@@ -1,3 +1,4 @@
-overlay/**
-./overlay
+rootfs/**
+./rootfs
 initrd
+vmlinux
