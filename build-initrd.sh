@@ -20,25 +20,16 @@ docker rm "$cid"
 # wrapper as PID 1.
 cat > rootfs/init <<'EOF'
 #!/bin/sh
-# Redirect all output (stdout+stderr) to the hypervisor console
 set -x
 
 echo "init: start" > /dev/kmsg
 
-# Mount essentials; never fail if already mounted
-mount -t proc proc /proc 2>/dev/null || true
-mount -t sysfs sysfs /sys 2>/dev/null || true
-mount -t devtmpfs devtmpfs /dev 2>/dev/null || mount -t tmpfs tmpfs /dev || true
-mkdir -p /dev/pts /dev/shm
-mount -t devpts devpts /dev/pts 2>/dev/null || true
-chmod 1777 /dev/shm
+# All mounts are handled by overlay init - skip them entirely
 
-echo "init: done with mount essentials" > /dev/kmsg
+# Redirect stdout/stderr to console for all subsequent commands
+exec >/dev/console 2>&1
 
-# exec >/dev/console 2>&1
-exec </dev/console >/dev/console 2>&1
-
-echo "init: launching wrapper"
+echo "init: launching wrapper" > /dev/kmsg
 
 # TODO: envs should not happen during build
 # Hardcoded environment variables
@@ -64,21 +55,91 @@ export PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
 export HOME='/root'
 /wrapper.sh
 EC=$?
-echo "init: wrapper exited with code $EC"
+echo "init: wrapper exited with code $EC" > /dev/kmsg
 
 # If wrapper failed (non-zero), give you a rescue shell instead of reboot/panic
 if [ "$EC" -ne 0 ]; then
-  echo "init: dropping into interactive shell for debugging..."
+  echo "init: dropping into interactive shell for debugging..." > /dev/kmsg
   /bin/sh -i
 else
-  echo "init: wrapper succeeded, sleeping to keep PID1 alive"
+  echo "init: wrapper succeeded, sleeping to keep PID1 alive" > /dev/kmsg
   sleep infinity
 fi
 EOF
 chmod +x rootfs/init
 
-# Uncompressed initrd, faster to boot up
-# Unikraft also does uncompressed
-rm initrd || true
-cd rootfs
+# Create disk image from rootfs instead of initrd
+DISK_SIZE="4G"  # Adjust size as needed
+rm -f rootfs.ext4 || true
+truncate -s $DISK_SIZE rootfs.ext4
+mkfs.ext4 -d rootfs rootfs.ext4 -F
+
+echo "Created rootfs.ext4 disk image ($(du -h rootfs.ext4 | cut -f1))"
+
+# ============================================
+# Build minimal initramfs from busybox for overlay setup
+# ============================================
+
+echo "Building initramfs from busybox..."
+busybox_cid=$(docker create busybox:latest)
+rm -rf initramfs-overlay || true
+mkdir -p initramfs-overlay
+docker export "$busybox_cid" | tar -C initramfs-overlay -xf -
+docker rm "$busybox_cid"
+
+# Create overlay init script that sets up readonly disk + tmpfs overlay
+cat > initramfs-overlay/init <<'EOF'
+#!/bin/sh
+set -xe
+echo "overlay-init: start" > /dev/kmsg
+
+# Mount essentials
+mount -t proc none /proc
+mount -t sysfs none /sys  
+mount -t devtmpfs none /dev
+
+# Setup /dev properly BEFORE moving it
+mkdir -p /dev/pts /dev/shm
+mount -t devpts devpts /dev/pts
+chmod 1777 /dev/shm
+
+echo "overlay-init: mounted proc/sys/dev with pts/shm" > /dev/kmsg
+
+# Mount readonly base filesystem from disk
+mkdir -p /lower
+mount -o ro /dev/vda /lower
+
+echo "overlay-init: mounted readonly rootfs from /dev/vda" > /dev/kmsg
+
+# Create memory overlay (using 2G, adjust as needed)
+mount -t tmpfs -o size=2G none /tmp
+mkdir -p /tmp/upper /tmp/work /tmp/newroot
+
+mount -t overlay \
+  -o lowerdir=/lower,upperdir=/tmp/upper,workdir=/tmp/work \
+  overlay /tmp/newroot
+
+echo "overlay-init: created tmpfs overlay" > /dev/kmsg
+
+# Move mounts to new root (all properly set up now)
+cd /tmp/newroot
+mkdir -p proc sys dev
+mount --move /proc proc
+mount --move /sys sys
+mount --move /dev dev
+
+echo "overlay-init: switching root to overlay" > /dev/kmsg
+
+# Switch to overlay root and run the app init
+exec switch_root . /init </dev/console >/dev/console 2>&1
+EOF
+
+chmod +x initramfs-overlay/init
+
+# Package as initramfs
+rm -f initrd || true
+cd initramfs-overlay
 find . | cpio -H newc -o > ../initrd
+cd ..
+
+echo "Created initrd from busybox ($(du -h initrd | cut -f1))"

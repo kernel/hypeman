@@ -17,10 +17,11 @@ sudo cloud-hypervisor \
   --initramfs initrd \
   --cmdline 'console=hvc0' \
   --cpus boot=4 --memory size=8192M \
+  --disk path=rootfs.ext4,readonly=on \
   --net "tap=${TAP},ip=${GUEST_IP},mask=${MASK},mac=${MAC}" \
   --api-socket /tmp/ch.sock
 
   # TODO: add config or stateful chrome volumes?
-  # --disk path=cfg.img,readonly=on \
-  # NOTE: 8192M memory - something different about how initrd unpack happens in unikraft,
-  # allowing for less memory
+  # NOTE: rootfs.ext4 is mounted readonly and an overlay is created in memory
+  # The overlay tmpfs size is configured in the initrd init script (default 2G)
+  # Total memory needed = 8192M base + overlay usage

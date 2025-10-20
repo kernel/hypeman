@@ -1,6 +1,12 @@
 set -xe
-sudo ch-remote --api-socket /tmp/cloud-hypervisor-test.sock pause
+SOCKET=/tmp/ch.sock
+echo "cleaning up"
 rm -rf /tmp/snapshot-test || true
 mkdir -p /tmp/snapshot-test
-sudo ch-remote --api-socket /tmp/cloud-hypervisor-test.sock snapshot file:///tmp/snapshot-test
-sudo ch-remote --api-socket /tmp/cloud-hypervisor-test.sock resume
+echo "Pausing..."
+sudo ch-remote --api-socket $SOCKET pause
+echo "Snap shotting..."
+sudo ch-remote --api-socket $SOCKET snapshot file:///tmp/snapshot-test
+echo "Resuming..."
+sudo ch-remote --api-socket $SOCKET resume
+echo "Done"
