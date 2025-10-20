@@ -39,6 +39,29 @@ echo "init: done with mount essentials" > /dev/kmsg
 exec </dev/console >/dev/console 2>&1
 
 echo "init: launching wrapper"
+
+# TODO: envs should not happen during build
+# Hardcoded environment variables
+export CHROMIUM_FLAGS="--disable-dev-shm-usage --disable-features=AcceptCHFrame,AutoExpandDetailsElement,AvoidUnnecessaryBeforeUnloadCheckSync,CertificateTransparencyComponentUpdater,DestroyProfileOnBrowserClose,DialMediaRouteProvider,GlobalMediaControls,HttpsUpgrades,ImprovedCookieControls,IsolateOrigins,LazyFrameLoading,MediaRouter,PaintHolding,PasswordManagerEnabled,PlzDedicatedWorker,site-per-process,Translate --disable-gpu --no-sandbox --no-zygote --remote-allow-origins=* --start-maximized --test-type"
+export DISPLAY_NUM="1"
+export ENABLE_WEBRTC="true"
+export HEIGHT="768"
+export HOME="/"
+# export NEKO_ICESERVERS=...
+export RUN_AS_ROOT="true"
+export WIDTH="1024"
+export WITH_KERNEL_IMAGES_API="true"
+
+# TODO: network config should not be hardcoded in build
+ip link set lo up
+ifconfig eth0 192.168.100.10 netmask 255.255.255.0 up
+route add default gw 192.168.100.1
+echo "nameserver 1.1.1.1" > /etc/resolv.conf
+
+# Need to set these envs for the wrapper to work right
+whoami
+export PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+export HOME='/root'
 /wrapper.sh
 EC=$?
 echo "init: wrapper exited with code $EC"
