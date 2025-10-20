@@ -1,5 +1,6 @@
 set -xe
-sudo rm /tmp/cloud-hypervisor-restore.sock || true
+SOCKET=/tmp/ch.sock
+sudo rm $SOCKET || true
 sudo cloud-hypervisor \
-	--api-socket path=/tmp/cloud-hypervisor-restore.sock
+	--api-socket path=$SOCKET
 
