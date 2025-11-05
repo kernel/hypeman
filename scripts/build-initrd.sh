@@ -82,9 +82,20 @@ echo "nameserver ${GUEST_DNS}" > /etc/resolv.conf
 
 echo "init: network configured - IP: ${GUEST_IP}" > /dev/kmsg
 
+# Set up /dev symlinks for bash process substitution (Docker compatibility)
+echo "init: setting up /dev symlinks" > /dev/kmsg
+ln -sf /proc/self/fd /dev/fd 2>/dev/null || true
+ln -sf /proc/self/fd/0 /dev/stdin 2>/dev/null || true
+ln -sf /proc/self/fd/1 /dev/stdout 2>/dev/null || true
+ln -sf /proc/self/fd/2 /dev/stderr 2>/dev/null || true
+
 # Set PATH for proper binary resolution
 export PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
 export HOME='/root'
+
+# Set up signal handlers for graceful shutdown
+trap 'echo "init: received SIGTERM, shutting down..." > /dev/kmsg; exit 0' TERM
+trap 'echo "init: received SIGINT, shutting down..." > /dev/kmsg; exit 0' INT
 
 echo "init: starting SSH server" > /dev/kmsg
 
