@@ -65,7 +65,7 @@ mount -o ro /dev/vdc /mnt/config
 
 if [ -f /mnt/config/config.sh ]; then
   echo "init: sourcing config from /mnt/config/config.sh" > /dev/kmsg
-  source /mnt/config/config.sh
+  . /mnt/config/config.sh
 else
   echo "init: ERROR - config.sh not found on config disk!" > /dev/kmsg
   /bin/sh -i
@@ -106,22 +106,16 @@ fi
 /usr/sbin/sshd
 
 echo "init: SSH server started" > /dev/kmsg
-echo "init: launching wrapper from ${WORKDIR}" > /dev/kmsg
+echo "init: launching entrypoint from ${WORKDIR:-/}" > /dev/kmsg
+echo "init: entrypoint=${ENTRYPOINT} cmd=${CMD}" > /dev/kmsg
 
-# Change to workdir and execute entrypoint
-cd ${WORKDIR}
-${ENTRYPOINT}
-EC=$?
-echo "init: wrapper exited with code $EC" > /dev/kmsg
+# Change to workdir (default to / if empty)
+cd ${WORKDIR:-/}
 
-# If wrapper failed (non-zero), give you a rescue shell instead of reboot/panic
-if [ "$EC" -ne 0 ]; then
-  echo "init: dropping into interactive shell for debugging..." > /dev/kmsg
-  /bin/sh -i
-else
-  echo "init: wrapper succeeded, sleeping to keep PID1 alive" > /dev/kmsg
-  sleep infinity
-fi
+# Execute entrypoint with cmd as arguments (like Docker does)
+# Using exec replaces this shell with the entrypoint, making it PID 1
+# When it exits, the VM will stop (just like a Docker container)
+exec ${ENTRYPOINT} ${CMD}
 EOF
 chmod +x rootfs/init
 
@@ -197,7 +191,8 @@ echo "overlay-init: switching root to overlay" > /dev/kmsg
 
 # Switch to overlay root and run the app init
 # Note: /dev/vdc (config disk) will be mounted by the rootfs init
-exec switch_root . /init </dev/ttyS0 >/dev/ttyS0 2>&1
+# Don't redirect here - let the new init handle console setup
+exec switch_root . /init
 EOF
 
 chmod +x initramfs-overlay/init
