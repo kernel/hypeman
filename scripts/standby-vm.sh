@@ -5,15 +5,19 @@ set -euo pipefail
 BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/data"
 
 # Check arguments
-if [ $# -ne 1 ]; then
-  echo "Usage: $0 <vm-id>"
+if [ $# -lt 1 ]; then
+  echo "Usage: $0 <vm-id> [--compress]"
   echo "Example: $0 5"
+  echo "Example: $0 5 --compress"
   echo ""
   echo "VM ID should be 1-10"
+  echo "Options:"
+  echo "  --compress  Compress snapshot with LZ4 (slower snapshot, faster restore on slow disks)"
   exit 1
 fi
 
 VM_NUM="$1"
+COMPRESS_FLAG="${2:-}"
 
 # Validate VM number
 if ! [[ "$VM_NUM" =~ ^[0-9]+$ ]] || [ "$VM_NUM" -lt 1 ] || [ "$VM_NUM" -gt 10 ]; then
@@ -112,6 +116,41 @@ SNAPSHOT_END=$(date +%s%3N)
 SNAPSHOT_TIME=$((SNAPSHOT_END - SNAPSHOT_START))
 echo "[INFO] Snapshot created successfully ($((SNAPSHOT_TIME))ms)"
 
+# Optionally compress memory-ranges (only if --compress flag provided)
+COMPRESS_TIME=0
+ORIGINAL_SIZE_MB=0
+COMPRESSED_SIZE_MB=0
+RATIO="1.0"
+
+if [ "$COMPRESS_FLAG" = "--compress" ]; then
+  echo "[INFO] Compressing snapshot with LZ4 (fast mode)..."
+  COMPRESS_START=$(date +%s%3N)
+  MEMORY_FILE="$SNAPSHOT_DIR/memory-ranges"
+
+  if [ -f "$MEMORY_FILE" ]; then
+    # Get original size
+    ORIGINAL_SIZE=$(sudo stat -c%s "$MEMORY_FILE")
+    ORIGINAL_SIZE_MB=$((ORIGINAL_SIZE / 1048576))
+    
+    # Compress with LZ4 fast mode (-1), remove original (need sudo - file owned by root)
+    sudo lz4 -1 --rm "$MEMORY_FILE" "$MEMORY_FILE.lz4"
+    
+    COMPRESS_END=$(date +%s%3N)
+    COMPRESS_TIME=$((COMPRESS_END - COMPRESS_START))
+    
+    # Get compressed size and ratio
+    COMPRESSED_SIZE=$(sudo stat -c%s "$MEMORY_FILE.lz4")
+    COMPRESSED_SIZE_MB=$((COMPRESSED_SIZE / 1048576))
+    RATIO=$(awk "BEGIN {printf \"%.1f\", $ORIGINAL_SIZE / $COMPRESSED_SIZE}")
+    
+    echo "[INFO] Compressed ${ORIGINAL_SIZE_MB}MB → ${COMPRESSED_SIZE_MB}MB (${RATIO}x, $((COMPRESS_TIME))ms)"
+  else
+    echo "[WARN] memory-ranges file not found, skipping compression"
+  fi
+else
+  echo "[INFO] Skipping compression (use --compress flag to enable)"
+fi
+
 # Get cloud-hypervisor PID by finding which process has the overlay disk open
 echo "[INFO] Stopping cloud-hypervisor process..."
 OVERLAY_DISK="$VM_DIR/overlay.raw"
@@ -198,6 +237,9 @@ echo "Timing Breakdown:"
 echo "  Memory resize:  $(format_time $MEMORY_RESIZE_TIME)s (→ ${ACTUAL_SIZE_MB}MB)"
 echo "  VM pause:       $(format_time $PAUSE_TIME)s"
 echo "  Snapshot save:  $(format_time $SNAPSHOT_TIME)s"
+if [ "$COMPRESS_FLAG" = "--compress" ] && [ "$COMPRESS_TIME" -gt 0 ]; then
+  echo "  LZ4 compress:   $(format_time $COMPRESS_TIME)s (${ORIGINAL_SIZE_MB}MB → ${COMPRESSED_SIZE_MB}MB, ${RATIO}x)"
+fi
 echo "  Process stop:   (included above)"
 echo "  ─────────────────────────────────"
 echo "  Total time:     $(format_time $TOTAL_TIME)s"

@@ -128,16 +128,57 @@ fi
 CH_END=$(date +%s%3N)
 CH_TIME=$((CH_END - CH_START))
 
-# Restore from snapshot
+# Decompress memory-ranges to tmpfs (memory) if compressed
+MEMORY_FILE="$SNAPSHOT_DIR/memory-ranges"
+COMPRESSED_FILE="$SNAPSHOT_DIR/memory-ranges.lz4"
+TMPFS_SNAPSHOT="/dev/shm/ch-restore-$VM_ID"
+DECOMPRESS_TIME=0
+
+# Clean up any old tmpfs snapshot
+rm -rf "$TMPFS_SNAPSHOT" 2>/dev/null || true
+
+if [ -f "$COMPRESSED_FILE" ]; then
+  echo "[INFO] Decompressing snapshot to tmpfs (memory)..."
+  DECOMPRESS_START=$(date +%s%3N)
+  
+  # Create tmpfs directory for this restore
+  mkdir -p "$TMPFS_SNAPSHOT"
+  
+  # Decompress directly to tmpfs (in memory, not disk!) - need sudo for root-owned file
+  sudo lz4 -d "$COMPRESSED_FILE" "$TMPFS_SNAPSHOT/memory-ranges"
+  
+  # Copy other snapshot files to tmpfs (small files, fast)
+  sudo cp "$SNAPSHOT_DIR/state.json" "$TMPFS_SNAPSHOT/"
+  sudo cp "$SNAPSHOT_DIR/config.json" "$TMPFS_SNAPSHOT/"
+  
+  # Fix permissions so cloud-hypervisor can read
+  sudo chmod 644 "$TMPFS_SNAPSHOT"/*
+  
+  DECOMPRESS_END=$(date +%s%3N)
+  DECOMPRESS_TIME=$((DECOMPRESS_END - DECOMPRESS_START))
+  
+  COMPRESSED_SIZE=$(sudo stat -c%s "$COMPRESSED_FILE" 2>/dev/null || echo "0")
+  COMPRESSED_SIZE_MB=$((COMPRESSED_SIZE / 1048576))
+  echo "[INFO] Decompressed ${COMPRESSED_SIZE_MB}MB to memory in $((DECOMPRESS_TIME))ms"
+  
+  # Use tmpfs snapshot location
+  SNAPSHOT_DIR_ACTUAL="$TMPFS_SNAPSHOT"
+else
+  echo "[INFO] Using uncompressed snapshot from disk"
+  SNAPSHOT_DIR_ACTUAL="$SNAPSHOT_DIR"
+fi
+
+# Restore from snapshot (now in tmpfs/memory if compressed)
 echo "[INFO] Restoring from snapshot..."
 SNAPSHOT_START=$(date +%s%3N)
 
-SNAPSHOT_URL="file://$SNAPSHOT_DIR"
+SNAPSHOT_URL="file://$SNAPSHOT_DIR_ACTUAL"
 if ! sudo ch-remote --api-socket "$SOCKET" restore "source_url=$SNAPSHOT_URL"; then
   echo "[ERROR] Failed to restore from snapshot"
   echo "[INFO] Cleaning up..."
   sudo kill "$CH_PID" 2>/dev/null || true
   sudo rm -f "$SOCKET"
+  rm -rf "$TMPFS_SNAPSHOT" 2>/dev/null || true
   exit 1
 fi
 
@@ -162,6 +203,12 @@ RESUME_END=$(date +%s%3N)
 RESUME_TIME=$((RESUME_END - RESUME_START))
 
 echo "[INFO] VM resumed successfully"
+
+# Clean up tmpfs snapshot if used
+if [ -d "$TMPFS_SNAPSHOT" ]; then
+  echo "[INFO] Cleaning up tmpfs snapshot..."
+  rm -rf "$TMPFS_SNAPSHOT"
+fi
 
 # Restore memory to full 4GB (virtio-mem hot-plug)
 echo "[INFO] Restoring memory to 4GB..."
@@ -209,6 +256,7 @@ if sudo ch-remote --api-socket "$SOCKET" info &>/dev/null; then
   echo "Timing Breakdown:"
   echo "  TAP device setup:      $(format_time $TAP_TIME)s"
   echo "  Cloud-hypervisor init: $(format_time $CH_TIME)s"
+  echo "  LZ4 decompress→tmpfs:  $(format_time $DECOMPRESS_TIME)s"
   echo "  Snapshot restore:      $(format_time $SNAPSHOT_TIME)s"
   echo "  VM resume:             $(format_time $RESUME_TIME)s"
   echo "  Memory resize (→4GB):  $(format_time $MEMORY_RESTORE_TIME)s"

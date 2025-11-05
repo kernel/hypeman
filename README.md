@@ -15,10 +15,10 @@ Tested with version `v48.0.0`
 
 Note: Requires `kernel-images-private` cloned to home directory with `iproute2` installed in the Chromium headful image.
 
-Also, `lsof` needs to be installed on the host
+Also, `lsof` and `lz4` needs to be installed on the host
 
 ```
-sudo apt-get install -y lsof
+sudo apt-get install -y lsof lz4
 ```
 
 ## Setup
