@@ -1,114 +1,113 @@
 # Cloud Hypervisor POC
 
-Check that we can run Chrome in a Cloud Hypervisor VM using our existing image builds. Investigate the performance and behavior of Cloud Hypervisor.
+Proof of concept for running 10 Chromium VMs simultaneously using Cloud Hypervisor with disk-based overlays, config disks, networking isolation, and standby/restore functionality.
 
-## Initial setup:
+## Prerequisites
 
-Install cloud-hypervisor by [installing the pre-built binaries](https://www.cloudhypervisor.org/docs/prologue/quick-start/#use-pre-built-binaries). Make sure `ch-remote` and `cloud-hypervisor` are in path (requires renaming the binaries).
+Install cloud-hypervisor by [installing the pre-built binaries](https://www.cloudhypervisor.org/docs/prologue/quick-start/#use-pre-built-binaries). Make sure `ch-remote` and `cloud-hypervisor` are in path.
 
-```
-# this should work
+```bash
 ch-remote --version
 cloud-hypervisor --version
 ```
 
-I used version `v48.0.0`
+Tested with version `v48.0.0`
 
-Download a kernel; we will use this when we start the VM:
+Note: Requires `kernel-images-private` cloned to home directory with `iproute2` installed in the Chromium headful image.
 
-```bash
-./get-kernel.sh 
-```
+## Setup
 
-This will result in the kernel at `./vmlinux`.
-
-## Build initial ram disk and Chromium root filesystem
-
-To minimize the amount of memory required, which speeds up the snapshot/restore process, the boot process works with three main flags.
-
-```
-# shown to explain, not to run
-...
-  --kernel vmlinux \
-  --initramfs initrd \
-  --disk path=rootfs.ext4,readonly=on \
-...
-```
-
-We provide the kernel because Docker filesystems don't include kernels, so this is analogous to Docker providing a kernel separately from the root filesystem.
-
-In the Unikraft world, we pack the Chromium root filesystem into the initial ram disk. In this setup, we instead build a BusyBox root filesystem with an initialization script in our initial ram disk. The init script here sets up an in-memory overlay filesystem on top of the attached, read-only Chromium rootfs disk. Then, we switch root into the overlay filesystem. This avoids keeping the entire Chromium filesystem in memory, and Chrome starts up in these VMs with only 2GB of memory (it might work with less; we didn’t try that).
-
-To build the initial ram disk and Chromium root filesystem, run this (check notes below first):
+Build kernel, initrd, and rootfs with config disk support:
 
 ```bash
-./build-initrd.sh
+./scripts/build-initrd.sh
 ```
 
-Note: this assumes you have `kernel-images-private` cloned to your home directory.
-Note: you also have to install `iproute2` in the Chromium headful image, see this diff:
+This creates:
+- `data/system/vmlinux` - Linux kernel
+- `data/system/initrd` - BusyBox init with disk-based overlay
+- `data/images/chromium-headful/v1/rootfs.ext4` - Chromium rootfs (read-only, shared)
 
-```
--    wget ca-certificates python2 supervisor xclip xdotool \
-+    wget ca-certificates python2 supervisor xclip xdotool iproute2 \
-```
-
-When that is done, you will have `initrd` and `rootfs.ext4`.
-
-In this current setup, configuration (envs) is built directly into the init script, but in a real setup, we would probably mount another disk for this so that the initrd and rootfs stay the same for all VMs on the same container version.
-
-## Run Chromium
-
-First, configure the host’s network to provide a tap interface for the guest VM.
+Configure host network with bridge and guest isolation:
 
 ```bash
-# this is idempotent
-./setup-host-network.sh
+./scripts/setup-host-network.sh
 ```
 
-Note: more investigation is needed before using this networking setup in production.
-
-Next, start Chromium! Note that you will want another shell after this step, so start a tmux session or similar before running this.
+Create 10 VM configurations (IPs 192.168.100.10-19, isolated TAP devices, overlay disks, config disks):
 
 ```bash
-./start-chrome.sh
+./scripts/setup-vms.sh
 ```
 
-## Perform a snapshot
+## Running VMs
 
-While Chrome is running in the VM in another shell, take a snapshot:
+Start all 10 VMs:
 
 ```bash
-./snapshot.sh
+./scripts/start-all-vms.sh
 ```
 
-Now that you have a snapshot, you can kill the VM like this:
+Check VM status:
 
 ```bash
-sudo pkill cloud-hyper
+./scripts/list-vms.sh
 ```
 
-## Perform a restore
-
-Back in your original shell where you were running the Chrome VM, start a hypervisor without booting a VM:
+View VM logs:
 
 ```bash
-./prepare-restore.sh
+./scripts/logs-vm.sh <vm-id>     # Show last 100 lines
+./scripts/logs-vm.sh <vm-id> -f  # Follow logs
 ```
 
-This script just starts up Cloud Hypervisor without any settings, so it’s ready to receive the restore.
-
-Then, perform the restore from your second shell:
+Stop a VM:
 
 ```bash
-./remote-restore.sh
+./scripts/stop-vm.sh <vm-id>
+./scripts/stop-all-vms.sh        # Stop all
 ```
 
-Note: the way this works is by sending an HTTP request to the socket. We don’t have to use the `ch-remote` command-line tool; we can call the API directly, as done in the **virtink** project. See the sample code in `virtink-reference.sh`. This file shows an example of how the virtink project takes a Docker image and boots it into a Cloud Hypervisor VM.
+## Standby / Restore
 
-## Next steps
+Standby a VM (pause, snapshot, delete VMM):
 
-* Can we connect to WebRTC?
-* Can we install `sshd` and SSH into the instance?
-* Can we connect to CDP and do something?
-* Does standby/restore work without interrupting the CDP connection?
+```bash
+./scripts/standby-vm.sh <vm-id>
+```
+
+Restore a VM from snapshot:
+
+```bash
+./scripts/restore-vm.sh <vm-id>
+```
+
+## Networking
+
+Enable port forwarding for WebRTC access (localhost:8080-8089 → guest VMs):
+
+```bash
+./scripts/setup-port-forwarding.sh
+```
+
+Connect to a VM:
+
+```bash
+./scripts/connect-guest.sh <vm-id>
+```
+
+## Volumes
+
+Create a persistent volume:
+
+```bash
+./scripts/create-volume.sh <vol-id> <size-gb>
+```
+
+## Architecture
+
+- **Disk-based overlay**: Each VM has a 50GB sparse overlay disk on `/dev/vdb` (faster restore than tmpfs)
+- **Config disk**: Each VM has a config disk on `/dev/vdc` with VM-specific settings (IP, MAC, envs)
+- **Guest isolation**: VMs cannot communicate with each other (iptables + bridge_slave isolation)
+- **Serial logging**: All VM output captured to `data/guests/guest-N/logs/console.log`
+- **Shared rootfs**: Single read-only rootfs image shared across all VMs
