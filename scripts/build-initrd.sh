@@ -106,17 +106,32 @@ chmod 700 /root/.ssh
 
 # Set root password (can be overridden in config)
 # POC ONLY
+echo "init: setting root password" > /dev/kmsg
 echo "root:root" | chpasswd
 
 # Generate host keys if they don't exist
+echo "init: generating SSH host keys" > /dev/kmsg
 if [ ! -f /etc/ssh/ssh_host_rsa_key ]; then
   ssh-keygen -A
 fi
 
-# Start SSH daemon
-/usr/sbin/sshd
+# Configure SSH to allow root password login (POC only - not for production!)
+echo "init: configuring SSH for root password login" > /dev/kmsg
+cat >> /etc/ssh/sshd_config <<'SSHEOF'
 
-echo "init: SSH server started" > /dev/kmsg
+# POC Configuration - Allow root login with password
+PermitRootLogin yes
+PasswordAuthentication yes
+SSHEOF
+
+# Start SSH daemon
+echo "init: starting sshd daemon" > /dev/kmsg
+/usr/sbin/sshd
+if [ $? -eq 0 ]; then
+  echo "init: SSH server started successfully on port 22" > /dev/kmsg
+else
+  echo "init: ERROR - SSH server failed to start!" > /dev/kmsg
+fi
 echo "init: launching entrypoint from ${WORKDIR:-/}" > /dev/kmsg
 echo "init: entrypoint=${ENTRYPOINT} cmd=${CMD}" > /dev/kmsg
 
