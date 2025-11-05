@@ -4,3 +4,4 @@ initrd
 vmlinux
 rootfs.ext4
 initramfs-overlay/**
+data/**
