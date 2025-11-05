@@ -89,9 +89,7 @@ for i in $(seq 1 $NUM_VMS); do
     --cmdline 'console=ttyS0' \
     --cpus boot=2 \
     --memory size=2048M \
-    --disk path="$ROOTFS",readonly=on \
-    --disk path="$OVERLAY_DISK" \
-    --disk path="$CONFIG_DISK",readonly=on \
+    --disk path="$ROOTFS",readonly=on path="$OVERLAY_DISK" path="$CONFIG_DISK",readonly=on \
     --net "tap=$TAP,ip=$GUEST_IP,mask=255.255.255.0,mac=$MAC" \
     --serial "file=$LOG_FILE" \
     --console off \
