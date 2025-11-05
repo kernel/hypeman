@@ -61,6 +61,12 @@ View VM logs:
 ./scripts/logs-vm.sh <vm-id> -f  # Follow logs
 ```
 
+SSH into a VM:
+
+```bash
+./scripts/ssh-vm.sh <vm-id>      # Password: root
+```
+
 Stop a VM:
 
 ```bash

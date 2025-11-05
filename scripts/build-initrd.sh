@@ -86,6 +86,26 @@ echo "init: network configured - IP: ${GUEST_IP}" > /dev/kmsg
 export PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
 export HOME='/root'
 
+echo "init: starting SSH server" > /dev/kmsg
+
+# Create SSH directory
+mkdir -p /var/run/sshd
+mkdir -p /root/.ssh
+chmod 700 /root/.ssh
+
+# Set root password (can be overridden in config)
+# POC ONLY
+echo "root:root" | chpasswd
+
+# Generate host keys if they don't exist
+if [ ! -f /etc/ssh/ssh_host_rsa_key ]; then
+  ssh-keygen -A
+fi
+
+# Start SSH daemon
+/usr/sbin/sshd
+
+echo "init: SSH server started" > /dev/kmsg
 echo "init: launching wrapper from ${WORKDIR}" > /dev/kmsg
 
 # Change to workdir and execute entrypoint
