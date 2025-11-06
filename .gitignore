@@ -9,3 +9,4 @@ data/**
 *.sock
 kernel
 kernel/**
+bin/**
