@@ -1,0 +1,959 @@
+openapi: 3.1.0
+info:
+  title: Hypeman API
+  description: Generic API for managing VM lifecycle using Cloud Hypervisor with OCI-based workloads
+  version: 0.1.0
+servers:
+  - url: http://localhost:8080
+    description: Local development server
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  schemas:
+    ErrorDetail:
+      type: object
+      properties:
+        code:
+          type: string
+          description: Lower-level error code providing more specific detail
+          example: invalid_input
+        message:
+          type: string
+          description: Further detail about the error
+          example: Image not found
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          description: Application-specific error code (machine-readable)
+          example: bad_request
+        message:
+          type: string
+          description: Human-readable error description for debugging
+          example: "Missing required field: image"
+        details:
+          type: array
+          description: Additional error details (for multiple errors)
+          items:
+            $ref: "#/components/schemas/ErrorDetail"
+        inner_error:
+          $ref: "#/components/schemas/ErrorDetail"
+    
+    InstanceState:
+      type: string
+      enum: [Created, Running, Paused, Shutdown, Stopped, Standby]
+      description: |
+        Instance state:
+        - Created: VMM created but not started (Cloud Hypervisor native)
+        - Running: VM is actively running (Cloud Hypervisor native)
+        - Paused: VM is paused (Cloud Hypervisor native)
+        - Shutdown: VM shut down but VMM exists (Cloud Hypervisor native)
+        - Stopped: No VMM running, no snapshot exists
+        - Standby: No VMM running, snapshot exists (can be restored)
+    
+    VolumeAttachment:
+      type: object
+      required: [volume_id, mount_path]
+      properties:
+        volume_id:
+          type: string
+          description: Volume identifier
+          example: vol-abc123
+        mount_path:
+          type: string
+          description: Path where volume is mounted in the guest
+          example: /mnt/data
+        readonly:
+          type: boolean
+          description: Whether volume is mounted read-only
+          default: false
+    
+    PortMapping:
+      type: object
+      required: [host_port, guest_port]
+      properties:
+        host_port:
+          type: integer
+          description: Port on the host
+          example: 8080
+        guest_port:
+          type: integer
+          description: Port in the guest VM
+          example: 80
+        protocol:
+          type: string
+          enum: [tcp, udp]
+          default: tcp
+    
+    CreateInstanceRequest:
+      type: object
+      required: [id, name, image]
+      properties:
+        id:
+          type: string
+          description: Unique identifier for the instance (provided by caller)
+          example: inst-abc123
+        name:
+          type: string
+          description: Human-readable name
+          example: my-workload-1
+        image:
+          type: string
+          description: Image identifier
+          example: img-chrome-v1
+        memory_mb:
+          type: integer
+          description: Base memory in MB
+          default: 1024
+          example: 2048
+        memory_max_mb:
+          type: integer
+          description: Maximum memory with hotplug in MB
+          default: 4096
+          example: 4096
+        vcpus:
+          type: integer
+          description: Number of virtual CPUs
+          default: 2
+          example: 2
+        env:
+          type: object
+          additionalProperties:
+            type: string
+          description: Environment variables
+          example:
+            PORT: "3000"
+            NODE_ENV: production
+        timeout_seconds:
+          type: integer
+          description: Timeout for scale-to-zero semantics
+          default: 3600
+          example: 7200
+        volumes:
+          type: array
+          description: Volumes to attach
+          items:
+            $ref: "#/components/schemas/VolumeAttachment"
+        port_mappings:
+          type: array
+          description: Port mappings from host to guest
+          items:
+            $ref: "#/components/schemas/PortMapping"
+    
+    Instance:
+      type: object
+      required: [id, name, image, state, created_at]
+      properties:
+        id:
+          type: string
+          description: Unique identifier
+          example: inst-abc123
+        name:
+          type: string
+          description: Human-readable name
+          example: my-workload-1
+        image:
+          type: string
+          description: Image identifier
+          example: img-chrome-v1
+        state:
+          $ref: "#/components/schemas/InstanceState"
+        fqdn:
+          type: string
+          description: Fully qualified domain name
+          example: inst-abc123.local
+          nullable: true
+        private_ip:
+          type: string
+          description: Private IP address
+          example: 192.168.100.10
+          nullable: true
+        memory_mb:
+          type: integer
+          description: Configured base memory in MB
+          example: 2048
+        memory_max_mb:
+          type: integer
+          description: Configured maximum memory in MB
+          example: 4096
+        vcpus:
+          type: integer
+          description: Number of virtual CPUs
+          example: 2
+        env:
+          type: object
+          additionalProperties:
+            type: string
+          description: Environment variables
+        timeout_seconds:
+          type: integer
+          description: Timeout configuration
+          example: 7200
+        created_at:
+          type: string
+          format: date-time
+          description: Creation timestamp (RFC3339)
+          example: "2025-01-15T10:30:00Z"
+        started_at:
+          type: string
+          format: date-time
+          description: Start timestamp (RFC3339)
+          example: "2025-01-15T10:30:05Z"
+          nullable: true
+        stopped_at:
+          type: string
+          format: date-time
+          description: Stop timestamp (RFC3339)
+          example: "2025-01-15T12:30:00Z"
+          nullable: true
+        volumes:
+          type: array
+          description: Attached volumes
+          items:
+            $ref: "#/components/schemas/VolumeAttachment"
+        port_mappings:
+          type: array
+          description: Port mappings
+          items:
+            $ref: "#/components/schemas/PortMapping"
+        has_snapshot:
+          type: boolean
+          description: Whether a snapshot exists for this instance
+          example: false
+    
+    CreateImageRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          description: OCI image reference (e.g., docker.io/library/nginx:latest)
+          example: docker.io/library/nginx:latest
+        id:
+          type: string
+          description: Optional custom identifier (auto-generated if not provided)
+          example: img-nginx-v1
+    
+    Image:
+      type: object
+      required: [id, name, created_at]
+      properties:
+        id:
+          type: string
+          description: Unique identifier
+          example: img-nginx-v1
+        name:
+          type: string
+          description: OCI image reference
+          example: docker.io/library/nginx:latest
+        version:
+          type: string
+          description: Image tag or digest
+          example: latest
+          nullable: true
+        size_bytes:
+          type: integer
+          format: int64
+          description: Disk size in bytes
+          example: 536870912
+        entrypoint:
+          type: array
+          items:
+            type: string
+          description: Entrypoint from container metadata
+          example: ["/docker-entrypoint.sh"]
+          nullable: true
+        cmd:
+          type: array
+          items:
+            type: string
+          description: CMD from container metadata
+          example: ["nginx", "-g", "daemon off;"]
+          nullable: true
+        env:
+          type: object
+          additionalProperties:
+            type: string
+          description: Environment variables from container metadata
+          example:
+            PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+        working_dir:
+          type: string
+          description: Working directory from container metadata
+          example: /app
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+          description: Creation timestamp (RFC3339)
+          example: "2025-01-15T10:00:00Z"
+    
+    CreateVolumeRequest:
+      type: object
+      required: [name, size_gb]
+      properties:
+        id:
+          type: string
+          description: Optional custom identifier (auto-generated if not provided)
+          example: vol-data-1
+        name:
+          type: string
+          description: Volume name
+          example: my-data-volume
+        size_gb:
+          type: integer
+          description: Size in gigabytes
+          example: 10
+    
+    Volume:
+      type: object
+      required: [id, name, size_gb, created_at]
+      properties:
+        id:
+          type: string
+          description: Unique identifier
+          example: vol-data-1
+        name:
+          type: string
+          description: Volume name
+          example: my-data-volume
+        size_gb:
+          type: integer
+          description: Size in gigabytes
+          example: 10
+        attached_to:
+          type: string
+          description: Instance ID if attached
+          example: inst-abc123
+          nullable: true
+        mount_path:
+          type: string
+          description: Mount path if attached
+          example: /mnt/data
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+          description: Creation timestamp (RFC3339)
+          example: "2025-01-15T09:00:00Z"
+    
+    AttachVolumeRequest:
+      type: object
+      required: [mount_path]
+      properties:
+        mount_path:
+          type: string
+          description: Path where volume should be mounted
+          example: /mnt/data
+        readonly:
+          type: boolean
+          description: Mount as read-only
+          default: false
+    
+    Health:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+          example: ok
+
+paths:
+  /health:
+    get:
+      summary: Health check
+      operationId: getHealth
+      responses:
+        200:
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+  
+  /images:
+    get:
+      summary: List images
+      operationId: listImages
+      security:
+        - bearerAuth: []
+      responses:
+        200:
+          description: List of images
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Image"
+        401:
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      summary: Pull and convert OCI image
+      operationId: createImage
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateImageRequest"
+      responses:
+        201:
+          description: Image created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Image"
+        400:
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        401:
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  
+  /images/{id}:
+    get:
+      summary: Get image details
+      operationId: getImage
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        200:
+          description: Image details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Image"
+        404:
+          description: Image not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      summary: Delete image
+      operationId: deleteImage
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        204:
+          description: Image deleted
+        404:
+          description: Image not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  
+  /instances:
+    get:
+      summary: List instances
+      operationId: listInstances
+      security:
+        - bearerAuth: []
+      responses:
+        200:
+          description: List of instances
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Instance"
+        401:
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      summary: Create and start instance
+      operationId: createInstance
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateInstanceRequest"
+      responses:
+        201:
+          description: Instance created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Instance"
+        400:
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        401:
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  
+  /instances/{id}:
+    get:
+      summary: Get instance details
+      operationId: getInstance
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        200:
+          description: Instance details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Instance"
+        404:
+          description: Instance not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      summary: Stop and delete instance
+      operationId: deleteInstance
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        204:
+          description: Instance deleted
+        404:
+          description: Instance not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  
+  /instances/{id}/standby:
+    post:
+      summary: Put instance in standby (pause, snapshot, delete VMM)
+      operationId: standbyInstance
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        200:
+          description: Instance in standby
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Instance"
+        404:
+          description: Instance not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Conflict - instance not in correct state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  
+  /instances/{id}/restore:
+    post:
+      summary: Restore instance from standby
+      operationId: restoreInstance
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        200:
+          description: Instance restored
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Instance"
+        404:
+          description: Instance not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Conflict - instance not in standby or no snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  
+  /instances/{id}/logs:
+    get:
+      summary: Stream instance logs (SSE)
+      operationId: getInstanceLogs
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: follow
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+          description: Follow logs (stream with SSE)
+        - name: tail
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 100
+          description: Number of lines to return from end
+      responses:
+        200:
+          description: Log stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+            text/plain:
+              schema:
+                type: string
+        404:
+          description: Instance not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  
+  /instances/{id}/volumes/{volumeId}:
+    post:
+      summary: Attach volume to instance
+      operationId: attachVolume
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: volumeId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AttachVolumeRequest"
+      responses:
+        200:
+          description: Volume attached
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Instance"
+        404:
+          description: Instance or volume not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Conflict - volume already attached
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      summary: Detach volume from instance
+      operationId: detachVolume
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: volumeId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        200:
+          description: Volume detached
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Instance"
+        404:
+          description: Instance or volume not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  
+  /volumes:
+    get:
+      summary: List volumes
+      operationId: listVolumes
+      security:
+        - bearerAuth: []
+      responses:
+        200:
+          description: List of volumes
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Volume"
+        401:
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      summary: Create volume
+      operationId: createVolume
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateVolumeRequest"
+      responses:
+        201:
+          description: Volume created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Volume"
+        400:
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        401:
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  
+  /volumes/{id}:
+    get:
+      summary: Get volume details
+      operationId: getVolume
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        200:
+          description: Volume details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Volume"
+        404:
+          description: Volume not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      summary: Delete volume
+      operationId: deleteVolume
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        204:
+          description: Volume deleted
+        404:
+          description: Volume not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Conflict - volume is attached
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+

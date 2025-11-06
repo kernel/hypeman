@@ -1,125 +1,68 @@
-# Cloud Hypervisor POC
+# Hypeman
 
-Proof of concept for running 10 Chromium VMs simultaneously using Cloud Hypervisor with disk-based overlays, config disks, networking isolation, and standby/restore functionality.
+[![Test](https://github.com/onkernel/hypeman/actions/workflows/test.yml/badge.svg)](https://github.com/onkernel/hypeman/actions/workflows/test.yml)
 
-## Prerequisites
+Run containerized workloads in VMs, powered by [Cloud Hypervisor](https://github.com/cloud-hypervisor/cloud-hypervisor).
 
-Install cloud-hypervisor by [installing the pre-built binaries](https://www.cloudhypervisor.org/docs/prologue/quick-start/#use-pre-built-binaries). Make sure `ch-remote` and `cloud-hypervisor` are in path.
+## Getting Started
 
+### Prerequisites
+
+**Cloud Hypervisor** - [Installation guide](https://www.cloudhypervisor.org/docs/prologue/quick-start/#use-pre-built-binaries)
 ```bash
+cloud-hypervisor --version  # Verify
 ch-remote --version
-cloud-hypervisor --version
 ```
 
-Tested with version `v48.0.0`
-
-Note: Requires `kernel-images-private` cloned to home directory with `iproute2` installed in the Chromium headful image.
-
-Also, `lsof` and `lz4` needs to be installed on the host
-
-```
-sudo apt-get install -y lsof lz4
+**containerd** - [Installation guide](https://github.com/containerd/containerd/blob/main/docs/getting-started.md)
+```bash
+containerd --version  # Verify
 ```
 
-## Setup
+**Go 1.25.4+** and **KVM**
 
-Build kernel, initrd, and rootfs with config disk support:
+### Configuration
 
 ```bash
-./scripts/build-initrd.sh
+cp .env.example .env
+# Edit .env and set JWT_SECRET
 ```
 
-This creates:
-- `data/system/vmlinux` - Linux kernel
-- `data/system/initrd` - BusyBox init with disk-based overlay
-- `data/images/chromium-headful/v1/rootfs.ext4` - Chromium rootfs (read-only, shared)
-
-Configure host network with bridge and guest isolation:
+### Build
 
 ```bash
-./scripts/setup-host-network.sh
+make build
 ```
+### Running the Server
 
-Create 10 VM configurations (IPs 192.168.100.10-19, isolated TAP devices, overlay disks, config disks):
+Start the server with hot-reload for development:
+```bash
+make dev
+```
+The server will start on port 8080 (configurable via `PORT` environment variable).
+
+### Testing
 
 ```bash
-./scripts/setup-vms.sh
+make test
 ```
 
-## Running VMs
+### Code Generation
 
-Start all 10 VMs:
+After modifying `openapi.yaml`, regenerate the Go code:
 
 ```bash
-./scripts/start-all-vms.sh
+make oapi-generate
 ```
 
-Check VM status:
+After modifying dependency injection in `cmd/api/wire.go` or `lib/providers/providers.go`, regenerate wire code:
 
 ```bash
-./scripts/list-vms.sh
+make generate-wire
 ```
 
-View VM logs:
+Or generate everything at once:
 
 ```bash
-./scripts/logs-vm.sh <vm-id>     # Show last 100 lines
-./scripts/logs-vm.sh <vm-id> -f  # Follow logs
+make generate-all
 ```
-
-SSH into a VM:
-
-```bash
-./scripts/ssh-vm.sh <vm-id>      # Password: root
-```
-
-Stop a VM:
-
-```bash
-./scripts/stop-vm.sh <vm-id>
-./scripts/stop-all-vms.sh        # Stop all
-```
-
-## Standby / Restore
-
-Standby a VM (pause, snapshot, delete VMM):
-
-```bash
-./scripts/standby-vm.sh <vm-id>
-```
-
-Restore a VM from snapshot:
-
-```bash
-./scripts/restore-vm.sh <vm-id>
-```
-
-## Networking
-
-Enable port forwarding for WebRTC access (localhost:8080-8089 → guest VMs):
-
-```bash
-./scripts/setup-port-forwarding.sh
-```
-
-Connect to a VM:
-
-```bash
-./scripts/connect-guest.sh <vm-id>
-```
-
-## Volumes
-
-Create a persistent volume:
-
-```bash
-./scripts/create-volume.sh <vol-id> <size-gb>
-```
-
-## Architecture
-
-- **Disk-based overlay**: Each VM has a 50GB sparse overlay disk on `/dev/vdb` (faster restore than tmpfs)
-- **Config disk**: Each VM has a config disk on `/dev/vdc` with VM-specific settings (IP, MAC, envs)
-- **Guest isolation**: VMs cannot communicate with each other (iptables + bridge_slave isolation)
-- **Serial logging**: All VM output captured to `data/guests/guest-N/logs/console.log`
-- **Shared rootfs**: Single read-only rootfs image shared across all VMs

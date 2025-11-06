@@ -7,3 +7,9 @@ initramfs-overlay/**
 data/**
 *.raw
 *.sock
+kernel
+kernel/**
+bin/**
+.env
+tmp
+tmp/**
