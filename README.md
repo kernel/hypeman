@@ -8,9 +8,25 @@ Run containerized workloads in VMs, powered by [Cloud Hypervisor](https://github
 
 ### Prerequisites
 
-- Go 1.25.4+
-- Cloud Hypervisor
-- containerd
+**Cloud Hypervisor** - [Installation guide](https://www.cloudhypervisor.org/docs/prologue/quick-start/#use-pre-built-binaries)
+```bash
+cloud-hypervisor --version  # Verify
+ch-remote --version
+```
+
+**containerd** - [Installation guide](https://github.com/containerd/containerd/blob/main/docs/getting-started.md)
+```bash
+containerd --version  # Verify
+```
+
+**Go 1.25.4+** and **KVM**
+
+### Configuration
+
+```bash
+cp .env.example .env
+# Edit .env and set JWT_SECRET
+```
 
 ### Build
 

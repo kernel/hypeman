@@ -10,3 +10,6 @@ data/**
 kernel
 kernel/**
 bin/**
+.env
+tmp
+tmp/**

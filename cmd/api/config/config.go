@@ -2,6 +2,8 @@ package config
 
 import (
 	"os"
+
+	"github.com/joho/godotenv"
 )
 
 type Config struct {
@@ -15,8 +17,13 @@ type Config struct {
 	DNSServer        string
 }
 
+// Load loads configuration from environment variables
+// Automatically loads .env file if present
 func Load() *Config {
-	return &Config{
+	// Try to load .env file (fail silently if not present)
+	_ = godotenv.Load()
+
+	cfg := &Config{
 		Port:             getEnv("PORT", "8080"),
 		DataDir:          getEnv("DATA_DIR", "/var/lib/hypeman"),
 		BridgeName:       getEnv("BRIDGE_NAME", "vmbr0"),
@@ -26,6 +33,8 @@ func Load() *Config {
 		JwtSecret:        getEnv("JWT_SECRET", ""),
 		DNSServer:        getEnv("DNS_SERVER", "1.1.1.1"),
 	}
+
+	return cfg
 }
 
 func getEnv(key, defaultValue string) string {
