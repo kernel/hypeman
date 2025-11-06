@@ -1,5 +1,5 @@
 SHELL := /bin/bash
-.PHONY: oapi-generate dev build test install-tools
+.PHONY: oapi-generate generate-wire generate-all dev build test install-tools
 
 # Directory where local binaries will be installed
 BIN_DIR ?= $(CURDIR)/bin
@@ -10,6 +10,7 @@ $(BIN_DIR):
 # Local binary paths
 OAPI_CODEGEN ?= $(BIN_DIR)/oapi-codegen
 AIR ?= $(BIN_DIR)/air
+WIRE ?= $(BIN_DIR)/wire
 
 # Install oapi-codegen
 $(OAPI_CODEGEN): | $(BIN_DIR)
@@ -19,7 +20,11 @@ $(OAPI_CODEGEN): | $(BIN_DIR)
 $(AIR): | $(BIN_DIR)
 	GOBIN=$(BIN_DIR) go install github.com/air-verse/air@latest
 
-install-tools: $(OAPI_CODEGEN) $(AIR)
+# Install wire for dependency injection
+$(WIRE): | $(BIN_DIR)
+	GOBIN=$(BIN_DIR) go install github.com/google/wire/cmd/wire@latest
+
+install-tools: $(OAPI_CODEGEN) $(AIR) $(WIRE)
 
 # Generate Go code from OpenAPI spec
 oapi-generate: $(OAPI_CODEGEN)
@@ -28,9 +33,17 @@ oapi-generate: $(OAPI_CODEGEN)
 	@echo "Formatting generated code..."
 	go fmt ./lib/oapi/oapi.go
 
+# Generate wire dependency injection code
+generate-wire: $(WIRE)
+	@echo "Generating wire code..."
+	cd ./cmd/api && $(WIRE)
+
+# Generate all code
+generate-all: oapi-generate generate-wire
+
 # Build the binary
 build: | $(BIN_DIR)
-	go build -o $(BIN_DIR)/dataplane ./cmd/dataplane
+	go build -o $(BIN_DIR)/dataplane ./cmd/api
 
 # Run in development mode with hot reload
 dev: $(AIR)

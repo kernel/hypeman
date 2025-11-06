@@ -15,10 +15,8 @@ import (
 	"github.com/ghodss/yaml"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	"github.com/onkernel/cloud-hypervisor-dataplane/cmd/dataplane/config"
-	dataplane "github.com/onkernel/cloud-hypervisor-dataplane/lib/dataplane"
-	"github.com/onkernel/cloud-hypervisor-dataplane/lib/oapi"
 	openapi "github.com/onkernel/cloud-hypervisor-dataplane"
+	"github.com/onkernel/cloud-hypervisor-dataplane/lib/oapi"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -30,21 +28,17 @@ func main() {
 }
 
 func run() error {
-	// Load configuration
-	cfg := config.Load()
+	// Initialize app with wire
+	app, cleanup, err := initializeApp()
+	if err != nil {
+		return fmt.Errorf("initialize application: %w", err)
+	}
+	defer cleanup()
 
-	// Setup logger
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
-	}))
-	slog.SetDefault(logger)
-
-	// Create dataplane service
-	service := dataplane.NewDataplaneService(cfg)
-
-	// Setup context with signal handling
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(app.Ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	logger := app.Logger
 
 	// Create router
 	r := chi.NewRouter()
@@ -74,8 +68,8 @@ func run() error {
 	})
 
 	// Setup strict handler
-	strictHandler := oapi.NewStrictHandler(service, nil)
-	
+	strictHandler := oapi.NewStrictHandler(app.ApiService, nil)
+
 	// Mount API routes
 	oapi.HandlerWithOptions(strictHandler, oapi.ChiServerOptions{
 		BaseRouter: r,
@@ -83,7 +77,7 @@ func run() error {
 
 	// Create HTTP server
 	srv := &http.Server{
-		Addr:    fmt.Sprintf(":%s", cfg.Port),
+		Addr:    fmt.Sprintf(":%s", app.Config.Port),
 		Handler: r,
 	}
 
@@ -92,7 +86,7 @@ func run() error {
 
 	// Run the server
 	grp.Go(func() error {
-		logger.Info("starting dataplane API server", "port", cfg.Port)
+		logger.Info("starting cloud hypervisor dataplane API", "port", app.Config.Port)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("http server error", "error", err)
 			return err

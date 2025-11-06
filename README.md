@@ -28,18 +28,26 @@ A generic dataplane API for managing VM lifecycle using Cloud Hypervisor with OC
 
 ```
 cloud-hypervisor-poc/
-├── cmd/dataplane/          # Main application entry point
-│   ├── main.go            # Server setup and routing
-│   └── config/            # Configuration management
+├── cmd/api/               # Main application entry point
+│   ├── main.go           # Server setup and routing
+│   ├── wire.go           # Wire dependency injection
+│   ├── wire_gen.go       # Generated wire code
+│   ├── config/           # Configuration management
+│   └── api/              # API handlers (one file per resource)
+│       ├── api.go        # ApiService struct
+│       ├── health.go     # Health check handler
+│       ├── images.go     # Image handlers
+│       ├── instances.go  # Instance handlers
+│       └── volumes.go    # Volume handlers
 ├── lib/
-│   ├── oapi/              # Generated OpenAPI code
-│   ├── dataplane/         # Service implementation
-│   ├── images/            # Image manager (stub)
-│   ├── instances/         # Instance manager (stub)
-│   └── volumes/           # Volume manager (stub)
-├── openapi.yaml           # OpenAPI 3.1 specification
-├── oapi-codegen.yaml      # Code generation config
-└── Makefile               # Build automation
+│   ├── oapi/             # Generated OpenAPI code
+│   ├── providers/        # Wire provider functions
+│   ├── images/           # Image manager service
+│   ├── instances/        # Instance manager service
+│   └── volumes/          # Volume manager service
+├── openapi.yaml          # OpenAPI 3.1 specification
+├── oapi-codegen.yaml     # Code generation config
+└── Makefile              # Build automation
 ```
 
 ## Getting Started
@@ -165,6 +173,18 @@ After modifying `openapi.yaml`, regenerate the Go code:
 
 ```bash
 make oapi-generate
+```
+
+After modifying dependency injection in `cmd/api/wire.go` or `lib/providers/providers.go`, regenerate wire code:
+
+```bash
+make generate-wire
+```
+
+Or generate everything at once:
+
+```bash
+make generate-all
 ```
 
 ### Testing

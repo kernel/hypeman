@@ -6,6 +6,7 @@ require (
 	github.com/getkin/kin-openapi v0.133.0
 	github.com/ghodss/yaml v1.0.0
 	github.com/go-chi/chi/v5 v5.2.3
+	github.com/google/wire v0.7.0
 	github.com/oapi-codegen/runtime v1.1.2
 	golang.org/x/sync v0.17.0
 )
