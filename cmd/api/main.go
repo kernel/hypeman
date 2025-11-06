@@ -16,6 +16,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/onkernel/hypeman"
+	mw "github.com/onkernel/hypeman/lib/middleware"
 	"github.com/onkernel/hypeman/lib/oapi"
 	"golang.org/x/sync/errgroup"
 )
@@ -40,17 +41,36 @@ func run() error {
 
 	logger := app.Logger
 
+	// Validate JWT secret is configured
+	if app.Config.JwtSecret == "" {
+		logger.Warn("JWT_SECRET not configured - API authentication will fail")
+	}
+
 	// Create router
 	r := chi.NewRouter()
 
-	// Middleware
-	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
-	r.Use(middleware.Logger)
-	r.Use(middleware.Recoverer)
-	r.Use(middleware.Timeout(60 * time.Second))
+	// Authenticated API endpoints
+	r.Group(func(r chi.Router) {
+		// Common middleware
+		r.Use(middleware.RequestID)
+		r.Use(middleware.RealIP)
+		r.Use(middleware.Logger)
+		r.Use(middleware.Recoverer)
+		r.Use(middleware.Timeout(60 * time.Second))
 
-	// Serve OpenAPI spec
+		// Setup strict handler
+		strictHandler := oapi.NewStrictHandler(app.ApiService, nil)
+
+		// Mount API routes with JWT authentication
+		oapi.HandlerWithOptions(strictHandler, oapi.ChiServerOptions{
+			BaseRouter: r,
+			Middlewares: []oapi.MiddlewareFunc{
+				mw.VerifyJWT(app.Config.JwtSecret),
+			},
+		})
+	})
+
+	// Unauthenticated endpoints (outside group)
 	r.Get("/spec.yaml", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/vnd.oai.openapi")
 		w.Write(hypeman.OpenAPIYAML)
@@ -65,14 +85,6 @@ func run() error {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(jsonData)
-	})
-
-	// Setup strict handler
-	strictHandler := oapi.NewStrictHandler(app.ApiService, nil)
-
-	// Mount API routes
-	oapi.HandlerWithOptions(strictHandler, oapi.ChiServerOptions{
-		BaseRouter: r,
 	})
 
 	// Create HTTP server
