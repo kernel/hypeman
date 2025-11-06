@@ -236,25 +236,90 @@ make generate-all
 
 ## Testing Pattern
 
-(TODO: To be established when implementing actual functionality)
+### Handler-Level Tests
 
+Test by calling `ApiService` methods directly (not via HTTP). This is simple, fast, and matches the kernel API pattern.
+
+**Test Helper (cmd/api/api/api_test.go):**
 ```go
-package images_test
+package api
 
 import (
     "context"
     "testing"
     
+    "github.com/onkernel/cloud-hypervisor-dataplane/cmd/api/config"
     "github.com/onkernel/cloud-hypervisor-dataplane/lib/images"
+    "github.com/onkernel/cloud-hypervisor-dataplane/lib/instances"
+    "github.com/onkernel/cloud-hypervisor-dataplane/lib/volumes"
+)
+
+func newTestService(t *testing.T) *ApiService {
+    cfg := &config.Config{
+        DataDir: t.TempDir(),  // Creates isolated temp directory per test
+    }
+    
+    return &ApiService{
+        Config:          cfg,
+        ImageManager:    images.NewManager(cfg.DataDir),
+        InstanceManager: instances.NewManager(cfg.DataDir),
+        VolumeManager:   volumes.NewManager(cfg.DataDir),
+    }
+}
+
+func ctx() context.Context {
+    return context.Background()
+}
+```
+
+**Example Test (cmd/api/api/images_test.go):**
+```go
+package api
+
+import (
+    "testing"
+    
+    "github.com/onkernel/cloud-hypervisor-dataplane/lib/oapi"
+    "github.com/stretchr/testify/assert"
     "github.com/stretchr/testify/require"
 )
 
 func TestGetImage_NotFound(t *testing.T) {
-    mgr := images.NewManager("/tmp/test")
-    _, err := mgr.GetImage(context.Background(), "fake-id")
-    require.ErrorIs(t, err, images.ErrNotFound)
+    svc := newTestService(t)
+    
+    resp, err := svc.GetImage(ctx(), oapi.GetImageRequestObject{
+        Id: "non-existent",
+    })
+    require.NoError(t, err)
+    
+    notFound, ok := resp.(oapi.GetImage404JSONResponse)
+    require.True(t, ok, "expected 404 response")
+    assert.Equal(t, "not_found", notFound.Code)
+    assert.Equal(t, "image not found", notFound.Message)
+}
+
+func TestListImages_Empty(t *testing.T) {
+    svc := newTestService(t)
+    
+    resp, err := svc.ListImages(ctx(), oapi.ListImagesRequestObject{})
+    require.NoError(t, err)
+    
+    list, ok := resp.(oapi.ListImages200JSONResponse)
+    require.True(t, ok, "expected 200 response")
+    assert.Empty(t, list)
 }
 ```
+
+### Running Tests
+
+```bash
+make test                    # Run all tests
+go test -v ./cmd/api/api/   # Run handler tests only
+```
+
+### CI Integration
+
+Tests run automatically on GitHub via `.github/workflows/test.yml` on push and PR.
 
 ## Comments
 

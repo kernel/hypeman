@@ -51,7 +51,7 @@ dev: $(AIR)
 
 # Run tests
 test:
-	go test -v ./...
+	go test -v -timeout 30s ./...
 
 # Clean generated files and binaries
 clean:

@@ -1,5 +1,7 @@
 # Cloud Hypervisor Dataplane API
 
+[![Test](https://github.com/onkernel/cloud-hypervisor-dataplane/actions/workflows/test.yml/badge.svg)](https://github.com/onkernel/cloud-hypervisor-dataplane/actions/workflows/test.yml)
+
 A generic dataplane API for managing VM lifecycle using Cloud Hypervisor with OCI-based workloads. This project provides a clean, REST-ful interface for creating, managing, and orchestrating VMs from container images.
 
 ## Features
@@ -189,9 +191,17 @@ make generate-all
 
 ### Testing
 
+Run all tests:
 ```bash
 make test
 ```
+
+Run specific package:
+```bash
+go test -v ./cmd/api/api/
+```
+
+Tests are handler-level tests that call `ApiService` methods directly (no HTTP server needed).
 
 ### Building
 
