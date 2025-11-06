@@ -14,9 +14,11 @@ cloud-hypervisor --version  # Verify
 ch-remote --version
 ```
 
-**containerd** - [Installation guide](https://github.com/containerd/containerd/blob/main/docs/getting-started.md)
+**Docker** - [Installation guide](https://docs.docker.com/engine/install/)
 ```bash
-containerd --version  # Verify
+docker --version  # Verify
+# Add your user to docker group for non-root access:
+sudo usermod -aG docker $USER
 ```
 
 **Go 1.25.4+** and **KVM**

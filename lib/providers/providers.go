@@ -43,4 +43,3 @@ func ProvideInstanceManager(cfg *config.Config) instances.Manager {
 func ProvideVolumeManager(cfg *config.Config) volumes.Manager {
 	return volumes.NewManager(cfg.DataDir)
 }
-

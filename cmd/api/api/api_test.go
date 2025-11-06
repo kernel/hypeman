@@ -27,4 +27,3 @@ func newTestService(t *testing.T) *ApiService {
 func ctx() context.Context {
 	return context.Background()
 }
-
