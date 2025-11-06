@@ -16,9 +16,12 @@ func newTestService(t *testing.T) *ApiService {
 		DataDir: t.TempDir(),
 	}
 
+	// Create Docker client for testing (may be nil if not available)
+	dockerClient, _ := images.NewDockerClient()
+
 	return &ApiService{
 		Config:          cfg,
-		ImageManager:    images.NewManager(cfg.DataDir),
+		ImageManager:    images.NewManager(cfg.DataDir, dockerClient),
 		InstanceManager: instances.NewManager(cfg.DataDir),
 		VolumeManager:   volumes.NewManager(cfg.DataDir),
 	}

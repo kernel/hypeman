@@ -11,10 +11,10 @@ import (
 )
 
 func TestCreateImage(t *testing.T) {
-	skipIfNoDocker(t)
+	dockerClient := skipIfNoDocker(t)
 
 	dataDir := t.TempDir()
-	mgr := NewManager(dataDir)
+	mgr := NewManager(dataDir, dockerClient)
 
 	ctx := context.Background()
 	req := oapi.CreateImageRequest{
@@ -41,10 +41,10 @@ func TestCreateImage(t *testing.T) {
 }
 
 func TestCreateImageWithCustomID(t *testing.T) {
-	skipIfNoDocker(t)
+	dockerClient := skipIfNoDocker(t)
 
 	dataDir := t.TempDir()
-	mgr := NewManager(dataDir)
+	mgr := NewManager(dataDir, dockerClient)
 
 	ctx := context.Background()
 	customID := "my-custom-alpine"
@@ -60,10 +60,10 @@ func TestCreateImageWithCustomID(t *testing.T) {
 }
 
 func TestCreateImageDuplicate(t *testing.T) {
-	skipIfNoDocker(t)
+	dockerClient := skipIfNoDocker(t)
 
 	dataDir := t.TempDir()
-	mgr := NewManager(dataDir)
+	mgr := NewManager(dataDir, dockerClient)
 
 	ctx := context.Background()
 	req := oapi.CreateImageRequest{
@@ -80,10 +80,10 @@ func TestCreateImageDuplicate(t *testing.T) {
 }
 
 func TestListImages(t *testing.T) {
-	skipIfNoDocker(t)
+	dockerClient := skipIfNoDocker(t)
 
 	dataDir := t.TempDir()
-	mgr := NewManager(dataDir)
+	mgr := NewManager(dataDir, dockerClient)
 
 	ctx := context.Background()
 
@@ -107,10 +107,10 @@ func TestListImages(t *testing.T) {
 }
 
 func TestGetImage(t *testing.T) {
-	skipIfNoDocker(t)
+	dockerClient := skipIfNoDocker(t)
 
 	dataDir := t.TempDir()
-	mgr := NewManager(dataDir)
+	mgr := NewManager(dataDir, dockerClient)
 
 	ctx := context.Background()
 	req := oapi.CreateImageRequest{
@@ -130,8 +130,13 @@ func TestGetImage(t *testing.T) {
 }
 
 func TestGetImageNotFound(t *testing.T) {
+	dockerClient, _ := NewDockerClient()
+	if dockerClient != nil {
+		defer dockerClient.Close()
+	}
+
 	dataDir := t.TempDir()
-	mgr := NewManager(dataDir)
+	mgr := NewManager(dataDir, dockerClient)
 
 	ctx := context.Background()
 
@@ -141,10 +146,10 @@ func TestGetImageNotFound(t *testing.T) {
 }
 
 func TestDeleteImage(t *testing.T) {
-	skipIfNoDocker(t)
+	dockerClient := skipIfNoDocker(t)
 
 	dataDir := t.TempDir()
-	mgr := NewManager(dataDir)
+	mgr := NewManager(dataDir, dockerClient)
 
 	ctx := context.Background()
 	req := oapi.CreateImageRequest{
@@ -169,8 +174,13 @@ func TestDeleteImage(t *testing.T) {
 }
 
 func TestDeleteImageNotFound(t *testing.T) {
+	dockerClient, _ := NewDockerClient()
+	if dockerClient != nil {
+		defer dockerClient.Close()
+	}
+
 	dataDir := t.TempDir()
-	mgr := NewManager(dataDir)
+	mgr := NewManager(dataDir, dockerClient)
 
 	ctx := context.Background()
 
@@ -200,19 +210,22 @@ func TestGenerateImageID(t *testing.T) {
 }
 
 // skipIfNoDocker skips the test if Docker is not available or accessible
-func skipIfNoDocker(t *testing.T) {
+// Returns a DockerClient for use in tests
+func skipIfNoDocker(t *testing.T) *DockerClient {
 	// Try to connect to Docker to verify we have permission
-	client, err := newDockerClient()
+	client, err := NewDockerClient()
 	if err != nil {
 		t.Skipf("cannot connect to docker: %v, skipping test", err)
 	}
-	defer client.close()
 
 	// Verify we can actually use Docker by pinging it
 	ctx := context.Background()
 	_, err = client.cli.Ping(ctx)
 	if err != nil {
+		client.Close()
 		t.Skipf("docker not available: %v, skipping test", err)
 	}
+
+	return client
 }
 

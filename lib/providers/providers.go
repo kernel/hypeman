@@ -29,9 +29,14 @@ func ProvideConfig() *config.Config {
 	return config.Load()
 }
 
+// ProvideDockerClient provides a Docker client
+func ProvideDockerClient() (*images.DockerClient, error) {
+	return images.NewDockerClient()
+}
+
 // ProvideImageManager provides the image manager
-func ProvideImageManager(cfg *config.Config) images.Manager {
-	return images.NewManager(cfg.DataDir)
+func ProvideImageManager(cfg *config.Config, dockerClient *images.DockerClient) images.Manager {
+	return images.NewManager(cfg.DataDir, dockerClient)
 }
 
 // ProvideInstanceManager provides the instance manager

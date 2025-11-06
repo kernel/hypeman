@@ -23,13 +23,15 @@ type Manager interface {
 }
 
 type manager struct {
-	dataDir string
+	dataDir      string
+	dockerClient *DockerClient
 }
 
-// NewManager creates a new image manager
-func NewManager(dataDir string) Manager {
+// NewManager creates a new image manager with Docker client
+func NewManager(dataDir string, dockerClient *DockerClient) Manager {
 	return &manager{
-		dataDir: dataDir,
+		dataDir:      dataDir,
+		dockerClient: dockerClient,
 	}
 }
 
@@ -60,18 +62,11 @@ func (m *manager) CreateImage(ctx context.Context, req oapi.CreateImageRequest) 
 		return nil, ErrAlreadyExists
 	}
 
-	// 3. Connect to Docker
-	client, err := newDockerClient()
-	if err != nil {
-		return nil, fmt.Errorf("connect to docker: %w", err)
-	}
-	defer client.close()
-
-	// 4. Pull image and export rootfs to temp directory
+	// 3. Pull image and export rootfs to temp directory
 	tempDir := filepath.Join(os.TempDir(), fmt.Sprintf("hypeman-image-%s-%d", *imageID, time.Now().Unix()))
 	defer os.RemoveAll(tempDir) // cleanup temp dir
 
-	containerMeta, err := client.pullAndExport(ctx, req.Name, tempDir)
+	containerMeta, err := m.dockerClient.pullAndExport(ctx, req.Name, tempDir)
 	if err != nil {
 		return nil, fmt.Errorf("pull and export: %w", err)
 	}

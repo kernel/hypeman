@@ -28,7 +28,11 @@ func initializeApp() (*application, func(), error) {
 	logger := providers.ProvideLogger()
 	context := providers.ProvideContext(logger)
 	config := providers.ProvideConfig()
-	manager := providers.ProvideImageManager(config)
+	dockerClient, err := providers.ProvideDockerClient()
+	if err != nil {
+		return nil, nil, err
+	}
+	manager := providers.ProvideImageManager(config, dockerClient)
 	instancesManager := providers.ProvideInstanceManager(config)
 	volumesManager := providers.ProvideVolumeManager(config)
 	apiService := api.New(config, manager, instancesManager, volumesManager)

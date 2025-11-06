@@ -11,27 +11,27 @@ import (
 	"github.com/docker/docker/pkg/archive"
 )
 
-// dockerClient wraps Docker API operations
-type dockerClient struct {
+// DockerClient wraps Docker API operations
+type DockerClient struct {
 	cli *client.Client
 }
 
-// newDockerClient creates a new Docker client using environment variables
-func newDockerClient() (*dockerClient, error) {
+// NewDockerClient creates a new Docker client using environment variables
+func NewDockerClient() (*DockerClient, error) {
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
 		return nil, fmt.Errorf("create docker client: %w", err)
 	}
-	return &dockerClient{cli: cli}, nil
+	return &DockerClient{cli: cli}, nil
 }
 
-// close closes the Docker client
-func (d *dockerClient) close() error {
+// Close closes the Docker client
+func (d *DockerClient) Close() error {
 	return d.cli.Close()
 }
 
 // pullAndExport pulls an OCI image and exports its rootfs to a directory
-func (d *dockerClient) pullAndExport(ctx context.Context, imageRef, exportDir string) (*containerMetadata, error) {
+func (d *DockerClient) pullAndExport(ctx context.Context, imageRef, exportDir string) (*containerMetadata, error) {
 	// Pull the image
 	pullReader, err := d.cli.ImagePull(ctx, imageRef, image.PullOptions{})
 	if err != nil {
