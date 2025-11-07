@@ -1,6 +1,6 @@
 # Image Manager
 
-Converts OCI container images into bootable ext4 disk images for Cloud Hypervisor VMs.
+Converts OCI images to bootable ext4 disks for Cloud Hypervisor VMs.
 
 ## Architecture
 
@@ -46,23 +46,35 @@ OCI Registry → containers/image → OCI Layout → umoci → rootfs/ → mkfs.
 - `-O ^has_journal` - No journal (disks mounted read-only in VMs, saves ~32MB)
 - Minimum 10MB size covers ext4 metadata (~5MB for superblock, inodes, bitmaps)
 
-**Alternative tried:** go-diskfs pure Go ext4 - has bugs
+**Alternative tried:** go-diskfs pure Go ext4, got too complicated. Could revisit this.
 
-**Tradeoff:** Shell command vs pure Go, but mkfs.ext4 is universally available and robust
+**Tradeoff:** Shell command vs pure Go, but mkfs.ext4 is widely available and robust
 
-## Filesystem Persistence (storage.go)
+## Filesystem Layout (storage.go)
 
-**Metadata:** JSON files with atomic writes (tmp + rename)
+
 ```
-/var/lib/hypeman/images/{id}/
-  rootfs.ext4
-  metadata.json
+/var/lib/hypeman/
+  images/
+    docker.io/library/alpine/
+      latest/
+        metadata.json  # Status, entrypoint, cmd, env
+        rootfs.ext4    # Bootable disk
+      3.18/            # Different version
+  system/oci-cache/
+    docker.io/library/alpine/latest/
+      blobs/sha256/... # Shared layers, persistent
 ```
 
-**Why filesystem vs database?**
-- Disk images must be on filesystem anyway
-- No sync issues between DB and actual artifacts
-- Simple recovery (scan directory to rebuild state)
+**Benefits:**
+- Natural hierarchy (versions grouped)
+- Layer caching (alpine:latest and alpine:3.18 share base layers)
+
+## Input Validation
+
+Uses `github.com/distribution/reference` to validate and normalize names:
+- `alpine` → `docker.io/library/alpine:latest`
+- Rejects invalid formats (returns 400)
 
 ## Build Tags
 
