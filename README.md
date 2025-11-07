@@ -8,20 +8,12 @@ Run containerized workloads in VMs, powered by [Cloud Hypervisor](https://github
 
 ### Prerequisites
 
-**Cloud Hypervisor** - [Installation guide](https://www.cloudhypervisor.org/docs/prologue/quick-start/#use-pre-built-binaries)
-```bash
-cloud-hypervisor --version  # Verify
-ch-remote --version
-```
+**Go 1.25.4+**, **Cloud Hypervisor**, **KVM**, **mkfs.ext4**
 
-**Docker** - [Installation guide](https://docs.docker.com/engine/install/)
 ```bash
-docker --version  # Verify
-# Add your user to docker group for non-root access:
-sudo usermod -aG docker $USER
+cloud-hypervisor --version
+mkfs.ext4 -V
 ```
-
-**Go 1.25.4+** and **KVM**
 
 ### Configuration
 
