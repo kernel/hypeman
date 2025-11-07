@@ -32,7 +32,7 @@ func initializeApp() (*application, func(), error) {
 		providers.ProvideLogger,
 		providers.ProvideContext,
 		providers.ProvideConfig,
-		providers.ProvideDockerClient,
+		providers.ProvideOCIClient,
 		providers.ProvideImageManager,
 		providers.ProvideInstanceManager,
 		providers.ProvideVolumeManager,

@@ -29,14 +29,16 @@ func ProvideConfig() *config.Config {
 	return config.Load()
 }
 
-// ProvideDockerClient provides a Docker client
-func ProvideDockerClient() (*images.DockerClient, error) {
-	return images.NewDockerClient()
+// ProvideOCIClient provides an OCI client
+func ProvideOCIClient(cfg *config.Config) (*images.OCIClient, error) {
+	// Use a cache directory under dataDir for OCI layouts
+	cacheDir := cfg.DataDir + "/oci-cache"
+	return images.NewOCIClient(cacheDir)
 }
 
 // ProvideImageManager provides the image manager
-func ProvideImageManager(cfg *config.Config, dockerClient *images.DockerClient) images.Manager {
-	return images.NewManager(cfg.DataDir, dockerClient)
+func ProvideImageManager(cfg *config.Config, ociClient *images.OCIClient) images.Manager {
+	return images.NewManager(cfg.DataDir, ociClient)
 }
 
 // ProvideInstanceManager provides the instance manager

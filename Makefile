@@ -43,7 +43,7 @@ generate-all: oapi-generate generate-wire
 
 # Build the binary
 build: | $(BIN_DIR)
-	go build -o $(BIN_DIR)/hypeman ./cmd/api
+	go build -tags containers_image_openpgp -o $(BIN_DIR)/hypeman ./cmd/api
 
 # Run in development mode with hot reload
 dev: $(AIR)
@@ -51,7 +51,7 @@ dev: $(AIR)
 
 # Run tests
 test:
-	go test -v -timeout 30s ./...
+	go test -tags containers_image_openpgp -v -timeout 30s ./...
 
 # Clean generated files and binaries
 clean:

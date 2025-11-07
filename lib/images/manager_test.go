@@ -11,10 +11,11 @@ import (
 )
 
 func TestCreateImage(t *testing.T) {
-	dockerClient := requireDocker(t)
+	ociClient, err := NewOCIClient(t.TempDir())
+	require.NoError(t, err)
 
 	dataDir := t.TempDir()
-	mgr := NewManager(dataDir, dockerClient)
+	mgr := NewManager(dataDir, ociClient)
 
 	ctx := context.Background()
 	req := oapi.CreateImageRequest{
@@ -41,10 +42,11 @@ func TestCreateImage(t *testing.T) {
 }
 
 func TestCreateImageWithCustomID(t *testing.T) {
-	dockerClient := requireDocker(t)
+	ociClient, err := NewOCIClient(t.TempDir())
+	require.NoError(t, err)
 
 	dataDir := t.TempDir()
-	mgr := NewManager(dataDir, dockerClient)
+	mgr := NewManager(dataDir, ociClient)
 
 	ctx := context.Background()
 	customID := "my-custom-alpine"
@@ -60,10 +62,11 @@ func TestCreateImageWithCustomID(t *testing.T) {
 }
 
 func TestCreateImageDuplicate(t *testing.T) {
-	dockerClient := requireDocker(t)
+	ociClient, err := NewOCIClient(t.TempDir())
+	require.NoError(t, err)
 
 	dataDir := t.TempDir()
-	mgr := NewManager(dataDir, dockerClient)
+	mgr := NewManager(dataDir, ociClient)
 
 	ctx := context.Background()
 	req := oapi.CreateImageRequest{
@@ -71,7 +74,7 @@ func TestCreateImageDuplicate(t *testing.T) {
 	}
 
 	// Create first image
-	_, err := mgr.CreateImage(ctx, req)
+	_, err = mgr.CreateImage(ctx, req)
 	require.NoError(t, err)
 
 	// Try to create duplicate
@@ -80,10 +83,11 @@ func TestCreateImageDuplicate(t *testing.T) {
 }
 
 func TestListImages(t *testing.T) {
-	dockerClient := requireDocker(t)
+	ociClient, err := NewOCIClient(t.TempDir())
+	require.NoError(t, err)
 
 	dataDir := t.TempDir()
-	mgr := NewManager(dataDir, dockerClient)
+	mgr := NewManager(dataDir, ociClient)
 
 	ctx := context.Background()
 
@@ -107,10 +111,11 @@ func TestListImages(t *testing.T) {
 }
 
 func TestGetImage(t *testing.T) {
-	dockerClient := requireDocker(t)
+	ociClient, err := NewOCIClient(t.TempDir())
+	require.NoError(t, err)
 
 	dataDir := t.TempDir()
-	mgr := NewManager(dataDir, dockerClient)
+	mgr := NewManager(dataDir, ociClient)
 
 	ctx := context.Background()
 	req := oapi.CreateImageRequest{
@@ -130,26 +135,25 @@ func TestGetImage(t *testing.T) {
 }
 
 func TestGetImageNotFound(t *testing.T) {
-	dockerClient, _ := NewDockerClient()
-	if dockerClient != nil {
-		defer dockerClient.Close()
-	}
+	ociClient, err := NewOCIClient(t.TempDir())
+	require.NoError(t, err)
 
 	dataDir := t.TempDir()
-	mgr := NewManager(dataDir, dockerClient)
+	mgr := NewManager(dataDir, ociClient)
 
 	ctx := context.Background()
 
 	// Try to get non-existent image
-	_, err := mgr.GetImage(ctx, "nonexistent")
+	_, err = mgr.GetImage(ctx, "nonexistent")
 	require.ErrorIs(t, err, ErrNotFound)
 }
 
 func TestDeleteImage(t *testing.T) {
-	dockerClient := requireDocker(t)
+	ociClient, err := NewOCIClient(t.TempDir())
+	require.NoError(t, err)
 
 	dataDir := t.TempDir()
-	mgr := NewManager(dataDir, dockerClient)
+	mgr := NewManager(dataDir, ociClient)
 
 	ctx := context.Background()
 	req := oapi.CreateImageRequest{
@@ -174,18 +178,16 @@ func TestDeleteImage(t *testing.T) {
 }
 
 func TestDeleteImageNotFound(t *testing.T) {
-	dockerClient, _ := NewDockerClient()
-	if dockerClient != nil {
-		defer dockerClient.Close()
-	}
+	ociClient, err := NewOCIClient(t.TempDir())
+	require.NoError(t, err)
 
 	dataDir := t.TempDir()
-	mgr := NewManager(dataDir, dockerClient)
+	mgr := NewManager(dataDir, ociClient)
 
 	ctx := context.Background()
 
 	// Try to delete non-existent image
-	err := mgr.DeleteImage(ctx, "nonexistent")
+	err = mgr.DeleteImage(ctx, "nonexistent")
 	require.ErrorIs(t, err, ErrNotFound)
 }
 
@@ -209,23 +211,4 @@ func TestGenerateImageID(t *testing.T) {
 	}
 }
 
-// requireDocker fails the test if Docker is not available or accessible
-// Returns a DockerClient for use in tests
-func requireDocker(t *testing.T) *DockerClient {
-	// Try to connect to Docker to verify we have permission
-	client, err := NewDockerClient()
-	if err != nil {
-		t.Fatalf("cannot connect to docker: %v", err)
-	}
-
-	// Verify we can actually use Docker by pinging it
-	ctx := context.Background()
-	_, err = client.cli.Ping(ctx)
-	if err != nil {
-		client.Close()
-		t.Fatalf("docker not available: %v", err)
-	}
-
-	return client
-}
 

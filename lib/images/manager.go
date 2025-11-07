@@ -2,10 +2,8 @@ package images
 
 import (
 	"context"
-	"crypto/sha256"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -23,15 +21,15 @@ type Manager interface {
 }
 
 type manager struct {
-	dataDir      string
-	dockerClient *DockerClient
+	dataDir   string
+	ociClient *OCIClient
 }
 
-// NewManager creates a new image manager with Docker client
-func NewManager(dataDir string, dockerClient *DockerClient) Manager {
+// NewManager creates a new image manager with OCI client
+func NewManager(dataDir string, ociClient *OCIClient) Manager {
 	return &manager{
-		dataDir:      dataDir,
-		dockerClient: dockerClient,
+		dataDir:   dataDir,
+		ociClient: ociClient,
 	}
 }
 
@@ -66,7 +64,7 @@ func (m *manager) CreateImage(ctx context.Context, req oapi.CreateImageRequest) 
 	tempDir := filepath.Join(os.TempDir(), fmt.Sprintf("hypeman-image-%s-%d", *imageID, time.Now().Unix()))
 	defer os.RemoveAll(tempDir) // cleanup temp dir
 
-	containerMeta, err := m.dockerClient.pullAndExport(ctx, req.Name, tempDir)
+	containerMeta, err := m.ociClient.pullAndExport(ctx, req.Name, tempDir)
 	if err != nil {
 		return nil, fmt.Errorf("pull and export: %w", err)
 	}
@@ -128,75 +126,4 @@ func generateImageID(imageName string) string {
 	return "img-" + sanitized
 }
 
-// convertToExt4 converts a rootfs directory to an ext4 disk image
-func convertToExt4(rootfsDir, diskPath string) (int64, error) {
-	// Calculate size of rootfs directory (rounded up to nearest GB, minimum 1GB)
-	sizeBytes, err := dirSize(rootfsDir)
-	if err != nil {
-		return 0, fmt.Errorf("calculate dir size: %w", err)
-	}
-
-	// Add 20% overhead for filesystem metadata, minimum 1GB
-	diskSizeBytes := sizeBytes + (sizeBytes / 5)
-	const minSize = 1024 * 1024 * 1024 // 1GB
-	if diskSizeBytes < minSize {
-		diskSizeBytes = minSize
-	}
-
-	// Ensure parent directory exists
-	if err := os.MkdirAll(filepath.Dir(diskPath), 0755); err != nil {
-		return 0, fmt.Errorf("create disk parent dir: %w", err)
-	}
-
-	// Create sparse file
-	f, err := os.Create(diskPath)
-	if err != nil {
-		return 0, fmt.Errorf("create disk file: %w", err)
-	}
-	if err := f.Truncate(diskSizeBytes); err != nil {
-		f.Close()
-		return 0, fmt.Errorf("truncate disk file: %w", err)
-	}
-	f.Close()
-
-	// Format as ext4 with rootfs contents
-	cmd := exec.Command("mkfs.ext4", "-d", rootfsDir, "-F", diskPath)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return 0, fmt.Errorf("mkfs.ext4 failed: %w, output: %s", err, output)
-	}
-
-	// Get actual disk size
-	stat, err := os.Stat(diskPath)
-	if err != nil {
-		return 0, fmt.Errorf("stat disk: %w", err)
-	}
-
-	return stat.Size(), nil
-}
-
-// dirSize calculates the total size of a directory
-func dirSize(path string) (int64, error) {
-	var size int64
-	err := filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if !info.IsDir() {
-			size += info.Size()
-		}
-		return nil
-	})
-	return size, err
-}
-
-// checksumFile computes sha256 of a file
-func checksumFile(path string) (string, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", err
-	}
-	hash := sha256.Sum256(data)
-	return fmt.Sprintf("%x", hash), nil
-}
 

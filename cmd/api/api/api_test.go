@@ -16,12 +16,15 @@ func newTestService(t *testing.T) *ApiService {
 		DataDir: t.TempDir(),
 	}
 
-	// Create Docker client for testing (may be nil if not available)
-	dockerClient, _ := images.NewDockerClient()
+	// Create OCI client for testing
+	ociClient, err := images.NewOCIClient(cfg.DataDir + "/oci-cache")
+	if err != nil {
+		t.Fatalf("failed to create OCI client: %v", err)
+	}
 
 	return &ApiService{
 		Config:          cfg,
-		ImageManager:    images.NewManager(cfg.DataDir, dockerClient),
+		ImageManager:    images.NewManager(cfg.DataDir, ociClient),
 		InstanceManager: instances.NewManager(cfg.DataDir),
 		VolumeManager:   volumes.NewManager(cfg.DataDir),
 	}
