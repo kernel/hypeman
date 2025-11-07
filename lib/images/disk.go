@@ -15,9 +15,9 @@ func convertToExt4(rootfsDir, diskPath string) (int64, error) {
 		return 0, fmt.Errorf("calculate dir size: %w", err)
 	}
 
-	// Add 20% overhead for filesystem metadata, minimum 1GB
+	// Add 20% overhead for filesystem metadata, minimum 10MB
 	diskSizeBytes := sizeBytes + (sizeBytes / 5)
-	const minSize = 1024 * 1024 * 1024 // 1GB
+	const minSize = 10 * 1024 * 1024 // 10MB
 	if diskSizeBytes < minSize {
 		diskSizeBytes = minSize
 	}
@@ -39,8 +39,11 @@ func convertToExt4(rootfsDir, diskPath string) (int64, error) {
 	f.Close()
 
 	// Format as ext4 with rootfs contents using mkfs.ext4
-	// This works without root when creating filesystem in a regular file
-	cmd := exec.Command("mkfs.ext4", "-d", rootfsDir, "-F", diskPath)
+	// -b 4096: 4KB blocks (standard, matches VM page size)
+	// -O ^has_journal: Disable journal (not needed for read-only VM mounts)
+	// -d: Copy directory contents into filesystem
+	// -F: Force creation (file not block device)
+	cmd := exec.Command("mkfs.ext4", "-b", "4096", "-O", "^has_journal", "-d", rootfsDir, "-F", diskPath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return 0, fmt.Errorf("mkfs.ext4 failed: %w, output: %s", err, output)

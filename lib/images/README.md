@@ -41,7 +41,12 @@ OCI Registry → containers/image → OCI Layout → umoci → rootfs/ → mkfs.
 - Works without root when creating filesystem in a regular file (not block device)
 - `-d` flag copies directory contents into filesystem
 
-**Alternative tried:** go-diskfs pure Go ext4, got too tricky but could revisit this
+**Options:**
+- `-b 4096` - 4KB blocks (standard, matches VM page size)
+- `-O ^has_journal` - No journal (disks mounted read-only in VMs, saves ~32MB)
+- Minimum 10MB size covers ext4 metadata (~5MB for superblock, inodes, bitmaps)
+
+**Alternative tried:** go-diskfs pure Go ext4 - has bugs
 
 **Tradeoff:** Shell command vs pure Go, but mkfs.ext4 is universally available and robust
 
