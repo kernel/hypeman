@@ -12,24 +12,37 @@ import (
 
 // imageMetadata represents the metadata stored on disk
 type imageMetadata struct {
-	ID         string            `json:"id"`
-	Name       string            `json:"name"`
-	SizeBytes  int64             `json:"size_bytes"`
-	Entrypoint []string          `json:"entrypoint,omitempty"`
-	Cmd        []string          `json:"cmd,omitempty"`
-	Env        map[string]string `json:"env,omitempty"`
-	WorkingDir string            `json:"working_dir,omitempty"`
-	CreatedAt  time.Time         `json:"created_at"`
+	ID            string                       `json:"id"`
+	Name          string                       `json:"name"`
+	Status        string                       `json:"status"`
+	Progress      int                          `json:"progress"`
+	QueuePosition *int                         `json:"queue_position,omitempty"`
+	Error         *string                      `json:"error,omitempty"`
+	Request       *oapi.CreateImageRequest     `json:"request,omitempty"`
+	SizeBytes     int64                        `json:"size_bytes"`
+	Entrypoint    []string                     `json:"entrypoint,omitempty"`
+	Cmd           []string                     `json:"cmd,omitempty"`
+	Env           map[string]string            `json:"env,omitempty"`
+	WorkingDir    string                       `json:"working_dir,omitempty"`
+	CreatedAt     time.Time                    `json:"created_at"`
 }
 
 // toOAPI converts internal metadata to OpenAPI schema
 func (m *imageMetadata) toOAPI() *oapi.Image {
-	sizeBytes := m.SizeBytes
 	img := &oapi.Image{
-		Id:        m.ID,
-		Name:      m.Name,
-		SizeBytes: &sizeBytes,
-		CreatedAt: m.CreatedAt,
+		Id:            m.ID,
+		Name:          m.Name,
+		Status:        oapi.ImageStatus(m.Status),
+		Progress:      m.Progress,
+		QueuePosition: m.QueuePosition,
+		Error:         m.Error,
+		CreatedAt:     m.CreatedAt,
+	}
+
+	// Only set size_bytes when ready
+	if m.Status == StatusReady && m.SizeBytes > 0 {
+		sizeBytes := m.SizeBytes
+		img.SizeBytes = &sizeBytes
 	}
 
 	if len(m.Entrypoint) > 0 {

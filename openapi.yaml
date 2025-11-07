@@ -240,7 +240,7 @@ components:
     
     Image:
       type: object
-      required: [id, name, created_at]
+      required: [id, name, status, progress, created_at]
       properties:
         id:
           type: string
@@ -250,6 +250,27 @@ components:
           type: string
           description: OCI image reference
           example: docker.io/library/nginx:latest
+        status:
+          type: string
+          enum: [pending, pulling, unpacking, converting, ready, failed]
+          description: Build status
+          example: ready
+        progress:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: Build progress percentage
+          example: 100
+        queue_position:
+          type: integer
+          description: Position in build queue (null if not queued)
+          example: 2
+          nullable: true
+        error:
+          type: string
+          description: Error message if status is failed
+          example: "pull failed: connection timeout"
+          nullable: true
         version:
           type: string
           description: Image tag or digest
@@ -258,8 +279,9 @@ components:
         size_bytes:
           type: integer
           format: int64
-          description: Disk size in bytes
+          description: Disk size in bytes (null until ready)
           example: 536870912
+          nullable: true
         entrypoint:
           type: array
           items:
@@ -415,8 +437,8 @@ paths:
             schema:
               $ref: "#/components/schemas/CreateImageRequest"
       responses:
-        201:
-          description: Image created
+        202:
+          description: Image build started (async)
           content:
             application/json:
               schema:
@@ -429,6 +451,38 @@ paths:
                 $ref: "#/components/schemas/Error"
         401:
           description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  
+  /images/{id}/progress:
+    get:
+      summary: Stream image build progress (SSE)
+      operationId: getImageProgress
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        200:
+          description: Progress event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        404:
+          description: Image not found
           content:
             application/json:
               schema:

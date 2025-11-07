@@ -24,7 +24,7 @@ func newTestService(t *testing.T) *ApiService {
 
 	return &ApiService{
 		Config:          cfg,
-		ImageManager:    images.NewManager(cfg.DataDir, ociClient),
+		ImageManager:    images.NewManager(cfg.DataDir, ociClient, 1),
 		InstanceManager: instances.NewManager(cfg.DataDir),
 		VolumeManager:   volumes.NewManager(cfg.DataDir),
 	}

@@ -38,7 +38,7 @@ func ProvideOCIClient(cfg *config.Config) (*images.OCIClient, error) {
 
 // ProvideImageManager provides the image manager
 func ProvideImageManager(cfg *config.Config, ociClient *images.OCIClient) images.Manager {
-	return images.NewManager(cfg.DataDir, ociClient)
+	return images.NewManager(cfg.DataDir, ociClient, cfg.MaxConcurrentBuilds)
 }
 
 // ProvideInstanceManager provides the instance manager

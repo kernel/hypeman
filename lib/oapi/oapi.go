@@ -32,6 +32,16 @@ const (
 	Ok HealthStatus = "ok"
 )
 
+// Defines values for ImageStatus.
+const (
+	Converting ImageStatus = "converting"
+	Failed     ImageStatus = "failed"
+	Pending    ImageStatus = "pending"
+	Pulling    ImageStatus = "pulling"
+	Ready      ImageStatus = "ready"
+	Unpacking  ImageStatus = "unpacking"
+)
+
 // Defines values for InstanceState.
 const (
 	Created  InstanceState = "Created"
@@ -155,14 +165,26 @@ type Image struct {
 	// Env Environment variables from container metadata
 	Env *map[string]string `json:"env,omitempty"`
 
+	// Error Error message if status is failed
+	Error *string `json:"error"`
+
 	// Id Unique identifier
 	Id string `json:"id"`
 
 	// Name OCI image reference
 	Name string `json:"name"`
 
-	// SizeBytes Disk size in bytes
-	SizeBytes *int64 `json:"size_bytes,omitempty"`
+	// Progress Build progress percentage
+	Progress int `json:"progress"`
+
+	// QueuePosition Position in build queue (null if not queued)
+	QueuePosition *int `json:"queue_position"`
+
+	// SizeBytes Disk size in bytes (null until ready)
+	SizeBytes *int64 `json:"size_bytes"`
+
+	// Status Build status
+	Status ImageStatus `json:"status"`
 
 	// Version Image tag or digest
 	Version *string `json:"version"`
@@ -170,6 +192,9 @@ type Image struct {
 	// WorkingDir Working directory from container metadata
 	WorkingDir *string `json:"working_dir"`
 }
+
+// ImageStatus Build status
+type ImageStatus string
 
 // Instance defines model for Instance.
 type Instance struct {
@@ -397,6 +422,9 @@ type ClientInterface interface {
 	// GetImage request
 	GetImage(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// GetImageProgress request
+	GetImageProgress(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// ListInstances request
 	ListInstances(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -505,6 +533,18 @@ func (c *Client) DeleteImage(ctx context.Context, id string, reqEditors ...Reque
 
 func (c *Client) GetImage(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetImageRequest(c.Server, id)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetImageProgress(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetImageProgressRequest(c.Server, id)
 	if err != nil {
 		return nil, err
 	}
@@ -852,6 +892,40 @@ func NewGetImageRequest(server string, id string) (*http.Request, error) {
 	}
 
 	operationPath := fmt.Sprintf("/images/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewGetImageProgressRequest generates requests for GetImageProgress
+func NewGetImageProgressRequest(server string, id string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "id", runtime.ParamLocationPath, id)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/images/%s/progress", pathParam0)
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -1434,6 +1508,9 @@ type ClientWithResponsesInterface interface {
 	// GetImageWithResponse request
 	GetImageWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*GetImageResponse, error)
 
+	// GetImageProgressWithResponse request
+	GetImageProgressWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*GetImageProgressResponse, error)
+
 	// ListInstancesWithResponse request
 	ListInstancesWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListInstancesResponse, error)
 
@@ -1529,7 +1606,7 @@ func (r ListImagesResponse) StatusCode() int {
 type CreateImageResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
-	JSON201      *Image
+	JSON202      *Image
 	JSON400      *Error
 	JSON401      *Error
 	JSON500      *Error
@@ -1592,6 +1669,29 @@ func (r GetImageResponse) Status() string {
 
 // StatusCode returns HTTPResponse.StatusCode
 func (r GetImageResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type GetImageProgressResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON404      *Error
+	JSON500      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r GetImageProgressResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetImageProgressResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
@@ -1966,6 +2066,15 @@ func (c *ClientWithResponses) GetImageWithResponse(ctx context.Context, id strin
 	return ParseGetImageResponse(rsp)
 }
 
+// GetImageProgressWithResponse request returning *GetImageProgressResponse
+func (c *ClientWithResponses) GetImageProgressWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*GetImageProgressResponse, error) {
+	rsp, err := c.GetImageProgress(ctx, id, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetImageProgressResponse(rsp)
+}
+
 // ListInstancesWithResponse request returning *ListInstancesResponse
 func (c *ClientWithResponses) ListInstancesWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListInstancesResponse, error) {
 	rsp, err := c.ListInstances(ctx, reqEditors...)
@@ -2187,12 +2296,12 @@ func ParseCreateImageResponse(rsp *http.Response) (*CreateImageResponse, error) 
 	}
 
 	switch {
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
 		var dest Image
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
-		response.JSON201 = &dest
+		response.JSON202 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
 		var dest Error
@@ -2274,6 +2383,39 @@ func ParseGetImageResponse(rsp *http.Response) (*GetImageResponse, error) {
 		}
 		response.JSON200 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetImageProgressResponse parses an HTTP response from a GetImageProgressWithResponse call
+func ParseGetImageProgressResponse(rsp *http.Response) (*GetImageProgressResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetImageProgressResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
 		var dest Error
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -2851,6 +2993,9 @@ type ServerInterface interface {
 	// Get image details
 	// (GET /images/{id})
 	GetImage(w http.ResponseWriter, r *http.Request, id string)
+	// Stream image build progress (SSE)
+	// (GET /images/{id}/progress)
+	GetImageProgress(w http.ResponseWriter, r *http.Request, id string)
 	// List instances
 	// (GET /instances)
 	ListInstances(w http.ResponseWriter, r *http.Request)
@@ -2923,6 +3068,12 @@ func (_ Unimplemented) DeleteImage(w http.ResponseWriter, r *http.Request, id st
 // Get image details
 // (GET /images/{id})
 func (_ Unimplemented) GetImage(w http.ResponseWriter, r *http.Request, id string) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Stream image build progress (SSE)
+// (GET /images/{id}/progress)
+func (_ Unimplemented) GetImageProgress(w http.ResponseWriter, r *http.Request, id string) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -3120,6 +3271,37 @@ func (siw *ServerInterfaceWrapper) GetImage(w http.ResponseWriter, r *http.Reque
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetImage(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetImageProgress operation middleware
+func (siw *ServerInterfaceWrapper) GetImageProgress(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", chi.URLParam(r, "id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetImageProgress(w, r, id)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -3654,6 +3836,9 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 		r.Get(options.BaseURL+"/images/{id}", wrapper.GetImage)
 	})
 	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/images/{id}/progress", wrapper.GetImageProgress)
+	})
+	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/instances", wrapper.ListInstances)
 	})
 	r.Group(func(r chi.Router) {
@@ -3754,11 +3939,11 @@ type CreateImageResponseObject interface {
 	VisitCreateImageResponse(w http.ResponseWriter) error
 }
 
-type CreateImage201JSONResponse Image
+type CreateImage202JSONResponse Image
 
-func (response CreateImage201JSONResponse) VisitCreateImageResponse(w http.ResponseWriter) error {
+func (response CreateImage202JSONResponse) VisitCreateImageResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(201)
+	w.WriteHeader(202)
 
 	return json.NewEncoder(w).Encode(response)
 }
@@ -3853,6 +4038,51 @@ func (response GetImage404JSONResponse) VisitGetImageResponse(w http.ResponseWri
 type GetImage500JSONResponse Error
 
 func (response GetImage500JSONResponse) VisitGetImageResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetImageProgressRequestObject struct {
+	Id string `json:"id"`
+}
+
+type GetImageProgressResponseObject interface {
+	VisitGetImageProgressResponse(w http.ResponseWriter) error
+}
+
+type GetImageProgress200TexteventStreamResponse struct {
+	Body          io.Reader
+	ContentLength int64
+}
+
+func (response GetImageProgress200TexteventStreamResponse) VisitGetImageProgressResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "text/event-stream")
+	if response.ContentLength != 0 {
+		w.Header().Set("Content-Length", fmt.Sprint(response.ContentLength))
+	}
+	w.WriteHeader(200)
+
+	if closer, ok := response.Body.(io.ReadCloser); ok {
+		defer closer.Close()
+	}
+	_, err := io.Copy(w, response.Body)
+	return err
+}
+
+type GetImageProgress404JSONResponse Error
+
+func (response GetImageProgress404JSONResponse) VisitGetImageProgressResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetImageProgress500JSONResponse Error
+
+func (response GetImageProgress500JSONResponse) VisitGetImageProgressResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(500)
 
@@ -4405,6 +4635,9 @@ type StrictServerInterface interface {
 	// Get image details
 	// (GET /images/{id})
 	GetImage(ctx context.Context, request GetImageRequestObject) (GetImageResponseObject, error)
+	// Stream image build progress (SSE)
+	// (GET /images/{id}/progress)
+	GetImageProgress(ctx context.Context, request GetImageProgressRequestObject) (GetImageProgressResponseObject, error)
 	// List instances
 	// (GET /instances)
 	ListInstances(ctx context.Context, request ListInstancesRequestObject) (ListInstancesResponseObject, error)
@@ -4599,6 +4832,32 @@ func (sh *strictHandler) GetImage(w http.ResponseWriter, r *http.Request, id str
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(GetImageResponseObject); ok {
 		if err := validResponse.VisitGetImageResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetImageProgress operation middleware
+func (sh *strictHandler) GetImageProgress(w http.ResponseWriter, r *http.Request, id string) {
+	var request GetImageProgressRequestObject
+
+	request.Id = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetImageProgress(ctx, request.(GetImageProgressRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetImageProgress")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetImageProgressResponseObject); ok {
+		if err := validResponse.VisitGetImageProgressResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -4963,57 +5222,61 @@ func (sh *strictHandler) GetVolume(w http.ResponseWriter, r *http.Request, id st
 // Base64 encoded, gzipped, json marshaled Swagger object
 var swaggerSpec = []string{
 
-	"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",
-	"4fp/AQAA//+BHkAF40wAAA==",
+	"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",
+	"AAA=",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file

@@ -2,18 +2,20 @@ package config
 
 import (
 	"os"
+	"strconv"
 
 	"github.com/joho/godotenv"
 )
 
 type Config struct {
-	Port          string
-	DataDir       string
-	BridgeName    string
-	SubnetCIDR    string
-	SubnetGateway string
-	JwtSecret     string
-	DNSServer     string
+	Port                string
+	DataDir             string
+	BridgeName          string
+	SubnetCIDR          string
+	SubnetGateway       string
+	JwtSecret           string
+	DNSServer           string
+	MaxConcurrentBuilds int
 }
 
 // Load loads configuration from environment variables
@@ -23,13 +25,14 @@ func Load() *Config {
 	_ = godotenv.Load()
 
 	cfg := &Config{
-		Port:          getEnv("PORT", "8080"),
-		DataDir:       getEnv("DATA_DIR", "/var/lib/hypeman"),
-		BridgeName:    getEnv("BRIDGE_NAME", "vmbr0"),
-		SubnetCIDR:    getEnv("SUBNET_CIDR", "192.168.100.0/24"),
-		SubnetGateway: getEnv("SUBNET_GATEWAY", "192.168.100.1"),
-		JwtSecret:     getEnv("JWT_SECRET", ""),
-		DNSServer:     getEnv("DNS_SERVER", "1.1.1.1"),
+		Port:                getEnv("PORT", "8080"),
+		DataDir:             getEnv("DATA_DIR", "/var/lib/hypeman"),
+		BridgeName:          getEnv("BRIDGE_NAME", "vmbr0"),
+		SubnetCIDR:          getEnv("SUBNET_CIDR", "192.168.100.0/24"),
+		SubnetGateway:       getEnv("SUBNET_GATEWAY", "192.168.100.1"),
+		JwtSecret:           getEnv("JWT_SECRET", ""),
+		DNSServer:           getEnv("DNS_SERVER", "1.1.1.1"),
+		MaxConcurrentBuilds: getEnvInt("MAX_CONCURRENT_BUILDS", 1),
 	}
 
 	return cfg
@@ -38,6 +41,15 @@ func Load() *Config {
 func getEnv(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
+	}
+	return defaultValue
+}
+
+func getEnvInt(key string, defaultValue int) int {
+	if value := os.Getenv(key); value != "" {
+		if intVal, err := strconv.Atoi(value); err == nil {
+			return intVal
+		}
 	}
 	return defaultValue
 }

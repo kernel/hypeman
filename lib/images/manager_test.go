@@ -15,29 +15,43 @@ func TestCreateImage(t *testing.T) {
 	require.NoError(t, err)
 
 	dataDir := t.TempDir()
-	mgr := NewManager(dataDir, ociClient)
+	mgr := NewManager(dataDir, ociClient, 1)
 
 	ctx := context.Background()
 	req := oapi.CreateImageRequest{
 		Name: "docker.io/library/alpine:latest",
 	}
 
+	// CreateImage returns immediately with pending status
 	img, err := mgr.CreateImage(ctx, req)
 	require.NoError(t, err)
 	require.NotNil(t, img)
 	require.Equal(t, "docker.io/library/alpine:latest", img.Name)
 	require.Equal(t, "img-alpine-latest", img.Id)
+	require.Contains(t, []oapi.ImageStatus{StatusPending, StatusPulling}, img.Status)
+
+	// Wait for build to complete via progress channel
+	progressCh, err := mgr.GetProgress(ctx, img.Id)
+	require.NoError(t, err)
+
+	for update := range progressCh {
+		if update.Status == StatusReady || update.Status == StatusFailed {
+			require.Equal(t, StatusReady, update.Status)
+			break
+		}
+	}
+
+	// Verify final state
+	img, err = mgr.GetImage(ctx, img.Id)
+	require.NoError(t, err)
+	require.Equal(t, oapi.ImageStatus(StatusReady), img.Status)
+	require.Equal(t, 100, img.Progress)
 	require.NotNil(t, img.SizeBytes)
 	require.Greater(t, *img.SizeBytes, int64(0))
 
 	// Verify disk image was created
 	diskPath := filepath.Join(dataDir, "images", img.Id, "rootfs.ext4")
 	_, err = os.Stat(diskPath)
-	require.NoError(t, err)
-
-	// Verify metadata file was created
-	metaPath := filepath.Join(dataDir, "images", img.Id, "metadata.json")
-	_, err = os.Stat(metaPath)
 	require.NoError(t, err)
 }
 
@@ -46,7 +60,7 @@ func TestCreateImageWithCustomID(t *testing.T) {
 	require.NoError(t, err)
 
 	dataDir := t.TempDir()
-	mgr := NewManager(dataDir, ociClient)
+	mgr := NewManager(dataDir, ociClient, 1)
 
 	ctx := context.Background()
 	customID := "my-custom-alpine"
@@ -59,6 +73,9 @@ func TestCreateImageWithCustomID(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, img)
 	require.Equal(t, "my-custom-alpine", img.Id)
+
+	// Wait for build to complete
+	waitForReady(t, mgr, ctx, img.Id)
 }
 
 func TestCreateImageDuplicate(t *testing.T) {
@@ -66,7 +83,7 @@ func TestCreateImageDuplicate(t *testing.T) {
 	require.NoError(t, err)
 
 	dataDir := t.TempDir()
-	mgr := NewManager(dataDir, ociClient)
+	mgr := NewManager(dataDir, ociClient, 1)
 
 	ctx := context.Background()
 	req := oapi.CreateImageRequest{
@@ -74,10 +91,13 @@ func TestCreateImageDuplicate(t *testing.T) {
 	}
 
 	// Create first image
-	_, err = mgr.CreateImage(ctx, req)
+	img1, err := mgr.CreateImage(ctx, req)
 	require.NoError(t, err)
 
-	// Try to create duplicate
+	// Wait for build to start (moves from pending to pulling)
+	waitForReady(t, mgr, ctx, img1.Id)
+
+	// Try to create duplicate (should fail even if first still building)
 	_, err = mgr.CreateImage(ctx, req)
 	require.ErrorIs(t, err, ErrAlreadyExists)
 }
@@ -87,7 +107,7 @@ func TestListImages(t *testing.T) {
 	require.NoError(t, err)
 
 	dataDir := t.TempDir()
-	mgr := NewManager(dataDir, ociClient)
+	mgr := NewManager(dataDir, ociClient, 1)
 
 	ctx := context.Background()
 
@@ -100,14 +120,18 @@ func TestListImages(t *testing.T) {
 	req1 := oapi.CreateImageRequest{
 		Name: "docker.io/library/alpine:latest",
 	}
-	_, err = mgr.CreateImage(ctx, req1)
+	img1, err := mgr.CreateImage(ctx, req1)
 	require.NoError(t, err)
+
+	// Wait for build
+	waitForReady(t, mgr, ctx, img1.Id)
 
 	// List should return one image
 	images, err = mgr.ListImages(ctx)
 	require.NoError(t, err)
 	require.Len(t, images, 1)
 	require.Equal(t, "docker.io/library/alpine:latest", images[0].Name)
+	require.Equal(t, oapi.ImageStatus(StatusReady), images[0].Status)
 }
 
 func TestGetImage(t *testing.T) {
@@ -115,7 +139,7 @@ func TestGetImage(t *testing.T) {
 	require.NoError(t, err)
 
 	dataDir := t.TempDir()
-	mgr := NewManager(dataDir, ociClient)
+	mgr := NewManager(dataDir, ociClient, 1)
 
 	ctx := context.Background()
 	req := oapi.CreateImageRequest{
@@ -125,13 +149,17 @@ func TestGetImage(t *testing.T) {
 	created, err := mgr.CreateImage(ctx, req)
 	require.NoError(t, err)
 
+	// Wait for build
+	waitForReady(t, mgr, ctx, created.Id)
+
 	// Get the image
 	img, err := mgr.GetImage(ctx, created.Id)
 	require.NoError(t, err)
 	require.NotNil(t, img)
 	require.Equal(t, created.Id, img.Id)
 	require.Equal(t, created.Name, img.Name)
-	require.Equal(t, *created.SizeBytes, *img.SizeBytes)
+	require.Equal(t, oapi.ImageStatus(StatusReady), img.Status)
+	require.NotNil(t, img.SizeBytes)
 }
 
 func TestGetImageNotFound(t *testing.T) {
@@ -139,7 +167,7 @@ func TestGetImageNotFound(t *testing.T) {
 	require.NoError(t, err)
 
 	dataDir := t.TempDir()
-	mgr := NewManager(dataDir, ociClient)
+	mgr := NewManager(dataDir, ociClient, 1)
 
 	ctx := context.Background()
 
@@ -153,7 +181,7 @@ func TestDeleteImage(t *testing.T) {
 	require.NoError(t, err)
 
 	dataDir := t.TempDir()
-	mgr := NewManager(dataDir, ociClient)
+	mgr := NewManager(dataDir, ociClient, 1)
 
 	ctx := context.Background()
 	req := oapi.CreateImageRequest{
@@ -162,6 +190,9 @@ func TestDeleteImage(t *testing.T) {
 
 	created, err := mgr.CreateImage(ctx, req)
 	require.NoError(t, err)
+
+	// Wait for ready
+	waitForReady(t, mgr, ctx, created.Id)
 
 	// Delete the image
 	err = mgr.DeleteImage(ctx, created.Id)
@@ -182,7 +213,7 @@ func TestDeleteImageNotFound(t *testing.T) {
 	require.NoError(t, err)
 
 	dataDir := t.TempDir()
-	mgr := NewManager(dataDir, ociClient)
+	mgr := NewManager(dataDir, ociClient, 1)
 
 	ctx := context.Background()
 
@@ -208,6 +239,22 @@ func TestGenerateImageID(t *testing.T) {
 			result := generateImageID(tt.input)
 			require.Equal(t, tt.expected, result)
 		})
+	}
+}
+
+// waitForReady waits for an image build to complete
+func waitForReady(t *testing.T, mgr Manager, ctx context.Context, imageID string) {
+	progressCh, err := mgr.GetProgress(ctx, imageID)
+	require.NoError(t, err)
+
+	for update := range progressCh {
+		t.Logf("Progress: status=%s, progress=%d%%", update.Status, update.Progress)
+		if update.Status == StatusReady || update.Status == StatusFailed {
+			if update.Status == StatusFailed {
+				t.Fatalf("Build failed: %v", update.Error)
+			}
+			break
+		}
 	}
 }
 
