@@ -121,6 +121,55 @@ func TestCreateImage_Async(t *testing.T) {
 	t.Fatal("Build did not complete within 30 seconds")
 }
 
+func TestCreateImage_InvalidTag(t *testing.T) {
+	svc := newTestService(t)
+	ctx := ctx()
+
+	t.Log("Creating image with invalid tag...")
+	createResp, err := svc.CreateImage(ctx, oapi.CreateImageRequestObject{
+		Body: &oapi.CreateImageRequest{
+			Name: "docker.io/library/busybox:foobar",
+		},
+	})
+	require.NoError(t, err)
+
+	acceptedResp, ok := createResp.(oapi.CreateImage202JSONResponse)
+	require.True(t, ok, "expected 202 accepted response")
+
+	img := oapi.Image(acceptedResp)
+	require.Equal(t, "docker.io/library/busybox:foobar", img.Name)
+	t.Logf("Image created: id=%s", img.Id)
+
+	// Poll until failed
+	t.Log("Polling for failure...")
+	for i := 0; i < 1000; i++ {
+		getResp, err := svc.GetImage(ctx, oapi.GetImageRequestObject{Id: img.Id})
+		require.NoError(t, err)
+
+		imgResp, ok := getResp.(oapi.GetImage200JSONResponse)
+		require.True(t, ok, "expected 200 response")
+
+		currentImg := oapi.Image(imgResp)
+		t.Logf("Status: %s", currentImg.Status)
+
+		if currentImg.Status == oapi.ImageStatus(images.StatusFailed) {
+			t.Log("Build failed as expected")
+			require.NotNil(t, currentImg.Error)
+			require.Contains(t, *currentImg.Error, "foobar")
+			t.Logf("Error message: %s", *currentImg.Error)
+			return
+		}
+
+		if currentImg.Status == oapi.ImageStatus(images.StatusReady) {
+			t.Fatal("Build should have failed but succeeded")
+		}
+
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	t.Fatal("Build did not fail within timeout")
+}
+
 func getQueuePos(pos *int) int {
 	if pos == nil {
 		return 0
