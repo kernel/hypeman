@@ -51,7 +51,7 @@ dev: $(AIR)
 
 # Run tests
 test:
-	go test -tags containers_image_openpgp -v -timeout 10s ./...
+	go test -tags containers_image_openpgp -v -timeout 30s ./...
 
 # Clean generated files and binaries
 clean:

@@ -40,14 +40,45 @@ func TestCreateImage(t *testing.T) {
 	ref, err := ParseNormalizedRef(img.Name)
 	require.NoError(t, err)
 	digestHex := strings.SplitN(img.Digest, ":", 2)[1]
+	
+	// Check erofs disk file
 	diskPath := digestPath(dataDir, ref.Repository(), digestHex)
-	_, err = os.Stat(diskPath)
+	diskStat, err := os.Stat(diskPath)
 	require.NoError(t, err)
+	require.False(t, diskStat.IsDir(), "disk path should be a file")
+	require.Greater(t, diskStat.Size(), int64(1000000), "erofs disk should be at least 1MB")
+	require.Equal(t, diskStat.Size(), *img.SizeBytes, "disk size should match metadata")
+	t.Logf("EROFS disk: path=%s, size=%d bytes", diskPath, diskStat.Size())
 
-	// Check that tag symlink exists
-	linkPath := tagSymlinkPath(dataDir, ref.Repository(), ref.Tag())
-	_, err = os.Lstat(linkPath)
+	// Check metadata file
+	metadataPath := metadataPath(dataDir, ref.Repository(), digestHex)
+	metaStat, err := os.Stat(metadataPath)
 	require.NoError(t, err)
+	require.False(t, metaStat.IsDir(), "metadata should be a file")
+	
+	// Read and verify metadata content
+	meta, err := readMetadata(dataDir, ref.Repository(), digestHex)
+	require.NoError(t, err)
+	require.Equal(t, img.Name, meta.Name)
+	require.Equal(t, img.Digest, meta.Digest)
+	require.Equal(t, StatusReady, meta.Status)
+	require.Nil(t, meta.Error)
+	require.Equal(t, diskStat.Size(), meta.SizeBytes)
+	require.NotEmpty(t, meta.Env, "should have environment variables")
+	t.Logf("Metadata: name=%s, digest=%s, status=%s, env_vars=%d", 
+		meta.Name, meta.Digest, meta.Status, len(meta.Env))
+
+	// Check that tag symlink exists and points to correct digest
+	linkPath := tagSymlinkPath(dataDir, ref.Repository(), ref.Tag())
+	linkStat, err := os.Lstat(linkPath)
+	require.NoError(t, err)
+	require.NotEqual(t, 0, linkStat.Mode()&os.ModeSymlink, "should be a symlink")
+	
+	// Verify symlink points to digest directory
+	linkTarget, err := os.Readlink(linkPath)
+	require.NoError(t, err)
+	require.Equal(t, digestHex, linkTarget, "symlink should point to digest")
+	t.Logf("Tag symlink: %s -> %s", linkPath, linkTarget)
 }
 
 func TestCreateImageDifferentTag(t *testing.T) {
