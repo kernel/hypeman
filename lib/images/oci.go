@@ -6,11 +6,10 @@ import (
 	"os"
 	"strings"
 
-	"github.com/containers/image/v5/copy"
-	"github.com/containers/image/v5/docker"
-	"github.com/containers/image/v5/manifest"
-	"github.com/containers/image/v5/oci/layout"
-	"github.com/containers/image/v5/signature"
+	"github.com/google/go-containerregistry/pkg/name"
+	"github.com/google/go-containerregistry/pkg/v1/empty"
+	"github.com/google/go-containerregistry/pkg/v1/layout"
+	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/opencontainers/image-spec/specs-go/v1"
 	rspec "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/opencontainers/umoci/oci/cas/dir"
@@ -63,35 +62,19 @@ func newOCIClient(cacheDir string) (*ociClient, error) {
 // inspectManifest synchronously inspects a remote image to get its digest
 // without pulling the image. This is used for upfront digest discovery.
 func (c *ociClient) inspectManifest(ctx context.Context, imageRef string) (string, error) {
-	srcRef, err := docker.ParseReference("//" + imageRef)
+	ref, err := name.ParseReference(imageRef)
 	if err != nil {
 		return "", fmt.Errorf("parse image reference: %w", err)
 	}
 
-	// Create image source to inspect the remote manifest
-	src, err := srcRef.NewImageSource(ctx, nil)
+	// Head request to get manifest descriptor - no automatic retries
+	// Rate limits return immediately with actual error
+	descriptor, err := remote.Head(ref, remote.WithContext(ctx))
 	if err != nil {
-		return "", fmt.Errorf("create image source: %w", err)
-	}
-	defer src.Close()
-
-	// Get the manifest bytes
-	manifestBytes, manifestType, err := src.GetManifest(ctx, nil)
-	if err != nil {
-		return "", fmt.Errorf("get manifest: %w", err)
+		return "", fmt.Errorf("fetch manifest: %w", err)
 	}
 
-	// Compute digest of the manifest
-	// For multi-arch images, this returns the manifest list digest
-	manifestDigest, err := manifest.Digest(manifestBytes)
-	if err != nil {
-		return "", fmt.Errorf("compute manifest digest: %w", err)
-	}
-
-	// Note: manifestType tells us if this is a manifest list or single-platform manifest
-	_ = manifestType
-
-	return manifestDigest.String(), nil
+	return descriptor.Digest.String(), nil
 }
 
 // pullResult contains the metadata and digest from pulling an image
@@ -133,33 +116,37 @@ func (c *ociClient) pullAndExport(ctx context.Context, imageRef, digest, exportD
 }
 
 func (c *ociClient) pullToOCILayout(ctx context.Context, imageRef, layoutTag string) error {
-	// Parse source reference (docker://...)
-	srcRef, err := docker.ParseReference("//" + imageRef)
+	ref, err := name.ParseReference(imageRef)
 	if err != nil {
 		return fmt.Errorf("parse image reference: %w", err)
 	}
 
-	// Create destination reference (shared OCI layout with sanitized tag)
-	// This allows multiple images to coexist in the same layout with automatic layer deduplication
-	destRef, err := layout.ParseReference(c.cacheDir + ":" + layoutTag)
+	// Fetch image manifest from registry (lazy - doesn't download layers yet)
+	img, err := remote.Image(ref, remote.WithContext(ctx))
 	if err != nil {
-		return fmt.Errorf("parse oci layout reference: %w", err)
+		// Rate limits fail here immediately during manifest fetch
+		return fmt.Errorf("fetch image manifest: %w", err)
 	}
 
-	// Create policy context (allow all)
-	policyContext, err := signature.NewPolicyContext(&signature.Policy{
-		Default: []signature.PolicyRequirement{signature.NewPRInsecureAcceptAnything()},
-	})
+	// Open or create OCI layout directory
+	path, err := layout.FromPath(c.cacheDir)
 	if err != nil {
-		return fmt.Errorf("create policy context: %w", err)
+		// If layout doesn't exist, create it
+		path, err = layout.Write(c.cacheDir, empty.Index)
+		if err != nil {
+			return fmt.Errorf("create oci layout: %w", err)
+		}
 	}
-	defer policyContext.Destroy()
 
-	_, err = copy.Image(ctx, policyContext, destRef, srcRef, &copy.Options{
-		ReportWriter: os.Stdout,
-	})
+	// Append image to layout - THIS is where actual layer data is downloaded
+	// Streams layers from registry and writes to blobs/sha256/ directory
+	// Automatically deduplicates shared layers across images
+	// Rate limits during layer download also fail immediately (no retries)
+	err = path.AppendImage(img, layout.WithAnnotations(map[string]string{
+		"org.opencontainers.image.ref.name": layoutTag,
+	}))
 	if err != nil {
-		return fmt.Errorf("copy image: %w", err)
+		return fmt.Errorf("download and write image layers: %w", err)
 	}
 
 	return nil
