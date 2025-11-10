@@ -68,9 +68,8 @@ func (c *ociClient) inspectManifest(ctx context.Context, imageRef string) (strin
 		return "", fmt.Errorf("parse image reference: %w", err)
 	}
 
-	// Head request to get manifest descriptor - no automatic retries
-	// Rate limits return immediately with actual error
 	// Use system authentication (reads from ~/.docker/config.json, etc.)
+	// Default retry: only on network errors, max ~1.3s total
 	descriptor, err := remote.Head(ref, 
 		remote.WithContext(ctx),
 		remote.WithAuthFromKeychain(authn.DefaultKeychain))
@@ -125,13 +124,13 @@ func (c *ociClient) pullToOCILayout(ctx context.Context, imageRef, layoutTag str
 		return fmt.Errorf("parse image reference: %w", err)
 	}
 
-	// Fetch image manifest from registry (lazy - doesn't download layers yet)
 	// Use system authentication (reads from ~/.docker/config.json, etc.)
+	// Default retry: only on network errors, max ~1.3s total
 	img, err := remote.Image(ref, 
 		remote.WithContext(ctx),
 		remote.WithAuthFromKeychain(authn.DefaultKeychain))
 	if err != nil {
-		// Rate limits fail here immediately during manifest fetch
+		// Rate limits fail here immediately (429 is not retried by default)
 		return fmt.Errorf("fetch image manifest: %w", err)
 	}
 
