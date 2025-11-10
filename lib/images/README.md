@@ -1,11 +1,11 @@
 # Image Manager
 
-Converts OCI images to bootable ext4 disks for Cloud Hypervisor VMs.
+Converts OCI images to bootable erofs disks for Cloud Hypervisor VMs.
 
 ## Architecture
 
 ```
-OCI Registry → containers/image → OCI Layout → umoci → rootfs/ → mkfs.ext4 → disk.ext4
+OCI Registry → containers/image → OCI Layout → umoci → rootfs/ → mkfs.erofs → disk.erofs
 ```
 
 ## Design Decisions
@@ -32,23 +32,21 @@ OCI Registry → containers/image → OCI Layout → umoci → rootfs/ → mkfs.
 
 **Alternative:** With Docker API, the daemon (running as root) mounts image layers using overlayfs, then exports the merged filesystem. Users get the result without needing root themselves but it still has the dependency on Docker and does actually mount the overlays to get the merged filesystem. With umoci, layers are merged in userspace by extracting each tar layer sequentially and applying changes (including whiteouts for deletions). No kernel mount needed, fully rootless. Umoci was chosen because it's purpose-built for this use case and embeddable with the go program.
 
-### Why mkfs.ext4? (disk.go)
+### Why erofs? (disk.go)
 
-**What:** Shell command to create ext4 filesystem
+**What:** erofs (Enhanced Read-Only File System) with LZ4 compression
 
 **Why:**
-- Battle-tested, fast, reliable
-- Works without root when creating filesystem in a regular file (not block device)
-- `-d` flag copies directory contents into filesystem
+- Purpose-built for read-only overlay lowerdir
+- Fast compression (~20-25% space savings)
+- Fast decompression at VM boot
+- Lower memory footprint than ext4
+- No journal/inode overhead
 
 **Options:**
-- `-b 4096` - 4KB blocks (standard, matches VM page size)
-- `-O ^has_journal` - No journal (disks mounted read-only in VMs, saves ~32MB)
-- Minimum 10MB size covers ext4 metadata (~5MB for superblock, inodes, bitmaps)
+- `-zlz4` - Fast compression (good balance for development)
 
-**Alternative tried:** go-diskfs pure Go ext4, got too complicated. Could revisit this.
-
-**Tradeoff:** Shell command vs pure Go, but mkfs.ext4 is widely available and robust
+**Alternative:** ext4 without journal works but erofs is optimized for this exact use case
 
 ## Filesystem Layout (storage.go)
 
@@ -59,7 +57,7 @@ OCI Registry → containers/image → OCI Layout → umoci → rootfs/ → mkfs.
     docker.io/library/alpine/
       latest/
         metadata.json  # Status, entrypoint, cmd, env
-        rootfs.ext4    # Bootable disk
+        rootfs.erofs   # Compressed read-only disk
       3.18/            # Different version
   system/oci-cache/
     docker.io/library/alpine/latest/

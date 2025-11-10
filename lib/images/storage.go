@@ -73,7 +73,7 @@ func imageDir(dataDir, imageName string) string {
 }
 
 func imagePath(dataDir, imageName string) string {
-	return filepath.Join(imageDir(dataDir, imageName), "rootfs.ext4")
+	return filepath.Join(imageDir(dataDir, imageName), "rootfs.erofs")
 }
 
 func metadataPath(dataDir, imageName string) string {

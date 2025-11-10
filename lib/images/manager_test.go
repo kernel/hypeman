@@ -36,7 +36,7 @@ func TestCreateImage(t *testing.T) {
 	require.NotNil(t, img.SizeBytes)
 	require.Greater(t, *img.SizeBytes, int64(0))
 
-	diskPath := filepath.Join(dataDir, "images", imageNameToPath(img.Name), "rootfs.ext4")
+	diskPath := filepath.Join(dataDir, "images", imageNameToPath(img.Name), "rootfs.erofs")
 	_, err = os.Stat(diskPath)
 	require.NoError(t, err)
 }

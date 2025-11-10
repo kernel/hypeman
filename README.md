@@ -8,11 +8,11 @@ Run containerized workloads in VMs, powered by [Cloud Hypervisor](https://github
 
 ### Prerequisites
 
-**Go 1.25.4+**, **Cloud Hypervisor**, **KVM**, **mkfs.ext4**
+**Go 1.25.4+**, **Cloud Hypervisor**, **KVM**, **erofs-utils**
 
 ```bash
 cloud-hypervisor --version
-mkfs.ext4 -V
+mkfs.erofs --version
 ```
 
 ### Configuration

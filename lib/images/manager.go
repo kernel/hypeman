@@ -119,9 +119,9 @@ func (m *manager) buildImage(ctx context.Context, imageName string, req oapi.Cre
 
 	m.updateStatus(imageName, StatusConverting, nil)
 	diskPath := imagePath(m.dataDir, imageName)
-	diskSize, err := convertToExt4(tempDir, diskPath)
+	diskSize, err := convertToErofs(tempDir, diskPath)
 	if err != nil {
-		m.updateStatus(imageName, StatusFailed, fmt.Errorf("convert to ext4: %w", err))
+		m.updateStatus(imageName, StatusFailed, fmt.Errorf("convert to erofs: %w", err))
 		return
 	}
 
