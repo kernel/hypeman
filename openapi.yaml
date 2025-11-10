@@ -236,12 +236,16 @@ components:
     
     Image:
       type: object
-      required: [name, status, created_at]
+      required: [name, digest, status, created_at]
       properties:
         name:
           type: string
-          description: OCI image reference (also serves as unique identifier)
+          description: Normalized OCI image reference (tag or digest)
           example: docker.io/library/nginx:latest
+        digest:
+          type: string
+          description: Resolved manifest digest
+          example: sha256:abc123def456...
         status:
           type: string
           enum: [pending, pulling, converting, ready, failed]
@@ -256,11 +260,6 @@ components:
           type: string
           description: Error message if status is failed
           example: "pull failed: connection timeout"
-          nullable: true
-        version:
-          type: string
-          description: Image tag or digest
-          example: latest
           nullable: true
         size_bytes:
           type: integer

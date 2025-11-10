@@ -4,10 +4,11 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
+	"strings"
 
 	"github.com/containers/image/v5/copy"
 	"github.com/containers/image/v5/docker"
+	"github.com/containers/image/v5/manifest"
 	"github.com/containers/image/v5/oci/layout"
 	"github.com/containers/image/v5/signature"
 	"github.com/opencontainers/image-spec/specs-go/v1"
@@ -22,6 +23,35 @@ type ociClient struct {
 	cacheDir string
 }
 
+// digestToLayoutTag converts a digest to a valid OCI layout tag.
+// Uses just the hex portion without the algorithm prefix.
+// Example: "sha256:abc123..." -> "abc123..."
+func digestToLayoutTag(digest string) string {
+	// Extract just the hex hash after the colon
+	parts := strings.SplitN(digest, ":", 2)
+	if len(parts) == 2 {
+		return parts[1]
+	}
+	return digest // Fallback if no colon found
+}
+
+// existsInLayout checks if a digest already exists in the OCI layout cache.
+func (c *ociClient) existsInLayout(layoutTag string) bool {
+	casEngine, err := dir.Open(c.cacheDir)
+	if err != nil {
+		return false
+	}
+	defer casEngine.Close()
+
+	engine := casext.NewEngine(casEngine)
+	descriptorPaths, err := engine.ResolveReference(context.Background(), layoutTag)
+	if err != nil {
+		return false
+	}
+
+	return len(descriptorPaths) > 0
+}
+
 // newOCIClient creates a new OCI client
 func newOCIClient(cacheDir string) (*ociClient, error) {
 	if err := os.MkdirAll(cacheDir, 0755); err != nil {
@@ -30,38 +60,88 @@ func newOCIClient(cacheDir string) (*ociClient, error) {
 	return &ociClient{cacheDir: cacheDir}, nil
 }
 
-func (c *ociClient) pullAndExport(ctx context.Context, imageRef, exportDir string) (*containerMetadata, error) {
-	// Use persistent OCI layout for caching (parse imageRef into path)
-	ociLayoutDir := filepath.Join(c.cacheDir, imageNameToPath(imageRef))
-	if err := os.MkdirAll(ociLayoutDir, 0755); err != nil {
-		return nil, fmt.Errorf("create oci layout dir: %w", err)
+// inspectManifest synchronously inspects a remote image to get its digest
+// without pulling the image. This is used for upfront digest discovery.
+func (c *ociClient) inspectManifest(ctx context.Context, imageRef string) (string, error) {
+	srcRef, err := docker.ParseReference("//" + imageRef)
+	if err != nil {
+		return "", fmt.Errorf("parse image reference: %w", err)
 	}
 
-	if err := c.pullToOCILayout(ctx, imageRef, ociLayoutDir); err != nil {
-		return nil, fmt.Errorf("pull to oci layout: %w", err)
+	// Create image source to inspect the remote manifest
+	src, err := srcRef.NewImageSource(ctx, nil)
+	if err != nil {
+		return "", fmt.Errorf("create image source: %w", err)
+	}
+	defer src.Close()
+
+	// Get the manifest bytes
+	manifestBytes, manifestType, err := src.GetManifest(ctx, nil)
+	if err != nil {
+		return "", fmt.Errorf("get manifest: %w", err)
 	}
 
-	meta, err := c.extractOCIMetadata(ociLayoutDir)
+	// Compute digest of the manifest
+	// For multi-arch images, this returns the manifest list digest
+	manifestDigest, err := manifest.Digest(manifestBytes)
+	if err != nil {
+		return "", fmt.Errorf("compute manifest digest: %w", err)
+	}
+
+	// Note: manifestType tells us if this is a manifest list or single-platform manifest
+	_ = manifestType
+
+	return manifestDigest.String(), nil
+}
+
+// pullResult contains the metadata and digest from pulling an image
+type pullResult struct {
+	Metadata *containerMetadata
+	Digest   string // sha256:abc123...
+}
+
+func (c *ociClient) pullAndExport(ctx context.Context, imageRef, digest, exportDir string) (*pullResult, error) {
+	// Use a shared OCI layout for all images to enable automatic layer caching
+	// The cacheDir itself is the OCI layout root with shared blobs/sha256/ directory
+	// The digest is ALWAYS known at this point (from inspectManifest or digest reference)
+	layoutTag := digestToLayoutTag(digest)
+
+	// Check if this digest is already cached
+	if !c.existsInLayout(layoutTag) {
+		// Not cached, pull it using digest-based tag
+		if err := c.pullToOCILayout(ctx, imageRef, layoutTag); err != nil {
+			return nil, fmt.Errorf("pull to oci layout: %w", err)
+		}
+	}
+	// If cached, we skip the pull entirely
+
+	// Extract metadata (from cache or freshly pulled)
+	meta, err := c.extractOCIMetadata(layoutTag)
 	if err != nil {
 		return nil, fmt.Errorf("extract metadata: %w", err)
 	}
 
-	if err := c.unpackLayers(ctx, ociLayoutDir, exportDir); err != nil {
+	// Unpack layers to the export directory
+	if err := c.unpackLayers(ctx, layoutTag, exportDir); err != nil {
 		return nil, fmt.Errorf("unpack layers: %w", err)
 	}
 
-	return meta, nil
+	return &pullResult{
+		Metadata: meta,
+		Digest:   digest,
+	}, nil
 }
 
-func (c *ociClient) pullToOCILayout(ctx context.Context, imageRef, ociLayoutDir string) error {
+func (c *ociClient) pullToOCILayout(ctx context.Context, imageRef, layoutTag string) error {
 	// Parse source reference (docker://...)
 	srcRef, err := docker.ParseReference("//" + imageRef)
 	if err != nil {
 		return fmt.Errorf("parse image reference: %w", err)
 	}
 
-	// Create destination reference (OCI layout)
-	destRef, err := layout.ParseReference(ociLayoutDir + ":latest")
+	// Create destination reference (shared OCI layout with sanitized tag)
+	// This allows multiple images to coexist in the same layout with automatic layer deduplication
+	destRef, err := layout.ParseReference(c.cacheDir + ":" + layoutTag)
 	if err != nil {
 		return fmt.Errorf("parse oci layout reference: %w", err)
 	}
@@ -85,10 +165,35 @@ func (c *ociClient) pullToOCILayout(ctx context.Context, imageRef, ociLayoutDir 
 	return nil
 }
 
+// extractDigest gets the manifest digest from the OCI layout
+func (c *ociClient) extractDigest(layoutTag string) (string, error) {
+	casEngine, err := dir.Open(c.cacheDir)
+	if err != nil {
+		return "", fmt.Errorf("open oci layout: %w", err)
+	}
+	defer casEngine.Close()
+
+	engine := casext.NewEngine(casEngine)
+
+	// Resolve the layout tag in the shared layout
+	descriptorPaths, err := engine.ResolveReference(context.Background(), layoutTag)
+	if err != nil {
+		return "", fmt.Errorf("resolve reference: %w", err)
+	}
+
+	if len(descriptorPaths) == 0 {
+		return "", fmt.Errorf("no image found in oci layout")
+	}
+
+	// Get the manifest descriptor's digest
+	digest := descriptorPaths[0].Descriptor().Digest.String()
+	return digest, nil
+}
+
 // extractOCIMetadata reads metadata from OCI layout config.json
-func (c *ociClient) extractOCIMetadata(ociLayoutDir string) (*containerMetadata, error) {
-	// Open the OCI layout
-	casEngine, err := dir.Open(ociLayoutDir)
+func (c *ociClient) extractOCIMetadata(layoutTag string) (*containerMetadata, error) {
+	// Open the shared OCI layout
+	casEngine, err := dir.Open(c.cacheDir)
 	if err != nil {
 		return nil, fmt.Errorf("open oci layout: %w", err)
 	}
@@ -96,8 +201,8 @@ func (c *ociClient) extractOCIMetadata(ociLayoutDir string) (*containerMetadata,
 
 	engine := casext.NewEngine(casEngine)
 
-	// Get image reference (we tagged it as "latest")
-	descriptorPaths, err := engine.ResolveReference(context.Background(), "latest")
+	// Resolve the layout tag in the shared layout
+	descriptorPaths, err := engine.ResolveReference(context.Background(), layoutTag)
 	if err != nil {
 		return nil, fmt.Errorf("resolve reference: %w", err)
 	}
@@ -154,9 +259,9 @@ func (c *ociClient) extractOCIMetadata(ociLayoutDir string) (*containerMetadata,
 }
 
 // unpackLayers unpacks all OCI layers to a target directory using umoci
-func (c *ociClient) unpackLayers(ctx context.Context, ociLayoutDir, targetDir string) error {
-	// Open OCI layout
-	casEngine, err := dir.Open(ociLayoutDir)
+func (c *ociClient) unpackLayers(ctx context.Context, imageRef, targetDir string) error {
+	// Open the shared OCI layout
+	casEngine, err := dir.Open(c.cacheDir)
 	if err != nil {
 		return fmt.Errorf("open oci layout: %w", err)
 	}
@@ -164,8 +269,8 @@ func (c *ociClient) unpackLayers(ctx context.Context, ociLayoutDir, targetDir st
 
 	engine := casext.NewEngine(casEngine)
 
-	// Get the manifest descriptor for "latest" tag
-	descriptorPaths, err := engine.ResolveReference(context.Background(), "latest")
+	// Resolve the image reference (tag) in the shared layout
+	descriptorPaths, err := engine.ResolveReference(context.Background(), imageRef)
 	if err != nil {
 		return fmt.Errorf("resolve reference: %w", err)
 	}

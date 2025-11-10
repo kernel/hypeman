@@ -102,6 +102,7 @@ func (s *ApiService) DeleteImage(ctx context.Context, request oapi.DeleteImageRe
 func imageToOAPI(img images.Image) oapi.Image {
 	oapiImg := oapi.Image{
 		Name:          img.Name,
+		Digest:        img.Digest,
 		Status:        oapi.ImageStatus(img.Status),
 		QueuePosition: img.QueuePosition,
 		Error:         img.Error,

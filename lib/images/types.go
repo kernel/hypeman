@@ -4,7 +4,8 @@ import "time"
 
 // Image represents a container image converted to bootable disk
 type Image struct {
-	Name          string
+	Name          string            // Normalized ref (e.g., docker.io/library/alpine:latest)
+	Digest        string            // Resolved manifest digest (sha256:...)
 	Status        string
 	QueuePosition *int
 	Error         *string

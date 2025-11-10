@@ -8,8 +8,6 @@ import (
 	"sort"
 	"sync"
 	"time"
-
-	"github.com/distribution/reference"
 )
 
 const (
@@ -29,7 +27,7 @@ type Manager interface {
 }
 
 type manager struct {
-	dataDir  string
+	dataDir   string
 	ociClient *ociClient
 	queue     *BuildQueue
 	createMu  sync.Mutex
@@ -43,7 +41,7 @@ func NewManager(dataDir string, maxConcurrentBuilds int) (Manager, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create oci client: %w", err)
 	}
-	
+
 	m := &manager{
 		dataDir:   dataDir,
 		ociClient: ociClient,
@@ -54,9 +52,9 @@ func NewManager(dataDir string, maxConcurrentBuilds int) (Manager, error) {
 }
 
 func (m *manager) ListImages(ctx context.Context) ([]Image, error) {
-	metas, err := listMetadata(m.dataDir)
+	metas, err := listAllTags(m.dataDir)
 	if err != nil {
-		return nil, fmt.Errorf("list metadata: %w", err)
+		return nil, fmt.Errorf("list tags: %w", err)
 	}
 
 	images := make([]Image, 0, len(metas))
@@ -68,39 +66,58 @@ func (m *manager) ListImages(ctx context.Context) ([]Image, error) {
 }
 
 func (m *manager) CreateImage(ctx context.Context, req CreateImageRequest) (*Image, error) {
-	normalizedName, err := normalizeImageName(req.Name)
+	// Parse and normalize
+	normalized, err := ParseNormalizedRef(req.Name)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s", ErrInvalidName, err.Error())
+	}
+
+	// Resolve to get digest (validates existence)
+	ref, err := normalized.Resolve(ctx, m.ociClient)
+	if err != nil {
+		return nil, fmt.Errorf("resolve manifest: %w", err)
 	}
 
 	m.createMu.Lock()
 	defer m.createMu.Unlock()
 
-	// Check if already exists (handles ready, failed, and in-progress)
-	if meta, err := readMetadata(m.dataDir, normalizedName); err == nil {
+	// Check if we already have this digest (deduplication)
+	if meta, err := readMetadata(m.dataDir, ref.Repository(), ref.DigestHex()); err == nil {
+		// We have this digest already
+		if meta.Status == StatusReady && ref.Tag() != "" {
+			// Update tag symlink to point to current digest
+			// (handles case where tag moved to new digest)
+			createTagSymlink(m.dataDir, ref.Repository(), ref.Tag(), ref.DigestHex())
+		}
 		img := meta.toImage()
-		// Add dynamic queue position only for pending status
+		// Add queue position if pending
 		if meta.Status == StatusPending {
-			img.QueuePosition = m.queue.GetPosition(normalizedName)
+			img.QueuePosition = m.queue.GetPosition(meta.Digest)
 		}
 		return img, nil
 	}
 
-	// Create metadata (we know it doesn't exist)
+	// Don't have this digest yet, queue the build
+	return m.createAndQueueImage(ref)
+}
+
+func (m *manager) createAndQueueImage(ref *ResolvedRef) (*Image, error) {
 	meta := &imageMetadata{
-		Name:      normalizedName,
+		Name:      ref.String(),
+		Digest:    ref.Digest(),
 		Status:    StatusPending,
-		Request:   &req,
+		Request:   &CreateImageRequest{Name: ref.String()},
 		CreatedAt: time.Now(),
 	}
 
-	if err := writeMetadata(m.dataDir, normalizedName, meta); err != nil {
+	// Write initial metadata
+	if err := writeMetadata(m.dataDir, ref.Repository(), ref.DigestHex(), meta); err != nil {
 		return nil, fmt.Errorf("write initial metadata: %w", err)
 	}
 
-	// Enqueue (we know it's not already queued due to mutex)
-	queuePos := m.queue.Enqueue(normalizedName, req, func() {
-		m.buildImage(context.Background(), normalizedName, req)
+	// Enqueue the build using digest as the queue key for deduplication
+	queuePos := m.queue.Enqueue(ref.Digest(), CreateImageRequest{Name: ref.String()}, func() {
+		m.buildImage(context.Background(), ref)
 	})
 
 	img := meta.toImage()
@@ -110,75 +127,107 @@ func (m *manager) CreateImage(ctx context.Context, req CreateImageRequest) (*Ima
 	return img, nil
 }
 
-func (m *manager) buildImage(ctx context.Context, imageName string, req CreateImageRequest) {
-
-	buildDir := filepath.Join(imageDir(m.dataDir, imageName), ".build")
+func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef) {
+	buildDir := filepath.Join(m.dataDir, "system", "builds", ref.String())
 	tempDir := filepath.Join(buildDir, "rootfs")
 
 	if err := os.MkdirAll(buildDir, 0755); err != nil {
-		m.updateStatus(imageName, StatusFailed, fmt.Errorf("create build dir: %w", err))
+		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("create build dir: %w", err))
 		return
 	}
 
 	defer func() {
-		meta, _ := readMetadata(m.dataDir, imageName)
-		if meta != nil && meta.Status == StatusReady {
-			os.RemoveAll(buildDir)
-		}
+		// Clean up build directory after completion
+		os.RemoveAll(buildDir)
 	}()
 
-	m.updateStatus(imageName, StatusPulling, nil)
-	containerMeta, err := m.ociClient.pullAndExport(ctx, req.Name, tempDir)
+	m.updateStatusByDigest(ref, StatusPulling, nil)
+
+	// Pull the image (digest is always known, uses cache if already pulled)
+	result, err := m.ociClient.pullAndExport(ctx, ref.String(), ref.Digest(), tempDir)
 	if err != nil {
-		m.updateStatus(imageName, StatusFailed, fmt.Errorf("pull and export: %w", err))
+		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("pull and export: %w", err))
 		return
 	}
 
-	m.updateStatus(imageName, StatusConverting, nil)
-	diskPath := imagePath(m.dataDir, imageName)
+	// Check if this digest already exists and is ready (deduplication)
+	if meta, err := readMetadata(m.dataDir, ref.Repository(), ref.DigestHex()); err == nil {
+		if meta.Status == StatusReady {
+			// Another build completed first, just update the tag symlink
+			if ref.Tag() != "" {
+				createTagSymlink(m.dataDir, ref.Repository(), ref.Tag(), ref.DigestHex())
+			}
+			return
+		}
+	}
+
+	m.updateStatusByDigest(ref, StatusConverting, nil)
+
+	diskPath := digestPath(m.dataDir, ref.Repository(), ref.DigestHex())
 	diskSize, err := convertToErofs(tempDir, diskPath)
 	if err != nil {
-		m.updateStatus(imageName, StatusFailed, fmt.Errorf("convert to erofs: %w", err))
+		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("convert to erofs: %w", err))
 		return
 	}
 
-	meta, err := readMetadata(m.dataDir, imageName)
+	// Read current metadata to preserve request info
+	meta, err := readMetadata(m.dataDir, ref.Repository(), ref.DigestHex())
 	if err != nil {
-		m.updateStatus(imageName, StatusFailed, fmt.Errorf("read metadata: %w", err))
-		return
+		// Create new metadata if it doesn't exist
+		meta = &imageMetadata{
+			Name:      ref.String(),
+			Digest:    ref.Digest(),
+			CreatedAt: time.Now(),
+		}
 	}
 
+	// Update with final status
 	meta.Status = StatusReady
 	meta.Error = nil
 	meta.SizeBytes = diskSize
-	meta.Entrypoint = containerMeta.Entrypoint
-	meta.Cmd = containerMeta.Cmd
-	meta.Env = containerMeta.Env
-	meta.WorkingDir = containerMeta.WorkingDir
+	meta.Entrypoint = result.Metadata.Entrypoint
+	meta.Cmd = result.Metadata.Cmd
+	meta.Env = result.Metadata.Env
+	meta.WorkingDir = result.Metadata.WorkingDir
 
-	if err := writeMetadata(m.dataDir, imageName, meta); err != nil {
-		m.updateStatus(imageName, StatusFailed, fmt.Errorf("write final metadata: %w", err))
+	if err := writeMetadata(m.dataDir, ref.Repository(), ref.DigestHex(), meta); err != nil {
+		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("write final metadata: %w", err))
 		return
+	}
+
+	// Only create/update tag symlink on successful completion
+	if ref.Tag() != "" {
+		if err := createTagSymlink(m.dataDir, ref.Repository(), ref.Tag(), ref.DigestHex()); err != nil {
+			// Log error but don't fail the build
+			fmt.Fprintf(os.Stderr, "Warning: failed to create tag symlink: %v\n", err)
+		}
 	}
 }
 
-func (m *manager) updateStatus(imageName, status string, err error) {
-	meta, readErr := readMetadata(m.dataDir, imageName)
+func (m *manager) updateStatusByDigest(ref *ResolvedRef, status string, err error) {
+	meta, readErr := readMetadata(m.dataDir, ref.Repository(), ref.DigestHex())
 	if readErr != nil {
-		return
+		// Create new metadata if it doesn't exist
+		meta = &imageMetadata{
+			Name:      ref.String(),
+			Digest:    ref.Digest(),
+			Status:    status,
+			CreatedAt: time.Now(),
+		}
+	} else {
+		meta.Status = status
 	}
 
-	meta.Status = status
 	if err != nil {
 		errorMsg := err.Error()
 		meta.Error = &errorMsg
 	}
 
-	writeMetadata(m.dataDir, imageName, meta)
+	writeMetadata(m.dataDir, ref.Repository(), ref.DigestHex(), meta)
 }
 
 func (m *manager) RecoverInterruptedBuilds() {
-	metas, err := listMetadata(m.dataDir)
+	metas, err := listAllTags(m.dataDir)
 	if err != nil {
 		return // Best effort
 	}
@@ -191,10 +240,16 @@ func (m *manager) RecoverInterruptedBuilds() {
 	for _, meta := range metas {
 		switch meta.Status {
 		case StatusPending, StatusPulling, StatusConverting:
-			if meta.Request != nil {
+			if meta.Request != nil && meta.Digest != "" {
 				metaCopy := meta
-				m.queue.Enqueue(metaCopy.Name, *metaCopy.Request, func() {
-					m.buildImage(context.Background(), metaCopy.Name, *metaCopy.Request)
+				normalized, err := ParseNormalizedRef(metaCopy.Name)
+				if err != nil {
+					continue
+				}
+				// Create a ResolvedRef since we already have the digest from metadata
+				ref := NewResolvedRef(normalized, metaCopy.Digest)
+				m.queue.Enqueue(metaCopy.Digest, *metaCopy.Request, func() {
+					m.buildImage(context.Background(), ref)
 				})
 			}
 		}
@@ -202,45 +257,57 @@ func (m *manager) RecoverInterruptedBuilds() {
 }
 
 func (m *manager) GetImage(ctx context.Context, name string) (*Image, error) {
-	normalizedName, err := normalizeImageName(name)
+	// Parse and normalize the reference
+	ref, err := ParseNormalizedRef(name)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s", ErrInvalidName, err.Error())
 	}
 
-	meta, err := readMetadata(m.dataDir, normalizedName)
+	repository := ref.Repository()
+
+	var digestHex string
+
+	if ref.IsDigest() {
+		// Direct digest lookup
+		digestHex = ref.DigestHex()
+	} else {
+		// Tag lookup - resolve symlink
+		tag := ref.Tag()
+
+		digestHex, err = resolveTag(m.dataDir, repository, tag)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	meta, err := readMetadata(m.dataDir, repository, digestHex)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	img := meta.toImage()
-	
+
 	if meta.Status == StatusPending {
-		img.QueuePosition = m.queue.GetPosition(normalizedName)
+		img.QueuePosition = m.queue.GetPosition(meta.Digest)
 	}
-	
+
 	return img, nil
 }
 
 func (m *manager) DeleteImage(ctx context.Context, name string) error {
-	normalizedName, err := normalizeImageName(name)
+	// Parse and normalize the reference
+	ref, err := ParseNormalizedRef(name)
 	if err != nil {
 		return fmt.Errorf("%w: %s", ErrInvalidName, err.Error())
 	}
-	return deleteImage(m.dataDir, normalizedName)
-}
 
-// normalizeImageName validates and normalizes an OCI image reference
-// Examples: alpine → docker.io/library/alpine:latest
-//           nginx:1.0 → docker.io/library/nginx:1.0
-func normalizeImageName(name string) (string, error) {
-	named, err := reference.ParseNormalizedNamed(name)
-	if err != nil {
-		return "", err
+	// Only allow deleting by tag, not by digest
+	if ref.IsDigest() {
+		return fmt.Errorf("cannot delete by digest, use tag name instead")
 	}
-	
-	// Ensure it has a tag (add :latest if missing)
-	tagged := reference.TagNameOnly(named)
-	return tagged.String(), nil
+
+	repository := ref.Repository()
+	tag := ref.Tag()
+
+	return deleteTag(m.dataDir, repository, tag)
 }
-
-

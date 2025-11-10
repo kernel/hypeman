@@ -164,7 +164,10 @@ type Image struct {
 	// Error Error message if status is failed
 	Error *string `json:"error"`
 
-	// Name OCI image reference (also serves as unique identifier)
+	// Digest Resolved manifest digest
+	Digest string `json:"digest"`
+
+	// Name Normalized OCI image reference (tag or digest)
 	Name string `json:"name"`
 
 	// QueuePosition Position in build queue (null if not queued)
@@ -175,9 +178,6 @@ type Image struct {
 
 	// Status Build status
 	Status ImageStatus `json:"status"`
-
-	// Version Image tag or digest
-	Version *string `json:"version"`
 
 	// WorkingDir Working directory from container metadata
 	WorkingDir *string `json:"working_dir"`
