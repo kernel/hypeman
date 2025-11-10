@@ -63,7 +63,7 @@ func (m *manager) ListImages(ctx context.Context) ([]oapi.Image, error) {
 func (m *manager) CreateImage(ctx context.Context, req oapi.CreateImageRequest) (*oapi.Image, error) {
 	normalizedName, err := normalizeImageName(req.Name)
 	if err != nil {
-		return nil, fmt.Errorf("invalid image name: %w", err)
+		return nil, fmt.Errorf("%w: %s", ErrInvalidName, err.Error())
 	}
 
 	if imageExists(m.dataDir, normalizedName) {
@@ -187,7 +187,7 @@ func (m *manager) RecoverInterruptedBuilds() {
 func (m *manager) GetImage(ctx context.Context, name string) (*oapi.Image, error) {
 	normalizedName, err := normalizeImageName(name)
 	if err != nil {
-		return nil, fmt.Errorf("invalid image name: %w", err)
+		return nil, fmt.Errorf("%w: %s", ErrInvalidName, err.Error())
 	}
 
 	meta, err := readMetadata(m.dataDir, normalizedName)
@@ -207,7 +207,7 @@ func (m *manager) GetImage(ctx context.Context, name string) (*oapi.Image, error
 func (m *manager) DeleteImage(ctx context.Context, name string) error {
 	normalizedName, err := normalizeImageName(name)
 	if err != nil {
-		return fmt.Errorf("invalid image name: %w", err)
+		return fmt.Errorf("%w: %s", ErrInvalidName, err.Error())
 	}
 	return deleteImage(m.dataDir, normalizedName)
 }

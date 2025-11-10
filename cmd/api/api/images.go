@@ -31,7 +31,7 @@ func (s *ApiService) CreateImage(ctx context.Context, request oapi.CreateImageRe
 	img, err := s.ImageManager.CreateImage(ctx, *request.Body)
 	if err != nil {
 		switch {
-		case images.IsInvalidNameError(err):
+		case errors.Is(err, images.ErrInvalidName):
 			return oapi.CreateImage400JSONResponse{
 				Code:    "invalid_name",
 				Message: err.Error(),
@@ -58,7 +58,7 @@ func (s *ApiService) GetImage(ctx context.Context, request oapi.GetImageRequestO
 	img, err := s.ImageManager.GetImage(ctx, request.Name)
 	if err != nil {
 		switch {
-		case images.IsInvalidNameError(err), errors.Is(err, images.ErrNotFound):
+		case errors.Is(err, images.ErrInvalidName), errors.Is(err, images.ErrNotFound):
 			return oapi.GetImage404JSONResponse{
 				Code:    "not_found",
 				Message: "image not found",
@@ -80,7 +80,7 @@ func (s *ApiService) DeleteImage(ctx context.Context, request oapi.DeleteImageRe
 	err := s.ImageManager.DeleteImage(ctx, request.Name)
 	if err != nil {
 		switch {
-		case images.IsInvalidNameError(err), errors.Is(err, images.ErrNotFound):
+		case errors.Is(err, images.ErrInvalidName), errors.Is(err, images.ErrNotFound):
 			return oapi.DeleteImage404JSONResponse{
 				Code:    "not_found",
 				Message: "image not found",
