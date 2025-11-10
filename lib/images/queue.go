@@ -27,19 +27,39 @@ func NewBuildQueue(maxConcurrent int) *BuildQueue {
 	}
 }
 
+// Enqueue adds a build to the queue. Returns queue position (0 if started immediately, >0 if queued).
+// If the image is already building or queued, returns its current position without re-enqueueing.
 func (q *BuildQueue) Enqueue(imageName string, req CreateImageRequest, startFn func()) int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
+	// Check if already building (position 0, actively running)
+	if q.active[imageName] {
+		return 0
+	}
+
+	// Check if already in pending queue
+	for i, build := range q.pending {
+		if build.ImageName == imageName {
+			return i + 1 // Return existing queue position
+		}
+	}
+
+	// Wrap the function to auto-complete
+	wrappedFn := func() {
+		defer q.MarkComplete(imageName)
+		startFn()
+	}
+
 	build := QueuedBuild{
 		ImageName: imageName,
 		Request:   req,
-		StartFn:   startFn,
+		StartFn:   wrappedFn,
 	}
 
 	if len(q.active) < q.maxConcurrent {
 		q.active[imageName] = true
-		go startFn()
+		go wrappedFn()
 		return 0
 	}
 

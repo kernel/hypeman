@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/distribution/reference"
@@ -28,9 +29,10 @@ type Manager interface {
 }
 
 type manager struct {
-	dataDir   string
+	dataDir  string
 	ociClient *OCIClient
 	queue     *BuildQueue
+	createMu  sync.Mutex
 }
 
 // NewManager creates a new image manager with OCI client
@@ -64,10 +66,20 @@ func (m *manager) CreateImage(ctx context.Context, req CreateImageRequest) (*Ima
 		return nil, fmt.Errorf("%w: %s", ErrInvalidName, err.Error())
 	}
 
-	if imageExists(m.dataDir, normalizedName) {
-		return nil, ErrAlreadyExists
+	m.createMu.Lock()
+	defer m.createMu.Unlock()
+
+	// Check if already exists (handles ready, failed, and in-progress)
+	if meta, err := readMetadata(m.dataDir, normalizedName); err == nil {
+		img := meta.toImage()
+		// Add dynamic queue position only for pending status
+		if meta.Status == StatusPending {
+			img.QueuePosition = m.queue.GetPosition(normalizedName)
+		}
+		return img, nil
 	}
 
+	// Create metadata (we know it doesn't exist)
 	meta := &imageMetadata{
 		Name:      normalizedName,
 		Status:    StatusPending,
@@ -79,6 +91,7 @@ func (m *manager) CreateImage(ctx context.Context, req CreateImageRequest) (*Ima
 		return nil, fmt.Errorf("write initial metadata: %w", err)
 	}
 
+	// Enqueue (we know it's not already queued due to mutex)
 	queuePos := m.queue.Enqueue(normalizedName, req, func() {
 		m.buildImage(context.Background(), normalizedName, req)
 	})
@@ -91,7 +104,6 @@ func (m *manager) CreateImage(ctx context.Context, req CreateImageRequest) (*Ima
 }
 
 func (m *manager) buildImage(ctx context.Context, imageName string, req CreateImageRequest) {
-	defer m.queue.MarkComplete(imageName)
 
 	buildDir := filepath.Join(imageDir(m.dataDir, imageName), ".build")
 	tempDir := filepath.Join(buildDir, "rootfs")

@@ -44,11 +44,6 @@ func (s *ApiService) CreateImage(ctx context.Context, request oapi.CreateImageRe
 				Code:    "invalid_name",
 				Message: err.Error(),
 			}, nil
-		case errors.Is(err, images.ErrAlreadyExists):
-			return oapi.CreateImage400JSONResponse{
-				Code:    "already_exists",
-				Message: "image already exists",
-			}, nil
 		default:
 			log.Error("failed to create image", "error", err, "name", request.Body.Name)
 			return oapi.CreateImage500JSONResponse{

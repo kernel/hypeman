@@ -77,9 +77,12 @@ func TestCreateImageDuplicate(t *testing.T) {
 
 	waitForReady(t, mgr, ctx, img1.Name)
 
-	// Try to create duplicate
-	_, err = mgr.CreateImage(ctx, req)
-	require.ErrorIs(t, err, ErrAlreadyExists)
+	// Second create should be idempotent and return existing image
+	img2, err := mgr.CreateImage(ctx, req)
+	require.NoError(t, err)
+	require.NotNil(t, img2)
+	require.Equal(t, img1.Name, img2.Name)
+	require.Equal(t, StatusReady, img2.Status)
 }
 
 func TestListImages(t *testing.T) {

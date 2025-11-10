@@ -193,6 +193,99 @@ func TestCreateImage_InvalidName(t *testing.T) {
 	}
 }
 
+func TestCreateImage_Idempotent(t *testing.T) {
+	svc := newTestService(t)
+	ctx := ctx()
+
+	// Create first image to occupy queue position 0
+	t.Log("Creating first image (busybox) to occupy queue...")
+	_, err := svc.CreateImage(ctx, oapi.CreateImageRequestObject{
+		Body: &oapi.CreateImageRequest{Name: "docker.io/library/busybox:latest"},
+	})
+	require.NoError(t, err)
+
+	imageName := "docker.io/library/alpine:3.18"
+
+	// First call - should create and queue at position 1
+	t.Log("First CreateImage call (alpine)...")
+	resp1, err := svc.CreateImage(ctx, oapi.CreateImageRequestObject{
+		Body: &oapi.CreateImageRequest{Name: imageName},
+	})
+	require.NoError(t, err)
+	
+	accepted1, ok := resp1.(oapi.CreateImage202JSONResponse)
+	require.True(t, ok, "expected 202 response")
+	img1 := oapi.Image(accepted1)
+	require.Equal(t, imageName, img1.Name)
+	require.Equal(t, oapi.ImageStatus(images.StatusPending), img1.Status)
+	require.NotNil(t, img1.QueuePosition, "should have queue position")
+	require.Equal(t, 1, *img1.QueuePosition, "should be at position 1")
+	t.Logf("First call: status=%s, queue_position=%v", img1.Status, formatQueuePos(img1.QueuePosition))
+
+	// Second call immediately - should return existing with same queue position
+	t.Log("Second CreateImage call (immediate duplicate)...")
+	resp2, err := svc.CreateImage(ctx, oapi.CreateImageRequestObject{
+		Body: &oapi.CreateImageRequest{Name: imageName},
+	})
+	require.NoError(t, err)
+	
+	accepted2, ok := resp2.(oapi.CreateImage202JSONResponse)
+	require.True(t, ok, "expected 202 response")
+	img2 := oapi.Image(accepted2)
+	require.Equal(t, imageName, img2.Name)
+	require.Equal(t, oapi.ImageStatus(images.StatusPending), img2.Status)
+	require.NotNil(t, img2.QueuePosition, "should have queue position")
+	require.Equal(t, 1, *img2.QueuePosition, "should still be at position 1")
+	t.Logf("Second call: status=%s, queue_position=%v", img2.Status, formatQueuePos(img2.QueuePosition))
+
+	// Wait for build to complete
+	t.Log("Waiting for build to complete...")
+	for i := 0; i < 3000; i++ {
+		getResp, err := svc.GetImage(ctx, oapi.GetImageRequestObject{Name: imageName})
+		require.NoError(t, err)
+
+		imgResp, ok := getResp.(oapi.GetImage200JSONResponse)
+		require.True(t, ok, "expected 200 response")
+
+		currentImg := oapi.Image(imgResp)
+		
+		if currentImg.Status == oapi.ImageStatus(images.StatusReady) {
+			t.Log("Build complete!")
+			break
+		}
+
+		if currentImg.Status == oapi.ImageStatus(images.StatusFailed) {
+			errMsg := ""
+			if currentImg.Error != nil {
+				errMsg = *currentImg.Error
+			}
+			t.Fatalf("Build failed: %s", errMsg)
+		}
+
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// Third call after completion - should return ready image with no queue position
+	t.Log("Third CreateImage call (after completion)...")
+	resp3, err := svc.CreateImage(ctx, oapi.CreateImageRequestObject{
+		Body: &oapi.CreateImageRequest{Name: imageName},
+	})
+	require.NoError(t, err)
+	
+	accepted3, ok := resp3.(oapi.CreateImage202JSONResponse)
+	require.True(t, ok, "expected 202 response")
+	img3 := oapi.Image(accepted3)
+	require.Equal(t, imageName, img3.Name)
+	require.Equal(t, oapi.ImageStatus(images.StatusReady), img3.Status, "should return ready image")
+	require.Nil(t, img3.QueuePosition, "ready image should have no queue position")
+	require.NotNil(t, img3.SizeBytes)
+	require.Greater(t, *img3.SizeBytes, int64(0))
+	t.Logf("Third call: status=%s, queue_position=%v, size=%d", 
+		img3.Status, formatQueuePos(img3.QueuePosition), *img3.SizeBytes)
+	
+	t.Log("Idempotency test passed!")
+}
+
 func getQueuePos(pos *int) int {
 	if pos == nil {
 		return 0
