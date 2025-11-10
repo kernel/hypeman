@@ -132,41 +132,14 @@ func TestCreateImage_InvalidTag(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	acceptedResp, ok := createResp.(oapi.CreateImage202JSONResponse)
-	require.True(t, ok, "expected 202 accepted response")
+	// With go-containerregistry, manifest validation happens synchronously
+	// Invalid tags fail immediately with 404 (manifest not found)
+	errorResp, ok := createResp.(oapi.CreateImage404JSONResponse)
+	require.True(t, ok, "expected 404 not found response for invalid tag")
 
-	img := oapi.Image(acceptedResp)
-	require.Equal(t, "docker.io/library/busybox:foobar", img.Name)
-	t.Logf("Image created: name=%s", img.Name)
-
-	// Poll until failed
-	t.Log("Polling for failure...")
-	for i := 0; i < 1000; i++ {
-		getResp, err := svc.GetImage(ctx, oapi.GetImageRequestObject{Name: img.Name})
-		require.NoError(t, err)
-
-		imgResp, ok := getResp.(oapi.GetImage200JSONResponse)
-		require.True(t, ok, "expected 200 response")
-
-		currentImg := oapi.Image(imgResp)
-		t.Logf("Status: %s", currentImg.Status)
-
-		if currentImg.Status == oapi.ImageStatus(images.StatusFailed) {
-			t.Log("Build failed as expected")
-			require.NotNil(t, currentImg.Error)
-			require.Contains(t, *currentImg.Error, "foobar")
-			t.Logf("Error message: %s", *currentImg.Error)
-			return
-		}
-
-		if currentImg.Status == oapi.ImageStatus(images.StatusReady) {
-			t.Fatal("Build should have failed but succeeded")
-		}
-
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	t.Fatal("Build did not fail within timeout")
+	errObj := oapi.Error(errorResp)
+	require.Equal(t, "not_found", errObj.Code)
+	t.Logf("Got expected error: code=%s message=%s", errObj.Code, errObj.Message)
 }
 
 func TestCreateImage_InvalidName(t *testing.T) {

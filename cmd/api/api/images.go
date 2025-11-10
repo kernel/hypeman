@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/logger"
@@ -43,6 +45,11 @@ func (s *ApiService) CreateImage(ctx context.Context, request oapi.CreateImageRe
 			return oapi.CreateImage400JSONResponse{
 				Code:    "invalid_name",
 				Message: err.Error(),
+			}, nil
+		case strings.Contains(err.Error(), "404") || strings.Contains(err.Error(), "not found"):
+			return oapi.CreateImage404JSONResponse{
+				Code:    "not_found",
+				Message: fmt.Sprintf("image not found: %v", err),
 			}, nil
 		default:
 			log.Error("failed to create image", "error", err, "name", request.Body.Name)
