@@ -73,7 +73,10 @@ func (m *manager) CreateImage(ctx context.Context, req CreateImageRequest) (*Ima
 	}
 
 	// Resolve to get digest (validates existence)
-	ref, err := normalized.Resolve(ctx, m.ociClient)
+	resolveCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	
+	ref, err := normalized.Resolve(resolveCtx, m.ociClient)
 	if err != nil {
 		return nil, fmt.Errorf("resolve manifest: %w", err)
 	}
