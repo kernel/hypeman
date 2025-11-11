@@ -7,9 +7,9 @@ import (
 	"os"
 	"testing"
 
-	"github.com/stainless-sdks/hypeman-go"
-	"github.com/stainless-sdks/hypeman-go/internal/testutil"
-	"github.com/stainless-sdks/hypeman-go/option"
+	"github.com/onkernel/hypeman-go"
+	"github.com/onkernel/hypeman-go/internal/testutil"
+	"github.com/onkernel/hypeman-go/option"
 )
 
 func TestUsage(t *testing.T) {

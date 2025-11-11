@@ -1,7 +1,7 @@
 package apiform
 
 import (
-	"github.com/stainless-sdks/hypeman-go/packages/param"
+	"github.com/onkernel/hypeman-go/packages/param"
 	"mime/multipart"
 	"reflect"
 )

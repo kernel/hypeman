@@ -7,10 +7,10 @@ import (
 	"net/http"
 	"slices"
 
-	"github.com/stainless-sdks/hypeman-go/internal/apijson"
-	"github.com/stainless-sdks/hypeman-go/internal/requestconfig"
-	"github.com/stainless-sdks/hypeman-go/option"
-	"github.com/stainless-sdks/hypeman-go/packages/respjson"
+	"github.com/onkernel/hypeman-go/internal/apijson"
+	"github.com/onkernel/hypeman-go/internal/requestconfig"
+	"github.com/onkernel/hypeman-go/option"
+	"github.com/onkernel/hypeman-go/packages/respjson"
 )
 
 // HealthService contains methods and other services that help with interacting

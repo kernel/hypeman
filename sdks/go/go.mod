@@ -1,4 +1,4 @@
-module github.com/stainless-sdks/hypeman-go
+module github.com/onkernel/hypeman-go
 
 go 1.22
 

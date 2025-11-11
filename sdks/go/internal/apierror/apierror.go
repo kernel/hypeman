@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"net/http/httputil"
 
-	"github.com/stainless-sdks/hypeman-go/internal/apijson"
-	"github.com/stainless-sdks/hypeman-go/packages/respjson"
+	"github.com/onkernel/hypeman-go/internal/apijson"
+	"github.com/onkernel/hypeman-go/packages/respjson"
 )
 
 // Error represents an error that originates from the API, i.e. when a request is

@@ -2,7 +2,7 @@ package param
 
 import (
 	"encoding/json"
-	"github.com/stainless-sdks/hypeman-go/internal/encoding/json/sentinel"
+	"github.com/onkernel/hypeman-go/internal/encoding/json/sentinel"
 	"reflect"
 )
 
