@@ -1,0 +1,10 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/oapi-codegen/oapi-codegen/HEAD/configuration-schema.json
+package: vmm
+generate:
+  client: true
+  models: true
+  embedded-spec: false
+output: lib/vmm/vmm.go
+output-options:
+  skip-prune: true
+

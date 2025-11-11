@@ -1,5 +1,5 @@
 SHELL := /bin/bash
-.PHONY: oapi-generate generate-wire generate-all dev build test install-tools gen-jwt
+.PHONY: oapi-generate generate-vmm-client generate-wire generate-all dev build test install-tools gen-jwt download-ch-binaries download-ch-spec
 
 # Directory where local binaries will be installed
 BIN_DIR ?= $(CURDIR)/bin
@@ -31,6 +31,32 @@ $(GODOTENV): | $(BIN_DIR)
 
 install-tools: $(OAPI_CODEGEN) $(AIR) $(WIRE) $(GODOTENV)
 
+# Download Cloud Hypervisor binaries
+download-ch-binaries:
+	@echo "Downloading Cloud Hypervisor binaries..."
+	@mkdir -p lib/vmm/binaries/cloud-hypervisor/v48.0/{x86_64,aarch64}
+	@mkdir -p lib/vmm/binaries/cloud-hypervisor/v49.0/{x86_64,aarch64}
+	@echo "Downloading v48.0..."
+	@curl -L -o lib/vmm/binaries/cloud-hypervisor/v48.0/x86_64/cloud-hypervisor \
+		https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/v48.0/cloud-hypervisor-static
+	@curl -L -o lib/vmm/binaries/cloud-hypervisor/v48.0/aarch64/cloud-hypervisor \
+		https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/v48.0/cloud-hypervisor-static-aarch64
+	@echo "Downloading v49.0..."
+	@curl -L -o lib/vmm/binaries/cloud-hypervisor/v49.0/x86_64/cloud-hypervisor \
+		https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/v49.0/cloud-hypervisor-static
+	@curl -L -o lib/vmm/binaries/cloud-hypervisor/v49.0/aarch64/cloud-hypervisor \
+		https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/v49.0/cloud-hypervisor-static-aarch64
+	@chmod +x lib/vmm/binaries/cloud-hypervisor/v*/*/cloud-hypervisor
+	@echo "Binaries downloaded successfully"
+
+# Download Cloud Hypervisor API spec
+download-ch-spec:
+	@echo "Downloading Cloud Hypervisor API spec..."
+	@mkdir -p specs/cloud-hypervisor/api-v0.3.0
+	@curl -L -o specs/cloud-hypervisor/api-v0.3.0/cloud-hypervisor.yaml \
+		https://raw.githubusercontent.com/cloud-hypervisor/cloud-hypervisor/refs/tags/v48.0/vmm/src/api/openapi/cloud-hypervisor.yaml
+	@echo "API spec downloaded"
+
 # Generate Go code from OpenAPI spec
 oapi-generate: $(OAPI_CODEGEN)
 	@echo "Generating Go code from OpenAPI spec..."
@@ -38,13 +64,20 @@ oapi-generate: $(OAPI_CODEGEN)
 	@echo "Formatting generated code..."
 	go fmt ./lib/oapi/oapi.go
 
+# Generate Cloud Hypervisor client from their OpenAPI spec
+generate-vmm-client: $(OAPI_CODEGEN)
+	@echo "Generating Cloud Hypervisor client from spec..."
+	$(OAPI_CODEGEN) -config ./oapi-codegen-vmm.yaml ./specs/cloud-hypervisor/api-v0.3.0/cloud-hypervisor.yaml
+	@echo "Formatting generated code..."
+	go fmt ./lib/vmm/vmm.go
+
 # Generate wire dependency injection code
 generate-wire: $(WIRE)
 	@echo "Generating wire code..."
 	cd ./cmd/api && $(WIRE)
 
 # Generate all code
-generate-all: oapi-generate generate-wire
+generate-all: oapi-generate generate-vmm-client generate-wire
 
 # Build the binary
 build: | $(BIN_DIR)
@@ -67,4 +100,5 @@ gen-jwt: $(GODOTENV)
 clean:
 	rm -rf $(BIN_DIR)
 	rm -f lib/oapi/oapi.go
+	rm -f lib/vmm/vmm.go
 

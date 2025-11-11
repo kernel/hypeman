@@ -14,3 +14,9 @@ bin/**
 tmp
 tmp/**
 .datadir
+
+# Cloud Hypervisor binaries (embedded at build time)
+lib/vmm/binaries/cloud-hypervisor/*/*/cloud-hypervisor
+
+# Generated VMM client
+lib/vmm/vmm.go
