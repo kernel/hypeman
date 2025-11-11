@@ -7,7 +7,7 @@ package apijson
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/stainless-sdks/hypeman-go/packages/param"
+	"github.com/onkernel/hypeman-go/packages/param"
 	"reflect"
 	"strconv"
 	"sync"

@@ -3,8 +3,8 @@
 package hypeman
 
 import (
-	"github.com/stainless-sdks/hypeman-go/internal/apierror"
-	"github.com/stainless-sdks/hypeman-go/packages/param"
+	"github.com/onkernel/hypeman-go/internal/apierror"
+	"github.com/onkernel/hypeman-go/packages/param"
 )
 
 // aliased to make [param.APIUnion] private when embedding

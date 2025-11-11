@@ -2,7 +2,7 @@
 package json
 
 import (
-	"github.com/stainless-sdks/hypeman-go/internal/encoding/json/shims"
+	"github.com/onkernel/hypeman-go/internal/encoding/json/shims"
 	"reflect"
 	"time"
 )

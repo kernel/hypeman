@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/stainless-sdks/hypeman-go/packages/param"
+	"github.com/onkernel/hypeman-go/packages/param"
 )
 
 var encoders sync.Map // map[encoderEntry]encoderFunc

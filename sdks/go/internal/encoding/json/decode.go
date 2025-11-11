@@ -14,7 +14,7 @@ import (
 	"encoding"
 	"encoding/base64"
 	"fmt"
-	"github.com/stainless-sdks/hypeman-go/internal/encoding/json/shims"
+	"github.com/onkernel/hypeman-go/internal/encoding/json/shims"
 	"reflect"
 	"strconv"
 	"strings"

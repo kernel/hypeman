@@ -1,7 +1,7 @@
 package apijson
 
 import (
-	"github.com/stainless-sdks/hypeman-go/packages/respjson"
+	"github.com/onkernel/hypeman-go/packages/respjson"
 	"reflect"
 )
 

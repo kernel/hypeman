@@ -2,8 +2,8 @@ package apijson_test
 
 import (
 	"encoding/json"
-	"github.com/stainless-sdks/hypeman-go/internal/apijson"
-	"github.com/stainless-sdks/hypeman-go/packages/respjson"
+	"github.com/onkernel/hypeman-go/internal/apijson"
+	"github.com/onkernel/hypeman-go/packages/respjson"
 	"testing"
 )
 

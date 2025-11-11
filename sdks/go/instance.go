@@ -12,13 +12,13 @@ import (
 	"slices"
 	"time"
 
-	"github.com/stainless-sdks/hypeman-go/internal/apijson"
-	"github.com/stainless-sdks/hypeman-go/internal/apiquery"
-	"github.com/stainless-sdks/hypeman-go/internal/requestconfig"
-	"github.com/stainless-sdks/hypeman-go/option"
-	"github.com/stainless-sdks/hypeman-go/packages/param"
-	"github.com/stainless-sdks/hypeman-go/packages/respjson"
-	"github.com/stainless-sdks/hypeman-go/packages/ssestream"
+	"github.com/onkernel/hypeman-go/internal/apijson"
+	"github.com/onkernel/hypeman-go/internal/apiquery"
+	"github.com/onkernel/hypeman-go/internal/requestconfig"
+	"github.com/onkernel/hypeman-go/option"
+	"github.com/onkernel/hypeman-go/packages/param"
+	"github.com/onkernel/hypeman-go/packages/respjson"
+	"github.com/onkernel/hypeman-go/packages/ssestream"
 )
 
 // InstanceService contains methods and other services that help with interacting

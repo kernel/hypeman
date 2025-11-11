@@ -1,7 +1,7 @@
 package sentinel
 
 import (
-	"github.com/stainless-sdks/hypeman-go/internal/encoding/json/shims"
+	"github.com/onkernel/hypeman-go/internal/encoding/json/shims"
 	"reflect"
 	"sync"
 )
