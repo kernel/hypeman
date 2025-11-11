@@ -49,6 +49,17 @@ func run() error {
 		logger.Warn("JWT_SECRET not configured - API authentication will fail")
 	}
 
+	// Ensure system files (kernel, initrd) exist before starting server
+	logger.Info("Ensuring system files...")
+	if err := app.SystemManager.EnsureSystemFiles(app.Ctx); err != nil {
+		logger.Error("failed to ensure system files", "error", err)
+		os.Exit(1)
+	}
+	kernelVer, initrdVer := app.SystemManager.GetDefaultVersions()
+	logger.Info("System files ready",
+		"kernel", kernelVer,
+		"initrd", initrdVer)
+
 	// Create router
 	r := chi.NewRouter()
 

@@ -7,6 +7,7 @@ import (
 	"github.com/onkernel/hypeman/cmd/api/config"
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/instances"
+	"github.com/onkernel/hypeman/lib/system"
 	"github.com/onkernel/hypeman/lib/volumes"
 )
 
@@ -21,11 +22,15 @@ func newTestService(t *testing.T) *ApiService {
 		t.Fatalf("failed to create image manager: %v", err)
 	}
 
+	systemMgr := system.NewManager(cfg.DataDir)
+	instanceMgr := instances.NewManager(cfg.DataDir, imageMgr, systemMgr)
+	volumeMgr := volumes.NewManager(cfg.DataDir)
+
 	return &ApiService{
 		Config:          cfg,
 		ImageManager:    imageMgr,
-		InstanceManager: instances.NewManager(cfg.DataDir, imageMgr),
-		VolumeManager:   volumes.NewManager(cfg.DataDir),
+		InstanceManager: instanceMgr,
+		VolumeManager:   volumeMgr,
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 
 	"github.com/oklog/ulid/v2"
 	"github.com/onkernel/hypeman/lib/images"
+	"github.com/onkernel/hypeman/lib/system"
 	"github.com/onkernel/hypeman/lib/vmm"
 )
 
@@ -60,56 +61,61 @@ func (m *manager) createInstance(
 		req.Env = make(map[string]string)
 	}
 
-	// 6. Create instance metadata
+	// 6. Get default system versions
+	kernelVer, initrdVer := m.systemManager.GetDefaultVersions()
+
+	// 7. Create instance metadata
 	inst := &Instance{
-		Id:          id,
-		Name:        req.Name,
-		Image:       req.Image,
-		State:       StateStopped,
-		HasSnapshot: false,
-		Size:        size,
-		HotplugSize: hotplugSize,
-		Vcpus:       vcpus,
-		Env:         req.Env,
-		CreatedAt:   time.Now(),
-		StartedAt:   nil,
-		StoppedAt:   nil,
-		CHVersion:   vmm.V49_0, // Use latest
-		SocketPath:  filepath.Join(m.dataDir, "guests", id, "ch.sock"),
-		DataDir:     filepath.Join(m.dataDir, "guests", id),
+		Id:            id,
+		Name:          req.Name,
+		Image:         req.Image,
+		State:         StateStopped,
+		HasSnapshot:   false,
+		Size:          size,
+		HotplugSize:   hotplugSize,
+		Vcpus:         vcpus,
+		Env:           req.Env,
+		CreatedAt:     time.Now(),
+		StartedAt:     nil,
+		StoppedAt:     nil,
+		KernelVersion: string(kernelVer),
+		InitrdVersion: string(initrdVer),
+		CHVersion:     vmm.V49_0, // Use latest
+		SocketPath:    filepath.Join(m.dataDir, "guests", id, "ch.sock"),
+		DataDir:       filepath.Join(m.dataDir, "guests", id),
 	}
 
-	// 7. Ensure directories
+	// 8. Ensure directories
 	if err := m.ensureDirectories(id); err != nil {
 		return nil, fmt.Errorf("ensure directories: %w", err)
 	}
 
-	// 8. Create overlay disk (50GB sparse)
+	// 9. Create overlay disk (50GB sparse)
 	if err := m.createOverlayDisk(id); err != nil {
 		m.deleteInstanceData(id) // Cleanup
 		return nil, fmt.Errorf("create overlay disk: %w", err)
 	}
 
-	// 9. Create config disk
+	// 10. Create config disk
 	if err := m.createConfigDisk(inst, imageInfo); err != nil {
 		m.deleteInstanceData(id) // Cleanup
 		return nil, fmt.Errorf("create config disk: %w", err)
 	}
 
-	// 10. Save metadata (state: Stopped)
+	// 11. Save metadata (state: Stopped)
 	meta := &metadata{Instance: *inst}
 	if err := m.saveMetadata(meta); err != nil {
 		m.deleteInstanceData(id) // Cleanup
 		return nil, fmt.Errorf("save metadata: %w", err)
 	}
 
-	// 11. Start VMM and boot VM (multi-hop: Stopped → Created → Running)
+	// 12. Start VMM and boot VM (multi-hop: Stopped → Created → Running)
 	if err := m.startAndBootVM(ctx, inst, imageInfo); err != nil {
 		m.deleteInstanceData(id) // Cleanup
 		return nil, err
 	}
 
-	// 12. Update state to Running
+	// 13. Update state to Running
 	inst.State = StateRunning
 	now := time.Now()
 	inst.StartedAt = &now
@@ -207,11 +213,15 @@ func (m *manager) startAndBootVM(
 
 // buildVMConfig creates the Cloud Hypervisor VmConfig
 func (m *manager) buildVMConfig(inst *Instance, imageInfo *images.Image) vmm.VmConfig {
+	// Get versioned system file paths
+	kernelPath, _ := m.systemManager.GetKernelPath(system.KernelVersion(inst.KernelVersion))
+	initrdPath, _ := m.systemManager.GetInitrdPath(system.InitrdVersion(inst.InitrdVersion))
+
 	// Payload configuration (kernel + initramfs)
 	payload := vmm.PayloadConfig{
-		Kernel:    ptr(filepath.Join(m.dataDir, "system", "vmlinux")),
+		Kernel:    ptr(kernelPath),
 		Cmdline:   ptr("console=ttyS0"),
-		Initramfs: ptr(filepath.Join(m.dataDir, "system", "initrd")),
+		Initramfs: ptr(initrdPath),
 	}
 
 	// CPU configuration

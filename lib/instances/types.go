@@ -43,9 +43,11 @@ type Instance struct {
 	StoppedAt *time.Time
 
 	// Internal (not in API response, used by manager)
-	CHVersion  vmm.CHVersion // Which Cloud Hypervisor version
-	SocketPath string        // Path to API socket
-	DataDir    string        // Instance data directory
+	KernelVersion string        // Kernel version (e.g., "ch-v6.12.9")
+	InitrdVersion string        // Initrd version (e.g., "v1.0.0")
+	CHVersion     vmm.CHVersion // Cloud Hypervisor version
+	SocketPath    string        // Path to API socket
+	DataDir       string        // Instance data directory
 }
 
 // CreateInstanceRequest is the domain request for creating an instance

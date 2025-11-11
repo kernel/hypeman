@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/onkernel/hypeman/lib/images"
+	"github.com/onkernel/hypeman/lib/system"
 )
 
 type Manager interface {
@@ -21,16 +22,18 @@ type Manager interface {
 }
 
 type manager struct {
-	dataDir      string
-	imageManager images.Manager
-	mu           sync.RWMutex // Protects concurrent access to instances
+	dataDir       string
+	imageManager  images.Manager
+	systemManager system.Manager
+	mu            sync.RWMutex // Protects concurrent access to instances
 }
 
 // NewManager creates a new instances manager
-func NewManager(dataDir string, imageManager images.Manager) Manager {
+func NewManager(dataDir string, imageManager images.Manager, systemManager system.Manager) Manager {
 	return &manager{
-		dataDir:      dataDir,
-		imageManager: imageManager,
+		dataDir:       dataDir,
+		imageManager:  imageManager,
+		systemManager: systemManager,
 	}
 }
 

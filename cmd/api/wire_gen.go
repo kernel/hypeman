@@ -13,6 +13,7 @@ import (
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/instances"
 	"github.com/onkernel/hypeman/lib/providers"
+	"github.com/onkernel/hypeman/lib/system"
 	"github.com/onkernel/hypeman/lib/volumes"
 	"log/slog"
 )
@@ -32,7 +33,8 @@ func initializeApp() (*application, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	instancesManager := providers.ProvideInstanceManager(config, manager)
+	systemManager := providers.ProvideSystemManager(config)
+	instancesManager := providers.ProvideInstanceManager(config, manager, systemManager)
 	volumesManager := providers.ProvideVolumeManager(config)
 	apiService := api.New(config, manager, instancesManager, volumesManager)
 	mainApplication := &application{
@@ -40,6 +42,7 @@ func initializeApp() (*application, func(), error) {
 		Logger:          logger,
 		Config:          config,
 		ImageManager:    manager,
+		SystemManager:   systemManager,
 		InstanceManager: instancesManager,
 		VolumeManager:   volumesManager,
 		ApiService:      apiService,
@@ -56,6 +59,7 @@ type application struct {
 	Logger          *slog.Logger
 	Config          *config.Config
 	ImageManager    images.Manager
+	SystemManager   system.Manager
 	InstanceManager instances.Manager
 	VolumeManager   volumes.Manager
 	ApiService      *api.ApiService

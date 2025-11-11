@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/onkernel/hypeman/lib/images"
+	"github.com/onkernel/hypeman/lib/system"
 	"github.com/onkernel/hypeman/lib/vmm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -26,7 +27,8 @@ func TestStorageOperations(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	imageManager := setupTestImageManager(t, tmpDir)
-	manager := NewManager(tmpDir, imageManager).(*manager)
+	systemManager := system.NewManager(tmpDir)
+	manager := NewManager(tmpDir, imageManager, systemManager).(*manager)
 
 	// Test metadata doesn't exist initially
 	_, err := manager.loadMetadata("nonexistent")
