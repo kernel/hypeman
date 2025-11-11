@@ -1,5 +1,5 @@
 SHELL := /bin/bash
-.PHONY: oapi-generate generate-vmm-client generate-wire generate-all dev build test install-tools gen-jwt download-ch-binaries download-ch-spec
+.PHONY: oapi-generate generate-vmm-client generate-wire generate-all dev build test install-tools gen-jwt download-ch-binaries download-ch-spec ensure-ch-binaries
 
 # Directory where local binaries will be installed
 BIN_DIR ?= $(CURDIR)/bin
@@ -79,8 +79,16 @@ generate-wire: $(WIRE)
 # Generate all code
 generate-all: oapi-generate generate-vmm-client generate-wire
 
+# Check if binaries exist, download if missing
+.PHONY: ensure-ch-binaries
+ensure-ch-binaries:
+	@if [ ! -f lib/vmm/binaries/cloud-hypervisor/v48.0/x86_64/cloud-hypervisor ]; then \
+		echo "Cloud Hypervisor binaries not found, downloading..."; \
+		$(MAKE) download-ch-binaries; \
+	fi
+
 # Build the binary
-build: | $(BIN_DIR)
+build: ensure-ch-binaries | $(BIN_DIR)
 	go build -tags containers_image_openpgp -o $(BIN_DIR)/hypeman ./cmd/api
 
 # Run in development mode with hot reload
@@ -88,7 +96,7 @@ dev: $(AIR)
 	$(AIR) -c .air.toml
 
 # Run tests
-test:
+test: ensure-ch-binaries
 	go test -tags containers_image_openpgp -v -timeout 30s ./...
 
 # Generate JWT token for testing
