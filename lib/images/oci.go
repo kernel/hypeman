@@ -11,7 +11,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/empty"
 	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
-	"github.com/opencontainers/image-spec/specs-go/v1"
+	v1 "github.com/opencontainers/image-spec/specs-go/v1"
 	rspec "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/opencontainers/umoci/oci/cas/dir"
 	"github.com/opencontainers/umoci/oci/casext"
@@ -70,11 +70,11 @@ func (c *ociClient) inspectManifest(ctx context.Context, imageRef string) (strin
 
 	// Use system authentication (reads from ~/.docker/config.json, etc.)
 	// Default retry: only on network errors, max ~1.3s total
-	descriptor, err := remote.Head(ref, 
+	descriptor, err := remote.Head(ref,
 		remote.WithContext(ctx),
 		remote.WithAuthFromKeychain(authn.DefaultKeychain))
 	if err != nil {
-		return "", fmt.Errorf("fetch manifest: %w", err)
+		return "", fmt.Errorf("fetch manifest: %w", wrapRegistryError(err))
 	}
 
 	return descriptor.Digest.String(), nil
@@ -126,12 +126,12 @@ func (c *ociClient) pullToOCILayout(ctx context.Context, imageRef, layoutTag str
 
 	// Use system authentication (reads from ~/.docker/config.json, etc.)
 	// Default retry: only on network errors, max ~1.3s total
-	img, err := remote.Image(ref, 
+	img, err := remote.Image(ref,
 		remote.WithContext(ctx),
 		remote.WithAuthFromKeychain(authn.DefaultKeychain))
 	if err != nil {
 		// Rate limits fail here immediately (429 is not retried by default)
-		return fmt.Errorf("fetch image manifest: %w", err)
+		return fmt.Errorf("fetch image manifest: %w", wrapRegistryError(err))
 	}
 
 	// Open or create OCI layout directory
@@ -293,7 +293,7 @@ func (c *ociClient) unpackLayers(ctx context.Context, imageRef, targetDir string
 	// Map container UIDs to current user's UID (identity mapping)
 	uid := uint32(os.Getuid())
 	gid := uint32(os.Getgid())
-	
+
 	unpackOpts := &layer.UnpackOptions{
 		OnDiskFormat: layer.DirRootfs{
 			MapOptions: layer.MapOptions{
@@ -307,7 +307,7 @@ func (c *ociClient) unpackLayers(ctx context.Context, imageRef, targetDir string
 			},
 		},
 	}
-	
+
 	err = layer.UnpackRootfs(context.Background(), casEngine, targetDir, manifest, unpackOpts)
 	if err != nil {
 		return fmt.Errorf("unpack rootfs: %w", err)
@@ -322,4 +322,3 @@ type containerMetadata struct {
 	Env        map[string]string
 	WorkingDir string
 }
-

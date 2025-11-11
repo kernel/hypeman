@@ -56,7 +56,7 @@ dev: $(AIR)
 
 # Run tests
 test:
-	go test -tags containers_image_openpgp -v -timeout 30s ./...
+	go test -tags containers_image_openpgp -tags containers_image_openpgp -v -timeout 30s ./...
 
 # Generate JWT token for testing
 # Usage: make gen-jwt [USER_ID=test-user]
