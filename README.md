@@ -49,7 +49,18 @@ make build
 ```
 ### Running the Server
 
-Start the server with hot-reload for development:
+1. Copy the example environment file and modify the values:
+```bash
+cp .env.example .env
+# Edit .env and set JWT_SECRET and other configuration values
+```
+
+2. Generate a JWT token for testing (optional):
+```bash
+make gen-jwt
+```
+
+3. Start the server with hot-reload for development:
 ```bash
 make dev
 ```

@@ -13,3 +13,4 @@ bin/**
 .env
 tmp
 tmp/**
+.datadir
