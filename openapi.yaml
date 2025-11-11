@@ -233,33 +233,40 @@ components:
           type: string
           description: OCI image reference (e.g., docker.io/library/nginx:latest)
           example: docker.io/library/nginx:latest
-        id:
-          type: string
-          description: Optional custom identifier (auto-generated if not provided)
-          example: img-nginx-v1
     
     Image:
       type: object
-      required: [id, name, created_at]
+      required: [name, digest, status, created_at]
       properties:
-        id:
-          type: string
-          description: Unique identifier
-          example: img-nginx-v1
         name:
           type: string
-          description: OCI image reference
+          description: Normalized OCI image reference (tag or digest)
           example: docker.io/library/nginx:latest
-        version:
+        digest:
           type: string
-          description: Image tag or digest
-          example: latest
+          description: Resolved manifest digest
+          example: sha256:abc123def456...
+        status:
+          type: string
+          enum: [pending, pulling, converting, ready, failed]
+          description: Build status
+          example: ready
+        queue_position:
+          type: integer
+          description: Position in build queue (null if not queued)
+          example: 2
+          nullable: true
+        error:
+          type: string
+          description: Error message if status is failed
+          example: "pull failed: connection timeout"
           nullable: true
         size_bytes:
           type: integer
           format: int64
-          description: Disk size in bytes
+          description: Disk size in bytes (null until ready)
           example: 536870912
+          nullable: true
         entrypoint:
           type: array
           items:
@@ -415,14 +422,20 @@ paths:
             schema:
               $ref: "#/components/schemas/CreateImageRequest"
       responses:
-        201:
-          description: Image created
+        202:
+          description: Image build started (async)
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Image"
         400:
           description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        404:
+          description: Image not found
           content:
             application/json:
               schema:
@@ -440,18 +453,19 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
   
-  /images/{id}:
+  /images/{name}:
     get:
       summary: Get image details
       operationId: getImage
       security:
         - bearerAuth: []
       parameters:
-        - name: id
+        - name: name
           in: path
           required: true
           schema:
             type: string
+          description: URL-encoded image name (e.g. docker.io%2Flibrary%2Falpine%3Alatest)
       responses:
         200:
           description: Image details
@@ -477,11 +491,12 @@ paths:
       security:
         - bearerAuth: []
       parameters:
-        - name: id
+        - name: name
           in: path
           required: true
           schema:
             type: string
+          description: URL-encoded image name
       responses:
         204:
           description: Image deleted

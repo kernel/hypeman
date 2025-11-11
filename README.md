@@ -8,25 +8,39 @@ Run containerized workloads in VMs, powered by [Cloud Hypervisor](https://github
 
 ### Prerequisites
 
-**Cloud Hypervisor** - [Installation guide](https://www.cloudhypervisor.org/docs/prologue/quick-start/#use-pre-built-binaries)
-```bash
-cloud-hypervisor --version  # Verify
-ch-remote --version
-```
+**Go 1.25.4+**, **Cloud Hypervisor**, **KVM**, **erofs-utils**
 
-**containerd** - [Installation guide](https://github.com/containerd/containerd/blob/main/docs/getting-started.md)
 ```bash
-containerd --version  # Verify
+cloud-hypervisor --version
+mkfs.erofs --version
 ```
-
-**Go 1.25.4+** and **KVM**
 
 ### Configuration
+
+#### Environment variables
 
 ```bash
 cp .env.example .env
 # Edit .env and set JWT_SECRET
 ```
+
+#### Data directory
+
+Hypeman stores data in a configurable directory. Configure permissions for this directory.
+
+```bash
+sudo mkdir /var/lib/hypeman
+sudo chown $USER:$USER /var/lib/hypeman
+```
+
+#### Dockerhub login
+
+Requires Docker Hub authentication to avoid rate limits when running the tests:
+```bash
+docker login
+```
+
+Docker itself isn't required to be installed. `~/.docker/config.json` is a standard used for handling registry authentication.
 
 ### Build
 

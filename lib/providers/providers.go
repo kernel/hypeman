@@ -30,8 +30,8 @@ func ProvideConfig() *config.Config {
 }
 
 // ProvideImageManager provides the image manager
-func ProvideImageManager(cfg *config.Config) images.Manager {
-	return images.NewManager(cfg.DataDir)
+func ProvideImageManager(cfg *config.Config) (images.Manager, error) {
+	return images.NewManager(cfg.DataDir, cfg.MaxConcurrentBuilds)
 }
 
 // ProvideInstanceManager provides the instance manager
@@ -43,4 +43,3 @@ func ProvideInstanceManager(cfg *config.Config) instances.Manager {
 func ProvideVolumeManager(cfg *config.Config) volumes.Manager {
 	return volumes.NewManager(cfg.DataDir)
 }
-

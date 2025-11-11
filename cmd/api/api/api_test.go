@@ -16,9 +16,14 @@ func newTestService(t *testing.T) *ApiService {
 		DataDir: t.TempDir(),
 	}
 
+	imageMgr, err := images.NewManager(cfg.DataDir, 1)
+	if err != nil {
+		t.Fatalf("failed to create image manager: %v", err)
+	}
+
 	return &ApiService{
 		Config:          cfg,
-		ImageManager:    images.NewManager(cfg.DataDir),
+		ImageManager:    imageMgr,
 		InstanceManager: instances.NewManager(cfg.DataDir),
 		VolumeManager:   volumes.NewManager(cfg.DataDir),
 	}
@@ -27,4 +32,3 @@ func newTestService(t *testing.T) *ApiService {
 func ctx() context.Context {
 	return context.Background()
 }
-

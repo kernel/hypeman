@@ -3,15 +3,12 @@ package volumes
 import (
 	"context"
 	"fmt"
-
-	"github.com/onkernel/hypeman/lib/oapi"
 )
 
-// Manager handles volume lifecycle operations
 type Manager interface {
-	ListVolumes(ctx context.Context) ([]oapi.Volume, error)
-	CreateVolume(ctx context.Context, req oapi.CreateVolumeRequest) (*oapi.Volume, error)
-	GetVolume(ctx context.Context, id string) (*oapi.Volume, error)
+	ListVolumes(ctx context.Context) ([]Volume, error)
+	CreateVolume(ctx context.Context, req CreateVolumeRequest) (*Volume, error)
+	GetVolume(ctx context.Context, id string) (*Volume, error)
 	DeleteVolume(ctx context.Context, id string) error
 }
 
@@ -19,43 +16,24 @@ type manager struct {
 	dataDir string
 }
 
-// NewManager creates a new volume manager
 func NewManager(dataDir string) Manager {
 	return &manager{
 		dataDir: dataDir,
 	}
 }
 
-func (m *manager) ListVolumes(ctx context.Context) ([]oapi.Volume, error) {
-	// TODO: implement
-	return []oapi.Volume{}, nil
+func (m *manager) ListVolumes(ctx context.Context) ([]Volume, error) {
+	return []Volume{}, nil
 }
 
-func (m *manager) CreateVolume(ctx context.Context, req oapi.CreateVolumeRequest) (*oapi.Volume, error) {
-	// TODO: implement
+func (m *manager) CreateVolume(ctx context.Context, req CreateVolumeRequest) (*Volume, error) {
 	return nil, fmt.Errorf("volume creation not yet implemented")
 }
 
-func (m *manager) GetVolume(ctx context.Context, id string) (*oapi.Volume, error) {
-	// TODO: implement actual logic
-	exists := false
-	if !exists {
-		return nil, ErrNotFound
-	}
-	return nil, fmt.Errorf("get volume not yet implemented")
+func (m *manager) GetVolume(ctx context.Context, id string) (*Volume, error) {
+	return nil, ErrNotFound
 }
 
 func (m *manager) DeleteVolume(ctx context.Context, id string) error {
-	// TODO: implement actual logic
-	exists := false
-	if !exists {
-		return ErrNotFound
-	}
-	// Check if volume is attached to any instance
-	inUse := false
-	if inUse {
-		return ErrInUse
-	}
-	return fmt.Errorf("delete volume not yet implemented")
+	return ErrNotFound
 }
-

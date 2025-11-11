@@ -5,7 +5,7 @@ tmp_dir = "tmp"
 [build]
   args_bin = []
   bin = "./tmp/main"
-  cmd = "go build -o ./tmp/main ./cmd/api"
+  cmd = "go build -tags containers_image_openpgp -o ./tmp/main ./cmd/api"
   delay = 1000
   exclude_dir = ["assets", "tmp", "vendor", "testdata", "bin", "scripts", "data", "kernel"]
   exclude_file = []

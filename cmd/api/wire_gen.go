@@ -28,7 +28,10 @@ func initializeApp() (*application, func(), error) {
 	logger := providers.ProvideLogger()
 	context := providers.ProvideContext(logger)
 	config := providers.ProvideConfig()
-	manager := providers.ProvideImageManager(config)
+	manager, err := providers.ProvideImageManager(config)
+	if err != nil {
+		return nil, nil, err
+	}
 	instancesManager := providers.ProvideInstanceManager(config)
 	volumesManager := providers.ProvideVolumeManager(config)
 	apiService := api.New(config, manager, instancesManager, volumesManager)

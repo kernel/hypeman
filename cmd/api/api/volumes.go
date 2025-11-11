@@ -13,7 +13,7 @@ import (
 func (s *ApiService) ListVolumes(ctx context.Context, request oapi.ListVolumesRequestObject) (oapi.ListVolumesResponseObject, error) {
 	log := logger.FromContext(ctx)
 
-	vols, err := s.VolumeManager.ListVolumes(ctx)
+	domainVols, err := s.VolumeManager.ListVolumes(ctx)
 	if err != nil {
 		log.Error("failed to list volumes", "error", err)
 		return oapi.ListVolumes500JSONResponse{
@@ -21,14 +21,26 @@ func (s *ApiService) ListVolumes(ctx context.Context, request oapi.ListVolumesRe
 			Message: "failed to list volumes",
 		}, nil
 	}
-	return oapi.ListVolumes200JSONResponse(vols), nil
+	
+	oapiVols := make([]oapi.Volume, len(domainVols))
+	for i, vol := range domainVols {
+		oapiVols[i] = volumeToOAPI(vol)
+	}
+	
+	return oapi.ListVolumes200JSONResponse(oapiVols), nil
 }
 
 // CreateVolume creates a new volume
 func (s *ApiService) CreateVolume(ctx context.Context, request oapi.CreateVolumeRequestObject) (oapi.CreateVolumeResponseObject, error) {
 	log := logger.FromContext(ctx)
 
-	vol, err := s.VolumeManager.CreateVolume(ctx, *request.Body)
+	domainReq := volumes.CreateVolumeRequest{
+		Name:   request.Body.Name,
+		SizeGb: request.Body.SizeGb,
+		Id:     request.Body.Id,
+	}
+
+	vol, err := s.VolumeManager.CreateVolume(ctx, domainReq)
 	if err != nil {
 		log.Error("failed to create volume", "error", err, "name", request.Body.Name)
 		return oapi.CreateVolume500JSONResponse{
@@ -36,7 +48,7 @@ func (s *ApiService) CreateVolume(ctx context.Context, request oapi.CreateVolume
 			Message: "failed to create volume",
 		}, nil
 	}
-	return oapi.CreateVolume201JSONResponse(*vol), nil
+	return oapi.CreateVolume201JSONResponse(volumeToOAPI(*vol)), nil
 }
 
 // GetVolume gets volume details
@@ -59,7 +71,7 @@ func (s *ApiService) GetVolume(ctx context.Context, request oapi.GetVolumeReques
 			}, nil
 		}
 	}
-	return oapi.GetVolume200JSONResponse(*vol), nil
+	return oapi.GetVolume200JSONResponse(volumeToOAPI(*vol)), nil
 }
 
 // DeleteVolume deletes a volume
@@ -88,5 +100,14 @@ func (s *ApiService) DeleteVolume(ctx context.Context, request oapi.DeleteVolume
 		}
 	}
 	return oapi.DeleteVolume204Response{}, nil
+}
+
+func volumeToOAPI(vol volumes.Volume) oapi.Volume {
+	return oapi.Volume{
+		Id:        vol.Id,
+		Name:      vol.Name,
+		SizeGb:    vol.SizeGb,
+		CreatedAt: vol.CreatedAt,
+	}
 }
 

@@ -9,11 +9,10 @@ import (
 	"github.com/onkernel/hypeman/lib/oapi"
 )
 
-// ListImages lists all images
 func (s *ApiService) ListImages(ctx context.Context, request oapi.ListImagesRequestObject) (oapi.ListImagesResponseObject, error) {
 	log := logger.FromContext(ctx)
 
-	imgs, err := s.ImageManager.ListImages(ctx)
+	domainImages, err := s.ImageManager.ListImages(ctx)
 	if err != nil {
 		log.Error("failed to list images", "error", err)
 		return oapi.ListImages500JSONResponse{
@@ -21,20 +20,34 @@ func (s *ApiService) ListImages(ctx context.Context, request oapi.ListImagesRequ
 			Message: "failed to list images",
 		}, nil
 	}
-	return oapi.ListImages200JSONResponse(imgs), nil
+	
+	oapiImages := make([]oapi.Image, len(domainImages))
+	for i, img := range domainImages {
+		oapiImages[i] = imageToOAPI(img)
+	}
+	
+	return oapi.ListImages200JSONResponse(oapiImages), nil
 }
 
-// CreateImage creates a new image from an OCI reference
 func (s *ApiService) CreateImage(ctx context.Context, request oapi.CreateImageRequestObject) (oapi.CreateImageResponseObject, error) {
 	log := logger.FromContext(ctx)
 
-	img, err := s.ImageManager.CreateImage(ctx, *request.Body)
+	domainReq := images.CreateImageRequest{
+		Name: request.Body.Name,
+	}
+
+	img, err := s.ImageManager.CreateImage(ctx, domainReq)
 	if err != nil {
 		switch {
-		case errors.Is(err, images.ErrAlreadyExists):
+		case errors.Is(err, images.ErrInvalidName):
 			return oapi.CreateImage400JSONResponse{
-				Code:    "already_exists",
-				Message: "image already exists",
+				Code:    "invalid_name",
+				Message: err.Error(),
+			}, nil
+		case errors.Is(err, images.ErrNotFound):
+			return oapi.CreateImage404JSONResponse{
+				Code:    "not_found",
+				Message: "image not found",
 			}, nil
 		default:
 			log.Error("failed to create image", "error", err, "name", request.Body.Name)
@@ -44,46 +57,44 @@ func (s *ApiService) CreateImage(ctx context.Context, request oapi.CreateImageRe
 			}, nil
 		}
 	}
-	return oapi.CreateImage201JSONResponse(*img), nil
+	return oapi.CreateImage202JSONResponse(imageToOAPI(*img)), nil
 }
 
-// GetImage gets image details
 func (s *ApiService) GetImage(ctx context.Context, request oapi.GetImageRequestObject) (oapi.GetImageResponseObject, error) {
 	log := logger.FromContext(ctx)
 
-	img, err := s.ImageManager.GetImage(ctx, request.Id)
+	img, err := s.ImageManager.GetImage(ctx, request.Name)
 	if err != nil {
 		switch {
-		case errors.Is(err, images.ErrNotFound):
+		case errors.Is(err, images.ErrInvalidName), errors.Is(err, images.ErrNotFound):
 			return oapi.GetImage404JSONResponse{
 				Code:    "not_found",
 				Message: "image not found",
 			}, nil
 		default:
-			log.Error("failed to get image", "error", err, "id", request.Id)
+			log.Error("failed to get image", "error", err, "name", request.Name)
 			return oapi.GetImage500JSONResponse{
 				Code:    "internal_error",
 				Message: "failed to get image",
 			}, nil
 		}
 	}
-	return oapi.GetImage200JSONResponse(*img), nil
+	return oapi.GetImage200JSONResponse(imageToOAPI(*img)), nil
 }
 
-// DeleteImage deletes an image
 func (s *ApiService) DeleteImage(ctx context.Context, request oapi.DeleteImageRequestObject) (oapi.DeleteImageResponseObject, error) {
 	log := logger.FromContext(ctx)
 
-	err := s.ImageManager.DeleteImage(ctx, request.Id)
+	err := s.ImageManager.DeleteImage(ctx, request.Name)
 	if err != nil {
 		switch {
-		case errors.Is(err, images.ErrNotFound):
+		case errors.Is(err, images.ErrInvalidName), errors.Is(err, images.ErrNotFound):
 			return oapi.DeleteImage404JSONResponse{
 				Code:    "not_found",
 				Message: "image not found",
 			}, nil
 		default:
-			log.Error("failed to delete image", "error", err, "id", request.Id)
+			log.Error("failed to delete image", "error", err, "name", request.Name)
 			return oapi.DeleteImage500JSONResponse{
 				Code:    "internal_error",
 				Message: "failed to delete image",
@@ -93,3 +104,29 @@ func (s *ApiService) DeleteImage(ctx context.Context, request oapi.DeleteImageRe
 	return oapi.DeleteImage204Response{}, nil
 }
 
+func imageToOAPI(img images.Image) oapi.Image {
+	oapiImg := oapi.Image{
+		Name:          img.Name,
+		Digest:        img.Digest,
+		Status:        oapi.ImageStatus(img.Status),
+		QueuePosition: img.QueuePosition,
+		Error:         img.Error,
+		SizeBytes:     img.SizeBytes,
+		CreatedAt:     img.CreatedAt,
+	}
+
+	if len(img.Entrypoint) > 0 {
+		oapiImg.Entrypoint = &img.Entrypoint
+	}
+	if len(img.Cmd) > 0 {
+		oapiImg.Cmd = &img.Cmd
+	}
+	if len(img.Env) > 0 {
+		oapiImg.Env = &img.Env
+	}
+	if img.WorkingDir != "" {
+		oapiImg.WorkingDir = &img.WorkingDir
+	}
+
+	return oapiImg
+}

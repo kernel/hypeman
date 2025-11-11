@@ -14,7 +14,7 @@ import (
 func (s *ApiService) ListInstances(ctx context.Context, request oapi.ListInstancesRequestObject) (oapi.ListInstancesResponseObject, error) {
 	log := logger.FromContext(ctx)
 
-	insts, err := s.InstanceManager.ListInstances(ctx)
+	domainInsts, err := s.InstanceManager.ListInstances(ctx)
 	if err != nil {
 		log.Error("failed to list instances", "error", err)
 		return oapi.ListInstances500JSONResponse{
@@ -22,22 +22,34 @@ func (s *ApiService) ListInstances(ctx context.Context, request oapi.ListInstanc
 			Message: "failed to list instances",
 		}, nil
 	}
-	return oapi.ListInstances200JSONResponse(insts), nil
+	
+	oapiInsts := make([]oapi.Instance, len(domainInsts))
+	for i, inst := range domainInsts {
+		oapiInsts[i] = instanceToOAPI(inst)
+	}
+	
+	return oapi.ListInstances200JSONResponse(oapiInsts), nil
 }
 
 // CreateInstance creates and starts a new instance
 func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInstanceRequestObject) (oapi.CreateInstanceResponseObject, error) {
 	log := logger.FromContext(ctx)
 
-	inst, err := s.InstanceManager.CreateInstance(ctx, *request.Body)
+	domainReq := instances.CreateInstanceRequest{
+		Id:    request.Body.Id,
+		Name:  request.Body.Name,
+		Image: request.Body.Image,
+	}
+
+	inst, err := s.InstanceManager.CreateInstance(ctx, domainReq)
 	if err != nil {
-		log.Error("failed to create instance", "error", err, "name", request.Body.Name)
+		log.Error("failed to create instance", "error", err, "image", request.Body.Image)
 		return oapi.CreateInstance500JSONResponse{
 			Code:    "internal_error",
 			Message: "failed to create instance",
 		}, nil
 	}
-	return oapi.CreateInstance201JSONResponse(*inst), nil
+	return oapi.CreateInstance201JSONResponse(instanceToOAPI(*inst)), nil
 }
 
 // GetInstance gets instance details
@@ -60,8 +72,10 @@ func (s *ApiService) GetInstance(ctx context.Context, request oapi.GetInstanceRe
 			}, nil
 		}
 	}
-	return oapi.GetInstance200JSONResponse(*inst), nil
+	return oapi.GetInstance200JSONResponse(instanceToOAPI(*inst)), nil
 }
+
+
 
 // DeleteInstance stops and deletes an instance
 func (s *ApiService) DeleteInstance(ctx context.Context, request oapi.DeleteInstanceRequestObject) (oapi.DeleteInstanceResponseObject, error) {
@@ -111,7 +125,7 @@ func (s *ApiService) StandbyInstance(ctx context.Context, request oapi.StandbyIn
 			}, nil
 		}
 	}
-	return oapi.StandbyInstance200JSONResponse(*inst), nil
+	return oapi.StandbyInstance200JSONResponse(instanceToOAPI(*inst)), nil
 }
 
 // RestoreInstance restores an instance from standby
@@ -139,7 +153,7 @@ func (s *ApiService) RestoreInstance(ctx context.Context, request oapi.RestoreIn
 			}, nil
 		}
 	}
-	return oapi.RestoreInstance200JSONResponse(*inst), nil
+	return oapi.RestoreInstance200JSONResponse(instanceToOAPI(*inst)), nil
 }
 
 // GetInstanceLogs streams instance logs
@@ -182,7 +196,11 @@ func (s *ApiService) GetInstanceLogs(ctx context.Context, request oapi.GetInstan
 func (s *ApiService) AttachVolume(ctx context.Context, request oapi.AttachVolumeRequestObject) (oapi.AttachVolumeResponseObject, error) {
 	log := logger.FromContext(ctx)
 
-	inst, err := s.InstanceManager.AttachVolume(ctx, request.Id, request.VolumeId, *request.Body)
+	domainReq := instances.AttachVolumeRequest{
+		MountPath: request.Body.MountPath,
+	}
+
+	inst, err := s.InstanceManager.AttachVolume(ctx, request.Id, request.VolumeId, domainReq)
 	if err != nil {
 		switch {
 		case errors.Is(err, instances.ErrNotFound):
@@ -198,7 +216,7 @@ func (s *ApiService) AttachVolume(ctx context.Context, request oapi.AttachVolume
 			}, nil
 		}
 	}
-	return oapi.AttachVolume200JSONResponse(*inst), nil
+	return oapi.AttachVolume200JSONResponse(instanceToOAPI(*inst)), nil
 }
 
 // DetachVolume detaches a volume from an instance
@@ -221,6 +239,14 @@ func (s *ApiService) DetachVolume(ctx context.Context, request oapi.DetachVolume
 			}, nil
 		}
 	}
-	return oapi.DetachVolume200JSONResponse(*inst), nil
+	return oapi.DetachVolume200JSONResponse(instanceToOAPI(*inst)), nil
 }
 
+func instanceToOAPI(inst instances.Instance) oapi.Instance {
+	return oapi.Instance{
+		Id:        inst.Id,
+		Name:      inst.Name,
+		Image:     inst.Image,
+		CreatedAt: inst.CreatedAt,
+	}
+}
