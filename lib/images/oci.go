@@ -74,7 +74,7 @@ func (c *ociClient) inspectManifest(ctx context.Context, imageRef string) (strin
 		remote.WithContext(ctx),
 		remote.WithAuthFromKeychain(authn.DefaultKeychain))
 	if err != nil {
-		return "", fmt.Errorf("fetch manifest: %w", err)
+		return "", fmt.Errorf("fetch manifest: %w", wrapRegistryError(err))
 	}
 
 	return descriptor.Digest.String(), nil
@@ -131,7 +131,7 @@ func (c *ociClient) pullToOCILayout(ctx context.Context, imageRef, layoutTag str
 		remote.WithAuthFromKeychain(authn.DefaultKeychain))
 	if err != nil {
 		// Rate limits fail here immediately (429 is not retried by default)
-		return fmt.Errorf("fetch image manifest: %w", err)
+		return fmt.Errorf("fetch image manifest: %w", wrapRegistryError(err))
 	}
 
 	// Open or create OCI layout directory
