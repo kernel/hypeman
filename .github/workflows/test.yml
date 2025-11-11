@@ -5,7 +5,7 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, kvm]
     steps:
       - uses: actions/checkout@v4
       
@@ -17,7 +17,10 @@ jobs:
       - name: Install dependencies
         run: |
           set -xe
-          sudo apt-get install -y erofs-utils
+          if ! command -v mkfs.erofs &> /dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y erofs-utils
+          fi
           go mod download
       
       # Avoids rate limits when running the tests
@@ -33,4 +36,3 @@ jobs:
       
       - name: Build
         run: make build
-
