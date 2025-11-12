@@ -3,9 +3,10 @@ package instances
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"time"
 
-	"github.com/oklog/ulid/v2"
+	"github.com/nrednav/cuid2"
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/logger"
 	"github.com/onkernel/hypeman/lib/system"
@@ -43,8 +44,8 @@ func (m *manager) createInstance(
 		return nil, fmt.Errorf("%w: image status is %s", ErrImageNotReady, imageInfo.Status)
 	}
 
-	// 3. Generate instance ID (ULID for time-ordered IDs)
-	id := ulid.Make().String()
+	// 3. Generate instance ID (CUID2 for secure, collision-resistant IDs)
+	id := cuid2.Generate()
 	log.DebugContext(ctx, "generated instance ID", "id", id)
 
 	// 4. Check instance doesn't already exist
@@ -162,6 +163,15 @@ func (m *manager) createInstance(
 func validateCreateRequest(req CreateInstanceRequest) error {
 	if req.Name == "" {
 		return fmt.Errorf("name is required")
+	}
+	// Validate name format: lowercase letters, digits, dashes only
+	// No starting/ending with dashes, no consecutive dashes, max 63 characters
+	if len(req.Name) > 63 {
+		return fmt.Errorf("name must be 63 characters or less")
+	}
+	namePattern := regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
+	if !namePattern.MatchString(req.Name) {
+		return fmt.Errorf("name must contain only lowercase letters, digits, and dashes; cannot start or end with a dash; cannot have consecutive dashes")
 	}
 	if req.Image == "" {
 		return fmt.Errorf("image is required")

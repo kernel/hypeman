@@ -95,7 +95,9 @@ components:
       properties:
         name:
           type: string
-          description: Human-readable name
+          description: Human-readable name (lowercase letters, digits, and dashes only; cannot start or end with a dash; no consecutive dashes)
+          pattern: ^[a-z0-9]+(-[a-z0-9]+)*$
+          maxLength: 63
           example: my-workload-1
         image:
           type: string
@@ -137,8 +139,8 @@ components:
       properties:
         id:
           type: string
-          description: Auto-generated unique identifier (ULID format)
-          example: 01H8X9Y5GJ2K3M4N5P6Q7R8S9T
+          description: Auto-generated unique identifier (CUID2 format)
+          example: tz4a98xxat96iws9zmbrgj3a
         name:
           type: string
           description: Human-readable name

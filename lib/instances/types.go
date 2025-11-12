@@ -21,7 +21,7 @@ const (
 // StoredMetadata represents instance metadata that is persisted to disk
 type StoredMetadata struct {
 	// Identification
-	Id    string // Auto-generated ULID
+	Id    string // Auto-generated CUID2
 	Name  string
 	Image string // OCI reference
 
