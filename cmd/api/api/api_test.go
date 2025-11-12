@@ -23,7 +23,8 @@ func newTestService(t *testing.T) *ApiService {
 	}
 
 	systemMgr := system.NewManager(cfg.DataDir)
-	instanceMgr := instances.NewManager(cfg.DataDir, imageMgr, systemMgr)
+	maxOverlaySize := int64(100 * 1024 * 1024 * 1024) // 100GB for tests
+	instanceMgr := instances.NewManager(cfg.DataDir, imageMgr, systemMgr, maxOverlaySize)
 	volumeMgr := volumes.NewManager(cfg.DataDir)
 
 	return &ApiService{

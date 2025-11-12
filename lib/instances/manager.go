@@ -22,18 +22,20 @@ type Manager interface {
 }
 
 type manager struct {
-	dataDir       string
-	imageManager  images.Manager
-	systemManager system.Manager
-	mu            sync.RWMutex // Protects concurrent access to instances
+	dataDir        string
+	imageManager   images.Manager
+	systemManager  system.Manager
+	maxOverlaySize int64        // Maximum overlay disk size in bytes
+	mu             sync.RWMutex // Protects concurrent access to instances
 }
 
 // NewManager creates a new instances manager
-func NewManager(dataDir string, imageManager images.Manager, systemManager system.Manager) Manager {
+func NewManager(dataDir string, imageManager images.Manager, systemManager system.Manager, maxOverlaySize int64) Manager {
 	return &manager{
-		dataDir:       dataDir,
-		imageManager:  imageManager,
-		systemManager: systemManager,
+		dataDir:        dataDir,
+		imageManager:   imageManager,
+		systemManager:  systemManager,
+		maxOverlaySize: maxOverlaySize,
 	}
 }
 

@@ -2,9 +2,11 @@ package providers
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 
+	"github.com/c2h5oh/datasize"
 	"github.com/onkernel/hypeman/cmd/api/config"
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/instances"
@@ -41,8 +43,13 @@ func ProvideSystemManager(cfg *config.Config) system.Manager {
 }
 
 // ProvideInstanceManager provides the instance manager
-func ProvideInstanceManager(cfg *config.Config, imageManager images.Manager, systemManager system.Manager) instances.Manager {
-	return instances.NewManager(cfg.DataDir, imageManager, systemManager)
+func ProvideInstanceManager(cfg *config.Config, imageManager images.Manager, systemManager system.Manager) (instances.Manager, error) {
+	// Parse max overlay size from config
+	var maxOverlaySize datasize.ByteSize
+	if err := maxOverlaySize.UnmarshalText([]byte(cfg.MaxOverlaySize)); err != nil {
+		return nil, fmt.Errorf("failed to parse MAX_OVERLAY_SIZE '%s': %w (expected format like '100GB', '50G', '10GiB')", cfg.MaxOverlaySize, err)
+	}
+	return instances.NewManager(cfg.DataDir, imageManager, systemManager, int64(maxOverlaySize)), nil
 }
 
 // ProvideVolumeManager provides the volume manager

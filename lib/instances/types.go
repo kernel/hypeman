@@ -32,6 +32,7 @@ type Instance struct {
 	// Resources (matching Cloud Hypervisor terminology)
 	Size        int64 // Base memory in bytes
 	HotplugSize int64 // Hotplug memory in bytes
+	OverlaySize int64 // Overlay disk size in bytes
 	Vcpus       int
 
 	// Configuration
@@ -56,6 +57,7 @@ type CreateInstanceRequest struct {
 	Image       string            // Required: OCI reference
 	Size        int64             // Base memory in bytes (default: 1GB)
 	HotplugSize int64             // Hotplug memory in bytes (default: 3GB)
+	OverlaySize int64             // Overlay disk size in bytes (default: 10GB)
 	Vcpus       int               // Default 2
 	Env         map[string]string // Optional environment variables
 }

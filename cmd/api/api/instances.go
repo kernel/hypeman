@@ -3,8 +3,10 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
+	"github.com/c2h5oh/datasize"
 	"github.com/onkernel/hypeman/lib/instances"
 	"github.com/onkernel/hypeman/lib/logger"
 	"github.com/onkernel/hypeman/lib/oapi"
@@ -35,15 +37,43 @@ func (s *ApiService) ListInstances(ctx context.Context, request oapi.ListInstanc
 func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInstanceRequestObject) (oapi.CreateInstanceResponseObject, error) {
 	log := logger.FromContext(ctx)
 
-	// Apply defaults
-	size := int64(1073741824) // 1GB default
-	if request.Body.Size != nil {
-		size = *request.Body.Size
+	// Parse size (default: 1GB)
+	size := int64(0)
+	if request.Body.Size != nil && *request.Body.Size != "" {
+		var sizeBytes datasize.ByteSize
+		if err := sizeBytes.UnmarshalText([]byte(*request.Body.Size)); err != nil {
+			return oapi.CreateInstance400JSONResponse{
+				Code:    "invalid_size",
+				Message: fmt.Sprintf("invalid size format: %v", err),
+			}, nil
+		}
+		size = int64(sizeBytes)
 	}
 
-	hotplugSize := int64(3221225472) // 3GB default
-	if request.Body.HotplugSize != nil {
-		hotplugSize = *request.Body.HotplugSize
+	// Parse hotplug_size (default: 3GB)
+	hotplugSize := int64(0)
+	if request.Body.HotplugSize != nil && *request.Body.HotplugSize != "" {
+		var hotplugBytes datasize.ByteSize
+		if err := hotplugBytes.UnmarshalText([]byte(*request.Body.HotplugSize)); err != nil {
+			return oapi.CreateInstance400JSONResponse{
+				Code:    "invalid_hotplug_size",
+				Message: fmt.Sprintf("invalid hotplug_size format: %v", err),
+			}, nil
+		}
+		hotplugSize = int64(hotplugBytes)
+	}
+
+	// Parse overlay_size (default: 10GB)
+	overlaySize := int64(0)
+	if request.Body.OverlaySize != nil && *request.Body.OverlaySize != "" {
+		var overlayBytes datasize.ByteSize
+		if err := overlayBytes.UnmarshalText([]byte(*request.Body.OverlaySize)); err != nil {
+			return oapi.CreateInstance400JSONResponse{
+				Code:    "invalid_overlay_size",
+				Message: fmt.Sprintf("invalid overlay_size format: %v", err),
+			}, nil
+		}
+		overlaySize = int64(overlayBytes)
 	}
 
 	vcpus := 2
@@ -61,6 +91,7 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		Image:       request.Body.Image,
 		Size:        size,
 		HotplugSize: hotplugSize,
+		OverlaySize: overlaySize,
 		Vcpus:       vcpus,
 		Env:         env,
 	}
@@ -245,13 +276,20 @@ func (s *ApiService) DetachVolume(ctx context.Context, request oapi.DetachVolume
 
 // instanceToOAPI converts domain Instance to OAPI Instance
 func instanceToOAPI(inst instances.Instance) oapi.Instance {
+	// Format sizes as human-readable strings with best precision
+	// HR() returns format like "1.5 GB" with 1 decimal place
+	sizeStr := datasize.ByteSize(inst.Size).HR()
+	hotplugSizeStr := datasize.ByteSize(inst.HotplugSize).HR()
+	overlaySizeStr := datasize.ByteSize(inst.OverlaySize).HR()
+
 	oapiInst := oapi.Instance{
 		Id:          inst.Id,
 		Name:        inst.Name,
 		Image:       inst.Image,
 		State:       oapi.InstanceState(inst.State),
-		Size:        &inst.Size,
-		HotplugSize: &inst.HotplugSize,
+		Size:        &sizeStr,
+		HotplugSize: &hotplugSizeStr,
+		OverlaySize: &overlaySizeStr,
 		Vcpus:       &inst.Vcpus,
 		CreatedAt:   inst.CreatedAt,
 		StartedAt:   inst.StartedAt,

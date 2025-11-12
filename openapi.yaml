@@ -102,17 +102,20 @@ components:
           description: OCI image reference
           example: docker.io/library/alpine:latest
         size:
-          type: integer
-          format: int64
-          description: Base memory size in bytes (matches Cloud Hypervisor MemoryConfig.size)
-          default: 1073741824
-          example: 2147483648
+          type: string
+          description: Base memory size (human-readable format like "1GB", "512MB", "2G")
+          default: "1GB"
+          example: "2GB"
         hotplug_size:
-          type: integer
-          format: int64
-          description: Additional memory for hotplug in bytes (matches Cloud Hypervisor MemoryConfig.hotplug_size)
-          default: 3221225472
-          example: 2147483648
+          type: string
+          description: Additional memory for hotplug (human-readable format like "3GB", "1G")
+          default: "3GB"
+          example: "2GB"
+        overlay_size:
+          type: string
+          description: Writable overlay disk size (human-readable format like "10GB", "50G")
+          default: "10GB"
+          example: "20GB"
         vcpus:
           type: integer
           description: Number of virtual CPUs
@@ -147,15 +150,17 @@ components:
         state:
           $ref: "#/components/schemas/InstanceState"
         size:
-          type: integer
-          format: int64
-          description: Base memory in bytes
-          example: 2147483648
+          type: string
+          description: Base memory size (human-readable)
+          example: "2GB"
         hotplug_size:
-          type: integer
-          format: int64
-          description: Hotplug memory in bytes
-          example: 2147483648
+          type: string
+          description: Hotplug memory size (human-readable)
+          example: "2GB"
+        overlay_size:
+          type: string
+          description: Writable overlay disk size (human-readable)
+          example: "10GB"
         vcpus:
           type: integer
           description: Number of virtual CPUs

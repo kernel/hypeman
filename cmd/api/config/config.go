@@ -16,6 +16,7 @@ type Config struct {
 	JwtSecret           string
 	DNSServer           string
 	MaxConcurrentBuilds int
+	MaxOverlaySize      string
 }
 
 // Load loads configuration from environment variables
@@ -33,6 +34,7 @@ func Load() *Config {
 		JwtSecret:           getEnv("JWT_SECRET", ""),
 		DNSServer:           getEnv("DNS_SERVER", "1.1.1.1"),
 		MaxConcurrentBuilds: getEnvInt("MAX_CONCURRENT_BUILDS", 1),
+		MaxOverlaySize:      getEnv("MAX_OVERLAY_SIZE", "100GB"),
 	}
 
 	return cfg

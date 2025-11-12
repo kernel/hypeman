@@ -59,14 +59,16 @@ func TestCreateAndDeleteInstance(t *testing.T) {
 	t.Log("System files ready")
 
 	// Create instances manager
-	manager := NewManager(tmpDir, imageManager, systemManager).(*manager)
+	maxOverlaySize := int64(100 * 1024 * 1024 * 1024) // 100GB
+	manager := NewManager(tmpDir, imageManager, systemManager, maxOverlaySize).(*manager)
 
 	// Create instance with real nginx image (stays running)
 	req := CreateInstanceRequest{
 		Name:        "test-nginx",
 		Image:       "docker.io/library/nginx:alpine",
-		Size:        512 * 1024 * 1024, // 512MB
-		HotplugSize: 512 * 1024 * 1024, // 512MB
+		Size:        512 * 1024 * 1024,      // 512MB
+		HotplugSize: 512 * 1024 * 1024,      // 512MB
+		OverlaySize: 10 * 1024 * 1024 * 1024, // 10GB
 		Vcpus:       1,
 		Env: map[string]string{
 			"TEST_VAR": "test_value",
@@ -140,7 +142,8 @@ func TestStorageOperations(t *testing.T) {
 
 	imageManager, _ := images.NewManager(tmpDir, 1)
 	systemManager := system.NewManager(tmpDir)
-	manager := NewManager(tmpDir, imageManager, systemManager).(*manager)
+	maxOverlaySize := int64(100 * 1024 * 1024 * 1024) // 100GB
+	manager := NewManager(tmpDir, imageManager, systemManager, maxOverlaySize).(*manager)
 
 	// Test metadata doesn't exist initially
 	_, err := manager.loadMetadata("nonexistent")
@@ -154,6 +157,7 @@ func TestStorageOperations(t *testing.T) {
 		State:       StateStopped,
 		Size:        1024 * 1024 * 1024,
 		HotplugSize: 2048 * 1024 * 1024,
+		OverlaySize: 10 * 1024 * 1024 * 1024,
 		Vcpus:       2,
 		Env:         map[string]string{"TEST": "value"},
 		CreatedAt:   time.Now(),
@@ -232,7 +236,8 @@ func TestStandbyAndRestore(t *testing.T) {
 	err = systemManager.EnsureSystemFiles(ctx)
 	require.NoError(t, err)
 
-	manager := NewManager(tmpDir, imageManager, systemManager).(*manager)
+	maxOverlaySize := int64(100 * 1024 * 1024 * 1024) // 100GB
+	manager := NewManager(tmpDir, imageManager, systemManager, maxOverlaySize).(*manager)
 
 	// Create instance
 	t.Log("Creating instance...")
@@ -241,6 +246,7 @@ func TestStandbyAndRestore(t *testing.T) {
 		Image:       "docker.io/library/nginx:alpine",
 		Size:        512 * 1024 * 1024,
 		HotplugSize: 512 * 1024 * 1024,
+		OverlaySize: 10 * 1024 * 1024 * 1024,
 		Vcpus:       1,
 		Env:         map[string]string{},
 	}

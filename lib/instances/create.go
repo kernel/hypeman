@@ -53,6 +53,14 @@ func (m *manager) createInstance(
 	if hotplugSize == 0 {
 		hotplugSize = 3 * 1024 * 1024 * 1024 // 3GB default
 	}
+	overlaySize := req.OverlaySize
+	if overlaySize == 0 {
+		overlaySize = 10 * 1024 * 1024 * 1024 // 10GB default
+	}
+	// Validate overlay size against max
+	if overlaySize > m.maxOverlaySize {
+		return nil, fmt.Errorf("overlay size %d exceeds maximum allowed size %d", overlaySize, m.maxOverlaySize)
+	}
 	vcpus := req.Vcpus
 	if vcpus == 0 {
 		vcpus = 2
@@ -73,6 +81,7 @@ func (m *manager) createInstance(
 		HasSnapshot:   false,
 		Size:          size,
 		HotplugSize:   hotplugSize,
+		OverlaySize:   overlaySize,
 		Vcpus:         vcpus,
 		Env:           req.Env,
 		CreatedAt:     time.Now(),
@@ -90,8 +99,8 @@ func (m *manager) createInstance(
 		return nil, fmt.Errorf("ensure directories: %w", err)
 	}
 
-	// 9. Create overlay disk (50GB sparse)
-	if err := m.createOverlayDisk(id); err != nil {
+	// 9. Create overlay disk with specified size
+	if err := m.createOverlayDisk(id, inst.OverlaySize); err != nil {
 		m.deleteInstanceData(id) // Cleanup
 		return nil, fmt.Errorf("create overlay disk: %w", err)
 	}
@@ -143,6 +152,9 @@ func validateCreateRequest(req CreateInstanceRequest) error {
 	}
 	if req.HotplugSize < 0 {
 		return fmt.Errorf("hotplug_size cannot be negative")
+	}
+	if req.OverlaySize < 0 {
+		return fmt.Errorf("overlay_size cannot be negative")
 	}
 	if req.Vcpus < 0 {
 		return fmt.Errorf("vcpus cannot be negative")

@@ -11,7 +11,7 @@ import (
 // Filesystem structure:
 // {dataDir}/guests/{instance-id}/
 //   metadata.json      # Instance metadata
-//   overlay.raw        # 50GB sparse overlay disk
+//   overlay.raw        # Configurable sparse overlay disk (default 10GB)
 //   config.ext4        # Read-only config disk (generated)
 //   ch.sock            # Cloud Hypervisor API socket
 //   ch-stdout.log      # CH process output
@@ -89,18 +89,18 @@ func (m *manager) saveMetadata(meta *metadata) error {
 }
 
 // createOverlayDisk creates a sparse overlay disk for the instance
-func (m *manager) createOverlayDisk(id string) error {
+func (m *manager) createOverlayDisk(id string, sizeBytes int64) error {
 	overlayPath := filepath.Join(m.dataDir, "guests", id, "overlay.raw")
 
-	// Create 50GB sparse file
+	// Create sparse file
 	file, err := os.Create(overlayPath)
 	if err != nil {
 		return fmt.Errorf("create overlay disk: %w", err)
 	}
 	file.Close()
 
-	// Truncate to 50GB to create sparse file
-	if err := os.Truncate(overlayPath, 50*1024*1024*1024); err != nil {
+	// Truncate to specified size to create sparse file
+	if err := os.Truncate(overlayPath, sizeBytes); err != nil {
 		return fmt.Errorf("truncate overlay disk: %w", err)
 	}
 
