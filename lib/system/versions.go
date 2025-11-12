@@ -17,6 +17,14 @@ const (
 	InitrdV1_0_0 InitrdVersion = "v1.0.0"
 )
 
+// InitrdBusyboxVersions maps initrd versions to specific busybox digests
+// Using digest references (not mutable tags) ensures reproducible builds
+// When bumping initrd version, you can reuse the same busybox digest if busybox doesn't need updating
+var InitrdBusyboxVersions = map[InitrdVersion]string{
+	InitrdV1_0_0: "docker.io/library/busybox@sha256:355b3a1bf5609da364166913878a8508d4ba30572d02020a97028c75477e24ff", // busybox:stable as of 2025-01-12
+	// Add future versions here
+}
+
 var (
 	// DefaultKernelVersion is the kernel version used for new instances
 	DefaultKernelVersion = KernelCH_6_12_8_20250613

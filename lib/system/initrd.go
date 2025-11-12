@@ -20,12 +20,11 @@ func (m *manager) buildInitrd(ctx context.Context, version InitrdVersion, arch s
 
 	rootfsDir := filepath.Join(tempDir, "rootfs")
 
-	// Use image manager to pull and unpack busybox
-	// We'll use the internal OCI client by accessing it through a helper
-	busyboxRef := "docker.io/library/busybox:stable"
-
-	// Pull busybox using image manager's CreateImage then accessing the unpacked rootfs
-	// Actually, we need a simpler approach - directly use OCI operations
+	// Get pinned busybox version for this initrd version (ensures reproducible builds)
+	busyboxRef, ok := InitrdBusyboxVersions[version]
+	if !ok {
+		return fmt.Errorf("no busybox version defined for initrd %s", version)
+	}
 
 	// Create a temporary OCI client (reuses image manager's cache)
 	cacheDir := filepath.Join(m.dataDir, "system", "oci-cache")
@@ -46,7 +45,7 @@ func (m *manager) buildInitrd(ctx context.Context, version InitrdVersion, arch s
 	}
 
 	// Inject init script
-	initScript := generateInitScript(version)
+	initScript := GenerateInitScript(version)
 	initPath := filepath.Join(rootfsDir, "init")
 	if err := os.WriteFile(initPath, []byte(initScript), 0755); err != nil {
 		return fmt.Errorf("write init script: %w", err)

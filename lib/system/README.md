@@ -146,7 +146,7 @@ const (
 )
 
 // lib/system/init_script.go
-// Update generateInitScript() if init logic changes
+// Update GenerateInitScript() if init logic changes
 
 // Update default
 var DefaultInitrdVersion = InitrdV1_1_0

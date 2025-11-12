@@ -1,6 +1,6 @@
 package system
 
-// generateInitScript returns the comprehensive init script for initrd
+// GenerateInitScript returns the comprehensive init script for initrd
 // This consolidates ALL init logic - no modifications to OCI images needed
 //
 // The script:
@@ -9,11 +9,11 @@ package system
 // 3. Mounts and sources config disk (/dev/vdc)
 // 4. Configures networking (if enabled)
 // 5. Executes container entrypoint
-func generateInitScript(version InitrdVersion) string {
+func GenerateInitScript(version InitrdVersion) string {
 	return `#!/bin/sh
 set -xe
 
-echo "overlay-init: start (` + string(version) + `)" > /dev/kmsg
+echo "overlay-init: START (` + string(version) + `)" > /dev/kmsg
 
 # Create mount points
 mkdir -p /proc /sys /dev

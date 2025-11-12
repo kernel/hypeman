@@ -65,7 +65,7 @@ func TestEnsureSystemFiles(t *testing.T) {
 }
 
 func TestInitScriptGeneration(t *testing.T) {
-	script := generateInitScript(InitrdV1_0_0)
+	script := GenerateInitScript(InitrdV1_0_0)
 
 	// Verify script contains essential components
 	assert.Contains(t, script, "#!/bin/sh")
