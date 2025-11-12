@@ -144,7 +144,9 @@ func run() error {
 		<-gctx.Done()
 		logger.Info("shutdown signal received")
 
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		// Use WithoutCancel to preserve context values while preventing cancellation
+		shutdownCtx := context.WithoutCancel(gctx)
+		shutdownCtx, cancel := context.WithTimeout(shutdownCtx, 30*time.Second)
 		defer cancel()
 
 		if err := srv.Shutdown(shutdownCtx); err != nil {
