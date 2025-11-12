@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+
+	"github.com/onkernel/hypeman/lib/paths"
 )
 
 //go:embed binaries/cloud-hypervisor/v48.0/x86_64/cloud-hypervisor
@@ -24,14 +26,14 @@ const (
 var SupportedVersions = []CHVersion{V48_0, V49_0}
 
 // ExtractBinary extracts the embedded Cloud Hypervisor binary to the data directory
-func ExtractBinary(dataDir string, version CHVersion) (string, error) {
+func ExtractBinary(p *paths.Paths, version CHVersion) (string, error) {
 	arch := runtime.GOARCH
 	if arch == "amd64" {
 		arch = "x86_64"
 	}
 
 	embeddedPath := fmt.Sprintf("binaries/cloud-hypervisor/%s/%s/cloud-hypervisor", version, arch)
-	extractPath := filepath.Join(dataDir, "system", "binaries", string(version), arch, "cloud-hypervisor")
+	extractPath := p.SystemBinary(string(version), arch)
 
 	// Check if already extracted
 	if _, err := os.Stat(extractPath); err == nil {
@@ -58,6 +60,6 @@ func ExtractBinary(dataDir string, version CHVersion) (string, error) {
 }
 
 // GetBinaryPath returns path to extracted binary, extracting if needed
-func GetBinaryPath(dataDir string, version CHVersion) (string, error) {
-	return ExtractBinary(dataDir, version)
+func GetBinaryPath(p *paths.Paths, version CHVersion) (string, error) {
+	return ExtractBinary(p, version)
 }

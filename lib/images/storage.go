@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/onkernel/hypeman/lib/paths"
 )
 
 type imageMetadata struct {
@@ -55,29 +57,44 @@ func (m *imageMetadata) toImage() *Image {
 
 // digestDir returns the directory for a specific digest
 // e.g., /var/lib/hypeman/images/docker.io/library/alpine/abc123def456...
-func digestDir(dataDir, repository, digestHex string) string {
-	return filepath.Join(dataDir, "images", repository, digestHex)
+func digestDir(p *paths.Paths, repository, digestHex string) string {
+	return p.ImageDigestDir(repository, digestHex)
 }
 
-// digestPath returns the path to the rootfs.erofs file for a digest
-func digestPath(dataDir, repository, digestHex string) string {
-	return filepath.Join(digestDir(dataDir, repository, digestHex), "rootfs.erofs")
+// digestPath returns the path to the rootfs disk file for a digest
+// Currently uses .ext4 extension (can change to .erofs when kernel supports it)
+func digestPath(p *paths.Paths, repository, digestHex string) string {
+	return p.ImageDigestPath(repository, digestHex)
+}
+
+// GetDiskPath returns the filesystem path to an image's rootfs.erofs file (public for instances manager)
+func GetDiskPath(p *paths.Paths, imageName string, digest string) (string, error) {
+	// Parse image name to get repository
+	ref, err := ParseNormalizedRef(imageName)
+	if err != nil {
+		return "", fmt.Errorf("parse image name: %w", err)
+	}
+
+	// Extract digest hex (remove "sha256:" prefix)
+	digestHex := strings.TrimPrefix(digest, "sha256:")
+
+	return digestPath(p, ref.Repository(), digestHex), nil
 }
 
 // metadataPath returns the path to metadata.json for a digest
-func metadataPath(dataDir, repository, digestHex string) string {
-	return filepath.Join(digestDir(dataDir, repository, digestHex), "metadata.json")
+func metadataPath(p *paths.Paths, repository, digestHex string) string {
+	return p.ImageMetadata(repository, digestHex)
 }
 
 // tagSymlinkPath returns the path to a tag symlink
 // e.g., /var/lib/hypeman/images/docker.io/library/alpine/latest
-func tagSymlinkPath(dataDir, repository, tag string) string {
-	return filepath.Join(dataDir, "images", repository, tag)
+func tagSymlinkPath(p *paths.Paths, repository, tag string) string {
+	return p.ImageTagSymlink(repository, tag)
 }
 
 // writeMetadata writes metadata for a digest
-func writeMetadata(dataDir, repository, digestHex string, meta *imageMetadata) error {
-	dir := digestDir(dataDir, repository, digestHex)
+func writeMetadata(p *paths.Paths, repository, digestHex string, meta *imageMetadata) error {
+	dir := digestDir(p, repository, digestHex)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("create digest directory: %w", err)
 	}
@@ -87,12 +104,12 @@ func writeMetadata(dataDir, repository, digestHex string, meta *imageMetadata) e
 		return fmt.Errorf("marshal metadata: %w", err)
 	}
 
-	tempPath := metadataPath(dataDir, repository, digestHex) + ".tmp"
+	tempPath := metadataPath(p, repository, digestHex) + ".tmp"
 	if err := os.WriteFile(tempPath, data, 0644); err != nil {
 		return fmt.Errorf("write temp metadata: %w", err)
 	}
 
-	finalPath := metadataPath(dataDir, repository, digestHex)
+	finalPath := metadataPath(p, repository, digestHex)
 	if err := os.Rename(tempPath, finalPath); err != nil {
 		os.Remove(tempPath)
 		return fmt.Errorf("rename metadata: %w", err)
@@ -102,8 +119,8 @@ func writeMetadata(dataDir, repository, digestHex string, meta *imageMetadata) e
 }
 
 // readMetadata reads metadata for a digest
-func readMetadata(dataDir, repository, digestHex string) (*imageMetadata, error) {
-	path := metadataPath(dataDir, repository, digestHex)
+func readMetadata(p *paths.Paths, repository, digestHex string) (*imageMetadata, error) {
+	path := metadataPath(p, repository, digestHex)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -118,7 +135,7 @@ func readMetadata(dataDir, repository, digestHex string) (*imageMetadata, error)
 	}
 
 	if meta.Status == StatusReady {
-		diskPath := digestPath(dataDir, repository, digestHex)
+		diskPath := digestPath(p, repository, digestHex)
 		if _, err := os.Stat(diskPath); err != nil {
 			if os.IsNotExist(err) {
 				return nil, fmt.Errorf("disk image missing: %s", diskPath)
@@ -132,8 +149,8 @@ func readMetadata(dataDir, repository, digestHex string) (*imageMetadata, error)
 
 // createTagSymlink creates or updates a tag symlink to point to a digest
 // Only creates the symlink if the digest dir exists and build is ready
-func createTagSymlink(dataDir, repository, tag, digestHex string) error {
-	linkPath := tagSymlinkPath(dataDir, repository, tag)
+func createTagSymlink(p *paths.Paths, repository, tag, digestHex string) error {
+	linkPath := tagSymlinkPath(p, repository, tag)
 	targetPath := digestHex // Relative path (just the digest hex)
 
 	// Ensure parent directory exists
@@ -153,8 +170,8 @@ func createTagSymlink(dataDir, repository, tag, digestHex string) error {
 }
 
 // resolveTag follows a tag symlink to get the digest hex
-func resolveTag(dataDir, repository, tag string) (string, error) {
-	linkPath := tagSymlinkPath(dataDir, repository, tag)
+func resolveTag(p *paths.Paths, repository, tag string) (string, error) {
+	linkPath := tagSymlinkPath(p, repository, tag)
 
 	// Read the symlink
 	target, err := os.Readlink(linkPath)
@@ -174,8 +191,8 @@ func resolveTag(dataDir, repository, tag string) (string, error) {
 }
 
 // listTags returns all tags for a repository
-func listTags(dataDir, repository string) ([]string, error) {
-	repoDir := filepath.Join(dataDir, "images", repository)
+func listTags(p *paths.Paths, repository string) ([]string, error) {
+	repoDir := p.ImageRepositoryDir(repository)
 	
 	entries, err := os.ReadDir(repoDir)
 	if err != nil {
@@ -202,8 +219,8 @@ func listTags(dataDir, repository string) ([]string, error) {
 }
 
 // listAllTags returns all tags across all repositories
-func listAllTags(dataDir string) ([]*imageMetadata, error) {
-	imagesDir := filepath.Join(dataDir, "images")
+func listAllTags(p *paths.Paths) ([]*imageMetadata, error) {
+	imagesDir := p.ImagesDir()
 	var metas []*imageMetadata
 
 	// Walk the images directory to find all repositories
@@ -227,7 +244,7 @@ func listAllTags(dataDir string) ([]*imageMetadata, error) {
 			}
 
 			// Read metadata for this digest
-			meta, err := readMetadata(dataDir, relPath, digestHex)
+			meta, err := readMetadata(p, relPath, digestHex)
 			if err != nil {
 				return nil // Skip if metadata can't be read
 			}
@@ -246,15 +263,15 @@ func listAllTags(dataDir string) ([]*imageMetadata, error) {
 }
 
 // digestExists checks if a digest directory exists
-func digestExists(dataDir, repository, digestHex string) bool {
-	dir := digestDir(dataDir, repository, digestHex)
+func digestExists(p *paths.Paths, repository, digestHex string) bool {
+	dir := digestDir(p, repository, digestHex)
 	_, err := os.Stat(dir)
 	return err == nil
 }
 
 // deleteTag removes a tag symlink (does not delete the digest directory)
-func deleteTag(dataDir, repository, tag string) error {
-	linkPath := tagSymlinkPath(dataDir, repository, tag)
+func deleteTag(p *paths.Paths, repository, tag string) error {
+	linkPath := tagSymlinkPath(p, repository, tag)
 	
 	// Check if symlink exists
 	if _, err := os.Lstat(linkPath); err != nil {

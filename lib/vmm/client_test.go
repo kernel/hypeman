@@ -5,8 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
+	"github.com/onkernel/hypeman/lib/paths"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -15,7 +15,7 @@ func TestExtractBinary(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Test extraction for v48.0
-	binaryPath, err := ExtractBinary(tmpDir, V48_0)
+	binaryPath, err := ExtractBinary(paths.New(tmpDir), V48_0)
 	require.NoError(t, err)
 
 	// Verify file exists
@@ -28,7 +28,7 @@ func TestExtractBinary(t *testing.T) {
 	assert.Equal(t, os.FileMode(0755), info.Mode().Perm())
 
 	// Test idempotency - second extraction should succeed and return same path
-	binaryPath2, err := ExtractBinary(tmpDir, V48_0)
+	binaryPath2, err := ExtractBinary(paths.New(tmpDir), V48_0)
 	require.NoError(t, err)
 	assert.Equal(t, binaryPath, binaryPath2)
 }
@@ -43,7 +43,7 @@ func TestParseVersion(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Extract binary
-	binaryPath, err := ExtractBinary(tmpDir, V48_0)
+	binaryPath, err := ExtractBinary(paths.New(tmpDir), V48_0)
 	require.NoError(t, err)
 
 	// Parse version
@@ -58,8 +58,9 @@ func TestStartProcessAndShutdown(t *testing.T) {
 	ctx := context.Background()
 
 	// Start VMM process
-	err := StartProcess(ctx, tmpDir, V48_0, socketPath)
+	pid, err := StartProcess(ctx, paths.New(tmpDir), V48_0, socketPath)
 	require.NoError(t, err)
+	assert.Greater(t, pid, 0, "PID should be positive")
 
 	// Verify socket exists
 	_, err = os.Stat(socketPath)
@@ -70,10 +71,12 @@ func TestStartProcessAndShutdown(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, client)
 
-	// Ping the VMM
+	// Ping the VMM to get PID
 	pingResp, err := client.GetVmmPingWithResponse(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, 200, pingResp.StatusCode())
+	require.NotNil(t, pingResp.JSON200)
+	require.NotNil(t, pingResp.JSON200.Pid)
 
 	// Shutdown VMM
 	shutdownResp, err := client.ShutdownVMMWithResponse(ctx)
@@ -82,8 +85,6 @@ func TestStartProcessAndShutdown(t *testing.T) {
 	assert.True(t, shutdownResp.StatusCode() >= 200 && shutdownResp.StatusCode() < 300,
 		"Expected 2xx status code, got %d", shutdownResp.StatusCode())
 
-	// Wait a moment for VMM to actually shut down
-	time.Sleep(100 * time.Millisecond)
 }
 
 func TestStartProcessSocketInUse(t *testing.T) {
@@ -92,11 +93,12 @@ func TestStartProcessSocketInUse(t *testing.T) {
 	ctx := context.Background()
 
 	// Start first VMM
-	err := StartProcess(ctx, tmpDir, V48_0, socketPath)
+	pid, err := StartProcess(ctx, paths.New(tmpDir), V48_0, socketPath)
 	require.NoError(t, err)
+	assert.Greater(t, pid, 0)
 
 	// Try to start second VMM on same socket - should fail
-	err = StartProcess(ctx, tmpDir, V48_0, socketPath)
+	_, err = StartProcess(ctx, paths.New(tmpDir), V48_0, socketPath)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "socket already in use")
 
@@ -124,16 +126,19 @@ func TestMultipleVersions(t *testing.T) {
 			ctx := context.Background()
 
 			// Start VMM
-			err := StartProcess(ctx, tmpDir, tt.version, socketPath)
+			pid, err := StartProcess(ctx, paths.New(tmpDir), tt.version, socketPath)
 			require.NoError(t, err)
+			assert.Greater(t, pid, 0)
 
-			// Create client and ping
+			// Create client and ping to get PID
 			client, err := NewVMM(socketPath)
 			require.NoError(t, err)
 
 			pingResp, err := client.GetVmmPingWithResponse(ctx)
 			require.NoError(t, err)
 			assert.Equal(t, 200, pingResp.StatusCode())
+			require.NotNil(t, pingResp.JSON200)
+			require.NotNil(t, pingResp.JSON200.Pid)
 
 			// Shutdown
 			shutdownResp, err := client.ShutdownVMMWithResponse(ctx)
@@ -142,7 +147,49 @@ func TestMultipleVersions(t *testing.T) {
 			assert.True(t, shutdownResp.StatusCode() >= 200 && shutdownResp.StatusCode() < 300,
 				"Expected 2xx status code, got %d", shutdownResp.StatusCode())
 
-			time.Sleep(100 * time.Millisecond)
 		})
 	}
+}
+
+func TestStartProcessCreatesLogFiles(t *testing.T) {
+	tmpDir := t.TempDir()
+	socketPath := filepath.Join(tmpDir, "test.sock")
+	ctx := context.Background()
+
+	// Start VMM process with verbose logging to ensure output is written
+	pid, err := StartProcessWithArgs(ctx, paths.New(tmpDir), V48_0, socketPath, []string{"-v"})
+	require.NoError(t, err)
+	assert.Greater(t, pid, 0)
+
+	// Verify log files exist - they are created and accessible by the daemon
+	stdoutLog := filepath.Join(tmpDir, "ch-stdout.log")
+	stderrLog := filepath.Join(tmpDir, "ch-stderr.log")
+
+	_, err = os.Stat(stdoutLog)
+	require.NoError(t, err, "stdout log should exist")
+
+	_, err = os.Stat(stderrLog)
+	require.NoError(t, err, "stderr log should exist")
+
+	// Verify the daemon is running and responsive
+	client, err := NewVMM(socketPath)
+	require.NoError(t, err)
+
+	pingResp, err := client.GetVmmPingWithResponse(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 200, pingResp.StatusCode())
+
+	// Read log files - with verbose mode, Cloud Hypervisor writes to logs
+	stdoutContent, err := os.ReadFile(stdoutLog)
+	require.NoError(t, err)
+	stderrContent, err := os.ReadFile(stderrLog)
+	require.NoError(t, err)
+
+	// Verify that logs contain output (proves daemon can write after parent closed files)
+	totalLogSize := len(stdoutContent) + len(stderrContent)
+	assert.Greater(t, totalLogSize, 0,
+		"Cloud Hypervisor daemon should write logs even after parent closed the file descriptors")
+
+	// Cleanup
+	client.ShutdownVMMWithResponse(ctx)
 }

@@ -49,6 +49,17 @@ func run() error {
 		logger.Warn("JWT_SECRET not configured - API authentication will fail")
 	}
 
+	// Ensure system files (kernel, initrd) exist before starting server
+	logger.Info("Ensuring system files...")
+	if err := app.SystemManager.EnsureSystemFiles(app.Ctx); err != nil {
+		logger.Error("failed to ensure system files", "error", err)
+		os.Exit(1)
+	}
+	kernelVer, initrdVer := app.SystemManager.GetDefaultVersions()
+	logger.Info("System files ready",
+		"kernel", kernelVer,
+		"initrd", initrdVer)
+
 	// Create router
 	r := chi.NewRouter()
 
@@ -133,7 +144,9 @@ func run() error {
 		<-gctx.Done()
 		logger.Info("shutdown signal received")
 
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		// Use WithoutCancel to preserve context values while preventing cancellation
+		shutdownCtx := context.WithoutCancel(gctx)
+		shutdownCtx, cancel := context.WithTimeout(shutdownCtx, 30*time.Second)
 		defer cancel()
 
 		if err := srv.Shutdown(shutdownCtx); err != nil {

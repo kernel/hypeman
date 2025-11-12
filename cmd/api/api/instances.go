@@ -3,8 +3,10 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
+	"github.com/c2h5oh/datasize"
 	"github.com/onkernel/hypeman/lib/instances"
 	"github.com/onkernel/hypeman/lib/logger"
 	"github.com/onkernel/hypeman/lib/oapi"
@@ -35,19 +37,85 @@ func (s *ApiService) ListInstances(ctx context.Context, request oapi.ListInstanc
 func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInstanceRequestObject) (oapi.CreateInstanceResponseObject, error) {
 	log := logger.FromContext(ctx)
 
+	// Parse size (default: 1GB)
+	size := int64(0)
+	if request.Body.Size != nil && *request.Body.Size != "" {
+		var sizeBytes datasize.ByteSize
+		if err := sizeBytes.UnmarshalText([]byte(*request.Body.Size)); err != nil {
+			return oapi.CreateInstance400JSONResponse{
+				Code:    "invalid_size",
+				Message: fmt.Sprintf("invalid size format: %v", err),
+			}, nil
+		}
+		size = int64(sizeBytes)
+	}
+
+	// Parse hotplug_size (default: 3GB)
+	hotplugSize := int64(0)
+	if request.Body.HotplugSize != nil && *request.Body.HotplugSize != "" {
+		var hotplugBytes datasize.ByteSize
+		if err := hotplugBytes.UnmarshalText([]byte(*request.Body.HotplugSize)); err != nil {
+			return oapi.CreateInstance400JSONResponse{
+				Code:    "invalid_hotplug_size",
+				Message: fmt.Sprintf("invalid hotplug_size format: %v", err),
+			}, nil
+		}
+		hotplugSize = int64(hotplugBytes)
+	}
+
+	// Parse overlay_size (default: 10GB)
+	overlaySize := int64(0)
+	if request.Body.OverlaySize != nil && *request.Body.OverlaySize != "" {
+		var overlayBytes datasize.ByteSize
+		if err := overlayBytes.UnmarshalText([]byte(*request.Body.OverlaySize)); err != nil {
+			return oapi.CreateInstance400JSONResponse{
+				Code:    "invalid_overlay_size",
+				Message: fmt.Sprintf("invalid overlay_size format: %v", err),
+			}, nil
+		}
+		overlaySize = int64(overlayBytes)
+	}
+
+	vcpus := 2
+	if request.Body.Vcpus != nil {
+		vcpus = *request.Body.Vcpus
+	}
+
+	env := make(map[string]string)
+	if request.Body.Env != nil {
+		env = *request.Body.Env
+	}
+
 	domainReq := instances.CreateInstanceRequest{
-		Id:    request.Body.Id,
-		Name:  request.Body.Name,
-		Image: request.Body.Image,
+		Name:        request.Body.Name,
+		Image:       request.Body.Image,
+		Size:        size,
+		HotplugSize: hotplugSize,
+		OverlaySize: overlaySize,
+		Vcpus:       vcpus,
+		Env:         env,
 	}
 
 	inst, err := s.InstanceManager.CreateInstance(ctx, domainReq)
 	if err != nil {
+		switch {
+		case errors.Is(err, instances.ErrImageNotReady):
+			return oapi.CreateInstance400JSONResponse{
+				Code:    "image_not_ready",
+				Message: err.Error(),
+			}, nil
+		case errors.Is(err, instances.ErrAlreadyExists):
+			return oapi.CreateInstance400JSONResponse{
+				Code:    "already_exists",
+				Message: "instance already exists",
+			}, nil
+		default:
 		log.Error("failed to create instance", "error", err, "image", request.Body.Image)
 		return oapi.CreateInstance500JSONResponse{
 			Code:    "internal_error",
 			Message: "failed to create instance",
 		}, nil
+		}
 	}
 	return oapi.CreateInstance201JSONResponse(instanceToOAPI(*inst)), nil
 }
@@ -74,8 +142,6 @@ func (s *ApiService) GetInstance(ctx context.Context, request oapi.GetInstanceRe
 	}
 	return oapi.GetInstance200JSONResponse(instanceToOAPI(*inst)), nil
 }
-
-
 
 // DeleteInstance stops and deletes an instance
 func (s *ApiService) DeleteInstance(ctx context.Context, request oapi.DeleteInstanceRequestObject) (oapi.DeleteInstanceResponseObject, error) {
@@ -115,7 +181,7 @@ func (s *ApiService) StandbyInstance(ctx context.Context, request oapi.StandbyIn
 		case errors.Is(err, instances.ErrInvalidState):
 			return oapi.StandbyInstance409JSONResponse{
 				Code:    "invalid_state",
-				Message: "instance is not in a valid state for standby",
+				Message: err.Error(),
 			}, nil
 		default:
 			log.Error("failed to standby instance", "error", err, "id", request.Id)
@@ -143,7 +209,7 @@ func (s *ApiService) RestoreInstance(ctx context.Context, request oapi.RestoreIn
 		case errors.Is(err, instances.ErrInvalidState):
 			return oapi.RestoreInstance409JSONResponse{
 				Code:    "invalid_state",
-				Message: "instance is not in standby state",
+				Message: err.Error(),
 			}, nil
 		default:
 			log.Error("failed to restore instance", "error", err, "id", request.Id)
@@ -192,61 +258,48 @@ func (s *ApiService) GetInstanceLogs(ctx context.Context, request oapi.GetInstan
 	}, nil
 }
 
-// AttachVolume attaches a volume to an instance
+// AttachVolume attaches a volume to an instance (not yet implemented)
 func (s *ApiService) AttachVolume(ctx context.Context, request oapi.AttachVolumeRequestObject) (oapi.AttachVolumeResponseObject, error) {
-	log := logger.FromContext(ctx)
-
-	domainReq := instances.AttachVolumeRequest{
-		MountPath: request.Body.MountPath,
-	}
-
-	inst, err := s.InstanceManager.AttachVolume(ctx, request.Id, request.VolumeId, domainReq)
-	if err != nil {
-		switch {
-		case errors.Is(err, instances.ErrNotFound):
-			return oapi.AttachVolume404JSONResponse{
-				Code:    "not_found",
-				Message: "instance or volume not found",
-			}, nil
-		default:
-			log.Error("failed to attach volume", "error", err, "instance_id", request.Id, "volume_id", request.VolumeId)
 			return oapi.AttachVolume500JSONResponse{
-				Code:    "internal_error",
-				Message: "failed to attach volume",
+		Code:    "not_implemented",
+		Message: "volume attachment not yet implemented",
 			}, nil
-		}
-	}
-	return oapi.AttachVolume200JSONResponse(instanceToOAPI(*inst)), nil
 }
 
-// DetachVolume detaches a volume from an instance
+// DetachVolume detaches a volume from an instance (not yet implemented)
 func (s *ApiService) DetachVolume(ctx context.Context, request oapi.DetachVolumeRequestObject) (oapi.DetachVolumeResponseObject, error) {
-	log := logger.FromContext(ctx)
-
-	inst, err := s.InstanceManager.DetachVolume(ctx, request.Id, request.VolumeId)
-	if err != nil {
-		switch {
-		case errors.Is(err, instances.ErrNotFound):
-			return oapi.DetachVolume404JSONResponse{
-				Code:    "not_found",
-				Message: "instance or volume not found",
-			}, nil
-		default:
-			log.Error("failed to detach volume", "error", err, "instance_id", request.Id, "volume_id", request.VolumeId)
 			return oapi.DetachVolume500JSONResponse{
-				Code:    "internal_error",
-				Message: "failed to detach volume",
+		Code:    "not_implemented",
+		Message: "volume detachment not yet implemented",
 			}, nil
-		}
-	}
-	return oapi.DetachVolume200JSONResponse(instanceToOAPI(*inst)), nil
 }
 
+// instanceToOAPI converts domain Instance to OAPI Instance
 func instanceToOAPI(inst instances.Instance) oapi.Instance {
-	return oapi.Instance{
-		Id:        inst.Id,
-		Name:      inst.Name,
-		Image:     inst.Image,
-		CreatedAt: inst.CreatedAt,
+	// Format sizes as human-readable strings with best precision
+	// HR() returns format like "1.5 GB" with 1 decimal place
+	sizeStr := datasize.ByteSize(inst.Size).HR()
+	hotplugSizeStr := datasize.ByteSize(inst.HotplugSize).HR()
+	overlaySizeStr := datasize.ByteSize(inst.OverlaySize).HR()
+
+	oapiInst := oapi.Instance{
+		Id:          inst.Id,
+		Name:        inst.Name,
+		Image:       inst.Image,
+		State:       oapi.InstanceState(inst.State),
+		Size:        &sizeStr,
+		HotplugSize: &hotplugSizeStr,
+		OverlaySize: &overlaySizeStr,
+		Vcpus:       &inst.Vcpus,
+		CreatedAt:   inst.CreatedAt,
+		StartedAt:   inst.StartedAt,
+		StoppedAt:   inst.StoppedAt,
+		HasSnapshot: &inst.HasSnapshot,
 	}
+
+	if len(inst.Env) > 0 {
+		oapiInst.Env = &inst.Env
+	}
+
+	return oapiInst
 }

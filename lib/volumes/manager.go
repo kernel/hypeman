@@ -3,6 +3,8 @@ package volumes
 import (
 	"context"
 	"fmt"
+
+	"github.com/onkernel/hypeman/lib/paths"
 )
 
 type Manager interface {
@@ -13,12 +15,12 @@ type Manager interface {
 }
 
 type manager struct {
-	dataDir string
+	paths *paths.Paths
 }
 
-func NewManager(dataDir string) Manager {
+func NewManager(p *paths.Paths) Manager {
 	return &manager{
-		dataDir: dataDir,
+		paths: p,
 	}
 }
 

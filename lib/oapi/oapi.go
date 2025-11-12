@@ -51,12 +51,6 @@ const (
 	Stopped  InstanceState = "Stopped"
 )
 
-// Defines values for PortMappingProtocol.
-const (
-	Tcp PortMappingProtocol = "tcp"
-	Udp PortMappingProtocol = "udp"
-)
-
 // AttachVolumeRequest defines model for AttachVolumeRequest.
 type AttachVolumeRequest struct {
 	// MountPath Path where volume should be mounted
@@ -77,32 +71,23 @@ type CreateInstanceRequest struct {
 	// Env Environment variables
 	Env *map[string]string `json:"env,omitempty"`
 
-	// Id Unique identifier for the instance (provided by caller)
-	Id string `json:"id"`
+	// HotplugSize Additional memory for hotplug (human-readable format like "3GB", "1G")
+	HotplugSize *string `json:"hotplug_size,omitempty"`
 
-	// Image Image identifier
+	// Image OCI image reference
 	Image string `json:"image"`
 
-	// MemoryMaxMb Maximum memory with hotplug in MB
-	MemoryMaxMb *int `json:"memory_max_mb,omitempty"`
-
-	// MemoryMb Base memory in MB
-	MemoryMb *int `json:"memory_mb,omitempty"`
-
-	// Name Human-readable name
+	// Name Human-readable name (lowercase letters, digits, and dashes only; cannot start or end with a dash)
 	Name string `json:"name"`
 
-	// PortMappings Port mappings from host to guest
-	PortMappings *[]PortMapping `json:"port_mappings,omitempty"`
+	// OverlaySize Writable overlay disk size (human-readable format like "10GB", "50G")
+	OverlaySize *string `json:"overlay_size,omitempty"`
 
-	// TimeoutSeconds Timeout for scale-to-zero semantics
-	TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
+	// Size Base memory size (human-readable format like "1GB", "512MB", "2G")
+	Size *string `json:"size,omitempty"`
 
 	// Vcpus Number of virtual CPUs
 	Vcpus *int `json:"vcpus,omitempty"`
-
-	// Volumes Volumes to attach
-	Volumes *[]VolumeAttachment `json:"volumes,omitempty"`
 }
 
 // CreateVolumeRequest defines model for CreateVolumeRequest.
@@ -194,32 +179,26 @@ type Instance struct {
 	// Env Environment variables
 	Env *map[string]string `json:"env,omitempty"`
 
-	// Fqdn Fully qualified domain name
-	Fqdn *string `json:"fqdn"`
-
 	// HasSnapshot Whether a snapshot exists for this instance
 	HasSnapshot *bool `json:"has_snapshot,omitempty"`
 
-	// Id Unique identifier
+	// HotplugSize Hotplug memory size (human-readable)
+	HotplugSize *string `json:"hotplug_size,omitempty"`
+
+	// Id Auto-generated unique identifier (CUID2 format)
 	Id string `json:"id"`
 
-	// Image Image identifier
+	// Image OCI image reference
 	Image string `json:"image"`
-
-	// MemoryMaxMb Configured maximum memory in MB
-	MemoryMaxMb *int `json:"memory_max_mb,omitempty"`
-
-	// MemoryMb Configured base memory in MB
-	MemoryMb *int `json:"memory_mb,omitempty"`
 
 	// Name Human-readable name
 	Name string `json:"name"`
 
-	// PortMappings Port mappings
-	PortMappings *[]PortMapping `json:"port_mappings,omitempty"`
+	// OverlaySize Writable overlay disk size (human-readable)
+	OverlaySize *string `json:"overlay_size,omitempty"`
 
-	// PrivateIp Private IP address
-	PrivateIp *string `json:"private_ip"`
+	// Size Base memory size (human-readable)
+	Size *string `json:"size,omitempty"`
 
 	// StartedAt Start timestamp (RFC3339)
 	StartedAt *time.Time `json:"started_at"`
@@ -236,14 +215,8 @@ type Instance struct {
 	// StoppedAt Stop timestamp (RFC3339)
 	StoppedAt *time.Time `json:"stopped_at"`
 
-	// TimeoutSeconds Timeout configuration
-	TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
-
 	// Vcpus Number of virtual CPUs
 	Vcpus *int `json:"vcpus,omitempty"`
-
-	// Volumes Attached volumes
-	Volumes *[]VolumeAttachment `json:"volumes,omitempty"`
 }
 
 // InstanceState Instance state:
@@ -254,19 +227,6 @@ type Instance struct {
 // - Stopped: No VMM running, no snapshot exists
 // - Standby: No VMM running, snapshot exists (can be restored)
 type InstanceState string
-
-// PortMapping defines model for PortMapping.
-type PortMapping struct {
-	// GuestPort Port in the guest VM
-	GuestPort int `json:"guest_port"`
-
-	// HostPort Port on the host
-	HostPort int                  `json:"host_port"`
-	Protocol *PortMappingProtocol `json:"protocol,omitempty"`
-}
-
-// PortMappingProtocol defines model for PortMapping.Protocol.
-type PortMappingProtocol string
 
 // Volume defines model for Volume.
 type Volume struct {
@@ -287,18 +247,6 @@ type Volume struct {
 
 	// SizeGb Size in gigabytes
 	SizeGb int `json:"size_gb"`
-}
-
-// VolumeAttachment defines model for VolumeAttachment.
-type VolumeAttachment struct {
-	// MountPath Path where volume is mounted in the guest
-	MountPath string `json:"mount_path"`
-
-	// Readonly Whether volume is mounted read-only
-	Readonly *bool `json:"readonly,omitempty"`
-
-	// VolumeId Volume identifier
-	VolumeId string `json:"volume_id"`
 }
 
 // GetInstanceLogsParams defines parameters for GetInstanceLogs.
@@ -4995,61 +4943,58 @@ func (sh *strictHandler) GetVolume(w http.ResponseWriter, r *http.Request, id st
 // Base64 encoded, gzipped, json marshaled Swagger object
 var swaggerSpec = []string{
 
-	"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",
-	"/x8BGYD1TgAA",
+	"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",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file

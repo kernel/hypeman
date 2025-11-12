@@ -91,30 +91,33 @@ components:
     
     CreateInstanceRequest:
       type: object
-      required: [id, name, image]
+      required: [name, image]
       properties:
-        id:
-          type: string
-          description: Unique identifier for the instance (provided by caller)
-          example: inst-abc123
         name:
           type: string
-          description: Human-readable name
+          description: Human-readable name (lowercase letters, digits, and dashes only; cannot start or end with a dash)
+          pattern: ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$
+          maxLength: 63
           example: my-workload-1
         image:
           type: string
-          description: Image identifier
-          example: img-chrome-v1
-        memory_mb:
-          type: integer
-          description: Base memory in MB
-          default: 1024
-          example: 2048
-        memory_max_mb:
-          type: integer
-          description: Maximum memory with hotplug in MB
-          default: 4096
-          example: 4096
+          description: OCI image reference
+          example: docker.io/library/alpine:latest
+        size:
+          type: string
+          description: Base memory size (human-readable format like "1GB", "512MB", "2G")
+          default: "1GB"
+          example: "2GB"
+        hotplug_size:
+          type: string
+          description: Additional memory for hotplug (human-readable format like "3GB", "1G")
+          default: "3GB"
+          example: "2GB"
+        overlay_size:
+          type: string
+          description: Writable overlay disk size (human-readable format like "10GB", "50G")
+          default: "10GB"
+          example: "20GB"
         vcpus:
           type: integer
           description: Number of virtual CPUs
@@ -128,21 +131,7 @@ components:
           example:
             PORT: "3000"
             NODE_ENV: production
-        timeout_seconds:
-          type: integer
-          description: Timeout for scale-to-zero semantics
-          default: 3600
-          example: 7200
-        volumes:
-          type: array
-          description: Volumes to attach
-          items:
-            $ref: "#/components/schemas/VolumeAttachment"
-        port_mappings:
-          type: array
-          description: Port mappings from host to guest
-          items:
-            $ref: "#/components/schemas/PortMapping"
+        # Future: volumes, port_mappings, timeout_seconds
     
     Instance:
       type: object
@@ -150,36 +139,30 @@ components:
       properties:
         id:
           type: string
-          description: Unique identifier
-          example: inst-abc123
+          description: Auto-generated unique identifier (CUID2 format)
+          example: tz4a98xxat96iws9zmbrgj3a
         name:
           type: string
           description: Human-readable name
           example: my-workload-1
         image:
           type: string
-          description: Image identifier
-          example: img-chrome-v1
+          description: OCI image reference
+          example: docker.io/library/alpine:latest
         state:
           $ref: "#/components/schemas/InstanceState"
-        fqdn:
+        size:
           type: string
-          description: Fully qualified domain name
-          example: inst-abc123.local
-          nullable: true
-        private_ip:
+          description: Base memory size (human-readable)
+          example: "2GB"
+        hotplug_size:
           type: string
-          description: Private IP address
-          example: 192.168.100.10
-          nullable: true
-        memory_mb:
-          type: integer
-          description: Configured base memory in MB
-          example: 2048
-        memory_max_mb:
-          type: integer
-          description: Configured maximum memory in MB
-          example: 4096
+          description: Hotplug memory size (human-readable)
+          example: "2GB"
+        overlay_size:
+          type: string
+          description: Writable overlay disk size (human-readable)
+          example: "10GB"
         vcpus:
           type: integer
           description: Number of virtual CPUs
@@ -189,10 +172,6 @@ components:
           additionalProperties:
             type: string
           description: Environment variables
-        timeout_seconds:
-          type: integer
-          description: Timeout configuration
-          example: 7200
         created_at:
           type: string
           format: date-time
@@ -210,16 +189,6 @@ components:
           description: Stop timestamp (RFC3339)
           example: "2025-01-15T12:30:00Z"
           nullable: true
-        volumes:
-          type: array
-          description: Attached volumes
-          items:
-            $ref: "#/components/schemas/VolumeAttachment"
-        port_mappings:
-          type: array
-          description: Port mappings
-          items:
-            $ref: "#/components/schemas/PortMapping"
         has_snapshot:
           type: boolean
           description: Whether a snapshot exists for this instance

@@ -8,12 +8,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/onkernel/hypeman/lib/paths"
 	"github.com/stretchr/testify/require"
 )
 
 func TestCreateImage(t *testing.T) {
 	dataDir := t.TempDir()
-	mgr, err := NewManager(dataDir, 1)
+	mgr, err := NewManager(paths.New(dataDir), 1)
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -42,7 +43,7 @@ func TestCreateImage(t *testing.T) {
 	digestHex := strings.SplitN(img.Digest, ":", 2)[1]
 	
 	// Check erofs disk file
-	diskPath := digestPath(dataDir, ref.Repository(), digestHex)
+	diskPath := digestPath(paths.New(dataDir), ref.Repository(), digestHex)
 	diskStat, err := os.Stat(diskPath)
 	require.NoError(t, err)
 	require.False(t, diskStat.IsDir(), "disk path should be a file")
@@ -51,13 +52,13 @@ func TestCreateImage(t *testing.T) {
 	t.Logf("EROFS disk: path=%s, size=%d bytes", diskPath, diskStat.Size())
 
 	// Check metadata file
-	metadataPath := metadataPath(dataDir, ref.Repository(), digestHex)
+	metadataPath := metadataPath(paths.New(dataDir), ref.Repository(), digestHex)
 	metaStat, err := os.Stat(metadataPath)
 	require.NoError(t, err)
 	require.False(t, metaStat.IsDir(), "metadata should be a file")
 	
 	// Read and verify metadata content
-	meta, err := readMetadata(dataDir, ref.Repository(), digestHex)
+	meta, err := readMetadata(paths.New(dataDir), ref.Repository(), digestHex)
 	require.NoError(t, err)
 	require.Equal(t, img.Name, meta.Name)
 	require.Equal(t, img.Digest, meta.Digest)
@@ -69,7 +70,7 @@ func TestCreateImage(t *testing.T) {
 		meta.Name, meta.Digest, meta.Status, len(meta.Env))
 
 	// Check that tag symlink exists and points to correct digest
-	linkPath := tagSymlinkPath(dataDir, ref.Repository(), ref.Tag())
+	linkPath := tagSymlinkPath(paths.New(dataDir), ref.Repository(), ref.Tag())
 	linkStat, err := os.Lstat(linkPath)
 	require.NoError(t, err)
 	require.NotEqual(t, 0, linkStat.Mode()&os.ModeSymlink, "should be a symlink")
@@ -83,7 +84,7 @@ func TestCreateImage(t *testing.T) {
 
 func TestCreateImageDifferentTag(t *testing.T) {
 	dataDir := t.TempDir()
-	mgr, err := NewManager(dataDir, 1)
+	mgr, err := NewManager(paths.New(dataDir), 1)
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -105,7 +106,7 @@ func TestCreateImageDifferentTag(t *testing.T) {
 
 func TestCreateImageDuplicate(t *testing.T) {
 	dataDir := t.TempDir()
-	mgr, err := NewManager(dataDir, 1)
+	mgr, err := NewManager(paths.New(dataDir), 1)
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -134,7 +135,7 @@ func TestCreateImageDuplicate(t *testing.T) {
 
 func TestListImages(t *testing.T) {
 	dataDir := t.TempDir()
-	mgr, err := NewManager(dataDir, 1)
+	mgr, err := NewManager(paths.New(dataDir), 1)
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -163,7 +164,7 @@ func TestListImages(t *testing.T) {
 
 func TestGetImage(t *testing.T) {
 	dataDir := t.TempDir()
-	mgr, err := NewManager(dataDir, 1)
+	mgr, err := NewManager(paths.New(dataDir), 1)
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -187,7 +188,7 @@ func TestGetImage(t *testing.T) {
 
 func TestGetImageNotFound(t *testing.T) {
 	dataDir := t.TempDir()
-	mgr, err := NewManager(dataDir, 1)
+	mgr, err := NewManager(paths.New(dataDir), 1)
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -198,7 +199,7 @@ func TestGetImageNotFound(t *testing.T) {
 
 func TestDeleteImage(t *testing.T) {
 	dataDir := t.TempDir()
-	mgr, err := NewManager(dataDir, 1)
+	mgr, err := NewManager(paths.New(dataDir), 1)
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -226,14 +227,14 @@ func TestDeleteImage(t *testing.T) {
 	require.ErrorIs(t, err, ErrNotFound)
 
 	// But digest directory should still exist
-	digestDir := digestPath(dataDir, ref.Repository(), digestHex)
+	digestDir := digestPath(paths.New(dataDir), ref.Repository(), digestHex)
 	_, err = os.Stat(digestDir)
 	require.NoError(t, err)
 }
 
 func TestDeleteImageNotFound(t *testing.T) {
 	dataDir := t.TempDir()
-	mgr, err := NewManager(dataDir, 1)
+	mgr, err := NewManager(paths.New(dataDir), 1)
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -270,7 +271,7 @@ func TestNormalizedRefParsing(t *testing.T) {
 
 func TestLayerCaching(t *testing.T) {
 	dataDir := t.TempDir()
-	mgr, err := NewManager(dataDir, 1)
+	mgr, err := NewManager(paths.New(dataDir), 1)
 	require.NoError(t, err)
 	ctx := context.Background()
 
@@ -323,8 +324,8 @@ func TestLayerCaching(t *testing.T) {
 
 	// Both should point to the same digest directory
 	digestHex := strings.TrimPrefix(alpine1.Digest, "sha256:")
-	disk1 := digestPath(dataDir, alpine1Parsed.Repository(), digestHex)
-	disk2 := digestPath(dataDir, alpine2Parsed.Repository(), digestHex)
+	disk1 := digestPath(paths.New(dataDir), alpine1Parsed.Repository(), digestHex)
+	disk2 := digestPath(paths.New(dataDir), alpine2Parsed.Repository(), digestHex)
 	
 	require.Equal(t, disk1, disk2, "both references should point to same disk")
 

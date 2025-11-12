@@ -7,7 +7,11 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"syscall"
 	"time"
+
+	"github.com/onkernel/hypeman/lib/paths"
 )
 
 // VMM wraps the generated Cloud Hypervisor client (API v0.3.0)
@@ -40,31 +44,85 @@ func NewVMM(socketPath string) (*VMM, error) {
 }
 
 // StartProcess starts a Cloud Hypervisor VMM process with the given version
-// It extracts the embedded binary if needed and starts the VMM
-func StartProcess(ctx context.Context, dataDir string, version CHVersion, socketPath string) error {
+// It extracts the embedded binary if needed and starts the VMM as a daemon.
+// Returns the process ID of the started Cloud Hypervisor process.
+func StartProcess(ctx context.Context, p *paths.Paths, version CHVersion, socketPath string) (int, error) {
+	return StartProcessWithArgs(ctx, p, version, socketPath, nil)
+}
+
+// StartProcessWithArgs starts a Cloud Hypervisor VMM process with additional command-line arguments.
+// This is useful for testing or when you need to pass specific flags like verbosity.
+func StartProcessWithArgs(ctx context.Context, p *paths.Paths, version CHVersion, socketPath string, extraArgs []string) (int, error) {
 	// Get binary path (extracts if needed)
-	binaryPath, err := GetBinaryPath(dataDir, version)
+	binaryPath, err := GetBinaryPath(p, version)
 	if err != nil {
-		return fmt.Errorf("get binary: %w", err)
+		return 0, fmt.Errorf("get binary: %w", err)
 	}
 
 	// Check if socket is already in use
 	if isSocketInUse(socketPath) {
-		return fmt.Errorf("socket already in use, VMM may be running at %s", socketPath)
+		return 0, fmt.Errorf("socket already in use, VMM may be running at %s", socketPath)
 	}
 
 	// Remove stale socket if exists
 	// Ignore error - if we can't remove it, CH will fail with clearer error
 	os.Remove(socketPath)
 
-	cmd := exec.CommandContext(ctx, binaryPath, "--api-socket", socketPath)
+	// Build command arguments
+	args := []string{"--api-socket", socketPath}
+	args = append(args, extraArgs...)
+	
+	// Use Command (not CommandContext) so process survives parent context cancellation
+	cmd := exec.Command(binaryPath, args...)
+	
+	// Daemonize: detach from parent process group
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setpgid: true, // Create new process group
+	}
+	
+	// Redirect stdout/stderr to log files (process won't block on I/O)
+	instanceDir := filepath.Dir(socketPath)
+	stdoutFile, err := os.OpenFile(
+		filepath.Join(instanceDir, "ch-stdout.log"),
+		os.O_CREATE|os.O_WRONLY|os.O_APPEND,
+		0644,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("create stdout log: %w", err)
+	}
+	// Note: These defers close the parent's file descriptors after cmd.Start().
+	// The child process receives duplicated file descriptors during fork/exec,
+	// so it can continue writing to the log files even after we close them here.
+	defer stdoutFile.Close()
+	
+	stderrFile, err := os.OpenFile(
+		filepath.Join(instanceDir, "ch-stderr.log"),
+		os.O_CREATE|os.O_WRONLY|os.O_APPEND,
+		0644,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("create stderr log: %w", err)
+	}
+	defer stderrFile.Close()
+	
+	cmd.Stdout = stdoutFile
+	cmd.Stderr = stderrFile
 
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("start cloud-hypervisor: %w", err)
+		return 0, fmt.Errorf("start cloud-hypervisor: %w", err)
 	}
+	
+	pid := cmd.Process.Pid
 
-	// Wait for socket to be ready
-	return waitForSocket(ctx, socketPath, 5*time.Second)
+	// Wait for socket to be ready (use fresh context with timeout, not parent context)
+	waitCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	
+	if err := waitForSocket(waitCtx, socketPath, 5*time.Second); err != nil {
+		return 0, err
+	}
+	
+	return pid, nil
 }
 
 // isSocketInUse checks if a Unix socket is actively being used

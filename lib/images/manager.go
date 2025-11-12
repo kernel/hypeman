@@ -8,6 +8,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/onkernel/hypeman/lib/paths"
 )
 
 const (
@@ -27,23 +29,23 @@ type Manager interface {
 }
 
 type manager struct {
-	dataDir   string
+	paths     *paths.Paths
 	ociClient *ociClient
 	queue     *BuildQueue
 	createMu  sync.Mutex
 }
 
 // NewManager creates a new image manager
-func NewManager(dataDir string, maxConcurrentBuilds int) (Manager, error) {
+func NewManager(p *paths.Paths, maxConcurrentBuilds int) (Manager, error) {
 	// Create cache directory under dataDir for OCI layouts
-	cacheDir := filepath.Join(dataDir, "system", "oci-cache")
+	cacheDir := p.SystemOCICache()
 	ociClient, err := newOCIClient(cacheDir)
 	if err != nil {
 		return nil, fmt.Errorf("create oci client: %w", err)
 	}
 
 	m := &manager{
-		dataDir:   dataDir,
+		paths:     p,
 		ociClient: ociClient,
 		queue:     NewBuildQueue(maxConcurrentBuilds),
 	}
@@ -52,7 +54,7 @@ func NewManager(dataDir string, maxConcurrentBuilds int) (Manager, error) {
 }
 
 func (m *manager) ListImages(ctx context.Context) ([]Image, error) {
-	metas, err := listAllTags(m.dataDir)
+	metas, err := listAllTags(m.paths)
 	if err != nil {
 		return nil, fmt.Errorf("list tags: %w", err)
 	}
@@ -86,12 +88,12 @@ func (m *manager) CreateImage(ctx context.Context, req CreateImageRequest) (*Ima
 	defer m.createMu.Unlock()
 
 	// Check if we already have this digest (deduplication)
-	if meta, err := readMetadata(m.dataDir, ref.Repository(), ref.DigestHex()); err == nil {
+	if meta, err := readMetadata(m.paths, ref.Repository(), ref.DigestHex()); err == nil {
 		// We have this digest already
 		if meta.Status == StatusReady && ref.Tag() != "" {
 			// Update tag symlink to point to current digest
 			// (handles case where tag moved to new digest)
-			createTagSymlink(m.dataDir, ref.Repository(), ref.Tag(), ref.DigestHex())
+			createTagSymlink(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex())
 		}
 		img := meta.toImage()
 		// Add queue position if pending
@@ -115,7 +117,7 @@ func (m *manager) createAndQueueImage(ref *ResolvedRef) (*Image, error) {
 	}
 
 	// Write initial metadata
-	if err := writeMetadata(m.dataDir, ref.Repository(), ref.DigestHex(), meta); err != nil {
+	if err := writeMetadata(m.paths, ref.Repository(), ref.DigestHex(), meta); err != nil {
 		return nil, fmt.Errorf("write initial metadata: %w", err)
 	}
 
@@ -132,7 +134,7 @@ func (m *manager) createAndQueueImage(ref *ResolvedRef) (*Image, error) {
 }
 
 func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef) {
-	buildDir := filepath.Join(m.dataDir, "system", "builds", ref.String())
+	buildDir := m.paths.SystemBuild(ref.String())
 	tempDir := filepath.Join(buildDir, "rootfs")
 
 	if err := os.MkdirAll(buildDir, 0755); err != nil {
@@ -155,11 +157,11 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef) {
 	}
 
 	// Check if this digest already exists and is ready (deduplication)
-	if meta, err := readMetadata(m.dataDir, ref.Repository(), ref.DigestHex()); err == nil {
+	if meta, err := readMetadata(m.paths, ref.Repository(), ref.DigestHex()); err == nil {
 		if meta.Status == StatusReady {
 			// Another build completed first, just update the tag symlink
 			if ref.Tag() != "" {
-				createTagSymlink(m.dataDir, ref.Repository(), ref.Tag(), ref.DigestHex())
+				createTagSymlink(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex())
 			}
 			return
 		}
@@ -167,15 +169,16 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef) {
 
 	m.updateStatusByDigest(ref, StatusConverting, nil)
 
-	diskPath := digestPath(m.dataDir, ref.Repository(), ref.DigestHex())
-	diskSize, err := convertToErofs(tempDir, diskPath)
+	diskPath := digestPath(m.paths, ref.Repository(), ref.DigestHex())
+	// Use default image format (ext4 for now, easy to switch to erofs later)
+	diskSize, err := ExportRootfs(tempDir, diskPath, DefaultImageFormat)
 	if err != nil {
-		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("convert to erofs: %w", err))
+		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("convert to %s: %w", DefaultImageFormat, err))
 		return
 	}
 
 	// Read current metadata to preserve request info
-	meta, err := readMetadata(m.dataDir, ref.Repository(), ref.DigestHex())
+	meta, err := readMetadata(m.paths, ref.Repository(), ref.DigestHex())
 	if err != nil {
 		// Create new metadata if it doesn't exist
 		meta = &imageMetadata{
@@ -194,14 +197,14 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef) {
 	meta.Env = result.Metadata.Env
 	meta.WorkingDir = result.Metadata.WorkingDir
 
-	if err := writeMetadata(m.dataDir, ref.Repository(), ref.DigestHex(), meta); err != nil {
+	if err := writeMetadata(m.paths, ref.Repository(), ref.DigestHex(), meta); err != nil {
 		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("write final metadata: %w", err))
 		return
 	}
 
 	// Only create/update tag symlink on successful completion
 	if ref.Tag() != "" {
-		if err := createTagSymlink(m.dataDir, ref.Repository(), ref.Tag(), ref.DigestHex()); err != nil {
+		if err := createTagSymlink(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex()); err != nil {
 			// Log error but don't fail the build
 			fmt.Fprintf(os.Stderr, "Warning: failed to create tag symlink: %v\n", err)
 		}
@@ -209,7 +212,7 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef) {
 }
 
 func (m *manager) updateStatusByDigest(ref *ResolvedRef, status string, err error) {
-	meta, readErr := readMetadata(m.dataDir, ref.Repository(), ref.DigestHex())
+	meta, readErr := readMetadata(m.paths, ref.Repository(), ref.DigestHex())
 	if readErr != nil {
 		// Create new metadata if it doesn't exist
 		meta = &imageMetadata{
@@ -227,11 +230,11 @@ func (m *manager) updateStatusByDigest(ref *ResolvedRef, status string, err erro
 		meta.Error = &errorMsg
 	}
 
-	writeMetadata(m.dataDir, ref.Repository(), ref.DigestHex(), meta)
+	writeMetadata(m.paths, ref.Repository(), ref.DigestHex(), meta)
 }
 
 func (m *manager) RecoverInterruptedBuilds() {
-	metas, err := listAllTags(m.dataDir)
+	metas, err := listAllTags(m.paths)
 	if err != nil {
 		return // Best effort
 	}
@@ -278,13 +281,13 @@ func (m *manager) GetImage(ctx context.Context, name string) (*Image, error) {
 		// Tag lookup - resolve symlink
 		tag := ref.Tag()
 
-		digestHex, err = resolveTag(m.dataDir, repository, tag)
+		digestHex, err = resolveTag(m.paths, repository, tag)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	meta, err := readMetadata(m.dataDir, repository, digestHex)
+	meta, err := readMetadata(m.paths, repository, digestHex)
 	if err != nil {
 		return nil, err
 	}
@@ -313,5 +316,5 @@ func (m *manager) DeleteImage(ctx context.Context, name string) error {
 	repository := ref.Repository()
 	tag := ref.Tag()
 
-	return deleteTag(m.dataDir, repository, tag)
+	return deleteTag(m.paths, repository, tag)
 }
