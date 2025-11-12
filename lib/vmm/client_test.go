@@ -58,8 +58,9 @@ func TestStartProcessAndShutdown(t *testing.T) {
 	ctx := context.Background()
 
 	// Start VMM process
-	err := StartProcess(ctx, tmpDir, V48_0, socketPath)
+	pid, err := StartProcess(ctx, tmpDir, V48_0, socketPath)
 	require.NoError(t, err)
+	assert.Greater(t, pid, 0, "PID should be positive")
 
 	// Verify socket exists
 	_, err = os.Stat(socketPath)
@@ -92,11 +93,12 @@ func TestStartProcessSocketInUse(t *testing.T) {
 	ctx := context.Background()
 
 	// Start first VMM
-	err := StartProcess(ctx, tmpDir, V48_0, socketPath)
+	pid, err := StartProcess(ctx, tmpDir, V48_0, socketPath)
 	require.NoError(t, err)
+	assert.Greater(t, pid, 0)
 
 	// Try to start second VMM on same socket - should fail
-	err = StartProcess(ctx, tmpDir, V48_0, socketPath)
+	_, err = StartProcess(ctx, tmpDir, V48_0, socketPath)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "socket already in use")
 
@@ -124,8 +126,9 @@ func TestMultipleVersions(t *testing.T) {
 			ctx := context.Background()
 
 			// Start VMM
-			err := StartProcess(ctx, tmpDir, tt.version, socketPath)
+			pid, err := StartProcess(ctx, tmpDir, tt.version, socketPath)
 			require.NoError(t, err)
+			assert.Greater(t, pid, 0)
 
 			// Create client and ping
 			client, err := NewVMM(socketPath)

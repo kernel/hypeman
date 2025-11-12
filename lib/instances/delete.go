@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os"
-
-	"github.com/onkernel/hypeman/lib/vmm"
+	"syscall"
+	"time"
 )
 
 // deleteInstance stops and deletes an instance
@@ -21,9 +21,9 @@ func (m *manager) deleteInstance(
 
 	inst := m.toInstance(ctx, meta)
 
-	// 2. If VMM might be running, try to stop it
+	// 2. If VMM might be running, force kill it
 	if inst.State.RequiresVMM() {
-		if err := m.stopVMM(ctx, &inst); err != nil {
+		if err := m.killVMM(ctx, &inst); err != nil {
 			// Log error but continue with cleanup
 			// Best effort to clean up even if VMM is unresponsive
 		}
@@ -37,32 +37,46 @@ func (m *manager) deleteInstance(
 	return nil
 }
 
-// stopVMM attempts to gracefully stop the VMM
-func (m *manager) stopVMM(ctx context.Context, inst *Instance) error {
-	// Check if socket exists
-	if _, err := os.Stat(inst.SocketPath); os.IsNotExist(err) {
-		// No socket - VMM not running
-		return nil
+// killVMM force kills the VMM process without graceful shutdown
+// Used only for delete operations where we're removing all data anyway.
+// For operations that need graceful shutdown (like standby), use the VMM API directly.
+func (m *manager) killVMM(ctx context.Context, inst *Instance) error {
+	// If we have a PID, kill the process immediately
+	if inst.CHPID != nil {
+		pid := *inst.CHPID
+		
+		// Check if process exists
+		if err := syscall.Kill(pid, 0); err == nil {
+			// Process exists - kill it immediately with SIGKILL
+			// No graceful shutdown needed since we're deleting all data
+			syscall.Kill(pid, syscall.SIGKILL)
+			
+			// Wait for process to die (SIGKILL is guaranteed, usually instant)
+			waitForProcessExit(pid, 1*time.Second)
+		}
 	}
-
-	// Try to connect to VMM
-	client, err := vmm.NewVMM(inst.SocketPath)
-	if err != nil {
-		// Socket exists but can't connect - stale socket
-		// Don't delete it here - it will be cleaned up by vmm.StartProcess if needed
-		return nil
-	}
-
-	// Verify VMM responds
-	if _, err := client.GetVmmPingWithResponse(ctx); err != nil {
-		// VMM unresponsive - stale socket
-		return nil
-	}
-
-	// VMM is alive - try graceful shutdown
-	client.ShutdownVMMWithResponse(ctx)
-	// Cloud Hypervisor will remove the socket on successful shutdown
+	
+	// Clean up socket if it still exists
+	os.Remove(inst.SocketPath)
 	
 	return nil
+}
+
+// waitForProcessExit polls for a process to exit, returns true if exited within timeout
+func waitForProcessExit(pid int, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	
+	for time.Now().Before(deadline) {
+		// Check if process still exists (signal 0 doesn't kill, just checks existence)
+		if err := syscall.Kill(pid, 0); err != nil {
+			// Process is gone (ESRCH = no such process)
+			return true
+		}
+		// Still alive, wait a bit before checking again
+		time.Sleep(10 * time.Millisecond)
+	}
+	
+	// Timeout reached, process still exists
+	return false
 }
 

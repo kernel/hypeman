@@ -78,10 +78,14 @@ func (m *manager) restoreFromSnapshot(
 	stored *StoredMetadata,
 	snapshotDir string,
 ) error {
-	// Start VMM process (without VM config - restore will provide it)
-	if err := vmm.StartProcess(ctx, m.dataDir, stored.CHVersion, stored.SocketPath); err != nil {
+	// Start VMM process and capture PID
+	pid, err := vmm.StartProcess(ctx, m.dataDir, stored.CHVersion, stored.SocketPath)
+	if err != nil {
 		return fmt.Errorf("start vmm: %w", err)
 	}
+	
+	// Store the PID for later cleanup
+	stored.CHPID = &pid
 
 	// Create client
 	client, err := vmm.NewVMM(stored.SocketPath)

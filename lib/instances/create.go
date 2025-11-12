@@ -167,10 +167,14 @@ func (m *manager) startAndBootVM(
 	stored *StoredMetadata,
 	imageInfo *images.Image,
 ) error {
-	// Start VMM process
-	if err := vmm.StartProcess(ctx, m.dataDir, stored.CHVersion, stored.SocketPath); err != nil {
+	// Start VMM process and capture PID
+	pid, err := vmm.StartProcess(ctx, m.dataDir, stored.CHVersion, stored.SocketPath)
+	if err != nil {
 		return fmt.Errorf("start vmm: %w", err)
 	}
+	
+	// Store the PID for later cleanup
+	stored.CHPID = &pid
 
 	// Create VMM client
 	client, err := vmm.NewVMM(stored.SocketPath)

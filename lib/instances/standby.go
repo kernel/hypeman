@@ -56,14 +56,15 @@ func (m *manager) standbyInstance(
 		return nil, fmt.Errorf("create snapshot: %w", err)
 	}
 
-	// 7. Stop VMM
-	if err := m.stopVMM(ctx, &inst); err != nil {
+	// 7. Stop VMM gracefully (snapshot is complete)
+	if err := m.shutdownVMM(ctx, &inst); err != nil {
 		// Log but continue - snapshot was created successfully
 	}
 
-	// 8. Update timestamp
+	// 8. Update timestamp and clear PID (VMM no longer running)
 	now := time.Now()
 	stored.StoppedAt = &now
+	stored.CHPID = nil
 
 	meta = &metadata{StoredMetadata: *stored}
 	if err := m.saveMetadata(meta); err != nil {
@@ -111,6 +112,26 @@ func createSnapshot(ctx context.Context, client *vmm.VMM, snapshotDir string) er
 		return fmt.Errorf("snapshot failed with status %d", resp.StatusCode())
 	}
 
+	return nil
+}
+
+// shutdownVMM gracefully shuts down the VMM process via API
+func (m *manager) shutdownVMM(ctx context.Context, inst *Instance) error {
+	// Try to connect to VMM
+	client, err := vmm.NewVMM(inst.SocketPath)
+	if err != nil {
+		// Can't connect - VMM might already be stopped
+		return nil
+	}
+
+	// Try graceful shutdown
+	client.ShutdownVMMWithResponse(ctx)
+	
+	// Wait for process to exit
+	if inst.CHPID != nil {
+		waitForProcessExit(*inst.CHPID, 2*time.Second)
+	}
+	
 	return nil
 }
 
