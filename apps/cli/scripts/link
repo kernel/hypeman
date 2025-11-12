@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+
+set -e
+
+cd "$(dirname "$0")/.."
+
+if [[ -n "$1" ]]; then
+  LOCAL_GO="$1"
+  shift
+else
+  LOCAL_GO=../hypeman-go
+fi
+
+echo "==> Linking with local directory"
+go mod tidy -e
+go mod edit -replace https://github.com/stainless-sdks/hypeman-go="$LOCAL_GO"
