@@ -5,6 +5,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+
+	"github.com/u-root/u-root/pkg/cpio"
 )
 
 // ExportFormat defines supported rootfs export formats
@@ -13,7 +15,7 @@ type ExportFormat string
 const (
 	FormatExt4  ExportFormat = "ext4"  // Read-only ext4 (app images, default)
 	FormatErofs ExportFormat = "erofs" // Read-only compressed (future: when kernel supports it)
-	FormatCpio  ExportFormat = "cpio"  // Compressed archive (initrd)
+	FormatCpio  ExportFormat = "cpio"  // Uncompressed archive (initrd, fast boot)
 )
 
 // DefaultImageFormat is the default export format for OCI images
@@ -33,7 +35,8 @@ func ExportRootfs(rootfsDir, outputPath string, format ExportFormat) (int64, err
 	}
 }
 
-// convertToCpio packages directory as gzipped cpio archive (initramfs format)
+// convertToCpio packages directory as uncompressed cpio archive (initramfs format)
+// Uses uncompressed format for faster boot (kernel loads directly without decompression)
 func convertToCpio(rootfsDir, outputPath string) (int64, error) {
 	// Ensure parent directory exists
 	if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
@@ -47,55 +50,53 @@ func convertToCpio(rootfsDir, outputPath string) (int64, error) {
 	}
 	defer outFile.Close()
 
-	// Pipeline: (cd rootfsDir && find . -print0 | cpio -H newc -o --null | gzip -9) > output
-	findCmd := exec.Command("find", ".", "-print0")
-	findCmd.Dir = rootfsDir
+	// Create newc format cpio writer (kernel-compatible format)
+	cpioWriter := cpio.Newc.Writer(outFile)
 
-	cpioCmd := exec.Command("cpio", "-H", "newc", "-o", "--null", "--quiet")
-	cpioCmd.Dir = rootfsDir
+	// Create recorder for tracking inodes and device numbers
+	recorder := cpio.NewRecorder()
 
-	gzipCmd := exec.Command("gzip", "-9")
+	// Walk the rootfs directory and add all files
+	err = filepath.Walk(rootfsDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
 
-	// Connect pipes
-	cpioPipe, err := cpioCmd.StdinPipe()
+		// Get path relative to rootfs root
+		relPath, err := filepath.Rel(rootfsDir, path)
+		if err != nil {
+			return err
+		}
+
+		// Skip the root directory itself
+		if relPath == "." {
+			return nil
+		}
+
+		// Get cpio record from file
+		rec, err := recorder.GetRecord(path)
+		if err != nil {
+			return fmt.Errorf("get cpio record for %s: %w", path, err)
+		}
+
+		// Set the name to be relative to root
+		rec.Name = relPath
+
+		// Write the record to the archive
+		if err := cpioWriter.WriteRecord(rec); err != nil {
+			return fmt.Errorf("write cpio record for %s: %w", path, err)
+		}
+
+		return nil
+	})
+
 	if err != nil {
-		return 0, err
-	}
-	gzipPipe, err := gzipCmd.StdinPipe()
-	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("walk rootfs: %w", err)
 	}
 
-	findCmd.Stdout = cpioPipe
-	cpioCmd.Stdout = gzipPipe
-	gzipCmd.Stdout = outFile
-
-	// Start all commands in reverse order
-	if err := gzipCmd.Start(); err != nil {
-		return 0, fmt.Errorf("start gzip: %w", err)
-	}
-	if err := cpioCmd.Start(); err != nil {
-		return 0, fmt.Errorf("start cpio: %w", err)
-	}
-	if err := findCmd.Start(); err != nil {
-		return 0, fmt.Errorf("start find: %w", err)
-	}
-
-	// Wait for find to complete
-	if err := findCmd.Wait(); err != nil {
-		return 0, fmt.Errorf("find failed: %w", err)
-	}
-	cpioPipe.Close()
-
-	// Wait for cpio
-	if err := cpioCmd.Wait(); err != nil {
-		return 0, fmt.Errorf("cpio failed: %w", err)
-	}
-	gzipPipe.Close()
-
-	// Wait for gzip
-	if err := gzipCmd.Wait(); err != nil {
-		return 0, fmt.Errorf("gzip failed: %w", err)
+	// Write CPIO trailer (required to mark end of archive)
+	if err := cpio.WriteTrailer(cpioWriter); err != nil {
+		return 0, fmt.Errorf("write cpio trailer: %w", err)
 	}
 
 	// Get file size
