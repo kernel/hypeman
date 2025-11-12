@@ -193,16 +193,23 @@ func (m *manager) allocateNextIP(ctx context.Context, networkName, subnet string
 
 // incrementIP increments IP address by n
 func incrementIP(ip net.IP, n int) net.IP {
-	result := make(net.IP, len(ip))
-	copy(result, ip)
+	// Ensure we're working with IPv4 (4 bytes)
+	ip4 := ip.To4()
+	if ip4 == nil {
+		// Should not happen with our subnet parsing, but handle it
+		return ip
+	}
+
+	result := make(net.IP, 4)
+	copy(result, ip4)
 
 	// Convert to 32-bit integer, increment, convert back
-	val := uint32(result[12])<<24 | uint32(result[13])<<16 | uint32(result[14])<<8 | uint32(result[15])
+	val := uint32(result[0])<<24 | uint32(result[1])<<16 | uint32(result[2])<<8 | uint32(result[3])
 	val += uint32(n)
-	result[12] = byte(val >> 24)
-	result[13] = byte(val >> 16)
-	result[14] = byte(val >> 8)
-	result[15] = byte(val)
+	result[0] = byte(val >> 24)
+	result[1] = byte(val >> 16)
+	result[2] = byte(val >> 8)
+	result[3] = byte(val)
 
 	return result
 }

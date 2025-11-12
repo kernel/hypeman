@@ -10,7 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/onkernel/hypeman/cmd/api/config"
 	"github.com/onkernel/hypeman/lib/images"
+	"github.com/onkernel/hypeman/lib/network"
 	"github.com/onkernel/hypeman/lib/paths"
 	"github.com/onkernel/hypeman/lib/system"
 	"github.com/onkernel/hypeman/lib/vmm"
@@ -22,12 +24,21 @@ import (
 func setupTestManager(t *testing.T) (*manager, string) {
 	tmpDir := t.TempDir()
 	
-	imageManager, err := images.NewManager(paths.New(tmpDir), 1)
+	cfg := &config.Config{
+		DataDir:       tmpDir,
+		BridgeName:    "vmbr0",
+		SubnetCIDR:    "192.168.100.0/24",
+		SubnetGateway: "192.168.100.1",
+	}
+	
+	p := paths.New(tmpDir)
+	imageManager, err := images.NewManager(p, 1)
 	require.NoError(t, err)
 	
-	systemManager := system.NewManager(paths.New(tmpDir))
+	systemManager := system.NewManager(p)
+	networkManager := network.NewManager(p, cfg)
 	maxOverlaySize := int64(100 * 1024 * 1024 * 1024)
-	mgr := NewManager(paths.New(tmpDir), imageManager, systemManager, maxOverlaySize).(*manager)
+	mgr := NewManager(p, imageManager, systemManager, networkManager, maxOverlaySize).(*manager)
 	
 	// Register cleanup to kill any orphaned Cloud Hypervisor processes
 	t.Cleanup(func() {
@@ -242,10 +253,19 @@ func TestStorageOperations(t *testing.T) {
 	// Test storage layer without starting VMs
 	tmpDir := t.TempDir()
 
-	imageManager, _ := images.NewManager(paths.New(tmpDir), 1)
-	systemManager := system.NewManager(paths.New(tmpDir))
+	cfg := &config.Config{
+		DataDir:       tmpDir,
+		BridgeName:    "vmbr0",
+		SubnetCIDR:    "192.168.100.0/24",
+		SubnetGateway: "192.168.100.1",
+	}
+
+	p := paths.New(tmpDir)
+	imageManager, _ := images.NewManager(p, 1)
+	systemManager := system.NewManager(p)
+	networkManager := network.NewManager(p, cfg)
 	maxOverlaySize := int64(100 * 1024 * 1024 * 1024) // 100GB
-	manager := NewManager(paths.New(tmpDir), imageManager, systemManager, maxOverlaySize).(*manager)
+	manager := NewManager(p, imageManager, systemManager, networkManager, maxOverlaySize).(*manager)
 
 	// Test metadata doesn't exist initially
 	_, err := manager.loadMetadata("nonexistent")

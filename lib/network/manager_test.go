@@ -1,7 +1,6 @@
 package network
 
 import (
-	"context"
 	"net"
 	"testing"
 
