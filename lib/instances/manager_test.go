@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -14,16 +15,69 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// setupTestManager creates a manager and registers cleanup for any orphaned processes
+func setupTestManager(t *testing.T) (*manager, string) {
+	tmpDir := t.TempDir()
+	
+	imageManager, err := images.NewManager(tmpDir, 1)
+	require.NoError(t, err)
+	
+	systemManager := system.NewManager(tmpDir)
+	maxOverlaySize := int64(100 * 1024 * 1024 * 1024)
+	mgr := NewManager(tmpDir, imageManager, systemManager, maxOverlaySize).(*manager)
+	
+	// Register cleanup to kill any orphaned Cloud Hypervisor processes
+	t.Cleanup(func() {
+		cleanupOrphanedProcesses(t, mgr)
+	})
+	
+	return mgr, tmpDir
+}
+
+// cleanupOrphanedProcesses kills any Cloud Hypervisor processes from metadata
+func cleanupOrphanedProcesses(t *testing.T, mgr *manager) {
+	// Find all metadata files
+	metaFiles, err := mgr.listMetadataFiles()
+	if err != nil {
+		return // No metadata files, nothing to clean
+	}
+	
+	for _, metaFile := range metaFiles {
+		// Extract instance ID from path
+		id := filepath.Base(filepath.Dir(metaFile))
+		
+		// Load metadata
+		meta, err := mgr.loadMetadata(id)
+		if err != nil {
+			continue
+		}
+		
+		// If metadata has a PID, try to kill it
+		if meta.CHPID != nil {
+			pid := *meta.CHPID
+			
+			// Check if process exists
+			if err := syscall.Kill(pid, 0); err == nil {
+				t.Logf("Cleaning up orphaned Cloud Hypervisor process: PID %d (instance %s)", pid, id)
+				syscall.Kill(pid, syscall.SIGKILL)
+				
+				// Wait briefly for it to die
+				time.Sleep(100 * time.Millisecond)
+			}
+		}
+	}
+}
+
 func TestCreateAndDeleteInstance(t *testing.T) {
 	// Require KVM access (don't skip, fail informatively)
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Fatal("/dev/kvm not available - ensure KVM is enabled and user is in 'kvm' group (sudo usermod -aG kvm $USER)")
 	}
 
-	tmpDir := t.TempDir()
+	manager, tmpDir := setupTestManager(t) // Automatically registers cleanup
 	ctx := context.Background()
 
-	// Create REAL image manager and pull nginx (stays running)
+	// Get the image manager from the manager (we need it for image operations)
 	imageManager, err := images.NewManager(tmpDir, 1)
 	require.NoError(t, err)
 
@@ -57,10 +111,6 @@ func TestCreateAndDeleteInstance(t *testing.T) {
 	err = systemManager.EnsureSystemFiles(ctx)
 	require.NoError(t, err)
 	t.Log("System files ready")
-
-	// Create instances manager
-	maxOverlaySize := int64(100 * 1024 * 1024 * 1024) // 100GB
-	manager := NewManager(tmpDir, imageManager, systemManager, maxOverlaySize).(*manager)
 
 	// Create instance with real nginx image (stays running)
 	req := CreateInstanceRequest{
@@ -201,10 +251,10 @@ func TestStandbyAndRestore(t *testing.T) {
 		t.Fatal("/dev/kvm not available - ensure KVM is enabled and user is in 'kvm' group (sudo usermod -aG kvm $USER)")
 	}
 
-	tmpDir := t.TempDir()
+	manager, tmpDir := setupTestManager(t) // Automatically registers cleanup
 	ctx := context.Background()
 
-	// Create REAL image manager and pull nginx
+	// Create image manager for pulling nginx
 	imageManager, err := images.NewManager(tmpDir, 1)
 	require.NoError(t, err)
 
@@ -234,9 +284,6 @@ func TestStandbyAndRestore(t *testing.T) {
 	systemManager := system.NewManager(tmpDir)
 	err = systemManager.EnsureSystemFiles(ctx)
 	require.NoError(t, err)
-
-	maxOverlaySize := int64(100 * 1024 * 1024 * 1024) // 100GB
-	manager := NewManager(tmpDir, imageManager, systemManager, maxOverlaySize).(*manager)
 
 	// Create instance
 	t.Log("Creating instance...")
