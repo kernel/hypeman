@@ -163,8 +163,14 @@ func TestMemoryReduction(t *testing.T) {
 		client, err := vmm.NewVMM(inst.SocketPath)
 		require.NoError(t, err)
 
-		// Wait for PHP to allocate
-		time.Sleep(5 * time.Second)
+		// Wait for PHP to allocate (poll for log message)
+		t.Log("Waiting for PHP to allocate memory...")
+		err = waitForLogMessage(ctx, manager, inst.Id, "Allocated 300MB", 10*time.Second)
+		require.NoError(t, err, "PHP should allocate memory")
+		
+		// Wait for PHP to start printing (ensures it's running)
+		err = waitForLogMessage(ctx, manager, inst.Id, "Still alive 0", 3*time.Second)
+		require.NoError(t, err, "PHP should start status loop")
 
 		// Get FULL VmInfo before reduction
 		t.Log("=== BEFORE REDUCTION ===")
@@ -208,16 +214,23 @@ func TestMemoryReduction(t *testing.T) {
 			}
 		}
 
-		// Wait and check if PHP is still alive
-		time.Sleep(3 * time.Second)
-		logs, _ := manager.GetInstanceLogs(ctx, inst.Id, false, 50)
-		highestStillAlive := -1
+		// Check what the current highest "Still alive" number is
+		logsNow, _ := manager.GetInstanceLogs(ctx, inst.Id, false, 50)
+		currentHighest := -1
 		for i := 0; i < 20; i++ {
-			if strings.Contains(logs, fmt.Sprintf("Still alive %d", i)) {
-				highestStillAlive = i
+			if strings.Contains(logsNow, fmt.Sprintf("Still alive %d", i)) {
+				currentHighest = i
 			}
 		}
-		t.Logf("\nPHP still alive up to message: %d", highestStillAlive)
+		t.Logf("Current highest 'Still alive': %d", currentHighest)
+		
+		// Wait for PHP to print the NEXT number (proves it's still running)
+		nextMessage := fmt.Sprintf("Still alive %d", currentHighest+1)
+		t.Logf("Waiting for '%s'...", nextMessage)
+		err = waitForLogMessage(ctx, manager, inst.Id, nextMessage, 3*time.Second)
+		require.NoError(t, err, "PHP should continue running and increment counter")
+		
+		t.Logf("\n✓ PHP still alive up to message: %d", currentHighest+1)
 
 		t.Log("\n=== ANALYSIS ===")
 		t.Logf("MemoryActualSize likely shows: Size + HotpluggedSize (VMM's configured view)")
@@ -268,19 +281,18 @@ func TestMemoryReduction(t *testing.T) {
 		assert.InDelta(t, expectedMax, initialSize, float64(50*1024*1024),
 			"Memory should be near 640MB after auto-expansion")
 
-		// Wait for PHP to start and allocate 300MB with physical pages
+		// Wait for PHP to start and allocate 300MB with physical pages (poll logs)
 		t.Log("Waiting for PHP to allocate and touch 300MB...")
-		time.Sleep(5 * time.Second)
+		err = waitForLogMessage(ctx, manager, inst.Id, "Allocated 300MB", 10*time.Second)
+		require.NoError(t, err, "PHP should allocate memory")
+		
+		// Also wait for at least first "Still alive" message to ensure PHP loop started
+		t.Log("Waiting for PHP to start printing status...")
+		err = waitForLogMessage(ctx, manager, inst.Id, "Still alive 0", 3*time.Second)
+		require.NoError(t, err, "PHP should start status loop")
 
 		afterAllocation := getActualMemorySize(t, ctx, client)
 		t.Logf("After PHP allocation: %d MB", afterAllocation/(1024*1024))
-		
-		// Check logs BEFORE reduction to verify PHP allocated
-		logsBefore, _ := manager.GetInstanceLogs(ctx, inst.Id, false, 50)
-		if logsBefore != "" {
-			assert.Contains(t, logsBefore, "Allocated 300MB", "PHP should have allocated memory")
-			t.Logf("PHP allocation confirmed in logs")
-		}
 
 		// KEY TEST: Request reduction to 128MB base
 		targetSize := int64(128 * 1024 * 1024) // REQUIRED: 128MB
@@ -300,21 +312,27 @@ func TestMemoryReduction(t *testing.T) {
 			targetSize/(1024*1024),
 			finalSize/(1024*1024))
 
-		// Wait a moment and check if PHP is still alive
-		t.Log("Waiting 4 seconds to see if PHP continues printing...")
-		time.Sleep(4 * time.Second)
-		
-		// Check logs AFTER reduction to see if PHP is still reporting "Still alive"
-		logsAfter, _ := manager.GetInstanceLogs(ctx, inst.Id, false, 80)
-		
-		// Look for the highest numbered "Still alive X" message
-		highestStillAlive := -1
+		// Check what the current highest "Still alive" number is
+		logsCurrent, _ := manager.GetInstanceLogs(ctx, inst.Id, false, 50)
+		currentHighest := -1
 		for i := 0; i < 20; i++ {
-			if strings.Contains(logsAfter, fmt.Sprintf("Still alive %d", i)) {
-				highestStillAlive = i
+			if strings.Contains(logsCurrent, fmt.Sprintf("Still alive %d", i)) {
+				currentHighest = i
 			}
 		}
-		t.Logf("Highest 'Still alive' message: %d", highestStillAlive)
+		t.Logf("Current highest 'Still alive': %d", currentHighest)
+		
+		// Wait for PHP to print the NEXT number (proves it's still running after reduction)
+		nextMessage := fmt.Sprintf("Still alive %d", currentHighest+1)
+		t.Log("Waiting for PHP to continue printing after reduction...")
+		t.Logf("Looking for '%s'...", nextMessage)
+		err = waitForLogMessage(ctx, manager, inst.Id, nextMessage, 3*time.Second)
+		require.NoError(t, err, "PHP should continue running and increment counter after reduction")
+		
+		// Now get full logs to check for OOM
+		logsAfter, _ := manager.GetInstanceLogs(ctx, inst.Id, false, 80)
+		highestStillAlive := currentHighest + 1
+		t.Logf("PHP continued to 'Still alive %d' after reduction", highestStillAlive)
 		
 		// Check for OOM indicators
 		hasOOM := strings.Contains(logsAfter, "Out of memory") || 
@@ -326,36 +344,27 @@ func TestMemoryReduction(t *testing.T) {
 			t.Logf("FOUND OOM EVENT in logs!")
 		}
 
-		// REQUIRED ASSERTION: finalSize must be > 128MB
-		// This proves partial reduction works and PHP wasn't OOM killed
+		// At this point we know PHP counter incremented, so process survived!
+		t.Logf("✓ IMPORTANT: PHP process SURVIVED memory reduction!")
+		t.Logf("✓ PHP continued printing (counter incremented) after reduction")
+		
+		// Check for OOM or migration traces
+		if strings.Contains(logsAfter, "migrate_pages") {
+			t.Logf("✓ Page migration traces found - virtio-mem migrated pages")
+		}
+		
+		// REQUIRED ASSERTION: finalSize must be > 128MB OR process survived
 		if finalSize > targetSize {
-			t.Logf("SUCCESS: Partial reduction worked! Stabilized at %d MB (above %d MB target)",
+			t.Logf("SUCCESS: Partial reduction - stabilized at %d MB (above %d MB target)",
 				finalSize/(1024*1024), targetSize/(1024*1024))
 			assert.Greater(t, finalSize, targetSize,
-				"Memory should stabilize above 128MB - PHP holding 300MB")
+				"Memory stabilized above target")
 		} else {
-			// Reduced to 128MB - check if PHP survived
-			t.Logf("INVESTIGATION: Reduced to %d MB despite PHP allocating 300MB", finalSize/(1024*1024))
-			
-			// PHP should be printing "Still alive 6+" after waiting 4 more seconds
-			// We saw 0,1,2 by ~5s, so by ~9s we should see 6,7,8
-			if highestStillAlive >= 6 {
-				t.Logf("✓ IMPORTANT: PHP process SURVIVED memory reduction!")
-				t.Logf("✓ PHP continued printing up to 'Still alive %d' after reduction", highestStillAlive)
-				t.Logf("✓ virtio-mem used page migration to move 300MB from hotplug to 128MB base region")
-				t.Logf("✓ This proves standby/resume is SAFE - no OOM killing occurs")
-				
-				// Check for migration traces
-				if strings.Contains(logsAfter, "migrate_pages") {
-					t.Logf("✓ Confirmed: Page migration traces found in kernel logs")
-				}
-				
-				// This is actually SUCCESS for safety, even though we can't test partial reduction
-				t.Logf("SUCCESS: Memory reduction is SAFE - process survived with page migration")
-			} else {
-				t.Logf("✗ PHP stopped at 'Still alive %d' - may have been OOM killed", highestStillAlive)
-				t.Fatalf("PHP process stopped printing - may have been OOM killed")
-			}
+			// Reduced to 128MB but PHP survived
+			t.Logf("FINDING: Reduced to 128MB but PHP survived")
+			t.Logf("✓ virtio-mem used page migration to move 300MB into 128MB base region")
+			t.Logf("✓ This proves standby/resume is SAFE - no OOM killing occurs")
+			t.Logf("SUCCESS: Memory reduction is SAFE - process survived with page migration")
 		}
 	})
 }
@@ -459,5 +468,22 @@ func reduceMemoryWithPolling(ctx context.Context, client *vmm.VMM, targetBytes i
 
 	// Reuse the production polling logic!
 	return pollVMMemory(ctx, client, targetBytes, 5*time.Second)
+}
+
+// waitForLogMessage polls instance logs for a specific message
+func waitForLogMessage(ctx context.Context, manager Manager, instanceID string, message string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	const pollInterval = 200 * time.Millisecond // Check logs every 200ms
+
+	for time.Now().Before(deadline) {
+		logs, err := manager.GetInstanceLogs(ctx, instanceID, false, 50)
+		if err == nil && strings.Contains(logs, message) {
+			return nil // Found the message!
+		}
+
+		time.Sleep(pollInterval)
+	}
+
+	return fmt.Errorf("log message %q not found within %v", message, timeout)
 }
 
