@@ -1,8 +1,10 @@
 package instances
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -88,6 +90,35 @@ func (m *manager) generateConfigScript(inst *Instance, imageInfo *images.Image) 
 		envLines.WriteString(fmt.Sprintf("export %s=%s\n", key, shellQuote(value)))
 	}
 	
+	// Build network configuration section
+	networkSection := ""
+	if inst.Network != "" {
+		// Get allocation from network manager
+		alloc, err := m.networkManager.GetAllocation(context.Background(), inst.Id)
+		if err == nil && alloc != nil {
+			// Get network details for gateway and DNS
+			network, err := m.networkManager.GetNetwork(context.Background(), inst.Network)
+			if err == nil {
+				// Parse netmask from subnet
+				_, ipNet, err := net.ParseCIDR(network.Subnet)
+				// TODO @sjmiller609 review: why do we assume /24 from instance manager, seems questionable?
+				netmask := "255.255.255.0" // Default
+				if err == nil {
+					netmask = fmt.Sprintf("%d.%d.%d.%d",
+						ipNet.Mask[0], ipNet.Mask[1], ipNet.Mask[2], ipNet.Mask[3])
+				}
+
+				networkSection = fmt.Sprintf(`
+# Network configuration
+GUEST_IP="%s"
+GUEST_MASK="%s"
+GUEST_GW="%s"
+GUEST_DNS="%s"
+`, alloc.IP, netmask, network.Gateway, network.Gateway)
+			}
+		}
+	}
+	
 	// Generate script as a readable template block
 	script := fmt.Sprintf(`#!/bin/sh
 # Generated config for instance: %s
@@ -98,12 +129,13 @@ CMD="%s"
 WORKDIR=%s
 
 # Environment variables
-%s`, 
+%s%s`, 
 		inst.Id,
 		entrypoint,
 		cmd,
 		workdir,
 		envLines.String(),
+		networkSection,
 	)
 	
 	return script

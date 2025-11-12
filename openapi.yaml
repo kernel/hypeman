@@ -131,6 +131,11 @@ components:
           example:
             PORT: "3000"
             NODE_ENV: production
+        network:
+          type: string
+          description: Network to attach instance to (defaults to "default", use empty string for no network)
+          default: "default"
+          example: "default"
         # Future: volumes, port_mappings, timeout_seconds
     
     Instance:
@@ -172,6 +177,20 @@ components:
           additionalProperties:
             type: string
           description: Environment variables
+        network:
+          type: string
+          description: Network name the instance is attached to (empty string if no network)
+          example: "default"
+        ip:
+          type: string
+          description: Assigned IP address (null if no network)
+          example: "192.168.100.10"
+          nullable: true
+        mac:
+          type: string
+          description: Assigned MAC address (null if no network)
+          example: "02:00:00:ab:cd:ef"
+          nullable: true
         created_at:
           type: string
           format: date-time
@@ -330,6 +349,64 @@ components:
           description: Mount as read-only
           default: false
     
+    Network:
+      type: object
+      required: [name, subnet, gateway, bridge, isolated, default]
+      properties:
+        name:
+          type: string
+          description: Network name
+          example: "default"
+        subnet:
+          type: string
+          description: Subnet in CIDR notation
+          example: "192.168.100.0/24"
+        gateway:
+          type: string
+          description: Gateway IP address
+          example: "192.168.100.1"
+        bridge:
+          type: string
+          description: Bridge interface name
+          example: "vmbr0"
+        isolated:
+          type: boolean
+          description: Whether instances are isolated (bridge_slave mode)
+          example: true
+        dns_domain:
+          type: string
+          description: DNS domain for this network
+          example: "hypeman"
+        default:
+          type: boolean
+          description: Whether this is the default network
+          example: true
+        created_at:
+          type: string
+          format: date-time
+          description: Creation timestamp (RFC3339)
+          example: "2025-01-15T10:00:00Z"
+    
+    CreateNetworkRequest:
+      type: object
+      required: [name, subnet]
+      properties:
+        name:
+          type: string
+          description: Network name (lowercase letters, digits, and dashes only)
+          pattern: ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$
+          maxLength: 63
+          example: "internal"
+        subnet:
+          type: string
+          description: Subnet in CIDR notation
+          example: "192.168.101.0/24"
+        isolated:
+          type: boolean
+          description: Whether to enable bridge_slave isolation (prevents VM-to-VM communication)
+          default: true
+          example: true
+    
     Health:
       type: object
       required: [status]
@@ -351,6 +428,154 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Health"
+  
+  /networks:
+    get:
+      summary: List networks
+      operationId: listNetworks
+      security:
+        - bearerAuth: []
+      responses:
+        200:
+          description: List of networks
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Network"
+        401:
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      summary: Create network
+      operationId: createNetwork
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateNetworkRequest"
+      responses:
+        201:
+          description: Network created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Network"
+        400:
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        401:
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  
+  /networks/{name}:
+    get:
+      summary: Get network details
+      operationId: getNetwork
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+          example: "default"
+      responses:
+        200:
+          description: Network details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Network"
+        401:
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        404:
+          description: Network not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      summary: Delete network
+      operationId: deleteNetwork
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+          example: "internal"
+      responses:
+        204:
+          description: Network deleted
+        400:
+          description: Cannot delete default network
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        401:
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        404:
+          description: Network not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Network has active instances
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   
   /images:
     get:

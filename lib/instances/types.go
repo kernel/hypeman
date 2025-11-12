@@ -32,7 +32,8 @@ type StoredMetadata struct {
 	Vcpus       int
 
 	// Configuration
-	Env map[string]string
+	Env     map[string]string
+	Network string // Network name ("default", "internal", or "" for no network)
 
 	// Timestamps (stored for historical tracking)
 	CreatedAt time.Time
@@ -68,6 +69,7 @@ type CreateInstanceRequest struct {
 	OverlaySize int64             // Overlay disk size in bytes (default: 10GB)
 	Vcpus       int               // Default 2
 	Env         map[string]string // Optional environment variables
+	Network     *string           // Network to attach (nil = default, "" = no network, "name" = specific network)
 }
 
 // AttachVolumeRequest is the domain request for attaching a volume

@@ -60,6 +60,14 @@ func run() error {
 		"kernel", kernelVer,
 		"initrd", initrdVer)
 
+	// Initialize network manager (creates default network if needed)
+	logger.Info("Initializing network manager...")
+	if err := app.NetworkManager.Initialize(app.Ctx); err != nil {
+		logger.Error("failed to initialize network manager", "error", err)
+		return fmt.Errorf("initialize network manager: %w", err)
+	}
+	logger.Info("Network manager initialized")
+
 	// Create router
 	r := chi.NewRouter()
 

@@ -80,6 +80,9 @@ type CreateInstanceRequest struct {
 	// Name Human-readable name (lowercase letters, digits, and dashes only; cannot start or end with a dash)
 	Name string `json:"name"`
 
+	// Network Network to attach instance to (defaults to "default", use empty string for no network)
+	Network *string `json:"network,omitempty"`
+
 	// OverlaySize Writable overlay disk size (human-readable format like "10GB", "50G")
 	OverlaySize *string `json:"overlay_size,omitempty"`
 
@@ -88,6 +91,18 @@ type CreateInstanceRequest struct {
 
 	// Vcpus Number of virtual CPUs
 	Vcpus *int `json:"vcpus,omitempty"`
+}
+
+// CreateNetworkRequest defines model for CreateNetworkRequest.
+type CreateNetworkRequest struct {
+	// Isolated Whether to enable bridge_slave isolation (prevents VM-to-VM communication)
+	Isolated *bool `json:"isolated,omitempty"`
+
+	// Name Network name (lowercase letters, digits, and dashes only)
+	Name string `json:"name"`
+
+	// Subnet Subnet in CIDR notation
+	Subnet string `json:"subnet"`
 }
 
 // CreateVolumeRequest defines model for CreateVolumeRequest.
@@ -191,8 +206,17 @@ type Instance struct {
 	// Image OCI image reference
 	Image string `json:"image"`
 
+	// Ip Assigned IP address (null if no network)
+	Ip *string `json:"ip"`
+
+	// Mac Assigned MAC address (null if no network)
+	Mac *string `json:"mac"`
+
 	// Name Human-readable name
 	Name string `json:"name"`
+
+	// Network Network name the instance is attached to (empty string if no network)
+	Network *string `json:"network,omitempty"`
 
 	// OverlaySize Writable overlay disk size (human-readable)
 	OverlaySize *string `json:"overlay_size,omitempty"`
@@ -227,6 +251,33 @@ type Instance struct {
 // - Stopped: No VMM running, no snapshot exists
 // - Standby: No VMM running, snapshot exists (can be restored)
 type InstanceState string
+
+// Network defines model for Network.
+type Network struct {
+	// Bridge Bridge interface name
+	Bridge string `json:"bridge"`
+
+	// CreatedAt Creation timestamp (RFC3339)
+	CreatedAt *time.Time `json:"created_at,omitempty"`
+
+	// Default Whether this is the default network
+	Default bool `json:"default"`
+
+	// DnsDomain DNS domain for this network
+	DnsDomain *string `json:"dns_domain,omitempty"`
+
+	// Gateway Gateway IP address
+	Gateway string `json:"gateway"`
+
+	// Isolated Whether instances are isolated (bridge_slave mode)
+	Isolated bool `json:"isolated"`
+
+	// Name Network name
+	Name string `json:"name"`
+
+	// Subnet Subnet in CIDR notation
+	Subnet string `json:"subnet"`
+}
 
 // Volume defines model for Volume.
 type Volume struct {
@@ -266,6 +317,9 @@ type CreateInstanceJSONRequestBody = CreateInstanceRequest
 
 // AttachVolumeJSONRequestBody defines body for AttachVolume for application/json ContentType.
 type AttachVolumeJSONRequestBody = AttachVolumeRequest
+
+// CreateNetworkJSONRequestBody defines body for CreateNetwork for application/json ContentType.
+type CreateNetworkJSONRequestBody = CreateNetworkRequest
 
 // CreateVolumeJSONRequestBody defines body for CreateVolume for application/json ContentType.
 type CreateVolumeJSONRequestBody = CreateVolumeRequest
@@ -390,6 +444,20 @@ type ClientInterface interface {
 	AttachVolumeWithBody(ctx context.Context, id string, volumeId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	AttachVolume(ctx context.Context, id string, volumeId string, body AttachVolumeJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ListNetworks request
+	ListNetworks(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreateNetworkWithBody request with any body
+	CreateNetworkWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	CreateNetwork(ctx context.Context, body CreateNetworkJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// DeleteNetwork request
+	DeleteNetwork(ctx context.Context, name string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetNetwork request
+	GetNetwork(ctx context.Context, name string, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ListVolumes request
 	ListVolumes(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -600,6 +668,66 @@ func (c *Client) AttachVolumeWithBody(ctx context.Context, id string, volumeId s
 
 func (c *Client) AttachVolume(ctx context.Context, id string, volumeId string, body AttachVolumeJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewAttachVolumeRequest(c.Server, id, volumeId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ListNetworks(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListNetworksRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateNetworkWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateNetworkRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateNetwork(ctx context.Context, body CreateNetworkJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateNetworkRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) DeleteNetwork(ctx context.Context, name string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewDeleteNetworkRequest(c.Server, name)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetNetwork(ctx context.Context, name string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetNetworkRequest(c.Server, name)
 	if err != nil {
 		return nil, err
 	}
@@ -1202,6 +1330,141 @@ func NewAttachVolumeRequestWithBody(server string, id string, volumeId string, c
 	return req, nil
 }
 
+// NewListNetworksRequest generates requests for ListNetworks
+func NewListNetworksRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/networks")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewCreateNetworkRequest calls the generic CreateNetwork builder with application/json body
+func NewCreateNetworkRequest(server string, body CreateNetworkJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateNetworkRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewCreateNetworkRequestWithBody generates requests for CreateNetwork with any type of body
+func NewCreateNetworkRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/networks")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewDeleteNetworkRequest generates requests for DeleteNetwork
+func NewDeleteNetworkRequest(server string, name string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "name", runtime.ParamLocationPath, name)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/networks/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("DELETE", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewGetNetworkRequest generates requests for GetNetwork
+func NewGetNetworkRequest(server string, name string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "name", runtime.ParamLocationPath, name)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/networks/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewListVolumesRequest generates requests for ListVolumes
 func NewListVolumesRequest(server string) (*http.Request, error) {
 	var err error
@@ -1427,6 +1690,20 @@ type ClientWithResponsesInterface interface {
 	AttachVolumeWithBodyWithResponse(ctx context.Context, id string, volumeId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*AttachVolumeResponse, error)
 
 	AttachVolumeWithResponse(ctx context.Context, id string, volumeId string, body AttachVolumeJSONRequestBody, reqEditors ...RequestEditorFn) (*AttachVolumeResponse, error)
+
+	// ListNetworksWithResponse request
+	ListNetworksWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListNetworksResponse, error)
+
+	// CreateNetworkWithBodyWithResponse request with any body
+	CreateNetworkWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateNetworkResponse, error)
+
+	CreateNetworkWithResponse(ctx context.Context, body CreateNetworkJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateNetworkResponse, error)
+
+	// DeleteNetworkWithResponse request
+	DeleteNetworkWithResponse(ctx context.Context, name string, reqEditors ...RequestEditorFn) (*DeleteNetworkResponse, error)
+
+	// GetNetworkWithResponse request
+	GetNetworkWithResponse(ctx context.Context, name string, reqEditors ...RequestEditorFn) (*GetNetworkResponse, error)
 
 	// ListVolumesWithResponse request
 	ListVolumesWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListVolumesResponse, error)
@@ -1780,6 +2057,106 @@ func (r AttachVolumeResponse) StatusCode() int {
 	return 0
 }
 
+type ListNetworksResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *[]Network
+	JSON401      *Error
+	JSON500      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r ListNetworksResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListNetworksResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type CreateNetworkResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON201      *Network
+	JSON400      *Error
+	JSON401      *Error
+	JSON500      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r CreateNetworkResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateNetworkResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type DeleteNetworkResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON400      *Error
+	JSON401      *Error
+	JSON404      *Error
+	JSON409      *Error
+	JSON500      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r DeleteNetworkResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r DeleteNetworkResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type GetNetworkResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *Network
+	JSON401      *Error
+	JSON404      *Error
+	JSON500      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r GetNetworkResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetNetworkResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
 type ListVolumesResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -2025,6 +2402,50 @@ func (c *ClientWithResponses) AttachVolumeWithResponse(ctx context.Context, id s
 		return nil, err
 	}
 	return ParseAttachVolumeResponse(rsp)
+}
+
+// ListNetworksWithResponse request returning *ListNetworksResponse
+func (c *ClientWithResponses) ListNetworksWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListNetworksResponse, error) {
+	rsp, err := c.ListNetworks(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListNetworksResponse(rsp)
+}
+
+// CreateNetworkWithBodyWithResponse request with arbitrary body returning *CreateNetworkResponse
+func (c *ClientWithResponses) CreateNetworkWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateNetworkResponse, error) {
+	rsp, err := c.CreateNetworkWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateNetworkResponse(rsp)
+}
+
+func (c *ClientWithResponses) CreateNetworkWithResponse(ctx context.Context, body CreateNetworkJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateNetworkResponse, error) {
+	rsp, err := c.CreateNetwork(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateNetworkResponse(rsp)
+}
+
+// DeleteNetworkWithResponse request returning *DeleteNetworkResponse
+func (c *ClientWithResponses) DeleteNetworkWithResponse(ctx context.Context, name string, reqEditors ...RequestEditorFn) (*DeleteNetworkResponse, error) {
+	rsp, err := c.DeleteNetwork(ctx, name, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseDeleteNetworkResponse(rsp)
+}
+
+// GetNetworkWithResponse request returning *GetNetworkResponse
+func (c *ClientWithResponses) GetNetworkWithResponse(ctx context.Context, name string, reqEditors ...RequestEditorFn) (*GetNetworkResponse, error) {
+	rsp, err := c.GetNetwork(ctx, name, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetNetworkResponse(rsp)
 }
 
 // ListVolumesWithResponse request returning *ListVolumesResponse
@@ -2638,6 +3059,194 @@ func ParseAttachVolumeResponse(rsp *http.Response) (*AttachVolumeResponse, error
 	return response, nil
 }
 
+// ParseListNetworksResponse parses an HTTP response from a ListNetworksWithResponse call
+func ParseListNetworksResponse(rsp *http.Response) (*ListNetworksResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListNetworksResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest []Network
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCreateNetworkResponse parses an HTTP response from a CreateNetworkWithResponse call
+func ParseCreateNetworkResponse(rsp *http.Response) (*CreateNetworkResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateNetworkResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest Network
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON201 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseDeleteNetworkResponse parses an HTTP response from a DeleteNetworkWithResponse call
+func ParseDeleteNetworkResponse(rsp *http.Response) (*DeleteNetworkResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &DeleteNetworkResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetNetworkResponse parses an HTTP response from a GetNetworkWithResponse call
+func ParseGetNetworkResponse(rsp *http.Response) (*GetNetworkResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetNetworkResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest Network
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseListVolumesResponse parses an HTTP response from a ListVolumesWithResponse call
 func ParseListVolumesResponse(rsp *http.Response) (*ListVolumesResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -2849,6 +3458,18 @@ type ServerInterface interface {
 	// Attach volume to instance
 	// (POST /instances/{id}/volumes/{volumeId})
 	AttachVolume(w http.ResponseWriter, r *http.Request, id string, volumeId string)
+	// List networks
+	// (GET /networks)
+	ListNetworks(w http.ResponseWriter, r *http.Request)
+	// Create network
+	// (POST /networks)
+	CreateNetwork(w http.ResponseWriter, r *http.Request)
+	// Delete network
+	// (DELETE /networks/{name})
+	DeleteNetwork(w http.ResponseWriter, r *http.Request, name string)
+	// Get network details
+	// (GET /networks/{name})
+	GetNetwork(w http.ResponseWriter, r *http.Request, name string)
 	// List volumes
 	// (GET /volumes)
 	ListVolumes(w http.ResponseWriter, r *http.Request)
@@ -2948,6 +3569,30 @@ func (_ Unimplemented) DetachVolume(w http.ResponseWriter, r *http.Request, id s
 // Attach volume to instance
 // (POST /instances/{id}/volumes/{volumeId})
 func (_ Unimplemented) AttachVolume(w http.ResponseWriter, r *http.Request, id string, volumeId string) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// List networks
+// (GET /networks)
+func (_ Unimplemented) ListNetworks(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Create network
+// (POST /networks)
+func (_ Unimplemented) CreateNetwork(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Delete network
+// (DELETE /networks/{name})
+func (_ Unimplemented) DeleteNetwork(w http.ResponseWriter, r *http.Request, name string) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Get network details
+// (GET /networks/{name})
+func (_ Unimplemented) GetNetwork(w http.ResponseWriter, r *http.Request, name string) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -3394,6 +4039,108 @@ func (siw *ServerInterfaceWrapper) AttachVolume(w http.ResponseWriter, r *http.R
 	handler.ServeHTTP(w, r)
 }
 
+// ListNetworks operation middleware
+func (siw *ServerInterfaceWrapper) ListNetworks(w http.ResponseWriter, r *http.Request) {
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListNetworks(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateNetwork operation middleware
+func (siw *ServerInterfaceWrapper) CreateNetwork(w http.ResponseWriter, r *http.Request) {
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateNetwork(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteNetwork operation middleware
+func (siw *ServerInterfaceWrapper) DeleteNetwork(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "name" -------------
+	var name string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "name", chi.URLParam(r, "name"), &name, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "name", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteNetwork(w, r, name)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetNetwork operation middleware
+func (siw *ServerInterfaceWrapper) GetNetwork(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "name" -------------
+	var name string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "name", chi.URLParam(r, "name"), &name, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "name", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetNetwork(w, r, name)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ListVolumes operation middleware
 func (siw *ServerInterfaceWrapper) ListVolumes(w http.ResponseWriter, r *http.Request) {
 
@@ -3650,6 +4397,18 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	})
 	r.Group(func(r chi.Router) {
 		r.Post(options.BaseURL+"/instances/{id}/volumes/{volumeId}", wrapper.AttachVolume)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/networks", wrapper.ListNetworks)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/networks", wrapper.CreateNetwork)
+	})
+	r.Group(func(r chi.Router) {
+		r.Delete(options.BaseURL+"/networks/{name}", wrapper.DeleteNetwork)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/networks/{name}", wrapper.GetNetwork)
 	})
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/volumes", wrapper.ListVolumes)
@@ -4212,6 +4971,189 @@ func (response AttachVolume500JSONResponse) VisitAttachVolumeResponse(w http.Res
 	return json.NewEncoder(w).Encode(response)
 }
 
+type ListNetworksRequestObject struct {
+}
+
+type ListNetworksResponseObject interface {
+	VisitListNetworksResponse(w http.ResponseWriter) error
+}
+
+type ListNetworks200JSONResponse []Network
+
+func (response ListNetworks200JSONResponse) VisitListNetworksResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListNetworks401JSONResponse Error
+
+func (response ListNetworks401JSONResponse) VisitListNetworksResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListNetworks500JSONResponse Error
+
+func (response ListNetworks500JSONResponse) VisitListNetworksResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateNetworkRequestObject struct {
+	Body *CreateNetworkJSONRequestBody
+}
+
+type CreateNetworkResponseObject interface {
+	VisitCreateNetworkResponse(w http.ResponseWriter) error
+}
+
+type CreateNetwork201JSONResponse Network
+
+func (response CreateNetwork201JSONResponse) VisitCreateNetworkResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateNetwork400JSONResponse Error
+
+func (response CreateNetwork400JSONResponse) VisitCreateNetworkResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateNetwork401JSONResponse Error
+
+func (response CreateNetwork401JSONResponse) VisitCreateNetworkResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateNetwork500JSONResponse Error
+
+func (response CreateNetwork500JSONResponse) VisitCreateNetworkResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteNetworkRequestObject struct {
+	Name string `json:"name"`
+}
+
+type DeleteNetworkResponseObject interface {
+	VisitDeleteNetworkResponse(w http.ResponseWriter) error
+}
+
+type DeleteNetwork204Response struct {
+}
+
+func (response DeleteNetwork204Response) VisitDeleteNetworkResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeleteNetwork400JSONResponse Error
+
+func (response DeleteNetwork400JSONResponse) VisitDeleteNetworkResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteNetwork401JSONResponse Error
+
+func (response DeleteNetwork401JSONResponse) VisitDeleteNetworkResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteNetwork404JSONResponse Error
+
+func (response DeleteNetwork404JSONResponse) VisitDeleteNetworkResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteNetwork409JSONResponse Error
+
+func (response DeleteNetwork409JSONResponse) VisitDeleteNetworkResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteNetwork500JSONResponse Error
+
+func (response DeleteNetwork500JSONResponse) VisitDeleteNetworkResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetNetworkRequestObject struct {
+	Name string `json:"name"`
+}
+
+type GetNetworkResponseObject interface {
+	VisitGetNetworkResponse(w http.ResponseWriter) error
+}
+
+type GetNetwork200JSONResponse Network
+
+func (response GetNetwork200JSONResponse) VisitGetNetworkResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetNetwork401JSONResponse Error
+
+func (response GetNetwork401JSONResponse) VisitGetNetworkResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetNetwork404JSONResponse Error
+
+func (response GetNetwork404JSONResponse) VisitGetNetworkResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetNetwork500JSONResponse Error
+
+func (response GetNetwork500JSONResponse) VisitGetNetworkResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
 type ListVolumesRequestObject struct {
 }
 
@@ -4412,6 +5354,18 @@ type StrictServerInterface interface {
 	// Attach volume to instance
 	// (POST /instances/{id}/volumes/{volumeId})
 	AttachVolume(ctx context.Context, request AttachVolumeRequestObject) (AttachVolumeResponseObject, error)
+	// List networks
+	// (GET /networks)
+	ListNetworks(ctx context.Context, request ListNetworksRequestObject) (ListNetworksResponseObject, error)
+	// Create network
+	// (POST /networks)
+	CreateNetwork(ctx context.Context, request CreateNetworkRequestObject) (CreateNetworkResponseObject, error)
+	// Delete network
+	// (DELETE /networks/{name})
+	DeleteNetwork(ctx context.Context, request DeleteNetworkRequestObject) (DeleteNetworkResponseObject, error)
+	// Get network details
+	// (GET /networks/{name})
+	GetNetwork(ctx context.Context, request GetNetworkRequestObject) (GetNetworkResponseObject, error)
 	// List volumes
 	// (GET /volumes)
 	ListVolumes(ctx context.Context, request ListVolumesRequestObject) (ListVolumesResponseObject, error)
@@ -4833,6 +5787,113 @@ func (sh *strictHandler) AttachVolume(w http.ResponseWriter, r *http.Request, id
 	}
 }
 
+// ListNetworks operation middleware
+func (sh *strictHandler) ListNetworks(w http.ResponseWriter, r *http.Request) {
+	var request ListNetworksRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListNetworks(ctx, request.(ListNetworksRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListNetworks")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListNetworksResponseObject); ok {
+		if err := validResponse.VisitListNetworksResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateNetwork operation middleware
+func (sh *strictHandler) CreateNetwork(w http.ResponseWriter, r *http.Request) {
+	var request CreateNetworkRequestObject
+
+	var body CreateNetworkJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateNetwork(ctx, request.(CreateNetworkRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateNetwork")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateNetworkResponseObject); ok {
+		if err := validResponse.VisitCreateNetworkResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeleteNetwork operation middleware
+func (sh *strictHandler) DeleteNetwork(w http.ResponseWriter, r *http.Request, name string) {
+	var request DeleteNetworkRequestObject
+
+	request.Name = name
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteNetwork(ctx, request.(DeleteNetworkRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteNetwork")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteNetworkResponseObject); ok {
+		if err := validResponse.VisitDeleteNetworkResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetNetwork operation middleware
+func (sh *strictHandler) GetNetwork(w http.ResponseWriter, r *http.Request, name string) {
+	var request GetNetworkRequestObject
+
+	request.Name = name
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetNetwork(ctx, request.(GetNetworkRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetNetwork")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetNetworkResponseObject); ok {
+		if err := validResponse.VisitGetNetworkResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // ListVolumes operation middleware
 func (sh *strictHandler) ListVolumes(w http.ResponseWriter, r *http.Request) {
 	var request ListVolumesRequestObject
@@ -4943,58 +6004,67 @@ func (sh *strictHandler) GetVolume(w http.ResponseWriter, r *http.Request, id st
 // Base64 encoded, gzipped, json marshaled Swagger object
 var swaggerSpec = []string{
 
-	"H4sIAAAAAAAC/+xb+08bubf/VyzfXYneOyEPoLdkf6LQB1JpEWxZ6ba9yBmfJF489tT2BFLE//6VHzOZ",
-	"yUwebCFbdishkczYPu9zPj52bnEsk1QKEEbj/i3W8RgS4j4eGEPi8YXkWQJn8DUDbezjVMkUlGHgBiUy",
-	"E+YyJWZsv1HQsWKpYVLgPj4lZoyux6AATdwqSI9lxikaAHLzgOIIww1JUg64j9uJMG1KDMERNtPUPtJG",
-	"MTHCdxFWQKgUfOrJDEnGDe4PCdcQzZE9sUsjopGd0nJzivUGUnIgAt+5Fb9mTAHF/U9lMb4Ug+XgT4iN",
-	"JX6ogBg4TshosSYESaCugw+Hx4jZeUjBEBSIGNAWbI+2I0RlfAVqm8k2ZwNF1LQtRkzc9DkxoM2zimqW",
-	"j63ra048x9sSwYQ2RMSLZQMxsf8IpczKRfhp5XXNWFUdvBITpqRIQBg0IYqRAQddFu8Wv/9w9Ory1fsL",
-	"3LeUaRa7qRE+/XD2O+7jnU6nY9et8T+WJuXZ6FKzb1DxDLzz5iWeZ+Sg4B8lkEg1RUOpUFgDbY2zhIiW",
-	"9RrLoX2XEIM4uwL02a73GUfoM+6++Yyrxuk5UjUlOLOv5RErTE14ygQstHW0wPXeVsWxg9AWl9egYqIB",
-	"cTAGlI4QZSNmdISIoIgSPQaNbND8hmIihDRIG6IMkgqBoOiamTEibtxvSEgUS6EhzgybQJhc1U0ybV1L",
-	"dcUloa0ujnBCbt6BGNl08XwnwimxTFhu//8TaX3rtPa//M9Wq/j47L9/aZJXTkBxMm2werfTYPY/FDNO",
-	"BWEeokxfITt5hc3tat7oe5261TvNZm9gqoGnl9YEwQnX4aRgpNs7CR976zriJE4zXWGpN8/O+ywZgEJy",
-	"iCZMmYxwdHj6sRKjvWJhJgyMQDUnmdztFyebFQWF0YaQSUPUxpk2MkGMgjBsyEChLZIZ2RqBAEUMUMSG",
-	"yPpsquSEUaBV/Uwkb9n64jxxzSjy7KIgXMWx3VK+si1yhMvRoL7kubU3E2jERmQwNdVc2O2sq+h8/SZV",
-	"v1JKqrpyY0kbRDxIU85iYr+1dAoxG7IYgV0B2QloKyHxmAkonLOq1QGhlyqYM2qqBYYwrhvIzrKxJxZG",
-	"oi2blZOMG5Zy8O9cVmEGErfOLwqGuI//qz3DLu0AXNpO8iO3UqliEKXI1CVlIUBdQq6ee6yUgNaNCX0u",
-	"z+ayFENckaEwyEYjq5Ky6k6Y1kyMUG5dNGTAad/Xh5VV3VlzxthCPwgyrOkN72yFaHGYAC87gY8oy2wi",
-	"FaDCT7zRKlIxMSGc0Usm0qzRJRaq8nWmzBhyT0BkIDODzDgotULEgTEX60OZCdqorJo63gLhHqlWNaEN",
-	"MVlAOllidSuvrD5n5OTVSnOERZrMcJxDgTkDJA3J7vDkCA2VTGxpNYQJUCgBQwIuLjj6hB0CxBFuWZ+i",
-	"BBIpkBwOf7McFKFSz3IZ59ZPcd+oDOoBErskTS+JaWDNvrMebVgC2pAkRVtnrw93dnb252tjb6/V6ba6",
-	"e793O/2O/fs/HGFf0yzGIQZadpHGhMFGoTJUqZ+BlnwCFCVEsCFog8LIMmU9Jr29530yiLu9HQrD3b3n",
-	"29vbTWRAGDVNJRMNpF4V79YzRduDttZszW09/j47PALkXkeWW3x68PtbuxnLtGpzGRPe1gMm+qXvxdfZ",
-	"C/fBfx0w0QjVi5w7x6lLMSEj2PLtwwgxjYaE8bktYppxHp73rSQC4sIhpUs2C/S6qsy/t67J2TegqHHL",
-	"ZsjIQmDvcd+3N4vw1wwyuEylZp56beMc3liQMMgYp8jNQFtWuBziuEdVgNNbKH4BJQJs8LCjRvioAMaW",
-	"sh0TaGbCMO421NMKxb2d5y/+t7Pf7ZWCmwnzfBevxUqRdufAsZM5vI2KnJyCoL6CWjfwn2IpJjYq3BfH",
-	"n80z3nEqCTx/VzOG3Z4wMbqkrME7//AvEWUKYuN2jKtjCLdJmq52xWZUV+S0QvxSRm6sLWHz3lBeHj6V",
-	"79wvlT9O36DeBSD6UguS6rFsEPWPMThQQVA+BsEN00Y7YGbGTCOW67AkeegtzTeOmnoOFTQYuglL9nbr",
-	"dQ8aoMFBda+TCfY1g8pu6PDj8VEv7B2rZMy3XbL/4uaGmP3n7Frvf0sGavTnDnkinYulTYU1GgR/rR9Q",
-	"VWF35Y7/Pjv8tbzA9V4WhPC568vcP373FsbvytppcxKs2jflCencDXazZJouFEKm95KhtyIHrZSh1A15",
-	"6A4Is2Cl0gbJVbZ2Fj/PNVzlLn/tiiL0P4sW8t0U2kcXJycorI4GmUFFzw4o2jrkMqPo7TQFNWFaKiSI",
-	"YRN4Zlc4y4RgYmRXsHCLxPYNnyLlny+ffEoy7anbuan7tnzG+TgzVF4LN0ePM4PsN8eyFSHk5OVLeE/q",
-	"o/fSzQmcRkjI+eTuhxNBB9P68PlCsBUTgQY2r2kjFdBnn0UJdwRN4wgHjeEIe/FxhHOp7EfPnfvkCJcs",
-	"PfM/31CqV2vijluAXhq5xP7HRxb/5WPntt3atPzGZ504eGh00Nm/70avqcR9nK9p92jgLTuL8odC9t1C",
-	"/ZWPn/7iLuIHbBaWc1JOZEU2suxAnClmpuc2p3v/HABRoA4yr12X7B0wco9nIo2NSfHdnWu1DRs8+Y2F",
-	"LyxGB6fHDn8lRJCRzTYXJ4izIcTTmAPKXFuslgrc6cOHw+PWgNh0k4MABwqZcaq2oxMi7Po4whNQ2tPt",
-	"bHe33RmSTEGQlOE+3nGP3CHE2InYHhf9oRG4sLAB6iLhmDreTeggWR3rVArtddPrdHxDTRjw/QQy66m2",
-	"/9R+k+cL5KryGSg4Fc65glVDDDbfekan3lZZkhA1tbK7pygeQ3zlXrVdFdILBXrHtDn2Q75TorV6s74N",
-	"VuvK1iW1fNlSHNi/i/Bup/tgGvbN8QayHwXJzFgq9g2oJbr3gGZdSPRYGFCCcKRBTUCFVmc5CHH/UzX8",
-	"Pn25+1K2u1PXTFep1A22Lp1hY58iQJuXkk4fTMSGU/K7ajqyyfSu5mm9B+MgOFiDkt22ZZD3FTw2Inoq",
-	"4mfeuzZg6JeEovyc5O/y6N3O7gY8eq41/4Qi6TTj3B2Eh77SrBlYzqftW1tQ73xx4+ABezXajtzzPNpS",
-	"okgCBpR2HMzZ6OxdC0QsKdCwvc63EPatgzM53sgLeTWiopLi5ntMX2rRttuALh1VL8pPN1nDTbx1c8eI",
-	"FqKF77C/vyU0uyT0a+916Kr82nvt+yq/7hzM7go9jrN0NpWa81Pin8630vneQCj2M6W51BS2iCvQXjFq",
-	"I4Av76veB/MVHP6EfevAvrK6liK/WY/7EcHf3E3CtfDfw5l45m9NCg8tlLD3/Vfhvqfi0t6LHALz1w7Z",
-	"zKLlHNe+ZXQd/DXz+bkS3FAuXafkoZFV7nQbB1c54SdZ4typgLuPGoBWqY4sxFobtXVnszlr4/DoSbuP",
-	"Q0g11dUTSJvLkV7W7cvV8M6OewS/imoX4CTn8hpZvtCWNgpI4pue5+evCpT/NQM1ndEcujm4TGf+BxL1",
-	"Xz8sPv7iTIBGRiIFJlPCX3gAd8OuiXq4/ddAu9tp6k6vDiUDN6YNExCm5TVQdaqGa352QsoJE8tH1iGn",
-	"HKFA4mdgrZeXnUcWseX91PlmU3iF4zR31tWITM/8gH906s7PFP9mF9vt7D8+6UMphpzFBrVmPmK5YMLC",
-	"OUEHUyRV+bD2KTl/cNaZZC4zBrka/T9/t9D/wznxP9r/Z7b/l0dALJWC2PgrHE+rKV6CU6VQ3nK3Pma3",
-	"KaIcrl+cnDQXBH/+rdu3/sPxqj3c7Aeoj4S+GhbJWXsSURYuHFAI9xk2HmFS5b/tfaKNfKu4XASX0Mt7",
-	"zeasXf5h9FPwy4dv9jX9NHytVt9Go6K45fOjRMWmK1DggXB3+b2ij6cSoN7TckmMnGsIhoKy9MjjIozZ",
-	"xIFHSAr3OO7IJfjZGV7jsKOkrGVHHUVqfryDjr+Q+x7OuLmXLcx8P484fvgjjkluw1kWW/NQ4/GAx1pH",
-	"GgXk3OyBxsWPU0+ZfpKlNFxamRQlalHXe5MO1tlcUtz0GcrFE94XvYG82JbOT9wCdsWmW0zvZEw4ojAB",
-	"LlP3kz0/Fkc4UzxcDO+3/U+Ix1Kb/ovOiw6++3L3nwAAAP//Q9I2d4NKAAA=",
+	"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",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file

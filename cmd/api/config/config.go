@@ -13,6 +13,7 @@ type Config struct {
 	BridgeName          string
 	SubnetCIDR          string
 	SubnetGateway       string
+	UplinkInterface     string
 	JwtSecret           string
 	DNSServer           string
 	MaxConcurrentBuilds int
@@ -31,6 +32,7 @@ func Load() *Config {
 		BridgeName:          getEnv("BRIDGE_NAME", "vmbr0"),
 		SubnetCIDR:          getEnv("SUBNET_CIDR", "192.168.100.0/24"),
 		SubnetGateway:       getEnv("SUBNET_GATEWAY", "192.168.100.1"),
+		UplinkInterface:     getEnv("UPLINK_INTERFACE", "eth0"),
 		JwtSecret:           getEnv("JWT_SECRET", ""),
 		DNSServer:           getEnv("DNS_SERVER", "1.1.1.1"),
 		MaxConcurrentBuilds: getEnvInt("MAX_CONCURRENT_BUILDS", 1),

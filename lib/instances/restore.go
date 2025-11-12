@@ -45,33 +45,55 @@ func (m *manager) restoreInstance(
 	// 3. Get snapshot directory
 	snapshotDir := m.paths.InstanceSnapshotLatest(id)
 
-	// 4. Transition: Standby → Paused (start VMM + restore)
+	// 4. Recreate TAP device if network configured
+	if stored.Network != "" {
+		log.DebugContext(ctx, "recreating network for restore", "id", id, "network", stored.Network)
+		if err := m.networkManager.RecreateNetwork(ctx, id); err != nil {
+			log.ErrorContext(ctx, "failed to recreate network", "id", id, "error", err)
+			return nil, fmt.Errorf("recreate network: %w", err)
+		}
+	}
+
+	// 5. Transition: Standby → Paused (start VMM + restore)
 	log.DebugContext(ctx, "restoring from snapshot", "id", id, "snapshot_dir", snapshotDir)
 	if err := m.restoreFromSnapshot(ctx, stored, snapshotDir); err != nil {
 		log.ErrorContext(ctx, "failed to restore from snapshot", "id", id, "error", err)
+		// Cleanup network on failure
+		if stored.Network != "" {
+			m.networkManager.ReleaseNetwork(ctx, id)
+		}
 		return nil, err
 	}
 
-	// 5. Create client for resumed VM
+	// 6. Create client for resumed VM
 	client, err := vmm.NewVMM(stored.SocketPath)
 	if err != nil {
 		log.ErrorContext(ctx, "failed to create VMM client", "id", id, "error", err)
+		// Cleanup network on failure
+		// TODO @sjmiller609 review: seeing lots of places where we clean up the network, but what does this mean, why not automatically do it if instance is disappeared?
+		if stored.Network != "" {
+			m.networkManager.ReleaseNetwork(ctx, id)
+		}
 		return nil, fmt.Errorf("create vmm client: %w", err)
 	}
 
-	// 6. Transition: Paused → Running (resume)
+	// 7. Transition: Paused → Running (resume)
 	log.DebugContext(ctx, "resuming VM", "id", id)
 	resumeResp, err := client.ResumeVMWithResponse(ctx)
 	if err != nil || resumeResp.StatusCode() != 204 {
 		log.ErrorContext(ctx, "failed to resume VM", "id", id, "error", err)
+		// Cleanup network on failure
+		if stored.Network != "" {
+			m.networkManager.ReleaseNetwork(ctx, id)
+		}
 		return nil, fmt.Errorf("resume vm failed: %w", err)
 	}
 
-	// 7. Delete snapshot after successful restore
+	// 8. Delete snapshot after successful restore
 	log.DebugContext(ctx, "deleting snapshot after successful restore", "id", id)
 	os.RemoveAll(snapshotDir) // Best effort, ignore errors
 
-	// 8. Update timestamp
+	// 9. Update timestamp
 	now := time.Now()
 	stored.StartedAt = &now
 

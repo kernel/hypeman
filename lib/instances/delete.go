@@ -38,7 +38,16 @@ func (m *manager) deleteInstance(
 		}
 	}
 
-	// 3. Delete all instance data
+	// 3. Release network allocation
+	if inst.Network != "" {
+		log.DebugContext(ctx, "releasing network", "id", id, "network", inst.Network)
+		if err := m.networkManager.ReleaseNetwork(ctx, id); err != nil {
+			// Log error but continue with cleanup
+			log.WarnContext(ctx, "failed to release network, continuing with cleanup", "id", id, "error", err)
+		}
+	}
+
+	// 4. Delete all instance data
 	log.DebugContext(ctx, "deleting instance data", "id", id)
 	if err := m.deleteInstanceData(id); err != nil {
 		log.ErrorContext(ctx, "failed to delete instance data", "id", id, "error", err)

@@ -20,6 +20,20 @@ sudo usermod -aG kvm $USER
 # Log out and back in, or use: newgrp kvm
 ```
 
+**Network Capabilities:** The hypeman binary needs network administration capabilities to create bridges and TAP devices:
+```bash
+# After building, grant network capabilities
+sudo setcap 'cap_net_admin,cap_net_bind_service=+ep' /path/to/hypeman
+
+# For development builds
+sudo setcap 'cap_net_admin,cap_net_bind_service=+ep' ./bin/hypeman
+
+# Verify capabilities
+getcap ./bin/hypeman
+```
+
+**Note:** These capabilities must be reapplied after each rebuild. For production deployments, set capabilities on the installed binary.
+
 ### Configuration
 
 #### Environment variables

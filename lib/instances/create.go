@@ -3,12 +3,14 @@ package instances
 import (
 	"context"
 	"fmt"
+	"net"
 	"regexp"
 	"time"
 
 	"github.com/nrednav/cuid2"
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/logger"
+	"github.com/onkernel/hypeman/lib/network"
 	"github.com/onkernel/hypeman/lib/system"
 	"github.com/onkernel/hypeman/lib/vmm"
 )
@@ -78,10 +80,16 @@ func (m *manager) createInstance(
 		req.Env = make(map[string]string)
 	}
 
-	// 6. Get default system versions
+	// 6. Determine network (default to "default" unless specified)
+	networkName := "default"
+	if req.Network != nil {
+		networkName = *req.Network // Use specified (can be "" for no network)
+	}
+
+	// 7. Get default system versions
 	kernelVer, initrdVer := m.systemManager.GetDefaultVersions()
 
-	// 7. Create instance metadata
+	// 8. Create instance metadata
 	stored := &StoredMetadata{
 		Id:            id,
 		Name:          req.Name,
@@ -91,6 +99,7 @@ func (m *manager) createInstance(
 		OverlaySize:   overlaySize,
 		Vcpus:         vcpus,
 		Env:           req.Env,
+		Network:       networkName,
 		CreatedAt:     time.Now(),
 		StartedAt:     nil,
 		StoppedAt:     nil,
@@ -116,33 +125,61 @@ func (m *manager) createInstance(
 		return nil, fmt.Errorf("create overlay disk: %w", err)
 	}
 
-	// 10. Create config disk (needs Instance for buildVMConfig)
+	// 10. Allocate network (if network specified)
+	if networkName != "" {
+		log.DebugContext(ctx, "allocating network", "id", id, "network", networkName)
+		_, err := m.networkManager.AllocateNetwork(ctx, network.AllocateRequest{
+			InstanceID:   id,
+			InstanceName: req.Name,
+			Network:      networkName,
+		})
+		if err != nil {
+			log.ErrorContext(ctx, "failed to allocate network", "id", id, "network", networkName, "error", err)
+			m.deleteInstanceData(id) // Cleanup
+			return nil, fmt.Errorf("allocate network: %w", err)
+		}
+	}
+
+	// 11. Create config disk (needs Instance for buildVMConfig)
 	inst := &Instance{StoredMetadata: *stored}
 	log.DebugContext(ctx, "creating config disk", "id", id)
 	if err := m.createConfigDisk(inst, imageInfo); err != nil {
 		log.ErrorContext(ctx, "failed to create config disk", "id", id, "error", err)
+		// Cleanup network allocation
+		// TODO @sjmiller609 review: what does it mean to release the network and is this handled automatically in case of unexpected scenarios like power loss?
+		if networkName != "" {
+			m.networkManager.ReleaseNetwork(ctx, id)
+		}
 		m.deleteInstanceData(id) // Cleanup
 		return nil, fmt.Errorf("create config disk: %w", err)
 	}
 
-	// 11. Save metadata
+	// 12. Save metadata
 	log.DebugContext(ctx, "saving instance metadata", "id", id)
 	meta := &metadata{StoredMetadata: *stored}
 	if err := m.saveMetadata(meta); err != nil {
 		log.ErrorContext(ctx, "failed to save metadata", "id", id, "error", err)
+		// Cleanup network allocation
+		if networkName != "" {
+			m.networkManager.ReleaseNetwork(ctx, id)
+		}
 		m.deleteInstanceData(id) // Cleanup
 		return nil, fmt.Errorf("save metadata: %w", err)
 	}
 
-	// 12. Start VMM and boot VM
+	// 13. Start VMM and boot VM
 	log.InfoContext(ctx, "starting VMM and booting VM", "id", id)
 	if err := m.startAndBootVM(ctx, stored, imageInfo); err != nil {
 		log.ErrorContext(ctx, "failed to start and boot VM", "id", id, "error", err)
+		// Cleanup network allocation
+		if networkName != "" {
+			m.networkManager.ReleaseNetwork(ctx, id)
+		}
 		m.deleteInstanceData(id) // Cleanup
 		return nil, err
 	}
 
-	// 13. Update timestamp after VM is running
+	// 14. Update timestamp after VM is running
 	now := time.Now()
 	stored.StartedAt = &now
 
@@ -335,6 +372,32 @@ func (m *manager) buildVMConfig(inst *Instance, imageInfo *images.Image) (vmm.Vm
 		Mode: vmm.ConsoleConfigMode("Off"),
 	}
 
+	// Network configuration (optional)
+	var nets *[]vmm.NetConfig
+	if inst.Network != "" {
+		// Get allocation from network manager
+		alloc, err := m.networkManager.GetAllocation(context.Background(), inst.Id)
+		if err == nil && alloc != nil {
+			// Parse subnet to get netmask
+			// TODO @sjmiller609 review: why do we assume /24 from instance manager, seems questionable?
+			netmask := "255.255.255.0" // Default /24
+			if network, err := m.networkManager.GetNetwork(context.Background(), inst.Network); err == nil {
+				_, ipNet, err := net.ParseCIDR(network.Subnet)
+				if err == nil {
+					netmask = fmt.Sprintf("%d.%d.%d.%d",
+						ipNet.Mask[0], ipNet.Mask[1], ipNet.Mask[2], ipNet.Mask[3])
+				}
+			}
+
+			nets = &[]vmm.NetConfig{{
+				Tap:  &alloc.TAPDevice,
+				Ip:   &alloc.IP,
+				Mac:  &alloc.MAC,
+				Mask: &netmask,
+			}}
+		}
+	}
+
 	return vmm.VmConfig{
 		Payload: payload,
 		Cpus:    &cpus,
@@ -342,6 +405,7 @@ func (m *manager) buildVMConfig(inst *Instance, imageInfo *images.Image) (vmm.Vm
 		Disks:   &disks,
 		Serial:  &serial,
 		Console: &console,
+		Net:     nets,
 	}, nil
 }
 

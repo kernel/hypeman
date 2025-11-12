@@ -94,6 +94,7 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		OverlaySize: overlaySize,
 		Vcpus:       vcpus,
 		Env:         env,
+		Network:     request.Body.Network,
 	}
 
 	inst, err := s.InstanceManager.CreateInstance(ctx, domainReq)
@@ -291,6 +292,7 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 		HotplugSize: &hotplugSizeStr,
 		OverlaySize: &overlaySizeStr,
 		Vcpus:       &inst.Vcpus,
+		Network:     &inst.Network,
 		CreatedAt:   inst.CreatedAt,
 		StartedAt:   inst.StartedAt,
 		StoppedAt:   inst.StoppedAt,

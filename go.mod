@@ -20,6 +20,7 @@ require (
 	github.com/opencontainers/umoci v0.6.0
 	github.com/stretchr/testify v1.11.1
 	github.com/u-root/u-root v0.15.0
+	github.com/vishvananda/netlink v1.3.1
 	golang.org/x/sync v0.17.0
 )
 
@@ -61,6 +62,7 @@ require (
 	github.com/u-root/uio v0.0.0-20240224005618-d2acac8f3701 // indirect
 	github.com/vbatts/go-mtree v0.6.1-0.20250911112631-8307d76bc1b9 // indirect
 	github.com/vbatts/tar-split v0.12.1 // indirect
+	github.com/vishvananda/netns v0.0.5 // indirect
 	github.com/woodsbury/decimal128 v1.3.0 // indirect
 	golang.org/x/crypto v0.41.0 // indirect
 	golang.org/x/sys v0.37.0 // indirect

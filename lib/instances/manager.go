@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/onkernel/hypeman/lib/images"
+	"github.com/onkernel/hypeman/lib/network"
 	"github.com/onkernel/hypeman/lib/paths"
 	"github.com/onkernel/hypeman/lib/system"
 )
@@ -26,17 +27,19 @@ type manager struct {
 	paths          *paths.Paths
 	imageManager   images.Manager
 	systemManager  system.Manager
-	maxOverlaySize int64    // Maximum overlay disk size in bytes
-	instanceLocks  sync.Map // map[string]*sync.RWMutex - per-instance locks
-	hostTopology   *HostTopology // Cached host CPU topology
+	networkManager network.Manager
+	maxOverlaySize int64           // Maximum overlay disk size in bytes
+	instanceLocks  sync.Map        // map[string]*sync.RWMutex - per-instance locks
+	hostTopology   *HostTopology   // Cached host CPU topology
 }
 
 // NewManager creates a new instances manager
-func NewManager(p *paths.Paths, imageManager images.Manager, systemManager system.Manager, maxOverlaySize int64) Manager {
+func NewManager(p *paths.Paths, imageManager images.Manager, systemManager system.Manager, networkManager network.Manager, maxOverlaySize int64) Manager {
 	return &manager{
 		paths:          p,
 		imageManager:   imageManager,
 		systemManager:  systemManager,
+		networkManager: networkManager,
 		maxOverlaySize: maxOverlaySize,
 		instanceLocks:  sync.Map{},
 		hostTopology:   detectHostTopology(), // Detect and cache host topology
