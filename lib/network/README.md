@@ -174,3 +174,49 @@ sudo setcap 'cap_net_admin,cap_net_bind_service=+ep' /path/to/hypeman
 - Stateful firewall (only allow ESTABLISHED,RELATED inbound)
 - Default DENY for forwarding
 
+## Testing
+
+Network manager tests create real network devices (bridges, TAPs, dnsmasq) and require elevated permissions.
+
+### Running Tests
+
+```bash
+make test
+```
+
+The Makefile compiles test binaries and grants capabilities via `sudo setcap`, then runs tests as your user (not root).
+
+### Test Isolation
+
+Network integration tests use per-test unique configuration for safe parallel execution:
+
+- Each test gets a unique bridge and /29 subnet in 172.16.0.0/12 range
+- Bridge names: `t{3hex}` (e.g., `t5a3`, `tff2`)
+- 131,072 possible test networks (supports massive parallelism)
+- Tests run safely in parallel with `t.Parallel()`
+- Hash includes test name + PID + timestamp + random = cross-run safe
+
+**Subnet allocation:**
+- /29 subnets = 6 usable IPs per test (sufficient for test cases)
+- Each test creates independent bridge, dnsmasq instance on unique IP
+- No port conflicts (dnsmasq binds to unique gateway IP on standard port 53)
+
+### Cleanup
+
+Cleanup happens automatically via `t.Cleanup()`, which runs even on test failure or panic.
+
+**If tests are killed (Ctrl+C)**, stale resources may remain. Manual cleanup:
+
+```bash
+./scripts/cleanup-test-networks.sh
+```
+
+This removes all test bridges (matching `t[0-9a-f]{3}`) and TAP devices (matching `tap-*`).
+
+### Unit Tests vs Integration Tests
+
+- **Unit tests** (TestGenerateMAC, TestValidateNetworkName, etc.): Run without permissions, test logic only
+- **Integration tests** (TestInitializeIntegration, TestAllocateNetworkIntegration, etc.): Require permissions, create real devices
+
+All tests run via `make test` - no separate commands needed.
+

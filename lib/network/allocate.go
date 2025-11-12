@@ -152,7 +152,7 @@ func (m *manager) ReleaseNetwork(ctx context.Context, instanceID string) error {
 // allocateNextIP finds the next available IP in the subnet
 func (m *manager) allocateNextIP(ctx context.Context, networkName, subnet string) (string, error) {
 	// Parse subnet
-	ip, ipNet, err := net.ParseCIDR(subnet)
+	_, ipNet, err := net.ParseCIDR(subnet)
 	if err != nil {
 		return "", fmt.Errorf("parse subnet: %w", err)
 	}
@@ -170,16 +170,23 @@ func (m *manager) allocateNextIP(ctx context.Context, networkName, subnet string
 		}
 	}
 
-	// Reserve gateway IP
-	usedIPs[ip.String()] = true
+	// Reserve network address and gateway (.0 and .1 relative to network)
+	usedIPs[ipNet.IP.String()] = true                    // Network address
+	usedIPs[incrementIP(ipNet.IP, 1).String()] = true    // Gateway (network + 1)
 
 	// Iterate through subnet to find free IP
-	// Start from .10 (reserve .1-.9 for infrastructure)
-	for ip := incrementIP(ip, 10); ipNet.Contains(ip); ip = incrementIP(ip, 1) {
-		ipStr := ip.String()
+	// Start from network address + 2 (skip network and gateway)
+	for testIP := incrementIP(ipNet.IP, 2); ipNet.Contains(testIP); testIP = incrementIP(testIP, 1) {
+		ipStr := testIP.String()
 
+		// Calculate broadcast address (last IP in subnet)
+		broadcast := make(net.IP, 4)
+		for i := 0; i < 4; i++ {
+			broadcast[i] = ipNet.IP[i] | ^ipNet.Mask[i]
+		}
+		
 		// Skip broadcast address
-		if ip[len(ip)-1] == 255 {
+		if testIP.Equal(broadcast) {
 			continue
 		}
 

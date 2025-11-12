@@ -1,11 +1,21 @@
 package network
 
 import (
+	"context"
+	"crypto/rand"
+	"fmt"
+	"hash/fnv"
 	"net"
+	"os"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/onkernel/hypeman/cmd/api/config"
+	"github.com/onkernel/hypeman/lib/paths"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/vishvananda/netlink"
 )
 
 func TestGenerateMAC(t *testing.T) {

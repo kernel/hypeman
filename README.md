@@ -8,10 +8,17 @@ Run containerized workloads in VMs, powered by [Cloud Hypervisor](https://github
 
 ### Prerequisites
 
-**Go 1.25.4+**, **KVM**, **erofs-utils**
+**Go 1.25.4+**, **KVM**, **erofs-utils**, **dnsmasq**
 
 ```bash
+# Verify prerequisites
 mkfs.erofs --version
+dnsmasq --version
+```
+
+**Install on Debian/Ubuntu:**
+```bash
+sudo apt-get install erofs-utils dnsmasq
 ```
 
 **KVM Access:** User must be in `kvm` group for VM access:
@@ -87,8 +94,17 @@ The server will start on port 8080 (configurable via `PORT` environment variable
 
 ### Testing
 
+Network tests require elevated permissions to create bridges and TAP devices.
+
 ```bash
 make test
+```
+
+The test command compiles test binaries, grants capabilities via `sudo setcap`, then runs tests as the current user (not root). You may be prompted for your sudo password during the capability grant step.
+
+**Cleanup stale resources** (if tests were killed with Ctrl+C):
+```bash
+./scripts/cleanup-test-networks.sh
 ```
 
 ### Code Generation

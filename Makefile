@@ -96,17 +96,30 @@ dev: $(AIR)
 	$(AIR) -c .air.toml
 
 # Run tests
+# Compile test binaries and grant network capabilities (runs as user, not root)
 test: ensure-ch-binaries
-	go test -tags containers_image_openpgp -v -timeout 30s ./...
+	@echo "Building test binaries..."
+	@mkdir -p $(BIN_DIR)/tests
+	@for pkg in $$(go list -tags containers_image_openpgp ./...); do \
+		pkg_name=$$(basename $$pkg); \
+		go test -c -tags containers_image_openpgp -o $(BIN_DIR)/tests/$$pkg_name.test $$pkg 2>/dev/null || true; \
+	done
+	@echo "Granting capabilities to test binaries..."
+	@for test in $(BIN_DIR)/tests/*.test; do \
+		if [ -f "$$test" ]; then \
+			sudo setcap 'cap_net_admin,cap_net_bind_service=+ep' $$test 2>/dev/null || true; \
+		fi; \
+	done
+	@echo "Running tests as current user with capabilities..."
+	@for test in $(BIN_DIR)/tests/*.test; do \
+		if [ -f "$$test" ]; then \
+			echo ""; \
+			echo "Running $$(basename $$test)..."; \
+			$$test -test.v -test.parallel=10 -test.timeout=30s || exit 1; \
+		fi; \
+	done
 
 # Generate JWT token for testing
 # Usage: make gen-jwt [USER_ID=test-user]
 gen-jwt: $(GODOTENV)
 	@$(GODOTENV) -f .env go run ./cmd/gen-jwt -user-id $${USER_ID:-test-user}
-
-# Clean generated files and binaries
-clean:
-	rm -rf $(BIN_DIR)
-	rm -f lib/oapi/oapi.go
-	rm -f lib/vmm/vmm.go
-

@@ -3,7 +3,6 @@ package instances
 import (
 	"context"
 	"fmt"
-	"net"
 	"regexp"
 	"time"
 
@@ -126,9 +125,10 @@ func (m *manager) createInstance(
 	}
 
 	// 10. Allocate network (if network specified)
+	var netConfig *network.NetworkConfig
 	if networkName != "" {
 		log.DebugContext(ctx, "allocating network", "id", id, "network", networkName)
-		_, err := m.networkManager.AllocateNetwork(ctx, network.AllocateRequest{
+		netConfig, err = m.networkManager.AllocateNetwork(ctx, network.AllocateRequest{
 			InstanceID:   id,
 			InstanceName: req.Name,
 			Network:      networkName,
@@ -169,7 +169,7 @@ func (m *manager) createInstance(
 
 	// 13. Start VMM and boot VM
 	log.InfoContext(ctx, "starting VMM and booting VM", "id", id)
-	if err := m.startAndBootVM(ctx, stored, imageInfo); err != nil {
+	if err := m.startAndBootVM(ctx, stored, imageInfo, netConfig); err != nil {
 		log.ErrorContext(ctx, "failed to start and boot VM", "id", id, "error", err)
 		// Cleanup network allocation
 		if networkName != "" {
@@ -233,6 +233,7 @@ func (m *manager) startAndBootVM(
 	ctx context.Context,
 	stored *StoredMetadata,
 	imageInfo *images.Image,
+	netConfig *network.NetworkConfig,
 ) error {
 	log := logger.FromContext(ctx)
 	
@@ -255,7 +256,7 @@ func (m *manager) startAndBootVM(
 
 	// Build VM configuration matching Cloud Hypervisor VmConfig
 	inst := &Instance{StoredMetadata: *stored}
-	vmConfig, err := m.buildVMConfig(inst, imageInfo)
+	vmConfig, err := m.buildVMConfig(inst, imageInfo, netConfig)
 	if err != nil {
 		return fmt.Errorf("build vm config: %w", err)
 	}
@@ -305,7 +306,7 @@ func (m *manager) startAndBootVM(
 }
 
 // buildVMConfig creates the Cloud Hypervisor VmConfig
-func (m *manager) buildVMConfig(inst *Instance, imageInfo *images.Image) (vmm.VmConfig, error) {
+func (m *manager) buildVMConfig(inst *Instance, imageInfo *images.Image, netConfig *network.NetworkConfig) (vmm.VmConfig, error) {
 	// Get versioned system file paths
 	kernelPath, _ := m.systemManager.GetKernelPath(system.KernelVersion(inst.KernelVersion))
 	initrdPath, _ := m.systemManager.GetInitrdPath(system.InitrdVersion(inst.InitrdVersion))
@@ -372,30 +373,15 @@ func (m *manager) buildVMConfig(inst *Instance, imageInfo *images.Image) (vmm.Vm
 		Mode: vmm.ConsoleConfigMode("Off"),
 	}
 
-	// Network configuration (optional)
+	// Network configuration (optional, use passed config)
 	var nets *[]vmm.NetConfig
-	if inst.Network != "" {
-		// Get allocation from network manager
-		alloc, err := m.networkManager.GetAllocation(context.Background(), inst.Id)
-		if err == nil && alloc != nil {
-			// Parse subnet to get netmask
-			// TODO @sjmiller609 review: why do we assume /24 from instance manager, seems questionable?
-			netmask := "255.255.255.0" // Default /24
-			if network, err := m.networkManager.GetNetwork(context.Background(), inst.Network); err == nil {
-				_, ipNet, err := net.ParseCIDR(network.Subnet)
-				if err == nil {
-					netmask = fmt.Sprintf("%d.%d.%d.%d",
-						ipNet.Mask[0], ipNet.Mask[1], ipNet.Mask[2], ipNet.Mask[3])
-				}
-			}
-
-			nets = &[]vmm.NetConfig{{
-				Tap:  &alloc.TAPDevice,
-				Ip:   &alloc.IP,
-				Mac:  &alloc.MAC,
-				Mask: &netmask,
-			}}
-		}
+	if netConfig != nil {
+		nets = &[]vmm.NetConfig{{
+			Tap:  &netConfig.TAPDevice,
+			Ip:   &netConfig.IP,
+			Mac:  &netConfig.MAC,
+			Mask: &netConfig.Netmask,
+		}}
 	}
 
 	return vmm.VmConfig{
