@@ -285,6 +285,11 @@ func (m *manager) buildVMConfig(inst *Instance, imageInfo *images.Image) (vmm.Vm
 		BootVcpus: inst.Vcpus,
 		MaxVcpus:  inst.Vcpus,
 	}
+	
+	// Calculate and set guest topology based on host topology
+	if topology := calculateGuestTopology(inst.Vcpus, m.hostTopology); topology != nil {
+		cpus.Topology = topology
+	}
 
 	// Memory configuration
 	memory := vmm.MemoryConfig{

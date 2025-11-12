@@ -28,6 +28,7 @@ type manager struct {
 	systemManager  system.Manager
 	maxOverlaySize int64    // Maximum overlay disk size in bytes
 	instanceLocks  sync.Map // map[string]*sync.RWMutex - per-instance locks
+	hostTopology   *HostTopology // Cached host CPU topology
 }
 
 // NewManager creates a new instances manager
@@ -38,6 +39,7 @@ func NewManager(p *paths.Paths, imageManager images.Manager, systemManager syste
 		systemManager:  systemManager,
 		maxOverlaySize: maxOverlaySize,
 		instanceLocks:  sync.Map{},
+		hostTopology:   detectHostTopology(), // Detect and cache host topology
 	}
 }
 
