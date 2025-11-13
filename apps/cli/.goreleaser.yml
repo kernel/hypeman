@@ -78,3 +78,19 @@ nfpms:
     contents:
       - src: man/man1/*.1.gz
         dst: /usr/share/man/man1/
+homebrew_casks:
+  - name: hypeman
+    repository:
+      owner: onkernel
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    homepage: https://github.com/onkernel/hypeman
+    description: orchestration for cloud-hypervisor VMs
+    license: Apache-2.0
+    binary: "hypeman"
+    completions:
+      bash: "completions/hypeman.bash"
+      zsh: "completions/hypeman.zsh"
+      fish: "completions/hypeman.fish"
+    manpages:
+    - man/man1/hypeman.1.gz
