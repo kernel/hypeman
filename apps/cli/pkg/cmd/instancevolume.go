@@ -5,10 +5,10 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"https://github.com/stainless-sdks/hypeman-go"
-	"https://github.com/stainless-sdks/hypeman-go/option"
 
 	"github.com/onkernel/hypeman-cli/pkg/jsonflag"
+	"github.com/onkernel/hypeman-go"
+	"github.com/onkernel/hypeman-go/option"
 	"github.com/tidwall/gjson"
 	"github.com/urfave/cli/v3"
 )

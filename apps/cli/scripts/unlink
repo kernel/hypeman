@@ -5,4 +5,4 @@ set -e
 cd "$(dirname "$0")/.."
 
 echo "==> Unlinking with local directory"
-go mod edit -dropreplace https://github.com/stainless-sdks/hypeman-go
+go mod edit -dropreplace github.com/onkernel/hypeman-go

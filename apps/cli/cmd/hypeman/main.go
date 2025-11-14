@@ -6,11 +6,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"https://github.com/stainless-sdks/hypeman-go"
 	"net/http"
 	"os"
 
 	"github.com/onkernel/hypeman-cli/pkg/cmd"
+	"github.com/onkernel/hypeman-go"
 	"github.com/tidwall/gjson"
 )
 
