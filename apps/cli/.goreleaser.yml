@@ -85,7 +85,7 @@ homebrew_casks:
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     homepage: https://github.com/onkernel/hypeman
-    description: orchestration for cloud-hypervisor VMs
+    description: orchestrate cloud-hypervisor VMs
     license: Apache-2.0
     binary: "hypeman"
     completions:
