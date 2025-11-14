@@ -13,9 +13,10 @@ import (
 )
 
 // instanceMetadata is the minimal metadata we need to derive allocations
+// Field names match StoredMetadata in lib/instances/types.go
 type instanceMetadata struct {
-	Name           string `json:"name"`
-	NetworkEnabled bool   `json:"network_enabled"`
+	Name           string
+	NetworkEnabled bool
 }
 
 // deriveAllocation derives network allocation from CH or snapshot
@@ -42,10 +43,10 @@ func (m *manager) deriveAllocation(ctx context.Context, instanceID string) (*All
 
 	// Calculate netmask from subnet
 	_, ipNet, err := net.ParseCIDR(defaultNet.Subnet)
-	netmask := "255.255.255.0" // Fallback
-	if err == nil {
-		netmask = fmt.Sprintf("%d.%d.%d.%d", ipNet.Mask[0], ipNet.Mask[1], ipNet.Mask[2], ipNet.Mask[3])
+	if err != nil {
+		return nil, fmt.Errorf("parse subnet CIDR: %w", err)
 	}
+	netmask := fmt.Sprintf("%d.%d.%d.%d", ipNet.Mask[0], ipNet.Mask[1], ipNet.Mask[2], ipNet.Mask[3])
 
 	// 4. Try to derive from running VM first
 	socketPath := m.paths.InstanceSocket(instanceID)
