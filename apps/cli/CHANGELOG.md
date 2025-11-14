@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.1 (2025-11-14)
+
+Full Changelog: [v0.1.0...v0.1.1](https://github.com/onkernel/hypeman-cli/compare/v0.1.0...v0.1.1)
+
+### Features
+
+* **api:** manual updates ([1133f94](https://github.com/onkernel/hypeman-cli/commit/1133f94ebcc7e53162d26aa03a265e3520806ebb))
+
 ## 0.1.0 (2025-11-14)
 
 Full Changelog: [v0.0.1...v0.1.0](https://github.com/onkernel/hypeman-cli/compare/v0.0.1...v0.1.0)
