@@ -399,8 +399,9 @@ func handleInstancesStreamLogs(ctx context.Context, cmd *cli.Command) error {
 		params,
 		option.WithMiddleware(cc.AsMiddleware()),
 	)
+	defer stream.Close()
 	for stream.Next() {
-		fmt.Printf("%s\n", stream.Current().RawJSON())
+		fmt.Printf("%s\n", stream.Current())
 	}
 	return stream.Err()
 }
