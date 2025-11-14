@@ -392,6 +392,22 @@ func TestStandbyAndRestore(t *testing.T) {
 	assert.DirExists(t, snapshotDir)
 	assert.FileExists(t, filepath.Join(snapshotDir, "memory-ranges"))
 	// Cloud Hypervisor creates various snapshot files, just verify directory exists
+	
+	// DEBUG: Check snapshot files (for comparison with networking test)
+	t.Log("DEBUG: Snapshot files for non-network instance:")
+	entries, _ := os.ReadDir(snapshotDir)
+	for _, entry := range entries {
+		info, _ := entry.Info()
+		t.Logf("  - %s (size: %d bytes)", entry.Name(), info.Size())
+	}
+	
+	// DEBUG: Check console.log file size before restore
+	consoleLogPath := filepath.Join(tmpDir, "guests", inst.Id, "logs", "console.log")
+	var consoleLogSizeBefore int64
+	if info, err := os.Stat(consoleLogPath); err == nil {
+		consoleLogSizeBefore = info.Size()
+		t.Logf("DEBUG: console.log size before restore: %d bytes", consoleLogSizeBefore)
+	}
 
 	// Restore instance
 	t.Log("Restoring instance...")
@@ -399,6 +415,16 @@ func TestStandbyAndRestore(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, StateRunning, inst.State)
 	t.Log("Instance restored and running")
+	
+	// DEBUG: Check console.log file size after restore
+	if info, err := os.Stat(consoleLogPath); err == nil {
+		consoleLogSizeAfter := info.Size()
+		t.Logf("DEBUG: console.log size after restore: %d bytes", consoleLogSizeAfter)
+		t.Logf("DEBUG: File size diff: %d bytes", consoleLogSizeAfter-consoleLogSizeBefore)
+		if consoleLogSizeAfter < consoleLogSizeBefore {
+			t.Logf("DEBUG: WARNING! console.log was TRUNCATED (lost %d bytes)", consoleLogSizeBefore-consoleLogSizeAfter)
+		}
+	}
 
 	// Cleanup (no sleep needed - DeleteInstance handles process cleanup)
 	t.Log("Cleaning up...")
