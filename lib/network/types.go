@@ -9,7 +9,6 @@ type Network struct {
 	Gateway   string    // "192.168.0.1"
 	Bridge    string    // "vmbr0" (derived from kernel)
 	Isolated  bool      // Bridge_slave isolation mode
-	DNSDomain string    // "hypeman"
 	Default   bool      // True for default network
 	CreatedAt time.Time
 }

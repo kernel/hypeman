@@ -154,18 +154,4 @@ func (p *Paths) NetworkDir() string {
 	return filepath.Join(p.dataDir, "network")
 }
 
-// NetworkDnsmasqConf returns the path to dnsmasq configuration file.
-func (p *Paths) NetworkDnsmasqConf() string {
-	return filepath.Join(p.NetworkDir(), "dnsmasq.conf")
-}
-
-// NetworkDnsmasqHosts returns the path to dnsmasq hosts file.
-func (p *Paths) NetworkDnsmasqHosts() string {
-	return filepath.Join(p.NetworkDir(), "dnsmasq.hosts")
-}
-
-// NetworkDnsmasqPid returns the path to dnsmasq PID file.
-func (p *Paths) NetworkDnsmasqPid() string {
-	return filepath.Join(p.NetworkDir(), "dnsmasq.pid")
-}
 

@@ -22,7 +22,6 @@ func (m *manager) AllocateNetwork(ctx context.Context, req AllocateRequest) (*Ne
 	// Acquire lock to prevent concurrent allocations from:
 	// 1. Picking the same IP address
 	// 2. Creating duplicate instance names
-	// 3. Conflicting DNS updates
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -67,13 +66,6 @@ func (m *manager) AllocateNetwork(ctx context.Context, req AllocateRequest) (*Ne
 		return nil, fmt.Errorf("create TAP device: %w", err)
 	}
 
-	// 7. Register DNS
-	if err := m.reloadDNS(ctx); err != nil {
-		// Cleanup TAP on DNS failure
-		m.deleteTAPDevice(tap)
-		return nil, fmt.Errorf("register DNS: %w", err)
-	}
-
 	log.InfoContext(ctx, "allocated network",
 		"instance_id", req.InstanceID,
 		"instance_name", req.InstanceName,
@@ -82,17 +74,17 @@ func (m *manager) AllocateNetwork(ctx context.Context, req AllocateRequest) (*Ne
 		"mac", mac,
 		"tap", tap)
 
-	// 8. Calculate netmask from subnet
+	// 7. Calculate netmask from subnet
 	_, ipNet, _ := net.ParseCIDR(network.Subnet)
 	netmask := fmt.Sprintf("%d.%d.%d.%d", ipNet.Mask[0], ipNet.Mask[1], ipNet.Mask[2], ipNet.Mask[3])
 
-	// 9. Return config (will be used in CH VmConfig)
+	// 8. Return config (will be used in CH VmConfig)
 	return &NetworkConfig{
 		IP:        ip,
 		MAC:       mac,
 		Gateway:   network.Gateway,
 		Netmask:   netmask,
-		DNS:       network.Gateway, // dnsmasq listens on gateway
+		DNS:       m.config.DNSServer,
 		TAPDevice: tap,
 	}, nil
 }
@@ -100,9 +92,8 @@ func (m *manager) AllocateNetwork(ctx context.Context, req AllocateRequest) (*Ne
 // RecreateNetwork recreates TAP for restore from standby
 // Note: No lock needed - this operation:
 // 1. Doesn't allocate new IPs (reuses existing from snapshot)
-// 2. Doesn't modify DNS (entries remain from before standby)
-// 3. Is already protected by instance-level locking
-// 4. Uses deterministic TAP names that can't conflict
+// 2. Is already protected by instance-level locking
+// 3. Uses deterministic TAP names that can't conflict
 func (m *manager) RecreateNetwork(ctx context.Context, instanceID string) error {
 	log := logger.FromContext(ctx)
 
@@ -152,15 +143,6 @@ func (m *manager) ReleaseNetwork(ctx context.Context, alloc *Allocation) error {
 	// 1. Delete TAP device (best effort)
 	if err := m.deleteTAPDevice(alloc.TAPDevice); err != nil {
 		log.WarnContext(ctx, "failed to delete TAP device", "tap", alloc.TAPDevice, "error", err)
-	}
-
-	// Acquire lock to prevent concurrent DNS updates
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	// 2. Reload DNS (removes entries)
-	if err := m.reloadDNS(ctx); err != nil {
-		log.WarnContext(ctx, "failed to reload DNS", "error", err)
 	}
 
 	log.InfoContext(ctx, "released network",

@@ -1,6 +1,6 @@
 # Network Manager
 
-Manages the default virtual network for instances using a Linux bridge, TAP devices, and dnsmasq for DNS.
+Manages the default virtual network for instances using a Linux bridge and TAP devices.
 
 ## Overview
 
@@ -57,29 +57,14 @@ Hypeman provides a single default network that all instances can optionally conn
 ### Name Uniqueness
 
 Instance names must be globally unique:
-- Prevents DNS collisions
 - Enforced at allocation time by checking all running/standby instances
 - Simpler than per-network scoping
 
-### DNS Resolution
+### DNS Configuration
 
-**Naming convention:**
-```
-{instance-name}.default.hypeman  → IP
-{instance-id}.default.hypeman    → IP
-```
-
-**Examples:**
-```
-my-app.default.hypeman          → 192.168.0.10
-tz4a98xxat96iws9zmbrgj3a.default.hypeman → 192.168.0.10
-```
-
-**dnsmasq configuration:**
-- Listens on default bridge gateway IP (default: 192.168.0.1)
-- Forwards unknown queries to 1.1.1.1
-- Reloads with SIGHUP signal when allocations change
-- Hosts file regenerated from scanning guest directories
+Guests are configured to use external DNS servers directly (no internal DNS server needed):
+- Configurable via `DNS_SERVER` environment variable (default: 1.1.1.1)
+- Set in guest's `/etc/resolv.conf` during boot
 
 ### Dependencies
 
@@ -87,11 +72,8 @@ tz4a98xxat96iws9zmbrgj3a.default.hypeman → 192.168.0.10
 - `github.com/vishvananda/netlink` - Bridge/TAP operations (standard, used by Docker/K8s)
 
 **Shell commands:**
-- `dnsmasq` - DNS forwarder (no viable Go library alternative)
 - `iptables` - Complex rule manipulation not well-supported in netlink
 - `ip link set X type bridge_slave isolated on` - Netlink library doesn't expose this flag
-
-**Why dnsmasq:** Lightweight, battle-tested, simple configuration. Alternatives like coredns would add complexity without significant benefit for a single-network setup.
 
 ### Permissions
 
@@ -108,10 +90,7 @@ sudo setcap 'cap_net_admin,cap_net_bind_service=+ep' /path/to/hypeman
 
 ```
 /var/lib/hypeman/
-  network/
-    dnsmasq.conf      # Generated config (listen address, upstream DNS)
-    dnsmasq.hosts     # Generated from scanning guest dirs
-    dnsmasq.pid       # Process PID
+  network/            # Network state directory (reserved for future use)
   guests/
     {instance-id}/
       metadata.json   # Contains: network_enabled field (bool)
@@ -126,7 +105,6 @@ sudo setcap 'cap_net_admin,cap_net_bind_service=+ep' /path/to/hypeman
 - Create default network bridge (vmbr0 or configured name)
 - Assign gateway IP
 - Setup iptables NAT and forwarding
-- Start dnsmasq
 
 ### AllocateNetwork
 1. Get default network details
@@ -135,7 +113,6 @@ sudo setcap 'cap_net_admin,cap_net_bind_service=+ep' /path/to/hypeman
 4. Generate MAC (02:00:00:... format - locally administered)
 5. Generate TAP name (tap-{first8chars-of-instance-id})
 6. Create TAP device and attach to bridge
-7. Reload DNS
 
 ### RecreateNetwork (for restore from standby)
 1. Derive allocation from snapshot vm.json
@@ -145,7 +122,6 @@ sudo setcap 'cap_net_admin,cap_net_bind_service=+ep' /path/to/hypeman
 ### ReleaseNetwork (for shutdown/delete)
 1. Derive current allocation
 2. Delete TAP device
-3. Reload DNS (removes entries)
 
 Note: In case of unexpected scenarios like power loss, straggler TAP devices may persist until manual cleanup or host reboot.
 
@@ -168,11 +144,11 @@ Note: In case of unexpected scenarios like power loss, straggler TAP devices may
 The network manager uses a single mutex to protect allocation operations:
 
 ### Locked Operations
-- **AllocateNetwork**: Prevents concurrent IP allocation and DNS conflicts
-- **ReleaseNetwork**: Prevents concurrent DNS updates
+- **AllocateNetwork**: Prevents concurrent IP allocation
 
 ### Unlocked Operations  
-- **RecreateNetwork**: Safe without lock - protected by instance-level locking, doesn't allocate IPs or modify DNS
+- **RecreateNetwork**: Safe without lock - protected by instance-level locking, doesn't allocate IPs
+- **ReleaseNetwork**: Safe without lock - only deletes TAP device
 - **Read operations** (GetAllocation, ListAllocations, NameExists): No lock needed - eventual consistency is acceptable
 
 ### Why This Works
@@ -196,7 +172,7 @@ The network manager uses a single mutex to protect allocation operations:
 
 ## Testing
 
-Network manager tests create real network devices (bridges, TAPs, dnsmasq) and require elevated permissions.
+Network manager tests create real network devices (bridges, TAPs) and require elevated permissions.
 
 ### Running Tests
 
@@ -218,8 +194,7 @@ Network integration tests use per-test unique configuration for safe parallel ex
 
 **Subnet allocation:**
 - /29 subnets = 6 usable IPs per test (sufficient for test cases)
-- Each test creates independent bridge, dnsmasq instance on unique IP
-- No port conflicts (dnsmasq binds to unique gateway IP on standard port 53)
+- Each test creates independent bridge on unique IP
 
 ### Cleanup
 

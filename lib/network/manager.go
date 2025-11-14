@@ -31,7 +31,7 @@ type Manager interface {
 type manager struct {
 	paths  *paths.Paths
 	config *config.Config
-	mu     sync.Mutex // Protects network allocation operations (IP allocation, DNS updates)
+	mu     sync.Mutex // Protects network allocation operations (IP allocation)
 }
 
 // NewManager creates a new network manager
@@ -64,11 +64,6 @@ func (m *manager) Initialize(ctx context.Context) error {
 		log.InfoContext(ctx, "default network already exists", "bridge", bridge)
 	}
 
-	// 2. Start dnsmasq
-	if err := m.startDNS(ctx); err != nil {
-		return fmt.Errorf("start DNS: %w", err)
-	}
-
 	log.InfoContext(ctx, "network manager initialized")
 	return nil
 }
@@ -87,7 +82,6 @@ func (m *manager) getDefaultNetwork(ctx context.Context) (*Network, error) {
 		Gateway:   state.Gateway,
 		Bridge:    m.config.BridgeName,
 		Isolated:  true,
-		DNSDomain: "hypeman",
 		Default:   true,
 		CreatedAt: time.Time{}, // Unknown for default
 	}, nil

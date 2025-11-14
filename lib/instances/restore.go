@@ -60,8 +60,8 @@ func (m *manager) restoreInstance(
 		log.ErrorContext(ctx, "failed to restore from snapshot", "id", id, "error", err)
 		// Cleanup network on failure
 		// Note: Network cleanup is explicitly called on failure paths to ensure TAP devices
-		// and DNS entries are removed. In production, stale TAP devices from unexpected
-		// failures (e.g., power loss) would require manual cleanup or host reboot.
+		// are removed. In production, stale TAP devices from unexpected failures (e.g.,
+		// power loss) would require manual cleanup or host reboot.
 		if stored.NetworkEnabled {
 			netAlloc, _ := m.networkManager.GetAllocation(ctx, id)
 			m.networkManager.ReleaseNetwork(ctx, netAlloc)
