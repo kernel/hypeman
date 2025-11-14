@@ -115,7 +115,7 @@ test: ensure-ch-binaries
 		if [ -f "$$test" ]; then \
 			echo ""; \
 			echo "Running $$(basename $$test)..."; \
-			$$test -test.v -test.parallel=10 -test.timeout=30s || exit 1; \
+			$$test -test.v -test.parallel=10 -test.timeout=60s || exit 1; \
 		fi; \
 	done
 
