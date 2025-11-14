@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/onkernel/hypeman/lib/logger"
+	"github.com/onkernel/hypeman/lib/network"
 )
 
 // deleteInstance stops and deletes an instance
@@ -83,13 +84,24 @@ func (m *manager) killVMM(ctx context.Context, inst *Instance) error {
 			// Process exists - kill it immediately with SIGKILL
 			// No graceful shutdown needed since we're deleting all data
 			log.DebugContext(ctx, "killing VMM process", "id", inst.Id, "pid", pid)
-			syscall.Kill(pid, syscall.SIGKILL)
+			if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
+				log.WarnContext(ctx, "failed to kill VMM process", "id", inst.Id, "pid", pid, "error", err)
+			}
 			
-			// Wait for process to die (SIGKILL is guaranteed, usually instant)
-			if !WaitForProcessExit(pid, 2*time.Second) {
-				log.WarnContext(ctx, "VMM process did not exit in time", "id", inst.Id, "pid", pid)
-			} else {
-				log.DebugContext(ctx, "VMM process killed successfully", "id", inst.Id, "pid", pid)
+			// Wait for process to die and reap it to prevent zombies
+			// SIGKILL should be instant, but give it a moment
+			for i := 0; i < 50; i++ { // 50 * 100ms = 5 seconds
+				var wstatus syscall.WaitStatus
+				wpid, err := syscall.Wait4(pid, &wstatus, syscall.WNOHANG, nil)
+				if err != nil || wpid == pid {
+					// Process reaped successfully or error (likely ECHILD if already reaped)
+					log.DebugContext(ctx, "VMM process killed and reaped", "id", inst.Id, "pid", pid)
+					break
+				}
+				if i == 49 {
+					log.WarnContext(ctx, "VMM process did not exit in time", "id", inst.Id, "pid", pid)
+				}
+				time.Sleep(100 * time.Millisecond)
 			}
 		} else {
 			log.DebugContext(ctx, "VMM process not running", "id", inst.Id, "pid", pid)
