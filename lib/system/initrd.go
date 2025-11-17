@@ -9,7 +9,7 @@ import (
 	"github.com/onkernel/hypeman/lib/images"
 )
 
-// buildInitrd builds initrd from busybox + custom init script
+// buildInitrd builds initrd from base image + custom init script
 func (m *manager) buildInitrd(ctx context.Context, version InitrdVersion, arch string) error {
 	// Create temp directory for building
 	tempDir, err := os.MkdirTemp("", "hypeman-initrd-*")
@@ -20,10 +20,10 @@ func (m *manager) buildInitrd(ctx context.Context, version InitrdVersion, arch s
 
 	rootfsDir := filepath.Join(tempDir, "rootfs")
 
-	// Get pinned busybox version for this initrd version (ensures reproducible builds)
-	busyboxRef, ok := InitrdBusyboxVersions[version]
+	// Get base image for this initrd version
+	baseImageRef, ok := InitrdBaseImages[version]
 	if !ok {
-		return fmt.Errorf("no busybox version defined for initrd %s", version)
+		return fmt.Errorf("no base image defined for initrd %s", version)
 	}
 
 	// Create a temporary OCI client (reuses image manager's cache)
@@ -34,14 +34,14 @@ func (m *manager) buildInitrd(ctx context.Context, version InitrdVersion, arch s
 	}
 
 	// Inspect to get digest
-	digest, err := ociClient.InspectManifest(ctx, busyboxRef)
+	digest, err := ociClient.InspectManifest(ctx, baseImageRef)
 	if err != nil {
-		return fmt.Errorf("inspect busybox manifest: %w", err)
+		return fmt.Errorf("inspect base image manifest: %w", err)
 	}
 
-	// Pull and unpack busybox
-	if err := ociClient.PullAndUnpack(ctx, busyboxRef, digest, rootfsDir); err != nil {
-		return fmt.Errorf("pull busybox: %w", err)
+	// Pull and unpack base image
+	if err := ociClient.PullAndUnpack(ctx, baseImageRef, digest, rootfsDir); err != nil {
+		return fmt.Errorf("pull base image: %w", err)
 	}
 
 	// Inject init script

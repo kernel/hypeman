@@ -124,6 +124,15 @@ type ErrorDetail struct {
 	Message *string `json:"message,omitempty"`
 }
 
+// ExecRequest defines model for ExecRequest.
+type ExecRequest struct {
+	// Command Command and arguments to execute
+	Command []string `json:"command"`
+
+	// Tty Allocate a pseudo-TTY
+	Tty *bool `json:"tty,omitempty"`
+}
+
 // Health defines model for Health.
 type Health struct {
 	Status HealthStatus `json:"status"`
@@ -264,6 +273,9 @@ type CreateImageJSONRequestBody = CreateImageRequest
 // CreateInstanceJSONRequestBody defines body for CreateInstance for application/json ContentType.
 type CreateInstanceJSONRequestBody = CreateInstanceRequest
 
+// ExecInstanceJSONRequestBody defines body for ExecInstance for application/json ContentType.
+type ExecInstanceJSONRequestBody = ExecRequest
+
 // AttachVolumeJSONRequestBody defines body for AttachVolume for application/json ContentType.
 type AttachVolumeJSONRequestBody = AttachVolumeRequest
 
@@ -373,6 +385,11 @@ type ClientInterface interface {
 
 	// GetInstance request
 	GetInstance(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ExecInstanceWithBody request with any body
+	ExecInstanceWithBody(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	ExecInstance(ctx context.Context, id string, body ExecInstanceJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// GetInstanceLogs request
 	GetInstanceLogs(ctx context.Context, id string, params *GetInstanceLogsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -528,6 +545,30 @@ func (c *Client) DeleteInstance(ctx context.Context, id string, reqEditors ...Re
 
 func (c *Client) GetInstance(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetInstanceRequest(c.Server, id)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ExecInstanceWithBody(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewExecInstanceRequestWithBody(c.Server, id, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ExecInstance(ctx context.Context, id string, body ExecInstanceJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewExecInstanceRequest(c.Server, id, body)
 	if err != nil {
 		return nil, err
 	}
@@ -963,6 +1004,53 @@ func NewGetInstanceRequest(server string, id string) (*http.Request, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	return req, nil
+}
+
+// NewExecInstanceRequest calls the generic ExecInstance builder with application/json body
+func NewExecInstanceRequest(server string, id string, body ExecInstanceJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewExecInstanceRequestWithBody(server, id, "application/json", bodyReader)
+}
+
+// NewExecInstanceRequestWithBody generates requests for ExecInstance with any type of body
+func NewExecInstanceRequestWithBody(server string, id string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "id", runtime.ParamLocationPath, id)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/instances/%s/exec", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
 
 	return req, nil
 }
@@ -1411,6 +1499,11 @@ type ClientWithResponsesInterface interface {
 	// GetInstanceWithResponse request
 	GetInstanceWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*GetInstanceResponse, error)
 
+	// ExecInstanceWithBodyWithResponse request with any body
+	ExecInstanceWithBodyWithResponse(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ExecInstanceResponse, error)
+
+	ExecInstanceWithResponse(ctx context.Context, id string, body ExecInstanceJSONRequestBody, reqEditors ...RequestEditorFn) (*ExecInstanceResponse, error)
+
 	// GetInstanceLogsWithResponse request
 	GetInstanceLogsWithResponse(ctx context.Context, id string, params *GetInstanceLogsParams, reqEditors ...RequestEditorFn) (*GetInstanceLogsResponse, error)
 
@@ -1652,6 +1745,30 @@ func (r GetInstanceResponse) Status() string {
 
 // StatusCode returns HTTPResponse.StatusCode
 func (r GetInstanceResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type ExecInstanceResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON404      *Error
+	JSON409      *Error
+	JSON500      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r ExecInstanceResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ExecInstanceResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
@@ -1972,6 +2089,23 @@ func (c *ClientWithResponses) GetInstanceWithResponse(ctx context.Context, id st
 		return nil, err
 	}
 	return ParseGetInstanceResponse(rsp)
+}
+
+// ExecInstanceWithBodyWithResponse request with arbitrary body returning *ExecInstanceResponse
+func (c *ClientWithResponses) ExecInstanceWithBodyWithResponse(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ExecInstanceResponse, error) {
+	rsp, err := c.ExecInstanceWithBody(ctx, id, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseExecInstanceResponse(rsp)
+}
+
+func (c *ClientWithResponses) ExecInstanceWithResponse(ctx context.Context, id string, body ExecInstanceJSONRequestBody, reqEditors ...RequestEditorFn) (*ExecInstanceResponse, error) {
+	rsp, err := c.ExecInstance(ctx, id, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseExecInstanceResponse(rsp)
 }
 
 // GetInstanceLogsWithResponse request returning *GetInstanceLogsResponse
@@ -2424,6 +2558,46 @@ func ParseGetInstanceResponse(rsp *http.Response) (*GetInstanceResponse, error) 
 	return response, nil
 }
 
+// ParseExecInstanceResponse parses an HTTP response from a ExecInstanceWithResponse call
+func ParseExecInstanceResponse(rsp *http.Response) (*ExecInstanceResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ExecInstanceResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseGetInstanceLogsResponse parses an HTTP response from a GetInstanceLogsWithResponse call
 func ParseGetInstanceLogsResponse(rsp *http.Response) (*GetInstanceLogsResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -2834,6 +3008,9 @@ type ServerInterface interface {
 	// Get instance details
 	// (GET /instances/{id})
 	GetInstance(w http.ResponseWriter, r *http.Request, id string)
+	// Execute command in instance via vsock
+	// (POST /instances/{id}/exec)
+	ExecInstance(w http.ResponseWriter, r *http.Request, id string)
 	// Stream instance logs (SSE)
 	// (GET /instances/{id}/logs)
 	GetInstanceLogs(w http.ResponseWriter, r *http.Request, id string, params GetInstanceLogsParams)
@@ -2918,6 +3095,12 @@ func (_ Unimplemented) DeleteInstance(w http.ResponseWriter, r *http.Request, id
 // Get instance details
 // (GET /instances/{id})
 func (_ Unimplemented) GetInstance(w http.ResponseWriter, r *http.Request, id string) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Execute command in instance via vsock
+// (POST /instances/{id}/exec)
+func (_ Unimplemented) ExecInstance(w http.ResponseWriter, r *http.Request, id string) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -3193,6 +3376,37 @@ func (siw *ServerInterfaceWrapper) GetInstance(w http.ResponseWriter, r *http.Re
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetInstance(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ExecInstance operation middleware
+func (siw *ServerInterfaceWrapper) ExecInstance(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", chi.URLParam(r, "id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ExecInstance(w, r, id)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -3637,6 +3851,9 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 		r.Get(options.BaseURL+"/instances/{id}", wrapper.GetInstance)
 	})
 	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/instances/{id}/exec", wrapper.ExecInstance)
+	})
+	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/instances/{id}/logs", wrapper.GetInstanceLogs)
 	})
 	r.Group(func(r chi.Router) {
@@ -3980,6 +4197,50 @@ func (response GetInstance404JSONResponse) VisitGetInstanceResponse(w http.Respo
 type GetInstance500JSONResponse Error
 
 func (response GetInstance500JSONResponse) VisitGetInstanceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ExecInstanceRequestObject struct {
+	Id   string `json:"id"`
+	Body *ExecInstanceJSONRequestBody
+}
+
+type ExecInstanceResponseObject interface {
+	VisitExecInstanceResponse(w http.ResponseWriter) error
+}
+
+type ExecInstance101Response struct {
+}
+
+func (response ExecInstance101Response) VisitExecInstanceResponse(w http.ResponseWriter) error {
+	w.WriteHeader(101)
+	return nil
+}
+
+type ExecInstance404JSONResponse Error
+
+func (response ExecInstance404JSONResponse) VisitExecInstanceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ExecInstance409JSONResponse Error
+
+func (response ExecInstance409JSONResponse) VisitExecInstanceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ExecInstance500JSONResponse Error
+
+func (response ExecInstance500JSONResponse) VisitExecInstanceResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(500)
 
@@ -4397,6 +4658,9 @@ type StrictServerInterface interface {
 	// Get instance details
 	// (GET /instances/{id})
 	GetInstance(ctx context.Context, request GetInstanceRequestObject) (GetInstanceResponseObject, error)
+	// Execute command in instance via vsock
+	// (POST /instances/{id}/exec)
+	ExecInstance(ctx context.Context, request ExecInstanceRequestObject) (ExecInstanceResponseObject, error)
 	// Stream instance logs (SSE)
 	// (GET /instances/{id}/logs)
 	GetInstanceLogs(ctx context.Context, request GetInstanceLogsRequestObject) (GetInstanceLogsResponseObject, error)
@@ -4693,6 +4957,39 @@ func (sh *strictHandler) GetInstance(w http.ResponseWriter, r *http.Request, id 
 	}
 }
 
+// ExecInstance operation middleware
+func (sh *strictHandler) ExecInstance(w http.ResponseWriter, r *http.Request, id string) {
+	var request ExecInstanceRequestObject
+
+	request.Id = id
+
+	var body ExecInstanceJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ExecInstance(ctx, request.(ExecInstanceRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ExecInstance")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ExecInstanceResponseObject); ok {
+		if err := validResponse.VisitExecInstanceResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // GetInstanceLogs operation middleware
 func (sh *strictHandler) GetInstanceLogs(w http.ResponseWriter, r *http.Request, id string, params GetInstanceLogsParams) {
 	var request GetInstanceLogsRequestObject
@@ -4943,58 +5240,61 @@ func (sh *strictHandler) GetVolume(w http.ResponseWriter, r *http.Request, id st
 // Base64 encoded, gzipped, json marshaled Swagger object
 var swaggerSpec = []string{
 
-	"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",
+	"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",
+	"m04AAA==",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file

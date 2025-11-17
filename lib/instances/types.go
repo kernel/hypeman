@@ -48,6 +48,10 @@ type StoredMetadata struct {
 	// Paths
 	SocketPath string // Path to API socket
 	DataDir    string // Instance data directory
+
+	// vsock configuration
+	VsockCID    int64  // Guest vsock Context ID
+	VsockSocket string // Host-side vsock socket path
 }
 
 // Instance represents a virtual machine instance with derived runtime state

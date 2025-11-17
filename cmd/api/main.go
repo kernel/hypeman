@@ -91,6 +91,9 @@ func run() error {
 		}
 		r.Use(nethttpmiddleware.OapiRequestValidatorWithOptions(spec, validatorOptions))
 
+		// Custom exec endpoint (uses HTTP hijacking for bidirectional streaming)
+		r.Post("/instances/{id}/exec", app.ApiService.ExecHandler)
+
 		// Setup strict handler
 		strictHandler := oapi.NewStrictHandler(app.ApiService, nil)
 

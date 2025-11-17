@@ -13,6 +13,23 @@ import (
 	"github.com/onkernel/hypeman/lib/vmm"
 )
 
+// generateVsockCID converts first 8 chars of instance ID to a unique CID
+// CIDs 0-2 are reserved (hypervisor, loopback, host)
+// Returns value in range 3 to 4294967295
+func generateVsockCID(instanceID string) int64 {
+	idPrefix := instanceID
+	if len(idPrefix) > 8 {
+		idPrefix = idPrefix[:8]
+	}
+
+	var sum int64
+	for _, c := range idPrefix {
+		sum = sum*37 + int64(c)
+	}
+
+	return (sum % 4294967292) + 3
+}
+
 // createInstance creates and starts a new instance
 // Multi-hop orchestration: Stopped → Created → Running
 func (m *manager) createInstance(
@@ -48,7 +65,12 @@ func (m *manager) createInstance(
 	id := cuid2.Generate()
 	log.DebugContext(ctx, "generated instance ID", "id", id)
 
-	// 4. Check instance doesn't already exist
+	// 4. Generate vsock configuration
+	vsockCID := generateVsockCID(id)
+	vsockSocket := m.paths.InstanceVsockSocket(id)
+	log.DebugContext(ctx, "generated vsock config", "id", id, "cid", vsockCID)
+
+	// 5. Check instance doesn't already exist
 	if _, err := m.loadMetadata(id); err == nil {
 		return nil, ErrAlreadyExists
 	}
@@ -99,6 +121,8 @@ func (m *manager) createInstance(
 		CHVersion:     vmm.V49_0, // Use latest
 		SocketPath:    m.paths.InstanceSocket(id),
 		DataDir:       m.paths.InstanceDir(id),
+		VsockCID:      vsockCID,
+		VsockSocket:   vsockSocket,
 	}
 
 	// 8. Ensure directories
@@ -335,6 +359,12 @@ func (m *manager) buildVMConfig(inst *Instance, imageInfo *images.Image) (vmm.Vm
 		Mode: vmm.ConsoleConfigMode("Off"),
 	}
 
+	// vsock configuration for remote exec
+	vsock := vmm.VsockConfig{
+		Cid:    inst.VsockCID,
+		Socket: inst.VsockSocket,
+	}
+
 	return vmm.VmConfig{
 		Payload: payload,
 		Cpus:    &cpus,
@@ -342,6 +372,7 @@ func (m *manager) buildVMConfig(inst *Instance, imageInfo *images.Image) (vmm.Vm
 		Disks:   &disks,
 		Serial:  &serial,
 		Console: &console,
+		Vsock:   &vsock,
 	}, nil
 }
 

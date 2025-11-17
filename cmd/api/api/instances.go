@@ -274,6 +274,17 @@ func (s *ApiService) DetachVolume(ctx context.Context, request oapi.DetachVolume
 			}, nil
 }
 
+// ExecInstance is a stub for the strict handler - actual exec uses ExecHandler
+func (s *ApiService) ExecInstance(ctx context.Context, request oapi.ExecInstanceRequestObject) (oapi.ExecInstanceResponseObject, error) {
+	// This method exists to satisfy the StrictServerInterface
+	// Actual exec functionality is handled by ExecHandler which uses HTTP hijacking
+	// This should never be called since we register the custom route first
+	return oapi.ExecInstance500JSONResponse{
+		Code:    "internal_error",
+		Message: "use custom exec endpoint",
+	}, nil
+}
+
 // instanceToOAPI converts domain Instance to OAPI Instance
 func instanceToOAPI(inst instances.Instance) oapi.Instance {
 	// Format sizes as human-readable strings with best precision

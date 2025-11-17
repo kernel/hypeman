@@ -14,14 +14,13 @@ const (
 
 	// Initrd versions (our internal versioning)
 	// Bump when init script logic changes
-	InitrdV1_0_0 InitrdVersion = "v1.0.0"
+	InitrdV2_0_0 InitrdVersion = "v2.0.0"
 )
 
-// InitrdBusyboxVersions maps initrd versions to specific busybox digests
-// Using digest references (not mutable tags) ensures reproducible builds
-// When bumping initrd version, you can reuse the same busybox digest if busybox doesn't need updating
-var InitrdBusyboxVersions = map[InitrdVersion]string{
-	InitrdV1_0_0: "docker.io/library/busybox@sha256:355b3a1bf5609da364166913878a8508d4ba30572d02020a97028c75477e24ff", // busybox:stable as of 2025-01-12
+// InitrdBaseImages maps initrd versions to specific base image references
+// v2.0.0: Uses pre-built Alpine image with exec-agent from Docker Hub (multi-arch OCI manifest list)
+var InitrdBaseImages = map[InitrdVersion]string{
+	InitrdV2_0_0: "docker.io/onkernel/hypeman-initrd:1d4efc9-oci",
 	// Add future versions here
 }
 
@@ -30,7 +29,7 @@ var (
 	DefaultKernelVersion = KernelCH_6_12_8_20250613
 
 	// DefaultInitrdVersion is the initrd version used for new instances
-	DefaultInitrdVersion = InitrdV1_0_0
+	DefaultInitrdVersion = InitrdV2_0_0
 
 	// SupportedKernelVersions lists all supported kernel versions
 	SupportedKernelVersions = []KernelVersion{
@@ -40,7 +39,7 @@ var (
 
 	// SupportedInitrdVersions lists all supported initrd versions
 	SupportedInitrdVersions = []InitrdVersion{
-		InitrdV1_0_0,
+		InitrdV2_0_0,
 	}
 )
 

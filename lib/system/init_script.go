@@ -98,17 +98,28 @@ fi
 export PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
 export HOME='/root'
 
+# Start vsock exec agent
+echo "overlay-init: starting exec agent"
+chroot /overlay/newroot /usr/local/bin/exec-agent 2>/dev/null &
+
 echo "overlay-init: launching entrypoint"
 echo "overlay-init: workdir=${WORKDIR:-/} entrypoint=${ENTRYPOINT} cmd=${CMD}"
 
 # Change to workdir  
 cd ${WORKDIR:-/}
 
-# Execute entrypoint with cmd as arguments
-# Using eval to properly handle quoted arguments in ENTRYPOINT and CMD
-# This preserves arguments like 'daemon off;' as single args
-# When it exits, the VM stops (like Docker containers)
-eval "exec chroot /overlay/newroot ${ENTRYPOINT} ${CMD}"
+# Fork container app (supervisor pattern)
+chroot /overlay/newroot ${ENTRYPOINT} ${CMD} &
+APP_PID=$!
+
+echo "overlay-init: container app started (PID $APP_PID)"
+
+# Wait for app to exit
+wait $APP_PID
+APP_EXIT=$?
+
+echo "overlay-init: app exited with code $APP_EXIT"
+exit $APP_EXIT
 `
 }
 

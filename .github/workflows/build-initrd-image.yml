@@ -3,7 +3,8 @@ name: Build Initrd Base Image
 on:
   push:
     paths:
-      - 'lib/system/alpine-initrd/Dockerfile'
+      - 'lib/system/initrd/Dockerfile'
+      - 'lib/system/initrd/guest-agent/**'
       - '.github/workflows/build-initrd-image.yml'
   workflow_dispatch:
 
@@ -26,13 +27,13 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
       
-      - name: Build and push
+      - name: Build and push multi-arch with OCI format
         uses: docker/build-push-action@v5
         with:
-          context: ./lib/system/alpine-initrd
+          context: ./lib/system/initrd
           platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/hypeman-initrd:${{ steps.sha.outputs.short }}
+          outputs: type=registry,name=${{ secrets.DOCKERHUB_USERNAME }}/hypeman-initrd:${{ steps.sha.outputs.short }}-oci,push=true,oci-mediatypes=true
+          provenance: false
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

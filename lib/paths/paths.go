@@ -122,6 +122,11 @@ func (p *Paths) InstanceSocket(id string) string {
 	return filepath.Join(p.InstanceDir(id), "ch.sock")
 }
 
+// InstanceVsockSocket returns the path to instance vsock socket.
+func (p *Paths) InstanceVsockSocket(id string) string {
+	return filepath.Join(p.InstanceDir(id), "vsock.sock")
+}
+
 // InstanceLogs returns the path to instance logs directory.
 func (p *Paths) InstanceLogs(id string) string {
 	return filepath.Join(p.InstanceDir(id), "logs")

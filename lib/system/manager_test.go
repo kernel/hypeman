@@ -29,9 +29,9 @@ func TestGetPaths(t *testing.T) {
 	assert.Contains(t, kernelPath, "vmlinux")
 
 	// Get initrd path
-	initrdPath, err := mgr.GetInitrdPath(InitrdV1_0_0)
+	initrdPath, err := mgr.GetInitrdPath(InitrdV2_0_0)
 	require.NoError(t, err)
-	assert.Contains(t, initrdPath, "initrd/v1.0.0")
+	assert.Contains(t, initrdPath, "initrd/v2.0.0")
 	assert.Contains(t, initrdPath, "initrd")
 }
 
@@ -66,7 +66,7 @@ func TestEnsureSystemFiles(t *testing.T) {
 }
 
 func TestInitScriptGeneration(t *testing.T) {
-	script := GenerateInitScript(InitrdV1_0_0)
+	script := GenerateInitScript(InitrdV2_0_0)
 
 	// Verify script contains essential components
 	assert.Contains(t, script, "#!/bin/sh")
@@ -74,8 +74,9 @@ func TestInitScriptGeneration(t *testing.T) {
 	assert.Contains(t, script, "/dev/vda") // rootfs disk
 	assert.Contains(t, script, "/dev/vdb") // overlay disk
 	assert.Contains(t, script, "/dev/vdc") // config disk
-	assert.Contains(t, script, "exec chroot")
+	assert.Contains(t, script, "exec-agent")  // vsock exec agent
 	assert.Contains(t, script, "${ENTRYPOINT}")
-	assert.Contains(t, script, "v1.0.0") // Version in script
+	assert.Contains(t, script, "v2.0.0") // Version in script
+	assert.Contains(t, script, "wait $APP_PID") // Supervisor pattern
 }
 
