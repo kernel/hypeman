@@ -1,18 +1,30 @@
 package api
 
 import (
-	"encoding/json"
+	"bytes"
+	"context"
 	"fmt"
+	"io"
 	"net/http"
+	"sync"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/gorilla/websocket"
 	"github.com/onkernel/hypeman/lib/instances"
 	"github.com/onkernel/hypeman/lib/logger"
-	"github.com/onkernel/hypeman/lib/oapi"
 	"github.com/onkernel/hypeman/lib/system"
 )
 
-// ExecHandler handles exec requests via HTTP hijacking for bidirectional streaming
+var upgrader = websocket.Upgrader{
+	ReadBufferSize:  32 * 1024,
+	WriteBufferSize: 32 * 1024,
+	CheckOrigin: func(r *http.Request) bool {
+		// Allow all origins for now - can be tightened in production
+		return true
+	},
+}
+
+// ExecHandler handles exec requests via WebSocket for bidirectional streaming
 func (s *ApiService) ExecHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	log := logger.FromContext(ctx)
@@ -36,58 +48,88 @@ func (s *ApiService) ExecHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse request
-	var req oapi.ExecRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, `{"code":"bad_request","message":"invalid request"}`, http.StatusBadRequest)
-		return
+	// Parse request from query parameters (before WebSocket upgrade)
+	command := r.URL.Query()["command"]
+	if len(command) == 0 {
+		command = []string{"/bin/sh"}
 	}
 
-	if len(req.Command) == 0 {
-		req.Command = []string{"/bin/sh"}
-	}
+	tty := r.URL.Query().Get("tty") != "false"
 
-	tty := true
-	if req.Tty != nil {
-		tty = *req.Tty
-	}
+	log.InfoContext(ctx, "exec session started", "id", instanceID, "command", command, "tty", tty)
 
-	log.InfoContext(ctx, "exec session started", "id", instanceID, "command", req.Command, "tty", tty)
-
-	// Hijack connection for bidirectional streaming
-	hijacker, ok := w.(http.Hijacker)
-	if !ok {
-		http.Error(w, `{"code":"internal_error","message":"streaming not supported"}`, http.StatusInternalServerError)
-		return
-	}
-
-	conn, bufrw, err := hijacker.Hijack()
+	// Upgrade to WebSocket
+	ws, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.ErrorContext(ctx, "hijack failed", "error", err)
+		log.ErrorContext(ctx, "websocket upgrade failed", "error", err)
 		return
 	}
-	defer conn.Close()
+	defer ws.Close()
 
-	// Send 101 Switching Protocols
-	bufrw.WriteString("HTTP/1.1 101 Switching Protocols\r\n")
-	bufrw.WriteString("Connection: Upgrade\r\n")
-	bufrw.WriteString("Upgrade: exec-protocol\r\n\r\n")
-	bufrw.Flush()
+	// Create WebSocket read/writer wrapper
+	wsConn := &wsReadWriter{ws: ws, ctx: ctx}
 
 	// Execute via vsock
 	exit, err := system.ExecIntoInstance(ctx, uint32(inst.VsockCID), system.ExecOptions{
-		Command: req.Command,
-		Stdin:   conn,
-		Stdout:  conn,
-		Stderr:  conn, // Combined in TTY mode
+		Command: command,
+		Stdin:   wsConn,
+		Stdout:  wsConn,
+		Stderr:  wsConn,
 		TTY:     tty,
 	})
 
 	if err != nil {
 		log.ErrorContext(ctx, "exec failed", "error", err, "id", instanceID)
+		// Send error message over WebSocket before closing
+		ws.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("Error: %v", err)))
 		return
 	}
 
 	log.InfoContext(ctx, "exec session ended", "id", instanceID, "exit_code", exit.Code)
+}
+
+// wsReadWriter wraps a WebSocket connection to implement io.ReadWriter
+type wsReadWriter struct {
+	ws     *websocket.Conn
+	ctx    context.Context
+	reader io.Reader
+	mu     sync.Mutex
+}
+
+func (w *wsReadWriter) Read(p []byte) (n int, err error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	// If we have a pending reader, continue reading from it
+	if w.reader != nil {
+		n, err = w.reader.Read(p)
+		if err != io.EOF {
+			return n, err
+		}
+		// EOF means we finished this message, get next one
+		w.reader = nil
+	}
+
+	// Read next WebSocket message
+	messageType, data, err := w.ws.ReadMessage()
+	if err != nil {
+		return 0, err
+	}
+
+	// Only handle binary and text messages
+	if messageType != websocket.BinaryMessage && messageType != websocket.TextMessage {
+		return 0, fmt.Errorf("unexpected message type: %d", messageType)
+	}
+
+	// Create reader for this message
+	w.reader = bytes.NewReader(data)
+	return w.reader.Read(p)
+}
+
+func (w *wsReadWriter) Write(p []byte) (n int, err error) {
+	if err := w.ws.WriteMessage(websocket.BinaryMessage, p); err != nil {
+		return 0, err
+	}
+	return len(p), nil
 }
 

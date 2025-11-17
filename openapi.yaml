@@ -746,7 +746,7 @@ paths:
   
   /instances/{id}/exec:
     post:
-      summary: Execute command in instance via vsock
+      summary: Execute command in instance via vsock (WebSocket)
       operationId: execInstance
       security:
         - bearerAuth: []
@@ -756,15 +756,24 @@ paths:
           required: true
           schema:
             type: string
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/ExecRequest"
+        - name: command
+          in: query
+          required: false
+          schema:
+            type: array
+            items:
+              type: string
+          description: Command to execute (defaults to /bin/sh)
+        - name: tty
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: true
+          description: Allocate a pseudo-TTY
       responses:
         101:
-          description: Switching to bidirectional stream
+          description: Switching to WebSocket protocol
         404:
           description: Instance not found
           content:
