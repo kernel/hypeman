@@ -91,23 +91,62 @@ func TestExecInstanceNonTTY(t *testing.T) {
 	require.NotEmpty(t, actualInst.VsockSocket, "vsock socket path should be set")
 	t.Logf("vsock CID: %d, socket: %s", actualInst.VsockCID, actualInst.VsockSocket)
 
-	// Test exec with a simple command
+	// Wait for exec agent to be ready (retry a few times)
+	var exit *system.ExitStatus
+	var stdout, stderr outputBuffer
+	var execErr error
+	
 	t.Log("Testing exec command: whoami")
-	exit, err := system.ExecIntoInstance(ctx(), uint32(actualInst.VsockCID), system.ExecOptions{
-		Command: []string{"/bin/sh", "-c", "whoami"},
+	maxRetries := 10
+	for i := 0; i < maxRetries; i++ {
+		stdout = outputBuffer{}
+		stderr = outputBuffer{}
+		
+		exit, execErr = system.ExecIntoInstance(ctx(), uint32(actualInst.VsockCID), system.ExecOptions{
+			Command: []string{"/bin/sh", "-c", "whoami"},
+			Stdin:   nil,
+			Stdout:  &stdout,
+			Stderr:  &stderr,
+			TTY:     false,
+		})
+		
+		if execErr == nil {
+			break
+		}
+		
+		t.Logf("Exec attempt %d/%d failed, retrying: %v", i+1, maxRetries, execErr)
+		time.Sleep(1 * time.Second)
+	}
+	
+	// Assert exec worked
+	require.NoError(t, execErr, "exec should succeed after retries")
+	require.NotNil(t, exit, "exit status should be returned")
+	require.Equal(t, 0, exit.Code, "whoami should exit with code 0")
+	
+	// Verify output
+	outStr := stdout.String()
+	t.Logf("Command output: %q", outStr)
+	require.Contains(t, outStr, "root", "whoami should return root user")
+	
+	// Test another command to verify filesystem access
+	t.Log("Testing exec command: ls /usr/local/bin/exec-agent")
+	stdout = outputBuffer{}
+	stderr = outputBuffer{}
+	
+	exit, err = system.ExecIntoInstance(ctx(), uint32(actualInst.VsockCID), system.ExecOptions{
+		Command: []string{"/bin/sh", "-c", "ls -la /usr/local/bin/exec-agent"},
 		Stdin:   nil,
-		Stdout:  &outputBuffer{},
-		Stderr:  &outputBuffer{},
+		Stdout:  &stdout,
+		Stderr:  &stderr,
 		TTY:     false,
 	})
-
-	if err != nil {
-		t.Logf("Exec failed (expected if agent not fully ready): %v", err)
-		// This is acceptable - the agent might not be fully initialized yet
-	} else {
-		t.Logf("Exec succeeded with exit code: %d", exit.Code)
-		assert.Equal(t, 0, exit.Code, "whoami should succeed with exit code 0")
-	}
+	
+	require.NoError(t, err, "ls command should succeed")
+	require.Equal(t, 0, exit.Code, "ls should exit with code 0")
+	
+	outStr = stdout.String()
+	t.Logf("ls output: %q", outStr)
+	require.Contains(t, outStr, "exec-agent", "should see exec-agent binary in /usr/local/bin")
 
 	// Cleanup
 	t.Log("Cleaning up instance...")

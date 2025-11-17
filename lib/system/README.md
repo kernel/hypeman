@@ -66,6 +66,33 @@ All init logic moved from app rootfs to initrd:
 
 **Result:** OCI images require **zero modifications** - no `/init` script needed!
 
+## Remote Exec (vsock)
+
+v2.0.0+ includes a guest exec-agent for remote command execution via vsock:
+
+**Architecture:**
+```
+Host                  vsock               Guest (initrd)
+lib/system/exec.go → [socket] → exec-agent → forks command in container
+```
+
+**Features:**
+- Network-independent (works even if guest networking is down)
+- TTY support (interactive shells)
+- Separate stdout/stderr streams
+- Terminal resize support
+- Exit code propagation
+
+**Protocol:**
+Simple 5-byte framing: `[type:1][length:4][data:N]`
+- Type 0: stdin, 1: stdout, 2: stderr, 3: error/exit, 4: resize
+
+**Guest agent:**
+- Built into initrd (`/usr/local/bin/exec-agent`)
+- Listens on vsock port 2222
+- Forks commands with PTY support
+- Runs as supervisor alongside container app
+
 ## Usage
 
 ### Application Startup
