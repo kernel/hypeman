@@ -127,21 +127,6 @@ wait $APP_PID
 APP_EXIT=$?
 
 echo "overlay-init: app exited with code $APP_EXIT"
-
-	# Keep VM alive if app crashes, to allow debugging via exec-agent
-	if [ $APP_EXIT -ne 0 ]; then
-		echo "overlay-init: CRITICAL - App exited with error."
-	fi
-
-	# FALLBACK: Launch interactive shell on console
-	# This allows manual debugging if attaching to the console
-	echo "overlay-init: Launching interactive shell on ttyS0..."
-	setsid cttyhack /bin/sh < /dev/ttyS0 > /dev/ttyS0 2>&1
-
-	# If shell exits (it shouldn't), loop forever
-	while true; do sleep 3600; done
-
-	exit $APP_EXIT
-	`
+exit $APP_EXIT`
 }
 

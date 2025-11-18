@@ -177,7 +177,6 @@ func TestCreateAndDeleteInstance(t *testing.T) {
 	assert.Equal(t, StateRunning, inst.State)
 	assert.False(t, inst.HasSnapshot)
 	assert.NotEmpty(t, inst.KernelVersion)
-	assert.NotEmpty(t, inst.InitrdVersion)
 
 	// Verify directories exist
 	p := paths.New(tmpDir)

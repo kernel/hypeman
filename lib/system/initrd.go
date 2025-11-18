@@ -75,6 +75,13 @@ func (m *manager) buildInitrd(ctx context.Context, arch string) (string, error) 
 		return "", fmt.Errorf("export initrd: %w", err)
 	}
 
+	// Store hash for staleness detection
+	hashPath := filepath.Join(filepath.Dir(outputPath), ".hash")
+	currentHash := computeInitrdHash()
+	if err := os.WriteFile(hashPath, []byte(currentHash), 0644); err != nil {
+		return "", fmt.Errorf("write hash file: %w", err)
+	}
+
 	// Update 'latest' symlink
 	latestLink := m.paths.SystemInitrdLatest(arch)
 	// Remove old symlink if it exists
@@ -113,13 +120,19 @@ func (m *manager) ensureInitrd(ctx context.Context) (string, error) {
 	return initrdPath, nil
 }
 
-// isInitrdStale checks if the initrd needs rebuilding by comparing embedded binary hash
+// isInitrdStale checks if the initrd needs rebuilding by comparing hashes
 func (m *manager) isInitrdStale(initrdPath string) bool {
-	// For now, we'll consider it stale if the embedded binary has changed
-	// We could store a hash file alongside the initrd and compare
-	// For simplicity, we'll just rebuild on every run for now
-	// TODO: Implement proper hash-based staleness check
-	return false
+	// Read stored hash
+	hashPath := filepath.Join(filepath.Dir(initrdPath), ".hash")
+	storedHash, err := os.ReadFile(hashPath)
+	if err != nil {
+		// No hash file, consider stale
+		return true
+	}
+
+	// Compare with current hash
+	currentHash := computeInitrdHash()
+	return string(storedHash) != currentHash
 }
 
 // computeInitrdHash computes a hash of the embedded binary and init script

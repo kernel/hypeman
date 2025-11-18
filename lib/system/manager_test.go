@@ -9,30 +9,23 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestGetDefaultVersions(t *testing.T) {
+func TestGetDefaultKernelVersion(t *testing.T) {
 	tmpDir := t.TempDir()
 	mgr := NewManager(paths.New(tmpDir))
 
-	kernelVer, initrdVer := mgr.GetDefaultVersions()
+	kernelVer := mgr.GetDefaultKernelVersion()
 	assert.Equal(t, DefaultKernelVersion, kernelVer)
-	assert.Equal(t, DefaultInitrdVersion, initrdVer)
 }
 
-func TestGetPaths(t *testing.T) {
+func TestGetKernelPath(t *testing.T) {
 	tmpDir := t.TempDir()
 	mgr := NewManager(paths.New(tmpDir))
 
 	// Get kernel path
-	kernelPath, err := mgr.GetKernelPath(KernelCH_6_12_8_20250613)
+	kernelPath, err := mgr.GetKernelPath(DefaultKernelVersion)
 	require.NoError(t, err)
-	assert.Contains(t, kernelPath, "kernel/ch-release-v6.12.8-20250613")
+	assert.Contains(t, kernelPath, "kernel")
 	assert.Contains(t, kernelPath, "vmlinux")
-
-	// Get initrd path
-	initrdPath, err := mgr.GetInitrdPath(InitrdV2_0_0)
-	require.NoError(t, err)
-	assert.Contains(t, initrdPath, "initrd/v2.0.0")
-	assert.Contains(t, initrdPath, "initrd")
 }
 
 func TestEnsureSystemFiles(t *testing.T) {
@@ -56,7 +49,7 @@ func TestEnsureSystemFiles(t *testing.T) {
 	assert.FileExists(t, kernelPath)
 
 	// Verify initrd exists
-	initrdPath, err := mgr.GetInitrdPath(DefaultInitrdVersion)
+	initrdPath, err := mgr.GetInitrdPath()
 	require.NoError(t, err)
 	assert.FileExists(t, initrdPath)
 
@@ -66,7 +59,7 @@ func TestEnsureSystemFiles(t *testing.T) {
 }
 
 func TestInitScriptGeneration(t *testing.T) {
-	script := GenerateInitScript(InitrdV2_0_0)
+	script := GenerateInitScript()
 
 	// Verify script contains essential components
 	assert.Contains(t, script, "#!/bin/sh")
@@ -76,7 +69,5 @@ func TestInitScriptGeneration(t *testing.T) {
 	assert.Contains(t, script, "/dev/vdc") // config disk
 	assert.Contains(t, script, "exec-agent")  // vsock exec agent
 	assert.Contains(t, script, "${ENTRYPOINT}")
-	assert.Contains(t, script, "v2.0.0") // Version in script
 	assert.Contains(t, script, "wait $APP_PID") // Supervisor pattern
 }
-
