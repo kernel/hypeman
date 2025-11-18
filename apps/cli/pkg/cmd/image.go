@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/onkernel/hypeman-cli/pkg/jsonflag"
 	"github.com/onkernel/hypeman-go"
 	"github.com/onkernel/hypeman-go/option"
 	"github.com/tidwall/gjson"
@@ -17,13 +16,9 @@ var imagesCreate = cli.Command{
 	Name:  "create",
 	Usage: "Pull and convert OCI image",
 	Flags: []cli.Flag{
-		&jsonflag.JSONStringFlag{
+		&cli.StringFlag{
 			Name:  "name",
 			Usage: "OCI image reference (e.g., docker.io/library/nginx:latest)",
-			Config: jsonflag.JSONConfig{
-				Kind: jsonflag.Body,
-				Path: "name",
-			},
 		},
 	},
 	Action:          handleImagesCreate,
@@ -63,17 +58,22 @@ var imagesDelete = cli.Command{
 }
 
 func handleImagesCreate(ctx context.Context, cmd *cli.Command) error {
-	cc := getAPICommandContext(cmd)
+	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
 	unusedArgs := cmd.Args().Slice()
 	if len(unusedArgs) > 0 {
 		return fmt.Errorf("Unexpected extra arguments: %v", unusedArgs)
 	}
 	params := hypeman.ImageNewParams{}
+	if err := unmarshalStdinWithFlags(cmd, map[string]string{
+		"name": "name",
+	}, &params); err != nil {
+		return err
+	}
 	var res []byte
-	_, err := cc.client.Images.New(
+	_, err := client.Images.New(
 		ctx,
 		params,
-		option.WithMiddleware(cc.AsMiddleware()),
+		option.WithMiddleware(debugMiddleware(cmd.Bool("debug"))),
 		option.WithResponseBodyInto(&res),
 	)
 	if err != nil {
@@ -87,7 +87,7 @@ func handleImagesCreate(ctx context.Context, cmd *cli.Command) error {
 }
 
 func handleImagesRetrieve(ctx context.Context, cmd *cli.Command) error {
-	cc := getAPICommandContext(cmd)
+	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
 	unusedArgs := cmd.Args().Slice()
 	if !cmd.IsSet("name") && len(unusedArgs) > 0 {
 		cmd.Set("name", unusedArgs[0])
@@ -97,10 +97,10 @@ func handleImagesRetrieve(ctx context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("Unexpected extra arguments: %v", unusedArgs)
 	}
 	var res []byte
-	_, err := cc.client.Images.Get(
+	_, err := client.Images.Get(
 		ctx,
 		cmd.Value("name").(string),
-		option.WithMiddleware(cc.AsMiddleware()),
+		option.WithMiddleware(debugMiddleware(cmd.Bool("debug"))),
 		option.WithResponseBodyInto(&res),
 	)
 	if err != nil {
@@ -114,15 +114,15 @@ func handleImagesRetrieve(ctx context.Context, cmd *cli.Command) error {
 }
 
 func handleImagesList(ctx context.Context, cmd *cli.Command) error {
-	cc := getAPICommandContext(cmd)
+	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
 	unusedArgs := cmd.Args().Slice()
 	if len(unusedArgs) > 0 {
 		return fmt.Errorf("Unexpected extra arguments: %v", unusedArgs)
 	}
 	var res []byte
-	_, err := cc.client.Images.List(
+	_, err := client.Images.List(
 		ctx,
-		option.WithMiddleware(cc.AsMiddleware()),
+		option.WithMiddleware(debugMiddleware(cmd.Bool("debug"))),
 		option.WithResponseBodyInto(&res),
 	)
 	if err != nil {
@@ -136,7 +136,7 @@ func handleImagesList(ctx context.Context, cmd *cli.Command) error {
 }
 
 func handleImagesDelete(ctx context.Context, cmd *cli.Command) error {
-	cc := getAPICommandContext(cmd)
+	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
 	unusedArgs := cmd.Args().Slice()
 	if !cmd.IsSet("name") && len(unusedArgs) > 0 {
 		cmd.Set("name", unusedArgs[0])
@@ -145,9 +145,9 @@ func handleImagesDelete(ctx context.Context, cmd *cli.Command) error {
 	if len(unusedArgs) > 0 {
 		return fmt.Errorf("Unexpected extra arguments: %v", unusedArgs)
 	}
-	return cc.client.Images.Delete(
+	return client.Images.Delete(
 		ctx,
 		cmd.Value("name").(string),
-		option.WithMiddleware(cc.AsMiddleware()),
+		option.WithMiddleware(debugMiddleware(cmd.Bool("debug"))),
 	)
 }

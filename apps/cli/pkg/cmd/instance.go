@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/onkernel/hypeman-cli/pkg/jsonflag"
 	"github.com/onkernel/hypeman-go"
 	"github.com/onkernel/hypeman-go/option"
 	"github.com/tidwall/gjson"
@@ -17,134 +16,37 @@ var instancesCreate = cli.Command{
 	Name:  "create",
 	Usage: "Create and start instance",
 	Flags: []cli.Flag{
-		&jsonflag.JSONStringFlag{
+		&cli.StringFlag{
 			Name:  "id",
 			Usage: "Unique identifier for the instance (provided by caller)",
-			Config: jsonflag.JSONConfig{
-				Kind: jsonflag.Body,
-				Path: "id",
-			},
 		},
-		&jsonflag.JSONStringFlag{
+		&cli.StringFlag{
 			Name:  "image",
 			Usage: "Image identifier",
-			Config: jsonflag.JSONConfig{
-				Kind: jsonflag.Body,
-				Path: "image",
-			},
 		},
-		&jsonflag.JSONStringFlag{
+		&cli.StringFlag{
 			Name:  "name",
 			Usage: "Human-readable name",
-			Config: jsonflag.JSONConfig{
-				Kind: jsonflag.Body,
-				Path: "name",
-			},
 		},
-		&jsonflag.JSONIntFlag{
+		&cli.Int64Flag{
 			Name:  "memory-max-mb",
 			Usage: "Maximum memory with hotplug in MB",
-			Config: jsonflag.JSONConfig{
-				Kind: jsonflag.Body,
-				Path: "memory_max_mb",
-			},
 			Value: 4096,
 		},
-		&jsonflag.JSONIntFlag{
+		&cli.Int64Flag{
 			Name:  "memory-mb",
 			Usage: "Base memory in MB",
-			Config: jsonflag.JSONConfig{
-				Kind: jsonflag.Body,
-				Path: "memory_mb",
-			},
 			Value: 1024,
 		},
-		&jsonflag.JSONIntFlag{
-			Name:  "port-mappings.guest_port",
-			Usage: "Port mappings from host to guest",
-			Config: jsonflag.JSONConfig{
-				Kind: jsonflag.Body,
-				Path: "port_mappings.#.guest_port",
-			},
-		},
-		&jsonflag.JSONIntFlag{
-			Name:  "port-mappings.host_port",
-			Usage: "Port mappings from host to guest",
-			Config: jsonflag.JSONConfig{
-				Kind: jsonflag.Body,
-				Path: "port_mappings.#.host_port",
-			},
-		},
-		&jsonflag.JSONStringFlag{
-			Name:  "port-mappings.protocol",
-			Usage: "Port mappings from host to guest",
-			Config: jsonflag.JSONConfig{
-				Kind: jsonflag.Body,
-				Path: "port_mappings.#.protocol",
-			},
-			Value: "tcp",
-		},
-		&jsonflag.JSONAnyFlag{
-			Name:  "+port-mapping",
-			Usage: "Port mappings from host to guest",
-			Config: jsonflag.JSONConfig{
-				Kind:     jsonflag.Body,
-				Path:     "port_mappings.-1",
-				SetValue: map[string]interface{}{},
-			},
-		},
-		&jsonflag.JSONIntFlag{
+		&cli.Int64Flag{
 			Name:  "timeout-seconds",
 			Usage: "Timeout for scale-to-zero semantics",
-			Config: jsonflag.JSONConfig{
-				Kind: jsonflag.Body,
-				Path: "timeout_seconds",
-			},
 			Value: 3600,
 		},
-		&jsonflag.JSONIntFlag{
+		&cli.Int64Flag{
 			Name:  "vcpus",
 			Usage: "Number of virtual CPUs",
-			Config: jsonflag.JSONConfig{
-				Kind: jsonflag.Body,
-				Path: "vcpus",
-			},
 			Value: 2,
-		},
-		&jsonflag.JSONStringFlag{
-			Name:  "volumes.mount_path",
-			Usage: "Volumes to attach",
-			Config: jsonflag.JSONConfig{
-				Kind: jsonflag.Body,
-				Path: "volumes.#.mount_path",
-			},
-		},
-		&jsonflag.JSONStringFlag{
-			Name:  "volumes.volume_id",
-			Usage: "Volumes to attach",
-			Config: jsonflag.JSONConfig{
-				Kind: jsonflag.Body,
-				Path: "volumes.#.volume_id",
-			},
-		},
-		&jsonflag.JSONBoolFlag{
-			Name:  "volumes.readonly",
-			Usage: "Volumes to attach",
-			Config: jsonflag.JSONConfig{
-				Kind:     jsonflag.Body,
-				Path:     "volumes.#.readonly",
-				SetValue: true,
-			},
-			Value: false,
-		},
-		&jsonflag.JSONAnyFlag{
-			Name:  "+volume",
-			Usage: "Volumes to attach",
-			Config: jsonflag.JSONConfig{
-				Kind:     jsonflag.Body,
-				Path:     "volumes.-1",
-				SetValue: map[string]interface{}{},
-			},
 		},
 	},
 	Action:          handleInstancesCreate,
@@ -214,23 +116,13 @@ var instancesStreamLogs = cli.Command{
 		&cli.StringFlag{
 			Name: "id",
 		},
-		&jsonflag.JSONBoolFlag{
+		&cli.BoolFlag{
 			Name:  "follow",
 			Usage: "Follow logs (stream with SSE)",
-			Config: jsonflag.JSONConfig{
-				Kind:     jsonflag.Query,
-				Path:     "follow",
-				SetValue: true,
-			},
-			Value: false,
 		},
-		&jsonflag.JSONIntFlag{
+		&cli.Int64Flag{
 			Name:  "tail",
 			Usage: "Number of lines to return from end",
-			Config: jsonflag.JSONConfig{
-				Kind: jsonflag.Query,
-				Path: "tail",
-			},
 			Value: 100,
 		},
 	},
@@ -239,17 +131,28 @@ var instancesStreamLogs = cli.Command{
 }
 
 func handleInstancesCreate(ctx context.Context, cmd *cli.Command) error {
-	cc := getAPICommandContext(cmd)
+	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
 	unusedArgs := cmd.Args().Slice()
 	if len(unusedArgs) > 0 {
 		return fmt.Errorf("Unexpected extra arguments: %v", unusedArgs)
 	}
 	params := hypeman.InstanceNewParams{}
+	if err := unmarshalStdinWithFlags(cmd, map[string]string{
+		"id":              "id",
+		"image":           "image",
+		"name":            "name",
+		"memory-max-mb":   "memory_max_mb",
+		"memory-mb":       "memory_mb",
+		"timeout-seconds": "timeout_seconds",
+		"vcpus":           "vcpus",
+	}, &params); err != nil {
+		return err
+	}
 	var res []byte
-	_, err := cc.client.Instances.New(
+	_, err := client.Instances.New(
 		ctx,
 		params,
-		option.WithMiddleware(cc.AsMiddleware()),
+		option.WithMiddleware(debugMiddleware(cmd.Bool("debug"))),
 		option.WithResponseBodyInto(&res),
 	)
 	if err != nil {
@@ -263,7 +166,7 @@ func handleInstancesCreate(ctx context.Context, cmd *cli.Command) error {
 }
 
 func handleInstancesRetrieve(ctx context.Context, cmd *cli.Command) error {
-	cc := getAPICommandContext(cmd)
+	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
 	unusedArgs := cmd.Args().Slice()
 	if !cmd.IsSet("id") && len(unusedArgs) > 0 {
 		cmd.Set("id", unusedArgs[0])
@@ -273,10 +176,10 @@ func handleInstancesRetrieve(ctx context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("Unexpected extra arguments: %v", unusedArgs)
 	}
 	var res []byte
-	_, err := cc.client.Instances.Get(
+	_, err := client.Instances.Get(
 		ctx,
 		cmd.Value("id").(string),
-		option.WithMiddleware(cc.AsMiddleware()),
+		option.WithMiddleware(debugMiddleware(cmd.Bool("debug"))),
 		option.WithResponseBodyInto(&res),
 	)
 	if err != nil {
@@ -290,15 +193,15 @@ func handleInstancesRetrieve(ctx context.Context, cmd *cli.Command) error {
 }
 
 func handleInstancesList(ctx context.Context, cmd *cli.Command) error {
-	cc := getAPICommandContext(cmd)
+	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
 	unusedArgs := cmd.Args().Slice()
 	if len(unusedArgs) > 0 {
 		return fmt.Errorf("Unexpected extra arguments: %v", unusedArgs)
 	}
 	var res []byte
-	_, err := cc.client.Instances.List(
+	_, err := client.Instances.List(
 		ctx,
-		option.WithMiddleware(cc.AsMiddleware()),
+		option.WithMiddleware(debugMiddleware(cmd.Bool("debug"))),
 		option.WithResponseBodyInto(&res),
 	)
 	if err != nil {
@@ -312,7 +215,7 @@ func handleInstancesList(ctx context.Context, cmd *cli.Command) error {
 }
 
 func handleInstancesDelete(ctx context.Context, cmd *cli.Command) error {
-	cc := getAPICommandContext(cmd)
+	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
 	unusedArgs := cmd.Args().Slice()
 	if !cmd.IsSet("id") && len(unusedArgs) > 0 {
 		cmd.Set("id", unusedArgs[0])
@@ -321,15 +224,15 @@ func handleInstancesDelete(ctx context.Context, cmd *cli.Command) error {
 	if len(unusedArgs) > 0 {
 		return fmt.Errorf("Unexpected extra arguments: %v", unusedArgs)
 	}
-	return cc.client.Instances.Delete(
+	return client.Instances.Delete(
 		ctx,
 		cmd.Value("id").(string),
-		option.WithMiddleware(cc.AsMiddleware()),
+		option.WithMiddleware(debugMiddleware(cmd.Bool("debug"))),
 	)
 }
 
 func handleInstancesPutInStandby(ctx context.Context, cmd *cli.Command) error {
-	cc := getAPICommandContext(cmd)
+	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
 	unusedArgs := cmd.Args().Slice()
 	if !cmd.IsSet("id") && len(unusedArgs) > 0 {
 		cmd.Set("id", unusedArgs[0])
@@ -339,10 +242,10 @@ func handleInstancesPutInStandby(ctx context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("Unexpected extra arguments: %v", unusedArgs)
 	}
 	var res []byte
-	_, err := cc.client.Instances.PutInStandby(
+	_, err := client.Instances.PutInStandby(
 		ctx,
 		cmd.Value("id").(string),
-		option.WithMiddleware(cc.AsMiddleware()),
+		option.WithMiddleware(debugMiddleware(cmd.Bool("debug"))),
 		option.WithResponseBodyInto(&res),
 	)
 	if err != nil {
@@ -356,7 +259,7 @@ func handleInstancesPutInStandby(ctx context.Context, cmd *cli.Command) error {
 }
 
 func handleInstancesRestoreFromStandby(ctx context.Context, cmd *cli.Command) error {
-	cc := getAPICommandContext(cmd)
+	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
 	unusedArgs := cmd.Args().Slice()
 	if !cmd.IsSet("id") && len(unusedArgs) > 0 {
 		cmd.Set("id", unusedArgs[0])
@@ -366,10 +269,10 @@ func handleInstancesRestoreFromStandby(ctx context.Context, cmd *cli.Command) er
 		return fmt.Errorf("Unexpected extra arguments: %v", unusedArgs)
 	}
 	var res []byte
-	_, err := cc.client.Instances.RestoreFromStandby(
+	_, err := client.Instances.RestoreFromStandby(
 		ctx,
 		cmd.Value("id").(string),
-		option.WithMiddleware(cc.AsMiddleware()),
+		option.WithMiddleware(debugMiddleware(cmd.Bool("debug"))),
 		option.WithResponseBodyInto(&res),
 	)
 	if err != nil {
@@ -383,7 +286,7 @@ func handleInstancesRestoreFromStandby(ctx context.Context, cmd *cli.Command) er
 }
 
 func handleInstancesStreamLogs(ctx context.Context, cmd *cli.Command) error {
-	cc := getAPICommandContext(cmd)
+	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
 	unusedArgs := cmd.Args().Slice()
 	if !cmd.IsSet("id") && len(unusedArgs) > 0 {
 		cmd.Set("id", unusedArgs[0])
@@ -393,11 +296,17 @@ func handleInstancesStreamLogs(ctx context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("Unexpected extra arguments: %v", unusedArgs)
 	}
 	params := hypeman.InstanceStreamLogsParams{}
-	stream := cc.client.Instances.StreamLogsStreaming(
+	if cmd.IsSet("follow") {
+		params.Follow = hypeman.Opt(cmd.Value("follow").(bool))
+	}
+	if cmd.IsSet("tail") {
+		params.Tail = hypeman.Opt(cmd.Value("tail").(int64))
+	}
+	stream := client.Instances.StreamLogsStreaming(
 		ctx,
 		cmd.Value("id").(string),
 		params,
-		option.WithMiddleware(cc.AsMiddleware()),
+		option.WithMiddleware(debugMiddleware(cmd.Bool("debug"))),
 	)
 	defer stream.Close()
 	for stream.Next() {
