@@ -70,7 +70,7 @@ func (s *ApiService) ExecHandler(w http.ResponseWriter, r *http.Request) {
 	wsConn := &wsReadWriter{ws: ws, ctx: ctx}
 
 	// Execute via vsock
-	exit, err := system.ExecIntoInstance(ctx, uint32(inst.VsockCID), system.ExecOptions{
+	exit, err := system.ExecIntoInstance(ctx, inst.VsockSocket, system.ExecOptions{
 		Command: command,
 		Stdin:   wsConn,
 		Stdout:  wsConn,

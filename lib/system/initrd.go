@@ -51,6 +51,26 @@ func (m *manager) buildInitrd(ctx context.Context, version InitrdVersion, arch s
 		return fmt.Errorf("write init script: %w", err)
 	}
 
+	// HACK: Inject custom exec-agent for debugging
+	// This assumes the agent is built at lib/system/initrd/guest-agent/exec-agent
+	// We try to find it relative to the project root.
+	// Since we are running from project root usually, or we can try to find it.
+	// Hardcoding path based on workspace structure for now.
+	customAgent := "/home/debianuser/hypeman/lib/system/initrd/guest-agent/exec-agent"
+	if input, err := os.ReadFile(customAgent); err == nil {
+		// Create directory if it doesn't exist (though it should from base image)
+		binDir := filepath.Join(rootfsDir, "usr/local/bin")
+		os.MkdirAll(binDir, 0755)
+		
+		agentPath := filepath.Join(binDir, "exec-agent")
+		if err := os.WriteFile(agentPath, input, 0755); err != nil {
+			return fmt.Errorf("write custom exec-agent: %w", err)
+		}
+		fmt.Printf("DEBUG: Injected custom exec-agent from %s\n", customAgent)
+	} else {
+		fmt.Printf("DEBUG: Could not find custom exec-agent at %s: %v\n", customAgent, err)
+	}
+
 	// Package as cpio.gz (initramfs format)
 	outputPath := m.paths.SystemInitrd(string(version), arch)
 	if _, err := images.ExportRootfs(rootfsDir, outputPath, images.FormatCpio); err != nil {
@@ -77,5 +97,10 @@ func (m *manager) ensureInitrd(ctx context.Context, version InitrdVersion) (stri
 	}
 
 	return initrdPath, nil
+}
+
+// BuildInitrd is a public wrapper for building initrd (used by dev tools)
+func (m *manager) BuildInitrd(ctx context.Context, version InitrdVersion, arch string) error {
+	return m.buildInitrd(ctx, version, arch)
 }
 

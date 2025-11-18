@@ -792,7 +792,7 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
-
+  
   /instances/{id}/volumes/{volumeId}:
     post:
       summary: Attach volume to instance

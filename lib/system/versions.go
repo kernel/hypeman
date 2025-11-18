@@ -9,45 +9,55 @@ type KernelVersion string
 type InitrdVersion string
 
 const (
-	// Kernel versions from Cloud Hypervisor releases (full version with date)
-	KernelCH_6_12_8_20250613 KernelVersion = "ch-release-v6.12.8-20250613"
+	// Kernel versions from Kernel linux build
+	Kernel_202511182 KernelVersion = "ch-6.12.8-kernel-1-202511182"
 
 	// Initrd versions (our internal versioning)
 	// Bump when init script logic changes
 	InitrdV2_0_0 InitrdVersion = "v2.0.0"
+	InitrdV2_0_1 InitrdVersion = "v2.0.1"
+	InitrdV2_0_2 InitrdVersion = "v2.0.2"
 )
 
 // InitrdBaseImages maps initrd versions to specific base image references
 // v2.0.0: Uses pre-built Alpine image with exec-agent from Docker Hub (multi-arch OCI manifest list)
+// v2.0.1: Uses same base but we will inject local agent
+// v2.0.2: Uses same base but with interactive shell fallback
+// v2.0.2-dev: Local dev build (built via cmd/build-dev-initrd)
 var InitrdBaseImages = map[InitrdVersion]string{
-	InitrdV2_0_0: "docker.io/onkernel/hypeman-initrd:1d4efc9-oci",
+	InitrdV2_0_0:                "docker.io/onkernel/hypeman-initrd:d0e84c2-oci",
+	InitrdV2_0_1:                "docker.io/onkernel/hypeman-initrd:d0e84c2-oci",
+	InitrdV2_0_2:                "docker.io/onkernel/hypeman-initrd:d0e84c2-oci",
+	InitrdVersion("v2.0.2-dev"): "docker.io/onkernel/hypeman-initrd:d0e84c2-oci", // Not used, already built locally
 	// Add future versions here
 }
 
 var (
 	// DefaultKernelVersion is the kernel version used for new instances
-	DefaultKernelVersion = KernelCH_6_12_8_20250613
+	DefaultKernelVersion = Kernel_202511182
 
 	// DefaultInitrdVersion is the initrd version used for new instances
-	DefaultInitrdVersion = InitrdV2_0_0
+	DefaultInitrdVersion = InitrdVersion("v2.0.2-dev")
 
 	// SupportedKernelVersions lists all supported kernel versions
 	SupportedKernelVersions = []KernelVersion{
-		KernelCH_6_12_8_20250613,
+		Kernel_202511182,
 		// Add future versions here
 	}
 
 	// SupportedInitrdVersions lists all supported initrd versions
 	SupportedInitrdVersions = []InitrdVersion{
 		InitrdV2_0_0,
+		InitrdV2_0_1,
+		InitrdV2_0_2,
 	}
 )
 
 // KernelDownloadURLs maps kernel versions and architectures to download URLs
 var KernelDownloadURLs = map[KernelVersion]map[string]string{
-	KernelCH_6_12_8_20250613: {
-		"x86_64":  "https://github.com/cloud-hypervisor/linux/releases/download/ch-release-v6.12.8-20250613/vmlinux-x86_64",
-		"aarch64": "https://github.com/cloud-hypervisor/linux/releases/download/ch-release-v6.12.8-20250613/Image-aarch64",
+	Kernel_202511182: {
+		"x86_64":  "https://github.com/onkernel/linux/releases/download/ch-6.12.8-kernel-1-202511182/vmlinux-x86_64",
+		"aarch64": "https://github.com/onkernel/linux/releases/download/ch-6.12.8-kernel-1-202511182/Image-arm64",
 	},
 	// Add future versions here
 }

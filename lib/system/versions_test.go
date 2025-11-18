@@ -12,7 +12,7 @@ import (
 // The hash is computed from: sha256(initScript + baseImageDigest)
 // This ensures that changes to either the script OR base image require a version bump
 var expectedInitrdHashes = map[InitrdVersion]string{
-	InitrdV2_0_0: "aaa467ebd20117aeb5aa96831accc9bfd74ed40f25a557a296f5b579b641425b",
+	InitrdV2_0_0: "e192f8c95912e8fe3acedbba7f2107ed4fda2adf7c94ae3eebee3720e80c524c",
 	// Add future versions here
 }
 

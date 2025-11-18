@@ -1,14 +1,15 @@
 package system
 
 import (
+	"bufio"
 	"context"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
+	"strings"
 	"sync"
-
-	"github.com/mdlayher/vsock"
 )
 
 const (
@@ -38,13 +39,30 @@ type ExitStatus struct {
 }
 
 // ExecIntoInstance executes command in instance via vsock
-func ExecIntoInstance(ctx context.Context, vsockCID uint32, opts ExecOptions) (*ExitStatus, error) {
-	// Connect to guest on vsock port 2222
-	conn, err := vsock.Dial(vsockCID, 2222, nil)
+// vsockSocketPath is the Unix socket created by Cloud Hypervisor (e.g., /var/lib/hypeman/guests/{id}/vsock.sock)
+func ExecIntoInstance(ctx context.Context, vsockSocketPath string, opts ExecOptions) (*ExitStatus, error) {
+	// Connect to Cloud Hypervisor's vsock Unix socket
+	conn, err := net.Dial("unix", vsockSocketPath)
 	if err != nil {
-		return nil, fmt.Errorf("dial vsock: %w", err)
+		return nil, fmt.Errorf("connect to vsock socket: %w", err)
 	}
 	defer conn.Close()
+
+	// Send the port number per Cloud Hypervisor protocol
+	if _, err := fmt.Fprintf(conn, "CONNECT 2222\n"); err != nil {
+		return nil, fmt.Errorf("send vsock port: %w", err)
+	}
+
+	// Read handshake response (OK <cid>)
+	reader := bufio.NewReader(conn)
+	response, err := reader.ReadString('\n')
+	if err != nil {
+		return nil, fmt.Errorf("read handshake response: %w", err)
+	}
+
+	if !strings.HasPrefix(response, "OK ") {
+		return nil, fmt.Errorf("handshake failed: %s", strings.TrimSpace(response))
+	}
 
 	// Send exec request as first stdin frame
 	req := struct {
@@ -115,7 +133,11 @@ func ExecIntoInstance(ctx context.Context, vsockCID uint32, opts ExecOptions) (*
 		for {
 			streamType, data, err := readFrame(conn)
 			if err != nil {
-				if err != io.EOF {
+				if err == io.EOF {
+					// If we get EOF without having received an exit code (which would return early),
+					// it's an error
+					errChan <- fmt.Errorf("unexpected EOF (no exit code received)")
+				} else {
 					errChan <- err
 				}
 				return
@@ -167,7 +189,7 @@ func ExecIntoInstance(ctx context.Context, vsockCID uint32, opts ExecOptions) (*
 	}
 }
 
-func readFrame(conn *vsock.Conn) (byte, []byte, error) {
+func readFrame(conn net.Conn) (byte, []byte, error) {
 	header := make([]byte, 5)
 	if _, err := io.ReadFull(conn, header); err != nil {
 		return 0, nil, err
@@ -175,7 +197,7 @@ func readFrame(conn *vsock.Conn) (byte, []byte, error) {
 
 	streamType := header[0]
 	length := binary.BigEndian.Uint32(header[1:5])
-
+	
 	data := make([]byte, length)
 	if _, err := io.ReadFull(conn, data); err != nil {
 		return 0, nil, err
@@ -184,7 +206,7 @@ func readFrame(conn *vsock.Conn) (byte, []byte, error) {
 	return streamType, data, nil
 }
 
-func sendFrame(conn *vsock.Conn, streamType byte, data []byte) error {
+func sendFrame(conn net.Conn, streamType byte, data []byte) error {
 	header := make([]byte, 5)
 	header[0] = streamType
 	binary.BigEndian.PutUint32(header[1:5], uint32(len(data)))

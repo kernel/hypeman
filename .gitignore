@@ -17,3 +17,5 @@ tmp/**
 
 # Cloud Hypervisor binaries (embedded at build time)
 lib/vmm/binaries/cloud-hypervisor/*/*/cloud-hypervisor
+cloud-hypervisor
+cloud-hypervisor/**
