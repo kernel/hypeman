@@ -81,7 +81,7 @@ generate-grpc:
 	@echo "Generating gRPC code from proto..."
 	protoc --go_out=. --go_opt=paths=source_relative \
 		--go-grpc_out=. --go-grpc_opt=paths=source_relative \
-		lib/system/exec.proto
+		lib/exec/exec.proto
 
 # Generate all code
 generate-all: oapi-generate generate-vmm-client generate-wire generate-grpc
@@ -121,4 +121,7 @@ clean:
 	rm -rf $(BIN_DIR)
 	rm -f lib/oapi/oapi.go
 	rm -f lib/vmm/vmm.go
+	rm -f lib/exec/exec.pb.go
+	rm -f lib/exec/exec_grpc.pb.go
+	rm -f lib/system/exec_agent/exec-agent
 

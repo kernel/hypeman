@@ -10,9 +10,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/gorilla/websocket"
+	"github.com/onkernel/hypeman/lib/exec"
 	"github.com/onkernel/hypeman/lib/instances"
 	"github.com/onkernel/hypeman/lib/logger"
-	"github.com/onkernel/hypeman/lib/system"
 )
 
 var upgrader = websocket.Upgrader{
@@ -70,7 +70,7 @@ func (s *ApiService) ExecHandler(w http.ResponseWriter, r *http.Request) {
 	wsConn := &wsReadWriter{ws: ws, ctx: ctx}
 
 	// Execute via vsock
-	exit, err := system.ExecIntoInstance(ctx, inst.VsockSocket, system.ExecOptions{
+	exit, err := exec.ExecIntoInstance(ctx, inst.VsockSocket, exec.ExecOptions{
 		Command: command,
 		Stdin:   wsConn,
 		Stdout:  wsConn,

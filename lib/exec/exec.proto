@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package exec;
 
-option go_package = "github.com/onkernel/hypeman/lib/system";
+option go_package = "github.com/onkernel/hypeman/lib/exec";
 
 // ExecService provides remote command execution in guest VMs
 service ExecService {

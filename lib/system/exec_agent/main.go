@@ -9,7 +9,7 @@ import (
 
 	"github.com/creack/pty"
 	"github.com/mdlayher/vsock"
-	pb "github.com/onkernel/hypeman/lib/system"
+	pb "github.com/onkernel/hypeman/lib/exec"
 	"google.golang.org/grpc"
 )
 

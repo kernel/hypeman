@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/onkernel/hypeman/lib/exec"
 	"github.com/onkernel/hypeman/lib/oapi"
 	"github.com/onkernel/hypeman/lib/paths"
 	"github.com/onkernel/hypeman/lib/system"
@@ -144,7 +145,7 @@ func TestExecInstanceNonTTY(t *testing.T) {
 	}
 
 	// Wait for exec agent to be ready (retry a few times)
-	var exit *system.ExitStatus
+	var exit *exec.ExitStatus
 	var stdout, stderr outputBuffer
 	var execErr error
 	
@@ -154,7 +155,7 @@ func TestExecInstanceNonTTY(t *testing.T) {
 		stdout = outputBuffer{}
 		stderr = outputBuffer{}
 		
-		exit, execErr = system.ExecIntoInstance(ctx(), actualInst.VsockSocket, system.ExecOptions{
+		exit, execErr = exec.ExecIntoInstance(ctx(), actualInst.VsockSocket, exec.ExecOptions{
 			Command: []string{"/bin/sh", "-c", "whoami"},
 			Stdin:   nil,
 			Stdout:  &stdout,
@@ -188,7 +189,7 @@ func TestExecInstanceNonTTY(t *testing.T) {
 	stderr = outputBuffer{}
 	
 	t.Log("Calling ExecIntoInstance for ls command...")
-	exit, err = system.ExecIntoInstance(ctx(), actualInst.VsockSocket, system.ExecOptions{
+	exit, err = exec.ExecIntoInstance(ctx(), actualInst.VsockSocket, exec.ExecOptions{
 		Command: []string{"/bin/sh", "-c", "ls -la /docker-entrypoint.sh"},
 		Stdin:   nil,
 		Stdout:  &stdout,

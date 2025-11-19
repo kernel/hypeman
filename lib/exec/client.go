@@ -1,4 +1,4 @@
-package system
+package exec
 
 import (
 	"bufio"
@@ -132,3 +132,4 @@ func ExecIntoInstance(ctx context.Context, vsockSocketPath string, opts ExecOpti
 		}
 	}
 }
+

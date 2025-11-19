@@ -2,9 +2,9 @@
 // versions:
 // 	protoc-gen-go v1.36.10
 // 	protoc        v3.21.12
-// source: lib/system/exec.proto
+// source: lib/exec/exec.proto
 
-package system
+package exec
 
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
@@ -36,7 +36,7 @@ type ExecRequest struct {
 
 func (x *ExecRequest) Reset() {
 	*x = ExecRequest{}
-	mi := &file_lib_system_exec_proto_msgTypes[0]
+	mi := &file_lib_exec_exec_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -48,7 +48,7 @@ func (x *ExecRequest) String() string {
 func (*ExecRequest) ProtoMessage() {}
 
 func (x *ExecRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lib_system_exec_proto_msgTypes[0]
+	mi := &file_lib_exec_exec_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -61,7 +61,7 @@ func (x *ExecRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecRequest.ProtoReflect.Descriptor instead.
 func (*ExecRequest) Descriptor() ([]byte, []int) {
-	return file_lib_system_exec_proto_rawDescGZIP(), []int{0}
+	return file_lib_exec_exec_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *ExecRequest) GetRequest() isExecRequest_Request {
@@ -131,7 +131,7 @@ type ExecStart struct {
 
 func (x *ExecStart) Reset() {
 	*x = ExecStart{}
-	mi := &file_lib_system_exec_proto_msgTypes[1]
+	mi := &file_lib_exec_exec_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -143,7 +143,7 @@ func (x *ExecStart) String() string {
 func (*ExecStart) ProtoMessage() {}
 
 func (x *ExecStart) ProtoReflect() protoreflect.Message {
-	mi := &file_lib_system_exec_proto_msgTypes[1]
+	mi := &file_lib_exec_exec_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -156,7 +156,7 @@ func (x *ExecStart) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecStart.ProtoReflect.Descriptor instead.
 func (*ExecStart) Descriptor() ([]byte, []int) {
-	return file_lib_system_exec_proto_rawDescGZIP(), []int{1}
+	return file_lib_exec_exec_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *ExecStart) GetCommand() []string {
@@ -184,7 +184,7 @@ type WindowSize struct {
 
 func (x *WindowSize) Reset() {
 	*x = WindowSize{}
-	mi := &file_lib_system_exec_proto_msgTypes[2]
+	mi := &file_lib_exec_exec_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -196,7 +196,7 @@ func (x *WindowSize) String() string {
 func (*WindowSize) ProtoMessage() {}
 
 func (x *WindowSize) ProtoReflect() protoreflect.Message {
-	mi := &file_lib_system_exec_proto_msgTypes[2]
+	mi := &file_lib_exec_exec_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -209,7 +209,7 @@ func (x *WindowSize) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WindowSize.ProtoReflect.Descriptor instead.
 func (*WindowSize) Descriptor() ([]byte, []int) {
-	return file_lib_system_exec_proto_rawDescGZIP(), []int{2}
+	return file_lib_exec_exec_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *WindowSize) GetRows() uint32 {
@@ -241,7 +241,7 @@ type ExecResponse struct {
 
 func (x *ExecResponse) Reset() {
 	*x = ExecResponse{}
-	mi := &file_lib_system_exec_proto_msgTypes[3]
+	mi := &file_lib_exec_exec_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -253,7 +253,7 @@ func (x *ExecResponse) String() string {
 func (*ExecResponse) ProtoMessage() {}
 
 func (x *ExecResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lib_system_exec_proto_msgTypes[3]
+	mi := &file_lib_exec_exec_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -266,7 +266,7 @@ func (x *ExecResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecResponse.ProtoReflect.Descriptor instead.
 func (*ExecResponse) Descriptor() ([]byte, []int) {
-	return file_lib_system_exec_proto_rawDescGZIP(), []int{3}
+	return file_lib_exec_exec_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *ExecResponse) GetResponse() isExecResponse_Response {
@@ -325,11 +325,11 @@ func (*ExecResponse_Stderr) isExecResponse_Response() {}
 
 func (*ExecResponse_ExitCode) isExecResponse_Response() {}
 
-var File_lib_system_exec_proto protoreflect.FileDescriptor
+var File_lib_exec_exec_proto protoreflect.FileDescriptor
 
-const file_lib_system_exec_proto_rawDesc = "" +
+const file_lib_exec_exec_proto_rawDesc = "" +
 	"\n" +
-	"\x15lib/system/exec.proto\x12\x04exec\"\x85\x01\n" +
+	"\x13lib/exec/exec.proto\x12\x04exec\"\x85\x01\n" +
 	"\vExecRequest\x12'\n" +
 	"\x05start\x18\x01 \x01(\v2\x0f.exec.ExecStartH\x00R\x05start\x12\x16\n" +
 	"\x05stdin\x18\x02 \x01(\fH\x00R\x05stdin\x12*\n" +
@@ -349,28 +349,28 @@ const file_lib_system_exec_proto_rawDesc = "" +
 	"\n" +
 	"\bresponse2@\n" +
 	"\vExecService\x121\n" +
-	"\x04Exec\x12\x11.exec.ExecRequest\x1a\x12.exec.ExecResponse(\x010\x01B(Z&github.com/onkernel/hypeman/lib/systemb\x06proto3"
+	"\x04Exec\x12\x11.exec.ExecRequest\x1a\x12.exec.ExecResponse(\x010\x01B&Z$github.com/onkernel/hypeman/lib/execb\x06proto3"
 
 var (
-	file_lib_system_exec_proto_rawDescOnce sync.Once
-	file_lib_system_exec_proto_rawDescData []byte
+	file_lib_exec_exec_proto_rawDescOnce sync.Once
+	file_lib_exec_exec_proto_rawDescData []byte
 )
 
-func file_lib_system_exec_proto_rawDescGZIP() []byte {
-	file_lib_system_exec_proto_rawDescOnce.Do(func() {
-		file_lib_system_exec_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_lib_system_exec_proto_rawDesc), len(file_lib_system_exec_proto_rawDesc)))
+func file_lib_exec_exec_proto_rawDescGZIP() []byte {
+	file_lib_exec_exec_proto_rawDescOnce.Do(func() {
+		file_lib_exec_exec_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_lib_exec_exec_proto_rawDesc), len(file_lib_exec_exec_proto_rawDesc)))
 	})
-	return file_lib_system_exec_proto_rawDescData
+	return file_lib_exec_exec_proto_rawDescData
 }
 
-var file_lib_system_exec_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
-var file_lib_system_exec_proto_goTypes = []any{
+var file_lib_exec_exec_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_lib_exec_exec_proto_goTypes = []any{
 	(*ExecRequest)(nil),  // 0: exec.ExecRequest
 	(*ExecStart)(nil),    // 1: exec.ExecStart
 	(*WindowSize)(nil),   // 2: exec.WindowSize
 	(*ExecResponse)(nil), // 3: exec.ExecResponse
 }
-var file_lib_system_exec_proto_depIdxs = []int32{
+var file_lib_exec_exec_proto_depIdxs = []int32{
 	1, // 0: exec.ExecRequest.start:type_name -> exec.ExecStart
 	2, // 1: exec.ExecRequest.resize:type_name -> exec.WindowSize
 	0, // 2: exec.ExecService.Exec:input_type -> exec.ExecRequest
@@ -382,17 +382,17 @@ var file_lib_system_exec_proto_depIdxs = []int32{
 	0, // [0:2] is the sub-list for field type_name
 }
 
-func init() { file_lib_system_exec_proto_init() }
-func file_lib_system_exec_proto_init() {
-	if File_lib_system_exec_proto != nil {
+func init() { file_lib_exec_exec_proto_init() }
+func file_lib_exec_exec_proto_init() {
+	if File_lib_exec_exec_proto != nil {
 		return
 	}
-	file_lib_system_exec_proto_msgTypes[0].OneofWrappers = []any{
+	file_lib_exec_exec_proto_msgTypes[0].OneofWrappers = []any{
 		(*ExecRequest_Start)(nil),
 		(*ExecRequest_Stdin)(nil),
 		(*ExecRequest_Resize)(nil),
 	}
-	file_lib_system_exec_proto_msgTypes[3].OneofWrappers = []any{
+	file_lib_exec_exec_proto_msgTypes[3].OneofWrappers = []any{
 		(*ExecResponse_Stdout)(nil),
 		(*ExecResponse_Stderr)(nil),
 		(*ExecResponse_ExitCode)(nil),
@@ -401,17 +401,17 @@ func file_lib_system_exec_proto_init() {
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_lib_system_exec_proto_rawDesc), len(file_lib_system_exec_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_lib_exec_exec_proto_rawDesc), len(file_lib_exec_exec_proto_rawDesc)),
 			NumEnums:      0,
 			NumMessages:   4,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
-		GoTypes:           file_lib_system_exec_proto_goTypes,
-		DependencyIndexes: file_lib_system_exec_proto_depIdxs,
-		MessageInfos:      file_lib_system_exec_proto_msgTypes,
+		GoTypes:           file_lib_exec_exec_proto_goTypes,
+		DependencyIndexes: file_lib_exec_exec_proto_depIdxs,
+		MessageInfos:      file_lib_exec_exec_proto_msgTypes,
 	}.Build()
-	File_lib_system_exec_proto = out.File
-	file_lib_system_exec_proto_goTypes = nil
-	file_lib_system_exec_proto_depIdxs = nil
+	File_lib_exec_exec_proto = out.File
+	file_lib_exec_exec_proto_goTypes = nil
+	file_lib_exec_exec_proto_depIdxs = nil
 }

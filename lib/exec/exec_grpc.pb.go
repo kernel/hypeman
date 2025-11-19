@@ -2,9 +2,9 @@
 // versions:
 // - protoc-gen-go-grpc v1.5.1
 // - protoc             v3.21.12
-// source: lib/system/exec.proto
+// source: lib/exec/exec.proto
 
-package system
+package exec
 
 import (
 	context "context"
@@ -117,5 +117,5 @@ var ExecService_ServiceDesc = grpc.ServiceDesc{
 			ClientStreams: true,
 		},
 	},
-	Metadata: "lib/system/exec.proto",
+	Metadata: "lib/exec/exec.proto",
 }
