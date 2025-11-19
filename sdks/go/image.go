@@ -67,7 +67,7 @@ func (r *ImageService) List(ctx context.Context, opts ...option.RequestOption) (
 // Delete image
 func (r *ImageService) Delete(ctx context.Context, name string, opts ...option.RequestOption) (err error) {
 	opts = slices.Concat(r.Options, opts)
-	opts = append([]option.RequestOption{option.WithHeader("Accept", "")}, opts...)
+	opts = append([]option.RequestOption{option.WithHeader("Accept", "*/*")}, opts...)
 	if name == "" {
 		err = errors.New("missing required name parameter")
 		return
