@@ -69,12 +69,13 @@ gRPC streaming RPC with protobuf messages:
 ### 4. Guest Agent (`lib/system/exec_agent/main.go`)
 
 - Embedded binary injected into microVM via initrd
+- **Runs inside container namespace** (chrooted to `/overlay/newroot`) for proper PTY signal handling
 - Listens on vsock port 2222 inside guest
 - Implements gRPC `ExecService` server
-- Executes commands via `chroot /overlay/newroot` (container rootfs)
+- Executes commands directly (no chroot wrapper needed since agent is already in container)
 - Two modes:
   - **Non-TTY**: Separate stdout/stderr pipes
-  - **TTY**: Single PTY for interactive shells
+  - **TTY**: Single PTY for interactive shells with proper Ctrl+C handling
 
 ### 5. Embedding
 
@@ -212,4 +213,22 @@ When a timeout is specified:
 - If the command doesn't complete in time, it receives SIGKILL
 - The exit code will be `124` (GNU timeout convention)
 - Timeout is enforced in the guest, so network issues won't cause false timeouts
+
+## PTY Signal Handling & Architecture
+
+For TTY mode (interactive shells), **the exec-agent runs inside the container namespace** - this is critical for proper signal handling:
+
+### Why This Matters
+When the PTY and shell are in the same namespace, Ctrl+C (byte `0x03`) is correctly interpreted as SIGINT and delivered to the process. Running exec-agent in initrd namespace and using chroot for commands creates a namespace boundary that breaks signal handling.
+
+### Implementation
+The init script (`lib/system/init_script.go`):
+1. Copies exec-agent into `/overlay/newroot/usr/local/bin/`
+2. Bind-mounts `/dev/pts` so PTY devices are accessible in container
+3. Runs exec-agent with `chroot /overlay/newroot`
+
+This ensures:
+- Ctrl+C, Ctrl+Z, and other terminal control sequences work correctly
+- PTY and process share the same namespace
+- No chroot wrapper needed when executing commands (agent is already in container)
 

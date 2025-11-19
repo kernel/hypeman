@@ -77,10 +77,12 @@ fi
 mkdir -p /overlay/newroot/proc
 mkdir -p /overlay/newroot/sys
 mkdir -p /overlay/newroot/dev
+mkdir -p /overlay/newroot/dev/pts
 
 mount --bind /proc /overlay/newroot/proc
 mount --bind /sys /overlay/newroot/sys
 mount --bind /dev /overlay/newroot/dev
+mount --bind /dev/pts /overlay/newroot/dev/pts
 
 echo "overlay-init: bound mounts to new root"
 
@@ -105,10 +107,15 @@ fi
 export PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
 export HOME='/root'
 
-# Start vsock exec agent
-# It runs in the initrd namespace but can chroot as needed (or commands run in initrd)
-echo "overlay-init: starting exec agent"
-/usr/local/bin/exec-agent &
+# Copy exec-agent into container rootfs and start it in container namespace
+# This way the PTY and shell run in the same namespace, fixing signal handling
+echo "overlay-init: copying exec-agent to container"
+mkdir -p /overlay/newroot/usr/local/bin
+cp /usr/local/bin/exec-agent /overlay/newroot/usr/local/bin/exec-agent
+
+# Start vsock exec agent inside the container namespace
+echo "overlay-init: starting exec agent in container namespace"
+chroot /overlay/newroot /usr/local/bin/exec-agent &
 
 echo "overlay-init: launching entrypoint"
 echo "overlay-init: workdir=${WORKDIR:-/} entrypoint=${ENTRYPOINT} cmd=${CMD}"
