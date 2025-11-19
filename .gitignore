@@ -17,3 +17,6 @@ tmp/**
 
 # Cloud Hypervisor binaries (embedded at build time)
 lib/vmm/binaries/cloud-hypervisor/*/*/cloud-hypervisor
+cloud-hypervisor
+cloud-hypervisor/**
+lib/system/exec_agent/exec-agent

@@ -9,19 +9,22 @@ package system
 // 3. Mounts and sources config disk (/dev/vdc)
 // 4. Configures networking (if enabled)
 // 5. Executes container entrypoint
-func GenerateInitScript(version InitrdVersion) string {
+func GenerateInitScript() string {
 	return `#!/bin/sh
 set -xe
 
-echo "overlay-init: START (` + string(version) + `)" > /dev/kmsg
+echo "overlay-init: START" > /dev/kmsg
 
 # Create mount points
 mkdir -p /proc /sys /dev
 
 # Mount essential filesystems
+# devtmpfs handles /dev population (null, zero, vsock, etc.) automatically
 mount -t proc none /proc
 mount -t sysfs none /sys  
 mount -t devtmpfs none /dev
+
+# Setup PTY support (needed for exec-agent and interactive shells)
 mkdir -p /dev/pts /dev/shm
 mount -t devpts devpts /dev/pts
 chmod 1777 /dev/shm
@@ -68,47 +71,69 @@ else
   exit 1
 fi
 
-# Move essential mounts to new root before chroot
-cd /overlay/newroot
-mkdir -p proc sys dev
-mount --move /proc proc
-mount --move /sys sys
-mount --move /dev dev
+# Prepare new root mount points
+# We use bind mounts instead of move so that the original /dev remains populated
+# for processes running in the initrd namespace (like exec-agent).
+mkdir -p /overlay/newroot/proc
+mkdir -p /overlay/newroot/sys
+mkdir -p /overlay/newroot/dev
+mkdir -p /overlay/newroot/dev/pts
 
-echo "overlay-init: moved mounts to new root"
+mount --bind /proc /overlay/newroot/proc
+mount --bind /sys /overlay/newroot/sys
+mount --bind /dev /overlay/newroot/dev
+mount --bind /dev/pts /overlay/newroot/dev/pts
 
-# Set up /dev symlinks for process substitution (Docker compatibility)
-chroot . ln -sf /proc/self/fd /dev/fd 2>/dev/null || true
-chroot . ln -sf /proc/self/fd/0 /dev/stdin 2>/dev/null || true
-chroot . ln -sf /proc/self/fd/1 /dev/stdout 2>/dev/null || true
-chroot . ln -sf /proc/self/fd/2 /dev/stderr 2>/dev/null || true
+echo "overlay-init: bound mounts to new root"
 
-# Configure network (if GUEST_IP is set)
+# Set up /dev symlinks for process substitution inside the container
+chroot /overlay/newroot ln -sf /proc/self/fd /dev/fd 2>/dev/null || true
+chroot /overlay/newroot ln -sf /proc/self/fd/0 /dev/stdin 2>/dev/null || true
+chroot /overlay/newroot ln -sf /proc/self/fd/1 /dev/stdout 2>/dev/null || true
+chroot /overlay/newroot ln -sf /proc/self/fd/2 /dev/stderr 2>/dev/null || true
+
+# Configure network inside the container view
 if [ -n "${GUEST_IP:-}" ]; then
   echo "overlay-init: configuring network"
-  chroot . ip link set lo up
-  chroot . ip addr add ${GUEST_IP}/${GUEST_MASK} dev eth0
-  chroot . ip link set eth0 up
-  chroot . ip route add default via ${GUEST_GW}
-  echo "nameserver ${GUEST_DNS}" > etc/resolv.conf
+  chroot /overlay/newroot ip link set lo up
+  chroot /overlay/newroot ip addr add ${GUEST_IP}/${GUEST_MASK} dev eth0
+  chroot /overlay/newroot ip link set eth0 up
+  chroot /overlay/newroot ip route add default via ${GUEST_GW}
+  echo "nameserver ${GUEST_DNS}" > /overlay/newroot/etc/resolv.conf
   echo "overlay-init: network configured - IP: ${GUEST_IP}"
 fi
 
-# Set PATH for proper binary resolution
+# Set PATH for initrd tools
 export PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
 export HOME='/root'
+
+# Copy exec-agent into container rootfs and start it in container namespace
+# This way the PTY and shell run in the same namespace, fixing signal handling
+echo "overlay-init: copying exec-agent to container"
+mkdir -p /overlay/newroot/usr/local/bin
+cp /usr/local/bin/exec-agent /overlay/newroot/usr/local/bin/exec-agent
+
+# Start vsock exec agent inside the container namespace
+echo "overlay-init: starting exec agent in container namespace"
+chroot /overlay/newroot /usr/local/bin/exec-agent &
 
 echo "overlay-init: launching entrypoint"
 echo "overlay-init: workdir=${WORKDIR:-/} entrypoint=${ENTRYPOINT} cmd=${CMD}"
 
-# Change to workdir  
-cd ${WORKDIR:-/}
+set +e
 
-# Execute entrypoint with cmd as arguments
-# Using eval to properly handle quoted arguments in ENTRYPOINT and CMD
-# This preserves arguments like 'daemon off;' as single args
-# When it exits, the VM stops (like Docker containers)
-eval "exec chroot /overlay/newroot ${ENTRYPOINT} ${CMD}"
-`
+# Construct the command string carefully
+# ENTRYPOINT and CMD are shell-safe quoted strings from config.sh
+eval "chroot /overlay/newroot /bin/sh -c \"cd ${WORKDIR:-/} && exec ${ENTRYPOINT} ${CMD}\"" &
+APP_PID=$!
+
+echo "overlay-init: container app started (PID $APP_PID)"
+
+# Wait for app to exit
+wait $APP_PID
+APP_EXIT=$?
+
+echo "overlay-init: app exited with code $APP_EXIT"
+exit $APP_EXIT`
 }
 

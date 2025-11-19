@@ -55,10 +55,9 @@ func run() error {
 		logger.Error("failed to ensure system files", "error", err)
 		os.Exit(1)
 	}
-	kernelVer, initrdVer := app.SystemManager.GetDefaultVersions()
+	kernelVer := app.SystemManager.GetDefaultKernelVersion()
 	logger.Info("System files ready",
-		"kernel", kernelVer,
-		"initrd", initrdVer)
+		"kernel", kernelVer)
 
 	// Create router
 	r := chi.NewRouter()
@@ -72,6 +71,15 @@ func run() error {
 	// Clear servers to avoid host validation issues
 	// See: https://github.com/oapi-codegen/nethttp-middleware#usage
 	spec.Servers = nil
+
+	// Custom exec endpoint (outside OpenAPI spec, uses WebSocket)
+	r.With(
+		middleware.RequestID,
+		middleware.RealIP,
+		middleware.Logger,
+		middleware.Recoverer,
+		mw.JwtAuth(app.Config.JwtSecret),
+	).Get("/instances/{id}/exec", app.ApiService.ExecHandler)
 
 	// Authenticated API endpoints
 	r.Group(func(r chi.Router) {

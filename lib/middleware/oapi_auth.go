@@ -116,3 +116,62 @@ func GetUserIDFromContext(ctx context.Context) string {
 	return ""
 }
 
+// JwtAuth creates a chi middleware that validates JWT bearer tokens
+func JwtAuth(jwtSecret string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			log := logger.FromContext(r.Context())
+
+			// Extract token from Authorization header
+			authHeader := r.Header.Get("Authorization")
+			if authHeader == "" {
+				log.DebugContext(r.Context(), "missing authorization header")
+				OapiErrorHandler(w, "authorization header required", http.StatusUnauthorized)
+				return
+			}
+
+			// Extract bearer token
+			token, err := extractBearerToken(authHeader)
+			if err != nil {
+				log.DebugContext(r.Context(), "invalid authorization header", "error", err)
+				OapiErrorHandler(w, "invalid authorization header format", http.StatusUnauthorized)
+				return
+			}
+
+			// Parse and validate JWT
+			claims := jwt.MapClaims{}
+			parsedToken, err := jwt.ParseWithClaims(token, claims, func(token *jwt.Token) (interface{}, error) {
+				// Validate signing method
+				if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+					return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+				}
+				return []byte(jwtSecret), nil
+			})
+
+			if err != nil {
+				log.DebugContext(r.Context(), "failed to parse JWT", "error", err)
+				OapiErrorHandler(w, "invalid token", http.StatusUnauthorized)
+				return
+			}
+
+			if !parsedToken.Valid {
+				log.DebugContext(r.Context(), "invalid JWT token")
+				OapiErrorHandler(w, "invalid token", http.StatusUnauthorized)
+				return
+			}
+
+			// Extract user ID from claims and add to context
+			var userID string
+			if sub, ok := claims["sub"].(string); ok {
+				userID = sub
+			}
+
+			// Update the context with user ID
+			newCtx := context.WithValue(r.Context(), userIDKey, userID)
+
+			// Call next handler with updated context
+			next.ServeHTTP(w, r.WithContext(newCtx))
+		})
+	}
+}
+

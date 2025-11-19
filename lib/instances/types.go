@@ -41,13 +41,16 @@ type StoredMetadata struct {
 
 	// Versions
 	KernelVersion string        // Kernel version (e.g., "ch-v6.12.9")
-	InitrdVersion string        // Initrd version (e.g., "v1.0.0")
 	CHVersion     vmm.CHVersion // Cloud Hypervisor version
 	CHPID         *int          // Cloud Hypervisor process ID (may be stale after host restart)
 
 	// Paths
 	SocketPath string // Path to API socket
 	DataDir    string // Instance data directory
+
+	// vsock configuration
+	VsockCID    int64  // Guest vsock Context ID
+	VsockSocket string // Host-side vsock socket path
 }
 
 // Instance represents a virtual machine instance with derived runtime state

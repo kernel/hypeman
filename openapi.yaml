@@ -330,6 +330,21 @@ components:
           description: Mount as read-only
           default: false
     
+    ExecRequest:
+      type: object
+      required: [command]
+      properties:
+        command:
+          type: array
+          items:
+            type: string
+          description: Command and arguments to execute
+          example: ["/bin/sh"]
+        tty:
+          type: boolean
+          description: Allocate a pseudo-TTY
+          default: true
+
     Health:
       type: object
       required: [status]
@@ -718,6 +733,55 @@ paths:
                 type: string
         404:
           description: Instance not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  
+  /instances/{id}/exec:
+    post:
+      summary: Execute command in instance via vsock (WebSocket)
+      operationId: execInstance
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: command
+          in: query
+          required: false
+          schema:
+            type: array
+            items:
+              type: string
+          description: Command to execute (defaults to /bin/sh)
+        - name: tty
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: true
+          description: Allocate a pseudo-TTY
+      responses:
+        101:
+          description: Switching to WebSocket protocol
+        404:
+          description: Instance not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Instance not running
           content:
             application/json:
               schema:

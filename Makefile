@@ -76,8 +76,15 @@ generate-wire: $(WIRE)
 	@echo "Generating wire code..."
 	cd ./cmd/api && $(WIRE)
 
+# Generate gRPC code from proto
+generate-grpc:
+	@echo "Generating gRPC code from proto..."
+	protoc --go_out=. --go_opt=paths=source_relative \
+		--go-grpc_out=. --go-grpc_opt=paths=source_relative \
+		lib/exec/exec.proto
+
 # Generate all code
-generate-all: oapi-generate generate-vmm-client generate-wire
+generate-all: oapi-generate generate-vmm-client generate-wire generate-grpc
 
 # Check if binaries exist, download if missing
 .PHONY: ensure-ch-binaries
@@ -87,16 +94,28 @@ ensure-ch-binaries:
 		$(MAKE) download-ch-binaries; \
 	fi
 
+# Build exec-agent (guest binary) into its own directory for embedding
+lib/system/exec_agent/exec-agent: lib/system/exec_agent/main.go
+	@echo "Building exec-agent..."
+	cd lib/system/exec_agent && CGO_ENABLED=0 go build -ldflags="-s -w" -o exec-agent .
+
 # Build the binary
-build: ensure-ch-binaries | $(BIN_DIR)
+build: ensure-ch-binaries lib/system/exec_agent/exec-agent | $(BIN_DIR)
 	go build -tags containers_image_openpgp -o $(BIN_DIR)/hypeman ./cmd/api
+
+# Build exec CLI
+build-exec: | $(BIN_DIR)
+	go build -o $(BIN_DIR)/hypeman-exec ./cmd/exec
+
+# Build all binaries
+build-all: build build-exec
 
 # Run in development mode with hot reload
 dev: $(AIR)
 	$(AIR) -c .air.toml
 
 # Run tests
-test: ensure-ch-binaries
+test: ensure-ch-binaries lib/system/exec_agent/exec-agent
 	go test -tags containers_image_openpgp -v -timeout 30s ./...
 
 # Generate JWT token for testing
@@ -109,4 +128,7 @@ clean:
 	rm -rf $(BIN_DIR)
 	rm -f lib/oapi/oapi.go
 	rm -f lib/vmm/vmm.go
+	rm -f lib/exec/exec.pb.go
+	rm -f lib/exec/exec_grpc.pb.go
+	rm -f lib/system/exec_agent/exec-agent
 
