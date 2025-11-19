@@ -30,9 +30,9 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
-      
-      - name: Run tests
-        run: make test
-      
+
       - name: Build
         run: make build
+     
+      - name: Run tests
+        run: make test
