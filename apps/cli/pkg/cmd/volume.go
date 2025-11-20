@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/onkernel/hypeman-cli/pkg/jsonflag"
 	"github.com/onkernel/hypeman-go"
 	"github.com/onkernel/hypeman-go/option"
 	"github.com/tidwall/gjson"
@@ -17,29 +16,17 @@ var volumesCreate = cli.Command{
 	Name:  "create",
 	Usage: "Create volume",
 	Flags: []cli.Flag{
-		&jsonflag.JSONStringFlag{
+		&cli.StringFlag{
 			Name:  "name",
 			Usage: "Volume name",
-			Config: jsonflag.JSONConfig{
-				Kind: jsonflag.Body,
-				Path: "name",
-			},
 		},
-		&jsonflag.JSONIntFlag{
+		&cli.Int64Flag{
 			Name:  "size-gb",
 			Usage: "Size in gigabytes",
-			Config: jsonflag.JSONConfig{
-				Kind: jsonflag.Body,
-				Path: "size_gb",
-			},
 		},
-		&jsonflag.JSONStringFlag{
+		&cli.StringFlag{
 			Name:  "id",
 			Usage: "Optional custom identifier (auto-generated if not provided)",
-			Config: jsonflag.JSONConfig{
-				Kind: jsonflag.Body,
-				Path: "id",
-			},
 		},
 	},
 	Action:          handleVolumesCreate,
@@ -79,17 +66,24 @@ var volumesDelete = cli.Command{
 }
 
 func handleVolumesCreate(ctx context.Context, cmd *cli.Command) error {
-	cc := getAPICommandContext(cmd)
+	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
 	unusedArgs := cmd.Args().Slice()
 	if len(unusedArgs) > 0 {
 		return fmt.Errorf("Unexpected extra arguments: %v", unusedArgs)
 	}
 	params := hypeman.VolumeNewParams{}
+	if err := unmarshalStdinWithFlags(cmd, map[string]string{
+		"name":    "name",
+		"size-gb": "size_gb",
+		"id":      "id",
+	}, &params); err != nil {
+		return err
+	}
 	var res []byte
-	_, err := cc.client.Volumes.New(
+	_, err := client.Volumes.New(
 		ctx,
 		params,
-		option.WithMiddleware(cc.AsMiddleware()),
+		option.WithMiddleware(debugMiddleware(cmd.Bool("debug"))),
 		option.WithResponseBodyInto(&res),
 	)
 	if err != nil {
@@ -103,7 +97,7 @@ func handleVolumesCreate(ctx context.Context, cmd *cli.Command) error {
 }
 
 func handleVolumesRetrieve(ctx context.Context, cmd *cli.Command) error {
-	cc := getAPICommandContext(cmd)
+	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
 	unusedArgs := cmd.Args().Slice()
 	if !cmd.IsSet("id") && len(unusedArgs) > 0 {
 		cmd.Set("id", unusedArgs[0])
@@ -113,10 +107,10 @@ func handleVolumesRetrieve(ctx context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("Unexpected extra arguments: %v", unusedArgs)
 	}
 	var res []byte
-	_, err := cc.client.Volumes.Get(
+	_, err := client.Volumes.Get(
 		ctx,
 		cmd.Value("id").(string),
-		option.WithMiddleware(cc.AsMiddleware()),
+		option.WithMiddleware(debugMiddleware(cmd.Bool("debug"))),
 		option.WithResponseBodyInto(&res),
 	)
 	if err != nil {
@@ -130,15 +124,15 @@ func handleVolumesRetrieve(ctx context.Context, cmd *cli.Command) error {
 }
 
 func handleVolumesList(ctx context.Context, cmd *cli.Command) error {
-	cc := getAPICommandContext(cmd)
+	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
 	unusedArgs := cmd.Args().Slice()
 	if len(unusedArgs) > 0 {
 		return fmt.Errorf("Unexpected extra arguments: %v", unusedArgs)
 	}
 	var res []byte
-	_, err := cc.client.Volumes.List(
+	_, err := client.Volumes.List(
 		ctx,
-		option.WithMiddleware(cc.AsMiddleware()),
+		option.WithMiddleware(debugMiddleware(cmd.Bool("debug"))),
 		option.WithResponseBodyInto(&res),
 	)
 	if err != nil {
@@ -152,7 +146,7 @@ func handleVolumesList(ctx context.Context, cmd *cli.Command) error {
 }
 
 func handleVolumesDelete(ctx context.Context, cmd *cli.Command) error {
-	cc := getAPICommandContext(cmd)
+	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
 	unusedArgs := cmd.Args().Slice()
 	if !cmd.IsSet("id") && len(unusedArgs) > 0 {
 		cmd.Set("id", unusedArgs[0])
@@ -161,9 +155,9 @@ func handleVolumesDelete(ctx context.Context, cmd *cli.Command) error {
 	if len(unusedArgs) > 0 {
 		return fmt.Errorf("Unexpected extra arguments: %v", unusedArgs)
 	}
-	return cc.client.Volumes.Delete(
+	return client.Volumes.Delete(
 		ctx,
 		cmd.Value("id").(string),
-		option.WithMiddleware(cc.AsMiddleware()),
+		option.WithMiddleware(debugMiddleware(cmd.Bool("debug"))),
 	)
 }

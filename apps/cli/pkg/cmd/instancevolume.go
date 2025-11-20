@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/onkernel/hypeman-cli/pkg/jsonflag"
 	"github.com/onkernel/hypeman-go"
 	"github.com/onkernel/hypeman-go/option"
 	"github.com/tidwall/gjson"
@@ -23,23 +22,13 @@ var instancesVolumesAttach = cli.Command{
 		&cli.StringFlag{
 			Name: "volume-id",
 		},
-		&jsonflag.JSONStringFlag{
+		&cli.StringFlag{
 			Name:  "mount-path",
 			Usage: "Path where volume should be mounted",
-			Config: jsonflag.JSONConfig{
-				Kind: jsonflag.Body,
-				Path: "mount_path",
-			},
 		},
-		&jsonflag.JSONBoolFlag{
+		&cli.BoolFlag{
 			Name:  "readonly",
 			Usage: "Mount as read-only",
-			Config: jsonflag.JSONConfig{
-				Kind:     jsonflag.Body,
-				Path:     "readonly",
-				SetValue: true,
-			},
-			Value: false,
 		},
 	},
 	Action:          handleInstancesVolumesAttach,
@@ -62,7 +51,7 @@ var instancesVolumesDetach = cli.Command{
 }
 
 func handleInstancesVolumesAttach(ctx context.Context, cmd *cli.Command) error {
-	cc := getAPICommandContext(cmd)
+	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
 	unusedArgs := cmd.Args().Slice()
 	if !cmd.IsSet("volume-id") && len(unusedArgs) > 0 {
 		cmd.Set("volume-id", unusedArgs[0])
@@ -71,16 +60,24 @@ func handleInstancesVolumesAttach(ctx context.Context, cmd *cli.Command) error {
 	if len(unusedArgs) > 0 {
 		return fmt.Errorf("Unexpected extra arguments: %v", unusedArgs)
 	}
-	params := hypeman.InstanceVolumeAttachParams{}
+	params := hypeman.InstanceVolumeAttachParams{
+		ID: cmd.Value("id").(string),
+	}
+	if err := unmarshalStdinWithFlags(cmd, map[string]string{
+		"mount-path": "mount_path",
+		"readonly":   "readonly",
+	}, &params); err != nil {
+		return err
+	}
 	if cmd.IsSet("id") {
 		params.ID = cmd.Value("id").(string)
 	}
 	var res []byte
-	_, err := cc.client.Instances.Volumes.Attach(
+	_, err := client.Instances.Volumes.Attach(
 		ctx,
 		cmd.Value("volume-id").(string),
 		params,
-		option.WithMiddleware(cc.AsMiddleware()),
+		option.WithMiddleware(debugMiddleware(cmd.Bool("debug"))),
 		option.WithResponseBodyInto(&res),
 	)
 	if err != nil {
@@ -94,7 +91,7 @@ func handleInstancesVolumesAttach(ctx context.Context, cmd *cli.Command) error {
 }
 
 func handleInstancesVolumesDetach(ctx context.Context, cmd *cli.Command) error {
-	cc := getAPICommandContext(cmd)
+	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
 	unusedArgs := cmd.Args().Slice()
 	if !cmd.IsSet("volume-id") && len(unusedArgs) > 0 {
 		cmd.Set("volume-id", unusedArgs[0])
@@ -103,16 +100,18 @@ func handleInstancesVolumesDetach(ctx context.Context, cmd *cli.Command) error {
 	if len(unusedArgs) > 0 {
 		return fmt.Errorf("Unexpected extra arguments: %v", unusedArgs)
 	}
-	params := hypeman.InstanceVolumeDetachParams{}
+	params := hypeman.InstanceVolumeDetachParams{
+		ID: cmd.Value("id").(string),
+	}
 	if cmd.IsSet("id") {
 		params.ID = cmd.Value("id").(string)
 	}
 	var res []byte
-	_, err := cc.client.Instances.Volumes.Detach(
+	_, err := client.Instances.Volumes.Detach(
 		ctx,
 		cmd.Value("volume-id").(string),
 		params,
-		option.WithMiddleware(cc.AsMiddleware()),
+		option.WithMiddleware(debugMiddleware(cmd.Bool("debug"))),
 		option.WithResponseBodyInto(&res),
 	)
 	if err != nil {

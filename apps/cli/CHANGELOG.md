@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.2 (2025-11-20)
+
+Full Changelog: [v0.1.1...v0.1.2](https://github.com/onkernel/hypeman-cli/compare/v0.1.1...v0.1.2)
+
+### ⚠ BREAKING CHANGES
+
+* new logic for parsing arguments
+
+### Features
+
+* new logic for parsing arguments ([de05b62](https://github.com/onkernel/hypeman-cli/commit/de05b6274cb3d3c27dcfe9784a331a9762a8dca5))
+
 ## 0.1.1 (2025-11-14)
 
 Full Changelog: [v0.1.0...v0.1.1](https://github.com/onkernel/hypeman-cli/compare/v0.1.0...v0.1.1)
