@@ -20,6 +20,7 @@ tmp_dir = "tmp"
   log = "build-errors.log"
   poll = false
   poll_interval = 0
+  post_cmd = ["sudo", "setcap", "cap_net_admin,cap_net_bind_service=+eip", "./tmp/main"]
   rerun = false
   rerun_delay = 500
   send_interrupt = false
