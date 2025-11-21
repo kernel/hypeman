@@ -3,6 +3,7 @@ package system
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/onkernel/hypeman/lib/paths"
 )
@@ -15,11 +16,11 @@ type Manager interface {
 	// GetKernelPath returns path to kernel file
 	GetKernelPath(version KernelVersion) (string, error)
 
-	// GetInitrdPath returns path to initrd file
-	GetInitrdPath(version InitrdVersion) (string, error)
+	// GetInitrdPath returns path to current initrd file
+	GetInitrdPath() (string, error)
 
-	// GetDefaultVersions returns the default kernel and initrd versions
-	GetDefaultVersions() (KernelVersion, InitrdVersion)
+	// GetDefaultKernelVersion returns the default kernel version
+	GetDefaultKernelVersion() KernelVersion
 }
 
 type manager struct {
@@ -35,16 +36,16 @@ func NewManager(p *paths.Paths) Manager {
 
 // EnsureSystemFiles ensures default kernel and initrd exist, downloading/building if needed
 func (m *manager) EnsureSystemFiles(ctx context.Context) error {
-	kernelVer, initrdVer := m.GetDefaultVersions()
+	kernelVer := m.GetDefaultKernelVersion()
 
 	// Ensure kernel exists
 	if _, err := m.ensureKernel(kernelVer); err != nil {
 		return fmt.Errorf("ensure kernel %s: %w", kernelVer, err)
 	}
 
-	// Ensure initrd exists
-	if _, err := m.ensureInitrd(ctx, initrdVer); err != nil {
-		return fmt.Errorf("ensure initrd %s: %w", initrdVer, err)
+	// Ensure initrd exists (builds if missing or stale)
+	if _, err := m.ensureInitrd(ctx); err != nil {
+		return fmt.Errorf("ensure initrd: %w", err)
 	}
 
 	return nil
@@ -57,15 +58,22 @@ func (m *manager) GetKernelPath(version KernelVersion) (string, error) {
 	return path, nil
 }
 
-// GetInitrdPath returns the path to an initrd version
-func (m *manager) GetInitrdPath(version InitrdVersion) (string, error) {
+// GetInitrdPath returns the path to the current initrd file
+func (m *manager) GetInitrdPath() (string, error) {
 	arch := GetArch()
-	path := m.paths.SystemInitrd(string(version), arch)
-	return path, nil
+	latestLink := m.paths.SystemInitrdLatest(arch)
+	
+	// Read the symlink to get the timestamp
+	target, err := os.Readlink(latestLink)
+	if err != nil {
+		return "", fmt.Errorf("read latest symlink: %w", err)
+	}
+	
+	return m.paths.SystemInitrdTimestamp(target, arch), nil
 }
 
-// GetDefaultVersions returns the default kernel and initrd versions
-func (m *manager) GetDefaultVersions() (KernelVersion, InitrdVersion) {
-	return DefaultKernelVersion, DefaultInitrdVersion
+// GetDefaultKernelVersion returns the default kernel version
+func (m *manager) GetDefaultKernelVersion() KernelVersion {
+	return DefaultKernelVersion
 }
 

@@ -106,6 +106,7 @@ GUEST_DNS="%s"
 	}
 	
 	// Generate script as a readable template block
+	// ENTRYPOINT and CMD contain shell-quoted arrays that will be eval'd in init
 	script := fmt.Sprintf(`#!/bin/sh
 # Generated config for instance: %s
 
@@ -152,10 +153,10 @@ func shellQuote(s string) string {
 }
 
 // shellQuoteArray quotes each element of an array for safe shell evaluation
-// Each element is single-quoted to preserve special characters like semicolons
+// Returns a string that when assigned to a variable and later eval'd, will be properly split
 func shellQuoteArray(arr []string) string {
 	if len(arr) == 0 {
-		return "\"\""
+		return ""
 	}
 
 	quoted := make([]string, len(arr))
@@ -163,6 +164,7 @@ func shellQuoteArray(arr []string) string {
 		quoted[i] = shellQuote(s)
 	}
 
+	// Join with spaces and return as-is (will be eval'd later in init script)
 	return strings.Join(quoted, " ")
 }
 
