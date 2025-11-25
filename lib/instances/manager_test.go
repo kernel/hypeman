@@ -27,8 +27,8 @@ func setupTestManager(t *testing.T) (*manager, string) {
 	cfg := &config.Config{
 		DataDir:       tmpDir,
 		BridgeName:    "vmbr0",
-		SubnetCIDR:    "192.168.100.0/24",
-		SubnetGateway: "192.168.100.1",
+		SubnetCIDR:    "192.168.0.0/16",
+		SubnetGateway: "192.168.0.1",
 	}
 	
 	p := paths.New(tmpDir)
@@ -82,6 +82,27 @@ func waitForVMReady(ctx context.Context, socketPath string, timeout time.Duratio
 	}
 	
 	return fmt.Errorf("VM did not reach running state within %v", timeout)
+}
+
+// waitForLogMessage polls instance logs until the message appears or times out
+func waitForLogMessage(ctx context.Context, mgr *manager, instanceID, message string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	
+	for time.Now().Before(deadline) {
+		logs, err := mgr.GetInstanceLogs(ctx, instanceID, false, 200)
+		if err != nil {
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+		
+		if strings.Contains(logs, message) {
+			return nil
+		}
+		
+		time.Sleep(100 * time.Millisecond)
+	}
+	
+	return fmt.Errorf("message %q not found in logs within %v", message, timeout)
 }
 
 // cleanupOrphanedProcesses kills any Cloud Hypervisor processes from metadata
@@ -254,8 +275,8 @@ func TestStorageOperations(t *testing.T) {
 	cfg := &config.Config{
 		DataDir:       tmpDir,
 		BridgeName:    "vmbr0",
-		SubnetCIDR:    "192.168.100.0/24",
-		SubnetGateway: "192.168.100.1",
+		SubnetCIDR:    "192.168.0.0/16",
+		SubnetGateway: "192.168.0.1",
 	}
 
 	p := paths.New(tmpDir)

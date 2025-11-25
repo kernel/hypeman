@@ -76,12 +76,16 @@ func TestExecInstanceNonTTY(t *testing.T) {
 
 	// Create instance
 	t.Log("Creating instance...")
+	networkDisabled := false
 	instResp, err := svc.CreateInstance(ctx(), oapi.CreateInstanceRequestObject{
 		Body: &oapi.CreateInstanceRequest{
 			Name:  "exec-test",
 			Image: "docker.io/library/nginx:alpine",
-			Network: &oapi.CreateInstanceRequestNetwork{
-				Enabled: ptr.Bool(false),
+			Network: &struct {
+				Enabled *bool   `json:"enabled,omitempty"`
+				Name    *string `json:"name,omitempty"`
+			}{
+				Enabled: &networkDisabled,
 			},
 		},
 	})

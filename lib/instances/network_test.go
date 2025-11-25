@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/onkernel/hypeman/lib/images"
-	"github.com/onkernel/hypeman/lib/paths"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/vishvananda/netlink"
@@ -97,7 +96,7 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 	t.Log("Verifying TAP device exists...")
 	tap, err := netlink.LinkByName(alloc.TAPDevice)
 	require.NoError(t, err)
-	assert.True(t, strings.HasPrefix(tap.Attrs().Name, "tap-"))
+	assert.True(t, strings.HasPrefix(tap.Attrs().Name, "hype-"))
 	// TAP should be UP - check the state matches
 	assert.Equal(t, uint8(netlink.OperUp), uint8(tap.Attrs().OperState))
 	t.Logf("TAP device verified: %s", alloc.TAPDevice)
