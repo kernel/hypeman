@@ -32,7 +32,7 @@ func Load() *Config {
 		BridgeName:          getEnv("BRIDGE_NAME", "vmbr0"),
 		SubnetCIDR:          getEnv("SUBNET_CIDR", "192.168.0.0/16"),
 		SubnetGateway:       getEnv("SUBNET_GATEWAY", "192.168.0.1"),
-		UplinkInterface:     getEnv("UPLINK_INTERFACE", "eth0"),
+		UplinkInterface:     getEnv("UPLINK_INTERFACE", ""), // empty = auto-detect from default route
 		JwtSecret:           getEnv("JWT_SECRET", ""),
 		DNSServer:           getEnv("DNS_SERVER", "1.1.1.1"),
 		MaxConcurrentBuilds: getEnvInt("MAX_CONCURRENT_BUILDS", 1),
