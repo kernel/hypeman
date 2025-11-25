@@ -96,11 +96,11 @@ chroot /overlay/newroot ln -sf /proc/self/fd/2 /dev/stderr 2>/dev/null || true
 if [ -n "${GUEST_IP:-}" ]; then
   echo "overlay-init: configuring network"
   chroot /overlay/newroot ip link set lo up
-  chroot /overlay/newroot ip addr add ${GUEST_IP}/${GUEST_MASK} dev eth0
+  chroot /overlay/newroot ip addr add ${GUEST_IP}/${GUEST_CIDR} dev eth0
   chroot /overlay/newroot ip link set eth0 up
   chroot /overlay/newroot ip route add default via ${GUEST_GW}
   echo "nameserver ${GUEST_DNS}" > /overlay/newroot/etc/resolv.conf
-  echo "overlay-init: network configured - IP: ${GUEST_IP}"
+  echo "overlay-init: network configured - IP: ${GUEST_IP}/${GUEST_CIDR}"
 fi
 
 # Set PATH for initrd tools
