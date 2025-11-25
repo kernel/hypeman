@@ -108,6 +108,13 @@ func (m *manager) createBridge(ctx context.Context, name, gateway, subnet string
 	return nil
 }
 
+// Rule comments for identifying hypeman iptables rules
+const (
+	commentNAT    = "hypeman-nat"
+	commentFwdOut = "hypeman-fwd-out"
+	commentFwdIn  = "hypeman-fwd-in"
+)
+
 // setupIPTablesRules sets up NAT and forwarding rules
 func (m *manager) setupIPTablesRules(ctx context.Context, subnet, bridgeName string) error {
 	log := logger.FromContext(ctx)
@@ -128,76 +135,134 @@ func (m *manager) setupIPTablesRules(ctx context.Context, subnet, bridgeName str
 		uplink = m.config.UplinkInterface
 	}
 
-	// Add MASQUERADE rule if not exists
-	checkCmd := exec.Command("iptables", "-t", "nat", "-C", "POSTROUTING",
-		"-s", subnet, "-o", uplink, "-j", "MASQUERADE")
-	checkCmd.SysProcAttr = &syscall.SysProcAttr{
-		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
-	}
-	masqStatus := "existing"
-	if err := checkCmd.Run(); err != nil {
-		// Rule doesn't exist, add it
-		addCmd := exec.Command("iptables", "-t", "nat", "-A", "POSTROUTING",
-			"-s", subnet, "-o", uplink, "-j", "MASQUERADE")
-		addCmd.SysProcAttr = &syscall.SysProcAttr{
-			AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
-		}
-		if err := addCmd.Run(); err != nil {
-			return fmt.Errorf("add masquerade rule: %w", err)
-		}
-		masqStatus = "added"
+	// Add MASQUERADE rule if not exists (position doesn't matter in POSTROUTING)
+	masqStatus, err := m.ensureNATRule(subnet, uplink)
+	if err != nil {
+		return err
 	}
 	log.InfoContext(ctx, "iptables NAT ready", "subnet", subnet, "uplink", uplink, "status", masqStatus)
 
-	// Allow bridge-initiated flows to traverse the host uplink
-	checkForwardOut := exec.Command("iptables", "-C", "FORWARD",
-		"-i", bridgeName, "-o", uplink,
-		"-m", "conntrack", "--ctstate", "NEW,ESTABLISHED,RELATED",
-		"-j", "ACCEPT")
-	checkForwardOut.SysProcAttr = &syscall.SysProcAttr{
-		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
-	}
-	fwdOutStatus := "existing"
-	if err := checkForwardOut.Run(); err != nil {
-		addForwardOut := exec.Command("iptables", "-A", "FORWARD",
-			"-i", bridgeName, "-o", uplink,
-			"-m", "conntrack", "--ctstate", "NEW,ESTABLISHED,RELATED",
-			"-j", "ACCEPT")
-		addForwardOut.SysProcAttr = &syscall.SysProcAttr{
-			AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
-		}
-		if err := addForwardOut.Run(); err != nil {
-			return fmt.Errorf("add forward outbound rule: %w", err)
-		}
-		fwdOutStatus = "added"
+	// FORWARD rules must be at top of chain (before Docker's DOCKER-USER/DOCKER-FORWARD)
+	// We insert at position 1 and 2 to ensure they're evaluated first
+	fwdOutStatus, err := m.ensureForwardRule(bridgeName, uplink, "NEW,ESTABLISHED,RELATED", commentFwdOut, 1)
+	if err != nil {
+		return fmt.Errorf("setup forward outbound: %w", err)
 	}
 
-	// Permit return traffic from the uplink back to the bridge
-	checkForwardIn := exec.Command("iptables", "-C", "FORWARD",
-		"-i", uplink, "-o", bridgeName,
-		"-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED",
-		"-j", "ACCEPT")
-	checkForwardIn.SysProcAttr = &syscall.SysProcAttr{
-		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
-	}
-	fwdInStatus := "existing"
-	if err := checkForwardIn.Run(); err != nil {
-		addForwardIn := exec.Command("iptables", "-A", "FORWARD",
-			"-i", uplink, "-o", bridgeName,
-			"-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED",
-			"-j", "ACCEPT")
-		addForwardIn.SysProcAttr = &syscall.SysProcAttr{
-			AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
-		}
-		if err := addForwardIn.Run(); err != nil {
-			return fmt.Errorf("add forward inbound rule: %w", err)
-		}
-		fwdInStatus = "added"
+	fwdInStatus, err := m.ensureForwardRule(uplink, bridgeName, "ESTABLISHED,RELATED", commentFwdIn, 2)
+	if err != nil {
+		return fmt.Errorf("setup forward inbound: %w", err)
 	}
 
 	log.InfoContext(ctx, "iptables FORWARD ready", "outbound", fwdOutStatus, "inbound", fwdInStatus)
 
 	return nil
+}
+
+// ensureNATRule ensures the MASQUERADE rule exists
+func (m *manager) ensureNATRule(subnet, uplink string) (string, error) {
+	// Check if rule exists (with or without comment)
+	checkCmd := exec.Command("iptables", "-t", "nat", "-C", "POSTROUTING",
+		"-s", subnet, "-o", uplink,
+		"-m", "comment", "--comment", commentNAT,
+		"-j", "MASQUERADE")
+	checkCmd.SysProcAttr = &syscall.SysProcAttr{
+		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+	}
+	if checkCmd.Run() == nil {
+		return "existing", nil
+	}
+
+	// Delete old rule without comment (migration from old code)
+	delOld := exec.Command("iptables", "-t", "nat", "-D", "POSTROUTING",
+		"-s", subnet, "-o", uplink, "-j", "MASQUERADE")
+	delOld.SysProcAttr = &syscall.SysProcAttr{
+		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+	}
+	delOld.Run() // ignore error
+
+	// Add rule with comment
+	addCmd := exec.Command("iptables", "-t", "nat", "-A", "POSTROUTING",
+		"-s", subnet, "-o", uplink,
+		"-m", "comment", "--comment", commentNAT,
+		"-j", "MASQUERADE")
+	addCmd.SysProcAttr = &syscall.SysProcAttr{
+		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+	}
+	if err := addCmd.Run(); err != nil {
+		return "", fmt.Errorf("add masquerade rule: %w", err)
+	}
+	return "added", nil
+}
+
+// ensureForwardRule ensures a FORWARD rule exists at the correct position (top of chain)
+func (m *manager) ensureForwardRule(inIface, outIface, ctstate, comment string, position int) (string, error) {
+	// Check if rule with comment exists at correct position
+	if m.isForwardRuleAtPosition(inIface, outIface, ctstate, comment, position) {
+		return "existing", nil
+	}
+
+	// Delete old rule without comment (migration from old code)
+	delOld := exec.Command("iptables", "-D", "FORWARD",
+		"-i", inIface, "-o", outIface,
+		"-m", "conntrack", "--ctstate", ctstate,
+		"-j", "ACCEPT")
+	delOld.SysProcAttr = &syscall.SysProcAttr{
+		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+	}
+	delOld.Run() // ignore error
+
+	// Delete old rule with comment if exists (might be at wrong position)
+	delWithComment := exec.Command("iptables", "-D", "FORWARD",
+		"-i", inIface, "-o", outIface,
+		"-m", "conntrack", "--ctstate", ctstate,
+		"-m", "comment", "--comment", comment,
+		"-j", "ACCEPT")
+	delWithComment.SysProcAttr = &syscall.SysProcAttr{
+		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+	}
+	delWithComment.Run() // ignore error
+
+	// Insert at specified position with comment
+	addCmd := exec.Command("iptables", "-I", "FORWARD", fmt.Sprintf("%d", position),
+		"-i", inIface, "-o", outIface,
+		"-m", "conntrack", "--ctstate", ctstate,
+		"-m", "comment", "--comment", comment,
+		"-j", "ACCEPT")
+	addCmd.SysProcAttr = &syscall.SysProcAttr{
+		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+	}
+	if err := addCmd.Run(); err != nil {
+		return "", fmt.Errorf("insert forward rule: %w", err)
+	}
+	return "added", nil
+}
+
+// isForwardRuleAtPosition checks if our rule exists at the expected position
+func (m *manager) isForwardRuleAtPosition(inIface, outIface, ctstate, comment string, position int) bool {
+	// List FORWARD chain with line numbers
+	cmd := exec.Command("iptables", "-L", "FORWARD", "--line-numbers", "-n")
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+	}
+	output, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+
+	// Look for our comment at the expected position
+	lines := strings.Split(string(output), "\n")
+	for _, line := range lines {
+		// Line format: "1    ACCEPT  ... /* hypeman-fwd-out */"
+		if strings.Contains(line, comment) {
+			// Check if it starts with the expected position number
+			fields := strings.Fields(line)
+			if len(fields) > 0 && fields[0] == fmt.Sprintf("%d", position) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // createTAPDevice creates TAP device and attaches to bridge
