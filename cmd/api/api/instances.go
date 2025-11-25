@@ -9,6 +9,7 @@ import (
 	"github.com/c2h5oh/datasize"
 	"github.com/onkernel/hypeman/lib/instances"
 	"github.com/onkernel/hypeman/lib/logger"
+	"github.com/onkernel/hypeman/lib/network"
 	"github.com/onkernel/hypeman/lib/oapi"
 )
 
@@ -116,12 +117,17 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 				Code:    "already_exists",
 				Message: "instance already exists",
 			}, nil
+		case errors.Is(err, network.ErrNameExists):
+			return oapi.CreateInstance400JSONResponse{
+				Code:    "name_conflict",
+				Message: err.Error(),
+			}, nil
 		default:
-		log.Error("failed to create instance", "error", err, "image", request.Body.Image)
-		return oapi.CreateInstance500JSONResponse{
-			Code:    "internal_error",
-			Message: "failed to create instance",
-		}, nil
+			log.Error("failed to create instance", "error", err, "image", request.Body.Image)
+			return oapi.CreateInstance500JSONResponse{
+				Code:    "internal_error",
+				Message: "failed to create instance",
+			}, nil
 		}
 	}
 	return oapi.CreateInstance201JSONResponse(instanceToOAPI(*inst)), nil
