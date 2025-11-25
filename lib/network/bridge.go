@@ -1,6 +1,7 @@
 package network
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"os"
@@ -8,12 +9,15 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/onkernel/hypeman/lib/logger"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
 )
 
-// createBridge creates a bridge interface using netlink
-func (m *manager) createBridge(name, gateway, subnet string) error {
+// createBridge creates or verifies a bridge interface using netlink
+func (m *manager) createBridge(ctx context.Context, name, gateway, subnet string) error {
+	log := logger.FromContext(ctx)
+
 	// 1. Parse subnet to get network and prefix length
 	_, ipNet, err := net.ParseCIDR(subnet)
 	if err != nil {
@@ -26,6 +30,11 @@ func (m *manager) createBridge(name, gateway, subnet string) error {
 		// Bridge exists, verify it's up
 		if err := netlink.LinkSetUp(existing); err != nil {
 			return fmt.Errorf("set bridge up: %w", err)
+		}
+		log.InfoContext(ctx, "bridge ready", "bridge", name, "status", "existing")
+		// Still need to ensure iptables rules are configured
+		if err := m.setupIPTablesRules(ctx, subnet, name); err != nil {
+			return fmt.Errorf("setup iptables: %w", err)
 		}
 		return nil
 	}
@@ -63,8 +72,10 @@ func (m *manager) createBridge(name, gateway, subnet string) error {
 		return fmt.Errorf("add gateway IP to bridge: %w", err)
 	}
 
+	log.InfoContext(ctx, "bridge ready", "bridge", name, "gateway", gateway, "status", "created")
+
 	// 6. Setup iptables rules
-	if err := m.setupIPTablesRules(subnet, name); err != nil {
+	if err := m.setupIPTablesRules(ctx, subnet, name); err != nil {
 		return fmt.Errorf("setup iptables: %w", err)
 	}
 
@@ -72,7 +83,9 @@ func (m *manager) createBridge(name, gateway, subnet string) error {
 }
 
 // setupIPTablesRules sets up NAT and forwarding rules
-func (m *manager) setupIPTablesRules(subnet, bridgeName string) error {
+func (m *manager) setupIPTablesRules(ctx context.Context, subnet, bridgeName string) error {
+	log := logger.FromContext(ctx)
+
 	// Check if IP forwarding is enabled (prerequisite)
 	forwardData, err := os.ReadFile("/proc/sys/net/ipv4/ip_forward")
 	if err != nil {
@@ -81,9 +94,9 @@ func (m *manager) setupIPTablesRules(subnet, bridgeName string) error {
 	if strings.TrimSpace(string(forwardData)) != "1" {
 		return fmt.Errorf("IPv4 forwarding is not enabled. Please enable it by running: sudo sysctl -w net.ipv4.ip_forward=1 (or add 'net.ipv4.ip_forward=1' to /etc/sysctl.conf for persistence)")
 	}
+	log.InfoContext(ctx, "ip forwarding enabled")
 
-	// Get uplink interface (usually eth0, but could be different)
-	// For now, we'll use a common default
+	// Get uplink interface
 	uplink := "eth0"
 	if m.config.UplinkInterface != "" {
 		uplink = m.config.UplinkInterface
@@ -95,6 +108,7 @@ func (m *manager) setupIPTablesRules(subnet, bridgeName string) error {
 	checkCmd.SysProcAttr = &syscall.SysProcAttr{
 		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
 	}
+	masqStatus := "existing"
 	if err := checkCmd.Run(); err != nil {
 		// Rule doesn't exist, add it
 		addCmd := exec.Command("iptables", "-t", "nat", "-A", "POSTROUTING",
@@ -105,9 +119,11 @@ func (m *manager) setupIPTablesRules(subnet, bridgeName string) error {
 		if err := addCmd.Run(); err != nil {
 			return fmt.Errorf("add masquerade rule: %w", err)
 		}
+		masqStatus = "added"
 	}
+	log.InfoContext(ctx, "iptables NAT ready", "subnet", subnet, "uplink", uplink, "status", masqStatus)
 
-	// Allow bridge-initiated flows to traverse the host uplink while conntrack tracks new and ongoing sessions
+	// Allow bridge-initiated flows to traverse the host uplink
 	checkForwardOut := exec.Command("iptables", "-C", "FORWARD",
 		"-i", bridgeName, "-o", uplink,
 		"-m", "conntrack", "--ctstate", "NEW,ESTABLISHED,RELATED",
@@ -115,6 +131,7 @@ func (m *manager) setupIPTablesRules(subnet, bridgeName string) error {
 	checkForwardOut.SysProcAttr = &syscall.SysProcAttr{
 		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
 	}
+	fwdOutStatus := "existing"
 	if err := checkForwardOut.Run(); err != nil {
 		addForwardOut := exec.Command("iptables", "-A", "FORWARD",
 			"-i", bridgeName, "-o", uplink,
@@ -126,9 +143,10 @@ func (m *manager) setupIPTablesRules(subnet, bridgeName string) error {
 		if err := addForwardOut.Run(); err != nil {
 			return fmt.Errorf("add forward outbound rule: %w", err)
 		}
+		fwdOutStatus = "added"
 	}
 
-	// Permit return traffic from the uplink back to the bridge only when conntrack marks it established or related
+	// Permit return traffic from the uplink back to the bridge
 	checkForwardIn := exec.Command("iptables", "-C", "FORWARD",
 		"-i", uplink, "-o", bridgeName,
 		"-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED",
@@ -136,6 +154,7 @@ func (m *manager) setupIPTablesRules(subnet, bridgeName string) error {
 	checkForwardIn.SysProcAttr = &syscall.SysProcAttr{
 		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
 	}
+	fwdInStatus := "existing"
 	if err := checkForwardIn.Run(); err != nil {
 		addForwardIn := exec.Command("iptables", "-A", "FORWARD",
 			"-i", uplink, "-o", bridgeName,
@@ -147,7 +166,10 @@ func (m *manager) setupIPTablesRules(subnet, bridgeName string) error {
 		if err := addForwardIn.Run(); err != nil {
 			return fmt.Errorf("add forward inbound rule: %w", err)
 		}
+		fwdInStatus = "added"
 	}
+
+	log.InfoContext(ctx, "iptables FORWARD ready", "outbound", fwdOutStatus, "inbound", fwdInStatus)
 
 	return nil
 }

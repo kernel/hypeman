@@ -45,23 +45,15 @@ func NewManager(p *paths.Paths, cfg *config.Config) Manager {
 // Initialize initializes the network manager and creates default network
 func (m *manager) Initialize(ctx context.Context) error {
 	log := logger.FromContext(ctx)
-	log.InfoContext(ctx, "initializing network manager")
+	log.InfoContext(ctx, "initializing network manager",
+		"bridge", m.config.BridgeName,
+		"subnet", m.config.SubnetCIDR,
+		"gateway", m.config.SubnetGateway)
 
-	// 1. Check if default network bridge exists
-	bridge := m.config.BridgeName
-	_, err := m.queryNetworkState(bridge)
-	if err != nil {
-		// Default network doesn't exist, create it
-		log.InfoContext(ctx, "creating default network",
-			"bridge", bridge,
-			"subnet", m.config.SubnetCIDR,
-			"gateway", m.config.SubnetGateway)
-
-		if err := m.createBridge(bridge, m.config.SubnetGateway, m.config.SubnetCIDR); err != nil {
-			return fmt.Errorf("create default network bridge: %w", err)
-		}
-	} else {
-		log.InfoContext(ctx, "default network already exists", "bridge", bridge)
+	// Ensure default network bridge exists and iptables rules are configured
+	// createBridge is idempotent - handles both new and existing bridges
+	if err := m.createBridge(ctx, m.config.BridgeName, m.config.SubnetGateway, m.config.SubnetCIDR); err != nil {
+		return fmt.Errorf("setup default network: %w", err)
 	}
 
 	log.InfoContext(ctx, "network manager initialized")
