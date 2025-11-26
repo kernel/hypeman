@@ -20,6 +20,7 @@ type Config struct {
 	MaxOverlaySize      string
 	LogMaxSize          string
 	LogMaxFiles         int
+	LogRotateInterval   string
 }
 
 // Load loads configuration from environment variables
@@ -41,6 +42,7 @@ func Load() *Config {
 		MaxOverlaySize:      getEnv("MAX_OVERLAY_SIZE", "100GB"),
 		LogMaxSize:          getEnv("LOG_MAX_SIZE", "50MB"),
 		LogMaxFiles:         getEnvInt("LOG_MAX_FILES", 1),
+		LogRotateInterval:   getEnv("LOG_ROTATE_INTERVAL", "5m"),
 	}
 
 	return cfg

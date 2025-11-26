@@ -51,6 +51,16 @@ func run() error {
 		logger.Warn("JWT_SECRET not configured - API authentication will fail")
 	}
 
+	// Validate log rotation config
+	var logMaxSize datasize.ByteSize
+	if err := logMaxSize.UnmarshalText([]byte(app.Config.LogMaxSize)); err != nil {
+		return fmt.Errorf("invalid LOG_MAX_SIZE %q: %w", app.Config.LogMaxSize, err)
+	}
+	logRotateInterval, err := time.ParseDuration(app.Config.LogRotateInterval)
+	if err != nil {
+		return fmt.Errorf("invalid LOG_ROTATE_INTERVAL %q: %w", app.Config.LogRotateInterval, err)
+	}
+
 	// Ensure system files (kernel, initrd) exist before starting server
 	logger.Info("Ensuring system files...")
 	if err := app.SystemManager.EnsureSystemFiles(app.Ctx); err != nil {
@@ -180,13 +190,7 @@ func run() error {
 
 	// Log rotation scheduler
 	grp.Go(func() error {
-		var logMaxSize datasize.ByteSize
-		if err := logMaxSize.UnmarshalText([]byte(app.Config.LogMaxSize)); err != nil {
-			logger.Error("invalid LOG_MAX_SIZE config", "value", app.Config.LogMaxSize, "error", err)
-			return nil // Don't crash server, just skip rotation
-		}
-
-		ticker := time.NewTicker(5 * time.Minute)
+		ticker := time.NewTicker(logRotateInterval)
 		defer ticker.Stop()
 
 		for {
