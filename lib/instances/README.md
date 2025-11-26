@@ -46,7 +46,7 @@ Manages VM instance lifecycle using Cloud Hypervisor.
         console.log             # Serial console (VM output)
       snapshots/
         snapshot-latest/        # Snapshot directory
-          vm.json               # VM configuration
+          config.json           # VM configuration
           memory-ranges         # Memory state
 ```
 

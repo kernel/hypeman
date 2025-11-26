@@ -19,7 +19,7 @@ import (
 //     console.log      # Serial console output
 //   snapshots/
 //     snapshot-latest/ # Snapshot directory
-//       vm.json
+//       config.json
 //       memory-ranges
 
 // metadata wraps StoredMetadata for JSON serialization

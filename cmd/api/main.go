@@ -19,6 +19,7 @@ import (
 	nethttpmiddleware "github.com/oapi-codegen/nethttp-middleware"
 	"github.com/onkernel/hypeman"
 	"github.com/onkernel/hypeman/cmd/api/api"
+	"github.com/onkernel/hypeman/lib/instances"
 	mw "github.com/onkernel/hypeman/lib/middleware"
 	"github.com/onkernel/hypeman/lib/oapi"
 	"golang.org/x/sync/errgroup"
@@ -58,6 +59,16 @@ func run() error {
 	kernelVer := app.SystemManager.GetDefaultKernelVersion()
 	logger.Info("System files ready",
 		"kernel", kernelVer)
+
+	// Initialize network manager (creates default network if needed)
+	// Get running instance IDs for TAP cleanup
+	runningIDs := getRunningInstanceIDs(app)
+	logger.Info("Initializing network manager...")
+	if err := app.NetworkManager.Initialize(app.Ctx, runningIDs); err != nil {
+		logger.Error("failed to initialize network manager", "error", err)
+		return fmt.Errorf("initialize network manager: %w", err)
+	}
+	logger.Info("Network manager initialized")
 
 	// Create router
 	r := chi.NewRouter()
@@ -167,5 +178,20 @@ func run() error {
 	})
 
 	return grp.Wait()
+}
+
+// getRunningInstanceIDs returns IDs of instances currently in Running state
+func getRunningInstanceIDs(app *application) []string {
+	allInstances, err := app.InstanceManager.ListInstances(app.Ctx)
+	if err != nil {
+		return nil
+	}
+	var running []string
+	for _, inst := range allInstances {
+		if inst.State == instances.StateRunning {
+			running = append(running, inst.Id)
+		}
+	}
+	return running
 }
 

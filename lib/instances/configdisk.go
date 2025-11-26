@@ -5,16 +5,18 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/onkernel/hypeman/lib/images"
+	"github.com/onkernel/hypeman/lib/network"
 )
 
 // createConfigDisk generates an erofs disk with instance configuration
 // The disk contains:
 // - /config.sh - Shell script sourced by init
 // - /metadata.json - JSON metadata for programmatic access
-func (m *manager) createConfigDisk(inst *Instance, imageInfo *images.Image) error {
+func (m *manager) createConfigDisk(inst *Instance, imageInfo *images.Image, netConfig *network.NetworkConfig) error {
 	// Create temporary directory for config files
 	tmpDir, err := os.MkdirTemp("", "hypeman-config-*")
 	if err != nil {
@@ -23,7 +25,7 @@ func (m *manager) createConfigDisk(inst *Instance, imageInfo *images.Image) erro
 	defer os.RemoveAll(tmpDir)
 
 	// Generate config.sh
-	configScript := m.generateConfigScript(inst, imageInfo)
+	configScript := m.generateConfigScript(inst, imageInfo, netConfig)
 	configPath := filepath.Join(tmpDir, "config.sh")
 	if err := os.WriteFile(configPath, []byte(configScript), 0644); err != nil {
 		return fmt.Errorf("write config.sh: %w", err)
@@ -62,7 +64,7 @@ func (m *manager) createConfigDisk(inst *Instance, imageInfo *images.Image) erro
 }
 
 // generateConfigScript creates the shell script that will be sourced by init
-func (m *manager) generateConfigScript(inst *Instance, imageInfo *images.Image) string {
+func (m *manager) generateConfigScript(inst *Instance, imageInfo *images.Image, netConfig *network.NetworkConfig) string {
 	// Prepare entrypoint value
 	entrypoint := ""
 	if len(imageInfo.Entrypoint) > 0 {
@@ -88,6 +90,21 @@ func (m *manager) generateConfigScript(inst *Instance, imageInfo *images.Image) 
 		envLines.WriteString(fmt.Sprintf("export %s=%s\n", key, shellQuote(value)))
 	}
 	
+	// Build network configuration section
+	// Use netConfig directly instead of trying to derive it (VM hasn't started yet)
+	networkSection := ""
+	if inst.NetworkEnabled && netConfig != nil {
+		// Convert netmask to CIDR prefix length for ip command
+		cidr := netmaskToCIDR(netConfig.Netmask)
+		networkSection = fmt.Sprintf(`
+# Network configuration
+GUEST_IP="%s"
+GUEST_CIDR="%d"
+GUEST_GW="%s"
+GUEST_DNS="%s"
+`, netConfig.IP, cidr, netConfig.Gateway, netConfig.DNS)
+	}
+	
 	// Generate script as a readable template block
 	// ENTRYPOINT and CMD contain shell-quoted arrays that will be eval'd in init
 	script := fmt.Sprintf(`#!/bin/sh
@@ -99,12 +116,13 @@ CMD="%s"
 WORKDIR=%s
 
 # Environment variables
-%s`, 
+%s%s`, 
 		inst.Id,
 		entrypoint,
 		cmd,
 		workdir,
 		envLines.String(),
+		networkSection,
 	)
 	
 	return script
@@ -150,4 +168,20 @@ func shellQuoteArray(arr []string) string {
 	return strings.Join(quoted, " ")
 }
 
-
+// netmaskToCIDR converts dotted decimal netmask to CIDR prefix length
+// e.g., "255.255.255.0" -> 24, "255.255.0.0" -> 16
+func netmaskToCIDR(netmask string) int {
+	parts := strings.Split(netmask, ".")
+	if len(parts) != 4 {
+		return 24 // default to /24
+	}
+	bits := 0
+	for _, p := range parts {
+		n, _ := strconv.Atoi(p)
+		for n > 0 {
+			bits += n & 1
+			n >>= 1
+		}
+	}
+	return bits
+}

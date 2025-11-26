@@ -9,7 +9,9 @@ import (
 	"github.com/c2h5oh/datasize"
 	"github.com/onkernel/hypeman/lib/instances"
 	"github.com/onkernel/hypeman/lib/logger"
+	"github.com/onkernel/hypeman/lib/network"
 	"github.com/onkernel/hypeman/lib/oapi"
+	"github.com/samber/lo"
 )
 
 // ListInstances lists all instances
@@ -86,14 +88,21 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		env = *request.Body.Env
 	}
 
+	// Parse network enabled (default: true)
+	networkEnabled := true
+	if request.Body.Network != nil && request.Body.Network.Enabled != nil {
+		networkEnabled = *request.Body.Network.Enabled
+	}
+
 	domainReq := instances.CreateInstanceRequest{
-		Name:        request.Body.Name,
-		Image:       request.Body.Image,
-		Size:        size,
-		HotplugSize: hotplugSize,
-		OverlaySize: overlaySize,
-		Vcpus:       vcpus,
-		Env:         env,
+		Name:           request.Body.Name,
+		Image:          request.Body.Image,
+		Size:           size,
+		HotplugSize:    hotplugSize,
+		OverlaySize:    overlaySize,
+		Vcpus:          vcpus,
+		Env:            env,
+		NetworkEnabled: networkEnabled,
 	}
 
 	inst, err := s.InstanceManager.CreateInstance(ctx, domainReq)
@@ -109,12 +118,17 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 				Code:    "already_exists",
 				Message: "instance already exists",
 			}, nil
+		case errors.Is(err, network.ErrNameExists):
+			return oapi.CreateInstance400JSONResponse{
+				Code:    "name_conflict",
+				Message: err.Error(),
+			}, nil
 		default:
-		log.Error("failed to create instance", "error", err, "image", request.Body.Image)
-		return oapi.CreateInstance500JSONResponse{
-			Code:    "internal_error",
-			Message: "failed to create instance",
-		}, nil
+			log.Error("failed to create instance", "error", err, "image", request.Body.Image)
+			return oapi.CreateInstance500JSONResponse{
+				Code:    "internal_error",
+				Message: "failed to create instance",
+			}, nil
 		}
 	}
 	return oapi.CreateInstance201JSONResponse(instanceToOAPI(*inst)), nil
@@ -293,19 +307,35 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 	hotplugSizeStr := datasize.ByteSize(inst.HotplugSize).HR()
 	overlaySizeStr := datasize.ByteSize(inst.OverlaySize).HR()
 
+	// Build network object with ip/mac nested inside
+	netObj := &struct {
+		Enabled *bool   `json:"enabled,omitempty"`
+		Ip      *string `json:"ip"`
+		Mac     *string `json:"mac"`
+		Name    *string `json:"name,omitempty"`
+	}{
+		Enabled: lo.ToPtr(inst.NetworkEnabled),
+	}
+	if inst.NetworkEnabled {
+		netObj.Name = lo.ToPtr("default")
+		netObj.Ip = lo.ToPtr(inst.IP)
+		netObj.Mac = lo.ToPtr(inst.MAC)
+	}
+
 	oapiInst := oapi.Instance{
 		Id:          inst.Id,
 		Name:        inst.Name,
 		Image:       inst.Image,
 		State:       oapi.InstanceState(inst.State),
-		Size:        &sizeStr,
-		HotplugSize: &hotplugSizeStr,
-		OverlaySize: &overlaySizeStr,
-		Vcpus:       &inst.Vcpus,
+		Size:        lo.ToPtr(sizeStr),
+		HotplugSize: lo.ToPtr(hotplugSizeStr),
+		OverlaySize: lo.ToPtr(overlaySizeStr),
+		Vcpus:       lo.ToPtr(inst.Vcpus),
+		Network:     netObj,
 		CreatedAt:   inst.CreatedAt,
 		StartedAt:   inst.StartedAt,
 		StoppedAt:   inst.StoppedAt,
-		HasSnapshot: &inst.HasSnapshot,
+		HasSnapshot: lo.ToPtr(inst.HasSnapshot),
 	}
 
 	if len(inst.Env) > 0 {

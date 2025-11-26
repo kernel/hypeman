@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/onkernel/hypeman/lib/logger"
+	"github.com/onkernel/hypeman/lib/network"
 	"github.com/onkernel/hypeman/lib/vmm"
 )
 
@@ -37,21 +38,32 @@ func (m *manager) standbyInstance(
 		return nil, fmt.Errorf("%w: cannot standby from state %s", ErrInvalidState, inst.State)
 	}
 
-	// 3. Create VMM client
+	// 3. Get network allocation BEFORE killing VMM (while we can still query it)
+	// This is needed to delete the TAP device after VMM shuts down
+	var networkAlloc *network.Allocation
+	if inst.NetworkEnabled {
+		log.DebugContext(ctx, "getting network allocation", "id", id)
+		networkAlloc, err = m.networkManager.GetAllocation(ctx, id)
+		if err != nil {
+			log.WarnContext(ctx, "failed to get network allocation, will still attempt cleanup", "id", id, "error", err)
+		}
+	}
+
+	// 4. Create VMM client
 	client, err := vmm.NewVMM(inst.SocketPath)
 	if err != nil {
 		log.ErrorContext(ctx, "failed to create VMM client", "id", id, "error", err)
 		return nil, fmt.Errorf("create vmm client: %w", err)
 	}
 
-	// 4. Reduce memory to base size (virtio-mem hotplug)
+	// 5. Reduce memory to base size (virtio-mem hotplug)
 	log.DebugContext(ctx, "reducing VM memory before snapshot", "id", id, "base_size", inst.Size)
 	if err := reduceMemory(ctx, client, inst.Size); err != nil {
 		// Log warning but continue - snapshot will just be larger
 		log.WarnContext(ctx, "failed to reduce memory, snapshot will be larger", "id", id, "error", err)
 	}
 
-	// 5. Transition: Running → Paused
+	// 6. Transition: Running → Paused
 	log.DebugContext(ctx, "pausing VM", "id", id)
 	pauseResp, err := client.PauseVMWithResponse(ctx)
 	if err != nil || pauseResp.StatusCode() != 204 {
@@ -59,7 +71,7 @@ func (m *manager) standbyInstance(
 		return nil, fmt.Errorf("pause vm failed: %w", err)
 	}
 
-	// 6. Create snapshot
+	// 7. Create snapshot
 	snapshotDir := m.paths.InstanceSnapshotLatest(id)
 	log.DebugContext(ctx, "creating snapshot", "id", id, "snapshot_dir", snapshotDir)
 	if err := createSnapshot(ctx, client, snapshotDir); err != nil {
@@ -69,14 +81,25 @@ func (m *manager) standbyInstance(
 		return nil, fmt.Errorf("create snapshot: %w", err)
 	}
 
-	// 7. Stop VMM gracefully (snapshot is complete)
+	// 8. Stop VMM gracefully (snapshot is complete)
 	log.DebugContext(ctx, "shutting down VMM", "id", id)
 	if err := m.shutdownVMM(ctx, &inst); err != nil {
 		// Log but continue - snapshot was created successfully
 		log.WarnContext(ctx, "failed to shutdown VMM gracefully, snapshot still valid", "id", id, "error", err)
 	}
 
-	// 8. Update timestamp and clear PID (VMM no longer running)
+	// 9. Release network allocation (delete TAP device)
+	// TAP devices with explicit Owner/Group fields do NOT auto-delete when VMM exits
+	// They must be explicitly deleted
+	if inst.NetworkEnabled {
+		log.DebugContext(ctx, "releasing network", "id", id, "network", "default")
+		if err := m.networkManager.ReleaseAllocation(ctx, networkAlloc); err != nil {
+			// Log error but continue - snapshot was created successfully
+			log.WarnContext(ctx, "failed to release network, continuing with standby", "id", id, "error", err)
+		}
+	}
+
+	// 10. Update timestamp and clear PID (VMM no longer running)
 	now := time.Now()
 	stored.StoppedAt = &now
 	stored.CHPID = nil

@@ -5,7 +5,7 @@ tmp_dir = "tmp"
 [build]
   args_bin = []
   bin = "./tmp/main"
-  cmd = "go build -tags containers_image_openpgp -o ./tmp/main ./cmd/api"
+  cmd = "go build -tags containers_image_openpgp -o ./tmp/main ./cmd/api && sudo setcap cap_net_admin,cap_net_bind_service=+eip ./tmp/main"
   delay = 1000
   exclude_dir = ["assets", "tmp", "vendor", "testdata", "bin", "scripts", "data", "kernel"]
   exclude_file = []
@@ -20,6 +20,7 @@ tmp_dir = "tmp"
   log = "build-errors.log"
   poll = false
   poll_interval = 0
+  post_cmd = []
   rerun = false
   rerun_delay = 500
   send_interrupt = false

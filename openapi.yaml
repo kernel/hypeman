@@ -131,6 +131,15 @@ components:
           example:
             PORT: "3000"
             NODE_ENV: production
+        network:
+          type: object
+          description: Network configuration for the instance
+          properties:
+            enabled:
+              type: boolean
+              description: Whether to attach instance to the default network
+              default: true
+              example: true
         # Future: volumes, port_mappings, timeout_seconds
     
     Instance:
@@ -172,6 +181,28 @@ components:
           additionalProperties:
             type: string
           description: Environment variables
+        network:
+          type: object
+          description: Network configuration of the instance
+          properties:
+            enabled:
+              type: boolean
+              description: Whether instance is attached to the default network
+              example: true
+            name:
+              type: string
+              description: Network name (always "default" when enabled)
+              example: "default"
+            ip:
+              type: string
+              description: Assigned IP address (null if no network)
+              example: "192.168.100.10"
+              nullable: true
+            mac:
+              type: string
+              description: Assigned MAC address (null if no network)
+              example: "02:00:00:ab:cd:ef"
+              nullable: true
         created_at:
           type: string
           format: date-time
@@ -366,6 +397,7 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Health"
+  
   
   /images:
     get:

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/onkernel/hypeman/lib/logger"
+	"github.com/onkernel/hypeman/lib/network"
 )
 
 // deleteInstance stops and deletes an instance
@@ -28,7 +29,17 @@ func (m *manager) deleteInstance(
 	inst := m.toInstance(ctx, meta)
 	log.DebugContext(ctx, "loaded instance", "id", id, "state", inst.State)
 
-	// 2. If VMM might be running, force kill it
+	// 2. Get network allocation BEFORE killing VMM (while we can still query it)
+	var networkAlloc *network.Allocation
+	if inst.NetworkEnabled {
+		log.DebugContext(ctx, "getting network allocation", "id", id)
+		networkAlloc, err = m.networkManager.GetAllocation(ctx, id)
+		if err != nil {
+			log.WarnContext(ctx, "failed to get network allocation, will still attempt cleanup", "id", id, "error", err)
+		}
+	}
+
+	// 3. If VMM might be running, force kill it
 	if inst.State.RequiresVMM() {
 		log.DebugContext(ctx, "stopping VMM", "id", id, "state", inst.State)
 		if err := m.killVMM(ctx, &inst); err != nil {
@@ -38,7 +49,16 @@ func (m *manager) deleteInstance(
 		}
 	}
 
-	// 3. Delete all instance data
+	// 4. Release network allocation
+	if inst.NetworkEnabled {
+		log.DebugContext(ctx, "releasing network", "id", id, "network", "default")
+		if err := m.networkManager.ReleaseAllocation(ctx, networkAlloc); err != nil {
+			// Log error but continue with cleanup
+			log.WarnContext(ctx, "failed to release network, continuing with cleanup", "id", id, "error", err)
+		}
+	}
+
+	// 5. Delete all instance data
 	log.DebugContext(ctx, "deleting instance data", "id", id)
 	if err := m.deleteInstanceData(id); err != nil {
 		log.ErrorContext(ctx, "failed to delete instance data", "id", id, "error", err)
@@ -64,13 +84,24 @@ func (m *manager) killVMM(ctx context.Context, inst *Instance) error {
 			// Process exists - kill it immediately with SIGKILL
 			// No graceful shutdown needed since we're deleting all data
 			log.DebugContext(ctx, "killing VMM process", "id", inst.Id, "pid", pid)
-			syscall.Kill(pid, syscall.SIGKILL)
+			if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
+				log.WarnContext(ctx, "failed to kill VMM process", "id", inst.Id, "pid", pid, "error", err)
+			}
 			
-			// Wait for process to die (SIGKILL is guaranteed, usually instant)
-			if !WaitForProcessExit(pid, 1*time.Second) {
-				log.WarnContext(ctx, "VMM process did not exit in time", "id", inst.Id, "pid", pid)
-			} else {
-				log.DebugContext(ctx, "VMM process killed successfully", "id", inst.Id, "pid", pid)
+			// Wait for process to die and reap it to prevent zombies
+			// SIGKILL should be instant, but give it a moment
+			for i := 0; i < 50; i++ { // 50 * 100ms = 5 seconds
+				var wstatus syscall.WaitStatus
+				wpid, err := syscall.Wait4(pid, &wstatus, syscall.WNOHANG, nil)
+				if err != nil || wpid == pid {
+					// Process reaped successfully or error (likely ECHILD if already reaped)
+					log.DebugContext(ctx, "VMM process killed and reaped", "id", inst.Id, "pid", pid)
+					break
+				}
+				if i == 49 {
+					log.WarnContext(ctx, "VMM process did not exit in time", "id", inst.Id, "pid", pid)
+				}
+				time.Sleep(100 * time.Millisecond)
 			}
 		} else {
 			log.DebugContext(ctx, "VMM process not running", "id", inst.Id, "pid", pid)

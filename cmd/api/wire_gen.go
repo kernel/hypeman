@@ -12,6 +12,7 @@ import (
 	"github.com/onkernel/hypeman/cmd/api/config"
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/instances"
+	"github.com/onkernel/hypeman/lib/network"
 	"github.com/onkernel/hypeman/lib/providers"
 	"github.com/onkernel/hypeman/lib/system"
 	"github.com/onkernel/hypeman/lib/volumes"
@@ -35,18 +36,20 @@ func initializeApp() (*application, func(), error) {
 		return nil, nil, err
 	}
 	systemManager := providers.ProvideSystemManager(paths)
-	instancesManager, err := providers.ProvideInstanceManager(paths, config, manager, systemManager)
+	networkManager := providers.ProvideNetworkManager(paths, config)
+	instancesManager, err := providers.ProvideInstanceManager(paths, config, manager, systemManager, networkManager)
 	if err != nil {
 		return nil, nil, err
 	}
 	volumesManager := providers.ProvideVolumeManager(paths)
-	apiService := api.New(config, manager, instancesManager, volumesManager)
+	apiService := api.New(config, manager, instancesManager, volumesManager, networkManager)
 	mainApplication := &application{
 		Ctx:             context,
 		Logger:          logger,
 		Config:          config,
 		ImageManager:    manager,
 		SystemManager:   systemManager,
+		NetworkManager:  networkManager,
 		InstanceManager: instancesManager,
 		VolumeManager:   volumesManager,
 		ApiService:      apiService,
@@ -64,6 +67,7 @@ type application struct {
 	Config          *config.Config
 	ImageManager    images.Manager
 	SystemManager   system.Manager
+	NetworkManager  network.Manager
 	InstanceManager instances.Manager
 	VolumeManager   volumes.Manager
 	ApiService      *api.ApiService
