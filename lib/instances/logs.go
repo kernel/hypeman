@@ -10,11 +10,19 @@ import (
 	"github.com/onkernel/hypeman/lib/logger"
 )
 
+// ErrTailNotFound is returned when the tail command is not available
+var ErrTailNotFound = fmt.Errorf("tail command not found: required for log streaming")
+
 // StreamInstanceLogs streams instance console logs
 // Returns last N lines, then continues following if follow=true
 func (m *manager) streamInstanceLogs(ctx context.Context, id string, tail int, follow bool) (<-chan string, error) {
 	log := logger.FromContext(ctx)
 	log.DebugContext(ctx, "starting log stream", "id", id, "tail", tail, "follow", follow)
+
+	// Verify tail command is available
+	if _, err := exec.LookPath("tail"); err != nil {
+		return nil, ErrTailNotFound
+	}
 
 	if _, err := m.loadMetadata(id); err != nil {
 		return nil, err

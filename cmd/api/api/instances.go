@@ -276,16 +276,23 @@ func (s *ApiService) GetInstanceLogs(ctx context.Context, request oapi.GetInstan
 
 	logChan, err := s.InstanceManager.StreamInstanceLogs(ctx, request.Id, tail, follow)
 	if err != nil {
-		if errors.Is(err, instances.ErrNotFound) {
+		switch {
+		case errors.Is(err, instances.ErrNotFound):
 			return oapi.GetInstanceLogs404JSONResponse{
 				Code:    "not_found",
 				Message: "instance not found",
 			}, nil
+		case errors.Is(err, instances.ErrTailNotFound):
+			return oapi.GetInstanceLogs500JSONResponse{
+				Code:    "dependency_missing",
+				Message: "tail command not found on server - required for log streaming",
+			}, nil
+		default:
+			return oapi.GetInstanceLogs500JSONResponse{
+				Code:    "internal_error",
+				Message: "failed to stream logs",
+			}, nil
 		}
-		return oapi.GetInstanceLogs500JSONResponse{
-			Code:    "internal_error",
-			Message: "failed to stream logs",
-		}, nil
 	}
 
 	return logsStreamResponse{logChan: logChan}, nil
