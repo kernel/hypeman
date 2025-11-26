@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.0 (2025-11-26)
+
+Full Changelog: [v0.2.0...v0.3.0](https://github.com/onkernel/hypeman-go/compare/v0.2.0...v0.3.0)
+
+### Features
+
+* Remove exec from openapi spec ([ee8d1bb](https://github.com/onkernel/hypeman-go/commit/ee8d1bb586a130c0b6629603ca4edb489f671889))
+
 ## 0.2.0 (2025-11-26)
 
 Full Changelog: [v0.1.0...v0.2.0](https://github.com/onkernel/hypeman-go/compare/v0.1.0...v0.2.0)
