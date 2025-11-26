@@ -82,19 +82,6 @@ func (r *InstanceService) Delete(ctx context.Context, id string, opts ...option.
 	return
 }
 
-// Upgrades to WebSocket for bidirectional streaming for shell access.
-func (r *InstanceService) ExecuteCommand(ctx context.Context, id string, opts ...option.RequestOption) (err error) {
-	opts = slices.Concat(r.Options, opts)
-	opts = append([]option.RequestOption{option.WithHeader("Accept", "*/*")}, opts...)
-	if id == "" {
-		err = errors.New("missing required id parameter")
-		return
-	}
-	path := fmt.Sprintf("instances/%s/exec", id)
-	err = requestconfig.ExecuteNewRequest(ctx, http.MethodGet, path, nil, nil, opts...)
-	return
-}
-
 // Put instance in standby (pause, snapshot, delete VMM)
 func (r *InstanceService) PutInStandby(ctx context.Context, id string, opts ...option.RequestOption) (res *Instance, err error) {
 	opts = slices.Concat(r.Options, opts)
