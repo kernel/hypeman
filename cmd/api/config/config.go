@@ -31,7 +31,7 @@ func Load() *Config {
 		DataDir:             getEnv("DATA_DIR", "/var/lib/hypeman"),
 		BridgeName:          getEnv("BRIDGE_NAME", "vmbr0"),
 		SubnetCIDR:          getEnv("SUBNET_CIDR", "10.100.0.0/16"),
-		SubnetGateway:       getEnv("SUBNET_GATEWAY", "10.100.0.1"),
+		SubnetGateway:       getEnv("SUBNET_GATEWAY", ""), // empty = derived as first IP from subnet
 		UplinkInterface:     getEnv("UPLINK_INTERFACE", ""), // empty = auto-detect from default route
 		JwtSecret:           getEnv("JWT_SECRET", ""),
 		DNSServer:           getEnv("DNS_SERVER", "1.1.1.1"),

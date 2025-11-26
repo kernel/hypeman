@@ -97,6 +97,58 @@ func TestIncrementIP(t *testing.T) {
 	}
 }
 
+func TestDeriveGateway(t *testing.T) {
+	tests := []struct {
+		name    string
+		cidr    string
+		want    string
+		wantErr bool
+	}{
+		{
+			name: "/16 subnet",
+			cidr: "10.100.0.0/16",
+			want: "10.100.0.1",
+		},
+		{
+			name: "/24 subnet",
+			cidr: "192.168.1.0/24",
+			want: "192.168.1.1",
+		},
+		{
+			name: "/8 subnet",
+			cidr: "10.0.0.0/8",
+			want: "10.0.0.1",
+		},
+		{
+			name: "different starting point",
+			cidr: "172.30.0.0/16",
+			want: "172.30.0.1",
+		},
+		{
+			name:    "invalid CIDR",
+			cidr:    "not-a-cidr",
+			wantErr: true,
+		},
+		{
+			name:    "missing prefix",
+			cidr:    "10.100.0.0",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := DeriveGateway(tt.cidr)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 // Helper to parse IP
 func parseIP(s string) net.IP {
 	return net.ParseIP(s).To4()

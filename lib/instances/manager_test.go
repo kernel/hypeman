@@ -27,8 +27,7 @@ func setupTestManager(t *testing.T) (*manager, string) {
 	cfg := &config.Config{
 		DataDir:       tmpDir,
 		BridgeName:    "vmbr0",
-		SubnetCIDR:    "10.100.0.0/16",
-		SubnetGateway: "10.100.0.1",
+		SubnetCIDR: "10.100.0.0/16",
 		DNSServer:     "1.1.1.1",
 	}
 	
@@ -276,8 +275,7 @@ func TestStorageOperations(t *testing.T) {
 	cfg := &config.Config{
 		DataDir:       tmpDir,
 		BridgeName:    "vmbr0",
-		SubnetCIDR:    "10.100.0.0/16",
-		SubnetGateway: "10.100.0.1",
+		SubnetCIDR: "10.100.0.0/16",
 		DNSServer:     "1.1.1.1",
 	}
 

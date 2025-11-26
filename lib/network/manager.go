@@ -46,10 +46,21 @@ func NewManager(p *paths.Paths, cfg *config.Config) Manager {
 // runningInstanceIDs should contain IDs of instances currently running (have active VMM).
 func (m *manager) Initialize(ctx context.Context, runningInstanceIDs []string) error {
 	log := logger.FromContext(ctx)
+
+	// Derive gateway from subnet if not explicitly configured
+	gateway := m.config.SubnetGateway
+	if gateway == "" {
+		var err error
+		gateway, err = DeriveGateway(m.config.SubnetCIDR)
+		if err != nil {
+			return fmt.Errorf("derive gateway from subnet: %w", err)
+		}
+	}
+
 	log.InfoContext(ctx, "initializing network manager",
 		"bridge", m.config.BridgeName,
 		"subnet", m.config.SubnetCIDR,
-		"gateway", m.config.SubnetGateway)
+		"gateway", gateway)
 
 	// Check for subnet conflicts with existing host routes before creating bridge
 	if err := m.checkSubnetConflicts(ctx, m.config.SubnetCIDR); err != nil {
@@ -58,7 +69,7 @@ func (m *manager) Initialize(ctx context.Context, runningInstanceIDs []string) e
 
 	// Ensure default network bridge exists and iptables rules are configured
 	// createBridge is idempotent - handles both new and existing bridges
-	if err := m.createBridge(ctx, m.config.BridgeName, m.config.SubnetGateway, m.config.SubnetCIDR); err != nil {
+	if err := m.createBridge(ctx, m.config.BridgeName, gateway, m.config.SubnetCIDR); err != nil {
 		return fmt.Errorf("setup default network: %w", err)
 	}
 

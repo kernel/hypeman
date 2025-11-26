@@ -14,6 +14,22 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// DeriveGateway returns the first usable IP in a subnet (used as gateway).
+// e.g., 10.100.0.0/16 -> 10.100.0.1
+func DeriveGateway(cidr string) (string, error) {
+	_, ipNet, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return "", fmt.Errorf("parse CIDR: %w", err)
+	}
+
+	// Gateway is network address + 1
+	gateway := make(net.IP, len(ipNet.IP))
+	copy(gateway, ipNet.IP)
+	gateway[len(gateway)-1]++ // Increment last octet
+
+	return gateway.String(), nil
+}
+
 // checkSubnetConflicts checks if the configured subnet conflicts with existing routes.
 // Returns an error if a conflict is detected, with guidance on how to resolve it.
 func (m *manager) checkSubnetConflicts(ctx context.Context, subnet string) error {

@@ -69,9 +69,8 @@ Hypeman can be configured using the following environment variables:
 | `PORT` | HTTP server port | `8080` |
 | `DATA_DIR` | Directory for storing VM images, volumes, and other data | `/var/lib/hypeman` |
 | `BRIDGE_NAME` | Name of the network bridge for VM networking | `vmbr0` |
-| `SUBNET_CIDR` | CIDR notation for the VM network subnet | `192.168.0.0/16` |
-| `SUBNET_GATEWAY` | Gateway IP address for the VM network | `192.168.0.1` |
-| `UPLINK_INTERFACE` | Host network interface to use for VM internet access | `eth0` |
+| `SUBNET_CIDR` | CIDR notation for the VM network subnet (gateway derived automatically) | `10.100.0.0/16` |
+| `UPLINK_INTERFACE` | Host network interface to use for VM internet access | _(auto-detect)_ |
 | `JWT_SECRET` | Secret key for JWT authentication (required for production) | _(empty)_ |
 | `DNS_SERVER` | DNS server IP address for VMs | `1.1.1.1` |
 | `MAX_CONCURRENT_BUILDS` | Maximum number of concurrent image builds | `1` |
@@ -79,33 +78,19 @@ Hypeman can be configured using the following environment variables:
 
 **Important: Subnet Configuration**
 
-The default subnet `192.168.0.0/16` covers all addresses from `192.168.0.0` to `192.168.255.255`. This may conflict with your existing network if:
-- Your local router uses `192.168.x.x` addresses (common for home networks)
-- You're running Docker (often uses `172.17.0.0/16`)
-- You have VPNs or other virtual networks configured
+The default subnet `10.100.0.0/16` is chosen to avoid common conflicts. Hypeman will detect conflicts with existing routes on startup and fail with guidance.
 
-**Check for conflicts:**
-```bash
-# View your current network routes
-ip route show
+If you need a different subnet, set `SUBNET_CIDR` in your environment. The gateway is automatically derived as the first IP in the subnet (e.g., `10.100.0.0/16` → `10.100.0.1`).
 
-# Check what IP your machine has
-ip addr show
-```
-
-**Recommended alternative subnets to avoid conflicts:**
-- `10.100.0.0/16` - Private range, less commonly used
+**Alternative subnets if needed:**
 - `172.30.0.0/16` - Private range between common Docker (172.17.x.x) and AWS (172.31.x.x) ranges
-- `192.168.250.0/24` - Smaller range in the high end of 192.168.x.x space
+- `10.200.0.0/16` - Another private range option
 
-**Example configuration for a conflict-free setup:**
+**Example:**
 ```bash
 # In your .env file
-SUBNET_CIDR=10.100.0.0/16
-SUBNET_GATEWAY=10.100.0.1
+SUBNET_CIDR=172.30.0.0/16
 ```
-
-**Note:** The gateway IP must be within the subnet range you specify. For example, if you use `10.100.0.0/16`, your gateway should be something like `10.100.0.1`.
 
 **Finding the uplink interface (`UPLINK_INTERFACE`)**
 
