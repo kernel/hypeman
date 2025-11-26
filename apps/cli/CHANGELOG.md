@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.0 (2025-11-26)
+
+Full Changelog: [v0.3.0...v0.4.0](https://github.com/onkernel/hypeman-cli/compare/v0.3.0...v0.4.0)
+
+### Features
+
+* Remove exec from openapi spec ([6bde031](https://github.com/onkernel/hypeman-cli/commit/6bde031264de6cd6b17afe32f73a70bf14c2f36d))
+
 ## 0.3.0 (2025-11-26)
 
 Full Changelog: [v0.2.0...v0.3.0](https://github.com/onkernel/hypeman-cli/compare/v0.2.0...v0.3.0)
