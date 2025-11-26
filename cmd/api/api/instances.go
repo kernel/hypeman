@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
+	"net/http"
 
 	"github.com/c2h5oh/datasize"
 	"github.com/onkernel/hypeman/lib/instances"
@@ -236,6 +236,30 @@ func (s *ApiService) RestoreInstance(ctx context.Context, request oapi.RestoreIn
 	return oapi.RestoreInstance200JSONResponse(instanceToOAPI(*inst)), nil
 }
 
+// logsStreamResponse implements oapi.GetInstanceLogsResponseObject with proper SSE flushing
+type logsStreamResponse struct {
+	logChan <-chan string
+}
+
+func (r logsStreamResponse) VisitGetInstanceLogsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no") // Disable nginx buffering
+	w.WriteHeader(200)
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		return fmt.Errorf("streaming not supported")
+	}
+
+	for line := range r.logChan {
+		fmt.Fprintf(w, "data: %s\n\n", line)
+		flusher.Flush()
+	}
+	return nil
+}
+
 // GetInstanceLogs streams instance logs via SSE
 // With follow=false (default), streams last N lines then closes
 // With follow=true, streams last N lines then continues following new output
@@ -264,20 +288,7 @@ func (s *ApiService) GetInstanceLogs(ctx context.Context, request oapi.GetInstan
 		}, nil
 	}
 
-	// Create a pipe to convert channel to io.Reader
-	pr, pw := io.Pipe()
-
-	go func() {
-		defer pw.Close()
-		for line := range logChan {
-			// Write SSE formatted event
-			fmt.Fprintf(pw, "data: %s\n\n", line)
-		}
-	}()
-
-	return oapi.GetInstanceLogs200TexteventStreamResponse{
-		Body: pr,
-	}, nil
+	return logsStreamResponse{logChan: logChan}, nil
 }
 
 // AttachVolume attaches a volume to an instance (not yet implemented)
