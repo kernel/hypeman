@@ -360,33 +360,6 @@ components:
           type: boolean
           description: Mount as read-only
           default: false
-    
-    ExecRequest:
-      type: object
-      description: Request sent as first WebSocket message after connection upgrade
-      properties:
-        command:
-          type: array
-          items:
-            type: string
-          description: Command and arguments to execute (defaults to /bin/sh)
-          example: ["/bin/sh"]
-        tty:
-          type: boolean
-          description: Allocate a pseudo-TTY
-          default: true
-        env:
-          type: object
-          additionalProperties:
-            type: string
-          description: Environment variables to set
-        cwd:
-          type: string
-          description: Working directory for command execution
-        timeout:
-          type: integer
-          format: int32
-          description: Execution timeout in seconds (0 = no timeout)
 
     Health:
       type: object
@@ -777,41 +750,6 @@ paths:
                 type: string
         404:
           description: Instance not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        500:
-          description: Internal server error
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-  
-  /instances/{id}/exec:
-    get:
-      summary: Execute command in instance via vsock (WebSocket)
-      description: Upgrades to WebSocket for bidirectional streaming for shell access.
-      operationId: execInstance
-      security:
-        - bearerAuth: []
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        101:
-          description: Switching to WebSocket protocol
-        404:
-          description: Instance not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        409:
-          description: Instance not running
           content:
             application/json:
               schema:
