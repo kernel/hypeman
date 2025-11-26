@@ -4,7 +4,6 @@ package hypeman
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -125,11 +124,11 @@ func (r *InstanceService) StreamLogsStreaming(ctx context.Context, id string, qu
 }
 
 type Instance struct {
-	// Unique identifier
+	// Auto-generated unique identifier (CUID2 format)
 	ID string `json:"id,required"`
 	// Creation timestamp (RFC3339)
 	CreatedAt time.Time `json:"created_at,required" format:"date-time"`
-	// Image identifier
+	// OCI image reference
 	Image string `json:"image,required"`
 	// Human-readable name
 	Name string `json:"name,required"`
@@ -146,49 +145,40 @@ type Instance struct {
 	State InstanceState `json:"state,required"`
 	// Environment variables
 	Env map[string]string `json:"env"`
-	// Fully qualified domain name
-	Fqdn string `json:"fqdn,nullable"`
 	// Whether a snapshot exists for this instance
 	HasSnapshot bool `json:"has_snapshot"`
-	// Configured maximum memory in MB
-	MemoryMaxMB int64 `json:"memory_max_mb"`
-	// Configured base memory in MB
-	MemoryMB int64 `json:"memory_mb"`
-	// Port mappings
-	PortMappings []PortMapping `json:"port_mappings"`
-	// Private IP address
-	PrivateIP string `json:"private_ip,nullable"`
+	// Hotplug memory size (human-readable)
+	HotplugSize string `json:"hotplug_size"`
+	// Network configuration of the instance
+	Network InstanceNetwork `json:"network"`
+	// Writable overlay disk size (human-readable)
+	OverlaySize string `json:"overlay_size"`
+	// Base memory size (human-readable)
+	Size string `json:"size"`
 	// Start timestamp (RFC3339)
 	StartedAt time.Time `json:"started_at,nullable" format:"date-time"`
 	// Stop timestamp (RFC3339)
 	StoppedAt time.Time `json:"stopped_at,nullable" format:"date-time"`
-	// Timeout configuration
-	TimeoutSeconds int64 `json:"timeout_seconds"`
 	// Number of virtual CPUs
 	Vcpus int64 `json:"vcpus"`
-	// Attached volumes
-	Volumes []VolumeAttachment `json:"volumes"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
-		ID             respjson.Field
-		CreatedAt      respjson.Field
-		Image          respjson.Field
-		Name           respjson.Field
-		State          respjson.Field
-		Env            respjson.Field
-		Fqdn           respjson.Field
-		HasSnapshot    respjson.Field
-		MemoryMaxMB    respjson.Field
-		MemoryMB       respjson.Field
-		PortMappings   respjson.Field
-		PrivateIP      respjson.Field
-		StartedAt      respjson.Field
-		StoppedAt      respjson.Field
-		TimeoutSeconds respjson.Field
-		Vcpus          respjson.Field
-		Volumes        respjson.Field
-		ExtraFields    map[string]respjson.Field
-		raw            string
+		ID          respjson.Field
+		CreatedAt   respjson.Field
+		Image       respjson.Field
+		Name        respjson.Field
+		State       respjson.Field
+		Env         respjson.Field
+		HasSnapshot respjson.Field
+		HotplugSize respjson.Field
+		Network     respjson.Field
+		OverlaySize respjson.Field
+		Size        respjson.Field
+		StartedAt   respjson.Field
+		StoppedAt   respjson.Field
+		Vcpus       respjson.Field
+		ExtraFields map[string]respjson.Field
+		raw         string
 	} `json:"-"`
 }
 
@@ -217,136 +207,51 @@ const (
 	InstanceStateStandby  InstanceState = "Standby"
 )
 
-type PortMapping struct {
-	// Port in the guest VM
-	GuestPort int64 `json:"guest_port,required"`
-	// Port on the host
-	HostPort int64 `json:"host_port,required"`
-	// Any of "tcp", "udp".
-	Protocol PortMappingProtocol `json:"protocol"`
+// Network configuration of the instance
+type InstanceNetwork struct {
+	// Whether instance is attached to the default network
+	Enabled bool `json:"enabled"`
+	// Assigned IP address (null if no network)
+	IP string `json:"ip,nullable"`
+	// Assigned MAC address (null if no network)
+	Mac string `json:"mac,nullable"`
+	// Network name (always "default" when enabled)
+	Name string `json:"name"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
-		GuestPort   respjson.Field
-		HostPort    respjson.Field
-		Protocol    respjson.Field
+		Enabled     respjson.Field
+		IP          respjson.Field
+		Mac         respjson.Field
+		Name        respjson.Field
 		ExtraFields map[string]respjson.Field
 		raw         string
 	} `json:"-"`
 }
 
 // Returns the unmodified JSON received from the API
-func (r PortMapping) RawJSON() string { return r.JSON.raw }
-func (r *PortMapping) UnmarshalJSON(data []byte) error {
-	return apijson.UnmarshalRoot(data, r)
-}
-
-// ToParam converts this PortMapping to a PortMappingParam.
-//
-// Warning: the fields of the param type will not be present. ToParam should only
-// be used at the last possible moment before sending a request. Test for this with
-// PortMappingParam.Overrides()
-func (r PortMapping) ToParam() PortMappingParam {
-	return param.Override[PortMappingParam](json.RawMessage(r.RawJSON()))
-}
-
-type PortMappingProtocol string
-
-const (
-	PortMappingProtocolTcp PortMappingProtocol = "tcp"
-	PortMappingProtocolUdp PortMappingProtocol = "udp"
-)
-
-// The properties GuestPort, HostPort are required.
-type PortMappingParam struct {
-	// Port in the guest VM
-	GuestPort int64 `json:"guest_port,required"`
-	// Port on the host
-	HostPort int64 `json:"host_port,required"`
-	// Any of "tcp", "udp".
-	Protocol PortMappingProtocol `json:"protocol,omitzero"`
-	paramObj
-}
-
-func (r PortMappingParam) MarshalJSON() (data []byte, err error) {
-	type shadow PortMappingParam
-	return param.MarshalObject(r, (*shadow)(&r))
-}
-func (r *PortMappingParam) UnmarshalJSON(data []byte) error {
-	return apijson.UnmarshalRoot(data, r)
-}
-
-type VolumeAttachment struct {
-	// Path where volume is mounted in the guest
-	MountPath string `json:"mount_path,required"`
-	// Volume identifier
-	VolumeID string `json:"volume_id,required"`
-	// Whether volume is mounted read-only
-	Readonly bool `json:"readonly"`
-	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
-	JSON struct {
-		MountPath   respjson.Field
-		VolumeID    respjson.Field
-		Readonly    respjson.Field
-		ExtraFields map[string]respjson.Field
-		raw         string
-	} `json:"-"`
-}
-
-// Returns the unmodified JSON received from the API
-func (r VolumeAttachment) RawJSON() string { return r.JSON.raw }
-func (r *VolumeAttachment) UnmarshalJSON(data []byte) error {
-	return apijson.UnmarshalRoot(data, r)
-}
-
-// ToParam converts this VolumeAttachment to a VolumeAttachmentParam.
-//
-// Warning: the fields of the param type will not be present. ToParam should only
-// be used at the last possible moment before sending a request. Test for this with
-// VolumeAttachmentParam.Overrides()
-func (r VolumeAttachment) ToParam() VolumeAttachmentParam {
-	return param.Override[VolumeAttachmentParam](json.RawMessage(r.RawJSON()))
-}
-
-// The properties MountPath, VolumeID are required.
-type VolumeAttachmentParam struct {
-	// Path where volume is mounted in the guest
-	MountPath string `json:"mount_path,required"`
-	// Volume identifier
-	VolumeID string `json:"volume_id,required"`
-	// Whether volume is mounted read-only
-	Readonly param.Opt[bool] `json:"readonly,omitzero"`
-	paramObj
-}
-
-func (r VolumeAttachmentParam) MarshalJSON() (data []byte, err error) {
-	type shadow VolumeAttachmentParam
-	return param.MarshalObject(r, (*shadow)(&r))
-}
-func (r *VolumeAttachmentParam) UnmarshalJSON(data []byte) error {
+func (r InstanceNetwork) RawJSON() string { return r.JSON.raw }
+func (r *InstanceNetwork) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, r)
 }
 
 type InstanceNewParams struct {
-	// Unique identifier for the instance (provided by caller)
-	ID string `json:"id,required"`
-	// Image identifier
+	// OCI image reference
 	Image string `json:"image,required"`
-	// Human-readable name
+	// Human-readable name (lowercase letters, digits, and dashes only; cannot start or
+	// end with a dash)
 	Name string `json:"name,required"`
-	// Maximum memory with hotplug in MB
-	MemoryMaxMB param.Opt[int64] `json:"memory_max_mb,omitzero"`
-	// Base memory in MB
-	MemoryMB param.Opt[int64] `json:"memory_mb,omitzero"`
-	// Timeout for scale-to-zero semantics
-	TimeoutSeconds param.Opt[int64] `json:"timeout_seconds,omitzero"`
+	// Additional memory for hotplug (human-readable format like "3GB", "1G")
+	HotplugSize param.Opt[string] `json:"hotplug_size,omitzero"`
+	// Writable overlay disk size (human-readable format like "10GB", "50G")
+	OverlaySize param.Opt[string] `json:"overlay_size,omitzero"`
+	// Base memory size (human-readable format like "1GB", "512MB", "2G")
+	Size param.Opt[string] `json:"size,omitzero"`
 	// Number of virtual CPUs
 	Vcpus param.Opt[int64] `json:"vcpus,omitzero"`
 	// Environment variables
 	Env map[string]string `json:"env,omitzero"`
-	// Port mappings from host to guest
-	PortMappings []PortMappingParam `json:"port_mappings,omitzero"`
-	// Volumes to attach
-	Volumes []VolumeAttachmentParam `json:"volumes,omitzero"`
+	// Network configuration for the instance
+	Network InstanceNewParamsNetwork `json:"network,omitzero"`
 	paramObj
 }
 
@@ -355,6 +260,21 @@ func (r InstanceNewParams) MarshalJSON() (data []byte, err error) {
 	return param.MarshalObject(r, (*shadow)(&r))
 }
 func (r *InstanceNewParams) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
+// Network configuration for the instance
+type InstanceNewParamsNetwork struct {
+	// Whether to attach instance to the default network
+	Enabled param.Opt[bool] `json:"enabled,omitzero"`
+	paramObj
+}
+
+func (r InstanceNewParamsNetwork) MarshalJSON() (data []byte, err error) {
+	type shadow InstanceNewParamsNetwork
+	return param.MarshalObject(r, (*shadow)(&r))
+}
+func (r *InstanceNewParamsNetwork) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, r)
 }
 

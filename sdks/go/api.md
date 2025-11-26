@@ -23,16 +23,9 @@ Methods:
 
 # Instances
 
-Params Types:
-
-- <a href="https://pkg.go.dev/github.com/onkernel/hypeman-go">hypeman</a>.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#PortMappingParam">PortMappingParam</a>
-- <a href="https://pkg.go.dev/github.com/onkernel/hypeman-go">hypeman</a>.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#VolumeAttachmentParam">VolumeAttachmentParam</a>
-
 Response Types:
 
 - <a href="https://pkg.go.dev/github.com/onkernel/hypeman-go">hypeman</a>.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#Instance">Instance</a>
-- <a href="https://pkg.go.dev/github.com/onkernel/hypeman-go">hypeman</a>.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#PortMapping">PortMapping</a>
-- <a href="https://pkg.go.dev/github.com/onkernel/hypeman-go">hypeman</a>.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#VolumeAttachment">VolumeAttachment</a>
 
 Methods:
 
