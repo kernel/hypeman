@@ -33,7 +33,9 @@ type StoredMetadata struct {
 
 	// Configuration
 	Env            map[string]string
-	NetworkEnabled bool // Whether instance has networking enabled (uses default network)
+	NetworkEnabled bool   // Whether instance has networking enabled (uses default network)
+	IP             string // Assigned IP address (empty if NetworkEnabled=false)
+	MAC            string // Assigned MAC address (empty if NetworkEnabled=false)
 
 	// Timestamps (stored for historical tracking)
 	CreatedAt time.Time

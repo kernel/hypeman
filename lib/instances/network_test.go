@@ -138,6 +138,15 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 	require.Error(t, err, "TAP device should be deleted during standby")
 	t.Log("TAP device cleaned up as expected")
 
+	// Verify network allocation still returns correct IP/MAC during standby (from snapshot)
+	t.Log("Verifying network allocation during standby...")
+	allocStandby, err := manager.networkManager.GetAllocation(ctx, inst.Id)
+	require.NoError(t, err)
+	require.NotNil(t, allocStandby, "Allocation should exist during standby")
+	assert.Equal(t, alloc.IP, allocStandby.IP, "IP should be preserved during standby")
+	assert.Equal(t, alloc.MAC, allocStandby.MAC, "MAC should be preserved during standby")
+	t.Logf("Network allocation during standby: IP=%s, MAC=%s", allocStandby.IP, allocStandby.MAC)
+
 	// Restore instance
 	t.Log("Restoring instance from standby...")
 	inst, err = manager.RestoreInstance(ctx, inst.Id)

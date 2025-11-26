@@ -166,6 +166,9 @@ func (m *manager) createInstance(
 			log.ErrorContext(ctx, "failed to allocate network", "id", id, "network", networkName, "error", err)
 			return nil, fmt.Errorf("allocate network: %w", err)
 		}
+		// Store IP/MAC in metadata (persisted with instance)
+		stored.IP = netConfig.IP
+		stored.MAC = netConfig.MAC
 		// Add network cleanup to stack
 		cu.Add(func() {
 			// Network cleanup: TAP devices are removed when ReleaseAllocation is called.

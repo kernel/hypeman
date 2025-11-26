@@ -308,8 +308,7 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 	overlaySizeStr := datasize.ByteSize(inst.OverlaySize).HR()
 
 	// Build network object with ip/mac nested inside
-	// Note: IP/MAC population from network allocations would be added in a follow-up
-	network := &struct {
+	netObj := &struct {
 		Enabled *bool   `json:"enabled,omitempty"`
 		Ip      *string `json:"ip"`
 		Mac     *string `json:"mac"`
@@ -318,7 +317,9 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 		Enabled: lo.ToPtr(inst.NetworkEnabled),
 	}
 	if inst.NetworkEnabled {
-		network.Name = lo.ToPtr("default")
+		netObj.Name = lo.ToPtr("default")
+		netObj.Ip = lo.ToPtr(inst.IP)
+		netObj.Mac = lo.ToPtr(inst.MAC)
 	}
 
 	oapiInst := oapi.Instance{
@@ -330,7 +331,7 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 		HotplugSize: lo.ToPtr(hotplugSizeStr),
 		OverlaySize: lo.ToPtr(overlaySizeStr),
 		Vcpus:       lo.ToPtr(inst.Vcpus),
-		Network:     network,
+		Network:     netObj,
 		CreatedAt:   inst.CreatedAt,
 		StartedAt:   inst.StartedAt,
 		StoppedAt:   inst.StoppedAt,
