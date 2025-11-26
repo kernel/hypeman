@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.0 (2025-11-26)
+
+Full Changelog: [v0.0.3...v0.1.0](https://github.com/onkernel/hypeman-go/compare/v0.0.3...v0.1.0)
+
+### Features
+
+* Network manager ([7864aba](https://github.com/onkernel/hypeman-go/commit/7864abadad29bcfbb61d2c35a7135ef2407d6c47))
+
 ## 0.0.3 (2025-11-19)
 
 Full Changelog: [v0.0.2...v0.0.3](https://github.com/onkernel/hypeman-go/compare/v0.0.2...v0.0.3)
