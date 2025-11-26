@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.0 (2025-11-26)
+
+Full Changelog: [v0.4.0...v0.5.0](https://github.com/onkernel/hypeman-cli/compare/v0.4.0...v0.5.0)
+
+### Features
+
+* Generate log streaming ([31951c5](https://github.com/onkernel/hypeman-cli/commit/31951c5caf65c008f9811ffd023f54a10c3f1474))
+
 ## 0.4.0 (2025-11-26)
 
 Full Changelog: [v0.3.0...v0.4.0](https://github.com/onkernel/hypeman-cli/compare/v0.3.0...v0.4.0)
