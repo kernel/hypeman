@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.0 (2025-11-26)
+
+Full Changelog: [v0.1.0...v0.2.0](https://github.com/onkernel/hypeman-go/compare/v0.1.0...v0.2.0)
+
+### Features
+
+* **api:** add exec ([f3992ff](https://github.com/onkernel/hypeman-go/commit/f3992ffe807e7006a25ae2211cd5cb25fb599bff))
+
 ## 0.1.0 (2025-11-26)
 
 Full Changelog: [v0.0.3...v0.1.0](https://github.com/onkernel/hypeman-go/compare/v0.0.3...v0.1.0)
