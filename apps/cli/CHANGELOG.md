@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.0 (2025-11-26)
+
+Full Changelog: [v0.2.0...v0.3.0](https://github.com/onkernel/hypeman-cli/compare/v0.2.0...v0.3.0)
+
+### Features
+
+* **api:** add exec ([cc1d174](https://github.com/onkernel/hypeman-cli/commit/cc1d17479467b19436346b30256f92d99474d9ed))
+
 ## 0.2.0 (2025-11-26)
 
 Full Changelog: [v0.1.2...v0.2.0](https://github.com/onkernel/hypeman-cli/compare/v0.1.2...v0.2.0)
