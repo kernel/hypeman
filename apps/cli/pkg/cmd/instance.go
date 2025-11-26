@@ -81,6 +81,18 @@ var instancesDelete = cli.Command{
 	HideHelpCommand: true,
 }
 
+var instancesExecuteCommand = cli.Command{
+	Name:  "execute-command",
+	Usage: "Upgrades to WebSocket for bidirectional streaming for shell access.",
+	Flags: []cli.Flag{
+		&cli.StringFlag{
+			Name: "id",
+		},
+	},
+	Action:          handleInstancesExecuteCommand,
+	HideHelpCommand: true,
+}
+
 var instancesPutInStandby = cli.Command{
 	Name:  "put-in-standby",
 	Usage: "Put instance in standby (pause, snapshot, delete VMM)",
@@ -220,6 +232,23 @@ func handleInstancesDelete(ctx context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("Unexpected extra arguments: %v", unusedArgs)
 	}
 	return client.Instances.Delete(
+		ctx,
+		cmd.Value("id").(string),
+		option.WithMiddleware(debugMiddleware(cmd.Bool("debug"))),
+	)
+}
+
+func handleInstancesExecuteCommand(ctx context.Context, cmd *cli.Command) error {
+	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
+	unusedArgs := cmd.Args().Slice()
+	if !cmd.IsSet("id") && len(unusedArgs) > 0 {
+		cmd.Set("id", unusedArgs[0])
+		unusedArgs = unusedArgs[1:]
+	}
+	if len(unusedArgs) > 0 {
+		return fmt.Errorf("Unexpected extra arguments: %v", unusedArgs)
+	}
+	return client.Instances.ExecuteCommand(
 		ctx,
 		cmd.Value("id").(string),
 		option.WithMiddleware(debugMiddleware(cmd.Bool("debug"))),
