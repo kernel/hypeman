@@ -271,10 +271,10 @@ func TestContextDeadlineStreaming(t *testing.T) {
 				},
 			}),
 		)
-		stream := client.Instances.StreamLogsStreaming(
+		stream := client.Instances.LogsStreaming(
 			deadlineCtx,
 			"id",
-			hypeman.InstanceStreamLogsParams{},
+			hypeman.InstanceLogsParams{},
 		)
 		for stream.Next() {
 			_ = stream.Current()
@@ -320,10 +320,10 @@ func TestContextDeadlineStreamingWithRequestTimeout(t *testing.T) {
 				},
 			}),
 		)
-		stream := client.Instances.StreamLogsStreaming(
+		stream := client.Instances.LogsStreaming(
 			context.Background(),
 			"id",
-			hypeman.InstanceStreamLogsParams{},
+			hypeman.InstanceLogsParams{},
 			option.WithRequestTimeout((100 * time.Millisecond)),
 		)
 		for stream.Next() {
