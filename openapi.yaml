@@ -363,18 +363,30 @@ components:
     
     ExecRequest:
       type: object
-      required: [command]
+      description: Request sent as first WebSocket message after connection upgrade
       properties:
         command:
           type: array
           items:
             type: string
-          description: Command and arguments to execute
+          description: Command and arguments to execute (defaults to /bin/sh)
           example: ["/bin/sh"]
         tty:
           type: boolean
           description: Allocate a pseudo-TTY
           default: true
+        env:
+          type: object
+          additionalProperties:
+            type: string
+          description: Environment variables to set
+        cwd:
+          type: string
+          description: Working directory for command execution
+        timeout:
+          type: integer
+          format: int32
+          description: Execution timeout in seconds (0 = no timeout)
 
     Health:
       type: object
@@ -777,8 +789,9 @@ paths:
                 $ref: "#/components/schemas/Error"
   
   /instances/{id}/exec:
-    post:
+    get:
       summary: Execute command in instance via vsock (WebSocket)
+      description: Upgrades to WebSocket for bidirectional streaming for shell access.
       operationId: execInstance
       security:
         - bearerAuth: []
@@ -788,21 +801,6 @@ paths:
           required: true
           schema:
             type: string
-        - name: command
-          in: query
-          required: false
-          schema:
-            type: array
-            items:
-              type: string
-          description: Command to execute (defaults to /bin/sh)
-        - name: tty
-          in: query
-          required: false
-          schema:
-            type: boolean
-            default: true
-          description: Allocate a pseudo-TTY
       responses:
         101:
           description: Switching to WebSocket protocol
