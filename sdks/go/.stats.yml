@@ -1,4 +1,4 @@
 configured_endpoints: 18
-openapi_spec_url: https://storage.googleapis.com/stainless-sdk-openapi-specs/kernel%2Fhypeman-5058541cc0e298a6fc3e9cda1af0e32586d1f39c5666946e15f546c1aedc18ea.yml
-openapi_spec_hash: 7f572ac0c7f9dc4f5fc7d9883a53d6c7
-config_hash: 35db4c99791f175865381f13a8ad6075
+openapi_spec_url: https://storage.googleapis.com/stainless-sdk-openapi-specs/kernel%2Fhypeman-ce51f144a3d2de556750203edbaa5bfeefe874660737c35a4fc37dfb30057dd5.yml
+openapi_spec_hash: 27663b6503056317abcb578ac7b67c06
+config_hash: b4e65d240d7bca1ba6162ee2098c8ac2

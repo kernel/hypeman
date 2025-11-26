@@ -82,6 +82,25 @@ func (r *InstanceService) Delete(ctx context.Context, id string, opts ...option.
 	return
 }
 
+// Streams instance console logs as Server-Sent Events. Returns the last N lines
+// (controlled by `tail` parameter), then optionally continues streaming new lines
+// if `follow=true`.
+func (r *InstanceService) LogsStreaming(ctx context.Context, id string, query InstanceLogsParams, opts ...option.RequestOption) (stream *ssestream.Stream[string]) {
+	var (
+		raw *http.Response
+		err error
+	)
+	opts = slices.Concat(r.Options, opts)
+	opts = append([]option.RequestOption{option.WithHeader("Accept", "text/event-stream")}, opts...)
+	if id == "" {
+		err = errors.New("missing required id parameter")
+		return
+	}
+	path := fmt.Sprintf("instances/%s/logs", id)
+	err = requestconfig.ExecuteNewRequest(ctx, http.MethodGet, path, query, &raw, opts...)
+	return ssestream.NewStream[string](ssestream.NewDecoder(raw), err)
+}
+
 // Put instance in standby (pause, snapshot, delete VMM)
 func (r *InstanceService) PutInStandby(ctx context.Context, id string, opts ...option.RequestOption) (res *Instance, err error) {
 	opts = slices.Concat(r.Options, opts)
@@ -104,23 +123,6 @@ func (r *InstanceService) RestoreFromStandby(ctx context.Context, id string, opt
 	path := fmt.Sprintf("instances/%s/restore", id)
 	err = requestconfig.ExecuteNewRequest(ctx, http.MethodPost, path, nil, &res, opts...)
 	return
-}
-
-// Stream instance logs (SSE)
-func (r *InstanceService) StreamLogsStreaming(ctx context.Context, id string, query InstanceStreamLogsParams, opts ...option.RequestOption) (stream *ssestream.Stream[string]) {
-	var (
-		raw *http.Response
-		err error
-	)
-	opts = slices.Concat(r.Options, opts)
-	opts = append([]option.RequestOption{option.WithHeader("Accept", "text/event-stream")}, opts...)
-	if id == "" {
-		err = errors.New("missing required id parameter")
-		return
-	}
-	path := fmt.Sprintf("instances/%s/logs", id)
-	err = requestconfig.ExecuteNewRequest(ctx, http.MethodGet, path, query, &raw, opts...)
-	return ssestream.NewStream[string](ssestream.NewDecoder(raw), err)
 }
 
 type Instance struct {
@@ -278,17 +280,16 @@ func (r *InstanceNewParamsNetwork) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, r)
 }
 
-type InstanceStreamLogsParams struct {
-	// Follow logs (stream with SSE)
+type InstanceLogsParams struct {
+	// Continue streaming new lines after initial output
 	Follow param.Opt[bool] `query:"follow,omitzero" json:"-"`
 	// Number of lines to return from end
 	Tail param.Opt[int64] `query:"tail,omitzero" json:"-"`
 	paramObj
 }
 
-// URLQuery serializes [InstanceStreamLogsParams]'s query parameters as
-// `url.Values`.
-func (r InstanceStreamLogsParams) URLQuery() (v url.Values, err error) {
+// URLQuery serializes [InstanceLogsParams]'s query parameters as `url.Values`.
+func (r InstanceLogsParams) URLQuery() (v url.Values, err error) {
 	return apiquery.MarshalWithSettings(r, apiquery.QuerySettings{
 		ArrayFormat:  apiquery.ArrayQueryFormatComma,
 		NestedFormat: apiquery.NestedQueryFormatBrackets,
