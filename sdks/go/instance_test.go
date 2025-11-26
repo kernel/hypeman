@@ -27,27 +27,19 @@ func TestInstanceNewWithOptionalParams(t *testing.T) {
 		option.WithAPIKey("My API Key"),
 	)
 	_, err := client.Instances.New(context.TODO(), hypeman.InstanceNewParams{
-		ID:    "inst-abc123",
-		Image: "img-chrome-v1",
+		Image: "docker.io/library/alpine:latest",
 		Name:  "my-workload-1",
 		Env: map[string]string{
 			"PORT":     "3000",
 			"NODE_ENV": "production",
 		},
-		MemoryMaxMB: hypeman.Int(4096),
-		MemoryMB:    hypeman.Int(2048),
-		PortMappings: []hypeman.PortMappingParam{{
-			GuestPort: 80,
-			HostPort:  8080,
-			Protocol:  hypeman.PortMappingProtocolTcp,
-		}},
-		TimeoutSeconds: hypeman.Int(7200),
-		Vcpus:          hypeman.Int(2),
-		Volumes: []hypeman.VolumeAttachmentParam{{
-			MountPath: "/mnt/data",
-			VolumeID:  "vol-abc123",
-			Readonly:  hypeman.Bool(true),
-		}},
+		HotplugSize: hypeman.String("2GB"),
+		Network: hypeman.InstanceNewParamsNetwork{
+			Enabled: hypeman.Bool(true),
+		},
+		OverlaySize: hypeman.String("20GB"),
+		Size:        hypeman.String("2GB"),
+		Vcpus:       hypeman.Int(2),
 	})
 	if err != nil {
 		var apierr *hypeman.Error
