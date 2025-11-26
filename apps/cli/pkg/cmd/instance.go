@@ -81,6 +81,27 @@ var instancesDelete = cli.Command{
 	HideHelpCommand: true,
 }
 
+var instancesLogs = cli.Command{
+	Name:  "logs",
+	Usage: "Streams instance console logs as Server-Sent Events. Returns the last N lines\n(controlled by `tail` parameter), then optionally continues streaming new lines\nif `follow=true`.",
+	Flags: []cli.Flag{
+		&cli.StringFlag{
+			Name: "id",
+		},
+		&cli.BoolFlag{
+			Name:  "follow",
+			Usage: "Continue streaming new lines after initial output",
+		},
+		&cli.Int64Flag{
+			Name:  "tail",
+			Usage: "Number of lines to return from end",
+			Value: 100,
+		},
+	},
+	Action:          handleInstancesLogs,
+	HideHelpCommand: true,
+}
+
 var instancesPutInStandby = cli.Command{
 	Name:  "put-in-standby",
 	Usage: "Put instance in standby (pause, snapshot, delete VMM)",
@@ -102,27 +123,6 @@ var instancesRestoreFromStandby = cli.Command{
 		},
 	},
 	Action:          handleInstancesRestoreFromStandby,
-	HideHelpCommand: true,
-}
-
-var instancesStreamLogs = cli.Command{
-	Name:  "stream-logs",
-	Usage: "Stream instance logs (SSE)",
-	Flags: []cli.Flag{
-		&cli.StringFlag{
-			Name: "id",
-		},
-		&cli.BoolFlag{
-			Name:  "follow",
-			Usage: "Follow logs (stream with SSE)",
-		},
-		&cli.Int64Flag{
-			Name:  "tail",
-			Usage: "Number of lines to return from end",
-			Value: 100,
-		},
-	},
-	Action:          handleInstancesStreamLogs,
 	HideHelpCommand: true,
 }
 
@@ -226,6 +226,36 @@ func handleInstancesDelete(ctx context.Context, cmd *cli.Command) error {
 	)
 }
 
+func handleInstancesLogs(ctx context.Context, cmd *cli.Command) error {
+	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
+	unusedArgs := cmd.Args().Slice()
+	if !cmd.IsSet("id") && len(unusedArgs) > 0 {
+		cmd.Set("id", unusedArgs[0])
+		unusedArgs = unusedArgs[1:]
+	}
+	if len(unusedArgs) > 0 {
+		return fmt.Errorf("Unexpected extra arguments: %v", unusedArgs)
+	}
+	params := hypeman.InstanceLogsParams{}
+	if cmd.IsSet("follow") {
+		params.Follow = hypeman.Opt(cmd.Value("follow").(bool))
+	}
+	if cmd.IsSet("tail") {
+		params.Tail = hypeman.Opt(cmd.Value("tail").(int64))
+	}
+	stream := client.Instances.LogsStreaming(
+		ctx,
+		cmd.Value("id").(string),
+		params,
+		option.WithMiddleware(debugMiddleware(cmd.Bool("debug"))),
+	)
+	defer stream.Close()
+	for stream.Next() {
+		fmt.Printf("%s\n", stream.Current())
+	}
+	return stream.Err()
+}
+
 func handleInstancesPutInStandby(ctx context.Context, cmd *cli.Command) error {
 	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
 	unusedArgs := cmd.Args().Slice()
@@ -278,34 +308,4 @@ func handleInstancesRestoreFromStandby(ctx context.Context, cmd *cli.Command) er
 	format := cmd.Root().String("format")
 	transform := cmd.Root().String("transform")
 	return ShowJSON("instances restore-from-standby", json, format, transform)
-}
-
-func handleInstancesStreamLogs(ctx context.Context, cmd *cli.Command) error {
-	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
-	unusedArgs := cmd.Args().Slice()
-	if !cmd.IsSet("id") && len(unusedArgs) > 0 {
-		cmd.Set("id", unusedArgs[0])
-		unusedArgs = unusedArgs[1:]
-	}
-	if len(unusedArgs) > 0 {
-		return fmt.Errorf("Unexpected extra arguments: %v", unusedArgs)
-	}
-	params := hypeman.InstanceStreamLogsParams{}
-	if cmd.IsSet("follow") {
-		params.Follow = hypeman.Opt(cmd.Value("follow").(bool))
-	}
-	if cmd.IsSet("tail") {
-		params.Tail = hypeman.Opt(cmd.Value("tail").(int64))
-	}
-	stream := client.Instances.StreamLogsStreaming(
-		ctx,
-		cmd.Value("id").(string),
-		params,
-		option.WithMiddleware(debugMiddleware(cmd.Bool("debug"))),
-	)
-	defer stream.Close()
-	for stream.Next() {
-		fmt.Printf("%s\n", stream.Current())
-	}
-	return stream.Err()
 }
