@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.0 (2025-11-26)
+
+Full Changelog: [v0.3.0...v0.4.0](https://github.com/onkernel/hypeman-go/compare/v0.3.0...v0.4.0)
+
+### Features
+
+* Generate log streaming ([f444c22](https://github.com/onkernel/hypeman-go/commit/f444c22bd9eb0ad06e66b3ca167171ddec2836e4))
+
 ## 0.3.0 (2025-11-26)
 
 Full Changelog: [v0.2.0...v0.3.0](https://github.com/onkernel/hypeman-go/compare/v0.2.0...v0.3.0)
