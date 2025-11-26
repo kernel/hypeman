@@ -2,6 +2,51 @@
 
 Manages the default virtual network for instances using a Linux bridge and TAP devices.
 
+## How Linux VM Networking Works
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│                              HOST                                    │
+│                                                                      │
+│  ┌───────────┐      ┌───────────┐                                    │
+│  │   VM 1    │      │   VM 2    │                                    │
+│  │ (no net)  │      │ 10.100.   │                                    │
+│  │           │      │   5.42    │                                    │
+│  └───────────┘      └─────┬─────┘                                    │
+│                           │                                          │
+│                      ┌────┴────┐                                     │
+│                      │   TAP   │                                     │
+│                      │ hype-x  │                                     │
+│                      └────┬────┘                                     │
+│  ┌───────────────────────────────────────────────────────────────┐   │
+│  │                     LINUX KERNEL                              │   │
+│  │  ┌─────────────┐                           ┌───────────────┐  │   │
+│  │  │   Bridge    │    routing + iptables     │    eth0       │  │   │
+│  │  │  (vmbr0)    │ ─────────────────────────>│   (uplink)    │  │   │
+│  │  │ 10.100.0.1  │      NAT/masquerade       │  public IP    │  │   │
+│  │  └─────────────┘                           └───────┬───────┘  │   │
+│  └────────────────────────────────────────────────────┼──────────┘   │
+│                                                       │              │
+└───────────────────────────────────────────────────────┼──────────────┘
+                                                        │
+                                                   To Internet
+```
+
+**Key concepts:**
+
+- **TAP device**: A virtual network interface. Each VM gets one (unless networking is disabled). It's like a virtual ethernet cable connecting the VM to the host.
+
+- **Bridge**: A virtual network switch inside the kernel. All TAP devices connect to it. The bridge has an IP (the gateway) that VMs use as their default route.
+
+- **Linux kernel as router**: The kernel routes packets between the bridge (VM network) and the uplink (physical network). iptables NAT rules translate VM private IPs to the host's public IP for outbound traffic.
+
+**What Hypeman creates:**
+1. One bridge (`vmbr0`) with the gateway IP (e.g., `10.100.0.1`)
+2. One TAP device per networked VM (e.g., `hype-abc123`)
+3. iptables rules for NAT and forwarding
+
+This setup allows for VMs with an attached network to communicate to the internet and for programs on the host to connect to the VMs via their private IP addresses.
+
 ## Overview
 
 Hypeman provides a single default network that all instances can optionally connect to. There is no support for multiple custom networks - instances either have networking enabled (connected to the default network) or disabled (no network connectivity).
