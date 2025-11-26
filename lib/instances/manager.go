@@ -18,8 +18,7 @@ type Manager interface {
 	DeleteInstance(ctx context.Context, id string) error
 	StandbyInstance(ctx context.Context, id string) (*Instance, error)
 	RestoreInstance(ctx context.Context, id string) (*Instance, error)
-	GetInstanceLogs(ctx context.Context, id string, tail int) (string, error)
-	StreamInstanceLogs(ctx context.Context, id string, tail int) (<-chan string, error)
+	StreamInstanceLogs(ctx context.Context, id string, tail int, follow bool) (<-chan string, error)
 	AttachVolume(ctx context.Context, id string, volumeId string, req AttachVolumeRequest) (*Instance, error)
 	DetachVolume(ctx context.Context, id string, volumeId string) (*Instance, error)
 }
@@ -108,19 +107,12 @@ func (m *manager) GetInstance(ctx context.Context, id string) (*Instance, error)
 	return m.getInstance(ctx, id)
 }
 
-// GetInstanceLogs returns instance console logs (tail only)
-func (m *manager) GetInstanceLogs(ctx context.Context, id string, tail int) (string, error) {
-	lock := m.getInstanceLock(id)
-	lock.RLock()
-	defer lock.RUnlock()
-	return m.getInstanceLogs(ctx, id, tail)
-}
-
 // StreamInstanceLogs streams instance console logs
-func (m *manager) StreamInstanceLogs(ctx context.Context, id string, tail int) (<-chan string, error) {
+// Returns last N lines, then continues following if follow=true
+func (m *manager) StreamInstanceLogs(ctx context.Context, id string, tail int, follow bool) (<-chan string, error) {
 	// Note: No lock held during streaming - we read from the file continuously
 	// and the file is append-only, so this is safe
-	return m.streamInstanceLogs(ctx, id, tail)
+	return m.streamInstanceLogs(ctx, id, tail, follow)
 }
 
 // AttachVolume attaches a volume to an instance (not yet implemented)

@@ -714,7 +714,11 @@ paths:
   
   /instances/{id}/logs:
     get:
-      summary: Get instance logs (tail)
+      summary: Stream instance logs (SSE)
+      description: |
+        Streams instance console logs as Server-Sent Events.
+        Returns the last N lines (controlled by `tail` parameter), then optionally
+        continues streaming new lines if `follow=true`.
       operationId: getInstanceLogs
       security:
         - bearerAuth: []
@@ -731,45 +735,13 @@ paths:
             type: integer
             default: 100
           description: Number of lines to return from end
-      responses:
-        200:
-          description: Log output
-          content:
-            text/plain:
-              schema:
-                type: string
-        404:
-          description: Instance not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        500:
-          description: Internal server error
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-  
-  /instances/{id}/logs/stream:
-    get:
-      summary: Stream instance logs (SSE)
-      operationId: streamInstanceLogs
-      security:
-        - bearerAuth: []
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-        - name: tail
+        - name: follow
           in: query
           required: false
           schema:
-            type: integer
-            default: 100
-          description: Number of lines to return from end before streaming
+            type: boolean
+            default: false
+          description: Continue streaming new lines after initial output
       responses:
         200:
           description: Log stream (SSE)

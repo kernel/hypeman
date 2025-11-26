@@ -238,38 +238,11 @@ func (s *ApiService) RestoreInstance(ctx context.Context, request oapi.RestoreIn
 	return oapi.RestoreInstance200JSONResponse(instanceToOAPI(*inst)), nil
 }
 
-// GetInstanceLogs returns instance logs (tail only, no streaming)
-func (s *ApiService) GetInstanceLogs(ctx context.Context, request oapi.GetInstanceLogsRequestObject) (oapi.GetInstanceLogsResponseObject, error) {
-	log := logger.FromContext(ctx)
-
-	tail := 100
-	if request.Params.Tail != nil {
-		tail = *request.Params.Tail
-	}
-
-	logs, err := s.InstanceManager.GetInstanceLogs(ctx, request.Id, tail)
-	if err != nil {
-		switch {
-		case errors.Is(err, instances.ErrNotFound):
-			return oapi.GetInstanceLogs404JSONResponse{
-				Code:    "not_found",
-				Message: "instance not found",
-			}, nil
-		default:
-			log.Error("failed to get instance logs", "error", err, "id", request.Id)
-			return oapi.GetInstanceLogs500JSONResponse{
-				Code:    "internal_error",
-				Message: "failed to get instance logs",
-			}, nil
-		}
-	}
-
-	return oapi.GetInstanceLogs200TextResponse(logs), nil
-}
-
-// StreamLogsHandler streams instance logs via SSE (Server-Sent Events)
+// LogsHandler streams instance logs via SSE (Server-Sent Events)
 // This handler is registered outside the timeout middleware for long-running connections
-func (s *ApiService) StreamLogsHandler(w http.ResponseWriter, r *http.Request) {
+// With follow=false (default), streams last N lines then closes
+// With follow=true, streams last N lines then continues following new output
+func (s *ApiService) LogsHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	log := logger.FromContext(ctx)
 
@@ -283,8 +256,11 @@ func (s *ApiService) StreamLogsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Parse follow parameter
+	follow := r.URL.Query().Get("follow") == "true"
+
 	// Start streaming logs
-	logChan, err := s.InstanceManager.StreamInstanceLogs(ctx, instanceID, tail)
+	logChan, err := s.InstanceManager.StreamInstanceLogs(ctx, instanceID, tail, follow)
 	if err != nil {
 		if errors.Is(err, instances.ErrNotFound) {
 			http.Error(w, `{"code":"not_found","message":"instance not found"}`, http.StatusNotFound)
@@ -317,7 +293,7 @@ func (s *ApiService) StreamLogsHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		case line, ok := <-logChan:
 			if !ok {
-				// Channel closed, stream ended
+				// Channel closed, stream ended (tail finished without follow)
 				log.DebugContext(ctx, "log stream ended", "id", instanceID)
 				return
 			}
@@ -328,14 +304,14 @@ func (s *ApiService) StreamLogsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// StreamInstanceLogs implements the strict server interface method
-// This is a stub - the actual streaming is handled by StreamLogsHandler
-// which is registered outside the timeout middleware
-func (s *ApiService) StreamInstanceLogs(ctx context.Context, request oapi.StreamInstanceLogsRequestObject) (oapi.StreamInstanceLogsResponseObject, error) {
-	// This should never be called as StreamLogsHandler takes precedence in routing
-	return oapi.StreamInstanceLogs500JSONResponse{
+// GetInstanceLogs implements the strict server interface method
+// This is a stub - the actual handler is LogsHandler which is registered
+// outside the timeout middleware
+func (s *ApiService) GetInstanceLogs(ctx context.Context, request oapi.GetInstanceLogsRequestObject) (oapi.GetInstanceLogsResponseObject, error) {
+	// This should never be called as LogsHandler takes precedence in routing
+	return oapi.GetInstanceLogs500JSONResponse{
 		Code:    "internal_error",
-		Message: "streaming should use /instances/{id}/logs/stream endpoint directly",
+		Message: "logs endpoint handled by LogsHandler",
 	}, nil
 }
 

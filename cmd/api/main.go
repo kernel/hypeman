@@ -92,14 +92,14 @@ func run() error {
 		mw.JwtAuth(app.Config.JwtSecret),
 	).Get("/instances/{id}/exec", app.ApiService.ExecHandler)
 
-	// Log streaming endpoint (outside timeout middleware for long-running SSE)
+	// Logs endpoint (outside timeout middleware for SSE streaming)
 	r.With(
 		middleware.RequestID,
 		middleware.RealIP,
 		middleware.Logger,
 		middleware.Recoverer,
 		mw.JwtAuth(app.Config.JwtSecret),
-	).Get("/instances/{id}/logs/stream", app.ApiService.StreamLogsHandler)
+	).Get("/instances/{id}/logs", app.ApiService.LogsHandler)
 
 	// Authenticated API endpoints
 	r.Group(func(r chi.Router) {

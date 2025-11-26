@@ -89,7 +89,7 @@ func waitForLogMessage(ctx context.Context, mgr *manager, instanceID, message st
 	deadline := time.Now().Add(timeout)
 	
 	for time.Now().Before(deadline) {
-		logs, err := mgr.GetInstanceLogs(ctx, instanceID, 200)
+		logs, err := collectLogs(ctx, mgr, instanceID, 200)
 		if err != nil {
 			time.Sleep(100 * time.Millisecond)
 			continue
@@ -103,6 +103,21 @@ func waitForLogMessage(ctx context.Context, mgr *manager, instanceID, message st
 	}
 	
 	return fmt.Errorf("message %q not found in logs within %v", message, timeout)
+}
+
+// collectLogs gets the last N lines of logs (non-streaming)
+func collectLogs(ctx context.Context, mgr *manager, instanceID string, n int) (string, error) {
+	logChan, err := mgr.StreamInstanceLogs(ctx, instanceID, n, false)
+	if err != nil {
+		return "", err
+	}
+	
+	var lines []string
+	for line := range logChan {
+		lines = append(lines, line)
+	}
+	
+	return strings.Join(lines, "\n"), nil
 }
 
 // cleanupOrphanedProcesses kills any Cloud Hypervisor processes from metadata
@@ -238,7 +253,7 @@ func TestCreateAndDeleteInstance(t *testing.T) {
 	var logs string
 	foundNginxStartup := false
 	for i := 0; i < 50; i++ { // Poll for up to 5 seconds (50 * 100ms)
-		logs, err = manager.GetInstanceLogs(ctx, inst.Id, 100)
+		logs, err = collectLogs(ctx, manager, inst.Id, 100)
 		require.NoError(t, err)
 		
 		if strings.Contains(logs, "start worker processes") {
@@ -258,7 +273,7 @@ func TestCreateAndDeleteInstance(t *testing.T) {
 	streamCtx, streamCancel := context.WithCancel(ctx)
 	defer streamCancel()
 
-	logChan, err := manager.StreamInstanceLogs(streamCtx, inst.Id, 10)
+	logChan, err := manager.StreamInstanceLogs(streamCtx, inst.Id, 10, true)
 	require.NoError(t, err)
 
 	// Create unique marker
