@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.0 (2025-11-26)
+
+Full Changelog: [v0.1.2...v0.2.0](https://github.com/onkernel/hypeman-cli/compare/v0.1.2...v0.2.0)
+
+### Features
+
+* Network manager ([cece9ba](https://github.com/onkernel/hypeman-cli/commit/cece9ba6e801a9b29512357060e5642976c8e3ec))
+
+
+### Chores
+
+* **client:** change name of underlying properties for models and params ([27fd97a](https://github.com/onkernel/hypeman-cli/commit/27fd97aa3faa8b436a625783232d36250bbd191a))
+
 ## 0.1.2 (2025-11-20)
 
 Full Changelog: [v0.1.1...v0.1.2](https://github.com/onkernel/hypeman-cli/compare/v0.1.1...v0.1.2)
