@@ -18,7 +18,8 @@ type Manager interface {
 	DeleteInstance(ctx context.Context, id string) error
 	StandbyInstance(ctx context.Context, id string) (*Instance, error)
 	RestoreInstance(ctx context.Context, id string) (*Instance, error)
-	GetInstanceLogs(ctx context.Context, id string, follow bool, tail int) (string, error)
+	StreamInstanceLogs(ctx context.Context, id string, tail int, follow bool) (<-chan string, error)
+	RotateLogs(ctx context.Context, maxBytes int64, maxFiles int) error
 	AttachVolume(ctx context.Context, id string, volumeId string, req AttachVolumeRequest) (*Instance, error)
 	DetachVolume(ctx context.Context, id string, volumeId string) (*Instance, error)
 }
@@ -107,12 +108,29 @@ func (m *manager) GetInstance(ctx context.Context, id string) (*Instance, error)
 	return m.getInstance(ctx, id)
 }
 
-// GetInstanceLogs returns instance console logs
-func (m *manager) GetInstanceLogs(ctx context.Context, id string, follow bool, tail int) (string, error) {
-	lock := m.getInstanceLock(id)
-	lock.RLock()
-	defer lock.RUnlock()
-	return m.getInstanceLogs(ctx, id, follow, tail)
+// StreamInstanceLogs streams instance console logs
+// Returns last N lines, then continues following if follow=true
+func (m *manager) StreamInstanceLogs(ctx context.Context, id string, tail int, follow bool) (<-chan string, error) {
+	// Note: No lock held during streaming - we read from the file continuously
+	// and the file is append-only, so this is safe
+	return m.streamInstanceLogs(ctx, id, tail, follow)
+}
+
+// RotateLogs rotates console logs for all instances that exceed maxBytes
+func (m *manager) RotateLogs(ctx context.Context, maxBytes int64, maxFiles int) error {
+	instances, err := m.listInstances(ctx)
+	if err != nil {
+		return fmt.Errorf("list instances for rotation: %w", err)
+	}
+
+	var lastErr error
+	for _, inst := range instances {
+		logPath := m.paths.InstanceConsoleLog(inst.Id)
+		if err := rotateLogIfNeeded(logPath, maxBytes, maxFiles); err != nil {
+			lastErr = err // Continue with other instances, but track error
+		}
+	}
+	return lastErr
 }
 
 // AttachVolume attaches a volume to an instance (not yet implemented)

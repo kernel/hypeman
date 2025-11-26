@@ -715,6 +715,10 @@ paths:
   /instances/{id}/logs:
     get:
       summary: Stream instance logs (SSE)
+      description: |
+        Streams instance console logs as Server-Sent Events.
+        Returns the last N lines (controlled by `tail` parameter), then optionally
+        continues streaming new lines if `follow=true`.
       operationId: getInstanceLogs
       security:
         - bearerAuth: []
@@ -724,13 +728,6 @@ paths:
           required: true
           schema:
             type: string
-        - name: follow
-          in: query
-          required: false
-          schema:
-            type: boolean
-            default: false
-          description: Follow logs (stream with SSE)
         - name: tail
           in: query
           required: false
@@ -738,14 +735,18 @@ paths:
             type: integer
             default: 100
           description: Number of lines to return from end
+        - name: follow
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+          description: Continue streaming new lines after initial output
       responses:
         200:
-          description: Log stream
+          description: Log stream (SSE)
           content:
             text/event-stream:
-              schema:
-                type: string
-            text/plain:
               schema:
                 type: string
         404:

@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/c2h5oh/datasize"
 	"github.com/getkin/kin-openapi/openapi3filter"
 	"github.com/ghodss/yaml"
 	"github.com/go-chi/chi/v5"
@@ -48,6 +49,16 @@ func run() error {
 	// Validate JWT secret is configured
 	if app.Config.JwtSecret == "" {
 		logger.Warn("JWT_SECRET not configured - API authentication will fail")
+	}
+
+	// Validate log rotation config
+	var logMaxSize datasize.ByteSize
+	if err := logMaxSize.UnmarshalText([]byte(app.Config.LogMaxSize)); err != nil {
+		return fmt.Errorf("invalid LOG_MAX_SIZE %q: %w", app.Config.LogMaxSize, err)
+	}
+	logRotateInterval, err := time.ParseDuration(app.Config.LogRotateInterval)
+	if err != nil {
+		return fmt.Errorf("invalid LOG_ROTATE_INTERVAL %q: %w", app.Config.LogRotateInterval, err)
 	}
 
 	// Ensure system files (kernel, initrd) exist before starting server
@@ -175,6 +186,26 @@ func run() error {
 
 		logger.Info("http server shutdown complete")
 		return nil
+	})
+
+	// Log rotation scheduler
+	grp.Go(func() error {
+		ticker := time.NewTicker(logRotateInterval)
+		defer ticker.Stop()
+
+		logger.Info("log rotation scheduler started", "interval", app.Config.LogRotateInterval, "max_size", logMaxSize, "max_files", app.Config.LogMaxFiles)
+		for {
+			select {
+			case <-gctx.Done():
+				return nil
+			case <-ticker.C:
+				if err := app.InstanceManager.RotateLogs(gctx, int64(logMaxSize), app.Config.LogMaxFiles); err != nil {
+					logger.Error("log rotation failed", "error", err)
+				} else {
+					logger.Info("log rotation completed", "max_size", logMaxSize, "max_files", app.Config.LogMaxFiles)
+				}
+			}
+		}
 	})
 
 	return grp.Wait()

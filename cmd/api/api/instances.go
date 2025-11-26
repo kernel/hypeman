@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
+	"net/http"
 
 	"github.com/c2h5oh/datasize"
 	"github.com/onkernel/hypeman/lib/instances"
@@ -236,20 +236,45 @@ func (s *ApiService) RestoreInstance(ctx context.Context, request oapi.RestoreIn
 	return oapi.RestoreInstance200JSONResponse(instanceToOAPI(*inst)), nil
 }
 
-// GetInstanceLogs streams instance logs
-func (s *ApiService) GetInstanceLogs(ctx context.Context, request oapi.GetInstanceLogsRequestObject) (oapi.GetInstanceLogsResponseObject, error) {
-	log := logger.FromContext(ctx)
+// logsStreamResponse implements oapi.GetInstanceLogsResponseObject with proper SSE flushing
+type logsStreamResponse struct {
+	logChan <-chan string
+}
 
-	follow := false
-	if request.Params.Follow != nil {
-		follow = *request.Params.Follow
+func (r logsStreamResponse) VisitGetInstanceLogsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no") // Disable nginx buffering
+	w.WriteHeader(200)
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		return fmt.Errorf("streaming not supported")
 	}
+
+	for line := range r.logChan {
+		fmt.Fprintf(w, "data: %s\n\n", line)
+		flusher.Flush()
+	}
+	return nil
+}
+
+// GetInstanceLogs streams instance logs via SSE
+// With follow=false (default), streams last N lines then closes
+// With follow=true, streams last N lines then continues following new output
+func (s *ApiService) GetInstanceLogs(ctx context.Context, request oapi.GetInstanceLogsRequestObject) (oapi.GetInstanceLogsResponseObject, error) {
 	tail := 100
 	if request.Params.Tail != nil {
 		tail = *request.Params.Tail
 	}
 
-	logs, err := s.InstanceManager.GetInstanceLogs(ctx, request.Id, follow, tail)
+	follow := false
+	if request.Params.Follow != nil {
+		follow = *request.Params.Follow
+	}
+
+	logChan, err := s.InstanceManager.StreamInstanceLogs(ctx, request.Id, tail, follow)
 	if err != nil {
 		switch {
 		case errors.Is(err, instances.ErrNotFound):
@@ -257,19 +282,20 @@ func (s *ApiService) GetInstanceLogs(ctx context.Context, request oapi.GetInstan
 				Code:    "not_found",
 				Message: "instance not found",
 			}, nil
+		case errors.Is(err, instances.ErrTailNotFound):
+			return oapi.GetInstanceLogs500JSONResponse{
+				Code:    "dependency_missing",
+				Message: "tail command not found on server - required for log streaming",
+			}, nil
 		default:
-			log.Error("failed to get instance logs", "error", err, "id", request.Id)
 			return oapi.GetInstanceLogs500JSONResponse{
 				Code:    "internal_error",
-				Message: "failed to get instance logs",
+				Message: "failed to stream logs",
 			}, nil
 		}
 	}
 
-	return oapi.GetInstanceLogs200TexteventStreamResponse{
-		Body:          strings.NewReader(logs),
-		ContentLength: int64(len(logs)),
-	}, nil
+	return logsStreamResponse{logChan: logChan}, nil
 }
 
 // AttachVolume attaches a volume to an instance (not yet implemented)
