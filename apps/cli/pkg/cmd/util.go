@@ -36,10 +36,12 @@ func getDefaultRequestOptions(cmd *cli.Command) []option.RequestOption {
 		option.WithHeader("X-Stainless-CLI-Command", cmd.FullName()),
 	}
 
-	// Override base URL if the --base-url flag is provided
-	if baseURL := cmd.String("base-url"); baseURL != "" {
-		opts = append(opts, option.WithBaseURL(baseURL))
+	// Set base URL (default to localhost for development)
+	baseURL := cmd.String("base-url")
+	if baseURL == "" {
+		baseURL = "http://localhost:8080"
 	}
+	opts = append(opts, option.WithBaseURL(baseURL))
 
 	return opts
 }

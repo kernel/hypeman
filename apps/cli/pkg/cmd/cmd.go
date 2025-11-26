@@ -67,6 +67,12 @@ func init() {
 			},
 		},
 		Commands: []*cli.Command{
+			&execCmd,
+			&pullCmd,
+			&runCmd,
+			&psCmd,
+			&logsCmd,
+			&rmCmd,
 			{
 				Name:     "health",
 				Category: "API RESOURCE",

@@ -33,17 +33,34 @@ go run cmd/hypeman/main.go
 
 ## Usage
 
-The CLI follows a resource-based command structure:
+```sh
+# Pull an image
+hypeman pull nginx:alpine
+
+# Run an instance (auto-pulls image if needed)
+hypeman run nginx:alpine
+hypeman run --name my-app -e PORT=3000 nginx:alpine
+
+# List running instances
+hypeman ps
+hypeman ps -a    # show all instances
+
+# View logs
+hypeman logs <instance-id>
+hypeman logs -f <instance-id>   # follow logs
+
+# Execute a command in a running instance
+hypeman exec <instance-id> -- /bin/sh
+hypeman exec -it <instance-id>  # interactive shell
+```
+
+For details about specific commands, use the `--help` flag.
+
+The CLI also provides resource-based commands for more advanced usage:
 
 ```sh
 hypeman [resource] [command] [flags]
 ```
-
-```sh
-hypeman health check
-```
-
-For details about specific commands, use the `--help` flag.
 
 ## Global Flags
 

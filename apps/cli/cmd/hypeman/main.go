@@ -17,6 +17,12 @@ import (
 func main() {
 	app := cmd.Command
 	if err := app.Run(context.Background(), os.Args); err != nil {
+		// Handle exec exit codes specially - exit with the command's exit code
+		var execErr *cmd.ExecExitError
+		if errors.As(err, &execErr) {
+			os.Exit(execErr.Code)
+		}
+
 		var apierr *hypeman.Error
 		if errors.As(err, &apierr) {
 			fmt.Fprintf(os.Stderr, "%s %q: %d %s\n", apierr.Request.Method, apierr.Request.URL, apierr.Response.StatusCode, http.StatusText(apierr.Response.StatusCode))
