@@ -103,11 +103,18 @@ func (s *ApiService) DeleteVolume(ctx context.Context, request oapi.DeleteVolume
 }
 
 func volumeToOAPI(vol volumes.Volume) oapi.Volume {
-	return oapi.Volume{
+	oapiVol := oapi.Volume{
 		Id:        vol.Id,
 		Name:      vol.Name,
 		SizeGb:    vol.SizeGb,
 		CreatedAt: vol.CreatedAt,
 	}
+	if vol.AttachedTo != nil {
+		oapiVol.AttachedTo = vol.AttachedTo
+	}
+	if vol.MountPath != nil {
+		oapiVol.MountPath = vol.MountPath
+	}
+	return oapiVol
 }
 

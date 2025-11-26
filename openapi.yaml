@@ -140,7 +140,12 @@ components:
               description: Whether to attach instance to the default network
               default: true
               example: true
-        # Future: volumes, port_mappings, timeout_seconds
+        volumes:
+          type: array
+          description: Volumes to attach to the instance at creation time
+          items:
+            $ref: "#/components/schemas/VolumeAttachment"
+        # Future: port_mappings, timeout_seconds
     
     Instance:
       type: object
@@ -203,6 +208,11 @@ components:
               description: Assigned MAC address (null if no network)
               example: "02:00:00:ab:cd:ef"
               nullable: true
+        volumes:
+          type: array
+          description: Volumes attached to the instance
+          items:
+            $ref: "#/components/schemas/VolumeAttachment"
         created_at:
           type: string
           format: date-time

@@ -199,3 +199,33 @@ func dirSize(path string) (int64, error) {
 	return size, err
 }
 
+// CreateEmptyExt4Disk creates a sparse disk file and formats it as ext4.
+// Used for volumes and instance overlays that need empty writable filesystems.
+func CreateEmptyExt4Disk(diskPath string, sizeBytes int64) error {
+	// Ensure parent directory exists
+	if err := os.MkdirAll(filepath.Dir(diskPath), 0755); err != nil {
+		return fmt.Errorf("create disk parent dir: %w", err)
+	}
+
+	// Create sparse file
+	file, err := os.Create(diskPath)
+	if err != nil {
+		return fmt.Errorf("create disk file: %w", err)
+	}
+	file.Close()
+
+	// Truncate to specified size to create sparse file
+	if err := os.Truncate(diskPath, sizeBytes); err != nil {
+		return fmt.Errorf("truncate disk file: %w", err)
+	}
+
+	// Format as ext4
+	cmd := exec.Command("mkfs.ext4", "-F", diskPath)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("mkfs.ext4 failed: %w, output: %s", err, output)
+	}
+
+	return nil
+}
+

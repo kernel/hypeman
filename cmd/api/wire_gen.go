@@ -37,11 +37,11 @@ func initializeApp() (*application, func(), error) {
 	}
 	systemManager := providers.ProvideSystemManager(paths)
 	networkManager := providers.ProvideNetworkManager(paths, config)
-	instancesManager, err := providers.ProvideInstanceManager(paths, config, manager, systemManager, networkManager)
+	volumesManager := providers.ProvideVolumeManager(paths)
+	instancesManager, err := providers.ProvideInstanceManager(paths, config, manager, systemManager, networkManager, volumesManager)
 	if err != nil {
 		return nil, nil, err
 	}
-	volumesManager := providers.ProvideVolumeManager(paths)
 	apiService := api.New(config, manager, instancesManager, volumesManager, networkManager)
 	mainApplication := &application{
 		Ctx:             context,

@@ -55,13 +55,13 @@ func ProvideNetworkManager(p *paths.Paths, cfg *config.Config) network.Manager {
 }
 
 // ProvideInstanceManager provides the instance manager
-func ProvideInstanceManager(p *paths.Paths, cfg *config.Config, imageManager images.Manager, systemManager system.Manager, networkManager network.Manager) (instances.Manager, error) {
+func ProvideInstanceManager(p *paths.Paths, cfg *config.Config, imageManager images.Manager, systemManager system.Manager, networkManager network.Manager, volumeManager volumes.Manager) (instances.Manager, error) {
 	// Parse max overlay size from config
 	var maxOverlaySize datasize.ByteSize
 	if err := maxOverlaySize.UnmarshalText([]byte(cfg.MaxOverlaySize)); err != nil {
 		return nil, fmt.Errorf("failed to parse MAX_OVERLAY_SIZE '%s': %w (expected format like '100GB', '50G', '10GiB')", cfg.MaxOverlaySize, err)
 	}
-	return instances.NewManager(p, imageManager, systemManager, networkManager, int64(maxOverlaySize)), nil
+	return instances.NewManager(p, imageManager, systemManager, networkManager, volumeManager, int64(maxOverlaySize)), nil
 }
 
 // ProvideVolumeManager provides the volume manager

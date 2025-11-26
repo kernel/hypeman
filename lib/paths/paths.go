@@ -15,6 +15,10 @@
 //	      rootfs.ext4
 //	      metadata.json
 //	    {repository}/{tag} -> {digest} (symlink)
+//	  volumes/
+//	    {id}/
+//	      data.raw
+//	      metadata.json
 //	  guests/
 //	    {id}/
 //	      metadata.json
@@ -175,4 +179,26 @@ func (p *Paths) InstanceSnapshotConfig(id string) string {
 // GuestsDir returns the root guests directory.
 func (p *Paths) GuestsDir() string {
 	return filepath.Join(p.dataDir, "guests")
+}
+
+// Volume path methods
+
+// VolumesDir returns the root volumes directory.
+func (p *Paths) VolumesDir() string {
+	return filepath.Join(p.dataDir, "volumes")
+}
+
+// VolumeDir returns the directory for a volume.
+func (p *Paths) VolumeDir(id string) string {
+	return filepath.Join(p.dataDir, "volumes", id)
+}
+
+// VolumeData returns the path to the volume data file.
+func (p *Paths) VolumeData(id string) string {
+	return filepath.Join(p.VolumeDir(id), "data.raw")
+}
+
+// VolumeMetadata returns the path to volume metadata.json.
+func (p *Paths) VolumeMetadata(id string) string {
+	return filepath.Join(p.VolumeDir(id), "metadata.json")
 }

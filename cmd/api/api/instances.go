@@ -95,6 +95,23 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		networkEnabled = *request.Body.Network.Enabled
 	}
 
+	// Parse volumes
+	var volumes []instances.VolumeAttachment
+	if request.Body.Volumes != nil {
+		volumes = make([]instances.VolumeAttachment, len(*request.Body.Volumes))
+		for i, vol := range *request.Body.Volumes {
+			readonly := false
+			if vol.Readonly != nil {
+				readonly = *vol.Readonly
+			}
+			volumes[i] = instances.VolumeAttachment{
+				VolumeID:  vol.VolumeId,
+				MountPath: vol.MountPath,
+				Readonly:  readonly,
+			}
+		}
+	}
+
 	domainReq := instances.CreateInstanceRequest{
 		Name:           request.Body.Name,
 		Image:          request.Body.Image,
@@ -104,6 +121,7 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		Vcpus:          vcpus,
 		Env:            env,
 		NetworkEnabled: networkEnabled,
+		Volumes:        volumes,
 	}
 
 	inst, err := s.InstanceManager.CreateInstance(ctx, domainReq)
@@ -357,6 +375,19 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 
 	if len(inst.Env) > 0 {
 		oapiInst.Env = &inst.Env
+	}
+
+	// Convert volume attachments
+	if len(inst.Volumes) > 0 {
+		oapiVolumes := make([]oapi.VolumeAttachment, len(inst.Volumes))
+		for i, vol := range inst.Volumes {
+			oapiVolumes[i] = oapi.VolumeAttachment{
+				VolumeId:  vol.VolumeID,
+				MountPath: vol.MountPath,
+				Readonly:  lo.ToPtr(vol.Readonly),
+			}
+		}
+		oapiInst.Volumes = &oapiVolumes
 	}
 
 	return oapiInst

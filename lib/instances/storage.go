@@ -4,8 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
+
+	"github.com/onkernel/hypeman/lib/images"
 )
 
 // Filesystem structure:
@@ -83,27 +84,7 @@ func (m *manager) saveMetadata(meta *metadata) error {
 // createOverlayDisk creates a sparse overlay disk for the instance
 func (m *manager) createOverlayDisk(id string, sizeBytes int64) error {
 	overlayPath := m.paths.InstanceOverlay(id)
-
-	// Create sparse file
-	file, err := os.Create(overlayPath)
-	if err != nil {
-		return fmt.Errorf("create overlay disk: %w", err)
-	}
-	file.Close()
-
-	// Truncate to specified size to create sparse file
-	if err := os.Truncate(overlayPath, sizeBytes); err != nil {
-		return fmt.Errorf("truncate overlay disk: %w", err)
-	}
-
-	// Format as ext4 (VM will mount this as writable overlay)
-	cmd := exec.Command("mkfs.ext4", "-F", overlayPath)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("mkfs.ext4 on overlay: %w, output: %s", err, output)
-	}
-
-	return nil
+	return images.CreateEmptyExt4Disk(overlayPath, sizeBytes)
 }
 
 // deleteInstanceData removes all instance data from disk

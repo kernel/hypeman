@@ -12,6 +12,7 @@ import (
 	"github.com/onkernel/hypeman/lib/network"
 	"github.com/onkernel/hypeman/lib/system"
 	"github.com/onkernel/hypeman/lib/vmm"
+	"github.com/onkernel/hypeman/lib/volumes"
 	"gvisor.dev/gvisor/pkg/cleanup"
 )
 
@@ -177,6 +178,41 @@ func (m *manager) createInstance(
 				m.networkManager.ReleaseAllocation(ctx, netAlloc)
 			}
 		})
+	}
+
+	// 10.5. Validate and attach volumes
+	if len(req.Volumes) > 0 {
+		log.DebugContext(ctx, "validating volumes", "id", id, "count", len(req.Volumes))
+		for _, volAttach := range req.Volumes {
+			// Check volume exists and is not attached
+			vol, err := m.volumeManager.GetVolume(ctx, volAttach.VolumeID)
+			if err != nil {
+				log.ErrorContext(ctx, "volume not found", "id", id, "volume_id", volAttach.VolumeID, "error", err)
+				return nil, fmt.Errorf("volume %s: %w", volAttach.VolumeID, err)
+			}
+			if vol.AttachedTo != nil {
+				log.ErrorContext(ctx, "volume already attached", "id", id, "volume_id", volAttach.VolumeID, "attached_to", *vol.AttachedTo)
+				return nil, fmt.Errorf("volume %s is already attached to instance %s", volAttach.VolumeID, *vol.AttachedTo)
+			}
+
+			// Mark volume as attached
+			if err := m.volumeManager.AttachVolume(ctx, volAttach.VolumeID, volumes.AttachVolumeRequest{
+				InstanceID: id,
+				MountPath:  volAttach.MountPath,
+				Readonly:   volAttach.Readonly,
+			}); err != nil {
+				log.ErrorContext(ctx, "failed to attach volume", "id", id, "volume_id", volAttach.VolumeID, "error", err)
+				return nil, fmt.Errorf("attach volume %s: %w", volAttach.VolumeID, err)
+			}
+
+			// Add volume cleanup to stack
+			volumeID := volAttach.VolumeID // capture for closure
+			cu.Add(func() {
+				m.volumeManager.DetachVolume(ctx, volumeID)
+			})
+		}
+		// Store volume attachments in metadata
+		stored.Volumes = req.Volumes
 	}
 
 	// 11. Create config disk (needs Instance for buildVMConfig)
@@ -386,6 +422,15 @@ func (m *manager) buildVMConfig(inst *Instance, imageInfo *images.Image, netConf
 			Path:     ptr(m.paths.InstanceConfigDisk(inst.Id)),
 			Readonly: ptr(true),
 		},
+	}
+
+	// Add attached volumes as additional disks
+	for _, volAttach := range inst.Volumes {
+		volumePath := m.volumeManager.GetVolumePath(volAttach.VolumeID)
+		disks = append(disks, vmm.DiskConfig{
+			Path:     &volumePath,
+			Readonly: ptr(volAttach.Readonly),
+		})
 	}
 
 	// Serial console configuration
