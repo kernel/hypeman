@@ -17,31 +17,27 @@ var instancesCreate = cli.Command{
 	Usage: "Create and start instance",
 	Flags: []cli.Flag{
 		&cli.StringFlag{
-			Name:  "id",
-			Usage: "Unique identifier for the instance (provided by caller)",
-		},
-		&cli.StringFlag{
 			Name:  "image",
-			Usage: "Image identifier",
+			Usage: "OCI image reference",
 		},
 		&cli.StringFlag{
 			Name:  "name",
-			Usage: "Human-readable name",
+			Usage: "Human-readable name (lowercase letters, digits, and dashes only; cannot start or end with a dash)",
 		},
-		&cli.Int64Flag{
-			Name:  "memory-max-mb",
-			Usage: "Maximum memory with hotplug in MB",
-			Value: 4096,
+		&cli.StringFlag{
+			Name:  "hotplug-size",
+			Usage: `Additional memory for hotplug (human-readable format like "3GB", "1G")`,
+			Value: "3GB",
 		},
-		&cli.Int64Flag{
-			Name:  "memory-mb",
-			Usage: "Base memory in MB",
-			Value: 1024,
+		&cli.StringFlag{
+			Name:  "overlay-size",
+			Usage: `Writable overlay disk size (human-readable format like "10GB", "50G")`,
+			Value: "10GB",
 		},
-		&cli.Int64Flag{
-			Name:  "timeout-seconds",
-			Usage: "Timeout for scale-to-zero semantics",
-			Value: 3600,
+		&cli.StringFlag{
+			Name:  "size",
+			Usage: `Base memory size (human-readable format like "1GB", "512MB", "2G")`,
+			Value: "1GB",
 		},
 		&cli.Int64Flag{
 			Name:  "vcpus",
@@ -138,13 +134,12 @@ func handleInstancesCreate(ctx context.Context, cmd *cli.Command) error {
 	}
 	params := hypeman.InstanceNewParams{}
 	if err := unmarshalStdinWithFlags(cmd, map[string]string{
-		"id":              "id",
-		"image":           "image",
-		"name":            "name",
-		"memory-max-mb":   "memory_max_mb",
-		"memory-mb":       "memory_mb",
-		"timeout-seconds": "timeout_seconds",
-		"vcpus":           "vcpus",
+		"image":        "image",
+		"name":         "name",
+		"hotplug-size": "hotplug_size",
+		"overlay-size": "overlay_size",
+		"size":         "size",
+		"vcpus":        "vcpus",
 	}, &params); err != nil {
 		return err
 	}
