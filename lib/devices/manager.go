@@ -42,6 +42,11 @@ type Manager interface {
 
 	// MarkDetached marks a device as detached from an instance
 	MarkDetached(ctx context.Context, deviceID string) error
+
+	// ReconcileDevices cleans up stale device state on startup.
+	// It detects devices with AttachedTo referencing non-existent instances
+	// and clears the orphaned attachment state.
+	ReconcileDevices(ctx context.Context) error
 }
 
 type manager struct {
@@ -59,6 +64,9 @@ func NewManager(p *paths.Paths) Manager {
 }
 
 func (m *manager) ListDevices(ctx context.Context) ([]Device, error) {
+	// RLock protects against concurrent directory modifications (CreateDevice/DeleteDevice)
+	// during iteration. While individual file reads are atomic, directory iteration could
+	// see inconsistent state if a device is being created or deleted concurrently.
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -172,6 +180,8 @@ func (m *manager) CreateDevice(ctx context.Context, req CreateDeviceRequest) (*D
 }
 
 func (m *manager) GetDevice(ctx context.Context, idOrName string) (*Device, error) {
+	// RLock protects against concurrent modifications while looking up by name,
+	// which requires iterating the devices directory.
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -341,6 +351,79 @@ func (m *manager) MarkDetached(ctx context.Context, deviceID string) error {
 
 	device.AttachedTo = nil
 	return m.saveDevice(device)
+}
+
+// ReconcileDevices cleans up stale device state on startup.
+// It scans all registered devices and clears AttachedTo for any device
+// that references an instance that no longer exists.
+func (m *manager) ReconcileDevices(ctx context.Context) error {
+	log := logger.FromContext(ctx)
+	log.InfoContext(ctx, "reconciling device state")
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	entries, err := os.ReadDir(m.paths.DevicesDir())
+	if err != nil {
+		if os.IsNotExist(err) {
+			// No devices directory yet, nothing to reconcile
+			return nil
+		}
+		return fmt.Errorf("read devices dir: %w", err)
+	}
+
+	var reconciled int
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		device, err := m.loadDevice(entry.Name())
+		if err != nil {
+			log.WarnContext(ctx, "failed to load device during reconciliation",
+				"device_id", entry.Name(),
+				"error", err,
+			)
+			continue
+		}
+
+		// Skip devices that aren't attached to anything
+		if device.AttachedTo == nil {
+			continue
+		}
+
+		// Check if the referenced instance still exists
+		instanceID := *device.AttachedTo
+		instanceDir := m.paths.InstanceDir(instanceID)
+		if _, err := os.Stat(instanceDir); os.IsNotExist(err) {
+			// Instance no longer exists - clear the orphaned attachment
+			log.WarnContext(ctx, "clearing orphaned device attachment",
+				"device_id", device.Id,
+				"device_name", device.Name,
+				"orphaned_instance_id", instanceID,
+			)
+
+			device.AttachedTo = nil
+			if err := m.saveDevice(device); err != nil {
+				log.ErrorContext(ctx, "failed to save device after clearing attachment",
+					"device_id", device.Id,
+					"error", err,
+				)
+				continue
+			}
+			reconciled++
+		}
+	}
+
+	if reconciled > 0 {
+		log.InfoContext(ctx, "device reconciliation complete",
+			"orphaned_attachments_cleared", reconciled,
+		)
+	} else {
+		log.InfoContext(ctx, "device reconciliation complete, no orphaned attachments found")
+	}
+
+	return nil
 }
 
 // Helper methods

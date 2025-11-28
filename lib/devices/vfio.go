@@ -191,9 +191,27 @@ func (v *VFIOBinder) stopNvidiaPersistenced() error {
 		return fmt.Errorf("failed to stop nvidia-persistenced (try: sudo systemctl stop nvidia-persistenced)")
 	}
 	
-	// Give it a moment to exit
-	time.Sleep(500 * time.Millisecond)
-	return nil
+	// Wait for process to exit with polling instead of arbitrary sleep
+	return v.waitForProcessExit("nvidia-persistenced", 2*time.Second)
+}
+
+// waitForProcessExit polls for a process to exit, with timeout
+func (v *VFIOBinder) waitForProcessExit(processName string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	pollInterval := 100 * time.Millisecond
+	
+	for time.Now().Before(deadline) {
+		checkCmd := exec.Command("pgrep", processName)
+		if checkCmd.Run() != nil {
+			// Process no longer exists
+			return nil
+		}
+		time.Sleep(pollInterval)
+	}
+	
+	// Timeout - process still running
+	slog.Warn("timeout waiting for process to exit", "process", processName, "timeout", timeout)
+	return nil // Continue anyway, the bind might still work
 }
 
 // startNvidiaPersistenced starts the nvidia-persistenced service

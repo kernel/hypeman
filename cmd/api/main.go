@@ -81,6 +81,13 @@ func run() error {
 	}
 	logger.Info("Network manager initialized")
 
+	// Reconcile device state (clears orphaned attachments from crashed VMs)
+	logger.Info("Reconciling device state...")
+	if err := app.DeviceManager.ReconcileDevices(app.Ctx); err != nil {
+		logger.Error("failed to reconcile device state", "error", err)
+		return fmt.Errorf("reconcile device state: %w", err)
+	}
+
 	// Create router
 	r := chi.NewRouter()
 
