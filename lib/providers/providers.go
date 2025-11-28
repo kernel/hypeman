@@ -8,6 +8,7 @@ import (
 
 	"github.com/c2h5oh/datasize"
 	"github.com/onkernel/hypeman/cmd/api/config"
+	"github.com/onkernel/hypeman/lib/devices"
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/instances"
 	"github.com/onkernel/hypeman/lib/logger"
@@ -54,14 +55,19 @@ func ProvideNetworkManager(p *paths.Paths, cfg *config.Config) network.Manager {
 	return network.NewManager(p, cfg)
 }
 
+// ProvideDeviceManager provides the device manager
+func ProvideDeviceManager(p *paths.Paths) devices.Manager {
+	return devices.NewManager(p)
+}
+
 // ProvideInstanceManager provides the instance manager
-func ProvideInstanceManager(p *paths.Paths, cfg *config.Config, imageManager images.Manager, systemManager system.Manager, networkManager network.Manager) (instances.Manager, error) {
+func ProvideInstanceManager(p *paths.Paths, cfg *config.Config, imageManager images.Manager, systemManager system.Manager, networkManager network.Manager, deviceManager devices.Manager) (instances.Manager, error) {
 	// Parse max overlay size from config
 	var maxOverlaySize datasize.ByteSize
 	if err := maxOverlaySize.UnmarshalText([]byte(cfg.MaxOverlaySize)); err != nil {
 		return nil, fmt.Errorf("failed to parse MAX_OVERLAY_SIZE '%s': %w (expected format like '100GB', '50G', '10GiB')", cfg.MaxOverlaySize, err)
 	}
-	return instances.NewManager(p, imageManager, systemManager, networkManager, int64(maxOverlaySize)), nil
+	return instances.NewManager(p, imageManager, systemManager, networkManager, deviceManager, int64(maxOverlaySize)), nil
 }
 
 // ProvideVolumeManager provides the volume manager

@@ -95,6 +95,12 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		networkEnabled = *request.Body.Network.Enabled
 	}
 
+	// Parse devices (GPU passthrough)
+	var deviceRefs []string
+	if request.Body.Devices != nil {
+		deviceRefs = *request.Body.Devices
+	}
+
 	domainReq := instances.CreateInstanceRequest{
 		Name:           request.Body.Name,
 		Image:          request.Body.Image,
@@ -104,6 +110,7 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		Vcpus:          vcpus,
 		Env:            env,
 		NetworkEnabled: networkEnabled,
+		Devices:        deviceRefs,
 	}
 
 	inst, err := s.InstanceManager.CreateInstance(ctx, domainReq)

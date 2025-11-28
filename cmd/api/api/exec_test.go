@@ -82,8 +82,7 @@ func TestExecInstanceNonTTY(t *testing.T) {
 			Name:  "exec-test",
 			Image: "docker.io/library/nginx:alpine",
 			Network: &struct {
-				Enabled *bool   `json:"enabled,omitempty"`
-				Name    *string `json:"name,omitempty"`
+				Enabled *bool `json:"enabled,omitempty"`
 			}{
 				Enabled: &networkDisabled,
 			},
@@ -108,10 +107,16 @@ func TestExecInstanceNonTTY(t *testing.T) {
 		case <-nginxTimeout:
 			t.Fatal("Timeout waiting for nginx to start")
 		case <-nginxTicker.C:
-			logs, err := svc.InstanceManager.GetInstanceLogs(ctx(), inst.Id, false, 100)
-			if err == nil && strings.Contains(logs, "start worker processes") {
-				nginxReady = true
-				t.Log("Nginx is ready")
+			logChan, err := svc.InstanceManager.StreamInstanceLogs(ctx(), inst.Id, 100, false)
+			if err == nil {
+				var logs strings.Builder
+				for line := range logChan {
+					logs.WriteString(line)
+				}
+				if strings.Contains(logs.String(), "start worker processes") {
+					nginxReady = true
+					t.Log("Nginx is ready")
+				}
 			}
 		}
 	}

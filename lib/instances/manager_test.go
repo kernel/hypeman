@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/onkernel/hypeman/cmd/api/config"
+	"github.com/onkernel/hypeman/lib/devices"
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/network"
 	"github.com/onkernel/hypeman/lib/paths"
@@ -37,8 +38,9 @@ func setupTestManager(t *testing.T) (*manager, string) {
 	
 	systemManager := system.NewManager(p)
 	networkManager := network.NewManager(p, cfg)
+	deviceManager := devices.NewManager(p)
 	maxOverlaySize := int64(100 * 1024 * 1024 * 1024)
-	mgr := NewManager(p, imageManager, systemManager, networkManager, maxOverlaySize).(*manager)
+	mgr := NewManager(p, imageManager, systemManager, networkManager, deviceManager, maxOverlaySize).(*manager)
 	
 	// Register cleanup to kill any orphaned Cloud Hypervisor processes
 	t.Cleanup(func() {
@@ -340,8 +342,9 @@ func TestStorageOperations(t *testing.T) {
 	imageManager, _ := images.NewManager(p, 1)
 	systemManager := system.NewManager(p)
 	networkManager := network.NewManager(p, cfg)
+	deviceManager := devices.NewManager(p)
 	maxOverlaySize := int64(100 * 1024 * 1024 * 1024) // 100GB
-	manager := NewManager(p, imageManager, systemManager, networkManager, maxOverlaySize).(*manager)
+	manager := NewManager(p, imageManager, systemManager, networkManager, deviceManager, maxOverlaySize).(*manager)
 
 	// Test metadata doesn't exist initially
 	_, err := manager.loadMetadata("nonexistent")

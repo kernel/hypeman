@@ -58,7 +58,24 @@ func (m *manager) deleteInstance(
 		}
 	}
 
-	// 5. Delete all instance data
+	// 5. Detach and auto-unbind devices from VFIO
+	if len(inst.Devices) > 0 && m.deviceManager != nil {
+		for _, deviceID := range inst.Devices {
+			log.DebugContext(ctx, "detaching device", "id", id, "device", deviceID)
+			// Mark device as detached
+			if err := m.deviceManager.MarkDetached(ctx, deviceID); err != nil {
+				log.WarnContext(ctx, "failed to mark device as detached", "id", id, "device", deviceID, "error", err)
+			}
+			// Auto-unbind from VFIO so native driver can reclaim it
+			log.InfoContext(ctx, "auto-unbinding device from VFIO", "id", id, "device", deviceID)
+			if err := m.deviceManager.UnbindFromVFIO(ctx, deviceID); err != nil {
+				// Log but continue - device might already be unbound or in use by another instance
+				log.WarnContext(ctx, "failed to unbind device from VFIO", "id", id, "device", deviceID, "error", err)
+			}
+		}
+	}
+
+	// 6. Delete all instance data
 	log.DebugContext(ctx, "deleting instance data", "id", id)
 	if err := m.deleteInstanceData(id); err != nil {
 		log.ErrorContext(ctx, "failed to delete instance data", "id", id, "error", err)

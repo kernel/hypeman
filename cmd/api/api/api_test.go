@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/onkernel/hypeman/cmd/api/config"
+	"github.com/onkernel/hypeman/lib/devices"
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/instances"
 	"github.com/onkernel/hypeman/lib/network"
@@ -30,8 +31,9 @@ func newTestService(t *testing.T) *ApiService {
 
 	systemMgr := system.NewManager(p)
 	networkMgr := network.NewManager(p, cfg)
+	deviceMgr := devices.NewManager(p)
 	maxOverlaySize := int64(100 * 1024 * 1024 * 1024) // 100GB for tests
-	instanceMgr := instances.NewManager(p, imageMgr, systemMgr, networkMgr, maxOverlaySize)
+	instanceMgr := instances.NewManager(p, imageMgr, systemMgr, networkMgr, deviceMgr, maxOverlaySize)
 	volumeMgr := volumes.NewManager(p)
 
 	// Register cleanup for orphaned Cloud Hypervisor processes
@@ -44,6 +46,7 @@ func newTestService(t *testing.T) *ApiService {
 		ImageManager:    imageMgr,
 		InstanceManager: instanceMgr,
 		VolumeManager:   volumeMgr,
+		DeviceManager:   deviceMgr,
 	}
 }
 

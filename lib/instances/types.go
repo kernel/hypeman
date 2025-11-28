@@ -54,6 +54,9 @@ type StoredMetadata struct {
 	// vsock configuration
 	VsockCID    int64  // Guest vsock Context ID
 	VsockSocket string // Host-side vsock socket path
+
+	// Attached devices (GPU passthrough)
+	Devices []string // Device IDs attached to this instance
 }
 
 // Instance represents a virtual machine instance with derived runtime state
@@ -75,6 +78,7 @@ type CreateInstanceRequest struct {
 	Vcpus          int               // Default 2
 	Env            map[string]string // Optional environment variables
 	NetworkEnabled bool              // Whether to enable networking (uses default network)
+	Devices        []string          // Device IDs or names to attach (GPU passthrough)
 }
 
 // AttachVolumeRequest is the domain request for attaching a volume
