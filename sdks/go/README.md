@@ -475,6 +475,23 @@ We take backwards-compatibility seriously and work hard to ensure you can rely o
 
 We are keen for your feedback; please open an [issue](https://www.github.com/onkernel/hypeman-go/issues) with questions, bugs, or suggestions.
 
+## Development
+
+### Testing Preview Branches
+
+When developing features in the main [hypeman](https://github.com/onkernel/hypeman) repo, Stainless automatically creates preview branches in `stainless-sdks/hypeman-go` with your API changes. You can check out these branches locally to test the SDK changes:
+
+```bash
+# Checkout preview/<branch> (e.g., if working on "devices" branch in hypeman)
+./scripts/checkout-preview devices
+
+# Checkout an exact branch name
+./scripts/checkout-preview -b main
+./scripts/checkout-preview -b preview/my-feature
+```
+
+The script automatically adds the `stainless` remote if it doesn't exist.
+
 ## Contributing
 
 See [the contributing documentation](./CONTRIBUTING.md).
