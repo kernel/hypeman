@@ -92,13 +92,14 @@ chroot /overlay/newroot ln -sf /proc/self/fd/0 /dev/stdin 2>/dev/null || true
 chroot /overlay/newroot ln -sf /proc/self/fd/1 /dev/stdout 2>/dev/null || true
 chroot /overlay/newroot ln -sf /proc/self/fd/2 /dev/stderr 2>/dev/null || true
 
-# Configure network inside the container view
+# Configure network from initrd (using busybox ip, not container's ip)
+# Network interfaces are shared, so we can configure them from here
 if [ -n "${GUEST_IP:-}" ]; then
   echo "overlay-init: configuring network"
-  chroot /overlay/newroot ip link set lo up
-  chroot /overlay/newroot ip addr add ${GUEST_IP}/${GUEST_CIDR} dev eth0
-  chroot /overlay/newroot ip link set eth0 up
-  chroot /overlay/newroot ip route add default via ${GUEST_GW}
+  ip link set lo up
+  ip addr add ${GUEST_IP}/${GUEST_CIDR} dev eth0
+  ip link set eth0 up
+  ip route add default via ${GUEST_GW}
   echo "nameserver ${GUEST_DNS}" > /overlay/newroot/etc/resolv.conf
   echo "overlay-init: network configured - IP: ${GUEST_IP}/${GUEST_CIDR}"
 fi
@@ -134,6 +135,8 @@ wait $APP_PID
 APP_EXIT=$?
 
 echo "overlay-init: app exited with code $APP_EXIT"
-exit $APP_EXIT`
-}
 
+# Wait for all background jobs (exec-agent runs forever, keeping init alive)
+# This prevents kernel panic from killing init (PID 1)
+wait`
+}
