@@ -41,9 +41,11 @@ func TestInstanceNewWithOptionalParams(t *testing.T) {
 		Size:        hypeman.String("2GB"),
 		Vcpus:       hypeman.Int(2),
 		Volumes: []hypeman.VolumeAttachmentParam{{
-			MountPath: "/mnt/data",
-			VolumeID:  "vol-abc123",
-			Readonly:  hypeman.Bool(true),
+			MountPath:   "/mnt/data",
+			VolumeID:    "vol-abc123",
+			Overlay:     hypeman.Bool(true),
+			OverlaySize: hypeman.String("1GB"),
+			Readonly:    hypeman.Bool(true),
 		}},
 	})
 	if err != nil {

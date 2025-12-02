@@ -245,12 +245,19 @@ type VolumeAttachment struct {
 	MountPath string `json:"mount_path,required"`
 	// Volume identifier
 	VolumeID string `json:"volume_id,required"`
+	// Create per-instance overlay for writes (requires readonly=true)
+	Overlay bool `json:"overlay"`
+	// Max overlay size as human-readable string (e.g., "1GB"). Required if
+	// overlay=true.
+	OverlaySize string `json:"overlay_size"`
 	// Whether volume is mounted read-only
 	Readonly bool `json:"readonly"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
 		MountPath   respjson.Field
 		VolumeID    respjson.Field
+		Overlay     respjson.Field
+		OverlaySize respjson.Field
 		Readonly    respjson.Field
 		ExtraFields map[string]respjson.Field
 		raw         string
@@ -278,6 +285,11 @@ type VolumeAttachmentParam struct {
 	MountPath string `json:"mount_path,required"`
 	// Volume identifier
 	VolumeID string `json:"volume_id,required"`
+	// Create per-instance overlay for writes (requires readonly=true)
+	Overlay param.Opt[bool] `json:"overlay,omitzero"`
+	// Max overlay size as human-readable string (e.g., "1GB"). Required if
+	// overlay=true.
+	OverlaySize param.Opt[string] `json:"overlay_size,omitzero"`
 	// Whether volume is mounted read-only
 	Readonly param.Opt[bool] `json:"readonly,omitzero"`
 	paramObj
