@@ -33,9 +33,11 @@ func newTestService(t *testing.T) *ApiService {
 
 	systemMgr := system.NewManager(p)
 	networkMgr := network.NewManager(p, cfg)
-	maxOverlaySize := int64(100 * 1024 * 1024 * 1024) // 100GB for tests
-	instanceMgr := instances.NewManager(p, imageMgr, systemMgr, networkMgr, maxOverlaySize)
-	volumeMgr := volumes.NewManager(p)
+	volumeMgr := volumes.NewManager(p, 0) // 0 = unlimited storage
+	limits := instances.ResourceLimits{
+		MaxOverlaySize: 100 * 1024 * 1024 * 1024, // 100GB
+	}
+	instanceMgr := instances.NewManager(p, imageMgr, systemMgr, networkMgr, volumeMgr, limits)
 
 	// Register cleanup for orphaned Cloud Hypervisor processes
 	t.Cleanup(func() {
