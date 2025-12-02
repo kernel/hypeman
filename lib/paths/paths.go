@@ -9,6 +9,9 @@
 //	    initrd/{arch}/latest -> {timestamp}
 //	    binaries/{version}/{arch}/cloud-hypervisor
 //	    oci-cache/
+//	      oci-layout
+//	      index.json
+//	      blobs/sha256/{digestHex}
 //	    builds/{ref}/
 //	  images/
 //	    {repository}/{digest}/
@@ -70,6 +73,26 @@ func (p *Paths) SystemInitrdDir(arch string) string {
 // SystemOCICache returns the path to the OCI cache directory.
 func (p *Paths) SystemOCICache() string {
 	return filepath.Join(p.dataDir, "system", "oci-cache")
+}
+
+// OCICacheBlobDir returns the path to the OCI cache blobs directory.
+func (p *Paths) OCICacheBlobDir() string {
+	return filepath.Join(p.SystemOCICache(), "blobs", "sha256")
+}
+
+// OCICacheBlob returns the path to a specific blob in the OCI cache.
+func (p *Paths) OCICacheBlob(digestHex string) string {
+	return filepath.Join(p.OCICacheBlobDir(), digestHex)
+}
+
+// OCICacheIndex returns the path to the OCI cache index.json.
+func (p *Paths) OCICacheIndex() string {
+	return filepath.Join(p.SystemOCICache(), "index.json")
+}
+
+// OCICacheLayout returns the path to the OCI cache oci-layout file.
+func (p *Paths) OCICacheLayout() string {
+	return filepath.Join(p.SystemOCICache(), "oci-layout")
 }
 
 // SystemBuild returns the path to a system build directory.

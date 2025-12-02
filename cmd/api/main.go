@@ -103,6 +103,16 @@ func run() error {
 		mw.JwtAuth(app.Config.JwtSecret),
 	).Get("/instances/{id}/exec", app.ApiService.ExecHandler)
 
+	// OCI Distribution registry endpoints for image push (outside OpenAPI spec)
+	r.Route("/v2", func(r chi.Router) {
+		r.Use(middleware.RequestID)
+		r.Use(middleware.RealIP)
+		r.Use(middleware.Logger)
+		r.Use(middleware.Recoverer)
+		r.Use(mw.JwtAuth(app.Config.JwtSecret))
+		r.Mount("/", app.Registry.Handler())
+	})
+
 	// Authenticated API endpoints
 	r.Group(func(r chi.Router) {
 		// Common middleware
@@ -225,4 +235,3 @@ func getRunningInstanceIDs(app *application) []string {
 	}
 	return running
 }
-

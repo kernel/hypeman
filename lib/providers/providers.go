@@ -13,6 +13,7 @@ import (
 	"github.com/onkernel/hypeman/lib/logger"
 	"github.com/onkernel/hypeman/lib/network"
 	"github.com/onkernel/hypeman/lib/paths"
+	"github.com/onkernel/hypeman/lib/registry"
 	"github.com/onkernel/hypeman/lib/system"
 	"github.com/onkernel/hypeman/lib/volumes"
 )
@@ -67,4 +68,9 @@ func ProvideInstanceManager(p *paths.Paths, cfg *config.Config, imageManager ima
 // ProvideVolumeManager provides the volume manager
 func ProvideVolumeManager(p *paths.Paths) volumes.Manager {
 	return volumes.NewManager(p)
+}
+
+// ProvideRegistry provides the OCI registry for image push
+func ProvideRegistry(p *paths.Paths, imageManager images.Manager) (*registry.Registry, error) {
+	return registry.New(p, imageManager)
 }
