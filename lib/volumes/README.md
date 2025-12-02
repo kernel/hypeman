@@ -5,10 +5,11 @@ Volumes are persistent block storage that exist independently of instances. They
 ## Lifecycle
 
 1. **Create** - `POST /volumes` creates an ext4-formatted sparse disk file of the specified size
-2. **Attach** - Specify volumes in `CreateInstanceRequest.volumes` with a mount path
-3. **Use** - Volume appears as a block device inside the guest, mounted at the specified path
-4. **Detach** - Volumes are automatically detached when an instance is deleted
-5. **Delete** - `DELETE /volumes/{id}` removes the volume (fails if still attached)
+2. **Create from Archive** - `POST /volumes/from-archive` creates a volume pre-populated with content from a tar.gz file
+3. **Attach** - Specify volumes in `CreateInstanceRequest.volumes` with a mount path
+4. **Use** - Volume appears as a block device inside the guest, mounted at the specified path
+5. **Detach** - Volumes are automatically detached when an instance is deleted
+6. **Delete** - `DELETE /volumes/{id}` removes the volume (fails if still attached)
 
 ## Cloud Hypervisor Integration
 
@@ -40,6 +41,23 @@ When attaching a volume with `overlay: true`, the instance gets copy-on-write se
 - Other instances don't see each other's overlay writes (isolated)
 
 This allows multiple instances to share a common base (e.g., dataset, model weights) while each can make local modifications without affecting others. Requires `readonly: true` and `overlay_size` specifying the max size of per-instance writes.
+
+## Creating Volumes from Archives
+
+Volumes can be created with initial content by uploading a tar.gz archive via `POST /volumes/from-archive`. This is useful for pre-populating volumes with datasets, configuration files, or application data.
+
+**Request:** Multipart form with fields:
+- `name` - Volume name (required)
+- `size_gb` - Maximum size in GB (required, extraction fails if content exceeds this)
+- `id` - Optional custom volume ID
+- `content` - tar.gz file (required)
+
+**Safety:** The extraction process protects against adversarial archives:
+- Tracks cumulative extracted size and aborts if limit exceeded
+- Validates paths to prevent directory traversal attacks
+- Rejects absolute paths and symlinks that escape the destination
+
+The resulting volume size is automatically calculated from the extracted content (with filesystem overhead), not the specified `size_gb` which serves as an upper limit.
 
 ## Constraints
 

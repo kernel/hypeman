@@ -32,3 +32,11 @@ type AttachVolumeRequest struct {
 	Readonly   bool
 }
 
+// CreateVolumeFromArchiveRequest is the domain request for creating a volume
+// pre-populated with content from a tar.gz archive
+type CreateVolumeFromArchiveRequest struct {
+	Name   string
+	SizeGb int     // Maximum size in GB (extraction fails if content exceeds this)
+	Id     *string // Optional custom ID
+}
+

@@ -2,7 +2,10 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"strconv"
 
 	"github.com/onkernel/hypeman/lib/logger"
 	"github.com/onkernel/hypeman/lib/oapi"
@@ -155,5 +158,94 @@ func volumeToOAPI(vol volumes.Volume) oapi.Volume {
 	}
 
 	return oapiVol
+}
+
+// CreateVolumeFromArchiveHandler handles POST /volumes/from-archive
+// This is a custom endpoint (outside OpenAPI spec) that accepts multipart form data
+// with a tar.gz file to create a pre-populated volume.
+//
+// Form fields:
+//   - name: volume name (required)
+//   - size_gb: maximum size in GB (required)
+//   - id: optional custom volume ID
+//   - content: tar.gz file (required)
+func (s *ApiService) CreateVolumeFromArchiveHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	log := logger.FromContext(ctx)
+
+	// Parse multipart form (32MB max in memory, rest goes to temp files)
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid_form", "failed to parse multipart form: "+err.Error())
+		return
+	}
+
+	// Get required fields
+	name := r.FormValue("name")
+	if name == "" {
+		writeJSONError(w, http.StatusBadRequest, "missing_field", "name is required")
+		return
+	}
+
+	sizeGbStr := r.FormValue("size_gb")
+	if sizeGbStr == "" {
+		writeJSONError(w, http.StatusBadRequest, "missing_field", "size_gb is required")
+		return
+	}
+	sizeGb, err := strconv.Atoi(sizeGbStr)
+	if err != nil || sizeGb <= 0 {
+		writeJSONError(w, http.StatusBadRequest, "invalid_field", "size_gb must be a positive integer")
+		return
+	}
+
+	// Get optional ID
+	var id *string
+	if idVal := r.FormValue("id"); idVal != "" {
+		id = &idVal
+	}
+
+	// Get the archive file
+	file, _, err := r.FormFile("content")
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "missing_file", "content file is required")
+		return
+	}
+	defer file.Close()
+
+	// Create the volume
+	domainReq := volumes.CreateVolumeFromArchiveRequest{
+		Name:   name,
+		SizeGb: sizeGb,
+		Id:     id,
+	}
+
+	vol, err := s.VolumeManager.CreateVolumeFromArchive(ctx, domainReq, file)
+	if err != nil {
+		if errors.Is(err, volumes.ErrArchiveTooLarge) {
+			writeJSONError(w, http.StatusBadRequest, "archive_too_large", err.Error())
+			return
+		}
+		if errors.Is(err, volumes.ErrAlreadyExists) {
+			writeJSONError(w, http.StatusConflict, "already_exists", "volume with this ID already exists")
+			return
+		}
+		log.Error("failed to create volume from archive", "error", err, "name", name)
+		writeJSONError(w, http.StatusInternalServerError, "internal_error", "failed to create volume")
+		return
+	}
+
+	// Return success response
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(volumeToOAPI(*vol))
+}
+
+// writeJSONError writes a JSON error response
+func writeJSONError(w http.ResponseWriter, status int, code, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]string{
+		"code":    code,
+		"message": message,
+	})
 }
 

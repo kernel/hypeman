@@ -1,6 +1,9 @@
 package instances
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"os"
 	"strings"
@@ -311,5 +314,153 @@ func TestOverlayDiskCleanupOnDelete(t *testing.T) {
 	assert.True(t, os.IsNotExist(err), "instance directory should be removed after deletion")
 
 	// Cleanup
+	volumeManager.DeleteVolume(ctx, vol.Id)
+}
+
+// createTestTarGz creates a tar.gz archive with the given files
+func createTestTarGz(t *testing.T, files map[string][]byte) *bytes.Buffer {
+	t.Helper()
+
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gw)
+
+	for name, content := range files {
+		hdr := &tar.Header{
+			Name: name,
+			Mode: 0644,
+			Size: int64(len(content)),
+		}
+		require.NoError(t, tw.WriteHeader(hdr))
+		_, err := tw.Write(content)
+		require.NoError(t, err)
+	}
+
+	require.NoError(t, tw.Close())
+	require.NoError(t, gw.Close())
+
+	return &buf
+}
+
+// TestVolumeFromArchive tests that a volume can be created from a tar.gz archive
+// and the files are accessible when mounted to an instance
+func TestVolumeFromArchive(t *testing.T) {
+	// Require KVM
+	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
+		t.Fatal("/dev/kvm not available - ensure KVM is enabled and user is in 'kvm' group")
+	}
+
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	manager, tmpDir := setupTestManager(t)
+	ctx := context.Background()
+	p := paths.New(tmpDir)
+
+	// Setup: prepare image and system files
+	imageManager, err := images.NewManager(p, 1)
+	require.NoError(t, err)
+
+	t.Log("Pulling alpine image...")
+	_, err = imageManager.CreateImage(ctx, images.CreateImageRequest{
+		Name: "docker.io/library/alpine:latest",
+	})
+	require.NoError(t, err)
+
+	for i := 0; i < 60; i++ {
+		img, err := imageManager.GetImage(ctx, "docker.io/library/alpine:latest")
+		if err == nil && img.Status == images.StatusReady {
+			break
+		}
+		time.Sleep(1 * time.Second)
+	}
+	t.Log("Image ready")
+
+	systemManager := system.NewManager(p)
+	t.Log("Ensuring system files...")
+	err = systemManager.EnsureSystemFiles(ctx)
+	require.NoError(t, err)
+	t.Log("System files ready")
+
+	// Create a tar.gz archive with test files
+	t.Log("Creating test archive...")
+	testFiles := map[string][]byte{
+		"greeting.txt":         []byte("Hello from archive!"),
+		"data/config.json":     []byte(`{"key": "value", "number": 42}`),
+		"data/nested/deep.txt": []byte("Deep nested file content"),
+	}
+	archive := createTestTarGz(t, testFiles)
+
+	// Create volume from archive
+	volumeManager := volumes.NewManager(p, 0)
+	t.Log("Creating volume from archive...")
+	vol, err := volumeManager.CreateVolumeFromArchive(ctx, volumes.CreateVolumeFromArchiveRequest{
+		Name:   "archive-data",
+		SizeGb: 1,
+	}, archive)
+	require.NoError(t, err)
+	t.Logf("Volume created: %s (size: %dGB)", vol.Id, vol.SizeGb)
+
+	// Create instance with the volume attached
+	t.Log("Creating instance with archive volume...")
+	inst, err := manager.CreateInstance(ctx, CreateInstanceRequest{
+		Name:           "archive-reader",
+		Image:          "docker.io/library/alpine:latest",
+		Size:           512 * 1024 * 1024,
+		HotplugSize:    512 * 1024 * 1024,
+		OverlaySize:    1024 * 1024 * 1024,
+		Vcpus:          1,
+		NetworkEnabled: false,
+		Volumes: []VolumeAttachment{
+			{VolumeID: vol.Id, MountPath: "/archive", Readonly: true},
+		},
+	})
+	require.NoError(t, err)
+	t.Logf("Instance created: %s", inst.Id)
+
+	// Wait for exec-agent
+	err = waitForExecAgent(ctx, manager, inst.Id, 15*time.Second)
+	require.NoError(t, err, "exec-agent should be ready")
+
+	// Verify files from archive are present
+	t.Log("Verifying archive files are accessible...")
+
+	// Check greeting.txt
+	output, code, err := execWithRetry(ctx, inst.VsockSocket, []string{"cat", "/archive/greeting.txt"})
+	require.NoError(t, err)
+	require.Equal(t, 0, code, "cat greeting.txt should succeed")
+	assert.Equal(t, "Hello from archive!", strings.TrimSpace(output))
+	t.Log("✓ greeting.txt verified")
+
+	// Check data/config.json
+	output, code, err = execWithRetry(ctx, inst.VsockSocket, []string{"cat", "/archive/data/config.json"})
+	require.NoError(t, err)
+	require.Equal(t, 0, code, "cat config.json should succeed")
+	assert.Contains(t, output, `"key": "value"`)
+	assert.Contains(t, output, `"number": 42`)
+	t.Log("✓ data/config.json verified")
+
+	// Check deeply nested file
+	output, code, err = execWithRetry(ctx, inst.VsockSocket, []string{"cat", "/archive/data/nested/deep.txt"})
+	require.NoError(t, err)
+	require.Equal(t, 0, code, "cat deep.txt should succeed")
+	assert.Equal(t, "Deep nested file content", strings.TrimSpace(output))
+	t.Log("✓ data/nested/deep.txt verified")
+
+	// List directory to confirm structure
+	output, code, err = execWithRetry(ctx, inst.VsockSocket, []string{"find", "/archive", "-type", "f"})
+	require.NoError(t, err)
+	require.Equal(t, 0, code, "find should succeed")
+	assert.Contains(t, output, "/archive/greeting.txt")
+	assert.Contains(t, output, "/archive/data/config.json")
+	assert.Contains(t, output, "/archive/data/nested/deep.txt")
+	t.Log("✓ Directory structure verified")
+
+	t.Log("Volume from archive test passed!")
+
+	// Cleanup
+	t.Log("Cleaning up...")
+	manager.DeleteInstance(ctx, inst.Id)
 	volumeManager.DeleteVolume(ctx, vol.Id)
 }

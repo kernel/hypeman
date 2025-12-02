@@ -3,10 +3,13 @@ package volumes
 import (
 	"context"
 	"fmt"
+	"io"
+	"os"
 	"sync"
 	"time"
 
 	"github.com/nrednav/cuid2"
+	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/paths"
 )
 
@@ -14,6 +17,7 @@ import (
 type Manager interface {
 	ListVolumes(ctx context.Context) ([]Volume, error)
 	CreateVolume(ctx context.Context, req CreateVolumeRequest) (*Volume, error)
+	CreateVolumeFromArchive(ctx context.Context, req CreateVolumeFromArchiveRequest, archive io.Reader) (*Volume, error)
 	GetVolume(ctx context.Context, id string) (*Volume, error)
 	GetVolumeByName(ctx context.Context, name string) (*Volume, error)
 	DeleteVolume(ctx context.Context, id string) error
@@ -137,6 +141,84 @@ func (m *manager) CreateVolume(ctx context.Context, req CreateVolumeRequest) (*V
 	// Save metadata
 	if err := saveMetadata(m.paths, meta); err != nil {
 		// Cleanup on error
+		deleteVolumeData(m.paths, id)
+		return nil, err
+	}
+
+	return m.metadataToVolume(meta), nil
+}
+
+// CreateVolumeFromArchive creates a new volume pre-populated with content from a tar.gz archive.
+// The archive is safely extracted with size limits to prevent tar bombs.
+func (m *manager) CreateVolumeFromArchive(ctx context.Context, req CreateVolumeFromArchiveRequest, archive io.Reader) (*Volume, error) {
+	// Generate or use provided ID
+	id := cuid2.Generate()
+	if req.Id != nil && *req.Id != "" {
+		id = *req.Id
+	}
+
+	// Check volume doesn't already exist
+	if _, err := loadMetadata(m.paths, id); err == nil {
+		return nil, ErrAlreadyExists
+	}
+
+	maxBytes := int64(req.SizeGb) * 1024 * 1024 * 1024
+
+	// Check total volume storage limit
+	if m.maxTotalVolumeStorage > 0 {
+		currentStorage, err := m.calculateTotalVolumeStorage(ctx)
+		if err != nil {
+			// Log but don't fail - continue with creation
+		} else {
+			if currentStorage+maxBytes > m.maxTotalVolumeStorage {
+				return nil, fmt.Errorf("total volume storage would be %d bytes, exceeds limit of %d bytes", currentStorage+maxBytes, m.maxTotalVolumeStorage)
+			}
+		}
+	}
+
+	// Create temp directory for extraction
+	tempDir, err := os.MkdirTemp("", "volume-archive-*")
+	if err != nil {
+		return nil, fmt.Errorf("create temp dir: %w", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Extract archive with size limit
+	_, err = ExtractTarGz(archive, tempDir, maxBytes)
+	if err != nil {
+		return nil, fmt.Errorf("extract archive: %w", err)
+	}
+
+	// Create volume directory
+	if err := ensureVolumeDir(m.paths, id); err != nil {
+		return nil, err
+	}
+
+	// Create ext4 disk from extracted content
+	diskPath := m.paths.VolumeData(id)
+	diskSize, err := images.ExportRootfs(tempDir, diskPath, images.FormatExt4)
+	if err != nil {
+		deleteVolumeData(m.paths, id)
+		return nil, fmt.Errorf("create disk from content: %w", err)
+	}
+
+	// Calculate actual size in GB (round up)
+	actualSizeGb := int((diskSize + 1024*1024*1024 - 1) / (1024 * 1024 * 1024))
+	if actualSizeGb < 1 {
+		actualSizeGb = 1
+	}
+
+	// Create metadata
+	now := time.Now()
+	meta := &storedMetadata{
+		Id:        id,
+		Name:      req.Name,
+		SizeGb:    actualSizeGb,
+		CreatedAt: now.Format(time.RFC3339),
+	}
+
+	// Save metadata
+	if err := saveMetadata(m.paths, meta); err != nil {
 		deleteVolumeData(m.paths, id)
 		return nil, err
 	}
