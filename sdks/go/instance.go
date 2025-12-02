@@ -4,6 +4,7 @@ package hypeman
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -163,6 +164,8 @@ type Instance struct {
 	StoppedAt time.Time `json:"stopped_at,nullable" format:"date-time"`
 	// Number of virtual CPUs
 	Vcpus int64 `json:"vcpus"`
+	// Volumes attached to the instance
+	Volumes []VolumeAttachment `json:"volumes"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
 		ID          respjson.Field
@@ -179,6 +182,7 @@ type Instance struct {
 		StartedAt   respjson.Field
 		StoppedAt   respjson.Field
 		Vcpus       respjson.Field
+		Volumes     respjson.Field
 		ExtraFields map[string]respjson.Field
 		raw         string
 	} `json:"-"`
@@ -236,6 +240,57 @@ func (r *InstanceNetwork) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, r)
 }
 
+type VolumeAttachment struct {
+	// Path where volume is mounted in the guest
+	MountPath string `json:"mount_path,required"`
+	// Volume identifier
+	VolumeID string `json:"volume_id,required"`
+	// Whether volume is mounted read-only
+	Readonly bool `json:"readonly"`
+	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
+	JSON struct {
+		MountPath   respjson.Field
+		VolumeID    respjson.Field
+		Readonly    respjson.Field
+		ExtraFields map[string]respjson.Field
+		raw         string
+	} `json:"-"`
+}
+
+// Returns the unmodified JSON received from the API
+func (r VolumeAttachment) RawJSON() string { return r.JSON.raw }
+func (r *VolumeAttachment) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
+// ToParam converts this VolumeAttachment to a VolumeAttachmentParam.
+//
+// Warning: the fields of the param type will not be present. ToParam should only
+// be used at the last possible moment before sending a request. Test for this with
+// VolumeAttachmentParam.Overrides()
+func (r VolumeAttachment) ToParam() VolumeAttachmentParam {
+	return param.Override[VolumeAttachmentParam](json.RawMessage(r.RawJSON()))
+}
+
+// The properties MountPath, VolumeID are required.
+type VolumeAttachmentParam struct {
+	// Path where volume is mounted in the guest
+	MountPath string `json:"mount_path,required"`
+	// Volume identifier
+	VolumeID string `json:"volume_id,required"`
+	// Whether volume is mounted read-only
+	Readonly param.Opt[bool] `json:"readonly,omitzero"`
+	paramObj
+}
+
+func (r VolumeAttachmentParam) MarshalJSON() (data []byte, err error) {
+	type shadow VolumeAttachmentParam
+	return param.MarshalObject(r, (*shadow)(&r))
+}
+func (r *VolumeAttachmentParam) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
 type InstanceNewParams struct {
 	// OCI image reference
 	Image string `json:"image,required"`
@@ -254,6 +309,8 @@ type InstanceNewParams struct {
 	Env map[string]string `json:"env,omitzero"`
 	// Network configuration for the instance
 	Network InstanceNewParamsNetwork `json:"network,omitzero"`
+	// Volumes to attach to the instance at creation time
+	Volumes []VolumeAttachmentParam `json:"volumes,omitzero"`
 	paramObj
 }
 
