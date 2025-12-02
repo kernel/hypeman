@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	securejoin "github.com/cyphar/filepath-securejoin"
 )
 
 var (
@@ -18,13 +20,33 @@ var (
 	ErrInvalidArchivePath = errors.New("invalid archive path")
 )
 
-// @sjmiller609 todo: do we have a dependency we can use for safe extraction?
+// validateArchivePath checks if a path from an archive is safe.
+// We reject obviously malicious paths rather than silently sanitizing them,
+// since a legitimate archive should not contain path traversal attempts.
+func validateArchivePath(name string) error {
+	// Clean the path first
+	cleaned := filepath.Clean(name)
+
+	// Reject absolute paths
+	if filepath.IsAbs(cleaned) || filepath.IsAbs(name) {
+		return fmt.Errorf("%w: absolute path %q", ErrInvalidArchivePath, name)
+	}
+
+	// Reject paths with .. components
+	if strings.HasPrefix(cleaned, "..") || strings.Contains(cleaned, string(filepath.Separator)+"..") {
+		return fmt.Errorf("%w: path traversal in %q", ErrInvalidArchivePath, name)
+	}
+
+	return nil
+}
+
 // ExtractTarGz extracts a tar.gz archive to destDir, aborting if the extracted
 // content exceeds maxBytes. Returns the total extracted bytes on success.
 //
 // Safety measures against adversarial archives:
+// - Rejects archives containing path traversal attempts or absolute paths
 // - Tracks cumulative extracted size, aborts immediately if limit exceeded
-// - Validates paths to prevent directory traversal attacks
+// - Uses securejoin for safe path joining (defense in depth)
 // - Uses io.LimitReader as secondary protection when copying files
 func ExtractTarGz(r io.Reader, destDir string, maxBytes int64) (int64, error) {
 	// Create destination directory
@@ -53,10 +75,15 @@ func ExtractTarGz(r io.Reader, destDir string, maxBytes int64) (int64, error) {
 			return extractedBytes, fmt.Errorf("read tar header: %w", err)
 		}
 
-		// Validate and sanitize path
-		targetPath, err := sanitizePath(destDir, header.Name)
-		if err != nil {
+		// Validate path - reject archives with malicious entries
+		if err := validateArchivePath(header.Name); err != nil {
 			return extractedBytes, err
+		}
+
+		// Use securejoin for safe path joining (defense in depth)
+		targetPath, err := securejoin.SecureJoin(destDir, header.Name)
+		if err != nil {
+			return extractedBytes, fmt.Errorf("%w: %v", ErrInvalidArchivePath, err)
 		}
 
 		// Check if adding this entry would exceed the limit
@@ -101,20 +128,29 @@ func ExtractTarGz(r io.Reader, destDir string, maxBytes int64) (int64, error) {
 			}
 
 		case tar.TypeSymlink:
-			// Validate symlink target doesn't escape destDir
-			linkTarget := header.Linkname
-			if filepath.IsAbs(linkTarget) {
-				return extractedBytes, fmt.Errorf("%w: absolute symlink target", ErrInvalidArchivePath)
+			// Reject absolute symlink targets
+			if filepath.IsAbs(header.Linkname) {
+				return extractedBytes, fmt.Errorf("%w: absolute symlink target %q", ErrInvalidArchivePath, header.Linkname)
 			}
 
-			// Resolve the symlink relative to its location
-			resolvedTarget := filepath.Join(filepath.Dir(targetPath), linkTarget)
-			resolvedTarget = filepath.Clean(resolvedTarget)
+			// Reject symlinks with path traversal attempts
+			// We check this explicitly because securejoin sanitizes rather than errors
+			cleanedLink := filepath.Clean(header.Linkname)
+			if strings.HasPrefix(cleanedLink, ".."+string(filepath.Separator)) || cleanedLink == ".." {
+				return extractedBytes, fmt.Errorf("%w: symlink %q escapes destination", ErrInvalidArchivePath, header.Linkname)
+			}
 
-			// Ensure resolved path is within destDir
-			if !strings.HasPrefix(resolvedTarget, filepath.Clean(destDir)+string(os.PathSeparator)) &&
-				resolvedTarget != filepath.Clean(destDir) {
-				return extractedBytes, fmt.Errorf("%w: symlink escapes destination", ErrInvalidArchivePath)
+			// Validate symlink target - resolve relative to symlink's directory
+			symlinkDir := filepath.Dir(targetPath)
+			resolvedTarget, err := securejoin.SecureJoin(symlinkDir, header.Linkname)
+			if err != nil {
+				return extractedBytes, fmt.Errorf("%w: symlink target unsafe: %v", ErrInvalidArchivePath, err)
+			}
+
+			// Verify the resolved target is within destDir (defense in depth)
+			cleanDest := filepath.Clean(destDir)
+			if !strings.HasPrefix(resolvedTarget, cleanDest+string(filepath.Separator)) && resolvedTarget != cleanDest {
+				return extractedBytes, fmt.Errorf("%w: symlink %q escapes destination", ErrInvalidArchivePath, header.Linkname)
 			}
 
 			// Ensure parent directory exists
@@ -122,15 +158,15 @@ func ExtractTarGz(r io.Reader, destDir string, maxBytes int64) (int64, error) {
 				return extractedBytes, fmt.Errorf("create parent dir for symlink: %w", err)
 			}
 
-			if err := os.Symlink(linkTarget, targetPath); err != nil {
+			if err := os.Symlink(header.Linkname, targetPath); err != nil {
 				return extractedBytes, fmt.Errorf("create symlink %s: %w", header.Name, err)
 			}
 
 		case tar.TypeLink:
-			// Hard links - validate target is within destDir
-			linkTarget, err := sanitizePath(destDir, header.Linkname)
+			// Hard links - validate target is within destDir using securejoin
+			linkTarget, err := securejoin.SecureJoin(destDir, header.Linkname)
 			if err != nil {
-				return extractedBytes, err
+				return extractedBytes, fmt.Errorf("%w: hardlink target unsafe: %v", ErrInvalidArchivePath, err)
 			}
 
 			// Ensure parent directory exists
@@ -149,32 +185,5 @@ func ExtractTarGz(r io.Reader, destDir string, maxBytes int64) (int64, error) {
 	}
 
 	return extractedBytes, nil
-}
-
-// sanitizePath validates and returns a safe path within destDir
-func sanitizePath(destDir, name string) (string, error) {
-	// Clean the path
-	name = filepath.Clean(name)
-
-	// Reject absolute paths
-	if filepath.IsAbs(name) {
-		return "", fmt.Errorf("%w: absolute path %s", ErrInvalidArchivePath, name)
-	}
-
-	// Reject paths with ..
-	if strings.Contains(name, "..") {
-		return "", fmt.Errorf("%w: path traversal in %s", ErrInvalidArchivePath, name)
-	}
-
-	// Build target path
-	targetPath := filepath.Join(destDir, name)
-
-	// Double-check the result is within destDir
-	if !strings.HasPrefix(filepath.Clean(targetPath), filepath.Clean(destDir)+string(os.PathSeparator)) &&
-		filepath.Clean(targetPath) != filepath.Clean(destDir) {
-		return "", fmt.Errorf("%w: path escapes destination: %s", ErrInvalidArchivePath, name)
-	}
-
-	return targetPath, nil
 }
 
