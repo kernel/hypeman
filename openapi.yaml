@@ -71,6 +71,14 @@ components:
           type: boolean
           description: Whether volume is mounted read-only
           default: false
+        overlay:
+          type: boolean
+          description: Create per-instance overlay for writes (requires readonly=true)
+          default: false
+        overlay_size:
+          type: string
+          description: Max overlay size as human-readable string (e.g., "1GB"). Required if overlay=true.
+          example: "1GB"
     
     PortMapping:
       type: object
@@ -326,6 +334,23 @@ components:
           description: Size in gigabytes
           example: 10
     
+    VolumeAttachmentInfo:
+      type: object
+      required: [instance_id, mount_path, readonly]
+      properties:
+        instance_id:
+          type: string
+          description: ID of the instance this volume is attached to
+          example: inst-abc123
+        mount_path:
+          type: string
+          description: Mount path in the guest
+          example: /mnt/data
+        readonly:
+          type: boolean
+          description: Whether the attachment is read-only
+          example: false
+    
     Volume:
       type: object
       required: [id, name, size_gb, created_at]
@@ -342,16 +367,11 @@ components:
           type: integer
           description: Size in gigabytes
           example: 10
-        attached_to:
-          type: string
-          description: Instance ID if attached
-          example: inst-abc123
-          nullable: true
-        mount_path:
-          type: string
-          description: Mount path if attached
-          example: /mnt/data
-          nullable: true
+        attachments:
+          type: array
+          description: List of current attachments (empty if not attached)
+          items:
+            $ref: "#/components/schemas/VolumeAttachmentInfo"
         created_at:
           type: string
           format: date-time

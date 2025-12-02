@@ -71,7 +71,8 @@ else
   exit 1
 fi
 
-# Mount attached volumes (from config: VOLUME_MOUNTS="device:path:mode device:path:mode ...")
+# Mount attached volumes (from config: VOLUME_MOUNTS="device:path:mode[:overlay_device] ...")
+# Modes: ro (read-only), rw (read-write), overlay (base ro + per-instance overlay)
 if [ -n "${VOLUME_MOUNTS:-}" ]; then
   echo "overlay-init: mounting volumes"
   for vol in $VOLUME_MOUNTS; do
@@ -82,13 +83,40 @@ if [ -n "${VOLUME_MOUNTS:-}" ]; then
     # Create mount point in overlay
     mkdir -p "/overlay/newroot${path}"
     
-    # Mount with appropriate options
-    if [ "$mode" = "ro" ]; then
-      mount -t ext4 -o ro "$device" "/overlay/newroot${path}"
+    if [ "$mode" = "overlay" ]; then
+      # Overlay mode: mount base read-only, create overlayfs with per-instance writable layer
+      overlay_device=$(echo "$vol" | cut -d: -f4)
+      
+      # Create temp mount points for base and overlay disk.
+      # These persist for the lifetime of the VM but are NOT leaked - they exist inside
+      # the ephemeral guest rootfs (which is itself an overlayfs) and are destroyed
+      # when the VM terminates along with all guest state.
+      base_mount="/mnt/vol-base-$(basename "$path")"
+      overlay_mount="/mnt/vol-overlay-$(basename "$path")"
+      mkdir -p "$base_mount" "$overlay_mount"
+      
+      # Mount base volume read-only (noload to skip journal recovery)
+      mount -t ext4 -o ro,noload "$device" "$base_mount"
+      
+      # Mount overlay disk (writable)
+      mount -t ext4 "$overlay_device" "$overlay_mount"
+      mkdir -p "$overlay_mount/upper" "$overlay_mount/work"
+      
+      # Create overlayfs combining base (lower) and instance overlay (upper)
+      mount -t overlay \
+        -o "lowerdir=$base_mount,upperdir=$overlay_mount/upper,workdir=$overlay_mount/work" \
+        overlay "/overlay/newroot${path}"
+      
+      echo "overlay-init: mounted volume $device at $path (overlay via $overlay_device)"
+    elif [ "$mode" = "ro" ]; then
+      # Read-only mount (noload to skip journal recovery for multi-attach safety)
+      mount -t ext4 -o ro,noload "$device" "/overlay/newroot${path}"
+      echo "overlay-init: mounted volume $device at $path (ro)"
     else
+      # Read-write mount
       mount -t ext4 "$device" "/overlay/newroot${path}"
+      echo "overlay-init: mounted volume $device at $path (rw)"
     fi
-    echo "overlay-init: mounted volume $device at $path ($mode)"
   done
 fi
 

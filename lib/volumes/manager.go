@@ -19,8 +19,12 @@ type Manager interface {
 	DeleteVolume(ctx context.Context, id string) error
 
 	// Attachment operations (called by instance manager)
+	// Multi-attach rules:
+	// - If no attachments: allow any mode (rw or ro)
+	// - If existing attachment is rw: reject all new attachments
+	// - If existing attachments are ro: only allow new ro attachments
 	AttachVolume(ctx context.Context, id string, req AttachVolumeRequest) error
-	DetachVolume(ctx context.Context, id string) error
+	DetachVolume(ctx context.Context, volumeID string, instanceID string) error
 
 	// GetVolumePath returns the path to the volume data file
 	GetVolumePath(id string) string
@@ -191,8 +195,8 @@ func (m *manager) DeleteVolume(ctx context.Context, id string) error {
 		return err
 	}
 
-	// Check if volume is attached
-	if meta.AttachedTo != nil {
+	// Check if volume has any attachments
+	if len(meta.Attachments) > 0 {
 		return ErrInUse
 	}
 
@@ -208,6 +212,10 @@ func (m *manager) DeleteVolume(ctx context.Context, id string) error {
 }
 
 // AttachVolume marks a volume as attached to an instance
+// Multi-attach rules (dynamic based on current state):
+// - If no attachments: allow any mode (rw or ro)
+// - If existing attachment is rw: reject all new attachments
+// - If existing attachments are ro: only allow new ro attachments
 func (m *manager) AttachVolume(ctx context.Context, id string, req AttachVolumeRequest) error {
 	lock := m.getVolumeLock(id)
 	lock.Lock()
@@ -218,35 +226,64 @@ func (m *manager) AttachVolume(ctx context.Context, id string, req AttachVolumeR
 		return err
 	}
 
-	// Check if already attached
-	if meta.AttachedTo != nil {
-		return ErrInUse
+	// Check if this instance is already attached
+	for _, att := range meta.Attachments {
+		if att.InstanceID == req.InstanceID {
+			return fmt.Errorf("volume already attached to instance %s", req.InstanceID)
+		}
 	}
 
-	// Update attachment info
-	meta.AttachedTo = &req.InstanceID
-	meta.MountPath = &req.MountPath
-	meta.Readonly = req.Readonly
+	// Apply multi-attach rules
+	if len(meta.Attachments) > 0 {
+		// Check if any existing attachment is read-write
+		for _, att := range meta.Attachments {
+			if !att.Readonly {
+				return fmt.Errorf("volume has exclusive read-write attachment to instance %s", att.InstanceID)
+			}
+		}
+		// Existing attachments are all read-only, new attachment must also be read-only
+		if !req.Readonly {
+			return fmt.Errorf("cannot attach read-write: volume has existing read-only attachments")
+		}
+	}
+
+	// Add new attachment
+	meta.Attachments = append(meta.Attachments, storedAttachment{
+		InstanceID: req.InstanceID,
+		MountPath:  req.MountPath,
+		Readonly:   req.Readonly,
+	})
 
 	return saveMetadata(m.paths, meta)
 }
 
-// DetachVolume marks a volume as detached from an instance
-func (m *manager) DetachVolume(ctx context.Context, id string) error {
-	lock := m.getVolumeLock(id)
+// DetachVolume removes the attachment for a specific instance
+func (m *manager) DetachVolume(ctx context.Context, volumeID string, instanceID string) error {
+	lock := m.getVolumeLock(volumeID)
 	lock.Lock()
 	defer lock.Unlock()
 
-	meta, err := loadMetadata(m.paths, id)
+	meta, err := loadMetadata(m.paths, volumeID)
 	if err != nil {
 		return err
 	}
 
-	// Clear attachment info
-	meta.AttachedTo = nil
-	meta.MountPath = nil
-	meta.Readonly = false
+	// Find and remove the attachment for this instance
+	found := false
+	newAttachments := make([]storedAttachment, 0, len(meta.Attachments))
+	for _, att := range meta.Attachments {
+		if att.InstanceID == instanceID {
+			found = true
+			continue // Skip this attachment (remove it)
+		}
+		newAttachments = append(newAttachments, att)
+	}
 
+	if !found {
+		return fmt.Errorf("volume not attached to instance %s", instanceID)
+	}
+
+	meta.Attachments = newAttachments
 	return saveMetadata(m.paths, meta)
 }
 
@@ -259,13 +296,21 @@ func (m *manager) GetVolumePath(id string) string {
 func (m *manager) metadataToVolume(meta *storedMetadata) *Volume {
 	createdAt, _ := time.Parse(time.RFC3339, meta.CreatedAt)
 
+	// Convert stored attachments to domain attachments
+	attachments := make([]Attachment, len(meta.Attachments))
+	for i, att := range meta.Attachments {
+		attachments[i] = Attachment{
+			InstanceID: att.InstanceID,
+			MountPath:  att.MountPath,
+			Readonly:   att.Readonly,
+		}
+	}
+
 	return &Volume{
-		Id:         meta.Id,
-		Name:       meta.Name,
-		SizeGb:     meta.SizeGb,
-		CreatedAt:  createdAt,
-		AttachedTo: meta.AttachedTo,
-		MountPath:  meta.MountPath,
-		Readonly:   meta.Readonly,
+		Id:          meta.Id,
+		Name:        meta.Name,
+		SizeGb:      meta.SizeGb,
+		CreatedAt:   createdAt,
+		Attachments: attachments,
 	}
 }

@@ -27,6 +27,8 @@
 //	      ch.sock
 //	      vsock.sock
 //	      logs/
+//	      vol-overlays/
+//	        {volumeID}.raw
 //	      snapshots/
 //	        snapshot-latest/
 //	          config.json
@@ -138,6 +140,16 @@ func (p *Paths) InstanceOverlay(id string) string {
 // InstanceConfigDisk returns the path to instance config disk.
 func (p *Paths) InstanceConfigDisk(id string) string {
 	return filepath.Join(p.InstanceDir(id), "config.ext4")
+}
+
+// InstanceVolumeOverlay returns the path to a volume's overlay disk for an instance.
+func (p *Paths) InstanceVolumeOverlay(instanceID, volumeID string) string {
+	return filepath.Join(p.InstanceDir(instanceID), "vol-overlays", volumeID+".raw")
+}
+
+// InstanceVolumeOverlaysDir returns the directory for volume overlays.
+func (p *Paths) InstanceVolumeOverlaysDir(instanceID string) string {
+	return filepath.Join(p.InstanceDir(instanceID), "vol-overlays")
 }
 
 // InstanceSocket returns the path to instance API socket.

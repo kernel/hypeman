@@ -15,15 +15,20 @@ import (
 //   data.raw        # ext4-formatted sparse disk
 //   metadata.json   # Volume metadata
 
+// storedAttachment represents an attachment in stored metadata
+type storedAttachment struct {
+	InstanceID string `json:"instance_id"`
+	MountPath  string `json:"mount_path"`
+	Readonly   bool   `json:"readonly"`
+}
+
 // storedMetadata represents volume metadata that is persisted to disk
 type storedMetadata struct {
-	Id         string  `json:"id"`
-	Name       string  `json:"name"`
-	SizeGb     int     `json:"size_gb"`
-	CreatedAt  string  `json:"created_at"` // RFC3339 format
-	AttachedTo *string `json:"attached_to,omitempty"`
-	MountPath  *string `json:"mount_path,omitempty"`
-	Readonly   bool    `json:"readonly,omitempty"`
+	Id          string             `json:"id"`
+	Name        string             `json:"name"`
+	SizeGb      int                `json:"size_gb"`
+	CreatedAt   string             `json:"created_at"` // RFC3339 format
+	Attachments []storedAttachment `json:"attachments,omitempty"`
 }
 
 // ensureVolumeDir creates the volume directory

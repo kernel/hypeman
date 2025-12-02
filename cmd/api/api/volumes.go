@@ -140,12 +140,20 @@ func volumeToOAPI(vol volumes.Volume) oapi.Volume {
 		SizeGb:    vol.SizeGb,
 		CreatedAt: vol.CreatedAt,
 	}
-	if vol.AttachedTo != nil {
-		oapiVol.AttachedTo = vol.AttachedTo
+
+	// Convert attachments
+	if len(vol.Attachments) > 0 {
+		attachments := make([]oapi.VolumeAttachmentInfo, len(vol.Attachments))
+		for i, att := range vol.Attachments {
+			attachments[i] = oapi.VolumeAttachmentInfo{
+				InstanceId: att.InstanceID,
+				MountPath:  att.MountPath,
+				Readonly:   att.Readonly,
+			}
+		}
+		oapiVol.Attachments = &attachments
 	}
-	if vol.MountPath != nil {
-		oapiVol.MountPath = vol.MountPath
-	}
+
 	return oapiVol
 }
 

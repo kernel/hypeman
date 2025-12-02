@@ -20,9 +20,11 @@ const (
 
 // VolumeAttachment represents a volume attached to an instance
 type VolumeAttachment struct {
-	VolumeID  string // Volume ID
-	MountPath string // Mount path in guest
-	Readonly  bool   // Whether mounted read-only
+	VolumeID    string // Volume ID
+	MountPath   string // Mount path in guest
+	Readonly    bool   // Whether mounted read-only
+	Overlay     bool   // If true, create per-instance overlay for writes (requires Readonly=true)
+	OverlaySize int64  // Size of overlay disk in bytes (max diff from base)
 }
 
 // StoredMetadata represents instance metadata that is persisted to disk

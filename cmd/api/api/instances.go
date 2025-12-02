@@ -104,10 +104,27 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 			if vol.Readonly != nil {
 				readonly = *vol.Readonly
 			}
+			overlay := false
+			if vol.Overlay != nil {
+				overlay = *vol.Overlay
+			}
+			var overlaySize int64
+			if vol.OverlaySize != nil && *vol.OverlaySize != "" {
+				var overlaySizeBytes datasize.ByteSize
+				if err := overlaySizeBytes.UnmarshalText([]byte(*vol.OverlaySize)); err != nil {
+					return oapi.CreateInstance400JSONResponse{
+						Code:    "invalid_overlay_size",
+						Message: fmt.Sprintf("invalid overlay_size for volume %s: %v", vol.VolumeId, err),
+					}, nil
+				}
+				overlaySize = int64(overlaySizeBytes)
+			}
 			volumes[i] = instances.VolumeAttachment{
-				VolumeID:  vol.VolumeId,
-				MountPath: vol.MountPath,
-				Readonly:  readonly,
+				VolumeID:    vol.VolumeId,
+				MountPath:   vol.MountPath,
+				Readonly:    readonly,
+				Overlay:     overlay,
+				OverlaySize: overlaySize,
 			}
 		}
 	}
@@ -461,11 +478,17 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 	if len(inst.Volumes) > 0 {
 		oapiVolumes := make([]oapi.VolumeAttachment, len(inst.Volumes))
 		for i, vol := range inst.Volumes {
-			oapiVolumes[i] = oapi.VolumeAttachment{
+			oapiVol := oapi.VolumeAttachment{
 				VolumeId:  vol.VolumeID,
 				MountPath: vol.MountPath,
 				Readonly:  lo.ToPtr(vol.Readonly),
 			}
+			if vol.Overlay {
+				oapiVol.Overlay = lo.ToPtr(true)
+				overlaySizeStr := datasize.ByteSize(vol.OverlaySize).HR()
+				oapiVol.OverlaySize = lo.ToPtr(overlaySizeStr)
+			}
+			oapiVolumes[i] = oapiVol
 		}
 		oapiInst.Volumes = &oapiVolumes
 	}

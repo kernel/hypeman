@@ -222,7 +222,7 @@ func TestCreateAndDeleteInstance(t *testing.T) {
 
 	// Verify volume file exists and is not attached
 	assert.FileExists(t, p.VolumeData(vol.Id))
-	assert.Nil(t, vol.AttachedTo, "Volume should not be attached yet")
+	assert.Empty(t, vol.Attachments, "Volume should not be attached yet")
 
 	// Create instance with real nginx image and attached volume
 	req := CreateInstanceRequest{
@@ -267,9 +267,9 @@ func TestCreateAndDeleteInstance(t *testing.T) {
 	// Verify volume shows as attached
 	vol, err = volumeManager.GetVolume(ctx, vol.Id)
 	require.NoError(t, err)
-	require.NotNil(t, vol.AttachedTo, "Volume should be attached")
-	assert.Equal(t, inst.Id, *vol.AttachedTo)
-	assert.Equal(t, "/mnt/data", *vol.MountPath)
+	require.Len(t, vol.Attachments, 1, "Volume should be attached")
+	assert.Equal(t, inst.Id, vol.Attachments[0].InstanceID)
+	assert.Equal(t, "/mnt/data", vol.Attachments[0].MountPath)
 
 	// Verify directories exist
 	assert.DirExists(t, p.InstanceDir(inst.Id))
@@ -444,7 +444,7 @@ func TestCreateAndDeleteInstance(t *testing.T) {
 	// Verify volume is detached but still exists
 	vol, err = volumeManager.GetVolume(ctx, vol.Id)
 	require.NoError(t, err)
-	assert.Nil(t, vol.AttachedTo, "Volume should be detached after instance deletion")
+	assert.Empty(t, vol.Attachments, "Volume should be detached after instance deletion")
 	assert.FileExists(t, p.VolumeData(vol.Id), "Volume file should still exist")
 
 	// Delete volume

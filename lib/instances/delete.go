@@ -62,7 +62,7 @@ func (m *manager) deleteInstance(
 	if len(inst.Volumes) > 0 {
 		log.DebugContext(ctx, "detaching volumes", "id", id, "count", len(inst.Volumes))
 		for _, volAttach := range inst.Volumes {
-			if err := m.volumeManager.DetachVolume(ctx, volAttach.VolumeID); err != nil {
+			if err := m.volumeManager.DetachVolume(ctx, volAttach.VolumeID, id); err != nil {
 				// Log error but continue with cleanup
 				log.WarnContext(ctx, "failed to detach volume, continuing with cleanup", "id", id, "volume_id", volAttach.VolumeID, "error", err)
 			}

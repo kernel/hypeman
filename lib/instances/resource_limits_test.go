@@ -29,7 +29,7 @@ func TestValidateVolumeAttachments_MaxVolumes(t *testing.T) {
 
 	err := validateVolumeAttachments(volumes)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "cannot attach more than 23 volumes")
+	assert.Contains(t, err.Error(), "cannot attach more than 23")
 }
 
 func TestValidateVolumeAttachments_SystemDirectory(t *testing.T) {
@@ -81,6 +81,70 @@ func TestValidateVolumeAttachments_Empty(t *testing.T) {
 
 	err = validateVolumeAttachments([]VolumeAttachment{})
 	assert.NoError(t, err)
+}
+
+func TestValidateVolumeAttachments_OverlayRequiresReadonly(t *testing.T) {
+	// Overlay=true with Readonly=false should fail
+	volumes := []VolumeAttachment{{
+		VolumeID:    "vol-1",
+		MountPath:   "/mnt/data",
+		Readonly:    false, // Invalid: overlay requires readonly=true
+		Overlay:     true,
+		OverlaySize: 100 * 1024 * 1024,
+	}}
+
+	err := validateVolumeAttachments(volumes)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "overlay mode requires readonly=true")
+}
+
+func TestValidateVolumeAttachments_OverlayRequiresSize(t *testing.T) {
+	// Overlay=true without OverlaySize should fail
+	volumes := []VolumeAttachment{{
+		VolumeID:    "vol-1",
+		MountPath:   "/mnt/data",
+		Readonly:    true,
+		Overlay:     true,
+		OverlaySize: 0, // Invalid: overlay requires size
+	}}
+
+	err := validateVolumeAttachments(volumes)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "overlay_size is required")
+}
+
+func TestValidateVolumeAttachments_OverlayValid(t *testing.T) {
+	// Valid overlay configuration
+	volumes := []VolumeAttachment{{
+		VolumeID:    "vol-1",
+		MountPath:   "/mnt/data",
+		Readonly:    true,
+		Overlay:     true,
+		OverlaySize: 100 * 1024 * 1024, // 100MB
+	}}
+
+	err := validateVolumeAttachments(volumes)
+	assert.NoError(t, err)
+}
+
+func TestValidateVolumeAttachments_OverlayCountsAsTwoDevices(t *testing.T) {
+	// 12 regular volumes + 12 overlay volumes = 12 + 24 = 36 devices (exceeds 23)
+	// But let's be more precise: 11 overlay volumes = 22 devices, + 1 regular = 23 (at limit)
+	// 12 overlay volumes = 24 devices (exceeds limit)
+	volumes := make([]VolumeAttachment, 12)
+	for i := range volumes {
+		volumes[i] = VolumeAttachment{
+			VolumeID:    "vol-" + string(rune('a'+i)),
+			MountPath:   "/mnt/vol" + string(rune('a'+i)),
+			Readonly:    true,
+			Overlay:     true,
+			OverlaySize: 100 * 1024 * 1024,
+		}
+	}
+
+	err := validateVolumeAttachments(volumes)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot attach more than 23")
 }
 
 // createTestManager creates a manager with specified limits for testing

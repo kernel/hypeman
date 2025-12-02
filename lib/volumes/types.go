@@ -2,17 +2,20 @@ package volumes
 
 import "time"
 
+// Attachment represents a volume attached to an instance
+type Attachment struct {
+	InstanceID string
+	MountPath  string
+	Readonly   bool
+}
+
 // Volume represents a persistent block storage volume
 type Volume struct {
-	Id        string
-	Name      string
-	SizeGb    int
-	CreatedAt time.Time
-
-	// Attachment state (nil/empty if not attached)
-	AttachedTo *string // Instance ID if attached
-	MountPath  *string // Mount path in guest if attached
-	Readonly   bool    // Whether mounted read-only
+	Id          string
+	Name        string
+	SizeGb      int
+	CreatedAt   time.Time
+	Attachments []Attachment // List of current attachments (empty if not attached)
 }
 
 // CreateVolumeRequest is the domain request for creating a volume
