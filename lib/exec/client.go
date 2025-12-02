@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"strings"
+	"sync"
 	"time"
 
 	"google.golang.org/grpc"
@@ -22,6 +23,62 @@ const (
 	// vsockGuestPort is the port the exec-agent listens on inside the guest
 	vsockGuestPort = 2222
 )
+
+// connPool manages reusable gRPC connections per vsock socket path
+// This avoids the overhead and potential issues of rapidly creating/closing connections
+var connPool = struct {
+	sync.RWMutex
+	conns map[string]*grpc.ClientConn
+}{
+	conns: make(map[string]*grpc.ClientConn),
+}
+
+// getOrCreateConn returns an existing connection or creates a new one
+func getOrCreateConn(ctx context.Context, vsockSocketPath string) (*grpc.ClientConn, error) {
+	// Try read lock first for existing connection
+	connPool.RLock()
+	if conn, ok := connPool.conns[vsockSocketPath]; ok {
+		connPool.RUnlock()
+		return conn, nil
+	}
+	connPool.RUnlock()
+
+	// Need to create new connection - acquire write lock
+	connPool.Lock()
+	defer connPool.Unlock()
+
+	// Double-check after acquiring write lock
+	if conn, ok := connPool.conns[vsockSocketPath]; ok {
+		return conn, nil
+	}
+
+	// Create new connection
+	conn, err := grpc.Dial("passthrough:///vsock",
+		grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
+			return dialVsock(ctx, vsockSocketPath)
+		}),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create grpc connection: %w", err)
+	}
+
+	connPool.conns[vsockSocketPath] = conn
+	slog.Debug("created new gRPC connection", "socket", vsockSocketPath)
+	return conn, nil
+}
+
+// CloseConn closes and removes a connection from the pool (call when VM is deleted)
+func CloseConn(vsockSocketPath string) {
+	connPool.Lock()
+	defer connPool.Unlock()
+
+	if conn, ok := connPool.conns[vsockSocketPath]; ok {
+		conn.Close()
+		delete(connPool.conns, vsockSocketPath)
+		slog.Debug("closed gRPC connection", "socket", vsockSocketPath)
+	}
+}
 
 // ExitStatus represents command exit information
 type ExitStatus struct {
@@ -54,17 +111,13 @@ func (c *bufferedConn) Read(p []byte) (int, error) {
 // ExecIntoInstance executes command in instance via vsock using gRPC
 // vsockSocketPath is the Unix socket created by Cloud Hypervisor (e.g., /var/lib/hypeman/guests/{id}/vsock.sock)
 func ExecIntoInstance(ctx context.Context, vsockSocketPath string, opts ExecOptions) (*ExitStatus, error) {
-	// Connect to Cloud Hypervisor's vsock Unix socket with custom dialer
-	grpcConn, err := grpc.NewClient("passthrough:///vsock",
-		grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
-			return dialVsock(ctx, vsockSocketPath)
-		}),
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-	)
+	// Get or create a reusable gRPC connection for this vsock socket
+	// Connection pooling avoids issues with rapid connect/disconnect cycles
+	grpcConn, err := getOrCreateConn(ctx, vsockSocketPath)
 	if err != nil {
-		return nil, fmt.Errorf("create grpc client: %w", err)
+		return nil, fmt.Errorf("get grpc connection: %w", err)
 	}
-	defer grpcConn.Close()
+	// Note: Don't close the connection - it's pooled and reused
 
 	// Create exec client
 	client := NewExecServiceClient(grpcConn)
@@ -72,6 +125,8 @@ func ExecIntoInstance(ctx context.Context, vsockSocketPath string, opts ExecOpti
 	if err != nil {
 		return nil, fmt.Errorf("start exec stream: %w", err)
 	}
+	// Ensure stream is properly closed when we're done
+	defer stream.CloseSend()
 
 	// Send start request
 	if err := stream.Send(&ExecRequest{
@@ -108,22 +163,24 @@ func ExecIntoInstance(ctx context.Context, vsockSocketPath string, opts ExecOpti
 	}
 
 	// Receive responses
+	var totalStdout, totalStderr int
 	for {
 		resp, err := stream.Recv()
 		if err == io.EOF {
-			// Stream closed without exit code
-			return nil, fmt.Errorf("stream closed without exit code")
+			return nil, fmt.Errorf("stream closed without exit code (stdout=%d, stderr=%d)", totalStdout, totalStderr)
 		}
 		if err != nil {
-			return nil, fmt.Errorf("receive response: %w", err)
+			return nil, fmt.Errorf("receive response (stdout=%d, stderr=%d): %w", totalStdout, totalStderr, err)
 		}
 
 		switch r := resp.Response.(type) {
 		case *ExecResponse_Stdout:
+			totalStdout += len(r.Stdout)
 			if opts.Stdout != nil {
 				opts.Stdout.Write(r.Stdout)
 			}
 		case *ExecResponse_Stderr:
+			totalStderr += len(r.Stderr)
 			if opts.Stderr != nil {
 				opts.Stderr.Write(r.Stderr)
 			}

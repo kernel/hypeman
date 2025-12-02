@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -113,8 +114,12 @@ func (s *execServer) executeNoTTY(ctx context.Context, stream pb.ExecService_Exe
 		return fmt.Errorf("start command: %w", err)
 	}
 
-	// Use WaitGroup to ensure all output is sent before exit code
+	// Mutex to protect concurrent stream.Send calls (gRPC streams are not thread-safe)
+	var sendMu sync.Mutex
+
+	// Use WaitGroup to ensure all output is read before sending
 	var wg sync.WaitGroup
+	var stdoutData, stderrData []byte
 
 	// Handle stdin in background
 	go func() {
@@ -130,47 +135,51 @@ func (s *execServer) executeNoTTY(ctx context.Context, stream pb.ExecService_Exe
 		}
 	}()
 
-	// Stream stdout
+	// Read all stdout/stderr BEFORE calling Wait() - Wait() closes the pipes!
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		buf := make([]byte, 32 * 1024)
-		for {
-			n, err := stdout.Read(buf)
-			if n > 0 {
-				stream.Send(&pb.ExecResponse{
-					Response: &pb.ExecResponse_Stdout{Stdout: buf[:n]},
-				})
-			}
-			if err != nil {
-				return
-			}
-		}
+		data, _ := io.ReadAll(stdout)
+		stdoutData = data
 	}()
 
-	// Stream stderr
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		buf := make([]byte, 32 * 1024)
-		for {
-			n, err := stderr.Read(buf)
-			if n > 0 {
-				stream.Send(&pb.ExecResponse{
-					Response: &pb.ExecResponse_Stderr{Stderr: buf[:n]},
-				})
-			}
-			if err != nil {
-				return
-			}
-		}
+		data, _ := io.ReadAll(stderr)
+		stderrData = data
 	}()
 
-	// Wait for command to finish or context cancellation
-	waitErr := cmd.Wait()
-	
-	// Wait for all output to be sent
+	// Wait for all reads to complete FIRST (before Wait closes pipes)
 	wg.Wait()
+	
+	// Now safe to call Wait - pipes are fully drained
+	waitErr := cmd.Wait()
+
+	// Now stream output in chunks (streaming compatible)
+	const chunkSize = 32 * 1024
+	for i := 0; i < len(stdoutData); i += chunkSize {
+		end := i + chunkSize
+		if end > len(stdoutData) {
+			end = len(stdoutData)
+		}
+		sendMu.Lock()
+		stream.Send(&pb.ExecResponse{
+			Response: &pb.ExecResponse_Stdout{Stdout: stdoutData[i:end]},
+		})
+		sendMu.Unlock()
+	}
+	for i := 0; i < len(stderrData); i += chunkSize {
+		end := i + chunkSize
+		if end > len(stderrData) {
+			end = len(stderrData)
+		}
+		sendMu.Lock()
+		stream.Send(&pb.ExecResponse{
+			Response: &pb.ExecResponse_Stderr{Stderr: stderrData[i:end]},
+		})
+		sendMu.Unlock()
+	}
 
 	exitCode := int32(0)
 	if cmd.ProcessState != nil {
@@ -213,6 +222,9 @@ func (s *execServer) executeTTY(ctx context.Context, stream pb.ExecService_ExecS
 	}
 	defer ptmx.Close()
 
+	// Mutex to protect concurrent stream.Send calls (gRPC streams are not thread-safe)
+	var sendMu sync.Mutex
+
 	// Use WaitGroup to ensure all output is sent before exit code
 	var wg sync.WaitGroup
 
@@ -238,9 +250,11 @@ func (s *execServer) executeTTY(ctx context.Context, stream pb.ExecService_ExecS
 		for {
 			n, err := ptmx.Read(buf)
 			if n > 0 {
+				sendMu.Lock()
 				stream.Send(&pb.ExecResponse{
 					Response: &pb.ExecResponse_Stdout{Stdout: buf[:n]},
 				})
+				sendMu.Unlock()
 			}
 			if err != nil {
 				return
