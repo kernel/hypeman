@@ -160,5 +160,59 @@ func TestExecConcurrent(t *testing.T) {
 	require.Empty(t, errs, "concurrent exec failed: %v", errs)
 
 	t.Logf("All %d workers completed %d iterations each (total: %d exec pairs)", numWorkers, numIterations, numWorkers*numIterations*2)
+
+	// Phase 2: Test long-running concurrent streams
+	// This verifies streams don't block each other (e.g., multiple shells or streaming commands)
+	t.Log("Phase 2: Testing long-running concurrent streams...")
+
+	const streamWorkers = 5
+	const streamDuration = 2 // seconds
+
+	var streamWg sync.WaitGroup
+	streamErrors := make(chan error, streamWorkers)
+	streamStart := time.Now()
+
+	for w := 0; w < streamWorkers; w++ {
+		streamWg.Add(1)
+		go func(workerID int) {
+			defer streamWg.Done()
+
+			// Command that takes ~2 seconds and produces output
+			cmd := fmt.Sprintf("sleep %d && echo 'stream-%d-done'", streamDuration, workerID)
+			output, code, err := execCommand(ctx, inst.VsockSocket, "/bin/sh", "-c", cmd)
+			if err != nil {
+				streamErrors <- fmt.Errorf("stream worker %d: error: %w", workerID, err)
+				return
+			}
+			if code != 0 {
+				streamErrors <- fmt.Errorf("stream worker %d: exit code %d", workerID, code)
+				return
+			}
+			expected := fmt.Sprintf("stream-%d-done", workerID)
+			if !strings.Contains(output, expected) {
+				streamErrors <- fmt.Errorf("stream worker %d: expected %q in output, got %q", workerID, expected, output)
+				return
+			}
+		}(w)
+	}
+
+	streamWg.Wait()
+	close(streamErrors)
+
+	streamElapsed := time.Since(streamStart)
+
+	// Check for errors
+	var streamErrs []error
+	for err := range streamErrors {
+		streamErrs = append(streamErrs, err)
+	}
+	require.Empty(t, streamErrs, "long-running streams failed: %v", streamErrs)
+
+	// If concurrent, should complete in ~2-4s; if serialized would be ~10s
+	maxExpected := time.Duration(streamDuration+2) * time.Second
+	require.Less(t, streamElapsed, maxExpected,
+		"streams appear serialized - took %v, expected < %v", streamElapsed, maxExpected)
+
+	t.Logf("Long-running streams completed in %v (concurrent OK)", streamElapsed)
 }
 
