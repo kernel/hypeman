@@ -45,9 +45,11 @@ Container (chroot /overlay/newroot)
 - **ExecIntoInstance()**: Main client function
 - Connects to Cloud Hypervisor's vsock Unix socket
 - Performs vsock handshake: `CONNECT 2222\n` → `OK <cid>`
-- Creates gRPC client over the vsock connection
+- Creates gRPC client over the vsock connection (pooled per VM for efficiency)
 - Streams stdin/stdout/stderr bidirectionally
 - Returns exit status when command completes
+
+**Concurrency**: Multiple exec calls to the same VM share the underlying gRPC connection but use separate streams, enabling concurrent command execution.
 
 ### 3. Protocol (`exec.proto`)
 
@@ -84,6 +86,7 @@ gRPC streaming RPC with protobuf messages:
 
 - **Bidirectional streaming**: Real-time stdin/stdout/stderr
 - **TTY support**: Interactive shells with terminal control
+- **Concurrent exec**: Multiple simultaneous commands per VM (separate streams)
 - **Exit codes**: Proper process exit status reporting
 - **No SSH required**: Direct vsock communication (faster, simpler)
 - **Container isolation**: Commands run in container context, not VM context
