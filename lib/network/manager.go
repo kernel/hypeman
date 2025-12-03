@@ -9,6 +9,8 @@ import (
 	"github.com/onkernel/hypeman/cmd/api/config"
 	"github.com/onkernel/hypeman/lib/logger"
 	"github.com/onkernel/hypeman/lib/paths"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 )
 
 // Manager defines the interface for network management
@@ -27,19 +29,84 @@ type Manager interface {
 	NameExists(ctx context.Context, name string) (bool, error)
 }
 
-// manager implements the Manager interface
-type manager struct {
-	paths  *paths.Paths
-	config *config.Config
-	mu     sync.Mutex // Protects network allocation operations (IP allocation)
+// Metrics holds the metrics instruments for network operations.
+type Metrics struct {
+	tapOperations metric.Int64Counter
 }
 
-// NewManager creates a new network manager
-func NewManager(p *paths.Paths, cfg *config.Config) Manager {
-	return &manager{
+// manager implements the Manager interface
+type manager struct {
+	paths   *paths.Paths
+	config  *config.Config
+	mu      sync.Mutex // Protects network allocation operations (IP allocation)
+	metrics *Metrics
+}
+
+// NewManager creates a new network manager.
+// If meter is nil, metrics are disabled.
+func NewManager(p *paths.Paths, cfg *config.Config, meter metric.Meter) Manager {
+	m := &manager{
 		paths:  p,
 		config: cfg,
 	}
+
+	// Initialize metrics if meter is provided
+	if meter != nil {
+		metrics, err := newNetworkMetrics(meter, m)
+		if err == nil {
+			m.metrics = metrics
+		}
+	}
+
+	return m
+}
+
+// newNetworkMetrics creates and registers all network metrics.
+func newNetworkMetrics(meter metric.Meter, m *manager) (*Metrics, error) {
+	tapOperations, err := meter.Int64Counter(
+		"hypeman_network_tap_operations_total",
+		metric.WithDescription("Total number of TAP device operations"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	// Register observable gauge for allocations
+	allocationsTotal, err := meter.Int64ObservableGauge(
+		"hypeman_network_allocations_total",
+		metric.WithDescription("Total number of active network allocations"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = meter.RegisterCallback(
+		func(ctx context.Context, o metric.Observer) error {
+			allocs, err := m.ListAllocations(ctx)
+			if err != nil {
+				return nil
+			}
+			o.ObserveInt64(allocationsTotal, int64(len(allocs)))
+			return nil
+		},
+		allocationsTotal,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Metrics{
+		tapOperations: tapOperations,
+	}, nil
+}
+
+// recordTAPOperation records a TAP device operation.
+func (m *manager) recordTAPOperation(ctx context.Context, operation string) {
+	if m.metrics == nil {
+		return
+	}
+	m.metrics.tapOperations.Add(ctx, 1,
+		metric.WithAttributes(attribute.String("operation", operation)))
 }
 
 // Initialize initializes the network manager and creates default network.
@@ -100,4 +167,3 @@ func (m *manager) getDefaultNetwork(ctx context.Context) (*Network, error) {
 		CreatedAt: time.Time{}, // Unknown for default
 	}, nil
 }
-

@@ -20,9 +20,13 @@ import (
 	nethttpmiddleware "github.com/oapi-codegen/nethttp-middleware"
 	"github.com/onkernel/hypeman"
 	"github.com/onkernel/hypeman/cmd/api/api"
+	"github.com/onkernel/hypeman/cmd/api/config"
+	"github.com/onkernel/hypeman/lib/exec"
 	"github.com/onkernel/hypeman/lib/instances"
 	mw "github.com/onkernel/hypeman/lib/middleware"
 	"github.com/onkernel/hypeman/lib/oapi"
+	"github.com/onkernel/hypeman/lib/otel"
+	"github.com/riandyrn/otelchi"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -34,6 +38,41 @@ func main() {
 }
 
 func run() error {
+	// Load config early for OTel initialization
+	cfg := config.Load()
+
+	// Initialize OpenTelemetry (before wire initialization)
+	otelCfg := otel.Config{
+		Enabled:     cfg.OtelEnabled,
+		Endpoint:    cfg.OtelEndpoint,
+		ServiceName: cfg.OtelServiceName,
+		Insecure:    cfg.OtelInsecure,
+		Version:     cfg.Version,
+	}
+
+	otelProvider, otelShutdown, err := otel.Init(context.Background(), otelCfg)
+	if err != nil {
+		// Log warning but don't fail - graceful degradation
+		slog.Warn("failed to initialize OpenTelemetry, continuing without telemetry", "error", err)
+	}
+	if otelShutdown != nil {
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := otelShutdown(shutdownCtx); err != nil {
+				slog.Warn("error shutting down OpenTelemetry", "error", err)
+			}
+		}()
+	}
+
+	// Initialize exec metrics if OTel is enabled
+	if otelProvider != nil && otelProvider.Meter != nil {
+		execMetrics, err := exec.NewMetrics(otelProvider.Meter)
+		if err == nil {
+			exec.SetMetrics(execMetrics)
+		}
+	}
+
 	// Initialize app with wire
 	app, cleanup, err := initializeApp()
 	if err != nil {
@@ -45,6 +84,11 @@ func run() error {
 	defer stop()
 
 	logger := app.Logger
+
+	// Log OTel status
+	if cfg.OtelEnabled {
+		logger.Info("OpenTelemetry enabled", "endpoint", cfg.OtelEndpoint, "service", cfg.OtelServiceName)
+	}
 
 	// Validate JWT secret is configured
 	if app.Config.JwtSecret == "" {
@@ -83,6 +127,24 @@ func run() error {
 
 	// Create router
 	r := chi.NewRouter()
+
+	// Add OpenTelemetry tracing middleware if enabled
+	if cfg.OtelEnabled {
+		r.Use(otelchi.Middleware(cfg.OtelServiceName, otelchi.WithChiRoutes(r)))
+	}
+
+	// Add HTTP metrics middleware if OTel is enabled
+	var httpMetricsMw func(http.Handler) http.Handler
+	if otelProvider != nil && otelProvider.Meter != nil {
+		httpMetrics, err := mw.NewHTTPMetrics(otelProvider.Meter)
+		if err == nil {
+			httpMetricsMw = httpMetrics.Middleware
+		}
+	}
+	if httpMetricsMw == nil {
+		httpMetricsMw = mw.NoopHTTPMetrics()
+	}
+	r.Use(httpMetricsMw)
 
 	// Load OpenAPI spec for request validation
 	spec, err := oapi.GetSwagger()
@@ -225,4 +287,3 @@ func getRunningInstanceIDs(app *application) []string {
 	}
 	return running
 }
-

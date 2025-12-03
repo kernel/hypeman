@@ -113,3 +113,9 @@ func (q *BuildQueue) PendingCount() int {
 	return len(q.pending)
 }
 
+// QueueLength returns the total number of builds (active + pending)
+func (q *BuildQueue) QueueLength() int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return len(q.active) + len(q.pending)
+}

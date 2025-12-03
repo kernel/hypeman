@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/onkernel/hypeman/lib/paths"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 )
 
 const (
@@ -28,15 +30,23 @@ type Manager interface {
 	RecoverInterruptedBuilds()
 }
 
+// Metrics holds the metrics instruments for image operations.
+type Metrics struct {
+	buildDuration metric.Float64Histogram
+	pullsTotal    metric.Int64Counter
+}
+
 type manager struct {
 	paths     *paths.Paths
 	ociClient *ociClient
 	queue     *BuildQueue
 	createMu  sync.Mutex
+	metrics   *Metrics
 }
 
-// NewManager creates a new image manager
-func NewManager(p *paths.Paths, maxConcurrentBuilds int) (Manager, error) {
+// NewManager creates a new image manager.
+// If meter is nil, metrics are disabled.
+func NewManager(p *paths.Paths, maxConcurrentBuilds int, meter metric.Meter) (Manager, error) {
 	// Create cache directory under dataDir for OCI layouts
 	cacheDir := p.SystemOCICache()
 	ociClient, err := newOCIClient(cacheDir)
@@ -49,8 +59,87 @@ func NewManager(p *paths.Paths, maxConcurrentBuilds int) (Manager, error) {
 		ociClient: ociClient,
 		queue:     NewBuildQueue(maxConcurrentBuilds),
 	}
+
+	// Initialize metrics if meter is provided
+	if meter != nil {
+		metrics, err := newMetrics(meter, m)
+		if err != nil {
+			return nil, fmt.Errorf("create metrics: %w", err)
+		}
+		m.metrics = metrics
+	}
+
 	m.RecoverInterruptedBuilds()
 	return m, nil
+}
+
+// newMetrics creates and registers all image metrics.
+func newMetrics(meter metric.Meter, m *manager) (*Metrics, error) {
+	buildDuration, err := meter.Float64Histogram(
+		"hypeman_images_build_duration_seconds",
+		metric.WithDescription("Time to build an image"),
+		metric.WithUnit("s"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	pullsTotal, err := meter.Int64Counter(
+		"hypeman_images_pulls_total",
+		metric.WithDescription("Total number of image pulls from registries"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	// Register observable gauges for queue length and total images
+	buildQueueLength, err := meter.Int64ObservableGauge(
+		"hypeman_images_build_queue_length",
+		metric.WithDescription("Current number of images in the build queue"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	imagesTotal, err := meter.Int64ObservableGauge(
+		"hypeman_images_total",
+		metric.WithDescription("Total number of cached images"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = meter.RegisterCallback(
+		func(ctx context.Context, o metric.Observer) error {
+			// Report queue length
+			o.ObserveInt64(buildQueueLength, int64(m.queue.QueueLength()))
+
+			// Count images by status
+			metas, err := listAllTags(m.paths)
+			if err != nil {
+				return nil
+			}
+			statusCounts := make(map[string]int64)
+			for _, meta := range metas {
+				statusCounts[meta.Status]++
+			}
+			for status, count := range statusCounts {
+				o.ObserveInt64(imagesTotal, count,
+					metric.WithAttributes(attribute.String("status", status)))
+			}
+			return nil
+		},
+		buildQueueLength,
+		imagesTotal,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Metrics{
+		buildDuration: buildDuration,
+		pullsTotal:    pullsTotal,
+	}, nil
 }
 
 func (m *manager) ListImages(ctx context.Context) ([]Image, error) {
@@ -78,7 +167,7 @@ func (m *manager) CreateImage(ctx context.Context, req CreateImageRequest) (*Ima
 	// Add a 2-second timeout to ensure fast failure on rate limits or errors
 	resolveCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	
+
 	ref, err := normalized.Resolve(resolveCtx, m.ociClient)
 	if err != nil {
 		return nil, fmt.Errorf("resolve manifest: %w", err)
@@ -134,11 +223,13 @@ func (m *manager) createAndQueueImage(ref *ResolvedRef) (*Image, error) {
 }
 
 func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef) {
+	buildStart := time.Now()
 	buildDir := m.paths.SystemBuild(ref.String())
 	tempDir := filepath.Join(buildDir, "rootfs")
 
 	if err := os.MkdirAll(buildDir, 0755); err != nil {
 		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("create build dir: %w", err))
+		m.recordBuildMetrics(ctx, buildStart, "failed")
 		return
 	}
 
@@ -153,8 +244,11 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef) {
 	result, err := m.ociClient.pullAndExport(ctx, ref.String(), ref.Digest(), tempDir)
 	if err != nil {
 		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("pull and export: %w", err))
+		m.recordPullMetrics(ctx, "failed")
+		m.recordBuildMetrics(ctx, buildStart, "failed")
 		return
 	}
+	m.recordPullMetrics(ctx, "success")
 
 	// Check if this digest already exists and is ready (deduplication)
 	if meta, err := readMetadata(m.paths, ref.Repository(), ref.DigestHex()); err == nil {
@@ -209,6 +303,27 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef) {
 			fmt.Fprintf(os.Stderr, "Warning: failed to create tag symlink: %v\n", err)
 		}
 	}
+
+	m.recordBuildMetrics(ctx, buildStart, "success")
+}
+
+// recordBuildMetrics records the build duration metric.
+func (m *manager) recordBuildMetrics(ctx context.Context, start time.Time, status string) {
+	if m.metrics == nil {
+		return
+	}
+	duration := time.Since(start).Seconds()
+	m.metrics.buildDuration.Record(ctx, duration,
+		metric.WithAttributes(attribute.String("status", status)))
+}
+
+// recordPullMetrics records the pull counter metric.
+func (m *manager) recordPullMetrics(ctx context.Context, status string) {
+	if m.metrics == nil {
+		return
+	}
+	m.metrics.pullsTotal.Add(ctx, 1,
+		metric.WithAttributes(attribute.String("status", status)))
 }
 
 func (m *manager) updateStatusByDigest(ref *ResolvedRef, status string, err error) {

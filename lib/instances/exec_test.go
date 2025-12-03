@@ -46,7 +46,7 @@ func TestExecConcurrent(t *testing.T) {
 	p := paths.New(tmpDir)
 
 	// Setup image
-	imageManager, err := images.NewManager(p, 1)
+	imageManager, err := images.NewManager(p, 1, nil)
 	require.NoError(t, err)
 
 	t.Log("Pulling nginx:alpine image...")
@@ -215,4 +215,3 @@ func TestExecConcurrent(t *testing.T) {
 
 	t.Logf("Long-running streams completed in %v (concurrent OK)", streamElapsed)
 }
-

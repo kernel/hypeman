@@ -59,6 +59,7 @@ func (m *manager) CreateAllocation(ctx context.Context, req AllocateRequest) (*N
 	if err := m.createTAPDevice(tap, network.Bridge, network.Isolated); err != nil {
 		return nil, fmt.Errorf("create TAP device: %w", err)
 	}
+	m.recordTAPOperation(ctx, "create")
 
 	log.InfoContext(ctx, "allocated network",
 		"instance_id", req.InstanceID,
@@ -111,6 +112,7 @@ func (m *manager) RecreateAllocation(ctx context.Context, instanceID string) err
 	if err := m.createTAPDevice(alloc.TAPDevice, network.Bridge, network.Isolated); err != nil {
 		return fmt.Errorf("create TAP device: %w", err)
 	}
+	m.recordTAPOperation(ctx, "create")
 
 	log.InfoContext(ctx, "recreated network for restore",
 		"instance_id", instanceID,
@@ -138,6 +140,8 @@ func (m *manager) ReleaseAllocation(ctx context.Context, alloc *Allocation) erro
 	// 1. Delete TAP device (best effort)
 	if err := m.deleteTAPDevice(alloc.TAPDevice); err != nil {
 		log.WarnContext(ctx, "failed to delete TAP device", "tap", alloc.TAPDevice, "error", err)
+	} else {
+		m.recordTAPOperation(ctx, "delete")
 	}
 
 	log.InfoContext(ctx, "released network",
@@ -270,4 +274,3 @@ func generateTAPName(instanceID string) string {
 	}
 	return TAPPrefix + strings.ToLower(shortID)
 }
-

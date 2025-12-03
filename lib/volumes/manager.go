@@ -6,11 +6,14 @@ import (
 	"io"
 	"os"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/nrednav/cuid2"
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/paths"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 )
 
 // Manager provides volume lifecycle operations
@@ -34,20 +37,126 @@ type Manager interface {
 	GetVolumePath(id string) string
 }
 
+// Metrics holds the metrics instruments for volume operations.
+type Metrics struct {
+	createDuration metric.Float64Histogram
+}
+
 type manager struct {
 	paths                 *paths.Paths
 	maxTotalVolumeStorage int64    // Maximum total volume storage in bytes (0 = unlimited)
 	volumeLocks           sync.Map // map[string]*sync.RWMutex - per-volume locks
+	metrics               *Metrics
 }
 
-// NewManager creates a new volumes manager
-// maxTotalVolumeStorage is the maximum total volume storage in bytes (0 = unlimited)
-func NewManager(p *paths.Paths, maxTotalVolumeStorage int64) Manager {
-	return &manager{
+// NewManager creates a new volumes manager.
+// maxTotalVolumeStorage is the maximum total volume storage in bytes (0 = unlimited).
+// If meter is nil, metrics are disabled.
+func NewManager(p *paths.Paths, maxTotalVolumeStorage int64, meter metric.Meter) Manager {
+	m := &manager{
 		paths:                 p,
 		maxTotalVolumeStorage: maxTotalVolumeStorage,
 		volumeLocks:           sync.Map{},
 	}
+
+	// Initialize metrics if meter is provided
+	if meter != nil {
+		metrics, err := newVolumeMetrics(meter, m)
+		if err == nil {
+			m.metrics = metrics
+		}
+	}
+
+	return m
+}
+
+// newVolumeMetrics creates and registers all volume metrics.
+func newVolumeMetrics(meter metric.Meter, m *manager) (*Metrics, error) {
+	createDuration, err := meter.Float64Histogram(
+		"hypeman_volumes_create_duration_seconds",
+		metric.WithDescription("Time to create a volume"),
+		metric.WithUnit("s"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	// Register observable gauges
+	volumesTotal, err := meter.Int64ObservableGauge(
+		"hypeman_volumes_total",
+		metric.WithDescription("Total number of volumes"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	allocatedBytes, err := meter.Int64ObservableGauge(
+		"hypeman_volumes_allocated_bytes",
+		metric.WithDescription("Total allocated/provisioned volume size in bytes"),
+		metric.WithUnit("By"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	usedBytes, err := meter.Int64ObservableGauge(
+		"hypeman_volumes_used_bytes",
+		metric.WithDescription("Actual disk space consumed by volumes in bytes"),
+		metric.WithUnit("By"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = meter.RegisterCallback(
+		func(ctx context.Context, o metric.Observer) error {
+			volumes, err := m.ListVolumes(ctx)
+			if err != nil {
+				return nil
+			}
+
+			o.ObserveInt64(volumesTotal, int64(len(volumes)))
+
+			var totalAllocated, totalUsed int64
+			for _, vol := range volumes {
+				// Allocated = provisioned size in GB
+				totalAllocated += int64(vol.SizeGb) * 1024 * 1024 * 1024
+
+				// Used = actual disk blocks consumed (for sparse files)
+				diskPath := m.paths.VolumeData(vol.Id)
+				if stat, err := os.Stat(diskPath); err == nil {
+					// Get actual blocks used via syscall
+					if sysStat, ok := stat.Sys().(*syscall.Stat_t); ok {
+						totalUsed += sysStat.Blocks * 512 // Blocks are in 512-byte units
+					}
+				}
+			}
+
+			o.ObserveInt64(allocatedBytes, totalAllocated)
+			o.ObserveInt64(usedBytes, totalUsed)
+			return nil
+		},
+		volumesTotal,
+		allocatedBytes,
+		usedBytes,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Metrics{
+		createDuration: createDuration,
+	}, nil
+}
+
+// recordCreateDuration records the volume creation duration.
+func (m *manager) recordCreateDuration(ctx context.Context, start time.Time, status string) {
+	if m.metrics == nil {
+		return
+	}
+	duration := time.Since(start).Seconds()
+	m.metrics.createDuration.Record(ctx, duration,
+		metric.WithAttributes(attribute.String("status", status)))
 }
 
 // getVolumeLock returns or creates a lock for a specific volume
@@ -92,6 +201,8 @@ func (m *manager) calculateTotalVolumeStorage(ctx context.Context) (int64, error
 
 // CreateVolume creates a new volume
 func (m *manager) CreateVolume(ctx context.Context, req CreateVolumeRequest) (*Volume, error) {
+	start := time.Now()
+
 	// Generate or use provided ID
 	id := cuid2.Generate()
 	if req.Id != nil && *req.Id != "" {
@@ -145,12 +256,15 @@ func (m *manager) CreateVolume(ctx context.Context, req CreateVolumeRequest) (*V
 		return nil, err
 	}
 
+	m.recordCreateDuration(ctx, start, "success")
 	return m.metadataToVolume(meta), nil
 }
 
 // CreateVolumeFromArchive creates a new volume pre-populated with content from a tar.gz archive.
 // The archive is safely extracted with size limits to prevent tar bombs.
 func (m *manager) CreateVolumeFromArchive(ctx context.Context, req CreateVolumeFromArchiveRequest, archive io.Reader) (*Volume, error) {
+	start := time.Now()
+
 	// Generate or use provided ID
 	id := cuid2.Generate()
 	if req.Id != nil && *req.Id != "" {
@@ -223,6 +337,7 @@ func (m *manager) CreateVolumeFromArchive(ctx context.Context, req CreateVolumeF
 		return nil, err
 	}
 
+	m.recordCreateDuration(ctx, start, "success")
 	return m.metadataToVolume(meta), nil
 }
 

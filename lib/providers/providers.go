@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
 
 	"github.com/c2h5oh/datasize"
 	"github.com/onkernel/hypeman/cmd/api/config"
@@ -17,11 +16,10 @@ import (
 	"github.com/onkernel/hypeman/lib/volumes"
 )
 
-// ProvideLogger provides a structured logger
+// ProvideLogger provides a structured logger with subsystem-specific levels
 func ProvideLogger() *slog.Logger {
-	return slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
-	}))
+	cfg := logger.NewConfig()
+	return logger.NewSubsystemLogger(logger.SubsystemAPI, cfg)
 }
 
 // ProvideContext provides a context with logger attached
@@ -41,7 +39,7 @@ func ProvidePaths(cfg *config.Config) *paths.Paths {
 
 // ProvideImageManager provides the image manager
 func ProvideImageManager(p *paths.Paths, cfg *config.Config) (images.Manager, error) {
-	return images.NewManager(p, cfg.MaxConcurrentBuilds)
+	return images.NewManager(p, cfg.MaxConcurrentBuilds, nil)
 }
 
 // ProvideSystemManager provides the system manager
@@ -51,7 +49,7 @@ func ProvideSystemManager(p *paths.Paths) system.Manager {
 
 // ProvideNetworkManager provides the network manager
 func ProvideNetworkManager(p *paths.Paths, cfg *config.Config) network.Manager {
-	return network.NewManager(p, cfg)
+	return network.NewManager(p, cfg, nil)
 }
 
 // ProvideInstanceManager provides the instance manager
@@ -90,7 +88,7 @@ func ProvideInstanceManager(p *paths.Paths, cfg *config.Config, imageManager ima
 		MaxTotalMemory:       maxTotalMemory,
 	}
 
-	return instances.NewManager(p, imageManager, systemManager, networkManager, volumeManager, limits), nil
+	return instances.NewManager(p, imageManager, systemManager, networkManager, volumeManager, limits, nil, nil), nil
 }
 
 // ProvideVolumeManager provides the volume manager
@@ -105,5 +103,5 @@ func ProvideVolumeManager(p *paths.Paths, cfg *config.Config) (volumes.Manager, 
 		maxTotalVolumeStorage = int64(storageSize)
 	}
 
-	return volumes.NewManager(p, maxTotalVolumeStorage), nil
+	return volumes.NewManager(p, maxTotalVolumeStorage, nil), nil
 }
