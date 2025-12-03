@@ -18,8 +18,6 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
 	"go.opentelemetry.io/otel/trace"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 // Config holds OpenTelemetry configuration.
@@ -70,17 +68,14 @@ func Init(ctx context.Context, cfg Config) (*Provider, func(context.Context) err
 		return nil, nil, fmt.Errorf("create resource: %w", err)
 	}
 
-	// Setup gRPC connection options
-	var dialOpts []grpc.DialOption
-	if cfg.Insecure {
-		dialOpts = append(dialOpts, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	}
-
 	// Create trace exporter
-	traceExporter, err := otlptracegrpc.New(ctx,
+	traceOpts := []otlptracegrpc.Option{
 		otlptracegrpc.WithEndpoint(cfg.Endpoint),
-		otlptracegrpc.WithDialOption(dialOpts...),
-	)
+	}
+	if cfg.Insecure {
+		traceOpts = append(traceOpts, otlptracegrpc.WithInsecure())
+	}
+	traceExporter, err := otlptracegrpc.New(ctx, traceOpts...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("create trace exporter: %w", err)
 	}
@@ -92,10 +87,13 @@ func Init(ctx context.Context, cfg Config) (*Provider, func(context.Context) err
 	)
 
 	// Create metric exporter
-	metricExporter, err := otlpmetricgrpc.New(ctx,
+	metricOpts := []otlpmetricgrpc.Option{
 		otlpmetricgrpc.WithEndpoint(cfg.Endpoint),
-		otlpmetricgrpc.WithDialOption(dialOpts...),
-	)
+	}
+	if cfg.Insecure {
+		metricOpts = append(metricOpts, otlpmetricgrpc.WithInsecure())
+	}
+	metricExporter, err := otlpmetricgrpc.New(ctx, metricOpts...)
 	if err != nil {
 		tracerProvider.Shutdown(ctx)
 		return nil, nil, fmt.Errorf("create metric exporter: %w", err)
