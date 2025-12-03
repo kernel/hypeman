@@ -152,24 +152,24 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "histogram_quantile(0.95, sum(rate(hypeman_instances_create_duration_seconds_bucket{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}[5m])) by (le))",
-          "legendFormat": "p95 create",
+          "expr": "hypeman_instances_create_duration_seconds_sum{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"} / hypeman_instances_create_duration_seconds_count{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}",
+          "legendFormat": "avg create",
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "histogram_quantile(0.95, sum(rate(hypeman_instances_restore_duration_seconds_bucket{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}[5m])) by (le))",
-          "legendFormat": "p95 restore",
+          "expr": "hypeman_instances_restore_duration_seconds_sum{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"} / hypeman_instances_restore_duration_seconds_count{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}",
+          "legendFormat": "avg restore",
           "refId": "B"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "histogram_quantile(0.95, sum(rate(hypeman_instances_standby_duration_seconds_bucket{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}[5m])) by (le))",
-          "legendFormat": "p95 standby",
+          "expr": "hypeman_instances_standby_duration_seconds_sum{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"} / hypeman_instances_standby_duration_seconds_count{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}",
+          "legendFormat": "avg standby",
           "refId": "C"
         }
       ],
-      "title": "Instance Operation Latency (p95)",
+      "title": "Instance Operation Latency (avg)",
       "type": "timeseries",
       "fieldConfig": {
         "defaults": { "unit": "s" },
@@ -266,12 +266,12 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "histogram_quantile(0.95, sum(rate(hypeman_vmm_api_duration_seconds_bucket{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}[5m])) by (le, operation))",
-          "legendFormat": "p95 {{operation}}",
+          "expr": "hypeman_vmm_api_duration_seconds_sum{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"} / hypeman_vmm_api_duration_seconds_count{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}",
+          "legendFormat": "avg {{operation}}",
           "refId": "A"
         }
       ],
-      "title": "VMM API Latency (p95)",
+      "title": "VMM API Latency (avg)",
       "type": "timeseries",
       "fieldConfig": {
         "defaults": { "unit": "s" },
@@ -312,18 +312,18 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "histogram_quantile(0.95, sum(rate(hypeman_images_build_duration_seconds_bucket{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}[5m])) by (le))",
-          "legendFormat": "p95 build",
+          "expr": "hypeman_images_build_duration_seconds_sum{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"} / hypeman_images_build_duration_seconds_count{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}",
+          "legendFormat": "avg build",
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "histogram_quantile(0.95, sum(rate(hypeman_volumes_create_duration_seconds_bucket{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}[5m])) by (le))",
-          "legendFormat": "p95 volume create",
+          "expr": "hypeman_volumes_create_duration_seconds_sum{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"} / hypeman_volumes_create_duration_seconds_count{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}",
+          "legendFormat": "avg volume create",
           "refId": "B"
         }
       ],
-      "title": "Image Build & Volume Create (p95)",
+      "title": "Image Build & Volume Create (avg)",
       "type": "timeseries",
       "fieldConfig": {
         "defaults": { "unit": "s" },
