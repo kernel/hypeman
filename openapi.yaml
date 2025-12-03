@@ -949,6 +949,74 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
   
+  /volumes/from-archive:
+    post:
+      summary: Create volume from tar.gz archive
+      description: |
+        Creates a new volume pre-populated with content from an uploaded tar.gz archive.
+        The archive is securely extracted with size limits to prevent tar bombs.
+      operationId: createVolumeFromArchive
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - name
+                - size_gb
+                - content
+              properties:
+                name:
+                  type: string
+                  description: Volume name
+                  example: my-data-volume
+                size_gb:
+                  type: integer
+                  description: Maximum size in GB (extraction fails if content exceeds this)
+                  example: 10
+                id:
+                  type: string
+                  description: Optional custom volume ID (auto-generated if not provided)
+                  example: vol-data-1
+                content:
+                  type: string
+                  format: binary
+                  description: tar.gz archive file containing the volume content
+      responses:
+        201:
+          description: Volume created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Volume"
+        400:
+          description: Bad request (invalid form data or archive too large)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        401:
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Conflict - volume with this ID already exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  
   /volumes/{id}:
     get:
       summary: Get volume details

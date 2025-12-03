@@ -2,9 +2,8 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"net/http"
+	"io"
 	"strconv"
 
 	"github.com/onkernel/hypeman/lib/logger"
@@ -160,92 +159,125 @@ func volumeToOAPI(vol volumes.Volume) oapi.Volume {
 	return oapiVol
 }
 
-// CreateVolumeFromArchiveHandler handles POST /volumes/from-archive
-// This is a custom endpoint (outside OpenAPI spec) that accepts multipart form data
-// with a tar.gz file to create a pre-populated volume.
-//
-// Form fields:
-//   - name: volume name (required)
-//   - size_gb: maximum size in GB (required)
-//   - id: optional custom volume ID
-//   - content: tar.gz file (required)
-func (s *ApiService) CreateVolumeFromArchiveHandler(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+// CreateVolumeFromArchive creates a volume pre-populated with content from a tar.gz archive
+func (s *ApiService) CreateVolumeFromArchive(ctx context.Context, request oapi.CreateVolumeFromArchiveRequestObject) (oapi.CreateVolumeFromArchiveResponseObject, error) {
 	log := logger.FromContext(ctx)
 
-	// Parse multipart form (32MB max in memory, rest goes to temp files)
-	if err := r.ParseMultipartForm(32 << 20); err != nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid_form", "failed to parse multipart form: "+err.Error())
-		return
-	}
-
-	// Get required fields
-	name := r.FormValue("name")
-	if name == "" {
-		writeJSONError(w, http.StatusBadRequest, "missing_field", "name is required")
-		return
-	}
-
-	sizeGbStr := r.FormValue("size_gb")
-	if sizeGbStr == "" {
-		writeJSONError(w, http.StatusBadRequest, "missing_field", "size_gb is required")
-		return
-	}
-	sizeGb, err := strconv.Atoi(sizeGbStr)
-	if err != nil || sizeGb <= 0 {
-		writeJSONError(w, http.StatusBadRequest, "invalid_field", "size_gb must be a positive integer")
-		return
-	}
-
-	// Get optional ID
+	// Read the multipart form data from the request body
+	var name string
+	var sizeGb int
 	var id *string
-	if idVal := r.FormValue("id"); idVal != "" {
-		id = &idVal
-	}
+	var archiveReader io.Reader
 
-	// Get the archive file
-	file, _, err := r.FormFile("content")
-	if err != nil {
-		writeJSONError(w, http.StatusBadRequest, "missing_file", "content file is required")
-		return
-	}
-	defer file.Close()
-
-	// Create the volume
-	domainReq := volumes.CreateVolumeFromArchiveRequest{
-		Name:   name,
-		SizeGb: sizeGb,
-		Id:     id,
-	}
-
-	vol, err := s.VolumeManager.CreateVolumeFromArchive(ctx, domainReq, file)
-	if err != nil {
-		if errors.Is(err, volumes.ErrArchiveTooLarge) {
-			writeJSONError(w, http.StatusBadRequest, "archive_too_large", err.Error())
-			return
+	for {
+		part, err := request.Body.NextPart()
+		if err == io.EOF {
+			break
 		}
-		if errors.Is(err, volumes.ErrAlreadyExists) {
-			writeJSONError(w, http.StatusConflict, "already_exists", "volume with this ID already exists")
-			return
+		if err != nil {
+			return oapi.CreateVolumeFromArchive400JSONResponse{
+				Code:    "invalid_form",
+				Message: "failed to parse multipart form: " + err.Error(),
+			}, nil
 		}
-		log.Error("failed to create volume from archive", "error", err, "name", name)
-		writeJSONError(w, http.StatusInternalServerError, "internal_error", "failed to create volume")
-		return
+
+		switch part.FormName() {
+		case "name":
+			data, err := io.ReadAll(part)
+			if err != nil {
+				return oapi.CreateVolumeFromArchive400JSONResponse{
+					Code:    "invalid_field",
+					Message: "failed to read name field",
+				}, nil
+			}
+			name = string(data)
+		case "size_gb":
+			data, err := io.ReadAll(part)
+			if err != nil {
+				return oapi.CreateVolumeFromArchive400JSONResponse{
+					Code:    "invalid_field",
+					Message: "failed to read size_gb field",
+				}, nil
+			}
+			sizeGb, err = strconv.Atoi(string(data))
+			if err != nil || sizeGb <= 0 {
+				return oapi.CreateVolumeFromArchive400JSONResponse{
+					Code:    "invalid_field",
+					Message: "size_gb must be a positive integer",
+				}, nil
+			}
+		case "id":
+			data, err := io.ReadAll(part)
+			if err != nil {
+				return oapi.CreateVolumeFromArchive400JSONResponse{
+					Code:    "invalid_field",
+					Message: "failed to read id field",
+				}, nil
+			}
+			idStr := string(data)
+			if idStr != "" {
+				id = &idStr
+			}
+		case "content":
+			archiveReader = part
+			// Process the archive immediately while we have the reader
+			if name == "" {
+				return oapi.CreateVolumeFromArchive400JSONResponse{
+					Code:    "missing_field",
+					Message: "name is required",
+				}, nil
+			}
+			if sizeGb <= 0 {
+				return oapi.CreateVolumeFromArchive400JSONResponse{
+					Code:    "missing_field",
+					Message: "size_gb is required",
+				}, nil
+			}
+
+			// Create the volume
+			domainReq := volumes.CreateVolumeFromArchiveRequest{
+				Name:   name,
+				SizeGb: sizeGb,
+				Id:     id,
+			}
+
+			vol, err := s.VolumeManager.CreateVolumeFromArchive(ctx, domainReq, archiveReader)
+			if err != nil {
+				if errors.Is(err, volumes.ErrArchiveTooLarge) {
+					return oapi.CreateVolumeFromArchive400JSONResponse{
+						Code:    "archive_too_large",
+						Message: err.Error(),
+					}, nil
+				}
+				if errors.Is(err, volumes.ErrAlreadyExists) {
+					return oapi.CreateVolumeFromArchive409JSONResponse{
+						Code:    "already_exists",
+						Message: "volume with this ID already exists",
+					}, nil
+				}
+				log.Error("failed to create volume from archive", "error", err, "name", name)
+				return oapi.CreateVolumeFromArchive500JSONResponse{
+					Code:    "internal_error",
+					Message: "failed to create volume",
+				}, nil
+			}
+
+			return oapi.CreateVolumeFromArchive201JSONResponse(volumeToOAPI(*vol)), nil
+		}
 	}
 
-	// Return success response
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(volumeToOAPI(*vol))
-}
+	// If we get here without processing content, it means content was not provided
+	if archiveReader == nil {
+		return oapi.CreateVolumeFromArchive400JSONResponse{
+			Code:    "missing_file",
+			Message: "content file is required",
+		}, nil
+	}
 
-// writeJSONError writes a JSON error response
-func writeJSONError(w http.ResponseWriter, status int, code, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]string{
-		"code":    code,
-		"message": message,
-	})
+	// Should not reach here, but return error just in case
+	return oapi.CreateVolumeFromArchive500JSONResponse{
+		Code:    "internal_error",
+		Message: "unexpected error processing request",
+	}, nil
 }
 

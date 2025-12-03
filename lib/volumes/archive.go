@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	securejoin "github.com/cyphar/filepath-securejoin"
 )
@@ -43,11 +44,16 @@ func validateArchivePath(name string) error {
 // ExtractTarGz extracts a tar.gz archive to destDir, aborting if the extracted
 // content exceeds maxBytes. Returns the total extracted bytes on success.
 //
-// Safety measures against adversarial archives:
-// - Rejects archives containing path traversal attempts or absolute paths
-// - Tracks cumulative extracted size, aborts immediately if limit exceeded
-// - Uses securejoin for safe path joining (defense in depth)
-// - Uses io.LimitReader as secondary protection when copying files
+// Security considerations (runs with elevated privileges):
+// This function implements multiple layers of defense against malicious archives:
+// 1. Path validation - rejects absolute paths and path traversal attempts upfront
+// 2. securejoin - safe path joining that resolves symlinks within the root
+// 3. O_NOFOLLOW - prevents following symlinks when creating files (defense in depth)
+// 4. Size limiting - tracks cumulative size and aborts if limit exceeded
+// 5. io.LimitReader - secondary protection when copying file contents
+//
+// The destination directory should be a freshly created temp directory to minimize
+// TOCTOU attack surface. The same approach is used by umoci and containerd.
 func ExtractTarGz(r io.Reader, destDir string, maxBytes int64) (int64, error) {
 	// Create destination directory
 	if err := os.MkdirAll(destDir, 0755); err != nil {
@@ -80,7 +86,7 @@ func ExtractTarGz(r io.Reader, destDir string, maxBytes int64) (int64, error) {
 			return extractedBytes, err
 		}
 
-		// Use securejoin for safe path joining (defense in depth)
+		// Use securejoin for safe path joining (resolves symlinks safely within root)
 		targetPath, err := securejoin.SecureJoin(destDir, header.Name)
 		if err != nil {
 			return extractedBytes, fmt.Errorf("%w: %v", ErrInvalidArchivePath, err)
@@ -103,8 +109,10 @@ func ExtractTarGz(r io.Reader, destDir string, maxBytes int64) (int64, error) {
 				return extractedBytes, fmt.Errorf("create parent dir: %w", err)
 			}
 
-			// Create file
-			f, err := os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(header.Mode))
+			// Create file with O_NOFOLLOW to prevent symlink attacks
+			// syscall.O_NOFOLLOW ensures we don't follow a symlink if one was
+			// maliciously created at targetPath during extraction
+			f, err := os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC|syscall.O_NOFOLLOW, os.FileMode(header.Mode))
 			if err != nil {
 				return extractedBytes, fmt.Errorf("create file %s: %w", header.Name, err)
 			}

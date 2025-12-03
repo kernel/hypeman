@@ -230,3 +230,185 @@ func TestExtractTarGz_PreventsTarBomb(t *testing.T) {
 	assert.ErrorIs(t, err, ErrArchiveTooLarge)
 }
 
+// =============================================================================
+// Attack scenario tests - verify defense against common tar-based attacks
+// =============================================================================
+
+func TestExtractTarGz_Attack_DotDotSlashVariants(t *testing.T) {
+	// Test various path traversal patterns that attackers commonly try
+	testCases := []struct {
+		name     string
+		path     string
+		wantErr  bool
+	}{
+		{"double dot basic", "../etc/passwd", true},
+		{"double dot nested", "foo/../../etc/passwd", true},
+		{"double dot at start", "..\\etc\\passwd", true}, // Windows-style
+		{"hidden in middle", "safe/dir/../../../etc/passwd", true},
+		{"percent encoded slashes", "foo%2F..%2Fbar/file.txt", false}, // Percent signs are literal chars in paths
+		{"safe relative path", "subdir/file.txt", false},
+		{"safe nested path", "a/b/c/d/file.txt", false},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			gw := gzip.NewWriter(&buf)
+			tw := tar.NewWriter(gw)
+
+			hdr := &tar.Header{
+				Name: tc.path,
+				Mode: 0644,
+				Size: 4,
+			}
+			require.NoError(t, tw.WriteHeader(hdr))
+			_, err := tw.Write([]byte("test"))
+			require.NoError(t, err)
+
+			require.NoError(t, tw.Close())
+			require.NoError(t, gw.Close())
+
+			destDir := t.TempDir()
+			_, err = ExtractTarGz(&buf, destDir, 1024*1024)
+
+			if tc.wantErr {
+				require.Error(t, err, "expected error for path: %s", tc.path)
+				assert.ErrorIs(t, err, ErrInvalidArchivePath)
+			} else {
+				require.NoError(t, err, "unexpected error for path: %s", tc.path)
+			}
+		})
+	}
+}
+
+func TestExtractTarGz_Attack_SymlinkChain(t *testing.T) {
+	// Attack: Create a chain of symlinks trying to escape
+	// link1 -> subdir, subdir/link2 -> ../.. (escape attempt)
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gw)
+
+	// Create a directory first
+	require.NoError(t, tw.WriteHeader(&tar.Header{
+		Name:     "subdir/",
+		Mode:     0755,
+		Typeflag: tar.TypeDir,
+	}))
+
+	// Create a symlink that tries to escape via relative path
+	require.NoError(t, tw.WriteHeader(&tar.Header{
+		Name:     "subdir/escape",
+		Mode:     0777,
+		Typeflag: tar.TypeSymlink,
+		Linkname: "../../etc/passwd",
+	}))
+
+	require.NoError(t, tw.Close())
+	require.NoError(t, gw.Close())
+
+	destDir := t.TempDir()
+	_, err := ExtractTarGz(&buf, destDir, 1024*1024)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidArchivePath)
+}
+
+func TestExtractTarGz_Attack_HardlinkToOutside(t *testing.T) {
+	// Attack: Hard link pointing to a file outside destDir
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gw)
+
+	hdr := &tar.Header{
+		Name:     "evil_hardlink",
+		Mode:     0644,
+		Typeflag: tar.TypeLink,
+		Linkname: "../../../etc/passwd",
+	}
+	require.NoError(t, tw.WriteHeader(hdr))
+
+	require.NoError(t, tw.Close())
+	require.NoError(t, gw.Close())
+
+	destDir := t.TempDir()
+	_, err := ExtractTarGz(&buf, destDir, 1024*1024)
+
+	// Hard link with path traversal in target should fail
+	require.Error(t, err)
+}
+
+func TestExtractTarGz_Attack_DeviceFiles(t *testing.T) {
+	// Attack: Try to create device files (should be skipped, not error)
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gw)
+
+	// Try to create a character device (like /dev/null)
+	hdr := &tar.Header{
+		Name:     "fake_device",
+		Mode:     0666,
+		Typeflag: tar.TypeChar,
+		Devmajor: 1,
+		Devminor: 3,
+	}
+	require.NoError(t, tw.WriteHeader(hdr))
+
+	// Also add a regular file to verify extraction continues
+	hdr = &tar.Header{
+		Name: "normal.txt",
+		Mode: 0644,
+		Size: 5,
+	}
+	require.NoError(t, tw.WriteHeader(hdr))
+	_, err := tw.Write([]byte("hello"))
+	require.NoError(t, err)
+
+	require.NoError(t, tw.Close())
+	require.NoError(t, gw.Close())
+
+	destDir := t.TempDir()
+	_, err = ExtractTarGz(&buf, destDir, 1024*1024)
+
+	// Should succeed - device files are skipped
+	require.NoError(t, err)
+
+	// Verify normal file was created
+	content, err := os.ReadFile(filepath.Join(destDir, "normal.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "hello", string(content))
+
+	// Verify device file was NOT created
+	_, err = os.Stat(filepath.Join(destDir, "fake_device"))
+	assert.True(t, os.IsNotExist(err), "device file should not be created")
+}
+
+func TestExtractTarGz_Attack_ZeroSizeClaimLargeContent(t *testing.T) {
+	// Attack: Header claims 0 size but contains large content
+	// (malformed tar trying to bypass size checks)
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gw)
+
+	// Create header with misleading size
+	hdr := &tar.Header{
+		Name: "misleading.txt",
+		Mode: 0644,
+		Size: 10, // Claim small size
+	}
+	require.NoError(t, tw.WriteHeader(hdr))
+	// Write exactly 10 bytes as claimed
+	_, err := tw.Write([]byte("0123456789"))
+	require.NoError(t, err)
+
+	require.NoError(t, tw.Close())
+	require.NoError(t, gw.Close())
+
+	destDir := t.TempDir()
+	// Set limit below the actual content
+	_, err = ExtractTarGz(&buf, destDir, 5)
+
+	// Should fail because even the claimed size exceeds limit
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrArchiveTooLarge)
+}
+
