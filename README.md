@@ -177,6 +177,8 @@ docker run -d --name lgtm \
   -p 127.0.0.1:3000:3000 \
   -p 127.0.0.1:4317:4317 \
   -p 127.0.0.1:4318:4318 \
+  -p 127.0.0.1:9090:9090 \
+  -p 127.0.0.1:4040:4040 \
   grafana/otel-lgtm:latest
 
 # If developing on a remote server, forward the port to your local machine:

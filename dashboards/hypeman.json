@@ -108,8 +108,8 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(http_server_request_duration_seconds_sum[5m]) / rate(http_server_request_duration_seconds_count[5m])",
-          "legendFormat": "{{http_route}}",
+          "expr": "rate(hypeman_http_request_duration_seconds_sum[5m]) / rate(hypeman_http_request_duration_seconds_count[5m])",
+          "legendFormat": "{{http_request_method}} {{http_route}}",
           "refId": "A"
         }
       ],
@@ -130,8 +130,8 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(http_server_request_duration_seconds_count[5m])",
-          "legendFormat": "{{http_route}} {{http_status_code}}",
+          "expr": "rate(hypeman_http_requests_total[5m])",
+          "legendFormat": "{{http_request_method}} {{http_route}} {{http_response_status_code}}",
           "refId": "A"
         }
       ],
@@ -306,14 +306,14 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "go_memstats_heap_inuse_bytes",
-          "legendFormat": "heap in use",
+          "expr": "go_memory_used_bytes",
+          "legendFormat": "memory used",
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "go_memstats_stack_inuse_bytes",
-          "legendFormat": "stack in use",
+          "expr": "go_memory_gc_goal_bytes",
+          "legendFormat": "GC goal",
           "refId": "B"
         }
       ],
@@ -334,7 +334,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "go_goroutines",
+          "expr": "go_goroutine_count",
           "legendFormat": "goroutines",
           "refId": "A"
         }
@@ -351,14 +351,14 @@
       {
         "current": { "selected": false, "text": "All", "value": "$__all" },
         "datasource": { "type": "prometheus", "uid": "prometheus" },
-        "definition": "label_values(hypeman_uptime_seconds, deployment_environment)",
+        "definition": "label_values(hypeman_uptime_seconds, deployment_environment_name)",
         "hide": 0,
         "includeAll": true,
         "label": "Environment",
         "multi": false,
         "name": "env",
         "options": [],
-        "query": { "query": "label_values(hypeman_uptime_seconds, deployment_environment)", "refId": "A" },
+        "query": { "query": "label_values(hypeman_uptime_seconds, deployment_environment_name)", "refId": "A" },
         "refresh": 1,
         "regex": "",
         "skipUrlSync": false,
@@ -392,4 +392,3 @@
   "version": 1,
   "weekStart": ""
 }
-
