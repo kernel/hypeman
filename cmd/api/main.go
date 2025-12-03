@@ -81,6 +81,11 @@ func run() error {
 		}
 	}
 
+	// Set global OTel log handler for logger package
+	if otelProvider != nil && otelProvider.LogHandler != nil {
+		otel.SetGlobalLogHandler(otelProvider.LogHandler)
+	}
+
 	// Initialize app with wire
 	app, cleanup, err := initializeApp()
 	if err != nil {

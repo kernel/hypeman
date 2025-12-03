@@ -4,15 +4,19 @@ package otel
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	goruntime "runtime"
 	"time"
 
+	"go.opentelemetry.io/contrib/bridges/otelslog"
 	otelruntime "go.opentelemetry.io/contrib/instrumentation/runtime"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/propagation"
+	sdklog "go.opentelemetry.io/otel/sdk/log"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -35,8 +39,10 @@ type Config struct {
 type Provider struct {
 	TracerProvider *sdktrace.TracerProvider
 	MeterProvider  *sdkmetric.MeterProvider
+	LoggerProvider *sdklog.LoggerProvider
 	Tracer         trace.Tracer
 	Meter          metric.Meter
+	LogHandler     slog.Handler
 	startTime      time.Time
 }
 
@@ -105,6 +111,26 @@ func Init(ctx context.Context, cfg Config) (*Provider, func(context.Context) err
 		sdkmetric.WithResource(res),
 	)
 
+	// Create log exporter
+	logOpts := []otlploggrpc.Option{
+		otlploggrpc.WithEndpoint(cfg.Endpoint),
+	}
+	if cfg.Insecure {
+		logOpts = append(logOpts, otlploggrpc.WithInsecure())
+	}
+	logExporter, err := otlploggrpc.New(ctx, logOpts...)
+	if err != nil {
+		tracerProvider.Shutdown(ctx)
+		meterProvider.Shutdown(ctx)
+		return nil, nil, fmt.Errorf("create log exporter: %w", err)
+	}
+
+	// Create logger provider
+	loggerProvider := sdklog.NewLoggerProvider(
+		sdklog.WithProcessor(sdklog.NewBatchProcessor(logExporter)),
+		sdklog.WithResource(res),
+	)
+
 	// Set global providers
 	otel.SetTracerProvider(tracerProvider)
 	otel.SetMeterProvider(meterProvider)
@@ -117,14 +143,20 @@ func Init(ctx context.Context, cfg Config) (*Provider, func(context.Context) err
 	if err := otelruntime.Start(otelruntime.WithMeterProvider(meterProvider)); err != nil {
 		tracerProvider.Shutdown(ctx)
 		meterProvider.Shutdown(ctx)
+		loggerProvider.Shutdown(ctx)
 		return nil, nil, fmt.Errorf("start runtime metrics: %w", err)
 	}
+
+	// Create slog handler that bridges to OTel
+	logHandler := otelslog.NewHandler(cfg.ServiceName, otelslog.WithLoggerProvider(loggerProvider))
 
 	provider := &Provider{
 		TracerProvider: tracerProvider,
 		MeterProvider:  meterProvider,
+		LoggerProvider: loggerProvider,
 		Tracer:         tracerProvider.Tracer(cfg.ServiceName),
 		Meter:          meterProvider.Meter(cfg.ServiceName),
+		LogHandler:     logHandler,
 		startTime:      time.Now(),
 	}
 
@@ -132,6 +164,7 @@ func Init(ctx context.Context, cfg Config) (*Provider, func(context.Context) err
 	if err := provider.registerSystemMetrics(cfg); err != nil {
 		tracerProvider.Shutdown(ctx)
 		meterProvider.Shutdown(ctx)
+		loggerProvider.Shutdown(ctx)
 		return nil, nil, fmt.Errorf("register system metrics: %w", err)
 	}
 
@@ -142,6 +175,9 @@ func Init(ctx context.Context, cfg Config) (*Provider, func(context.Context) err
 		}
 		if err := meterProvider.Shutdown(ctx); err != nil {
 			errs = append(errs, fmt.Errorf("shutdown meter: %w", err))
+		}
+		if err := loggerProvider.Shutdown(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("shutdown logger: %w", err))
 		}
 		if len(errs) > 0 {
 			return fmt.Errorf("shutdown errors: %v", errs)
@@ -213,4 +249,17 @@ func (p *Provider) MeterFor(subsystem string) metric.Meter {
 // GoVersion returns the Go version used to build the binary.
 func GoVersion() string {
 	return goruntime.Version()
+}
+
+// globalLogHandler holds the OTel log handler for use by the logger package.
+var globalLogHandler slog.Handler
+
+// SetGlobalLogHandler sets the global OTel log handler.
+func SetGlobalLogHandler(h slog.Handler) {
+	globalLogHandler = h
+}
+
+// GetGlobalLogHandler returns the global OTel log handler.
+func GetGlobalLogHandler() slog.Handler {
+	return globalLogHandler
 }

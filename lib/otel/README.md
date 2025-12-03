@@ -4,9 +4,10 @@ Provides OpenTelemetry initialization and metric definitions for Hypeman.
 
 ## Features
 
-- OTLP export for traces and metrics (gRPC)
+- OTLP export for traces, metrics, and logs (gRPC)
 - Runtime metrics (Go GC, goroutines, memory)
 - Application-specific metrics per subsystem
+- Log bridging from slog to OTel (viewable in Grafana/Loki)
 - Graceful degradation (failures don't crash the app)
 
 ## Configuration
@@ -89,6 +90,15 @@ provider, shutdown, err := otel.Init(ctx, otel.Config{
 })
 defer shutdown(ctx)
 
-meter := provider.Meter // Use for creating metrics
+meter := provider.Meter       // Use for creating metrics
+tracer := provider.Tracer     // Use for creating traces
+logHandler := provider.LogHandler // Use with slog for logs to OTel
 ```
+
+## Logs
+
+Logs are exported via the OTel log bridge (`otelslog`). When OTel is enabled, all slog logs are sent to Loki (via OTLP) and include:
+- `subsystem` attribute (API, IMAGES, INSTANCES, etc.)
+- `trace_id` and `span_id` when available
+- Service attributes (name, instance, environment)
 

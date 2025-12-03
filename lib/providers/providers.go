@@ -11,6 +11,7 @@ import (
 	"github.com/onkernel/hypeman/lib/instances"
 	"github.com/onkernel/hypeman/lib/logger"
 	"github.com/onkernel/hypeman/lib/network"
+	hypemanotel "github.com/onkernel/hypeman/lib/otel"
 	"github.com/onkernel/hypeman/lib/paths"
 	"github.com/onkernel/hypeman/lib/system"
 	"github.com/onkernel/hypeman/lib/volumes"
@@ -20,7 +21,8 @@ import (
 // ProvideLogger provides a structured logger with subsystem-specific levels
 func ProvideLogger() *slog.Logger {
 	cfg := logger.NewConfig()
-	return logger.NewSubsystemLogger(logger.SubsystemAPI, cfg)
+	otelHandler := hypemanotel.GetGlobalLogHandler()
+	return logger.NewSubsystemLogger(logger.SubsystemAPI, cfg, otelHandler)
 }
 
 // ProvideContext provides a context with logger attached

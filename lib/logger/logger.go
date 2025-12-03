@@ -101,16 +101,29 @@ func NewLogger(cfg Config) *slog.Logger {
 }
 
 // NewSubsystemLogger creates a logger for a specific subsystem with its configured level.
-func NewSubsystemLogger(subsystem string, cfg Config) *slog.Logger {
+// If otelHandler is provided, logs will be sent both to stdout and to OTel.
+func NewSubsystemLogger(subsystem string, cfg Config, otelHandler slog.Handler) *slog.Logger {
 	level := cfg.LevelFor(subsystem)
-	handler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+	jsonHandler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		Level:     level,
 		AddSource: cfg.AddSource,
 	})
-	// Wrap with trace context handler if we want trace IDs in logs
+
+	var baseHandler slog.Handler
+	if otelHandler != nil {
+		// Use multi-handler to write to both stdout and OTel
+		baseHandler = &multiHandler{
+			handlers: []slog.Handler{jsonHandler, otelHandler},
+		}
+	} else {
+		baseHandler = jsonHandler
+	}
+
+	// Wrap with trace context handler for trace IDs in logs
 	wrappedHandler := &traceContextHandler{
-		Handler:   handler,
+		Handler:   baseHandler,
 		subsystem: subsystem,
+		level:     level,
 	}
 	return slog.New(wrappedHandler)
 }
@@ -119,6 +132,12 @@ func NewSubsystemLogger(subsystem string, cfg Config) *slog.Logger {
 type traceContextHandler struct {
 	slog.Handler
 	subsystem string
+	level     slog.Level
+}
+
+// Enabled reports whether the handler handles records at the given level.
+func (h *traceContextHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	return level >= h.level
 }
 
 // Handle adds trace_id and span_id from the context if available.
@@ -143,6 +162,7 @@ func (h *traceContextHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	return &traceContextHandler{
 		Handler:   h.Handler.WithAttrs(attrs),
 		subsystem: h.subsystem,
+		level:     h.level,
 	}
 }
 
@@ -151,7 +171,53 @@ func (h *traceContextHandler) WithGroup(name string) slog.Handler {
 	return &traceContextHandler{
 		Handler:   h.Handler.WithGroup(name),
 		subsystem: h.subsystem,
+		level:     h.level,
 	}
+}
+
+// multiHandler fans out log records to multiple handlers.
+type multiHandler struct {
+	handlers []slog.Handler
+}
+
+// Enabled returns true if any handler is enabled.
+func (m *multiHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	for _, h := range m.handlers {
+		if h.Enabled(ctx, level) {
+			return true
+		}
+	}
+	return false
+}
+
+// Handle writes the record to all handlers.
+func (m *multiHandler) Handle(ctx context.Context, r slog.Record) error {
+	for _, h := range m.handlers {
+		if h.Enabled(ctx, r.Level) {
+			if err := h.Handle(ctx, r); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// WithAttrs returns a new multiHandler with the given attributes.
+func (m *multiHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	handlers := make([]slog.Handler, len(m.handlers))
+	for i, h := range m.handlers {
+		handlers[i] = h.WithAttrs(attrs)
+	}
+	return &multiHandler{handlers: handlers}
+}
+
+// WithGroup returns a new multiHandler with the given group name.
+func (m *multiHandler) WithGroup(name string) slog.Handler {
+	handlers := make([]slog.Handler, len(m.handlers))
+	for i, h := range m.handlers {
+		handlers[i] = h.WithGroup(name)
+	}
+	return &multiHandler{handlers: handlers}
 }
 
 // AddToContext adds a logger to the context.

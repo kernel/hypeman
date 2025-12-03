@@ -192,7 +192,7 @@ echo "ENV=yourname" >> .env
 make dev
 ```
 
-Open http://localhost:3000 to view traces (Tempo) and metrics (Mimir) in Grafana.
+Open http://localhost:3000 to view traces (Tempo), metrics (Mimir), and logs (Loki) in Grafana.
 
 **Import the Hypeman dashboard:**
 1. Go to Dashboards → New → Import
