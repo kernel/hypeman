@@ -1,8 +1,10 @@
 package middleware
 
 import (
+	"bufio"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"time"
 
@@ -48,11 +50,8 @@ func (m *HTTPMetrics) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 
-		// Wrap response writer to capture status code
-		wrapped := &responseWriter{
-			ResponseWriter: w,
-			statusCode:     http.StatusOK,
-		}
+		// Wrap response writer to capture status code and bytes
+		wrapped := wrapResponseWriter(w)
 
 		// Process request
 		next.ServeHTTP(wrapped, r)
@@ -70,28 +69,12 @@ func (m *HTTPMetrics) Middleware(next http.Handler) http.Handler {
 		attrs := []attribute.KeyValue{
 			attribute.String("method", r.Method),
 			attribute.String("path", routePattern),
-			attribute.Int("status", wrapped.statusCode),
+			attribute.Int("status", wrapped.Status()),
 		}
 
 		m.requestsTotal.Add(r.Context(), 1, metric.WithAttributes(attrs...))
 		m.requestDuration.Record(r.Context(), duration, metric.WithAttributes(attrs...))
 	})
-}
-
-// responseWriter wraps http.ResponseWriter to capture the status code.
-type responseWriter struct {
-	http.ResponseWriter
-	statusCode int
-}
-
-func (rw *responseWriter) WriteHeader(code int) {
-	rw.statusCode = code
-	rw.ResponseWriter.WriteHeader(code)
-}
-
-// Unwrap provides access to the underlying ResponseWriter for http.ResponseController.
-func (rw *responseWriter) Unwrap() http.ResponseWriter {
-	return rw.ResponseWriter
 }
 
 // NoopHTTPMetrics returns a middleware that does nothing (for when OTel is disabled).
@@ -109,10 +92,7 @@ func AccessLogger(log *slog.Logger) func(http.Handler) http.Handler {
 			start := time.Now()
 
 			// Wrap response writer to capture status code and bytes
-			wrapped := &accessLogWriter{
-				ResponseWriter: w,
-				statusCode:     http.StatusOK,
-			}
+			wrapped := wrapResponseWriter(w)
 
 			// Process request
 			next.ServeHTTP(wrapped, r)
@@ -126,38 +106,16 @@ func AccessLogger(log *slog.Logger) func(http.Handler) http.Handler {
 			// Log with trace context from request context
 			duration := time.Since(start)
 			log.InfoContext(r.Context(),
-				fmt.Sprintf("%s %s %d %dB %dms", r.Method, routePattern, wrapped.statusCode, wrapped.bytesWritten, duration.Milliseconds()),
+				fmt.Sprintf("%s %s %d %dB %dms", r.Method, routePattern, wrapped.Status(), wrapped.BytesWritten(), duration.Milliseconds()),
 				"method", r.Method,
 				"path", routePattern,
-				"status", wrapped.statusCode,
-				"bytes", wrapped.bytesWritten,
+				"status", wrapped.Status(),
+				"bytes", wrapped.BytesWritten(),
 				"duration_ms", duration.Milliseconds(),
 				"remote_addr", r.RemoteAddr,
 			)
 		})
 	}
-}
-
-// accessLogWriter wraps http.ResponseWriter to capture status and bytes.
-type accessLogWriter struct {
-	http.ResponseWriter
-	statusCode   int
-	bytesWritten int
-}
-
-func (w *accessLogWriter) WriteHeader(code int) {
-	w.statusCode = code
-	w.ResponseWriter.WriteHeader(code)
-}
-
-func (w *accessLogWriter) Write(b []byte) (int, error) {
-	n, err := w.ResponseWriter.Write(b)
-	w.bytesWritten += n
-	return n, err
-}
-
-func (w *accessLogWriter) Unwrap() http.ResponseWriter {
-	return w.ResponseWriter
 }
 
 // NewAccessLogger creates an access logger with OTel handler if available.
@@ -175,4 +133,70 @@ func InjectLogger(log *slog.Logger) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+// responseWriter wraps http.ResponseWriter to capture status code and bytes written.
+// It also implements http.Flusher and http.Hijacker when the underlying writer supports them.
+type responseWriter struct {
+	http.ResponseWriter
+	statusCode   int
+	bytesWritten int
+	wroteHeader  bool
+}
+
+// wrapResponseWriter creates a new responseWriter wrapper.
+func wrapResponseWriter(w http.ResponseWriter) *responseWriter {
+	return &responseWriter{
+		ResponseWriter: w,
+		statusCode:     http.StatusOK,
+	}
+}
+
+// Status returns the HTTP status code.
+func (rw *responseWriter) Status() int {
+	return rw.statusCode
+}
+
+// BytesWritten returns the number of bytes written.
+func (rw *responseWriter) BytesWritten() int {
+	return rw.bytesWritten
+}
+
+// WriteHeader captures the status code before calling the underlying WriteHeader.
+func (rw *responseWriter) WriteHeader(code int) {
+	if !rw.wroteHeader {
+		rw.statusCode = code
+		rw.wroteHeader = true
+		rw.ResponseWriter.WriteHeader(code)
+	}
+}
+
+// Write captures bytes written and calls the underlying Write.
+func (rw *responseWriter) Write(b []byte) (int, error) {
+	if !rw.wroteHeader {
+		rw.WriteHeader(http.StatusOK)
+	}
+	n, err := rw.ResponseWriter.Write(b)
+	rw.bytesWritten += n
+	return n, err
+}
+
+// Unwrap provides access to the underlying ResponseWriter for http.ResponseController.
+func (rw *responseWriter) Unwrap() http.ResponseWriter {
+	return rw.ResponseWriter
+}
+
+// Flush implements http.Flusher. It delegates to the underlying writer if supported.
+func (rw *responseWriter) Flush() {
+	if f, ok := rw.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// Hijack implements http.Hijacker. It delegates to the underlying writer if supported.
+func (rw *responseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if h, ok := rw.ResponseWriter.(http.Hijacker); ok {
+		return h.Hijack()
+	}
+	return nil, nil, fmt.Errorf("underlying ResponseWriter does not implement http.Hijacker")
 }
