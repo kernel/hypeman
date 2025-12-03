@@ -151,6 +151,13 @@ func run() error {
 		}
 	}
 
+	// Create access logger with OTel handler for HTTP request logging with trace correlation
+	var accessLogHandler slog.Handler
+	if otelProvider != nil {
+		accessLogHandler = otelProvider.LogHandler
+	}
+	accessLogger := mw.NewAccessLogger(accessLogHandler)
+
 	// Load OpenAPI spec for request validation
 	spec, err := oapi.GetSwagger()
 	if err != nil {
@@ -162,11 +169,12 @@ func run() error {
 	spec.Servers = nil
 
 	// Custom exec endpoint (outside OpenAPI spec, uses WebSocket)
+	// Note: No otelchi here as WebSocket doesn't work well with tracing middleware
 	r.With(
 		middleware.RequestID,
 		middleware.RealIP,
-		middleware.Logger,
 		middleware.Recoverer,
+		mw.AccessLogger(accessLogger),
 		mw.JwtAuth(app.Config.JwtSecret),
 	).Get("/instances/{id}/exec", app.ApiService.ExecHandler)
 
@@ -175,13 +183,18 @@ func run() error {
 		// Common middleware
 		r.Use(middleware.RequestID)
 		r.Use(middleware.RealIP)
-		r.Use(middleware.Logger)
 		r.Use(middleware.Recoverer)
 
-		// OpenTelemetry middleware (inside group to avoid breaking WebSocket/SSE on other routes)
+		// OpenTelemetry tracing middleware FIRST (creates span context)
 		if cfg.OtelEnabled {
 			r.Use(otelchi.Middleware(cfg.OtelServiceName, otelchi.WithChiRoutes(r)))
 		}
+
+		// Inject logger into request context for handlers to use
+		r.Use(mw.InjectLogger(accessLogger))
+
+		// Access logger AFTER otelchi so trace context is available
+		r.Use(mw.AccessLogger(accessLogger))
 		if httpMetricsMw != nil {
 			// Skip HTTP metrics for SSE streaming endpoints (logs)
 			r.Use(func(next http.Handler) http.Handler {
