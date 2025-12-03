@@ -75,6 +75,10 @@ Hypeman can be configured using the following environment variables:
 | `DNS_SERVER` | DNS server IP address for VMs | `1.1.1.1` |
 | `MAX_CONCURRENT_BUILDS` | Maximum number of concurrent image builds | `1` |
 | `MAX_OVERLAY_SIZE` | Maximum size for overlay filesystem | `100GB` |
+| `OTEL_ENABLED` | Enable OpenTelemetry traces/metrics | `false` |
+| `OTEL_ENDPOINT` | OTLP gRPC endpoint | `localhost:4317` |
+| `LOG_LEVEL` | Default log level (debug, info, warn, error) | `info` |
+| `LOG_LEVEL_<SUBSYSTEM>` | Per-subsystem log level (API, IMAGES, INSTANCES, NETWORK, VOLUMES, VMM, SYSTEM, EXEC) | inherits default |
 
 **Important: Subnet Configuration**
 
@@ -158,6 +162,24 @@ make gen-jwt
 make dev
 ```
 The server will start on port 8080 (configurable via `PORT` environment variable).
+
+#### Local OpenTelemetry (optional)
+
+To collect traces and metrics locally, run the Grafana LGTM stack (Loki, Grafana, Tempo, Mimir):
+
+```bash
+# Start Grafana LGTM (UI at http://localhost:3000, login: admin/admin)
+docker run -d --name lgtm -p 3000:3000 -p 4317:4317 -p 4318:4318 \
+  grafana/otel-lgtm:latest
+
+# Enable OTel in .env
+echo "OTEL_ENABLED=true" >> .env
+
+# Restart dev server
+make dev
+```
+
+Open http://localhost:3000 to view traces (Tempo) and metrics (Mimir) in Grafana.
 
 ### Testing
 
