@@ -67,7 +67,7 @@ func TestVolumeMultiAttachReadOnly(t *testing.T) {
 	p := paths.New(tmpDir)
 
 	// Setup: prepare image and system files
-	imageManager, err := images.NewManager(p, 1)
+	imageManager, err := images.NewManager(p, 1, nil)
 	require.NoError(t, err)
 
 	t.Log("Pulling alpine image...")
@@ -92,7 +92,7 @@ func TestVolumeMultiAttachReadOnly(t *testing.T) {
 	t.Log("System files ready")
 
 	// Create volume
-	volumeManager := volumes.NewManager(p, 0)
+	volumeManager := volumes.NewManager(p, 0, nil)
 	t.Log("Creating volume...")
 	vol, err := volumeManager.CreateVolume(ctx, volumes.CreateVolumeRequest{
 		Name:   "shared-data",
@@ -250,7 +250,7 @@ func TestOverlayDiskCleanupOnDelete(t *testing.T) {
 	p := paths.New(tmpDir)
 
 	// Setup: prepare image and system files
-	imageManager, err := images.NewManager(p, 1)
+	imageManager, err := images.NewManager(p, 1, nil)
 	require.NoError(t, err)
 
 	t.Log("Pulling alpine image...")
@@ -272,7 +272,7 @@ func TestOverlayDiskCleanupOnDelete(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create volume
-	volumeManager := volumes.NewManager(p, 0)
+	volumeManager := volumes.NewManager(p, 0, nil)
 	vol, err := volumeManager.CreateVolume(ctx, volumes.CreateVolumeRequest{
 		Name:   "cleanup-test-vol",
 		SizeGb: 1,
@@ -359,7 +359,7 @@ func TestVolumeFromArchive(t *testing.T) {
 	p := paths.New(tmpDir)
 
 	// Setup: prepare image and system files
-	imageManager, err := images.NewManager(p, 1)
+	imageManager, err := images.NewManager(p, 1, nil)
 	require.NoError(t, err)
 
 	t.Log("Pulling alpine image...")
@@ -393,7 +393,7 @@ func TestVolumeFromArchive(t *testing.T) {
 	archive := createTestTarGz(t, testFiles)
 
 	// Create volume from archive
-	volumeManager := volumes.NewManager(p, 0)
+	volumeManager := volumes.NewManager(p, 0, nil)
 	t.Log("Creating volume from archive...")
 	vol, err := volumeManager.CreateVolumeFromArchive(ctx, volumes.CreateVolumeFromArchiveRequest{
 		Name:   "archive-data",

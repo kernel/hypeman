@@ -154,23 +154,23 @@ func createTestManager(t *testing.T, limits ResourceLimits) *manager {
 	cfg := &config.Config{DataDir: tmpDir}
 	p := paths.New(cfg.DataDir)
 
-	imageMgr, err := images.NewManager(p, 1)
+	imageMgr, err := images.NewManager(p, 1, nil)
 	require.NoError(t, err)
 
 	systemMgr := system.NewManager(p)
-	networkMgr := network.NewManager(p, cfg)
-	volumeMgr := volumes.NewManager(p, 0)
+	networkMgr := network.NewManager(p, cfg, nil)
+	volumeMgr := volumes.NewManager(p, 0, nil)
 
-	return NewManager(p, imageMgr, systemMgr, networkMgr, volumeMgr, limits).(*manager)
+	return NewManager(p, imageMgr, systemMgr, networkMgr, volumeMgr, limits, nil, nil).(*manager)
 }
 
 func TestResourceLimits_StructValues(t *testing.T) {
 	limits := ResourceLimits{
-		MaxOverlaySize:       10 * 1024 * 1024 * 1024,  // 10GB
+		MaxOverlaySize:       10 * 1024 * 1024 * 1024, // 10GB
 		MaxVcpusPerInstance:  4,
-		MaxMemoryPerInstance: 8 * 1024 * 1024 * 1024,   // 8GB
+		MaxMemoryPerInstance: 8 * 1024 * 1024 * 1024, // 8GB
 		MaxTotalVcpus:        16,
-		MaxTotalMemory:       32 * 1024 * 1024 * 1024,  // 32GB
+		MaxTotalMemory:       32 * 1024 * 1024 * 1024, // 32GB
 	}
 
 	assert.Equal(t, int64(10*1024*1024*1024), limits.MaxOverlaySize)
@@ -246,12 +246,12 @@ func TestAggregateLimits_EnforcedAtRuntime(t *testing.T) {
 	}
 
 	p := paths.New(tmpDir)
-	imageManager, err := images.NewManager(p, 1)
+	imageManager, err := images.NewManager(p, 1, nil)
 	require.NoError(t, err)
 
 	systemManager := system.NewManager(p)
-	networkManager := network.NewManager(p, cfg)
-	volumeManager := volumes.NewManager(p, 0)
+	networkManager := network.NewManager(p, cfg, nil)
+	volumeManager := volumes.NewManager(p, 0, nil)
 
 	// Set small aggregate limits:
 	// - MaxTotalVcpus: 2 (first VM gets 1, second wants 2 -> denied)
@@ -264,7 +264,7 @@ func TestAggregateLimits_EnforcedAtRuntime(t *testing.T) {
 		MaxTotalMemory:       2 * 1024 * 1024 * 1024,   // aggregate: only 2GB total
 	}
 
-	mgr := NewManager(p, imageManager, systemManager, networkManager, volumeManager, limits).(*manager)
+	mgr := NewManager(p, imageManager, systemManager, networkManager, volumeManager, limits, nil, nil).(*manager)
 
 	// Cleanup any orphaned processes on test end
 	t.Cleanup(func() {
@@ -375,4 +375,3 @@ func cleanupTestProcesses(t *testing.T, mgr *manager) {
 		}
 	}
 }
-

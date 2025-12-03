@@ -11,6 +11,7 @@ import (
 	"github.com/nrednav/cuid2"
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/paths"
+	"go.opentelemetry.io/otel/metric"
 )
 
 // Manager provides volume lifecycle operations
@@ -38,16 +39,28 @@ type manager struct {
 	paths                 *paths.Paths
 	maxTotalVolumeStorage int64    // Maximum total volume storage in bytes (0 = unlimited)
 	volumeLocks           sync.Map // map[string]*sync.RWMutex - per-volume locks
+	metrics               *Metrics
 }
 
-// NewManager creates a new volumes manager
-// maxTotalVolumeStorage is the maximum total volume storage in bytes (0 = unlimited)
-func NewManager(p *paths.Paths, maxTotalVolumeStorage int64) Manager {
-	return &manager{
+// NewManager creates a new volumes manager.
+// maxTotalVolumeStorage is the maximum total volume storage in bytes (0 = unlimited).
+// If meter is nil, metrics are disabled.
+func NewManager(p *paths.Paths, maxTotalVolumeStorage int64, meter metric.Meter) Manager {
+	m := &manager{
 		paths:                 p,
 		maxTotalVolumeStorage: maxTotalVolumeStorage,
 		volumeLocks:           sync.Map{},
 	}
+
+	// Initialize metrics if meter is provided
+	if meter != nil {
+		metrics, err := newVolumeMetrics(meter, m)
+		if err == nil {
+			m.metrics = metrics
+		}
+	}
+
+	return m
 }
 
 // getVolumeLock returns or creates a lock for a specific volume
@@ -92,6 +105,8 @@ func (m *manager) calculateTotalVolumeStorage(ctx context.Context) (int64, error
 
 // CreateVolume creates a new volume
 func (m *manager) CreateVolume(ctx context.Context, req CreateVolumeRequest) (*Volume, error) {
+	start := time.Now()
+
 	// Generate or use provided ID
 	id := cuid2.Generate()
 	if req.Id != nil && *req.Id != "" {
@@ -145,12 +160,15 @@ func (m *manager) CreateVolume(ctx context.Context, req CreateVolumeRequest) (*V
 		return nil, err
 	}
 
+	m.recordCreateDuration(ctx, start, "success")
 	return m.metadataToVolume(meta), nil
 }
 
 // CreateVolumeFromArchive creates a new volume pre-populated with content from a tar.gz archive.
 // The archive is safely extracted with size limits to prevent tar bombs.
 func (m *manager) CreateVolumeFromArchive(ctx context.Context, req CreateVolumeFromArchiveRequest, archive io.Reader) (*Volume, error) {
+	start := time.Now()
+
 	// Generate or use provided ID
 	id := cuid2.Generate()
 	if req.Id != nil && *req.Id != "" {
@@ -223,6 +241,7 @@ func (m *manager) CreateVolumeFromArchive(ctx context.Context, req CreateVolumeF
 		return nil, err
 	}
 
+	m.recordCreateDuration(ctx, start, "success")
 	return m.metadataToVolume(meta), nil
 }
 

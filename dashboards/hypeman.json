@@ -1,0 +1,470 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "links": [],
+  "panels": [
+    {
+      "gridPos": { "h": 3, "w": 6, "x": 0, "y": 0 },
+      "id": 1,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "hypeman_uptime_seconds{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}",
+          "refId": "A"
+        }
+      ],
+      "title": "Uptime",
+      "type": "stat",
+      "fieldConfig": {
+        "defaults": { "unit": "s" },
+        "overrides": []
+      }
+    },
+    {
+      "gridPos": { "h": 3, "w": 6, "x": 6, "y": 0 },
+      "id": 2,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(hypeman_instances_total{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}) by (state)",
+          "legendFormat": "{{state}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Instances",
+      "type": "stat"
+    },
+    {
+      "gridPos": { "h": 3, "w": 6, "x": 12, "y": 0 },
+      "id": 3,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "hypeman_volumes_total{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}",
+          "refId": "A"
+        }
+      ],
+      "title": "Volumes",
+      "type": "stat"
+    },
+    {
+      "gridPos": { "h": 3, "w": 6, "x": 18, "y": 0 },
+      "id": 4,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(hypeman_images_total{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}) by (status)",
+          "legendFormat": "{{status}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Images",
+      "type": "stat"
+    },
+    {
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 3 },
+      "id": 5,
+      "options": {
+        "legend": { "calcs": [], "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "single", "sort": "none" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "rate(hypeman_http_request_duration_seconds_sum{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}[5m]) / rate(hypeman_http_request_duration_seconds_count{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}[5m])",
+          "legendFormat": "{{http_request_method}} {{http_route}}",
+          "refId": "A"
+        }
+      ],
+      "title": "HTTP Request Latency (avg)",
+      "type": "timeseries",
+      "fieldConfig": {
+        "defaults": { "unit": "s" },
+        "overrides": []
+      }
+    },
+    {
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 3 },
+      "id": 6,
+      "options": {
+        "legend": { "calcs": [], "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "single", "sort": "none" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "rate(hypeman_http_requests_total{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}[5m])",
+          "legendFormat": "{{http_request_method}} {{http_route}} {{http_response_status_code}}",
+          "refId": "A"
+        }
+      ],
+      "title": "HTTP Requests/sec",
+      "type": "timeseries",
+      "fieldConfig": {
+        "defaults": { "unit": "reqps" },
+        "overrides": []
+      }
+    },
+    {
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 11 },
+      "id": 7,
+      "options": {
+        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "single", "sort": "none" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "hypeman_instances_create_duration_seconds_sum{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"} / hypeman_instances_create_duration_seconds_count{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}",
+          "legendFormat": "avg create",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "hypeman_instances_restore_duration_seconds_sum{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"} / hypeman_instances_restore_duration_seconds_count{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}",
+          "legendFormat": "avg restore",
+          "refId": "B"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "hypeman_instances_standby_duration_seconds_sum{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"} / hypeman_instances_standby_duration_seconds_count{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}",
+          "legendFormat": "avg standby",
+          "refId": "C"
+        }
+      ],
+      "title": "Instance Operation Latency (avg)",
+      "type": "timeseries",
+      "fieldConfig": {
+        "defaults": { "unit": "s" },
+        "overrides": []
+      }
+    },
+    {
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 11 },
+      "id": 8,
+      "options": {
+        "legend": { "calcs": [], "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "single", "sort": "none" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "hypeman_volumes_allocated_bytes{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}",
+          "legendFormat": "allocated",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "hypeman_volumes_used_bytes{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}",
+          "legendFormat": "used",
+          "refId": "B"
+        }
+      ],
+      "title": "Volume Storage",
+      "type": "timeseries",
+      "fieldConfig": {
+        "defaults": { "unit": "bytes" },
+        "overrides": []
+      }
+    },
+    {
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 11 },
+      "id": 9,
+      "options": {
+        "legend": { "calcs": [], "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "single", "sort": "none" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "hypeman_exec_bytes_sent_total{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}",
+          "legendFormat": "sent (stdin)",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "hypeman_exec_bytes_received_total{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}",
+          "legendFormat": "received (stdout+stderr)",
+          "refId": "B"
+        }
+      ],
+      "title": "Exec Bytes (cumulative)",
+      "type": "timeseries",
+      "fieldConfig": {
+        "defaults": { "unit": "bytes" },
+        "overrides": []
+      }
+    },
+    {
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 19 },
+      "id": 10,
+      "options": {
+        "legend": { "calcs": [], "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "single", "sort": "none" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "hypeman_images_build_queue_length{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}",
+          "legendFormat": "queue length",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "hypeman_images_pulls_total{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}",
+          "legendFormat": "pulls ({{status}})",
+          "refId": "B"
+        }
+      ],
+      "title": "Image Build Queue & Pulls",
+      "type": "timeseries"
+    },
+    {
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 19 },
+      "id": 11,
+      "options": {
+        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "single", "sort": "none" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "hypeman_vmm_api_duration_seconds_sum{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"} / hypeman_vmm_api_duration_seconds_count{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}",
+          "legendFormat": "avg {{operation}}",
+          "refId": "A"
+        }
+      ],
+      "title": "VMM API Latency (avg)",
+      "type": "timeseries",
+      "fieldConfig": {
+        "defaults": { "unit": "s" },
+        "overrides": []
+      }
+    },
+    {
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 19 },
+      "id": 12,
+      "options": {
+        "legend": { "calcs": [], "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "single", "sort": "none" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "hypeman_network_allocations_total{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}",
+          "legendFormat": "IP allocations",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "hypeman_network_tap_operations_total{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}",
+          "legendFormat": "TAP ops ({{operation}})",
+          "refId": "B"
+        }
+      ],
+      "title": "Network",
+      "type": "timeseries"
+    },
+    {
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 27 },
+      "id": 15,
+      "options": {
+        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "single", "sort": "none" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "hypeman_images_build_duration_seconds_sum{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"} / hypeman_images_build_duration_seconds_count{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}",
+          "legendFormat": "avg build",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "hypeman_volumes_create_duration_seconds_sum{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"} / hypeman_volumes_create_duration_seconds_count{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}",
+          "legendFormat": "avg volume create",
+          "refId": "B"
+        }
+      ],
+      "title": "Image Build & Volume Create (avg)",
+      "type": "timeseries",
+      "fieldConfig": {
+        "defaults": { "unit": "s" },
+        "overrides": []
+      }
+    },
+    {
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 27 },
+      "id": 16,
+      "options": {
+        "legend": { "calcs": [], "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "single", "sort": "none" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "hypeman_instances_state_transitions_total{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}",
+          "legendFormat": "{{from}} → {{to}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Instance State Transitions",
+      "type": "timeseries"
+    },
+    {
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 27 },
+      "id": 13,
+      "options": {
+        "legend": { "calcs": [], "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "single", "sort": "none" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "go_memory_used_bytes{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}",
+          "legendFormat": "memory used",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "go_memory_gc_goal_bytes{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}",
+          "legendFormat": "GC goal",
+          "refId": "B"
+        }
+      ],
+      "title": "Go Memory",
+      "type": "timeseries",
+      "fieldConfig": {
+        "defaults": { "unit": "bytes" },
+        "overrides": []
+      }
+    },
+    {
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 35 },
+      "id": 14,
+      "options": {
+        "legend": { "calcs": [], "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "single", "sort": "none" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "go_goroutine_count{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}",
+          "legendFormat": "goroutines",
+          "refId": "A"
+        }
+      ],
+      "title": "Goroutines",
+      "type": "timeseries"
+    },
+    {
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 35 },
+      "id": 17,
+      "options": {
+        "legend": { "calcs": [], "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "single", "sort": "none" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "hypeman_exec_sessions_total{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}",
+          "legendFormat": "sessions ({{status}}, exit={{exit_code}})",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "hypeman_exec_duration_seconds_sum{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"} / hypeman_exec_duration_seconds_count{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}",
+          "legendFormat": "avg duration (s)",
+          "refId": "B"
+        }
+      ],
+      "title": "Exec Sessions & Duration",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 38,
+  "tags": ["hypeman"],
+  "templating": {
+    "list": [
+      {
+        "current": { "selected": false, "text": "All", "value": "$__all" },
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "definition": "label_values(hypeman_uptime_seconds, deployment_environment_name)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Environment",
+        "multi": true,
+        "name": "env",
+        "options": [],
+        "query": { "query": "label_values(hypeman_uptime_seconds, deployment_environment_name)", "refId": "A" },
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": { "selected": false, "text": "All", "value": "$__all" },
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "definition": "label_values(hypeman_uptime_seconds, service_instance_id)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Instance",
+        "multi": true,
+        "name": "instance",
+        "options": [],
+        "query": { "query": "label_values(hypeman_uptime_seconds, service_instance_id)", "refId": "A" },
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      }
+    ]
+  },
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Hypeman",
+  "uid": "hypeman-overview",
+  "version": 2,
+  "weekStart": ""
+}

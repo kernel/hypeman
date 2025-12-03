@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/onkernel/hypeman/lib/paths"
+	"go.opentelemetry.io/otel/metric"
 )
 
 const (
@@ -33,10 +34,12 @@ type manager struct {
 	ociClient *ociClient
 	queue     *BuildQueue
 	createMu  sync.Mutex
+	metrics   *Metrics
 }
 
-// NewManager creates a new image manager
-func NewManager(p *paths.Paths, maxConcurrentBuilds int) (Manager, error) {
+// NewManager creates a new image manager.
+// If meter is nil, metrics are disabled.
+func NewManager(p *paths.Paths, maxConcurrentBuilds int, meter metric.Meter) (Manager, error) {
 	// Create cache directory under dataDir for OCI layouts
 	cacheDir := p.SystemOCICache()
 	ociClient, err := newOCIClient(cacheDir)
@@ -49,6 +52,16 @@ func NewManager(p *paths.Paths, maxConcurrentBuilds int) (Manager, error) {
 		ociClient: ociClient,
 		queue:     NewBuildQueue(maxConcurrentBuilds),
 	}
+
+	// Initialize metrics if meter is provided
+	if meter != nil {
+		metrics, err := newMetrics(meter, m)
+		if err != nil {
+			return nil, fmt.Errorf("create metrics: %w", err)
+		}
+		m.metrics = metrics
+	}
+
 	m.RecoverInterruptedBuilds()
 	return m, nil
 }
@@ -78,7 +91,7 @@ func (m *manager) CreateImage(ctx context.Context, req CreateImageRequest) (*Ima
 	// Add a 2-second timeout to ensure fast failure on rate limits or errors
 	resolveCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	
+
 	ref, err := normalized.Resolve(resolveCtx, m.ociClient)
 	if err != nil {
 		return nil, fmt.Errorf("resolve manifest: %w", err)
@@ -134,11 +147,13 @@ func (m *manager) createAndQueueImage(ref *ResolvedRef) (*Image, error) {
 }
 
 func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef) {
+	buildStart := time.Now()
 	buildDir := m.paths.SystemBuild(ref.String())
 	tempDir := filepath.Join(buildDir, "rootfs")
 
 	if err := os.MkdirAll(buildDir, 0755); err != nil {
 		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("create build dir: %w", err))
+		m.recordBuildMetrics(ctx, buildStart, "failed")
 		return
 	}
 
@@ -153,8 +168,11 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef) {
 	result, err := m.ociClient.pullAndExport(ctx, ref.String(), ref.Digest(), tempDir)
 	if err != nil {
 		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("pull and export: %w", err))
+		m.recordPullMetrics(ctx, "failed")
+		m.recordBuildMetrics(ctx, buildStart, "failed")
 		return
 	}
+	m.recordPullMetrics(ctx, "success")
 
 	// Check if this digest already exists and is ready (deduplication)
 	if meta, err := readMetadata(m.paths, ref.Repository(), ref.DigestHex()); err == nil {
@@ -209,6 +227,8 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef) {
 			fmt.Fprintf(os.Stderr, "Warning: failed to create tag symlink: %v\n", err)
 		}
 	}
+
+	m.recordBuildMetrics(ctx, buildStart, "success")
 }
 
 func (m *manager) updateStatusByDigest(ref *ResolvedRef, status string, err error) {

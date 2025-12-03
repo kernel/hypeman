@@ -14,7 +14,7 @@ func (s *ApiService) ListImages(ctx context.Context, request oapi.ListImagesRequ
 
 	domainImages, err := s.ImageManager.ListImages(ctx)
 	if err != nil {
-		log.Error("failed to list images", "error", err)
+		log.ErrorContext(ctx, "failed to list images", "error", err)
 		return oapi.ListImages500JSONResponse{
 			Code:    "internal_error",
 			Message: "failed to list images",
@@ -50,7 +50,7 @@ func (s *ApiService) CreateImage(ctx context.Context, request oapi.CreateImageRe
 				Message: "image not found",
 			}, nil
 		default:
-			log.Error("failed to create image", "error", err, "name", request.Body.Name)
+			log.ErrorContext(ctx, "failed to create image", "error", err, "name", request.Body.Name)
 			return oapi.CreateImage500JSONResponse{
 				Code:    "internal_error",
 				Message: "failed to create image",
@@ -72,7 +72,7 @@ func (s *ApiService) GetImage(ctx context.Context, request oapi.GetImageRequestO
 				Message: "image not found",
 			}, nil
 		default:
-			log.Error("failed to get image", "error", err, "name", request.Name)
+			log.ErrorContext(ctx, "failed to get image", "error", err, "name", request.Name)
 			return oapi.GetImage500JSONResponse{
 				Code:    "internal_error",
 				Message: "failed to get image",
@@ -94,7 +94,7 @@ func (s *ApiService) DeleteImage(ctx context.Context, request oapi.DeleteImageRe
 				Message: "image not found",
 			}, nil
 		default:
-			log.Error("failed to delete image", "error", err, "name", request.Name)
+			log.ErrorContext(ctx, "failed to delete image", "error", err, "name", request.Name)
 			return oapi.DeleteImage500JSONResponse{
 				Code:    "internal_error",
 				Message: "failed to delete image",

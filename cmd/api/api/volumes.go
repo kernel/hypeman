@@ -18,18 +18,18 @@ func (s *ApiService) ListVolumes(ctx context.Context, request oapi.ListVolumesRe
 
 	domainVols, err := s.VolumeManager.ListVolumes(ctx)
 	if err != nil {
-		log.Error("failed to list volumes", "error", err)
+		log.ErrorContext(ctx, "failed to list volumes", "error", err)
 		return oapi.ListVolumes500JSONResponse{
 			Code:    "internal_error",
 			Message: "failed to list volumes",
 		}, nil
 	}
-	
+
 	oapiVols := make([]oapi.Volume, len(domainVols))
 	for i, vol := range domainVols {
 		oapiVols[i] = volumeToOAPI(vol)
 	}
-	
+
 	return oapi.ListVolumes200JSONResponse(oapiVols), nil
 }
 
@@ -56,7 +56,7 @@ func (s *ApiService) CreateVolume(ctx context.Context, request oapi.CreateVolume
 					Message: "volume with this ID already exists",
 				}, nil
 			}
-			log.Error("failed to create volume", "error", err, "name", request.JSONBody.Name)
+			log.ErrorContext(ctx, "failed to create volume", "error", err, "name", request.JSONBody.Name)
 			return oapi.CreateVolume500JSONResponse{
 				Code:    "internal_error",
 				Message: "failed to create volume",
@@ -171,7 +171,7 @@ func (s *ApiService) createVolumeFromMultipart(ctx context.Context, multipartRea
 						Message: "volume with this ID already exists",
 					}, nil
 				}
-				log.Error("failed to create volume from archive", "error", err, "name", name)
+				log.ErrorContext(ctx, "failed to create volume from archive", "error", err, "name", name)
 				return oapi.CreateVolume500JSONResponse{
 					Code:    "internal_error",
 					Message: "failed to create volume",
@@ -222,7 +222,7 @@ func (s *ApiService) GetVolume(ctx context.Context, request oapi.GetVolumeReques
 				Message: "multiple volumes have this name, use volume ID instead",
 			}, nil
 		default:
-			log.Error("failed to get volume", "error", err, "id", request.Id)
+			log.ErrorContext(ctx, "failed to get volume", "error", err, "id", request.Id)
 			return oapi.GetVolume500JSONResponse{
 				Code:    "internal_error",
 				Message: "failed to get volume",
@@ -269,7 +269,7 @@ func (s *ApiService) DeleteVolume(ctx context.Context, request oapi.DeleteVolume
 				Message: "volume is in use by an instance",
 			}, nil
 		default:
-			log.Error("failed to delete volume", "error", err, "id", request.Id)
+			log.ErrorContext(ctx, "failed to delete volume", "error", err, "id", request.Id)
 			return oapi.DeleteVolume500JSONResponse{
 				Code:    "internal_error",
 				Message: "failed to delete volume",
@@ -302,5 +302,3 @@ func volumeToOAPI(vol volumes.Volume) oapi.Volume {
 
 	return oapiVol
 }
-
-

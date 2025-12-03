@@ -23,7 +23,7 @@ func setupTestManager(t *testing.T) (Manager, *paths.Paths, func()) {
 	// Create required directories
 	require.NoError(t, os.MkdirAll(p.VolumesDir(), 0755))
 
-	manager := NewManager(p, 0) // 0 = unlimited storage
+	manager := NewManager(p, 0, nil) // 0 = unlimited storage
 
 	cleanup := func() {
 		os.RemoveAll(tmpDir)
@@ -389,4 +389,3 @@ func TestMultiAttach_ConcurrentRWConflict(t *testing.T) {
 	assert.Len(t, vol.Attachments, 1, "Should have exactly one attachment")
 	assert.False(t, vol.Attachments[0].Readonly, "Attachment should be read-write")
 }
-

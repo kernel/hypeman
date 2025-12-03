@@ -26,18 +26,18 @@ func newTestService(t *testing.T) *ApiService {
 	}
 
 	p := paths.New(cfg.DataDir)
-	imageMgr, err := images.NewManager(p, 1)
+	imageMgr, err := images.NewManager(p, 1, nil)
 	if err != nil {
 		t.Fatalf("failed to create image manager: %v", err)
 	}
 
 	systemMgr := system.NewManager(p)
-	networkMgr := network.NewManager(p, cfg)
-	volumeMgr := volumes.NewManager(p, 0) // 0 = unlimited storage
+	networkMgr := network.NewManager(p, cfg, nil)
+	volumeMgr := volumes.NewManager(p, 0, nil) // 0 = unlimited storage
 	limits := instances.ResourceLimits{
 		MaxOverlaySize: 100 * 1024 * 1024 * 1024, // 100GB
 	}
-	instanceMgr := instances.NewManager(p, imageMgr, systemMgr, networkMgr, volumeMgr, limits)
+	instanceMgr := instances.NewManager(p, imageMgr, systemMgr, networkMgr, volumeMgr, limits, nil, nil)
 
 	// Register cleanup for orphaned Cloud Hypervisor processes
 	t.Cleanup(func() {

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -20,9 +21,14 @@ import (
 	nethttpmiddleware "github.com/oapi-codegen/nethttp-middleware"
 	"github.com/onkernel/hypeman"
 	"github.com/onkernel/hypeman/cmd/api/api"
+	"github.com/onkernel/hypeman/cmd/api/config"
+	"github.com/onkernel/hypeman/lib/exec"
 	"github.com/onkernel/hypeman/lib/instances"
 	mw "github.com/onkernel/hypeman/lib/middleware"
 	"github.com/onkernel/hypeman/lib/oapi"
+	"github.com/onkernel/hypeman/lib/otel"
+	"github.com/onkernel/hypeman/lib/vmm"
+	"github.com/riandyrn/otelchi"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -34,6 +40,52 @@ func main() {
 }
 
 func run() error {
+	// Load config early for OTel initialization
+	cfg := config.Load()
+
+	// Initialize OpenTelemetry (before wire initialization)
+	otelCfg := otel.Config{
+		Enabled:           cfg.OtelEnabled,
+		Endpoint:          cfg.OtelEndpoint,
+		ServiceName:       cfg.OtelServiceName,
+		ServiceInstanceID: cfg.OtelServiceInstanceID,
+		Insecure:          cfg.OtelInsecure,
+		Version:           cfg.Version,
+		Env:               cfg.Env,
+	}
+
+	otelProvider, otelShutdown, err := otel.Init(context.Background(), otelCfg)
+	if err != nil {
+		// Log warning but don't fail - graceful degradation
+		slog.Warn("failed to initialize OpenTelemetry, continuing without telemetry", "error", err)
+	}
+	if otelShutdown != nil {
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := otelShutdown(shutdownCtx); err != nil {
+				slog.Warn("error shutting down OpenTelemetry", "error", err)
+			}
+		}()
+	}
+
+	// Initialize exec and vmm metrics if OTel is enabled
+	if otelProvider != nil && otelProvider.Meter != nil {
+		execMetrics, err := exec.NewMetrics(otelProvider.Meter)
+		if err == nil {
+			exec.SetMetrics(execMetrics)
+		}
+		vmmMetrics, err := vmm.NewMetrics(otelProvider.Meter)
+		if err == nil {
+			vmm.SetMetrics(vmmMetrics)
+		}
+	}
+
+	// Set global OTel log handler for logger package
+	if otelProvider != nil && otelProvider.LogHandler != nil {
+		otel.SetGlobalLogHandler(otelProvider.LogHandler)
+	}
+
 	// Initialize app with wire
 	app, cleanup, err := initializeApp()
 	if err != nil {
@@ -45,6 +97,11 @@ func run() error {
 	defer stop()
 
 	logger := app.Logger
+
+	// Log OTel status
+	if cfg.OtelEnabled {
+		logger.Info("OpenTelemetry enabled", "endpoint", cfg.OtelEndpoint, "service", cfg.OtelServiceName)
+	}
 
 	// Validate JWT secret is configured
 	if app.Config.JwtSecret == "" {
@@ -84,6 +141,23 @@ func run() error {
 	// Create router
 	r := chi.NewRouter()
 
+	// Prepare HTTP metrics middleware (applied inside API group, not globally)
+	// Global application breaks WebSocket (Hijacker) and SSE (Flusher)
+	var httpMetricsMw func(http.Handler) http.Handler
+	if otelProvider != nil && otelProvider.Meter != nil {
+		httpMetrics, err := mw.NewHTTPMetrics(otelProvider.Meter)
+		if err == nil {
+			httpMetricsMw = httpMetrics.Middleware
+		}
+	}
+
+	// Create access logger with OTel handler for HTTP request logging with trace correlation
+	var accessLogHandler slog.Handler
+	if otelProvider != nil {
+		accessLogHandler = otelProvider.LogHandler
+	}
+	accessLogger := mw.NewAccessLogger(accessLogHandler)
+
 	// Load OpenAPI spec for request validation
 	spec, err := oapi.GetSwagger()
 	if err != nil {
@@ -95,11 +169,12 @@ func run() error {
 	spec.Servers = nil
 
 	// Custom exec endpoint (outside OpenAPI spec, uses WebSocket)
+	// Note: No otelchi here as WebSocket doesn't work well with tracing middleware
 	r.With(
 		middleware.RequestID,
 		middleware.RealIP,
-		middleware.Logger,
 		middleware.Recoverer,
+		mw.AccessLogger(accessLogger),
 		mw.JwtAuth(app.Config.JwtSecret),
 	).Get("/instances/{id}/exec", app.ApiService.ExecHandler)
 
@@ -108,8 +183,31 @@ func run() error {
 		// Common middleware
 		r.Use(middleware.RequestID)
 		r.Use(middleware.RealIP)
-		r.Use(middleware.Logger)
 		r.Use(middleware.Recoverer)
+
+		// OpenTelemetry tracing middleware FIRST (creates span context)
+		if cfg.OtelEnabled {
+			r.Use(otelchi.Middleware(cfg.OtelServiceName, otelchi.WithChiRoutes(r)))
+		}
+
+		// Inject logger into request context for handlers to use
+		r.Use(mw.InjectLogger(accessLogger))
+
+		// Access logger AFTER otelchi so trace context is available
+		r.Use(mw.AccessLogger(accessLogger))
+		if httpMetricsMw != nil {
+			// Skip HTTP metrics for SSE streaming endpoints (logs)
+			r.Use(func(next http.Handler) http.Handler {
+				return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if strings.HasSuffix(r.URL.Path, "/logs") {
+						next.ServeHTTP(w, r)
+						return
+					}
+					httpMetricsMw(next).ServeHTTP(w, r)
+				})
+			})
+		}
+
 		r.Use(middleware.Timeout(60 * time.Second))
 
 		// OpenAPI request validation with authentication
@@ -225,4 +323,3 @@ func getRunningInstanceIDs(app *application) []string {
 	}
 	return running
 }
-

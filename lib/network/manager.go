@@ -9,6 +9,7 @@ import (
 	"github.com/onkernel/hypeman/cmd/api/config"
 	"github.com/onkernel/hypeman/lib/logger"
 	"github.com/onkernel/hypeman/lib/paths"
+	"go.opentelemetry.io/otel/metric"
 )
 
 // Manager defines the interface for network management
@@ -29,17 +30,29 @@ type Manager interface {
 
 // manager implements the Manager interface
 type manager struct {
-	paths  *paths.Paths
-	config *config.Config
-	mu     sync.Mutex // Protects network allocation operations (IP allocation)
+	paths   *paths.Paths
+	config  *config.Config
+	mu      sync.Mutex // Protects network allocation operations (IP allocation)
+	metrics *Metrics
 }
 
-// NewManager creates a new network manager
-func NewManager(p *paths.Paths, cfg *config.Config) Manager {
-	return &manager{
+// NewManager creates a new network manager.
+// If meter is nil, metrics are disabled.
+func NewManager(p *paths.Paths, cfg *config.Config, meter metric.Meter) Manager {
+	m := &manager{
 		paths:  p,
 		config: cfg,
 	}
+
+	// Initialize metrics if meter is provided
+	if meter != nil {
+		metrics, err := newNetworkMetrics(meter, m)
+		if err == nil {
+			m.metrics = metrics
+		}
+	}
+
+	return m
 }
 
 // Initialize initializes the network manager and creates default network.
@@ -100,4 +113,3 @@ func (m *manager) getDefaultNetwork(ctx context.Context) (*Network, error) {
 		CreatedAt: time.Time{}, // Unknown for default
 	}, nil
 }
-

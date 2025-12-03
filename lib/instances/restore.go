@@ -8,18 +8,27 @@ import (
 
 	"github.com/onkernel/hypeman/lib/logger"
 	"github.com/onkernel/hypeman/lib/vmm"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // RestoreInstance restores an instance from standby
 // Multi-hop orchestration: Standby → Paused → Running
 func (m *manager) restoreInstance(
 	ctx context.Context,
-	
+
 	id string,
 ) (*Instance, error) {
+	start := time.Now()
 	log := logger.FromContext(ctx)
 	log.InfoContext(ctx, "restoring instance from standby", "id", id)
-	
+
+	// Start tracing span if tracer is available
+	if m.metrics != nil && m.metrics.tracer != nil {
+		var span trace.Span
+		ctx, span = m.metrics.tracer.Start(ctx, "RestoreInstance")
+		defer span.End()
+	}
+
 	// 1. Load instance
 	meta, err := m.loadMetadata(id)
 	if err != nil {
@@ -108,6 +117,12 @@ func (m *manager) restoreInstance(
 		log.WarnContext(ctx, "failed to update metadata after restore", "id", id, "error", err)
 	}
 
+	// Record metrics
+	if m.metrics != nil {
+		m.recordDuration(ctx, m.metrics.restoreDuration, start, "success")
+		m.recordStateTransition(ctx, string(StateStandby), string(StateRunning))
+	}
+
 	// Return instance with derived state (should be Running now)
 	finalInst := m.toInstance(ctx, meta)
 	log.InfoContext(ctx, "instance restored successfully", "id", id, "state", finalInst.State)
@@ -121,14 +136,14 @@ func (m *manager) restoreFromSnapshot(
 	snapshotDir string,
 ) error {
 	log := logger.FromContext(ctx)
-	
+
 	// Start VMM process and capture PID
 	log.DebugContext(ctx, "starting VMM process for restore", "id", stored.Id, "version", stored.CHVersion)
 	pid, err := vmm.StartProcess(ctx, m.paths, stored.CHVersion, stored.SocketPath)
 	if err != nil {
 		return fmt.Errorf("start vmm: %w", err)
 	}
-	
+
 	// Store the PID for later cleanup
 	stored.CHPID = &pid
 	log.DebugContext(ctx, "VMM process started", "id", stored.Id, "pid", pid)
@@ -162,5 +177,3 @@ func (m *manager) restoreFromSnapshot(
 	log.DebugContext(ctx, "VM restored from snapshot successfully", "id", stored.Id)
 	return nil
 }
-
-

@@ -2,10 +2,51 @@ package config
 
 import (
 	"os"
+	"runtime/debug"
 	"strconv"
 
 	"github.com/joho/godotenv"
 )
+
+func getHostname() string {
+	if h, err := os.Hostname(); err == nil {
+		return h
+	}
+	return "unknown"
+}
+
+// getBuildVersion extracts version info from Go's embedded build info.
+// Returns git short hash + "-dirty" suffix if uncommitted changes, or "unknown" if unavailable.
+func getBuildVersion() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "unknown"
+	}
+
+	var revision string
+	var dirty bool
+	for _, s := range info.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			revision = s.Value
+		case "vcs.modified":
+			dirty = s.Value == "true"
+		}
+	}
+
+	if revision == "" {
+		return "unknown"
+	}
+
+	// Use short hash (8 chars)
+	if len(revision) > 8 {
+		revision = revision[:8]
+	}
+	if dirty {
+		revision += "-dirty"
+	}
+	return revision
+}
 
 type Config struct {
 	Port                string
@@ -23,13 +64,25 @@ type Config struct {
 	LogRotateInterval   string
 
 	// Resource limits - per instance
-	MaxVcpusPerInstance   int    // Max vCPUs for a single VM (0 = unlimited)
-	MaxMemoryPerInstance  string // Max memory for a single VM (0 = unlimited)
+	MaxVcpusPerInstance  int    // Max vCPUs for a single VM (0 = unlimited)
+	MaxMemoryPerInstance string // Max memory for a single VM (0 = unlimited)
 
 	// Resource limits - aggregate
 	MaxTotalVcpus         int    // Aggregate vCPU limit across all instances (0 = unlimited)
 	MaxTotalMemory        string // Aggregate memory limit across all instances (0 = unlimited)
 	MaxTotalVolumeStorage string // Total volume storage limit (0 = unlimited)
+
+	// OpenTelemetry configuration
+	OtelEnabled           bool   // Enable OpenTelemetry
+	OtelEndpoint          string // OTLP endpoint (gRPC)
+	OtelServiceName       string // Service name for tracing
+	OtelServiceInstanceID string // Service instance ID (default: hostname)
+	OtelInsecure          bool   // Disable TLS for OTLP
+	Version               string // Application version for telemetry
+	Env                   string // Deployment environment (e.g., dev, staging, prod)
+
+	// Logging configuration
+	LogLevel string // Default log level (debug, info, warn, error)
 }
 
 // Load loads configuration from environment variables
@@ -43,7 +96,7 @@ func Load() *Config {
 		DataDir:             getEnv("DATA_DIR", "/var/lib/hypeman"),
 		BridgeName:          getEnv("BRIDGE_NAME", "vmbr0"),
 		SubnetCIDR:          getEnv("SUBNET_CIDR", "10.100.0.0/16"),
-		SubnetGateway:       getEnv("SUBNET_GATEWAY", ""), // empty = derived as first IP from subnet
+		SubnetGateway:       getEnv("SUBNET_GATEWAY", ""),   // empty = derived as first IP from subnet
 		UplinkInterface:     getEnv("UPLINK_INTERFACE", ""), // empty = auto-detect from default route
 		JwtSecret:           getEnv("JWT_SECRET", ""),
 		DNSServer:           getEnv("DNS_SERVER", "1.1.1.1"),
@@ -61,6 +114,18 @@ func Load() *Config {
 		MaxTotalVcpus:         getEnvInt("MAX_TOTAL_VCPUS", 0),
 		MaxTotalMemory:        getEnv("MAX_TOTAL_MEMORY", ""),
 		MaxTotalVolumeStorage: getEnv("MAX_TOTAL_VOLUME_STORAGE", ""),
+
+		// OpenTelemetry configuration
+		OtelEnabled:           getEnvBool("OTEL_ENABLED", false),
+		OtelEndpoint:          getEnv("OTEL_ENDPOINT", "127.0.0.1:4317"),
+		OtelServiceName:       getEnv("OTEL_SERVICE_NAME", "hypeman"),
+		OtelServiceInstanceID: getEnv("OTEL_SERVICE_INSTANCE_ID", getHostname()),
+		OtelInsecure:          getEnvBool("OTEL_INSECURE", true),
+		Version:               getEnv("VERSION", getBuildVersion()),
+		Env:                   getEnv("ENV", "unset"),
+
+		// Logging configuration
+		LogLevel: getEnv("LOG_LEVEL", "info"),
 	}
 
 	return cfg
@@ -82,3 +147,11 @@ func getEnvInt(key string, defaultValue int) int {
 	return defaultValue
 }
 
+func getEnvBool(key string, defaultValue bool) bool {
+	if value := os.Getenv(key); value != "" {
+		if boolVal, err := strconv.ParseBool(value); err == nil {
+			return boolVal
+		}
+	}
+	return defaultValue
+}

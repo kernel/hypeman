@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/onkernel/hypeman/lib/paths"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 )
 
 // VMM wraps the generated Cloud Hypervisor client (API v0.3.0)
@@ -20,15 +22,45 @@ type VMM struct {
 	socketPath string
 }
 
+// metricsRoundTripper wraps an http.RoundTripper to record metrics
+type metricsRoundTripper struct {
+	base http.RoundTripper
+}
+
+func (m *metricsRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	start := time.Now()
+	resp, err := m.base.RoundTrip(req)
+
+	// Record metrics using global VMMMetrics
+	if VMMMetrics != nil {
+		operation := req.Method + " " + req.URL.Path
+		status := "success"
+		if err != nil || (resp != nil && resp.StatusCode >= 400) {
+			status = "error"
+			VMMMetrics.APIErrorsTotal.Add(req.Context(), 1,
+				metric.WithAttributes(attribute.String("operation", operation)))
+		}
+		VMMMetrics.APIDuration.Record(req.Context(), time.Since(start).Seconds(),
+			metric.WithAttributes(
+				attribute.String("operation", operation),
+				attribute.String("status", status),
+			))
+	}
+
+	return resp, err
+}
+
 // NewVMM creates a Cloud Hypervisor client for an existing VMM socket
 func NewVMM(socketPath string) (*VMM, error) {
-	httpClient := &http.Client{
-		Transport: &http.Transport{
-			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-				return net.Dial("unix", socketPath)
-			},
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return net.Dial("unix", socketPath)
 		},
-		Timeout: 30 * time.Second,
+	}
+
+	httpClient := &http.Client{
+		Transport: &metricsRoundTripper{base: transport},
+		Timeout:   30 * time.Second,
 	}
 
 	client, err := NewClientWithResponses("http://localhost/api/v1",
@@ -71,15 +103,15 @@ func StartProcessWithArgs(ctx context.Context, p *paths.Paths, version CHVersion
 	// Build command arguments
 	args := []string{"--api-socket", socketPath}
 	args = append(args, extraArgs...)
-	
+
 	// Use Command (not CommandContext) so process survives parent context cancellation
 	cmd := exec.Command(binaryPath, args...)
-	
+
 	// Daemonize: detach from parent process group
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Setpgid: true, // Create new process group
 	}
-	
+
 	// Redirect stdout/stderr to log files (process won't block on I/O)
 	instanceDir := filepath.Dir(socketPath)
 	stdoutFile, err := os.OpenFile(
@@ -94,7 +126,7 @@ func StartProcessWithArgs(ctx context.Context, p *paths.Paths, version CHVersion
 	// The child process receives duplicated file descriptors during fork/exec,
 	// so it can continue writing to the log files even after we close them here.
 	defer stdoutFile.Close()
-	
+
 	stderrFile, err := os.OpenFile(
 		filepath.Join(instanceDir, "ch-stderr.log"),
 		os.O_CREATE|os.O_WRONLY|os.O_APPEND,
@@ -104,24 +136,24 @@ func StartProcessWithArgs(ctx context.Context, p *paths.Paths, version CHVersion
 		return 0, fmt.Errorf("create stderr log: %w", err)
 	}
 	defer stderrFile.Close()
-	
+
 	cmd.Stdout = stdoutFile
 	cmd.Stderr = stderrFile
 
 	if err := cmd.Start(); err != nil {
 		return 0, fmt.Errorf("start cloud-hypervisor: %w", err)
 	}
-	
+
 	pid := cmd.Process.Pid
 
 	// Wait for socket to be ready (use fresh context with timeout, not parent context)
 	waitCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	
+
 	if err := waitForSocket(waitCtx, socketPath, 5*time.Second); err != nil {
 		return 0, err
 	}
-	
+
 	return pid, nil
 }
 

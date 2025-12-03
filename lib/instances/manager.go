@@ -10,6 +10,8 @@ import (
 	"github.com/onkernel/hypeman/lib/paths"
 	"github.com/onkernel/hypeman/lib/system"
 	"github.com/onkernel/hypeman/lib/volumes"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type Manager interface {
@@ -44,11 +46,13 @@ type manager struct {
 	limits         ResourceLimits
 	instanceLocks  sync.Map      // map[string]*sync.RWMutex - per-instance locks
 	hostTopology   *HostTopology // Cached host CPU topology
+	metrics        *Metrics
 }
 
-// NewManager creates a new instances manager
-func NewManager(p *paths.Paths, imageManager images.Manager, systemManager system.Manager, networkManager network.Manager, volumeManager volumes.Manager, limits ResourceLimits) Manager {
-	return &manager{
+// NewManager creates a new instances manager.
+// If meter is nil, metrics are disabled.
+func NewManager(p *paths.Paths, imageManager images.Manager, systemManager system.Manager, networkManager network.Manager, volumeManager volumes.Manager, limits ResourceLimits, meter metric.Meter, tracer trace.Tracer) Manager {
+	m := &manager{
 		paths:          p,
 		imageManager:   imageManager,
 		systemManager:  systemManager,
@@ -58,6 +62,16 @@ func NewManager(p *paths.Paths, imageManager images.Manager, systemManager syste
 		instanceLocks:  sync.Map{},
 		hostTopology:   detectHostTopology(), // Detect and cache host topology
 	}
+
+	// Initialize metrics if meter is provided
+	if meter != nil {
+		metrics, err := newInstanceMetrics(meter, tracer, m)
+		if err == nil {
+			m.metrics = metrics
+		}
+	}
+
+	return m
 }
 
 // getInstanceLock returns or creates a lock for a specific instance
@@ -81,7 +95,7 @@ func (m *manager) DeleteInstance(ctx context.Context, id string) error {
 	lock := m.getInstanceLock(id)
 	lock.Lock()
 	defer lock.Unlock()
-	
+
 	err := m.deleteInstance(ctx, id)
 	if err == nil {
 		// Clean up the lock after successful deletion

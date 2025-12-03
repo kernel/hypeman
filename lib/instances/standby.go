@@ -9,18 +9,27 @@ import (
 	"github.com/onkernel/hypeman/lib/logger"
 	"github.com/onkernel/hypeman/lib/network"
 	"github.com/onkernel/hypeman/lib/vmm"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // StandbyInstance puts an instance in standby state
 // Multi-hop orchestration: Running → Paused → Standby
 func (m *manager) standbyInstance(
 	ctx context.Context,
-	
+
 	id string,
 ) (*Instance, error) {
+	start := time.Now()
 	log := logger.FromContext(ctx)
 	log.InfoContext(ctx, "putting instance in standby", "id", id)
-	
+
+	// Start tracing span if tracer is available
+	if m.metrics != nil && m.metrics.tracer != nil {
+		var span trace.Span
+		ctx, span = m.metrics.tracer.Start(ctx, "StandbyInstance")
+		defer span.End()
+	}
+
 	// 1. Load instance
 	meta, err := m.loadMetadata(id)
 	if err != nil {
@@ -110,6 +119,12 @@ func (m *manager) standbyInstance(
 		return nil, fmt.Errorf("save metadata: %w", err)
 	}
 
+	// Record metrics
+	if m.metrics != nil {
+		m.recordDuration(ctx, m.metrics.standbyDuration, start, "success")
+		m.recordStateTransition(ctx, string(StateRunning), string(StateStandby))
+	}
+
 	// Return instance with derived state (should be Standby now)
 	finalInst := m.toInstance(ctx, meta)
 	log.InfoContext(ctx, "instance put in standby successfully", "id", id, "state", finalInst.State)
@@ -131,34 +146,34 @@ func reduceMemory(ctx context.Context, client *vmm.VMM, targetBytes int64) error
 func pollVMMemory(ctx context.Context, client *vmm.VMM, targetBytes int64, timeout time.Duration) error {
 	log := logger.FromContext(ctx)
 	deadline := time.Now().Add(timeout)
-	
+
 	// Use 20ms for fast response with minimal overhead
 	const pollInterval = 20 * time.Millisecond
 	const stabilityThreshold = 3 // Memory unchanged for 3 checks = stable
-	
+
 	var previousSize *int64
 	unchangedCount := 0
-	
+
 	for time.Now().Before(deadline) {
 		infoResp, err := client.GetVmInfoWithResponse(ctx)
 		if err != nil {
 			time.Sleep(pollInterval)
 			continue
 		}
-		
+
 		if infoResp.StatusCode() != 200 || infoResp.JSON200 == nil {
 			time.Sleep(pollInterval)
 			continue
 		}
-		
+
 		actualSize := infoResp.JSON200.MemoryActualSize
 		if actualSize == nil {
 			time.Sleep(pollInterval)
 			continue
 		}
-		
+
 		currentSize := *actualSize
-		
+
 		// Best case: reached target or below
 		if currentSize <= targetBytes {
 			log.DebugContext(ctx, "memory reduced to target",
@@ -166,7 +181,7 @@ func pollVMMemory(ctx context.Context, client *vmm.VMM, targetBytes int64, timeo
 				"actual_mb", currentSize/(1024*1024))
 			return nil
 		}
-		
+
 		// Check if memory has stopped shrinking (stabilized above target)
 		if previousSize != nil {
 			if currentSize == *previousSize {
@@ -185,11 +200,11 @@ func pollVMMemory(ctx context.Context, client *vmm.VMM, targetBytes int64, timeo
 				unchangedCount = 0
 			}
 		}
-		
+
 		previousSize = &currentSize
 		time.Sleep(pollInterval)
 	}
-	
+
 	// Timeout - memory never stabilized
 	return fmt.Errorf("memory reduction did not complete within %v", timeout)
 }
@@ -197,7 +212,7 @@ func pollVMMemory(ctx context.Context, client *vmm.VMM, targetBytes int64, timeo
 // createSnapshot creates a Cloud Hypervisor snapshot
 func createSnapshot(ctx context.Context, client *vmm.VMM, snapshotDir string) error {
 	log := logger.FromContext(ctx)
-	
+
 	// Remove old snapshot
 	os.RemoveAll(snapshotDir)
 
@@ -227,7 +242,7 @@ func createSnapshot(ctx context.Context, client *vmm.VMM, snapshotDir string) er
 // shutdownVMM gracefully shuts down the VMM process via API
 func (m *manager) shutdownVMM(ctx context.Context, inst *Instance) error {
 	log := logger.FromContext(ctx)
-	
+
 	// Try to connect to VMM
 	client, err := vmm.NewVMM(inst.SocketPath)
 	if err != nil {
@@ -239,7 +254,7 @@ func (m *manager) shutdownVMM(ctx context.Context, inst *Instance) error {
 	// Try graceful shutdown
 	log.DebugContext(ctx, "sending shutdown command to VMM", "id", inst.Id)
 	client.ShutdownVMMWithResponse(ctx)
-	
+
 	// Wait for process to exit
 	if inst.CHPID != nil {
 		if !WaitForProcessExit(*inst.CHPID, 2*time.Second) {
@@ -248,7 +263,6 @@ func (m *manager) shutdownVMM(ctx context.Context, inst *Instance) error {
 			log.DebugContext(ctx, "VMM shutdown gracefully", "id", inst.Id, "pid", *inst.CHPID)
 		}
 	}
-	
+
 	return nil
 }
-

@@ -21,18 +21,18 @@ func (s *ApiService) ListInstances(ctx context.Context, request oapi.ListInstanc
 
 	domainInsts, err := s.InstanceManager.ListInstances(ctx)
 	if err != nil {
-		log.Error("failed to list instances", "error", err)
+		log.ErrorContext(ctx, "failed to list instances", "error", err)
 		return oapi.ListInstances500JSONResponse{
 			Code:    "internal_error",
 			Message: "failed to list instances",
 		}, nil
 	}
-	
+
 	oapiInsts := make([]oapi.Instance, len(domainInsts))
 	for i, inst := range domainInsts {
 		oapiInsts[i] = instanceToOAPI(inst)
 	}
-	
+
 	return oapi.ListInstances200JSONResponse(oapiInsts), nil
 }
 
@@ -160,7 +160,7 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 				Message: err.Error(),
 			}, nil
 		default:
-			log.Error("failed to create instance", "error", err, "image", request.Body.Image)
+			log.ErrorContext(ctx, "failed to create instance", "error", err, "image", request.Body.Image)
 			return oapi.CreateInstance500JSONResponse{
 				Code:    "internal_error",
 				Message: "failed to create instance",
@@ -195,7 +195,7 @@ func (s *ApiService) GetInstance(ctx context.Context, request oapi.GetInstanceRe
 				Message: "multiple instances have this name, use instance ID instead",
 			}, nil
 		default:
-			log.Error("failed to get instance", "error", err, "id", request.Id)
+			log.ErrorContext(ctx, "failed to get instance", "error", err, "id", request.Id)
 			return oapi.GetInstance500JSONResponse{
 				Code:    "internal_error",
 				Message: "failed to get instance",
@@ -235,7 +235,7 @@ func (s *ApiService) DeleteInstance(ctx context.Context, request oapi.DeleteInst
 				Message: "instance not found",
 			}, nil
 		default:
-			log.Error("failed to delete instance", "error", err, "id", request.Id)
+			log.ErrorContext(ctx, "failed to delete instance", "error", err, "id", request.Id)
 			return oapi.DeleteInstance500JSONResponse{
 				Code:    "internal_error",
 				Message: "failed to delete instance",
@@ -280,7 +280,7 @@ func (s *ApiService) StandbyInstance(ctx context.Context, request oapi.StandbyIn
 				Message: err.Error(),
 			}, nil
 		default:
-			log.Error("failed to standby instance", "error", err, "id", request.Id)
+			log.ErrorContext(ctx, "failed to standby instance", "error", err, "id", request.Id)
 			return oapi.StandbyInstance500JSONResponse{
 				Code:    "internal_error",
 				Message: "failed to standby instance",
@@ -325,7 +325,7 @@ func (s *ApiService) RestoreInstance(ctx context.Context, request oapi.RestoreIn
 				Message: err.Error(),
 			}, nil
 		default:
-			log.Error("failed to restore instance", "error", err, "id", request.Id)
+			log.ErrorContext(ctx, "failed to restore instance", "error", err, "id", request.Id)
 			return oapi.RestoreInstance500JSONResponse{
 				Code:    "internal_error",
 				Message: "failed to restore instance",
@@ -417,18 +417,18 @@ func (s *ApiService) GetInstanceLogs(ctx context.Context, request oapi.GetInstan
 
 // AttachVolume attaches a volume to an instance (not yet implemented)
 func (s *ApiService) AttachVolume(ctx context.Context, request oapi.AttachVolumeRequestObject) (oapi.AttachVolumeResponseObject, error) {
-			return oapi.AttachVolume500JSONResponse{
+	return oapi.AttachVolume500JSONResponse{
 		Code:    "not_implemented",
 		Message: "volume attachment not yet implemented",
-			}, nil
+	}, nil
 }
 
 // DetachVolume detaches a volume from an instance (not yet implemented)
 func (s *ApiService) DetachVolume(ctx context.Context, request oapi.DetachVolumeRequestObject) (oapi.DetachVolumeResponseObject, error) {
-			return oapi.DetachVolume500JSONResponse{
+	return oapi.DetachVolume500JSONResponse{
 		Code:    "not_implemented",
 		Message: "volume detachment not yet implemented",
-			}, nil
+	}, nil
 }
 
 // instanceToOAPI converts domain Instance to OAPI Instance

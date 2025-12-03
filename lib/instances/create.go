@@ -15,6 +15,7 @@ import (
 	"github.com/onkernel/hypeman/lib/system"
 	"github.com/onkernel/hypeman/lib/vmm"
 	"github.com/onkernel/hypeman/lib/volumes"
+	"go.opentelemetry.io/otel/trace"
 	"gvisor.dev/gvisor/pkg/cleanup"
 )
 
@@ -93,9 +94,17 @@ func (m *manager) createInstance(
 	ctx context.Context,
 	req CreateInstanceRequest,
 ) (*Instance, error) {
+	start := time.Now()
 	log := logger.FromContext(ctx)
 	log.InfoContext(ctx, "creating instance", "name", req.Name, "image", req.Image, "vcpus", req.Vcpus)
-	
+
+	// Start tracing span if tracer is available
+	if m.metrics != nil && m.metrics.tracer != nil {
+		var span trace.Span
+		ctx, span = m.metrics.tracer.Start(ctx, "CreateInstance")
+		defer span.End()
+	}
+
 	// 1. Validate request
 	if err := validateCreateRequest(req); err != nil {
 		log.ErrorContext(ctx, "invalid create request", "error", err)
@@ -336,6 +345,12 @@ func (m *manager) createInstance(
 	// Success - release cleanup stack (prevent cleanup)
 	cu.Release()
 
+	// Record metrics
+	if m.metrics != nil {
+		m.recordDuration(ctx, m.metrics.createDuration, start, "success")
+		m.recordStateTransition(ctx, "stopped", string(StateRunning))
+	}
+
 	// Return instance with derived state
 	finalInst := m.toInstance(ctx, meta)
 	log.InfoContext(ctx, "instance created successfully", "id", id, "name", req.Name, "state", finalInst.State)
@@ -452,14 +467,14 @@ func (m *manager) startAndBootVM(
 	netConfig *network.NetworkConfig,
 ) error {
 	log := logger.FromContext(ctx)
-	
+
 	// Start VMM process and capture PID
 	log.DebugContext(ctx, "starting VMM process", "id", stored.Id, "version", stored.CHVersion)
 	pid, err := vmm.StartProcess(ctx, m.paths, stored.CHVersion, stored.SocketPath)
 	if err != nil {
 		return fmt.Errorf("start vmm: %w", err)
 	}
-	
+
 	// Store the PID for later cleanup
 	stored.CHPID = &pid
 	log.DebugContext(ctx, "VMM process started", "id", stored.Id, "pid", pid)
@@ -539,7 +554,7 @@ func (m *manager) buildVMConfig(inst *Instance, imageInfo *images.Image, netConf
 		BootVcpus: inst.Vcpus,
 		MaxVcpus:  inst.Vcpus,
 	}
-	
+
 	// Calculate and set guest topology based on host topology
 	if topology := calculateGuestTopology(inst.Vcpus, m.hostTopology); topology != nil {
 		cpus.Topology = topology
@@ -551,7 +566,7 @@ func (m *manager) buildVMConfig(inst *Instance, imageInfo *images.Image, netConf
 	}
 	if inst.HotplugSize > 0 {
 		memory.HotplugSize = &inst.HotplugSize
-		memory.HotplugMethod = ptr("VirtioMem")  // PascalCase, not kebab-case
+		memory.HotplugMethod = ptr("VirtioMem") // PascalCase, not kebab-case
 	}
 
 	// Disk configuration
@@ -644,4 +659,3 @@ func (m *manager) buildVMConfig(inst *Instance, imageInfo *images.Image, netConf
 func ptr[T any](v T) *T {
 	return &v
 }
-
