@@ -203,7 +203,7 @@ func ExecIntoInstance(ctx context.Context, vsockSocketPath string, opts ExecOpti
 
 // dialVsock connects to Cloud Hypervisor's vsock Unix socket and performs the handshake
 func dialVsock(ctx context.Context, vsockSocketPath string) (net.Conn, error) {
-	slog.Debug("connecting to vsock", "socket", vsockSocketPath)
+	slog.DebugContext(ctx, "connecting to vsock", "socket", vsockSocketPath)
 
 	// Use dial timeout, respecting context deadline if shorter
 	dialTimeout := vsockDialTimeout
@@ -220,7 +220,7 @@ func dialVsock(ctx context.Context, vsockSocketPath string) (net.Conn, error) {
 		return nil, fmt.Errorf("dial vsock socket %s: %w", vsockSocketPath, err)
 	}
 
-	slog.Debug("connected to vsock socket, performing handshake", "port", vsockGuestPort)
+	slog.DebugContext(ctx, "connected to vsock socket, performing handshake", "port", vsockGuestPort)
 
 	// Set deadline for handshake
 	if err := conn.SetDeadline(time.Now().Add(vsockHandshakeTimeout)); err != nil {
@@ -255,7 +255,7 @@ func dialVsock(ctx context.Context, vsockSocketPath string) (net.Conn, error) {
 		return nil, fmt.Errorf("vsock handshake failed: %s", response)
 	}
 
-	slog.Debug("vsock handshake successful", "response", response)
+	slog.DebugContext(ctx, "vsock handshake successful", "response", response)
 
 	// Return wrapped connection that uses the bufio.Reader
 	// This ensures any bytes buffered during handshake are not lost
