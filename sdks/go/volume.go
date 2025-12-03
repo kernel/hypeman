@@ -36,7 +36,11 @@ func NewVolumeService(opts ...option.RequestOption) (r VolumeService) {
 	return
 }
 
-// Create volume
+// Creates a new volume. Supports two modes:
+//
+//   - JSON body: Creates an empty volume of the specified size
+//   - Multipart form: Creates a volume pre-populated with content from a tar.gz
+//     archive
 func (r *VolumeService) New(ctx context.Context, body VolumeNewParams, opts ...option.RequestOption) (res *Volume, err error) {
 	opts = slices.Concat(r.Options, opts)
 	path := "volumes"
