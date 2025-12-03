@@ -14,6 +14,15 @@ type Metrics struct {
 	APIErrorsTotal metric.Int64Counter
 }
 
+// VMMMetrics is the global metrics instance for the vmm package.
+// Set this via SetMetrics() during application initialization.
+var VMMMetrics *Metrics
+
+// SetMetrics sets the global metrics instance.
+func SetMetrics(m *Metrics) {
+	VMMMetrics = m
+}
+
 // NewMetrics creates VMM metrics instruments.
 // If meter is nil, returns nil (metrics disabled).
 func NewMetrics(meter metric.Meter) (*Metrics, error) {

@@ -22,7 +22,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "hypeman_uptime_seconds",
+          "expr": "hypeman_uptime_seconds{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}",
           "refId": "A"
         }
       ],
@@ -47,7 +47,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "hypeman_instances_total",
+          "expr": "sum(hypeman_instances_total{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}) by (state)",
           "legendFormat": "{{state}}",
           "refId": "A"
         }
@@ -69,7 +69,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "hypeman_volumes_total",
+          "expr": "hypeman_volumes_total{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}",
           "refId": "A"
         }
       ],
@@ -90,7 +90,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "hypeman_images_total",
+          "expr": "sum(hypeman_images_total{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}) by (status)",
           "legendFormat": "{{status}}",
           "refId": "A"
         }
@@ -108,7 +108,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(hypeman_http_request_duration_seconds_sum[5m]) / rate(hypeman_http_request_duration_seconds_count[5m])",
+          "expr": "rate(hypeman_http_request_duration_seconds_sum{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}[5m]) / rate(hypeman_http_request_duration_seconds_count{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}[5m])",
           "legendFormat": "{{http_request_method}} {{http_route}}",
           "refId": "A"
         }
@@ -130,7 +130,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(hypeman_http_requests_total[5m])",
+          "expr": "rate(hypeman_http_requests_total{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}[5m])",
           "legendFormat": "{{http_request_method}} {{http_route}} {{http_response_status_code}}",
           "refId": "A"
         }
@@ -152,19 +152,19 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "histogram_quantile(0.95, rate(hypeman_instances_create_duration_seconds_bucket[5m]))",
+          "expr": "histogram_quantile(0.95, sum(rate(hypeman_instances_create_duration_seconds_bucket{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}[5m])) by (le))",
           "legendFormat": "p95 create",
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "histogram_quantile(0.95, rate(hypeman_instances_restore_duration_seconds_bucket[5m]))",
+          "expr": "histogram_quantile(0.95, sum(rate(hypeman_instances_restore_duration_seconds_bucket{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}[5m])) by (le))",
           "legendFormat": "p95 restore",
           "refId": "B"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "histogram_quantile(0.95, rate(hypeman_instances_standby_duration_seconds_bucket[5m]))",
+          "expr": "histogram_quantile(0.95, sum(rate(hypeman_instances_standby_duration_seconds_bucket{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}[5m])) by (le))",
           "legendFormat": "p95 standby",
           "refId": "C"
         }
@@ -186,13 +186,13 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "hypeman_volumes_allocated_bytes",
+          "expr": "hypeman_volumes_allocated_bytes{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}",
           "legendFormat": "allocated",
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "hypeman_volumes_used_bytes",
+          "expr": "hypeman_volumes_used_bytes{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}",
           "legendFormat": "used",
           "refId": "B"
         }
@@ -214,13 +214,13 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(hypeman_exec_bytes_sent_total[5m])",
+          "expr": "rate(hypeman_exec_bytes_sent_total{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}[5m])",
           "legendFormat": "sent (stdin)",
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(hypeman_exec_bytes_received_total[5m])",
+          "expr": "rate(hypeman_exec_bytes_received_total{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}[5m])",
           "legendFormat": "received (stdout+stderr)",
           "refId": "B"
         }
@@ -242,12 +242,18 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "hypeman_images_build_queue_length",
+          "expr": "hypeman_images_build_queue_length{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}",
           "legendFormat": "queue length",
           "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "rate(hypeman_images_pulls_total{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}[5m])",
+          "legendFormat": "pulls/sec ({{status}})",
+          "refId": "B"
         }
       ],
-      "title": "Image Build Queue",
+      "title": "Image Build Queue & Pulls",
       "type": "timeseries"
     },
     {
@@ -260,7 +266,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "histogram_quantile(0.95, rate(hypeman_vmm_api_duration_seconds_bucket[5m]))",
+          "expr": "histogram_quantile(0.95, sum(rate(hypeman_vmm_api_duration_seconds_bucket{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}[5m])) by (le, operation))",
           "legendFormat": "p95 {{operation}}",
           "refId": "A"
         }
@@ -282,13 +288,13 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "hypeman_network_allocations_total",
+          "expr": "hypeman_network_allocations_total{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}",
           "legendFormat": "IP allocations",
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(hypeman_network_tap_operations_total[5m])",
+          "expr": "rate(hypeman_network_tap_operations_total{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}[5m])",
           "legendFormat": "TAP ops/sec ({{operation}})",
           "refId": "B"
         }
@@ -297,7 +303,53 @@
       "type": "timeseries"
     },
     {
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 27 },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 27 },
+      "id": 15,
+      "options": {
+        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "single", "sort": "none" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "histogram_quantile(0.95, sum(rate(hypeman_images_build_duration_seconds_bucket{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}[5m])) by (le))",
+          "legendFormat": "p95 build",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "histogram_quantile(0.95, sum(rate(hypeman_volumes_create_duration_seconds_bucket{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}[5m])) by (le))",
+          "legendFormat": "p95 volume create",
+          "refId": "B"
+        }
+      ],
+      "title": "Image Build & Volume Create (p95)",
+      "type": "timeseries",
+      "fieldConfig": {
+        "defaults": { "unit": "s" },
+        "overrides": []
+      }
+    },
+    {
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 27 },
+      "id": 16,
+      "options": {
+        "legend": { "calcs": [], "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "single", "sort": "none" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "rate(hypeman_instances_state_transitions_total{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}[5m])",
+          "legendFormat": "{{from}} → {{to}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Instance State Transitions/sec",
+      "type": "timeseries"
+    },
+    {
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 27 },
       "id": 13,
       "options": {
         "legend": { "calcs": [], "displayMode": "list", "placement": "bottom" },
@@ -306,13 +358,13 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "go_memory_used_bytes",
+          "expr": "go_memory_used_bytes{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}",
           "legendFormat": "memory used",
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "go_memory_gc_goal_bytes",
+          "expr": "go_memory_gc_goal_bytes{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}",
           "legendFormat": "GC goal",
           "refId": "B"
         }
@@ -325,7 +377,7 @@
       }
     },
     {
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 27 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 35 },
       "id": 14,
       "options": {
         "legend": { "calcs": [], "displayMode": "list", "placement": "bottom" },
@@ -334,12 +386,30 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "go_goroutine_count",
+          "expr": "go_goroutine_count{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}",
           "legendFormat": "goroutines",
           "refId": "A"
         }
       ],
       "title": "Goroutines",
+      "type": "timeseries"
+    },
+    {
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 35 },
+      "id": 17,
+      "options": {
+        "legend": { "calcs": [], "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "single", "sort": "none" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "rate(hypeman_exec_sessions_total{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}[5m])",
+          "legendFormat": "sessions/sec ({{status}})",
+          "refId": "A"
+        }
+      ],
+      "title": "Exec Sessions/sec",
       "type": "timeseries"
     }
   ],
@@ -355,14 +425,14 @@
         "hide": 0,
         "includeAll": true,
         "label": "Environment",
-        "multi": false,
+        "multi": true,
         "name": "env",
         "options": [],
         "query": { "query": "label_values(hypeman_uptime_seconds, deployment_environment_name)", "refId": "A" },
-        "refresh": 1,
+        "refresh": 2,
         "regex": "",
         "skipUrlSync": false,
-        "sort": 0,
+        "sort": 1,
         "type": "query"
       },
       {
@@ -372,14 +442,14 @@
         "hide": 0,
         "includeAll": true,
         "label": "Instance",
-        "multi": false,
+        "multi": true,
         "name": "instance",
         "options": [],
         "query": { "query": "label_values(hypeman_uptime_seconds, service_instance_id)", "refId": "A" },
-        "refresh": 1,
+        "refresh": 2,
         "regex": "",
         "skipUrlSync": false,
-        "sort": 0,
+        "sort": 1,
         "type": "query"
       }
     ]
@@ -389,6 +459,6 @@
   "timezone": "",
   "title": "Hypeman",
   "uid": "hypeman-overview",
-  "version": 1,
+  "version": 2,
   "weekStart": ""
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/onkernel/hypeman/lib/paths"
 	"github.com/onkernel/hypeman/lib/system"
 	"github.com/onkernel/hypeman/lib/volumes"
+	"go.opentelemetry.io/otel"
 )
 
 // ProvideLogger provides a structured logger with subsystem-specific levels
@@ -39,7 +40,8 @@ func ProvidePaths(cfg *config.Config) *paths.Paths {
 
 // ProvideImageManager provides the image manager
 func ProvideImageManager(p *paths.Paths, cfg *config.Config) (images.Manager, error) {
-	return images.NewManager(p, cfg.MaxConcurrentBuilds, nil)
+	meter := otel.GetMeterProvider().Meter("hypeman")
+	return images.NewManager(p, cfg.MaxConcurrentBuilds, meter)
 }
 
 // ProvideSystemManager provides the system manager
@@ -49,7 +51,8 @@ func ProvideSystemManager(p *paths.Paths) system.Manager {
 
 // ProvideNetworkManager provides the network manager
 func ProvideNetworkManager(p *paths.Paths, cfg *config.Config) network.Manager {
-	return network.NewManager(p, cfg, nil)
+	meter := otel.GetMeterProvider().Meter("hypeman")
+	return network.NewManager(p, cfg, meter)
 }
 
 // ProvideInstanceManager provides the instance manager
@@ -88,7 +91,9 @@ func ProvideInstanceManager(p *paths.Paths, cfg *config.Config, imageManager ima
 		MaxTotalMemory:       maxTotalMemory,
 	}
 
-	return instances.NewManager(p, imageManager, systemManager, networkManager, volumeManager, limits, nil, nil), nil
+	meter := otel.GetMeterProvider().Meter("hypeman")
+	tracer := otel.GetTracerProvider().Tracer("hypeman")
+	return instances.NewManager(p, imageManager, systemManager, networkManager, volumeManager, limits, meter, tracer), nil
 }
 
 // ProvideVolumeManager provides the volume manager
@@ -103,5 +108,6 @@ func ProvideVolumeManager(p *paths.Paths, cfg *config.Config) (volumes.Manager, 
 		maxTotalVolumeStorage = int64(storageSize)
 	}
 
-	return volumes.NewManager(p, maxTotalVolumeStorage, nil), nil
+	meter := otel.GetMeterProvider().Meter("hypeman")
+	return volumes.NewManager(p, maxTotalVolumeStorage, meter), nil
 }

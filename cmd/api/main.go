@@ -27,6 +27,7 @@ import (
 	mw "github.com/onkernel/hypeman/lib/middleware"
 	"github.com/onkernel/hypeman/lib/oapi"
 	"github.com/onkernel/hypeman/lib/otel"
+	"github.com/onkernel/hypeman/lib/vmm"
 	"github.com/riandyrn/otelchi"
 	"golang.org/x/sync/errgroup"
 )
@@ -68,11 +69,15 @@ func run() error {
 		}()
 	}
 
-	// Initialize exec metrics if OTel is enabled
+	// Initialize exec and vmm metrics if OTel is enabled
 	if otelProvider != nil && otelProvider.Meter != nil {
 		execMetrics, err := exec.NewMetrics(otelProvider.Meter)
 		if err == nil {
 			exec.SetMetrics(execMetrics)
+		}
+		vmmMetrics, err := vmm.NewMetrics(otelProvider.Meter)
+		if err == nil {
+			vmm.SetMetrics(vmmMetrics)
 		}
 	}
 
