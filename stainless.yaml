@@ -100,6 +100,18 @@ resources:
       retrieve: get /volumes/{id}
       delete: delete /volumes/{id}
 
+  ingresses:
+    models:
+      ingress: '#/components/schemas/Ingress'
+      ingress_rule: '#/components/schemas/IngressRule'
+      ingress_match: '#/components/schemas/IngressMatch'
+      ingress_target: '#/components/schemas/IngressTarget'
+    methods:
+      list: get /ingresses
+      create: post /ingresses
+      retrieve: get /ingresses/{id}
+      delete: delete /ingresses/{id}
+
 settings:
   # All generated integration tests that hit the prism mock http server are marked
   # as skipped. Removing this setting or setting it to false enables tests, but
