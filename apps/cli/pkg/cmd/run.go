@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/onkernel/hypeman-go"
 	"github.com/onkernel/hypeman-go/option"
@@ -65,23 +66,27 @@ func handleRun(ctx context.Context, cmd *cli.Command) error {
 
 	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
 
-	// Check if image exists, pull if not
-	_, err := client.Images.Get(ctx, image)
+	// Check if image exists and is ready
+	imgInfo, err := client.Images.Get(ctx, image)
 	if err != nil {
 		// Image not found, try to pull it
 		var apiErr *hypeman.Error
 		if ok := isNotFoundError(err, &apiErr); ok {
 			fmt.Fprintf(os.Stderr, "Image not found locally. Pulling %s...\n", image)
-			_, err = client.Images.New(ctx, hypeman.ImageNewParams{
+			imgInfo, err = client.Images.New(ctx, hypeman.ImageNewParams{
 				Name: image,
 			})
 			if err != nil {
 				return fmt.Errorf("failed to pull image: %w", err)
 			}
-			fmt.Fprintf(os.Stderr, "Pull complete.\n")
 		} else {
 			return fmt.Errorf("failed to check image: %w", err)
 		}
+	}
+
+	// Wait for image to be ready (build is asynchronous)
+	if err := waitForImageReady(ctx, &client, image, imgInfo); err != nil {
+		return err
 	}
 
 	// Generate name if not provided
@@ -139,3 +144,68 @@ func isNotFoundError(err error, target **hypeman.Error) bool {
 	return false
 }
 
+// waitForImageReady polls image status until it becomes ready or failed
+func waitForImageReady(ctx context.Context, client *hypeman.Client, imageName string, img *hypeman.Image) error {
+	if img.Status == hypeman.ImageStatusReady {
+		return nil
+	}
+	if img.Status == hypeman.ImageStatusFailed {
+		if img.Error != "" {
+			return fmt.Errorf("image build failed: %s", img.Error)
+		}
+		return fmt.Errorf("image build failed")
+	}
+
+	// Poll until ready
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	// Show initial status
+	showImageStatus(img)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			updated, err := client.Images.Get(ctx, imageName)
+			if err != nil {
+				return fmt.Errorf("failed to check image status: %w", err)
+			}
+
+			// Show status update if changed
+			if updated.Status != img.Status {
+				showImageStatus(updated)
+				img = updated
+			}
+
+			switch updated.Status {
+			case hypeman.ImageStatusReady:
+				return nil
+			case hypeman.ImageStatusFailed:
+				if updated.Error != "" {
+					return fmt.Errorf("image build failed: %s", updated.Error)
+				}
+				return fmt.Errorf("image build failed")
+			}
+		}
+	}
+}
+
+// showImageStatus prints image build status to stderr
+func showImageStatus(img *hypeman.Image) {
+	switch img.Status {
+	case hypeman.ImageStatusPending:
+		if img.QueuePosition > 0 {
+			fmt.Fprintf(os.Stderr, "Queued (position %d)...\n", img.QueuePosition)
+		} else {
+			fmt.Fprintf(os.Stderr, "Queued...\n")
+		}
+	case hypeman.ImageStatusPulling:
+		fmt.Fprintf(os.Stderr, "Pulling image...\n")
+	case hypeman.ImageStatusConverting:
+		fmt.Fprintf(os.Stderr, "Converting to disk image...\n")
+	case hypeman.ImageStatusReady:
+		fmt.Fprintf(os.Stderr, "Image ready.\n")
+	}
+}

@@ -98,6 +98,8 @@ func init() {
 					&instancesList,
 					&instancesPutInStandby,
 					&instancesRestoreFromStandby,
+					&instancesLogs,
+					&instancesDelete,
 				},
 			},
 			{
