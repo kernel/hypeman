@@ -134,10 +134,12 @@ func Load() *Config {
 		LogLevel: getEnv("LOG_LEVEL", "info"),
 
 		// Envoy / Ingress configuration
-		EnvoyListenAddress:  getEnv("ENVOY_LISTEN_ADDRESS", "0.0.0.0"),
-		EnvoyAdminAddress:   getEnv("ENVOY_ADMIN_ADDRESS", "127.0.0.1"),
-		EnvoyAdminPort:      getEnvInt("ENVOY_ADMIN_PORT", 9901),
-		EnvoyStopOnShutdown: getEnvBool("ENVOY_STOP_ON_SHUTDOWN", false),
+		EnvoyListenAddress: getEnv("ENVOY_LISTEN_ADDRESS", "0.0.0.0"),
+		EnvoyAdminAddress:  getEnv("ENVOY_ADMIN_ADDRESS", "127.0.0.1"),
+		EnvoyAdminPort:     getEnvInt("ENVOY_ADMIN_PORT", 9901),
+		// For production, set to false
+		// allows for updating hypeman without restarting envoy
+		EnvoyStopOnShutdown: getEnvBool("ENVOY_STOP_ON_SHUTDOWN", true),
 	}
 
 	return cfg
