@@ -24,23 +24,29 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRegistryPushAndConvert(t *testing.T) {
+// setupRegistryTest creates a test service with a mounted OCI registry server.
+// Returns the service (for API calls) and the server host (for building push URLs).
+func setupRegistryTest(t *testing.T) (*ApiService, string) {
+	t.Helper()
+
 	svc := newTestService(t)
 	p := paths.New(svc.Config.DataDir)
 
-	// Create registry
 	reg, err := registry.New(p, svc.ImageManager)
 	require.NoError(t, err)
 
-	// Create test server with registry mounted
 	r := chi.NewRouter()
 	r.Mount("/v2", reg.Handler())
 
 	ts := httptest.NewServer(r)
-	defer ts.Close()
+	t.Cleanup(ts.Close)
 
-	// Get the test server host (without http://)
 	serverHost := strings.TrimPrefix(ts.URL, "http://")
+	return svc, serverHost
+}
+
+func TestRegistryPushAndConvert(t *testing.T) {
+	svc, serverHost := setupRegistryTest(t)
 
 	// Pull a small image from Docker Hub to push to our registry
 	t.Log("Pulling alpine:latest from Docker Hub...")
@@ -54,7 +60,7 @@ func TestRegistryPushAndConvert(t *testing.T) {
 	require.NoError(t, err)
 	t.Logf("Source image digest: %s", digest.String())
 
-	// Push to our test registry using digest reference (required for conversion trigger)
+	// Push to our test registry using digest reference
 	targetRef := serverHost + "/test/alpine@" + digest.String()
 	t.Logf("Pushing to %s...", targetRef)
 
@@ -67,62 +73,15 @@ func TestRegistryPushAndConvert(t *testing.T) {
 
 	// Wait for image to be converted
 	imageName := "test/alpine@" + digest.String()
-	t.Logf("Waiting for image %s to be ready...", imageName)
-
-	deadline := time.Now().Add(60 * time.Second)
-	var lastStatus oapi.ImageStatus
-	for time.Now().Before(deadline) {
-		resp, err := svc.GetImage(ctx(), oapi.GetImageRequestObject{
-			Name: imageName,
-		})
-		if err != nil {
-			t.Logf("GetImage error (may be expected initially): %v", err)
-			time.Sleep(1 * time.Second)
-			continue
-		}
-
-		imgResp, ok := resp.(oapi.GetImage200JSONResponse)
-		if ok {
-			lastStatus = imgResp.Status
-			switch imgResp.Status {
-			case oapi.Ready:
-				t.Log("Image conversion complete!")
-				assert.NotNil(t, imgResp.SizeBytes, "ready image should have size")
-				t.Logf("Image ready: %s (digest=%s, size=%d)", imgResp.Name, imgResp.Digest, *imgResp.SizeBytes)
-				return
-			case oapi.Failed:
-				errMsg := "unknown error"
-				if imgResp.Error != nil {
-					errMsg = *imgResp.Error
-				}
-				t.Fatalf("Image conversion failed: %s", errMsg)
-			default:
-				t.Logf("Image status: %s", imgResp.Status)
-			}
-		}
-		time.Sleep(2 * time.Second)
-	}
-
-	t.Fatalf("Timeout waiting for image conversion. Last status: %s", lastStatus)
+	imgResp := waitForImageReady(t, svc, imageName, 60*time.Second)
+	assert.NotNil(t, imgResp.SizeBytes, "ready image should have size")
 }
 
 func TestRegistryVersionCheck(t *testing.T) {
-	svc := newTestService(t)
-	p := paths.New(svc.Config.DataDir)
-
-	// Create registry
-	reg, err := registry.New(p, svc.ImageManager)
-	require.NoError(t, err)
-
-	// Create test server
-	r := chi.NewRouter()
-	r.Mount("/v2", reg.Handler())
-
-	ts := httptest.NewServer(r)
-	defer ts.Close()
+	_, serverHost := setupRegistryTest(t)
 
 	// Test /v2/ endpoint (version check)
-	resp, err := http.Get(ts.URL + "/v2/")
+	resp, err := http.Get("http://" + serverHost + "/v2/")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
@@ -136,26 +95,13 @@ func TestRegistryPushAndCreateInstance(t *testing.T) {
 		t.Skip("/dev/kvm not available - skipping VM creation test")
 	}
 
-	svc := newTestService(t)
-	p := paths.New(svc.Config.DataDir)
+	svc, serverHost := setupRegistryTest(t)
 
-	// Ensure system files
+	// Ensure system files for VM creation
+	p := paths.New(svc.Config.DataDir)
 	systemMgr := system.NewManager(p)
 	err := systemMgr.EnsureSystemFiles(context.Background())
 	require.NoError(t, err)
-
-	// Create registry
-	reg, err := registry.New(p, svc.ImageManager)
-	require.NoError(t, err)
-
-	// Create test server
-	r := chi.NewRouter()
-	r.Mount("/v2", reg.Handler())
-
-	ts := httptest.NewServer(r)
-	defer ts.Close()
-
-	serverHost := strings.TrimPrefix(ts.URL, "http://")
 
 	// Pull and push alpine
 	t.Log("Pulling alpine:latest...")
@@ -178,15 +124,7 @@ func TestRegistryPushAndCreateInstance(t *testing.T) {
 
 	// Wait for image to be ready
 	imageName := "test/alpine@" + digest.String()
-	deadline := time.Now().Add(60 * time.Second)
-	for time.Now().Before(deadline) {
-		resp, _ := svc.GetImage(ctx(), oapi.GetImageRequestObject{Name: imageName})
-		if img, ok := resp.(oapi.GetImage200JSONResponse); ok && img.Status == oapi.Ready {
-			t.Log("Image ready!")
-			break
-		}
-		time.Sleep(2 * time.Second)
-	}
+	waitForImageReady(t, svc, imageName, 60*time.Second)
 
 	// Create instance with pushed image
 	t.Log("Creating instance with pushed image...")
@@ -212,7 +150,7 @@ func TestRegistryPushAndCreateInstance(t *testing.T) {
 	t.Logf("Instance created: %s (state: %s)", instance.Id, instance.State)
 
 	// Verify instance reaches Running state
-	deadline = time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		resp, _ := svc.GetInstance(ctx(), oapi.GetInstanceRequestObject{Id: instance.Id})
 		if inst, ok := resp.(oapi.GetInstance200JSONResponse); ok {
@@ -231,19 +169,7 @@ func TestRegistryPushAndCreateInstance(t *testing.T) {
 // TestRegistryLayerCaching verifies that pushing the same image twice
 // reuses cached layers and doesn't re-upload them.
 func TestRegistryLayerCaching(t *testing.T) {
-	svc := newTestService(t)
-	p := paths.New(svc.Config.DataDir)
-
-	reg, err := registry.New(p, svc.ImageManager)
-	require.NoError(t, err)
-
-	r := chi.NewRouter()
-	r.Mount("/v2", reg.Handler())
-
-	ts := httptest.NewServer(r)
-	defer ts.Close()
-
-	serverHost := strings.TrimPrefix(ts.URL, "http://")
+	_, serverHost := setupRegistryTest(t)
 
 	// Pull alpine image from Docker Hub
 	t.Log("Pulling alpine:latest from Docker Hub...")
@@ -326,19 +252,7 @@ func TestRegistryLayerCaching(t *testing.T) {
 // TestRegistrySharedLayerCaching verifies that pushing different images
 // that share layers reuses the cached shared layers.
 func TestRegistrySharedLayerCaching(t *testing.T) {
-	svc := newTestService(t)
-	p := paths.New(svc.Config.DataDir)
-
-	reg, err := registry.New(p, svc.ImageManager)
-	require.NoError(t, err)
-
-	r := chi.NewRouter()
-	r.Mount("/v2", reg.Handler())
-
-	ts := httptest.NewServer(r)
-	defer ts.Close()
-
-	serverHost := strings.TrimPrefix(ts.URL, "http://")
+	_, serverHost := setupRegistryTest(t)
 
 	// Pull alpine image (this will be our base)
 	t.Log("Pulling alpine:latest...")
@@ -419,19 +333,7 @@ func TestRegistrySharedLayerCaching(t *testing.T) {
 // TestRegistryTagPush verifies that pushing with a tag reference (not digest)
 // correctly triggers conversion. The server computes the digest from the manifest.
 func TestRegistryTagPush(t *testing.T) {
-	svc := newTestService(t)
-	p := paths.New(svc.Config.DataDir)
-
-	reg, err := registry.New(p, svc.ImageManager)
-	require.NoError(t, err)
-
-	r := chi.NewRouter()
-	r.Mount("/v2", reg.Handler())
-
-	ts := httptest.NewServer(r)
-	defer ts.Close()
-
-	serverHost := strings.TrimPrefix(ts.URL, "http://")
+	svc, serverHost := setupRegistryTest(t)
 
 	// Pull alpine image from Docker Hub
 	t.Log("Pulling alpine:latest from Docker Hub...")
@@ -457,81 +359,33 @@ func TestRegistryTagPush(t *testing.T) {
 	t.Log("Push successful!")
 
 	// The image should be registered with the computed digest, not the tag
-	// Wait for image to be converted using the digest-based name
 	imageName := "tag-test/alpine@" + digest.String()
-	t.Logf("Waiting for image %s to be ready...", imageName)
+	waitForImageReady(t, svc, imageName, 60*time.Second)
 
-	deadline := time.Now().Add(60 * time.Second)
-	var lastStatus oapi.ImageStatus
-	for time.Now().Before(deadline) {
-		resp, err := svc.GetImage(ctx(), oapi.GetImageRequestObject{
-			Name: imageName,
-		})
-		if err != nil {
-			t.Logf("GetImage error (may be expected initially): %v", err)
-			time.Sleep(1 * time.Second)
-			continue
+	// Verify image appears in ListImages (GET /images)
+	listResp, err := svc.ListImages(ctx(), oapi.ListImagesRequestObject{})
+	require.NoError(t, err)
+	images, ok := listResp.(oapi.ListImages200JSONResponse)
+	require.True(t, ok, "expected ListImages 200 response")
+
+	var found bool
+	for _, img := range images {
+		if img.Digest == digest.String() {
+			found = true
+			assert.Equal(t, oapi.Ready, img.Status, "image in list should have Ready status")
+			assert.NotNil(t, img.SizeBytes, "ready image should have size")
+			t.Logf("Image found in ListImages: %s (status=%s, size=%d)", img.Name, img.Status, *img.SizeBytes)
+			break
 		}
-
-		imgResp, ok := resp.(oapi.GetImage200JSONResponse)
-		if ok {
-			lastStatus = imgResp.Status
-			switch imgResp.Status {
-			case oapi.Ready:
-				t.Log("Image conversion complete! Tag push works correctly.")
-
-				// Verify image appears in ListImages (GET /images)
-				listResp, err := svc.ListImages(ctx(), oapi.ListImagesRequestObject{})
-				require.NoError(t, err)
-				images, ok := listResp.(oapi.ListImages200JSONResponse)
-				require.True(t, ok, "expected ListImages 200 response")
-
-				// Find our image in the list
-				var found bool
-				for _, img := range images {
-					if img.Digest == digest.String() {
-						found = true
-						assert.Equal(t, oapi.Ready, img.Status, "image in list should have Ready status")
-						assert.NotNil(t, img.SizeBytes, "ready image should have size")
-						t.Logf("Image found in ListImages: %s (status=%s, size=%d)", img.Name, img.Status, *img.SizeBytes)
-						break
-					}
-				}
-				assert.True(t, found, "pushed image should appear in ListImages response")
-				return // Success!
-			case oapi.Failed:
-				errMsg := "unknown error"
-				if imgResp.Error != nil {
-					errMsg = *imgResp.Error
-				}
-				t.Fatalf("Image conversion failed: %s", errMsg)
-			default:
-				t.Logf("Image status: %s", imgResp.Status)
-			}
-		}
-		time.Sleep(2 * time.Second)
 	}
-
-	t.Fatalf("Timeout waiting for image conversion. Last status: %s", lastStatus)
+	assert.True(t, found, "pushed image should appear in ListImages response")
 }
 
 // TestRegistryDockerV2ManifestConversion verifies that pushing an image with a
 // Docker v2 manifest (as returned by local Docker daemon) is correctly converted
 // to OCI format and the image conversion succeeds.
 func TestRegistryDockerV2ManifestConversion(t *testing.T) {
-	svc := newTestService(t)
-	p := paths.New(svc.Config.DataDir)
-
-	reg, err := registry.New(p, svc.ImageManager)
-	require.NoError(t, err)
-
-	r := chi.NewRouter()
-	r.Mount("/v2", reg.Handler())
-
-	ts := httptest.NewServer(r)
-	defer ts.Close()
-
-	serverHost := strings.TrimPrefix(ts.URL, "http://")
+	svc, serverHost := setupRegistryTest(t)
 
 	// Pull alpine image from Docker Hub (OCI format)
 	t.Log("Pulling alpine:latest from Docker Hub...")
@@ -556,59 +410,11 @@ func TestRegistryDockerV2ManifestConversion(t *testing.T) {
 	require.NoError(t, err)
 	t.Log("Push successful!")
 
-	// Get the digest of the pushed image (Docker v2 manifest digest)
-	dockerV2Digest, err := dockerV2Img.Digest()
-	require.NoError(t, err)
-	t.Logf("Docker v2 manifest digest: %s", dockerV2Digest.String())
-
 	// Wait for image to be converted
-	// The server should convert Docker v2 to OCI format internally
-	deadline := time.Now().Add(60 * time.Second)
-	var lastStatus oapi.ImageStatus
-	var lastError string
-	for time.Now().Before(deadline) {
-		// Check ListImages to find the image
-		listResp, err := svc.ListImages(ctx(), oapi.ListImagesRequestObject{})
-		if err != nil {
-			t.Logf("ListImages error: %v", err)
-			time.Sleep(1 * time.Second)
-			continue
-		}
-
-		images, ok := listResp.(oapi.ListImages200JSONResponse)
-		if !ok {
-			time.Sleep(1 * time.Second)
-			continue
-		}
-
-		// Look for our image in the list
-		for _, img := range images {
-			if strings.Contains(img.Name, "dockerv2-test/alpine") {
-				lastStatus = img.Status
-				if img.Error != nil {
-					lastError = *img.Error
-				}
-
-				switch img.Status {
-				case oapi.Ready:
-					t.Log("Docker v2 image conversion complete!")
-					assert.NotNil(t, img.SizeBytes, "ready image should have size")
-					t.Logf("Image ready: %s (digest=%s, size=%d)", img.Name, img.Digest, *img.SizeBytes)
-
-					// Verify the image has expected metadata
-					assert.NotEmpty(t, img.Digest, "image should have digest")
-					return // Success!
-				case oapi.Failed:
-					t.Fatalf("Docker v2 image conversion failed: %s", lastError)
-				default:
-					t.Logf("Image status: %s", img.Status)
-				}
-			}
-		}
-		time.Sleep(2 * time.Second)
-	}
-
-	t.Fatalf("Timeout waiting for Docker v2 image conversion. Last status: %s, error: %s", lastStatus, lastError)
+	// The server converts Docker v2 to OCI format internally, resulting in a different digest
+	imgResp := waitForImageReady(t, svc, "dockerv2-test/alpine:v1", 60*time.Second)
+	assert.NotNil(t, imgResp.SizeBytes, "ready image should have size")
+	assert.NotEmpty(t, imgResp.Digest, "image should have digest")
 }
 
 // dockerV2ImageWrapper wraps an OCI image and returns Docker v2 media types
@@ -750,4 +556,48 @@ type loggingTransport struct {
 func (t *loggingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	t.log(req.Method, req.URL.Path)
 	return t.transport.RoundTrip(req)
+}
+
+// waitForImageReady polls GetImage until the image reaches Ready status.
+// Returns the image response on success, fails the test on error or timeout.
+func waitForImageReady(t *testing.T, svc *ApiService, imageName string, timeout time.Duration) oapi.GetImage200JSONResponse {
+	t.Helper()
+	t.Logf("Waiting for image %s to be ready...", imageName)
+
+	deadline := time.Now().Add(timeout)
+	var lastStatus oapi.ImageStatus
+	var lastError string
+
+	for time.Now().Before(deadline) {
+		resp, err := svc.GetImage(ctx(), oapi.GetImageRequestObject{Name: imageName})
+		if err != nil {
+			time.Sleep(1 * time.Second)
+			continue
+		}
+
+		imgResp, ok := resp.(oapi.GetImage200JSONResponse)
+		if !ok {
+			time.Sleep(1 * time.Second)
+			continue
+		}
+
+		lastStatus = imgResp.Status
+		if imgResp.Error != nil {
+			lastError = *imgResp.Error
+		}
+
+		switch imgResp.Status {
+		case oapi.Ready:
+			t.Logf("Image ready: %s (digest=%s)", imgResp.Name, imgResp.Digest)
+			return imgResp
+		case oapi.Failed:
+			t.Fatalf("Image conversion failed: %s", lastError)
+		default:
+			t.Logf("Image status: %s", imgResp.Status)
+		}
+		time.Sleep(2 * time.Second)
+	}
+
+	t.Fatalf("Timeout waiting for image %s. Last status: %s, error: %s", imageName, lastStatus, lastError)
+	return oapi.GetImage200JSONResponse{}
 }

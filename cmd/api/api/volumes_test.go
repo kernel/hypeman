@@ -37,7 +37,7 @@ func TestGetVolume_ByName(t *testing.T) {
 
 	// Create a volume
 	createResp, err := svc.CreateVolume(ctx(), oapi.CreateVolumeRequestObject{
-		Body: &oapi.CreateVolumeRequest{
+		JSONBody: &oapi.CreateVolumeRequest{
 			Name:   "my-data",
 			SizeGb: 1,
 		},
@@ -62,7 +62,7 @@ func TestDeleteVolume_ByName(t *testing.T) {
 
 	// Create a volume
 	_, err := svc.CreateVolume(ctx(), oapi.CreateVolumeRequestObject{
-		Body: &oapi.CreateVolumeRequest{
+		JSONBody: &oapi.CreateVolumeRequest{
 			Name:   "to-delete",
 			SizeGb: 1,
 		},
