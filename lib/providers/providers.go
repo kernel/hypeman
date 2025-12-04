@@ -8,6 +8,7 @@ import (
 	"github.com/c2h5oh/datasize"
 	"github.com/onkernel/hypeman/cmd/api/config"
 	"github.com/onkernel/hypeman/lib/images"
+	"github.com/onkernel/hypeman/lib/ingress"
 	"github.com/onkernel/hypeman/lib/instances"
 	"github.com/onkernel/hypeman/lib/logger"
 	"github.com/onkernel/hypeman/lib/network"
@@ -118,4 +119,64 @@ func ProvideVolumeManager(p *paths.Paths, cfg *config.Config) (volumes.Manager, 
 // ProvideRegistry provides the OCI registry for image push
 func ProvideRegistry(p *paths.Paths, imageManager images.Manager) (*registry.Registry, error) {
 	return registry.New(p, imageManager)
+}
+
+// instanceResolverAdapter adapts the instance manager to the ingress.InstanceResolver interface
+type instanceResolverAdapter struct {
+	instanceManager instances.Manager
+}
+
+// ResolveInstanceIP resolves an instance name or ID to its IP address.
+func (a *instanceResolverAdapter) ResolveInstanceIP(ctx context.Context, nameOrID string) (string, error) {
+	// Try by ID first
+	inst, err := a.instanceManager.GetInstance(ctx, nameOrID)
+	if err != nil {
+		// Try by name
+		inst, err = a.instanceManager.GetInstanceByName(ctx, nameOrID)
+		if err != nil {
+			return "", fmt.Errorf("instance not found: %s", nameOrID)
+		}
+	}
+
+	// Check if instance has network enabled
+	if !inst.NetworkEnabled {
+		return "", fmt.Errorf("instance %s has no network configured", nameOrID)
+	}
+
+	// Check if instance has an IP assigned
+	if inst.IP == "" {
+		return "", fmt.Errorf("instance %s has no IP assigned", nameOrID)
+	}
+
+	return inst.IP, nil
+}
+
+// InstanceExists checks if an instance with the given name or ID exists.
+func (a *instanceResolverAdapter) InstanceExists(ctx context.Context, nameOrID string) (bool, error) {
+	// Try by ID first
+	_, err := a.instanceManager.GetInstance(ctx, nameOrID)
+	if err == nil {
+		return true, nil
+	}
+
+	// Try by name
+	_, err = a.instanceManager.GetInstanceByName(ctx, nameOrID)
+	if err == nil {
+		return true, nil
+	}
+
+	return false, nil
+}
+
+// ProvideIngressManager provides the ingress manager
+func ProvideIngressManager(p *paths.Paths, cfg *config.Config, instanceManager instances.Manager) ingress.Manager {
+	ingressConfig := ingress.Config{
+		ListenAddress: cfg.EnvoyListenAddress,
+		ListenPort:    cfg.EnvoyListenPort,
+		AdminAddress:  cfg.EnvoyAdminAddress,
+		AdminPort:     cfg.EnvoyAdminPort,
+	}
+
+	resolver := &instanceResolverAdapter{instanceManager: instanceManager}
+	return ingress.NewManager(p, ingressConfig, resolver)
 }

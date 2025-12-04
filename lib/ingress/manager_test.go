@@ -1,0 +1,527 @@
+package ingress
+
+import (
+	"context"
+	"os"
+	"testing"
+	"time"
+
+	"github.com/onkernel/hypeman/lib/paths"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// mockInstanceResolver implements InstanceResolver for testing
+type mockInstanceResolver struct {
+	instances map[string]string // instance name/ID -> IP
+}
+
+func newMockResolver() *mockInstanceResolver {
+	return &mockInstanceResolver{
+		instances: make(map[string]string),
+	}
+}
+
+func (m *mockInstanceResolver) AddInstance(nameOrID, ip string) {
+	m.instances[nameOrID] = ip
+}
+
+func (m *mockInstanceResolver) ResolveInstanceIP(ctx context.Context, nameOrID string) (string, error) {
+	ip, ok := m.instances[nameOrID]
+	if !ok {
+		return "", ErrInstanceNotFound
+	}
+	return ip, nil
+}
+
+func (m *mockInstanceResolver) InstanceExists(ctx context.Context, nameOrID string) (bool, error) {
+	_, ok := m.instances[nameOrID]
+	return ok, nil
+}
+
+func setupTestManager(t *testing.T) (Manager, *mockInstanceResolver, *paths.Paths, func()) {
+	t.Helper()
+
+	// Create temp dir
+	tmpDir, err := os.MkdirTemp("", "ingress-manager-test-*")
+	require.NoError(t, err)
+
+	p := paths.New(tmpDir)
+
+	// Create required directories
+	require.NoError(t, os.MkdirAll(p.EnvoyDir(), 0755))
+	require.NoError(t, os.MkdirAll(p.IngressesDir(), 0755))
+
+	resolver := newMockResolver()
+	resolver.AddInstance("my-api", "10.100.0.10")
+	resolver.AddInstance("web-app", "10.100.0.20")
+
+	config := Config{
+		ListenAddress: "0.0.0.0",
+		ListenPort:    8080, // Use non-privileged port for testing
+		AdminAddress:  "127.0.0.1",
+		AdminPort:     19901, // Use different port for testing
+	}
+
+	manager := NewManager(p, config, resolver)
+
+	cleanup := func() {
+		os.RemoveAll(tmpDir)
+	}
+
+	return manager, resolver, p, cleanup
+}
+
+func TestCreateIngress_Success(t *testing.T) {
+	manager, _, _, cleanup := setupTestManager(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	req := CreateIngressRequest{
+		Name: "test-ingress",
+		Rules: []IngressRule{
+			{
+				Match:  IngressMatch{Hostname: "api.example.com"},
+				Target: IngressTarget{Instance: "my-api", Port: 8080},
+			},
+		},
+	}
+
+	ing, err := manager.Create(ctx, req)
+	require.NoError(t, err)
+	assert.NotEmpty(t, ing.ID)
+	assert.Equal(t, "test-ingress", ing.Name)
+	assert.Len(t, ing.Rules, 1)
+	assert.Equal(t, "api.example.com", ing.Rules[0].Match.Hostname)
+	assert.WithinDuration(t, time.Now(), ing.CreatedAt, time.Second)
+}
+
+func TestCreateIngress_MultipleRules(t *testing.T) {
+	manager, _, _, cleanup := setupTestManager(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	req := CreateIngressRequest{
+		Name: "multi-rule-ingress",
+		Rules: []IngressRule{
+			{
+				Match:  IngressMatch{Hostname: "api.example.com"},
+				Target: IngressTarget{Instance: "my-api", Port: 8080},
+			},
+			{
+				Match:  IngressMatch{Hostname: "web.example.com"},
+				Target: IngressTarget{Instance: "web-app", Port: 3000},
+			},
+		},
+	}
+
+	ing, err := manager.Create(ctx, req)
+	require.NoError(t, err)
+	assert.Len(t, ing.Rules, 2)
+}
+
+func TestCreateIngress_InvalidName(t *testing.T) {
+	manager, _, _, cleanup := setupTestManager(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	testCases := []struct {
+		name string
+	}{
+		{"Invalid_Name"},
+		{"-starts-with-dash"},
+		{"ends-with-dash-"},
+		{"has spaces"},
+		{"UPPERCASE"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := CreateIngressRequest{
+				Name: tc.name,
+				Rules: []IngressRule{
+					{Match: IngressMatch{Hostname: "test.example.com"}, Target: IngressTarget{Instance: "my-api", Port: 8080}},
+				},
+			}
+
+			_, err := manager.Create(ctx, req)
+			assert.Error(t, err)
+			assert.ErrorIs(t, err, ErrInvalidRequest)
+		})
+	}
+}
+
+func TestCreateIngress_EmptyName(t *testing.T) {
+	manager, _, _, cleanup := setupTestManager(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	req := CreateIngressRequest{
+		Name: "",
+		Rules: []IngressRule{
+			{Match: IngressMatch{Hostname: "test.example.com"}, Target: IngressTarget{Instance: "my-api", Port: 8080}},
+		},
+	}
+
+	_, err := manager.Create(ctx, req)
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidRequest)
+}
+
+func TestCreateIngress_NoRules(t *testing.T) {
+	manager, _, _, cleanup := setupTestManager(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	req := CreateIngressRequest{
+		Name:  "no-rules-ingress",
+		Rules: []IngressRule{},
+	}
+
+	_, err := manager.Create(ctx, req)
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidRequest)
+}
+
+func TestCreateIngress_InstanceNotFound(t *testing.T) {
+	manager, _, _, cleanup := setupTestManager(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	req := CreateIngressRequest{
+		Name: "missing-instance",
+		Rules: []IngressRule{
+			{
+				Match:  IngressMatch{Hostname: "test.example.com"},
+				Target: IngressTarget{Instance: "nonexistent-instance", Port: 8080},
+			},
+		},
+	}
+
+	_, err := manager.Create(ctx, req)
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, ErrInstanceNotFound)
+}
+
+func TestCreateIngress_DuplicateName(t *testing.T) {
+	manager, _, _, cleanup := setupTestManager(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	req := CreateIngressRequest{
+		Name: "unique-ingress",
+		Rules: []IngressRule{
+			{Match: IngressMatch{Hostname: "first.example.com"}, Target: IngressTarget{Instance: "my-api", Port: 8080}},
+		},
+	}
+
+	// Create first ingress
+	_, err := manager.Create(ctx, req)
+	require.NoError(t, err)
+
+	// Try to create another with same name but different hostname
+	req.Rules[0].Match.Hostname = "second.example.com"
+	_, err = manager.Create(ctx, req)
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, ErrAlreadyExists)
+}
+
+func TestCreateIngress_DuplicateHostname(t *testing.T) {
+	manager, _, _, cleanup := setupTestManager(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Create first ingress with hostname
+	req1 := CreateIngressRequest{
+		Name: "first-ingress",
+		Rules: []IngressRule{
+			{Match: IngressMatch{Hostname: "shared.example.com"}, Target: IngressTarget{Instance: "my-api", Port: 8080}},
+		},
+	}
+	_, err := manager.Create(ctx, req1)
+	require.NoError(t, err)
+
+	// Try to create another ingress with same hostname
+	req2 := CreateIngressRequest{
+		Name: "second-ingress",
+		Rules: []IngressRule{
+			{Match: IngressMatch{Hostname: "shared.example.com"}, Target: IngressTarget{Instance: "web-app", Port: 3000}},
+		},
+	}
+	_, err = manager.Create(ctx, req2)
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, ErrHostnameInUse)
+}
+
+func TestGetIngress_ByID(t *testing.T) {
+	manager, _, _, cleanup := setupTestManager(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Create ingress
+	req := CreateIngressRequest{
+		Name: "get-test",
+		Rules: []IngressRule{
+			{Match: IngressMatch{Hostname: "test.example.com"}, Target: IngressTarget{Instance: "my-api", Port: 8080}},
+		},
+	}
+	created, err := manager.Create(ctx, req)
+	require.NoError(t, err)
+
+	// Get by ID
+	found, err := manager.Get(ctx, created.ID)
+	require.NoError(t, err)
+	assert.Equal(t, created.ID, found.ID)
+	assert.Equal(t, created.Name, found.Name)
+}
+
+func TestGetIngress_ByName(t *testing.T) {
+	manager, _, _, cleanup := setupTestManager(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Create ingress
+	req := CreateIngressRequest{
+		Name: "named-ingress",
+		Rules: []IngressRule{
+			{Match: IngressMatch{Hostname: "test.example.com"}, Target: IngressTarget{Instance: "my-api", Port: 8080}},
+		},
+	}
+	created, err := manager.Create(ctx, req)
+	require.NoError(t, err)
+
+	// Get by name
+	found, err := manager.Get(ctx, "named-ingress")
+	require.NoError(t, err)
+	assert.Equal(t, created.ID, found.ID)
+}
+
+func TestGetIngress_NotFound(t *testing.T) {
+	manager, _, _, cleanup := setupTestManager(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	_, err := manager.Get(ctx, "nonexistent")
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, ErrNotFound)
+}
+
+func TestListIngresses_Empty(t *testing.T) {
+	manager, _, _, cleanup := setupTestManager(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	ingresses, err := manager.List(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, ingresses)
+}
+
+func TestListIngresses_Multiple(t *testing.T) {
+	manager, _, _, cleanup := setupTestManager(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Create multiple ingresses
+	for i := 0; i < 3; i++ {
+		req := CreateIngressRequest{
+			Name: "ingress-" + string(rune('a'+i)),
+			Rules: []IngressRule{
+				{Match: IngressMatch{Hostname: "host" + string(rune('0'+i)) + ".example.com"}, Target: IngressTarget{Instance: "my-api", Port: 8080}},
+			},
+		}
+		_, err := manager.Create(ctx, req)
+		require.NoError(t, err)
+	}
+
+	ingresses, err := manager.List(ctx)
+	require.NoError(t, err)
+	assert.Len(t, ingresses, 3)
+}
+
+func TestDeleteIngress_ByID(t *testing.T) {
+	manager, _, _, cleanup := setupTestManager(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Create ingress
+	req := CreateIngressRequest{
+		Name: "delete-test",
+		Rules: []IngressRule{
+			{Match: IngressMatch{Hostname: "test.example.com"}, Target: IngressTarget{Instance: "my-api", Port: 8080}},
+		},
+	}
+	created, err := manager.Create(ctx, req)
+	require.NoError(t, err)
+
+	// Delete by ID
+	err = manager.Delete(ctx, created.ID)
+	require.NoError(t, err)
+
+	// Verify deleted
+	_, err = manager.Get(ctx, created.ID)
+	assert.ErrorIs(t, err, ErrNotFound)
+}
+
+func TestDeleteIngress_ByName(t *testing.T) {
+	manager, _, _, cleanup := setupTestManager(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Create ingress
+	req := CreateIngressRequest{
+		Name: "delete-by-name",
+		Rules: []IngressRule{
+			{Match: IngressMatch{Hostname: "test.example.com"}, Target: IngressTarget{Instance: "my-api", Port: 8080}},
+		},
+	}
+	_, err := manager.Create(ctx, req)
+	require.NoError(t, err)
+
+	// Delete by name
+	err = manager.Delete(ctx, "delete-by-name")
+	require.NoError(t, err)
+
+	// Verify deleted
+	_, err = manager.Get(ctx, "delete-by-name")
+	assert.ErrorIs(t, err, ErrNotFound)
+}
+
+func TestDeleteIngress_NotFound(t *testing.T) {
+	manager, _, _, cleanup := setupTestManager(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	err := manager.Delete(ctx, "nonexistent")
+	assert.ErrorIs(t, err, ErrNotFound)
+}
+
+func TestValidateName(t *testing.T) {
+	validNames := []string{
+		"a",
+		"ab",
+		"my-ingress",
+		"ingress-1",
+		"a1b2c3",
+		"test123",
+	}
+
+	invalidNames := []string{
+		"",
+		"-starts-with-dash",
+		"ends-with-dash-",
+		"has spaces",
+		"UPPERCASE",
+		"has_underscore",
+		"has.period",
+	}
+
+	for _, name := range validNames {
+		t.Run("valid:"+name, func(t *testing.T) {
+			assert.True(t, isValidName(name), "expected %q to be valid", name)
+		})
+	}
+
+	for _, name := range invalidNames {
+		t.Run("invalid:"+name, func(t *testing.T) {
+			assert.False(t, isValidName(name), "expected %q to be invalid", name)
+		})
+	}
+}
+
+func TestCreateIngressRequest_Validate(t *testing.T) {
+	tests := []struct {
+		name    string
+		req     CreateIngressRequest
+		wantErr bool
+	}{
+		{
+			name: "valid request",
+			req: CreateIngressRequest{
+				Name: "valid",
+				Rules: []IngressRule{
+					{Match: IngressMatch{Hostname: "test.example.com"}, Target: IngressTarget{Instance: "my-api", Port: 8080}},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "empty name",
+			req: CreateIngressRequest{
+				Name: "",
+				Rules: []IngressRule{
+					{Match: IngressMatch{Hostname: "test.example.com"}, Target: IngressTarget{Instance: "my-api", Port: 8080}},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "empty rules",
+			req: CreateIngressRequest{
+				Name:  "valid",
+				Rules: []IngressRule{},
+			},
+			wantErr: true,
+		},
+		{
+			name: "empty hostname",
+			req: CreateIngressRequest{
+				Name: "valid",
+				Rules: []IngressRule{
+					{Match: IngressMatch{Hostname: ""}, Target: IngressTarget{Instance: "my-api", Port: 8080}},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "empty instance",
+			req: CreateIngressRequest{
+				Name: "valid",
+				Rules: []IngressRule{
+					{Match: IngressMatch{Hostname: "test.example.com"}, Target: IngressTarget{Instance: "", Port: 8080}},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid port zero",
+			req: CreateIngressRequest{
+				Name: "valid",
+				Rules: []IngressRule{
+					{Match: IngressMatch{Hostname: "test.example.com"}, Target: IngressTarget{Instance: "my-api", Port: 0}},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid port negative",
+			req: CreateIngressRequest{
+				Name: "valid",
+				Rules: []IngressRule{
+					{Match: IngressMatch{Hostname: "test.example.com"}, Target: IngressTarget{Instance: "my-api", Port: -1}},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid port too high",
+			req: CreateIngressRequest{
+				Name: "valid",
+				Rules: []IngressRule{
+					{Match: IngressMatch{Hostname: "test.example.com"}, Target: IngressTarget{Instance: "my-api", Port: 70000}},
+				},
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.req.Validate()
+			if tc.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}

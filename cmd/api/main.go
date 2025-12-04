@@ -144,6 +144,14 @@ func run() error {
 	}
 	logger.Info("Network manager initialized")
 
+	// Initialize ingress manager (starts Envoy daemon)
+	logger.Info("Initializing ingress manager...")
+	if err := app.IngressManager.Initialize(app.Ctx); err != nil {
+		logger.Error("failed to initialize ingress manager", "error", err)
+		return fmt.Errorf("initialize ingress manager: %w", err)
+	}
+	logger.Info("Ingress manager initialized", "listen", fmt.Sprintf("%s:%d", cfg.EnvoyListenAddress, cfg.EnvoyListenPort))
+
 	// Create router
 	r := chi.NewRouter()
 

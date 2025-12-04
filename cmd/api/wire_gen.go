@@ -11,6 +11,7 @@ import (
 	"github.com/onkernel/hypeman/cmd/api/api"
 	"github.com/onkernel/hypeman/cmd/api/config"
 	"github.com/onkernel/hypeman/lib/images"
+	"github.com/onkernel/hypeman/lib/ingress"
 	"github.com/onkernel/hypeman/lib/instances"
 	"github.com/onkernel/hypeman/lib/network"
 	"github.com/onkernel/hypeman/lib/providers"
@@ -46,11 +47,12 @@ func initializeApp() (*application, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	ingressManager := providers.ProvideIngressManager(paths, config, instancesManager)
 	registry, err := providers.ProvideRegistry(paths, manager)
 	if err != nil {
 		return nil, nil, err
 	}
-	apiService := api.New(config, manager, instancesManager, volumesManager, networkManager)
+	apiService := api.New(config, manager, instancesManager, volumesManager, networkManager, ingressManager)
 	mainApplication := &application{
 		Ctx:             context,
 		Logger:          logger,
@@ -60,6 +62,7 @@ func initializeApp() (*application, func(), error) {
 		NetworkManager:  networkManager,
 		InstanceManager: instancesManager,
 		VolumeManager:   volumesManager,
+		IngressManager:  ingressManager,
 		Registry:        registry,
 		ApiService:      apiService,
 	}
@@ -79,6 +82,7 @@ type application struct {
 	NetworkManager  network.Manager
 	InstanceManager instances.Manager
 	VolumeManager   volumes.Manager
+	IngressManager  ingress.Manager
 	Registry        *registry.Registry
 	ApiService      *api.ApiService
 }

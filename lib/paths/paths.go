@@ -237,3 +237,42 @@ func (p *Paths) VolumeData(id string) string {
 func (p *Paths) VolumeMetadata(id string) string {
 	return filepath.Join(p.VolumeDir(id), "metadata.json")
 }
+
+// Envoy path methods
+
+// EnvoyDir returns the envoy data directory.
+func (p *Paths) EnvoyDir() string {
+	return filepath.Join(p.dataDir, "envoy")
+}
+
+// EnvoyBinary returns the path to the envoy binary.
+func (p *Paths) EnvoyBinary(version, arch string) string {
+	return filepath.Join(p.dataDir, "system", "binaries", "envoy", version, arch, "envoy")
+}
+
+// EnvoyConfig returns the path to the envoy config file.
+func (p *Paths) EnvoyConfig() string {
+	return filepath.Join(p.EnvoyDir(), "config.yaml")
+}
+
+// EnvoyPIDFile returns the path to the envoy PID file.
+func (p *Paths) EnvoyPIDFile() string {
+	return filepath.Join(p.EnvoyDir(), "envoy.pid")
+}
+
+// EnvoyLogFile returns the path to the envoy log file.
+func (p *Paths) EnvoyLogFile() string {
+	return filepath.Join(p.EnvoyDir(), "envoy.log")
+}
+
+// Ingress path methods
+
+// IngressesDir returns the root ingresses directory.
+func (p *Paths) IngressesDir() string {
+	return filepath.Join(p.dataDir, "ingresses")
+}
+
+// IngressMetadata returns the path to ingress metadata.json.
+func (p *Paths) IngressMetadata(id string) string {
+	return filepath.Join(p.IngressesDir(), id+".json")
+}

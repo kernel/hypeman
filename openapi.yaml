@@ -399,6 +399,77 @@ components:
           type: string
           enum: [ok]
           example: ok
+    
+    IngressMatch:
+      type: object
+      required: [hostname]
+      properties:
+        hostname:
+          type: string
+          description: Hostname to match (exact match on Host header)
+          example: api.example.com
+    
+    IngressTarget:
+      type: object
+      required: [instance, port]
+      properties:
+        instance:
+          type: string
+          description: Target instance name or ID
+          example: my-api
+        port:
+          type: integer
+          description: Target port on the instance
+          example: 8080
+    
+    IngressRule:
+      type: object
+      required: [match, target]
+      properties:
+        match:
+          $ref: "#/components/schemas/IngressMatch"
+        target:
+          $ref: "#/components/schemas/IngressTarget"
+    
+    CreateIngressRequest:
+      type: object
+      required: [name, rules]
+      properties:
+        name:
+          type: string
+          description: Human-readable name (lowercase letters, digits, and dashes only; cannot start or end with a dash)
+          pattern: ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$
+          maxLength: 63
+          example: my-api-ingress
+        rules:
+          type: array
+          description: Routing rules for this ingress
+          items:
+            $ref: "#/components/schemas/IngressRule"
+          minItems: 1
+    
+    Ingress:
+      type: object
+      required: [id, name, rules, created_at]
+      properties:
+        id:
+          type: string
+          description: Auto-generated unique identifier
+          example: 2OgJqXsP7j1qLVVYvGJDNiYVlPO
+        name:
+          type: string
+          description: Human-readable name
+          example: my-api-ingress
+        rules:
+          type: array
+          description: Routing rules for this ingress
+          items:
+            $ref: "#/components/schemas/IngressRule"
+        created_at:
+          type: string
+          format: date-time
+          description: Creation timestamp (RFC3339)
+          example: "2025-01-15T10:00:00Z"
 
 paths:
   /health:
@@ -1038,6 +1109,136 @@ paths:
                 $ref: "#/components/schemas/Error"
         409:
           description: Conflict - volume is attached
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  
+  /ingresses:
+    get:
+      summary: List ingresses
+      operationId: listIngresses
+      security:
+        - bearerAuth: []
+      responses:
+        200:
+          description: List of ingresses
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Ingress"
+        401:
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      summary: Create ingress
+      operationId: createIngress
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateIngressRequest"
+      responses:
+        201:
+          description: Ingress created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Ingress"
+        400:
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        401:
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Conflict - ingress with this name already exists or hostname in use
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  
+  /ingresses/{id}:
+    get:
+      summary: Get ingress details
+      operationId: getIngress
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Ingress ID or name
+      responses:
+        200:
+          description: Ingress details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Ingress"
+        404:
+          description: Ingress not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      summary: Delete ingress
+      operationId: deleteIngress
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Ingress ID or name
+      responses:
+        204:
+          description: Ingress deleted
+        404:
+          description: Ingress not found
           content:
             application/json:
               schema:
