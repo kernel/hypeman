@@ -108,6 +108,12 @@ func run() error {
 		logger.Warn("JWT_SECRET not configured - API authentication will fail")
 	}
 
+	// Verify KVM access (required for VM creation)
+	if err := checkKVMAccess(); err != nil {
+		return fmt.Errorf("KVM access check failed: %w\n\nEnsure:\n  1. KVM is enabled (check /dev/kvm exists)\n  2. User is in 'kvm' group: sudo usermod -aG kvm $USER\n  3. Log out and back in, or use: newgrp kvm", err)
+	}
+	logger.Info("KVM access verified")
+
 	// Validate log rotation config
 	var logMaxSize datasize.ByteSize
 	if err := logMaxSize.UnmarshalText([]byte(app.Config.LogMaxSize)); err != nil {
@@ -332,4 +338,20 @@ func getRunningInstanceIDs(app *application) []string {
 		}
 	}
 	return running
+}
+
+// checkKVMAccess verifies KVM is available and the user has permission to use it
+func checkKVMAccess() error {
+	f, err := os.OpenFile("/dev/kvm", os.O_RDWR, 0)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("/dev/kvm not found - KVM not enabled or not supported")
+		}
+		if os.IsPermission(err) {
+			return fmt.Errorf("permission denied accessing /dev/kvm - user not in 'kvm' group")
+		}
+		return fmt.Errorf("cannot access /dev/kvm: %w", err)
+	}
+	f.Close()
+	return nil
 }
