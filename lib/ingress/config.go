@@ -109,7 +109,7 @@ func (g *EnvoyConfigGenerator) WriteConfig(ctx context.Context, ingresses []Ingr
 func (g *EnvoyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingress, ipResolver func(instance string) (string, error)) map[string]interface{} {
 	clusters := g.buildClusters(ctx, ingresses, ipResolver)
 
-	// Add OTEL collector cluster if enabled
+	// Add OTEL collector cluster if enabled (for metrics export)
 	if g.otel.Enabled && g.otel.Endpoint != "" {
 		otelCluster := g.buildOTELCollectorCluster()
 		clusters = append(clusters, otelCluster)
@@ -128,6 +128,11 @@ func (g *EnvoyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 			"listeners": g.buildListeners(ctx, ingresses, ipResolver),
 			"clusters":  clusters,
 		},
+	}
+
+	// Add stats sink to push metrics to OTEL collector
+	if g.otel.Enabled && g.otel.Endpoint != "" {
+		config["stats_sinks"] = g.buildStatsSinks()
 	}
 
 	return config
@@ -252,11 +257,6 @@ func (g *EnvoyConfigGenerator) buildFilterChainsByPort(ctx context.Context, ingr
 					},
 				},
 			},
-		}
-
-		// Add tracing config if OTEL is enabled
-		if g.otel.Enabled && g.otel.Endpoint != "" {
-			httpConnectionManager["tracing"] = g.buildTracingConfig()
 		}
 
 		filterChain := map[string]interface{}{
@@ -391,31 +391,17 @@ func (g *EnvoyConfigGenerator) buildOTELCollectorCluster() map[string]interface{
 	}
 }
 
-// buildTracingConfig builds the tracing configuration for HttpConnectionManager.
-func (g *EnvoyConfigGenerator) buildTracingConfig() map[string]interface{} {
+// buildStatsSinks builds the stats sinks configuration for metrics export to OTEL.
+func (g *EnvoyConfigGenerator) buildStatsSinks() []interface{} {
 	serviceName := g.otel.ServiceName
 	if serviceName == "" {
 		serviceName = "hypeman-envoy"
 	}
 
-	tracingConfig := map[string]interface{}{
-		"provider": map[string]interface{}{
-			"name": "envoy.tracers.opentelemetry",
-			"typed_config": map[string]interface{}{
-				"@type": "type.googleapis.com/envoy.config.trace.v3.OpenTelemetryConfig",
-				"grpc_service": map[string]interface{}{
-					"envoy_grpc": map[string]interface{}{
-						"cluster_name": otelCollectorClusterName,
-					},
-					"timeout": "1s",
-				},
-				"service_name": serviceName,
-			},
-		},
+	// Build resource attributes for metrics
+	resourceAttrs := map[string]interface{}{
+		"service.name": serviceName,
 	}
-
-	// Add resource attributes for common labels (attributes is a map of string -> string)
-	resourceAttrs := map[string]interface{}{}
 	if g.otel.Environment != "" {
 		resourceAttrs["deployment.environment.name"] = g.otel.Environment
 	}
@@ -423,19 +409,22 @@ func (g *EnvoyConfigGenerator) buildTracingConfig() map[string]interface{} {
 		resourceAttrs["service.instance.id"] = g.otel.ServiceInstanceID
 	}
 
-	if len(resourceAttrs) > 0 {
-		tracingConfig["provider"].(map[string]interface{})["typed_config"].(map[string]interface{})["resource_detectors"] = []interface{}{
-			map[string]interface{}{
-				"name": "envoy.tracers.opentelemetry.resource_detectors.static_config",
-				"typed_config": map[string]interface{}{
-					"@type":      "type.googleapis.com/envoy.extensions.tracers.opentelemetry.resource_detectors.v3.StaticConfigResourceDetectorConfig",
-					"attributes": resourceAttrs,
+	return []interface{}{
+		map[string]interface{}{
+			"name": "envoy.stat_sinks.open_telemetry",
+			"typed_config": map[string]interface{}{
+				"@type": "type.googleapis.com/envoy.extensions.stat_sinks.open_telemetry.v3.SinkConfig",
+				"grpc_service": map[string]interface{}{
+					"envoy_grpc": map[string]interface{}{
+						"cluster_name": otelCollectorClusterName,
+					},
+					"timeout": "5s",
 				},
+				"emit_tags_as_attributes": true,
+				"prefix":                  "envoy",
 			},
-		}
+		},
 	}
-
-	return tracingConfig
 }
 
 // parseEndpoint parses a host:port string. Defaults to port 4317 if not specified.

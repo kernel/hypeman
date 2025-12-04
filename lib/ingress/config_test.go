@@ -451,20 +451,17 @@ func TestGenerateConfig_WithOTEL(t *testing.T) {
 
 	configStr := string(data)
 
-	// Verify OTEL collector cluster is present
+	// Verify OTEL collector cluster is present (for stats sink)
 	assert.Contains(t, configStr, "opentelemetry_collector", "config should contain OTEL collector cluster")
 	assert.Contains(t, configStr, "otel-collector", "config should contain OTEL collector host")
 	assert.Contains(t, configStr, "4317", "config should contain OTEL collector port")
 
-	// Verify tracing config is present
-	assert.Contains(t, configStr, "envoy.tracers.opentelemetry", "config should contain OTEL tracer")
-	assert.Contains(t, configStr, "test-service", "config should contain service name")
+	// Verify stats sink is present (for metrics export, not tracing)
+	assert.Contains(t, configStr, "stats_sinks", "config should contain stats_sinks")
+	assert.Contains(t, configStr, "envoy.stat_sinks.open_telemetry", "config should contain OTEL stats sink")
 
-	// Verify resource attributes are present (plain string values)
-	assert.Contains(t, configStr, "deployment.environment.name", "config should contain environment attribute")
-	assert.Contains(t, configStr, "service.instance.id", "config should contain instance ID attribute")
-	assert.Contains(t, configStr, "test", "config should contain environment value")
-	assert.Contains(t, configStr, "instance-123", "config should contain instance ID value")
+	// Verify NO tracing config (we export metrics, not per-request traces)
+	assert.NotContains(t, configStr, "envoy.tracers.opentelemetry", "config should NOT contain OTEL tracer")
 }
 
 func TestGenerateConfig_WithOTELDisabled(t *testing.T) {

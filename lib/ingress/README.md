@@ -102,17 +102,20 @@ DELETE /ingresses/{id} - Delete ingress
 
 ### OpenTelemetry Integration
 
-When OTEL is enabled in hypeman (`OTEL_ENABLED=true`), Envoy is automatically configured to export traces to the same OTEL collector. The following OTEL settings are respected:
+When OTEL is enabled in hypeman (`OTEL_ENABLED=true`), Envoy is automatically configured to push **operational metrics** to the OTEL collector. This provides infrastructure monitoring without exposing tenant request data.
 
+**Configuration used:**
 - `OTEL_ENDPOINT` - gRPC endpoint for the OTEL collector (e.g., `otel-collector:4317`)
 - `OTEL_SERVICE_NAME` - Service name (Envoy uses `{service_name}-envoy`)
-- `OTEL_SERVICE_INSTANCE_ID` - Instance identifier included in traces
-- `ENV` - Deployment environment label
 
-Traces include:
-- HTTP request spans for all ingress traffic
-- Upstream connection and routing information
-- Resource attributes for environment and instance identification
+**Metrics exported include:**
+- Connection metrics (active connections, connection rates, errors)
+- Request rates and error counts (aggregate, not per-request)
+- Upstream health (backend availability, retries)
+- Listener and cluster statistics
+- Memory and resource usage
+
+**Note:** Per-request tracing is intentionally disabled to protect tenant privacy. Only aggregate operational metrics are exported.
 
 ## Security
 
