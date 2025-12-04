@@ -100,6 +100,20 @@ DELETE /ingresses/{id} - Delete ingress
 
 **Note on Ports:** Each ingress rule can specify a `port` in the match criteria to listen on a specific host port. If not specified, defaults to port 80. Envoy dynamically creates listeners for each unique port across all ingresses.
 
+### OpenTelemetry Integration
+
+When OTEL is enabled in hypeman (`OTEL_ENABLED=true`), Envoy is automatically configured to export traces to the same OTEL collector. The following OTEL settings are respected:
+
+- `OTEL_ENDPOINT` - gRPC endpoint for the OTEL collector (e.g., `otel-collector:4317`)
+- `OTEL_SERVICE_NAME` - Service name (Envoy uses `{service_name}-envoy`)
+- `OTEL_SERVICE_INSTANCE_ID` - Instance identifier included in traces
+- `ENV` - Deployment environment label
+
+Traces include:
+- HTTP request spans for all ingress traffic
+- Upstream connection and routing information
+- Resource attributes for environment and instance identification
+
 ## Security
 
 - Admin API bound to localhost only by default
@@ -116,9 +130,13 @@ DELETE /ingresses/{id} - Delete ingress
 4. Wait for admin API to become ready
 
 ### Config Updates
-1. Regenerate `config.yaml` from all ingresses
-2. Perform hot restart by starting a new Envoy process with an incremented restart epoch
-3. New Envoy process coordinates with the old one to take over without dropping connections
+1. Regenerate config to a temporary file
+2. Validate the config using `envoy --mode validate`
+3. If valid, atomically move the temp file to `config.yaml`
+4. Perform hot restart by starting a new Envoy process with an incremented restart epoch
+5. New Envoy process coordinates with the old one to take over without dropping connections
+
+**Note:** Config validation ensures that invalid configurations are never applied. If validation fails, the operation returns an internal server error (500) and the original config remains in place.
 
 ### Shutdown
 - By default (`ENVOY_STOP_ON_SHUTDOWN=false`), Envoy continues running when hypeman exits
@@ -141,7 +159,5 @@ Tests use:
 
 - TLS termination with ACME/Let's Encrypt
 - Path-based L7 routing
-- Multiple listener ports
 - Health checks for backends
 - Connection draining for graceful config updates
-

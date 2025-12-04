@@ -24,7 +24,9 @@ func setupTestGenerator(t *testing.T) (*EnvoyConfigGenerator, *paths.Paths, func
 	// Create required directories
 	require.NoError(t, os.MkdirAll(p.EnvoyDir(), 0755))
 
-	generator := NewEnvoyConfigGenerator(p, "0.0.0.0", "127.0.0.1", 9901)
+	// Pass nil for validator in tests - no real Envoy binary available
+	// Empty OTELConfig means OTEL is disabled
+	generator := NewEnvoyConfigGenerator(p, "0.0.0.0", "127.0.0.1", 9901, nil, OTELConfig{})
 
 	cleanup := func() {
 		os.RemoveAll(tmpDir)
@@ -404,4 +406,93 @@ func TestConfigIsValidYAML(t *testing.T) {
 
 	// Also check that there are no obvious YAML issues (multiple documents, etc)
 	assert.False(t, strings.Contains(string(data), "---\n"), "should be single YAML document")
+}
+
+func TestGenerateConfig_WithOTEL(t *testing.T) {
+	// Create temp dir
+	tmpDir, err := os.MkdirTemp("", "ingress-config-otel-test-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+
+	p := paths.New(tmpDir)
+	require.NoError(t, os.MkdirAll(p.EnvoyDir(), 0755))
+
+	// Create generator with OTEL enabled
+	otelConfig := OTELConfig{
+		Enabled:           true,
+		Endpoint:          "otel-collector:4317",
+		ServiceName:       "test-service",
+		ServiceInstanceID: "instance-123",
+		Insecure:          true,
+		Environment:       "test",
+	}
+	generator := NewEnvoyConfigGenerator(p, "0.0.0.0", "127.0.0.1", 9901, nil, otelConfig)
+
+	ctx := context.Background()
+	ingresses := []Ingress{
+		{
+			ID:   "ing-123",
+			Name: "test-ingress",
+			Rules: []IngressRule{
+				{
+					Match:  IngressMatch{Hostname: "api.example.com"},
+					Target: IngressTarget{Instance: "my-api", Port: 8080},
+				},
+			},
+		},
+	}
+
+	ipResolver := func(instance string) (string, error) {
+		return "10.100.0.10", nil
+	}
+
+	data, err := generator.GenerateConfig(ctx, ingresses, ipResolver)
+	require.NoError(t, err)
+
+	configStr := string(data)
+
+	// Verify OTEL collector cluster is present
+	assert.Contains(t, configStr, "opentelemetry_collector", "config should contain OTEL collector cluster")
+	assert.Contains(t, configStr, "otel-collector", "config should contain OTEL collector host")
+	assert.Contains(t, configStr, "4317", "config should contain OTEL collector port")
+
+	// Verify tracing config is present
+	assert.Contains(t, configStr, "envoy.tracers.opentelemetry", "config should contain OTEL tracer")
+	assert.Contains(t, configStr, "test-service", "config should contain service name")
+
+	// Verify resource attributes are present
+	assert.Contains(t, configStr, "deployment.environment.name", "config should contain environment attribute")
+	assert.Contains(t, configStr, "service.instance.id", "config should contain instance ID attribute")
+}
+
+func TestGenerateConfig_WithOTELDisabled(t *testing.T) {
+	generator, _, cleanup := setupTestGenerator(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	ingresses := []Ingress{
+		{
+			ID:   "ing-123",
+			Name: "test-ingress",
+			Rules: []IngressRule{
+				{
+					Match:  IngressMatch{Hostname: "api.example.com"},
+					Target: IngressTarget{Instance: "my-api", Port: 8080},
+				},
+			},
+		},
+	}
+
+	ipResolver := func(instance string) (string, error) {
+		return "10.100.0.10", nil
+	}
+
+	data, err := generator.GenerateConfig(ctx, ingresses, ipResolver)
+	require.NoError(t, err)
+
+	configStr := string(data)
+
+	// Verify OTEL is NOT present when disabled
+	assert.NotContains(t, configStr, "opentelemetry_collector", "config should not contain OTEL collector when disabled")
+	assert.NotContains(t, configStr, "envoy.tracers.opentelemetry", "config should not contain OTEL tracer when disabled")
 }

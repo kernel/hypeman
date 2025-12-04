@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/onkernel/hypeman/lib/logger"
@@ -12,21 +13,30 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// ConfigValidator validates Envoy configuration files.
+type ConfigValidator interface {
+	ValidateConfig(configPath string) error
+}
+
 // EnvoyConfigGenerator generates Envoy configuration from ingress resources.
 type EnvoyConfigGenerator struct {
 	paths         *paths.Paths
 	listenAddress string
 	adminAddress  string
 	adminPort     int
+	validator     ConfigValidator
+	otel          OTELConfig
 }
 
 // NewEnvoyConfigGenerator creates a new config generator.
-func NewEnvoyConfigGenerator(p *paths.Paths, listenAddress string, adminAddress string, adminPort int) *EnvoyConfigGenerator {
+func NewEnvoyConfigGenerator(p *paths.Paths, listenAddress string, adminAddress string, adminPort int, validator ConfigValidator, otel OTELConfig) *EnvoyConfigGenerator {
 	return &EnvoyConfigGenerator{
 		paths:         p,
 		listenAddress: listenAddress,
 		adminAddress:  adminAddress,
 		adminPort:     adminPort,
+		validator:     validator,
+		otel:          otel,
 	}
 }
 
@@ -37,7 +47,8 @@ func (g *EnvoyConfigGenerator) GenerateConfig(ctx context.Context, ingresses []I
 	return yaml.Marshal(config)
 }
 
-// WriteConfig generates and writes the Envoy configuration file.
+// WriteConfig generates, validates, and writes the Envoy configuration file.
+// The config is written to a temp file first, validated, then atomically moved to the final path.
 func (g *EnvoyConfigGenerator) WriteConfig(ctx context.Context, ingresses []Ingress, ipResolver func(instance string) (string, error)) error {
 	data, err := g.GenerateConfig(ctx, ingresses, ipResolver)
 	if err != nil {
@@ -45,21 +56,65 @@ func (g *EnvoyConfigGenerator) WriteConfig(ctx context.Context, ingresses []Ingr
 	}
 
 	configPath := g.paths.EnvoyConfig()
+	configDir := filepath.Dir(configPath)
 
 	// Ensure the directory exists
-	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+	if err := os.MkdirAll(configDir, 0755); err != nil {
 		return fmt.Errorf("create config directory: %w", err)
 	}
 
-	if err := os.WriteFile(configPath, data, 0644); err != nil {
-		return fmt.Errorf("write config: %w", err)
+	// Write to a temp file first
+	tempFile, err := os.CreateTemp(configDir, "envoy-config-*.yaml")
+	if err != nil {
+		return fmt.Errorf("create temp config file: %w", err)
 	}
+	tempPath := tempFile.Name()
+
+	// Clean up temp file on any error
+	defer func() {
+		if tempPath != "" {
+			os.Remove(tempPath)
+		}
+	}()
+
+	if _, err := tempFile.Write(data); err != nil {
+		tempFile.Close()
+		return fmt.Errorf("write temp config: %w", err)
+	}
+	if err := tempFile.Close(); err != nil {
+		return fmt.Errorf("close temp config: %w", err)
+	}
+
+	// Validate the config if validator is available
+	if g.validator != nil {
+		if err := g.validator.ValidateConfig(tempPath); err != nil {
+			log := logger.FromContext(ctx)
+			log.ErrorContext(ctx, "envoy config validation failed", "error", err)
+			return ErrConfigValidationFailed
+		}
+	}
+
+	// Atomically move temp file to final path
+	if err := os.Rename(tempPath, configPath); err != nil {
+		return fmt.Errorf("rename config file: %w", err)
+	}
+
+	// Clear tempPath so defer doesn't try to remove the renamed file
+	tempPath = ""
 
 	return nil
 }
 
 // buildConfig builds the Envoy configuration structure.
 func (g *EnvoyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingress, ipResolver func(instance string) (string, error)) map[string]interface{} {
+	clusters := g.buildClusters(ctx, ingresses, ipResolver)
+
+	// Add OTEL collector cluster if enabled
+	if g.otel.Enabled && g.otel.Endpoint != "" {
+		otelCluster := g.buildOTELCollectorCluster()
+		clusters = append(clusters, otelCluster)
+	}
+
 	config := map[string]interface{}{
 		"admin": map[string]interface{}{
 			"address": map[string]interface{}{
@@ -71,7 +126,7 @@ func (g *EnvoyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 		},
 		"static_resources": map[string]interface{}{
 			"listeners": g.buildListeners(ctx, ingresses, ipResolver),
-			"clusters":  g.buildClusters(ctx, ingresses, ipResolver),
+			"clusters":  clusters,
 		},
 	}
 
@@ -199,6 +254,11 @@ func (g *EnvoyConfigGenerator) buildFilterChainsByPort(ctx context.Context, ingr
 			},
 		}
 
+		// Add tracing config if OTEL is enabled
+		if g.otel.Enabled && g.otel.Endpoint != "" {
+			httpConnectionManager["tracing"] = g.buildTracingConfig()
+		}
+
 		filterChain := map[string]interface{}{
 			"filters": []interface{}{
 				map[string]interface{}{
@@ -286,4 +346,118 @@ func sanitizeHostname(hostname string) string {
 // sanitizeName converts a name to a safe string for use in Envoy config names.
 func sanitizeName(name string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(name, ".", "_"), "-", "_")
+}
+
+// otelCollectorClusterName is the cluster name for the OTEL collector.
+const otelCollectorClusterName = "opentelemetry_collector"
+
+// buildOTELCollectorCluster builds the cluster configuration for the OTEL collector.
+func (g *EnvoyConfigGenerator) buildOTELCollectorCluster() map[string]interface{} {
+	// Parse endpoint (host:port)
+	host, port := parseEndpoint(g.otel.Endpoint)
+
+	return map[string]interface{}{
+		"name":            otelCollectorClusterName,
+		"type":            "STRICT_DNS",
+		"connect_timeout": "5s",
+		"lb_policy":       "ROUND_ROBIN",
+		"typed_extension_protocol_options": map[string]interface{}{
+			"envoy.extensions.upstreams.http.v3.HttpProtocolOptions": map[string]interface{}{
+				"@type": "type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions",
+				"explicit_http_config": map[string]interface{}{
+					"http2_protocol_options": map[string]interface{}{},
+				},
+			},
+		},
+		"load_assignment": map[string]interface{}{
+			"cluster_name": otelCollectorClusterName,
+			"endpoints": []interface{}{
+				map[string]interface{}{
+					"lb_endpoints": []interface{}{
+						map[string]interface{}{
+							"endpoint": map[string]interface{}{
+								"address": map[string]interface{}{
+									"socket_address": map[string]interface{}{
+										"address":    host,
+										"port_value": port,
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+// buildTracingConfig builds the tracing configuration for HttpConnectionManager.
+func (g *EnvoyConfigGenerator) buildTracingConfig() map[string]interface{} {
+	serviceName := g.otel.ServiceName
+	if serviceName == "" {
+		serviceName = "hypeman-envoy"
+	}
+
+	tracingConfig := map[string]interface{}{
+		"provider": map[string]interface{}{
+			"name": "envoy.tracers.opentelemetry",
+			"typed_config": map[string]interface{}{
+				"@type": "type.googleapis.com/envoy.config.trace.v3.OpenTelemetryConfig",
+				"grpc_service": map[string]interface{}{
+					"envoy_grpc": map[string]interface{}{
+						"cluster_name": otelCollectorClusterName,
+					},
+					"timeout": "1s",
+				},
+				"service_name": serviceName,
+			},
+		},
+	}
+
+	// Add resource attributes for common labels
+	resourceAttrs := []interface{}{}
+	if g.otel.Environment != "" {
+		resourceAttrs = append(resourceAttrs, map[string]interface{}{
+			"key": "deployment.environment.name",
+			"value": map[string]interface{}{
+				"string_value": g.otel.Environment,
+			},
+		})
+	}
+	if g.otel.ServiceInstanceID != "" {
+		resourceAttrs = append(resourceAttrs, map[string]interface{}{
+			"key": "service.instance.id",
+			"value": map[string]interface{}{
+				"string_value": g.otel.ServiceInstanceID,
+			},
+		})
+	}
+
+	if len(resourceAttrs) > 0 {
+		tracingConfig["provider"].(map[string]interface{})["typed_config"].(map[string]interface{})["resource_detectors"] = []interface{}{
+			map[string]interface{}{
+				"name": "envoy.tracers.opentelemetry.resource_detectors.static_config",
+				"typed_config": map[string]interface{}{
+					"@type":      "type.googleapis.com/envoy.extensions.tracers.opentelemetry.resource_detectors.v3.StaticConfigResourceDetectorConfig",
+					"attributes": resourceAttrs,
+				},
+			},
+		}
+	}
+
+	return tracingConfig
+}
+
+// parseEndpoint parses a host:port string. Defaults to port 4317 if not specified.
+func parseEndpoint(endpoint string) (string, int) {
+	parts := strings.Split(endpoint, ":")
+	if len(parts) == 2 {
+		port := 4317
+		if p, err := strconv.Atoi(parts[1]); err == nil {
+			port = p
+		}
+		return parts[0], port
+	}
+	// Default OTLP gRPC port
+	return endpoint, 4317
 }

@@ -60,6 +60,34 @@ type Config struct {
 	// StopOnShutdown determines whether to stop Envoy when hypeman shuts down (default: false).
 	// When false, Envoy continues running independently.
 	StopOnShutdown bool
+
+	// DisableValidation disables Envoy config validation before applying.
+	// This should only be used for testing.
+	DisableValidation bool
+
+	// OTEL configuration for Envoy tracing
+	OTEL OTELConfig
+}
+
+// OTELConfig holds OpenTelemetry configuration for Envoy.
+type OTELConfig struct {
+	// Enabled controls whether OTEL tracing is enabled in Envoy.
+	Enabled bool
+
+	// Endpoint is the OTEL collector gRPC endpoint (host:port).
+	Endpoint string
+
+	// ServiceName is the service name for traces (default: "hypeman-envoy").
+	ServiceName string
+
+	// ServiceInstanceID is the service instance identifier.
+	ServiceInstanceID string
+
+	// Insecure disables TLS for OTEL connections.
+	Insecure bool
+
+	// Environment is the deployment environment (e.g., dev, staging, prod).
+	Environment string
 }
 
 // DefaultConfig returns the default ingress configuration.
@@ -83,12 +111,20 @@ type manager struct {
 
 // NewManager creates a new ingress manager.
 func NewManager(p *paths.Paths, config Config, instanceResolver InstanceResolver) Manager {
+	daemon := NewEnvoyDaemon(p, config.AdminAddress, config.AdminPort, config.StopOnShutdown)
+
+	// Use daemon as validator unless validation is disabled
+	var validator ConfigValidator
+	if !config.DisableValidation {
+		validator = daemon
+	}
+
 	return &manager{
 		paths:            p,
 		config:           config,
 		instanceResolver: instanceResolver,
-		daemon:           NewEnvoyDaemon(p, config.AdminAddress, config.AdminPort, config.StopOnShutdown),
-		configGenerator:  NewEnvoyConfigGenerator(p, config.ListenAddress, config.AdminAddress, config.AdminPort),
+		daemon:           daemon,
+		configGenerator:  NewEnvoyConfigGenerator(p, config.ListenAddress, config.AdminAddress, config.AdminPort, validator, config.OTEL),
 	}
 }
 
@@ -200,9 +236,11 @@ func (m *manager) Create(ctx context.Context, req CreateIngressRequest) (*Ingres
 	// Reload Envoy
 	if m.daemon.IsRunning() {
 		if err := m.daemon.ReloadConfig(); err != nil {
-			// Non-fatal, config will be picked up on next reload
 			log := logger.FromContext(ctx)
-			log.WarnContext(ctx, "failed to reload envoy config", "error", err)
+			log.ErrorContext(ctx, "failed to reload envoy config after create", "error", err)
+			// Try to clean up the saved ingress since reload failed
+			deleteIngressData(m.paths, id)
+			return nil, ErrConfigValidationFailed
 		}
 	}
 
@@ -274,9 +312,9 @@ func (m *manager) Delete(ctx context.Context, idOrName string) error {
 	// Reload Envoy
 	if m.daemon.IsRunning() {
 		if err := m.daemon.ReloadConfig(); err != nil {
-			// Non-fatal
 			log := logger.FromContext(ctx)
-			log.WarnContext(ctx, "failed to reload envoy config", "error", err)
+			log.ErrorContext(ctx, "failed to reload envoy config after delete", "error", err)
+			return ErrConfigValidationFailed
 		}
 	}
 

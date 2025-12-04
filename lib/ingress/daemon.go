@@ -279,6 +279,30 @@ func (d *EnvoyDaemon) AdminURL() string {
 	return fmt.Sprintf("http://%s:%d", d.adminAddress, d.adminPort)
 }
 
+// ValidateConfig validates an Envoy configuration file without starting Envoy.
+// Returns nil if valid, or an error with details if invalid.
+func (d *EnvoyDaemon) ValidateConfig(configPath string) error {
+	binaryPath, err := GetEnvoyBinaryPath(d.paths)
+	if err != nil {
+		return fmt.Errorf("get envoy binary: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, binaryPath,
+		"--mode", "validate",
+		"--config-path", configPath,
+	)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("config validation failed: %w: %s", err, string(output))
+	}
+
+	return nil
+}
+
 // epochFilePath returns the path to the epoch file.
 func (d *EnvoyDaemon) epochFilePath() string {
 	return filepath.Join(d.paths.EnvoyDir(), "epoch")

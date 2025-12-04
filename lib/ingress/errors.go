@@ -24,4 +24,8 @@ var (
 
 	// ErrHostnameInUse is returned when a hostname is already in use by another ingress.
 	ErrHostnameInUse = errors.New("hostname already in use by another ingress")
+
+	// ErrConfigValidationFailed is returned when Envoy config validation fails.
+	// This indicates a server-side bug since input validation should catch user errors.
+	ErrConfigValidationFailed = errors.New("internal error: config validation failed")
 )

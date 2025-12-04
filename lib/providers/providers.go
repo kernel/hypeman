@@ -159,6 +159,14 @@ func ProvideIngressManager(p *paths.Paths, cfg *config.Config, instanceManager i
 		AdminAddress:   cfg.EnvoyAdminAddress,
 		AdminPort:      cfg.EnvoyAdminPort,
 		StopOnShutdown: cfg.EnvoyStopOnShutdown,
+		OTEL: ingress.OTELConfig{
+			Enabled:           cfg.OtelEnabled,
+			Endpoint:          cfg.OtelEndpoint,
+			ServiceName:       cfg.OtelServiceName + "-envoy",
+			ServiceInstanceID: cfg.OtelServiceInstanceID,
+			Insecure:          cfg.OtelInsecure,
+			Environment:       cfg.Env,
+		},
 	}
 
 	resolver := &instanceResolverAdapter{instanceManager: instanceManager}

@@ -57,9 +57,10 @@ func setupTestManager(t *testing.T) (Manager, *mockInstanceResolver, *paths.Path
 	resolver.AddInstance("web-app", "10.100.0.20")
 
 	config := Config{
-		ListenAddress: "0.0.0.0",
-		AdminAddress:  "127.0.0.1",
-		AdminPort:     19901, // Use different port for testing
+		ListenAddress:     "0.0.0.0",
+		AdminAddress:      "127.0.0.1",
+		AdminPort:         19901, // Use different port for testing
+		DisableValidation: true,  // No Envoy binary available in tests
 	}
 
 	manager := NewManager(p, config, resolver)
