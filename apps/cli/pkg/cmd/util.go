@@ -36,8 +36,10 @@ func getDefaultRequestOptions(cmd *cli.Command) []option.RequestOption {
 		option.WithHeader("X-Stainless-CLI-Command", cmd.FullName()),
 	}
 
-	// Set base URL (default to localhost for development)
 	baseURL := cmd.String("base-url")
+	if baseURL == "" {
+		baseURL = os.Getenv("HYPEMAN_BASE_URL")
+	}
 	if baseURL == "" {
 		baseURL = "http://localhost:8080"
 	}

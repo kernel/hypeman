@@ -36,6 +36,9 @@ func handlePush(ctx context.Context, cmd *cli.Command) error {
 
 	baseURL := cmd.String("base-url")
 	if baseURL == "" {
+		baseURL = os.Getenv("HYPEMAN_BASE_URL")
+	}
+	if baseURL == "" {
 		baseURL = "http://localhost:8080"
 	}
 
@@ -58,23 +61,8 @@ func handlePush(ctx context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("load image: %w", err)
 	}
 
-	digest, err := img.Digest()
-	if err != nil {
-		return fmt.Errorf("get image digest: %w", err)
-	}
-	fmt.Fprintf(os.Stderr, "Digest: %s\n", digest.String())
-
-	// Strip any tag from targetName and use digest reference instead
-	// This ensures the server triggers image conversion
-	targetBase := strings.TrimPrefix(targetName, "/")
-	if idx := strings.LastIndex(targetBase, ":"); idx != -1 && !strings.Contains(targetBase[idx:], "/") {
-		targetBase = targetBase[:idx]
-	}
-	if idx := strings.LastIndex(targetBase, "@"); idx != -1 {
-		targetBase = targetBase[:idx]
-	}
-
-	targetRef := registryHost + "/" + targetBase + "@" + digest.String()
+	// Build target reference - server computes digest from manifest
+	targetRef := registryHost + "/" + strings.TrimPrefix(targetName, "/")
 	fmt.Fprintf(os.Stderr, "Pushing to %s...\n", targetRef)
 
 	dstRef, err := name.ParseReference(targetRef, name.Insecure)
