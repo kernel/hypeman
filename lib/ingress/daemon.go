@@ -18,6 +18,7 @@ import (
 
 // EnvoyDaemon manages the Envoy proxy daemon lifecycle with hot restart support.
 // See: https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/operations/hot_restart
+// Supports multiple hypeman instances on the same host via unique baseID derived from data directory.
 type EnvoyDaemon struct {
 	paths          *paths.Paths
 	adminAddress   string

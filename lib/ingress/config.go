@@ -108,108 +108,77 @@ func (g *EnvoyConfigGenerator) buildListeners(ingresses []Ingress, ipResolver fu
 }
 
 // buildFilterChainsByPort builds filter chains grouped by port for hostname-based routing.
+// For plain HTTP, we use virtual hosts with domain matching (Host header) instead of
+// filter_chain_match with server_names (which only works for TLS/SNI).
 func (g *EnvoyConfigGenerator) buildFilterChainsByPort(ingresses []Ingress, ipResolver func(instance string) (string, error)) map[int][]interface{} {
-	portToFilterChains := make(map[int][]interface{})
+	// Group virtual hosts by port
+	portToVirtualHosts := make(map[int][]interface{})
 
 	for _, ingress := range ingresses {
 		for _, rule := range ingress.Rules {
-			// Resolve instance IP
-			ip, err := ipResolver(rule.Target.Instance)
+			// Resolve instance IP - skip rules where we can't resolve
+			_, err := ipResolver(rule.Target.Instance)
 			if err != nil {
-				// Skip rules where we can't resolve the instance
 				continue
 			}
 
 			port := rule.Match.GetPort()
 			clusterName := g.clusterName(ingress.ID, rule.Target.Instance, rule.Target.Port)
 
-			// Build route configuration for this hostname
-			routeConfig := map[string]interface{}{
-				"name": fmt.Sprintf("route_%s_%s", ingress.ID, sanitizeHostname(rule.Match.Hostname)),
-				"virtual_hosts": []interface{}{
+			// Build virtual host for this hostname
+			virtualHost := map[string]interface{}{
+				"name":    fmt.Sprintf("vh_%s_%s", ingress.ID, sanitizeHostname(rule.Match.Hostname)),
+				"domains": []string{rule.Match.Hostname},
+				"routes": []interface{}{
 					map[string]interface{}{
-						"name":    fmt.Sprintf("vh_%s_%s", ingress.ID, sanitizeHostname(rule.Match.Hostname)),
-						"domains": []string{rule.Match.Hostname},
-						"routes": []interface{}{
-							map[string]interface{}{
-								"match": map[string]interface{}{
-									"prefix": "/",
-								},
-								"route": map[string]interface{}{
-									"cluster": clusterName,
-								},
-							},
+						"match": map[string]interface{}{
+							"prefix": "/",
+						},
+						"route": map[string]interface{}{
+							"cluster": clusterName,
 						},
 					},
 				},
 			}
 
-			httpFilters := []interface{}{
-				map[string]interface{}{
-					"name": "envoy.filters.http.router",
-					"typed_config": map[string]interface{}{
-						"@type": "type.googleapis.com/envoy.extensions.filters.http.router.v3.Router",
-					},
-				},
-			}
-
-			httpConnectionManager := map[string]interface{}{
-				"@type":        "type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager",
-				"stat_prefix":  fmt.Sprintf("ingress_%s", ingress.ID),
-				"codec_type":   "AUTO",
-				"route_config": routeConfig,
-				"http_filters": httpFilters,
-			}
-
-			filterChain := map[string]interface{}{
-				"filter_chain_match": map[string]interface{}{
-					"server_names": []string{rule.Match.Hostname},
-				},
-				"filters": []interface{}{
-					map[string]interface{}{
-						"name":         "envoy.filters.network.http_connection_manager",
-						"typed_config": httpConnectionManager,
-					},
-				},
-			}
-
-			// Include resolved IP for documentation purposes in comments
-			_ = ip
-
-			portToFilterChains[port] = append(portToFilterChains[port], filterChain)
+			portToVirtualHosts[port] = append(portToVirtualHosts[port], virtualHost)
 		}
 	}
 
-	// Add a default filter chain for non-matching requests (returns 404) to each port
-	for port, filterChains := range portToFilterChains {
-		defaultRouteConfig := map[string]interface{}{
-			"name": fmt.Sprintf("default_route_%d", port),
-			"virtual_hosts": []interface{}{
+	// Build filter chains - one per port with all virtual hosts combined
+	portToFilterChains := make(map[int][]interface{})
+
+	for port, virtualHosts := range portToVirtualHosts {
+		// Add default virtual host for unmatched hostnames (returns 404)
+		defaultVirtualHost := map[string]interface{}{
+			"name":    "default",
+			"domains": []string{"*"},
+			"routes": []interface{}{
 				map[string]interface{}{
-					"name":    "default",
-					"domains": []string{"*"},
-					"routes": []interface{}{
-						map[string]interface{}{
-							"match": map[string]interface{}{
-								"prefix": "/",
-							},
-							"direct_response": map[string]interface{}{
-								"status": 404,
-								"body": map[string]interface{}{
-									"inline_string": "No ingress found for this hostname",
-								},
-							},
+					"match": map[string]interface{}{
+						"prefix": "/",
+					},
+					"direct_response": map[string]interface{}{
+						"status": 404,
+						"body": map[string]interface{}{
+							"inline_string": "No ingress found for this hostname",
 						},
 					},
 				},
 			},
 		}
+		allVirtualHosts := append(virtualHosts, defaultVirtualHost)
 
-		defaultHttpConnectionManager := map[string]interface{}{
+		routeConfig := map[string]interface{}{
+			"name":          fmt.Sprintf("ingress_routes_%d", port),
+			"virtual_hosts": allVirtualHosts,
+		}
+
+		httpConnectionManager := map[string]interface{}{
 			"@type":        "type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager",
-			"stat_prefix":  fmt.Sprintf("ingress_default_%d", port),
+			"stat_prefix":  fmt.Sprintf("ingress_%d", port),
 			"codec_type":   "AUTO",
-			"route_config": defaultRouteConfig,
+			"route_config": routeConfig,
 			"http_filters": []interface{}{
 				map[string]interface{}{
 					"name": "envoy.filters.http.router",
@@ -220,16 +189,16 @@ func (g *EnvoyConfigGenerator) buildFilterChainsByPort(ingresses []Ingress, ipRe
 			},
 		}
 
-		defaultFilterChain := map[string]interface{}{
+		filterChain := map[string]interface{}{
 			"filters": []interface{}{
 				map[string]interface{}{
 					"name":         "envoy.filters.network.http_connection_manager",
-					"typed_config": defaultHttpConnectionManager,
+					"typed_config": httpConnectionManager,
 				},
 			},
 		}
 
-		portToFilterChains[port] = append(filterChains, defaultFilterChain)
+		portToFilterChains[port] = []interface{}{filterChain}
 	}
 
 	return portToFilterChains
