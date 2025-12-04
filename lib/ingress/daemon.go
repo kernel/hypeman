@@ -3,6 +3,7 @@ package ingress
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
 	"net/http"
 	"os"
 	"os/exec"
@@ -15,29 +16,38 @@ import (
 	"github.com/onkernel/hypeman/lib/paths"
 )
 
-// baseID is a unique identifier for this Envoy instance on the host.
-// This allows multiple Envoy instances to run on the same host with independent hot restart.
-const baseID = 1
-
 // EnvoyDaemon manages the Envoy proxy daemon lifecycle with hot restart support.
 // See: https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/operations/hot_restart
 type EnvoyDaemon struct {
 	paths          *paths.Paths
 	adminAddress   string
 	adminPort      int
+	baseID         int // Unique identifier derived from data directory, allows multiple instances per host
 	pid            int
 	epoch          int  // Current restart epoch
 	stopOnShutdown bool // If true, stop Envoy when hypeman shuts down
 }
 
 // NewEnvoyDaemon creates a new EnvoyDaemon manager.
+// The baseID is derived from the data directory path to allow multiple hypeman instances
+// on the same host without shared memory conflicts.
 func NewEnvoyDaemon(p *paths.Paths, adminAddress string, adminPort int, stopOnShutdown bool) *EnvoyDaemon {
 	return &EnvoyDaemon{
 		paths:          p,
 		adminAddress:   adminAddress,
 		adminPort:      adminPort,
+		baseID:         deriveBaseID(p.DataDir()),
 		stopOnShutdown: stopOnShutdown,
 	}
+}
+
+// deriveBaseID generates a unique base ID from the data directory path.
+// This ensures multiple hypeman instances on the same host don't conflict.
+func deriveBaseID(dataDir string) int {
+	h := fnv.New32a()
+	h.Write([]byte(dataDir))
+	// Use modulo to keep in reasonable range (1-999), add 1 to avoid 0
+	return int(h.Sum32()%999) + 1
 }
 
 // StopOnShutdown returns whether Envoy should be stopped when hypeman shuts down.
@@ -91,7 +101,7 @@ func (d *EnvoyDaemon) startEnvoy(ctx context.Context, epoch int) (int, error) {
 		"--config-path", configPath,
 		"--log-path", d.paths.EnvoyLogFile(),
 		"--log-level", "info",
-		"--base-id", strconv.Itoa(baseID),
+		"--base-id", strconv.Itoa(d.baseID),
 		"--restart-epoch", strconv.Itoa(epoch),
 	}
 
@@ -294,7 +304,7 @@ func (d *EnvoyDaemon) cleanupStaleSharedMemory() {
 	// Envoy uses /dev/shm/envoy_shared_memory_{base_id * 10 + epoch} for hot restart coordination
 	// Clean up all possible epochs (0-9) for our base ID
 	for epoch := 0; epoch < 10; epoch++ {
-		shmPath := fmt.Sprintf("/dev/shm/envoy_shared_memory_%d", baseID*10+epoch)
+		shmPath := fmt.Sprintf("/dev/shm/envoy_shared_memory_%d", d.baseID*10+epoch)
 		os.Remove(shmPath)
 	}
 }
@@ -383,7 +393,7 @@ func (d *EnvoyDaemon) findEnvoyPID() int {
 
 		// Check if it's envoy with our base-id
 		cmdStr := string(cmdline)
-		if strings.Contains(cmdStr, "envoy") && strings.Contains(cmdStr, fmt.Sprintf("--base-id\x00%d", baseID)) {
+		if strings.Contains(cmdStr, "envoy") && strings.Contains(cmdStr, fmt.Sprintf("--base-id\x00%d", d.baseID)) {
 			return pid
 		}
 	}

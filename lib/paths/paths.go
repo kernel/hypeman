@@ -49,6 +49,11 @@ func New(dataDir string) *Paths {
 	return &Paths{dataDir: dataDir}
 }
 
+// DataDir returns the root data directory.
+func (p *Paths) DataDir() string {
+	return p.dataDir
+}
+
 // System path methods
 
 // SystemKernel returns the path to a kernel file.
