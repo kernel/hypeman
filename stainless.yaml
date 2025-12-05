@@ -72,7 +72,7 @@ resources:
 
   instances:
     models:
-      volume_attachment: '#/components/schemas/VolumeAttachment'
+      volume_mount: '#/components/schemas/VolumeMount'
       port_mapping: '#/components/schemas/PortMapping'
       instance: '#/components/schemas/Instance'
     methods:
@@ -94,6 +94,7 @@ resources:
   volumes:
     models:
       volume: '#/components/schemas/Volume'
+      volume_attachment: '#/components/schemas/VolumeAttachment'
     methods:
       list: get /volumes
       create: post /volumes

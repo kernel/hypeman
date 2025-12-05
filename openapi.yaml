@@ -55,7 +55,7 @@ components:
         - Stopped: No VMM running, no snapshot exists
         - Standby: No VMM running, snapshot exists (can be restored)
     
-    VolumeAttachment:
+    VolumeMount:
       type: object
       required: [volume_id, mount_path]
       properties:
@@ -152,7 +152,7 @@ components:
           type: array
           description: Volumes to attach to the instance at creation time
           items:
-            $ref: "#/components/schemas/VolumeAttachment"
+            $ref: "#/components/schemas/VolumeMount"
         # Future: port_mappings, timeout_seconds
     
     Instance:
@@ -220,7 +220,7 @@ components:
           type: array
           description: Volumes attached to the instance
           items:
-            $ref: "#/components/schemas/VolumeAttachment"
+            $ref: "#/components/schemas/VolumeMount"
         created_at:
           type: string
           format: date-time
@@ -334,7 +334,7 @@ components:
           description: Size in gigabytes
           example: 10
     
-    VolumeAttachedInstance:
+    VolumeAttachment:
       type: object
       required: [instance_id, mount_path, readonly]
       properties:
@@ -371,7 +371,7 @@ components:
           type: array
           description: List of current attachments (empty if not attached)
           items:
-            $ref: "#/components/schemas/VolumeAttachedInstance"
+            $ref: "#/components/schemas/VolumeAttachment"
         created_at:
           type: string
           format: date-time

@@ -474,9 +474,9 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 
 	// Convert volume attachments
 	if len(inst.Volumes) > 0 {
-		oapiVolumes := make([]oapi.VolumeAttachment, len(inst.Volumes))
+		oapiVolumes := make([]oapi.VolumeMount, len(inst.Volumes))
 		for i, vol := range inst.Volumes {
-			oapiVol := oapi.VolumeAttachment{
+			oapiVol := oapi.VolumeMount{
 				VolumeId:  vol.VolumeID,
 				MountPath: vol.MountPath,
 				Readonly:  lo.ToPtr(vol.Readonly),

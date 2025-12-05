@@ -289,9 +289,9 @@ func volumeToOAPI(vol volumes.Volume) oapi.Volume {
 
 	// Convert attachments
 	if len(vol.Attachments) > 0 {
-		attachments := make([]oapi.VolumeAttachedInstance, len(vol.Attachments))
+		attachments := make([]oapi.VolumeAttachment, len(vol.Attachments))
 		for i, att := range vol.Attachments {
-			attachments[i] = oapi.VolumeAttachedInstance{
+			attachments[i] = oapi.VolumeAttachment{
 				InstanceId: att.InstanceID,
 				MountPath:  att.MountPath,
 				Readonly:   att.Readonly,
