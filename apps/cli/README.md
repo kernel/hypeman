@@ -82,11 +82,23 @@ When developing features in the main [hypeman](https://github.com/onkernel/hypem
 ./scripts/checkout-preview -b preview/my-feature
 ```
 
-The script automatically adds the `stainless` remote if it doesn't exist.
+The script automatically adds the `stainless` remote if needed and also updates `go.mod` to point the `hypeman-go` SDK dependency to the corresponding preview branch in `stainless-sdks/hypeman-go`.
+
+> **Warning:** The `go.mod` and `go.sum` changes from `checkout-preview` are for local testing only. Do not commit these changes.
 
 After checking out a preview branch, you can build and test the CLI:
 
 ```bash
 go build -o hypeman ./cmd/hypeman
 ./hypeman --help
+```
+
+You can also point the SDK dependency independently:
+
+```bash
+# Point hypeman-go to a specific branch
+./scripts/use-sdk-preview preview/my-feature
+
+# Point to a specific commit
+./scripts/use-sdk-preview abc1234def567
 ```

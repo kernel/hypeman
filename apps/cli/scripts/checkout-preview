@@ -65,3 +65,8 @@ git checkout -B "${BRANCH}" "stainless/${BRANCH}"
 
 echo ""
 echo "Switched to branch '${BRANCH}' tracking stainless/${BRANCH}"
+
+# Point the hypeman-go SDK dependency to the corresponding preview branch
+echo ""
+SCRIPT_DIR="$(dirname "$0")"
+"${SCRIPT_DIR}/use-sdk-preview" "${BRANCH}"

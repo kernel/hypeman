@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+# Point the onkernel/hypeman-go dependency to stainless-sdks/hypeman-go at a specific branch.
+#
+# Usage:
+#   ./scripts/use-sdk-preview <branch-name>
+#   ./scripts/use-sdk-preview <commit-hash>
+#
+# This modifies go.mod with a replace directive. Do not commit this change.
+
+cd "$(dirname "$0")/.."
+
+STAINLESS_SDK_REPO="github.com/stainless-sdks/hypeman-go"
+PUBLIC_SDK_REPO="github.com/onkernel/hypeman-go"
+
+# Ensure the Go toolchain can access the private SDK repository.
+if [[ -z "${GOPRIVATE:-}" ]]; then
+  export GOPRIVATE="$STAINLESS_SDK_REPO"
+elif [[ "$GOPRIVATE" != *"$STAINLESS_SDK_REPO"* ]]; then
+  export GOPRIVATE="${GOPRIVATE},${STAINLESS_SDK_REPO}"
+fi
+
+# Ensure git rewrites GitHub HTTPS URLs to SSH for private repo access.
+if ! git config --global --get-all url."git@github.com:".insteadOf | grep -q "https://github.com/"; then
+  echo "Your git configuration is missing the rewrite from HTTPS to SSH for GitHub repositories." >&2
+  echo "Run the following command and try again:" >&2
+  echo "  git config --global url.\"git@github.com:\".insteadOf \"https://github.com/\"" >&2
+  exit 1
+fi
+
+usage() {
+  echo "Usage: $(basename "$0") <commit-hash|branch-name>" >&2
+  echo "" >&2
+  echo "Point the hypeman-go SDK dependency to stainless-sdks/hypeman-go at a specific ref." >&2
+  echo "" >&2
+  echo "Examples:" >&2
+  echo "  $(basename "$0") preview/devices      # Use preview/devices branch" >&2
+  echo "  $(basename "$0") main                 # Use main branch" >&2
+  echo "  $(basename "$0") abc1234              # Use specific commit" >&2
+  exit 1
+}
+
+if [ "$#" -ne 1 ]; then
+  usage
+fi
+
+ref="$1"
+commit=""
+tmp_dir="/tmp/hypeman-go"
+
+# Clone the stainless-sdks/hypeman-go repo (shallow clone for speed)
+rm -rf "$tmp_dir"
+echo "==> Cloning stainless-sdks/hypeman-go..."
+git clone --filter=blob:none --quiet git@github.com:stainless-sdks/hypeman-go "$tmp_dir"
+
+# Determine the commit hash corresponding to the provided ref
+pushd "$tmp_dir" >/dev/null
+
+# If the ref looks like a commit SHA (7-40 hex chars), use it directly; otherwise treat it as a branch
+if [[ "$ref" =~ ^[0-9a-f]{7,40}$ ]]; then
+  commit="$ref"
+else
+  # Fetch the branch and resolve its HEAD commit hash
+  git fetch --depth=1 origin "$ref" >/dev/null 2>&1 || {
+    echo "Error: failed to fetch branch '$ref' from stainless-sdks/hypeman-go." >&2
+    popd >/dev/null
+    exit 1
+  }
+  commit=$(git rev-parse FETCH_HEAD)
+fi
+
+# Compute the Go pseudo-version for the resolved commit
+gomod_version=$(git show -s --abbrev=12 \
+  --date=format:%Y%m%d%H%M%S \
+  --format='v0.0.0-%cd-%h' "$commit")
+
+popd >/dev/null
+
+# Verify we're in the CLI module directory
+if [ ! -f go.mod ]; then
+  echo "go.mod not found. Please run this script from the hypeman-cli repository root." >&2
+  exit 1
+fi
+
+echo "==> Updating go.mod to use stainless-sdks/hypeman-go @ $gomod_version..."
+
+# Remove any existing replace directive for the SDK, then add the new one
+go mod edit -dropreplace="$PUBLIC_SDK_REPO" 2>/dev/null || true
+go mod edit -replace="$PUBLIC_SDK_REPO"="$STAINLESS_SDK_REPO"@"$gomod_version"
+go mod tidy
+
+echo ""
+echo "go.mod updated to use $STAINLESS_SDK_REPO @ $gomod_version"
+echo ""
+echo "WARNING: Do not commit this change to go.mod/go.sum!"
+
