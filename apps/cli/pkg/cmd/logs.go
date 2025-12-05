@@ -51,11 +51,16 @@ func handleLogs(ctx context.Context, cmd *cli.Command) error {
 		params.Tail = hypeman.Opt(int64(cmd.Int("tail")))
 	}
 
+	var opts []option.RequestOption
+	if cmd.Root().Bool("debug") {
+		opts = append(opts, debugMiddlewareOption)
+	}
+
 	stream := client.Instances.LogsStreaming(
 		ctx,
 		instanceID,
 		params,
-		option.WithMiddleware(debugMiddleware(cmd.Root().Bool("debug"))),
+		opts...,
 	)
 	defer stream.Close()
 

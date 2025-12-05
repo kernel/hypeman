@@ -14,61 +14,68 @@ import (
 	"github.com/urfave/cli/v3"
 )
 
-var imagesCreate = cli.Command{
+var ingressesCreate = cli.Command{
 	Name:  "create",
-	Usage: "Pull and convert OCI image",
+	Usage: "Create ingress",
 	Flags: []cli.Flag{
 		&requestflag.StringFlag{
 			Name:  "name",
-			Usage: "OCI image reference (e.g., docker.io/library/nginx:latest)",
+			Usage: "Human-readable name (lowercase letters, digits, and dashes only; cannot start or end with a dash)",
 			Config: requestflag.RequestConfig{
 				BodyPath: "name",
 			},
 		},
+		&requestflag.YAMLSliceFlag{
+			Name:  "rule",
+			Usage: "Routing rules for this ingress",
+			Config: requestflag.RequestConfig{
+				BodyPath: "rules",
+			},
+		},
 	},
-	Action:          handleImagesCreate,
+	Action:          handleIngressesCreate,
 	HideHelpCommand: true,
 }
 
-var imagesList = cli.Command{
+var ingressesList = cli.Command{
 	Name:            "list",
-	Usage:           "List images",
+	Usage:           "List ingresses",
 	Flags:           []cli.Flag{},
-	Action:          handleImagesList,
+	Action:          handleIngressesList,
 	HideHelpCommand: true,
 }
 
-var imagesDelete = cli.Command{
+var ingressesDelete = cli.Command{
 	Name:  "delete",
-	Usage: "Delete image",
+	Usage: "Delete ingress",
 	Flags: []cli.Flag{
 		&requestflag.StringFlag{
-			Name: "name",
+			Name: "id",
 		},
 	},
-	Action:          handleImagesDelete,
+	Action:          handleIngressesDelete,
 	HideHelpCommand: true,
 }
 
-var imagesGet = cli.Command{
+var ingressesGet = cli.Command{
 	Name:  "get",
-	Usage: "Get image details",
+	Usage: "Get ingress details",
 	Flags: []cli.Flag{
 		&requestflag.StringFlag{
-			Name: "name",
+			Name: "id",
 		},
 	},
-	Action:          handleImagesGet,
+	Action:          handleIngressesGet,
 	HideHelpCommand: true,
 }
 
-func handleImagesCreate(ctx context.Context, cmd *cli.Command) error {
+func handleIngressesCreate(ctx context.Context, cmd *cli.Command) error {
 	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
 	unusedArgs := cmd.Args().Slice()
 	if len(unusedArgs) > 0 {
 		return fmt.Errorf("Unexpected extra arguments: %v", unusedArgs)
 	}
-	params := hypeman.ImageNewParams{}
+	params := hypeman.IngressNewParams{}
 
 	options, err := flagOptions(
 		cmd,
@@ -81,7 +88,7 @@ func handleImagesCreate(ctx context.Context, cmd *cli.Command) error {
 	}
 	var res []byte
 	options = append(options, option.WithResponseBodyInto(&res))
-	_, err = client.Images.New(
+	_, err = client.Ingresses.New(
 		ctx,
 		params,
 		options...,
@@ -93,10 +100,10 @@ func handleImagesCreate(ctx context.Context, cmd *cli.Command) error {
 	json := gjson.Parse(string(res))
 	format := cmd.Root().String("format")
 	transform := cmd.Root().String("transform")
-	return ShowJSON("images create", json, format, transform)
+	return ShowJSON("ingresses create", json, format, transform)
 }
 
-func handleImagesList(ctx context.Context, cmd *cli.Command) error {
+func handleIngressesList(ctx context.Context, cmd *cli.Command) error {
 	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
 	unusedArgs := cmd.Args().Slice()
 	if len(unusedArgs) > 0 {
@@ -113,7 +120,7 @@ func handleImagesList(ctx context.Context, cmd *cli.Command) error {
 	}
 	var res []byte
 	options = append(options, option.WithResponseBodyInto(&res))
-	_, err = client.Images.List(ctx, options...)
+	_, err = client.Ingresses.List(ctx, options...)
 	if err != nil {
 		return err
 	}
@@ -121,14 +128,14 @@ func handleImagesList(ctx context.Context, cmd *cli.Command) error {
 	json := gjson.Parse(string(res))
 	format := cmd.Root().String("format")
 	transform := cmd.Root().String("transform")
-	return ShowJSON("images list", json, format, transform)
+	return ShowJSON("ingresses list", json, format, transform)
 }
 
-func handleImagesDelete(ctx context.Context, cmd *cli.Command) error {
+func handleIngressesDelete(ctx context.Context, cmd *cli.Command) error {
 	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
 	unusedArgs := cmd.Args().Slice()
-	if !cmd.IsSet("name") && len(unusedArgs) > 0 {
-		cmd.Set("name", unusedArgs[0])
+	if !cmd.IsSet("id") && len(unusedArgs) > 0 {
+		cmd.Set("id", unusedArgs[0])
 		unusedArgs = unusedArgs[1:]
 	}
 	if len(unusedArgs) > 0 {
@@ -143,18 +150,18 @@ func handleImagesDelete(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return err
 	}
-	return client.Images.Delete(
+	return client.Ingresses.Delete(
 		ctx,
-		requestflag.CommandRequestValue[string](cmd, "name"),
+		requestflag.CommandRequestValue[string](cmd, "id"),
 		options...,
 	)
 }
 
-func handleImagesGet(ctx context.Context, cmd *cli.Command) error {
+func handleIngressesGet(ctx context.Context, cmd *cli.Command) error {
 	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
 	unusedArgs := cmd.Args().Slice()
-	if !cmd.IsSet("name") && len(unusedArgs) > 0 {
-		cmd.Set("name", unusedArgs[0])
+	if !cmd.IsSet("id") && len(unusedArgs) > 0 {
+		cmd.Set("id", unusedArgs[0])
 		unusedArgs = unusedArgs[1:]
 	}
 	if len(unusedArgs) > 0 {
@@ -171,9 +178,9 @@ func handleImagesGet(ctx context.Context, cmd *cli.Command) error {
 	}
 	var res []byte
 	options = append(options, option.WithResponseBodyInto(&res))
-	_, err = client.Images.Get(
+	_, err = client.Ingresses.Get(
 		ctx,
-		requestflag.CommandRequestValue[string](cmd, "name"),
+		requestflag.CommandRequestValue[string](cmd, "id"),
 		options...,
 	)
 	if err != nil {
@@ -183,5 +190,5 @@ func handleImagesGet(ctx context.Context, cmd *cli.Command) error {
 	json := gjson.Parse(string(res))
 	format := cmd.Root().String("format")
 	transform := cmd.Root().String("transform")
-	return ShowJSON("images get", json, format, transform)
+	return ShowJSON("ingresses get", json, format, transform)
 }

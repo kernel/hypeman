@@ -6,6 +6,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/onkernel/hypeman-cli/internal/apiquery"
+	"github.com/onkernel/hypeman-cli/internal/requestflag"
 	"github.com/onkernel/hypeman-go"
 	"github.com/onkernel/hypeman-go/option"
 	"github.com/tidwall/gjson"
@@ -14,34 +16,31 @@ import (
 
 var volumesCreate = cli.Command{
 	Name:  "create",
-	Usage: "Create volume",
+	Usage: "Creates a new volume. Supports two modes:",
 	Flags: []cli.Flag{
-		&cli.StringFlag{
+		&requestflag.StringFlag{
 			Name:  "name",
 			Usage: "Volume name",
+			Config: requestflag.RequestConfig{
+				BodyPath: "name",
+			},
 		},
-		&cli.Int64Flag{
+		&requestflag.IntFlag{
 			Name:  "size-gb",
 			Usage: "Size in gigabytes",
+			Config: requestflag.RequestConfig{
+				BodyPath: "size_gb",
+			},
 		},
-		&cli.StringFlag{
+		&requestflag.StringFlag{
 			Name:  "id",
 			Usage: "Optional custom identifier (auto-generated if not provided)",
+			Config: requestflag.RequestConfig{
+				BodyPath: "id",
+			},
 		},
 	},
 	Action:          handleVolumesCreate,
-	HideHelpCommand: true,
-}
-
-var volumesRetrieve = cli.Command{
-	Name:  "retrieve",
-	Usage: "Get volume details",
-	Flags: []cli.Flag{
-		&cli.StringFlag{
-			Name: "id",
-		},
-	},
-	Action:          handleVolumesRetrieve,
 	HideHelpCommand: true,
 }
 
@@ -57,11 +56,23 @@ var volumesDelete = cli.Command{
 	Name:  "delete",
 	Usage: "Delete volume",
 	Flags: []cli.Flag{
-		&cli.StringFlag{
+		&requestflag.StringFlag{
 			Name: "id",
 		},
 	},
 	Action:          handleVolumesDelete,
+	HideHelpCommand: true,
+}
+
+var volumesGet = cli.Command{
+	Name:  "get",
+	Usage: "Get volume details",
+	Flags: []cli.Flag{
+		&requestflag.StringFlag{
+			Name: "id",
+		},
+	},
+	Action:          handleVolumesGet,
 	HideHelpCommand: true,
 }
 
@@ -72,19 +83,22 @@ func handleVolumesCreate(ctx context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("Unexpected extra arguments: %v", unusedArgs)
 	}
 	params := hypeman.VolumeNewParams{}
-	if err := unmarshalStdinWithFlags(cmd, map[string]string{
-		"name":    "name",
-		"size-gb": "size_gb",
-		"id":      "id",
-	}, &params); err != nil {
+
+	options, err := flagOptions(
+		cmd,
+		apiquery.NestedQueryFormatBrackets,
+		apiquery.ArrayQueryFormatComma,
+		ApplicationJSON,
+	)
+	if err != nil {
 		return err
 	}
 	var res []byte
-	_, err := client.Volumes.New(
+	options = append(options, option.WithResponseBodyInto(&res))
+	_, err = client.Volumes.New(
 		ctx,
 		params,
-		option.WithMiddleware(debugMiddleware(cmd.Bool("debug"))),
-		option.WithResponseBodyInto(&res),
+		options...,
 	)
 	if err != nil {
 		return err
@@ -96,45 +110,24 @@ func handleVolumesCreate(ctx context.Context, cmd *cli.Command) error {
 	return ShowJSON("volumes create", json, format, transform)
 }
 
-func handleVolumesRetrieve(ctx context.Context, cmd *cli.Command) error {
-	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
-	unusedArgs := cmd.Args().Slice()
-	if !cmd.IsSet("id") && len(unusedArgs) > 0 {
-		cmd.Set("id", unusedArgs[0])
-		unusedArgs = unusedArgs[1:]
-	}
-	if len(unusedArgs) > 0 {
-		return fmt.Errorf("Unexpected extra arguments: %v", unusedArgs)
-	}
-	var res []byte
-	_, err := client.Volumes.Get(
-		ctx,
-		cmd.Value("id").(string),
-		option.WithMiddleware(debugMiddleware(cmd.Bool("debug"))),
-		option.WithResponseBodyInto(&res),
-	)
-	if err != nil {
-		return err
-	}
-
-	json := gjson.Parse(string(res))
-	format := cmd.Root().String("format")
-	transform := cmd.Root().String("transform")
-	return ShowJSON("volumes retrieve", json, format, transform)
-}
-
 func handleVolumesList(ctx context.Context, cmd *cli.Command) error {
 	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
 	unusedArgs := cmd.Args().Slice()
 	if len(unusedArgs) > 0 {
 		return fmt.Errorf("Unexpected extra arguments: %v", unusedArgs)
 	}
-	var res []byte
-	_, err := client.Volumes.List(
-		ctx,
-		option.WithMiddleware(debugMiddleware(cmd.Bool("debug"))),
-		option.WithResponseBodyInto(&res),
+	options, err := flagOptions(
+		cmd,
+		apiquery.NestedQueryFormatBrackets,
+		apiquery.ArrayQueryFormatComma,
+		ApplicationJSON,
 	)
+	if err != nil {
+		return err
+	}
+	var res []byte
+	options = append(options, option.WithResponseBodyInto(&res))
+	_, err = client.Volumes.List(ctx, options...)
 	if err != nil {
 		return err
 	}
@@ -155,9 +148,54 @@ func handleVolumesDelete(ctx context.Context, cmd *cli.Command) error {
 	if len(unusedArgs) > 0 {
 		return fmt.Errorf("Unexpected extra arguments: %v", unusedArgs)
 	}
+	options, err := flagOptions(
+		cmd,
+		apiquery.NestedQueryFormatBrackets,
+		apiquery.ArrayQueryFormatComma,
+		ApplicationJSON,
+	)
+	if err != nil {
+		return err
+	}
 	return client.Volumes.Delete(
 		ctx,
-		cmd.Value("id").(string),
-		option.WithMiddleware(debugMiddleware(cmd.Bool("debug"))),
+		requestflag.CommandRequestValue[string](cmd, "id"),
+		options...,
 	)
+}
+
+func handleVolumesGet(ctx context.Context, cmd *cli.Command) error {
+	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
+	unusedArgs := cmd.Args().Slice()
+	if !cmd.IsSet("id") && len(unusedArgs) > 0 {
+		cmd.Set("id", unusedArgs[0])
+		unusedArgs = unusedArgs[1:]
+	}
+	if len(unusedArgs) > 0 {
+		return fmt.Errorf("Unexpected extra arguments: %v", unusedArgs)
+	}
+	options, err := flagOptions(
+		cmd,
+		apiquery.NestedQueryFormatBrackets,
+		apiquery.ArrayQueryFormatComma,
+		ApplicationJSON,
+	)
+	if err != nil {
+		return err
+	}
+	var res []byte
+	options = append(options, option.WithResponseBodyInto(&res))
+	_, err = client.Volumes.Get(
+		ctx,
+		requestflag.CommandRequestValue[string](cmd, "id"),
+		options...,
+	)
+	if err != nil {
+		return err
+	}
+
+	json := gjson.Parse(string(res))
+	format := cmd.Root().String("format")
+	transform := cmd.Root().String("transform")
+	return ShowJSON("volumes get", json, format, transform)
 }

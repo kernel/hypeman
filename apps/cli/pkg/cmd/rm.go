@@ -73,12 +73,18 @@ func handleRm(ctx context.Context, cmd *cli.Command) error {
 			}
 		}
 
+		// Build debug options once
+		var opts []option.RequestOption
+		if cmd.Root().Bool("debug") {
+			opts = append(opts, debugMiddlewareOption)
+		}
+
 		// Check instance state if not forcing
 		if !force {
 			inst, err := client.Instances.Get(
 				ctx,
 				instanceID,
-				option.WithMiddleware(debugMiddleware(cmd.Root().Bool("debug"))),
+				opts...,
 			)
 			if err != nil {
 				fmt.Printf("Error: failed to get instance %s: %v\n", instanceID, err)
@@ -101,7 +107,7 @@ func handleRm(ctx context.Context, cmd *cli.Command) error {
 		err = client.Instances.Delete(
 			ctx,
 			instanceID,
-			option.WithMiddleware(debugMiddleware(cmd.Root().Bool("debug"))),
+			opts...,
 		)
 		if err != nil {
 			fmt.Printf("Error: failed to remove instance %s: %v\n", instanceID, err)

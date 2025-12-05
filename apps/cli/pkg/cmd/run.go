@@ -120,10 +120,15 @@ func handleRun(ctx context.Context, cmd *cli.Command) error {
 
 	fmt.Fprintf(os.Stderr, "Creating instance %s...\n", name)
 
+	var opts []option.RequestOption
+	if cmd.Root().Bool("debug") {
+		opts = append(opts, debugMiddlewareOption)
+	}
+
 	result, err := client.Instances.New(
 		ctx,
 		params,
-		option.WithMiddleware(debugMiddleware(cmd.Root().Bool("debug"))),
+		opts...,
 	)
 	if err != nil {
 		return err

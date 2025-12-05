@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.5.1 (2025-12-05)
+
+Full Changelog: [v0.5.0...v0.5.1](https://github.com/onkernel/hypeman-cli/compare/v0.5.0...v0.5.1)
+
+### Features
+
+* **api:** manual updates ([a3f2ec1](https://github.com/onkernel/hypeman-cli/commit/a3f2ec15101a6afd6feb1da1addcb3a2589acb53))
+* fix edge cases for sending request data and add YAML support ([3e740a9](https://github.com/onkernel/hypeman-cli/commit/3e740a94698f4704e79cc5c3b6434cbb1bfcb935))
+* Ingress ([bfb79c5](https://github.com/onkernel/hypeman-cli/commit/bfb79c5a160a3b92cac3793ea49da49ddcc7c8c6))
+* Initialize volume with data ([ef9997c](https://github.com/onkernel/hypeman-cli/commit/ef9997cc2c6d0fc14531bdf9d1238f3447e3a454))
+* **push:** add hypeman push command for local image upload ([e120ec6](https://github.com/onkernel/hypeman-cli/commit/e120ec6d96531ab49909a3d55895f5fcc4d43dc2))
+* respect HYPEMAN_BASE_URL environment variable ([17122d7](https://github.com/onkernel/hypeman-cli/commit/17122d7b2d6041c57d4e2d341b52f18697aef5d4))
+
+
+### Bug Fixes
+
+* fix for default flag values ([812e009](https://github.com/onkernel/hypeman-cli/commit/812e0091f73ab5e8992adab5ca1c2cef76b60c63))
+* **run:** wait for image to be ready before creating instance ([048ee73](https://github.com/onkernel/hypeman-cli/commit/048ee7311c39d6c3c7efad9c662fa2a1993ced97))
+* use correct user agent value ([580e468](https://github.com/onkernel/hypeman-cli/commit/580e468e95a11c8c57016954464039af3b0586f1))
+
+
+### Chores
+
+* add scripts ([c3e4955](https://github.com/onkernel/hypeman-cli/commit/c3e4955f932edc7567d929f22f3e93f22ae69e1a))
+* update dependencies ([4ed31f6](https://github.com/onkernel/hypeman-cli/commit/4ed31f6294c1b94ef764bb7959dc99e89af62cfb))
+
 ## 0.5.0 (2025-11-26)
 
 Full Changelog: [v0.4.0...v0.5.0](https://github.com/onkernel/hypeman-cli/compare/v0.4.0...v0.5.0)

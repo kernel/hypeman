@@ -6,6 +6,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/onkernel/hypeman-cli/internal/apiquery"
+	"github.com/onkernel/hypeman-cli/internal/requestflag"
 	"github.com/onkernel/hypeman-go"
 	"github.com/onkernel/hypeman-go/option"
 	"github.com/tidwall/gjson"
@@ -16,48 +18,75 @@ var instancesCreate = cli.Command{
 	Name:  "create",
 	Usage: "Create and start instance",
 	Flags: []cli.Flag{
-		&cli.StringFlag{
+		&requestflag.StringFlag{
 			Name:  "image",
 			Usage: "OCI image reference",
+			Config: requestflag.RequestConfig{
+				BodyPath: "image",
+			},
 		},
-		&cli.StringFlag{
+		&requestflag.StringFlag{
 			Name:  "name",
 			Usage: "Human-readable name (lowercase letters, digits, and dashes only; cannot start or end with a dash)",
+			Config: requestflag.RequestConfig{
+				BodyPath: "name",
+			},
 		},
-		&cli.StringFlag{
+		&requestflag.YAMLFlag{
+			Name:  "env",
+			Usage: "Environment variables",
+			Config: requestflag.RequestConfig{
+				BodyPath: "env",
+			},
+		},
+		&requestflag.StringFlag{
 			Name:  "hotplug-size",
 			Usage: `Additional memory for hotplug (human-readable format like "3GB", "1G")`,
-			Value: "3GB",
+			Value: requestflag.Value[string]("3GB"),
+			Config: requestflag.RequestConfig{
+				BodyPath: "hotplug_size",
+			},
 		},
-		&cli.StringFlag{
+		&requestflag.YAMLFlag{
+			Name:  "network",
+			Usage: "Network configuration for the instance",
+			Config: requestflag.RequestConfig{
+				BodyPath: "network",
+			},
+		},
+		&requestflag.StringFlag{
 			Name:  "overlay-size",
 			Usage: `Writable overlay disk size (human-readable format like "10GB", "50G")`,
-			Value: "10GB",
+			Value: requestflag.Value[string]("10GB"),
+			Config: requestflag.RequestConfig{
+				BodyPath: "overlay_size",
+			},
 		},
-		&cli.StringFlag{
+		&requestflag.StringFlag{
 			Name:  "size",
 			Usage: `Base memory size (human-readable format like "1GB", "512MB", "2G")`,
-			Value: "1GB",
+			Value: requestflag.Value[string]("1GB"),
+			Config: requestflag.RequestConfig{
+				BodyPath: "size",
+			},
 		},
-		&cli.Int64Flag{
+		&requestflag.IntFlag{
 			Name:  "vcpus",
 			Usage: "Number of virtual CPUs",
-			Value: 2,
+			Value: requestflag.Value[int64](2),
+			Config: requestflag.RequestConfig{
+				BodyPath: "vcpus",
+			},
+		},
+		&requestflag.YAMLSliceFlag{
+			Name:  "volume",
+			Usage: "Volumes to attach to the instance at creation time",
+			Config: requestflag.RequestConfig{
+				BodyPath: "volumes",
+			},
 		},
 	},
 	Action:          handleInstancesCreate,
-	HideHelpCommand: true,
-}
-
-var instancesRetrieve = cli.Command{
-	Name:  "retrieve",
-	Usage: "Get instance details",
-	Flags: []cli.Flag{
-		&cli.StringFlag{
-			Name: "id",
-		},
-	},
-	Action:          handleInstancesRetrieve,
 	HideHelpCommand: true,
 }
 
@@ -73,7 +102,7 @@ var instancesDelete = cli.Command{
 	Name:  "delete",
 	Usage: "Stop and delete instance",
 	Flags: []cli.Flag{
-		&cli.StringFlag{
+		&requestflag.StringFlag{
 			Name: "id",
 		},
 	},
@@ -81,48 +110,66 @@ var instancesDelete = cli.Command{
 	HideHelpCommand: true,
 }
 
+var instancesGet = cli.Command{
+	Name:  "get",
+	Usage: "Get instance details",
+	Flags: []cli.Flag{
+		&requestflag.StringFlag{
+			Name: "id",
+		},
+	},
+	Action:          handleInstancesGet,
+	HideHelpCommand: true,
+}
+
 var instancesLogs = cli.Command{
 	Name:  "logs",
 	Usage: "Streams instance console logs as Server-Sent Events. Returns the last N lines\n(controlled by `tail` parameter), then optionally continues streaming new lines\nif `follow=true`.",
 	Flags: []cli.Flag{
-		&cli.StringFlag{
+		&requestflag.StringFlag{
 			Name: "id",
 		},
-		&cli.BoolFlag{
+		&requestflag.BoolFlag{
 			Name:  "follow",
 			Usage: "Continue streaming new lines after initial output",
+			Config: requestflag.RequestConfig{
+				QueryPath: "follow",
+			},
 		},
-		&cli.Int64Flag{
+		&requestflag.IntFlag{
 			Name:  "tail",
 			Usage: "Number of lines to return from end",
-			Value: 100,
+			Value: requestflag.Value[int64](100),
+			Config: requestflag.RequestConfig{
+				QueryPath: "tail",
+			},
 		},
 	},
 	Action:          handleInstancesLogs,
 	HideHelpCommand: true,
 }
 
-var instancesPutInStandby = cli.Command{
-	Name:  "put-in-standby",
-	Usage: "Put instance in standby (pause, snapshot, delete VMM)",
+var instancesRestore = cli.Command{
+	Name:  "restore",
+	Usage: "Restore instance from standby",
 	Flags: []cli.Flag{
-		&cli.StringFlag{
+		&requestflag.StringFlag{
 			Name: "id",
 		},
 	},
-	Action:          handleInstancesPutInStandby,
+	Action:          handleInstancesRestore,
 	HideHelpCommand: true,
 }
 
-var instancesRestoreFromStandby = cli.Command{
-	Name:  "restore-from-standby",
-	Usage: "Restore instance from standby",
+var instancesStandby = cli.Command{
+	Name:  "standby",
+	Usage: "Put instance in standby (pause, snapshot, delete VMM)",
 	Flags: []cli.Flag{
-		&cli.StringFlag{
+		&requestflag.StringFlag{
 			Name: "id",
 		},
 	},
-	Action:          handleInstancesRestoreFromStandby,
+	Action:          handleInstancesStandby,
 	HideHelpCommand: true,
 }
 
@@ -133,22 +180,22 @@ func handleInstancesCreate(ctx context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("Unexpected extra arguments: %v", unusedArgs)
 	}
 	params := hypeman.InstanceNewParams{}
-	if err := unmarshalStdinWithFlags(cmd, map[string]string{
-		"image":        "image",
-		"name":         "name",
-		"hotplug-size": "hotplug_size",
-		"overlay-size": "overlay_size",
-		"size":         "size",
-		"vcpus":        "vcpus",
-	}, &params); err != nil {
+
+	options, err := flagOptions(
+		cmd,
+		apiquery.NestedQueryFormatBrackets,
+		apiquery.ArrayQueryFormatComma,
+		ApplicationJSON,
+	)
+	if err != nil {
 		return err
 	}
 	var res []byte
-	_, err := client.Instances.New(
+	options = append(options, option.WithResponseBodyInto(&res))
+	_, err = client.Instances.New(
 		ctx,
 		params,
-		option.WithMiddleware(debugMiddleware(cmd.Bool("debug"))),
-		option.WithResponseBodyInto(&res),
+		options...,
 	)
 	if err != nil {
 		return err
@@ -160,45 +207,24 @@ func handleInstancesCreate(ctx context.Context, cmd *cli.Command) error {
 	return ShowJSON("instances create", json, format, transform)
 }
 
-func handleInstancesRetrieve(ctx context.Context, cmd *cli.Command) error {
-	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
-	unusedArgs := cmd.Args().Slice()
-	if !cmd.IsSet("id") && len(unusedArgs) > 0 {
-		cmd.Set("id", unusedArgs[0])
-		unusedArgs = unusedArgs[1:]
-	}
-	if len(unusedArgs) > 0 {
-		return fmt.Errorf("Unexpected extra arguments: %v", unusedArgs)
-	}
-	var res []byte
-	_, err := client.Instances.Get(
-		ctx,
-		cmd.Value("id").(string),
-		option.WithMiddleware(debugMiddleware(cmd.Bool("debug"))),
-		option.WithResponseBodyInto(&res),
-	)
-	if err != nil {
-		return err
-	}
-
-	json := gjson.Parse(string(res))
-	format := cmd.Root().String("format")
-	transform := cmd.Root().String("transform")
-	return ShowJSON("instances retrieve", json, format, transform)
-}
-
 func handleInstancesList(ctx context.Context, cmd *cli.Command) error {
 	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
 	unusedArgs := cmd.Args().Slice()
 	if len(unusedArgs) > 0 {
 		return fmt.Errorf("Unexpected extra arguments: %v", unusedArgs)
 	}
-	var res []byte
-	_, err := client.Instances.List(
-		ctx,
-		option.WithMiddleware(debugMiddleware(cmd.Bool("debug"))),
-		option.WithResponseBodyInto(&res),
+	options, err := flagOptions(
+		cmd,
+		apiquery.NestedQueryFormatBrackets,
+		apiquery.ArrayQueryFormatComma,
+		ApplicationJSON,
 	)
+	if err != nil {
+		return err
+	}
+	var res []byte
+	options = append(options, option.WithResponseBodyInto(&res))
+	_, err = client.Instances.List(ctx, options...)
 	if err != nil {
 		return err
 	}
@@ -219,11 +245,56 @@ func handleInstancesDelete(ctx context.Context, cmd *cli.Command) error {
 	if len(unusedArgs) > 0 {
 		return fmt.Errorf("Unexpected extra arguments: %v", unusedArgs)
 	}
+	options, err := flagOptions(
+		cmd,
+		apiquery.NestedQueryFormatBrackets,
+		apiquery.ArrayQueryFormatComma,
+		ApplicationJSON,
+	)
+	if err != nil {
+		return err
+	}
 	return client.Instances.Delete(
 		ctx,
-		cmd.Value("id").(string),
-		option.WithMiddleware(debugMiddleware(cmd.Bool("debug"))),
+		requestflag.CommandRequestValue[string](cmd, "id"),
+		options...,
 	)
+}
+
+func handleInstancesGet(ctx context.Context, cmd *cli.Command) error {
+	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
+	unusedArgs := cmd.Args().Slice()
+	if !cmd.IsSet("id") && len(unusedArgs) > 0 {
+		cmd.Set("id", unusedArgs[0])
+		unusedArgs = unusedArgs[1:]
+	}
+	if len(unusedArgs) > 0 {
+		return fmt.Errorf("Unexpected extra arguments: %v", unusedArgs)
+	}
+	options, err := flagOptions(
+		cmd,
+		apiquery.NestedQueryFormatBrackets,
+		apiquery.ArrayQueryFormatComma,
+		ApplicationJSON,
+	)
+	if err != nil {
+		return err
+	}
+	var res []byte
+	options = append(options, option.WithResponseBodyInto(&res))
+	_, err = client.Instances.Get(
+		ctx,
+		requestflag.CommandRequestValue[string](cmd, "id"),
+		options...,
+	)
+	if err != nil {
+		return err
+	}
+
+	json := gjson.Parse(string(res))
+	format := cmd.Root().String("format")
+	transform := cmd.Root().String("transform")
+	return ShowJSON("instances get", json, format, transform)
 }
 
 func handleInstancesLogs(ctx context.Context, cmd *cli.Command) error {
@@ -237,17 +308,21 @@ func handleInstancesLogs(ctx context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("Unexpected extra arguments: %v", unusedArgs)
 	}
 	params := hypeman.InstanceLogsParams{}
-	if cmd.IsSet("follow") {
-		params.Follow = hypeman.Opt(cmd.Value("follow").(bool))
-	}
-	if cmd.IsSet("tail") {
-		params.Tail = hypeman.Opt(cmd.Value("tail").(int64))
+
+	options, err := flagOptions(
+		cmd,
+		apiquery.NestedQueryFormatBrackets,
+		apiquery.ArrayQueryFormatComma,
+		ApplicationJSON,
+	)
+	if err != nil {
+		return err
 	}
 	stream := client.Instances.LogsStreaming(
 		ctx,
-		cmd.Value("id").(string),
+		requestflag.CommandRequestValue[string](cmd, "id"),
 		params,
-		option.WithMiddleware(debugMiddleware(cmd.Bool("debug"))),
+		options...,
 	)
 	defer stream.Close()
 	for stream.Next() {
@@ -256,7 +331,7 @@ func handleInstancesLogs(ctx context.Context, cmd *cli.Command) error {
 	return stream.Err()
 }
 
-func handleInstancesPutInStandby(ctx context.Context, cmd *cli.Command) error {
+func handleInstancesRestore(ctx context.Context, cmd *cli.Command) error {
 	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
 	unusedArgs := cmd.Args().Slice()
 	if !cmd.IsSet("id") && len(unusedArgs) > 0 {
@@ -266,12 +341,21 @@ func handleInstancesPutInStandby(ctx context.Context, cmd *cli.Command) error {
 	if len(unusedArgs) > 0 {
 		return fmt.Errorf("Unexpected extra arguments: %v", unusedArgs)
 	}
+	options, err := flagOptions(
+		cmd,
+		apiquery.NestedQueryFormatBrackets,
+		apiquery.ArrayQueryFormatComma,
+		ApplicationJSON,
+	)
+	if err != nil {
+		return err
+	}
 	var res []byte
-	_, err := client.Instances.PutInStandby(
+	options = append(options, option.WithResponseBodyInto(&res))
+	_, err = client.Instances.Restore(
 		ctx,
-		cmd.Value("id").(string),
-		option.WithMiddleware(debugMiddleware(cmd.Bool("debug"))),
-		option.WithResponseBodyInto(&res),
+		requestflag.CommandRequestValue[string](cmd, "id"),
+		options...,
 	)
 	if err != nil {
 		return err
@@ -280,10 +364,10 @@ func handleInstancesPutInStandby(ctx context.Context, cmd *cli.Command) error {
 	json := gjson.Parse(string(res))
 	format := cmd.Root().String("format")
 	transform := cmd.Root().String("transform")
-	return ShowJSON("instances put-in-standby", json, format, transform)
+	return ShowJSON("instances restore", json, format, transform)
 }
 
-func handleInstancesRestoreFromStandby(ctx context.Context, cmd *cli.Command) error {
+func handleInstancesStandby(ctx context.Context, cmd *cli.Command) error {
 	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
 	unusedArgs := cmd.Args().Slice()
 	if !cmd.IsSet("id") && len(unusedArgs) > 0 {
@@ -293,12 +377,21 @@ func handleInstancesRestoreFromStandby(ctx context.Context, cmd *cli.Command) er
 	if len(unusedArgs) > 0 {
 		return fmt.Errorf("Unexpected extra arguments: %v", unusedArgs)
 	}
+	options, err := flagOptions(
+		cmd,
+		apiquery.NestedQueryFormatBrackets,
+		apiquery.ArrayQueryFormatComma,
+		ApplicationJSON,
+	)
+	if err != nil {
+		return err
+	}
 	var res []byte
-	_, err := client.Instances.RestoreFromStandby(
+	options = append(options, option.WithResponseBodyInto(&res))
+	_, err = client.Instances.Standby(
 		ctx,
-		cmd.Value("id").(string),
-		option.WithMiddleware(debugMiddleware(cmd.Bool("debug"))),
-		option.WithResponseBodyInto(&res),
+		requestflag.CommandRequestValue[string](cmd, "id"),
+		options...,
 	)
 	if err != nil {
 		return err
@@ -307,5 +400,5 @@ func handleInstancesRestoreFromStandby(ctx context.Context, cmd *cli.Command) er
 	json := gjson.Parse(string(res))
 	format := cmd.Root().String("format")
 	transform := cmd.Root().String("transform")
-	return ShowJSON("instances restore-from-standby", json, format, transform)
+	return ShowJSON("instances standby", json, format, transform)
 }

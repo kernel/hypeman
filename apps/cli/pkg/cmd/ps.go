@@ -32,9 +32,14 @@ var psCmd = cli.Command{
 func handlePs(ctx context.Context, cmd *cli.Command) error {
 	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
 
+	var opts []option.RequestOption
+	if cmd.Root().Bool("debug") {
+		opts = append(opts, debugMiddlewareOption)
+	}
+
 	instances, err := client.Instances.List(
 		ctx,
-		option.WithMiddleware(debugMiddleware(cmd.Root().Bool("debug"))),
+		opts...,
 	)
 	if err != nil {
 		return err

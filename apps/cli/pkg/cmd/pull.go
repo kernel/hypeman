@@ -34,10 +34,15 @@ func handlePull(ctx context.Context, cmd *cli.Command) error {
 		Name: image,
 	}
 
+	var opts []option.RequestOption
+	if cmd.Root().Bool("debug") {
+		opts = append(opts, debugMiddlewareOption)
+	}
+
 	result, err := client.Images.New(
 		ctx,
 		params,
-		option.WithMiddleware(debugMiddleware(cmd.Root().Bool("debug"))),
+		opts...,
 	)
 	if err != nil {
 		return err
