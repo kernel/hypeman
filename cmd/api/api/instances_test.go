@@ -136,8 +136,8 @@ func TestInstanceLifecycle_StopStartReboot(t *testing.T) {
 
 	svc := newTestService(t)
 
-	// Create and wait for alpine image
-	createAndWaitForImage(t, svc, "docker.io/library/alpine:latest", 30*time.Second)
+	// Use nginx:alpine so the VM runs a real workload (not just exits immediately)
+	createAndWaitForImage(t, svc, "docker.io/library/nginx:alpine", 60*time.Second)
 
 	// Ensure system files (kernel and initramfs) are available
 	t.Log("Ensuring system files (kernel and initramfs)...")
@@ -152,7 +152,7 @@ func TestInstanceLifecycle_StopStartReboot(t *testing.T) {
 	createResp, err := svc.CreateInstance(ctx(), oapi.CreateInstanceRequestObject{
 		Body: &oapi.CreateInstanceRequest{
 			Name:  "test-lifecycle",
-			Image: "docker.io/library/alpine:latest",
+			Image: "docker.io/library/nginx:alpine",
 			Network: &struct {
 				Enabled *bool `json:"enabled,omitempty"`
 			}{
