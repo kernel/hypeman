@@ -334,7 +334,7 @@ components:
           description: Size in gigabytes
           example: 10
     
-    VolumeAttachmentInfo:
+    VolumeAttachedInstance:
       type: object
       required: [instance_id, mount_path, readonly]
       properties:
@@ -371,7 +371,7 @@ components:
           type: array
           description: List of current attachments (empty if not attached)
           items:
-            $ref: "#/components/schemas/VolumeAttachmentInfo"
+            $ref: "#/components/schemas/VolumeAttachedInstance"
         created_at:
           type: string
           format: date-time
