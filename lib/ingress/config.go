@@ -188,14 +188,10 @@ func (g *EnvoyConfigGenerator) buildLDSData(ctx context.Context, ingresses []Ing
 }
 
 // buildCDSData builds the CDS configuration data.
+// Note: OTEL collector cluster is NOT included here - it's added as a static cluster
+// in the bootstrap config because stats_sinks needs it available at bootstrap time.
 func (g *EnvoyConfigGenerator) buildCDSData(ctx context.Context, ingresses []Ingress, ipResolver func(instance string) (string, error)) ([]byte, error) {
 	clusters := g.buildClusters(ctx, ingresses, ipResolver)
-
-	// Add OTEL collector cluster if enabled
-	if g.otel.Enabled && g.otel.Endpoint != "" {
-		otelCluster := g.buildOTELCollectorCluster()
-		clusters = append(clusters, otelCluster)
-	}
 
 	cdsConfig := map[string]interface{}{
 		"resources": g.wrapResources(clusters, "type.googleapis.com/envoy.config.cluster.v3.Cluster"),
@@ -297,9 +293,14 @@ func (g *EnvoyConfigGenerator) buildBootstrapConfigWithPaths(ldsPath, cdsPath, w
 		},
 	}
 
-	// Add stats sink to push metrics to OTEL collector
+	// Add OTEL stats sink and collector cluster if enabled
+	// The OTEL collector cluster must be a static resource (not in CDS) because
+	// stats_sinks needs it available at bootstrap time before CDS is loaded
 	if g.otel.Enabled && g.otel.Endpoint != "" {
 		config["stats_sinks"] = g.buildStatsSinks()
+		config["static_resources"] = map[string]interface{}{
+			"clusters": []interface{}{g.buildOTELCollectorCluster()},
+		}
 	}
 
 	return config
