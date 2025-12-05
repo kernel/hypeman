@@ -57,29 +57,6 @@ func TestInstanceNewWithOptionalParams(t *testing.T) {
 	}
 }
 
-func TestInstanceGet(t *testing.T) {
-	t.Skip("Prism tests are disabled")
-	baseURL := "http://localhost:4010"
-	if envURL, ok := os.LookupEnv("TEST_API_BASE_URL"); ok {
-		baseURL = envURL
-	}
-	if !testutil.CheckTestServer(t, baseURL) {
-		return
-	}
-	client := hypeman.NewClient(
-		option.WithBaseURL(baseURL),
-		option.WithAPIKey("My API Key"),
-	)
-	_, err := client.Instances.Get(context.TODO(), "id")
-	if err != nil {
-		var apierr *hypeman.Error
-		if errors.As(err, &apierr) {
-			t.Log(string(apierr.DumpRequest(true)))
-		}
-		t.Fatalf("err should be nil: %s", err.Error())
-	}
-}
-
 func TestInstanceList(t *testing.T) {
 	t.Skip("Prism tests are disabled")
 	baseURL := "http://localhost:4010"
@@ -126,7 +103,7 @@ func TestInstanceDelete(t *testing.T) {
 	}
 }
 
-func TestInstancePutInStandby(t *testing.T) {
+func TestInstanceGet(t *testing.T) {
 	t.Skip("Prism tests are disabled")
 	baseURL := "http://localhost:4010"
 	if envURL, ok := os.LookupEnv("TEST_API_BASE_URL"); ok {
@@ -139,7 +116,7 @@ func TestInstancePutInStandby(t *testing.T) {
 		option.WithBaseURL(baseURL),
 		option.WithAPIKey("My API Key"),
 	)
-	_, err := client.Instances.PutInStandby(context.TODO(), "id")
+	_, err := client.Instances.Get(context.TODO(), "id")
 	if err != nil {
 		var apierr *hypeman.Error
 		if errors.As(err, &apierr) {
@@ -149,7 +126,7 @@ func TestInstancePutInStandby(t *testing.T) {
 	}
 }
 
-func TestInstanceRestoreFromStandby(t *testing.T) {
+func TestInstanceRestore(t *testing.T) {
 	t.Skip("Prism tests are disabled")
 	baseURL := "http://localhost:4010"
 	if envURL, ok := os.LookupEnv("TEST_API_BASE_URL"); ok {
@@ -162,7 +139,30 @@ func TestInstanceRestoreFromStandby(t *testing.T) {
 		option.WithBaseURL(baseURL),
 		option.WithAPIKey("My API Key"),
 	)
-	_, err := client.Instances.RestoreFromStandby(context.TODO(), "id")
+	_, err := client.Instances.Restore(context.TODO(), "id")
+	if err != nil {
+		var apierr *hypeman.Error
+		if errors.As(err, &apierr) {
+			t.Log(string(apierr.DumpRequest(true)))
+		}
+		t.Fatalf("err should be nil: %s", err.Error())
+	}
+}
+
+func TestInstanceStandby(t *testing.T) {
+	t.Skip("Prism tests are disabled")
+	baseURL := "http://localhost:4010"
+	if envURL, ok := os.LookupEnv("TEST_API_BASE_URL"); ok {
+		baseURL = envURL
+	}
+	if !testutil.CheckTestServer(t, baseURL) {
+		return
+	}
+	client := hypeman.NewClient(
+		option.WithBaseURL(baseURL),
+		option.WithAPIKey("My API Key"),
+	)
+	_, err := client.Instances.Standby(context.TODO(), "id")
 	if err != nil {
 		var apierr *hypeman.Error
 		if errors.As(err, &apierr) {

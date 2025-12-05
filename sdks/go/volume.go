@@ -48,18 +48,6 @@ func (r *VolumeService) New(ctx context.Context, body VolumeNewParams, opts ...o
 	return
 }
 
-// Get volume details
-func (r *VolumeService) Get(ctx context.Context, id string, opts ...option.RequestOption) (res *Volume, err error) {
-	opts = slices.Concat(r.Options, opts)
-	if id == "" {
-		err = errors.New("missing required id parameter")
-		return
-	}
-	path := fmt.Sprintf("volumes/%s", id)
-	err = requestconfig.ExecuteNewRequest(ctx, http.MethodGet, path, nil, &res, opts...)
-	return
-}
-
 // List volumes
 func (r *VolumeService) List(ctx context.Context, opts ...option.RequestOption) (res *[]Volume, err error) {
 	opts = slices.Concat(r.Options, opts)
@@ -78,6 +66,18 @@ func (r *VolumeService) Delete(ctx context.Context, id string, opts ...option.Re
 	}
 	path := fmt.Sprintf("volumes/%s", id)
 	err = requestconfig.ExecuteNewRequest(ctx, http.MethodDelete, path, nil, nil, opts...)
+	return
+}
+
+// Get volume details
+func (r *VolumeService) Get(ctx context.Context, id string, opts ...option.RequestOption) (res *Volume, err error) {
+	opts = slices.Concat(r.Options, opts)
+	if id == "" {
+		err = errors.New("missing required id parameter")
+		return
+	}
+	path := fmt.Sprintf("volumes/%s", id)
+	err = requestconfig.ExecuteNewRequest(ctx, http.MethodGet, path, nil, &res, opts...)
 	return
 }
 

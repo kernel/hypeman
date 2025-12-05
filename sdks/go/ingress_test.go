@@ -13,7 +13,7 @@ import (
 	"github.com/onkernel/hypeman-go/option"
 )
 
-func TestVolumeNewWithOptionalParams(t *testing.T) {
+func TestIngressNew(t *testing.T) {
 	t.Skip("Prism tests are disabled")
 	baseURL := "http://localhost:4010"
 	if envURL, ok := os.LookupEnv("TEST_API_BASE_URL"); ok {
@@ -26,10 +26,18 @@ func TestVolumeNewWithOptionalParams(t *testing.T) {
 		option.WithBaseURL(baseURL),
 		option.WithAPIKey("My API Key"),
 	)
-	_, err := client.Volumes.New(context.TODO(), hypeman.VolumeNewParams{
-		Name:   "my-data-volume",
-		SizeGB: 10,
-		ID:     hypeman.String("vol-data-1"),
+	_, err := client.Ingresses.New(context.TODO(), hypeman.IngressNewParams{
+		Name: "my-api-ingress",
+		Rules: []hypeman.IngressRuleParam{{
+			Match: hypeman.IngressMatchParam{
+				Hostname: "api.example.com",
+				Port:     hypeman.Int(8080),
+			},
+			Target: hypeman.IngressTargetParam{
+				Instance: "my-api",
+				Port:     8080,
+			},
+		}},
 	})
 	if err != nil {
 		var apierr *hypeman.Error
@@ -40,7 +48,7 @@ func TestVolumeNewWithOptionalParams(t *testing.T) {
 	}
 }
 
-func TestVolumeList(t *testing.T) {
+func TestIngressList(t *testing.T) {
 	t.Skip("Prism tests are disabled")
 	baseURL := "http://localhost:4010"
 	if envURL, ok := os.LookupEnv("TEST_API_BASE_URL"); ok {
@@ -53,7 +61,7 @@ func TestVolumeList(t *testing.T) {
 		option.WithBaseURL(baseURL),
 		option.WithAPIKey("My API Key"),
 	)
-	_, err := client.Volumes.List(context.TODO())
+	_, err := client.Ingresses.List(context.TODO())
 	if err != nil {
 		var apierr *hypeman.Error
 		if errors.As(err, &apierr) {
@@ -63,7 +71,7 @@ func TestVolumeList(t *testing.T) {
 	}
 }
 
-func TestVolumeDelete(t *testing.T) {
+func TestIngressDelete(t *testing.T) {
 	t.Skip("Prism tests are disabled")
 	baseURL := "http://localhost:4010"
 	if envURL, ok := os.LookupEnv("TEST_API_BASE_URL"); ok {
@@ -76,7 +84,7 @@ func TestVolumeDelete(t *testing.T) {
 		option.WithBaseURL(baseURL),
 		option.WithAPIKey("My API Key"),
 	)
-	err := client.Volumes.Delete(context.TODO(), "id")
+	err := client.Ingresses.Delete(context.TODO(), "id")
 	if err != nil {
 		var apierr *hypeman.Error
 		if errors.As(err, &apierr) {
@@ -86,7 +94,7 @@ func TestVolumeDelete(t *testing.T) {
 	}
 }
 
-func TestVolumeGet(t *testing.T) {
+func TestIngressGet(t *testing.T) {
 	t.Skip("Prism tests are disabled")
 	baseURL := "http://localhost:4010"
 	if envURL, ok := os.LookupEnv("TEST_API_BASE_URL"); ok {
@@ -99,7 +107,7 @@ func TestVolumeGet(t *testing.T) {
 		option.WithBaseURL(baseURL),
 		option.WithAPIKey("My API Key"),
 	)
-	_, err := client.Volumes.Get(context.TODO(), "id")
+	_, err := client.Ingresses.Get(context.TODO(), "id")
 	if err != nil {
 		var apierr *hypeman.Error
 		if errors.As(err, &apierr) {

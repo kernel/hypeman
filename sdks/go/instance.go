@@ -50,18 +50,6 @@ func (r *InstanceService) New(ctx context.Context, body InstanceNewParams, opts 
 	return
 }
 
-// Get instance details
-func (r *InstanceService) Get(ctx context.Context, id string, opts ...option.RequestOption) (res *Instance, err error) {
-	opts = slices.Concat(r.Options, opts)
-	if id == "" {
-		err = errors.New("missing required id parameter")
-		return
-	}
-	path := fmt.Sprintf("instances/%s", id)
-	err = requestconfig.ExecuteNewRequest(ctx, http.MethodGet, path, nil, &res, opts...)
-	return
-}
-
 // List instances
 func (r *InstanceService) List(ctx context.Context, opts ...option.RequestOption) (res *[]Instance, err error) {
 	opts = slices.Concat(r.Options, opts)
@@ -80,6 +68,18 @@ func (r *InstanceService) Delete(ctx context.Context, id string, opts ...option.
 	}
 	path := fmt.Sprintf("instances/%s", id)
 	err = requestconfig.ExecuteNewRequest(ctx, http.MethodDelete, path, nil, nil, opts...)
+	return
+}
+
+// Get instance details
+func (r *InstanceService) Get(ctx context.Context, id string, opts ...option.RequestOption) (res *Instance, err error) {
+	opts = slices.Concat(r.Options, opts)
+	if id == "" {
+		err = errors.New("missing required id parameter")
+		return
+	}
+	path := fmt.Sprintf("instances/%s", id)
+	err = requestconfig.ExecuteNewRequest(ctx, http.MethodGet, path, nil, &res, opts...)
 	return
 }
 
@@ -102,26 +102,26 @@ func (r *InstanceService) LogsStreaming(ctx context.Context, id string, query In
 	return ssestream.NewStream[string](ssestream.NewDecoder(raw), err)
 }
 
-// Put instance in standby (pause, snapshot, delete VMM)
-func (r *InstanceService) PutInStandby(ctx context.Context, id string, opts ...option.RequestOption) (res *Instance, err error) {
-	opts = slices.Concat(r.Options, opts)
-	if id == "" {
-		err = errors.New("missing required id parameter")
-		return
-	}
-	path := fmt.Sprintf("instances/%s/standby", id)
-	err = requestconfig.ExecuteNewRequest(ctx, http.MethodPost, path, nil, &res, opts...)
-	return
-}
-
 // Restore instance from standby
-func (r *InstanceService) RestoreFromStandby(ctx context.Context, id string, opts ...option.RequestOption) (res *Instance, err error) {
+func (r *InstanceService) Restore(ctx context.Context, id string, opts ...option.RequestOption) (res *Instance, err error) {
 	opts = slices.Concat(r.Options, opts)
 	if id == "" {
 		err = errors.New("missing required id parameter")
 		return
 	}
 	path := fmt.Sprintf("instances/%s/restore", id)
+	err = requestconfig.ExecuteNewRequest(ctx, http.MethodPost, path, nil, &res, opts...)
+	return
+}
+
+// Put instance in standby (pause, snapshot, delete VMM)
+func (r *InstanceService) Standby(ctx context.Context, id string, opts ...option.RequestOption) (res *Instance, err error) {
+	opts = slices.Concat(r.Options, opts)
+	if id == "" {
+		err = errors.New("missing required id parameter")
+		return
+	}
+	path := fmt.Sprintf("instances/%s/standby", id)
 	err = requestconfig.ExecuteNewRequest(ctx, http.MethodPost, path, nil, &res, opts...)
 	return
 }
