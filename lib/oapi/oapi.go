@@ -516,11 +516,20 @@ type ClientInterface interface {
 	// GetInstanceLogs request
 	GetInstanceLogs(ctx context.Context, id string, params *GetInstanceLogsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// RebootInstance request
+	RebootInstance(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// RestoreInstance request
 	RestoreInstance(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// StandbyInstance request
 	StandbyInstance(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// StartInstance request
+	StartInstance(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// StopInstance request
+	StopInstance(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// DetachVolume request
 	DetachVolume(ctx context.Context, id string, volumeId string, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -749,6 +758,18 @@ func (c *Client) GetInstanceLogs(ctx context.Context, id string, params *GetInst
 	return c.Client.Do(req)
 }
 
+func (c *Client) RebootInstance(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewRebootInstanceRequest(c.Server, id)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 func (c *Client) RestoreInstance(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewRestoreInstanceRequest(c.Server, id)
 	if err != nil {
@@ -763,6 +784,30 @@ func (c *Client) RestoreInstance(ctx context.Context, id string, reqEditors ...R
 
 func (c *Client) StandbyInstance(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewStandbyInstanceRequest(c.Server, id)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) StartInstance(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewStartInstanceRequest(c.Server, id)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) StopInstance(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewStopInstanceRequest(c.Server, id)
 	if err != nil {
 		return nil, err
 	}
@@ -1373,6 +1418,40 @@ func NewGetInstanceLogsRequest(server string, id string, params *GetInstanceLogs
 	return req, nil
 }
 
+// NewRebootInstanceRequest generates requests for RebootInstance
+func NewRebootInstanceRequest(server string, id string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "id", runtime.ParamLocationPath, id)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/instances/%s/reboot", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewRestoreInstanceRequest generates requests for RestoreInstance
 func NewRestoreInstanceRequest(server string, id string) (*http.Request, error) {
 	var err error
@@ -1424,6 +1503,74 @@ func NewStandbyInstanceRequest(server string, id string) (*http.Request, error) 
 	}
 
 	operationPath := fmt.Sprintf("/instances/%s/standby", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewStartInstanceRequest generates requests for StartInstance
+func NewStartInstanceRequest(server string, id string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "id", runtime.ParamLocationPath, id)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/instances/%s/start", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewStopInstanceRequest generates requests for StopInstance
+func NewStopInstanceRequest(server string, id string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "id", runtime.ParamLocationPath, id)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/instances/%s/stop", pathParam0)
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -1762,11 +1909,20 @@ type ClientWithResponsesInterface interface {
 	// GetInstanceLogsWithResponse request
 	GetInstanceLogsWithResponse(ctx context.Context, id string, params *GetInstanceLogsParams, reqEditors ...RequestEditorFn) (*GetInstanceLogsResponse, error)
 
+	// RebootInstanceWithResponse request
+	RebootInstanceWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*RebootInstanceResponse, error)
+
 	// RestoreInstanceWithResponse request
 	RestoreInstanceWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*RestoreInstanceResponse, error)
 
 	// StandbyInstanceWithResponse request
 	StandbyInstanceWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*StandbyInstanceResponse, error)
+
+	// StartInstanceWithResponse request
+	StartInstanceWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*StartInstanceResponse, error)
+
+	// StopInstanceWithResponse request
+	StopInstanceWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*StopInstanceResponse, error)
 
 	// DetachVolumeWithResponse request
 	DetachVolumeWithResponse(ctx context.Context, id string, volumeId string, reqEditors ...RequestEditorFn) (*DetachVolumeResponse, error)
@@ -2126,6 +2282,31 @@ func (r GetInstanceLogsResponse) StatusCode() int {
 	return 0
 }
 
+type RebootInstanceResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *Instance
+	JSON404      *Error
+	JSON409      *Error
+	JSON500      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r RebootInstanceResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r RebootInstanceResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
 type RestoreInstanceResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -2170,6 +2351,56 @@ func (r StandbyInstanceResponse) Status() string {
 
 // StatusCode returns HTTPResponse.StatusCode
 func (r StandbyInstanceResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type StartInstanceResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *Instance
+	JSON404      *Error
+	JSON409      *Error
+	JSON500      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r StartInstanceResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r StartInstanceResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type StopInstanceResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *Instance
+	JSON404      *Error
+	JSON409      *Error
+	JSON500      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r StopInstanceResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r StopInstanceResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
@@ -2473,6 +2704,15 @@ func (c *ClientWithResponses) GetInstanceLogsWithResponse(ctx context.Context, i
 	return ParseGetInstanceLogsResponse(rsp)
 }
 
+// RebootInstanceWithResponse request returning *RebootInstanceResponse
+func (c *ClientWithResponses) RebootInstanceWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*RebootInstanceResponse, error) {
+	rsp, err := c.RebootInstance(ctx, id, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseRebootInstanceResponse(rsp)
+}
+
 // RestoreInstanceWithResponse request returning *RestoreInstanceResponse
 func (c *ClientWithResponses) RestoreInstanceWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*RestoreInstanceResponse, error) {
 	rsp, err := c.RestoreInstance(ctx, id, reqEditors...)
@@ -2489,6 +2729,24 @@ func (c *ClientWithResponses) StandbyInstanceWithResponse(ctx context.Context, i
 		return nil, err
 	}
 	return ParseStandbyInstanceResponse(rsp)
+}
+
+// StartInstanceWithResponse request returning *StartInstanceResponse
+func (c *ClientWithResponses) StartInstanceWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*StartInstanceResponse, error) {
+	rsp, err := c.StartInstance(ctx, id, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseStartInstanceResponse(rsp)
+}
+
+// StopInstanceWithResponse request returning *StopInstanceResponse
+func (c *ClientWithResponses) StopInstanceWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*StopInstanceResponse, error) {
+	rsp, err := c.StopInstance(ctx, id, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseStopInstanceResponse(rsp)
 }
 
 // DetachVolumeWithResponse request returning *DetachVolumeResponse
@@ -3114,6 +3372,53 @@ func ParseGetInstanceLogsResponse(rsp *http.Response) (*GetInstanceLogsResponse,
 	return response, nil
 }
 
+// ParseRebootInstanceResponse parses an HTTP response from a RebootInstanceWithResponse call
+func ParseRebootInstanceResponse(rsp *http.Response) (*RebootInstanceResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &RebootInstanceResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest Instance
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseRestoreInstanceResponse parses an HTTP response from a RestoreInstanceWithResponse call
 func ParseRestoreInstanceResponse(rsp *http.Response) (*RestoreInstanceResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -3170,6 +3475,100 @@ func ParseStandbyInstanceResponse(rsp *http.Response) (*StandbyInstanceResponse,
 	}
 
 	response := &StandbyInstanceResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest Instance
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseStartInstanceResponse parses an HTTP response from a StartInstanceWithResponse call
+func ParseStartInstanceResponse(rsp *http.Response) (*StartInstanceResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &StartInstanceResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest Instance
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseStopInstanceResponse parses an HTTP response from a StopInstanceWithResponse call
+func ParseStopInstanceResponse(rsp *http.Response) (*StopInstanceResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &StopInstanceResponse{
 		Body:         bodyBytes,
 		HTTPResponse: rsp,
 	}
@@ -3513,12 +3912,21 @@ type ServerInterface interface {
 	// Stream instance logs (SSE)
 	// (GET /instances/{id}/logs)
 	GetInstanceLogs(w http.ResponseWriter, r *http.Request, id string, params GetInstanceLogsParams)
+	// Reboot a running instance
+	// (POST /instances/{id}/reboot)
+	RebootInstance(w http.ResponseWriter, r *http.Request, id string)
 	// Restore instance from standby
 	// (POST /instances/{id}/restore)
 	RestoreInstance(w http.ResponseWriter, r *http.Request, id string)
 	// Put instance in standby (pause, snapshot, delete VMM)
 	// (POST /instances/{id}/standby)
 	StandbyInstance(w http.ResponseWriter, r *http.Request, id string)
+	// Start a stopped instance
+	// (POST /instances/{id}/start)
+	StartInstance(w http.ResponseWriter, r *http.Request, id string)
+	// Stop instance (graceful shutdown)
+	// (POST /instances/{id}/stop)
+	StopInstance(w http.ResponseWriter, r *http.Request, id string)
 	// Detach volume from instance
 	// (DELETE /instances/{id}/volumes/{volumeId})
 	DetachVolume(w http.ResponseWriter, r *http.Request, id string, volumeId string)
@@ -3627,6 +4035,12 @@ func (_ Unimplemented) GetInstanceLogs(w http.ResponseWriter, r *http.Request, i
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
+// Reboot a running instance
+// (POST /instances/{id}/reboot)
+func (_ Unimplemented) RebootInstance(w http.ResponseWriter, r *http.Request, id string) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
 // Restore instance from standby
 // (POST /instances/{id}/restore)
 func (_ Unimplemented) RestoreInstance(w http.ResponseWriter, r *http.Request, id string) {
@@ -3636,6 +4050,18 @@ func (_ Unimplemented) RestoreInstance(w http.ResponseWriter, r *http.Request, i
 // Put instance in standby (pause, snapshot, delete VMM)
 // (POST /instances/{id}/standby)
 func (_ Unimplemented) StandbyInstance(w http.ResponseWriter, r *http.Request, id string) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Start a stopped instance
+// (POST /instances/{id}/start)
+func (_ Unimplemented) StartInstance(w http.ResponseWriter, r *http.Request, id string) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Stop instance (graceful shutdown)
+// (POST /instances/{id}/stop)
+func (_ Unimplemented) StopInstance(w http.ResponseWriter, r *http.Request, id string) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -4054,6 +4480,37 @@ func (siw *ServerInterfaceWrapper) GetInstanceLogs(w http.ResponseWriter, r *htt
 	handler.ServeHTTP(w, r)
 }
 
+// RebootInstance operation middleware
+func (siw *ServerInterfaceWrapper) RebootInstance(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", chi.URLParam(r, "id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RebootInstance(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // RestoreInstance operation middleware
 func (siw *ServerInterfaceWrapper) RestoreInstance(w http.ResponseWriter, r *http.Request) {
 
@@ -4107,6 +4564,68 @@ func (siw *ServerInterfaceWrapper) StandbyInstance(w http.ResponseWriter, r *htt
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.StandbyInstance(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// StartInstance operation middleware
+func (siw *ServerInterfaceWrapper) StartInstance(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", chi.URLParam(r, "id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.StartInstance(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// StopInstance operation middleware
+func (siw *ServerInterfaceWrapper) StopInstance(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", chi.URLParam(r, "id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.StopInstance(w, r, id)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -4454,10 +4973,19 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 		r.Get(options.BaseURL+"/instances/{id}/logs", wrapper.GetInstanceLogs)
 	})
 	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/instances/{id}/reboot", wrapper.RebootInstance)
+	})
+	r.Group(func(r chi.Router) {
 		r.Post(options.BaseURL+"/instances/{id}/restore", wrapper.RestoreInstance)
 	})
 	r.Group(func(r chi.Router) {
 		r.Post(options.BaseURL+"/instances/{id}/standby", wrapper.StandbyInstance)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/instances/{id}/start", wrapper.StartInstance)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/instances/{id}/stop", wrapper.StopInstance)
 	})
 	r.Group(func(r chi.Router) {
 		r.Delete(options.BaseURL+"/instances/{id}/volumes/{volumeId}", wrapper.DetachVolume)
@@ -5002,6 +5530,50 @@ func (response GetInstanceLogs500JSONResponse) VisitGetInstanceLogsResponse(w ht
 	return json.NewEncoder(w).Encode(response)
 }
 
+type RebootInstanceRequestObject struct {
+	Id string `json:"id"`
+}
+
+type RebootInstanceResponseObject interface {
+	VisitRebootInstanceResponse(w http.ResponseWriter) error
+}
+
+type RebootInstance200JSONResponse Instance
+
+func (response RebootInstance200JSONResponse) VisitRebootInstanceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type RebootInstance404JSONResponse Error
+
+func (response RebootInstance404JSONResponse) VisitRebootInstanceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type RebootInstance409JSONResponse Error
+
+func (response RebootInstance409JSONResponse) VisitRebootInstanceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type RebootInstance500JSONResponse Error
+
+func (response RebootInstance500JSONResponse) VisitRebootInstanceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
 type RestoreInstanceRequestObject struct {
 	Id string `json:"id"`
 }
@@ -5084,6 +5656,94 @@ func (response StandbyInstance409JSONResponse) VisitStandbyInstanceResponse(w ht
 type StandbyInstance500JSONResponse Error
 
 func (response StandbyInstance500JSONResponse) VisitStandbyInstanceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type StartInstanceRequestObject struct {
+	Id string `json:"id"`
+}
+
+type StartInstanceResponseObject interface {
+	VisitStartInstanceResponse(w http.ResponseWriter) error
+}
+
+type StartInstance200JSONResponse Instance
+
+func (response StartInstance200JSONResponse) VisitStartInstanceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type StartInstance404JSONResponse Error
+
+func (response StartInstance404JSONResponse) VisitStartInstanceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type StartInstance409JSONResponse Error
+
+func (response StartInstance409JSONResponse) VisitStartInstanceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type StartInstance500JSONResponse Error
+
+func (response StartInstance500JSONResponse) VisitStartInstanceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type StopInstanceRequestObject struct {
+	Id string `json:"id"`
+}
+
+type StopInstanceResponseObject interface {
+	VisitStopInstanceResponse(w http.ResponseWriter) error
+}
+
+type StopInstance200JSONResponse Instance
+
+func (response StopInstance200JSONResponse) VisitStopInstanceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type StopInstance404JSONResponse Error
+
+func (response StopInstance404JSONResponse) VisitStopInstanceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type StopInstance409JSONResponse Error
+
+func (response StopInstance409JSONResponse) VisitStopInstanceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type StopInstance500JSONResponse Error
+
+func (response StopInstance500JSONResponse) VisitStopInstanceResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(500)
 
@@ -5382,12 +6042,21 @@ type StrictServerInterface interface {
 	// Stream instance logs (SSE)
 	// (GET /instances/{id}/logs)
 	GetInstanceLogs(ctx context.Context, request GetInstanceLogsRequestObject) (GetInstanceLogsResponseObject, error)
+	// Reboot a running instance
+	// (POST /instances/{id}/reboot)
+	RebootInstance(ctx context.Context, request RebootInstanceRequestObject) (RebootInstanceResponseObject, error)
 	// Restore instance from standby
 	// (POST /instances/{id}/restore)
 	RestoreInstance(ctx context.Context, request RestoreInstanceRequestObject) (RestoreInstanceResponseObject, error)
 	// Put instance in standby (pause, snapshot, delete VMM)
 	// (POST /instances/{id}/standby)
 	StandbyInstance(ctx context.Context, request StandbyInstanceRequestObject) (StandbyInstanceResponseObject, error)
+	// Start a stopped instance
+	// (POST /instances/{id}/start)
+	StartInstance(ctx context.Context, request StartInstanceRequestObject) (StartInstanceResponseObject, error)
+	// Stop instance (graceful shutdown)
+	// (POST /instances/{id}/stop)
+	StopInstance(ctx context.Context, request StopInstanceRequestObject) (StopInstanceResponseObject, error)
 	// Detach volume from instance
 	// (DELETE /instances/{id}/volumes/{volumeId})
 	DetachVolume(ctx context.Context, request DetachVolumeRequestObject) (DetachVolumeResponseObject, error)
@@ -5809,6 +6478,32 @@ func (sh *strictHandler) GetInstanceLogs(w http.ResponseWriter, r *http.Request,
 	}
 }
 
+// RebootInstance operation middleware
+func (sh *strictHandler) RebootInstance(w http.ResponseWriter, r *http.Request, id string) {
+	var request RebootInstanceRequestObject
+
+	request.Id = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RebootInstance(ctx, request.(RebootInstanceRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RebootInstance")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RebootInstanceResponseObject); ok {
+		if err := validResponse.VisitRebootInstanceResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // RestoreInstance operation middleware
 func (sh *strictHandler) RestoreInstance(w http.ResponseWriter, r *http.Request, id string) {
 	var request RestoreInstanceRequestObject
@@ -5854,6 +6549,58 @@ func (sh *strictHandler) StandbyInstance(w http.ResponseWriter, r *http.Request,
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(StandbyInstanceResponseObject); ok {
 		if err := validResponse.VisitStandbyInstanceResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// StartInstance operation middleware
+func (sh *strictHandler) StartInstance(w http.ResponseWriter, r *http.Request, id string) {
+	var request StartInstanceRequestObject
+
+	request.Id = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.StartInstance(ctx, request.(StartInstanceRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "StartInstance")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(StartInstanceResponseObject); ok {
+		if err := validResponse.VisitStartInstanceResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// StopInstance operation middleware
+func (sh *strictHandler) StopInstance(w http.ResponseWriter, r *http.Request, id string) {
+	var request StopInstanceRequestObject
+
+	request.Id = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.StopInstance(ctx, request.(StopInstanceRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "StopInstance")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(StopInstanceResponseObject); ok {
+		if err := validResponse.VisitStopInstanceResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -6043,78 +6790,79 @@ func (sh *strictHandler) GetVolume(w http.ResponseWriter, r *http.Request, id st
 // Base64 encoded, gzipped, json marshaled Swagger object
 var swaggerSpec = []string{
 
-	"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",
-	"NwAA//9w1r8nQGkAAA==",
+	"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",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file

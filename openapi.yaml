@@ -822,6 +822,123 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
   
+  /instances/{id}/stop:
+    post:
+      summary: Stop instance (graceful shutdown)
+      operationId: stopInstance
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Instance ID or name
+      responses:
+        200:
+          description: Instance stopped
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Instance"
+        404:
+          description: Instance not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Conflict - instance not in correct state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  
+  /instances/{id}/start:
+    post:
+      summary: Start a stopped instance
+      operationId: startInstance
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Instance ID or name
+      responses:
+        200:
+          description: Instance started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Instance"
+        404:
+          description: Instance not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Conflict - instance not in stopped state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  
+  /instances/{id}/reboot:
+    post:
+      summary: Reboot a running instance
+      operationId: rebootInstance
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Instance ID or name
+      responses:
+        200:
+          description: Instance rebooted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Instance"
+        404:
+          description: Instance not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Conflict - instance not running
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  
   /instances/{id}/logs:
     get:
       summary: Stream instance logs (SSE)

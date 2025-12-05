@@ -24,6 +24,9 @@ type Manager interface {
 	DeleteInstance(ctx context.Context, id string) error
 	StandbyInstance(ctx context.Context, id string) (*Instance, error)
 	RestoreInstance(ctx context.Context, id string) (*Instance, error)
+	StopInstance(ctx context.Context, id string) (*Instance, error)
+	StartInstance(ctx context.Context, id string) (*Instance, error)
+	RebootInstance(ctx context.Context, id string) (*Instance, error)
 	StreamInstanceLogs(ctx context.Context, id string, tail int, follow bool) (<-chan string, error)
 	RotateLogs(ctx context.Context, maxBytes int64, maxFiles int) error
 	AttachVolume(ctx context.Context, id string, volumeId string, req AttachVolumeRequest) (*Instance, error)
@@ -120,6 +123,30 @@ func (m *manager) RestoreInstance(ctx context.Context, id string) (*Instance, er
 	lock.Lock()
 	defer lock.Unlock()
 	return m.restoreInstance(ctx, id)
+}
+
+// StopInstance gracefully stops a running instance
+func (m *manager) StopInstance(ctx context.Context, id string) (*Instance, error) {
+	lock := m.getInstanceLock(id)
+	lock.Lock()
+	defer lock.Unlock()
+	return m.stopInstance(ctx, id)
+}
+
+// StartInstance starts a stopped instance
+func (m *manager) StartInstance(ctx context.Context, id string) (*Instance, error) {
+	lock := m.getInstanceLock(id)
+	lock.Lock()
+	defer lock.Unlock()
+	return m.startInstance(ctx, id)
+}
+
+// RebootInstance reboots a running instance
+func (m *manager) RebootInstance(ctx context.Context, id string) (*Instance, error) {
+	lock := m.getInstanceLock(id)
+	lock.Lock()
+	defer lock.Unlock()
+	return m.rebootInstance(ctx, id)
 }
 
 // ListInstances returns all instances

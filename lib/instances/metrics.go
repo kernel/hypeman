@@ -14,6 +14,9 @@ type Metrics struct {
 	createDuration   metric.Float64Histogram
 	restoreDuration  metric.Float64Histogram
 	standbyDuration  metric.Float64Histogram
+	stopDuration     metric.Float64Histogram
+	startDuration    metric.Float64Histogram
+	rebootDuration   metric.Float64Histogram
 	stateTransitions metric.Int64Counter
 	tracer           trace.Tracer
 }
@@ -41,6 +44,33 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 	standbyDuration, err := meter.Float64Histogram(
 		"hypeman_instances_standby_duration_seconds",
 		metric.WithDescription("Time to put an instance in standby"),
+		metric.WithUnit("s"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	stopDuration, err := meter.Float64Histogram(
+		"hypeman_instances_stop_duration_seconds",
+		metric.WithDescription("Time to stop an instance"),
+		metric.WithUnit("s"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	startDuration, err := meter.Float64Histogram(
+		"hypeman_instances_start_duration_seconds",
+		metric.WithDescription("Time to start an instance"),
+		metric.WithUnit("s"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	rebootDuration, err := meter.Float64Histogram(
+		"hypeman_instances_reboot_duration_seconds",
+		metric.WithDescription("Time to reboot an instance"),
 		metric.WithUnit("s"),
 	)
 	if err != nil {
@@ -90,6 +120,9 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 		createDuration:   createDuration,
 		restoreDuration:  restoreDuration,
 		standbyDuration:  standbyDuration,
+		stopDuration:     stopDuration,
+		startDuration:    startDuration,
+		rebootDuration:   rebootDuration,
 		stateTransitions: stateTransitions,
 		tracer:           tracer,
 	}, nil
