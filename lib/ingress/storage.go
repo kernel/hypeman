@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/onkernel/hypeman/lib/paths"
@@ -158,46 +157,4 @@ func findIngressByName(p *paths.Paths, name string) (*storedIngress, error) {
 	}
 
 	return nil, ErrNotFound
-}
-
-// ingressNameExists checks if an ingress with the given name already exists.
-func ingressNameExists(p *paths.Paths, name string) (bool, error) {
-	ingressesDir := p.IngressesDir()
-
-	entries, err := os.ReadDir(ingressesDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return false, nil
-		}
-		return false, fmt.Errorf("read ingresses directory: %w", err)
-	}
-
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-
-		name := entry.Name()
-		if !strings.HasSuffix(name, ".json") {
-			continue
-		}
-
-		// Read and check name
-		filePath := filepath.Join(ingressesDir, name)
-		data, err := os.ReadFile(filePath)
-		if err != nil {
-			continue
-		}
-
-		var stored storedIngress
-		if err := json.Unmarshal(data, &stored); err != nil {
-			continue
-		}
-
-		if stored.Name == name {
-			return true, nil
-		}
-	}
-
-	return false, nil
 }
