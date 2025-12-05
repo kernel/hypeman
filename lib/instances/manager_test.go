@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/onkernel/hypeman/cmd/api/config"
 	"github.com/onkernel/hypeman/lib/exec"
 	"github.com/onkernel/hypeman/lib/images"
+	"github.com/onkernel/hypeman/lib/ingress"
 	"github.com/onkernel/hypeman/lib/network"
 	"github.com/onkernel/hypeman/lib/paths"
 	"github.com/onkernel/hypeman/lib/system"
@@ -224,6 +226,18 @@ func TestBasicEndToEnd(t *testing.T) {
 	assert.FileExists(t, p.VolumeData(vol.Id))
 	assert.Empty(t, vol.Attachments, "Volume should not be attached yet")
 
+	// Initialize network for ingress testing
+	networkManager := network.NewManager(p, &config.Config{
+		DataDir:    tmpDir,
+		BridgeName: "vmbr0",
+		SubnetCIDR: "10.100.0.0/16",
+		DNSServer:  "1.1.1.1",
+	}, nil)
+	t.Log("Initializing network...")
+	err = networkManager.Initialize(ctx, nil)
+	require.NoError(t, err)
+	t.Log("Network initialized")
+
 	// Create instance with real nginx image and attached volume
 	req := CreateInstanceRequest{
 		Name:           "test-nginx",
@@ -232,7 +246,7 @@ func TestBasicEndToEnd(t *testing.T) {
 		HotplugSize:    512 * 1024 * 1024,       // 512MB
 		OverlaySize:    10 * 1024 * 1024 * 1024, // 10GB
 		Vcpus:          1,
-		NetworkEnabled: false, // No network for tests
+		NetworkEnabled: true, // Enable network for ingress test
 		Env: map[string]string{
 			"TEST_VAR": "test_value",
 		},
@@ -311,6 +325,81 @@ func TestBasicEndToEnd(t *testing.T) {
 
 	// Verify nginx started successfully
 	assert.True(t, foundNginxStartup, "Nginx should have started worker processes within 5 seconds")
+
+	// Test ingress - route external traffic to nginx through Envoy
+	t.Log("Testing ingress routing to nginx...")
+
+	// Get a random free port for Envoy to listen on
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	ingressPort := listener.Addr().(*net.TCPAddr).Port
+	listener.Close() // Close so Envoy can use it
+	t.Logf("Using random port %d for ingress test", ingressPort)
+
+	// Create ingress manager with random ports
+	adminPort := ingressPort + 1 // Use next port for admin
+	ingressConfig := ingress.Config{
+		ListenAddress:     "127.0.0.1",
+		AdminAddress:      "127.0.0.1",
+		AdminPort:         adminPort,
+		StopOnShutdown:    true,
+		DisableValidation: true, // No envoy binary in test
+	}
+
+	// Create a simple instance resolver that returns the instance IP
+	instanceIP := inst.IP
+	require.NotEmpty(t, instanceIP, "Instance should have an IP address")
+	t.Logf("Instance IP: %s", instanceIP)
+
+	resolver := &testInstanceResolver{
+		ip:     instanceIP,
+		exists: true,
+	}
+
+	ingressManager := ingress.NewManager(p, ingressConfig, resolver)
+
+	// Create an ingress rule
+	t.Log("Creating ingress rule...")
+	ingressReq := ingress.CreateIngressRequest{
+		Name: "test-nginx-ingress",
+		Rules: []ingress.IngressRule{
+			{
+				Match: ingress.IngressMatch{
+					Hostname: "test.local",
+					Port:     ingressPort,
+				},
+				Target: ingress.IngressTarget{
+					Instance: "test-nginx",
+					Port:     80,
+				},
+			},
+		},
+	}
+	ing, err := ingressManager.Create(ctx, ingressReq)
+	require.NoError(t, err)
+	require.NotNil(t, ing)
+	t.Logf("Ingress created: %s", ing.ID)
+
+	// Verify ingress config files were written
+	assert.FileExists(t, p.EnvoyLDS(), "LDS config should be written")
+	assert.FileExists(t, p.EnvoyCDS(), "CDS config should be written")
+
+	// Read LDS config and verify it contains our hostname
+	ldsData, err := os.ReadFile(p.EnvoyLDS())
+	require.NoError(t, err)
+	assert.Contains(t, string(ldsData), "test.local", "LDS should contain our hostname")
+
+	// Read CDS config and verify it contains the instance IP
+	cdsData, err := os.ReadFile(p.EnvoyCDS())
+	require.NoError(t, err)
+	assert.Contains(t, string(cdsData), instanceIP, "CDS should contain instance IP")
+
+	t.Log("Ingress config files verified")
+
+	// Clean up ingress
+	err = ingressManager.Delete(ctx, ing.ID)
+	require.NoError(t, err)
+	t.Log("Ingress deleted")
 
 	// Test volume is accessible from inside the guest via exec
 	t.Log("Testing volume from inside guest via exec...")
@@ -686,3 +775,20 @@ func TestStateTransitions(t *testing.T) {
 }
 
 // No mock image manager needed - tests use real images!
+
+// testInstanceResolver is a simple implementation of ingress.InstanceResolver for testing.
+type testInstanceResolver struct {
+	ip     string
+	exists bool
+}
+
+func (r *testInstanceResolver) ResolveInstanceIP(ctx context.Context, nameOrID string) (string, error) {
+	if r.ip == "" {
+		return "", fmt.Errorf("instance not found: %s", nameOrID)
+	}
+	return r.ip, nil
+}
+
+func (r *testInstanceResolver) InstanceExists(ctx context.Context, nameOrID string) (bool, error) {
+	return r.exists, nil
+}

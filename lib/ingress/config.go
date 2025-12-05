@@ -81,11 +81,15 @@ func (g *EnvoyConfigGenerator) buildStaticConfig(ctx context.Context, ingresses 
 	return config
 }
 
-// WriteConfig generates and writes the Envoy xDS configuration files.
+// WriteConfig generates, validates, and writes the Envoy xDS configuration files.
 // This writes three files:
 // - bootstrap.yaml: Main Envoy bootstrap config with dynamic_resources pointing to xDS files
 // - lds.yaml: Listener Discovery Service config (watched by Envoy for changes)
 // - cds.yaml: Cluster Discovery Service config (watched by Envoy for changes)
+//
+// Validation is performed by writing all files to a temp directory first, then running
+// envoy --mode validate on the temp bootstrap (which references temp LDS/CDS files).
+// Only if validation passes are the files moved to production paths.
 func (g *EnvoyConfigGenerator) WriteConfig(ctx context.Context, ingresses []Ingress, ipResolver func(instance string) (string, error)) error {
 	configDir := filepath.Dir(g.paths.EnvoyConfig())
 
@@ -94,13 +98,30 @@ func (g *EnvoyConfigGenerator) WriteConfig(ctx context.Context, ingresses []Ingr
 		return fmt.Errorf("create config directory: %w", err)
 	}
 
-	// Write LDS config (listeners)
-	if err := g.writeLDSConfig(ctx, ingresses, ipResolver); err != nil {
+	// Build LDS and CDS content
+	ldsData, err := g.buildLDSData(ctx, ingresses, ipResolver)
+	if err != nil {
+		return fmt.Errorf("build LDS config: %w", err)
+	}
+
+	cdsData, err := g.buildCDSData(ctx, ingresses, ipResolver)
+	if err != nil {
+		return fmt.Errorf("build CDS config: %w", err)
+	}
+
+	// Validate configuration if validator is available
+	if g.validator != nil {
+		if err := g.validateXDSConfig(ldsData, cdsData); err != nil {
+			return err
+		}
+	}
+
+	// Validation passed (or skipped) - write to production paths
+	if err := g.atomicWrite(g.paths.EnvoyLDS(), ldsData); err != nil {
 		return fmt.Errorf("write LDS config: %w", err)
 	}
 
-	// Write CDS config (clusters)
-	if err := g.writeCDSConfig(ctx, ingresses, ipResolver); err != nil {
+	if err := g.atomicWrite(g.paths.EnvoyCDS(), cdsData); err != nil {
 		return fmt.Errorf("write CDS config: %w", err)
 	}
 
@@ -115,31 +136,59 @@ func (g *EnvoyConfigGenerator) WriteConfig(ctx context.Context, ingresses []Ingr
 	return nil
 }
 
-// writeBootstrapConfig writes the Envoy bootstrap configuration with dynamic xDS.
-func (g *EnvoyConfigGenerator) writeBootstrapConfig() error {
-	bootstrap := g.buildBootstrapConfig()
-	data, err := yaml.Marshal(bootstrap)
+// validateXDSConfig validates the xDS configuration by writing to a temp directory
+// and running envoy --mode validate on a bootstrap that references the temp files.
+func (g *EnvoyConfigGenerator) validateXDSConfig(ldsData, cdsData []byte) error {
+	// Create temp directory for validation
+	tempDir, err := os.MkdirTemp("", "envoy-validate-")
 	if err != nil {
-		return fmt.Errorf("marshal bootstrap config: %w", err)
+		return fmt.Errorf("create temp dir for validation: %w", err)
 	}
-	return g.atomicWrite(g.paths.EnvoyConfig(), data)
+	defer os.RemoveAll(tempDir)
+
+	// Write LDS to temp
+	tempLDSPath := filepath.Join(tempDir, "lds.yaml")
+	if err := os.WriteFile(tempLDSPath, ldsData, 0644); err != nil {
+		return fmt.Errorf("write temp LDS: %w", err)
+	}
+
+	// Write CDS to temp
+	tempCDSPath := filepath.Join(tempDir, "cds.yaml")
+	if err := os.WriteFile(tempCDSPath, cdsData, 0644); err != nil {
+		return fmt.Errorf("write temp CDS: %w", err)
+	}
+
+	// Build and write bootstrap that references temp paths
+	tempBootstrap := g.buildBootstrapConfigWithPaths(tempLDSPath, tempCDSPath, tempDir)
+	bootstrapData, err := yaml.Marshal(tempBootstrap)
+	if err != nil {
+		return fmt.Errorf("marshal temp bootstrap: %w", err)
+	}
+
+	tempBootstrapPath := filepath.Join(tempDir, "bootstrap.yaml")
+	if err := os.WriteFile(tempBootstrapPath, bootstrapData, 0644); err != nil {
+		return fmt.Errorf("write temp bootstrap: %w", err)
+	}
+
+	// Validate using envoy --mode validate
+	if err := g.validator.ValidateConfig(tempBootstrapPath); err != nil {
+		return fmt.Errorf("%w: %v", ErrConfigValidationFailed, err)
+	}
+
+	return nil
 }
 
-// writeLDSConfig writes the Listener Discovery Service configuration.
-func (g *EnvoyConfigGenerator) writeLDSConfig(ctx context.Context, ingresses []Ingress, ipResolver func(instance string) (string, error)) error {
+// buildLDSData builds the LDS configuration data.
+func (g *EnvoyConfigGenerator) buildLDSData(ctx context.Context, ingresses []Ingress, ipResolver func(instance string) (string, error)) ([]byte, error) {
 	listeners := g.buildListeners(ctx, ingresses, ipResolver)
 	ldsConfig := map[string]interface{}{
 		"resources": g.wrapResources(listeners, "type.googleapis.com/envoy.config.listener.v3.Listener"),
 	}
-	data, err := yaml.Marshal(ldsConfig)
-	if err != nil {
-		return fmt.Errorf("marshal LDS config: %w", err)
-	}
-	return g.atomicWrite(g.paths.EnvoyLDS(), data)
+	return yaml.Marshal(ldsConfig)
 }
 
-// writeCDSConfig writes the Cluster Discovery Service configuration.
-func (g *EnvoyConfigGenerator) writeCDSConfig(ctx context.Context, ingresses []Ingress, ipResolver func(instance string) (string, error)) error {
+// buildCDSData builds the CDS configuration data.
+func (g *EnvoyConfigGenerator) buildCDSData(ctx context.Context, ingresses []Ingress, ipResolver func(instance string) (string, error)) ([]byte, error) {
 	clusters := g.buildClusters(ctx, ingresses, ipResolver)
 
 	// Add OTEL collector cluster if enabled
@@ -151,11 +200,17 @@ func (g *EnvoyConfigGenerator) writeCDSConfig(ctx context.Context, ingresses []I
 	cdsConfig := map[string]interface{}{
 		"resources": g.wrapResources(clusters, "type.googleapis.com/envoy.config.cluster.v3.Cluster"),
 	}
-	data, err := yaml.Marshal(cdsConfig)
+	return yaml.Marshal(cdsConfig)
+}
+
+// writeBootstrapConfig writes the Envoy bootstrap configuration with dynamic xDS.
+func (g *EnvoyConfigGenerator) writeBootstrapConfig() error {
+	bootstrap := g.buildBootstrapConfig()
+	data, err := yaml.Marshal(bootstrap)
 	if err != nil {
-		return fmt.Errorf("marshal CDS config: %w", err)
+		return fmt.Errorf("marshal bootstrap config: %w", err)
 	}
-	return g.atomicWrite(g.paths.EnvoyCDS(), data)
+	return g.atomicWrite(g.paths.EnvoyConfig(), data)
 }
 
 // wrapResources wraps resources with their @type for xDS format.
@@ -206,7 +261,18 @@ func (g *EnvoyConfigGenerator) atomicWrite(path string, data []byte) error {
 
 // buildBootstrapConfig builds the Envoy bootstrap configuration with dynamic xDS.
 func (g *EnvoyConfigGenerator) buildBootstrapConfig() map[string]interface{} {
+	return g.buildBootstrapConfigWithPaths(g.paths.EnvoyLDS(), g.paths.EnvoyCDS(), filepath.Dir(g.paths.EnvoyLDS()))
+}
+
+// buildBootstrapConfigWithPaths builds an Envoy bootstrap configuration with custom xDS paths.
+// This is used for validation (with temp paths) and production (with real paths).
+func (g *EnvoyConfigGenerator) buildBootstrapConfigWithPaths(ldsPath, cdsPath, watchDir string) map[string]interface{} {
 	config := map[string]interface{}{
+		// Node identification required for xDS
+		"node": map[string]interface{}{
+			"id":      "hypeman-envoy",
+			"cluster": "hypeman",
+		},
 		"admin": map[string]interface{}{
 			"address": map[string]interface{}{
 				"socket_address": map[string]interface{}{
@@ -218,14 +284,14 @@ func (g *EnvoyConfigGenerator) buildBootstrapConfig() map[string]interface{} {
 		"dynamic_resources": map[string]interface{}{
 			"lds_config": map[string]interface{}{
 				"path_config_source": map[string]interface{}{
-					"path":              g.paths.EnvoyLDS(),
-					"watched_directory": map[string]interface{}{"path": filepath.Dir(g.paths.EnvoyLDS())},
+					"path":              ldsPath,
+					"watched_directory": map[string]interface{}{"path": watchDir},
 				},
 			},
 			"cds_config": map[string]interface{}{
 				"path_config_source": map[string]interface{}{
-					"path":              g.paths.EnvoyCDS(),
-					"watched_directory": map[string]interface{}{"path": filepath.Dir(g.paths.EnvoyCDS())},
+					"path":              cdsPath,
+					"watched_directory": map[string]interface{}{"path": watchDir},
 				},
 			},
 		},

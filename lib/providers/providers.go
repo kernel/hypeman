@@ -138,6 +138,7 @@ func ProvideIngressManager(p *paths.Paths, cfg *config.Config, instanceManager i
 		},
 	}
 
-	resolver := ingress.NewInstanceResolverAdapter(instanceManager)
+	// IngressResolver from instances package implements ingress.InstanceResolver
+	resolver := instances.NewIngressResolver(instanceManager)
 	return ingress.NewManager(p, ingressConfig, resolver)
 }
