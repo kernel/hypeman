@@ -36,23 +36,15 @@ func NewVolumeService(opts ...option.RequestOption) (r VolumeService) {
 	return
 }
 
-// Create volume
+// Creates a new volume. Supports two modes:
+//
+//   - JSON body: Creates an empty volume of the specified size
+//   - Multipart form: Creates a volume pre-populated with content from a tar.gz
+//     archive
 func (r *VolumeService) New(ctx context.Context, body VolumeNewParams, opts ...option.RequestOption) (res *Volume, err error) {
 	opts = slices.Concat(r.Options, opts)
 	path := "volumes"
 	err = requestconfig.ExecuteNewRequest(ctx, http.MethodPost, path, body, &res, opts...)
-	return
-}
-
-// Get volume details
-func (r *VolumeService) Get(ctx context.Context, id string, opts ...option.RequestOption) (res *Volume, err error) {
-	opts = slices.Concat(r.Options, opts)
-	if id == "" {
-		err = errors.New("missing required id parameter")
-		return
-	}
-	path := fmt.Sprintf("volumes/%s", id)
-	err = requestconfig.ExecuteNewRequest(ctx, http.MethodGet, path, nil, &res, opts...)
 	return
 }
 
@@ -77,6 +69,18 @@ func (r *VolumeService) Delete(ctx context.Context, id string, opts ...option.Re
 	return
 }
 
+// Get volume details
+func (r *VolumeService) Get(ctx context.Context, id string, opts ...option.RequestOption) (res *Volume, err error) {
+	opts = slices.Concat(r.Options, opts)
+	if id == "" {
+		err = errors.New("missing required id parameter")
+		return
+	}
+	path := fmt.Sprintf("volumes/%s", id)
+	err = requestconfig.ExecuteNewRequest(ctx, http.MethodGet, path, nil, &res, opts...)
+	return
+}
+
 type Volume struct {
 	// Unique identifier
 	ID string `json:"id,required"`
@@ -86,18 +90,15 @@ type Volume struct {
 	Name string `json:"name,required"`
 	// Size in gigabytes
 	SizeGB int64 `json:"size_gb,required"`
-	// Instance ID if attached
-	AttachedTo string `json:"attached_to,nullable"`
-	// Mount path if attached
-	MountPath string `json:"mount_path,nullable"`
+	// List of current attachments (empty if not attached)
+	Attachments []VolumeAttachment `json:"attachments"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
 		ID          respjson.Field
 		CreatedAt   respjson.Field
 		Name        respjson.Field
 		SizeGB      respjson.Field
-		AttachedTo  respjson.Field
-		MountPath   respjson.Field
+		Attachments respjson.Field
 		ExtraFields map[string]respjson.Field
 		raw         string
 	} `json:"-"`
@@ -106,6 +107,29 @@ type Volume struct {
 // Returns the unmodified JSON received from the API
 func (r Volume) RawJSON() string { return r.JSON.raw }
 func (r *Volume) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
+type VolumeAttachment struct {
+	// ID of the instance this volume is attached to
+	InstanceID string `json:"instance_id,required"`
+	// Mount path in the guest
+	MountPath string `json:"mount_path,required"`
+	// Whether the attachment is read-only
+	Readonly bool `json:"readonly,required"`
+	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
+	JSON struct {
+		InstanceID  respjson.Field
+		MountPath   respjson.Field
+		Readonly    respjson.Field
+		ExtraFields map[string]respjson.Field
+		raw         string
+	} `json:"-"`
+}
+
+// Returns the unmodified JSON received from the API
+func (r VolumeAttachment) RawJSON() string { return r.JSON.raw }
+func (r *VolumeAttachment) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, r)
 }
 

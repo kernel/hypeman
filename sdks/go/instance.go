@@ -4,6 +4,7 @@ package hypeman
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -49,18 +50,6 @@ func (r *InstanceService) New(ctx context.Context, body InstanceNewParams, opts 
 	return
 }
 
-// Get instance details
-func (r *InstanceService) Get(ctx context.Context, id string, opts ...option.RequestOption) (res *Instance, err error) {
-	opts = slices.Concat(r.Options, opts)
-	if id == "" {
-		err = errors.New("missing required id parameter")
-		return
-	}
-	path := fmt.Sprintf("instances/%s", id)
-	err = requestconfig.ExecuteNewRequest(ctx, http.MethodGet, path, nil, &res, opts...)
-	return
-}
-
 // List instances
 func (r *InstanceService) List(ctx context.Context, opts ...option.RequestOption) (res *[]Instance, err error) {
 	opts = slices.Concat(r.Options, opts)
@@ -79,6 +68,18 @@ func (r *InstanceService) Delete(ctx context.Context, id string, opts ...option.
 	}
 	path := fmt.Sprintf("instances/%s", id)
 	err = requestconfig.ExecuteNewRequest(ctx, http.MethodDelete, path, nil, nil, opts...)
+	return
+}
+
+// Get instance details
+func (r *InstanceService) Get(ctx context.Context, id string, opts ...option.RequestOption) (res *Instance, err error) {
+	opts = slices.Concat(r.Options, opts)
+	if id == "" {
+		err = errors.New("missing required id parameter")
+		return
+	}
+	path := fmt.Sprintf("instances/%s", id)
+	err = requestconfig.ExecuteNewRequest(ctx, http.MethodGet, path, nil, &res, opts...)
 	return
 }
 
@@ -101,26 +102,26 @@ func (r *InstanceService) LogsStreaming(ctx context.Context, id string, query In
 	return ssestream.NewStream[string](ssestream.NewDecoder(raw), err)
 }
 
-// Put instance in standby (pause, snapshot, delete VMM)
-func (r *InstanceService) PutInStandby(ctx context.Context, id string, opts ...option.RequestOption) (res *Instance, err error) {
-	opts = slices.Concat(r.Options, opts)
-	if id == "" {
-		err = errors.New("missing required id parameter")
-		return
-	}
-	path := fmt.Sprintf("instances/%s/standby", id)
-	err = requestconfig.ExecuteNewRequest(ctx, http.MethodPost, path, nil, &res, opts...)
-	return
-}
-
 // Restore instance from standby
-func (r *InstanceService) RestoreFromStandby(ctx context.Context, id string, opts ...option.RequestOption) (res *Instance, err error) {
+func (r *InstanceService) Restore(ctx context.Context, id string, opts ...option.RequestOption) (res *Instance, err error) {
 	opts = slices.Concat(r.Options, opts)
 	if id == "" {
 		err = errors.New("missing required id parameter")
 		return
 	}
 	path := fmt.Sprintf("instances/%s/restore", id)
+	err = requestconfig.ExecuteNewRequest(ctx, http.MethodPost, path, nil, &res, opts...)
+	return
+}
+
+// Put instance in standby (pause, snapshot, delete VMM)
+func (r *InstanceService) Standby(ctx context.Context, id string, opts ...option.RequestOption) (res *Instance, err error) {
+	opts = slices.Concat(r.Options, opts)
+	if id == "" {
+		err = errors.New("missing required id parameter")
+		return
+	}
+	path := fmt.Sprintf("instances/%s/standby", id)
 	err = requestconfig.ExecuteNewRequest(ctx, http.MethodPost, path, nil, &res, opts...)
 	return
 }
@@ -163,6 +164,8 @@ type Instance struct {
 	StoppedAt time.Time `json:"stopped_at,nullable" format:"date-time"`
 	// Number of virtual CPUs
 	Vcpus int64 `json:"vcpus"`
+	// Volumes attached to the instance
+	Volumes []VolumeMount `json:"volumes"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
 		ID          respjson.Field
@@ -179,6 +182,7 @@ type Instance struct {
 		StartedAt   respjson.Field
 		StoppedAt   respjson.Field
 		Vcpus       respjson.Field
+		Volumes     respjson.Field
 		ExtraFields map[string]respjson.Field
 		raw         string
 	} `json:"-"`
@@ -236,6 +240,69 @@ func (r *InstanceNetwork) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, r)
 }
 
+type VolumeMount struct {
+	// Path where volume is mounted in the guest
+	MountPath string `json:"mount_path,required"`
+	// Volume identifier
+	VolumeID string `json:"volume_id,required"`
+	// Create per-instance overlay for writes (requires readonly=true)
+	Overlay bool `json:"overlay"`
+	// Max overlay size as human-readable string (e.g., "1GB"). Required if
+	// overlay=true.
+	OverlaySize string `json:"overlay_size"`
+	// Whether volume is mounted read-only
+	Readonly bool `json:"readonly"`
+	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
+	JSON struct {
+		MountPath   respjson.Field
+		VolumeID    respjson.Field
+		Overlay     respjson.Field
+		OverlaySize respjson.Field
+		Readonly    respjson.Field
+		ExtraFields map[string]respjson.Field
+		raw         string
+	} `json:"-"`
+}
+
+// Returns the unmodified JSON received from the API
+func (r VolumeMount) RawJSON() string { return r.JSON.raw }
+func (r *VolumeMount) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
+// ToParam converts this VolumeMount to a VolumeMountParam.
+//
+// Warning: the fields of the param type will not be present. ToParam should only
+// be used at the last possible moment before sending a request. Test for this with
+// VolumeMountParam.Overrides()
+func (r VolumeMount) ToParam() VolumeMountParam {
+	return param.Override[VolumeMountParam](json.RawMessage(r.RawJSON()))
+}
+
+// The properties MountPath, VolumeID are required.
+type VolumeMountParam struct {
+	// Path where volume is mounted in the guest
+	MountPath string `json:"mount_path,required"`
+	// Volume identifier
+	VolumeID string `json:"volume_id,required"`
+	// Create per-instance overlay for writes (requires readonly=true)
+	Overlay param.Opt[bool] `json:"overlay,omitzero"`
+	// Max overlay size as human-readable string (e.g., "1GB"). Required if
+	// overlay=true.
+	OverlaySize param.Opt[string] `json:"overlay_size,omitzero"`
+	// Whether volume is mounted read-only
+	Readonly param.Opt[bool] `json:"readonly,omitzero"`
+	paramObj
+}
+
+func (r VolumeMountParam) MarshalJSON() (data []byte, err error) {
+	type shadow VolumeMountParam
+	return param.MarshalObject(r, (*shadow)(&r))
+}
+func (r *VolumeMountParam) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
 type InstanceNewParams struct {
 	// OCI image reference
 	Image string `json:"image,required"`
@@ -254,6 +321,8 @@ type InstanceNewParams struct {
 	Env map[string]string `json:"env,omitzero"`
 	// Network configuration for the instance
 	Network InstanceNewParamsNetwork `json:"network,omitzero"`
+	// Volumes to attach to the instance at creation time
+	Volumes []VolumeMountParam `json:"volumes,omitzero"`
 	paramObj
 }
 
