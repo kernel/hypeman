@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.5.0 (2025-12-05)
+
+Full Changelog: [v0.4.0...v0.5.0](https://github.com/onkernel/hypeman-go/compare/v0.4.0...v0.5.0)
+
+### Features
+
+* add Push and PushImage functions for OCI registry push ([7417cc8](https://github.com/onkernel/hypeman-go/commit/7417cc8a56c7d11c535ac7ab9a7b3d21d80bd2b4))
+* Ingress ([c751d1a](https://github.com/onkernel/hypeman-go/commit/c751d1a6bba5ca619c03f833f27251c6d3b855a7))
+* Initialize volume with data ([32d4047](https://github.com/onkernel/hypeman-go/commit/32d404746df0a3e9d83e7651105e6c6daa16476f))
+* try to fix name collision in codegen ([8173a73](https://github.com/onkernel/hypeman-go/commit/8173a73d0317d35870d5a3cec8f3fdec56fcf362))
+* Volume readonly multi-attach ([bac3fd2](https://github.com/onkernel/hypeman-go/commit/bac3fd2cee3325dc3d1b31e6077ad1f1ce13340c))
+* Volumes ([099f9b8](https://github.com/onkernel/hypeman-go/commit/099f9b8a2553087e117c8c8a9731900081d713f0))
+
 ## 0.4.0 (2025-11-26)
 
 Full Changelog: [v0.3.0...v0.4.0](https://github.com/onkernel/hypeman-go/compare/v0.3.0...v0.4.0)
