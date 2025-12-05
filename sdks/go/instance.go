@@ -165,7 +165,7 @@ type Instance struct {
 	// Number of virtual CPUs
 	Vcpus int64 `json:"vcpus"`
 	// Volumes attached to the instance
-	Volumes []VolumeAttachment `json:"volumes"`
+	Volumes []VolumeMount `json:"volumes"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
 		ID          respjson.Field
@@ -240,7 +240,7 @@ func (r *InstanceNetwork) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, r)
 }
 
-type VolumeAttachment struct {
+type VolumeMount struct {
 	// Path where volume is mounted in the guest
 	MountPath string `json:"mount_path,required"`
 	// Volume identifier
@@ -265,22 +265,22 @@ type VolumeAttachment struct {
 }
 
 // Returns the unmodified JSON received from the API
-func (r VolumeAttachment) RawJSON() string { return r.JSON.raw }
-func (r *VolumeAttachment) UnmarshalJSON(data []byte) error {
+func (r VolumeMount) RawJSON() string { return r.JSON.raw }
+func (r *VolumeMount) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, r)
 }
 
-// ToParam converts this VolumeAttachment to a VolumeAttachmentParam.
+// ToParam converts this VolumeMount to a VolumeMountParam.
 //
 // Warning: the fields of the param type will not be present. ToParam should only
 // be used at the last possible moment before sending a request. Test for this with
-// VolumeAttachmentParam.Overrides()
-func (r VolumeAttachment) ToParam() VolumeAttachmentParam {
-	return param.Override[VolumeAttachmentParam](json.RawMessage(r.RawJSON()))
+// VolumeMountParam.Overrides()
+func (r VolumeMount) ToParam() VolumeMountParam {
+	return param.Override[VolumeMountParam](json.RawMessage(r.RawJSON()))
 }
 
 // The properties MountPath, VolumeID are required.
-type VolumeAttachmentParam struct {
+type VolumeMountParam struct {
 	// Path where volume is mounted in the guest
 	MountPath string `json:"mount_path,required"`
 	// Volume identifier
@@ -295,11 +295,11 @@ type VolumeAttachmentParam struct {
 	paramObj
 }
 
-func (r VolumeAttachmentParam) MarshalJSON() (data []byte, err error) {
-	type shadow VolumeAttachmentParam
+func (r VolumeMountParam) MarshalJSON() (data []byte, err error) {
+	type shadow VolumeMountParam
 	return param.MarshalObject(r, (*shadow)(&r))
 }
-func (r *VolumeAttachmentParam) UnmarshalJSON(data []byte) error {
+func (r *VolumeMountParam) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, r)
 }
 
@@ -322,7 +322,7 @@ type InstanceNewParams struct {
 	// Network configuration for the instance
 	Network InstanceNewParamsNetwork `json:"network,omitzero"`
 	// Volumes to attach to the instance at creation time
-	Volumes []VolumeAttachmentParam `json:"volumes,omitzero"`
+	Volumes []VolumeMountParam `json:"volumes,omitzero"`
 	paramObj
 }
 

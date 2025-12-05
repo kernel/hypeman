@@ -25,12 +25,12 @@ Methods:
 
 Params Types:
 
-- <a href="https://pkg.go.dev/github.com/onkernel/hypeman-go">hypeman</a>.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#VolumeAttachmentParam">VolumeAttachmentParam</a>
+- <a href="https://pkg.go.dev/github.com/onkernel/hypeman-go">hypeman</a>.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#VolumeMountParam">VolumeMountParam</a>
 
 Response Types:
 
 - <a href="https://pkg.go.dev/github.com/onkernel/hypeman-go">hypeman</a>.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#Instance">Instance</a>
-- <a href="https://pkg.go.dev/github.com/onkernel/hypeman-go">hypeman</a>.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#VolumeAttachment">VolumeAttachment</a>
+- <a href="https://pkg.go.dev/github.com/onkernel/hypeman-go">hypeman</a>.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#VolumeMount">VolumeMount</a>
 
 Methods:
 
@@ -54,6 +54,7 @@ Methods:
 Response Types:
 
 - <a href="https://pkg.go.dev/github.com/onkernel/hypeman-go">hypeman</a>.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#Volume">Volume</a>
+- <a href="https://pkg.go.dev/github.com/onkernel/hypeman-go">hypeman</a>.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#VolumeAttachment">VolumeAttachment</a>
 
 Methods:
 
