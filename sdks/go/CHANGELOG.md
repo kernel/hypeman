@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.6.0 (2025-12-06)
+
+Full Changelog: [v0.5.0...v0.6.0](https://github.com/onkernel/hypeman-go/compare/v0.5.0...v0.6.0)
+
+### Features
+
+* Start and Stop VM ([b992228](https://github.com/onkernel/hypeman-go/commit/b99222818b197010ba324c2e2477047e5bf13802))
+
+
+### Bug Fixes
+
+* **mcp:** correct code tool API endpoint ([0d87152](https://github.com/onkernel/hypeman-go/commit/0d8715273698dab9bb6c276352a13605ddd272a5))
+* rename param to avoid collision ([f1ec9d5](https://github.com/onkernel/hypeman-go/commit/f1ec9d52e3f5f6c8398bdded04a4ed9cfbd8151b))
+
+
+### Chores
+
+* elide duplicate aliases ([9be276f](https://github.com/onkernel/hypeman-go/commit/9be276faa6d683ddffe3a21c969b44f13acface0))
+* **internal:** codegen related update ([f3de06d](https://github.com/onkernel/hypeman-go/commit/f3de06d220faf866b70829862cd1b76ee4e8fbf8))
+
 ## 0.5.0 (2025-12-05)
 
 Full Changelog: [v0.4.0...v0.5.0](https://github.com/onkernel/hypeman-go/compare/v0.4.0...v0.5.0)
