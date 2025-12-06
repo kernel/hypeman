@@ -126,6 +126,30 @@ func (r *InstanceService) Standby(ctx context.Context, id string, opts ...option
 	return
 }
 
+// Start a stopped instance
+func (r *InstanceService) Start(ctx context.Context, id string, opts ...option.RequestOption) (res *Instance, err error) {
+	opts = slices.Concat(r.Options, opts)
+	if id == "" {
+		err = errors.New("missing required id parameter")
+		return
+	}
+	path := fmt.Sprintf("instances/%s/start", id)
+	err = requestconfig.ExecuteNewRequest(ctx, http.MethodPost, path, nil, &res, opts...)
+	return
+}
+
+// Stop instance (graceful shutdown)
+func (r *InstanceService) Stop(ctx context.Context, id string, opts ...option.RequestOption) (res *Instance, err error) {
+	opts = slices.Concat(r.Options, opts)
+	if id == "" {
+		err = errors.New("missing required id parameter")
+		return
+	}
+	path := fmt.Sprintf("instances/%s/stop", id)
+	err = requestconfig.ExecuteNewRequest(ctx, http.MethodPost, path, nil, &res, opts...)
+	return
+}
+
 type Instance struct {
 	// Auto-generated unique identifier (CUID2 format)
 	ID string `json:"id,required"`
