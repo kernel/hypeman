@@ -2,6 +2,7 @@ package ingress
 
 import (
 	"context"
+	"encoding/json"
 	"net"
 	"os"
 	"testing"
@@ -21,11 +22,8 @@ func getFreePort(t *testing.T) int {
 	return port
 }
 
-// TestXDSValidation tests that xDS config validation works with the embedded Envoy binary.
-// This test verifies that:
-// - Valid LDS/CDS configs pass validation
-// - Invalid LDS/CDS configs fail validation
-func TestXDSValidation(t *testing.T) {
+// TestConfigGeneration tests that config generation produces valid Caddy JSON.
+func TestConfigGeneration(t *testing.T) {
 	// Create temp dir
 	tmpDir, err := os.MkdirTemp("", "ingress-validation-test-*")
 	require.NoError(t, err)
@@ -34,21 +32,14 @@ func TestXDSValidation(t *testing.T) {
 	p := paths.New(tmpDir)
 
 	// Create required directories
-	require.NoError(t, os.MkdirAll(p.EnvoyDir(), 0755))
-
-	// Extract the embedded Envoy binary
-	envoyPath, err := ExtractEnvoyBinary(p)
-	require.NoError(t, err, "Should be able to extract embedded Envoy binary")
-	require.FileExists(t, envoyPath, "Envoy binary should exist after extraction")
+	require.NoError(t, os.MkdirAll(p.CaddyDir(), 0755))
+	require.NoError(t, os.MkdirAll(p.CaddyDataDir(), 0755))
 
 	// Use random port to avoid test collisions
 	adminPort := getFreePort(t)
 
-	// Create daemon for validation (it has ValidateConfig method)
-	daemon := NewEnvoyDaemon(p, "127.0.0.1", adminPort, true)
-
-	// Create config generator with daemon as validator
-	generator := NewEnvoyConfigGenerator(p, "0.0.0.0", "127.0.0.1", adminPort, daemon, OTELConfig{})
+	// Create config generator
+	generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", adminPort, ACMEConfig{})
 
 	ctx := context.Background()
 	ipResolver := func(instance string) (string, error) {
@@ -76,32 +67,30 @@ func TestXDSValidation(t *testing.T) {
 			},
 		}
 
-		// WriteConfig should succeed with valid config
-		err := generator.WriteConfig(ctx, ingresses, ipResolver)
-		if err != nil {
-			t.Logf("WriteConfig error: %v", err)
-			// Try to get more details by reading any written files
-			if ldsData, readErr := os.ReadFile(p.EnvoyLDS()); readErr == nil {
-				t.Logf("LDS content:\n%s", string(ldsData))
-			}
-			if cdsData, readErr := os.ReadFile(p.EnvoyCDS()); readErr == nil {
-				t.Logf("CDS content:\n%s", string(cdsData))
-			}
-		}
-		require.NoError(t, err, "Valid config should pass validation")
+		// GenerateConfig should succeed and produce valid JSON
+		data, err := generator.GenerateConfig(ctx, ingresses, ipResolver)
+		require.NoError(t, err, "Valid config should generate successfully")
 
-		// Verify files were written
-		assert.FileExists(t, p.EnvoyLDS(), "LDS file should be written")
-		assert.FileExists(t, p.EnvoyCDS(), "CDS file should be written")
-		assert.FileExists(t, p.EnvoyConfig(), "Bootstrap file should be written")
+		// Verify it's valid JSON
+		var config map[string]interface{}
+		err = json.Unmarshal(data, &config)
+		require.NoError(t, err, "Generated config should be valid JSON")
+
+		// Verify essential structure
+		assert.Contains(t, config, "admin")
+		assert.Contains(t, config, "apps")
 	})
 
 	t.Run("EmptyConfig", func(t *testing.T) {
 		// Empty config should also be valid
 		ingresses := []Ingress{}
 
-		err := generator.WriteConfig(ctx, ingresses, ipResolver)
-		require.NoError(t, err, "Empty config should pass validation")
+		data, err := generator.GenerateConfig(ctx, ingresses, ipResolver)
+		require.NoError(t, err, "Empty config should generate successfully")
+
+		var config map[string]interface{}
+		err = json.Unmarshal(data, &config)
+		require.NoError(t, err, "Generated config should be valid JSON")
 	})
 
 	t.Run("MultipleRules", func(t *testing.T) {
@@ -127,141 +116,176 @@ func TestXDSValidation(t *testing.T) {
 			},
 		}
 
+		data, err := generator.GenerateConfig(ctx, ingresses, ipResolver)
+		require.NoError(t, err, "Config with multiple rules should generate successfully")
+
+		var config map[string]interface{}
+		err = json.Unmarshal(data, &config)
+		require.NoError(t, err, "Generated config should be valid JSON")
+
+		// Verify routes are present
+		configStr := string(data)
+		assert.Contains(t, configStr, "api.example.com")
+		assert.Contains(t, configStr, "web.example.com")
+		assert.Contains(t, configStr, "admin.example.com")
+	})
+
+	t.Run("WriteConfig", func(t *testing.T) {
+		ingresses := []Ingress{
+			{
+				ID:   "write-test",
+				Name: "write-test",
+				Rules: []IngressRule{
+					{
+						Match:  IngressMatch{Hostname: "test.example.com", Port: 80},
+						Target: IngressTarget{Instance: "test", Port: 8080},
+					},
+				},
+			},
+		}
+
 		err := generator.WriteConfig(ctx, ingresses, ipResolver)
-		require.NoError(t, err, "Config with multiple rules should pass validation")
+		require.NoError(t, err, "WriteConfig should succeed")
+
+		// Verify file was written
+		assert.FileExists(t, p.CaddyConfig(), "Config file should be written")
+
+		// Verify file content is valid JSON
+		data, err := os.ReadFile(p.CaddyConfig())
+		require.NoError(t, err)
+
+		var config map[string]interface{}
+		err = json.Unmarshal(data, &config)
+		require.NoError(t, err, "Written config should be valid JSON")
 	})
 }
 
-// TestXDSValidationWithInvalidConfig tests that invalid configs are rejected.
-func TestXDSValidationWithInvalidConfig(t *testing.T) {
+// TestTLSConfigGeneration tests TLS-specific config generation.
+func TestTLSConfigGeneration(t *testing.T) {
 	// Create temp dir
-	tmpDir, err := os.MkdirTemp("", "ingress-invalid-validation-test-*")
+	tmpDir, err := os.MkdirTemp("", "ingress-tls-validation-test-*")
 	require.NoError(t, err)
 	defer os.RemoveAll(tmpDir)
 
 	p := paths.New(tmpDir)
 
-	// Create required directories
-	require.NoError(t, os.MkdirAll(p.EnvoyDir(), 0755))
+	require.NoError(t, os.MkdirAll(p.CaddyDir(), 0755))
+	require.NoError(t, os.MkdirAll(p.CaddyDataDir(), 0755))
 
-	// Extract the embedded Envoy binary
-	_, err = ExtractEnvoyBinary(p)
-	require.NoError(t, err)
-
-	// Use random port to avoid test collisions
 	adminPort := getFreePort(t)
 
-	// Create daemon for validation
-	daemon := NewEnvoyDaemon(p, "127.0.0.1", adminPort, true)
+	t.Run("TLSWithCloudflare", func(t *testing.T) {
+		acmeConfig := ACMEConfig{
+			Email:              "admin@example.com",
+			DNSProvider:        "cloudflare",
+			CloudflareAPIToken: "test-token",
+		}
+		generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", adminPort, acmeConfig)
 
-	t.Run("InvalidYAMLFormat", func(t *testing.T) {
-		// Write invalid YAML to the bootstrap config path
-		invalidConfig := `
-admin:
-  address:
-    socket_address:
-      address: "127.0.0.1"
-      port_value: 9901
-dynamic_resources:
-  lds_config:
-    path_config_source:
-      path: "/nonexistent/lds.yaml"
-  cds_config:
-    path_config_source:
-      path: "/nonexistent/cds.yaml"
-`
-		// Write to a temp file for validation
-		tmpFile, err := os.CreateTemp(tmpDir, "invalid-*.yaml")
+		ingresses := []Ingress{
+			{
+				ID:   "tls-ingress",
+				Name: "tls-ingress",
+				Rules: []IngressRule{
+					{
+						Match:        IngressMatch{Hostname: "secure.example.com", Port: 443},
+						Target:       IngressTarget{Instance: "secure-app", Port: 8080},
+						TLS:          true,
+						RedirectHTTP: true,
+					},
+				},
+			},
+		}
+
+		ctx := context.Background()
+		ipResolver := func(instance string) (string, error) {
+			return "10.100.0.10", nil
+		}
+
+		data, err := generator.GenerateConfig(ctx, ingresses, ipResolver)
 		require.NoError(t, err)
-		defer os.Remove(tmpFile.Name())
 
-		_, err = tmpFile.WriteString(invalidConfig)
-		require.NoError(t, err)
-		tmpFile.Close()
+		configStr := string(data)
 
-		// Validation should fail because referenced files don't exist
-		err = daemon.ValidateConfig(tmpFile.Name())
-		assert.Error(t, err, "Config with nonexistent xDS files should fail validation")
+		// Verify TLS automation is configured
+		assert.Contains(t, configStr, "automation")
+		assert.Contains(t, configStr, "secure.example.com")
+		assert.Contains(t, configStr, "cloudflare")
+		assert.Contains(t, configStr, "admin@example.com")
+
+		// Verify redirect is configured
+		assert.Contains(t, configStr, "301")
+		assert.Contains(t, configStr, "Location")
 	})
 
-	t.Run("MalformedYAML", func(t *testing.T) {
-		// Write malformed YAML
-		malformedConfig := `
-admin:
-  address:
-    socket_address
-      address: "127.0.0.1"
-      port_value: this_should_be_int
-`
-		tmpFile, err := os.CreateTemp(tmpDir, "malformed-*.yaml")
-		require.NoError(t, err)
-		defer os.Remove(tmpFile.Name())
+	t.Run("TLSWithRoute53", func(t *testing.T) {
+		acmeConfig := ACMEConfig{
+			Email:              "admin@example.com",
+			DNSProvider:        "route53",
+			AWSAccessKeyID:     "AKID",
+			AWSSecretAccessKey: "secret",
+			AWSRegion:          "us-west-2",
+		}
+		generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", adminPort, acmeConfig)
 
-		_, err = tmpFile.WriteString(malformedConfig)
-		require.NoError(t, err)
-		tmpFile.Close()
+		ingresses := []Ingress{
+			{
+				ID:   "tls-ingress",
+				Name: "tls-ingress",
+				Rules: []IngressRule{
+					{
+						Match:  IngressMatch{Hostname: "secure.example.com", Port: 443},
+						Target: IngressTarget{Instance: "secure-app", Port: 8080},
+						TLS:    true,
+					},
+				},
+			},
+		}
 
-		err = daemon.ValidateConfig(tmpFile.Name())
-		assert.Error(t, err, "Malformed YAML should fail validation")
+		ctx := context.Background()
+		ipResolver := func(instance string) (string, error) {
+			return "10.100.0.10", nil
+		}
+
+		data, err := generator.GenerateConfig(ctx, ingresses, ipResolver)
+		require.NoError(t, err)
+
+		configStr := string(data)
+
+		// Verify Route53 is configured
+		assert.Contains(t, configStr, "route53")
+		assert.Contains(t, configStr, "AKID")
+		assert.Contains(t, configStr, "us-west-2")
 	})
 
-	t.Run("InvalidListenerConfig", func(t *testing.T) {
-		// Create config with invalid listener (negative port)
-		ldsConfig := `
-resources:
-  - "@type": type.googleapis.com/envoy.config.listener.v3.Listener
-    name: invalid_listener
-    address:
-      socket_address:
-        address: "0.0.0.0"
-        port_value: -1
-`
-		cdsConfig := `
-resources: []
-`
-		// Write LDS
-		ldsFile, err := os.CreateTemp(tmpDir, "invalid-lds-*.yaml")
-		require.NoError(t, err)
-		defer os.Remove(ldsFile.Name())
-		_, err = ldsFile.WriteString(ldsConfig)
-		require.NoError(t, err)
-		ldsFile.Close()
+	t.Run("NoTLSAutomationWithoutConfig", func(t *testing.T) {
+		// Empty ACME config
+		generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", adminPort, ACMEConfig{})
 
-		// Write CDS
-		cdsFile, err := os.CreateTemp(tmpDir, "invalid-cds-*.yaml")
-		require.NoError(t, err)
-		defer os.Remove(cdsFile.Name())
-		_, err = cdsFile.WriteString(cdsConfig)
-		require.NoError(t, err)
-		cdsFile.Close()
+		ingresses := []Ingress{
+			{
+				ID:   "no-tls-ingress",
+				Name: "no-tls-ingress",
+				Rules: []IngressRule{
+					{
+						Match:  IngressMatch{Hostname: "test.example.com", Port: 80},
+						Target: IngressTarget{Instance: "app", Port: 8080},
+					},
+				},
+			},
+		}
 
-		// Write bootstrap referencing these files
-		bootstrapConfig := `
-admin:
-  address:
-    socket_address:
-      address: "127.0.0.1"
-      port_value: 9901
-dynamic_resources:
-  lds_config:
-    path_config_source:
-      path: "` + ldsFile.Name() + `"
-      watched_directory:
-        path: "` + tmpDir + `"
-  cds_config:
-    path_config_source:
-      path: "` + cdsFile.Name() + `"
-      watched_directory:
-        path: "` + tmpDir + `"
-`
-		bootstrapFile, err := os.CreateTemp(tmpDir, "invalid-bootstrap-*.yaml")
-		require.NoError(t, err)
-		defer os.Remove(bootstrapFile.Name())
-		_, err = bootstrapFile.WriteString(bootstrapConfig)
-		require.NoError(t, err)
-		bootstrapFile.Close()
+		ctx := context.Background()
+		ipResolver := func(instance string) (string, error) {
+			return "10.100.0.10", nil
+		}
 
-		err = daemon.ValidateConfig(bootstrapFile.Name())
-		assert.Error(t, err, "Config with invalid listener port should fail validation")
+		data, err := generator.GenerateConfig(ctx, ingresses, ipResolver)
+		require.NoError(t, err)
+
+		configStr := string(data)
+
+		// Should NOT have TLS automation when ACME not configured
+		assert.NotContains(t, configStr, `"automation"`)
 	})
 }

@@ -435,6 +435,14 @@ components:
           $ref: "#/components/schemas/IngressMatch"
         target:
           $ref: "#/components/schemas/IngressTarget"
+        tls:
+          type: boolean
+          description: Enable TLS termination (certificate auto-issued via ACME)
+          default: false
+        redirect_http:
+          type: boolean
+          description: Auto-create HTTP to HTTPS redirect for this hostname (only applies when tls is enabled)
+          default: false
     
     CreateIngressRequest:
       type: object

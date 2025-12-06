@@ -22,4 +22,4 @@ cloud-hypervisor/**
 lib/system/exec_agent/exec-agent
 
 # Envoy binaries
-lib/ingress/binaries/envoy/*/*/envoy
+lib/ingress/binaries/caddy/**

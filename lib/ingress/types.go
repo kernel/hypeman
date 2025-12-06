@@ -2,6 +2,7 @@ package ingress
 
 import (
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -28,6 +29,14 @@ type IngressRule struct {
 
 	// Target specifies where matching requests should be routed.
 	Target IngressTarget `json:"target"`
+
+	// TLS enables TLS termination for this rule.
+	// When enabled, a certificate will be automatically issued via ACME.
+	TLS bool `json:"tls,omitempty"`
+
+	// RedirectHTTP creates an automatic HTTP to HTTPS redirect for this hostname.
+	// Only applies when TLS is enabled.
+	RedirectHTTP bool `json:"redirect_http,omitempty"`
 }
 
 // IngressMatch specifies the conditions for matching incoming requests.
@@ -77,6 +86,10 @@ func (r *CreateIngressRequest) Validate() error {
 		if rule.Match.Hostname == "" {
 			return &ValidationError{Field: "rules", Message: "hostname is required in rule " + strconv.Itoa(i)}
 		}
+		// Wildcard hostnames are not supported for ACME certificates
+		if strings.HasPrefix(rule.Match.Hostname, "*") {
+			return &ValidationError{Field: "rules", Message: "wildcard hostnames are not supported in rule " + strconv.Itoa(i)}
+		}
 		// Port is optional (defaults to 80), but if specified must be valid
 		if rule.Match.Port != 0 && (rule.Match.Port < 1 || rule.Match.Port > 65535) {
 			return &ValidationError{Field: "rules", Message: "match.port must be between 1 and 65535 in rule " + strconv.Itoa(i)}
@@ -86,6 +99,10 @@ func (r *CreateIngressRequest) Validate() error {
 		}
 		if rule.Target.Port <= 0 || rule.Target.Port > 65535 {
 			return &ValidationError{Field: "rules", Message: "target.port must be between 1 and 65535 in rule " + strconv.Itoa(i)}
+		}
+		// redirect_http only makes sense with TLS
+		if rule.RedirectHTTP && !rule.TLS {
+			return &ValidationError{Field: "rules", Message: "redirect_http requires tls to be enabled in rule " + strconv.Itoa(i)}
 		}
 	}
 

@@ -208,41 +208,41 @@ func (p *Paths) VolumeMetadata(id string) string {
 	return filepath.Join(p.VolumeDir(id), "metadata.json")
 }
 
-// Envoy path methods
+// Caddy path methods
 
-// EnvoyDir returns the envoy data directory.
-func (p *Paths) EnvoyDir() string {
-	return filepath.Join(p.dataDir, "envoy")
+// CaddyDir returns the caddy data directory.
+func (p *Paths) CaddyDir() string {
+	return filepath.Join(p.dataDir, "caddy")
 }
 
-// EnvoyBinary returns the path to the envoy binary.
-func (p *Paths) EnvoyBinary(version, arch string) string {
-	return filepath.Join(p.dataDir, "system", "binaries", "envoy", version, arch, "envoy")
+// CaddyBinary returns the path to the caddy binary.
+func (p *Paths) CaddyBinary(version, arch string) string {
+	return filepath.Join(p.dataDir, "system", "binaries", "caddy", version, arch, "caddy")
 }
 
-// EnvoyConfig returns the path to the envoy bootstrap config file.
-func (p *Paths) EnvoyConfig() string {
-	return filepath.Join(p.EnvoyDir(), "bootstrap.yaml")
+// CaddyConfig returns the path to the caddy config file.
+func (p *Paths) CaddyConfig() string {
+	return filepath.Join(p.CaddyDir(), "config.json")
 }
 
-// EnvoyLDS returns the path to the Listener Discovery Service config file.
-func (p *Paths) EnvoyLDS() string {
-	return filepath.Join(p.EnvoyDir(), "lds.yaml")
+// CaddyPIDFile returns the path to the caddy PID file.
+func (p *Paths) CaddyPIDFile() string {
+	return filepath.Join(p.CaddyDir(), "caddy.pid")
 }
 
-// EnvoyCDS returns the path to the Cluster Discovery Service config file.
-func (p *Paths) EnvoyCDS() string {
-	return filepath.Join(p.EnvoyDir(), "cds.yaml")
+// CaddyLogFile returns the path to the caddy log file.
+func (p *Paths) CaddyLogFile() string {
+	return filepath.Join(p.CaddyDir(), "caddy.log")
 }
 
-// EnvoyPIDFile returns the path to the envoy PID file.
-func (p *Paths) EnvoyPIDFile() string {
-	return filepath.Join(p.EnvoyDir(), "envoy.pid")
+// CaddyDataDir returns the path to Caddy's data directory (for certs, etc.).
+func (p *Paths) CaddyDataDir() string {
+	return filepath.Join(p.CaddyDir(), "data")
 }
 
-// EnvoyLogFile returns the path to the envoy log file.
-func (p *Paths) EnvoyLogFile() string {
-	return filepath.Join(p.EnvoyDir(), "envoy.log")
+// CaddyConfigDir returns the path to Caddy's config directory.
+func (p *Paths) CaddyConfigDir() string {
+	return filepath.Join(p.CaddyDir(), "config")
 }
 
 // Ingress path methods

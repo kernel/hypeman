@@ -124,17 +124,19 @@ func ProvideRegistry(p *paths.Paths, imageManager images.Manager) (*registry.Reg
 // ProvideIngressManager provides the ingress manager
 func ProvideIngressManager(p *paths.Paths, cfg *config.Config, instanceManager instances.Manager) ingress.Manager {
 	ingressConfig := ingress.Config{
-		ListenAddress:  cfg.EnvoyListenAddress,
-		AdminAddress:   cfg.EnvoyAdminAddress,
-		AdminPort:      cfg.EnvoyAdminPort,
-		StopOnShutdown: cfg.EnvoyStopOnShutdown,
-		OTEL: ingress.OTELConfig{
-			Enabled:           cfg.OtelEnabled,
-			Endpoint:          cfg.OtelEndpoint,
-			ServiceName:       cfg.OtelServiceName + "-envoy",
-			ServiceInstanceID: cfg.OtelServiceInstanceID,
-			Insecure:          cfg.OtelInsecure,
-			Environment:       cfg.Env,
+		ListenAddress:  cfg.CaddyListenAddress,
+		AdminAddress:   cfg.CaddyAdminAddress,
+		AdminPort:      cfg.CaddyAdminPort,
+		StopOnShutdown: cfg.CaddyStopOnShutdown,
+		ACME: ingress.ACMEConfig{
+			Email:              cfg.AcmeEmail,
+			DNSProvider:        cfg.AcmeDnsProvider,
+			CA:                 cfg.AcmeCA,
+			CloudflareAPIToken: cfg.CloudflareApiToken,
+			AWSAccessKeyID:     cfg.AwsAccessKeyId,
+			AWSSecretAccessKey: cfg.AwsSecretAccessKey,
+			AWSRegion:          cfg.AwsRegion,
+			AWSHostedZoneID:    cfg.AwsHostedZoneId,
 		},
 	}
 

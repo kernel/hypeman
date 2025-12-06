@@ -1,12 +1,13 @@
 package ingress
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -16,20 +17,19 @@ import (
 	"github.com/onkernel/hypeman/lib/paths"
 )
 
-// EnvoyDaemon manages the Envoy proxy daemon lifecycle.
-// Envoy uses file-based xDS for dynamic configuration - it watches LDS/CDS files
-// and automatically reloads when they change. No hot restart needed.
-type EnvoyDaemon struct {
+// CaddyDaemon manages the Caddy proxy daemon lifecycle.
+// Caddy uses its admin API for configuration updates - no restart needed.
+type CaddyDaemon struct {
 	paths          *paths.Paths
 	adminAddress   string
 	adminPort      int
 	pid            int
-	stopOnShutdown bool // If true, stop Envoy when hypeman shuts down
+	stopOnShutdown bool
 }
 
-// NewEnvoyDaemon creates a new EnvoyDaemon manager.
-func NewEnvoyDaemon(p *paths.Paths, adminAddress string, adminPort int, stopOnShutdown bool) *EnvoyDaemon {
-	return &EnvoyDaemon{
+// NewCaddyDaemon creates a new CaddyDaemon manager.
+func NewCaddyDaemon(p *paths.Paths, adminAddress string, adminPort int, stopOnShutdown bool) *CaddyDaemon {
+	return &CaddyDaemon{
 		paths:          p,
 		adminAddress:   adminAddress,
 		adminPort:      adminPort,
@@ -37,61 +37,71 @@ func NewEnvoyDaemon(p *paths.Paths, adminAddress string, adminPort int, stopOnSh
 	}
 }
 
-// StopOnShutdown returns whether Envoy should be stopped when hypeman shuts down.
-func (d *EnvoyDaemon) StopOnShutdown() bool {
+// StopOnShutdown returns whether Caddy should be stopped when hypeman shuts down.
+func (d *CaddyDaemon) StopOnShutdown() bool {
 	return d.stopOnShutdown
 }
 
-// Start starts the Envoy daemon. If Envoy is already running (discovered via PID file
+// Start starts the Caddy daemon. If Caddy is already running (discovered via PID file
 // or admin API), this is a no-op and returns the existing PID.
-func (d *EnvoyDaemon) Start(ctx context.Context) (int, error) {
+func (d *CaddyDaemon) Start(ctx context.Context) (int, error) {
 	// Check if already running
 	if pid, running := d.DiscoverRunning(); running {
 		d.pid = pid
 		return pid, nil
 	}
 
-	return d.startEnvoy(ctx)
+	return d.startCaddy(ctx)
 }
 
-// startEnvoy starts a new Envoy process.
-func (d *EnvoyDaemon) startEnvoy(ctx context.Context) (int, error) {
+// startCaddy starts a new Caddy process.
+func (d *CaddyDaemon) startCaddy(ctx context.Context) (int, error) {
 	// Get binary path (extracts if needed)
-	binaryPath, err := GetEnvoyBinaryPath(d.paths)
+	binaryPath, err := GetCaddyBinaryPath(d.paths)
 	if err != nil {
-		return 0, fmt.Errorf("get envoy binary: %w", err)
+		return 0, fmt.Errorf("get caddy binary: %w", err)
 	}
 
-	// Ensure envoy directory exists
-	envoyDir := d.paths.EnvoyDir()
-	if err := os.MkdirAll(envoyDir, 0755); err != nil {
-		return 0, fmt.Errorf("create envoy directory: %w", err)
+	// Ensure caddy directory exists
+	caddyDir := d.paths.CaddyDir()
+	if err := os.MkdirAll(caddyDir, 0755); err != nil {
+		return 0, fmt.Errorf("create caddy directory: %w", err)
 	}
 
-	// Build command arguments - Envoy uses file-based xDS for dynamic config
-	configPath := d.paths.EnvoyConfig()
+	// Ensure data directory exists (for certificates)
+	if err := os.MkdirAll(d.paths.CaddyDataDir(), 0755); err != nil {
+		return 0, fmt.Errorf("create caddy data directory: %w", err)
+	}
+
+	// Build command arguments
+	configPath := d.paths.CaddyConfig()
 	args := []string{
-		"--config-path", configPath,
-		"--log-path", d.paths.EnvoyLogFile(),
-		"--log-level", "info",
+		"run",
+		"--config", configPath,
 	}
 
 	// Use Command (not CommandContext) so process survives parent context cancellation
 	cmd := exec.Command(binaryPath, args...)
 
+	// Set environment for Caddy data/config paths
+	cmd.Env = append(os.Environ(),
+		fmt.Sprintf("XDG_DATA_HOME=%s", d.paths.CaddyDataDir()),
+		fmt.Sprintf("XDG_CONFIG_HOME=%s", d.paths.CaddyConfigDir()),
+	)
+
 	// Daemonize: create new session to fully detach from parent
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Setsid: true, // Create new session (implies new process group)
+		Setsid: true,
 	}
 
 	// Redirect stdout/stderr to log file
 	logFile, err := os.OpenFile(
-		filepath.Join(envoyDir, "envoy-stdout.log"),
+		d.paths.CaddyLogFile(),
 		os.O_CREATE|os.O_WRONLY|os.O_APPEND,
 		0644,
 	)
 	if err != nil {
-		return 0, fmt.Errorf("create stdout log: %w", err)
+		return 0, fmt.Errorf("create log file: %w", err)
 	}
 	defer logFile.Close()
 
@@ -99,15 +109,14 @@ func (d *EnvoyDaemon) startEnvoy(ctx context.Context) (int, error) {
 	cmd.Stderr = logFile
 
 	if err := cmd.Start(); err != nil {
-		return 0, fmt.Errorf("start envoy: %w", err)
+		return 0, fmt.Errorf("start caddy: %w", err)
 	}
 
 	pid := cmd.Process.Pid
 
 	// Write PID file
-	pidPath := d.paths.EnvoyPIDFile()
+	pidPath := d.paths.CaddyPIDFile()
 	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(pid)), 0644); err != nil {
-		// Non-fatal, log but continue
 		log := logger.FromContext(ctx)
 		log.WarnContext(ctx, "failed to write PID file", "error", err)
 	}
@@ -121,27 +130,26 @@ func (d *EnvoyDaemon) startEnvoy(ctx context.Context) (int, error) {
 		if proc, err := os.FindProcess(pid); err == nil {
 			proc.Kill()
 		}
-		return 0, fmt.Errorf("envoy failed to start: %w", err)
+		return 0, fmt.Errorf("caddy failed to start: %w", err)
 	}
 
 	d.pid = pid
 	return pid, nil
 }
 
-// Stop gracefully stops the Envoy daemon.
-func (d *EnvoyDaemon) Stop() error {
+// Stop gracefully stops the Caddy daemon.
+func (d *CaddyDaemon) Stop() error {
 	pid, running := d.DiscoverRunning()
 	if !running {
-		return nil // Already stopped
+		return nil
 	}
 
 	// Try graceful shutdown via admin API first
 	client := &http.Client{Timeout: 5 * time.Second}
-	adminURL := fmt.Sprintf("http://%s:%d/quitquitquit", d.adminAddress, d.adminPort)
+	adminURL := fmt.Sprintf("http://%s:%d/stop", d.adminAddress, d.adminPort)
 	resp, err := client.Post(adminURL, "", nil)
 	if err == nil {
 		resp.Body.Close()
-		// Wait for process to exit
 		time.Sleep(2 * time.Second)
 	}
 
@@ -163,43 +171,49 @@ func (d *EnvoyDaemon) Stop() error {
 	}
 
 	// Clean up PID file
-	os.Remove(d.paths.EnvoyPIDFile())
+	os.Remove(d.paths.CaddyPIDFile())
 	d.pid = 0
 
 	return nil
 }
 
-// ReloadConfig is a no-op - Envoy watches the xDS config files and reloads automatically.
-// This method is kept for API compatibility but does nothing since file-based xDS
-// handles configuration updates automatically when files change.
-func (d *EnvoyDaemon) ReloadConfig() error {
-	// No-op: Envoy watches the LDS/CDS files and reloads automatically
+// ReloadConfig reloads Caddy configuration by posting to the admin API.
+func (d *CaddyDaemon) ReloadConfig(config []byte) error {
+	client := &http.Client{Timeout: 30 * time.Second}
+	adminURL := fmt.Sprintf("http://%s:%d/load", d.adminAddress, d.adminPort)
+
+	resp, err := client.Post(adminURL, "application/json", bytes.NewReader(config))
+	if err != nil {
+		return fmt.Errorf("post to admin API: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("caddy reload failed (status %d): %s", resp.StatusCode, string(body))
+	}
+
 	return nil
 }
 
-// DiscoverRunning checks if Envoy is already running and returns its PID.
-// Returns (pid, true) if running, (0, false) otherwise.
-func (d *EnvoyDaemon) DiscoverRunning() (int, bool) {
+// DiscoverRunning checks if Caddy is already running and returns its PID.
+func (d *CaddyDaemon) DiscoverRunning() (int, bool) {
 	// First, try to read PID file
-	pidPath := d.paths.EnvoyPIDFile()
+	pidPath := d.paths.CaddyPIDFile()
 	data, err := os.ReadFile(pidPath)
 	if err == nil {
 		pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
 		if err == nil && d.isProcessRunning(pid) {
-			// Verify it's actually Envoy by checking admin API
 			if d.isAdminResponding() {
 				return pid, true
 			}
 		}
 	}
 
-	// Try admin API directly (might be running without PID file)
+	// Try admin API directly
 	if d.isAdminResponding() {
-		// We don't know the PID, but it's running
-		// Try to find it via procfs
-		pid := d.findEnvoyPID()
+		pid := d.findCaddyPID()
 		if pid > 0 {
-			// Update PID file
 			os.WriteFile(pidPath, []byte(strconv.Itoa(pid)), 0644)
 			return pid, true
 		}
@@ -208,14 +222,14 @@ func (d *EnvoyDaemon) DiscoverRunning() (int, bool) {
 	return 0, false
 }
 
-// IsRunning returns true if Envoy is currently running.
-func (d *EnvoyDaemon) IsRunning() bool {
+// IsRunning returns true if Caddy is currently running.
+func (d *CaddyDaemon) IsRunning() bool {
 	_, running := d.DiscoverRunning()
 	return running
 }
 
-// GetPID returns the PID of the running Envoy process, or 0 if not running.
-func (d *EnvoyDaemon) GetPID() int {
+// GetPID returns the PID of the running Caddy process, or 0 if not running.
+func (d *CaddyDaemon) GetPID() int {
 	pid, running := d.DiscoverRunning()
 	if running {
 		return pid
@@ -224,43 +238,19 @@ func (d *EnvoyDaemon) GetPID() int {
 }
 
 // AdminURL returns the admin API URL.
-func (d *EnvoyDaemon) AdminURL() string {
+func (d *CaddyDaemon) AdminURL() string {
 	return fmt.Sprintf("http://%s:%d", d.adminAddress, d.adminPort)
 }
 
-// ValidateConfig validates an Envoy configuration file without starting Envoy.
-// Returns nil if valid, or an error with details if invalid.
-func (d *EnvoyDaemon) ValidateConfig(configPath string) error {
-	binaryPath, err := GetEnvoyBinaryPath(d.paths)
-	if err != nil {
-		return fmt.Errorf("get envoy binary: %w", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, binaryPath,
-		"--mode", "validate",
-		"--config-path", configPath,
-	)
-
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("config validation failed: %w: %s", err, string(output))
-	}
-
-	return nil
-}
-
 // waitForAdmin waits for the admin API to become responsive.
-func (d *EnvoyDaemon) waitForAdmin(ctx context.Context) error {
+func (d *CaddyDaemon) waitForAdmin(ctx context.Context) error {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("timeout waiting for envoy admin API")
+			return fmt.Errorf("timeout waiting for caddy admin API")
 		case <-ticker.C:
 			if d.isAdminResponding() {
 				return nil
@@ -270,36 +260,35 @@ func (d *EnvoyDaemon) waitForAdmin(ctx context.Context) error {
 }
 
 // isAdminResponding checks if the admin API is responding.
-func (d *EnvoyDaemon) isAdminResponding() bool {
+func (d *CaddyDaemon) isAdminResponding() bool {
 	client := &http.Client{Timeout: 1 * time.Second}
-	adminURL := fmt.Sprintf("http://%s:%d/ready", d.adminAddress, d.adminPort)
+	adminURL := fmt.Sprintf("http://%s:%d/config/", d.adminAddress, d.adminPort)
 	resp, err := client.Get(adminURL)
 	if err != nil {
 		return false
 	}
 	resp.Body.Close()
+	// Caddy returns 200 for /config/ when running
 	return resp.StatusCode == http.StatusOK
 }
 
 // isProcessRunning checks if a process with the given PID is running.
-func (d *EnvoyDaemon) isProcessRunning(pid int) bool {
+func (d *CaddyDaemon) isProcessRunning(pid int) bool {
 	proc, err := os.FindProcess(pid)
 	if err != nil {
 		return false
 	}
-	// On Unix, FindProcess always succeeds. Use signal 0 to check if process exists.
 	err = proc.Signal(syscall.Signal(0))
 	return err == nil
 }
 
-// findEnvoyPID tries to find the Envoy process PID by scanning /proc.
-func (d *EnvoyDaemon) findEnvoyPID() int {
+// findCaddyPID tries to find the Caddy process PID by scanning /proc.
+func (d *CaddyDaemon) findCaddyPID() int {
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
 		return 0
 	}
 
-	configPath := d.paths.EnvoyConfig()
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -309,15 +298,13 @@ func (d *EnvoyDaemon) findEnvoyPID() int {
 			continue
 		}
 
-		// Read cmdline
 		cmdline, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
 		if err != nil {
 			continue
 		}
 
-		// Check if it's envoy with our config path
 		cmdStr := string(cmdline)
-		if strings.Contains(cmdStr, "envoy") && strings.Contains(cmdStr, configPath) {
+		if strings.Contains(cmdStr, "caddy") && strings.Contains(cmdStr, "run") {
 			return pid
 		}
 	}

@@ -49,7 +49,8 @@ func setupTestManager(t *testing.T) (Manager, *mockInstanceResolver, *paths.Path
 	p := paths.New(tmpDir)
 
 	// Create required directories
-	require.NoError(t, os.MkdirAll(p.EnvoyDir(), 0755))
+	require.NoError(t, os.MkdirAll(p.CaddyDir(), 0755))
+	require.NoError(t, os.MkdirAll(p.CaddyDataDir(), 0755))
 	require.NoError(t, os.MkdirAll(p.IngressesDir(), 0755))
 
 	resolver := newMockResolver()
@@ -57,10 +58,11 @@ func setupTestManager(t *testing.T) (Manager, *mockInstanceResolver, *paths.Path
 	resolver.AddInstance("web-app", "10.100.0.20")
 
 	config := Config{
-		ListenAddress:     "0.0.0.0",
-		AdminAddress:      "127.0.0.1",
-		AdminPort:         19901, // Use different port for testing
-		DisableValidation: true,  // No Envoy binary available in tests
+		ListenAddress:  "0.0.0.0",
+		AdminAddress:   "127.0.0.1",
+		AdminPort:      12019, // Use different port for testing
+		StopOnShutdown: true,
+		// Empty ACME config - TLS not configured for basic tests
 	}
 
 	manager := NewManager(p, config, resolver)
@@ -580,6 +582,36 @@ func TestCreateIngressRequest_Validate(t *testing.T) {
 				Name: "valid",
 				Rules: []IngressRule{
 					{Match: IngressMatch{Hostname: "test.example.com", Port: 8080}, Target: IngressTarget{Instance: "my-api", Port: 3000}},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "wildcard hostname not supported",
+			req: CreateIngressRequest{
+				Name: "valid",
+				Rules: []IngressRule{
+					{Match: IngressMatch{Hostname: "*.example.com"}, Target: IngressTarget{Instance: "my-api", Port: 8080}},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "redirect_http without tls",
+			req: CreateIngressRequest{
+				Name: "valid",
+				Rules: []IngressRule{
+					{Match: IngressMatch{Hostname: "test.example.com"}, Target: IngressTarget{Instance: "my-api", Port: 8080}, RedirectHTTP: true, TLS: false},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "valid tls with redirect",
+			req: CreateIngressRequest{
+				Name: "valid",
+				Rules: []IngressRule{
+					{Match: IngressMatch{Hostname: "test.example.com", Port: 443}, Target: IngressTarget{Instance: "my-api", Port: 8080}, TLS: true, RedirectHTTP: true},
 				},
 			},
 			wantErr: false,

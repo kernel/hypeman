@@ -1,5 +1,5 @@
 SHELL := /bin/bash
-.PHONY: oapi-generate generate-vmm-client generate-wire generate-all dev build test install-tools gen-jwt download-ch-binaries download-ch-spec ensure-ch-binaries download-envoy-binaries ensure-envoy-binaries
+.PHONY: oapi-generate generate-vmm-client generate-wire generate-all dev build test install-tools gen-jwt download-ch-binaries download-ch-spec ensure-ch-binaries download-caddy-binaries ensure-caddy-binaries
 
 # Directory where local binaries will be installed
 BIN_DIR ?= $(CURDIR)/bin
@@ -49,18 +49,22 @@ download-ch-binaries:
 	@chmod +x lib/vmm/binaries/cloud-hypervisor/v*/*/cloud-hypervisor
 	@echo "Binaries downloaded successfully"
 
-# Download Envoy binaries
-download-envoy-binaries:
-	@echo "Downloading Envoy binaries..."
-	@mkdir -p lib/ingress/binaries/envoy/v1.36/{x86_64,aarch64}
-	@echo "Downloading Envoy v1.36.3 for x86_64..."
-	@curl -L -o lib/ingress/binaries/envoy/v1.36/x86_64/envoy \
-		https://github.com/envoyproxy/envoy/releases/download/v1.36.3/envoy-1.36.3-linux-x86_64
-	@echo "Downloading Envoy v1.36.3 for aarch64..."
-	@curl -L -o lib/ingress/binaries/envoy/v1.36/aarch64/envoy \
-		https://github.com/envoyproxy/envoy/releases/download/v1.36.3/envoy-1.36.3-linux-aarch_64
-	@chmod +x lib/ingress/binaries/envoy/v1.36/*/envoy
-	@echo "Envoy binaries downloaded successfully"
+# Download Caddy binaries
+download-caddy-binaries:
+	@echo "Downloading Caddy binaries..."
+	@mkdir -p lib/ingress/binaries/caddy/v2.10.2/{x86_64,aarch64}
+	@echo "Downloading Caddy v2.10.2 for x86_64..."
+	@curl -L -o /tmp/caddy_x86_64.tar.gz \
+		https://github.com/caddyserver/caddy/releases/download/v2.10.2/caddy_2.10.2_linux_amd64.tar.gz
+	@tar -xzf /tmp/caddy_x86_64.tar.gz -C lib/ingress/binaries/caddy/v2.10.2/x86_64 caddy
+	@rm /tmp/caddy_x86_64.tar.gz
+	@echo "Downloading Caddy v2.10.2 for aarch64..."
+	@curl -L -o /tmp/caddy_aarch64.tar.gz \
+		https://github.com/caddyserver/caddy/releases/download/v2.10.2/caddy_2.10.2_linux_arm64.tar.gz
+	@tar -xzf /tmp/caddy_aarch64.tar.gz -C lib/ingress/binaries/caddy/v2.10.2/aarch64 caddy
+	@rm /tmp/caddy_aarch64.tar.gz
+	@chmod +x lib/ingress/binaries/caddy/v2.10.2/*/caddy
+	@echo "Caddy binaries downloaded successfully"
 
 # Download Cloud Hypervisor API spec
 download-ch-spec:
@@ -107,12 +111,12 @@ ensure-ch-binaries:
 		$(MAKE) download-ch-binaries; \
 	fi
 
-# Check if Envoy binaries exist, download if missing
-.PHONY: ensure-envoy-binaries
-ensure-envoy-binaries:
-	@if [ ! -f lib/ingress/binaries/envoy/v1.36/x86_64/envoy ]; then \
-		echo "Envoy binaries not found, downloading..."; \
-		$(MAKE) download-envoy-binaries; \
+# Check if Caddy binaries exist, download if missing
+.PHONY: ensure-caddy-binaries
+ensure-caddy-binaries:
+	@if [ ! -f lib/ingress/binaries/caddy/v2.10.2/x86_64/caddy ]; then \
+		echo "Caddy binaries not found, downloading..."; \
+		$(MAKE) download-caddy-binaries; \
 	fi
 
 # Build exec-agent (guest binary) into its own directory for embedding
@@ -121,7 +125,7 @@ lib/system/exec_agent/exec-agent: lib/system/exec_agent/main.go
 	cd lib/system/exec_agent && CGO_ENABLED=0 go build -ldflags="-s -w" -o exec-agent .
 
 # Build the binary
-build: ensure-ch-binaries ensure-envoy-binaries lib/system/exec_agent/exec-agent | $(BIN_DIR)
+build: ensure-ch-binaries ensure-caddy-binaries lib/system/exec_agent/exec-agent | $(BIN_DIR)
 	go build -tags containers_image_openpgp -o $(BIN_DIR)/hypeman ./cmd/api
 
 # Build exec CLI
@@ -139,7 +143,7 @@ dev: $(AIR)
 # Compile test binaries and grant network capabilities (runs as user, not root)
 # Usage: make test                              - runs all tests
 #        make test TEST=TestCreateInstanceWithNetwork  - runs specific test
-test: ensure-ch-binaries ensure-envoy-binaries lib/system/exec_agent/exec-agent
+test: ensure-ch-binaries ensure-caddy-binaries lib/system/exec_agent/exec-agent
 	@echo "Building test binaries..."
 	@mkdir -p $(BIN_DIR)/tests
 	@for pkg in $$(go list -tags containers_image_openpgp ./...); do \

@@ -10,16 +10,16 @@ import (
 	"github.com/onkernel/hypeman/lib/paths"
 )
 
-//go:embed binaries/envoy/v1.36/x86_64/envoy
-//go:embed binaries/envoy/v1.36/aarch64/envoy
-var envoyBinaryFS embed.FS
+//go:embed binaries/caddy/v2.10.2/x86_64/caddy
+//go:embed binaries/caddy/v2.10.2/aarch64/caddy
+var caddyBinaryFS embed.FS
 
-// EnvoyVersion is the version of Envoy embedded in this build.
-const EnvoyVersion = "v1.36"
+// CaddyVersion is the version of Caddy embedded in this build.
+const CaddyVersion = "v2.10.2"
 
-// ExtractEnvoyBinary extracts the embedded Envoy binary to the data directory.
+// ExtractCaddyBinary extracts the embedded Caddy binary to the data directory.
 // Returns the path to the extracted binary.
-func ExtractEnvoyBinary(p *paths.Paths) (string, error) {
+func ExtractCaddyBinary(p *paths.Paths) (string, error) {
 	arch := runtime.GOARCH
 	if arch == "amd64" {
 		arch = "x86_64"
@@ -27,8 +27,8 @@ func ExtractEnvoyBinary(p *paths.Paths) (string, error) {
 		arch = "aarch64"
 	}
 
-	embeddedPath := fmt.Sprintf("binaries/envoy/%s/%s/envoy", EnvoyVersion, arch)
-	extractPath := p.EnvoyBinary(EnvoyVersion, arch)
+	embeddedPath := fmt.Sprintf("binaries/caddy/%s/%s/caddy", CaddyVersion, arch)
+	extractPath := p.CaddyBinary(CaddyVersion, arch)
 
 	// Check if already extracted
 	if _, err := os.Stat(extractPath); err == nil {
@@ -37,24 +37,24 @@ func ExtractEnvoyBinary(p *paths.Paths) (string, error) {
 
 	// Create directory
 	if err := os.MkdirAll(filepath.Dir(extractPath), 0755); err != nil {
-		return "", fmt.Errorf("create envoy binary dir: %w", err)
+		return "", fmt.Errorf("create caddy binary dir: %w", err)
 	}
 
 	// Read embedded binary
-	data, err := envoyBinaryFS.ReadFile(embeddedPath)
+	data, err := caddyBinaryFS.ReadFile(embeddedPath)
 	if err != nil {
-		return "", fmt.Errorf("read embedded envoy binary: %w", err)
+		return "", fmt.Errorf("read embedded caddy binary: %w", err)
 	}
 
 	// Write to filesystem
 	if err := os.WriteFile(extractPath, data, 0755); err != nil {
-		return "", fmt.Errorf("write envoy binary: %w", err)
+		return "", fmt.Errorf("write caddy binary: %w", err)
 	}
 
 	return extractPath, nil
 }
 
-// GetEnvoyBinaryPath returns path to extracted binary, extracting if needed.
-func GetEnvoyBinaryPath(p *paths.Paths) (string, error) {
-	return ExtractEnvoyBinary(p)
+// GetCaddyBinaryPath returns path to extracted binary, extracting if needed.
+func GetCaddyBinaryPath(p *paths.Paths) (string, error) {
+	return ExtractCaddyBinary(p)
 }

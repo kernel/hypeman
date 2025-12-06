@@ -45,6 +45,14 @@ func (s *ApiService) CreateIngress(ctx context.Context, request oapi.CreateIngre
 		if rule.Match.Port != nil {
 			matchPort = *rule.Match.Port
 		}
+		tlsEnabled := false
+		if rule.Tls != nil {
+			tlsEnabled = *rule.Tls
+		}
+		redirectHTTP := false
+		if rule.RedirectHttp != nil {
+			redirectHTTP = *rule.RedirectHttp
+		}
 		domainReq.Rules[i] = ingress.IngressRule{
 			Match: ingress.IngressMatch{
 				Hostname: rule.Match.Hostname,
@@ -54,6 +62,8 @@ func (s *ApiService) CreateIngress(ctx context.Context, request oapi.CreateIngre
 				Instance: rule.Target.Instance,
 				Port:     rule.Target.Port,
 			},
+			TLS:          tlsEnabled,
+			RedirectHTTP: redirectHTTP,
 		}
 	}
 
@@ -141,6 +151,8 @@ func ingressToOAPI(ing ingress.Ingress) oapi.Ingress {
 	rules := make([]oapi.IngressRule, len(ing.Rules))
 	for i, rule := range ing.Rules {
 		port := rule.Match.GetPort()
+		tls := rule.TLS
+		redirectHTTP := rule.RedirectHTTP
 		rules[i] = oapi.IngressRule{
 			Match: oapi.IngressMatch{
 				Hostname: rule.Match.Hostname,
@@ -150,6 +162,8 @@ func ingressToOAPI(ing ingress.Ingress) oapi.Ingress {
 				Instance: rule.Target.Instance,
 				Port:     rule.Target.Port,
 			},
+			Tls:          &tls,
+			RedirectHttp: &redirectHTTP,
 		}
 	}
 

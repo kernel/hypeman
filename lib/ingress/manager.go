@@ -48,46 +48,21 @@ type Manager interface {
 
 // Config holds configuration for the ingress manager.
 type Config struct {
-	// ListenAddress is the address Envoy should listen on (default: 0.0.0.0).
+	// ListenAddress is the address Caddy should listen on (default: 0.0.0.0).
 	ListenAddress string
 
-	// AdminAddress is the address for Envoy admin API (default: 127.0.0.1).
+	// AdminAddress is the address for Caddy admin API (default: 127.0.0.1).
 	AdminAddress string
 
-	// AdminPort is the port for Envoy admin API (default: 9901).
+	// AdminPort is the port for Caddy admin API (default: 2019).
 	AdminPort int
 
-	// StopOnShutdown determines whether to stop Envoy when hypeman shuts down (default: false).
-	// When false, Envoy continues running independently.
+	// StopOnShutdown determines whether to stop Caddy when hypeman shuts down (default: false).
+	// When false, Caddy continues running independently.
 	StopOnShutdown bool
 
-	// DisableValidation disables Envoy config validation before applying.
-	// This should only be used for testing.
-	DisableValidation bool
-
-	// OTEL configuration for Envoy tracing
-	OTEL OTELConfig
-}
-
-// OTELConfig holds OpenTelemetry configuration for Envoy.
-type OTELConfig struct {
-	// Enabled controls whether OTEL tracing is enabled in Envoy.
-	Enabled bool
-
-	// Endpoint is the OTEL collector gRPC endpoint (host:port).
-	Endpoint string
-
-	// ServiceName is the service name for traces (default: "hypeman-envoy").
-	ServiceName string
-
-	// ServiceInstanceID is the service instance identifier.
-	ServiceInstanceID string
-
-	// Insecure disables TLS for OTEL connections.
-	Insecure bool
-
-	// Environment is the deployment environment (e.g., dev, staging, prod).
-	Environment string
+	// ACME configuration for TLS certificates
+	ACME ACMEConfig
 }
 
 // DefaultConfig returns the default ingress configuration.
@@ -95,7 +70,7 @@ func DefaultConfig() Config {
 	return Config{
 		ListenAddress:  "0.0.0.0",
 		AdminAddress:   "127.0.0.1",
-		AdminPort:      9901,
+		AdminPort:      2019,
 		StopOnShutdown: false,
 	}
 }
@@ -104,27 +79,21 @@ type manager struct {
 	paths            *paths.Paths
 	config           Config
 	instanceResolver InstanceResolver
-	daemon           *EnvoyDaemon
-	configGenerator  *EnvoyConfigGenerator
+	daemon           *CaddyDaemon
+	configGenerator  *CaddyConfigGenerator
 	mu               sync.RWMutex
 }
 
 // NewManager creates a new ingress manager.
 func NewManager(p *paths.Paths, config Config, instanceResolver InstanceResolver) Manager {
-	daemon := NewEnvoyDaemon(p, config.AdminAddress, config.AdminPort, config.StopOnShutdown)
-
-	// Use daemon as validator unless validation is disabled
-	var validator ConfigValidator
-	if !config.DisableValidation {
-		validator = daemon
-	}
+	daemon := NewCaddyDaemon(p, config.AdminAddress, config.AdminPort, config.StopOnShutdown)
 
 	return &manager{
 		paths:            p,
 		config:           config,
 		instanceResolver: instanceResolver,
 		daemon:           daemon,
-		configGenerator:  NewEnvoyConfigGenerator(p, config.ListenAddress, config.AdminAddress, config.AdminPort, validator, config.OTEL),
+		configGenerator:  NewCaddyConfigGenerator(p, config.ListenAddress, config.AdminAddress, config.AdminPort, config.ACME),
 	}
 }
 
@@ -133,10 +102,17 @@ func (m *manager) Initialize(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Load existing ingresses and regenerate config
+	log := logger.FromContext(ctx)
+
+	// Load existing ingresses
 	ingresses, err := m.loadAllIngresses()
 	if err != nil {
 		return fmt.Errorf("load ingresses: %w", err)
+	}
+
+	// Check if any TLS ingresses exist but TLS isn't configured
+	if HasTLSRules(ingresses) && !m.config.ACME.IsTLSConfigured() {
+		log.WarnContext(ctx, "TLS ingresses exist but ACME is not configured - TLS will not work")
 	}
 
 	// Generate and write config
@@ -144,10 +120,10 @@ func (m *manager) Initialize(ctx context.Context) error {
 		return fmt.Errorf("regenerate config: %w", err)
 	}
 
-	// Start Envoy daemon
+	// Start Caddy daemon
 	_, err = m.daemon.Start(ctx)
 	if err != nil {
-		return fmt.Errorf("start envoy: %w", err)
+		return fmt.Errorf("start caddy: %w", err)
 	}
 
 	return nil
@@ -157,6 +133,8 @@ func (m *manager) Initialize(ctx context.Context) error {
 func (m *manager) Create(ctx context.Context, req CreateIngressRequest) (*Ingress, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	log := logger.FromContext(ctx)
 
 	// Validate request
 	if err := req.Validate(); err != nil {
@@ -171,6 +149,13 @@ func (m *manager) Create(ctx context.Context, req CreateIngressRequest) (*Ingres
 	// Check if name already exists
 	if _, err := findIngressByName(m.paths, req.Name); err == nil {
 		return nil, fmt.Errorf("%w: ingress with name %q already exists", ErrAlreadyExists, req.Name)
+	}
+
+	// Check if TLS is requested but ACME isn't configured
+	for _, rule := range req.Rules {
+		if rule.TLS && !m.config.ACME.IsTLSConfigured() {
+			return nil, fmt.Errorf("%w: TLS requested but ACME is not configured (set ACME_EMAIL and ACME_DNS_PROVIDER)", ErrInvalidRequest)
+		}
 	}
 
 	// Validate that all target instances exist
@@ -213,7 +198,26 @@ func (m *manager) Create(ctx context.Context, req CreateIngressRequest) (*Ingres
 		CreatedAt: time.Now().UTC(),
 	}
 
-	// Save to storage
+	// Generate config with the new ingress included
+	allIngresses := append(existingIngresses, ingress)
+	ipResolver := func(instance string) (string, error) {
+		return m.instanceResolver.ResolveInstanceIP(ctx, instance)
+	}
+
+	configData, err := m.configGenerator.GenerateConfig(ctx, allIngresses, ipResolver)
+	if err != nil {
+		return nil, fmt.Errorf("generate config: %w", err)
+	}
+
+	// Apply config to Caddy - this validates and applies atomically
+	// If Caddy rejects the config, we don't persist the ingress
+	if m.daemon.IsRunning() {
+		if err := m.daemon.ReloadConfig(configData); err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrConfigValidationFailed, err)
+		}
+	}
+
+	// Config accepted - save ingress to storage
 	stored := &storedIngress{
 		ID:        ingress.ID,
 		Name:      ingress.Name,
@@ -225,23 +229,12 @@ func (m *manager) Create(ctx context.Context, req CreateIngressRequest) (*Ingres
 		return nil, fmt.Errorf("save ingress: %w", err)
 	}
 
-	// Regenerate Envoy config with new ingress
-	allIngresses := append(existingIngresses, ingress)
-	if err := m.regenerateConfig(ctx, allIngresses); err != nil {
+	// Write config to disk (for Caddy restarts)
+	if err := m.configGenerator.WriteConfig(ctx, allIngresses, ipResolver); err != nil {
 		// Try to clean up the saved ingress
 		deleteIngressData(m.paths, id)
-		return nil, fmt.Errorf("regenerate config: %w", err)
-	}
-
-	// Reload Envoy
-	if m.daemon.IsRunning() {
-		if err := m.daemon.ReloadConfig(); err != nil {
-			log := logger.FromContext(ctx)
-			log.ErrorContext(ctx, "failed to reload envoy config after create", "error", err)
-			// Try to clean up the saved ingress since reload failed
-			deleteIngressData(m.paths, id)
-			return nil, ErrConfigValidationFailed
-		}
+		log.ErrorContext(ctx, "failed to write config after create", "error", err)
+		return nil, fmt.Errorf("write config: %w", err)
 	}
 
 	return &ingress, nil
@@ -280,6 +273,8 @@ func (m *manager) Delete(ctx context.Context, idOrName string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	log := logger.FromContext(ctx)
+
 	// Find the ingress
 	var id string
 	stored, err := loadIngress(m.paths, idOrName)
@@ -305,17 +300,27 @@ func (m *manager) Delete(ctx context.Context, idOrName string) error {
 		return fmt.Errorf("load ingresses: %w", err)
 	}
 
-	if err := m.regenerateConfig(ctx, ingresses); err != nil {
-		return fmt.Errorf("regenerate config: %w", err)
+	ipResolver := func(instance string) (string, error) {
+		return m.instanceResolver.ResolveInstanceIP(ctx, instance)
 	}
 
-	// Reload Envoy
+	// Generate and validate new config
+	configData, err := m.configGenerator.GenerateConfig(ctx, ingresses, ipResolver)
+	if err != nil {
+		return fmt.Errorf("generate config: %w", err)
+	}
+
+	// Apply new config
 	if m.daemon.IsRunning() {
-		if err := m.daemon.ReloadConfig(); err != nil {
-			log := logger.FromContext(ctx)
-			log.ErrorContext(ctx, "failed to reload envoy config after delete", "error", err)
+		if err := m.daemon.ReloadConfig(configData); err != nil {
+			log.ErrorContext(ctx, "failed to reload caddy config after delete", "error", err)
 			return ErrConfigValidationFailed
 		}
+	}
+
+	// Write config to disk
+	if err := m.configGenerator.WriteConfig(ctx, ingresses, ipResolver); err != nil {
+		log.ErrorContext(ctx, "failed to write config after delete", "error", err)
 	}
 
 	return nil
@@ -326,7 +331,7 @@ func (m *manager) Shutdown() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Only stop Envoy if configured to do so
+	// Only stop Caddy if configured to do so
 	if m.daemon.StopOnShutdown() {
 		return m.daemon.Stop()
 	}
@@ -349,7 +354,7 @@ func (m *manager) loadAllIngresses() ([]Ingress, error) {
 	return ingresses, nil
 }
 
-// regenerateConfig regenerates the Envoy config file from the given ingresses.
+// regenerateConfig regenerates the Caddy config file from the given ingresses.
 func (m *manager) regenerateConfig(ctx context.Context, ingresses []Ingress) error {
 	ipResolver := func(instance string) (string, error) {
 		return m.instanceResolver.ResolveInstanceIP(ctx, instance)

@@ -19,13 +19,13 @@ var (
 	// ErrInstanceNoNetwork is returned when the target instance has no network.
 	ErrInstanceNoNetwork = errors.New("target instance has no network configured")
 
-	// ErrEnvoyNotRunning is returned when Envoy is not running.
-	ErrEnvoyNotRunning = errors.New("envoy is not running")
+	// ErrCaddyNotRunning is returned when Caddy is not running.
+	ErrCaddyNotRunning = errors.New("caddy is not running")
 
 	// ErrHostnameInUse is returned when a hostname is already in use by another ingress.
 	ErrHostnameInUse = errors.New("hostname already in use by another ingress")
 
-	// ErrConfigValidationFailed is returned when Envoy config validation fails.
-	// This indicates a server-side bug since input validation should catch user errors.
-	ErrConfigValidationFailed = errors.New("internal error: config validation failed")
+	// ErrConfigValidationFailed is returned when Caddy config validation fails.
+	// This indicates the config was rejected by Caddy's admin API.
+	ErrConfigValidationFailed = errors.New("config validation failed")
 )
