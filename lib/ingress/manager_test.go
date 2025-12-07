@@ -65,7 +65,8 @@ func setupTestManager(t *testing.T) (Manager, *mockInstanceResolver, *paths.Path
 		// Empty ACME config - TLS not configured for basic tests
 	}
 
-	manager := NewManager(p, config, resolver)
+	// Pass nil for otelLogger - no log forwarding in tests
+	manager := NewManager(p, config, resolver, nil)
 
 	cleanup := func() {
 		os.RemoveAll(tmpDir)

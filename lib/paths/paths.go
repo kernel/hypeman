@@ -245,6 +245,11 @@ func (p *Paths) CaddyConfigDir() string {
 	return filepath.Join(p.CaddyDir(), "config")
 }
 
+// CaddySystemLog returns the path to Caddy's system log file (JSON format).
+func (p *Paths) CaddySystemLog() string {
+	return filepath.Join(p.CaddyDir(), "system.log")
+}
+
 // Ingress path methods
 
 // IngressesDir returns the root ingresses directory.

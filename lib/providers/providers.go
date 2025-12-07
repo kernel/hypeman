@@ -140,7 +140,14 @@ func ProvideIngressManager(p *paths.Paths, cfg *config.Config, instanceManager i
 		},
 	}
 
+	// Create OTEL logger for Caddy log forwarding (if OTEL is enabled)
+	var otelLogger *slog.Logger
+	if otelHandler := hypemanotel.GetGlobalLogHandler(); otelHandler != nil {
+		logCfg := logger.NewConfig()
+		otelLogger = logger.NewSubsystemLogger(logger.SubsystemCaddy, logCfg, otelHandler)
+	}
+
 	// IngressResolver from instances package implements ingress.InstanceResolver
 	resolver := instances.NewIngressResolver(instanceManager)
-	return ingress.NewManager(p, ingressConfig, resolver)
+	return ingress.NewManager(p, ingressConfig, resolver, otelLogger)
 }

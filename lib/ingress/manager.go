@@ -3,6 +3,7 @@ package ingress
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"sync"
 	"time"
@@ -81,12 +82,20 @@ type manager struct {
 	instanceResolver InstanceResolver
 	daemon           *CaddyDaemon
 	configGenerator  *CaddyConfigGenerator
+	logForwarder     *CaddyLogForwarder
 	mu               sync.RWMutex
 }
 
 // NewManager creates a new ingress manager.
-func NewManager(p *paths.Paths, config Config, instanceResolver InstanceResolver) Manager {
+// If otelLogger is non-nil, Caddy system logs will be forwarded to OTEL.
+func NewManager(p *paths.Paths, config Config, instanceResolver InstanceResolver, otelLogger *slog.Logger) Manager {
 	daemon := NewCaddyDaemon(p, config.AdminAddress, config.AdminPort, config.StopOnShutdown)
+
+	// Create log forwarder if OTEL logger is provided
+	var logForwarder *CaddyLogForwarder
+	if otelLogger != nil {
+		logForwarder = NewCaddyLogForwarder(p, otelLogger)
+	}
 
 	return &manager{
 		paths:            p,
@@ -94,6 +103,7 @@ func NewManager(p *paths.Paths, config Config, instanceResolver InstanceResolver
 		instanceResolver: instanceResolver,
 		daemon:           daemon,
 		configGenerator:  NewCaddyConfigGenerator(p, config.ListenAddress, config.AdminAddress, config.AdminPort, config.ACME),
+		logForwarder:     logForwarder,
 	}
 }
 
@@ -124,6 +134,14 @@ func (m *manager) Initialize(ctx context.Context) error {
 	_, err = m.daemon.Start(ctx)
 	if err != nil {
 		return fmt.Errorf("start caddy: %w", err)
+	}
+
+	// Start log forwarder (if configured) to forward Caddy system logs to OTEL
+	if m.logForwarder != nil {
+		if err := m.logForwarder.Start(ctx); err != nil {
+			log.WarnContext(ctx, "failed to start caddy log forwarder", "error", err)
+			// Non-fatal - continue without log forwarding
+		}
 	}
 
 	return nil
@@ -330,6 +348,11 @@ func (m *manager) Delete(ctx context.Context, idOrName string) error {
 func (m *manager) Shutdown() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	// Stop log forwarder
+	if m.logForwarder != nil {
+		m.logForwarder.Stop()
+	}
 
 	// Only stop Caddy if configured to do so
 	if m.daemon.StopOnShutdown() {

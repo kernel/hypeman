@@ -183,9 +183,27 @@ func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 		"disable_redirects": true,
 	}
 
+	// Disable access logs (per-request logs) - we only want system logs
+	server["logs"] = map[string]interface{}{}
+
 	config := map[string]interface{}{
 		"admin": map[string]interface{}{
 			"listen": fmt.Sprintf("%s:%d", g.adminAddress, g.adminPort),
+		},
+		// Configure logging: system logs only (no access logs)
+		"logging": map[string]interface{}{
+			"logs": map[string]interface{}{
+				"default": map[string]interface{}{
+					"writer": map[string]interface{}{
+						"output":   "file",
+						"filename": g.paths.CaddySystemLog(),
+					},
+					"encoder": map[string]interface{}{
+						"format": "json",
+					},
+					"level": "INFO",
+				},
+			},
 		},
 		"apps": map[string]interface{}{
 			"http": map[string]interface{}{
