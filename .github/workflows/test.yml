@@ -42,4 +42,5 @@ jobs:
           ACME_CA: "https://acme-staging-v02.api.letsencrypt.org/directory"
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           TLS_TEST_DOMAIN: "test.hypeman-development.com"
+          TLS_ALLOWED_DOMAINS: '*.hypeman-development.com'
         run: make test
