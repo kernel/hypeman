@@ -142,6 +142,10 @@ func TestGenerateConfig_SingleIngress(t *testing.T) {
 	assert.Contains(t, configStr, "api.example.com", "config should contain hostname")
 	assert.Contains(t, configStr, "10.100.0.10:8080", "config should contain instance dial address")
 	assert.Contains(t, configStr, "reverse_proxy", "config should contain reverse_proxy handler")
+
+	// Verify catch-all 404 route is present
+	assert.Contains(t, configStr, "static_response", "config should contain static_response handler for 404")
+	assert.Contains(t, configStr, "no ingress configured for hostname", "config should contain 404 message")
 }
 
 func TestGenerateConfig_MultipleRules(t *testing.T) {

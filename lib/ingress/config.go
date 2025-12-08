@@ -230,9 +230,24 @@ func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 		// Combine redirect routes (for HTTP) and main routes
 		// Use slices.Concat to avoid modifying original slices
 		allRoutes := slices.Concat(redirectRoutes, routes)
-		if len(allRoutes) > 0 {
-			server["routes"] = allRoutes
+
+		// Add catch-all route at the end to return 404 for unmatched hostnames
+		// This must be last since routes are evaluated in order
+		catchAllRoute := map[string]interface{}{
+			"handle": []interface{}{
+				map[string]interface{}{
+					"handler":     "static_response",
+					"status_code": 404,
+					"headers": map[string]interface{}{
+						"Content-Type": []string{"text/plain; charset=utf-8"},
+					},
+					"body": "Not Found: no ingress configured for hostname {http.request.host}",
+				},
+			},
 		}
+		allRoutes = append(allRoutes, catchAllRoute)
+
+		server["routes"] = allRoutes
 
 		// Configure automatic HTTPS settings
 		if len(tlsHostnames) > 0 {
