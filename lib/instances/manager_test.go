@@ -490,6 +490,7 @@ func TestBasicEndToEnd(t *testing.T) {
 				DNSProvider:        ingress.DNSProviderCloudflare,
 				CA:                 acmeCA, // Use staging CA if set, otherwise production
 				CloudflareAPIToken: cloudflareToken,
+				AllowedDomains:     tlsTestDomain, // Allow the test domain
 			},
 		}
 

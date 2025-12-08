@@ -106,6 +106,7 @@ Hypeman can be configured using the following environment variables:
 | `ACME_EMAIL` | Email for ACME certificate registration (required for TLS ingresses) | _(empty)_ |
 | `ACME_DNS_PROVIDER` | DNS provider for ACME challenges: `cloudflare` or `route53` | _(empty)_ |
 | `ACME_CA` | ACME CA URL (empty = Let's Encrypt production) | _(empty)_ |
+| `TLS_ALLOWED_DOMAINS` | Comma-separated allowed domains for TLS (e.g., `*.example.com,api.other.com`) | _(empty)_ |
 | `DNS_PROPAGATION_TIMEOUT` | Max time to wait for DNS propagation (e.g., `2m`) | _(empty)_ |
 | `DNS_RESOLVERS` | Comma-separated DNS resolvers for propagation checking | _(empty)_ |
 | `CLOUDFLARE_API_TOKEN` | Cloudflare API token (when using `cloudflare` provider) | _(empty)_ |
