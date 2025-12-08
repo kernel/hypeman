@@ -177,7 +177,7 @@ func TestRegistryLayerCaching(t *testing.T) {
 	srcRef, err := name.ParseReference("docker.io/library/alpine:latest")
 	require.NoError(t, err)
 
-	img, err := remote.Image(srcRef)
+	img, err := remote.Image(srcRef, remote.WithAuthFromKeychain(authn.DefaultKeychain))
 	require.NoError(t, err)
 
 	digest, err := img.Digest()
