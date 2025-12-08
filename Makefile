@@ -12,6 +12,7 @@ OAPI_CODEGEN ?= $(BIN_DIR)/oapi-codegen
 AIR ?= $(BIN_DIR)/air
 WIRE ?= $(BIN_DIR)/wire
 GODOTENV ?= $(BIN_DIR)/godotenv
+XCADDY ?= $(BIN_DIR)/xcaddy
 
 # Install oapi-codegen
 $(OAPI_CODEGEN): | $(BIN_DIR)
@@ -29,7 +30,11 @@ $(WIRE): | $(BIN_DIR)
 $(GODOTENV): | $(BIN_DIR)
 	GOBIN=$(BIN_DIR) go install github.com/joho/godotenv/cmd/godotenv@latest
 
-install-tools: $(OAPI_CODEGEN) $(AIR) $(WIRE) $(GODOTENV)
+# Install xcaddy for building Caddy with plugins
+$(XCADDY): | $(BIN_DIR)
+	GOBIN=$(BIN_DIR) go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
+
+install-tools: $(OAPI_CODEGEN) $(AIR) $(WIRE) $(GODOTENV) $(XCADDY)
 
 # Download Cloud Hypervisor binaries
 download-ch-binaries:
@@ -55,24 +60,23 @@ CADDY_DNS_MODULES := --with github.com/caddy-dns/cloudflare --with github.com/ca
 
 # Build Caddy with DNS modules using xcaddy
 # xcaddy builds Caddy from source with the specified modules
-build-caddy-binaries:
+build-caddy-binaries: $(XCADDY)
 	@echo "Building Caddy $(CADDY_VERSION) with DNS modules..."
-	@echo "This requires xcaddy: go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest"
 	@mkdir -p lib/ingress/binaries/caddy/$(CADDY_VERSION)/x86_64
 	@mkdir -p lib/ingress/binaries/caddy/$(CADDY_VERSION)/aarch64
 	@echo "Building Caddy $(CADDY_VERSION) for x86_64..."
-	GOOS=linux GOARCH=amd64 xcaddy build $(CADDY_VERSION) \
+	GOOS=linux GOARCH=amd64 $(XCADDY) build $(CADDY_VERSION) \
 		$(CADDY_DNS_MODULES) \
 		--output lib/ingress/binaries/caddy/$(CADDY_VERSION)/x86_64/caddy
 	@echo "Building Caddy $(CADDY_VERSION) for aarch64..."
-	GOOS=linux GOARCH=arm64 xcaddy build $(CADDY_VERSION) \
+	GOOS=linux GOARCH=arm64 $(XCADDY) build $(CADDY_VERSION) \
 		$(CADDY_DNS_MODULES) \
 		--output lib/ingress/binaries/caddy/$(CADDY_VERSION)/aarch64/caddy
 	@chmod +x lib/ingress/binaries/caddy/$(CADDY_VERSION)/*/caddy
 	@echo "Caddy binaries built successfully with DNS modules"
 
 # Build Caddy for current architecture only (faster for development)
-build-caddy:
+build-caddy: $(XCADDY)
 	@echo "Building Caddy $(CADDY_VERSION) with DNS modules for current architecture..."
 	@ARCH=$$(uname -m); \
 	if [ "$$ARCH" = "x86_64" ]; then \
@@ -85,7 +89,7 @@ build-caddy:
 		echo "Unsupported architecture: $$ARCH"; exit 1; \
 	fi; \
 	mkdir -p lib/ingress/binaries/caddy/$(CADDY_VERSION)/$$CADDY_ARCH; \
-	GOOS=linux GOARCH=$$GOARCH xcaddy build $(CADDY_VERSION) \
+	GOOS=linux GOARCH=$$GOARCH $(XCADDY) build $(CADDY_VERSION) \
 		$(CADDY_DNS_MODULES) \
 		--output lib/ingress/binaries/caddy/$(CADDY_VERSION)/$$CADDY_ARCH/caddy; \
 	chmod +x lib/ingress/binaries/caddy/$(CADDY_VERSION)/$$CADDY_ARCH/caddy
@@ -169,7 +173,7 @@ build-exec: | $(BIN_DIR)
 build-all: build build-exec
 
 # Run in development mode with hot reload
-dev: $(AIR)
+dev: ensure-ch-binaries ensure-caddy-binaries lib/system/exec_agent/exec-agent $(AIR)
 	$(AIR) -c .air.toml
 
 # Run tests
