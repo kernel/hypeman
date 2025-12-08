@@ -305,8 +305,16 @@ func run() error {
 			logger.Error("failed to shutdown http server", "error", err)
 			return err
 		}
-
 		logger.Info("http server shutdown complete")
+
+		// Shutdown ingress manager (stops Caddy if CADDY_STOP_ON_SHUTDOWN=true)
+		if err := app.IngressManager.Shutdown(); err != nil {
+			logger.Error("failed to shutdown ingress manager", "error", err)
+			// Don't return error - continue with shutdown
+		} else {
+			logger.Info("ingress manager shutdown complete")
+		}
+
 		return nil
 	})
 
