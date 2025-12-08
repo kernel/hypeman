@@ -1,6 +1,11 @@
 package ingress
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+	"regexp"
+	"strings"
+)
 
 // Common errors returned by the ingress package.
 var (
@@ -25,4 +30,23 @@ var (
 	// ErrConfigValidationFailed is returned when Caddy config validation fails.
 	// This indicates the config was rejected by Caddy's admin API.
 	ErrConfigValidationFailed = errors.New("config validation failed")
+
+	// ErrPortInUse is returned when the requested port is already in use by another process.
+	ErrPortInUse = errors.New("port already in use")
 )
+
+// portInUseRegex matches Caddy's "address already in use" error messages
+var portInUseRegex = regexp.MustCompile(`listen tcp [^:]+:(\d+): bind: address already in use`)
+
+// ParseCaddyError parses a Caddy error response and returns a more specific error if possible.
+func ParseCaddyError(caddyError string) error {
+	// Check for "address already in use" errors
+	if strings.Contains(caddyError, "address already in use") {
+		if matches := portInUseRegex.FindStringSubmatch(caddyError); len(matches) > 1 {
+			return fmt.Errorf("%w: port %s is already bound by another process", ErrPortInUse, matches[1])
+		}
+		return fmt.Errorf("%w: address is already bound by another process", ErrPortInUse)
+	}
+
+	return nil
+}

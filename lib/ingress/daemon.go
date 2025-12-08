@@ -213,7 +213,14 @@ func (d *CaddyDaemon) ReloadConfig(config []byte) error {
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("caddy reload failed (status %d): %s", resp.StatusCode, string(body))
+		bodyStr := string(body)
+
+		// Try to parse a more specific error
+		if specificErr := ParseCaddyError(bodyStr); specificErr != nil {
+			return specificErr
+		}
+
+		return fmt.Errorf("caddy reload failed (status %d): %s", resp.StatusCode, bodyStr)
 	}
 
 	return nil

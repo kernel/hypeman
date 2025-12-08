@@ -85,9 +85,20 @@ func (s *ApiService) CreateIngress(ctx context.Context, request oapi.CreateIngre
 				Code:    "hostname_in_use",
 				Message: err.Error(),
 			}, nil
+		case errors.Is(err, ingress.ErrPortInUse):
+			return oapi.CreateIngress409JSONResponse{
+				Code:    "port_in_use",
+				Message: err.Error(),
+			}, nil
 		case errors.Is(err, ingress.ErrInstanceNotFound):
 			return oapi.CreateIngress400JSONResponse{
 				Code:    "instance_not_found",
+				Message: err.Error(),
+			}, nil
+		case errors.Is(err, ingress.ErrConfigValidationFailed):
+			log.ErrorContext(ctx, "failed to create ingress", "error", err, "name", request.Body.Name)
+			return oapi.CreateIngress400JSONResponse{
+				Code:    "config_validation_failed",
 				Message: err.Error(),
 			}, nil
 		default:
