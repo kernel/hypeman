@@ -61,6 +61,7 @@ func setupTestManager(t *testing.T) (Manager, *mockInstanceResolver, *paths.Path
 		ListenAddress:  "0.0.0.0",
 		AdminAddress:   "127.0.0.1",
 		AdminPort:      12019, // Use different port for testing
+		DNSPort:        0,     // Use random port for testing to avoid conflicts
 		StopOnShutdown: true,
 		// Empty ACME config - TLS not configured for basic tests
 	}
@@ -697,6 +698,7 @@ func TestGetIngress_Resolution(t *testing.T) {
 		ListenAddress:  "0.0.0.0",
 		AdminAddress:   "127.0.0.1",
 		AdminPort:      12019,
+		DNSPort:        0, // Use random port for testing
 		StopOnShutdown: true,
 	}
 	manager := NewManager(p, config, resolver, nil)
@@ -766,6 +768,7 @@ func TestDeleteIngress_Resolution(t *testing.T) {
 		ListenAddress:  "0.0.0.0",
 		AdminAddress:   "127.0.0.1",
 		AdminPort:      12019,
+		DNSPort:        0, // Use random port for testing
 		StopOnShutdown: true,
 	}
 

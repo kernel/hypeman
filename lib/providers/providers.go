@@ -133,6 +133,7 @@ func ProvideIngressManager(p *paths.Paths, cfg *config.Config, instanceManager i
 		ListenAddress:  cfg.CaddyListenAddress,
 		AdminAddress:   cfg.CaddyAdminAddress,
 		AdminPort:      cfg.CaddyAdminPort,
+		DNSPort:        ingress.DefaultDNSPort,
 		StopOnShutdown: cfg.CaddyStopOnShutdown,
 		ACME: ingress.ACMEConfig{
 			Email:                 cfg.AcmeEmail,

@@ -25,7 +25,9 @@ func setupTestGenerator(t *testing.T) (*CaddyConfigGenerator, *paths.Paths, func
 	require.NoError(t, os.MkdirAll(p.CaddyDataDir(), 0755))
 
 	// Empty ACMEConfig means TLS is not configured
-	generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", 2019, ACMEConfig{})
+	// Use DNS resolver port for dynamic upstreams
+	dnsResolverPort := 5353
+	generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", 2019, ACMEConfig{}, dnsResolverPort)
 
 	cleanup := func() {
 		os.RemoveAll(tmpDir)
@@ -40,11 +42,8 @@ func TestGenerateConfig_EmptyIngresses(t *testing.T) {
 
 	ctx := context.Background()
 	ingresses := []Ingress{}
-	ipResolver := func(instance string) (string, error) {
-		return "10.100.0.10", nil
-	}
 
-	data, err := generator.GenerateConfig(ctx, ingresses, ipResolver)
+	data, err := generator.GenerateConfig(ctx, ingresses)
 	require.NoError(t, err)
 
 	// Parse JSON to verify structure
@@ -82,10 +81,10 @@ func TestGenerateConfig_StoragePath(t *testing.T) {
 	require.NoError(t, os.MkdirAll(p.CaddyDir(), 0755))
 	require.NoError(t, os.MkdirAll(p.CaddyDataDir(), 0755))
 
-	generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", 2019, ACMEConfig{})
+	generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", 2019, ACMEConfig{}, 5353)
 
 	ctx := context.Background()
-	data, err := generator.GenerateConfig(ctx, []Ingress{}, func(string) (string, error) { return "", nil })
+	data, err := generator.GenerateConfig(ctx, []Ingress{})
 	require.NoError(t, err)
 
 	var config map[string]interface{}
@@ -126,22 +125,18 @@ func TestGenerateConfig_SingleIngress(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	ipResolver := func(instance string) (string, error) {
-		if instance == "my-api" {
-			return "10.100.0.10", nil
-		}
-		return "", ErrInstanceNotFound
-	}
 
-	data, err := generator.GenerateConfig(ctx, ingresses, ipResolver)
+	data, err := generator.GenerateConfig(ctx, ingresses)
 	require.NoError(t, err)
 
 	configStr := string(data)
 
 	// Verify key elements are present
 	assert.Contains(t, configStr, "api.example.com", "config should contain hostname")
-	assert.Contains(t, configStr, "10.100.0.10:8080", "config should contain instance dial address")
+	assert.Contains(t, configStr, "dynamic_upstreams", "config should use dynamic upstreams")
 	assert.Contains(t, configStr, "reverse_proxy", "config should contain reverse_proxy handler")
+	assert.Contains(t, configStr, "my-api", "config should contain instance name in upstream URL")
+	assert.Contains(t, configStr, "8080", "config should contain target port")
 
 	// Verify catch-all 404 route is present
 	assert.Contains(t, configStr, "static_response", "config should contain static_response handler for 404")
@@ -170,17 +165,7 @@ func TestGenerateConfig_MultipleRules(t *testing.T) {
 		},
 	}
 
-	ipResolver := func(instance string) (string, error) {
-		switch instance {
-		case "api-service":
-			return "10.100.0.10", nil
-		case "web-service":
-			return "10.100.0.11", nil
-		}
-		return "", ErrInstanceNotFound
-	}
-
-	data, err := generator.GenerateConfig(ctx, ingresses, ipResolver)
+	data, err := generator.GenerateConfig(ctx, ingresses)
 	require.NoError(t, err)
 
 	configStr := string(data)
@@ -188,8 +173,8 @@ func TestGenerateConfig_MultipleRules(t *testing.T) {
 	// Verify both hosts are present
 	assert.Contains(t, configStr, "api.example.com")
 	assert.Contains(t, configStr, "web.example.com")
-	assert.Contains(t, configStr, "10.100.0.10:8080")
-	assert.Contains(t, configStr, "10.100.0.11:3000")
+	assert.Contains(t, configStr, "api-service")
+	assert.Contains(t, configStr, "web-service")
 }
 
 func TestGenerateConfig_MultipleIngresses(t *testing.T) {
@@ -210,26 +195,16 @@ func TestGenerateConfig_MultipleIngresses(t *testing.T) {
 		},
 	}
 
-	ipResolver := func(instance string) (string, error) {
-		switch instance {
-		case "app1":
-			return "10.100.0.10", nil
-		case "app2":
-			return "10.100.0.20", nil
-		}
-		return "", ErrInstanceNotFound
-	}
-
-	data, err := generator.GenerateConfig(ctx, ingresses, ipResolver)
+	data, err := generator.GenerateConfig(ctx, ingresses)
 	require.NoError(t, err)
 
 	configStr := string(data)
 
-	// Verify all hosts and IPs are present
+	// Verify all hosts and instances are present
 	assert.Contains(t, configStr, "app1.example.com")
 	assert.Contains(t, configStr, "app2.example.com")
-	assert.Contains(t, configStr, "10.100.0.10:8080")
-	assert.Contains(t, configStr, "10.100.0.20:9000")
+	assert.Contains(t, configStr, "app1")
+	assert.Contains(t, configStr, "app2")
 }
 
 func TestGenerateConfig_MultiplePorts(t *testing.T) {
@@ -261,19 +236,7 @@ func TestGenerateConfig_MultiplePorts(t *testing.T) {
 		},
 	}
 
-	ipResolver := func(instance string) (string, error) {
-		switch instance {
-		case "api":
-			return "10.100.0.10", nil
-		case "internal":
-			return "10.100.0.20", nil
-		case "metrics":
-			return "10.100.0.30", nil
-		}
-		return "", ErrInstanceNotFound
-	}
-
-	data, err := generator.GenerateConfig(ctx, ingresses, ipResolver)
+	data, err := generator.GenerateConfig(ctx, ingresses)
 	require.NoError(t, err)
 
 	configStr := string(data)
@@ -319,22 +282,10 @@ func TestGenerateConfig_DeterministicOrder(t *testing.T) {
 		},
 	}
 
-	ipResolver := func(instance string) (string, error) {
-		switch instance {
-		case "api":
-			return "10.100.0.10", nil
-		case "internal":
-			return "10.100.0.20", nil
-		case "metrics":
-			return "10.100.0.30", nil
-		}
-		return "", ErrInstanceNotFound
-	}
-
 	// Generate config multiple times and verify output is identical
 	var firstOutput []byte
 	for i := 0; i < 5; i++ {
-		data, err := generator.GenerateConfig(ctx, ingresses, ipResolver)
+		data, err := generator.GenerateConfig(ctx, ingresses)
 		require.NoError(t, err)
 
 		if firstOutput == nil {
@@ -377,59 +328,13 @@ func TestGenerateConfig_DefaultPort(t *testing.T) {
 		},
 	}
 
-	ipResolver := func(instance string) (string, error) {
-		return "10.100.0.10", nil
-	}
-
-	data, err := generator.GenerateConfig(ctx, ingresses, ipResolver)
+	data, err := generator.GenerateConfig(ctx, ingresses)
 	require.NoError(t, err)
 
 	configStr := string(data)
 
 	// Should create listener on port 80 (default)
 	assert.Contains(t, configStr, "0.0.0.0:80")
-}
-
-func TestGenerateConfig_SkipsUnresolvedInstances(t *testing.T) {
-	generator, _, cleanup := setupTestGenerator(t)
-	defer cleanup()
-
-	ctx := context.Background()
-	ingresses := []Ingress{
-		{
-			ID:   "ing-123",
-			Name: "partial-ingress",
-			Rules: []IngressRule{
-				{
-					Match:  IngressMatch{Hostname: "valid.example.com"},
-					Target: IngressTarget{Instance: "valid-instance", Port: 8080},
-				},
-				{
-					Match:  IngressMatch{Hostname: "invalid.example.com"},
-					Target: IngressTarget{Instance: "missing-instance", Port: 8080},
-				},
-			},
-		},
-	}
-
-	ipResolver := func(instance string) (string, error) {
-		if instance == "valid-instance" {
-			return "10.100.0.10", nil
-		}
-		return "", ErrInstanceNotFound
-	}
-
-	data, err := generator.GenerateConfig(ctx, ingresses, ipResolver)
-	require.NoError(t, err)
-
-	configStr := string(data)
-
-	// Valid instance should be present
-	assert.Contains(t, configStr, "valid.example.com")
-	assert.Contains(t, configStr, "10.100.0.10")
-
-	// Invalid instance should NOT be present
-	assert.NotContains(t, configStr, "invalid.example.com")
 }
 
 func TestWriteConfig(t *testing.T) {
@@ -445,11 +350,7 @@ func TestWriteConfig(t *testing.T) {
 		},
 	}
 
-	ipResolver := func(instance string) (string, error) {
-		return "10.100.0.10", nil
-	}
-
-	err := generator.WriteConfig(ctx, ingresses, ipResolver)
+	err := generator.WriteConfig(ctx, ingresses)
 	require.NoError(t, err)
 
 	// Verify config file was written
@@ -458,7 +359,7 @@ func TestWriteConfig(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, len(data) > 0, "config file should not be empty")
 	assert.Contains(t, string(data), "test.example.com")
-	assert.Contains(t, string(data), "10.100.0.10")
+	assert.Contains(t, string(data), "test-svc")
 }
 
 func TestConfigIsValidJSON(t *testing.T) {
@@ -479,11 +380,7 @@ func TestConfigIsValidJSON(t *testing.T) {
 		},
 	}
 
-	ipResolver := func(instance string) (string, error) {
-		return "10.100.0.10", nil
-	}
-
-	data, err := generator.GenerateConfig(ctx, ingresses, ipResolver)
+	data, err := generator.GenerateConfig(ctx, ingresses)
 	require.NoError(t, err)
 
 	// Verify it's valid JSON by parsing it
@@ -508,7 +405,7 @@ func TestGenerateConfig_WithTLS(t *testing.T) {
 		DNSProvider:        DNSProviderCloudflare,
 		CloudflareAPIToken: "test-token",
 	}
-	generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", 2019, acmeConfig)
+	generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", 2019, acmeConfig, 5353)
 
 	ctx := context.Background()
 	ingresses := []Ingress{
@@ -526,11 +423,7 @@ func TestGenerateConfig_WithTLS(t *testing.T) {
 		},
 	}
 
-	ipResolver := func(instance string) (string, error) {
-		return "10.100.0.10", nil
-	}
-
-	data, err := generator.GenerateConfig(ctx, ingresses, ipResolver)
+	data, err := generator.GenerateConfig(ctx, ingresses)
 	require.NoError(t, err)
 
 	configStr := string(data)
@@ -567,11 +460,7 @@ func TestGenerateConfig_WithTLSDisabled(t *testing.T) {
 		},
 	}
 
-	ipResolver := func(instance string) (string, error) {
-		return "10.100.0.10", nil
-	}
-
-	data, err := generator.GenerateConfig(ctx, ingresses, ipResolver)
+	data, err := generator.GenerateConfig(ctx, ingresses)
 	require.NoError(t, err)
 
 	configStr := string(data)
@@ -754,7 +643,7 @@ func TestGenerateConfig_MixedTLSAndNonTLS(t *testing.T) {
 		DNSProvider:        DNSProviderCloudflare,
 		CloudflareAPIToken: "test-token",
 	}
-	generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", 2019, acmeConfig)
+	generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", 2019, acmeConfig, 5353)
 
 	ctx := context.Background()
 	ingresses := []Ingress{
@@ -779,17 +668,7 @@ func TestGenerateConfig_MixedTLSAndNonTLS(t *testing.T) {
 		},
 	}
 
-	ipResolver := func(instance string) (string, error) {
-		switch instance {
-		case "api":
-			return "10.100.0.10", nil
-		case "secure":
-			return "10.100.0.20", nil
-		}
-		return "", ErrInstanceNotFound
-	}
-
-	data, err := generator.GenerateConfig(ctx, ingresses, ipResolver)
+	data, err := generator.GenerateConfig(ctx, ingresses)
 	require.NoError(t, err)
 
 	configStr := string(data)
@@ -852,4 +731,77 @@ func TestHasTLSRules(t *testing.T) {
 			assert.Equal(t, tc.expected, result)
 		})
 	}
+}
+
+func TestGenerateConfig_PatternHostname(t *testing.T) {
+	generator, _, cleanup := setupTestGenerator(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	ingresses := []Ingress{
+		{
+			ID:   "pattern-ingress",
+			Name: "pattern-ingress",
+			Rules: []IngressRule{
+				{
+					Match:  IngressMatch{Hostname: "{instance}.example.com"},
+					Target: IngressTarget{Instance: "{instance}", Port: 8080},
+				},
+			},
+		},
+	}
+
+	data, err := generator.GenerateConfig(ctx, ingresses)
+	require.NoError(t, err)
+
+	configStr := string(data)
+
+	// Verify wildcard is used for hostname matching
+	assert.Contains(t, configStr, "*.example.com")
+
+	// Verify dynamic upstream uses Caddy placeholder for instance resolution
+	assert.Contains(t, configStr, "http.request.host.labels")
+}
+
+func TestGenerateConfig_DynamicUpstreams(t *testing.T) {
+	// Create temp dir
+	tmpDir, err := os.MkdirTemp("", "ingress-config-dynamic-test-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+
+	p := paths.New(tmpDir)
+	require.NoError(t, os.MkdirAll(p.CaddyDir(), 0755))
+	require.NoError(t, os.MkdirAll(p.CaddyDataDir(), 0755))
+
+	dnsPort := 5353
+	generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", 2019, ACMEConfig{}, dnsPort)
+
+	ctx := context.Background()
+	ingresses := []Ingress{
+		{
+			ID:   "ing-123",
+			Name: "test-ingress",
+			Rules: []IngressRule{
+				{
+					Match:  IngressMatch{Hostname: "api.example.com"},
+					Target: IngressTarget{Instance: "my-api", Port: 8080},
+				},
+			},
+		},
+	}
+
+	data, err := generator.GenerateConfig(ctx, ingresses)
+	require.NoError(t, err)
+
+	configStr := string(data)
+
+	// Verify DNS-based dynamic upstreams structure is present
+	assert.Contains(t, configStr, "dynamic_upstreams")
+	assert.Contains(t, configStr, `"source"`)
+	assert.Contains(t, configStr, `"a"`)
+
+	// Verify DNS hostname and resolver are configured
+	assert.Contains(t, configStr, "my-api.hypeman.internal")
+	assert.Contains(t, configStr, "resolver")
+	assert.Contains(t, configStr, "127.0.0.1:5353")
 }

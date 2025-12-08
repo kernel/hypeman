@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nrednav/cuid2"
+	"github.com/onkernel/hypeman/lib/dns"
 	"github.com/onkernel/hypeman/lib/logger"
 	"github.com/onkernel/hypeman/lib/paths"
 )
@@ -52,6 +53,9 @@ type Manager interface {
 	Shutdown() error
 }
 
+// DefaultDNSPort is the default port for the internal DNS server.
+const DefaultDNSPort = dns.DefaultPort
+
 // Config holds configuration for the ingress manager.
 type Config struct {
 	// ListenAddress is the address Caddy should listen on (default: 0.0.0.0).
@@ -62,6 +66,10 @@ type Config struct {
 
 	// AdminPort is the port for Caddy admin API (default: 2019).
 	AdminPort int
+
+	// DNSPort is the port for the internal DNS server used for dynamic upstream resolution.
+	// Default: 5353. Set to 0 to use a random available port.
+	DNSPort int
 
 	// StopOnShutdown determines whether to stop Caddy when hypeman shuts down (default: false).
 	// When false, Caddy continues running independently.
@@ -77,6 +85,7 @@ func DefaultConfig() Config {
 		ListenAddress:  "0.0.0.0",
 		AdminAddress:   "127.0.0.1",
 		AdminPort:      2019,
+		DNSPort:        dns.DefaultPort,
 		StopOnShutdown: false,
 	}
 }
@@ -88,6 +97,7 @@ type manager struct {
 	daemon           *CaddyDaemon
 	configGenerator  *CaddyConfigGenerator
 	logForwarder     *CaddyLogForwarder
+	dnsServer        *dns.Server
 	mu               sync.RWMutex
 }
 
@@ -102,13 +112,30 @@ func NewManager(p *paths.Paths, config Config, instanceResolver InstanceResolver
 		logForwarder = NewCaddyLogForwarder(p, otelLogger)
 	}
 
+	// Create DNS server for instance resolution
+	// The InstanceResolver interface is compatible with dns.InstanceResolver
+	dnsServer := dns.NewServer(instanceResolver, config.DNSPort, otelLogger)
+
+	// Create config generator with initial DNS port
+	// Note: If DNSPort was 0 (random), the actual port is determined in Initialize()
+	// after the DNS server starts. The config generator is recreated there with the actual port.
+	configGenerator := NewCaddyConfigGenerator(
+		p,
+		config.ListenAddress,
+		config.AdminAddress,
+		config.AdminPort,
+		config.ACME,
+		dnsServer.Port(),
+	)
+
 	return &manager{
 		paths:            p,
 		config:           config,
 		instanceResolver: instanceResolver,
 		daemon:           daemon,
-		configGenerator:  NewCaddyConfigGenerator(p, config.ListenAddress, config.AdminAddress, config.AdminPort, config.ACME),
+		configGenerator:  configGenerator,
 		logForwarder:     logForwarder,
+		dnsServer:        dnsServer,
 	}
 }
 
@@ -118,6 +145,22 @@ func (m *manager) Initialize(ctx context.Context) error {
 	defer m.mu.Unlock()
 
 	log := logger.FromContext(ctx)
+
+	// Start DNS server for instance resolution
+	if err := m.dnsServer.Start(ctx); err != nil {
+		return fmt.Errorf("start DNS server: %w", err)
+	}
+
+	// Create config generator now that DNS server is running and we know the actual port
+	// (important when DNSPort was configured as 0 for random port)
+	m.configGenerator = NewCaddyConfigGenerator(
+		m.paths,
+		m.config.ListenAddress,
+		m.config.AdminAddress,
+		m.config.AdminPort,
+		m.config.ACME,
+		m.dnsServer.Port(),
+	)
 
 	// Load existing ingresses
 	ingresses, err := m.loadAllIngresses()
@@ -181,21 +224,35 @@ func (m *manager) Create(ctx context.Context, req CreateIngressRequest) (*Ingres
 				return nil, fmt.Errorf("%w: TLS requested but ACME is not configured (set ACME_EMAIL and ACME_DNS_PROVIDER)", ErrInvalidRequest)
 			}
 			// Check if domain is in the allowed list
-			if !m.config.ACME.IsDomainAllowed(rule.Match.Hostname) {
-				return nil, fmt.Errorf("%w: %q is not in TLS_ALLOWED_DOMAINS (allowed: %s)", ErrDomainNotAllowed, rule.Match.Hostname, m.config.ACME.AllowedDomains)
+			// For pattern hostnames, check the wildcard pattern (e.g., "*.example.com")
+			domainToCheck := rule.Match.Hostname
+			if rule.Match.IsPattern() {
+				pattern, err := rule.Match.ParsePattern()
+				if err != nil {
+					return nil, fmt.Errorf("invalid hostname pattern: %w", err)
+				}
+				domainToCheck = pattern.Wildcard
+			}
+			if !m.config.ACME.IsDomainAllowed(domainToCheck) {
+				return nil, fmt.Errorf("%w: %q is not in TLS_ALLOWED_DOMAINS (allowed: %s)", ErrDomainNotAllowed, domainToCheck, m.config.ACME.AllowedDomains)
 			}
 		}
 	}
 
-	// Validate that all target instances exist
+	// Validate that all target instances exist (only for literal hostnames)
+	// Pattern hostnames have dynamic target instances that can't be validated at creation time
 	for _, rule := range req.Rules {
-		exists, err := m.instanceResolver.InstanceExists(ctx, rule.Target.Instance)
-		if err != nil {
-			return nil, fmt.Errorf("check instance %q: %w", rule.Target.Instance, err)
+		if !rule.Match.IsPattern() {
+			// Literal hostname - validate instance exists
+			exists, err := m.instanceResolver.InstanceExists(ctx, rule.Target.Instance)
+			if err != nil {
+				return nil, fmt.Errorf("check instance %q: %w", rule.Target.Instance, err)
+			}
+			if !exists {
+				return nil, fmt.Errorf("%w: instance %q not found", ErrInstanceNotFound, rule.Target.Instance)
+			}
 		}
-		if !exists {
-			return nil, fmt.Errorf("%w: instance %q not found", ErrInstanceNotFound, rule.Target.Instance)
-		}
+		// For pattern hostnames, instance validation happens at request time via the upstream resolver
 	}
 
 	// Check for hostname conflicts (hostname + port must be unique)
@@ -230,11 +287,8 @@ func (m *manager) Create(ctx context.Context, req CreateIngressRequest) (*Ingres
 	// Generate config with the new ingress included
 	// Use slices.Concat to avoid modifying the existingIngresses slice
 	allIngresses := slices.Concat(existingIngresses, []Ingress{ingress})
-	ipResolver := func(instance string) (string, error) {
-		return m.instanceResolver.ResolveInstanceIP(ctx, instance)
-	}
 
-	configData, err := m.configGenerator.GenerateConfig(ctx, allIngresses, ipResolver)
+	configData, err := m.configGenerator.GenerateConfig(ctx, allIngresses)
 	if err != nil {
 		return nil, fmt.Errorf("generate config: %w", err)
 	}
@@ -260,7 +314,7 @@ func (m *manager) Create(ctx context.Context, req CreateIngressRequest) (*Ingres
 	}
 
 	// Write config to disk (for Caddy restarts)
-	if err := m.configGenerator.WriteConfig(ctx, allIngresses, ipResolver); err != nil {
+	if err := m.configGenerator.WriteConfig(ctx, allIngresses); err != nil {
 		// Try to clean up the saved ingress
 		deleteIngressData(m.paths, id)
 		log.ErrorContext(ctx, "failed to write config after create", "error", err)
@@ -359,12 +413,8 @@ func (m *manager) Delete(ctx context.Context, idOrName string) error {
 		return fmt.Errorf("load ingresses: %w", err)
 	}
 
-	ipResolver := func(instance string) (string, error) {
-		return m.instanceResolver.ResolveInstanceIP(ctx, instance)
-	}
-
 	// Generate and validate new config
-	configData, err := m.configGenerator.GenerateConfig(ctx, ingresses, ipResolver)
+	configData, err := m.configGenerator.GenerateConfig(ctx, ingresses)
 	if err != nil {
 		return fmt.Errorf("generate config: %w", err)
 	}
@@ -378,7 +428,7 @@ func (m *manager) Delete(ctx context.Context, idOrName string) error {
 	}
 
 	// Write config to disk
-	if err := m.configGenerator.WriteConfig(ctx, ingresses, ipResolver); err != nil {
+	if err := m.configGenerator.WriteConfig(ctx, ingresses); err != nil {
 		log.ErrorContext(ctx, "failed to write config after delete", "error", err)
 	}
 
@@ -393,6 +443,14 @@ func (m *manager) Shutdown() error {
 	// Stop log forwarder
 	if m.logForwarder != nil {
 		m.logForwarder.Stop()
+	}
+
+	// Stop DNS server
+	if m.dnsServer != nil {
+		if err := m.dnsServer.Stop(); err != nil {
+			// Log but don't fail - continue with shutdown
+			slog.Warn("failed to stop DNS server", "error", err)
+		}
 	}
 
 	// Only stop Caddy if configured to do so
@@ -420,11 +478,7 @@ func (m *manager) loadAllIngresses() ([]Ingress, error) {
 
 // regenerateConfig regenerates the Caddy config file from the given ingresses.
 func (m *manager) regenerateConfig(ctx context.Context, ingresses []Ingress) error {
-	ipResolver := func(instance string) (string, error) {
-		return m.instanceResolver.ResolveInstanceIP(ctx, instance)
-	}
-
-	return m.configGenerator.WriteConfig(ctx, ingresses, ipResolver)
+	return m.configGenerator.WriteConfig(ctx, ingresses)
 }
 
 // storedToIngress converts a storedIngress to an Ingress.

@@ -351,6 +351,7 @@ func TestBasicEndToEnd(t *testing.T) {
 		ListenAddress:  "127.0.0.1",
 		AdminAddress:   "127.0.0.1",
 		AdminPort:      adminPort,
+		DNSPort:        0, // Use random port for testing
 		StopOnShutdown: true,
 	}
 
@@ -484,6 +485,7 @@ func TestBasicEndToEnd(t *testing.T) {
 			ListenAddress:  "0.0.0.0", // Must be accessible for certificate validation
 			AdminAddress:   "127.0.0.1",
 			AdminPort:      tlsAdminPort,
+			DNSPort:        0, // Use random port for testing
 			StopOnShutdown: true,
 			ACME: ingress.ACMEConfig{
 				Email:              acmeEmail,

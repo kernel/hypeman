@@ -144,7 +144,7 @@ func run() error {
 	}
 	logger.Info("Network manager initialized")
 
-	// Initialize ingress manager (starts Caddy daemon)
+	// Initialize ingress manager (starts Caddy daemon and DNS server for dynamic upstreams)
 	logger.Info("Initializing ingress manager...")
 	if err := app.IngressManager.Initialize(app.Ctx); err != nil {
 		logger.Error("failed to initialize ingress manager", "error", err)

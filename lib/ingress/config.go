@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/onkernel/hypeman/lib/dns"
 	"github.com/onkernel/hypeman/lib/logger"
 	"github.com/onkernel/hypeman/lib/paths"
 )
@@ -134,32 +135,34 @@ func (c *ACMEConfig) IsTLSConfigured() bool {
 
 // CaddyConfigGenerator generates Caddy configuration from ingress resources.
 type CaddyConfigGenerator struct {
-	paths         *paths.Paths
-	listenAddress string
-	adminAddress  string
-	adminPort     int
-	acme          ACMEConfig
+	paths           *paths.Paths
+	listenAddress   string
+	adminAddress    string
+	adminPort       int
+	acme            ACMEConfig
+	dnsResolverPort int
 }
 
 // NewCaddyConfigGenerator creates a new Caddy config generator.
-func NewCaddyConfigGenerator(p *paths.Paths, listenAddress string, adminAddress string, adminPort int, acme ACMEConfig) *CaddyConfigGenerator {
+func NewCaddyConfigGenerator(p *paths.Paths, listenAddress string, adminAddress string, adminPort int, acme ACMEConfig, dnsResolverPort int) *CaddyConfigGenerator {
 	return &CaddyConfigGenerator{
-		paths:         p,
-		listenAddress: listenAddress,
-		adminAddress:  adminAddress,
-		adminPort:     adminPort,
-		acme:          acme,
+		paths:           p,
+		listenAddress:   listenAddress,
+		adminAddress:    adminAddress,
+		adminPort:       adminPort,
+		acme:            acme,
+		dnsResolverPort: dnsResolverPort,
 	}
 }
 
 // GenerateConfig generates the Caddy JSON configuration.
-func (g *CaddyConfigGenerator) GenerateConfig(ctx context.Context, ingresses []Ingress, ipResolver func(instance string) (string, error)) ([]byte, error) {
-	config := g.buildConfig(ctx, ingresses, ipResolver)
+func (g *CaddyConfigGenerator) GenerateConfig(ctx context.Context, ingresses []Ingress) ([]byte, error) {
+	config := g.buildConfig(ctx, ingresses)
 	return json.MarshalIndent(config, "", "  ")
 }
 
 // buildConfig builds the complete Caddy configuration.
-func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingress, ipResolver func(instance string) (string, error)) map[string]interface{} {
+func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingress) map[string]interface{} {
 	log := logger.FromContext(ctx)
 
 	// Build routes from ingresses
@@ -170,38 +173,57 @@ func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 
 	for _, ingress := range ingresses {
 		for _, rule := range ingress.Rules {
-			// Resolve instance IP
-			ip, err := ipResolver(rule.Target.Instance)
-			if err != nil {
-				log.WarnContext(ctx, "skipping ingress rule: cannot resolve instance IP",
-					"ingress_id", ingress.ID,
-					"ingress_name", ingress.Name,
-					"hostname", rule.Match.Hostname,
-					"instance", rule.Target.Instance,
-					"error", err)
-				continue
-			}
-
 			port := rule.Match.GetPort()
 			listenPorts[port] = true
 
-			// Build the route
+			// Determine hostname pattern (wildcard or literal) and instance expression
+			var hostnameMatch string
+			var instanceExpr string
+
+			if rule.Match.IsPattern() {
+				// Pattern hostname - parse and use wildcard + Caddy placeholders
+				pattern, err := rule.Match.ParsePattern()
+				if err != nil {
+					log.WarnContext(ctx, "skipping ingress rule: invalid hostname pattern",
+						"ingress_id", ingress.ID,
+						"ingress_name", ingress.Name,
+						"hostname", rule.Match.Hostname,
+						"error", err)
+					continue
+				}
+				hostnameMatch = pattern.Wildcard
+				instanceExpr = pattern.ResolveInstance(rule.Target.Instance)
+			} else {
+				// Literal hostname - exact match
+				hostnameMatch = rule.Match.Hostname
+				instanceExpr = rule.Target.Instance
+			}
+
+			// Build DNS hostname for instance resolution
+			// The instance expression may be a Caddy placeholder like {http.request.host.labels.2}
+			// This becomes e.g., "my-api.hypeman.internal" or "{http.request.host.labels.2}.hypeman.internal"
+			dnsHostname := fmt.Sprintf("%s.%s", instanceExpr, dns.Suffix)
+
+			// Build the route with DNS-based dynamic upstreams using the "a" module
+			reverseProxy := map[string]interface{}{
+				"handler": "reverse_proxy",
+				"dynamic_upstreams": map[string]interface{}{
+					"source": "a",
+					"name":   dnsHostname,
+					"port":   fmt.Sprintf("%d", rule.Target.Port),
+					"resolver": map[string]interface{}{
+						"addresses": []string{fmt.Sprintf("127.0.0.1:%d", g.dnsResolverPort)},
+					},
+				},
+			}
+
 			route := map[string]interface{}{
 				"match": []interface{}{
 					map[string]interface{}{
-						"host": []string{rule.Match.Hostname},
+						"host": []string{hostnameMatch},
 					},
 				},
-				"handle": []interface{}{
-					map[string]interface{}{
-						"handler": "reverse_proxy",
-						"upstreams": []interface{}{
-							map[string]interface{}{
-								"dial": fmt.Sprintf("%s:%d", ip, rule.Target.Port),
-							},
-						},
-					},
-				},
+				"handle": []interface{}{reverseProxy},
 			}
 
 			// Add terminal to stop processing after this route matches
@@ -210,8 +232,9 @@ func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 			routes = append(routes, route)
 
 			// Track TLS hostnames for automation policy
+			// For patterns, use the wildcard for TLS (e.g., "*.example.com")
 			if rule.TLS {
-				tlsHostnames = append(tlsHostnames, rule.Match.Hostname)
+				tlsHostnames = append(tlsHostnames, hostnameMatch)
 
 				// Add HTTP redirect route if requested
 				if rule.RedirectHTTP {
@@ -219,7 +242,7 @@ func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 					redirectRoute := map[string]interface{}{
 						"match": []interface{}{
 							map[string]interface{}{
-								"host": []string{rule.Match.Hostname},
+								"host": []string{hostnameMatch},
 							},
 						},
 						"handle": []interface{}{
@@ -418,7 +441,7 @@ func (g *CaddyConfigGenerator) buildDNSChallengeConfig() map[string]interface{} 
 }
 
 // WriteConfig writes the Caddy configuration to disk.
-func (g *CaddyConfigGenerator) WriteConfig(ctx context.Context, ingresses []Ingress, ipResolver func(instance string) (string, error)) error {
+func (g *CaddyConfigGenerator) WriteConfig(ctx context.Context, ingresses []Ingress) error {
 	configDir := filepath.Dir(g.paths.CaddyConfig())
 
 	// Ensure the directory exists
@@ -432,7 +455,7 @@ func (g *CaddyConfigGenerator) WriteConfig(ctx context.Context, ingresses []Ingr
 	}
 
 	// Generate config
-	data, err := g.GenerateConfig(ctx, ingresses, ipResolver)
+	data, err := g.GenerateConfig(ctx, ingresses)
 	if err != nil {
 		return fmt.Errorf("generate config: %w", err)
 	}
