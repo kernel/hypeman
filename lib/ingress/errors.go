@@ -19,9 +19,6 @@ var (
 	// ErrInstanceNoNetwork is returned when the target instance has no network.
 	ErrInstanceNoNetwork = errors.New("target instance has no network configured")
 
-	// ErrCaddyNotRunning is returned when Caddy is not running.
-	ErrCaddyNotRunning = errors.New("caddy is not running")
-
 	// ErrHostnameInUse is returned when a hostname is already in use by another ingress.
 	ErrHostnameInUse = errors.New("hostname already in use by another ingress")
 

@@ -34,7 +34,8 @@ func NewCaddyLogForwarder(p *paths.Paths, logger *slog.Logger) *CaddyLogForwarde
 func (f *CaddyLogForwarder) Start(ctx context.Context) error {
 	ctx, f.cancel = context.WithCancel(ctx)
 
-	logPath := f.paths.CaddySystemLog()
+	// Caddy writes JSON logs to stderr, which daemon.go redirects to CaddyLogFile
+	logPath := f.paths.CaddyLogFile()
 
 	// Use tail -F (capital F) to follow file even if it's recreated
 	f.cmd = exec.CommandContext(ctx, "tail", "-F", "-n", "0", logPath)
@@ -67,7 +68,9 @@ func (f *CaddyLogForwarder) Stop() {
 		f.cancel()
 	}
 	if f.cmd != nil && f.cmd.Process != nil {
-		f.cmd.Process.Kill()
+		if err := f.cmd.Process.Kill(); err != nil && f.logger != nil {
+			f.logger.Debug("failed to kill tail process", "error", err)
+		}
 	}
 	f.wg.Wait()
 }

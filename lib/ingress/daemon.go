@@ -127,9 +127,11 @@ func (d *CaddyDaemon) startCaddy(ctx context.Context) (int, error) {
 
 	if err := d.waitForAdmin(waitCtx); err != nil {
 		// Try to kill the process if it failed to start properly
-		if proc, err := os.FindProcess(pid); err == nil {
+		if proc, findErr := os.FindProcess(pid); findErr == nil {
 			proc.Kill()
 		}
+		// Clean up PID file to avoid stale file on restart
+		os.Remove(d.paths.CaddyPIDFile())
 		return 0, fmt.Errorf("caddy failed to start: %w", err)
 	}
 
@@ -150,31 +152,52 @@ func (d *CaddyDaemon) Stop() error {
 	resp, err := client.Post(adminURL, "", nil)
 	if err == nil {
 		resp.Body.Close()
-		time.Sleep(2 * time.Second)
 	}
 
-	// Check if still running, send SIGTERM
-	if d.isProcessRunning(pid) {
-		proc, err := os.FindProcess(pid)
-		if err == nil {
-			proc.Signal(syscall.SIGTERM)
-			time.Sleep(2 * time.Second)
-		}
+	// Wait for process to exit after admin API stop (up to 5s)
+	if d.waitForProcessExit(pid, 5*time.Second) {
+		os.Remove(d.paths.CaddyPIDFile())
+		d.pid = 0
+		return nil
 	}
 
-	// Final check, send SIGKILL if needed
-	if d.isProcessRunning(pid) {
-		proc, err := os.FindProcess(pid)
-		if err == nil {
-			proc.Signal(syscall.SIGKILL)
-		}
+	// Send SIGTERM if still running
+	if proc, err := os.FindProcess(pid); err == nil {
+		proc.Signal(syscall.SIGTERM)
 	}
+
+	// Wait for process to exit after SIGTERM
+	if d.waitForProcessExit(pid, 2*time.Second) {
+		os.Remove(d.paths.CaddyPIDFile())
+		d.pid = 0
+		return nil
+	}
+
+	// Final resort: SIGKILL
+	if proc, err := os.FindProcess(pid); err == nil {
+		proc.Signal(syscall.SIGKILL)
+	}
+
+	// Brief wait after SIGKILL with timeout
+	d.waitForProcessExit(pid, 1*time.Second)
 
 	// Clean up PID file
 	os.Remove(d.paths.CaddyPIDFile())
 	d.pid = 0
 
 	return nil
+}
+
+// waitForProcessExit polls until the process exits or timeout.
+func (d *CaddyDaemon) waitForProcessExit(pid int, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if !d.isProcessRunning(pid) {
+			return true
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return !d.isProcessRunning(pid)
 }
 
 // ReloadConfig reloads Caddy configuration by posting to the admin API.

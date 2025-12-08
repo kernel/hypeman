@@ -630,3 +630,27 @@ func TestCreateIngressRequest_Validate(t *testing.T) {
 		})
 	}
 }
+
+func TestCreateIngress_TLSWithoutACME(t *testing.T) {
+	// Setup manager without ACME configured
+	manager, _, _, cleanup := setupTestManager(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Try to create TLS ingress without ACME config
+	req := CreateIngressRequest{
+		Name: "tls-ingress",
+		Rules: []IngressRule{
+			{
+				Match:  IngressMatch{Hostname: "secure.example.com", Port: 443},
+				Target: IngressTarget{Instance: "my-api", Port: 8080},
+				TLS:    true,
+			},
+		},
+	}
+
+	_, err := manager.Create(ctx, req)
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidRequest)
+	assert.Contains(t, err.Error(), "ACME is not configured")
+}

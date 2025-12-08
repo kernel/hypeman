@@ -177,7 +177,7 @@ func TestTLSConfigGeneration(t *testing.T) {
 	t.Run("TLSWithCloudflare", func(t *testing.T) {
 		acmeConfig := ACMEConfig{
 			Email:              "admin@example.com",
-			DNSProvider:        "cloudflare",
+			DNSProvider:        DNSProviderCloudflare,
 			CloudflareAPIToken: "test-token",
 		}
 		generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", adminPort, acmeConfig)
@@ -221,7 +221,7 @@ func TestTLSConfigGeneration(t *testing.T) {
 	t.Run("TLSWithRoute53", func(t *testing.T) {
 		acmeConfig := ACMEConfig{
 			Email:              "admin@example.com",
-			DNSProvider:        "route53",
+			DNSProvider:        DNSProviderRoute53,
 			AWSAccessKeyID:     "AKID",
 			AWSSecretAccessKey: "secret",
 			AWSRegion:          "us-west-2",

@@ -47,7 +47,10 @@ func initializeApp() (*application, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	ingressManager := providers.ProvideIngressManager(paths, config, instancesManager)
+	ingressManager, err := providers.ProvideIngressManager(paths, config, instancesManager)
+	if err != nil {
+		return nil, nil, err
+	}
 	registry, err := providers.ProvideRegistry(paths, manager)
 	if err != nil {
 		return nil, nil, err

@@ -6,18 +6,45 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 
 	"github.com/onkernel/hypeman/lib/logger"
 	"github.com/onkernel/hypeman/lib/paths"
 )
+
+// DNSProvider represents supported DNS providers for ACME challenges.
+type DNSProvider string
+
+const (
+	// DNSProviderNone indicates no DNS provider is configured.
+	DNSProviderNone DNSProvider = ""
+	// DNSProviderCloudflare uses Cloudflare for DNS challenges.
+	DNSProviderCloudflare DNSProvider = "cloudflare"
+	// DNSProviderRoute53 uses AWS Route53 for DNS challenges.
+	DNSProviderRoute53 DNSProvider = "route53"
+)
+
+// ParseDNSProvider parses a string into a DNSProvider, returning an error for unknown values.
+func ParseDNSProvider(s string) (DNSProvider, error) {
+	switch s {
+	case "":
+		return DNSProviderNone, nil
+	case "cloudflare":
+		return DNSProviderCloudflare, nil
+	case "route53":
+		return DNSProviderRoute53, nil
+	default:
+		return DNSProviderNone, fmt.Errorf("unknown DNS provider %q: must be 'cloudflare' or 'route53'", s)
+	}
+}
 
 // ACMEConfig holds ACME/TLS configuration for Caddy.
 type ACMEConfig struct {
 	// Email is the ACME account email (required for TLS).
 	Email string
 
-	// DNSProvider is the DNS provider for challenges: "cloudflare" or "route53".
-	DNSProvider string
+	// DNSProvider is the DNS provider for ACME challenges.
+	DNSProvider DNSProvider
 
 	// CA is the ACME CA URL. Empty means Let's Encrypt production.
 	CA string
@@ -34,14 +61,14 @@ type ACMEConfig struct {
 
 // IsTLSConfigured returns true if ACME/TLS is properly configured.
 func (c *ACMEConfig) IsTLSConfigured() bool {
-	if c.Email == "" || c.DNSProvider == "" {
+	if c.Email == "" || c.DNSProvider == DNSProviderNone {
 		return false
 	}
 
 	switch c.DNSProvider {
-	case "cloudflare":
+	case DNSProviderCloudflare:
 		return c.CloudflareAPIToken != ""
-	case "route53":
+	case DNSProviderRoute53:
 		return c.AWSAccessKeyID != "" && c.AWSSecretAccessKey != ""
 	default:
 		return false
@@ -161,25 +188,11 @@ func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 		listenAddrs = append(listenAddrs, fmt.Sprintf("%s:%d", g.listenAddress, port))
 	}
 
-	// Build base config (admin API and logging only)
+	// Build base config (admin API only)
+	// Caddy writes JSON logs to stderr by default, which we capture to caddy.log
 	config := map[string]interface{}{
 		"admin": map[string]interface{}{
 			"listen": fmt.Sprintf("%s:%d", g.adminAddress, g.adminPort),
-		},
-		// Configure logging: system logs only (no access logs)
-		"logging": map[string]interface{}{
-			"logs": map[string]interface{}{
-				"default": map[string]interface{}{
-					"writer": map[string]interface{}{
-						"output":   "file",
-						"filename": g.paths.CaddySystemLog(),
-					},
-					"encoder": map[string]interface{}{
-						"format": "json",
-					},
-					"level": "INFO",
-				},
-			},
 		},
 	}
 
@@ -191,7 +204,8 @@ func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 		}
 
 		// Combine redirect routes (for HTTP) and main routes
-		allRoutes := append(redirectRoutes, routes...)
+		// Use slices.Concat to avoid modifying original slices
+		allRoutes := slices.Concat(redirectRoutes, routes)
 		if len(allRoutes) > 0 {
 			server["routes"] = allRoutes
 		}
@@ -270,14 +284,14 @@ func (g *CaddyConfigGenerator) buildTLSConfig(hostnames []string) map[string]int
 // buildDNSChallengeConfig builds the DNS challenge configuration.
 func (g *CaddyConfigGenerator) buildDNSChallengeConfig() map[string]interface{} {
 	switch g.acme.DNSProvider {
-	case "cloudflare":
+	case DNSProviderCloudflare:
 		return map[string]interface{}{
 			"provider": map[string]interface{}{
 				"name":      "cloudflare",
 				"api_token": g.acme.CloudflareAPIToken,
 			},
 		}
-	case "route53":
+	case DNSProviderRoute53:
 		provider := map[string]interface{}{
 			"name":              "route53",
 			"access_key_id":     g.acme.AWSAccessKeyID,
@@ -291,6 +305,7 @@ func (g *CaddyConfigGenerator) buildDNSChallengeConfig() map[string]interface{} 
 			"provider": provider,
 		}
 	default:
+		// Should not happen - DNSProvider is validated at startup
 		return map[string]interface{}{}
 	}
 }

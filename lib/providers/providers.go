@@ -122,7 +122,13 @@ func ProvideRegistry(p *paths.Paths, imageManager images.Manager) (*registry.Reg
 }
 
 // ProvideIngressManager provides the ingress manager
-func ProvideIngressManager(p *paths.Paths, cfg *config.Config, instanceManager instances.Manager) ingress.Manager {
+func ProvideIngressManager(p *paths.Paths, cfg *config.Config, instanceManager instances.Manager) (ingress.Manager, error) {
+	// Parse DNS provider - fail if invalid
+	dnsProvider, err := ingress.ParseDNSProvider(cfg.AcmeDnsProvider)
+	if err != nil {
+		return nil, fmt.Errorf("invalid ACME_DNS_PROVIDER: %w", err)
+	}
+
 	ingressConfig := ingress.Config{
 		ListenAddress:  cfg.CaddyListenAddress,
 		AdminAddress:   cfg.CaddyAdminAddress,
@@ -130,7 +136,7 @@ func ProvideIngressManager(p *paths.Paths, cfg *config.Config, instanceManager i
 		StopOnShutdown: cfg.CaddyStopOnShutdown,
 		ACME: ingress.ACMEConfig{
 			Email:              cfg.AcmeEmail,
-			DNSProvider:        cfg.AcmeDnsProvider,
+			DNSProvider:        dnsProvider,
 			CA:                 cfg.AcmeCA,
 			CloudflareAPIToken: cfg.CloudflareApiToken,
 			AWSAccessKeyID:     cfg.AwsAccessKeyId,
@@ -149,5 +155,5 @@ func ProvideIngressManager(p *paths.Paths, cfg *config.Config, instanceManager i
 
 	// IngressResolver from instances package implements ingress.InstanceResolver
 	resolver := instances.NewIngressResolver(instanceManager)
-	return ingress.NewManager(p, ingressConfig, resolver, otelLogger)
+	return ingress.NewManager(p, ingressConfig, resolver, otelLogger), nil
 }

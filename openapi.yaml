@@ -437,7 +437,7 @@ components:
           $ref: "#/components/schemas/IngressTarget"
         tls:
           type: boolean
-          description: Enable TLS termination (certificate auto-issued via ACME)
+          description: Enable TLS termination (certificate auto-issued via ACME).
           default: false
         redirect_http:
           type: boolean

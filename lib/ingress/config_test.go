@@ -57,10 +57,6 @@ func TestGenerateConfig_EmptyIngresses(t *testing.T) {
 	require.True(t, ok, "config should have admin section")
 	assert.Equal(t, "127.0.0.1:2019", admin["listen"])
 
-	// Should have logging section
-	_, ok = config["logging"].(map[string]interface{})
-	require.True(t, ok, "config should have logging section")
-
 	// Should NOT have apps section when no ingresses exist
 	// (no HTTP server started until ingresses are created)
 	_, hasApps := config["apps"]
@@ -393,7 +389,7 @@ func TestGenerateConfig_WithTLS(t *testing.T) {
 	// Create generator with ACME configured
 	acmeConfig := ACMEConfig{
 		Email:              "admin@example.com",
-		DNSProvider:        "cloudflare",
+		DNSProvider:        DNSProviderCloudflare,
 		CloudflareAPIToken: "test-token",
 	}
 	generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", 2019, acmeConfig)
@@ -483,7 +479,7 @@ func TestACMEConfig_IsTLSConfigured(t *testing.T) {
 			name: "cloudflare configured",
 			config: ACMEConfig{
 				Email:              "admin@example.com",
-				DNSProvider:        "cloudflare",
+				DNSProvider:        DNSProviderCloudflare,
 				CloudflareAPIToken: "token",
 			},
 			expected: true,
@@ -492,7 +488,7 @@ func TestACMEConfig_IsTLSConfigured(t *testing.T) {
 			name: "cloudflare missing token",
 			config: ACMEConfig{
 				Email:       "admin@example.com",
-				DNSProvider: "cloudflare",
+				DNSProvider: DNSProviderCloudflare,
 			},
 			expected: false,
 		},
@@ -500,7 +496,7 @@ func TestACMEConfig_IsTLSConfigured(t *testing.T) {
 			name: "route53 configured",
 			config: ACMEConfig{
 				Email:              "admin@example.com",
-				DNSProvider:        "route53",
+				DNSProvider:        DNSProviderRoute53,
 				AWSAccessKeyID:     "AKID",
 				AWSSecretAccessKey: "secret",
 			},
@@ -510,15 +506,15 @@ func TestACMEConfig_IsTLSConfigured(t *testing.T) {
 			name: "route53 missing credentials",
 			config: ACMEConfig{
 				Email:       "admin@example.com",
-				DNSProvider: "route53",
+				DNSProvider: DNSProviderRoute53,
 			},
 			expected: false,
 		},
 		{
-			name: "unknown provider",
+			name: "no provider set",
 			config: ACMEConfig{
 				Email:       "admin@example.com",
-				DNSProvider: "unknown",
+				DNSProvider: DNSProviderNone,
 			},
 			expected: false,
 		},
@@ -530,6 +526,79 @@ func TestACMEConfig_IsTLSConfigured(t *testing.T) {
 			assert.Equal(t, tc.expected, result)
 		})
 	}
+}
+
+func TestGenerateConfig_MixedTLSAndNonTLS(t *testing.T) {
+	// Create temp dir
+	tmpDir, err := os.MkdirTemp("", "ingress-config-mixed-tls-test-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+
+	p := paths.New(tmpDir)
+	require.NoError(t, os.MkdirAll(p.CaddyDir(), 0755))
+	require.NoError(t, os.MkdirAll(p.CaddyDataDir(), 0755))
+
+	// Create generator with ACME configured
+	acmeConfig := ACMEConfig{
+		Email:              "admin@example.com",
+		DNSProvider:        DNSProviderCloudflare,
+		CloudflareAPIToken: "test-token",
+	}
+	generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", 2019, acmeConfig)
+
+	ctx := context.Background()
+	ingresses := []Ingress{
+		{
+			ID:   "mixed-ingress",
+			Name: "mixed-ingress",
+			Rules: []IngressRule{
+				{
+					// Non-TLS rule on port 80
+					Match:  IngressMatch{Hostname: "api.example.com", Port: 80},
+					Target: IngressTarget{Instance: "api", Port: 8080},
+					TLS:    false,
+				},
+				{
+					// TLS rule on port 443
+					Match:        IngressMatch{Hostname: "secure.example.com", Port: 443},
+					Target:       IngressTarget{Instance: "secure", Port: 8080},
+					TLS:          true,
+					RedirectHTTP: true,
+				},
+			},
+		},
+	}
+
+	ipResolver := func(instance string) (string, error) {
+		switch instance {
+		case "api":
+			return "10.100.0.10", nil
+		case "secure":
+			return "10.100.0.20", nil
+		}
+		return "", ErrInstanceNotFound
+	}
+
+	data, err := generator.GenerateConfig(ctx, ingresses, ipResolver)
+	require.NoError(t, err)
+
+	configStr := string(data)
+
+	// Verify both hostnames are present
+	assert.Contains(t, configStr, "api.example.com")
+	assert.Contains(t, configStr, "secure.example.com")
+
+	// Verify TLS automation is configured for secure hostname
+	assert.Contains(t, configStr, "automation")
+	assert.Contains(t, configStr, "acme")
+
+	// Verify HTTP redirect is present (for TLS rule with redirect_http)
+	assert.Contains(t, configStr, "301")
+
+	// Verify automatic_https has disable_redirects (not fully disabled)
+	// because we have TLS hostnames
+	assert.Contains(t, configStr, `"disable_redirects"`)
+	assert.NotContains(t, configStr, `"disable": true`)
 }
 
 func TestHasTLSRules(t *testing.T) {

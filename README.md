@@ -60,7 +60,7 @@ getcap ./bin/hypeman
 
 **File Descriptor Limits:**
 
-Envoy (used for ingress) requires a higher file descriptor limit than the default on some systems (root defaults to 1024 on many systems). If you see "Too many open files" errors, increase the limit:
+Caddy (used for ingress) requires a higher file descriptor limit than the default on some systems. If you see "Too many open files" errors, increase the limit:
 
 ```bash
 # Check current limit (also check with: sudo bash -c 'ulimit -n')
@@ -98,11 +98,19 @@ Hypeman can be configured using the following environment variables:
 | `OTEL_ENDPOINT` | OTLP gRPC endpoint | `127.0.0.1:4317` |
 | `OTEL_SERVICE_INSTANCE_ID` | Instance ID for telemetry (differentiates multiple servers) | hostname |
 | `LOG_LEVEL` | Default log level (debug, info, warn, error) | `info` |
-| `LOG_LEVEL_<SUBSYSTEM>` | Per-subsystem log level (API, IMAGES, INSTANCES, NETWORK, VOLUMES, VMM, SYSTEM, EXEC) | inherits default |
-| `ENVOY_LISTEN_ADDRESS` | Address for Envoy ingress listeners | `0.0.0.0` |
-| `ENVOY_ADMIN_ADDRESS` | Address for Envoy admin API | `127.0.0.1` |
-| `ENVOY_ADMIN_PORT` | Port for Envoy admin API | `9901` |
-| `ENVOY_STOP_ON_SHUTDOWN` | Stop Envoy when hypeman shuts down (if false, Envoy continues running) | `false` |
+| `LOG_LEVEL_<SUBSYSTEM>` | Per-subsystem log level (API, IMAGES, INSTANCES, NETWORK, VOLUMES, VMM, SYSTEM, EXEC, CADDY) | inherits default |
+| `CADDY_LISTEN_ADDRESS` | Address for Caddy ingress listeners | `0.0.0.0` |
+| `CADDY_ADMIN_ADDRESS` | Address for Caddy admin API | `127.0.0.1` |
+| `CADDY_ADMIN_PORT` | Port for Caddy admin API | `2019` |
+| `CADDY_STOP_ON_SHUTDOWN` | Stop Caddy when hypeman shuts down (set to `false` for production - allows hypeman updates without dropping connections) | `true` |
+| `ACME_EMAIL` | Email for ACME certificate registration (required for TLS ingresses) | _(empty)_ |
+| `ACME_DNS_PROVIDER` | DNS provider for ACME challenges: `cloudflare` or `route53` | _(empty)_ |
+| `ACME_CA` | ACME CA URL (empty = Let's Encrypt production) | _(empty)_ |
+| `CLOUDFLARE_API_TOKEN` | Cloudflare API token (when using `cloudflare` provider) | _(empty)_ |
+| `AWS_ACCESS_KEY_ID` | AWS access key (when using `route53` provider) | _(empty)_ |
+| `AWS_SECRET_ACCESS_KEY` | AWS secret key (when using `route53` provider) | _(empty)_ |
+| `AWS_REGION` | AWS region (when using `route53` provider) | `us-east-1` |
+| `AWS_HOSTED_ZONE_ID` | AWS Route53 hosted zone ID (optional) | _(empty)_ |
 
 **Important: Subnet Configuration**
 
@@ -143,6 +151,45 @@ You can also inspect all routes:
 ip route show
 ```
 Pick the interface used by the default route (usually the line starting with `default`). Avoid using local bridges like `docker0`, `br-...`, `virbr0`, or `vmbr0` as the uplink; those are typically internal virtual networks, not your actual internet-facing interface.
+
+**TLS Ingress (HTTPS)**
+
+Hypeman uses Caddy with automatic ACME certificates for TLS termination. Certificates are issued via DNS-01 challenges (Cloudflare or Route53).
+
+To enable TLS ingresses:
+
+1. Configure ACME credentials in your `.env`:
+```bash
+# Required for any TLS ingress
+ACME_EMAIL=admin@example.com
+
+# For Cloudflare
+ACME_DNS_PROVIDER=cloudflare
+CLOUDFLARE_API_TOKEN=your-api-token
+
+# Or for Route53
+ACME_DNS_PROVIDER=route53
+AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
+AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+AWS_REGION=us-east-1
+```
+
+2. Create an ingress with TLS enabled:
+```bash
+curl -X POST http://localhost:8080/v1/ingresses \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "my-https-app",
+    "rules": [{
+      "match": {"hostname": "app.example.com", "port": 443},
+      "target": {"instance": "my-instance", "port": 8080},
+      "tls": true,
+      "redirect_http": true
+    }]
+  }'
+```
+
+Certificates are stored in `$DATA_DIR/caddy/data/` and auto-renewed by Caddy.
 
 **Setup:**
 
