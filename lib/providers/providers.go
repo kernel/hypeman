@@ -143,12 +143,6 @@ func ProvideIngressManager(p *paths.Paths, cfg *config.Config, instanceManager i
 			DNSResolvers:          cfg.DnsResolvers,
 			AllowedDomains:        cfg.TlsAllowedDomains,
 			CloudflareAPIToken:    cfg.CloudflareApiToken,
-			AWSAccessKeyID:        cfg.AwsAccessKeyId,
-			AWSSecretAccessKey:    cfg.AwsSecretAccessKey,
-			AWSProfile:            cfg.AwsProfile,
-			AWSRegion:             cfg.AwsRegion,
-			AWSHostedZoneID:       cfg.AwsHostedZoneId,
-			AWSMaxRetries:         cfg.AwsMaxRetries,
 		},
 	}
 

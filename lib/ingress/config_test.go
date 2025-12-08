@@ -498,34 +498,6 @@ func TestACMEConfig_IsTLSConfigured(t *testing.T) {
 			expected: false,
 		},
 		{
-			name: "route53 with explicit credentials",
-			config: ACMEConfig{
-				Email:              "admin@example.com",
-				DNSProvider:        DNSProviderRoute53,
-				AWSAccessKeyID:     "AKID",
-				AWSSecretAccessKey: "secret",
-			},
-			expected: true,
-		},
-		{
-			name: "route53 with profile",
-			config: ACMEConfig{
-				Email:       "admin@example.com",
-				DNSProvider: DNSProviderRoute53,
-				AWSProfile:  "my-profile",
-			},
-			expected: true,
-		},
-		{
-			name: "route53 with IAM role (no explicit credentials)",
-			config: ACMEConfig{
-				Email:       "admin@example.com",
-				DNSProvider: DNSProviderRoute53,
-				// Empty credentials = use IAM role/instance profile
-			},
-			expected: true,
-		},
-		{
 			name: "no provider set",
 			config: ACMEConfig{
 				Email:       "admin@example.com",

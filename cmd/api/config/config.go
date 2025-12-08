@@ -92,7 +92,7 @@ type Config struct {
 
 	// ACME / TLS configuration
 	AcmeEmail             string // ACME account email (required for TLS ingresses)
-	AcmeDnsProvider       string // DNS provider: "cloudflare" or "route53"
+	AcmeDnsProvider       string // DNS provider: "cloudflare"
 	AcmeCA                string // ACME CA URL (empty = Let's Encrypt production)
 	DnsPropagationTimeout string // Max time to wait for DNS propagation (e.g., "2m")
 	DnsResolvers          string // Comma-separated DNS resolvers for propagation checking
@@ -100,18 +100,6 @@ type Config struct {
 
 	// Cloudflare configuration (if AcmeDnsProvider=cloudflare)
 	CloudflareApiToken string // Cloudflare API token
-
-	// AWS Route53 configuration (if AcmeDnsProvider=route53)
-	// Supports three auth methods:
-	// 1. Explicit credentials: AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY
-	// 2. Named profile: AWS_PROFILE
-	// 3. IAM role/instance profile: leave all empty
-	AwsAccessKeyId     string // AWS access key ID
-	AwsSecretAccessKey string // AWS secret access key
-	AwsProfile         string // AWS profile name (for shared credentials file)
-	AwsRegion          string // AWS region
-	AwsHostedZoneId    string // Route53 hosted zone ID (optional)
-	AwsMaxRetries      int    // Max retries for Route53 API calls
 }
 
 // Load loads configuration from environment variables
@@ -172,14 +160,6 @@ func Load() *Config {
 
 		// Cloudflare configuration
 		CloudflareApiToken: getEnv("CLOUDFLARE_API_TOKEN", ""),
-
-		// AWS Route53 configuration
-		AwsAccessKeyId:     getEnv("AWS_ACCESS_KEY_ID", ""),
-		AwsSecretAccessKey: getEnv("AWS_SECRET_ACCESS_KEY", ""),
-		AwsProfile:         getEnv("AWS_PROFILE", ""),
-		AwsRegion:          getEnv("AWS_REGION", "us-east-1"),
-		AwsHostedZoneId:    getEnv("AWS_HOSTED_ZONE_ID", ""),
-		AwsMaxRetries:      getEnvInt("AWS_MAX_RETRIES", 0),
 	}
 
 	return cfg

@@ -5,13 +5,16 @@ Manages external traffic routing to VM instances using Caddy as a reverse proxy 
 ## Architecture
 
 ```
-External Request                Caddy (daemon)               VM
-    |                               |                         |
-    | Host:api.example.com:443      |                         |
-    +------------------------------>| config.json lookup      |
-                                    | route -> my-api:8080    |
-                                    +------------------------>|
-                                         10.100.x.y:8080
+External Request         Caddy (daemon)        DNS Server        VM
+    |                         |                    |               |
+    | Host:api.example.com    |                    |               |
+    +------------------------>| route match        |               |
+                              | lookup my-api      |               |
+                              +------------------->|               |
+                              | A: 10.100.x.y      |               |
+                              |<-------------------+               |
+                              | proxy to 10.100.x.y:8080           |
+                              +----------------------------------->|
 ```
 
 ## How It Works
@@ -48,6 +51,23 @@ An Ingress is a configuration object that defines how external traffic should be
 }
 ```
 
+Pattern hostnames enable convention-based routing where the subdomain maps to an instance name:
+
+```json
+{
+  "name": "wildcard-ingress",
+  "rules": [
+    {
+      "match": { "hostname": "{instance}.dev.example.com" },
+      "target": { "instance": "{instance}", "port": 8080 },
+      "tls": true
+    }
+  ]
+}
+```
+
+This routes `foobar.dev.example.com` → instance `foobar`, `myapp.dev.example.com` → instance `myapp`, etc.
+
 ### Configuration Flow
 
 1. User creates an ingress via API
@@ -71,7 +91,8 @@ When `redirect_http: true` is also set:
 ### Hostname Routing
 
 - Uses HTTP Host header matching (HTTP) or SNI (HTTPS)
-- One hostname per rule (exact match)
+- Supports exact hostnames (`api.example.com`) and patterns (`{instance}.example.com`)
+- Pattern hostnames enable convention-based routing (e.g., `foobar.example.com` → instance `foobar`)
 - Hostnames must be unique across all ingresses
 - Default 404 response for unmatched hostnames
 
@@ -120,7 +141,7 @@ DELETE /ingresses/{id} - Delete ingress
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `ACME_EMAIL` | ACME account email (required for TLS) | |
-| `ACME_DNS_PROVIDER` | DNS provider: `cloudflare` or `route53` | |
+| `ACME_DNS_PROVIDER` | DNS provider: `cloudflare` | |
 | `ACME_CA` | ACME CA URL (for staging, etc.) | Let's Encrypt production |
 
 ### Cloudflare DNS Provider
@@ -129,22 +150,13 @@ DELETE /ingresses/{id} - Delete ingress
 |----------|-------------|
 | `CLOUDFLARE_API_TOKEN` | Cloudflare API token with DNS edit permissions |
 
-### AWS Route53 DNS Provider
-
-| Variable | Description |
-|----------|-------------|
-| `AWS_ACCESS_KEY_ID` | AWS access key |
-| `AWS_SECRET_ACCESS_KEY` | AWS secret key |
-| `AWS_REGION` | AWS region (default: `us-east-1`) |
-| `AWS_HOSTED_ZONE_ID` | Specific hosted zone ID (optional) |
-
 **Note on Ports:** Each ingress rule can specify a `port` in the match criteria to listen on a specific host port. If not specified, defaults to port 80. Caddy dynamically listens on all unique ports across all ingresses.
 
 ## Security
 
 - Admin API bound to localhost only by default
-- Ingress validation ensures target instances exist
-- Instance IP resolution happens at config generation time
+- Ingress validation ensures target instances exist (for exact hostnames)
+- Instance IP resolution happens at request time via internal DNS server
 - Caddy runs as the same user as hypeman (not root)
 - Private keys for TLS certificates stored with restrictive permissions
 
@@ -152,9 +164,10 @@ DELETE /ingresses/{id} - Delete ingress
 
 ### Startup
 1. Extract Caddy binary (if needed)
-2. Check for existing running Caddy (via PID file or admin API)
-3. If not running, start Caddy with generated config
-4. Wait for admin API to become ready
+2. Start internal DNS server for dynamic upstream resolution (port 5353)
+3. Check for existing running Caddy (via PID file or admin API)
+4. If not running, start Caddy with generated config
+5. Wait for admin API to become ready
 
 ### Config Updates
 

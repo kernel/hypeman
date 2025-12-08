@@ -402,43 +402,6 @@ func TestTLSConfigGeneration(t *testing.T) {
 		assert.Contains(t, configStr, "Location")
 	})
 
-	t.Run("TLSWithRoute53", func(t *testing.T) {
-		acmeConfig := ACMEConfig{
-			Email:              "admin@example.com",
-			DNSProvider:        DNSProviderRoute53,
-			AWSAccessKeyID:     "AKID",
-			AWSSecretAccessKey: "secret",
-			AWSRegion:          "us-west-2",
-		}
-		generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", adminPort, acmeConfig, dnsResolverPort)
-
-		ingresses := []Ingress{
-			{
-				ID:   "tls-ingress",
-				Name: "tls-ingress",
-				Rules: []IngressRule{
-					{
-						Match:  IngressMatch{Hostname: "secure.example.com", Port: 443},
-						Target: IngressTarget{Instance: "secure-app", Port: 8080},
-						TLS:    true,
-					},
-				},
-			},
-		}
-
-		ctx := context.Background()
-
-		data, err := generator.GenerateConfig(ctx, ingresses)
-		require.NoError(t, err)
-
-		configStr := string(data)
-
-		// Verify Route53 is configured
-		assert.Contains(t, configStr, "route53")
-		assert.Contains(t, configStr, "AKID")
-		assert.Contains(t, configStr, "us-west-2")
-	})
-
 	t.Run("NoTLSAutomationWithoutConfig", func(t *testing.T) {
 		// Empty ACME config
 		generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", adminPort, ACMEConfig{}, dnsResolverPort)

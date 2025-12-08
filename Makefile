@@ -56,7 +56,7 @@ download-ch-binaries:
 
 # Caddy version and modules
 CADDY_VERSION := v2.10.2
-CADDY_DNS_MODULES := --with github.com/caddy-dns/cloudflare --with github.com/caddy-dns/route53
+CADDY_DNS_MODULES := --with github.com/caddy-dns/cloudflare
 
 # Build Caddy with DNS modules using xcaddy
 # xcaddy builds Caddy from source with the specified modules

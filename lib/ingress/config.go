@@ -23,8 +23,6 @@ const (
 	DNSProviderNone DNSProvider = ""
 	// DNSProviderCloudflare uses Cloudflare for DNS challenges.
 	DNSProviderCloudflare DNSProvider = "cloudflare"
-	// DNSProviderRoute53 uses AWS Route53 for DNS challenges.
-	DNSProviderRoute53 DNSProvider = "route53"
 )
 
 // ParseDNSProvider parses a string into a DNSProvider, returning an error for unknown values.
@@ -34,10 +32,8 @@ func ParseDNSProvider(s string) (DNSProvider, error) {
 		return DNSProviderNone, nil
 	case "cloudflare":
 		return DNSProviderCloudflare, nil
-	case "route53":
-		return DNSProviderRoute53, nil
 	default:
-		return DNSProviderNone, fmt.Errorf("unknown DNS provider %q: must be 'cloudflare' or 'route53'", s)
+		return DNSProviderNone, fmt.Errorf("unknown DNS provider %q: must be 'cloudflare'", s)
 	}
 }
 
@@ -63,18 +59,6 @@ type ACMEConfig struct {
 
 	// Cloudflare API token (if DNSProvider=cloudflare).
 	CloudflareAPIToken string
-
-	// AWS/Route53 configuration (if DNSProvider=route53).
-	// Supports three auth methods:
-	// 1. Explicit credentials: AWSAccessKeyID + AWSSecretAccessKey
-	// 2. Named profile: AWSProfile
-	// 3. IAM role/instance profile: leave all empty
-	AWSAccessKeyID     string
-	AWSSecretAccessKey string
-	AWSProfile         string // AWS profile name for shared credentials
-	AWSRegion          string
-	AWSHostedZoneID    string
-	AWSMaxRetries      int // Max retries for Route53 API calls
 }
 
 // IsDomainAllowed checks if a hostname is allowed for TLS based on the AllowedDomains config.
@@ -119,15 +103,6 @@ func (c *ACMEConfig) IsTLSConfigured() bool {
 	switch c.DNSProvider {
 	case DNSProviderCloudflare:
 		return c.CloudflareAPIToken != ""
-	case DNSProviderRoute53:
-		// Route53 supports multiple auth methods:
-		// 1. Explicit credentials
-		// 2. Named profile
-		// 3. IAM role/instance profile (no explicit config needed)
-		hasExplicitCreds := c.AWSAccessKeyID != "" && c.AWSSecretAccessKey != ""
-		hasProfile := c.AWSProfile != ""
-		useIAMRole := !hasExplicitCreds && !hasProfile // Will use instance profile/IAM role
-		return hasExplicitCreds || hasProfile || useIAMRole
 	default:
 		return false
 	}
@@ -382,7 +357,7 @@ func (g *CaddyConfigGenerator) buildTLSConfig(hostnames []string) map[string]int
 }
 
 // buildDNSChallengeConfig builds the DNS challenge configuration.
-// Uses the caddy-dns module format: https://github.com/caddy-dns/cloudflare and https://github.com/caddy-dns/route53
+// Uses the caddy-dns module format: https://github.com/caddy-dns/cloudflare
 func (g *CaddyConfigGenerator) buildDNSChallengeConfig() map[string]interface{} {
 	dnsConfig := map[string]interface{}{}
 
@@ -394,31 +369,6 @@ func (g *CaddyConfigGenerator) buildDNSChallengeConfig() map[string]interface{} 
 			"name":      "cloudflare",
 			"api_token": g.acme.CloudflareAPIToken,
 		}
-	case DNSProviderRoute53:
-		// caddy-dns/route53 module format
-		// Supports multiple auth methods: explicit credentials, profile, or IAM role (empty config)
-		provider := map[string]interface{}{
-			"name": "route53",
-		}
-		// Only add credentials if explicitly provided
-		// If neither credentials nor profile are set, route53 uses IAM role/instance profile
-		if g.acme.AWSAccessKeyID != "" && g.acme.AWSSecretAccessKey != "" {
-			provider["access_key_id"] = g.acme.AWSAccessKeyID
-			provider["secret_access_key"] = g.acme.AWSSecretAccessKey
-		}
-		if g.acme.AWSProfile != "" {
-			provider["aws_profile"] = g.acme.AWSProfile
-		}
-		if g.acme.AWSRegion != "" {
-			provider["region"] = g.acme.AWSRegion
-		}
-		if g.acme.AWSHostedZoneID != "" {
-			provider["hosted_zone_id"] = g.acme.AWSHostedZoneID
-		}
-		if g.acme.AWSMaxRetries > 0 {
-			provider["max_retries"] = g.acme.AWSMaxRetries
-		}
-		dnsConfig["provider"] = provider
 	default:
 		// Should not happen - DNSProvider is validated at startup
 		return map[string]interface{}{}

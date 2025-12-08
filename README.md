@@ -104,18 +104,12 @@ Hypeman can be configured using the following environment variables:
 | `CADDY_ADMIN_PORT` | Port for Caddy admin API | `2019` |
 | `CADDY_STOP_ON_SHUTDOWN` | Stop Caddy when hypeman shuts down (set to `true` for dev) | `false` |
 | `ACME_EMAIL` | Email for ACME certificate registration (required for TLS ingresses) | _(empty)_ |
-| `ACME_DNS_PROVIDER` | DNS provider for ACME challenges: `cloudflare` or `route53` | _(empty)_ |
+| `ACME_DNS_PROVIDER` | DNS provider for ACME challenges: `cloudflare` | _(empty)_ |
 | `ACME_CA` | ACME CA URL (empty = Let's Encrypt production) | _(empty)_ |
 | `TLS_ALLOWED_DOMAINS` | Comma-separated allowed domains for TLS (e.g., `*.example.com,api.other.com`) | _(empty)_ |
 | `DNS_PROPAGATION_TIMEOUT` | Max time to wait for DNS propagation (e.g., `2m`) | _(empty)_ |
 | `DNS_RESOLVERS` | Comma-separated DNS resolvers for propagation checking | _(empty)_ |
 | `CLOUDFLARE_API_TOKEN` | Cloudflare API token (when using `cloudflare` provider) | _(empty)_ |
-| `AWS_ACCESS_KEY_ID` | AWS access key (when using `route53` provider, method 1) | _(empty)_ |
-| `AWS_SECRET_ACCESS_KEY` | AWS secret key (when using `route53` provider, method 1) | _(empty)_ |
-| `AWS_PROFILE` | AWS profile name (when using `route53` provider, method 2) | _(empty)_ |
-| `AWS_REGION` | AWS region (when using `route53` provider) | `us-east-1` |
-| `AWS_HOSTED_ZONE_ID` | AWS Route53 hosted zone ID (optional) | _(empty)_ |
-| `AWS_MAX_RETRIES` | Max retries for Route53 API calls | `0` (default) |
 
 **Important: Subnet Configuration**
 
@@ -124,7 +118,7 @@ The default subnet `10.100.0.0/16` is chosen to avoid common conflicts. Hypeman 
 If you need a different subnet, set `SUBNET_CIDR` in your environment. The gateway is automatically derived as the first IP in the subnet (e.g., `10.100.0.0/16` → `10.100.0.1`).
 
 **Alternative subnets if needed:**
-- `172.30.0.0/16` - Private range between common Docker (172.17.x.x) and AWS (172.31.x.x) ranges
+- `172.30.0.0/16` - Private range between common Docker (172.17.x.x) and cloud provider (172.31.x.x) ranges
 - `10.200.0.0/16` - Another private range option
 
 **Example:**
@@ -159,7 +153,7 @@ Pick the interface used by the default route (usually the line starting with `de
 
 **TLS Ingress (HTTPS)**
 
-Hypeman uses Caddy with automatic ACME certificates for TLS termination. Certificates are issued via DNS-01 challenges (Cloudflare or Route53).
+Hypeman uses Caddy with automatic ACME certificates for TLS termination. Certificates are issued via DNS-01 challenges (Cloudflare).
 
 To enable TLS ingresses:
 
@@ -171,22 +165,6 @@ ACME_EMAIL=admin@example.com
 # For Cloudflare
 ACME_DNS_PROVIDER=cloudflare
 CLOUDFLARE_API_TOKEN=your-api-token
-
-# For Route53 - Method 1: Explicit credentials
-ACME_DNS_PROVIDER=route53
-AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
-AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
-AWS_REGION=us-east-1
-
-# For Route53 - Method 2: Named profile (~/.aws/credentials)
-ACME_DNS_PROVIDER=route53
-AWS_PROFILE=my-route53-profile
-AWS_REGION=us-east-1
-
-# For Route53 - Method 3: IAM role / instance profile
-# Just set the provider and region; credentials are obtained automatically
-ACME_DNS_PROVIDER=route53
-AWS_REGION=us-east-1
 ```
 
 2. Create an ingress with TLS enabled:
