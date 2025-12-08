@@ -35,13 +35,17 @@ type Manager interface {
 	// Create creates a new ingress resource.
 	Create(ctx context.Context, req CreateIngressRequest) (*Ingress, error)
 
-	// Get retrieves an ingress by ID or name.
+	// Get retrieves an ingress by ID, name, or ID prefix.
+	// Lookup order: exact ID match -> exact name match -> ID prefix match.
+	// Returns ErrAmbiguousName if prefix matches multiple ingresses.
 	Get(ctx context.Context, idOrName string) (*Ingress, error)
 
 	// List returns all ingress resources.
 	List(ctx context.Context) ([]Ingress, error)
 
-	// Delete removes an ingress resource.
+	// Delete removes an ingress resource by ID, name, or ID prefix.
+	// Lookup order: exact ID match -> exact name match -> ID prefix match.
+	// Returns ErrAmbiguousName if prefix matches multiple ingresses.
 	Delete(ctx context.Context, idOrName string) error
 
 	// Shutdown gracefully stops the ingress subsystem.
@@ -266,24 +270,60 @@ func (m *manager) Create(ctx context.Context, req CreateIngressRequest) (*Ingres
 	return &ingress, nil
 }
 
-// Get retrieves an ingress by ID or name.
+// Get retrieves an ingress by ID, name, or ID prefix.
+// Lookup order: exact ID match -> exact name match -> ID prefix match.
+// Returns ErrAmbiguousName if prefix matches multiple ingresses.
 func (m *manager) Get(ctx context.Context, idOrName string) (*Ingress, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	// Try by ID first
+	return m.resolveIngress(idOrName)
+}
+
+// resolveIngress finds an ingress by ID, name, or ID prefix.
+// Must be called with at least a read lock held.
+func (m *manager) resolveIngress(idOrName string) (*Ingress, error) {
+	// 1. Try exact ID match first (most common case)
 	stored, err := loadIngress(m.paths, idOrName)
 	if err == nil {
 		return storedToIngress(stored), nil
 	}
 
-	// Try by name
-	stored, err = findIngressByName(m.paths, idOrName)
+	// 2. Load all ingresses for name and prefix matching
+	allIngresses, err := loadAllIngresses(m.paths)
 	if err != nil {
-		return nil, ErrNotFound
+		return nil, err
 	}
 
-	return storedToIngress(stored), nil
+	// 3. Try exact name match
+	var nameMatches []storedIngress
+	for _, ing := range allIngresses {
+		if ing.Name == idOrName {
+			nameMatches = append(nameMatches, ing)
+		}
+	}
+	if len(nameMatches) == 1 {
+		return storedToIngress(&nameMatches[0]), nil
+	}
+	if len(nameMatches) > 1 {
+		return nil, ErrAmbiguousName
+	}
+
+	// 4. Try ID prefix match
+	var prefixMatches []storedIngress
+	for _, ing := range allIngresses {
+		if len(idOrName) > 0 && len(ing.ID) >= len(idOrName) && ing.ID[:len(idOrName)] == idOrName {
+			prefixMatches = append(prefixMatches, ing)
+		}
+	}
+	if len(prefixMatches) == 1 {
+		return storedToIngress(&prefixMatches[0]), nil
+	}
+	if len(prefixMatches) > 1 {
+		return nil, ErrAmbiguousName
+	}
+
+	return nil, ErrNotFound
 }
 
 // List returns all ingress resources.
@@ -294,26 +334,19 @@ func (m *manager) List(ctx context.Context) ([]Ingress, error) {
 	return m.loadAllIngresses()
 }
 
-// Delete removes an ingress resource.
+// Delete removes an ingress resource by ID, name, or ID prefix.
 func (m *manager) Delete(ctx context.Context, idOrName string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	log := logger.FromContext(ctx)
 
-	// Find the ingress
-	var id string
-	stored, err := loadIngress(m.paths, idOrName)
-	if err == nil {
-		id = stored.ID
-	} else {
-		// Try by name
-		stored, err = findIngressByName(m.paths, idOrName)
-		if err != nil {
-			return ErrNotFound
-		}
-		id = stored.ID
+	// Find the ingress using ID/name/prefix resolution
+	ingress, err := m.resolveIngress(idOrName)
+	if err != nil {
+		return err
 	}
+	id := ingress.ID
 
 	// Delete from storage
 	if err := deleteIngressData(m.paths, id); err != nil {

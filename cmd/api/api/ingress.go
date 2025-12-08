@@ -118,45 +118,59 @@ func (s *ApiService) CreateIngress(ctx context.Context, request oapi.CreateIngre
 	return oapi.CreateIngress201JSONResponse(ingressToOAPI(*ing)), nil
 }
 
-// GetIngress gets ingress details by ID or name
+// GetIngress gets ingress details by ID, name, or ID prefix
 func (s *ApiService) GetIngress(ctx context.Context, request oapi.GetIngressRequestObject) (oapi.GetIngressResponseObject, error) {
 	log := logger.FromContext(ctx)
 
 	ing, err := s.IngressManager.Get(ctx, request.Id)
 	if err != nil {
-		if errors.Is(err, ingress.ErrNotFound) {
+		switch {
+		case errors.Is(err, ingress.ErrNotFound):
 			return oapi.GetIngress404JSONResponse{
 				Code:    "not_found",
 				Message: "ingress not found",
 			}, nil
+		case errors.Is(err, ingress.ErrAmbiguousName):
+			return oapi.GetIngress409JSONResponse{
+				Code:    "ambiguous_identifier",
+				Message: "identifier matches multiple ingresses, please use a more specific ID or name",
+			}, nil
+		default:
+			log.ErrorContext(ctx, "failed to get ingress", "error", err, "id", request.Id)
+			return oapi.GetIngress500JSONResponse{
+				Code:    "internal_error",
+				Message: "failed to get ingress",
+			}, nil
 		}
-		log.ErrorContext(ctx, "failed to get ingress", "error", err, "id", request.Id)
-		return oapi.GetIngress500JSONResponse{
-			Code:    "internal_error",
-			Message: "failed to get ingress",
-		}, nil
 	}
 
 	return oapi.GetIngress200JSONResponse(ingressToOAPI(*ing)), nil
 }
 
-// DeleteIngress deletes an ingress by ID or name
+// DeleteIngress deletes an ingress by ID, name, or ID prefix
 func (s *ApiService) DeleteIngress(ctx context.Context, request oapi.DeleteIngressRequestObject) (oapi.DeleteIngressResponseObject, error) {
 	log := logger.FromContext(ctx)
 
 	err := s.IngressManager.Delete(ctx, request.Id)
 	if err != nil {
-		if errors.Is(err, ingress.ErrNotFound) {
+		switch {
+		case errors.Is(err, ingress.ErrNotFound):
 			return oapi.DeleteIngress404JSONResponse{
 				Code:    "not_found",
 				Message: "ingress not found",
 			}, nil
+		case errors.Is(err, ingress.ErrAmbiguousName):
+			return oapi.DeleteIngress409JSONResponse{
+				Code:    "ambiguous_identifier",
+				Message: "identifier matches multiple ingresses, please use a more specific ID or name",
+			}, nil
+		default:
+			log.ErrorContext(ctx, "failed to delete ingress", "error", err, "id", request.Id)
+			return oapi.DeleteIngress500JSONResponse{
+				Code:    "internal_error",
+				Message: "failed to delete ingress",
+			}, nil
 		}
-		log.ErrorContext(ctx, "failed to delete ingress", "error", err, "id", request.Id)
-		return oapi.DeleteIngress500JSONResponse{
-			Code:    "internal_error",
-			Message: "failed to delete ingress",
-		}, nil
 	}
 
 	return oapi.DeleteIngress204Response{}, nil

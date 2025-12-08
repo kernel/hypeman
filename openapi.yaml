@@ -1293,7 +1293,7 @@ paths:
           required: true
           schema:
             type: string
-          description: Ingress ID or name
+          description: Ingress ID, name, or ID prefix
       responses:
         200:
           description: Ingress details
@@ -1303,6 +1303,12 @@ paths:
                 $ref: "#/components/schemas/Ingress"
         404:
           description: Ingress not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Ambiguous identifier matches multiple ingresses
           content:
             application/json:
               schema:
@@ -1324,12 +1330,18 @@ paths:
           required: true
           schema:
             type: string
-          description: Ingress ID or name
+          description: Ingress ID, name, or ID prefix
       responses:
         204:
           description: Ingress deleted
         404:
           description: Ingress not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Ambiguous identifier matches multiple ingresses
           content:
             application/json:
               schema:

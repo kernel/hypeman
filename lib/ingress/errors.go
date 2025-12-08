@@ -36,6 +36,9 @@ var (
 
 	// ErrDomainNotAllowed is returned when a TLS ingress is requested for a domain not in the allowed list.
 	ErrDomainNotAllowed = errors.New("domain not allowed for TLS")
+
+	// ErrAmbiguousName is returned when a lookup matches multiple ingresses.
+	ErrAmbiguousName = errors.New("ambiguous ingress identifier matches multiple ingresses")
 )
 
 // portInUseRegex matches Caddy's "address already in use" error messages
