@@ -174,21 +174,34 @@ func (m *manager) Initialize(ctx context.Context) error {
 		log.WarnContext(ctx, "TLS ingresses exist but ACME is not configured - TLS will not work")
 	}
 
-	// Check if any TLS ingresses have hostnames not in the allowed domains list
+	// Filter out TLS ingresses with hostnames not in the allowed domains list
+	// to prevent Caddy from trying to obtain certificates for invalid domains
+	var validIngresses []Ingress
 	for _, ing := range ingresses {
+		var validRules []IngressRule
 		for _, rule := range ing.Rules {
 			if rule.TLS && !m.config.ACME.IsDomainAllowed(rule.Match.Hostname) {
-				log.WarnContext(ctx, "existing TLS ingress has hostname not in allowed domains list",
+				log.WarnContext(ctx, "skipping TLS ingress rule with hostname not in allowed domains list",
 					"ingress", ing.Name,
 					"hostname", rule.Match.Hostname,
 					"allowed_domains", m.config.ACME.AllowedDomains,
 				)
+				continue // Skip this rule
 			}
+			validRules = append(validRules, rule)
+		}
+		if len(validRules) > 0 {
+			ing.Rules = validRules
+			validIngresses = append(validIngresses, ing)
+		} else {
+			log.WarnContext(ctx, "skipping ingress with no valid rules",
+				"ingress", ing.Name,
+			)
 		}
 	}
 
-	// Generate and write config
-	if err := m.regenerateConfig(ctx, ingresses); err != nil {
+	// Generate and write config with only valid ingresses
+	if err := m.regenerateConfig(ctx, validIngresses); err != nil {
 		return fmt.Errorf("regenerate config: %w", err)
 	}
 
