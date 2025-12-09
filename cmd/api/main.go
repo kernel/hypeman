@@ -150,7 +150,7 @@ func run() error {
 		logger.Error("failed to initialize ingress manager", "error", err)
 		return fmt.Errorf("initialize ingress manager: %w", err)
 	}
-	logger.Info("Ingress manager initialized", "listen_addr", cfg.CaddyListenAddress, "admin", fmt.Sprintf("%s:%d", cfg.CaddyAdminAddress, cfg.CaddyAdminPort))
+	logger.Info("Ingress manager initialized", "listen_addr", cfg.CaddyListenAddress, "admin", app.IngressManager.AdminURL())
 
 	// Create router
 	r := chi.NewRouter()
@@ -308,7 +308,7 @@ func run() error {
 		logger.Info("http server shutdown complete")
 
 		// Shutdown ingress manager (stops Caddy if CADDY_STOP_ON_SHUTDOWN=true)
-		if err := app.IngressManager.Shutdown(); err != nil {
+		if err := app.IngressManager.Shutdown(shutdownCtx); err != nil {
 			logger.Error("failed to shutdown ingress manager", "error", err)
 			// Don't return error - continue with shutdown
 		} else {

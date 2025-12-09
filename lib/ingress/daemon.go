@@ -3,8 +3,10 @@ package ingress
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -32,12 +34,13 @@ const (
 type CaddyDaemon struct {
 	paths          *paths.Paths
 	adminAddress   string
-	adminPort      int
+	adminPort      int // actual port to use (resolved from config or picked fresh)
 	pid            int
 	stopOnShutdown bool
 }
 
 // NewCaddyDaemon creates a new CaddyDaemon manager.
+// If adminPort is 0, it will be resolved later from existing config or picked fresh.
 func NewCaddyDaemon(p *paths.Paths, adminAddress string, adminPort int, stopOnShutdown bool) *CaddyDaemon {
 	return &CaddyDaemon{
 		paths:          p,
@@ -52,8 +55,15 @@ func (d *CaddyDaemon) StopOnShutdown() bool {
 	return d.stopOnShutdown
 }
 
+// AdminPort returns the admin port. If it was configured as 0 (random),
+// this returns the actual port after it's been resolved.
+func (d *CaddyDaemon) AdminPort() int {
+	return d.adminPort
+}
+
 // Start starts the Caddy daemon. If Caddy is already running (discovered via PID file
 // or admin API), this is a no-op and returns the existing PID.
+// Note: adminPort must be resolved (non-zero) before calling Start.
 func (d *CaddyDaemon) Start(ctx context.Context) (int, error) {
 	// Check if already running
 	if pid, running := d.DiscoverRunning(); running {
@@ -62,6 +72,48 @@ func (d *CaddyDaemon) Start(ctx context.Context) (int, error) {
 	}
 
 	return d.startCaddy(ctx)
+}
+
+// pickAvailablePort finds an available TCP port by briefly binding to port 0.
+func pickAvailablePort(address string) (int, error) {
+	listener, err := net.Listen("tcp", address+":0")
+	if err != nil {
+		return 0, err
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	listener.Close()
+	return port, nil
+}
+
+// readPortFromConfig reads the admin port from the existing Caddy config file.
+func (d *CaddyDaemon) readPortFromConfig() int {
+	data, err := os.ReadFile(d.paths.CaddyConfig())
+	if err != nil {
+		return 0
+	}
+
+	var config struct {
+		Admin struct {
+			Listen string `json:"listen"`
+		} `json:"admin"`
+	}
+	if err := json.Unmarshal(data, &config); err != nil {
+		return 0
+	}
+
+	// Parse "127.0.0.1:2019" format
+	if config.Admin.Listen == "" {
+		return 0
+	}
+	_, portStr, err := net.SplitHostPort(config.Admin.Listen)
+	if err != nil {
+		return 0
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return 0
+	}
+	return port
 }
 
 // startCaddy starts a new Caddy process.
@@ -152,11 +204,16 @@ func (d *CaddyDaemon) startCaddy(ctx context.Context) (int, error) {
 }
 
 // Stop gracefully stops the Caddy daemon.
-func (d *CaddyDaemon) Stop() error {
+func (d *CaddyDaemon) Stop(ctx context.Context) error {
+	log := logger.FromContext(ctx)
+
 	pid, running := d.DiscoverRunning()
 	if !running {
+		log.InfoContext(ctx, "Caddy not running, nothing to stop")
 		return nil
 	}
+
+	log.InfoContext(ctx, "stopping Caddy via admin API", "pid", pid)
 
 	// Try graceful shutdown via admin API first
 	client := &http.Client{Timeout: 5 * time.Second}
@@ -173,6 +230,8 @@ func (d *CaddyDaemon) Stop() error {
 		return nil
 	}
 
+	log.InfoContext(ctx, "Caddy still running after admin API stop, sending SIGTERM")
+
 	// Send SIGTERM if still running
 	if proc, err := os.FindProcess(pid); err == nil {
 		proc.Signal(syscall.SIGTERM)
@@ -184,6 +243,8 @@ func (d *CaddyDaemon) Stop() error {
 		d.pid = 0
 		return nil
 	}
+
+	log.InfoContext(ctx, "Caddy still running after SIGTERM, sending SIGKILL")
 
 	// Final resort: SIGKILL
 	if proc, err := os.FindProcess(pid); err == nil {
@@ -303,6 +364,9 @@ func (d *CaddyDaemon) waitForAdmin(ctx context.Context) error {
 
 // isAdminResponding checks if the admin API is responding.
 func (d *CaddyDaemon) isAdminResponding() bool {
+	if d.adminPort == 0 {
+		return false
+	}
 	client := &http.Client{Timeout: 1 * time.Second}
 	adminURL := fmt.Sprintf("http://%s:%d/config/", d.adminAddress, d.adminPort)
 	resp, err := client.Get(adminURL)
