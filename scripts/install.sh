@@ -8,6 +8,7 @@
 # Options (via environment variables):
 #   VERSION      - Install specific API version (default: latest)
 #   CLI_VERSION  - Install specific CLI version (default: latest)
+#   BRANCH       - Build from source using this branch (for development/testing)
 #   INSTALL_DIR  - Binary installation directory (default: /opt/hypeman/bin)
 #   DATA_DIR     - Data directory (default: /var/lib/hypeman)
 #   CONFIG_DIR   - Config directory (default: /etc/hypeman)
@@ -66,6 +67,13 @@ command -v systemctl >/dev/null 2>&1 || error "systemctl is required but not ins
 command -v setcap >/dev/null 2>&1 || error "setcap is required but not installed (install libcap2-bin)"
 command -v openssl >/dev/null 2>&1 || error "openssl is required but not installed"
 
+# Additional checks for build-from-source mode
+if [ -n "$BRANCH" ]; then
+    command -v git >/dev/null 2>&1 || error "git is required for BRANCH mode but not installed"
+    command -v go >/dev/null 2>&1 || error "go is required for BRANCH mode but not installed"
+    command -v make >/dev/null 2>&1 || error "make is required for BRANCH mode but not installed"
+fi
+
 # Detect OS
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 if [ "$OS" != "linux" ]; then
@@ -89,38 +97,63 @@ esac
 info "Pre-flight checks passed"
 
 # =============================================================================
-# Determine version to install
-# =============================================================================
-
-if [ -z "$VERSION" ]; then
-    info "Fetching latest version..."
-    VERSION=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name"' | cut -d'"' -f4)
-    if [ -z "$VERSION" ]; then
-        error "Failed to fetch latest version"
-    fi
-fi
-info "Installing version: $VERSION"
-
-# =============================================================================
-# Download and extract
-# =============================================================================
-
-# Construct download URL
-VERSION_NUM="${VERSION#v}"
-ARCHIVE_NAME="hypeman_${VERSION_NUM}_${OS}_${ARCH}.tar.gz"
-DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${VERSION}/${ARCHIVE_NAME}"
-
 # Create temp directory
+# =============================================================================
+
 TMP_DIR=$(mktemp -d)
 trap "rm -rf $TMP_DIR" EXIT
 
-info "Downloading ${ARCHIVE_NAME}..."
-if ! curl -fsSL "$DOWNLOAD_URL" -o "${TMP_DIR}/${ARCHIVE_NAME}"; then
-    error "Failed to download from ${DOWNLOAD_URL}"
-fi
+# =============================================================================
+# Get binaries (either download release or build from source)
+# =============================================================================
 
-info "Extracting..."
-tar -xzf "${TMP_DIR}/${ARCHIVE_NAME}" -C "$TMP_DIR"
+if [ -n "$BRANCH" ]; then
+    # Build from source mode
+    info "Building from source (branch: $BRANCH)..."
+    
+    BUILD_DIR="${TMP_DIR}/hypeman"
+    git clone --branch "$BRANCH" --depth 1 "https://github.com/${REPO}.git" "$BUILD_DIR"
+    
+    info "Building binaries (this may take a few minutes)..."
+    cd "$BUILD_DIR"
+    
+    # Build main binary (includes dependencies)
+    make build
+    cp "bin/hypeman" "${TMP_DIR}/${BINARY_NAME}"
+    
+    # Build hypeman-token (not included in make build)
+    info "Building hypeman-token..."
+    go build -o "${TMP_DIR}/hypeman-token" ./cmd/gen-jwt
+    
+    # Copy .env.example for config template
+    cp ".env.example" "${TMP_DIR}/.env.example"
+    
+    VERSION="$BRANCH (source)"
+    cd - > /dev/null
+else
+    # Download release mode
+    if [ -z "$VERSION" ]; then
+        info "Fetching latest version..."
+        VERSION=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name"' | cut -d'"' -f4)
+        if [ -z "$VERSION" ]; then
+            error "Failed to fetch latest version"
+        fi
+    fi
+    info "Installing version: $VERSION"
+
+    # Construct download URL
+    VERSION_NUM="${VERSION#v}"
+    ARCHIVE_NAME="hypeman_${VERSION_NUM}_${OS}_${ARCH}.tar.gz"
+    DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${VERSION}/${ARCHIVE_NAME}"
+
+    info "Downloading ${ARCHIVE_NAME}..."
+    if ! curl -fsSL "$DOWNLOAD_URL" -o "${TMP_DIR}/${ARCHIVE_NAME}"; then
+        error "Failed to download from ${DOWNLOAD_URL}"
+    fi
+
+    info "Extracting..."
+    tar -xzf "${TMP_DIR}/${ARCHIVE_NAME}" -C "$TMP_DIR"
+fi
 
 # =============================================================================
 # Stop existing service if running
@@ -189,10 +222,16 @@ $SUDO mkdir -p "$CONFIG_DIR"
 # =============================================================================
 
 if [ ! -f "$CONFIG_FILE" ]; then
-    info "Downloading config template..."
-    CONFIG_URL="https://raw.githubusercontent.com/${REPO}/${VERSION}/.env.example"
-    if ! curl -fsSL "$CONFIG_URL" -o "${TMP_DIR}/config"; then
-        error "Failed to download config template from ${CONFIG_URL}"
+    # Get config template (from local build or download from repo)
+    if [ -f "${TMP_DIR}/.env.example" ]; then
+        info "Using config template from source..."
+        cp "${TMP_DIR}/.env.example" "${TMP_DIR}/config"
+    else
+        info "Downloading config template..."
+        CONFIG_URL="https://raw.githubusercontent.com/${REPO}/${VERSION}/.env.example"
+        if ! curl -fsSL "$CONFIG_URL" -o "${TMP_DIR}/config"; then
+            error "Failed to download config template from ${CONFIG_URL}"
+        fi
     fi
     
     # Generate random JWT secret
