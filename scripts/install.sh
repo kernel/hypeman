@@ -188,9 +188,8 @@ if [ ! -f "$CONFIG_FILE" ]; then
     $SUDO install -m 600 "${TMP_DIR}/config" "$CONFIG_FILE"
     
     # Give ownership to the installing user so they can read the config for CLI
-    if [ -n "$SUDO_USER" ]; then
-        $SUDO chown "$SUDO_USER" "$CONFIG_FILE"
-    fi
+    INSTALL_USER="${SUDO_USER:-$(whoami)}"
+    $SUDO chown "$INSTALL_USER" "$CONFIG_FILE"
 else
     info "Config file already exists at ${CONFIG_FILE}, skipping..."
 fi
