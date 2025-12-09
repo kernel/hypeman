@@ -30,13 +30,15 @@ func TestIngressNew(t *testing.T) {
 		Name: "my-api-ingress",
 		Rules: []hypeman.IngressRuleParam{{
 			Match: hypeman.IngressMatchParam{
-				Hostname: "api.example.com",
+				Hostname: "{instance}.example.com",
 				Port:     hypeman.Int(8080),
 			},
 			Target: hypeman.IngressTargetParam{
-				Instance: "my-api",
+				Instance: "{instance}",
 				Port:     8080,
 			},
+			RedirectHTTP: hypeman.Bool(true),
+			Tls:          hypeman.Bool(true),
 		}},
 	})
 	if err != nil {
