@@ -105,7 +105,14 @@ func (r *Ingress) UnmarshalJSON(data []byte) error {
 }
 
 type IngressMatch struct {
-	// Hostname to match (exact match on Host header)
+	// Hostname to match. Can be:
+	//
+	// - Literal: "api.example.com" (exact match on Host header)
+	// - Pattern: "{instance}.example.com" (dynamic routing based on subdomain)
+	//
+	// Pattern hostnames use named captures in curly braces (e.g., {instance}, {app})
+	// that extract parts of the hostname for routing. The extracted values can be
+	// referenced in the target.instance field.
 	Hostname string `json:"hostname,required"`
 	// Host port to listen on for this rule (default 80)
 	Port int64 `json:"port"`
@@ -135,7 +142,14 @@ func (r IngressMatch) ToParam() IngressMatchParam {
 
 // The property Hostname is required.
 type IngressMatchParam struct {
-	// Hostname to match (exact match on Host header)
+	// Hostname to match. Can be:
+	//
+	// - Literal: "api.example.com" (exact match on Host header)
+	// - Pattern: "{instance}.example.com" (dynamic routing based on subdomain)
+	//
+	// Pattern hostnames use named captures in curly braces (e.g., {instance}, {app})
+	// that extract parts of the hostname for routing. The extracted values can be
+	// referenced in the target.instance field.
 	Hostname string `json:"hostname,required"`
 	// Host port to listen on for this rule (default 80)
 	Port param.Opt[int64] `json:"port,omitzero"`
@@ -153,12 +167,19 @@ func (r *IngressMatchParam) UnmarshalJSON(data []byte) error {
 type IngressRule struct {
 	Match  IngressMatch  `json:"match,required"`
 	Target IngressTarget `json:"target,required"`
+	// Auto-create HTTP to HTTPS redirect for this hostname (only applies when tls is
+	// enabled)
+	RedirectHTTP bool `json:"redirect_http"`
+	// Enable TLS termination (certificate auto-issued via ACME).
+	Tls bool `json:"tls"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
-		Match       respjson.Field
-		Target      respjson.Field
-		ExtraFields map[string]respjson.Field
-		raw         string
+		Match        respjson.Field
+		Target       respjson.Field
+		RedirectHTTP respjson.Field
+		Tls          respjson.Field
+		ExtraFields  map[string]respjson.Field
+		raw          string
 	} `json:"-"`
 }
 
@@ -181,6 +202,11 @@ func (r IngressRule) ToParam() IngressRuleParam {
 type IngressRuleParam struct {
 	Match  IngressMatchParam  `json:"match,omitzero,required"`
 	Target IngressTargetParam `json:"target,omitzero,required"`
+	// Auto-create HTTP to HTTPS redirect for this hostname (only applies when tls is
+	// enabled)
+	RedirectHTTP param.Opt[bool] `json:"redirect_http,omitzero"`
+	// Enable TLS termination (certificate auto-issued via ACME).
+	Tls param.Opt[bool] `json:"tls,omitzero"`
 	paramObj
 }
 
@@ -193,7 +219,14 @@ func (r *IngressRuleParam) UnmarshalJSON(data []byte) error {
 }
 
 type IngressTarget struct {
-	// Target instance name or ID
+	// Target instance name, ID, or capture reference.
+	//
+	//   - For literal hostnames: Use the instance name or ID directly (e.g., "my-api")
+	//   - For pattern hostnames: Reference a capture from the hostname (e.g.,
+	//     "{instance}")
+	//
+	// When using pattern hostnames, the instance is resolved dynamically at request
+	// time.
 	Instance string `json:"instance,required"`
 	// Target port on the instance
 	Port int64 `json:"port,required"`
@@ -223,7 +256,14 @@ func (r IngressTarget) ToParam() IngressTargetParam {
 
 // The properties Instance, Port are required.
 type IngressTargetParam struct {
-	// Target instance name or ID
+	// Target instance name, ID, or capture reference.
+	//
+	//   - For literal hostnames: Use the instance name or ID directly (e.g., "my-api")
+	//   - For pattern hostnames: Reference a capture from the hostname (e.g.,
+	//     "{instance}")
+	//
+	// When using pattern hostnames, the instance is resolved dynamically at request
+	// time.
 	Instance string `json:"instance,required"`
 	// Target port on the instance
 	Port int64 `json:"port,required"`
