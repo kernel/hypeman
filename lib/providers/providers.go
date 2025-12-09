@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/c2h5oh/datasize"
 	"github.com/onkernel/hypeman/cmd/api/config"
@@ -127,6 +128,13 @@ func ProvideIngressManager(p *paths.Paths, cfg *config.Config, instanceManager i
 	dnsProvider, err := ingress.ParseDNSProvider(cfg.AcmeDnsProvider)
 	if err != nil {
 		return nil, fmt.Errorf("invalid ACME_DNS_PROVIDER: %w", err)
+	}
+
+	// Validate DNS propagation timeout if set (must be a valid Go duration string)
+	if cfg.DnsPropagationTimeout != "" {
+		if _, err := time.ParseDuration(cfg.DnsPropagationTimeout); err != nil {
+			return nil, fmt.Errorf("invalid DNS_PROPAGATION_TIMEOUT %q: %w (expected format like '2m', '120s', '1h')", cfg.DnsPropagationTimeout, err)
+		}
 	}
 
 	ingressConfig := ingress.Config{

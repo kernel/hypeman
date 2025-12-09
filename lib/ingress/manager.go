@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"regexp"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -366,7 +367,7 @@ func (m *manager) resolveIngress(idOrName string) (*Ingress, error) {
 	// 4. Try ID prefix match
 	var prefixMatches []storedIngress
 	for _, ing := range allIngresses {
-		if len(idOrName) > 0 && len(ing.ID) >= len(idOrName) && ing.ID[:len(idOrName)] == idOrName {
+		if len(idOrName) > 0 && strings.HasPrefix(ing.ID, idOrName) {
 			prefixMatches = append(prefixMatches, ing)
 		}
 	}

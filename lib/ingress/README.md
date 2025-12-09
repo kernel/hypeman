@@ -88,6 +88,51 @@ When `tls: true` is set on a rule:
 When `redirect_http: true` is also set:
 - An automatic HTTP → HTTPS redirect is created for the hostname
 
+#### TLS Requirements
+
+To use TLS on any ingress rule, you **must** configure:
+
+1. **ACME credentials**: `ACME_EMAIL` and `ACME_DNS_PROVIDER` (with provider-specific credentials)
+2. **Allowed domains**: `TLS_ALLOWED_DOMAINS` must include the hostname pattern
+
+If TLS is requested without proper configuration, the ingress creation will fail with a descriptive error.
+
+#### Allowed Domains (`TLS_ALLOWED_DOMAINS`)
+
+This environment variable controls which hostnames can have TLS certificates issued. It's a comma-separated list of patterns:
+
+| Pattern | Matches | Does NOT Match |
+|---------|---------|----------------|
+| `api.example.com` | `api.example.com` (exact) | Any other hostname |
+| `*.example.com` | `foo.example.com`, `bar.example.com` | `example.com` (apex), `a.b.example.com` (multi-level) |
+| `*` | Any hostname (use with caution) | - |
+
+**Wildcard behavior:**
+- `*.example.com` matches **single-level** subdomains only
+- It does NOT match the apex domain (`example.com`)
+- It does NOT match multi-level subdomains (`foo.bar.example.com`)
+- To allow both apex and subdomains, use: `TLS_ALLOWED_DOMAINS=example.com,*.example.com`
+
+**Example configuration:**
+```bash
+# Allow TLS for any subdomain of example.com plus the apex
+TLS_ALLOWED_DOMAINS=example.com,*.example.com
+
+# Allow TLS for specific subdomains only
+TLS_ALLOWED_DOMAINS=api.example.com,www.example.com
+
+# Allow TLS for any domain (not recommended for production)
+TLS_ALLOWED_DOMAINS=*
+```
+
+#### Warning Scenarios
+
+The ingress manager logs warnings in these situations:
+
+- **TLS ingresses exist but ACME not configured**: If existing ingresses have `tls: true` but `ACME_EMAIL` or `ACME_DNS_PROVIDER` is not set, a warning is logged at startup. TLS will not work until ACME is configured.
+
+- **Domain not in allowed list**: Creating an ingress with `tls: true` for a hostname not in `TLS_ALLOWED_DOMAINS` will fail with error `domain_not_allowed`.
+
 ### Hostname Routing
 
 - Uses HTTP Host header matching (HTTP) or SNI (HTTPS)
@@ -143,6 +188,9 @@ DELETE /ingresses/{id} - Delete ingress
 | `ACME_EMAIL` | ACME account email (required for TLS) | |
 | `ACME_DNS_PROVIDER` | DNS provider: `cloudflare` | |
 | `ACME_CA` | ACME CA URL (for staging, etc.) | Let's Encrypt production |
+| `TLS_ALLOWED_DOMAINS` | Comma-separated domain patterns allowed for TLS (required for TLS ingresses) | |
+| `DNS_PROPAGATION_TIMEOUT` | Max time to wait for DNS propagation (e.g., `2m`, `120s`) | |
+| `DNS_RESOLVERS` | Comma-separated DNS resolvers for propagation checking | |
 
 ### Cloudflare DNS Provider
 

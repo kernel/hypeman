@@ -17,6 +17,16 @@ import (
 	"github.com/onkernel/hypeman/lib/paths"
 )
 
+// Polling intervals for Caddy daemon lifecycle management.
+const (
+	// adminPollInterval is the interval for polling the admin API during startup.
+	adminPollInterval = 100 * time.Millisecond
+
+	// processExitPollInterval is the interval for polling process exit during shutdown.
+	// This is faster than adminPollInterval to ensure responsive shutdown.
+	processExitPollInterval = 50 * time.Millisecond
+)
+
 // CaddyDaemon manages the Caddy proxy daemon lifecycle.
 // Caddy uses its admin API for configuration updates - no restart needed.
 type CaddyDaemon struct {
@@ -195,7 +205,7 @@ func (d *CaddyDaemon) waitForProcessExit(pid int, timeout time.Duration) bool {
 		if !d.isProcessRunning(pid) {
 			return true
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(processExitPollInterval)
 	}
 	return !d.isProcessRunning(pid)
 }
@@ -274,7 +284,7 @@ func (d *CaddyDaemon) AdminURL() string {
 
 // waitForAdmin waits for the admin API to become responsive.
 func (d *CaddyDaemon) waitForAdmin(ctx context.Context) error {
-	ticker := time.NewTicker(100 * time.Millisecond)
+	ticker := time.NewTicker(adminPollInterval)
 	defer ticker.Stop()
 
 	for {

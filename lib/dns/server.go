@@ -43,6 +43,7 @@ type Server struct {
 	log      *slog.Logger
 	mu       sync.Mutex
 	running  bool
+	ctx      context.Context // Base context for resolver calls, set during Start()
 }
 
 // NewServer creates a new DNS server for instance resolution.
@@ -67,6 +68,10 @@ func (s *Server) Start(ctx context.Context) error {
 	if s.running {
 		return nil
 	}
+
+	// Store context for use in resolver calls
+	// This allows DNS resolution to respect cancellation from the parent context
+	s.ctx = ctx
 
 	// Create DNS handler
 	mux := dns.NewServeMux()
@@ -137,10 +142,12 @@ func (s *Server) handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 		case dns.TypeA:
 			s.handleAQuery(m, q)
 		case dns.TypeAAAA:
-			// We don't support IPv6 for instances, return empty
-			// This prevents Caddy from waiting for AAAA responses
+			// IPv6 not supported for instances - return empty response (no answer records).
+			// This is intentional: returning quickly with no records prevents Caddy from
+			// waiting for AAAA resolution, improving request latency. Clients will fall
+			// back to IPv4 A record resolution.
 		default:
-			// Unsupported query type
+			// Unsupported query type - return empty response
 		}
 	}
 
@@ -164,9 +171,9 @@ func (s *Server) handleAQuery(m *dns.Msg, q dns.Question) {
 		return
 	}
 
-	// Resolve instance IP
-	ctx := context.Background()
-	ip, err := s.resolver.ResolveInstanceIP(ctx, instanceName)
+	// Resolve instance IP using the server's base context
+	// This allows resolution to be cancelled when the server is stopped
+	ip, err := s.resolver.ResolveInstanceIP(s.ctx, instanceName)
 	if err != nil {
 		s.log.Debug("DNS resolution failed", "instance", instanceName, "error", err)
 		// Return NXDOMAIN by not adding any answer records

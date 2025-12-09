@@ -588,6 +588,81 @@ func TestACMEConfig_IsDomainAllowed(t *testing.T) {
 			hostname:       "api.other.com",
 			expected:       true,
 		},
+		// Edge cases for global wildcard
+		{
+			name:           "global wildcard matches any domain",
+			allowedDomains: "*",
+			hostname:       "anything.example.com",
+			expected:       true,
+		},
+		{
+			name:           "global wildcard matches apex domain",
+			allowedDomains: "*",
+			hostname:       "example.com",
+			expected:       true,
+		},
+		{
+			name:           "global wildcard matches deeply nested",
+			allowedDomains: "*",
+			hostname:       "a.b.c.d.example.com",
+			expected:       true,
+		},
+		{
+			name:           "global wildcard with other patterns",
+			allowedDomains: "*, specific.example.com",
+			hostname:       "random.other.com",
+			expected:       true,
+		},
+		// Edge cases for subdomain wildcard
+		{
+			name:           "subdomain wildcard with single char subdomain",
+			allowedDomains: "*.example.com",
+			hostname:       "x.example.com",
+			expected:       true,
+		},
+		{
+			name:           "subdomain wildcard with hyphenated subdomain",
+			allowedDomains: "*.example.com",
+			hostname:       "my-app.example.com",
+			expected:       true,
+		},
+		{
+			name:           "subdomain wildcard with numeric subdomain",
+			allowedDomains: "*.example.com",
+			hostname:       "123.example.com",
+			expected:       true,
+		},
+		{
+			name:           "subdomain wildcard does not match empty prefix",
+			allowedDomains: "*.example.com",
+			hostname:       ".example.com",
+			expected:       false,
+		},
+		{
+			name:           "subdomain wildcard vs apex - explicit apex allowed",
+			allowedDomains: "*.example.com, example.com",
+			hostname:       "example.com",
+			expected:       true,
+		},
+		{
+			name:           "subdomain wildcard triple-level does not match",
+			allowedDomains: "*.example.com",
+			hostname:       "a.b.example.com",
+			expected:       false,
+		},
+		// Edge cases for pattern formatting
+		{
+			name:           "empty pattern in list is skipped",
+			allowedDomains: "api.example.com, , www.example.com",
+			hostname:       "www.example.com",
+			expected:       true,
+		},
+		{
+			name:           "only whitespace pattern is skipped",
+			allowedDomains: "   ,api.example.com",
+			hostname:       "api.example.com",
+			expected:       true,
+		},
 	}
 
 	for _, tc := range tests {

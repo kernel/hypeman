@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -25,15 +26,27 @@ const (
 	DNSProviderCloudflare DNSProvider = "cloudflare"
 )
 
+// Caddy DNS module provider names (used in Caddy JSON config).
+// These map our DNSProvider constants to the names expected by caddy-dns modules.
+const (
+	caddyProviderCloudflare = "cloudflare"
+)
+
+// SupportedDNSProviders returns a comma-separated list of supported DNS provider names.
+// Used in error messages to keep them in sync as new providers are added.
+func SupportedDNSProviders() string {
+	return string(DNSProviderCloudflare)
+}
+
 // ParseDNSProvider parses a string into a DNSProvider, returning an error for unknown values.
 func ParseDNSProvider(s string) (DNSProvider, error) {
 	switch s {
 	case "":
 		return DNSProviderNone, nil
-	case "cloudflare":
+	case string(DNSProviderCloudflare):
 		return DNSProviderCloudflare, nil
 	default:
-		return DNSProviderNone, fmt.Errorf("unknown DNS provider %q: must be 'cloudflare'", s)
+		return DNSProviderNone, fmt.Errorf("unknown DNS provider %q: supported providers are: %s", s, SupportedDNSProviders())
 	}
 }
 
@@ -63,7 +76,16 @@ type ACMEConfig struct {
 
 // IsDomainAllowed checks if a hostname is allowed for TLS based on the AllowedDomains config.
 // Returns true if the hostname matches any of the allowed patterns.
-// Supports exact matches and wildcard patterns (e.g., "*.example.com").
+//
+// Supported pattern types:
+//   - Exact match: "api.example.com" matches only "api.example.com"
+//   - Global wildcard: "*" matches any hostname (use with caution)
+//   - Subdomain wildcard: "*.example.com" matches single-level subdomains only
+//
+// Wildcard behavior for "*.example.com":
+//   - Matches: "foo.example.com", "bar.example.com"
+//   - Does NOT match: "example.com" (apex domain)
+//   - Does NOT match: "foo.bar.example.com" (multi-level subdomain)
 func (c *ACMEConfig) IsDomainAllowed(hostname string) bool {
 	if c.AllowedDomains == "" {
 		return false // No domains allowed if not configured
@@ -81,12 +103,25 @@ func (c *ACMEConfig) IsDomainAllowed(hostname string) bool {
 			return true
 		}
 
-		// Wildcard match (e.g., "*.example.com" matches "foo.example.com")
+		// Global wildcard "*" - matches any domain (use with caution)
+		if pattern == "*" {
+			return true
+		}
+
+		// Subdomain wildcard match (e.g., "*.example.com" matches "foo.example.com")
+		// Requirements:
+		// - Pattern must start with "*." (e.g., "*.example.com")
+		// - Hostname must end with the suffix (e.g., ".example.com")
+		// - Hostname must have exactly one label before the suffix (single-level only)
 		if strings.HasPrefix(pattern, "*.") {
 			suffix := pattern[1:] // Remove the "*", keep ".example.com"
-			if strings.HasSuffix(hostname, suffix) && !strings.Contains(strings.TrimSuffix(hostname, suffix), ".") {
-				// Ensure it only matches one level (foo.example.com, not foo.bar.example.com)
-				return true
+			if strings.HasSuffix(hostname, suffix) {
+				// Extract the prefix (e.g., "foo" from "foo.example.com")
+				prefix := strings.TrimSuffix(hostname, suffix)
+				// Prefix must be non-empty and contain no dots (single-level subdomain only)
+				if prefix != "" && !strings.Contains(prefix, ".") {
+					return true
+				}
 			}
 		}
 	}
@@ -366,11 +401,12 @@ func (g *CaddyConfigGenerator) buildDNSChallengeConfig() map[string]interface{} 
 	case DNSProviderCloudflare:
 		// caddy-dns/cloudflare module format
 		dnsConfig["provider"] = map[string]interface{}{
-			"name":      "cloudflare",
+			"name":      caddyProviderCloudflare,
 			"api_token": g.acme.CloudflareAPIToken,
 		}
 	default:
-		// Should not happen - DNSProvider is validated at startup
+		// This shouldn't happen due to validation at startup, but log if it does
+		slog.Warn("unknown DNS provider in buildDNSChallengeConfig", "provider", g.acme.DNSProvider)
 		return map[string]interface{}{}
 	}
 
