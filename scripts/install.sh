@@ -240,8 +240,9 @@ if [ ! -f "$CONFIG_FILE" ]; then
     sed -i "s/^JWT_SECRET=$/JWT_SECRET=${JWT_SECRET}/" "${TMP_DIR}/config"
     
     # Set fixed ports for production (instead of random ports used in dev)
-    sed -i "s/^# CADDY_ADMIN_PORT=0/CADDY_ADMIN_PORT=2019/" "${TMP_DIR}/config"
-    sed -i "s/^# INTERNAL_DNS_PORT=0/INTERNAL_DNS_PORT=5353/" "${TMP_DIR}/config"
+    # Replace entire line to avoid trailing comments being included in the value
+    sed -i "s/^# CADDY_ADMIN_PORT=.*/CADDY_ADMIN_PORT=2019/" "${TMP_DIR}/config"
+    sed -i "s/^# INTERNAL_DNS_PORT=.*/INTERNAL_DNS_PORT=5353/" "${TMP_DIR}/config"
     
     info "Installing config file at ${CONFIG_FILE}..."
     $SUDO install -m 640 "${TMP_DIR}/config" "$CONFIG_FILE"

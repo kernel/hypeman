@@ -146,11 +146,12 @@ func Load() *Config {
 		LogLevel: getEnv("LOG_LEVEL", "info"),
 
 		// Caddy / Ingress configuration
-		CaddyListenAddress:  getEnv("CADDY_LISTEN_ADDRESS", "0.0.0.0"),
-		CaddyAdminAddress:   getEnv("CADDY_ADMIN_ADDRESS", "127.0.0.1"),
-		CaddyAdminPort:      getEnvInt("CADDY_ADMIN_PORT", 0),  // 0 = random port to prevent conflicts on shared dev machines
-		InternalDNSPort:     getEnvInt("INTERNAL_DNS_PORT", 0), // 0 = random port; used for dynamic upstream resolution
-		CaddyStopOnShutdown: getEnvBool("CADDY_STOP_ON_SHUTDOWN", false),
+		CaddyListenAddress: getEnv("CADDY_LISTEN_ADDRESS", "0.0.0.0"),
+		CaddyAdminAddress:  getEnv("CADDY_ADMIN_ADDRESS", "127.0.0.1"),
+		CaddyAdminPort:     getEnvInt("CADDY_ADMIN_PORT", 0),  // 0 = random port to prevent conflicts on shared dev machines
+		InternalDNSPort:    getEnvInt("INTERNAL_DNS_PORT", 0), // 0 = random port; used for dynamic upstream resolution
+		// Set to false if you're likely to frequently update hypeman
+		CaddyStopOnShutdown: getEnvBool("CADDY_STOP_ON_SHUTDOWN", true),
 
 		// ACME / TLS configuration
 		AcmeEmail:             getEnv("ACME_EMAIL", ""),
