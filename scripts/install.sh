@@ -6,7 +6,8 @@
 #   curl -fsSL https://raw.githubusercontent.com/onkernel/hypeman/main/scripts/install.sh | bash
 #
 # Options (via environment variables):
-#   VERSION      - Install specific version (default: latest)
+#   VERSION      - Install specific API version (default: latest)
+#   CLI_VERSION  - Install specific CLI version (default: latest)
 #   INSTALL_DIR  - Binary installation directory (default: /opt/hypeman/bin)
 #   DATA_DIR     - Data directory (default: /var/lib/hypeman)
 #   CONFIG_DIR   - Config directory (default: /etc/hypeman)
@@ -226,6 +227,55 @@ info "Starting ${SERVICE_NAME} service..."
 $SUDO systemctl start "$SERVICE_NAME"
 
 # =============================================================================
+# Install Hypeman CLI
+# =============================================================================
+
+CLI_REPO="onkernel/hypeman-cli"
+
+if [ -z "$CLI_VERSION" ]; then
+    info "Fetching latest CLI version..."
+    CLI_VERSION=$(curl -fsSL "https://api.github.com/repos/${CLI_REPO}/releases/latest" | grep '"tag_name"' | cut -d'"' -f4)
+    if [ -z "$CLI_VERSION" ]; then
+        warn "Failed to fetch latest CLI version, skipping CLI installation"
+        CLI_VERSION=""
+    fi
+fi
+
+if [ -n "$CLI_VERSION" ]; then
+    info "Installing Hypeman CLI version: $CLI_VERSION"
+    
+    CLI_VERSION_NUM="${CLI_VERSION#v}"
+    CLI_ARCHIVE_NAME="hypeman_${CLI_VERSION_NUM}_${OS}_${ARCH}.tar.gz"
+    CLI_DOWNLOAD_URL="https://github.com/${CLI_REPO}/releases/download/${CLI_VERSION}/${CLI_ARCHIVE_NAME}"
+    
+    info "Downloading CLI ${CLI_ARCHIVE_NAME}..."
+    if curl -fsSL "$CLI_DOWNLOAD_URL" -o "${TMP_DIR}/${CLI_ARCHIVE_NAME}"; then
+        info "Extracting CLI..."
+        mkdir -p "${TMP_DIR}/cli"
+        tar -xzf "${TMP_DIR}/${CLI_ARCHIVE_NAME}" -C "${TMP_DIR}/cli"
+        
+        # Install CLI binary
+        info "Installing hypeman CLI to ${INSTALL_DIR}..."
+        $SUDO install -m 755 "${TMP_DIR}/cli/hypeman" "${INSTALL_DIR}/hypeman-cli"
+        
+        # Install wrapper script to /usr/local/bin for PATH access
+        info "Installing hypeman wrapper to /usr/local/bin..."
+        $SUDO tee /usr/local/bin/hypeman > /dev/null << WRAPPER
+#!/bin/bash
+# Wrapper script for hypeman CLI that auto-generates API token
+set -a
+source ${CONFIG_FILE}
+set +a
+export HYPEMAN_API_KEY=\$(${INSTALL_DIR}/hypeman-token -user-id "cli-user-\$(whoami)" 2>/dev/null)
+exec ${INSTALL_DIR}/hypeman-cli "\$@"
+WRAPPER
+        $SUDO chmod 755 /usr/local/bin/hypeman
+    else
+        warn "Failed to download CLI from ${CLI_DOWNLOAD_URL}, skipping CLI installation"
+    fi
+fi
+
+# =============================================================================
 # Done
 # =============================================================================
 
@@ -240,20 +290,24 @@ cat << 'EOF'
  ╚═╝  ╚═╝     ╚═╝     ╚═╝       ╚══════╝  ╚═╝     ╚═╝  ╚═╝  ╚═╝  ╚═╝  ╚═══╝
 EOF
 echo -e "${NC}"
-info "Hypeman API ${VERSION} installed successfully!"
+info "Hypeman installed successfully!"
 echo ""
-echo "  Binary:      ${INSTALL_DIR}/${BINARY_NAME}"
-echo "  Token tool:  /usr/local/bin/hypeman-token"
-echo "  Config:      ${CONFIG_FILE}"
-echo "  Data:        ${DATA_DIR}"
-echo "  Service:     ${SERVICE_NAME}.service"
+echo "  API Binary:   ${INSTALL_DIR}/${BINARY_NAME}"
+echo "  CLI:          /usr/local/bin/hypeman"
+echo "  Token tool:   /usr/local/bin/hypeman-token"
+echo "  Config:       ${CONFIG_FILE}"
+echo "  Data:         ${DATA_DIR}"
+echo "  Service:      ${SERVICE_NAME}.service"
 echo ""
 echo ""
 echo "Next steps:"
 echo "  - (Optional) Edit ${CONFIG_FILE} to configure your installation"
 echo ""
 echo "Get Started:"
-echo "╭────────────────────────────────────────────────────────────────────╮"
-echo "│  Install the Hypeman CLI: https://github.com/onkernel/hypeman-cli  │"
-echo "╰────────────────────────────────────────────────────────────────────╯"
+echo "╭──────────────────────────────────────────╮"
+echo "│  hypeman pull nginx:alpine               │"
+echo "│  hypeman run nginx:alpine                │"
+echo "│  hypeman logs <instance-id>              │"
+echo "│  hypeman --help                          │"
+echo "╰──────────────────────────────────────────╯"
 echo ""
