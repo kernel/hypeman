@@ -203,5 +203,5 @@ clean:
 
 # Prepare for release build (called by GoReleaser)
 # Downloads all embedded binaries and builds embedded components
-release-prep: download-ch-binaries ensure-caddy-binaries lib/system/exec_agent/exec-agent
+release-prep: download-ch-binaries build-caddy-binaries lib/system/exec_agent/exec-agent
 	go mod tidy
