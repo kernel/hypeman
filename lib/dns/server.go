@@ -9,13 +9,16 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/miekg/dns"
 )
 
 const (
 	// DefaultPort is the default port for the local DNS server.
-	DefaultPort = 5353
+	// Using 0 means the OS will assign a random available port, preventing
+	// conflicts on shared development machines.
+	DefaultPort = 0
 
 	// Suffix is the domain suffix used for instance resolution.
 	// Queries like "my-instance.hypeman.internal" will be resolved.
@@ -24,6 +27,11 @@ const (
 	// DefaultTTL is the TTL for DNS responses in seconds.
 	// Keep it low since instance IPs can change.
 	DefaultTTL = 5
+
+	// resolverTimeout is the timeout for each DNS resolution request.
+	// Using a per-query timeout ensures DNS queries don't fail if the server
+	// is still running but the parent context is cancelled during shutdown.
+	resolverTimeout = 5 * time.Second
 )
 
 // InstanceResolver provides instance IP resolution.
@@ -43,7 +51,6 @@ type Server struct {
 	log      *slog.Logger
 	mu       sync.Mutex
 	running  bool
-	ctx      context.Context // Base context for resolver calls, set during Start()
 }
 
 // NewServer creates a new DNS server for instance resolution.
@@ -68,10 +75,6 @@ func (s *Server) Start(ctx context.Context) error {
 	if s.running {
 		return nil
 	}
-
-	// Store context for use in resolver calls
-	// This allows DNS resolution to respect cancellation from the parent context
-	s.ctx = ctx
 
 	// Create DNS handler
 	mux := dns.NewServeMux()
@@ -171,9 +174,13 @@ func (s *Server) handleAQuery(m *dns.Msg, q dns.Question) {
 		return
 	}
 
-	// Resolve instance IP using the server's base context
-	// This allows resolution to be cancelled when the server is stopped
-	ip, err := s.resolver.ResolveInstanceIP(s.ctx, instanceName)
+	// Use a fresh context with timeout for each DNS query.
+	// This ensures queries don't fail if the server is still running but
+	// a parent context was cancelled during shutdown.
+	ctx, cancel := context.WithTimeout(context.Background(), resolverTimeout)
+	defer cancel()
+
+	ip, err := s.resolver.ResolveInstanceIP(ctx, instanceName)
 	if err != nil {
 		s.log.Debug("DNS resolution failed", "instance", instanceName, "error", err)
 		// Return NXDOMAIN by not adding any answer records

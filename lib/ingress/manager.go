@@ -174,6 +174,19 @@ func (m *manager) Initialize(ctx context.Context) error {
 		log.WarnContext(ctx, "TLS ingresses exist but ACME is not configured - TLS will not work")
 	}
 
+	// Check if any TLS ingresses have hostnames not in the allowed domains list
+	for _, ing := range ingresses {
+		for _, rule := range ing.Rules {
+			if rule.TLS && !m.config.ACME.IsDomainAllowed(rule.Match.Hostname) {
+				log.WarnContext(ctx, "existing TLS ingress has hostname not in allowed domains list",
+					"ingress", ing.Name,
+					"hostname", rule.Match.Hostname,
+					"allowed_domains", m.config.ACME.AllowedDomains,
+				)
+			}
+		}
+	}
+
 	// Generate and write config
 	if err := m.regenerateConfig(ctx, ingresses); err != nil {
 		return fmt.Errorf("regenerate config: %w", err)

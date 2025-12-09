@@ -131,7 +131,9 @@ func (d *CaddyDaemon) startCaddy(ctx context.Context) (int, error) {
 		log.WarnContext(ctx, "failed to write PID file", "error", err)
 	}
 
-	// Wait for admin API to be ready
+	// Wait for admin API to be ready.
+	// Use context.Background() instead of the parent context to ensure the startup
+	// wait isn't cancelled if the parent context times out during server startup.
 	waitCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 

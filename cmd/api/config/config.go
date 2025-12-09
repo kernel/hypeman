@@ -147,7 +147,7 @@ func Load() *Config {
 		// Caddy / Ingress configuration
 		CaddyListenAddress:  getEnv("CADDY_LISTEN_ADDRESS", "0.0.0.0"),
 		CaddyAdminAddress:   getEnv("CADDY_ADMIN_ADDRESS", "127.0.0.1"),
-		CaddyAdminPort:      getEnvInt("CADDY_ADMIN_PORT", 2019),
+		CaddyAdminPort:      getEnvInt("CADDY_ADMIN_PORT", 0), // 0 = random port to prevent conflicts on shared dev machines
 		CaddyStopOnShutdown: getEnvBool("CADDY_STOP_ON_SHUTDOWN", false),
 
 		// ACME / TLS configuration

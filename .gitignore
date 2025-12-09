@@ -23,3 +23,5 @@ lib/system/exec_agent/exec-agent
 
 # Envoy binaries
 lib/ingress/binaries/caddy/**
+lib/ingress/binaries/**
+dist/**

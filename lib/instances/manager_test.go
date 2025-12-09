@@ -443,18 +443,14 @@ func TestBasicEndToEnd(t *testing.T) {
 
 	// Test TLS ingress (only if ACME is configured via environment variables or .env file)
 	// Try to load .env file from repository root (for local development)
-	if envPath := filepath.Join(filepath.Dir(filepath.Dir(filepath.Dir(tmpDir))), ".env"); true {
-		// Walk up to find .env in repo root
-		cwd, _ := os.Getwd()
-		for dir := cwd; dir != "/"; dir = filepath.Dir(dir) {
-			envFile := filepath.Join(dir, ".env")
-			if _, err := os.Stat(envFile); err == nil {
-				_ = godotenv.Load(envFile)
-				t.Logf("Loaded .env from %s", envFile)
-				break
-			}
+	cwd, _ := os.Getwd()
+	for dir := cwd; dir != "/"; dir = filepath.Dir(dir) {
+		envFile := filepath.Join(dir, ".env")
+		if _, err := os.Stat(envFile); err == nil {
+			_ = godotenv.Load(envFile)
+			t.Logf("Loaded .env from %s", envFile)
+			break
 		}
-		_ = envPath // silence unused warning
 	}
 
 	acmeEmail := os.Getenv("ACME_EMAIL")
