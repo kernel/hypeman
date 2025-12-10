@@ -7,7 +7,11 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"os"
+	"os/exec"
+	"os/signal"
+	"runtime"
 	"strings"
+	"syscall"
 
 	"github.com/onkernel/hypeman-cli/pkg/jsonview"
 	"github.com/onkernel/hypeman-go/option"
@@ -16,6 +20,7 @@ import (
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/pretty"
 	"github.com/urfave/cli/v3"
+	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 )
 
@@ -71,9 +76,123 @@ func isTerminal(w io.Writer) bool {
 	}
 }
 
+func streamOutput(label string, generateOutput func(w *os.File) error) error {
+	// For non-tty output (probably a pipe), write directly to stdout
+	if !isTerminal(os.Stdout) {
+		return streamToStdout(generateOutput)
+	}
+
+	pagerInput, outputFile, isSocketPair, err := createPagerFiles()
+	if err != nil {
+		return err
+	}
+	defer pagerInput.Close()
+	defer outputFile.Close()
+
+	cmd, err := startPagerCommand(pagerInput, label, isSocketPair)
+	if err != nil {
+		return err
+	}
+
+	if err := pagerInput.Close(); err != nil {
+		return err
+	}
+
+	// If the pager exits before reading all input, then generateOutput() will
+	// produce a broken pipe error, which is fine and we don't want to propagate it.
+	if err := generateOutput(outputFile); err != nil && !strings.Contains(err.Error(), "broken pipe") {
+		return err
+	}
+
+	return cmd.Wait()
+}
+
+func streamToStdout(generateOutput func(w *os.File) error) error {
+	signal.Ignore(syscall.SIGPIPE)
+	err := generateOutput(os.Stdout)
+	if err != nil && strings.Contains(err.Error(), "broken pipe") {
+		return nil
+	}
+	return err
+}
+
+func createPagerFiles() (*os.File, *os.File, bool, error) {
+	// Windows lacks UNIX socket APIs, so we fall back to pipes there or if
+	// socket creation fails. We prefer sockets when available because they
+	// allow for smaller buffer sizes, preventing unnecessary data streaming
+	// from the backend. Pipes typically have large buffers but serve as a
+	// decent alternative when sockets aren't available.
+	if runtime.GOOS != "windows" {
+		pagerInput, outputFile, isSocketPair, err := createSocketPair()
+		if err == nil {
+			return pagerInput, outputFile, isSocketPair, nil
+		}
+	}
+
+	r, w, err := os.Pipe()
+	return r, w, false, err
+}
+
+// In order to avoid large buffers on pipes, this function create a pair of
+// files for reading and writing through a barely buffered socket.
+func createSocketPair() (*os.File, *os.File, bool, error) {
+	fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM, 0)
+	if err != nil {
+		return nil, nil, false, err
+	}
+
+	parentSock, childSock := fds[0], fds[1]
+
+	// Use small buffer sizes so we don't ask the server for more paginated
+	// values than we actually need.
+	if err := unix.SetsockoptInt(parentSock, unix.SOL_SOCKET, unix.SO_SNDBUF, 128); err != nil {
+		return nil, nil, false, err
+	}
+	if err := unix.SetsockoptInt(childSock, unix.SOL_SOCKET, unix.SO_RCVBUF, 128); err != nil {
+		return nil, nil, false, err
+	}
+
+	pagerInput := os.NewFile(uintptr(childSock), "child_socket")
+	outputFile := os.NewFile(uintptr(parentSock), "parent_socket")
+	return pagerInput, outputFile, true, nil
+}
+
+// Start a subprocess running the user's preferred pager (or `less` if `$PAGER` is unset)
+func startPagerCommand(pagerInput *os.File, label string, useSocketpair bool) (*exec.Cmd, error) {
+	pagerProgram := os.Getenv("PAGER")
+	if pagerProgram == "" {
+		pagerProgram = "less"
+	}
+
+	if shouldUseColors(os.Stdout) {
+		os.Setenv("FORCE_COLOR", "1")
+	}
+
+	var cmd *exec.Cmd
+	if useSocketpair {
+		cmd = exec.Command(pagerProgram, fmt.Sprintf("/dev/fd/%d", pagerInput.Fd()))
+		cmd.ExtraFiles = []*os.File{pagerInput}
+	} else {
+		cmd = exec.Command(pagerProgram)
+		cmd.Stdin = pagerInput
+	}
+
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Env = append(os.Environ(),
+		"LESS=-r -f -P "+label,
+		"MORE=-r -f -P "+label,
+	)
+
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+
+	return cmd, nil
+}
+
 func shouldUseColors(w io.Writer) bool {
 	force, ok := os.LookupEnv("FORCE_COLOR")
-
 	if ok {
 		if force == "1" {
 			return true
@@ -82,11 +201,10 @@ func shouldUseColors(w io.Writer) bool {
 			return false
 		}
 	}
-
 	return isTerminal(w)
 }
 
-func ShowJSON(title string, res gjson.Result, format string, transform string) error {
+func ShowJSON(out *os.File, title string, res gjson.Result, format string, transform string) error {
 	if format != "raw" && transform != "" {
 		transformed := res.Get(transform)
 		if transformed.Exists() {
@@ -95,22 +213,36 @@ func ShowJSON(title string, res gjson.Result, format string, transform string) e
 	}
 	switch strings.ToLower(format) {
 	case "auto":
-		return ShowJSON(title, res, "json", "")
+		return ShowJSON(out, title, res, "json", "")
 	case "explore":
 		return jsonview.ExploreJSON(title, res)
 	case "pretty":
-		jsonview.DisplayJSON(title, res)
-		return nil
+		_, err := out.WriteString(jsonview.RenderJSON(title, res) + "\n")
+		return err
 	case "json":
 		prettyJSON := pretty.Pretty([]byte(res.Raw))
-		if shouldUseColors(os.Stdout) {
-			fmt.Print(string(pretty.Color(prettyJSON, pretty.TerminalStyle)))
+		if shouldUseColors(out) {
+			_, err := out.Write(pretty.Color(prettyJSON, pretty.TerminalStyle))
+			return err
 		} else {
-			fmt.Print(string(prettyJSON))
+			_, err := out.Write(prettyJSON)
+			return err
 		}
-		return nil
+	case "jsonl":
+		// @ugly is gjson syntax for "no whitespace", so it fits on one line
+		oneLineJSON := res.Get("@ugly").Raw
+		if shouldUseColors(out) {
+			bytes := append(pretty.Color([]byte(oneLineJSON), pretty.TerminalStyle), '\n')
+			_, err := out.Write(bytes)
+			return err
+		} else {
+			_, err := out.Write([]byte(oneLineJSON + "\n"))
+			return err
+		}
 	case "raw":
-		fmt.Println(res.Raw)
+		if _, err := out.Write([]byte(res.Raw + "\n")); err != nil {
+			return err
+		}
 		return nil
 	case "yaml":
 		input := strings.NewReader(res.Raw)
@@ -118,8 +250,8 @@ func ShowJSON(title string, res gjson.Result, format string, transform string) e
 		if err := json2yaml.Convert(&yaml, input); err != nil {
 			return err
 		}
-		fmt.Print(yaml.String())
-		return nil
+		_, err := out.Write([]byte(yaml.String()))
+		return err
 	default:
 		return fmt.Errorf("Invalid format: %s, valid formats are: %s", format, strings.Join(OutputFormats, ", "))
 	}

@@ -5,6 +5,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/onkernel/hypeman-cli/internal/apiquery"
 	"github.com/onkernel/hypeman-cli/internal/requestflag"
@@ -79,6 +80,7 @@ var volumesGet = cli.Command{
 func handleVolumesCreate(ctx context.Context, cmd *cli.Command) error {
 	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
 	unusedArgs := cmd.Args().Slice()
+
 	if len(unusedArgs) > 0 {
 		return fmt.Errorf("Unexpected extra arguments: %v", unusedArgs)
 	}
@@ -93,26 +95,24 @@ func handleVolumesCreate(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return err
 	}
+
 	var res []byte
 	options = append(options, option.WithResponseBodyInto(&res))
-	_, err = client.Volumes.New(
-		ctx,
-		params,
-		options...,
-	)
+	_, err = client.Volumes.New(ctx, params, options...)
 	if err != nil {
 		return err
 	}
 
-	json := gjson.Parse(string(res))
+	obj := gjson.ParseBytes(res)
 	format := cmd.Root().String("format")
 	transform := cmd.Root().String("transform")
-	return ShowJSON("volumes create", json, format, transform)
+	return ShowJSON(os.Stdout, "volumes create", obj, format, transform)
 }
 
 func handleVolumesList(ctx context.Context, cmd *cli.Command) error {
 	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
 	unusedArgs := cmd.Args().Slice()
+
 	if len(unusedArgs) > 0 {
 		return fmt.Errorf("Unexpected extra arguments: %v", unusedArgs)
 	}
@@ -125,6 +125,7 @@ func handleVolumesList(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return err
 	}
+
 	var res []byte
 	options = append(options, option.WithResponseBodyInto(&res))
 	_, err = client.Volumes.List(ctx, options...)
@@ -132,10 +133,10 @@ func handleVolumesList(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 
-	json := gjson.Parse(string(res))
+	obj := gjson.ParseBytes(res)
 	format := cmd.Root().String("format")
 	transform := cmd.Root().String("transform")
-	return ShowJSON("volumes list", json, format, transform)
+	return ShowJSON(os.Stdout, "volumes list", obj, format, transform)
 }
 
 func handleVolumesDelete(ctx context.Context, cmd *cli.Command) error {
@@ -157,11 +158,8 @@ func handleVolumesDelete(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return err
 	}
-	return client.Volumes.Delete(
-		ctx,
-		requestflag.CommandRequestValue[string](cmd, "id"),
-		options...,
-	)
+
+	return client.Volumes.Delete(ctx, requestflag.CommandRequestValue[string](cmd, "id"), options...)
 }
 
 func handleVolumesGet(ctx context.Context, cmd *cli.Command) error {
@@ -183,19 +181,16 @@ func handleVolumesGet(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return err
 	}
+
 	var res []byte
 	options = append(options, option.WithResponseBodyInto(&res))
-	_, err = client.Volumes.Get(
-		ctx,
-		requestflag.CommandRequestValue[string](cmd, "id"),
-		options...,
-	)
+	_, err = client.Volumes.Get(ctx, requestflag.CommandRequestValue[string](cmd, "id"), options...)
 	if err != nil {
 		return err
 	}
 
-	json := gjson.Parse(string(res))
+	obj := gjson.ParseBytes(res)
 	format := cmd.Root().String("format")
 	transform := cmd.Root().String("transform")
-	return ShowJSON("volumes get", json, format, transform)
+	return ShowJSON(os.Stdout, "volumes get", obj, format, transform)
 }

@@ -5,6 +5,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/onkernel/hypeman-cli/internal/apiquery"
 	"github.com/onkernel/hypeman-go"
@@ -24,6 +25,7 @@ var healthCheck = cli.Command{
 func handleHealthCheck(ctx context.Context, cmd *cli.Command) error {
 	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
 	unusedArgs := cmd.Args().Slice()
+
 	if len(unusedArgs) > 0 {
 		return fmt.Errorf("Unexpected extra arguments: %v", unusedArgs)
 	}
@@ -36,6 +38,7 @@ func handleHealthCheck(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return err
 	}
+
 	var res []byte
 	options = append(options, option.WithResponseBodyInto(&res))
 	_, err = client.Health.Check(ctx, options...)
@@ -43,8 +46,8 @@ func handleHealthCheck(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 
-	json := gjson.Parse(string(res))
+	obj := gjson.ParseBytes(res)
 	format := cmd.Root().String("format")
 	transform := cmd.Root().String("transform")
-	return ShowJSON("health check", json, format, transform)
+	return ShowJSON(os.Stdout, "health check", obj, format, transform)
 }

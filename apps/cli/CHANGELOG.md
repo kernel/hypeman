@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.0 (2025-12-06)
+
+Full Changelog: [v0.5.1...v0.6.0](https://github.com/onkernel/hypeman-cli/compare/v0.5.1...v0.6.0)
+
+### Features
+
+* **cli:** automatic streaming for paginated endpoints ([9af6924](https://github.com/onkernel/hypeman-cli/commit/9af69246d62010c32d39583c8b1eba39a663d3fa))
+
 ## 0.5.1 (2025-12-05)
 
 Full Changelog: [v0.5.0...v0.5.1](https://github.com/onkernel/hypeman-cli/compare/v0.5.0...v0.5.1)

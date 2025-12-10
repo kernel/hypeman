@@ -1,6 +1,7 @@
 package jsonview
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -226,7 +227,8 @@ func ExploreJSON(title string, json gjson.Result) error {
 	viewer := &JSONViewer{stack: []JSONView{view}, root: title, rawMode: false, help: help.New()}
 	_, err = tea.NewProgram(viewer).Run()
 	if viewer.message != "" {
-		fmt.Println("\n" + viewer.message)
+		_, msgErr := fmt.Println("\n" + viewer.message)
+		err = errors.Join(err, msgErr)
 	}
 	return err
 }

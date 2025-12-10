@@ -133,7 +133,3 @@ func RenderJSON(title string, json gjson.Result) string {
 	content := strings.TrimLeft(formatJSON(json, width), "\n")
 	return titleStyle.Render(title) + "\n" + containerStyle.Render(content)
 }
-
-func DisplayJSON(title string, json gjson.Result) {
-	fmt.Println(RenderJSON(title, json))
-}

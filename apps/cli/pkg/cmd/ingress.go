@@ -5,6 +5,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/onkernel/hypeman-cli/internal/apiquery"
 	"github.com/onkernel/hypeman-cli/internal/requestflag"
@@ -72,6 +73,7 @@ var ingressesGet = cli.Command{
 func handleIngressesCreate(ctx context.Context, cmd *cli.Command) error {
 	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
 	unusedArgs := cmd.Args().Slice()
+
 	if len(unusedArgs) > 0 {
 		return fmt.Errorf("Unexpected extra arguments: %v", unusedArgs)
 	}
@@ -86,26 +88,24 @@ func handleIngressesCreate(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return err
 	}
+
 	var res []byte
 	options = append(options, option.WithResponseBodyInto(&res))
-	_, err = client.Ingresses.New(
-		ctx,
-		params,
-		options...,
-	)
+	_, err = client.Ingresses.New(ctx, params, options...)
 	if err != nil {
 		return err
 	}
 
-	json := gjson.Parse(string(res))
+	obj := gjson.ParseBytes(res)
 	format := cmd.Root().String("format")
 	transform := cmd.Root().String("transform")
-	return ShowJSON("ingresses create", json, format, transform)
+	return ShowJSON(os.Stdout, "ingresses create", obj, format, transform)
 }
 
 func handleIngressesList(ctx context.Context, cmd *cli.Command) error {
 	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
 	unusedArgs := cmd.Args().Slice()
+
 	if len(unusedArgs) > 0 {
 		return fmt.Errorf("Unexpected extra arguments: %v", unusedArgs)
 	}
@@ -118,6 +118,7 @@ func handleIngressesList(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return err
 	}
+
 	var res []byte
 	options = append(options, option.WithResponseBodyInto(&res))
 	_, err = client.Ingresses.List(ctx, options...)
@@ -125,10 +126,10 @@ func handleIngressesList(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 
-	json := gjson.Parse(string(res))
+	obj := gjson.ParseBytes(res)
 	format := cmd.Root().String("format")
 	transform := cmd.Root().String("transform")
-	return ShowJSON("ingresses list", json, format, transform)
+	return ShowJSON(os.Stdout, "ingresses list", obj, format, transform)
 }
 
 func handleIngressesDelete(ctx context.Context, cmd *cli.Command) error {
@@ -150,11 +151,8 @@ func handleIngressesDelete(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return err
 	}
-	return client.Ingresses.Delete(
-		ctx,
-		requestflag.CommandRequestValue[string](cmd, "id"),
-		options...,
-	)
+
+	return client.Ingresses.Delete(ctx, requestflag.CommandRequestValue[string](cmd, "id"), options...)
 }
 
 func handleIngressesGet(ctx context.Context, cmd *cli.Command) error {
@@ -176,19 +174,16 @@ func handleIngressesGet(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return err
 	}
+
 	var res []byte
 	options = append(options, option.WithResponseBodyInto(&res))
-	_, err = client.Ingresses.Get(
-		ctx,
-		requestflag.CommandRequestValue[string](cmd, "id"),
-		options...,
-	)
+	_, err = client.Ingresses.Get(ctx, requestflag.CommandRequestValue[string](cmd, "id"), options...)
 	if err != nil {
 		return err
 	}
 
-	json := gjson.Parse(string(res))
+	obj := gjson.ParseBytes(res)
 	format := cmd.Root().String("format")
 	transform := cmd.Root().String("transform")
-	return ShowJSON("ingresses get", json, format, transform)
+	return ShowJSON(os.Stdout, "ingresses get", obj, format, transform)
 }

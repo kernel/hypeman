@@ -5,6 +5,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/onkernel/hypeman-cli/internal/apiquery"
 	"github.com/onkernel/hypeman-cli/internal/requestflag"
@@ -81,6 +82,7 @@ func handleInstancesVolumesAttach(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return err
 	}
+
 	var res []byte
 	options = append(options, option.WithResponseBodyInto(&res))
 	_, err = client.Instances.Volumes.Attach(
@@ -93,10 +95,10 @@ func handleInstancesVolumesAttach(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 
-	json := gjson.Parse(string(res))
+	obj := gjson.ParseBytes(res)
 	format := cmd.Root().String("format")
 	transform := cmd.Root().String("transform")
-	return ShowJSON("instances:volumes attach", json, format, transform)
+	return ShowJSON(os.Stdout, "instances:volumes attach", obj, format, transform)
 }
 
 func handleInstancesVolumesDetach(ctx context.Context, cmd *cli.Command) error {
@@ -122,6 +124,7 @@ func handleInstancesVolumesDetach(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return err
 	}
+
 	var res []byte
 	options = append(options, option.WithResponseBodyInto(&res))
 	_, err = client.Instances.Volumes.Detach(
@@ -134,8 +137,8 @@ func handleInstancesVolumesDetach(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 
-	json := gjson.Parse(string(res))
+	obj := gjson.ParseBytes(res)
 	format := cmd.Root().String("format")
 	transform := cmd.Root().String("transform")
-	return ShowJSON("instances:volumes detach", json, format, transform)
+	return ShowJSON(os.Stdout, "instances:volumes detach", obj, format, transform)
 }

@@ -5,6 +5,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/onkernel/hypeman-cli/internal/apiquery"
 	"github.com/onkernel/hypeman-cli/internal/requestflag"
@@ -65,6 +66,7 @@ var imagesGet = cli.Command{
 func handleImagesCreate(ctx context.Context, cmd *cli.Command) error {
 	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
 	unusedArgs := cmd.Args().Slice()
+
 	if len(unusedArgs) > 0 {
 		return fmt.Errorf("Unexpected extra arguments: %v", unusedArgs)
 	}
@@ -79,26 +81,24 @@ func handleImagesCreate(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return err
 	}
+
 	var res []byte
 	options = append(options, option.WithResponseBodyInto(&res))
-	_, err = client.Images.New(
-		ctx,
-		params,
-		options...,
-	)
+	_, err = client.Images.New(ctx, params, options...)
 	if err != nil {
 		return err
 	}
 
-	json := gjson.Parse(string(res))
+	obj := gjson.ParseBytes(res)
 	format := cmd.Root().String("format")
 	transform := cmd.Root().String("transform")
-	return ShowJSON("images create", json, format, transform)
+	return ShowJSON(os.Stdout, "images create", obj, format, transform)
 }
 
 func handleImagesList(ctx context.Context, cmd *cli.Command) error {
 	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
 	unusedArgs := cmd.Args().Slice()
+
 	if len(unusedArgs) > 0 {
 		return fmt.Errorf("Unexpected extra arguments: %v", unusedArgs)
 	}
@@ -111,6 +111,7 @@ func handleImagesList(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return err
 	}
+
 	var res []byte
 	options = append(options, option.WithResponseBodyInto(&res))
 	_, err = client.Images.List(ctx, options...)
@@ -118,10 +119,10 @@ func handleImagesList(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 
-	json := gjson.Parse(string(res))
+	obj := gjson.ParseBytes(res)
 	format := cmd.Root().String("format")
 	transform := cmd.Root().String("transform")
-	return ShowJSON("images list", json, format, transform)
+	return ShowJSON(os.Stdout, "images list", obj, format, transform)
 }
 
 func handleImagesDelete(ctx context.Context, cmd *cli.Command) error {
@@ -143,11 +144,8 @@ func handleImagesDelete(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return err
 	}
-	return client.Images.Delete(
-		ctx,
-		requestflag.CommandRequestValue[string](cmd, "name"),
-		options...,
-	)
+
+	return client.Images.Delete(ctx, requestflag.CommandRequestValue[string](cmd, "name"), options...)
 }
 
 func handleImagesGet(ctx context.Context, cmd *cli.Command) error {
@@ -169,19 +167,16 @@ func handleImagesGet(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return err
 	}
+
 	var res []byte
 	options = append(options, option.WithResponseBodyInto(&res))
-	_, err = client.Images.Get(
-		ctx,
-		requestflag.CommandRequestValue[string](cmd, "name"),
-		options...,
-	)
+	_, err = client.Images.Get(ctx, requestflag.CommandRequestValue[string](cmd, "name"), options...)
 	if err != nil {
 		return err
 	}
 
-	json := gjson.Parse(string(res))
+	obj := gjson.ParseBytes(res)
 	format := cmd.Root().String("format")
 	transform := cmd.Root().String("transform")
-	return ShowJSON("images get", json, format, transform)
+	return ShowJSON(os.Stdout, "images get", obj, format, transform)
 }

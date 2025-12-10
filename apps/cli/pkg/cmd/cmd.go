@@ -17,7 +17,7 @@ import (
 
 var (
 	Command       *cli.Command
-	OutputFormats = []string{"auto", "explore", "json", "pretty", "raw", "yaml"}
+	OutputFormats = []string{"auto", "explore", "json", "jsonl", "pretty", "raw", "yaml"}
 )
 
 func init() {

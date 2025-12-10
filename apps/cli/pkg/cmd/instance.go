@@ -5,6 +5,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/onkernel/hypeman-cli/internal/apiquery"
 	"github.com/onkernel/hypeman-cli/internal/requestflag"
@@ -176,6 +177,7 @@ var instancesStandby = cli.Command{
 func handleInstancesCreate(ctx context.Context, cmd *cli.Command) error {
 	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
 	unusedArgs := cmd.Args().Slice()
+
 	if len(unusedArgs) > 0 {
 		return fmt.Errorf("Unexpected extra arguments: %v", unusedArgs)
 	}
@@ -190,26 +192,24 @@ func handleInstancesCreate(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return err
 	}
+
 	var res []byte
 	options = append(options, option.WithResponseBodyInto(&res))
-	_, err = client.Instances.New(
-		ctx,
-		params,
-		options...,
-	)
+	_, err = client.Instances.New(ctx, params, options...)
 	if err != nil {
 		return err
 	}
 
-	json := gjson.Parse(string(res))
+	obj := gjson.ParseBytes(res)
 	format := cmd.Root().String("format")
 	transform := cmd.Root().String("transform")
-	return ShowJSON("instances create", json, format, transform)
+	return ShowJSON(os.Stdout, "instances create", obj, format, transform)
 }
 
 func handleInstancesList(ctx context.Context, cmd *cli.Command) error {
 	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
 	unusedArgs := cmd.Args().Slice()
+
 	if len(unusedArgs) > 0 {
 		return fmt.Errorf("Unexpected extra arguments: %v", unusedArgs)
 	}
@@ -222,6 +222,7 @@ func handleInstancesList(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return err
 	}
+
 	var res []byte
 	options = append(options, option.WithResponseBodyInto(&res))
 	_, err = client.Instances.List(ctx, options...)
@@ -229,10 +230,10 @@ func handleInstancesList(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 
-	json := gjson.Parse(string(res))
+	obj := gjson.ParseBytes(res)
 	format := cmd.Root().String("format")
 	transform := cmd.Root().String("transform")
-	return ShowJSON("instances list", json, format, transform)
+	return ShowJSON(os.Stdout, "instances list", obj, format, transform)
 }
 
 func handleInstancesDelete(ctx context.Context, cmd *cli.Command) error {
@@ -254,11 +255,8 @@ func handleInstancesDelete(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return err
 	}
-	return client.Instances.Delete(
-		ctx,
-		requestflag.CommandRequestValue[string](cmd, "id"),
-		options...,
-	)
+
+	return client.Instances.Delete(ctx, requestflag.CommandRequestValue[string](cmd, "id"), options...)
 }
 
 func handleInstancesGet(ctx context.Context, cmd *cli.Command) error {
@@ -280,21 +278,18 @@ func handleInstancesGet(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return err
 	}
+
 	var res []byte
 	options = append(options, option.WithResponseBodyInto(&res))
-	_, err = client.Instances.Get(
-		ctx,
-		requestflag.CommandRequestValue[string](cmd, "id"),
-		options...,
-	)
+	_, err = client.Instances.Get(ctx, requestflag.CommandRequestValue[string](cmd, "id"), options...)
 	if err != nil {
 		return err
 	}
 
-	json := gjson.Parse(string(res))
+	obj := gjson.ParseBytes(res)
 	format := cmd.Root().String("format")
 	transform := cmd.Root().String("transform")
-	return ShowJSON("instances get", json, format, transform)
+	return ShowJSON(os.Stdout, "instances get", obj, format, transform)
 }
 
 func handleInstancesLogs(ctx context.Context, cmd *cli.Command) error {
@@ -318,6 +313,7 @@ func handleInstancesLogs(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return err
 	}
+
 	stream := client.Instances.LogsStreaming(
 		ctx,
 		requestflag.CommandRequestValue[string](cmd, "id"),
@@ -350,21 +346,18 @@ func handleInstancesRestore(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return err
 	}
+
 	var res []byte
 	options = append(options, option.WithResponseBodyInto(&res))
-	_, err = client.Instances.Restore(
-		ctx,
-		requestflag.CommandRequestValue[string](cmd, "id"),
-		options...,
-	)
+	_, err = client.Instances.Restore(ctx, requestflag.CommandRequestValue[string](cmd, "id"), options...)
 	if err != nil {
 		return err
 	}
 
-	json := gjson.Parse(string(res))
+	obj := gjson.ParseBytes(res)
 	format := cmd.Root().String("format")
 	transform := cmd.Root().String("transform")
-	return ShowJSON("instances restore", json, format, transform)
+	return ShowJSON(os.Stdout, "instances restore", obj, format, transform)
 }
 
 func handleInstancesStandby(ctx context.Context, cmd *cli.Command) error {
@@ -386,19 +379,16 @@ func handleInstancesStandby(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return err
 	}
+
 	var res []byte
 	options = append(options, option.WithResponseBodyInto(&res))
-	_, err = client.Instances.Standby(
-		ctx,
-		requestflag.CommandRequestValue[string](cmd, "id"),
-		options...,
-	)
+	_, err = client.Instances.Standby(ctx, requestflag.CommandRequestValue[string](cmd, "id"), options...)
 	if err != nil {
 		return err
 	}
 
-	json := gjson.Parse(string(res))
+	obj := gjson.ParseBytes(res)
 	format := cmd.Root().String("format")
 	transform := cmd.Root().String("transform")
-	return ShowJSON("instances standby", json, format, transform)
+	return ShowJSON(os.Stdout, "instances standby", obj, format, transform)
 }
