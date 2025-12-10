@@ -90,17 +90,23 @@ func (h *InstanceLogHandler) writeToInstanceLog(instanceID string, r slog.Record
 	// Ensure directory exists
 	dir := filepath.Dir(logPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		return // silently skip if can't create directory
+		// Use package-level slog (not our handler) to avoid recursion.
+		// No "id" attr means this won't trigger writeToInstanceLog.
+		slog.Warn("failed to create instance log directory", "path", dir, "error", err)
+		return
 	}
 
 	// Open, write, close (no caching = no leak)
 	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
-		return // silently skip if can't open file
+		slog.Warn("failed to open instance log file", "path", logPath, "error", err)
+		return
 	}
 	defer f.Close()
 
-	f.WriteString(line)
+	if _, err := f.WriteString(line); err != nil {
+		slog.Warn("failed to write to instance log file", "path", logPath, "error", err)
+	}
 }
 
 // Enabled reports whether the handler handles records at the given level.
