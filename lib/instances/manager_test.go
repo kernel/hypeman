@@ -58,7 +58,6 @@ func setupTestManager(t *testing.T) (*manager, string) {
 	}
 	mgr := NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, nil, nil).(*manager)
 
-
 	// Register cleanup to kill any orphaned Cloud Hypervisor processes
 	t.Cleanup(func() {
 		cleanupOrphanedProcesses(t, mgr)

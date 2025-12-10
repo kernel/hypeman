@@ -18,7 +18,7 @@ func (m *manager) deleteInstance(
 ) error {
 	log := logger.FromContext(ctx)
 	log.InfoContext(ctx, "deleting instance", "id", id)
-	
+
 	// 1. Load instance
 	meta, err := m.loadMetadata(id)
 	if err != nil {
@@ -102,11 +102,11 @@ func (m *manager) deleteInstance(
 // For operations that need graceful shutdown (like standby), use the VMM API directly.
 func (m *manager) killVMM(ctx context.Context, inst *Instance) error {
 	log := logger.FromContext(ctx)
-	
+
 	// If we have a PID, kill the process immediately
 	if inst.CHPID != nil {
 		pid := *inst.CHPID
-		
+
 		// Check if process exists
 		if err := syscall.Kill(pid, 0); err == nil {
 			// Process exists - kill it immediately with SIGKILL
@@ -115,7 +115,7 @@ func (m *manager) killVMM(ctx context.Context, inst *Instance) error {
 			if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
 				log.WarnContext(ctx, "failed to kill VMM process", "id", inst.Id, "pid", pid, "error", err)
 			}
-			
+
 			// Wait for process to die and reap it to prevent zombies
 			// SIGKILL should be instant, but give it a moment
 			for i := 0; i < 50; i++ { // 50 * 100ms = 5 seconds
@@ -135,10 +135,10 @@ func (m *manager) killVMM(ctx context.Context, inst *Instance) error {
 			log.DebugContext(ctx, "VMM process not running", "id", inst.Id, "pid", pid)
 		}
 	}
-	
+
 	// Clean up socket if it still exists
 	os.Remove(inst.SocketPath)
-	
+
 	return nil
 }
 
@@ -146,7 +146,7 @@ func (m *manager) killVMM(ctx context.Context, inst *Instance) error {
 // Exported for use in tests.
 func WaitForProcessExit(pid int, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
-	
+
 	for time.Now().Before(deadline) {
 		// Check if process still exists (signal 0 doesn't kill, just checks existence)
 		if err := syscall.Kill(pid, 0); err != nil {
@@ -157,8 +157,7 @@ func WaitForProcessExit(pid int, timeout time.Duration) bool {
 		// 10ms polling interval balances responsiveness with CPU usage
 		time.Sleep(10 * time.Millisecond)
 	}
-	
+
 	// Timeout reached, process still exists
 	return false
 }
-
