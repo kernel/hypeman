@@ -123,7 +123,7 @@ func waitForLogMessage(ctx context.Context, mgr *manager, instanceID, message st
 
 // collectLogs gets the last N lines of logs (non-streaming)
 func collectLogs(ctx context.Context, mgr *manager, instanceID string, n int) (string, error) {
-	logChan, err := mgr.StreamInstanceLogs(ctx, instanceID, n, false)
+	logChan, err := mgr.StreamInstanceLogs(ctx, instanceID, n, false, LogSourceApp)
 	if err != nil {
 		return "", err
 	}
@@ -672,7 +672,7 @@ func TestBasicEndToEnd(t *testing.T) {
 	streamCtx, streamCancel := context.WithCancel(ctx)
 	defer streamCancel()
 
-	logChan, err := manager.StreamInstanceLogs(streamCtx, inst.Id, 10, true)
+	logChan, err := manager.StreamInstanceLogs(streamCtx, inst.Id, 10, true, LogSourceApp)
 	require.NoError(t, err)
 
 	// Create unique marker

@@ -161,15 +161,15 @@ func TestStartProcessCreatesLogFiles(t *testing.T) {
 	require.NoError(t, err)
 	assert.Greater(t, pid, 0)
 
-	// Verify log files exist - they are created and accessible by the daemon
-	stdoutLog := filepath.Join(tmpDir, "ch-stdout.log")
-	stderrLog := filepath.Join(tmpDir, "ch-stderr.log")
+	// Verify logs directory and vmm.log file exist
+	logsDir := filepath.Join(tmpDir, "logs")
+	vmmLog := filepath.Join(logsDir, "vmm.log")
 
-	_, err = os.Stat(stdoutLog)
-	require.NoError(t, err, "stdout log should exist")
+	_, err = os.Stat(logsDir)
+	require.NoError(t, err, "logs directory should exist")
 
-	_, err = os.Stat(stderrLog)
-	require.NoError(t, err, "stderr log should exist")
+	_, err = os.Stat(vmmLog)
+	require.NoError(t, err, "vmm.log should exist")
 
 	// Verify the daemon is running and responsive
 	client, err := NewVMM(socketPath)
@@ -179,16 +179,13 @@ func TestStartProcessCreatesLogFiles(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 200, pingResp.StatusCode())
 
-	// Read log files - with verbose mode, Cloud Hypervisor writes to logs
-	stdoutContent, err := os.ReadFile(stdoutLog)
-	require.NoError(t, err)
-	stderrContent, err := os.ReadFile(stderrLog)
+	// Read log file - with verbose mode, Cloud Hypervisor writes to logs
+	vmmContent, err := os.ReadFile(vmmLog)
 	require.NoError(t, err)
 
 	// Verify that logs contain output (proves daemon can write after parent closed files)
-	totalLogSize := len(stdoutContent) + len(stderrContent)
-	assert.Greater(t, totalLogSize, 0,
-		"Cloud Hypervisor daemon should write logs even after parent closed the file descriptors")
+	assert.Greater(t, len(vmmContent), 0,
+		"Cloud Hypervisor daemon should write logs even after parent closed the file descriptor")
 
 	// Cleanup
 	client.ShutdownVMMWithResponse(ctx)

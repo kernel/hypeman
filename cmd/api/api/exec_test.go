@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/onkernel/hypeman/lib/exec"
+	"github.com/onkernel/hypeman/lib/instances"
 	"github.com/onkernel/hypeman/lib/oapi"
 	"github.com/onkernel/hypeman/lib/paths"
 	"github.com/onkernel/hypeman/lib/system"
@@ -280,7 +281,7 @@ func TestExecWithDebianMinimal(t *testing.T) {
 
 // collectTestLogs collects logs from an instance (non-streaming)
 func collectTestLogs(t *testing.T, svc *ApiService, instanceID string, n int) string {
-	logChan, err := svc.InstanceManager.StreamInstanceLogs(ctx(), instanceID, n, false)
+	logChan, err := svc.InstanceManager.StreamInstanceLogs(ctx(), instanceID, n, false, instances.LogSourceApp)
 	if err != nil {
 		return ""
 	}
