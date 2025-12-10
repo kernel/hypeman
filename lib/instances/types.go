@@ -16,6 +16,7 @@ const (
 	StatePaused   State = "Paused"   // VM paused (CH native)
 	StateShutdown State = "Shutdown" // VM shutdown, VMM exists (CH native)
 	StateStandby  State = "Standby"  // No VMM, snapshot exists
+	StateUnknown  State = "Unknown"  // Failed to determine state (VMM query failed)
 )
 
 // VolumeAttachment represents a volume attached to an instance
@@ -76,8 +77,9 @@ type Instance struct {
 	StoredMetadata
 
 	// Derived fields (not stored in metadata.json)
-	State       State // Derived from socket + VMM query
-	HasSnapshot bool  // Derived from filesystem check
+	State       State   // Derived from socket + VMM query
+	StateError  *string // Error message if state couldn't be determined (non-nil when State=Unknown)
+	HasSnapshot bool    // Derived from filesystem check
 }
 
 // CreateInstanceRequest is the domain request for creating an instance

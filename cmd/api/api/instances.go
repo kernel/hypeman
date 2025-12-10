@@ -558,6 +558,7 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 		Name:        inst.Name,
 		Image:       inst.Image,
 		State:       oapi.InstanceState(inst.State),
+		StateError:  inst.StateError,
 		Size:        lo.ToPtr(sizeStr),
 		HotplugSize: lo.ToPtr(hotplugSizeStr),
 		OverlaySize: lo.ToPtr(overlaySizeStr),

@@ -378,7 +378,7 @@ func TestBasicEndToEnd(t *testing.T) {
 	// Ensure we clean up Caddy - use t.Cleanup for guaranteed cleanup even on test failures
 	t.Cleanup(func() {
 		t.Log("Shutting down Caddy...")
-		if err := ingressManager.Shutdown(); err != nil {
+		if err := ingressManager.Shutdown(context.Background()); err != nil {
 			t.Logf("Warning: failed to shutdown ingress manager: %v", err)
 		}
 	})
@@ -504,7 +504,7 @@ func TestBasicEndToEnd(t *testing.T) {
 		// Use t.Cleanup for guaranteed cleanup even on test failures
 		t.Cleanup(func() {
 			t.Log("Shutting down TLS Caddy...")
-			if err := tlsIngressManager.Shutdown(); err != nil {
+			if err := tlsIngressManager.Shutdown(context.Background()); err != nil {
 				t.Logf("Warning: failed to shutdown TLS ingress manager: %v", err)
 			}
 		})

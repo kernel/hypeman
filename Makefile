@@ -180,6 +180,7 @@ build-preview-cli:
 
 # Run in development mode with hot reload
 dev: ensure-ch-binaries ensure-caddy-binaries lib/system/exec_agent/exec-agent $(AIR)
+	@rm -f ./tmp/main
 	$(AIR) -c .air.toml
 
 # Run tests (as root for network capabilities, enables caching and parallelism)

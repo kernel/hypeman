@@ -37,6 +37,7 @@ func main() {
 		slog.Error("application terminated", "error", err)
 		os.Exit(1)
 	}
+	slog.Info("main() exiting normally")
 }
 
 func run() error {
@@ -61,11 +62,13 @@ func run() error {
 	}
 	if otelShutdown != nil {
 		defer func() {
+			slog.Info("shutting down OpenTelemetry")
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			if err := otelShutdown(shutdownCtx); err != nil {
 				slog.Warn("error shutting down OpenTelemetry", "error", err)
 			}
+			slog.Info("OpenTelemetry shutdown complete")
 		}()
 	}
 
@@ -91,10 +94,18 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("initialize application: %w", err)
 	}
-	defer cleanup()
+	defer func() {
+		slog.Info("cleaning up application resources")
+		cleanup()
+		slog.Info("application cleanup complete")
+	}()
 
 	ctx, stop := signal.NotifyContext(app.Ctx, os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	defer func() {
+		slog.Info("stopping signal handler")
+		stop()
+		slog.Info("signal handler stopped")
+	}()
 
 	logger := app.Logger
 
@@ -157,7 +168,7 @@ func run() error {
 		logger.Error("failed to initialize ingress manager", "error", err)
 		return fmt.Errorf("initialize ingress manager: %w", err)
 	}
-	logger.Info("Ingress manager initialized", "listen_addr", cfg.CaddyListenAddress, "admin", fmt.Sprintf("%s:%d", cfg.CaddyAdminAddress, cfg.CaddyAdminPort))
+	logger.Info("Ingress manager initialized", "listen_addr", cfg.CaddyListenAddress, "admin", app.IngressManager.AdminURL())
 
 	// Create router
 	r := chi.NewRouter()
@@ -315,7 +326,7 @@ func run() error {
 		logger.Info("http server shutdown complete")
 
 		// Shutdown ingress manager (stops Caddy if CADDY_STOP_ON_SHUTDOWN=true)
-		if err := app.IngressManager.Shutdown(); err != nil {
+		if err := app.IngressManager.Shutdown(shutdownCtx); err != nil {
 			logger.Error("failed to shutdown ingress manager", "error", err)
 			// Don't return error - continue with shutdown
 		} else {
@@ -345,7 +356,9 @@ func run() error {
 		}
 	})
 
-	return grp.Wait()
+	err = grp.Wait()
+	slog.Info("all goroutines finished")
+	return err
 }
 
 // getRunningInstanceIDs returns IDs of instances currently in Running state

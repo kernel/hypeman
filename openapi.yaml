@@ -45,7 +45,7 @@ components:
     
     InstanceState:
       type: string
-      enum: [Created, Running, Paused, Shutdown, Stopped, Standby]
+      enum: [Created, Running, Paused, Shutdown, Stopped, Standby, Unknown]
       description: |
         Instance state:
         - Created: VMM created but not started (Cloud Hypervisor native)
@@ -54,6 +54,7 @@ components:
         - Shutdown: VM shut down but VMM exists (Cloud Hypervisor native)
         - Stopped: No VMM running, no snapshot exists
         - Standby: No VMM running, snapshot exists (can be restored)
+        - Unknown: Failed to determine state (see state_error for details)
     
     VolumeMount:
       type: object
@@ -179,6 +180,11 @@ components:
           example: docker.io/library/alpine:latest
         state:
           $ref: "#/components/schemas/InstanceState"
+        state_error:
+          type: string
+          description: Error message if state couldn't be determined (only set when state is Unknown)
+          nullable: true
+          example: "failed to query VMM: connection refused"
         size:
           type: string
           description: Base memory size (human-readable)

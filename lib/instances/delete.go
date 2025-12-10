@@ -40,7 +40,8 @@ func (m *manager) deleteInstance(
 	}
 
 	// 3. If VMM might be running, force kill it
-	if inst.State.RequiresVMM() {
+	// Also attempt kill for StateUnknown since we can't be sure if VMM is running
+	if inst.State.RequiresVMM() || inst.State == StateUnknown {
 		log.DebugContext(ctx, "stopping VMM", "id", id, "state", inst.State)
 		if err := m.killVMM(ctx, &inst); err != nil {
 			// Log error but continue with cleanup

@@ -32,6 +32,11 @@ var ValidTransitions = map[State][]State{
 		StatePaused,  // start VMM + restore (atomic operation)
 		StateStopped, // delete snapshot + cleanup (terminal)
 	},
+	// StateUnknown means we failed to determine state - no transitions allowed.
+	// Operations on instances in Unknown state should fail with an error
+	// until the underlying issue is resolved.
+	// Can still Delete the instance.
+	StateUnknown: {},
 }
 
 // CanTransitionTo checks if a transition from current state to target state is valid
@@ -65,11 +70,9 @@ func (s State) RequiresVMM() bool {
 	switch s {
 	case StateCreated, StateRunning, StatePaused, StateShutdown:
 		return true
-	case StateStopped, StateStandby:
+	case StateStopped, StateStandby, StateUnknown:
 		return false
 	default:
 		return false
 	}
 }
-
-

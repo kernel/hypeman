@@ -56,6 +56,11 @@ func NewVMM(socketPath string) (*VMM, error) {
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return net.Dial("unix", socketPath)
 		},
+		// Disable keep-alives to prevent connection leaks.
+		// Each NewVMM call creates a new transport, so connection pooling
+		// just causes connections to accumulate until cloud-hypervisor
+		// hits its connection limit.
+		DisableKeepAlives: true,
 	}
 
 	httpClient := &http.Client{

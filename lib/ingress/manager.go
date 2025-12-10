@@ -51,7 +51,11 @@ type Manager interface {
 	Delete(ctx context.Context, idOrName string) error
 
 	// Shutdown gracefully stops the ingress subsystem.
-	Shutdown() error
+	Shutdown(ctx context.Context) error
+
+	// AdminURL returns the Caddy admin API URL.
+	// Only valid after Initialize() has been called.
+	AdminURL() string
 }
 
 // DefaultDNSPort is the default port for the internal DNS server.
@@ -152,13 +156,31 @@ func (m *manager) Initialize(ctx context.Context) error {
 		return fmt.Errorf("start DNS server: %w", err)
 	}
 
-	// Create config generator now that DNS server is running and we know the actual port
-	// (important when DNSPort was configured as 0 for random port)
+	// Resolve the admin port before creating config generator.
+	// If configured as 0, try to read from existing config or pick a new port.
+	adminPort := m.config.AdminPort
+	if adminPort == 0 {
+		// Try to read port from existing Caddy config
+		if existingPort := m.daemon.readPortFromConfig(); existingPort > 0 {
+			adminPort = existingPort
+		} else {
+			// Pick a new available port
+			port, err := pickAvailablePort(m.config.AdminAddress)
+			if err != nil {
+				return fmt.Errorf("pick admin port: %w", err)
+			}
+			adminPort = port
+		}
+		// Update daemon with resolved port
+		m.daemon.adminPort = adminPort
+	}
+
+	// Create config generator with resolved ports
 	m.configGenerator = NewCaddyConfigGenerator(
 		m.paths,
 		m.config.ListenAddress,
 		m.config.AdminAddress,
-		m.config.AdminPort,
+		adminPort,
 		m.config.ACME,
 		m.dnsServer.Port(),
 	)
@@ -463,9 +485,11 @@ func (m *manager) Delete(ctx context.Context, idOrName string) error {
 }
 
 // Shutdown gracefully stops the ingress subsystem.
-func (m *manager) Shutdown() error {
+func (m *manager) Shutdown(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	log := logger.FromContext(ctx)
 
 	// Stop log forwarder
 	if m.logForwarder != nil {
@@ -474,18 +498,32 @@ func (m *manager) Shutdown() error {
 
 	// Stop DNS server
 	if m.dnsServer != nil {
+		log.InfoContext(ctx, "stopping DNS server")
 		if err := m.dnsServer.Stop(); err != nil {
-			// Log but don't fail - continue with shutdown
-			slog.Warn("failed to stop DNS server", "error", err)
+			log.WarnContext(ctx, "failed to stop DNS server", "error", err)
+		} else {
+			log.InfoContext(ctx, "stopped DNS server")
 		}
 	}
 
 	// Only stop Caddy if configured to do so
 	if m.daemon.StopOnShutdown() {
-		return m.daemon.Stop()
+		log.InfoContext(ctx, "stopping Caddy daemon")
+		if err := m.daemon.Stop(ctx); err != nil {
+			log.ErrorContext(ctx, "failed to stop Caddy daemon", "error", err)
+			return err
+		}
+		log.InfoContext(ctx, "stopped Caddy daemon")
+		return nil
 	}
 
+	log.InfoContext(ctx, "leaving Caddy daemon running (CADDY_STOP_ON_SHUTDOWN=false)")
 	return nil
+}
+
+// AdminURL returns the Caddy admin API URL.
+func (m *manager) AdminURL() string {
+	return m.daemon.AdminURL()
 }
 
 // loadAllIngresses loads all ingresses and converts them to the Ingress type.
