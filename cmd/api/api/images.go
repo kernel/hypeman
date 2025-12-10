@@ -65,6 +65,12 @@ func (s *ApiService) CreateImage(ctx context.Context, request oapi.CreateImageRe
 // Note: Resolution is handled by ResolveResource middleware
 func (s *ApiService) GetImage(ctx context.Context, request oapi.GetImageRequestObject) (oapi.GetImageResponseObject, error) {
 	img := mw.GetResolvedImage[images.Image](ctx)
+	if img == nil {
+		return oapi.GetImage500JSONResponse{
+			Code:    "internal_error",
+			Message: "resource not resolved",
+		}, nil
+	}
 	return oapi.GetImage200JSONResponse(imageToOAPI(*img)), nil
 }
 
@@ -72,6 +78,12 @@ func (s *ApiService) GetImage(ctx context.Context, request oapi.GetImageRequestO
 // Note: Resolution is handled by ResolveResource middleware
 func (s *ApiService) DeleteImage(ctx context.Context, request oapi.DeleteImageRequestObject) (oapi.DeleteImageResponseObject, error) {
 	img := mw.GetResolvedImage[images.Image](ctx)
+	if img == nil {
+		return oapi.DeleteImage500JSONResponse{
+			Code:    "internal_error",
+			Message: "resource not resolved",
+		}, nil
+	}
 	log := logger.FromContext(ctx)
 
 	err := s.ImageManager.DeleteImage(ctx, img.Name)

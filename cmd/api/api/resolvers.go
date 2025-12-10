@@ -94,7 +94,7 @@ func ResolverErrorResponder(w http.ResponseWriter, err error, lookup string) {
 	case errors.Is(err, instances.ErrAmbiguousName),
 		errors.Is(err, volumes.ErrAmbiguousName),
 		errors.Is(err, ingress.ErrAmbiguousName):
-		w.WriteHeader(http.StatusNotFound)
+		w.WriteHeader(http.StatusConflict)
 		w.Write([]byte(`{"code":"ambiguous","message":"multiple resources match, use full ID"}`))
 
 	case errors.Is(err, images.ErrInvalidName):

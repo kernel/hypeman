@@ -123,6 +123,12 @@ func (s *ApiService) CreateIngress(ctx context.Context, request oapi.CreateIngre
 // Note: Resolution is handled by ResolveResource middleware
 func (s *ApiService) GetIngress(ctx context.Context, request oapi.GetIngressRequestObject) (oapi.GetIngressResponseObject, error) {
 	ing := mw.GetResolvedIngress[ingress.Ingress](ctx)
+	if ing == nil {
+		return oapi.GetIngress500JSONResponse{
+			Code:    "internal_error",
+			Message: "resource not resolved",
+		}, nil
+	}
 	return oapi.GetIngress200JSONResponse(ingressToOAPI(*ing)), nil
 }
 
@@ -130,6 +136,12 @@ func (s *ApiService) GetIngress(ctx context.Context, request oapi.GetIngressRequ
 // Note: Resolution is handled by ResolveResource middleware
 func (s *ApiService) DeleteIngress(ctx context.Context, request oapi.DeleteIngressRequestObject) (oapi.DeleteIngressResponseObject, error) {
 	ing := mw.GetResolvedIngress[ingress.Ingress](ctx)
+	if ing == nil {
+		return oapi.DeleteIngress500JSONResponse{
+			Code:    "internal_error",
+			Message: "resource not resolved",
+		}, nil
+	}
 	log := logger.FromContext(ctx)
 
 	err := s.IngressManager.Delete(ctx, ing.ID)

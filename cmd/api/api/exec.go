@@ -44,6 +44,10 @@ func (s *ApiService) ExecHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Get instance resolved by middleware
 	inst := mw.GetResolvedInstance[instances.Instance](ctx)
+	if inst == nil {
+		http.Error(w, `{"code":"internal_error","message":"resource not resolved"}`, http.StatusInternalServerError)
+		return
+	}
 
 	if inst.State != instances.StateRunning {
 		http.Error(w, fmt.Sprintf(`{"code":"invalid_state","message":"instance must be running (current state: %s)"}`, inst.State), http.StatusConflict)

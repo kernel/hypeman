@@ -203,6 +203,12 @@ func (s *ApiService) createVolumeFromMultipart(ctx context.Context, multipartRea
 // Note: Resolution is handled by ResolveResource middleware
 func (s *ApiService) GetVolume(ctx context.Context, request oapi.GetVolumeRequestObject) (oapi.GetVolumeResponseObject, error) {
 	vol := mw.GetResolvedVolume[volumes.Volume](ctx)
+	if vol == nil {
+		return oapi.GetVolume500JSONResponse{
+			Code:    "internal_error",
+			Message: "resource not resolved",
+		}, nil
+	}
 	return oapi.GetVolume200JSONResponse(volumeToOAPI(*vol)), nil
 }
 
@@ -211,6 +217,12 @@ func (s *ApiService) GetVolume(ctx context.Context, request oapi.GetVolumeReques
 // Note: Resolution is handled by ResolveResource middleware
 func (s *ApiService) DeleteVolume(ctx context.Context, request oapi.DeleteVolumeRequestObject) (oapi.DeleteVolumeResponseObject, error) {
 	vol := mw.GetResolvedVolume[volumes.Volume](ctx)
+	if vol == nil {
+		return oapi.DeleteVolume500JSONResponse{
+			Code:    "internal_error",
+			Message: "resource not resolved",
+		}, nil
+	}
 	log := logger.FromContext(ctx)
 
 	err := s.VolumeManager.DeleteVolume(ctx, vol.Id)

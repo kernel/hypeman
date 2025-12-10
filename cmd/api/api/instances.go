@@ -176,6 +176,12 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 // Note: Resolution is handled by ResolveResource middleware
 func (s *ApiService) GetInstance(ctx context.Context, request oapi.GetInstanceRequestObject) (oapi.GetInstanceResponseObject, error) {
 	inst := mw.GetResolvedInstance[instances.Instance](ctx)
+	if inst == nil {
+		return oapi.GetInstance500JSONResponse{
+			Code:    "internal_error",
+			Message: "resource not resolved",
+		}, nil
+	}
 	return oapi.GetInstance200JSONResponse(instanceToOAPI(*inst)), nil
 }
 
@@ -184,6 +190,12 @@ func (s *ApiService) GetInstance(ctx context.Context, request oapi.GetInstanceRe
 // Note: Resolution is handled by ResolveResource middleware
 func (s *ApiService) DeleteInstance(ctx context.Context, request oapi.DeleteInstanceRequestObject) (oapi.DeleteInstanceResponseObject, error) {
 	inst := mw.GetResolvedInstance[instances.Instance](ctx)
+	if inst == nil {
+		return oapi.DeleteInstance500JSONResponse{
+			Code:    "internal_error",
+			Message: "resource not resolved",
+		}, nil
+	}
 	log := logger.FromContext(ctx)
 
 	err := s.InstanceManager.DeleteInstance(ctx, inst.Id)
@@ -202,6 +214,12 @@ func (s *ApiService) DeleteInstance(ctx context.Context, request oapi.DeleteInst
 // Note: Resolution is handled by ResolveResource middleware
 func (s *ApiService) StandbyInstance(ctx context.Context, request oapi.StandbyInstanceRequestObject) (oapi.StandbyInstanceResponseObject, error) {
 	inst := mw.GetResolvedInstance[instances.Instance](ctx)
+	if inst == nil {
+		return oapi.StandbyInstance500JSONResponse{
+			Code:    "internal_error",
+			Message: "resource not resolved",
+		}, nil
+	}
 	log := logger.FromContext(ctx)
 
 	result, err := s.InstanceManager.StandbyInstance(ctx, inst.Id)
@@ -228,6 +246,12 @@ func (s *ApiService) StandbyInstance(ctx context.Context, request oapi.StandbyIn
 // Note: Resolution is handled by ResolveResource middleware
 func (s *ApiService) RestoreInstance(ctx context.Context, request oapi.RestoreInstanceRequestObject) (oapi.RestoreInstanceResponseObject, error) {
 	inst := mw.GetResolvedInstance[instances.Instance](ctx)
+	if inst == nil {
+		return oapi.RestoreInstance500JSONResponse{
+			Code:    "internal_error",
+			Message: "resource not resolved",
+		}, nil
+	}
 	log := logger.FromContext(ctx)
 
 	result, err := s.InstanceManager.RestoreInstance(ctx, inst.Id)
@@ -254,6 +278,12 @@ func (s *ApiService) RestoreInstance(ctx context.Context, request oapi.RestoreIn
 // Note: Resolution is handled by ResolveResource middleware
 func (s *ApiService) StopInstance(ctx context.Context, request oapi.StopInstanceRequestObject) (oapi.StopInstanceResponseObject, error) {
 	inst := mw.GetResolvedInstance[instances.Instance](ctx)
+	if inst == nil {
+		return oapi.StopInstance500JSONResponse{
+			Code:    "internal_error",
+			Message: "resource not resolved",
+		}, nil
+	}
 	log := logger.FromContext(ctx)
 
 	result, err := s.InstanceManager.StopInstance(ctx, inst.Id)
@@ -280,6 +310,12 @@ func (s *ApiService) StopInstance(ctx context.Context, request oapi.StopInstance
 // Note: Resolution is handled by ResolveResource middleware
 func (s *ApiService) StartInstance(ctx context.Context, request oapi.StartInstanceRequestObject) (oapi.StartInstanceResponseObject, error) {
 	inst := mw.GetResolvedInstance[instances.Instance](ctx)
+	if inst == nil {
+		return oapi.StartInstance500JSONResponse{
+			Code:    "internal_error",
+			Message: "resource not resolved",
+		}, nil
+	}
 	log := logger.FromContext(ctx)
 
 	result, err := s.InstanceManager.StartInstance(ctx, inst.Id)
@@ -333,6 +369,12 @@ func (r logsStreamResponse) VisitGetInstanceLogsResponse(w http.ResponseWriter) 
 // Note: Resolution is handled by ResolveResource middleware
 func (s *ApiService) GetInstanceLogs(ctx context.Context, request oapi.GetInstanceLogsRequestObject) (oapi.GetInstanceLogsResponseObject, error) {
 	inst := mw.GetResolvedInstance[instances.Instance](ctx)
+	if inst == nil {
+		return oapi.GetInstanceLogs500JSONResponse{
+			Code:    "internal_error",
+			Message: "resource not resolved",
+		}, nil
+	}
 
 	tail := 100
 	if request.Params.Tail != nil {
