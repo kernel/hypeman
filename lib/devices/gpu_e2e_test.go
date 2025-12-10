@@ -17,6 +17,7 @@ import (
 	"github.com/onkernel/hypeman/lib/network"
 	"github.com/onkernel/hypeman/lib/paths"
 	"github.com/onkernel/hypeman/lib/system"
+	"github.com/onkernel/hypeman/lib/volumes"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -60,15 +61,18 @@ func TestGPUPassthrough(t *testing.T) {
 		DNSServer:  "1.1.1.1",
 	}
 
-	// Initialize managers
-	imageMgr, err := images.NewManager(p, 1)
+	// Initialize managers (nil meter/tracer disables metrics/tracing)
+	imageMgr, err := images.NewManager(p, 1, nil)
 	require.NoError(t, err)
 
 	systemMgr := system.NewManager(p)
-	networkMgr := network.NewManager(p, cfg)
+	networkMgr := network.NewManager(p, cfg, nil)
 	deviceMgr := devices.NewManager(p)
-	maxOverlaySize := int64(100 * 1024 * 1024 * 1024)
-	instanceMgr := instances.NewManager(p, imageMgr, systemMgr, networkMgr, deviceMgr, maxOverlaySize)
+	volumeMgr := volumes.NewManager(p, 100*1024*1024*1024, nil) // 100GB max volume storage
+	limits := instances.ResourceLimits{
+		MaxOverlaySize: 100 * 1024 * 1024 * 1024, // 100GB
+	}
+	instanceMgr := instances.NewManager(p, imageMgr, systemMgr, networkMgr, deviceMgr, volumeMgr, limits, nil, nil)
 
 	// Step 1: Discover available GPUs
 	t.Log("Step 1: Discovering available GPUs...")
@@ -144,7 +148,7 @@ func TestGPUPassthrough(t *testing.T) {
 	})
 	require.NoError(t, createErr, "CreateImage should succeed")
 	t.Logf("CreateImage returned: name=%s, status=%s", createdImg.Name, createdImg.Status)
-	
+
 	// Use the name returned from CreateImage (it may be normalized)
 	imageName := createdImg.Name
 
@@ -181,7 +185,7 @@ func TestGPUPassthrough(t *testing.T) {
 	t.Log("Step 5: Creating instance with GPU...")
 	createCtx, createCancel := context.WithTimeout(ctx, 60*time.Second)
 	defer createCancel()
-	
+
 	inst, err := instanceMgr.CreateInstance(createCtx, instances.CreateInstanceRequest{
 		Name:           "gpu-test",
 		Image:          "docker.io/library/nginx:alpine",
@@ -347,4 +351,3 @@ func (b *outputBuffer) Write(p []byte) (n int, err error) {
 func (b *outputBuffer) String() string {
 	return b.buf.String()
 }
-
