@@ -167,8 +167,10 @@ type Instance struct {
 	// - Shutdown: VM shut down but VMM exists (Cloud Hypervisor native)
 	// - Stopped: No VMM running, no snapshot exists
 	// - Standby: No VMM running, snapshot exists (can be restored)
+	// - Unknown: Failed to determine state (see state_error for details)
 	//
-	// Any of "Created", "Running", "Paused", "Shutdown", "Stopped", "Standby".
+	// Any of "Created", "Running", "Paused", "Shutdown", "Stopped", "Standby",
+	// "Unknown".
 	State InstanceState `json:"state,required"`
 	// Environment variables
 	Env map[string]string `json:"env"`
@@ -184,6 +186,8 @@ type Instance struct {
 	Size string `json:"size"`
 	// Start timestamp (RFC3339)
 	StartedAt time.Time `json:"started_at,nullable" format:"date-time"`
+	// Error message if state couldn't be determined (only set when state is Unknown)
+	StateError string `json:"state_error,nullable"`
 	// Stop timestamp (RFC3339)
 	StoppedAt time.Time `json:"stopped_at,nullable" format:"date-time"`
 	// Number of virtual CPUs
@@ -204,6 +208,7 @@ type Instance struct {
 		OverlaySize respjson.Field
 		Size        respjson.Field
 		StartedAt   respjson.Field
+		StateError  respjson.Field
 		StoppedAt   respjson.Field
 		Vcpus       respjson.Field
 		Volumes     respjson.Field
@@ -226,6 +231,7 @@ func (r *Instance) UnmarshalJSON(data []byte) error {
 // - Shutdown: VM shut down but VMM exists (Cloud Hypervisor native)
 // - Stopped: No VMM running, no snapshot exists
 // - Standby: No VMM running, snapshot exists (can be restored)
+// - Unknown: Failed to determine state (see state_error for details)
 type InstanceState string
 
 const (
@@ -235,6 +241,7 @@ const (
 	InstanceStateShutdown InstanceState = "Shutdown"
 	InstanceStateStopped  InstanceState = "Stopped"
 	InstanceStateStandby  InstanceState = "Standby"
+	InstanceStateUnknown  InstanceState = "Unknown"
 )
 
 // Network configuration of the instance
