@@ -207,6 +207,7 @@ func run() error {
 		middleware.RequestID,
 		middleware.RealIP,
 		middleware.Recoverer,
+		mw.InjectLogger(logger),
 		mw.AccessLogger(accessLogger),
 		mw.JwtAuth(app.Config.JwtSecret),
 	).Get("/instances/{id}/exec", app.ApiService.ExecHandler)

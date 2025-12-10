@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 )
 
@@ -21,15 +20,6 @@ import (
 type InstanceLogHandler struct {
 	slog.Handler
 	logPathFunc func(id string) string // returns path to hypeman.log for an instance
-	state       *sharedState           // shared across all handlers derived via WithAttrs/WithGroup
-}
-
-// sharedState holds state that must be shared across all handler instances
-// derived from the same parent via WithAttrs/WithGroup.
-// Using a pointer ensures all derived handlers share the same mutex and file cache.
-type sharedState struct {
-	mu        sync.Mutex
-	fileCache map[string]*os.File
 }
 
 // NewInstanceLogHandler creates a new handler that wraps the given handler
@@ -39,9 +29,6 @@ func NewInstanceLogHandler(wrapped slog.Handler, logPathFunc func(id string) str
 	return &InstanceLogHandler{
 		Handler:     wrapped,
 		logPathFunc: logPathFunc,
-		state: &sharedState{
-			fileCache: make(map[string]*os.File),
-		},
 	}
 }
 
@@ -72,13 +59,14 @@ func (h *InstanceLogHandler) Handle(ctx context.Context, r slog.Record) error {
 }
 
 // writeToInstanceLog writes a log record to the instance's hypeman.log file.
+// Opens and closes the file for each write to avoid file handle leaks.
 func (h *InstanceLogHandler) writeToInstanceLog(instanceID string, r slog.Record) {
 	logPath := h.logPathFunc(instanceID)
 	if logPath == "" {
 		return
 	}
 
-	// Format log line outside the lock: timestamp LEVEL message key=value key=value...
+	// Format log line: timestamp LEVEL message key=value key=value...
 	timestamp := r.Time.Format(time.RFC3339)
 	level := r.Level.String()
 	msg := r.Message
@@ -99,27 +87,19 @@ func (h *InstanceLogHandler) writeToInstanceLog(instanceID string, r slog.Record
 	}
 	line += "\n"
 
-	// Get or create file handle and write (single lock acquisition)
-	h.state.mu.Lock()
-	defer h.state.mu.Unlock()
-
-	f, ok := h.state.fileCache[instanceID]
-	if !ok {
-		// Ensure directory exists
-		dir := filepath.Dir(logPath)
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			return // silently skip if can't create directory
-		}
-
-		var err error
-		f, err = os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-		if err != nil {
-			return // silently skip if can't open file
-		}
-		h.state.fileCache[instanceID] = f
+	// Ensure directory exists
+	dir := filepath.Dir(logPath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return // silently skip if can't create directory
 	}
 
-	// Write to file (best effort)
+	// Open, write, close (no caching = no leak)
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return // silently skip if can't open file
+	}
+	defer f.Close()
+
 	f.WriteString(line)
 }
 
@@ -129,45 +109,17 @@ func (h *InstanceLogHandler) Enabled(ctx context.Context, level slog.Level) bool
 }
 
 // WithAttrs returns a new handler with the given attributes.
-// The new handler shares the same state (mutex and file cache) as the parent.
 func (h *InstanceLogHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	return &InstanceLogHandler{
 		Handler:     h.Handler.WithAttrs(attrs),
 		logPathFunc: h.logPathFunc,
-		state:       h.state, // same pointer = shared mutex and cache
 	}
 }
 
 // WithGroup returns a new handler with the given group name.
-// The new handler shares the same state (mutex and file cache) as the parent.
 func (h *InstanceLogHandler) WithGroup(name string) slog.Handler {
 	return &InstanceLogHandler{
 		Handler:     h.Handler.WithGroup(name),
 		logPathFunc: h.logPathFunc,
-		state:       h.state, // same pointer = shared mutex and cache
-	}
-}
-
-// CloseInstanceLog closes and removes a cached file handle for an instance.
-// Call this when an instance is deleted.
-func (h *InstanceLogHandler) CloseInstanceLog(instanceID string) {
-	h.state.mu.Lock()
-	defer h.state.mu.Unlock()
-
-	if f, ok := h.state.fileCache[instanceID]; ok {
-		f.Close()
-		delete(h.state.fileCache, instanceID)
-	}
-}
-
-// CloseAll closes all cached file handles.
-// Call this during shutdown.
-func (h *InstanceLogHandler) CloseAll() {
-	h.state.mu.Lock()
-	defer h.state.mu.Unlock()
-
-	for id, f := range h.state.fileCache {
-		f.Close()
-		delete(h.state.fileCache, id)
 	}
 }
