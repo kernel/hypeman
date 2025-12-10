@@ -146,10 +146,18 @@ func run() error {
 		"kernel", kernelVer)
 
 	// Initialize network manager (creates default network if needed)
-	// Get running instance IDs for TAP cleanup
-	runningIDs := getRunningInstanceIDs(app)
+	// Get instance IDs that might have a running VMM for TAP cleanup safety.
+	// Include Unknown state: we couldn't confirm their state, but they might still
+	// have a running VMM. Better to leave a stale TAP than crash a running VM.
+	allInstances, _ := app.InstanceManager.ListInstances(app.Ctx)
+	var preserveTAPs []string
+	for _, inst := range allInstances {
+		if inst.State == instances.StateRunning || inst.State == instances.StateUnknown {
+			preserveTAPs = append(preserveTAPs, inst.Id)
+		}
+	}
 	logger.Info("Initializing network manager...")
-	if err := app.NetworkManager.Initialize(app.Ctx, runningIDs); err != nil {
+	if err := app.NetworkManager.Initialize(app.Ctx, preserveTAPs); err != nil {
 		logger.Error("failed to initialize network manager", "error", err)
 		return fmt.Errorf("initialize network manager: %w", err)
 	}
@@ -353,21 +361,6 @@ func run() error {
 	err = grp.Wait()
 	slog.Info("all goroutines finished")
 	return err
-}
-
-// getRunningInstanceIDs returns IDs of instances currently in Running state
-func getRunningInstanceIDs(app *application) []string {
-	allInstances, err := app.InstanceManager.ListInstances(app.Ctx)
-	if err != nil {
-		return nil
-	}
-	var running []string
-	for _, inst := range allInstances {
-		if inst.State == instances.StateRunning {
-			running = append(running, inst.Id)
-		}
-	}
-	return running
 }
 
 // checkKVMAccess verifies KVM is available and the user has permission to use it
