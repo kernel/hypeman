@@ -165,12 +165,8 @@ lib/system/exec_agent/exec-agent: lib/system/exec_agent/main.go
 build: ensure-ch-binaries ensure-caddy-binaries lib/system/exec_agent/exec-agent | $(BIN_DIR)
 	go build -tags containers_image_openpgp -o $(BIN_DIR)/hypeman ./cmd/api
 
-# Build exec CLI
-build-exec: | $(BIN_DIR)
-	go build -o $(BIN_DIR)/hypeman-exec ./cmd/exec
-
 # Build all binaries
-build-all: build build-exec
+build-all: build
 
 # Run in development mode with hot reload
 dev: ensure-ch-binaries ensure-caddy-binaries lib/system/exec_agent/exec-agent $(AIR)
