@@ -59,6 +59,11 @@ func (m *manager) streamInstanceLogs(ctx context.Context, id string, tail int, f
 		logPath = m.paths.InstanceAppLog(id)
 	}
 
+	// Check if log file exists before starting tail
+	if _, err := os.Stat(logPath); os.IsNotExist(err) {
+		return nil, ErrLogNotFound
+	}
+
 	// Build tail command
 	args := []string{"-n", strconv.Itoa(tail)}
 	if follow {
