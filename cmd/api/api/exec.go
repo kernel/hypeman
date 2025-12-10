@@ -105,7 +105,7 @@ func (s *ApiService) ExecHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Audit log: exec session started
 	log.InfoContext(ctx, "exec session started",
-		"id", instanceID,
+		"id", inst.Id,
 		"subject", subject,
 		"command", execReq.Command,
 		"tty", execReq.TTY,
@@ -133,7 +133,7 @@ func (s *ApiService) ExecHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.ErrorContext(ctx, "exec failed",
 			"error", err,
-			"id", instanceID,
+			"id", inst.Id,
 			"subject", subject,
 			"duration_ms", duration.Milliseconds(),
 		)
@@ -148,7 +148,7 @@ func (s *ApiService) ExecHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Audit log: exec session ended
 	log.InfoContext(ctx, "exec session ended",
-		"id", instanceID,
+		"id", inst.Id,
 		"subject", subject,
 		"exit_code", exit.Code,
 		"duration_ms", duration.Milliseconds(),
