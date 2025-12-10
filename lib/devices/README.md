@@ -4,7 +4,7 @@ This package provides GPU and PCI device passthrough for virtual machines using 
 
 ## Overview
 
-Device passthrough allows a VM to have direct, near-native access to physical hardware (GPUs, network cards, etc.) by bypassing the host's device drivers and giving the guest exclusive control.
+Device passthrough allows a VM to have direct, near-native access to physical hardware (GPUs, network cards, etc.) by bypassing the host's device drivers and giving the guest exclusive control. For a deep dive into the VFIO framework, see the [kernel documentation](https://docs.kernel.org/driver-api/vfio.html).
 
 ```
 ┌─────────────────────────────────────────────────────────────┐

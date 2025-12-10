@@ -18,7 +18,16 @@ dnsmasq --version
 
 **Install on Debian/Ubuntu:**
 ```bash
-sudo apt-get install erofs-utils dnsmasq
+sudo apt-get install erofs-utils dnsmasq iptables
+```
+
+**PATH setup:** On Debian/Ubuntu, `iptables` is in `/usr/sbin` which may not be in your PATH for non-root users. Add it if needed:
+```bash
+# Check if iptables is findable
+which iptables || echo "not in PATH"
+
+# Add to your shell config (~/.bashrc or ~/.zshrc)
+export PATH="$PATH:/usr/sbin"
 ```
 
 **KVM Access:** User must be in `kvm` group for VM access:
@@ -193,11 +202,17 @@ cp .env.example .env
 
 #### Data directory
 
-Hypeman stores data in a configurable directory. Configure permissions for this directory.
+Hypeman stores data in a configurable directory (set via `DATA_DIR` environment variable). You must create this directory and set permissions before running:
 
 ```bash
+# For default location:
 sudo mkdir /var/lib/hypeman
 sudo chown $USER:$USER /var/lib/hypeman
+
+# For custom location (e.g., on shared machines):
+sudo mkdir /var/lib/hypeman-$USER
+sudo chown $USER:$USER /var/lib/hypeman-$USER
+# Then set DATA_DIR=/var/lib/hypeman-$USER in your .env
 ```
 
 #### Dockerhub login

@@ -202,16 +202,40 @@ func getVendorName(vendorID string) string {
 
 // getDeviceName returns a human-readable device name based on class and IDs
 func getDeviceName(vendorID, deviceID, classCode string) string {
-	// For NVIDIA, provide some common device names
+	// For NVIDIA, provide some common device names.
+	// Sources:
+	//   - NVIDIA Driver README, Appendix A "Supported NVIDIA GPU Products":
+	//     https://download.nvidia.com/XFree86/Linux-x86_64/570.133.07/README/supportedchips.html
+	//   - PCI ID Database: https://pci-ids.ucw.cz/read/PC/10de
 	if vendorID == "10de" {
 		nvidiaDevices := map[string]string{
+			// H100 series
+			"2321": "H100 NVL",
+			"2330": "H100 SXM5 80GB",
+			"2331": "H100 PCIe",
+			"2339": "H100",
+			// H200 series
+			"2335": "H200",
+			// L4
 			"27b8": "L4",
-			"2684": "RTX 4090",
-			"2704": "RTX 4080",
+			// L40 series
+			"26b5": "L40",
 			"26b9": "L40S",
-			"20b5": "A100",
-			"20b0": "A100",
-			"1db4": "V100",
+			// A100 series
+			"20b0": "A100 SXM4 40GB",
+			"20b2": "A100 SXM4 80GB",
+			"20b5": "A100 PCIe 40GB",
+			"20f1": "A100 PCIe 80GB",
+			// A30/A40
+			"20b7": "A30",
+			"2235": "A40",
+			// RTX 4000 series (datacenter)
+			"2684": "RTX 4090",
+			"27b0": "RTX 4090 D",
+			// V100 series
+			"1db4": "V100 PCIe 16GB",
+			"1db5": "V100 SXM2 16GB",
+			"1db6": "V100 PCIe 32GB",
 		}
 		if name, ok := nvidiaDevices[deviceID]; ok {
 			return name
@@ -253,5 +277,3 @@ func DetermineDeviceType(device *AvailableDevice) DeviceType {
 
 	return DeviceTypeGeneric
 }
-
-
