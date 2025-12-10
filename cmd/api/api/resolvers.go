@@ -97,6 +97,10 @@ func ResolverErrorResponder(w http.ResponseWriter, err error, lookup string) {
 		w.WriteHeader(http.StatusNotFound)
 		w.Write([]byte(`{"code":"ambiguous","message":"multiple resources match, use full ID"}`))
 
+	case errors.Is(err, images.ErrInvalidName):
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`{"code":"invalid_name","message":"invalid image reference"}`))
+
 	default:
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte(`{"code":"internal_error","message":"failed to resolve resource"}`))
