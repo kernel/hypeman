@@ -1,8 +1,6 @@
 # Hypeman CLI
 
-The official CLI for the Hypeman REST API.
-
-It is generated with [Stainless](https://www.stainless.com/).
+The official CLI for [Hypeman](https://github.com/onkernel/hypeman/).
 
 ## Installation
 
