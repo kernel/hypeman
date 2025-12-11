@@ -69,6 +69,9 @@ func (m *manager) startInstance(
 			log.ErrorContext(ctx, "failed to allocate network", "instance_id", id, "error", err)
 			return nil, fmt.Errorf("allocate network: %w", err)
 		}
+		// Update stored metadata with new IP/MAC
+		stored.IP = netConfig.IP
+		stored.MAC = netConfig.MAC
 		// Add network cleanup to stack
 		cu.Add(func() {
 			m.networkManager.ReleaseAllocation(ctx, &network.Allocation{
@@ -78,7 +81,15 @@ func (m *manager) startInstance(
 		})
 	}
 
-	// 5. Start VMM and boot VM (reuses logic from create)
+	// 5. Regenerate config disk with new network configuration
+	instForConfig := &Instance{StoredMetadata: *stored}
+	log.DebugContext(ctx, "regenerating config disk", "instance_id", id)
+	if err := m.createConfigDisk(instForConfig, imageInfo, netConfig); err != nil {
+		log.ErrorContext(ctx, "failed to create config disk", "instance_id", id, "error", err)
+		return nil, fmt.Errorf("create config disk: %w", err)
+	}
+
+	// 6. Start VMM and boot VM (reuses logic from create)
 	log.InfoContext(ctx, "starting VMM and booting VM", "instance_id", id)
 	if err := m.startAndBootVM(ctx, stored, imageInfo, netConfig); err != nil {
 		log.ErrorContext(ctx, "failed to start and boot VM", "instance_id", id, "error", err)
@@ -88,7 +99,7 @@ func (m *manager) startInstance(
 	// Success - release cleanup stack (prevent cleanup)
 	cu.Release()
 
-	// 6. Update metadata (set PID, StartedAt)
+	// 7. Update metadata (set PID, StartedAt)
 	now := time.Now()
 	stored.StartedAt = &now
 
