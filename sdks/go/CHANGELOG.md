@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.7.0 (2025-12-11)
+
+Full Changelog: [v0.6.0...v0.7.0](https://github.com/onkernel/hypeman-go/compare/v0.6.0...v0.7.0)
+
+### Features
+
+* Operational logs over API: hypeman.log, vmm.log ([ec614f5](https://github.com/onkernel/hypeman-go/commit/ec614f5bdc0e110f31cec905d6deb7f1d460305b))
+* Support TLS for ingress ([973a5d8](https://github.com/onkernel/hypeman-go/commit/973a5d8b65601e70801ed4570f76980d01c92198))
+
+
+### Bug Fixes
+
+* incorrect reporting of Stopped, add better error reporting ([dc27cbd](https://github.com/onkernel/hypeman-go/commit/dc27cbdc7985c1db74b19501f1eb7a5da6442041))
+
 ## 0.6.0 (2025-12-06)
 
 Full Changelog: [v0.5.0...v0.6.0](https://github.com/onkernel/hypeman-go/compare/v0.5.0...v0.6.0)
