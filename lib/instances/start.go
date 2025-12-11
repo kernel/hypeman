@@ -8,6 +8,7 @@ import (
 	"github.com/onkernel/hypeman/lib/logger"
 	"github.com/onkernel/hypeman/lib/network"
 	"go.opentelemetry.io/otel/trace"
+	"gvisor.dev/gvisor/pkg/cleanup"
 )
 
 // startInstance starts a stopped instance
@@ -52,44 +53,40 @@ func (m *manager) startInstance(
 		return nil, fmt.Errorf("get image: %w", err)
 	}
 
-	// 4. Recreate network allocation if network enabled
+	// Setup cleanup stack for automatic rollback on errors
+	cu := cleanup.Make(func() {})
+	defer cu.Clean()
+
+	// 4. Allocate fresh network if network enabled
 	var netConfig *network.NetworkConfig
 	if stored.NetworkEnabled {
-		log.DebugContext(ctx, "recreating network for start", "instance_id", id, "network", "default")
-		if err := m.networkManager.RecreateAllocation(ctx, id); err != nil {
-			log.ErrorContext(ctx, "failed to recreate network", "instance_id", id, "error", err)
-			return nil, fmt.Errorf("recreate network: %w", err)
-		}
-		// Get the network config for VM configuration
-		netAlloc, err := m.networkManager.GetAllocation(ctx, id)
+		log.DebugContext(ctx, "allocating network for start", "instance_id", id, "network", "default")
+		netConfig, err = m.networkManager.CreateAllocation(ctx, network.AllocateRequest{
+			InstanceID:   id,
+			InstanceName: stored.Name,
+		})
 		if err != nil {
-			log.ErrorContext(ctx, "failed to get network allocation", "instance_id", id, "error", err)
-			// Cleanup network on failure
-			if netAlloc != nil {
-				m.networkManager.ReleaseAllocation(ctx, netAlloc)
-			}
-			return nil, fmt.Errorf("get network allocation: %w", err)
+			log.ErrorContext(ctx, "failed to allocate network", "instance_id", id, "error", err)
+			return nil, fmt.Errorf("allocate network: %w", err)
 		}
-		netConfig = &network.NetworkConfig{
-			TAPDevice: netAlloc.TAPDevice,
-			IP:        netAlloc.IP,
-			MAC:       netAlloc.MAC,
-			Netmask:   "255.255.255.0", // Default netmask
-		}
+		// Add network cleanup to stack
+		cu.Add(func() {
+			m.networkManager.ReleaseAllocation(ctx, &network.Allocation{
+				InstanceID: id,
+				TAPDevice:  netConfig.TAPDevice,
+			})
+		})
 	}
 
 	// 5. Start VMM and boot VM (reuses logic from create)
 	log.InfoContext(ctx, "starting VMM and booting VM", "instance_id", id)
 	if err := m.startAndBootVM(ctx, stored, imageInfo, netConfig); err != nil {
 		log.ErrorContext(ctx, "failed to start and boot VM", "instance_id", id, "error", err)
-		// Cleanup network on failure
-		if stored.NetworkEnabled {
-			if netAlloc, err := m.networkManager.GetAllocation(ctx, id); err == nil {
-				m.networkManager.ReleaseAllocation(ctx, netAlloc)
-			}
-		}
 		return nil, err
 	}
+
+	// Success - release cleanup stack (prevent cleanup)
+	cu.Release()
 
 	// 6. Update metadata (set PID, StartedAt)
 	now := time.Now()
