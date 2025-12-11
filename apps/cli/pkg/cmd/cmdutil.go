@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"runtime"
 	"strings"
 	"syscall"
 
@@ -20,7 +19,6 @@ import (
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/pretty"
 	"github.com/urfave/cli/v3"
-	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 )
 
@@ -117,44 +115,17 @@ func streamToStdout(generateOutput func(w *os.File) error) error {
 }
 
 func createPagerFiles() (*os.File, *os.File, bool, error) {
-	// Windows lacks UNIX socket APIs, so we fall back to pipes there or if
-	// socket creation fails. We prefer sockets when available because they
-	// allow for smaller buffer sizes, preventing unnecessary data streaming
-	// from the backend. Pipes typically have large buffers but serve as a
-	// decent alternative when sockets aren't available.
-	if runtime.GOOS != "windows" {
-		pagerInput, outputFile, isSocketPair, err := createSocketPair()
-		if err == nil {
-			return pagerInput, outputFile, isSocketPair, nil
-		}
+	// We prefer sockets when available because they allow for smaller buffer
+	// sizes, preventing unnecessary data streaming from the backend. Pipes
+	// typically have large buffers but serve as a decent alternative when
+	// sockets aren't available (e.g., on Windows).
+	pagerInput, outputFile, isSocketPair, err := createSocketPair()
+	if err == nil {
+		return pagerInput, outputFile, isSocketPair, nil
 	}
 
 	r, w, err := os.Pipe()
 	return r, w, false, err
-}
-
-// In order to avoid large buffers on pipes, this function create a pair of
-// files for reading and writing through a barely buffered socket.
-func createSocketPair() (*os.File, *os.File, bool, error) {
-	fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM, 0)
-	if err != nil {
-		return nil, nil, false, err
-	}
-
-	parentSock, childSock := fds[0], fds[1]
-
-	// Use small buffer sizes so we don't ask the server for more paginated
-	// values than we actually need.
-	if err := unix.SetsockoptInt(parentSock, unix.SOL_SOCKET, unix.SO_SNDBUF, 128); err != nil {
-		return nil, nil, false, err
-	}
-	if err := unix.SetsockoptInt(childSock, unix.SOL_SOCKET, unix.SO_RCVBUF, 128); err != nil {
-		return nil, nil, false, err
-	}
-
-	pagerInput := os.NewFile(uintptr(childSock), "child_socket")
-	outputFile := os.NewFile(uintptr(parentSock), "parent_socket")
-	return pagerInput, outputFile, true, nil
 }
 
 // Start a subprocess running the user's preferred pager (or `less` if `$PAGER` is unset)
