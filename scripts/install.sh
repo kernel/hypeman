@@ -97,6 +97,54 @@ esac
 info "Pre-flight checks passed"
 
 # =============================================================================
+# System Configuration - KVM access and network capabilities
+# =============================================================================
+
+# Get the installing user (for adding to groups)
+INSTALL_USER="${SUDO_USER:-$(whoami)}"
+
+# Ensure KVM access
+if [ -e /dev/kvm ]; then
+    if getent group kvm &>/dev/null; then
+        if ! groups "$INSTALL_USER" 2>/dev/null | grep -qw kvm; then
+            info "Adding user ${INSTALL_USER} to kvm group..."
+            $SUDO usermod -aG kvm "$INSTALL_USER"
+            warn "You may need to log out and back in for kvm group membership to take effect"
+        fi
+    fi
+else
+    warn "/dev/kvm not found - KVM may not be available on this system"
+fi
+
+# Enable IPv4 forwarding (required for VM networking)
+CURRENT_IP_FORWARD=$(sysctl -n net.ipv4.ip_forward 2>/dev/null || echo "0")
+if [ "$CURRENT_IP_FORWARD" != "1" ]; then
+    info "Enabling IPv4 forwarding..."
+    $SUDO sysctl -w net.ipv4.ip_forward=1 > /dev/null
+    
+    # Make it persistent across reboots
+    if [ -d /etc/sysctl.d ]; then
+        echo 'net.ipv4.ip_forward=1' | $SUDO tee /etc/sysctl.d/99-hypeman.conf > /dev/null
+    elif ! grep -q '^net.ipv4.ip_forward=1' /etc/sysctl.conf 2>/dev/null; then
+        echo 'net.ipv4.ip_forward=1' | $SUDO tee -a /etc/sysctl.conf > /dev/null
+    fi
+fi
+
+# Increase file descriptor limit for Caddy (ingress)
+if [ -d /etc/security/limits.d ]; then
+    if [ ! -f /etc/security/limits.d/99-hypeman.conf ]; then
+        info "Configuring file descriptor limits for ingress..."
+        $SUDO tee /etc/security/limits.d/99-hypeman.conf > /dev/null << 'LIMITS'
+# Hypeman: Increased file descriptor limits for Caddy ingress
+*  soft  nofile  65536
+*  hard  nofile  65536
+root  soft  nofile  65536
+root  hard  nofile  65536
+LIMITS
+    fi
+fi
+
+# =============================================================================
 # Create temp directory
 # =============================================================================
 
