@@ -8,7 +8,7 @@ type KernelVersion string
 const (
 	// Kernel versions from Kernel linux build
 	Kernel_202511182 KernelVersion = "ch-6.12.8-kernel-1-202511182"
-	Kernel_20251211  KernelVersion = "ch-6.12.8-kernel-2-20251211"
+	Kernel_20251211  KernelVersion = "ch-6.12.8-kernel-1.1-20251211"
 )
 
 var (
@@ -30,8 +30,8 @@ var KernelDownloadURLs = map[KernelVersion]map[string]string{
 		"aarch64": "https://github.com/onkernel/linux/releases/download/ch-6.12.8-kernel-1-202511182/Image-arm64",
 	},
 	Kernel_20251211: {
-		"x86_64":  "https://github.com/onkernel/linux/releases/download/ch-6.12.8-kernel-2-20251211/vmlinux-x86_64",
-		"aarch64": "https://github.com/onkernel/linux/releases/download/ch-6.12.8-kernel-2-20251211/Image-arm64",
+		"x86_64":  "https://github.com/onkernel/linux/releases/download/ch-6.12.8-kernel-1.1-20251211/vmlinux-x86_64",
+		"aarch64": "https://github.com/onkernel/linux/releases/download/ch-6.12.8-kernel-1.1-20251211/Image-arm64",
 	},
 	// Add future versions here
 }
