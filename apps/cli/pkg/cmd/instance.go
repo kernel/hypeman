@@ -450,7 +450,7 @@ func handleInstancesStart(ctx context.Context, cmd *cli.Command) error {
 	json := gjson.Parse(string(res))
 	format := cmd.Root().String("format")
 	transform := cmd.Root().String("transform")
-	return ShowJSON("instances start", json, format, transform)
+	return ShowJSON(os.Stdout, "instances start", json, format, transform)
 }
 
 func handleInstancesStop(ctx context.Context, cmd *cli.Command) error {
@@ -486,5 +486,5 @@ func handleInstancesStop(ctx context.Context, cmd *cli.Command) error {
 	json := gjson.Parse(string(res))
 	format := cmd.Root().String("format")
 	transform := cmd.Root().String("transform")
-	return ShowJSON("instances stop", json, format, transform)
+	return ShowJSON(os.Stdout, "instances stop", json, format, transform)
 }
