@@ -37,21 +37,88 @@ go run cmd/hypeman/main.go
 # Pull an image
 hypeman pull nginx:alpine
 
-# Run an instance (auto-pulls image if needed)
-hypeman run nginx:alpine
-hypeman run --name my-app -e PORT=3000 nginx:alpine
+# Boot a new VM (auto-pulls image if needed)
+hypeman run --name my-app nginx:alpine
 
-# List running instances
+# List running VMs
 hypeman ps
-hypeman ps -a    # show all instances
+# show all VMs
+hypeman ps -a
 
-# View logs
-hypeman logs <instance-id>
-hypeman logs -f <instance-id>   # follow logs
+# View logs of your app
+# All commands support using VM name, ID, or partial ID
+hypeman logs my-app
+hypeman logs -f my-app
 
-# Execute a command in a running instance
-hypeman exec <instance-id> -- /bin/sh
-hypeman exec -it <instance-id>  # interactive shell
+# Execute a command in a running VM
+hypeman exec my-app whoami
+# Shell into the VM
+hypeman exec -it my-app /bin/sh
+
+# VM lifecycle
+# Turn off the VM
+hypeman stop my-app
+# Boot the VM that was turned off
+hypeman start my-app
+# Put the VM to sleep (paused)
+hypeman standby my-app
+# Awaken the VM (resumed)
+hypeman restore my-app
+
+# Create a reverse proxy ("ingress") from the host to your VM
+hypeman ingress create --name my-ingress my-app --hostname my-nginx-app --port 80 --host-port 8081
+
+# List ingresses
+hypeman ingress list
+
+# Curl nginx through your ingress
+curl --header "Host: my-nginx-app" http://127.0.0.1:8081
+
+# Delete an ingress
+hypeman ingress delete my-ingress
+
+# Delete all VMs
+hypeman rm --force --all
+```
+
+More ingress features:
+- Automatic certs
+- Subdomain-based routing
+
+```bash
+# Make your VM if not already present
+hypeman run --name my-app nginx:alpine
+
+# This requires configuring the Hypeman server with DNS credentials
+# Change --hostname to a domain you own
+hypeman ingress create --name my-tls-ingress my-app --hostname hello.hypeman-development.com -p 80 --host-port 7443 --tls
+
+# Curl through your TLS-terminating reverse proxy configuration
+curl \
+  --resolve hello.hypeman-development.com:7443:127.0.0.1 \
+  https://hello.hypeman-development.com:7443
+
+# OR... Ingress also supports subdomain-based routing
+hypeman ingress create --name my-tls-subdomain-ingress '{instance}' --hostname '{instance}.hypeman-development.com' -p 80 --host-port 8443 --tls
+
+# Curling through the subdomain-based routing
+curl \
+  --resolve my-app.hypeman-development.com:8443:127.0.0.1 \
+  https://my-app.hypeman-development.com:8443
+
+# Delete all ingress
+hypeman ingress delete --all
+```
+
+More logging features:
+- Cloud Hypervisor logs
+- Hypeman operational logs
+
+```bash
+# View Cloud Hypervisor logs for your VM
+hypeman logs --source vmm my-app
+# View Hypeman logs for your VM
+hypeman logs --source hypeman my-app
 ```
 
 For details about specific commands, use the `--help` flag.

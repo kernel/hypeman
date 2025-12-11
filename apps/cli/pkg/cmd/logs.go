@@ -24,6 +24,11 @@ var logsCmd = cli.Command{
 			Usage: "Number of lines to show from the end of the logs",
 			Value: 100,
 		},
+		&cli.StringFlag{
+			Name:    "source",
+			Aliases: []string{"s"},
+			Usage:   "Log source: app (default), vmm (Cloud Hypervisor), or hypeman (operations log)",
+		},
 	},
 	Action:          handleLogs,
 	HideHelpCommand: true,
@@ -50,6 +55,9 @@ func handleLogs(ctx context.Context, cmd *cli.Command) error {
 	if cmd.IsSet("tail") {
 		params.Tail = hypeman.Opt(int64(cmd.Int("tail")))
 	}
+	if cmd.IsSet("source") {
+		params.Source = hypeman.InstanceLogsParamsSource(cmd.String("source"))
+	}
 
 	var opts []option.RequestOption
 	if cmd.Root().Bool("debug") {
@@ -70,5 +78,3 @@ func handleLogs(ctx context.Context, cmd *cli.Command) error {
 
 	return stream.Err()
 }
-
-

@@ -74,6 +74,11 @@ func init() {
 			&psCmd,
 			&logsCmd,
 			&rmCmd,
+			&stopCmd,
+			&startCmd,
+			&standbyCmd,
+			&restoreCmd,
+			&ingressCmd,
 			{
 				Name:     "health",
 				Category: "API RESOURCE",
@@ -101,6 +106,8 @@ func init() {
 					&instancesLogs,
 					&instancesDelete,
 					&instancesStandby,
+					&instancesStart,
+					&instancesStop,
 				},
 			},
 			{

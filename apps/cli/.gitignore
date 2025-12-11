@@ -3,3 +3,4 @@ dist/
 /hypeman
 .env
 hypeman/**
+bin/hypeman

@@ -174,6 +174,30 @@ var instancesStandby = cli.Command{
 	HideHelpCommand: true,
 }
 
+var instancesStart = cli.Command{
+	Name:  "start",
+	Usage: "Start a stopped instance",
+	Flags: []cli.Flag{
+		&requestflag.StringFlag{
+			Name: "id",
+		},
+	},
+	Action:          handleInstancesStart,
+	HideHelpCommand: true,
+}
+
+var instancesStop = cli.Command{
+	Name:  "stop",
+	Usage: "Stop instance (graceful shutdown)",
+	Flags: []cli.Flag{
+		&requestflag.StringFlag{
+			Name: "id",
+		},
+	},
+	Action:          handleInstancesStop,
+	HideHelpCommand: true,
+}
+
 func handleInstancesCreate(ctx context.Context, cmd *cli.Command) error {
 	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
 	unusedArgs := cmd.Args().Slice()
@@ -391,4 +415,76 @@ func handleInstancesStandby(ctx context.Context, cmd *cli.Command) error {
 	format := cmd.Root().String("format")
 	transform := cmd.Root().String("transform")
 	return ShowJSON(os.Stdout, "instances standby", obj, format, transform)
+}
+
+func handleInstancesStart(ctx context.Context, cmd *cli.Command) error {
+	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
+	unusedArgs := cmd.Args().Slice()
+	if !cmd.IsSet("id") && len(unusedArgs) > 0 {
+		cmd.Set("id", unusedArgs[0])
+		unusedArgs = unusedArgs[1:]
+	}
+	if len(unusedArgs) > 0 {
+		return fmt.Errorf("Unexpected extra arguments: %v", unusedArgs)
+	}
+	options, err := flagOptions(
+		cmd,
+		apiquery.NestedQueryFormatBrackets,
+		apiquery.ArrayQueryFormatComma,
+		ApplicationJSON,
+	)
+	if err != nil {
+		return err
+	}
+	var res []byte
+	options = append(options, option.WithResponseBodyInto(&res))
+	_, err = client.Instances.Start(
+		ctx,
+		requestflag.CommandRequestValue[string](cmd, "id"),
+		options...,
+	)
+	if err != nil {
+		return err
+	}
+
+	json := gjson.Parse(string(res))
+	format := cmd.Root().String("format")
+	transform := cmd.Root().String("transform")
+	return ShowJSON("instances start", json, format, transform)
+}
+
+func handleInstancesStop(ctx context.Context, cmd *cli.Command) error {
+	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
+	unusedArgs := cmd.Args().Slice()
+	if !cmd.IsSet("id") && len(unusedArgs) > 0 {
+		cmd.Set("id", unusedArgs[0])
+		unusedArgs = unusedArgs[1:]
+	}
+	if len(unusedArgs) > 0 {
+		return fmt.Errorf("Unexpected extra arguments: %v", unusedArgs)
+	}
+	options, err := flagOptions(
+		cmd,
+		apiquery.NestedQueryFormatBrackets,
+		apiquery.ArrayQueryFormatComma,
+		ApplicationJSON,
+	)
+	if err != nil {
+		return err
+	}
+	var res []byte
+	options = append(options, option.WithResponseBodyInto(&res))
+	_, err = client.Instances.Stop(
+		ctx,
+		requestflag.CommandRequestValue[string](cmd, "id"),
+		options...,
+	)
+	if err != nil {
+		return err
+	}
+
+	json := gjson.Parse(string(res))
+	format := cmd.Root().String("format")
+	transform := cmd.Root().String("transform")
+	return ShowJSON("instances stop", json, format, transform)
 }

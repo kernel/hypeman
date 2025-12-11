@@ -85,7 +85,7 @@ func handleRun(ctx context.Context, cmd *cli.Command) error {
 	}
 
 	// Wait for image to be ready (build is asynchronous)
-	if err := waitForImageReady(ctx, &client, image, imgInfo); err != nil {
+	if err := waitForImageReady(ctx, &client, imgInfo); err != nil {
 		return err
 	}
 
@@ -150,7 +150,7 @@ func isNotFoundError(err error, target **hypeman.Error) bool {
 }
 
 // waitForImageReady polls image status until it becomes ready or failed
-func waitForImageReady(ctx context.Context, client *hypeman.Client, imageName string, img *hypeman.Image) error {
+func waitForImageReady(ctx context.Context, client *hypeman.Client, img *hypeman.Image) error {
 	if img.Status == hypeman.ImageStatusReady {
 		return nil
 	}
@@ -161,8 +161,8 @@ func waitForImageReady(ctx context.Context, client *hypeman.Client, imageName st
 		return fmt.Errorf("image build failed")
 	}
 
-	// Poll until ready
-	ticker := time.NewTicker(1 * time.Second)
+	// Poll until ready using the normalized image name from the API response
+	ticker := time.NewTicker(300 * time.Millisecond)
 	defer ticker.Stop()
 
 	// Show initial status
@@ -173,7 +173,7 @@ func waitForImageReady(ctx context.Context, client *hypeman.Client, imageName st
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			updated, err := client.Images.Get(ctx, imageName)
+			updated, err := client.Images.Get(ctx, img.Name)
 			if err != nil {
 				return fmt.Errorf("failed to check image status: %w", err)
 			}
