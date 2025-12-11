@@ -87,6 +87,7 @@ brews:
     homepage: https://github.com/onkernel/hypeman
     description: orchestrate cloud-hypervisor VMs
     license: Apache-2.0
+    directory: Formula
     install: |
       bin.install "hypeman"
       bash_completion.install "completions/hypeman.bash" => "hypeman"
