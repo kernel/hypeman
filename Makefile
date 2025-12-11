@@ -1,5 +1,5 @@
 SHELL := /bin/bash
-.PHONY: oapi-generate generate-vmm-client generate-wire generate-all dev build test install-tools gen-jwt download-ch-binaries download-ch-spec ensure-ch-binaries build-caddy-binaries build-caddy ensure-caddy-binaries release-prep
+.PHONY: oapi-generate generate-vmm-client generate-wire generate-all dev build test install-tools gen-jwt download-ch-binaries download-ch-spec ensure-ch-binaries build-caddy-binaries build-caddy ensure-caddy-binaries release-prep clean
 
 # Directory where local binaries will be installed
 BIN_DIR ?= $(CURDIR)/bin
@@ -192,10 +192,8 @@ gen-jwt: $(GODOTENV)
 # Clean generated files and binaries
 clean:
 	rm -rf $(BIN_DIR)
-	rm -f lib/oapi/oapi.go
-	rm -f lib/vmm/vmm.go
-	rm -f lib/exec/exec.pb.go
-	rm -f lib/exec/exec_grpc.pb.go
+	rm -rf lib/vmm/binaries/cloud-hypervisor/
+	rm -rf lib/ingress/binaries/
 	rm -f lib/system/exec_agent/exec-agent
 
 # Prepare for release build (called by GoReleaser)
