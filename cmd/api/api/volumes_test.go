@@ -22,14 +22,10 @@ func TestListVolumes_Empty(t *testing.T) {
 func TestGetVolume_NotFound(t *testing.T) {
 	svc := newTestService(t)
 
-	resp, err := svc.GetVolume(ctx(), oapi.GetVolumeRequestObject{
-		Id: "non-existent",
-	})
-	require.NoError(t, err)
-
-	notFound, ok := resp.(oapi.GetVolume404JSONResponse)
-	require.True(t, ok, "expected 404 response")
-	assert.Equal(t, "not_found", notFound.Code)
+	// With middleware, not-found would be handled before reaching handler.
+	// For this test, we call the manager directly to verify the error.
+	_, err := svc.VolumeManager.GetVolume(ctx(), "non-existent")
+	require.Error(t, err)
 }
 
 func TestGetVolume_ByName(t *testing.T) {
@@ -45,8 +41,8 @@ func TestGetVolume_ByName(t *testing.T) {
 	require.NoError(t, err)
 	created := createResp.(oapi.CreateVolume201JSONResponse)
 
-	// Get by name (not ID)
-	resp, err := svc.GetVolume(ctx(), oapi.GetVolumeRequestObject{
+	// Get by name (not ID) - use ctxWithVolume to simulate middleware
+	resp, err := svc.GetVolume(ctxWithVolume(svc, "my-data"), oapi.GetVolumeRequestObject{
 		Id: "my-data", // using name instead of ID
 	})
 	require.NoError(t, err)
@@ -69,12 +65,11 @@ func TestDeleteVolume_ByName(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Delete by name
-	resp, err := svc.DeleteVolume(ctx(), oapi.DeleteVolumeRequestObject{
+	// Delete by name - use ctxWithVolume to simulate middleware
+	resp, err := svc.DeleteVolume(ctxWithVolume(svc, "to-delete"), oapi.DeleteVolumeRequestObject{
 		Id: "to-delete",
 	})
 	require.NoError(t, err)
 	_, ok := resp.(oapi.DeleteVolume204Response)
 	assert.True(t, ok, "expected 204 response")
 }
-

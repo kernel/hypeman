@@ -29,10 +29,10 @@ import (
 
 // initializeApp is the injector function
 func initializeApp() (*application, func(), error) {
-	logger := providers.ProvideLogger()
-	context := providers.ProvideContext(logger)
 	config := providers.ProvideConfig()
 	paths := providers.ProvidePaths(config)
+	logger := providers.ProvideLogger(paths)
+	context := providers.ProvideContext(logger)
 	manager, err := providers.ProvideImageManager(paths, config)
 	if err != nil {
 		return nil, nil, err

@@ -146,10 +146,27 @@ func run() error {
 		"kernel", kernelVer)
 
 	// Initialize network manager (creates default network if needed)
-	// Get running instance IDs for TAP cleanup
-	runningIDs := getRunningInstanceIDs(app)
+	// Get instance IDs that might have a running VMM for TAP cleanup safety.
+	// Include Unknown state: we couldn't confirm their state, but they might still
+	// have a running VMM. Better to leave a stale TAP than crash a running VM.
+	var preserveTAPs []string
+	allInstances, err := app.InstanceManager.ListInstances(app.Ctx)
+	if err != nil {
+		// On error, skip TAP cleanup entirely to avoid crashing running VMs.
+		// Pass nil to Initialize to skip cleanup.
+		logger.Warn("failed to list instances for TAP cleanup, skipping cleanup", "error", err)
+		preserveTAPs = nil
+	} else {
+		// Initialize to empty slice (not nil) so cleanup runs even with no running VMs
+		preserveTAPs = []string{}
+		for _, inst := range allInstances {
+			if inst.State == instances.StateRunning || inst.State == instances.StateUnknown {
+				preserveTAPs = append(preserveTAPs, inst.Id)
+			}
+		}
+	}
 	logger.Info("Initializing network manager...")
-	if err := app.NetworkManager.Initialize(app.Ctx, runningIDs); err != nil {
+	if err := app.NetworkManager.Initialize(app.Ctx, preserveTAPs); err != nil {
 		logger.Error("failed to initialize network manager", "error", err)
 		return fmt.Errorf("initialize network manager: %w", err)
 	}
@@ -199,8 +216,10 @@ func run() error {
 		middleware.RequestID,
 		middleware.RealIP,
 		middleware.Recoverer,
+		mw.InjectLogger(logger),
 		mw.AccessLogger(accessLogger),
 		mw.JwtAuth(app.Config.JwtSecret),
+		mw.ResolveResource(app.ApiService.NewResolvers(), api.ResolverErrorResponder),
 	).Get("/instances/{id}/exec", app.ApiService.ExecHandler)
 
 	// OCI Distribution registry endpoints for image push (outside OpenAPI spec)
@@ -226,7 +245,8 @@ func run() error {
 		}
 
 		// Inject logger into request context for handlers to use
-		r.Use(mw.InjectLogger(accessLogger))
+		// Use app logger (not accessLogger) so the instance log handler is included
+		r.Use(mw.InjectLogger(logger))
 
 		// Access logger AFTER otelchi so trace context is available
 		r.Use(mw.AccessLogger(accessLogger))
@@ -253,6 +273,10 @@ func run() error {
 			ErrorHandler: mw.OapiErrorHandler,
 		}
 		r.Use(nethttpmiddleware.OapiRequestValidatorWithOptions(spec, validatorOptions))
+
+		// Resource resolver middleware - resolves IDs/names/prefixes before handlers
+		// Enriches context with resolved resource and logger with resolved ID
+		r.Use(mw.ResolveResource(app.ApiService.NewResolvers(), api.ResolverErrorResponder))
 
 		// Setup strict handler
 		strictHandler := oapi.NewStrictHandler(app.ApiService, nil)
@@ -352,21 +376,6 @@ func run() error {
 	err = grp.Wait()
 	slog.Info("all goroutines finished")
 	return err
-}
-
-// getRunningInstanceIDs returns IDs of instances currently in Running state
-func getRunningInstanceIDs(app *application) []string {
-	allInstances, err := app.InstanceManager.ListInstances(app.Ctx)
-	if err != nil {
-		return nil
-	}
-	var running []string
-	for _, inst := range allInstances {
-		if inst.State == instances.StateRunning {
-			running = append(running, inst.Id)
-		}
-	}
-	return running
 }
 
 // checkKVMAccess verifies KVM is available and the user has permission to use it

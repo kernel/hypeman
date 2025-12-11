@@ -42,3 +42,12 @@ func (r *IngressResolver) InstanceExists(ctx context.Context, nameOrID string) (
 	_, err := r.manager.GetInstance(ctx, nameOrID)
 	return err == nil, nil
 }
+
+// ResolveInstance resolves an instance name, ID, or ID prefix to its canonical name and ID.
+func (r *IngressResolver) ResolveInstance(ctx context.Context, nameOrID string) (string, string, error) {
+	inst, err := r.manager.GetInstance(ctx, nameOrID)
+	if err != nil {
+		return "", "", fmt.Errorf("instance not found: %s", nameOrID)
+	}
+	return inst.Name, inst.Id, nil
+}

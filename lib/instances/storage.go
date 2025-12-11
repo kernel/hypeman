@@ -15,9 +15,10 @@ import (
 //   overlay.raw        # Configurable sparse overlay disk (default 10GB)
 //   config.ext4        # Read-only config disk (generated)
 //   ch.sock            # Cloud Hypervisor API socket
-//   ch-stdout.log      # CH process output
 //   logs/
-//     console.log      # Serial console output
+//     app.log          # Guest application log (serial console output)
+//     vmm.log          # Cloud Hypervisor VMM log (stdout+stderr combined)
+//     hypeman.log      # Hypeman operations log (actions taken on this instance)
 //   snapshots/
 //     snapshot-latest/ # Snapshot directory
 //       config.json
@@ -141,4 +142,3 @@ func (m *manager) listMetadataFiles() ([]string, error) {
 
 	return metaFiles, nil
 }
-

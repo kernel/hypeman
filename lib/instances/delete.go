@@ -17,67 +17,67 @@ func (m *manager) deleteInstance(
 	id string,
 ) error {
 	log := logger.FromContext(ctx)
-	log.InfoContext(ctx, "deleting instance", "id", id)
+	log.InfoContext(ctx, "deleting instance", "instance_id", id)
 
 	// 1. Load instance
 	meta, err := m.loadMetadata(id)
 	if err != nil {
-		log.ErrorContext(ctx, "failed to load instance metadata", "id", id, "error", err)
+		log.ErrorContext(ctx, "failed to load instance metadata", "instance_id", id, "error", err)
 		return err
 	}
 
 	inst := m.toInstance(ctx, meta)
-	log.DebugContext(ctx, "loaded instance", "id", id, "state", inst.State)
+	log.DebugContext(ctx, "loaded instance", "instance_id", id, "state", inst.State)
 
 	// 2. Get network allocation BEFORE killing VMM (while we can still query it)
 	var networkAlloc *network.Allocation
 	if inst.NetworkEnabled {
-		log.DebugContext(ctx, "getting network allocation", "id", id)
+		log.DebugContext(ctx, "getting network allocation", "instance_id", id)
 		networkAlloc, err = m.networkManager.GetAllocation(ctx, id)
 		if err != nil {
-			log.WarnContext(ctx, "failed to get network allocation, will still attempt cleanup", "id", id, "error", err)
+			log.WarnContext(ctx, "failed to get network allocation, will still attempt cleanup", "instance_id", id, "error", err)
 		}
 	}
 
 	// 3. If VMM might be running, force kill it
 	// Also attempt kill for StateUnknown since we can't be sure if VMM is running
 	if inst.State.RequiresVMM() || inst.State == StateUnknown {
-		log.DebugContext(ctx, "stopping VMM", "id", id, "state", inst.State)
+		log.DebugContext(ctx, "stopping VMM", "instance_id", id, "state", inst.State)
 		if err := m.killVMM(ctx, &inst); err != nil {
 			// Log error but continue with cleanup
 			// Best effort to clean up even if VMM is unresponsive
-			log.WarnContext(ctx, "failed to kill VMM, continuing with cleanup", "id", id, "error", err)
+			log.WarnContext(ctx, "failed to kill VMM, continuing with cleanup", "instance_id", id, "error", err)
 		}
 	}
 
 	// 4. Release network allocation
 	if inst.NetworkEnabled {
-		log.DebugContext(ctx, "releasing network", "id", id, "network", "default")
+		log.DebugContext(ctx, "releasing network", "instance_id", id, "network", "default")
 		if err := m.networkManager.ReleaseAllocation(ctx, networkAlloc); err != nil {
 			// Log error but continue with cleanup
-			log.WarnContext(ctx, "failed to release network, continuing with cleanup", "id", id, "error", err)
+			log.WarnContext(ctx, "failed to release network, continuing with cleanup", "instance_id", id, "error", err)
 		}
 	}
 
 	// 5. Detach volumes
 	if len(inst.Volumes) > 0 {
-		log.DebugContext(ctx, "detaching volumes", "id", id, "count", len(inst.Volumes))
+		log.DebugContext(ctx, "detaching volumes", "instance_id", id, "count", len(inst.Volumes))
 		for _, volAttach := range inst.Volumes {
 			if err := m.volumeManager.DetachVolume(ctx, volAttach.VolumeID, id); err != nil {
 				// Log error but continue with cleanup
-				log.WarnContext(ctx, "failed to detach volume, continuing with cleanup", "id", id, "volume_id", volAttach.VolumeID, "error", err)
+				log.WarnContext(ctx, "failed to detach volume, continuing with cleanup", "instance_id", id, "volume_id", volAttach.VolumeID, "error", err)
 			}
 		}
 	}
 
 	// 6. Delete all instance data
-	log.DebugContext(ctx, "deleting instance data", "id", id)
+	log.DebugContext(ctx, "deleting instance data", "instance_id", id)
 	if err := m.deleteInstanceData(id); err != nil {
-		log.ErrorContext(ctx, "failed to delete instance data", "id", id, "error", err)
+		log.ErrorContext(ctx, "failed to delete instance data", "instance_id", id, "error", err)
 		return fmt.Errorf("delete instance data: %w", err)
 	}
 
-	log.InfoContext(ctx, "instance deleted successfully", "id", id)
+	log.InfoContext(ctx, "instance deleted successfully", "instance_id", id)
 	return nil
 }
 
@@ -95,9 +95,9 @@ func (m *manager) killVMM(ctx context.Context, inst *Instance) error {
 		if err := syscall.Kill(pid, 0); err == nil {
 			// Process exists - kill it immediately with SIGKILL
 			// No graceful shutdown needed since we're deleting all data
-			log.DebugContext(ctx, "killing VMM process", "id", inst.Id, "pid", pid)
+			log.DebugContext(ctx, "killing VMM process", "instance_id", inst.Id, "pid", pid)
 			if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
-				log.WarnContext(ctx, "failed to kill VMM process", "id", inst.Id, "pid", pid, "error", err)
+				log.WarnContext(ctx, "failed to kill VMM process", "instance_id", inst.Id, "pid", pid, "error", err)
 			}
 
 			// Wait for process to die and reap it to prevent zombies
@@ -107,16 +107,16 @@ func (m *manager) killVMM(ctx context.Context, inst *Instance) error {
 				wpid, err := syscall.Wait4(pid, &wstatus, syscall.WNOHANG, nil)
 				if err != nil || wpid == pid {
 					// Process reaped successfully or error (likely ECHILD if already reaped)
-					log.DebugContext(ctx, "VMM process killed and reaped", "id", inst.Id, "pid", pid)
+					log.DebugContext(ctx, "VMM process killed and reaped", "instance_id", inst.Id, "pid", pid)
 					break
 				}
 				if i == 49 {
-					log.WarnContext(ctx, "VMM process did not exit in time", "id", inst.Id, "pid", pid)
+					log.WarnContext(ctx, "VMM process did not exit in time", "instance_id", inst.Id, "pid", pid)
 				}
 				time.Sleep(100 * time.Millisecond)
 			}
 		} else {
-			log.DebugContext(ctx, "VMM process not running", "id", inst.Id, "pid", pid)
+			log.DebugContext(ctx, "VMM process not running", "instance_id", inst.Id, "pid", pid)
 		}
 	}
 

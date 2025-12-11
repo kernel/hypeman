@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/onkernel/hypeman/lib/exec"
+	"github.com/onkernel/hypeman/lib/instances"
 	"github.com/onkernel/hypeman/lib/oapi"
 	"github.com/onkernel/hypeman/lib/paths"
 	"github.com/onkernel/hypeman/lib/system"
@@ -91,7 +92,7 @@ func TestExecInstanceNonTTY(t *testing.T) {
 	// Capture console log on failure with exec-agent filtering
 	t.Cleanup(func() {
 		if t.Failed() {
-			consolePath := paths.New(svc.Config.DataDir).InstanceConsoleLog(inst.Id)
+			consolePath := paths.New(svc.Config.DataDir).InstanceAppLog(inst.Id)
 			if consoleData, err := os.ReadFile(consolePath); err == nil {
 				lines := strings.Split(string(consoleData), "\n")
 
@@ -152,7 +153,7 @@ func TestExecInstanceNonTTY(t *testing.T) {
 
 	// Cleanup
 	t.Log("Cleaning up instance...")
-	delResp, err := svc.DeleteInstance(ctx(), oapi.DeleteInstanceRequestObject{
+	delResp, err := svc.DeleteInstance(ctxWithInstance(svc, inst.Id), oapi.DeleteInstanceRequestObject{
 		Id: inst.Id,
 	})
 	require.NoError(t, err)
@@ -211,7 +212,7 @@ func TestExecWithDebianMinimal(t *testing.T) {
 	// Cleanup on exit
 	t.Cleanup(func() {
 		t.Log("Cleaning up instance...")
-		svc.DeleteInstance(ctx(), oapi.DeleteInstanceRequestObject{Id: inst.Id})
+		svc.DeleteInstance(ctxWithInstance(svc, inst.Id), oapi.DeleteInstanceRequestObject{Id: inst.Id})
 	})
 
 	// Get actual instance to access vsock fields
@@ -280,7 +281,7 @@ func TestExecWithDebianMinimal(t *testing.T) {
 
 // collectTestLogs collects logs from an instance (non-streaming)
 func collectTestLogs(t *testing.T, svc *ApiService, instanceID string, n int) string {
-	logChan, err := svc.InstanceManager.StreamInstanceLogs(ctx(), instanceID, n, false)
+	logChan, err := svc.InstanceManager.StreamInstanceLogs(ctx(), instanceID, n, false, instances.LogSourceApp)
 	if err != nil {
 		return ""
 	}

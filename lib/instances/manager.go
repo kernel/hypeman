@@ -26,7 +26,7 @@ type Manager interface {
 	RestoreInstance(ctx context.Context, id string) (*Instance, error)
 	StopInstance(ctx context.Context, id string) (*Instance, error)
 	StartInstance(ctx context.Context, id string) (*Instance, error)
-	StreamInstanceLogs(ctx context.Context, id string, tail int, follow bool) (<-chan string, error)
+	StreamInstanceLogs(ctx context.Context, id string, tail int, follow bool, source LogSource) (<-chan string, error)
 	RotateLogs(ctx context.Context, maxBytes int64, maxFiles int) error
 	AttachVolume(ctx context.Context, id string, volumeId string, req AttachVolumeRequest) (*Instance, error)
 	DetachVolume(ctx context.Context, id string, volumeId string) (*Instance, error)
@@ -197,15 +197,15 @@ func (m *manager) GetInstance(ctx context.Context, idOrName string) (*Instance, 
 	return nil, ErrNotFound
 }
 
-// StreamInstanceLogs streams instance console logs
+// StreamInstanceLogs streams instance logs from the specified source
 // Returns last N lines, then continues following if follow=true
-func (m *manager) StreamInstanceLogs(ctx context.Context, id string, tail int, follow bool) (<-chan string, error) {
+func (m *manager) StreamInstanceLogs(ctx context.Context, id string, tail int, follow bool, source LogSource) (<-chan string, error) {
 	// Note: No lock held during streaming - we read from the file continuously
 	// and the file is append-only, so this is safe
-	return m.streamInstanceLogs(ctx, id, tail, follow)
+	return m.streamInstanceLogs(ctx, id, tail, follow, source)
 }
 
-// RotateLogs rotates console logs for all instances that exceed maxBytes
+// RotateLogs rotates all instance logs (app, vmm, hypeman) that exceed maxBytes
 func (m *manager) RotateLogs(ctx context.Context, maxBytes int64, maxFiles int) error {
 	instances, err := m.listInstances(ctx)
 	if err != nil {
@@ -214,9 +214,16 @@ func (m *manager) RotateLogs(ctx context.Context, maxBytes int64, maxFiles int) 
 
 	var lastErr error
 	for _, inst := range instances {
-		logPath := m.paths.InstanceConsoleLog(inst.Id)
+		// Rotate all three log types
+		logPaths := []string{
+			m.paths.InstanceAppLog(inst.Id),
+			m.paths.InstanceVMMLog(inst.Id),
+			m.paths.InstanceHypemanLog(inst.Id),
+		}
+		for _, logPath := range logPaths {
 		if err := rotateLogIfNeeded(logPath, maxBytes, maxFiles); err != nil {
-			lastErr = err // Continue with other instances, but track error
+				lastErr = err // Continue with other logs, but track error
+			}
 		}
 	}
 	return lastErr

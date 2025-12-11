@@ -117,33 +117,29 @@ func StartProcessWithArgs(ctx context.Context, p *paths.Paths, version CHVersion
 		Setpgid: true, // Create new process group
 	}
 
-	// Redirect stdout/stderr to log files (process won't block on I/O)
+	// Redirect stdout/stderr to combined VMM log file (process won't block on I/O)
 	instanceDir := filepath.Dir(socketPath)
-	stdoutFile, err := os.OpenFile(
-		filepath.Join(instanceDir, "ch-stdout.log"),
+	logsDir := filepath.Join(instanceDir, "logs")
+	if err := os.MkdirAll(logsDir, 0755); err != nil {
+		return 0, fmt.Errorf("create logs directory: %w", err)
+	}
+
+	vmmLogFile, err := os.OpenFile(
+		filepath.Join(logsDir, "vmm.log"),
 		os.O_CREATE|os.O_WRONLY|os.O_APPEND,
 		0644,
 	)
 	if err != nil {
-		return 0, fmt.Errorf("create stdout log: %w", err)
+		return 0, fmt.Errorf("create vmm log: %w", err)
 	}
-	// Note: These defers close the parent's file descriptors after cmd.Start().
-	// The child process receives duplicated file descriptors during fork/exec,
-	// so it can continue writing to the log files even after we close them here.
-	defer stdoutFile.Close()
+	// Note: This defer closes the parent's file descriptor after cmd.Start().
+	// The child process receives a duplicated file descriptor during fork/exec,
+	// so it can continue writing to the log file even after we close it here.
+	defer vmmLogFile.Close()
 
-	stderrFile, err := os.OpenFile(
-		filepath.Join(instanceDir, "ch-stderr.log"),
-		os.O_CREATE|os.O_WRONLY|os.O_APPEND,
-		0644,
-	)
-	if err != nil {
-		return 0, fmt.Errorf("create stderr log: %w", err)
-	}
-	defer stderrFile.Close()
-
-	cmd.Stdout = stdoutFile
-	cmd.Stderr = stderrFile
+	// Both stdout and stderr go to the same file
+	cmd.Stdout = vmmLogFile
+	cmd.Stderr = vmmLogFile
 
 	if err := cmd.Start(); err != nil {
 		return 0, fmt.Errorf("start cloud-hypervisor: %w", err)

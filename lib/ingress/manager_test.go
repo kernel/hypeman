@@ -13,30 +13,51 @@ import (
 
 // mockInstanceResolver implements InstanceResolver for testing
 type mockInstanceResolver struct {
-	instances map[string]string // instance name/ID -> IP
+	instances map[string]mockInstance // instance name/ID -> mock data
+}
+
+type mockInstance struct {
+	name string
+	id   string
+	ip   string
 }
 
 func newMockResolver() *mockInstanceResolver {
 	return &mockInstanceResolver{
-		instances: make(map[string]string),
+		instances: make(map[string]mockInstance),
 	}
 }
 
 func (m *mockInstanceResolver) AddInstance(nameOrID, ip string) {
-	m.instances[nameOrID] = ip
+	// For backwards compatibility, use the nameOrID as both name and id
+	m.instances[nameOrID] = mockInstance{name: nameOrID, id: nameOrID, ip: ip}
+}
+
+func (m *mockInstanceResolver) AddInstanceFull(name, id, ip string) {
+	// Add with explicit name and id
+	m.instances[name] = mockInstance{name: name, id: id, ip: ip}
+	m.instances[id] = mockInstance{name: name, id: id, ip: ip}
 }
 
 func (m *mockInstanceResolver) ResolveInstanceIP(ctx context.Context, nameOrID string) (string, error) {
-	ip, ok := m.instances[nameOrID]
+	inst, ok := m.instances[nameOrID]
 	if !ok {
 		return "", ErrInstanceNotFound
 	}
-	return ip, nil
+	return inst.ip, nil
 }
 
 func (m *mockInstanceResolver) InstanceExists(ctx context.Context, nameOrID string) (bool, error) {
 	_, ok := m.instances[nameOrID]
 	return ok, nil
+}
+
+func (m *mockInstanceResolver) ResolveInstance(ctx context.Context, nameOrID string) (string, string, error) {
+	inst, ok := m.instances[nameOrID]
+	if !ok {
+		return "", "", ErrInstanceNotFound
+	}
+	return inst.name, inst.id, nil
 }
 
 func setupTestManager(t *testing.T) (Manager, *mockInstanceResolver, *paths.Paths, func()) {

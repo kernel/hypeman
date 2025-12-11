@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"github.com/onkernel/hypeman/lib/logger"
+	mw "github.com/onkernel/hypeman/lib/middleware"
 	"github.com/onkernel/hypeman/lib/oapi"
 	"github.com/onkernel/hypeman/lib/volumes"
 )
@@ -199,77 +200,41 @@ func (s *ApiService) createVolumeFromMultipart(ctx context.Context, multipartRea
 
 // GetVolume gets volume details
 // The id parameter can be either a volume ID or name
+// Note: Resolution is handled by ResolveResource middleware
 func (s *ApiService) GetVolume(ctx context.Context, request oapi.GetVolumeRequestObject) (oapi.GetVolumeResponseObject, error) {
-	log := logger.FromContext(ctx)
-
-	// Try lookup by ID first
-	vol, err := s.VolumeManager.GetVolume(ctx, request.Id)
-	if errors.Is(err, volumes.ErrNotFound) {
-		// Try lookup by name
-		vol, err = s.VolumeManager.GetVolumeByName(ctx, request.Id)
-	}
-
-	if err != nil {
-		switch {
-		case errors.Is(err, volumes.ErrNotFound):
-			return oapi.GetVolume404JSONResponse{
-				Code:    "not_found",
-				Message: "volume not found",
-			}, nil
-		case errors.Is(err, volumes.ErrAmbiguousName):
-			return oapi.GetVolume404JSONResponse{
-				Code:    "ambiguous_name",
-				Message: "multiple volumes have this name, use volume ID instead",
-			}, nil
-		default:
-			log.ErrorContext(ctx, "failed to get volume", "error", err, "id", request.Id)
-			return oapi.GetVolume500JSONResponse{
-				Code:    "internal_error",
-				Message: "failed to get volume",
-			}, nil
-		}
+	vol := mw.GetResolvedVolume[volumes.Volume](ctx)
+	if vol == nil {
+		return oapi.GetVolume500JSONResponse{
+			Code:    "internal_error",
+			Message: "resource not resolved",
+		}, nil
 	}
 	return oapi.GetVolume200JSONResponse(volumeToOAPI(*vol)), nil
 }
 
 // DeleteVolume deletes a volume
 // The id parameter can be either a volume ID or name
+// Note: Resolution is handled by ResolveResource middleware
 func (s *ApiService) DeleteVolume(ctx context.Context, request oapi.DeleteVolumeRequestObject) (oapi.DeleteVolumeResponseObject, error) {
+	vol := mw.GetResolvedVolume[volumes.Volume](ctx)
+	if vol == nil {
+		return oapi.DeleteVolume500JSONResponse{
+			Code:    "internal_error",
+			Message: "resource not resolved",
+		}, nil
+	}
 	log := logger.FromContext(ctx)
 
-	// Resolve ID - try direct ID first, then name lookup
-	volumeID := request.Id
-	_, err := s.VolumeManager.GetVolume(ctx, request.Id)
-	if errors.Is(err, volumes.ErrNotFound) {
-		// Try lookup by name
-		vol, nameErr := s.VolumeManager.GetVolumeByName(ctx, request.Id)
-		if nameErr == nil {
-			volumeID = vol.Id
-		} else if errors.Is(nameErr, volumes.ErrAmbiguousName) {
-			return oapi.DeleteVolume404JSONResponse{
-				Code:    "ambiguous_name",
-				Message: "multiple volumes have this name, use volume ID instead",
-			}, nil
-		}
-		// If name lookup also fails with ErrNotFound, we'll proceed with original ID
-		// and let DeleteVolume return the proper 404
-	}
-
-	err = s.VolumeManager.DeleteVolume(ctx, volumeID)
+	err := s.VolumeManager.DeleteVolume(ctx, vol.Id)
 	if err != nil {
 		switch {
-		case errors.Is(err, volumes.ErrNotFound):
-			return oapi.DeleteVolume404JSONResponse{
-				Code:    "not_found",
-				Message: "volume not found",
-			}, nil
 		case errors.Is(err, volumes.ErrInUse):
 			return oapi.DeleteVolume409JSONResponse{
 				Code:    "conflict",
 				Message: "volume is in use by an instance",
 			}, nil
 		default:
-			log.ErrorContext(ctx, "failed to delete volume", "error", err, "id", request.Id)
+			log.ErrorContext(ctx, "failed to delete volume", "error", err)
 			return oapi.DeleteVolume500JSONResponse{
 				Code:    "internal_error",
 				Message: "failed to delete volume",

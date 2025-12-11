@@ -26,6 +26,10 @@ type InstanceResolver interface {
 
 	// InstanceExists checks if an instance with the given name or ID exists.
 	InstanceExists(ctx context.Context, nameOrID string) (bool, error)
+
+	// ResolveInstance resolves an instance name, ID, or ID prefix to its canonical name and ID.
+	// Returns (name, id, nil) if found, or an error if the instance doesn't exist.
+	ResolveInstance(ctx context.Context, nameOrID string) (name string, id string, err error)
 }
 
 // Manager is the interface for managing ingress resources.
@@ -288,18 +292,20 @@ func (m *manager) Create(ctx context.Context, req CreateIngressRequest) (*Ingres
 		}
 	}
 
-	// Validate that all target instances exist (only for literal hostnames)
+	// Validate that all target instances exist and resolve their names (only for literal hostnames)
 	// Pattern hostnames have dynamic target instances that can't be validated at creation time
-	for _, rule := range req.Rules {
+	var resolvedInstanceIDs []string // Track IDs for logging (used for hypeman.log routing)
+	for i, rule := range req.Rules {
 		if !rule.Match.IsPattern() {
-			// Literal hostname - validate instance exists
-			exists, err := m.instanceResolver.InstanceExists(ctx, rule.Target.Instance)
+			// Literal hostname - validate instance exists and resolve to canonical name + ID
+			resolvedName, resolvedID, err := m.instanceResolver.ResolveInstance(ctx, rule.Target.Instance)
 			if err != nil {
-				return nil, fmt.Errorf("check instance %q: %w", rule.Target.Instance, err)
-			}
-			if !exists {
 				return nil, fmt.Errorf("%w: instance %q not found", ErrInstanceNotFound, rule.Target.Instance)
 			}
+			// Update the rule with the resolved instance name (human-readable for config)
+			req.Rules[i].Target.Instance = resolvedName
+			// Track ID for logging (instance directories are by ID)
+			resolvedInstanceIDs = append(resolvedInstanceIDs, resolvedID)
 		}
 		// For pattern hostnames, instance validation happens at request time via the upstream resolver
 	}
@@ -368,6 +374,23 @@ func (m *manager) Create(ctx context.Context, req CreateIngressRequest) (*Ingres
 		deleteIngressData(m.paths, id)
 		log.ErrorContext(ctx, "failed to write config after create", "error", err)
 		return nil, fmt.Errorf("write config: %w", err)
+	}
+
+	// Log creation with ingress_id and instance_id(s) for audit trail
+	// Each resolved instance gets the log in their hypeman.log (routed by instance_id)
+	for _, instanceID := range resolvedInstanceIDs {
+		log.InfoContext(ctx, "ingress created",
+			"ingress_id", ingress.ID,
+			"ingress_name", ingress.Name,
+			"instance_id", instanceID,
+		)
+	}
+	// If no literal hostnames (all patterns), still log the creation
+	if len(resolvedInstanceIDs) == 0 {
+		log.InfoContext(ctx, "ingress created",
+			"ingress_id", ingress.ID,
+			"ingress_name", ingress.Name,
+		)
 	}
 
 	return &ingress, nil
@@ -479,6 +502,38 @@ func (m *manager) Delete(ctx context.Context, idOrName string) error {
 	// Write config to disk
 	if err := m.configGenerator.WriteConfig(ctx, ingresses); err != nil {
 		log.ErrorContext(ctx, "failed to write config after delete", "error", err)
+	}
+
+	// Log deletion with instance_id(s) for audit trail
+	// Resolve instance names to IDs for hypeman.log routing
+	hasLiteralHostname := false
+	for _, rule := range ingress.Rules {
+		if !rule.Match.IsPattern() {
+			hasLiteralHostname = true
+			// Resolve instance name to ID for logging (instance may have been deleted, so ignore errors)
+			_, instanceID, err := m.instanceResolver.ResolveInstance(ctx, rule.Target.Instance)
+			if err == nil {
+				log.InfoContext(ctx, "ingress deleted",
+					"ingress_id", ingress.ID,
+					"ingress_name", ingress.Name,
+					"instance_id", instanceID,
+				)
+			} else {
+				// Instance doesn't exist anymore, log without instance_id
+				log.InfoContext(ctx, "ingress deleted",
+					"ingress_id", ingress.ID,
+					"ingress_name", ingress.Name,
+					"instance_name", rule.Target.Instance,
+				)
+			}
+		}
+	}
+	// If no literal hostnames (all patterns), still log the deletion
+	if !hasLiteralHostname {
+		log.InfoContext(ctx, "ingress deleted",
+			"ingress_id", ingress.ID,
+			"ingress_name", ingress.Name,
+		)
 	}
 
 	return nil

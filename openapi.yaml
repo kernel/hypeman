@@ -930,7 +930,12 @@ paths:
     get:
       summary: Stream instance logs (SSE)
       description: |
-        Streams instance console logs as Server-Sent Events.
+        Streams instance logs as Server-Sent Events.
+        Use the `source` parameter to select which log to stream:
+        - `app` (default): Guest application logs (serial console)
+        - `vmm`: Cloud Hypervisor VMM logs
+        - `hypeman`: Hypeman operations log
+        
         Returns the last N lines (controlled by `tail` parameter), then optionally
         continues streaming new lines if `follow=true`.
       operationId: getInstanceLogs
@@ -957,6 +962,18 @@ paths:
             type: boolean
             default: false
           description: Continue streaming new lines after initial output
+        - name: source
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [app, vmm, hypeman]
+            default: app
+          description: |
+            Log source to stream:
+            - app: Guest application logs (serial console output)
+            - vmm: Cloud Hypervisor VMM logs (hypervisor stdout+stderr)
+            - hypeman: Hypeman operations log (actions taken on this instance)
       responses:
         200:
           description: Log stream (SSE)

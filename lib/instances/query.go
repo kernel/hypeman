@@ -140,7 +140,7 @@ func (m *manager) listInstances(ctx context.Context) ([]Instance, error) {
 		meta, err := m.loadMetadata(id)
 		if err != nil {
 			// Skip instances with invalid metadata
-			log.WarnContext(ctx, "skipping instance with invalid metadata", "id", id, "error", err)
+			log.WarnContext(ctx, "skipping instance with invalid metadata", "instance_id", id, "error", err)
 			continue
 		}
 
@@ -155,15 +155,15 @@ func (m *manager) listInstances(ctx context.Context) ([]Instance, error) {
 // getInstance returns a single instance by ID
 func (m *manager) getInstance(ctx context.Context, id string) (*Instance, error) {
 	log := logger.FromContext(ctx)
-	log.DebugContext(ctx, "getting instance", "id", id)
+	log.DebugContext(ctx, "getting instance", "lookup", id)
 
 	meta, err := m.loadMetadata(id)
 	if err != nil {
-		log.ErrorContext(ctx, "failed to load instance metadata", "id", id, "error", err)
+		log.DebugContext(ctx, "failed to load instance metadata", "lookup", id, "error", err)
 		return nil, err
 	}
 
 	inst := m.toInstance(ctx, meta)
-	log.DebugContext(ctx, "retrieved instance", "id", id, "state", inst.State)
+	log.DebugContext(ctx, "retrieved instance", "instance_id", inst.Id, "state", inst.State)
 	return &inst, nil
 }

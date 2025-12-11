@@ -160,9 +160,19 @@ func (p *Paths) InstanceLogs(id string) string {
 	return filepath.Join(p.InstanceDir(id), "logs")
 }
 
-// InstanceConsoleLog returns the path to instance console log file.
-func (p *Paths) InstanceConsoleLog(id string) string {
-	return filepath.Join(p.InstanceLogs(id), "console.log")
+// InstanceAppLog returns the path to instance application log (guest serial console).
+func (p *Paths) InstanceAppLog(id string) string {
+	return filepath.Join(p.InstanceLogs(id), "app.log")
+}
+
+// InstanceVMMLog returns the path to instance VMM log (Cloud Hypervisor stdout+stderr).
+func (p *Paths) InstanceVMMLog(id string) string {
+	return filepath.Join(p.InstanceLogs(id), "vmm.log")
+}
+
+// InstanceHypemanLog returns the path to instance hypeman operations log.
+func (p *Paths) InstanceHypemanLog(id string) string {
+	return filepath.Join(p.InstanceLogs(id), "hypeman.log")
 }
 
 // InstanceSnapshots returns the path to instance snapshots directory.

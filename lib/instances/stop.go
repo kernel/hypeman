@@ -18,7 +18,7 @@ func (m *manager) stopInstance(
 ) (*Instance, error) {
 	start := time.Now()
 	log := logger.FromContext(ctx)
-	log.InfoContext(ctx, "stopping instance", "id", id)
+	log.InfoContext(ctx, "stopping instance", "instance_id", id)
 
 	// Start tracing span if tracer is available
 	if m.metrics != nil && m.metrics.tracer != nil {
@@ -30,44 +30,44 @@ func (m *manager) stopInstance(
 	// 1. Load instance
 	meta, err := m.loadMetadata(id)
 	if err != nil {
-		log.ErrorContext(ctx, "failed to load instance metadata", "id", id, "error", err)
+		log.ErrorContext(ctx, "failed to load instance metadata", "instance_id", id, "error", err)
 		return nil, err
 	}
 
 	inst := m.toInstance(ctx, meta)
 	stored := &meta.StoredMetadata
-	log.DebugContext(ctx, "loaded instance", "id", id, "state", inst.State)
+	log.DebugContext(ctx, "loaded instance", "instance_id", id, "state", inst.State)
 
 	// 2. Validate state transition (must be Running to stop)
 	if inst.State != StateRunning {
-		log.ErrorContext(ctx, "invalid state for stop", "id", id, "state", inst.State)
+		log.ErrorContext(ctx, "invalid state for stop", "instance_id", id, "state", inst.State)
 		return nil, fmt.Errorf("%w: cannot stop from state %s, must be Running", ErrInvalidState, inst.State)
 	}
 
 	// 3. Get network allocation BEFORE killing VMM (while we can still query it)
 	var networkAlloc *network.Allocation
 	if inst.NetworkEnabled {
-		log.DebugContext(ctx, "getting network allocation", "id", id)
+		log.DebugContext(ctx, "getting network allocation", "instance_id", id)
 		networkAlloc, err = m.networkManager.GetAllocation(ctx, id)
 		if err != nil {
-			log.WarnContext(ctx, "failed to get network allocation, will still attempt cleanup", "id", id, "error", err)
+			log.WarnContext(ctx, "failed to get network allocation, will still attempt cleanup", "instance_id", id, "error", err)
 		}
 	}
 
 	// 4. Shutdown VMM process
 	// TODO: Add graceful shutdown via vsock signal to allow app to clean up
-	log.DebugContext(ctx, "shutting down VMM", "id", id)
+	log.DebugContext(ctx, "shutting down VMM", "instance_id", id)
 	if err := m.shutdownVMM(ctx, &inst); err != nil {
 		// Log but continue - try to clean up anyway
-		log.WarnContext(ctx, "failed to shutdown VMM gracefully", "id", id, "error", err)
+		log.WarnContext(ctx, "failed to shutdown VMM gracefully", "instance_id", id, "error", err)
 	}
 
 	// 5. Release network allocation (delete TAP device)
 	if inst.NetworkEnabled && networkAlloc != nil {
-		log.DebugContext(ctx, "releasing network", "id", id, "network", "default")
+		log.DebugContext(ctx, "releasing network", "instance_id", id, "network", "default")
 		if err := m.networkManager.ReleaseAllocation(ctx, networkAlloc); err != nil {
 			// Log error but continue
-			log.WarnContext(ctx, "failed to release network, continuing", "id", id, "error", err)
+			log.WarnContext(ctx, "failed to release network, continuing", "instance_id", id, "error", err)
 		}
 	}
 
@@ -78,7 +78,7 @@ func (m *manager) stopInstance(
 
 	meta = &metadata{StoredMetadata: *stored}
 	if err := m.saveMetadata(meta); err != nil {
-		log.ErrorContext(ctx, "failed to save metadata", "id", id, "error", err)
+		log.ErrorContext(ctx, "failed to save metadata", "instance_id", id, "error", err)
 		return nil, fmt.Errorf("save metadata: %w", err)
 	}
 
@@ -90,6 +90,6 @@ func (m *manager) stopInstance(
 
 	// Return instance with derived state (should be Stopped now)
 	finalInst := m.toInstance(ctx, meta)
-	log.InfoContext(ctx, "instance stopped successfully", "id", id, "state", finalInst.State)
+	log.InfoContext(ctx, "instance stopped successfully", "instance_id", id, "state", finalInst.State)
 	return &finalInst, nil
 }

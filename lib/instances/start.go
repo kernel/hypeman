@@ -18,7 +18,7 @@ func (m *manager) startInstance(
 ) (*Instance, error) {
 	start := time.Now()
 	log := logger.FromContext(ctx)
-	log.InfoContext(ctx, "starting instance", "id", id)
+	log.InfoContext(ctx, "starting instance", "instance_id", id)
 
 	// Start tracing span if tracer is available
 	if m.metrics != nil && m.metrics.tracer != nil {
@@ -30,40 +30,40 @@ func (m *manager) startInstance(
 	// 1. Load instance
 	meta, err := m.loadMetadata(id)
 	if err != nil {
-		log.ErrorContext(ctx, "failed to load instance metadata", "id", id, "error", err)
+		log.ErrorContext(ctx, "failed to load instance metadata", "instance_id", id, "error", err)
 		return nil, err
 	}
 
 	inst := m.toInstance(ctx, meta)
 	stored := &meta.StoredMetadata
-	log.DebugContext(ctx, "loaded instance", "id", id, "state", inst.State)
+	log.DebugContext(ctx, "loaded instance", "instance_id", id, "state", inst.State)
 
 	// 2. Validate state (must be Stopped to start)
 	if inst.State != StateStopped {
-		log.ErrorContext(ctx, "invalid state for start", "id", id, "state", inst.State)
+		log.ErrorContext(ctx, "invalid state for start", "instance_id", id, "state", inst.State)
 		return nil, fmt.Errorf("%w: cannot start from state %s, must be Stopped", ErrInvalidState, inst.State)
 	}
 
 	// 3. Get image info (needed for buildVMConfig)
-	log.DebugContext(ctx, "getting image info", "id", id, "image", stored.Image)
+	log.DebugContext(ctx, "getting image info", "instance_id", id, "image", stored.Image)
 	imageInfo, err := m.imageManager.GetImage(ctx, stored.Image)
 	if err != nil {
-		log.ErrorContext(ctx, "failed to get image", "id", id, "image", stored.Image, "error", err)
+		log.ErrorContext(ctx, "failed to get image", "instance_id", id, "image", stored.Image, "error", err)
 		return nil, fmt.Errorf("get image: %w", err)
 	}
 
 	// 4. Recreate network allocation if network enabled
 	var netConfig *network.NetworkConfig
 	if stored.NetworkEnabled {
-		log.DebugContext(ctx, "recreating network for start", "id", id, "network", "default")
+		log.DebugContext(ctx, "recreating network for start", "instance_id", id, "network", "default")
 		if err := m.networkManager.RecreateAllocation(ctx, id); err != nil {
-			log.ErrorContext(ctx, "failed to recreate network", "id", id, "error", err)
+			log.ErrorContext(ctx, "failed to recreate network", "instance_id", id, "error", err)
 			return nil, fmt.Errorf("recreate network: %w", err)
 		}
 		// Get the network config for VM configuration
 		netAlloc, err := m.networkManager.GetAllocation(ctx, id)
 		if err != nil {
-			log.ErrorContext(ctx, "failed to get network allocation", "id", id, "error", err)
+			log.ErrorContext(ctx, "failed to get network allocation", "instance_id", id, "error", err)
 			// Cleanup network on failure
 			if netAlloc != nil {
 				m.networkManager.ReleaseAllocation(ctx, netAlloc)
@@ -79,9 +79,9 @@ func (m *manager) startInstance(
 	}
 
 	// 5. Start VMM and boot VM (reuses logic from create)
-	log.InfoContext(ctx, "starting VMM and booting VM", "id", id)
+	log.InfoContext(ctx, "starting VMM and booting VM", "instance_id", id)
 	if err := m.startAndBootVM(ctx, stored, imageInfo, netConfig); err != nil {
-		log.ErrorContext(ctx, "failed to start and boot VM", "id", id, "error", err)
+		log.ErrorContext(ctx, "failed to start and boot VM", "instance_id", id, "error", err)
 		// Cleanup network on failure
 		if stored.NetworkEnabled {
 			if netAlloc, err := m.networkManager.GetAllocation(ctx, id); err == nil {
@@ -98,7 +98,7 @@ func (m *manager) startInstance(
 	meta = &metadata{StoredMetadata: *stored}
 	if err := m.saveMetadata(meta); err != nil {
 		// VM is running but metadata failed - log but don't fail
-		log.WarnContext(ctx, "failed to update metadata after VM start", "id", id, "error", err)
+		log.WarnContext(ctx, "failed to update metadata after VM start", "instance_id", id, "error", err)
 	}
 
 	// Record metrics
@@ -109,6 +109,6 @@ func (m *manager) startInstance(
 
 	// Return instance with derived state (should be Running now)
 	finalInst := m.toInstance(ctx, meta)
-	log.InfoContext(ctx, "instance started successfully", "id", id, "state", finalInst.State)
+	log.InfoContext(ctx, "instance started successfully", "instance_id", id, "state", finalInst.State)
 	return &finalInst, nil
 }

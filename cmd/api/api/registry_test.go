@@ -150,11 +150,11 @@ func TestRegistryPushAndCreateInstance(t *testing.T) {
 	assert.Equal(t, "test-pushed-image", instance.Name)
 	t.Logf("Instance created: %s (state: %s)", instance.Id, instance.State)
 
-	// Verify instance reaches Running state
+	// Verify instance reaches Running state (use manager directly for polling)
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
-		resp, _ := svc.GetInstance(ctx(), oapi.GetInstanceRequestObject{Id: instance.Id})
-		if inst, ok := resp.(oapi.GetInstance200JSONResponse); ok {
+		inst, err := svc.InstanceManager.GetInstance(ctx(), instance.Id)
+		if err == nil {
 			if inst.State == "Running" {
 				t.Log("Instance is running!")
 				return // Success!
@@ -559,42 +559,41 @@ func (t *loggingTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 	return t.transport.RoundTrip(req)
 }
 
-// waitForImageReady polls GetImage until the image reaches Ready status.
+// waitForImageReady polls ImageManager until the image reaches Ready status.
 // Returns the image response on success, fails the test on error or timeout.
 func waitForImageReady(t *testing.T, svc *ApiService, imageName string, timeout time.Duration) oapi.GetImage200JSONResponse {
 	t.Helper()
 	t.Logf("Waiting for image %s to be ready...", imageName)
 
 	deadline := time.Now().Add(timeout)
-	var lastStatus oapi.ImageStatus
+	var lastStatus string
 	var lastError string
 
 	for time.Now().Before(deadline) {
-		resp, err := svc.GetImage(ctx(), oapi.GetImageRequestObject{Name: imageName})
+		img, err := svc.ImageManager.GetImage(ctx(), imageName)
 		if err != nil {
 			time.Sleep(1 * time.Second)
 			continue
 		}
 
-		imgResp, ok := resp.(oapi.GetImage200JSONResponse)
-		if !ok {
-			time.Sleep(1 * time.Second)
-			continue
+		lastStatus = string(img.Status)
+		if img.Error != nil {
+			lastError = *img.Error
 		}
 
-		lastStatus = imgResp.Status
-		if imgResp.Error != nil {
-			lastError = *imgResp.Error
-		}
-
-		switch imgResp.Status {
-		case oapi.Ready:
-			t.Logf("Image ready: %s (digest=%s)", imgResp.Name, imgResp.Digest)
-			return imgResp
-		case oapi.Failed:
+		switch img.Status {
+		case "ready":
+			t.Logf("Image ready: %s (digest=%s)", img.Name, img.Digest)
+			return oapi.GetImage200JSONResponse{
+				Name:      img.Name,
+				Digest:    img.Digest,
+				Status:    oapi.ImageStatus(img.Status),
+				SizeBytes: img.SizeBytes,
+			}
+		case "failed":
 			t.Fatalf("Image conversion failed: %s", lastError)
 		default:
-			t.Logf("Image status: %s", imgResp.Status)
+			t.Logf("Image status: %s", img.Status)
 		}
 		time.Sleep(2 * time.Second)
 	}

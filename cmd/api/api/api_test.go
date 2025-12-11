@@ -11,6 +11,7 @@ import (
 	"github.com/onkernel/hypeman/cmd/api/config"
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/instances"
+	mw "github.com/onkernel/hypeman/lib/middleware"
 	"github.com/onkernel/hypeman/lib/network"
 	"github.com/onkernel/hypeman/lib/oapi"
 	"github.com/onkernel/hypeman/lib/paths"
@@ -98,6 +99,36 @@ func ctx() context.Context {
 	return context.Background()
 }
 
+// ctxWithInstance creates a context with a resolved instance (simulates ResolveResource middleware)
+func ctxWithInstance(svc *ApiService, idOrName string) context.Context {
+	inst, err := svc.InstanceManager.GetInstance(ctx(), idOrName)
+	if err != nil {
+		return ctx() // Let handler deal with the error
+	}
+	return mw.WithResolvedInstance(ctx(), inst.Id, inst)
+}
+
+// ctxWithVolume creates a context with a resolved volume (simulates ResolveResource middleware)
+func ctxWithVolume(svc *ApiService, idOrName string) context.Context {
+	vol, err := svc.VolumeManager.GetVolume(ctx(), idOrName)
+	if err != nil {
+		vol, err = svc.VolumeManager.GetVolumeByName(ctx(), idOrName)
+	}
+	if err != nil {
+		return ctx()
+	}
+	return mw.WithResolvedVolume(ctx(), vol.Id, vol)
+}
+
+// ctxWithImage creates a context with a resolved image (simulates ResolveResource middleware)
+func ctxWithImage(svc *ApiService, name string) context.Context {
+	img, err := svc.ImageManager.GetImage(ctx(), name)
+	if err != nil {
+		return ctx()
+	}
+	return mw.WithResolvedImage(ctx(), img.Name, img)
+}
+
 // createAndWaitForImage creates an image and waits for it to be ready.
 // Returns the image name on success, or fails the test on error/timeout.
 func createAndWaitForImage(t *testing.T, svc *ApiService, imageName string, timeout time.Duration) string {
@@ -117,24 +148,26 @@ func createAndWaitForImage(t *testing.T, svc *ApiService, imageName string, time
 	t.Log("Waiting for image to be ready...")
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		imgResp, err := svc.GetImage(ctx(), oapi.GetImageRequestObject{
-			Name: imageName,
-		})
-		require.NoError(t, err)
-
-		img, ok := imgResp.(oapi.GetImage200JSONResponse)
-		if ok {
-			switch img.Status {
-			case "ready":
-				t.Log("Image is ready")
-				return imgCreated.Name
-			case "failed":
-				t.Fatalf("Image build failed: %v", img.Error)
-			default:
-				t.Logf("Image status: %s", img.Status)
-			}
+		// Get image from manager (may fail during pending/pulling, that's OK)
+		img, err := svc.ImageManager.GetImage(ctx(), imageName)
+		if err != nil {
+			time.Sleep(100 * time.Millisecond)
+			continue
 		}
-		time.Sleep(1 * time.Second)
+
+		switch img.Status {
+		case "ready":
+			t.Log("Image is ready")
+			return imgCreated.Name
+		case "failed":
+			errMsg := ""
+			if img.Error != nil {
+				errMsg = *img.Error
+			}
+			t.Fatalf("Image build failed: %v", errMsg)
+		}
+		// Still pending/pulling/converting, poll again
+		time.Sleep(100 * time.Millisecond)
 	}
 
 	t.Fatalf("Timeout waiting for image %s to be ready", imageName)

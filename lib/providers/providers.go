@@ -21,11 +21,21 @@ import (
 	"go.opentelemetry.io/otel"
 )
 
-// ProvideLogger provides a structured logger with subsystem-specific levels
-func ProvideLogger() *slog.Logger {
+// ProvideLogger provides a structured logger with subsystem-specific levels.
+// Wraps with InstanceLogHandler to automatically write logs with "id" attribute
+// to per-instance hypeman.log files.
+func ProvideLogger(p *paths.Paths) *slog.Logger {
 	cfg := logger.NewConfig()
 	otelHandler := hypemanotel.GetGlobalLogHandler()
-	return logger.NewSubsystemLogger(logger.SubsystemAPI, cfg, otelHandler)
+	baseLogger := logger.NewSubsystemLogger(logger.SubsystemAPI, cfg, otelHandler)
+
+	// Wrap the handler with instance log handler for per-instance logging
+	logPathFunc := func(id string) string {
+		return p.InstanceHypemanLog(id)
+	}
+	instanceHandler := logger.NewInstanceLogHandler(baseLogger.Handler(), logPathFunc)
+
+	return slog.New(instanceHandler)
 }
 
 // ProvideContext provides a context with logger attached

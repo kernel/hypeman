@@ -6,6 +6,7 @@ import (
 
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/logger"
+	mw "github.com/onkernel/hypeman/lib/middleware"
 	"github.com/onkernel/hypeman/lib/oapi"
 )
 
@@ -60,46 +61,38 @@ func (s *ApiService) CreateImage(ctx context.Context, request oapi.CreateImageRe
 	return oapi.CreateImage202JSONResponse(imageToOAPI(*img)), nil
 }
 
+// GetImage gets image details by name
+// Note: Resolution is handled by ResolveResource middleware
 func (s *ApiService) GetImage(ctx context.Context, request oapi.GetImageRequestObject) (oapi.GetImageResponseObject, error) {
-	log := logger.FromContext(ctx)
-
-	img, err := s.ImageManager.GetImage(ctx, request.Name)
-	if err != nil {
-		switch {
-		case errors.Is(err, images.ErrInvalidName), errors.Is(err, images.ErrNotFound):
-			return oapi.GetImage404JSONResponse{
-				Code:    "not_found",
-				Message: "image not found",
-			}, nil
-		default:
-			log.ErrorContext(ctx, "failed to get image", "error", err, "name", request.Name)
-			return oapi.GetImage500JSONResponse{
-				Code:    "internal_error",
-				Message: "failed to get image",
-			}, nil
-		}
+	img := mw.GetResolvedImage[images.Image](ctx)
+	if img == nil {
+		return oapi.GetImage500JSONResponse{
+			Code:    "internal_error",
+			Message: "resource not resolved",
+		}, nil
 	}
 	return oapi.GetImage200JSONResponse(imageToOAPI(*img)), nil
 }
 
+// DeleteImage deletes an image by name
+// Note: Resolution is handled by ResolveResource middleware
 func (s *ApiService) DeleteImage(ctx context.Context, request oapi.DeleteImageRequestObject) (oapi.DeleteImageResponseObject, error) {
+	img := mw.GetResolvedImage[images.Image](ctx)
+	if img == nil {
+		return oapi.DeleteImage500JSONResponse{
+			Code:    "internal_error",
+			Message: "resource not resolved",
+		}, nil
+	}
 	log := logger.FromContext(ctx)
 
-	err := s.ImageManager.DeleteImage(ctx, request.Name)
+	err := s.ImageManager.DeleteImage(ctx, img.Name)
 	if err != nil {
-		switch {
-		case errors.Is(err, images.ErrInvalidName), errors.Is(err, images.ErrNotFound):
-			return oapi.DeleteImage404JSONResponse{
-				Code:    "not_found",
-				Message: "image not found",
-			}, nil
-		default:
-			log.ErrorContext(ctx, "failed to delete image", "error", err, "name", request.Name)
-			return oapi.DeleteImage500JSONResponse{
-				Code:    "internal_error",
-				Message: "failed to delete image",
-			}, nil
-		}
+		log.ErrorContext(ctx, "failed to delete image", "error", err)
+		return oapi.DeleteImage500JSONResponse{
+			Code:    "internal_error",
+			Message: "failed to delete image",
+		}, nil
 	}
 	return oapi.DeleteImage204Response{}, nil
 }

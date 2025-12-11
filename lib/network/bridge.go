@@ -430,7 +430,7 @@ func (m *manager) createTAPDevice(tapName, bridgeName string, isolated bool) err
 	// This allows Cloud Hypervisor (running as current user) to access the TAP
 	uid := os.Getuid()
 	gid := os.Getgid()
-	
+
 	tap := &netlink.Tuntap{
 		LinkAttrs: netlink.LinkAttrs{
 			Name: tapName,
@@ -535,9 +535,16 @@ func (m *manager) queryNetworkState(bridgeName string) (*Network, error) {
 
 // CleanupOrphanedTAPs removes TAP devices that aren't used by any running instance.
 // runningInstanceIDs is a list of instance IDs that currently have a running VMM.
+// Pass nil to skip cleanup entirely (used when we couldn't determine running instances).
 // Returns the number of TAPs deleted.
 func (m *manager) CleanupOrphanedTAPs(ctx context.Context, runningInstanceIDs []string) int {
 	log := logger.FromContext(ctx)
+
+	// If nil, skip cleanup entirely to avoid accidentally deleting TAPs for running VMs
+	if runningInstanceIDs == nil {
+		log.DebugContext(ctx, "skipping TAP cleanup (nil instance list)")
+		return 0
+	}
 
 	// Build set of expected TAP names for running instances
 	expectedTAPs := make(map[string]bool)
@@ -578,6 +585,3 @@ func (m *manager) CleanupOrphanedTAPs(ctx context.Context, runningInstanceIDs []
 
 	return deleted
 }
-
-
-

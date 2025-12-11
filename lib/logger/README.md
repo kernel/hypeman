@@ -8,6 +8,7 @@ Structured logging with per-subsystem log levels and OpenTelemetry trace context
 - Automatic trace_id/span_id injection when OTel is active
 - Context-based logger propagation
 - JSON output format
+- Per-instance log files via `InstanceLogHandler`
 
 ## Configuration
 
@@ -35,7 +36,25 @@ ctx = logger.AddToContext(ctx, log)
 
 // Retrieve from context
 log = logger.FromContext(ctx)
-log.InfoContext(ctx, "instance created", "id", instanceID)
+log.InfoContext(ctx, "instance created", "instance_id", instanceID)
+```
+
+## Per-Instance Logging
+
+The `InstanceLogHandler` automatically writes logs with an `"instance_id"` attribute to per-instance `hypeman.log` files. This provides an operations audit trail for each VM.
+
+```go
+// Wrap any handler with instance logging
+handler := logger.NewInstanceLogHandler(baseHandler, func(id string) string {
+    return paths.InstanceHypemanLog(id)
+})
+
+// Logs with "instance_id" attribute are automatically written to that instance's hypeman.log
+log.InfoContext(ctx, "starting VM", "instance_id", instanceID)
+
+// Related operations (e.g., ingress creation) can also include instance_id
+// to appear in the instance's audit log
+log.InfoContext(ctx, "ingress created", "ingress_id", ingressID, "instance_id", targetInstance)
 ```
 
 ## Output
@@ -49,7 +68,7 @@ When OTel tracing is active, logs include trace context:
   "subsystem": "INSTANCES",
   "trace_id": "abc123...",
   "span_id": "def456...",
-  "id": "instance-123"
+  "instance_id": "instance-123"
 }
 ```
 

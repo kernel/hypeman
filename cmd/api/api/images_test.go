@@ -26,15 +26,10 @@ func TestListImages_Empty(t *testing.T) {
 func TestGetImage_NotFound(t *testing.T) {
 	svc := newTestService(t)
 
-	resp, err := svc.GetImage(ctx(), oapi.GetImageRequestObject{
-		Name: "non-existent:latest",
-	})
-	require.NoError(t, err)
-
-	notFound, ok := resp.(oapi.GetImage404JSONResponse)
-	require.True(t, ok, "expected 404 response")
-	assert.Equal(t, "not_found", notFound.Code)
-	assert.Equal(t, "image not found", notFound.Message)
+	// With middleware, not-found would be handled before reaching handler.
+	// For this test, we call the manager directly to verify the error.
+	_, err := svc.ImageManager.GetImage(ctx(), "non-existent:latest")
+	require.Error(t, err)
 }
 
 func TestCreateImage_Async(t *testing.T) {
@@ -69,7 +64,7 @@ func TestCreateImage_Async(t *testing.T) {
 	img := oapi.Image(acceptedResp)
 	require.Equal(t, "docker.io/library/alpine:latest", img.Name)
 	require.NotEmpty(t, img.Digest, "digest should be populated immediately")
-	t.Logf("Image created: name=%s, digest=%s, initial_status=%s, queue_position=%v", 
+	t.Logf("Image created: name=%s, digest=%s, initial_status=%s, queue_position=%v",
 		img.Name, img.Digest, img.Status, img.QueuePosition)
 
 	// Construct digest reference for polling: repository@digest
@@ -81,9 +76,9 @@ func TestCreateImage_Async(t *testing.T) {
 	t.Log("Polling for completion...")
 	lastStatus := img.Status
 	lastQueuePos := getQueuePos(img.QueuePosition)
-	
+
 	for i := 0; i < 3000; i++ {
-		getResp, err := svc.GetImage(ctx, oapi.GetImageRequestObject{Name: digestRef})
+		getResp, err := svc.GetImage(ctxWithImage(svc, digestRef), oapi.GetImageRequestObject{Name: digestRef})
 		require.NoError(t, err)
 
 		imgResp, ok := getResp.(oapi.GetImage200JSONResponse)
@@ -93,16 +88,16 @@ func TestCreateImage_Async(t *testing.T) {
 
 		currentImg := oapi.Image(imgResp)
 		currentQueuePos := getQueuePos(currentImg.QueuePosition)
-		
+
 		// Log when status or queue position changes
 		if currentImg.Status != lastStatus || currentQueuePos != lastQueuePos {
 			t.Logf("Update: status=%s, queue_position=%v", currentImg.Status, formatQueuePos(currentImg.QueuePosition))
-			
+
 			// Queue position should only decrease (never increase)
 			if lastQueuePos > 0 && currentQueuePos > lastQueuePos {
 				t.Errorf("Queue position increased: %d -> %d", lastQueuePos, currentQueuePos)
 			}
-			
+
 			lastStatus = currentImg.Status
 			lastQueuePos = currentQueuePos
 		}
@@ -194,7 +189,7 @@ func TestCreateImage_Idempotent(t *testing.T) {
 		Body: &oapi.CreateImageRequest{Name: imageName},
 	})
 	require.NoError(t, err)
-	
+
 	accepted1, ok := resp1.(oapi.CreateImage202JSONResponse)
 	require.True(t, ok, "expected 202 response")
 	img1 := oapi.Image(accepted1)
@@ -211,17 +206,17 @@ func TestCreateImage_Idempotent(t *testing.T) {
 		Body: &oapi.CreateImageRequest{Name: imageName},
 	})
 	require.NoError(t, err)
-	
+
 	accepted2, ok := resp2.(oapi.CreateImage202JSONResponse)
 	require.True(t, ok, "expected 202 response")
 	img2 := oapi.Image(accepted2)
 	require.Equal(t, imageName, img2.Name)
 	require.Equal(t, img1.Digest, img2.Digest, "should have same digest")
-	
+
 	// Log actual status to see what's happening
-	t.Logf("Second call: digest=%s, status=%s, queue_position=%v, error=%v", 
+	t.Logf("Second call: digest=%s, status=%s, queue_position=%v, error=%v",
 		img2.Digest, img2.Status, formatQueuePos(img2.QueuePosition), img2.Error)
-	
+
 	// If it failed, we need to see why
 	if img2.Status == oapi.ImageStatus(images.StatusFailed) {
 		if img2.Error != nil {
@@ -229,7 +224,7 @@ func TestCreateImage_Idempotent(t *testing.T) {
 		}
 		t.Fatal("Build failed - this is the root cause of test failures")
 	}
-	
+
 	require.Equal(t, oapi.ImageStatus(images.StatusPending), img2.Status)
 	require.NotNil(t, img2.QueuePosition, "should have queue position")
 	require.Equal(t, 1, *img2.QueuePosition, "should still be at position 1")
@@ -243,14 +238,14 @@ func TestCreateImage_Idempotent(t *testing.T) {
 	// Wait for build to complete - poll by digest (tag symlink doesn't exist until status=ready)
 	t.Log("Waiting for build to complete...")
 	for i := 0; i < 3000; i++ {
-		getResp, err := svc.GetImage(ctx, oapi.GetImageRequestObject{Name: digestRef})
+		getResp, err := svc.GetImage(ctxWithImage(svc, digestRef), oapi.GetImageRequestObject{Name: digestRef})
 		require.NoError(t, err)
 
 		imgResp, ok := getResp.(oapi.GetImage200JSONResponse)
 		require.True(t, ok, "expected 200 response")
 
 		currentImg := oapi.Image(imgResp)
-		
+
 		if currentImg.Status == oapi.ImageStatus(images.StatusReady) {
 			t.Log("Build complete!")
 			break
@@ -273,7 +268,7 @@ func TestCreateImage_Idempotent(t *testing.T) {
 		Body: &oapi.CreateImageRequest{Name: imageName},
 	})
 	require.NoError(t, err)
-	
+
 	accepted3, ok := resp3.(oapi.CreateImage202JSONResponse)
 	require.True(t, ok, "expected 202 response")
 	img3 := oapi.Image(accepted3)
@@ -282,9 +277,9 @@ func TestCreateImage_Idempotent(t *testing.T) {
 	require.Nil(t, img3.QueuePosition, "ready image should have no queue position")
 	require.NotNil(t, img3.SizeBytes)
 	require.Greater(t, *img3.SizeBytes, int64(0))
-	t.Logf("Third call: status=%s, queue_position=%v, size=%d", 
+	t.Logf("Third call: status=%s, queue_position=%v, size=%d",
 		img3.Status, formatQueuePos(img3.QueuePosition), *img3.SizeBytes)
-	
+
 	t.Log("Idempotency test passed!")
 }
 
@@ -301,5 +296,3 @@ func formatQueuePos(pos *int) string {
 	}
 	return fmt.Sprintf("%d", *pos)
 }
-
-
