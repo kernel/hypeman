@@ -78,7 +78,7 @@ nfpms:
     contents:
       - src: man/man1/*.1.gz
         dst: /usr/share/man/man1/
-homebrew_casks:
+brews:
   - name: hypeman
     repository:
       owner: onkernel
@@ -87,10 +87,11 @@ homebrew_casks:
     homepage: https://github.com/onkernel/hypeman
     description: orchestrate cloud-hypervisor VMs
     license: Apache-2.0
-    binary: "hypeman"
-    completions:
-      bash: "completions/hypeman.bash"
-      zsh: "completions/hypeman.zsh"
-      fish: "completions/hypeman.fish"
-    manpages:
-    - man/man1/hypeman.1.gz
+    install: |
+      bin.install "hypeman"
+      bash_completion.install "completions/hypeman.bash" => "hypeman"
+      zsh_completion.install "completions/hypeman.zsh" => "_hypeman"
+      fish_completion.install "completions/hypeman.fish"
+      man1.install Dir["man/man1/*.1.gz"]
+    test: |
+      system "#{bin}/hypeman", "--version"
