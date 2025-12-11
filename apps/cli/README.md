@@ -7,8 +7,7 @@ The official CLI for [Hypeman](https://github.com/onkernel/hypeman/).
 ### Installing with Homebrew
 
 ```sh
-brew tap onkernel/tap
-brew install hypeman
+brew install onkernel/tap/hypeman
 ```
 
 ### Installing with Go
