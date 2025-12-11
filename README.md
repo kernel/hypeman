@@ -15,10 +15,6 @@
   <strong>Run containerized workloads in VMs, powered by <a href="https://github.com/cloud-hypervisor/cloud-hypervisor">Cloud Hypervisor</a>.</strong>
 </p>
 
-<p align="center">
-  <a href="https://github.com/onkernel/hypeman/actions/workflows/test.yml"><img src="https://github.com/onkernel/hypeman/actions/workflows/test.yml/badge.svg" alt="Test"></a>
-</p>
-
 ---
 
 ## Requirements
@@ -48,6 +44,19 @@ brew install hypeman
 **Go:**
 ```bash
 go install 'github.com/onkernel/hypeman-cli/cmd/hypeman@latest'
+```
+
+**Configure remote access:**
+
+1. On the server, generate an API token:
+```bash
+hypeman-token
+```
+
+2. On your local machine, set the environment variables:
+```bash
+export HYPEMAN_API_KEY="<token-from-server>"
+export HYPEMAN_BASE_URL="http://<server-ip>:8080"
 ```
 
 ## Usage
