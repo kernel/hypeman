@@ -37,8 +37,7 @@ To connect to a Hypeman server from another machine, install just the CLI:
 
 **Homebrew:**
 ```bash
-brew tap onkernel/tap
-brew install hypeman
+brew install onkernel/tap/hypeman
 ```
 
 **Go:**
