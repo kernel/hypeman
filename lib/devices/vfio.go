@@ -59,21 +59,29 @@ func (v *VFIOBinder) BindToVFIO(pciAddress string) error {
 	// For NVIDIA GPUs, stop nvidia-persistenced which holds the device open
 	// This is required because the service keeps /dev/nvidia* open, blocking driver unbind
 	isNvidia := deviceInfo.VendorID == "10de"
+	stoppedNvidiaPersistenced := false
 	if isNvidia {
 		if err := v.stopNvidiaPersistenced(); err != nil {
 			slog.Warn("failed to stop nvidia-persistenced", "error", err)
 			// Continue anyway - it might not be running
+		} else {
+			stoppedNvidiaPersistenced = true
 		}
 	}
+
+	// Use defer to ensure nvidia-persistenced is restarted on any error
+	// after we successfully stopped it
+	bindSucceeded := false
+	defer func() {
+		if stoppedNvidiaPersistenced && !bindSucceeded {
+			_ = v.startNvidiaPersistenced()
+		}
+	}()
 
 	// Unbind from current driver if bound
 	currentDriver := readCurrentDriver(pciAddress)
 	if currentDriver != nil && *currentDriver != "" {
 		if err := v.unbindFromDriver(pciAddress, *currentDriver); err != nil {
-			// Try to restart nvidia-persistenced if we stopped it
-			if isNvidia {
-				_ = v.startNvidiaPersistenced()
-			}
 			return fmt.Errorf("unbind from %s: %w", *currentDriver, err)
 		}
 	}
@@ -88,6 +96,7 @@ func (v *VFIOBinder) BindToVFIO(pciAddress string) error {
 		return fmt.Errorf("bind to vfio-pci: %w", err)
 	}
 
+	bindSucceeded = true
 	return nil
 }
 
@@ -148,12 +157,6 @@ func (v *VFIOBinder) setDriverOverride(pciAddress, driver string) error {
 	return os.WriteFile(overridePath, []byte(content), 0200)
 }
 
-// bindToVFIODriver binds a device using the new_id method
-func (v *VFIOBinder) bindToVFIODriver(vendorID, deviceID string) error {
-	newIDPath := filepath.Join(vfioDriverPath, "new_id")
-	idString := fmt.Sprintf("%s %s", vendorID, deviceID)
-	return os.WriteFile(newIDPath, []byte(idString), 0200)
-}
 
 // bindDeviceToVFIO binds a specific device to vfio-pci using bind
 func (v *VFIOBinder) bindDeviceToVFIO(pciAddress string) error {
