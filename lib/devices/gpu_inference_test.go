@@ -3,7 +3,10 @@ package devices_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	osExec "os/exec"
@@ -316,7 +319,7 @@ func TestGPUInference(t *testing.T) {
 
 	// Check nvidia-smi (should work now with CUDA image)
 	var nvidiaSmiStdout, nvidiaSmiStderr inferenceOutputBuffer
-	_, err = exec.ExecIntoInstance(gpuCheckCtx, actualInst.VsockSocket, exec.ExecOptions{
+	_, _ = exec.ExecIntoInstance(gpuCheckCtx, actualInst.VsockSocket, exec.ExecOptions{
 		Command: []string{"/bin/sh", "-c", "nvidia-smi 2>&1 || echo 'nvidia-smi failed'"},
 		Stdout:  &nvidiaSmiStdout,
 		Stderr:  &nvidiaSmiStderr,
@@ -348,10 +351,9 @@ func TestGPUInference(t *testing.T) {
 		t.Logf("✓ NVIDIA device nodes:\n%s", devStdout.String())
 	}
 
-	// Step 12: Pull and run inference
-	t.Log("Step 12: Pulling TinyLlama model...")
+	// Step 12: Pull model via exec (needed for first time)
+	t.Log("Step 12: Ensuring TinyLlama model is available...")
 
-	// Check if model is cached
 	var listStdout inferenceOutputBuffer
 	exec.ExecIntoInstance(gpuCheckCtx, actualInst.VsockSocket, exec.ExecOptions{
 		Command: []string{"/bin/sh", "-c", "ollama list 2>&1"},
@@ -374,38 +376,70 @@ func TestGPUInference(t *testing.T) {
 		t.Log("Model already cached")
 	}
 
-	t.Log("Step 13: Running inference...")
-	prompt := "Say hello in exactly 3 words"
-	ollamaCmd := "ollama run tinyllama '" + prompt + "' 2>&1"
-	t.Logf("Executing: %s", ollamaCmd)
+	// Step 13: Test inference via HTTP API using the VM's private IP
+	// This is much faster than using `ollama run` CLI
+	t.Log("Step 13: Running inference via Ollama API...")
+	require.NotEmpty(t, actualInst.IP, "Instance should have a private IP")
+	ollamaURL := fmt.Sprintf("http://%s:11434/api/generate", actualInst.IP)
+	t.Logf("Calling Ollama API at %s", ollamaURL)
 
-	// GPU inference should be fast, but first run needs model load time
-	// First run may need to compile CUDA kernels which can take several minutes
-	inferenceCtx, inferenceCancel := context.WithTimeout(ctx, 5*time.Minute)
-	defer inferenceCancel()
+	// Create the inference request
+	inferenceReq := map[string]interface{}{
+		"model":  "tinyllama",
+		"prompt": "Say hello in 3 words",
+		"stream": false,
+	}
+	reqBody, err := json.Marshal(inferenceReq)
+	require.NoError(t, err)
 
-	var inferenceStdout, inferenceStderr inferenceOutputBuffer
-	_, execErr := exec.ExecIntoInstance(inferenceCtx, actualInst.VsockSocket, exec.ExecOptions{
-		Command: []string{"/bin/sh", "-c", ollamaCmd},
-		Stdout:  &inferenceStdout,
-		Stderr:  &inferenceStderr,
-	})
+	// Make the HTTP request with timeout
+	httpClient := &http.Client{Timeout: 2 * time.Minute}
+	start := time.Now()
+	resp, err := httpClient.Post(ollamaURL, "application/json", bytes.NewReader(reqBody))
+	elapsed := time.Since(start)
 
-	inferenceOutput := inferenceStdout.String()
-	t.Logf("Inference output: %s", inferenceOutput)
-
-	if execErr != nil {
+	if err != nil {
+		// Log console for debugging
 		consoleLogPath := p.InstanceConsoleLog(inst.Id)
-		if consoleLog, err := os.ReadFile(consoleLogPath); err == nil {
+		if consoleLog, readErr := os.ReadFile(consoleLogPath); readErr == nil {
 			t.Logf("=== VM Console Log ===\n%s\n=== End ===", truncateTail(string(consoleLog), 3000))
 		}
-		t.Logf("Inference stderr: %s", inferenceStderr.String())
 	}
-	require.NoError(t, execErr, "ollama inference should succeed")
+	require.NoError(t, err, "HTTP request to Ollama should succeed")
+	defer resp.Body.Close()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode, "Ollama should return 200")
+
+	// Parse response
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+
+	var ollamaResp struct {
+		Response      string `json:"response"`
+		Done          bool   `json:"done"`
+		TotalDuration int64  `json:"total_duration"` // nanoseconds
+		EvalDuration  int64  `json:"eval_duration"`  // nanoseconds
+		EvalCount     int    `json:"eval_count"`     // tokens generated
+	}
+	err = json.Unmarshal(body, &ollamaResp)
+	require.NoError(t, err)
+
+	// Log results
+	t.Logf("Inference response: %s", ollamaResp.Response)
+	t.Logf("Total time: %v (API reported: %dms)", elapsed, ollamaResp.TotalDuration/1e6)
+	if ollamaResp.EvalCount > 0 && ollamaResp.EvalDuration > 0 {
+		tokensPerSec := float64(ollamaResp.EvalCount) / (float64(ollamaResp.EvalDuration) / 1e9)
+		t.Logf("Generation speed: %.1f tokens/sec (%d tokens in %dms)",
+			tokensPerSec, ollamaResp.EvalCount, ollamaResp.EvalDuration/1e6)
+	}
 
 	// Verify output
-	assert.NotEmpty(t, inferenceOutput, "Model should generate output")
-	assert.True(t, len(inferenceOutput) > 5, "Model output should be substantive")
+	assert.True(t, ollamaResp.Done, "Inference should complete")
+	assert.NotEmpty(t, ollamaResp.Response, "Model should generate output")
+	assert.True(t, len(ollamaResp.Response) > 5, "Model output should be substantive")
+
+	// GPU inference should be fast (< 5 seconds for this small prompt)
+	assert.Less(t, elapsed, 30*time.Second, "GPU inference should be fast")
 
 	t.Log("✅ GPU inference test PASSED!")
 }

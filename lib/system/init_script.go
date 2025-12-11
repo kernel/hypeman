@@ -124,6 +124,44 @@ if [ "${HAS_GPU:-0}" = "1" ]; then
   else
     echo "overlay-init: /lib/modules not found, skipping NVIDIA module loading"
   fi
+  
+  # Inject NVIDIA userspace driver libraries into container rootfs
+  # This allows containers to use standard CUDA images without bundled drivers
+  # See lib/devices/GPU.md for documentation
+  if [ -d /usr/lib/nvidia ]; then
+    echo "overlay-init: injecting NVIDIA driver libraries into container"
+    
+    DRIVER_VERSION=$(cat /usr/lib/nvidia/version 2>/dev/null || echo "unknown")
+    LIB_DST="/overlay/newroot/usr/lib/x86_64-linux-gnu"
+    BIN_DST="/overlay/newroot/usr/bin"
+    
+    mkdir -p "$LIB_DST" "$BIN_DST"
+    
+    # Copy all driver libraries and create symlinks
+    for lib in /usr/lib/nvidia/*.so.*; do
+      if [ -f "$lib" ]; then
+        libname=$(basename "$lib")
+        cp "$lib" "$LIB_DST/"
+        
+        # Create standard symlinks: libfoo.so.VERSION -> libfoo.so.1 -> libfoo.so
+        base=$(echo "$libname" | sed 's/\.so\..*//')
+        ln -sf "$libname" "$LIB_DST/${base}.so.1" 2>/dev/null || true
+        ln -sf "${base}.so.1" "$LIB_DST/${base}.so" 2>/dev/null || true
+      fi
+    done
+    
+    # Copy nvidia-smi and nvidia-modprobe binaries
+    for bin in nvidia-smi nvidia-modprobe; do
+      if [ -x /usr/bin/$bin ]; then
+        cp /usr/bin/$bin "$BIN_DST/"
+      fi
+    done
+    
+    # Update ldconfig cache so applications can find the libraries
+    chroot /overlay/newroot ldconfig 2>/dev/null || true
+    
+    echo "overlay-init: NVIDIA driver libraries injected (version: $DRIVER_VERSION)"
+  fi
 fi
 
 # Mount attached volumes (from config: VOLUME_MOUNTS="device:path:mode[:overlay_device] ...")
