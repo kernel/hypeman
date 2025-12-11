@@ -83,9 +83,15 @@ func (r *InstanceService) Get(ctx context.Context, id string, opts ...option.Req
 	return
 }
 
-// Streams instance console logs as Server-Sent Events. Returns the last N lines
-// (controlled by `tail` parameter), then optionally continues streaming new lines
-// if `follow=true`.
+// Streams instance logs as Server-Sent Events. Use the `source` parameter to
+// select which log to stream:
+//
+// - `app` (default): Guest application logs (serial console)
+// - `vmm`: Cloud Hypervisor VMM logs
+// - `hypeman`: Hypeman operations log
+//
+// Returns the last N lines (controlled by `tail` parameter), then optionally
+// continues streaming new lines if `follow=true`.
 func (r *InstanceService) LogsStreaming(ctx context.Context, id string, query InstanceLogsParams, opts ...option.RequestOption) (stream *ssestream.Stream[string]) {
 	var (
 		raw *http.Response
@@ -385,6 +391,14 @@ type InstanceLogsParams struct {
 	Follow param.Opt[bool] `query:"follow,omitzero" json:"-"`
 	// Number of lines to return from end
 	Tail param.Opt[int64] `query:"tail,omitzero" json:"-"`
+	// Log source to stream:
+	//
+	// - app: Guest application logs (serial console output)
+	// - vmm: Cloud Hypervisor VMM logs (hypervisor stdout+stderr)
+	// - hypeman: Hypeman operations log (actions taken on this instance)
+	//
+	// Any of "app", "vmm", "hypeman".
+	Source InstanceLogsParamsSource `query:"source,omitzero" json:"-"`
 	paramObj
 }
 
@@ -395,3 +409,16 @@ func (r InstanceLogsParams) URLQuery() (v url.Values, err error) {
 		NestedFormat: apiquery.NestedQueryFormatBrackets,
 	})
 }
+
+// Log source to stream:
+//
+// - app: Guest application logs (serial console output)
+// - vmm: Cloud Hypervisor VMM logs (hypervisor stdout+stderr)
+// - hypeman: Hypeman operations log (actions taken on this instance)
+type InstanceLogsParamsSource string
+
+const (
+	InstanceLogsParamsSourceApp     InstanceLogsParamsSource = "app"
+	InstanceLogsParamsSourceVmm     InstanceLogsParamsSource = "vmm"
+	InstanceLogsParamsSourceHypeman InstanceLogsParamsSource = "hypeman"
+)
