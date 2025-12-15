@@ -1,6 +1,7 @@
 package instances
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -8,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/onkernel/hypeman/lib/devices"
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/network"
 )
@@ -16,7 +18,7 @@ import (
 // The disk contains:
 // - /config.sh - Shell script sourced by init
 // - /metadata.json - JSON metadata for programmatic access
-func (m *manager) createConfigDisk(inst *Instance, imageInfo *images.Image, netConfig *network.NetworkConfig) error {
+func (m *manager) createConfigDisk(ctx context.Context, inst *Instance, imageInfo *images.Image, netConfig *network.NetworkConfig) error {
 	// Create temporary directory for config files
 	tmpDir, err := os.MkdirTemp("", "hypeman-config-*")
 	if err != nil {
@@ -25,7 +27,7 @@ func (m *manager) createConfigDisk(inst *Instance, imageInfo *images.Image, netC
 	defer os.RemoveAll(tmpDir)
 
 	// Generate config.sh
-	configScript := m.generateConfigScript(inst, imageInfo, netConfig)
+	configScript := m.generateConfigScript(ctx, inst, imageInfo, netConfig)
 	configPath := filepath.Join(tmpDir, "config.sh")
 	if err := os.WriteFile(configPath, []byte(configScript), 0644); err != nil {
 		return fmt.Errorf("write config.sh: %w", err)
@@ -64,7 +66,7 @@ func (m *manager) createConfigDisk(inst *Instance, imageInfo *images.Image, netC
 }
 
 // generateConfigScript creates the shell script that will be sourced by init
-func (m *manager) generateConfigScript(inst *Instance, imageInfo *images.Image, netConfig *network.NetworkConfig) string {
+func (m *manager) generateConfigScript(ctx context.Context, inst *Instance, imageInfo *images.Image, netConfig *network.NetworkConfig) string {
 	// Prepare entrypoint value
 	entrypoint := ""
 	if len(imageInfo.Entrypoint) > 0 {
@@ -106,10 +108,14 @@ GUEST_DNS="%s"
 	}
 
 	// GPU passthrough configuration
-	// When devices are attached, set HAS_GPU=1 to trigger NVIDIA module loading in init
+	// Only set HAS_GPU=1 if at least one attached device is actually a GPU
 	gpuSection := ""
-	if len(inst.Devices) > 0 {
-		gpuSection = "\n# GPU passthrough\nHAS_GPU=1\n"
+	for _, deviceID := range inst.Devices {
+		device, err := m.deviceManager.GetDevice(ctx, deviceID)
+		if err == nil && device.Type == devices.DeviceTypeGPU {
+			gpuSection = "\n# GPU passthrough\nHAS_GPU=1\n"
+			break
+		}
 	}
 
 	// Build volume mounts section

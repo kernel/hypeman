@@ -360,7 +360,7 @@ func (m *manager) createInstance(
 	// 15. Create config disk (needs Instance for buildVMConfig)
 	inst := &Instance{StoredMetadata: *stored}
 	log.DebugContext(ctx, "creating config disk", "instance_id", id)
-	if err := m.createConfigDisk(inst, imageInfo, netConfig); err != nil {
+	if err := m.createConfigDisk(ctx, inst, imageInfo, netConfig); err != nil {
 		log.ErrorContext(ctx, "failed to create config disk", "instance_id", id, "error", err)
 		return nil, fmt.Errorf("create config disk: %w", err)
 	}
