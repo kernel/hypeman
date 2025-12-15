@@ -13,6 +13,8 @@
 
 <p align="center">
   <strong>Run containerized workloads in VMs, powered by <a href="https://github.com/cloud-hypervisor/cloud-hypervisor">Cloud Hypervisor</a>.</strong>
+ <img alt="GitHub License" src="https://img.shields.io/github/license/onkernel/hypeman">
+  <a href="https://discord.gg/FBrveQRcud"><img src="https://img.shields.io/discord/1342243238748225556?logo=discord&logoColor=white&color=7289DA" alt="Discord"></a>
 </p>
 
 ---
