@@ -66,8 +66,6 @@ func (m *manager) buildInitrd(ctx context.Context, arch string) (string, error) 
 	}
 
 	// Write generated init script
-	// Note: The init script is generated at instance creation time with hasGPU flag,
-	// so we write a placeholder here that will be replaced per-instance
 	initScript := GenerateInitScript()
 	initPath := filepath.Join(rootfsDir, "init")
 	if err := os.WriteFile(initPath, []byte(initScript), 0755); err != nil {
