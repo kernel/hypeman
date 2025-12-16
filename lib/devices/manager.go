@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -29,6 +28,10 @@ type InstanceLivenessChecker interface {
 
 	// ListAllInstanceDevices returns a map of instanceID -> []deviceIDs for all instances.
 	ListAllInstanceDevices(ctx context.Context) map[string][]string
+
+	// DetectSuspiciousVMMProcesses finds cloud-hypervisor processes that don't match
+	// known instances and logs warnings. Returns the count of suspicious processes found.
+	DetectSuspiciousVMMProcesses(ctx context.Context) int
 }
 
 // Manager provides device management operations
@@ -526,7 +529,9 @@ func (m *manager) ReconcileDevices(ctx context.Context) error {
 	}
 
 	// Phase 3: Detect suspicious cloud-hypervisor processes (log-only)
-	m.detectSuspiciousVMMProcesses(ctx, &stats)
+	if m.livenessChecker != nil {
+		stats.suspiciousVMM = m.livenessChecker.DetectSuspiciousVMMProcesses(ctx)
+	}
 
 	// Log summary
 	log.InfoContext(ctx, "device reconciliation complete",
@@ -699,71 +704,6 @@ func (m *manager) resetOrphanedDevice(ctx context.Context, device *Device, stats
 			"device_id", device.Id,
 			"error", err,
 		)
-	}
-}
-
-// detectSuspiciousVMMProcesses logs warnings about cloud-hypervisor processes
-// that don't match known instances. This is log-only (no killing).
-func (m *manager) detectSuspiciousVMMProcesses(ctx context.Context, stats *reconcileStats) {
-	log := logger.FromContext(ctx)
-
-	// Find all cloud-hypervisor processes
-	cmd := exec.Command("pgrep", "-a", "cloud-hypervisor")
-	output, err := cmd.Output()
-	if err != nil {
-		// pgrep returns exit code 1 if no processes found - that's fine
-		return
-	}
-
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-	if len(lines) == 0 || (len(lines) == 1 && lines[0] == "") {
-		return
-	}
-
-	for _, line := range lines {
-		if line == "" {
-			continue
-		}
-
-		// Try to extract socket path from command line to match against known instances
-		// cloud-hypervisor command typically includes --api-socket <path>
-		socketPath := ""
-		parts := strings.Fields(line)
-		for i, part := range parts {
-			if part == "--api-socket" && i+1 < len(parts) {
-				socketPath = parts[i+1]
-				break
-			}
-		}
-
-		// Check if this socket path matches any running instance
-		// We use IsInstanceRunning directly rather than ListAllInstanceDevices because
-		// the latter only returns instances with devices attached, which would cause
-		// false positives for instances without GPU passthrough.
-		matched := false
-		if socketPath != "" && m.livenessChecker != nil {
-			// Socket path is typically like /var/lib/hypeman/guests/<id>/ch.sock
-			// Try to extract instance ID
-			if strings.Contains(socketPath, "/guests/") {
-				pathParts := strings.Split(socketPath, "/guests/")
-				if len(pathParts) > 1 {
-					instancePath := pathParts[1]
-					instanceID := strings.Split(instancePath, "/")[0]
-					if m.livenessChecker.IsInstanceRunning(ctx, instanceID) {
-						matched = true
-					}
-				}
-			}
-		}
-
-		if !matched {
-			log.WarnContext(ctx, "detected untracked cloud-hypervisor process",
-				"process_info", line,
-				"socket_path", socketPath,
-				"remediation", "Run lib/devices/scripts/gpu-reset.sh for manual recovery if needed",
-			)
-			stats.suspiciousVMM++
-		}
 	}
 }
 

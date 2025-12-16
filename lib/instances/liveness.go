@@ -2,8 +2,11 @@ package instances
 
 import (
 	"context"
+	"os/exec"
+	"strings"
 
 	"github.com/onkernel/hypeman/lib/devices"
+	"github.com/onkernel/hypeman/lib/logger"
 )
 
 // Ensure instanceLivenessAdapter implements the interface
@@ -77,5 +80,76 @@ func (a *instanceLivenessAdapter) ListAllInstanceDevices(ctx context.Context) ma
 		}
 	}
 	return result
+}
+
+// DetectSuspiciousVMMProcesses finds cloud-hypervisor processes that don't match
+// known instances and logs warnings. Returns the count of suspicious processes found.
+// This uses ListInstances (all instances) rather than ListAllInstanceDevices to avoid
+// false positives for instances without GPU devices attached.
+func (a *instanceLivenessAdapter) DetectSuspiciousVMMProcesses(ctx context.Context) int {
+	log := logger.FromContext(ctx)
+
+	if a.manager == nil {
+		return 0
+	}
+
+	// Find all cloud-hypervisor processes
+	cmd := exec.Command("pgrep", "-a", "cloud-hypervisor")
+	output, err := cmd.Output()
+	if err != nil {
+		// pgrep returns exit code 1 if no processes found - that's fine
+		return 0
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	if len(lines) == 0 || (len(lines) == 1 && lines[0] == "") {
+		return 0
+	}
+
+	suspiciousCount := 0
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+
+		// Try to extract socket path from command line to match against known instances
+		// cloud-hypervisor command typically includes --api-socket <path>
+		socketPath := ""
+		parts := strings.Fields(line)
+		for i, part := range parts {
+			if part == "--api-socket" && i+1 < len(parts) {
+				socketPath = parts[i+1]
+				break
+			}
+		}
+
+		// Check if this socket path matches any known instance
+		matched := false
+		if socketPath != "" {
+			// Socket path is typically like /var/lib/hypeman/guests/<id>/ch.sock
+			// Try to extract instance ID
+			if strings.Contains(socketPath, "/guests/") {
+				pathParts := strings.Split(socketPath, "/guests/")
+				if len(pathParts) > 1 {
+					instancePath := pathParts[1]
+					instanceID := strings.Split(instancePath, "/")[0]
+					if a.IsInstanceRunning(ctx, instanceID) {
+						matched = true
+					}
+				}
+			}
+		}
+
+		if !matched {
+			log.WarnContext(ctx, "detected untracked cloud-hypervisor process",
+				"process_info", line,
+				"socket_path", socketPath,
+				"remediation", "Run lib/devices/scripts/gpu-reset.sh for manual recovery if needed",
+			)
+			suspiciousCount++
+		}
+	}
+
+	return suspiciousCount
 }
 
