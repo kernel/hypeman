@@ -21,6 +21,7 @@ type Client struct {
 	Images    ImageService
 	Instances InstanceService
 	Volumes   VolumeService
+	Devices   DeviceService
 	Ingresses IngressService
 }
 
@@ -50,6 +51,7 @@ func NewClient(opts ...option.RequestOption) (r Client) {
 	r.Images = NewImageService(opts...)
 	r.Instances = NewInstanceService(opts...)
 	r.Volumes = NewVolumeService(opts...)
+	r.Devices = NewDeviceService(opts...)
 	r.Ingresses = NewIngressService(opts...)
 
 	return

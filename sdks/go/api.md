@@ -65,6 +65,22 @@ Methods:
 - <code title="delete /volumes/{id}">client.Volumes.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#VolumeService.Delete">Delete</a>(ctx <a href="https://pkg.go.dev/context">context</a>.<a href="https://pkg.go.dev/context#Context">Context</a>, id <a href="https://pkg.go.dev/builtin#string">string</a>) <a href="https://pkg.go.dev/builtin#error">error</a></code>
 - <code title="get /volumes/{id}">client.Volumes.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#VolumeService.Get">Get</a>(ctx <a href="https://pkg.go.dev/context">context</a>.<a href="https://pkg.go.dev/context#Context">Context</a>, id <a href="https://pkg.go.dev/builtin#string">string</a>) (<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go">hypeman</a>.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#Volume">Volume</a>, <a href="https://pkg.go.dev/builtin#error">error</a>)</code>
 
+# Devices
+
+Response Types:
+
+- <a href="https://pkg.go.dev/github.com/onkernel/hypeman-go">hypeman</a>.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#AvailableDevice">AvailableDevice</a>
+- <a href="https://pkg.go.dev/github.com/onkernel/hypeman-go">hypeman</a>.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#Device">Device</a>
+- <a href="https://pkg.go.dev/github.com/onkernel/hypeman-go">hypeman</a>.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#DeviceType">DeviceType</a>
+
+Methods:
+
+- <code title="post /devices">client.Devices.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#DeviceService.New">New</a>(ctx <a href="https://pkg.go.dev/context">context</a>.<a href="https://pkg.go.dev/context#Context">Context</a>, body <a href="https://pkg.go.dev/github.com/onkernel/hypeman-go">hypeman</a>.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#DeviceNewParams">DeviceNewParams</a>) (<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go">hypeman</a>.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#Device">Device</a>, <a href="https://pkg.go.dev/builtin#error">error</a>)</code>
+- <code title="get /devices/{id}">client.Devices.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#DeviceService.Get">Get</a>(ctx <a href="https://pkg.go.dev/context">context</a>.<a href="https://pkg.go.dev/context#Context">Context</a>, id <a href="https://pkg.go.dev/builtin#string">string</a>) (<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go">hypeman</a>.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#Device">Device</a>, <a href="https://pkg.go.dev/builtin#error">error</a>)</code>
+- <code title="get /devices">client.Devices.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#DeviceService.List">List</a>(ctx <a href="https://pkg.go.dev/context">context</a>.<a href="https://pkg.go.dev/context#Context">Context</a>) ([]<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go">hypeman</a>.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#Device">Device</a>, <a href="https://pkg.go.dev/builtin#error">error</a>)</code>
+- <code title="delete /devices/{id}">client.Devices.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#DeviceService.Delete">Delete</a>(ctx <a href="https://pkg.go.dev/context">context</a>.<a href="https://pkg.go.dev/context#Context">Context</a>, id <a href="https://pkg.go.dev/builtin#string">string</a>) <a href="https://pkg.go.dev/builtin#error">error</a></code>
+- <code title="get /devices/available">client.Devices.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#DeviceService.ListAvailable">ListAvailable</a>(ctx <a href="https://pkg.go.dev/context">context</a>.<a href="https://pkg.go.dev/context#Context">Context</a>) ([]<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go">hypeman</a>.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#AvailableDevice">AvailableDevice</a>, <a href="https://pkg.go.dev/builtin#error">error</a>)</code>
+
 # Ingresses
 
 Params Types:

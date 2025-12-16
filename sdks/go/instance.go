@@ -354,6 +354,8 @@ type InstanceNewParams struct {
 	Size param.Opt[string] `json:"size,omitzero"`
 	// Number of virtual CPUs
 	Vcpus param.Opt[int64] `json:"vcpus,omitzero"`
+	// Device IDs or names to attach for GPU/PCI passthrough
+	Devices []string `json:"devices,omitzero"`
 	// Environment variables
 	Env map[string]string `json:"env,omitzero"`
 	// Network configuration for the instance
