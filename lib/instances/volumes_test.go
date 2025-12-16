@@ -93,7 +93,7 @@ func TestVolumeMultiAttachReadOnly(t *testing.T) {
 	writerInst, err := manager.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "writer",
 		Image:          "docker.io/library/alpine:latest",
-		Size:           512 * 1024 * 1024,
+		Size:           2 * 1024 * 1024 * 1024, // 2GB (needs extra room for initrd with NVIDIA libs)
 		HotplugSize:    512 * 1024 * 1024,
 		OverlaySize:    1024 * 1024 * 1024,
 		Vcpus:          1,
@@ -135,7 +135,7 @@ func TestVolumeMultiAttachReadOnly(t *testing.T) {
 	reader1, err := manager.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "reader-1",
 		Image:          "docker.io/library/alpine:latest",
-		Size:           512 * 1024 * 1024,
+		Size:           2 * 1024 * 1024 * 1024, // 2GB (needs extra room for initrd with NVIDIA libs)
 		HotplugSize:    512 * 1024 * 1024,
 		OverlaySize:    1024 * 1024 * 1024,
 		Vcpus:          1,
@@ -151,7 +151,7 @@ func TestVolumeMultiAttachReadOnly(t *testing.T) {
 	reader2, err := manager.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "reader-2-overlay",
 		Image:          "docker.io/library/alpine:latest",
-		Size:           512 * 1024 * 1024,
+		Size:           2 * 1024 * 1024 * 1024, // 2GB (needs extra room for initrd with NVIDIA libs)
 		HotplugSize:    512 * 1024 * 1024,
 		OverlaySize:    1024 * 1024 * 1024,
 		Vcpus:          1,
@@ -270,7 +270,7 @@ func TestOverlayDiskCleanupOnDelete(t *testing.T) {
 	inst, err := manager.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "overlay-cleanup-test",
 		Image:          "docker.io/library/alpine:latest",
-		Size:           512 * 1024 * 1024,
+		Size:           2 * 1024 * 1024 * 1024, // 2GB (needs extra room for initrd with NVIDIA libs)
 		HotplugSize:    512 * 1024 * 1024,
 		OverlaySize:    1024 * 1024 * 1024,
 		Vcpus:          1,
@@ -394,7 +394,7 @@ func TestVolumeFromArchive(t *testing.T) {
 	inst, err := manager.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "archive-reader",
 		Image:          "docker.io/library/alpine:latest",
-		Size:           512 * 1024 * 1024,
+		Size:           2 * 1024 * 1024 * 1024, // 2GB (needs extra room for initrd with NVIDIA libs)
 		HotplugSize:    512 * 1024 * 1024,
 		OverlaySize:    1024 * 1024 * 1024,
 		Vcpus:          1,

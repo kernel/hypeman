@@ -8,8 +8,11 @@ package main
 
 import (
 	"context"
+	"log/slog"
+
 	"github.com/onkernel/hypeman/cmd/api/api"
 	"github.com/onkernel/hypeman/cmd/api/config"
+	"github.com/onkernel/hypeman/lib/devices"
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/ingress"
 	"github.com/onkernel/hypeman/lib/instances"
@@ -18,10 +21,7 @@ import (
 	"github.com/onkernel/hypeman/lib/registry"
 	"github.com/onkernel/hypeman/lib/system"
 	"github.com/onkernel/hypeman/lib/volumes"
-	"log/slog"
-)
 
-import (
 	_ "embed"
 )
 
@@ -39,11 +39,12 @@ func initializeApp() (*application, func(), error) {
 	}
 	systemManager := providers.ProvideSystemManager(paths)
 	networkManager := providers.ProvideNetworkManager(paths, config)
+	devicesManager := providers.ProvideDeviceManager(paths)
 	volumesManager, err := providers.ProvideVolumeManager(paths, config)
 	if err != nil {
 		return nil, nil, err
 	}
-	instancesManager, err := providers.ProvideInstanceManager(paths, config, manager, systemManager, networkManager, volumesManager)
+	instancesManager, err := providers.ProvideInstanceManager(paths, config, manager, systemManager, networkManager, devicesManager, volumesManager)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -55,7 +56,7 @@ func initializeApp() (*application, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	apiService := api.New(config, manager, instancesManager, volumesManager, networkManager, ingressManager)
+	apiService := api.New(config, manager, instancesManager, volumesManager, networkManager, devicesManager, ingressManager)
 	mainApplication := &application{
 		Ctx:             context,
 		Logger:          logger,
@@ -63,6 +64,7 @@ func initializeApp() (*application, func(), error) {
 		ImageManager:    manager,
 		SystemManager:   systemManager,
 		NetworkManager:  networkManager,
+		DeviceManager:   devicesManager,
 		InstanceManager: instancesManager,
 		VolumeManager:   volumesManager,
 		IngressManager:  ingressManager,
@@ -83,6 +85,7 @@ type application struct {
 	ImageManager    images.Manager
 	SystemManager   system.Manager
 	NetworkManager  network.Manager
+	DeviceManager   devices.Manager
 	InstanceManager instances.Manager
 	VolumeManager   volumes.Manager
 	IngressManager  ingress.Manager

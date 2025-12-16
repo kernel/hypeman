@@ -172,6 +172,18 @@ func run() error {
 	}
 	logger.Info("Network manager initialized")
 
+	// Reconcile device state (clears orphaned attachments from crashed VMs)
+	// Set up liveness checker so device reconciliation can accurately detect orphaned attachments
+	logger.Info("Reconciling device state...")
+	livenessChecker := instances.NewLivenessChecker(app.InstanceManager)
+	if livenessChecker != nil {
+		app.DeviceManager.SetLivenessChecker(livenessChecker)
+	}
+	if err := app.DeviceManager.ReconcileDevices(app.Ctx); err != nil {
+		logger.Error("failed to reconcile device state", "error", err)
+		return fmt.Errorf("reconcile device state: %w", err)
+	}
+
 	// Initialize ingress manager (starts Caddy daemon and DNS server for dynamic upstreams)
 	logger.Info("Initializing ingress manager...")
 	if err := app.IngressManager.Initialize(app.Ctx); err != nil {

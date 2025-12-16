@@ -84,7 +84,7 @@ func (m *manager) startInstance(
 	// 5. Regenerate config disk with new network configuration
 	instForConfig := &Instance{StoredMetadata: *stored}
 	log.DebugContext(ctx, "regenerating config disk", "instance_id", id)
-	if err := m.createConfigDisk(instForConfig, imageInfo, netConfig); err != nil {
+	if err := m.createConfigDisk(ctx, instForConfig, imageInfo, netConfig); err != nil {
 		log.ErrorContext(ctx, "failed to create config disk", "instance_id", id, "error", err)
 		return nil, fmt.Errorf("create config disk: %w", err)
 	}

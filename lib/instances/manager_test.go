@@ -17,6 +17,7 @@ import (
 
 	"github.com/joho/godotenv"
 	"github.com/onkernel/hypeman/cmd/api/config"
+	"github.com/onkernel/hypeman/lib/devices"
 	"github.com/onkernel/hypeman/lib/exec"
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/ingress"
@@ -46,6 +47,7 @@ func setupTestManager(t *testing.T) (*manager, string) {
 
 	systemManager := system.NewManager(p)
 	networkManager := network.NewManager(p, cfg, nil)
+	deviceManager := devices.NewManager(p)
 	volumeManager := volumes.NewManager(p, 0, nil) // 0 = unlimited storage
 	limits := ResourceLimits{
 		MaxOverlaySize:       100 * 1024 * 1024 * 1024, // 100GB
@@ -54,7 +56,7 @@ func setupTestManager(t *testing.T) (*manager, string) {
 		MaxTotalVcpus:        0,                        // unlimited
 		MaxTotalMemory:       0,                        // unlimited
 	}
-	mgr := NewManager(p, imageManager, systemManager, networkManager, volumeManager, limits, nil, nil).(*manager)
+	mgr := NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, nil, nil).(*manager)
 
 	// Register cleanup to kill any orphaned Cloud Hypervisor processes
 	t.Cleanup(func() {
@@ -246,7 +248,7 @@ func TestBasicEndToEnd(t *testing.T) {
 	req := CreateInstanceRequest{
 		Name:           "test-nginx",
 		Image:          "docker.io/library/nginx:alpine",
-		Size:           512 * 1024 * 1024,       // 512MB
+		Size:           2 * 1024 * 1024 * 1024,  // 2GB (needs extra room for initrd with NVIDIA libs)
 		HotplugSize:    512 * 1024 * 1024,       // 512MB
 		OverlaySize:    10 * 1024 * 1024 * 1024, // 10GB
 		Vcpus:          1,
@@ -754,6 +756,7 @@ func TestStorageOperations(t *testing.T) {
 	imageManager, _ := images.NewManager(p, 1, nil)
 	systemManager := system.NewManager(p)
 	networkManager := network.NewManager(p, cfg, nil)
+	deviceManager := devices.NewManager(p)
 	volumeManager := volumes.NewManager(p, 0, nil) // 0 = unlimited storage
 	limits := ResourceLimits{
 		MaxOverlaySize:       100 * 1024 * 1024 * 1024, // 100GB
@@ -762,7 +765,7 @@ func TestStorageOperations(t *testing.T) {
 		MaxTotalVcpus:        0,                        // unlimited
 		MaxTotalMemory:       0,                        // unlimited
 	}
-	manager := NewManager(p, imageManager, systemManager, networkManager, volumeManager, limits, nil, nil).(*manager)
+	manager := NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, nil, nil).(*manager)
 
 	// Test metadata doesn't exist initially
 	_, err := manager.loadMetadata("nonexistent")
@@ -859,7 +862,7 @@ func TestStandbyAndRestore(t *testing.T) {
 	req := CreateInstanceRequest{
 		Name:           "test-standby",
 		Image:          "docker.io/library/nginx:alpine",
-		Size:           512 * 1024 * 1024,
+		Size:           2 * 1024 * 1024 * 1024, // 2GB (needs extra room for initrd with NVIDIA libs)
 		HotplugSize:    512 * 1024 * 1024,
 		OverlaySize:    10 * 1024 * 1024 * 1024,
 		Vcpus:          1,

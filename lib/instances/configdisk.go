@@ -1,6 +1,7 @@
 package instances
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -8,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/onkernel/hypeman/lib/devices"
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/network"
 )
@@ -16,7 +18,7 @@ import (
 // The disk contains:
 // - /config.sh - Shell script sourced by init
 // - /metadata.json - JSON metadata for programmatic access
-func (m *manager) createConfigDisk(inst *Instance, imageInfo *images.Image, netConfig *network.NetworkConfig) error {
+func (m *manager) createConfigDisk(ctx context.Context, inst *Instance, imageInfo *images.Image, netConfig *network.NetworkConfig) error {
 	// Create temporary directory for config files
 	tmpDir, err := os.MkdirTemp("", "hypeman-config-*")
 	if err != nil {
@@ -25,7 +27,7 @@ func (m *manager) createConfigDisk(inst *Instance, imageInfo *images.Image, netC
 	defer os.RemoveAll(tmpDir)
 
 	// Generate config.sh
-	configScript := m.generateConfigScript(inst, imageInfo, netConfig)
+	configScript := m.generateConfigScript(ctx, inst, imageInfo, netConfig)
 	configPath := filepath.Join(tmpDir, "config.sh")
 	if err := os.WriteFile(configPath, []byte(configScript), 0644); err != nil {
 		return fmt.Errorf("write config.sh: %w", err)
@@ -53,7 +55,7 @@ func (m *manager) createConfigDisk(inst *Instance, imageInfo *images.Image, netC
 	// Create ext4 disk with config files
 	// Use ext4 for now (can switch to erofs when kernel supports it)
 	diskPath := m.paths.InstanceConfigDisk(inst.Id)
-	
+
 	// Calculate size (config files are tiny, use 1MB minimum)
 	_, err = images.ExportRootfs(tmpDir, diskPath, images.FormatExt4)
 	if err != nil {
@@ -64,32 +66,32 @@ func (m *manager) createConfigDisk(inst *Instance, imageInfo *images.Image, netC
 }
 
 // generateConfigScript creates the shell script that will be sourced by init
-func (m *manager) generateConfigScript(inst *Instance, imageInfo *images.Image, netConfig *network.NetworkConfig) string {
+func (m *manager) generateConfigScript(ctx context.Context, inst *Instance, imageInfo *images.Image, netConfig *network.NetworkConfig) string {
 	// Prepare entrypoint value
 	entrypoint := ""
 	if len(imageInfo.Entrypoint) > 0 {
 		entrypoint = shellQuoteArray(imageInfo.Entrypoint)
 	}
-	
+
 	// Prepare cmd value
 	cmd := ""
 	if len(imageInfo.Cmd) > 0 {
 		cmd = shellQuoteArray(imageInfo.Cmd)
 	}
-	
+
 	// Prepare workdir value
 	workdir := shellQuote("/")
 	if imageInfo.WorkingDir != "" {
 		workdir = shellQuote(imageInfo.WorkingDir)
 	}
-	
+
 	// Build environment variable exports
 	var envLines strings.Builder
 	mergedEnv := mergeEnv(imageInfo.Env, inst.Env)
 	for key, value := range mergedEnv {
 		envLines.WriteString(fmt.Sprintf("export %s=%s\n", key, shellQuote(value)))
 	}
-	
+
 	// Build network configuration section
 	// Use netConfig directly instead of trying to derive it (VM hasn't started yet)
 	networkSection := ""
@@ -103,6 +105,17 @@ GUEST_CIDR="%d"
 GUEST_GW="%s"
 GUEST_DNS="%s"
 `, netConfig.IP, cidr, netConfig.Gateway, netConfig.DNS)
+	}
+
+	// GPU passthrough configuration
+	// Only set HAS_GPU=1 if at least one attached device is actually a GPU
+	gpuSection := ""
+	for _, deviceID := range inst.Devices {
+		device, err := m.deviceManager.GetDevice(ctx, deviceID)
+		if err == nil && device.Type == devices.DeviceTypeGPU {
+			gpuSection = "\n# GPU passthrough\nHAS_GPU=1\n"
+			break
+		}
 	}
 
 	// Build volume mounts section
@@ -137,7 +150,7 @@ GUEST_DNS="%s"
 		volumeLines.WriteString("\"\n")
 		volumeSection = volumeLines.String()
 	}
-	
+
 	// Generate script as a readable template block
 	// ENTRYPOINT and CMD contain shell-quoted arrays that will be eval'd in init
 	script := fmt.Sprintf(`#!/bin/sh
@@ -149,7 +162,7 @@ CMD="%s"
 WORKDIR=%s
 
 # Environment variables
-%s%s%s`, 
+%s%s%s%s`,
 		inst.Id,
 		entrypoint,
 		cmd,
@@ -157,8 +170,9 @@ WORKDIR=%s
 		envLines.String(),
 		networkSection,
 		volumeSection,
+		gpuSection,
 	)
-	
+
 	return script
 }
 

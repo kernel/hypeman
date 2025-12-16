@@ -7,8 +7,12 @@ package system
 // 1. Mounts essential filesystems (proc, sys, dev)
 // 2. Sets up overlay filesystem (lowerdir=rootfs, upperdir=overlay disk)
 // 3. Mounts and sources config disk (/dev/vdc)
-// 4. Configures networking (if enabled)
-// 5. Executes container entrypoint
+// 4. Loads NVIDIA kernel modules (if HAS_GPU=1 in config.sh)
+// 5. Configures networking (if enabled)
+// 6. Executes container entrypoint
+//
+// GPU support: When HAS_GPU=1 is set in the instance's config.sh, the init script
+// will load NVIDIA kernel modules before launching the container entrypoint.
 func GenerateInitScript() string {
 	return `#!/bin/sh
 set -xe
@@ -69,6 +73,95 @@ else
   echo "overlay-init: ERROR - config.sh not found!"
   /bin/sh -i
   exit 1
+fi
+
+# Load NVIDIA kernel modules for GPU passthrough (if HAS_GPU=1)
+if [ "${HAS_GPU:-0}" = "1" ]; then
+  echo "overlay-init: loading NVIDIA kernel modules for GPU passthrough"
+  if [ -d /lib/modules ]; then
+    # Find the kernel version directory
+    KVER=$(ls /lib/modules/ 2>/dev/null | head -1)
+    if [ -n "$KVER" ] && [ -d "/lib/modules/$KVER/kernel/drivers/gpu" ]; then
+      # Load modules in order (dependencies first)
+      insmod /lib/modules/$KVER/kernel/drivers/gpu/nvidia.ko 2>&1 || echo "overlay-init: nvidia.ko load failed"
+      insmod /lib/modules/$KVER/kernel/drivers/gpu/nvidia-uvm.ko 2>&1 || echo "overlay-init: nvidia-uvm.ko load failed"
+      insmod /lib/modules/$KVER/kernel/drivers/gpu/nvidia-modeset.ko 2>&1 || echo "overlay-init: nvidia-modeset.ko load failed"
+      insmod /lib/modules/$KVER/kernel/drivers/gpu/nvidia-drm.ko modeset=1 2>&1 || echo "overlay-init: nvidia-drm.ko load failed"
+      echo "overlay-init: NVIDIA modules loaded for kernel $KVER"
+      
+      # Use nvidia-modprobe to create device nodes with correct major/minor numbers.
+      # nvidia-modprobe is the official NVIDIA utility that:
+      # 1. Loads kernel modules if needed (already done above)
+      # 2. Creates /dev/nvidiactl and /dev/nvidia0 with correct permissions
+      # 3. Creates /dev/nvidia-uvm and /dev/nvidia-uvm-tools
+      if [ -x /usr/bin/nvidia-modprobe ]; then
+        echo "overlay-init: running nvidia-modprobe to create device nodes"
+        /usr/bin/nvidia-modprobe 2>&1 || echo "overlay-init: nvidia-modprobe failed"
+        /usr/bin/nvidia-modprobe -u -c=0 2>&1 || echo "overlay-init: nvidia-modprobe -u failed"
+        echo "overlay-init: nvidia-modprobe completed"
+        ls -la /dev/nvidia* 2>/dev/null || true
+      else
+        echo "overlay-init: nvidia-modprobe not found, falling back to manual mknod"
+        # Fallback: Manual device node creation
+        NVIDIA_MAJOR=$(awk '/nvidia-frontend|^[0-9]+ nvidia$/ {print $1}' /proc/devices 2>/dev/null | head -1)
+        NVIDIA_UVM_MAJOR=$(awk '/nvidia-uvm/ {print $1}' /proc/devices 2>/dev/null)
+        
+        if [ -n "$NVIDIA_MAJOR" ]; then
+          mknod -m 666 /dev/nvidiactl c $NVIDIA_MAJOR 255
+          mknod -m 666 /dev/nvidia0 c $NVIDIA_MAJOR 0
+          echo "overlay-init: created /dev/nvidiactl and /dev/nvidia0 (major $NVIDIA_MAJOR)"
+        fi
+        
+        if [ -n "$NVIDIA_UVM_MAJOR" ]; then
+          mknod -m 666 /dev/nvidia-uvm c $NVIDIA_UVM_MAJOR 0
+          mknod -m 666 /dev/nvidia-uvm-tools c $NVIDIA_UVM_MAJOR 1
+          echo "overlay-init: created /dev/nvidia-uvm* (major $NVIDIA_UVM_MAJOR)"
+        fi
+      fi
+    else
+      echo "overlay-init: NVIDIA modules not found in /lib/modules/$KVER"
+    fi
+  else
+    echo "overlay-init: /lib/modules not found, skipping NVIDIA module loading"
+  fi
+  
+  # Inject NVIDIA userspace driver libraries into container rootfs
+  # This allows containers to use standard CUDA images without bundled drivers
+  # See lib/devices/GPU.md for documentation
+  if [ -d /usr/lib/nvidia ]; then
+    echo "overlay-init: injecting NVIDIA driver libraries into container"
+    
+    DRIVER_VERSION=$(cat /usr/lib/nvidia/version 2>/dev/null || echo "unknown")
+    LIB_DST="/overlay/newroot/usr/lib/x86_64-linux-gnu"
+    BIN_DST="/overlay/newroot/usr/bin"
+    
+    mkdir -p "$LIB_DST" "$BIN_DST"
+    
+    # Copy all driver libraries and create symlinks
+    for lib in /usr/lib/nvidia/*.so.*; do
+      if [ -f "$lib" ]; then
+        libname=$(basename "$lib")
+        cp "$lib" "$LIB_DST/"
+        
+        # Create standard symlinks: libfoo.so.VERSION -> libfoo.so.1 -> libfoo.so
+        base=$(echo "$libname" | sed 's/\.so\..*//')
+        ln -sf "$libname" "$LIB_DST/${base}.so.1" 2>/dev/null || true
+        ln -sf "${base}.so.1" "$LIB_DST/${base}.so" 2>/dev/null || true
+      fi
+    done
+    
+    # Copy nvidia-smi and nvidia-modprobe binaries
+    for bin in nvidia-smi nvidia-modprobe; do
+      if [ -x /usr/bin/$bin ]; then
+        cp /usr/bin/$bin "$BIN_DST/"
+      fi
+    done
+    
+    # Update ldconfig cache so applications can find the libraries
+    chroot /overlay/newroot ldconfig 2>/dev/null || true
+    
+    echo "overlay-init: NVIDIA driver libraries injected (version: $DRIVER_VERSION)"
+  fi
 fi
 
 # Mount attached volumes (from config: VOLUME_MOUNTS="device:path:mode[:overlay_device] ...")

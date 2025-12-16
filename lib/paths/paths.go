@@ -1,5 +1,4 @@
 // Package paths provides centralized path construction for hypeman data directory.
-
 package paths
 
 import "path/filepath"
@@ -194,6 +193,23 @@ func (p *Paths) InstanceSnapshotConfig(id string) string {
 // GuestsDir returns the root guests directory.
 func (p *Paths) GuestsDir() string {
 	return filepath.Join(p.dataDir, "guests")
+}
+
+// Device path methods
+
+// DevicesDir returns the root devices directory.
+func (p *Paths) DevicesDir() string {
+	return filepath.Join(p.dataDir, "devices")
+}
+
+// DeviceDir returns the directory for a device.
+func (p *Paths) DeviceDir(id string) string {
+	return filepath.Join(p.DevicesDir(), id)
+}
+
+// DeviceMetadata returns the path to device metadata.json.
+func (p *Paths) DeviceMetadata(id string) string {
+	return filepath.Join(p.DeviceDir(id), "metadata.json")
 }
 
 // Volume path methods

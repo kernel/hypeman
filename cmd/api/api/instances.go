@@ -96,6 +96,12 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		networkEnabled = *request.Body.Network.Enabled
 	}
 
+	// Parse devices (GPU passthrough)
+	var deviceRefs []string
+	if request.Body.Devices != nil {
+		deviceRefs = *request.Body.Devices
+	}
+
 	// Parse volumes
 	var volumes []instances.VolumeAttachment
 	if request.Body.Volumes != nil {
@@ -139,6 +145,7 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		Vcpus:          vcpus,
 		Env:            env,
 		NetworkEnabled: networkEnabled,
+		Devices:        deviceRefs,
 		Volumes:        volumes,
 	}
 

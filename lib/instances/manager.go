@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/onkernel/hypeman/lib/devices"
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/network"
 	"github.com/onkernel/hypeman/lib/paths"
@@ -46,6 +47,7 @@ type manager struct {
 	imageManager   images.Manager
 	systemManager  system.Manager
 	networkManager network.Manager
+	deviceManager  devices.Manager
 	volumeManager  volumes.Manager
 	limits         ResourceLimits
 	instanceLocks  sync.Map      // map[string]*sync.RWMutex - per-instance locks
@@ -55,12 +57,13 @@ type manager struct {
 
 // NewManager creates a new instances manager.
 // If meter is nil, metrics are disabled.
-func NewManager(p *paths.Paths, imageManager images.Manager, systemManager system.Manager, networkManager network.Manager, volumeManager volumes.Manager, limits ResourceLimits, meter metric.Meter, tracer trace.Tracer) Manager {
+func NewManager(p *paths.Paths, imageManager images.Manager, systemManager system.Manager, networkManager network.Manager, deviceManager devices.Manager, volumeManager volumes.Manager, limits ResourceLimits, meter metric.Meter, tracer trace.Tracer) Manager {
 	m := &manager{
 		paths:          p,
 		imageManager:   imageManager,
 		systemManager:  systemManager,
 		networkManager: networkManager,
+		deviceManager:  deviceManager,
 		volumeManager:  volumeManager,
 		limits:         limits,
 		instanceLocks:  sync.Map{},

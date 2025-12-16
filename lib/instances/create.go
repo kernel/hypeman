@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nrednav/cuid2"
+	"github.com/onkernel/hypeman/lib/devices"
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/logger"
 	"github.com/onkernel/hypeman/lib/network"
@@ -141,7 +142,7 @@ func (m *manager) createInstance(
 		return nil, ErrAlreadyExists
 	}
 
-	// 5. Apply defaults
+	// 6. Apply defaults
 	size := req.Size
 	if size == 0 {
 		size = 1 * 1024 * 1024 * 1024 // 1GB default
@@ -191,16 +192,70 @@ func (m *manager) createInstance(
 		req.Env = make(map[string]string)
 	}
 
-	// 6. Determine network based on NetworkEnabled flag
+	// 7. Determine network based on NetworkEnabled flag
 	networkName := ""
 	if req.NetworkEnabled {
 		networkName = "default"
 	}
 
-	// 7. Get default kernel version
+	// 8. Get default kernel version
 	kernelVer := m.systemManager.GetDefaultKernelVersion()
 
-	// 8. Create instance metadata
+	// 9. Validate, resolve, and auto-bind devices (GPU passthrough)
+	// Track devices we've marked as attached for cleanup on error.
+	// The cleanup closure captures this slice by reference, so it will see
+	// whatever devices have been attached when cleanup runs.
+	var attachedDeviceIDs []string
+	var resolvedDeviceIDs []string
+
+	// Setup cleanup stack early so device attachment errors trigger cleanup
+	cu := cleanup.Make(func() {
+		log.DebugContext(ctx, "cleaning up instance on error", "instance_id", id)
+		m.deleteInstanceData(id)
+	})
+	defer cu.Clean()
+
+	// Add device detachment cleanup - closure captures attachedDeviceIDs by reference
+	if m.deviceManager != nil {
+		cu.Add(func() {
+			for _, deviceID := range attachedDeviceIDs {
+				log.DebugContext(ctx, "detaching device on cleanup", "instance_id", id, "device", deviceID)
+				m.deviceManager.MarkDetached(ctx, deviceID)
+			}
+		})
+	}
+
+	if len(req.Devices) > 0 && m.deviceManager != nil {
+		for _, deviceRef := range req.Devices {
+			device, err := m.deviceManager.GetDevice(ctx, deviceRef)
+			if err != nil {
+				log.ErrorContext(ctx, "failed to get device", "device", deviceRef, "error", err)
+				return nil, fmt.Errorf("device %s: %w", deviceRef, err)
+			}
+			if device.AttachedTo != nil {
+				log.ErrorContext(ctx, "device already attached", "device", deviceRef, "instance", *device.AttachedTo)
+				return nil, fmt.Errorf("device %s is already attached to instance %s", deviceRef, *device.AttachedTo)
+			}
+			// Auto-bind to VFIO if not already bound
+			if !device.BoundToVFIO {
+				log.InfoContext(ctx, "auto-binding device to VFIO", "device", deviceRef, "pci_address", device.PCIAddress)
+				if err := m.deviceManager.BindToVFIO(ctx, device.Id); err != nil {
+					log.ErrorContext(ctx, "failed to bind device to VFIO", "device", deviceRef, "error", err)
+					return nil, fmt.Errorf("bind device %s to VFIO: %w", deviceRef, err)
+				}
+			}
+			// Mark device as attached to this instance
+			if err := m.deviceManager.MarkAttached(ctx, device.Id, id); err != nil {
+				log.ErrorContext(ctx, "failed to mark device as attached", "device", deviceRef, "error", err)
+				return nil, fmt.Errorf("mark device %s as attached: %w", deviceRef, err)
+			}
+			attachedDeviceIDs = append(attachedDeviceIDs, device.Id)
+			resolvedDeviceIDs = append(resolvedDeviceIDs, device.Id)
+		}
+		log.DebugContext(ctx, "validated devices for passthrough", "id", id, "devices", resolvedDeviceIDs)
+	}
+
+	// 10. Create instance metadata
 	stored := &StoredMetadata{
 		Id:             id,
 		Name:           req.Name,
@@ -220,30 +275,24 @@ func (m *manager) createInstance(
 		DataDir:        m.paths.InstanceDir(id),
 		VsockCID:       vsockCID,
 		VsockSocket:    vsockSocket,
+		Devices:        resolvedDeviceIDs,
 	}
 
-	// Setup cleanup stack for automatic rollback on errors
-	cu := cleanup.Make(func() {
-		log.DebugContext(ctx, "cleaning up instance on error", "instance_id", id)
-		m.deleteInstanceData(id)
-	})
-	defer cu.Clean()
-
-	// 8. Ensure directories
+	// 11. Ensure directories
 	log.DebugContext(ctx, "creating instance directories", "instance_id", id)
 	if err := m.ensureDirectories(id); err != nil {
 		log.ErrorContext(ctx, "failed to create directories", "instance_id", id, "error", err)
 		return nil, fmt.Errorf("ensure directories: %w", err)
 	}
 
-	// 9. Create overlay disk with specified size
+	// 12. Create overlay disk with specified size
 	log.DebugContext(ctx, "creating overlay disk", "instance_id", id, "size_bytes", stored.OverlaySize)
 	if err := m.createOverlayDisk(id, stored.OverlaySize); err != nil {
 		log.ErrorContext(ctx, "failed to create overlay disk", "instance_id", id, "error", err)
 		return nil, fmt.Errorf("create overlay disk: %w", err)
 	}
 
-	// 10. Allocate network (if network enabled)
+	// 13. Allocate network (if network enabled)
 	var netConfig *network.NetworkConfig
 	if networkName != "" {
 		log.DebugContext(ctx, "allocating network", "instance_id", id, "network", networkName)
@@ -268,7 +317,7 @@ func (m *manager) createInstance(
 		})
 	}
 
-	// 10.5. Validate and attach volumes
+	// 14. Validate and attach volumes
 	if len(req.Volumes) > 0 {
 		log.DebugContext(ctx, "validating volumes", "instance_id", id, "count", len(req.Volumes))
 		for _, volAttach := range req.Volumes {
@@ -308,15 +357,15 @@ func (m *manager) createInstance(
 		stored.Volumes = req.Volumes
 	}
 
-	// 11. Create config disk (needs Instance for buildVMConfig)
+	// 15. Create config disk (needs Instance for buildVMConfig)
 	inst := &Instance{StoredMetadata: *stored}
 	log.DebugContext(ctx, "creating config disk", "instance_id", id)
-	if err := m.createConfigDisk(inst, imageInfo, netConfig); err != nil {
+	if err := m.createConfigDisk(ctx, inst, imageInfo, netConfig); err != nil {
 		log.ErrorContext(ctx, "failed to create config disk", "instance_id", id, "error", err)
 		return nil, fmt.Errorf("create config disk: %w", err)
 	}
 
-	// 12. Save metadata
+	// 16. Save metadata
 	log.DebugContext(ctx, "saving instance metadata", "instance_id", id)
 	meta := &metadata{StoredMetadata: *stored}
 	if err := m.saveMetadata(meta); err != nil {
@@ -324,14 +373,14 @@ func (m *manager) createInstance(
 		return nil, fmt.Errorf("save metadata: %w", err)
 	}
 
-	// 13. Start VMM and boot VM
+	// 17. Start VMM and boot VM
 	log.InfoContext(ctx, "starting VMM and booting VM", "instance_id", id)
 	if err := m.startAndBootVM(ctx, stored, imageInfo, netConfig); err != nil {
 		log.ErrorContext(ctx, "failed to start and boot VM", "instance_id", id, "error", err)
 		return nil, err
 	}
 
-	// 14. Update timestamp after VM is running
+	// 18. Update timestamp after VM is running
 	now := time.Now()
 	stored.StartedAt = &now
 
@@ -487,7 +536,7 @@ func (m *manager) startAndBootVM(
 
 	// Build VM configuration matching Cloud Hypervisor VmConfig
 	inst := &Instance{StoredMetadata: *stored}
-	vmConfig, err := m.buildVMConfig(inst, imageInfo, netConfig)
+	vmConfig, err := m.buildVMConfig(ctx, inst, imageInfo, netConfig)
 	if err != nil {
 		return fmt.Errorf("build vm config: %w", err)
 	}
@@ -537,7 +586,7 @@ func (m *manager) startAndBootVM(
 }
 
 // buildVMConfig creates the Cloud Hypervisor VmConfig
-func (m *manager) buildVMConfig(inst *Instance, imageInfo *images.Image, netConfig *network.NetworkConfig) (vmm.VmConfig, error) {
+func (m *manager) buildVMConfig(ctx context.Context, inst *Instance, imageInfo *images.Image, netConfig *network.NetworkConfig) (vmm.VmConfig, error) {
 	// Get system file paths
 	kernelPath, _ := m.systemManager.GetKernelPath(system.KernelVersion(inst.KernelVersion))
 	initrdPath, _ := m.systemManager.GetInitrdPath()
@@ -644,6 +693,22 @@ func (m *manager) buildVMConfig(inst *Instance, imageInfo *images.Image, netConf
 		Socket: inst.VsockSocket,
 	}
 
+	// Device passthrough configuration (GPU, etc.)
+	var deviceConfigs *[]vmm.DeviceConfig
+	if len(inst.Devices) > 0 && m.deviceManager != nil {
+		configs := make([]vmm.DeviceConfig, 0, len(inst.Devices))
+		for _, deviceID := range inst.Devices {
+			device, err := m.deviceManager.GetDevice(ctx, deviceID)
+			if err != nil {
+				return vmm.VmConfig{}, fmt.Errorf("get device %s: %w", deviceID, err)
+			}
+			configs = append(configs, vmm.DeviceConfig{
+				Path: devices.GetDeviceSysfsPath(device.PCIAddress),
+			})
+		}
+		deviceConfigs = &configs
+	}
+
 	return vmm.VmConfig{
 		Payload: payload,
 		Cpus:    &cpus,
@@ -653,6 +718,7 @@ func (m *manager) buildVMConfig(inst *Instance, imageInfo *images.Image, netConf
 		Console: &console,
 		Net:     nets,
 		Vsock:   &vsock,
+		Devices: deviceConfigs,
 	}, nil
 }
 

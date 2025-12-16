@@ -149,6 +149,12 @@ components:
               description: Whether to attach instance to the default network
               default: true
               example: true
+        devices:
+          type: array
+          items:
+            type: string
+          description: Device IDs or names to attach for GPU/PCI passthrough
+          example: ["l4-gpu"]
         volumes:
           type: array
           description: Volumes to attach to the instance at creation time
@@ -501,6 +507,107 @@ components:
           format: date-time
           description: Creation timestamp (RFC3339)
           example: "2025-01-15T10:00:00Z"
+
+    DeviceType:
+      type: string
+      enum: [gpu, pci]
+      description: Type of PCI device
+    
+    CreateDeviceRequest:
+      type: object
+      required: [pci_address]
+      properties:
+        name:
+          type: string
+          description: Optional globally unique device name. If not provided, a name is auto-generated from the PCI address (e.g., "pci-0000-a2-00-0")
+          pattern: ^[a-zA-Z0-9][a-zA-Z0-9_.-]+$
+          example: l4-gpu
+        pci_address:
+          type: string
+          description: PCI address of the device (required, e.g., "0000:a2:00.0")
+          example: "0000:a2:00.0"
+    
+    Device:
+      type: object
+      required: [id, type, pci_address, vendor_id, device_id, iommu_group, bound_to_vfio, created_at]
+      properties:
+        id:
+          type: string
+          description: Auto-generated unique identifier (CUID2 format)
+          example: tz4a98xxat96iws9zmbrgj3a
+        name:
+          type: string
+          description: Device name (user-provided or auto-generated from PCI address)
+          example: l4-gpu
+        type:
+          $ref: "#/components/schemas/DeviceType"
+        pci_address:
+          type: string
+          description: PCI address
+          example: "0000:a2:00.0"
+        vendor_id:
+          type: string
+          description: PCI vendor ID (hex)
+          example: "10de"
+        device_id:
+          type: string
+          description: PCI device ID (hex)
+          example: "27b8"
+        iommu_group:
+          type: integer
+          description: IOMMU group number
+          example: 82
+        bound_to_vfio:
+          type: boolean
+          description: |
+            Whether the device is currently bound to the vfio-pci driver, which is required for VM passthrough.
+            - true: Device is bound to vfio-pci and ready for (or currently in use by) a VM. The device's native driver has been unloaded.
+            - false: Device is using its native driver (e.g., nvidia) or no driver. Hypeman will automatically bind to vfio-pci when attaching to an instance.
+          example: false
+        attached_to:
+          type: string
+          description: Instance ID if attached
+          nullable: true
+          example: null
+        created_at:
+          type: string
+          format: date-time
+          description: Registration timestamp (RFC3339)
+          example: "2025-01-15T10:00:00Z"
+    
+    AvailableDevice:
+      type: object
+      required: [pci_address, vendor_id, device_id, iommu_group]
+      properties:
+        pci_address:
+          type: string
+          description: PCI address
+          example: "0000:a2:00.0"
+        vendor_id:
+          type: string
+          description: PCI vendor ID (hex)
+          example: "10de"
+        device_id:
+          type: string
+          description: PCI device ID (hex)
+          example: "27b8"
+        vendor_name:
+          type: string
+          description: Human-readable vendor name
+          example: "NVIDIA Corporation"
+        device_name:
+          type: string
+          description: Human-readable device name
+          example: "L4"
+        iommu_group:
+          type: integer
+          description: IOMMU group number
+          example: 82
+        current_driver:
+          type: string
+          description: Currently bound driver (null if none)
+          nullable: true
+          example: "nvidia"
 
 paths:
   /health:
@@ -1246,6 +1353,176 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
   
+  /devices:
+    get:
+      summary: List registered devices
+      operationId: listDevices
+      security:
+        - bearerAuth: []
+      responses:
+        200:
+          description: List of registered devices
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Device"
+        401:
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      summary: Register a device for passthrough
+      operationId: createDevice
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateDeviceRequest"
+      responses:
+        201:
+          description: Device registered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Device"
+        400:
+          description: Bad request (invalid name or PCI address)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        401:
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        404:
+          description: PCI device not found on host
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Conflict - device or name already registered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /devices/available:
+    get:
+      summary: Discover passthrough-capable devices on host
+      operationId: listAvailableDevices
+      security:
+        - bearerAuth: []
+      responses:
+        200:
+          description: List of available PCI devices
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AvailableDevice"
+        401:
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /devices/{id}:
+    get:
+      summary: Get device details
+      operationId: getDevice
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Device ID or name
+      responses:
+        200:
+          description: Device details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Device"
+        404:
+          description: Device not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      summary: Unregister device
+      operationId: deleteDevice
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Device ID or name
+      responses:
+        204:
+          description: Device unregistered
+        404:
+          description: Device not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Conflict - device is attached to an instance
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  
   /ingresses:
     get:
       summary: List ingresses
@@ -1387,4 +1664,5 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+
 

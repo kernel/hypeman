@@ -9,6 +9,7 @@ import (
 	"github.com/google/wire"
 	"github.com/onkernel/hypeman/cmd/api/api"
 	"github.com/onkernel/hypeman/cmd/api/config"
+	"github.com/onkernel/hypeman/lib/devices"
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/ingress"
 	"github.com/onkernel/hypeman/lib/instances"
@@ -27,6 +28,7 @@ type application struct {
 	ImageManager    images.Manager
 	SystemManager   system.Manager
 	NetworkManager  network.Manager
+	DeviceManager   devices.Manager
 	InstanceManager instances.Manager
 	VolumeManager   volumes.Manager
 	IngressManager  ingress.Manager
@@ -44,6 +46,7 @@ func initializeApp() (*application, func(), error) {
 		providers.ProvideImageManager,
 		providers.ProvideSystemManager,
 		providers.ProvideNetworkManager,
+		providers.ProvideDeviceManager,
 		providers.ProvideInstanceManager,
 		providers.ProvideVolumeManager,
 		providers.ProvideIngressManager,

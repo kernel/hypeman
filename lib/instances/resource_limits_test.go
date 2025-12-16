@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/onkernel/hypeman/cmd/api/config"
+	"github.com/onkernel/hypeman/lib/devices"
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/network"
 	"github.com/onkernel/hypeman/lib/paths"
@@ -159,9 +160,10 @@ func createTestManager(t *testing.T, limits ResourceLimits) *manager {
 
 	systemMgr := system.NewManager(p)
 	networkMgr := network.NewManager(p, cfg, nil)
+	deviceMgr := devices.NewManager(p)
 	volumeMgr := volumes.NewManager(p, 0, nil)
 
-	return NewManager(p, imageMgr, systemMgr, networkMgr, volumeMgr, limits, nil, nil).(*manager)
+	return NewManager(p, imageMgr, systemMgr, networkMgr, deviceMgr, volumeMgr, limits, nil, nil).(*manager)
 }
 
 func TestResourceLimits_StructValues(t *testing.T) {
@@ -251,20 +253,21 @@ func TestAggregateLimits_EnforcedAtRuntime(t *testing.T) {
 
 	systemManager := system.NewManager(p)
 	networkManager := network.NewManager(p, cfg, nil)
+	deviceManager := devices.NewManager(p)
 	volumeManager := volumes.NewManager(p, 0, nil)
 
 	// Set small aggregate limits:
 	// - MaxTotalVcpus: 2 (first VM gets 1, second wants 2 -> denied)
-	// - MaxTotalMemory: 2GB (first VM gets 1GB, second wants 1.5GB -> denied)
+	// - MaxTotalMemory: 6GB (first VM gets 2.5GB, second wants 4GB -> denied)
 	limits := ResourceLimits{
 		MaxOverlaySize:       100 * 1024 * 1024 * 1024, // 100GB
 		MaxVcpusPerInstance:  4,                        // per-instance limit (high)
-		MaxMemoryPerInstance: 4 * 1024 * 1024 * 1024,   // 4GB per-instance (high)
+		MaxMemoryPerInstance: 8 * 1024 * 1024 * 1024,   // 8GB per-instance (high)
 		MaxTotalVcpus:        2,                        // aggregate: only 2 total
-		MaxTotalMemory:       2 * 1024 * 1024 * 1024,   // aggregate: only 2GB total
+		MaxTotalMemory:       6 * 1024 * 1024 * 1024,   // aggregate: only 6GB total (allows first 2.5GB VM)
 	}
 
-	mgr := NewManager(p, imageManager, systemManager, networkManager, volumeManager, limits, nil, nil).(*manager)
+	mgr := NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, nil, nil).(*manager)
 
 	// Cleanup any orphaned processes on test end
 	t.Cleanup(func() {
@@ -303,14 +306,14 @@ func TestAggregateLimits_EnforcedAtRuntime(t *testing.T) {
 	assert.Equal(t, 0, usage.TotalVcpus, "Initial vCPUs should be 0")
 	assert.Equal(t, int64(0), usage.TotalMemory, "Initial memory should be 0")
 
-	// Create first VM: 1 vCPU, 512MB + 512MB = 1GB memory
-	t.Log("Creating first instance (1 vCPU, 1GB memory)...")
+	// Create first VM: 1 vCPU, 2GB + 512MB = 2.5GB memory
+	t.Log("Creating first instance (1 vCPU, 2.5GB memory)...")
 	inst1, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "small-vm-1",
 		Image:          "docker.io/library/alpine:latest",
 		Vcpus:          1,
-		Size:           512 * 1024 * 1024, // 512MB
-		HotplugSize:    512 * 1024 * 1024, // 512MB (total 1GB)
+		Size:           2 * 1024 * 1024 * 1024, // 2GB (needs extra room for initrd with NVIDIA libs)
+		HotplugSize:    512 * 1024 * 1024,     // 512MB
 		OverlaySize:    1 * 1024 * 1024 * 1024,
 		NetworkEnabled: false,
 	})
@@ -322,7 +325,7 @@ func TestAggregateLimits_EnforcedAtRuntime(t *testing.T) {
 	usage, err = mgr.calculateAggregateUsage(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, 1, usage.TotalVcpus, "Should have 1 vCPU in use")
-	assert.Equal(t, int64(1024*1024*1024), usage.TotalMemory, "Should have 1GB memory in use")
+	assert.Equal(t, int64(2*1024*1024*1024+512*1024*1024), usage.TotalMemory, "Should have 2.5GB memory in use")
 	t.Logf("Aggregate usage after first VM: %d vCPUs, %d bytes memory", usage.TotalVcpus, usage.TotalMemory)
 
 	// Try to create second VM: 2 vCPUs (would exceed MaxTotalVcpus=2)

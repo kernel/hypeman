@@ -2,6 +2,7 @@ package api
 
 import (
 	"github.com/onkernel/hypeman/cmd/api/config"
+	"github.com/onkernel/hypeman/lib/devices"
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/ingress"
 	"github.com/onkernel/hypeman/lib/instances"
@@ -17,6 +18,7 @@ type ApiService struct {
 	InstanceManager instances.Manager
 	VolumeManager   volumes.Manager
 	NetworkManager  network.Manager
+	DeviceManager   devices.Manager
 	IngressManager  ingress.Manager
 }
 
@@ -29,6 +31,7 @@ func New(
 	instanceManager instances.Manager,
 	volumeManager volumes.Manager,
 	networkManager network.Manager,
+	deviceManager devices.Manager,
 	ingressManager ingress.Manager,
 ) *ApiService {
 	return &ApiService{
@@ -37,6 +40,7 @@ func New(
 		InstanceManager: instanceManager,
 		VolumeManager:   volumeManager,
 		NetworkManager:  networkManager,
+		DeviceManager:   deviceManager,
 		IngressManager:  ingressManager,
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/onkernel/hypeman/cmd/api/config"
+	"github.com/onkernel/hypeman/lib/devices"
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/instances"
 	mw "github.com/onkernel/hypeman/lib/middleware"
@@ -34,11 +35,12 @@ func newTestService(t *testing.T) *ApiService {
 
 	systemMgr := system.NewManager(p)
 	networkMgr := network.NewManager(p, cfg, nil)
+	deviceMgr := devices.NewManager(p)
 	volumeMgr := volumes.NewManager(p, 0, nil) // 0 = unlimited storage
 	limits := instances.ResourceLimits{
 		MaxOverlaySize: 100 * 1024 * 1024 * 1024, // 100GB
 	}
-	instanceMgr := instances.NewManager(p, imageMgr, systemMgr, networkMgr, volumeMgr, limits, nil, nil)
+	instanceMgr := instances.NewManager(p, imageMgr, systemMgr, networkMgr, deviceMgr, volumeMgr, limits, nil, nil)
 
 	// Register cleanup for orphaned Cloud Hypervisor processes
 	t.Cleanup(func() {
@@ -50,6 +52,7 @@ func newTestService(t *testing.T) *ApiService {
 		ImageManager:    imageMgr,
 		InstanceManager: instanceMgr,
 		VolumeManager:   volumeMgr,
+		DeviceManager:   deviceMgr,
 	}
 }
 
