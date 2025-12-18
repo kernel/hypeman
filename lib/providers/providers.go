@@ -8,6 +8,7 @@ import (
 
 	"github.com/c2h5oh/datasize"
 	"github.com/onkernel/hypeman/cmd/api/config"
+	"github.com/onkernel/hypeman/lib/builds"
 	"github.com/onkernel/hypeman/lib/devices"
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/ingress"
@@ -186,4 +187,31 @@ func ProvideIngressManager(p *paths.Paths, cfg *config.Config, instanceManager i
 	// IngressResolver from instances package implements ingress.InstanceResolver
 	resolver := instances.NewIngressResolver(instanceManager)
 	return ingress.NewManager(p, ingressConfig, resolver, otelLogger), nil
+}
+
+// ProvideBuildManager provides the build manager
+func ProvideBuildManager(p *paths.Paths, cfg *config.Config, instanceManager instances.Manager, volumeManager volumes.Manager, log *slog.Logger) (builds.Manager, error) {
+	buildConfig := builds.Config{
+		MaxConcurrentBuilds: cfg.MaxConcurrentSourceBuilds,
+		BuilderImage:        cfg.BuilderImage,
+		RegistryURL:         cfg.RegistryURL,
+		DefaultTimeout:      cfg.BuildTimeout,
+	}
+
+	// Apply defaults if not set
+	if buildConfig.MaxConcurrentBuilds == 0 {
+		buildConfig.MaxConcurrentBuilds = 2
+	}
+	if buildConfig.BuilderImage == "" {
+		buildConfig.BuilderImage = "hypeman/builder:latest"
+	}
+	if buildConfig.RegistryURL == "" {
+		buildConfig.RegistryURL = "localhost:8080"
+	}
+	if buildConfig.DefaultTimeout == 0 {
+		buildConfig.DefaultTimeout = 600
+	}
+
+	meter := otel.GetMeterProvider().Meter("hypeman")
+	return builds.NewManager(p, buildConfig, instanceManager, volumeManager, nil, log, meter)
 }

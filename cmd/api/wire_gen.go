@@ -8,10 +8,9 @@ package main
 
 import (
 	"context"
-	"log/slog"
-
 	"github.com/onkernel/hypeman/cmd/api/api"
 	"github.com/onkernel/hypeman/cmd/api/config"
+	"github.com/onkernel/hypeman/lib/builds"
 	"github.com/onkernel/hypeman/lib/devices"
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/ingress"
@@ -21,7 +20,10 @@ import (
 	"github.com/onkernel/hypeman/lib/registry"
 	"github.com/onkernel/hypeman/lib/system"
 	"github.com/onkernel/hypeman/lib/volumes"
+	"log/slog"
+)
 
+import (
 	_ "embed"
 )
 
@@ -52,11 +54,15 @@ func initializeApp() (*application, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	buildsManager, err := providers.ProvideBuildManager(paths, config, instancesManager, volumesManager, logger)
+	if err != nil {
+		return nil, nil, err
+	}
 	registry, err := providers.ProvideRegistry(paths, manager)
 	if err != nil {
 		return nil, nil, err
 	}
-	apiService := api.New(config, manager, instancesManager, volumesManager, networkManager, devicesManager, ingressManager)
+	apiService := api.New(config, manager, instancesManager, volumesManager, networkManager, devicesManager, ingressManager, buildsManager)
 	mainApplication := &application{
 		Ctx:             context,
 		Logger:          logger,
@@ -68,6 +74,7 @@ func initializeApp() (*application, func(), error) {
 		InstanceManager: instancesManager,
 		VolumeManager:   volumesManager,
 		IngressManager:  ingressManager,
+		BuildManager:    buildsManager,
 		Registry:        registry,
 		ApiService:      apiService,
 	}
@@ -89,6 +96,7 @@ type application struct {
 	InstanceManager instances.Manager
 	VolumeManager   volumes.Manager
 	IngressManager  ingress.Manager
+	BuildManager    builds.Manager
 	Registry        *registry.Registry
 	ApiService      *api.ApiService
 }

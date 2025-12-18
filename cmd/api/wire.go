@@ -9,6 +9,7 @@ import (
 	"github.com/google/wire"
 	"github.com/onkernel/hypeman/cmd/api/api"
 	"github.com/onkernel/hypeman/cmd/api/config"
+	"github.com/onkernel/hypeman/lib/builds"
 	"github.com/onkernel/hypeman/lib/devices"
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/ingress"
@@ -32,6 +33,7 @@ type application struct {
 	InstanceManager instances.Manager
 	VolumeManager   volumes.Manager
 	IngressManager  ingress.Manager
+	BuildManager    builds.Manager
 	Registry        *registry.Registry
 	ApiService      *api.ApiService
 }
@@ -50,6 +52,7 @@ func initializeApp() (*application, func(), error) {
 		providers.ProvideInstanceManager,
 		providers.ProvideVolumeManager,
 		providers.ProvideIngressManager,
+		providers.ProvideBuildManager,
 		providers.ProvideRegistry,
 		api.New,
 		wire.Struct(new(application), "*"),

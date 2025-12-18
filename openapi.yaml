@@ -609,6 +609,135 @@ components:
           nullable: true
           example: "nvidia"
 
+    BuildStatus:
+      type: string
+      enum: [queued, building, pushing, ready, failed, cancelled]
+      description: Build job status
+    
+    BuildPolicy:
+      type: object
+      properties:
+        timeout_seconds:
+          type: integer
+          description: Maximum build duration (default 600)
+          default: 600
+        memory_mb:
+          type: integer
+          description: Memory limit for builder VM (default 2048)
+          default: 2048
+        cpus:
+          type: integer
+          description: Number of vCPUs for builder VM (default 2)
+          default: 2
+        network_mode:
+          type: string
+          enum: [isolated, egress]
+          description: Network access during build
+          default: egress
+    
+    BuildProvenance:
+      type: object
+      properties:
+        base_image_digest:
+          type: string
+          description: Pinned base image digest used
+        source_hash:
+          type: string
+          description: SHA256 hash of source tarball
+        lockfile_hashes:
+          type: object
+          additionalProperties:
+            type: string
+          description: Map of lockfile names to SHA256 hashes
+        toolchain_version:
+          type: string
+          description: Runtime version (e.g., "node v20.10.0")
+        buildkit_version:
+          type: string
+          description: BuildKit version used
+        timestamp:
+          type: string
+          format: date-time
+          description: Build completion timestamp
+    
+    CreateBuildRequest:
+      type: object
+      required: [runtime]
+      properties:
+        runtime:
+          type: string
+          enum: [nodejs20, python312]
+          description: Build runtime
+          example: nodejs20
+        base_image_digest:
+          type: string
+          description: Optional pinned base image digest for reproducibility
+        cache_scope:
+          type: string
+          description: Tenant-specific cache key prefix for isolation
+        dockerfile:
+          type: string
+          description: Optional custom Dockerfile content
+        build_args:
+          type: object
+          additionalProperties:
+            type: string
+          description: Build arguments to pass to Dockerfile
+        build_policy:
+          $ref: "#/components/schemas/BuildPolicy"
+    
+    Build:
+      type: object
+      required: [id, status, runtime, created_at]
+      properties:
+        id:
+          type: string
+          description: Build job identifier
+          example: "build-abc123"
+        status:
+          $ref: "#/components/schemas/BuildStatus"
+        runtime:
+          type: string
+          description: Build runtime
+          example: nodejs20
+        queue_position:
+          type: integer
+          description: Position in build queue (only when status is queued)
+          nullable: true
+        image_digest:
+          type: string
+          description: Digest of built image (only when status is ready)
+          nullable: true
+        image_ref:
+          type: string
+          description: Full image reference (only when status is ready)
+          nullable: true
+        error:
+          type: string
+          description: Error message (only when status is failed)
+          nullable: true
+        provenance:
+          $ref: "#/components/schemas/BuildProvenance"
+        created_at:
+          type: string
+          format: date-time
+          description: Build creation timestamp
+        started_at:
+          type: string
+          format: date-time
+          description: Build start timestamp
+          nullable: true
+        completed_at:
+          type: string
+          format: date-time
+          description: Build completion timestamp
+          nullable: true
+        duration_ms:
+          type: integer
+          format: int64
+          description: Build duration in milliseconds
+          nullable: true
+
 paths:
   /health:
     get:
@@ -1665,4 +1794,202 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /builds:
+    get:
+      summary: List builds
+      operationId: listBuilds
+      security:
+        - bearerAuth: []
+      responses:
+        200:
+          description: List of builds
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Build"
+        401:
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      summary: Create a new build
+      description: |
+        Creates a new build job. Source code should be uploaded as a tar.gz archive
+        in the multipart form data.
+      operationId: createBuild
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - runtime
+                - source
+              properties:
+                runtime:
+                  type: string
+                  enum: [nodejs20, python312]
+                  description: Build runtime
+                source:
+                  type: string
+                  format: binary
+                  description: Source tarball (tar.gz)
+                base_image_digest:
+                  type: string
+                  description: Optional pinned base image digest
+                cache_scope:
+                  type: string
+                  description: Tenant-specific cache key prefix
+                dockerfile:
+                  type: string
+                  description: Optional custom Dockerfile content
+                timeout_seconds:
+                  type: integer
+                  description: Build timeout (default 600)
+      responses:
+        202:
+          description: Build created and queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Build"
+        400:
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        401:
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
+  /builds/{id}:
+    get:
+      summary: Get build details
+      operationId: getBuild
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Build ID
+      responses:
+        200:
+          description: Build details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Build"
+        404:
+          description: Build not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      summary: Cancel build
+      operationId: cancelBuild
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Build ID
+      responses:
+        204:
+          description: Build cancelled
+        404:
+          description: Build not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Build already completed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /builds/{id}/logs:
+    get:
+      summary: Stream build logs (SSE)
+      description: |
+        Streams build logs as Server-Sent Events.
+        Returns existing logs, then continues streaming new lines if follow=true.
+      operationId: getBuildLogs
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Build ID
+        - name: follow
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+          description: Continue streaming new lines after initial output
+      responses:
+        200:
+          description: Log stream (SSE)
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        404:
+          description: Build not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"

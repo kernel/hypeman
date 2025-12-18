@@ -373,7 +373,7 @@ func TestRegistryTagPush(t *testing.T) {
 	for _, img := range images {
 		if img.Digest == digest.String() {
 			found = true
-			assert.Equal(t, oapi.Ready, img.Status, "image in list should have Ready status")
+			assert.Equal(t, oapi.ImageStatusReady, img.Status, "image in list should have Ready status")
 			assert.NotNil(t, img.SizeBytes, "ready image should have size")
 			t.Logf("Image found in ListImages: %s (status=%s, size=%d)", img.Name, img.Status, *img.SizeBytes)
 			break
