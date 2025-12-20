@@ -19,6 +19,25 @@ const (
 	// Future: TypeQEMU Type = "qemu"
 )
 
+// socketNames maps hypervisor types to their socket filenames.
+// Registered by each hypervisor package's init() function.
+var socketNames = make(map[Type]string)
+
+// RegisterSocketName registers the socket filename for a hypervisor type.
+// Called by each hypervisor implementation's init() function.
+func RegisterSocketName(t Type, name string) {
+	socketNames[t] = name
+}
+
+// SocketNameForType returns the socket filename for a hypervisor type.
+// Falls back to type + ".sock" if not registered.
+func SocketNameForType(t Type) string {
+	if name, ok := socketNames[t]; ok {
+		return name
+	}
+	return string(t) + ".sock"
+}
+
 // Hypervisor defines the interface for VM management operations.
 // All hypervisor implementations must implement this interface.
 type Hypervisor interface {
@@ -92,6 +111,10 @@ type Capabilities struct {
 // This is separate from the Hypervisor interface because process management
 // happens before/after the VMM socket is available.
 type ProcessManager interface {
+	// SocketName returns the socket filename for this hypervisor.
+	// Uses short names to stay within Unix socket path length limits (SUN_LEN ~108 bytes).
+	SocketName() string
+
 	// StartProcess launches the hypervisor process.
 	// Returns the process ID of the started hypervisor.
 	StartProcess(ctx context.Context, p *paths.Paths, version string, socketPath string) (pid int, err error)

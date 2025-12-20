@@ -152,6 +152,11 @@ func StartProcessWithArgs(ctx context.Context, p *paths.Paths, version CHVersion
 	defer cancel()
 
 	if err := waitForSocket(waitCtx, socketPath, 5*time.Second); err != nil {
+		// Read vmm.log to understand why socket wasn't created
+		vmmLogPath := filepath.Join(logsDir, "vmm.log")
+		if logData, readErr := os.ReadFile(vmmLogPath); readErr == nil && len(logData) > 0 {
+			return 0, fmt.Errorf("%w; vmm.log: %s", err, string(logData))
+		}
 		return 0, err
 	}
 

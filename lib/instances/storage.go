@@ -11,16 +11,16 @@ import (
 
 // Filesystem structure:
 // {dataDir}/guests/{instance-id}/
-//   metadata.json           # Instance metadata
-//   overlay.raw             # Configurable sparse overlay disk (default 10GB)
-//   config.ext4             # Read-only config disk (generated)
-//   cloud-hypervisor.sock   # Hypervisor API socket (named after hypervisor type)
+//   metadata.json      # Instance metadata
+//   overlay.raw        # Configurable sparse overlay disk (default 10GB)
+//   config.ext4        # Read-only config disk (generated)
+//   ch.sock            # Hypervisor API socket (abbreviated name for SUN_LEN limit)
 //   logs/
-//     app.log               # Guest application log (serial console output)
-//     vmm.log               # Hypervisor log (stdout+stderr combined)
-//     hypeman.log           # Hypeman operations log (actions taken on this instance)
+//     app.log          # Guest application log (serial console output)
+//     vmm.log          # Hypervisor log (stdout+stderr combined)
+//     hypeman.log      # Hypeman operations log (actions taken on this instance)
 //   snapshots/
-//     snapshot-latest/      # Snapshot directory
+//     snapshot-latest/ # Snapshot directory
 //       config.json
 //       memory-ranges
 

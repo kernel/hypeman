@@ -202,7 +202,15 @@ func (m *manager) createInstance(
 	// 8. Get default kernel version
 	kernelVer := m.systemManager.GetDefaultKernelVersion()
 
-	// 9. Validate, resolve, and auto-bind devices (GPU passthrough)
+	// 9. Get process manager for hypervisor type (needed for socket name)
+	hvType := hypervisor.TypeCloudHypervisor
+	pm, err := m.getProcessManager(hvType)
+	if err != nil {
+		log.ErrorContext(ctx, "failed to get process manager", "error", err)
+		return nil, fmt.Errorf("get process manager: %w", err)
+	}
+
+	// 10. Validate, resolve, and auto-bind devices (GPU passthrough)
 	// Track devices we've marked as attached for cleanup on error.
 	// The cleanup closure captures this slice by reference, so it will see
 	// whatever devices have been attached when cleanup runs.
@@ -256,7 +264,7 @@ func (m *manager) createInstance(
 		log.DebugContext(ctx, "validated devices for passthrough", "id", id, "devices", resolvedDeviceIDs)
 	}
 
-	// 10. Create instance metadata
+	// 11. Create instance metadata
 	stored := &StoredMetadata{
 		Id:                id,
 		Name:              req.Name,
@@ -271,30 +279,30 @@ func (m *manager) createInstance(
 		StartedAt:         nil,
 		StoppedAt:         nil,
 		KernelVersion:     string(kernelVer),
-		HypervisorType:    hypervisor.TypeCloudHypervisor,
+		HypervisorType:    hvType,
 		HypervisorVersion: string(vmm.V49_0), // Use latest
-		SocketPath:        m.paths.InstanceSocket(id, string(hypervisor.TypeCloudHypervisor)),
+		SocketPath:        m.paths.InstanceSocket(id, pm.SocketName()),
 		DataDir:           m.paths.InstanceDir(id),
 		VsockCID:          vsockCID,
 		VsockSocket:       vsockSocket,
 		Devices:           resolvedDeviceIDs,
 	}
 
-	// 11. Ensure directories
+	// 12. Ensure directories
 	log.DebugContext(ctx, "creating instance directories", "instance_id", id)
 	if err := m.ensureDirectories(id); err != nil {
 		log.ErrorContext(ctx, "failed to create directories", "instance_id", id, "error", err)
 		return nil, fmt.Errorf("ensure directories: %w", err)
 	}
 
-	// 12. Create overlay disk with specified size
+	// 13. Create overlay disk with specified size
 	log.DebugContext(ctx, "creating overlay disk", "instance_id", id, "size_bytes", stored.OverlaySize)
 	if err := m.createOverlayDisk(id, stored.OverlaySize); err != nil {
 		log.ErrorContext(ctx, "failed to create overlay disk", "instance_id", id, "error", err)
 		return nil, fmt.Errorf("create overlay disk: %w", err)
 	}
 
-	// 13. Allocate network (if network enabled)
+	// 14. Allocate network (if network enabled)
 	var netConfig *network.NetworkConfig
 	if networkName != "" {
 		log.DebugContext(ctx, "allocating network", "instance_id", id, "network", networkName)
@@ -319,7 +327,7 @@ func (m *manager) createInstance(
 		})
 	}
 
-	// 14. Validate and attach volumes
+	// 15. Validate and attach volumes
 	if len(req.Volumes) > 0 {
 		log.DebugContext(ctx, "validating volumes", "instance_id", id, "count", len(req.Volumes))
 		for _, volAttach := range req.Volumes {
@@ -359,7 +367,7 @@ func (m *manager) createInstance(
 		stored.Volumes = req.Volumes
 	}
 
-	// 15. Create config disk (needs Instance for buildVMConfig)
+	// 16. Create config disk (needs Instance for buildVMConfig)
 	inst := &Instance{StoredMetadata: *stored}
 	log.DebugContext(ctx, "creating config disk", "instance_id", id)
 	if err := m.createConfigDisk(ctx, inst, imageInfo, netConfig); err != nil {
@@ -367,7 +375,7 @@ func (m *manager) createInstance(
 		return nil, fmt.Errorf("create config disk: %w", err)
 	}
 
-	// 16. Save metadata
+	// 17. Save metadata
 	log.DebugContext(ctx, "saving instance metadata", "instance_id", id)
 	meta := &metadata{StoredMetadata: *stored}
 	if err := m.saveMetadata(meta); err != nil {
@@ -375,14 +383,14 @@ func (m *manager) createInstance(
 		return nil, fmt.Errorf("save metadata: %w", err)
 	}
 
-	// 17. Start VMM and boot VM
+	// 18. Start VMM and boot VM
 	log.InfoContext(ctx, "starting VMM and booting VM", "instance_id", id)
 	if err := m.startAndBootVM(ctx, stored, imageInfo, netConfig); err != nil {
 		log.ErrorContext(ctx, "failed to start and boot VM", "instance_id", id, "error", err)
 		return nil, err
 	}
 
-	// 18. Update timestamp after VM is running
+	// 19. Update timestamp after VM is running
 	now := time.Now()
 	stored.StartedAt = &now
 

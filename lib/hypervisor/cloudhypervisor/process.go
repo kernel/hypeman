@@ -9,6 +9,10 @@ import (
 	"github.com/onkernel/hypeman/lib/vmm"
 )
 
+func init() {
+	hypervisor.RegisterSocketName(hypervisor.TypeCloudHypervisor, "ch.sock")
+}
+
 // ProcessManager implements hypervisor.ProcessManager for Cloud Hypervisor.
 type ProcessManager struct{}
 
@@ -19,6 +23,11 @@ func NewProcessManager() *ProcessManager {
 
 // Verify ProcessManager implements the interface
 var _ hypervisor.ProcessManager = (*ProcessManager)(nil)
+
+// SocketName returns the socket filename for Cloud Hypervisor.
+func (p *ProcessManager) SocketName() string {
+	return "ch.sock"
+}
 
 // StartProcess launches a Cloud Hypervisor VMM process.
 func (p *ProcessManager) StartProcess(ctx context.Context, paths *paths.Paths, version string, socketPath string) (int, error) {

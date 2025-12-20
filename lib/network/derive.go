@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 
+	"github.com/onkernel/hypeman/lib/hypervisor"
 	"github.com/onkernel/hypeman/lib/logger"
 	"github.com/onkernel/hypeman/lib/vmm"
 )
@@ -49,7 +50,7 @@ func (m *manager) deriveAllocation(ctx context.Context, instanceID string) (*All
 	netmask := fmt.Sprintf("%d.%d.%d.%d", ipNet.Mask[0], ipNet.Mask[1], ipNet.Mask[2], ipNet.Mask[3])
 
 	// 4. Try to derive from running VM first
-	socketPath := m.paths.InstanceSocket(instanceID, meta.HypervisorType)
+	socketPath := m.paths.InstanceSocket(instanceID, hypervisor.SocketNameForType(hypervisor.Type(meta.HypervisorType)))
 	if fileExists(socketPath) {
 		client, err := vmm.NewVMM(socketPath)
 		if err == nil {
