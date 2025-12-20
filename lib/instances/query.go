@@ -6,8 +6,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/onkernel/hypeman/lib/hypervisor"
 	"github.com/onkernel/hypeman/lib/logger"
-	"github.com/onkernel/hypeman/lib/vmm"
 )
 
 // stateResult holds the result of state derivation
@@ -16,8 +16,8 @@ type stateResult struct {
 	Error *string // Non-nil if state couldn't be determined
 }
 
-// deriveState determines instance state by checking socket and querying VMM.
-// Returns StateUnknown with an error message if the socket exists but VMM is unreachable.
+// deriveState determines instance state by checking socket and querying the hypervisor.
+// Returns StateUnknown with an error message if the socket exists but hypervisor is unreachable.
 func (m *manager) deriveState(ctx context.Context, stored *StoredMetadata) stateResult {
 	log := logger.FromContext(ctx)
 
@@ -30,11 +30,11 @@ func (m *manager) deriveState(ctx context.Context, stored *StoredMetadata) state
 		return stateResult{State: StateStopped}
 	}
 
-	// 2. Socket exists - query VMM for actual state
-	client, err := vmm.NewVMM(stored.SocketPath)
+	// 2. Socket exists - query hypervisor for actual state
+	hv, err := m.getHypervisor(stored.SocketPath, stored.HypervisorType)
 	if err != nil {
 		// Failed to create client - this is unexpected if socket exists
-		errMsg := fmt.Sprintf("failed to create VMM client: %v", err)
+		errMsg := fmt.Sprintf("failed to create hypervisor client: %v", err)
 		log.WarnContext(ctx, "failed to determine instance state",
 			"instance_id", stored.Id,
 			"socket", stored.SocketPath,
@@ -43,11 +43,11 @@ func (m *manager) deriveState(ctx context.Context, stored *StoredMetadata) state
 		return stateResult{State: StateUnknown, Error: &errMsg}
 	}
 
-	resp, err := client.GetVmInfoWithResponse(ctx)
+	info, err := hv.GetVMInfo(ctx)
 	if err != nil {
-		// Socket exists but VMM is unreachable - this is unexpected
-		errMsg := fmt.Sprintf("failed to query VMM: %v", err)
-		log.WarnContext(ctx, "failed to query VMM state",
+		// Socket exists but hypervisor is unreachable - this is unexpected
+		errMsg := fmt.Sprintf("failed to query hypervisor: %v", err)
+		log.WarnContext(ctx, "failed to query hypervisor state",
 			"instance_id", stored.Id,
 			"socket", stored.SocketPath,
 			"error", err,
@@ -55,35 +55,22 @@ func (m *manager) deriveState(ctx context.Context, stored *StoredMetadata) state
 		return stateResult{State: StateUnknown, Error: &errMsg}
 	}
 
-	if resp.StatusCode() != 200 || resp.JSON200 == nil {
-		// VMM returned an error - log it and return Unknown
-		body := string(resp.Body)
-		errMsg := fmt.Sprintf("VMM returned error (status %d): %s", resp.StatusCode(), body)
-		log.WarnContext(ctx, "VMM returned error response",
-			"instance_id", stored.Id,
-			"socket", stored.SocketPath,
-			"status_code", resp.StatusCode(),
-			"body", body,
-		)
-		return stateResult{State: StateUnknown, Error: &errMsg}
-	}
-
-	// 3. Map CH state to our state
-	switch resp.JSON200.State {
-	case vmm.Created:
+	// 3. Map hypervisor state to our state
+	switch info.State {
+	case hypervisor.StateCreated:
 		return stateResult{State: StateCreated}
-	case vmm.Running:
+	case hypervisor.StateRunning:
 		return stateResult{State: StateRunning}
-	case vmm.Paused:
+	case hypervisor.StatePaused:
 		return stateResult{State: StatePaused}
-	case vmm.Shutdown:
+	case hypervisor.StateShutdown:
 		return stateResult{State: StateShutdown}
 	default:
-		// Unknown CH state - log and return Unknown
-		errMsg := fmt.Sprintf("unexpected VMM state: %s", resp.JSON200.State)
-		log.WarnContext(ctx, "VMM returned unexpected state",
+		// Unknown state - log and return Unknown
+		errMsg := fmt.Sprintf("unexpected hypervisor state: %s", info.State)
+		log.WarnContext(ctx, "hypervisor returned unexpected state",
 			"instance_id", stored.Id,
-			"vmm_state", resp.JSON200.State,
+			"hypervisor_state", info.State,
 		)
 		return stateResult{State: StateUnknown, Error: &errMsg}
 	}

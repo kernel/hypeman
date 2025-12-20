@@ -6,6 +6,8 @@ import (
 	"sync"
 
 	"github.com/onkernel/hypeman/lib/devices"
+	"github.com/onkernel/hypeman/lib/hypervisor"
+	"github.com/onkernel/hypeman/lib/hypervisor/cloudhypervisor"
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/network"
 	"github.com/onkernel/hypeman/lib/paths"
@@ -53,6 +55,9 @@ type manager struct {
 	instanceLocks  sync.Map      // map[string]*sync.RWMutex - per-instance locks
 	hostTopology   *HostTopology // Cached host CPU topology
 	metrics        *Metrics
+
+	// Hypervisor support
+	processManagers map[hypervisor.Type]hypervisor.ProcessManager
 }
 
 // NewManager creates a new instances manager.
@@ -68,6 +73,9 @@ func NewManager(p *paths.Paths, imageManager images.Manager, systemManager syste
 		limits:         limits,
 		instanceLocks:  sync.Map{},
 		hostTopology:   detectHostTopology(), // Detect and cache host topology
+		processManagers: map[hypervisor.Type]hypervisor.ProcessManager{
+			hypervisor.TypeCloudHypervisor: cloudhypervisor.NewProcessManager(),
+		},
 	}
 
 	// Initialize metrics if meter is provided
@@ -79,6 +87,25 @@ func NewManager(p *paths.Paths, imageManager images.Manager, systemManager syste
 	}
 
 	return m
+}
+
+// getHypervisor creates a hypervisor client for the given socket and type.
+func (m *manager) getHypervisor(socketPath string, hvType hypervisor.Type) (hypervisor.Hypervisor, error) {
+	switch hvType {
+	case hypervisor.TypeCloudHypervisor:
+		return cloudhypervisor.New(socketPath)
+	default:
+		return nil, fmt.Errorf("unsupported hypervisor type: %s", hvType)
+	}
+}
+
+// getProcessManager returns the process manager for the given hypervisor type.
+func (m *manager) getProcessManager(hvType hypervisor.Type) (hypervisor.ProcessManager, error) {
+	pm, ok := m.processManagers[hvType]
+	if !ok {
+		return nil, fmt.Errorf("no process manager for hypervisor type: %s", hvType)
+	}
+	return pm, nil
 }
 
 // getInstanceLock returns or creates a lock for a specific instance
@@ -224,7 +251,7 @@ func (m *manager) RotateLogs(ctx context.Context, maxBytes int64, maxFiles int) 
 			m.paths.InstanceHypemanLog(inst.Id),
 		}
 		for _, logPath := range logPaths {
-		if err := rotateLogIfNeeded(logPath, maxBytes, maxFiles); err != nil {
+			if err := rotateLogIfNeeded(logPath, maxBytes, maxFiles); err != nil {
 				lastErr = err // Continue with other logs, but track error
 			}
 		}

@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/onkernel/hypeman/lib/logger"
-	"github.com/onkernel/hypeman/lib/vmm"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -63,14 +62,11 @@ func (m *manager) restoreInstance(
 		}
 	}
 
-	// 5. Transition: Standby → Paused (start VMM + restore)
+	// 5. Transition: Standby → Paused (start hypervisor + restore)
 	log.DebugContext(ctx, "restoring from snapshot", "instance_id", id, "snapshot_dir", snapshotDir)
 	if err := m.restoreFromSnapshot(ctx, stored, snapshotDir); err != nil {
 		log.ErrorContext(ctx, "failed to restore from snapshot", "instance_id", id, "error", err)
 		// Cleanup network on failure
-		// Note: Network cleanup is explicitly called on failure paths to ensure TAP devices
-		// are removed. In production, stale TAP devices from unexpected failures (e.g.,
-		// power loss) would require manual cleanup or host reboot.
 		if stored.NetworkEnabled {
 			netAlloc, _ := m.networkManager.GetAllocation(ctx, id)
 			m.networkManager.ReleaseAllocation(ctx, netAlloc)
@@ -78,22 +74,21 @@ func (m *manager) restoreInstance(
 		return nil, err
 	}
 
-	// 6. Create client for resumed VM
-	client, err := vmm.NewVMM(stored.SocketPath)
+	// 6. Create hypervisor client for resumed VM
+	hv, err := m.getHypervisor(stored.SocketPath, stored.HypervisorType)
 	if err != nil {
-		log.ErrorContext(ctx, "failed to create VMM client", "instance_id", id, "error", err)
+		log.ErrorContext(ctx, "failed to create hypervisor client", "instance_id", id, "error", err)
 		// Cleanup network on failure
 		if stored.NetworkEnabled {
 			netAlloc, _ := m.networkManager.GetAllocation(ctx, id)
 			m.networkManager.ReleaseAllocation(ctx, netAlloc)
 		}
-		return nil, fmt.Errorf("create vmm client: %w", err)
+		return nil, fmt.Errorf("create hypervisor client: %w", err)
 	}
 
 	// 7. Transition: Paused → Running (resume)
 	log.DebugContext(ctx, "resuming VM", "instance_id", id)
-	resumeResp, err := client.ResumeVMWithResponse(ctx)
-	if err != nil || resumeResp.StatusCode() != 204 {
+	if err := hv.Resume(ctx); err != nil {
 		log.ErrorContext(ctx, "failed to resume VM", "instance_id", id, "error", err)
 		// Cleanup network on failure
 		if stored.NetworkEnabled {
@@ -129,7 +124,7 @@ func (m *manager) restoreInstance(
 	return &finalInst, nil
 }
 
-// restoreFromSnapshot starts VMM and restores from snapshot
+// restoreFromSnapshot starts the hypervisor and restores from snapshot
 func (m *manager) restoreFromSnapshot(
 	ctx context.Context,
 	stored *StoredMetadata,
@@ -137,41 +132,35 @@ func (m *manager) restoreFromSnapshot(
 ) error {
 	log := logger.FromContext(ctx)
 
-	// Start VMM process and capture PID
-	log.DebugContext(ctx, "starting VMM process for restore", "instance_id", stored.Id, "version", stored.CHVersion)
-	pid, err := vmm.StartProcess(ctx, m.paths, stored.CHVersion, stored.SocketPath)
+	// Get process manager for this hypervisor type
+	pm, err := m.getProcessManager(stored.HypervisorType)
 	if err != nil {
-		return fmt.Errorf("start vmm: %w", err)
+		return fmt.Errorf("get process manager: %w", err)
+	}
+
+	// Start hypervisor process and capture PID
+	log.DebugContext(ctx, "starting hypervisor process for restore", "instance_id", stored.Id, "hypervisor", stored.HypervisorType, "version", stored.HypervisorVersion)
+	pid, err := pm.StartProcess(ctx, m.paths, stored.HypervisorVersion, stored.SocketPath)
+	if err != nil {
+		return fmt.Errorf("start hypervisor: %w", err)
 	}
 
 	// Store the PID for later cleanup
-	stored.CHPID = &pid
-	log.DebugContext(ctx, "VMM process started", "instance_id", stored.Id, "pid", pid)
+	stored.HypervisorPID = &pid
+	log.DebugContext(ctx, "hypervisor process started", "instance_id", stored.Id, "pid", pid)
 
-	// Create client
-	client, err := vmm.NewVMM(stored.SocketPath)
+	// Create hypervisor client
+	hv, err := m.getHypervisor(stored.SocketPath, stored.HypervisorType)
 	if err != nil {
-		return fmt.Errorf("create vmm client: %w", err)
+		return fmt.Errorf("create hypervisor client: %w", err)
 	}
 
 	// Restore from snapshot
-	sourceURL := "file://" + snapshotDir
-	restoreConfig := vmm.RestoreConfig{
-		SourceUrl: sourceURL,
-		Prefault:  ptr(false), // Don't prefault pages for faster restore
-	}
-
-	log.DebugContext(ctx, "invoking VMM restore API", "instance_id", stored.Id, "source_url", sourceURL)
-	resp, err := client.PutVmRestoreWithResponse(ctx, restoreConfig)
-	if err != nil {
+	log.DebugContext(ctx, "invoking hypervisor restore API", "instance_id", stored.Id, "snapshot_dir", snapshotDir)
+	if err := hv.Restore(ctx, snapshotDir); err != nil {
 		log.ErrorContext(ctx, "restore API call failed", "instance_id", stored.Id, "error", err)
-		client.ShutdownVMMWithResponse(ctx) // Cleanup
-		return fmt.Errorf("restore api call: %w", err)
-	}
-	if resp.StatusCode() != 204 {
-		log.ErrorContext(ctx, "restore API returned error", "instance_id", stored.Id, "status", resp.StatusCode())
-		client.ShutdownVMMWithResponse(ctx) // Cleanup
-		return fmt.Errorf("restore failed with status %d", resp.StatusCode())
+		hv.Shutdown(ctx) // Cleanup
+		return fmt.Errorf("restore: %w", err)
 	}
 
 	log.DebugContext(ctx, "VM restored from snapshot successfully", "instance_id", stored.Id)

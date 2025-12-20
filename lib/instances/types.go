@@ -3,7 +3,7 @@ package instances
 import (
 	"time"
 
-	"github.com/onkernel/hypeman/lib/vmm"
+	"github.com/onkernel/hypeman/lib/hypervisor"
 )
 
 // State represents the instance state
@@ -56,9 +56,12 @@ type StoredMetadata struct {
 	StoppedAt *time.Time // Last time VM was stopped
 
 	// Versions
-	KernelVersion string        // Kernel version (e.g., "ch-v6.12.9")
-	CHVersion     vmm.CHVersion // Cloud Hypervisor version
-	CHPID         *int          // Cloud Hypervisor process ID (may be stale after host restart)
+	KernelVersion string // Kernel version (e.g., "ch-v6.12.9")
+
+	// Hypervisor configuration
+	HypervisorType    hypervisor.Type // Hypervisor type (e.g., "cloud-hypervisor")
+	HypervisorVersion string          // Hypervisor version (e.g., "v49.0")
+	HypervisorPID     *int            // Hypervisor process ID (may be stale after host restart)
 
 	// Paths
 	SocketPath string // Path to API socket

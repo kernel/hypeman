@@ -313,7 +313,7 @@ func TestAggregateLimits_EnforcedAtRuntime(t *testing.T) {
 		Image:          "docker.io/library/alpine:latest",
 		Vcpus:          1,
 		Size:           2 * 1024 * 1024 * 1024, // 2GB (needs extra room for initrd with NVIDIA libs)
-		HotplugSize:    512 * 1024 * 1024,     // 512MB
+		HotplugSize:    512 * 1024 * 1024,      // 512MB
 		OverlaySize:    1 * 1024 * 1024 * 1024,
 		NetworkEnabled: false,
 	})
@@ -369,10 +369,10 @@ func cleanupTestProcesses(t *testing.T, mgr *manager) {
 		return
 	}
 	for _, inst := range instances {
-		if inst.StoredMetadata.CHPID != nil {
-			pid := *inst.StoredMetadata.CHPID
+		if inst.StoredMetadata.HypervisorPID != nil {
+			pid := *inst.StoredMetadata.HypervisorPID
 			if err := syscall.Kill(pid, 0); err == nil {
-				t.Logf("Cleaning up CH process: PID %d", pid)
+				t.Logf("Cleaning up hypervisor process: PID %d", pid)
 				syscall.Kill(pid, syscall.SIGKILL)
 			}
 		}

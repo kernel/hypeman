@@ -56,7 +56,7 @@ func newTestService(t *testing.T) *ApiService {
 	}
 }
 
-// cleanupOrphanedProcesses kills Cloud Hypervisor processes from metadata files
+// cleanupOrphanedProcesses kills hypervisor processes from metadata files
 func cleanupOrphanedProcesses(t *testing.T, dataDir string) {
 	p := paths.New(dataDir)
 	guestsDir := p.GuestsDir()
@@ -77,21 +77,21 @@ func cleanupOrphanedProcesses(t *testing.T, dataDir string) {
 			continue
 		}
 
-		// Parse just the CHPID field
+		// Parse just the HypervisorPID field
 		var meta struct {
-			CHPID *int `json:"CHPID"`
+			HypervisorPID *int `json:"HypervisorPID"`
 		}
 		if err := json.Unmarshal(data, &meta); err != nil {
 			continue
 		}
 
 		// If metadata has a PID, try to kill it
-		if meta.CHPID != nil {
-			pid := *meta.CHPID
+		if meta.HypervisorPID != nil {
+			pid := *meta.HypervisorPID
 
 			// Check if process exists
 			if err := syscall.Kill(pid, 0); err == nil {
-				t.Logf("Cleaning up orphaned Cloud Hypervisor process: PID %d", pid)
+				t.Logf("Cleaning up orphaned hypervisor process: PID %d", pid)
 				syscall.Kill(pid, syscall.SIGKILL)
 			}
 		}
