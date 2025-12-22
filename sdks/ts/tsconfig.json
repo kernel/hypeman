@@ -8,8 +8,8 @@
     "moduleResolution": "node",
     "esModuleInterop": true,
     "paths": {
-      "hypeman/*": ["./src/*"],
-      "hypeman": ["./src/index.ts"]
+      "@onkernel/hypeman/*": ["./src/*"],
+      "@onkernel/hypeman": ["./src/index.ts"]
     },
     "noEmit": true,
 

@@ -7,8 +7,8 @@ const config: JestConfigWithTsJest = {
     '^.+\\.(t|j)sx?$': ['@swc/jest', { sourceMaps: 'inline' }],
   },
   moduleNameMapper: {
-    '^hypeman$': '<rootDir>/src/index.ts',
-    '^hypeman/(.*)$': '<rootDir>/src/$1',
+    '^@onkernel/hypeman$': '<rootDir>/src/index.ts',
+    '^@onkernel/hypeman/(.*)$': '<rootDir>/src/$1',
   },
   modulePathIgnorePatterns: [
     '<rootDir>/ecosystem-tests/',

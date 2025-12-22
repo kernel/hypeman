@@ -5,8 +5,8 @@
   "compilerOptions": {
     "rootDir": "./dist/src",
     "paths": {
-      "hypeman/*": ["./dist/src/*"],
-      "hypeman": ["./dist/src/index.ts"]
+      "@onkernel/hypeman/*": ["./dist/src/*"],
+      "@onkernel/hypeman": ["./dist/src/index.ts"]
     },
     "noEmit": false,
     "declaration": true,

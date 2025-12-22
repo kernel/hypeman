@@ -25,7 +25,7 @@ export default tseslint.config(
         {
           patterns: [
             {
-              regex: '^hypeman(/.*)?',
+              regex: '^@onkernel/hypeman(/.*)?',
               message: 'Use a relative import, not a package import.',
             },
           ],

@@ -1,5 +1,5 @@
 import { inspect } from 'node:util';
-import { buildHeaders, type HeadersLike, type NullableHeaders } from 'hypeman/internal/headers';
+import { buildHeaders, type HeadersLike, type NullableHeaders } from '@onkernel/hypeman/internal/headers';
 
 function inspectNullableHeaders(headers: NullableHeaders) {
   return `NullableHeaders {${[
