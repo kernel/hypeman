@@ -1,5 +1,5 @@
-import { multipartFormRequestOptions, createForm } from 'hypeman/internal/uploads';
-import { toFile } from 'hypeman/core/uploads';
+import { multipartFormRequestOptions, createForm } from '@onkernel/hypeman/internal/uploads';
+import { toFile } from '@onkernel/hypeman/core/uploads';
 
 describe('form data validation', () => {
   test('valid values do not error', async () => {

@@ -1,12 +1,12 @@
 {
-  "name": "hypeman",
-  "version": "0.0.1",
+  "name": "@onkernel/hypeman",
+  "version": "0.0.2",
   "description": "The official TypeScript library for the Hypeman API",
   "author": "Hypeman <>",
   "types": "dist/index.d.ts",
   "main": "dist/index.js",
   "type": "commonjs",
-  "repository": "github:stainless-sdks/hypeman-typescript",
+  "repository": "github:onkernel/hypeman-ts",
   "license": "Apache-2.0",
   "packageManager": "pnpm@10.24.0",
   "files": [

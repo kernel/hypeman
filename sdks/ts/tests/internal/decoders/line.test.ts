@@ -1,4 +1,4 @@
-import { findDoubleNewlineIndex, LineDecoder } from 'hypeman/internal/decoders/line';
+import { findDoubleNewlineIndex, LineDecoder } from '@onkernel/hypeman/internal/decoders/line';
 
 function decodeChunks(chunks: string[], { flush }: { flush: boolean } = { flush: false }): string[] {
   const decoder = new LineDecoder();
