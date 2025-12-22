@@ -1,0 +1,11 @@
+.prism.log
+node_modules
+yarn-error.log
+codegen.log
+Brewfile.lock.json
+dist
+dist-deno
+/*.tgz
+.idea/
+.eslintcache
+
