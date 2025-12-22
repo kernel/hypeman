@@ -8,7 +8,15 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/onkernel/hypeman/lib/logger"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
+
+// HypervisorTyper is implemented by resources that have a hypervisor type.
+// This allows the middleware to enrich logs/traces without importing the instances package.
+type HypervisorTyper interface {
+	GetHypervisorType() string
+}
 
 // ResourceResolver is implemented by managers that support lookup by ID, name, or prefix.
 type ResourceResolver interface {
@@ -115,6 +123,23 @@ func ResolveResource(resolvers Resolvers, errResponder ErrorResponder) func(http
 				logKey = "image_name"
 			}
 			log := logger.FromContext(ctx).With(logKey, resolvedID)
+
+			// For instances, also add hypervisor type to logs and traces
+			if resourceType == "instance" {
+				if hvTyper, ok := resource.(HypervisorTyper); ok {
+					hvType := hvTyper.GetHypervisorType()
+					if hvType != "" {
+						log = log.With("hypervisor", hvType)
+
+						// Add to trace span if one exists
+						span := trace.SpanFromContext(ctx)
+						if span.IsRecording() {
+							span.SetAttributes(attribute.String("hypervisor", hvType))
+						}
+					}
+				}
+			}
+
 			ctx = logger.AddToContext(ctx, log)
 
 			next.ServeHTTP(w, r.WithContext(ctx))

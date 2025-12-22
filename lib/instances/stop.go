@@ -84,8 +84,8 @@ func (m *manager) stopInstance(
 
 	// Record metrics
 	if m.metrics != nil {
-		m.recordDuration(ctx, m.metrics.stopDuration, start, "success")
-		m.recordStateTransition(ctx, string(StateRunning), string(StateStopped))
+		m.recordDuration(ctx, m.metrics.stopDuration, start, "success", stored.HypervisorType)
+		m.recordStateTransition(ctx, string(StateRunning), string(StateStopped), stored.HypervisorType)
 	}
 
 	// Return instance with derived state (should be Stopped now)

@@ -114,8 +114,8 @@ func (m *manager) restoreInstance(
 
 	// Record metrics
 	if m.metrics != nil {
-		m.recordDuration(ctx, m.metrics.restoreDuration, start, "success")
-		m.recordStateTransition(ctx, string(StateStandby), string(StateRunning))
+		m.recordDuration(ctx, m.metrics.restoreDuration, start, "success", stored.HypervisorType)
+		m.recordStateTransition(ctx, string(StateStandby), string(StateRunning), stored.HypervisorType)
 	}
 
 	// Return instance with derived state (should be Running now)

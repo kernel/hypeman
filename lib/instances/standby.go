@@ -74,10 +74,10 @@ func (m *manager) standbyInstance(
 	// 6. Reduce memory to base size (virtio-mem hotplug) if supported
 	// Wait for memory to stabilize so the snapshot is as small as possible
 	if hv.Capabilities().SupportsHotplugMemory {
-	log.DebugContext(ctx, "reducing VM memory before snapshot", "instance_id", id, "base_size", inst.Size)
+		log.DebugContext(ctx, "reducing VM memory before snapshot", "instance_id", id, "base_size", inst.Size)
 		if err := hv.ResizeMemoryAndWait(ctx, inst.Size, 5*time.Second); err != nil {
-		// Log warning but continue - snapshot will just be larger
-		log.WarnContext(ctx, "failed to reduce memory, snapshot will be larger", "instance_id", id, "error", err)
+			// Log warning but continue - snapshot will just be larger
+			log.WarnContext(ctx, "failed to reduce memory, snapshot will be larger", "instance_id", id, "error", err)
 		}
 	}
 
@@ -129,8 +129,8 @@ func (m *manager) standbyInstance(
 
 	// Record metrics
 	if m.metrics != nil {
-		m.recordDuration(ctx, m.metrics.standbyDuration, start, "success")
-		m.recordStateTransition(ctx, string(StateRunning), string(StateStandby))
+		m.recordDuration(ctx, m.metrics.standbyDuration, start, "success", stored.HypervisorType)
+		m.recordStateTransition(ctx, string(StateRunning), string(StateStandby), stored.HypervisorType)
 	}
 
 	// Return instance with derived state (should be Standby now)

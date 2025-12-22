@@ -4,6 +4,8 @@ import (
 	"context"
 	"time"
 
+	"github.com/onkernel/hypeman/lib/hypervisor"
+	mw "github.com/onkernel/hypeman/lib/middleware"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
@@ -90,13 +92,25 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 			if err != nil {
 				return nil
 			}
-			stateCounts := make(map[string]int64)
-			for _, inst := range instances {
-				stateCounts[string(inst.State)]++
+			// Count by state and hypervisor combination
+			type stateHypervisor struct {
+				state      string
+				hypervisor string
 			}
-			for state, count := range stateCounts {
+			counts := make(map[stateHypervisor]int64)
+			for _, inst := range instances {
+				key := stateHypervisor{
+					state:      string(inst.State),
+					hypervisor: string(inst.HypervisorType),
+				}
+				counts[key]++
+			}
+			for key, count := range counts {
 				o.ObserveInt64(instancesTotal, count,
-					metric.WithAttributes(attribute.String("state", state)))
+					metric.WithAttributes(
+						attribute.String("state", key.state),
+						attribute.String("hypervisor", key.hypervisor),
+					))
 			}
 			return nil
 		},
@@ -117,24 +131,41 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 	}, nil
 }
 
-// recordDuration records operation duration.
-func (m *manager) recordDuration(ctx context.Context, histogram metric.Float64Histogram, start time.Time, status string) {
+// getHypervisorFromContext extracts the hypervisor type from the resolved instance in context.
+// Returns empty string if not available.
+func getHypervisorFromContext(ctx context.Context) string {
+	if inst := mw.GetResolvedInstance[Instance](ctx); inst != nil {
+		return string(inst.HypervisorType)
+	}
+	return ""
+}
+
+// recordDuration records operation duration with hypervisor label.
+func (m *manager) recordDuration(ctx context.Context, histogram metric.Float64Histogram, start time.Time, status string, hvType hypervisor.Type) {
 	if m.metrics == nil {
 		return
 	}
 	duration := time.Since(start).Seconds()
-	histogram.Record(ctx, duration,
-		metric.WithAttributes(attribute.String("status", status)))
+	attrs := []attribute.KeyValue{
+		attribute.String("status", status),
+	}
+	if hvType != "" {
+		attrs = append(attrs, attribute.String("hypervisor", string(hvType)))
+	}
+	histogram.Record(ctx, duration, metric.WithAttributes(attrs...))
 }
 
-// recordStateTransition records a state transition.
-func (m *manager) recordStateTransition(ctx context.Context, fromState, toState string) {
+// recordStateTransition records a state transition with hypervisor label.
+func (m *manager) recordStateTransition(ctx context.Context, fromState, toState string, hvType hypervisor.Type) {
 	if m.metrics == nil {
 		return
 	}
-	m.metrics.stateTransitions.Add(ctx, 1,
-		metric.WithAttributes(
-			attribute.String("from", fromState),
-			attribute.String("to", toState),
-		))
+	attrs := []attribute.KeyValue{
+		attribute.String("from", fromState),
+		attribute.String("to", toState),
+	}
+	if hvType != "" {
+		attrs = append(attrs, attribute.String("hypervisor", string(hvType)))
+	}
+	m.metrics.stateTransitions.Add(ctx, 1, metric.WithAttributes(attrs...))
 }

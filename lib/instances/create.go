@@ -17,6 +17,7 @@ import (
 	"github.com/onkernel/hypeman/lib/system"
 	"github.com/onkernel/hypeman/lib/vmm"
 	"github.com/onkernel/hypeman/lib/volumes"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 	"gvisor.dev/gvisor/pkg/cleanup"
 )
@@ -207,9 +208,20 @@ func (m *manager) createInstance(
 	if hvType == "" {
 		hvType = m.defaultHypervisor
 	}
+
+	// Enrich logger and trace span with hypervisor type
+	log = log.With("hypervisor", string(hvType))
+	ctx = logger.AddToContext(ctx, log)
+	if m.metrics != nil && m.metrics.tracer != nil {
+		span := trace.SpanFromContext(ctx)
+		if span.IsRecording() {
+			span.SetAttributes(attribute.String("hypervisor", string(hvType)))
+		}
+	}
+
 	pm, err := m.getProcessManager(hvType)
 	if err != nil {
-		log.ErrorContext(ctx, "failed to get process manager", "hypervisor", hvType, "error", err)
+		log.ErrorContext(ctx, "failed to get process manager", "error", err)
 		return nil, fmt.Errorf("get process manager for %s: %w", hvType, err)
 	}
 
@@ -409,13 +421,13 @@ func (m *manager) createInstance(
 
 	// Record metrics
 	if m.metrics != nil {
-		m.recordDuration(ctx, m.metrics.createDuration, start, "success")
-		m.recordStateTransition(ctx, "stopped", string(StateRunning))
+		m.recordDuration(ctx, m.metrics.createDuration, start, "success", hvType)
+		m.recordStateTransition(ctx, "stopped", string(StateRunning), hvType)
 	}
 
 	// Return instance with derived state
 	finalInst := m.toInstance(ctx, meta)
-	log.InfoContext(ctx, "instance created successfully", "instance_id", id, "name", req.Name, "state", finalInst.State)
+	log.InfoContext(ctx, "instance created successfully", "instance_id", id, "name", req.Name, "state", finalInst.State, "hypervisor", hvType)
 	return &finalInst, nil
 }
 
