@@ -1,10 +1,10 @@
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
-import { APIPromise } from 'hypeman/core/api-promise';
+import { APIPromise } from '@onkernel/hypeman/core/api-promise';
 
 import util from 'node:util';
-import Hypeman from 'hypeman';
-import { APIUserAbortError } from 'hypeman';
+import Hypeman from '@onkernel/hypeman';
+import { APIUserAbortError } from '@onkernel/hypeman';
 const defaultFetch = fetch;
 
 describe('instantiate client', () => {

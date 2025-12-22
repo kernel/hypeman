@@ -1,6 +1,6 @@
 import assert from 'assert';
-import { _iterSSEMessages } from 'hypeman/core/streaming';
-import { ReadableStreamFrom } from 'hypeman/internal/shims';
+import { _iterSSEMessages } from '@onkernel/hypeman/core/streaming';
+import { ReadableStreamFrom } from '@onkernel/hypeman/internal/shims';
 
 describe('streaming decoding', () => {
   test('basic', async () => {

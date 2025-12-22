@@ -1,6 +1,6 @@
 import fs from 'fs';
-import type { ResponseLike } from 'hypeman/internal/to-file';
-import { toFile } from 'hypeman/core/uploads';
+import type { ResponseLike } from '@onkernel/hypeman/internal/to-file';
+import { toFile } from '@onkernel/hypeman/core/uploads';
 import { File } from 'node:buffer';
 
 class MyClass {
@@ -97,7 +97,7 @@ describe('missing File error message', () => {
   });
 
   test('is thrown', async () => {
-    const uploads = await import('hypeman/core/uploads');
+    const uploads = await import('@onkernel/hypeman/core/uploads');
     await expect(
       uploads.toFile(mockResponse({ url: 'https://example.com/my/audio.mp3' })),
     ).rejects.toMatchInlineSnapshot(

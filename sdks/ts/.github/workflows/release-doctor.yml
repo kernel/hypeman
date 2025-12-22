@@ -17,4 +17,6 @@ jobs:
       - name: Check release environment
         run: |
           bash ./bin/check-release-environment
+        env:
+          NPM_TOKEN: ${{ secrets.HYPEMAN_NPM_TOKEN || secrets.NPM_TOKEN }}
 
