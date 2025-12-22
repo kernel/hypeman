@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
+	gcr "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/empty"
 	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
@@ -58,6 +60,14 @@ func newOCIClient(cacheDir string) (*ociClient, error) {
 		return nil, fmt.Errorf("create cache dir: %w", err)
 	}
 	return &ociClient{cacheDir: cacheDir}, nil
+}
+
+// currentPlatform returns the platform for the current host
+func currentPlatform() gcr.Platform {
+	return gcr.Platform{
+		Architecture: runtime.GOARCH,
+		OS:           runtime.GOOS,
+	}
 }
 
 // inspectManifest synchronously inspects a remote image to get its digest
@@ -126,9 +136,11 @@ func (c *ociClient) pullToOCILayout(ctx context.Context, imageRef, layoutTag str
 
 	// Use system authentication (reads from ~/.docker/config.json, etc.)
 	// Default retry: only on network errors, max ~1.3s total
+	// WithPlatform ensures we pull the correct architecture for multi-arch images
 	img, err := remote.Image(ref,
 		remote.WithContext(ctx),
-		remote.WithAuthFromKeychain(authn.DefaultKeychain))
+		remote.WithAuthFromKeychain(authn.DefaultKeychain),
+		remote.WithPlatform(currentPlatform()))
 	if err != nil {
 		// Rate limits fail here immediately (429 is not retried by default)
 		return fmt.Errorf("fetch image manifest: %w", wrapRegistryError(err))

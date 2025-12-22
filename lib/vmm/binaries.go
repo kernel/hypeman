@@ -30,6 +30,8 @@ func ExtractBinary(p *paths.Paths, version CHVersion) (string, error) {
 	arch := runtime.GOARCH
 	if arch == "amd64" {
 		arch = "x86_64"
+	} else if arch == "arm64" {
+		arch = "aarch64"
 	}
 
 	embeddedPath := fmt.Sprintf("binaries/cloud-hypervisor/%s/%s/cloud-hypervisor", version, arch)
