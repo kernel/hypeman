@@ -1,6 +1,6 @@
 {
   "name": "@onkernel/hypeman",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "The official TypeScript library for the Hypeman API",
   "author": "Hypeman <>",
   "types": "dist/index.d.ts",
