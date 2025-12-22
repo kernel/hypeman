@@ -3,7 +3,7 @@
 # Provision the VM with Hypeman dependencies
 #
 # Run this script ON the VM (after SSHing in), or from your Mac:
-#   ssh hypeman 'bash -s' < setup-vm.sh
+#   ssh hypeman 'bash -s' < bootstrap-dev-environment.sh
 #
 
 set -e

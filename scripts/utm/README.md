@@ -32,7 +32,7 @@ Follow the [official UTM Ubuntu guide](https://docs.getutm.app/guides/ubuntu/):
 1. Hardware: Set RAM to **8192 MiB** and CPU cores to **4**
 1. Linux: check the box to **Use Apple Virtualization**. **Boot from ISO** should be the default. Click **Browse** and select the Ubuntu Server ISO.
 1. Storage: Set disk size to **100 GiB**
-1. Shared Directory: skip this. The `setup-vm.sh` script will clone Hypeman onto the VM.
+1. Shared Directory: skip this. The `bootstrap-dev-environment.sh` script will clone Hypeman onto the VM.
 1. Summary: Name the VM **Hypeman** and click **Save**
 
 **Important:** Before starting the VM:
@@ -91,12 +91,12 @@ ssh hypeman
 
 ## Setting up the VM for Hypeman Development
 
-Copy the `setup-vm.sh` script into the VM and run it:
+Copy the `bootstrap-dev-environment.sh` script into the VM and run it:
 
 ```bash
-scp setup-vm.sh hypeman:
+scp bootstrap-dev-environment.sh hypeman:
 ssh hypeman
-./setup-vm.sh
+./bootstrap-dev-environment.sh
 ```
 
 This installs Go, erofs-utils, dnsmasq, and other dependencies needed for Hypeman.
