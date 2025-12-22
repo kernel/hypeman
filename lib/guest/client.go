@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	securejoin "github.com/cyphar/filepath-securejoin"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -466,6 +467,7 @@ func CopyFromInstance(ctx context.Context, vsockSocketPath string, opts CopyFrom
 
 	var currentFile *os.File
 	var currentHeader *CopyFromGuestHeader
+	var receivedFinal bool
 
 	// Ensure file is closed on error paths
 	defer func() {
@@ -492,18 +494,48 @@ func CopyFromInstance(ctx context.Context, vsockSocketPath string, opts CopyFrom
 			}
 
 			currentHeader = r.Header
-			targetPath := filepath.Join(opts.DstPath, r.Header.Path)
+			// Use securejoin to prevent path traversal attacks
+			targetPath, err := securejoin.SecureJoin(opts.DstPath, r.Header.Path)
+			if err != nil {
+				return fmt.Errorf("invalid path %s: %w", r.Header.Path, err)
+			}
 
 			if r.Header.IsDir {
 				if err := os.MkdirAll(targetPath, fs.FileMode(r.Header.Mode)); err != nil {
 					return fmt.Errorf("create directory %s: %w", targetPath, err)
 				}
-			} else if r.Header.IsSymlink {
-				// Create symlink
-				os.Remove(targetPath) // Remove existing if any
-				if err := os.Symlink(r.Header.LinkTarget, targetPath); err != nil {
-					return fmt.Errorf("create symlink %s: %w", targetPath, err)
-				}
+		} else if r.Header.IsSymlink {
+			// Validate symlink target to prevent path traversal attacks
+			// Reject absolute paths
+			if filepath.IsAbs(r.Header.LinkTarget) {
+				return fmt.Errorf("invalid symlink target (absolute path not allowed): %s", r.Header.LinkTarget)
+			}
+			// Reject targets that escape the destination directory
+			// Resolve the link target relative to the symlink's parent directory
+			linkDir := filepath.Dir(targetPath)
+			resolvedTarget := filepath.Clean(filepath.Join(linkDir, r.Header.LinkTarget))
+			cleanDst := filepath.Clean(opts.DstPath)
+			// Check path containment - handle root destination specially
+			var contained bool
+			if cleanDst == "/" {
+				// For root destination, any absolute path that doesn't contain ".." after cleaning is valid
+				contained = !strings.Contains(resolvedTarget, "..")
+			} else {
+				contained = strings.HasPrefix(resolvedTarget, cleanDst+string(filepath.Separator)) || resolvedTarget == cleanDst
+			}
+			if !contained {
+				return fmt.Errorf("invalid symlink target (escapes destination): %s", r.Header.LinkTarget)
+			}
+
+			// Create parent directory if needed
+			if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
+				return fmt.Errorf("create parent dir for symlink: %w", err)
+			}
+			// Create symlink
+			os.Remove(targetPath) // Remove existing if any
+			if err := os.Symlink(r.Header.LinkTarget, targetPath); err != nil {
+				return fmt.Errorf("create symlink %s: %w", targetPath, err)
+			}
 			} else {
 				// Create parent directory
 				if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
@@ -529,14 +561,17 @@ func CopyFromInstance(ctx context.Context, vsockSocketPath string, opts CopyFrom
 				currentFile.Close()
 				// Set modification time
 				if currentHeader != nil && currentHeader.Mtime > 0 {
-					targetPath := filepath.Join(opts.DstPath, currentHeader.Path)
-					mtime := time.Unix(currentHeader.Mtime, 0)
-					os.Chtimes(targetPath, mtime, mtime)
+					targetPath, err := securejoin.SecureJoin(opts.DstPath, currentHeader.Path)
+					if err == nil {
+						mtime := time.Unix(currentHeader.Mtime, 0)
+						os.Chtimes(targetPath, mtime, mtime)
+					}
 				}
 				currentFile = nil
 				currentHeader = nil
 			}
 			if r.End.Final {
+				receivedFinal = true
 				return nil
 			}
 
@@ -545,6 +580,9 @@ func CopyFromInstance(ctx context.Context, vsockSocketPath string, opts CopyFrom
 		}
 	}
 
+	if !receivedFinal {
+		return fmt.Errorf("copy stream ended without completion marker")
+	}
 	return nil
 }
 
