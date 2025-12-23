@@ -160,6 +160,11 @@ components:
           description: Volumes to attach to the instance at creation time
           items:
             $ref: "#/components/schemas/VolumeMount"
+        hypervisor:
+          type: string
+          enum: [cloud-hypervisor, qemu]
+          description: Hypervisor to use for this instance. Defaults to server configuration.
+          example: cloud-hypervisor
         # Future: port_mappings, timeout_seconds
     
     Instance:
@@ -254,6 +259,11 @@ components:
           type: boolean
           description: Whether a snapshot exists for this instance
           example: false
+        hypervisor:
+          type: string
+          enum: [cloud-hypervisor, qemu]
+          description: Hypervisor running this instance
+          example: cloud-hypervisor
     
     PathInfo:
       type: object

@@ -57,7 +57,7 @@ func setupTestManager(t *testing.T) (*manager, string) {
 		MaxTotalVcpus:        0,                        // unlimited
 		MaxTotalMemory:       0,                        // unlimited
 	}
-	mgr := NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, nil, nil).(*manager)
+	mgr := NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, "", nil, nil).(*manager)
 
 	// Register cleanup to kill any orphaned Cloud Hypervisor processes
 	t.Cleanup(func() {
@@ -604,13 +604,18 @@ func TestBasicEndToEnd(t *testing.T) {
 		var lastExitCode int
 		var lastErr error
 
+		dialer, err := hypervisor.NewVsockDialer(inst.HypervisorType, inst.VsockSocket, inst.VsockCID)
+		if err != nil {
+			return "", -1, err
+		}
+
 		for attempt := 0; attempt < 5; attempt++ {
 			if attempt > 0 {
 				time.Sleep(200 * time.Millisecond)
 			}
 
 			var stdout, stderr bytes.Buffer
-			exit, err := guest.ExecIntoInstance(ctx, inst.VsockSocket, guest.ExecOptions{
+			exit, err := guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{
 				Command: command,
 				Stdout:  &stdout,
 				Stderr:  &stderr,
@@ -766,7 +771,7 @@ func TestStorageOperations(t *testing.T) {
 		MaxTotalVcpus:        0,                        // unlimited
 		MaxTotalMemory:       0,                        // unlimited
 	}
-	manager := NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, nil, nil).(*manager)
+	manager := NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, "", nil, nil).(*manager)
 
 	// Test metadata doesn't exist initially
 	_, err := manager.loadMetadata("nonexistent")

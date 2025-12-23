@@ -101,6 +101,9 @@ type Config struct {
 
 	// Cloudflare configuration (if AcmeDnsProvider=cloudflare)
 	CloudflareApiToken string // Cloudflare API token
+
+	// Hypervisor configuration
+	DefaultHypervisor string // Default hypervisor type: "cloud-hypervisor" or "qemu"
 }
 
 // Load loads configuration from environment variables
@@ -163,6 +166,9 @@ func Load() *Config {
 
 		// Cloudflare configuration
 		CloudflareApiToken: getEnv("CLOUDFLARE_API_TOKEN", ""),
+
+		// Hypervisor configuration
+		DefaultHypervisor: getEnv("DEFAULT_HYPERVISOR", "cloud-hypervisor"),
 	}
 
 	return cfg

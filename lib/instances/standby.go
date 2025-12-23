@@ -129,8 +129,8 @@ func (m *manager) standbyInstance(
 
 	// Record metrics
 	if m.metrics != nil {
-		m.recordDuration(ctx, m.metrics.standbyDuration, start, "success")
-		m.recordStateTransition(ctx, string(StateRunning), string(StateStandby))
+		m.recordDuration(ctx, m.metrics.standbyDuration, start, "success", stored.HypervisorType)
+		m.recordStateTransition(ctx, string(StateRunning), string(StateStandby), stored.HypervisorType)
 	}
 
 	// Return instance with derived state (should be Standby now)

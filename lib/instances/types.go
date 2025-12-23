@@ -85,6 +85,12 @@ type Instance struct {
 	HasSnapshot bool    // Derived from filesystem check
 }
 
+// GetHypervisorType returns the hypervisor type as a string.
+// This implements the middleware.HypervisorTyper interface for OTEL enrichment.
+func (i *Instance) GetHypervisorType() string {
+	return string(i.HypervisorType)
+}
+
 // CreateInstanceRequest is the domain request for creating an instance
 type CreateInstanceRequest struct {
 	Name           string             // Required
@@ -97,6 +103,7 @@ type CreateInstanceRequest struct {
 	NetworkEnabled bool               // Whether to enable networking (uses default network)
 	Devices        []string           // Device IDs or names to attach (GPU passthrough)
 	Volumes        []VolumeAttachment // Volumes to attach at creation time
+	Hypervisor     hypervisor.Type    // Optional: hypervisor type (defaults to config)
 }
 
 // AttachVolumeRequest is the domain request for attaching a volume (used for API compatibility)

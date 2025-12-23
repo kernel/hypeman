@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/onkernel/hypeman/lib/guest"
+	"github.com/onkernel/hypeman/lib/hypervisor"
 	"github.com/onkernel/hypeman/lib/oapi"
 	"github.com/onkernel/hypeman/lib/paths"
 	"github.com/onkernel/hypeman/lib/system"
@@ -109,10 +110,14 @@ func TestCpToAndFromInstance(t *testing.T) {
 	err = os.WriteFile(srcFile, []byte(testContent), 0644)
 	require.NoError(t, err)
 
+	// Create vsock dialer
+	dialer, err := hypervisor.NewVsockDialer(actualInst.HypervisorType, actualInst.VsockSocket, actualInst.VsockCID)
+	require.NoError(t, err)
+
 	// Test 1: Copy file TO instance
 	t.Log("Testing CopyToInstance...")
 	dstPath := "/tmp/copied-file.txt"
-	err = guest.CopyToInstance(ctx(), actualInst.VsockSocket, guest.CopyToInstanceOptions{
+	err = guest.CopyToInstance(ctx(), dialer, guest.CopyToInstanceOptions{
 		SrcPath: srcFile,
 		DstPath: dstPath,
 	})
@@ -121,7 +126,7 @@ func TestCpToAndFromInstance(t *testing.T) {
 	// Verify the file was copied by reading it back via exec
 	t.Log("Verifying file was copied via exec...")
 	var stdout, stderr outputBuffer
-	exit, err := guest.ExecIntoInstance(ctx(), actualInst.VsockSocket, guest.ExecOptions{
+	exit, err := guest.ExecIntoInstance(ctx(), dialer, guest.ExecOptions{
 		Command: []string{"cat", dstPath},
 		Stdout:  &stdout,
 		Stderr:  &stderr,
@@ -134,7 +139,7 @@ func TestCpToAndFromInstance(t *testing.T) {
 	// Test 2: Copy file FROM instance
 	t.Log("Testing CopyFromInstance...")
 	localDstDir := t.TempDir()
-	err = guest.CopyFromInstance(ctx(), actualInst.VsockSocket, guest.CopyFromInstanceOptions{
+	err = guest.CopyFromInstance(ctx(), dialer, guest.CopyFromInstanceOptions{
 		SrcPath: dstPath,
 		DstPath: localDstDir,
 	})
@@ -211,6 +216,10 @@ func TestCpDirectoryToInstance(t *testing.T) {
 	actualInst, err := svc.InstanceManager.GetInstance(ctx(), inst.Id)
 	require.NoError(t, err)
 
+	// Create vsock dialer
+	dialer, err := hypervisor.NewVsockDialer(actualInst.HypervisorType, actualInst.VsockSocket, actualInst.VsockCID)
+	require.NoError(t, err)
+
 	// Create a test directory structure
 	srcDir := filepath.Join(t.TempDir(), "testdir")
 	require.NoError(t, os.MkdirAll(filepath.Join(srcDir, "subdir"), 0755))
@@ -219,7 +228,7 @@ func TestCpDirectoryToInstance(t *testing.T) {
 
 	// Copy directory to instance
 	t.Log("Copying directory to instance...")
-	err = guest.CopyToInstance(ctx(), actualInst.VsockSocket, guest.CopyToInstanceOptions{
+	err = guest.CopyToInstance(ctx(), dialer, guest.CopyToInstanceOptions{
 		SrcPath: srcDir,
 		DstPath: "/tmp/testdir",
 	})
@@ -227,7 +236,7 @@ func TestCpDirectoryToInstance(t *testing.T) {
 
 	// Verify files exist via exec
 	var stdout outputBuffer
-	exit, err := guest.ExecIntoInstance(ctx(), actualInst.VsockSocket, guest.ExecOptions{
+	exit, err := guest.ExecIntoInstance(ctx(), dialer, guest.ExecOptions{
 		Command: []string{"cat", "/tmp/testdir/file1.txt"},
 		Stdout:  &stdout,
 		TTY:     false,
@@ -237,7 +246,7 @@ func TestCpDirectoryToInstance(t *testing.T) {
 	assert.Equal(t, "file1 content", stdout.String())
 
 	stdout = outputBuffer{}
-	exit, err = guest.ExecIntoInstance(ctx(), actualInst.VsockSocket, guest.ExecOptions{
+	exit, err = guest.ExecIntoInstance(ctx(), dialer, guest.ExecOptions{
 		Command: []string{"cat", "/tmp/testdir/subdir/file2.txt"},
 		Stdout:  &stdout,
 		TTY:     false,
@@ -249,7 +258,7 @@ func TestCpDirectoryToInstance(t *testing.T) {
 	// Copy directory from instance
 	t.Log("Copying directory from instance...")
 	localDstDir := t.TempDir()
-	err = guest.CopyFromInstance(ctx(), actualInst.VsockSocket, guest.CopyFromInstanceOptions{
+	err = guest.CopyFromInstance(ctx(), dialer, guest.CopyFromInstanceOptions{
 		SrcPath: "/tmp/testdir",
 		DstPath: localDstDir,
 	})
@@ -266,4 +275,3 @@ func TestCpDirectoryToInstance(t *testing.T) {
 
 	t.Log("Directory cp tests passed!")
 }
-

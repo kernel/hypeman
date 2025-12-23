@@ -19,6 +19,7 @@ import (
 	"github.com/onkernel/hypeman/cmd/api/config"
 	"github.com/onkernel/hypeman/lib/devices"
 	"github.com/onkernel/hypeman/lib/guest"
+	"github.com/onkernel/hypeman/lib/hypervisor"
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/instances"
 	"github.com/onkernel/hypeman/lib/network"
@@ -77,7 +78,7 @@ func TestNVIDIAModuleLoading(t *testing.T) {
 	deviceMgr := devices.NewManager(p)
 	volumeMgr := volumes.NewManager(p, 10*1024*1024*1024, nil)
 	limits := instances.ResourceLimits{MaxOverlaySize: 10 * 1024 * 1024 * 1024}
-	instanceMgr := instances.NewManager(p, imageMgr, systemMgr, networkMgr, deviceMgr, volumeMgr, limits, nil, nil)
+	instanceMgr := instances.NewManager(p, imageMgr, systemMgr, networkMgr, deviceMgr, volumeMgr, limits, "", nil, nil)
 
 	// Step 1: Find an NVIDIA GPU
 	t.Log("Step 1: Discovering available GPUs...")
@@ -194,6 +195,9 @@ func TestNVIDIAModuleLoading(t *testing.T) {
 	actualInst, err := instanceMgr.GetInstance(ctx, inst.Id)
 	require.NoError(t, err)
 
+	dialer, err := hypervisor.NewVsockDialer(actualInst.HypervisorType, actualInst.VsockSocket, actualInst.VsockCID)
+	require.NoError(t, err)
+
 	execCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
@@ -204,7 +208,7 @@ func TestNVIDIAModuleLoading(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		stdout = outputBuffer{}
 		stderr = outputBuffer{}
-		_, err = guest.ExecIntoInstance(execCtx, actualInst.VsockSocket, guest.ExecOptions{
+		_, err = guest.ExecIntoInstance(execCtx, dialer, guest.ExecOptions{
 			Command: []string{"/bin/sh", "-c", dmesgCmd},
 			Stdin:   nil,
 			Stdout:  &stdout,
@@ -234,7 +238,7 @@ func TestNVIDIAModuleLoading(t *testing.T) {
 	// Check lsmod for nvidia modules
 	stdout = outputBuffer{}
 	stderr = outputBuffer{}
-	_, err = guest.ExecIntoInstance(execCtx, actualInst.VsockSocket, guest.ExecOptions{
+	_, err = guest.ExecIntoInstance(execCtx, dialer, guest.ExecOptions{
 		Command: []string{"/bin/sh", "-c", "cat /proc/modules | grep nvidia || echo 'No nvidia modules loaded'"},
 		Stdin:   nil,
 		Stdout:  &stdout,
@@ -254,7 +258,7 @@ func TestNVIDIAModuleLoading(t *testing.T) {
 	// Check for /dev/nvidia* devices
 	stdout = outputBuffer{}
 	stderr = outputBuffer{}
-	_, err = guest.ExecIntoInstance(execCtx, actualInst.VsockSocket, guest.ExecOptions{
+	_, err = guest.ExecIntoInstance(execCtx, dialer, guest.ExecOptions{
 		Command: []string{"/bin/sh", "-c", "ls -la /dev/nvidia* 2>&1 || echo 'No nvidia devices found'"},
 		Stdin:   nil,
 		Stdout:  &stdout,
@@ -318,7 +322,7 @@ func TestNVMLDetection(t *testing.T) {
 	deviceMgr := devices.NewManager(p)
 	volumeMgr := volumes.NewManager(p, 10*1024*1024*1024, nil)
 	limits := instances.ResourceLimits{MaxOverlaySize: 10 * 1024 * 1024 * 1024}
-	instanceMgr := instances.NewManager(p, imageMgr, systemMgr, networkMgr, deviceMgr, volumeMgr, limits, nil, nil)
+	instanceMgr := instances.NewManager(p, imageMgr, systemMgr, networkMgr, deviceMgr, volumeMgr, limits, "", nil, nil)
 
 	// Step 1: Check if ollama-cuda:test image exists in Docker
 	t.Log("Step 1: Checking for ollama-cuda:test Docker image...")
@@ -430,13 +434,16 @@ func TestNVMLDetection(t *testing.T) {
 	actualInst, err := instanceMgr.GetInstance(ctx, inst.Id)
 	require.NoError(t, err)
 
+	dialer2, err := hypervisor.NewVsockDialer(actualInst.HypervisorType, actualInst.VsockSocket, actualInst.VsockCID)
+	require.NoError(t, err)
+
 	// Step 5: Run NVML test
 	t.Log("Step 5: Running NVML detection test...")
 	execCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	var stdout, stderr outputBuffer
-	_, err = guest.ExecIntoInstance(execCtx, actualInst.VsockSocket, guest.ExecOptions{
+	_, err = guest.ExecIntoInstance(execCtx, dialer2, guest.ExecOptions{
 		Command: []string{"/bin/sh", "-c", "python3 /usr/local/bin/test-nvml.py 2>&1"},
 		Stdin:   nil,
 		Stdout:  &stdout,
@@ -469,7 +476,7 @@ func TestNVMLDetection(t *testing.T) {
 	t.Log("Step 6: Running CUDA driver test...")
 	stdout = outputBuffer{}
 	stderr = outputBuffer{}
-	_, err = guest.ExecIntoInstance(execCtx, actualInst.VsockSocket, guest.ExecOptions{
+	_, err = guest.ExecIntoInstance(execCtx, dialer2, guest.ExecOptions{
 		Command: []string{"/bin/sh", "-c", "python3 /usr/local/bin/test-cuda.py 2>&1"},
 		Stdin:   nil,
 		Stdout:  &stdout,

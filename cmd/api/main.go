@@ -23,6 +23,7 @@ import (
 	"github.com/onkernel/hypeman/cmd/api/api"
 	"github.com/onkernel/hypeman/cmd/api/config"
 	"github.com/onkernel/hypeman/lib/guest"
+	"github.com/onkernel/hypeman/lib/hypervisor/qemu"
 	"github.com/onkernel/hypeman/lib/instances"
 	mw "github.com/onkernel/hypeman/lib/middleware"
 	"github.com/onkernel/hypeman/lib/oapi"
@@ -124,6 +125,11 @@ func run() error {
 		return fmt.Errorf("KVM access check failed: %w\n\nEnsure:\n  1. KVM is enabled (check /dev/kvm exists)\n  2. User is in 'kvm' group: sudo usermod -aG kvm $USER\n  3. Log out and back in, or use: newgrp kvm", err)
 	}
 	logger.Info("KVM access verified")
+
+	// Check if QEMU is available (optional - only warn if not present)
+	if _, err := (&qemu.Starter{}).GetBinaryPath(nil, ""); err != nil {
+		logger.Warn("QEMU not available - QEMU hypervisor will not work", "error", err)
+	}
 
 	// Validate log rotation config
 	var logMaxSize datasize.ByteSize

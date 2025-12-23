@@ -10,14 +10,15 @@ import (
 	"time"
 
 	"github.com/onkernel/hypeman/lib/guest"
+	"github.com/onkernel/hypeman/lib/hypervisor"
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/paths"
 	"github.com/onkernel/hypeman/lib/system"
 	"github.com/stretchr/testify/require"
 )
 
-// waitForGuestAgent polls until guest-agent is ready
-func waitForGuestAgent(ctx context.Context, mgr *manager, instanceID string, timeout time.Duration) error {
+// waitForExecAgent polls until exec-agent is ready
+func waitForExecAgent(ctx context.Context, mgr *manager, instanceID string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		logs, err := collectLogs(ctx, mgr, instanceID, 100)
@@ -89,12 +90,12 @@ func TestExecConcurrent(t *testing.T) {
 		manager.DeleteInstance(ctx, inst.Id)
 	})
 
-	// Wait for guest-agent to be ready (retry here is OK - we're just waiting for startup)
-	err = waitForGuestAgent(ctx, manager, inst.Id, 15*time.Second)
-	require.NoError(t, err, "guest-agent should be ready")
+	// Wait for exec-agent to be ready (retry here is OK - we're just waiting for startup)
+	err = waitForExecAgent(ctx, manager, inst.Id, 15*time.Second)
+	require.NoError(t, err, "exec-agent should be ready")
 
-	// Verify guest-agent works with a simple command first
-	_, code, err := execCommand(ctx, inst.VsockSocket, "echo", "ready")
+	// Verify exec-agent works with a simple command first
+	_, code, err := execCommand(ctx, inst, "echo", "ready")
 	require.NoError(t, err, "initial exec should work")
 	require.Equal(t, 0, code, "initial exec should succeed")
 
@@ -117,7 +118,7 @@ func TestExecConcurrent(t *testing.T) {
 			for i := 1; i <= numIterations; i++ {
 				// Write (no retry - must work first time)
 				writeCmd := fmt.Sprintf("echo '%d-%d' > %s", workerID, i, filename)
-				output, code, err := execCommand(ctx, inst.VsockSocket, "/bin/sh", "-c", writeCmd)
+				output, code, err := execCommand(ctx, inst, "/bin/sh", "-c", writeCmd)
 				if err != nil {
 					errors <- fmt.Errorf("worker %d, iter %d: write error: %w", workerID, i, err)
 					return
@@ -128,7 +129,7 @@ func TestExecConcurrent(t *testing.T) {
 				}
 
 				// Read (no retry - must work first time)
-				output, code, err = execCommand(ctx, inst.VsockSocket, "cat", filename)
+				output, code, err = execCommand(ctx, inst, "cat", filename)
 				if err != nil {
 					errors <- fmt.Errorf("worker %d, iter %d: read error: %w", workerID, i, err)
 					return
@@ -180,7 +181,7 @@ func TestExecConcurrent(t *testing.T) {
 
 			// Command that takes ~2 seconds and produces output
 			cmd := fmt.Sprintf("sleep %d && echo 'stream-%d-done'", streamDuration, workerID)
-			output, code, err := execCommand(ctx, inst.VsockSocket, "/bin/sh", "-c", cmd)
+			output, code, err := execCommand(ctx, inst, "/bin/sh", "-c", cmd)
 			if err != nil {
 				streamErrors <- fmt.Errorf("stream worker %d: error: %w", workerID, err)
 				return
@@ -221,9 +222,12 @@ func TestExecConcurrent(t *testing.T) {
 	t.Log("Phase 3: Testing exec with non-existent command...")
 
 	// Test without TTY
+	dialer, err := hypervisor.NewVsockDialer(inst.HypervisorType, inst.VsockSocket, inst.VsockCID)
+	require.NoError(t, err)
+
 	start := time.Now()
 	var stdout, stderr strings.Builder
-	_, err = guest.ExecIntoInstance(ctx, inst.VsockSocket, guest.ExecOptions{
+	_, err = guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{
 		Command: []string{"nonexistent_command_asdfasdf"},
 		Stdout:  &stdout,
 		Stderr:  &stderr,
@@ -240,7 +244,7 @@ func TestExecConcurrent(t *testing.T) {
 	start = time.Now()
 	stdout.Reset()
 	stderr.Reset()
-	_, err = guest.ExecIntoInstance(ctx, inst.VsockSocket, guest.ExecOptions{
+	_, err = guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{
 		Command: []string{"nonexistent_command_xyz123"},
 		Stdout:  &stdout,
 		Stderr:  &stderr,

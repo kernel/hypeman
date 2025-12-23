@@ -7,6 +7,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/onkernel/hypeman/lib/guest"
+	"github.com/onkernel/hypeman/lib/hypervisor"
 	"github.com/onkernel/hypeman/lib/logger"
 	"github.com/onkernel/hypeman/lib/network"
 )
@@ -39,7 +41,12 @@ func (m *manager) deleteInstance(
 		}
 	}
 
-	// 3. If hypervisor might be running, force kill it
+	// 3. Close exec gRPC connection before killing hypervisor to prevent panic
+	if dialer, err := hypervisor.NewVsockDialer(inst.HypervisorType, inst.VsockSocket, inst.VsockCID); err == nil {
+		guest.CloseConn(dialer.Key())
+	}
+
+	// 4. If hypervisor might be running, force kill it
 	// Also attempt kill for StateUnknown since we can't be sure if hypervisor is running
 	if inst.State.RequiresVMM() || inst.State == StateUnknown {
 		log.DebugContext(ctx, "stopping hypervisor", "instance_id", id, "state", inst.State)
@@ -50,7 +57,7 @@ func (m *manager) deleteInstance(
 		}
 	}
 
-	// 4. Release network allocation
+	// 5. Release network allocation
 	if inst.NetworkEnabled {
 		log.DebugContext(ctx, "releasing network", "instance_id", id, "network", "default")
 		if err := m.networkManager.ReleaseAllocation(ctx, networkAlloc); err != nil {
@@ -59,7 +66,7 @@ func (m *manager) deleteInstance(
 		}
 	}
 
-	// 5. Detach and auto-unbind devices from VFIO
+	// 6. Detach and auto-unbind devices from VFIO
 	if len(inst.Devices) > 0 && m.deviceManager != nil {
 		for _, deviceID := range inst.Devices {
 			log.DebugContext(ctx, "detaching device", "id", id, "device", deviceID)
@@ -76,7 +83,7 @@ func (m *manager) deleteInstance(
 		}
 	}
 
-	// 5b. Detach volumes
+	// 6b. Detach volumes
 	if len(inst.Volumes) > 0 {
 		log.DebugContext(ctx, "detaching volumes", "instance_id", id, "count", len(inst.Volumes))
 		for _, volAttach := range inst.Volumes {
@@ -87,7 +94,7 @@ func (m *manager) deleteInstance(
 		}
 	}
 
-	// 6. Delete all instance data
+	// 7. Delete all instance data
 	log.DebugContext(ctx, "deleting instance data", "instance_id", id)
 	if err := m.deleteInstanceData(id); err != nil {
 		log.ErrorContext(ctx, "failed to delete instance data", "instance_id", id, "error", err)

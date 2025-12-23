@@ -11,6 +11,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/onkernel/hypeman/lib/guest"
+	"github.com/onkernel/hypeman/lib/hypervisor"
 	"github.com/onkernel/hypeman/lib/instances"
 	"github.com/onkernel/hypeman/lib/logger"
 	mw "github.com/onkernel/hypeman/lib/middleware"
@@ -218,7 +219,13 @@ func (s *ApiService) CpHandler(w http.ResponseWriter, r *http.Request) {
 // handleCopyTo handles copying files from client to guest
 // Returns the number of bytes transferred and any error.
 func (s *ApiService) handleCopyTo(ctx context.Context, ws *websocket.Conn, inst *instances.Instance, req CpRequest) (int64, error) {
-	grpcConn, err := guest.GetOrCreateConnPublic(ctx, inst.VsockSocket)
+	// Create vsock dialer for this hypervisor type
+	dialer, err := hypervisor.NewVsockDialer(inst.HypervisorType, inst.VsockSocket, inst.VsockCID)
+	if err != nil {
+		return 0, fmt.Errorf("create vsock dialer: %w", err)
+	}
+
+	grpcConn, err := guest.GetOrCreateConn(ctx, dialer)
 	if err != nil {
 		return 0, fmt.Errorf("get grpc connection: %w", err)
 	}
@@ -322,7 +329,13 @@ func (s *ApiService) handleCopyTo(ctx context.Context, ws *websocket.Conn, inst 
 // handleCopyFrom handles copying files from guest to client
 // Returns the number of bytes transferred and any error.
 func (s *ApiService) handleCopyFrom(ctx context.Context, ws *websocket.Conn, inst *instances.Instance, req CpRequest) (int64, error) {
-	grpcConn, err := guest.GetOrCreateConnPublic(ctx, inst.VsockSocket)
+	// Create vsock dialer for this hypervisor type
+	dialer, err := hypervisor.NewVsockDialer(inst.HypervisorType, inst.VsockSocket, inst.VsockCID)
+	if err != nil {
+		return 0, fmt.Errorf("create vsock dialer: %w", err)
+	}
+
+	grpcConn, err := guest.GetOrCreateConn(ctx, dialer)
 	if err != nil {
 		return 0, fmt.Errorf("get grpc connection: %w", err)
 	}
@@ -406,4 +419,3 @@ func (s *ApiService) handleCopyFrom(ctx context.Context, ws *websocket.Conn, ins
 	}
 	return bytesReceived, nil
 }
-

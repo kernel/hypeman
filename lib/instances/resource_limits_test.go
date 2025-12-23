@@ -163,7 +163,7 @@ func createTestManager(t *testing.T, limits ResourceLimits) *manager {
 	deviceMgr := devices.NewManager(p)
 	volumeMgr := volumes.NewManager(p, 0, nil)
 
-	return NewManager(p, imageMgr, systemMgr, networkMgr, deviceMgr, volumeMgr, limits, nil, nil).(*manager)
+	return NewManager(p, imageMgr, systemMgr, networkMgr, deviceMgr, volumeMgr, limits, "", nil, nil).(*manager)
 }
 
 func TestResourceLimits_StructValues(t *testing.T) {
@@ -267,7 +267,7 @@ func TestAggregateLimits_EnforcedAtRuntime(t *testing.T) {
 		MaxTotalMemory:       6 * 1024 * 1024 * 1024,   // aggregate: only 6GB total (allows first 2.5GB VM)
 	}
 
-	mgr := NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, nil, nil).(*manager)
+	mgr := NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, "", nil, nil).(*manager)
 
 	// Cleanup any orphaned processes on test end
 	t.Cleanup(func() {

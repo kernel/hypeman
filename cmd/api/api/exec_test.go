@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/onkernel/hypeman/lib/guest"
+	"github.com/onkernel/hypeman/lib/hypervisor"
 	"github.com/onkernel/hypeman/lib/instances"
 	"github.com/onkernel/hypeman/lib/oapi"
 	"github.com/onkernel/hypeman/lib/paths"
@@ -119,13 +120,16 @@ func TestExecInstanceNonTTY(t *testing.T) {
 	var stdout, stderr outputBuffer
 	var execErr error
 
+	dialer, err := hypervisor.NewVsockDialer(actualInst.HypervisorType, actualInst.VsockSocket, actualInst.VsockCID)
+	require.NoError(t, err)
+
 	t.Log("Testing exec command: whoami")
 	maxRetries := 10
 	for i := 0; i < maxRetries; i++ {
 		stdout = outputBuffer{}
 		stderr = outputBuffer{}
 
-		exit, execErr = guest.ExecIntoInstance(ctx(), actualInst.VsockSocket, guest.ExecOptions{
+		exit, execErr = guest.ExecIntoInstance(ctx(), dialer, guest.ExecOptions{
 			Command: []string{"/bin/sh", "-c", "whoami"},
 			Stdin:   nil,
 			Stdout:  &stdout,
@@ -250,9 +254,12 @@ func TestExecWithDebianMinimal(t *testing.T) {
 	assert.Contains(t, logs, "overlay-init: app exited with code", "App should have exited")
 
 	// Test exec commands work even though the main app (bash) has exited
+	dialer2, err := hypervisor.NewVsockDialer(actualInst.HypervisorType, actualInst.VsockSocket, actualInst.VsockCID)
+	require.NoError(t, err)
+
 	t.Log("Testing exec command: echo")
 	var stdout, stderr outputBuffer
-	exit, err := guest.ExecIntoInstance(ctx(), actualInst.VsockSocket, guest.ExecOptions{
+	exit, err := guest.ExecIntoInstance(ctx(), dialer2, guest.ExecOptions{
 		Command: []string{"echo", "hello from debian"},
 		Stdout:  &stdout,
 		Stderr:  &stderr,
@@ -266,7 +273,7 @@ func TestExecWithDebianMinimal(t *testing.T) {
 	// Verify we're actually in Debian
 	t.Log("Verifying OS release...")
 	stdout = outputBuffer{}
-	exit, err = guest.ExecIntoInstance(ctx(), actualInst.VsockSocket, guest.ExecOptions{
+	exit, err = guest.ExecIntoInstance(ctx(), dialer2, guest.ExecOptions{
 		Command: []string{"cat", "/etc/os-release"},
 		Stdout:  &stdout,
 		TTY:     false,

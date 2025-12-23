@@ -9,6 +9,7 @@ import (
 	"github.com/c2h5oh/datasize"
 	"github.com/onkernel/hypeman/cmd/api/config"
 	"github.com/onkernel/hypeman/lib/devices"
+	"github.com/onkernel/hypeman/lib/hypervisor"
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/ingress"
 	"github.com/onkernel/hypeman/lib/instances"
@@ -114,7 +115,8 @@ func ProvideInstanceManager(p *paths.Paths, cfg *config.Config, imageManager ima
 
 	meter := otel.GetMeterProvider().Meter("hypeman")
 	tracer := otel.GetTracerProvider().Tracer("hypeman")
-	return instances.NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, meter, tracer), nil
+	defaultHypervisor := hypervisor.Type(cfg.DefaultHypervisor)
+	return instances.NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, defaultHypervisor, meter, tracer), nil
 }
 
 // ProvideVolumeManager provides the volume manager

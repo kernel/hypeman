@@ -9,7 +9,6 @@ import (
 
 	"github.com/onkernel/hypeman/lib/hypervisor"
 	"github.com/onkernel/hypeman/lib/logger"
-	"github.com/onkernel/hypeman/lib/vmm"
 )
 
 // instanceMetadata is the minimal metadata we need to derive allocations
@@ -18,6 +17,8 @@ type instanceMetadata struct {
 	Name           string
 	NetworkEnabled bool
 	HypervisorType string
+	IP             string // Assigned IP address
+	MAC            string // Assigned MAC address
 }
 
 // deriveAllocation derives network allocation from CH or snapshot
@@ -49,58 +50,38 @@ func (m *manager) deriveAllocation(ctx context.Context, instanceID string) (*All
 	}
 	netmask := fmt.Sprintf("%d.%d.%d.%d", ipNet.Mask[0], ipNet.Mask[1], ipNet.Mask[2], ipNet.Mask[3])
 
-	// 4. Try to derive from running VM first
-	socketPath := m.paths.InstanceSocket(instanceID, hypervisor.SocketNameForType(hypervisor.Type(meta.HypervisorType)))
-	if fileExists(socketPath) {
-		client, err := vmm.NewVMM(socketPath)
-		if err == nil {
-			resp, err := client.GetVmInfoWithResponse(ctx)
-			if err == nil && resp.JSON200 != nil && resp.JSON200.Config.Net != nil && len(*resp.JSON200.Config.Net) > 0 {
-				nets := *resp.JSON200.Config.Net
-				net := nets[0]
-				if net.Ip != nil && net.Mac != nil && net.Tap != nil {
-					log.DebugContext(ctx, "derived allocation from running VM", "instance_id", instanceID)
-					return &Allocation{
-						InstanceID:   instanceID,
-						InstanceName: meta.Name,
-						Network:      "default",
-						IP:           *net.Ip,
-						MAC:          *net.Mac,
-						TAPDevice:    *net.Tap,
-						Gateway:      defaultNet.Gateway,
-						Netmask:      netmask,
-						State:        "running",
-					}, nil
-				}
+	// 4. Use stored metadata to derive allocation (works for all hypervisors)
+	if meta.IP != "" && meta.MAC != "" {
+		tap := generateTAPName(instanceID)
+
+		// Determine state based on socket existence and snapshot
+		socketPath := m.paths.InstanceSocket(instanceID, hypervisor.SocketNameForType(hypervisor.Type(meta.HypervisorType)))
+		state := "stopped"
+		if fileExists(socketPath) {
+			state = "running"
+		} else {
+			// Check for snapshot (standby state)
+			snapshotConfigJson := m.paths.InstanceSnapshotConfig(instanceID)
+			if fileExists(snapshotConfigJson) {
+				state = "standby"
 			}
 		}
+
+		log.DebugContext(ctx, "derived allocation from metadata", "instance_id", instanceID, "state", state)
+		return &Allocation{
+			InstanceID:   instanceID,
+			InstanceName: meta.Name,
+			Network:      "default",
+			IP:           meta.IP,
+			MAC:          meta.MAC,
+			TAPDevice:    tap,
+			Gateway:      defaultNet.Gateway,
+			Netmask:      netmask,
+			State:        state,
+		}, nil
 	}
 
-	// 5. Try to derive from snapshot
-	// Cloud Hypervisor creates config.json in the snapshot directory
-	snapshotConfigJson := m.paths.InstanceSnapshotConfig(instanceID)
-	if fileExists(snapshotConfigJson) {
-		vmConfig, err := m.parseVmJson(snapshotConfigJson)
-		if err == nil && vmConfig.Net != nil && len(*vmConfig.Net) > 0 {
-			nets := *vmConfig.Net
-			if nets[0].Ip != nil && nets[0].Mac != nil && nets[0].Tap != nil {
-				log.DebugContext(ctx, "derived allocation from snapshot", "instance_id", instanceID)
-				return &Allocation{
-					InstanceID:   instanceID,
-					InstanceName: meta.Name,
-					Network:      "default",
-					IP:           *nets[0].Ip,
-					MAC:          *nets[0].Mac,
-					TAPDevice:    *nets[0].Tap,
-					Gateway:      defaultNet.Gateway,
-					Netmask:      netmask,
-					State:        "standby",
-				}, nil
-			}
-		}
-	}
-
-	// 6. No allocation (stopped or network not yet configured)
+	// 5. No allocation (network not yet configured)
 	return nil, nil
 }
 
@@ -162,22 +143,6 @@ func (m *manager) loadInstanceMetadata(instanceID string) (*instanceMetadata, er
 	}
 
 	return &meta, nil
-}
-
-// parseVmJson parses Cloud Hypervisor's config.json from snapshot
-// Note: Despite the function name, this parses config.json (what CH actually creates)
-func (m *manager) parseVmJson(path string) (*vmm.VmConfig, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read config.json: %w", err)
-	}
-
-	var vmConfig vmm.VmConfig
-	if err := json.Unmarshal(data, &vmConfig); err != nil {
-		return nil, fmt.Errorf("unmarshal config.json: %w", err)
-	}
-
-	return &vmConfig, nil
 }
 
 // fileExists checks if a file exists
