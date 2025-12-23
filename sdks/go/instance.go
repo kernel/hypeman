@@ -197,6 +197,10 @@ type Instance struct {
 	HasSnapshot bool `json:"has_snapshot"`
 	// Hotplug memory size (human-readable)
 	HotplugSize string `json:"hotplug_size"`
+	// Hypervisor running this instance
+	//
+	// Any of "cloud-hypervisor", "qemu".
+	Hypervisor InstanceHypervisor `json:"hypervisor"`
 	// Network configuration of the instance
 	Network InstanceNetwork `json:"network"`
 	// Writable overlay disk size (human-readable)
@@ -223,6 +227,7 @@ type Instance struct {
 		Env         respjson.Field
 		HasSnapshot respjson.Field
 		HotplugSize respjson.Field
+		Hypervisor  respjson.Field
 		Network     respjson.Field
 		OverlaySize respjson.Field
 		Size        respjson.Field
@@ -261,6 +266,14 @@ const (
 	InstanceStateStopped  InstanceState = "Stopped"
 	InstanceStateStandby  InstanceState = "Standby"
 	InstanceStateUnknown  InstanceState = "Unknown"
+)
+
+// Hypervisor running this instance
+type InstanceHypervisor string
+
+const (
+	InstanceHypervisorCloudHypervisor InstanceHypervisor = "cloud-hypervisor"
+	InstanceHypervisorQemu            InstanceHypervisor = "qemu"
 )
 
 // Network configuration of the instance
@@ -410,6 +423,10 @@ type InstanceNewParams struct {
 	Devices []string `json:"devices,omitzero"`
 	// Environment variables
 	Env map[string]string `json:"env,omitzero"`
+	// Hypervisor to use for this instance. Defaults to server configuration.
+	//
+	// Any of "cloud-hypervisor", "qemu".
+	Hypervisor InstanceNewParamsHypervisor `json:"hypervisor,omitzero"`
 	// Network configuration for the instance
 	Network InstanceNewParamsNetwork `json:"network,omitzero"`
 	// Volumes to attach to the instance at creation time
@@ -424,6 +441,14 @@ func (r InstanceNewParams) MarshalJSON() (data []byte, err error) {
 func (r *InstanceNewParams) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, r)
 }
+
+// Hypervisor to use for this instance. Defaults to server configuration.
+type InstanceNewParamsHypervisor string
+
+const (
+	InstanceNewParamsHypervisorCloudHypervisor InstanceNewParamsHypervisor = "cloud-hypervisor"
+	InstanceNewParamsHypervisorQemu            InstanceNewParamsHypervisor = "qemu"
+)
 
 // Network configuration for the instance
 type InstanceNewParamsNetwork struct {
