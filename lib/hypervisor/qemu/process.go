@@ -137,7 +137,7 @@ func (p *ProcessManager) GetBinaryPath(paths *paths.Paths, version string) (stri
 		return path, nil
 	}
 
-	return "", fmt.Errorf("%s not found; install QEMU on your system", binaryName)
+	return "", fmt.Errorf("%s not found; install with: %s", binaryName, qemuInstallHint())
 }
 
 // qemuBinaryName returns the QEMU binary name for the host architecture.
@@ -149,6 +149,18 @@ func qemuBinaryName() (string, error) {
 		return "qemu-system-aarch64", nil
 	default:
 		return "", fmt.Errorf("unsupported architecture: %s", runtime.GOARCH)
+	}
+}
+
+// qemuInstallHint returns package installation hints for the current architecture.
+func qemuInstallHint() string {
+	switch runtime.GOARCH {
+	case "amd64":
+		return "apt install qemu-system-x86 (Debian/Ubuntu) or dnf install qemu-system-x86-core (Fedora)"
+	case "arm64":
+		return "apt install qemu-system-arm (Debian/Ubuntu) or dnf install qemu-system-aarch64-core (Fedora)"
+	default:
+		return "install QEMU for your platform"
 	}
 }
 
