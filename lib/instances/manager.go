@@ -264,7 +264,7 @@ func (m *manager) RotateLogs(ctx context.Context, maxBytes int64, maxFiles int) 
 			m.paths.InstanceHypemanLog(inst.Id),
 		}
 		for _, logPath := range logPaths {
-			if err := rotateLogIfNeeded(logPath, maxBytes, maxFiles); err != nil {
+		if err := rotateLogIfNeeded(logPath, maxBytes, maxFiles); err != nil {
 				lastErr = err // Continue with other logs, but track error
 			}
 		}

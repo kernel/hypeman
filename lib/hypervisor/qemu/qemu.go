@@ -11,16 +11,23 @@ import (
 
 // QEMU implements hypervisor.Hypervisor for QEMU VMM.
 type QEMU struct {
-	client *Client
+	client     *Client
+	socketPath string // for self-removal from pool on error
 }
 
-// New creates a new QEMU client for an existing QMP socket.
+// New returns a QEMU client for the given socket path.
+// Uses a connection pool to ensure only one connection per socket exists.
 func New(socketPath string) (*QEMU, error) {
+	return GetOrCreate(socketPath)
+}
+
+// newClient creates a new QEMU client (internal, used by pool).
+func newClient(socketPath string) (*QEMU, error) {
 	client, err := NewClient(socketPath)
 	if err != nil {
 		return nil, fmt.Errorf("create qemu client: %w", err)
 	}
-	return &QEMU{client: client}, nil
+	return &QEMU{client: client, socketPath: socketPath}, nil
 }
 
 // Verify QEMU implements the interface
@@ -40,18 +47,29 @@ func (q *QEMU) Capabilities() hypervisor.Capabilities {
 // DeleteVM removes the VM configuration from QEMU.
 // This sends a graceful shutdown signal to the guest.
 func (q *QEMU) DeleteVM(ctx context.Context) error {
-	return q.client.SystemPowerdown()
+	if err := q.client.SystemPowerdown(); err != nil {
+		Remove(q.socketPath)
+		return err
+	}
+	return nil
 }
 
 // Shutdown stops the QEMU process.
 func (q *QEMU) Shutdown(ctx context.Context) error {
-	return q.client.Quit()
+	if err := q.client.Quit(); err != nil {
+		Remove(q.socketPath)
+		return err
+	}
+	// Connection is gone after quit, remove from pool
+	Remove(q.socketPath)
+	return nil
 }
 
 // GetVMInfo returns current VM state.
 func (q *QEMU) GetVMInfo(ctx context.Context) (*hypervisor.VMInfo, error) {
 	status, err := q.client.Status()
 	if err != nil {
+		Remove(q.socketPath)
 		return nil, fmt.Errorf("query status: %w", err)
 	}
 
@@ -85,12 +103,20 @@ func (q *QEMU) GetVMInfo(ctx context.Context) (*hypervisor.VMInfo, error) {
 
 // Pause suspends VM execution.
 func (q *QEMU) Pause(ctx context.Context) error {
-	return q.client.Stop()
+	if err := q.client.Stop(); err != nil {
+		Remove(q.socketPath)
+		return err
+	}
+	return nil
 }
 
 // Resume continues VM execution.
 func (q *QEMU) Resume(ctx context.Context) error {
-	return q.client.Continue()
+	if err := q.client.Continue(); err != nil {
+		Remove(q.socketPath)
+		return err
+	}
+	return nil
 }
 
 // Snapshot creates a VM snapshot.
