@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.7.0 (2025-12-23)
+
+Full Changelog: [v0.6.1...v0.7.0](https://github.com/onkernel/hypeman-cli/compare/v0.6.1...v0.7.0)
+
+### Features
+
+* add cp command for file copy to/from instances ([#18](https://github.com/onkernel/hypeman-cli/issues/18)) ([f67ad7b](https://github.com/onkernel/hypeman-cli/commit/f67ad7bcb6fbbe0a9409574fababab862da87840))
+
+
+### Chores
+
+* **internal:** codegen related update ([a6c6588](https://github.com/onkernel/hypeman-cli/commit/a6c6588d42a6981b65f5144d033f040afc29a959))
+
 ## 0.6.1 (2025-12-11)
 
 Full Changelog: [v0.6.0...v0.6.1](https://github.com/onkernel/hypeman-cli/compare/v0.6.0...v0.6.1)

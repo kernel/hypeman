@@ -74,13 +74,13 @@ func init() {
 			&runCmd,
 			&psCmd,
 			&logsCmd,
-			&rmCmd,
-			&stopCmd,
-			&startCmd,
-			&standbyCmd,
-			&restoreCmd,
-			&ingressCmd,
-			{
+		&rmCmd,
+		&stopCmd,
+		&startCmd,
+		&standbyCmd,
+		&restoreCmd,
+		&ingressCmd,
+		{
 				Name:     "health",
 				Category: "API RESOURCE",
 				Commands: []*cli.Command{
