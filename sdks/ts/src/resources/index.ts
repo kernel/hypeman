@@ -23,12 +23,14 @@ export {
 export {
   Instances,
   type Instance,
+  type PathInfo,
   type PortMapping,
   type VolumeMount,
   type InstanceListResponse,
   type InstanceLogsResponse,
   type InstanceCreateParams,
   type InstanceLogsParams,
+  type InstanceStatParams,
 } from './instances/instances';
 export {
   Volumes,
