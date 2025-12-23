@@ -68,6 +68,7 @@ func init() {
 		},
 		Commands: []*cli.Command{
 			&execCmd,
+			&cpCmd,
 			&pullCmd,
 			&pushCmd,
 			&runCmd,
