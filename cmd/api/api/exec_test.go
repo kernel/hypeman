@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/onkernel/hypeman/lib/exec"
+	"github.com/onkernel/hypeman/lib/guest"
 	"github.com/onkernel/hypeman/lib/hypervisor"
 	"github.com/onkernel/hypeman/lib/instances"
 	"github.com/onkernel/hypeman/lib/oapi"
@@ -90,17 +90,17 @@ func TestExecInstanceNonTTY(t *testing.T) {
 	require.NotEmpty(t, actualInst.VsockSocket, "vsock socket path should be set")
 	t.Logf("vsock CID: %d, socket: %s", actualInst.VsockCID, actualInst.VsockSocket)
 
-	// Capture console log on failure with exec-agent filtering
+	// Capture console log on failure with guest-agent filtering
 	t.Cleanup(func() {
 		if t.Failed() {
 			consolePath := paths.New(svc.Config.DataDir).InstanceAppLog(inst.Id)
 			if consoleData, err := os.ReadFile(consolePath); err == nil {
 				lines := strings.Split(string(consoleData), "\n")
 
-				// Print exec-agent specific logs
-				t.Logf("=== Exec Agent Logs ===")
+				// Print guest-agent specific logs
+				t.Logf("=== Guest Agent Logs ===")
 				for _, line := range lines {
-					if strings.Contains(line, "[exec-agent]") {
+					if strings.Contains(line, "[guest-agent]") {
 						t.Logf("%s", line)
 					}
 				}
@@ -116,7 +116,7 @@ func TestExecInstanceNonTTY(t *testing.T) {
 	}
 
 	// Wait for exec agent to be ready (retry a few times)
-	var exit *exec.ExitStatus
+	var exit *guest.ExitStatus
 	var stdout, stderr outputBuffer
 	var execErr error
 
@@ -129,7 +129,7 @@ func TestExecInstanceNonTTY(t *testing.T) {
 		stdout = outputBuffer{}
 		stderr = outputBuffer{}
 
-		exit, execErr = exec.ExecIntoInstance(ctx(), dialer, exec.ExecOptions{
+		exit, execErr = guest.ExecIntoInstance(ctx(), dialer, guest.ExecOptions{
 			Command: []string{"/bin/sh", "-c", "whoami"},
 			Stdin:   nil,
 			Stdout:  &stdout,
@@ -168,7 +168,7 @@ func TestExecInstanceNonTTY(t *testing.T) {
 // TestExecWithDebianMinimal tests exec with a minimal Debian image.
 // This test specifically catches issues that wouldn't appear with Alpine-based images:
 // 1. Debian's default entrypoint (bash) exits immediately without a TTY
-// 2. exec-agent must keep running even after the main app exits
+// 2. guest-agent must keep running even after the main app exits
 // 3. The VM must not kernel panic when the entrypoint exits
 func TestExecWithDebianMinimal(t *testing.T) {
 	// Require KVM access for VM creation
@@ -224,9 +224,9 @@ func TestExecWithDebianMinimal(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, actualInst)
 
-	// Wait for exec-agent to be ready by checking logs
-	// This is the key difference: we wait for exec-agent, not the app (which exits immediately)
-	t.Log("Waiting for exec-agent to start...")
+	// Wait for guest-agent to be ready by checking logs
+	// This is the key difference: we wait for guest-agent, not the app (which exits immediately)
+	t.Log("Waiting for guest-agent to start...")
 	execAgentReady := false
 	agentTimeout := time.After(15 * time.Second)
 	agentTicker := time.NewTicker(500 * time.Millisecond)
@@ -239,12 +239,12 @@ func TestExecWithDebianMinimal(t *testing.T) {
 			// Dump logs on failure for debugging
 			logs = collectTestLogs(t, svc, inst.Id, 200)
 			t.Logf("Console logs:\n%s", logs)
-			t.Fatal("Timeout waiting for exec-agent to start")
+			t.Fatal("Timeout waiting for guest-agent to start")
 		case <-agentTicker.C:
 			logs = collectTestLogs(t, svc, inst.Id, 100)
-			if strings.Contains(logs, "[exec-agent] listening on vsock port 2222") {
+			if strings.Contains(logs, "[guest-agent] listening on vsock port 2222") {
 				execAgentReady = true
-				t.Log("exec-agent is ready")
+				t.Log("guest-agent is ready")
 			}
 		}
 	}
@@ -259,7 +259,7 @@ func TestExecWithDebianMinimal(t *testing.T) {
 
 	t.Log("Testing exec command: echo")
 	var stdout, stderr outputBuffer
-	exit, err := exec.ExecIntoInstance(ctx(), dialer2, exec.ExecOptions{
+	exit, err := guest.ExecIntoInstance(ctx(), dialer2, guest.ExecOptions{
 		Command: []string{"echo", "hello from debian"},
 		Stdout:  &stdout,
 		Stderr:  &stderr,
@@ -273,7 +273,7 @@ func TestExecWithDebianMinimal(t *testing.T) {
 	// Verify we're actually in Debian
 	t.Log("Verifying OS release...")
 	stdout = outputBuffer{}
-	exit, err = exec.ExecIntoInstance(ctx(), dialer2, exec.ExecOptions{
+	exit, err = guest.ExecIntoInstance(ctx(), dialer2, guest.ExecOptions{
 		Command: []string{"cat", "/etc/os-release"},
 		Stdout:  &stdout,
 		TTY:     false,

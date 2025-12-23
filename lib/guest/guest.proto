@@ -1,0 +1,136 @@
+syntax = "proto3";
+
+package guest;
+
+option go_package = "github.com/onkernel/hypeman/lib/guest";
+
+// GuestService provides remote operations in guest VMs
+service GuestService {
+  // Exec executes a command with bidirectional streaming
+  rpc Exec(stream ExecRequest) returns (stream ExecResponse);
+  
+  // CopyToGuest streams file data to the guest filesystem
+  rpc CopyToGuest(stream CopyToGuestRequest) returns (CopyToGuestResponse);
+  
+  // CopyFromGuest streams file data from the guest filesystem
+  rpc CopyFromGuest(CopyFromGuestRequest) returns (stream CopyFromGuestResponse);
+  
+  // StatPath returns information about a path in the guest filesystem
+  rpc StatPath(StatPathRequest) returns (StatPathResponse);
+}
+
+// ExecRequest represents messages from client to server
+message ExecRequest {
+  oneof request {
+    ExecStart start = 1;      // Initial exec request
+    bytes stdin = 2;          // Stdin data
+  }
+}
+
+// ExecStart initiates command execution
+message ExecStart {
+  repeated string command = 1;        // Command and arguments
+  bool tty = 2;                       // Allocate pseudo-TTY
+  map<string, string> env = 3;        // Environment variables
+  string cwd = 4;                     // Working directory (optional)
+  int32 timeout_seconds = 5;          // Execution timeout in seconds (0 = no timeout)
+}
+
+// ExecResponse represents messages from server to client
+message ExecResponse {
+  oneof response {
+    bytes stdout = 1;     // Stdout data
+    bytes stderr = 2;     // Stderr data
+    int32 exit_code = 3;  // Command exit code (final message)
+  }
+}
+
+// CopyToGuestRequest represents messages for copying files to guest
+message CopyToGuestRequest {
+  oneof request {
+    CopyToGuestStart start = 1;    // Initial copy request with metadata
+    bytes data = 2;                 // File content chunk
+    CopyToGuestEnd end = 3;         // End of file marker
+  }
+}
+
+// CopyToGuestStart initiates a copy-to-guest operation
+message CopyToGuestStart {
+  string path = 1;           // Destination path in guest
+  uint32 mode = 2;           // File mode (permissions)
+  bool is_dir = 3;           // True if this is a directory
+  int64 size = 4;            // Expected total size (0 for directories)
+  int64 mtime = 5;           // Modification time (Unix timestamp)
+  uint32 uid = 6;            // User ID (archive mode only, 0 = use default)
+  uint32 gid = 7;            // Group ID (archive mode only, 0 = use default)
+}
+
+// CopyToGuestEnd signals the end of a file transfer
+message CopyToGuestEnd {
+  // Empty message signals transfer complete
+}
+
+// CopyToGuestResponse is the response after a copy-to-guest operation
+message CopyToGuestResponse {
+  bool success = 1;          // Whether the copy succeeded
+  string error = 2;          // Error message if failed
+  int64 bytes_written = 3;   // Total bytes written
+}
+
+// CopyFromGuestRequest initiates a copy-from-guest operation
+message CopyFromGuestRequest {
+  string path = 1;           // Source path in guest
+  bool follow_links = 2;     // Follow symbolic links (like -L flag)
+}
+
+// CopyFromGuestResponse streams file data from guest
+message CopyFromGuestResponse {
+  oneof response {
+    CopyFromGuestHeader header = 1;  // File/directory metadata
+    bytes data = 2;                   // File content chunk
+    CopyFromGuestEnd end = 3;         // End of file/transfer marker
+    CopyFromGuestError error = 4;     // Error during copy
+  }
+}
+
+// CopyFromGuestHeader provides metadata about a file being copied
+message CopyFromGuestHeader {
+  string path = 1;           // Relative path from copy root
+  uint32 mode = 2;           // File mode (permissions)
+  bool is_dir = 3;           // True if this is a directory
+  bool is_symlink = 4;       // True if this is a symbolic link
+  string link_target = 5;    // Symlink target (if is_symlink)
+  int64 size = 6;            // File size (0 for directories)
+  int64 mtime = 7;           // Modification time (Unix timestamp)
+  uint32 uid = 8;            // User ID
+  uint32 gid = 9;            // Group ID
+}
+
+// CopyFromGuestEnd signals the end of a file or transfer
+message CopyFromGuestEnd {
+  bool final = 1;            // True if this is the final file
+}
+
+// CopyFromGuestError reports an error during copy
+message CopyFromGuestError {
+  string message = 1;        // Error message
+  string path = 2;           // Path that caused error (if applicable)
+}
+
+// StatPathRequest requests information about a path
+message StatPathRequest {
+  string path = 1;           // Path to stat
+  bool follow_links = 2;     // Follow symbolic links
+}
+
+// StatPathResponse contains information about a path
+message StatPathResponse {
+  bool exists = 1;           // Whether the path exists
+  bool is_dir = 2;           // True if this is a directory
+  bool is_file = 3;          // True if this is a regular file
+  bool is_symlink = 4;       // True if this is a symbolic link (only if follow_links=false)
+  string link_target = 5;    // Symlink target (if is_symlink)
+  uint32 mode = 6;           // File mode (permissions)
+  int64 size = 7;            // File size
+  string error = 8;          // Error message if stat failed (e.g., permission denied)
+}

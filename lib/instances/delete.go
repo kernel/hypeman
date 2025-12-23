@@ -7,7 +7,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/onkernel/hypeman/lib/exec"
+	"github.com/onkernel/hypeman/lib/guest"
 	"github.com/onkernel/hypeman/lib/hypervisor"
 	"github.com/onkernel/hypeman/lib/logger"
 	"github.com/onkernel/hypeman/lib/network"
@@ -43,7 +43,7 @@ func (m *manager) deleteInstance(
 
 	// 3. Close exec gRPC connection before killing hypervisor to prevent panic
 	if dialer, err := hypervisor.NewVsockDialer(inst.HypervisorType, inst.VsockSocket, inst.VsockCID); err == nil {
-		exec.CloseConn(dialer.Key())
+		guest.CloseConn(dialer.Key())
 	}
 
 	// 4. If hypervisor might be running, force kill it

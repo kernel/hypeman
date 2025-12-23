@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/onkernel/hypeman/lib/exec"
+	"github.com/onkernel/hypeman/lib/guest"
 	"github.com/onkernel/hypeman/lib/hypervisor"
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/paths"
@@ -227,7 +227,7 @@ func TestExecConcurrent(t *testing.T) {
 
 	start := time.Now()
 	var stdout, stderr strings.Builder
-	_, err = exec.ExecIntoInstance(ctx, dialer, exec.ExecOptions{
+	_, err = guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{
 		Command: []string{"nonexistent_command_asdfasdf"},
 		Stdout:  &stdout,
 		Stderr:  &stderr,
@@ -244,7 +244,7 @@ func TestExecConcurrent(t *testing.T) {
 	start = time.Now()
 	stdout.Reset()
 	stderr.Reset()
-	_, err = exec.ExecIntoInstance(ctx, dialer, exec.ExecOptions{
+	_, err = guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{
 		Command: []string{"nonexistent_command_xyz123"},
 		Stdout:  &stdout,
 		Stderr:  &stderr,

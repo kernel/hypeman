@@ -11,50 +11,12 @@ import (
 	"time"
 
 	"github.com/creack/pty"
-	"github.com/mdlayher/vsock"
-	pb "github.com/onkernel/hypeman/lib/exec"
-	"google.golang.org/grpc"
+	pb "github.com/onkernel/hypeman/lib/guest"
 )
 
-// execServer implements the gRPC ExecService
-type execServer struct {
-	pb.UnimplementedExecServiceServer
-}
-
-func main() {
-	// Listen on vsock port 2222 with retries
-	var l *vsock.Listener
-	var err error
-	
-	for i := 0; i < 10; i++ {
-		l, err = vsock.Listen(2222, nil)
-		if err == nil {
-			break
-		}
-		log.Printf("[exec-agent] vsock listen attempt %d/10 failed: %v (retrying in 1s)", i+1, err)
-		time.Sleep(1 * time.Second)
-	}
-	
-	if err != nil {
-		log.Fatalf("[exec-agent] failed to listen on vsock port 2222 after retries: %v", err)
-	}
-	defer l.Close()
-
-	log.Println("[exec-agent] listening on vsock port 2222")
-
-	// Create gRPC server
-	grpcServer := grpc.NewServer()
-	pb.RegisterExecServiceServer(grpcServer, &execServer{})
-
-	// Serve gRPC over vsock
-	if err := grpcServer.Serve(l); err != nil {
-		log.Fatalf("[exec-agent] gRPC server failed: %v", err)
-	}
-}
-
 // Exec handles command execution with bidirectional streaming
-func (s *execServer) Exec(stream pb.ExecService_ExecServer) error {
-	log.Printf("[exec-agent] new exec stream")
+func (s *guestServer) Exec(stream pb.GuestService_ExecServer) error {
+	log.Printf("[guest-agent] new exec stream")
 
 	// Receive start request
 	req, err := stream.Recv()
@@ -72,7 +34,7 @@ func (s *execServer) Exec(stream pb.ExecService_ExecServer) error {
 		command = []string{"/bin/sh"}
 	}
 
-	log.Printf("[exec-agent] exec: command=%v tty=%v cwd=%s timeout=%d",
+	log.Printf("[guest-agent] exec: command=%v tty=%v cwd=%s timeout=%d",
 		command, start.Tty, start.Cwd, start.TimeoutSeconds)
 
 	// Create context with timeout if specified
@@ -90,17 +52,17 @@ func (s *execServer) Exec(stream pb.ExecService_ExecServer) error {
 }
 
 // executeNoTTY executes command without TTY
-func (s *execServer) executeNoTTY(ctx context.Context, stream pb.ExecService_ExecServer, start *pb.ExecStart) error {
-	// Run command directly - exec-agent is already running in container namespace
+func (s *guestServer) executeNoTTY(ctx context.Context, stream pb.GuestService_ExecServer, start *pb.ExecStart) error {
+	// Run command directly - guest-agent is already running in container namespace
 	if len(start.Command) == 0 {
 		return fmt.Errorf("empty command")
 	}
-	
+
 	cmd := exec.CommandContext(ctx, start.Command[0], start.Command[1:]...)
-	
+
 	// Set up environment
 	cmd.Env = s.buildEnv(start.Env)
-	
+
 	// Set up working directory
 	if start.Cwd != "" {
 		cmd.Dir = start.Cwd
@@ -152,7 +114,7 @@ func (s *execServer) executeNoTTY(ctx context.Context, stream pb.ExecService_Exe
 
 	// Wait for all reads to complete FIRST (before Wait closes pipes)
 	wg.Wait()
-	
+
 	// Now safe to call Wait - pipes are fully drained
 	waitErr := cmd.Wait()
 
@@ -189,7 +151,7 @@ func (s *execServer) executeNoTTY(ctx context.Context, stream pb.ExecService_Exe
 		exitCode = 124
 	}
 
-	log.Printf("[exec-agent] command finished with exit code: %d", exitCode)
+	log.Printf("[guest-agent] command finished with exit code: %d", exitCode)
 
 	// Send exit code
 	return stream.Send(&pb.ExecResponse{
@@ -198,23 +160,23 @@ func (s *execServer) executeNoTTY(ctx context.Context, stream pb.ExecService_Exe
 }
 
 // executeTTY executes command with TTY
-func (s *execServer) executeTTY(ctx context.Context, stream pb.ExecService_ExecServer, start *pb.ExecStart) error {
-	// Run command directly with PTY - exec-agent is already running in container namespace
+func (s *guestServer) executeTTY(ctx context.Context, stream pb.GuestService_ExecServer, start *pb.ExecStart) error {
+	// Run command directly with PTY - guest-agent is already running in container namespace
 	// This ensures PTY and shell are in the same namespace, fixing Ctrl+C signal handling
 	if len(start.Command) == 0 {
 		return fmt.Errorf("empty command")
 	}
-	
+
 	cmd := exec.CommandContext(ctx, start.Command[0], start.Command[1:]...)
-	
+
 	// Set up environment
 	cmd.Env = s.buildEnv(start.Env)
-	
+
 	// Set up working directory
 	if start.Cwd != "" {
 		cmd.Dir = start.Cwd
 	}
-	
+
 	// Start with PTY
 	ptmx, err := pty.Start(cmd)
 	if err != nil {
@@ -246,7 +208,7 @@ func (s *execServer) executeTTY(ctx context.Context, stream pb.ExecService_ExecS
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		buf := make([]byte, 32 * 1024)
+		buf := make([]byte, 32*1024)
 		for {
 			n, err := ptmx.Read(buf)
 			if n > 0 {
@@ -264,7 +226,7 @@ func (s *execServer) executeTTY(ctx context.Context, stream pb.ExecService_ExecS
 
 	// Wait for command or context cancellation
 	waitErr := cmd.Wait()
-	
+
 	// Wait for all output to be sent
 	wg.Wait()
 
@@ -276,7 +238,7 @@ func (s *execServer) executeTTY(ctx context.Context, stream pb.ExecService_ExecS
 		exitCode = 124
 	}
 
-	log.Printf("[exec-agent] TTY command finished with exit code: %d", exitCode)
+	log.Printf("[guest-agent] TTY command finished with exit code: %d", exitCode)
 
 	// Send exit code
 	return stream.Send(&pb.ExecResponse{
@@ -285,14 +247,15 @@ func (s *execServer) executeTTY(ctx context.Context, stream pb.ExecService_ExecS
 }
 
 // buildEnv constructs environment variables by merging provided env with defaults
-func (s *execServer) buildEnv(envMap map[string]string) []string {
+func (s *guestServer) buildEnv(envMap map[string]string) []string {
 	// Start with current environment as base
 	env := os.Environ()
-	
+
 	// Merge in provided environment variables
 	for k, v := range envMap {
 		env = append(env, fmt.Sprintf("%s=%s", k, v))
 	}
-	
+
 	return env
 }
+

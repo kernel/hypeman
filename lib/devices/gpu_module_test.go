@@ -18,7 +18,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/onkernel/hypeman/cmd/api/config"
 	"github.com/onkernel/hypeman/lib/devices"
-	"github.com/onkernel/hypeman/lib/exec"
+	"github.com/onkernel/hypeman/lib/guest"
 	"github.com/onkernel/hypeman/lib/hypervisor"
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/instances"
@@ -208,7 +208,7 @@ func TestNVIDIAModuleLoading(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		stdout = outputBuffer{}
 		stderr = outputBuffer{}
-		_, err = exec.ExecIntoInstance(execCtx, dialer, exec.ExecOptions{
+		_, err = guest.ExecIntoInstance(execCtx, dialer, guest.ExecOptions{
 			Command: []string{"/bin/sh", "-c", dmesgCmd},
 			Stdin:   nil,
 			Stdout:  &stdout,
@@ -238,7 +238,7 @@ func TestNVIDIAModuleLoading(t *testing.T) {
 	// Check lsmod for nvidia modules
 	stdout = outputBuffer{}
 	stderr = outputBuffer{}
-	_, err = exec.ExecIntoInstance(execCtx, dialer, exec.ExecOptions{
+	_, err = guest.ExecIntoInstance(execCtx, dialer, guest.ExecOptions{
 		Command: []string{"/bin/sh", "-c", "cat /proc/modules | grep nvidia || echo 'No nvidia modules loaded'"},
 		Stdin:   nil,
 		Stdout:  &stdout,
@@ -258,7 +258,7 @@ func TestNVIDIAModuleLoading(t *testing.T) {
 	// Check for /dev/nvidia* devices
 	stdout = outputBuffer{}
 	stderr = outputBuffer{}
-	_, err = exec.ExecIntoInstance(execCtx, dialer, exec.ExecOptions{
+	_, err = guest.ExecIntoInstance(execCtx, dialer, guest.ExecOptions{
 		Command: []string{"/bin/sh", "-c", "ls -la /dev/nvidia* 2>&1 || echo 'No nvidia devices found'"},
 		Stdin:   nil,
 		Stdout:  &stdout,
@@ -443,7 +443,7 @@ func TestNVMLDetection(t *testing.T) {
 	defer cancel()
 
 	var stdout, stderr outputBuffer
-	_, err = exec.ExecIntoInstance(execCtx, dialer2, exec.ExecOptions{
+	_, err = guest.ExecIntoInstance(execCtx, dialer2, guest.ExecOptions{
 		Command: []string{"/bin/sh", "-c", "python3 /usr/local/bin/test-nvml.py 2>&1"},
 		Stdin:   nil,
 		Stdout:  &stdout,
@@ -476,7 +476,7 @@ func TestNVMLDetection(t *testing.T) {
 	t.Log("Step 6: Running CUDA driver test...")
 	stdout = outputBuffer{}
 	stderr = outputBuffer{}
-	_, err = exec.ExecIntoInstance(execCtx, dialer2, exec.ExecOptions{
+	_, err = guest.ExecIntoInstance(execCtx, dialer2, guest.ExecOptions{
 		Command: []string{"/bin/sh", "-c", "python3 /usr/local/bin/test-cuda.py 2>&1"},
 		Stdin:   nil,
 		Stdout:  &stdout,

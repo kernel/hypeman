@@ -28,7 +28,7 @@ mount -t proc none /proc
 mount -t sysfs none /sys  
 mount -t devtmpfs none /dev
 
-# Setup PTY support (needed for exec-agent and interactive shells)
+# Setup PTY support (needed for guest-agent and interactive shells)
 mkdir -p /dev/pts /dev/shm
 mount -t devpts devpts /dev/pts
 chmod 1777 /dev/shm
@@ -36,7 +36,12 @@ chmod 1777 /dev/shm
 echo "overlay-init: mounted proc/sys/dev" > /dev/kmsg
 
 # Redirect all output to serial console
-exec >/dev/ttyS0 2>&1
+# ttyS0 for x86_64, ttyAMA0 for ARM64 (PL011 UART)
+if [ -e /dev/ttyAMA0 ]; then
+  exec >/dev/ttyAMA0 2>&1
+else
+  exec >/dev/ttyS0 2>&1
+fi
 
 echo "overlay-init: redirected to serial console"
 
@@ -132,7 +137,12 @@ if [ "${HAS_GPU:-0}" = "1" ]; then
     echo "overlay-init: injecting NVIDIA driver libraries into container"
     
     DRIVER_VERSION=$(cat /usr/lib/nvidia/version 2>/dev/null || echo "unknown")
-    LIB_DST="/overlay/newroot/usr/lib/x86_64-linux-gnu"
+    # Determine library path based on architecture
+    if [ "$(uname -m)" = "aarch64" ]; then
+      LIB_DST="/overlay/newroot/usr/lib/aarch64-linux-gnu"
+    else
+      LIB_DST="/overlay/newroot/usr/lib/x86_64-linux-gnu"
+    fi
     BIN_DST="/overlay/newroot/usr/bin"
     
     mkdir -p "$LIB_DST" "$BIN_DST"
@@ -215,7 +225,7 @@ fi
 
 # Prepare new root mount points
 # We use bind mounts instead of move so that the original /dev remains populated
-# for processes running in the initrd namespace (like exec-agent).
+# for processes running in the initrd namespace (like guest-agent).
 mkdir -p /overlay/newroot/proc
 mkdir -p /overlay/newroot/sys
 mkdir -p /overlay/newroot/dev
@@ -250,15 +260,15 @@ fi
 export PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
 export HOME='/root'
 
-# Copy exec-agent into container rootfs and start it in container namespace
+# Copy guest-agent into container rootfs and start it in container namespace
 # This way the PTY and shell run in the same namespace, fixing signal handling
-echo "overlay-init: copying exec-agent to container"
+echo "overlay-init: copying guest-agent to container"
 mkdir -p /overlay/newroot/usr/local/bin
-cp /usr/local/bin/exec-agent /overlay/newroot/usr/local/bin/exec-agent
+cp /usr/local/bin/guest-agent /overlay/newroot/usr/local/bin/guest-agent
 
-# Start vsock exec agent inside the container namespace
-echo "overlay-init: starting exec agent in container namespace"
-chroot /overlay/newroot /usr/local/bin/exec-agent &
+# Start vsock guest agent inside the container namespace
+echo "overlay-init: starting guest agent in container namespace"
+chroot /overlay/newroot /usr/local/bin/guest-agent &
 
 echo "overlay-init: launching entrypoint"
 echo "overlay-init: workdir=${WORKDIR:-/} entrypoint=${ENTRYPOINT} cmd=${CMD}"
@@ -278,7 +288,7 @@ APP_EXIT=$?
 
 echo "overlay-init: app exited with code $APP_EXIT"
 
-# Wait for all background jobs (exec-agent runs forever, keeping init alive)
+# Wait for all background jobs (guest-agent runs forever, keeping init alive)
 # This prevents kernel panic from killing init (PID 1)
 wait`
 }

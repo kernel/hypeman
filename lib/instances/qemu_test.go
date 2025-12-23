@@ -16,7 +16,7 @@ import (
 
 	"github.com/onkernel/hypeman/cmd/api/config"
 	"github.com/onkernel/hypeman/lib/devices"
-	"github.com/onkernel/hypeman/lib/exec"
+	"github.com/onkernel/hypeman/lib/guest"
 	"github.com/onkernel/hypeman/lib/hypervisor"
 	"github.com/onkernel/hypeman/lib/hypervisor/qemu"
 	"github.com/onkernel/hypeman/lib/images"
@@ -451,7 +451,7 @@ func TestQEMUBasicEndToEnd(t *testing.T) {
 			}
 
 			var stdout, stderr bytes.Buffer
-			exit, err := exec.ExecIntoInstance(ctx, dialer, exec.ExecOptions{
+			exit, err := guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{
 				Command: command,
 				Stdout:  &stdout,
 				Stderr:  &stderr,

@@ -20,7 +20,7 @@ import (
 
 const alpineBaseImage = "alpine:3.22"
 
-// buildInitrd builds initrd from Alpine base + embedded exec-agent + generated init script
+// buildInitrd builds initrd from Alpine base + embedded guest-agent + generated init script
 func (m *manager) buildInitrd(ctx context.Context, arch string) (string, error) {
 	// Create temp directory for building
 	tempDir, err := os.MkdirTemp("", "hypeman-initrd-*")
@@ -49,15 +49,15 @@ func (m *manager) buildInitrd(ctx context.Context, arch string) (string, error) 
 		return "", fmt.Errorf("pull alpine base: %w", err)
 	}
 
-	// Write embedded exec-agent binary
+	// Write embedded guest-agent binary
 	binDir := filepath.Join(rootfsDir, "usr/local/bin")
 	if err := os.MkdirAll(binDir, 0755); err != nil {
 		return "", fmt.Errorf("create bin dir: %w", err)
 	}
 
-	agentPath := filepath.Join(binDir, "exec-agent")
-	if err := os.WriteFile(agentPath, ExecAgentBinary, 0755); err != nil {
-		return "", fmt.Errorf("write exec-agent: %w", err)
+	agentPath := filepath.Join(binDir, "guest-agent")
+	if err := os.WriteFile(agentPath, GuestAgentBinary, 0755); err != nil {
+		return "", fmt.Errorf("write guest-agent: %w", err)
 	}
 
 	// Add NVIDIA kernel modules (for GPU passthrough support)
@@ -150,7 +150,7 @@ func (m *manager) isInitrdStale(initrdPath string) bool {
 // computeInitrdHash computes a hash of the embedded binary, init script, and NVIDIA assets
 func computeInitrdHash() string {
 	h := sha256.New()
-	h.Write(ExecAgentBinary)
+	h.Write(GuestAgentBinary)
 	h.Write([]byte(GenerateInitScript()))
 	// Include NVIDIA driver version in hash so initrd is rebuilt when driver changes
 	if ver, ok := NvidiaDriverVersion[DefaultKernelVersion]; ok {

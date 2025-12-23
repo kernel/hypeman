@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/c2h5oh/datasize"
+	"github.com/onkernel/hypeman/lib/guest"
 	"github.com/onkernel/hypeman/lib/hypervisor"
 	"github.com/onkernel/hypeman/lib/instances"
 	"github.com/onkernel/hypeman/lib/logger"
@@ -436,6 +437,82 @@ func (s *ApiService) GetInstanceLogs(ctx context.Context, request oapi.GetInstan
 	}
 
 	return logsStreamResponse{logChan: logChan}, nil
+}
+
+// StatInstancePath returns information about a path in the guest filesystem
+// The id parameter can be an instance ID, name, or ID prefix
+// Note: Resolution is handled by ResolveResource middleware
+func (s *ApiService) StatInstancePath(ctx context.Context, request oapi.StatInstancePathRequestObject) (oapi.StatInstancePathResponseObject, error) {
+	log := logger.FromContext(ctx)
+
+	inst := mw.GetResolvedInstance[instances.Instance](ctx)
+	if inst == nil {
+		return oapi.StatInstancePath500JSONResponse{
+			Code:    "internal_error",
+			Message: "resource not resolved",
+		}, nil
+	}
+
+	if inst.State != instances.StateRunning {
+		return oapi.StatInstancePath409JSONResponse{
+			Code:    "invalid_state",
+			Message: fmt.Sprintf("instance must be running (current state: %s)", inst.State),
+		}, nil
+	}
+
+	// Create vsock dialer for this hypervisor type
+	dialer, err := hypervisor.NewVsockDialer(inst.HypervisorType, inst.VsockSocket, inst.VsockCID)
+	if err != nil {
+		log.ErrorContext(ctx, "failed to create vsock dialer", "error", err)
+		return oapi.StatInstancePath500JSONResponse{
+			Code:    "internal_error",
+			Message: "failed to create vsock dialer",
+		}, nil
+	}
+
+	grpcConn, err := guest.GetOrCreateConn(ctx, dialer)
+	if err != nil {
+		log.ErrorContext(ctx, "failed to get grpc connection", "error", err)
+		return oapi.StatInstancePath500JSONResponse{
+			Code:    "internal_error",
+			Message: "failed to connect to guest agent",
+		}, nil
+	}
+
+	client := guest.NewGuestServiceClient(grpcConn)
+	followLinks := false
+	if request.Params.FollowLinks != nil {
+		followLinks = *request.Params.FollowLinks
+	}
+
+	resp, err := client.StatPath(ctx, &guest.StatPathRequest{
+		Path:        request.Params.Path,
+		FollowLinks: followLinks,
+	})
+	if err != nil {
+		log.ErrorContext(ctx, "stat path failed", "error", err, "path", request.Params.Path)
+		return oapi.StatInstancePath500JSONResponse{
+			Code:    "internal_error",
+			Message: "failed to stat path in guest",
+		}, nil
+	}
+
+	// Convert types from protobuf to OAPI
+	mode := int(resp.Mode)
+	response := oapi.StatInstancePath200JSONResponse{
+		Exists:     resp.Exists,
+		IsDir:      &resp.IsDir,
+		IsFile:     &resp.IsFile,
+		IsSymlink:  &resp.IsSymlink,
+		LinkTarget: &resp.LinkTarget,
+		Mode:       &mode,
+		Size:       &resp.Size,
+	}
+	// Include error message if stat failed (e.g., permission denied)
+	if resp.Error != "" {
+		response.Error = &resp.Error
+	}
+	return response, nil
 }
 
 // AttachVolume attaches a volume to an instance (not yet implemented)

@@ -11,7 +11,7 @@ import (
 
 	"github.com/onkernel/hypeman/cmd/api/config"
 	"github.com/onkernel/hypeman/lib/devices"
-	"github.com/onkernel/hypeman/lib/exec"
+	"github.com/onkernel/hypeman/lib/guest"
 	"github.com/onkernel/hypeman/lib/hypervisor"
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/instances"
@@ -236,7 +236,7 @@ func TestGPUPassthrough(t *testing.T) {
 		stdout = outputBuffer{}
 		stderr = outputBuffer{}
 
-		_, execErr = exec.ExecIntoInstance(execCtx, dialer, exec.ExecOptions{
+		_, execErr = guest.ExecIntoInstance(execCtx, dialer, guest.ExecOptions{
 			Command: []string{"/bin/sh", "-c", checkGPUCmd},
 			Stdin:   nil,
 			Stdout:  &stdout,

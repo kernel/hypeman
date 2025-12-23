@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/onkernel/hypeman/lib/exec"
+	"github.com/onkernel/hypeman/lib/guest"
 	"github.com/onkernel/hypeman/lib/hypervisor"
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/stretchr/testify/assert"
@@ -232,7 +232,7 @@ func execCommand(ctx context.Context, inst *Instance, command ...string) (string
 
 	var stdout, stderr bytes.Buffer
 
-	exit, err := exec.ExecIntoInstance(ctx, dialer, exec.ExecOptions{
+	exit, err := guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{
 		Command: command,
 		Stdin:   nil,
 		Stdout:  &stdout,

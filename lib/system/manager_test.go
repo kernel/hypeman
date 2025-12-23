@@ -67,7 +67,7 @@ func TestInitScriptGeneration(t *testing.T) {
 	assert.Contains(t, script, "/dev/vda") // rootfs disk
 	assert.Contains(t, script, "/dev/vdb") // overlay disk
 	assert.Contains(t, script, "/dev/vdc") // config disk
-	assert.Contains(t, script, "exec-agent")  // vsock exec agent
+	assert.Contains(t, script, "guest-agent")  // vsock guest agent
 	assert.Contains(t, script, "${ENTRYPOINT}")
 	assert.Contains(t, script, "wait $APP_PID") // Supervisor pattern
 }

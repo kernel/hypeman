@@ -22,7 +22,7 @@ import (
 	"github.com/onkernel/hypeman"
 	"github.com/onkernel/hypeman/cmd/api/api"
 	"github.com/onkernel/hypeman/cmd/api/config"
-	"github.com/onkernel/hypeman/lib/exec"
+	"github.com/onkernel/hypeman/lib/guest"
 	"github.com/onkernel/hypeman/lib/instances"
 	mw "github.com/onkernel/hypeman/lib/middleware"
 	"github.com/onkernel/hypeman/lib/oapi"
@@ -72,11 +72,11 @@ func run() error {
 		}()
 	}
 
-	// Initialize exec and vmm metrics if OTel is enabled
+	// Initialize guest and vmm metrics if OTel is enabled
 	if otelProvider != nil && otelProvider.Meter != nil {
-		execMetrics, err := exec.NewMetrics(otelProvider.Meter)
+		guestMetrics, err := guest.NewMetrics(otelProvider.Meter)
 		if err == nil {
-			exec.SetMetrics(execMetrics)
+			guest.SetMetrics(guestMetrics)
 		}
 		vmmMetrics, err := vmm.NewMetrics(otelProvider.Meter)
 		if err == nil {
@@ -233,6 +233,17 @@ func run() error {
 		mw.JwtAuth(app.Config.JwtSecret),
 		mw.ResolveResource(app.ApiService.NewResolvers(), api.ResolverErrorResponder),
 	).Get("/instances/{id}/exec", app.ApiService.ExecHandler)
+
+	// Custom cp endpoint (outside OpenAPI spec, uses WebSocket)
+	r.With(
+		middleware.RequestID,
+		middleware.RealIP,
+		middleware.Recoverer,
+		mw.InjectLogger(logger),
+		mw.AccessLogger(accessLogger),
+		mw.JwtAuth(app.Config.JwtSecret),
+		mw.ResolveResource(app.ApiService.NewResolvers(), api.ResolverErrorResponder),
+	).Get("/instances/{id}/cp", app.ApiService.CpHandler)
 
 	// OCI Distribution registry endpoints for image push (outside OpenAPI spec)
 	r.Route("/v2", func(r chi.Router) {

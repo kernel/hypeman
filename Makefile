@@ -127,7 +127,7 @@ generate-grpc:
 	@echo "Generating gRPC code from proto..."
 	protoc --go_out=. --go_opt=paths=source_relative \
 		--go-grpc_out=. --go-grpc_opt=paths=source_relative \
-		lib/exec/exec.proto
+		lib/guest/guest.proto
 
 # Generate all code
 generate-all: oapi-generate generate-vmm-client generate-wire generate-grpc
@@ -135,7 +135,15 @@ generate-all: oapi-generate generate-vmm-client generate-wire generate-grpc
 # Check if CH binaries exist, download if missing
 .PHONY: ensure-ch-binaries
 ensure-ch-binaries:
-	@if [ ! -f lib/vmm/binaries/cloud-hypervisor/v48.0/x86_64/cloud-hypervisor ]; then \
+	@ARCH=$$(uname -m); \
+	if [ "$$ARCH" = "x86_64" ]; then \
+		CH_ARCH=x86_64; \
+	elif [ "$$ARCH" = "aarch64" ] || [ "$$ARCH" = "arm64" ]; then \
+		CH_ARCH=aarch64; \
+	else \
+		echo "Unsupported architecture: $$ARCH"; exit 1; \
+	fi; \
+	if [ ! -f lib/vmm/binaries/cloud-hypervisor/v48.0/$$CH_ARCH/cloud-hypervisor ]; then \
 		echo "Cloud Hypervisor binaries not found, downloading..."; \
 		$(MAKE) download-ch-binaries; \
 	fi
@@ -156,27 +164,27 @@ ensure-caddy-binaries:
 		$(MAKE) build-caddy; \
 	fi
 
-# Build exec-agent (guest binary) into its own directory for embedding
-lib/system/exec_agent/exec-agent: lib/system/exec_agent/main.go
-	@echo "Building exec-agent..."
-	cd lib/system/exec_agent && CGO_ENABLED=0 go build -ldflags="-s -w" -o exec-agent .
+# Build guest-agent (guest binary) into its own directory for embedding
+lib/system/guest_agent/guest-agent: lib/system/guest_agent/main.go
+	@echo "Building guest-agent..."
+	cd lib/system/guest_agent && CGO_ENABLED=0 go build -ldflags="-s -w" -o guest-agent .
 
 # Build the binary
-build: ensure-ch-binaries ensure-caddy-binaries lib/system/exec_agent/exec-agent | $(BIN_DIR)
+build: ensure-ch-binaries ensure-caddy-binaries lib/system/guest_agent/guest-agent | $(BIN_DIR)
 	go build -tags containers_image_openpgp -o $(BIN_DIR)/hypeman ./cmd/api
 
 # Build all binaries
 build-all: build
 
 # Run in development mode with hot reload
-dev: ensure-ch-binaries ensure-caddy-binaries lib/system/exec_agent/exec-agent $(AIR)
+dev: ensure-ch-binaries ensure-caddy-binaries lib/system/guest_agent/guest-agent $(AIR)
 	@rm -f ./tmp/main
 	$(AIR) -c .air.toml
 
 # Run tests (as root for network capabilities, enables caching and parallelism)
 # Usage: make test                              - runs all tests
 #        make test TEST=TestCreateInstanceWithNetwork  - runs specific test
-test: ensure-ch-binaries ensure-caddy-binaries lib/system/exec_agent/exec-agent
+test: ensure-ch-binaries ensure-caddy-binaries lib/system/guest_agent/guest-agent
 	@if [ -n "$(TEST)" ]; then \
 		echo "Running specific test: $(TEST)"; \
 		sudo env "PATH=$$PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" go test -tags containers_image_openpgp -run=$(TEST) -v -timeout=180s ./...; \
@@ -194,9 +202,9 @@ clean:
 	rm -rf $(BIN_DIR)
 	rm -rf lib/vmm/binaries/cloud-hypervisor/
 	rm -rf lib/ingress/binaries/
-	rm -f lib/system/exec_agent/exec-agent
+	rm -f lib/system/guest_agent/guest-agent
 
 # Prepare for release build (called by GoReleaser)
 # Downloads all embedded binaries and builds embedded components
-release-prep: download-ch-binaries build-caddy-binaries lib/system/exec_agent/exec-agent
+release-prep: download-ch-binaries build-caddy-binaries lib/system/guest_agent/guest-agent
 	go mod tidy

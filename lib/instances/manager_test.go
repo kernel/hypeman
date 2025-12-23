@@ -18,7 +18,7 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/onkernel/hypeman/cmd/api/config"
 	"github.com/onkernel/hypeman/lib/devices"
-	"github.com/onkernel/hypeman/lib/exec"
+	"github.com/onkernel/hypeman/lib/guest"
 	"github.com/onkernel/hypeman/lib/hypervisor"
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/ingress"
@@ -615,7 +615,7 @@ func TestBasicEndToEnd(t *testing.T) {
 			}
 
 			var stdout, stderr bytes.Buffer
-			exit, err := exec.ExecIntoInstance(ctx, dialer, exec.ExecOptions{
+			exit, err := guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{
 				Command: command,
 				Stdout:  &stdout,
 				Stderr:  &stderr,
