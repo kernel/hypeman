@@ -151,11 +151,52 @@ function buildWsURL(baseURL: string, instanceId: string): string {
  * ```
  */
 export async function cpToInstance(cfg: CpConfig, opts: CpToInstanceOptions): Promise<void> {
-  // Get file stats
-  const stats = fs.statSync(opts.srcPath);
-  const isDir = stats.isDirectory();
+  // Use internal implementation with cycle detection
+  const visited = new Set<string>();
+  await cpToInstanceInternal(cfg, opts, visited);
+}
 
-  if (isDir) {
+/**
+ * Internal recursive implementation with cycle detection.
+ */
+async function cpToInstanceInternal(
+  cfg: CpConfig,
+  opts: CpToInstanceOptions,
+  visited: Set<string>,
+): Promise<void> {
+  // Use lstatSync to not follow symlinks - this lets us detect symlinks
+  const lstats = fs.lstatSync(opts.srcPath);
+
+  if (lstats.isSymbolicLink()) {
+    // For symlinks, check what they point to
+    try {
+      const targetStats = fs.statSync(opts.srcPath);
+      if (targetStats.isDirectory()) {
+        // Skip directory symlinks to prevent potential cycles
+        // The directory could point to an ancestor, causing infinite recursion
+        return;
+      }
+      // For file symlinks, copy the target file contents
+      await cpSingleFileToInstance(cfg, {
+        ...opts,
+        isDir: false,
+      });
+    } catch {
+      // Broken symlink - skip it
+      return;
+    }
+    return;
+  }
+
+  if (lstats.isDirectory()) {
+    // Check for cycles using device + inode
+    const dirId = `${lstats.dev}:${lstats.ino}`;
+    if (visited.has(dirId)) {
+      // Already visited this directory - skip to prevent infinite recursion
+      return;
+    }
+    visited.add(dirId);
+
     // For directories, first create the directory, then recursively copy contents
     await cpSingleFileToInstance(cfg, {
       ...opts,
@@ -169,12 +210,16 @@ export async function cpToInstance(cfg: CpConfig, opts: CpToInstanceOptions): Pr
       // Use path.posix.join for guest paths to ensure forward slashes
       const dstEntryPath = path.posix.join(opts.dstPath, entry.name);
 
-      await cpToInstance(cfg, {
-        instanceId: opts.instanceId,
-        srcPath: srcEntryPath,
-        dstPath: dstEntryPath,
-        ...(opts.mode !== undefined && { mode: opts.mode }),
-      });
+      await cpToInstanceInternal(
+        cfg,
+        {
+          instanceId: opts.instanceId,
+          srcPath: srcEntryPath,
+          dstPath: dstEntryPath,
+          ...(opts.mode !== undefined && { mode: opts.mode }),
+        },
+        visited,
+      );
     }
   } else {
     // For files, copy directly
@@ -251,11 +296,18 @@ async function cpSingleFileToInstance(
         });
 
         fileStream.on('data', (chunk: any) => {
-          ws.send(chunk as Buffer);
+          // Check WebSocket is still open before sending
+          // Queued events can fire after close is initiated
+          if (ws.readyState === ws.OPEN) {
+            ws.send(chunk as Buffer);
+          }
         });
 
         fileStream.on('end', () => {
-          ws.send(JSON.stringify({ type: 'end' }));
+          // Check WebSocket is still open before sending
+          if (ws.readyState === ws.OPEN) {
+            ws.send(JSON.stringify({ type: 'end' }));
+          }
         });
 
         fileStream.on('error', (err) => {
