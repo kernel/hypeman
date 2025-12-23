@@ -71,24 +71,14 @@ func (m *manager) standbyInstance(
 		return nil, fmt.Errorf("hypervisor %s does not support standby (snapshots)", stored.HypervisorType)
 	}
 
-	// 6. Reduce memory to base size (virtio-mem hotplug) if supported
-	// Wait for memory to stabilize so the snapshot is as small as possible
-	if hv.Capabilities().SupportsHotplugMemory {
-		log.DebugContext(ctx, "reducing VM memory before snapshot", "instance_id", id, "base_size", inst.Size)
-		if err := hv.ResizeMemoryAndWait(ctx, inst.Size, 5*time.Second); err != nil {
-			// Log warning but continue - snapshot will just be larger
-			log.WarnContext(ctx, "failed to reduce memory, snapshot will be larger", "instance_id", id, "error", err)
-		}
-	}
-
-	// 7. Transition: Running → Paused
+	// 6. Transition: Running → Paused
 	log.DebugContext(ctx, "pausing VM", "instance_id", id)
 	if err := hv.Pause(ctx); err != nil {
 		log.ErrorContext(ctx, "failed to pause VM", "instance_id", id, "error", err)
 		return nil, fmt.Errorf("pause vm failed: %w", err)
 	}
 
-	// 8. Create snapshot
+	// 7. Create snapshot
 	snapshotDir := m.paths.InstanceSnapshotLatest(id)
 	log.DebugContext(ctx, "creating snapshot", "instance_id", id, "snapshot_dir", snapshotDir)
 	if err := createSnapshot(ctx, hv, snapshotDir); err != nil {
@@ -98,14 +88,14 @@ func (m *manager) standbyInstance(
 		return nil, fmt.Errorf("create snapshot: %w", err)
 	}
 
-	// 9. Stop VMM gracefully (snapshot is complete)
+	// 8. Stop VMM gracefully (snapshot is complete)
 	log.DebugContext(ctx, "shutting down hypervisor", "instance_id", id)
 	if err := m.shutdownHypervisor(ctx, &inst); err != nil {
 		// Log but continue - snapshot was created successfully
 		log.WarnContext(ctx, "failed to shutdown hypervisor gracefully, snapshot still valid", "instance_id", id, "error", err)
 	}
 
-	// 10. Release network allocation (delete TAP device)
+	// 9. Release network allocation (delete TAP device)
 	// TAP devices with explicit Owner/Group fields do NOT auto-delete when VMM exits
 	// They must be explicitly deleted
 	if inst.NetworkEnabled {
@@ -116,7 +106,7 @@ func (m *manager) standbyInstance(
 		}
 	}
 
-	// 11. Update timestamp and clear PID (hypervisor no longer running)
+	// 10. Update timestamp and clear PID (hypervisor no longer running)
 	now := time.Now()
 	stored.StoppedAt = &now
 	stored.HypervisorPID = nil

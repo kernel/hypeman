@@ -1,6 +1,7 @@
 package qemu
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -93,4 +94,60 @@ func (c *Client) Events() (chan qmp.Event, chan struct{}, error) {
 // Run executes a raw QMP command (for commands not yet wrapped).
 func (c *Client) Run(cmd qmp.Command) ([]byte, error) {
 	return c.domain.Run(cmd)
+}
+
+// Migrate initiates a migration to the given URI (typically "file:///path").
+// This is used for saving VM state to a file for snapshot/standby.
+func (c *Client) Migrate(uri string) error {
+	// Migrate(uri, blk, inc, detach) - we use nil for optional params
+	return c.raw.Migrate(uri, nil, nil, nil)
+}
+
+// QueryMigration returns the current migration status.
+func (c *Client) QueryMigration() (raw.MigrationInfo, error) {
+	return c.raw.QueryMigrate()
+}
+
+// WaitMigration polls until migration completes or times out.
+// Returns nil if migration completed successfully, error otherwise.
+func (c *Client) WaitMigration(ctx context.Context, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	pollInterval := 50 * time.Millisecond
+
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		info, err := c.QueryMigration()
+		if err != nil {
+			return fmt.Errorf("query migration: %w", err)
+		}
+
+		// Check migration status (Status is a pointer in MigrationInfo)
+		if info.Status == nil {
+			// Status not available yet, continue polling
+			time.Sleep(pollInterval)
+			continue
+		}
+
+		switch *info.Status {
+		case raw.MigrationStatusCompleted:
+			return nil
+		case raw.MigrationStatusFailed:
+			return fmt.Errorf("migration failed")
+		case raw.MigrationStatusCancelled:
+			return fmt.Errorf("migration cancelled")
+		case raw.MigrationStatusActive, raw.MigrationStatusSetup, raw.MigrationStatusPreSwitchover, raw.MigrationStatusDevice:
+			// Still in progress, continue polling
+		default:
+			// Unknown or "none" status - might not have started yet
+		}
+
+		time.Sleep(pollInterval)
+	}
+
+	return fmt.Errorf("migration timeout after %v", timeout)
 }

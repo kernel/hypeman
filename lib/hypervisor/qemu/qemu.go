@@ -3,6 +3,8 @@ package qemu
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/digitalocean/go-qemu/qemu"
@@ -36,8 +38,8 @@ var _ hypervisor.Hypervisor = (*QEMU)(nil)
 // Capabilities returns the features supported by QEMU.
 func (q *QEMU) Capabilities() hypervisor.Capabilities {
 	return hypervisor.Capabilities{
-		SupportsSnapshot:       false, // Not implemented in first pass
-		SupportsHotplugMemory:  false, // Not implemented in first pass
+		SupportsSnapshot:       true,  // Uses QMP migrate file:// for snapshot
+		SupportsHotplugMemory:  false, // Not implemented - balloon not configured
 		SupportsPause:          true,
 		SupportsVsock:          true,
 		SupportsGPUPassthrough: true,
@@ -119,10 +121,39 @@ func (q *QEMU) Resume(ctx context.Context) error {
 	return nil
 }
 
-// Snapshot creates a VM snapshot.
-// Not implemented in first pass.
+// Snapshot creates a VM snapshot using QEMU's migrate-to-file mechanism.
+// The VM state is saved to destPath/memory file.
+// The VM config is copied to destPath for restore (QEMU requires exact arg match).
 func (q *QEMU) Snapshot(ctx context.Context, destPath string) error {
-	return fmt.Errorf("snapshot not supported by QEMU implementation")
+	// QEMU uses migrate to file for snapshots
+	// The file URI must be absolute path
+	uri := "file://" + destPath + "/memory"
+	if err := q.client.Migrate(uri); err != nil {
+		Remove(q.socketPath)
+		return fmt.Errorf("migrate: %w", err)
+	}
+
+	// Wait for migration to complete
+	if err := q.client.WaitMigration(ctx, 30*time.Second); err != nil {
+		Remove(q.socketPath)
+		return fmt.Errorf("wait migration: %w", err)
+	}
+
+	// Copy VM config from instance dir to snapshot dir
+	// QEMU restore requires exact same command-line args as when snapshot was taken
+	instanceDir := filepath.Dir(q.socketPath)
+	srcConfig := filepath.Join(instanceDir, vmConfigFile)
+	dstConfig := filepath.Join(destPath, vmConfigFile)
+
+	configData, err := os.ReadFile(srcConfig)
+	if err != nil {
+		return fmt.Errorf("read vm config for snapshot: %w", err)
+	}
+	if err := os.WriteFile(dstConfig, configData, 0644); err != nil {
+		return fmt.Errorf("write vm config to snapshot: %w", err)
+	}
+
+	return nil
 }
 
 // ResizeMemory changes the VM's memory allocation.

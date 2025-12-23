@@ -536,3 +536,125 @@ func TestQEMUBasicEndToEnd(t *testing.T) {
 
 	t.Log("QEMU instance lifecycle test complete!")
 }
+
+// TestQEMUStandbyAndRestore tests the standby/restore cycle with QEMU.
+// This tests QEMU's migrate-to-file snapshot mechanism.
+func TestQEMUStandbyAndRestore(t *testing.T) {
+	// Require KVM access
+	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
+		t.Fatal("/dev/kvm not available - ensure KVM is enabled and user is in 'kvm' group (sudo usermod -aG kvm $USER)")
+	}
+
+	// Require QEMU to be installed
+	starter := qemu.NewStarter()
+	if _, err := starter.GetBinaryPath(nil, ""); err != nil {
+		t.Fatalf("QEMU not available: %v", err)
+	}
+
+	manager, tmpDir := setupTestManagerForQEMU(t)
+	ctx := context.Background()
+	p := paths.New(tmpDir)
+
+	// Get the image manager for image operations
+	imageManager, err := images.NewManager(p, 1, nil)
+	require.NoError(t, err)
+
+	// Pull nginx image
+	t.Log("Pulling nginx:alpine image...")
+	nginxImage, err := imageManager.CreateImage(ctx, images.CreateImageRequest{
+		Name: "docker.io/library/nginx:alpine",
+	})
+	require.NoError(t, err)
+
+	// Wait for image to be ready
+	t.Log("Waiting for image build to complete...")
+	imageName := nginxImage.Name
+	for i := 0; i < 60; i++ {
+		img, err := imageManager.GetImage(ctx, imageName)
+		if err == nil && img.Status == images.StatusReady {
+			nginxImage = img
+			break
+		}
+		if err == nil && img.Status == images.StatusFailed {
+			t.Fatalf("Image build failed: %s", *img.Error)
+		}
+		time.Sleep(1 * time.Second)
+	}
+	require.Equal(t, images.StatusReady, nginxImage.Status, "Image should be ready after 60 seconds")
+	t.Log("Nginx image ready")
+
+	// Ensure system files
+	systemManager := system.NewManager(p)
+	t.Log("Ensuring system files...")
+	err = systemManager.EnsureSystemFiles(ctx)
+	require.NoError(t, err)
+	t.Log("System files ready")
+
+	// Create instance with QEMU hypervisor (no network for simpler test)
+	req := CreateInstanceRequest{
+		Name:           "test-qemu-standby",
+		Image:          "docker.io/library/nginx:alpine",
+		Size:           2 * 1024 * 1024 * 1024,  // 2GB
+		HotplugSize:    512 * 1024 * 1024,       // 512MB (unused by QEMU)
+		OverlaySize:    10 * 1024 * 1024 * 1024, // 10GB
+		Vcpus:          1,
+		NetworkEnabled: false, // No network for simpler standby test
+		Hypervisor:     hypervisor.TypeQEMU,
+		Env:            map[string]string{},
+	}
+
+	t.Log("Creating QEMU instance...")
+	inst, err := manager.CreateInstance(ctx, req)
+	require.NoError(t, err)
+	require.NotNil(t, inst)
+	assert.Equal(t, StateRunning, inst.State)
+	assert.Equal(t, hypervisor.TypeQEMU, inst.HypervisorType)
+	t.Logf("Instance created: %s (hypervisor: %s)", inst.Id, inst.HypervisorType)
+
+	// Wait for VM to be fully running before standby
+	err = waitForQEMUReady(ctx, inst.SocketPath, 10*time.Second)
+	require.NoError(t, err, "QEMU VM should reach running state")
+
+	// Standby instance
+	t.Log("Standing by instance...")
+	inst, err = manager.StandbyInstance(ctx, inst.Id)
+	require.NoError(t, err)
+	assert.Equal(t, StateStandby, inst.State)
+	assert.True(t, inst.HasSnapshot)
+	t.Log("Instance in standby")
+
+	// Verify snapshot exists
+	snapshotDir := p.InstanceSnapshotLatest(inst.Id)
+	assert.DirExists(t, snapshotDir)
+	assert.FileExists(t, filepath.Join(snapshotDir, "memory"), "QEMU snapshot memory file should exist")
+	assert.FileExists(t, filepath.Join(snapshotDir, "qemu-config.json"), "QEMU config should be saved in snapshot")
+
+	// Log snapshot files
+	t.Log("Snapshot files:")
+	entries, _ := os.ReadDir(snapshotDir)
+	for _, entry := range entries {
+		info, _ := entry.Info()
+		t.Logf("  - %s (size: %d bytes)", entry.Name(), info.Size())
+	}
+
+	// Restore instance
+	t.Log("Restoring instance...")
+	inst, err = manager.RestoreInstance(ctx, inst.Id)
+	require.NoError(t, err)
+	assert.Equal(t, StateRunning, inst.State)
+	t.Log("Instance restored and running")
+
+	// Wait for VM to be running again
+	err = waitForQEMUReady(ctx, inst.SocketPath, 10*time.Second)
+	require.NoError(t, err, "QEMU VM should reach running state after restore")
+
+	// Cleanup
+	t.Log("Cleaning up...")
+	err = manager.DeleteInstance(ctx, inst.Id)
+	require.NoError(t, err)
+
+	// Verify cleanup
+	assert.NoDirExists(t, p.InstanceDir(inst.Id))
+
+	t.Log("QEMU standby/restore test complete!")
+}
