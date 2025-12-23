@@ -31,6 +31,7 @@ describe('resource instances', () => {
       devices: ['l4-gpu'],
       env: { PORT: '3000', NODE_ENV: 'production' },
       hotplug_size: '2GB',
+      hypervisor: 'cloud-hypervisor',
       network: { enabled: true },
       overlay_size: '20GB',
       size: '2GB',

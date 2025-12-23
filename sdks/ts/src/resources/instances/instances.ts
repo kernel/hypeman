@@ -209,6 +209,11 @@ export interface Instance {
   hotplug_size?: string;
 
   /**
+   * Hypervisor running this instance
+   */
+  hypervisor?: 'cloud-hypervisor' | 'qemu';
+
+  /**
    * Network configuration of the instance
    */
   network?: Instance.Network;
@@ -391,6 +396,11 @@ export interface InstanceCreateParams {
    * Additional memory for hotplug (human-readable format like "3GB", "1G")
    */
   hotplug_size?: string;
+
+  /**
+   * Hypervisor to use for this instance. Defaults to server configuration.
+   */
+  hypervisor?: 'cloud-hypervisor' | 'qemu';
 
   /**
    * Network configuration for the instance
