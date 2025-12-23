@@ -255,6 +255,46 @@ components:
           description: Whether a snapshot exists for this instance
           example: false
     
+    PathInfo:
+      type: object
+      required: [exists]
+      properties:
+        exists:
+          type: boolean
+          description: Whether the path exists
+          example: true
+        is_dir:
+          type: boolean
+          description: True if this is a directory
+          example: false
+        is_file:
+          type: boolean
+          description: True if this is a regular file
+          example: true
+        is_symlink:
+          type: boolean
+          description: True if this is a symbolic link (only set when follow_links=false)
+          example: false
+        link_target:
+          type: string
+          description: Symlink target path (only set when is_symlink=true)
+          nullable: true
+          example: "/actual/target/path"
+        mode:
+          type: integer
+          description: File mode (Unix permissions)
+          example: 420
+        size:
+          type: integer
+          format: int64
+          description: File size in bytes
+          example: 1024
+        error:
+          type: string
+          description: Error message if stat failed (e.g., permission denied). Only set when exists is false due to an error rather than the path not existing.
+          nullable: true
+          example: "permission denied"
+    
     CreateImageRequest:
       type: object
       required: [name]
@@ -1090,6 +1130,63 @@ paths:
                 type: string
         404:
           description: Instance not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  
+  /instances/{id}/stat:
+    get:
+      summary: Get filesystem path info
+      description: |
+        Returns information about a path in the guest filesystem.
+        Useful for checking if a path exists, its type, and permissions
+        before performing file operations.
+      operationId: statInstancePath
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Instance ID or name
+        - name: path
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Path to stat in the guest filesystem
+          example: "/app/data"
+        - name: follow_links
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+          description: Follow symbolic links (like stat vs lstat)
+      responses:
+        200:
+          description: Path information
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PathInfo"
+        404:
+          description: Instance not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Instance not in running state
           content:
             application/json:
               schema:

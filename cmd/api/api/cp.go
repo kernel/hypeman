@@ -27,7 +27,7 @@ func (e *cpErrorSent) Unwrap() error { return e.err }
 
 // CpRequest represents the JSON body for copy requests
 type CpRequest struct {
-	// Direction: "to" copies from client to guest, "from" copies from guest to client, "stat" queries path info
+	// Direction: "to" copies from client to guest, "from" copies from guest to client
 	Direction string `json:"direction"`
 	// Path in the guest filesystem
 	GuestPath string `json:"guest_path"`
@@ -43,19 +43,6 @@ type CpRequest struct {
 	Uid uint32 `json:"uid,omitempty"`
 	// Gid is the group ID (archive mode, for "to" direction)
 	Gid uint32 `json:"gid,omitempty"`
-}
-
-// CpStatResponse contains information about a path in the guest
-type CpStatResponse struct {
-	Type       string `json:"type"` // "stat"
-	Exists     bool   `json:"exists"`
-	IsDir      bool   `json:"is_dir"`
-	IsFile     bool   `json:"is_file"`
-	IsSymlink  bool   `json:"is_symlink,omitempty"`
-	LinkTarget string `json:"link_target,omitempty"`
-	Mode       uint32 `json:"mode"`
-	Size       int64  `json:"size"`
-	Error      string `json:"error,omitempty"`
 }
 
 // CpFileHeader is sent before file data in WebSocket protocol
@@ -165,10 +152,8 @@ func (s *ApiService) CpHandler(w http.ResponseWriter, r *http.Request) {
 		cpErr = s.handleCopyTo(ctx, ws, inst, cpReq)
 	case "from":
 		cpErr = s.handleCopyFrom(ctx, ws, inst, cpReq)
-	case "stat":
-		cpErr = s.handleStat(ctx, ws, inst, cpReq)
 	default:
-		cpErr = fmt.Errorf("invalid direction: %s (must be 'to', 'from', or 'stat')", cpReq.Direction)
+		cpErr = fmt.Errorf("invalid direction: %s (must be 'to' or 'from')", cpReq.Direction)
 	}
 
 	duration := time.Since(startTime)
@@ -381,36 +366,5 @@ func (s *ApiService) handleCopyFrom(ctx context.Context, ws *websocket.Conn, ins
 		return fmt.Errorf("copy stream ended without completion marker")
 	}
 	return nil
-}
-
-// handleStat returns information about a path in the guest
-func (s *ApiService) handleStat(ctx context.Context, ws *websocket.Conn, inst *instances.Instance, req CpRequest) error {
-	grpcConn, err := guest.GetOrCreateConnPublic(ctx, inst.VsockSocket)
-	if err != nil {
-		return fmt.Errorf("get grpc connection: %w", err)
-	}
-
-	client := guest.NewGuestServiceClient(grpcConn)
-	resp, err := client.StatPath(ctx, &guest.StatPathRequest{
-		Path:        req.GuestPath,
-		FollowLinks: req.FollowLinks,
-	})
-	if err != nil {
-		return fmt.Errorf("stat path: %w", err)
-	}
-
-	statResp := CpStatResponse{
-		Type:       "stat",
-		Exists:     resp.Exists,
-		IsDir:      resp.IsDir,
-		IsFile:     resp.IsFile,
-		IsSymlink:  resp.IsSymlink,
-		LinkTarget: resp.LinkTarget,
-		Mode:       resp.Mode,
-		Size:       resp.Size,
-		Error:      resp.Error,
-	}
-	respJSON, _ := json.Marshal(statResp)
-	return ws.WriteMessage(websocket.TextMessage, respJSON)
 }
 
