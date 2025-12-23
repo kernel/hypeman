@@ -172,7 +172,16 @@ func (c *vsockConn) Read(b []byte) (int, error) {
 }
 
 func (c *vsockConn) Write(b []byte) (int, error) {
-	return unix.Write(c.fd, b)
+	n, err := unix.Write(c.fd, b)
+	// Ensure we never return negative n (violates io.Writer contract)
+	// This can happen when the vsock fd becomes invalid (VM died)
+	if n < 0 {
+		if err == nil {
+			err = io.ErrClosedPipe
+		}
+		return 0, err
+	}
+	return n, err
 }
 
 func (c *vsockConn) Close() error {

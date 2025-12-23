@@ -14,6 +14,7 @@ import (
 
 	"github.com/onkernel/hypeman/lib/hypervisor"
 	"github.com/onkernel/hypeman/lib/paths"
+	"gvisor.dev/gvisor/pkg/cleanup"
 )
 
 func init() {
@@ -121,6 +122,12 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 
 	pid := cmd.Process.Pid
 
+	// Setup cleanup to kill the process if subsequent steps fail
+	cu := cleanup.Make(func() {
+		syscall.Kill(pid, syscall.SIGKILL)
+	})
+	defer cu.Clean()
+
 	// Wait for socket to be ready
 	if err := waitForSocket(socketPath, 10*time.Second); err != nil {
 		vmmLogPath := filepath.Join(logsDir, "vmm.log")
@@ -136,6 +143,8 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 		return 0, nil, fmt.Errorf("create client: %w", err)
 	}
 
+	// Success - release cleanup to prevent killing the process
+	cu.Release()
 	return pid, hv, nil
 }
 

@@ -3,10 +3,12 @@ package cloudhypervisor
 import (
 	"context"
 	"fmt"
+	"syscall"
 
 	"github.com/onkernel/hypeman/lib/hypervisor"
 	"github.com/onkernel/hypeman/lib/paths"
 	"github.com/onkernel/hypeman/lib/vmm"
+	"gvisor.dev/gvisor/pkg/cleanup"
 )
 
 func init() {
@@ -53,6 +55,12 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 		return 0, nil, fmt.Errorf("start process: %w", err)
 	}
 
+	// Setup cleanup to kill the process if subsequent steps fail
+	cu := cleanup.Make(func() {
+		syscall.Kill(pid, syscall.SIGKILL)
+	})
+	defer cu.Clean()
+
 	// 2. Create the HTTP client
 	hv, err := New(socketPath)
 	if err != nil {
@@ -78,6 +86,8 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 		return 0, nil, fmt.Errorf("boot vm failed with status %d: %s", bootResp.StatusCode(), string(bootResp.Body))
 	}
 
+	// Success - release cleanup to prevent killing the process
+	cu.Release()
 	return pid, hv, nil
 }
 
@@ -96,6 +106,12 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 		return 0, nil, fmt.Errorf("start process: %w", err)
 	}
 
+	// Setup cleanup to kill the process if subsequent steps fail
+	cu := cleanup.Make(func() {
+		syscall.Kill(pid, syscall.SIGKILL)
+	})
+	defer cu.Clean()
+
 	// 2. Create the HTTP client
 	hv, err := New(socketPath)
 	if err != nil {
@@ -110,14 +126,14 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 	}
 	resp, err := hv.client.PutVmRestoreWithResponse(ctx, restoreConfig)
 	if err != nil {
-		hv.Shutdown(ctx) // Cleanup on failure
 		return 0, nil, fmt.Errorf("restore: %w", err)
 	}
 	if resp.StatusCode() != 204 {
-		hv.Shutdown(ctx) // Cleanup on failure
 		return 0, nil, fmt.Errorf("restore failed with status %d: %s", resp.StatusCode(), string(resp.Body))
 	}
 
+	// Success - release cleanup to prevent killing the process
+	cu.Release()
 	return pid, hv, nil
 }
 
