@@ -144,6 +144,19 @@ func (r *InstanceService) Start(ctx context.Context, id string, opts ...option.R
 	return
 }
 
+// Returns information about a path in the guest filesystem. Useful for checking if
+// a path exists, its type, and permissions before performing file operations.
+func (r *InstanceService) Stat(ctx context.Context, id string, query InstanceStatParams, opts ...option.RequestOption) (res *PathInfo, err error) {
+	opts = slices.Concat(r.Options, opts)
+	if id == "" {
+		err = errors.New("missing required id parameter")
+		return
+	}
+	path := fmt.Sprintf("instances/%s/stat", id)
+	err = requestconfig.ExecuteNewRequest(ctx, http.MethodGet, path, query, &res, opts...)
+	return
+}
+
 // Stop instance (graceful shutdown)
 func (r *InstanceService) Stop(ctx context.Context, id string, opts ...option.RequestOption) (res *Instance, err error) {
 	opts = slices.Concat(r.Options, opts)
@@ -277,6 +290,45 @@ func (r *InstanceNetwork) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, r)
 }
 
+type PathInfo struct {
+	// Whether the path exists
+	Exists bool `json:"exists,required"`
+	// Error message if stat failed (e.g., permission denied). Only set when exists is
+	// false due to an error rather than the path not existing.
+	Error string `json:"error,nullable"`
+	// True if this is a directory
+	IsDir bool `json:"is_dir"`
+	// True if this is a regular file
+	IsFile bool `json:"is_file"`
+	// True if this is a symbolic link (only set when follow_links=false)
+	IsSymlink bool `json:"is_symlink"`
+	// Symlink target path (only set when is_symlink=true)
+	LinkTarget string `json:"link_target,nullable"`
+	// File mode (Unix permissions)
+	Mode int64 `json:"mode"`
+	// File size in bytes
+	Size int64 `json:"size"`
+	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
+	JSON struct {
+		Exists      respjson.Field
+		Error       respjson.Field
+		IsDir       respjson.Field
+		IsFile      respjson.Field
+		IsSymlink   respjson.Field
+		LinkTarget  respjson.Field
+		Mode        respjson.Field
+		Size        respjson.Field
+		ExtraFields map[string]respjson.Field
+		raw         string
+	} `json:"-"`
+}
+
+// Returns the unmodified JSON received from the API
+func (r PathInfo) RawJSON() string { return r.JSON.raw }
+func (r *PathInfo) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
 type VolumeMount struct {
 	// Path where volume is mounted in the guest
 	MountPath string `json:"mount_path,required"`
@@ -354,6 +406,8 @@ type InstanceNewParams struct {
 	Size param.Opt[string] `json:"size,omitzero"`
 	// Number of virtual CPUs
 	Vcpus param.Opt[int64] `json:"vcpus,omitzero"`
+	// Device IDs or names to attach for GPU/PCI passthrough
+	Devices []string `json:"devices,omitzero"`
 	// Environment variables
 	Env map[string]string `json:"env,omitzero"`
 	// Network configuration for the instance
@@ -422,3 +476,19 @@ const (
 	InstanceLogsParamsSourceVmm     InstanceLogsParamsSource = "vmm"
 	InstanceLogsParamsSourceHypeman InstanceLogsParamsSource = "hypeman"
 )
+
+type InstanceStatParams struct {
+	// Path to stat in the guest filesystem
+	Path string `query:"path,required" json:"-"`
+	// Follow symbolic links (like stat vs lstat)
+	FollowLinks param.Opt[bool] `query:"follow_links,omitzero" json:"-"`
+	paramObj
+}
+
+// URLQuery serializes [InstanceStatParams]'s query parameters as `url.Values`.
+func (r InstanceStatParams) URLQuery() (v url.Values, err error) {
+	return apiquery.MarshalWithSettings(r, apiquery.QuerySettings{
+		ArrayFormat:  apiquery.ArrayQueryFormatComma,
+		NestedFormat: apiquery.NestedQueryFormatBrackets,
+	})
+}
