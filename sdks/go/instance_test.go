@@ -35,6 +35,7 @@ func TestInstanceNewWithOptionalParams(t *testing.T) {
 			"NODE_ENV": "production",
 		},
 		HotplugSize: hypeman.String("2GB"),
+		Hypervisor:  hypeman.InstanceNewParamsHypervisorCloudHypervisor,
 		Network: hypeman.InstanceNewParamsNetwork{
 			Enabled: hypeman.Bool(true),
 		},
