@@ -110,7 +110,7 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 
 	// Wait for exec agent to be ready
 	t.Log("Waiting for exec agent...")
-	err = waitForLogMessage(ctx, manager, inst.Id, "[exec-agent] listening", 10*time.Second)
+	err = waitForLogMessage(ctx, manager, inst.Id, "[guest-agent] listening", 10*time.Second)
 	require.NoError(t, err, "Exec agent should be listening")
 	t.Log("Exec agent is ready")
 

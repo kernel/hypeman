@@ -22,7 +22,7 @@ func waitForExecAgent(ctx context.Context, mgr *manager, instanceID string, time
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		logs, err := collectLogs(ctx, mgr, instanceID, 100)
-		if err == nil && strings.Contains(logs, "[exec-agent] listening on vsock port 2222") {
+		if err == nil && strings.Contains(logs, "[guest-agent] listening on vsock port 2222") {
 			return nil
 		}
 		time.Sleep(500 * time.Millisecond)
