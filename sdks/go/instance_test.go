@@ -27,8 +27,9 @@ func TestInstanceNewWithOptionalParams(t *testing.T) {
 		option.WithAPIKey("My API Key"),
 	)
 	_, err := client.Instances.New(context.TODO(), hypeman.InstanceNewParams{
-		Image: "docker.io/library/alpine:latest",
-		Name:  "my-workload-1",
+		Image:   "docker.io/library/alpine:latest",
+		Name:    "my-workload-1",
+		Devices: []string{"l4-gpu"},
 		Env: map[string]string{
 			"PORT":     "3000",
 			"NODE_ENV": "production",

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.8.0 (2025-12-23)
+
+Full Changelog: [v0.7.0...v0.8.0](https://github.com/onkernel/hypeman-go/compare/v0.7.0...v0.8.0)
+
+### Features
+
+* add hypeman cp for file copy to/from running VMs ([49ea898](https://github.com/onkernel/hypeman-go/commit/49ea89852eed5e0893febc4c68d295a0d1a8bfe5))
+* **encoder:** support bracket encoding form-data object members ([8ab31e8](https://github.com/onkernel/hypeman-go/commit/8ab31e89c70baa967842c1c160d0b49db44b089a))
+* gpu passthrough ([067a01b](https://github.com/onkernel/hypeman-go/commit/067a01b4ac06e82c2db6b165127144afa18a691d))
+
+
+### Bug Fixes
+
+* skip usage tests that don't work with Prism ([d62b246](https://github.com/onkernel/hypeman-go/commit/d62b2466715247e7d083ab7ef33040e5da036bd8))
+
+
+### Chores
+
+* add float64 to valid types for RegisterFieldValidator ([b4666fd](https://github.com/onkernel/hypeman-go/commit/b4666fd1bfcdd17b0a4d4bf88541670cd40c8b1c))
+
 ## 0.7.0 (2025-12-11)
 
 Full Changelog: [v0.6.0...v0.7.0](https://github.com/onkernel/hypeman-go/compare/v0.6.0...v0.7.0)
