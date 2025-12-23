@@ -13,45 +13,114 @@ func init() {
 	hypervisor.RegisterSocketName(hypervisor.TypeCloudHypervisor, "ch.sock")
 }
 
-// ProcessManager implements hypervisor.ProcessManager for Cloud Hypervisor.
-type ProcessManager struct{}
+// Starter implements hypervisor.VMStarter for Cloud Hypervisor.
+type Starter struct{}
 
-// NewProcessManager creates a new Cloud Hypervisor process manager.
-func NewProcessManager() *ProcessManager {
-	return &ProcessManager{}
+// NewStarter creates a new Cloud Hypervisor starter.
+func NewStarter() *Starter {
+	return &Starter{}
 }
 
-// Verify ProcessManager implements the interface
-var _ hypervisor.ProcessManager = (*ProcessManager)(nil)
+// Verify Starter implements the interface
+var _ hypervisor.VMStarter = (*Starter)(nil)
 
 // SocketName returns the socket filename for Cloud Hypervisor.
-func (p *ProcessManager) SocketName() string {
+func (s *Starter) SocketName() string {
 	return "ch.sock"
 }
 
-// StartProcess launches a Cloud Hypervisor VMM process.
-func (p *ProcessManager) StartProcess(ctx context.Context, paths *paths.Paths, version string, socketPath string) (int, error) {
-	chVersion := vmm.CHVersion(version)
-	if !vmm.IsVersionSupported(chVersion) {
-		return 0, fmt.Errorf("unsupported cloud-hypervisor version: %s", version)
-	}
-	return vmm.StartProcess(ctx, paths, chVersion, socketPath)
-}
-
-// StartProcessWithArgs launches a Cloud Hypervisor VMM process with extra arguments.
-func (p *ProcessManager) StartProcessWithArgs(ctx context.Context, paths *paths.Paths, version string, socketPath string, extraArgs []string) (int, error) {
-	chVersion := vmm.CHVersion(version)
-	if !vmm.IsVersionSupported(chVersion) {
-		return 0, fmt.Errorf("unsupported cloud-hypervisor version: %s", version)
-	}
-	return vmm.StartProcessWithArgs(ctx, paths, chVersion, socketPath, extraArgs)
-}
-
 // GetBinaryPath returns the path to the Cloud Hypervisor binary.
-func (p *ProcessManager) GetBinaryPath(paths *paths.Paths, version string) (string, error) {
+func (s *Starter) GetBinaryPath(p *paths.Paths, version string) (string, error) {
 	chVersion := vmm.CHVersion(version)
 	if !vmm.IsVersionSupported(chVersion) {
 		return "", fmt.Errorf("unsupported cloud-hypervisor version: %s", version)
 	}
-	return vmm.GetBinaryPath(paths, chVersion)
+	return vmm.GetBinaryPath(p, chVersion)
+}
+
+// StartVM launches Cloud Hypervisor, configures the VM, and boots it.
+// Returns the process ID and a Hypervisor client for subsequent operations.
+func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, socketPath string, config hypervisor.VMConfig) (int, hypervisor.Hypervisor, error) {
+	// Validate version
+	chVersion := vmm.CHVersion(version)
+	if !vmm.IsVersionSupported(chVersion) {
+		return 0, nil, fmt.Errorf("unsupported cloud-hypervisor version: %s", version)
+	}
+
+	// 1. Start the Cloud Hypervisor process
+	pid, err := vmm.StartProcess(ctx, p, chVersion, socketPath)
+	if err != nil {
+		return 0, nil, fmt.Errorf("start process: %w", err)
+	}
+
+	// 2. Create the HTTP client
+	hv, err := New(socketPath)
+	if err != nil {
+		return 0, nil, fmt.Errorf("create client: %w", err)
+	}
+
+	// 3. Configure the VM via HTTP API
+	vmConfig := ToVMConfig(config)
+	resp, err := hv.client.CreateVMWithResponse(ctx, vmConfig)
+	if err != nil {
+		return 0, nil, fmt.Errorf("create vm: %w", err)
+	}
+	if resp.StatusCode() != 204 {
+		return 0, nil, fmt.Errorf("create vm failed with status %d: %s", resp.StatusCode(), string(resp.Body))
+	}
+
+	// 4. Boot the VM via HTTP API
+	bootResp, err := hv.client.BootVMWithResponse(ctx)
+	if err != nil {
+		return 0, nil, fmt.Errorf("boot vm: %w", err)
+	}
+	if bootResp.StatusCode() != 204 {
+		return 0, nil, fmt.Errorf("boot vm failed with status %d: %s", bootResp.StatusCode(), string(bootResp.Body))
+	}
+
+	return pid, hv, nil
+}
+
+// RestoreVM starts Cloud Hypervisor and restores VM state from a snapshot.
+// The VM is in paused state after restore; caller should call Resume() to continue execution.
+func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string, socketPath string, snapshotPath string) (int, hypervisor.Hypervisor, error) {
+	// Validate version
+	chVersion := vmm.CHVersion(version)
+	if !vmm.IsVersionSupported(chVersion) {
+		return 0, nil, fmt.Errorf("unsupported cloud-hypervisor version: %s", version)
+	}
+
+	// 1. Start the Cloud Hypervisor process
+	pid, err := vmm.StartProcess(ctx, p, chVersion, socketPath)
+	if err != nil {
+		return 0, nil, fmt.Errorf("start process: %w", err)
+	}
+
+	// 2. Create the HTTP client
+	hv, err := New(socketPath)
+	if err != nil {
+		return 0, nil, fmt.Errorf("create client: %w", err)
+	}
+
+	// 3. Restore from snapshot via HTTP API
+	sourceURL := "file://" + snapshotPath
+	restoreConfig := vmm.RestoreConfig{
+		SourceUrl: sourceURL,
+		Prefault:  ptr(false),
+	}
+	resp, err := hv.client.PutVmRestoreWithResponse(ctx, restoreConfig)
+	if err != nil {
+		hv.Shutdown(ctx) // Cleanup on failure
+		return 0, nil, fmt.Errorf("restore: %w", err)
+	}
+	if resp.StatusCode() != 204 {
+		hv.Shutdown(ctx) // Cleanup on failure
+		return 0, nil, fmt.Errorf("restore failed with status %d: %s", resp.StatusCode(), string(resp.Body))
+	}
+
+	return pid, hv, nil
+}
+
+func ptr[T any](v T) *T {
+	return &v
 }

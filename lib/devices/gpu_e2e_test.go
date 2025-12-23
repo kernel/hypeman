@@ -12,6 +12,7 @@ import (
 	"github.com/onkernel/hypeman/cmd/api/config"
 	"github.com/onkernel/hypeman/lib/devices"
 	"github.com/onkernel/hypeman/lib/exec"
+	"github.com/onkernel/hypeman/lib/hypervisor"
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/instances"
 	"github.com/onkernel/hypeman/lib/network"
@@ -218,6 +219,9 @@ func TestGPUPassthrough(t *testing.T) {
 	actualInst, err := instanceMgr.GetInstance(ctx, inst.Id)
 	require.NoError(t, err)
 
+	dialer, err := hypervisor.NewVsockDialer(actualInst.HypervisorType, actualInst.VsockSocket, actualInst.VsockCID)
+	require.NoError(t, err)
+
 	// Create a context with timeout for exec operations
 	execCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -232,7 +236,7 @@ func TestGPUPassthrough(t *testing.T) {
 		stdout = outputBuffer{}
 		stderr = outputBuffer{}
 
-		_, execErr = exec.ExecIntoInstance(execCtx, actualInst.VsockSocket, exec.ExecOptions{
+		_, execErr = exec.ExecIntoInstance(execCtx, dialer, exec.ExecOptions{
 			Command: []string{"/bin/sh", "-c", checkGPUCmd},
 			Stdin:   nil,
 			Stdout:  &stdout,

@@ -27,6 +27,9 @@ func New(socketPath string) (*CloudHypervisor, error) {
 	}, nil
 }
 
+// Verify CloudHypervisor implements the interface
+var _ hypervisor.Hypervisor = (*CloudHypervisor)(nil)
+
 // Capabilities returns the features supported by Cloud Hypervisor.
 func (c *CloudHypervisor) Capabilities() hypervisor.Capabilities {
 	return hypervisor.Capabilities{
@@ -36,31 +39,6 @@ func (c *CloudHypervisor) Capabilities() hypervisor.Capabilities {
 		SupportsVsock:          true,
 		SupportsGPUPassthrough: true,
 	}
-}
-
-// CreateVM configures the VM in Cloud Hypervisor.
-func (c *CloudHypervisor) CreateVM(ctx context.Context, config hypervisor.VMConfig) error {
-	vmConfig := ToVMConfig(config)
-	resp, err := c.client.CreateVMWithResponse(ctx, vmConfig)
-	if err != nil {
-		return fmt.Errorf("create vm: %w", err)
-	}
-	if resp.StatusCode() != 204 {
-		return fmt.Errorf("create vm failed with status %d: %s", resp.StatusCode(), string(resp.Body))
-	}
-	return nil
-}
-
-// BootVM starts the configured VM.
-func (c *CloudHypervisor) BootVM(ctx context.Context) error {
-	resp, err := c.client.BootVMWithResponse(ctx)
-	if err != nil {
-		return fmt.Errorf("boot vm: %w", err)
-	}
-	if resp.StatusCode() != 204 {
-		return fmt.Errorf("boot vm failed with status %d: %s", resp.StatusCode(), string(resp.Body))
-	}
-	return nil
 }
 
 // DeleteVM removes the VM configuration from Cloud Hypervisor.
@@ -157,23 +135,6 @@ func (c *CloudHypervisor) Snapshot(ctx context.Context, destPath string) error {
 	return nil
 }
 
-// Restore loads a VM from snapshot.
-func (c *CloudHypervisor) Restore(ctx context.Context, sourcePath string) error {
-	sourceURL := "file://" + sourcePath
-	restoreConfig := vmm.RestoreConfig{
-		SourceUrl: sourceURL,
-		Prefault:  ptr(false),
-	}
-	resp, err := c.client.PutVmRestoreWithResponse(ctx, restoreConfig)
-	if err != nil {
-		return fmt.Errorf("restore: %w", err)
-	}
-	if resp.StatusCode() != 204 {
-		return fmt.Errorf("restore failed with status %d", resp.StatusCode())
-	}
-	return nil
-}
-
 // ResizeMemory changes the VM's memory allocation.
 func (c *CloudHypervisor) ResizeMemory(ctx context.Context, bytes int64) error {
 	resizeConfig := vmm.VmResize{DesiredRam: &bytes}
@@ -238,8 +199,4 @@ func (c *CloudHypervisor) ResizeMemoryAndWait(ctx context.Context, bytes int64, 
 
 	// Timeout reached, but resize was requested successfully
 	return nil
-}
-
-func ptr[T any](v T) *T {
-	return &v
 }

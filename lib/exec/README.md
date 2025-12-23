@@ -11,7 +11,7 @@ API Server (/instances/{id}/exec)
     ↓
 lib/exec/client.go (ExecIntoInstance)
     ↓
-Cloud Hypervisor vsock socket
+Hypervisor vsock (CH: Unix socket, QEMU: AF_VSOCK)
     ↓
 Guest: exec-agent (lib/system/exec_agent)
     ↓
@@ -37,14 +37,13 @@ Container (chroot /overlay/newroot)
     "timeout": 30           // optional: timeout in seconds
   }
   ```
-- Calls `exec.ExecIntoInstance()` with the instance's vsock socket path
+- Creates a `VsockDialer` for the instance's hypervisor type and calls `exec.ExecIntoInstance()`
 - Logs audit trail: JWT subject, instance ID, command, start/end time, exit code
 
 ### 2. Client (`lib/exec/client.go`)
 
-- **ExecIntoInstance()**: Main client function
-- Connects to Cloud Hypervisor's vsock Unix socket
-- Performs vsock handshake: `CONNECT 2222\n` → `OK <cid>`
+- **ExecIntoInstance()**: Main client function, takes a `VsockDialer` interface
+- Uses hypervisor-specific dialer to connect to guest (see `lib/hypervisor/*/vsock.go`)
 - Creates gRPC client over the vsock connection (pooled per VM for efficiency)
 - Streams stdin/stdout/stderr bidirectionally
 - Returns exit status when command completes

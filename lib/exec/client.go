@@ -1,31 +1,27 @@
 package exec
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+
+	"github.com/onkernel/hypeman/lib/hypervisor"
 )
 
 const (
-	// vsockDialTimeout is the timeout for connecting to the vsock Unix socket
-	vsockDialTimeout = 5 * time.Second
-	// vsockHandshakeTimeout is the timeout for the Cloud Hypervisor vsock handshake
-	vsockHandshakeTimeout = 5 * time.Second
 	// vsockGuestPort is the port the exec-agent listens on inside the guest
 	vsockGuestPort = 2222
 )
 
-// connPool manages reusable gRPC connections per vsock socket path
+// connPool manages reusable gRPC connections per vsock dialer key
 // This avoids the overhead and potential issues of rapidly creating/closing connections
 var connPool = struct {
 	sync.RWMutex
@@ -35,10 +31,12 @@ var connPool = struct {
 }
 
 // getOrCreateConn returns an existing connection or creates a new one
-func getOrCreateConn(ctx context.Context, vsockSocketPath string) (*grpc.ClientConn, error) {
+func getOrCreateConn(ctx context.Context, dialer hypervisor.VsockDialer) (*grpc.ClientConn, error) {
+	key := dialer.Key()
+
 	// Try read lock first for existing connection
 	connPool.RLock()
-	if conn, ok := connPool.conns[vsockSocketPath]; ok {
+	if conn, ok := connPool.conns[key]; ok {
 		connPool.RUnlock()
 		return conn, nil
 	}
@@ -49,14 +47,14 @@ func getOrCreateConn(ctx context.Context, vsockSocketPath string) (*grpc.ClientC
 	defer connPool.Unlock()
 
 	// Double-check after acquiring write lock
-	if conn, ok := connPool.conns[vsockSocketPath]; ok {
+	if conn, ok := connPool.conns[key]; ok {
 		return conn, nil
 	}
 
 	// Create new connection
 	conn, err := grpc.Dial("passthrough:///vsock",
 		grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
-			return dialVsock(ctx, vsockSocketPath)
+			return dialer.DialVsock(ctx, vsockGuestPort)
 		}),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
@@ -64,20 +62,20 @@ func getOrCreateConn(ctx context.Context, vsockSocketPath string) (*grpc.ClientC
 		return nil, fmt.Errorf("create grpc connection: %w", err)
 	}
 
-	connPool.conns[vsockSocketPath] = conn
-	slog.Debug("created new gRPC connection", "socket", vsockSocketPath)
+	connPool.conns[key] = conn
+	slog.Debug("created new gRPC connection", "key", key)
 	return conn, nil
 }
 
 // CloseConn closes and removes a connection from the pool (call when VM is deleted)
-func CloseConn(vsockSocketPath string) {
+func CloseConn(dialerKey string) {
 	connPool.Lock()
 	defer connPool.Unlock()
 
-	if conn, ok := connPool.conns[vsockSocketPath]; ok {
+	if conn, ok := connPool.conns[dialerKey]; ok {
 		conn.Close()
-		delete(connPool.conns, vsockSocketPath)
-		slog.Debug("closed gRPC connection", "socket", vsockSocketPath)
+		delete(connPool.conns, dialerKey)
+		slog.Debug("closed gRPC connection", "key", dialerKey)
 	}
 }
 
@@ -98,26 +96,15 @@ type ExecOptions struct {
 	Timeout int32             // Execution timeout in seconds (0 = no timeout)
 }
 
-// bufferedConn wraps a net.Conn with a bufio.Reader to ensure any buffered
-// data from the handshake is properly drained before reading from the connection
-type bufferedConn struct {
-	net.Conn
-	reader *bufio.Reader
-}
-
-func (c *bufferedConn) Read(p []byte) (int, error) {
-	return c.reader.Read(p)
-}
-
-// ExecIntoInstance executes command in instance via vsock using gRPC
-// vsockSocketPath is the Unix socket created by Cloud Hypervisor (e.g., /var/lib/hypeman/guests/{id}/vsock.sock)
-func ExecIntoInstance(ctx context.Context, vsockSocketPath string, opts ExecOptions) (*ExitStatus, error) {
+// ExecIntoInstance executes command in instance via vsock using gRPC.
+// The dialer is a hypervisor-specific VsockDialer that knows how to connect to the guest.
+func ExecIntoInstance(ctx context.Context, dialer hypervisor.VsockDialer, opts ExecOptions) (*ExitStatus, error) {
 	start := time.Now()
 	var bytesSent int64
 
-	// Get or create a reusable gRPC connection for this vsock socket
+	// Get or create a reusable gRPC connection for this vsock dialer
 	// Connection pooling avoids issues with rapid connect/disconnect cycles
-	grpcConn, err := getOrCreateConn(ctx, vsockSocketPath)
+	grpcConn, err := getOrCreateConn(ctx, dialer)
 	if err != nil {
 		return nil, fmt.Errorf("get grpc connection: %w", err)
 	}
@@ -199,65 +186,4 @@ func ExecIntoInstance(ctx context.Context, vsockSocketPath string, opts ExecOpti
 			return &ExitStatus{Code: exitCode}, nil
 		}
 	}
-}
-
-// dialVsock connects to Cloud Hypervisor's vsock Unix socket and performs the handshake
-func dialVsock(ctx context.Context, vsockSocketPath string) (net.Conn, error) {
-	slog.DebugContext(ctx, "connecting to vsock", "socket", vsockSocketPath)
-
-	// Use dial timeout, respecting context deadline if shorter
-	dialTimeout := vsockDialTimeout
-	if deadline, ok := ctx.Deadline(); ok {
-		if remaining := time.Until(deadline); remaining < dialTimeout {
-			dialTimeout = remaining
-		}
-	}
-
-	// Connect to CH's Unix socket with timeout
-	dialer := net.Dialer{Timeout: dialTimeout}
-	conn, err := dialer.DialContext(ctx, "unix", vsockSocketPath)
-	if err != nil {
-		return nil, fmt.Errorf("dial vsock socket %s: %w", vsockSocketPath, err)
-	}
-
-	slog.DebugContext(ctx, "connected to vsock socket, performing handshake", "port", vsockGuestPort)
-
-	// Set deadline for handshake
-	if err := conn.SetDeadline(time.Now().Add(vsockHandshakeTimeout)); err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("set handshake deadline: %w", err)
-	}
-
-	// Perform Cloud Hypervisor vsock handshake
-	handshakeCmd := fmt.Sprintf("CONNECT %d\n", vsockGuestPort)
-	if _, err := conn.Write([]byte(handshakeCmd)); err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("send vsock handshake: %w", err)
-	}
-
-	// Read handshake response
-	reader := bufio.NewReader(conn)
-	response, err := reader.ReadString('\n')
-	if err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("read vsock handshake response (is exec-agent running in guest?): %w", err)
-	}
-
-	// Clear deadline after successful handshake
-	if err := conn.SetDeadline(time.Time{}); err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("clear deadline: %w", err)
-	}
-
-	response = strings.TrimSpace(response)
-	if !strings.HasPrefix(response, "OK ") {
-		conn.Close()
-		return nil, fmt.Errorf("vsock handshake failed: %s", response)
-	}
-
-	slog.DebugContext(ctx, "vsock handshake successful", "response", response)
-
-	// Return wrapped connection that uses the bufio.Reader
-	// This ensures any bytes buffered during handshake are not lost
-	return &bufferedConn{Conn: conn, reader: reader}, nil
 }

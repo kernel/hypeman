@@ -604,13 +604,18 @@ func TestBasicEndToEnd(t *testing.T) {
 		var lastExitCode int
 		var lastErr error
 
+		dialer, err := hypervisor.NewVsockDialer(inst.HypervisorType, inst.VsockSocket, inst.VsockCID)
+		if err != nil {
+			return "", -1, err
+		}
+
 		for attempt := 0; attempt < 5; attempt++ {
 			if attempt > 0 {
 				time.Sleep(200 * time.Millisecond)
 			}
 
 			var stdout, stderr bytes.Buffer
-			exit, err := exec.ExecIntoInstance(ctx, inst.VsockSocket, exec.ExecOptions{
+			exit, err := exec.ExecIntoInstance(ctx, dialer, exec.ExecOptions{
 				Command: command,
 				Stdout:  &stdout,
 				Stderr:  &stderr,

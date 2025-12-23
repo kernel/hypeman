@@ -161,8 +161,8 @@ func (m *manager) recordStateTransition(ctx context.Context, fromState, toState 
 		return
 	}
 	attrs := []attribute.KeyValue{
-		attribute.String("from", fromState),
-		attribute.String("to", toState),
+			attribute.String("from", fromState),
+			attribute.String("to", toState),
 	}
 	if hvType != "" {
 		attrs = append(attrs, attribute.String("hypervisor", string(hvType)))

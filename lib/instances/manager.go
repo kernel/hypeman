@@ -58,7 +58,7 @@ type manager struct {
 	metrics        *Metrics
 
 	// Hypervisor support
-	processManagers   map[hypervisor.Type]hypervisor.ProcessManager
+	vmStarters        map[hypervisor.Type]hypervisor.VMStarter
 	defaultHypervisor hypervisor.Type // Default hypervisor type when not specified in request
 }
 
@@ -81,9 +81,9 @@ func NewManager(p *paths.Paths, imageManager images.Manager, systemManager syste
 		limits:         limits,
 		instanceLocks:  sync.Map{},
 		hostTopology:   detectHostTopology(), // Detect and cache host topology
-		processManagers: map[hypervisor.Type]hypervisor.ProcessManager{
-			hypervisor.TypeCloudHypervisor: cloudhypervisor.NewProcessManager(),
-			hypervisor.TypeQEMU:            qemu.NewProcessManager(),
+		vmStarters: map[hypervisor.Type]hypervisor.VMStarter{
+			hypervisor.TypeCloudHypervisor: cloudhypervisor.NewStarter(),
+			hypervisor.TypeQEMU:            qemu.NewStarter(),
 		},
 		defaultHypervisor: defaultHypervisor,
 	}
@@ -100,6 +100,7 @@ func NewManager(p *paths.Paths, imageManager images.Manager, systemManager syste
 }
 
 // getHypervisor creates a hypervisor client for the given socket and type.
+// Used for connecting to already-running VMs (e.g., for state queries).
 func (m *manager) getHypervisor(socketPath string, hvType hypervisor.Type) (hypervisor.Hypervisor, error) {
 	switch hvType {
 	case hypervisor.TypeCloudHypervisor:
@@ -111,13 +112,13 @@ func (m *manager) getHypervisor(socketPath string, hvType hypervisor.Type) (hype
 	}
 }
 
-// getProcessManager returns the process manager for the given hypervisor type.
-func (m *manager) getProcessManager(hvType hypervisor.Type) (hypervisor.ProcessManager, error) {
-	pm, ok := m.processManagers[hvType]
+// getVMStarter returns the VM starter for the given hypervisor type.
+func (m *manager) getVMStarter(hvType hypervisor.Type) (hypervisor.VMStarter, error) {
+	starter, ok := m.vmStarters[hvType]
 	if !ok {
-		return nil, fmt.Errorf("no process manager for hypervisor type: %s", hvType)
+		return nil, fmt.Errorf("no VM starter for hypervisor type: %s", hvType)
 	}
-	return pm, nil
+	return starter, nil
 }
 
 // getInstanceLock returns or creates a lock for a specific instance

@@ -37,24 +37,6 @@ func (q *QEMU) Capabilities() hypervisor.Capabilities {
 	}
 }
 
-// CreateVM configures the VM in QEMU.
-// For QEMU, the VM is configured via command-line args when the process starts,
-// so this is a no-op. The configuration is applied in StartProcess.
-func (q *QEMU) CreateVM(ctx context.Context, config hypervisor.VMConfig) error {
-	// QEMU doesn't have a separate create step - configuration is done at process start
-	// This is a no-op for QEMU
-	return nil
-}
-
-// BootVM starts the configured VM.
-// For QEMU, the VM starts automatically when the process starts,
-// so this is a no-op.
-func (q *QEMU) BootVM(ctx context.Context) error {
-	// QEMU starts running immediately when the process starts
-	// This is a no-op for QEMU
-	return nil
-}
-
 // DeleteVM removes the VM configuration from QEMU.
 // This sends a graceful shutdown signal to the guest.
 func (q *QEMU) DeleteVM(ctx context.Context) error {
@@ -115,12 +97,6 @@ func (q *QEMU) Resume(ctx context.Context) error {
 // Not implemented in first pass.
 func (q *QEMU) Snapshot(ctx context.Context, destPath string) error {
 	return fmt.Errorf("snapshot not supported by QEMU implementation")
-}
-
-// Restore loads a VM from snapshot.
-// Not implemented in first pass.
-func (q *QEMU) Restore(ctx context.Context, sourcePath string) error {
-	return fmt.Errorf("restore not supported by QEMU implementation")
 }
 
 // ResizeMemory changes the VM's memory allocation.

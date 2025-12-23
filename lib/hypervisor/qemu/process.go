@@ -20,49 +20,72 @@ func init() {
 	hypervisor.RegisterSocketName(hypervisor.TypeQEMU, "qemu.sock")
 }
 
-// ProcessManager implements hypervisor.ProcessManager for QEMU.
-type ProcessManager struct{}
+// Starter implements hypervisor.VMStarter for QEMU.
+type Starter struct{}
 
-// NewProcessManager creates a new QEMU process manager.
-func NewProcessManager() *ProcessManager {
-	return &ProcessManager{}
+// NewStarter creates a new QEMU starter.
+func NewStarter() *Starter {
+	return &Starter{}
 }
 
-// Verify ProcessManager implements the interface
-var _ hypervisor.ProcessManager = (*ProcessManager)(nil)
+// Verify Starter implements the interface
+var _ hypervisor.VMStarter = (*Starter)(nil)
 
 // SocketName returns the socket filename for QEMU.
-func (p *ProcessManager) SocketName() string {
+func (s *Starter) SocketName() string {
 	return "qemu.sock"
 }
 
-// StartProcess launches a QEMU VMM process.
-func (p *ProcessManager) StartProcess(ctx context.Context, paths *paths.Paths, version string, socketPath string) (int, error) {
-	return p.StartProcessWithArgs(ctx, paths, version, socketPath, nil)
+// GetBinaryPath returns the path to the QEMU binary.
+// QEMU is expected to be installed on the system.
+func (s *Starter) GetBinaryPath(p *paths.Paths, version string) (string, error) {
+	binaryName, err := qemuBinaryName()
+	if err != nil {
+		return "", err
+	}
+
+	candidates := []string{
+		"/usr/bin/" + binaryName,
+		"/usr/local/bin/" + binaryName,
+	}
+
+	for _, path := range candidates {
+		if _, err := os.Stat(path); err == nil {
+			return path, nil
+		}
+	}
+
+	if path, err := exec.LookPath(binaryName); err == nil {
+		return path, nil
+	}
+
+	return "", fmt.Errorf("%s not found; install with: %s", binaryName, qemuInstallHint())
 }
 
-// StartProcessWithArgs launches a QEMU VMM process with extra arguments.
-func (p *ProcessManager) StartProcessWithArgs(ctx context.Context, paths *paths.Paths, version string, socketPath string, extraArgs []string) (int, error) {
+// StartVM launches QEMU with the VM configuration and returns a Hypervisor client.
+// QEMU receives all configuration via command-line arguments at process start.
+func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, socketPath string, config hypervisor.VMConfig) (int, hypervisor.Hypervisor, error) {
 	// Get binary path
-	binaryPath, err := p.GetBinaryPath(paths, version)
+	binaryPath, err := s.GetBinaryPath(p, version)
 	if err != nil {
-		return 0, fmt.Errorf("get binary: %w", err)
+		return 0, nil, fmt.Errorf("get binary: %w", err)
 	}
 
 	// Check if socket is already in use
 	if isSocketInUse(socketPath) {
-		return 0, fmt.Errorf("socket already in use, QEMU may be running at %s", socketPath)
+		return 0, nil, fmt.Errorf("socket already in use, QEMU may be running at %s", socketPath)
 	}
 
 	// Remove stale socket if exists
 	os.Remove(socketPath)
 
-	// Build base command arguments for QMP socket
+	// Build command arguments: QMP socket + VM configuration
 	args := []string{
 		"-chardev", fmt.Sprintf("socket,id=qmp,path=%s,server=on,wait=off", socketPath),
 		"-mon", "chardev=qmp,mode=control",
 	}
-	args = append(args, extraArgs...)
+	// Append VM configuration as command-line arguments
+	args = append(args, BuildArgs(config)...)
 
 	// Create command
 	cmd := exec.Command(binaryPath, args...)
@@ -76,7 +99,7 @@ func (p *ProcessManager) StartProcessWithArgs(ctx context.Context, paths *paths.
 	instanceDir := filepath.Dir(socketPath)
 	logsDir := filepath.Join(instanceDir, "logs")
 	if err := os.MkdirAll(logsDir, 0755); err != nil {
-		return 0, fmt.Errorf("create logs directory: %w", err)
+		return 0, nil, fmt.Errorf("create logs directory: %w", err)
 	}
 
 	vmmLogFile, err := os.OpenFile(
@@ -85,7 +108,7 @@ func (p *ProcessManager) StartProcessWithArgs(ctx context.Context, paths *paths.
 		0644,
 	)
 	if err != nil {
-		return 0, fmt.Errorf("create vmm log: %w", err)
+		return 0, nil, fmt.Errorf("create vmm log: %w", err)
 	}
 	defer vmmLogFile.Close()
 
@@ -93,51 +116,33 @@ func (p *ProcessManager) StartProcessWithArgs(ctx context.Context, paths *paths.
 	cmd.Stderr = vmmLogFile
 
 	if err := cmd.Start(); err != nil {
-		return 0, fmt.Errorf("start qemu: %w", err)
+		return 0, nil, fmt.Errorf("start qemu: %w", err)
 	}
 
 	pid := cmd.Process.Pid
 
 	// Wait for socket to be ready
 	if err := waitForSocket(socketPath, 10*time.Second); err != nil {
-		// Read vmm.log to understand why socket wasn't created
 		vmmLogPath := filepath.Join(logsDir, "vmm.log")
 		if logData, readErr := os.ReadFile(vmmLogPath); readErr == nil && len(logData) > 0 {
-			return 0, fmt.Errorf("%w; vmm.log: %s", err, string(logData))
+			return 0, nil, fmt.Errorf("%w; vmm.log: %s", err, string(logData))
 		}
-		return 0, err
+		return 0, nil, err
 	}
 
-	return pid, nil
+	// Create QMP client
+	hv, err := New(socketPath)
+	if err != nil {
+		return 0, nil, fmt.Errorf("create client: %w", err)
+	}
+
+	return pid, hv, nil
 }
 
-// GetBinaryPath returns the path to the QEMU binary.
-// QEMU is expected to be installed on the system.
-func (p *ProcessManager) GetBinaryPath(paths *paths.Paths, version string) (string, error) {
-	// Determine binary name based on host architecture
-	binaryName, err := qemuBinaryName()
-	if err != nil {
-		return "", err
-	}
-
-	// Look for system-installed QEMU
-	candidates := []string{
-		"/usr/bin/" + binaryName,
-		"/usr/local/bin/" + binaryName,
-	}
-
-	for _, path := range candidates {
-		if _, err := os.Stat(path); err == nil {
-			return path, nil
-		}
-	}
-
-	// Try PATH lookup
-	if path, err := exec.LookPath(binaryName); err == nil {
-		return path, nil
-	}
-
-	return "", fmt.Errorf("%s not found; install with: %s", binaryName, qemuInstallHint())
+// RestoreVM starts QEMU and restores VM state from a snapshot.
+// Not yet implemented for QEMU.
+func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string, socketPath string, snapshotPath string) (int, hypervisor.Hypervisor, error) {
+	return 0, nil, fmt.Errorf("restore not supported by QEMU implementation")
 }
 
 // qemuBinaryName returns the QEMU binary name for the host architecture.

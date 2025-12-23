@@ -219,10 +219,10 @@ func (m *manager) createInstance(
 		}
 	}
 
-	pm, err := m.getProcessManager(hvType)
+	starter, err := m.getVMStarter(hvType)
 	if err != nil {
-		log.ErrorContext(ctx, "failed to get process manager", "error", err)
-		return nil, fmt.Errorf("get process manager for %s: %w", hvType, err)
+		log.ErrorContext(ctx, "failed to get vm starter", "error", err)
+		return nil, fmt.Errorf("get vm starter for %s: %w", hvType, err)
 	}
 
 	// 10. Validate, resolve, and auto-bind devices (GPU passthrough)
@@ -296,7 +296,7 @@ func (m *manager) createInstance(
 		KernelVersion:     string(kernelVer),
 		HypervisorType:    hvType,
 		HypervisorVersion: string(vmm.V49_0), // Use latest
-		SocketPath:        m.paths.InstanceSocket(id, pm.SocketName()),
+		SocketPath:        m.paths.InstanceSocket(id, starter.SocketName()),
 		DataDir:           m.paths.InstanceDir(id),
 		VsockCID:          vsockCID,
 		VsockSocket:       vsockSocket,
@@ -542,27 +542,10 @@ func (m *manager) startAndBootVM(
 ) error {
 	log := logger.FromContext(ctx)
 
-	// Get process manager for this hypervisor type
-	pm, err := m.getProcessManager(stored.HypervisorType)
+	// Get VM starter for this hypervisor type
+	starter, err := m.getVMStarter(stored.HypervisorType)
 	if err != nil {
-		return fmt.Errorf("get process manager: %w", err)
-	}
-
-	// Start VMM process and capture PID
-	log.DebugContext(ctx, "starting VMM process", "instance_id", stored.Id, "hypervisor", stored.HypervisorType, "version", stored.HypervisorVersion)
-	pid, err := pm.StartProcess(ctx, m.paths, stored.HypervisorVersion, stored.SocketPath)
-	if err != nil {
-		return fmt.Errorf("start vmm: %w", err)
-	}
-
-	// Store the PID for later cleanup
-	stored.HypervisorPID = &pid
-	log.DebugContext(ctx, "VMM process started", "instance_id", stored.Id, "pid", pid)
-
-	// Create hypervisor client
-	hv, err := m.getHypervisor(stored.SocketPath, stored.HypervisorType)
-	if err != nil {
-		return fmt.Errorf("create hypervisor client: %w", err)
+		return fmt.Errorf("get vm starter: %w", err)
 	}
 
 	// Build VM configuration
@@ -572,20 +555,16 @@ func (m *manager) startAndBootVM(
 		return fmt.Errorf("build vm config: %w", err)
 	}
 
-	// Create VM in hypervisor
-	log.DebugContext(ctx, "creating VM in hypervisor", "instance_id", stored.Id)
-	if err := hv.CreateVM(ctx, vmConfig); err != nil {
-		return fmt.Errorf("create vm: %w", err)
+	// Start VM (handles process start, configuration, and boot)
+	log.DebugContext(ctx, "starting VM", "instance_id", stored.Id, "hypervisor", stored.HypervisorType, "version", stored.HypervisorVersion)
+	pid, hv, err := starter.StartVM(ctx, m.paths, stored.HypervisorVersion, stored.SocketPath, vmConfig)
+	if err != nil {
+		return fmt.Errorf("start vm: %w", err)
 	}
 
-	// Transition: Created → Running (boot VM)
-	log.DebugContext(ctx, "booting VM", "instance_id", stored.Id)
-	if err := hv.BootVM(ctx); err != nil {
-		// Try to cleanup
-		hv.DeleteVM(ctx)
-		hv.Shutdown(ctx)
-		return fmt.Errorf("boot vm: %w", err)
-	}
+	// Store the PID for later cleanup
+	stored.HypervisorPID = &pid
+	log.DebugContext(ctx, "VM started", "instance_id", stored.Id, "pid", pid)
 
 	// Optional: Expand memory to max if hotplug configured
 	if inst.HotplugSize > 0 && hv.Capabilities().SupportsHotplugMemory {
