@@ -2,6 +2,7 @@ package qemu
 
 import (
 	"fmt"
+	"runtime"
 	"strconv"
 
 	"github.com/onkernel/hypeman/lib/hypervisor"
@@ -11,8 +12,8 @@ import (
 func BuildArgs(cfg hypervisor.VMConfig) []string {
 	args := make([]string, 0, 64)
 
-	// Machine type with KVM acceleration
-	args = append(args, "-machine", "q35,accel=kvm")
+	// Machine type with KVM acceleration (arch-specific)
+	args = append(args, "-machine", machineType())
 
 	// CPU configuration
 	args = append(args, "-cpu", "host")
@@ -76,4 +77,15 @@ func BuildArgs(cfg hypervisor.VMConfig) []string {
 	args = append(args, "-nodefaults")
 
 	return args
+}
+
+// machineType returns the QEMU machine type for the host architecture.
+func machineType() string {
+	switch runtime.GOARCH {
+	case "arm64":
+		return "virt,accel=kvm"
+	default:
+		// x86_64 and others use q35
+		return "q35,accel=kvm"
+	}
 }

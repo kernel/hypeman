@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"syscall"
 	"time"
 
@@ -112,10 +113,16 @@ func (p *ProcessManager) StartProcessWithArgs(ctx context.Context, paths *paths.
 // GetBinaryPath returns the path to the QEMU binary.
 // QEMU is expected to be installed on the system.
 func (p *ProcessManager) GetBinaryPath(paths *paths.Paths, version string) (string, error) {
+	// Determine binary name based on host architecture
+	binaryName, err := qemuBinaryName()
+	if err != nil {
+		return "", err
+	}
+
 	// Look for system-installed QEMU
 	candidates := []string{
-		"/usr/bin/qemu-system-x86_64",
-		"/usr/local/bin/qemu-system-x86_64",
+		"/usr/bin/" + binaryName,
+		"/usr/local/bin/" + binaryName,
 	}
 
 	for _, path := range candidates {
@@ -125,11 +132,23 @@ func (p *ProcessManager) GetBinaryPath(paths *paths.Paths, version string) (stri
 	}
 
 	// Try PATH lookup
-	if path, err := exec.LookPath("qemu-system-x86_64"); err == nil {
+	if path, err := exec.LookPath(binaryName); err == nil {
 		return path, nil
 	}
 
-	return "", fmt.Errorf("qemu-system-x86_64 not found; install QEMU on your system")
+	return "", fmt.Errorf("%s not found; install QEMU on your system", binaryName)
+}
+
+// qemuBinaryName returns the QEMU binary name for the host architecture.
+func qemuBinaryName() (string, error) {
+	switch runtime.GOARCH {
+	case "amd64":
+		return "qemu-system-x86_64", nil
+	case "arm64":
+		return "qemu-system-aarch64", nil
+	default:
+		return "", fmt.Errorf("unsupported architecture: %s", runtime.GOARCH)
+	}
 }
 
 // isSocketInUse checks if a Unix socket is actively being used
