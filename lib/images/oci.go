@@ -72,22 +72,32 @@ func currentPlatform() gcr.Platform {
 
 // inspectManifest synchronously inspects a remote image to get its digest
 // without pulling the image. This is used for upfront digest discovery.
+// For multi-arch images, it returns the platform-specific manifest digest
+// (matching the current host platform) rather than the manifest index digest.
 func (c *ociClient) inspectManifest(ctx context.Context, imageRef string) (string, error) {
 	ref, err := name.ParseReference(imageRef)
 	if err != nil {
 		return "", fmt.Errorf("parse image reference: %w", err)
 	}
 
-	// Use system authentication (reads from ~/.docker/config.json, etc.)
-	// Default retry: only on network errors, max ~1.3s total
-	descriptor, err := remote.Head(ref,
+	// Use remote.Image with platform filtering to get the platform-specific digest.
+	// For multi-arch images, this resolves the manifest index to the correct platform.
+	// This matches what pullToOCILayout does to ensure cache key consistency.
+	// Note: remote.Image is lazy - it only fetches the manifest, not layer blobs.
+	img, err := remote.Image(ref,
 		remote.WithContext(ctx),
-		remote.WithAuthFromKeychain(authn.DefaultKeychain))
+		remote.WithAuthFromKeychain(authn.DefaultKeychain),
+		remote.WithPlatform(currentPlatform()))
 	if err != nil {
 		return "", fmt.Errorf("fetch manifest: %w", wrapRegistryError(err))
 	}
 
-	return descriptor.Digest.String(), nil
+	digest, err := img.Digest()
+	if err != nil {
+		return "", fmt.Errorf("get image digest: %w", err)
+	}
+
+	return digest.String(), nil
 }
 
 // pullResult contains the metadata and digest from pulling an image
