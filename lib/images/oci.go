@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
+	gcr "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/empty"
 	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
@@ -60,24 +62,42 @@ func newOCIClient(cacheDir string) (*ociClient, error) {
 	return &ociClient{cacheDir: cacheDir}, nil
 }
 
+// currentPlatform returns the platform for the current host
+func currentPlatform() gcr.Platform {
+	return gcr.Platform{
+		Architecture: runtime.GOARCH,
+		OS:           runtime.GOOS,
+	}
+}
+
 // inspectManifest synchronously inspects a remote image to get its digest
 // without pulling the image. This is used for upfront digest discovery.
+// For multi-arch images, it returns the platform-specific manifest digest
+// (matching the current host platform) rather than the manifest index digest.
 func (c *ociClient) inspectManifest(ctx context.Context, imageRef string) (string, error) {
 	ref, err := name.ParseReference(imageRef)
 	if err != nil {
 		return "", fmt.Errorf("parse image reference: %w", err)
 	}
 
-	// Use system authentication (reads from ~/.docker/config.json, etc.)
-	// Default retry: only on network errors, max ~1.3s total
-	descriptor, err := remote.Head(ref,
+	// Use remote.Image with platform filtering to get the platform-specific digest.
+	// For multi-arch images, this resolves the manifest index to the correct platform.
+	// This matches what pullToOCILayout does to ensure cache key consistency.
+	// Note: remote.Image is lazy - it only fetches the manifest, not layer blobs.
+	img, err := remote.Image(ref,
 		remote.WithContext(ctx),
-		remote.WithAuthFromKeychain(authn.DefaultKeychain))
+		remote.WithAuthFromKeychain(authn.DefaultKeychain),
+		remote.WithPlatform(currentPlatform()))
 	if err != nil {
 		return "", fmt.Errorf("fetch manifest: %w", wrapRegistryError(err))
 	}
 
-	return descriptor.Digest.String(), nil
+	digest, err := img.Digest()
+	if err != nil {
+		return "", fmt.Errorf("get image digest: %w", err)
+	}
+
+	return digest.String(), nil
 }
 
 // pullResult contains the metadata and digest from pulling an image
@@ -126,9 +146,11 @@ func (c *ociClient) pullToOCILayout(ctx context.Context, imageRef, layoutTag str
 
 	// Use system authentication (reads from ~/.docker/config.json, etc.)
 	// Default retry: only on network errors, max ~1.3s total
+	// WithPlatform ensures we pull the correct architecture for multi-arch images
 	img, err := remote.Image(ref,
 		remote.WithContext(ctx),
-		remote.WithAuthFromKeychain(authn.DefaultKeychain))
+		remote.WithAuthFromKeychain(authn.DefaultKeychain),
+		remote.WithPlatform(currentPlatform()))
 	if err != nil {
 		// Rate limits fail here immediately (429 is not retried by default)
 		return fmt.Errorf("fetch image manifest: %w", wrapRegistryError(err))
