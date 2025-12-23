@@ -132,21 +132,6 @@ export class Instances extends APIResource {
   }
 
   /**
-   * Returns information about a path in the guest filesystem. Useful for checking if
-   * a path exists, its type, and permissions before performing file operations.
-   *
-   * @example
-   * ```ts
-   * const pathInfo = await client.instances.stat('id', {
-   *   path: 'path',
-   * });
-   * ```
-   */
-  stat(id: string, query: InstanceStatParams, options?: RequestOptions): APIPromise<PathInfo> {
-    return this._client.get(path`/instances/${id}/stat`, { query, ...options });
-  }
-
-  /**
    * Stop instance (graceful shutdown)
    *
    * @example
@@ -274,49 +259,6 @@ export namespace Instance {
      */
     name?: string;
   }
-}
-
-export interface PathInfo {
-  /**
-   * Whether the path exists
-   */
-  exists: boolean;
-
-  /**
-   * Error message if stat failed (e.g., permission denied). Only set when exists is
-   * false due to an error rather than the path not existing.
-   */
-  error?: string | null;
-
-  /**
-   * True if this is a directory
-   */
-  is_dir?: boolean;
-
-  /**
-   * True if this is a regular file
-   */
-  is_file?: boolean;
-
-  /**
-   * True if this is a symbolic link (only set when follow_links=false)
-   */
-  is_symlink?: boolean;
-
-  /**
-   * Symlink target path (only set when is_symlink=true)
-   */
-  link_target?: string | null;
-
-  /**
-   * File mode (Unix permissions)
-   */
-  mode?: number;
-
-  /**
-   * File size in bytes
-   */
-  size?: number;
 }
 
 export interface PortMapping {
@@ -451,31 +393,17 @@ export interface InstanceLogsParams {
   tail?: number;
 }
 
-export interface InstanceStatParams {
-  /**
-   * Path to stat in the guest filesystem
-   */
-  path: string;
-
-  /**
-   * Follow symbolic links (like stat vs lstat)
-   */
-  follow_links?: boolean;
-}
-
 Instances.Volumes = Volumes;
 
 export declare namespace Instances {
   export {
     type Instance as Instance,
-    type PathInfo as PathInfo,
     type PortMapping as PortMapping,
     type VolumeMount as VolumeMount,
     type InstanceListResponse as InstanceListResponse,
     type InstanceLogsResponse as InstanceLogsResponse,
     type InstanceCreateParams as InstanceCreateParams,
     type InstanceLogsParams as InstanceLogsParams,
-    type InstanceStatParams as InstanceStatParams,
   };
 
   export {

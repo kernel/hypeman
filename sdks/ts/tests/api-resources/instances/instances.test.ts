@@ -144,23 +144,6 @@ describe('resource instances', () => {
   });
 
   // Prism tests are disabled
-  test.skip('stat: only required params', async () => {
-    const responsePromise = client.instances.stat('id', { path: 'path' });
-    const rawResponse = await responsePromise.asResponse();
-    expect(rawResponse).toBeInstanceOf(Response);
-    const response = await responsePromise;
-    expect(response).not.toBeInstanceOf(Response);
-    const dataAndResponse = await responsePromise.withResponse();
-    expect(dataAndResponse.data).toBe(response);
-    expect(dataAndResponse.response).toBe(rawResponse);
-  });
-
-  // Prism tests are disabled
-  test.skip('stat: required and optional params', async () => {
-    const response = await client.instances.stat('id', { path: 'path', follow_links: true });
-  });
-
-  // Prism tests are disabled
   test.skip('stop', async () => {
     const responsePromise = client.instances.stop('id');
     const rawResponse = await responsePromise.asResponse();

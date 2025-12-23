@@ -49,9 +49,7 @@ import {
   InstanceListResponse,
   InstanceLogsParams,
   InstanceLogsResponse,
-  InstanceStatParams,
   Instances,
-  PathInfo,
   PortMapping,
   VolumeMount,
 } from './resources/instances/instances';
@@ -782,14 +780,12 @@ export declare namespace Hypeman {
   export {
     Instances as Instances,
     type Instance as Instance,
-    type PathInfo as PathInfo,
     type PortMapping as PortMapping,
     type VolumeMount as VolumeMount,
     type InstanceListResponse as InstanceListResponse,
     type InstanceLogsResponse as InstanceLogsResponse,
     type InstanceCreateParams as InstanceCreateParams,
     type InstanceLogsParams as InstanceLogsParams,
-    type InstanceStatParams as InstanceStatParams,
   };
 
   export {
