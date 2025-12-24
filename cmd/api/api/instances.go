@@ -479,7 +479,7 @@ func (s *ApiService) StatInstancePath(ctx context.Context, request oapi.StatInst
 		}, nil
 	}
 
-	client := guest.NewGuestServiceClient(grpcConn)
+	client := guest.NewDRPCGuestServiceClient(grpcConn)
 	followLinks := false
 	if request.Params.FollowLinks != nil {
 		followLinks = *request.Params.FollowLinks

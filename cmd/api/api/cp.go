@@ -230,7 +230,7 @@ func (s *ApiService) handleCopyTo(ctx context.Context, ws *websocket.Conn, inst 
 		return 0, fmt.Errorf("get grpc connection: %w", err)
 	}
 
-	client := guest.NewGuestServiceClient(grpcConn)
+	client := guest.NewDRPCGuestServiceClient(grpcConn)
 	stream, err := client.CopyToGuest(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("start copy stream: %w", err)
@@ -340,7 +340,7 @@ func (s *ApiService) handleCopyFrom(ctx context.Context, ws *websocket.Conn, ins
 		return 0, fmt.Errorf("get grpc connection: %w", err)
 	}
 
-	client := guest.NewGuestServiceClient(grpcConn)
+	client := guest.NewDRPCGuestServiceClient(grpcConn)
 	stream, err := client.CopyFromGuest(ctx, &guest.CopyFromGuestRequest{
 		Path:        req.GuestPath,
 		FollowLinks: req.FollowLinks,

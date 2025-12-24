@@ -15,7 +15,7 @@ import (
 )
 
 // Exec handles command execution with bidirectional streaming
-func (s *guestServer) Exec(stream pb.GuestService_ExecServer) error {
+func (s *guestServer) Exec(stream pb.DRPCGuestService_ExecStream) error {
 	log.Printf("[guest-agent] new exec stream")
 
 	// Receive start request
@@ -52,7 +52,7 @@ func (s *guestServer) Exec(stream pb.GuestService_ExecServer) error {
 }
 
 // executeNoTTY executes command without TTY
-func (s *guestServer) executeNoTTY(ctx context.Context, stream pb.GuestService_ExecServer, start *pb.ExecStart) error {
+func (s *guestServer) executeNoTTY(ctx context.Context, stream pb.DRPCGuestService_ExecStream, start *pb.ExecStart) error {
 	// Run command directly - guest-agent is already running in container namespace
 	if len(start.Command) == 0 {
 		return fmt.Errorf("empty command")
@@ -160,7 +160,7 @@ func (s *guestServer) executeNoTTY(ctx context.Context, stream pb.GuestService_E
 }
 
 // executeTTY executes command with TTY
-func (s *guestServer) executeTTY(ctx context.Context, stream pb.GuestService_ExecServer, start *pb.ExecStart) error {
+func (s *guestServer) executeTTY(ctx context.Context, stream pb.DRPCGuestService_ExecStream, start *pb.ExecStart) error {
 	// Run command directly with PTY - guest-agent is already running in container namespace
 	// This ensures PTY and shell are in the same namespace, fixing Ctrl+C signal handling
 	if len(start.Command) == 0 {

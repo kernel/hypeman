@@ -14,7 +14,7 @@ import (
 )
 
 // CopyToGuest handles copying files to the guest filesystem
-func (s *guestServer) CopyToGuest(stream pb.GuestService_CopyToGuestServer) error {
+func (s *guestServer) CopyToGuest(stream pb.DRPCGuestService_CopyToGuestStream) error {
 	log.Printf("[guest-agent] new copy-to-guest stream")
 
 	// Receive start request
@@ -154,7 +154,7 @@ func (s *guestServer) CopyToGuest(stream pb.GuestService_CopyToGuestServer) erro
 }
 
 // CopyFromGuest handles copying files from the guest filesystem
-func (s *guestServer) CopyFromGuest(req *pb.CopyFromGuestRequest, stream pb.GuestService_CopyFromGuestServer) error {
+func (s *guestServer) CopyFromGuest(req *pb.CopyFromGuestRequest, stream pb.DRPCGuestService_CopyFromGuestStream) error {
 	log.Printf("[guest-agent] copy-from-guest: path=%s follow_links=%v", req.Path, req.FollowLinks)
 
 	// Stat the source path
@@ -186,7 +186,7 @@ func (s *guestServer) CopyFromGuest(req *pb.CopyFromGuestRequest, stream pb.Gues
 }
 
 // copyFromGuestFile streams a single file
-func (s *guestServer) copyFromGuestFile(fullPath, relativePath string, info os.FileInfo, followLinks bool, stream pb.GuestService_CopyFromGuestServer, isFinal bool) error {
+func (s *guestServer) copyFromGuestFile(fullPath, relativePath string, info os.FileInfo, followLinks bool, stream pb.DRPCGuestService_CopyFromGuestStream, isFinal bool) error {
 	if relativePath == "" {
 		relativePath = filepath.Base(fullPath)
 	}
@@ -288,7 +288,7 @@ func (s *guestServer) copyFromGuestFile(fullPath, relativePath string, info os.F
 }
 
 // copyFromGuestDir walks a directory and streams all files
-func (s *guestServer) copyFromGuestDir(rootPath string, followLinks bool, stream pb.GuestService_CopyFromGuestServer) error {
+func (s *guestServer) copyFromGuestDir(rootPath string, followLinks bool, stream pb.DRPCGuestService_CopyFromGuestStream) error {
 	// Collect all entries first to know which is final
 	type entry struct {
 		fullPath     string

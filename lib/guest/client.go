@@ -17,8 +17,7 @@ import (
 
 	securejoin "github.com/cyphar/filepath-securejoin"
 	"github.com/onkernel/hypeman/lib/hypervisor"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
+	"storj.io/drpc/drpcconn"
 )
 
 const (
@@ -51,25 +50,31 @@ func IsAgentConnectionError(err error) bool {
 		errors.As(err, &agentErr))
 }
 
-// connPool manages reusable gRPC connections per vsock dialer key
+// pooledConn wraps a drpc connection with its underlying net.Conn for cleanup
+type pooledConn struct {
+	drpc    *drpcconn.Conn
+	netConn net.Conn
+}
+
+// connPool manages reusable DRPC connections per vsock dialer key
 // This avoids the overhead and potential issues of rapidly creating/closing connections
 var connPool = struct {
 	sync.RWMutex
-	conns map[string]*grpc.ClientConn
+	conns map[string]*pooledConn
 }{
-	conns: make(map[string]*grpc.ClientConn),
+	conns: make(map[string]*pooledConn),
 }
 
 // GetOrCreateConn returns an existing connection or creates a new one using a VsockDialer.
 // This supports multiple hypervisor types (Cloud Hypervisor, QEMU, etc.).
-func GetOrCreateConn(ctx context.Context, dialer hypervisor.VsockDialer) (*grpc.ClientConn, error) {
+func GetOrCreateConn(ctx context.Context, dialer hypervisor.VsockDialer) (*drpcconn.Conn, error) {
 	key := dialer.Key()
 
 	// Try read lock first for existing connection
 	connPool.RLock()
-	if conn, ok := connPool.conns[key]; ok {
+	if pc, ok := connPool.conns[key]; ok {
 		connPool.RUnlock()
-		return conn, nil
+		return pc.drpc, nil
 	}
 	connPool.RUnlock()
 
@@ -78,40 +83,33 @@ func GetOrCreateConn(ctx context.Context, dialer hypervisor.VsockDialer) (*grpc.
 	defer connPool.Unlock()
 
 	// Double-check after acquiring write lock
-	if conn, ok := connPool.conns[key]; ok {
-		return conn, nil
+	if pc, ok := connPool.conns[key]; ok {
+		return pc.drpc, nil
 	}
 
 	// Create new connection using the VsockDialer
-	conn, err := grpc.Dial("passthrough:///vsock",
-		grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
-			netConn, err := dialer.DialVsock(ctx, vsockGuestPort)
-			if err != nil {
-				return nil, &AgentConnectionError{Err: err}
-			}
-			return netConn, nil
-		}),
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-	)
+	netConn, err := dialer.DialVsock(ctx, vsockGuestPort)
 	if err != nil {
-		return nil, fmt.Errorf("create grpc connection: %w", err)
+		return nil, &AgentConnectionError{Err: err}
 	}
 
-	connPool.conns[key] = conn
-	slog.Debug("created new gRPC connection", "key", key)
+	// Wrap in drpc connection
+	conn := drpcconn.New(netConn)
+
+	connPool.conns[key] = &pooledConn{drpc: conn, netConn: netConn}
+	slog.Debug("created new DRPC connection", "key", key)
 	return conn, nil
 }
 
 // CloseConn removes a connection from the pool by key (call when VM is deleted).
-// We only remove from pool, not explicitly close - the connection will fail
-// naturally when the VM dies, and grpc will clean up.
 func CloseConn(dialerKey string) {
 	connPool.Lock()
 	defer connPool.Unlock()
 
-	if _, ok := connPool.conns[dialerKey]; ok {
+	if pc, ok := connPool.conns[dialerKey]; ok {
+		pc.drpc.Close()
 		delete(connPool.conns, dialerKey)
-		slog.Debug("removed gRPC connection from pool", "key", dialerKey)
+		slog.Debug("removed DRPC connection from pool", "key", dialerKey)
 	}
 }
 
@@ -132,27 +130,27 @@ type ExecOptions struct {
 	Timeout int32             // Execution timeout in seconds (0 = no timeout)
 }
 
-// ExecIntoInstance executes command in instance via vsock using gRPC.
+// ExecIntoInstance executes command in instance via vsock using DRPC.
 // The dialer is a hypervisor-specific VsockDialer that knows how to connect to the guest.
 func ExecIntoInstance(ctx context.Context, dialer hypervisor.VsockDialer, opts ExecOptions) (*ExitStatus, error) {
 	start := time.Now()
 	var bytesSent int64
 
-	// Get or create a reusable gRPC connection for this vsock dialer
-	grpcConn, err := GetOrCreateConn(ctx, dialer)
+	// Get or create a reusable DRPC connection for this vsock dialer
+	drpcConn, err := GetOrCreateConn(ctx, dialer)
 	if err != nil {
-		return nil, fmt.Errorf("get grpc connection: %w", err)
+		return nil, fmt.Errorf("get drpc connection: %w", err)
 	}
 	// Note: Don't close the connection - it's pooled and reused
 
 	// Create guest client
-	client := NewGuestServiceClient(grpcConn)
+	client := NewDRPCGuestServiceClient(drpcConn)
 	stream, err := client.Exec(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("start exec stream: %w", err)
 	}
 	// Ensure stream is properly closed when we're done
-	defer stream.CloseSend()
+	defer stream.Close()
 
 	// Send start request
 	if err := stream.Send(&ExecRequest{
@@ -233,12 +231,12 @@ type CopyToInstanceOptions struct {
 // CopyToInstance copies a file or directory to an instance via vsock.
 // The dialer is a hypervisor-specific VsockDialer that knows how to connect to the guest.
 func CopyToInstance(ctx context.Context, dialer hypervisor.VsockDialer, opts CopyToInstanceOptions) error {
-	grpcConn, err := GetOrCreateConn(ctx, dialer)
+	drpcConn, err := GetOrCreateConn(ctx, dialer)
 	if err != nil {
-		return fmt.Errorf("get grpc connection: %w", err)
+		return fmt.Errorf("get drpc connection: %w", err)
 	}
 
-	client := NewGuestServiceClient(grpcConn)
+	client := NewDRPCGuestServiceClient(drpcConn)
 
 	// Stat the source
 	srcInfo, err := os.Stat(opts.SrcPath)
@@ -253,7 +251,7 @@ func CopyToInstance(ctx context.Context, dialer hypervisor.VsockDialer, opts Cop
 }
 
 // copyFileToInstance copies a single file to the instance
-func copyFileToInstance(ctx context.Context, client GuestServiceClient, srcPath, dstPath string, mode fs.FileMode) error {
+func copyFileToInstance(ctx context.Context, client DRPCGuestServiceClient, srcPath, dstPath string, mode fs.FileMode) error {
 	srcInfo, err := os.Stat(srcPath)
 	if err != nil {
 		return fmt.Errorf("stat source: %w", err)
@@ -329,7 +327,7 @@ func copyFileToInstance(ctx context.Context, client GuestServiceClient, srcPath,
 }
 
 // copyDirToInstance copies a directory recursively to the instance
-func copyDirToInstance(ctx context.Context, client GuestServiceClient, srcPath, dstPath string) error {
+func copyDirToInstance(ctx context.Context, client DRPCGuestServiceClient, srcPath, dstPath string) error {
 	srcPath = filepath.Clean(srcPath)
 
 	// First create the destination directory
@@ -444,12 +442,12 @@ type FileHandler func(header *CopyFromGuestHeader, data io.Reader) error
 // CopyFromInstance copies a file or directory from an instance via vsock.
 // The dialer is a hypervisor-specific VsockDialer that knows how to connect to the guest.
 func CopyFromInstance(ctx context.Context, dialer hypervisor.VsockDialer, opts CopyFromInstanceOptions) error {
-	grpcConn, err := GetOrCreateConn(ctx, dialer)
+	drpcConn, err := GetOrCreateConn(ctx, dialer)
 	if err != nil {
-		return fmt.Errorf("get grpc connection: %w", err)
+		return fmt.Errorf("get drpc connection: %w", err)
 	}
 
-	client := NewGuestServiceClient(grpcConn)
+	client := NewDRPCGuestServiceClient(drpcConn)
 
 	stream, err := client.CopyFromGuest(ctx, &CopyFromGuestRequest{
 		Path:        opts.SrcPath,

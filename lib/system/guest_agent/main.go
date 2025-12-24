@@ -1,17 +1,19 @@
 package main
 
 import (
+	"context"
 	"log"
 	"time"
 
 	"github.com/mdlayher/vsock"
 	pb "github.com/onkernel/hypeman/lib/guest"
-	"google.golang.org/grpc"
+	"storj.io/drpc/drpcmux"
+	"storj.io/drpc/drpcserver"
 )
 
-// guestServer implements the gRPC GuestService
+// guestServer implements the DRPC GuestService
 type guestServer struct {
-	pb.UnimplementedGuestServiceServer
+	pb.DRPCGuestServiceUnimplementedServer
 }
 
 func main() {
@@ -35,12 +37,25 @@ func main() {
 
 	log.Println("[guest-agent] listening on vsock port 2222")
 
-	// Create gRPC server
-	grpcServer := grpc.NewServer()
-	pb.RegisterGuestServiceServer(grpcServer, &guestServer{})
+	// Create DRPC server
+	mux := drpcmux.New()
+	if err := pb.DRPCRegisterGuestService(mux, &guestServer{}); err != nil {
+		log.Fatalf("[guest-agent] failed to register service: %v", err)
+	}
 
-	// Serve gRPC over vsock
-	if err := grpcServer.Serve(l); err != nil {
-		log.Fatalf("[guest-agent] gRPC server failed: %v", err)
+	server := drpcserver.New(mux)
+
+	// Serve DRPC over vsock - accept connections in a loop
+	for {
+		conn, err := l.Accept()
+		if err != nil {
+			log.Printf("[guest-agent] accept error: %v", err)
+			continue
+		}
+		go func() {
+			if err := server.ServeOne(context.Background(), conn); err != nil {
+				log.Printf("[guest-agent] connection error: %v", err)
+			}
+		}()
 	}
 }

@@ -122,15 +122,16 @@ generate-wire: $(WIRE)
 	@echo "Generating wire code..."
 	cd ./cmd/api && $(WIRE)
 
-# Generate gRPC code from proto
-generate-grpc:
-	@echo "Generating gRPC code from proto..."
-	protoc --go_out=. --go_opt=paths=source_relative \
-		--go-grpc_out=. --go-grpc_opt=paths=source_relative \
+# Generate DRPC code from proto
+# Note: PATH ordering ensures we use GOPATH/bin versions of protoc-gen-go and protoc-gen-go-drpc
+generate-drpc:
+	@echo "Generating DRPC code from proto..."
+	PATH=$(shell go env GOPATH)/bin:$$PATH protoc --go_out=. --go_opt=paths=source_relative \
+		--go-drpc_out=. --go-drpc_opt=paths=source_relative \
 		lib/guest/guest.proto
 
 # Generate all code
-generate-all: oapi-generate generate-vmm-client generate-wire generate-grpc
+generate-all: oapi-generate generate-vmm-client generate-wire generate-drpc
 
 # Check if CH binaries exist, download if missing
 .PHONY: ensure-ch-binaries
