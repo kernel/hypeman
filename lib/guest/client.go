@@ -18,7 +18,9 @@ import (
 	securejoin "github.com/cyphar/filepath-securejoin"
 	"github.com/onkernel/hypeman/lib/hypervisor"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -126,7 +128,7 @@ type ExecOptions struct {
 
 // ExecIntoInstance executes command in instance via vsock using gRPC.
 // The dialer is a hypervisor-specific VsockDialer that knows how to connect to the guest.
-// If WaitForAgent is set, it will retry on AgentConnectionError until the timeout.
+// If WaitForAgent is set, it will retry on connection errors until the timeout.
 func ExecIntoInstance(ctx context.Context, dialer hypervisor.VsockDialer, opts ExecOptions) (*ExitStatus, error) {
 	// If no wait requested, execute immediately
 	if opts.WaitForAgent == 0 {
@@ -138,9 +140,13 @@ func ExecIntoInstance(ctx context.Context, dialer hypervisor.VsockDialer, opts E
 	for {
 		exit, err := execIntoInstanceOnce(ctx, dialer, opts)
 
-		// Success or non-connection error - return immediately
-		var connErr *AgentConnectionError
-		if err == nil || !errors.As(err, &connErr) {
+		// Success - return immediately
+		if err == nil {
+			return exit, err
+		}
+
+		// Check if this is a retryable connection error
+		if !isRetryableConnectionError(err) {
 			return exit, err
 		}
 
@@ -157,6 +163,25 @@ func ExecIntoInstance(ctx context.Context, dialer hypervisor.VsockDialer, opts E
 			// Continue to retry
 		}
 	}
+}
+
+// isRetryableConnectionError returns true if the error indicates the guest agent
+// is not yet ready and we should retry connecting.
+func isRetryableConnectionError(err error) bool {
+	// Check for our custom AgentConnectionError
+	var connErr *AgentConnectionError
+	if errors.As(err, &connErr) {
+		return true
+	}
+
+	// Check for gRPC Unavailable errors (agent not yet listening)
+	if s, ok := status.FromError(err); ok {
+		if s.Code() == codes.Unavailable {
+			return true
+		}
+	}
+
+	return false
 }
 
 // execIntoInstanceOnce executes command in instance via vsock using gRPC (single attempt).
