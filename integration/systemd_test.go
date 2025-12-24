@@ -170,35 +170,25 @@ func TestSystemdMode(t *testing.T) {
 
 // waitForGuestAgent polls until the guest agent is ready
 func waitForGuestAgent(ctx context.Context, mgr instances.Manager, instanceID string, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		inst, err := mgr.GetInstance(ctx, instanceID)
-		if err != nil {
-			time.Sleep(500 * time.Millisecond)
-			continue
-		}
-
-		// Try to connect to the guest agent
-		dialer, err := hypervisor.NewVsockDialer(inst.HypervisorType, inst.VsockSocket, inst.VsockCID)
-		if err != nil {
-			time.Sleep(500 * time.Millisecond)
-			continue
-		}
-
-		// Try a simple exec to verify agent is responding
-		var stdout bytes.Buffer
-		_, err = guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{
-			Command: []string{"echo", "ready"},
-			Stdout:  &stdout,
-			TTY:     false,
-		})
-		if err == nil {
-			return nil
-		}
-
-		time.Sleep(500 * time.Millisecond)
+	inst, err := mgr.GetInstance(ctx, instanceID)
+	if err != nil {
+		return err
 	}
-	return context.DeadlineExceeded
+
+	dialer, err := hypervisor.NewVsockDialer(inst.HypervisorType, inst.VsockSocket, inst.VsockCID)
+	if err != nil {
+		return err
+	}
+
+	// Use WaitForAgent to wait for the agent to be ready
+	var stdout bytes.Buffer
+	_, err = guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{
+		Command:      []string{"echo", "ready"},
+		Stdout:       &stdout,
+		TTY:          false,
+		WaitForAgent: timeout,
+	})
+	return err
 }
 
 // execInInstance executes a command in the instance

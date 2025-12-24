@@ -92,6 +92,8 @@ flowchart TB
     end
 ```
 
+
+
 ## Shared vs Mode-Specific Behavior
 
 | Step | Exec Mode | Systemd Mode ||------|-----------|--------------|| Mount proc/sys/dev | Shared | Shared || Mount rootfs overlay | Shared | Shared || Read config disk | Shared | Shared || Configure network | Init configures it | Init configures it (before pivot) || Load GPU drivers | Shared | Shared || Mount volumes | Shared | Shared || Copy guest-agent | To `/opt/hypeman/` | To `/opt/hypeman/` || Start guest-agent | Background process | Systemd service || PID 1 | Go init binary | Systemd || App lifecycle | Managed by init | Managed by systemd |
@@ -143,6 +145,8 @@ func (l *Logger) Error(phase, msg string, err error) {
 // 2024-12-23T10:15:32Z [INFO] [systemd] exec /sbin/init
 ```
 
+
+
 ## Go-based Init Binary
 
 Package structure at `lib/system/init/`:
@@ -159,6 +163,8 @@ lib/system/init/
     mode_systemd.go   # Systemd mode: pivot_root + exec init
     logger.go         # Human-readable logging to hypeman operations log
 ```
+
+
 
 ### Main Orchestration
 
@@ -215,6 +221,8 @@ func main() {
     }
 }
 ```
+
+
 
 ### Systemd Mode
 
@@ -277,6 +285,8 @@ WantedBy=multi-user.target
 }
 ```
 
+
+
 ## Detection Logic
 
 Auto-detect systemd mode by inspecting the image's CMD. No override flag - if CMD is a systemd init, always use systemd mode.
@@ -319,6 +329,8 @@ func IsSystemdImage(entrypoint, cmd []string) bool {
     return false
 }
 ```
+
+
 
 ## E2E Test
 
@@ -400,7 +412,7 @@ func TestExecModeUnchanged(t *testing.T) {
     result = execInVM(t, inst, "cat", "/proc/1/comm")
     assert.Equal(t, "init", strings.TrimSpace(result.Stdout))
 }
+
+
+
 ```
-
-
-## Files to Modify/Create

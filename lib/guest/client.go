@@ -30,7 +30,6 @@ const (
 // This can happen if:
 // - The VM is still booting
 // - The guest agent was stopped or deleted
-// - The VM is in systemd mode and the agent service failed to start
 type AgentConnectionError struct {
 	Err error
 }
@@ -41,14 +40,6 @@ func (e *AgentConnectionError) Error() string {
 
 func (e *AgentConnectionError) Unwrap() error {
 	return e.Err
-}
-
-// IsAgentConnectionError checks if an error is due to the guest agent not responding.
-func IsAgentConnectionError(err error) bool {
-	var agentErr *AgentConnectionError
-	return err != nil && (strings.Contains(err.Error(), "guest agent not responding") ||
-		strings.Contains(err.Error(), "connection refused") ||
-		errors.As(err, &agentErr))
 }
 
 // connPool manages reusable gRPC connections per vsock dialer key
@@ -122,19 +113,54 @@ type ExitStatus struct {
 
 // ExecOptions configures command execution
 type ExecOptions struct {
-	Command []string
-	Stdin   io.Reader
-	Stdout  io.Writer
-	Stderr  io.Writer
-	TTY     bool
-	Env     map[string]string // Environment variables
-	Cwd     string            // Working directory (optional)
-	Timeout int32             // Execution timeout in seconds (0 = no timeout)
+	Command      []string
+	Stdin        io.Reader
+	Stdout       io.Writer
+	Stderr       io.Writer
+	TTY          bool
+	Env          map[string]string // Environment variables
+	Cwd          string            // Working directory (optional)
+	Timeout      int32             // Execution timeout in seconds (0 = no timeout)
+	WaitForAgent time.Duration     // Max time to wait for agent to be ready (0 = no wait, fail immediately)
 }
 
 // ExecIntoInstance executes command in instance via vsock using gRPC.
 // The dialer is a hypervisor-specific VsockDialer that knows how to connect to the guest.
+// If WaitForAgent is set, it will retry on AgentConnectionError until the timeout.
 func ExecIntoInstance(ctx context.Context, dialer hypervisor.VsockDialer, opts ExecOptions) (*ExitStatus, error) {
+	// If no wait requested, execute immediately
+	if opts.WaitForAgent == 0 {
+		return execIntoInstanceOnce(ctx, dialer, opts)
+	}
+
+	deadline := time.Now().Add(opts.WaitForAgent)
+
+	for {
+		exit, err := execIntoInstanceOnce(ctx, dialer, opts)
+
+		// Success or non-connection error - return immediately
+		var connErr *AgentConnectionError
+		if err == nil || !errors.As(err, &connErr) {
+			return exit, err
+		}
+
+		// Connection error - check if we should retry
+		if time.Now().After(deadline) {
+			return nil, err
+		}
+
+		// Wait before retrying, but respect context cancellation
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+			// Continue to retry
+		}
+	}
+}
+
+// execIntoInstanceOnce executes command in instance via vsock using gRPC (single attempt).
+func execIntoInstanceOnce(ctx context.Context, dialer hypervisor.VsockDialer, opts ExecOptions) (*ExitStatus, error) {
 	start := time.Now()
 	var bytesSent int64
 

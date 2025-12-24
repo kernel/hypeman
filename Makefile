@@ -1,5 +1,5 @@
 SHELL := /bin/bash
-.PHONY: oapi-generate generate-vmm-client generate-wire generate-all dev build test install-tools gen-jwt download-ch-binaries download-ch-spec ensure-ch-binaries build-caddy-binaries build-caddy ensure-caddy-binaries build-preview-cli release-prep clean
+.PHONY: oapi-generate generate-vmm-client generate-wire generate-all dev build test install-tools gen-jwt download-ch-binaries download-ch-spec ensure-ch-binaries build-caddy-binaries build-caddy ensure-caddy-binaries  release-prep clean build-embedded
 
 # Directory where local binaries will be installed
 BIN_DIR ?= $(CURDIR)/bin
@@ -176,7 +176,6 @@ lib/system/init/init: lib/system/init/*.go
 	cd lib/system/init && CGO_ENABLED=0 go build -ldflags="-s -w" -o init .
 
 # Build all embedded binaries
-.PHONY: build-embedded
 build-embedded: lib/system/guest_agent/guest-agent lib/system/init/init
 
 # Build the binary
