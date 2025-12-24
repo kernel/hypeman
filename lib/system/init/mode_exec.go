@@ -59,9 +59,11 @@ func runExecMode(log *Logger, cfg *Config) {
 
 	log.Info("exec", "launching entrypoint")
 
-	// Run the entrypoint
+	// Run the entrypoint without stdin (defaults to /dev/null).
+	// This matches the old shell script behavior where the app ran in background with &
+	// and couldn't read from stdin. Interactive shells like bash will see EOF and exit.
+	// Users interact with the VM via guest-agent exec, not the entrypoint's stdin.
 	appCmd := exec.Command("/bin/sh", "-c", shellCmd)
-	appCmd.Stdin = os.Stdin
 	appCmd.Stdout = os.Stdout
 	appCmd.Stderr = os.Stderr
 

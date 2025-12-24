@@ -236,7 +236,7 @@ func TestExecWithDebianMinimal(t *testing.T) {
 
 	// Verify the app exited but VM is still usable (key behavior this test validates)
 	logs = collectTestLogs(t, svc, inst.Id, 200)
-	assert.Contains(t, logs, "overlay-init: app exited with code", "App should have exited")
+	assert.Contains(t, logs, "[exec] app exited with code", "App should have exited")
 
 	// Test exec commands work even though the main app (bash) has exited
 	dialer2, err := hypervisor.NewVsockDialer(actualInst.HypervisorType, actualInst.VsockSocket, actualInst.VsockCID)
