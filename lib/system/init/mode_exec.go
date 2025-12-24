@@ -12,17 +12,30 @@ import (
 // - The init binary remains PID 1
 // - Guest-agent runs as a background process
 // - The container entrypoint runs as a child process
-// - When the entrypoint exits, the VM exits
+// - After entrypoint exits, guest-agent keeps VM alive
 func runExecMode(log *Logger, cfg *Config) {
 	const newroot = "/overlay/newroot"
+
+	// Change root to the new filesystem using chroot (consistent with systemd mode)
+	log.Info("exec", "executing chroot")
+	if err := syscall.Chroot(newroot); err != nil {
+		log.Error("exec", "chroot failed", err)
+		dropToShell()
+	}
+
+	// Change to new root directory
+	if err := os.Chdir("/"); err != nil {
+		log.Error("exec", "chdir / failed", err)
+		dropToShell()
+	}
 
 	// Set up environment
 	os.Setenv("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 	os.Setenv("HOME", "/root")
 
-	// Start guest-agent in background inside the container namespace
+	// Start guest-agent in background
 	log.Info("exec", "starting guest-agent in background")
-	agentCmd := exec.Command("/usr/sbin/chroot", newroot, "/opt/hypeman/guest-agent")
+	agentCmd := exec.Command("/opt/hypeman/guest-agent")
 	agentCmd.Stdout = os.Stdout
 	agentCmd.Stderr = os.Stderr
 	if err := agentCmd.Start(); err != nil {
@@ -47,7 +60,7 @@ func runExecMode(log *Logger, cfg *Config) {
 	log.Info("exec", "launching entrypoint")
 
 	// Run the entrypoint
-	appCmd := exec.Command("/usr/sbin/chroot", newroot, "/bin/sh", "-c", shellCmd)
+	appCmd := exec.Command("/bin/sh", "-c", shellCmd)
 	appCmd.Stdin = os.Stdin
 	appCmd.Stdout = os.Stdout
 	appCmd.Stderr = os.Stderr

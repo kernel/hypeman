@@ -170,12 +170,10 @@ lib/system/guest_agent/guest-agent: lib/system/guest_agent/*.go
 	cd lib/system/guest_agent && CGO_ENABLED=0 go build -ldflags="-s -w" -o guest-agent .
 
 # Build init binary (runs as PID 1 in guest VM) for embedding
-# Uses static linking for portability across different guest environments
 lib/system/init/init: lib/system/init/*.go
 	@echo "Building init binary..."
 	cd lib/system/init && CGO_ENABLED=0 go build -ldflags="-s -w" -o init .
 
-# Build all embedded binaries
 build-embedded: lib/system/guest_agent/guest-agent lib/system/init/init
 
 # Build the binary

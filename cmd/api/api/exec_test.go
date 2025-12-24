@@ -115,7 +115,6 @@ func TestExecInstanceNonTTY(t *testing.T) {
 		t.Logf("vsock socket exists: %s", actualInst.VsockSocket)
 	}
 
-	// Wait for exec agent to be ready using WaitForAgent
 	var stdout, stderr outputBuffer
 
 	dialer, err := hypervisor.NewVsockDialer(actualInst.HypervisorType, actualInst.VsockSocket, actualInst.VsockCID)
