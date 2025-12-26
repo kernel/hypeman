@@ -188,7 +188,7 @@ func Load() *Config {
 		OversubMemory:  getEnvFloat("OVERSUB_MEMORY", 1.0),
 		OversubDisk:    getEnvFloat("OVERSUB_DISK", 1.0),
 		OversubNetwork: getEnvFloat("OVERSUB_NETWORK", 2.0),
-		OversubDiskIO:  getEnvFloat("OVERSUB_DISK_IO", 5.0),
+		OversubDiskIO:  getEnvFloat("OVERSUB_DISK_IO", 2.0),
 
 		// Resource capacity limits (empty = auto-detect)
 		DiskLimit:       getEnv("DISK_LIMIT", ""),

@@ -18,10 +18,10 @@ Host resource discovery, capacity tracking, and oversubscription-aware allocatio
 | `OVERSUB_MEMORY` | `1.0` | Memory oversubscription ratio |
 | `OVERSUB_DISK` | `1.0` | Disk oversubscription ratio |
 | `OVERSUB_NETWORK` | `2.0` | Network oversubscription ratio |
-| `OVERSUB_DISK_IO` | `5.0` | Disk I/O oversubscription ratio |
+| `OVERSUB_DISK_IO` | `2.0` | Disk I/O oversubscription ratio |
 | `DISK_LIMIT` | auto | Hard disk limit (e.g., `500GB`), auto-detects from filesystem |
 | `NETWORK_LIMIT` | auto | Hard network limit (e.g., `10Gbps`), auto-detects from uplink speed |
-| `DISK_IO_LIMIT` | none | Hard disk I/O limit (e.g., `500MB/s`), no limiting if unset |
+| `DISK_IO_LIMIT` | `1GB/s` | Hard disk I/O limit (e.g., `500MB/s`, `2GB/s`) |
 | `MAX_IMAGE_STORAGE` | `0.2` | Max image storage as fraction of disk (OCI cache + rootfs) |
 
 ## Resource Types
@@ -68,20 +68,20 @@ Per-VM disk I/O rate limiting with burst support:
 
 - **Cloud Hypervisor**: Uses native `RateLimiterConfig` with token bucket
 - **QEMU**: Uses drive `throttling.bps-total` options
-- **Default**: Proportional to CPU: `(vcpus / cpu_capacity) * disk_io_capacity * 5.0`
+- **Default**: Proportional to CPU: `(vcpus / cpu_capacity) * disk_io_capacity * 2.0`
 - **Burst**: 4x sustained rate (allows fast cold starts)
 
 ## Example: Default Limits
 
-**Host**: 16-core server with 10Gbps NIC and NVMe SSD (configured `DISK_IO_LIMIT=2GB/s`)
+**Host**: 16-core server with 10Gbps NIC (default disk I/O = 1GB/s)
 
 **VM**: 2 vCPUs (12.5% of host)
 
 | Resource | Calculation | Default Limit |
 |----------|-------------|---------------|
 | Network (down/up) | 10Gbps × 2.0 × 12.5% | 2.5 Gbps (312 MB/s) |
-| Disk I/O (sustained) | 2GB/s × 5.0 × 12.5% | 1.25 GB/s |
-| Disk I/O (burst) | 1.25 GB/s × 4 | 5 GB/s |
+| Disk I/O (sustained) | 1GB/s × 2.0 × 12.5% | 250 MB/s |
+| Disk I/O (burst) | 250 MB/s × 4 | 1 GB/s |
 
 ## Effective Limits
 

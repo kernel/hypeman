@@ -347,16 +347,16 @@ func (m *Manager) NetworkCapacity() int64 {
 	return 0
 }
 
-// DiskIOCapacity returns the configured disk I/O capacity in bytes/sec.
-// Returns 0 if not configured (no I/O limiting).
+// DiskIOCapacity returns the disk I/O capacity in bytes/sec.
+// Uses configured DISK_IO_LIMIT if set, otherwise defaults to 1 GB/s.
 func (m *Manager) DiskIOCapacity() int64 {
 	if m.cfg.DiskIOLimit == "" {
-		return 0
+		return 1 * 1000 * 1000 * 1000 // 1 GB/s default
 	}
 	// Parse the limit using the same format as network (e.g., "500MB/s")
 	capacity, err := parseDiskIOLimit(m.cfg.DiskIOLimit)
 	if err != nil {
-		return 0
+		return 1 * 1000 * 1000 * 1000 // 1 GB/s fallback
 	}
 	return capacity
 }
@@ -403,7 +403,7 @@ func (m *Manager) DefaultDiskIOBandwidth(vcpus int) (ioBps, burstBps int64) {
 
 	ratio := m.cfg.OversubDiskIO
 	if ratio <= 0 {
-		ratio = 5.0 // Default 5x oversubscription for disk I/O
+		ratio = 2.0 // Default 2x oversubscription for disk I/O
 	}
 	effectiveIO := int64(float64(ioCapacity) * ratio)
 
