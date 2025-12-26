@@ -19,7 +19,7 @@ type Manager interface {
 
 	// Instance allocation operations (called by instance manager)
 	CreateAllocation(ctx context.Context, req AllocateRequest) (*NetworkConfig, error)
-	RecreateAllocation(ctx context.Context, instanceID string) error
+	RecreateAllocation(ctx context.Context, instanceID string, rateLimitBps int64) error
 	ReleaseAllocation(ctx context.Context, alloc *Allocation) error
 
 	// Queries (derive from CH/snapshots)

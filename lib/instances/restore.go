@@ -60,8 +60,8 @@ func (m *manager) restoreInstance(
 		if m.metrics != nil && m.metrics.tracer != nil {
 			ctx, networkSpan = m.metrics.tracer.Start(ctx, "RestoreNetwork")
 		}
-		log.DebugContext(ctx, "recreating network for restore", "instance_id", id, "network", "default")
-		if err := m.networkManager.RecreateAllocation(ctx, id); err != nil {
+		log.InfoContext(ctx, "recreating network for restore", "instance_id", id, "network", "default", "network_bandwidth", stored.NetworkBandwidth)
+		if err := m.networkManager.RecreateAllocation(ctx, id, stored.NetworkBandwidth); err != nil {
 			if networkSpan != nil {
 				networkSpan.End()
 			}
@@ -78,7 +78,7 @@ func (m *manager) restoreInstance(
 	if m.metrics != nil && m.metrics.tracer != nil {
 		ctx, restoreSpan = m.metrics.tracer.Start(ctx, "RestoreFromSnapshot")
 	}
-	log.DebugContext(ctx, "restoring from snapshot", "instance_id", id, "snapshot_dir", snapshotDir, "hypervisor", stored.HypervisorType)
+	log.InfoContext(ctx, "restoring from snapshot", "instance_id", id, "snapshot_dir", snapshotDir, "hypervisor", stored.HypervisorType)
 	pid, hv, err := m.restoreFromSnapshot(ctx, stored, snapshotDir)
 	if restoreSpan != nil {
 		restoreSpan.End()
@@ -101,7 +101,7 @@ func (m *manager) restoreInstance(
 	if m.metrics != nil && m.metrics.tracer != nil {
 		ctx, resumeSpan = m.metrics.tracer.Start(ctx, "ResumeVM")
 	}
-	log.DebugContext(ctx, "resuming VM", "instance_id", id)
+	log.InfoContext(ctx, "resuming VM", "instance_id", id)
 	if err := hv.Resume(ctx); err != nil {
 		if resumeSpan != nil {
 			resumeSpan.End()
@@ -120,7 +120,7 @@ func (m *manager) restoreInstance(
 	}
 
 	// 8. Delete snapshot after successful restore
-	log.DebugContext(ctx, "deleting snapshot after successful restore", "instance_id", id)
+	log.InfoContext(ctx, "deleting snapshot after successful restore", "instance_id", id)
 	os.RemoveAll(snapshotDir) // Best effort, ignore errors
 
 	// 9. Update timestamp

@@ -185,6 +185,7 @@ sudo setcap 'cap_net_admin,cap_net_bind_service=+eip' /path/to/hypeman
 1. Derive allocation from snapshot config.json
 2. Recreate TAP device with same name
 3. Attach to bridge with isolation mode
+4. Reapply rate limit from instance metadata
 
 ### ReleaseAllocation (for shutdown/delete)
 1. Derive current allocation

@@ -90,7 +90,7 @@ func (m *manager) CreateAllocation(ctx context.Context, req AllocateRequest) (*N
 // 1. Doesn't allocate new IPs (reuses existing from snapshot)
 // 2. Is already protected by instance-level locking
 // 3. Uses deterministic TAP names that can't conflict
-func (m *manager) RecreateAllocation(ctx context.Context, instanceID string) error {
+func (m *manager) RecreateAllocation(ctx context.Context, instanceID string, rateLimitBps int64) error {
 	log := logger.FromContext(ctx)
 
 	// 1. Derive allocation from snapshot
@@ -109,9 +109,8 @@ func (m *manager) RecreateAllocation(ctx context.Context, instanceID string) err
 		return fmt.Errorf("get default network: %w", err)
 	}
 
-	// 3. Recreate TAP device with same name
-	// Note: Rate limit not applied on recreate - would need to be stored in metadata
-	if err := m.createTAPDevice(alloc.TAPDevice, network.Bridge, network.Isolated, 0); err != nil {
+	// 3. Recreate TAP device with same name and rate limit from instance metadata
+	if err := m.createTAPDevice(alloc.TAPDevice, network.Bridge, network.Isolated, rateLimitBps); err != nil {
 		return fmt.Errorf("create TAP device: %w", err)
 	}
 	m.recordTAPOperation(ctx, "create")
@@ -119,7 +118,8 @@ func (m *manager) RecreateAllocation(ctx context.Context, instanceID string) err
 	log.InfoContext(ctx, "recreated network for restore",
 		"instance_id", instanceID,
 		"network", "default",
-		"tap", alloc.TAPDevice)
+		"tap", alloc.TAPDevice,
+		"rate_limit_bps", rateLimitBps)
 
 	return nil
 }
