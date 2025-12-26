@@ -60,8 +60,9 @@ func (m *manager) restoreInstance(
 		if m.metrics != nil && m.metrics.tracer != nil {
 			ctx, networkSpan = m.metrics.tracer.Start(ctx, "RestoreNetwork")
 		}
-		log.InfoContext(ctx, "recreating network for restore", "instance_id", id, "network", "default", "network_bandwidth", stored.NetworkBandwidth)
-		if err := m.networkManager.RecreateAllocation(ctx, id, stored.NetworkBandwidth); err != nil {
+		log.InfoContext(ctx, "recreating network for restore", "instance_id", id, "network", "default",
+			"download_bps", stored.NetworkBandwidthDownload, "upload_bps", stored.NetworkBandwidthUpload)
+		if err := m.networkManager.RecreateAllocation(ctx, id, stored.NetworkBandwidthDownload, stored.NetworkBandwidthUpload); err != nil {
 			if networkSpan != nil {
 				networkSpan.End()
 			}

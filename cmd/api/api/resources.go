@@ -45,12 +45,13 @@ func (s *ApiService) GetResources(ctx context.Context, _ oapi.GetResourcesReques
 	// Add per-instance allocations
 	for _, alloc := range status.Allocations {
 		resp.Allocations = append(resp.Allocations, oapi.ResourceAllocation{
-			InstanceId:   &alloc.InstanceID,
-			InstanceName: &alloc.InstanceName,
-			Cpu:          &alloc.CPU,
-			MemoryBytes:  &alloc.MemoryBytes,
-			DiskBytes:    &alloc.DiskBytes,
-			NetworkBps:   &alloc.NetworkBps,
+			InstanceId:         &alloc.InstanceID,
+			InstanceName:       &alloc.InstanceName,
+			Cpu:                &alloc.CPU,
+			MemoryBytes:        &alloc.MemoryBytes,
+			DiskBytes:          &alloc.DiskBytes,
+			NetworkDownloadBps: &alloc.NetworkDownloadBps,
+			NetworkUploadBps:   &alloc.NetworkUploadBps,
 		})
 	}
 

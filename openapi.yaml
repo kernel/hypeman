@@ -149,9 +149,13 @@ components:
               description: Whether to attach instance to the default network
               default: true
               example: true
-            bandwidth:
+            bandwidth_download:
               type: string
-              description: Network bandwidth limit (e.g., "1Gbps", "125MB/s"). Defaults to proportional share based on CPU allocation.
+              description: Download bandwidth limit (external→VM, e.g., "1Gbps", "125MB/s"). Defaults to proportional share based on CPU allocation.
+              example: "1Gbps"
+            bandwidth_upload:
+              type: string
+              description: Upload bandwidth limit (VM→external, e.g., "1Gbps", "125MB/s"). Defaults to proportional share based on CPU allocation.
               example: "1Gbps"
         devices:
           type: array
@@ -745,10 +749,15 @@ components:
           format: int64
           description: Disk allocated in bytes (overlay + volumes)
           example: 10737418240
-        network_bps:
+        network_download_bps:
           type: integer
           format: int64
-          description: Network bandwidth in bytes/sec
+          description: Download bandwidth limit in bytes/sec (external→VM)
+          example: 125000000
+        network_upload_bps:
+          type: integer
+          format: int64
+          description: Upload bandwidth limit in bytes/sec (VM→external)
           example: 125000000
 
     Resources:

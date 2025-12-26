@@ -185,11 +185,74 @@ sudo setcap 'cap_net_admin,cap_net_bind_service=+eip' /path/to/hypeman
 1. Derive allocation from snapshot config.json
 2. Recreate TAP device with same name
 3. Attach to bridge with isolation mode
-4. Reapply rate limit from instance metadata
+4. Reapply rate limits from instance metadata
 
 ### ReleaseAllocation (for shutdown/delete)
 1. Derive current allocation
-2. Delete TAP device
+2. Remove HTB class from bridge (if upload limiting enabled)
+3. Delete TAP device
+
+## Bidirectional Rate Limiting
+
+Network bandwidth is limited separately for download and upload directions:
+
+```
+                    Internet
+                        │
+                   ┌────┴────┐
+                   │  eth0   │
+                   │ (uplink)│
+                   └────┬────┘
+                        │
+    ┌───────────────────┴───────────────────┐
+    │            Bridge (vmbr0)             │
+    │      HTB qdisc for upload shaping     │
+    │  ┌────────┬────────┐                   │
+    │  │ 1:a1b2 │ 1:c3d4 │                   │
+    │  │ VM-A   │ VM-B   │                   │
+    │  │ rate+  │ rate+  │                   │
+    │  │ ceil   │ ceil   │                   │
+    │  └────┬───┴────┬───┘                   │
+    └───────┼────────┼──────────────────────┘
+            │        │
+       ┌────┴───┐┌───┴────┐
+       │  TAP-A ││  TAP-B │
+       │ + TBF  ││ + TBF  │  (download shaping)
+       └────┬───┘└───┬────┘
+            │        │
+        ┌───┴───┐┌───┴───┐
+        │ VM-A  ││ VM-B  │
+        └───────┘└───────┘
+```
+
+### Download (external → VM)
+- **Method:** TBF (Token Bucket Filter) on TAP device egress
+- **Behavior:** Queues packets to smooth traffic, doesn't drop
+- **Per-VM:** Each TAP gets its own shaper, independent
+
+### Upload (VM → external)
+- **Method:** HTB (Hierarchical Token Bucket) on bridge egress
+- **Behavior:** Fair sharing with guaranteed rates and burst ceilings
+- **Per-VM:** Each VM gets an HTB class with:
+  - `rate`: Guaranteed bandwidth (always available)
+  - `ceil`: Burst ceiling (can use more when others are idle)
+  - `fq_codel`: Leaf qdisc for low latency
+
+### Why Different Methods?
+
+| Direction | Bottleneck | Solution |
+|-----------|------------|----------|
+| Download | Physical NIC ingress | Shape before delivery to each TAP |
+| Upload | Physical NIC egress (shared) | Centralized HTB for fair arbitration |
+
+**Policing (drop-based) was rejected** because it causes TCP to oscillate due to congestion control reacting to packet loss. Shaping (queue-based) provides smoother, more predictable throughput.
+
+### Default Limits
+
+When not specified in the create request:
+- Both download and upload = `(vcpus / cpu_capacity) * network_capacity`
+- Symmetric by default
+- Upload ceiling = 2x guaranteed rate (allows bursting)
 
 Note: In case of unexpected scenarios like power loss, straggler TAP devices may persist until manual cleanup or host reboot.
 

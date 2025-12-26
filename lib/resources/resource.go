@@ -46,12 +46,13 @@ type ResourceStatus struct {
 
 // AllocationBreakdown shows per-instance resource allocations.
 type AllocationBreakdown struct {
-	InstanceID   string `json:"instance_id"`
-	InstanceName string `json:"instance_name"`
-	CPU          int    `json:"cpu"`
-	MemoryBytes  int64  `json:"memory_bytes"`
-	DiskBytes    int64  `json:"disk_bytes"`
-	NetworkBps   int64  `json:"network_bps"`
+	InstanceID         string `json:"instance_id"`
+	InstanceName       string `json:"instance_name"`
+	CPU                int    `json:"cpu"`
+	MemoryBytes        int64  `json:"memory_bytes"`
+	DiskBytes          int64  `json:"disk_bytes"`
+	NetworkDownloadBps int64  `json:"network_download_bps"` // External→VM
+	NetworkUploadBps   int64  `json:"network_upload_bps"`   // VM→External
 }
 
 // DiskBreakdown shows disk usage by category.
@@ -79,14 +80,15 @@ type InstanceLister interface {
 
 // InstanceAllocation represents the resources allocated to a single instance.
 type InstanceAllocation struct {
-	ID           string
-	Name         string
-	Vcpus        int
-	MemoryBytes  int64 // Size + HotplugSize
-	OverlayBytes int64
-	NetworkBps   int64
-	State        string // Only count running/paused/created instances
-	VolumeBytes  int64  // Sum of attached volume sizes
+	ID                 string
+	Name               string
+	Vcpus              int
+	MemoryBytes        int64 // Size + HotplugSize
+	OverlayBytes       int64
+	NetworkDownloadBps int64  // Download rate limit (external→VM)
+	NetworkUploadBps   int64  // Upload rate limit (VM→external)
+	State              string // Only count running/paused/created instances
+	VolumeBytes        int64  // Sum of attached volume sizes
 }
 
 // ImageLister provides access to image sizes for disk calculations.
@@ -287,12 +289,13 @@ func (m *Manager) GetFullStatus(ctx context.Context) (*FullResourceStatus, error
 				// Only include active instances
 				if inst.State == "Running" || inst.State == "Paused" || inst.State == "Created" {
 					allocations = append(allocations, AllocationBreakdown{
-						InstanceID:   inst.ID,
-						InstanceName: inst.Name,
-						CPU:          inst.Vcpus,
-						MemoryBytes:  inst.MemoryBytes,
-						DiskBytes:    inst.OverlayBytes + inst.VolumeBytes,
-						NetworkBps:   inst.NetworkBps,
+						InstanceID:         inst.ID,
+						InstanceName:       inst.Name,
+						CPU:                inst.Vcpus,
+						MemoryBytes:        inst.MemoryBytes,
+						DiskBytes:          inst.OverlayBytes + inst.VolumeBytes,
+						NetworkDownloadBps: inst.NetworkDownloadBps,
+						NetworkUploadBps:   inst.NetworkUploadBps,
 					})
 				}
 			}
@@ -341,22 +344,26 @@ func (m *Manager) NetworkCapacity() int64 {
 // DefaultNetworkBandwidth calculates the default network bandwidth for an instance
 // based on its CPU allocation proportional to host CPU capacity.
 // Formula: (instanceVcpus / hostCpuCapacity) * networkCapacity * oversubRatio
-func (m *Manager) DefaultNetworkBandwidth(vcpus int) int64 {
+// Returns symmetric download/upload limits.
+func (m *Manager) DefaultNetworkBandwidth(vcpus int) (downloadBps, uploadBps int64) {
 	cpuCapacity := m.CPUCapacity()
 	if cpuCapacity == 0 {
-		return 0
+		return 0, 0
 	}
 
 	netCapacity := m.NetworkCapacity()
 	if netCapacity == 0 {
-		return 0
+		return 0, 0
 	}
 
 	ratio := m.GetOversubRatio(ResourceNetwork)
 	effectiveNet := int64(float64(netCapacity) * ratio)
 
 	// Proportional to CPU: (vcpus / cpuCapacity) * effectiveNet
-	return (int64(vcpus) * effectiveNet) / cpuCapacity
+	bandwidth := (int64(vcpus) * effectiveNet) / cpuCapacity
+
+	// Symmetric limits by default
+	return bandwidth, bandwidth
 }
 
 // HasSufficientDiskForPull checks if there's enough disk space for an image pull.

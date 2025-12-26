@@ -305,14 +305,15 @@ func (m *manager) ListInstanceAllocations(ctx context.Context) ([]resources.Inst
 		}
 
 		allocations = append(allocations, resources.InstanceAllocation{
-			ID:           inst.Id,
-			Name:         inst.Name,
-			Vcpus:        inst.Vcpus,
-			MemoryBytes:  inst.Size + inst.HotplugSize,
-			OverlayBytes: inst.OverlaySize,
-			NetworkBps:   inst.NetworkBandwidth,
-			State:        string(inst.State),
-			VolumeBytes:  volumeBytes,
+			ID:                 inst.Id,
+			Name:               inst.Name,
+			Vcpus:              inst.Vcpus,
+			MemoryBytes:        inst.Size + inst.HotplugSize,
+			OverlayBytes:       inst.OverlaySize,
+			NetworkDownloadBps: inst.NetworkBandwidthDownload,
+			NetworkUploadBps:   inst.NetworkBandwidthUpload,
+			State:              string(inst.State),
+			VolumeBytes:        volumeBytes,
 		})
 	}
 

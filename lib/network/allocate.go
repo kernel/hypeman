@@ -55,8 +55,8 @@ func (m *manager) CreateAllocation(ctx context.Context, req AllocateRequest) (*N
 	// 5. Generate TAP name (tap-{first8chars-of-id})
 	tap := generateTAPName(req.InstanceID)
 
-	// 6. Create TAP device with optional rate limiting
-	if err := m.createTAPDevice(tap, network.Bridge, network.Isolated, req.RateLimitBps); err != nil {
+	// 6. Create TAP device with bidirectional rate limiting
+	if err := m.createTAPDevice(tap, network.Bridge, network.Isolated, req.DownloadBps, req.UploadBps, req.UploadCeilBps); err != nil {
 		return nil, fmt.Errorf("create TAP device: %w", err)
 	}
 	m.recordTAPOperation(ctx, "create")
@@ -68,7 +68,8 @@ func (m *manager) CreateAllocation(ctx context.Context, req AllocateRequest) (*N
 		"ip", ip,
 		"mac", mac,
 		"tap", tap,
-		"rate_limit_bps", req.RateLimitBps)
+		"download_bps", req.DownloadBps,
+		"upload_bps", req.UploadBps)
 
 	// 7. Calculate netmask from subnet
 	_, ipNet, _ := net.ParseCIDR(network.Subnet)
@@ -90,7 +91,7 @@ func (m *manager) CreateAllocation(ctx context.Context, req AllocateRequest) (*N
 // 1. Doesn't allocate new IPs (reuses existing from snapshot)
 // 2. Is already protected by instance-level locking
 // 3. Uses deterministic TAP names that can't conflict
-func (m *manager) RecreateAllocation(ctx context.Context, instanceID string, rateLimitBps int64) error {
+func (m *manager) RecreateAllocation(ctx context.Context, instanceID string, downloadBps, uploadBps int64) error {
 	log := logger.FromContext(ctx)
 
 	// 1. Derive allocation from snapshot
@@ -109,8 +110,9 @@ func (m *manager) RecreateAllocation(ctx context.Context, instanceID string, rat
 		return fmt.Errorf("get default network: %w", err)
 	}
 
-	// 3. Recreate TAP device with same name and rate limit from instance metadata
-	if err := m.createTAPDevice(alloc.TAPDevice, network.Bridge, network.Isolated, rateLimitBps); err != nil {
+	// 3. Recreate TAP device with same name and rate limits from instance metadata
+	// Use uploadBps as ceiling too (same as guaranteed rate on restore)
+	if err := m.createTAPDevice(alloc.TAPDevice, network.Bridge, network.Isolated, downloadBps, uploadBps, uploadBps); err != nil {
 		return fmt.Errorf("create TAP device: %w", err)
 	}
 	m.recordTAPOperation(ctx, "create")
@@ -119,7 +121,8 @@ func (m *manager) RecreateAllocation(ctx context.Context, instanceID string, rat
 		"instance_id", instanceID,
 		"network", "default",
 		"tap", alloc.TAPDevice,
-		"rate_limit_bps", rateLimitBps)
+		"download_bps", downloadBps,
+		"upload_bps", uploadBps)
 
 	return nil
 }

@@ -287,27 +287,28 @@ func (m *manager) createInstance(
 
 	// 11. Create instance metadata
 	stored := &StoredMetadata{
-		Id:                id,
-		Name:              req.Name,
-		Image:             req.Image,
-		Size:              size,
-		HotplugSize:       hotplugSize,
-		OverlaySize:       overlaySize,
-		Vcpus:             vcpus,
-		NetworkBandwidth:  req.NetworkBandwidth, // Will be set by caller if using resource manager
-		Env:               req.Env,
-		NetworkEnabled:    req.NetworkEnabled,
-		CreatedAt:         time.Now(),
-		StartedAt:         nil,
-		StoppedAt:         nil,
-		KernelVersion:     string(kernelVer),
-		HypervisorType:    hvType,
-		HypervisorVersion: hvVersion,
-		SocketPath:        m.paths.InstanceSocket(id, starter.SocketName()),
-		DataDir:           m.paths.InstanceDir(id),
-		VsockCID:          vsockCID,
-		VsockSocket:       vsockSocket,
-		Devices:           resolvedDeviceIDs,
+		Id:                       id,
+		Name:                     req.Name,
+		Image:                    req.Image,
+		Size:                     size,
+		HotplugSize:              hotplugSize,
+		OverlaySize:              overlaySize,
+		Vcpus:                    vcpus,
+		NetworkBandwidthDownload: req.NetworkBandwidthDownload, // Will be set by caller if using resource manager
+		NetworkBandwidthUpload:   req.NetworkBandwidthUpload,   // Will be set by caller if using resource manager
+		Env:                      req.Env,
+		NetworkEnabled:           req.NetworkEnabled,
+		CreatedAt:                time.Now(),
+		StartedAt:                nil,
+		StoppedAt:                nil,
+		KernelVersion:            string(kernelVer),
+		HypervisorType:           hvType,
+		HypervisorVersion:        hvVersion,
+		SocketPath:               m.paths.InstanceSocket(id, starter.SocketName()),
+		DataDir:                  m.paths.InstanceDir(id),
+		VsockCID:                 vsockCID,
+		VsockSocket:              vsockSocket,
+		Devices:                  resolvedDeviceIDs,
 	}
 
 	// 12. Ensure directories
@@ -327,11 +328,14 @@ func (m *manager) createInstance(
 	// 14. Allocate network (if network enabled)
 	var netConfig *network.NetworkConfig
 	if networkName != "" {
-		log.DebugContext(ctx, "allocating network", "instance_id", id, "network", networkName, "network_bandwidth", stored.NetworkBandwidth)
+		log.DebugContext(ctx, "allocating network", "instance_id", id, "network", networkName,
+			"download_bps", stored.NetworkBandwidthDownload, "upload_bps", stored.NetworkBandwidthUpload)
 		netConfig, err = m.networkManager.CreateAllocation(ctx, network.AllocateRequest{
-			InstanceID:   id,
-			InstanceName: req.Name,
-			RateLimitBps: stored.NetworkBandwidth,
+			InstanceID:    id,
+			InstanceName:  req.Name,
+			DownloadBps:   stored.NetworkBandwidthDownload,
+			UploadBps:     stored.NetworkBandwidthUpload,
+			UploadCeilBps: stored.NetworkBandwidthUpload * 2, // Allow burst to 2x guaranteed rate
 		})
 		if err != nil {
 			log.ErrorContext(ctx, "failed to allocate network", "instance_id", id, "network", networkName, "error", err)

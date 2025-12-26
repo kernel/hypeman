@@ -96,9 +96,10 @@ func TestDefaultNetworkBandwidth(t *testing.T) {
 
 	if cpuCapacity > 0 && netCapacity > 0 {
 		// Request 2 vCPUs
-		bw := mgr.DefaultNetworkBandwidth(2)
+		downloadBw, uploadBw := mgr.DefaultNetworkBandwidth(2)
 		expected := (int64(2) * netCapacity) / cpuCapacity
-		assert.Equal(t, expected, bw)
+		assert.Equal(t, expected, downloadBw)
+		assert.Equal(t, expected, uploadBw) // Symmetric by default
 	}
 }
 
@@ -115,8 +116,9 @@ func TestDefaultNetworkBandwidth_ZeroCPU(t *testing.T) {
 	mgr := NewManager(cfg, p)
 	// Don't initialize - CPU capacity will be 0
 
-	bw := mgr.DefaultNetworkBandwidth(2)
-	assert.Equal(t, int64(0), bw, "Should return 0 when CPU capacity is 0")
+	downloadBw, uploadBw := mgr.DefaultNetworkBandwidth(2)
+	assert.Equal(t, int64(0), downloadBw, "Should return 0 when CPU capacity is 0")
+	assert.Equal(t, int64(0), uploadBw, "Should return 0 when CPU capacity is 0")
 }
 
 func TestParseNetworkLimit(t *testing.T) {

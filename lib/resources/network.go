@@ -65,6 +65,7 @@ func (n *NetworkResource) Capacity() int64 {
 }
 
 // Allocated returns total network bandwidth allocated to running instances.
+// Uses the max of download/upload per instance since they share the physical link.
 func (n *NetworkResource) Allocated(ctx context.Context) (int64, error) {
 	if n.instanceLister == nil {
 		return 0, nil
@@ -78,7 +79,13 @@ func (n *NetworkResource) Allocated(ctx context.Context) (int64, error) {
 	var total int64
 	for _, inst := range instances {
 		if isActiveState(inst.State) {
-			total += inst.NetworkBps
+			// Use max of download/upload since they share the same physical link
+			// This is conservative - actual usage depends on traffic direction
+			alloc := inst.NetworkDownloadBps
+			if inst.NetworkUploadBps > alloc {
+				alloc = inst.NetworkUploadBps
+			}
+			total += alloc
 		}
 	}
 	return total, nil

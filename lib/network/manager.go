@@ -19,8 +19,12 @@ type Manager interface {
 
 	// Instance allocation operations (called by instance manager)
 	CreateAllocation(ctx context.Context, req AllocateRequest) (*NetworkConfig, error)
-	RecreateAllocation(ctx context.Context, instanceID string, rateLimitBps int64) error
+	RecreateAllocation(ctx context.Context, instanceID string, downloadBps, uploadBps int64) error
 	ReleaseAllocation(ctx context.Context, alloc *Allocation) error
+
+	// SetupHTB initializes HTB qdisc on the bridge for upload fair sharing.
+	// Should be called during network initialization with the total network capacity.
+	SetupHTB(ctx context.Context, capacityBps int64) error
 
 	// Queries (derive from CH/snapshots)
 	GetAllocation(ctx context.Context, instanceID string) (*Allocation, error)
@@ -112,4 +116,10 @@ func (m *manager) getDefaultNetwork(ctx context.Context) (*Network, error) {
 		Default:   true,
 		CreatedAt: time.Time{}, // Unknown for default
 	}, nil
+}
+
+// SetupHTB initializes HTB qdisc on the bridge for upload fair sharing.
+// capacityBps is the total network capacity in bytes per second.
+func (m *manager) SetupHTB(ctx context.Context, capacityBps int64) error {
+	return m.setupBridgeHTB(ctx, m.config.BridgeName, capacityBps)
 }

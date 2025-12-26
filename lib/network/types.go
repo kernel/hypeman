@@ -39,7 +39,9 @@ type NetworkConfig struct {
 // AllocateRequest is the request to allocate network for an instance
 // Always allocates from the default network
 type AllocateRequest struct {
-	InstanceID   string
-	InstanceName string
-	RateLimitBps int64 // Network rate limit in bytes/sec (0 = no limit)
+	InstanceID    string
+	InstanceName  string
+	DownloadBps   int64 // Download rate limit in bytes/sec (external→VM, TAP egress TBF)
+	UploadBps     int64 // Upload rate limit in bytes/sec (VM→external, HTB class rate)
+	UploadCeilBps int64 // Upload ceiling in bytes/sec (HTB burst when bandwidth available, 0 = same as UploadBps)
 }

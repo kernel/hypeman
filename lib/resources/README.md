@@ -7,7 +7,7 @@ Host resource discovery, capacity tracking, and oversubscription-aware allocatio
 - **Resource Discovery**: Automatically detects host capacity from `/proc/cpuinfo`, `/proc/meminfo`, filesystem stats, and network interface speed
 - **Oversubscription**: Configurable ratios per resource type (e.g., 2x CPU oversubscription)
 - **Allocation Tracking**: Tracks resource usage across all running instances
-- **Network Rate Limiting**: Applies `tc` traffic control on TAP devices (hypervisor-agnostic)
+- **Bidirectional Network Rate Limiting**: Separate download/upload limits with fair sharing
 - **API Endpoint**: `GET /resources` returns capacity, allocations, and per-instance breakdown
 
 ## Configuration
@@ -37,10 +37,27 @@ Host resource discovery, capacity tracking, and oversubscription-aware allocatio
 - Image pulls blocked when <5GB available
 
 ### Network
-- Discovered from `/sys/class/net/{uplink}/speed`, or configured via `NETWORK_LIMIT`
-- Allocated = sum of per-instance network limits
-- Default per-instance limit = proportional to CPU allocation (`vcpus/cpu_capacity * network_capacity`)
-- Enforced via `tc tbf` qdisc on each TAP device
+
+Bidirectional rate limiting with separate download and upload controls:
+
+**Downloads (external → VM):**
+- TBF (Token Bucket Filter) shaping on each TAP device egress
+- Simple per-VM caps, independent of other VMs
+- Smooth traffic shaping (queues packets, doesn't drop)
+
+**Uploads (VM → external):**
+- HTB (Hierarchical Token Bucket) on bridge egress
+- Per-VM classes with guaranteed rate and burst ceiling
+- Fair sharing when VMs contend for bandwidth
+- fq_codel leaf qdisc for low latency under load
+
+**Default limits:**
+- Proportional to CPU: `(vcpus / cpu_capacity) * network_capacity`
+- Symmetric download/upload by default
+- Upload ceiling = 2x guaranteed rate (allows bursting when bandwidth available)
+
+**Capacity tracking:**
+- Uses max(download, upload) per instance since they share physical link
 
 ## Effective Limits
 
@@ -79,9 +96,9 @@ For example, with 64 CPUs and `OVERSUB_CPU=2.0`, up to 128 vCPUs can be allocate
       "cpu": 4,
       "memory_bytes": 8589934592,
       "disk_bytes": 10737418240,
-      "network_bps": 125000000
+      "network_download_bps": 125000000,
+      "network_upload_bps": 125000000
     }
   ]
 }
 ```
-
