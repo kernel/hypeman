@@ -387,7 +387,6 @@ func (m *manager) DeleteImage(ctx context.Context, name string) error {
 }
 
 // TotalImageBytes returns the total size of all ready images on disk.
-// @sjmiller609 TODO: This seems inefficient, shouldn't need list all images every check
 func (m *manager) TotalImageBytes(ctx context.Context) (int64, error) {
 	images, err := m.ListImages(ctx)
 	if err != nil {

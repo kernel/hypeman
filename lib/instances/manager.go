@@ -12,6 +12,7 @@ import (
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/network"
 	"github.com/onkernel/hypeman/lib/paths"
+	"github.com/onkernel/hypeman/lib/resources"
 	"github.com/onkernel/hypeman/lib/system"
 	"github.com/onkernel/hypeman/lib/volumes"
 	"go.opentelemetry.io/otel/metric"
@@ -36,20 +37,7 @@ type Manager interface {
 	DetachVolume(ctx context.Context, id string, volumeId string) (*Instance, error)
 	// ListInstanceAllocations returns resource allocations for all instances.
 	// Used by the resource manager for capacity tracking.
-	ListInstanceAllocations(ctx context.Context) ([]InstanceAllocation, error)
-}
-
-// InstanceAllocation represents resource allocation for a single instance.
-// Used by the resource manager to track capacity.
-type InstanceAllocation struct {
-	ID           string
-	Name         string
-	Vcpus        int
-	MemoryBytes  int64
-	OverlayBytes int64
-	NetworkBps   int64
-	State        string
-	VolumeBytes  int64
+	ListInstanceAllocations(ctx context.Context) ([]resources.InstanceAllocation, error)
 }
 
 // ResourceLimits contains configurable resource limits for instances
@@ -300,14 +288,13 @@ func (m *manager) DetachVolume(ctx context.Context, id string, volumeId string) 
 
 // ListInstanceAllocations returns resource allocations for all instances.
 // Used by the resource manager for capacity tracking.
-// @sjmiller609 TODO: This seems inefficient, shouldn't need list all instances every check
-func (m *manager) ListInstanceAllocations(ctx context.Context) ([]InstanceAllocation, error) {
+func (m *manager) ListInstanceAllocations(ctx context.Context) ([]resources.InstanceAllocation, error) {
 	instances, err := m.listInstances(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	allocations := make([]InstanceAllocation, 0, len(instances))
+	allocations := make([]resources.InstanceAllocation, 0, len(instances))
 	for _, inst := range instances {
 		// Calculate volume bytes
 		var volumeBytes int64
@@ -317,7 +304,7 @@ func (m *manager) ListInstanceAllocations(ctx context.Context) ([]InstanceAlloca
 			}
 		}
 
-		allocations = append(allocations, InstanceAllocation{
+		allocations = append(allocations, resources.InstanceAllocation{
 			ID:           inst.Id,
 			Name:         inst.Name,
 			Vcpus:        inst.Vcpus,
