@@ -10,6 +10,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 )
@@ -85,6 +86,7 @@ func main() {
 
 // dropToShell drops to an interactive shell for debugging when boot fails
 func dropToShell() {
+	fmt.Fprintln(os.Stderr, "FATAL: dropping to shell for debugging")
 	cmd := exec.Command("/bin/sh", "-i")
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout

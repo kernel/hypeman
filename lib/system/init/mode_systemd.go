@@ -1,8 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"syscall"
+
+	"github.com/onkernel/hypeman/lib/vmconfig"
 )
 
 // runSystemdMode hands off control to systemd.
@@ -10,8 +13,8 @@ import (
 // The init binary:
 // 1. Injects the hypeman-agent.service unit
 // 2. Uses chroot to switch to the container rootfs
-// 3. Execs /sbin/init (systemd) which becomes the new PID 1
-func runSystemdMode(log *Logger, cfg *Config) {
+// 3. Execs the image's entrypoint/cmd (systemd) which becomes the new PID 1
+func runSystemdMode(log *Logger, cfg *vmconfig.Config) {
 	const newroot = "/overlay/newroot"
 
 	// Inject hypeman-agent.service
@@ -34,14 +37,20 @@ func runSystemdMode(log *Logger, cfg *Config) {
 		dropToShell()
 	}
 
+	// Build effective command from entrypoint + cmd
+	argv := append(cfg.Entrypoint, cfg.Cmd...)
+	if len(argv) == 0 {
+		// Fallback to /sbin/init if no command specified
+		argv = []string{"/sbin/init"}
+	}
+
 	// Exec systemd - this replaces the current process
-	log.Info("systemd", "exec /sbin/init")
+	log.Info("systemd", fmt.Sprintf("exec %v", argv))
 
 	// syscall.Exec replaces the current process with the new one
-	// /sbin/init is typically a symlink to /lib/systemd/systemd
-	err := syscall.Exec("/sbin/init", []string{"/sbin/init"}, os.Environ())
+	err := syscall.Exec(argv[0], argv, os.Environ())
 	if err != nil {
-		log.Error("systemd", "exec /sbin/init failed", err)
+		log.Error("systemd", fmt.Sprintf("exec %s failed", argv[0]), err)
 		dropToShell()
 	}
 }

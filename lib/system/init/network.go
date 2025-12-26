@@ -4,11 +4,13 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+
+	"github.com/onkernel/hypeman/lib/vmconfig"
 )
 
 // configureNetwork sets up networking in the guest VM.
 // This is done from the initrd before pivot_root so it works for both exec and systemd modes.
-func configureNetwork(log *Logger, cfg *Config) error {
+func configureNetwork(log *Logger, cfg *vmconfig.Config) error {
 	// Bring up loopback interface
 	if err := runIP("link", "set", "lo", "up"); err != nil {
 		return fmt.Errorf("bring up lo: %w", err)

@@ -4,7 +4,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"syscall"
+
+	"github.com/onkernel/hypeman/lib/vmconfig"
 )
 
 // runExecMode runs the container in exec mode (default).
@@ -13,7 +16,7 @@ import (
 // - Guest-agent runs as a background process
 // - The container entrypoint runs as a child process
 // - After entrypoint exits, guest-agent keeps VM alive
-func runExecMode(log *Logger, cfg *Config) {
+func runExecMode(log *Logger, cfg *vmconfig.Config) {
 	const newroot = "/overlay/newroot"
 
 	// Change root to the new filesystem using chroot (consistent with systemd mode)
@@ -48,14 +51,14 @@ func runExecMode(log *Logger, cfg *Config) {
 		workdir = "/"
 	}
 
-	entrypoint := cfg.Entrypoint
-	cmd := cfg.Cmd
+	// Shell-quote the entrypoint and cmd arrays for safe execution
+	entrypoint := shellQuoteArgs(cfg.Entrypoint)
+	cmd := shellQuoteArgs(cfg.Cmd)
 
-	log.Info("exec", fmt.Sprintf("workdir=%s entrypoint=%s cmd=%s", workdir, entrypoint, cmd))
+	log.Info("exec", fmt.Sprintf("workdir=%s entrypoint=%v cmd=%v", workdir, cfg.Entrypoint, cfg.Cmd))
 
 	// Construct the shell command to run
-	// ENTRYPOINT and CMD are shell-safe quoted strings from config.sh
-	shellCmd := fmt.Sprintf("cd %s && exec %s %s", workdir, entrypoint, cmd)
+	shellCmd := fmt.Sprintf("cd %s && exec %s %s", shellQuote(workdir), entrypoint, cmd)
 
 	log.Info("exec", "launching entrypoint")
 
@@ -111,4 +114,22 @@ func buildEnv(env map[string]string) []string {
 	}
 
 	return result
+}
+
+// shellQuote quotes a string for safe use in shell commands.
+func shellQuote(s string) string {
+	// Use single quotes and escape embedded single quotes
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
+
+// shellQuoteArgs quotes each argument and joins them with spaces.
+func shellQuoteArgs(args []string) string {
+	if len(args) == 0 {
+		return ""
+	}
+	quoted := make([]string, len(args))
+	for i, arg := range args {
+		quoted[i] = shellQuote(arg)
+	}
+	return strings.Join(quoted, " ")
 }

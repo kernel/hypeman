@@ -5,11 +5,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+
+	"github.com/onkernel/hypeman/lib/vmconfig"
 )
 
 // mountVolumes mounts attached volumes according to the configuration.
 // Supports three modes: ro (read-only), rw (read-write), and overlay.
-func mountVolumes(log *Logger, cfg *Config) error {
+func mountVolumes(log *Logger, cfg *vmconfig.Config) error {
 	log.Info("volumes", "mounting volumes")
 
 	for _, vol := range cfg.VolumeMounts {
@@ -42,7 +44,7 @@ func mountVolumes(log *Logger, cfg *Config) error {
 
 // mountVolumeOverlay mounts a volume in overlay mode.
 // Uses the base device as read-only lower layer and overlay device for writable upper layer.
-func mountVolumeOverlay(log *Logger, vol VolumeMount, mountPath string) error {
+func mountVolumeOverlay(log *Logger, vol vmconfig.VolumeMount, mountPath string) error {
 	baseName := filepath.Base(vol.Path)
 	baseMount := fmt.Sprintf("/mnt/vol-base-%s", baseName)
 	overlayMount := fmt.Sprintf("/mnt/vol-overlay-%s", baseName)
@@ -85,7 +87,7 @@ func mountVolumeOverlay(log *Logger, vol VolumeMount, mountPath string) error {
 }
 
 // mountVolumeReadOnly mounts a volume in read-only mode.
-func mountVolumeReadOnly(log *Logger, vol VolumeMount, mountPath string) error {
+func mountVolumeReadOnly(log *Logger, vol vmconfig.VolumeMount, mountPath string) error {
 	// Use noload to skip journal recovery for multi-attach safety
 	cmd := exec.Command("/bin/mount", "-t", "ext4", "-o", "ro,noload", vol.Device, mountPath)
 	if output, err := cmd.CombinedOutput(); err != nil {
@@ -97,7 +99,7 @@ func mountVolumeReadOnly(log *Logger, vol VolumeMount, mountPath string) error {
 }
 
 // mountVolumeReadWrite mounts a volume in read-write mode.
-func mountVolumeReadWrite(log *Logger, vol VolumeMount, mountPath string) error {
+func mountVolumeReadWrite(log *Logger, vol vmconfig.VolumeMount, mountPath string) error {
 	cmd := exec.Command("/bin/mount", "-t", "ext4", vol.Device, mountPath)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("%s: %s", err, output)
