@@ -57,9 +57,10 @@ type AllocationBreakdown struct {
 
 // DiskBreakdown shows disk usage by category.
 type DiskBreakdown struct {
-	Images   int64 `json:"images_bytes"`
+	Images   int64 `json:"images_bytes"`    // Exported rootfs disk files
+	OCICache int64 `json:"oci_cache_bytes"` // OCI layer cache (shared blobs)
 	Volumes  int64 `json:"volumes_bytes"`
-	Overlays int64 `json:"overlays_bytes"`
+	Overlays int64 `json:"overlays_bytes"` // Rootfs overlays + volume overlays
 }
 
 // FullResourceStatus is the complete resource status for the API response.
@@ -83,18 +84,21 @@ type InstanceAllocation struct {
 	ID                 string
 	Name               string
 	Vcpus              int
-	MemoryBytes        int64 // Size + HotplugSize
-	OverlayBytes       int64
+	MemoryBytes        int64  // Size + HotplugSize
+	OverlayBytes       int64  // Rootfs overlay size
+	VolumeOverlayBytes int64  // Sum of volume overlay sizes
 	NetworkDownloadBps int64  // Download rate limit (external→VM)
 	NetworkUploadBps   int64  // Upload rate limit (VM→external)
 	State              string // Only count running/paused/created instances
-	VolumeBytes        int64  // Sum of attached volume sizes
+	VolumeBytes        int64  // Sum of attached volume base sizes (for per-instance reporting)
 }
 
 // ImageLister provides access to image sizes for disk calculations.
 type ImageLister interface {
 	// TotalImageBytes returns the total size of all images on disk.
 	TotalImageBytes(ctx context.Context) (int64, error)
+	// TotalOCICacheBytes returns the total size of the OCI layer cache.
+	TotalOCICacheBytes(ctx context.Context) (int64, error)
 }
 
 // VolumeLister provides access to volume sizes for disk calculations.
@@ -158,6 +162,7 @@ func (m *Manager) Initialize(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("discover CPU: %w", err)
 	}
+	cpu.SetInstanceLister(m.instanceLister)
 	m.resources[ResourceCPU] = cpu
 
 	// Discover memory
@@ -165,6 +170,7 @@ func (m *Manager) Initialize(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("discover memory: %w", err)
 	}
+	mem.SetInstanceLister(m.instanceLister)
 	m.resources[ResourceMemory] = mem
 
 	// Discover disk
@@ -379,6 +385,62 @@ func (m *Manager) HasSufficientDiskForPull(ctx context.Context) error {
 	if status.Available < minDiskForPull {
 		return fmt.Errorf("insufficient disk space for image pull: %d bytes available, minimum %d bytes required",
 			status.Available, minDiskForPull)
+	}
+
+	return nil
+}
+
+// MaxImageStorageBytes returns the maximum allowed image storage (OCI cache + rootfs).
+// Based on MaxImageStorage fraction (default 20%) of disk capacity.
+func (m *Manager) MaxImageStorageBytes() int64 {
+	m.mu.RLock()
+	diskRes, ok := m.resources[ResourceDisk]
+	m.mu.RUnlock()
+
+	if !ok {
+		return 0
+	}
+
+	capacity := diskRes.Capacity()
+	fraction := m.cfg.MaxImageStorage
+	if fraction <= 0 {
+		fraction = 0.2 // Default 20%
+	}
+
+	return int64(float64(capacity) * fraction)
+}
+
+// CurrentImageStorageBytes returns the current image storage usage (OCI cache + rootfs).
+func (m *Manager) CurrentImageStorageBytes(ctx context.Context) (int64, error) {
+	if m.imageLister == nil {
+		return 0, nil
+	}
+
+	rootfsBytes, err := m.imageLister.TotalImageBytes(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	ociCacheBytes, err := m.imageLister.TotalOCICacheBytes(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	return rootfsBytes + ociCacheBytes, nil
+}
+
+// HasSufficientImageStorage checks if pulling another image would exceed the image storage limit.
+// Returns an error if current image storage >= max allowed.
+func (m *Manager) HasSufficientImageStorage(ctx context.Context) error {
+	current, err := m.CurrentImageStorageBytes(ctx)
+	if err != nil {
+		return fmt.Errorf("check image storage: %w", err)
+	}
+
+	max := m.MaxImageStorageBytes()
+	if max > 0 && current >= max {
+		return fmt.Errorf("image storage limit exceeded: %d bytes used, limit is %d bytes (%.0f%% of disk)",
+			current, max, m.cfg.MaxImageStorage*100)
 	}
 
 	return nil

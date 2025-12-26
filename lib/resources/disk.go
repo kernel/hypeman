@@ -59,24 +59,29 @@ func (d *DiskResource) Capacity() int64 {
 	return d.capacity
 }
 
-// Allocated returns total disk space used by images, volumes, and overlays.
+// Allocated returns total disk space used by images, OCI cache, volumes, and overlays.
 func (d *DiskResource) Allocated(ctx context.Context) (int64, error) {
 	breakdown, err := d.GetBreakdown(ctx)
 	if err != nil {
 		return 0, err
 	}
-	return breakdown.Images + breakdown.Volumes + breakdown.Overlays, nil
+	return breakdown.Images + breakdown.OCICache + breakdown.Volumes + breakdown.Overlays, nil
 }
 
 // GetBreakdown returns disk usage broken down by category.
 func (d *DiskResource) GetBreakdown(ctx context.Context) (*DiskBreakdown, error) {
 	var breakdown DiskBreakdown
 
-	// Get image sizes
+	// Get image sizes (exported rootfs disks)
 	if d.imageLister != nil {
 		imageBytes, err := d.imageLister.TotalImageBytes(ctx)
 		if err == nil {
 			breakdown.Images = imageBytes
+		}
+		// Get OCI layer cache size
+		ociCacheBytes, err := d.imageLister.TotalOCICacheBytes(ctx)
+		if err == nil {
+			breakdown.OCICache = ociCacheBytes
 		}
 	}
 
@@ -88,13 +93,13 @@ func (d *DiskResource) GetBreakdown(ctx context.Context) (*DiskBreakdown, error)
 		}
 	}
 
-	// Get overlay sizes from instances
+	// Get overlay sizes from instances (rootfs overlays + volume overlays)
 	if d.instanceLister != nil {
 		instances, err := d.instanceLister.ListInstanceAllocations(ctx)
 		if err == nil {
 			for _, inst := range instances {
 				if isActiveState(inst.State) {
-					breakdown.Overlays += inst.OverlayBytes
+					breakdown.Overlays += inst.OverlayBytes + inst.VolumeOverlayBytes
 				}
 			}
 		}

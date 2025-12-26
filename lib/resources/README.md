@@ -20,6 +20,7 @@ Host resource discovery, capacity tracking, and oversubscription-aware allocatio
 | `OVERSUB_NETWORK` | `1.0` | Network oversubscription ratio |
 | `DISK_LIMIT` | auto | Hard disk limit (e.g., `500GB`), auto-detects from filesystem |
 | `NETWORK_LIMIT` | auto | Hard network limit (e.g., `10Gbps`), auto-detects from uplink speed |
+| `MAX_IMAGE_STORAGE` | `0.2` | Max image storage as fraction of disk (OCI cache + rootfs) |
 
 ## Resource Types
 
@@ -33,8 +34,8 @@ Host resource discovery, capacity tracking, and oversubscription-aware allocatio
 
 ### Disk
 - Discovered via `statfs()` on DataDir, or configured via `DISK_LIMIT`
-- Allocated = images + volumes + instance overlays
-- Image pulls blocked when <5GB available
+- Allocated = images (rootfs) + OCI cache + volumes + overlays (rootfs + volume)
+- Image pulls blocked when <5GB available or image storage exceeds `MAX_IMAGE_STORAGE`
 
 ### Network
 
@@ -86,6 +87,7 @@ For example, with 64 CPUs and `OVERSUB_CPU=2.0`, up to 128 vCPUs can be allocate
   "network": { ... },
   "disk_breakdown": {
     "images_bytes": 214748364800,
+    "oci_cache_bytes": 53687091200,
     "volumes_bytes": 107374182400,
     "overlays_bytes": 227633306624
   },

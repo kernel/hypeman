@@ -711,8 +711,13 @@ components:
         images_bytes:
           type: integer
           format: int64
-          description: Disk used by images
+          description: Disk used by exported rootfs images
           example: 214748364800
+        oci_cache_bytes:
+          type: integer
+          format: int64
+          description: Disk used by OCI layer cache (shared blobs)
+          example: 53687091200
         volumes_bytes:
           type: integer
           format: int64
@@ -721,7 +726,7 @@ components:
         overlays_bytes:
           type: integer
           format: int64
-          description: Disk used by instance overlays
+          description: Disk used by instance overlays (rootfs + volume overlays)
           example: 227633306624
 
     ResourceAllocation:

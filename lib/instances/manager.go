@@ -296,11 +296,19 @@ func (m *manager) ListInstanceAllocations(ctx context.Context) ([]resources.Inst
 
 	allocations := make([]resources.InstanceAllocation, 0, len(instances))
 	for _, inst := range instances {
-		// Calculate volume bytes
+		// Calculate volume bytes and volume overlay bytes separately
 		var volumeBytes int64
+		var volumeOverlayBytes int64
 		for _, vol := range inst.Volumes {
+			// Get actual volume size from volume manager
+			if m.volumeManager != nil {
+				if volume, err := m.volumeManager.GetVolume(ctx, vol.VolumeID); err == nil {
+					volumeBytes += int64(volume.SizeGb) * 1024 * 1024 * 1024
+				}
+			}
+			// Track overlay size separately for overlay volumes
 			if vol.Overlay {
-				volumeBytes += vol.OverlaySize
+				volumeOverlayBytes += vol.OverlaySize
 			}
 		}
 
@@ -310,6 +318,7 @@ func (m *manager) ListInstanceAllocations(ctx context.Context) ([]resources.Inst
 			Vcpus:              inst.Vcpus,
 			MemoryBytes:        inst.Size + inst.HotplugSize,
 			OverlayBytes:       inst.OverlaySize,
+			VolumeOverlayBytes: volumeOverlayBytes,
 			NetworkDownloadBps: inst.NetworkBandwidthDownload,
 			NetworkUploadBps:   inst.NetworkBandwidthUpload,
 			State:              string(inst.State),

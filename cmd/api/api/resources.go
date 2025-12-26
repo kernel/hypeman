@@ -37,6 +37,7 @@ func (s *ApiService) GetResources(ctx context.Context, _ oapi.GetResourcesReques
 	if status.DiskDetail != nil {
 		resp.DiskBreakdown = &oapi.DiskBreakdown{
 			ImagesBytes:   &status.DiskDetail.Images,
+			OciCacheBytes: &status.DiskDetail.OCICache,
 			VolumesBytes:  &status.DiskDetail.Volumes,
 			OverlaysBytes: &status.DiskDetail.Overlays,
 		}
