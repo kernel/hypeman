@@ -45,6 +45,11 @@ func run() error {
 	// Load config early for OTel initialization
 	cfg := config.Load()
 
+	// Validate configuration before proceeding
+	if err := cfg.Validate(); err != nil {
+		return fmt.Errorf("invalid configuration: %w", err)
+	}
+
 	// Initialize OpenTelemetry (before wire initialization)
 	otelCfg := otel.Config{
 		Enabled:           cfg.OtelEnabled,

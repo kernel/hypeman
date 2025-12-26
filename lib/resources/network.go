@@ -25,7 +25,7 @@ func NewNetworkResource(cfg *config.Config, instLister InstanceLister) (*Network
 
 	if cfg.NetworkLimit != "" {
 		// Parse configured limit (e.g., "10Gbps", "1GB/s")
-		parsed, err := parseNetworkLimit(cfg.NetworkLimit)
+		parsed, err := ParseBandwidth(cfg.NetworkLimit)
 		if err != nil {
 			return nil, fmt.Errorf("parse network limit: %w", err)
 		}
@@ -136,9 +136,10 @@ func getInterfaceSpeed(iface string) (int64, error) {
 	return speed, nil
 }
 
-// parseNetworkLimit parses a network limit string like "10Gbps", "1GB/s", "125MB/s".
+// ParseBandwidth parses a bandwidth string like "10Gbps", "1GB/s", "125MB/s".
+// Handles both bit-based (bps) and byte-based (/s) formats.
 // Returns bytes per second.
-func parseNetworkLimit(limit string) (int64, error) {
+func ParseBandwidth(limit string) (int64, error) {
 	limit = strings.TrimSpace(limit)
 	limit = strings.ToLower(limit)
 

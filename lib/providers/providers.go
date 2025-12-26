@@ -46,9 +46,14 @@ func ProvideContext(log *slog.Logger) context.Context {
 	return logger.AddToContext(context.Background(), log)
 }
 
-// ProvideConfig provides the application configuration
+// ProvideConfig provides the application configuration.
+// Panics if configuration is invalid (prevents startup with bad config).
 func ProvideConfig() *config.Config {
-	return config.Load()
+	cfg := config.Load()
+	if err := cfg.Validate(); err != nil {
+		panic(fmt.Sprintf("invalid configuration: %v", err))
+	}
+	return cfg
 }
 
 // ProvidePaths provides the paths abstraction

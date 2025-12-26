@@ -16,6 +16,7 @@ import (
 	mw "github.com/onkernel/hypeman/lib/middleware"
 	"github.com/onkernel/hypeman/lib/network"
 	"github.com/onkernel/hypeman/lib/oapi"
+	"github.com/onkernel/hypeman/lib/resources"
 	"github.com/samber/lo"
 )
 
@@ -117,34 +118,29 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 	}
 
 	// Parse network bandwidth limits (0 = auto)
+	// Supports both bit-based (e.g., "1Gbps") and byte-based (e.g., "125MB/s") formats
 	var networkBandwidthDownload int64
 	var networkBandwidthUpload int64
 	if request.Body.Network != nil {
 		if request.Body.Network.BandwidthDownload != nil && *request.Body.Network.BandwidthDownload != "" {
-			var bwBytes datasize.ByteSize
-			bwStr := *request.Body.Network.BandwidthDownload
-			bwStr = strings.TrimSuffix(bwStr, "/s")
-			bwStr = strings.TrimSuffix(bwStr, "ps")
-			if err := bwBytes.UnmarshalText([]byte(bwStr)); err != nil {
+			bw, err := resources.ParseBandwidth(*request.Body.Network.BandwidthDownload)
+			if err != nil {
 				return oapi.CreateInstance400JSONResponse{
 					Code:    "invalid_bandwidth_download",
 					Message: fmt.Sprintf("invalid bandwidth_download format: %v", err),
 				}, nil
 			}
-			networkBandwidthDownload = int64(bwBytes)
+			networkBandwidthDownload = bw
 		}
 		if request.Body.Network.BandwidthUpload != nil && *request.Body.Network.BandwidthUpload != "" {
-			var bwBytes datasize.ByteSize
-			bwStr := *request.Body.Network.BandwidthUpload
-			bwStr = strings.TrimSuffix(bwStr, "/s")
-			bwStr = strings.TrimSuffix(bwStr, "ps")
-			if err := bwBytes.UnmarshalText([]byte(bwStr)); err != nil {
+			bw, err := resources.ParseBandwidth(*request.Body.Network.BandwidthUpload)
+			if err != nil {
 				return oapi.CreateInstance400JSONResponse{
 					Code:    "invalid_bandwidth_upload",
 					Message: fmt.Sprintf("invalid bandwidth_upload format: %v", err),
 				}, nil
 			}
-			networkBandwidthUpload = int64(bwBytes)
+			networkBandwidthUpload = bw
 		}
 	}
 
