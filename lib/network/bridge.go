@@ -559,7 +559,7 @@ func (m *manager) setupBridgeHTB(ctx context.Context, bridgeName string, capacit
 	}
 	output, err := checkCmd.Output()
 	if err == nil && strings.Contains(string(output), "htb") {
-		log.DebugContext(ctx, "HTB qdisc already exists on bridge", "bridge", bridgeName)
+		log.InfoContext(ctx, "HTB qdisc ready", "bridge", bridgeName, "status", "existing")
 		return nil
 	}
 
@@ -585,7 +585,7 @@ func (m *manager) setupBridgeHTB(ctx context.Context, bridgeName string, capacit
 		return fmt.Errorf("tc class add root: %w (output: %s)", err, string(output))
 	}
 
-	log.InfoContext(ctx, "HTB qdisc configured on bridge", "bridge", bridgeName, "capacity", rateStr)
+	log.InfoContext(ctx, "HTB qdisc ready", "bridge", bridgeName, "capacity", rateStr, "status", "configured")
 	return nil
 }
 

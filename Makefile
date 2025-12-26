@@ -184,12 +184,15 @@ dev: ensure-ch-binaries ensure-caddy-binaries lib/system/guest_agent/guest-agent
 # Run tests (as root for network capabilities, enables caching and parallelism)
 # Usage: make test                              - runs all tests
 #        make test TEST=TestCreateInstanceWithNetwork  - runs specific test
+#        make test VERBOSE=1                    - runs with verbose output
 test: ensure-ch-binaries ensure-caddy-binaries lib/system/guest_agent/guest-agent
-	@if [ -n "$(TEST)" ]; then \
+	@VERBOSE_FLAG=""; \
+	if [ -n "$(VERBOSE)" ]; then VERBOSE_FLAG="-v"; fi; \
+	if [ -n "$(TEST)" ]; then \
 		echo "Running specific test: $(TEST)"; \
-		sudo env "PATH=$$PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" go test -tags containers_image_openpgp -run=$(TEST) -v -timeout=180s ./...; \
+		sudo env "PATH=$$PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" go test -tags containers_image_openpgp -run=$(TEST) $$VERBOSE_FLAG -timeout=180s ./...; \
 	else \
-		sudo env "PATH=$$PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" go test -tags containers_image_openpgp -v -timeout=180s ./...; \
+		sudo env "PATH=$$PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" go test -tags containers_image_openpgp $$VERBOSE_FLAG -timeout=180s ./...; \
 	fi
 
 # Generate JWT token for testing
