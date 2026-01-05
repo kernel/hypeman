@@ -167,6 +167,8 @@ components:
             type: string
           description: Device IDs or names to attach for GPU/PCI passthrough
           example: ["l4-gpu"]
+        gpu:
+          $ref: "#/components/schemas/GPUConfig"
         volumes:
           type: array
           description: Volumes to attach to the instance at creation time
@@ -262,6 +264,8 @@ components:
           description: Volumes attached to the instance
           items:
             $ref: "#/components/schemas/VolumeMount"
+        gpu:
+          $ref: "#/components/schemas/InstanceGPU"
         created_at:
           type: string
           format: date-time
@@ -587,6 +591,90 @@ components:
       enum: [gpu, pci]
       description: Type of PCI device
     
+    GPUConfig:
+      type: object
+      description: GPU configuration for the instance
+      properties:
+        profile:
+          type: string
+          description: vGPU profile name (e.g., "L40S-1Q"). Only used in vGPU mode.
+          example: "L40S-1Q"
+    
+    InstanceGPU:
+      type: object
+      description: GPU information attached to the instance
+      properties:
+        profile:
+          type: string
+          description: vGPU profile name
+          example: "L40S-1Q"
+        mdev_uuid:
+          type: string
+          description: mdev device UUID
+          example: "aa618089-8b16-4d01-a136-25a0f3c73123"
+    
+    GPUProfile:
+      type: object
+      description: Available vGPU profile
+      required: [name, framebuffer_mb, available]
+      properties:
+        name:
+          type: string
+          description: Profile name (user-facing)
+          example: "L40S-1Q"
+        framebuffer_mb:
+          type: integer
+          description: Frame buffer size in MB
+          example: 1024
+        available:
+          type: integer
+          description: Number of instances that can be created with this profile
+          example: 59
+    
+    PassthroughDevice:
+      type: object
+      description: Physical GPU available for passthrough
+      required: [name, available]
+      properties:
+        name:
+          type: string
+          description: GPU name
+          example: "NVIDIA L40S"
+        available:
+          type: boolean
+          description: Whether this GPU is available (not attached to an instance)
+          example: true
+    
+    GPUResourceStatus:
+      type: object
+      description: GPU resource status. Null if no GPUs available.
+      nullable: true
+      required: [mode, total_slots, used_slots]
+      properties:
+        mode:
+          type: string
+          enum: [vgpu, passthrough]
+          description: GPU mode (vgpu for SR-IOV/mdev, passthrough for whole GPU)
+          example: "vgpu"
+        total_slots:
+          type: integer
+          description: Total slots (VFs for vGPU, physical GPUs for passthrough)
+          example: 64
+        used_slots:
+          type: integer
+          description: Slots currently in use
+          example: 5
+        profiles:
+          type: array
+          description: Available vGPU profiles (only in vGPU mode)
+          items:
+            $ref: "#/components/schemas/GPUProfile"
+        devices:
+          type: array
+          description: Physical GPUs (only in passthrough mode)
+          items:
+            $ref: "#/components/schemas/PassthroughDevice"
+    
     CreateDeviceRequest:
       type: object
       required: [pci_address]
@@ -795,6 +883,8 @@ components:
           $ref: "#/components/schemas/ResourceStatus"
         disk_breakdown:
           $ref: "#/components/schemas/DiskBreakdown"
+        gpu:
+          $ref: "#/components/schemas/GPUResourceStatus"
         allocations:
           type: array
           items:

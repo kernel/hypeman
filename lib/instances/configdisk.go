@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/onkernel/hypeman/lib/devices"
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/network"
 	"github.com/onkernel/hypeman/lib/vmconfig"
@@ -67,15 +66,6 @@ func (m *manager) buildGuestConfig(ctx context.Context, inst *Instance, imageInf
 		cfg.GuestCIDR = netmaskToCIDR(netConfig.Netmask)
 		cfg.GuestGW = netConfig.Gateway
 		cfg.GuestDNS = netConfig.DNS
-	}
-
-	// GPU passthrough - check if any attached device is a GPU
-	for _, deviceID := range inst.Devices {
-		device, err := m.deviceManager.GetDevice(ctx, deviceID)
-		if err == nil && device.Type == devices.DeviceTypeGPU {
-			cfg.HasGPU = true
-			break
-		}
 	}
 
 	// Volume mounts

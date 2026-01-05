@@ -190,6 +190,14 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		hvType = hypervisor.Type(*request.Body.Hypervisor)
 	}
 
+	// Parse GPU configuration (vGPU mode)
+	var gpuConfig *instances.GPUConfig
+	if request.Body.Gpu != nil && request.Body.Gpu.Profile != nil && *request.Body.Gpu.Profile != "" {
+		gpuConfig = &instances.GPUConfig{
+			Profile: *request.Body.Gpu.Profile,
+		}
+	}
+
 	// Calculate default resource limits when not specified (0 = auto)
 	// Uses proportional allocation based on CPU: (vcpus / cpuCapacity) * resourceCapacity
 	if diskIOBps == 0 {
@@ -220,6 +228,7 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		Devices:                  deviceRefs,
 		Volumes:                  volumes,
 		Hypervisor:               hvType,
+		GPU:                      gpuConfig,
 	}
 
 	inst, err := s.InstanceManager.CreateInstance(ctx, domainReq)
@@ -683,6 +692,14 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 			oapiVolumes[i] = oapiVol
 		}
 		oapiInst.Volumes = &oapiVolumes
+	}
+
+	// Convert GPU info
+	if inst.GPUProfile != "" {
+		oapiInst.Gpu = &oapi.InstanceGPU{
+			Profile:  lo.ToPtr(inst.GPUProfile),
+			MdevUuid: lo.ToPtr(inst.GPUMdevUUID),
+		}
 	}
 
 	return oapiInst

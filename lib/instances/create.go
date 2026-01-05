@@ -237,6 +237,8 @@ func (m *manager) createInstance(
 	// whatever devices have been attached when cleanup runs.
 	var attachedDeviceIDs []string
 	var resolvedDeviceIDs []string
+	var gpuProfile string
+	var gpuMdevUUID string
 
 	// Setup cleanup stack early so device attachment errors trigger cleanup
 	cu := cleanup.Make(func() {
@@ -252,6 +254,25 @@ func (m *manager) createInstance(
 				log.DebugContext(ctx, "detaching device on cleanup", "instance_id", id, "device", deviceID)
 				m.deviceManager.MarkDetached(ctx, deviceID)
 			}
+		})
+	}
+
+	// Handle vGPU profile request - create mdev device
+	if req.GPU != nil && req.GPU.Profile != "" {
+		log.InfoContext(ctx, "creating vGPU mdev", "instance_id", id, "profile", req.GPU.Profile)
+		mdev, err := devices.CreateMdev(req.GPU.Profile, id)
+		if err != nil {
+			log.ErrorContext(ctx, "failed to create mdev", "profile", req.GPU.Profile, "error", err)
+			return nil, fmt.Errorf("create vGPU mdev for profile %s: %w", req.GPU.Profile, err)
+		}
+		gpuProfile = req.GPU.Profile
+		gpuMdevUUID = mdev.UUID
+		log.InfoContext(ctx, "created vGPU mdev", "instance_id", id, "profile", gpuProfile, "uuid", gpuMdevUUID)
+
+		// Add mdev cleanup to stack
+		cu.Add(func() {
+			log.DebugContext(ctx, "destroying mdev on cleanup", "instance_id", id, "uuid", gpuMdevUUID)
+			devices.DestroyMdev(gpuMdevUUID)
 		})
 	}
 
@@ -310,6 +331,8 @@ func (m *manager) createInstance(
 		VsockCID:                 vsockCID,
 		VsockSocket:              vsockSocket,
 		Devices:                  resolvedDeviceIDs,
+		GPUProfile:               gpuProfile,
+		GPUMdevUUID:              gpuMdevUUID,
 	}
 
 	// 12. Ensure directories
@@ -671,6 +694,12 @@ func (m *manager) buildHypervisorConfig(ctx context.Context, inst *Instance, ima
 			}
 			pciDevices = append(pciDevices, devices.GetDeviceSysfsPath(device.PCIAddress))
 		}
+	}
+
+	// Add vGPU mdev device if configured
+	if inst.GPUMdevUUID != "" {
+		mdevPath := filepath.Join("/sys/bus/mdev/devices", inst.GPUMdevUUID)
+		pciDevices = append(pciDevices, mdevPath)
 	}
 
 	// Build topology if available

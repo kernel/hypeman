@@ -42,32 +42,6 @@ var KernelDownloadURLs = map[KernelVersion]map[string]string{
 	// Add future versions here
 }
 
-// NvidiaModuleURLs maps kernel versions and architectures to NVIDIA module tarball URLs
-// These tarballs contain pre-built NVIDIA kernel modules that match the kernel version
-var NvidiaModuleURLs = map[KernelVersion]map[string]string{
-	Kernel_20251213: {
-		"x86_64": "https://github.com/onkernel/linux/releases/download/ch-6.12.8-kernel-1.2-20251213/nvidia-modules-x86_64.tar.gz",
-		// Note: NVIDIA open-gpu-kernel-modules does not support arm64 yet
-	},
-	// Kernel_202511182 and Kernel_20251211 do not have NVIDIA modules (pre-module-support kernels)
-}
-
-// NvidiaDriverLibURLs maps kernel versions and architectures to driver library tarball URLs
-// These tarballs contain userspace NVIDIA libraries (libcuda.so, libnvidia-ml.so, etc.)
-// that match the kernel modules and are injected into containers at boot time.
-// See lib/devices/GPU.md for documentation on driver injection.
-var NvidiaDriverLibURLs = map[KernelVersion]map[string]string{
-	Kernel_20251213: {
-		"x86_64": "https://github.com/onkernel/linux/releases/download/ch-6.12.8-kernel-1.2-20251213/nvidia-driver-libs-x86_64.tar.gz",
-	},
-}
-
-// NvidiaDriverVersion tracks the NVIDIA driver version bundled with each kernel
-var NvidiaDriverVersion = map[KernelVersion]string{
-	Kernel_20251213: "570.86.16",
-	// Kernel_202511182 and Kernel_20251211 do not have NVIDIA modules
-}
-
 // GetArch returns the architecture string for the current platform
 func GetArch() string {
 	arch := runtime.GOARCH

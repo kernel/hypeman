@@ -7,6 +7,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/onkernel/hypeman/lib/devices"
 	"github.com/onkernel/hypeman/lib/guest"
 	"github.com/onkernel/hypeman/lib/hypervisor"
 	"github.com/onkernel/hypeman/lib/logger"
@@ -91,6 +92,15 @@ func (m *manager) deleteInstance(
 				// Log error but continue with cleanup
 				log.WarnContext(ctx, "failed to detach volume, continuing with cleanup", "instance_id", id, "volume_id", volAttach.VolumeID, "error", err)
 			}
+		}
+	}
+
+	// 6c. Destroy vGPU mdev device if present
+	if inst.GPUMdevUUID != "" {
+		log.InfoContext(ctx, "destroying vGPU mdev", "instance_id", id, "uuid", inst.GPUMdevUUID)
+		if err := devices.DestroyMdev(inst.GPUMdevUUID); err != nil {
+			// Log error but continue with cleanup
+			log.WarnContext(ctx, "failed to destroy mdev, continuing with cleanup", "instance_id", id, "uuid", inst.GPUMdevUUID, "error", err)
 		}
 	}
 
