@@ -260,7 +260,7 @@ func (m *manager) createInstance(
 	// Handle vGPU profile request - create mdev device
 	if req.GPU != nil && req.GPU.Profile != "" {
 		log.InfoContext(ctx, "creating vGPU mdev", "instance_id", id, "profile", req.GPU.Profile)
-		mdev, err := devices.CreateMdev(req.GPU.Profile, id)
+		mdev, err := devices.CreateMdev(ctx, req.GPU.Profile, id)
 		if err != nil {
 			log.ErrorContext(ctx, "failed to create mdev", "profile", req.GPU.Profile, "error", err)
 			return nil, fmt.Errorf("create vGPU mdev for profile %s: %w", req.GPU.Profile, err)
@@ -272,7 +272,7 @@ func (m *manager) createInstance(
 		// Add mdev cleanup to stack
 		cu.Add(func() {
 			log.DebugContext(ctx, "destroying mdev on cleanup", "instance_id", id, "uuid", gpuMdevUUID)
-			devices.DestroyMdev(gpuMdevUUID)
+			devices.DestroyMdev(ctx, gpuMdevUUID)
 		})
 	}
 

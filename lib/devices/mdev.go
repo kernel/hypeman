@@ -2,6 +2,7 @@ package devices
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -10,14 +11,20 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/google/uuid"
+	"github.com/onkernel/hypeman/lib/logger"
 )
 
 const (
 	mdevBusPath = "/sys/class/mdev_bus"
 	mdevDevices = "/sys/bus/mdev/devices"
 )
+
+// mdevMu protects mdev creation/destruction to prevent race conditions
+// when multiple instances request vGPUs concurrently.
+var mdevMu sync.Mutex
 
 // DiscoverVFs returns all SR-IOV Virtual Functions available for vGPU.
 // These are discovered by scanning /sys/class/mdev_bus/ which contains
@@ -29,6 +36,13 @@ func DiscoverVFs() ([]VirtualFunction, error) {
 			return nil, nil // No mdev_bus means no vGPU support
 		}
 		return nil, fmt.Errorf("read mdev_bus: %w", err)
+	}
+
+	// List mdevs once and build a lookup map to avoid O(n*m) performance
+	mdevs, _ := ListMdevDevices()
+	mdevByVF := make(map[string]bool, len(mdevs))
+	for _, mdev := range mdevs {
+		mdevByVF[mdev.VFAddress] = true
 	}
 
 	var vfs []VirtualFunction
@@ -43,8 +57,8 @@ func DiscoverVFs() ([]VirtualFunction, error) {
 			parentGPU = filepath.Base(target)
 		}
 
-		// Check if this VF already has an mdev
-		hasMdev := vfHasMdev(vfAddr)
+		// Check if this VF already has an mdev (using pre-built lookup map)
+		hasMdev := mdevByVF[vfAddr]
 
 		vfs = append(vfs, VirtualFunction{
 			PCIAddress: vfAddr,
@@ -54,18 +68,6 @@ func DiscoverVFs() ([]VirtualFunction, error) {
 	}
 
 	return vfs, nil
-}
-
-// vfHasMdev checks if a VF has an mdev device created on it
-func vfHasMdev(vfAddr string) bool {
-	// Check if any mdev device has this VF as parent
-	mdevs, _ := ListMdevDevices()
-	for _, mdev := range mdevs {
-		if mdev.VFAddress == vfAddr {
-			return true
-		}
-	}
-	return false
 }
 
 // ListGPUProfiles returns available vGPU profiles with availability counts.
@@ -328,7 +330,15 @@ func getProfileNameFromType(profileType, vfAddress string) string {
 
 // CreateMdev creates an mdev device for the given profile and instance.
 // It finds an available VF and creates the mdev, returning the device info.
-func CreateMdev(profileName, instanceID string) (*MdevDevice, error) {
+// This function is thread-safe and uses a mutex to prevent race conditions
+// when multiple instances request vGPUs concurrently.
+func CreateMdev(ctx context.Context, profileName, instanceID string) (*MdevDevice, error) {
+	log := logger.FromContext(ctx)
+
+	// Lock to prevent race conditions when multiple instances request the same profile
+	mdevMu.Lock()
+	defer mdevMu.Unlock()
+
 	// Find profile type from name
 	profileType, err := findProfileType(profileName)
 	if err != nil {
@@ -364,11 +374,15 @@ func CreateMdev(profileName, instanceID string) (*MdevDevice, error) {
 	// Generate UUID for the mdev
 	mdevUUID := uuid.New().String()
 
+	log.DebugContext(ctx, "creating mdev device", "profile", profileName, "vf", targetVF, "uuid", mdevUUID, "instance_id", instanceID)
+
 	// Create mdev by writing UUID to create file
 	createPath := filepath.Join(mdevBusPath, targetVF, "mdev_supported_types", profileType, "create")
 	if err := os.WriteFile(createPath, []byte(mdevUUID), 0200); err != nil {
-		return nil, fmt.Errorf("create mdev: %w", err)
+		return nil, fmt.Errorf("create mdev on VF %s: %w", targetVF, err)
 	}
+
+	log.InfoContext(ctx, "created mdev device", "profile", profileName, "vf", targetVF, "uuid", mdevUUID, "instance_id", instanceID)
 
 	return &MdevDevice{
 		UUID:        mdevUUID,
@@ -381,40 +395,125 @@ func CreateMdev(profileName, instanceID string) (*MdevDevice, error) {
 }
 
 // DestroyMdev removes an mdev device.
-func DestroyMdev(mdevUUID string) error {
+func DestroyMdev(ctx context.Context, mdevUUID string) error {
+	log := logger.FromContext(ctx)
+
+	// Lock to prevent race conditions during destruction
+	mdevMu.Lock()
+	defer mdevMu.Unlock()
+
+	log.DebugContext(ctx, "destroying mdev device", "uuid", mdevUUID)
+
 	// Try mdevctl undefine first (removes persistent definition)
-	exec.Command("mdevctl", "undefine", "--uuid", mdevUUID).Run()
+	if err := exec.Command("mdevctl", "undefine", "--uuid", mdevUUID).Run(); err != nil {
+		// Log at debug level - mdevctl might not be installed or mdev might not be defined
+		log.DebugContext(ctx, "mdevctl undefine failed (may be expected)", "uuid", mdevUUID, "error", err)
+	}
 
 	// Remove via sysfs
 	removePath := filepath.Join(mdevDevices, mdevUUID, "remove")
 	if err := os.WriteFile(removePath, []byte("1"), 0200); err != nil {
 		if os.IsNotExist(err) {
+			log.DebugContext(ctx, "mdev already removed", "uuid", mdevUUID)
 			return nil // Already removed
 		}
-		return fmt.Errorf("remove mdev: %w", err)
+		return fmt.Errorf("remove mdev %s: %w", mdevUUID, err)
 	}
 
+	log.InfoContext(ctx, "destroyed mdev device", "uuid", mdevUUID)
 	return nil
 }
 
-// ReconcileMdevs destroys orphaned mdevs that are not attached to running instances.
+// IsMdevInUse checks if an mdev device is currently bound to a driver (in use by a VM).
+// An mdev with a driver symlink is actively attached to a hypervisor/VFIO.
+func IsMdevInUse(mdevUUID string) bool {
+	driverPath := filepath.Join(mdevDevices, mdevUUID, "driver")
+	_, err := os.Readlink(driverPath)
+	return err == nil // Has a driver = in use
+}
+
+// MdevReconcileInfo contains information needed to reconcile mdevs for an instance
+type MdevReconcileInfo struct {
+	InstanceID string
+	MdevUUID   string
+	IsRunning  bool // true if instance's VMM is running or state is unknown
+}
+
+// ReconcileMdevs destroys orphaned mdevs that belong to hypeman but are no longer in use.
 // This is called on server startup to clean up stale mdevs from previous runs.
-func ReconcileMdevs(isInstanceRunning func(string) bool) error {
+//
+// Safety guarantees:
+//   - Only destroys mdevs that are tracked by hypeman instances (via hypemanMdevs map)
+//   - Never destroys mdevs created by other processes on the host
+//   - Skips mdevs that are currently bound to a driver (in use by a VM)
+//   - Skips mdevs for instances in Running or Unknown state
+func ReconcileMdevs(ctx context.Context, instanceInfos []MdevReconcileInfo) error {
+	log := logger.FromContext(ctx)
+
 	mdevs, err := ListMdevDevices()
 	if err != nil {
 		return fmt.Errorf("list mdevs: %w", err)
 	}
 
-	for _, mdev := range mdevs {
-		// If mdev has an instance ID and that instance is not running, destroy it
-		// If mdev has no instance ID, it's orphaned (created but never tracked)
-		if mdev.InstanceID == "" || !isInstanceRunning(mdev.InstanceID) {
-			if err := DestroyMdev(mdev.UUID); err != nil {
-				// Log but continue - best effort cleanup
-				continue
-			}
+	if len(mdevs) == 0 {
+		log.DebugContext(ctx, "no mdev devices found to reconcile")
+		return nil
+	}
+
+	// Build lookup maps from instance info
+	// mdevUUID -> instanceID for mdevs managed by hypeman
+	hypemanMdevs := make(map[string]string, len(instanceInfos))
+	// instanceID -> isRunning for liveness check
+	instanceRunning := make(map[string]bool, len(instanceInfos))
+	for _, info := range instanceInfos {
+		if info.MdevUUID != "" {
+			hypemanMdevs[info.MdevUUID] = info.InstanceID
+			instanceRunning[info.InstanceID] = info.IsRunning
 		}
 	}
+
+	log.InfoContext(ctx, "reconciling mdev devices", "total_mdevs", len(mdevs), "hypeman_mdevs", len(hypemanMdevs))
+
+	var destroyed, skippedNotOurs, skippedInUse, skippedRunning int
+	for _, mdev := range mdevs {
+		// Only consider mdevs that hypeman created
+		instanceID, isOurs := hypemanMdevs[mdev.UUID]
+		if !isOurs {
+			log.DebugContext(ctx, "skipping mdev not managed by hypeman", "uuid", mdev.UUID, "profile", mdev.ProfileName)
+			skippedNotOurs++
+			continue
+		}
+
+		// Skip if instance is running or in unknown state (might still be using the mdev)
+		if instanceRunning[instanceID] {
+			log.DebugContext(ctx, "skipping mdev for running/unknown instance", "uuid", mdev.UUID, "instance_id", instanceID)
+			skippedRunning++
+			continue
+		}
+
+		// Check if mdev is bound to a driver (in use by VM)
+		if IsMdevInUse(mdev.UUID) {
+			log.WarnContext(ctx, "skipping mdev still bound to driver", "uuid", mdev.UUID, "instance_id", instanceID)
+			skippedInUse++
+			continue
+		}
+
+		// Safe to destroy - it's ours, instance is not running, and not bound to driver
+		log.InfoContext(ctx, "destroying orphaned mdev", "uuid", mdev.UUID, "profile", mdev.ProfileName, "instance_id", instanceID)
+		if err := DestroyMdev(ctx, mdev.UUID); err != nil {
+			// Log error but continue - best effort cleanup
+			log.WarnContext(ctx, "failed to destroy orphaned mdev", "uuid", mdev.UUID, "error", err)
+			continue
+		}
+		destroyed++
+	}
+
+	log.InfoContext(ctx, "mdev reconciliation complete",
+		"destroyed", destroyed,
+		"skipped_not_ours", skippedNotOurs,
+		"skipped_in_use", skippedInUse,
+		"skipped_running", skippedRunning,
+	)
 
 	return nil
 }

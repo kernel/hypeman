@@ -22,6 +22,7 @@ import (
 	"github.com/onkernel/hypeman"
 	"github.com/onkernel/hypeman/cmd/api/api"
 	"github.com/onkernel/hypeman/cmd/api/config"
+	"github.com/onkernel/hypeman/lib/devices"
 	"github.com/onkernel/hypeman/lib/guest"
 	"github.com/onkernel/hypeman/lib/hypervisor/qemu"
 	"github.com/onkernel/hypeman/lib/instances"
@@ -198,6 +199,26 @@ func run() error {
 	if err := app.DeviceManager.ReconcileDevices(app.Ctx); err != nil {
 		logger.Error("failed to reconcile device state", "error", err)
 		return fmt.Errorf("reconcile device state: %w", err)
+	}
+
+	// Reconcile mdev devices (clears orphaned vGPUs from crashed VMs)
+	// Build mdev info from instances - only destroys mdevs tracked by hypeman
+	logger.Info("Reconciling mdev devices...")
+	var mdevInfos []devices.MdevReconcileInfo
+	if allInstances != nil {
+		for _, inst := range allInstances {
+			if inst.GPUMdevUUID != "" {
+				mdevInfos = append(mdevInfos, devices.MdevReconcileInfo{
+					InstanceID: inst.Id,
+					MdevUUID:   inst.GPUMdevUUID,
+					IsRunning:  inst.State == instances.StateRunning || inst.State == instances.StateUnknown,
+				})
+			}
+		}
+	}
+	if err := devices.ReconcileMdevs(app.Ctx, mdevInfos); err != nil {
+		// Log but don't fail - mdev cleanup is best-effort
+		logger.Warn("failed to reconcile mdev devices", "error", err)
 	}
 
 	// Initialize ingress manager (starts Caddy daemon and DNS server for dynamic upstreams)
