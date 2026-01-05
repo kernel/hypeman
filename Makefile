@@ -1,5 +1,5 @@
 SHELL := /bin/bash
-.PHONY: oapi-generate generate-vmm-client generate-wire generate-all dev build test install-tools gen-jwt download-ch-binaries download-ch-spec ensure-ch-binaries build-caddy-binaries build-caddy ensure-caddy-binaries build-preview-cli release-prep clean
+.PHONY: oapi-generate generate-vmm-client generate-wire generate-all dev build test install-tools gen-jwt download-ch-binaries download-ch-spec ensure-ch-binaries build-caddy-binaries build-caddy ensure-caddy-binaries  release-prep clean build-embedded
 
 # Directory where local binaries will be installed
 BIN_DIR ?= $(CURDIR)/bin
@@ -165,26 +165,32 @@ ensure-caddy-binaries:
 	fi
 
 # Build guest-agent (guest binary) into its own directory for embedding
-lib/system/guest_agent/guest-agent: lib/system/guest_agent/main.go
+lib/system/guest_agent/guest-agent: lib/system/guest_agent/*.go
 	@echo "Building guest-agent..."
 	cd lib/system/guest_agent && CGO_ENABLED=0 go build -ldflags="-s -w" -o guest-agent .
 
+# Build init binary (runs as PID 1 in guest VM) for embedding
+lib/system/init/init: lib/system/init/*.go
+	@echo "Building init binary..."
+	cd lib/system/init && CGO_ENABLED=0 go build -ldflags="-s -w" -o init .
+
+build-embedded: lib/system/guest_agent/guest-agent lib/system/init/init
+
 # Build the binary
-build: ensure-ch-binaries ensure-caddy-binaries lib/system/guest_agent/guest-agent | $(BIN_DIR)
+build: ensure-ch-binaries ensure-caddy-binaries build-embedded | $(BIN_DIR)
 	go build -tags containers_image_openpgp -o $(BIN_DIR)/hypeman ./cmd/api
 
 # Build all binaries
 build-all: build
 
 # Run in development mode with hot reload
-dev: ensure-ch-binaries ensure-caddy-binaries lib/system/guest_agent/guest-agent $(AIR)
+dev: ensure-ch-binaries ensure-caddy-binaries build-embedded $(AIR)
 	@rm -f ./tmp/main
 	$(AIR) -c .air.toml
 
 # Run tests (as root for network capabilities, enables caching and parallelism)
 # Usage: make test                              - runs all tests
 #        make test TEST=TestCreateInstanceWithNetwork  - runs specific test
-#        make test VERBOSE=1                    - runs with verbose output
 test: ensure-ch-binaries ensure-caddy-binaries lib/system/guest_agent/guest-agent
 	@VERBOSE_FLAG=""; \
 	if [ -n "$(VERBOSE)" ]; then VERBOSE_FLAG="-v"; fi; \
@@ -206,8 +212,9 @@ clean:
 	rm -rf lib/vmm/binaries/cloud-hypervisor/
 	rm -rf lib/ingress/binaries/
 	rm -f lib/system/guest_agent/guest-agent
+	rm -f lib/system/init/init
 
 # Prepare for release build (called by GoReleaser)
 # Downloads all embedded binaries and builds embedded components
-release-prep: download-ch-binaries build-caddy-binaries lib/system/guest_agent/guest-agent
+release-prep: download-ch-binaries build-caddy-binaries build-embedded
 	go mod tidy

@@ -21,7 +21,7 @@ cloud-hypervisor
 cloud-hypervisor/**
 lib/system/exec_agent/exec-agent
 lib/system/guest_agent/guest-agent
-lib/system/guest_agent/guest_agent
+lib/system/init/init
 
 # Envoy binaries
 lib/ingress/binaries/**

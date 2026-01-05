@@ -29,11 +29,12 @@ var upgrader = websocket.Upgrader{
 
 // ExecRequest represents the JSON body for exec requests
 type ExecRequest struct {
-	Command []string          `json:"command"`
-	TTY     bool              `json:"tty"`
-	Env     map[string]string `json:"env,omitempty"`
-	Cwd     string            `json:"cwd,omitempty"`
-	Timeout int32             `json:"timeout,omitempty"` // seconds
+	Command      []string          `json:"command"`
+	TTY          bool              `json:"tty"`
+	Env          map[string]string `json:"env,omitempty"`
+	Cwd          string            `json:"cwd,omitempty"`
+	Timeout      int32             `json:"timeout,omitempty"`       // seconds
+	WaitForAgent int32             `json:"wait_for_agent,omitempty"` // seconds to wait for guest agent to be ready
 }
 
 // ExecHandler handles exec requests via WebSocket for bidirectional streaming
@@ -106,6 +107,7 @@ func (s *ApiService) ExecHandler(w http.ResponseWriter, r *http.Request) {
 		"tty", execReq.TTY,
 		"cwd", execReq.Cwd,
 		"timeout", execReq.Timeout,
+		"wait_for_agent", execReq.WaitForAgent,
 	)
 
 	// Create WebSocket read/writer wrapper
@@ -122,14 +124,15 @@ func (s *ApiService) ExecHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Execute via vsock
 	exit, err := guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{
-		Command: execReq.Command,
-		Stdin:   wsConn,
-		Stdout:  wsConn,
-		Stderr:  wsConn,
-		TTY:     execReq.TTY,
-		Env:     execReq.Env,
-		Cwd:     execReq.Cwd,
-		Timeout: execReq.Timeout,
+		Command:      execReq.Command,
+		Stdin:        wsConn,
+		Stdout:       wsConn,
+		Stderr:       wsConn,
+		TTY:          execReq.TTY,
+		Env:          execReq.Env,
+		Cwd:          execReq.Cwd,
+		Timeout:      execReq.Timeout,
+		WaitForAgent: time.Duration(execReq.WaitForAgent) * time.Second,
 	})
 
 	duration := time.Since(startTime)

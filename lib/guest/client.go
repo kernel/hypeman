@@ -2,6 +2,7 @@ package guest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -17,13 +18,29 @@ import (
 	securejoin "github.com/cyphar/filepath-securejoin"
 	"github.com/onkernel/hypeman/lib/hypervisor"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 )
 
 const (
 	// vsockGuestPort is the port the guest-agent listens on inside the guest
 	vsockGuestPort = 2222
 )
+
+// AgentVSockDialError indicates the vsock dial to the guest agent failed.
+// This typically means the VM is still booting or the agent hasn't started yet.
+type AgentVSockDialError struct {
+	Err error
+}
+
+func (e *AgentVSockDialError) Error() string {
+	return fmt.Sprintf("vsock dial failed (VM may still be booting): %v", e.Err)
+}
+
+func (e *AgentVSockDialError) Unwrap() error {
+	return e.Err
+}
 
 // connPool manages reusable gRPC connections per vsock dialer key
 // This avoids the overhead and potential issues of rapidly creating/closing connections
@@ -59,7 +76,11 @@ func GetOrCreateConn(ctx context.Context, dialer hypervisor.VsockDialer) (*grpc.
 	// Create new connection using the VsockDialer
 	conn, err := grpc.Dial("passthrough:///vsock",
 		grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
-			return dialer.DialVsock(ctx, vsockGuestPort)
+			netConn, err := dialer.DialVsock(ctx, vsockGuestPort)
+			if err != nil {
+				return nil, &AgentVSockDialError{Err: err}
+			}
+			return netConn, nil
 		}),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
@@ -92,19 +113,77 @@ type ExitStatus struct {
 
 // ExecOptions configures command execution
 type ExecOptions struct {
-	Command []string
-	Stdin   io.Reader
-	Stdout  io.Writer
-	Stderr  io.Writer
-	TTY     bool
-	Env     map[string]string // Environment variables
-	Cwd     string            // Working directory (optional)
-	Timeout int32             // Execution timeout in seconds (0 = no timeout)
+	Command      []string
+	Stdin        io.Reader
+	Stdout       io.Writer
+	Stderr       io.Writer
+	TTY          bool
+	Env          map[string]string // Environment variables
+	Cwd          string            // Working directory (optional)
+	Timeout      int32             // Execution timeout in seconds (0 = no timeout)
+	WaitForAgent time.Duration     // Max time to wait for agent to be ready (0 = no wait, fail immediately)
 }
 
 // ExecIntoInstance executes command in instance via vsock using gRPC.
 // The dialer is a hypervisor-specific VsockDialer that knows how to connect to the guest.
+// If WaitForAgent is set, it will retry on connection errors until the timeout.
 func ExecIntoInstance(ctx context.Context, dialer hypervisor.VsockDialer, opts ExecOptions) (*ExitStatus, error) {
+	// If no wait requested, execute immediately
+	if opts.WaitForAgent == 0 {
+		return execIntoInstanceOnce(ctx, dialer, opts)
+	}
+
+	deadline := time.Now().Add(opts.WaitForAgent)
+
+	for {
+		exit, err := execIntoInstanceOnce(ctx, dialer, opts)
+
+		// Success - return immediately
+		if err == nil {
+			return exit, err
+		}
+
+		// Check if this is a retryable connection error
+		if !isRetryableConnectionError(err) {
+			return exit, err
+		}
+
+		// Connection error - check if we should retry
+		if time.Now().After(deadline) {
+			return nil, err
+		}
+
+		// Wait before retrying, but respect context cancellation
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+			// Continue to retry
+		}
+	}
+}
+
+// isRetryableConnectionError returns true if the error indicates the guest agent
+// is not yet ready and we should retry connecting.
+func isRetryableConnectionError(err error) bool {
+	// Check for vsock dial errors
+	var dialErr *AgentVSockDialError
+	if errors.As(err, &dialErr) {
+		return true
+	}
+
+	// Check for gRPC Unavailable errors (agent not yet listening)
+	if s, ok := status.FromError(err); ok {
+		if s.Code() == codes.Unavailable {
+			return true
+		}
+	}
+
+	return false
+}
+
+// execIntoInstanceOnce executes command in instance via vsock using gRPC (single attempt).
+func execIntoInstanceOnce(ctx context.Context, dialer hypervisor.VsockDialer, opts ExecOptions) (*ExitStatus, error) {
 	start := time.Now()
 	var bytesSent int64
 

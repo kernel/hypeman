@@ -117,38 +117,23 @@ func TestExecInstanceNonTTY(t *testing.T) {
 		t.Logf("vsock socket exists: %s", actualInst.VsockSocket)
 	}
 
-	// Wait for exec agent to be ready (retry a few times)
-	var exit *guest.ExitStatus
 	var stdout, stderr outputBuffer
-	var execErr error
 
 	dialer, err := hypervisor.NewVsockDialer(actualInst.HypervisorType, actualInst.VsockSocket, actualInst.VsockCID)
 	require.NoError(t, err)
 
 	t.Log("Testing exec command: whoami")
-	maxRetries := 10
-	for i := 0; i < maxRetries; i++ {
-		stdout = outputBuffer{}
-		stderr = outputBuffer{}
-
-		exit, execErr = guest.ExecIntoInstance(ctx(), dialer, guest.ExecOptions{
-			Command: []string{"/bin/sh", "-c", "whoami"},
-			Stdin:   nil,
-			Stdout:  &stdout,
-			Stderr:  &stderr,
-			TTY:     false,
-		})
-
-		if execErr == nil {
-			break
-		}
-
-		t.Logf("Exec attempt %d/%d failed, retrying: %v", i+1, maxRetries, execErr)
-		time.Sleep(1 * time.Second)
-	}
+	exit, execErr := guest.ExecIntoInstance(ctx(), dialer, guest.ExecOptions{
+		Command:      []string{"/bin/sh", "-c", "whoami"},
+		Stdin:        nil,
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+		TTY:          false,
+		WaitForAgent: 10 * time.Second, // Wait up to 10s for guest agent to be ready
+	})
 
 	// Assert exec worked
-	require.NoError(t, execErr, "exec should succeed after retries")
+	require.NoError(t, execErr, "exec should succeed")
 	require.NotNil(t, exit, "exit status should be returned")
 	require.Equal(t, 0, exit.Code, "whoami should exit with code 0")
 
@@ -255,7 +240,7 @@ func TestExecWithDebianMinimal(t *testing.T) {
 
 	// Verify the app exited but VM is still usable (key behavior this test validates)
 	logs = collectTestLogs(t, svc, inst.Id, 200)
-	assert.Contains(t, logs, "overlay-init: app exited with code", "App should have exited")
+	assert.Contains(t, logs, "[exec] app exited with code", "App should have exited")
 
 	// Test exec commands work even though the main app (bash) has exited
 	dialer2, err := hypervisor.NewVsockDialer(actualInst.HypervisorType, actualInst.VsockSocket, actualInst.VsockCID)
