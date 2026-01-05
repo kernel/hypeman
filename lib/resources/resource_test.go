@@ -126,7 +126,7 @@ func TestDefaultNetworkBandwidth_ZeroCPU(t *testing.T) {
 	assert.Equal(t, int64(0), uploadBw, "Should return 0 when CPU capacity is 0")
 }
 
-func TestParseNetworkLimit(t *testing.T) {
+func TestParseBandwidth(t *testing.T) {
 	tests := []struct {
 		input    string
 		expected int64
@@ -143,7 +143,7 @@ func TestParseNetworkLimit(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			result, err := parseNetworkLimit(tt.input)
+			result, err := ParseBandwidth(tt.input)
 			if tt.wantErr {
 				assert.Error(t, err)
 			} else {
