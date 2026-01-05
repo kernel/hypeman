@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.0 (2026-01-05)
+
+Full Changelog: [v0.8.0...v0.9.0](https://github.com/onkernel/hypeman-go/compare/v0.8.0...v0.9.0)
+
+### Features
+
+* QEMU support ([d708091](https://github.com/onkernel/hypeman-go/commit/d70809169d136df3f1efbf961f2a90084e1f9fa5))
+* Resource accounting ([4141287](https://github.com/onkernel/hypeman-go/commit/414128770e8137ed2a40d404f0f4ac06ea1a0731))
+
 ## 0.8.0 (2025-12-23)
 
 Full Changelog: [v0.7.0...v0.8.0](https://github.com/onkernel/hypeman-go/compare/v0.7.0...v0.8.0)
