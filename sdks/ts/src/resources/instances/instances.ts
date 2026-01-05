@@ -194,6 +194,11 @@ export interface Instance {
   state: 'Created' | 'Running' | 'Paused' | 'Shutdown' | 'Stopped' | 'Standby' | 'Unknown';
 
   /**
+   * Disk I/O rate limit (human-readable, e.g., "100MB/s")
+   */
+  disk_io_bps?: string;
+
+  /**
    * Environment variables
    */
   env?: { [key: string]: string };
@@ -259,6 +264,16 @@ export namespace Instance {
    * Network configuration of the instance
    */
   export interface Network {
+    /**
+     * Download bandwidth limit (human-readable, e.g., "1Gbps", "125MB/s")
+     */
+    bandwidth_download?: string;
+
+    /**
+     * Upload bandwidth limit (human-readable, e.g., "1Gbps", "125MB/s")
+     */
+    bandwidth_upload?: string;
+
     /**
      * Whether instance is attached to the default network
      */
@@ -388,6 +403,12 @@ export interface InstanceCreateParams {
   devices?: Array<string>;
 
   /**
+   * Disk I/O rate limit (e.g., "100MB/s", "500MB/s"). Defaults to proportional share
+   * based on CPU allocation if configured.
+   */
+  disk_io_bps?: string;
+
+  /**
    * Environment variables
    */
   env?: { [key: string]: string };
@@ -433,6 +454,18 @@ export namespace InstanceCreateParams {
    * Network configuration for the instance
    */
   export interface Network {
+    /**
+     * Download bandwidth limit (external→VM, e.g., "1Gbps", "125MB/s"). Defaults to
+     * proportional share based on CPU allocation.
+     */
+    bandwidth_download?: string;
+
+    /**
+     * Upload bandwidth limit (VM→external, e.g., "1Gbps", "125MB/s"). Defaults to
+     * proportional share based on CPU allocation.
+     */
+    bandwidth_upload?: string;
+
     /**
      * Whether to attach instance to the default network
      */
