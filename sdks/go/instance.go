@@ -191,6 +191,8 @@ type Instance struct {
 	// Any of "Created", "Running", "Paused", "Shutdown", "Stopped", "Standby",
 	// "Unknown".
 	State InstanceState `json:"state,required"`
+	// Disk I/O rate limit (human-readable, e.g., "100MB/s")
+	DiskIoBps string `json:"disk_io_bps"`
 	// Environment variables
 	Env map[string]string `json:"env"`
 	// Whether a snapshot exists for this instance
@@ -224,6 +226,7 @@ type Instance struct {
 		Image       respjson.Field
 		Name        respjson.Field
 		State       respjson.Field
+		DiskIoBps   respjson.Field
 		Env         respjson.Field
 		HasSnapshot respjson.Field
 		HotplugSize respjson.Field
@@ -278,6 +281,10 @@ const (
 
 // Network configuration of the instance
 type InstanceNetwork struct {
+	// Download bandwidth limit (human-readable, e.g., "1Gbps", "125MB/s")
+	BandwidthDownload string `json:"bandwidth_download"`
+	// Upload bandwidth limit (human-readable, e.g., "1Gbps", "125MB/s")
+	BandwidthUpload string `json:"bandwidth_upload"`
 	// Whether instance is attached to the default network
 	Enabled bool `json:"enabled"`
 	// Assigned IP address (null if no network)
@@ -288,12 +295,14 @@ type InstanceNetwork struct {
 	Name string `json:"name"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
-		Enabled     respjson.Field
-		IP          respjson.Field
-		Mac         respjson.Field
-		Name        respjson.Field
-		ExtraFields map[string]respjson.Field
-		raw         string
+		BandwidthDownload respjson.Field
+		BandwidthUpload   respjson.Field
+		Enabled           respjson.Field
+		IP                respjson.Field
+		Mac               respjson.Field
+		Name              respjson.Field
+		ExtraFields       map[string]respjson.Field
+		raw               string
 	} `json:"-"`
 }
 
@@ -411,6 +420,9 @@ type InstanceNewParams struct {
 	// Human-readable name (lowercase letters, digits, and dashes only; cannot start or
 	// end with a dash)
 	Name string `json:"name,required"`
+	// Disk I/O rate limit (e.g., "100MB/s", "500MB/s"). Defaults to proportional share
+	// based on CPU allocation if configured.
+	DiskIoBps param.Opt[string] `json:"disk_io_bps,omitzero"`
 	// Additional memory for hotplug (human-readable format like "3GB", "1G")
 	HotplugSize param.Opt[string] `json:"hotplug_size,omitzero"`
 	// Writable overlay disk size (human-readable format like "10GB", "50G")
@@ -452,6 +464,12 @@ const (
 
 // Network configuration for the instance
 type InstanceNewParamsNetwork struct {
+	// Download bandwidth limit (external→VM, e.g., "1Gbps", "125MB/s"). Defaults to
+	// proportional share based on CPU allocation.
+	BandwidthDownload param.Opt[string] `json:"bandwidth_download,omitzero"`
+	// Upload bandwidth limit (VM→external, e.g., "1Gbps", "125MB/s"). Defaults to
+	// proportional share based on CPU allocation.
+	BandwidthUpload param.Opt[string] `json:"bandwidth_upload,omitzero"`
 	// Whether to attach instance to the default network
 	Enabled param.Opt[bool] `json:"enabled,omitzero"`
 	paramObj
