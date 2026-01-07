@@ -13,7 +13,10 @@ describe('resource ingresses', () => {
     const responsePromise = client.ingresses.create({
       name: 'my-api-ingress',
       rules: [
-        { match: { hostname: '{instance}.example.com' }, target: { instance: '{instance}', port: 8080 } },
+        {
+          match: { hostname: '{instance}.example.com' },
+          target: { instance: '{instance}', port: 8080 },
+        },
       ],
     });
     const rawResponse = await responsePromise.asResponse();
