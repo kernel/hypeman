@@ -28,7 +28,7 @@ The build system provides source-to-image builds inside ephemeral Cloud Hypervis
 │  │                                              │               ││
 │  │                                              ▼               ││
 │  │                                     Push to Registry         ││
-│  │                                     (HTTP, insecure)         ││
+│  │                                     (JWT token auth)         ││
 │  └─────────────────────────────────────────────────────────────┘│
 └─────────────────────────────────────────────────────────────────┘
                               │
@@ -106,10 +106,39 @@ Registry-based caching with tenant isolation:
 
 ```go
 gen := NewCacheKeyGenerator("localhost:8080")
-key, _ := gen.GenerateCacheKey("my-tenant", "nodejs20", lockfileHashes)
-// key.ImportCacheArg() → "type=registry,ref=localhost:8080/cache/my-tenant/nodejs20/abc123"
-// key.ExportCacheArg() → "type=registry,ref=localhost:8080/cache/my-tenant/nodejs20/abc123,mode=max"
+key, _ := gen.GenerateCacheKey("my-tenant", "myapp", lockfileHashes)
+// key.ImportCacheArg() → "type=registry,ref=localhost:8080/cache/my-tenant/myapp/abc123"
+// key.ExportCacheArg() → "type=registry,ref=localhost:8080/cache/my-tenant/myapp/abc123,mode=max"
 ```
+
+### Registry Token System (`registry_token.go`)
+
+JWT-based authentication for builder VMs to push images:
+
+```go
+generator := NewRegistryTokenGenerator(jwtSecret)
+token, _ := generator.GeneratePushToken(buildID, []string{"builds/abc123", "cache/tenant-x"}, 30*time.Minute)
+// Token grants push access only to specified repositories
+// Validated by middleware on /v2/* registry endpoints
+```
+
+| Field | Description |
+|-------|-------------|
+| `BuildID` | Build job identifier for audit |
+| `Repositories` | Allowed repository paths |
+| `Scope` | Access scope: `push` or `pull` |
+| `ExpiresAt` | Token expiry (matches build timeout) |
+
+### Metrics (`metrics.go`)
+
+OpenTelemetry metrics for monitoring:
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `hypeman_build_duration_seconds` | Histogram | Build duration |
+| `hypeman_builds_total` | Counter | Total builds by status/runtime |
+| `hypeman_build_queue_length` | Gauge | Pending builds in queue |
+| `hypeman_builds_active` | Gauge | Currently running builds |
 
 ### Builder Agent (`builder_agent/main.go`)
 
@@ -190,7 +219,14 @@ The `REGISTRY_URL` must be accessible from inside builder VMs. Since `localhost`
 REGISTRY_URL=10.102.0.1:8083  # Gateway IP accessible from VM network
 ```
 
-The middleware allows unauthenticated registry pushes from the VM network (10.102.x.x).
+### Registry Authentication
+
+Builder VMs authenticate to the registry using short-lived JWT tokens:
+
+1. **Token Generation**: The build manager generates a scoped token for each build
+2. **Token Scope**: Grants push access only to `builds/{build_id}` and `cache/{cache_scope}`
+3. **Token TTL**: Matches build timeout (minimum 30 minutes)
+4. **Authentication**: Builder agent sends token via Basic auth (`token:` format)
 
 ## Build Status Flow
 
@@ -209,6 +245,7 @@ queued → building → pushing → ready
 3. **Network Control**: `network_mode: isolated` or `egress` with optional domain allowlist
 4. **Secret Handling**: Secrets fetched via vsock, never written to disk in guest
 5. **Cache Isolation**: Per-tenant cache scopes prevent cross-tenant cache poisoning
+6. **Registry Auth**: Short-lived JWT tokens scoped to specific repositories (builds/{id}, cache/{scope})
 
 ## Builder Images
 
@@ -233,15 +270,17 @@ Builder images must include:
 
 ### Build and Push
 
+> **Important**: Images must be built with OCI manifest format for Hypeman.
+> See [`images/README.md`](./images/README.md) for detailed build instructions.
+
 ```bash
-# Build the generic builder image
-docker build \
-  -t hypeman/builder:latest \
+# Build with OCI format (required for Hypeman)
+docker buildx build \
+  --platform linux/amd64 \
+  --output "type=registry,oci-mediatypes=true" \
+  --tag yourregistry/builder:latest \
   -f lib/builds/images/generic/Dockerfile \
   .
-
-# Push to your registry
-docker push hypeman/builder:latest
 ```
 
 ### Environment Variables
@@ -312,7 +351,7 @@ go test ./lib/builds/... -v
 # Test specific components
 go test ./lib/builds/queue_test.go ./lib/builds/queue.go ./lib/builds/types.go -v
 go test ./lib/builds/cache_test.go ./lib/builds/cache.go ./lib/builds/types.go ./lib/builds/errors.go -v
-go test ./lib/builds/templates/... -v
+go test ./lib/builds/registry_token_test.go ./lib/builds/registry_token.go -v
 ```
 
 ### E2E Testing
@@ -328,7 +367,7 @@ go test ./lib/builds/templates/... -v
    curl -X POST http://localhost:8083/images \
      -H "Authorization: Bearer $TOKEN" \
      -H "Content-Type: application/json" \
-     -d '{"name": "hirokernel/builder-nodejs20:latest"}'
+     -d '{"name": "hirokernel/builder-generic:latest"}'
    ```
 
 3. **Create test source with Dockerfile**:
@@ -382,7 +421,7 @@ go test ./lib/builds/templates/... -v
 | `no cgroup mount found` | Cgroups not mounted in VM | Update init script to mount cgroups |
 | `http: server gave HTTP response to HTTPS client` | BuildKit using HTTPS for HTTP registry | Add `registry.insecure=true` to output flags |
 | `connection refused` to localhost:8080 | Registry URL not accessible from VM | Use gateway IP (10.102.0.1) instead of localhost |
-| `authorization header required` | Registry auth blocking VM push | Ensure auth bypass for 10.102.x.x IPs |
+| `401 Unauthorized` | Registry auth issue | Check registry_token in config.json; verify middleware handles Basic auth |
 | `No space left on device` | Instance memory too small for image | Use at least 1GB RAM for Node.js images |
 | `can't enable NoProcessSandbox without Rootless` | Wrong BUILDKITD_FLAGS | Use empty flags or remove the flag |
 
@@ -412,11 +451,14 @@ Expected format:
 ```json
 {
   "job_id": "abc123",
-  "runtime": "nodejs20",
   "registry_url": "10.102.0.1:8083",
+  "registry_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
   "cache_scope": "my-tenant",
   "source_path": "/src",
+  "dockerfile": "FROM node:20-alpine\nWORKDIR /app\n...",
   "timeout_seconds": 300,
   "network_mode": "egress"
 }
 ```
+
+Note: `registry_token` is a short-lived JWT granting push access to `builds/abc123` and `cache/my-tenant`.
