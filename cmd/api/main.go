@@ -22,7 +22,8 @@ import (
 	"github.com/onkernel/hypeman"
 	"github.com/onkernel/hypeman/cmd/api/api"
 	"github.com/onkernel/hypeman/cmd/api/config"
-	"github.com/onkernel/hypeman/lib/exec"
+	"github.com/onkernel/hypeman/lib/guest"
+	"github.com/onkernel/hypeman/lib/hypervisor/qemu"
 	"github.com/onkernel/hypeman/lib/instances"
 	mw "github.com/onkernel/hypeman/lib/middleware"
 	"github.com/onkernel/hypeman/lib/oapi"
@@ -43,6 +44,11 @@ func main() {
 func run() error {
 	// Load config early for OTel initialization
 	cfg := config.Load()
+
+	// Validate configuration before proceeding
+	if err := cfg.Validate(); err != nil {
+		return fmt.Errorf("invalid configuration: %w", err)
+	}
 
 	// Initialize OpenTelemetry (before wire initialization)
 	otelCfg := otel.Config{
@@ -72,11 +78,11 @@ func run() error {
 		}()
 	}
 
-	// Initialize exec and vmm metrics if OTel is enabled
+	// Initialize guest and vmm metrics if OTel is enabled
 	if otelProvider != nil && otelProvider.Meter != nil {
-		execMetrics, err := exec.NewMetrics(otelProvider.Meter)
+		guestMetrics, err := guest.NewMetrics(otelProvider.Meter)
 		if err == nil {
-			exec.SetMetrics(execMetrics)
+			guest.SetMetrics(guestMetrics)
 		}
 		vmmMetrics, err := vmm.NewMetrics(otelProvider.Meter)
 		if err == nil {
@@ -125,6 +131,11 @@ func run() error {
 	}
 	logger.Info("KVM access verified")
 
+	// Check if QEMU is available (optional - only warn if not present)
+	if _, err := (&qemu.Starter{}).GetBinaryPath(nil, ""); err != nil {
+		logger.Warn("QEMU not available - QEMU hypervisor will not work", "error", err)
+	}
+
 	// Validate log rotation config
 	var logMaxSize datasize.ByteSize
 	if err := logMaxSize.UnmarshalText([]byte(app.Config.LogMaxSize)); err != nil {
@@ -170,7 +181,12 @@ func run() error {
 		logger.Error("failed to initialize network manager", "error", err)
 		return fmt.Errorf("initialize network manager: %w", err)
 	}
-	logger.Info("Network manager initialized")
+
+	// Set up HTB qdisc on bridge for network fair sharing
+	networkCapacity := app.ResourceManager.NetworkCapacity()
+	if err := app.NetworkManager.SetupHTB(app.Ctx, networkCapacity); err != nil {
+		logger.Warn("failed to setup HTB on bridge (network rate limiting disabled)", "error", err)
+	}
 
 	// Reconcile device state (clears orphaned attachments from crashed VMs)
 	// Set up liveness checker so device reconciliation can accurately detect orphaned attachments
@@ -233,6 +249,17 @@ func run() error {
 		mw.JwtAuth(app.Config.JwtSecret),
 		mw.ResolveResource(app.ApiService.NewResolvers(), api.ResolverErrorResponder),
 	).Get("/instances/{id}/exec", app.ApiService.ExecHandler)
+
+	// Custom cp endpoint (outside OpenAPI spec, uses WebSocket)
+	r.With(
+		middleware.RequestID,
+		middleware.RealIP,
+		middleware.Recoverer,
+		mw.InjectLogger(logger),
+		mw.AccessLogger(accessLogger),
+		mw.JwtAuth(app.Config.JwtSecret),
+		mw.ResolveResource(app.ApiService.NewResolvers(), api.ResolverErrorResponder),
+	).Get("/instances/{id}/cp", app.ApiService.CpHandler)
 
 	// OCI Distribution registry endpoints for image push (outside OpenAPI spec)
 	r.Route("/v2", func(r chi.Router) {

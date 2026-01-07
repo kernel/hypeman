@@ -145,8 +145,10 @@ func (p *Paths) InstanceVolumeOverlaysDir(instanceID string) string {
 }
 
 // InstanceSocket returns the path to instance API socket.
-func (p *Paths) InstanceSocket(id string) string {
-	return filepath.Join(p.InstanceDir(id), "ch.sock")
+// The socketName should be obtained from hypervisor.Type.SocketName() to ensure
+// it stays within Unix socket path length limits (SUN_LEN ~108 bytes).
+func (p *Paths) InstanceSocket(id string, socketName string) string {
+	return filepath.Join(p.InstanceDir(id), socketName)
 }
 
 // InstanceVsockSocket returns the path to instance vsock socket.

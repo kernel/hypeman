@@ -7,6 +7,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/onkernel/hypeman/lib/guest"
+	"github.com/onkernel/hypeman/lib/hypervisor"
 	"github.com/onkernel/hypeman/lib/logger"
 	"github.com/onkernel/hypeman/lib/network"
 )
@@ -39,18 +41,23 @@ func (m *manager) deleteInstance(
 		}
 	}
 
-	// 3. If VMM might be running, force kill it
-	// Also attempt kill for StateUnknown since we can't be sure if VMM is running
+	// 3. Close exec gRPC connection before killing hypervisor to prevent panic
+	if dialer, err := hypervisor.NewVsockDialer(inst.HypervisorType, inst.VsockSocket, inst.VsockCID); err == nil {
+		guest.CloseConn(dialer.Key())
+	}
+
+	// 4. If hypervisor might be running, force kill it
+	// Also attempt kill for StateUnknown since we can't be sure if hypervisor is running
 	if inst.State.RequiresVMM() || inst.State == StateUnknown {
-		log.DebugContext(ctx, "stopping VMM", "instance_id", id, "state", inst.State)
-		if err := m.killVMM(ctx, &inst); err != nil {
+		log.DebugContext(ctx, "stopping hypervisor", "instance_id", id, "state", inst.State)
+		if err := m.killHypervisor(ctx, &inst); err != nil {
 			// Log error but continue with cleanup
-			// Best effort to clean up even if VMM is unresponsive
-			log.WarnContext(ctx, "failed to kill VMM, continuing with cleanup", "instance_id", id, "error", err)
+			// Best effort to clean up even if hypervisor is unresponsive
+			log.WarnContext(ctx, "failed to kill hypervisor, continuing with cleanup", "instance_id", id, "error", err)
 		}
 	}
 
-	// 4. Release network allocation
+	// 5. Release network allocation
 	if inst.NetworkEnabled {
 		log.DebugContext(ctx, "releasing network", "instance_id", id, "network", "default")
 		if err := m.networkManager.ReleaseAllocation(ctx, networkAlloc); err != nil {
@@ -59,7 +66,7 @@ func (m *manager) deleteInstance(
 		}
 	}
 
-	// 5. Detach and auto-unbind devices from VFIO
+	// 6. Detach and auto-unbind devices from VFIO
 	if len(inst.Devices) > 0 && m.deviceManager != nil {
 		for _, deviceID := range inst.Devices {
 			log.DebugContext(ctx, "detaching device", "id", id, "device", deviceID)
@@ -76,7 +83,7 @@ func (m *manager) deleteInstance(
 		}
 	}
 
-	// 5b. Detach volumes
+	// 6b. Detach volumes
 	if len(inst.Volumes) > 0 {
 		log.DebugContext(ctx, "detaching volumes", "instance_id", id, "count", len(inst.Volumes))
 		for _, volAttach := range inst.Volumes {
@@ -87,7 +94,7 @@ func (m *manager) deleteInstance(
 		}
 	}
 
-	// 6. Delete all instance data
+	// 7. Delete all instance data
 	log.DebugContext(ctx, "deleting instance data", "instance_id", id)
 	if err := m.deleteInstanceData(id); err != nil {
 		log.ErrorContext(ctx, "failed to delete instance data", "instance_id", id, "error", err)
@@ -98,23 +105,23 @@ func (m *manager) deleteInstance(
 	return nil
 }
 
-// killVMM force kills the VMM process without graceful shutdown
+// killHypervisor force kills the hypervisor process without graceful shutdown
 // Used only for delete operations where we're removing all data anyway.
-// For operations that need graceful shutdown (like standby), use the VMM API directly.
-func (m *manager) killVMM(ctx context.Context, inst *Instance) error {
+// For operations that need graceful shutdown (like standby), use the hypervisor API directly.
+func (m *manager) killHypervisor(ctx context.Context, inst *Instance) error {
 	log := logger.FromContext(ctx)
 
 	// If we have a PID, kill the process immediately
-	if inst.CHPID != nil {
-		pid := *inst.CHPID
+	if inst.HypervisorPID != nil {
+		pid := *inst.HypervisorPID
 
 		// Check if process exists
 		if err := syscall.Kill(pid, 0); err == nil {
 			// Process exists - kill it immediately with SIGKILL
 			// No graceful shutdown needed since we're deleting all data
-			log.DebugContext(ctx, "killing VMM process", "instance_id", inst.Id, "pid", pid)
+			log.DebugContext(ctx, "killing hypervisor process", "instance_id", inst.Id, "pid", pid)
 			if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
-				log.WarnContext(ctx, "failed to kill VMM process", "instance_id", inst.Id, "pid", pid, "error", err)
+				log.WarnContext(ctx, "failed to kill hypervisor process", "instance_id", inst.Id, "pid", pid, "error", err)
 			}
 
 			// Wait for process to die and reap it to prevent zombies
@@ -124,16 +131,16 @@ func (m *manager) killVMM(ctx context.Context, inst *Instance) error {
 				wpid, err := syscall.Wait4(pid, &wstatus, syscall.WNOHANG, nil)
 				if err != nil || wpid == pid {
 					// Process reaped successfully or error (likely ECHILD if already reaped)
-					log.DebugContext(ctx, "VMM process killed and reaped", "instance_id", inst.Id, "pid", pid)
+					log.DebugContext(ctx, "hypervisor process killed and reaped", "instance_id", inst.Id, "pid", pid)
 					break
 				}
 				if i == 49 {
-					log.WarnContext(ctx, "VMM process did not exit in time", "instance_id", inst.Id, "pid", pid)
+					log.WarnContext(ctx, "hypervisor process did not exit in time", "instance_id", inst.Id, "pid", pid)
 				}
 				time.Sleep(100 * time.Millisecond)
 			}
 		} else {
-			log.DebugContext(ctx, "VMM process not running", "instance_id", inst.Id, "pid", pid)
+			log.DebugContext(ctx, "hypervisor process not running", "instance_id", inst.Id, "pid", pid)
 		}
 	}
 

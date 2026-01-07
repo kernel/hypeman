@@ -3,6 +3,7 @@ package network
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
 	"net"
 	"os"
 	"os/exec"
@@ -186,6 +187,12 @@ const (
 	commentNAT    = "hypeman-nat"
 	commentFwdOut = "hypeman-fwd-out"
 	commentFwdIn  = "hypeman-fwd-in"
+)
+
+// HTB handles for traffic control
+const (
+	htbRootHandle  = "1:"  // Root qdisc handle
+	htbRootClassID = "1:1" // Root class for total capacity
 )
 
 // getUplinkInterface returns the uplink interface for NAT/forwarding.
@@ -416,8 +423,10 @@ func (m *manager) deleteForwardRuleByComment(comment string) {
 	}
 }
 
-// createTAPDevice creates TAP device and attaches to bridge
-func (m *manager) createTAPDevice(tapName, bridgeName string, isolated bool) error {
+// createTAPDevice creates TAP device and attaches to bridge.
+// downloadBps: rate limit for download (external→VM), applied as TBF on TAP egress
+// uploadBps/uploadCeilBps: rate limit for upload (VM→external), applied as HTB class on bridge
+func (m *manager) createTAPDevice(tapName, bridgeName string, isolated bool, downloadBps, uploadBps, uploadCeilBps int64) error {
 	// 1. Check if TAP already exists
 	if _, err := netlink.LinkByName(tapName); err == nil {
 		// TAP already exists, delete it first
@@ -479,11 +488,256 @@ func (m *manager) createTAPDevice(tapName, bridgeName string, isolated bool) err
 		}
 	}
 
+	// 6. Apply download rate limiting (TBF on TAP egress)
+	if downloadBps > 0 {
+		if err := m.applyDownloadRateLimit(tapName, downloadBps); err != nil {
+			return fmt.Errorf("apply download rate limit: %w", err)
+		}
+	}
+
+	// 7. Apply upload rate limiting (HTB class on bridge)
+	if uploadBps > 0 {
+		if err := m.addVMClass(bridgeName, tapName, uploadBps, uploadCeilBps); err != nil {
+			return fmt.Errorf("apply upload rate limit: %w", err)
+		}
+	}
+
 	return nil
 }
 
-// deleteTAPDevice removes TAP device
+// applyDownloadRateLimit applies download (external→VM) rate limiting using TBF on TAP egress.
+func (m *manager) applyDownloadRateLimit(tapName string, rateLimitBps int64) error {
+	rateStr := formatTcRate(rateLimitBps)
+
+	// Use Token Bucket Filter (tbf) for download shaping
+	// burst: bucket size = (rate * multiplier) / 250 for HZ=250 kernels
+	// The multiplier allows initial burst before settling to sustained rate.
+	// latency: max time a packet can wait in queue
+	multiplier := m.GetDownloadBurstMultiplier()
+	burstBytes := (rateLimitBps * int64(multiplier)) / 250
+	if burstBytes < 1540 {
+		burstBytes = 1540 // Minimum burst for standard MTU
+	}
+
+	cmd := exec.Command("tc", "qdisc", "add", "dev", tapName, "root", "tbf",
+		"rate", rateStr,
+		"burst", fmt.Sprintf("%d", burstBytes),
+		"latency", "50ms")
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+	}
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("tc qdisc add tbf: %w (output: %s)", err, string(output))
+	}
+
+	return nil
+}
+
+// removeRateLimit removes any rate limiting from a TAP device.
+func (m *manager) removeRateLimit(tapName string) error {
+	cmd := exec.Command("tc", "qdisc", "del", "dev", tapName, "root")
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+	}
+	// Ignore errors - qdisc may not exist
+	cmd.Run()
+	return nil
+}
+
+// setupBridgeHTB sets up HTB qdisc on bridge for upload (VM→external) fair sharing.
+// This is one-time setup - per-VM classes are added dynamically via addVMClass.
+func (m *manager) setupBridgeHTB(ctx context.Context, bridgeName string, capacityBps int64) error {
+	log := logger.FromContext(ctx)
+
+	if capacityBps <= 0 {
+		log.DebugContext(ctx, "skipping HTB setup - no capacity configured", "bridge", bridgeName)
+		return nil
+	}
+
+	// Check if HTB qdisc already exists
+	checkCmd := exec.Command("tc", "qdisc", "show", "dev", bridgeName)
+	checkCmd.SysProcAttr = &syscall.SysProcAttr{
+		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+	}
+	output, err := checkCmd.Output()
+	if err == nil && strings.Contains(string(output), "htb") {
+		log.InfoContext(ctx, "HTB qdisc ready", "bridge", bridgeName, "status", "existing")
+		return nil
+	}
+
+	rateStr := formatTcRate(capacityBps)
+
+	// 1. Add root HTB qdisc (no default - all traffic must be classified)
+	cmd := exec.Command("tc", "qdisc", "add", "dev", bridgeName, "root",
+		"handle", htbRootHandle, "htb")
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+	}
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("tc qdisc add htb: %w (output: %s)", err, string(output))
+	}
+
+	// 2. Add root class for total capacity
+	cmd = exec.Command("tc", "class", "add", "dev", bridgeName, "parent", htbRootHandle,
+		"classid", htbRootClassID, "htb", "rate", rateStr)
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+	}
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("tc class add root: %w (output: %s)", err, string(output))
+	}
+
+	log.InfoContext(ctx, "HTB qdisc ready", "bridge", bridgeName, "capacity", rateStr, "status", "configured")
+	return nil
+}
+
+// addVMClass adds an HTB class for a VM on the bridge for upload rate limiting.
+// Called during TAP device creation. rateBps is guaranteed, ceilBps is burst ceiling.
+func (m *manager) addVMClass(bridgeName, tapName string, rateBps, ceilBps int64) error {
+	if rateBps <= 0 {
+		return nil // No rate limiting configured
+	}
+
+	// Use first 4 hex chars of TAP name suffix as class ID (e.g., "hype-a1b2c3d4" → "a1b2")
+	// This ensures unique, stable class IDs per VM
+	classID := deriveClassID(tapName)
+	fullClassID := fmt.Sprintf("1:%s", classID)
+
+	rateStr := formatTcRate(rateBps)
+	if ceilBps <= 0 {
+		ceilBps = rateBps
+	}
+	ceilStr := formatTcRate(ceilBps)
+
+	// 1. Add HTB class for this VM
+	cmd := exec.Command("tc", "class", "add", "dev", bridgeName, "parent", htbRootClassID,
+		"classid", fullClassID, "htb", "rate", rateStr, "ceil", ceilStr, "prio", "1")
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+	}
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("tc class add vm: %w (output: %s)", err, string(output))
+	}
+
+	// 2. Add fq_codel to this class for better latency under load
+	cmd = exec.Command("tc", "qdisc", "add", "dev", bridgeName, "parent", fullClassID, "fq_codel")
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+	}
+	// Ignore errors - fq_codel may not be available
+	cmd.Run()
+
+	// 3. Add filter to classify traffic from this TAP to this class
+	// Use basic match on incoming interface (rt_iif)
+	tapLink, err := netlink.LinkByName(tapName)
+	if err != nil {
+		return fmt.Errorf("get TAP link for filter: %w", err)
+	}
+	tapIndex := tapLink.Attrs().Index
+
+	cmd = exec.Command("tc", "filter", "add", "dev", bridgeName, "parent", htbRootHandle,
+		"protocol", "all", "prio", "1", "basic",
+		"match", fmt.Sprintf("meta(rt_iif eq %d)", tapIndex),
+		"flowid", fullClassID)
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+	}
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("tc filter add: %w (output: %s)", err, string(output))
+	}
+
+	return nil
+}
+
+// removeVMClass removes the HTB class for a VM from the bridge.
+func (m *manager) removeVMClass(bridgeName, tapName string) error {
+	classID := deriveClassID(tapName)
+	fullClassID := fmt.Sprintf("1:%s", classID)
+
+	// Delete filter first (by matching flowid)
+	// List filters and delete matching ones
+	listCmd := exec.Command("tc", "filter", "show", "dev", bridgeName, "parent", htbRootHandle)
+	listCmd.SysProcAttr = &syscall.SysProcAttr{
+		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+	}
+	output, _ := listCmd.Output()
+
+	// Parse filter output to find handle for this flowid
+	lines := strings.Split(string(output), "\n")
+	for _, line := range lines {
+		if strings.Contains(line, fullClassID) && strings.Contains(line, "filter") {
+			// Extract filter handle (e.g., "filter parent 1: protocol all pref 1 basic chain 0 handle 0x1")
+			fields := strings.Fields(line)
+			for i, f := range fields {
+				if f == "handle" && i+1 < len(fields) {
+					handle := fields[i+1]
+					delCmd := exec.Command("tc", "filter", "del", "dev", bridgeName, "parent", htbRootHandle,
+						"protocol", "all", "prio", "1", "handle", handle, "basic")
+					delCmd.SysProcAttr = &syscall.SysProcAttr{
+						AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+					}
+					delCmd.Run() // Best effort
+					break
+				}
+			}
+		}
+	}
+
+	// Delete child qdisc (fq_codel) before deleting the class
+	qdiscCmd := exec.Command("tc", "qdisc", "del", "dev", bridgeName, "parent", fullClassID)
+	qdiscCmd.SysProcAttr = &syscall.SysProcAttr{
+		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+	}
+	qdiscCmd.Run() // Best effort - may not exist
+
+	// Delete the class
+	cmd := exec.Command("tc", "class", "del", "dev", bridgeName, "classid", fullClassID)
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+	}
+	// Ignore errors - class may not exist
+	cmd.Run()
+
+	return nil
+}
+
+// deriveClassID derives a unique HTB class ID from a TAP name.
+// Uses first 4 hex characters after the prefix (e.g., "hype-a1b2c3d4" → "a1b2").
+func deriveClassID(tapName string) string {
+	// Hash the TAP name to get a valid hex class ID.
+	// tc class IDs must be hexadecimal (0-9, a-f), but CUID2 instance IDs
+	// use base-36 (0-9, a-z) which includes invalid chars like t, w, v, etc.
+	// Using FNV-1a for speed. Limited to 16 bits since tc class IDs max at 0xFFFF.
+	h := fnv.New32a()
+	h.Write([]byte(tapName))
+	hash := h.Sum32()
+	// Use only 16 bits (tc class ID max is 0xFFFF)
+	return fmt.Sprintf("%04x", hash&0xFFFF)
+}
+
+// formatTcRate formats bytes per second as a tc rate string.
+// It uses the largest unit that exactly represents the value to avoid
+// truncation from integer division (e.g., 2.5 Gbps becomes "2500mbit" not "2gbit").
+func formatTcRate(bytesPerSec int64) string {
+	bitsPerSec := bytesPerSec * 8
+	switch {
+	case bitsPerSec >= 1000000000 && bitsPerSec%1000000000 == 0:
+		return fmt.Sprintf("%dgbit", bitsPerSec/1000000000)
+	case bitsPerSec >= 1000000 && bitsPerSec%1000000 == 0:
+		return fmt.Sprintf("%dmbit", bitsPerSec/1000000)
+	case bitsPerSec >= 1000 && bitsPerSec%1000 == 0:
+		return fmt.Sprintf("%dkbit", bitsPerSec/1000)
+	default:
+		return fmt.Sprintf("%dbit", bitsPerSec)
+	}
+}
+
+// deleteTAPDevice removes TAP device and its associated HTB class on the bridge.
 func (m *manager) deleteTAPDevice(tapName string) error {
+	// Remove HTB class from bridge before deleting TAP
+	m.removeVMClass(m.config.BridgeName, tapName)
+
 	link, err := netlink.LinkByName(tapName)
 	if err != nil {
 		// TAP doesn't exist, nothing to do
@@ -580,6 +834,121 @@ func (m *manager) CleanupOrphanedTAPs(ctx context.Context, runningInstanceIDs []
 			continue
 		}
 		log.InfoContext(ctx, "deleted orphaned TAP device", "tap", name)
+		deleted++
+	}
+
+	return deleted
+}
+
+// CleanupOrphanedClasses removes HTB classes on the bridge that don't have matching TAP devices.
+// This handles the case where a TAP was deleted externally (manual deletion, reboot, etc.)
+// but the HTB class persists on the bridge.
+// Returns the number of classes deleted.
+func (m *manager) CleanupOrphanedClasses(ctx context.Context) int {
+	log := logger.FromContext(ctx)
+	bridgeName := m.config.BridgeName
+
+	// List all HTB classes on the bridge
+	cmd := exec.Command("tc", "class", "show", "dev", bridgeName)
+	output, err := cmd.Output()
+	if err != nil {
+		log.DebugContext(ctx, "no HTB classes to clean up", "bridge", bridgeName)
+		return 0
+	}
+
+	// Build set of class IDs that belong to existing TAP devices
+	validClassIDs := make(map[string]bool)
+	links, err := netlink.LinkList()
+	if err == nil {
+		for _, link := range links {
+			name := link.Attrs().Name
+			if strings.HasPrefix(name, TAPPrefix) {
+				classID := deriveClassID(name)
+				validClassIDs[classID] = true
+			}
+		}
+	}
+
+	// Parse class output and find orphaned classes
+	// Format: "class htb 1:xxxx parent 1:1 ..."
+	deleted := 0
+	lines := strings.Split(string(output), "\n")
+	for _, line := range lines {
+		if !strings.Contains(line, "class htb 1:") {
+			continue
+		}
+
+		// Extract class ID (e.g., "1:a3f2")
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			continue
+		}
+		fullClassID := fields[2] // "1:xxxx"
+
+		// Skip root class
+		if fullClassID == htbRootClassID {
+			continue
+		}
+
+		// Extract just the minor part (after "1:")
+		parts := strings.Split(fullClassID, ":")
+		if len(parts) != 2 {
+			continue
+		}
+		classID := parts[1]
+
+		// Check if this class belongs to an existing TAP
+		if validClassIDs[classID] {
+			continue
+		}
+
+		// Orphaned class - delete it with warning
+		log.WarnContext(ctx, "cleaning up orphaned HTB class", "class", fullClassID, "bridge", bridgeName)
+
+		// Delete filter first (find and delete by flowid)
+		// Filters are created with 'basic' classifier, format: "handle 0xN flowid 1:xxxx"
+		filterCmd := exec.Command("tc", "filter", "show", "dev", bridgeName)
+		filterCmd.SysProcAttr = &syscall.SysProcAttr{
+			AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+		}
+		if filterOutput, err := filterCmd.Output(); err == nil {
+			filterLines := strings.Split(string(filterOutput), "\n")
+			for _, fline := range filterLines {
+				if strings.Contains(fline, fullClassID) {
+					// Extract filter handle (format: "handle 0x2 flowid 1:ffd")
+					ffields := strings.Fields(fline)
+					for i, f := range ffields {
+						if f == "handle" && i+1 < len(ffields) {
+							handle := ffields[i+1]
+							// Use 'basic' classifier (not u32) to match how filters were created
+							delCmd := exec.Command("tc", "filter", "del", "dev", bridgeName, "parent", "1:", "handle", handle, "prio", "1", "basic")
+							delCmd.SysProcAttr = &syscall.SysProcAttr{
+								AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+							}
+							delCmd.Run() // Best effort
+							break
+						}
+					}
+				}
+			}
+		}
+
+		// Delete child qdisc (fq_codel) before deleting the class
+		delQdiscCmd := exec.Command("tc", "qdisc", "del", "dev", bridgeName, "parent", fullClassID)
+		delQdiscCmd.SysProcAttr = &syscall.SysProcAttr{
+			AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+		}
+		delQdiscCmd.Run() // Best effort - may not exist
+
+		// Delete the class
+		delClassCmd := exec.Command("tc", "class", "del", "dev", bridgeName, "classid", fullClassID)
+		delClassCmd.SysProcAttr = &syscall.SysProcAttr{
+			AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+		}
+		if output, err := delClassCmd.CombinedOutput(); err != nil {
+			log.WarnContext(ctx, "failed to delete orphaned class", "class", fullClassID, "error", err, "output", string(output))
+			continue
+		}
 		deleted++
 	}
 

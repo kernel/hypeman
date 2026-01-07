@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/onkernel/hypeman/lib/paths"
 	"go.opentelemetry.io/otel/metric"
 )
@@ -31,6 +32,12 @@ type Manager interface {
 	GetImage(ctx context.Context, name string) (*Image, error)
 	DeleteImage(ctx context.Context, name string) error
 	RecoverInterruptedBuilds()
+	// TotalImageBytes returns the total size of all ready images on disk.
+	// Used by the resource manager for disk capacity tracking.
+	TotalImageBytes(ctx context.Context) (int64, error)
+	// TotalOCICacheBytes returns the total size of the OCI layer cache.
+	// Used by the resource manager for disk capacity tracking.
+	TotalOCICacheBytes(ctx context.Context) (int64, error)
 }
 
 type manager struct {
@@ -381,4 +388,77 @@ func (m *manager) DeleteImage(ctx context.Context, name string) error {
 	tag := ref.Tag()
 
 	return deleteTag(m.paths, repository, tag)
+}
+
+// TotalImageBytes returns the total size of all ready images on disk.
+func (m *manager) TotalImageBytes(ctx context.Context) (int64, error) {
+	images, err := m.ListImages(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	var total int64
+	for _, img := range images {
+		if img.Status == StatusReady && img.SizeBytes != nil {
+			total += *img.SizeBytes
+		}
+	}
+	return total, nil
+}
+
+// TotalOCICacheBytes returns the total size of the OCI layer cache.
+// Uses OCI layout metadata instead of walking the filesystem for efficiency.
+func (m *manager) TotalOCICacheBytes(ctx context.Context) (int64, error) {
+	path, err := layout.FromPath(m.paths.SystemOCICache())
+	if err != nil {
+		return 0, nil // No cache yet
+	}
+
+	index, err := path.ImageIndex()
+	if err != nil {
+		return 0, nil // Empty or invalid cache
+	}
+
+	manifest, err := index.IndexManifest()
+	if err != nil {
+		return 0, nil
+	}
+
+	// Collect unique blob digests and sizes (layers are shared/deduplicated)
+	blobSizes := make(map[string]int64)
+
+	for _, desc := range manifest.Manifests {
+		// Count the manifest blob itself
+		blobSizes[desc.Digest.String()] = desc.Size
+
+		// Get image to access layers and config
+		img, err := path.Image(desc.Digest)
+		if err != nil {
+			continue
+		}
+
+		// Count config blob
+		if configDigest, err := img.ConfigName(); err == nil {
+			if configFile, err := img.RawConfigFile(); err == nil {
+				blobSizes[configDigest.String()] = int64(len(configFile))
+			}
+		}
+
+		// Count layer blobs
+		if layers, err := img.Layers(); err == nil {
+			for _, layer := range layers {
+				if digest, err := layer.Digest(); err == nil {
+					if size, err := layer.Size(); err == nil {
+						blobSizes[digest.String()] = size
+					}
+				}
+			}
+		}
+	}
+
+	var total int64
+	for _, size := range blobSizes {
+		total += size
+	}
+	return total, nil
 }

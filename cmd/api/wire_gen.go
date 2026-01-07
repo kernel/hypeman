@@ -18,6 +18,7 @@ import (
 	"github.com/onkernel/hypeman/lib/network"
 	"github.com/onkernel/hypeman/lib/providers"
 	"github.com/onkernel/hypeman/lib/registry"
+	"github.com/onkernel/hypeman/lib/resources"
 	"github.com/onkernel/hypeman/lib/system"
 	"github.com/onkernel/hypeman/lib/volumes"
 	"log/slog"
@@ -58,11 +59,15 @@ func initializeApp() (*application, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	resourcesManager, err := providers.ProvideResourceManager(context, config, paths, manager, instancesManager, volumesManager)
+	if err != nil {
+		return nil, nil, err
+	}
 	registry, err := providers.ProvideRegistry(paths, manager)
 	if err != nil {
 		return nil, nil, err
 	}
-	apiService := api.New(config, manager, instancesManager, volumesManager, networkManager, devicesManager, ingressManager, buildsManager)
+	apiService := api.New(config, manager, instancesManager, volumesManager, networkManager, devicesManager, ingressManager, buildsManager, resourcesManager)
 	mainApplication := &application{
 		Ctx:             context,
 		Logger:          logger,
@@ -75,6 +80,7 @@ func initializeApp() (*application, func(), error) {
 		VolumeManager:   volumesManager,
 		IngressManager:  ingressManager,
 		BuildManager:    buildsManager,
+		ResourceManager: resourcesManager,
 		Registry:        registry,
 		ApiService:      apiService,
 	}
@@ -97,6 +103,7 @@ type application struct {
 	VolumeManager   volumes.Manager
 	IngressManager  ingress.Manager
 	BuildManager    builds.Manager
+	ResourceManager *resources.Manager
 	Registry        *registry.Registry
 	ApiService      *api.ApiService
 }

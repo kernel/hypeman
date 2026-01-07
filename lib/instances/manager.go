@@ -6,9 +6,13 @@ import (
 	"sync"
 
 	"github.com/onkernel/hypeman/lib/devices"
+	"github.com/onkernel/hypeman/lib/hypervisor"
+	"github.com/onkernel/hypeman/lib/hypervisor/cloudhypervisor"
+	"github.com/onkernel/hypeman/lib/hypervisor/qemu"
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/network"
 	"github.com/onkernel/hypeman/lib/paths"
+	"github.com/onkernel/hypeman/lib/resources"
 	"github.com/onkernel/hypeman/lib/system"
 	"github.com/onkernel/hypeman/lib/volumes"
 	"go.opentelemetry.io/otel/metric"
@@ -31,6 +35,9 @@ type Manager interface {
 	RotateLogs(ctx context.Context, maxBytes int64, maxFiles int) error
 	AttachVolume(ctx context.Context, id string, volumeId string, req AttachVolumeRequest) (*Instance, error)
 	DetachVolume(ctx context.Context, id string, volumeId string) (*Instance, error)
+	// ListInstanceAllocations returns resource allocations for all instances.
+	// Used by the resource manager for capacity tracking.
+	ListInstanceAllocations(ctx context.Context) ([]resources.InstanceAllocation, error)
 }
 
 // ResourceLimits contains configurable resource limits for instances
@@ -53,11 +60,21 @@ type manager struct {
 	instanceLocks  sync.Map      // map[string]*sync.RWMutex - per-instance locks
 	hostTopology   *HostTopology // Cached host CPU topology
 	metrics        *Metrics
+
+	// Hypervisor support
+	vmStarters        map[hypervisor.Type]hypervisor.VMStarter
+	defaultHypervisor hypervisor.Type // Default hypervisor type when not specified in request
 }
 
 // NewManager creates a new instances manager.
 // If meter is nil, metrics are disabled.
-func NewManager(p *paths.Paths, imageManager images.Manager, systemManager system.Manager, networkManager network.Manager, deviceManager devices.Manager, volumeManager volumes.Manager, limits ResourceLimits, meter metric.Meter, tracer trace.Tracer) Manager {
+// defaultHypervisor specifies which hypervisor to use when not specified in requests.
+func NewManager(p *paths.Paths, imageManager images.Manager, systemManager system.Manager, networkManager network.Manager, deviceManager devices.Manager, volumeManager volumes.Manager, limits ResourceLimits, defaultHypervisor hypervisor.Type, meter metric.Meter, tracer trace.Tracer) Manager {
+	// Validate and default the hypervisor type
+	if defaultHypervisor == "" {
+		defaultHypervisor = hypervisor.TypeCloudHypervisor
+	}
+
 	m := &manager{
 		paths:          p,
 		imageManager:   imageManager,
@@ -68,6 +85,11 @@ func NewManager(p *paths.Paths, imageManager images.Manager, systemManager syste
 		limits:         limits,
 		instanceLocks:  sync.Map{},
 		hostTopology:   detectHostTopology(), // Detect and cache host topology
+		vmStarters: map[hypervisor.Type]hypervisor.VMStarter{
+			hypervisor.TypeCloudHypervisor: cloudhypervisor.NewStarter(),
+			hypervisor.TypeQEMU:            qemu.NewStarter(),
+		},
+		defaultHypervisor: defaultHypervisor,
 	}
 
 	// Initialize metrics if meter is provided
@@ -79,6 +101,28 @@ func NewManager(p *paths.Paths, imageManager images.Manager, systemManager syste
 	}
 
 	return m
+}
+
+// getHypervisor creates a hypervisor client for the given socket and type.
+// Used for connecting to already-running VMs (e.g., for state queries).
+func (m *manager) getHypervisor(socketPath string, hvType hypervisor.Type) (hypervisor.Hypervisor, error) {
+	switch hvType {
+	case hypervisor.TypeCloudHypervisor:
+		return cloudhypervisor.New(socketPath)
+	case hypervisor.TypeQEMU:
+		return qemu.New(socketPath)
+	default:
+		return nil, fmt.Errorf("unsupported hypervisor type: %s", hvType)
+	}
+}
+
+// getVMStarter returns the VM starter for the given hypervisor type.
+func (m *manager) getVMStarter(hvType hypervisor.Type) (hypervisor.VMStarter, error) {
+	starter, ok := m.vmStarters[hvType]
+	if !ok {
+		return nil, fmt.Errorf("no VM starter for hypervisor type: %s", hvType)
+	}
+	return starter, nil
 }
 
 // getInstanceLock returns or creates a lock for a specific instance
@@ -224,7 +268,7 @@ func (m *manager) RotateLogs(ctx context.Context, maxBytes int64, maxFiles int) 
 			m.paths.InstanceHypemanLog(inst.Id),
 		}
 		for _, logPath := range logPaths {
-		if err := rotateLogIfNeeded(logPath, maxBytes, maxFiles); err != nil {
+			if err := rotateLogIfNeeded(logPath, maxBytes, maxFiles); err != nil {
 				lastErr = err // Continue with other logs, but track error
 			}
 		}
@@ -240,4 +284,47 @@ func (m *manager) AttachVolume(ctx context.Context, id string, volumeId string, 
 // DetachVolume detaches a volume from an instance (not yet implemented)
 func (m *manager) DetachVolume(ctx context.Context, id string, volumeId string) (*Instance, error) {
 	return nil, fmt.Errorf("detach volume not yet implemented")
+}
+
+// ListInstanceAllocations returns resource allocations for all instances.
+// Used by the resource manager for capacity tracking.
+func (m *manager) ListInstanceAllocations(ctx context.Context) ([]resources.InstanceAllocation, error) {
+	instances, err := m.listInstances(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	allocations := make([]resources.InstanceAllocation, 0, len(instances))
+	for _, inst := range instances {
+		// Calculate volume bytes and volume overlay bytes separately
+		var volumeBytes int64
+		var volumeOverlayBytes int64
+		for _, vol := range inst.Volumes {
+			// Get actual volume size from volume manager
+			if m.volumeManager != nil {
+				if volume, err := m.volumeManager.GetVolume(ctx, vol.VolumeID); err == nil {
+					volumeBytes += int64(volume.SizeGb) * 1024 * 1024 * 1024
+				}
+			}
+			// Track overlay size separately for overlay volumes
+			if vol.Overlay {
+				volumeOverlayBytes += vol.OverlaySize
+			}
+		}
+
+		allocations = append(allocations, resources.InstanceAllocation{
+			ID:                 inst.Id,
+			Name:               inst.Name,
+			Vcpus:              inst.Vcpus,
+			MemoryBytes:        inst.Size + inst.HotplugSize,
+			OverlayBytes:       inst.OverlaySize,
+			VolumeOverlayBytes: volumeOverlayBytes,
+			NetworkDownloadBps: inst.NetworkBandwidthDownload,
+			NetworkUploadBps:   inst.NetworkBandwidthUpload,
+			State:              string(inst.State),
+			VolumeBytes:        volumeBytes,
+		})
+	}
+
+	return allocations, nil
 }

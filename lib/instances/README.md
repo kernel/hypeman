@@ -40,10 +40,11 @@ Manages VM instance lifecycle using Cloud Hypervisor.
       metadata.json             # State, versions, timestamps
       overlay.raw               # 50GB sparse writable overlay
       config.erofs              # Compressed config disk
-      ch.sock                   # Cloud Hypervisor API socket
-      ch-stdout.log             # CH process output
+      ch.sock                   # Hypervisor API socket (abbreviated for SUN_LEN limit)
       logs/
-        console.log             # Serial console (VM output)
+        app.log                 # Guest application log (serial console output)
+        vmm.log                 # Hypervisor log (stdout+stderr)
+        hypeman.log             # Hypeman operations log
       snapshots/
         snapshot-latest/        # Snapshot directory
           config.json           # VM configuration

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"runtime/debug"
 	"strconv"
@@ -107,6 +108,26 @@ type Config struct {
 	BuilderImage              string // OCI image for builder VMs
 	RegistryURL               string // URL of registry for built images
 	BuildTimeout              int    // Default build timeout in seconds
+
+	// Hypervisor configuration
+	DefaultHypervisor string // Default hypervisor type: "cloud-hypervisor" or "qemu"
+
+	// Oversubscription ratios (1.0 = no oversubscription, 2.0 = 2x oversubscription)
+	OversubCPU     float64 // CPU oversubscription ratio
+	OversubMemory  float64 // Memory oversubscription ratio
+	OversubDisk    float64 // Disk oversubscription ratio
+	OversubNetwork float64 // Network oversubscription ratio
+	OversubDiskIO  float64 // Disk I/O oversubscription ratio
+
+	// Network rate limiting
+	UploadBurstMultiplier   int // Multiplier for upload burst ceiling vs guaranteed rate (default: 4)
+	DownloadBurstMultiplier int // Multiplier for download burst bucket vs rate (default: 4)
+
+	// Resource capacity limits (empty = auto-detect from host)
+	DiskLimit       string  // Hard disk limit for DataDir, e.g. "500GB"
+	NetworkLimit    string  // Hard network limit, e.g. "10Gbps" (empty = detect from uplink speed)
+	DiskIOLimit     string  // Hard disk I/O limit, e.g. "500MB/s" (empty = auto-detect from disk type)
+	MaxImageStorage float64 // Max image storage as fraction of disk (0.2 = 20%), counts OCI cache + rootfs
 }
 
 // Load loads configuration from environment variables
@@ -175,6 +196,26 @@ func Load() *Config {
 		BuilderImage:              getEnv("BUILDER_IMAGE", "hypeman/builder:latest"),
 		RegistryURL:               getEnv("REGISTRY_URL", "localhost:8080"),
 		BuildTimeout:              getEnvInt("BUILD_TIMEOUT", 600),
+
+		// Hypervisor configuration
+		DefaultHypervisor: getEnv("DEFAULT_HYPERVISOR", "cloud-hypervisor"),
+
+		// Oversubscription ratios (1.0 = no oversubscription)
+		OversubCPU:     getEnvFloat("OVERSUB_CPU", 4.0),
+		OversubMemory:  getEnvFloat("OVERSUB_MEMORY", 1.0),
+		OversubDisk:    getEnvFloat("OVERSUB_DISK", 1.0),
+		OversubNetwork: getEnvFloat("OVERSUB_NETWORK", 2.0),
+		OversubDiskIO:  getEnvFloat("OVERSUB_DISK_IO", 2.0),
+
+		// Network rate limiting
+		UploadBurstMultiplier:   getEnvInt("UPLOAD_BURST_MULTIPLIER", 4),
+		DownloadBurstMultiplier: getEnvInt("DOWNLOAD_BURST_MULTIPLIER", 4),
+
+		// Resource capacity limits (empty = auto-detect)
+		DiskLimit:       getEnv("DISK_LIMIT", ""),
+		NetworkLimit:    getEnv("NETWORK_LIMIT", ""),
+		DiskIOLimit:     getEnv("DISK_IO_LIMIT", ""),
+		MaxImageStorage: getEnvFloat("MAX_IMAGE_STORAGE", 0.2), // 20% of disk by default
 	}
 
 	return cfg
@@ -203,4 +244,41 @@ func getEnvBool(key string, defaultValue bool) bool {
 		}
 	}
 	return defaultValue
+}
+
+func getEnvFloat(key string, defaultValue float64) float64 {
+	if value := os.Getenv(key); value != "" {
+		if floatVal, err := strconv.ParseFloat(value, 64); err == nil {
+			return floatVal
+		}
+	}
+	return defaultValue
+}
+
+// Validate checks configuration values for correctness.
+// Returns an error if any configuration value is invalid.
+func (c *Config) Validate() error {
+	// Validate oversubscription ratios are positive
+	if c.OversubCPU <= 0 {
+		return fmt.Errorf("OVERSUB_CPU must be positive, got %v", c.OversubCPU)
+	}
+	if c.OversubMemory <= 0 {
+		return fmt.Errorf("OVERSUB_MEMORY must be positive, got %v", c.OversubMemory)
+	}
+	if c.OversubDisk <= 0 {
+		return fmt.Errorf("OVERSUB_DISK must be positive, got %v", c.OversubDisk)
+	}
+	if c.OversubNetwork <= 0 {
+		return fmt.Errorf("OVERSUB_NETWORK must be positive, got %v", c.OversubNetwork)
+	}
+	if c.OversubDiskIO <= 0 {
+		return fmt.Errorf("OVERSUB_DISK_IO must be positive, got %v", c.OversubDiskIO)
+	}
+	if c.UploadBurstMultiplier < 1 {
+		return fmt.Errorf("UPLOAD_BURST_MULTIPLIER must be >= 1, got %v", c.UploadBurstMultiplier)
+	}
+	if c.DownloadBurstMultiplier < 1 {
+		return fmt.Errorf("DOWNLOAD_BURST_MULTIPLIER must be >= 1, got %v", c.DownloadBurstMultiplier)
+	}
+	return nil
 }

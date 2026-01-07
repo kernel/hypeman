@@ -14,10 +14,10 @@ import (
 //   metadata.json      # Instance metadata
 //   overlay.raw        # Configurable sparse overlay disk (default 10GB)
 //   config.ext4        # Read-only config disk (generated)
-//   ch.sock            # Cloud Hypervisor API socket
+//   ch.sock            # Hypervisor API socket (abbreviated name for SUN_LEN limit)
 //   logs/
 //     app.log          # Guest application log (serial console output)
-//     vmm.log          # Cloud Hypervisor VMM log (stdout+stderr combined)
+//     vmm.log          # Hypervisor log (stdout+stderr combined)
 //     hypeman.log      # Hypeman operations log (actions taken on this instance)
 //   snapshots/
 //     snapshot-latest/ # Snapshot directory

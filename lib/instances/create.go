@@ -10,12 +10,13 @@ import (
 
 	"github.com/nrednav/cuid2"
 	"github.com/onkernel/hypeman/lib/devices"
+	"github.com/onkernel/hypeman/lib/hypervisor"
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/logger"
 	"github.com/onkernel/hypeman/lib/network"
 	"github.com/onkernel/hypeman/lib/system"
-	"github.com/onkernel/hypeman/lib/vmm"
 	"github.com/onkernel/hypeman/lib/volumes"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 	"gvisor.dev/gvisor/pkg/cleanup"
 )
@@ -201,7 +202,36 @@ func (m *manager) createInstance(
 	// 8. Get default kernel version
 	kernelVer := m.systemManager.GetDefaultKernelVersion()
 
-	// 9. Validate, resolve, and auto-bind devices (GPU passthrough)
+	// 9. Get process manager for hypervisor type (needed for socket name)
+	hvType := req.Hypervisor
+	if hvType == "" {
+		hvType = m.defaultHypervisor
+	}
+
+	// Enrich logger and trace span with hypervisor type
+	log = log.With("hypervisor", string(hvType))
+	ctx = logger.AddToContext(ctx, log)
+	if m.metrics != nil && m.metrics.tracer != nil {
+		span := trace.SpanFromContext(ctx)
+		if span.IsRecording() {
+			span.SetAttributes(attribute.String("hypervisor", string(hvType)))
+		}
+	}
+
+	starter, err := m.getVMStarter(hvType)
+	if err != nil {
+		log.ErrorContext(ctx, "failed to get vm starter", "error", err)
+		return nil, fmt.Errorf("get vm starter for %s: %w", hvType, err)
+	}
+
+	// Get hypervisor version
+	hvVersion, err := starter.GetVersion(m.paths)
+	if err != nil {
+		log.WarnContext(ctx, "failed to get hypervisor version", "hypervisor", hvType, "error", err)
+		hvVersion = "unknown"
+	}
+
+	// 10. Validate, resolve, and auto-bind devices (GPU passthrough)
 	// Track devices we've marked as attached for cleanup on error.
 	// The cleanup closure captures this slice by reference, so it will see
 	// whatever devices have been attached when cleanup runs.
@@ -255,50 +285,58 @@ func (m *manager) createInstance(
 		log.DebugContext(ctx, "validated devices for passthrough", "id", id, "devices", resolvedDeviceIDs)
 	}
 
-	// 10. Create instance metadata
+	// 11. Create instance metadata
 	stored := &StoredMetadata{
-		Id:             id,
-		Name:           req.Name,
-		Image:          req.Image,
-		Size:           size,
-		HotplugSize:    hotplugSize,
-		OverlaySize:    overlaySize,
-		Vcpus:          vcpus,
-		Env:            req.Env,
-		NetworkEnabled: req.NetworkEnabled,
-		CreatedAt:      time.Now(),
-		StartedAt:      nil,
-		StoppedAt:      nil,
-		KernelVersion:  string(kernelVer),
-		CHVersion:      vmm.V49_0, // Use latest
-		SocketPath:     m.paths.InstanceSocket(id),
-		DataDir:        m.paths.InstanceDir(id),
-		VsockCID:       vsockCID,
-		VsockSocket:    vsockSocket,
-		Devices:        resolvedDeviceIDs,
+		Id:                       id,
+		Name:                     req.Name,
+		Image:                    req.Image,
+		Size:                     size,
+		HotplugSize:              hotplugSize,
+		OverlaySize:              overlaySize,
+		Vcpus:                    vcpus,
+		NetworkBandwidthDownload: req.NetworkBandwidthDownload, // Will be set by caller if using resource manager
+		NetworkBandwidthUpload:   req.NetworkBandwidthUpload,   // Will be set by caller if using resource manager
+		DiskIOBps:                req.DiskIOBps,                // Will be set by caller if using resource manager
+		Env:                      req.Env,
+		NetworkEnabled:           req.NetworkEnabled,
+		CreatedAt:                time.Now(),
+		StartedAt:                nil,
+		StoppedAt:                nil,
+		KernelVersion:            string(kernelVer),
+		HypervisorType:           hvType,
+		HypervisorVersion:        hvVersion,
+		SocketPath:               m.paths.InstanceSocket(id, starter.SocketName()),
+		DataDir:                  m.paths.InstanceDir(id),
+		VsockCID:                 vsockCID,
+		VsockSocket:              vsockSocket,
+		Devices:                  resolvedDeviceIDs,
 	}
 
-	// 11. Ensure directories
+	// 12. Ensure directories
 	log.DebugContext(ctx, "creating instance directories", "instance_id", id)
 	if err := m.ensureDirectories(id); err != nil {
 		log.ErrorContext(ctx, "failed to create directories", "instance_id", id, "error", err)
 		return nil, fmt.Errorf("ensure directories: %w", err)
 	}
 
-	// 12. Create overlay disk with specified size
+	// 13. Create overlay disk with specified size
 	log.DebugContext(ctx, "creating overlay disk", "instance_id", id, "size_bytes", stored.OverlaySize)
 	if err := m.createOverlayDisk(id, stored.OverlaySize); err != nil {
 		log.ErrorContext(ctx, "failed to create overlay disk", "instance_id", id, "error", err)
 		return nil, fmt.Errorf("create overlay disk: %w", err)
 	}
 
-	// 13. Allocate network (if network enabled)
+	// 14. Allocate network (if network enabled)
 	var netConfig *network.NetworkConfig
 	if networkName != "" {
-		log.DebugContext(ctx, "allocating network", "instance_id", id, "network", networkName)
+		log.DebugContext(ctx, "allocating network", "instance_id", id, "network", networkName,
+			"download_bps", stored.NetworkBandwidthDownload, "upload_bps", stored.NetworkBandwidthUpload)
 		netConfig, err = m.networkManager.CreateAllocation(ctx, network.AllocateRequest{
-			InstanceID:   id,
-			InstanceName: req.Name,
+			InstanceID:    id,
+			InstanceName:  req.Name,
+			DownloadBps:   stored.NetworkBandwidthDownload,
+			UploadBps:     stored.NetworkBandwidthUpload,
+			UploadCeilBps: stored.NetworkBandwidthUpload * int64(m.networkManager.GetUploadBurstMultiplier()),
 		})
 		if err != nil {
 			log.ErrorContext(ctx, "failed to allocate network", "instance_id", id, "network", networkName, "error", err)
@@ -317,7 +355,7 @@ func (m *manager) createInstance(
 		})
 	}
 
-	// 14. Validate and attach volumes
+	// 15. Validate and attach volumes
 	if len(req.Volumes) > 0 {
 		log.DebugContext(ctx, "validating volumes", "instance_id", id, "count", len(req.Volumes))
 		for _, volAttach := range req.Volumes {
@@ -357,7 +395,7 @@ func (m *manager) createInstance(
 		stored.Volumes = req.Volumes
 	}
 
-	// 15. Create config disk (needs Instance for buildVMConfig)
+	// 16. Create config disk (needs Instance for buildVMConfig)
 	inst := &Instance{StoredMetadata: *stored}
 	log.DebugContext(ctx, "creating config disk", "instance_id", id)
 	if err := m.createConfigDisk(ctx, inst, imageInfo, netConfig); err != nil {
@@ -365,7 +403,7 @@ func (m *manager) createInstance(
 		return nil, fmt.Errorf("create config disk: %w", err)
 	}
 
-	// 16. Save metadata
+	// 17. Save metadata
 	log.DebugContext(ctx, "saving instance metadata", "instance_id", id)
 	meta := &metadata{StoredMetadata: *stored}
 	if err := m.saveMetadata(meta); err != nil {
@@ -373,14 +411,14 @@ func (m *manager) createInstance(
 		return nil, fmt.Errorf("save metadata: %w", err)
 	}
 
-	// 17. Start VMM and boot VM
+	// 18. Start VMM and boot VM
 	log.InfoContext(ctx, "starting VMM and booting VM", "instance_id", id)
 	if err := m.startAndBootVM(ctx, stored, imageInfo, netConfig); err != nil {
 		log.ErrorContext(ctx, "failed to start and boot VM", "instance_id", id, "error", err)
 		return nil, err
 	}
 
-	// 18. Update timestamp after VM is running
+	// 19. Update timestamp after VM is running
 	now := time.Now()
 	stored.StartedAt = &now
 
@@ -396,13 +434,13 @@ func (m *manager) createInstance(
 
 	// Record metrics
 	if m.metrics != nil {
-		m.recordDuration(ctx, m.metrics.createDuration, start, "success")
-		m.recordStateTransition(ctx, "stopped", string(StateRunning))
+		m.recordDuration(ctx, m.metrics.createDuration, start, "success", hvType)
+		m.recordStateTransition(ctx, "stopped", string(StateRunning), hvType)
 	}
 
 	// Return instance with derived state
 	finalInst := m.toInstance(ctx, meta)
-	log.InfoContext(ctx, "instance created successfully", "instance_id", id, "name", req.Name, "state", finalInst.State)
+	log.InfoContext(ctx, "instance created successfully", "instance_id", id, "name", req.Name, "state", finalInst.State, "hypervisor", hvType)
 	return &finalInst, nil
 }
 
@@ -517,67 +555,36 @@ func (m *manager) startAndBootVM(
 ) error {
 	log := logger.FromContext(ctx)
 
-	// Start VMM process and capture PID
-	log.DebugContext(ctx, "starting VMM process", "instance_id", stored.Id, "version", stored.CHVersion)
-	pid, err := vmm.StartProcess(ctx, m.paths, stored.CHVersion, stored.SocketPath)
+	// Get VM starter for this hypervisor type
+	starter, err := m.getVMStarter(stored.HypervisorType)
 	if err != nil {
-		return fmt.Errorf("start vmm: %w", err)
+		return fmt.Errorf("get vm starter: %w", err)
 	}
 
-	// Store the PID for later cleanup
-	stored.CHPID = &pid
-	log.DebugContext(ctx, "VMM process started", "instance_id", stored.Id, "pid", pid)
-
-	// Create VMM client
-	client, err := vmm.NewVMM(stored.SocketPath)
-	if err != nil {
-		return fmt.Errorf("create vmm client: %w", err)
-	}
-
-	// Build VM configuration matching Cloud Hypervisor VmConfig
+	// Build VM configuration
 	inst := &Instance{StoredMetadata: *stored}
-	vmConfig, err := m.buildVMConfig(ctx, inst, imageInfo, netConfig)
+	vmConfig, err := m.buildHypervisorConfig(ctx, inst, imageInfo, netConfig)
 	if err != nil {
 		return fmt.Errorf("build vm config: %w", err)
 	}
 
-	// Create VM in VMM
-	log.DebugContext(ctx, "creating VM in VMM", "instance_id", stored.Id)
-	createResp, err := client.CreateVMWithResponse(ctx, vmConfig)
+	// Start VM (handles process start, configuration, and boot)
+	log.DebugContext(ctx, "starting VM", "instance_id", stored.Id, "hypervisor", stored.HypervisorType, "version", stored.HypervisorVersion)
+	pid, hv, err := starter.StartVM(ctx, m.paths, stored.HypervisorVersion, stored.SocketPath, vmConfig)
 	if err != nil {
-		return fmt.Errorf("create vm: %w", err)
-	}
-	if createResp.StatusCode() != 204 {
-		// Include response body for debugging
-		body := string(createResp.Body)
-		log.ErrorContext(ctx, "create VM failed", "instance_id", stored.Id, "status", createResp.StatusCode(), "body", body)
-		return fmt.Errorf("create vm failed with status %d: %s", createResp.StatusCode(), body)
+		return fmt.Errorf("start vm: %w", err)
 	}
 
-	// Transition: Created → Running (boot VM)
-	log.DebugContext(ctx, "booting VM", "instance_id", stored.Id)
-	bootResp, err := client.BootVMWithResponse(ctx)
-	if err != nil {
-		// Try to cleanup
-		client.DeleteVMWithResponse(ctx)
-		client.ShutdownVMMWithResponse(ctx)
-		return fmt.Errorf("boot vm: %w", err)
-	}
-	if bootResp.StatusCode() != 204 {
-		client.DeleteVMWithResponse(ctx)
-		client.ShutdownVMMWithResponse(ctx)
-		body := string(bootResp.Body)
-		log.ErrorContext(ctx, "boot VM failed", "instance_id", stored.Id, "status", bootResp.StatusCode(), "body", body)
-		return fmt.Errorf("boot vm failed with status %d: %s", bootResp.StatusCode(), body)
-	}
+	// Store the PID for later cleanup
+	stored.HypervisorPID = &pid
+	log.DebugContext(ctx, "VM started", "instance_id", stored.Id, "pid", pid)
 
 	// Optional: Expand memory to max if hotplug configured
-	if inst.HotplugSize > 0 {
+	if inst.HotplugSize > 0 && hv.Capabilities().SupportsHotplugMemory {
 		totalBytes := inst.Size + inst.HotplugSize
 		log.DebugContext(ctx, "expanding VM memory", "instance_id", stored.Id, "total_bytes", totalBytes)
-		resizeConfig := vmm.VmResize{DesiredRam: &totalBytes}
 		// Best effort, ignore errors
-		if resp, err := client.PutVmResizeWithResponse(ctx, resizeConfig); err != nil || resp.StatusCode() != 204 {
+		if err := hv.ResizeMemory(ctx, totalBytes); err != nil {
 			log.WarnContext(ctx, "failed to expand VM memory", "instance_id", stored.Id, "error", err)
 		}
 	}
@@ -585,140 +592,119 @@ func (m *manager) startAndBootVM(
 	return nil
 }
 
-// buildVMConfig creates the Cloud Hypervisor VmConfig
-func (m *manager) buildVMConfig(ctx context.Context, inst *Instance, imageInfo *images.Image, netConfig *network.NetworkConfig) (vmm.VmConfig, error) {
+// buildHypervisorConfig creates a hypervisor-agnostic VM configuration
+func (m *manager) buildHypervisorConfig(ctx context.Context, inst *Instance, imageInfo *images.Image, netConfig *network.NetworkConfig) (hypervisor.VMConfig, error) {
 	// Get system file paths
 	kernelPath, _ := m.systemManager.GetKernelPath(system.KernelVersion(inst.KernelVersion))
 	initrdPath, _ := m.systemManager.GetInitrdPath()
-
-	// Payload configuration (kernel + initramfs)
-	payload := vmm.PayloadConfig{
-		Kernel:    ptr(kernelPath),
-		Cmdline:   ptr("console=ttyS0"),
-		Initramfs: ptr(initrdPath),
-	}
-
-	// CPU configuration
-	cpus := vmm.CpusConfig{
-		BootVcpus: inst.Vcpus,
-		MaxVcpus:  inst.Vcpus,
-	}
-
-	// Calculate and set guest topology based on host topology
-	if topology := calculateGuestTopology(inst.Vcpus, m.hostTopology); topology != nil {
-		cpus.Topology = topology
-	}
-
-	// Memory configuration
-	memory := vmm.MemoryConfig{
-		Size: inst.Size,
-	}
-	if inst.HotplugSize > 0 {
-		memory.HotplugSize = &inst.HotplugSize
-		memory.HotplugMethod = ptr("VirtioMem") // PascalCase, not kebab-case
-	}
 
 	// Disk configuration
 	// Get rootfs disk path from image manager
 	rootfsPath, err := images.GetDiskPath(m.paths, imageInfo.Name, imageInfo.Digest)
 	if err != nil {
-		return vmm.VmConfig{}, err
+		return hypervisor.VMConfig{}, err
 	}
 
-	disks := []vmm.DiskConfig{
+	// Get disk I/O limits (same for all disks in this VM)
+	ioBps := inst.DiskIOBps
+	burstBps := ioBps * 4 // Burst is 4x sustained
+	if ioBps <= 0 {
+		burstBps = 0
+	}
+
+	disks := []hypervisor.DiskConfig{
 		// Rootfs (from image, read-only)
-		{
-			Path:     &rootfsPath,
-			Readonly: ptr(true),
-		},
+		{Path: rootfsPath, Readonly: true, IOBps: ioBps, IOBurstBps: burstBps},
 		// Overlay disk (writable)
-		{
-			Path: ptr(m.paths.InstanceOverlay(inst.Id)),
-		},
+		{Path: m.paths.InstanceOverlay(inst.Id), Readonly: false, IOBps: ioBps, IOBurstBps: burstBps},
 		// Config disk (read-only)
-		{
-			Path:     ptr(m.paths.InstanceConfigDisk(inst.Id)),
-			Readonly: ptr(true),
-		},
+		{Path: m.paths.InstanceConfigDisk(inst.Id), Readonly: true, IOBps: ioBps, IOBurstBps: burstBps},
 	}
 
 	// Add attached volumes as additional disks
-	// For overlay volumes, add both base (readonly) and overlay disk
 	for _, volAttach := range inst.Volumes {
 		volumePath := m.volumeManager.GetVolumePath(volAttach.VolumeID)
 		if volAttach.Overlay {
 			// Base volume is always read-only when overlay is enabled
-			disks = append(disks, vmm.DiskConfig{
-				Path:     &volumePath,
-				Readonly: ptr(true),
+			disks = append(disks, hypervisor.DiskConfig{
+				Path:       volumePath,
+				Readonly:   true,
+				IOBps:      ioBps,
+				IOBurstBps: burstBps,
 			})
 			// Overlay disk is writable
 			overlayPath := m.paths.InstanceVolumeOverlay(inst.Id, volAttach.VolumeID)
-			disks = append(disks, vmm.DiskConfig{
-				Path: &overlayPath,
+			disks = append(disks, hypervisor.DiskConfig{
+				Path:       overlayPath,
+				Readonly:   false,
+				IOBps:      ioBps,
+				IOBurstBps: burstBps,
 			})
 		} else {
-			disks = append(disks, vmm.DiskConfig{
-				Path:     &volumePath,
-				Readonly: ptr(volAttach.Readonly),
+			disks = append(disks, hypervisor.DiskConfig{
+				Path:       volumePath,
+				Readonly:   volAttach.Readonly,
+				IOBps:      ioBps,
+				IOBurstBps: burstBps,
 			})
 		}
 	}
 
-	// Serial console configuration
-	serial := vmm.ConsoleConfig{
-		Mode: vmm.ConsoleConfigMode("File"),
-		File: ptr(m.paths.InstanceAppLog(inst.Id)),
-	}
-
-	// Console off (we use serial)
-	console := vmm.ConsoleConfig{
-		Mode: vmm.ConsoleConfigMode("Off"),
-	}
-
-	// Network configuration (optional, use passed config)
-	var nets *[]vmm.NetConfig
+	// Network configuration
+	var networks []hypervisor.NetworkConfig
 	if netConfig != nil {
-		nets = &[]vmm.NetConfig{{
-			Tap:  &netConfig.TAPDevice,
-			Ip:   &netConfig.IP,
-			Mac:  &netConfig.MAC,
-			Mask: &netConfig.Netmask,
-		}}
-	}
-
-	// vsock configuration for remote exec
-	vsock := vmm.VsockConfig{
-		Cid:    inst.VsockCID,
-		Socket: inst.VsockSocket,
+		networks = append(networks, hypervisor.NetworkConfig{
+			TAPDevice: netConfig.TAPDevice,
+			IP:        netConfig.IP,
+			MAC:       netConfig.MAC,
+			Netmask:   netConfig.Netmask,
+		})
 	}
 
 	// Device passthrough configuration (GPU, etc.)
-	var deviceConfigs *[]vmm.DeviceConfig
+	var pciDevices []string
 	if len(inst.Devices) > 0 && m.deviceManager != nil {
-		configs := make([]vmm.DeviceConfig, 0, len(inst.Devices))
 		for _, deviceID := range inst.Devices {
 			device, err := m.deviceManager.GetDevice(ctx, deviceID)
 			if err != nil {
-				return vmm.VmConfig{}, fmt.Errorf("get device %s: %w", deviceID, err)
+				return hypervisor.VMConfig{}, fmt.Errorf("get device %s: %w", deviceID, err)
 			}
-			configs = append(configs, vmm.DeviceConfig{
-				Path: devices.GetDeviceSysfsPath(device.PCIAddress),
-			})
+			pciDevices = append(pciDevices, devices.GetDeviceSysfsPath(device.PCIAddress))
 		}
-		deviceConfigs = &configs
 	}
 
-	return vmm.VmConfig{
-		Payload: payload,
-		Cpus:    &cpus,
-		Memory:  &memory,
-		Disks:   &disks,
-		Serial:  &serial,
-		Console: &console,
-		Net:     nets,
-		Vsock:   &vsock,
-		Devices: deviceConfigs,
+	// Build topology if available
+	var topology *hypervisor.CPUTopology
+	if hostTopo := calculateGuestTopology(inst.Vcpus, m.hostTopology); hostTopo != nil {
+		topology = &hypervisor.CPUTopology{}
+		if hostTopo.ThreadsPerCore != nil {
+			topology.ThreadsPerCore = *hostTopo.ThreadsPerCore
+		}
+		if hostTopo.CoresPerDie != nil {
+			topology.CoresPerDie = *hostTopo.CoresPerDie
+		}
+		if hostTopo.DiesPerPackage != nil {
+			topology.DiesPerPackage = *hostTopo.DiesPerPackage
+		}
+		if hostTopo.Packages != nil {
+			topology.Packages = *hostTopo.Packages
+		}
+	}
+
+	return hypervisor.VMConfig{
+		VCPUs:         inst.Vcpus,
+		MemoryBytes:   inst.Size,
+		HotplugBytes:  inst.HotplugSize,
+		Topology:      topology,
+		Disks:         disks,
+		Networks:      networks,
+		SerialLogPath: m.paths.InstanceAppLog(inst.Id),
+		VsockCID:      inst.VsockCID,
+		VsockSocket:   inst.VsockSocket,
+		PCIDevices:    pciDevices,
+		KernelPath:    kernelPath,
+		InitrdPath:    initrdPath,
+		KernelArgs:    "console=ttyS0",
 	}, nil
 }
 

@@ -6,11 +6,13 @@ require (
 	github.com/c2h5oh/datasize v0.0.0-20231215233829-aa82cc1e6500
 	github.com/creack/pty v1.1.24
 	github.com/cyphar/filepath-securejoin v0.6.1
+	github.com/digitalocean/go-qemu v0.0.0-20250212194115-ee9b0668d242
 	github.com/distribution/reference v0.6.0
 	github.com/getkin/kin-openapi v0.133.0
 	github.com/ghodss/yaml v1.0.0
 	github.com/go-chi/chi/v5 v5.2.3
 	github.com/golang-jwt/jwt/v5 v5.3.0
+	github.com/golang/protobuf v1.5.4
 	github.com/google/go-containerregistry v0.20.6
 	github.com/google/wire v0.7.0
 	github.com/gorilla/websocket v1.5.3
@@ -42,7 +44,6 @@ require (
 	golang.org/x/sync v0.17.0
 	golang.org/x/sys v0.38.0
 	google.golang.org/grpc v1.77.0
-	google.golang.org/protobuf v1.36.10
 	gvisor.dev/gvisor v0.0.0-20251125014920-fc40e232ff54
 )
 
@@ -58,6 +59,7 @@ require (
 	github.com/containerd/errdefs/pkg v0.3.0 // indirect
 	github.com/containerd/stargz-snapshotter/estargz v0.16.3 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
+	github.com/digitalocean/go-libvirt v0.0.0-20220804181439-8648fbde413e // indirect
 	github.com/docker/cli v28.2.2+incompatible // indirect
 	github.com/docker/distribution v2.8.3+incompatible // indirect
 	github.com/docker/docker v28.2.2+incompatible // indirect
@@ -112,6 +114,7 @@ require (
 	golang.org/x/tools v0.37.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20251022142026-3a174f9686a8 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20251022142026-3a174f9686a8 // indirect
+	google.golang.org/protobuf v1.36.10 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	gotest.tools/v3 v3.5.2 // indirect

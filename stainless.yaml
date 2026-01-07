@@ -8,9 +8,9 @@ edition: 2025-10-10
 organization:
   name: hypeman
   # Link to your API documentation.
-  docs: ''
+  docs: ""
   # Contact email for bug reports, questions, and support requests.
-  contact: ''
+  contact: ""
 
 # `targets` define the output targets and their customization options, such as
 # whether to emit the Node SDK and what its package name should be.
@@ -35,6 +35,12 @@ targets:
         tap_repo: onkernel/homebrew-tap
         homepage: https://github.com/onkernel/hypeman
         description: orchestrate cloud-hypervisor VMs
+  typescript:
+    edition: typescript.2025-10-10
+    package_name: "@onkernel/hypeman"
+    production_repo: onkernel/hypeman-ts
+    publish:
+      npm: true
 
 # `environments` are a map of the name of the environment (e.g. "sandbox",
 # "production") to the corresponding url to use.
@@ -63,7 +69,7 @@ resources:
     #
     # [reference]: https://www.stainless.com/docs/reference/config#model
     models:
-      image: '#/components/schemas/Image'
+      image: "#/components/schemas/Image"
     methods:
       list: get /images
       create: post /images
@@ -72,9 +78,10 @@ resources:
 
   instances:
     models:
-      volume_mount: '#/components/schemas/VolumeMount'
-      port_mapping: '#/components/schemas/PortMapping'
-      instance: '#/components/schemas/Instance'
+      volume_mount: "#/components/schemas/VolumeMount"
+      port_mapping: "#/components/schemas/PortMapping"
+      instance: "#/components/schemas/Instance"
+      path_info: "#/components/schemas/PathInfo"
     methods:
       list: get /instances
       create: post /instances
@@ -85,6 +92,7 @@ resources:
       start: post /instances/{id}/start
       stop: post /instances/{id}/stop
       logs: get /instances/{id}/logs
+      stat: get /instances/{id}/stat
     # Subresources define resources that are nested within another for more powerful
     # logical groupings, e.g. `cards.payments`.
     subresources:
@@ -95,8 +103,8 @@ resources:
 
   volumes:
     models:
-      volume: '#/components/schemas/Volume'
-      volume_attachment: '#/components/schemas/VolumeAttachment'
+      volume: "#/components/schemas/Volume"
+      volume_attachment: "#/components/schemas/VolumeAttachment"
     methods:
       list: get /volumes
       create: post /volumes
@@ -105,9 +113,9 @@ resources:
 
   devices:
     models:
-      device: '#/components/schemas/Device'
-      available_device: '#/components/schemas/AvailableDevice'
-      device_type: '#/components/schemas/DeviceType'
+      device: "#/components/schemas/Device"
+      available_device: "#/components/schemas/AvailableDevice"
+      device_type: "#/components/schemas/DeviceType"
     methods:
       list: get /devices
       create: post /devices
@@ -117,10 +125,10 @@ resources:
 
   ingresses:
     models:
-      ingress: '#/components/schemas/Ingress'
-      ingress_rule: '#/components/schemas/IngressRule'
-      ingress_match: '#/components/schemas/IngressMatch'
-      ingress_target: '#/components/schemas/IngressTarget'
+      ingress: "#/components/schemas/Ingress"
+      ingress_rule: "#/components/schemas/IngressRule"
+      ingress_match: "#/components/schemas/IngressMatch"
+      ingress_target: "#/components/schemas/IngressTarget"
     methods:
       list: get /ingresses
       create: post /ingresses

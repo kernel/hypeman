@@ -65,7 +65,9 @@ func TestCreateInstance_ParsesHumanReadableSizes(t *testing.T) {
 			HotplugSize: &hotplugSize,
 			OverlaySize: &overlaySize,
 			Network: &struct {
-				Enabled *bool `json:"enabled,omitempty"`
+				BandwidthDownload *string `json:"bandwidth_download,omitempty"`
+				BandwidthUpload   *string `json:"bandwidth_upload,omitempty"`
+				Enabled           *bool   `json:"enabled,omitempty"`
 			}{
 				Enabled: &networkEnabled,
 			},
@@ -109,7 +111,9 @@ func TestCreateInstance_InvalidSizeFormat(t *testing.T) {
 			Image: "docker.io/library/alpine:latest",
 			Size:  &invalidSize,
 			Network: &struct {
-				Enabled *bool `json:"enabled,omitempty"`
+				BandwidthDownload *string `json:"bandwidth_download,omitempty"`
+				BandwidthUpload   *string `json:"bandwidth_upload,omitempty"`
+				Enabled           *bool   `json:"enabled,omitempty"`
 			}{
 				Enabled: &networkEnabled,
 			},
@@ -150,7 +154,9 @@ func TestInstanceLifecycle_StopStart(t *testing.T) {
 			Name:  "test-lifecycle",
 			Image: "docker.io/library/nginx:alpine",
 			Network: &struct {
-				Enabled *bool `json:"enabled,omitempty"`
+				BandwidthDownload *string `json:"bandwidth_download,omitempty"`
+				BandwidthUpload   *string `json:"bandwidth_upload,omitempty"`
+				Enabled           *bool   `json:"enabled,omitempty"`
 			}{
 				Enabled: &networkEnabled,
 			},
@@ -208,11 +214,11 @@ func waitForState(t *testing.T, svc *ApiService, instanceID string, expectedStat
 		inst, err := svc.InstanceManager.GetInstance(ctx(), instanceID)
 		require.NoError(t, err)
 
-			if string(inst.State) == expectedState {
-				t.Logf("Instance reached %s state", expectedState)
-				return
-			}
-			t.Logf("Instance state: %s (waiting for %s)", inst.State, expectedState)
+		if string(inst.State) == expectedState {
+			t.Logf("Instance reached %s state", expectedState)
+			return
+		}
+		t.Logf("Instance state: %s (waiting for %s)", inst.State, expectedState)
 		time.Sleep(100 * time.Millisecond)
 	}
 	t.Fatalf("Timeout waiting for instance to reach %s state", expectedState)

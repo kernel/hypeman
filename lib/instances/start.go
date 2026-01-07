@@ -45,7 +45,7 @@ func (m *manager) startInstance(
 		return nil, fmt.Errorf("%w: cannot start from state %s, must be Stopped", ErrInvalidState, inst.State)
 	}
 
-	// 3. Get image info (needed for buildVMConfig)
+	// 3. Get image info (needed for buildHypervisorConfig)
 	log.DebugContext(ctx, "getting image info", "instance_id", id, "image", stored.Image)
 	imageInfo, err := m.imageManager.GetImage(ctx, stored.Image)
 	if err != nil {
@@ -89,8 +89,8 @@ func (m *manager) startInstance(
 		return nil, fmt.Errorf("create config disk: %w", err)
 	}
 
-	// 6. Start VMM and boot VM (reuses logic from create)
-	log.InfoContext(ctx, "starting VMM and booting VM", "instance_id", id)
+	// 6. Start hypervisor and boot VM (reuses logic from create)
+	log.InfoContext(ctx, "starting hypervisor and booting VM", "instance_id", id)
 	if err := m.startAndBootVM(ctx, stored, imageInfo, netConfig); err != nil {
 		log.ErrorContext(ctx, "failed to start and boot VM", "instance_id", id, "error", err)
 		return nil, err
@@ -111,8 +111,8 @@ func (m *manager) startInstance(
 
 	// Record metrics
 	if m.metrics != nil {
-		m.recordDuration(ctx, m.metrics.startDuration, start, "success")
-		m.recordStateTransition(ctx, string(StateStopped), string(StateRunning))
+		m.recordDuration(ctx, m.metrics.startDuration, start, "success", stored.HypervisorType)
+		m.recordStateTransition(ctx, string(StateStopped), string(StateRunning), stored.HypervisorType)
 	}
 
 	// Return instance with derived state (should be Running now)

@@ -11,7 +11,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/onkernel/hypeman/lib/exec"
+	"github.com/onkernel/hypeman/lib/guest"
+	"github.com/onkernel/hypeman/lib/hypervisor"
 	"github.com/onkernel/hypeman/lib/instances"
 	"github.com/onkernel/hypeman/lib/logger"
 	mw "github.com/onkernel/hypeman/lib/middleware"
@@ -28,11 +29,12 @@ var upgrader = websocket.Upgrader{
 
 // ExecRequest represents the JSON body for exec requests
 type ExecRequest struct {
-	Command []string          `json:"command"`
-	TTY     bool              `json:"tty"`
-	Env     map[string]string `json:"env,omitempty"`
-	Cwd     string            `json:"cwd,omitempty"`
-	Timeout int32             `json:"timeout,omitempty"` // seconds
+	Command      []string          `json:"command"`
+	TTY          bool              `json:"tty"`
+	Env          map[string]string `json:"env,omitempty"`
+	Cwd          string            `json:"cwd,omitempty"`
+	Timeout      int32             `json:"timeout,omitempty"`       // seconds
+	WaitForAgent int32             `json:"wait_for_agent,omitempty"` // seconds to wait for guest agent to be ready
 }
 
 // ExecHandler handles exec requests via WebSocket for bidirectional streaming
@@ -105,21 +107,32 @@ func (s *ApiService) ExecHandler(w http.ResponseWriter, r *http.Request) {
 		"tty", execReq.TTY,
 		"cwd", execReq.Cwd,
 		"timeout", execReq.Timeout,
+		"wait_for_agent", execReq.WaitForAgent,
 	)
 
 	// Create WebSocket read/writer wrapper
 	wsConn := &wsReadWriter{ws: ws, ctx: ctx}
 
+	// Create vsock dialer for this hypervisor type
+	dialer, err := hypervisor.NewVsockDialer(hypervisor.Type(inst.HypervisorType), inst.VsockSocket, inst.VsockCID)
+	if err != nil {
+		log.ErrorContext(ctx, "failed to create vsock dialer", "error", err)
+		ws.WriteMessage(websocket.BinaryMessage, []byte(fmt.Sprintf("Error: %v\r\n", err)))
+		ws.WriteMessage(websocket.TextMessage, []byte(`{"exitCode":127}`))
+		return
+	}
+
 	// Execute via vsock
-	exit, err := exec.ExecIntoInstance(ctx, inst.VsockSocket, exec.ExecOptions{
-		Command: execReq.Command,
-		Stdin:   wsConn,
-		Stdout:  wsConn,
-		Stderr:  wsConn,
-		TTY:     execReq.TTY,
-		Env:     execReq.Env,
-		Cwd:     execReq.Cwd,
-		Timeout: execReq.Timeout,
+	exit, err := guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{
+		Command:      execReq.Command,
+		Stdin:        wsConn,
+		Stdout:       wsConn,
+		Stderr:       wsConn,
+		TTY:          execReq.TTY,
+		Env:          execReq.Env,
+		Cwd:          execReq.Cwd,
+		Timeout:      execReq.Timeout,
+		WaitForAgent: time.Duration(execReq.WaitForAgent) * time.Second,
 	})
 
 	duration := time.Since(startTime)

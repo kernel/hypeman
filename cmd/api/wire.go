@@ -17,6 +17,7 @@ import (
 	"github.com/onkernel/hypeman/lib/network"
 	"github.com/onkernel/hypeman/lib/providers"
 	"github.com/onkernel/hypeman/lib/registry"
+	"github.com/onkernel/hypeman/lib/resources"
 	"github.com/onkernel/hypeman/lib/system"
 	"github.com/onkernel/hypeman/lib/volumes"
 )
@@ -34,6 +35,7 @@ type application struct {
 	VolumeManager   volumes.Manager
 	IngressManager  ingress.Manager
 	BuildManager    builds.Manager
+	ResourceManager *resources.Manager
 	Registry        *registry.Registry
 	ApiService      *api.ApiService
 }
@@ -53,6 +55,7 @@ func initializeApp() (*application, func(), error) {
 		providers.ProvideVolumeManager,
 		providers.ProvideIngressManager,
 		providers.ProvideBuildManager,
+		providers.ProvideResourceManager,
 		providers.ProvideRegistry,
 		api.New,
 		wire.Struct(new(application), "*"),

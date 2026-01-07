@@ -11,7 +11,8 @@ import (
 
 	"github.com/onkernel/hypeman/cmd/api/config"
 	"github.com/onkernel/hypeman/lib/devices"
-	"github.com/onkernel/hypeman/lib/exec"
+	"github.com/onkernel/hypeman/lib/guest"
+	"github.com/onkernel/hypeman/lib/hypervisor"
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/instances"
 	"github.com/onkernel/hypeman/lib/network"
@@ -72,7 +73,7 @@ func TestGPUPassthrough(t *testing.T) {
 	limits := instances.ResourceLimits{
 		MaxOverlaySize: 100 * 1024 * 1024 * 1024, // 100GB
 	}
-	instanceMgr := instances.NewManager(p, imageMgr, systemMgr, networkMgr, deviceMgr, volumeMgr, limits, nil, nil)
+	instanceMgr := instances.NewManager(p, imageMgr, systemMgr, networkMgr, deviceMgr, volumeMgr, limits, "", nil, nil)
 
 	// Step 1: Discover available GPUs
 	t.Log("Step 1: Discovering available GPUs...")
@@ -218,6 +219,9 @@ func TestGPUPassthrough(t *testing.T) {
 	actualInst, err := instanceMgr.GetInstance(ctx, inst.Id)
 	require.NoError(t, err)
 
+	dialer, err := hypervisor.NewVsockDialer(actualInst.HypervisorType, actualInst.VsockSocket, actualInst.VsockCID)
+	require.NoError(t, err)
+
 	// Create a context with timeout for exec operations
 	execCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -232,7 +236,7 @@ func TestGPUPassthrough(t *testing.T) {
 		stdout = outputBuffer{}
 		stderr = outputBuffer{}
 
-		_, execErr = exec.ExecIntoInstance(execCtx, actualInst.VsockSocket, exec.ExecOptions{
+		_, execErr = guest.ExecIntoInstance(execCtx, dialer, guest.ExecOptions{
 			Command: []string{"/bin/sh", "-c", checkGPUCmd},
 			Stdin:   nil,
 			Stdout:  &stdout,

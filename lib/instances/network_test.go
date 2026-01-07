@@ -8,7 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/onkernel/hypeman/lib/exec"
+	"github.com/onkernel/hypeman/lib/guest"
+	"github.com/onkernel/hypeman/lib/hypervisor"
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -109,13 +110,13 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 
 	// Wait for exec agent to be ready
 	t.Log("Waiting for exec agent...")
-	err = waitForLogMessage(ctx, manager, inst.Id, "[exec-agent] listening", 10*time.Second)
+	err = waitForLogMessage(ctx, manager, inst.Id, "[guest-agent] listening", 10*time.Second)
 	require.NoError(t, err, "Exec agent should be listening")
 	t.Log("Exec agent is ready")
 
 	// Test initial internet connectivity via exec
 	t.Log("Testing initial internet connectivity via exec...")
-	output, exitCode, err := execCommand(ctx, inst.VsockSocket, "curl", "-s", "--connect-timeout", "10", "https://public-ping-bucket-kernel.s3.us-east-1.amazonaws.com/index.html")
+	output, exitCode, err := execCommand(ctx, inst, "curl", "-s", "--connect-timeout", "10", "https://public-ping-bucket-kernel.s3.us-east-1.amazonaws.com/index.html")
 	if err != nil || exitCode != 0 {
 		t.Logf("curl failed: exitCode=%d err=%v output=%s", exitCode, err, output)
 	}
@@ -182,7 +183,7 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 	var restoreOutput string
 	var restoreExitCode int
 	for i := 0; i < 10; i++ {
-		restoreOutput, restoreExitCode, err = execCommand(ctx, inst.VsockSocket, "curl", "-s", "https://public-ping-bucket-kernel.s3.us-east-1.amazonaws.com/index.html")
+		restoreOutput, restoreExitCode, err = execCommand(ctx, inst, "curl", "-s", "https://public-ping-bucket-kernel.s3.us-east-1.amazonaws.com/index.html")
 		if err == nil && restoreExitCode == 0 {
 			break
 		}
@@ -196,7 +197,7 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 
 	// Verify the original nginx process is still running (proves restore worked, not reboot)
 	t.Log("Verifying nginx master process is still running...")
-	psOutput, psExitCode, err := execCommand(ctx, inst.VsockSocket, "ps", "aux")
+	psOutput, psExitCode, err := execCommand(ctx, inst, "ps", "aux")
 	require.NoError(t, err)
 	require.Equal(t, 0, psExitCode)
 	require.Contains(t, psOutput, "nginx: master process", "nginx master should still be running")
@@ -223,10 +224,15 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 }
 
 // execCommand runs a command in the instance via vsock and returns stdout+stderr, exit code, and error
-func execCommand(ctx context.Context, vsockSocket string, command ...string) (string, int, error) {
+func execCommand(ctx context.Context, inst *Instance, command ...string) (string, int, error) {
+	dialer, err := hypervisor.NewVsockDialer(inst.HypervisorType, inst.VsockSocket, inst.VsockCID)
+	if err != nil {
+		return "", -1, err
+	}
+
 	var stdout, stderr bytes.Buffer
 
-	exit, err := exec.ExecIntoInstance(ctx, vsockSocket, exec.ExecOptions{
+	exit, err := guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{
 		Command: command,
 		Stdin:   nil,
 		Stdout:  &stdout,

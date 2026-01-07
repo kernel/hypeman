@@ -33,6 +33,10 @@ type Manager interface {
 
 	// GetVolumePath returns the path to the volume data file
 	GetVolumePath(id string) string
+
+	// TotalVolumeBytes returns the total size of all volumes.
+	// Used by the resource manager for disk capacity tracking.
+	TotalVolumeBytes(ctx context.Context) (int64, error)
 }
 
 type manager struct {
@@ -391,6 +395,11 @@ func (m *manager) DetachVolume(ctx context.Context, volumeID string, instanceID 
 // GetVolumePath returns the path to the volume data file
 func (m *manager) GetVolumePath(id string) string {
 	return m.paths.VolumeData(id)
+}
+
+// TotalVolumeBytes returns the total size of all volumes.
+func (m *manager) TotalVolumeBytes(ctx context.Context) (int64, error) {
+	return m.calculateTotalVolumeStorage(ctx)
 }
 
 // metadataToVolume converts stored metadata to a Volume struct

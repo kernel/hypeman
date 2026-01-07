@@ -135,7 +135,9 @@ func TestRegistryPushAndCreateInstance(t *testing.T) {
 			Name:  "test-pushed-image",
 			Image: imageName,
 			Network: &struct {
-				Enabled *bool `json:"enabled,omitempty"`
+				BandwidthDownload *string `json:"bandwidth_download,omitempty"`
+				BandwidthUpload   *string `json:"bandwidth_upload,omitempty"`
+				Enabled           *bool   `json:"enabled,omitempty"`
 			}{
 				Enabled: &networkEnabled,
 			},

@@ -127,6 +127,10 @@ components:
           description: Writable overlay disk size (human-readable format like "10GB", "50G")
           default: "10GB"
           example: "20GB"
+        disk_io_bps:
+          type: string
+          description: Disk I/O rate limit (e.g., "100MB/s", "500MB/s"). Defaults to proportional share based on CPU allocation if configured.
+          example: "100MB/s"
         vcpus:
           type: integer
           description: Number of virtual CPUs
@@ -149,6 +153,14 @@ components:
               description: Whether to attach instance to the default network
               default: true
               example: true
+            bandwidth_download:
+              type: string
+              description: Download bandwidth limit (external→VM, e.g., "1Gbps", "125MB/s"). Defaults to proportional share based on CPU allocation.
+              example: "1Gbps"
+            bandwidth_upload:
+              type: string
+              description: Upload bandwidth limit (VM→external, e.g., "1Gbps", "125MB/s"). Defaults to proportional share based on CPU allocation.
+              example: "1Gbps"
         devices:
           type: array
           items:
@@ -160,6 +172,11 @@ components:
           description: Volumes to attach to the instance at creation time
           items:
             $ref: "#/components/schemas/VolumeMount"
+        hypervisor:
+          type: string
+          enum: [cloud-hypervisor, qemu]
+          description: Hypervisor to use for this instance. Defaults to server configuration.
+          example: cloud-hypervisor
         # Future: port_mappings, timeout_seconds
     
     Instance:
@@ -201,6 +218,10 @@ components:
           type: integer
           description: Number of virtual CPUs
           example: 2
+        disk_io_bps:
+          type: string
+          description: Disk I/O rate limit (human-readable, e.g., "100MB/s")
+          example: "100MB/s"
         env:
           type: object
           additionalProperties:
@@ -228,6 +249,14 @@ components:
               description: Assigned MAC address (null if no network)
               example: "02:00:00:ab:cd:ef"
               nullable: true
+            bandwidth_download:
+              type: string
+              description: Download bandwidth limit (human-readable, e.g., "1Gbps", "125MB/s")
+              example: "125MB/s"
+            bandwidth_upload:
+              type: string
+              description: Upload bandwidth limit (human-readable, e.g., "1Gbps", "125MB/s")
+              example: "125MB/s"
         volumes:
           type: array
           description: Volumes attached to the instance
@@ -254,6 +283,51 @@ components:
           type: boolean
           description: Whether a snapshot exists for this instance
           example: false
+        hypervisor:
+          type: string
+          enum: [cloud-hypervisor, qemu]
+          description: Hypervisor running this instance
+          example: cloud-hypervisor
+    
+    PathInfo:
+      type: object
+      required: [exists]
+      properties:
+        exists:
+          type: boolean
+          description: Whether the path exists
+          example: true
+        is_dir:
+          type: boolean
+          description: True if this is a directory
+          example: false
+        is_file:
+          type: boolean
+          description: True if this is a regular file
+          example: true
+        is_symlink:
+          type: boolean
+          description: True if this is a symbolic link (only set when follow_links=false)
+          example: false
+        link_target:
+          type: string
+          description: Symlink target path (only set when is_symlink=true)
+          nullable: true
+          example: "/actual/target/path"
+        mode:
+          type: integer
+          description: File mode (Unix permissions)
+          example: 420
+        size:
+          type: integer
+          format: int64
+          description: File size in bytes
+          example: 1024
+        error:
+          type: string
+          description: Error message if stat failed (e.g., permission denied). Only set when exists is false due to an error rather than the path not existing.
+          nullable: true
+          example: "permission denied"
     
     CreateImageRequest:
       type: object
@@ -736,6 +810,123 @@ components:
           description: Build duration in milliseconds
           nullable: true
 
+    ResourceStatus:
+      type: object
+      required: [type, capacity, effective_limit, allocated, available, oversub_ratio]
+      properties:
+        type:
+          type: string
+          description: Resource type
+          example: "cpu"
+        capacity:
+          type: integer
+          format: int64
+          description: Raw host capacity
+          example: 64
+        effective_limit:
+          type: integer
+          format: int64
+          description: Capacity after oversubscription (capacity * ratio)
+          example: 128
+        allocated:
+          type: integer
+          format: int64
+          description: Currently allocated resources
+          example: 48
+        available:
+          type: integer
+          format: int64
+          description: Available for allocation (effective_limit - allocated)
+          example: 80
+        oversub_ratio:
+          type: number
+          format: double
+          description: Oversubscription ratio applied
+          example: 2.0
+        source:
+          type: string
+          description: How capacity was determined (detected, configured)
+          example: "detected"
+
+    DiskBreakdown:
+      type: object
+      properties:
+        images_bytes:
+          type: integer
+          format: int64
+          description: Disk used by exported rootfs images
+          example: 214748364800
+        oci_cache_bytes:
+          type: integer
+          format: int64
+          description: Disk used by OCI layer cache (shared blobs)
+          example: 53687091200
+        volumes_bytes:
+          type: integer
+          format: int64
+          description: Disk used by volumes
+          example: 107374182400
+        overlays_bytes:
+          type: integer
+          format: int64
+          description: Disk used by instance overlays (rootfs + volume overlays)
+          example: 227633306624
+
+    ResourceAllocation:
+      type: object
+      properties:
+        instance_id:
+          type: string
+          description: Instance identifier
+          example: "abc123"
+        instance_name:
+          type: string
+          description: Instance name
+          example: "my-vm"
+        cpu:
+          type: integer
+          description: vCPUs allocated
+          example: 4
+        memory_bytes:
+          type: integer
+          format: int64
+          description: Memory allocated in bytes
+          example: 8589934592
+        disk_bytes:
+          type: integer
+          format: int64
+          description: Disk allocated in bytes (overlay + volumes)
+          example: 10737418240
+        network_download_bps:
+          type: integer
+          format: int64
+          description: Download bandwidth limit in bytes/sec (external→VM)
+          example: 125000000
+        network_upload_bps:
+          type: integer
+          format: int64
+          description: Upload bandwidth limit in bytes/sec (VM→external)
+          example: 125000000
+
+    Resources:
+      type: object
+      required: [cpu, memory, disk, network, allocations]
+      properties:
+        cpu:
+          $ref: "#/components/schemas/ResourceStatus"
+        memory:
+          $ref: "#/components/schemas/ResourceStatus"
+        disk:
+          $ref: "#/components/schemas/ResourceStatus"
+        network:
+          $ref: "#/components/schemas/ResourceStatus"
+        disk_breakdown:
+          $ref: "#/components/schemas/DiskBreakdown"
+        allocations:
+          type: array
+          items:
+            $ref: "#/components/schemas/ResourceAllocation"
+
 paths:
   /health:
     get:
@@ -749,6 +940,29 @@ paths:
               schema:
                 $ref: "#/components/schemas/Health"
   
+  /resources:
+    get:
+      summary: Get host resource capacity and allocations
+      description: |
+        Returns current host resource capacity, allocation status, and per-instance breakdown.
+        Resources include CPU, memory, disk, and network. Oversubscription ratios are applied
+        to calculate effective limits.
+      operationId: getResources
+      security:
+        - bearerAuth: []
+      responses:
+        200:
+          description: Resource status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Resources"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   
   /images:
     get:
@@ -1217,6 +1431,63 @@ paths:
                 type: string
         404:
           description: Instance not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  
+  /instances/{id}/stat:
+    get:
+      summary: Get filesystem path info
+      description: |
+        Returns information about a path in the guest filesystem.
+        Useful for checking if a path exists, its type, and permissions
+        before performing file operations.
+      operationId: statInstancePath
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Instance ID or name
+        - name: path
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Path to stat in the guest filesystem
+          example: "/app/data"
+        - name: follow_links
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+          description: Follow symbolic links (like stat vs lstat)
+      responses:
+        200:
+          description: Path information
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PathInfo"
+        404:
+          description: Instance not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Instance not in running state
           content:
             application/json:
               schema:

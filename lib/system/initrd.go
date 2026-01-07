@@ -20,7 +20,7 @@ import (
 
 const alpineBaseImage = "alpine:3.22"
 
-// buildInitrd builds initrd from Alpine base + embedded exec-agent + generated init script
+// buildInitrd builds initrd from Alpine base + embedded guest-agent + embedded init binary
 func (m *manager) buildInitrd(ctx context.Context, arch string) (string, error) {
 	// Create temp directory for building
 	tempDir, err := os.MkdirTemp("", "hypeman-initrd-*")
@@ -49,15 +49,15 @@ func (m *manager) buildInitrd(ctx context.Context, arch string) (string, error) 
 		return "", fmt.Errorf("pull alpine base: %w", err)
 	}
 
-	// Write embedded exec-agent binary
+	// Write embedded guest-agent binary
 	binDir := filepath.Join(rootfsDir, "usr/local/bin")
 	if err := os.MkdirAll(binDir, 0755); err != nil {
 		return "", fmt.Errorf("create bin dir: %w", err)
 	}
 
-	agentPath := filepath.Join(binDir, "exec-agent")
-	if err := os.WriteFile(agentPath, ExecAgentBinary, 0755); err != nil {
-		return "", fmt.Errorf("write exec-agent: %w", err)
+	agentPath := filepath.Join(binDir, "guest-agent")
+	if err := os.WriteFile(agentPath, GuestAgentBinary, 0755); err != nil {
+		return "", fmt.Errorf("write guest-agent: %w", err)
 	}
 
 	// Add NVIDIA kernel modules (for GPU passthrough support)
@@ -67,11 +67,17 @@ func (m *manager) buildInitrd(ctx context.Context, arch string) (string, error) 
 		log.InfoContext(ctx, "skipping NVIDIA modules", "error", err)
 	}
 
-	// Write generated init script
-	initScript := GenerateInitScript()
-	initPath := filepath.Join(rootfsDir, "init")
-	if err := os.WriteFile(initPath, []byte(initScript), 0755); err != nil {
-		return "", fmt.Errorf("write init script: %w", err)
+	// Write shell wrapper as /init (sets up /proc, /sys, /dev before Go runtime)
+	// The Go runtime needs these filesystems during initialization
+	initWrapperPath := filepath.Join(rootfsDir, "init")
+	if err := os.WriteFile(initWrapperPath, InitWrapper, 0755); err != nil {
+		return "", fmt.Errorf("write init wrapper: %w", err)
+	}
+
+	// Write Go init binary as /init.bin (called by wrapper after setup)
+	initBinPath := filepath.Join(rootfsDir, "init.bin")
+	if err := os.WriteFile(initBinPath, InitBinary, 0755); err != nil {
+		return "", fmt.Errorf("write init binary: %w", err)
 	}
 
 	// Generate timestamp for this build
@@ -89,7 +95,7 @@ func (m *manager) buildInitrd(ctx context.Context, arch string) (string, error) 
 
 	// Store hash for staleness detection
 	hashPath := filepath.Join(filepath.Dir(outputPath), ".hash")
-	currentHash := computeInitrdHash()
+	currentHash := computeInitrdHash(arch)
 	if err := os.WriteFile(hashPath, []byte(currentHash), 0644); err != nil {
 		return "", fmt.Errorf("write hash file: %w", err)
 	}
@@ -117,7 +123,7 @@ func (m *manager) ensureInitrd(ctx context.Context) (string, error) {
 		initrdPath := m.paths.SystemInitrdTimestamp(target, arch)
 		if _, err := os.Stat(initrdPath); err == nil {
 			// File exists, check if it's stale by comparing embedded binary hash
-			if !m.isInitrdStale(initrdPath) {
+			if !m.isInitrdStale(initrdPath, arch) {
 				return initrdPath, nil
 			}
 		}
@@ -133,7 +139,7 @@ func (m *manager) ensureInitrd(ctx context.Context) (string, error) {
 }
 
 // isInitrdStale checks if the initrd needs rebuilding by comparing hashes
-func (m *manager) isInitrdStale(initrdPath string) bool {
+func (m *manager) isInitrdStale(initrdPath, arch string) bool {
 	// Read stored hash
 	hashPath := filepath.Join(filepath.Dir(initrdPath), ".hash")
 	storedHash, err := os.ReadFile(hashPath)
@@ -143,22 +149,23 @@ func (m *manager) isInitrdStale(initrdPath string) bool {
 	}
 
 	// Compare with current hash
-	currentHash := computeInitrdHash()
+	currentHash := computeInitrdHash(arch)
 	return string(storedHash) != currentHash
 }
 
-// computeInitrdHash computes a hash of the embedded binary, init script, and NVIDIA assets
-func computeInitrdHash() string {
+// computeInitrdHash computes a hash of the embedded binaries and NVIDIA assets for a specific architecture
+func computeInitrdHash(arch string) string {
 	h := sha256.New()
-	h.Write(ExecAgentBinary)
-	h.Write([]byte(GenerateInitScript()))
+	h.Write(GuestAgentBinary)
+	h.Write(InitBinary)
+	h.Write(InitWrapper)
 	// Include NVIDIA driver version in hash so initrd is rebuilt when driver changes
 	if ver, ok := NvidiaDriverVersion[DefaultKernelVersion]; ok {
 		h.Write([]byte(ver))
 	}
 	// Include driver libs URL so initrd is rebuilt when the libs tarball changes
 	if archURLs, ok := NvidiaDriverLibURLs[DefaultKernelVersion]; ok {
-		if url, ok := archURLs["x86_64"]; ok {
+		if url, ok := archURLs[arch]; ok {
 			h.Write([]byte(url))
 		}
 	}

@@ -19,13 +19,23 @@ type Manager interface {
 
 	// Instance allocation operations (called by instance manager)
 	CreateAllocation(ctx context.Context, req AllocateRequest) (*NetworkConfig, error)
-	RecreateAllocation(ctx context.Context, instanceID string) error
+	RecreateAllocation(ctx context.Context, instanceID string, downloadBps, uploadBps int64) error
 	ReleaseAllocation(ctx context.Context, alloc *Allocation) error
+
+	// SetupHTB initializes HTB qdisc on the bridge for upload fair sharing.
+	// Should be called during network initialization with the total network capacity.
+	SetupHTB(ctx context.Context, capacityBps int64) error
 
 	// Queries (derive from CH/snapshots)
 	GetAllocation(ctx context.Context, instanceID string) (*Allocation, error)
 	ListAllocations(ctx context.Context) ([]Allocation, error)
 	NameExists(ctx context.Context, name string) (bool, error)
+
+	// GetUploadBurstMultiplier returns the configured multiplier for upload burst ceiling.
+	GetUploadBurstMultiplier() int
+
+	// GetDownloadBurstMultiplier returns the configured multiplier for download burst bucket.
+	GetDownloadBurstMultiplier() int
 }
 
 // manager implements the Manager interface
@@ -91,6 +101,11 @@ func (m *manager) Initialize(ctx context.Context, runningInstanceIDs []string) e
 		log.InfoContext(ctx, "cleaned up orphaned TAP devices", "count", deleted)
 	}
 
+	// Cleanup orphaned HTB classes (TAPs deleted externally but classes remain)
+	if deleted := m.CleanupOrphanedClasses(ctx); deleted > 0 {
+		log.InfoContext(ctx, "cleaned up orphaned HTB classes", "count", deleted)
+	}
+
 	log.InfoContext(ctx, "network manager initialized")
 	return nil
 }
@@ -112,4 +127,28 @@ func (m *manager) getDefaultNetwork(ctx context.Context) (*Network, error) {
 		Default:   true,
 		CreatedAt: time.Time{}, // Unknown for default
 	}, nil
+}
+
+// SetupHTB initializes HTB qdisc on the bridge for upload fair sharing.
+// capacityBps is the total network capacity in bytes per second.
+func (m *manager) SetupHTB(ctx context.Context, capacityBps int64) error {
+	return m.setupBridgeHTB(ctx, m.config.BridgeName, capacityBps)
+}
+
+// GetUploadBurstMultiplier returns the configured multiplier for upload burst ceiling.
+// Defaults to 4 if not configured.
+func (m *manager) GetUploadBurstMultiplier() int {
+	if m.config.UploadBurstMultiplier < 1 {
+		return DefaultUploadBurstMultiplier
+	}
+	return m.config.UploadBurstMultiplier
+}
+
+// GetDownloadBurstMultiplier returns the configured multiplier for download burst bucket.
+// Defaults to 4 if not configured.
+func (m *manager) GetDownloadBurstMultiplier() int {
+	if m.config.DownloadBurstMultiplier < 1 {
+		return DefaultDownloadBurstMultiplier
+	}
+	return m.config.DownloadBurstMultiplier
 }

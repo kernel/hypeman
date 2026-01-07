@@ -22,7 +22,8 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/onkernel/hypeman/cmd/api/config"
 	"github.com/onkernel/hypeman/lib/devices"
-	"github.com/onkernel/hypeman/lib/exec"
+	"github.com/onkernel/hypeman/lib/guest"
+	"github.com/onkernel/hypeman/lib/hypervisor"
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/instances"
 	"github.com/onkernel/hypeman/lib/network"
@@ -111,7 +112,7 @@ func TestGPUInference(t *testing.T) {
 	limits := instances.ResourceLimits{
 		MaxOverlaySize: 100 * 1024 * 1024 * 1024,
 	}
-	instanceMgr := instances.NewManager(p, imageMgr, systemMgr, networkMgr, deviceMgr, volumeMgr, limits, nil, nil)
+	instanceMgr := instances.NewManager(p, imageMgr, systemMgr, networkMgr, deviceMgr, volumeMgr, limits, "", nil, nil)
 
 	// Step 1: Build custom CUDA+Ollama image
 	t.Log("Step 1: Building custom CUDA+Ollama Docker image...")
@@ -285,6 +286,9 @@ func TestGPUInference(t *testing.T) {
 	actualInst, err := instanceMgr.GetInstance(ctx, inst.Id)
 	require.NoError(t, err)
 
+	dialer, err := hypervisor.NewVsockDialer(actualInst.HypervisorType, actualInst.VsockSocket, actualInst.VsockCID)
+	require.NoError(t, err)
+
 	// Step 10: Wait for Ollama server
 	t.Log("Step 10: Waiting for Ollama server to be ready...")
 	ollamaReady := false
@@ -292,7 +296,7 @@ func TestGPUInference(t *testing.T) {
 		healthCtx, healthCancel := context.WithTimeout(ctx, 5*time.Second)
 		var healthStdout, healthStderr inferenceOutputBuffer
 
-		_, err = exec.ExecIntoInstance(healthCtx, actualInst.VsockSocket, exec.ExecOptions{
+		_, err = guest.ExecIntoInstance(healthCtx, dialer, guest.ExecOptions{
 			Command: []string{"/bin/sh", "-c", "ollama list 2>&1"},
 			Stdout:  &healthStdout,
 			Stderr:  &healthStderr,
@@ -319,7 +323,7 @@ func TestGPUInference(t *testing.T) {
 
 	// Check nvidia-smi (should work now with CUDA image)
 	var nvidiaSmiStdout, nvidiaSmiStderr inferenceOutputBuffer
-	_, _ = exec.ExecIntoInstance(gpuCheckCtx, actualInst.VsockSocket, exec.ExecOptions{
+	_, _ = guest.ExecIntoInstance(gpuCheckCtx, dialer, guest.ExecOptions{
 		Command: []string{"/bin/sh", "-c", "nvidia-smi 2>&1 || echo 'nvidia-smi failed'"},
 		Stdout:  &nvidiaSmiStdout,
 		Stderr:  &nvidiaSmiStderr,
@@ -333,7 +337,7 @@ func TestGPUInference(t *testing.T) {
 
 	// Check NVIDIA kernel modules
 	var modulesStdout inferenceOutputBuffer
-	exec.ExecIntoInstance(gpuCheckCtx, actualInst.VsockSocket, exec.ExecOptions{
+	guest.ExecIntoInstance(gpuCheckCtx, dialer, guest.ExecOptions{
 		Command: []string{"/bin/sh", "-c", "cat /proc/modules | grep nvidia"},
 		Stdout:  &modulesStdout,
 	})
@@ -343,7 +347,7 @@ func TestGPUInference(t *testing.T) {
 
 	// Check device nodes
 	var devStdout inferenceOutputBuffer
-	exec.ExecIntoInstance(gpuCheckCtx, actualInst.VsockSocket, exec.ExecOptions{
+	guest.ExecIntoInstance(gpuCheckCtx, dialer, guest.ExecOptions{
 		Command: []string{"/bin/sh", "-c", "ls -la /dev/nvidia* 2>&1"},
 		Stdout:  &devStdout,
 	})
@@ -355,7 +359,7 @@ func TestGPUInference(t *testing.T) {
 	t.Log("Step 12: Ensuring TinyLlama model is available...")
 
 	var listStdout inferenceOutputBuffer
-	exec.ExecIntoInstance(gpuCheckCtx, actualInst.VsockSocket, exec.ExecOptions{
+	guest.ExecIntoInstance(gpuCheckCtx, dialer, guest.ExecOptions{
 		Command: []string{"/bin/sh", "-c", "ollama list 2>&1"},
 		Stdout:  &listStdout,
 	})
@@ -366,7 +370,7 @@ func TestGPUInference(t *testing.T) {
 		defer pullCancel()
 
 		var pullStdout inferenceOutputBuffer
-		_, pullErr := exec.ExecIntoInstance(pullCtx, actualInst.VsockSocket, exec.ExecOptions{
+		_, pullErr := guest.ExecIntoInstance(pullCtx, dialer, guest.ExecOptions{
 			Command: []string{"/bin/sh", "-c", "ollama pull tinyllama 2>&1"},
 			Stdout:  &pullStdout,
 		})

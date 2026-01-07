@@ -19,13 +19,13 @@ import (
 )
 
 // execWithRetry runs a command with retries until exec-agent is ready
-func execWithRetry(ctx context.Context, vsockSocket string, command []string) (string, int, error) {
+func execWithRetry(ctx context.Context, inst *Instance, command []string) (string, int, error) {
 	var output string
 	var code int
 	var err error
 
 	for i := 0; i < 10; i++ {
-		output, code, err = execCommand(ctx, vsockSocket, command...)
+		output, code, err = execCommand(ctx, inst, command...)
 		if err == nil {
 			return output, code, nil
 		}
@@ -111,7 +111,7 @@ func TestVolumeMultiAttachReadOnly(t *testing.T) {
 
 	// Write test file, sync, and verify in one command to ensure data persistence
 	t.Log("Writing test file to volume...")
-	output, code, err := execWithRetry(ctx, writerInst.VsockSocket, []string{
+	output, code, err := execWithRetry(ctx, writerInst, []string{
 		"/bin/sh", "-c", "echo 'Hello from writer' > /data/test.txt && sync && cat /data/test.txt",
 	})
 	require.NoError(t, err)
@@ -177,21 +177,21 @@ func TestVolumeMultiAttachReadOnly(t *testing.T) {
 
 	// Verify data is readable from reader-1
 	t.Log("Verifying data from reader-1...")
-	output1, code, err := execWithRetry(ctx, reader1.VsockSocket, []string{"cat", "/data/test.txt"})
+	output1, code, err := execWithRetry(ctx, reader1, []string{"cat", "/data/test.txt"})
 	require.NoError(t, err)
 	require.Equal(t, 0, code)
 	require.Contains(t, output1, "Hello from writer", "Reader 1 should see the file")
 
 	// Verify data is readable from reader-2 (overlay mode)
 	t.Log("Verifying data from reader-2 (overlay)...")
-	output2, code, err := execWithRetry(ctx, reader2.VsockSocket, []string{"cat", "/data/test.txt"})
+	output2, code, err := execWithRetry(ctx, reader2, []string{"cat", "/data/test.txt"})
 	require.NoError(t, err)
 	require.Equal(t, 0, code)
 	assert.Contains(t, output2, "Hello from writer", "Reader 2 should see the file from base volume")
 
 	// Verify overlay allows writes: append to the file and verify in one command
 	t.Log("Verifying overlay allows writes (append to file)...")
-	output2, code, err = execWithRetry(ctx, reader2.VsockSocket, []string{
+	output2, code, err = execWithRetry(ctx, reader2, []string{
 		"/bin/sh", "-c", "echo 'Appended by overlay' >> /data/test.txt && sync && cat /data/test.txt",
 	})
 	require.NoError(t, err)
@@ -201,7 +201,7 @@ func TestVolumeMultiAttachReadOnly(t *testing.T) {
 
 	// Verify reader-1 does NOT see the appended data AND write fails (all in one command)
 	t.Log("Verifying read-only enforcement and isolation on reader-1...")
-	output1, code, err = execWithRetry(ctx, reader1.VsockSocket, []string{
+	output1, code, err = execWithRetry(ctx, reader1, []string{
 		"/bin/sh", "-c", "cat /data/test.txt && echo 'illegal' > /data/illegal.txt",
 	})
 	require.NoError(t, err, "Exec should succeed even if write command fails")
@@ -414,14 +414,14 @@ func TestVolumeFromArchive(t *testing.T) {
 	t.Log("Verifying archive files are accessible...")
 
 	// Check greeting.txt
-	output, code, err := execWithRetry(ctx, inst.VsockSocket, []string{"cat", "/archive/greeting.txt"})
+	output, code, err := execWithRetry(ctx, inst, []string{"cat", "/archive/greeting.txt"})
 	require.NoError(t, err)
 	require.Equal(t, 0, code, "cat greeting.txt should succeed")
 	assert.Equal(t, "Hello from archive!", strings.TrimSpace(output))
 	t.Log("✓ greeting.txt verified")
 
 	// Check data/config.json
-	output, code, err = execWithRetry(ctx, inst.VsockSocket, []string{"cat", "/archive/data/config.json"})
+	output, code, err = execWithRetry(ctx, inst, []string{"cat", "/archive/data/config.json"})
 	require.NoError(t, err)
 	require.Equal(t, 0, code, "cat config.json should succeed")
 	assert.Contains(t, output, `"key": "value"`)
@@ -429,14 +429,14 @@ func TestVolumeFromArchive(t *testing.T) {
 	t.Log("✓ data/config.json verified")
 
 	// Check deeply nested file
-	output, code, err = execWithRetry(ctx, inst.VsockSocket, []string{"cat", "/archive/data/nested/deep.txt"})
+	output, code, err = execWithRetry(ctx, inst, []string{"cat", "/archive/data/nested/deep.txt"})
 	require.NoError(t, err)
 	require.Equal(t, 0, code, "cat deep.txt should succeed")
 	assert.Equal(t, "Deep nested file content", strings.TrimSpace(output))
 	t.Log("✓ data/nested/deep.txt verified")
 
 	// List directory to confirm structure
-	output, code, err = execWithRetry(ctx, inst.VsockSocket, []string{"find", "/archive", "-type", "f"})
+	output, code, err = execWithRetry(ctx, inst, []string{"find", "/archive", "-type", "f"})
 	require.NoError(t, err)
 	require.Equal(t, 0, code, "find should succeed")
 	assert.Contains(t, output, "/archive/greeting.txt")

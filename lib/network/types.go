@@ -2,14 +2,25 @@ package network
 
 import "time"
 
+// DefaultUploadBurstMultiplier is the default multiplier applied to guaranteed upload rate
+// to calculate the burst ceiling. This allows VMs to burst above their guaranteed rate
+// when other VMs are not using their full bandwidth allocation.
+// Configurable via UPLOAD_BURST_MULTIPLIER environment variable.
+const DefaultUploadBurstMultiplier = 4
+
+// DefaultDownloadBurstMultiplier is the default multiplier for the TBF burst bucket size.
+// A larger bucket allows faster initial burst before settling to sustained rate.
+// Configurable via DOWNLOAD_BURST_MULTIPLIER environment variable.
+const DefaultDownloadBurstMultiplier = 4
+
 // Network represents a virtual network for instances
 type Network struct {
-	Name      string    // "default", "internal"
-	Subnet    string    // "192.168.0.0/16"
-	Gateway   string    // "192.168.0.1"
-	Bridge    string    // "vmbr0" (derived from kernel)
-	Isolated  bool      // Bridge_slave isolation mode
-	Default   bool      // True for default network
+	Name      string // "default", "internal"
+	Subnet    string // "192.168.0.0/16"
+	Gateway   string // "192.168.0.1"
+	Bridge    string // "vmbr0" (derived from kernel)
+	Isolated  bool   // Bridge_slave isolation mode
+	Default   bool   // True for default network
 	CreatedAt time.Time
 }
 
@@ -39,7 +50,9 @@ type NetworkConfig struct {
 // AllocateRequest is the request to allocate network for an instance
 // Always allocates from the default network
 type AllocateRequest struct {
-	InstanceID   string
-	InstanceName string
+	InstanceID    string
+	InstanceName  string
+	DownloadBps   int64 // Download rate limit in bytes/sec (external→VM, TAP egress TBF)
+	UploadBps     int64 // Upload rate limit in bytes/sec (VM→external, HTB class rate)
+	UploadCeilBps int64 // Upload ceiling in bytes/sec (HTB burst when bandwidth available, 0 = same as UploadBps)
 }
-

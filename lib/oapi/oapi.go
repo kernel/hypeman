@@ -39,6 +39,12 @@ const (
 	BuildStatusReady     BuildStatus = "ready"
 )
 
+// Defines values for CreateInstanceRequestHypervisor.
+const (
+	CreateInstanceRequestHypervisorCloudHypervisor CreateInstanceRequestHypervisor = "cloud-hypervisor"
+	CreateInstanceRequestHypervisorQemu            CreateInstanceRequestHypervisor = "qemu"
+)
+
 // Defines values for DeviceType.
 const (
 	Gpu DeviceType = "gpu"
@@ -57,6 +63,12 @@ const (
 	ImageStatusPending    ImageStatus = "pending"
 	ImageStatusPulling    ImageStatus = "pulling"
 	ImageStatusReady      ImageStatus = "ready"
+)
+
+// Defines values for InstanceHypervisor.
+const (
+	InstanceHypervisorCloudHypervisor InstanceHypervisor = "cloud-hypervisor"
+	InstanceHypervisorQemu            InstanceHypervisor = "qemu"
 )
 
 // Defines values for InstanceState.
@@ -200,11 +212,17 @@ type CreateInstanceRequest struct {
 	// Devices Device IDs or names to attach for GPU/PCI passthrough
 	Devices *[]string `json:"devices,omitempty"`
 
+	// DiskIoBps Disk I/O rate limit (e.g., "100MB/s", "500MB/s"). Defaults to proportional share based on CPU allocation if configured.
+	DiskIoBps *string `json:"disk_io_bps,omitempty"`
+
 	// Env Environment variables
 	Env *map[string]string `json:"env,omitempty"`
 
 	// HotplugSize Additional memory for hotplug (human-readable format like "3GB", "1G")
 	HotplugSize *string `json:"hotplug_size,omitempty"`
+
+	// Hypervisor Hypervisor to use for this instance. Defaults to server configuration.
+	Hypervisor *CreateInstanceRequestHypervisor `json:"hypervisor,omitempty"`
 
 	// Image OCI image reference
 	Image string `json:"image"`
@@ -214,6 +232,12 @@ type CreateInstanceRequest struct {
 
 	// Network Network configuration for the instance
 	Network *struct {
+		// BandwidthDownload Download bandwidth limit (external→VM, e.g., "1Gbps", "125MB/s"). Defaults to proportional share based on CPU allocation.
+		BandwidthDownload *string `json:"bandwidth_download,omitempty"`
+
+		// BandwidthUpload Upload bandwidth limit (VM→external, e.g., "1Gbps", "125MB/s"). Defaults to proportional share based on CPU allocation.
+		BandwidthUpload *string `json:"bandwidth_upload,omitempty"`
+
 		// Enabled Whether to attach instance to the default network
 		Enabled *bool `json:"enabled,omitempty"`
 	} `json:"network,omitempty"`
@@ -230,6 +254,9 @@ type CreateInstanceRequest struct {
 	// Volumes Volumes to attach to the instance at creation time
 	Volumes *[]VolumeMount `json:"volumes,omitempty"`
 }
+
+// CreateInstanceRequestHypervisor Hypervisor to use for this instance. Defaults to server configuration.
+type CreateInstanceRequestHypervisor string
 
 // CreateVolumeRequest defines model for CreateVolumeRequest.
 type CreateVolumeRequest struct {
@@ -280,6 +307,21 @@ type Device struct {
 
 // DeviceType Type of PCI device
 type DeviceType string
+
+// DiskBreakdown defines model for DiskBreakdown.
+type DiskBreakdown struct {
+	// ImagesBytes Disk used by exported rootfs images
+	ImagesBytes *int64 `json:"images_bytes,omitempty"`
+
+	// OciCacheBytes Disk used by OCI layer cache (shared blobs)
+	OciCacheBytes *int64 `json:"oci_cache_bytes,omitempty"`
+
+	// OverlaysBytes Disk used by instance overlays (rootfs + volume overlays)
+	OverlaysBytes *int64 `json:"overlays_bytes,omitempty"`
+
+	// VolumesBytes Disk used by volumes
+	VolumesBytes *int64 `json:"volumes_bytes,omitempty"`
+}
 
 // Error defines model for Error.
 type Error struct {
@@ -410,6 +452,9 @@ type Instance struct {
 	// CreatedAt Creation timestamp (RFC3339)
 	CreatedAt time.Time `json:"created_at"`
 
+	// DiskIoBps Disk I/O rate limit (human-readable, e.g., "100MB/s")
+	DiskIoBps *string `json:"disk_io_bps,omitempty"`
+
 	// Env Environment variables
 	Env *map[string]string `json:"env,omitempty"`
 
@@ -418,6 +463,9 @@ type Instance struct {
 
 	// HotplugSize Hotplug memory size (human-readable)
 	HotplugSize *string `json:"hotplug_size,omitempty"`
+
+	// Hypervisor Hypervisor running this instance
+	Hypervisor *InstanceHypervisor `json:"hypervisor,omitempty"`
 
 	// Id Auto-generated unique identifier (CUID2 format)
 	Id string `json:"id"`
@@ -430,6 +478,12 @@ type Instance struct {
 
 	// Network Network configuration of the instance
 	Network *struct {
+		// BandwidthDownload Download bandwidth limit (human-readable, e.g., "1Gbps", "125MB/s")
+		BandwidthDownload *string `json:"bandwidth_download,omitempty"`
+
+		// BandwidthUpload Upload bandwidth limit (human-readable, e.g., "1Gbps", "125MB/s")
+		BandwidthUpload *string `json:"bandwidth_upload,omitempty"`
+
 		// Enabled Whether instance is attached to the default network
 		Enabled *bool `json:"enabled,omitempty"`
 
@@ -475,6 +529,9 @@ type Instance struct {
 	Volumes *[]VolumeMount `json:"volumes,omitempty"`
 }
 
+// InstanceHypervisor Hypervisor running this instance
+type InstanceHypervisor string
+
 // InstanceState Instance state:
 // - Created: VMM created but not started (Cloud Hypervisor native)
 // - Running: VM is actively running (Cloud Hypervisor native)
@@ -484,6 +541,91 @@ type Instance struct {
 // - Standby: No VMM running, snapshot exists (can be restored)
 // - Unknown: Failed to determine state (see state_error for details)
 type InstanceState string
+
+// PathInfo defines model for PathInfo.
+type PathInfo struct {
+	// Error Error message if stat failed (e.g., permission denied). Only set when exists is false due to an error rather than the path not existing.
+	Error *string `json:"error"`
+
+	// Exists Whether the path exists
+	Exists bool `json:"exists"`
+
+	// IsDir True if this is a directory
+	IsDir *bool `json:"is_dir,omitempty"`
+
+	// IsFile True if this is a regular file
+	IsFile *bool `json:"is_file,omitempty"`
+
+	// IsSymlink True if this is a symbolic link (only set when follow_links=false)
+	IsSymlink *bool `json:"is_symlink,omitempty"`
+
+	// LinkTarget Symlink target path (only set when is_symlink=true)
+	LinkTarget *string `json:"link_target"`
+
+	// Mode File mode (Unix permissions)
+	Mode *int `json:"mode,omitempty"`
+
+	// Size File size in bytes
+	Size *int64 `json:"size,omitempty"`
+}
+
+// ResourceAllocation defines model for ResourceAllocation.
+type ResourceAllocation struct {
+	// Cpu vCPUs allocated
+	Cpu *int `json:"cpu,omitempty"`
+
+	// DiskBytes Disk allocated in bytes (overlay + volumes)
+	DiskBytes *int64 `json:"disk_bytes,omitempty"`
+
+	// InstanceId Instance identifier
+	InstanceId *string `json:"instance_id,omitempty"`
+
+	// InstanceName Instance name
+	InstanceName *string `json:"instance_name,omitempty"`
+
+	// MemoryBytes Memory allocated in bytes
+	MemoryBytes *int64 `json:"memory_bytes,omitempty"`
+
+	// NetworkDownloadBps Download bandwidth limit in bytes/sec (external→VM)
+	NetworkDownloadBps *int64 `json:"network_download_bps,omitempty"`
+
+	// NetworkUploadBps Upload bandwidth limit in bytes/sec (VM→external)
+	NetworkUploadBps *int64 `json:"network_upload_bps,omitempty"`
+}
+
+// ResourceStatus defines model for ResourceStatus.
+type ResourceStatus struct {
+	// Allocated Currently allocated resources
+	Allocated int64 `json:"allocated"`
+
+	// Available Available for allocation (effective_limit - allocated)
+	Available int64 `json:"available"`
+
+	// Capacity Raw host capacity
+	Capacity int64 `json:"capacity"`
+
+	// EffectiveLimit Capacity after oversubscription (capacity * ratio)
+	EffectiveLimit int64 `json:"effective_limit"`
+
+	// OversubRatio Oversubscription ratio applied
+	OversubRatio float64 `json:"oversub_ratio"`
+
+	// Source How capacity was determined (detected, configured)
+	Source *string `json:"source,omitempty"`
+
+	// Type Resource type
+	Type string `json:"type"`
+}
+
+// Resources defines model for Resources.
+type Resources struct {
+	Allocations   []ResourceAllocation `json:"allocations"`
+	Cpu           ResourceStatus       `json:"cpu"`
+	Disk          ResourceStatus       `json:"disk"`
+	DiskBreakdown *DiskBreakdown       `json:"disk_breakdown,omitempty"`
+	Memory        ResourceStatus       `json:"memory"`
+	Network       ResourceStatus       `json:"network"`
+}
 
 // Volume defines model for Volume.
 type Volume struct {
@@ -577,6 +719,15 @@ type GetInstanceLogsParams struct {
 
 // GetInstanceLogsParamsSource defines parameters for GetInstanceLogs.
 type GetInstanceLogsParamsSource string
+
+// StatInstancePathParams defines parameters for StatInstancePath.
+type StatInstancePathParams struct {
+	// Path Path to stat in the guest filesystem
+	Path string `form:"path" json:"path"`
+
+	// FollowLinks Follow symbolic links (like stat vs lstat)
+	FollowLinks *bool `form:"follow_links,omitempty" json:"follow_links,omitempty"`
+}
 
 // CreateVolumeMultipartBody defines parameters for CreateVolume.
 type CreateVolumeMultipartBody struct {
@@ -779,6 +930,9 @@ type ClientInterface interface {
 	// StartInstance request
 	StartInstance(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// StatInstancePath request
+	StatInstancePath(ctx context.Context, id string, params *StatInstancePathParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// StopInstance request
 	StopInstance(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -789,6 +943,9 @@ type ClientInterface interface {
 	AttachVolumeWithBody(ctx context.Context, id string, volumeId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	AttachVolume(ctx context.Context, id string, volumeId string, body AttachVolumeJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetResources request
+	GetResources(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ListVolumes request
 	ListVolumes(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -1177,6 +1334,18 @@ func (c *Client) StartInstance(ctx context.Context, id string, reqEditors ...Req
 	return c.Client.Do(req)
 }
 
+func (c *Client) StatInstancePath(ctx context.Context, id string, params *StatInstancePathParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewStatInstancePathRequest(c.Server, id, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 func (c *Client) StopInstance(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewStopInstanceRequest(c.Server, id)
 	if err != nil {
@@ -1215,6 +1384,18 @@ func (c *Client) AttachVolumeWithBody(ctx context.Context, id string, volumeId s
 
 func (c *Client) AttachVolume(ctx context.Context, id string, volumeId string, body AttachVolumeJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewAttachVolumeRequest(c.Server, id, volumeId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetResources(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetResourcesRequest(c.Server)
 	if err != nil {
 		return nil, err
 	}
@@ -2249,6 +2430,74 @@ func NewStartInstanceRequest(server string, id string) (*http.Request, error) {
 	return req, nil
 }
 
+// NewStatInstancePathRequest generates requests for StatInstancePath
+func NewStatInstancePathRequest(server string, id string, params *StatInstancePathParams) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "id", runtime.ParamLocationPath, id)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/instances/%s/stat", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		queryValues := queryURL.Query()
+
+		if queryFrag, err := runtime.StyleParamWithLocation("form", true, "path", runtime.ParamLocationQuery, params.Path); err != nil {
+			return nil, err
+		} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+			return nil, err
+		} else {
+			for k, v := range parsed {
+				for _, v2 := range v {
+					queryValues.Add(k, v2)
+				}
+			}
+		}
+
+		if params.FollowLinks != nil {
+
+			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "follow_links", runtime.ParamLocationQuery, *params.FollowLinks); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		queryURL.RawQuery = queryValues.Encode()
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewStopInstanceRequest generates requests for StopInstance
 func NewStopInstanceRequest(server string, id string) (*http.Request, error) {
 	var err error
@@ -2374,6 +2623,33 @@ func NewAttachVolumeRequestWithBody(server string, id string, volumeId string, c
 	}
 
 	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewGetResourcesRequest generates requests for GetResources
+func NewGetResourcesRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/resources")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
 
 	return req, nil
 }
@@ -2645,6 +2921,9 @@ type ClientWithResponsesInterface interface {
 	// StartInstanceWithResponse request
 	StartInstanceWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*StartInstanceResponse, error)
 
+	// StatInstancePathWithResponse request
+	StatInstancePathWithResponse(ctx context.Context, id string, params *StatInstancePathParams, reqEditors ...RequestEditorFn) (*StatInstancePathResponse, error)
+
 	// StopInstanceWithResponse request
 	StopInstanceWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*StopInstanceResponse, error)
 
@@ -2655,6 +2934,9 @@ type ClientWithResponsesInterface interface {
 	AttachVolumeWithBodyWithResponse(ctx context.Context, id string, volumeId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*AttachVolumeResponse, error)
 
 	AttachVolumeWithResponse(ctx context.Context, id string, volumeId string, body AttachVolumeJSONRequestBody, reqEditors ...RequestEditorFn) (*AttachVolumeResponse, error)
+
+	// GetResourcesWithResponse request
+	GetResourcesWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetResourcesResponse, error)
 
 	// ListVolumesWithResponse request
 	ListVolumesWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListVolumesResponse, error)
@@ -3326,6 +3608,31 @@ func (r StartInstanceResponse) StatusCode() int {
 	return 0
 }
 
+type StatInstancePathResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *PathInfo
+	JSON404      *Error
+	JSON409      *Error
+	JSON500      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r StatInstancePathResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r StatInstancePathResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
 type StopInstanceResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -3394,6 +3701,29 @@ func (r AttachVolumeResponse) Status() string {
 
 // StatusCode returns HTTPResponse.StatusCode
 func (r AttachVolumeResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type GetResourcesResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *Resources
+	JSON500      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r GetResourcesResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetResourcesResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
@@ -3773,6 +4103,15 @@ func (c *ClientWithResponses) StartInstanceWithResponse(ctx context.Context, id 
 	return ParseStartInstanceResponse(rsp)
 }
 
+// StatInstancePathWithResponse request returning *StatInstancePathResponse
+func (c *ClientWithResponses) StatInstancePathWithResponse(ctx context.Context, id string, params *StatInstancePathParams, reqEditors ...RequestEditorFn) (*StatInstancePathResponse, error) {
+	rsp, err := c.StatInstancePath(ctx, id, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseStatInstancePathResponse(rsp)
+}
+
 // StopInstanceWithResponse request returning *StopInstanceResponse
 func (c *ClientWithResponses) StopInstanceWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*StopInstanceResponse, error) {
 	rsp, err := c.StopInstance(ctx, id, reqEditors...)
@@ -3806,6 +4145,15 @@ func (c *ClientWithResponses) AttachVolumeWithResponse(ctx context.Context, id s
 		return nil, err
 	}
 	return ParseAttachVolumeResponse(rsp)
+}
+
+// GetResourcesWithResponse request returning *GetResourcesResponse
+func (c *ClientWithResponses) GetResourcesWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetResourcesResponse, error) {
+	rsp, err := c.GetResources(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetResourcesResponse(rsp)
 }
 
 // ListVolumesWithResponse request returning *ListVolumesResponse
@@ -4981,6 +5329,53 @@ func ParseStartInstanceResponse(rsp *http.Response) (*StartInstanceResponse, err
 	return response, nil
 }
 
+// ParseStatInstancePathResponse parses an HTTP response from a StatInstancePathWithResponse call
+func ParseStatInstancePathResponse(rsp *http.Response) (*StatInstancePathResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &StatInstancePathResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest PathInfo
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseStopInstanceResponse parses an HTTP response from a StopInstanceWithResponse call
 func ParseStopInstanceResponse(rsp *http.Response) (*StopInstanceResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -5102,6 +5497,39 @@ func ParseAttachVolumeResponse(rsp *http.Response) (*AttachVolumeResponse, error
 			return nil, err
 		}
 		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetResourcesResponse parses an HTTP response from a GetResourcesWithResponse call
+func ParseGetResourcesResponse(rsp *http.Response) (*GetResourcesResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetResourcesResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest Resources
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest Error
@@ -5372,6 +5800,9 @@ type ServerInterface interface {
 	// Start a stopped instance
 	// (POST /instances/{id}/start)
 	StartInstance(w http.ResponseWriter, r *http.Request, id string)
+	// Get filesystem path info
+	// (GET /instances/{id}/stat)
+	StatInstancePath(w http.ResponseWriter, r *http.Request, id string, params StatInstancePathParams)
 	// Stop instance (graceful shutdown)
 	// (POST /instances/{id}/stop)
 	StopInstance(w http.ResponseWriter, r *http.Request, id string)
@@ -5381,6 +5812,9 @@ type ServerInterface interface {
 	// Attach volume to instance
 	// (POST /instances/{id}/volumes/{volumeId})
 	AttachVolume(w http.ResponseWriter, r *http.Request, id string, volumeId string)
+	// Get host resource capacity and allocations
+	// (GET /resources)
+	GetResources(w http.ResponseWriter, r *http.Request)
 	// List volumes
 	// (GET /volumes)
 	ListVolumes(w http.ResponseWriter, r *http.Request)
@@ -5561,6 +5995,12 @@ func (_ Unimplemented) StartInstance(w http.ResponseWriter, r *http.Request, id 
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
+// Get filesystem path info
+// (GET /instances/{id}/stat)
+func (_ Unimplemented) StatInstancePath(w http.ResponseWriter, r *http.Request, id string, params StatInstancePathParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
 // Stop instance (graceful shutdown)
 // (POST /instances/{id}/stop)
 func (_ Unimplemented) StopInstance(w http.ResponseWriter, r *http.Request, id string) {
@@ -5576,6 +6016,12 @@ func (_ Unimplemented) DetachVolume(w http.ResponseWriter, r *http.Request, id s
 // Attach volume to instance
 // (POST /instances/{id}/volumes/{volumeId})
 func (_ Unimplemented) AttachVolume(w http.ResponseWriter, r *http.Request, id string, volumeId string) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Get host resource capacity and allocations
+// (GET /resources)
+func (_ Unimplemented) GetResources(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -6349,6 +6795,63 @@ func (siw *ServerInterfaceWrapper) StartInstance(w http.ResponseWriter, r *http.
 	handler.ServeHTTP(w, r)
 }
 
+// StatInstancePath operation middleware
+func (siw *ServerInterfaceWrapper) StatInstancePath(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", chi.URLParam(r, "id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params StatInstancePathParams
+
+	// ------------- Required query parameter "path" -------------
+
+	if paramValue := r.URL.Query().Get("path"); paramValue != "" {
+
+	} else {
+		siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "path"})
+		return
+	}
+
+	err = runtime.BindQueryParameter("form", true, true, "path", r.URL.Query(), &params.Path)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "path", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "follow_links" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "follow_links", r.URL.Query(), &params.FollowLinks)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "follow_links", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.StatInstancePath(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // StopInstance operation middleware
 func (siw *ServerInterfaceWrapper) StopInstance(w http.ResponseWriter, r *http.Request) {
 
@@ -6451,6 +6954,26 @@ func (siw *ServerInterfaceWrapper) AttachVolume(w http.ResponseWriter, r *http.R
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.AttachVolume(w, r, id, volumeId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetResources operation middleware
+func (siw *ServerInterfaceWrapper) GetResources(w http.ResponseWriter, r *http.Request) {
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetResources(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -6757,6 +7280,9 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 		r.Post(options.BaseURL+"/instances/{id}/start", wrapper.StartInstance)
 	})
 	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/instances/{id}/stat", wrapper.StatInstancePath)
+	})
+	r.Group(func(r chi.Router) {
 		r.Post(options.BaseURL+"/instances/{id}/stop", wrapper.StopInstance)
 	})
 	r.Group(func(r chi.Router) {
@@ -6764,6 +7290,9 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	})
 	r.Group(func(r chi.Router) {
 		r.Post(options.BaseURL+"/instances/{id}/volumes/{volumeId}", wrapper.AttachVolume)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/resources", wrapper.GetResources)
 	})
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/volumes", wrapper.ListVolumes)
@@ -7862,6 +8391,51 @@ func (response StartInstance500JSONResponse) VisitStartInstanceResponse(w http.R
 	return json.NewEncoder(w).Encode(response)
 }
 
+type StatInstancePathRequestObject struct {
+	Id     string `json:"id"`
+	Params StatInstancePathParams
+}
+
+type StatInstancePathResponseObject interface {
+	VisitStatInstancePathResponse(w http.ResponseWriter) error
+}
+
+type StatInstancePath200JSONResponse PathInfo
+
+func (response StatInstancePath200JSONResponse) VisitStatInstancePathResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type StatInstancePath404JSONResponse Error
+
+func (response StatInstancePath404JSONResponse) VisitStatInstancePathResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type StatInstancePath409JSONResponse Error
+
+func (response StatInstancePath409JSONResponse) VisitStatInstancePathResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type StatInstancePath500JSONResponse Error
+
+func (response StatInstancePath500JSONResponse) VisitStatInstancePathResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
 type StopInstanceRequestObject struct {
 	Id string `json:"id"`
 }
@@ -7982,6 +8556,31 @@ func (response AttachVolume409JSONResponse) VisitAttachVolumeResponse(w http.Res
 type AttachVolume500JSONResponse Error
 
 func (response AttachVolume500JSONResponse) VisitAttachVolumeResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetResourcesRequestObject struct {
+}
+
+type GetResourcesResponseObject interface {
+	VisitGetResourcesResponse(w http.ResponseWriter) error
+}
+
+type GetResources200JSONResponse Resources
+
+func (response GetResources200JSONResponse) VisitGetResourcesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetResources500JSONResponse Error
+
+func (response GetResources500JSONResponse) VisitGetResourcesResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(500)
 
@@ -8237,6 +8836,9 @@ type StrictServerInterface interface {
 	// Start a stopped instance
 	// (POST /instances/{id}/start)
 	StartInstance(ctx context.Context, request StartInstanceRequestObject) (StartInstanceResponseObject, error)
+	// Get filesystem path info
+	// (GET /instances/{id}/stat)
+	StatInstancePath(ctx context.Context, request StatInstancePathRequestObject) (StatInstancePathResponseObject, error)
 	// Stop instance (graceful shutdown)
 	// (POST /instances/{id}/stop)
 	StopInstance(ctx context.Context, request StopInstanceRequestObject) (StopInstanceResponseObject, error)
@@ -8246,6 +8848,9 @@ type StrictServerInterface interface {
 	// Attach volume to instance
 	// (POST /instances/{id}/volumes/{volumeId})
 	AttachVolume(ctx context.Context, request AttachVolumeRequestObject) (AttachVolumeResponseObject, error)
+	// Get host resource capacity and allocations
+	// (GET /resources)
+	GetResources(ctx context.Context, request GetResourcesRequestObject) (GetResourcesResponseObject, error)
 	// List volumes
 	// (GET /volumes)
 	ListVolumes(ctx context.Context, request ListVolumesRequestObject) (ListVolumesResponseObject, error)
@@ -9004,6 +9609,33 @@ func (sh *strictHandler) StartInstance(w http.ResponseWriter, r *http.Request, i
 	}
 }
 
+// StatInstancePath operation middleware
+func (sh *strictHandler) StatInstancePath(w http.ResponseWriter, r *http.Request, id string, params StatInstancePathParams) {
+	var request StatInstancePathRequestObject
+
+	request.Id = id
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.StatInstancePath(ctx, request.(StatInstancePathRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "StatInstancePath")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(StatInstancePathResponseObject); ok {
+		if err := validResponse.VisitStatInstancePathResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // StopInstance operation middleware
 func (sh *strictHandler) StopInstance(w http.ResponseWriter, r *http.Request, id string) {
 	var request StopInstanceRequestObject
@@ -9084,6 +9716,30 @@ func (sh *strictHandler) AttachVolume(w http.ResponseWriter, r *http.Request, id
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(AttachVolumeResponseObject); ok {
 		if err := validResponse.VisitAttachVolumeResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetResources operation middleware
+func (sh *strictHandler) GetResources(w http.ResponseWriter, r *http.Request) {
+	var request GetResourcesRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetResources(ctx, request.(GetResourcesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetResources")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetResourcesResponseObject); ok {
+		if err := validResponse.VisitGetResourcesResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -9212,117 +9868,139 @@ func (sh *strictHandler) GetVolume(w http.ResponseWriter, r *http.Request, id st
 // Base64 encoded, gzipped, json marshaled Swagger object
 var swaggerSpec = []string{
 
-	"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",
-	"AA==",
+	"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",
+	"FH5c59PCAAA=",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file

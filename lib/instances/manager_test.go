@@ -18,7 +18,8 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/onkernel/hypeman/cmd/api/config"
 	"github.com/onkernel/hypeman/lib/devices"
-	"github.com/onkernel/hypeman/lib/exec"
+	"github.com/onkernel/hypeman/lib/guest"
+	"github.com/onkernel/hypeman/lib/hypervisor"
 	"github.com/onkernel/hypeman/lib/images"
 	"github.com/onkernel/hypeman/lib/ingress"
 	"github.com/onkernel/hypeman/lib/network"
@@ -56,7 +57,7 @@ func setupTestManager(t *testing.T) (*manager, string) {
 		MaxTotalVcpus:        0,                        // unlimited
 		MaxTotalMemory:       0,                        // unlimited
 	}
-	mgr := NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, nil, nil).(*manager)
+	mgr := NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, "", nil, nil).(*manager)
 
 	// Register cleanup to kill any orphaned Cloud Hypervisor processes
 	t.Cleanup(func() {
@@ -157,12 +158,12 @@ func cleanupOrphanedProcesses(t *testing.T, mgr *manager) {
 		}
 
 		// If metadata has a PID, try to kill it
-		if meta.CHPID != nil {
-			pid := *meta.CHPID
+		if meta.HypervisorPID != nil {
+			pid := *meta.HypervisorPID
 
 			// Check if process exists
 			if err := syscall.Kill(pid, 0); err == nil {
-				t.Logf("Cleaning up orphaned Cloud Hypervisor process: PID %d (instance %s)", pid, id)
+				t.Logf("Cleaning up orphaned hypervisor process: PID %d (instance %s)", pid, id)
 				syscall.Kill(pid, syscall.SIGKILL)
 
 				// Wait for process to exit
@@ -603,13 +604,18 @@ func TestBasicEndToEnd(t *testing.T) {
 		var lastExitCode int
 		var lastErr error
 
+		dialer, err := hypervisor.NewVsockDialer(inst.HypervisorType, inst.VsockSocket, inst.VsockCID)
+		if err != nil {
+			return "", -1, err
+		}
+
 		for attempt := 0; attempt < 5; attempt++ {
 			if attempt > 0 {
 				time.Sleep(200 * time.Millisecond)
 			}
 
 			var stdout, stderr bytes.Buffer
-			exit, err := exec.ExecIntoInstance(ctx, inst.VsockSocket, exec.ExecOptions{
+			exit, err := guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{
 				Command: command,
 				Stdout:  &stdout,
 				Stderr:  &stderr,
@@ -765,7 +771,7 @@ func TestStorageOperations(t *testing.T) {
 		MaxTotalVcpus:        0,                        // unlimited
 		MaxTotalMemory:       0,                        // unlimited
 	}
-	manager := NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, nil, nil).(*manager)
+	manager := NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, "", nil, nil).(*manager)
 
 	// Test metadata doesn't exist initially
 	_, err := manager.loadMetadata("nonexistent")
@@ -773,18 +779,19 @@ func TestStorageOperations(t *testing.T) {
 
 	// Create instance metadata (stored fields only)
 	stored := &StoredMetadata{
-		Id:          "test-123",
-		Name:        "test",
-		Image:       "test:latest",
-		Size:        1024 * 1024 * 1024,
-		HotplugSize: 2048 * 1024 * 1024,
-		OverlaySize: 10 * 1024 * 1024 * 1024,
-		Vcpus:       2,
-		Env:         map[string]string{"TEST": "value"},
-		CreatedAt:   time.Now(),
-		CHVersion:   vmm.V49_0,
-		SocketPath:  "/tmp/test.sock",
-		DataDir:     paths.New(tmpDir).InstanceDir("test-123"),
+		Id:                "test-123",
+		Name:              "test",
+		Image:             "test:latest",
+		Size:              1024 * 1024 * 1024,
+		HotplugSize:       2048 * 1024 * 1024,
+		OverlaySize:       10 * 1024 * 1024 * 1024,
+		Vcpus:             2,
+		Env:               map[string]string{"TEST": "value"},
+		CreatedAt:         time.Now(),
+		HypervisorType:    hypervisor.TypeCloudHypervisor,
+		HypervisorVersion: string(vmm.V49_0),
+		SocketPath:        "/tmp/test.sock",
+		DataDir:           paths.New(tmpDir).InstanceDir("test-123"),
 	}
 
 	// Ensure directories

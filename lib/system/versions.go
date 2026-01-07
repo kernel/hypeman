@@ -74,5 +74,8 @@ func GetArch() string {
 	if arch == "amd64" {
 		return "x86_64"
 	}
+	if arch == "arm64" {
+		return "aarch64"
+	}
 	return arch
 }

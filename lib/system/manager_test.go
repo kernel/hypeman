@@ -58,16 +58,9 @@ func TestEnsureSystemFiles(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestInitScriptGeneration(t *testing.T) {
-	script := GenerateInitScript()
-
-	// Verify script contains essential components
-	assert.Contains(t, script, "#!/bin/sh")
-	assert.Contains(t, script, "mount -t overlay")
-	assert.Contains(t, script, "/dev/vda") // rootfs disk
-	assert.Contains(t, script, "/dev/vdb") // overlay disk
-	assert.Contains(t, script, "/dev/vdc") // config disk
-	assert.Contains(t, script, "exec-agent")  // vsock exec agent
-	assert.Contains(t, script, "${ENTRYPOINT}")
-	assert.Contains(t, script, "wait $APP_PID") // Supervisor pattern
+func TestInitBinaryEmbedded(t *testing.T) {
+	// Verify the init binary is embedded and has reasonable size
+	// The Go init binary should be at least 1MB when statically linked
+	assert.NotEmpty(t, InitBinary, "init binary should be embedded")
+	assert.Greater(t, len(InitBinary), 100000, "init binary should be at least 100KB")
 }

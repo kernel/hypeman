@@ -20,7 +20,12 @@ lib/vmm/binaries/cloud-hypervisor/*/*/cloud-hypervisor
 cloud-hypervisor
 cloud-hypervisor/**
 lib/system/exec_agent/exec-agent
+lib/system/guest_agent/guest-agent
+lib/system/init/init
 
 # Envoy binaries
 lib/ingress/binaries/**
 dist/**
+
+# UTM VM - downloaded ISO files
+scripts/utm/images/

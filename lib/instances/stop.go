@@ -54,12 +54,12 @@ func (m *manager) stopInstance(
 		}
 	}
 
-	// 4. Shutdown VMM process
+	// 4. Shutdown hypervisor process
 	// TODO: Add graceful shutdown via vsock signal to allow app to clean up
-	log.DebugContext(ctx, "shutting down VMM", "instance_id", id)
-	if err := m.shutdownVMM(ctx, &inst); err != nil {
+	log.DebugContext(ctx, "shutting down hypervisor", "instance_id", id)
+	if err := m.shutdownHypervisor(ctx, &inst); err != nil {
 		// Log but continue - try to clean up anyway
-		log.WarnContext(ctx, "failed to shutdown VMM gracefully", "instance_id", id, "error", err)
+		log.WarnContext(ctx, "failed to shutdown hypervisor gracefully", "instance_id", id, "error", err)
 	}
 
 	// 5. Release network allocation (delete TAP device)
@@ -74,7 +74,7 @@ func (m *manager) stopInstance(
 	// 6. Update metadata (clear PID, set StoppedAt)
 	now := time.Now()
 	stored.StoppedAt = &now
-	stored.CHPID = nil
+	stored.HypervisorPID = nil
 
 	meta = &metadata{StoredMetadata: *stored}
 	if err := m.saveMetadata(meta); err != nil {
@@ -84,8 +84,8 @@ func (m *manager) stopInstance(
 
 	// Record metrics
 	if m.metrics != nil {
-		m.recordDuration(ctx, m.metrics.stopDuration, start, "success")
-		m.recordStateTransition(ctx, string(StateRunning), string(StateStopped))
+		m.recordDuration(ctx, m.metrics.stopDuration, start, "success", stored.HypervisorType)
+		m.recordStateTransition(ctx, string(StateRunning), string(StateStopped), stored.HypervisorType)
 	}
 
 	// Return instance with derived state (should be Stopped now)

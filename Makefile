@@ -1,5 +1,5 @@
 SHELL := /bin/bash
-.PHONY: oapi-generate generate-vmm-client generate-wire generate-all dev build test install-tools gen-jwt download-ch-binaries download-ch-spec ensure-ch-binaries build-caddy-binaries build-caddy ensure-caddy-binaries build-preview-cli release-prep clean
+.PHONY: oapi-generate generate-vmm-client generate-wire generate-all dev build test install-tools gen-jwt download-ch-binaries download-ch-spec ensure-ch-binaries build-caddy-binaries build-caddy ensure-caddy-binaries  release-prep clean build-embedded
 
 # Directory where local binaries will be installed
 BIN_DIR ?= $(CURDIR)/bin
@@ -127,7 +127,7 @@ generate-grpc:
 	@echo "Generating gRPC code from proto..."
 	protoc --go_out=. --go_opt=paths=source_relative \
 		--go-grpc_out=. --go-grpc_opt=paths=source_relative \
-		lib/exec/exec.proto
+		lib/guest/guest.proto
 
 # Generate all code
 generate-all: oapi-generate generate-vmm-client generate-wire generate-grpc
@@ -135,7 +135,15 @@ generate-all: oapi-generate generate-vmm-client generate-wire generate-grpc
 # Check if CH binaries exist, download if missing
 .PHONY: ensure-ch-binaries
 ensure-ch-binaries:
-	@if [ ! -f lib/vmm/binaries/cloud-hypervisor/v48.0/x86_64/cloud-hypervisor ]; then \
+	@ARCH=$$(uname -m); \
+	if [ "$$ARCH" = "x86_64" ]; then \
+		CH_ARCH=x86_64; \
+	elif [ "$$ARCH" = "aarch64" ] || [ "$$ARCH" = "arm64" ]; then \
+		CH_ARCH=aarch64; \
+	else \
+		echo "Unsupported architecture: $$ARCH"; exit 1; \
+	fi; \
+	if [ ! -f lib/vmm/binaries/cloud-hypervisor/v48.0/$$CH_ARCH/cloud-hypervisor ]; then \
 		echo "Cloud Hypervisor binaries not found, downloading..."; \
 		$(MAKE) download-ch-binaries; \
 	fi
@@ -156,32 +164,41 @@ ensure-caddy-binaries:
 		$(MAKE) build-caddy; \
 	fi
 
-# Build exec-agent (guest binary) into its own directory for embedding
-lib/system/exec_agent/exec-agent: lib/system/exec_agent/main.go
-	@echo "Building exec-agent..."
-	cd lib/system/exec_agent && CGO_ENABLED=0 go build -ldflags="-s -w" -o exec-agent .
+# Build guest-agent (guest binary) into its own directory for embedding
+lib/system/guest_agent/guest-agent: lib/system/guest_agent/*.go
+	@echo "Building guest-agent..."
+	cd lib/system/guest_agent && CGO_ENABLED=0 go build -ldflags="-s -w" -o guest-agent .
+
+# Build init binary (runs as PID 1 in guest VM) for embedding
+lib/system/init/init: lib/system/init/*.go
+	@echo "Building init binary..."
+	cd lib/system/init && CGO_ENABLED=0 go build -ldflags="-s -w" -o init .
+
+build-embedded: lib/system/guest_agent/guest-agent lib/system/init/init
 
 # Build the binary
-build: ensure-ch-binaries ensure-caddy-binaries lib/system/exec_agent/exec-agent | $(BIN_DIR)
+build: ensure-ch-binaries ensure-caddy-binaries build-embedded | $(BIN_DIR)
 	go build -tags containers_image_openpgp -o $(BIN_DIR)/hypeman ./cmd/api
 
 # Build all binaries
 build-all: build
 
 # Run in development mode with hot reload
-dev: ensure-ch-binaries ensure-caddy-binaries lib/system/exec_agent/exec-agent $(AIR)
+dev: ensure-ch-binaries ensure-caddy-binaries build-embedded $(AIR)
 	@rm -f ./tmp/main
 	$(AIR) -c .air.toml
 
 # Run tests (as root for network capabilities, enables caching and parallelism)
 # Usage: make test                              - runs all tests
 #        make test TEST=TestCreateInstanceWithNetwork  - runs specific test
-test: ensure-ch-binaries ensure-caddy-binaries lib/system/exec_agent/exec-agent
-	@if [ -n "$(TEST)" ]; then \
+test: ensure-ch-binaries ensure-caddy-binaries build-embedded
+	@VERBOSE_FLAG=""; \
+	if [ -n "$(VERBOSE)" ]; then VERBOSE_FLAG="-v"; fi; \
+	if [ -n "$(TEST)" ]; then \
 		echo "Running specific test: $(TEST)"; \
-		sudo env "PATH=$$PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" go test -tags containers_image_openpgp -run=$(TEST) -v -timeout=180s ./...; \
+		sudo env "PATH=$$PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" go test -tags containers_image_openpgp -run=$(TEST) $$VERBOSE_FLAG -timeout=180s ./...; \
 	else \
-		sudo env "PATH=$$PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" go test -tags containers_image_openpgp -v -timeout=180s ./...; \
+		sudo env "PATH=$$PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" go test -tags containers_image_openpgp $$VERBOSE_FLAG -timeout=180s ./...; \
 	fi
 
 # Generate JWT token for testing
@@ -210,9 +227,10 @@ clean:
 	rm -rf $(BIN_DIR)
 	rm -rf lib/vmm/binaries/cloud-hypervisor/
 	rm -rf lib/ingress/binaries/
-	rm -f lib/system/exec_agent/exec-agent
+	rm -f lib/system/guest_agent/guest-agent
+	rm -f lib/system/init/init
 
 # Prepare for release build (called by GoReleaser)
 # Downloads all embedded binaries and builds embedded components
-release-prep: download-ch-binaries build-caddy-binaries lib/system/exec_agent/exec-agent
+release-prep: download-ch-binaries build-caddy-binaries build-embedded
 	go mod tidy
