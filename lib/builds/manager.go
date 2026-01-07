@@ -665,6 +665,17 @@ func (m *manager) RecoverPendingBuilds() {
 
 		// Re-enqueue the build
 		if meta.Request != nil {
+			// Regenerate registry token since the original token may have expired
+			// during server downtime. Token TTL is minimum 30 minutes.
+			if err := m.refreshBuildToken(meta.ID, meta.Request); err != nil {
+				m.logger.Error("failed to refresh registry token for recovered build",
+					"id", meta.ID, "error", err)
+				// Mark the build as failed since we can't refresh the token
+				errMsg := fmt.Sprintf("failed to refresh registry token on recovery: %v", err)
+				m.updateBuildComplete(meta.ID, StatusFailed, nil, &errMsg, nil, nil)
+				continue
+			}
+
 			m.queue.Enqueue(meta.ID, *meta.Request, func() {
 				policy := DefaultBuildPolicy()
 				if meta.Request.BuildPolicy != nil {
@@ -678,6 +689,49 @@ func (m *manager) RecoverPendingBuilds() {
 	if len(pending) > 0 {
 		m.logger.Info("recovered pending builds", "count", len(pending))
 	}
+}
+
+// refreshBuildToken regenerates the registry token for a build and updates the config file
+func (m *manager) refreshBuildToken(buildID string, req *CreateBuildRequest) error {
+	// Read existing build config
+	config, err := readBuildConfig(m.paths, buildID)
+	if err != nil {
+		return fmt.Errorf("read build config: %w", err)
+	}
+
+	// Determine token TTL from build policy
+	policy := DefaultBuildPolicy()
+	if req.BuildPolicy != nil {
+		policy = *req.BuildPolicy
+		policy.ApplyDefaults()
+	}
+	tokenTTL := time.Duration(policy.TimeoutSeconds) * time.Second
+	if tokenTTL < 30*time.Minute {
+		tokenTTL = 30 * time.Minute // Minimum 30 minutes
+	}
+
+	// Generate allowed repos list
+	allowedRepos := []string{fmt.Sprintf("builds/%s", buildID)}
+	if req.CacheScope != "" {
+		allowedRepos = append(allowedRepos, fmt.Sprintf("cache/%s", req.CacheScope))
+	}
+
+	// Generate fresh registry token
+	registryToken, err := m.tokenGenerator.GeneratePushToken(buildID, allowedRepos, tokenTTL)
+	if err != nil {
+		return fmt.Errorf("generate registry token: %w", err)
+	}
+
+	// Update config with new token
+	config.RegistryToken = registryToken
+
+	// Write updated config back to disk
+	if err := writeBuildConfig(m.paths, buildID, config); err != nil {
+		return fmt.Errorf("write build config: %w", err)
+	}
+
+	m.logger.Debug("refreshed registry token for recovered build", "id", buildID)
+	return nil
 }
 
 // Helper functions

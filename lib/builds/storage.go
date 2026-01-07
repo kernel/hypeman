@@ -12,19 +12,19 @@ import (
 
 // buildMetadata is the internal representation stored on disk
 type buildMetadata struct {
-	ID              string           `json:"id"`
-	Status          string           `json:"status"`
-	Runtime         string           `json:"runtime"`
+	ID              string              `json:"id"`
+	Status          string              `json:"status"`
+	Runtime         string              `json:"runtime"`
 	Request         *CreateBuildRequest `json:"request,omitempty"`
-	ImageDigest     *string          `json:"image_digest,omitempty"`
-	ImageRef        *string          `json:"image_ref,omitempty"`
-	Error           *string          `json:"error,omitempty"`
-	Provenance      *BuildProvenance `json:"provenance,omitempty"`
-	CreatedAt       time.Time        `json:"created_at"`
-	StartedAt       *time.Time       `json:"started_at,omitempty"`
-	CompletedAt     *time.Time       `json:"completed_at,omitempty"`
-	DurationMS      *int64           `json:"duration_ms,omitempty"`
-	BuilderInstance *string          `json:"builder_instance,omitempty"` // Instance ID of builder VM
+	ImageDigest     *string             `json:"image_digest,omitempty"`
+	ImageRef        *string             `json:"image_ref,omitempty"`
+	Error           *string             `json:"error,omitempty"`
+	Provenance      *BuildProvenance    `json:"provenance,omitempty"`
+	CreatedAt       time.Time           `json:"created_at"`
+	StartedAt       *time.Time          `json:"started_at,omitempty"`
+	CompletedAt     *time.Time          `json:"completed_at,omitempty"`
+	DurationMS      *int64              `json:"duration_ms,omitempty"`
+	BuilderInstance *string             `json:"builder_instance,omitempty"` // Instance ID of builder VM
 }
 
 // toBuild converts internal metadata to the public Build type
@@ -225,3 +225,21 @@ func writeBuildConfig(p *paths.Paths, id string, config *BuildConfig) error {
 	return nil
 }
 
+// readBuildConfig reads the build config for a build
+func readBuildConfig(p *paths.Paths, id string) (*BuildConfig, error) {
+	configPath := p.BuildConfig(id)
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("read build config: %w", err)
+	}
+
+	var config BuildConfig
+	if err := json.Unmarshal(data, &config); err != nil {
+		return nil, fmt.Errorf("unmarshal build config: %w", err)
+	}
+
+	return &config, nil
+}
