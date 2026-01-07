@@ -22,7 +22,11 @@ describe('resource volumes', () => {
 
   // Prism tests are disabled
   test.skip('create: required and optional params', async () => {
-    const response = await client.volumes.create({ name: 'my-data-volume', size_gb: 10, id: 'vol-data-1' });
+    const response = await client.volumes.create({
+      name: 'my-data-volume',
+      size_gb: 10,
+      id: 'vol-data-1',
+    });
   });
 
   // Prism tests are disabled
