@@ -270,17 +270,16 @@ Builder images must include:
 
 ### Build and Push
 
-> **Important**: Images must be built with OCI manifest format for Hypeman.
-> See [`images/README.md`](./images/README.md) for detailed build instructions.
+See [`images/README.md`](./images/README.md) for detailed build instructions.
 
 ```bash
-# Build with OCI format (required for Hypeman)
-docker buildx build \
-  --platform linux/amd64 \
-  --output "type=registry,oci-mediatypes=true" \
-  --tag yourregistry/builder:latest \
+# Build and push the builder image
+docker build \
+  -t yourregistry/builder:latest \
   -f lib/builds/images/generic/Dockerfile \
   .
+
+docker push yourregistry/builder:latest
 ```
 
 ### Environment Variables
@@ -417,7 +416,7 @@ go test ./lib/builds/registry_token_test.go ./lib/builds/registry_token.go -v
 
 | Error | Cause | Solution |
 |-------|-------|----------|
-| `image not found` | Builder image not in OCI format | Push with `crane` after `docker buildx --output type=oci` |
+| `image not found` | Builder image not imported | Import image using `POST /images` endpoint |
 | `no cgroup mount found` | Cgroups not mounted in VM | Update init script to mount cgroups |
 | `http: server gave HTTP response to HTTPS client` | BuildKit using HTTPS for HTTP registry | Add `registry.insecure=true` to output flags |
 | `connection refused` to localhost:8080 | Registry URL not accessible from VM | Use gateway IP (10.102.0.1) instead of localhost |

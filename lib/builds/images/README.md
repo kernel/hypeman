@@ -44,57 +44,41 @@ images/
 
 ## Building the Generic Builder Image
 
-> **Important**: Hypeman uses `umoci` for OCI image manipulation, which requires images
-> to have **OCI manifest format** (not Docker v2 format). You must use `docker buildx`
-> with the `oci-mediatypes=true` option.
+Hypeman supports both Docker v2 and OCI image formats. You can use standard `docker build`
+or `docker buildx` - both work.
 
 ### Prerequisites
 
-1. **Docker Buildx** with a container builder:
-   ```bash
-   # Create a buildx builder (if you don't have one)
-   docker buildx create --name ocibuilder --use
-   ```
-
+1. **Docker** installed
 2. **Docker Hub login** (or your registry):
    ```bash
    docker login
    ```
 
-### 1. Build and Push with OCI Format
+### 1. Build and Push
 
 ```bash
 # From repository root
+docker build \
+  -t hirokernel/builder-generic:latest \
+  -f lib/builds/images/generic/Dockerfile \
+  .
+
+docker push hirokernel/builder-generic:latest
+```
+
+Or with buildx for multi-platform support:
+
+```bash
 docker buildx build \
   --platform linux/amd64 \
-  --output "type=registry,oci-mediatypes=true" \
+  --push \
   --tag hirokernel/builder-generic:latest \
   -f lib/builds/images/generic/Dockerfile \
   .
 ```
 
-This command:
-- Builds for `linux/amd64` platform
-- Uses `oci-mediatypes=true` to create OCI manifests (required for Hypeman)
-- Pushes directly to the registry
-
-### 2. Verify the Manifest Format
-
-```bash
-# Should show "application/vnd.oci.image.index.v1+json"
-docker manifest inspect hirokernel/builder-generic:latest | head -5
-```
-
-Expected output:
-```json
-{
-  "schemaVersion": 2,
-  "mediaType": "application/vnd.oci.image.index.v1+json",
-  ...
-}
-```
-
-### 3. Import into Hypeman
+### 2. Import into Hypeman
 
 ```bash
 # Generate a token
@@ -111,7 +95,7 @@ curl http://localhost:8083/images/docker.io%2Fhirokernel%2Fbuilder-generic:lates
   -H "Authorization: Bearer $TOKEN"
 ```
 
-### 4. Configure Hypeman
+### 3. Configure Hypeman
 
 Set the builder image in your `.env`:
 
@@ -119,23 +103,10 @@ Set the builder image in your `.env`:
 BUILDER_IMAGE=hirokernel/builder-generic:latest
 ```
 
-### Why OCI Format is Required
-
-| Build Method | Manifest Type | Works with Hypeman? |
-|--------------|---------------|---------------------|
-| `docker build` | Docker v2 (`application/vnd.docker.distribution.manifest.v2+json`) | ❌ No |
-| `docker buildx --output type=docker` | Docker v2 | ❌ No |
-| `docker buildx --output type=registry,oci-mediatypes=true` | OCI (`application/vnd.oci.image.index.v1+json`) | ✅ Yes |
-
-Hypeman uses `umoci` to extract and convert OCI images to ext4 disk images for microVMs.
-`umoci` strictly requires OCI-format manifests and cannot parse Docker v2 manifests.
-
 ### Building for Local Testing (without pushing)
 
-If you need to test locally before pushing:
-
 ```bash
-# Build and load to local Docker (for testing only - won't work with Hypeman import)
+# Build locally
 docker build \
   -t hypeman/builder:local \
   -f lib/builds/images/generic/Dockerfile \
@@ -144,10 +115,6 @@ docker build \
 # Run locally to test
 docker run --rm hypeman/builder:local --help
 ```
-
-**Note**: Images built with `docker build` cannot be imported into Hypeman directly.
-You must rebuild with `docker buildx --output type=registry,oci-mediatypes=true`
-before deploying to Hypeman.
 
 ## Usage
 
@@ -266,8 +233,7 @@ When the builder runs inside a Hypeman microVM:
 
 | Issue | Cause | Solution |
 |-------|-------|----------|
-| `manifest data is not v1.Manifest` | Image built with Docker v2 format | Rebuild with `docker buildx --output type=registry,oci-mediatypes=true` |
-| Image import stuck on `pending`/`failed` | Manifest format incompatible | Check manifest format with `docker manifest inspect` |
+| Image import stuck on `pending`/`failed` | Network or registry issue | Check Hypeman logs, verify registry access |
 | `Dockerfile required` | No Dockerfile in source or parameter | Include Dockerfile in tarball or pass as parameter |
 | `401 Unauthorized` during push | Registry token issue | Check builder agent logs, verify token generation |
 | `runc: not found` | BuildKit binaries missing | Rebuild the builder image |
@@ -281,14 +247,9 @@ When the builder runs inside a Hypeman microVM:
 # Check image status
 cat ~/hypeman_data_dir/images/docker.io/hirokernel/builder-generic/*/metadata.json | jq .
 
-# Check OCI cache for manifest format
+# Check OCI cache index
 cat ~/hypeman_data_dir/system/oci-cache/index.json | jq '.manifests[-1]'
-
-# Verify image on Docker Hub has OCI format
-skopeo inspect --raw docker://hirokernel/builder-generic:latest | head -5
 ```
-
-If you see `application/vnd.docker.distribution.manifest.v2+json`, the image needs to be rebuilt with OCI format.
 
 ## Migration from Runtime-Specific Images
 
