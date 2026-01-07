@@ -1,7 +1,6 @@
 package api
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -65,25 +64,50 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 				}, nil
 			}
 		case "runtime":
-			var buf bytes.Buffer
-			io.Copy(&buf, part)
-			runtime = buf.String()
+			data, err := io.ReadAll(part)
+			if err != nil {
+				return oapi.CreateBuild400JSONResponse{
+					Code:    "invalid_request",
+					Message: "failed to read runtime field",
+				}, nil
+			}
+			runtime = string(data)
 		case "base_image_digest":
-			var buf bytes.Buffer
-			io.Copy(&buf, part)
-			baseImageDigest = buf.String()
+			data, err := io.ReadAll(part)
+			if err != nil {
+				return oapi.CreateBuild400JSONResponse{
+					Code:    "invalid_request",
+					Message: "failed to read base_image_digest field",
+				}, nil
+			}
+			baseImageDigest = string(data)
 		case "cache_scope":
-			var buf bytes.Buffer
-			io.Copy(&buf, part)
-			cacheScope = buf.String()
+			data, err := io.ReadAll(part)
+			if err != nil {
+				return oapi.CreateBuild400JSONResponse{
+					Code:    "invalid_request",
+					Message: "failed to read cache_scope field",
+				}, nil
+			}
+			cacheScope = string(data)
 		case "dockerfile":
-			var buf bytes.Buffer
-			io.Copy(&buf, part)
-			dockerfile = buf.String()
+			data, err := io.ReadAll(part)
+			if err != nil {
+				return oapi.CreateBuild400JSONResponse{
+					Code:    "invalid_request",
+					Message: "failed to read dockerfile field",
+				}, nil
+			}
+			dockerfile = string(data)
 		case "timeout_seconds":
-			var buf bytes.Buffer
-			io.Copy(&buf, part)
-			if v, err := strconv.Atoi(buf.String()); err == nil {
+			data, err := io.ReadAll(part)
+			if err != nil {
+				return oapi.CreateBuild400JSONResponse{
+					Code:    "invalid_request",
+					Message: "failed to read timeout_seconds field",
+				}, nil
+			}
+			if v, err := strconv.Atoi(string(data)); err == nil {
 				timeoutSeconds = v
 			}
 		}
@@ -294,4 +318,3 @@ func (r *stringReaderImpl) Read(p []byte) (n int, err error) {
 	r.i += n
 	return n, nil
 }
-

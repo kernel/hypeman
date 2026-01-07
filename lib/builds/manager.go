@@ -325,7 +325,7 @@ func (m *manager) executeBuild(ctx context.Context, id string, req CreateBuildRe
 	if err != nil {
 		return nil, fmt.Errorf("create source volume: %w", err)
 	}
-	defer m.volumeManager.DeleteVolume(ctx, sourceVolID)
+	defer m.volumeManager.DeleteVolume(context.Background(), sourceVolID)
 
 	// Create config volume with build.json for the builder agent
 	configVolID := fmt.Sprintf("build-config-%s", id)
@@ -346,17 +346,17 @@ func (m *manager) executeBuild(ctx context.Context, id string, req CreateBuildRe
 		// by copying it to the expected location
 		volPath := m.paths.VolumeData(configVolID)
 		if copyErr := copyFile(configVolPath, volPath); copyErr != nil {
-			return nil, fmt.Errorf("setup config volume: %w", err)
+			return nil, fmt.Errorf("setup config volume: %w", copyErr)
 		}
 	} else {
 		// Copy our config disk over the empty volume
 		volPath := m.paths.VolumeData(configVolID)
 		if err := copyFile(configVolPath, volPath); err != nil {
-			m.volumeManager.DeleteVolume(ctx, configVolID)
+			m.volumeManager.DeleteVolume(context.Background(), configVolID)
 			return nil, fmt.Errorf("write config to volume: %w", err)
 		}
 	}
-	defer m.volumeManager.DeleteVolume(ctx, configVolID)
+	defer m.volumeManager.DeleteVolume(context.Background(), configVolID)
 
 	// Create builder instance
 	builderName := fmt.Sprintf("builder-%s", id)
