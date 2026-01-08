@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -41,6 +42,11 @@ type Manager interface {
 
 	// GetBuildLogs returns the logs for a build
 	GetBuildLogs(ctx context.Context, id string) ([]byte, error)
+
+	// StreamBuildEvents streams build events (logs, status changes, heartbeats)
+	// With follow=false, returns existing logs then closes
+	// With follow=true, continues streaming until build completes or context cancels
+	StreamBuildEvents(ctx context.Context, id string, follow bool) (<-chan BuildEvent, error)
 
 	// RecoverPendingBuilds recovers builds that were interrupted on restart
 	RecoverPendingBuilds()
@@ -87,6 +93,10 @@ type manager struct {
 	logger          *slog.Logger
 	metrics         *Metrics
 	createMu        sync.Mutex
+
+	// Status subscription system for SSE streaming
+	statusSubscribers map[string][]chan BuildEvent
+	subscriberMu      sync.RWMutex
 }
 
 // NewManager creates a new build manager
@@ -104,14 +114,15 @@ func NewManager(
 	}
 
 	m := &manager{
-		config:          config,
-		paths:           p,
-		queue:           NewBuildQueue(config.MaxConcurrentBuilds),
-		instanceManager: instanceMgr,
-		volumeManager:   volumeMgr,
-		secretProvider:  secretProvider,
-		tokenGenerator:  NewRegistryTokenGenerator(config.RegistrySecret),
-		logger:          logger,
+		config:            config,
+		paths:             p,
+		queue:             NewBuildQueue(config.MaxConcurrentBuilds),
+		instanceManager:   instanceMgr,
+		volumeManager:     volumeMgr,
+		secretProvider:    secretProvider,
+		tokenGenerator:    NewRegistryTokenGenerator(config.RegistrySecret),
+		logger:            logger,
+		statusSubscribers: make(map[string][]chan BuildEvent),
 	}
 
 	// Initialize metrics if meter is provided
@@ -563,6 +574,9 @@ func (m *manager) updateStatus(id string, status string, err error) {
 	if writeErr := writeMetadata(m.paths, meta); writeErr != nil {
 		m.logger.Error("write metadata for status update", "id", id, "error", writeErr)
 	}
+
+	// Notify subscribers of status change
+	m.notifyStatusChange(id, status)
 }
 
 // updateBuildComplete updates the build with final results
@@ -584,6 +598,55 @@ func (m *manager) updateBuildComplete(id string, status string, digest *string, 
 
 	if writeErr := writeMetadata(m.paths, meta); writeErr != nil {
 		m.logger.Error("write metadata for completion", "id", id, "error", writeErr)
+	}
+
+	// Notify subscribers of status change
+	m.notifyStatusChange(id, status)
+}
+
+// subscribeToStatus adds a subscriber channel for status updates on a build
+func (m *manager) subscribeToStatus(buildID string, ch chan BuildEvent) {
+	m.subscriberMu.Lock()
+	defer m.subscriberMu.Unlock()
+	m.statusSubscribers[buildID] = append(m.statusSubscribers[buildID], ch)
+}
+
+// unsubscribeFromStatus removes a subscriber channel
+func (m *manager) unsubscribeFromStatus(buildID string, ch chan BuildEvent) {
+	m.subscriberMu.Lock()
+	defer m.subscriberMu.Unlock()
+
+	subscribers := m.statusSubscribers[buildID]
+	for i, sub := range subscribers {
+		if sub == ch {
+			m.statusSubscribers[buildID] = append(subscribers[:i], subscribers[i+1:]...)
+			break
+		}
+	}
+
+	// Clean up empty subscriber lists
+	if len(m.statusSubscribers[buildID]) == 0 {
+		delete(m.statusSubscribers, buildID)
+	}
+}
+
+// notifyStatusChange broadcasts a status change to all subscribers
+func (m *manager) notifyStatusChange(buildID string, status string) {
+	m.subscriberMu.RLock()
+	defer m.subscriberMu.RUnlock()
+
+	event := BuildEvent{
+		Type:      EventTypeStatus,
+		Timestamp: time.Now(),
+		Status:    status,
+	}
+
+	for _, ch := range m.statusSubscribers[buildID] {
+		// Non-blocking send - drop if channel is full
+		select {
+		case ch <- event:
+		default:
+		}
 	}
 }
 
@@ -664,6 +727,161 @@ func (m *manager) GetBuildLogs(ctx context.Context, id string) ([]byte, error) {
 	}
 
 	return readLog(m.paths, id)
+}
+
+// StreamBuildEvents streams build events (logs, status changes, heartbeats)
+func (m *manager) StreamBuildEvents(ctx context.Context, id string, follow bool) (<-chan BuildEvent, error) {
+	meta, err := readMetadata(m.paths, id)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create output channel
+	out := make(chan BuildEvent, 100)
+
+	// Check if build is already complete
+	isComplete := meta.Status == StatusReady || meta.Status == StatusFailed || meta.Status == StatusCancelled
+
+	go func() {
+		defer close(out)
+
+		// Create a channel for status updates
+		statusChan := make(chan BuildEvent, 10)
+		if follow && !isComplete {
+			m.subscribeToStatus(id, statusChan)
+			defer m.unsubscribeFromStatus(id, statusChan)
+		}
+
+		// Stream existing logs using tail
+		logPath := m.paths.BuildLog(id)
+
+		// Check if log file exists
+		if _, err := os.Stat(logPath); os.IsNotExist(err) {
+			// No logs yet - if not following, just return
+			if !follow || isComplete {
+				return
+			}
+			// Wait for log file to appear, or for build to complete
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case event := <-statusChan:
+					select {
+					case out <- event:
+					case <-ctx.Done():
+						return
+					}
+					// Check if build completed
+					if event.Status == StatusReady || event.Status == StatusFailed || event.Status == StatusCancelled {
+						return
+					}
+				case <-time.After(500 * time.Millisecond):
+					if _, err := os.Stat(logPath); err == nil {
+						break // Log file appeared
+					}
+					continue
+				}
+				break
+			}
+		}
+
+		// Build tail command args
+		args := []string{"-n", "+1"} // Start from beginning
+		if follow && !isComplete {
+			args = append(args, "-f")
+		}
+		args = append(args, logPath)
+
+		cmd := exec.CommandContext(ctx, "tail", args...)
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			m.logger.Error("create stdout pipe for build logs", "id", id, "error", err)
+			return
+		}
+
+		if err := cmd.Start(); err != nil {
+			m.logger.Error("start tail for build logs", "id", id, "error", err)
+			return
+		}
+
+		// Goroutine to read log lines
+		logLines := make(chan string, 100)
+		go func() {
+			defer close(logLines)
+			scanner := bufio.NewScanner(stdout)
+			for scanner.Scan() {
+				select {
+				case logLines <- scanner.Text():
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+
+		// Heartbeat ticker (30 seconds)
+		heartbeatTicker := time.NewTicker(30 * time.Second)
+		defer heartbeatTicker.Stop()
+
+		// Main event loop
+		for {
+			select {
+			case <-ctx.Done():
+				cmd.Process.Kill()
+				return
+
+			case line, ok := <-logLines:
+				if !ok {
+					// Log stream ended - wait for tail to exit
+					cmd.Wait()
+					return
+				}
+				event := BuildEvent{
+					Type:      EventTypeLog,
+					Timestamp: time.Now(),
+					Content:   line,
+				}
+				select {
+				case out <- event:
+				case <-ctx.Done():
+					cmd.Process.Kill()
+					return
+				}
+
+			case event := <-statusChan:
+				select {
+				case out <- event:
+				case <-ctx.Done():
+					cmd.Process.Kill()
+					return
+				}
+				// Check if build completed
+				if event.Status == StatusReady || event.Status == StatusFailed || event.Status == StatusCancelled {
+					// Give a moment for final logs to come through
+					time.Sleep(100 * time.Millisecond)
+					cmd.Process.Kill()
+					return
+				}
+
+			case <-heartbeatTicker.C:
+				if !follow {
+					continue
+				}
+				event := BuildEvent{
+					Type:      EventTypeHeartbeat,
+					Timestamp: time.Now(),
+				}
+				select {
+				case out <- event:
+				case <-ctx.Done():
+					cmd.Process.Kill()
+					return
+				}
+			}
+		}
+	}()
+
+	return out, nil
 }
 
 // RecoverPendingBuilds recovers builds that were interrupted on restart

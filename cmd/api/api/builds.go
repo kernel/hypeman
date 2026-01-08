@@ -2,8 +2,11 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"net/http"
 	"strconv"
 
 	"github.com/onkernel/hypeman/lib/builds"
@@ -204,11 +207,19 @@ func (s *ApiService) CancelBuild(ctx context.Context, request oapi.CancelBuildRe
 	return oapi.CancelBuild204Response{}, nil
 }
 
-// GetBuildEvents streams build events
+// GetBuildEvents streams build events via SSE
+// With follow=false (default), streams existing logs then closes
+// With follow=true, continues streaming until build completes
 func (s *ApiService) GetBuildEvents(ctx context.Context, request oapi.GetBuildEventsRequestObject) (oapi.GetBuildEventsResponseObject, error) {
 	log := logger.FromContext(ctx)
 
-	logs, err := s.BuildManager.GetBuildLogs(ctx, request.Id)
+	// Parse follow parameter (default false)
+	follow := false
+	if request.Params.Follow != nil {
+		follow = *request.Params.Follow
+	}
+
+	eventChan, err := s.BuildManager.StreamBuildEvents(ctx, request.Id, follow)
 	if err != nil {
 		if errors.Is(err, builds.ErrNotFound) {
 			return oapi.GetBuildEvents404JSONResponse{
@@ -216,19 +227,42 @@ func (s *ApiService) GetBuildEvents(ctx context.Context, request oapi.GetBuildEv
 				Message: "build not found",
 			}, nil
 		}
-		log.ErrorContext(ctx, "failed to get build events", "error", err, "id", request.Id)
+		log.ErrorContext(ctx, "failed to stream build events", "error", err, "id", request.Id)
 		return oapi.GetBuildEvents500JSONResponse{
 			Code:    "internal_error",
-			Message: "failed to get build events",
+			Message: "failed to stream build events",
 		}, nil
 	}
 
-	// Return logs as SSE events
-	// TODO: Implement proper SSE streaming with follow support and typed events
-	return oapi.GetBuildEvents200TexteventStreamResponse{
-		Body:          stringReader(string(logs)),
-		ContentLength: int64(len(logs)),
-	}, nil
+	return buildEventsStreamResponse{eventChan: eventChan}, nil
+}
+
+// buildEventsStreamResponse implements oapi.GetBuildEventsResponseObject with proper SSE streaming
+type buildEventsStreamResponse struct {
+	eventChan <-chan builds.BuildEvent
+}
+
+func (r buildEventsStreamResponse) VisitGetBuildEventsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no") // Disable nginx buffering
+	w.WriteHeader(200)
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		return fmt.Errorf("streaming not supported")
+	}
+
+	for event := range r.eventChan {
+		jsonEvent, err := json.Marshal(event)
+		if err != nil {
+			continue
+		}
+		fmt.Fprintf(w, "data: %s\n\n", jsonEvent)
+		flusher.Flush()
+	}
+	return nil
 }
 
 // buildToOAPI converts a domain Build to OAPI Build
@@ -261,21 +295,3 @@ func buildToOAPI(b *builds.Build) oapi.Build {
 	return oapiBuild
 }
 
-// stringReader wraps a string as an io.Reader
-type stringReaderImpl struct {
-	s string
-	i int
-}
-
-func stringReader(s string) io.Reader {
-	return &stringReaderImpl{s: s}
-}
-
-func (r *stringReaderImpl) Read(p []byte) (n int, err error) {
-	if r.i >= len(r.s) {
-		return 0, io.EOF
-	}
-	n = copy(p, r.s[r.i:])
-	r.i += n
-	return n, nil
-}

@@ -36,15 +36,17 @@ Outstanding issues and improvements for the build system.
 
 ## 🟡 Medium Priority - Implementation TODOs
 
-### 4. SSE Streaming Implementation
+### 4. ~~SSE Streaming Implementation~~ ✅ DONE
 
-**File:** `cmd/api/api/builds.go` (L227)
+**Files:** `cmd/api/api/builds.go`, `lib/builds/manager.go`, `lib/builds/types.go`
 
-```go
-// TODO: Implement proper SSE streaming with follow support and typed events
-```
-
-**Description:** The `/builds/{id}/events` endpoint should stream typed events (`LogEvent`, `BuildStatusEvent`) with proper SSE formatting, heartbeat events, and `follow` query parameter support.
+**Status:** Implemented proper SSE streaming with:
+- `BuildEvent` type with `log`, `status`, and `heartbeat` event types
+- `StreamBuildEvents` method in Manager with real-time log tailing via `tail -f`
+- Status subscription system for broadcasting status changes to SSE clients
+- Heartbeat events every 30 seconds in follow mode
+- `follow` query parameter support
+- Unit tests for all streaming scenarios
 
 ---
 
@@ -117,4 +119,5 @@ Outstanding issues and improvements for the build system.
 - [x] Verify vsock read deadline handling (already fixed with goroutine pattern)
 - [x] E2E test enhancement - run VM with built image
 - [x] Build manager unit tests with mocked dependencies
+- [x] SSE streaming implementation with typed events, follow mode, and heartbeats
 

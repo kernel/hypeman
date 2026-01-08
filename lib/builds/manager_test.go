@@ -252,14 +252,15 @@ func setupTestManager(t *testing.T) (*manager, *mockInstanceManager, *mockVolume
 
 	// Create manager (without calling NewManager to avoid RecoverPendingBuilds)
 	mgr := &manager{
-		config:          config,
-		paths:           p,
-		queue:           NewBuildQueue(config.MaxConcurrentBuilds),
-		instanceManager: instanceMgr,
-		volumeManager:   volumeMgr,
-		secretProvider:  secretProvider,
-		tokenGenerator:  NewRegistryTokenGenerator(config.RegistrySecret),
-		logger:          logger,
+		config:            config,
+		paths:             p,
+		queue:             NewBuildQueue(config.MaxConcurrentBuilds),
+		instanceManager:   instanceMgr,
+		volumeManager:     volumeMgr,
+		secretProvider:    secretProvider,
+		tokenGenerator:    NewRegistryTokenGenerator(config.RegistrySecret),
+		logger:            logger,
+		statusSubscribers: make(map[string][]chan BuildEvent),
 	}
 
 	return mgr, instanceMgr, volumeMgr, tempDir
@@ -692,5 +693,197 @@ func TestCreateBuild_MultipleConcurrent(t *testing.T) {
 	for _, b := range builds {
 		assert.False(t, ids[b.ID], "duplicate build ID: %s", b.ID)
 		ids[b.ID] = true
+	}
+}
+
+func TestStreamBuildEvents_NotFound(t *testing.T) {
+	mgr, _, _, tempDir := setupTestManager(t)
+	defer os.RemoveAll(tempDir)
+
+	ctx := context.Background()
+
+	_, err := mgr.StreamBuildEvents(ctx, "nonexistent-id", false)
+	assert.Error(t, err)
+}
+
+func TestStreamBuildEvents_ExistingLogs(t *testing.T) {
+	mgr, _, _, tempDir := setupTestManager(t)
+	defer os.RemoveAll(tempDir)
+
+	ctx := context.Background()
+
+	// Create a build
+	req := CreateBuildRequest{Dockerfile: "FROM alpine"}
+	sourceData := []byte("fake-tarball-data")
+	build, err := mgr.CreateBuild(ctx, req, sourceData)
+	require.NoError(t, err)
+
+	// Write some logs directly
+	logDir := filepath.Join(tempDir, "builds", build.ID, "logs")
+	require.NoError(t, os.MkdirAll(logDir, 0755))
+	logPath := filepath.Join(logDir, "build.log")
+	require.NoError(t, os.WriteFile(logPath, []byte("line1\nline2\nline3\n"), 0644))
+
+	// Stream events without follow
+	eventChan, err := mgr.StreamBuildEvents(ctx, build.ID, false)
+	require.NoError(t, err)
+
+	// Collect events
+	var events []BuildEvent
+	for event := range eventChan {
+		events = append(events, event)
+	}
+
+	// Should have 3 log events
+	assert.Len(t, events, 3)
+	for _, event := range events {
+		assert.Equal(t, EventTypeLog, event.Type)
+	}
+	assert.Equal(t, "line1", events[0].Content)
+	assert.Equal(t, "line2", events[1].Content)
+	assert.Equal(t, "line3", events[2].Content)
+}
+
+func TestStreamBuildEvents_NoLogs(t *testing.T) {
+	mgr, _, _, tempDir := setupTestManager(t)
+	defer os.RemoveAll(tempDir)
+
+	ctx := context.Background()
+
+	// Create a build
+	req := CreateBuildRequest{Dockerfile: "FROM alpine"}
+	sourceData := []byte("fake-tarball-data")
+	build, err := mgr.CreateBuild(ctx, req, sourceData)
+	require.NoError(t, err)
+
+	// Stream events without follow (no logs exist)
+	eventChan, err := mgr.StreamBuildEvents(ctx, build.ID, false)
+	require.NoError(t, err)
+
+	// Should close immediately with no events
+	var events []BuildEvent
+	for event := range eventChan {
+		events = append(events, event)
+	}
+	assert.Empty(t, events)
+}
+
+func TestStreamBuildEvents_WithStatusUpdate(t *testing.T) {
+	mgr, _, _, tempDir := setupTestManager(t)
+	defer os.RemoveAll(tempDir)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Create a build
+	req := CreateBuildRequest{Dockerfile: "FROM alpine"}
+	sourceData := []byte("fake-tarball-data")
+	build, err := mgr.CreateBuild(ctx, req, sourceData)
+	require.NoError(t, err)
+
+	// Write some initial logs
+	logDir := filepath.Join(tempDir, "builds", build.ID, "logs")
+	require.NoError(t, os.MkdirAll(logDir, 0755))
+	logPath := filepath.Join(logDir, "build.log")
+	require.NoError(t, os.WriteFile(logPath, []byte("initial log\n"), 0644))
+
+	// Stream events with follow
+	eventChan, err := mgr.StreamBuildEvents(ctx, build.ID, true)
+	require.NoError(t, err)
+
+	// Read events until we see the initial log
+	var foundInitialLog bool
+	timeout := time.After(2 * time.Second)
+eventLoop:
+	for !foundInitialLog {
+		select {
+		case event := <-eventChan:
+			if event.Type == EventTypeLog && event.Content == "initial log" {
+				foundInitialLog = true
+				break eventLoop
+			}
+			// Skip status events from queue (e.g. "building")
+		case <-timeout:
+			t.Fatal("timeout waiting for initial log event")
+		}
+	}
+
+	// Trigger a status update to "ready" (should cause stream to close)
+	mgr.updateStatus(build.ID, StatusReady, nil)
+
+	// Should receive "ready" status event and channel should close
+	var readyReceived bool
+	timeout = time.After(2 * time.Second)
+	for !readyReceived {
+		select {
+		case event, ok := <-eventChan:
+			if !ok {
+				// Channel closed, this is fine after status update
+				return
+			}
+			if event.Type == EventTypeStatus && event.Status == StatusReady {
+				readyReceived = true
+			}
+		case <-timeout:
+			t.Fatal("timeout waiting for ready status event")
+		}
+	}
+}
+
+func TestStreamBuildEvents_ContextCancellation(t *testing.T) {
+	mgr, _, _, tempDir := setupTestManager(t)
+	defer os.RemoveAll(tempDir)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Create a build
+	req := CreateBuildRequest{Dockerfile: "FROM alpine"}
+	sourceData := []byte("fake-tarball-data")
+	build, err := mgr.CreateBuild(ctx, req, sourceData)
+	require.NoError(t, err)
+
+	// Write some logs
+	logDir := filepath.Join(tempDir, "builds", build.ID, "logs")
+	require.NoError(t, os.MkdirAll(logDir, 0755))
+	logPath := filepath.Join(logDir, "build.log")
+	require.NoError(t, os.WriteFile(logPath, []byte("log line\n"), 0644))
+
+	// Stream events with follow
+	eventChan, err := mgr.StreamBuildEvents(ctx, build.ID, true)
+	require.NoError(t, err)
+
+	// Read events until we see the log line
+	var foundLogLine bool
+	timeout := time.After(2 * time.Second)
+eventLoop:
+	for !foundLogLine {
+		select {
+		case event := <-eventChan:
+			if event.Type == EventTypeLog && event.Content == "log line" {
+				foundLogLine = true
+				break eventLoop
+			}
+			// Skip status events from queue (e.g. "building")
+		case <-timeout:
+			t.Fatal("timeout waiting for log event")
+		}
+	}
+
+	// Cancel the context
+	cancel()
+
+	// Channel should close
+	timeout = time.After(2 * time.Second)
+	for {
+		select {
+		case _, ok := <-eventChan:
+			if !ok {
+				// Channel closed as expected
+				return
+			}
+			// May get more events before close, drain them
+		case <-timeout:
+			t.Fatal("timeout waiting for channel to close after cancel")
+		}
 	}
 }
