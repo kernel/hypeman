@@ -108,6 +108,7 @@ type Config struct {
 	BuilderImage              string // OCI image for builder VMs
 	RegistryURL               string // URL of registry for built images
 	BuildTimeout              int    // Default build timeout in seconds
+	BuildSecretsDir           string // Directory containing build secrets (optional)
 
 	// Hypervisor configuration
 	DefaultHypervisor string // Default hypervisor type: "cloud-hypervisor" or "qemu"
@@ -196,6 +197,7 @@ func Load() *Config {
 		BuilderImage:              getEnv("BUILDER_IMAGE", "hypeman/builder:latest"),
 		RegistryURL:               getEnv("REGISTRY_URL", "localhost:8080"),
 		BuildTimeout:              getEnvInt("BUILD_TIMEOUT", 600),
+		BuildSecretsDir:           getEnv("BUILD_SECRETS_DIR", ""), // Optional: path to directory with build secrets
 
 		// Hypervisor configuration
 		DefaultHypervisor: getEnv("DEFAULT_HYPERVISOR", "cloud-hypervisor"),
