@@ -50,15 +50,17 @@ Outstanding issues and improvements for the build system.
 
 ---
 
-### 5. Build Secrets
+### 5. ~~Build Secrets~~ ✅ DONE
 
-**File:** `lib/builds/builder_agent/main.go` (L239)
+**Files:** `lib/builds/manager.go`, `lib/builds/builder_agent/main.go`, `lib/builds/file_secret_provider.go`
 
-```go
-// TODO: Implement bidirectional secret fetching
-```
-
-**Description:** Allow builds to securely fetch secrets (e.g., npm tokens, pip credentials) via the vsock channel during the build process.
+**Status:** Implemented secure secret injection via vsock:
+- Host sends `host_ready` message when connected to builder agent
+- Agent requests secrets with `get_secrets` message containing secret IDs
+- Host responds with `secrets_response` containing secret values from `SecretProvider`
+- Agent writes secrets to `/run/secrets/{id}` for BuildKit consumption
+- `FileSecretProvider` reads secrets from a configurable directory
+- Unit tests for `FileSecretProvider` with path traversal protection
 
 ---
 
@@ -120,4 +122,5 @@ Outstanding issues and improvements for the build system.
 - [x] E2E test enhancement - run VM with built image
 - [x] Build manager unit tests with mocked dependencies
 - [x] SSE streaming implementation with typed events, follow mode, and heartbeats
+- [x] Build secrets via vsock with FileSecretProvider
 

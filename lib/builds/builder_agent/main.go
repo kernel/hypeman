@@ -77,10 +77,11 @@ type BuildProvenance struct {
 
 // VsockMessage is the envelope for vsock communication
 type VsockMessage struct {
-	Type    string            `json:"type"`
-	Result  *BuildResult      `json:"result,omitempty"`
-	Log     string            `json:"log,omitempty"`
-	Secrets map[string]string `json:"secrets,omitempty"` // For secrets response from host
+	Type      string            `json:"type"`
+	Result    *BuildResult      `json:"result,omitempty"`
+	Log       string            `json:"log,omitempty"`
+	SecretIDs []string          `json:"secret_ids,omitempty"` // For secrets request to host
+	Secrets   map[string]string `json:"secrets,omitempty"`    // For secrets response from host
 }
 
 // Global state for the result to send when host connects
@@ -88,6 +89,12 @@ var (
 	buildResult     *BuildResult
 	buildResultLock sync.Mutex
 	buildDone       = make(chan struct{})
+
+	// Secrets coordination
+	buildConfig     *BuildConfig
+	buildConfigLock sync.Mutex
+	secretsReady    = make(chan struct{})
+	secretsOnce     sync.Once
 )
 
 func main() {
@@ -151,6 +158,17 @@ func handleHostConnection(conn net.Conn) {
 		}
 
 		switch msg.Type {
+		case "host_ready":
+			// Host is ready to handle requests
+			// Request secrets if we have any configured
+			if err := handleSecretsRequest(encoder, decoder); err != nil {
+				log.Printf("Failed to fetch secrets: %v", err)
+			}
+			// Signal that secrets are ready (even if failed, build can proceed)
+			secretsOnce.Do(func() {
+				close(secretsReady)
+			})
+
 		case "get_result":
 			// Host is asking for the build result
 			// Wait for build to complete if not done yet
@@ -178,15 +196,78 @@ func handleHostConnection(conn net.Conn) {
 				encoder.Encode(VsockMessage{Type: "status", Log: "building"})
 			}
 
-		case "secrets_response":
-			// Host is sending secrets we requested
-			// This is handled inline during secret fetching
-			log.Printf("Received secrets response")
-
 		default:
 			log.Printf("Unknown message type: %s", msg.Type)
 		}
 	}
+}
+
+// handleSecretsRequest requests secrets from the host and writes them to /run/secrets/
+func handleSecretsRequest(encoder *json.Encoder, decoder *json.Decoder) error {
+	// Wait for config to be loaded
+	var config *BuildConfig
+	for i := 0; i < 30; i++ {
+		buildConfigLock.Lock()
+		config = buildConfig
+		buildConfigLock.Unlock()
+		if config != nil {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	if config == nil {
+		log.Printf("Config not loaded yet, skipping secrets")
+		return nil
+	}
+
+	if len(config.Secrets) == 0 {
+		log.Printf("No secrets configured")
+		return nil
+	}
+
+	// Extract secret IDs
+	secretIDs := make([]string, len(config.Secrets))
+	for i, s := range config.Secrets {
+		secretIDs[i] = s.ID
+	}
+
+	log.Printf("Requesting secrets: %v", secretIDs)
+
+	// Send get_secrets request
+	req := VsockMessage{
+		Type:      "get_secrets",
+		SecretIDs: secretIDs,
+	}
+	if err := encoder.Encode(req); err != nil {
+		return fmt.Errorf("send get_secrets: %w", err)
+	}
+
+	// Wait for secrets_response
+	var resp VsockMessage
+	if err := decoder.Decode(&resp); err != nil {
+		return fmt.Errorf("receive secrets_response: %w", err)
+	}
+
+	if resp.Type != "secrets_response" {
+		return fmt.Errorf("unexpected response type: %s", resp.Type)
+	}
+
+	// Write secrets to /run/secrets/
+	if err := os.MkdirAll("/run/secrets", 0700); err != nil {
+		return fmt.Errorf("create secrets dir: %w", err)
+	}
+
+	for id, value := range resp.Secrets {
+		secretPath := fmt.Sprintf("/run/secrets/%s", id)
+		if err := os.WriteFile(secretPath, []byte(value), 0600); err != nil {
+			return fmt.Errorf("write secret %s: %w", id, err)
+		}
+		log.Printf("Wrote secret: %s", id)
+	}
+
+	log.Printf("Received %d secrets", len(resp.Secrets))
+	return nil
 }
 
 // runBuildProcess runs the actual build and stores the result
@@ -214,6 +295,11 @@ func runBuildProcess() {
 	}
 	log.Printf("Job: %s", config.JobID)
 
+	// Store config globally so handleHostConnection can access it for secrets
+	buildConfigLock.Lock()
+	buildConfig = config
+	buildConfigLock.Unlock()
+
 	// Setup registry authentication before running the build
 	if err := setupRegistryAuth(config.RegistryURL, config.RegistryToken); err != nil {
 		setResult(BuildResult{
@@ -233,11 +319,27 @@ func runBuildProcess() {
 		defer cancel()
 	}
 
-	// Note: Secret fetching would need the host connection
-	// For now, we skip secrets if they require host communication
-	// TODO: Implement bidirectional secret fetching
+	// Wait for secrets if any are configured
 	if len(config.Secrets) > 0 {
-		log.Printf("Warning: Secrets requested but vsock secret fetching not yet implemented in new model")
+		log.Printf("Waiting for secrets from host...")
+		select {
+		case <-secretsReady:
+			log.Printf("Secrets ready, proceeding with build")
+		case <-time.After(30 * time.Second):
+			log.Printf("Warning: Timeout waiting for secrets, proceeding anyway")
+			// Signal secrets ready to avoid blocking other goroutines
+			secretsOnce.Do(func() {
+				close(secretsReady)
+			})
+		case <-ctx.Done():
+			setResult(BuildResult{
+				Success:    false,
+				Error:      "build timeout while waiting for secrets",
+				Logs:       logs.String(),
+				DurationMS: time.Since(start).Milliseconds(),
+			})
+			return
+		}
 	}
 
 	// Ensure Dockerfile exists (either in source or provided via config)

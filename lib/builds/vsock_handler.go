@@ -7,14 +7,18 @@ import (
 const (
 	// BuildAgentVsockPort is the port the builder agent listens on inside the guest
 	BuildAgentVsockPort = 5001
+
+	// SecretsVsockPort is the port the host listens on for secret requests from builder agents
+	SecretsVsockPort = 5002
 )
 
 // VsockMessage is the envelope for vsock communication with builder agents
 type VsockMessage struct {
-	Type    string            `json:"type"`
-	Result  *BuildResult      `json:"result,omitempty"`
-	Log     string            `json:"log,omitempty"`
-	Secrets map[string]string `json:"secrets,omitempty"` // For secrets response
+	Type      string            `json:"type"`
+	Result    *BuildResult      `json:"result,omitempty"`
+	Log       string            `json:"log,omitempty"`
+	SecretIDs []string          `json:"secret_ids,omitempty"` // For secrets request
+	Secrets   map[string]string `json:"secrets,omitempty"`    // For secrets response
 }
 
 // SecretsRequest is sent by the builder agent to fetch secrets

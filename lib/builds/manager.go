@@ -454,46 +454,71 @@ func (m *manager) waitForResult(ctx context.Context, inst *instances.Instance) (
 
 	m.logger.Info("connected to builder agent", "instance", inst.Id)
 
-	// Send request for result
 	encoder := json.NewEncoder(conn)
 	decoder := json.NewDecoder(conn)
 
-	// Request the build result (this will block until build completes)
-	if err := encoder.Encode(VsockMessage{Type: "get_result"}); err != nil {
-		return nil, fmt.Errorf("send get_result request: %w", err)
+	// Tell the agent we're ready - it may request secrets
+	if err := encoder.Encode(VsockMessage{Type: "host_ready"}); err != nil {
+		return nil, fmt.Errorf("send host_ready: %w", err)
 	}
 
-	// Use a goroutine for decoding so we can respect context cancellation.
-	// json.Decoder.Decode() doesn't respect context, so we need to close the
-	// connection to unblock it when the context is cancelled.
-	type decodeResult struct {
-		response VsockMessage
-		err      error
-	}
-	resultCh := make(chan decodeResult, 1)
-
-	go func() {
-		var response VsockMessage
-		err := decoder.Decode(&response)
-		resultCh <- decodeResult{response: response, err: err}
-	}()
-
-	// Wait for either the result or context cancellation
-	select {
-	case <-ctx.Done():
-		// Close the connection to unblock the decoder goroutine
-		conn.Close()
-		// Drain the result channel to avoid goroutine leak
-		<-resultCh
-		return nil, ctx.Err()
-	case dr := <-resultCh:
-		if dr.err != nil {
-			return nil, fmt.Errorf("read result: %w", dr.err)
+	// Handle messages from agent until we get the build result
+	for {
+		// Use a goroutine for decoding so we can respect context cancellation.
+		type decodeResult struct {
+			response VsockMessage
+			err      error
 		}
-		if dr.response.Type != "build_result" || dr.response.Result == nil {
-			return nil, fmt.Errorf("unexpected response type: %s", dr.response.Type)
+		resultCh := make(chan decodeResult, 1)
+
+		go func() {
+			var response VsockMessage
+			err := decoder.Decode(&response)
+			resultCh <- decodeResult{response: response, err: err}
+		}()
+
+		// Wait for either a message or context cancellation
+		var dr decodeResult
+		select {
+		case <-ctx.Done():
+			conn.Close()
+			<-resultCh
+			return nil, ctx.Err()
+		case dr = <-resultCh:
+			if dr.err != nil {
+				return nil, fmt.Errorf("read message: %w", dr.err)
+			}
 		}
-		return dr.response.Result, nil
+
+		// Handle message based on type
+		switch dr.response.Type {
+		case "get_secrets":
+			// Agent is requesting secrets
+			m.logger.Debug("agent requesting secrets", "instance", inst.Id, "secret_ids", dr.response.SecretIDs)
+
+			// Fetch secrets from provider
+			secrets, err := m.secretProvider.GetSecrets(ctx, dr.response.SecretIDs)
+			if err != nil {
+				m.logger.Error("failed to fetch secrets", "error", err)
+				secrets = make(map[string]string)
+			}
+
+			// Send secrets response
+			if err := encoder.Encode(VsockMessage{Type: "secrets_response", Secrets: secrets}); err != nil {
+				return nil, fmt.Errorf("send secrets response: %w", err)
+			}
+			m.logger.Debug("sent secrets to agent", "count", len(secrets))
+
+		case "build_result":
+			// Build completed
+			if dr.response.Result == nil {
+				return nil, fmt.Errorf("received build_result with nil result")
+			}
+			return dr.response.Result, nil
+
+		default:
+			m.logger.Warn("unexpected message type from agent", "type", dr.response.Type)
+		}
 	}
 }
 
