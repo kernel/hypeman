@@ -96,11 +96,26 @@ Outstanding issues and improvements for the build system.
 - `TestRegistryTokenGeneration` - Token generation verification
 - `TestCreateBuild_MultipleConcurrent` - Concurrent build creation
 
-### 8. Guest Agent on Builder VMs
+### 8. Enable cgroups for BuildKit Secrets
+
+**Issue:** When `--secret` flags are passed to BuildKit, runc requires cgroup mounts that aren't present in the microVM.
+
+**Error:** `runc run failed: no cgroup mount found in mountinfo`
+
+**Status:** The secrets API flow works correctly (host → vsock → agent → BuildKit flags), but BuildKit execution fails due to missing cgroups.
+
+**Potential Fixes:**
+- Enable cgroup support in the microVM kernel/rootfs
+- Use BuildKit in rootless mode without cgroup dependency
+- Configure BuildKit to use a different runc execution mode
+
+**Workaround:** Builds without secrets work fine. The secrets code is ready once cgroups are enabled.
+
+### 9. Guest Agent on Builder VMs
 
 **Suggestion:** Run the guest-agent on builder VMs to enable `exec` into failed builds for debugging.
 
-### 9. Builder Image Tooling
+### 10. Builder Image Tooling
 
 **File:** `lib/builds/images/README.md`
 
