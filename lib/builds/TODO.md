@@ -178,9 +178,20 @@ Cons:
 2. Rebuild initrd: `make initrd`
 3. Test builds with secrets
 
-### 9. Guest Agent on Builder VMs
+### 9. ~~Guest Agent on Builder VMs~~ ✅ DONE
 
-**Suggestion:** Run the guest-agent on builder VMs to enable `exec` into failed builds for debugging.
+**Files:** `lib/builds/images/generic/Dockerfile`, `lib/builds/builder_agent/main.go`
+
+**Status:** Implemented guest-agent support in builder VMs:
+- Builder Dockerfile now builds and includes `/usr/bin/guest-agent`
+- Builder-agent starts guest-agent at boot (before build starts)
+- Guest-agent listens on vsock port 2222 for exec requests
+
+**Limitation:** Currently can't test exec because:
+1. Builder instances are deleted immediately after build completion (success or failure)
+2. Builds fail due to cgroup issue (prevents long-running builds to exec into)
+
+**Future Enhancement:** Add `KeepFailedBuilders` option to keep failed build instances running for debugging.
 
 ### 10. Builder Image Tooling
 

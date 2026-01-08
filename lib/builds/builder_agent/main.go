@@ -100,6 +100,9 @@ var (
 func main() {
 	log.Println("=== Builder Agent Starting ===")
 
+	// Start guest-agent for exec/debugging support (runs in background)
+	startGuestAgent()
+
 	// Start vsock listener first (so host can connect as soon as VM is ready)
 	listener, err := startVsockListener()
 	if err != nil {
@@ -137,6 +140,38 @@ func startVsockListener() (*vsock.Listener, error) {
 	}
 
 	return nil, fmt.Errorf("failed to listen on vsock port %d after retries: %v", vsockPort, err)
+}
+
+// startGuestAgent starts the guest-agent binary for exec/debugging support.
+// The guest-agent listens on vsock port 2222 and provides exec capability
+// so operators can debug failed builds.
+func startGuestAgent() {
+	guestAgentPath := "/usr/bin/guest-agent"
+
+	// Check if guest-agent exists
+	if _, err := os.Stat(guestAgentPath); os.IsNotExist(err) {
+		log.Printf("guest-agent not found at %s (exec disabled)", guestAgentPath)
+		return
+	}
+
+	// Start guest-agent in background
+	cmd := exec.Command(guestAgentPath)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Start(); err != nil {
+		log.Printf("Failed to start guest-agent: %v", err)
+		return
+	}
+
+	log.Printf("Started guest-agent (PID %d) for exec support", cmd.Process.Pid)
+
+	// Let the process run in background - don't wait for it
+	go func() {
+		if err := cmd.Wait(); err != nil {
+			log.Printf("guest-agent exited: %v", err)
+		}
+	}()
 }
 
 // handleHostConnection handles a connection from the host

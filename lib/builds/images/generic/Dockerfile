@@ -1,10 +1,10 @@
 # Generic Builder Image
-# Contains rootless BuildKit + builder agent
+# Contains rootless BuildKit + builder agent + guest-agent for debugging
 # Builds any Dockerfile provided by the user
 
 FROM moby/buildkit:rootless AS buildkit
 
-# Build the builder-agent (multi-stage build from hypeman repo)
+# Build the builder-agent and guest-agent (multi-stage build from hypeman repo)
 FROM golang:1.25-alpine AS agent-builder
 
 WORKDIR /app
@@ -13,11 +13,17 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 
-# Copy only the builder_agent source
+# Copy the builder_agent and guest_agent sources
 COPY lib/builds/builder_agent/ ./lib/builds/builder_agent/
+COPY lib/system/guest_agent/ ./lib/system/guest_agent/
+# Only copy proto files for guest-agent (not client.go which has host-side deps)
+COPY lib/guest/guest.pb.go lib/guest/guest_grpc.pb.go ./lib/guest/
 
-# Build the agent
+# Build the builder-agent
 RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /builder-agent ./lib/builds/builder_agent
+
+# Build the guest-agent (for exec into builder VMs)
+RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /guest-agent ./lib/system/guest_agent
 
 # Final builder image - minimal alpine base
 FROM alpine:3.21
@@ -28,8 +34,9 @@ COPY --from=buildkit /usr/bin/buildctl-daemonless.sh /usr/bin/buildctl-daemonles
 COPY --from=buildkit /usr/bin/buildkitd /usr/bin/buildkitd
 COPY --from=buildkit /usr/bin/buildkit-runc /usr/bin/runc
 
-# Copy builder agent
+# Copy builder agent and guest agent
 COPY --from=agent-builder /builder-agent /usr/bin/builder-agent
+COPY --from=agent-builder /guest-agent /usr/bin/guest-agent
 
 # Install minimal dependencies
 RUN apk add --no-cache \
