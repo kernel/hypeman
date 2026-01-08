@@ -216,7 +216,7 @@ import_image() {
             jq --arg name "$IMAGE_NAME" '[.[] | select(.name == $name)] | .[0] // empty')
         
         if [ -z "$RESPONSE" ] || [ "$RESPONSE" = "null" ]; then
-            echo -ne "\r  Waiting for image... (poll $i/60)..."
+            echo -ne "\r  Waiting for image... (poll $i/60)..." >&2
             sleep 2
             continue
         fi
@@ -227,12 +227,14 @@ import_image() {
         
         case "$STATUS" in
             "ready")
+                echo "" >&2  # Clear the progress line
                 log "✓ Image is ready: $FOUND_NAME"
-                # Export the actual image name for use in instance creation
+                # Export the actual image name for use in instance creation (to stdout)
                 echo "$FOUND_NAME"
                 return 0
                 ;;
             "failed")
+                echo "" >&2  # Clear the progress line
                 error "Image import failed: $IMAGE_ERROR"
                 if echo "$IMAGE_ERROR" | grep -q "mediatype"; then
                     error "  Hint: The builder may be pushing Docker-format images instead of OCI format."
@@ -241,7 +243,7 @@ import_image() {
                 return 1
                 ;;
             "pending"|"pulling"|"converting")
-                echo -ne "\r  Status: $STATUS (poll $i/60)..."
+                echo -ne "\r  Status: $STATUS (poll $i/60)..." >&2
                 ;;
             *)
                 warn "Unknown status: $STATUS"
