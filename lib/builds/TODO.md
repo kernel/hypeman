@@ -52,7 +52,7 @@ Outstanding issues and improvements for the build system.
 
 ### 5. ~~Build Secrets~~ ✅ DONE
 
-**Files:** `lib/builds/manager.go`, `lib/builds/builder_agent/main.go`, `lib/builds/file_secret_provider.go`
+**Files:** `lib/builds/manager.go`, `lib/builds/builder_agent/main.go`, `lib/builds/file_secret_provider.go`, `cmd/api/api/builds.go`
 
 **Status:** Implemented secure secret injection via vsock:
 - Host sends `host_ready` message when connected to builder agent
@@ -61,6 +61,9 @@ Outstanding issues and improvements for the build system.
 - Agent writes secrets to `/run/secrets/{id}` for BuildKit consumption
 - `FileSecretProvider` reads secrets from a configurable directory
 - Unit tests for `FileSecretProvider` with path traversal protection
+- **Fixed vsock protocol deadlock** - agent now proactively sends `build_result` when complete
+- Added `secrets` field to POST `/builds` API endpoint (JSON array of `{"id": "..."}` objects)
+- E2E tested: builds complete successfully and logs stream via SSE
 
 ---
 
