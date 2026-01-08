@@ -97,9 +97,3 @@ Cons:
 **File:** `lib/builds/images/README.md`
 
 **Suggestion:** Create a script or tooling for building and publishing new builder images.
-
-### 3. Keep Failed Builders for Debugging
-
-**Suggestion:** Add `KeepFailedBuilders` option to keep failed build instances running for debugging via exec.
-
-Currently, builder instances are deleted immediately after build completion (success or failure), making it impossible to debug failed builds interactively.
