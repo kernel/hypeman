@@ -139,6 +139,28 @@ type BuildConfig struct {
 	NetworkMode string `json:"network_mode"`
 }
 
+// BuildEvent represents a typed SSE event for build streaming
+type BuildEvent struct {
+	// Type is one of "log", "status", or "heartbeat"
+	Type string `json:"type"`
+
+	// Timestamp is when the event occurred
+	Timestamp time.Time `json:"timestamp"`
+
+	// Content is the log line content (only for type="log")
+	Content string `json:"content,omitempty"`
+
+	// Status is the new build status (only for type="status")
+	Status string `json:"status,omitempty"`
+}
+
+// BuildEvent type constants
+const (
+	EventTypeLog       = "log"
+	EventTypeStatus    = "status"
+	EventTypeHeartbeat = "heartbeat"
+)
+
 // BuildResult is returned by the builder agent after a build completes
 type BuildResult struct {
 	// Success indicates whether the build succeeded
