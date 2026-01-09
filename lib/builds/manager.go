@@ -466,30 +466,30 @@ func (m *manager) waitForResult(ctx context.Context, inst *instances.Instance) (
 
 	// Handle messages from agent until we get the build result
 	for {
-		// Use a goroutine for decoding so we can respect context cancellation.
-		type decodeResult struct {
-			response VsockMessage
-			err      error
-		}
-		resultCh := make(chan decodeResult, 1)
+	// Use a goroutine for decoding so we can respect context cancellation.
+	type decodeResult struct {
+		response VsockMessage
+		err      error
+	}
+	resultCh := make(chan decodeResult, 1)
 
-		go func() {
-			var response VsockMessage
-			err := decoder.Decode(&response)
-			resultCh <- decodeResult{response: response, err: err}
-		}()
+	go func() {
+		var response VsockMessage
+		err := decoder.Decode(&response)
+		resultCh <- decodeResult{response: response, err: err}
+	}()
 
 		// Wait for either a message or context cancellation
 		var dr decodeResult
-		select {
-		case <-ctx.Done():
-			conn.Close()
-			<-resultCh
-			return nil, ctx.Err()
+	select {
+	case <-ctx.Done():
+		conn.Close()
+		<-resultCh
+		return nil, ctx.Err()
 		case dr = <-resultCh:
-			if dr.err != nil {
+		if dr.err != nil {
 				return nil, fmt.Errorf("read message: %w", dr.err)
-			}
+		}
 		}
 
 		// Handle message based on type
@@ -516,8 +516,8 @@ func (m *manager) waitForResult(ctx context.Context, inst *instances.Instance) (
 			// Build completed
 			if dr.response.Result == nil {
 				return nil, fmt.Errorf("received build_result with nil result")
-			}
-			return dr.response.Result, nil
+		}
+		return dr.response.Result, nil
 
 		default:
 			m.logger.Warn("unexpected message type from agent", "type", dr.response.Type)

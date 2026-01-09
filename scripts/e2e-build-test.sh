@@ -447,10 +447,10 @@ main() {
             "failed")
                 error "❌ Build failed!"
                 echo "$BUILD_RESPONSE" | jq .
-                echo ""
-                log "=== Build Logs ==="
-                get_logs "$TOKEN" "$BUILD_ID"
-                echo ""
+        echo ""
+        log "=== Build Logs ==="
+        get_logs "$TOKEN" "$BUILD_ID"
+        echo ""
                 error "=== E2E Test FAILED ==="
                 rm -f "$SOURCE"
                 exit 1
@@ -478,10 +478,10 @@ main() {
         exit 1
     fi
     
-    echo ""
-    log "=== Build Logs ==="
-    get_logs "$TOKEN" "$BUILD_ID"
-    echo ""
+        echo ""
+        log "=== Build Logs ==="
+        get_logs "$TOKEN" "$BUILD_ID"
+        echo ""
     
     # Run the built image (unless skipped)
     if [ "$SKIP_RUN" = "false" ]; then
@@ -494,9 +494,9 @@ main() {
                 log "✅ VM run test passed!"
             else
                 error "❌ VM run test failed!"
-                rm -f "$SOURCE"
-                exit 1
-            fi
+        rm -f "$SOURCE"
+        exit 1
+    fi
         else
             warn "No image_ref in build response, skipping VM test"
         fi
