@@ -843,6 +843,14 @@ func (m *manager) StreamBuildEvents(ctx context.Context, id string, follow bool)
 			return
 		}
 
+		// Ensure tail process is cleaned up on all exit paths to avoid zombie processes.
+		// Kill() is safe to call even if the process has already exited.
+		// Wait() reaps the process to prevent zombies.
+		defer func() {
+			cmd.Process.Kill()
+			cmd.Wait()
+		}()
+
 		// Goroutine to read log lines
 		logLines := make(chan string, 100)
 		go func() {
@@ -865,13 +873,11 @@ func (m *manager) StreamBuildEvents(ctx context.Context, id string, follow bool)
 		for {
 			select {
 			case <-ctx.Done():
-				cmd.Process.Kill()
 				return
 
 			case line, ok := <-logLines:
 				if !ok {
-					// Log stream ended - wait for tail to exit
-					cmd.Wait()
+					// Log stream ended
 					return
 				}
 				event := BuildEvent{
@@ -882,7 +888,6 @@ func (m *manager) StreamBuildEvents(ctx context.Context, id string, follow bool)
 				select {
 				case out <- event:
 				case <-ctx.Done():
-					cmd.Process.Kill()
 					return
 				}
 
@@ -890,14 +895,12 @@ func (m *manager) StreamBuildEvents(ctx context.Context, id string, follow bool)
 				select {
 				case out <- event:
 				case <-ctx.Done():
-					cmd.Process.Kill()
 					return
 				}
 				// Check if build completed
 				if event.Status == StatusReady || event.Status == StatusFailed || event.Status == StatusCancelled {
 					// Give a moment for final logs to come through
 					time.Sleep(100 * time.Millisecond)
-					cmd.Process.Kill()
 					return
 				}
 
@@ -912,7 +915,6 @@ func (m *manager) StreamBuildEvents(ctx context.Context, id string, follow bool)
 				select {
 				case out <- event:
 				case <-ctx.Done():
-					cmd.Process.Kill()
 					return
 				}
 			}
