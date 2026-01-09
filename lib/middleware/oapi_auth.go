@@ -191,8 +191,8 @@ func isInternalVMRequest(r *http.Request) bool {
 	ip := r.RemoteAddr
 
 	// RemoteAddr is "IP:port" format, extract just the IP
-		if idx := strings.LastIndex(ip, ":"); idx != -1 {
-			ip = ip[:idx]
+	if idx := strings.LastIndex(ip, ":"); idx != -1 {
+		ip = ip[:idx]
 	}
 
 	// Check if it's from the VM network (10.102.x.x)

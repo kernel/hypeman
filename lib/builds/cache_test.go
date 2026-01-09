@@ -60,6 +60,20 @@ func TestCacheKeyGenerator_GenerateCacheKey(t *testing.T) {
 			},
 			wantPrefix: "localhost:8080/cache/my-team/nodejs/",
 		},
+		{
+			name:           "empty lockfileHashes does not panic",
+			tenantScope:    "tenant-abc",
+			runtime:        "nodejs",
+			lockfileHashes: map[string]string{},
+			wantPrefix:     "localhost:8080/cache/tenant-abc/nodejs/",
+		},
+		{
+			name:           "nil lockfileHashes does not panic",
+			tenantScope:    "tenant-abc",
+			runtime:        "python",
+			lockfileHashes: nil,
+			wantPrefix:     "localhost:8080/cache/tenant-abc/python/",
+		},
 	}
 
 	for _, tt := range tests {
@@ -159,9 +173,14 @@ func TestComputeCombinedHash(t *testing.T) {
 	})
 	assert.NotEqual(t, hash1, hash3)
 
-	// Empty map should return "empty"
+	// Empty map should return a valid hash (64 hex chars), not a short string
 	emptyHash := computeCombinedHash(map[string]string{})
-	assert.Equal(t, "empty", emptyHash)
+	assert.Len(t, emptyHash, 64, "empty hash should be 64 hex characters (sha256)")
+
+	// Nil map should also return a valid hash
+	nilHash := computeCombinedHash(nil)
+	assert.Len(t, nilHash, 64, "nil hash should be 64 hex characters (sha256)")
+	assert.Equal(t, emptyHash, nilHash, "empty and nil should produce same hash")
 }
 
 func TestGetCacheKeyFromConfig(t *testing.T) {
@@ -188,4 +207,26 @@ func TestGetCacheKeyFromConfig(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, importArg)
 	assert.Empty(t, exportArg)
+
+	// With cache scope but empty lockfileHashes - should not panic (regression test)
+	importArg, exportArg, err = GetCacheKeyFromConfig(
+		"localhost:8080",
+		"my-tenant",
+		"nodejs",
+		map[string]string{}, // Empty lockfileHashes
+	)
+	require.NoError(t, err)
+	assert.NotEmpty(t, importArg, "should generate cache args even with empty lockfileHashes")
+	assert.NotEmpty(t, exportArg)
+
+	// With cache scope but nil lockfileHashes - should not panic (regression test)
+	importArg, exportArg, err = GetCacheKeyFromConfig(
+		"localhost:8080",
+		"my-tenant",
+		"python",
+		nil, // nil lockfileHashes
+	)
+	require.NoError(t, err)
+	assert.NotEmpty(t, importArg, "should generate cache args even with nil lockfileHashes")
+	assert.NotEmpty(t, exportArg)
 }

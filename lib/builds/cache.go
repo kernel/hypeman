@@ -24,15 +24,16 @@ type CacheKey struct {
 	Reference string
 
 	// Components
-	TenantScope string
-	Runtime     string
+	TenantScope  string
+	Runtime      string
 	LockfileHash string
 }
 
 // GenerateCacheKey generates a cache key for a build.
 //
 // Cache key structure:
-//   {registry}/cache/{tenant_scope}/{runtime}/{lockfile_hash}
+//
+//	{registry}/cache/{tenant_scope}/{runtime}/{lockfile_hash}
 //
 // This structure provides:
 // - Tenant isolation: each tenant's cache is isolated by scope
@@ -123,14 +124,18 @@ func normalizeCacheScope(scope string) string {
 	return normalized
 }
 
-// computeCombinedHash computes a combined hash from multiple lockfile hashes
+// computeCombinedHash computes a combined hash from multiple lockfile hashes.
+// Returns a 64-character hex string (sha256), even for empty input.
 func computeCombinedHash(lockfileHashes map[string]string) string {
+	h := sha256.New()
+
 	if len(lockfileHashes) == 0 {
-		return "empty"
+		// Hash "empty" to get a consistent 64-char hex string
+		h.Write([]byte("empty"))
+		return hex.EncodeToString(h.Sum(nil))
 	}
 
 	// Sort keys for determinism
-	h := sha256.New()
 	for _, name := range sortedKeys(lockfileHashes) {
 		h.Write([]byte(name))
 		h.Write([]byte(":"))
@@ -172,4 +177,3 @@ func GetCacheKeyFromConfig(registryURL, cacheScope, runtime string, lockfileHash
 
 	return key.ImportCacheArg(), key.ExportCacheArg(), nil
 }
-

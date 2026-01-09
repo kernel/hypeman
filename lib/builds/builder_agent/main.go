@@ -95,6 +95,10 @@ var (
 	buildConfigLock sync.Mutex
 	secretsReady    = make(chan struct{})
 	secretsOnce     sync.Once
+
+	// Encoder lock protects concurrent access to json.Encoder
+	// (the goroutine sending build_result and the main loop handling get_status)
+	encoderLock sync.Mutex
 )
 
 func main() {
@@ -213,7 +217,10 @@ func handleHostConnection(conn net.Conn) {
 				buildResultLock.Unlock()
 
 				log.Printf("Build completed, sending result to host")
-				if err := encoder.Encode(VsockMessage{Type: "build_result", Result: result}); err != nil {
+				encoderLock.Lock()
+				err := encoder.Encode(VsockMessage{Type: "build_result", Result: result})
+				encoderLock.Unlock()
+				if err != nil {
 					log.Printf("Failed to send build result: %v", err)
 				}
 			}()
@@ -231,19 +238,24 @@ func handleHostConnection(conn net.Conn) {
 				Type:   "build_result",
 				Result: result,
 			}
-			if err := encoder.Encode(response); err != nil {
+			encoderLock.Lock()
+			err := encoder.Encode(response)
+			encoderLock.Unlock()
+			if err != nil {
 				log.Printf("Failed to send result: %v", err)
 			}
 			return // Close connection after sending result
 
 		case "get_status":
 			// Host is checking if build is still running
+			encoderLock.Lock()
 			select {
 			case <-buildDone:
 				encoder.Encode(VsockMessage{Type: "status", Log: "completed"})
 			default:
 				encoder.Encode(VsockMessage{Type: "status", Log: "building"})
 			}
+			encoderLock.Unlock()
 
 		default:
 			log.Printf("Unknown message type: %s", msg.Type)
@@ -288,7 +300,10 @@ func handleSecretsRequest(encoder *json.Encoder, decoder *json.Decoder) error {
 		Type:      "get_secrets",
 		SecretIDs: secretIDs,
 	}
-	if err := encoder.Encode(req); err != nil {
+	encoderLock.Lock()
+	err := encoder.Encode(req)
+	encoderLock.Unlock()
+	if err != nil {
 		return fmt.Errorf("send get_secrets: %w", err)
 	}
 
