@@ -85,7 +85,6 @@ func DefaultConfig() Config {
 type manager struct {
 	config          Config
 	paths           *paths.Paths
-	queue           *BuildQueue
 	instanceManager instances.Manager
 	volumeManager   volumes.Manager
 	secretProvider  SecretProvider
@@ -116,7 +115,6 @@ func NewManager(
 	m := &manager{
 		config:            config,
 		paths:             p,
-		queue:             NewBuildQueue(config.MaxConcurrentBuilds),
 		instanceManager:   instanceMgr,
 		volumeManager:     volumeMgr,
 		secretProvider:    secretProvider,
@@ -171,7 +169,7 @@ func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourc
 	// Create build metadata
 	meta := &buildMetadata{
 		ID:        id,
-		Status:    StatusQueued,
+		Status:    StatusBuilding,
 		Request:   &req,
 		CreatedAt: time.Now(),
 	}
@@ -222,17 +220,12 @@ func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourc
 		return nil, fmt.Errorf("write build config: %w", err)
 	}
 
-	// Enqueue the build
-	queuePos := m.queue.Enqueue(id, req, func() {
-		m.runBuild(context.Background(), id, req, policy)
-	})
+	// Start the build immediately in background
+	go m.runBuild(context.Background(), id, req, policy)
 
 	build := meta.toBuild()
-	if queuePos > 0 {
-		build.QueuePosition = &queuePos
-	}
 
-	m.logger.Info("build created", "id", id, "queue_position", queuePos)
+	m.logger.Info("build created", "id", id)
 	return build, nil
 }
 
@@ -386,6 +379,11 @@ func (m *manager) executeBuild(ctx context.Context, id string, req CreateBuildRe
 		},
 	})
 	if err != nil {
+		// Check if this is a resource exhaustion error
+		errStr := err.Error()
+		if strings.Contains(errStr, "exceeds") && strings.Contains(errStr, "limit") {
+			return nil, fmt.Errorf("%w: %v", ErrResourcesExhausted, err)
+		}
 		return nil, fmt.Errorf("create builder instance: %w", err)
 	}
 
@@ -693,14 +691,7 @@ func (m *manager) GetBuild(ctx context.Context, id string) (*Build, error) {
 		return nil, err
 	}
 
-	build := meta.toBuild()
-
-	// Add queue position if queued
-	if meta.Status == StatusQueued {
-		build.QueuePosition = m.queue.GetPosition(id)
-	}
-
-	return build, nil
+	return meta.toBuild(), nil
 }
 
 // ListBuilds returns all builds
@@ -712,17 +703,13 @@ func (m *manager) ListBuilds(ctx context.Context) ([]*Build, error) {
 
 	builds := make([]*Build, 0, len(metas))
 	for _, meta := range metas {
-		build := meta.toBuild()
-		if meta.Status == StatusQueued {
-			build.QueuePosition = m.queue.GetPosition(meta.ID)
-		}
-		builds = append(builds, build)
+		builds = append(builds, meta.toBuild())
 	}
 
 	return builds, nil
 }
 
-// CancelBuild cancels a pending build
+// CancelBuild cancels a running build
 func (m *manager) CancelBuild(ctx context.Context, id string) error {
 	meta, err := readMetadata(m.paths, id)
 	if err != nil {
@@ -730,17 +717,8 @@ func (m *manager) CancelBuild(ctx context.Context, id string) error {
 	}
 
 	switch meta.Status {
-	case StatusQueued:
-		// Remove from queue
-		if m.queue.Cancel(id) {
-			m.updateStatus(id, StatusCancelled, nil)
-			return nil
-		}
-		return ErrBuildInProgress // Was already picked up
-
 	case StatusBuilding, StatusPushing:
-		// Can't cancel a running build easily
-		// Would need to terminate the builder instance
+		// Terminate the builder instance to cancel the build
 		if meta.BuilderInstance != nil {
 			m.instanceManager.DeleteInstance(ctx, *meta.BuilderInstance)
 		}
@@ -936,7 +914,7 @@ func (m *manager) RecoverPendingBuilds() {
 		meta := meta // Shadow loop variable for closure capture
 		m.logger.Info("recovering build", "id", meta.ID, "status", meta.Status)
 
-		// Re-enqueue the build
+		// Start the build directly
 		if meta.Request != nil {
 			// Regenerate registry token since the original token may have expired
 			// during server downtime. Token TTL is minimum 30 minutes.
@@ -949,13 +927,14 @@ func (m *manager) RecoverPendingBuilds() {
 				continue
 			}
 
-			m.queue.Enqueue(meta.ID, *meta.Request, func() {
+			// Start the build in background
+			go func() {
 				policy := DefaultBuildPolicy()
 				if meta.Request.BuildPolicy != nil {
 					policy = *meta.Request.BuildPolicy
 				}
 				m.runBuild(context.Background(), meta.ID, *meta.Request, &policy)
-			})
+			}()
 		}
 	}
 

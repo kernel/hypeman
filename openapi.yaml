@@ -685,7 +685,7 @@ components:
 
     BuildStatus:
       type: string
-      enum: [queued, building, pushing, ready, failed, cancelled]
+      enum: [building, pushing, ready, failed, cancelled]
       description: Build job status
     
     BuildPolicy:
@@ -762,8 +762,9 @@ components:
           $ref: "#/components/schemas/BuildStatus"
         queue_position:
           type: integer
-          description: Position in build queue (only when status is queued)
+          description: Deprecated - always null. Builds now start immediately.
           nullable: true
+          deprecated: true
         image_digest:
           type: string
           description: Digest of built image (only when status is ready)
@@ -2119,7 +2120,7 @@ paths:
                     Example: [{"id": "npm_token"}, {"id": "github_token"}]
       responses:
         202:
-          description: Build created and queued
+          description: Build created and started
           content:
             application/json:
               schema:
@@ -2138,6 +2139,17 @@ paths:
                 $ref: "#/components/schemas/Error"
         500:
           description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        503:
+          description: Service temporarily unavailable - insufficient resources
+          headers:
+            Retry-After:
+              description: Suggested retry delay in seconds
+              schema:
+                type: integer
           content:
             application/json:
               schema:

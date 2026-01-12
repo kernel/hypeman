@@ -7,7 +7,7 @@ The build system provides source-to-image builds inside ephemeral Cloud Hypervis
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                         Hypeman API                              │
-│  POST /builds  →  BuildManager  →  BuildQueue                   │
+│  POST /builds  →  BuildManager  →  Builder VM                   │
 │                        │                                         │
 │              Start() → VsockHandler (port 5001)                 │
 └─────────────────────────────────────────────────────────────────┘
@@ -53,19 +53,6 @@ The build system provides source-to-image builds inside ephemeral Cloud Hypervis
 | `BuildProvenance` | Audit trail for reproducibility |
 | `BuildPolicy` | Resource limits and network policy |
 
-### Build Queue (`queue.go`)
-
-In-memory queue with configurable concurrency:
-
-```go
-queue := NewBuildQueue(maxConcurrent)
-position := queue.Enqueue(buildID, request, startFunc)
-queue.Cancel(buildID)
-queue.GetPosition(buildID)
-```
-
-**Recovery**: On startup, `listPendingBuilds()` scans disk metadata for incomplete builds and re-enqueues them in FIFO order.
-
 ### Storage (`storage.go`)
 
 Builds are persisted to `$DATA_DIR/builds/{id}/`:
@@ -87,14 +74,15 @@ Orchestrates the build lifecycle:
 
 1. Validate request and store source
 2. Write build config to disk
-3. Enqueue build job
-4. Create source volume from archive
-5. Create config volume with `build.json`
-6. Create builder VM with both volumes attached
-7. Wait for build completion
-8. Update metadata and cleanup
+3. Create source volume from archive
+4. Create config volume with `build.json`
+5. Create builder VM with both volumes attached
+6. Wait for build completion via vsock
+7. Update metadata and cleanup
 
-**Important**: The `Start()` method must be called to start the vsock handler for builder communication.
+Builds start immediately when created. If host resources are exhausted, the build will fail with an appropriate error message.
+
+**Recovery**: On startup, `listPendingBuilds()` scans disk metadata for incomplete builds (building/pushing status) and restarts them.
 
 ### Cache System (`cache.go`)
 
@@ -136,9 +124,7 @@ OpenTelemetry metrics for monitoring:
 | Metric | Type | Description |
 |--------|------|-------------|
 | `hypeman_build_duration_seconds` | Histogram | Build duration |
-| `hypeman_builds_total` | Counter | Total builds by status/runtime |
-| `hypeman_build_queue_length` | Gauge | Pending builds in queue |
-| `hypeman_builds_active` | Gauge | Currently running builds |
+| `hypeman_builds_total` | Counter | Total builds by status |
 
 ### Builder Agent (`builder_agent/main.go`)
 
@@ -196,7 +182,7 @@ CMD [\"node\", \"index.js\"]" \
 ```json
 {
   "id": "abc123",
-  "status": "queued",
+  "status": "building",
   "created_at": "2025-01-15T10:00:00Z"
 }
 ```
@@ -231,11 +217,11 @@ Builder VMs authenticate to the registry using short-lived JWT tokens:
 ## Build Status Flow
 
 ```
-queued → building → pushing → ready
-                 ↘         ↗
-                   failed
-                      ↑
-                  cancelled
+building → pushing → ready
+        ↘         ↗
+          failed
+             ↑
+         cancelled
 ```
 
 ## Security Model
@@ -348,7 +334,6 @@ Each build records provenance for reproducibility:
 go test ./lib/builds/... -v
 
 # Test specific components
-go test ./lib/builds/queue_test.go ./lib/builds/queue.go ./lib/builds/types.go -v
 go test ./lib/builds/cache_test.go ./lib/builds/cache.go ./lib/builds/types.go ./lib/builds/errors.go -v
 go test ./lib/builds/registry_token_test.go ./lib/builds/registry_token.go -v
 ```

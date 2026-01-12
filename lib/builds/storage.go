@@ -122,7 +122,7 @@ func listAllBuilds(p *paths.Paths) ([]*buildMetadata, error) {
 }
 
 // listPendingBuilds returns builds that need to be recovered on startup
-// Returns builds with status queued/building, sorted by created_at (oldest first for FIFO)
+// Returns builds with status building/pushing, sorted by created_at (oldest first for FIFO)
 func listPendingBuilds(p *paths.Paths) ([]*buildMetadata, error) {
 	all, err := listAllBuilds(p)
 	if err != nil {
@@ -132,7 +132,7 @@ func listPendingBuilds(p *paths.Paths) ([]*buildMetadata, error) {
 	var pending []*buildMetadata
 	for _, meta := range all {
 		switch meta.Status {
-		case StatusQueued, StatusBuilding, StatusPushing:
+		case StatusBuilding, StatusPushing:
 			pending = append(pending, meta)
 		}
 	}
