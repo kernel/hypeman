@@ -32,7 +32,7 @@ targets:
       go_sdk_package: github.com/onkernel/hypeman-go
     publish:
       homebrew:
-        tap_repo: onkernel/homebrew-tap
+        tap_repo: kernel/homebrew-tap
         homepage: https://github.com/kernel/hypeman
         description: orchestrate cloud-hypervisor VMs
   typescript:
