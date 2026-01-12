@@ -9,10 +9,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/onkernel/hypeman/lib/devices"
-	"github.com/onkernel/hypeman/lib/images"
-	"github.com/onkernel/hypeman/lib/network"
-	"github.com/onkernel/hypeman/lib/vmconfig"
+	"github.com/kernel/hypeman/lib/devices"
+	"github.com/kernel/hypeman/lib/images"
+	"github.com/kernel/hypeman/lib/network"
+	"github.com/kernel/hypeman/lib/vmconfig"
 )
 
 // createConfigDisk generates an ext4 disk with instance configuration.

@@ -62,7 +62,7 @@ hypeman injects the following at boot:
 
 The driver libraries injected by hypeman are pinned to a specific version that matches the kernel modules. This version is tracked in:
 
-- **Kernel release:** `onkernel/linux` GitHub releases (e.g., `ch-6.12.8-kernel-2-20251211`)
+- **Kernel release:** `kernel/linux` GitHub releases (e.g., `ch-6.12.8-kernel-2-20251211`)
 - **hypeman config:** `lib/system/versions.go` - `NvidiaDriverVersion` map
 
 ### Current Driver Version
@@ -81,7 +81,7 @@ To upgrade the NVIDIA driver version:
 
 1. **Choose a new version** from [NVIDIA's Linux drivers](https://www.nvidia.com/Download/index.aspx)
 
-2. **Update onkernel/linux:**
+2. **Update kernel/linux:**
    - Edit `.github/workflows/release.yaml`
    - Change `DRIVER_VERSION=` in all locations (search for the current version)
    - The workflow file contains comments explaining what to update

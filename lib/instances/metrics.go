@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/onkernel/hypeman/lib/hypervisor"
-	mw "github.com/onkernel/hypeman/lib/middleware"
+	"github.com/kernel/hypeman/lib/hypervisor"
+	mw "github.com/kernel/hypeman/lib/middleware"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"

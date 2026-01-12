@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/v1/layout"
-	"github.com/onkernel/hypeman/lib/paths"
+	"github.com/kernel/hypeman/lib/paths"
 	"go.opentelemetry.io/otel/metric"
 )
 

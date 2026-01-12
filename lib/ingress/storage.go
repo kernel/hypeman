@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/onkernel/hypeman/lib/paths"
+	"github.com/kernel/hypeman/lib/paths"
 )
 
 // Filesystem structure:

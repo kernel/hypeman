@@ -7,10 +7,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/onkernel/hypeman/lib/guest"
-	"github.com/onkernel/hypeman/lib/hypervisor"
-	"github.com/onkernel/hypeman/lib/logger"
-	"github.com/onkernel/hypeman/lib/network"
+	"github.com/kernel/hypeman/lib/guest"
+	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/logger"
+	"github.com/kernel/hypeman/lib/network"
 )
 
 // deleteInstance stops and deletes an instance

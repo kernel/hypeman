@@ -6,7 +6,7 @@ import (
 	"os"
 	"os/exec"
 
-	"github.com/onkernel/hypeman/lib/vmconfig"
+	"github.com/kernel/hypeman/lib/vmconfig"
 )
 
 // readConfig mounts and reads the config disk, parsing the JSON configuration.

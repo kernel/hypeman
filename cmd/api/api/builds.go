@@ -9,9 +9,9 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/onkernel/hypeman/lib/builds"
-	"github.com/onkernel/hypeman/lib/logger"
-	"github.com/onkernel/hypeman/lib/oapi"
+	"github.com/kernel/hypeman/lib/builds"
+	"github.com/kernel/hypeman/lib/logger"
+	"github.com/kernel/hypeman/lib/oapi"
 )
 
 // ListBuilds returns all builds

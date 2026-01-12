@@ -33,7 +33,7 @@ targets:
     publish:
       homebrew:
         tap_repo: onkernel/homebrew-tap
-        homepage: https://github.com/onkernel/hypeman
+        homepage: https://github.com/kernel/hypeman
         description: orchestrate cloud-hypervisor VMs
   typescript:
     edition: typescript.2025-10-10

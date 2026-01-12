@@ -4,7 +4,7 @@ Manages versioned kernel and initrd files for Cloud Hypervisor VMs.
 
 ## Features
 
-- **Automatic Downloads**: Kernel downloaded from onkernel/linux releases on first use
+- **Automatic Downloads**: Kernel downloaded from kernel/linux releases on first use
 - **Automatic Build**: Initrd built from Alpine base + Go init binary + guest-agent
 - **Versioned**: Side-by-side support for multiple kernel versions
 - **Zero Docker**: Uses OCI directly (reuses image manager infrastructure)
@@ -81,12 +81,12 @@ via `INIT_MODE` in the config disk.
 
 ## Kernel Sources
 
-Kernels downloaded from onkernel/linux releases (Cloud Hypervisor-optimized fork):
-- https://github.com/onkernel/linux/releases
+Kernels downloaded from kernel/linux releases (Cloud Hypervisor-optimized fork):
+- https://github.com/kernel/linux/releases
 
 Example URLs:
-- x86_64: `https://github.com/onkernel/linux/releases/download/ch-6.12.8-kernel-1.2-20251213/vmlinux-x86_64`
-- aarch64: `https://github.com/onkernel/linux/releases/download/ch-6.12.8-kernel-1.2-20251213/Image-arm64`
+- x86_64: `https://github.com/kernel/linux/releases/download/ch-6.12.8-kernel-1.2-20251213/vmlinux-x86_64`
+- aarch64: `https://github.com/kernel/linux/releases/download/ch-6.12.8-kernel-1.2-20251213/Image-arm64`
 
 ## Initrd Build Process
 
@@ -111,8 +111,8 @@ const (
 var KernelDownloadURLs = map[KernelVersion]map[string]string{
     // ... existing ...
     Kernel_20251220: {
-        "x86_64":  "https://github.com/onkernel/linux/releases/download/ch-6.12.8-kernel-1.3-20251220/vmlinux-x86_64",
-        "aarch64": "https://github.com/onkernel/linux/releases/download/ch-6.12.8-kernel-1.3-20251220/Image-arm64",
+        "x86_64":  "https://github.com/kernel/linux/releases/download/ch-6.12.8-kernel-1.3-20251220/vmlinux-x86_64",
+        "aarch64": "https://github.com/kernel/linux/releases/download/ch-6.12.8-kernel-1.3-20251220/Image-arm64",
     },
 }
 

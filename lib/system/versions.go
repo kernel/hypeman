@@ -6,7 +6,7 @@ import "runtime"
 type KernelVersion string
 
 const (
-	// Kernel versions from onkernel/linux releases
+	// Kernel versions from kernel/linux releases
 	Kernel_202511182 KernelVersion = "ch-6.12.8-kernel-1-202511182"
 	Kernel_20251211  KernelVersion = "ch-6.12.8-kernel-1.1-20251211"
 	Kernel_20251213  KernelVersion = "ch-6.12.8-kernel-1.2-20251213" // NVIDIA module + driver lib support + networking configs
@@ -28,16 +28,16 @@ var (
 // KernelDownloadURLs maps kernel versions and architectures to download URLs
 var KernelDownloadURLs = map[KernelVersion]map[string]string{
 	Kernel_202511182: {
-		"x86_64":  "https://github.com/onkernel/linux/releases/download/ch-6.12.8-kernel-1-202511182/vmlinux-x86_64",
-		"aarch64": "https://github.com/onkernel/linux/releases/download/ch-6.12.8-kernel-1-202511182/Image-arm64",
+		"x86_64":  "https://github.com/kernel/linux/releases/download/ch-6.12.8-kernel-1-202511182/vmlinux-x86_64",
+		"aarch64": "https://github.com/kernel/linux/releases/download/ch-6.12.8-kernel-1-202511182/Image-arm64",
 	},
 	Kernel_20251211: {
-		"x86_64":  "https://github.com/onkernel/linux/releases/download/ch-6.12.8-kernel-1.1-20251211/vmlinux-x86_64",
-		"aarch64": "https://github.com/onkernel/linux/releases/download/ch-6.12.8-kernel-1.1-20251211/Image-arm64",
+		"x86_64":  "https://github.com/kernel/linux/releases/download/ch-6.12.8-kernel-1.1-20251211/vmlinux-x86_64",
+		"aarch64": "https://github.com/kernel/linux/releases/download/ch-6.12.8-kernel-1.1-20251211/Image-arm64",
 	},
 	Kernel_20251213: {
-		"x86_64":  "https://github.com/onkernel/linux/releases/download/ch-6.12.8-kernel-1.2-20251213/vmlinux-x86_64",
-		"aarch64": "https://github.com/onkernel/linux/releases/download/ch-6.12.8-kernel-1.2-20251213/Image-arm64",
+		"x86_64":  "https://github.com/kernel/linux/releases/download/ch-6.12.8-kernel-1.2-20251213/vmlinux-x86_64",
+		"aarch64": "https://github.com/kernel/linux/releases/download/ch-6.12.8-kernel-1.2-20251213/Image-arm64",
 	},
 	// Add future versions here
 }
@@ -46,7 +46,7 @@ var KernelDownloadURLs = map[KernelVersion]map[string]string{
 // These tarballs contain pre-built NVIDIA kernel modules that match the kernel version
 var NvidiaModuleURLs = map[KernelVersion]map[string]string{
 	Kernel_20251213: {
-		"x86_64": "https://github.com/onkernel/linux/releases/download/ch-6.12.8-kernel-1.2-20251213/nvidia-modules-x86_64.tar.gz",
+		"x86_64": "https://github.com/kernel/linux/releases/download/ch-6.12.8-kernel-1.2-20251213/nvidia-modules-x86_64.tar.gz",
 		// Note: NVIDIA open-gpu-kernel-modules does not support arm64 yet
 	},
 	// Kernel_202511182 and Kernel_20251211 do not have NVIDIA modules (pre-module-support kernels)
@@ -58,7 +58,7 @@ var NvidiaModuleURLs = map[KernelVersion]map[string]string{
 // See lib/devices/GPU.md for documentation on driver injection.
 var NvidiaDriverLibURLs = map[KernelVersion]map[string]string{
 	Kernel_20251213: {
-		"x86_64": "https://github.com/onkernel/linux/releases/download/ch-6.12.8-kernel-1.2-20251213/nvidia-driver-libs-x86_64.tar.gz",
+		"x86_64": "https://github.com/kernel/linux/releases/download/ch-6.12.8-kernel-1.2-20251213/nvidia-driver-libs-x86_64.tar.gz",
 	},
 }
 

@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/creack/pty"
-	pb "github.com/onkernel/hypeman/lib/guest"
+	pb "github.com/kernel/hypeman/lib/guest"
 )
 
 // Exec handles command execution with bidirectional streaming

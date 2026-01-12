@@ -6,7 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	"github.com/onkernel/hypeman/lib/vmconfig"
+	"github.com/kernel/hypeman/lib/vmconfig"
 )
 
 // mountVolumes mounts attached volumes according to the configuration.

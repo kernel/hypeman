@@ -7,7 +7,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/onkernel/hypeman/lib/paths"
+	"github.com/kernel/hypeman/lib/paths"
 )
 
 // buildMetadata is the internal representation stored on disk

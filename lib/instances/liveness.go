@@ -5,8 +5,8 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/onkernel/hypeman/lib/devices"
-	"github.com/onkernel/hypeman/lib/logger"
+	"github.com/kernel/hypeman/lib/devices"
+	"github.com/kernel/hypeman/lib/logger"
 )
 
 // Ensure instanceLivenessAdapter implements the interface

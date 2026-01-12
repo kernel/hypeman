@@ -5,7 +5,7 @@ import (
 	"os"
 	"syscall"
 
-	"github.com/onkernel/hypeman/lib/vmconfig"
+	"github.com/kernel/hypeman/lib/vmconfig"
 )
 
 // runSystemdMode hands off control to systemd.
