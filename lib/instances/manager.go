@@ -31,6 +31,9 @@ type Manager interface {
 	RotateLogs(ctx context.Context, maxBytes int64, maxFiles int) error
 	AttachVolume(ctx context.Context, id string, volumeId string, req AttachVolumeRequest) (*Instance, error)
 	DetachVolume(ctx context.Context, id string, volumeId string) (*Instance, error)
+	// CheckResourceAvailability checks if resources are available to create an instance
+	// with the given vCPUs and memory. Returns ErrResourcesExhausted if not.
+	CheckResourceAvailability(ctx context.Context, vcpus int, memoryBytes int64) error
 }
 
 // ResourceLimits contains configurable resource limits for instances
@@ -240,4 +243,33 @@ func (m *manager) AttachVolume(ctx context.Context, id string, volumeId string, 
 // DetachVolume detaches a volume from an instance (not yet implemented)
 func (m *manager) DetachVolume(ctx context.Context, id string, volumeId string) (*Instance, error) {
 	return nil, fmt.Errorf("detach volume not yet implemented")
+}
+
+// CheckResourceAvailability checks if resources are available to create an instance
+// with the given vCPUs and memory. Returns ErrResourcesExhausted if limits would be exceeded.
+func (m *manager) CheckResourceAvailability(ctx context.Context, vcpus int, memoryBytes int64) error {
+	// Check per-instance limits
+	if m.limits.MaxVcpusPerInstance > 0 && vcpus > m.limits.MaxVcpusPerInstance {
+		return fmt.Errorf("%w: vcpus %d exceeds maximum allowed %d per instance", ErrResourcesExhausted, vcpus, m.limits.MaxVcpusPerInstance)
+	}
+	if m.limits.MaxMemoryPerInstance > 0 && memoryBytes > m.limits.MaxMemoryPerInstance {
+		return fmt.Errorf("%w: memory %d exceeds maximum allowed %d per instance", ErrResourcesExhausted, memoryBytes, m.limits.MaxMemoryPerInstance)
+	}
+
+	// Check aggregate limits
+	if m.limits.MaxTotalVcpus > 0 || m.limits.MaxTotalMemory > 0 {
+		usage, err := m.calculateAggregateUsage(ctx)
+		if err != nil {
+			// If we can't calculate usage, allow the request (fail open)
+			return nil
+		}
+		if m.limits.MaxTotalVcpus > 0 && usage.TotalVcpus+vcpus > m.limits.MaxTotalVcpus {
+			return fmt.Errorf("%w: total vcpus would be %d, exceeds aggregate limit of %d", ErrResourcesExhausted, usage.TotalVcpus+vcpus, m.limits.MaxTotalVcpus)
+		}
+		if m.limits.MaxTotalMemory > 0 && usage.TotalMemory+memoryBytes > m.limits.MaxTotalMemory {
+			return fmt.Errorf("%w: total memory would be %d, exceeds aggregate limit of %d", ErrResourcesExhausted, usage.TotalMemory+memoryBytes, m.limits.MaxTotalMemory)
+		}
+	}
+
+	return nil
 }

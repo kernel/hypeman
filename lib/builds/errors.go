@@ -32,6 +32,9 @@ var (
 
 	// ErrBuildInProgress is returned when trying to cancel a build that's already complete
 	ErrBuildInProgress = errors.New("build in progress")
+
+	// ErrResourcesExhausted is returned when a build cannot start due to resource limits
+	ErrResourcesExhausted = errors.New("resources exhausted")
 )
 
 // IsSupportedRuntime returns true if the runtime is supported

@@ -1861,7 +1861,7 @@ paths:
                   description: Build timeout (default 600)
       responses:
         202:
-          description: Build created and queued
+          description: Build created and started
           content:
             application/json:
               schema:
@@ -1880,6 +1880,18 @@ paths:
                 $ref: "#/components/schemas/Error"
         500:
           description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        503:
+          description: Service unavailable - resources exhausted
+          headers:
+            Retry-After:
+              description: Suggested wait time in seconds before retrying
+              schema:
+                type: integer
+                example: 30
           content:
             application/json:
               schema:

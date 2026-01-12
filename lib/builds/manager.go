@@ -2,6 +2,7 @@ package builds
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -65,7 +66,6 @@ func DefaultConfig() Config {
 type manager struct {
 	config          Config
 	paths           *paths.Paths
-	queue           *BuildQueue
 	instanceManager instances.Manager
 	volumeManager   volumes.Manager
 	secretProvider  SecretProvider
@@ -92,7 +92,6 @@ func NewManager(
 	m := &manager{
 		config:          config,
 		paths:           p,
-		queue:           NewBuildQueue(config.MaxConcurrentBuilds),
 		instanceManager: instanceMgr,
 		volumeManager:   volumeMgr,
 		secretProvider:  secretProvider,
@@ -133,20 +132,32 @@ func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourc
 		policy.ApplyDefaults()
 	}
 
+	// Preflight check: verify resources are available before accepting the build
+	// This allows us to return 503 synchronously if resources are exhausted
+	builderMemory := int64(policy.MemoryMB) * 1024 * 1024
+	if err := m.instanceManager.CheckResourceAvailability(ctx, policy.CPUs, builderMemory); err != nil {
+		if errors.Is(err, instances.ErrResourcesExhausted) {
+			return nil, fmt.Errorf("%w: %v", ErrResourcesExhausted, err)
+		}
+		return nil, fmt.Errorf("check resource availability: %w", err)
+	}
+
 	m.createMu.Lock()
 	defer m.createMu.Unlock()
 
 	// Generate build ID
 	id := cuid2.Generate()
 
-	// Create build metadata
+	// Create build metadata with status "building" (builds start immediately)
 	meta := &buildMetadata{
 		ID:        id,
-		Status:    StatusQueued,
+		Status:    StatusBuilding,
 		Runtime:   req.Runtime,
 		Request:   &req,
 		CreatedAt: time.Now(),
 	}
+	now := time.Now()
+	meta.StartedAt = &now
 
 	// Write initial metadata
 	if err := writeMetadata(m.paths, meta); err != nil {
@@ -178,17 +189,12 @@ func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourc
 		return nil, fmt.Errorf("write build config: %w", err)
 	}
 
-	// Enqueue the build
-	queuePos := m.queue.Enqueue(id, req, func() {
-		m.runBuild(context.Background(), id, req, policy)
-	})
+	// Start the build immediately in background
+	go m.runBuild(context.Background(), id, req, policy)
 
 	build := meta.toBuild()
-	if queuePos > 0 {
-		build.QueuePosition = &queuePos
-	}
 
-	m.logger.Info("build created", "id", id, "queue_position", queuePos)
+	m.logger.Info("build created and started", "id", id)
 	return build, nil
 }
 
@@ -209,7 +215,18 @@ func (m *manager) runBuild(ctx context.Context, id string, req CreateBuildReques
 	start := time.Now()
 	m.logger.Info("starting build", "id", id)
 
-	// Update status to building
+	// Check if build was cancelled before we started
+	meta, err := readMetadata(m.paths, id)
+	if err != nil {
+		m.logger.Error("failed to read metadata at build start", "id", id, "error", err)
+		return
+	}
+	if isTerminalStatus(meta.Status) {
+		m.logger.Info("build already in terminal state, skipping", "id", id, "status", meta.Status)
+		return
+	}
+
+	// Update status to building (will be skipped if already terminal)
 	m.updateStatus(id, StatusBuilding, nil)
 
 	// Create timeout context
@@ -362,10 +379,18 @@ func (m *manager) waitForResult(ctx context.Context, inst *instances.Instance) (
 }
 
 // updateStatus updates the build status
+// It checks for terminal states to prevent race conditions (e.g., cancelled build being overwritten)
 func (m *manager) updateStatus(id string, status string, err error) {
 	meta, readErr := readMetadata(m.paths, id)
 	if readErr != nil {
 		m.logger.Error("read metadata for status update", "id", id, "error", readErr)
+		return
+	}
+
+	// Don't overwrite terminal states - prevents race condition where cancelled
+	// build gets overwritten by a concurrent goroutine setting it to building
+	if isTerminalStatus(meta.Status) {
+		m.logger.Debug("skipping status update for terminal build", "id", id, "current", meta.Status, "requested", status)
 		return
 	}
 
@@ -381,6 +406,16 @@ func (m *manager) updateStatus(id string, status string, err error) {
 
 	if writeErr := writeMetadata(m.paths, meta); writeErr != nil {
 		m.logger.Error("write metadata for status update", "id", id, "error", writeErr)
+	}
+}
+
+// isTerminalStatus returns true if the status represents a completed build
+func isTerminalStatus(status string) bool {
+	switch status {
+	case StatusReady, StatusFailed, StatusCancelled:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -413,14 +448,7 @@ func (m *manager) GetBuild(ctx context.Context, id string) (*Build, error) {
 		return nil, err
 	}
 
-	build := meta.toBuild()
-
-	// Add queue position if queued
-	if meta.Status == StatusQueued {
-		build.QueuePosition = m.queue.GetPosition(id)
-	}
-
-	return build, nil
+	return meta.toBuild(), nil
 }
 
 // ListBuilds returns all builds
@@ -432,17 +460,13 @@ func (m *manager) ListBuilds(ctx context.Context) ([]*Build, error) {
 
 	builds := make([]*Build, 0, len(metas))
 	for _, meta := range metas {
-		build := meta.toBuild()
-		if meta.Status == StatusQueued {
-			build.QueuePosition = m.queue.GetPosition(meta.ID)
-		}
-		builds = append(builds, build)
+		builds = append(builds, meta.toBuild())
 	}
 
 	return builds, nil
 }
 
-// CancelBuild cancels a pending build
+// CancelBuild cancels a pending or running build
 func (m *manager) CancelBuild(ctx context.Context, id string) error {
 	meta, err := readMetadata(m.paths, id)
 	if err != nil {
@@ -450,21 +474,19 @@ func (m *manager) CancelBuild(ctx context.Context, id string) error {
 	}
 
 	switch meta.Status {
-	case StatusQueued:
-		// Remove from queue
-		if m.queue.Cancel(id) {
-			m.updateStatus(id, StatusCancelled, nil)
-			return nil
-		}
-		return ErrBuildInProgress // Was already picked up
-
 	case StatusBuilding, StatusPushing:
-		// Can't cancel a running build easily
-		// Would need to terminate the builder instance
-		if meta.BuilderInstance != nil {
-			m.instanceManager.DeleteInstance(ctx, *meta.BuilderInstance)
-		}
+		// Mark as cancelled first to prevent race condition with runBuild goroutine
 		m.updateStatus(id, StatusCancelled, nil)
+
+		// Then terminate the builder instance if it exists
+		if meta.BuilderInstance != nil {
+			// Use a fresh context with timeout since the request context may be cancelled
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := m.instanceManager.DeleteInstance(cleanupCtx, *meta.BuilderInstance); err != nil {
+				m.logger.Warn("failed to delete builder instance during cancel", "id", id, "instance", *meta.BuilderInstance, "error", err)
+			}
+		}
 		return nil
 
 	case StatusReady, StatusFailed, StatusCancelled:
@@ -496,15 +518,18 @@ func (m *manager) RecoverPendingBuilds() {
 	for _, meta := range pending {
 		m.logger.Info("recovering build", "id", meta.ID, "status", meta.Status)
 
-		// Re-enqueue the build
+		// Start the build immediately in background
 		if meta.Request != nil {
-			m.queue.Enqueue(meta.ID, *meta.Request, func() {
+			// Capture values for goroutine
+			buildID := meta.ID
+			req := *meta.Request
+			go func() {
 				policy := DefaultBuildPolicy()
-				if meta.Request.BuildPolicy != nil {
-					policy = *meta.Request.BuildPolicy
+				if req.BuildPolicy != nil {
+					policy = *req.BuildPolicy
 				}
-				m.runBuild(context.Background(), meta.ID, *meta.Request, &policy)
-			})
+				m.runBuild(context.Background(), buildID, req, &policy)
+			}()
 		}
 	}
 

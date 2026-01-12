@@ -166,11 +166,11 @@ func (m *manager) createInstance(
 
 	// Validate per-instance resource limits
 	if m.limits.MaxVcpusPerInstance > 0 && vcpus > m.limits.MaxVcpusPerInstance {
-		return nil, fmt.Errorf("vcpus %d exceeds maximum allowed %d per instance", vcpus, m.limits.MaxVcpusPerInstance)
+		return nil, fmt.Errorf("%w: vcpus %d exceeds maximum allowed %d per instance", ErrResourcesExhausted, vcpus, m.limits.MaxVcpusPerInstance)
 	}
 	totalMemory := size + hotplugSize
 	if m.limits.MaxMemoryPerInstance > 0 && totalMemory > m.limits.MaxMemoryPerInstance {
-		return nil, fmt.Errorf("total memory %d (size + hotplug_size) exceeds maximum allowed %d per instance", totalMemory, m.limits.MaxMemoryPerInstance)
+		return nil, fmt.Errorf("%w: total memory %d (size + hotplug_size) exceeds maximum allowed %d per instance", ErrResourcesExhausted, totalMemory, m.limits.MaxMemoryPerInstance)
 	}
 
 	// Validate aggregate resource limits
@@ -180,10 +180,10 @@ func (m *manager) createInstance(
 			log.WarnContext(ctx, "failed to calculate aggregate usage, skipping limit check", "error", err)
 		} else {
 			if m.limits.MaxTotalVcpus > 0 && usage.TotalVcpus+vcpus > m.limits.MaxTotalVcpus {
-				return nil, fmt.Errorf("total vcpus would be %d, exceeds aggregate limit of %d", usage.TotalVcpus+vcpus, m.limits.MaxTotalVcpus)
+				return nil, fmt.Errorf("%w: total vcpus would be %d, exceeds aggregate limit of %d", ErrResourcesExhausted, usage.TotalVcpus+vcpus, m.limits.MaxTotalVcpus)
 			}
 			if m.limits.MaxTotalMemory > 0 && usage.TotalMemory+totalMemory > m.limits.MaxTotalMemory {
-				return nil, fmt.Errorf("total memory would be %d, exceeds aggregate limit of %d", usage.TotalMemory+totalMemory, m.limits.MaxTotalMemory)
+				return nil, fmt.Errorf("%w: total memory would be %d, exceeds aggregate limit of %d", ErrResourcesExhausted, usage.TotalMemory+totalMemory, m.limits.MaxTotalMemory)
 			}
 		}
 	}
