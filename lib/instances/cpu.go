@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/onkernel/hypeman/lib/vmm"
+	"github.com/kernel/hypeman/lib/vmm"
 )
 
 // HostTopology represents the CPU topology of the host machine

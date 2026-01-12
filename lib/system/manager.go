@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/onkernel/hypeman/lib/paths"
+	"github.com/kernel/hypeman/lib/paths"
 )
 
 // Manager handles system files (kernel, initrd)

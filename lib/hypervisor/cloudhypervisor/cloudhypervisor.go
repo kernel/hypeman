@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/onkernel/hypeman/lib/hypervisor"
-	"github.com/onkernel/hypeman/lib/vmm"
+	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/vmm"
 )
 
 // CloudHypervisor implements hypervisor.Hypervisor for Cloud Hypervisor VMM.

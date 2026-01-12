@@ -3,8 +3,8 @@ package api
 import (
 	"context"
 
-	"github.com/onkernel/hypeman/lib/oapi"
-	"github.com/onkernel/hypeman/lib/resources"
+	"github.com/kernel/hypeman/lib/oapi"
+	"github.com/kernel/hypeman/lib/resources"
 )
 
 // GetResources returns host resource capacity and allocations

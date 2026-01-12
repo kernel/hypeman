@@ -5,7 +5,7 @@ import (
 	"log"
 	"os"
 
-	pb "github.com/onkernel/hypeman/lib/guest"
+	pb "github.com/kernel/hypeman/lib/guest"
 )
 
 // StatPath returns information about a path in the guest filesystem

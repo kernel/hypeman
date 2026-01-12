@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/onkernel/hypeman/lib/paths"
+	"github.com/kernel/hypeman/lib/paths"
 )
 
 // CaddyLogForwarder tails Caddy's system log and forwards to OTEL.

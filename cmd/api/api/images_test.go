@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/onkernel/hypeman/lib/images"
-	"github.com/onkernel/hypeman/lib/oapi"
+	"github.com/kernel/hypeman/lib/images"
+	"github.com/kernel/hypeman/lib/oapi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

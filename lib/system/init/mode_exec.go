@@ -7,7 +7,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/onkernel/hypeman/lib/vmconfig"
+	"github.com/kernel/hypeman/lib/vmconfig"
 )
 
 // runExecMode runs the container in exec mode (default).

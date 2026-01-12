@@ -11,8 +11,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/golang-jwt/jwt/v5"
 	nethttpmiddleware "github.com/oapi-codegen/nethttp-middleware"
-	mw "github.com/onkernel/hypeman/lib/middleware"
-	"github.com/onkernel/hypeman/lib/oapi"
+	mw "github.com/kernel/hypeman/lib/middleware"
+	"github.com/kernel/hypeman/lib/oapi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

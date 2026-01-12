@@ -9,7 +9,7 @@ import (
 	"os/exec"
 	"strconv"
 
-	"github.com/onkernel/hypeman/lib/logger"
+	"github.com/kernel/hypeman/lib/logger"
 )
 
 // LogSource represents a log source type

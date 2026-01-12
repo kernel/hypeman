@@ -15,10 +15,10 @@ import (
 	"time"
 
 	"github.com/nrednav/cuid2"
-	"github.com/onkernel/hypeman/lib/images"
-	"github.com/onkernel/hypeman/lib/instances"
-	"github.com/onkernel/hypeman/lib/paths"
-	"github.com/onkernel/hypeman/lib/volumes"
+	"github.com/kernel/hypeman/lib/images"
+	"github.com/kernel/hypeman/lib/instances"
+	"github.com/kernel/hypeman/lib/paths"
+	"github.com/kernel/hypeman/lib/volumes"
 	"go.opentelemetry.io/otel/metric"
 )
 

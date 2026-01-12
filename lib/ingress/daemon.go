@@ -15,8 +15,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/onkernel/hypeman/lib/logger"
-	"github.com/onkernel/hypeman/lib/paths"
+	"github.com/kernel/hypeman/lib/logger"
+	"github.com/kernel/hypeman/lib/paths"
 )
 
 // Polling intervals for Caddy daemon lifecycle management.

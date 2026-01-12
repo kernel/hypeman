@@ -10,7 +10,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/onkernel/hypeman/lib/logger"
+	"github.com/kernel/hypeman/lib/logger"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
 )

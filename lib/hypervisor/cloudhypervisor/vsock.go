@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/onkernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/hypervisor"
 )
 
 const (

@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/onkernel/hypeman/lib/guest"
-	"github.com/onkernel/hypeman/lib/hypervisor"
-	"github.com/onkernel/hypeman/lib/images"
-	"github.com/onkernel/hypeman/lib/paths"
-	"github.com/onkernel/hypeman/lib/system"
+	"github.com/kernel/hypeman/lib/guest"
+	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/images"
+	"github.com/kernel/hypeman/lib/paths"
+	"github.com/kernel/hypeman/lib/system"
 	"github.com/stretchr/testify/require"
 )
 

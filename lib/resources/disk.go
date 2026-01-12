@@ -6,8 +6,8 @@ import (
 	"syscall"
 
 	"github.com/c2h5oh/datasize"
-	"github.com/onkernel/hypeman/cmd/api/config"
-	"github.com/onkernel/hypeman/lib/paths"
+	"github.com/kernel/hypeman/cmd/api/config"
+	"github.com/kernel/hypeman/lib/paths"
 )
 
 // DiskResource implements Resource for disk space discovery and tracking.

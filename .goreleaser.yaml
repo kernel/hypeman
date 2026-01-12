@@ -65,7 +65,7 @@ changelog:
 
 release:
   github:
-    owner: onkernel
+    owner: kernel
     name: hypeman
   prerelease: auto
   draft: false

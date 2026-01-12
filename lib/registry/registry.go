@@ -20,8 +20,8 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/empty"
 	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/google/go-containerregistry/pkg/v1/types"
-	"github.com/onkernel/hypeman/lib/images"
-	"github.com/onkernel/hypeman/lib/paths"
+	"github.com/kernel/hypeman/lib/images"
+	"github.com/kernel/hypeman/lib/paths"
 )
 
 // Registry provides an OCI Distribution Spec compliant registry that stores pushed images

@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 
-	"github.com/onkernel/hypeman/lib/devices"
-	"github.com/onkernel/hypeman/lib/oapi"
+	"github.com/kernel/hypeman/lib/devices"
+	"github.com/kernel/hypeman/lib/oapi"
 )
 
 // ListDevices returns all registered devices

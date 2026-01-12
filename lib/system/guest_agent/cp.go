@@ -10,7 +10,7 @@ import (
 	"syscall"
 	"time"
 
-	pb "github.com/onkernel/hypeman/lib/guest"
+	pb "github.com/kernel/hypeman/lib/guest"
 )
 
 // CopyToGuest handles copying files to the guest filesystem

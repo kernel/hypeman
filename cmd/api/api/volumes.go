@@ -7,10 +7,10 @@ import (
 	"mime/multipart"
 	"strconv"
 
-	"github.com/onkernel/hypeman/lib/logger"
-	mw "github.com/onkernel/hypeman/lib/middleware"
-	"github.com/onkernel/hypeman/lib/oapi"
-	"github.com/onkernel/hypeman/lib/volumes"
+	"github.com/kernel/hypeman/lib/logger"
+	mw "github.com/kernel/hypeman/lib/middleware"
+	"github.com/kernel/hypeman/lib/oapi"
+	"github.com/kernel/hypeman/lib/volumes"
 )
 
 // ListVolumes lists all volumes

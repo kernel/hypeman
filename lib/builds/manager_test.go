@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/onkernel/hypeman/lib/instances"
-	"github.com/onkernel/hypeman/lib/paths"
-	"github.com/onkernel/hypeman/lib/resources"
-	"github.com/onkernel/hypeman/lib/volumes"
+	"github.com/kernel/hypeman/lib/instances"
+	"github.com/kernel/hypeman/lib/paths"
+	"github.com/kernel/hypeman/lib/resources"
+	"github.com/kernel/hypeman/lib/volumes"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

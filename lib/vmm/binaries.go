@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 
-	"github.com/onkernel/hypeman/lib/paths"
+	"github.com/kernel/hypeman/lib/paths"
 )
 
 //go:embed binaries/cloud-hypervisor/v48.0/x86_64/cloud-hypervisor

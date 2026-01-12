@@ -6,9 +6,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/onkernel/hypeman/lib/hypervisor"
-	"github.com/onkernel/hypeman/lib/logger"
-	"github.com/onkernel/hypeman/lib/network"
+	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/logger"
+	"github.com/kernel/hypeman/lib/network"
 	"go.opentelemetry.io/otel/trace"
 )
 

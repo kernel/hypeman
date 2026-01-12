@@ -3,7 +3,7 @@
 # Hypeman Uninstall Script
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/onkernel/hypeman/main/scripts/uninstall.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/kernel/hypeman/main/scripts/uninstall.sh | bash
 #
 # Options (via environment variables):
 #   KEEP_DATA=false   - Remove data directory (/var/lib/hypeman) - kept by default
@@ -166,5 +166,5 @@ echo "  Kill all:   sudo pkill -f caddy; sudo pkill -f cloud-h"
 echo ""
 
 echo "To reinstall:"
-echo "  curl -fsSL https://raw.githubusercontent.com/onkernel/hypeman/main/scripts/install.sh | bash"
+echo "  curl -fsSL https://raw.githubusercontent.com/kernel/hypeman/main/scripts/install.sh | bash"
 echo ""

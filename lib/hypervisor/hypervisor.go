@@ -9,7 +9,7 @@ import (
 	"net"
 	"time"
 
-	"github.com/onkernel/hypeman/lib/paths"
+	"github.com/kernel/hypeman/lib/paths"
 )
 
 // Type identifies the hypervisor implementation
