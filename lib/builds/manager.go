@@ -268,8 +268,12 @@ func (m *manager) runBuild(ctx context.Context, id string, req CreateBuildReques
 		return
 	}
 
-	// Update status to building (will be skipped if already terminal)
-	m.updateStatus(id, StatusBuilding, nil)
+	// Update status to building - if this returns false, the build was cancelled
+	// between our check above and now, so we should abort to avoid wasting resources
+	if !m.updateStatus(id, StatusBuilding, nil) {
+		m.logger.Info("build status update failed (likely cancelled), aborting", "id", id)
+		return
+	}
 
 	// Create timeout context
 	buildCtx, cancel := context.WithTimeout(ctx, time.Duration(policy.TimeoutSeconds)*time.Second)
@@ -603,18 +607,19 @@ func (c *bufferedConn) Read(p []byte) (int, error) {
 
 // updateStatus updates the build status
 // It checks for terminal states to prevent race conditions (e.g., cancelled build being overwritten)
-func (m *manager) updateStatus(id string, status string, err error) {
+// Returns true if the status was updated, false if skipped (e.g., build already in terminal state)
+func (m *manager) updateStatus(id string, status string, err error) bool {
 	meta, readErr := readMetadata(m.paths, id)
 	if readErr != nil {
 		m.logger.Error("read metadata for status update", "id", id, "error", readErr)
-		return
+		return false
 	}
 
 	// Don't overwrite terminal states - prevents race condition where cancelled
 	// build gets overwritten by a concurrent goroutine setting it to building
 	if isTerminalStatus(meta.Status) {
 		m.logger.Debug("skipping status update for terminal build", "id", id, "current", meta.Status, "requested", status)
-		return
+		return false
 	}
 
 	meta.Status = status
@@ -629,10 +634,12 @@ func (m *manager) updateStatus(id string, status string, err error) {
 
 	if writeErr := writeMetadata(m.paths, meta); writeErr != nil {
 		m.logger.Error("write metadata for status update", "id", id, "error", writeErr)
+		return false
 	}
 
 	// Notify subscribers of status change
 	m.notifyStatusChange(id, status)
+	return true
 }
 
 // isTerminalStatus returns true if the status represents a completed build
