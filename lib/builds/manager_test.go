@@ -121,6 +121,10 @@ func (m *mockInstanceManager) ListInstanceAllocations(ctx context.Context) ([]re
 	return nil, nil
 }
 
+func (m *mockInstanceManager) CheckResourceAvailability(ctx context.Context, vcpus int, memoryBytes int64) error {
+	return nil // Always return nil (resources available) in tests
+}
+
 // mockVolumeManager implements volumes.Manager for testing
 type mockVolumeManager struct {
 	volumes               map[string]*volumes.Volume
