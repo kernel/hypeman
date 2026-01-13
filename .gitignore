@@ -29,3 +29,4 @@ dist/**
 
 # UTM VM - downloaded ISO files
 scripts/utm/images/
+scripts/build/

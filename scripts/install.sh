@@ -9,6 +9,7 @@
 #   VERSION      - Install specific API version (default: latest)
 #   CLI_VERSION  - Install specific CLI version (default: latest)
 #   BRANCH       - Build from source using this branch (for development/testing)
+#   BINARY_DIR   - Use binaries from this directory instead of building/downloading
 #   INSTALL_DIR  - Binary installation directory (default: /opt/hypeman/bin)
 #   DATA_DIR     - Data directory (default: /var/lib/hypeman)
 #   CONFIG_DIR   - Config directory (default: /etc/hypeman)
@@ -25,6 +26,8 @@ CONFIG_FILE="${CONFIG_DIR}/config"
 SYSTEMD_DIR="/etc/systemd/system"
 SERVICE_NAME="hypeman"
 SERVICE_USER="hypeman"
+BUILD_SCRIPT="build-from-source.sh"
+
 
 # Colors for output (true color)
 RED='\033[38;2;255;110;110m'
@@ -99,11 +102,32 @@ command -v systemctl >/dev/null 2>&1 || error "systemctl is required but not ins
 command -v setcap >/dev/null 2>&1 || error "setcap is required but not installed (install libcap2-bin)"
 command -v openssl >/dev/null 2>&1 || error "openssl is required but not installed"
 
+# Branch and binary_dir are mutually exclusive
+if [ -n "$BRANCH" ] && [ -n "$BINARY_DIR" ]; then
+    error "BRANCH and BINARY_DIR are mutually exclusive"
+fi
+
 # Additional checks for build-from-source mode
 if [ -n "$BRANCH" ]; then
     command -v git >/dev/null 2>&1 || error "git is required for BRANCH mode but not installed"
     command -v go >/dev/null 2>&1 || error "go is required for BRANCH mode but not installed"
     command -v make >/dev/null 2>&1 || error "make is required for BRANCH mode but not installed"
+fi
+
+# Additional checks for BINARY_DIR mode
+if [ -n "$BINARY_DIR" ]; then
+    if [ ! -d "$BINARY_DIR" ]; then
+        error "BINARY_DIR does not exist: ${BINARY_DIR}"
+    fi
+    if [ ! -f "${BINARY_DIR}/${BINARY_NAME}" ]; then
+        error "Required binary not found: ${BINARY_DIR}/${BINARY_NAME}"
+    fi
+    if [ ! -f "${BINARY_DIR}/hypeman-token" ]; then
+        error "Required binary not found: ${BINARY_DIR}/hypeman-token"
+    fi
+    if [ ! -f "${BINARY_DIR}/.env.example" ]; then
+        error "Required file not found: ${BINARY_DIR}/.env.example"
+    fi
 fi
 
 # Detect OS
@@ -184,48 +208,34 @@ TMP_DIR=$(mktemp -d)
 trap "rm -rf $TMP_DIR" EXIT
 
 # =============================================================================
-# Get binaries (either download release or build from source)
+# Get binaries (either use BINARY_DIR, download release, or build from source)
 # =============================================================================
 
-if [ -n "$BRANCH" ]; then
+if [ -n "$BINARY_DIR" ]; then
+    # Use binaries from specified directory
+    info "Using binaries from ${BINARY_DIR}..."
+
+    # Copy binaries to TMP_DIR
+    info "Copying binaries from ${BINARY_DIR}..."
+    cp "${BINARY_DIR}/${BINARY_NAME}" "${TMP_DIR}/${BINARY_NAME}"
+    cp "${BINARY_DIR}/hypeman-token" "${TMP_DIR}/hypeman-token"
+    cp "${BINARY_DIR}/.env.example" "${TMP_DIR}/.env.example"
+
+    # Make binaries executable
+    chmod +x "${TMP_DIR}/${BINARY_NAME}"
+    chmod +x "${TMP_DIR}/hypeman-token"
+
+    VERSION="custom (from ${BINARY_DIR})"
+elif [ -n "$BRANCH" ]; then
     # Build from source mode
     info "Building from source (branch: $BRANCH)..."
     
-    BUILD_DIR="${TMP_DIR}/hypeman"
-    BUILD_LOG="${TMP_DIR}/build.log"
-    
-    # Clone repo (quiet)
-    if ! git clone --branch "$BRANCH" --depth 1 -q "https://github.com/${REPO}.git" "$BUILD_DIR" 2>&1 | tee -a "$BUILD_LOG"; then
-        error "Failed to clone repository. Build log:\n$(cat "$BUILD_LOG")"
+    # Run build script
+    if ! "OUTPUT_DIR=$TMP_DIR $BUILD_SCRIPT"; then
+        error "Build from source failed"
     fi
-    
-    info "Building binaries (this may take a few minutes)..."
-    cd "$BUILD_DIR"
-    
-    # Build main binary (includes dependencies) - capture output, show on error
-    if ! make build >> "$BUILD_LOG" 2>&1; then
-        echo ""
-        echo -e "${RED}Build failed. Full build log:${NC}"
-        cat "$BUILD_LOG"
-        error "Build failed"
-    fi
-    cp "bin/hypeman" "${TMP_DIR}/${BINARY_NAME}"
-    
-    # Build hypeman-token (not included in make build)
-    if ! go build -o "${TMP_DIR}/hypeman-token" ./cmd/gen-jwt >> "$BUILD_LOG" 2>&1; then
-        echo ""
-        echo -e "${RED}Build failed. Full build log:${NC}"
-        cat "$BUILD_LOG"
-        error "Failed to build hypeman-token"
-    fi
-    
-    # Copy .env.example for config template
-    cp ".env.example" "${TMP_DIR}/.env.example"
     
     VERSION="$BRANCH (source)"
-    cd - > /dev/null
-    
-    info "Build complete"
 else
     # Download release mode
     if [ -z "$VERSION" ]; then
