@@ -136,7 +136,7 @@ func listPendingBuilds(p *paths.Paths) ([]*buildMetadata, error) {
 		switch meta.Status {
 		case StatusBuilding, StatusPushing:
 			pending = append(pending, meta)
-		case StatusQueued:
+		case "queued":
 			// Backward compatibility: treat queued builds from previous versions as pending
 			// Update status to building since we no longer have a queue
 			meta.Status = StatusBuilding
