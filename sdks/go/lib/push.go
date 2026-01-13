@@ -12,7 +12,7 @@ import (
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/daemon"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
-	"github.com/onkernel/hypeman-go/internal/requestconfig"
+	"github.com/kernel/hypeman-go/internal/requestconfig"
 )
 
 // PushConfig holds the configuration needed to push images to hypeman's registry.

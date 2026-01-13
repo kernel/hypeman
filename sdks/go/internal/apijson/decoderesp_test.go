@@ -2,8 +2,8 @@ package apijson_test
 
 import (
 	"encoding/json"
-	"github.com/onkernel/hypeman-go/internal/apijson"
-	"github.com/onkernel/hypeman-go/packages/respjson"
+	"github.com/kernel/hypeman-go/internal/apijson"
+	"github.com/kernel/hypeman-go/packages/respjson"
 	"testing"
 )
 
