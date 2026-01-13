@@ -6,7 +6,6 @@ import "time"
 
 // Build status constants
 const (
-	StatusQueued    = "queued"
 	StatusBuilding  = "building"
 	StatusPushing   = "pushing"
 	StatusReady     = "ready"

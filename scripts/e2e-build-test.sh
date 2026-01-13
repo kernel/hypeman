@@ -347,28 +347,49 @@ run_built_image() {
         return 1
     fi
     
-    # Give the container a moment to run
-    sleep 2
+    # Give the container and guest agent time to initialize
+    sleep 5
     
     # Try to exec into the instance and run a simple command
+    # Note: The exec endpoint uses WebSocket, not REST API
     log "Executing test command in instance..."
-    EXEC_RESPONSE=$(curl -s -X POST "$API_URL/instances/$INSTANCE_ID/exec" \
-        -H "Authorization: Bearer $token" \
-        -H "Content-Type: application/json" \
-        -d '{
-            "command": ["node", "-e", "console.log(\"E2E VM test passed!\")"],
-            "timeout_seconds": 30
-        }')
     
-    EXEC_EXIT_CODE=$(echo "$EXEC_RESPONSE" | jq -r '.exit_code // -1')
-    EXEC_STDOUT=$(echo "$EXEC_RESPONSE" | jq -r '.stdout // ""')
+    # Check for websocat, download if needed
+    WEBSOCAT_BIN="${WEBSOCAT_BIN:-/tmp/websocat}"
+    if [ ! -x "$WEBSOCAT_BIN" ]; then
+        log "Downloading websocat for WebSocket exec..."
+        curl -sL -o "$WEBSOCAT_BIN" "https://github.com/vi/websocat/releases/download/v1.13.0/websocat.x86_64-unknown-linux-musl"
+        chmod +x "$WEBSOCAT_BIN"
+    fi
     
-    if [ "$EXEC_EXIT_CODE" = "0" ]; then
+    # Convert http:// to ws:// for WebSocket URL
+    WS_URL=$(echo "$API_URL" | sed 's|^http://|ws://|; s|^https://|wss://|')
+    
+    # Execute via WebSocket
+    # Note: websocat outputs binary messages (stdout) but not text messages (exit code JSON)
+    # So we verify the command ran by checking for expected output
+    # Write JSON to temp file to avoid shell escaping issues
+    # Include wait_for_agent to give guest agent time to be ready
+    EXEC_JSON_FILE=$(mktemp)
+    cat > "$EXEC_JSON_FILE" << 'EXECJSON'
+{"command":["cat","/etc/os-release"],"wait_for_agent":10}
+EXECJSON
+    
+    EXEC_OUTPUT=$(cat "$EXEC_JSON_FILE" | \
+        timeout 30 "$WEBSOCAT_BIN" -H="Authorization: Bearer $token" \
+        "$WS_URL/instances/$INSTANCE_ID/exec" 2>&1) || true
+    rm -f "$EXEC_JSON_FILE"
+    
+    # Check if we got expected output (proves exec worked - Alpine Linux is the base)
+    if echo "$EXEC_OUTPUT" | grep -qi "alpine\|linux"; then
         log "✅ Instance exec succeeded!"
-        log "  Output: $EXEC_STDOUT"
+        log "  Output: $(echo "$EXEC_OUTPUT" | head -3)"
+    elif echo "$EXEC_OUTPUT" | grep -qi "error"; then
+        warn "Instance exec returned an error"
+        log "  Output: $EXEC_OUTPUT"
     else
-        warn "Instance exec returned exit code: $EXEC_EXIT_CODE"
-        echo "$EXEC_RESPONSE" | jq .
+        warn "Instance exec returned unexpected output"
+        log "  Output: $EXEC_OUTPUT"
     fi
     
     # Cleanup

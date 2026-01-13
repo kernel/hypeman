@@ -121,6 +121,10 @@ func (m *mockInstanceManager) ListInstanceAllocations(ctx context.Context) ([]re
 	return nil, nil
 }
 
+func (m *mockInstanceManager) CheckResourceAvailability(ctx context.Context, vcpus int, memoryBytes int64) error {
+	return nil // Always return nil (resources available) in tests
+}
+
 // mockVolumeManager implements volumes.Manager for testing
 type mockVolumeManager struct {
 	volumes               map[string]*volumes.Volume
@@ -254,7 +258,6 @@ func setupTestManager(t *testing.T) (*manager, *mockInstanceManager, *mockVolume
 	mgr := &manager{
 		config:            config,
 		paths:             p,
-		queue:             NewBuildQueue(config.MaxConcurrentBuilds),
 		instanceManager:   instanceMgr,
 		volumeManager:     volumeMgr,
 		secretProvider:    secretProvider,
@@ -281,7 +284,7 @@ func TestCreateBuild_Success(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.NotEmpty(t, build.ID)
-	assert.Equal(t, StatusQueued, build.Status)
+	assert.Equal(t, StatusBuilding, build.Status)
 	assert.NotNil(t, build.CreatedAt)
 
 	// Verify source was stored
@@ -339,7 +342,7 @@ func TestGetBuild_Found(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, created.ID, build.ID)
-	assert.Equal(t, StatusQueued, build.Status)
+	assert.Equal(t, StatusBuilding, build.Status)
 }
 
 func TestGetBuild_NotFound(t *testing.T) {
@@ -387,35 +390,6 @@ func TestListBuilds_WithBuilds(t *testing.T) {
 	assert.Len(t, builds, 3)
 }
 
-func TestCancelBuild_QueuedBuild(t *testing.T) {
-	// Test the queue cancellation directly to avoid race conditions
-	queue := NewBuildQueue(1) // Only 1 concurrent
-
-	started := make(chan struct{})
-
-	// Add a blocking build to fill the single slot
-	queue.Enqueue("build-1", CreateBuildRequest{}, func() {
-		started <- struct{}{}
-		select {} // Block forever
-	})
-
-	// Wait for first build to start
-	<-started
-
-	// Add a second build - this one should be queued
-	queue.Enqueue("build-2", CreateBuildRequest{}, func() {})
-
-	// Verify it's pending
-	assert.Equal(t, 1, queue.PendingCount())
-
-	// Cancel the queued build
-	cancelled := queue.Cancel("build-2")
-	assert.True(t, cancelled)
-
-	// Verify it's removed from pending
-	assert.Equal(t, 0, queue.PendingCount())
-}
-
 func TestCancelBuild_NotFound(t *testing.T) {
 	mgr, _, _, tempDir := setupTestManager(t)
 	defer os.RemoveAll(tempDir)
@@ -453,7 +427,6 @@ func TestCancelBuild_AlreadyCompleted(t *testing.T) {
 	mgr := &manager{
 		config:         config,
 		paths:          p,
-		queue:          NewBuildQueue(config.MaxConcurrentBuilds),
 		tokenGenerator: NewRegistryTokenGenerator(config.RegistrySecret),
 		logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
@@ -521,35 +494,6 @@ func TestGetBuildLogs_NotFound(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestBuildQueue_ConcurrencyLimit(t *testing.T) {
-	// Test the queue directly rather than through the manager
-	// because the manager's runBuild goroutine completes quickly with mocks
-	queue := NewBuildQueue(2) // Max 2 concurrent
-
-	started := make(chan string, 5)
-	
-	// Enqueue 5 builds with blocking start functions
-	for i := 0; i < 5; i++ {
-		id := string(rune('A' + i))
-		queue.Enqueue(id, CreateBuildRequest{}, func() {
-			started <- id
-			// Block until test completes - simulates long-running build
-			select {}
-		})
-	}
-
-	// Give goroutines time to start
-	for i := 0; i < 2; i++ {
-		<-started
-	}
-
-	// First 2 should be active, rest should be pending
-	active := queue.ActiveCount()
-	pending := queue.PendingCount()
-	assert.Equal(t, 2, active, "expected 2 active builds")
-	assert.Equal(t, 3, pending, "expected 3 pending builds")
-}
-
 func TestUpdateStatus(t *testing.T) {
 	// Test the updateStatus function directly using storage functions
 	// This avoids race conditions with the build queue goroutines
@@ -563,22 +507,19 @@ func TestUpdateStatus(t *testing.T) {
 	// Create initial metadata
 	meta := &buildMetadata{
 		ID:        "test-build-1",
-		Status:    StatusQueued,
+		Status:    StatusBuilding,
 		CreatedAt: time.Now(),
 	}
 	require.NoError(t, writeMetadata(p, meta))
 
-	// Update status
-	meta.Status = StatusBuilding
-	now := time.Now()
-	meta.StartedAt = &now
+	// Update status to pushing
+	meta.Status = StatusPushing
 	require.NoError(t, writeMetadata(p, meta))
 
 	// Read back and verify
 	readMeta, err := readMetadata(p, "test-build-1")
 	require.NoError(t, err)
-	assert.Equal(t, StatusBuilding, readMeta.Status)
-	assert.NotNil(t, readMeta.StartedAt)
+	assert.Equal(t, StatusPushing, readMeta.Status)
 }
 
 func TestUpdateStatus_WithError(t *testing.T) {
@@ -593,7 +534,7 @@ func TestUpdateStatus_WithError(t *testing.T) {
 	// Create initial metadata
 	meta := &buildMetadata{
 		ID:        "test-build-1",
-		Status:    StatusQueued,
+		Status:    StatusBuilding,
 		CreatedAt: time.Now(),
 	}
 	require.NoError(t, writeMetadata(p, meta))
@@ -769,26 +710,42 @@ func TestStreamBuildEvents_NoLogs(t *testing.T) {
 }
 
 func TestStreamBuildEvents_WithStatusUpdate(t *testing.T) {
-	mgr, _, _, tempDir := setupTestManager(t)
+	// Test that status updates are received through event streaming
+	// We create build metadata directly to avoid timing issues with the build goroutine
+	tempDir, err := os.MkdirTemp("", "builds-test-*")
+	require.NoError(t, err)
 	defer os.RemoveAll(tempDir)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	p := paths.New(tempDir)
+	buildID := "test-status-build"
+	require.NoError(t, os.MkdirAll(filepath.Join(tempDir, "builds", buildID), 0755))
 
-	// Create a build
-	req := CreateBuildRequest{Dockerfile: "FROM alpine"}
-	sourceData := []byte("fake-tarball-data")
-	build, err := mgr.CreateBuild(ctx, req, sourceData)
-	require.NoError(t, err)
+	// Create metadata with building status
+	meta := &buildMetadata{
+		ID:        buildID,
+		Status:    StatusBuilding,
+		CreatedAt: time.Now(),
+	}
+	require.NoError(t, writeMetadata(p, meta))
 
 	// Write some initial logs
-	logDir := filepath.Join(tempDir, "builds", build.ID, "logs")
+	logDir := filepath.Join(tempDir, "builds", buildID, "logs")
 	require.NoError(t, os.MkdirAll(logDir, 0755))
 	logPath := filepath.Join(logDir, "build.log")
 	require.NoError(t, os.WriteFile(logPath, []byte("initial log\n"), 0644))
 
+	// Create a minimal manager for streaming
+	mgr := &manager{
+		paths:             p,
+		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
+		statusSubscribers: make(map[string][]chan BuildEvent),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	// Stream events with follow
-	eventChan, err := mgr.StreamBuildEvents(ctx, build.ID, true)
+	eventChan, err := mgr.StreamBuildEvents(ctx, buildID, true)
 	require.NoError(t, err)
 
 	// Read events until we see the initial log
@@ -802,14 +759,13 @@ eventLoop:
 				foundInitialLog = true
 				break eventLoop
 			}
-			// Skip status events from queue (e.g. "building")
 		case <-timeout:
 			t.Fatal("timeout waiting for initial log event")
 		}
 	}
 
 	// Trigger a status update to "ready" (should cause stream to close)
-	mgr.updateStatus(build.ID, StatusReady, nil)
+	mgr.updateStatus(buildID, StatusReady, nil)
 
 	// Should receive "ready" status event and channel should close
 	var readyReceived bool
@@ -831,25 +787,42 @@ eventLoop:
 }
 
 func TestStreamBuildEvents_ContextCancellation(t *testing.T) {
-	mgr, _, _, tempDir := setupTestManager(t)
+	// Test that context cancellation properly closes the event channel
+	// We use a simpler approach: create build metadata directly without
+	// starting the actual build goroutine to avoid timing issues
+	tempDir, err := os.MkdirTemp("", "builds-test-*")
+	require.NoError(t, err)
 	defer os.RemoveAll(tempDir)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	p := paths.New(tempDir)
+	buildID := "test-cancel-build"
+	require.NoError(t, os.MkdirAll(filepath.Join(tempDir, "builds", buildID), 0755))
 
-	// Create a build
-	req := CreateBuildRequest{Dockerfile: "FROM alpine"}
-	sourceData := []byte("fake-tarball-data")
-	build, err := mgr.CreateBuild(ctx, req, sourceData)
-	require.NoError(t, err)
+	// Create metadata with building status
+	meta := &buildMetadata{
+		ID:        buildID,
+		Status:    StatusBuilding,
+		CreatedAt: time.Now(),
+	}
+	require.NoError(t, writeMetadata(p, meta))
 
 	// Write some logs
-	logDir := filepath.Join(tempDir, "builds", build.ID, "logs")
+	logDir := filepath.Join(tempDir, "builds", buildID, "logs")
 	require.NoError(t, os.MkdirAll(logDir, 0755))
 	logPath := filepath.Join(logDir, "build.log")
 	require.NoError(t, os.WriteFile(logPath, []byte("log line\n"), 0644))
 
+	// Create a minimal manager for streaming
+	mgr := &manager{
+		paths:             p,
+		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
+		statusSubscribers: make(map[string][]chan BuildEvent),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
 	// Stream events with follow
-	eventChan, err := mgr.StreamBuildEvents(ctx, build.ID, true)
+	eventChan, err := mgr.StreamBuildEvents(ctx, buildID, true)
 	require.NoError(t, err)
 
 	// Read events until we see the log line
@@ -863,7 +836,6 @@ eventLoop:
 				foundLogLine = true
 				break eventLoop
 			}
-			// Skip status events from queue (e.g. "building")
 		case <-timeout:
 			t.Fatal("timeout waiting for log event")
 		}

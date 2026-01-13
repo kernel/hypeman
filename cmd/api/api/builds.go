@@ -160,6 +160,16 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 				Code:    "invalid_source",
 				Message: err.Error(),
 			}, nil
+		case errors.Is(err, builds.ErrResourcesExhausted):
+			return oapi.CreateBuild503JSONResponse{
+				Body: oapi.Error{
+					Code:    "resources_exhausted",
+					Message: "insufficient resources for build, please retry later",
+				},
+				Headers: oapi.CreateBuild503ResponseHeaders{
+					RetryAfter: 30,
+				},
+			}, nil
 		default:
 			log.ErrorContext(ctx, "failed to create build", "error", err)
 			return oapi.CreateBuild500JSONResponse{
