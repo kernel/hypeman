@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -160,6 +161,16 @@ func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourc
 		policy.ApplyDefaults()
 	}
 
+	// Preflight check: verify resources are available before accepting the build
+	// This allows us to return 503 synchronously if resources are exhausted
+	builderMemory := int64(policy.MemoryMB) * 1024 * 1024
+	if err := m.instanceManager.CheckResourceAvailability(ctx, policy.CPUs, builderMemory); err != nil {
+		if errors.Is(err, instances.ErrResourcesExhausted) {
+			return nil, fmt.Errorf("%w: %v", ErrResourcesExhausted, err)
+		}
+		return nil, fmt.Errorf("check resource availability: %w", err)
+	}
+
 	m.createMu.Lock()
 	defer m.createMu.Unlock()
 
@@ -246,7 +257,18 @@ func (m *manager) runBuild(ctx context.Context, id string, req CreateBuildReques
 	start := time.Now()
 	m.logger.Info("starting build", "id", id)
 
-	// Update status to building
+	// Check if build was cancelled before we started
+	meta, err := readMetadata(m.paths, id)
+	if err != nil {
+		m.logger.Error("failed to read metadata at build start", "id", id, "error", err)
+		return
+	}
+	if isTerminalStatus(meta.Status) {
+		m.logger.Info("build already in terminal state, skipping", "id", id, "status", meta.Status)
+		return
+	}
+
+	// Update status to building (will be skipped if already terminal)
 	m.updateStatus(id, StatusBuilding, nil)
 
 	// Create timeout context
@@ -580,10 +602,18 @@ func (c *bufferedConn) Read(p []byte) (int, error) {
 }
 
 // updateStatus updates the build status
+// It checks for terminal states to prevent race conditions (e.g., cancelled build being overwritten)
 func (m *manager) updateStatus(id string, status string, err error) {
 	meta, readErr := readMetadata(m.paths, id)
 	if readErr != nil {
 		m.logger.Error("read metadata for status update", "id", id, "error", readErr)
+		return
+	}
+
+	// Don't overwrite terminal states - prevents race condition where cancelled
+	// build gets overwritten by a concurrent goroutine setting it to building
+	if isTerminalStatus(meta.Status) {
+		m.logger.Debug("skipping status update for terminal build", "id", id, "current", meta.Status, "requested", status)
 		return
 	}
 
@@ -603,6 +633,16 @@ func (m *manager) updateStatus(id string, status string, err error) {
 
 	// Notify subscribers of status change
 	m.notifyStatusChange(id, status)
+}
+
+// isTerminalStatus returns true if the status represents a completed build
+func isTerminalStatus(status string) bool {
+	switch status {
+	case StatusReady, StatusFailed, StatusCancelled:
+		return true
+	default:
+		return false
+	}
 }
 
 // updateBuildComplete updates the build with final results
@@ -718,11 +758,18 @@ func (m *manager) CancelBuild(ctx context.Context, id string) error {
 
 	switch meta.Status {
 	case StatusBuilding, StatusPushing:
-		// Terminate the builder instance to cancel the build
-		if meta.BuilderInstance != nil {
-			m.instanceManager.DeleteInstance(ctx, *meta.BuilderInstance)
-		}
+		// Mark as cancelled first to prevent race condition with runBuild goroutine
 		m.updateStatus(id, StatusCancelled, nil)
+
+		// Then terminate the builder instance if it exists
+		if meta.BuilderInstance != nil {
+			// Use a fresh context with timeout since the request context may be cancelled
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := m.instanceManager.DeleteInstance(cleanupCtx, *meta.BuilderInstance); err != nil {
+				m.logger.Warn("failed to delete builder instance during cancel", "id", id, "instance", *meta.BuilderInstance, "error", err)
+			}
+		}
 		return nil
 
 	case StatusReady, StatusFailed, StatusCancelled:

@@ -17,4 +17,7 @@ var (
 
 	// ErrAmbiguousName is returned when multiple instances have the same name
 	ErrAmbiguousName = errors.New("multiple instances with the same name")
+
+	// ErrResourcesExhausted is returned when an instance cannot be created due to resource limits
+	ErrResourcesExhausted = errors.New("resources exhausted")
 )
