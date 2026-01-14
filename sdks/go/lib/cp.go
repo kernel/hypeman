@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/onkernel/hypeman-go/internal/requestconfig"
+	"github.com/kernel/hypeman-go/internal/requestconfig"
 )
 
 // CpConfig holds the configuration needed for copy operations.

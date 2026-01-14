@@ -18,10 +18,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/onkernel/hypeman-go/internal"
-	"github.com/onkernel/hypeman-go/internal/apierror"
-	"github.com/onkernel/hypeman-go/internal/apiform"
-	"github.com/onkernel/hypeman-go/internal/apiquery"
+	"github.com/kernel/hypeman-go/internal"
+	"github.com/kernel/hypeman-go/internal/apierror"
+	"github.com/kernel/hypeman-go/internal/apiform"
+	"github.com/kernel/hypeman-go/internal/apiquery"
 )
 
 func getDefaultHeaders() map[string]string {

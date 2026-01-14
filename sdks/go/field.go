@@ -1,7 +1,7 @@
 package hypeman
 
 import (
-	"github.com/onkernel/hypeman-go/packages/param"
+	"github.com/kernel/hypeman-go/packages/param"
 	"io"
 	"time"
 )

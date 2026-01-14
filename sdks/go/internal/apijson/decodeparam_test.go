@@ -3,8 +3,8 @@ package apijson_test
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/onkernel/hypeman-go/internal/apijson"
-	"github.com/onkernel/hypeman-go/packages/param"
+	"github.com/kernel/hypeman-go/internal/apijson"
+	"github.com/kernel/hypeman-go/packages/param"
 	"reflect"
 	"testing"
 )

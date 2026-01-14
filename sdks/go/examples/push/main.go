@@ -20,8 +20,8 @@ import (
 
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
-	hypeman "github.com/onkernel/hypeman-go"
-	"github.com/onkernel/hypeman-go/lib"
+	hypeman "github.com/kernel/hypeman-go"
+	"github.com/kernel/hypeman-go/lib"
 )
 
 func main() {
