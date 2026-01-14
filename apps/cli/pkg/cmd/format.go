@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/onkernel/hypeman-go"
+	"github.com/kernel/hypeman-go"
 )
 
 // TableWriter provides simple table formatting for CLI output

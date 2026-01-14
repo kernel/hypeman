@@ -15,7 +15,7 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/onkernel/hypeman-go/option"
+	"github.com/kernel/hypeman-go/option"
 
 	"github.com/tidwall/sjson"
 	"github.com/urfave/cli/v3"

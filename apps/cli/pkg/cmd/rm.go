@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/onkernel/hypeman-go"
-	"github.com/onkernel/hypeman-go/option"
+	"github.com/kernel/hypeman-go"
+	"github.com/kernel/hypeman-go/option"
 	"github.com/urfave/cli/v3"
 )
 

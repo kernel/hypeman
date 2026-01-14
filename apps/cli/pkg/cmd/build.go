@@ -390,7 +390,7 @@ func streamBuildEvents(ctx context.Context, baseURL, apiKey, buildID string) err
 
 	// Check final status
 	if finalStatus == "failed" {
-		return fmt.Errorf(buildError)
+		return fmt.Errorf("%s", buildError)
 	}
 	if finalStatus == "ready" {
 		return nil

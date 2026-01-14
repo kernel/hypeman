@@ -7,10 +7,10 @@ import (
 	"mime/multipart"
 	"os"
 
-	"github.com/onkernel/hypeman-cli/internal/apiform"
-	"github.com/onkernel/hypeman-cli/internal/apiquery"
-	"github.com/onkernel/hypeman-cli/internal/requestflag"
-	"github.com/onkernel/hypeman-go/option"
+	"github.com/kernel/hypeman-cli/internal/apiform"
+	"github.com/kernel/hypeman-cli/internal/apiquery"
+	"github.com/kernel/hypeman-cli/internal/requestflag"
+	"github.com/kernel/hypeman-go/option"
 
 	"github.com/urfave/cli/v3"
 )

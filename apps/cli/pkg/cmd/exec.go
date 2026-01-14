@@ -14,7 +14,7 @@ import (
 	"syscall"
 
 	"github.com/gorilla/websocket"
-	"github.com/onkernel/hypeman-go"
+	"github.com/kernel/hypeman-go"
 	"github.com/urfave/cli/v3"
 	"golang.org/x/term"
 )

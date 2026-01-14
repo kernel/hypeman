@@ -16,8 +16,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/onkernel/hypeman-go"
-	"github.com/onkernel/hypeman-go/lib"
+	"github.com/kernel/hypeman-go"
+	"github.com/kernel/hypeman-go/lib"
 	"github.com/urfave/cli/v3"
 )
 

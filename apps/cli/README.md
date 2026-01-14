@@ -1,13 +1,13 @@
 # Hypeman CLI
 
-The official CLI for [Hypeman](https://github.com/onkernel/hypeman/).
+The official CLI for [Hypeman](https://github.com/kernel/hypeman/).
 
 ## Installation
 
 ### Installing with Homebrew
 
 ```sh
-brew install onkernel/tap/hypeman
+brew install kernel/tap/hypeman
 ```
 
 ### Installing with Go
@@ -15,7 +15,7 @@ brew install onkernel/tap/hypeman
 <!-- x-release-please-start-version -->
 
 ```sh
-go install 'github.com/onkernel/hypeman-cli/cmd/hypeman@latest'
+go install 'github.com/kernel/hypeman-cli/cmd/hypeman@latest'
 ```
 
 ### Running Locally
@@ -135,7 +135,7 @@ hypeman [resource] [command] [flags]
 
 ### Testing Preview Branches
 
-When developing features in the main [hypeman](https://github.com/onkernel/hypeman) repo, Stainless automatically creates preview branches in `stainless-sdks/hypeman-cli` with your API changes. You can check out these branches locally to test the CLI changes:
+When developing features in the main [hypeman](https://github.com/kernel/hypeman) repo, Stainless automatically creates preview branches in `stainless-sdks/hypeman-cli` with your API changes. You can check out these branches locally to test the CLI changes:
 
 ```bash
 # Checkout preview/<branch> (e.g., if working on "devices" branch in hypeman)

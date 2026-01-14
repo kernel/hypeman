@@ -9,8 +9,8 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/onkernel/hypeman-cli/pkg/cmd"
-	"github.com/onkernel/hypeman-go"
+	"github.com/kernel/hypeman-cli/pkg/cmd"
+	"github.com/kernel/hypeman-go"
 	"github.com/tidwall/gjson"
 )
 

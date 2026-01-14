@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-# Point the onkernel/hypeman-go dependency to stainless-sdks/hypeman-go at a specific branch.
+# Point the kernel/hypeman-go dependency to stainless-sdks/hypeman-go at a specific branch.
 #
 # Usage:
 #   ./scripts/use-sdk-preview <branch-name>
@@ -13,7 +13,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 STAINLESS_SDK_REPO="github.com/stainless-sdks/hypeman-go"
-PUBLIC_SDK_REPO="github.com/onkernel/hypeman-go"
+PUBLIC_SDK_REPO="github.com/kernel/hypeman-go"
 
 # Ensure the Go toolchain can access the private SDK repository.
 if [[ -z "${GOPRIVATE:-}" ]]; then
