@@ -67,7 +67,7 @@ snapshot:
 
 nfpms:
   - license: Apache-2.0
-    maintainer: 
+    maintainer: Kernel <support@kernel.dev>
     bindir: /usr
     formats:
       - apk

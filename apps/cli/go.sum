@@ -74,8 +74,8 @@ github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.2 h1:8Tjv8EJ+pM1xP8mK6egEbD1OgnV
 github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.2/go.mod h1:pkJQ2tZHJ0aFOVEEot6oZmaVEZcRme73eIFmhiVuRWs=
 github.com/itchyny/json2yaml v0.1.4 h1:/pErVOXGG5iTyXHi/QKR4y3uzhLjGTEmmJIy97YT+k8=
 github.com/itchyny/json2yaml v0.1.4/go.mod h1:6iudhBZdarpjLFRNj+clWLAkGft+9uCcjAZYXUH9eGI=
-github.com/kernel/hypeman-go v0.9.0 h1:6qlMVyDsS6DHl9kugUedvqAt63Qdp8WMvnczoQ9Jf3s=
-github.com/kernel/hypeman-go v0.9.0/go.mod h1:guRrhyP9QW/ebUS1UcZ0uZLLJeGAAhDNzSi68U4M9hI=
+github.com/kernel/hypeman-go v0.9.1 h1:4EcC9sOYH6f1365IIgJQqgFaZGPekl9DbhhpH/Tt0e8=
+github.com/kernel/hypeman-go v0.9.1/go.mod h1:guRrhyP9QW/ebUS1UcZ0uZLLJeGAAhDNzSi68U4M9hI=
 github.com/klauspost/compress v1.18.1 h1:bcSGx7UbpBqMChDtsF28Lw6v/G94LPrrbMbdC3JH2co=
 github.com/klauspost/compress v1.18.1/go.mod h1:ZQFFVG+MdnR0P+l6wpXgIL4NTtwiKIdBnrBd8Nrxr+0=
 github.com/lucasb-eyer/go-colorful v1.2.0 h1:1nnpGOrhyZZuNyfu1QjKiUICQ74+3FNCN69Aj6K7nkY=
