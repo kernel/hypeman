@@ -13,7 +13,6 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -183,10 +182,7 @@ func cpToInstanceInternal(ctx context.Context, cfg CpConfig, opts CpToInstanceOp
 	// Get UID/GID if archive mode is enabled
 	var uid, gid uint32
 	if opts.Archive {
-		if stat, ok := srcInfo.Sys().(*syscall.Stat_t); ok {
-			uid = stat.Uid
-			gid = stat.Gid
-		}
+		uid, gid = getFileOwnership(srcInfo)
 	}
 
 	// Send initial request
