@@ -211,6 +211,30 @@ Returns GPU status along with other resources:
 }
 ```
 
+## Upgrading NVIDIA Drivers
+
+To upgrade the NVIDIA driver version:
+
+1. **Choose a new version** from [NVIDIA's Linux drivers](https://www.nvidia.com/Download/index.aspx)
+
+2. **Update kernel/linux:**
+   - Edit `.github/workflows/release.yaml`
+   - Change `DRIVER_VERSION=` in all locations (search for the current version)
+   - The workflow file contains comments explaining what to update
+   - Create a new release tag (e.g., `ch-6.12.8-kernel-2-YYYYMMDD`)
+
+3. **Update hypeman:**
+   - Edit `lib/system/versions.go`
+   - Add new `KernelVersion` constant
+   - Update `DefaultKernelVersion`
+   - Update `NvidiaDriverVersion` map entry
+   - Update `NvidiaModuleURLs` with new release URL
+   - Update `NvidiaDriverLibURLs` with new release URL
+
+4. **Test thoroughly** before deploying:
+   - Run GPU passthrough E2E tests
+   - Verify with real CUDA workloads (e.g., ollama inference)
+
 ## Troubleshooting
 
 ### No GPU shown in /resources

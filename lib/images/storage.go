@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/onkernel/hypeman/lib/paths"
+	"github.com/kernel/hypeman/lib/paths"
 )
 
 type imageMetadata struct {

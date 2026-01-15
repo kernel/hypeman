@@ -1,7 +1,7 @@
 package resources
 
 import (
-	"github.com/onkernel/hypeman/lib/devices"
+	"github.com/kernel/hypeman/lib/devices"
 )
 
 // GPUResourceStatus represents the GPU resource status for the API response.

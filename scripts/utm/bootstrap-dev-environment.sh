@@ -94,16 +94,16 @@ else
     echo "⚠ KVM may not be available (nested virtualization requires M3+ and macOS 15+)"
 fi
 
-# Clone onkernel repositories
-echo "[10/10] Cloning onkernel repositories..."
+# Clone kernel repositories
+echo "[10/10] Cloning kernel repositories..."
 mkdir -p ~/code
 
 REPOS=(
-    "onkernel/hypeman"
-    "onkernel/hypeman-ts"
-    "onkernel/hypeman-go"
-    "onkernel/hypeman-cli"
-    "onkernel/linux"
+    "kernel/hypeman"
+    "kernel/hypeman-ts"
+    "kernel/hypeman-go"
+    "kernel/hypeman-cli"
+    "kernel/linux"
 )
 
 # Check GitHub authentication status

@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/onkernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/hypervisor"
 )
 
 // BuildArgs converts hypervisor.VMConfig to QEMU command-line arguments.

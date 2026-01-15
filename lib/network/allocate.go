@@ -8,7 +8,7 @@ import (
 	"net"
 	"strings"
 
-	"github.com/onkernel/hypeman/lib/logger"
+	"github.com/kernel/hypeman/lib/logger"
 )
 
 // CreateAllocation allocates IP/MAC/TAP for instance on the default network

@@ -284,3 +284,40 @@ func (p *Paths) IngressesDir() string {
 func (p *Paths) IngressMetadata(id string) string {
 	return filepath.Join(p.IngressesDir(), id+".json")
 }
+
+// Build path methods
+
+// BuildsDir returns the root builds directory.
+func (p *Paths) BuildsDir() string {
+	return filepath.Join(p.dataDir, "builds")
+}
+
+// BuildDir returns the directory for a specific build.
+func (p *Paths) BuildDir(id string) string {
+	return filepath.Join(p.BuildsDir(), id)
+}
+
+// BuildMetadata returns the path to build metadata.json.
+func (p *Paths) BuildMetadata(id string) string {
+	return filepath.Join(p.BuildDir(id), "metadata.json")
+}
+
+// BuildLogs returns the path to build logs directory.
+func (p *Paths) BuildLogs(id string) string {
+	return filepath.Join(p.BuildDir(id), "logs")
+}
+
+// BuildLog returns the path to the main build log file.
+func (p *Paths) BuildLog(id string) string {
+	return filepath.Join(p.BuildLogs(id), "build.log")
+}
+
+// BuildSourceDir returns the path to the source directory for a build.
+func (p *Paths) BuildSourceDir(id string) string {
+	return filepath.Join(p.BuildDir(id), "source")
+}
+
+// BuildConfig returns the path to the build config file (passed to builder VM).
+func (p *Paths) BuildConfig(id string) string {
+	return filepath.Join(p.BuildDir(id), "config.json")
+}

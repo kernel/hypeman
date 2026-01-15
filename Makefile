@@ -206,6 +206,17 @@ test: ensure-ch-binaries ensure-caddy-binaries build-embedded
 gen-jwt: $(GODOTENV)
 	@$(GODOTENV) -f .env go run ./cmd/gen-jwt -user-id $${USER_ID:-test-user}
 
+# Build the generic builder image for builds
+build-builder:
+	docker build -t hypeman/builder:latest -f lib/builds/images/generic/Dockerfile .
+
+# Alias for backwards compatibility
+build-builders: build-builder
+
+# Run E2E build system test (requires server running: make dev)
+e2e-build-test:
+	@./scripts/e2e-build-test.sh
+
 # Clean generated files and binaries
 clean:
 	rm -rf $(BIN_DIR)

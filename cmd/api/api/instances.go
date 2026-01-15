@@ -9,14 +9,14 @@ import (
 	"strings"
 
 	"github.com/c2h5oh/datasize"
-	"github.com/onkernel/hypeman/lib/guest"
-	"github.com/onkernel/hypeman/lib/hypervisor"
-	"github.com/onkernel/hypeman/lib/instances"
-	"github.com/onkernel/hypeman/lib/logger"
-	mw "github.com/onkernel/hypeman/lib/middleware"
-	"github.com/onkernel/hypeman/lib/network"
-	"github.com/onkernel/hypeman/lib/oapi"
-	"github.com/onkernel/hypeman/lib/resources"
+	"github.com/kernel/hypeman/lib/guest"
+	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/instances"
+	"github.com/kernel/hypeman/lib/logger"
+	mw "github.com/kernel/hypeman/lib/middleware"
+	"github.com/kernel/hypeman/lib/network"
+	"github.com/kernel/hypeman/lib/oapi"
+	"github.com/kernel/hypeman/lib/resources"
 	"github.com/samber/lo"
 )
 

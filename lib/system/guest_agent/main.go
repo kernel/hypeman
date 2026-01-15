@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/mdlayher/vsock"
-	pb "github.com/onkernel/hypeman/lib/guest"
+	pb "github.com/kernel/hypeman/lib/guest"
 	"google.golang.org/grpc"
 )
 

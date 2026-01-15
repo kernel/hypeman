@@ -29,6 +29,23 @@ const (
 	BearerAuthScopes = "bearerAuth.Scopes"
 )
 
+// Defines values for BuildEventType.
+const (
+	Heartbeat BuildEventType = "heartbeat"
+	Log       BuildEventType = "log"
+	Status    BuildEventType = "status"
+)
+
+// Defines values for BuildStatus.
+const (
+	BuildStatusBuilding  BuildStatus = "building"
+	BuildStatusCancelled BuildStatus = "cancelled"
+	BuildStatusFailed    BuildStatus = "failed"
+	BuildStatusPushing   BuildStatus = "pushing"
+	BuildStatusQueued    BuildStatus = "queued"
+	BuildStatusReady     BuildStatus = "ready"
+)
+
 // Defines values for CreateInstanceRequestHypervisor.
 const (
 	CreateInstanceRequestHypervisorCloudHypervisor CreateInstanceRequestHypervisor = "cloud-hypervisor"
@@ -54,11 +71,11 @@ const (
 
 // Defines values for ImageStatus.
 const (
-	Converting ImageStatus = "converting"
-	Failed     ImageStatus = "failed"
-	Pending    ImageStatus = "pending"
-	Pulling    ImageStatus = "pulling"
-	Ready      ImageStatus = "ready"
+	ImageStatusConverting ImageStatus = "converting"
+	ImageStatusFailed     ImageStatus = "failed"
+	ImageStatusPending    ImageStatus = "pending"
+	ImageStatusPulling    ImageStatus = "pulling"
+	ImageStatusReady      ImageStatus = "ready"
 )
 
 // Defines values for InstanceHypervisor.
@@ -117,6 +134,79 @@ type AvailableDevice struct {
 	// VendorName Human-readable vendor name
 	VendorName *string `json:"vendor_name,omitempty"`
 }
+
+// Build defines model for Build.
+type Build struct {
+	// CompletedAt Build completion timestamp
+	CompletedAt *time.Time `json:"completed_at"`
+
+	// CreatedAt Build creation timestamp
+	CreatedAt time.Time `json:"created_at"`
+
+	// DurationMs Build duration in milliseconds
+	DurationMs *int64 `json:"duration_ms"`
+
+	// Error Error message (only when status is failed)
+	Error *string `json:"error"`
+
+	// Id Build job identifier
+	Id string `json:"id"`
+
+	// ImageDigest Digest of built image (only when status is ready)
+	ImageDigest *string `json:"image_digest"`
+
+	// ImageRef Full image reference (only when status is ready)
+	ImageRef   *string          `json:"image_ref"`
+	Provenance *BuildProvenance `json:"provenance,omitempty"`
+
+	// QueuePosition Position in build queue (only when status is queued)
+	QueuePosition *int `json:"queue_position"`
+
+	// StartedAt Build start timestamp
+	StartedAt *time.Time `json:"started_at"`
+
+	// Status Build job status
+	Status BuildStatus `json:"status"`
+}
+
+// BuildEvent defines model for BuildEvent.
+type BuildEvent struct {
+	// Content Log line content (only for type=log)
+	Content *string `json:"content,omitempty"`
+
+	// Status Build job status
+	Status *BuildStatus `json:"status,omitempty"`
+
+	// Timestamp Event timestamp
+	Timestamp time.Time `json:"timestamp"`
+
+	// Type Event type
+	Type BuildEventType `json:"type"`
+}
+
+// BuildEventType Event type
+type BuildEventType string
+
+// BuildProvenance defines model for BuildProvenance.
+type BuildProvenance struct {
+	// BaseImageDigest Pinned base image digest used
+	BaseImageDigest *string `json:"base_image_digest,omitempty"`
+
+	// BuildkitVersion BuildKit version used
+	BuildkitVersion *string `json:"buildkit_version,omitempty"`
+
+	// LockfileHashes Map of lockfile names to SHA256 hashes
+	LockfileHashes *map[string]string `json:"lockfile_hashes,omitempty"`
+
+	// SourceHash SHA256 hash of source tarball
+	SourceHash *string `json:"source_hash,omitempty"`
+
+	// Timestamp Build completion timestamp
+	Timestamp *time.Time `json:"timestamp,omitempty"`
+}
+
+// BuildStatus Build job status
+type BuildStatus string
 
 // CreateDeviceRequest defines model for CreateDeviceRequest.
 type CreateDeviceRequest struct {
@@ -676,6 +766,35 @@ type VolumeMount struct {
 	VolumeId string `json:"volume_id"`
 }
 
+// CreateBuildMultipartBody defines parameters for CreateBuild.
+type CreateBuildMultipartBody struct {
+	// BaseImageDigest Optional pinned base image digest
+	BaseImageDigest *string `json:"base_image_digest,omitempty"`
+
+	// CacheScope Tenant-specific cache key prefix
+	CacheScope *string `json:"cache_scope,omitempty"`
+
+	// Dockerfile Dockerfile content. Required if not included in the source tarball.
+	Dockerfile *string `json:"dockerfile,omitempty"`
+
+	// Secrets JSON array of secret references to inject during build.
+	// Each object has "id" (required) for use with --mount=type=secret,id=...
+	// Example: [{"id": "npm_token"}, {"id": "github_token"}]
+	Secrets *string `json:"secrets,omitempty"`
+
+	// Source Source tarball (tar.gz) containing application code and optionally a Dockerfile
+	Source openapi_types.File `json:"source"`
+
+	// TimeoutSeconds Build timeout (default 600)
+	TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
+}
+
+// GetBuildEventsParams defines parameters for GetBuildEvents.
+type GetBuildEventsParams struct {
+	// Follow Continue streaming new events after initial output
+	Follow *bool `form:"follow,omitempty" json:"follow,omitempty"`
+}
+
 // GetInstanceLogsParams defines parameters for GetInstanceLogs.
 type GetInstanceLogsParams struct {
 	// Tail Number of lines to return from end
@@ -717,6 +836,9 @@ type CreateVolumeMultipartBody struct {
 	// SizeGb Maximum size in GB (extraction fails if content exceeds this)
 	SizeGb int `json:"size_gb"`
 }
+
+// CreateBuildMultipartRequestBody defines body for CreateBuild for multipart/form-data ContentType.
+type CreateBuildMultipartRequestBody CreateBuildMultipartBody
 
 // CreateDeviceJSONRequestBody defines body for CreateDevice for application/json ContentType.
 type CreateDeviceJSONRequestBody = CreateDeviceRequest
@@ -812,6 +934,21 @@ func WithRequestEditorFn(fn RequestEditorFn) ClientOption {
 
 // The interface specification for the client above.
 type ClientInterface interface {
+	// ListBuilds request
+	ListBuilds(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreateBuildWithBody request with any body
+	CreateBuildWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CancelBuild request
+	CancelBuild(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetBuild request
+	GetBuild(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetBuildEvents request
+	GetBuildEvents(ctx context.Context, id string, params *GetBuildEventsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// ListDevices request
 	ListDevices(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -916,6 +1053,66 @@ type ClientInterface interface {
 
 	// GetVolume request
 	GetVolume(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error)
+}
+
+func (c *Client) ListBuilds(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListBuildsRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateBuildWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateBuildRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CancelBuild(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCancelBuildRequest(c.Server, id)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetBuild(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetBuildRequest(c.Server, id)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetBuildEvents(ctx context.Context, id string, params *GetBuildEventsParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetBuildEventsRequest(c.Server, id, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
 }
 
 func (c *Client) ListDevices(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -1360,6 +1557,186 @@ func (c *Client) GetVolume(ctx context.Context, id string, reqEditors ...Request
 		return nil, err
 	}
 	return c.Client.Do(req)
+}
+
+// NewListBuildsRequest generates requests for ListBuilds
+func NewListBuildsRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/builds")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewCreateBuildRequestWithBody generates requests for CreateBuild with any type of body
+func NewCreateBuildRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/builds")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewCancelBuildRequest generates requests for CancelBuild
+func NewCancelBuildRequest(server string, id string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "id", runtime.ParamLocationPath, id)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/builds/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("DELETE", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewGetBuildRequest generates requests for GetBuild
+func NewGetBuildRequest(server string, id string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "id", runtime.ParamLocationPath, id)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/builds/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewGetBuildEventsRequest generates requests for GetBuildEvents
+func NewGetBuildEventsRequest(server string, id string, params *GetBuildEventsParams) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "id", runtime.ParamLocationPath, id)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/builds/%s/events", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		queryValues := queryURL.Query()
+
+		if params.Follow != nil {
+
+			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "follow", runtime.ParamLocationQuery, *params.Follow); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		queryURL.RawQuery = queryValues.Encode()
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
 }
 
 // NewListDevicesRequest generates requests for ListDevices
@@ -2548,6 +2925,21 @@ func WithBaseURL(baseURL string) ClientOption {
 
 // ClientWithResponsesInterface is the interface specification for the client with responses above.
 type ClientWithResponsesInterface interface {
+	// ListBuildsWithResponse request
+	ListBuildsWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListBuildsResponse, error)
+
+	// CreateBuildWithBodyWithResponse request with any body
+	CreateBuildWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateBuildResponse, error)
+
+	// CancelBuildWithResponse request
+	CancelBuildWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*CancelBuildResponse, error)
+
+	// GetBuildWithResponse request
+	GetBuildWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*GetBuildResponse, error)
+
+	// GetBuildEventsWithResponse request
+	GetBuildEventsWithResponse(ctx context.Context, id string, params *GetBuildEventsParams, reqEditors ...RequestEditorFn) (*GetBuildEventsResponse, error)
+
 	// ListDevicesWithResponse request
 	ListDevicesWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListDevicesResponse, error)
 
@@ -2652,6 +3044,126 @@ type ClientWithResponsesInterface interface {
 
 	// GetVolumeWithResponse request
 	GetVolumeWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*GetVolumeResponse, error)
+}
+
+type ListBuildsResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *[]Build
+	JSON401      *Error
+	JSON500      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r ListBuildsResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListBuildsResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type CreateBuildResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON202      *Build
+	JSON400      *Error
+	JSON401      *Error
+	JSON500      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r CreateBuildResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateBuildResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type CancelBuildResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON404      *Error
+	JSON409      *Error
+	JSON500      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r CancelBuildResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CancelBuildResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type GetBuildResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *Build
+	JSON404      *Error
+	JSON500      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r GetBuildResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetBuildResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type GetBuildEventsResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON404      *Error
+	JSON500      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r GetBuildEventsResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetBuildEventsResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
 }
 
 type ListDevicesResponse struct {
@@ -3409,6 +3921,51 @@ func (r GetVolumeResponse) StatusCode() int {
 	return 0
 }
 
+// ListBuildsWithResponse request returning *ListBuildsResponse
+func (c *ClientWithResponses) ListBuildsWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListBuildsResponse, error) {
+	rsp, err := c.ListBuilds(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListBuildsResponse(rsp)
+}
+
+// CreateBuildWithBodyWithResponse request with arbitrary body returning *CreateBuildResponse
+func (c *ClientWithResponses) CreateBuildWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateBuildResponse, error) {
+	rsp, err := c.CreateBuildWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateBuildResponse(rsp)
+}
+
+// CancelBuildWithResponse request returning *CancelBuildResponse
+func (c *ClientWithResponses) CancelBuildWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*CancelBuildResponse, error) {
+	rsp, err := c.CancelBuild(ctx, id, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCancelBuildResponse(rsp)
+}
+
+// GetBuildWithResponse request returning *GetBuildResponse
+func (c *ClientWithResponses) GetBuildWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*GetBuildResponse, error) {
+	rsp, err := c.GetBuild(ctx, id, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetBuildResponse(rsp)
+}
+
+// GetBuildEventsWithResponse request returning *GetBuildEventsResponse
+func (c *ClientWithResponses) GetBuildEventsWithResponse(ctx context.Context, id string, params *GetBuildEventsParams, reqEditors ...RequestEditorFn) (*GetBuildEventsResponse, error) {
+	rsp, err := c.GetBuildEvents(ctx, id, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetBuildEventsResponse(rsp)
+}
+
 // ListDevicesWithResponse request returning *ListDevicesResponse
 func (c *ClientWithResponses) ListDevicesWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListDevicesResponse, error) {
 	rsp, err := c.ListDevices(ctx, reqEditors...)
@@ -3734,6 +4291,206 @@ func (c *ClientWithResponses) GetVolumeWithResponse(ctx context.Context, id stri
 		return nil, err
 	}
 	return ParseGetVolumeResponse(rsp)
+}
+
+// ParseListBuildsResponse parses an HTTP response from a ListBuildsWithResponse call
+func ParseListBuildsResponse(rsp *http.Response) (*ListBuildsResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListBuildsResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest []Build
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCreateBuildResponse parses an HTTP response from a CreateBuildWithResponse call
+func ParseCreateBuildResponse(rsp *http.Response) (*CreateBuildResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateBuildResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest Build
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCancelBuildResponse parses an HTTP response from a CancelBuildWithResponse call
+func ParseCancelBuildResponse(rsp *http.Response) (*CancelBuildResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CancelBuildResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetBuildResponse parses an HTTP response from a GetBuildWithResponse call
+func ParseGetBuildResponse(rsp *http.Response) (*GetBuildResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetBuildResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest Build
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetBuildEventsResponse parses an HTTP response from a GetBuildEventsWithResponse call
+func ParseGetBuildEventsResponse(rsp *http.Response) (*GetBuildEventsResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetBuildEventsResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
 }
 
 // ParseListDevicesResponse parses an HTTP response from a ListDevicesWithResponse call
@@ -5055,6 +5812,21 @@ func ParseGetVolumeResponse(rsp *http.Response) (*GetVolumeResponse, error) {
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
+	// List builds
+	// (GET /builds)
+	ListBuilds(w http.ResponseWriter, r *http.Request)
+	// Create a new build
+	// (POST /builds)
+	CreateBuild(w http.ResponseWriter, r *http.Request)
+	// Cancel build
+	// (DELETE /builds/{id})
+	CancelBuild(w http.ResponseWriter, r *http.Request, id string)
+	// Get build details
+	// (GET /builds/{id})
+	GetBuild(w http.ResponseWriter, r *http.Request, id string)
+	// Stream build events (SSE)
+	// (GET /builds/{id}/events)
+	GetBuildEvents(w http.ResponseWriter, r *http.Request, id string, params GetBuildEventsParams)
 	// List registered devices
 	// (GET /devices)
 	ListDevices(w http.ResponseWriter, r *http.Request)
@@ -5153,6 +5925,36 @@ type ServerInterface interface {
 // Unimplemented server implementation that returns http.StatusNotImplemented for each endpoint.
 
 type Unimplemented struct{}
+
+// List builds
+// (GET /builds)
+func (_ Unimplemented) ListBuilds(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Create a new build
+// (POST /builds)
+func (_ Unimplemented) CreateBuild(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Cancel build
+// (DELETE /builds/{id})
+func (_ Unimplemented) CancelBuild(w http.ResponseWriter, r *http.Request, id string) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Get build details
+// (GET /builds/{id})
+func (_ Unimplemented) GetBuild(w http.ResponseWriter, r *http.Request, id string) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Stream build events (SSE)
+// (GET /builds/{id}/events)
+func (_ Unimplemented) GetBuildEvents(w http.ResponseWriter, r *http.Request, id string, params GetBuildEventsParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
 
 // List registered devices
 // (GET /devices)
@@ -5348,6 +6150,150 @@ type ServerInterfaceWrapper struct {
 }
 
 type MiddlewareFunc func(http.Handler) http.Handler
+
+// ListBuilds operation middleware
+func (siw *ServerInterfaceWrapper) ListBuilds(w http.ResponseWriter, r *http.Request) {
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListBuilds(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateBuild operation middleware
+func (siw *ServerInterfaceWrapper) CreateBuild(w http.ResponseWriter, r *http.Request) {
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateBuild(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CancelBuild operation middleware
+func (siw *ServerInterfaceWrapper) CancelBuild(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", chi.URLParam(r, "id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CancelBuild(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetBuild operation middleware
+func (siw *ServerInterfaceWrapper) GetBuild(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", chi.URLParam(r, "id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetBuild(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetBuildEvents operation middleware
+func (siw *ServerInterfaceWrapper) GetBuildEvents(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", chi.URLParam(r, "id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetBuildEventsParams
+
+	// ------------- Optional query parameter "follow" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "follow", r.URL.Query(), &params.Follow)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "follow", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetBuildEvents(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
 
 // ListDevices operation middleware
 func (siw *ServerInterfaceWrapper) ListDevices(w http.ResponseWriter, r *http.Request) {
@@ -6346,6 +7292,21 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	}
 
 	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/builds", wrapper.ListBuilds)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/builds", wrapper.CreateBuild)
+	})
+	r.Group(func(r chi.Router) {
+		r.Delete(options.BaseURL+"/builds/{id}", wrapper.CancelBuild)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/builds/{id}", wrapper.GetBuild)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/builds/{id}/events", wrapper.GetBuildEvents)
+	})
+	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/devices", wrapper.ListDevices)
 	})
 	r.Group(func(r chi.Router) {
@@ -6440,6 +7401,208 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	})
 
 	return r
+}
+
+type ListBuildsRequestObject struct {
+}
+
+type ListBuildsResponseObject interface {
+	VisitListBuildsResponse(w http.ResponseWriter) error
+}
+
+type ListBuilds200JSONResponse []Build
+
+func (response ListBuilds200JSONResponse) VisitListBuildsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListBuilds401JSONResponse Error
+
+func (response ListBuilds401JSONResponse) VisitListBuildsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListBuilds500JSONResponse Error
+
+func (response ListBuilds500JSONResponse) VisitListBuildsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateBuildRequestObject struct {
+	Body *multipart.Reader
+}
+
+type CreateBuildResponseObject interface {
+	VisitCreateBuildResponse(w http.ResponseWriter) error
+}
+
+type CreateBuild202JSONResponse Build
+
+func (response CreateBuild202JSONResponse) VisitCreateBuildResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(202)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateBuild400JSONResponse Error
+
+func (response CreateBuild400JSONResponse) VisitCreateBuildResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateBuild401JSONResponse Error
+
+func (response CreateBuild401JSONResponse) VisitCreateBuildResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateBuild500JSONResponse Error
+
+func (response CreateBuild500JSONResponse) VisitCreateBuildResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CancelBuildRequestObject struct {
+	Id string `json:"id"`
+}
+
+type CancelBuildResponseObject interface {
+	VisitCancelBuildResponse(w http.ResponseWriter) error
+}
+
+type CancelBuild204Response struct {
+}
+
+func (response CancelBuild204Response) VisitCancelBuildResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type CancelBuild404JSONResponse Error
+
+func (response CancelBuild404JSONResponse) VisitCancelBuildResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CancelBuild409JSONResponse Error
+
+func (response CancelBuild409JSONResponse) VisitCancelBuildResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CancelBuild500JSONResponse Error
+
+func (response CancelBuild500JSONResponse) VisitCancelBuildResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetBuildRequestObject struct {
+	Id string `json:"id"`
+}
+
+type GetBuildResponseObject interface {
+	VisitGetBuildResponse(w http.ResponseWriter) error
+}
+
+type GetBuild200JSONResponse Build
+
+func (response GetBuild200JSONResponse) VisitGetBuildResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetBuild404JSONResponse Error
+
+func (response GetBuild404JSONResponse) VisitGetBuildResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetBuild500JSONResponse Error
+
+func (response GetBuild500JSONResponse) VisitGetBuildResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetBuildEventsRequestObject struct {
+	Id     string `json:"id"`
+	Params GetBuildEventsParams
+}
+
+type GetBuildEventsResponseObject interface {
+	VisitGetBuildEventsResponse(w http.ResponseWriter) error
+}
+
+type GetBuildEvents200TexteventStreamResponse struct {
+	Body          io.Reader
+	ContentLength int64
+}
+
+func (response GetBuildEvents200TexteventStreamResponse) VisitGetBuildEventsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "text/event-stream")
+	if response.ContentLength != 0 {
+		w.Header().Set("Content-Length", fmt.Sprint(response.ContentLength))
+	}
+	w.WriteHeader(200)
+
+	if closer, ok := response.Body.(io.ReadCloser); ok {
+		defer closer.Close()
+	}
+	_, err := io.Copy(w, response.Body)
+	return err
+}
+
+type GetBuildEvents404JSONResponse Error
+
+func (response GetBuildEvents404JSONResponse) VisitGetBuildEventsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetBuildEvents500JSONResponse Error
+
+func (response GetBuildEvents500JSONResponse) VisitGetBuildEventsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
 }
 
 type ListDevicesRequestObject struct {
@@ -7685,6 +8848,21 @@ func (response GetVolume500JSONResponse) VisitGetVolumeResponse(w http.ResponseW
 
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
+	// List builds
+	// (GET /builds)
+	ListBuilds(ctx context.Context, request ListBuildsRequestObject) (ListBuildsResponseObject, error)
+	// Create a new build
+	// (POST /builds)
+	CreateBuild(ctx context.Context, request CreateBuildRequestObject) (CreateBuildResponseObject, error)
+	// Cancel build
+	// (DELETE /builds/{id})
+	CancelBuild(ctx context.Context, request CancelBuildRequestObject) (CancelBuildResponseObject, error)
+	// Get build details
+	// (GET /builds/{id})
+	GetBuild(ctx context.Context, request GetBuildRequestObject) (GetBuildResponseObject, error)
+	// Stream build events (SSE)
+	// (GET /builds/{id}/events)
+	GetBuildEvents(ctx context.Context, request GetBuildEventsRequestObject) (GetBuildEventsResponseObject, error)
 	// List registered devices
 	// (GET /devices)
 	ListDevices(ctx context.Context, request ListDevicesRequestObject) (ListDevicesResponseObject, error)
@@ -7807,6 +8985,140 @@ type strictHandler struct {
 	ssi         StrictServerInterface
 	middlewares []StrictMiddlewareFunc
 	options     StrictHTTPServerOptions
+}
+
+// ListBuilds operation middleware
+func (sh *strictHandler) ListBuilds(w http.ResponseWriter, r *http.Request) {
+	var request ListBuildsRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListBuilds(ctx, request.(ListBuildsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListBuilds")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListBuildsResponseObject); ok {
+		if err := validResponse.VisitListBuildsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateBuild operation middleware
+func (sh *strictHandler) CreateBuild(w http.ResponseWriter, r *http.Request) {
+	var request CreateBuildRequestObject
+
+	if reader, err := r.MultipartReader(); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode multipart body: %w", err))
+		return
+	} else {
+		request.Body = reader
+	}
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateBuild(ctx, request.(CreateBuildRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateBuild")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateBuildResponseObject); ok {
+		if err := validResponse.VisitCreateBuildResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CancelBuild operation middleware
+func (sh *strictHandler) CancelBuild(w http.ResponseWriter, r *http.Request, id string) {
+	var request CancelBuildRequestObject
+
+	request.Id = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CancelBuild(ctx, request.(CancelBuildRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CancelBuild")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CancelBuildResponseObject); ok {
+		if err := validResponse.VisitCancelBuildResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetBuild operation middleware
+func (sh *strictHandler) GetBuild(w http.ResponseWriter, r *http.Request, id string) {
+	var request GetBuildRequestObject
+
+	request.Id = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetBuild(ctx, request.(GetBuildRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetBuild")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetBuildResponseObject); ok {
+		if err := validResponse.VisitGetBuildResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetBuildEvents operation middleware
+func (sh *strictHandler) GetBuildEvents(w http.ResponseWriter, r *http.Request, id string, params GetBuildEventsParams) {
+	var request GetBuildEventsRequestObject
+
+	request.Id = id
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetBuildEvents(ctx, request.(GetBuildEventsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetBuildEvents")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetBuildEventsResponseObject); ok {
+		if err := validResponse.VisitGetBuildEventsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
 }
 
 // ListDevices operation middleware
@@ -8649,134 +9961,151 @@ func (sh *strictHandler) GetVolume(w http.ResponseWriter, r *http.Request, id st
 // Base64 encoded, gzipped, json marshaled Swagger object
 var swaggerSpec = []string{
 
-	"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",
+	"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",
+	"rBW54cHgYBB8fPPx/wcAAP//PPEgqyLOAAA=",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file

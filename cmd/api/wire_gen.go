@@ -8,18 +8,19 @@ package main
 
 import (
 	"context"
-	"github.com/onkernel/hypeman/cmd/api/api"
-	"github.com/onkernel/hypeman/cmd/api/config"
-	"github.com/onkernel/hypeman/lib/devices"
-	"github.com/onkernel/hypeman/lib/images"
-	"github.com/onkernel/hypeman/lib/ingress"
-	"github.com/onkernel/hypeman/lib/instances"
-	"github.com/onkernel/hypeman/lib/network"
-	"github.com/onkernel/hypeman/lib/providers"
-	"github.com/onkernel/hypeman/lib/registry"
-	"github.com/onkernel/hypeman/lib/resources"
-	"github.com/onkernel/hypeman/lib/system"
-	"github.com/onkernel/hypeman/lib/volumes"
+	"github.com/kernel/hypeman/cmd/api/api"
+	"github.com/kernel/hypeman/cmd/api/config"
+	"github.com/kernel/hypeman/lib/builds"
+	"github.com/kernel/hypeman/lib/devices"
+	"github.com/kernel/hypeman/lib/images"
+	"github.com/kernel/hypeman/lib/ingress"
+	"github.com/kernel/hypeman/lib/instances"
+	"github.com/kernel/hypeman/lib/network"
+	"github.com/kernel/hypeman/lib/providers"
+	"github.com/kernel/hypeman/lib/registry"
+	"github.com/kernel/hypeman/lib/resources"
+	"github.com/kernel/hypeman/lib/system"
+	"github.com/kernel/hypeman/lib/volumes"
 	"log/slog"
 )
 
@@ -54,6 +55,10 @@ func initializeApp() (*application, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	buildsManager, err := providers.ProvideBuildManager(paths, config, instancesManager, volumesManager, logger)
+	if err != nil {
+		return nil, nil, err
+	}
 	resourcesManager, err := providers.ProvideResourceManager(context, config, paths, manager, instancesManager, volumesManager)
 	if err != nil {
 		return nil, nil, err
@@ -62,7 +67,7 @@ func initializeApp() (*application, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	apiService := api.New(config, manager, instancesManager, volumesManager, networkManager, devicesManager, ingressManager, resourcesManager)
+	apiService := api.New(config, manager, instancesManager, volumesManager, networkManager, devicesManager, ingressManager, buildsManager, resourcesManager)
 	mainApplication := &application{
 		Ctx:             context,
 		Logger:          logger,
@@ -74,6 +79,7 @@ func initializeApp() (*application, func(), error) {
 		InstanceManager: instancesManager,
 		VolumeManager:   volumesManager,
 		IngressManager:  ingressManager,
+		BuildManager:    buildsManager,
 		ResourceManager: resourcesManager,
 		Registry:        registry,
 		ApiService:      apiService,
@@ -96,6 +102,7 @@ type application struct {
 	InstanceManager instances.Manager
 	VolumeManager   volumes.Manager
 	IngressManager  ingress.Manager
+	BuildManager    builds.Manager
 	ResourceManager *resources.Manager
 	Registry        *registry.Registry
 	ApiService      *api.ApiService

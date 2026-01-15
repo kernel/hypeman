@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/digitalocean/go-qemu/qemu"
-	"github.com/onkernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/hypervisor"
 )
 
 // QEMU implements hypervisor.Hypervisor for QEMU VMM.

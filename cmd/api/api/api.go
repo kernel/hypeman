@@ -1,15 +1,16 @@
 package api
 
 import (
-	"github.com/onkernel/hypeman/cmd/api/config"
-	"github.com/onkernel/hypeman/lib/devices"
-	"github.com/onkernel/hypeman/lib/images"
-	"github.com/onkernel/hypeman/lib/ingress"
-	"github.com/onkernel/hypeman/lib/instances"
-	"github.com/onkernel/hypeman/lib/network"
-	"github.com/onkernel/hypeman/lib/oapi"
-	"github.com/onkernel/hypeman/lib/resources"
-	"github.com/onkernel/hypeman/lib/volumes"
+	"github.com/kernel/hypeman/cmd/api/config"
+	"github.com/kernel/hypeman/lib/builds"
+	"github.com/kernel/hypeman/lib/devices"
+	"github.com/kernel/hypeman/lib/images"
+	"github.com/kernel/hypeman/lib/ingress"
+	"github.com/kernel/hypeman/lib/instances"
+	"github.com/kernel/hypeman/lib/network"
+	"github.com/kernel/hypeman/lib/oapi"
+	"github.com/kernel/hypeman/lib/resources"
+	"github.com/kernel/hypeman/lib/volumes"
 )
 
 // ApiService implements the oapi.StrictServerInterface
@@ -21,6 +22,7 @@ type ApiService struct {
 	NetworkManager  network.Manager
 	DeviceManager   devices.Manager
 	IngressManager  ingress.Manager
+	BuildManager    builds.Manager
 	ResourceManager *resources.Manager
 }
 
@@ -35,6 +37,7 @@ func New(
 	networkManager network.Manager,
 	deviceManager devices.Manager,
 	ingressManager ingress.Manager,
+	buildManager builds.Manager,
 	resourceManager *resources.Manager,
 ) *ApiService {
 	return &ApiService{
@@ -45,6 +48,7 @@ func New(
 		NetworkManager:  networkManager,
 		DeviceManager:   deviceManager,
 		IngressManager:  ingressManager,
+		BuildManager:    buildManager,
 		ResourceManager: resourceManager,
 	}
 }

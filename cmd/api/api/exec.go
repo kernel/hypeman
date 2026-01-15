@@ -11,11 +11,11 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/onkernel/hypeman/lib/guest"
-	"github.com/onkernel/hypeman/lib/hypervisor"
-	"github.com/onkernel/hypeman/lib/instances"
-	"github.com/onkernel/hypeman/lib/logger"
-	mw "github.com/onkernel/hypeman/lib/middleware"
+	"github.com/kernel/hypeman/lib/guest"
+	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/instances"
+	"github.com/kernel/hypeman/lib/logger"
+	mw "github.com/kernel/hypeman/lib/middleware"
 )
 
 var upgrader = websocket.Upgrader{

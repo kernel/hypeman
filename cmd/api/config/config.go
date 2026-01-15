@@ -103,6 +103,13 @@ type Config struct {
 	// Cloudflare configuration (if AcmeDnsProvider=cloudflare)
 	CloudflareApiToken string // Cloudflare API token
 
+	// Build system configuration
+	MaxConcurrentSourceBuilds int    // Max concurrent source-to-image builds
+	BuilderImage              string // OCI image for builder VMs
+	RegistryURL               string // URL of registry for built images
+	BuildTimeout              int    // Default build timeout in seconds
+	BuildSecretsDir           string // Directory containing build secrets (optional)
+
 	// Hypervisor configuration
 	DefaultHypervisor string // Default hypervisor type: "cloud-hypervisor" or "qemu"
 
@@ -184,6 +191,13 @@ func Load() *Config {
 
 		// Cloudflare configuration
 		CloudflareApiToken: getEnv("CLOUDFLARE_API_TOKEN", ""),
+
+		// Build system configuration
+		MaxConcurrentSourceBuilds: getEnvInt("MAX_CONCURRENT_SOURCE_BUILDS", 2),
+		BuilderImage:              getEnv("BUILDER_IMAGE", "hypeman/builder:latest"),
+		RegistryURL:               getEnv("REGISTRY_URL", "localhost:8080"),
+		BuildTimeout:              getEnvInt("BUILD_TIMEOUT", 600),
+		BuildSecretsDir:           getEnv("BUILD_SECRETS_DIR", ""), // Optional: path to directory with build secrets
 
 		// Hypervisor configuration
 		DefaultHypervisor: getEnv("DEFAULT_HYPERVISOR", "cloud-hypervisor"),

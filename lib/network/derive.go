@@ -7,8 +7,8 @@ import (
 	"net"
 	"os"
 
-	"github.com/onkernel/hypeman/lib/hypervisor"
-	"github.com/onkernel/hypeman/lib/logger"
+	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/logger"
 )
 
 // instanceMetadata is the minimal metadata we need to derive allocations

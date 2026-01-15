@@ -17,10 +17,10 @@ import (
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/google/go-containerregistry/pkg/v1/types"
-	"github.com/onkernel/hypeman/lib/oapi"
-	"github.com/onkernel/hypeman/lib/paths"
-	"github.com/onkernel/hypeman/lib/registry"
-	"github.com/onkernel/hypeman/lib/system"
+	"github.com/kernel/hypeman/lib/oapi"
+	"github.com/kernel/hypeman/lib/paths"
+	"github.com/kernel/hypeman/lib/registry"
+	"github.com/kernel/hypeman/lib/system"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -73,7 +73,8 @@ func TestRegistryPushAndConvert(t *testing.T) {
 	t.Log("Push successful!")
 
 	// Wait for image to be converted
-	imageName := "test/alpine@" + digest.String()
+	// Include serverHost since our registry now stores images with the full host
+	imageName := serverHost + "/test/alpine@" + digest.String()
 	imgResp := waitForImageReady(t, svc, imageName, 60*time.Second)
 	assert.NotNil(t, imgResp.SizeBytes, "ready image should have size")
 }
@@ -124,7 +125,8 @@ func TestRegistryPushAndCreateInstance(t *testing.T) {
 	require.NoError(t, err)
 
 	// Wait for image to be ready
-	imageName := "test/alpine@" + digest.String()
+	// Include serverHost since our registry now stores images with the full host
+	imageName := serverHost + "/test/alpine@" + digest.String()
 	waitForImageReady(t, svc, imageName, 60*time.Second)
 
 	// Create instance with pushed image
@@ -362,7 +364,8 @@ func TestRegistryTagPush(t *testing.T) {
 	t.Log("Push successful!")
 
 	// The image should be registered with the computed digest, not the tag
-	imageName := "tag-test/alpine@" + digest.String()
+	// Include serverHost since our registry now stores images with the full host
+	imageName := serverHost + "/tag-test/alpine@" + digest.String()
 	waitForImageReady(t, svc, imageName, 60*time.Second)
 
 	// Verify image appears in ListImages (GET /images)
@@ -375,7 +378,7 @@ func TestRegistryTagPush(t *testing.T) {
 	for _, img := range images {
 		if img.Digest == digest.String() {
 			found = true
-			assert.Equal(t, oapi.Ready, img.Status, "image in list should have Ready status")
+			assert.Equal(t, oapi.ImageStatusReady, img.Status, "image in list should have Ready status")
 			assert.NotNil(t, img.SizeBytes, "ready image should have size")
 			t.Logf("Image found in ListImages: %s (status=%s, size=%d)", img.Name, img.Status, *img.SizeBytes)
 			break
@@ -415,7 +418,8 @@ func TestRegistryDockerV2ManifestConversion(t *testing.T) {
 
 	// Wait for image to be converted
 	// The server converts Docker v2 to OCI format internally, resulting in a different digest
-	imgResp := waitForImageReady(t, svc, "dockerv2-test/alpine:v1", 60*time.Second)
+	// Include serverHost since our registry now stores images with the full host
+	imgResp := waitForImageReady(t, svc, serverHost+"/dockerv2-test/alpine:v1", 60*time.Second)
 	assert.NotNil(t, imgResp.SizeBytes, "ready image should have size")
 	assert.NotEmpty(t, imgResp.Digest, "image should have digest")
 }

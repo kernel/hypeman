@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 
-	"github.com/onkernel/hypeman/lib/images"
-	"github.com/onkernel/hypeman/lib/logger"
-	mw "github.com/onkernel/hypeman/lib/middleware"
-	"github.com/onkernel/hypeman/lib/oapi"
+	"github.com/kernel/hypeman/lib/images"
+	"github.com/kernel/hypeman/lib/logger"
+	mw "github.com/kernel/hypeman/lib/middleware"
+	"github.com/kernel/hypeman/lib/oapi"
 )
 
 func (s *ApiService) ListImages(ctx context.Context, request oapi.ListImagesRequestObject) (oapi.ListImagesResponseObject, error) {

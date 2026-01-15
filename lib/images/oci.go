@@ -13,6 +13,8 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/empty"
 	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
+	digest "github.com/opencontainers/go-digest"
+	"github.com/opencontainers/image-spec/specs-go"
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
 	rspec "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/opencontainers/umoci/oci/cas/dir"
@@ -205,61 +207,65 @@ func (c *ociClient) extractDigest(layoutTag string) (string, error) {
 	return digest, nil
 }
 
+// imageByAnnotation finds an image in the OCI layout by its annotation tag.
+// This iterates through the index to find the image with matching
+// "org.opencontainers.image.ref.name" annotation.
+func imageByAnnotation(path layout.Path, layoutTag string) (gcr.Image, error) {
+	index, err := path.ImageIndex()
+	if err != nil {
+		return nil, fmt.Errorf("get image index: %w", err)
+	}
+
+	indexManifest, err := index.IndexManifest()
+	if err != nil {
+		return nil, fmt.Errorf("get index manifest: %w", err)
+	}
+
+	// Find the image with matching annotation
+	for _, desc := range indexManifest.Manifests {
+		if desc.Annotations != nil {
+			if refName, ok := desc.Annotations["org.opencontainers.image.ref.name"]; ok {
+				if refName == layoutTag {
+					return path.Image(desc.Digest)
+				}
+			}
+		}
+	}
+
+	return nil, fmt.Errorf("no image found with tag %s", layoutTag)
+}
+
 // extractOCIMetadata reads metadata from OCI layout config.json
+// Uses go-containerregistry which handles both Docker v2 and OCI v1 manifests.
 func (c *ociClient) extractOCIMetadata(layoutTag string) (*containerMetadata, error) {
-	// Open the shared OCI layout
-	casEngine, err := dir.Open(c.cacheDir)
+	// Open OCI layout using go-containerregistry (handles Docker v2 and OCI v1)
+	path, err := layout.FromPath(c.cacheDir)
 	if err != nil {
 		return nil, fmt.Errorf("open oci layout: %w", err)
 	}
-	defer casEngine.Close()
 
-	engine := casext.NewEngine(casEngine)
-
-	// Resolve the layout tag in the shared layout
-	descriptorPaths, err := engine.ResolveReference(context.Background(), layoutTag)
+	// Get the image by annotation tag from the layout
+	img, err := imageByAnnotation(path, layoutTag)
 	if err != nil {
-		return nil, fmt.Errorf("resolve reference: %w", err)
+		return nil, fmt.Errorf("find image by tag %s: %w", layoutTag, err)
 	}
 
-	if len(descriptorPaths) == 0 {
-		return nil, fmt.Errorf("no image found in oci layout")
-	}
-
-	// Get the manifest
-	manifestBlob, err := engine.FromDescriptor(context.Background(), descriptorPaths[0].Descriptor())
+	// Get config file (go-containerregistry handles manifest format automatically)
+	configFile, err := img.ConfigFile()
 	if err != nil {
-		return nil, fmt.Errorf("get manifest: %w", err)
+		return nil, fmt.Errorf("get config file: %w", err)
 	}
 
-	// casext automatically parses manifests, so Data is already a v1.Manifest
-	manifest, ok := manifestBlob.Data.(v1.Manifest)
-	if !ok {
-		return nil, fmt.Errorf("manifest data is not v1.Manifest (got %T)", manifestBlob.Data)
-	}
-
-	// Get the config blob
-	configBlob, err := engine.FromDescriptor(context.Background(), manifest.Config)
-	if err != nil {
-		return nil, fmt.Errorf("get config: %w", err)
-	}
-
-	// casext automatically parses config, so Data is already a v1.Image
-	config, ok := configBlob.Data.(v1.Image)
-	if !ok {
-		return nil, fmt.Errorf("config data is not v1.Image (got %T)", configBlob.Data)
-	}
-
-	// Extract metadata
+	// Extract metadata from config
 	meta := &containerMetadata{
-		Entrypoint: config.Config.Entrypoint,
-		Cmd:        config.Config.Cmd,
+		Entrypoint: configFile.Config.Entrypoint,
+		Cmd:        configFile.Config.Cmd,
 		Env:        make(map[string]string),
-		WorkingDir: config.Config.WorkingDir,
+		WorkingDir: configFile.Config.WorkingDir,
 	}
 
 	// Parse environment variables
-	for _, env := range config.Config.Env {
+	for _, env := range configFile.Config.Env {
 		for i := 0; i < len(env); i++ {
 			if env[i] == '=' {
 				key := env[:i]
@@ -274,37 +280,36 @@ func (c *ociClient) extractOCIMetadata(layoutTag string) (*containerMetadata, er
 }
 
 // unpackLayers unpacks all OCI layers to a target directory using umoci
-func (c *ociClient) unpackLayers(ctx context.Context, imageRef, targetDir string) error {
-	// Open the shared OCI layout
-	casEngine, err := dir.Open(c.cacheDir)
+// Uses go-containerregistry to get the manifest (handles both Docker v2 and OCI v1)
+// then converts it to OCI v1 format for umoci's layer unpacker.
+func (c *ociClient) unpackLayers(ctx context.Context, layoutTag, targetDir string) error {
+	// Open OCI layout using go-containerregistry (handles Docker v2 and OCI v1)
+	path, err := layout.FromPath(c.cacheDir)
 	if err != nil {
 		return fmt.Errorf("open oci layout: %w", err)
 	}
-	defer casEngine.Close()
 
-	engine := casext.NewEngine(casEngine)
-
-	// Resolve the image reference (tag) in the shared layout
-	descriptorPaths, err := engine.ResolveReference(context.Background(), imageRef)
+	// Get the image by annotation tag from the layout
+	img, err := imageByAnnotation(path, layoutTag)
 	if err != nil {
-		return fmt.Errorf("resolve reference: %w", err)
+		return fmt.Errorf("find image by tag %s: %w", layoutTag, err)
 	}
 
-	if len(descriptorPaths) == 0 {
-		return fmt.Errorf("no image found")
-	}
-
-	// Get the manifest blob
-	manifestBlob, err := engine.FromDescriptor(context.Background(), descriptorPaths[0].Descriptor())
+	// Get manifest from go-containerregistry
+	gcrManifest, err := img.Manifest()
 	if err != nil {
 		return fmt.Errorf("get manifest: %w", err)
 	}
 
-	// casext automatically parses manifests
-	manifest, ok := manifestBlob.Data.(v1.Manifest)
-	if !ok {
-		return fmt.Errorf("manifest data is not v1.Manifest (got %T)", manifestBlob.Data)
+	// Convert go-containerregistry manifest to OCI v1.Manifest for umoci
+	ociManifest := convertToOCIManifest(gcrManifest)
+
+	// Open the shared OCI layout with umoci for layer unpacking
+	casEngine, err := dir.Open(c.cacheDir)
+	if err != nil {
+		return fmt.Errorf("open oci layout for unpacking: %w", err)
 	}
+	defer casEngine.Close()
 
 	// Pre-create target directory (umoci needs it to exist)
 	if err := os.MkdirAll(targetDir, 0755); err != nil {
@@ -330,12 +335,51 @@ func (c *ociClient) unpackLayers(ctx context.Context, imageRef, targetDir string
 		},
 	}
 
-	err = layer.UnpackRootfs(context.Background(), casEngine, targetDir, manifest, unpackOpts)
+	err = layer.UnpackRootfs(context.Background(), casEngine, targetDir, ociManifest, unpackOpts)
 	if err != nil {
 		return fmt.Errorf("unpack rootfs: %w", err)
 	}
 
 	return nil
+}
+
+// convertToOCIManifest converts a go-containerregistry manifest to OCI v1.Manifest
+// This allows us to use go-containerregistry (which handles both Docker v2 and OCI v1)
+// for manifest parsing, while still using umoci for layer unpacking.
+func convertToOCIManifest(gcrManifest *gcr.Manifest) v1.Manifest {
+	// Convert config descriptor
+	configDesc := v1.Descriptor{
+		MediaType:   string(gcrManifest.Config.MediaType),
+		Digest:      gcrDigestToOCI(gcrManifest.Config.Digest),
+		Size:        gcrManifest.Config.Size,
+		Annotations: gcrManifest.Config.Annotations,
+	}
+
+	// Convert layer descriptors
+	layers := make([]v1.Descriptor, len(gcrManifest.Layers))
+	for i, layer := range gcrManifest.Layers {
+		layers[i] = v1.Descriptor{
+			MediaType:   string(layer.MediaType),
+			Digest:      gcrDigestToOCI(layer.Digest),
+			Size:        layer.Size,
+			Annotations: layer.Annotations,
+		}
+	}
+
+	return v1.Manifest{
+		Versioned: specs.Versioned{
+			SchemaVersion: int(gcrManifest.SchemaVersion),
+		},
+		MediaType:   string(gcrManifest.MediaType),
+		Config:      configDesc,
+		Layers:      layers,
+		Annotations: gcrManifest.Annotations,
+	}
+}
+
+// gcrDigestToOCI converts a go-containerregistry digest to OCI digest
+func gcrDigestToOCI(d gcr.Hash) digest.Digest {
+	return digest.NewDigestFromEncoded(digest.Algorithm(d.Algorithm), d.Hex)
 }
 
 type containerMetadata struct {

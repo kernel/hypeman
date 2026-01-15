@@ -20,8 +20,8 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/empty"
 	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/google/go-containerregistry/pkg/v1/types"
-	"github.com/onkernel/hypeman/lib/images"
-	"github.com/onkernel/hypeman/lib/paths"
+	"github.com/kernel/hypeman/lib/images"
+	"github.com/kernel/hypeman/lib/paths"
 )
 
 // Registry provides an OCI Distribution Spec compliant registry that stores pushed images
@@ -67,8 +67,16 @@ func (r *Registry) Handler() http.Handler {
 		if req.Method == http.MethodPut {
 			matches := manifestPutPattern.FindStringSubmatch(req.URL.Path)
 			if matches != nil {
-				repo := matches[1]
+				pathRepo := matches[1]
 				reference := matches[2]
+
+				// Include the host to form the full repository path
+				// This preserves the registry host (e.g., "10.102.0.1:8083/builds/xxx")
+				// instead of normalizing to docker.io
+				fullRepo := pathRepo
+				if req.Host != "" {
+					fullRepo = req.Host + "/" + pathRepo
+				}
 
 				body, err := io.ReadAll(req.Body)
 				req.Body.Close()
@@ -94,7 +102,7 @@ func (r *Registry) Handler() http.Handler {
 				r.handler.ServeHTTP(wrapper, req)
 
 				if wrapper.statusCode == http.StatusCreated {
-					go r.triggerConversion(repo, reference, digest)
+					go r.triggerConversion(fullRepo, reference, digest)
 				}
 				return
 			}

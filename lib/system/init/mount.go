@@ -14,6 +14,7 @@ import (
 // This function mounts:
 // - /dev/pts (pseudo-terminals)
 // - /dev/shm (shared memory)
+// - /sys/fs/cgroup (cgroup2 for container runtimes like runc)
 func mountEssentials(log *Logger) error {
 	// Create mount points for pts and shm (proc/sys/dev already exist from wrapper)
 	for _, dir := range []string{"/dev/pts", "/dev/shm"} {
@@ -30,6 +31,19 @@ func mountEssentials(log *Logger) error {
 	// Set permissions on /dev/shm
 	if err := os.Chmod("/dev/shm", 01777); err != nil {
 		return fmt.Errorf("chmod /dev/shm: %w", err)
+	}
+
+	// Mount cgroup2 for container runtimes (runc/BuildKit require cgroups)
+	// This is safe because VMs are already isolated by the hypervisor, and
+	// cgroup v2 has better security than v1 (no release_agent escape vector)
+	if err := os.MkdirAll("/sys/fs/cgroup", 0755); err != nil {
+		return fmt.Errorf("mkdir /sys/fs/cgroup: %w", err)
+	}
+	if err := syscall.Mount("cgroup2", "/sys/fs/cgroup", "cgroup2", 0, ""); err != nil {
+		// Non-fatal: some kernels may not have cgroup2 support
+		log.Info("mount", "cgroup2 mount failed (non-fatal): "+err.Error())
+	} else {
+		log.Info("mount", "mounted cgroup2")
 	}
 
 	log.Info("mount", "mounted devpts/shm")
@@ -99,7 +113,7 @@ func bindMountsToNewRoot(log *Logger) error {
 	newroot := "/overlay/newroot"
 
 	// Create mount points in new root
-	for _, dir := range []string{"proc", "sys", "dev", "dev/pts"} {
+	for _, dir := range []string{"proc", "sys", "sys/fs/cgroup", "dev", "dev/pts"} {
 		if err := os.MkdirAll(newroot+"/"+dir, 0755); err != nil {
 			return fmt.Errorf("mkdir %s: %w", dir, err)
 		}
@@ -109,6 +123,7 @@ func bindMountsToNewRoot(log *Logger) error {
 	mounts := []struct{ src, dst string }{
 		{"/proc", newroot + "/proc"},
 		{"/sys", newroot + "/sys"},
+		{"/sys/fs/cgroup", newroot + "/sys/fs/cgroup"},
 		{"/dev", newroot + "/dev"},
 		{"/dev/pts", newroot + "/dev/pts"},
 	}

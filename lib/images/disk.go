@@ -116,8 +116,10 @@ func convertToExt4(rootfsDir, diskPath string) (int64, error) {
 		return 0, fmt.Errorf("calculate dir size: %w", err)
 	}
 
-	// Add 20% overhead for filesystem metadata, minimum 10MB
-	diskSizeBytes := sizeBytes + (sizeBytes / 5)
+	// Add 50% overhead for filesystem metadata, minimum 10MB
+	// ext4 needs significant overhead for superblock, group descriptors, inode tables, etc.
+	// 20% was insufficient for small filesystems with many files (like tzdata)
+	diskSizeBytes := sizeBytes + (sizeBytes / 2)
 	const minSize = 10 * 1024 * 1024 // 10MB
 	if diskSizeBytes < minSize {
 		diskSizeBytes = minSize

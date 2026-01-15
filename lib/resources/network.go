@@ -8,8 +8,8 @@ import (
 	"strings"
 
 	"github.com/c2h5oh/datasize"
-	"github.com/onkernel/hypeman/cmd/api/config"
-	"github.com/onkernel/hypeman/lib/logger"
+	"github.com/kernel/hypeman/cmd/api/config"
+	"github.com/kernel/hypeman/lib/logger"
 	"github.com/vishvananda/netlink"
 )
 

@@ -14,7 +14,7 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
-	"github.com/onkernel/hypeman/lib/logger"
+	"github.com/kernel/hypeman/lib/logger"
 )
 
 const (

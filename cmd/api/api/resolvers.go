@@ -5,11 +5,11 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/onkernel/hypeman/lib/images"
-	"github.com/onkernel/hypeman/lib/ingress"
-	"github.com/onkernel/hypeman/lib/instances"
-	"github.com/onkernel/hypeman/lib/middleware"
-	"github.com/onkernel/hypeman/lib/volumes"
+	"github.com/kernel/hypeman/lib/images"
+	"github.com/kernel/hypeman/lib/ingress"
+	"github.com/kernel/hypeman/lib/instances"
+	"github.com/kernel/hypeman/lib/middleware"
+	"github.com/kernel/hypeman/lib/volumes"
 )
 
 // InstanceResolver adapts instances.Manager to middleware.ResourceResolver.

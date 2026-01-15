@@ -3,7 +3,7 @@ package api
 import (
 	"context"
 
-	"github.com/onkernel/hypeman/lib/oapi"
+	"github.com/kernel/hypeman/lib/oapi"
 )
 
 // GetHealth implements health check endpoint

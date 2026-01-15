@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/onkernel/hypeman/lib/images"
+	"github.com/kernel/hypeman/lib/images"
 )
 
 const alpineBaseImage = "alpine:3.22"

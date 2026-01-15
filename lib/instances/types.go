@@ -3,7 +3,7 @@ package instances
 import (
 	"time"
 
-	"github.com/onkernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/hypervisor"
 )
 
 // State represents the instance state

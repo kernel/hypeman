@@ -5,7 +5,7 @@ import (
 	"os"
 	"os/exec"
 
-	"github.com/onkernel/hypeman/lib/vmconfig"
+	"github.com/kernel/hypeman/lib/vmconfig"
 )
 
 // configureNetwork sets up networking in the guest VM.

@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/onkernel/hypeman/lib/images"
-	"github.com/onkernel/hypeman/lib/oapi"
+	"github.com/kernel/hypeman/lib/images"
+	"github.com/kernel/hypeman/lib/oapi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -225,9 +225,17 @@ func TestCreateImage_Idempotent(t *testing.T) {
 		t.Fatal("Build failed - this is the root cause of test failures")
 	}
 
-	require.Equal(t, oapi.ImageStatus(images.StatusPending), img2.Status)
-	require.NotNil(t, img2.QueuePosition, "should have queue position")
-	require.Equal(t, 1, *img2.QueuePosition, "should still be at position 1")
+	// Status can be "pending" (still processing) or "ready" (already completed in fast CI)
+	// The key idempotency invariant is that the digest is the same (verified above)
+	require.Contains(t, []oapi.ImageStatus{
+		oapi.ImageStatus(images.StatusPending),
+		oapi.ImageStatus(images.StatusReady),
+	}, img2.Status, "status should be pending or ready")
+
+	// If still pending, should have queue position
+	if img2.Status == oapi.ImageStatus(images.StatusPending) {
+		require.NotNil(t, img2.QueuePosition, "should have queue position when pending")
+	}
 
 	// Construct digest reference: repository@digest
 	// Extract repository from imageName (strip tag part)

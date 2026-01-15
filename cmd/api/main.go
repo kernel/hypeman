@@ -19,17 +19,17 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	nethttpmiddleware "github.com/oapi-codegen/nethttp-middleware"
-	"github.com/onkernel/hypeman"
-	"github.com/onkernel/hypeman/cmd/api/api"
-	"github.com/onkernel/hypeman/cmd/api/config"
-	"github.com/onkernel/hypeman/lib/devices"
-	"github.com/onkernel/hypeman/lib/guest"
-	"github.com/onkernel/hypeman/lib/hypervisor/qemu"
-	"github.com/onkernel/hypeman/lib/instances"
-	mw "github.com/onkernel/hypeman/lib/middleware"
-	"github.com/onkernel/hypeman/lib/oapi"
-	"github.com/onkernel/hypeman/lib/otel"
-	"github.com/onkernel/hypeman/lib/vmm"
+	"github.com/kernel/hypeman"
+	"github.com/kernel/hypeman/cmd/api/api"
+	"github.com/kernel/hypeman/cmd/api/config"
+	"github.com/kernel/hypeman/lib/devices"
+	"github.com/kernel/hypeman/lib/guest"
+	"github.com/kernel/hypeman/lib/hypervisor/qemu"
+	"github.com/kernel/hypeman/lib/instances"
+	mw "github.com/kernel/hypeman/lib/middleware"
+	"github.com/kernel/hypeman/lib/oapi"
+	"github.com/kernel/hypeman/lib/otel"
+	"github.com/kernel/hypeman/lib/vmm"
 	"github.com/riandyrn/otelchi"
 	"golang.org/x/sync/errgroup"
 )
@@ -375,6 +375,12 @@ func run() error {
 
 	// Error group for coordinated shutdown
 	grp, gctx := errgroup.WithContext(ctx)
+
+	// Start build manager background services (vsock handler for builder VMs)
+	if err := app.BuildManager.Start(gctx); err != nil {
+		logger.Error("failed to start build manager", "error", err)
+		return err
+	}
 
 	// Run the server
 	grp.Go(func() error {

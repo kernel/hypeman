@@ -135,7 +135,7 @@ The Hypeman CLI can be installed on your host machine and used to interact with 
 1. Install the CLI on your host machine (or build from source):
 
 ```bash
-brew install onkernel/tap/hypeman
+brew install kernel/tap/hypeman
 ```
 
 2. Set up the API key on your host machine:

@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/onkernel/hypeman/cmd/api/config"
-	"github.com/onkernel/hypeman/lib/logger"
-	"github.com/onkernel/hypeman/lib/paths"
+	"github.com/kernel/hypeman/cmd/api/config"
+	"github.com/kernel/hypeman/lib/logger"
+	"github.com/kernel/hypeman/lib/paths"
 )
 
 // ResourceType identifies a type of host resource.

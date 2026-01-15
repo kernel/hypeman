@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	v1 "github.com/google/go-containerregistry/pkg/v1"
-	"github.com/onkernel/hypeman/lib/paths"
+	"github.com/kernel/hypeman/lib/paths"
 )
 
 // notFoundError is a custom error that matches go-containerregistry's errNotFound sentinel.

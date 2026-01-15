@@ -3,7 +3,7 @@
 # Hypeman API Install Script
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/onkernel/hypeman/main/scripts/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/kernel/hypeman/main/scripts/install.sh | bash
 #
 # Options (via environment variables):
 #   VERSION      - Install specific API version (default: latest)
@@ -16,7 +16,7 @@
 
 set -e
 
-REPO="onkernel/hypeman"
+REPO="kernel/hypeman"
 BINARY_NAME="hypeman-api"
 INSTALL_DIR="${INSTALL_DIR:-/opt/hypeman/bin}"
 DATA_DIR="${DATA_DIR:-/var/lib/hypeman}"
@@ -359,7 +359,7 @@ info "Installing systemd service..."
 $SUDO tee "${SYSTEMD_DIR}/${SERVICE_NAME}.service" > /dev/null << EOF
 [Unit]
 Description=Hypeman API Server
-Documentation=https://github.com/onkernel/hypeman
+Documentation=https://github.com/kernel/hypeman
 After=network.target
 
 [Service]
@@ -403,7 +403,7 @@ $SUDO systemctl start "$SERVICE_NAME"
 # Install Hypeman CLI
 # =============================================================================
 
-CLI_REPO="onkernel/hypeman-cli"
+CLI_REPO="kernel/hypeman-cli"
 
 if [ -z "$CLI_VERSION" ]; then
     info "Fetching latest CLI version with available artifacts..."

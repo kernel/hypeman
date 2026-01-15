@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/onkernel/hypeman/lib/paths"
+	"github.com/kernel/hypeman/lib/paths"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

@@ -3,7 +3,7 @@ package qemu
 import (
 	"testing"
 
-	"github.com/onkernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/stretchr/testify/assert"
 )
 

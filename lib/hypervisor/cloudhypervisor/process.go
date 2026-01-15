@@ -6,10 +6,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/onkernel/hypeman/lib/hypervisor"
-	"github.com/onkernel/hypeman/lib/logger"
-	"github.com/onkernel/hypeman/lib/paths"
-	"github.com/onkernel/hypeman/lib/vmm"
+	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/logger"
+	"github.com/kernel/hypeman/lib/paths"
+	"github.com/kernel/hypeman/lib/vmm"
 	"gvisor.dev/gvisor/pkg/cleanup"
 )
 

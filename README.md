@@ -13,7 +13,7 @@
 
 <p align="center">
   <strong>Run containerized workloads in VMs, powered by <a href="https://github.com/cloud-hypervisor/cloud-hypervisor">Cloud Hypervisor</a>.</strong>
- <img alt="GitHub License" src="https://img.shields.io/github/license/onkernel/hypeman">
+ <img alt="GitHub License" src="https://img.shields.io/github/license/kernel/hypeman">
   <a href="https://discord.gg/FBrveQRcud"><img src="https://img.shields.io/discord/1342243238748225556?logo=discord&logoColor=white&color=7289DA" alt="Discord"></a>
 </p>
 
@@ -39,12 +39,12 @@ To connect to a Hypeman server from another machine, install just the CLI:
 
 **Homebrew:**
 ```bash
-brew install onkernel/tap/hypeman
+brew install kernel/tap/hypeman
 ```
 
 **Go:**
 ```bash
-go install 'github.com/onkernel/hypeman-cli/cmd/hypeman@latest'
+go install 'github.com/kernel/hypeman-cli/cmd/hypeman@latest'
 ```
 
 **Configure remote access:**

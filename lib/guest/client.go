@@ -16,7 +16,7 @@ import (
 	"time"
 
 	securejoin "github.com/cyphar/filepath-securejoin"
-	"github.com/onkernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/hypervisor"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
