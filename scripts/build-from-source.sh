@@ -43,6 +43,11 @@ SOURCE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 : "${OUTPUT_DIR:=${SOURCE_DIR}/bin}"
 
+# Validate OUTPUT_DIR is an absolute path
+if [[ "$OUTPUT_DIR" != /* ]]; then
+    error "OUTPUT_DIR must be an absolute path (got: ${OUTPUT_DIR})"
+fi
+
 # Create output directory if it doesn't exist
 mkdir -p "$OUTPUT_DIR"
 
