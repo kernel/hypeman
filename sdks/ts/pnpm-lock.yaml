@@ -2741,7 +2741,7 @@ snapshots:
     dependencies:
       '@typescript-eslint/typescript-estree': 8.31.1(typescript@5.8.3)
       '@typescript-eslint/utils': 8.31.1(eslint@9.39.1)(typescript@5.8.3)
-      debug: 4.4.1
+      debug: 4.4.3
       eslint: 9.39.1
       ts-api-utils: 2.0.1(typescript@5.8.3)
       typescript: 5.8.3
@@ -2754,7 +2754,7 @@ snapshots:
     dependencies:
       '@typescript-eslint/types': 8.31.1
       '@typescript-eslint/visitor-keys': 8.31.1
-      debug: 4.4.1
+      debug: 4.4.3
       fast-glob: 3.3.2
       is-glob: 4.0.3
       minimatch: 9.0.5
