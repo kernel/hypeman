@@ -2,6 +2,7 @@ package qemu
 
 import (
 	"fmt"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -73,9 +74,8 @@ func BuildArgs(cfg hypervisor.VMConfig) []string {
 			deviceArg = fmt.Sprintf("vfio-pci,sysfsdev=%s", devicePath)
 		} else if strings.HasPrefix(devicePath, "/sys/bus/pci/devices/") {
 			// Full sysfs path for regular PCI device - extract the PCI address
-			// Path format: /sys/bus/pci/devices/0000:82:00.4/
-			parts := strings.Split(strings.TrimSuffix(devicePath, "/"), "/")
-			pciAddr := parts[len(parts)-1]
+			// Using filepath.Base is more robust than manual string splitting
+			pciAddr := filepath.Base(strings.TrimSuffix(devicePath, "/"))
 			deviceArg = fmt.Sprintf("vfio-pci,host=%s", pciAddr)
 		} else {
 			// Raw PCI address (e.g., "0000:82:00.4")

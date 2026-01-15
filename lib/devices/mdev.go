@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/kernel/hypeman/lib/logger"
@@ -270,10 +271,16 @@ type mdevctlDevice struct {
 
 // ListMdevDevices returns all active mdev devices on the host.
 func ListMdevDevices() ([]MdevDevice, error) {
-	// Try mdevctl first
-	output, err := exec.Command("mdevctl", "list", "-d", "--dumpjson").Output()
+	// Try mdevctl first with a timeout to prevent API hangs
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	output, err := exec.CommandContext(ctx, "mdevctl", "list", "-d", "--dumpjson").Output()
 	if err == nil && len(output) > 0 {
-		return parseMdevctlOutput(output)
+		// If parsing fails, fall back to sysfs scanning instead of failing
+		if mdevs, parseErr := parseMdevctlOutput(output); parseErr == nil {
+			return mdevs, nil
+		}
 	}
 
 	// Fallback to sysfs scanning
@@ -402,6 +409,10 @@ func CreateMdev(ctx context.Context, profileName, instanceID string) (*MdevDevic
 
 	var targetVF string
 	for _, vf := range vfs {
+		// Skip VFs that already have an mdev
+		if vf.HasMdev {
+			continue
+		}
 		// Check if this VF can create the profile
 		availPath := filepath.Join(mdevBusPath, vf.PCIAddress, "mdev_supported_types", profileType, "available_instances")
 		data, err := os.ReadFile(availPath)

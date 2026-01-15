@@ -320,6 +320,8 @@ if [ ! -f "$CONFIG_FILE" ]; then
     sed -i "s/^# INTERNAL_DNS_PORT=.*/INTERNAL_DNS_PORT=5353/" "${TMP_DIR}/config"
     
     info "Installing config file at ${CONFIG_FILE}..."
+    # Config is 640 root:root - intentionally requires root/sudo to read since it contains JWT_SECRET.
+    # The hypeman service runs as root and the CLI wrapper uses sudo to source the config.
     $SUDO install -m 640 "${TMP_DIR}/config" "$CONFIG_FILE"
     $SUDO chown root:root "$CONFIG_FILE"
 else

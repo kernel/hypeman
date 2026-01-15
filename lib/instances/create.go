@@ -272,7 +272,9 @@ func (m *manager) createInstance(
 		// Add mdev cleanup to stack
 		cu.Add(func() {
 			log.DebugContext(ctx, "destroying mdev on cleanup", "instance_id", id, "uuid", gpuMdevUUID)
-			devices.DestroyMdev(ctx, gpuMdevUUID)
+			if err := devices.DestroyMdev(ctx, gpuMdevUUID); err != nil {
+				log.WarnContext(ctx, "failed to destroy mdev on cleanup", "instance_id", id, "uuid", gpuMdevUUID, "error", err)
+			}
 		})
 	}
 

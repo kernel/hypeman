@@ -696,10 +696,14 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 
 	// Convert GPU info
 	if inst.GPUProfile != "" {
-		oapiInst.Gpu = &oapi.InstanceGPU{
-			Profile:  lo.ToPtr(inst.GPUProfile),
-			MdevUuid: lo.ToPtr(inst.GPUMdevUUID),
+		gpu := &oapi.InstanceGPU{
+			Profile: lo.ToPtr(inst.GPUProfile),
 		}
+		// Only set MdevUuid when non-empty to avoid "mdev_uuid": "" in output
+		if inst.GPUMdevUUID != "" {
+			gpu.MdevUuid = lo.ToPtr(inst.GPUMdevUUID)
+		}
+		oapiInst.Gpu = gpu
 	}
 
 	return oapiInst
