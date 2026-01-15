@@ -3,7 +3,6 @@ package devices
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,7 +11,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/kernel/hypeman/lib/logger"
@@ -96,6 +94,7 @@ func ListGPUProfiles() ([]GPUProfile, error) {
 
 // ListGPUProfilesWithVFs returns available vGPU profiles using pre-discovered VFs.
 // This avoids redundant VF discovery when the caller already has the list.
+// Uses parallel sysfs reads for fast availability counting.
 func ListGPUProfilesWithVFs(vfs []VirtualFunction) ([]GPUProfile, error) {
 	if len(vfs) == 0 {
 		return nil, nil
@@ -106,13 +105,16 @@ func ListGPUProfilesWithVFs(vfs []VirtualFunction) ([]GPUProfile, error) {
 		cachedProfiles = loadProfileMetadata(vfs[0].PCIAddress)
 	})
 
+	// Count availability for all profiles in parallel
+	availability := countAvailableVFsForProfilesParallel(vfs, cachedProfiles)
+
 	// Build result with dynamic availability counts
 	profiles := make([]GPUProfile, 0, len(cachedProfiles))
 	for _, meta := range cachedProfiles {
 		profiles = append(profiles, GPUProfile{
 			Name:          meta.Name,
 			FramebufferMB: meta.FramebufferMB,
-			Available:     countAvailableVFsForProfile(vfs, meta.TypeName),
+			Available:     availability[meta.TypeName],
 		})
 	}
 
@@ -191,15 +193,15 @@ func parseFramebufferFromDescription(typeDir string) int {
 	return 0
 }
 
-// countAvailableVFsForProfile counts available instances for a profile type.
+// countAvailableVFsForProfilesParallel counts available instances for all profiles in parallel.
 // Optimized: all VFs on the same parent GPU have identical profile support,
 // so we only sample one VF per parent instead of reading from every VF.
-func countAvailableVFsForProfile(vfs []VirtualFunction, profileType string) int {
-	if len(vfs) == 0 {
-		return 0
+func countAvailableVFsForProfilesParallel(vfs []VirtualFunction, profiles []profileMetadata) map[string]int {
+	if len(vfs) == 0 || len(profiles) == 0 {
+		return make(map[string]int)
 	}
 
-	// Group free VFs by parent GPU
+	// Group free VFs by parent GPU (done once, shared by all goroutines)
 	freeVFsByParent := make(map[string][]VirtualFunction)
 	for _, vf := range vfs {
 		if vf.HasMdev {
@@ -208,6 +210,28 @@ func countAvailableVFsForProfile(vfs []VirtualFunction, profileType string) int 
 		freeVFsByParent[vf.ParentGPU] = append(freeVFsByParent[vf.ParentGPU], vf)
 	}
 
+	// Count availability for all profiles in parallel
+	results := make(map[string]int, len(profiles))
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	for _, meta := range profiles {
+		wg.Add(1)
+		go func(profileType string) {
+			defer wg.Done()
+			count := countAvailableForSingleProfile(freeVFsByParent, profileType)
+			mu.Lock()
+			results[profileType] = count
+			mu.Unlock()
+		}(meta.TypeName)
+	}
+
+	wg.Wait()
+	return results
+}
+
+// countAvailableForSingleProfile counts available VFs for a single profile type.
+func countAvailableForSingleProfile(freeVFsByParent map[string][]VirtualFunction, profileType string) int {
 	count := 0
 	for _, parentVFs := range freeVFsByParent {
 		if len(parentVFs) == 0 {
@@ -261,65 +285,9 @@ func findProfileType(profileName string) (string, error) {
 	return "", fmt.Errorf("profile %q not found", profileName)
 }
 
-// mdevctlDevice represents the JSON structure from mdevctl list
-type mdevctlDevice struct {
-	Start        string `json:"start,omitempty"`
-	MdevType     string `json:"mdev_type,omitempty"`
-	ManuallyDef  bool   `json:"manually_defined,omitempty"`
-	ParentDevice string `json:"parent,omitempty"`
-}
-
 // ListMdevDevices returns all active mdev devices on the host.
+// Scans sysfs directly for fast, consistent results without external process overhead.
 func ListMdevDevices() ([]MdevDevice, error) {
-	// Try mdevctl first with a timeout to prevent API hangs
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	output, err := exec.CommandContext(ctx, "mdevctl", "list", "-d", "--dumpjson").Output()
-	if err == nil && len(output) > 0 {
-		// If parsing fails, fall back to sysfs scanning instead of failing
-		if mdevs, parseErr := parseMdevctlOutput(output); parseErr == nil {
-			return mdevs, nil
-		}
-	}
-
-	// Fallback to sysfs scanning
-	return scanMdevDevices()
-}
-
-// parseMdevctlOutput parses the JSON output from mdevctl list
-func parseMdevctlOutput(output []byte) ([]MdevDevice, error) {
-	// mdevctl outputs: { "uuid": { ... }, "uuid2": { ... } }
-	var rawMap map[string][]mdevctlDevice
-	if err := json.Unmarshal(output, &rawMap); err != nil {
-		return nil, fmt.Errorf("parse mdevctl output: %w", err)
-	}
-
-	var mdevs []MdevDevice
-	for uuid, devices := range rawMap {
-		if len(devices) == 0 {
-			continue
-		}
-		dev := devices[0]
-
-		// Get profile name from mdev type
-		profileName := getProfileNameFromType(dev.MdevType, dev.ParentDevice)
-
-		mdevs = append(mdevs, MdevDevice{
-			UUID:        uuid,
-			VFAddress:   dev.ParentDevice,
-			ProfileType: dev.MdevType,
-			ProfileName: profileName,
-			SysfsPath:   filepath.Join(mdevDevices, uuid),
-			InstanceID:  "", // Not tracked by mdevctl, we track separately
-		})
-	}
-
-	return mdevs, nil
-}
-
-// scanMdevDevices scans /sys/bus/mdev/devices for active mdevs
-func scanMdevDevices() ([]MdevDevice, error) {
 	entries, err := os.ReadDir(mdevDevices)
 	if err != nil {
 		if os.IsNotExist(err) {
