@@ -5,11 +5,11 @@
 # Usage:
 #   ./scripts/build-from-source.sh
 #
-# Options (via environment variables:
-#   OUTPUT_DIR   - Full path of directory to place built binaries (optional, default: $(pwd)/bin)
+# Options (via environment variables):
+#   OUTPUT_DIR   - Full path of directory to place built binaries (optional, default: repo's root bin directory)
 #
 
-set -e
+set -euo pipefail
 
 # Default values
 BINARY_NAME="hypeman-api"
@@ -41,14 +41,13 @@ command -v make >/dev/null 2>&1 || error "make is required but not installed"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-if [ -z "$OUTPUT_DIR" ]; then
-    OUTPUT_DIR=${SOURCE_DIR}/bin
-fi
+: "${OUTPUT_DIR:=${SOURCE_DIR}/bin}"
 
 # Create output directory if it doesn't exist
 mkdir -p "$OUTPUT_DIR"
 
 BUILD_LOG="${OUTPUT_DIR}/build.log"
+: > "$BUILD_LOG"
 
 # =============================================================================
 # Build from source

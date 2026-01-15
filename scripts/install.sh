@@ -211,6 +211,11 @@ if [ -n "$BINARY_DIR" ]; then
 
     # Copy binaries to TMP_DIR
     info "Copying binaries from ${BINARY_DIR}..."
+
+    for f in "${BINARY_NAME}" "hypeman-token" ".env.example"; do
+        [ -f "${BINARY_DIR}/${f}" ] || error "File ${f} not found in ${BINARY_DIR}"
+    done
+
     cp "${BINARY_DIR}/${BINARY_NAME}" "${TMP_DIR}/${BINARY_NAME}"
     cp "${BINARY_DIR}/hypeman-token" "${TMP_DIR}/hypeman-token"
     cp "${BINARY_DIR}/.env.example" "${TMP_DIR}/.env.example"
