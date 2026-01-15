@@ -66,7 +66,13 @@ func main() {
 		// Continue anyway - exec will still work, just no remote access
 	}
 
-	// Phase 8: Mode-specific execution
+	// Phase 8: Setup kernel headers for DKMS
+	if err := setupKernelHeaders(log); err != nil {
+		log.Error("headers", "failed to setup kernel headers", err)
+		// Continue anyway - only needed for DKMS module building
+	}
+
+	// Phase 9: Mode-specific execution
 	if cfg.InitMode == "systemd" {
 		log.Info("mode", "entering systemd mode")
 		runSystemdMode(log, cfg)

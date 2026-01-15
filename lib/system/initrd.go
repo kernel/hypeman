@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -66,6 +68,11 @@ func (m *manager) buildInitrd(ctx context.Context, arch string) (string, error) 
 	initBinPath := filepath.Join(rootfsDir, "init.bin")
 	if err := os.WriteFile(initBinPath, InitBinary, 0755); err != nil {
 		return "", fmt.Errorf("write init binary: %w", err)
+	}
+
+	// Download and add kernel headers tarball (for DKMS support)
+	if err := downloadKernelHeaders(arch, rootfsDir); err != nil {
+		return "", fmt.Errorf("download kernel headers: %w", err)
 	}
 
 	// Generate timestamp for this build
@@ -141,11 +148,57 @@ func (m *manager) isInitrdStale(initrdPath, arch string) bool {
 	return string(storedHash) != currentHash
 }
 
-// computeInitrdHash computes a hash of the embedded binaries
-func computeInitrdHash(_ string) string {
+// computeInitrdHash computes a hash of the embedded binaries and header URL
+func computeInitrdHash(arch string) string {
 	h := sha256.New()
 	h.Write(GuestAgentBinary)
 	h.Write(InitBinary)
 	h.Write(InitWrapper)
+	// Include kernel header URL in hash so initrd rebuilds when headers change
+	if url, ok := KernelHeaderURLs[DefaultKernelVersion][arch]; ok {
+		h.Write([]byte(url))
+	}
 	return hex.EncodeToString(h.Sum(nil))[:16]
+}
+
+// downloadKernelHeaders downloads kernel headers tarball and adds it to the initrd rootfs
+func downloadKernelHeaders(arch, rootfsDir string) error {
+	url, ok := KernelHeaderURLs[DefaultKernelVersion][arch]
+	if !ok {
+		// No headers available for this arch, skip (non-fatal)
+		return nil
+	}
+
+	destPath := filepath.Join(rootfsDir, "kernel-headers.tar.gz")
+
+	// Download headers (GitHub releases return 302 redirects)
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return nil // Follow redirects
+		},
+	}
+
+	resp, err := client.Get(url)
+	if err != nil {
+		return fmt.Errorf("http get: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("download failed with status %d from %s", resp.StatusCode, url)
+	}
+
+	// Create output file
+	outFile, err := os.Create(destPath)
+	if err != nil {
+		return fmt.Errorf("create file: %w", err)
+	}
+	defer outFile.Close()
+
+	// Copy content
+	if _, err = io.Copy(outFile, resp.Body); err != nil {
+		return fmt.Errorf("write file: %w", err)
+	}
+
+	return nil
 }
