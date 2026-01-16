@@ -143,6 +143,27 @@ func (c *ACMEConfig) IsTLSConfigured() bool {
 	}
 }
 
+// APIIngressConfig holds configuration for exposing the Hypeman API via Caddy.
+type APIIngressConfig struct {
+	// Hostname is the hostname for API access (e.g., "api.hostname.kernel.sh").
+	// Empty means API ingress is disabled.
+	Hostname string
+
+	// Port is the local port where the Hypeman API is running.
+	Port int
+
+	// TLS enables TLS for the API hostname.
+	TLS bool
+
+	// RedirectHTTP enables HTTP to HTTPS redirect for the API hostname.
+	RedirectHTTP bool
+}
+
+// IsEnabled returns true if API ingress is configured.
+func (c *APIIngressConfig) IsEnabled() bool {
+	return c.Hostname != ""
+}
+
 // CaddyConfigGenerator generates Caddy configuration from ingress resources.
 type CaddyConfigGenerator struct {
 	paths           *paths.Paths
@@ -150,17 +171,19 @@ type CaddyConfigGenerator struct {
 	adminAddress    string
 	adminPort       int
 	acme            ACMEConfig
+	apiIngress      APIIngressConfig
 	dnsResolverPort int
 }
 
 // NewCaddyConfigGenerator creates a new Caddy config generator.
-func NewCaddyConfigGenerator(p *paths.Paths, listenAddress string, adminAddress string, adminPort int, acme ACMEConfig, dnsResolverPort int) *CaddyConfigGenerator {
+func NewCaddyConfigGenerator(p *paths.Paths, listenAddress string, adminAddress string, adminPort int, acme ACMEConfig, apiIngress APIIngressConfig, dnsResolverPort int) *CaddyConfigGenerator {
 	return &CaddyConfigGenerator{
 		paths:           p,
 		listenAddress:   listenAddress,
 		adminAddress:    adminAddress,
 		adminPort:       adminPort,
 		acme:            acme,
+		apiIngress:      apiIngress,
 		dnsResolverPort: dnsResolverPort,
 	}
 }
@@ -271,6 +294,63 @@ func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 					redirectRoutes = append(redirectRoutes, redirectRoute)
 				}
 			}
+		}
+	}
+
+	// Add API ingress route if configured
+	// This routes requests to the API hostname directly to localhost (Hypeman API)
+	if g.apiIngress.IsEnabled() {
+		log.InfoContext(ctx, "adding API ingress route", "hostname", g.apiIngress.Hostname, "port", g.apiIngress.Port)
+
+		// API reverse proxy to localhost
+		apiReverseProxy := map[string]interface{}{
+			"handler": "reverse_proxy",
+			"upstreams": []map[string]interface{}{
+				{"dial": fmt.Sprintf("127.0.0.1:%d", g.apiIngress.Port)},
+			},
+		}
+
+		apiRoute := map[string]interface{}{
+			"match": []interface{}{
+				map[string]interface{}{
+					"host": []string{g.apiIngress.Hostname},
+				},
+			},
+			"handle":   []interface{}{apiReverseProxy},
+			"terminal": true,
+		}
+		routes = append(routes, apiRoute)
+
+		// Add TLS configuration for API hostname
+		if g.apiIngress.TLS {
+			listenPorts[443] = true
+			tlsHostnames = append(tlsHostnames, g.apiIngress.Hostname)
+
+			// Add HTTP to HTTPS redirect for API hostname
+			if g.apiIngress.RedirectHTTP {
+				listenPorts[80] = true
+				apiRedirectRoute := map[string]interface{}{
+					"match": []interface{}{
+						map[string]interface{}{
+							"host":     []string{g.apiIngress.Hostname},
+							"protocol": "http",
+						},
+					},
+					"handle": []interface{}{
+						map[string]interface{}{
+							"handler": "static_response",
+							"headers": map[string]interface{}{
+								"Location": []string{"https://{http.request.host}{http.request.uri}"},
+							},
+							"status_code": 301,
+						},
+					},
+					"terminal": true,
+				}
+				redirectRoutes = append(redirectRoutes, apiRedirectRoute)
+			}
+		} else {
+			listenPorts[80] = true
 		}
 	}
 

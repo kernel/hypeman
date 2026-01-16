@@ -86,6 +86,9 @@ type Config struct {
 
 	// ACME configuration for TLS certificates
 	ACME ACMEConfig
+
+	// APIIngress configuration for exposing Hypeman API via Caddy
+	APIIngress APIIngressConfig
 }
 
 // DefaultConfig returns the default ingress configuration.
@@ -134,6 +137,7 @@ func NewManager(p *paths.Paths, config Config, instanceResolver InstanceResolver
 		config.AdminAddress,
 		config.AdminPort,
 		config.ACME,
+		config.APIIngress,
 		dnsServer.Port(),
 	)
 
@@ -186,6 +190,7 @@ func (m *manager) Initialize(ctx context.Context) error {
 		m.config.AdminAddress,
 		adminPort,
 		m.config.ACME,
+		m.config.APIIngress,
 		m.dnsServer.Port(),
 	)
 
