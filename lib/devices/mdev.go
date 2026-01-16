@@ -231,25 +231,25 @@ func countAvailableVFsForProfilesParallel(vfs []VirtualFunction, profiles []prof
 }
 
 // countAvailableForSingleProfile counts available VFs for a single profile type.
+// For SR-IOV vGPU (e.g., L40S), each VF has its own available_instances (typically 0 or 1).
+// For time-sliced vGPU, available_instances may reflect shared GPU resources.
+// We sum across all free VFs to handle both cases correctly.
 func countAvailableForSingleProfile(freeVFsByParent map[string][]VirtualFunction, profileType string) int {
 	count := 0
 	for _, parentVFs := range freeVFsByParent {
-		if len(parentVFs) == 0 {
-			continue
+		// Sum available_instances from all free VFs on this parent
+		for _, vf := range parentVFs {
+			availPath := filepath.Join(mdevBusPath, vf.PCIAddress, "mdev_supported_types", profileType, "available_instances")
+			data, err := os.ReadFile(availPath)
+			if err != nil {
+				continue
+			}
+			instances, err := strconv.Atoi(strings.TrimSpace(string(data)))
+			if err != nil {
+				continue
+			}
+			count += instances
 		}
-		// Sample just ONE VF per parent - available_instances reflects GPU-wide capacity
-		sampleVF := parentVFs[0]
-		availPath := filepath.Join(mdevBusPath, sampleVF.PCIAddress, "mdev_supported_types", profileType, "available_instances")
-		data, err := os.ReadFile(availPath)
-		if err != nil {
-			continue
-		}
-		instances, err := strconv.Atoi(strings.TrimSpace(string(data)))
-		if err != nil || instances < 1 {
-			continue
-		}
-		// available_instances reflects GPU-wide remaining capacity, not per-VF
-		count += instances
 	}
 	return count
 }
