@@ -299,6 +299,8 @@ func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 
 	// Add API ingress route if configured
 	// This routes requests to the API hostname directly to localhost (Hypeman API)
+	// IMPORTANT: API route must be prepended to routes so it takes precedence over
+	// wildcard patterns that might otherwise match the API hostname
 	if g.apiIngress.IsEnabled() {
 		log.InfoContext(ctx, "adding API ingress route", "hostname", g.apiIngress.Hostname, "port", g.apiIngress.Port)
 
@@ -319,7 +321,8 @@ func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 			"handle":   []interface{}{apiReverseProxy},
 			"terminal": true,
 		}
-		routes = append(routes, apiRoute)
+		// Prepend API route so it takes precedence over wildcards
+		routes = append([]interface{}{apiRoute}, routes...)
 
 		// Add TLS configuration for API hostname
 		if g.apiIngress.TLS {
@@ -327,6 +330,7 @@ func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 			tlsHostnames = append(tlsHostnames, g.apiIngress.Hostname)
 
 			// Add HTTP to HTTPS redirect for API hostname
+			// Prepend so it takes precedence over wildcard redirects
 			if g.apiIngress.RedirectHTTP {
 				listenPorts[80] = true
 				apiRedirectRoute := map[string]interface{}{
@@ -347,7 +351,7 @@ func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 					},
 					"terminal": true,
 				}
-				redirectRoutes = append(redirectRoutes, apiRedirectRoute)
+				redirectRoutes = append([]interface{}{apiRedirectRoute}, redirectRoutes...)
 			}
 		} else {
 			listenPorts[80] = true
