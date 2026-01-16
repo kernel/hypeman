@@ -323,6 +323,12 @@ func (m *manager) Create(ctx context.Context, req CreateIngressRequest) (*Ingres
 
 	for _, rule := range req.Rules {
 		newPort := rule.Match.GetPort()
+
+		// Check if hostname conflicts with API hostname (reserved for Hypeman API)
+		if m.config.APIIngress.IsEnabled() && rule.Match.Hostname == m.config.APIIngress.Hostname {
+			return nil, fmt.Errorf("%w: hostname %q is reserved for the Hypeman API", ErrHostnameInUse, rule.Match.Hostname)
+		}
+
 		for _, existing := range existingIngresses {
 			for _, existingRule := range existing.Rules {
 				existingPort := existingRule.Match.GetPort()
