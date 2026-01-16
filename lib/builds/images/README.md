@@ -44,12 +44,12 @@ images/
 
 ## Building the Generic Builder Image
 
-Hypeman supports both Docker v2 and OCI image formats. You can use standard `docker build`
-or `docker buildx` - both work.
+Hypeman requires images to use **OCI mediatypes**. Use `docker buildx` with `oci-mediatypes=true`
+to ensure compatibility.
 
 ### Prerequisites
 
-1. **Docker** installed
+1. **Docker** with buildx installed
 2. **Docker Hub login** (or your registry):
    ```bash
    docker login
@@ -58,22 +58,11 @@ or `docker buildx` - both work.
 ### 1. Build and Push
 
 ```bash
-# From repository root
-docker build \
-  -t hirokernel/builder-generic:latest \
-  -f lib/builds/images/generic/Dockerfile \
-  .
-
-docker push hirokernel/builder-generic:latest
-```
-
-Or with buildx for multi-platform support:
-
-```bash
+# From repository root - use buildx with OCI mediatypes
 docker buildx build \
   --platform linux/amd64 \
-  --push \
-  --tag hirokernel/builder-generic:latest \
+  --output type=image,oci-mediatypes=true,push=true \
+  --tag onkernel/builder-generic:latest \
   -f lib/builds/images/generic/Dockerfile \
   .
 ```
@@ -88,10 +77,10 @@ TOKEN=$(make gen-jwt | tail -1)
 curl -X POST http://localhost:8083/images \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"name": "hirokernel/builder-generic:latest"}'
+  -d '{"name": "onkernel/builder-generic:latest"}'
 
 # Wait for import to complete
-curl http://localhost:8083/images/docker.io%2Fhirokernel%2Fbuilder-generic:latest \
+curl http://localhost:8083/images/docker.io%2Fonkernel%2Fbuilder-generic:latest \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -100,7 +89,7 @@ curl http://localhost:8083/images/docker.io%2Fhirokernel%2Fbuilder-generic:lates
 Set the builder image in your `.env`:
 
 ```bash
-BUILDER_IMAGE=hirokernel/builder-generic:latest
+BUILDER_IMAGE=onkernel/builder-generic:latest
 ```
 
 ### Building for Local Testing (without pushing)
@@ -245,7 +234,7 @@ When the builder runs inside a Hypeman microVM:
 
 ```bash
 # Check image status
-cat ~/hypeman_data_dir/images/docker.io/hirokernel/builder-generic/*/metadata.json | jq .
+cat ~/hypeman_data_dir/images/docker.io/onkernel/builder-generic/*/metadata.json | jq .
 
 # Check OCI cache index
 cat ~/hypeman_data_dir/system/oci-cache/index.json | jq '.manifests[-1]'

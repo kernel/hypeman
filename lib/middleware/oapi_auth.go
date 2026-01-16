@@ -181,7 +181,7 @@ func isRegistryPath(path string) bool {
 	return strings.HasPrefix(path, "/v2/")
 }
 
-// isInternalVMRequest checks if the request is from an internal VM network (10.102.x.x)
+// isInternalVMRequest checks if the request is from an internal VM network
 // This is used as a fallback for builder VMs that don't have token auth yet.
 //
 // SECURITY: We only trust RemoteAddr, not X-Real-IP or X-Forwarded-For headers,
@@ -195,8 +195,8 @@ func isInternalVMRequest(r *http.Request) bool {
 		ip = ip[:idx]
 	}
 
-	// Check if it's from the VM network (10.102.x.x)
-	return strings.HasPrefix(ip, "10.102.")
+	// Check if it's from the VM network (10.100.x.x or 10.102.x.x)
+	return strings.HasPrefix(ip, "10.100.") || strings.HasPrefix(ip, "10.102.")
 }
 
 // extractRepoFromPath extracts the repository name from a registry path.

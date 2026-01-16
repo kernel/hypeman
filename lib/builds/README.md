@@ -273,13 +273,13 @@ Builder images must include:
 See [`images/README.md`](./images/README.md) for detailed build instructions.
 
 ```bash
-# Build and push the builder image
-docker build \
-  -t yourregistry/builder:latest \
+# Build and push the builder image (must use OCI mediatypes)
+docker buildx build \
+  --platform linux/amd64 \
+  --output type=image,oci-mediatypes=true,push=true \
+  --tag yourregistry/builder:latest \
   -f lib/builds/images/generic/Dockerfile \
   .
-
-docker push yourregistry/builder:latest
 ```
 
 ### Environment Variables
@@ -366,7 +366,7 @@ go test ./lib/builds/registry_token_test.go ./lib/builds/registry_token.go -v
    curl -X POST http://localhost:8083/images \
      -H "Authorization: Bearer $TOKEN" \
      -H "Content-Type: application/json" \
-     -d '{"name": "hirokernel/builder-generic:latest"}'
+     -d '{"name": "onkernel/builder-generic:latest"}'
    ```
 
 3. **Create test source with Dockerfile**:

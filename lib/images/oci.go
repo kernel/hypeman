@@ -346,20 +346,21 @@ func (c *ociClient) unpackLayers(ctx context.Context, layoutTag, targetDir strin
 // convertToOCIManifest converts a go-containerregistry manifest to OCI v1.Manifest
 // This allows us to use go-containerregistry (which handles both Docker v2 and OCI v1)
 // for manifest parsing, while still using umoci for layer unpacking.
+// Docker v2 mediatypes are converted to OCI equivalents since umoci expects OCI format.
 func convertToOCIManifest(gcrManifest *gcr.Manifest) v1.Manifest {
-	// Convert config descriptor
+	// Convert config descriptor with mediatype conversion
 	configDesc := v1.Descriptor{
-		MediaType:   string(gcrManifest.Config.MediaType),
+		MediaType:   convertToOCIMediaType(string(gcrManifest.Config.MediaType)),
 		Digest:      gcrDigestToOCI(gcrManifest.Config.Digest),
 		Size:        gcrManifest.Config.Size,
 		Annotations: gcrManifest.Config.Annotations,
 	}
 
-	// Convert layer descriptors
+	// Convert layer descriptors with mediatype conversion
 	layers := make([]v1.Descriptor, len(gcrManifest.Layers))
 	for i, layer := range gcrManifest.Layers {
 		layers[i] = v1.Descriptor{
-			MediaType:   string(layer.MediaType),
+			MediaType:   convertToOCIMediaType(string(layer.MediaType)),
 			Digest:      gcrDigestToOCI(layer.Digest),
 			Size:        layer.Size,
 			Annotations: layer.Annotations,
@@ -370,10 +371,29 @@ func convertToOCIManifest(gcrManifest *gcr.Manifest) v1.Manifest {
 		Versioned: specs.Versioned{
 			SchemaVersion: int(gcrManifest.SchemaVersion),
 		},
-		MediaType:   string(gcrManifest.MediaType),
+		MediaType:   convertToOCIMediaType(string(gcrManifest.MediaType)),
 		Config:      configDesc,
 		Layers:      layers,
 		Annotations: gcrManifest.Annotations,
+	}
+}
+
+// convertToOCIMediaType converts Docker v2 media types to OCI equivalents.
+// Images from Docker Hub often use Docker-specific mediatypes, but umoci
+// requires OCI-standard mediatypes for layer unpacking.
+func convertToOCIMediaType(mediaType string) string {
+	switch mediaType {
+	case "application/vnd.docker.distribution.manifest.v2+json":
+		return v1.MediaTypeImageManifest
+	case "application/vnd.docker.container.image.v1+json":
+		return v1.MediaTypeImageConfig
+	case "application/vnd.docker.image.rootfs.diff.tar.gzip":
+		return v1.MediaTypeImageLayerGzip
+	case "application/vnd.docker.image.rootfs.diff.tar":
+		return v1.MediaTypeImageLayer
+	default:
+		// If already OCI or unknown, return as-is
+		return mediaType
 	}
 }
 
