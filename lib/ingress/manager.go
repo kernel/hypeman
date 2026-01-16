@@ -297,6 +297,16 @@ func (m *manager) Create(ctx context.Context, req CreateIngressRequest) (*Ingres
 		}
 	}
 
+	// Check if any hostname conflicts with API hostname (reserved for Hypeman API)
+	// This check must happen before instance validation to give a clear error message
+	if m.config.APIIngress.IsEnabled() {
+		for _, rule := range req.Rules {
+			if rule.Match.Hostname == m.config.APIIngress.Hostname {
+				return nil, fmt.Errorf("%w: hostname %q is reserved for the Hypeman API", ErrHostnameInUse, rule.Match.Hostname)
+			}
+		}
+	}
+
 	// Validate that all target instances exist and resolve their names (only for literal hostnames)
 	// Pattern hostnames have dynamic target instances that can't be validated at creation time
 	var resolvedInstanceIDs []string // Track IDs for logging (used for hypeman.log routing)
@@ -323,12 +333,6 @@ func (m *manager) Create(ctx context.Context, req CreateIngressRequest) (*Ingres
 
 	for _, rule := range req.Rules {
 		newPort := rule.Match.GetPort()
-
-		// Check if hostname conflicts with API hostname (reserved for Hypeman API)
-		if m.config.APIIngress.IsEnabled() && rule.Match.Hostname == m.config.APIIngress.Hostname {
-			return nil, fmt.Errorf("%w: hostname %q is reserved for the Hypeman API", ErrHostnameInUse, rule.Match.Hostname)
-		}
-
 		for _, existing := range existingIngresses {
 			for _, existingRule := range existing.Rules {
 				existingPort := existingRule.Match.GetPort()
