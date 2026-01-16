@@ -1,8 +1,6 @@
 package system
 
 import (
-	"archive/tar"
-	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -15,7 +13,6 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/images"
-	"github.com/kernel/hypeman/lib/logger"
 )
 
 const alpineBaseImage = "alpine:3.22"
@@ -60,13 +57,6 @@ func (m *manager) buildInitrd(ctx context.Context, arch string) (string, error) 
 		return "", fmt.Errorf("write guest-agent: %w", err)
 	}
 
-	// Add NVIDIA kernel modules (for GPU passthrough support)
-	if err := m.addNvidiaModules(ctx, rootfsDir, arch); err != nil {
-		// Log but don't fail - NVIDIA modules are optional (not available on all architectures)
-		log := logger.FromContext(ctx)
-		log.InfoContext(ctx, "skipping NVIDIA modules", "error", err)
-	}
-
 	// Write shell wrapper as /init (sets up /proc, /sys, /dev before Go runtime)
 	// The Go runtime needs these filesystems during initialization
 	initWrapperPath := filepath.Join(rootfsDir, "init")
@@ -78,6 +68,11 @@ func (m *manager) buildInitrd(ctx context.Context, arch string) (string, error) 
 	initBinPath := filepath.Join(rootfsDir, "init.bin")
 	if err := os.WriteFile(initBinPath, InitBinary, 0755); err != nil {
 		return "", fmt.Errorf("write init binary: %w", err)
+	}
+
+	// Download and add kernel headers tarball (for DKMS support)
+	if err := downloadKernelHeaders(arch, rootfsDir); err != nil {
+		return "", fmt.Errorf("download kernel headers: %w", err)
 	}
 
 	// Generate timestamp for this build
@@ -153,167 +148,56 @@ func (m *manager) isInitrdStale(initrdPath, arch string) bool {
 	return string(storedHash) != currentHash
 }
 
-// computeInitrdHash computes a hash of the embedded binaries and NVIDIA assets for a specific architecture
+// computeInitrdHash computes a hash of the embedded binaries and header URL
 func computeInitrdHash(arch string) string {
 	h := sha256.New()
 	h.Write(GuestAgentBinary)
 	h.Write(InitBinary)
 	h.Write(InitWrapper)
-	// Include NVIDIA driver version in hash so initrd is rebuilt when driver changes
-	if ver, ok := NvidiaDriverVersion[DefaultKernelVersion]; ok {
-		h.Write([]byte(ver))
-	}
-	// Include driver libs URL so initrd is rebuilt when the libs tarball changes
-	if archURLs, ok := NvidiaDriverLibURLs[DefaultKernelVersion]; ok {
-		if url, ok := archURLs[arch]; ok {
-			h.Write([]byte(url))
-		}
+	// Include kernel header URL in hash so initrd rebuilds when headers change
+	if url, ok := KernelHeaderURLs[DefaultKernelVersion][arch]; ok {
+		h.Write([]byte(url))
 	}
 	return hex.EncodeToString(h.Sum(nil))[:16]
 }
 
-// addNvidiaModules downloads and extracts NVIDIA kernel modules into the rootfs
-func (m *manager) addNvidiaModules(ctx context.Context, rootfsDir, arch string) error {
-	// Check if NVIDIA modules are available for this architecture
-	archURLs, ok := NvidiaModuleURLs[DefaultKernelVersion]
+// downloadKernelHeaders downloads kernel headers tarball and adds it to the initrd rootfs
+func downloadKernelHeaders(arch, rootfsDir string) error {
+	url, ok := KernelHeaderURLs[DefaultKernelVersion][arch]
 	if !ok {
-		return fmt.Errorf("no NVIDIA modules for kernel version %s", DefaultKernelVersion)
-	}
-	url, ok := archURLs[arch]
-	if !ok {
-		return fmt.Errorf("no NVIDIA modules for architecture %s", arch)
+		// No headers available for this arch, skip (non-fatal)
+		return nil
 	}
 
-	// Download the tarball
+	destPath := filepath.Join(rootfsDir, "kernel-headers.tar.gz")
+
+	// Download headers (GitHub releases return 302 redirects)
 	client := &http.Client{
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return nil // Follow redirects
 		},
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	resp, err := client.Get(url)
 	if err != nil {
-		return fmt.Errorf("create request: %w", err)
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("download nvidia modules: %w", err)
+		return fmt.Errorf("http get: %w", err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download failed with status %d", resp.StatusCode)
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("download failed with status %d from %s", resp.StatusCode, url)
 	}
 
-	// Extract tarball directly into rootfs
-	if err := extractTarGz(resp.Body, rootfsDir); err != nil {
-		return fmt.Errorf("extract nvidia modules: %w", err)
-	}
-
-	// Add userspace driver libraries (libcuda.so, libnvidia-ml.so, nvidia-smi, etc.)
-	// These are injected into containers at boot time - see lib/devices/GPU.md
-	if err := m.addNvidiaDriverLibs(ctx, rootfsDir, arch); err != nil {
-		log := logger.FromContext(ctx)
-		log.WarnContext(ctx, "could not add nvidia driver libs", "error", err)
-		// Don't fail - kernel modules can still work, but containers won't have driver libs
-	}
-
-	return nil
-}
-
-// addNvidiaDriverLibs downloads and extracts NVIDIA userspace driver libraries
-// These libraries (libcuda.so, libnvidia-ml.so, nvidia-smi, etc.) are injected
-// into containers at boot time, eliminating the need for containers to bundle
-// matching driver versions. See lib/devices/GPU.md for documentation.
-func (m *manager) addNvidiaDriverLibs(ctx context.Context, rootfsDir, arch string) error {
-	archURLs, ok := NvidiaDriverLibURLs[DefaultKernelVersion]
-	if !ok {
-		return fmt.Errorf("no NVIDIA driver libs for kernel version %s", DefaultKernelVersion)
-	}
-	url, ok := archURLs[arch]
-	if !ok {
-		return fmt.Errorf("no NVIDIA driver libs for architecture %s", arch)
-	}
-
-	client := &http.Client{
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return nil // Follow redirects
-		},
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	// Create output file
+	outFile, err := os.Create(destPath)
 	if err != nil {
-		return fmt.Errorf("create request: %w", err)
+		return fmt.Errorf("create file: %w", err)
 	}
+	defer outFile.Close()
 
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("download nvidia driver libs: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download failed with status %d", resp.StatusCode)
-	}
-
-	// Extract tarball directly into rootfs
-	if err := extractTarGz(resp.Body, rootfsDir); err != nil {
-		return fmt.Errorf("extract nvidia driver libs: %w", err)
-	}
-
-	log := logger.FromContext(ctx)
-	log.InfoContext(ctx, "added NVIDIA driver libraries", "url", url)
-	return nil
-}
-
-// extractTarGz extracts a gzipped tarball into the destination directory
-func extractTarGz(r io.Reader, destDir string) error {
-	gzr, err := gzip.NewReader(r)
-	if err != nil {
-		return fmt.Errorf("create gzip reader: %w", err)
-	}
-	defer gzr.Close()
-
-	tr := tar.NewReader(gzr)
-	for {
-		header, err := tr.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return fmt.Errorf("read tar: %w", err)
-		}
-
-		// Calculate destination path
-		destPath := filepath.Join(destDir, header.Name)
-
-		switch header.Typeflag {
-		case tar.TypeDir:
-			if err := os.MkdirAll(destPath, os.FileMode(header.Mode)); err != nil {
-				return fmt.Errorf("create directory %s: %w", destPath, err)
-			}
-		case tar.TypeReg:
-			// Ensure parent directory exists
-			if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
-				return fmt.Errorf("create parent dir: %w", err)
-			}
-
-			outFile, err := os.Create(destPath)
-			if err != nil {
-				return fmt.Errorf("create file %s: %w", destPath, err)
-			}
-
-			if _, err := io.Copy(outFile, tr); err != nil {
-				outFile.Close()
-				return fmt.Errorf("write file %s: %w", destPath, err)
-			}
-			outFile.Close()
-
-			if err := os.Chmod(destPath, os.FileMode(header.Mode)); err != nil {
-				return fmt.Errorf("chmod %s: %w", destPath, err)
-			}
-		}
+	// Copy content
+	if _, err = io.Copy(outFile, resp.Body); err != nil {
+		return fmt.Errorf("write file: %w", err)
 	}
 
 	return nil

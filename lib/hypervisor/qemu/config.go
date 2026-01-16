@@ -2,8 +2,10 @@ package qemu
 
 import (
 	"fmt"
+	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
 )
@@ -64,9 +66,22 @@ func BuildArgs(cfg hypervisor.VMConfig) []string {
 		args = append(args, "-device", fmt.Sprintf("vhost-vsock-pci,guest-cid=%d", cfg.VsockCID))
 	}
 
-	// PCI device passthrough (GPU, etc.)
-	for _, pciAddr := range cfg.PCIDevices {
-		args = append(args, "-device", fmt.Sprintf("vfio-pci,host=%s", pciAddr))
+	// PCI device passthrough (GPU, mdev vGPU, etc.)
+	for _, devicePath := range cfg.PCIDevices {
+		var deviceArg string
+		if strings.HasPrefix(devicePath, "/sys/bus/mdev/devices/") {
+			// mdev device (vGPU) - use sysfsdev parameter
+			deviceArg = fmt.Sprintf("vfio-pci,sysfsdev=%s", devicePath)
+		} else if strings.HasPrefix(devicePath, "/sys/bus/pci/devices/") {
+			// Full sysfs path for regular PCI device - extract the PCI address
+			// Using filepath.Base is more robust than manual string splitting
+			pciAddr := filepath.Base(strings.TrimSuffix(devicePath, "/"))
+			deviceArg = fmt.Sprintf("vfio-pci,host=%s", pciAddr)
+		} else {
+			// Raw PCI address (e.g., "0000:82:00.4")
+			deviceArg = fmt.Sprintf("vfio-pci,host=%s", devicePath)
+		}
+		args = append(args, "-device", deviceArg)
 	}
 
 	// Serial console output to file

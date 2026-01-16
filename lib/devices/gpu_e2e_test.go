@@ -35,6 +35,10 @@ import (
 //
 //	sudo env PATH=$PATH:/sbin:/usr/sbin go test -v -run TestGPUPassthrough ./lib/devices/...
 //
+// Note: This test only verifies PCI device visibility (vendor ID 0x10de), not
+// driver functionality. To test nvidia-smi or CUDA, use an image with pre-installed
+// NVIDIA guest drivers (e.g., nvidia/cuda with nvidia-utils-550).
+//
 // WARNING: This test will unbind the GPU from the nvidia driver, which may
 // disrupt other processes using the GPU. The test attempts to restore the
 // nvidia driver binding on cleanup.
@@ -142,7 +146,10 @@ func TestGPUPassthrough(t *testing.T) {
 	require.NoError(t, err)
 	t.Log("System files ready")
 
-	// Step 4: Pull nginx:alpine (nginx keeps running unlike plain alpine which exits immediately)
+	// Step 4: Pull nginx:alpine image
+	// Note: This image doesn't have NVIDIA drivers, but that's fine - this test only
+	// verifies PCI device visibility. For full GPU functionality tests, use an image
+	// with pre-installed NVIDIA guest drivers.
 	t.Log("Step 4: Pulling nginx:alpine image...")
 	createdImg, createErr := imageMgr.CreateImage(ctx, images.CreateImageRequest{
 		Name: "docker.io/library/nginx:alpine",
