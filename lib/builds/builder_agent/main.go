@@ -572,7 +572,10 @@ func runBuild(ctx context.Context, config *BuildConfig, logWriter io.Writer) (st
 	cmd.Stdout = io.MultiWriter(logWriter, &buildLogs)
 	cmd.Stderr = io.MultiWriter(logWriter, &buildLogs)
 	// Use BUILDKITD_FLAGS from environment (set in Dockerfile) or empty for default
-	cmd.Env = os.Environ()
+	// Explicitly set DOCKER_CONFIG to ensure buildkit finds the auth config
+	env := os.Environ()
+	env = append(env, "DOCKER_CONFIG=/home/builder/.docker")
+	cmd.Env = env
 
 	if err := cmd.Run(); err != nil {
 		return "", buildLogs.String(), fmt.Errorf("buildctl failed: %w", err)
