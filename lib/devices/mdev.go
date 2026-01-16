@@ -237,7 +237,7 @@ func countAvailableForSingleProfile(freeVFsByParent map[string][]VirtualFunction
 		if len(parentVFs) == 0 {
 			continue
 		}
-		// Sample just ONE VF per parent - all VFs on same parent have same profiles
+		// Sample just ONE VF per parent - available_instances reflects GPU-wide capacity
 		sampleVF := parentVFs[0]
 		availPath := filepath.Join(mdevBusPath, sampleVF.PCIAddress, "mdev_supported_types", profileType, "available_instances")
 		data, err := os.ReadFile(availPath)
@@ -248,8 +248,8 @@ func countAvailableForSingleProfile(freeVFsByParent map[string][]VirtualFunction
 		if err != nil || instances < 1 {
 			continue
 		}
-		// Profile is available - count all free VFs on this parent
-		count += len(parentVFs)
+		// available_instances reflects GPU-wide remaining capacity, not per-VF
+		count += instances
 	}
 	return count
 }
