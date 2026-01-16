@@ -79,6 +79,16 @@ via `INIT_MODE` in the config disk.
 
 **Result:** OCI images require **zero modifications** - no `/init` script needed!
 
+## Kernel Headers
+
+Kernel headers are bundled in the initrd and automatically installed at boot, enabling DKMS to build out-of-tree kernel modules (e.g., NVIDIA vGPU drivers).
+
+**Why:** Guest images come with headers for their native kernel (e.g., Ubuntu's 5.15), but hypeman VMs run a custom kernel. Without matching headers, DKMS cannot compile drivers.
+
+**How:** The initrd includes `kernel-headers.tar.gz` from the same release as the kernel. At boot, init extracts headers to `/usr/src/linux-headers-{version}/`, creates the `/lib/modules/{version}/build` symlink, and removes mismatched headers from the guest image.
+
+**Result:** Guests can `apt install nvidia-driver-xxx` and DKMS builds modules for the running kernel automatically.
+
 ## Kernel Sources
 
 Kernels downloaded from kernel/linux releases (Cloud Hypervisor-optimized fork):
@@ -94,7 +104,7 @@ Example URLs:
 2. **Add guest-agent binary** (embedded, runs in guest for exec/shell)
 3. **Add init.sh wrapper** (mounts /proc, /sys, /dev before Go runtime)
 4. **Add init binary** (embedded Go binary, runs as PID 1)
-5. **Add NVIDIA modules** (optional, for GPU passthrough)
+5. **Add kernel headers tarball** (downloaded from release, for DKMS)
 6. **Package as cpio** (initramfs format, pure Go - no shell tools required)
 
 ## Adding New Versions
@@ -148,7 +158,7 @@ go test ./lib/system/...
 | File | Size | Purpose |
 |------|------|---------|
 | kernel/*/vmlinux | ~70MB | Cloud Hypervisor optimized kernel |
-| initrd/*/initrd | ~5-10MB | Alpine base + Go init binary + guest-agent |
+| initrd/*/initrd | ~20MB | Alpine base + init binary + guest-agent + kernel headers |
 
 Files downloaded/built once per version, reused for all instances using that version.
 
@@ -161,7 +171,7 @@ lib/system/init/
     mount.go          # Mount operations (overlay, bind mounts)
     config.go         # Parse config disk
     network.go        # Network configuration
-    drivers.go        # GPU driver loading
+    headers.go        # Kernel headers setup for DKMS
     volumes.go        # Volume mounting
     mode_exec.go      # Exec mode: chroot, run entrypoint, wait on guest-agent
     mode_systemd.go   # Systemd mode: chroot + exec /sbin/init

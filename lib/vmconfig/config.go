@@ -20,9 +20,6 @@ type Config struct {
 	GuestGW        string `json:"guest_gw,omitempty"`
 	GuestDNS       string `json:"guest_dns,omitempty"`
 
-	// GPU passthrough
-	HasGPU bool `json:"has_gpu"`
-
 	// Volume mounts
 	VolumeMounts []VolumeMount `json:"volume_mounts,omitempty"`
 

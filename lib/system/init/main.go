@@ -46,15 +46,7 @@ func main() {
 		}
 	}
 
-	// Phase 5: Load GPU drivers if needed
-	if cfg.HasGPU {
-		if err := loadGPUDrivers(log); err != nil {
-			log.Error("gpu", "failed to load GPU drivers", err)
-			// Continue anyway
-		}
-	}
-
-	// Phase 6: Mount volumes
+	// Phase 5: Mount volumes
 	if len(cfg.VolumeMounts) > 0 {
 		if err := mountVolumes(log, cfg); err != nil {
 			log.Error("volumes", "failed to mount volumes", err)
@@ -62,16 +54,22 @@ func main() {
 		}
 	}
 
-	// Phase 7: Bind mount filesystems to new root
+	// Phase 6: Bind mount filesystems to new root
 	if err := bindMountsToNewRoot(log); err != nil {
 		log.Error("bind", "failed to bind mounts", err)
 		dropToShell()
 	}
 
-	// Phase 8: Copy guest-agent to target location
+	// Phase 7: Copy guest-agent to target location
 	if err := copyGuestAgent(log); err != nil {
 		log.Error("agent", "failed to copy guest-agent", err)
 		// Continue anyway - exec will still work, just no remote access
+	}
+
+	// Phase 8: Setup kernel headers for DKMS
+	if err := setupKernelHeaders(log); err != nil {
+		log.Error("headers", "failed to setup kernel headers", err)
+		// Continue anyway - only needed for DKMS module building
 	}
 
 	// Phase 9: Mode-specific execution
@@ -94,4 +92,3 @@ func dropToShell() {
 	cmd.Run()
 	os.Exit(1)
 }
-

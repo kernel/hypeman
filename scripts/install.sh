@@ -9,6 +9,7 @@
 #   VERSION      - Install specific API version (default: latest)
 #   CLI_VERSION  - Install specific CLI version (default: latest)
 #   BRANCH       - Build from source using this branch (for development/testing)
+#   BINARY_DIR   - Use binaries from this directory instead of building/downloading
 #   INSTALL_DIR  - Binary installation directory (default: /opt/hypeman/bin)
 #   DATA_DIR     - Data directory (default: /var/lib/hypeman)
 #   CONFIG_DIR   - Config directory (default: /etc/hypeman)
@@ -24,7 +25,6 @@ CONFIG_DIR="${CONFIG_DIR:-/etc/hypeman}"
 CONFIG_FILE="${CONFIG_DIR}/config"
 SYSTEMD_DIR="/etc/systemd/system"
 SERVICE_NAME="hypeman"
-SERVICE_USER="hypeman"
 
 # Colors for output (true color)
 RED='\033[38;2;255;110;110m'
@@ -96,14 +96,30 @@ fi
 command -v curl >/dev/null 2>&1 || error "curl is required but not installed"
 command -v tar >/dev/null 2>&1 || error "tar is required but not installed"
 command -v systemctl >/dev/null 2>&1 || error "systemctl is required but not installed (systemd not available?)"
-command -v setcap >/dev/null 2>&1 || error "setcap is required but not installed (install libcap2-bin)"
 command -v openssl >/dev/null 2>&1 || error "openssl is required but not installed"
+
+# Count how many of BRANCH, VERSION, BINARY_DIR are set
+count=0
+[ -n "$BRANCH" ] && ((count++)) || true
+[ -n "$VERSION" ] && ((count++)) || true
+[ -n "$BINARY_DIR" ] && ((count++)) || true
+
+if [ "$count" -gt 1 ]; then
+    error "BRANCH, VERSION, and BINARY_DIR are mutually exclusive"
+fi
 
 # Additional checks for build-from-source mode
 if [ -n "$BRANCH" ]; then
     command -v git >/dev/null 2>&1 || error "git is required for BRANCH mode but not installed"
     command -v go >/dev/null 2>&1 || error "go is required for BRANCH mode but not installed"
     command -v make >/dev/null 2>&1 || error "make is required for BRANCH mode but not installed"
+fi
+
+# Additional checks for BINARY_DIR mode
+if [ -n "$BINARY_DIR" ]; then
+    if [ ! -d "$BINARY_DIR" ]; then
+        error "BINARY_DIR does not exist: ${BINARY_DIR}. Are you sure you provided the correct path?"
+    fi
 fi
 
 # Detect OS
@@ -184,10 +200,30 @@ TMP_DIR=$(mktemp -d)
 trap "rm -rf $TMP_DIR" EXIT
 
 # =============================================================================
-# Get binaries (either download release or build from source)
+# Get binaries (either use BINARY_DIR, download release, or build from source)
 # =============================================================================
 
-if [ -n "$BRANCH" ]; then
+if [ -n "$BINARY_DIR" ]; then
+    # Use binaries from specified directory
+    info "Using binaries from ${BINARY_DIR}..."
+
+    # Copy binaries to TMP_DIR
+    info "Copying binaries from ${BINARY_DIR}..."
+
+    for f in "${BINARY_NAME}" "hypeman-token" ".env.example"; do
+        [ -f "${BINARY_DIR}/${f}" ] || error "File ${f} not found in ${BINARY_DIR}"
+    done
+
+    cp "${BINARY_DIR}/${BINARY_NAME}" "${TMP_DIR}/${BINARY_NAME}"
+    cp "${BINARY_DIR}/hypeman-token" "${TMP_DIR}/hypeman-token"
+    cp "${BINARY_DIR}/.env.example" "${TMP_DIR}/.env.example"
+
+    # Make binaries executable
+    chmod +x "${TMP_DIR}/${BINARY_NAME}"
+    chmod +x "${TMP_DIR}/hypeman-token"
+
+    VERSION="custom (from binary)"
+elif [ -n "$BRANCH" ]; then
     # Build from source mode
     info "Building from source (branch: $BRANCH)..."
     
@@ -268,10 +304,6 @@ info "Installing ${BINARY_NAME} to ${INSTALL_DIR}..."
 $SUDO mkdir -p "$INSTALL_DIR"
 $SUDO install -m 755 "${TMP_DIR}/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
 
-# Set capabilities for network operations
-info "Setting capabilities..."
-$SUDO setcap 'cap_net_admin,cap_net_bind_service=+eip' "${INSTALL_DIR}/${BINARY_NAME}"
-
 # Install hypeman-token binary
 info "Installing hypeman-token to ${INSTALL_DIR}..."
 $SUDO install -m 755 "${TMP_DIR}/hypeman-token" "${INSTALL_DIR}/hypeman-token"
@@ -289,26 +321,11 @@ EOF
 $SUDO chmod 755 /usr/local/bin/hypeman-token
 
 # =============================================================================
-# Create hypeman system user
-# =============================================================================
-
-if ! id "$SERVICE_USER" &>/dev/null; then
-    info "Creating system user: ${SERVICE_USER}..."
-    $SUDO useradd --system --no-create-home --shell /usr/sbin/nologin "$SERVICE_USER"
-fi
-
-# Add hypeman user to kvm group for VM access
-if getent group kvm &>/dev/null; then
-    $SUDO usermod -aG kvm "$SERVICE_USER"
-fi
-
-# =============================================================================
 # Create directories
 # =============================================================================
 
 info "Creating data directory at ${DATA_DIR}..."
 $SUDO mkdir -p "$DATA_DIR"
-$SUDO chown "$SERVICE_USER:$SERVICE_USER" "$DATA_DIR"
 
 info "Creating config directory at ${CONFIG_DIR}..."
 $SUDO mkdir -p "$CONFIG_DIR"
@@ -341,12 +358,10 @@ if [ ! -f "$CONFIG_FILE" ]; then
     sed -i "s/^# INTERNAL_DNS_PORT=.*/INTERNAL_DNS_PORT=5353/" "${TMP_DIR}/config"
     
     info "Installing config file at ${CONFIG_FILE}..."
+    # Config is 640 root:root - intentionally requires root/sudo to read since it contains JWT_SECRET.
+    # The hypeman service runs as root and the CLI wrapper uses sudo to source the config.
     $SUDO install -m 640 "${TMP_DIR}/config" "$CONFIG_FILE"
-    
-    # Set ownership: installing user owns the file, hypeman group can read it
-    # This allows CLI (running as user) and service (running as hypeman) to both read
-    INSTALL_USER="${SUDO_USER:-$(whoami)}"
-    $SUDO chown "${INSTALL_USER}:${SERVICE_USER}" "$CONFIG_FILE"
+    $SUDO chown root:root "$CONFIG_FILE"
 else
     info "Config file already exists at ${CONFIG_FILE}, skipping..."
 fi
@@ -364,8 +379,6 @@ After=network.target
 
 [Service]
 Type=simple
-User=${SERVICE_USER}
-Group=${SERVICE_USER}
 Environment="HOME=${DATA_DIR}"
 EnvironmentFile=${CONFIG_FILE}
 ExecStart=${INSTALL_DIR}/${BINARY_NAME}
@@ -377,11 +390,6 @@ ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
 ReadWritePaths=${DATA_DIR}
-# Note: NoNewPrivileges=true is omitted because we need capabilities
-
-# Capabilities for network operations
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
 
 [Install]
 WantedBy=multi-user.target
@@ -405,7 +413,7 @@ $SUDO systemctl start "$SERVICE_NAME"
 
 CLI_REPO="kernel/hypeman-cli"
 
-if [ -z "$CLI_VERSION" ]; then
+if [ -z "$CLI_VERSION" ] || [ "$CLI_VERSION" == "latest" ]; then
     info "Fetching latest CLI version with available artifacts..."
     CLI_VERSION=$(find_release_with_artifact "$CLI_REPO" "hypeman" "$OS" "$ARCH")
     if [ -z "$CLI_VERSION" ]; then

@@ -79,6 +79,7 @@ type FullResourceStatus struct {
 	Disk        ResourceStatus        `json:"disk"`
 	Network     ResourceStatus        `json:"network"`
 	DiskDetail  *DiskBreakdown        `json:"disk_breakdown,omitempty"`
+	GPU         *GPUResourceStatus    `json:"gpu,omitempty"` // nil if no GPU available
 	Allocations []AllocationBreakdown `json:"allocations"`
 }
 
@@ -323,12 +324,16 @@ func (m *Manager) GetFullStatus(ctx context.Context) (*FullResourceStatus, error
 		}
 	}
 
+	// Get GPU status
+	gpuStatus := GetGPUStatus()
+
 	return &FullResourceStatus{
 		CPU:         *cpuStatus,
 		Memory:      *memStatus,
 		Disk:        *diskStatus,
 		Network:     *netStatus,
 		DiskDetail:  diskBreakdown,
+		GPU:         gpuStatus,
 		Allocations: allocations,
 	}, nil
 }

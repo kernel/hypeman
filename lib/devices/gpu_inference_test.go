@@ -47,14 +47,16 @@ const ollamaCudaDockerImage = "ollama-cuda:test"
 // TestGPUInference is an E2E test that verifies Ollama GPU inference works with VFIO passthrough.
 //
 // This test:
-//  1. Builds a custom Docker image with NVIDIA CUDA runtime + Ollama
+//  1. Builds a custom Docker image with NVIDIA CUDA runtime + Ollama (no drivers)
 //  2. Pushes the image to hypeman's test registry
 //  3. Launches a VM with GPU passthrough + the image
-//  4. Runs `ollama run tinyllama` to perform GPU-accelerated inference
-//  5. Verifies the model generates output
+//  4. Installs NVIDIA driver at runtime via DKMS (builds kernel modules)
+//  5. Runs `ollama run tinyllama` to perform GPU-accelerated inference
+//  6. Verifies the model generates output
 //
-// The custom image bundles CUDA libraries, enabling Ollama to detect and use the GPU
-// without needing nvidia-docker/nvidia-container-toolkit.
+// The custom image bundles CUDA libraries. NVIDIA kernel drivers are installed
+// at runtime via DKMS, which works because hypeman automatically installs
+// kernel headers during VM boot.
 //
 // Prerequisites:
 //   - NVIDIA GPU on host
@@ -289,8 +291,55 @@ func TestGPUInference(t *testing.T) {
 	dialer, err := hypervisor.NewVsockDialer(actualInst.HypervisorType, actualInst.VsockSocket, actualInst.VsockCID)
 	require.NoError(t, err)
 
-	// Step 10: Wait for Ollama server
-	t.Log("Step 10: Waiting for Ollama server to be ready...")
+	// Step 10: Install NVIDIA driver via DKMS
+	// hypeman's init auto-installs kernel headers, so DKMS can build modules
+	t.Log("Step 10: Installing NVIDIA driver (DKMS will build kernel modules)...")
+	installDriverCmd := `export DEBIAN_FRONTEND=noninteractive && \
+		apt-get update && \
+		apt-get install -y nvidia-driver-550-server && \
+		modprobe nvidia`
+
+	installCtx, installCancel := context.WithTimeout(ctx, 300*time.Second) // 5 min for DKMS build
+	defer installCancel()
+
+	var installStdout, installStderr inferenceOutputBuffer
+	for i := 0; i < 30; i++ { // Retry until exec agent is ready
+		installStdout = inferenceOutputBuffer{}
+		installStderr = inferenceOutputBuffer{}
+		_, err = guest.ExecIntoInstance(installCtx, dialer, guest.ExecOptions{
+			Command: []string{"/bin/sh", "-c", installDriverCmd},
+			Stdin:   nil,
+			Stdout:  &installStdout,
+			Stderr:  &installStderr,
+			TTY:     false,
+		})
+		if err == nil {
+			break
+		}
+		t.Logf("Waiting for exec agent... (%d/30)", i+1)
+		time.Sleep(2 * time.Second)
+	}
+	require.NoError(t, err, "Failed to install NVIDIA driver: stdout=%s stderr=%s", installStdout.String(), installStderr.String())
+	t.Logf("Driver installation output:\nstdout: %s\nstderr: %s", installStdout.String(), installStderr.String())
+
+	// Verify nvidia-smi works
+	t.Log("Verifying nvidia-smi...")
+	smiCtx, smiCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer smiCancel()
+
+	var smiStdout, smiStderr inferenceOutputBuffer
+	_, err = guest.ExecIntoInstance(smiCtx, dialer, guest.ExecOptions{
+		Command: []string{"nvidia-smi"},
+		Stdin:   nil,
+		Stdout:  &smiStdout,
+		Stderr:  &smiStderr,
+		TTY:     false,
+	})
+	require.NoError(t, err, "nvidia-smi failed: stderr=%s", smiStderr.String())
+	t.Logf("nvidia-smi output:\n%s", smiStdout.String())
+
+	// Step 12: Wait for Ollama server
+	t.Log("Step 12: Waiting for Ollama server to be ready...")
 	ollamaReady := false
 	for i := 0; i < 60; i++ { // 60 seconds for CUDA init
 		healthCtx, healthCancel := context.WithTimeout(ctx, 5*time.Second)
@@ -316,8 +365,8 @@ func TestGPUInference(t *testing.T) {
 	}
 	require.True(t, ollamaReady, "Ollama server should become ready")
 
-	// Step 11: Check GPU detection
-	t.Log("Step 11: Checking GPU detection...")
+	// Step 13: Check GPU detection
+	t.Log("Step 13: Checking GPU detection...")
 	gpuCheckCtx, gpuCheckCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer gpuCheckCancel()
 
@@ -355,8 +404,8 @@ func TestGPUInference(t *testing.T) {
 		t.Logf("✓ NVIDIA device nodes:\n%s", devStdout.String())
 	}
 
-	// Step 12: Pull model via exec (needed for first time)
-	t.Log("Step 12: Ensuring TinyLlama model is available...")
+	// Step 14: Pull model via exec (needed for first time)
+	t.Log("Step 14: Ensuring TinyLlama model is available...")
 
 	var listStdout inferenceOutputBuffer
 	guest.ExecIntoInstance(gpuCheckCtx, dialer, guest.ExecOptions{
@@ -380,9 +429,9 @@ func TestGPUInference(t *testing.T) {
 		t.Log("Model already cached")
 	}
 
-	// Step 13: Test inference via HTTP API using the VM's private IP
+	// Step 15: Test inference via HTTP API using the VM's private IP
 	// This is much faster than using `ollama run` CLI
-	t.Log("Step 13: Running inference via Ollama API...")
+	t.Log("Step 15: Running inference via Ollama API...")
 	require.NotEmpty(t, actualInst.IP, "Instance should have a private IP")
 	ollamaURL := fmt.Sprintf("http://%s:11434/api/generate", actualInst.IP)
 	t.Logf("Calling Ollama API at %s", ollamaURL)
