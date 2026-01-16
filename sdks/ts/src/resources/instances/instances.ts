@@ -204,6 +204,11 @@ export interface Instance {
   env?: { [key: string]: string };
 
   /**
+   * GPU information attached to the instance
+   */
+  gpu?: Instance.GPU;
+
+  /**
    * Whether a snapshot exists for this instance
    */
   has_snapshot?: boolean;
@@ -260,6 +265,21 @@ export interface Instance {
 }
 
 export namespace Instance {
+  /**
+   * GPU information attached to the instance
+   */
+  export interface GPU {
+    /**
+     * mdev device UUID
+     */
+    mdev_uuid?: string;
+
+    /**
+     * vGPU profile name
+     */
+    profile?: string;
+  }
+
   /**
    * Network configuration of the instance
    */
@@ -414,6 +434,11 @@ export interface InstanceCreateParams {
   env?: { [key: string]: string };
 
   /**
+   * GPU configuration for the instance
+   */
+  gpu?: InstanceCreateParams.GPU;
+
+  /**
    * Additional memory for hotplug (human-readable format like "3GB", "1G")
    */
   hotplug_size?: string;
@@ -450,6 +475,16 @@ export interface InstanceCreateParams {
 }
 
 export namespace InstanceCreateParams {
+  /**
+   * GPU configuration for the instance
+   */
+  export interface GPU {
+    /**
+     * vGPU profile name (e.g., "L40S-1Q"). Only used in vGPU mode.
+     */
+    profile?: string;
+  }
+
   /**
    * Network configuration for the instance
    */

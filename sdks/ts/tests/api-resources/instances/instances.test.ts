@@ -31,6 +31,7 @@ describe('resource instances', () => {
       devices: ['l4-gpu'],
       disk_io_bps: '100MB/s',
       env: { PORT: '3000', NODE_ENV: 'production' },
+      gpu: { profile: 'L40S-1Q' },
       hotplug_size: '2GB',
       hypervisor: 'cloud-hypervisor',
       network: {
