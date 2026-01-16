@@ -196,7 +196,7 @@ func TestConfigGeneration(t *testing.T) {
 
 	// Create config generator with DNS-based dynamic upstream settings
 	dnsResolverPort := 5353
-	generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", adminPort, ACMEConfig{}, dnsResolverPort)
+	generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", adminPort, ACMEConfig{}, APIIngressConfig{}, dnsResolverPort)
 
 	ctx := context.Background()
 
@@ -367,7 +367,7 @@ func TestTLSConfigGeneration(t *testing.T) {
 			DNSProvider:        DNSProviderCloudflare,
 			CloudflareAPIToken: "test-token",
 		}
-		generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", adminPort, acmeConfig, dnsResolverPort)
+		generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", adminPort, acmeConfig, APIIngressConfig{}, dnsResolverPort)
 
 		ingresses := []Ingress{
 			{
@@ -404,7 +404,7 @@ func TestTLSConfigGeneration(t *testing.T) {
 
 	t.Run("NoTLSAutomationWithoutConfig", func(t *testing.T) {
 		// Empty ACME config
-		generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", adminPort, ACMEConfig{}, dnsResolverPort)
+		generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", adminPort, ACMEConfig{}, APIIngressConfig{}, dnsResolverPort)
 
 		ingresses := []Ingress{
 			{

@@ -103,6 +103,11 @@ type Config struct {
 	// Cloudflare configuration (if AcmeDnsProvider=cloudflare)
 	CloudflareApiToken string // Cloudflare API token
 
+	// API ingress configuration - exposes Hypeman API via Caddy
+	ApiHostname     string // Hostname for API access (e.g., api.hostname.kernel.sh). Empty = disabled.
+	ApiTLS          bool   // Enable TLS for API hostname
+	ApiRedirectHTTP bool   // Redirect HTTP to HTTPS for API hostname
+
 	// Build system configuration
 	MaxConcurrentSourceBuilds int    // Max concurrent source-to-image builds
 	BuilderImage              string // OCI image for builder VMs
@@ -191,6 +196,11 @@ func Load() *Config {
 
 		// Cloudflare configuration
 		CloudflareApiToken: getEnv("CLOUDFLARE_API_TOKEN", ""),
+
+		// API ingress configuration
+		ApiHostname:     getEnv("API_HOSTNAME", ""),     // Empty = disabled
+		ApiTLS:          getEnvBool("API_TLS", true),    // Default to TLS enabled
+		ApiRedirectHTTP: getEnvBool("API_REDIRECT_HTTP", true),
 
 		// Build system configuration
 		MaxConcurrentSourceBuilds: getEnvInt("MAX_CONCURRENT_SOURCE_BUILDS", 2),

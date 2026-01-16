@@ -27,7 +27,7 @@ func setupTestGenerator(t *testing.T) (*CaddyConfigGenerator, *paths.Paths, func
 	// Empty ACMEConfig means TLS is not configured
 	// Use DNS resolver port for dynamic upstreams
 	dnsResolverPort := 5353
-	generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", 2019, ACMEConfig{}, dnsResolverPort)
+	generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", 2019, ACMEConfig{}, APIIngressConfig{}, dnsResolverPort)
 
 	cleanup := func() {
 		os.RemoveAll(tmpDir)
@@ -81,7 +81,7 @@ func TestGenerateConfig_StoragePath(t *testing.T) {
 	require.NoError(t, os.MkdirAll(p.CaddyDir(), 0755))
 	require.NoError(t, os.MkdirAll(p.CaddyDataDir(), 0755))
 
-	generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", 2019, ACMEConfig{}, 5353)
+	generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", 2019, ACMEConfig{}, APIIngressConfig{}, 5353)
 
 	ctx := context.Background()
 	data, err := generator.GenerateConfig(ctx, []Ingress{})
@@ -405,7 +405,7 @@ func TestGenerateConfig_WithTLS(t *testing.T) {
 		DNSProvider:        DNSProviderCloudflare,
 		CloudflareAPIToken: "test-token",
 	}
-	generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", 2019, acmeConfig, 5353)
+	generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", 2019, acmeConfig, APIIngressConfig{}, 5353)
 
 	ctx := context.Background()
 	ingresses := []Ingress{
@@ -690,7 +690,7 @@ func TestGenerateConfig_MixedTLSAndNonTLS(t *testing.T) {
 		DNSProvider:        DNSProviderCloudflare,
 		CloudflareAPIToken: "test-token",
 	}
-	generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", 2019, acmeConfig, 5353)
+	generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", 2019, acmeConfig, APIIngressConfig{}, 5353)
 
 	ctx := context.Background()
 	ingresses := []Ingress{
@@ -821,7 +821,7 @@ func TestGenerateConfig_DynamicUpstreams(t *testing.T) {
 	require.NoError(t, os.MkdirAll(p.CaddyDataDir(), 0755))
 
 	dnsPort := 5353
-	generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", 2019, ACMEConfig{}, dnsPort)
+	generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", 2019, ACMEConfig{}, APIIngressConfig{}, dnsPort)
 
 	ctx := context.Background()
 	ingresses := []Ingress{
