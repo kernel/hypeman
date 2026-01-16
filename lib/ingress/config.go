@@ -247,12 +247,14 @@ func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 				tlsHostnames = append(tlsHostnames, hostnameMatch)
 
 				// Add HTTP redirect route if requested
+				// Uses protocol matcher to only redirect HTTP, not HTTPS (which would cause redirect loop)
 				if rule.RedirectHTTP {
 					listenPorts[80] = true
 					redirectRoute := map[string]interface{}{
 						"match": []interface{}{
 							map[string]interface{}{
-								"host": []string{hostnameMatch},
+								"host":     []string{hostnameMatch},
+								"protocol": "http",
 							},
 						},
 						"handle": []interface{}{
