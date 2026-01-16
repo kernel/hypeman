@@ -35,6 +35,9 @@ func TestInstanceNewWithOptionalParams(t *testing.T) {
 			"PORT":     "3000",
 			"NODE_ENV": "production",
 		},
+		GPU: hypeman.InstanceNewParamsGPU{
+			Profile: hypeman.String("L40S-1Q"),
+		},
 		HotplugSize: hypeman.String("2GB"),
 		Hypervisor:  hypeman.InstanceNewParamsHypervisorCloudHypervisor,
 		Network: hypeman.InstanceNewParamsNetwork{
