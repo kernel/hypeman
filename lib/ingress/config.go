@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"slices"
 	"sort"
 	"strings"
 
@@ -195,19 +194,21 @@ func (g *CaddyConfigGenerator) GenerateConfig(ctx context.Context, ingresses []I
 }
 
 // buildConfig builds the complete Caddy configuration.
+// Routes are grouped by listen port to prevent conflicts when multiple wildcard
+// ingresses match the same hostname pattern on different ports.
 func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingress) map[string]interface{} {
 	log := logger.FromContext(ctx)
 
-	// Build routes from ingresses
-	routes := []interface{}{}
-	redirectRoutes := []interface{}{}
+	// Group routes by listen port to isolate them in separate Caddy servers.
+	// This prevents conflicts when multiple wildcard ingresses match the same
+	// hostname pattern on different ports (e.g., *.host.kernel.sh:443 and *.host.kernel.sh:3000).
+	routesByPort := map[int][]interface{}{}
 	tlsHostnames := []string{}
-	listenPorts := map[int]bool{}
+	tlsPortsByHostname := map[string][]int{} // Track which ports need TLS for each hostname
 
 	for _, ingress := range ingresses {
 		for _, rule := range ingress.Rules {
 			port := rule.Match.GetPort()
-			listenPorts[port] = true
 
 			// Determine hostname pattern (wildcard or literal) and instance expression
 			var hostnameMatch string
@@ -256,23 +257,22 @@ func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 						"host": []string{hostnameMatch},
 					},
 				},
-				"handle": []interface{}{reverseProxy},
+				"handle":   []interface{}{reverseProxy},
+				"terminal": true,
 			}
 
-			// Add terminal to stop processing after this route matches
-			route["terminal"] = true
-
-			routes = append(routes, route)
+			// Add route to port-specific group
+			routesByPort[port] = append(routesByPort[port], route)
 
 			// Track TLS hostnames for automation policy
 			// For patterns, use the wildcard for TLS (e.g., "*.example.com")
 			if rule.TLS {
 				tlsHostnames = append(tlsHostnames, hostnameMatch)
+				tlsPortsByHostname[hostnameMatch] = append(tlsPortsByHostname[hostnameMatch], port)
 
 				// Add HTTP redirect route if requested
-				// Uses protocol matcher to only redirect HTTP, not HTTPS (which would cause redirect loop)
+				// These go to port 80 server
 				if rule.RedirectHTTP {
-					listenPorts[80] = true
 					redirectRoute := map[string]interface{}{
 						"match": []interface{}{
 							map[string]interface{}{
@@ -291,7 +291,7 @@ func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 						},
 						"terminal": true,
 					}
-					redirectRoutes = append(redirectRoutes, redirectRoute)
+					routesByPort[80] = append(routesByPort[80], redirectRoute)
 				}
 			}
 		}
@@ -299,8 +299,6 @@ func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 
 	// Add API ingress route if configured
 	// This routes requests to the API hostname directly to localhost (Hypeman API)
-	// IMPORTANT: API route must be prepended to routes so it takes precedence over
-	// wildcard patterns that might otherwise match the API hostname
 	if g.apiIngress.IsEnabled() {
 		log.InfoContext(ctx, "adding API ingress route", "hostname", g.apiIngress.Hostname, "port", g.apiIngress.Port)
 
@@ -321,18 +319,16 @@ func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 			"handle":   []interface{}{apiReverseProxy},
 			"terminal": true,
 		}
-		// Prepend API route so it takes precedence over wildcards
-		routes = append([]interface{}{apiRoute}, routes...)
 
-		// Add TLS configuration for API hostname
+		// Determine which port the API route goes to
+		apiListenPort := 80
 		if g.apiIngress.TLS {
-			listenPorts[443] = true
+			apiListenPort = 443
 			tlsHostnames = append(tlsHostnames, g.apiIngress.Hostname)
+			tlsPortsByHostname[g.apiIngress.Hostname] = append(tlsPortsByHostname[g.apiIngress.Hostname], 443)
 
 			// Add HTTP to HTTPS redirect for API hostname
-			// Prepend so it takes precedence over wildcard redirects
 			if g.apiIngress.RedirectHTTP {
-				listenPorts[80] = true
 				apiRedirectRoute := map[string]interface{}{
 					"match": []interface{}{
 						map[string]interface{}{
@@ -351,22 +347,12 @@ func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 					},
 					"terminal": true,
 				}
-				redirectRoutes = append([]interface{}{apiRedirectRoute}, redirectRoutes...)
+				// Prepend so API redirect takes precedence
+				routesByPort[80] = append([]interface{}{apiRedirectRoute}, routesByPort[80]...)
 			}
-		} else {
-			listenPorts[80] = true
 		}
-	}
-
-	// Build listen addresses (sorted for deterministic config output)
-	ports := make([]int, 0, len(listenPorts))
-	for port := range listenPorts {
-		ports = append(ports, port)
-	}
-	sort.Ints(ports)
-	listenAddrs := make([]string, 0, len(ports))
-	for _, port := range ports {
-		listenAddrs = append(listenAddrs, fmt.Sprintf("%s:%d", g.listenAddress, port))
+		// Prepend API route so it takes precedence over wildcards
+		routesByPort[apiListenPort] = append([]interface{}{apiRoute}, routesByPort[apiListenPort]...)
 	}
 
 	// Build base config (admin API only)
@@ -377,19 +363,20 @@ func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 		},
 	}
 
-	// Only add HTTP server if we have listen addresses (i.e., ingresses exist)
-	if len(listenAddrs) > 0 {
-		// Build server configuration
-		server := map[string]interface{}{
-			"listen": listenAddrs,
+	// Build servers map - one server per unique listen port
+	// This isolates routes by port, preventing conflicts when multiple wildcard
+	// ingresses match the same hostname pattern on different ports.
+	if len(routesByPort) > 0 {
+		servers := map[string]interface{}{}
+
+		// Get sorted list of ports for deterministic output
+		ports := make([]int, 0, len(routesByPort))
+		for port := range routesByPort {
+			ports = append(ports, port)
 		}
+		sort.Ints(ports)
 
-		// Combine redirect routes (for HTTP) and main routes
-		// Use slices.Concat to avoid modifying original slices
-		allRoutes := slices.Concat(redirectRoutes, routes)
-
-		// Add catch-all route at the end to return 404 for unmatched hostnames
-		// This must be last since routes are evaluated in order
+		// Catch-all route returns 404 for unmatched hostnames
 		catchAllRoute := map[string]interface{}{
 			"handle": []interface{}{
 				map[string]interface{}{
@@ -402,31 +389,40 @@ func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 				},
 			},
 		}
-		allRoutes = append(allRoutes, catchAllRoute)
 
-		server["routes"] = allRoutes
+		for _, port := range ports {
+			routes := routesByPort[port]
 
-		// Configure automatic HTTPS settings
-		if len(tlsHostnames) > 0 {
-			// When we have TLS hostnames, disable only redirects - we handle them explicitly
-			server["automatic_https"] = map[string]interface{}{
-				"disable_redirects": true,
+			// Add catch-all at the end of each server's routes
+			allRoutes := append(routes, catchAllRoute)
+
+			server := map[string]interface{}{
+				"listen": []string{fmt.Sprintf("%s:%d", g.listenAddress, port)},
+				"routes": allRoutes,
+				"logs":   map[string]interface{}{}, // Disable access logs
 			}
-		} else {
-			// No TLS hostnames - disable automatic HTTPS completely
-			server["automatic_https"] = map[string]interface{}{
-				"disable": true,
+
+			// Configure automatic HTTPS settings based on port
+			if port == 80 {
+				// Port 80 is HTTP only - disable automatic HTTPS completely
+				server["automatic_https"] = map[string]interface{}{
+					"disable": true,
+				}
+			} else {
+				// Other ports may have TLS - disable only redirects (we handle them explicitly)
+				server["automatic_https"] = map[string]interface{}{
+					"disable_redirects": true,
+				}
 			}
+
+			// Use descriptive server names
+			serverName := fmt.Sprintf("ingress-%d", port)
+			servers[serverName] = server
 		}
-
-		// Disable access logs (per-request logs) - we only want system logs
-		server["logs"] = map[string]interface{}{}
 
 		config["apps"] = map[string]interface{}{
 			"http": map[string]interface{}{
-				"servers": map[string]interface{}{
-					"ingress": server,
-				},
+				"servers": servers,
 			},
 		}
 	}

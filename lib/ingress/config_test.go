@@ -295,7 +295,7 @@ func TestGenerateConfig_DeterministicOrder(t *testing.T) {
 		}
 	}
 
-	// Also verify the listen addresses are in sorted order (80, 443, 9000)
+	// Verify we have separate servers for each port (port-isolated architecture)
 	var config map[string]interface{}
 	err := json.Unmarshal(firstOutput, &config)
 	require.NoError(t, err)
@@ -303,13 +303,25 @@ func TestGenerateConfig_DeterministicOrder(t *testing.T) {
 	apps := config["apps"].(map[string]interface{})
 	httpApp := apps["http"].(map[string]interface{})
 	servers := httpApp["servers"].(map[string]interface{})
-	ingressServer := servers["ingress"].(map[string]interface{})
-	listenAddrs := ingressServer["listen"].([]interface{})
 
-	require.Len(t, listenAddrs, 3)
-	assert.Equal(t, "0.0.0.0:80", listenAddrs[0].(string))
-	assert.Equal(t, "0.0.0.0:443", listenAddrs[1].(string))
-	assert.Equal(t, "0.0.0.0:9000", listenAddrs[2].(string))
+	// Should have 3 separate servers, one per port
+	require.Len(t, servers, 3)
+
+	// Verify each server exists and has correct listen address
+	server80 := servers["ingress-80"].(map[string]interface{})
+	listen80 := server80["listen"].([]interface{})
+	require.Len(t, listen80, 1)
+	assert.Equal(t, "0.0.0.0:80", listen80[0].(string))
+
+	server443 := servers["ingress-443"].(map[string]interface{})
+	listen443 := server443["listen"].([]interface{})
+	require.Len(t, listen443, 1)
+	assert.Equal(t, "0.0.0.0:443", listen443[0].(string))
+
+	server9000 := servers["ingress-9000"].(map[string]interface{})
+	listen9000 := server9000["listen"].([]interface{})
+	require.Len(t, listen9000, 1)
+	assert.Equal(t, "0.0.0.0:9000", listen9000[0].(string))
 }
 
 func TestGenerateConfig_DefaultPort(t *testing.T) {
@@ -731,10 +743,11 @@ func TestGenerateConfig_MixedTLSAndNonTLS(t *testing.T) {
 	// Verify HTTP redirect is present (for TLS rule with redirect_http)
 	assert.Contains(t, configStr, "301")
 
-	// Verify automatic_https has disable_redirects (not fully disabled)
-	// because we have TLS hostnames
+	// With port-isolated servers:
+	// - Port 443 server has "disable_redirects": true (TLS enabled, manual redirects)
+	// - Port 80 server has "disable": true (HTTP only, no TLS)
 	assert.Contains(t, configStr, `"disable_redirects"`)
-	assert.NotContains(t, configStr, `"disable": true`)
+	assert.Contains(t, configStr, `"disable": true`) // Port 80 server disables HTTPS completely
 }
 
 func TestHasTLSRules(t *testing.T) {
@@ -891,11 +904,109 @@ func TestGenerateConfig_TLSHostnameDeduplication(t *testing.T) {
 	assert.Len(t, subjects, 1, "TLS subjects should be deduplicated")
 	assert.Equal(t, "*.example.com", subjects[0].(string))
 
-	// Verify all three ports are in listen addresses
-	configStr := string(data)
-	assert.Contains(t, configStr, ":443")
-	assert.Contains(t, configStr, ":3000")
-	assert.Contains(t, configStr, ":8080")
+	// Verify all three ports have separate servers (port isolation)
+	httpApp := apps["http"].(map[string]interface{})
+	servers := httpApp["servers"].(map[string]interface{})
+	assert.Contains(t, servers, "ingress-443")
+	assert.Contains(t, servers, "ingress-3000")
+	assert.Contains(t, servers, "ingress-8080")
+}
+
+func TestGenerateConfig_PortIsolation(t *testing.T) {
+	// Test that wildcard ingresses on different ports don't conflict
+	// by verifying each port gets its own isolated server with routes
+	tmpDir, err := os.MkdirTemp("", "ingress-config-port-isolation-test-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+
+	p := paths.New(tmpDir)
+	require.NoError(t, os.MkdirAll(p.CaddyDir(), 0755))
+	require.NoError(t, os.MkdirAll(p.CaddyDataDir(), 0755))
+
+	// Create generator with ACME configured
+	acmeConfig := ACMEConfig{
+		Email:              "admin@example.com",
+		DNSProvider:        DNSProviderCloudflare,
+		CloudflareAPIToken: "test-token",
+		AllowedDomains:     "*.example.com",
+	}
+	generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", 2019, acmeConfig, APIIngressConfig{}, 5353)
+
+	ctx := context.Background()
+	// Create wildcard ingresses on different ports that would conflict
+	// if they were in the same server (same hostname pattern, different target ports)
+	ingresses := []Ingress{
+		{
+			ID:   "ing-legacy",
+			Name: "wildcard-legacy",
+			Rules: []IngressRule{
+				{
+					// Old style: HTTPS on 443 -> backend on 80
+					Match:  IngressMatch{Hostname: "{instance}.example.com", Port: 443},
+					Target: IngressTarget{Instance: "{instance}", Port: 80},
+					TLS:    true,
+				},
+			},
+		},
+		{
+			ID:   "ing-app",
+			Name: "wildcard-app",
+			Rules: []IngressRule{
+				{
+					// New style: HTTPS on 3000 -> backend on 3000
+					Match:  IngressMatch{Hostname: "{instance}.example.com", Port: 3000},
+					Target: IngressTarget{Instance: "{instance}", Port: 3000},
+					TLS:    true,
+				},
+			},
+		},
+	}
+
+	data, err := generator.GenerateConfig(ctx, ingresses)
+	require.NoError(t, err)
+
+	// Parse the config
+	var config map[string]interface{}
+	err = json.Unmarshal(data, &config)
+	require.NoError(t, err)
+
+	apps := config["apps"].(map[string]interface{})
+	httpApp := apps["http"].(map[string]interface{})
+	servers := httpApp["servers"].(map[string]interface{})
+
+	// Should have 2 separate servers (one per port)
+	assert.Len(t, servers, 2)
+
+	// Verify server for port 443 exists and routes to port 80
+	server443 := servers["ingress-443"].(map[string]interface{})
+	routes443 := server443["routes"].([]interface{})
+	assert.GreaterOrEqual(t, len(routes443), 1)
+
+	// First route should be the wildcard route to port 80
+	route443 := routes443[0].(map[string]interface{})
+	handle443 := route443["handle"].([]interface{})[0].(map[string]interface{})
+	dynamicUpstreams443 := handle443["dynamic_upstreams"].(map[string]interface{})
+	assert.Equal(t, "80", dynamicUpstreams443["port"])
+
+	// Verify server for port 3000 exists and routes to port 3000
+	server3000 := servers["ingress-3000"].(map[string]interface{})
+	routes3000 := server3000["routes"].([]interface{})
+	assert.GreaterOrEqual(t, len(routes3000), 1)
+
+	// First route should be the wildcard route to port 3000
+	route3000 := routes3000[0].(map[string]interface{})
+	handle3000 := route3000["handle"].([]interface{})[0].(map[string]interface{})
+	dynamicUpstreams3000 := handle3000["dynamic_upstreams"].(map[string]interface{})
+	assert.Equal(t, "3000", dynamicUpstreams3000["port"])
+
+	// Verify each server only listens on its own port
+	listen443 := server443["listen"].([]interface{})
+	assert.Len(t, listen443, 1)
+	assert.Equal(t, "0.0.0.0:443", listen443[0])
+
+	listen3000 := server3000["listen"].([]interface{})
+	assert.Len(t, listen3000, 1)
+	assert.Equal(t, "0.0.0.0:3000", listen3000[0])
 }
 
 func TestDeduplicateStrings(t *testing.T) {
