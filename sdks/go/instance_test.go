@@ -27,16 +27,20 @@ func TestInstanceNewWithOptionalParams(t *testing.T) {
 		option.WithAPIKey("My API Key"),
 	)
 	_, err := client.Instances.New(context.TODO(), hypeman.InstanceNewParams{
-		Image:   "docker.io/library/alpine:latest",
-		Name:    "my-workload-1",
-		Devices: []string{"l4-gpu"},
+		Image:     "docker.io/library/alpine:latest",
+		Name:      "my-workload-1",
+		Devices:   []string{"l4-gpu"},
+		DiskIoBps: hypeman.String("100MB/s"),
 		Env: map[string]string{
 			"PORT":     "3000",
 			"NODE_ENV": "production",
 		},
 		HotplugSize: hypeman.String("2GB"),
+		Hypervisor:  hypeman.InstanceNewParamsHypervisorCloudHypervisor,
 		Network: hypeman.InstanceNewParamsNetwork{
-			Enabled: hypeman.Bool(true),
+			BandwidthDownload: hypeman.String("1Gbps"),
+			BandwidthUpload:   hypeman.String("1Gbps"),
+			Enabled:           hypeman.Bool(true),
 		},
 		OverlaySize: hypeman.String("20GB"),
 		Size:        hypeman.String("2GB"),
