@@ -205,6 +205,7 @@ func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 	routesByPort := map[int][]interface{}{}
 	tlsHostnames := []string{}
 	tlsPortsByHostname := map[string][]int{} // Track which ports need TLS for each hostname
+	tlsEnabledPorts := map[int]bool{}        // Track which ports have at least one TLS route
 
 	for _, ingress := range ingresses {
 		for _, rule := range ingress.Rules {
@@ -269,6 +270,7 @@ func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 			if rule.TLS {
 				tlsHostnames = append(tlsHostnames, hostnameMatch)
 				tlsPortsByHostname[hostnameMatch] = append(tlsPortsByHostname[hostnameMatch], port)
+				tlsEnabledPorts[port] = true
 
 				// Add HTTP redirect route if requested
 				// These go to port 80 server
@@ -326,6 +328,7 @@ func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 			apiListenPort = 443
 			tlsHostnames = append(tlsHostnames, g.apiIngress.Hostname)
 			tlsPortsByHostname[g.apiIngress.Hostname] = append(tlsPortsByHostname[g.apiIngress.Hostname], 443)
+			tlsEnabledPorts[443] = true
 
 			// Add HTTP to HTTPS redirect for API hostname
 			if g.apiIngress.RedirectHTTP {
@@ -402,16 +405,16 @@ func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 				"logs":   map[string]interface{}{}, // Disable access logs
 			}
 
-			// Configure automatic HTTPS settings based on port
-			if port == 80 {
-				// Port 80 is HTTP only - disable automatic HTTPS completely
-				server["automatic_https"] = map[string]interface{}{
-					"disable": true,
-				}
-			} else {
-				// Other ports may have TLS - disable only redirects (we handle them explicitly)
+			// Configure automatic HTTPS settings based on whether this port has TLS routes
+			if tlsEnabledPorts[port] {
+				// This port has TLS routes - disable only automatic redirects (we handle them explicitly)
 				server["automatic_https"] = map[string]interface{}{
 					"disable_redirects": true,
+				}
+			} else {
+				// No TLS routes on this port - disable automatic HTTPS completely
+				server["automatic_https"] = map[string]interface{}{
+					"disable": true,
 				}
 			}
 
