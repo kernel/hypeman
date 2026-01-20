@@ -135,6 +135,32 @@ resources:
       get: get /ingresses/{id}
       delete: delete /ingresses/{id}
 
+  resources:
+    models:
+      resources: "#/components/schemas/Resources"
+      resource_status: "#/components/schemas/ResourceStatus"
+      resource_allocation: "#/components/schemas/ResourceAllocation"
+      disk_breakdown: "#/components/schemas/DiskBreakdown"
+      gpu_resource_status: "#/components/schemas/GPUResourceStatus"
+      gpu_profile: "#/components/schemas/GPUProfile"
+      passthrough_device: "#/components/schemas/PassthroughDevice"
+    methods:
+      get: get /resources
+
+  builds:
+    models:
+      build: "#/components/schemas/Build"
+      build_status: "#/components/schemas/BuildStatus"
+      build_policy: "#/components/schemas/BuildPolicy"
+      build_provenance: "#/components/schemas/BuildProvenance"
+      build_event: "#/components/schemas/BuildEvent"
+    methods:
+      list: get /builds
+      create: post /builds
+      get: get /builds/{id}
+      cancel: delete /builds/{id}
+      events: get /builds/{id}/events
+
 settings:
   # All generated integration tests that hit the prism mock http server are marked
   # as skipped. Removing this setting or setting it to false enables tests, but
