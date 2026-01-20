@@ -14,14 +14,14 @@ import (
 	"slices"
 	"time"
 
-	"github.com/onkernel/hypeman-go/internal/apiform"
-	"github.com/onkernel/hypeman-go/internal/apijson"
-	"github.com/onkernel/hypeman-go/internal/apiquery"
-	"github.com/onkernel/hypeman-go/internal/requestconfig"
-	"github.com/onkernel/hypeman-go/option"
-	"github.com/onkernel/hypeman-go/packages/param"
-	"github.com/onkernel/hypeman-go/packages/respjson"
-	"github.com/onkernel/hypeman-go/packages/ssestream"
+	"github.com/kernel/hypeman-go/internal/apiform"
+	"github.com/kernel/hypeman-go/internal/apijson"
+	"github.com/kernel/hypeman-go/internal/apiquery"
+	"github.com/kernel/hypeman-go/internal/requestconfig"
+	"github.com/kernel/hypeman-go/option"
+	"github.com/kernel/hypeman-go/packages/param"
+	"github.com/kernel/hypeman-go/packages/respjson"
+	"github.com/kernel/hypeman-go/packages/ssestream"
 )
 
 // BuildService contains methods and other services that help with interacting with
