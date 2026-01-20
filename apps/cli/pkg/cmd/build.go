@@ -2,38 +2,18 @@ package cmd
 
 import (
 	"archive/tar"
-	"bufio"
 	"bytes"
 	"compress/gzip"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
-	"mime/multipart"
-	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 
+	"github.com/kernel/hypeman-go"
+	"github.com/kernel/hypeman-go/option"
 	"github.com/urfave/cli/v3"
 )
-
-// BuildEvent represents an event from the build SSE stream
-type BuildEvent struct {
-	Type      string `json:"type"`      // "log", "status", "heartbeat"
-	Timestamp string `json:"timestamp"`
-	Content   string `json:"content,omitempty"` // for type=log
-	Status    string `json:"status,omitempty"`  // for type=status
-}
-
-// Build represents the build response from the API
-type Build struct {
-	ID          string `json:"id"`
-	Status      string `json:"status"`
-	ImageDigest string `json:"image_digest,omitempty"`
-	ImageRef    string `json:"image_ref,omitempty"`
-	Error       string `json:"error,omitempty"`
-}
 
 var buildCmd = cli.Command{
 	Name:      "build",
@@ -97,31 +77,18 @@ func handleBuild(ctx context.Context, cmd *cli.Command) error {
 
 	// Get Dockerfile path
 	dockerfilePath := cmd.String("file")
-	var dockerfileContent []byte
+	var dockerfileContent string
 
 	if dockerfilePath != "" {
 		// If dockerfile is specified, read it
 		if !filepath.IsAbs(dockerfilePath) {
 			dockerfilePath = filepath.Join(absContextPath, dockerfilePath)
 		}
-		dockerfileContent, err = os.ReadFile(dockerfilePath)
+		content, err := os.ReadFile(dockerfilePath)
 		if err != nil {
 			return fmt.Errorf("cannot read Dockerfile: %w", err)
 		}
-	}
-
-	// Get base URL and API key
-	baseURL := cmd.Root().String("base-url")
-	if baseURL == "" {
-		baseURL = os.Getenv("HYPEMAN_BASE_URL")
-	}
-	if baseURL == "" {
-		baseURL = "http://localhost:8080"
-	}
-
-	apiKey := os.Getenv("HYPEMAN_API_KEY")
-	if apiKey == "" {
-		return fmt.Errorf("HYPEMAN_API_KEY environment variable required")
+		dockerfileContent = string(content)
 	}
 
 	timeout := cmd.Int("timeout")
@@ -134,8 +101,26 @@ func handleBuild(ctx context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("failed to create source archive: %w", err)
 	}
 
-	// Upload build and get build ID
-	build, err := uploadBuild(ctx, baseURL, apiKey, tarball, dockerfileContent, int(timeout))
+	// Create client with options
+	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
+
+	var opts []option.RequestOption
+	if cmd.Root().Bool("debug") {
+		opts = append(opts, debugMiddlewareOption)
+	}
+
+	// Build params
+	params := hypeman.BuildNewParams{
+		Source:         bytes.NewReader(tarball.Bytes()),
+		TimeoutSeconds: hypeman.Opt(int64(timeout)),
+	}
+
+	if dockerfileContent != "" {
+		params.Dockerfile = hypeman.Opt(dockerfileContent)
+	}
+
+	// Start build
+	build, err := client.Builds.New(ctx, params, opts...)
 	if err != nil {
 		return fmt.Errorf("failed to start build: %w", err)
 	}
@@ -143,12 +128,73 @@ func handleBuild(ctx context.Context, cmd *cli.Command) error {
 	fmt.Fprintf(os.Stderr, "Build started: %s\n", build.ID)
 
 	// Stream build events
-	err = streamBuildEvents(ctx, baseURL, apiKey, build.ID)
+	err = streamBuildEventsSDK(ctx, client, build.ID, opts)
 	if err != nil {
 		return fmt.Errorf("build failed: %w", err)
 	}
 
 	return nil
+}
+
+// streamBuildEventsSDK streams build events using the SDK
+func streamBuildEventsSDK(ctx context.Context, client hypeman.Client, buildID string, opts []option.RequestOption) error {
+	stream := client.Builds.EventsStreaming(
+		ctx,
+		buildID,
+		hypeman.BuildEventsParams{
+			Follow: hypeman.Opt(true),
+		},
+		opts...,
+	)
+	defer stream.Close()
+
+	var finalStatus hypeman.BuildStatus
+	var buildError string
+
+	for stream.Next() {
+		event := stream.Current()
+
+		switch event.Type {
+		case hypeman.BuildEventTypeLog:
+			// Print log content
+			fmt.Println(event.Content)
+
+		case hypeman.BuildEventTypeStatus:
+			finalStatus = event.Status
+			switch event.Status {
+			case hypeman.BuildStatusQueued:
+				fmt.Fprintf(os.Stderr, "Build queued...\n")
+			case hypeman.BuildStatusBuilding:
+				fmt.Fprintf(os.Stderr, "Building...\n")
+			case hypeman.BuildStatusPushing:
+				fmt.Fprintf(os.Stderr, "Pushing image...\n")
+			case hypeman.BuildStatusReady:
+				fmt.Fprintf(os.Stderr, "Build complete!\n")
+				return nil
+			case hypeman.BuildStatusFailed:
+				buildError = "build failed"
+			case hypeman.BuildStatusCancelled:
+				return fmt.Errorf("build was cancelled")
+			}
+
+		case hypeman.BuildEventTypeHeartbeat:
+			// Ignore heartbeat events
+		}
+	}
+
+	if err := stream.Err(); err != nil {
+		return err
+	}
+
+	// Check final status
+	if finalStatus == hypeman.BuildStatusFailed {
+		return fmt.Errorf("%s", buildError)
+	}
+	if finalStatus == hypeman.BuildStatusReady {
+		return nil
+	}
+
+	return fmt.Errorf("build stream ended unexpectedly (status: %s)", finalStatus)
 }
 
 // createSourceTarball creates a gzipped tar archive of the build context
@@ -234,167 +280,4 @@ func createSourceTarball(contextPath string) (*bytes.Buffer, error) {
 	}
 
 	return buf, nil
-}
-
-// uploadBuild uploads the source tarball to the builds API
-func uploadBuild(ctx context.Context, baseURL, apiKey string, source *bytes.Buffer, dockerfile []byte, timeout int) (*Build, error) {
-	// Create multipart form
-	body := new(bytes.Buffer)
-	writer := multipart.NewWriter(body)
-
-	// Add source tarball
-	sourcePart, err := writer.CreateFormFile("source", "source.tar.gz")
-	if err != nil {
-		return nil, err
-	}
-	if _, err := io.Copy(sourcePart, source); err != nil {
-		return nil, err
-	}
-
-	// Add dockerfile if provided separately
-	if dockerfile != nil {
-		if err := writer.WriteField("dockerfile", string(dockerfile)); err != nil {
-			return nil, err
-		}
-	}
-
-	// Add timeout
-	if err := writer.WriteField("timeout_seconds", fmt.Sprintf("%d", timeout)); err != nil {
-		return nil, err
-	}
-
-	if err := writer.Close(); err != nil {
-		return nil, err
-	}
-
-	// Create request
-	req, err := http.NewRequestWithContext(ctx, "POST", baseURL+"/builds", body)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-
-	// Send request
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	if resp.StatusCode != http.StatusAccepted && resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("build request failed (HTTP %d): %s", resp.StatusCode, string(respBody))
-	}
-
-	var build Build
-	if err := json.Unmarshal(respBody, &build); err != nil {
-		return nil, fmt.Errorf("failed to parse build response: %w", err)
-	}
-
-	return &build, nil
-}
-
-// streamBuildEvents streams build events from the SSE endpoint
-func streamBuildEvents(ctx context.Context, baseURL, apiKey, buildID string) error {
-	url := fmt.Sprintf("%s/builds/%s/events?follow=true", baseURL, buildID)
-
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Accept", "text/event-stream")
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-	req.Header.Set("Cache-Control", "no-cache")
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("failed to connect to build events (HTTP %d): %s", resp.StatusCode, string(body))
-	}
-
-	reader := bufio.NewReader(resp.Body)
-	var finalStatus string
-	var buildError string
-
-	for {
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			return err
-		}
-
-		line = strings.TrimSpace(line)
-
-		// Skip empty lines and comments
-		if line == "" || strings.HasPrefix(line, ":") {
-			continue
-		}
-
-		// Parse SSE data line
-		if strings.HasPrefix(line, "data:") {
-			data := strings.TrimPrefix(line, "data:")
-			data = strings.TrimSpace(data)
-
-			if data == "" {
-				continue
-			}
-
-			var event BuildEvent
-			if err := json.Unmarshal([]byte(data), &event); err != nil {
-				// Skip malformed events
-				continue
-			}
-
-			switch event.Type {
-			case "log":
-				// Print log content
-				fmt.Println(event.Content)
-
-			case "status":
-				finalStatus = event.Status
-				switch event.Status {
-				case "queued":
-					fmt.Fprintf(os.Stderr, "Build queued...\n")
-				case "building":
-					fmt.Fprintf(os.Stderr, "Building...\n")
-				case "pushing":
-					fmt.Fprintf(os.Stderr, "Pushing image...\n")
-				case "ready":
-					fmt.Fprintf(os.Stderr, "Build complete!\n")
-					return nil
-				case "failed":
-					buildError = "build failed"
-				case "cancelled":
-					return fmt.Errorf("build was cancelled")
-				}
-
-			case "heartbeat":
-				// Ignore heartbeat events
-			}
-		}
-	}
-
-	// Check final status
-	if finalStatus == "failed" {
-		return fmt.Errorf("%s", buildError)
-	}
-	if finalStatus == "ready" {
-		return nil
-	}
-
-	return fmt.Errorf("build stream ended unexpectedly (status: %s)", finalStatus)
 }
