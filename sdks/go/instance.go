@@ -195,6 +195,8 @@ type Instance struct {
 	DiskIoBps string `json:"disk_io_bps"`
 	// Environment variables
 	Env map[string]string `json:"env"`
+	// GPU information attached to the instance
+	GPU InstanceGPU `json:"gpu"`
 	// Whether a snapshot exists for this instance
 	HasSnapshot bool `json:"has_snapshot"`
 	// Hotplug memory size (human-readable)
@@ -228,6 +230,7 @@ type Instance struct {
 		State       respjson.Field
 		DiskIoBps   respjson.Field
 		Env         respjson.Field
+		GPU         respjson.Field
 		HasSnapshot respjson.Field
 		HotplugSize respjson.Field
 		Hypervisor  respjson.Field
@@ -270,6 +273,27 @@ const (
 	InstanceStateStandby  InstanceState = "Standby"
 	InstanceStateUnknown  InstanceState = "Unknown"
 )
+
+// GPU information attached to the instance
+type InstanceGPU struct {
+	// mdev device UUID
+	MdevUuid string `json:"mdev_uuid"`
+	// vGPU profile name
+	Profile string `json:"profile"`
+	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
+	JSON struct {
+		MdevUuid    respjson.Field
+		Profile     respjson.Field
+		ExtraFields map[string]respjson.Field
+		raw         string
+	} `json:"-"`
+}
+
+// Returns the unmodified JSON received from the API
+func (r InstanceGPU) RawJSON() string { return r.JSON.raw }
+func (r *InstanceGPU) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
 
 // Hypervisor running this instance
 type InstanceHypervisor string
@@ -435,6 +459,8 @@ type InstanceNewParams struct {
 	Devices []string `json:"devices,omitzero"`
 	// Environment variables
 	Env map[string]string `json:"env,omitzero"`
+	// GPU configuration for the instance
+	GPU InstanceNewParamsGPU `json:"gpu,omitzero"`
 	// Hypervisor to use for this instance. Defaults to server configuration.
 	//
 	// Any of "cloud-hypervisor", "qemu".
@@ -451,6 +477,21 @@ func (r InstanceNewParams) MarshalJSON() (data []byte, err error) {
 	return param.MarshalObject(r, (*shadow)(&r))
 }
 func (r *InstanceNewParams) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
+// GPU configuration for the instance
+type InstanceNewParamsGPU struct {
+	// vGPU profile name (e.g., "L40S-1Q"). Only used in vGPU mode.
+	Profile param.Opt[string] `json:"profile,omitzero"`
+	paramObj
+}
+
+func (r InstanceNewParamsGPU) MarshalJSON() (data []byte, err error) {
+	type shadow InstanceNewParamsGPU
+	return param.MarshalObject(r, (*shadow)(&r))
+}
+func (r *InstanceNewParamsGPU) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, r)
 }
 
