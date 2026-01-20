@@ -432,11 +432,14 @@ func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 	}
 
 	// Add TLS automation if we have TLS hostnames
+	// Deduplicate hostnames to avoid "cannot apply more than one automation policy to host" error
+	// This can happen when multiple ingress rules use the same hostname pattern on different ports
 	if len(tlsHostnames) > 0 && g.acme.IsTLSConfigured() {
+		uniqueTLSHostnames := deduplicateStrings(tlsHostnames)
 		if config["apps"] == nil {
 			config["apps"] = map[string]interface{}{}
 		}
-		config["apps"].(map[string]interface{})["tls"] = g.buildTLSConfig(tlsHostnames)
+		config["apps"].(map[string]interface{})["tls"] = g.buildTLSConfig(uniqueTLSHostnames)
 	}
 
 	// Configure Caddy storage paths
@@ -578,4 +581,18 @@ func HasTLSRules(ingresses []Ingress) bool {
 		}
 	}
 	return false
+}
+
+// deduplicateStrings returns a new slice with duplicate strings removed.
+// Order is preserved (first occurrence is kept).
+func deduplicateStrings(s []string) []string {
+	seen := make(map[string]bool)
+	result := make([]string, 0, len(s))
+	for _, v := range s {
+		if !seen[v] {
+			seen[v] = true
+			result = append(result, v)
+		}
+	}
+	return result
 }

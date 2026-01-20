@@ -810,6 +810,135 @@ func TestGenerateConfig_PatternHostname(t *testing.T) {
 	assert.Contains(t, configStr, "http.request.host.labels")
 }
 
+func TestGenerateConfig_TLSHostnameDeduplication(t *testing.T) {
+	// Test that duplicate TLS hostnames (same hostname on different ports) don't cause
+	// Caddy to fail with "cannot apply more than one automation policy to host"
+	tmpDir, err := os.MkdirTemp("", "ingress-config-tls-dedup-test-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+
+	p := paths.New(tmpDir)
+	require.NoError(t, os.MkdirAll(p.CaddyDir(), 0755))
+	require.NoError(t, os.MkdirAll(p.CaddyDataDir(), 0755))
+
+	// Create generator with ACME configured
+	acmeConfig := ACMEConfig{
+		Email:              "admin@example.com",
+		DNSProvider:        DNSProviderCloudflare,
+		CloudflareAPIToken: "test-token",
+		AllowedDomains:     "*.example.com",
+	}
+	generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", 2019, acmeConfig, APIIngressConfig{}, 5353)
+
+	ctx := context.Background()
+	// Create two ingresses with the same wildcard hostname pattern on different ports
+	ingresses := []Ingress{
+		{
+			ID:   "ing-port-443",
+			Name: "wildcard-443",
+			Rules: []IngressRule{
+				{
+					Match:  IngressMatch{Hostname: "{instance}.example.com", Port: 443},
+					Target: IngressTarget{Instance: "{instance}", Port: 80},
+					TLS:    true,
+				},
+			},
+		},
+		{
+			ID:   "ing-port-3000",
+			Name: "wildcard-3000",
+			Rules: []IngressRule{
+				{
+					Match:  IngressMatch{Hostname: "{instance}.example.com", Port: 3000},
+					Target: IngressTarget{Instance: "{instance}", Port: 3000},
+					TLS:    true,
+				},
+			},
+		},
+		{
+			ID:   "ing-port-8080",
+			Name: "wildcard-8080",
+			Rules: []IngressRule{
+				{
+					Match:  IngressMatch{Hostname: "{instance}.example.com", Port: 8080},
+					Target: IngressTarget{Instance: "{instance}", Port: 8080},
+					TLS:    true,
+				},
+			},
+		},
+	}
+
+	data, err := generator.GenerateConfig(ctx, ingresses)
+	require.NoError(t, err)
+
+	// Parse the config to verify TLS subjects are deduplicated
+	var config map[string]interface{}
+	err = json.Unmarshal(data, &config)
+	require.NoError(t, err)
+
+	// Navigate to TLS automation policies
+	apps := config["apps"].(map[string]interface{})
+	tlsApp := apps["tls"].(map[string]interface{})
+	automation := tlsApp["automation"].(map[string]interface{})
+	policies := automation["policies"].([]interface{})
+
+	require.Len(t, policies, 1, "should have exactly one policy")
+
+	policy := policies[0].(map[string]interface{})
+	subjects := policy["subjects"].([]interface{})
+
+	// Should have only ONE entry for *.example.com (deduplicated)
+	assert.Len(t, subjects, 1, "TLS subjects should be deduplicated")
+	assert.Equal(t, "*.example.com", subjects[0].(string))
+
+	// Verify all three ports are in listen addresses
+	configStr := string(data)
+	assert.Contains(t, configStr, ":443")
+	assert.Contains(t, configStr, ":3000")
+	assert.Contains(t, configStr, ":8080")
+}
+
+func TestDeduplicateStrings(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    []string
+		expected []string
+	}{
+		{
+			name:     "empty",
+			input:    []string{},
+			expected: []string{},
+		},
+		{
+			name:     "no duplicates",
+			input:    []string{"a", "b", "c"},
+			expected: []string{"a", "b", "c"},
+		},
+		{
+			name:     "with duplicates",
+			input:    []string{"a", "b", "a", "c", "b"},
+			expected: []string{"a", "b", "c"},
+		},
+		{
+			name:     "all same",
+			input:    []string{"x", "x", "x"},
+			expected: []string{"x"},
+		},
+		{
+			name:     "preserves order",
+			input:    []string{"c", "a", "b", "a", "c"},
+			expected: []string{"c", "a", "b"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := deduplicateStrings(tc.input)
+			assert.Equal(t, tc.expected, result)
+		})
+	}
+}
+
 func TestGenerateConfig_DynamicUpstreams(t *testing.T) {
 	// Create temp dir
 	tmpDir, err := os.MkdirTemp("", "ingress-config-dynamic-test-*")
