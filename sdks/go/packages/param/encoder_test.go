@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/onkernel/hypeman-go/packages/param"
+	"github.com/kernel/hypeman-go/packages/param"
 )
 
 type Struct struct {

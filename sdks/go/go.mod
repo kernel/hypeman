@@ -1,4 +1,4 @@
-module github.com/onkernel/hypeman-go
+module github.com/kernel/hypeman-go
 
 go 1.24.0
 

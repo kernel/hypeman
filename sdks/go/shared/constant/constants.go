@@ -3,7 +3,7 @@
 package constant
 
 import (
-	shimjson "github.com/onkernel/hypeman-go/internal/encoding/json"
+	shimjson "github.com/kernel/hypeman-go/internal/encoding/json"
 )
 
 type Constant[T any] interface {

@@ -2,7 +2,7 @@
 
 <!-- x-release-please-start-version -->
 
-<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go"><img src="https://pkg.go.dev/badge/github.com/onkernel/hypeman-go.svg" alt="Go Reference"></a>
+<a href="https://pkg.go.dev/github.com/kernel/hypeman-go"><img src="https://pkg.go.dev/badge/github.com/kernel/hypeman-go.svg" alt="Go Reference"></a>
 
 <!-- x-release-please-end -->
 
@@ -17,7 +17,7 @@ It is generated with [Stainless](https://www.stainless.com/).
 
 ```go
 import (
-	"github.com/onkernel/hypeman-go" // imported as hypeman
+	"github.com/kernel/hypeman-go" // imported as hypeman
 )
 ```
 
@@ -48,8 +48,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/onkernel/hypeman-go"
-	"github.com/onkernel/hypeman-go/option"
+	"github.com/kernel/hypeman-go"
+	"github.com/kernel/hypeman-go/option"
 )
 
 func main() {
@@ -276,7 +276,7 @@ client.Health.Check(context.TODO(), ...,
 
 The request option `option.WithDebugLog(nil)` may be helpful while debugging.
 
-See the [full list of request options](https://pkg.go.dev/github.com/onkernel/hypeman-go/option).
+See the [full list of request options](https://pkg.go.dev/github.com/kernel/hypeman-go/option).
 
 ### Pagination
 
@@ -473,13 +473,13 @@ This package generally follows [SemVer](https://semver.org/spec/v2.0.0.html) con
 
 We take backwards-compatibility seriously and work hard to ensure you can rely on a smooth upgrade experience.
 
-We are keen for your feedback; please open an [issue](https://www.github.com/onkernel/hypeman-go/issues) with questions, bugs, or suggestions.
+We are keen for your feedback; please open an [issue](https://www.github.com/kernel/hypeman-go/issues) with questions, bugs, or suggestions.
 
 ## Development
 
 ### Testing Preview Branches
 
-When developing features in the main [hypeman](https://github.com/onkernel/hypeman) repo, Stainless automatically creates preview branches in `stainless-sdks/hypeman-go` with your API changes. You can check out these branches locally to test the SDK changes:
+When developing features in the main [hypeman](https://github.com/kernel/hypeman) repo, Stainless automatically creates preview branches in `stainless-sdks/hypeman-go` with your API changes. You can check out these branches locally to test the SDK changes:
 
 ```bash
 # Checkout preview/<branch> (e.g., if working on "devices" branch in hypeman)

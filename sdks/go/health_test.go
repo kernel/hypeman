@@ -8,9 +8,9 @@ import (
 	"os"
 	"testing"
 
-	"github.com/onkernel/hypeman-go"
-	"github.com/onkernel/hypeman-go/internal/testutil"
-	"github.com/onkernel/hypeman-go/option"
+	"github.com/kernel/hypeman-go"
+	"github.com/kernel/hypeman-go/internal/testutil"
+	"github.com/kernel/hypeman-go/option"
 )
 
 func TestHealthCheck(t *testing.T) {

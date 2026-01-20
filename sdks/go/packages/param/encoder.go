@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	shimjson "github.com/onkernel/hypeman-go/internal/encoding/json"
+	shimjson "github.com/kernel/hypeman-go/internal/encoding/json"
 
 	"github.com/tidwall/sjson"
 )
