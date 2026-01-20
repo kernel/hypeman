@@ -72,13 +72,15 @@ func handlePs(ctx context.Context, cmd *cli.Command) error {
 		return nil
 	}
 
-	table := NewTableWriter(os.Stdout, "INSTANCE ID", "NAME", "IMAGE", "STATE", "CREATED")
+	table := NewTableWriter(os.Stdout, "INSTANCE ID", "NAME", "IMAGE", "STATE", "GPU", "HV", "CREATED")
 	for _, inst := range filtered {
 		table.AddRow(
 			TruncateID(inst.ID),
 			TruncateString(inst.Name, 20),
 			TruncateString(inst.Image, 25),
 			string(inst.State),
+			formatGPU(inst.GPU),
+			formatHypervisor(inst.Hypervisor),
 			FormatTimeAgo(inst.CreatedAt),
 		)
 	}
@@ -87,3 +89,30 @@ func handlePs(ctx context.Context, cmd *cli.Command) error {
 	return nil
 }
 
+// formatGPU returns a short representation of GPU configuration
+func formatGPU(gpu hypeman.InstanceGPU) string {
+	// Check if GPU profile is set
+	if gpu.Profile != "" {
+		return gpu.Profile
+	}
+	// Check if mdev UUID is set (indicates vGPU without profile name shown)
+	if gpu.MdevUuid != "" {
+		return "vgpu"
+	}
+	return "-"
+}
+
+// formatHypervisor returns a short abbreviation for the hypervisor
+func formatHypervisor(hv hypeman.InstanceHypervisor) string {
+	switch hv {
+	case hypeman.InstanceHypervisorCloudHypervisor:
+		return "ch"
+	case hypeman.InstanceHypervisorQemu:
+		return "qemu"
+	default:
+		if hv == "" {
+			return "ch" // default
+		}
+		return string(hv)
+	}
+}
