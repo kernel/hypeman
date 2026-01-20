@@ -104,7 +104,7 @@ type Config struct {
 	CloudflareApiToken string // Cloudflare API token
 
 	// API ingress configuration - exposes Hypeman API via Caddy
-	ApiHostname     string // Hostname for API access (e.g., api.hostname.kernel.sh). Empty = disabled.
+	ApiHostname     string // Hostname for API access (e.g., hypeman.hostname.kernel.sh). Empty = disabled.
 	ApiTLS          bool   // Enable TLS for API hostname
 	ApiRedirectHTTP bool   // Redirect HTTP to HTTPS for API hostname
 

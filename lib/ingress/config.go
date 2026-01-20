@@ -145,7 +145,7 @@ func (c *ACMEConfig) IsTLSConfigured() bool {
 
 // APIIngressConfig holds configuration for exposing the Hypeman API via Caddy.
 type APIIngressConfig struct {
-	// Hostname is the hostname for API access (e.g., "api.hostname.kernel.sh").
+	// Hostname is the hostname for API access (e.g., "hypeman.hostname.kernel.sh").
 	// Empty means API ingress is disabled.
 	Hostname string
 
