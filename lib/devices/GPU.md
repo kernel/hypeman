@@ -1,81 +1,217 @@
-# GPU Passthrough Support
+# GPU and vGPU Support
 
-This document covers NVIDIA GPU passthrough specifics. For general device passthrough, see [README.md](README.md).
+This document covers GPU passthrough and vGPU (SR-IOV) support in hypeman.
 
-## How GPU Passthrough Works
+## Overview
 
-hypeman supports NVIDIA GPU passthrough via VFIO, with automatic driver injection:
+hypeman supports two GPU modes, automatically detected based on host configuration:
+
+| Mode | Description | Use Case |
+|------|-------------|----------|
+| **vGPU (SR-IOV)** | Virtual GPUs via mdev on SR-IOV VFs | Multi-tenant, shared GPU resources |
+| **Passthrough** | Whole GPU VFIO passthrough | Dedicated GPU per instance |
+
+The host's GPU mode is determined by the host driver configuration:
+- If `/sys/class/mdev_bus/` contains VFs → vGPU mode
+- If NVIDIA GPUs are available for VFIO → passthrough mode
+
+## vGPU Mode (Recommended)
+
+vGPU mode uses NVIDIA's SR-IOV technology to create Virtual Functions (VFs), each capable of hosting an mdev (mediated device) representing a vGPU.
+
+### How It Works
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│  hypeman Initrd (built at startup)                                  │
+│  Physical GPU (e.g., NVIDIA L40S)                                   │
 │  ┌──────────────────────────────────────────────────────────────┐   │
-│  │  /lib/modules/<kver>/kernel/drivers/gpu/                     │   │
-│  │    ├── nvidia.ko                                             │   │
-│  │    ├── nvidia-uvm.ko                                         │   │
-│  │    ├── nvidia-modeset.ko                                     │   │
-│  │    └── nvidia-drm.ko                                         │   │
-│  ├──────────────────────────────────────────────────────────────┤   │
-│  │  /usr/lib/nvidia/                                            │   │
-│  │    ├── libcuda.so.570.86.16                                  │   │
-│  │    ├── libnvidia-ml.so.570.86.16                             │   │
-│  │    ├── libnvidia-ptxjitcompiler.so.570.86.16                 │   │
-│  │    └── ... (other driver libraries)                          │   │
+│  │  SR-IOV Virtual Functions (VFs)                               │   │
+│  │  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐              │   │
+│  │  │ VF 0    │ │ VF 1    │ │ VF 2    │ │ VF 3    │ ...         │   │
+│  │  │ mdev    │ │ (avail) │ │ mdev    │ │ (avail) │              │   │
+│  │  │ L40S-1Q │ │         │ │ L40S-2Q │ │         │              │   │
+│  │  └─────────┘ └─────────┘ └─────────┘ └─────────┘              │   │
 │  └──────────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼ (at VM boot, if HAS_GPU=1)
-┌─────────────────────────────────────────────────────────────────────┐
-│  Guest VM                                                           │
-│  1. Load kernel modules (modprobe nvidia, etc.)                     │
-│  2. Create device nodes (/dev/nvidia0, /dev/nvidiactl, etc.)        │
-│  3. Copy driver libs to container rootfs                            │
-│  4. Run ldconfig to update library cache                            │
-│  5. Container can now use GPU!                                      │
-└─────────────────────────────────────────────────────────────────────┘
 ```
 
-## Container Image Requirements
+### Available Profiles
 
-With driver injection, containers **do not need** to bundle NVIDIA driver libraries.
+Query available profiles via the resources API:
 
-**Minimal CUDA image example:**
+```bash
+curl -s http://localhost:8080/resources | jq .gpu
+```
+
+```json
+{
+  "mode": "vgpu",
+  "total_slots": 64,
+  "used_slots": 5,
+  "profiles": [
+    {"name": "L40S-1Q", "framebuffer_mb": 1024, "available": 59},
+    {"name": "L40S-2Q", "framebuffer_mb": 2048, "available": 30},
+    {"name": "L40S-4Q", "framebuffer_mb": 4096, "available": 16}
+  ]
+}
+```
+
+### Creating an Instance with vGPU
+
+Request a vGPU by specifying the profile name:
+
+```bash
+curl -X POST http://localhost:8080/instances \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "ml-training",
+    "image": "nvidia/cuda:12.4-runtime-ubuntu22.04",
+    "vcpus": 4,
+    "size": "8GB",
+    "gpu": {
+      "profile": "L40S-1Q"
+    }
+  }'
+```
+
+The response includes the assigned mdev UUID:
+
+```json
+{
+  "id": "abc123",
+  "name": "ml-training",
+  "gpu": {
+    "profile": "L40S-1Q",
+    "mdev_uuid": "aa618089-8b16-4d01-a136-25a0f3c73123"
+  }
+}
+```
+
+### Ephemeral mdev Lifecycle
+
+mdev devices are **ephemeral**: created on instance start, destroyed on instance delete.
+
+```
+Instance Create → Create mdev → Attach to VM → Instance Running
+Instance Delete → Stop VM → Destroy mdev → VF available again
+```
+
+This ensures:
+- **Security**: No VRAM data leakage between instances
+- **Clean state**: Fresh vGPU for each instance
+- **Automatic cleanup**: Orphaned mdevs cleaned up on server restart
+
+## Passthrough Mode
+
+Passthrough mode assigns entire physical GPUs to instances via VFIO.
+
+### Checking Available GPUs
+
+```bash
+curl -s http://localhost:8080/resources | jq .gpu
+```
+
+```json
+{
+  "mode": "passthrough",
+  "total_slots": 4,
+  "used_slots": 2,
+  "devices": [
+    {"name": "NVIDIA L40S", "available": true},
+    {"name": "NVIDIA L40S", "available": false}
+  ]
+}
+```
+
+### Using Passthrough
+
+For whole-GPU passthrough, use the devices API (see [README.md](README.md)):
+
+```bash
+# Register GPU
+curl -X POST http://localhost:8080/devices \
+  -d '{"pci_address": "0000:82:00.0", "name": "gpu-0"}'
+
+# Create instance with GPU
+curl -X POST http://localhost:8080/instances \
+  -d '{"name": "ml-job", "image": "nvidia/cuda:12.4", "devices": ["gpu-0"]}'
+```
+
+## Guest Driver Requirements
+
+**Important**: hypeman does NOT inject NVIDIA drivers into guest VMs. The guest image must include pre-installed NVIDIA drivers.
+
+### Recommended Base Images
+
+Use NVIDIA's official CUDA images with driver utilities:
 
 ```dockerfile
-FROM nvidia/cuda:12.4-runtime-ubuntu22.04
-# Your application - no driver installation needed!
-RUN pip install torch
-CMD ["python", "train.py"]
+FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
+
+# Install NVIDIA driver userspace utilities
+RUN apt-get update && \
+    apt-get install -y nvidia-utils-550 && \
+    rm -rf /var/lib/apt/lists/*
+
+# Your application
+COPY app /app
+CMD ["/app/run"]
 ```
 
-hypeman injects the following at boot:
+### Driver Version Compatibility
 
-- `libcuda.so` - CUDA driver API
-- `libnvidia-ml.so` - NVML (nvidia-smi, monitoring)
-- `libnvidia-ptxjitcompiler.so` - PTX JIT compilation
-- `libnvidia-nvvm.so` - NVVM compiler
-- `libnvidia-gpucomp.so` - GPU compute library
-- `nvidia-smi` binary
-- `nvidia-modprobe` binary
+The guest driver version must be compatible with:
+- The host's NVIDIA vGPU Manager (for vGPU mode)
+- The CUDA toolkit version your application requires
 
-## Driver Version Compatibility
+Check NVIDIA's [vGPU Documentation](https://docs.nvidia.com/grid/) for compatibility matrices.
 
-The driver libraries injected by hypeman are pinned to a specific version that matches the kernel modules. This version is tracked in:
+## API Reference
 
-- **Kernel release:** `kernel/linux` GitHub releases (e.g., `ch-6.12.8-kernel-2-20251211`)
-- **hypeman config:** `lib/system/versions.go` - `NvidiaDriverVersion` map
+### GET /resources
 
-### Current Driver Version
+Returns GPU status along with other resources:
 
-| Kernel Version | Driver Version | Release Date |
-|---------------|----------------|--------------|
-| ch-6.12.8-kernel-2-20251211 | 570.86.16 | 2025-12-11 |
+```json
+{
+  "cpu": { ... },
+  "memory": { ... },
+  "gpu": {
+    "mode": "vgpu",
+    "total_slots": 64,
+    "used_slots": 5,
+    "profiles": [
+      {"name": "L40S-1Q", "framebuffer_mb": 1024, "available": 59}
+    ]
+  }
+}
+```
 
-### CUDA Compatibility
+### POST /instances (with GPU)
 
-Driver 570.86.16 supports CUDA 12.4 and earlier. Check [NVIDIA's compatibility matrix](https://docs.nvidia.com/deploy/cuda-compatibility/) for details.
+```json
+{
+  "name": "my-instance",
+  "image": "nvidia/cuda:12.4-runtime",
+  "gpu": {
+    "profile": "L40S-1Q"
+  }
+}
+```
 
-## Upgrading the Driver
+### Instance Response
+
+```json
+{
+  "id": "abc123",
+  "gpu": {
+    "profile": "L40S-1Q",
+    "mdev_uuid": "aa618089-8b16-4d01-a136-25a0f3c73123"
+  }
+}
+```
+
+## Upgrading NVIDIA Drivers
 
 To upgrade the NVIDIA driver version:
 
@@ -99,63 +235,53 @@ To upgrade the NVIDIA driver version:
    - Run GPU passthrough E2E tests
    - Verify with real CUDA workloads (e.g., ollama inference)
 
-## Supported GPUs
-
-All NVIDIA datacenter GPUs supported by the open-gpu-kernel-modules are supported:
-
-- NVIDIA H100, H200
-- NVIDIA L4, L40, L40S
-- NVIDIA A100, A10, A30
-- NVIDIA T4
-- And other Turing/Ampere/Hopper/Ada Lovelace architecture GPUs
-
-Consumer GPUs (GeForce) are **not** supported by the open kernel modules.
-
 ## Troubleshooting
 
-### nvidia-smi shows wrong driver version
+### No GPU shown in /resources
 
-The driver version shown by nvidia-smi should match hypeman's configured version. If it differs, the container may have its own driver libraries that are taking precedence. Either:
-
-- Use a minimal CUDA runtime image without driver libs
-- Or ensure the container's driver version matches
-
-### CUDA initialization failed
-
-Check that:
-
-1. Kernel modules are loaded: `cat /proc/modules | grep nvidia`
-2. Device nodes exist: `ls -la /dev/nvidia*`
-3. Libraries are in LD_LIBRARY_PATH: `ldconfig -p | grep nvidia`
-
-### Driver/library version mismatch
-
-Error like `NVML_ERROR_LIB_RM_VERSION_MISMATCH` means the userspace library version doesn't match the kernel module version. This shouldn't happen with hypeman's automatic injection, but can occur if the container has its own driver libraries.
-
-**Solution:** Use a base image that doesn't include driver libraries, or ensure any bundled libraries match the hypeman driver version.
-
-### GPU not detected in container
-
-1. Verify the GPU was attached to the instance:
+1. Check host GPU mode detection:
    ```bash
-   hypeman instance get <id> | jq .devices
+   ls /sys/class/mdev_bus/  # Should show VFs for vGPU mode
    ```
 
-2. Check the VM console log for module loading errors:
+2. Verify NVIDIA drivers are loaded on host:
    ```bash
-   cat /var/lib/hypeman/instances/<id>/console.log | grep -i nvidia
+   nvidia-smi
    ```
 
-3. Verify VFIO binding on the host:
+### Profile not available
+
+The requested profile may require more VRAM than available. Check:
+```bash
+curl -s http://localhost:8080/resources | jq '.gpu.profiles'
+```
+
+### nvidia-smi fails in guest
+
+1. Verify guest image has NVIDIA drivers installed
+2. Check driver version compatibility with vGPU Manager
+3. Inspect guest boot logs:
    ```bash
-   ls -la /sys/bus/pci/devices/<pci-addr>/driver
+   curl http://localhost:8080/instances/<id>/logs?source=app
+   ```
+
+### mdev creation fails
+
+1. Check if VFs are available:
+   ```bash
+   ls /sys/class/mdev_bus/
+   ```
+
+2. Verify mdev types:
+   ```bash
+   cat /sys/class/mdev_bus/*/mdev_supported_types/*/available_instances
    ```
 
 ## Performance Tuning
 
 ### Huge Pages
 
-For best GPU performance, enable huge pages on the host:
+For best vGPU performance, enable huge pages on the host:
 
 ```bash
 echo 1024 > /proc/sys/vm/nr_hugepages
@@ -163,7 +289,7 @@ echo 1024 > /proc/sys/vm/nr_hugepages
 
 ### IOMMU Configuration
 
-Ensure IOMMU is properly configured:
+Ensure IOMMU is properly configured for either mode:
 
 ```bash
 # Intel
@@ -173,5 +299,16 @@ intel_iommu=on iommu=pt
 amd_iommu=on iommu=pt
 ```
 
-The `iommu=pt` (passthrough) option improves performance for devices not using VFIO.
+## Supported Hardware
 
+### vGPU Mode (SR-IOV)
+- NVIDIA L40, L40S
+- NVIDIA A100 (with appropriate vGPU license)
+- Other NVIDIA GPUs supporting SR-IOV
+
+### Passthrough Mode
+All NVIDIA datacenter GPUs supported by open-gpu-kernel-modules:
+- NVIDIA H100, H200
+- NVIDIA L4, L40, L40S
+- NVIDIA A100, A10, A30
+- NVIDIA T4

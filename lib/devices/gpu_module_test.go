@@ -429,7 +429,6 @@ func TestNVMLDetection(t *testing.T) {
 
 	err = waitForInstanceReady(ctx, t, instanceMgr, inst.Id, 60*time.Second)
 	require.NoError(t, err)
-	time.Sleep(5 * time.Second)
 
 	actualInst, err := instanceMgr.GetInstance(ctx, inst.Id)
 	require.NoError(t, err)
@@ -437,8 +436,54 @@ func TestNVMLDetection(t *testing.T) {
 	dialer2, err := hypervisor.NewVsockDialer(actualInst.HypervisorType, actualInst.VsockSocket, actualInst.VsockCID)
 	require.NoError(t, err)
 
-	// Step 5: Run NVML test
-	t.Log("Step 5: Running NVML detection test...")
+	// Step 5: Install NVIDIA driver via DKMS
+	t.Log("Step 5: Installing NVIDIA driver (DKMS will build kernel modules)...")
+	installDriverCmd := `export DEBIAN_FRONTEND=noninteractive && \
+		apt-get update && \
+		apt-get install -y nvidia-driver-550-server && \
+		modprobe nvidia`
+
+	installCtx, installCancel := context.WithTimeout(ctx, 300*time.Second) // 5 min for DKMS build
+	defer installCancel()
+
+	var installStdout, installStderr outputBuffer
+	for i := 0; i < 30; i++ { // Retry until exec agent is ready
+		installStdout = outputBuffer{}
+		installStderr = outputBuffer{}
+		_, err = guest.ExecIntoInstance(installCtx, dialer2, guest.ExecOptions{
+			Command: []string{"/bin/sh", "-c", installDriverCmd},
+			Stdin:   nil,
+			Stdout:  &installStdout,
+			Stderr:  &installStderr,
+			TTY:     false,
+		})
+		if err == nil {
+			break
+		}
+		t.Logf("Waiting for exec agent... (%d/30)", i+1)
+		time.Sleep(2 * time.Second)
+	}
+	require.NoError(t, err, "Failed to install NVIDIA driver: stdout=%s stderr=%s", installStdout.String(), installStderr.String())
+	t.Logf("Driver installation complete")
+
+	// Verify nvidia-smi works
+	t.Log("Verifying nvidia-smi...")
+	smiCtx, smiCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer smiCancel()
+
+	var smiStdout, smiStderr outputBuffer
+	_, err = guest.ExecIntoInstance(smiCtx, dialer2, guest.ExecOptions{
+		Command: []string{"nvidia-smi"},
+		Stdin:   nil,
+		Stdout:  &smiStdout,
+		Stderr:  &smiStderr,
+		TTY:     false,
+	})
+	require.NoError(t, err, "nvidia-smi failed: stderr=%s", smiStderr.String())
+	t.Logf("nvidia-smi output:\n%s", smiStdout.String())
+
+	// Step 7: Run NVML test
+	t.Log("Step 7: Running NVML detection test...")
 	execCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
@@ -472,8 +517,8 @@ func TestNVMLDetection(t *testing.T) {
 		t.Errorf("✗ NVML test failed: %s", output)
 	}
 
-	// Step 6: Run CUDA test
-	t.Log("Step 6: Running CUDA driver test...")
+	// Step 8: Run CUDA test
+	t.Log("Step 8: Running CUDA driver test...")
 	stdout = outputBuffer{}
 	stderr = outputBuffer{}
 	_, err = guest.ExecIntoInstance(execCtx, dialer2, guest.ExecOptions{

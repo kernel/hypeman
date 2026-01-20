@@ -56,6 +56,12 @@ func (s *ApiService) GetResources(ctx context.Context, _ oapi.GetResourcesReques
 		})
 	}
 
+	// Add GPU status if available
+	if status.GPU != nil {
+		gpuStatus := convertGPUResourceStatus(status.GPU)
+		resp.Gpu = &gpuStatus
+	}
+
 	return oapi.GetResources200JSONResponse(resp), nil
 }
 
@@ -74,4 +80,39 @@ func convertResourceStatus(rs resources.ResourceStatus) oapi.ResourceStatus {
 		OversubRatio:   rs.OversubRatio,
 		Source:         source,
 	}
+}
+
+func convertGPUResourceStatus(gs *resources.GPUResourceStatus) oapi.GPUResourceStatus {
+	result := oapi.GPUResourceStatus{
+		Mode:       oapi.GPUResourceStatusMode(gs.Mode),
+		TotalSlots: gs.TotalSlots,
+		UsedSlots:  gs.UsedSlots,
+	}
+
+	// Convert profiles (vGPU mode)
+	if len(gs.Profiles) > 0 {
+		profiles := make([]oapi.GPUProfile, len(gs.Profiles))
+		for i, p := range gs.Profiles {
+			profiles[i] = oapi.GPUProfile{
+				Name:          p.Name,
+				FramebufferMb: p.FramebufferMB,
+				Available:     p.Available,
+			}
+		}
+		result.Profiles = &profiles
+	}
+
+	// Convert devices (passthrough mode)
+	if len(gs.Devices) > 0 {
+		devices := make([]oapi.PassthroughDevice, len(gs.Devices))
+		for i, d := range gs.Devices {
+			devices[i] = oapi.PassthroughDevice{
+				Name:      d.Name,
+				Available: d.Available,
+			}
+		}
+		result.Devices = &devices
+	}
+
+	return result
 }

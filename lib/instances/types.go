@@ -76,6 +76,10 @@ type StoredMetadata struct {
 
 	// Attached devices (GPU passthrough)
 	Devices []string // Device IDs attached to this instance
+
+	// GPU configuration (vGPU mode)
+	GPUProfile  string // vGPU profile name (e.g., "L40S-1Q")
+	GPUMdevUUID string // mdev device UUID
 }
 
 // Instance represents a virtual machine instance with derived runtime state
@@ -94,6 +98,11 @@ func (i *Instance) GetHypervisorType() string {
 	return string(i.HypervisorType)
 }
 
+// GPUConfig contains GPU configuration for instance creation
+type GPUConfig struct {
+	Profile string // vGPU profile name (e.g., "L40S-1Q")
+}
+
 // CreateInstanceRequest is the domain request for creating an instance
 type CreateInstanceRequest struct {
 	Name                     string             // Required
@@ -110,6 +119,7 @@ type CreateInstanceRequest struct {
 	Devices                  []string           // Device IDs or names to attach (GPU passthrough)
 	Volumes                  []VolumeAttachment // Volumes to attach at creation time
 	Hypervisor               hypervisor.Type    // Optional: hypervisor type (defaults to config)
+	GPU                      *GPUConfig         // Optional: vGPU configuration
 }
 
 // AttachVolumeRequest is the domain request for attaching a volume (used for API compatibility)
