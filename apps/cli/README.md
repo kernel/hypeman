@@ -126,6 +126,93 @@ The CLI also provides resource-based commands for more advanced usage:
 hypeman [resource] [command] [flags]
 ```
 
+## Resource Management
+
+### Viewing Server Resources
+
+Check available server capacity, current allocations, and GPU availability:
+
+```bash
+# Show server resource status (CPU, memory, disk, network, GPU)
+hypeman resources
+
+# Show resources as JSON
+hypeman resources --format json
+
+# Show only GPU information
+hypeman resources --transform gpu
+```
+
+### Per-VM Resource Limits
+
+Control resource allocation for instances:
+
+```bash
+# Set disk I/O limit
+hypeman run --disk-io 100MB/s --name io-limited myimage:latest
+
+# Set network bandwidth limits
+hypeman run --bandwidth-down 1Gbps --bandwidth-up 500Mbps --name bw-limited myimage:latest
+
+# Combine multiple resource options
+hypeman run \
+  --cpus 4 \
+  --memory 8GB \
+  --gpu-profile L40S-2Q \
+  --disk-io 200MB/s \
+  --bandwidth-down 10Gbps \
+  --name ml-training \
+  pytorch:latest
+```
+
+## GPU support
+
+
+### GPU Passthrough
+
+For full GPU passthrough (entire GPU dedicated to one VM):
+
+```bash
+# Discover available passthrough-capable devices
+hypeman device available
+
+# Register a GPU for passthrough
+hypeman device register --pci-address 0000:a2:00.0 --name my-gpu
+
+# List registered devices
+hypeman device list
+
+# Run an instance with the GPU attached
+hypeman run --device my-gpu --hypervisor qemu --name gpu-workload cuda:12.0
+
+# When done, unregister the device
+hypeman device delete my-gpu
+```
+
+### Nvidia vGPU
+
+Use NVIDIA vGPU to share a physical GPU across multiple VMs:
+
+```bash
+# Run with a vGPU profile
+hypeman run --gpu-profile L40S-1Q --name ml-workload pytorch:latest
+
+# Run with more vGPU resources
+hypeman run --gpu-profile L40S-4Q --cpus 8 --memory 32GB --name training-job tensorflow:latest
+```
+
+### Hypervisor Selection
+
+Choose between Cloud Hypervisor (default) and QEMU:
+
+```bash
+# Run with QEMU (more compatible with some features like vGPU)
+hypeman run --hypervisor qemu --name qemu-vm myimage:latest
+
+# Run with Cloud Hypervisor (default, faster boot)
+hypeman run --hypervisor cloud-hypervisor --name ch-vm myimage:latest
+```
+
 ## Global Flags
 
 - `--debug` - Enable debug logging (includes HTTP request/response details)
