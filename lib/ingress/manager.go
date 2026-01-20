@@ -86,6 +86,9 @@ type Config struct {
 
 	// ACME configuration for TLS certificates
 	ACME ACMEConfig
+
+	// APIIngress configuration for exposing Hypeman API via Caddy
+	APIIngress APIIngressConfig
 }
 
 // DefaultConfig returns the default ingress configuration.
@@ -134,6 +137,7 @@ func NewManager(p *paths.Paths, config Config, instanceResolver InstanceResolver
 		config.AdminAddress,
 		config.AdminPort,
 		config.ACME,
+		config.APIIngress,
 		dnsServer.Port(),
 	)
 
@@ -186,6 +190,7 @@ func (m *manager) Initialize(ctx context.Context) error {
 		m.config.AdminAddress,
 		adminPort,
 		m.config.ACME,
+		m.config.APIIngress,
 		m.dnsServer.Port(),
 	)
 
@@ -288,6 +293,16 @@ func (m *manager) Create(ctx context.Context, req CreateIngressRequest) (*Ingres
 			}
 			if !m.config.ACME.IsDomainAllowed(domainToCheck) {
 				return nil, fmt.Errorf("%w: %q is not in TLS_ALLOWED_DOMAINS (allowed: %s)", ErrDomainNotAllowed, domainToCheck, m.config.ACME.AllowedDomains)
+			}
+		}
+	}
+
+	// Check if any hostname conflicts with API hostname (reserved for Hypeman API)
+	// This check must happen before instance validation to give a clear error message
+	if m.config.APIIngress.IsEnabled() {
+		for _, rule := range req.Rules {
+			if rule.Match.Hostname == m.config.APIIngress.Hostname {
+				return nil, fmt.Errorf("%w: hostname %q is reserved for the Hypeman API", ErrHostnameInUse, rule.Match.Hostname)
 			}
 		}
 	}

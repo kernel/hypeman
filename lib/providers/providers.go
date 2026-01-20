@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"github.com/c2h5oh/datasize"
@@ -185,6 +186,14 @@ func ProvideIngressManager(p *paths.Paths, cfg *config.Config, instanceManager i
 		internalDNSPort = ingress.DefaultDNSPort
 	}
 
+	// Parse API port from config
+	apiPort := 8080 // default
+	if cfg.Port != "" {
+		if p, err := strconv.Atoi(cfg.Port); err == nil {
+			apiPort = p
+		}
+	}
+
 	ingressConfig := ingress.Config{
 		ListenAddress:  cfg.CaddyListenAddress,
 		AdminAddress:   cfg.CaddyAdminAddress,
@@ -199,6 +208,12 @@ func ProvideIngressManager(p *paths.Paths, cfg *config.Config, instanceManager i
 			DNSResolvers:          cfg.DnsResolvers,
 			AllowedDomains:        cfg.TlsAllowedDomains,
 			CloudflareAPIToken:    cfg.CloudflareApiToken,
+		},
+		APIIngress: ingress.APIIngressConfig{
+			Hostname:     cfg.ApiHostname,
+			Port:         apiPort,
+			TLS:          cfg.ApiTLS,
+			RedirectHTTP: cfg.ApiRedirectHTTP,
 		},
 	}
 
