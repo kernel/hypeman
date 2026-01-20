@@ -102,3 +102,38 @@ Methods:
 - <code title="get /ingresses">client.ingresses.<a href="./src/resources/ingresses.ts">list</a>() -> IngressListResponse</code>
 - <code title="delete /ingresses/{id}">client.ingresses.<a href="./src/resources/ingresses.ts">delete</a>(id) -> void</code>
 - <code title="get /ingresses/{id}">client.ingresses.<a href="./src/resources/ingresses.ts">get</a>(id) -> Ingress</code>
+
+# Resources
+
+Types:
+
+- <code><a href="./src/resources/resources.ts">DiskBreakdown</a></code>
+- <code><a href="./src/resources/resources.ts">GPUProfile</a></code>
+- <code><a href="./src/resources/resources.ts">GPUResourceStatus</a></code>
+- <code><a href="./src/resources/resources.ts">PassthroughDevice</a></code>
+- <code><a href="./src/resources/resources.ts">ResourceAllocation</a></code>
+- <code><a href="./src/resources/resources.ts">ResourceStatus</a></code>
+- <code><a href="./src/resources/resources.ts">Resources</a></code>
+
+Methods:
+
+- <code title="get /resources">client.resources.<a href="./src/resources/resources.ts">get</a>() -> Resources</code>
+
+# Builds
+
+Types:
+
+- <code><a href="./src/resources/builds.ts">Build</a></code>
+- <code><a href="./src/resources/builds.ts">BuildEvent</a></code>
+- <code><a href="./src/resources/builds.ts">BuildPolicy</a></code>
+- <code><a href="./src/resources/builds.ts">BuildProvenance</a></code>
+- <code><a href="./src/resources/builds.ts">BuildStatus</a></code>
+- <code><a href="./src/resources/builds.ts">BuildListResponse</a></code>
+
+Methods:
+
+- <code title="post /builds">client.builds.<a href="./src/resources/builds.ts">create</a>({ ...params }) -> Build</code>
+- <code title="get /builds">client.builds.<a href="./src/resources/builds.ts">list</a>() -> BuildListResponse</code>
+- <code title="delete /builds/{id}">client.builds.<a href="./src/resources/builds.ts">cancel</a>(id) -> void</code>
+- <code title="get /builds/{id}/events">client.builds.<a href="./src/resources/builds.ts">events</a>(id, { ...params }) -> BuildEvent</code>
+- <code title="get /builds/{id}">client.builds.<a href="./src/resources/builds.ts">get</a>(id) -> Build</code>

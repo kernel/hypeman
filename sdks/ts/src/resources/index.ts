@@ -1,6 +1,17 @@
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 export {
+  Builds,
+  type Build,
+  type BuildEvent,
+  type BuildPolicy,
+  type BuildProvenance,
+  type BuildStatus,
+  type BuildListResponse,
+  type BuildCreateParams,
+  type BuildEventsParams,
+} from './builds';
+export {
   Devices,
   type AvailableDevice,
   type Device,
@@ -32,6 +43,15 @@ export {
   type InstanceLogsParams,
   type InstanceStatParams,
 } from './instances/instances';
+export {
+  Resources,
+  type DiskBreakdown,
+  type GPUProfile,
+  type GPUResourceStatus,
+  type PassthroughDevice,
+  type ResourceAllocation,
+  type ResourceStatus,
+} from './resources';
 export {
   Volumes,
   type Volume,
