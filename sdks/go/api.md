@@ -104,3 +104,35 @@ Methods:
 - <code title="get /ingresses">client.Ingresses.<a href="https://pkg.go.dev/github.com/kernel/hypeman-go#IngressService.List">List</a>(ctx <a href="https://pkg.go.dev/context">context</a>.<a href="https://pkg.go.dev/context#Context">Context</a>) ([]<a href="https://pkg.go.dev/github.com/kernel/hypeman-go">hypeman</a>.<a href="https://pkg.go.dev/github.com/kernel/hypeman-go#Ingress">Ingress</a>, <a href="https://pkg.go.dev/builtin#error">error</a>)</code>
 - <code title="delete /ingresses/{id}">client.Ingresses.<a href="https://pkg.go.dev/github.com/kernel/hypeman-go#IngressService.Delete">Delete</a>(ctx <a href="https://pkg.go.dev/context">context</a>.<a href="https://pkg.go.dev/context#Context">Context</a>, id <a href="https://pkg.go.dev/builtin#string">string</a>) <a href="https://pkg.go.dev/builtin#error">error</a></code>
 - <code title="get /ingresses/{id}">client.Ingresses.<a href="https://pkg.go.dev/github.com/kernel/hypeman-go#IngressService.Get">Get</a>(ctx <a href="https://pkg.go.dev/context">context</a>.<a href="https://pkg.go.dev/context#Context">Context</a>, id <a href="https://pkg.go.dev/builtin#string">string</a>) (<a href="https://pkg.go.dev/github.com/kernel/hypeman-go">hypeman</a>.<a href="https://pkg.go.dev/github.com/kernel/hypeman-go#Ingress">Ingress</a>, <a href="https://pkg.go.dev/builtin#error">error</a>)</code>
+# Resources
+
+Response Types:
+
+- <a href="https://pkg.go.dev/github.com/onkernel/hypeman-go">hypeman</a>.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#DiskBreakdown">DiskBreakdown</a>
+- <a href="https://pkg.go.dev/github.com/onkernel/hypeman-go">hypeman</a>.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#GPUProfile">GPUProfile</a>
+- <a href="https://pkg.go.dev/github.com/onkernel/hypeman-go">hypeman</a>.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#GPUResourceStatus">GPUResourceStatus</a>
+- <a href="https://pkg.go.dev/github.com/onkernel/hypeman-go">hypeman</a>.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#PassthroughDevice">PassthroughDevice</a>
+- <a href="https://pkg.go.dev/github.com/onkernel/hypeman-go">hypeman</a>.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#ResourceAllocation">ResourceAllocation</a>
+- <a href="https://pkg.go.dev/github.com/onkernel/hypeman-go">hypeman</a>.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#ResourceStatus">ResourceStatus</a>
+- <a href="https://pkg.go.dev/github.com/onkernel/hypeman-go">hypeman</a>.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#Resources">Resources</a>
+
+Methods:
+
+- <code title="get /resources">client.Resources.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#ResourceService.Get">Get</a>(ctx <a href="https://pkg.go.dev/context">context</a>.<a href="https://pkg.go.dev/context#Context">Context</a>) (\*<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go">hypeman</a>.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#Resources">Resources</a>, <a href="https://pkg.go.dev/builtin#error">error</a>)</code>
+
+# Builds
+
+Response Types:
+
+- <a href="https://pkg.go.dev/github.com/onkernel/hypeman-go">hypeman</a>.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#Build">Build</a>
+- <a href="https://pkg.go.dev/github.com/onkernel/hypeman-go">hypeman</a>.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#BuildEvent">BuildEvent</a>
+- <a href="https://pkg.go.dev/github.com/onkernel/hypeman-go">hypeman</a>.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#BuildProvenance">BuildProvenance</a>
+- <a href="https://pkg.go.dev/github.com/onkernel/hypeman-go">hypeman</a>.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#BuildStatus">BuildStatus</a>
+
+Methods:
+
+- <code title="post /builds">client.Builds.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#BuildService.New">New</a>(ctx <a href="https://pkg.go.dev/context">context</a>.<a href="https://pkg.go.dev/context#Context">Context</a>, body <a href="https://pkg.go.dev/github.com/onkernel/hypeman-go">hypeman</a>.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#BuildNewParams">BuildNewParams</a>) (\*<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go">hypeman</a>.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#Build">Build</a>, <a href="https://pkg.go.dev/builtin#error">error</a>)</code>
+- <code title="get /builds">client.Builds.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#BuildService.List">List</a>(ctx <a href="https://pkg.go.dev/context">context</a>.<a href="https://pkg.go.dev/context#Context">Context</a>) (\*[]<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go">hypeman</a>.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#Build">Build</a>, <a href="https://pkg.go.dev/builtin#error">error</a>)</code>
+- <code title="delete /builds/{id}">client.Builds.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#BuildService.Cancel">Cancel</a>(ctx <a href="https://pkg.go.dev/context">context</a>.<a href="https://pkg.go.dev/context#Context">Context</a>, id <a href="https://pkg.go.dev/builtin#string">string</a>) <a href="https://pkg.go.dev/builtin#error">error</a></code>
+- <code title="get /builds/{id}/events">client.Builds.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#BuildService.Events">Events</a>(ctx <a href="https://pkg.go.dev/context">context</a>.<a href="https://pkg.go.dev/context#Context">Context</a>, id <a href="https://pkg.go.dev/builtin#string">string</a>, query <a href="https://pkg.go.dev/github.com/onkernel/hypeman-go">hypeman</a>.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#BuildEventsParams">BuildEventsParams</a>) (\*<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go">hypeman</a>.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#BuildEvent">BuildEvent</a>, <a href="https://pkg.go.dev/builtin#error">error</a>)</code>
+- <code title="get /builds/{id}">client.Builds.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#BuildService.Get">Get</a>(ctx <a href="https://pkg.go.dev/context">context</a>.<a href="https://pkg.go.dev/context#Context">Context</a>, id <a href="https://pkg.go.dev/builtin#string">string</a>) (\*<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go">hypeman</a>.<a href="https://pkg.go.dev/github.com/onkernel/hypeman-go#Build">Build</a>, <a href="https://pkg.go.dev/builtin#error">error</a>)</code>

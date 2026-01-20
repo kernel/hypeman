@@ -23,6 +23,8 @@ type Client struct {
 	Volumes   VolumeService
 	Devices   DeviceService
 	Ingresses IngressService
+	Resources ResourceService
+	Builds    BuildService
 }
 
 // DefaultClientOptions read from the environment (HYPEMAN_API_KEY,
@@ -53,6 +55,8 @@ func NewClient(opts ...option.RequestOption) (r Client) {
 	r.Volumes = NewVolumeService(opts...)
 	r.Devices = NewDeviceService(opts...)
 	r.Ingresses = NewIngressService(opts...)
+	r.Resources = NewResourceService(opts...)
+	r.Builds = NewBuildService(opts...)
 
 	return
 }
