@@ -113,14 +113,20 @@ func (m *manager) ListAllocations(ctx context.Context) ([]Allocation, error) {
 	return allocations, nil
 }
 
-// NameExists checks if instance name is already used in the default network
-func (m *manager) NameExists(ctx context.Context, name string) (bool, error) {
+// NameExists checks if instance name is already used in the default network.
+// excludeInstanceID allows excluding a specific instance from the check (used when
+// starting an existing instance to avoid it conflicting with itself).
+func (m *manager) NameExists(ctx context.Context, name string, excludeInstanceID string) (bool, error) {
 	allocations, err := m.ListAllocations(ctx)
 	if err != nil {
 		return false, err
 	}
 
 	for _, alloc := range allocations {
+		// Skip the excluded instance (e.g., when restarting an instance)
+		if excludeInstanceID != "" && alloc.InstanceID == excludeInstanceID {
+			continue
+		}
 		if alloc.InstanceName == name {
 			return true, nil
 		}

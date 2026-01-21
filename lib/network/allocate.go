@@ -27,8 +27,8 @@ func (m *manager) CreateAllocation(ctx context.Context, req AllocateRequest) (*N
 		return nil, fmt.Errorf("get default network: %w", err)
 	}
 
-	// 2. Check name uniqueness
-	exists, err := m.NameExists(ctx, req.InstanceName)
+	// 2. Check name uniqueness (exclude current instance to allow restarts)
+	exists, err := m.NameExists(ctx, req.InstanceName, req.InstanceID)
 	if err != nil {
 		return nil, fmt.Errorf("check name exists: %w", err)
 	}

@@ -29,7 +29,7 @@ type Manager interface {
 	// Queries (derive from CH/snapshots)
 	GetAllocation(ctx context.Context, instanceID string) (*Allocation, error)
 	ListAllocations(ctx context.Context) ([]Allocation, error)
-	NameExists(ctx context.Context, name string) (bool, error)
+	NameExists(ctx context.Context, name string, excludeInstanceID string) (bool, error)
 
 	// GetUploadBurstMultiplier returns the configured multiplier for upload burst ceiling.
 	GetUploadBurstMultiplier() int
