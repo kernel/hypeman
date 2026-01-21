@@ -301,15 +301,23 @@ func (m *manager) runBuild(ctx context.Context, id string, req CreateBuildReques
 	// Wait for image to be ready before reporting build as complete.
 	// This fixes the race condition (KERNEL-863) where build reports "ready"
 	// but image conversion hasn't finished yet.
-	if err := m.waitForImageReady(ctx, id); err != nil {
+	// Use buildCtx to respect the build timeout during image wait.
+	if err := m.waitForImageReady(buildCtx, id); err != nil {
+		// Recalculate duration to include image wait time
+		duration = time.Since(start)
+		durationMS = duration.Milliseconds()
 		m.logger.Error("image conversion failed after build", "id", id, "error", err, "duration", duration)
 		errMsg := fmt.Sprintf("image conversion failed: %v", err)
 		m.updateBuildComplete(id, StatusFailed, nil, &errMsg, &result.Provenance, &durationMS)
 		if m.metrics != nil {
-			m.metrics.RecordBuild(ctx, "failed", duration)
+			m.metrics.RecordBuild(buildCtx, "failed", duration)
 		}
 		return
 	}
+
+	// Recalculate duration to include image wait time for accurate reporting
+	duration = time.Since(start)
+	durationMS = duration.Milliseconds()
 
 	m.updateBuildComplete(id, StatusReady, &result.ImageDigest, nil, &result.Provenance, &durationMS)
 
@@ -320,7 +328,7 @@ func (m *manager) runBuild(ctx context.Context, id string, req CreateBuildReques
 	}
 
 	if m.metrics != nil {
-		m.metrics.RecordBuild(ctx, "success", duration)
+		m.metrics.RecordBuild(buildCtx, "success", duration)
 	}
 }
 
