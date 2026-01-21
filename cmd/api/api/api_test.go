@@ -25,7 +25,10 @@ import (
 // newTestService creates an ApiService for testing with automatic cleanup
 func newTestService(t *testing.T) *ApiService {
 	cfg := &config.Config{
-		DataDir: t.TempDir(),
+		DataDir:     t.TempDir(),
+		BridgeName:  "vmbr0",
+		SubnetCIDR:  "10.100.0.0/16",
+		DNSServer:   "1.1.1.1",
 	}
 
 	p := paths.New(cfg.DataDir)
@@ -44,6 +47,11 @@ func newTestService(t *testing.T) *ApiService {
 	}
 	instanceMgr := instances.NewManager(p, imageMgr, systemMgr, networkMgr, deviceMgr, volumeMgr, limits, "", nil, nil)
 
+	// Initialize network manager (creates bridge for network-enabled tests)
+	if err := networkMgr.Initialize(ctx(), nil); err != nil {
+		t.Logf("Warning: failed to initialize network manager: %v (network tests may fail)", err)
+	}
+
 	// Register cleanup for orphaned Cloud Hypervisor processes
 	t.Cleanup(func() {
 		cleanupOrphanedProcesses(t, cfg.DataDir)
@@ -54,6 +62,7 @@ func newTestService(t *testing.T) *ApiService {
 		ImageManager:    imageMgr,
 		InstanceManager: instanceMgr,
 		VolumeManager:   volumeMgr,
+		NetworkManager:  networkMgr,
 		DeviceManager:   deviceMgr,
 		ResourceManager: resourceMgr,
 	}
