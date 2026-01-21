@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/instances"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/kernel/hypeman/lib/resources"
@@ -219,8 +220,85 @@ func (m *mockSecretProvider) GetSecrets(ctx context.Context, secretIDs []string)
 	return make(map[string]string), nil
 }
 
+// mockImageManager implements images.Manager for testing
+type mockImageManager struct {
+	images      map[string]*images.Image
+	getImageErr error
+}
+
+func newMockImageManager() *mockImageManager {
+	return &mockImageManager{
+		images: make(map[string]*images.Image),
+	}
+}
+
+func (m *mockImageManager) ListImages(ctx context.Context) ([]images.Image, error) {
+	var result []images.Image
+	for _, img := range m.images {
+		result = append(result, *img)
+	}
+	return result, nil
+}
+
+func (m *mockImageManager) CreateImage(ctx context.Context, req images.CreateImageRequest) (*images.Image, error) {
+	img := &images.Image{
+		Name:   req.Name,
+		Status: images.StatusPending,
+	}
+	m.images[req.Name] = img
+	return img, nil
+}
+
+func (m *mockImageManager) ImportLocalImage(ctx context.Context, repo, reference, digest string) (*images.Image, error) {
+	img := &images.Image{
+		Name:   repo + ":" + reference,
+		Status: images.StatusReady,
+	}
+	m.images[img.Name] = img
+	return img, nil
+}
+
+func (m *mockImageManager) GetImage(ctx context.Context, name string) (*images.Image, error) {
+	if m.getImageErr != nil {
+		return nil, m.getImageErr
+	}
+	if img, ok := m.images[name]; ok {
+		return img, nil
+	}
+	return nil, images.ErrNotFound
+}
+
+func (m *mockImageManager) DeleteImage(ctx context.Context, name string) error {
+	delete(m.images, name)
+	return nil
+}
+
+func (m *mockImageManager) RecoverInterruptedBuilds() {}
+
+func (m *mockImageManager) TotalImageBytes(ctx context.Context) (int64, error) {
+	return 0, nil
+}
+
+func (m *mockImageManager) TotalOCICacheBytes(ctx context.Context) (int64, error) {
+	return 0, nil
+}
+
+// SetImageReady sets an image to ready status for testing
+func (m *mockImageManager) SetImageReady(name string) {
+	m.images[name] = &images.Image{
+		Name:   name,
+		Status: images.StatusReady,
+	}
+}
+
 // Test helper to create a manager with test paths and mocks
 func setupTestManager(t *testing.T) (*manager, *mockInstanceManager, *mockVolumeManager, string) {
+	mgr, instanceMgr, volumeMgr, _, tempDir := setupTestManagerWithImageMgr(t)
+	return mgr, instanceMgr, volumeMgr, tempDir
+}
+
+// setupTestManagerWithImageMgr returns the image manager for tests that need it
+func setupTestManagerWithImageMgr(t *testing.T) (*manager, *mockInstanceManager, *mockVolumeManager, *mockImageManager, string) {
 	t.Helper()
 
 	// Create temp directory for test data
@@ -236,6 +314,7 @@ func setupTestManager(t *testing.T) (*manager, *mockInstanceManager, *mockVolume
 	// Create mocks
 	instanceMgr := newMockInstanceManager()
 	volumeMgr := newMockVolumeManager()
+	imageMgr := newMockImageManager()
 	secretProvider := &mockSecretProvider{}
 
 	// Create config
@@ -257,13 +336,14 @@ func setupTestManager(t *testing.T) (*manager, *mockInstanceManager, *mockVolume
 		queue:             NewBuildQueue(config.MaxConcurrentBuilds),
 		instanceManager:   instanceMgr,
 		volumeManager:     volumeMgr,
+		imageManager:      imageMgr,
 		secretProvider:    secretProvider,
 		tokenGenerator:    NewRegistryTokenGenerator(config.RegistrySecret),
 		logger:            logger,
 		statusSubscribers: make(map[string][]chan BuildEvent),
 	}
 
-	return mgr, instanceMgr, volumeMgr, tempDir
+	return mgr, instanceMgr, volumeMgr, imageMgr, tempDir
 }
 
 func TestCreateBuild_Success(t *testing.T) {

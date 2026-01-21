@@ -230,7 +230,7 @@ func ProvideIngressManager(p *paths.Paths, cfg *config.Config, instanceManager i
 }
 
 // ProvideBuildManager provides the build manager
-func ProvideBuildManager(p *paths.Paths, cfg *config.Config, instanceManager instances.Manager, volumeManager volumes.Manager, log *slog.Logger) (builds.Manager, error) {
+func ProvideBuildManager(p *paths.Paths, cfg *config.Config, instanceManager instances.Manager, volumeManager volumes.Manager, imageManager images.Manager, log *slog.Logger) (builds.Manager, error) {
 	buildConfig := builds.Config{
 		MaxConcurrentBuilds: cfg.MaxConcurrentSourceBuilds,
 		BuilderImage:        cfg.BuilderImage,
@@ -263,5 +263,5 @@ func ProvideBuildManager(p *paths.Paths, cfg *config.Config, instanceManager ins
 	}
 
 	meter := otel.GetMeterProvider().Meter("hypeman")
-	return builds.NewManager(p, buildConfig, instanceManager, volumeManager, secretProvider, log, meter)
+	return builds.NewManager(p, buildConfig, instanceManager, volumeManager, imageManager, secretProvider, log, meter)
 }

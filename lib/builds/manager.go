@@ -88,6 +88,7 @@ type manager struct {
 	queue           *BuildQueue
 	instanceManager instances.Manager
 	volumeManager   volumes.Manager
+	imageManager    images.Manager
 	secretProvider  SecretProvider
 	tokenGenerator  *RegistryTokenGenerator
 	logger          *slog.Logger
@@ -105,6 +106,7 @@ func NewManager(
 	config Config,
 	instanceMgr instances.Manager,
 	volumeMgr volumes.Manager,
+	imageMgr images.Manager,
 	secretProvider SecretProvider,
 	logger *slog.Logger,
 	meter metric.Meter,
@@ -119,6 +121,7 @@ func NewManager(
 		queue:             NewBuildQueue(config.MaxConcurrentBuilds),
 		instanceManager:   instanceMgr,
 		volumeManager:     volumeMgr,
+		imageManager:      imageMgr,
 		secretProvider:    secretProvider,
 		tokenGenerator:    NewRegistryTokenGenerator(config.RegistrySecret),
 		logger:            logger,
@@ -294,6 +297,20 @@ func (m *manager) runBuild(ctx context.Context, id string, req CreateBuildReques
 
 	m.logger.Info("build succeeded", "id", id, "digest", result.ImageDigest, "duration", duration)
 	imageRef := fmt.Sprintf("%s/builds/%s", m.config.RegistryURL, id)
+
+	// Wait for image to be ready before reporting build as complete.
+	// This fixes the race condition (KERNEL-863) where build reports "ready"
+	// but image conversion hasn't finished yet.
+	if err := m.waitForImageReady(ctx, id); err != nil {
+		m.logger.Error("image conversion failed after build", "id", id, "error", err, "duration", duration)
+		errMsg := fmt.Sprintf("image conversion failed: %v", err)
+		m.updateBuildComplete(id, StatusFailed, nil, &errMsg, &result.Provenance, &durationMS)
+		if m.metrics != nil {
+			m.metrics.RecordBuild(ctx, "failed", duration)
+		}
+		return
+	}
+
 	m.updateBuildComplete(id, StatusReady, &result.ImageDigest, nil, &result.Provenance, &durationMS)
 
 	// Update with image ref
@@ -638,6 +655,44 @@ func (m *manager) updateBuildComplete(id string, status string, digest *string, 
 
 	// Notify subscribers of status change
 	m.notifyStatusChange(id, status)
+}
+
+// waitForImageReady polls the image manager until the build's image is ready.
+// This ensures that when a build reports "ready", the image is actually usable
+// for instance creation (fixes KERNEL-863 race condition).
+func (m *manager) waitForImageReady(ctx context.Context, id string) error {
+	imageRef := fmt.Sprintf("%s/builds/%s", m.config.RegistryURL, id)
+
+	// Poll for up to 60 seconds (image conversion is typically fast)
+	const maxAttempts = 120
+	const pollInterval = 500 * time.Millisecond
+
+	m.logger.Debug("waiting for image to be ready", "id", id, "image_ref", imageRef)
+
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		img, err := m.imageManager.GetImage(ctx, imageRef)
+		if err == nil {
+			switch img.Status {
+			case images.StatusReady:
+				m.logger.Debug("image is ready", "id", id, "image_ref", imageRef, "attempts", attempt+1)
+				return nil
+			case images.StatusFailed:
+				return fmt.Errorf("image conversion failed")
+			case images.StatusPending, images.StatusPulling, images.StatusConverting:
+				// Still processing, continue polling
+			}
+		}
+		// Image not found or still processing, wait and retry
+		time.Sleep(pollInterval)
+	}
+
+	return fmt.Errorf("timeout waiting for image to be ready after %v", time.Duration(maxAttempts)*pollInterval)
 }
 
 // subscribeToStatus adds a subscriber channel for status updates on a build

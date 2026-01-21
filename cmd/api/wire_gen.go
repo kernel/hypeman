@@ -55,7 +55,7 @@ func initializeApp() (*application, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	buildsManager, err := providers.ProvideBuildManager(paths, config, instancesManager, volumesManager, logger)
+	buildsManager, err := providers.ProvideBuildManager(paths, config, instancesManager, volumesManager, manager, logger)
 	if err != nil {
 		return nil, nil, err
 	}
