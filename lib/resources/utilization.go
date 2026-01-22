@@ -190,8 +190,8 @@ func ReadProcStatm(pid int) (rssBytes, vmsBytes uint64, err error) {
 		return 0, 0, fmt.Errorf("parse rss: %w", err)
 	}
 
-	// Convert pages to bytes (page size is typically 4096)
-	const pageSize = 4096
+	// Convert pages to bytes using system page size (varies by architecture)
+	pageSize := uint64(os.Getpagesize())
 	return rssPages * pageSize, vmsPages * pageSize, nil
 }
 
