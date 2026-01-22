@@ -157,9 +157,18 @@ func ProvideResourceManager(ctx context.Context, cfg *config.Config, p *paths.Pa
 	mgr.SetInstanceLister(instanceManager)
 	mgr.SetVolumeLister(volumeManager)
 
+	// Set utilization source for VM metrics (instanceManager implements UtilizationSource)
+	mgr.SetUtilizationSource(instanceManager)
+
 	// Initialize resource discovery
 	if err := mgr.Initialize(ctx); err != nil {
 		return nil, fmt.Errorf("initialize resource manager: %w", err)
+	}
+
+	// Initialize VM utilization metrics
+	meter := otel.GetMeterProvider().Meter("hypeman")
+	if err := mgr.InitializeMetrics(meter); err != nil {
+		return nil, fmt.Errorf("initialize utilization metrics: %w", err)
 	}
 
 	return mgr, nil

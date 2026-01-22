@@ -10,6 +10,7 @@ import (
 	"github.com/kernel/hypeman/cmd/api/config"
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/paths"
+	"go.opentelemetry.io/otel/metric"
 )
 
 // ResourceType identifies a type of host resource.
@@ -129,6 +130,10 @@ type Manager struct {
 	instanceLister InstanceLister
 	imageLister    ImageLister
 	volumeLister   VolumeLister
+
+	// Dependencies for utilization metrics
+	utilizationSource  UtilizationSource
+	utilizationMetrics *UtilizationMetrics
 }
 
 // NewManager creates a new resource manager.
@@ -159,6 +164,33 @@ func (m *Manager) SetVolumeLister(lister VolumeLister) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.volumeLister = lister
+}
+
+// SetUtilizationSource sets the utilization source for VM metrics collection.
+func (m *Manager) SetUtilizationSource(source UtilizationSource) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.utilizationSource = source
+}
+
+// InitializeMetrics sets up OTel metrics for VM utilization.
+// Must be called after SetUtilizationSource and before the manager is used.
+// If meter is nil, metrics are not initialized.
+func (m *Manager) InitializeMetrics(meter metric.Meter) error {
+	if meter == nil {
+		return nil
+	}
+
+	metrics, err := newUtilizationMetrics(meter, m)
+	if err != nil {
+		return fmt.Errorf("initialize utilization metrics: %w", err)
+	}
+
+	m.mu.Lock()
+	m.utilizationMetrics = metrics
+	m.mu.Unlock()
+
+	return nil
 }
 
 // Initialize discovers host resources and registers them.
