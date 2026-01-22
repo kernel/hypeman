@@ -18,7 +18,6 @@ import (
 	"github.com/ghodss/yaml"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	nethttpmiddleware "github.com/oapi-codegen/nethttp-middleware"
 	"github.com/kernel/hypeman"
 	"github.com/kernel/hypeman/cmd/api/api"
 	"github.com/kernel/hypeman/cmd/api/config"
@@ -30,6 +29,7 @@ import (
 	"github.com/kernel/hypeman/lib/oapi"
 	"github.com/kernel/hypeman/lib/otel"
 	"github.com/kernel/hypeman/lib/vmm"
+	nethttpmiddleware "github.com/oapi-codegen/nethttp-middleware"
 	"github.com/riandyrn/otelchi"
 	"golang.org/x/sync/errgroup"
 )
@@ -50,6 +50,9 @@ func run() error {
 	if err := cfg.Validate(); err != nil {
 		return fmt.Errorf("invalid configuration: %w", err)
 	}
+
+	// Configure GPU profile cache TTL
+	devices.SetGPUProfileCacheTTL(cfg.GPUProfileCacheTTL)
 
 	// Initialize OpenTelemetry (before wire initialization)
 	otelCfg := otel.Config{

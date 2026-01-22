@@ -35,22 +35,27 @@ type profileMetadata struct {
 }
 
 // cachedProfiles holds profile metadata with TTL-based expiry.
-// The cache TTL is configurable via GPU_PROFILE_CACHE_TTL environment variable.
 var (
 	cachedProfiles     []profileMetadata
 	cachedProfilesMu   sync.RWMutex
 	cachedProfilesTime time.Time
+	gpuProfileCacheTTL time.Duration = 30 * time.Minute // default
 )
 
-// getProfileCacheTTL returns the TTL for profile metadata cache.
-// Reads from GPU_PROFILE_CACHE_TTL env var, defaults to 30 minutes.
-func getProfileCacheTTL() time.Duration {
-	if ttl := os.Getenv("GPU_PROFILE_CACHE_TTL"); ttl != "" {
-		if d, err := time.ParseDuration(ttl); err == nil {
-			return d
-		}
+// SetGPUProfileCacheTTL sets the TTL for GPU profile metadata cache.
+// Should be called during application startup with the config value.
+func SetGPUProfileCacheTTL(ttl string) {
+	if ttl == "" {
+		return
 	}
-	return 30 * time.Minute
+	if d, err := time.ParseDuration(ttl); err == nil {
+		gpuProfileCacheTTL = d
+	}
+}
+
+// getProfileCacheTTL returns the configured TTL for profile metadata cache.
+func getProfileCacheTTL() time.Duration {
+	return gpuProfileCacheTTL
 }
 
 // getCachedProfiles returns cached profile metadata, refreshing if TTL has expired.

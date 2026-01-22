@@ -201,8 +201,8 @@ func Load() *Config {
 		CloudflareApiToken: getEnv("CLOUDFLARE_API_TOKEN", ""),
 
 		// API ingress configuration
-		ApiHostname:     getEnv("API_HOSTNAME", ""),     // Empty = disabled
-		ApiTLS:          getEnvBool("API_TLS", true),    // Default to TLS enabled
+		ApiHostname:     getEnv("API_HOSTNAME", ""),  // Empty = disabled
+		ApiTLS:          getEnvBool("API_TLS", true), // Default to TLS enabled
 		ApiRedirectHTTP: getEnvBool("API_REDIRECT_HTTP", true),
 
 		// Build system configuration
