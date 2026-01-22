@@ -282,17 +282,6 @@ func run() error {
 		mw.ResolveResource(app.ApiService.NewResolvers(), api.ResolverErrorResponder),
 	).Get("/instances/{id}/cp", app.ApiService.CpHandler)
 
-	// Instance stats endpoint (outside OpenAPI spec)
-	r.With(
-		middleware.RequestID,
-		middleware.RealIP,
-		middleware.Recoverer,
-		mw.InjectLogger(logger),
-		mw.AccessLogger(accessLogger),
-		mw.JwtAuth(app.Config.JwtSecret),
-		mw.ResolveResource(app.ApiService.NewResolvers(), api.ResolverErrorResponder),
-	).Get("/instances/{id}/stats", app.ApiService.StatsHandler)
-
 	// OCI Distribution registry endpoints for image push (outside OpenAPI spec)
 	r.Route("/v2", func(r chi.Router) {
 		r.Use(middleware.RequestID)

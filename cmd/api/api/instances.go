@@ -274,6 +274,83 @@ func (s *ApiService) GetInstance(ctx context.Context, request oapi.GetInstanceRe
 	return oapi.GetInstance200JSONResponse(instanceToOAPI(*inst)), nil
 }
 
+// GetInstanceStats returns resource utilization statistics for an instance
+// The id parameter can be an instance ID, name, or ID prefix
+// Note: Resolution is handled by ResolveResource middleware
+func (s *ApiService) GetInstanceStats(ctx context.Context, request oapi.GetInstanceStatsRequestObject) (oapi.GetInstanceStatsResponseObject, error) {
+	log := logger.FromContext(ctx)
+	inst := mw.GetResolvedInstance[instances.Instance](ctx)
+	if inst == nil {
+		return oapi.GetInstanceStats500JSONResponse{
+			Code:    "internal_error",
+			Message: "resource not resolved",
+		}, nil
+	}
+
+	// Build stats response
+	stats := oapi.InstanceStats{
+		InstanceId:           inst.Id,
+		InstanceName:         inst.Name,
+		AllocatedVcpus:       inst.Vcpus,
+		AllocatedMemoryBytes: inst.Size + inst.HotplugSize,
+	}
+
+	// Read /proc stats if we have a hypervisor PID
+	if inst.HypervisorPID != nil {
+		pid := *inst.HypervisorPID
+
+		// Read CPU from /proc/<pid>/stat
+		cpuUsec, err := resources.ReadProcStat(pid)
+		if err != nil {
+			log.DebugContext(ctx, "failed to read proc stat", "pid", pid, "error", err)
+		} else {
+			stats.CpuSeconds = float64(cpuUsec) / 1_000_000.0
+		}
+
+		// Read memory from /proc/<pid>/statm
+		rssBytes, vmsBytes, err := resources.ReadProcStatm(pid)
+		if err != nil {
+			log.DebugContext(ctx, "failed to read proc statm", "pid", pid, "error", err)
+		} else {
+			stats.MemoryRssBytes = int64(rssBytes)
+			stats.MemoryVmsBytes = int64(vmsBytes)
+
+			// Compute utilization ratio
+			if stats.AllocatedMemoryBytes > 0 {
+				ratio := float64(rssBytes) / float64(stats.AllocatedMemoryBytes)
+				stats.MemoryUtilizationRatio = &ratio
+			}
+		}
+	}
+
+	// Read TAP stats if network is enabled
+	if inst.NetworkEnabled {
+		tapName := generateTAPName(inst.Id)
+		rxBytes, txBytes, err := resources.ReadTAPStats(tapName)
+		if err != nil {
+			log.DebugContext(ctx, "failed to read TAP stats", "tap", tapName, "error", err)
+		} else {
+			stats.NetworkRxBytes = int64(rxBytes)
+			stats.NetworkTxBytes = int64(txBytes)
+		}
+	}
+
+	return oapi.GetInstanceStats200JSONResponse(stats), nil
+}
+
+// generateTAPName generates TAP device name from instance ID
+func generateTAPName(instanceID string) string {
+	// TAP name format: "hype-" + first 10 chars of instance ID
+	// Max TAP name length is 15 chars (IFNAMSIZ - 1)
+	prefix := "hype-"
+	maxIDLen := 15 - len(prefix)
+	idPart := instanceID
+	if len(idPart) > maxIDLen {
+		idPart = idPart[:maxIDLen]
+	}
+	return prefix + idPart
+}
+
 // DeleteInstance stops and deletes an instance
 // The id parameter can be an instance ID, name, or ID prefix
 // Note: Resolution is handled by ResolveResource middleware

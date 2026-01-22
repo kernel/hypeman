@@ -333,6 +333,60 @@ components:
           nullable: true
           example: "permission denied"
     
+    InstanceStats:
+      type: object
+      required: [instance_id, instance_name, cpu_seconds, memory_rss_bytes, memory_vms_bytes, network_rx_bytes, network_tx_bytes, allocated_vcpus, allocated_memory_bytes]
+      description: Real-time resource utilization statistics for a VM instance
+      properties:
+        instance_id:
+          type: string
+          description: Instance identifier
+          example: "qilviffnqzck2jrim1x6s2b1"
+        instance_name:
+          type: string
+          description: Instance name
+          example: "my-web-server"
+        cpu_seconds:
+          type: number
+          format: double
+          description: Total CPU time consumed by the VM hypervisor process in seconds
+          example: 29.94
+        memory_rss_bytes:
+          type: integer
+          format: int64
+          description: Resident Set Size - actual physical memory used by the VM in bytes
+          example: 443338752
+        memory_vms_bytes:
+          type: integer
+          format: int64
+          description: Virtual Memory Size - total virtual memory allocated in bytes
+          example: 4330745856
+        network_rx_bytes:
+          type: integer
+          format: int64
+          description: Total network bytes received by the VM (from TAP interface)
+          example: 12345678
+        network_tx_bytes:
+          type: integer
+          format: int64
+          description: Total network bytes transmitted by the VM (from TAP interface)
+          example: 87654321
+        allocated_vcpus:
+          type: integer
+          description: Number of vCPUs allocated to the VM
+          example: 2
+        allocated_memory_bytes:
+          type: integer
+          format: int64
+          description: Total memory allocated to the VM (Size + HotplugSize) in bytes
+          example: 4294967296
+        memory_utilization_ratio:
+          type: number
+          format: double
+          description: Memory utilization ratio (RSS / allocated memory). Only present when allocated_memory_bytes > 0.
+          nullable: true
+          example: 0.103
+    
     CreateImageRequest:
       type: object
       required: [name]
@@ -1566,6 +1620,43 @@ paths:
                 $ref: "#/components/schemas/Error"
         409:
           description: Instance not in running state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  
+  /instances/{id}/stats:
+    get:
+      summary: Get instance resource utilization stats
+      description: |
+        Returns real-time resource utilization statistics for a running VM instance.
+        Metrics are collected from /proc/<pid>/stat and /proc/<pid>/statm for CPU and memory,
+        and from TAP interface statistics for network I/O.
+      operationId: getInstanceStats
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Instance ID or name
+      responses:
+        200:
+          description: Instance utilization statistics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InstanceStats"
+        404:
+          description: Instance not found
           content:
             application/json:
               schema:
