@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"time"
 
 	"github.com/kernel/hypeman/lib/vmconfig"
 )
@@ -17,6 +18,11 @@ func readConfig(log *Logger) (*vmconfig.Config, error) {
 	// Create mount point
 	if err := os.MkdirAll(configMount, 0755); err != nil {
 		return nil, fmt.Errorf("mkdir config mount: %w", err)
+	}
+
+	// Wait for config disk to be ready (polls every 10ms, 2s timeout)
+	if err := waitForDevice("/dev/vdc", 2*time.Second); err != nil {
+		return nil, fmt.Errorf("wait for config device: %w", err)
 	}
 
 	// Mount config disk (/dev/vdc) read-only
