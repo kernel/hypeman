@@ -41,6 +41,8 @@ describe('resource instances', () => {
       },
       overlay_size: '20GB',
       size: '2GB',
+      skip_guest_agent: false,
+      skip_kernel_headers: true,
       vcpus: 2,
       volumes: [
         {

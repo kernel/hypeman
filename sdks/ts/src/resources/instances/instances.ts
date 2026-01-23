@@ -464,6 +464,21 @@ export interface InstanceCreateParams {
   size?: string;
 
   /**
+   * Skip guest-agent installation during boot. When true, the exec and stat APIs
+   * will not work for this instance. The instance will still run, but remote command
+   * execution will be unavailable.
+   */
+  skip_guest_agent?: boolean;
+
+  /**
+   * Skip kernel headers installation during boot for faster startup. When true, DKMS
+   * (Dynamic Kernel Module Support) will not work, preventing compilation of
+   * out-of-tree kernel modules (e.g., NVIDIA vGPU drivers). Recommended for
+   * workloads that don't need kernel module compilation.
+   */
+  skip_kernel_headers?: boolean;
+
+  /**
    * Number of virtual CPUs
    */
   vcpus?: number;
