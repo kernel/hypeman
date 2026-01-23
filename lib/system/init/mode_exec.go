@@ -36,13 +36,18 @@ func runExecMode(log *Logger, cfg *vmconfig.Config) {
 	os.Setenv("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 	os.Setenv("HOME", "/root")
 
-	// Start guest-agent in background
-	log.Info("exec", "starting guest-agent in background")
-	agentCmd := exec.Command("/opt/hypeman/guest-agent")
-	agentCmd.Stdout = os.Stdout
-	agentCmd.Stderr = os.Stderr
-	if err := agentCmd.Start(); err != nil {
-		log.Error("exec", "failed to start guest-agent", err)
+	// Start guest-agent in background (skip if guest-agent was not copied)
+	var agentCmd *exec.Cmd
+	if cfg.SkipGuestAgent {
+		log.Info("exec", "skipping guest-agent (skip_guest_agent=true)")
+	} else {
+		log.Info("exec", "starting guest-agent in background")
+		agentCmd = exec.Command("/opt/hypeman/guest-agent")
+		agentCmd.Stdout = os.Stdout
+		agentCmd.Stderr = os.Stderr
+		if err := agentCmd.Start(); err != nil {
+			log.Error("exec", "failed to start guest-agent", err)
+		}
 	}
 
 	// Build the entrypoint command
@@ -94,7 +99,7 @@ func runExecMode(log *Logger, cfg *vmconfig.Config) {
 	// Wait for guest-agent (keeps init alive, prevents kernel panic)
 	// The guest-agent runs forever, so this effectively keeps the VM alive
 	// until it's explicitly terminated
-	if agentCmd.Process != nil {
+	if agentCmd != nil && agentCmd.Process != nil {
 		agentCmd.Wait()
 	}
 
