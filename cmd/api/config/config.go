@@ -118,6 +118,9 @@ type Config struct {
 	// Hypervisor configuration
 	DefaultHypervisor string // Default hypervisor type: "cloud-hypervisor" or "qemu"
 
+	// GPU configuration
+	GPUProfileCacheTTL string // TTL for GPU profile metadata cache (e.g., "30m")
+
 	// Oversubscription ratios (1.0 = no oversubscription, 2.0 = 2x oversubscription)
 	OversubCPU     float64 // CPU oversubscription ratio
 	OversubMemory  float64 // Memory oversubscription ratio
@@ -198,8 +201,8 @@ func Load() *Config {
 		CloudflareApiToken: getEnv("CLOUDFLARE_API_TOKEN", ""),
 
 		// API ingress configuration
-		ApiHostname:     getEnv("API_HOSTNAME", ""),     // Empty = disabled
-		ApiTLS:          getEnvBool("API_TLS", true),    // Default to TLS enabled
+		ApiHostname:     getEnv("API_HOSTNAME", ""),  // Empty = disabled
+		ApiTLS:          getEnvBool("API_TLS", true), // Default to TLS enabled
 		ApiRedirectHTTP: getEnvBool("API_REDIRECT_HTTP", true),
 
 		// Build system configuration
@@ -211,6 +214,9 @@ func Load() *Config {
 
 		// Hypervisor configuration
 		DefaultHypervisor: getEnv("DEFAULT_HYPERVISOR", "cloud-hypervisor"),
+
+		// GPU configuration
+		GPUProfileCacheTTL: getEnv("GPU_PROFILE_CACHE_TTL", "30m"),
 
 		// Oversubscription ratios (1.0 = no oversubscription)
 		OversubCPU:     getEnvFloat("OVERSUB_CPU", 4.0),
