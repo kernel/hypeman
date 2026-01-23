@@ -10,7 +10,6 @@ import (
 	"github.com/kernel/hypeman/cmd/api/config"
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/paths"
-	"go.opentelemetry.io/otel/metric"
 )
 
 // ResourceType identifies a type of host resource.
@@ -118,6 +117,19 @@ type VolumeLister interface {
 	TotalVolumeBytes(ctx context.Context) (int64, error)
 }
 
+// InstanceUtilizationInfo contains the minimal info needed to collect VM utilization metrics.
+// Used by vm_metrics package via adapter.
+type InstanceUtilizationInfo struct {
+	ID            string
+	Name          string
+	HypervisorPID *int   // PID of the hypervisor process
+	TAPDevice     string // Name of the TAP device (e.g., "hype-01234567")
+
+	// Allocated resources (for computing utilization ratios)
+	AllocatedVcpus       int   // Number of allocated vCPUs
+	AllocatedMemoryBytes int64 // Allocated memory in bytes (Size + HotplugSize)
+}
+
 // Manager coordinates resource discovery and allocation tracking.
 type Manager struct {
 	cfg   *config.Config
@@ -130,10 +142,6 @@ type Manager struct {
 	instanceLister InstanceLister
 	imageLister    ImageLister
 	volumeLister   VolumeLister
-
-	// Dependencies for utilization metrics
-	utilizationSource  UtilizationSource
-	utilizationMetrics *UtilizationMetrics
 }
 
 // NewManager creates a new resource manager.
@@ -164,33 +172,6 @@ func (m *Manager) SetVolumeLister(lister VolumeLister) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.volumeLister = lister
-}
-
-// SetUtilizationSource sets the utilization source for VM metrics collection.
-func (m *Manager) SetUtilizationSource(source UtilizationSource) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.utilizationSource = source
-}
-
-// InitializeMetrics sets up OTel metrics for VM utilization.
-// Must be called after SetUtilizationSource and before the manager is used.
-// If meter is nil, metrics are not initialized.
-func (m *Manager) InitializeMetrics(meter metric.Meter) error {
-	if meter == nil {
-		return nil
-	}
-
-	metrics, err := newUtilizationMetrics(meter, m)
-	if err != nil {
-		return fmt.Errorf("initialize utilization metrics: %w", err)
-	}
-
-	m.mu.Lock()
-	m.utilizationMetrics = metrics
-	m.mu.Unlock()
-
-	return nil
 }
 
 // Initialize discovers host resources and registers them.

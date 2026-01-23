@@ -1,117 +1,12 @@
-// Package resources provides host resource discovery, capacity tracking,
-// and oversubscription-aware allocation management for CPU, memory, disk, and network.
-package resources
+package vm_metrics
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
-
-	"github.com/kernel/hypeman/lib/logger"
 )
-
-// VMUtilization holds actual resource utilization metrics for a VM.
-// These are real-time values read from /proc/<pid>/stat, /proc/<pid>/statm, and TAP interfaces.
-type VMUtilization struct {
-	InstanceID     string
-	InstanceName   string
-	CPUUsec        uint64 // Total CPU time in microseconds (user + system)
-	MemoryRSSBytes uint64 // Resident Set Size - actual physical memory used
-	MemoryVMSBytes uint64 // Virtual Memory Size - total allocated virtual memory
-	NetRxBytes     uint64 // Total network bytes received
-	NetTxBytes     uint64 // Total network bytes transmitted
-
-	// Allocated resources (for computing utilization ratios)
-	AllocatedVcpus       int   // Number of allocated vCPUs
-	AllocatedMemoryBytes int64 // Allocated memory in bytes
-}
-
-// UtilizationSource provides access to instance data for utilization collection.
-type UtilizationSource interface {
-	// ListRunningInstancesInfo returns basic info for running instances.
-	ListRunningInstancesInfo(ctx context.Context) ([]InstanceUtilizationInfo, error)
-}
-
-// InstanceUtilizationInfo contains the minimal info needed to collect utilization.
-type InstanceUtilizationInfo struct {
-	ID            string
-	Name          string
-	HypervisorPID *int   // PID of the hypervisor process
-	TAPDevice     string // Name of the TAP device (e.g., "hype-01234567")
-
-	// Allocated resources (for computing utilization ratios)
-	AllocatedVcpus       int   // Number of allocated vCPUs
-	AllocatedMemoryBytes int64 // Allocated memory in bytes (Size + HotplugSize)
-}
-
-// CollectVMUtilization gathers utilization metrics for all running VMs.
-// Uses /proc/<pid>/stat and /proc/<pid>/statm for per-process metrics (no cgroups needed).
-func (m *Manager) CollectVMUtilization(ctx context.Context) ([]VMUtilization, error) {
-	m.mu.RLock()
-	source := m.utilizationSource
-	m.mu.RUnlock()
-
-	if source == nil {
-		return nil, nil
-	}
-
-	log := logger.FromContext(ctx)
-
-	instances, err := source.ListRunningInstancesInfo(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list running instances: %w", err)
-	}
-
-	var utilizations []VMUtilization
-	for _, inst := range instances {
-		util := VMUtilization{
-			InstanceID:           inst.ID,
-			InstanceName:         inst.Name,
-			AllocatedVcpus:       inst.AllocatedVcpus,
-			AllocatedMemoryBytes: inst.AllocatedMemoryBytes,
-		}
-
-		// Collect per-process metrics from /proc if we have a PID
-		if inst.HypervisorPID != nil {
-			pid := *inst.HypervisorPID
-
-			// Read CPU time from /proc/<pid>/stat
-			cpuUsec, err := ReadProcStat(pid)
-			if err != nil {
-				log.DebugContext(ctx, "failed to read proc stat", "instance_id", inst.ID, "pid", pid, "error", err)
-			} else {
-				util.CPUUsec = cpuUsec
-			}
-
-			// Read memory from /proc/<pid>/statm
-			rssBytes, vmsBytes, err := ReadProcStatm(pid)
-			if err != nil {
-				log.DebugContext(ctx, "failed to read proc statm", "instance_id", inst.ID, "pid", pid, "error", err)
-			} else {
-				util.MemoryRSSBytes = rssBytes
-				util.MemoryVMSBytes = vmsBytes
-			}
-		}
-
-		// Collect TAP stats if we have a TAP device
-		if inst.TAPDevice != "" {
-			rxBytes, txBytes, err := ReadTAPStats(inst.TAPDevice)
-			if err != nil {
-				log.DebugContext(ctx, "failed to read TAP stats", "instance_id", inst.ID, "tap", inst.TAPDevice, "error", err)
-			} else {
-				util.NetRxBytes = rxBytes
-				util.NetTxBytes = txBytes
-			}
-		}
-
-		utilizations = append(utilizations, util)
-	}
-
-	return utilizations, nil
-}
 
 // ReadProcStat reads CPU time from /proc/<pid>/stat.
 // Returns total CPU time (user + system) in microseconds.
@@ -191,6 +86,7 @@ func ReadProcStatm(pid int) (rssBytes, vmsBytes uint64, err error) {
 	}
 
 	// Convert pages to bytes using system page size (varies by architecture)
+	// x86_64: typically 4KB, ARM64: can be 4KB, 16KB, or 64KB
 	pageSize := uint64(os.Getpagesize())
 	return rssPages * pageSize, vmsPages * pageSize, nil
 }

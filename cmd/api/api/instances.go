@@ -17,6 +17,7 @@ import (
 	"github.com/kernel/hypeman/lib/network"
 	"github.com/kernel/hypeman/lib/oapi"
 	"github.com/kernel/hypeman/lib/resources"
+	"github.com/kernel/hypeman/lib/vm_metrics"
 	"github.com/samber/lo"
 )
 
@@ -278,7 +279,6 @@ func (s *ApiService) GetInstance(ctx context.Context, request oapi.GetInstanceRe
 // The id parameter can be an instance ID, name, or ID prefix
 // Note: Resolution is handled by ResolveResource middleware
 func (s *ApiService) GetInstanceStats(ctx context.Context, request oapi.GetInstanceStatsRequestObject) (oapi.GetInstanceStatsResponseObject, error) {
-	log := logger.FromContext(ctx)
 	inst := mw.GetResolvedInstance[instances.Instance](ctx)
 	if inst == nil {
 		return oapi.GetInstanceStats500JSONResponse{
@@ -287,68 +287,38 @@ func (s *ApiService) GetInstanceStats(ctx context.Context, request oapi.GetInsta
 		}, nil
 	}
 
-	// Build stats response
-	stats := oapi.InstanceStats{
-		InstanceId:           inst.Id,
-		InstanceName:         inst.Name,
-		AllocatedVcpus:       inst.Vcpus,
-		AllocatedMemoryBytes: inst.Size + inst.HotplugSize,
-	}
+	// Build instance info for metrics collection
+	info := vm_metrics.BuildInstanceInfo(
+		inst.Id,
+		inst.Name,
+		inst.HypervisorPID,
+		inst.NetworkEnabled,
+		inst.Vcpus,
+		inst.Size+inst.HotplugSize,
+	)
 
-	// Read /proc stats if we have a hypervisor PID
-	if inst.HypervisorPID != nil {
-		pid := *inst.HypervisorPID
+	// Collect stats using vm_metrics manager
+	vmStats := s.VMMetricsManager.GetInstanceStats(ctx, info)
 
-		// Read CPU from /proc/<pid>/stat
-		cpuUsec, err := resources.ReadProcStat(pid)
-		if err != nil {
-			log.DebugContext(ctx, "failed to read proc stat", "pid", pid, "error", err)
-		} else {
-			stats.CpuSeconds = float64(cpuUsec) / 1_000_000.0
-		}
-
-		// Read memory from /proc/<pid>/statm
-		rssBytes, vmsBytes, err := resources.ReadProcStatm(pid)
-		if err != nil {
-			log.DebugContext(ctx, "failed to read proc statm", "pid", pid, "error", err)
-		} else {
-			stats.MemoryRssBytes = int64(rssBytes)
-			stats.MemoryVmsBytes = int64(vmsBytes)
-
-			// Compute utilization ratio
-			if stats.AllocatedMemoryBytes > 0 {
-				ratio := float64(rssBytes) / float64(stats.AllocatedMemoryBytes)
-				stats.MemoryUtilizationRatio = &ratio
-			}
-		}
-	}
-
-	// Read TAP stats if network is enabled
-	if inst.NetworkEnabled {
-		tapName := generateTAPName(inst.Id)
-		rxBytes, txBytes, err := resources.ReadTAPStats(tapName)
-		if err != nil {
-			log.DebugContext(ctx, "failed to read TAP stats", "tap", tapName, "error", err)
-		} else {
-			stats.NetworkRxBytes = int64(rxBytes)
-			stats.NetworkTxBytes = int64(txBytes)
-		}
-	}
-
-	return oapi.GetInstanceStats200JSONResponse(stats), nil
+	// Map domain type to API type
+	return oapi.GetInstanceStats200JSONResponse(vmStatsToOAPI(vmStats)), nil
 }
 
-// generateTAPName generates TAP device name from instance ID
-func generateTAPName(instanceID string) string {
-	// TAP name format: "hype-" + first 10 chars of instance ID
-	// Max TAP name length is 15 chars (IFNAMSIZ - 1)
-	prefix := "hype-"
-	maxIDLen := 15 - len(prefix)
-	idPart := instanceID
-	if len(idPart) > maxIDLen {
-		idPart = idPart[:maxIDLen]
+// vmStatsToOAPI converts vm_metrics.VMStats to oapi.InstanceStats
+func vmStatsToOAPI(s *vm_metrics.VMStats) oapi.InstanceStats {
+	stats := oapi.InstanceStats{
+		InstanceId:           s.InstanceID,
+		InstanceName:         s.InstanceName,
+		CpuSeconds:           s.CPUSeconds(),
+		MemoryRssBytes:       int64(s.MemoryRSSBytes),
+		MemoryVmsBytes:       int64(s.MemoryVMSBytes),
+		NetworkRxBytes:       int64(s.NetRxBytes),
+		NetworkTxBytes:       int64(s.NetTxBytes),
+		AllocatedVcpus:       s.AllocatedVcpus,
+		AllocatedMemoryBytes: s.AllocatedMemoryBytes,
+		MemoryUtilizationRatio: s.MemoryUtilizationRatio(),
 	}
-	return prefix + idPart
+	return stats
 }
 
 // DeleteInstance stops and deletes an instance

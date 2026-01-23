@@ -3,7 +3,6 @@ package instances
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 
 	"github.com/kernel/hypeman/lib/devices"
@@ -359,7 +358,7 @@ func (m *manager) ListRunningInstancesInfo(ctx context.Context) ([]resources.Ins
 
 		// Derive TAP device name if networking is enabled
 		if inst.NetworkEnabled {
-			info.TAPDevice = generateTAPName(inst.Id)
+			info.TAPDevice = network.GenerateTAPName(inst.Id)
 		}
 
 		infos = append(infos, info)
@@ -368,14 +367,3 @@ func (m *manager) ListRunningInstancesInfo(ctx context.Context) ([]resources.Ins
 	return infos, nil
 }
 
-// generateTAPName generates TAP device name from instance ID.
-// This matches the logic in network/allocate.go.
-func generateTAPName(instanceID string) string {
-	// Use first 8 chars of instance ID
-	// hype-{8chars} fits within 15-char Linux interface name limit
-	shortID := instanceID
-	if len(shortID) > 8 {
-		shortID = shortID[:8]
-	}
-	return "hype-" + strings.ToLower(shortID)
-}

@@ -1002,38 +1002,3 @@ func (r *testInstanceResolver) ResolveInstance(ctx context.Context, nameOrID str
 	return nameOrID, nameOrID, nil
 }
 
-func TestGenerateTAPName(t *testing.T) {
-	tests := []struct {
-		name       string
-		instanceID string
-		expected   string
-	}{
-		{
-			name:       "standard ID",
-			instanceID: "01HQVX7ABC123DEF456",
-			expected:   "hype-01hqvx7a",
-		},
-		{
-			name:       "short ID",
-			instanceID: "ABC123",
-			expected:   "hype-abc123",
-		},
-		{
-			name:       "exact 8 chars",
-			instanceID: "ABCDEFGH",
-			expected:   "hype-abcdefgh",
-		},
-		{
-			name:       "mixed case",
-			instanceID: "AbCdEfGhIjKl",
-			expected:   "hype-abcdefgh",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := generateTAPName(tt.instanceID)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}

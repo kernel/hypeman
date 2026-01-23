@@ -1,4 +1,4 @@
-package resources
+package vm_metrics
 
 import (
 	"context"
@@ -7,8 +7,8 @@ import (
 	"go.opentelemetry.io/otel/metric"
 )
 
-// UtilizationMetrics holds the observable instruments for VM utilization.
-type UtilizationMetrics struct {
+// otelMetrics holds the OpenTelemetry instruments for VM metrics.
+type otelMetrics struct {
 	cpuSecondsTotal        metric.Float64ObservableCounter
 	allocatedVcpus         metric.Int64ObservableGauge
 	memoryRSSBytes         metric.Int64ObservableGauge
@@ -19,9 +19,8 @@ type UtilizationMetrics struct {
 	memoryUtilizationRatio metric.Float64ObservableGauge
 }
 
-// newUtilizationMetrics creates and registers all VM utilization metrics.
-// These are observable gauges/counters that read from /proc and TAP interfaces.
-func newUtilizationMetrics(meter metric.Meter, m *Manager) (*UtilizationMetrics, error) {
+// newOTelMetrics creates and registers all VM utilization metrics.
+func newOTelMetrics(meter metric.Meter, m *Manager) (*otelMetrics, error) {
 	// CPU time in seconds (converted from microseconds)
 	cpuSecondsTotal, err := meter.Float64ObservableCounter(
 		"hypeman_vm_cpu_seconds_total",
@@ -105,36 +104,34 @@ func newUtilizationMetrics(meter metric.Meter, m *Manager) (*UtilizationMetrics,
 	// Register the callback that will collect all utilization metrics
 	_, err = meter.RegisterCallback(
 		func(ctx context.Context, o metric.Observer) error {
-			utilizations, err := m.CollectVMUtilization(ctx)
+			stats, err := m.CollectAll(ctx)
 			if err != nil {
 				// Log error but don't fail the callback
 				return nil
 			}
 
-			for _, util := range utilizations {
+			for _, s := range stats {
 				attrs := metric.WithAttributes(
-					attribute.String("instance_id", util.InstanceID),
-					attribute.String("instance_name", util.InstanceName),
+					attribute.String("instance_id", s.InstanceID),
+					attribute.String("instance_name", s.InstanceName),
 				)
 
-				// Convert CPU microseconds to seconds
-				cpuSeconds := float64(util.CPUUsec) / 1_000_000.0
-				o.ObserveFloat64(cpuSecondsTotal, cpuSeconds, attrs)
+				// CPU time in seconds
+				o.ObserveFloat64(cpuSecondsTotal, s.CPUSeconds(), attrs)
 
 				// Allocated resources
-				o.ObserveInt64(allocatedVcpus, int64(util.AllocatedVcpus), attrs)
-				o.ObserveInt64(allocatedMemoryBytes, util.AllocatedMemoryBytes, attrs)
+				o.ObserveInt64(allocatedVcpus, int64(s.AllocatedVcpus), attrs)
+				o.ObserveInt64(allocatedMemoryBytes, s.AllocatedMemoryBytes, attrs)
 
 				// Actual usage
-				o.ObserveInt64(memoryRSSBytes, int64(util.MemoryRSSBytes), attrs)
-				o.ObserveInt64(memoryVMSBytes, int64(util.MemoryVMSBytes), attrs)
-				o.ObserveInt64(networkRxBytesTotal, int64(util.NetRxBytes), attrs)
-				o.ObserveInt64(networkTxBytesTotal, int64(util.NetTxBytes), attrs)
+				o.ObserveInt64(memoryRSSBytes, int64(s.MemoryRSSBytes), attrs)
+				o.ObserveInt64(memoryVMSBytes, int64(s.MemoryVMSBytes), attrs)
+				o.ObserveInt64(networkRxBytesTotal, int64(s.NetRxBytes), attrs)
+				o.ObserveInt64(networkTxBytesTotal, int64(s.NetTxBytes), attrs)
 
-				// Compute utilization ratio (RSS vs allocated)
-				if util.AllocatedMemoryBytes > 0 {
-					memRatio := float64(util.MemoryRSSBytes) / float64(util.AllocatedMemoryBytes)
-					o.ObserveFloat64(memoryUtilizationRatio, memRatio, attrs)
+				// Compute utilization ratio
+				if ratio := s.MemoryUtilizationRatio(); ratio != nil {
+					o.ObserveFloat64(memoryUtilizationRatio, *ratio, attrs)
 				}
 			}
 
@@ -153,7 +150,7 @@ func newUtilizationMetrics(meter metric.Meter, m *Manager) (*UtilizationMetrics,
 		return nil, err
 	}
 
-	return &UtilizationMetrics{
+	return &otelMetrics{
 		cpuSecondsTotal:        cpuSecondsTotal,
 		allocatedVcpus:         allocatedVcpus,
 		memoryRSSBytes:         memoryRSSBytes,
