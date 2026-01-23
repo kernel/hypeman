@@ -38,6 +38,9 @@ type Manager interface {
 	// ListInstanceAllocations returns resource allocations for all instances.
 	// Used by the resource manager for capacity tracking.
 	ListInstanceAllocations(ctx context.Context) ([]resources.InstanceAllocation, error)
+	// ListRunningInstancesInfo returns info needed for utilization metrics collection.
+	// Used by the resource manager for VM utilization tracking.
+	ListRunningInstancesInfo(ctx context.Context) ([]resources.InstanceUtilizationInfo, error)
 }
 
 // ResourceLimits contains configurable resource limits for instances
@@ -328,3 +331,39 @@ func (m *manager) ListInstanceAllocations(ctx context.Context) ([]resources.Inst
 
 	return allocations, nil
 }
+
+// ListRunningInstancesInfo returns info needed for utilization metrics collection.
+// Used by the resource manager for VM utilization tracking.
+func (m *manager) ListRunningInstancesInfo(ctx context.Context) ([]resources.InstanceUtilizationInfo, error) {
+	instances, err := m.listInstances(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	infos := make([]resources.InstanceUtilizationInfo, 0, len(instances))
+	for _, inst := range instances {
+		// Only include running instances (they have a hypervisor process)
+		if inst.State != StateRunning {
+			continue
+		}
+
+		info := resources.InstanceUtilizationInfo{
+			ID:            inst.Id,
+			Name:          inst.Name,
+			HypervisorPID: inst.HypervisorPID,
+			// Include allocated resources for utilization ratio calculations
+			AllocatedVcpus:       inst.Vcpus,
+			AllocatedMemoryBytes: inst.Size + inst.HotplugSize,
+		}
+
+		// Derive TAP device name if networking is enabled
+		if inst.NetworkEnabled {
+			info.TAPDevice = network.GenerateTAPName(inst.Id)
+		}
+
+		infos = append(infos, info)
+	}
+
+	return infos, nil
+}
+

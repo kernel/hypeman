@@ -17,6 +17,7 @@ import (
 	"github.com/kernel/hypeman/lib/network"
 	"github.com/kernel/hypeman/lib/oapi"
 	"github.com/kernel/hypeman/lib/resources"
+	"github.com/kernel/hypeman/lib/vm_metrics"
 	"github.com/samber/lo"
 )
 
@@ -274,6 +275,52 @@ func (s *ApiService) GetInstance(ctx context.Context, request oapi.GetInstanceRe
 		}, nil
 	}
 	return oapi.GetInstance200JSONResponse(instanceToOAPI(*inst)), nil
+}
+
+// GetInstanceStats returns resource utilization statistics for an instance
+// The id parameter can be an instance ID, name, or ID prefix
+// Note: Resolution is handled by ResolveResource middleware
+func (s *ApiService) GetInstanceStats(ctx context.Context, request oapi.GetInstanceStatsRequestObject) (oapi.GetInstanceStatsResponseObject, error) {
+	inst := mw.GetResolvedInstance[instances.Instance](ctx)
+	if inst == nil {
+		return oapi.GetInstanceStats500JSONResponse{
+			Code:    "internal_error",
+			Message: "resource not resolved",
+		}, nil
+	}
+
+	// Build instance info for metrics collection
+	info := vm_metrics.BuildInstanceInfo(
+		inst.Id,
+		inst.Name,
+		inst.HypervisorPID,
+		inst.NetworkEnabled,
+		inst.Vcpus,
+		inst.Size+inst.HotplugSize,
+	)
+
+	// Collect stats using vm_metrics manager
+	vmStats := s.VMMetricsManager.GetInstanceStats(ctx, info)
+
+	// Map domain type to API type
+	return oapi.GetInstanceStats200JSONResponse(vmStatsToOAPI(vmStats)), nil
+}
+
+// vmStatsToOAPI converts vm_metrics.VMStats to oapi.InstanceStats
+func vmStatsToOAPI(s *vm_metrics.VMStats) oapi.InstanceStats {
+	stats := oapi.InstanceStats{
+		InstanceId:           s.InstanceID,
+		InstanceName:         s.InstanceName,
+		CpuSeconds:           s.CPUSeconds(),
+		MemoryRssBytes:       int64(s.MemoryRSSBytes),
+		MemoryVmsBytes:       int64(s.MemoryVMSBytes),
+		NetworkRxBytes:       int64(s.NetRxBytes),
+		NetworkTxBytes:       int64(s.NetTxBytes),
+		AllocatedVcpus:       s.AllocatedVcpus,
+		AllocatedMemoryBytes: s.AllocatedMemoryBytes,
+		MemoryUtilizationRatio: s.MemoryUtilizationRatio(),
+	}
+	return stats
 }
 
 // DeleteInstance stops and deletes an instance

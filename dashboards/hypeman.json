@@ -417,6 +417,112 @@
       ],
       "title": "Exec Sessions & Duration",
       "type": "timeseries"
+    },
+    {
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 43 },
+      "id": 18,
+      "title": "VM Resource Utilization",
+      "type": "row"
+    },
+    {
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 44 },
+      "id": 19,
+      "options": {
+        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "rate(hypeman_vm_cpu_seconds_total{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}[1m])",
+          "legendFormat": "{{instance_name}}",
+          "refId": "A"
+        }
+      ],
+      "title": "VM CPU Usage (cores)",
+      "type": "timeseries",
+      "fieldConfig": {
+        "defaults": { "unit": "short", "min": 0 },
+        "overrides": []
+      }
+    },
+    {
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 44 },
+      "id": 20,
+      "options": {
+        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "hypeman_vm_memory_rss_bytes{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}",
+          "legendFormat": "{{instance_name}} RSS",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "hypeman_vm_memory_vms_bytes{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}",
+          "legendFormat": "{{instance_name}} VMS",
+          "refId": "B"
+        }
+      ],
+      "title": "VM Memory Usage (RSS & VMS)",
+      "type": "timeseries",
+      "fieldConfig": {
+        "defaults": { "unit": "bytes", "min": 0 },
+        "overrides": []
+      }
+    },
+    {
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 52 },
+      "id": 21,
+      "options": {
+        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "rate(hypeman_vm_network_rx_bytes_total{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}[1m])",
+          "legendFormat": "{{instance_name}} RX",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "rate(hypeman_vm_network_tx_bytes_total{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}[1m])",
+          "legendFormat": "{{instance_name}} TX",
+          "refId": "B"
+        }
+      ],
+      "title": "VM Network I/O",
+      "type": "timeseries",
+      "fieldConfig": {
+        "defaults": { "unit": "Bps", "min": 0 },
+        "overrides": []
+      }
+    },
+    {
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 60 },
+      "id": 23,
+      "options": {
+        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "right" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "hypeman_vm_memory_utilization_ratio{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}",
+          "legendFormat": "{{instance_name}}",
+          "refId": "A"
+        }
+      ],
+      "title": "VM Memory Utilization (% of allocated)",
+      "type": "timeseries",
+      "fieldConfig": {
+        "defaults": { "unit": "percentunit", "min": 0, "max": 1 },
+        "overrides": []
+      }
     }
   ],
   "refresh": "10s",

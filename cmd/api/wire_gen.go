@@ -20,6 +20,7 @@ import (
 	"github.com/kernel/hypeman/lib/registry"
 	"github.com/kernel/hypeman/lib/resources"
 	"github.com/kernel/hypeman/lib/system"
+	"github.com/kernel/hypeman/lib/vm_metrics"
 	"github.com/kernel/hypeman/lib/volumes"
 	"log/slog"
 )
@@ -63,26 +64,31 @@ func initializeApp() (*application, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	vm_metricsManager, err := providers.ProvideVMMetricsManager(instancesManager)
+	if err != nil {
+		return nil, nil, err
+	}
 	registry, err := providers.ProvideRegistry(paths, manager)
 	if err != nil {
 		return nil, nil, err
 	}
-	apiService := api.New(config, manager, instancesManager, volumesManager, networkManager, devicesManager, ingressManager, buildsManager, resourcesManager)
+	apiService := api.New(config, manager, instancesManager, volumesManager, networkManager, devicesManager, ingressManager, buildsManager, resourcesManager, vm_metricsManager)
 	mainApplication := &application{
-		Ctx:             context,
-		Logger:          logger,
-		Config:          config,
-		ImageManager:    manager,
-		SystemManager:   systemManager,
-		NetworkManager:  networkManager,
-		DeviceManager:   devicesManager,
-		InstanceManager: instancesManager,
-		VolumeManager:   volumesManager,
-		IngressManager:  ingressManager,
-		BuildManager:    buildsManager,
-		ResourceManager: resourcesManager,
-		Registry:        registry,
-		ApiService:      apiService,
+		Ctx:              context,
+		Logger:           logger,
+		Config:           config,
+		ImageManager:     manager,
+		SystemManager:    systemManager,
+		NetworkManager:   networkManager,
+		DeviceManager:    devicesManager,
+		InstanceManager:  instancesManager,
+		VolumeManager:    volumesManager,
+		IngressManager:   ingressManager,
+		BuildManager:     buildsManager,
+		ResourceManager:  resourcesManager,
+		VMMetricsManager: vm_metricsManager,
+		Registry:         registry,
+		ApiService:       apiService,
 	}
 	return mainApplication, func() {
 	}, nil
@@ -92,18 +98,19 @@ func initializeApp() (*application, func(), error) {
 
 // application struct to hold initialized components
 type application struct {
-	Ctx             context.Context
-	Logger          *slog.Logger
-	Config          *config.Config
-	ImageManager    images.Manager
-	SystemManager   system.Manager
-	NetworkManager  network.Manager
-	DeviceManager   devices.Manager
-	InstanceManager instances.Manager
-	VolumeManager   volumes.Manager
-	IngressManager  ingress.Manager
-	BuildManager    builds.Manager
-	ResourceManager *resources.Manager
-	Registry        *registry.Registry
-	ApiService      *api.ApiService
+	Ctx              context.Context
+	Logger           *slog.Logger
+	Config           *config.Config
+	ImageManager     images.Manager
+	SystemManager    system.Manager
+	NetworkManager   network.Manager
+	DeviceManager    devices.Manager
+	InstanceManager  instances.Manager
+	VolumeManager    volumes.Manager
+	IngressManager   ingress.Manager
+	BuildManager     builds.Manager
+	ResourceManager  *resources.Manager
+	VMMetricsManager *vm_metrics.Manager
+	Registry         *registry.Registry
+	ApiService       *api.ApiService
 }

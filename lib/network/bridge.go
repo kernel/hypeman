@@ -803,7 +803,7 @@ func (m *manager) CleanupOrphanedTAPs(ctx context.Context, runningInstanceIDs []
 	// Build set of expected TAP names for running instances
 	expectedTAPs := make(map[string]bool)
 	for _, id := range runningInstanceIDs {
-		tapName := generateTAPName(id)
+		tapName := GenerateTAPName(id)
 		expectedTAPs[tapName] = true
 	}
 

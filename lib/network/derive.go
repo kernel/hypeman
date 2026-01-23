@@ -52,7 +52,7 @@ func (m *manager) deriveAllocation(ctx context.Context, instanceID string) (*All
 
 	// 4. Use stored metadata to derive allocation (works for all hypervisors)
 	if meta.IP != "" && meta.MAC != "" {
-		tap := generateTAPName(instanceID)
+		tap := GenerateTAPName(instanceID)
 
 		// Determine state based on socket existence and snapshot
 		socketPath := m.paths.InstanceSocket(instanceID, hypervisor.SocketNameForType(hypervisor.Type(meta.HypervisorType)))

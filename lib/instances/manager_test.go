@@ -1001,3 +1001,4 @@ func (r *testInstanceResolver) ResolveInstance(ctx context.Context, nameOrID str
 	// For tests, just return nameOrID as both name and id
 	return nameOrID, nameOrID, nil
 }
+

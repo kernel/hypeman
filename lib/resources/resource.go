@@ -117,6 +117,19 @@ type VolumeLister interface {
 	TotalVolumeBytes(ctx context.Context) (int64, error)
 }
 
+// InstanceUtilizationInfo contains the minimal info needed to collect VM utilization metrics.
+// Used by vm_metrics package via adapter.
+type InstanceUtilizationInfo struct {
+	ID            string
+	Name          string
+	HypervisorPID *int   // PID of the hypervisor process
+	TAPDevice     string // Name of the TAP device (e.g., "hype-01234567")
+
+	// Allocated resources (for computing utilization ratios)
+	AllocatedVcpus       int   // Number of allocated vCPUs
+	AllocatedMemoryBytes int64 // Allocated memory in bytes (Size + HotplugSize)
+}
+
 // Manager coordinates resource discovery and allocation tracking.
 type Manager struct {
 	cfg   *config.Config

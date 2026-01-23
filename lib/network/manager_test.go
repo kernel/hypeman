@@ -53,7 +53,7 @@ func TestGenerateTAPName(t *testing.T) {
 	
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := generateTAPName(tt.instanceID)
+			got := GenerateTAPName(tt.instanceID)
 			assert.Equal(t, tt.want, got)
 			// Verify within Linux interface name limit (15 chars)
 			assert.LessOrEqual(t, len(got), 15)

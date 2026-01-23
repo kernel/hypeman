@@ -122,6 +122,10 @@ func (m *mockInstanceManager) ListInstanceAllocations(ctx context.Context) ([]re
 	return nil, nil
 }
 
+func (m *mockInstanceManager) ListRunningInstancesInfo(ctx context.Context) ([]resources.InstanceUtilizationInfo, error) {
+	return nil, nil
+}
+
 // mockVolumeManager implements volumes.Manager for testing
 type mockVolumeManager struct {
 	volumes               map[string]*volumes.Volume

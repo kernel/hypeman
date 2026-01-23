@@ -53,7 +53,7 @@ func (m *manager) CreateAllocation(ctx context.Context, req AllocateRequest) (*N
 	}
 
 	// 5. Generate TAP name (tap-{first8chars-of-id})
-	tap := generateTAPName(req.InstanceID)
+	tap := GenerateTAPName(req.InstanceID)
 
 	// 6. Create TAP device with bidirectional rate limiting
 	if err := m.createTAPDevice(tap, network.Bridge, network.Isolated, req.DownloadBps, req.UploadBps, req.UploadCeilBps); err != nil {
@@ -269,8 +269,9 @@ func generateMAC() (string, error) {
 // TAPPrefix is the prefix used for hypeman TAP devices
 const TAPPrefix = "hype-"
 
-// generateTAPName generates TAP device name from instance ID
-func generateTAPName(instanceID string) string {
+// GenerateTAPName generates TAP device name from instance ID.
+// Exported for use by other packages (e.g., vm_metrics).
+func GenerateTAPName(instanceID string) string {
 	// Use first 8 chars of instance ID
 	// hype-{8chars} fits within 15-char Linux interface name limit
 	shortID := instanceID

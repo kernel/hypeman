@@ -22,6 +22,7 @@ import (
 	"github.com/kernel/hypeman/lib/registry"
 	"github.com/kernel/hypeman/lib/resources"
 	"github.com/kernel/hypeman/lib/system"
+	"github.com/kernel/hypeman/lib/vm_metrics"
 	"github.com/kernel/hypeman/lib/volumes"
 	"go.opentelemetry.io/otel"
 )
@@ -160,6 +161,23 @@ func ProvideResourceManager(ctx context.Context, cfg *config.Config, p *paths.Pa
 	// Initialize resource discovery
 	if err := mgr.Initialize(ctx); err != nil {
 		return nil, fmt.Errorf("initialize resource manager: %w", err)
+	}
+
+	return mgr, nil
+}
+
+// ProvideVMMetricsManager provides the VM metrics manager for utilization tracking
+func ProvideVMMetricsManager(instanceManager instances.Manager) (*vm_metrics.Manager, error) {
+	mgr := vm_metrics.NewManager()
+
+	// Adapt instance manager to vm_metrics.InstanceSource interface
+	adapter := vm_metrics.NewInstanceManagerAdapter(instanceManager)
+	mgr.SetInstanceSource(adapter)
+
+	// Initialize OTel metrics
+	meter := otel.GetMeterProvider().Meter("hypeman")
+	if err := mgr.InitializeOTel(meter); err != nil {
+		return nil, fmt.Errorf("initialize vm metrics: %w", err)
 	}
 
 	return mgr, nil

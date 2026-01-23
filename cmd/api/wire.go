@@ -19,25 +19,27 @@ import (
 	"github.com/kernel/hypeman/lib/registry"
 	"github.com/kernel/hypeman/lib/resources"
 	"github.com/kernel/hypeman/lib/system"
+	"github.com/kernel/hypeman/lib/vm_metrics"
 	"github.com/kernel/hypeman/lib/volumes"
 )
 
 // application struct to hold initialized components
 type application struct {
-	Ctx             context.Context
-	Logger          *slog.Logger
-	Config          *config.Config
-	ImageManager    images.Manager
-	SystemManager   system.Manager
-	NetworkManager  network.Manager
-	DeviceManager   devices.Manager
-	InstanceManager instances.Manager
-	VolumeManager   volumes.Manager
-	IngressManager  ingress.Manager
-	BuildManager    builds.Manager
-	ResourceManager *resources.Manager
-	Registry        *registry.Registry
-	ApiService      *api.ApiService
+	Ctx              context.Context
+	Logger           *slog.Logger
+	Config           *config.Config
+	ImageManager     images.Manager
+	SystemManager    system.Manager
+	NetworkManager   network.Manager
+	DeviceManager    devices.Manager
+	InstanceManager  instances.Manager
+	VolumeManager    volumes.Manager
+	IngressManager   ingress.Manager
+	BuildManager     builds.Manager
+	ResourceManager  *resources.Manager
+	VMMetricsManager *vm_metrics.Manager
+	Registry         *registry.Registry
+	ApiService       *api.ApiService
 }
 
 // initializeApp is the injector function
@@ -56,6 +58,7 @@ func initializeApp() (*application, func(), error) {
 		providers.ProvideIngressManager,
 		providers.ProvideBuildManager,
 		providers.ProvideResourceManager,
+		providers.ProvideVMMetricsManager,
 		providers.ProvideRegistry,
 		api.New,
 		wire.Struct(new(application), "*"),
