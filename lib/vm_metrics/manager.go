@@ -89,8 +89,11 @@ func (m *Manager) GetInstanceStats(ctx context.Context, info InstanceInfo) *VMSt
 		if err != nil {
 			log.DebugContext(ctx, "failed to read TAP stats", "instance_id", info.ID, "tap", info.TAPDevice, "error", err)
 		} else {
-			stats.NetRxBytes = rxBytes
-			stats.NetTxBytes = txBytes
+			// TAP stats are from host perspective, swap for VM perspective:
+			// - TAP rx_bytes = host receives = VM transmits
+			// - TAP tx_bytes = host transmits = VM receives
+			stats.NetRxBytes = txBytes
+			stats.NetTxBytes = rxBytes
 		}
 	}
 

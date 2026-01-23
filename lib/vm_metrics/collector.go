@@ -93,6 +93,9 @@ func ReadProcStatm(pid int) (rssBytes, vmsBytes uint64, err error) {
 
 // ReadTAPStats reads network statistics from a TAP device.
 // Reads from /sys/class/net/<tap>/statistics/{rx,tx}_bytes.
+// Note: Returns stats from host perspective. Caller must swap for VM perspective:
+// - rxBytes = host receives = VM transmits
+// - txBytes = host transmits = VM receives
 func ReadTAPStats(tapName string) (rxBytes, txBytes uint64, err error) {
 	basePath := filepath.Join("/sys/class/net", tapName, "statistics")
 
