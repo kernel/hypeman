@@ -17,11 +17,15 @@ import (
 func runSystemdMode(log *Logger, cfg *vmconfig.Config) {
 	const newroot = "/overlay/newroot"
 
-	// Inject hypeman-agent.service
-	log.Info("systemd", "injecting hypeman-agent.service")
-	if err := injectAgentService(newroot); err != nil {
-		log.Error("systemd", "failed to inject service", err)
-		// Continue anyway - VM will work, just without agent
+	// Inject hypeman-agent.service (skip if guest-agent was not copied)
+	if cfg.SkipGuestAgent {
+		log.Info("systemd", "skipping agent service injection (skip_guest_agent=true)")
+	} else {
+		log.Info("systemd", "injecting hypeman-agent.service")
+		if err := injectAgentService(newroot); err != nil {
+			log.Error("systemd", "failed to inject service", err)
+			// Continue anyway - VM will work, just without agent
+		}
 	}
 
 	// Change root to the new filesystem using chroot
