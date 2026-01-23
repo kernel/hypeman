@@ -335,6 +335,8 @@ func (m *manager) createInstance(
 		Devices:                  resolvedDeviceIDs,
 		GPUProfile:               gpuProfile,
 		GPUMdevUUID:              gpuMdevUUID,
+		SkipKernelHeaders:        req.SkipKernelHeaders,
+		SkipGuestAgent:           req.SkipGuestAgent,
 	}
 
 	// 12. Ensure directories

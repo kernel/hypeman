@@ -25,6 +25,10 @@ type Config struct {
 
 	// Init mode: "exec" (default) or "systemd"
 	InitMode string `json:"init_mode"`
+
+	// Boot optimizations
+	SkipKernelHeaders bool `json:"skip_kernel_headers,omitempty"`
+	SkipGuestAgent    bool `json:"skip_guest_agent,omitempty"`
 }
 
 // VolumeMount represents a volume mount configuration.

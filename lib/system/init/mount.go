@@ -63,13 +63,36 @@ func mountEssentials(log *Logger) error {
 	return nil
 }
 
+// waitForDevice polls for a block device to become available.
+// It polls every 10ms until the device exists or the timeout is reached.
+func waitForDevice(device string, timeout time.Duration) error {
+	const pollInterval = 10 * time.Millisecond
+	deadline := time.Now().Add(timeout)
+
+	for {
+		if _, err := os.Stat(device); err == nil {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timeout waiting for device %s", device)
+		}
+		time.Sleep(pollInterval)
+	}
+}
+
 // setupOverlay sets up the overlay filesystem:
 // - /dev/vda: readonly rootfs (ext4)
 // - /dev/vdb: writable overlay disk (ext4)
 // - /overlay/newroot: merged overlay filesystem
 func setupOverlay(log *Logger) error {
-	// Wait for block devices to be ready
-	time.Sleep(500 * time.Millisecond)
+	// Wait for block devices to be ready (polls every 10ms, 2s timeout)
+	// This typically completes in 10-50ms instead of always waiting 500ms
+	if err := waitForDevice("/dev/vda", 2*time.Second); err != nil {
+		return fmt.Errorf("wait for rootfs device: %w", err)
+	}
+	if err := waitForDevice("/dev/vdb", 2*time.Second); err != nil {
+		return fmt.Errorf("wait for overlay device: %w", err)
+	}
 
 	// Create mount points
 	for _, dir := range []string{"/lower", "/overlay"} {
@@ -197,11 +220,26 @@ func redirectToConsole(device string) {
 }
 
 // copyGuestAgent copies the guest-agent binary to the target location in the new root.
-func copyGuestAgent(log *Logger) error {
+// It skips copying if:
+// - skipGuestAgent config option is true
+// - The destination file already exists (lazy copy optimization)
+func copyGuestAgent(log *Logger, skipGuestAgent bool) error {
 	const (
 		src = "/usr/local/bin/guest-agent"
 		dst = "/overlay/newroot/opt/hypeman/guest-agent"
 	)
+
+	// Check for skip via config
+	if skipGuestAgent {
+		log.Info("agent", "skipping guest-agent copy (skip_guest_agent=true)")
+		return nil
+	}
+
+	// Check if destination already exists (lazy copy - skip if already present)
+	if _, err := os.Stat(dst); err == nil {
+		log.Info("agent", "guest-agent already exists, skipping copy")
+		return nil
+	}
 
 	// Create target directory
 	if err := os.MkdirAll("/overlay/newroot/opt/hypeman", 0755); err != nil {

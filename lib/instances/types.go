@@ -80,6 +80,10 @@ type StoredMetadata struct {
 	// GPU configuration (vGPU mode)
 	GPUProfile  string // vGPU profile name (e.g., "L40S-1Q")
 	GPUMdevUUID string // mdev device UUID
+
+	// Boot optimizations
+	SkipKernelHeaders bool // Skip kernel headers installation (disables DKMS)
+	SkipGuestAgent    bool // Skip guest-agent installation (disables exec/stat API)
 }
 
 // Instance represents a virtual machine instance with derived runtime state
@@ -120,6 +124,8 @@ type CreateInstanceRequest struct {
 	Volumes                  []VolumeAttachment // Volumes to attach at creation time
 	Hypervisor               hypervisor.Type    // Optional: hypervisor type (defaults to config)
 	GPU                      *GPUConfig         // Optional: vGPU configuration
+	SkipKernelHeaders        bool               // Skip kernel headers installation (disables DKMS)
+	SkipGuestAgent           bool               // Skip guest-agent installation (disables exec/stat API)
 }
 
 // AttachVolumeRequest is the domain request for attaching a volume (used for API compatibility)

@@ -60,16 +60,20 @@ func main() {
 		dropToShell()
 	}
 
-	// Phase 7: Copy guest-agent to target location
-	if err := copyGuestAgent(log); err != nil {
+	// Phase 7: Copy guest-agent to target location (skips if already exists or skip_guest_agent=true)
+	if err := copyGuestAgent(log, cfg.SkipGuestAgent); err != nil {
 		log.Error("agent", "failed to copy guest-agent", err)
 		// Continue anyway - exec will still work, just no remote access
 	}
 
-	// Phase 8: Setup kernel headers for DKMS
-	if err := setupKernelHeaders(log); err != nil {
-		log.Error("headers", "failed to setup kernel headers", err)
-		// Continue anyway - only needed for DKMS module building
+	// Phase 8: Setup kernel headers for DKMS (can be skipped via config)
+	if cfg.SkipKernelHeaders {
+		log.Info("headers", "skipping kernel headers setup (skip_kernel_headers=true)")
+	} else {
+		if err := setupKernelHeaders(log); err != nil {
+			log.Error("headers", "failed to setup kernel headers", err)
+			// Continue anyway - only needed for DKMS module building
+		}
 	}
 
 	// Phase 9: Mode-specific execution

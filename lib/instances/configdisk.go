@@ -97,6 +97,10 @@ func (m *manager) buildGuestConfig(ctx context.Context, inst *Instance, imageInf
 		cfg.InitMode = "systemd"
 	}
 
+	// Boot optimizations
+	cfg.SkipKernelHeaders = inst.SkipKernelHeaders
+	cfg.SkipGuestAgent = inst.SkipGuestAgent
+
 	return cfg
 }
 

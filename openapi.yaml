@@ -179,6 +179,23 @@ components:
           enum: [cloud-hypervisor, qemu]
           description: Hypervisor to use for this instance. Defaults to server configuration.
           example: cloud-hypervisor
+        skip_kernel_headers:
+          type: boolean
+          description: |
+            Skip kernel headers installation during boot for faster startup.
+            When true, DKMS (Dynamic Kernel Module Support) will not work,
+            preventing compilation of out-of-tree kernel modules (e.g., NVIDIA vGPU drivers).
+            Recommended for workloads that don't need kernel module compilation.
+          default: false
+          example: true
+        skip_guest_agent:
+          type: boolean
+          description: |
+            Skip guest-agent installation during boot.
+            When true, the exec and stat APIs will not work for this instance.
+            The instance will still run, but remote command execution will be unavailable.
+          default: false
+          example: false
         # Future: port_mappings, timeout_seconds
     
     Instance:

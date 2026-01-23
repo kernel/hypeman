@@ -229,6 +229,8 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		Volumes:                  volumes,
 		Hypervisor:               hvType,
 		GPU:                      gpuConfig,
+		SkipKernelHeaders:        request.Body.SkipKernelHeaders != nil && *request.Body.SkipKernelHeaders,
+		SkipGuestAgent:           request.Body.SkipGuestAgent != nil && *request.Body.SkipGuestAgent,
 	}
 
 	inst, err := s.InstanceManager.CreateInstance(ctx, domainReq)
