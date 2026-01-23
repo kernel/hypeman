@@ -8,6 +8,7 @@ import (
 
 	"github.com/kernel/hypeman-go"
 	"github.com/kernel/hypeman-go/option"
+	"github.com/tidwall/gjson"
 	"github.com/urfave/cli/v3"
 )
 
@@ -144,6 +145,21 @@ func handleIngressList(ctx context.Context, cmd *cli.Command) error {
 	var opts []option.RequestOption
 	if cmd.Root().Bool("debug") {
 		opts = append(opts, debugMiddlewareOption)
+	}
+
+	format := cmd.Root().String("format")
+	transform := cmd.Root().String("transform")
+
+	// If a specific format is requested (not "auto"), output in that format
+	if format != "auto" {
+		var res []byte
+		opts = append(opts, option.WithResponseBodyInto(&res))
+		_, err := client.Ingresses.List(ctx, opts...)
+		if err != nil {
+			return err
+		}
+		obj := gjson.ParseBytes(res)
+		return ShowJSON(os.Stdout, "ingress list", obj, format, transform)
 	}
 
 	ingresses, err := client.Ingresses.List(ctx, opts...)
