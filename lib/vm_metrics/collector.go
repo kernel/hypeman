@@ -8,6 +8,13 @@ import (
 	"strings"
 )
 
+// userHZ is the clock tick rate used by /proc for CPU times.
+// This is USER_HZ (not kernel CONFIG_HZ), which is always 100 on Linux.
+// The kernel converts internal HZ to USER_HZ when writing to /proc to
+// maintain a stable userspace ABI. This has been 100 since Linux 2.4.
+// See: https://man7.org/linux/man-pages/man5/proc.5.html (search for "clock ticks")
+const userHZ = 100
+
 // ReadProcStat reads CPU time from /proc/<pid>/stat.
 // Returns total CPU time (user + system) in microseconds.
 // Fields 14 and 15 are utime and stime in clock ticks.
@@ -49,10 +56,8 @@ func ReadProcStat(pid int) (uint64, error) {
 	}
 
 	// Convert clock ticks to microseconds
-	// Clock ticks are typically 100 per second (sysconf(_SC_CLK_TCK))
-	// 1 tick = 10000 microseconds (for 100 Hz)
-	const ticksPerSecond = 100
-	const usecPerTick = 1_000_000 / ticksPerSecond
+	// /proc reports CPU times in USER_HZ (always 100 on Linux)
+	const usecPerTick = 1_000_000 / userHZ
 
 	totalUsec := (utime + stime) * usecPerTick
 	return totalUsec, nil
