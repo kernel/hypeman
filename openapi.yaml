@@ -2315,6 +2315,17 @@ paths:
                     JSON array of secret references to inject during build.
                     Each object has "id" (required) for use with --mount=type=secret,id=...
                     Example: [{"id": "npm_token"}, {"id": "github_token"}]
+                is_admin_build:
+                  type: string
+                  description: |
+                    Set to "true" to grant push access to global cache (operator-only).
+                    Admin builds can populate the shared global cache that all tenant builds read from.
+                global_cache_runtime:
+                  type: string
+                  description: |
+                    Runtime category for global cache (e.g., "node", "python", "go").
+                    When specified, the build will import from cache/global/{runtime}.
+                    Admin builds will also export to this location.
       responses:
         202:
           description: Build created and queued

@@ -52,6 +52,15 @@ type CreateBuildRequest struct {
 
 	// Secrets are secret references to inject during build
 	Secrets []SecretRef `json:"secrets,omitempty"`
+
+	// IsAdminBuild grants push access to global cache (operator-only).
+	// Regular tenant builds only get pull access to global cache.
+	IsAdminBuild bool `json:"is_admin_build,omitempty"`
+
+	// GlobalCacheRuntime is the runtime category for global cache (e.g., "node", "python").
+	// Used with IsAdminBuild to target cache/global/{runtime}.
+	// Regular builds import from cache/global/{runtime} with pull-only access.
+	GlobalCacheRuntime string `json:"global_cache_runtime,omitempty"`
 }
 
 // BuildPolicy defines resource limits and network policy for a build
@@ -137,6 +146,12 @@ type BuildConfig struct {
 
 	// NetworkMode is "isolated" or "egress"
 	NetworkMode string `json:"network_mode"`
+
+	// IsAdminBuild indicates this is an admin build with push access to global cache
+	IsAdminBuild bool `json:"is_admin_build,omitempty"`
+
+	// GlobalCacheRuntime is the runtime category for global cache (e.g., "node", "python")
+	GlobalCacheRuntime string `json:"global_cache_runtime,omitempty"`
 }
 
 // BuildEvent represents a typed SSE event for build streaming

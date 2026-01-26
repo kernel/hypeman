@@ -37,17 +37,19 @@ const (
 
 // BuildConfig matches the BuildConfig type from lib/builds/types.go
 type BuildConfig struct {
-	JobID           string            `json:"job_id"`
-	BaseImageDigest string            `json:"base_image_digest,omitempty"`
-	RegistryURL     string            `json:"registry_url"`
-	RegistryToken   string            `json:"registry_token,omitempty"`
-	CacheScope      string            `json:"cache_scope,omitempty"`
-	SourcePath      string            `json:"source_path"`
-	Dockerfile      string            `json:"dockerfile,omitempty"`
-	BuildArgs       map[string]string `json:"build_args,omitempty"`
-	Secrets         []SecretRef       `json:"secrets,omitempty"`
-	TimeoutSeconds  int               `json:"timeout_seconds"`
-	NetworkMode     string            `json:"network_mode"`
+	JobID              string            `json:"job_id"`
+	BaseImageDigest    string            `json:"base_image_digest,omitempty"`
+	RegistryURL        string            `json:"registry_url"`
+	RegistryToken      string            `json:"registry_token,omitempty"`
+	CacheScope         string            `json:"cache_scope,omitempty"`
+	SourcePath         string            `json:"source_path"`
+	Dockerfile         string            `json:"dockerfile,omitempty"`
+	BuildArgs          map[string]string `json:"build_args,omitempty"`
+	Secrets            []SecretRef       `json:"secrets,omitempty"`
+	TimeoutSeconds     int               `json:"timeout_seconds"`
+	NetworkMode        string            `json:"network_mode"`
+	IsAdminBuild       bool              `json:"is_admin_build,omitempty"`
+	GlobalCacheRuntime string            `json:"global_cache_runtime,omitempty"`
 }
 
 // SecretRef references a secret to inject during build
@@ -547,11 +549,40 @@ func runBuild(ctx context.Context, config *BuildConfig, logWriter io.Writer) (st
 		"--metadata-file", "/tmp/build-metadata.json",
 	}
 
-	// Add cache if scope is set
-	if config.CacheScope != "" {
-		cacheRef := fmt.Sprintf("%s/cache/%s", config.RegistryURL, config.CacheScope)
-		args = append(args, "--import-cache", fmt.Sprintf("type=registry,ref=%s,registry.insecure=true", cacheRef))
-		args = append(args, "--export-cache", fmt.Sprintf("type=registry,ref=%s,mode=max,registry.insecure=true", cacheRef))
+	// Two-tier cache implementation:
+	// 1. Import from global cache (if runtime specified) - always read-only for regular builds
+	// 2. Import from tenant cache (if cache scope specified)
+	// 3. Export to appropriate target based on build type
+
+	// Import from global cache (read-only for regular builds, read-write for admin builds)
+	if config.GlobalCacheRuntime != "" {
+		globalCacheRef := fmt.Sprintf("%s/cache/global/%s", config.RegistryURL, config.GlobalCacheRuntime)
+		args = append(args, "--import-cache", fmt.Sprintf("type=registry,ref=%s,registry.insecure=true", globalCacheRef))
+		log.Printf("Importing from global cache: %s", globalCacheRef)
+	}
+
+	// For regular builds, also import from tenant cache if scope is set
+	if !config.IsAdminBuild && config.CacheScope != "" {
+		tenantCacheRef := fmt.Sprintf("%s/cache/%s", config.RegistryURL, config.CacheScope)
+		args = append(args, "--import-cache", fmt.Sprintf("type=registry,ref=%s,registry.insecure=true", tenantCacheRef))
+		log.Printf("Importing from tenant cache: %s", tenantCacheRef)
+	}
+
+	// Export cache based on build type
+	if config.IsAdminBuild {
+		// Admin build: export to global cache
+		if config.GlobalCacheRuntime != "" {
+			globalCacheRef := fmt.Sprintf("%s/cache/global/%s", config.RegistryURL, config.GlobalCacheRuntime)
+			args = append(args, "--export-cache", fmt.Sprintf("type=registry,ref=%s,mode=max,registry.insecure=true", globalCacheRef))
+			log.Printf("Exporting to global cache (admin build): %s", globalCacheRef)
+		}
+	} else {
+		// Regular build: export to tenant cache
+		if config.CacheScope != "" {
+			tenantCacheRef := fmt.Sprintf("%s/cache/%s", config.RegistryURL, config.CacheScope)
+			args = append(args, "--export-cache", fmt.Sprintf("type=registry,ref=%s,mode=max,registry.insecure=true", tenantCacheRef))
+			log.Printf("Exporting to tenant cache: %s", tenantCacheRef)
+		}
 	}
 
 	// Add secret mounts

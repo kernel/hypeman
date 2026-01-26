@@ -191,16 +191,45 @@ func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourc
 	}
 
 	// Generate scoped registry token for this build
-	// Token grants push access to the build output repo and cache repo
-	allowedRepos := []string{fmt.Sprintf("builds/%s", id)}
-	if req.CacheScope != "" {
-		allowedRepos = append(allowedRepos, fmt.Sprintf("cache/%s", req.CacheScope))
-	}
+	// Token grants per-repo access based on build type:
+	// - Regular builds: push to builds/{id}, push to cache/{tenant}, pull from cache/global/{runtime}
+	// - Admin builds: push to builds/{id}, push to cache/global/{runtime}
 	tokenTTL := time.Duration(policy.TimeoutSeconds) * time.Second
 	if tokenTTL < 30*time.Minute {
 		tokenTTL = 30 * time.Minute // Minimum 30 minutes
 	}
-	registryToken, err := m.tokenGenerator.GeneratePushToken(id, allowedRepos, tokenTTL)
+
+	repoAccess := []RepoPermission{
+		{Repo: fmt.Sprintf("builds/%s", id), Scope: "push"},
+	}
+
+	if req.IsAdminBuild {
+		// Admin build: push access to global cache
+		if req.GlobalCacheRuntime != "" {
+			repoAccess = append(repoAccess, RepoPermission{
+				Repo:  fmt.Sprintf("cache/global/%s", req.GlobalCacheRuntime),
+				Scope: "push",
+			})
+		}
+	} else {
+		// Regular tenant build
+		// Pull access to global cache (if runtime specified)
+		if req.GlobalCacheRuntime != "" {
+			repoAccess = append(repoAccess, RepoPermission{
+				Repo:  fmt.Sprintf("cache/global/%s", req.GlobalCacheRuntime),
+				Scope: "pull",
+			})
+		}
+		// Push access to tenant cache (if cache scope specified)
+		if req.CacheScope != "" {
+			repoAccess = append(repoAccess, RepoPermission{
+				Repo:  fmt.Sprintf("cache/%s", req.CacheScope),
+				Scope: "push",
+			})
+		}
+	}
+
+	registryToken, err := m.tokenGenerator.GenerateToken(id, repoAccess, tokenTTL)
 	if err != nil {
 		deleteBuild(m.paths, id)
 		return nil, fmt.Errorf("generate registry token: %w", err)
@@ -208,17 +237,19 @@ func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourc
 
 	// Write build config for the builder agent
 	buildConfig := &BuildConfig{
-		JobID:           id,
-		BaseImageDigest: req.BaseImageDigest,
-		RegistryURL:     m.config.RegistryURL,
-		RegistryToken:   registryToken,
-		CacheScope:      req.CacheScope,
-		SourcePath:      "/src",
-		Dockerfile:      req.Dockerfile,
-		BuildArgs:       req.BuildArgs,
-		Secrets:         req.Secrets,
-		TimeoutSeconds:  policy.TimeoutSeconds,
-		NetworkMode:     policy.NetworkMode,
+		JobID:              id,
+		BaseImageDigest:    req.BaseImageDigest,
+		RegistryURL:        m.config.RegistryURL,
+		RegistryToken:      registryToken,
+		CacheScope:         req.CacheScope,
+		SourcePath:         "/src",
+		Dockerfile:         req.Dockerfile,
+		BuildArgs:          req.BuildArgs,
+		Secrets:            req.Secrets,
+		TimeoutSeconds:     policy.TimeoutSeconds,
+		NetworkMode:        policy.NetworkMode,
+		IsAdminBuild:       req.IsAdminBuild,
+		GlobalCacheRuntime: req.GlobalCacheRuntime,
 	}
 	if err := writeBuildConfig(m.paths, id, buildConfig); err != nil {
 		deleteBuild(m.paths, id)
@@ -1046,14 +1077,37 @@ func (m *manager) refreshBuildToken(buildID string, req *CreateBuildRequest) err
 		tokenTTL = 30 * time.Minute // Minimum 30 minutes
 	}
 
-	// Generate allowed repos list
-	allowedRepos := []string{fmt.Sprintf("builds/%s", buildID)}
-	if req.CacheScope != "" {
-		allowedRepos = append(allowedRepos, fmt.Sprintf("cache/%s", req.CacheScope))
+	// Generate per-repo access list (same logic as CreateBuild)
+	repoAccess := []RepoPermission{
+		{Repo: fmt.Sprintf("builds/%s", buildID), Scope: "push"},
+	}
+
+	if req.IsAdminBuild {
+		// Admin build: push access to global cache
+		if req.GlobalCacheRuntime != "" {
+			repoAccess = append(repoAccess, RepoPermission{
+				Repo:  fmt.Sprintf("cache/global/%s", req.GlobalCacheRuntime),
+				Scope: "push",
+			})
+		}
+	} else {
+		// Regular tenant build
+		if req.GlobalCacheRuntime != "" {
+			repoAccess = append(repoAccess, RepoPermission{
+				Repo:  fmt.Sprintf("cache/global/%s", req.GlobalCacheRuntime),
+				Scope: "pull",
+			})
+		}
+		if req.CacheScope != "" {
+			repoAccess = append(repoAccess, RepoPermission{
+				Repo:  fmt.Sprintf("cache/%s", req.CacheScope),
+				Scope: "push",
+			})
+		}
 	}
 
 	// Generate fresh registry token
-	registryToken, err := m.tokenGenerator.GeneratePushToken(buildID, allowedRepos, tokenTTL)
+	registryToken, err := m.tokenGenerator.GenerateToken(buildID, repoAccess, tokenTTL)
 	if err != nil {
 		return fmt.Errorf("generate registry token: %w", err)
 	}

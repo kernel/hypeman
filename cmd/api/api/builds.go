@@ -41,8 +41,9 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 
 	// Parse multipart form fields
 	var sourceData []byte
-	var baseImageDigest, cacheScope, dockerfile string
+	var baseImageDigest, cacheScope, dockerfile, globalCacheRuntime string
 	var timeoutSeconds int
+	var isAdminBuild bool
 	var secrets []builds.SecretRef
 
 	for {
@@ -118,6 +119,24 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 					Message: "secrets must be a JSON array of {\"id\": \"...\", \"env_var\": \"...\"} objects",
 				}, nil
 			}
+		case "is_admin_build":
+			data, err := io.ReadAll(part)
+			if err != nil {
+				return oapi.CreateBuild400JSONResponse{
+					Code:    "invalid_request",
+					Message: "failed to read is_admin_build field",
+				}, nil
+			}
+			isAdminBuild = string(data) == "true" || string(data) == "1"
+		case "global_cache_runtime":
+			data, err := io.ReadAll(part)
+			if err != nil {
+				return oapi.CreateBuild400JSONResponse{
+					Code:    "invalid_request",
+					Message: "failed to read global_cache_runtime field",
+				}, nil
+			}
+			globalCacheRuntime = string(data)
 		}
 		part.Close()
 	}
@@ -134,10 +153,12 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 
 	// Build domain request
 	domainReq := builds.CreateBuildRequest{
-		BaseImageDigest: baseImageDigest,
-		CacheScope:      cacheScope,
-		Dockerfile:      dockerfile,
-		Secrets:         secrets,
+		BaseImageDigest:    baseImageDigest,
+		CacheScope:         cacheScope,
+		Dockerfile:         dockerfile,
+		Secrets:            secrets,
+		IsAdminBuild:       isAdminBuild,
+		GlobalCacheRuntime: globalCacheRuntime,
 	}
 
 	// Apply timeout if provided
