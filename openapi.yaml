@@ -2320,11 +2320,11 @@ paths:
                   description: |
                     Set to "true" to grant push access to global cache (operator-only).
                     Admin builds can populate the shared global cache that all tenant builds read from.
-                global_cache_runtime:
+                global_cache_key:
                   type: string
                   description: |
-                    Runtime category for global cache (e.g., "node", "python", "go").
-                    When specified, the build will import from cache/global/{runtime}.
+                    Global cache identifier (e.g., "node", "python", "ubuntu", "browser").
+                    When specified, the build will import from cache/global/{key}.
                     Admin builds will also export to this location.
       responses:
         202:

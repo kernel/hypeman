@@ -49,7 +49,7 @@ type BuildConfig struct {
 	TimeoutSeconds     int               `json:"timeout_seconds"`
 	NetworkMode        string            `json:"network_mode"`
 	IsAdminBuild       bool              `json:"is_admin_build,omitempty"`
-	GlobalCacheRuntime string            `json:"global_cache_runtime,omitempty"`
+	GlobalCacheKey string            `json:"global_cache_key,omitempty"`
 }
 
 // SecretRef references a secret to inject during build
@@ -555,8 +555,8 @@ func runBuild(ctx context.Context, config *BuildConfig, logWriter io.Writer) (st
 	// 3. Export to appropriate target based on build type
 
 	// Import from global cache (read-only for regular builds, read-write for admin builds)
-	if config.GlobalCacheRuntime != "" {
-		globalCacheRef := fmt.Sprintf("%s/cache/global/%s", config.RegistryURL, config.GlobalCacheRuntime)
+	if config.GlobalCacheKey != "" {
+		globalCacheRef := fmt.Sprintf("%s/cache/global/%s", config.RegistryURL, config.GlobalCacheKey)
 		args = append(args, "--import-cache", fmt.Sprintf("type=registry,ref=%s,registry.insecure=true", globalCacheRef))
 		log.Printf("Importing from global cache: %s", globalCacheRef)
 	}
@@ -571,8 +571,8 @@ func runBuild(ctx context.Context, config *BuildConfig, logWriter io.Writer) (st
 	// Export cache based on build type
 	if config.IsAdminBuild {
 		// Admin build: export to global cache
-		if config.GlobalCacheRuntime != "" {
-			globalCacheRef := fmt.Sprintf("%s/cache/global/%s", config.RegistryURL, config.GlobalCacheRuntime)
+		if config.GlobalCacheKey != "" {
+			globalCacheRef := fmt.Sprintf("%s/cache/global/%s", config.RegistryURL, config.GlobalCacheKey)
 			args = append(args, "--export-cache", fmt.Sprintf("type=registry,ref=%s,mode=max,registry.insecure=true", globalCacheRef))
 			log.Printf("Exporting to global cache (admin build): %s", globalCacheRef)
 		}

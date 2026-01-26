@@ -41,7 +41,7 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 
 	// Parse multipart form fields
 	var sourceData []byte
-	var baseImageDigest, cacheScope, dockerfile, globalCacheRuntime string
+	var baseImageDigest, cacheScope, dockerfile, globalCacheKey string
 	var timeoutSeconds int
 	var isAdminBuild bool
 	var secrets []builds.SecretRef
@@ -128,15 +128,15 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 				}, nil
 			}
 			isAdminBuild = string(data) == "true" || string(data) == "1"
-		case "global_cache_runtime":
+		case "global_cache_key":
 			data, err := io.ReadAll(part)
 			if err != nil {
 				return oapi.CreateBuild400JSONResponse{
 					Code:    "invalid_request",
-					Message: "failed to read global_cache_runtime field",
+					Message: "failed to read global_cache_key field",
 				}, nil
 			}
-			globalCacheRuntime = string(data)
+			globalCacheKey = string(data)
 		}
 		part.Close()
 	}
@@ -158,7 +158,7 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 		Dockerfile:         dockerfile,
 		Secrets:            secrets,
 		IsAdminBuild:       isAdminBuild,
-		GlobalCacheRuntime: globalCacheRuntime,
+		GlobalCacheKey: globalCacheKey,
 	}
 
 	// Apply timeout if provided

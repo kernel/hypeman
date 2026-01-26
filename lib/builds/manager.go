@@ -205,18 +205,18 @@ func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourc
 
 	if req.IsAdminBuild {
 		// Admin build: push access to global cache
-		if req.GlobalCacheRuntime != "" {
+		if req.GlobalCacheKey != "" {
 			repoAccess = append(repoAccess, RepoPermission{
-				Repo:  fmt.Sprintf("cache/global/%s", req.GlobalCacheRuntime),
+				Repo:  fmt.Sprintf("cache/global/%s", req.GlobalCacheKey),
 				Scope: "push",
 			})
 		}
 	} else {
 		// Regular tenant build
 		// Pull access to global cache (if runtime specified)
-		if req.GlobalCacheRuntime != "" {
+		if req.GlobalCacheKey != "" {
 			repoAccess = append(repoAccess, RepoPermission{
-				Repo:  fmt.Sprintf("cache/global/%s", req.GlobalCacheRuntime),
+				Repo:  fmt.Sprintf("cache/global/%s", req.GlobalCacheKey),
 				Scope: "pull",
 			})
 		}
@@ -249,7 +249,7 @@ func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourc
 		TimeoutSeconds:     policy.TimeoutSeconds,
 		NetworkMode:        policy.NetworkMode,
 		IsAdminBuild:       req.IsAdminBuild,
-		GlobalCacheRuntime: req.GlobalCacheRuntime,
+		GlobalCacheKey: req.GlobalCacheKey,
 	}
 	if err := writeBuildConfig(m.paths, id, buildConfig); err != nil {
 		deleteBuild(m.paths, id)
@@ -1084,17 +1084,17 @@ func (m *manager) refreshBuildToken(buildID string, req *CreateBuildRequest) err
 
 	if req.IsAdminBuild {
 		// Admin build: push access to global cache
-		if req.GlobalCacheRuntime != "" {
+		if req.GlobalCacheKey != "" {
 			repoAccess = append(repoAccess, RepoPermission{
-				Repo:  fmt.Sprintf("cache/global/%s", req.GlobalCacheRuntime),
+				Repo:  fmt.Sprintf("cache/global/%s", req.GlobalCacheKey),
 				Scope: "push",
 			})
 		}
 	} else {
 		// Regular tenant build
-		if req.GlobalCacheRuntime != "" {
+		if req.GlobalCacheKey != "" {
 			repoAccess = append(repoAccess, RepoPermission{
-				Repo:  fmt.Sprintf("cache/global/%s", req.GlobalCacheRuntime),
+				Repo:  fmt.Sprintf("cache/global/%s", req.GlobalCacheKey),
 				Scope: "pull",
 			})
 		}

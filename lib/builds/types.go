@@ -57,10 +57,10 @@ type CreateBuildRequest struct {
 	// Regular tenant builds only get pull access to global cache.
 	IsAdminBuild bool `json:"is_admin_build,omitempty"`
 
-	// GlobalCacheRuntime is the runtime category for global cache (e.g., "node", "python").
-	// Used with IsAdminBuild to target cache/global/{runtime}.
-	// Regular builds import from cache/global/{runtime} with pull-only access.
-	GlobalCacheRuntime string `json:"global_cache_runtime,omitempty"`
+	// GlobalCacheKey is the global cache identifier (e.g., "node", "python", "ubuntu", "browser").
+	// Used with IsAdminBuild to target cache/global/{key}.
+	// Regular builds import from cache/global/{key} with pull-only access.
+	GlobalCacheKey string `json:"global_cache_key,omitempty"`
 }
 
 // BuildPolicy defines resource limits and network policy for a build
@@ -150,8 +150,8 @@ type BuildConfig struct {
 	// IsAdminBuild indicates this is an admin build with push access to global cache
 	IsAdminBuild bool `json:"is_admin_build,omitempty"`
 
-	// GlobalCacheRuntime is the runtime category for global cache (e.g., "node", "python")
-	GlobalCacheRuntime string `json:"global_cache_runtime,omitempty"`
+	// GlobalCacheKey is the global cache identifier (e.g., "node", "python", "ubuntu", "browser")
+	GlobalCacheKey string `json:"global_cache_key,omitempty"`
 }
 
 // BuildEvent represents a typed SSE event for build streaming
