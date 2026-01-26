@@ -17,8 +17,10 @@ type contextKey string
 
 const userIDKey contextKey = "user_id"
 
-// registryPathPattern matches /v2/{repository}/... paths
-var registryPathPattern = regexp.MustCompile(`^/v2/([^/]+(?:/[^/]+)?)/`)
+// registryPathPattern matches /v2/{repository}/(manifests|blobs)/... paths
+// Supports 1-3 segment repos: builds/id, cache/tenant, cache/global/key
+// Uses non-greedy match to capture repo path before /manifests/ or /blobs/
+var registryPathPattern = regexp.MustCompile(`^/v2/(.+?)/(manifests|blobs)/`)
 
 // RepoPermission defines access permissions for a specific repository.
 // This mirrors the type in lib/builds/registry_token.go to avoid circular imports.
