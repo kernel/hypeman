@@ -284,16 +284,17 @@ func (r buildEventsStreamResponse) VisitGetBuildEventsResponse(w http.ResponseWr
 // buildToOAPI converts a domain Build to OAPI Build
 func buildToOAPI(b *builds.Build) oapi.Build {
 	oapiBuild := oapi.Build{
-		Id:            b.ID,
-		Status:        oapi.BuildStatus(b.Status),
-		QueuePosition: b.QueuePosition,
-		ImageDigest:   b.ImageDigest,
-		ImageRef:      b.ImageRef,
-		Error:         b.Error,
-		CreatedAt:     b.CreatedAt,
-		StartedAt:     b.StartedAt,
-		CompletedAt:   b.CompletedAt,
-		DurationMs:    b.DurationMS,
+		Id:                b.ID,
+		Status:            oapi.BuildStatus(b.Status),
+		QueuePosition:     b.QueuePosition,
+		ImageDigest:       b.ImageDigest,
+		ImageRef:          b.ImageRef,
+		Error:             b.Error,
+		CreatedAt:         b.CreatedAt,
+		StartedAt:         b.StartedAt,
+		CompletedAt:       b.CompletedAt,
+		DurationMs:        b.DurationMS,
+		BuilderInstanceId: b.BuilderInstanceID,
 	}
 
 	if b.Provenance != nil {
@@ -310,4 +311,3 @@ func buildToOAPI(b *builds.Build) oapi.Build {
 
 	return oapiBuild
 }
-

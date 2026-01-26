@@ -29,16 +29,17 @@ type buildMetadata struct {
 // toBuild converts internal metadata to the public Build type
 func (m *buildMetadata) toBuild() *Build {
 	return &Build{
-		ID:          m.ID,
-		Status:      m.Status,
-		ImageDigest: m.ImageDigest,
-		ImageRef:    m.ImageRef,
-		Error:       m.Error,
-		Provenance:  m.Provenance,
-		CreatedAt:   m.CreatedAt,
-		StartedAt:   m.StartedAt,
-		CompletedAt: m.CompletedAt,
-		DurationMS:  m.DurationMS,
+		ID:                m.ID,
+		Status:            m.Status,
+		ImageDigest:       m.ImageDigest,
+		ImageRef:          m.ImageRef,
+		Error:             m.Error,
+		Provenance:        m.Provenance,
+		CreatedAt:         m.CreatedAt,
+		StartedAt:         m.StartedAt,
+		CompletedAt:       m.CompletedAt,
+		DurationMS:        m.DurationMS,
+		BuilderInstanceID: m.BuilderInstance,
 	}
 }
 
