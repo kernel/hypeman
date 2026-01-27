@@ -4,6 +4,7 @@ package middleware
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -96,12 +97,22 @@ func ResolveResource(resolvers Resolvers, errResponder ErrorResponder) func(http
 			}
 
 			// Get the ID parameter from the URL
+			// chi.URLParam returns the raw URL-encoded value, so we must decode it.
+			// For example, "docker.io%2Flibrary%2Falpine" -> "docker.io/library/alpine"
 			idOrName := chi.URLParam(r, paramName)
 			if idOrName == "" {
 				// No ID in path (e.g., list or create endpoint)
 				next.ServeHTTP(w, r)
 				return
 			}
+
+			// URL-decode the parameter (handles %2F -> /, %3A -> :, etc.)
+			decoded, err := url.PathUnescape(idOrName)
+			if err != nil {
+				// If decoding fails, use the original value (should be rare)
+				decoded = idOrName
+			}
+			idOrName = decoded
 
 			// Resolve the resource
 			resolvedID, resource, err := resolver.Resolve(ctx, idOrName)

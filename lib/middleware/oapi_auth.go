@@ -5,11 +5,12 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/http"
-	"regexp"
 	"strings"
 
+	v2 "github.com/docker/distribution/registry/api/v2"
 	"github.com/getkin/kin-openapi/openapi3filter"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/gorilla/mux"
 	"github.com/kernel/hypeman/lib/logger"
 )
 
@@ -17,8 +18,9 @@ type contextKey string
 
 const userIDKey contextKey = "user_id"
 
-// registryPathPattern matches /v2/{repository}/... paths
-var registryPathPattern = regexp.MustCompile(`^/v2/([^/]+(?:/[^/]+)?)/`)
+// registryRouter is the OCI Distribution API router from docker/distribution.
+// It properly parses repository names (which can contain slashes) from /v2/ paths.
+var registryRouter = v2.Router()
 
 // RegistryTokenClaims contains the claims for a scoped registry access token.
 // This mirrors the type in lib/builds/registry_token.go to avoid circular imports.
@@ -201,10 +203,21 @@ func isInternalVMRequest(r *http.Request) bool {
 
 // extractRepoFromPath extracts the repository name from a registry path.
 // e.g., "/v2/builds/abc123/manifests/latest" -> "builds/abc123"
+// extractRepoFromPath extracts the repository name from a registry path.
+// Uses the docker/distribution router which properly handles repository names
+// that can contain slashes (e.g., "builds/abc123" from "/v2/builds/abc123/manifests/latest").
 func extractRepoFromPath(path string) string {
-	matches := registryPathPattern.FindStringSubmatch(path)
-	if len(matches) >= 2 {
-		return matches[1]
+	// Create a minimal request for route matching
+	req, err := http.NewRequest(http.MethodGet, path, nil)
+	if err != nil {
+		return ""
+	}
+
+	var match mux.RouteMatch
+	if registryRouter.Match(req, &match) {
+		if name, ok := match.Vars["name"]; ok {
+			return name
+		}
 	}
 	return ""
 }

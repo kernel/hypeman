@@ -384,6 +384,7 @@ EnvironmentFile=${CONFIG_FILE}
 ExecStart=${INSTALL_DIR}/${BINARY_NAME}
 Restart=on-failure
 RestartSec=5
+KillMode=process
 
 # Security hardening
 ProtectSystem=strict
