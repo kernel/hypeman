@@ -136,6 +136,95 @@ func TestOapiRuntimeBindStyledParameter_URLDecoding(t *testing.T) {
 	}
 }
 
+func TestGetImage_URLEncodedSlashes(t *testing.T) {
+	// This test reproduces the bug where URL-encoded image names are not properly
+	// decoded before being passed to the image reference parser.
+	//
+	// Bug: curl "https://server/images/docker.io%2Flibrary%2Fnginx:alpine"
+	// Returns: {"code":"invalid_name","message":"invalid image reference"}
+	// Expected: 200 with image details (or 404 if not found)
+	//
+	// The server passes "docker.io%2Flibrary%2Fnginx:alpine" (still encoded)
+	// to the parser instead of "docker.io/library/nginx:alpine" (decoded).
+
+	r := chi.NewRouter()
+
+	// Track what name the handler receives through the oapi wrapper
+	var receivedName string
+
+	// Create a handler that implements oapi.ServerInterface
+	handler := &testImageHandler{
+		getImage: func(w http.ResponseWriter, r *http.Request, name string) {
+			receivedName = name
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(`{"code":"not_found","message":"image not found"}`))
+		},
+	}
+
+	// Mount using oapi's HandlerFromMux which uses the generated wrappers
+	// This tests the full path: chi.URLParam -> runtime.BindStyledParameterWithOptions -> handler
+	oapi.HandlerFromMux(handler, r)
+
+	token, err := generateValidJWT("user-123")
+	require.NoError(t, err)
+
+	tests := []struct {
+		name         string
+		path         string
+		expectedName string
+	}{
+		{
+			name:         "simple image name",
+			path:         "/images/alpine:latest",
+			expectedName: "alpine:latest",
+		},
+		{
+			name:         "URL-encoded slashes should be decoded",
+			path:         "/images/docker.io%2Flibrary%2Fnginx%3Aalpine",
+			expectedName: "docker.io/library/nginx:alpine", // Must be decoded!
+		},
+		{
+			name:         "URL-encoded with colon",
+			path:         "/images/docker.io%2Flibrary%2Falpine%3Alatest",
+			expectedName: "docker.io/library/alpine:latest",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			receivedName = "" // Reset
+
+			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
+			req.Header.Set("Authorization", "Bearer "+token)
+
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+
+			// We expect 404 (image not found) - that's fine, we're testing the name decoding
+			// NOT 400 (invalid_name) which would indicate the encoded string wasn't decoded
+			assert.NotEqual(t, http.StatusBadRequest, w.Code,
+				"Got 400 Bad Request - URL-encoded name was likely not decoded. Path: %s, Body: %s",
+				tt.path, w.Body.String())
+
+			assert.Equal(t, tt.expectedName, receivedName,
+				"Handler received wrong name - URL decoding may have failed")
+		})
+	}
+}
+
+// testImageHandler implements oapi.ServerInterface with just GetImage for testing
+type testImageHandler struct {
+	oapi.Unimplemented
+	getImage func(w http.ResponseWriter, r *http.Request, name string)
+}
+
+func (h *testImageHandler) GetImage(w http.ResponseWriter, r *http.Request, name string) {
+	if h.getImage != nil {
+		h.getImage(w, r, name)
+	}
+}
+
 func TestImageNameWithSlashes_URLEncoding(t *testing.T) {
 	// This test verifies how chi router handles image names with slashes.
 	// Image names like "docker.io/onkernel/chromium-headful:latest" contain slashes
