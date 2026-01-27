@@ -135,6 +135,74 @@ func TestJwtAuth_RejectsRegistryTokens(t *testing.T) {
 	})
 }
 
+func TestExtractRepoFromPath(t *testing.T) {
+	tests := []struct {
+		name     string
+		path     string
+		expected string
+	}{
+		// Simple repository names
+		{
+			name:     "simple repo with manifests",
+			path:     "/v2/test-alpine/manifests/latest",
+			expected: "test-alpine",
+		},
+		{
+			name:     "simple repo with blobs",
+			path:     "/v2/test-alpine/blobs/sha256:abc123",
+			expected: "test-alpine",
+		},
+		{
+			name:     "simple repo with uploads",
+			path:     "/v2/test-alpine/blobs/uploads/uuid-here",
+			expected: "test-alpine",
+		},
+
+		// Nested repository names (like builds/abc123)
+		{
+			name:     "nested repo with manifests",
+			path:     "/v2/builds/abc123/manifests/latest",
+			expected: "builds/abc123",
+		},
+		{
+			name:     "nested repo with blobs",
+			path:     "/v2/builds/abc123/blobs/sha256:def456",
+			expected: "builds/abc123",
+		},
+		{
+			name:     "nested repo with uploads",
+			path:     "/v2/builds/abc123/blobs/uploads/uuid-here",
+			expected: "builds/abc123",
+		},
+
+		// Base path (no repo)
+		{
+			name:     "base path",
+			path:     "/v2/",
+			expected: "",
+		},
+
+		// Edge cases
+		{
+			name:     "repo named manifests-test",
+			path:     "/v2/manifests-test/manifests/latest",
+			expected: "manifests-test",
+		},
+		{
+			name:     "repo named blobs-data",
+			path:     "/v2/blobs-data/blobs/sha256:abc",
+			expected: "blobs-data",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := extractRepoFromPath(tt.path)
+			assert.Equal(t, tt.expected, result, "extractRepoFromPath(%q)", tt.path)
+		})
+	}
+}
+
 func TestJwtAuth_RequiresAuthorization(t *testing.T) {
 	nextHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -201,4 +269,3 @@ func TestJwtAuth_RequiresAuthorization(t *testing.T) {
 		assert.Contains(t, rr.Body.String(), "invalid token")
 	})
 }
-
