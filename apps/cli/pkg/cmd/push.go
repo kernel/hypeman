@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"strings"
@@ -70,11 +71,21 @@ func handlePush(ctx context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("invalid target: %w", err)
 	}
 
-	auth := &hypemanAuth{}
+	token := os.Getenv("HYPEMAN_BEARER_TOKEN")
+	if token == "" {
+		token = os.Getenv("HYPEMAN_API_KEY")
+	}
+
+	// Use custom transport that always sends Basic auth header
+	transport := &authTransport{
+		base:  http.DefaultTransport,
+		token: token,
+	}
 
 	err = remote.Write(dstRef, img,
 		remote.WithContext(ctx),
-		remote.WithAuth(auth),
+		remote.WithAuth(authn.Anonymous),
+		remote.WithTransport(transport),
 	)
 	if err != nil {
 		return fmt.Errorf("push failed: %w", err)
@@ -84,15 +95,17 @@ func handlePush(ctx context.Context, cmd *cli.Command) error {
 	return nil
 }
 
-type hypemanAuth struct{}
+// authTransport adds Basic auth header to all requests
+type authTransport struct {
+	base  http.RoundTripper
+	token string
+}
 
-func (a *hypemanAuth) Authorization() (*authn.AuthConfig, error) {
-	token := os.Getenv("HYPEMAN_BEARER_TOKEN")
-	if token == "" {
-		token = os.Getenv("HYPEMAN_API_KEY")
+func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if t.token != "" {
+		// Clone request to avoid modifying the original (RoundTripper contract)
+		req = req.Clone(req.Context())
+		req.Header.Set("Authorization", "Bearer "+t.token)
 	}
-	if token == "" {
-		return &authn.AuthConfig{}, nil
-	}
-	return &authn.AuthConfig{RegistryToken: token}, nil
+	return t.base.RoundTrip(req)
 }

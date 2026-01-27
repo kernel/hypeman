@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -114,7 +115,8 @@ func handleRun(ctx context.Context, cmd *cli.Command) error {
 	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
 
 	// Check if image exists and is ready
-	imgInfo, err := client.Images.Get(ctx, image)
+	// URL-encode the image name to handle slashes (e.g., docker.io/library/nginx:latest)
+	imgInfo, err := client.Images.Get(ctx, url.PathEscape(image))
 	if err != nil {
 		// Image not found, try to pull it
 		var apiErr *hypeman.Error
@@ -272,7 +274,7 @@ func waitForImageReady(ctx context.Context, client *hypeman.Client, img *hypeman
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			updated, err := client.Images.Get(ctx, img.Name)
+			updated, err := client.Images.Get(ctx, url.PathEscape(img.Name))
 			if err != nil {
 				return fmt.Errorf("failed to check image status: %w", err)
 			}

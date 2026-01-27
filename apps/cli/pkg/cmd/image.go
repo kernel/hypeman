@@ -5,6 +5,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 
 	"github.com/kernel/hypeman-cli/internal/apiquery"
@@ -145,7 +146,9 @@ func handleImagesDelete(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 
-	return client.Images.Delete(ctx, requestflag.CommandRequestValue[string](cmd, "name"), options...)
+	// URL-encode the name to handle slashes in image references (e.g., docker.io/library/nginx:latest)
+	name := url.PathEscape(requestflag.CommandRequestValue[string](cmd, "name"))
+	return client.Images.Delete(ctx, name, options...)
 }
 
 func handleImagesGet(ctx context.Context, cmd *cli.Command) error {
@@ -170,7 +173,9 @@ func handleImagesGet(ctx context.Context, cmd *cli.Command) error {
 
 	var res []byte
 	options = append(options, option.WithResponseBodyInto(&res))
-	_, err = client.Images.Get(ctx, requestflag.CommandRequestValue[string](cmd, "name"), options...)
+	// URL-encode the name to handle slashes in image references (e.g., docker.io/library/nginx:latest)
+	name := url.PathEscape(requestflag.CommandRequestValue[string](cmd, "name"))
+	_, err = client.Images.Get(ctx, name, options...)
 	if err != nil {
 		return err
 	}
