@@ -17,8 +17,10 @@ type contextKey string
 
 const userIDKey contextKey = "user_id"
 
-// registryPathPattern matches /v2/{repository}/... paths
-var registryPathPattern = regexp.MustCompile(`^/v2/([^/]+(?:/[^/]+)?)/`)
+// registryPathPattern matches /v2/{repository}/{action}/... paths where action is manifests, blobs, or tags.
+// The repository name is captured in group 1, and can contain slashes (e.g., "builds/abc123").
+// Uses non-greedy matching to capture the minimal repo name before the action keyword.
+var registryPathPattern = regexp.MustCompile(`^/v2/(.+?)/(manifests|blobs|tags)/`)
 
 // RegistryTokenClaims contains the claims for a scoped registry access token.
 // This mirrors the type in lib/builds/registry_token.go to avoid circular imports.
