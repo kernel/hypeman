@@ -33,6 +33,8 @@ func TestBuildNewWithOptionalParams(t *testing.T) {
 		BaseImageDigest: hypeman.String("base_image_digest"),
 		CacheScope:      hypeman.String("cache_scope"),
 		Dockerfile:      hypeman.String("dockerfile"),
+		GlobalCacheKey:  hypeman.String("global_cache_key"),
+		IsAdminBuild:    hypeman.String("is_admin_build"),
 		Secrets:         hypeman.String("secrets"),
 		TimeoutSeconds:  hypeman.Int(0),
 	})
