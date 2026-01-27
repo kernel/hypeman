@@ -82,6 +82,11 @@ export interface Build {
   status: BuildStatus;
 
   /**
+   * Instance ID of the builder VM (for debugging)
+   */
+  builder_instance_id?: string | null;
+
+  /**
    * Build completion timestamp
    */
   completed_at?: string | null;
@@ -217,6 +222,19 @@ export interface BuildCreateParams {
    * Dockerfile content. Required if not included in the source tarball.
    */
   dockerfile?: string;
+
+  /**
+   * Global cache identifier (e.g., "node", "python", "ubuntu", "browser"). When
+   * specified, the build will import from cache/global/{key}. Admin builds will also
+   * export to this location.
+   */
+  global_cache_key?: string;
+
+  /**
+   * Set to "true" to grant push access to global cache (operator-only). Admin builds
+   * can populate the shared global cache that all tenant builds read from.
+   */
+  is_admin_build?: string;
 
   /**
    * JSON array of secret references to inject during build. Each object has "id"
