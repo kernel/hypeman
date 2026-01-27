@@ -29,6 +29,8 @@ describe('resource builds', () => {
       base_image_digest: 'base_image_digest',
       cache_scope: 'cache_scope',
       dockerfile: 'dockerfile',
+      global_cache_key: 'global_cache_key',
+      is_admin_build: 'is_admin_build',
       secrets: 'secrets',
       timeout_seconds: 0,
     });
