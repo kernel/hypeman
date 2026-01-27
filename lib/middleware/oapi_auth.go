@@ -5,11 +5,12 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/http"
-	"regexp"
 	"strings"
 
+	v2 "github.com/docker/distribution/registry/api/v2"
 	"github.com/getkin/kin-openapi/openapi3filter"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/gorilla/mux"
 	"github.com/kernel/hypeman/lib/logger"
 )
 
@@ -17,27 +18,17 @@ type contextKey string
 
 const userIDKey contextKey = "user_id"
 
-// registryPathPattern matches /v2/{repository}/(manifests|blobs)/... paths
-// Supports 1-3 segment repos: builds/id, cache/tenant, cache/global/key
-// Uses non-greedy match to capture repo path before /manifests/ or /blobs/
-var registryPathPattern = regexp.MustCompile(`^/v2/(.+?)/(manifests|blobs)/`)
-
-// RepoPermission defines access permissions for a specific repository.
-// This mirrors the type in lib/builds/registry_token.go to avoid circular imports.
-type RepoPermission struct {
-	Repo  string `json:"repo"`
-	Scope string `json:"scope"`
-}
+// registryRouter is the OCI Distribution API router from docker/distribution.
+// It properly parses repository names (which can contain slashes) from /v2/ paths.
+var registryRouter = v2.Router()
 
 // RegistryTokenClaims contains the claims for a scoped registry access token.
 // This mirrors the type in lib/builds/registry_token.go to avoid circular imports.
 type RegistryTokenClaims struct {
 	jwt.RegisteredClaims
-	BuildID    string           `json:"build_id"`
-	RepoAccess []RepoPermission `json:"repo_access,omitempty"` // New per-repo format
-	// Legacy fields (kept for backward compat)
-	Repositories []string `json:"repos,omitempty"`
-	Scope        string   `json:"scope,omitempty"`
+	BuildID      string   `json:"build_id"`
+	Repositories []string `json:"repos"`
+	Scope        string   `json:"scope"`
 }
 
 // OapiAuthenticationFunc creates an AuthenticationFunc compatible with nethttp-middleware
@@ -212,10 +203,21 @@ func isInternalVMRequest(r *http.Request) bool {
 
 // extractRepoFromPath extracts the repository name from a registry path.
 // e.g., "/v2/builds/abc123/manifests/latest" -> "builds/abc123"
+// extractRepoFromPath extracts the repository name from a registry path.
+// Uses the docker/distribution router which properly handles repository names
+// that can contain slashes (e.g., "builds/abc123" from "/v2/builds/abc123/manifests/latest").
 func extractRepoFromPath(path string) string {
-	matches := registryPathPattern.FindStringSubmatch(path)
-	if len(matches) >= 2 {
-		return matches[1]
+	// Create a minimal request for route matching
+	req, err := http.NewRequest(http.MethodGet, path, nil)
+	if err != nil {
+		return ""
+	}
+
+	var match mux.RouteMatch
+	if registryRouter.Match(req, &match) {
+		if name, ok := match.Vars["name"]; ok {
+			return name
+		}
 	}
 	return ""
 }
@@ -244,8 +246,8 @@ func validateRegistryToken(tokenString, jwtSecret, requestPath, method string) (
 		return nil, fmt.Errorf("invalid token")
 	}
 
-	// Check if this is a registry token (has repos claim or repo_access claim)
-	if len(claims.RepoAccess) == 0 && len(claims.Repositories) == 0 {
+	// Check if this is a registry token (has repos claim)
+	if len(claims.Repositories) == 0 {
 		return nil, fmt.Errorf("not a registry token")
 	}
 
@@ -259,40 +261,24 @@ func validateRegistryToken(tokenString, jwtSecret, requestPath, method string) (
 		return nil, fmt.Errorf("could not extract repository from path")
 	}
 
-	// Check if the repository is allowed and get the scope for this repo
-	repoScope := getRepoScopeFromClaims(claims, repo)
-	if repoScope == "" {
+	// Check if the repository is allowed by the token
+	allowed := false
+	for _, allowedRepo := range claims.Repositories {
+		if allowedRepo == repo {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
 		return nil, fmt.Errorf("repository %s not allowed by token", repo)
 	}
 
 	// Check scope for write operations
-	if isWriteOperation(method) && repoScope != "push" {
-		return nil, fmt.Errorf("token does not allow write operations to %s (scope: %s)", repo, repoScope)
+	if isWriteOperation(method) && claims.Scope != "push" {
+		return nil, fmt.Errorf("token does not allow write operations")
 	}
 
 	return claims, nil
-}
-
-// getRepoScopeFromClaims returns the scope for a specific repository from the token claims.
-// Returns empty string if the repository is not allowed.
-func getRepoScopeFromClaims(claims *RegistryTokenClaims, repo string) string {
-	// Check new per-repo access format first
-	if len(claims.RepoAccess) > 0 {
-		for _, perm := range claims.RepoAccess {
-			if perm.Repo == repo {
-				return perm.Scope
-			}
-		}
-		return ""
-	}
-
-	// Fall back to legacy format - all repos have the same scope
-	for _, allowedRepo := range claims.Repositories {
-		if allowedRepo == repo {
-			return claims.Scope
-		}
-	}
-	return ""
 }
 
 // JwtAuth creates a chi middleware that validates JWT bearer tokens

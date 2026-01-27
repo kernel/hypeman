@@ -37,6 +37,9 @@ jobs:
       - name: Clean cached binaries
         run: make clean
 
+      - name: Generate OpenAPI code
+        run: make oapi-generate
+
       - name: Build
         run: make build
      

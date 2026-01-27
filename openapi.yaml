@@ -956,6 +956,10 @@ components:
           format: int64
           description: Build duration in milliseconds
           nullable: true
+        builder_instance_id:
+          type: string
+          description: Instance ID of the builder VM (for debugging)
+          nullable: true
 
     ResourceStatus:
       type: object

@@ -16,17 +16,18 @@ const (
 
 // Build represents a source-to-image build job
 type Build struct {
-	ID            string           `json:"id"`
-	Status        string           `json:"status"`
-	QueuePosition *int             `json:"queue_position,omitempty"`
-	ImageDigest   *string          `json:"image_digest,omitempty"`
-	ImageRef      *string          `json:"image_ref,omitempty"`
-	Error         *string          `json:"error,omitempty"`
-	Provenance    *BuildProvenance `json:"provenance,omitempty"`
-	CreatedAt     time.Time        `json:"created_at"`
-	StartedAt     *time.Time       `json:"started_at,omitempty"`
-	CompletedAt   *time.Time       `json:"completed_at,omitempty"`
-	DurationMS    *int64           `json:"duration_ms,omitempty"`
+	ID                string           `json:"id"`
+	Status            string           `json:"status"`
+	QueuePosition     *int             `json:"queue_position,omitempty"`
+	ImageDigest       *string          `json:"image_digest,omitempty"`
+	ImageRef          *string          `json:"image_ref,omitempty"`
+	Error             *string          `json:"error,omitempty"`
+	Provenance        *BuildProvenance `json:"provenance,omitempty"`
+	CreatedAt         time.Time        `json:"created_at"`
+	StartedAt         *time.Time       `json:"started_at,omitempty"`
+	CompletedAt       *time.Time       `json:"completed_at,omitempty"`
+	DurationMS        *int64           `json:"duration_ms,omitempty"`
+	BuilderInstanceID *string          `json:"builder_instance_id,omitempty"`
 }
 
 // CreateBuildRequest represents a request to create a new build
