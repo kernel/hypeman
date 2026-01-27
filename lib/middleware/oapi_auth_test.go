@@ -25,7 +25,7 @@ func generateUserToken(t *testing.T, userID string) string {
 	return tokenString
 }
 
-// generateRegistryToken creates a registry token (like those given to builder VMs)
+// generateRegistryToken creates a registry token using the legacy format
 func generateRegistryToken(t *testing.T, buildID string) string {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"sub":      "builder-" + buildID,
@@ -35,6 +35,21 @@ func generateRegistryToken(t *testing.T, buildID string) string {
 		"build_id": buildID,
 		"repos":    []string{"builds/" + buildID},
 		"scope":    "push",
+	})
+	tokenString, err := token.SignedString([]byte(testJWTSecret))
+	require.NoError(t, err)
+	return tokenString
+}
+
+// generateRepoAccessToken creates a registry token using the new RepoAccess format
+func generateRepoAccessToken(t *testing.T, buildID string, repoAccess []map[string]string) string {
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"sub":         "builder-" + buildID,
+		"iat":         time.Now().Unix(),
+		"exp":         time.Now().Add(time.Hour).Unix(),
+		"iss":         "hypeman",
+		"build_id":    buildID,
+		"repo_access": repoAccess,
 	})
 	tokenString, err := token.SignedString([]byte(testJWTSecret))
 	require.NoError(t, err)
@@ -201,6 +216,77 @@ func TestExtractRepoFromPath(t *testing.T) {
 			assert.Equal(t, tt.expected, result, "extractRepoFromPath(%q)", tt.path)
 		})
 	}
+}
+
+func TestValidateRegistryToken(t *testing.T) {
+	t.Run("legacy format token allows push to allowed repo", func(t *testing.T) {
+		token := generateRegistryToken(t, "build-123")
+		claims, err := validateRegistryToken(token, testJWTSecret, "/v2/builds/build-123/manifests/latest", http.MethodPut)
+		require.NoError(t, err)
+		assert.Equal(t, "build-123", claims.BuildID)
+	})
+
+	t.Run("legacy format token rejects unauthorized repo", func(t *testing.T) {
+		token := generateRegistryToken(t, "build-123")
+		_, err := validateRegistryToken(token, testJWTSecret, "/v2/builds/other-build/manifests/latest", http.MethodPut)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not allowed by token")
+	})
+
+	t.Run("RepoAccess format token allows push to push-scoped repo", func(t *testing.T) {
+		repoAccess := []map[string]string{
+			{"repo": "builds/build-456", "scope": "push"},
+			{"repo": "cache/tenant-x", "scope": "push"},
+			{"repo": "cache/global/node", "scope": "pull"},
+		}
+		token := generateRepoAccessToken(t, "build-456", repoAccess)
+
+		claims, err := validateRegistryToken(token, testJWTSecret, "/v2/builds/build-456/manifests/latest", http.MethodPut)
+		require.NoError(t, err)
+		assert.Equal(t, "build-456", claims.BuildID)
+	})
+
+	t.Run("RepoAccess format token allows pull from pull-scoped repo", func(t *testing.T) {
+		repoAccess := []map[string]string{
+			{"repo": "builds/build-456", "scope": "push"},
+			{"repo": "cache/global/node", "scope": "pull"},
+		}
+		token := generateRepoAccessToken(t, "build-456", repoAccess)
+
+		// GET (pull) from pull-scoped repo should work
+		_, err := validateRegistryToken(token, testJWTSecret, "/v2/cache/global/node/manifests/latest", http.MethodGet)
+		require.NoError(t, err)
+	})
+
+	t.Run("RepoAccess format token rejects push to pull-only repo", func(t *testing.T) {
+		repoAccess := []map[string]string{
+			{"repo": "builds/build-456", "scope": "push"},
+			{"repo": "cache/global/node", "scope": "pull"},
+		}
+		token := generateRepoAccessToken(t, "build-456", repoAccess)
+
+		// PUT (push) to pull-only repo should fail
+		_, err := validateRegistryToken(token, testJWTSecret, "/v2/cache/global/node/manifests/latest", http.MethodPut)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "does not allow write operations")
+	})
+
+	t.Run("RepoAccess format token rejects unauthorized repo", func(t *testing.T) {
+		repoAccess := []map[string]string{
+			{"repo": "builds/build-456", "scope": "push"},
+		}
+		token := generateRepoAccessToken(t, "build-456", repoAccess)
+
+		_, err := validateRegistryToken(token, testJWTSecret, "/v2/builds/other-build/manifests/latest", http.MethodPut)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not allowed by token")
+	})
+
+	t.Run("allows base path check without repo validation", func(t *testing.T) {
+		token := generateRegistryToken(t, "build-123")
+		_, err := validateRegistryToken(token, testJWTSecret, "/v2/", http.MethodGet)
+		require.NoError(t, err)
+	})
 }
 
 func TestJwtAuth_RequiresAuthorization(t *testing.T) {

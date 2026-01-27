@@ -22,13 +22,28 @@ const userIDKey contextKey = "user_id"
 // It properly parses repository names (which can contain slashes) from /v2/ paths.
 var registryRouter = v2.Router()
 
+// RepoPermission defines access permissions for a specific repository.
+// This mirrors the type in lib/builds/registry_token.go to avoid circular imports.
+type RepoPermission struct {
+	Repo  string `json:"repo"`
+	Scope string `json:"scope"`
+}
+
 // RegistryTokenClaims contains the claims for a scoped registry access token.
 // This mirrors the type in lib/builds/registry_token.go to avoid circular imports.
 type RegistryTokenClaims struct {
 	jwt.RegisteredClaims
-	BuildID      string   `json:"build_id"`
-	Repositories []string `json:"repos"`
-	Scope        string   `json:"scope"`
+	BuildID string `json:"build_id"`
+
+	// RepoAccess defines per-repository access permissions (new two-tier format)
+	// If present, this takes precedence over the legacy Repositories/Scope fields
+	RepoAccess []RepoPermission `json:"repo_access,omitempty"`
+
+	// Repositories is the list of allowed repository paths (legacy format)
+	Repositories []string `json:"repos,omitempty"`
+
+	// Scope is the access scope (legacy format)
+	Scope string `json:"scope,omitempty"`
 }
 
 // OapiAuthenticationFunc creates an AuthenticationFunc compatible with nethttp-middleware
@@ -229,6 +244,7 @@ func isWriteOperation(method string) bool {
 
 // validateRegistryToken validates a registry-scoped JWT token and checks repository access.
 // Returns the claims if valid, nil otherwise.
+// Supports both new RepoAccess format and legacy Repositories/Scope format.
 func validateRegistryToken(tokenString, jwtSecret, requestPath, method string) (*RegistryTokenClaims, error) {
 	token, err := jwt.ParseWithClaims(tokenString, &RegistryTokenClaims{}, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
@@ -246,8 +262,8 @@ func validateRegistryToken(tokenString, jwtSecret, requestPath, method string) (
 		return nil, fmt.Errorf("invalid token")
 	}
 
-	// Check if this is a registry token (has repos claim)
-	if len(claims.Repositories) == 0 {
+	// Check if this is a registry token (has either RepoAccess or legacy repos claim)
+	if len(claims.RepoAccess) == 0 && len(claims.Repositories) == 0 {
 		return nil, fmt.Errorf("not a registry token")
 	}
 
@@ -261,21 +277,34 @@ func validateRegistryToken(tokenString, jwtSecret, requestPath, method string) (
 		return nil, fmt.Errorf("could not extract repository from path")
 	}
 
-	// Check if the repository is allowed by the token
-	allowed := false
-	for _, allowedRepo := range claims.Repositories {
-		if allowedRepo == repo {
-			allowed = true
-			break
+	// Check if the repository is allowed by the token and get its scope
+	var repoScope string
+
+	// Check new RepoAccess format first
+	if len(claims.RepoAccess) > 0 {
+		for _, perm := range claims.RepoAccess {
+			if perm.Repo == repo {
+				repoScope = perm.Scope
+				break
+			}
+		}
+	} else {
+		// Fall back to legacy format
+		for _, allowedRepo := range claims.Repositories {
+			if allowedRepo == repo {
+				repoScope = claims.Scope
+				break
+			}
 		}
 	}
-	if !allowed {
+
+	if repoScope == "" {
 		return nil, fmt.Errorf("repository %s not allowed by token", repo)
 	}
 
 	// Check scope for write operations
-	if isWriteOperation(method) && claims.Scope != "push" {
-		return nil, fmt.Errorf("token does not allow write operations")
+	if isWriteOperation(method) && repoScope != "push" {
+		return nil, fmt.Errorf("token does not allow write operations for %s", repo)
 	}
 
 	return claims, nil
