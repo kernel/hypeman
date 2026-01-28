@@ -212,8 +212,11 @@ func isInternalVMRequest(r *http.Request) bool {
 		ip = ip[:idx]
 	}
 
-	// Check if it's from the VM network (10.100.x.x or 10.102.x.x)
-	return strings.HasPrefix(ip, "10.100.") || strings.HasPrefix(ip, "10.102.")
+	// Check if it's from the VM network
+	// Different environments use different subnets:
+	// - 10.100.x.x, 10.102.x.x: staging/dev environments
+	// - 172.30.x.x: production environment
+	return strings.HasPrefix(ip, "10.100.") || strings.HasPrefix(ip, "10.102.") || strings.HasPrefix(ip, "172.30.")
 }
 
 // extractRepoFromPath extracts the repository name from a registry path.

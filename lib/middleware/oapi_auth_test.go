@@ -289,6 +289,42 @@ func TestValidateRegistryToken(t *testing.T) {
 	})
 }
 
+func TestIsInternalVMRequest(t *testing.T) {
+	tests := []struct {
+		name       string
+		remoteAddr string
+		expected   bool
+	}{
+		// Staging/dev subnets
+		{"staging 10.100.x.x", "10.100.1.50:12345", true},
+		{"staging 10.102.x.x", "10.102.5.100:54321", true},
+
+		// Production subnet
+		{"production 172.30.x.x", "172.30.16.101:42700", true},
+		{"production 172.30.0.x", "172.30.0.50:8080", true},
+
+		// External IPs (should be rejected)
+		{"external 192.168.x.x", "192.168.1.100:8080", false},
+		{"external public IP", "34.21.1.136:8080", false},
+		{"external 10.0.x.x (different subnet)", "10.0.1.50:8080", false},
+		{"external 172.16.x.x (different subnet)", "172.16.1.50:8080", false},
+
+		// Edge cases
+		{"localhost", "127.0.0.1:8080", false},
+		{"IPv6 localhost", "[::1]:8080", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/v2/test/manifests/latest", nil)
+			req.RemoteAddr = tt.remoteAddr
+
+			result := isInternalVMRequest(req)
+			assert.Equal(t, tt.expected, result, "isInternalVMRequest with RemoteAddr=%q", tt.remoteAddr)
+		})
+	}
+}
+
 func TestJwtAuth_RequiresAuthorization(t *testing.T) {
 	nextHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)

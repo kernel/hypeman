@@ -291,6 +291,7 @@ func run() error {
 		r.Use(middleware.RealIP)
 		r.Use(middleware.Logger)
 		r.Use(middleware.Recoverer)
+		r.Use(mw.InjectLogger(logger)) // Inject logger for debug logging in JwtAuth
 		r.Use(mw.JwtAuth(app.Config.JwtSecret))
 		r.Mount("/", app.Registry.Handler())
 	})
