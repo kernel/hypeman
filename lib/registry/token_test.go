@@ -146,6 +146,24 @@ func TestTokenHandler_NoAuth(t *testing.T) {
 
 		assert.Equal(t, http.StatusUnauthorized, rr.Code)
 	})
+
+	t.Run("no auth returns WWW-Authenticate header for Basic auth challenge", func(t *testing.T) {
+		// This test verifies that anonymous token requests get a proper auth challenge.
+		// BuildKit needs this header to know it should retry with credentials.
+		req := httptest.NewRequest(http.MethodGet, "/v2/token?scope=repository:cache/org-123:pull", nil)
+		req.RemoteAddr = "172.30.0.5:12345"
+
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+
+		assert.Equal(t, http.StatusUnauthorized, rr.Code)
+
+		// Verify WWW-Authenticate header is present and correct
+		wwwAuth := rr.Header().Get("WWW-Authenticate")
+		assert.NotEmpty(t, wwwAuth, "WWW-Authenticate header should be present on 401")
+		assert.Contains(t, wwwAuth, "Basic", "should challenge with Basic auth")
+		assert.Contains(t, wwwAuth, `realm="hypeman"`, "should include realm")
+	})
 }
 
 func TestTokenHandler_ExpiredToken(t *testing.T) {
