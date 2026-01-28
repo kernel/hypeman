@@ -37,12 +37,14 @@ func runExecMode(log *Logger, cfg *vmconfig.Config) {
 	os.Setenv("HOME", "/root")
 
 	// Start guest-agent in background (skip if guest-agent was not copied)
+	// Pass environment variables so they're available via hypeman exec
 	var agentCmd *exec.Cmd
 	if cfg.SkipGuestAgent {
 		log.Info("exec", "skipping guest-agent (skip_guest_agent=true)")
 	} else {
 		log.Info("exec", "starting guest-agent in background")
 		agentCmd = exec.Command("/opt/hypeman/guest-agent")
+		agentCmd.Env = buildEnv(cfg.Env)
 		agentCmd.Stdout = os.Stdout
 		agentCmd.Stderr = os.Stderr
 		if err := agentCmd.Start(); err != nil {

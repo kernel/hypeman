@@ -18,11 +18,12 @@ func runSystemdMode(log *Logger, cfg *vmconfig.Config) {
 	const newroot = "/overlay/newroot"
 
 	// Inject hypeman-agent.service (skip if guest-agent was not copied)
+	// Pass environment variables so they're available via hypeman exec
 	if cfg.SkipGuestAgent {
 		log.Info("systemd", "skipping agent service injection (skip_guest_agent=true)")
 	} else {
 		log.Info("systemd", "injecting hypeman-agent.service")
-		if err := injectAgentService(newroot); err != nil {
+		if err := injectAgentService(newroot, cfg.Env); err != nil {
 			log.Error("systemd", "failed to inject service", err)
 			// Continue anyway - VM will work, just without agent
 		}
@@ -61,7 +62,9 @@ func runSystemdMode(log *Logger, cfg *vmconfig.Config) {
 }
 
 // injectAgentService creates the systemd service unit for the hypeman guest-agent.
-func injectAgentService(newroot string) error {
+// It also writes an environment file with the configured env vars so they're
+// available to commands run via hypeman exec.
+func injectAgentService(newroot string, env map[string]string) error {
 	serviceContent := `[Unit]
 Description=Hypeman Guest Agent
 After=network.target
@@ -70,6 +73,7 @@ Wants=network.target
 [Service]
 Type=simple
 ExecStart=/opt/hypeman/guest-agent
+EnvironmentFile=-/etc/hypeman/env
 Restart=always
 RestartSec=3
 StandardOutput=journal
@@ -81,12 +85,24 @@ WantedBy=multi-user.target
 
 	serviceDir := newroot + "/etc/systemd/system"
 	wantsDir := serviceDir + "/multi-user.target.wants"
+	hypemanDir := newroot + "/etc/hypeman"
 
 	// Create directories
 	if err := os.MkdirAll(serviceDir, 0755); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(wantsDir, 0755); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(hypemanDir, 0755); err != nil {
+		return err
+	}
+
+	// Write environment file with configured env vars
+	// Format: KEY=VALUE, one per line
+	envContent := buildEnvFileContent(env)
+	envPath := hypemanDir + "/env"
+	if err := os.WriteFile(envPath, []byte(envContent), 0644); err != nil {
 		return err
 	}
 
@@ -102,3 +118,23 @@ WantedBy=multi-user.target
 	return os.Symlink("../hypeman-agent.service", symlinkPath)
 }
 
+// buildEnvFileContent creates systemd environment file content from env map.
+// Includes default PATH and HOME if not already set.
+func buildEnvFileContent(env map[string]string) string {
+	var content string
+
+	// Add user's environment variables
+	for k, v := range env {
+		content += fmt.Sprintf("%s=%s\n", k, v)
+	}
+
+	// Add defaults only if not already set by user
+	if _, ok := env["PATH"]; !ok {
+		content += "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n"
+	}
+	if _, ok := env["HOME"]; !ok {
+		content += "HOME=/root\n"
+	}
+
+	return content
+}

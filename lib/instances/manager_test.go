@@ -675,6 +675,14 @@ func TestBasicEndToEnd(t *testing.T) {
 	t.Logf("Volume test output:\n%s", output)
 	t.Log("Volume read/write test passed!")
 
+	// Test environment variables are accessible via exec (tests guest-agent has env vars)
+	t.Log("Testing environment variables via exec...")
+	output, exitCode, err = runCmd("printenv", "TEST_VAR")
+	require.NoError(t, err, "printenv should execute")
+	require.Equal(t, 0, exitCode, "printenv should succeed")
+	assert.Equal(t, "test_value", strings.TrimSpace(output), "Environment variable should be accessible via exec")
+	t.Log("Environment variable accessible via exec!")
+
 	// Test streaming logs with live updates
 	t.Log("Testing log streaming with live updates...")
 	streamCtx, streamCancel := context.WithCancel(ctx)
@@ -745,6 +753,168 @@ func TestBasicEndToEnd(t *testing.T) {
 	assert.ErrorIs(t, err, volumes.ErrNotFound)
 
 	t.Log("Instance and volume lifecycle test complete!")
+}
+
+// TestEntrypointEnvVars verifies that environment variables are passed to the entrypoint process.
+// This uses bitnami/redis which configures REDIS_PASSWORD from an env var - if auth is required,
+// it proves the entrypoint received and used the env var.
+func TestEntrypointEnvVars(t *testing.T) {
+	if os.Getuid() != 0 {
+		t.Skip("Skipping test that requires root")
+	}
+
+	mgr, tmpDir := setupTestManager(t) // Automatically registers cleanup
+	ctx := context.Background()
+
+	// Get image manager
+	p := paths.New(tmpDir)
+	imageManager, err := images.NewManager(p, 1, nil)
+	require.NoError(t, err)
+
+	// Pull bitnami/redis image
+	t.Log("Pulling bitnami/redis image...")
+	redisImage, err := imageManager.CreateImage(ctx, images.CreateImageRequest{
+		Name: "docker.io/bitnami/redis:latest",
+	})
+	require.NoError(t, err)
+
+	// Wait for image to be ready
+	t.Log("Waiting for image build to complete...")
+	imageName := redisImage.Name
+	for i := 0; i < 60; i++ {
+		img, err := imageManager.GetImage(ctx, imageName)
+		if err == nil && img.Status == images.StatusReady {
+			redisImage = img
+			break
+		}
+		if err == nil && img.Status == images.StatusFailed {
+			t.Fatalf("Image build failed: %s", *img.Error)
+		}
+		time.Sleep(1 * time.Second)
+	}
+	require.Equal(t, images.StatusReady, redisImage.Status, "Image should be ready after 60 seconds")
+	t.Log("Redis image ready")
+
+	// Ensure system files
+	systemManager := system.NewManager(p)
+	t.Log("Ensuring system files...")
+	err = systemManager.EnsureSystemFiles(ctx)
+	require.NoError(t, err)
+	t.Log("System files ready")
+
+	// Initialize network (needed for loopback interface in guest)
+	networkManager := network.NewManager(p, &config.Config{
+		DataDir:    tmpDir,
+		BridgeName: "vmbr0",
+		SubnetCIDR: "10.100.0.0/16",
+		DNSServer:  "1.1.1.1",
+	}, nil)
+	t.Log("Initializing network...")
+	err = networkManager.Initialize(ctx, nil)
+	require.NoError(t, err)
+	t.Log("Network initialized")
+
+	// Create instance with REDIS_PASSWORD env var
+	testPassword := "test_secret_password_123"
+	req := CreateInstanceRequest{
+		Name:           "test-redis-env",
+		Image:          "docker.io/bitnami/redis:latest",
+		Size:           2 * 1024 * 1024 * 1024,
+		HotplugSize:    512 * 1024 * 1024,
+		OverlaySize:    10 * 1024 * 1024 * 1024,
+		Vcpus:          2,
+		NetworkEnabled: true, // Need network for loopback to work properly
+		Env: map[string]string{
+			"REDIS_PASSWORD": testPassword,
+		},
+	}
+
+	t.Log("Creating redis instance with REDIS_PASSWORD...")
+	inst, err := mgr.CreateInstance(ctx, req)
+	require.NoError(t, err)
+	require.NotNil(t, inst)
+	assert.Equal(t, StateRunning, inst.State)
+	t.Logf("Instance created: %s", inst.Id)
+
+	// Wait for redis to be ready (bitnami/redis takes longer to start)
+	t.Log("Waiting for redis to be ready...")
+	time.Sleep(15 * time.Second)
+
+	// Helper to run command in guest with retry
+	runCmd := func(command ...string) (string, int, error) {
+		var lastOutput string
+		var lastExitCode int
+		var lastErr error
+
+		dialer, err := hypervisor.NewVsockDialer(inst.HypervisorType, inst.VsockSocket, inst.VsockCID)
+		if err != nil {
+			return "", -1, err
+		}
+
+		for attempt := 0; attempt < 5; attempt++ {
+			if attempt > 0 {
+				time.Sleep(200 * time.Millisecond)
+			}
+
+			var stdout, stderr bytes.Buffer
+			exit, err := guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{
+				Command: command,
+				Stdout:  &stdout,
+				Stderr:  &stderr,
+				TTY:     false,
+			})
+
+			output := stdout.String()
+			if stderr.Len() > 0 {
+				output += stderr.String()
+			}
+			output = strings.TrimSpace(output)
+
+			if err != nil {
+				lastErr = err
+				lastOutput = output
+				lastExitCode = -1
+				continue
+			}
+
+			lastOutput = output
+			lastExitCode = exit.Code
+			lastErr = nil
+
+			if output != "" || exit.Code == 0 {
+				return output, exit.Code, nil
+			}
+		}
+
+		return lastOutput, lastExitCode, lastErr
+	}
+
+	// Test 1: PING without auth should fail
+	t.Log("Testing redis PING without auth (should fail)...")
+	output, _, err := runCmd("redis-cli", "PING")
+	require.NoError(t, err)
+	assert.Contains(t, output, "NOAUTH", "Redis should require authentication")
+
+	// Test 2: PING with correct password should succeed
+	t.Log("Testing redis PING with correct password (should succeed)...")
+	output, exitCode, err := runCmd("redis-cli", "-a", testPassword, "PING")
+	require.NoError(t, err)
+	require.Equal(t, 0, exitCode)
+	assert.Contains(t, output, "PONG", "Redis should respond to authenticated PING")
+
+	// Test 3: Verify requirepass config matches our env var
+	t.Log("Verifying redis requirepass config...")
+	output, exitCode, err = runCmd("redis-cli", "-a", testPassword, "CONFIG", "GET", "requirepass")
+	require.NoError(t, err)
+	require.Equal(t, 0, exitCode)
+	assert.Contains(t, output, testPassword, "Redis requirepass should match REDIS_PASSWORD env var")
+
+	t.Log("Entrypoint environment variable test passed!")
+
+	// Cleanup
+	t.Log("Cleaning up...")
+	err = mgr.DeleteInstance(ctx, inst.Id)
+	require.NoError(t, err)
 }
 
 func TestStorageOperations(t *testing.T) {
@@ -1001,4 +1171,3 @@ func (r *testInstanceResolver) ResolveInstance(ctx context.Context, nameOrID str
 	// For tests, just return nameOrID as both name and id
 	return nameOrID, nameOrID, nil
 }
-
