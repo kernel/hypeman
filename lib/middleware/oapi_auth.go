@@ -131,6 +131,13 @@ func OapiAuthenticationFunc(jwtSecret string) openapi3filter.AuthenticationFunc 
 // that returns consistent error responses.
 func OapiErrorHandler(w http.ResponseWriter, message string, statusCode int) {
 	w.Header().Set("Content-Type", "application/json")
+
+	// For 401 responses, include WWW-Authenticate header so Docker/BuildKit
+	// knows to send credentials from the Docker config
+	if statusCode == http.StatusUnauthorized {
+		w.Header().Set("WWW-Authenticate", `Basic realm="registry"`)
+	}
+
 	w.WriteHeader(statusCode)
 
 	// Return a simple JSON error response matching our Error schema
@@ -212,11 +219,10 @@ func isInternalVMRequest(r *http.Request) bool {
 		ip = ip[:idx]
 	}
 
-	// Check if it's from the VM network
-	// Different environments use different subnets:
-	// - 10.100.x.x, 10.102.x.x: staging/dev environments
-	// - 172.30.x.x: production environment
-	return strings.HasPrefix(ip, "10.100.") || strings.HasPrefix(ip, "10.102.") || strings.HasPrefix(ip, "172.30.")
+	// Check if it's from the VM network (staging/dev only)
+	// Production (172.30.x.x) should use token auth, not IP fallback
+	// TODO: Remove this fallback entirely once token auth is verified working
+	return strings.HasPrefix(ip, "10.100.") || strings.HasPrefix(ip, "10.102.")
 }
 
 // extractRepoFromPath extracts the repository name from a registry path.

@@ -339,18 +339,20 @@ func TestJwtAuth_RegistryPaths(t *testing.T) {
 		assert.Equal(t, http.StatusOK, rr.Code, "internal staging IP should allow access via fallback")
 	})
 
-	t.Run("no token but internal production IP allows access via fallback", func(t *testing.T) {
+	t.Run("production IP without token returns 401 (no fallback for prod)", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodHead, "/v2/builds/any-build/manifests/latest", nil)
 		// No Authorization header
-		req.RemoteAddr = "172.30.16.101:42700" // Production subnet
+		req.RemoteAddr = "172.30.16.101:42700" // Production subnet - should NOT fallback
 
 		rr := httptest.NewRecorder()
 		handler.ServeHTTP(rr, req)
 
-		assert.Equal(t, http.StatusOK, rr.Code, "internal production IP should allow access via fallback")
+		// Production should require token auth, not IP fallback
+		assert.Equal(t, http.StatusUnauthorized, rr.Code, "production IP should require token auth")
+		assert.Equal(t, `Basic realm="registry"`, rr.Header().Get("WWW-Authenticate"))
 	})
 
-	t.Run("no token and external IP returns 401", func(t *testing.T) {
+	t.Run("no token and external IP returns 401 with WWW-Authenticate header", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodHead, "/v2/builds/any-build/manifests/latest", nil)
 		// No Authorization header
 		req.RemoteAddr = "8.8.8.8:12345" // External IP
@@ -360,6 +362,9 @@ func TestJwtAuth_RegistryPaths(t *testing.T) {
 
 		assert.Equal(t, http.StatusUnauthorized, rr.Code, "external IP without token should be rejected")
 		assert.Contains(t, rr.Body.String(), "registry authentication required")
+		// WWW-Authenticate header is required for Docker/BuildKit to send credentials
+		assert.Equal(t, `Basic realm="registry"`, rr.Header().Get("WWW-Authenticate"),
+			"401 response must include WWW-Authenticate header for Docker auth")
 	})
 
 	t.Run("invalid token but internal IP allows access via fallback", func(t *testing.T) {
@@ -423,6 +428,35 @@ func TestJwtAuth_RegistryPaths(t *testing.T) {
 
 		assert.Equal(t, http.StatusOK, rr.Code, "Bearer auth should also work for registry paths")
 	})
+
+	t.Run("simulates BuildKit auth flow: 401 then retry with credentials", func(t *testing.T) {
+		// This simulates what BuildKit should do:
+		// 1. First request without auth -> 401 with WWW-Authenticate
+		// 2. Second request with auth -> 200
+
+		token := generateRegistryToken(t, "build-flow-test")
+
+		// Step 1: Request without auth (external IP)
+		req1 := httptest.NewRequest(http.MethodHead, "/v2/builds/build-flow-test/manifests/latest", nil)
+		req1.RemoteAddr = "8.8.8.8:12345" // External IP, no fallback
+
+		rr1 := httptest.NewRecorder()
+		handler.ServeHTTP(rr1, req1)
+
+		assert.Equal(t, http.StatusUnauthorized, rr1.Code, "first request without auth should get 401")
+		assert.Equal(t, `Basic realm="registry"`, rr1.Header().Get("WWW-Authenticate"),
+			"401 must include WWW-Authenticate to trigger client auth")
+
+		// Step 2: Retry with Basic auth (what Docker/BuildKit does after seeing WWW-Authenticate)
+		req2 := httptest.NewRequest(http.MethodHead, "/v2/builds/build-flow-test/manifests/latest", nil)
+		req2.Header.Set("Authorization", "Basic "+basicAuth(token))
+		req2.RemoteAddr = "8.8.8.8:12345"
+
+		rr2 := httptest.NewRecorder()
+		handler.ServeHTTP(rr2, req2)
+
+		assert.Equal(t, http.StatusOK, rr2.Code, "retry with auth should succeed")
+	})
 }
 
 // basicAuth creates a Basic auth value (base64 of "token:")
@@ -436,13 +470,13 @@ func TestIsInternalVMRequest(t *testing.T) {
 		remoteAddr string
 		expected   bool
 	}{
-		// Staging/dev subnets
+		// Staging/dev subnets (fallback allowed)
 		{"staging 10.100.x.x", "10.100.1.50:12345", true},
 		{"staging 10.102.x.x", "10.102.5.100:54321", true},
 
-		// Production subnet
-		{"production 172.30.x.x", "172.30.16.101:42700", true},
-		{"production 172.30.0.x", "172.30.0.50:8080", true},
+		// Production subnet (NO fallback - must use token auth)
+		{"production 172.30.x.x requires token", "172.30.16.101:42700", false},
+		{"production 172.30.0.x requires token", "172.30.0.50:8080", false},
 
 		// External IPs (should be rejected)
 		{"external 192.168.x.x", "192.168.1.100:8080", false},

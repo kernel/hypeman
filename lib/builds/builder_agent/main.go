@@ -516,19 +516,27 @@ func setupRegistryAuth(registryURL, token string) error {
 		return fmt.Errorf("marshal docker config: %w", err)
 	}
 
-	// Ensure ~/.docker directory exists
-	dockerDir := "/home/builder/.docker"
-	if err := os.MkdirAll(dockerDir, 0700); err != nil {
-		return fmt.Errorf("create docker config dir: %w", err)
+	// Write config to multiple locations to ensure BuildKit finds it
+	// buildctl-daemonless.sh may run buildkitd with different user/env
+	configDirs := []string{
+		"/home/builder/.docker", // Builder user home
+		"/root/.docker",         // Root user (buildkitd may run as root)
 	}
 
-	// Write config.json
-	configPath := filepath.Join(dockerDir, "config.json")
-	if err := os.WriteFile(configPath, configData, 0600); err != nil {
-		return fmt.Errorf("write docker config: %w", err)
+	for _, dockerDir := range configDirs {
+		if err := os.MkdirAll(dockerDir, 0700); err != nil {
+			log.Printf("Warning: failed to create %s: %v", dockerDir, err)
+			continue
+		}
+
+		configPath := filepath.Join(dockerDir, "config.json")
+		if err := os.WriteFile(configPath, configData, 0600); err != nil {
+			log.Printf("Warning: failed to write %s: %v", configPath, err)
+			continue
+		}
+		log.Printf("Registry auth configured at %s", configPath)
 	}
 
-	log.Printf("Registry auth configured for %s", registryURL)
 	return nil
 }
 
