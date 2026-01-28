@@ -6,7 +6,7 @@
   "types": "dist/index.d.ts",
   "main": "dist/index.js",
   "type": "commonjs",
-  "repository": "github:onkernel/hypeman-ts",
+  "repository": "github:kernel/hypeman-ts",
   "license": "Apache-2.0",
   "packageManager": "pnpm@10.24.0",
   "files": [
