@@ -244,8 +244,16 @@ func (h *TokenHandler) writeToken(w http.ResponseWriter, token string) {
 }
 
 // writeError writes an error response.
+// For 401 responses, includes WWW-Authenticate header to tell clients how to authenticate.
 func (h *TokenHandler) writeError(w http.ResponseWriter, status int, code, message string) {
 	w.Header().Set("Content-Type", "application/json")
+
+	// For 401 Unauthorized, include WWW-Authenticate header
+	// This tells clients (like BuildKit) to retry with Basic auth credentials
+	if status == http.StatusUnauthorized {
+		w.Header().Set("WWW-Authenticate", `Basic realm="hypeman"`)
+	}
+
 	w.WriteHeader(status)
 
 	resp := TokenErrorResponse{
