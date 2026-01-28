@@ -5,6 +5,7 @@ import (
 	"os"
 	"syscall"
 
+	"al.essio.dev/pkg/shellescape"
 	"github.com/kernel/hypeman/lib/vmconfig"
 )
 
@@ -120,12 +121,14 @@ WantedBy=multi-user.target
 
 // buildEnvFileContent creates systemd environment file content from env map.
 // Includes default PATH and HOME if not already set.
+// Values are properly quoted and escaped for systemd's EnvironmentFile format
+// using shellescape.Quote() which handles shell-style quoting.
 func buildEnvFileContent(env map[string]string) string {
 	var content string
 
 	// Add user's environment variables
 	for k, v := range env {
-		content += fmt.Sprintf("%s=%s\n", k, v)
+		content += fmt.Sprintf("%s=%s\n", k, shellescape.Quote(v))
 	}
 
 	// Add defaults only if not already set by user
