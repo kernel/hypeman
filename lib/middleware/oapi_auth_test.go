@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -287,6 +288,146 @@ func TestValidateRegistryToken(t *testing.T) {
 		_, err := validateRegistryToken(token, testJWTSecret, "/v2/", http.MethodGet)
 		require.NoError(t, err)
 	})
+}
+
+func TestJwtAuth_RegistryPaths(t *testing.T) {
+	// Create a simple handler that returns 200 if auth passes
+	nextHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	handler := JwtAuth(testJWTSecret)(nextHandler)
+
+	t.Run("valid registry token allows access to authorized repo", func(t *testing.T) {
+		token := generateRegistryToken(t, "build-123")
+
+		req := httptest.NewRequest(http.MethodHead, "/v2/builds/build-123/manifests/latest", nil)
+		req.Header.Set("Authorization", "Basic "+basicAuth(token))
+		req.RemoteAddr = "8.8.8.8:12345" // External IP - should still work with valid token
+
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+
+		assert.Equal(t, http.StatusOK, rr.Code, "valid registry token should allow access")
+	})
+
+	t.Run("valid RepoAccess token allows access to authorized repo", func(t *testing.T) {
+		repoAccess := []map[string]string{
+			{"repo": "builds/build-456", "scope": "push"},
+			{"repo": "cache/tenant-x", "scope": "push"},
+		}
+		token := generateRepoAccessToken(t, "build-456", repoAccess)
+
+		req := httptest.NewRequest(http.MethodPut, "/v2/builds/build-456/manifests/latest", nil)
+		req.Header.Set("Authorization", "Basic "+basicAuth(token))
+		req.RemoteAddr = "8.8.8.8:12345" // External IP
+
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+
+		assert.Equal(t, http.StatusOK, rr.Code, "valid RepoAccess token should allow access")
+	})
+
+	t.Run("no token but internal staging IP allows access via fallback", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodHead, "/v2/builds/any-build/manifests/latest", nil)
+		// No Authorization header
+		req.RemoteAddr = "10.100.5.50:12345" // Staging subnet
+
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+
+		assert.Equal(t, http.StatusOK, rr.Code, "internal staging IP should allow access via fallback")
+	})
+
+	t.Run("no token but internal production IP allows access via fallback", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodHead, "/v2/builds/any-build/manifests/latest", nil)
+		// No Authorization header
+		req.RemoteAddr = "172.30.16.101:42700" // Production subnet
+
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+
+		assert.Equal(t, http.StatusOK, rr.Code, "internal production IP should allow access via fallback")
+	})
+
+	t.Run("no token and external IP returns 401", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodHead, "/v2/builds/any-build/manifests/latest", nil)
+		// No Authorization header
+		req.RemoteAddr = "8.8.8.8:12345" // External IP
+
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+
+		assert.Equal(t, http.StatusUnauthorized, rr.Code, "external IP without token should be rejected")
+		assert.Contains(t, rr.Body.String(), "registry authentication required")
+	})
+
+	t.Run("invalid token but internal IP allows access via fallback", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodHead, "/v2/builds/any-build/manifests/latest", nil)
+		req.Header.Set("Authorization", "Basic "+basicAuth("invalid-not-a-jwt-token"))
+		req.RemoteAddr = "10.102.1.50:12345" // Internal IP
+
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+
+		assert.Equal(t, http.StatusOK, rr.Code, "internal IP should allow access via fallback even with invalid token")
+	})
+
+	t.Run("invalid token and external IP returns 401", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodHead, "/v2/builds/any-build/manifests/latest", nil)
+		req.Header.Set("Authorization", "Basic "+basicAuth("invalid-not-a-jwt-token"))
+		req.RemoteAddr = "8.8.8.8:12345" // External IP
+
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+
+		assert.Equal(t, http.StatusUnauthorized, rr.Code, "external IP with invalid token should be rejected")
+	})
+
+	t.Run("valid token for wrong repo returns 401 even with internal IP", func(t *testing.T) {
+		token := generateRegistryToken(t, "build-123")
+
+		req := httptest.NewRequest(http.MethodPut, "/v2/builds/different-build/manifests/latest", nil)
+		req.Header.Set("Authorization", "Basic "+basicAuth(token))
+		req.RemoteAddr = "10.100.5.50:12345" // Internal IP - but token validation fails first
+
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+
+		// Token is valid JWT but wrong repo - should fall through to IP fallback
+		assert.Equal(t, http.StatusOK, rr.Code, "should fall back to IP check when token doesn't match repo")
+	})
+
+	t.Run("registry base path /v2/ allows access with valid token", func(t *testing.T) {
+		token := generateRegistryToken(t, "build-123")
+
+		req := httptest.NewRequest(http.MethodGet, "/v2/", nil)
+		req.Header.Set("Authorization", "Basic "+basicAuth(token))
+		req.RemoteAddr = "8.8.8.8:12345"
+
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+
+		assert.Equal(t, http.StatusOK, rr.Code, "/v2/ base path should be allowed with valid token")
+	})
+
+	t.Run("Bearer auth also works for registry paths", func(t *testing.T) {
+		token := generateRegistryToken(t, "build-789")
+
+		req := httptest.NewRequest(http.MethodHead, "/v2/builds/build-789/manifests/latest", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.RemoteAddr = "8.8.8.8:12345"
+
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+
+		assert.Equal(t, http.StatusOK, rr.Code, "Bearer auth should also work for registry paths")
+	})
+}
+
+// basicAuth creates a Basic auth value (base64 of "token:")
+func basicAuth(token string) string {
+	return base64.StdEncoding.EncodeToString([]byte(token + ":"))
 }
 
 func TestIsInternalVMRequest(t *testing.T) {
