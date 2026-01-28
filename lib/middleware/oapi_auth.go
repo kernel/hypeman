@@ -236,14 +236,17 @@ func isWriteOperation(method string) bool {
 // for Docker Registry Token Authentication. This tells clients (like BuildKit) where
 // to obtain a bearer token.
 // See: https://distribution.github.io/distribution/spec/auth/token/
-func writeRegistryUnauthorized(w http.ResponseWriter, host string) {
+func writeRegistryUnauthorized(w http.ResponseWriter, r *http.Request) {
 	// Build the realm URL - use the host from the request
+	host := r.Host
 	realm := "/v2/token"
 	if host != "" {
-		// Determine scheme - assume https unless it looks like localhost
-		scheme := "https"
-		if strings.HasPrefix(host, "localhost") || strings.HasPrefix(host, "127.0.0.1") {
-			scheme = "http"
+		// Determine scheme from request
+		scheme := "http" // Default to http for internal/private IPs
+		if r.TLS != nil {
+			scheme = "https"
+		} else if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
+			scheme = proto
 		}
 		realm = fmt.Sprintf("%s://%s/v2/token", scheme, host)
 	}
@@ -371,7 +374,7 @@ func JwtAuth(jwtSecret string) func(http.Handler) http.Handler {
 				// Registry auth failed - return 401 with WWW-Authenticate header
 				// This tells clients (like BuildKit) where to get a token
 				log.DebugContext(r.Context(), "registry request unauthorized", "remote_addr", r.RemoteAddr)
-				writeRegistryUnauthorized(w, r.Host)
+				writeRegistryUnauthorized(w, r)
 				return
 			}
 
