@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 
@@ -61,7 +62,7 @@ func (s *guestServer) executeNoTTY(ctx context.Context, stream pb.GuestService_E
 	cmd := exec.CommandContext(ctx, start.Command[0], start.Command[1:]...)
 
 	// Set up environment
-	cmd.Env = s.buildEnv(start.Env)
+	cmd.Env = s.buildEnv(start.Env, false)
 
 	// Set up working directory
 	if start.Cwd != "" {
@@ -170,7 +171,7 @@ func (s *guestServer) executeTTY(ctx context.Context, stream pb.GuestService_Exe
 	cmd := exec.CommandContext(ctx, start.Command[0], start.Command[1:]...)
 
 	// Set up environment
-	cmd.Env = s.buildEnv(start.Env)
+	cmd.Env = s.buildEnv(start.Env, true)
 
 	// Set up working directory
 	if start.Cwd != "" {
@@ -247,15 +248,37 @@ func (s *guestServer) executeTTY(ctx context.Context, stream pb.GuestService_Exe
 }
 
 // buildEnv constructs environment variables by merging provided env with defaults
-func (s *guestServer) buildEnv(envMap map[string]string) []string {
+func (s *guestServer) buildEnv(envMap map[string]string, tty bool) []string {
 	// Start with current environment as base
-	env := os.Environ()
-
-	// Merge in provided environment variables
+	baseEnv := os.Environ()
+	
+	// Build final environment
+	env := []string{}
+	
+	// For TTY sessions, set TERM=linux as default if not provided by user
+	setTERM := tty && envMap["TERM"] == ""
+	
+	// Check if user provided TERM
+	userProvidedTERM := envMap["TERM"] != ""
+	
+	// Copy base environment, filtering out TERM if we're setting it or user provided it
+	for _, e := range baseEnv {
+		if (setTERM || userProvidedTERM) && strings.HasPrefix(e, "TERM=") {
+			continue // Skip existing TERM since we'll set our own or user's
+		}
+		env = append(env, e)
+	}
+	
+	// Add TERM=linux for TTY if not provided by user
+	if setTERM {
+		env = append(env, "TERM=linux")
+	}
+	
+	// Merge in provided environment variables (can override TERM)
 	for k, v := range envMap {
 		env = append(env, fmt.Sprintf("%s=%s", k, v))
 	}
-
+	
 	return env
 }
 
