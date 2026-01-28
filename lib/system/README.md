@@ -73,6 +73,8 @@ It replaces the previous shell-based init script with cleaner logic and structur
 - **Exec mode** (default): Init chroots to container rootfs, runs entrypoint as child process, then waits on guest-agent to keep VM alive
 - **Systemd mode** (auto-detected on host): Init chroots to container rootfs, then execs /sbin/init so systemd becomes PID 1
 
+**Environment variables:** In exec mode, env vars are passed directly to the entrypoint and guest-agent processes. In systemd mode, env vars are written to `/etc/hypeman/env` and loaded via `EnvironmentFile` in the `hypeman-agent.service` unit.
+
 **Systemd detection:** Host-side detection in `lib/images/systemd.go` checks if image CMD is
 `/sbin/init`, `/lib/systemd/systemd`, or similar. The detected mode is passed to the initrd
 via `INIT_MODE` in the config disk.
