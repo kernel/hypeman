@@ -62,7 +62,18 @@ type Config struct {
 	BuilderImage string
 
 	// RegistryURL is the URL of the registry to push built images to
+	// Can be HTTP (http://host:port) or HTTPS (https://host:port)
 	RegistryURL string
+
+	// RegistryInsecure skips TLS certificate verification for HTTPS registries.
+	// Use this for internal registries with self-signed certificates.
+	// For HTTP registries, insecure mode is automatically enabled.
+	RegistryInsecure bool
+
+	// RegistryCACert is the PEM-encoded CA certificate for the registry.
+	// If provided, this allows proper TLS verification for registries with
+	// self-signed certificates while maintaining token authentication.
+	RegistryCACert string
 
 	// DefaultTimeout is the default build timeout in seconds
 	DefaultTimeout int
@@ -237,19 +248,21 @@ func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourc
 
 	// Write build config for the builder agent
 	buildConfig := &BuildConfig{
-		JobID:              id,
-		BaseImageDigest:    req.BaseImageDigest,
-		RegistryURL:        m.config.RegistryURL,
-		RegistryToken:      registryToken,
-		CacheScope:         req.CacheScope,
-		SourcePath:         "/src",
-		Dockerfile:         req.Dockerfile,
-		BuildArgs:          req.BuildArgs,
-		Secrets:            req.Secrets,
-		TimeoutSeconds:     policy.TimeoutSeconds,
-		NetworkMode:        policy.NetworkMode,
-		IsAdminBuild:       req.IsAdminBuild,
-		GlobalCacheKey: req.GlobalCacheKey,
+		JobID:            id,
+		BaseImageDigest:  req.BaseImageDigest,
+		RegistryURL:      m.config.RegistryURL,
+		RegistryInsecure: m.config.RegistryInsecure,
+		RegistryCACert:   m.config.RegistryCACert,
+		RegistryToken:    registryToken,
+		CacheScope:       req.CacheScope,
+		SourcePath:       "/src",
+		Dockerfile:       req.Dockerfile,
+		BuildArgs:        req.BuildArgs,
+		Secrets:          req.Secrets,
+		TimeoutSeconds:   policy.TimeoutSeconds,
+		NetworkMode:      policy.NetworkMode,
+		IsAdminBuild:     req.IsAdminBuild,
+		GlobalCacheKey:   req.GlobalCacheKey,
 	}
 	if err := writeBuildConfig(m.paths, id, buildConfig); err != nil {
 		deleteBuild(m.paths, id)

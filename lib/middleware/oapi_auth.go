@@ -130,12 +130,27 @@ func OapiAuthenticationFunc(jwtSecret string) openapi3filter.AuthenticationFunc 
 // OapiErrorHandler creates a custom error handler for nethttp-middleware
 // that returns consistent error responses.
 func OapiErrorHandler(w http.ResponseWriter, message string, statusCode int) {
+	OapiErrorHandlerWithHost(w, message, statusCode, "")
+}
+
+// OapiErrorHandlerWithHost creates a custom error handler that includes the host
+// in the WWW-Authenticate header for Bearer token auth.
+func OapiErrorHandlerWithHost(w http.ResponseWriter, message string, statusCode int, host string) {
 	w.Header().Set("Content-Type", "application/json")
 
-	// For 401 responses, include WWW-Authenticate header so Docker/BuildKit
-	// knows to send credentials from the Docker config
+	// For 401 responses, include WWW-Authenticate header with Bearer token endpoint
+	// This tells Docker/BuildKit to request a token from our /v2/token endpoint
 	if statusCode == http.StatusUnauthorized {
-		w.Header().Set("WWW-Authenticate", `Basic realm="registry"`)
+		if host != "" {
+			// Use Bearer auth with token endpoint - this is what Docker registries use
+			w.Header().Set("WWW-Authenticate", fmt.Sprintf(
+				`Bearer realm="https://%s/v2/token",service="registry"`,
+				host,
+			))
+		} else {
+			// Fallback to Basic auth if host not available
+			w.Header().Set("WWW-Authenticate", `Basic realm="registry"`)
+		}
 	}
 
 	w.WriteHeader(statusCode)
@@ -210,6 +225,8 @@ func isRegistryPath(path string) bool {
 //
 // SECURITY: We only trust RemoteAddr, not X-Real-IP or X-Forwarded-For headers,
 // as those can be spoofed by attackers to bypass authentication.
+//
+// DISABLED: Token auth now works over HTTPS, so IP fallback is no longer needed.
 func isInternalVMRequest(r *http.Request) bool {
 	// Use only RemoteAddr - never trust client-supplied headers for auth decisions
 	ip := r.RemoteAddr
@@ -220,9 +237,8 @@ func isInternalVMRequest(r *http.Request) bool {
 	}
 
 	// Check if it's from the VM network
-	// BuildKit with registry.insecure=true doesn't do WWW-Authenticate challenge-response,
-	// so we need IP fallback for all internal subnets until we find a way to make
-	// BuildKit send auth proactively
+	// This is a fallback for older builder images that don't support token auth.
+	// New builders use the /v2/token endpoint for Bearer token authentication.
 	return strings.HasPrefix(ip, "10.100.") || strings.HasPrefix(ip, "10.102.") || strings.HasPrefix(ip, "172.30.")
 }
 
@@ -320,6 +336,83 @@ func validateRegistryToken(tokenString, jwtSecret, requestPath, method string) (
 	return claims, nil
 }
 
+// AccessTokenClaims are the claims in access tokens issued by /v2/token.
+// This follows the Docker registry token format.
+type AccessTokenClaims struct {
+	jwt.RegisteredClaims
+	Access []AccessEntry `json:"access,omitempty"`
+}
+
+// AccessEntry describes access to a specific resource.
+type AccessEntry struct {
+	Type    string   `json:"type"`
+	Name    string   `json:"name"`
+	Actions []string `json:"actions"`
+}
+
+// validateAccessToken validates an access token issued by the /v2/token endpoint.
+// These tokens have a different format than the original registry tokens.
+func validateAccessToken(tokenString, jwtSecret, requestPath, method string) (*AccessTokenClaims, error) {
+	token, err := jwt.ParseWithClaims(tokenString, &AccessTokenClaims{}, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+		return []byte(jwtSecret), nil
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("parse token: %w", err)
+	}
+
+	claims, ok := token.Claims.(*AccessTokenClaims)
+	if !ok || !token.Valid {
+		return nil, fmt.Errorf("invalid token")
+	}
+
+	// Check if this is an access token (has Access claim or issuer is "registry")
+	if len(claims.Access) == 0 && claims.Issuer != "registry" {
+		return nil, fmt.Errorf("not an access token")
+	}
+
+	// Extract repository from request path
+	repo := extractRepoFromPath(requestPath)
+	if repo == "" {
+		// Allow /v2/ (base path check) without repo validation
+		if requestPath == "/v2/" || requestPath == "/v2" {
+			return claims, nil
+		}
+		return nil, fmt.Errorf("could not extract repository from path")
+	}
+
+	// Check if the repository is allowed by the token
+	var hasAccess bool
+	var canWrite bool
+
+	for _, entry := range claims.Access {
+		if entry.Type == "repository" && entry.Name == repo {
+			hasAccess = true
+			for _, action := range entry.Actions {
+				if action == "push" || action == "*" {
+					canWrite = true
+					break
+				}
+			}
+			break
+		}
+	}
+
+	if !hasAccess {
+		return nil, fmt.Errorf("repository %s not allowed by token", repo)
+	}
+
+	// Check scope for write operations
+	if isWriteOperation(method) && !canWrite {
+		return nil, fmt.Errorf("token does not allow write operations for %s", repo)
+	}
+
+	return claims, nil
+}
+
 // JwtAuth creates a chi middleware that validates JWT bearer tokens
 func JwtAuth(jwtSecret string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
@@ -329,15 +422,34 @@ func JwtAuth(jwtSecret string) func(http.Handler) http.Handler {
 			// Extract token from Authorization header
 			authHeader := r.Header.Get("Authorization")
 
-			// For registry paths, handle specially to support both Bearer and Basic auth
+			// For registry paths, handle specially to support Bearer and Basic auth
 			if isRegistryPath(r.URL.Path) {
+				// Token endpoint is unauthenticated (it's where you get auth from)
+				if r.URL.Path == "/v2/token" {
+					next.ServeHTTP(w, r)
+					return
+				}
+
 				if authHeader != "" {
 					// Try to extract token (supports both Bearer and Basic auth)
 					token, authType, err := extractTokenFromAuth(authHeader)
 					if err == nil {
 						log.DebugContext(r.Context(), "extracted token for registry request", "auth_type", authType)
 
-						// Try to validate as a registry-scoped token
+					// For Bearer tokens, try to validate as an access token from /v2/token
+					if authType == "bearer" {
+							accessClaims, err := validateAccessToken(token, jwtSecret, r.URL.Path, r.Method)
+							if err == nil {
+								log.DebugContext(r.Context(), "access token validated",
+									"subject", accessClaims.Subject)
+								ctx := context.WithValue(r.Context(), userIDKey, "builder-"+accessClaims.Subject)
+								next.ServeHTTP(w, r.WithContext(ctx))
+								return
+							}
+							log.DebugContext(r.Context(), "access token validation failed, trying registry token", "error", err)
+						}
+
+						// Try to validate as a registry-scoped token (original JWT)
 						registryClaims, err := validateRegistryToken(token, jwtSecret, r.URL.Path, r.Method)
 						if err == nil {
 							// Valid registry token - set build ID as user for audit trail
@@ -366,9 +478,9 @@ func JwtAuth(jwtSecret string) func(http.Handler) http.Handler {
 					return
 				}
 
-				// Registry auth failed
+				// Registry auth failed - return Bearer challenge with token endpoint
 				log.DebugContext(r.Context(), "registry request unauthorized", "remote_addr", r.RemoteAddr)
-				OapiErrorHandler(w, "registry authentication required", http.StatusUnauthorized)
+				OapiErrorHandlerWithHost(w, "registry authentication required", http.StatusUnauthorized, r.Host)
 				return
 			}
 

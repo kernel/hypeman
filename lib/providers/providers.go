@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"strconv"
 	"time"
 
@@ -149,6 +150,11 @@ func ProvideRegistry(p *paths.Paths, imageManager images.Manager) (*registry.Reg
 	return registry.New(p, imageManager)
 }
 
+// ProvideTokenHandler provides the Docker registry token endpoint handler
+func ProvideTokenHandler(cfg *config.Config) *registry.TokenHandler {
+	return registry.NewTokenHandler(cfg.JwtSecret, "registry")
+}
+
 // ProvideResourceManager provides the resource manager for capacity tracking
 func ProvideResourceManager(ctx context.Context, cfg *config.Config, p *paths.Paths, imageManager images.Manager, instanceManager instances.Manager, volumeManager volumes.Manager) (*resources.Manager, error) {
 	mgr := resources.NewManager(cfg, p)
@@ -249,10 +255,24 @@ func ProvideIngressManager(p *paths.Paths, cfg *config.Config, instanceManager i
 
 // ProvideBuildManager provides the build manager
 func ProvideBuildManager(p *paths.Paths, cfg *config.Config, instanceManager instances.Manager, volumeManager volumes.Manager, imageManager images.Manager, log *slog.Logger) (builds.Manager, error) {
+	// Load CA cert if configured
+	var registryCACert string
+	if cfg.RegistryCACertFile != "" {
+		certData, err := os.ReadFile(cfg.RegistryCACertFile)
+		if err != nil {
+			log.Warn("failed to read registry CA cert file", "path", cfg.RegistryCACertFile, "error", err)
+		} else {
+			registryCACert = string(certData)
+			log.Info("loaded registry CA cert", "path", cfg.RegistryCACertFile)
+		}
+	}
+
 	buildConfig := builds.Config{
 		MaxConcurrentBuilds: cfg.MaxConcurrentSourceBuilds,
 		BuilderImage:        cfg.BuilderImage,
 		RegistryURL:         cfg.RegistryURL,
+		RegistryInsecure:    cfg.RegistryInsecure,
+		RegistryCACert:      registryCACert,
 		DefaultTimeout:      cfg.BuildTimeout,
 		RegistrySecret:      cfg.JwtSecret, // Use same secret for registry tokens
 	}

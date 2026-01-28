@@ -72,6 +72,7 @@ func initializeApp() (*application, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	tokenHandler := providers.ProvideTokenHandler(config)
 	apiService := api.New(config, manager, instancesManager, volumesManager, networkManager, devicesManager, ingressManager, buildsManager, resourcesManager, vm_metricsManager)
 	mainApplication := &application{
 		Ctx:              context,
@@ -88,6 +89,7 @@ func initializeApp() (*application, func(), error) {
 		ResourceManager:  resourcesManager,
 		VMMetricsManager: vm_metricsManager,
 		Registry:         registry,
+		TokenHandler:     tokenHandler,
 		ApiService:       apiService,
 	}
 	return mainApplication, func() {
@@ -112,5 +114,6 @@ type application struct {
 	ResourceManager  *resources.Manager
 	VMMetricsManager *vm_metrics.Manager
 	Registry         *registry.Registry
+	TokenHandler     *registry.TokenHandler
 	ApiService       *api.ApiService
 }

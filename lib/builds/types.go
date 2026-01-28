@@ -124,7 +124,19 @@ type BuildConfig struct {
 	BaseImageDigest string `json:"base_image_digest,omitempty"`
 
 	// RegistryURL is where to push the built image
+	// Can be HTTP (http://host:port) or HTTPS (https://host:port)
 	RegistryURL string `json:"registry_url"`
+
+	// RegistryInsecure skips TLS certificate verification for HTTPS registries.
+	// Use this for internal registries with self-signed certificates.
+	// For HTTP registries, this is automatically set to true.
+	RegistryInsecure bool `json:"registry_insecure,omitempty"`
+
+	// RegistryCACert is the PEM-encoded CA certificate for the registry.
+	// If provided, this cert is installed in the builder VM and used to verify
+	// the registry's TLS certificate. This allows proper TLS + auth for internal
+	// registries with self-signed certificates.
+	RegistryCACert string `json:"registry_ca_cert,omitempty"`
 
 	// RegistryToken is a short-lived JWT granting push access to specific repositories.
 	// The builder agent uses this token to authenticate with the registry.

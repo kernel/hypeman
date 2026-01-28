@@ -39,6 +39,7 @@ type application struct {
 	ResourceManager  *resources.Manager
 	VMMetricsManager *vm_metrics.Manager
 	Registry         *registry.Registry
+	TokenHandler     *registry.TokenHandler
 	ApiService       *api.ApiService
 }
 
@@ -60,6 +61,7 @@ func initializeApp() (*application, func(), error) {
 		providers.ProvideResourceManager,
 		providers.ProvideVMMetricsManager,
 		providers.ProvideRegistry,
+		providers.ProvideTokenHandler,
 		api.New,
 		wire.Struct(new(application), "*"),
 	))

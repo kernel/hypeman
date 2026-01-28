@@ -293,6 +293,11 @@ func run() error {
 		r.Use(middleware.Recoverer)
 		r.Use(mw.InjectLogger(logger)) // Inject logger for debug logging in JwtAuth
 		r.Use(mw.JwtAuth(app.Config.JwtSecret))
+
+		// Token endpoint for Docker registry authentication
+		// This is handled by JwtAuth middleware as unauthenticated
+		r.Handle("/token", app.TokenHandler)
+
 		r.Mount("/", app.Registry.Handler())
 	})
 

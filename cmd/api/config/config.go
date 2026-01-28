@@ -111,7 +111,9 @@ type Config struct {
 	// Build system configuration
 	MaxConcurrentSourceBuilds int    // Max concurrent source-to-image builds
 	BuilderImage              string // OCI image for builder VMs
-	RegistryURL               string // URL of registry for built images
+	RegistryURL               string // URL of registry for built images (http:// or https://)
+	RegistryInsecure          bool   // Skip TLS verification for HTTPS registries (for self-signed certs)
+	RegistryCACertFile        string // Path to CA cert file for registry (enables TLS + auth with self-signed certs)
 	BuildTimeout              int    // Default build timeout in seconds
 	BuildSecretsDir           string // Directory containing build secrets (optional)
 
@@ -209,6 +211,8 @@ func Load() *Config {
 		MaxConcurrentSourceBuilds: getEnvInt("MAX_CONCURRENT_SOURCE_BUILDS", 2),
 		BuilderImage:              getEnv("BUILDER_IMAGE", "hypeman/builder:latest"),
 		RegistryURL:               getEnv("REGISTRY_URL", "localhost:8080"),
+		RegistryInsecure:          getEnvBool("REGISTRY_INSECURE", false), // Set true for self-signed certs
+		RegistryCACertFile:        getEnv("REGISTRY_CA_CERT_FILE", ""),    // Path to CA cert for self-signed registry
 		BuildTimeout:              getEnvInt("BUILD_TIMEOUT", 600),
 		BuildSecretsDir:           getEnv("BUILD_SECRETS_DIR", ""), // Optional: path to directory with build secrets
 

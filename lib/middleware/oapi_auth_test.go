@@ -363,8 +363,10 @@ func TestJwtAuth_RegistryPaths(t *testing.T) {
 		assert.Equal(t, http.StatusUnauthorized, rr.Code, "external IP without token should be rejected")
 		assert.Contains(t, rr.Body.String(), "registry authentication required")
 		// WWW-Authenticate header is required for Docker/BuildKit to send credentials
-		assert.Equal(t, `Basic realm="registry"`, rr.Header().Get("WWW-Authenticate"),
-			"401 response must include WWW-Authenticate header for Docker auth")
+		// We use Bearer auth with a token endpoint for standard Docker registry auth flow
+		wwwAuth := rr.Header().Get("WWW-Authenticate")
+		assert.Contains(t, wwwAuth, `Bearer realm="`,
+			"401 response must include WWW-Authenticate Bearer header for Docker auth")
 	})
 
 	t.Run("invalid token but internal IP allows access via fallback", func(t *testing.T) {
@@ -444,8 +446,9 @@ func TestJwtAuth_RegistryPaths(t *testing.T) {
 		handler.ServeHTTP(rr1, req1)
 
 		assert.Equal(t, http.StatusUnauthorized, rr1.Code, "first request without auth should get 401")
-		assert.Equal(t, `Basic realm="registry"`, rr1.Header().Get("WWW-Authenticate"),
-			"401 must include WWW-Authenticate to trigger client auth")
+		wwwAuth := rr1.Header().Get("WWW-Authenticate")
+		assert.Contains(t, wwwAuth, `Bearer realm="`,
+			"401 must include WWW-Authenticate Bearer header to trigger client auth")
 
 		// Step 2: Retry with Basic auth (what Docker/BuildKit does after seeing WWW-Authenticate)
 		req2 := httptest.NewRequest(http.MethodHead, "/v2/builds/build-flow-test/manifests/latest", nil)
