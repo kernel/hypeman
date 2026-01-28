@@ -251,16 +251,16 @@ func (s *guestServer) executeTTY(ctx context.Context, stream pb.GuestService_Exe
 func (s *guestServer) buildEnv(envMap map[string]string, tty bool) []string {
 	// Start with current environment as base
 	baseEnv := os.Environ()
-	
+
 	// Build final environment
 	env := []string{}
-	
+
 	// For TTY sessions, set TERM=linux as default if not provided by user
 	setTERM := tty && envMap["TERM"] == ""
-	
+
 	// Check if user provided TERM
 	userProvidedTERM := envMap["TERM"] != ""
-	
+
 	// Copy base environment, filtering out TERM if we're setting it or user provided it
 	for _, e := range baseEnv {
 		if (setTERM || userProvidedTERM) && strings.HasPrefix(e, "TERM=") {
@@ -268,17 +268,16 @@ func (s *guestServer) buildEnv(envMap map[string]string, tty bool) []string {
 		}
 		env = append(env, e)
 	}
-	
+
 	// Add TERM=linux for TTY if not provided by user
 	if setTERM {
 		env = append(env, "TERM=linux")
 	}
-	
+
 	// Merge in provided environment variables (can override TERM)
 	for k, v := range envMap {
 		env = append(env, fmt.Sprintf("%s=%s", k, v))
 	}
-	
+
 	return env
 }
-
