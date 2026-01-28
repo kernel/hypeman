@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -49,29 +50,54 @@ func TestBuildEnv_TTY_TERM(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			env := server.buildEnv(tt.envMap, tt.tty)
-
-			// Check if TERM is present in the environment
-			termFound := false
-			for _, e := range env {
+			// Get base environment's TERM value before test
+			baseTERM := ""
+			for _, e := range os.Environ() {
 				if strings.HasPrefix(e, "TERM=") {
-					if tt.wantTERM == "" {
-						// If we don't expect TERM to be added by buildEnv, it's OK if it's from os.Environ()
-						// We just check that our code didn't add it
-						continue
-					}
-					if e == tt.wantTERM {
-						termFound = true
-						break
-					} else {
-						t.Errorf("Expected TERM=%q but got %q", tt.wantTERM, e)
-						return
-					}
+					baseTERM = e
+					break
 				}
 			}
 
-			if tt.wantTERM != "" && !termFound {
-				t.Errorf("Expected to find %q in environment but didn't. Env: %v", tt.wantTERM, env)
+			env := server.buildEnv(tt.envMap, tt.tty)
+
+			// Collect all TERM entries
+			termEntries := []string{}
+			for _, e := range env {
+				if strings.HasPrefix(e, "TERM=") {
+					termEntries = append(termEntries, e)
+				}
+			}
+
+			if tt.wantTERM == "" {
+				// For non-TTY without user-provided TERM, verify behavior:
+				// If os.Environ() had TERM, it should be preserved
+				// If os.Environ() had no TERM, none should be added
+				if baseTERM != "" {
+					found := false
+					for _, entry := range termEntries {
+						if entry == baseTERM {
+							found = true
+							break
+						}
+					}
+					if !found {
+						t.Errorf("Expected base environment TERM=%q to be preserved, but got: %v", baseTERM, termEntries)
+					}
+				}
+				// Don't fail if buildEnv doesn't add TERM (expected behavior)
+			} else {
+				// Verify expected TERM is present
+				found := false
+				for _, entry := range termEntries {
+					if entry == tt.wantTERM {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("Expected to find %q in environment but didn't. Found TERM entries: %v", tt.wantTERM, termEntries)
+				}
 			}
 
 			// Verify other environment variables are present
@@ -84,7 +110,7 @@ func TestBuildEnv_TTY_TERM(t *testing.T) {
 						break
 					}
 				}
-				if !found && k != "TERM" {
+				if !found {
 					t.Errorf("Expected to find %q in environment but didn't", expected)
 				}
 			}
@@ -99,18 +125,35 @@ func TestBuildEnv_Precedence(t *testing.T) {
 	// TTY mode with custom TERM should override default
 	env := server.buildEnv(map[string]string{"TERM": "custom"}, true)
 
-	customTermFound := false
+	// Count TERM entries and verify only one exists with the custom value
+	termEntries := []string{}
 	for _, e := range env {
-		if e == "TERM=custom" {
-			customTermFound = true
+		if strings.HasPrefix(e, "TERM=") {
+			termEntries = append(termEntries, e)
 		}
 	}
 
-	if !customTermFound {
-		t.Error("Expected custom TERM=custom to be present")
+	if len(termEntries) == 0 {
+		t.Error("Expected TERM to be present in environment")
 	}
 
-	// The user-provided value should be in the environment
-	// Note: Both TERM=linux and TERM=custom might be present since we append to os.Environ(),
-	// but the last one in the list will be used by the process
+	// Verify only TERM=custom exists (no duplicates)
+	foundCustom := false
+	foundLinux := false
+	for _, entry := range termEntries {
+		if entry == "TERM=custom" {
+			foundCustom = true
+		}
+		if entry == "TERM=linux" {
+			foundLinux = true
+		}
+	}
+
+	if !foundCustom {
+		t.Errorf("Expected TERM=custom to be present, but found: %v", termEntries)
+	}
+
+	if foundLinux {
+		t.Errorf("Expected TERM=linux NOT to be present when user provides custom TERM, but found: %v", termEntries)
+	}
 }
