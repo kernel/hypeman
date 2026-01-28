@@ -339,17 +339,17 @@ func TestJwtAuth_RegistryPaths(t *testing.T) {
 		assert.Equal(t, http.StatusOK, rr.Code, "internal staging IP should allow access via fallback")
 	})
 
-	t.Run("production IP without token returns 401 (no fallback for prod)", func(t *testing.T) {
+	t.Run("no token but internal production IP allows access via fallback", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodHead, "/v2/builds/any-build/manifests/latest", nil)
 		// No Authorization header
-		req.RemoteAddr = "172.30.16.101:42700" // Production subnet - should NOT fallback
+		req.RemoteAddr = "172.30.16.101:42700" // Production subnet
 
 		rr := httptest.NewRecorder()
 		handler.ServeHTTP(rr, req)
 
-		// Production should require token auth, not IP fallback
-		assert.Equal(t, http.StatusUnauthorized, rr.Code, "production IP should require token auth")
-		assert.Equal(t, `Basic realm="registry"`, rr.Header().Get("WWW-Authenticate"))
+		// BuildKit with insecure registries doesn't do WWW-Authenticate challenge-response,
+		// so we need IP fallback for production
+		assert.Equal(t, http.StatusOK, rr.Code, "internal production IP should allow access via fallback")
 	})
 
 	t.Run("no token and external IP returns 401 with WWW-Authenticate header", func(t *testing.T) {
@@ -470,13 +470,13 @@ func TestIsInternalVMRequest(t *testing.T) {
 		remoteAddr string
 		expected   bool
 	}{
-		// Staging/dev subnets (fallback allowed)
+		// Staging/dev subnets
 		{"staging 10.100.x.x", "10.100.1.50:12345", true},
 		{"staging 10.102.x.x", "10.102.5.100:54321", true},
 
-		// Production subnet (NO fallback - must use token auth)
-		{"production 172.30.x.x requires token", "172.30.16.101:42700", false},
-		{"production 172.30.0.x requires token", "172.30.0.50:8080", false},
+		// Production subnet (fallback needed because BuildKit doesn't do WWW-Authenticate)
+		{"production 172.30.x.x", "172.30.16.101:42700", true},
+		{"production 172.30.0.x", "172.30.0.50:8080", true},
 
 		// External IPs (should be rejected)
 		{"external 192.168.x.x", "192.168.1.100:8080", false},

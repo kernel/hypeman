@@ -219,10 +219,11 @@ func isInternalVMRequest(r *http.Request) bool {
 		ip = ip[:idx]
 	}
 
-	// Check if it's from the VM network (staging/dev only)
-	// Production (172.30.x.x) should use token auth, not IP fallback
-	// TODO: Remove this fallback entirely once token auth is verified working
-	return strings.HasPrefix(ip, "10.100.") || strings.HasPrefix(ip, "10.102.")
+	// Check if it's from the VM network
+	// BuildKit with registry.insecure=true doesn't do WWW-Authenticate challenge-response,
+	// so we need IP fallback for all internal subnets until we find a way to make
+	// BuildKit send auth proactively
+	return strings.HasPrefix(ip, "10.100.") || strings.HasPrefix(ip, "10.102.") || strings.HasPrefix(ip, "172.30.")
 }
 
 // extractRepoFromPath extracts the repository name from a registry path.
