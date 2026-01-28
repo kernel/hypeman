@@ -232,29 +232,17 @@ func isWriteOperation(method string) bool {
 	return method == http.MethodPut || method == http.MethodPost || method == http.MethodPatch || method == http.MethodDelete
 }
 
-// writeRegistryUnauthorized writes a 401 response with proper WWW-Authenticate header
-// for Docker Registry Token Authentication. This tells clients (like BuildKit) where
-// to obtain a bearer token.
-// See: https://distribution.github.io/distribution/spec/auth/token/
+// writeRegistryUnauthorized writes a 401 response with proper WWW-Authenticate header.
+// We use Basic auth instead of Bearer/token flow because:
+// 1. BuildKit has credentials in docker config.json (JWT as username)
+// 2. BuildKit sends Basic auth directly to registry when challenged
+// 3. Our middleware already accepts Basic auth with JWT and validates it
+// This bypasses the OAuth2 token exchange which has issues with BuildKit not
+// sending credentials to the token endpoint.
 func writeRegistryUnauthorized(w http.ResponseWriter, r *http.Request) {
-	// Build the realm URL - use the host from the request
-	host := r.Host
-	realm := "/v2/token"
-	if host != "" {
-		// Determine scheme from request
-		scheme := "http" // Default to http for internal/private IPs
-		if r.TLS != nil {
-			scheme = "https"
-		} else if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
-			scheme = proto
-		}
-		realm = fmt.Sprintf("%s://%s/v2/token", scheme, host)
-	}
-
-	// Set WWW-Authenticate header per Docker Registry Token spec
-	// Format: Bearer realm="<token-url>",service="<service-name>"
-	wwwAuth := fmt.Sprintf(`Bearer realm="%s",service="hypeman"`, realm)
-	w.Header().Set("WWW-Authenticate", wwwAuth)
+	// Use Basic auth challenge - BuildKit will send credentials from docker config.json
+	// The JWT is stored as the username in docker config.json (base64 encoded as "jwt:")
+	w.Header().Set("WWW-Authenticate", `Basic realm="hypeman"`)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusUnauthorized)
 
