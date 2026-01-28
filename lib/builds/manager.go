@@ -64,6 +64,13 @@ type Config struct {
 	// RegistryURL is the URL of the registry to push built images to
 	RegistryURL string
 
+	// RegistryInsecure skips TLS verification for the registry (for self-signed certs)
+	RegistryInsecure bool
+
+	// RegistryCACert is the PEM-encoded CA certificate for verifying the registry's TLS cert
+	// If set, this is passed to the builder VM to enable TLS verification
+	RegistryCACert string
+
 	// DefaultTimeout is the default build timeout in seconds
 	DefaultTimeout int
 
@@ -80,6 +87,18 @@ func DefaultConfig() Config {
 		RegistryURL:         "localhost:8080",
 		DefaultTimeout:      600, // 10 minutes
 	}
+}
+
+// stripRegistryScheme removes http:// or https:// prefix from registry URL.
+// This is needed because image references should not contain the scheme.
+func stripRegistryScheme(registryURL string) string {
+	if strings.HasPrefix(registryURL, "https://") {
+		return strings.TrimPrefix(registryURL, "https://")
+	}
+	if strings.HasPrefix(registryURL, "http://") {
+		return strings.TrimPrefix(registryURL, "http://")
+	}
+	return registryURL
 }
 
 type manager struct {
@@ -237,19 +256,21 @@ func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourc
 
 	// Write build config for the builder agent
 	buildConfig := &BuildConfig{
-		JobID:              id,
-		BaseImageDigest:    req.BaseImageDigest,
-		RegistryURL:        m.config.RegistryURL,
-		RegistryToken:      registryToken,
-		CacheScope:         req.CacheScope,
-		SourcePath:         "/src",
-		Dockerfile:         req.Dockerfile,
-		BuildArgs:          req.BuildArgs,
-		Secrets:            req.Secrets,
-		TimeoutSeconds:     policy.TimeoutSeconds,
-		NetworkMode:        policy.NetworkMode,
-		IsAdminBuild:       req.IsAdminBuild,
-		GlobalCacheKey: req.GlobalCacheKey,
+		JobID:            id,
+		BaseImageDigest:  req.BaseImageDigest,
+		RegistryURL:      m.config.RegistryURL,
+		RegistryToken:    registryToken,
+		RegistryInsecure: m.config.RegistryInsecure,
+		RegistryCACert:   m.config.RegistryCACert,
+		CacheScope:       req.CacheScope,
+		SourcePath:       "/src",
+		Dockerfile:       req.Dockerfile,
+		BuildArgs:        req.BuildArgs,
+		Secrets:          req.Secrets,
+		TimeoutSeconds:   policy.TimeoutSeconds,
+		NetworkMode:      policy.NetworkMode,
+		IsAdminBuild:     req.IsAdminBuild,
+		GlobalCacheKey:   req.GlobalCacheKey,
 	}
 	if err := writeBuildConfig(m.paths, id, buildConfig); err != nil {
 		deleteBuild(m.paths, id)
@@ -327,7 +348,8 @@ func (m *manager) runBuild(ctx context.Context, id string, req CreateBuildReques
 	}
 
 	m.logger.Info("build succeeded", "id", id, "digest", result.ImageDigest, "duration", duration)
-	imageRef := fmt.Sprintf("%s/builds/%s", m.config.RegistryURL, id)
+	registryHost := stripRegistryScheme(m.config.RegistryURL)
+	imageRef := fmt.Sprintf("%s/builds/%s", registryHost, id)
 
 	// Wait for image to be ready before reporting build as complete.
 	// This fixes the race condition (KERNEL-863) where build reports "ready"
@@ -700,7 +722,8 @@ func (m *manager) updateBuildComplete(id string, status string, digest *string, 
 // This ensures that when a build reports "ready", the image is actually usable
 // for instance creation (fixes KERNEL-863 race condition).
 func (m *manager) waitForImageReady(ctx context.Context, id string) error {
-	imageRef := fmt.Sprintf("%s/builds/%s", m.config.RegistryURL, id)
+	registryHost := stripRegistryScheme(m.config.RegistryURL)
+	imageRef := fmt.Sprintf("%s/builds/%s", registryHost, id)
 
 	// Poll for up to 60 seconds (image conversion is typically fast)
 	const maxAttempts = 120

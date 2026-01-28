@@ -183,6 +183,11 @@ func isRegistryPath(path string) bool {
 	return strings.HasPrefix(path, "/v2/")
 }
 
+// isTokenEndpoint checks if the request is for the /v2/token endpoint
+func isTokenEndpoint(path string) bool {
+	return path == "/v2/token" || path == "/v2/token/"
+}
+
 // isInternalVMRequest checks if the request is from an internal VM network
 // This is used as a fallback for builder VMs that don't have token auth yet.
 //
@@ -225,6 +230,33 @@ func extractRepoFromPath(path string) string {
 // isWriteOperation returns true if the HTTP method implies a write operation
 func isWriteOperation(method string) bool {
 	return method == http.MethodPut || method == http.MethodPost || method == http.MethodPatch || method == http.MethodDelete
+}
+
+// writeRegistryUnauthorized writes a 401 response with proper WWW-Authenticate header
+// for Docker Registry Token Authentication. This tells clients (like BuildKit) where
+// to obtain a bearer token.
+// See: https://distribution.github.io/distribution/spec/auth/token/
+func writeRegistryUnauthorized(w http.ResponseWriter, host string) {
+	// Build the realm URL - use the host from the request
+	realm := "/v2/token"
+	if host != "" {
+		// Determine scheme - assume https unless it looks like localhost
+		scheme := "https"
+		if strings.HasPrefix(host, "localhost") || strings.HasPrefix(host, "127.0.0.1") {
+			scheme = "http"
+		}
+		realm = fmt.Sprintf("%s://%s/v2/token", scheme, host)
+	}
+
+	// Set WWW-Authenticate header per Docker Registry Token spec
+	// Format: Bearer realm="<token-url>",service="<service-name>"
+	wwwAuth := fmt.Sprintf(`Bearer realm="%s",service="hypeman"`, realm)
+	w.Header().Set("WWW-Authenticate", wwwAuth)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusUnauthorized)
+
+	// Return error in OCI Distribution format
+	fmt.Fprintf(w, `{"errors":[{"code":"UNAUTHORIZED","message":"authentication required"}]}`)
 }
 
 // validateRegistryToken validates a registry-scoped JWT token and checks repository access.
@@ -292,6 +324,15 @@ func JwtAuth(jwtSecret string) func(http.Handler) http.Handler {
 
 			// For registry paths, handle specially to support both Bearer and Basic auth
 			if isRegistryPath(r.URL.Path) {
+				// Allow /v2/token endpoint through without auth - it handles its own auth
+				// This implements the Docker Registry Token Authentication flow
+				if isTokenEndpoint(r.URL.Path) {
+					log.DebugContext(r.Context(), "allowing token endpoint request through",
+						"remote_addr", r.RemoteAddr)
+					next.ServeHTTP(w, r)
+					return
+				}
+
 				if authHeader != "" {
 					// Try to extract token (supports both Bearer and Basic auth)
 					token, authType, err := extractTokenFromAuth(authHeader)
@@ -327,9 +368,10 @@ func JwtAuth(jwtSecret string) func(http.Handler) http.Handler {
 					return
 				}
 
-				// Registry auth failed
+				// Registry auth failed - return 401 with WWW-Authenticate header
+				// This tells clients (like BuildKit) where to get a token
 				log.DebugContext(r.Context(), "registry request unauthorized", "remote_addr", r.RemoteAddr)
-				OapiErrorHandler(w, "registry authentication required", http.StatusUnauthorized)
+				writeRegistryUnauthorized(w, r.Host)
 				return
 			}
 

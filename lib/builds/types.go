@@ -130,6 +130,12 @@ type BuildConfig struct {
 	// The builder agent uses this token to authenticate with the registry.
 	RegistryToken string `json:"registry_token,omitempty"`
 
+	// RegistryInsecure skips TLS verification for the registry (for self-signed certs)
+	RegistryInsecure bool `json:"registry_insecure,omitempty"`
+
+	// RegistryCACert is the PEM-encoded CA certificate for verifying the registry's TLS cert
+	RegistryCACert string `json:"registry_ca_cert,omitempty"`
+
 	// CacheScope is the tenant-specific cache key prefix
 	CacheScope string `json:"cache_scope,omitempty"`
 

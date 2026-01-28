@@ -28,6 +28,7 @@ import (
 	mw "github.com/kernel/hypeman/lib/middleware"
 	"github.com/kernel/hypeman/lib/oapi"
 	"github.com/kernel/hypeman/lib/otel"
+	"github.com/kernel/hypeman/lib/registry"
 	"github.com/kernel/hypeman/lib/vmm"
 	nethttpmiddleware "github.com/oapi-codegen/nethttp-middleware"
 	"github.com/riandyrn/otelchi"
@@ -285,6 +286,12 @@ func run() error {
 		mw.ResolveResource(app.ApiService.NewResolvers(), api.ResolverErrorResponder),
 	).Get("/instances/{id}/cp", app.ApiService.CpHandler)
 
+	// Create builder VM resolver for secure token authentication
+	// This validates that token requests from builder VMs are for their authorized repos only
+	// Create token handler for Docker Registry Token Authentication
+	// All clients must provide explicit credentials (Basic or Bearer auth with JWT)
+	tokenHandler := registry.NewTokenHandler(app.Config.JwtSecret)
+
 	// OCI Distribution registry endpoints for image push (outside OpenAPI spec)
 	r.Route("/v2", func(r chi.Router) {
 		r.Use(middleware.RequestID)
@@ -292,6 +299,11 @@ func run() error {
 		r.Use(middleware.Logger)
 		r.Use(middleware.Recoverer)
 		r.Use(mw.JwtAuth(app.Config.JwtSecret))
+
+		// Token endpoint for Docker Registry Token Authentication
+		// This is called by clients (like BuildKit) after receiving a 401 with WWW-Authenticate
+		r.Get("/token", tokenHandler.ServeHTTP)
+
 		r.Mount("/", app.Registry.Handler())
 	})
 

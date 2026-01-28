@@ -146,13 +146,74 @@ hypeman push myimage:latest my-custom-name
 
 ## Authentication
 
-The registry endpoints use JWT bearer token authentication. The hypeman CLI reads `HYPEMAN_API_KEY` or `HYPEMAN_BEARER_TOKEN` and passes it directly as a registry token using go-containerregistry's `RegistryToken` auth.
+The registry implements [Docker Registry Token Authentication](https://distribution.github.io/distribution/spec/auth/token/):
 
-**Note:** `docker push` will not work with this registry. Docker CLI expects the v2 registry token auth flow (WWW-Authenticate challenge → token endpoint → retry with JWT), which we don't implement. Use the hypeman CLI for pushing images.
+```mermaid
+sequenceDiagram
+    participant Client as BuildKit/Docker
+    participant Registry as Hypeman Registry
+    participant Token as /v2/token
+
+    Client->>Registry: GET /v2/builds/xxx/manifests/latest
+    Registry-->>Client: 401 WWW-Authenticate: Bearer realm="/v2/token"
+    
+    alt Client has credentials
+        Client->>Token: GET /v2/token?scope=repository:builds/xxx:push (Basic auth: JWT:)
+        Token->>Token: Validate JWT, check scope
+        Token-->>Client: {"token": "bearer-token"}
+    else Internal VM (no credentials)
+        Client->>Token: GET /v2/token?scope=repository:builds/xxx:push
+        Token->>Token: Check RemoteAddr is 10.100.x.x or 10.102.x.x
+        Token-->>Client: {"token": "internal-vm-token"}
+    end
+    
+    Client->>Registry: GET /v2/builds/xxx/manifests/latest (Bearer token)
+    Registry-->>Client: 200 OK
+```
+
+### Authentication Methods
+
+1. **Bearer Token**: Pass JWT directly in `Authorization: Bearer <token>` header
+2. **Basic Auth**: Pass JWT as username in `Authorization: Basic base64(jwt:)` header (BuildKit uses this)
+3. **IP-based (Internal VMs)**: Requests from 10.100.x.x or 10.102.x.x are trusted (fallback for builder VMs)
+
+### Token Endpoint (`/v2/token`)
+
+The token endpoint handles the OAuth2-style token exchange:
+
+- **With credentials**: Validates the JWT and returns a bearer token if the requested scope is allowed
+- **Without credentials from internal VM**: Returns a token for the requested scope (builder VM fallback)
+- **Without credentials from external IP**: Returns 401
+
+### Registry Tokens
+
+Builder VMs receive scoped JWT tokens with:
+
+```json
+{
+  "sub": "builder-build-123",
+  "build_id": "build-123",
+  "repos": ["builds/build-123", "cache/tenant-x"],
+  "scope": "push"
+}
+```
+
+Or with per-repo permissions:
+
+```json
+{
+  "sub": "builder-build-123",
+  "build_id": "build-123",
+  "repo_access": [
+    {"repo": "builds/build-123", "scope": "push"},
+    {"repo": "cache/global/node", "scope": "pull"}
+  ]
+}
+```
 
 ## Limitations
 
-- **No docker push support**: Docker CLI requires the v2 registry token auth flow. Use `hypeman push` instead.
+- **BuildKit credential forwarding**: BuildKit may not send credentials from `config.json` to the `/v2/token` endpoint. The registry works around this by trusting internal VM network IPs (10.100.x.x, 10.102.x.x) on the token endpoint.
 
 ## Design Decisions
 

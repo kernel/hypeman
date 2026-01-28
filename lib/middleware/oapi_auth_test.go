@@ -203,6 +203,70 @@ func TestExtractRepoFromPath(t *testing.T) {
 	}
 }
 
+func TestJwtAuth_TokenEndpointBypass(t *testing.T) {
+	// Create a handler that returns 200 if the request gets through
+	nextHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("token endpoint reached"))
+	})
+
+	handler := JwtAuth(testJWTSecret)(nextHandler)
+
+	t.Run("token endpoint passes through without auth", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/v2/token?scope=repository:builds/abc:push", nil)
+
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+
+		assert.Equal(t, http.StatusOK, rr.Code)
+		assert.Contains(t, rr.Body.String(), "token endpoint reached")
+	})
+
+	t.Run("token endpoint with trailing slash passes through", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/v2/token/", nil)
+
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+
+		assert.Equal(t, http.StatusOK, rr.Code)
+	})
+}
+
+func TestJwtAuth_RegistryUnauthorizedResponse(t *testing.T) {
+	nextHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	handler := JwtAuth(testJWTSecret)(nextHandler)
+
+	t.Run("registry 401 includes WWW-Authenticate header", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/v2/builds/abc123/manifests/latest", nil)
+		req.Host = "localhost:8080"
+
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+
+		assert.Equal(t, http.StatusUnauthorized, rr.Code)
+
+		// Check WWW-Authenticate header
+		wwwAuth := rr.Header().Get("WWW-Authenticate")
+		assert.Contains(t, wwwAuth, "Bearer realm=")
+		assert.Contains(t, wwwAuth, "/v2/token")
+		assert.Contains(t, wwwAuth, `service="hypeman"`)
+	})
+
+	t.Run("registry 401 response is OCI Distribution format", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/v2/builds/abc123/blobs/sha256:abc", nil)
+
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+
+		assert.Equal(t, http.StatusUnauthorized, rr.Code)
+		assert.Contains(t, rr.Body.String(), `"code":"UNAUTHORIZED"`)
+		assert.Contains(t, rr.Body.String(), `"message":"authentication required"`)
+	})
+}
+
 func TestJwtAuth_RequiresAuthorization(t *testing.T) {
 	nextHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)

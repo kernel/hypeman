@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"strconv"
 	"time"
 
@@ -249,10 +250,23 @@ func ProvideIngressManager(p *paths.Paths, cfg *config.Config, instanceManager i
 
 // ProvideBuildManager provides the build manager
 func ProvideBuildManager(p *paths.Paths, cfg *config.Config, instanceManager instances.Manager, volumeManager volumes.Manager, imageManager images.Manager, log *slog.Logger) (builds.Manager, error) {
+	// Read CA cert file if specified
+	var registryCACert string
+	if cfg.RegistryCACertFile != "" {
+		certData, err := os.ReadFile(cfg.RegistryCACertFile)
+		if err != nil {
+			return nil, fmt.Errorf("read registry CA cert file: %w", err)
+		}
+		registryCACert = string(certData)
+		log.Info("registry CA certificate loaded", "file", cfg.RegistryCACertFile)
+	}
+
 	buildConfig := builds.Config{
 		MaxConcurrentBuilds: cfg.MaxConcurrentSourceBuilds,
 		BuilderImage:        cfg.BuilderImage,
 		RegistryURL:         cfg.RegistryURL,
+		RegistryInsecure:    cfg.RegistryInsecure,
+		RegistryCACert:      registryCACert,
 		DefaultTimeout:      cfg.BuildTimeout,
 		RegistrySecret:      cfg.JwtSecret, // Use same secret for registry tokens
 	}

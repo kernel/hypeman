@@ -37,19 +37,21 @@ const (
 
 // BuildConfig matches the BuildConfig type from lib/builds/types.go
 type BuildConfig struct {
-	JobID              string            `json:"job_id"`
-	BaseImageDigest    string            `json:"base_image_digest,omitempty"`
-	RegistryURL        string            `json:"registry_url"`
-	RegistryToken      string            `json:"registry_token,omitempty"`
-	CacheScope         string            `json:"cache_scope,omitempty"`
-	SourcePath         string            `json:"source_path"`
-	Dockerfile         string            `json:"dockerfile,omitempty"`
-	BuildArgs          map[string]string `json:"build_args,omitempty"`
-	Secrets            []SecretRef       `json:"secrets,omitempty"`
-	TimeoutSeconds     int               `json:"timeout_seconds"`
-	NetworkMode        string            `json:"network_mode"`
-	IsAdminBuild       bool              `json:"is_admin_build,omitempty"`
-	GlobalCacheKey string            `json:"global_cache_key,omitempty"`
+	JobID            string            `json:"job_id"`
+	BaseImageDigest  string            `json:"base_image_digest,omitempty"`
+	RegistryURL      string            `json:"registry_url"`
+	RegistryToken    string            `json:"registry_token,omitempty"`
+	RegistryInsecure bool              `json:"registry_insecure,omitempty"`
+	RegistryCACert   string            `json:"registry_ca_cert,omitempty"`
+	CacheScope       string            `json:"cache_scope,omitempty"`
+	SourcePath       string            `json:"source_path"`
+	Dockerfile       string            `json:"dockerfile,omitempty"`
+	BuildArgs        map[string]string `json:"build_args,omitempty"`
+	Secrets          []SecretRef       `json:"secrets,omitempty"`
+	TimeoutSeconds   int               `json:"timeout_seconds"`
+	NetworkMode      string            `json:"network_mode"`
+	IsAdminBuild     bool              `json:"is_admin_build,omitempty"`
+	GlobalCacheKey   string            `json:"global_cache_key,omitempty"`
 }
 
 // SecretRef references a secret to inject during build
@@ -367,7 +369,7 @@ func runBuildProcess() {
 	buildConfigLock.Unlock()
 
 	// Setup registry authentication before running the build
-	if err := setupRegistryAuth(config.RegistryURL, config.RegistryToken); err != nil {
+	if err := setupRegistryAuth(config); err != nil {
 		setResult(BuildResult{
 			Success:    false,
 			Error:      fmt.Sprintf("setup registry auth: %v", err),
@@ -489,9 +491,20 @@ func loadConfig() (*BuildConfig, error) {
 	return &config, nil
 }
 
-// setupRegistryAuth creates a Docker config.json with the registry token for authentication.
-// BuildKit uses this file to authenticate when pushing images.
-func setupRegistryAuth(registryURL, token string) error {
+// setupRegistryAuth creates a Docker config.json with the registry token for authentication,
+// and a buildkitd.toml for TLS configuration.
+// BuildKit uses these files to authenticate and configure TLS when pushing images.
+func setupRegistryAuth(config *BuildConfig) error {
+	// Parse registry host (strip any scheme prefix for backwards compatibility)
+	registryHost := config.RegistryURL
+	if strings.HasPrefix(registryHost, "https://") {
+		registryHost = strings.TrimPrefix(registryHost, "https://")
+	} else if strings.HasPrefix(registryHost, "http://") {
+		registryHost = strings.TrimPrefix(registryHost, "http://")
+	}
+
+	token := config.RegistryToken
+
 	if token == "" {
 		log.Println("No registry token provided, skipping auth setup")
 		return nil
@@ -503,9 +516,10 @@ func setupRegistryAuth(registryURL, token string) error {
 	authValue := base64.StdEncoding.EncodeToString([]byte(token + ":"))
 
 	// Create the Docker config structure
+	// Note: Docker config uses host without scheme (e.g., "10.102.0.1:8443")
 	dockerConfig := map[string]interface{}{
 		"auths": map[string]interface{}{
-			registryURL: map[string]string{
+			registryHost: map[string]string{
 				"auth": authValue,
 			},
 		},
@@ -528,24 +542,137 @@ func setupRegistryAuth(registryURL, token string) error {
 		return fmt.Errorf("write docker config: %w", err)
 	}
 
-	log.Printf("Registry auth configured for %s", registryURL)
+	log.Printf("Docker config created for registry %s (auth length: %d)", registryHost, len(authValue))
+
+	// Also write to /root/.docker for rootless buildkit that may run as root
+	rootDockerDir := "/root/.docker"
+	if err := os.MkdirAll(rootDockerDir, 0700); err == nil {
+		rootConfigPath := filepath.Join(rootDockerDir, "config.json")
+		if err := os.WriteFile(rootConfigPath, configData, 0600); err != nil {
+			log.Printf("Warning: failed to write root docker config: %v", err)
+		} else {
+			log.Printf("Registry auth configured at %s", rootConfigPath)
+		}
+	}
+
+	log.Printf("Registry auth configured at %s", configPath)
+
+	// Setup buildkitd.toml for TLS configuration
+	if err := setupBuildkitdConfig(config); err != nil {
+		return fmt.Errorf("setup buildkitd config: %w", err)
+	}
+
+	return nil
+}
+
+// setupBuildkitdConfig creates a buildkitd.toml configuration file for registry TLS settings.
+// This configures BuildKit's TLS verification behavior for the registry.
+func setupBuildkitdConfig(config *BuildConfig) error {
+	// Parse registry host from URL (strip any scheme prefix for backwards compatibility)
+	registryHost := config.RegistryURL
+	if strings.HasPrefix(registryHost, "https://") {
+		registryHost = strings.TrimPrefix(registryHost, "https://")
+	} else if strings.HasPrefix(registryHost, "http://") {
+		registryHost = strings.TrimPrefix(registryHost, "http://")
+	}
+
+	// Determine protocol:
+	// - RegistryInsecure=true means use HTTP (plaintext)
+	// - RegistryInsecure=false (default) means use HTTPS
+	isHTTPS := !config.RegistryInsecure
+	hasCA := config.RegistryCACert != ""
+
+	log.Printf("BuildKit config for registry %s (https=%v, insecure=%v, hasCA=%v)",
+		registryHost, isHTTPS, config.RegistryInsecure, hasCA)
+
+	// Write CA certificate if provided
+	caCertPath := ""
+	if hasCA {
+		caCertPath = "/home/builder/.config/buildkit/registry-ca.crt"
+		certDir := filepath.Dir(caCertPath)
+		if err := os.MkdirAll(certDir, 0755); err != nil {
+			return fmt.Errorf("create cert dir: %w", err)
+		}
+		if err := os.WriteFile(caCertPath, []byte(config.RegistryCACert), 0644); err != nil {
+			return fmt.Errorf("write CA cert: %w", err)
+		}
+		log.Printf("Registry CA certificate written to %s", caCertPath)
+	}
+
+	// Build the buildkitd.toml content
+	var tomlContent strings.Builder
+	tomlContent.WriteString("# BuildKit daemon configuration\n")
+	tomlContent.WriteString("# Generated by builder-agent for registry TLS\n\n")
+
+	// Registry configuration section
+	tomlContent.WriteString(fmt.Sprintf("[registry.\"%s\"]\n", registryHost))
+
+	if !isHTTPS {
+		// HTTP registry - mark as insecure (plaintext)
+		tomlContent.WriteString("  http = true\n")
+		tomlContent.WriteString("  insecure = true\n")
+	} else if config.RegistryInsecure {
+		// HTTPS but skip TLS verification
+		tomlContent.WriteString("  insecure = true\n")
+	} else if hasCA {
+		// HTTPS with custom CA
+		tomlContent.WriteString(fmt.Sprintf("  ca = [\"%s\"]\n", caCertPath))
+	}
+	// If HTTPS without insecure and without CA, use system CA (no config needed)
+
+	// Ensure config directory exists
+	buildkitDir := "/home/builder/.config/buildkit"
+	if err := os.MkdirAll(buildkitDir, 0755); err != nil {
+		return fmt.Errorf("create buildkit config dir: %w", err)
+	}
+
+	// Write buildkitd.toml
+	tomlPath := filepath.Join(buildkitDir, "buildkitd.toml")
+	if err := os.WriteFile(tomlPath, []byte(tomlContent.String()), 0644); err != nil {
+		return fmt.Errorf("write buildkitd.toml: %w", err)
+	}
+
+	log.Printf("BuildKit config written to %s for registry %s (https=%v, insecure=%v, hasCA=%v)",
+		tomlPath, registryHost, isHTTPS, config.RegistryInsecure, hasCA)
+
 	return nil
 }
 
 func runBuild(ctx context.Context, config *BuildConfig, logWriter io.Writer) (string, string, error) {
 	var buildLogs bytes.Buffer
 
-	// Build output reference
-	outputRef := fmt.Sprintf("%s/builds/%s", config.RegistryURL, config.JobID)
+	// Parse registry host (strip any scheme prefix for backwards compatibility)
+	registryHost := config.RegistryURL
+	if strings.HasPrefix(registryHost, "https://") {
+		registryHost = strings.TrimPrefix(registryHost, "https://")
+	} else if strings.HasPrefix(registryHost, "http://") {
+		registryHost = strings.TrimPrefix(registryHost, "http://")
+	}
+
+	// Build output reference (use host without scheme)
+	outputRef := fmt.Sprintf("%s/builds/%s", registryHost, config.JobID)
+
+	// Determine protocol:
+	// - RegistryInsecure=true means use HTTP (plaintext), needs registry.insecure=true in buildctl
+	// - RegistryInsecure=false (default) means use HTTPS, TLS config comes from buildkitd.toml
+	useInsecureFlag := config.RegistryInsecure
 
 	// Build arguments
-	// Use registry.insecure=true for internal HTTP registries
+	var outputOpts string
+	if useInsecureFlag {
+		outputOpts = fmt.Sprintf("type=image,name=%s,push=true,registry.insecure=true,oci-mediatypes=true", outputRef)
+		log.Printf("Using HTTP registry (insecure mode): %s", registryHost)
+	} else {
+		outputOpts = fmt.Sprintf("type=image,name=%s,push=true,oci-mediatypes=true", outputRef)
+		log.Printf("Using HTTPS registry (secure mode): %s", registryHost)
+	}
+
 	args := []string{
 		"build",
 		"--frontend", "dockerfile.v0",
 		"--local", "context=" + config.SourcePath,
 		"--local", "dockerfile=" + config.SourcePath,
-		"--output", fmt.Sprintf("type=image,name=%s,push=true,registry.insecure=true,oci-mediatypes=true", outputRef),
+		"--output", outputOpts,
 		"--metadata-file", "/tmp/build-metadata.json",
 	}
 
@@ -556,15 +683,23 @@ func runBuild(ctx context.Context, config *BuildConfig, logWriter io.Writer) (st
 
 	// Import from global cache (read-only for regular builds, read-write for admin builds)
 	if config.GlobalCacheKey != "" {
-		globalCacheRef := fmt.Sprintf("%s/cache/global/%s", config.RegistryURL, config.GlobalCacheKey)
-		args = append(args, "--import-cache", fmt.Sprintf("type=registry,ref=%s,registry.insecure=true", globalCacheRef))
+		globalCacheRef := fmt.Sprintf("%s/cache/global/%s", registryHost, config.GlobalCacheKey)
+		cacheOpts := "type=registry,ref=" + globalCacheRef
+		if useInsecureFlag {
+			cacheOpts += ",registry.insecure=true"
+		}
+		args = append(args, "--import-cache", cacheOpts)
 		log.Printf("Importing from global cache: %s", globalCacheRef)
 	}
 
 	// For regular builds, also import from tenant cache if scope is set
 	if !config.IsAdminBuild && config.CacheScope != "" {
-		tenantCacheRef := fmt.Sprintf("%s/cache/%s", config.RegistryURL, config.CacheScope)
-		args = append(args, "--import-cache", fmt.Sprintf("type=registry,ref=%s,registry.insecure=true", tenantCacheRef))
+		tenantCacheRef := fmt.Sprintf("%s/cache/%s", registryHost, config.CacheScope)
+		cacheOpts := "type=registry,ref=" + tenantCacheRef
+		if useInsecureFlag {
+			cacheOpts += ",registry.insecure=true"
+		}
+		args = append(args, "--import-cache", cacheOpts)
 		log.Printf("Importing from tenant cache: %s", tenantCacheRef)
 	}
 
@@ -572,15 +707,23 @@ func runBuild(ctx context.Context, config *BuildConfig, logWriter io.Writer) (st
 	if config.IsAdminBuild {
 		// Admin build: export to global cache
 		if config.GlobalCacheKey != "" {
-			globalCacheRef := fmt.Sprintf("%s/cache/global/%s", config.RegistryURL, config.GlobalCacheKey)
-			args = append(args, "--export-cache", fmt.Sprintf("type=registry,ref=%s,mode=max,registry.insecure=true", globalCacheRef))
+			globalCacheRef := fmt.Sprintf("%s/cache/global/%s", registryHost, config.GlobalCacheKey)
+			cacheOpts := "type=registry,ref=" + globalCacheRef + ",mode=max"
+			if useInsecureFlag {
+				cacheOpts += ",registry.insecure=true"
+			}
+			args = append(args, "--export-cache", cacheOpts)
 			log.Printf("Exporting to global cache (admin build): %s", globalCacheRef)
 		}
 	} else {
 		// Regular build: export to tenant cache
 		if config.CacheScope != "" {
-			tenantCacheRef := fmt.Sprintf("%s/cache/%s", config.RegistryURL, config.CacheScope)
-			args = append(args, "--export-cache", fmt.Sprintf("type=registry,ref=%s,mode=max,registry.insecure=true", tenantCacheRef))
+			tenantCacheRef := fmt.Sprintf("%s/cache/%s", registryHost, config.CacheScope)
+			cacheOpts := "type=registry,ref=" + tenantCacheRef + ",mode=max"
+			if useInsecureFlag {
+				cacheOpts += ",registry.insecure=true"
+			}
+			args = append(args, "--export-cache", cacheOpts)
 			log.Printf("Exporting to tenant cache: %s", tenantCacheRef)
 		}
 	}
@@ -596,16 +739,22 @@ func runBuild(ctx context.Context, config *BuildConfig, logWriter io.Writer) (st
 		args = append(args, "--opt", fmt.Sprintf("build-arg:%s=%s", k, v))
 	}
 
+	// Set buildkitd config path
+	buildkitdConfig := "/home/builder/.config/buildkit/buildkitd.toml"
+	log.Printf("Using buildkitd config: %s", buildkitdConfig)
+
 	log.Printf("Running: buildctl-daemonless.sh %s", strings.Join(args, " "))
 
 	// Run buildctl-daemonless.sh
 	cmd := exec.CommandContext(ctx, "buildctl-daemonless.sh", args...)
 	cmd.Stdout = io.MultiWriter(logWriter, &buildLogs)
 	cmd.Stderr = io.MultiWriter(logWriter, &buildLogs)
-	// Use BUILDKITD_FLAGS from environment (set in Dockerfile) or empty for default
-	// Explicitly set DOCKER_CONFIG to ensure buildkit finds the auth config
+	// Set environment:
+	// - DOCKER_CONFIG: ensures buildkit finds the auth config
+	// - BUILDKITD_FLAGS: tells buildkitd to use our custom config for registry TLS settings
 	env := os.Environ()
 	env = append(env, "DOCKER_CONFIG=/home/builder/.docker")
+	env = append(env, fmt.Sprintf("BUILDKITD_FLAGS=--config=%s", buildkitdConfig))
 	cmd.Env = env
 
 	if err := cmd.Run(); err != nil {
