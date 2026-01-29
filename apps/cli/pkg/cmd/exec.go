@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/gorilla/websocket"
@@ -35,6 +36,8 @@ type execRequest struct {
 	Env     map[string]string `json:"env,omitempty"`
 	Cwd     string            `json:"cwd,omitempty"`
 	Timeout int32             `json:"timeout,omitempty"`
+	Rows    uint32            `json:"rows,omitempty"`
+	Cols    uint32            `json:"cols,omitempty"`
 }
 
 var execCmd = cli.Command{
@@ -127,6 +130,17 @@ func handleExec(ctx context.Context, cmd *cli.Command) error {
 		execReq.Timeout = int32(timeout)
 	}
 
+	// Get terminal size for TTY mode (only if stdout is actually a terminal)
+	if tty && term.IsTerminal(int(os.Stdout.Fd())) {
+		cols, rows, _ := term.GetSize(int(os.Stdout.Fd()))
+		if rows > 0 {
+			execReq.Rows = uint32(rows)
+		}
+		if cols > 0 {
+			execReq.Cols = uint32(cols)
+		}
+	}
+
 	reqBody, err := json.Marshal(execReq)
 	if err != nil {
 		return fmt.Errorf("failed to marshal request: %w", err)
@@ -213,8 +227,29 @@ func runExecInteractive(ws *websocket.Conn) (int, error) {
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(sigCh)
 
+	// Handle SIGWINCH for terminal resize
+	sigwinch := make(chan os.Signal, 1)
+	signal.Notify(sigwinch, syscall.SIGWINCH)
+	defer signal.Stop(sigwinch)
+
+	// Mutex to protect WebSocket writes from concurrent access
+	var wsMu sync.Mutex
+
 	errCh := make(chan error, 2)
 	exitCodeCh := make(chan int, 1)
+
+	// Handle terminal resize events
+	go func() {
+		for range sigwinch {
+			cols, rows, _ := term.GetSize(int(os.Stdout.Fd()))
+			if rows > 0 && cols > 0 {
+				msg := fmt.Sprintf(`{"resize":{"rows":%d,"cols":%d}}`, rows, cols)
+				wsMu.Lock()
+				ws.WriteMessage(websocket.TextMessage, []byte(msg))
+				wsMu.Unlock()
+			}
+		}
+	}()
 
 	// Forward stdin to WebSocket
 	go func() {
@@ -228,7 +263,10 @@ func runExecInteractive(ws *websocket.Conn) (int, error) {
 				return
 			}
 			if n > 0 {
-				if err := ws.WriteMessage(websocket.BinaryMessage, buf[:n]); err != nil {
+				wsMu.Lock()
+				err := ws.WriteMessage(websocket.BinaryMessage, buf[:n])
+				wsMu.Unlock()
+				if err != nil {
 					errCh <- fmt.Errorf("websocket write error: %w", err)
 					return
 				}
