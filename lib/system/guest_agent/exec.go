@@ -268,7 +268,7 @@ func (s *guestServer) executeTTY(ctx context.Context, stream pb.GuestService_Exe
 }
 
 // buildEnv constructs environment variables by merging provided env with defaults.
-// When tty is true, adds TERM=xterm-256color unless user specified TERM.
+// When tty is true, adds sensible defaults for interactive terminal sessions.
 // User-provided env vars override both base environment and defaults.
 func (s *guestServer) buildEnv(envMap map[string]string, tty bool) []string {
 	// Build map of keys to override (user-provided + TTY defaults)
@@ -277,6 +277,9 @@ func (s *guestServer) buildEnv(envMap map[string]string, tty bool) []string {
 	// Add defaults for TTY sessions
 	if tty {
 		overrides["TERM"] = "xterm-256color"
+		overrides["LANG"] = "C.UTF-8"
+		overrides["LC_ALL"] = "C.UTF-8"
+		overrides["COLORTERM"] = "truecolor"
 	}
 
 	// User-provided env vars override defaults
