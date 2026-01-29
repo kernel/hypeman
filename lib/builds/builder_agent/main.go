@@ -693,7 +693,6 @@ func runBuild(ctx context.Context, config *BuildConfig, logWriter io.Writer) (st
 
 	args := []string{
 		"build",
-		"--progress", "plain", // More verbose output for debugging
 		"--frontend", "dockerfile.v0",
 		"--local", "context=" + config.SourcePath,
 		"--local", "dockerfile=" + config.SourcePath,

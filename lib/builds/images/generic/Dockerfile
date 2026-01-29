@@ -5,9 +5,6 @@
 # Use non-rootless buildkit to avoid potential credential handling issues
 FROM moby/buildkit:latest AS buildkit
 
-# Get crane for reliable image pushing
-FROM gcr.io/go-containerregistry/crane:latest AS crane
-
 # Build the builder-agent and guest-agent (multi-stage build from hypeman repo)
 FROM golang:1.25-alpine AS agent-builder
 
@@ -48,9 +45,6 @@ COPY --from=buildkit /usr/bin/buildkit-runc /usr/bin/runc
 # Copy builder agent and guest agent
 COPY --from=agent-builder /builder-agent /usr/bin/builder-agent
 COPY --from=agent-builder /guest-agent /usr/bin/guest-agent
-
-# Copy crane for reliable image pushing (bypasses BuildKit credential issues)
-COPY --from=crane /ko-app/crane /usr/bin/crane
 
 # Create unprivileged user for rootless BuildKit
 RUN adduser -D -u 1000 builder && \

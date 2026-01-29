@@ -157,15 +157,9 @@ sequenceDiagram
     Client->>Registry: GET /v2/builds/xxx/manifests/latest
     Registry-->>Client: 401 WWW-Authenticate: Bearer realm="/v2/token"
     
-    alt Client has credentials
-        Client->>Token: GET /v2/token?scope=repository:builds/xxx:push (Basic auth: JWT:)
-        Token->>Token: Validate JWT, check scope
-        Token-->>Client: {"token": "bearer-token"}
-    else Internal VM (no credentials)
-        Client->>Token: GET /v2/token?scope=repository:builds/xxx:push
-        Token->>Token: Check RemoteAddr is 10.100.x.x or 10.102.x.x
-        Token-->>Client: {"token": "internal-vm-token"}
-    end
+    Client->>Token: GET /v2/token?scope=repository:builds/xxx:push (Basic auth)
+    Token->>Token: Validate JWT, check scope
+    Token-->>Client: {"token": "bearer-token"}
     
     Client->>Registry: GET /v2/builds/xxx/manifests/latest (Bearer token)
     Registry-->>Client: 200 OK
@@ -174,16 +168,14 @@ sequenceDiagram
 ### Authentication Methods
 
 1. **Bearer Token**: Pass JWT directly in `Authorization: Bearer <token>` header
-2. **Basic Auth**: Pass JWT as username in `Authorization: Basic base64(jwt:)` header (BuildKit uses this)
-3. **IP-based (Internal VMs)**: Requests from 10.100.x.x or 10.102.x.x are trusted (fallback for builder VMs)
+2. **Basic Auth**: Pass JWT as username or password in `Authorization: Basic base64(jwt:)` or `base64(:jwt)` header (BuildKit uses identitytoken format)
 
 ### Token Endpoint (`/v2/token`)
 
 The token endpoint handles the OAuth2-style token exchange:
 
 - **With credentials**: Validates the JWT and returns a bearer token if the requested scope is allowed
-- **Without credentials from internal VM**: Returns a token for the requested scope (builder VM fallback)
-- **Without credentials from external IP**: Returns 401
+- **Without credentials**: Returns 401 with `WWW-Authenticate: Basic` challenge
 
 ### Registry Tokens
 
@@ -213,7 +205,7 @@ Or with per-repo permissions:
 
 ## Limitations
 
-- **BuildKit credential forwarding**: BuildKit may not send credentials from `config.json` to the `/v2/token` endpoint. The registry works around this by trusting internal VM network IPs (10.100.x.x, 10.102.x.x) on the token endpoint.
+- **BuildKit credential format**: BuildKit sends the `identitytoken` from `config.json` as the password in Basic auth (empty username). The token endpoint handles both formats: JWT as username (`jwt:`) and JWT as password (`:jwt`).
 
 ## Design Decisions
 
