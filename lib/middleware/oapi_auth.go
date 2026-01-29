@@ -24,11 +24,22 @@ var registryRouter = v2.Router()
 
 // RegistryTokenClaims contains the claims for a scoped registry access token.
 // This mirrors the type in lib/builds/registry_token.go to avoid circular imports.
+// RepoPermission defines access permissions for a specific repository
+type RepoPermission struct {
+	Repo  string `json:"repo"`
+	Scope string `json:"scope"`
+}
+
 type RegistryTokenClaims struct {
 	jwt.RegisteredClaims
-	BuildID      string   `json:"build_id"`
-	Repositories []string `json:"repos"`
-	Scope        string   `json:"scope"`
+	BuildID string `json:"build_id"`
+
+	// RepoAccess is the new format - array of repo permissions
+	RepoAccess []RepoPermission `json:"repo_access,omitempty"`
+
+	// Legacy format fields (kept for backward compat)
+	Repositories []string `json:"repos,omitempty"`
+	Scope        string   `json:"scope,omitempty"`
 }
 
 // OapiAuthenticationFunc creates an AuthenticationFunc compatible with nethttp-middleware
@@ -159,12 +170,21 @@ func extractTokenFromAuth(authHeader string) (string, string, error) {
 			return "", "", fmt.Errorf("invalid basic auth encoding: %w", err)
 		}
 		// Split on colon to get username:password
+		// JWT can be in username (our auth field format) OR password (identitytoken format)
+		// BuildKit sends identitytoken as password with empty username
 		credentials := strings.SplitN(string(decoded), ":", 2)
 		if len(credentials) == 0 {
 			return "", "", fmt.Errorf("invalid basic auth format")
 		}
-		// The JWT is the username part
-		return credentials[0], "basic", nil
+		// Try username first (our auth field format: "jwt:")
+		if credentials[0] != "" {
+			return credentials[0], "basic", nil
+		}
+		// Fall back to password (identitytoken format: ":jwt")
+		if len(credentials) > 1 && credentials[1] != "" {
+			return credentials[1], "basic", nil
+		}
+		return "", "", fmt.Errorf("empty credentials")
 	default:
 		return "", "", fmt.Errorf("unsupported authorization scheme: %s", scheme)
 	}
@@ -188,23 +208,6 @@ func isTokenEndpoint(path string) bool {
 	return path == "/v2/token" || path == "/v2/token/"
 }
 
-// isInternalVMRequest checks if the request is from an internal VM network
-// This is used as a fallback for builder VMs that don't have token auth yet.
-//
-// SECURITY: We only trust RemoteAddr, not X-Real-IP or X-Forwarded-For headers,
-// as those can be spoofed by attackers to bypass authentication.
-func isInternalVMRequest(r *http.Request) bool {
-	// Use only RemoteAddr - never trust client-supplied headers for auth decisions
-	ip := r.RemoteAddr
-
-	// RemoteAddr is "IP:port" format, extract just the IP
-	if idx := strings.LastIndex(ip, ":"); idx != -1 {
-		ip = ip[:idx]
-	}
-
-	// Check if it's from the VM network (10.100.x.x or 10.102.x.x)
-	return strings.HasPrefix(ip, "10.100.") || strings.HasPrefix(ip, "10.102.")
-}
 
 // extractRepoFromPath extracts the repository name from a registry path.
 // e.g., "/v2/builds/abc123/manifests/latest" -> "builds/abc123"
@@ -233,16 +236,21 @@ func isWriteOperation(method string) bool {
 }
 
 // writeRegistryUnauthorized writes a 401 response with proper WWW-Authenticate header.
-// We use Basic auth instead of Bearer/token flow because:
-// 1. BuildKit has credentials in docker config.json (JWT as username)
-// 2. BuildKit sends Basic auth directly to registry when challenged
-// 3. Our middleware already accepts Basic auth with JWT and validates it
-// This bypasses the OAuth2 token exchange which has issues with BuildKit not
-// sending credentials to the token endpoint.
+// We use Bearer token flow because:
+// 1. BuildKit expects to receive a Bearer challenge with a token endpoint URL
+// 2. BuildKit will call /v2/token with Basic auth (JWT from docker config.json as username)
+// 3. Our token handler validates the JWT and returns it as a Bearer token
+// 4. BuildKit then retries the original request with the Bearer token
 func writeRegistryUnauthorized(w http.ResponseWriter, r *http.Request) {
-	// Use Basic auth challenge - BuildKit will send credentials from docker config.json
-	// The JWT is stored as the username in docker config.json (base64 encoded as "jwt:")
-	w.Header().Set("WWW-Authenticate", `Basic realm="hypeman"`)
+	// Build the token endpoint URL from the request
+	// Always use HTTPS for registry operations - the registry endpoint is always TLS
+	// (r.TLS may be nil if TLS is terminated by a proxy, but the endpoint is still HTTPS)
+	host := r.Host
+	tokenURL := fmt.Sprintf("https://%s/v2/token", host)
+	
+	// Use Bearer challenge pointing to our token endpoint
+	challenge := fmt.Sprintf(`Bearer realm="%s",service="hypeman"`, tokenURL)
+	w.Header().Set("WWW-Authenticate", challenge)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusUnauthorized)
 
@@ -269,8 +277,10 @@ func validateRegistryToken(tokenString, jwtSecret, requestPath, method string) (
 		return nil, fmt.Errorf("invalid token")
 	}
 
-	// Check if this is a registry token (has repos claim)
-	if len(claims.Repositories) == 0 {
+	// Check if this is a registry token (has repo_access or repos claim)
+	hasRepoAccess := len(claims.RepoAccess) > 0
+	hasLegacyRepos := len(claims.Repositories) > 0
+	if !hasRepoAccess && !hasLegacyRepos {
 		return nil, fmt.Errorf("not a registry token")
 	}
 
@@ -286,18 +296,34 @@ func validateRegistryToken(tokenString, jwtSecret, requestPath, method string) (
 
 	// Check if the repository is allowed by the token
 	allowed := false
-	for _, allowedRepo := range claims.Repositories {
-		if allowedRepo == repo {
-			allowed = true
-			break
+	scope := ""
+
+	// Check new format (repo_access) first
+	if hasRepoAccess {
+		for _, perm := range claims.RepoAccess {
+			if perm.Repo == repo {
+				allowed = true
+				scope = perm.Scope
+				break
+			}
+		}
+	} else {
+		// Fall back to legacy format
+		for _, allowedRepo := range claims.Repositories {
+			if allowedRepo == repo {
+				allowed = true
+				scope = claims.Scope
+				break
+			}
 		}
 	}
+
 	if !allowed {
 		return nil, fmt.Errorf("repository %s not allowed by token", repo)
 	}
 
 	// Check scope for write operations
-	if isWriteOperation(method) && claims.Scope != "push" {
+	if isWriteOperation(method) && scope != "push" {
 		return nil, fmt.Errorf("token does not allow write operations")
 	}
 
@@ -324,11 +350,16 @@ func JwtAuth(jwtSecret string) func(http.Handler) http.Handler {
 					return
 				}
 
-				if authHeader != "" {
-					// Try to extract token (supports both Bearer and Basic auth)
-					token, authType, err := extractTokenFromAuth(authHeader)
-					if err == nil {
-						log.DebugContext(r.Context(), "extracted token for registry request", "auth_type", authType)
+			if authHeader != "" {
+				// Try to extract token (supports both Bearer and Basic auth)
+				log.InfoContext(r.Context(), "registry request with auth header",
+					"path", r.URL.Path,
+					"method", r.Method,
+					"auth_type", strings.Split(authHeader, " ")[0],
+					"remote_addr", r.RemoteAddr)
+				token, authType, err := extractTokenFromAuth(authHeader)
+				if err == nil {
+					log.DebugContext(r.Context(), "extracted token for registry request", "auth_type", authType)
 
 						// Try to validate as a registry-scoped token
 						registryClaims, err := validateRegistryToken(token, jwtSecret, r.URL.Path, r.Method)
@@ -348,20 +379,14 @@ func JwtAuth(jwtSecret string) func(http.Handler) http.Handler {
 					}
 				}
 
-				// Fallback: Allow internal VM network (10.102.x.x) for registry pushes
-				// This is a transitional fallback for older builder images without token auth
-				if isInternalVMRequest(r) {
-					log.DebugContext(r.Context(), "allowing internal VM request via IP fallback (deprecated)",
-						"remote_addr", r.RemoteAddr,
-						"path", r.URL.Path)
-					ctx := context.WithValue(r.Context(), userIDKey, "internal-builder-legacy")
-					next.ServeHTTP(w, r.WithContext(ctx))
-					return
-				}
-
 				// Registry auth failed - return 401 with WWW-Authenticate header
 				// This tells clients (like BuildKit) where to get a token
-				log.DebugContext(r.Context(), "registry request unauthorized", "remote_addr", r.RemoteAddr)
+				if authHeader == "" {
+					log.InfoContext(r.Context(), "registry request WITHOUT auth header",
+						"path", r.URL.Path,
+						"method", r.Method,
+						"remote_addr", r.RemoteAddr)
+				}
 				writeRegistryUnauthorized(w, r)
 				return
 			}

@@ -517,12 +517,16 @@ func setupRegistryAuth(config *BuildConfig) error {
 
 	// Create the Docker config structure
 	// Note: Docker config uses host without scheme (e.g., "10.102.0.1:8443")
+	// We use both auth (Basic) and identitytoken (JWT) to support different BuildKit versions
 	dockerConfig := map[string]interface{}{
 		"auths": map[string]interface{}{
 			registryHost: map[string]string{
-				"auth": authValue,
+				"auth":          authValue,      // Basic auth: base64(jwt:)
+				"identitytoken": token,          // JWT directly for OAuth2-style auth
 			},
 		},
+		"credsStore":  "",
+		"credHelpers": map[string]string{},
 	}
 
 	configData, err := json.MarshalIndent(dockerConfig, "", "  ")
@@ -597,6 +601,26 @@ func setupBuildkitdConfig(config *BuildConfig) error {
 			return fmt.Errorf("write CA cert: %w", err)
 		}
 		log.Printf("Registry CA certificate written to %s", caCertPath)
+
+		// Also install CA cert system-wide so BuildKit's HTTP client trusts it
+		// (needed for the /v2/token endpoint which uses Go's default HTTP client)
+		systemCADir := "/usr/local/share/ca-certificates"
+		if err := os.MkdirAll(systemCADir, 0755); err != nil {
+			log.Printf("Warning: failed to create system CA dir: %v", err)
+		} else {
+			systemCAPath := filepath.Join(systemCADir, "hypeman-registry.crt")
+			if err := os.WriteFile(systemCAPath, []byte(config.RegistryCACert), 0644); err != nil {
+				log.Printf("Warning: failed to write system CA cert: %v", err)
+			} else {
+				// Run update-ca-certificates to add to system trust store
+				cmd := exec.Command("update-ca-certificates")
+				if output, err := cmd.CombinedOutput(); err != nil {
+					log.Printf("Warning: update-ca-certificates failed: %v: %s", err, output)
+				} else {
+					log.Printf("Installed CA cert system-wide")
+				}
+			}
+		}
 	}
 
 	// Build the buildkitd.toml content
@@ -669,6 +693,7 @@ func runBuild(ctx context.Context, config *BuildConfig, logWriter io.Writer) (st
 
 	args := []string{
 		"build",
+		"--progress", "plain", // More verbose output for debugging
 		"--frontend", "dockerfile.v0",
 		"--local", "context=" + config.SourcePath,
 		"--local", "dockerfile=" + config.SourcePath,
@@ -750,10 +775,19 @@ func runBuild(ctx context.Context, config *BuildConfig, logWriter io.Writer) (st
 	cmd.Stdout = io.MultiWriter(logWriter, &buildLogs)
 	cmd.Stderr = io.MultiWriter(logWriter, &buildLogs)
 	// Set environment:
-	// - DOCKER_CONFIG: ensures buildkit finds the auth config
+	// - HOME and DOCKER_CONFIG: ensures buildctl finds the auth config at /root/.docker/config.json
 	// - BUILDKITD_FLAGS: tells buildkitd to use our custom config for registry TLS settings
-	env := os.Environ()
-	env = append(env, "DOCKER_CONFIG=/home/builder/.docker")
+	// Filter out existing values to avoid duplicates (first value wins in shell)
+	env := make([]string, 0, len(os.Environ())+3)
+	for _, e := range os.Environ() {
+		if !strings.HasPrefix(e, "DOCKER_CONFIG=") && 
+		   !strings.HasPrefix(e, "BUILDKITD_FLAGS=") &&
+		   !strings.HasPrefix(e, "HOME=") {
+			env = append(env, e)
+		}
+	}
+	env = append(env, "HOME=/root")
+	env = append(env, "DOCKER_CONFIG=/root/.docker")
 	env = append(env, fmt.Sprintf("BUILDKITD_FLAGS=--config=%s", buildkitdConfig))
 	cmd.Env = env
 

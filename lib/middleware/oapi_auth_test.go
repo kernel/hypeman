@@ -248,12 +248,12 @@ func TestJwtAuth_RegistryUnauthorizedResponse(t *testing.T) {
 
 		assert.Equal(t, http.StatusUnauthorized, rr.Code)
 
-		// Check WWW-Authenticate header - we use Basic auth so BuildKit sends
-		// credentials directly from docker config.json instead of going through
-		// the OAuth2 token flow
+		// Check WWW-Authenticate header - we use Bearer token flow so BuildKit
+		// calls /v2/token with credentials from docker config.json to get a token
 		wwwAuth := rr.Header().Get("WWW-Authenticate")
-		assert.Contains(t, wwwAuth, "Basic")
-		assert.Contains(t, wwwAuth, `realm="hypeman"`)
+		assert.Contains(t, wwwAuth, "Bearer")
+		assert.Contains(t, wwwAuth, `realm="https://localhost:8080/v2/token"`)
+		assert.Contains(t, wwwAuth, `service="hypeman"`)
 	})
 
 	t.Run("registry 401 response is OCI Distribution format", func(t *testing.T) {

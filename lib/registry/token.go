@@ -60,9 +60,8 @@ func NewTokenHandler(jwtSecret string) *TokenHandler {
 //   - service: the registry service name (optional)
 //
 // Authentication:
-//   - Basic auth: username is the JWT token, password is empty
+//   - Basic auth: JWT as username (legacy) or password (identitytoken format)
 //   - Bearer auth: the JWT token directly
-//   - No auth from internal VM network (10.100.x.x, 10.102.x.x): returns token based on scope
 func (h *TokenHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	log := logger.FromContext(r.Context())
 
@@ -138,12 +137,22 @@ func (h *TokenHandler) extractToken(r *http.Request) (string, string) {
 		if err != nil {
 			return "", ""
 		}
-		// Format is username:password, JWT is the username
+		// Format is username:password
+		// JWT can be in username (our auth field format) OR password (identitytoken format)
+		// BuildKit sends identitytoken as password with empty username
 		credentials := strings.SplitN(string(decoded), ":", 2)
-		if len(credentials) == 0 || credentials[0] == "" {
+		if len(credentials) == 0 {
 			return "", ""
 		}
-		return credentials[0], "basic"
+		// Try username first (our auth field format: "jwt:")
+		if credentials[0] != "" {
+			return credentials[0], "basic"
+		}
+		// Fall back to password (identitytoken format: ":jwt")
+		if len(credentials) > 1 && credentials[1] != "" {
+			return credentials[1], "basic"
+		}
+		return "", ""
 	}
 
 	return "", ""
