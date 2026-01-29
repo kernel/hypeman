@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 
@@ -60,8 +61,8 @@ func (s *guestServer) executeNoTTY(ctx context.Context, stream pb.GuestService_E
 
 	cmd := exec.CommandContext(ctx, start.Command[0], start.Command[1:]...)
 
-	// Set up environment
-	cmd.Env = s.buildEnv(start.Env)
+	// Set up environment (no TTY defaults for non-TTY mode)
+	cmd.Env = s.buildEnv(start.Env, false)
 
 	// Set up working directory
 	if start.Cwd != "" {
@@ -169,16 +170,28 @@ func (s *guestServer) executeTTY(ctx context.Context, stream pb.GuestService_Exe
 
 	cmd := exec.CommandContext(ctx, start.Command[0], start.Command[1:]...)
 
-	// Set up environment
-	cmd.Env = s.buildEnv(start.Env)
+	// Set up environment (TTY mode adds TERM default)
+	cmd.Env = s.buildEnv(start.Env, true)
 
 	// Set up working directory
 	if start.Cwd != "" {
 		cmd.Dir = start.Cwd
 	}
 
-	// Start with PTY
-	ptmx, err := pty.Start(cmd)
+	// Set up initial window size (use defaults if not specified)
+	ws := &pty.Winsize{
+		Rows: uint16(start.Rows),
+		Cols: uint16(start.Cols),
+	}
+	if ws.Rows == 0 {
+		ws.Rows = 24
+	}
+	if ws.Cols == 0 {
+		ws.Cols = 80
+	}
+
+	// Start with PTY and initial window size
+	ptmx, err := pty.StartWithSize(cmd, ws)
 	if err != nil {
 		return fmt.Errorf("start pty: %w", err)
 	}
@@ -190,7 +203,7 @@ func (s *guestServer) executeTTY(ctx context.Context, stream pb.GuestService_Exe
 	// Use WaitGroup to ensure all output is sent before exit code
 	var wg sync.WaitGroup
 
-	// Handle stdin in background
+	// Handle stdin and resize in background
 	go func() {
 		for {
 			req, err := stream.Recv()
@@ -200,6 +213,14 @@ func (s *guestServer) executeTTY(ctx context.Context, stream pb.GuestService_Exe
 
 			if data := req.GetStdin(); data != nil {
 				ptmx.Write(data)
+			}
+
+			// Handle window resize
+			if resize := req.GetResize(); resize != nil {
+				pty.Setsize(ptmx, &pty.Winsize{
+					Rows: uint16(resize.Rows),
+					Cols: uint16(resize.Cols),
+				})
 			}
 		}
 	}()
@@ -246,16 +267,39 @@ func (s *guestServer) executeTTY(ctx context.Context, stream pb.GuestService_Exe
 	})
 }
 
-// buildEnv constructs environment variables by merging provided env with defaults
-func (s *guestServer) buildEnv(envMap map[string]string) []string {
-	// Start with current environment as base
-	env := os.Environ()
+// buildEnv constructs environment variables by merging provided env with defaults.
+// When tty is true, adds TERM=xterm-256color unless user specified TERM.
+// User-provided env vars override both base environment and defaults.
+func (s *guestServer) buildEnv(envMap map[string]string, tty bool) []string {
+	// Build map of keys to override (user-provided + TTY defaults)
+	overrides := make(map[string]string)
 
-	// Merge in provided environment variables
+	// Add defaults for TTY sessions
+	if tty {
+		overrides["TERM"] = "xterm-256color"
+	}
+
+	// User-provided env vars override defaults
 	for k, v := range envMap {
+		overrides[k] = v
+	}
+
+	// Start with current environment, filtering out keys we'll override
+	var env []string
+	for _, e := range os.Environ() {
+		parts := strings.SplitN(e, "=", 2)
+		if len(parts) == 2 {
+			if _, override := overrides[parts[0]]; override {
+				continue // Skip - we'll add our value
+			}
+		}
+		env = append(env, e)
+	}
+
+	// Add overrides
+	for k, v := range overrides {
 		env = append(env, fmt.Sprintf("%s=%s", k, v))
 	}
 
 	return env
 }
-

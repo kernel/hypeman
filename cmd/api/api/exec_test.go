@@ -2,8 +2,10 @@ package api
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -273,6 +275,45 @@ func TestExecWithDebianMinimal(t *testing.T) {
 	assert.Contains(t, stdout.String(), "bookworm", "Should be Debian 12 (bookworm)")
 	t.Logf("OS: %s", strings.Split(stdout.String(), "\n")[0])
 
+	// Test TTY with TERM environment variable and window resize
+	t.Run("TTY with TERM and resize", func(t *testing.T) {
+		stdinR, stdinW := io.Pipe()
+		resizeChan := make(chan *guest.WindowSize, 1)
+
+		var stdoutSync syncBuffer // Thread-safe buffer
+
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			guest.ExecIntoInstance(ctx(), dialer2, guest.ExecOptions{
+				Command:    []string{"/bin/sh", "-c", "echo $TERM; stty size; read x; stty size"},
+				TTY:        true,
+				Rows:       24,
+				Cols:       80,
+				Stdin:      stdinR,
+				Stdout:     &stdoutSync,
+				ResizeChan: resizeChan,
+			})
+		}()
+
+		// Poll until initial output (TERM and size)
+		require.Eventually(t, func() bool {
+			out := stdoutSync.String()
+			return strings.Contains(out, "xterm-256color") && strings.Contains(out, "24 80")
+		}, 5*time.Second, 50*time.Millisecond, "TERM and initial size not printed")
+
+		// Send resize THEN stdin - gRPC stream guarantees ordering
+		resizeChan <- &guest.WindowSize{Rows: 50, Cols: 150}
+		stdinW.Write([]byte("\n"))
+		stdinW.Close()
+
+		// Poll until new size appears
+		require.Eventually(t, func() bool {
+			return strings.Contains(stdoutSync.String(), "50 150")
+		}, 5*time.Second, 50*time.Millisecond, "resized size not printed")
+
+		<-done
+	})
 }
 
 // collectTestLogs collects logs from an instance (non-streaming)
@@ -300,5 +341,23 @@ func (b *outputBuffer) Write(p []byte) (n int, err error) {
 }
 
 func (b *outputBuffer) String() string {
+	return b.buf.String()
+}
+
+// syncBuffer is a thread-safe buffer for concurrent write/read in tests
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (n int, err error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	return b.buf.String()
 }

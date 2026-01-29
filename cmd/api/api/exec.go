@@ -33,8 +33,18 @@ type ExecRequest struct {
 	TTY          bool              `json:"tty"`
 	Env          map[string]string `json:"env,omitempty"`
 	Cwd          string            `json:"cwd,omitempty"`
-	Timeout      int32             `json:"timeout,omitempty"`       // seconds
+	Timeout      int32             `json:"timeout,omitempty"`        // seconds
 	WaitForAgent int32             `json:"wait_for_agent,omitempty"` // seconds to wait for guest agent to be ready
+	Rows         uint32            `json:"rows,omitempty"`           // Initial terminal rows (0 = default)
+	Cols         uint32            `json:"cols,omitempty"`           // Initial terminal cols (0 = default)
+}
+
+// ResizeMessage represents a window resize control message
+type ResizeMessage struct {
+	Resize struct {
+		Rows uint32 `json:"rows"`
+		Cols uint32 `json:"cols"`
+	} `json:"resize"`
 }
 
 // ExecHandler handles exec requests via WebSocket for bidirectional streaming
@@ -108,10 +118,19 @@ func (s *ApiService) ExecHandler(w http.ResponseWriter, r *http.Request) {
 		"cwd", execReq.Cwd,
 		"timeout", execReq.Timeout,
 		"wait_for_agent", execReq.WaitForAgent,
+		"rows", execReq.Rows,
+		"cols", execReq.Cols,
 	)
 
-	// Create WebSocket read/writer wrapper
-	wsConn := &wsReadWriter{ws: ws, ctx: ctx}
+	// Create resize channel for TTY sessions
+	var resizeChan chan *guest.WindowSize
+	if execReq.TTY {
+		resizeChan = make(chan *guest.WindowSize, 10)
+		defer close(resizeChan)
+	}
+
+	// Create WebSocket read/writer wrapper that handles resize messages
+	wsConn := &wsReadWriter{ws: ws, ctx: ctx, resizeChan: resizeChan}
 
 	// Create vsock dialer for this hypervisor type
 	dialer, err := hypervisor.NewVsockDialer(hypervisor.Type(inst.HypervisorType), inst.VsockSocket, inst.VsockCID)
@@ -133,6 +152,9 @@ func (s *ApiService) ExecHandler(w http.ResponseWriter, r *http.Request) {
 		Cwd:          execReq.Cwd,
 		Timeout:      execReq.Timeout,
 		WaitForAgent: time.Duration(execReq.WaitForAgent) * time.Second,
+		Rows:         execReq.Rows,
+		Cols:         execReq.Cols,
+		ResizeChan:   resizeChan,
 	})
 
 	duration := time.Since(startTime)
@@ -167,41 +189,61 @@ func (s *ApiService) ExecHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // wsReadWriter wraps a WebSocket connection to implement io.ReadWriter
+// It also handles resize control messages for TTY sessions
 type wsReadWriter struct {
-	ws     *websocket.Conn
-	ctx    context.Context
-	reader io.Reader
-	mu     sync.Mutex
+	ws         *websocket.Conn
+	ctx        context.Context
+	reader     io.Reader
+	mu         sync.Mutex
+	resizeChan chan<- *guest.WindowSize // Channel to send resize events (nil if not TTY)
 }
 
 func (w *wsReadWriter) Read(p []byte) (n int, err error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	// If we have a pending reader, continue reading from it
-	if w.reader != nil {
-		n, err = w.reader.Read(p)
-		if err != io.EOF {
-			return n, err
+	for {
+		// If we have a pending reader, continue reading from it
+		if w.reader != nil {
+			n, err = w.reader.Read(p)
+			if err != io.EOF {
+				return n, err
+			}
+			// EOF means we finished this message, get next one
+			w.reader = nil
 		}
-		// EOF means we finished this message, get next one
-		w.reader = nil
-	}
 
-	// Read next WebSocket message
-	messageType, data, err := w.ws.ReadMessage()
-	if err != nil {
-		return 0, err
-	}
+		// Read next WebSocket message
+		messageType, data, err := w.ws.ReadMessage()
+		if err != nil {
+			return 0, err
+		}
 
-	// Only handle binary and text messages
-	if messageType != websocket.BinaryMessage && messageType != websocket.TextMessage {
-		return 0, fmt.Errorf("unexpected message type: %d", messageType)
-	}
+		// Handle text messages as potential control messages
+		if messageType == websocket.TextMessage && w.resizeChan != nil {
+			// Try to parse as resize message
+			var resizeMsg ResizeMessage
+			if err := json.Unmarshal(data, &resizeMsg); err == nil && resizeMsg.Resize.Rows > 0 && resizeMsg.Resize.Cols > 0 {
+				// Send resize event (non-blocking)
+				select {
+				case w.resizeChan <- &guest.WindowSize{Rows: resizeMsg.Resize.Rows, Cols: resizeMsg.Resize.Cols}:
+				default:
+					// Channel full, skip
+				}
+				continue // Get next message
+			}
+			// Not a resize message, treat as stdin
+		}
 
-	// Create reader for this message
-	w.reader = bytes.NewReader(data)
-	return w.reader.Read(p)
+		// Binary messages and non-resize text messages are stdin data
+		if messageType != websocket.BinaryMessage && messageType != websocket.TextMessage {
+			return 0, fmt.Errorf("unexpected message type: %d", messageType)
+		}
+
+		// Create reader for this message
+		w.reader = bytes.NewReader(data)
+		return w.reader.Read(p)
+	}
 }
 
 func (w *wsReadWriter) Write(p []byte) (n int, err error) {

@@ -111,6 +111,9 @@ type ExitStatus struct {
 	Code int
 }
 
+// Note: WindowSize is defined in guest.pb.go (proto-generated)
+// Use guest.WindowSize{Rows: N, Cols: M} for resize events
+
 // ExecOptions configures command execution
 type ExecOptions struct {
 	Command      []string
@@ -118,10 +121,13 @@ type ExecOptions struct {
 	Stdout       io.Writer
 	Stderr       io.Writer
 	TTY          bool
-	Env          map[string]string // Environment variables
-	Cwd          string            // Working directory (optional)
-	Timeout      int32             // Execution timeout in seconds (0 = no timeout)
-	WaitForAgent time.Duration     // Max time to wait for agent to be ready (0 = no wait, fail immediately)
+	Env          map[string]string  // Environment variables
+	Cwd          string             // Working directory (optional)
+	Timeout      int32              // Execution timeout in seconds (0 = no timeout)
+	WaitForAgent time.Duration      // Max time to wait for agent to be ready (0 = no wait, fail immediately)
+	Rows         uint32             // Initial terminal rows (0 = default 24)
+	Cols         uint32             // Initial terminal cols (0 = default 80)
+	ResizeChan   <-chan *WindowSize // Optional: channel to receive resize events (pointer to avoid copying mutex)
 }
 
 // ExecIntoInstance executes command in instance via vsock using gRPC.
@@ -203,7 +209,7 @@ func execIntoInstanceOnce(ctx context.Context, dialer hypervisor.VsockDialer, op
 	// Ensure stream is properly closed when we're done
 	defer stream.CloseSend()
 
-	// Send start request
+	// Send start request with initial window size
 	if err := stream.Send(&ExecRequest{
 		Request: &ExecRequest_Start{
 			Start: &ExecStart{
@@ -212,6 +218,8 @@ func execIntoInstanceOnce(ctx context.Context, dialer hypervisor.VsockDialer, op
 				Env:            opts.Env,
 				Cwd:            opts.Cwd,
 				TimeoutSeconds: opts.Timeout,
+				Rows:           opts.Rows,
+				Cols:           opts.Cols,
 			},
 		},
 	}); err != nil {
@@ -234,6 +242,19 @@ func execIntoInstanceOnce(ctx context.Context, dialer hypervisor.VsockDialer, op
 					stream.CloseSend()
 					return
 				}
+			}
+		}()
+	}
+
+	// Handle resize events in background (if channel provided)
+	if opts.ResizeChan != nil {
+		go func() {
+			for resize := range opts.ResizeChan {
+				stream.Send(&ExecRequest{
+					Request: &ExecRequest_Resize{
+						Resize: resize,
+					},
+				})
 			}
 		}()
 	}

@@ -24,6 +24,7 @@ message ExecRequest {
   oneof request {
     ExecStart start = 1;      // Initial exec request
     bytes stdin = 2;          // Stdin data
+    WindowSize resize = 3;    // Window resize event
   }
 }
 
@@ -34,6 +35,14 @@ message ExecStart {
   map<string, string> env = 3;        // Environment variables
   string cwd = 4;                     // Working directory (optional)
   int32 timeout_seconds = 5;          // Execution timeout in seconds (0 = no timeout)
+  uint32 rows = 6;                    // Initial terminal rows (0 = default 24)
+  uint32 cols = 7;                    // Initial terminal cols (0 = default 80)
+}
+
+// WindowSize represents terminal window dimensions for resize events
+message WindowSize {
+  uint32 rows = 1;
+  uint32 cols = 2;
 }
 
 // ExecResponse represents messages from server to client
