@@ -226,6 +226,9 @@ func execIntoInstanceOnce(ctx context.Context, dialer hypervisor.VsockDialer, op
 		return nil, fmt.Errorf("send start request: %w", err)
 	}
 
+	// Mutex to protect concurrent stream.Send/CloseSend calls (gRPC streams are not thread-safe)
+	var streamMu sync.Mutex
+
 	// Handle stdin in background
 	if opts.Stdin != nil {
 		go func() {
@@ -233,13 +236,17 @@ func execIntoInstanceOnce(ctx context.Context, dialer hypervisor.VsockDialer, op
 			for {
 				n, err := opts.Stdin.Read(buf)
 				if n > 0 {
+					streamMu.Lock()
 					stream.Send(&ExecRequest{
 						Request: &ExecRequest_Stdin{Stdin: buf[:n]},
 					})
+					streamMu.Unlock()
 					atomic.AddInt64(&bytesSent, int64(n))
 				}
 				if err != nil {
+					streamMu.Lock()
 					stream.CloseSend()
+					streamMu.Unlock()
 					return
 				}
 			}
@@ -250,11 +257,13 @@ func execIntoInstanceOnce(ctx context.Context, dialer hypervisor.VsockDialer, op
 	if opts.ResizeChan != nil {
 		go func() {
 			for resize := range opts.ResizeChan {
+				streamMu.Lock()
 				stream.Send(&ExecRequest{
 					Request: &ExecRequest_Resize{
 						Resize: resize,
 					},
 				})
+				streamMu.Unlock()
 			}
 		}()
 	}

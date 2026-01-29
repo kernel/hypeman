@@ -122,9 +122,18 @@ generate-wire: $(WIRE)
 	@echo "Generating wire code..."
 	cd ./cmd/api && $(WIRE)
 
+# Install proto generators from go.mod versions (pinned via tools.go)
+install-proto-tools:
+	@echo "Installing proto generators from go.mod versions..."
+	go install google.golang.org/protobuf/cmd/protoc-gen-go
+	go install google.golang.org/grpc/cmd/protoc-gen-go-grpc
+
 # Generate gRPC code from proto
-generate-grpc:
+# Run 'make install-proto-tools' first to install generators from go.mod
+generate-grpc: install-proto-tools
 	@echo "Generating gRPC code from proto..."
+	@echo "Using protoc-gen-go: $$(protoc-gen-go --version)"
+	@echo "Using protoc-gen-go-grpc: $$(protoc-gen-go-grpc --version)"
 	protoc --go_out=. --go_opt=paths=source_relative \
 		--go-grpc_out=. --go-grpc_opt=paths=source_relative \
 		lib/guest/guest.proto
