@@ -117,6 +117,8 @@ type Build struct {
 	//
 	// Any of "queued", "building", "pushing", "ready", "failed", "cancelled".
 	Status BuildStatus `json:"status,required"`
+	// Instance ID of the builder VM (for debugging)
+	BuilderInstanceID string `json:"builder_instance_id,nullable"`
 	// Build completion timestamp
 	CompletedAt time.Time `json:"completed_at,nullable" format:"date-time"`
 	// Build duration in milliseconds
@@ -134,19 +136,20 @@ type Build struct {
 	StartedAt time.Time `json:"started_at,nullable" format:"date-time"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
-		ID            respjson.Field
-		CreatedAt     respjson.Field
-		Status        respjson.Field
-		CompletedAt   respjson.Field
-		DurationMs    respjson.Field
-		Error         respjson.Field
-		ImageDigest   respjson.Field
-		ImageRef      respjson.Field
-		Provenance    respjson.Field
-		QueuePosition respjson.Field
-		StartedAt     respjson.Field
-		ExtraFields   map[string]respjson.Field
-		raw           string
+		ID                respjson.Field
+		CreatedAt         respjson.Field
+		Status            respjson.Field
+		BuilderInstanceID respjson.Field
+		CompletedAt       respjson.Field
+		DurationMs        respjson.Field
+		Error             respjson.Field
+		ImageDigest       respjson.Field
+		ImageRef          respjson.Field
+		Provenance        respjson.Field
+		QueuePosition     respjson.Field
+		StartedAt         respjson.Field
+		ExtraFields       map[string]respjson.Field
+		raw               string
 	} `json:"-"`
 }
 
@@ -245,6 +248,13 @@ type BuildNewParams struct {
 	CacheScope param.Opt[string] `json:"cache_scope,omitzero"`
 	// Dockerfile content. Required if not included in the source tarball.
 	Dockerfile param.Opt[string] `json:"dockerfile,omitzero"`
+	// Global cache identifier (e.g., "node", "python", "ubuntu", "browser"). When
+	// specified, the build will import from cache/global/{key}. Admin builds will also
+	// export to this location.
+	GlobalCacheKey param.Opt[string] `json:"global_cache_key,omitzero"`
+	// Set to "true" to grant push access to global cache (operator-only). Admin builds
+	// can populate the shared global cache that all tenant builds read from.
+	IsAdminBuild param.Opt[string] `json:"is_admin_build,omitzero"`
 	// JSON array of secret references to inject during build. Each object has "id"
 	// (required) for use with --mount=type=secret,id=... Example: [{"id":
 	// "npm_token"}, {"id": "github_token"}]
