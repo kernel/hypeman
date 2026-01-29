@@ -243,10 +243,13 @@ func isWriteOperation(method string) bool {
 // 4. BuildKit then retries the original request with the Bearer token
 func writeRegistryUnauthorized(w http.ResponseWriter, r *http.Request) {
 	// Build the token endpoint URL from the request
-	// Always use HTTPS for registry operations - the registry endpoint is always TLS
-	// (r.TLS may be nil if TLS is terminated by a proxy, but the endpoint is still HTTPS)
+	// Detect scheme from the incoming request to support both HTTP and HTTPS registries
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
 	host := r.Host
-	tokenURL := fmt.Sprintf("https://%s/v2/token", host)
+	tokenURL := fmt.Sprintf("%s://%s/v2/token", scheme, host)
 	
 	// Use Bearer challenge pointing to our token endpoint
 	challenge := fmt.Sprintf(`Bearer realm="%s",service="hypeman"`, tokenURL)

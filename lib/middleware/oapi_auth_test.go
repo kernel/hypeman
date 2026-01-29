@@ -250,9 +250,10 @@ func TestJwtAuth_RegistryUnauthorizedResponse(t *testing.T) {
 
 		// Check WWW-Authenticate header - we use Bearer token flow so BuildKit
 		// calls /v2/token with credentials from docker config.json to get a token
+		// The scheme matches the incoming request (HTTP in tests, so http://)
 		wwwAuth := rr.Header().Get("WWW-Authenticate")
 		assert.Contains(t, wwwAuth, "Bearer")
-		assert.Contains(t, wwwAuth, `realm="https://localhost:8080/v2/token"`)
+		assert.Contains(t, wwwAuth, `realm="http://localhost:8080/v2/token"`)
 		assert.Contains(t, wwwAuth, `service="hypeman"`)
 	})
 
