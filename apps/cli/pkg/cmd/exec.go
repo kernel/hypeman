@@ -12,7 +12,6 @@ import (
 	"os/signal"
 	"strings"
 	"sync"
-	"syscall"
 
 	"github.com/gorilla/websocket"
 	"github.com/kernel/hypeman-go"
@@ -222,34 +221,20 @@ func runExecInteractive(ws *websocket.Conn) (int, error) {
 	}
 	defer term.Restore(int(os.Stdin.Fd()), oldState)
 
-	// Handle signals gracefully
+	// Handle signals gracefully (os.Interrupt is cross-platform)
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	signal.Notify(sigCh, os.Interrupt)
 	defer signal.Stop(sigCh)
-
-	// Handle SIGWINCH for terminal resize
-	sigwinch := make(chan os.Signal, 1)
-	signal.Notify(sigwinch, syscall.SIGWINCH)
-	defer signal.Stop(sigwinch)
 
 	// Mutex to protect WebSocket writes from concurrent access
 	var wsMu sync.Mutex
 
+	// Handle terminal resize events (Unix only, no-op on Windows)
+	cleanupResize := setupResizeHandler(ws, &wsMu)
+	defer cleanupResize()
+
 	errCh := make(chan error, 2)
 	exitCodeCh := make(chan int, 1)
-
-	// Handle terminal resize events
-	go func() {
-		for range sigwinch {
-			cols, rows, _ := term.GetSize(int(os.Stdout.Fd()))
-			if rows > 0 && cols > 0 {
-				msg := fmt.Sprintf(`{"resize":{"rows":%d,"cols":%d}}`, rows, cols)
-				wsMu.Lock()
-				ws.WriteMessage(websocket.TextMessage, []byte(msg))
-				wsMu.Unlock()
-			}
-		}
-	}()
 
 	// Forward stdin to WebSocket
 	go func() {
@@ -380,4 +365,3 @@ func runExecNonInteractive(ws *websocket.Conn) (int, error) {
 		return 0, nil
 	}
 }
-
