@@ -64,6 +64,7 @@ type AllocationBreakdown struct {
 	DiskBytes          int64  `json:"disk_bytes"`
 	NetworkDownloadBps int64  `json:"network_download_bps"` // External→VM
 	NetworkUploadBps   int64  `json:"network_upload_bps"`   // VM→External
+	DiskIOBps          int64  `json:"disk_io_bps"`          // Disk I/O bandwidth
 }
 
 // DiskBreakdown shows disk usage by category.
@@ -80,6 +81,7 @@ type FullResourceStatus struct {
 	Memory      ResourceStatus        `json:"memory"`
 	Disk        ResourceStatus        `json:"disk"`
 	Network     ResourceStatus        `json:"network"`
+	DiskIO      ResourceStatus        `json:"disk_io"`
 	DiskDetail  *DiskBreakdown        `json:"disk_breakdown,omitempty"`
 	GPU         *GPUResourceStatus    `json:"gpu,omitempty"` // nil if no GPU available
 	Allocations []AllocationBreakdown `json:"allocations"`
@@ -312,6 +314,11 @@ func (m *Manager) GetFullStatus(ctx context.Context) (*FullResourceStatus, error
 		return nil, err
 	}
 
+	diskIOStatus, err := m.GetStatus(ctx, ResourceDiskIO)
+	if err != nil {
+		return nil, err
+	}
+
 	// Get disk breakdown
 	var diskBreakdown *DiskBreakdown
 	m.mu.RLock()
@@ -347,6 +354,7 @@ func (m *Manager) GetFullStatus(ctx context.Context) (*FullResourceStatus, error
 						DiskBytes:          inst.OverlayBytes + inst.VolumeBytes,
 						NetworkDownloadBps: inst.NetworkDownloadBps,
 						NetworkUploadBps:   inst.NetworkUploadBps,
+						DiskIOBps:          inst.DiskIOBps,
 					})
 				}
 			}
@@ -361,6 +369,7 @@ func (m *Manager) GetFullStatus(ctx context.Context) (*FullResourceStatus, error
 		Memory:      *memStatus,
 		Disk:        *diskStatus,
 		Network:     *netStatus,
+		DiskIO:      *diskIOStatus,
 		DiskDetail:  diskBreakdown,
 		GPU:         gpuStatus,
 		Allocations: allocations,

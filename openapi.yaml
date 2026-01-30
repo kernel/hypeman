@@ -1058,6 +1058,11 @@ components:
           format: int64
           description: Upload bandwidth limit in bytes/sec (VM→external)
           example: 125000000
+        disk_io_bps:
+          type: integer
+          format: int64
+          description: Disk I/O bandwidth limit in bytes/sec
+          example: 104857600
 
     Resources:
       type: object
@@ -1070,6 +1075,8 @@ components:
         disk:
           $ref: "#/components/schemas/ResourceStatus"
         network:
+          $ref: "#/components/schemas/ResourceStatus"
+        disk_io:
           $ref: "#/components/schemas/ResourceStatus"
         disk_breakdown:
           $ref: "#/components/schemas/DiskBreakdown"

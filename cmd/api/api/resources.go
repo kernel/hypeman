@@ -25,11 +25,13 @@ func (s *ApiService) GetResources(ctx context.Context, _ oapi.GetResourcesReques
 	}
 
 	// Convert to API response
+	diskIO := convertResourceStatus(status.DiskIO)
 	resp := oapi.Resources{
 		Cpu:         convertResourceStatus(status.CPU),
 		Memory:      convertResourceStatus(status.Memory),
 		Disk:        convertResourceStatus(status.Disk),
 		Network:     convertResourceStatus(status.Network),
+		DiskIo:      &diskIO,
 		Allocations: make([]oapi.ResourceAllocation, 0, len(status.Allocations)),
 	}
 
@@ -53,6 +55,7 @@ func (s *ApiService) GetResources(ctx context.Context, _ oapi.GetResourcesReques
 			DiskBytes:          &alloc.DiskBytes,
 			NetworkDownloadBps: &alloc.NetworkDownloadBps,
 			NetworkUploadBps:   &alloc.NetworkUploadBps,
+			DiskIoBps:          &alloc.DiskIOBps,
 		})
 	}
 
