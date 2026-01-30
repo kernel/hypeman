@@ -1805,11 +1805,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
     post:
-      summary: Create volume
-      description: |
-        Creates a new volume. Supports two modes:
-        - JSON body: Creates an empty volume of the specified size
-        - Multipart form: Creates a volume pre-populated with content from a tar.gz archive
+      summary: Create empty volume
+      description: Creates a new empty volume of the specified size.
       operationId: createVolume
       security:
         - bearerAuth: []
@@ -1819,6 +1816,50 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/CreateVolumeRequest"
+      responses:
+        201:
+          description: Volume created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Volume"
+        400:
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        401:
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Conflict - volume with this ID already exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  
+  /volumes/from-archive:
+    post:
+      summary: Create volume from archive
+      description: |
+        Creates a new volume pre-populated with content from a tar.gz archive.
+        The archive is extracted into the volume's root directory.
+      operationId: createVolumeFromArchive
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
           multipart/form-data:
             schema:
               type: object
