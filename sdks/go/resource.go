@@ -158,6 +158,8 @@ type ResourceAllocation struct {
 	CPU int64 `json:"cpu"`
 	// Disk allocated in bytes (overlay + volumes)
 	DiskBytes int64 `json:"disk_bytes"`
+	// Disk I/O bandwidth limit in bytes/sec
+	DiskIoBps int64 `json:"disk_io_bps"`
 	// Instance identifier
 	InstanceID string `json:"instance_id"`
 	// Instance name
@@ -172,6 +174,7 @@ type ResourceAllocation struct {
 	JSON struct {
 		CPU                respjson.Field
 		DiskBytes          respjson.Field
+		DiskIoBps          respjson.Field
 		InstanceID         respjson.Field
 		InstanceName       respjson.Field
 		MemoryBytes        respjson.Field
@@ -230,6 +233,7 @@ type Resources struct {
 	Memory        ResourceStatus       `json:"memory,required"`
 	Network       ResourceStatus       `json:"network,required"`
 	DiskBreakdown DiskBreakdown        `json:"disk_breakdown"`
+	DiskIo        ResourceStatus       `json:"disk_io"`
 	// GPU resource status. Null if no GPUs available.
 	GPU GPUResourceStatus `json:"gpu,nullable"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
@@ -240,6 +244,7 @@ type Resources struct {
 		Memory        respjson.Field
 		Network       respjson.Field
 		DiskBreakdown respjson.Field
+		DiskIo        respjson.Field
 		GPU           respjson.Field
 		ExtraFields   map[string]respjson.Field
 		raw           string

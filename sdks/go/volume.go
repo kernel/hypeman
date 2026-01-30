@@ -3,14 +3,20 @@
 package hypeman
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"mime/multipart"
 	"net/http"
+	"net/url"
 	"slices"
 	"time"
 
+	"github.com/kernel/hypeman-go/internal/apiform"
 	"github.com/kernel/hypeman-go/internal/apijson"
+	"github.com/kernel/hypeman-go/internal/apiquery"
 	"github.com/kernel/hypeman-go/internal/requestconfig"
 	"github.com/kernel/hypeman-go/option"
 	"github.com/kernel/hypeman-go/packages/param"
@@ -36,11 +42,7 @@ func NewVolumeService(opts ...option.RequestOption) (r VolumeService) {
 	return
 }
 
-// Creates a new volume. Supports two modes:
-//
-//   - JSON body: Creates an empty volume of the specified size
-//   - Multipart form: Creates a volume pre-populated with content from a tar.gz
-//     archive
+// Creates a new empty volume of the specified size.
 func (r *VolumeService) New(ctx context.Context, body VolumeNewParams, opts ...option.RequestOption) (res *Volume, err error) {
 	opts = slices.Concat(r.Options, opts)
 	path := "volumes"
@@ -66,6 +68,16 @@ func (r *VolumeService) Delete(ctx context.Context, id string, opts ...option.Re
 	}
 	path := fmt.Sprintf("volumes/%s", id)
 	err = requestconfig.ExecuteNewRequest(ctx, http.MethodDelete, path, nil, nil, opts...)
+	return
+}
+
+// Creates a new volume pre-populated with content from a tar.gz archive. The
+// archive is streamed directly into the volume's root directory.
+func (r *VolumeService) NewFromArchive(ctx context.Context, body io.Reader, params VolumeNewFromArchiveParams, opts ...option.RequestOption) (res *Volume, err error) {
+	opts = slices.Concat(r.Options, opts)
+	opts = append([]option.RequestOption{option.WithRequestBody("application/gzip", body)}, opts...)
+	path := "volumes/from-archive"
+	err = requestconfig.ExecuteNewRequest(ctx, http.MethodPost, path, nil, &res, opts...)
 	return
 }
 
@@ -149,4 +161,41 @@ func (r VolumeNewParams) MarshalJSON() (data []byte, err error) {
 }
 func (r *VolumeNewParams) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, r)
+}
+
+type VolumeNewFromArchiveParams struct {
+	// Volume name
+	Name string `query:"name,required" json:"-"`
+	// Maximum size in GB (extraction fails if content exceeds this)
+	SizeGB int64 `query:"size_gb,required" json:"-"`
+	// Optional custom volume ID (auto-generated if not provided)
+	ID param.Opt[string] `query:"id,omitzero" json:"-"`
+	paramObj
+}
+
+func (r VolumeNewFromArchiveParams) MarshalMultipart() (data []byte, contentType string, err error) {
+	buf := bytes.NewBuffer(nil)
+	writer := multipart.NewWriter(buf)
+	err = apiform.MarshalRoot(r, writer)
+	if err == nil {
+		err = apiform.WriteExtras(writer, r.ExtraFields())
+	}
+	if err != nil {
+		writer.Close()
+		return nil, "", err
+	}
+	err = writer.Close()
+	if err != nil {
+		return nil, "", err
+	}
+	return buf.Bytes(), writer.FormDataContentType(), nil
+}
+
+// URLQuery serializes [VolumeNewFromArchiveParams]'s query parameters as
+// `url.Values`.
+func (r VolumeNewFromArchiveParams) URLQuery() (v url.Values, err error) {
+	return apiquery.MarshalWithSettings(r, apiquery.QuerySettings{
+		ArrayFormat:  apiquery.ArrayQueryFormatComma,
+		NestedFormat: apiquery.NestedQueryFormatBrackets,
+	})
 }

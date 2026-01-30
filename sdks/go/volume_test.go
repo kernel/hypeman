@@ -3,8 +3,10 @@
 package hypeman_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"testing"
 
@@ -77,6 +79,37 @@ func TestVolumeDelete(t *testing.T) {
 		option.WithAPIKey("My API Key"),
 	)
 	err := client.Volumes.Delete(context.TODO(), "id")
+	if err != nil {
+		var apierr *hypeman.Error
+		if errors.As(err, &apierr) {
+			t.Log(string(apierr.DumpRequest(true)))
+		}
+		t.Fatalf("err should be nil: %s", err.Error())
+	}
+}
+
+func TestVolumeNewFromArchiveWithOptionalParams(t *testing.T) {
+	t.Skip("Prism tests are disabled")
+	baseURL := "http://localhost:4010"
+	if envURL, ok := os.LookupEnv("TEST_API_BASE_URL"); ok {
+		baseURL = envURL
+	}
+	if !testutil.CheckTestServer(t, baseURL) {
+		return
+	}
+	client := hypeman.NewClient(
+		option.WithBaseURL(baseURL),
+		option.WithAPIKey("My API Key"),
+	)
+	_, err := client.Volumes.NewFromArchive(
+		context.TODO(),
+		io.Reader(bytes.NewBuffer([]byte("some file contents"))),
+		hypeman.VolumeNewFromArchiveParams{
+			Name:   "name",
+			SizeGB: 0,
+			ID:     hypeman.String("id"),
+		},
+	)
 	if err != nil {
 		var apierr *hypeman.Error
 		if errors.As(err, &apierr) {
