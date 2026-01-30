@@ -53,9 +53,9 @@ func TestFormatBps(t *testing.T) {
 	// The CLI should convert to bits and display as Mbps/Gbps
 	// Formula: bytes/sec * 8 = bits/sec
 	tests := []struct {
-		name         string
-		bytesPerSec  int64
-		expected     string
+		name        string
+		bytesPerSec int64
+		expected    string
 	}{
 		// 30 Mbps = 30,000,000 bits/sec = 3,750,000 bytes/sec
 		// This is the user's reported bug: they set 30Mbps, API stores 3750000 bytes/sec,
@@ -90,6 +90,38 @@ func TestFormatBps(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := formatBps(tt.bytesPerSec)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestFormatDiskBps(t *testing.T) {
+	// Disk I/O is displayed in bytes/sec (KB/s, MB/s, GB/s), not bits/sec
+	tests := []struct {
+		name        string
+		bytesPerSec int64
+		expected    string
+	}{
+		// Common disk I/O limits
+		{"100 MB/s SSD limit", 100000000, "100 MB/s"},
+		{"500 MB/s NVMe limit", 500000000, "500 MB/s"},
+		{"1 GB/s high-perf limit", 1000000000, "1.0 GB/s"},
+		{"3.5 GB/s NVMe Gen4", 3500000000, "3.5 GB/s"},
+
+		// Smaller values
+		{"50 MB/s HDD limit", 50000000, "50 MB/s"},
+		{"10 MB/s throttled", 10000000, "10 MB/s"},
+		{"1 MB/s minimal", 1000000, "1 MB/s"},
+		{"500 KB/s very slow", 500000, "500 KB/s"},
+
+		// Edge cases
+		{"zero (no limit or disabled)", 0, "-"},
+		{"tiny value", 500, "500 B/s"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := formatDiskBps(tt.bytesPerSec)
 			assert.Equal(t, tt.expected, result)
 		})
 	}

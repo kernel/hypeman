@@ -71,6 +71,7 @@ func showResourcesTable(data []byte) error {
 	printResourceRow("cpu", obj.Get("cpu"), "cores")
 	printResourceRow("memory", obj.Get("memory"), "bytes")
 	printResourceRow("disk", obj.Get("disk"), "bytes")
+	printResourceRow("disk_io", obj.Get("disk_io"), "disk_bps")
 	printResourceRow("network", obj.Get("network"), "bps")
 
 	// Print GPU information if available
@@ -104,8 +105,8 @@ func showResourcesTable(data []byte) error {
 	if allocations.Exists() && allocations.IsArray() && len(allocations.Array()) > 0 {
 		fmt.Println()
 		fmt.Println("ALLOCATIONS:")
-		fmt.Println("INSTANCE                      CPU    MEMORY     DISK       NET DOWN    NET UP")
-		fmt.Println(strings.Repeat("-", 80))
+		fmt.Println("INSTANCE                      CPU    MEMORY     DISK       DISK I/O    NET DOWN    NET UP")
+		fmt.Println(strings.Repeat("-", 95))
 		allocations.ForEach(func(key, value gjson.Result) bool {
 			name := value.Get("instance_name").String()
 			if len(name) > 28 {
@@ -114,9 +115,10 @@ func showResourcesTable(data []byte) error {
 			cpu := value.Get("cpu").Int()
 			mem := formatBytes(value.Get("memory_bytes").Int())
 			disk := formatBytes(value.Get("disk_bytes").Int())
+			diskIO := formatDiskBps(value.Get("disk_io_bps").Int())
 			netDown := formatBps(value.Get("network_download_bps").Int())
 			netUp := formatBps(value.Get("network_upload_bps").Int())
-			fmt.Printf("%-28s  %3d    %-9s  %-9s  %-10s  %s\n", name, cpu, mem, disk, netDown, netUp)
+			fmt.Printf("%-28s  %3d    %-9s  %-9s  %-10s  %-10s  %s\n", name, cpu, mem, disk, diskIO, netDown, netUp)
 			return true
 		})
 	}
@@ -148,6 +150,11 @@ func printResourceRow(name string, res gjson.Result, unit string) {
 		effStr = formatBps(effective)
 		allocStr = formatBps(allocated)
 		availStr = formatBps(available)
+	case "disk_bps":
+		capStr = formatDiskBps(capacity)
+		effStr = formatDiskBps(effective)
+		allocStr = formatDiskBps(allocated)
+		availStr = formatDiskBps(available)
 	default:
 		capStr = fmt.Sprintf("%d", capacity)
 		effStr = fmt.Sprintf("%d", effective)
@@ -255,5 +262,29 @@ func formatBps(bytesPerSec int64) string {
 		return fmt.Sprintf("%.0f Kbps", float64(bps)/Kbps)
 	default:
 		return fmt.Sprintf("%d bps", bps)
+	}
+}
+
+// formatDiskBps formats disk I/O bandwidth in bytes per second to a human-readable
+// string (KB/s, MB/s, GB/s). Unlike network bandwidth which uses bits, disk I/O
+// is conventionally displayed in bytes per second.
+func formatDiskBps(bytesPerSec int64) string {
+	const (
+		KBps = 1000
+		MBps = KBps * 1000
+		GBps = MBps * 1000
+	)
+
+	switch {
+	case bytesPerSec >= GBps:
+		return fmt.Sprintf("%.1f GB/s", float64(bytesPerSec)/GBps)
+	case bytesPerSec >= MBps:
+		return fmt.Sprintf("%.0f MB/s", float64(bytesPerSec)/MBps)
+	case bytesPerSec >= KBps:
+		return fmt.Sprintf("%.0f KB/s", float64(bytesPerSec)/KBps)
+	case bytesPerSec == 0:
+		return "-"
+	default:
+		return fmt.Sprintf("%d B/s", bytesPerSec)
 	}
 }
