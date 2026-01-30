@@ -83,12 +83,8 @@ func (s *ApiService) CreateVolumeFromArchive(ctx context.Context, request oapi.C
 			Message: "size_gb must be a positive integer",
 		}, nil
 	}
-	if request.Body == nil {
-		return oapi.CreateVolumeFromArchive400JSONResponse{
-			Code:    "missing_body",
-			Message: "request body (tar.gz archive) is required",
-		}, nil
-	}
+	// Note: request.Body is never nil in Go's net/http (empty body = http.NoBody)
+	// Empty/invalid archives will fail with a clear gzip error downstream
 
 	// Create the volume from archive - stream directly without buffering
 	domainReq := volumes.CreateVolumeFromArchiveRequest{
