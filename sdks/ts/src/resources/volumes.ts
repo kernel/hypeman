@@ -4,16 +4,11 @@ import { APIResource } from '../core/resource';
 import { APIPromise } from '../core/api-promise';
 import { buildHeaders } from '../internal/headers';
 import { RequestOptions } from '../internal/request-options';
-import { maybeMultipartFormRequestOptions } from '../internal/uploads';
 import { path } from '../internal/utils/path';
 
 export class Volumes extends APIResource {
   /**
-   * Creates a new volume. Supports two modes:
-   *
-   * - JSON body: Creates an empty volume of the specified size
-   * - Multipart form: Creates a volume pre-populated with content from a tar.gz
-   *   archive
+   * Creates a new empty volume of the specified size.
    *
    * @example
    * ```ts
@@ -24,10 +19,7 @@ export class Volumes extends APIResource {
    * ```
    */
   create(body: VolumeCreateParams, options?: RequestOptions): APIPromise<Volume> {
-    return this._client.post(
-      '/volumes',
-      maybeMultipartFormRequestOptions({ body, ...options }, this._client),
-    );
+    return this._client.post('/volumes', { body, ...options });
   }
 
   /**
@@ -54,6 +46,32 @@ export class Volumes extends APIResource {
     return this._client.delete(path`/volumes/${id}`, {
       ...options,
       headers: buildHeaders([{ Accept: '*/*' }, options?.headers]),
+    });
+  }
+
+  /**
+   * Creates a new volume pre-populated with content from a tar.gz archive. The
+   * archive is streamed directly into the volume's root directory.
+   *
+   * @example
+   * ```ts
+   * const volume = await client.volumes.createFromArchive(
+   *   fs.createReadStream('path/to/file'),
+   *   { name: 'name', size_gb: 0 },
+   * );
+   * ```
+   */
+  createFromArchive(
+    body: string | ArrayBuffer | ArrayBufferView | Blob | DataView,
+    params: VolumeCreateFromArchiveParams,
+    options?: RequestOptions,
+  ): APIPromise<Volume> {
+    const { name, size_gb, id } = params;
+    return this._client.post('/volumes/from-archive', {
+      body: body,
+      query: { name, size_gb, id },
+      ...options,
+      headers: buildHeaders([{ 'Content-Type': 'application/gzip' }, options?.headers]),
     });
   }
 
@@ -133,11 +151,29 @@ export interface VolumeCreateParams {
   id?: string;
 }
 
+export interface VolumeCreateFromArchiveParams {
+  /**
+   * Query param: Volume name
+   */
+  name: string;
+
+  /**
+   * Query param: Maximum size in GB (extraction fails if content exceeds this)
+   */
+  size_gb: number;
+
+  /**
+   * Query param: Optional custom volume ID (auto-generated if not provided)
+   */
+  id?: string;
+}
+
 export declare namespace Volumes {
   export {
     type Volume as Volume,
     type VolumeAttachment as VolumeAttachment,
     type VolumeListResponse as VolumeListResponse,
     type VolumeCreateParams as VolumeCreateParams,
+    type VolumeCreateFromArchiveParams as VolumeCreateFromArchiveParams,
   };
 }

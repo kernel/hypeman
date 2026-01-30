@@ -114,6 +114,11 @@ export interface ResourceAllocation {
   disk_bytes?: number;
 
   /**
+   * Disk I/O bandwidth limit in bytes/sec
+   */
+  disk_io_bps?: number;
+
+  /**
    * Instance identifier
    */
   instance_id?: string;
@@ -188,6 +193,8 @@ export interface Resources {
   network: ResourceStatus;
 
   disk_breakdown?: DiskBreakdown;
+
+  disk_io?: ResourceStatus;
 
   /**
    * GPU resource status. Null if no GPUs available.

@@ -59,6 +59,7 @@ import {
 import {
   Volume,
   VolumeAttachment,
+  VolumeCreateFromArchiveParams,
   VolumeCreateParams,
   VolumeListResponse,
   Volumes,
@@ -821,6 +822,7 @@ export declare namespace Hypeman {
     type VolumeAttachment as VolumeAttachment,
     type VolumeListResponse as VolumeListResponse,
     type VolumeCreateParams as VolumeCreateParams,
+    type VolumeCreateFromArchiveParams as VolumeCreateFromArchiveParams,
   };
 
   export {
