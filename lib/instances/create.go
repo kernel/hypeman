@@ -149,7 +149,7 @@ func (m *manager) createInstance(
 		return nil, fmt.Errorf("total memory %d (size + hotplug_size) exceeds maximum allowed %d per instance", totalMemory, m.limits.MaxMemoryPerInstance)
 	}
 
-	// Validate aggregate resource limits via ResourceValidator
+	// Validate aggregate resource limits via ResourceValidator (if configured)
 	if m.resourceValidator != nil {
 		needsGPU := req.GPU != nil && req.GPU.Profile != ""
 		if err := m.resourceValidator.ValidateAllocation(ctx, vcpus, totalMemory, req.NetworkBandwidthDownload, req.NetworkBandwidthUpload, req.DiskIOBps, needsGPU); err != nil {

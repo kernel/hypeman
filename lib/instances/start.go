@@ -46,7 +46,7 @@ func (m *manager) startInstance(
 		return nil, fmt.Errorf("%w: cannot start from state %s, must be Stopped", ErrInvalidState, inst.State)
 	}
 
-	// 2b. Validate aggregate resource limits before allocating resources
+	// 2b. Validate aggregate resource limits before allocating resources (if configured)
 	if m.resourceValidator != nil {
 		needsGPU := stored.GPUProfile != ""
 		totalMemory := stored.Size + stored.HotplugSize

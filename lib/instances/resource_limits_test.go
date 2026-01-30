@@ -150,7 +150,13 @@ func TestValidateVolumeAttachments_OverlayCountsAsTwoDevices(t *testing.T) {
 func createTestManager(t *testing.T, limits ResourceLimits) *manager {
 	t.Helper()
 	tmpDir := t.TempDir()
-	cfg := &config.Config{DataDir: tmpDir}
+	cfg := &config.Config{
+		DataDir:        tmpDir,
+		OversubCPU:     1.0,
+		OversubMemory:  1.0,
+		OversubDisk:    1.0,
+		OversubNetwork: 1.0,
+	}
 	p := paths.New(cfg.DataDir)
 
 	imageMgr, err := images.NewManager(p, 1, nil)

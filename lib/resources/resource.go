@@ -215,19 +215,26 @@ func (m *Manager) Initialize(ctx context.Context) error {
 }
 
 // GetOversubRatio returns the oversubscription ratio for a resource type.
+// Returns 1.0 (no oversubscription) if the config value is not set or <= 0.
 func (m *Manager) GetOversubRatio(rt ResourceType) float64 {
+	var ratio float64
 	switch rt {
 	case ResourceCPU:
-		return m.cfg.OversubCPU
+		ratio = m.cfg.OversubCPU
 	case ResourceMemory:
-		return m.cfg.OversubMemory
+		ratio = m.cfg.OversubMemory
 	case ResourceDisk:
-		return m.cfg.OversubDisk
+		ratio = m.cfg.OversubDisk
 	case ResourceNetwork:
-		return m.cfg.OversubNetwork
+		ratio = m.cfg.OversubNetwork
 	default:
 		return 1.0
 	}
+	// Default to 1.0 (no oversubscription) if not configured
+	if ratio <= 0 {
+		return 1.0
+	}
+	return ratio
 }
 
 // GetStatus returns the current status of a specific resource type.

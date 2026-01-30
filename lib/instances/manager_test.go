@@ -24,6 +24,7 @@ import (
 	"github.com/kernel/hypeman/lib/ingress"
 	"github.com/kernel/hypeman/lib/network"
 	"github.com/kernel/hypeman/lib/paths"
+	"github.com/kernel/hypeman/lib/resources"
 	"github.com/kernel/hypeman/lib/system"
 	"github.com/kernel/hypeman/lib/vmm"
 	"github.com/kernel/hypeman/lib/volumes"
@@ -56,6 +57,15 @@ func setupTestManager(t *testing.T) (*manager, string) {
 		MaxMemoryPerInstance: 0,                        // unlimited
 	}
 	mgr := NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, "", nil, nil).(*manager)
+
+	// Set up resource validation using the real ResourceManager
+	resourceMgr := resources.NewManager(cfg, p)
+	resourceMgr.SetInstanceLister(mgr)
+	resourceMgr.SetImageLister(imageManager)
+	resourceMgr.SetVolumeLister(volumeManager)
+	err = resourceMgr.Initialize(context.Background())
+	require.NoError(t, err)
+	mgr.SetResourceValidator(resourceMgr)
 
 	// Register cleanup to kill any orphaned Cloud Hypervisor processes
 	t.Cleanup(func() {
@@ -920,10 +930,14 @@ func TestStorageOperations(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	cfg := &config.Config{
-		DataDir:    tmpDir,
-		BridgeName: "vmbr0",
-		SubnetCIDR: "10.100.0.0/16",
-		DNSServer:  "1.1.1.1",
+		DataDir:        tmpDir,
+		BridgeName:     "vmbr0",
+		SubnetCIDR:     "10.100.0.0/16",
+		DNSServer:      "1.1.1.1",
+		OversubCPU:     1.0,
+		OversubMemory:  1.0,
+		OversubDisk:    1.0,
+		OversubNetwork: 1.0,
 	}
 
 	p := paths.New(tmpDir)

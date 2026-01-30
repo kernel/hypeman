@@ -126,6 +126,10 @@ func (m *mockInstanceManager) ListRunningInstancesInfo(ctx context.Context) ([]r
 	return nil, nil
 }
 
+func (m *mockInstanceManager) SetResourceValidator(v instances.ResourceValidator) {
+	// no-op for mock
+}
+
 // mockVolumeManager implements volumes.Manager for testing
 type mockVolumeManager struct {
 	volumes               map[string]*volumes.Volume
@@ -611,7 +615,7 @@ func TestBuildQueue_ConcurrencyLimit(t *testing.T) {
 	queue := NewBuildQueue(2) // Max 2 concurrent
 
 	started := make(chan string, 5)
-	
+
 	// Enqueue 5 builds with blocking start functions
 	for i := 0; i < 5; i++ {
 		id := string(rune('A' + i))
