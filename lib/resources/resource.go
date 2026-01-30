@@ -21,6 +21,7 @@ const (
 	ResourceMemory  ResourceType = "memory"
 	ResourceDisk    ResourceType = "disk"
 	ResourceNetwork ResourceType = "network"
+	ResourceDiskIO  ResourceType = "disk_io"
 )
 
 // SourceType identifies how a resource capacity was determined.
@@ -100,6 +101,7 @@ type InstanceAllocation struct {
 	VolumeOverlayBytes int64  // Sum of volume overlay sizes
 	NetworkDownloadBps int64  // Download rate limit (external→VM)
 	NetworkUploadBps   int64  // Upload rate limit (VM→external)
+	DiskIOBps          int64  // Disk I/O rate limit (bytes/sec)
 	State              string // Only count running/paused/created instances
 	VolumeBytes        int64  // Sum of attached volume base sizes (for per-instance reporting)
 }
@@ -211,6 +213,10 @@ func (m *Manager) Initialize(ctx context.Context) error {
 	}
 	m.resources[ResourceNetwork] = net
 
+	// Discover disk I/O (reuses existing DiskIOCapacity method)
+	diskIO := NewDiskIOResource(m.DiskIOCapacity(), m.instanceLister)
+	m.resources[ResourceDiskIO] = diskIO
+
 	return nil
 }
 
@@ -227,6 +233,8 @@ func (m *Manager) GetOversubRatio(rt ResourceType) float64 {
 		ratio = m.cfg.OversubDisk
 	case ResourceNetwork:
 		ratio = m.cfg.OversubNetwork
+	case ResourceDiskIO:
+		ratio = m.cfg.OversubDiskIO
 	default:
 		return 1.0
 	}
@@ -410,6 +418,20 @@ func (m *Manager) ValidateAllocation(ctx context.Context, vcpus int, memoryBytes
 		if netBandwidth > status.Available {
 			return fmt.Errorf("insufficient network bandwidth: requested %s/s, but only %s/s available (currently allocated: %s/s, effective limit: %s/s with %.1fx oversubscription)",
 				datasize.ByteSize(netBandwidth).HR(), datasize.ByteSize(status.Available).HR(), datasize.ByteSize(status.Allocated).HR(), datasize.ByteSize(status.EffectiveLimit).HR(), status.OversubRatio)
+		}
+	}
+
+	// Check Disk I/O
+	if diskIOBps > 0 {
+		status, err := m.GetStatus(ctx, ResourceDiskIO)
+		if err != nil {
+			return fmt.Errorf("check disk I/O capacity: %w", err)
+		}
+		if diskIOBps > status.Available {
+			return fmt.Errorf("insufficient disk I/O: requested %s/s, but only %s/s available (currently allocated: %s/s, effective limit: %s/s with %.1fx oversubscription)",
+				datasize.ByteSize(diskIOBps).HR(), datasize.ByteSize(status.Available).HR(),
+				datasize.ByteSize(status.Allocated).HR(), datasize.ByteSize(status.EffectiveLimit).HR(),
+				status.OversubRatio)
 		}
 	}
 

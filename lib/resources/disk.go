@@ -126,3 +126,42 @@ func parseDiskIOLimit(limit string) (int64, error) {
 
 	return int64(ds.Bytes()), nil
 }
+
+// DiskIOResource implements Resource for disk I/O bandwidth tracking.
+type DiskIOResource struct {
+	capacity       int64 // bytes per second
+	instanceLister InstanceLister
+}
+
+// NewDiskIOResource creates a disk I/O resource with the given capacity.
+func NewDiskIOResource(capacity int64, instLister InstanceLister) *DiskIOResource {
+	return &DiskIOResource{capacity: capacity, instanceLister: instLister}
+}
+
+// Type returns the resource type.
+func (d *DiskIOResource) Type() ResourceType {
+	return ResourceDiskIO
+}
+
+// Capacity returns the total disk I/O capacity in bytes per second.
+func (d *DiskIOResource) Capacity() int64 {
+	return d.capacity
+}
+
+// Allocated returns total disk I/O allocated across all active instances.
+func (d *DiskIOResource) Allocated(ctx context.Context) (int64, error) {
+	if d.instanceLister == nil {
+		return 0, nil
+	}
+	instances, err := d.instanceLister.ListInstanceAllocations(ctx)
+	if err != nil {
+		return 0, err
+	}
+	var total int64
+	for _, inst := range instances {
+		if isActiveState(inst.State) {
+			total += inst.DiskIOBps
+		}
+	}
+	return total, nil
+}

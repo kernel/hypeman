@@ -340,6 +340,7 @@ func (m *manager) ListInstanceAllocations(ctx context.Context) ([]resources.Inst
 			VolumeOverlayBytes: volumeOverlayBytes,
 			NetworkDownloadBps: inst.NetworkBandwidthDownload,
 			NetworkUploadBps:   inst.NetworkBandwidthUpload,
+			DiskIOBps:          inst.DiskIOBps,
 			State:              string(inst.State),
 			VolumeBytes:        volumeBytes,
 		})
