@@ -232,12 +232,19 @@ func formatMB(mb int64) string {
 	return fmt.Sprintf("%d MB", mb)
 }
 
-func formatBps(bps int64) string {
+// formatBps converts bytes per second (as returned by the API) to a human-readable
+// bits per second string (Kbps, Mbps, Gbps). The API stores bandwidth in bytes/sec,
+// but users specify and expect to see bandwidth in bits/sec (the standard unit for
+// network bandwidth).
+func formatBps(bytesPerSec int64) string {
 	const (
 		Kbps = 1000
 		Mbps = Kbps * 1000
 		Gbps = Mbps * 1000
 	)
+
+	// Convert bytes/sec to bits/sec (multiply by 8)
+	bps := bytesPerSec * 8
 
 	switch {
 	case bps >= Gbps:
