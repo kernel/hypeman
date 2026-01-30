@@ -77,6 +77,11 @@ func parseVolumeMultipartForm(multipartReader *multipart.Reader) (*volumeMultipa
 				form.ID = &idStr
 			}
 		case "content":
+			// Reject duplicate content fields to prevent temp file leaks
+			if form.ContentFile != nil {
+				form.Close()
+				return nil, &formError{Code: "invalid_form", Message: "duplicate content field"}
+			}
 			// Buffer content to a temp file to handle any field order
 			tempFile, err := os.CreateTemp("", "volume-archive-*.tar.gz")
 			if err != nil {
