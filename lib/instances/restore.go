@@ -51,6 +51,16 @@ func (m *manager) restoreInstance(
 		return nil, fmt.Errorf("no snapshot available for instance %s", id)
 	}
 
+	// 2b. Validate aggregate resource limits before allocating resources (if configured)
+	if m.resourceValidator != nil {
+		needsGPU := stored.GPUProfile != ""
+		totalMemory := stored.Size + stored.HotplugSize
+		if err := m.resourceValidator.ValidateAllocation(ctx, stored.Vcpus, totalMemory, stored.NetworkBandwidthDownload, stored.NetworkBandwidthUpload, stored.DiskIOBps, needsGPU); err != nil {
+			log.ErrorContext(ctx, "resource validation failed for restore", "instance_id", id, "error", err)
+			return nil, fmt.Errorf("%w: %v", ErrInsufficientResources, err)
+		}
+	}
+
 	// 3. Get snapshot directory
 	snapshotDir := m.paths.InstanceSnapshotLatest(id)
 
