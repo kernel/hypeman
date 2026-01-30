@@ -3,122 +3,12 @@ package api
 import (
 	"context"
 	"errors"
-	"io"
-	"mime/multipart"
-	"os"
-	"strconv"
 
 	"github.com/kernel/hypeman/lib/logger"
 	mw "github.com/kernel/hypeman/lib/middleware"
 	"github.com/kernel/hypeman/lib/oapi"
 	"github.com/kernel/hypeman/lib/volumes"
 )
-
-// volumeMultipartForm holds parsed multipart form data for volume creation
-type volumeMultipartForm struct {
-	Name        string
-	SizeGb      int
-	ID          *string
-	ContentFile *os.File // Temp file containing the archive content
-}
-
-// Close cleans up any temp files
-func (f *volumeMultipartForm) Close() {
-	if f.ContentFile != nil {
-		f.ContentFile.Close()
-		os.Remove(f.ContentFile.Name())
-	}
-}
-
-// parseVolumeMultipartForm parses a multipart form for volume creation.
-// It buffers the content field to a temp file to handle any field order.
-// Caller must call form.Close() to clean up temp files.
-func parseVolumeMultipartForm(multipartReader *multipart.Reader) (*volumeMultipartForm, error) {
-	form := &volumeMultipartForm{}
-
-	for {
-		part, err := multipartReader.NextPart()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			form.Close()
-			return nil, &formError{Code: "invalid_form", Message: "failed to parse multipart form: " + err.Error()}
-		}
-
-		switch part.FormName() {
-		case "name":
-			data, err := io.ReadAll(part)
-			if err != nil {
-				form.Close()
-				return nil, &formError{Code: "invalid_field", Message: "failed to read name field"}
-			}
-			form.Name = string(data)
-		case "size_gb":
-			data, err := io.ReadAll(part)
-			if err != nil {
-				form.Close()
-				return nil, &formError{Code: "invalid_field", Message: "failed to read size_gb field"}
-			}
-			sizeGb, err := strconv.Atoi(string(data))
-			if err != nil || sizeGb <= 0 {
-				form.Close()
-				return nil, &formError{Code: "invalid_field", Message: "size_gb must be a positive integer"}
-			}
-			form.SizeGb = sizeGb
-		case "id":
-			data, err := io.ReadAll(part)
-			if err != nil {
-				form.Close()
-				return nil, &formError{Code: "invalid_field", Message: "failed to read id field"}
-			}
-			idStr := string(data)
-			if idStr != "" {
-				form.ID = &idStr
-			}
-		case "content":
-			// Reject duplicate content fields to prevent temp file leaks
-			if form.ContentFile != nil {
-				form.Close()
-				return nil, &formError{Code: "invalid_form", Message: "duplicate content field"}
-			}
-			// Buffer content to a temp file to handle any field order
-			tempFile, err := os.CreateTemp("", "volume-archive-*.tar.gz")
-			if err != nil {
-				form.Close()
-				return nil, &formError{Code: "internal_error", Message: "failed to create temp file"}
-			}
-			_, err = io.Copy(tempFile, part)
-			if err != nil {
-				tempFile.Close()
-				os.Remove(tempFile.Name())
-				form.Close()
-				return nil, &formError{Code: "invalid_field", Message: "failed to read content field"}
-			}
-			// Seek back to beginning for reading
-			_, err = tempFile.Seek(0, 0)
-			if err != nil {
-				tempFile.Close()
-				os.Remove(tempFile.Name())
-				form.Close()
-				return nil, &formError{Code: "internal_error", Message: "failed to seek temp file"}
-			}
-			form.ContentFile = tempFile
-		}
-	}
-
-	return form, nil
-}
-
-// formError represents a form parsing error
-type formError struct {
-	Code    string
-	Message string
-}
-
-func (e *formError) Error() string {
-	return e.Message
-}
 
 // ListVolumes lists all volumes
 func (s *ApiService) ListVolumes(ctx context.Context, request oapi.ListVolumesRequestObject) (oapi.ListVolumesResponseObject, error) {
@@ -141,191 +31,73 @@ func (s *ApiService) ListVolumes(ctx context.Context, request oapi.ListVolumesRe
 	return oapi.ListVolumes200JSONResponse(oapiVols), nil
 }
 
-// CreateVolume creates a new volume
-// Supports two modes:
-//   - JSON body: Creates an empty volume of the specified size
-//   - Multipart form (DEPRECATED): Creates a volume from a tar.gz archive
-//     New integrations should use CreateVolumeFromArchive instead
+// CreateVolume creates a new empty volume of the specified size
 func (s *ApiService) CreateVolume(ctx context.Context, request oapi.CreateVolumeRequestObject) (oapi.CreateVolumeResponseObject, error) {
 	log := logger.FromContext(ctx)
 
-	// Handle JSON request (empty volume)
-	if request.JSONBody != nil {
-		domainReq := volumes.CreateVolumeRequest{
-			Name:   request.JSONBody.Name,
-			SizeGb: request.JSONBody.SizeGb,
-			Id:     request.JSONBody.Id,
-		}
-
-		vol, err := s.VolumeManager.CreateVolume(ctx, domainReq)
-		if err != nil {
-			if errors.Is(err, volumes.ErrAlreadyExists) {
-				return oapi.CreateVolume409JSONResponse{
-					Code:    "already_exists",
-					Message: "volume with this ID already exists",
-				}, nil
-			}
-			log.ErrorContext(ctx, "failed to create volume", "error", err, "name", request.JSONBody.Name)
-			return oapi.CreateVolume500JSONResponse{
-				Code:    "internal_error",
-				Message: "failed to create volume",
-			}, nil
-		}
-		return oapi.CreateVolume201JSONResponse(volumeToOAPI(*vol)), nil
+	if request.Body == nil {
+		return oapi.CreateVolume400JSONResponse{
+			Code:    "invalid_request",
+			Message: "request body is required",
+		}, nil
 	}
 
-	// Handle multipart request (DEPRECATED - volume with archive content)
-	if request.MultipartBody != nil {
-		return s.createVolumeFromMultipartDeprecated(ctx, request.MultipartBody)
+	domainReq := volumes.CreateVolumeRequest{
+		Name:   request.Body.Name,
+		SizeGb: request.Body.SizeGb,
+		Id:     request.Body.Id,
 	}
 
-	return oapi.CreateVolume400JSONResponse{
-		Code:    "invalid_request",
-		Message: "request body is required",
-	}, nil
-}
-
-// createVolumeFromMultipartDeprecated handles the deprecated multipart form on POST /volumes
-// New integrations should use POST /volumes/from-archive instead
-func (s *ApiService) createVolumeFromMultipartDeprecated(ctx context.Context, multipartReader *multipart.Reader) (oapi.CreateVolumeResponseObject, error) {
-	log := logger.FromContext(ctx)
-
-	// Parse the multipart form (handles any field order via temp file buffering)
-	form, err := parseVolumeMultipartForm(multipartReader)
+	vol, err := s.VolumeManager.CreateVolume(ctx, domainReq)
 	if err != nil {
-		var formErr *formError
-		if errors.As(err, &formErr) {
-			if formErr.Code == "internal_error" {
-				return oapi.CreateVolume500JSONResponse{
-					Code:    formErr.Code,
-					Message: formErr.Message,
-				}, nil
-			}
-			return oapi.CreateVolume400JSONResponse{
-				Code:    formErr.Code,
-				Message: formErr.Message,
-			}, nil
-		}
-		return oapi.CreateVolume500JSONResponse{
-			Code:    "internal_error",
-			Message: "failed to parse form",
-		}, nil
-	}
-	defer form.Close()
-
-	// Validate required fields after parsing all fields
-	if form.Name == "" {
-		return oapi.CreateVolume400JSONResponse{
-			Code:    "missing_field",
-			Message: "name is required",
-		}, nil
-	}
-	if form.SizeGb <= 0 {
-		return oapi.CreateVolume400JSONResponse{
-			Code:    "missing_field",
-			Message: "size_gb is required",
-		}, nil
-	}
-	if form.ContentFile == nil {
-		return oapi.CreateVolume400JSONResponse{
-			Code:    "missing_file",
-			Message: "content file is required for multipart requests",
-		}, nil
-	}
-
-	// Create the volume from archive
-	domainReq := volumes.CreateVolumeFromArchiveRequest{
-		Name:   form.Name,
-		SizeGb: form.SizeGb,
-		Id:     form.ID,
-	}
-
-	vol, err := s.VolumeManager.CreateVolumeFromArchive(ctx, domainReq, form.ContentFile)
-	if err != nil {
-		if errors.Is(err, volumes.ErrArchiveTooLarge) {
-			return oapi.CreateVolume400JSONResponse{
-				Code:    "archive_too_large",
-				Message: err.Error(),
-			}, nil
-		}
 		if errors.Is(err, volumes.ErrAlreadyExists) {
 			return oapi.CreateVolume409JSONResponse{
 				Code:    "already_exists",
 				Message: "volume with this ID already exists",
 			}, nil
 		}
-		log.ErrorContext(ctx, "failed to create volume from archive", "error", err, "name", form.Name)
+		log.ErrorContext(ctx, "failed to create volume", "error", err, "name", request.Body.Name)
 		return oapi.CreateVolume500JSONResponse{
 			Code:    "internal_error",
 			Message: "failed to create volume",
 		}, nil
 	}
-
 	return oapi.CreateVolume201JSONResponse(volumeToOAPI(*vol)), nil
 }
 
 // CreateVolumeFromArchive creates a new volume pre-populated with content from a tar.gz archive
+// The archive is streamed directly into the volume without intermediate buffering
 func (s *ApiService) CreateVolumeFromArchive(ctx context.Context, request oapi.CreateVolumeFromArchiveRequestObject) (oapi.CreateVolumeFromArchiveResponseObject, error) {
 	log := logger.FromContext(ctx)
 
+	// Validate required parameters
+	if request.Params.Name == "" {
+		return oapi.CreateVolumeFromArchive400JSONResponse{
+			Code:    "missing_field",
+			Message: "name query parameter is required",
+		}, nil
+	}
+	if request.Params.SizeGb <= 0 {
+		return oapi.CreateVolumeFromArchive400JSONResponse{
+			Code:    "invalid_field",
+			Message: "size_gb must be a positive integer",
+		}, nil
+	}
 	if request.Body == nil {
 		return oapi.CreateVolumeFromArchive400JSONResponse{
-			Code:    "invalid_request",
-			Message: "multipart body is required",
+			Code:    "missing_body",
+			Message: "request body (tar.gz archive) is required",
 		}, nil
 	}
 
-	// Parse the multipart form (handles any field order via temp file buffering)
-	form, err := parseVolumeMultipartForm(request.Body)
-	if err != nil {
-		var formErr *formError
-		if errors.As(err, &formErr) {
-			if formErr.Code == "internal_error" {
-				return oapi.CreateVolumeFromArchive500JSONResponse{
-					Code:    formErr.Code,
-					Message: formErr.Message,
-				}, nil
-			}
-			return oapi.CreateVolumeFromArchive400JSONResponse{
-				Code:    formErr.Code,
-				Message: formErr.Message,
-			}, nil
-		}
-		return oapi.CreateVolumeFromArchive500JSONResponse{
-			Code:    "internal_error",
-			Message: "failed to parse form",
-		}, nil
-	}
-	defer form.Close()
-
-	// Validate required fields after parsing all fields
-	if form.Name == "" {
-		return oapi.CreateVolumeFromArchive400JSONResponse{
-			Code:    "missing_field",
-			Message: "name is required",
-		}, nil
-	}
-	if form.SizeGb <= 0 {
-		return oapi.CreateVolumeFromArchive400JSONResponse{
-			Code:    "missing_field",
-			Message: "size_gb is required",
-		}, nil
-	}
-	if form.ContentFile == nil {
-		return oapi.CreateVolumeFromArchive400JSONResponse{
-			Code:    "missing_file",
-			Message: "content file is required",
-		}, nil
-	}
-
-	// Create the volume from archive
+	// Create the volume from archive - stream directly without buffering
 	domainReq := volumes.CreateVolumeFromArchiveRequest{
-		Name:   form.Name,
-		SizeGb: form.SizeGb,
-		Id:     form.ID,
+		Name:   request.Params.Name,
+		SizeGb: request.Params.SizeGb,
+		Id:     request.Params.Id,
 	}
 
-	vol, err := s.VolumeManager.CreateVolumeFromArchive(ctx, domainReq, form.ContentFile)
+	vol, err := s.VolumeManager.CreateVolumeFromArchive(ctx, domainReq, request.Body)
 	if err != nil {
 		if errors.Is(err, volumes.ErrArchiveTooLarge) {
 			return oapi.CreateVolumeFromArchive400JSONResponse{
@@ -339,7 +111,7 @@ func (s *ApiService) CreateVolumeFromArchive(ctx context.Context, request oapi.C
 				Message: "volume with this ID already exists",
 			}, nil
 		}
-		log.ErrorContext(ctx, "failed to create volume from archive", "error", err, "name", form.Name)
+		log.ErrorContext(ctx, "failed to create volume from archive", "error", err, "name", request.Params.Name)
 		return oapi.CreateVolumeFromArchive500JSONResponse{
 			Code:    "internal_error",
 			Message: "failed to create volume",
