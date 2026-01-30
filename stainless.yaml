@@ -108,6 +108,7 @@ resources:
     methods:
       list: get /volumes
       create: post /volumes
+      create_from_archive: post /volumes/from-archive
       get: get /volumes/{id}
       delete: delete /volumes/{id}
 
