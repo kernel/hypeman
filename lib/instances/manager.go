@@ -41,6 +41,9 @@ type Manager interface {
 	// ListRunningInstancesInfo returns info needed for utilization metrics collection.
 	// Used by the resource manager for VM utilization tracking.
 	ListRunningInstancesInfo(ctx context.Context) ([]resources.InstanceUtilizationInfo, error)
+	// SetResourceValidator sets the validator for aggregate resource limit checking.
+	// Called after initialization to avoid circular dependencies.
+	SetResourceValidator(v ResourceValidator)
 }
 
 // ResourceLimits contains configurable resource limits for instances
@@ -48,21 +51,28 @@ type ResourceLimits struct {
 	MaxOverlaySize       int64 // Maximum overlay disk size in bytes per instance
 	MaxVcpusPerInstance  int   // Maximum vCPUs per instance (0 = unlimited)
 	MaxMemoryPerInstance int64 // Maximum memory in bytes per instance (0 = unlimited)
-	MaxTotalVcpus        int   // Maximum total vCPUs across all instances (0 = unlimited)
-	MaxTotalMemory       int64 // Maximum total memory in bytes across all instances (0 = unlimited)
+}
+
+// ResourceValidator validates if resources can be allocated
+type ResourceValidator interface {
+	// ValidateAllocation checks if the requested resources are available.
+	// Returns nil if allocation is allowed, or a detailed error describing
+	// which resource is insufficient and the current capacity/usage.
+	ValidateAllocation(ctx context.Context, vcpus int, memoryBytes int64, networkDownloadBps int64, networkUploadBps int64, diskIOBps int64, needsGPU bool) error
 }
 
 type manager struct {
-	paths          *paths.Paths
-	imageManager   images.Manager
-	systemManager  system.Manager
-	networkManager network.Manager
-	deviceManager  devices.Manager
-	volumeManager  volumes.Manager
-	limits         ResourceLimits
-	instanceLocks  sync.Map      // map[string]*sync.RWMutex - per-instance locks
-	hostTopology   *HostTopology // Cached host CPU topology
-	metrics        *Metrics
+	paths             *paths.Paths
+	imageManager      images.Manager
+	systemManager     system.Manager
+	networkManager    network.Manager
+	deviceManager     devices.Manager
+	volumeManager     volumes.Manager
+	limits            ResourceLimits
+	resourceValidator ResourceValidator // Optional validator for aggregate resource limits
+	instanceLocks     sync.Map          // map[string]*sync.RWMutex - per-instance locks
+	hostTopology      *HostTopology     // Cached host CPU topology
+	metrics           *Metrics
 
 	// Hypervisor support
 	vmStarters        map[hypervisor.Type]hypervisor.VMStarter
@@ -104,6 +114,12 @@ func NewManager(p *paths.Paths, imageManager images.Manager, systemManager syste
 	}
 
 	return m
+}
+
+// SetResourceValidator sets the resource validator for aggregate limit checking.
+// This is called after initialization to avoid circular dependencies.
+func (m *manager) SetResourceValidator(v ResourceValidator) {
+	m.resourceValidator = v
 }
 
 // getHypervisor creates a hypervisor client for the given socket and type.
@@ -366,4 +382,3 @@ func (m *manager) ListRunningInstancesInfo(ctx context.Context) ([]resources.Ins
 
 	return infos, nil
 }
-

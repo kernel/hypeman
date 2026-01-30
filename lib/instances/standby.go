@@ -47,6 +47,12 @@ func (m *manager) standbyInstance(
 		return nil, fmt.Errorf("%w: cannot standby from state %s", ErrInvalidState, inst.State)
 	}
 
+	// 2b. Block standby for vGPU instances (driver limitation - NVIDIA vGPU doesn't support snapshots)
+	if inst.GPUMdevUUID != "" || inst.GPUProfile != "" {
+		log.ErrorContext(ctx, "standby not supported for vGPU instances", "instance_id", id, "gpu_profile", inst.GPUProfile)
+		return nil, fmt.Errorf("%w: standby is not supported for instances with vGPU attached (driver limitation)", ErrInvalidState)
+	}
+
 	// 3. Get network allocation BEFORE killing VMM (while we can still query it)
 	// This is needed to delete the TAP device after VMM shuts down
 	var networkAlloc *network.Allocation

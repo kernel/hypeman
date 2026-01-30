@@ -252,6 +252,11 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 				Code:    "name_conflict",
 				Message: err.Error(),
 			}, nil
+		case errors.Is(err, instances.ErrInsufficientResources):
+			return oapi.CreateInstance409JSONResponse{
+				Code:    "insufficient_resources",
+				Message: err.Error(),
+			}, nil
 		default:
 			log.ErrorContext(ctx, "failed to create instance", "error", err, "image", request.Body.Image)
 			return oapi.CreateInstance500JSONResponse{
@@ -309,15 +314,15 @@ func (s *ApiService) GetInstanceStats(ctx context.Context, request oapi.GetInsta
 // vmStatsToOAPI converts vm_metrics.VMStats to oapi.InstanceStats
 func vmStatsToOAPI(s *vm_metrics.VMStats) oapi.InstanceStats {
 	stats := oapi.InstanceStats{
-		InstanceId:           s.InstanceID,
-		InstanceName:         s.InstanceName,
-		CpuSeconds:           s.CPUSeconds(),
-		MemoryRssBytes:       int64(s.MemoryRSSBytes),
-		MemoryVmsBytes:       int64(s.MemoryVMSBytes),
-		NetworkRxBytes:       int64(s.NetRxBytes),
-		NetworkTxBytes:       int64(s.NetTxBytes),
-		AllocatedVcpus:       s.AllocatedVcpus,
-		AllocatedMemoryBytes: s.AllocatedMemoryBytes,
+		InstanceId:             s.InstanceID,
+		InstanceName:           s.InstanceName,
+		CpuSeconds:             s.CPUSeconds(),
+		MemoryRssBytes:         int64(s.MemoryRSSBytes),
+		MemoryVmsBytes:         int64(s.MemoryVMSBytes),
+		NetworkRxBytes:         int64(s.NetRxBytes),
+		NetworkTxBytes:         int64(s.NetTxBytes),
+		AllocatedVcpus:         s.AllocatedVcpus,
+		AllocatedMemoryBytes:   s.AllocatedMemoryBytes,
 		MemoryUtilizationRatio: s.MemoryUtilizationRatio(),
 	}
 	return stats
@@ -462,6 +467,11 @@ func (s *ApiService) StartInstance(ctx context.Context, request oapi.StartInstan
 		case errors.Is(err, instances.ErrInvalidState):
 			return oapi.StartInstance409JSONResponse{
 				Code:    "invalid_state",
+				Message: err.Error(),
+			}, nil
+		case errors.Is(err, instances.ErrInsufficientResources):
+			return oapi.StartInstance409JSONResponse{
+				Code:    "insufficient_resources",
 				Message: err.Error(),
 			}, nil
 		default:

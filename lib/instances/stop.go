@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/network"
 	"go.opentelemetry.io/otel/trace"
@@ -71,10 +72,20 @@ func (m *manager) stopInstance(
 		}
 	}
 
-	// 6. Update metadata (clear PID, set StoppedAt)
+	// 6. Destroy vGPU mdev device if present (frees vGPU slot for other VMs)
+	if inst.GPUMdevUUID != "" {
+		log.InfoContext(ctx, "destroying vGPU mdev on stop", "instance_id", id, "uuid", inst.GPUMdevUUID)
+		if err := devices.DestroyMdev(ctx, inst.GPUMdevUUID); err != nil {
+			// Log error but continue - mdev cleanup is best-effort
+			log.WarnContext(ctx, "failed to destroy mdev on stop", "instance_id", id, "uuid", inst.GPUMdevUUID, "error", err)
+		}
+	}
+
+	// 7. Update metadata (clear PID, mdev UUID, set StoppedAt)
 	now := time.Now()
 	stored.StoppedAt = &now
 	stored.HypervisorPID = nil
+	stored.GPUMdevUUID = "" // Clear mdev UUID since we destroyed it
 
 	meta = &metadata{StoredMetadata: *stored}
 	if err := m.saveMetadata(meta); err != nil {

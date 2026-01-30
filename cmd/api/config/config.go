@@ -69,8 +69,7 @@ type Config struct {
 	MaxMemoryPerInstance string // Max memory for a single VM (0 = unlimited)
 
 	// Resource limits - aggregate
-	MaxTotalVcpus         int    // Aggregate vCPU limit across all instances (0 = unlimited)
-	MaxTotalMemory        string // Aggregate memory limit across all instances (0 = unlimited)
+	// Note: CPU/memory aggregate limits are now handled via oversubscription ratios (OVERSUB_CPU, OVERSUB_MEMORY)
 	MaxTotalVolumeStorage string // Total volume storage limit (0 = unlimited)
 
 	// OpenTelemetry configuration
@@ -166,9 +165,8 @@ func Load() *Config {
 		MaxVcpusPerInstance:  getEnvInt("MAX_VCPUS_PER_INSTANCE", 16),
 		MaxMemoryPerInstance: getEnv("MAX_MEMORY_PER_INSTANCE", "32GB"),
 
-		// Resource limits - aggregate (0 or empty = unlimited)
-		MaxTotalVcpus:         getEnvInt("MAX_TOTAL_VCPUS", 0),
-		MaxTotalMemory:        getEnv("MAX_TOTAL_MEMORY", ""),
+		// Resource limits - aggregate
+		// Note: CPU/memory aggregate limits are now handled via oversubscription ratios
 		MaxTotalVolumeStorage: getEnv("MAX_TOTAL_VOLUME_STORAGE", ""),
 
 		// OpenTelemetry configuration

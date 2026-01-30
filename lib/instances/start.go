@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/network"
 	"go.opentelemetry.io/otel/trace"
@@ -45,6 +46,16 @@ func (m *manager) startInstance(
 		return nil, fmt.Errorf("%w: cannot start from state %s, must be Stopped", ErrInvalidState, inst.State)
 	}
 
+	// 2b. Validate aggregate resource limits before allocating resources
+	if m.resourceValidator != nil {
+		needsGPU := stored.GPUProfile != ""
+		totalMemory := stored.Size + stored.HotplugSize
+		if err := m.resourceValidator.ValidateAllocation(ctx, stored.Vcpus, totalMemory, stored.NetworkBandwidthDownload, stored.NetworkBandwidthUpload, stored.DiskIOBps, needsGPU); err != nil {
+			log.ErrorContext(ctx, "resource validation failed for start", "instance_id", id, "error", err)
+			return nil, fmt.Errorf("%w: %v", ErrInsufficientResources, err)
+		}
+	}
+
 	// 3. Get image info (needed for buildHypervisorConfig)
 	log.DebugContext(ctx, "getting image info", "instance_id", id, "image", stored.Image)
 	imageInfo, err := m.imageManager.GetImage(ctx, stored.Image)
@@ -78,6 +89,26 @@ func (m *manager) startInstance(
 				InstanceID: id,
 				TAPDevice:  netConfig.TAPDevice,
 			})
+		})
+	}
+
+	// 4b. Recreate vGPU mdev if this instance had a GPU profile
+	// Note: GPU availability was already validated in step 2b
+	if stored.GPUProfile != "" {
+		log.InfoContext(ctx, "creating vGPU mdev for start", "instance_id", id, "profile", stored.GPUProfile)
+		mdev, err := devices.CreateMdev(ctx, stored.GPUProfile, id)
+		if err != nil {
+			log.ErrorContext(ctx, "failed to create mdev", "instance_id", id, "profile", stored.GPUProfile, "error", err)
+			return nil, fmt.Errorf("create vGPU mdev for profile %s: %w", stored.GPUProfile, err)
+		}
+		stored.GPUMdevUUID = mdev.UUID
+		log.InfoContext(ctx, "created vGPU mdev", "instance_id", id, "profile", stored.GPUProfile, "uuid", mdev.UUID)
+		// Add mdev cleanup to stack
+		cu.Add(func() {
+			log.DebugContext(ctx, "destroying mdev on cleanup", "instance_id", id, "uuid", mdev.UUID)
+			if err := devices.DestroyMdev(ctx, mdev.UUID); err != nil {
+				log.WarnContext(ctx, "failed to destroy mdev on cleanup", "instance_id", id, "uuid", mdev.UUID, "error", err)
+			}
 		})
 	}
 

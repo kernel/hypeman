@@ -105,22 +105,12 @@ func ProvideInstanceManager(p *paths.Paths, cfg *config.Config, imageManager ima
 		maxMemoryPerInstance = int64(memSize)
 	}
 
-	// Parse max total memory (empty or "0" means unlimited)
-	var maxTotalMemory int64
-	if cfg.MaxTotalMemory != "" && cfg.MaxTotalMemory != "0" {
-		var memSize datasize.ByteSize
-		if err := memSize.UnmarshalText([]byte(cfg.MaxTotalMemory)); err != nil {
-			return nil, fmt.Errorf("failed to parse MAX_TOTAL_MEMORY '%s': %w", cfg.MaxTotalMemory, err)
-		}
-		maxTotalMemory = int64(memSize)
-	}
-
+	// Note: Aggregate CPU/memory limits are now handled via oversubscription ratios
+	// in the ResourceManager, wired up via SetResourceValidator after initialization.
 	limits := instances.ResourceLimits{
 		MaxOverlaySize:       int64(maxOverlaySize),
 		MaxVcpusPerInstance:  cfg.MaxVcpusPerInstance,
 		MaxMemoryPerInstance: maxMemoryPerInstance,
-		MaxTotalVcpus:        cfg.MaxTotalVcpus,
-		MaxTotalMemory:       maxTotalMemory,
 	}
 
 	meter := otel.GetMeterProvider().Meter("hypeman")

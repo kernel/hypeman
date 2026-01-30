@@ -76,8 +76,6 @@ func TestVGPU(t *testing.T) {
 		MaxOverlaySize:       100 * 1024 * 1024 * 1024,
 		MaxVcpusPerInstance:  0,
 		MaxMemoryPerInstance: 0,
-		MaxTotalVcpus:        0,
-		MaxTotalMemory:       0,
 	}
 
 	instanceManager := instances.NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, "", nil, nil)
@@ -272,4 +270,3 @@ func checkVGPUTestPrerequisites() (string, string) {
 
 	return "vGPU test requires at least one available VF (all VFs are in use)", ""
 }
-

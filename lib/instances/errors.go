@@ -17,4 +17,7 @@ var (
 
 	// ErrAmbiguousName is returned when multiple instances have the same name
 	ErrAmbiguousName = errors.New("multiple instances with the same name")
+
+	// ErrInsufficientResources is returned when resources (CPU, memory, network, GPU) are not available
+	ErrInsufficientResources = errors.New("insufficient resources")
 )

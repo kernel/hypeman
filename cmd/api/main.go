@@ -225,6 +225,12 @@ func run() error {
 		logger.Warn("failed to reconcile mdev devices", "error", err)
 	}
 
+	// Wire up resource validator for aggregate limit checking
+	// This enables the instance manager to validate CPU, memory, network, and GPU
+	// availability before creating or starting instances.
+	app.InstanceManager.SetResourceValidator(app.ResourceManager)
+	logger.Info("Resource validator configured")
+
 	// Initialize ingress manager (starts Caddy daemon and DNS server for dynamic upstreams)
 	logger.Info("Initializing ingress manager...")
 	if err := app.IngressManager.Initialize(app.Ctx); err != nil {

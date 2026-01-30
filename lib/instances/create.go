@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nrednav/cuid2"
 	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
@@ -16,6 +15,7 @@ import (
 	"github.com/kernel/hypeman/lib/network"
 	"github.com/kernel/hypeman/lib/system"
 	"github.com/kernel/hypeman/lib/volumes"
+	"github.com/nrednav/cuid2"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 	"gvisor.dev/gvisor/pkg/cleanup"
@@ -46,31 +46,6 @@ var systemDirectories = []string{
 	"/tmp",
 	"/usr",
 	"/var",
-}
-
-// AggregateUsage represents total resource usage across all instances
-type AggregateUsage struct {
-	TotalVcpus  int
-	TotalMemory int64 // in bytes
-}
-
-// calculateAggregateUsage calculates total resource usage across all running instances
-func (m *manager) calculateAggregateUsage(ctx context.Context) (AggregateUsage, error) {
-	instances, err := m.listInstances(ctx)
-	if err != nil {
-		return AggregateUsage{}, err
-	}
-
-	var usage AggregateUsage
-	for _, inst := range instances {
-		// Only count running/paused instances (those consuming resources)
-		if inst.State == StateRunning || inst.State == StatePaused || inst.State == StateCreated {
-			usage.TotalVcpus += inst.Vcpus
-			usage.TotalMemory += inst.Size + inst.HotplugSize
-		}
-	}
-
-	return usage, nil
 }
 
 // generateVsockCID converts first 8 chars of instance ID to a unique CID
@@ -174,18 +149,12 @@ func (m *manager) createInstance(
 		return nil, fmt.Errorf("total memory %d (size + hotplug_size) exceeds maximum allowed %d per instance", totalMemory, m.limits.MaxMemoryPerInstance)
 	}
 
-	// Validate aggregate resource limits
-	if m.limits.MaxTotalVcpus > 0 || m.limits.MaxTotalMemory > 0 {
-		usage, err := m.calculateAggregateUsage(ctx)
-		if err != nil {
-			log.WarnContext(ctx, "failed to calculate aggregate usage, skipping limit check", "error", err)
-		} else {
-			if m.limits.MaxTotalVcpus > 0 && usage.TotalVcpus+vcpus > m.limits.MaxTotalVcpus {
-				return nil, fmt.Errorf("total vcpus would be %d, exceeds aggregate limit of %d", usage.TotalVcpus+vcpus, m.limits.MaxTotalVcpus)
-			}
-			if m.limits.MaxTotalMemory > 0 && usage.TotalMemory+totalMemory > m.limits.MaxTotalMemory {
-				return nil, fmt.Errorf("total memory would be %d, exceeds aggregate limit of %d", usage.TotalMemory+totalMemory, m.limits.MaxTotalMemory)
-			}
+	// Validate aggregate resource limits via ResourceValidator
+	if m.resourceValidator != nil {
+		needsGPU := req.GPU != nil && req.GPU.Profile != ""
+		if err := m.resourceValidator.ValidateAllocation(ctx, vcpus, totalMemory, req.NetworkBandwidthDownload, req.NetworkBandwidthUpload, req.DiskIOBps, needsGPU); err != nil {
+			log.ErrorContext(ctx, "resource validation failed", "error", err)
+			return nil, fmt.Errorf("%w: %v", ErrInsufficientResources, err)
 		}
 	}
 

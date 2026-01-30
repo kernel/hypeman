@@ -54,8 +54,6 @@ func setupTestManager(t *testing.T) (*manager, string) {
 		MaxOverlaySize:       100 * 1024 * 1024 * 1024, // 100GB
 		MaxVcpusPerInstance:  0,                        // unlimited
 		MaxMemoryPerInstance: 0,                        // unlimited
-		MaxTotalVcpus:        0,                        // unlimited
-		MaxTotalMemory:       0,                        // unlimited
 	}
 	mgr := NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, "", nil, nil).(*manager)
 
@@ -938,8 +936,6 @@ func TestStorageOperations(t *testing.T) {
 		MaxOverlaySize:       100 * 1024 * 1024 * 1024, // 100GB
 		MaxVcpusPerInstance:  0,                        // unlimited
 		MaxMemoryPerInstance: 0,                        // unlimited
-		MaxTotalVcpus:        0,                        // unlimited
-		MaxTotalMemory:       0,                        // unlimited
 	}
 	manager := NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, "", nil, nil).(*manager)
 
