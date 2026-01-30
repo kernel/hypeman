@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.9.6 (2026-01-30)
+
+Full Changelog: [v0.9.0...v0.9.6](https://github.com/kernel/hypeman-go/compare/v0.9.0...v0.9.6)
+
+### Features
+
+* add boot time optimizations for faster VM startup ([3992761](https://github.com/kernel/hypeman-go/commit/3992761e3ad8ebb0cc22fb7408199b068e9d8013))
+* Add to stainless config new API endpoints ([de008e8](https://github.com/kernel/hypeman-go/commit/de008e89fadbaedde6554181618fb03c71b49465))
+* **api:** manual updates ([f60e600](https://github.com/kernel/hypeman-go/commit/f60e60015bb9ce18c7083963d9ecd11c980de495))
+* **builds:** implement two-tier build cache with per-repo token scopes ([0e29d03](https://github.com/kernel/hypeman-go/commit/0e29d03d94cf50a0d0e83c323f7ed9f2e15f3e61))
+* **client:** add a convenient param.SetJSON helper ([7fea166](https://github.com/kernel/hypeman-go/commit/7fea1660f3d17d8a35f5d2f6aa352b553785624b))
+* Use resources module for input validation ([af678e8](https://github.com/kernel/hypeman-go/commit/af678e8c794307a6bd47476acff3ca42a7a52546))
+
 ## 0.9.0 (2026-01-05)
 
 Full Changelog: [v0.8.0...v0.9.0](https://github.com/kernel/hypeman-go/compare/v0.8.0...v0.9.0)
