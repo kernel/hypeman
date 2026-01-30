@@ -3,9 +3,6 @@ package api
 import (
 	"context"
 	"errors"
-	"io"
-	"mime/multipart"
-	"strconv"
 
 	"github.com/kernel/hypeman/lib/logger"
 	mw "github.com/kernel/hypeman/lib/middleware"
@@ -34,168 +31,90 @@ func (s *ApiService) ListVolumes(ctx context.Context, request oapi.ListVolumesRe
 	return oapi.ListVolumes200JSONResponse(oapiVols), nil
 }
 
-// CreateVolume creates a new volume
-// Supports two modes:
-// - JSON body: Creates an empty volume of the specified size
-// - Multipart form: Creates a volume pre-populated with content from a tar.gz archive
+// CreateVolume creates a new empty volume of the specified size
 func (s *ApiService) CreateVolume(ctx context.Context, request oapi.CreateVolumeRequestObject) (oapi.CreateVolumeResponseObject, error) {
 	log := logger.FromContext(ctx)
 
-	// Handle JSON request (empty volume)
-	if request.JSONBody != nil {
-		domainReq := volumes.CreateVolumeRequest{
-			Name:   request.JSONBody.Name,
-			SizeGb: request.JSONBody.SizeGb,
-			Id:     request.JSONBody.Id,
-		}
-
-		vol, err := s.VolumeManager.CreateVolume(ctx, domainReq)
-		if err != nil {
-			if errors.Is(err, volumes.ErrAlreadyExists) {
-				return oapi.CreateVolume409JSONResponse{
-					Code:    "already_exists",
-					Message: "volume with this ID already exists",
-				}, nil
-			}
-			log.ErrorContext(ctx, "failed to create volume", "error", err, "name", request.JSONBody.Name)
-			return oapi.CreateVolume500JSONResponse{
-				Code:    "internal_error",
-				Message: "failed to create volume",
-			}, nil
-		}
-		return oapi.CreateVolume201JSONResponse(volumeToOAPI(*vol)), nil
-	}
-
-	// Handle multipart request (volume with archive content)
-	if request.MultipartBody != nil {
-		return s.createVolumeFromMultipart(ctx, request.MultipartBody)
-	}
-
-	return oapi.CreateVolume400JSONResponse{
-		Code:    "invalid_request",
-		Message: "request body is required",
-	}, nil
-}
-
-// createVolumeFromMultipart handles creating a volume from multipart form data with archive content
-func (s *ApiService) createVolumeFromMultipart(ctx context.Context, multipartReader *multipart.Reader) (oapi.CreateVolumeResponseObject, error) {
-	log := logger.FromContext(ctx)
-
-	var name string
-	var sizeGb int
-	var id *string
-	var archiveReader io.Reader
-
-	for {
-		part, err := multipartReader.NextPart()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return oapi.CreateVolume400JSONResponse{
-				Code:    "invalid_form",
-				Message: "failed to parse multipart form: " + err.Error(),
-			}, nil
-		}
-
-		switch part.FormName() {
-		case "name":
-			data, err := io.ReadAll(part)
-			if err != nil {
-				return oapi.CreateVolume400JSONResponse{
-					Code:    "invalid_field",
-					Message: "failed to read name field",
-				}, nil
-			}
-			name = string(data)
-		case "size_gb":
-			data, err := io.ReadAll(part)
-			if err != nil {
-				return oapi.CreateVolume400JSONResponse{
-					Code:    "invalid_field",
-					Message: "failed to read size_gb field",
-				}, nil
-			}
-			sizeGb, err = strconv.Atoi(string(data))
-			if err != nil || sizeGb <= 0 {
-				return oapi.CreateVolume400JSONResponse{
-					Code:    "invalid_field",
-					Message: "size_gb must be a positive integer",
-				}, nil
-			}
-		case "id":
-			data, err := io.ReadAll(part)
-			if err != nil {
-				return oapi.CreateVolume400JSONResponse{
-					Code:    "invalid_field",
-					Message: "failed to read id field",
-				}, nil
-			}
-			idStr := string(data)
-			if idStr != "" {
-				id = &idStr
-			}
-		case "content":
-			archiveReader = part
-			// Process the archive immediately while we have the reader
-			if name == "" {
-				return oapi.CreateVolume400JSONResponse{
-					Code:    "missing_field",
-					Message: "name is required",
-				}, nil
-			}
-			if sizeGb <= 0 {
-				return oapi.CreateVolume400JSONResponse{
-					Code:    "missing_field",
-					Message: "size_gb is required",
-				}, nil
-			}
-
-			// Create the volume from archive
-			domainReq := volumes.CreateVolumeFromArchiveRequest{
-				Name:   name,
-				SizeGb: sizeGb,
-				Id:     id,
-			}
-
-			vol, err := s.VolumeManager.CreateVolumeFromArchive(ctx, domainReq, archiveReader)
-			if err != nil {
-				if errors.Is(err, volumes.ErrArchiveTooLarge) {
-					return oapi.CreateVolume400JSONResponse{
-						Code:    "archive_too_large",
-						Message: err.Error(),
-					}, nil
-				}
-				if errors.Is(err, volumes.ErrAlreadyExists) {
-					return oapi.CreateVolume409JSONResponse{
-						Code:    "already_exists",
-						Message: "volume with this ID already exists",
-					}, nil
-				}
-				log.ErrorContext(ctx, "failed to create volume from archive", "error", err, "name", name)
-				return oapi.CreateVolume500JSONResponse{
-					Code:    "internal_error",
-					Message: "failed to create volume",
-				}, nil
-			}
-
-			return oapi.CreateVolume201JSONResponse(volumeToOAPI(*vol)), nil
-		}
-	}
-
-	// If we get here without processing content, it means content was not provided
-	if archiveReader == nil {
+	if request.Body == nil {
 		return oapi.CreateVolume400JSONResponse{
-			Code:    "missing_file",
-			Message: "content file is required for multipart requests",
+			Code:    "invalid_request",
+			Message: "request body is required",
 		}, nil
 	}
 
-	// Should not reach here
-	return oapi.CreateVolume500JSONResponse{
-		Code:    "internal_error",
-		Message: "unexpected error processing request",
-	}, nil
+	domainReq := volumes.CreateVolumeRequest{
+		Name:   request.Body.Name,
+		SizeGb: request.Body.SizeGb,
+		Id:     request.Body.Id,
+	}
+
+	vol, err := s.VolumeManager.CreateVolume(ctx, domainReq)
+	if err != nil {
+		if errors.Is(err, volumes.ErrAlreadyExists) {
+			return oapi.CreateVolume409JSONResponse{
+				Code:    "already_exists",
+				Message: "volume with this ID already exists",
+			}, nil
+		}
+		log.ErrorContext(ctx, "failed to create volume", "error", err, "name", request.Body.Name)
+		return oapi.CreateVolume500JSONResponse{
+			Code:    "internal_error",
+			Message: "failed to create volume",
+		}, nil
+	}
+	return oapi.CreateVolume201JSONResponse(volumeToOAPI(*vol)), nil
+}
+
+// CreateVolumeFromArchive creates a new volume pre-populated with content from a tar.gz archive
+// The archive is streamed directly into the volume without intermediate buffering
+func (s *ApiService) CreateVolumeFromArchive(ctx context.Context, request oapi.CreateVolumeFromArchiveRequestObject) (oapi.CreateVolumeFromArchiveResponseObject, error) {
+	log := logger.FromContext(ctx)
+
+	// Validate required parameters
+	if request.Params.Name == "" {
+		return oapi.CreateVolumeFromArchive400JSONResponse{
+			Code:    "missing_field",
+			Message: "name query parameter is required",
+		}, nil
+	}
+	if request.Params.SizeGb <= 0 {
+		return oapi.CreateVolumeFromArchive400JSONResponse{
+			Code:    "invalid_field",
+			Message: "size_gb must be a positive integer",
+		}, nil
+	}
+	// Note: request.Body is never nil in Go's net/http (empty body = http.NoBody)
+	// Empty/invalid archives will fail with a clear gzip error downstream
+
+	// Create the volume from archive - stream directly without buffering
+	domainReq := volumes.CreateVolumeFromArchiveRequest{
+		Name:   request.Params.Name,
+		SizeGb: request.Params.SizeGb,
+		Id:     request.Params.Id,
+	}
+
+	vol, err := s.VolumeManager.CreateVolumeFromArchive(ctx, domainReq, request.Body)
+	if err != nil {
+		if errors.Is(err, volumes.ErrArchiveTooLarge) {
+			return oapi.CreateVolumeFromArchive400JSONResponse{
+				Code:    "archive_too_large",
+				Message: err.Error(),
+			}, nil
+		}
+		if errors.Is(err, volumes.ErrAlreadyExists) {
+			return oapi.CreateVolumeFromArchive409JSONResponse{
+				Code:    "already_exists",
+				Message: "volume with this ID already exists",
+			}, nil
+		}
+		log.ErrorContext(ctx, "failed to create volume from archive", "error", err, "name", request.Params.Name)
+		return oapi.CreateVolumeFromArchive500JSONResponse{
+			Code:    "internal_error",
+			Message: "failed to create volume",
+		}, nil
+	}
+
+	return oapi.CreateVolumeFromArchive201JSONResponse(volumeToOAPI(*vol)), nil
 }
 
 // GetVolume gets volume details

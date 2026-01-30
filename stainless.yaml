@@ -21,15 +21,15 @@ targets:
     # [docs]: https://www.stainless.com/docs/reference/editions
     edition: go.2025-10-08
     package_name: hypeman
-    production_repo: onkernel/hypeman-go
+    production_repo: kernel/hypeman-go
     options:
       enable_v2: true
   cli:
     edition: cli.2025-10-08
     binary_name: hypeman
-    production_repo: onkernel/hypeman-cli
+    production_repo: kernel/hypeman-cli
     options:
-      go_sdk_package: github.com/onkernel/hypeman-go
+      go_sdk_package: github.com/kernel/hypeman-go
     publish:
       homebrew:
         tap_repo: kernel/homebrew-tap
@@ -108,6 +108,7 @@ resources:
     methods:
       list: get /volumes
       create: post /volumes
+      create_from_archive: post /volumes/from-archive
       get: get /volumes/{id}
       delete: delete /volumes/{id}
 
