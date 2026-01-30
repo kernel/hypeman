@@ -66,6 +66,7 @@ Methods:
 - <code title="post /volumes">client.volumes.<a href="./src/resources/volumes.ts">create</a>({ ...params }) -> Volume</code>
 - <code title="get /volumes">client.volumes.<a href="./src/resources/volumes.ts">list</a>() -> VolumeListResponse</code>
 - <code title="delete /volumes/{id}">client.volumes.<a href="./src/resources/volumes.ts">delete</a>(id) -> void</code>
+- <code title="post /volumes/from-archive">client.volumes.<a href="./src/resources/volumes.ts">createFromArchive</a>(body, { ...params }) -> Volume</code>
 - <code title="get /volumes/{id}">client.volumes.<a href="./src/resources/volumes.ts">get</a>(id) -> Volume</code>
 
 # Devices

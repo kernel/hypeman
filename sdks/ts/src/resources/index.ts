@@ -58,4 +58,5 @@ export {
   type VolumeAttachment,
   type VolumeListResponse,
   type VolumeCreateParams,
+  type VolumeCreateFromArchiveParams,
 } from './volumes';
