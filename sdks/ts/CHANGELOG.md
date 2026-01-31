@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.2.0 (2026-01-31)
+
+Full Changelog: [v0.1.0...v0.2.0](https://github.com/onkernel/hypeman-ts/compare/v0.1.0...v0.2.0)
+
+### Features
+
+* add boot time optimizations for faster VM startup ([20a98ea](https://github.com/onkernel/hypeman-ts/commit/20a98ea15491dc399f57ea5cc5d10f2549d1c4bd))
+* Add to stainless config new API endpoints ([72cbe88](https://github.com/onkernel/hypeman-ts/commit/72cbe8848676023c5cc9c270d5936c37ddf3e3f3))
+* Add vGPU support ([4eade24](https://github.com/onkernel/hypeman-ts/commit/4eade24f03d1e9ef5d62757ae8a9bc3a0f446f13))
+* **api:** manual updates ([5534841](https://github.com/onkernel/hypeman-ts/commit/5534841c1706682c4a75e502afafb3f1f399069c))
+* **builds:** implement two-tier build cache with per-repo token scopes ([53c9b24](https://github.com/onkernel/hypeman-ts/commit/53c9b248c245c1cb5f1e0dae46a1448de430c283))
+* Resource accounting ([57ff511](https://github.com/onkernel/hypeman-ts/commit/57ff511aa73bbc08b67496d7b807418b9342dc87))
+* Use resources module for input validation ([8dc08a4](https://github.com/onkernel/hypeman-ts/commit/8dc08a468794e1fead711c5c1b538d02cd7f49c9))
+
+
+### Chores
+
+* break long lines in snippets into multiline ([48ae7b9](https://github.com/onkernel/hypeman-ts/commit/48ae7b93d321533d96fc9e5be246450fb93eb725))
+* **ci:** upgrade `actions/github-script` ([46d5e26](https://github.com/onkernel/hypeman-ts/commit/46d5e26a7c2d5f53b4a9d88558d0f96561cf1b7d))
+* **internal:** update `actions/checkout` version ([ba20375](https://github.com/onkernel/hypeman-ts/commit/ba2037568735937bda37a9ca386c781eb00e723a))
+* **internal:** update lock file ([8593b7c](https://github.com/onkernel/hypeman-ts/commit/8593b7c196af2b6b63121135a5a3dc18edfec04e))
+* **internal:** upgrade babel, qs, js-yaml ([cad9e24](https://github.com/onkernel/hypeman-ts/commit/cad9e2468b82a08e525c728e61a1e7266e1fc1b7))
+* **internal:** upgrade brace-expansion and @babel/helpers ([bef9226](https://github.com/onkernel/hypeman-ts/commit/bef9226de43a88d06e8a9688b7701e44c311ebf4))
+
 ## 0.1.0 (2025-12-23)
 
 Full Changelog: [v0.0.2...v0.1.0](https://github.com/onkernel/hypeman-ts/compare/v0.0.2...v0.1.0)
