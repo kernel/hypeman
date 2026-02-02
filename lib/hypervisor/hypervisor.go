@@ -5,11 +5,22 @@ package hypervisor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"time"
 
 	"github.com/kernel/hypeman/lib/paths"
+)
+
+// Common errors
+var (
+	// ErrHypervisorNotRunning is returned when trying to connect to a hypervisor
+	// that is not currently running or cannot be reconnected to.
+	ErrHypervisorNotRunning = errors.New("hypervisor is not running")
+
+	// ErrNotSupported is returned when an operation is not supported by the hypervisor.
+	ErrNotSupported = errors.New("operation not supported by this hypervisor")
 )
 
 // Type identifies the hypervisor implementation
@@ -20,6 +31,8 @@ const (
 	TypeCloudHypervisor Type = "cloud-hypervisor"
 	// TypeQEMU is the QEMU VMM
 	TypeQEMU Type = "qemu"
+	// TypeVZ is the Virtualization.framework VMM (macOS only)
+	TypeVZ Type = "vz"
 )
 
 // socketNames maps hypervisor types to their socket filenames.

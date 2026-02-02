@@ -504,9 +504,14 @@ func (m *manager) waitForResult(ctx context.Context, inst *instances.Instance) (
 		default:
 		}
 
-		conn, err = m.dialBuilderVsock(inst.VsockSocket)
-		if err == nil {
-			break
+		dialer, dialerErr := m.instanceManager.GetVsockDialer(ctx, inst.Id)
+		if dialerErr == nil {
+			conn, err = dialer.DialVsock(ctx, BuildAgentVsockPort)
+			if err == nil {
+				break
+			}
+		} else {
+			err = dialerErr
 		}
 
 		m.logger.Debug("waiting for builder agent", "attempt", attempt+1, "error", err)
