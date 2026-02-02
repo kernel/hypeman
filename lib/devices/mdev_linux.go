@@ -1,3 +1,5 @@
+//go:build linux
+
 package devices
 
 import (
@@ -602,13 +604,6 @@ func IsMdevInUse(mdevUUID string) bool {
 	driverPath := filepath.Join(mdevDevices, mdevUUID, "driver")
 	_, err := os.Readlink(driverPath)
 	return err == nil // Has a driver = in use
-}
-
-// MdevReconcileInfo contains information needed to reconcile mdevs for an instance
-type MdevReconcileInfo struct {
-	InstanceID string
-	MdevUUID   string
-	IsRunning  bool // true if instance's VMM is running or state is unknown
 }
 
 // ReconcileMdevs destroys orphaned mdevs that belong to hypeman but are no longer in use.
