@@ -29,3 +29,9 @@ dist/**
 
 # UTM VM - downloaded ISO files
 scripts/utm/images/
+
+# IDE and editor
+.cursor/
+
+# Build artifacts
+api
