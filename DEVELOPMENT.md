@@ -4,7 +4,17 @@ This document covers development setup, configuration, and contributing to Hypem
 
 ## Prerequisites
 
-> **macOS Users:** Hypeman requires KVM, which is only available on Linux. See [scripts/utm/README.md](scripts/utm/README.md) for instructions on setting up a Linux VM with nested virtualization on Apple Silicon Macs.
+### Linux (Default)
+
+**Go 1.25.4+**, **KVM**, **erofs-utils**, **dnsmasq**
+
+### macOS (Experimental)
+
+See [macOS Development](#macos-development) below for native macOS development using Virtualization.framework.
+
+---
+
+**Linux Prerequisites:**
 
 **Go 1.25.4+**, **KVM**, **erofs-utils**, **dnsmasq**
 
@@ -314,3 +324,176 @@ Or generate everything at once:
 ```bash
 make generate-all
 ```
+
+## macOS Development
+
+Hypeman supports native macOS development using Apple's Virtualization.framework (via the `vz` hypervisor).
+
+### Requirements
+
+- **macOS 11.0+** (Big Sur or later)
+- **Apple Silicon** (M1/M2/M3) recommended
+- **macOS 14.0+** (Sonoma) required for snapshot/restore (ARM64 only)
+- **Go 1.25.4+**
+- **Caddy** (for ingress): `brew install caddy`
+- **e2fsprogs** (for ext4 disk images): `brew install e2fsprogs`
+
+### Quick Start
+
+```bash
+# 1. Install dependencies
+brew install caddy e2fsprogs
+
+# 2. Add e2fsprogs to PATH (it's keg-only)
+export PATH="/opt/homebrew/opt/e2fsprogs/bin:/opt/homebrew/opt/e2fsprogs/sbin:$PATH"
+# Add to ~/.zshrc for persistence
+
+# 3. Configure environment
+cp .env.darwin.example .env
+# Edit .env as needed (defaults work for local development)
+
+# 4. Create data directory
+mkdir -p ~/Library/Application\ Support/hypeman
+
+# 5. Run in development mode (auto-detects macOS, builds, signs, and runs with hot reload)
+make dev
+```
+
+The `make dev` command automatically detects macOS and:
+- Builds with vz support
+- Signs with required entitlements
+- Runs with hot reload (no sudo required)
+
+### Alternative Commands
+
+```bash
+# Build and sign only (no hot reload)
+make sign-darwin
+
+# Verify entitlements are correct
+make verify-entitlements
+
+# Run manually after signing
+./bin/hypeman
+```
+
+### Key Differences from Linux Development
+
+| Aspect | Linux | macOS |
+|--------|-------|-------|
+| Hypervisor | Cloud Hypervisor, QEMU | vz (Virtualization.framework) |
+| Binary signing | Not required | Automatic via `make dev` or `make sign-darwin` |
+| Networking | TAP + bridge + iptables | Automatic NAT (no setup needed) |
+| Root/sudo | Required for networking | Not required |
+| Caddy | Embedded binary | Install via `brew install caddy` |
+| DNS port | 5353 | 5354 (avoids mDNSResponder conflict) |
+
+### macOS-Specific Configuration
+
+The following environment variables work differently on macOS (see `.env.darwin.example`):
+
+| Variable | Linux | macOS |
+|----------|-------|-------|
+| `DEFAULT_HYPERVISOR` | `cloud-hypervisor` | `vz` |
+| `DATA_DIR` | `/var/lib/hypeman` | `~/Library/Application Support/hypeman` |
+| `INTERNAL_DNS_PORT` | `5353` | `5354` (5353 is used by mDNSResponder) |
+| `BRIDGE_NAME` | Used | Ignored (NAT) |
+| `SUBNET_CIDR` | Used | Ignored (NAT) |
+| `UPLINK_INTERFACE` | Used | Ignored (NAT) |
+| Network rate limiting | Supported | Not supported |
+| GPU passthrough | Supported (VFIO) | Not supported |
+
+### Code Organization
+
+Platform-specific code uses Go build tags:
+
+```
+lib/network/
+├── bridge_linux.go      # Linux networking (TAP, bridges, iptables)
+├── bridge_darwin.go     # macOS stubs (uses NAT)
+└── ip.go                # Shared utilities
+
+lib/devices/
+├── discovery_linux.go   # Linux PCI device discovery
+├── discovery_darwin.go  # macOS stubs (no passthrough)
+├── mdev_linux.go        # Linux vGPU (mdev)
+├── mdev_darwin.go       # macOS stubs
+├── vfio_linux.go        # Linux VFIO binding
+├── vfio_darwin.go       # macOS stubs
+└── types.go             # Shared types
+
+lib/hypervisor/
+├── cloudhypervisor/     # Cloud Hypervisor (Linux)
+├── qemu/                # QEMU (Linux, vsock_linux.go)
+└── vz/                  # Virtualization.framework (macOS only)
+    ├── starter.go       # VMStarter implementation
+    ├── hypervisor.go    # Hypervisor interface
+    └── vsock.go         # VsockDialer via VirtioSocketDevice
+```
+
+### Testing on macOS
+
+```bash
+# Verify vz package compiles correctly
+make test-vz-compile
+
+# Run unit tests (Linux-specific tests like networking will be skipped)
+go test ./lib/hypervisor/vz/...
+go test ./lib/resources/...
+go test ./lib/images/...
+```
+
+Note: Full integration tests require Linux. On macOS, focus on unit tests and manual API testing.
+
+### Known Limitations
+
+1. **Disk Format**: vz only supports raw disk images (not qcow2). Convert images:
+   ```bash
+   qemu-img convert -f qcow2 -O raw disk.qcow2 disk.raw
+   ```
+
+2. **Snapshots**: Only available on macOS 14+ (Sonoma) on Apple Silicon:
+   ```go
+   // Check support at runtime
+   valid, err := vmConfig.ValidateSaveRestoreSupport()
+   ```
+
+3. **Network Ingress**: VMs get DHCP addresses from macOS NAT. To access a VM's services:
+   - Query the VM's IP via guest agent
+   - Use vsock for internal communication (no NAT traversal needed)
+
+4. **In-Process VMM**: Unlike CH/QEMU which run as separate processes, vz VMs run in the hypeman process. If hypeman crashes, all VMs stop.
+
+### Troubleshooting
+
+**"binary needs to be signed with entitlements"**
+```bash
+make sign-darwin
+# Or just use: make dev (handles signing automatically)
+```
+
+**"caddy binary is not embedded on macOS"**
+```bash
+brew install caddy
+```
+
+**"address already in use" on port 5353**
+- Port 5353 is used by mDNSResponder (Bonjour) on macOS
+- Use port 5354 instead: `INTERNAL_DNS_PORT=5354` in `.env`
+- The `.env.darwin.example` already has this configured correctly
+
+**"Virtualization.framework is not available"**
+- Ensure you're on macOS 11.0+
+- Check if virtualization is enabled in Recovery Mode settings
+
+**"snapshot not supported"**
+- Requires macOS 14.0+ on Apple Silicon
+- Check: `sw_vers` and `uname -m` (should be arm64)
+
+**VM fails to start**
+- Check serial log: `$DATA_DIR/instances/<id>/serial.log`
+- Ensure kernel and initrd paths are correct in config
+
+**IOMMU/VFIO warnings at startup**
+- These are expected on macOS and can be ignored
+- GPU passthrough is not supported on macOS
