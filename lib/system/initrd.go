@@ -35,14 +35,14 @@ func (m *manager) buildInitrd(ctx context.Context, arch string) (string, error) 
 		return "", fmt.Errorf("create oci client: %w", err)
 	}
 
-	// Inspect Alpine base to get digest
-	digest, err := ociClient.InspectManifest(ctx, alpineBaseImage)
+	// Inspect Alpine base to get digest (always use Linux platform since this is for guest VMs)
+	digest, err := ociClient.InspectManifestForLinux(ctx, alpineBaseImage)
 	if err != nil {
 		return "", fmt.Errorf("inspect alpine manifest: %w", err)
 	}
 
-	// Pull and unpack Alpine base
-	if err := ociClient.PullAndUnpack(ctx, alpineBaseImage, digest, rootfsDir); err != nil {
+	// Pull and unpack Alpine base (always use Linux platform since this is for guest VMs)
+	if err := ociClient.PullAndUnpackForLinux(ctx, alpineBaseImage, digest, rootfsDir); err != nil {
 		return "", fmt.Errorf("pull alpine base: %w", err)
 	}
 

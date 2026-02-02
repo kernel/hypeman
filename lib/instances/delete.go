@@ -121,6 +121,19 @@ func (m *manager) deleteInstance(
 func (m *manager) killHypervisor(ctx context.Context, inst *Instance) error {
 	log := logger.FromContext(ctx)
 
+	// Handle in-process hypervisors (vz) - stop via API and remove from tracking
+	if inst.HypervisorType == hypervisor.TypeVZ {
+		if hvRaw, ok := m.activeHypervisors.LoadAndDelete(inst.Id); ok {
+			hv := hvRaw.(hypervisor.Hypervisor)
+			log.DebugContext(ctx, "stopping in-process vz VM", "instance_id", inst.Id)
+			if err := hv.Shutdown(ctx); err != nil {
+				log.WarnContext(ctx, "failed to stop vz VM", "instance_id", inst.Id, "error", err)
+			}
+		}
+		return nil
+	}
+
+	// Handle external process hypervisors (cloud-hypervisor, QEMU)
 	// If we have a PID, kill the process immediately
 	if inst.HypervisorPID != nil {
 		pid := *inst.HypervisorPID
