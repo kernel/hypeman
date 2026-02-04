@@ -3,73 +3,113 @@
 package vz
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
-	"sync"
-
-	"github.com/Code-Hex/vz/v3"
+	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
 )
 
-// VsockDialer implements hypervisor.VsockDialer for vz.
+const (
+	vsockDialTimeout      = 5 * time.Second
+	vsockHandshakeTimeout = 5 * time.Second
+)
+
+// VsockDialer implements hypervisor.VsockDialer for vz via the shim's Unix socket proxy.
+// Uses the same protocol as Cloud Hypervisor: CONNECT {port}\n -> OK {port}\n
 type VsockDialer struct {
-	socketPath string // used as connection pool key
-	cid        int64  // unused by vz but kept for interface compatibility
-	vm         *vz.VirtualMachine
-	mu         sync.RWMutex
+	socketPath string // path to vz.vsock Unix socket
 }
 
 // NewVsockDialer creates a new VsockDialer for vz.
+// The vsockSocket parameter should be the control socket path (vz.sock).
+// We derive the vsock proxy socket path from it (vz.vsock).
 func NewVsockDialer(vsockSocket string, vsockCID int64) hypervisor.VsockDialer {
+	// Derive vsock proxy socket path from control socket
+	dir := filepath.Dir(vsockSocket)
+	vsockProxySocket := filepath.Join(dir, "vz.vsock")
 	return &VsockDialer{
-		socketPath: vsockSocket,
-		cid:        vsockCID,
+		socketPath: vsockProxySocket,
 	}
 }
 
 // Key returns a unique identifier for this dialer, used for connection pooling.
 func (d *VsockDialer) Key() string {
-	return fmt.Sprintf("vz:%s", d.socketPath)
+	return "vz:" + d.socketPath
 }
 
-// SetVM sets the VirtualMachine for this dialer.
-// This must be called after the VM starts, before DialVsock.
-func (d *VsockDialer) SetVM(vm *vz.VirtualMachine) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.vm = vm
-}
-
-// DialVsock connects to the guest on the specified port.
+// DialVsock connects to the guest on the specified port via the shim's vsock proxy.
 func (d *VsockDialer) DialVsock(ctx context.Context, port int) (net.Conn, error) {
-	d.mu.RLock()
-	vm := d.vm
-	d.mu.RUnlock()
+	slog.DebugContext(ctx, "connecting to vsock via shim proxy", "socket", d.socketPath, "port", port)
 
-	if vm == nil {
-		return nil, fmt.Errorf("VM not set on VsockDialer - call SetVM first")
+	// Use dial timeout, respecting context deadline if shorter
+	dialTimeout := vsockDialTimeout
+	if deadline, ok := ctx.Deadline(); ok {
+		if remaining := time.Until(deadline); remaining < dialTimeout {
+			dialTimeout = remaining
+		}
 	}
 
-	socketDevices := vm.SocketDevices()
-	if len(socketDevices) == 0 {
-		return nil, fmt.Errorf("no vsock device configured on VM")
-	}
-
-	conn, err := socketDevices[0].Connect(uint32(port))
+	// Connect to the shim's vsock proxy Unix socket
+	dialer := net.Dialer{Timeout: dialTimeout}
+	conn, err := dialer.DialContext(ctx, "unix", d.socketPath)
 	if err != nil {
-		return nil, fmt.Errorf("vsock connect to port %d: %w", port, err)
+		return nil, fmt.Errorf("dial vsock proxy socket %s: %w", d.socketPath, err)
 	}
 
-	return conn, nil
+	slog.DebugContext(ctx, "connected to vsock proxy, performing handshake", "port", port)
+
+	// Set deadline for handshake
+	if err := conn.SetDeadline(time.Now().Add(vsockHandshakeTimeout)); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("set handshake deadline: %w", err)
+	}
+
+	// Perform handshake (same protocol as Cloud Hypervisor)
+	handshakeCmd := fmt.Sprintf("CONNECT %d\n", port)
+	if _, err := conn.Write([]byte(handshakeCmd)); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("send vsock handshake: %w", err)
+	}
+
+	// Read handshake response
+	reader := bufio.NewReader(conn)
+	response, err := reader.ReadString('\n')
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("read vsock handshake response (is guest-agent running?): %w", err)
+	}
+
+	// Clear deadline after successful handshake
+	if err := conn.SetDeadline(time.Time{}); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("clear deadline: %w", err)
+	}
+
+	response = strings.TrimSpace(response)
+	if !strings.HasPrefix(response, "OK ") {
+		conn.Close()
+		return nil, fmt.Errorf("vsock handshake failed: %s", response)
+	}
+
+	slog.DebugContext(ctx, "vsock handshake successful", "response", response)
+
+	// Return wrapped connection that uses the bufio.Reader
+	return &bufferedConn{Conn: conn, reader: reader}, nil
 }
 
-// VsockDialerWithVM creates a VsockDialer that's pre-configured with a VM.
-// This is a convenience function for when you have the VM already.
-func VsockDialerWithVM(vm *vz.VirtualMachine, socketPath string) *VsockDialer {
-	return &VsockDialer{
-		socketPath: socketPath,
-		vm:         vm,
-	}
+// bufferedConn wraps a net.Conn with a bufio.Reader to ensure any buffered
+// data from the handshake is properly drained before reading from the connection.
+type bufferedConn struct {
+	net.Conn
+	reader *bufio.Reader
+}
+
+func (c *bufferedConn) Read(p []byte) (int, error) {
+	return c.reader.Read(p)
 }

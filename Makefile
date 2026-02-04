@@ -257,11 +257,25 @@ release-prep: download-ch-binaries build-caddy-binaries build-embedded
 # Entitlements file for macOS codesigning
 ENTITLEMENTS_FILE ?= vz.entitlements
 
+# Build vz-shim (subprocess that hosts vz VMs)
+.PHONY: build-vz-shim
+build-vz-shim: | $(BIN_DIR)
+	@echo "Building vz-shim for macOS..."
+	go build -o $(BIN_DIR)/vz-shim ./cmd/vz-shim
+	@echo "Build complete: $(BIN_DIR)/vz-shim"
+
+# Sign vz-shim with entitlements
+.PHONY: sign-vz-shim
+sign-vz-shim: build-vz-shim
+	@echo "Signing $(BIN_DIR)/vz-shim with entitlements..."
+	codesign --sign - --entitlements $(ENTITLEMENTS_FILE) --force $(BIN_DIR)/vz-shim
+	@echo "Signed: $(BIN_DIR)/vz-shim"
+
 # Build for macOS with vz support
 # Note: This builds without embedded CH/Caddy binaries since vz doesn't need them
 # Guest-agent and init are cross-compiled for Linux (they run inside the VM)
 .PHONY: build-darwin
-build-darwin: build-embedded | $(BIN_DIR)
+build-darwin: build-embedded build-vz-shim | $(BIN_DIR)
 	@echo "Building hypeman for macOS with vz support..."
 	go build -tags containers_image_openpgp -o $(BIN_DIR)/hypeman ./cmd/api
 	@echo "Build complete: $(BIN_DIR)/hypeman"
@@ -269,7 +283,7 @@ build-darwin: build-embedded | $(BIN_DIR)
 # Sign the binary with entitlements (required for Virtualization.framework)
 # Usage: make sign-darwin
 .PHONY: sign-darwin
-sign-darwin: build-darwin
+sign-darwin: build-darwin sign-vz-shim
 	@echo "Signing $(BIN_DIR)/hypeman with entitlements..."
 	codesign --sign - --entitlements $(ENTITLEMENTS_FILE) --force $(BIN_DIR)/hypeman
 	@echo "Verifying signature..."

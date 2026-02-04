@@ -575,12 +575,6 @@ func (m *manager) startAndBootVM(
 	stored.HypervisorPID = &pid
 	log.DebugContext(ctx, "VM started", "instance_id", stored.Id, "pid", pid)
 
-	// Store in-process hypervisors (vz) for later state queries
-	// These can't be reconnected via socket like cloud-hypervisor/QEMU
-	if stored.HypervisorType == hypervisor.TypeVZ {
-		m.activeHypervisors.Store(stored.Id, hv)
-	}
-
 	// Optional: Expand memory to max if hotplug configured
 	if inst.HotplugSize > 0 && hv.Capabilities().SupportsHotplugMemory {
 		totalBytes := inst.Size + inst.HotplugSize

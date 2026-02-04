@@ -177,3 +177,23 @@ func NewVsockDialer(hvType Type, vsockSocket string, vsockCID int64) (VsockDiale
 	}
 	return factory(vsockSocket, vsockCID), nil
 }
+
+// ClientFactory creates Hypervisor client instances for a hypervisor type.
+type ClientFactory func(socketPath string) (Hypervisor, error)
+
+// clientFactories maps hypervisor types to their client factories.
+var clientFactories = make(map[Type]ClientFactory)
+
+// RegisterClientFactory registers a Hypervisor client factory.
+func RegisterClientFactory(t Type, factory ClientFactory) {
+	clientFactories[t] = factory
+}
+
+// NewClient creates a Hypervisor client for the given type and socket.
+func NewClient(hvType Type, socketPath string) (Hypervisor, error) {
+	factory, ok := clientFactories[hvType]
+	if !ok {
+		return nil, fmt.Errorf("no client factory registered for hypervisor type: %s", hvType)
+	}
+	return factory(socketPath)
+}

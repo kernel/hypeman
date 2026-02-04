@@ -1,18 +1,17 @@
 //go:build darwin
 
 // Package vz implements the hypervisor.Hypervisor interface for
-// Apple's Virtualization.framework on macOS.
+// Apple's Virtualization.framework on macOS via the vz-shim subprocess.
 package vz
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"net"
 	"os"
-	"runtime"
-	"strings"
-
-	"github.com/Code-Hex/vz/v3"
+	"os/exec"
+	"path/filepath"
+	"time"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
@@ -22,6 +21,35 @@ import (
 func init() {
 	hypervisor.RegisterSocketName(hypervisor.TypeVZ, "vz.sock")
 	hypervisor.RegisterVsockDialerFactory(hypervisor.TypeVZ, NewVsockDialer)
+	hypervisor.RegisterClientFactory(hypervisor.TypeVZ, func(socketPath string) (hypervisor.Hypervisor, error) {
+		return NewClient(socketPath)
+	})
+}
+
+// ShimConfig is the configuration passed to the vz-shim process.
+type ShimConfig struct {
+	VCPUs         int             `json:"vcpus"`
+	MemoryBytes   int64           `json:"memory_bytes"`
+	Disks         []DiskConfig    `json:"disks"`
+	Networks      []NetworkConfig `json:"networks"`
+	SerialLogPath string          `json:"serial_log_path"`
+	KernelPath    string          `json:"kernel_path"`
+	InitrdPath    string          `json:"initrd_path"`
+	KernelArgs    string          `json:"kernel_args"`
+	ControlSocket string          `json:"control_socket"`
+	VsockSocket   string          `json:"vsock_socket"`
+	LogPath       string          `json:"log_path"`
+}
+
+// DiskConfig for shim.
+type DiskConfig struct {
+	Path     string `json:"path"`
+	Readonly bool   `json:"readonly"`
+}
+
+// NetworkConfig for shim.
+type NetworkConfig struct {
+	MAC string `json:"mac"`
 }
 
 // Starter implements hypervisor.VMStarter for Virtualization.framework.
@@ -51,327 +79,155 @@ func (s *Starter) GetVersion(p *paths.Paths) (string, error) {
 	return "vz-macos", nil
 }
 
-// StartVM creates and starts a VM. Returns PID 0 since vz runs in-process.
+// StartVM spawns a vz-shim subprocess to host the VM.
+// Returns the shim PID and a client to control the VM.
 func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, socketPath string, config hypervisor.VMConfig) (int, hypervisor.Hypervisor, error) {
 	log := logger.FromContext(ctx)
 
-	// vz uses hvc0 for serial console
-	kernelCommandLine := config.KernelArgs
-	if kernelCommandLine == "" {
-		kernelCommandLine = "console=hvc0 root=/dev/vda"
-	} else {
-		kernelCommandLine = strings.ReplaceAll(kernelCommandLine, "console=ttyS0", "console=hvc0")
+	// Derive socket paths from the control socket path
+	instanceDir := filepath.Dir(socketPath)
+	controlSocket := socketPath
+	vsockSocket := filepath.Join(instanceDir, "vz.vsock")
+	logPath := filepath.Join(instanceDir, "logs", "vz-shim.log")
+
+	// Build shim config
+	shimConfig := ShimConfig{
+		VCPUs:         config.VCPUs,
+		MemoryBytes:   config.MemoryBytes,
+		SerialLogPath: config.SerialLogPath,
+		KernelPath:    config.KernelPath,
+		InitrdPath:    config.InitrdPath,
+		KernelArgs:    config.KernelArgs,
+		ControlSocket: controlSocket,
+		VsockSocket:   vsockSocket,
+		LogPath:       logPath,
 	}
 
-	bootLoader, err := vz.NewLinuxBootLoader(
-		config.KernelPath,
-		vz.WithCommandLine(kernelCommandLine),
-		vz.WithInitrd(config.InitrdPath),
-	)
+	// Convert disks
+	for _, disk := range config.Disks {
+		shimConfig.Disks = append(shimConfig.Disks, DiskConfig{
+			Path:     disk.Path,
+			Readonly: disk.Readonly,
+		})
+	}
+
+	// Convert networks
+	for _, net := range config.Networks {
+		shimConfig.Networks = append(shimConfig.Networks, NetworkConfig{
+			MAC: net.MAC,
+		})
+	}
+
+	configJSON, err := json.Marshal(shimConfig)
 	if err != nil {
-		return 0, nil, fmt.Errorf("create boot loader: %w", err)
+		return 0, nil, fmt.Errorf("marshal shim config: %w", err)
 	}
 
-	vcpus := computeCPUCount(config.VCPUs)
-	memoryBytes := computeMemorySize(uint64(config.MemoryBytes))
+	log.DebugContext(ctx, "spawning vz-shim", "config", string(configJSON))
 
-	log.DebugContext(ctx, "vz VM config",
-		"vcpus", vcpus,
-		"memory_bytes", memoryBytes,
-		"kernel", config.KernelPath,
-		"initrd", config.InitrdPath)
-
-	vmConfig, err := vz.NewVirtualMachineConfiguration(bootLoader, vcpus, memoryBytes)
+	// Find the vz-shim binary (same directory as hypeman or in PATH)
+	shimPath, err := s.findShimBinary()
 	if err != nil {
-		return 0, nil, fmt.Errorf("create vm configuration: %w", err)
+		return 0, nil, fmt.Errorf("find vz-shim binary: %w", err)
 	}
 
-	if err := s.configureSerialConsole(vmConfig, config.SerialLogPath); err != nil {
-		return 0, nil, fmt.Errorf("configure serial: %w", err)
+	// Spawn the shim process
+	cmd := exec.CommandContext(ctx, shimPath, "-config", string(configJSON))
+	cmd.Stdout = nil // Shim logs to file
+	cmd.Stderr = nil
+	cmd.Stdin = nil
+
+	if err := cmd.Start(); err != nil {
+		return 0, nil, fmt.Errorf("start vz-shim: %w", err)
 	}
 
-	if err := s.configureNetwork(vmConfig, config.Networks); err != nil {
-		return 0, nil, fmt.Errorf("configure network: %w", err)
-	}
+	pid := cmd.Process.Pid
+	log.InfoContext(ctx, "vz-shim started", "pid", pid, "control_socket", controlSocket)
 
-	entropyConfig, err := vz.NewVirtioEntropyDeviceConfiguration()
+	// Wait for the control socket to be ready
+	client, err := s.waitForShim(ctx, controlSocket, 30*time.Second)
 	if err != nil {
-		return 0, nil, fmt.Errorf("create entropy device: %w", err)
-	}
-	vmConfig.SetEntropyDevicesVirtualMachineConfiguration([]*vz.VirtioEntropyDeviceConfiguration{entropyConfig})
-
-	if err := s.configureStorage(vmConfig, config.Disks); err != nil {
-		return 0, nil, fmt.Errorf("configure storage: %w", err)
+		// Kill the shim if we can't connect
+		cmd.Process.Kill()
+		return 0, nil, fmt.Errorf("connect to vz-shim: %w", err)
 	}
 
-	vsockConfig, err := vz.NewVirtioSocketDeviceConfiguration()
-	if err != nil {
-		return 0, nil, fmt.Errorf("create vsock device: %w", err)
-	}
-	vmConfig.SetSocketDevicesVirtualMachineConfiguration([]vz.SocketDeviceConfiguration{vsockConfig})
+	// Release the process so it's not killed when cmd goes out of scope
+	cmd.Process.Release()
 
-	if balloonConfig, err := vz.NewVirtioTraditionalMemoryBalloonDeviceConfiguration(); err == nil {
-		vmConfig.SetMemoryBalloonDevicesVirtualMachineConfiguration([]vz.MemoryBalloonDeviceConfiguration{balloonConfig})
-	}
-
-	if validated, err := vmConfig.Validate(); !validated || err != nil {
-		return 0, nil, fmt.Errorf("invalid vm configuration: %w", err)
-	}
-
-	vm, err := vz.NewVirtualMachine(vmConfig)
-	if err != nil {
-		return 0, nil, fmt.Errorf("create virtual machine: %w", err)
-	}
-
-	if err := vm.Start(); err != nil {
-		return 0, nil, fmt.Errorf("start vm: %w", err)
-	}
-
-	log.InfoContext(ctx, "vz VM started", "vcpus", vcpus, "memory_mb", memoryBytes/1024/1024)
-
-	return 0, &Hypervisor{vm: vm, vmConfig: vmConfig}, nil
+	return pid, client, nil
 }
 
-// RestoreVM restores a VM from a snapshot (macOS 14+ ARM64 only).
-func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string, socketPath string, snapshotPath string) (int, hypervisor.Hypervisor, error) {
-	return 0, nil, fmt.Errorf("vz RestoreVM requires VMConfig; use RestoreVMWithConfig instead")
-}
-
-// RestoreVMWithConfig restores a VM from a snapshot (macOS 14+ ARM64 only).
-func (s *Starter) RestoreVMWithConfig(ctx context.Context, p *paths.Paths, config hypervisor.VMConfig, snapshotPath string) (int, hypervisor.Hypervisor, error) {
-	log := logger.FromContext(ctx)
-
-	kernelCommandLine := config.KernelArgs
-	if kernelCommandLine == "" {
-		kernelCommandLine = "console=hvc0 root=/dev/vda"
-	}
-
-	bootLoader, err := vz.NewLinuxBootLoader(
-		config.KernelPath,
-		vz.WithCommandLine(kernelCommandLine),
-		vz.WithInitrd(config.InitrdPath),
-	)
-	if err != nil {
-		return 0, nil, fmt.Errorf("create boot loader: %w", err)
-	}
-
-	vcpus := computeCPUCount(config.VCPUs)
-	memoryBytes := computeMemorySize(uint64(config.MemoryBytes))
-
-	vmConfig, err := vz.NewVirtualMachineConfiguration(bootLoader, vcpus, memoryBytes)
-	if err != nil {
-		return 0, nil, fmt.Errorf("create vm configuration: %w", err)
-	}
-
-	if err := s.configureSerialConsole(vmConfig, config.SerialLogPath); err != nil {
-		return 0, nil, fmt.Errorf("configure serial: %w", err)
-	}
-	if err := s.configureNetwork(vmConfig, config.Networks); err != nil {
-		return 0, nil, fmt.Errorf("configure network: %w", err)
-	}
-
-	entropyConfig, err := vz.NewVirtioEntropyDeviceConfiguration()
-	if err != nil {
-		return 0, nil, fmt.Errorf("create entropy device: %w", err)
-	}
-	vmConfig.SetEntropyDevicesVirtualMachineConfiguration([]*vz.VirtioEntropyDeviceConfiguration{entropyConfig})
-
-	if err := s.configureStorage(vmConfig, config.Disks); err != nil {
-		return 0, nil, fmt.Errorf("configure storage: %w", err)
-	}
-
-	vsockConfig, err := vz.NewVirtioSocketDeviceConfiguration()
-	if err != nil {
-		return 0, nil, fmt.Errorf("create vsock device: %w", err)
-	}
-	vmConfig.SetSocketDevicesVirtualMachineConfiguration([]vz.SocketDeviceConfiguration{vsockConfig})
-
-	if validated, err := vmConfig.Validate(); !validated || err != nil {
-		return 0, nil, fmt.Errorf("invalid vm configuration: %w", err)
-	}
-
-	if valid, err := vmConfig.ValidateSaveRestoreSupport(); err != nil || !valid {
-		return 0, nil, fmt.Errorf("snapshot restore not supported (requires macOS 14+ ARM64)")
-	}
-
-	vm, err := vz.NewVirtualMachine(vmConfig)
-	if err != nil {
-		return 0, nil, fmt.Errorf("create virtual machine: %w", err)
-	}
-
-	log.InfoContext(ctx, "restoring vz VM from snapshot", "path", snapshotPath)
-	if err := vm.RestoreMachineStateFromURL(snapshotPath); err != nil {
-		return 0, nil, fmt.Errorf("restore from snapshot: %w", err)
-	}
-
-	log.InfoContext(ctx, "vz VM restored", "vcpus", vcpus, "memory_mb", memoryBytes/1024/1024)
-
-	return 0, &Hypervisor{vm: vm, vmConfig: vmConfig}, nil
-}
-
-func (s *Starter) configureSerialConsole(vmConfig *vz.VirtualMachineConfiguration, logPath string) error {
-	var serialAttachment *vz.FileHandleSerialPortAttachment
-
-	nullRead, err := os.OpenFile("/dev/null", os.O_RDONLY, 0)
-	if err != nil {
-		return fmt.Errorf("open /dev/null for reading: %w", err)
-	}
-
-	if logPath != "" {
-		file, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-		if err != nil {
-			nullRead.Close()
-			return fmt.Errorf("open serial log file: %w", err)
+// findShimBinary locates the vz-shim binary.
+func (s *Starter) findShimBinary() (string, error) {
+	// First, check next to the current executable
+	exe, err := os.Executable()
+	if err == nil {
+		exeDir := filepath.Dir(exe)
+		shimPath := filepath.Join(exeDir, "vz-shim")
+		if _, err := os.Stat(shimPath); err == nil {
+			return shimPath, nil
 		}
-		serialAttachment, err = vz.NewFileHandleSerialPortAttachment(nullRead, file)
-		if err != nil {
-			nullRead.Close()
-			file.Close()
-			return fmt.Errorf("create serial attachment: %w", err)
-		}
-	} else {
-		nullWrite, err := os.OpenFile("/dev/null", os.O_WRONLY, 0)
-		if err != nil {
-			nullRead.Close()
-			return fmt.Errorf("open /dev/null for writing: %w", err)
-		}
-		serialAttachment, err = vz.NewFileHandleSerialPortAttachment(nullRead, nullWrite)
-		if err != nil {
-			nullRead.Close()
-			nullWrite.Close()
-			return fmt.Errorf("create serial attachment: %w", err)
-		}
-	}
-
-	consoleConfig, err := vz.NewVirtioConsoleDeviceSerialPortConfiguration(serialAttachment)
-	if err != nil {
-		return fmt.Errorf("create console config: %w", err)
-	}
-	vmConfig.SetSerialPortsVirtualMachineConfiguration([]*vz.VirtioConsoleDeviceSerialPortConfiguration{
-		consoleConfig,
-	})
-
-	return nil
-}
-
-func (s *Starter) configureNetwork(vmConfig *vz.VirtualMachineConfiguration, networks []hypervisor.NetworkConfig) error {
-	if len(networks) == 0 {
-		return s.addNATNetwork(vmConfig, "")
-	}
-	for _, netConfig := range networks {
-		if err := s.addNATNetwork(vmConfig, netConfig.MAC); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (s *Starter) addNATNetwork(vmConfig *vz.VirtualMachineConfiguration, macAddr string) error {
-	natAttachment, err := vz.NewNATNetworkDeviceAttachment()
-	if err != nil {
-		return fmt.Errorf("create NAT attachment: %w", err)
-	}
-
-	networkConfig, err := vz.NewVirtioNetworkDeviceConfiguration(natAttachment)
-	if err != nil {
-		return fmt.Errorf("create network config: %w", err)
-	}
-
-	var mac *vz.MACAddress
-	if macAddr != "" {
-		hwAddr, parseErr := net.ParseMAC(macAddr)
-		if parseErr == nil {
-			mac, err = vz.NewMACAddress(hwAddr)
-		}
-		if parseErr != nil || err != nil {
-			mac, err = vz.NewRandomLocallyAdministeredMACAddress()
-			if err != nil {
-				return fmt.Errorf("generate MAC address: %w", err)
+		// Also check parent's tmp dir (for air hot-reload development)
+		// When running ./tmp/main, check ./tmp/vz-shim
+		if filepath.Base(exeDir) == "tmp" {
+			shimPath = filepath.Join(exeDir, "vz-shim")
+			if _, err := os.Stat(shimPath); err == nil {
+				return shimPath, nil
 			}
 		}
-	} else {
-		mac, err = vz.NewRandomLocallyAdministeredMACAddress()
-		if err != nil {
-			return fmt.Errorf("generate MAC address: %w", err)
+	}
+
+	// Check in PATH
+	shimPath, err := exec.LookPath("vz-shim")
+	if err == nil {
+		return shimPath, nil
+	}
+
+	// Check common locations
+	commonPaths := []string{
+		"/usr/local/bin/vz-shim",
+		filepath.Join(os.Getenv("HOME"), "bin", "vz-shim"),
+	}
+	for _, p := range commonPaths {
+		if _, err := os.Stat(p); err == nil {
+			return p, nil
 		}
 	}
-	networkConfig.SetMACAddress(mac)
 
-	vmConfig.SetNetworkDevicesVirtualMachineConfiguration([]*vz.VirtioNetworkDeviceConfiguration{
-		networkConfig,
-	})
-
-	return nil
+	return "", fmt.Errorf("vz-shim binary not found")
 }
 
-func (s *Starter) configureStorage(vmConfig *vz.VirtualMachineConfiguration, disks []hypervisor.DiskConfig) error {
-	var storageDevices []vz.StorageDeviceConfiguration
+// waitForShim waits for the shim's control socket to be ready.
+func (s *Starter) waitForShim(ctx context.Context, socketPath string, timeout time.Duration) (*Client, error) {
+	deadline := time.Now().Add(timeout)
 
-	for _, disk := range disks {
-		if _, err := os.Stat(disk.Path); os.IsNotExist(err) {
-			return fmt.Errorf("disk image not found: %s", disk.Path)
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
 		}
 
-		if strings.HasSuffix(disk.Path, ".qcow2") {
-			return fmt.Errorf("qcow2 not supported by vz, use raw format: %s", disk.Path)
+		client, err := NewClient(socketPath)
+		if err == nil {
+			return client, nil
 		}
 
-		attachment, err := vz.NewDiskImageStorageDeviceAttachment(disk.Path, disk.Readonly)
-		if err != nil {
-			return fmt.Errorf("create disk attachment for %s: %w", disk.Path, err)
-		}
-
-		blockConfig, err := vz.NewVirtioBlockDeviceConfiguration(attachment)
-		if err != nil {
-			return fmt.Errorf("create block device config: %w", err)
-		}
-
-		storageDevices = append(storageDevices, blockConfig)
+		time.Sleep(100 * time.Millisecond)
 	}
 
-	if len(storageDevices) > 0 {
-		vmConfig.SetStorageDevicesVirtualMachineConfiguration(storageDevices)
-	}
-
-	return nil
+	return nil, fmt.Errorf("timeout waiting for shim socket: %s", socketPath)
 }
 
-func computeCPUCount(requested int) uint {
-	virtualCPUCount := uint(requested)
-	if virtualCPUCount == 0 {
-		virtualCPUCount = uint(runtime.NumCPU() - 1)
-		if virtualCPUCount < 1 {
-			virtualCPUCount = 1
-		}
-	}
-
-	maxAllowed := vz.VirtualMachineConfigurationMaximumAllowedCPUCount()
-	minAllowed := vz.VirtualMachineConfigurationMinimumAllowedCPUCount()
-
-	if virtualCPUCount > maxAllowed {
-		virtualCPUCount = maxAllowed
-	}
-	if virtualCPUCount < minAllowed {
-		virtualCPUCount = minAllowed
-	}
-
-	return virtualCPUCount
+// RestoreVM restores a VM from a snapshot.
+// Note: Snapshot restore via shim is not yet implemented.
+func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string, socketPath string, snapshotPath string) (int, hypervisor.Hypervisor, error) {
+	return 0, nil, fmt.Errorf("vz snapshot restore not implemented via shim")
 }
 
-func computeMemorySize(requested uint64) uint64 {
-	if requested == 0 {
-		requested = 2 * 1024 * 1024 * 1024 // 2GB default
-	}
-
-	maxAllowed := vz.VirtualMachineConfigurationMaximumAllowedMemorySize()
-	minAllowed := vz.VirtualMachineConfigurationMinimumAllowedMemorySize()
-
-	if requested > maxAllowed {
-		requested = maxAllowed
-	}
-	if requested < minAllowed {
-		requested = minAllowed
-	}
-
-	return requested
+// RestoreVMWithConfig restores a VM from a snapshot.
+// Note: Snapshot restore via shim is not yet implemented.
+func (s *Starter) RestoreVMWithConfig(ctx context.Context, p *paths.Paths, config hypervisor.VMConfig, snapshotPath string) (int, hypervisor.Hypervisor, error) {
+	return 0, nil, fmt.Errorf("vz snapshot restore not implemented via shim")
 }

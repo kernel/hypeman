@@ -79,8 +79,6 @@ type manager struct {
 	// Hypervisor support
 	vmStarters        map[hypervisor.Type]hypervisor.VMStarter
 	defaultHypervisor hypervisor.Type // Default hypervisor type when not specified in request
-
-	activeHypervisors sync.Map // map[instanceID]hypervisor.Hypervisor - for in-process VMs (vz)
 }
 
 // additionalStarters is populated by platform-specific init functions.
@@ -139,20 +137,8 @@ func (m *manager) SetResourceValidator(v ResourceValidator) {
 
 // getHypervisor creates a hypervisor client for the given socket and type.
 // Used for connecting to already-running VMs (e.g., for state queries).
-// Note: vz hypervisors run in-process and cannot be reconnected; use
-// the Hypervisor instance returned by StartVM instead.
 func (m *manager) getHypervisor(socketPath string, hvType hypervisor.Type) (hypervisor.Hypervisor, error) {
-	switch hvType {
-	case hypervisor.TypeCloudHypervisor:
-		return cloudhypervisor.New(socketPath)
-	case hypervisor.TypeQEMU:
-		return qemu.New(socketPath)
-	case hypervisor.TypeVZ:
-		// vz runs in-process and can't be reconnected via socket
-		return nil, hypervisor.ErrHypervisorNotRunning
-	default:
-		return nil, fmt.Errorf("unsupported hypervisor type: %s", hvType)
-	}
+	return hypervisor.NewClient(hvType, socketPath)
 }
 
 // getVMStarter returns the VM starter for the given hypervisor type.

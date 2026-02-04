@@ -6,7 +6,8 @@ tmp_dir = "tmp"
   args_bin = []
   bin = "./tmp/main"
   # Build for macOS with vz support, then sign with entitlements
-  cmd = "make build-embedded && go build -tags containers_image_openpgp -o ./tmp/main ./cmd/api && codesign --sign - --entitlements vz.entitlements --force ./tmp/main"
+  # Also builds and signs vz-shim (subprocess that hosts vz VMs)
+  cmd = "make build-embedded && go build -o ./tmp/vz-shim ./cmd/vz-shim && codesign --sign - --entitlements vz.entitlements --force ./tmp/vz-shim && go build -tags containers_image_openpgp -o ./tmp/main ./cmd/api && codesign --sign - --entitlements vz.entitlements --force ./tmp/main"
   delay = 1000
   exclude_dir = ["assets", "tmp", "vendor", "testdata", "bin", "scripts", "data", "kernel"]
   exclude_file = []

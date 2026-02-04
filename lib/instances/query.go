@@ -21,20 +21,8 @@ type stateResult struct {
 func (m *manager) deriveState(ctx context.Context, stored *StoredMetadata) stateResult {
 	log := logger.FromContext(ctx)
 
-	// 1. Check for in-process hypervisors (vz runs in-process, not via socket)
-	if stored.HypervisorType == hypervisor.TypeVZ {
-		if hvRaw, ok := m.activeHypervisors.Load(stored.Id); ok {
-			hv := hvRaw.(hypervisor.Hypervisor)
-			return m.queryHypervisorState(ctx, stored, hv)
-		}
-		// No active hypervisor - check for snapshot to distinguish Stopped vs Standby
-		if m.hasSnapshot(stored.DataDir) {
-			return stateResult{State: StateStandby}
-		}
-		return stateResult{State: StateStopped}
-	}
-
-	// 2. For socket-based hypervisors (cloud-hypervisor, QEMU), check if socket exists
+	// All hypervisors (cloud-hypervisor, QEMU, vz-shim) are socket-based.
+	// Check if socket exists
 	if _, err := os.Stat(stored.SocketPath); err != nil {
 		// No socket - check for snapshot to distinguish Stopped vs Standby
 		if m.hasSnapshot(stored.DataDir) {
