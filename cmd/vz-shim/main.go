@@ -47,6 +47,9 @@ type ShimConfig struct {
 
 	// Logging
 	LogPath string `json:"log_path"`
+
+	// Restore from snapshot (optional)
+	RestoreStatePath string `json:"restore_state_path,omitempty"`
 }
 
 // DiskConfig represents a disk attached to the VM.
@@ -83,19 +86,35 @@ func main() {
 
 	slog.Info("vz-shim starting", "control_socket", config.ControlSocket, "vsock_socket", config.VsockSocket)
 
-	// Create and start the VM
+	// Create the VM
 	vm, vmConfig, err := createVM(config)
 	if err != nil {
 		slog.Error("failed to create VM", "error", err)
 		os.Exit(1)
 	}
 
-	if err := vm.Start(); err != nil {
-		slog.Error("failed to start VM", "error", err)
-		os.Exit(1)
+	// Either restore from snapshot or start fresh
+	// NOTE: Linux VM restore is NOT supported by Virtualization.framework
+	// This code path exists for potential future macOS guest support
+	if config.RestoreStatePath != "" {
+		slog.Info("restoring VM from snapshot", "path", config.RestoreStatePath)
+		if err := vm.RestoreMachineStateFromURL(config.RestoreStatePath); err != nil {
+			slog.Error("failed to restore VM from snapshot", "error", err)
+			os.Exit(1)
+		}
+		// After restore, VM is in paused state - resume it
+		if err := vm.Resume(); err != nil {
+			slog.Error("failed to resume VM after restore", "error", err)
+			os.Exit(1)
+		}
+		slog.Info("VM restored and resumed", "vcpus", config.VCPUs, "memory_mb", config.MemoryBytes/1024/1024)
+	} else {
+		if err := vm.Start(); err != nil {
+			slog.Error("failed to start VM", "error", err)
+			os.Exit(1)
+		}
+		slog.Info("VM started", "vcpus", config.VCPUs, "memory_mb", config.MemoryBytes/1024/1024)
 	}
-
-	slog.Info("VM started", "vcpus", config.VCPUs, "memory_mb", config.MemoryBytes/1024/1024)
 
 	// Create the shim server
 	server := NewShimServer(vm, vmConfig)

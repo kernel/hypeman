@@ -74,6 +74,10 @@ func createVM(config ShimConfig) (*vz.VirtualMachine, *vz.VirtualMachineConfigur
 		return nil, nil, fmt.Errorf("invalid vm configuration: %w", err)
 	}
 
+	// Note: ValidateSaveRestoreSupport() returns true but Linux VM restore
+	// still fails with "invalid argument". This is an undocumented limitation
+	// of Virtualization.framework - only macOS guests support save/restore.
+
 	vm, err := vz.NewVirtualMachine(vmConfig)
 	if err != nil {
 		return nil, nil, fmt.Errorf("create virtual machine: %w", err)
@@ -155,8 +159,17 @@ func addNATNetwork(vmConfig *vz.VirtualMachineConfiguration, macAddr string) err
 		hwAddr, parseErr := net.ParseMAC(macAddr)
 		if parseErr == nil {
 			mac, err = vz.NewMACAddress(hwAddr)
-		}
-		if parseErr != nil || err != nil {
+			if err != nil {
+				slog.Warn("failed to create MAC from parsed address, generating random", "mac", macAddr, "error", err)
+				mac, err = vz.NewRandomLocallyAdministeredMACAddress()
+				if err != nil {
+					return fmt.Errorf("generate MAC address: %w", err)
+				}
+			} else {
+				slog.Info("using specified MAC address", "mac", macAddr)
+			}
+		} else {
+			slog.Warn("failed to parse MAC address, generating random", "mac", macAddr, "error", parseErr)
 			mac, err = vz.NewRandomLocallyAdministeredMACAddress()
 			if err != nil {
 				return fmt.Errorf("generate MAC address: %w", err)
@@ -167,6 +180,7 @@ func addNATNetwork(vmConfig *vz.VirtualMachineConfiguration, macAddr string) err
 		if err != nil {
 			return fmt.Errorf("generate MAC address: %w", err)
 		}
+		slog.Info("generated random MAC address", "mac", mac.String())
 	}
 	networkConfig.SetMACAddress(mac)
 

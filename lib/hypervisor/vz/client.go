@@ -3,9 +3,11 @@
 package vz
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"time"
@@ -55,7 +57,13 @@ type vmInfoResponse struct {
 // Capabilities returns the features supported by vz.
 func (c *Client) Capabilities() hypervisor.Capabilities {
 	return hypervisor.Capabilities{
-		SupportsSnapshot:       false, // Not implemented via shim yet
+		// Snapshot NOT supported: Virtualization.framework does not support
+		// save/restore for Linux guest VMs - only macOS guests work.
+		// This is an undocumented limitation of the framework.
+		// See: https://github.com/cirruslabs/tart/issues/1177
+		// See: https://github.com/cirruslabs/tart/issues/796
+		// See: https://github.com/utmapp/UTM/issues/6654
+		SupportsSnapshot:       false,
 		SupportsHotplugMemory:  false,
 		SupportsPause:          true,
 		SupportsVsock:          true,
@@ -174,9 +182,44 @@ func (c *Client) Resume(ctx context.Context) error {
 	return nil
 }
 
-// Snapshot is not supported via shim yet.
+// snapshotRequest matches the shim's SnapshotRequest structure.
+type snapshotRequest struct {
+	DestinationURL string `json:"destination_url"`
+}
+
+// Snapshot saves the VM state to a file. VM must be paused first.
+// Requires macOS 14+ on ARM64.
+// Note: destPath is expected to be a directory (matching CH convention).
+// vz expects a file path, so we append "vz-state" to the directory.
 func (c *Client) Snapshot(ctx context.Context, destPath string) error {
-	return fmt.Errorf("snapshot not implemented via shim")
+	// vz SaveMachineStateToPath expects a file path, not a directory
+	// Append a fixed filename to match the directory-based API of other hypervisors
+	statePath := destPath + "/vz-state"
+
+	reqBody := snapshotRequest{DestinationURL: statePath}
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return fmt.Errorf("marshal snapshot request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, "http://vz-shim/api/v1/vm.snapshot", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("snapshot request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("snapshot failed with status %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	return nil
 }
 
 // ResizeMemory is not supported by vz.
