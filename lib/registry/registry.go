@@ -143,7 +143,8 @@ func (r *Registry) triggerConversion(repo, reference, dockerDigest string) {
 	// Skip BuildKit cache images - they use a custom mediatype that can't be
 	// unpacked as a standard OCI image. BuildKit imports them directly from
 	// the registry without needing local conversion.
-	if strings.HasPrefix(repo, "cache/") {
+	// Note: repo may include host prefix (e.g., "10.102.0.1:8083/cache/global/node")
+	if strings.HasPrefix(repo, "cache/") || strings.Contains(repo, "/cache/") {
 		return
 	}
 
