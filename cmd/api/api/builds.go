@@ -45,6 +45,7 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 	var timeoutSeconds int
 	var isAdminBuild bool
 	var secrets []builds.SecretRef
+	var buildArgs map[string]string
 
 	for {
 		part, err := request.Body.NextPart()
@@ -137,6 +138,20 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 				}, nil
 			}
 			globalCacheKey = string(data)
+		case "build_args":
+			data, err := io.ReadAll(part)
+			if err != nil {
+				return oapi.CreateBuild400JSONResponse{
+					Code:    "invalid_request",
+					Message: "failed to read build_args field",
+				}, nil
+			}
+			if err := json.Unmarshal(data, &buildArgs); err != nil {
+				return oapi.CreateBuild400JSONResponse{
+					Code:    "invalid_request",
+					Message: "build_args must be a JSON object of key-value pairs",
+				}, nil
+			}
 		}
 		part.Close()
 	}
@@ -153,12 +168,13 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 
 	// Build domain request
 	domainReq := builds.CreateBuildRequest{
-		BaseImageDigest:    baseImageDigest,
-		CacheScope:         cacheScope,
-		Dockerfile:         dockerfile,
-		Secrets:            secrets,
-		IsAdminBuild:       isAdminBuild,
-		GlobalCacheKey: globalCacheKey,
+		BaseImageDigest: baseImageDigest,
+		CacheScope:      cacheScope,
+		Dockerfile:      dockerfile,
+		Secrets:         secrets,
+		IsAdminBuild:    isAdminBuild,
+		GlobalCacheKey:  globalCacheKey,
+		BuildArgs:       buildArgs,
 	}
 
 	// Apply timeout if provided

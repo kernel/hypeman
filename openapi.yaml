@@ -2387,6 +2387,12 @@ paths:
                     Global cache identifier (e.g., "node", "python", "ubuntu", "browser").
                     When specified, the build will import from cache/global/{key}.
                     Admin builds will also export to this location.
+                build_args:
+                  type: string
+                  description: |
+                    JSON object of build arguments to pass to the Dockerfile.
+                    These correspond to ARG instructions in the Dockerfile.
+                    Example: {"NODE_ENV": "production", "APP_VERSION": "1.0.0"}
       responses:
         202:
           description: Build created and queued
