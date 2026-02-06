@@ -728,11 +728,14 @@ func runBuild(ctx context.Context, config *BuildConfig, logWriter io.Writer) (st
 	}
 
 	// Export cache based on build type
+	// Note: image-manifest=true ensures layer blobs are stored in the registry cache image
+	// rather than as references to external registries (e.g., docker.io). This is critical
+	// for cache hits in ephemeral BuildKit instances that don't have local layer storage.
 	if config.IsAdminBuild {
 		// Admin build: export to global cache
 		if config.GlobalCacheKey != "" {
 			globalCacheRef := fmt.Sprintf("%s/cache/global/%s", registryHost, config.GlobalCacheKey)
-			cacheOpts := "type=registry,ref=" + globalCacheRef + ",mode=max"
+			cacheOpts := "type=registry,ref=" + globalCacheRef + ",mode=max,image-manifest=true,oci-mediatypes=true"
 			if useInsecureFlag {
 				cacheOpts += ",registry.insecure=true"
 			}
@@ -743,7 +746,7 @@ func runBuild(ctx context.Context, config *BuildConfig, logWriter io.Writer) (st
 		// Regular build: export to tenant cache
 		if config.CacheScope != "" {
 			tenantCacheRef := fmt.Sprintf("%s/cache/%s", registryHost, config.CacheScope)
-			cacheOpts := "type=registry,ref=" + tenantCacheRef + ",mode=max"
+			cacheOpts := "type=registry,ref=" + tenantCacheRef + ",mode=max,image-manifest=true,oci-mediatypes=true"
 			if useInsecureFlag {
 				cacheOpts += ",registry.insecure=true"
 			}

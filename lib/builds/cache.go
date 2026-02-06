@@ -100,8 +100,10 @@ func (k *CacheKey) ImportCacheArg() string {
 }
 
 // ExportCacheArg returns the BuildKit --export-cache argument
+// Uses image-manifest=true to ensure layer blobs are stored in the cache image
+// rather than as external references, enabling cache hits in ephemeral BuildKit instances.
 func (k *CacheKey) ExportCacheArg() string {
-	return fmt.Sprintf("type=registry,ref=%s,mode=max", k.Reference)
+	return fmt.Sprintf("type=registry,ref=%s,mode=max,image-manifest=true,oci-mediatypes=true", k.Reference)
 }
 
 // normalizeCacheScope normalizes a cache scope to only contain safe characters

@@ -103,7 +103,7 @@ func TestCacheKey_Args(t *testing.T) {
 	assert.Equal(t, "type=registry,ref=localhost:8080/cache/tenant/nodejs/abc123", importArg)
 
 	exportArg := key.ExportCacheArg()
-	assert.Equal(t, "type=registry,ref=localhost:8080/cache/tenant/nodejs/abc123,mode=max", exportArg)
+	assert.Equal(t, "type=registry,ref=localhost:8080/cache/tenant/nodejs/abc123,mode=max,image-manifest=true,oci-mediatypes=true", exportArg)
 }
 
 func TestValidateCacheScope(t *testing.T) {
