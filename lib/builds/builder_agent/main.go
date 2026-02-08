@@ -103,7 +103,64 @@ var (
 	// Encoder lock protects concurrent access to json.Encoder
 	// (the goroutine sending build_result and the main loop handling get_status)
 	encoderLock sync.Mutex
+
+	// Log streaming channel - logs are sent here and forwarded to host via vsock
+	logChan     = make(chan string, 1000)
+	logChanOnce sync.Once
 )
+
+// streamingLogWriter writes log lines to a channel for streaming to the host.
+// It also writes to a buffer to include all logs in the final result.
+type streamingLogWriter struct {
+	buffer   *bytes.Buffer
+	mu       sync.Mutex
+	closed   bool
+	closedMu sync.RWMutex
+}
+
+func newStreamingLogWriter() *streamingLogWriter {
+	return &streamingLogWriter{
+		buffer: &bytes.Buffer{},
+	}
+}
+
+func (w *streamingLogWriter) Write(p []byte) (n int, err error) {
+	w.mu.Lock()
+	w.buffer.Write(p)
+	w.mu.Unlock()
+
+	// Check if channel is closed before attempting to send
+	w.closedMu.RLock()
+	isClosed := w.closed
+	w.closedMu.RUnlock()
+
+	if !isClosed {
+		// Send to channel for streaming (non-blocking)
+		line := string(p)
+		select {
+		case logChan <- line:
+		default:
+			// Channel full, drop the log line for streaming but it's still in buffer
+		}
+	}
+
+	// Also write to stdout for local debugging
+	os.Stdout.Write(p)
+
+	return len(p), nil
+}
+
+func (w *streamingLogWriter) markClosed() {
+	w.closedMu.Lock()
+	w.closed = true
+	w.closedMu.Unlock()
+}
+
+func (w *streamingLogWriter) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buffer.String()
+}
 
 func main() {
 	log.Println("=== Builder Agent Starting ===")
@@ -211,6 +268,19 @@ func handleHostConnection(conn net.Conn) {
 			secretsOnce.Do(func() {
 				close(secretsReady)
 			})
+
+			// Start streaming logs to host
+			go func() {
+				for logLine := range logChan {
+					encoderLock.Lock()
+					err := encoder.Encode(VsockMessage{Type: "log", Log: logLine})
+					encoderLock.Unlock()
+					if err != nil {
+						// Connection closed, stop streaming
+						return
+					}
+				}
+			}()
 
 			// Wait for build to complete and send result to host
 			go func() {
@@ -341,12 +411,17 @@ func handleSecretsRequest(encoder *json.Encoder, decoder *json.Decoder) error {
 // runBuildProcess runs the actual build and stores the result
 func runBuildProcess() {
 	start := time.Now()
-	var logs bytes.Buffer
-	logWriter := io.MultiWriter(os.Stdout, &logs)
+	logWriter := newStreamingLogWriter()
 
 	log.SetOutput(logWriter)
 
 	defer func() {
+		// Mark writer as closed first to prevent writes to closed channel
+		logWriter.markClosed()
+		// Close log channel so streaming goroutine terminates
+		logChanOnce.Do(func() {
+			close(logChan)
+		})
 		close(buildDone)
 	}()
 
@@ -356,7 +431,7 @@ func runBuildProcess() {
 		setResult(BuildResult{
 			Success:    false,
 			Error:      fmt.Sprintf("load config: %v", err),
-			Logs:       logs.String(),
+			Logs:       logWriter.String(),
 			DurationMS: time.Since(start).Milliseconds(),
 		})
 		return
@@ -373,7 +448,7 @@ func runBuildProcess() {
 		setResult(BuildResult{
 			Success:    false,
 			Error:      fmt.Sprintf("setup registry auth: %v", err),
-			Logs:       logs.String(),
+			Logs:       logWriter.String(),
 			DurationMS: time.Since(start).Milliseconds(),
 		})
 		return
@@ -403,7 +478,7 @@ func runBuildProcess() {
 			setResult(BuildResult{
 				Success:    false,
 				Error:      "build timeout while waiting for secrets",
-				Logs:       logs.String(),
+				Logs:       logWriter.String(),
 				DurationMS: time.Since(start).Milliseconds(),
 			})
 			return
@@ -418,7 +493,7 @@ func runBuildProcess() {
 			setResult(BuildResult{
 				Success:    false,
 				Error:      "Dockerfile required: provide dockerfile parameter or include Dockerfile in source tarball",
-				Logs:       logs.String(),
+				Logs:       logWriter.String(),
 				DurationMS: time.Since(start).Milliseconds(),
 			})
 			return
@@ -428,7 +503,7 @@ func runBuildProcess() {
 			setResult(BuildResult{
 				Success:    false,
 				Error:      fmt.Sprintf("write dockerfile: %v", err),
-				Logs:       logs.String(),
+				Logs:       logWriter.String(),
 				DurationMS: time.Since(start).Milliseconds(),
 			})
 			return
@@ -443,8 +518,8 @@ func runBuildProcess() {
 
 	// Run the build
 	log.Println("=== Starting Build ===")
-	digest, buildLogs, err := runBuild(ctx, config, logWriter)
-	logs.WriteString(buildLogs)
+	digest, _, err := runBuild(ctx, config, logWriter)
+	// Note: buildLogs is already written to logWriter via io.MultiWriter in runBuild
 
 	duration := time.Since(start).Milliseconds()
 
@@ -452,7 +527,7 @@ func runBuildProcess() {
 		setResult(BuildResult{
 			Success:    false,
 			Error:      err.Error(),
-			Logs:       logs.String(),
+			Logs:       logWriter.String(),
 			Provenance: provenance,
 			DurationMS: duration,
 		})
@@ -466,7 +541,7 @@ func runBuildProcess() {
 	setResult(BuildResult{
 		Success:     true,
 		ImageDigest: digest,
-		Logs:        logs.String(),
+		Logs:        logWriter.String(),
 		Provenance:  provenance,
 		DurationMS:  duration,
 	})

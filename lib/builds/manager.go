@@ -331,12 +331,9 @@ func (m *manager) runBuild(ctx context.Context, id string, req CreateBuildReques
 		return
 	}
 
-	// Save build logs (regardless of success/failure)
-	if result.Logs != "" {
-		if err := appendLog(m.paths, id, []byte(result.Logs)); err != nil {
-			m.logger.Warn("failed to save build logs", "id", id, "error", err)
-		}
-	}
+	// Note: Logs are now streamed via vsock "log" messages and written incrementally
+	// in waitForResult, so we no longer need to save them here.
+	// The result.Logs field is kept for backward compatibility but is redundant.
 
 	if !result.Success {
 		m.logger.Error("build failed", "id", id, "error", result.Error, "duration", duration)
@@ -480,7 +477,7 @@ func (m *manager) executeBuild(ctx context.Context, id string, req CreateBuildRe
 
 	// Wait for build result via vsock
 	// The builder agent will send the result when complete
-	result, err := m.waitForResult(ctx, inst)
+	result, err := m.waitForResult(ctx, id, inst)
 	if err != nil {
 		return nil, fmt.Errorf("wait for result: %w", err)
 	}
@@ -489,7 +486,7 @@ func (m *manager) executeBuild(ctx context.Context, id string, req CreateBuildRe
 }
 
 // waitForResult waits for the build result from the builder agent via vsock
-func (m *manager) waitForResult(ctx context.Context, inst *instances.Instance) (*BuildResult, error) {
+func (m *manager) waitForResult(ctx context.Context, buildID string, inst *instances.Instance) (*BuildResult, error) {
 	// Wait a bit for the VM to start and the builder agent to listen on vsock
 	time.Sleep(3 * time.Second)
 
@@ -594,6 +591,14 @@ func (m *manager) waitForResult(ctx context.Context, inst *instances.Instance) (
 				return nil, fmt.Errorf("send secrets response: %w", err)
 			}
 			m.logger.Info("sent secrets to agent", "count", len(secrets), "instance", inst.Id)
+
+		case "log":
+			// Stream log line to build log file immediately
+			if dr.response.Log != "" {
+				if err := appendLog(m.paths, buildID, []byte(dr.response.Log)); err != nil {
+					m.logger.Error("failed to append streamed log", "error", err, "build_id", buildID)
+				}
+			}
 
 		case "build_result":
 			// Build completed
