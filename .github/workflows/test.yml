@@ -59,8 +59,8 @@ jobs:
   test-darwin:
     runs-on: [self-hosted, macos, arm64]
     concurrency:
-      group: macos-ci
-      cancel-in-progress: false
+      group: macos-ci-test-${{ github.ref }}
+      cancel-in-progress: true
     env:
       DATA_DIR: /tmp/hypeman-ci-${{ github.run_id }}
     steps:
@@ -96,8 +96,8 @@ jobs:
     runs-on: [self-hosted, macos, arm64]
     needs: test-darwin
     concurrency:
-      group: macos-ci
-      cancel-in-progress: false
+      group: macos-ci-e2e-${{ github.ref }}
+      cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v6
