@@ -117,6 +117,18 @@ if [ "$OS" = "darwin" ]; then
     fi
     command -v codesign >/dev/null 2>&1 || error "codesign is required but not installed (install Xcode Command Line Tools)"
     command -v docker >/dev/null 2>&1 || error "Docker CLI is required but not found. Install Docker via Colima or Docker Desktop."
+    # Check if we need sudo for INSTALL_DIR
+    if [ ! -w "$INSTALL_DIR" ] 2>/dev/null && [ ! -w "$(dirname "$INSTALL_DIR")" ] 2>/dev/null; then
+        if command -v sudo >/dev/null 2>&1; then
+            if ! sudo -n true 2>/dev/null; then
+                info "Requesting sudo privileges (needed for $INSTALL_DIR)..."
+                if ! sudo -v < /dev/tty; then
+                    error "Failed to obtain sudo privileges"
+                fi
+            fi
+            SUDO="sudo"
+        fi
+    fi
 else
     # Linux pre-flight
     if [ "$EUID" -ne 0 ]; then
@@ -366,26 +378,17 @@ fi
 # =============================================================================
 
 info "Installing ${BINARY_NAME} to ${INSTALL_DIR}..."
-if [ "$OS" = "darwin" ]; then
-    mkdir -p "$INSTALL_DIR"
-    install -m 755 "${TMP_DIR}/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
-else
-    $SUDO mkdir -p "$INSTALL_DIR"
-    $SUDO install -m 755 "${TMP_DIR}/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
-fi
+$SUDO mkdir -p "$INSTALL_DIR"
+$SUDO install -m 755 "${TMP_DIR}/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
 
 # Install hypeman-token binary
 info "Installing hypeman-token to ${INSTALL_DIR}..."
-if [ "$OS" = "darwin" ]; then
-    install -m 755 "${TMP_DIR}/hypeman-token" "${INSTALL_DIR}/hypeman-token"
-else
-    $SUDO install -m 755 "${TMP_DIR}/hypeman-token" "${INSTALL_DIR}/hypeman-token"
-fi
+$SUDO install -m 755 "${TMP_DIR}/hypeman-token" "${INSTALL_DIR}/hypeman-token"
 
 # Install vz-shim on macOS
 if [ "$OS" = "darwin" ] && [ -f "${TMP_DIR}/vz-shim" ]; then
     info "Installing vz-shim to ${INSTALL_DIR}..."
-    install -m 755 "${TMP_DIR}/vz-shim" "${INSTALL_DIR}/vz-shim"
+    $SUDO install -m 755 "${TMP_DIR}/vz-shim" "${INSTALL_DIR}/vz-shim"
 fi
 
 if [ "$OS" = "linux" ]; then
