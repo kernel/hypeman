@@ -171,6 +171,21 @@ func ensureLogsDir(p *paths.Paths, id string) error {
 	return os.MkdirAll(logsDir, 0755)
 }
 
+// writeLog overwrites the build log file with the given data.
+// Used to write the complete log record after build completion.
+func writeLog(p *paths.Paths, id string, data []byte) error {
+	if err := ensureLogsDir(p, id); err != nil {
+		return err
+	}
+
+	logPath := p.BuildLog(id)
+	if err := os.WriteFile(logPath, data, 0644); err != nil {
+		return fmt.Errorf("write log: %w", err)
+	}
+
+	return nil
+}
+
 // appendLog appends log data to the build log file
 func appendLog(p *paths.Paths, id string, data []byte) error {
 	if err := ensureLogsDir(p, id); err != nil {

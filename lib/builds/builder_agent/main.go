@@ -129,12 +129,13 @@ func (w *streamingLogWriter) Write(p []byte) (n int, err error) {
 	w.buffer.Write(p)
 	w.mu.Unlock()
 
-	// Check if channel is closed before attempting to send
+	// Hold read lock during both the closed check AND the channel send.
+	// This prevents a TOCTOU race where markClosed() + close(logChan) could
+	// execute between reading closed=false and the send, which would panic.
+	// markClosed() acquires a write lock, so it blocks while we hold the read lock,
+	// and close(logChan) only runs after markClosed() completes.
 	w.closedMu.RLock()
-	isClosed := w.closed
-	w.closedMu.RUnlock()
-
-	if !isClosed {
+	if !w.closed {
 		// Send to channel for streaming (non-blocking)
 		line := string(p)
 		select {
@@ -143,6 +144,7 @@ func (w *streamingLogWriter) Write(p []byte) (n int, err error) {
 			// Channel full, drop the log line for streaming but it's still in buffer
 		}
 	}
+	w.closedMu.RUnlock()
 
 	// Also write to stdout for local debugging
 	os.Stdout.Write(p)

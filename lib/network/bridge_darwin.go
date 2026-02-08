@@ -4,7 +4,6 @@ package network
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/kernel/hypeman/lib/logger"
 )
@@ -76,23 +75,3 @@ func (m *manager) CleanupOrphanedClasses(ctx context.Context) int {
 //
 // The CreateAllocation and ReleaseAllocation methods in allocate.go
 // will need platform-specific handling for the TAP-related calls.
-
-// macOSNetworkConfig holds macOS-specific network configuration
-type macOSNetworkConfig struct {
-	UseNAT bool // Always true for macOS
-}
-
-// GetMacOSNetworkConfig returns the macOS network configuration
-func GetMacOSNetworkConfig() *macOSNetworkConfig {
-	return &macOSNetworkConfig{
-		UseNAT: true,
-	}
-}
-
-// IsMacOS returns true on macOS builds
-func IsMacOS() bool {
-	return true
-}
-
-// ErrRateLimitNotSupported indicates rate limiting is not supported on macOS
-var ErrRateLimitNotSupported = fmt.Errorf("network rate limiting is not supported on macOS")

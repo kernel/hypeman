@@ -331,9 +331,14 @@ func (m *manager) runBuild(ctx context.Context, id string, req CreateBuildReques
 		return
 	}
 
-	// Note: Logs are now streamed via vsock "log" messages and written incrementally
-	// in waitForResult, so we no longer need to save them here.
-	// The result.Logs field is kept for backward compatibility but is redundant.
+	// Logs are streamed incrementally via vsock "log" messages in waitForResult,
+	// but the streaming channel may drop lines when full. Overwrite the log file
+	// with the complete logs from result.Logs to ensure no lines are lost.
+	if result.Logs != "" {
+		if err := writeLog(m.paths, id, []byte(result.Logs)); err != nil {
+			m.logger.Warn("failed to save build logs", "id", id, "error", err)
+		}
+	}
 
 	if !result.Success {
 		m.logger.Error("build failed", "id", id, "error", result.Error, "duration", duration)
