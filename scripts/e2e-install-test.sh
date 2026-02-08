@@ -59,6 +59,18 @@ while [ $ELAPSED -lt $TIMEOUT ]; do
 done
 
 if [ $ELAPSED -ge $TIMEOUT ]; then
+    # Dump logs for debugging
+    if [ "$OS" = "darwin" ]; then
+        LOG_FILE="$HOME/Library/Application Support/hypeman/logs/hypeman.log"
+        if [ -f "$LOG_FILE" ]; then
+            warn "Service logs (last 50 lines):"
+            tail -50 "$LOG_FILE" || true
+        else
+            warn "No log file found at $LOG_FILE"
+        fi
+        warn "launchctl list:"
+        launchctl list | grep hypeman || true
+    fi
     fail "Service did not become healthy within ${TIMEOUT}s"
 fi
 
