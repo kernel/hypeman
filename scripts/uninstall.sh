@@ -71,6 +71,16 @@ if [ "$OS" = "linux" ]; then
         fi
         SUDO="sudo"
     fi
+elif [ "$OS" = "darwin" ]; then
+    if [ ! -w "$INSTALL_DIR" ] 2>/dev/null; then
+        if command -v sudo >/dev/null 2>&1; then
+            if ! sudo -n true 2>/dev/null; then
+                info "Requesting sudo privileges (needed for $INSTALL_DIR)..."
+                sudo -v < /dev/tty 2>/dev/null || true
+            fi
+            SUDO="sudo"
+        fi
+    fi
 fi
 
 # =============================================================================
@@ -119,10 +129,10 @@ fi
 info "Removing binaries..."
 
 if [ "$OS" = "darwin" ]; then
-    rm -f "${INSTALL_DIR}/hypeman-api"
-    rm -f "${INSTALL_DIR}/vz-shim"
-    rm -f "${INSTALL_DIR}/hypeman-token"
-    rm -f "${INSTALL_DIR}/hypeman"
+    $SUDO rm -f "${INSTALL_DIR}/hypeman-api"
+    $SUDO rm -f "${INSTALL_DIR}/vz-shim"
+    $SUDO rm -f "${INSTALL_DIR}/hypeman-token"
+    $SUDO rm -f "${INSTALL_DIR}/hypeman"
 else
     # Remove wrapper scripts from /usr/local/bin
     $SUDO rm -f /usr/local/bin/hypeman
