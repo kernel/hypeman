@@ -1,5 +1,5 @@
 SHELL := /bin/bash
-.PHONY: oapi-generate generate-vmm-client generate-wire generate-all dev build test install-tools gen-jwt download-ch-binaries download-ch-spec ensure-ch-binaries build-caddy-binaries build-caddy ensure-caddy-binaries  release-prep clean build-embedded
+.PHONY: oapi-generate generate-vmm-client generate-wire generate-all dev build build-linux test test-linux test-darwin install-tools gen-jwt download-ch-binaries download-ch-spec ensure-ch-binaries build-caddy-binaries build-caddy ensure-caddy-binaries  release-prep clean build-embedded
 
 # Directory where local binaries will be installed
 BIN_DIR ?= $(CURDIR)/bin
@@ -188,7 +188,14 @@ lib/system/init/init: lib/system/init/*.go
 build-embedded: lib/system/guest_agent/guest-agent lib/system/init/init
 
 # Build the binary
-build: ensure-ch-binaries ensure-caddy-binaries build-embedded | $(BIN_DIR)
+build:
+ifeq ($(shell uname -s),Darwin)
+	$(MAKE) build-darwin
+else
+	$(MAKE) build-linux
+endif
+
+build-linux: ensure-ch-binaries ensure-caddy-binaries build-embedded | $(BIN_DIR)
 	go build -tags containers_image_openpgp -o $(BIN_DIR)/hypeman ./cmd/api
 
 # Build all binaries
@@ -208,10 +215,18 @@ dev-linux: ensure-ch-binaries ensure-caddy-binaries build-embedded $(AIR)
 	@rm -f ./tmp/main
 	$(AIR) -c .air.toml
 
-# Run tests (as root for network capabilities, enables caching and parallelism)
+# Run tests
 # Usage: make test                              - runs all tests
 #        make test TEST=TestCreateInstanceWithNetwork  - runs specific test
-test: ensure-ch-binaries ensure-caddy-binaries build-embedded
+test:
+ifeq ($(shell uname -s),Darwin)
+	$(MAKE) test-darwin
+else
+	$(MAKE) test-linux
+endif
+
+# Linux tests (as root for network capabilities)
+test-linux: ensure-ch-binaries ensure-caddy-binaries build-embedded
 	@VERBOSE_FLAG=""; \
 	if [ -n "$(VERBOSE)" ]; then VERBOSE_FLAG="-v"; fi; \
 	if [ -n "$(TEST)" ]; then \
@@ -219,6 +234,19 @@ test: ensure-ch-binaries ensure-caddy-binaries build-embedded
 		sudo env "PATH=$$PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" go test -tags containers_image_openpgp -run=$(TEST) $$VERBOSE_FLAG -timeout=180s ./...; \
 	else \
 		sudo env "PATH=$$PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" go test -tags containers_image_openpgp $$VERBOSE_FLAG -timeout=180s ./...; \
+	fi
+
+# macOS tests (no sudo needed, adds e2fsprogs to PATH)
+test-darwin: build-embedded sign-vz-shim
+	@VERBOSE_FLAG=""; \
+	if [ -n "$(VERBOSE)" ]; then VERBOSE_FLAG="-v"; fi; \
+	if [ -n "$(TEST)" ]; then \
+		echo "Running specific test: $(TEST)"; \
+		PATH="/opt/homebrew/opt/e2fsprogs/sbin:$(PATH)" \
+		go test -tags containers_image_openpgp -run=$(TEST) $$VERBOSE_FLAG -timeout=180s ./...; \
+	else \
+		PATH="/opt/homebrew/opt/e2fsprogs/sbin:$(PATH)" \
+		go test -tags containers_image_openpgp $$VERBOSE_FLAG -timeout=180s ./...; \
 	fi
 
 # Generate JWT token for testing

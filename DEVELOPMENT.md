@@ -121,6 +121,7 @@ Hypeman can be configured using the following environment variables:
 | `DNS_PROPAGATION_TIMEOUT`  | Max time to wait for DNS propagation (e.g., `2m`)                                            | _(empty)_          |
 | `DNS_RESOLVERS`            | Comma-separated DNS resolvers for propagation checking                                       | _(empty)_          |
 | `CLOUDFLARE_API_TOKEN`     | Cloudflare API token (when using `cloudflare` provider)                                      | _(empty)_          |
+| `DOCKER_SOCKET`            | Path to Docker socket (for builder image builds)                                             | `/var/run/docker.sock` |
 
 **Important: Subnet Configuration**
 
@@ -256,13 +257,19 @@ The server will start on port 8080 (configurable via `PORT` environment variable
 
 ### Setting Up the Builder Image (for Dockerfile builds)
 
-For `hypeman build` to work, you need the builder image available in Hypeman's internal registry. This is a one-time setup:
+The builder image is required for `hypeman build` to work. There are two modes:
+
+**Automatic mode (default):** When `BUILDER_IMAGE` is unset or empty, the server will automatically build and push the builder image on startup using Docker. This is the easiest way to get started — just ensure Docker is available and run `make dev`. If a build is requested while the builder image is still being prepared, the server returns a clear error asking you to retry shortly.
+
+On macOS with Colima, set the Docker socket path:
+```bash
+DOCKER_SOCKET=$HOME/.colima/default/docker.sock
+```
+
+**Manual mode:** When `BUILDER_IMAGE` is explicitly set, the server assumes you manage your own image. Follow these steps:
 
 1. **Build the builder image** (requires Docker):
    ```bash
-   # On macOS with Colima, you may need:
-   # export DOCKER_HOST="unix://$HOME/.colima/default/docker.sock"
-   
    docker build -t hypeman/builder:latest -f lib/builds/images/generic/Dockerfile .
    ```
 
@@ -277,7 +284,7 @@ For `hypeman build` to work, you need the builder image available in Hypeman's i
    export JWT_SECRET="dev-secret-for-local-testing"
    export HYPEMAN_API_KEY=$(go run ./cmd/gen-jwt -registry-push "hypeman/builder")
    export HYPEMAN_BASE_URL="http://localhost:8080"
-   
+
    # Push using hypeman-cli
    hypeman push hypeman/builder:latest
    ```

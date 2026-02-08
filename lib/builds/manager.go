@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nrednav/cuid2"
@@ -77,6 +78,9 @@ type Config struct {
 	// RegistrySecret is the secret used to sign registry access tokens
 	// This should be the same secret used by the registry middleware
 	RegistrySecret string
+
+	// DockerSocket is the path to the Docker socket for building the builder image
+	DockerSocket string
 }
 
 // DefaultConfig returns the default build manager configuration
@@ -113,6 +117,7 @@ type manager struct {
 	logger          *slog.Logger
 	metrics         *Metrics
 	createMu        sync.Mutex
+	builderReady    atomic.Bool
 
 	// Status subscription system for SSE streaming
 	statusSubscribers map[string][]chan BuildEvent
@@ -164,11 +169,70 @@ func NewManager(
 
 // Start starts the build manager's background services
 func (m *manager) Start(ctx context.Context) error {
-	// Note: We no longer use a global vsock listener.
-	// Instead, we connect TO each builder VM's vsock socket directly.
-	// This follows the Cloud Hypervisor vsock pattern where host initiates connections.
+	go m.ensureBuilderImage(ctx)
 	m.logger.Info("build manager started")
 	return nil
+}
+
+// ensureBuilderImage ensures the builder image is available in the registry.
+// If BUILDER_IMAGE is unset/empty, it builds from the embedded Dockerfile.
+// If BUILDER_IMAGE is set, it checks if the image exists.
+// This runs in a background goroutine during startup.
+func (m *manager) ensureBuilderImage(ctx context.Context) {
+	defer m.builderReady.Store(true)
+
+	builderImage := m.config.BuilderImage
+	if builderImage == "" {
+		builderImage = "hypeman/builder:latest"
+	}
+
+	// Check if image already exists in the registry
+	registryHost := stripRegistryScheme(m.config.RegistryURL)
+	imageRef := fmt.Sprintf("%s/%s", registryHost, builderImage)
+	if _, err := m.imageManager.GetImage(ctx, imageRef); err == nil {
+		m.logger.Info("builder image already available", "image", imageRef)
+		return
+	}
+
+	// Try to build the image using Docker
+	dockerSocket := m.config.DockerSocket
+	if dockerSocket == "" {
+		dockerSocket = "/var/run/docker.sock"
+	}
+
+	// Check if Docker socket exists
+	if _, err := os.Stat(dockerSocket); err != nil {
+		m.logger.Warn("Docker socket not found, skipping builder image build",
+			"socket", dockerSocket,
+			"error", err)
+		return
+	}
+
+	m.logger.Info("building builder image", "image", builderImage)
+
+	// Find the Dockerfile - look relative to the binary or in common locations
+	dockerfilePath := "lib/builds/images/generic/Dockerfile"
+	if _, err := os.Stat(dockerfilePath); err != nil {
+		// Try relative to executable
+		if execPath, err := os.Executable(); err == nil {
+			altPath := filepath.Join(filepath.Dir(execPath), "..", dockerfilePath)
+			if _, err := os.Stat(altPath); err == nil {
+				dockerfilePath = altPath
+			}
+		}
+	}
+
+	cmd := exec.CommandContext(ctx, "docker", "build", "-t", builderImage, "-f", dockerfilePath, ".")
+	cmd.Env = append(os.Environ(), fmt.Sprintf("DOCKER_HOST=unix://%s", dockerSocket))
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		m.logger.Warn("failed to build builder image",
+			"error", err,
+			"output", string(output))
+		return
+	}
+
+	m.logger.Info("builder image built successfully", "image", builderImage)
 }
 
 // CreateBuild starts a new build job
@@ -384,6 +448,10 @@ func (m *manager) runBuild(ctx context.Context, id string, req CreateBuildReques
 
 // executeBuild runs the build in a builder VM
 func (m *manager) executeBuild(ctx context.Context, id string, req CreateBuildRequest, policy *BuildPolicy) (*BuildResult, error) {
+	if !m.builderReady.Load() {
+		return nil, fmt.Errorf("builder image is being prepared, please retry shortly")
+	}
+
 	// Create a volume with the source data
 	sourceVolID := fmt.Sprintf("build-source-%s", id)
 	sourcePath := m.paths.BuildSourceDir(id) + "/source.tar.gz"
