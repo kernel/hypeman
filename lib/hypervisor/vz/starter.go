@@ -175,14 +175,6 @@ func (s *Starter) findShimBinary() (string, error) {
 		if _, err := os.Stat(shimPath); err == nil {
 			return shimPath, nil
 		}
-		// Also check parent's tmp dir (for air hot-reload development)
-		// When running ./tmp/main, check ./tmp/vz-shim
-		if filepath.Base(exeDir) == "tmp" {
-			shimPath = filepath.Join(exeDir, "vz-shim")
-			if _, err := os.Stat(shimPath); err == nil {
-				return shimPath, nil
-			}
-		}
 	}
 
 	// Check in PATH
