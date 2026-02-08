@@ -49,8 +49,7 @@ TIMEOUT=60
 ELAPSED=0
 
 while [ $ELAPSED -lt $TIMEOUT ]; do
-    if curl -sf "http://localhost:${PORT}/v1/instances" -H "Authorization: Bearer test" >/dev/null 2>&1 || \
-       curl -sf "http://localhost:${PORT}/" >/dev/null 2>&1; then
+    if curl -sf "http://localhost:${PORT}/health" >/dev/null 2>&1; then
         pass "Service is responding on port ${PORT}"
         break
     fi
