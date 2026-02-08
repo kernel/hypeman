@@ -300,7 +300,8 @@ func (s *ShimServer) handleVsockConnection(conn net.Conn) {
 		done <- struct{}{}
 	}()
 
-	// Wait for one direction to close
+	// Wait for both directions to close
+	<-done
 	<-done
 }
 
