@@ -627,7 +627,7 @@ CLI_REPO="kernel/hypeman-cli"
 
 if [ -z "$CLI_VERSION" ] || [ "$CLI_VERSION" == "latest" ]; then
     info "Fetching latest CLI version with available artifacts..."
-    CLI_VERSION=$(find_release_with_artifact "$CLI_REPO" "hypeman" "$OS" "$ARCH")
+    CLI_VERSION=$(find_release_with_artifact "$CLI_REPO" "hypeman" "$OS" "$ARCH" || true)
     if [ -z "$CLI_VERSION" ]; then
         warn "Failed to find a CLI release with artifacts for ${OS}/${ARCH}, skipping CLI installation"
     fi
