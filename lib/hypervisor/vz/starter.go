@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
@@ -134,10 +135,15 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 	}
 
 	// Spawn the shim process
-	cmd := exec.CommandContext(ctx, shimPath, "-config", string(configJSON))
+	// Use Command (not CommandContext) so process survives parent context cancellation
+	cmd := exec.Command(shimPath, "-config", string(configJSON))
 	cmd.Stdout = nil // Shim logs to file
 	cmd.Stderr = nil
 	cmd.Stdin = nil
+	// Detach from parent process group
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setpgid: true,
+	}
 
 	if err := cmd.Start(); err != nil {
 		return 0, nil, fmt.Errorf("start vz-shim: %w", err)
@@ -330,10 +336,15 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 	}
 
 	// Spawn the shim process
-	cmd := exec.CommandContext(ctx, shimPath, "-config", string(configJSON))
+	// Use Command (not CommandContext) so process survives parent context cancellation
+	cmd := exec.Command(shimPath, "-config", string(configJSON))
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 	cmd.Stdin = nil
+	// Detach from parent process group
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setpgid: true,
+	}
 
 	if err := cmd.Start(); err != nil {
 		return 0, nil, fmt.Errorf("start vz-shim: %w", err)

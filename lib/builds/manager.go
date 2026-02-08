@@ -608,62 +608,6 @@ func (m *manager) waitForResult(ctx context.Context, inst *instances.Instance) (
 	}
 }
 
-// dialBuilderVsock connects to a builder VM's vsock socket using Cloud Hypervisor's handshake
-func (m *manager) dialBuilderVsock(vsockSocketPath string) (net.Conn, error) {
-	// Connect to the Cloud Hypervisor vsock Unix socket
-	conn, err := net.DialTimeout("unix", vsockSocketPath, 5*time.Second)
-	if err != nil {
-		return nil, fmt.Errorf("dial vsock socket %s: %w", vsockSocketPath, err)
-	}
-
-	// Set deadline for handshake
-	if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("set handshake deadline: %w", err)
-	}
-
-	// Perform Cloud Hypervisor vsock handshake
-	// Format: "CONNECT <port>\n" -> "OK <port>\n"
-	handshakeCmd := fmt.Sprintf("CONNECT %d\n", BuildAgentVsockPort)
-	if _, err := conn.Write([]byte(handshakeCmd)); err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("send vsock handshake: %w", err)
-	}
-
-	// Read handshake response
-	reader := bufio.NewReader(conn)
-	response, err := reader.ReadString('\n')
-	if err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("read vsock handshake response: %w", err)
-	}
-
-	// Clear deadline after successful handshake
-	if err := conn.SetDeadline(time.Time{}); err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("clear deadline: %w", err)
-	}
-
-	response = strings.TrimSpace(response)
-	if !strings.HasPrefix(response, "OK ") {
-		conn.Close()
-		return nil, fmt.Errorf("vsock handshake failed: %s", response)
-	}
-
-	return &bufferedConn{Conn: conn, reader: reader}, nil
-}
-
-// bufferedConn wraps a net.Conn with a bufio.Reader to ensure any buffered
-// data from the handshake is properly drained before reading from the connection
-type bufferedConn struct {
-	net.Conn
-	reader *bufio.Reader
-}
-
-func (c *bufferedConn) Read(p []byte) (int, error) {
-	return c.reader.Read(p)
-}
-
 // updateStatus updates the build status
 func (m *manager) updateStatus(id string, status string, err error) {
 	meta, readErr := readMetadata(m.paths, id)
