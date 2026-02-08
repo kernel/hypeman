@@ -393,7 +393,6 @@ func findImageRootfs(imagesDir, imageName string) (string, error) {
 // containsImageName checks if a path contains the image name components.
 func containsImageName(path, imageName string) bool {
 	// Extract just the image name without tag (e.g., "alpine" from "alpine:3.20")
-	parts := filepath.SplitList(imageName)
 	name := imageName
 	if idx := len(name) - 1; idx >= 0 {
 		for i := len(name) - 1; i >= 0; i-- {
@@ -403,7 +402,6 @@ func containsImageName(path, imageName string) bool {
 			}
 		}
 	}
-	_ = parts
 	return filepath.Base(filepath.Dir(filepath.Dir(path))) == name ||
 		filepath.Base(filepath.Dir(path)) == name
 }
