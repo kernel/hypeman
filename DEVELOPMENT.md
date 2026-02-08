@@ -254,6 +254,43 @@ make dev
 
 The server will start on port 8080 (configurable via `PORT` environment variable).
 
+### Setting Up the Builder Image (for Dockerfile builds)
+
+For `hypeman build` to work, you need the builder image available in Hypeman's internal registry. This is a one-time setup:
+
+1. **Build the builder image** (requires Docker):
+   ```bash
+   # On macOS with Colima, you may need:
+   # export DOCKER_HOST="unix://$HOME/.colima/default/docker.sock"
+   
+   docker build -t hypeman/builder:latest -f lib/builds/images/generic/Dockerfile .
+   ```
+
+2. **Start the Hypeman server** (if not already running):
+   ```bash
+   make dev
+   ```
+
+3. **Push to Hypeman's internal registry**:
+   ```bash
+   # Generate a token with registry push permissions
+   export JWT_SECRET="dev-secret-for-local-testing"
+   export HYPEMAN_API_KEY=$(go run ./cmd/gen-jwt -registry-push "hypeman/builder")
+   export HYPEMAN_BASE_URL="http://localhost:8080"
+   
+   # Push using hypeman-cli
+   hypeman push hypeman/builder:latest
+   ```
+
+4. **Configure the builder image** in `.env`:
+   ```bash
+   BUILDER_IMAGE=localhost:8080/hypeman/builder:latest
+   ```
+
+5. **Restart the server** to pick up the new config.
+
+Now `hypeman build <directory>` will work for Dockerfile-based builds.
+
 ### Local OpenTelemetry (optional)
 
 To collect traces and metrics locally, run the Grafana LGTM stack (Loki, Grafana, Tempo, Mimir):
