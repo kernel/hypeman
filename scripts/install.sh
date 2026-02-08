@@ -442,10 +442,13 @@ if [ ! -f "$CONFIG_FILE" ]; then
             fi
         fi
 
+        # Expand ~ to $HOME (launchd doesn't do shell expansion)
+        sed -i '' "s|~/|${HOME}/|g" "${TMP_DIR}/config"
+
         # Generate random JWT secret
         info "Generating JWT secret..."
         JWT_SECRET=$(openssl rand -hex 32)
-        sed -i '' "s/^JWT_SECRET=$/JWT_SECRET=${JWT_SECRET}/" "${TMP_DIR}/config"
+        sed -i '' "s/^JWT_SECRET=.*/JWT_SECRET=${JWT_SECRET}/" "${TMP_DIR}/config"
 
         # Auto-detect Docker socket
         DOCKER_SOCKET=""
