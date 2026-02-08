@@ -133,10 +133,12 @@ func (c *Client) GetVMInfo(ctx context.Context) (*hypervisor.VMInfo, error) {
 		state = hypervisor.StateRunning
 	case "Paused":
 		state = hypervisor.StatePaused
-	case "Shutdown", "Stopped":
+	case "Starting":
+		state = hypervisor.StateCreated
+	case "Shutdown", "Stopped", "Error":
 		state = hypervisor.StateShutdown
 	default:
-		state = hypervisor.StateRunning
+		state = hypervisor.StateShutdown
 	}
 
 	return &hypervisor.VMInfo{State: state}, nil

@@ -132,26 +132,35 @@ func configureSerialConsole(vmConfig *vz.VirtualMachineConfiguration, logPath st
 }
 
 func configureNetwork(vmConfig *vz.VirtualMachineConfiguration, networks []NetworkConfig) error {
+	var devices []*vz.VirtioNetworkDeviceConfiguration
 	if len(networks) == 0 {
-		return addNATNetwork(vmConfig, "")
-	}
-	for _, netConfig := range networks {
-		if err := addNATNetwork(vmConfig, netConfig.MAC); err != nil {
+		dev, err := createNATNetworkDevice("")
+		if err != nil {
 			return err
 		}
+		devices = append(devices, dev)
+	} else {
+		for _, netConfig := range networks {
+			dev, err := createNATNetworkDevice(netConfig.MAC)
+			if err != nil {
+				return err
+			}
+			devices = append(devices, dev)
+		}
 	}
+	vmConfig.SetNetworkDevicesVirtualMachineConfiguration(devices)
 	return nil
 }
 
-func addNATNetwork(vmConfig *vz.VirtualMachineConfiguration, macAddr string) error {
+func createNATNetworkDevice(macAddr string) (*vz.VirtioNetworkDeviceConfiguration, error) {
 	natAttachment, err := vz.NewNATNetworkDeviceAttachment()
 	if err != nil {
-		return fmt.Errorf("create NAT attachment: %w", err)
+		return nil, fmt.Errorf("create NAT attachment: %w", err)
 	}
 
 	networkConfig, err := vz.NewVirtioNetworkDeviceConfiguration(natAttachment)
 	if err != nil {
-		return fmt.Errorf("create network config: %w", err)
+		return nil, fmt.Errorf("create network config: %w", err)
 	}
 
 	var mac *vz.MACAddress
@@ -163,7 +172,7 @@ func addNATNetwork(vmConfig *vz.VirtualMachineConfiguration, macAddr string) err
 				slog.Warn("failed to create MAC from parsed address, generating random", "mac", macAddr, "error", err)
 				mac, err = vz.NewRandomLocallyAdministeredMACAddress()
 				if err != nil {
-					return fmt.Errorf("generate MAC address: %w", err)
+					return nil, fmt.Errorf("generate MAC address: %w", err)
 				}
 			} else {
 				slog.Info("using specified MAC address", "mac", macAddr)
@@ -172,23 +181,19 @@ func addNATNetwork(vmConfig *vz.VirtualMachineConfiguration, macAddr string) err
 			slog.Warn("failed to parse MAC address, generating random", "mac", macAddr, "error", parseErr)
 			mac, err = vz.NewRandomLocallyAdministeredMACAddress()
 			if err != nil {
-				return fmt.Errorf("generate MAC address: %w", err)
+				return nil, fmt.Errorf("generate MAC address: %w", err)
 			}
 		}
 	} else {
 		mac, err = vz.NewRandomLocallyAdministeredMACAddress()
 		if err != nil {
-			return fmt.Errorf("generate MAC address: %w", err)
+			return nil, fmt.Errorf("generate MAC address: %w", err)
 		}
 		slog.Info("generated random MAC address", "mac", mac.String())
 	}
 	networkConfig.SetMACAddress(mac)
 
-	vmConfig.SetNetworkDevicesVirtualMachineConfiguration([]*vz.VirtioNetworkDeviceConfiguration{
-		networkConfig,
-	})
-
-	return nil
+	return networkConfig, nil
 }
 
 func configureStorage(vmConfig *vz.VirtualMachineConfiguration, disks []DiskConfig) error {

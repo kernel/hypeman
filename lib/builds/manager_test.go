@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/instances"
 	"github.com/kernel/hypeman/lib/paths"
@@ -128,6 +129,10 @@ func (m *mockInstanceManager) ListRunningInstancesInfo(ctx context.Context) ([]r
 
 func (m *mockInstanceManager) SetResourceValidator(v instances.ResourceValidator) {
 	// no-op for mock
+}
+
+func (m *mockInstanceManager) GetVsockDialer(ctx context.Context, instanceID string) (hypervisor.VsockDialer, error) {
+	return nil, nil
 }
 
 // mockVolumeManager implements volumes.Manager for testing

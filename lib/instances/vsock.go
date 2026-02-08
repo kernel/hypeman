@@ -1,5 +1,3 @@
-//go:build darwin
-
 package instances
 
 import (
@@ -9,7 +7,6 @@ import (
 )
 
 // GetVsockDialer returns a VsockDialer for the specified instance.
-// On macOS, all hypervisors (including vz via shim) use socket-based vsock.
 func (m *manager) GetVsockDialer(ctx context.Context, instanceID string) (hypervisor.VsockDialer, error) {
 	inst, err := m.GetInstance(ctx, instanceID)
 	if err != nil {

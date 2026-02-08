@@ -161,7 +161,7 @@ For all available commands, run `hypeman --help`.
 
 ## macOS Support
 
-Hypeman supports macOS using Apple's Virtualization.framework through the `vz` hypervisor. This provides native virtualization on Apple Silicon and Intel Macs.
+Hypeman supports macOS using Apple's Virtualization.framework through the `vz` hypervisor. This provides native virtualization on Apple Silicon Macs (Intel Macs are not supported).
 
 ### Requirements
 

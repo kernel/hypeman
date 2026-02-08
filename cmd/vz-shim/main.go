@@ -119,7 +119,8 @@ func main() {
 	// Create the shim server
 	server := NewShimServer(vm, vmConfig)
 
-	// Start control socket listener
+	// Start control socket listener (remove stale socket from previous run)
+	os.Remove(config.ControlSocket)
 	controlListener, err := net.Listen("unix", config.ControlSocket)
 	if err != nil {
 		slog.Error("failed to listen on control socket", "error", err, "path", config.ControlSocket)
@@ -127,7 +128,8 @@ func main() {
 	}
 	defer controlListener.Close()
 
-	// Start vsock proxy listener
+	// Start vsock proxy listener (remove stale socket from previous run)
+	os.Remove(config.VsockSocket)
 	vsockListener, err := net.Listen("unix", config.VsockSocket)
 	if err != nil {
 		slog.Error("failed to listen on vsock socket", "error", err, "path", config.VsockSocket)
