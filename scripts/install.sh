@@ -541,7 +541,9 @@ if [ "$OS" = "darwin" ]; then
         <string>${INSTALL_DIR}/${BINARY_NAME}</string>
     </array>
     <key>EnvironmentVariables</key>
-    <dict>${ENV_DICT}
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>${ENV_DICT}
     </dict>
     <key>KeepAlive</key>
     <true/>
