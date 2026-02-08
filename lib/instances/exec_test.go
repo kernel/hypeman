@@ -36,7 +36,7 @@ func waitForExecAgent(ctx context.Context, mgr *manager, instanceID string, time
 // This validates that the exec infrastructure handles concurrent access correctly.
 func TestExecConcurrent(t *testing.T) {
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
-		t.Fatal("/dev/kvm not available")
+		t.Skip("/dev/kvm not available, skipping on this platform")
 	}
 
 	if testing.Short() {
