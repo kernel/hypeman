@@ -237,12 +237,14 @@ test-linux: ensure-ch-binaries ensure-caddy-binaries build-embedded
 	fi
 
 # macOS tests (no sudo needed, adds e2fsprogs to PATH)
-# Uses 'go list' to discover only packages that compile on Darwin,
-# skipping Linux-only packages (lib/network, lib/devices, lib/vmm, etc.)
+# Uses 'go list' to discover compilable packages, then filters out packages
+# whose test files reference Linux-only symbols (network, devices, system/init).
+DARWIN_EXCLUDE_PKGS := /lib/network|/lib/devices|/lib/system/init
 test-darwin: build-embedded sign-vz-shim
 	@VERBOSE_FLAG=""; \
 	if [ -n "$(VERBOSE)" ]; then VERBOSE_FLAG="-v"; fi; \
-	PKGS=$$(PATH="/opt/homebrew/opt/e2fsprogs/sbin:$(PATH)" go list -tags containers_image_openpgp ./... 2>/dev/null); \
+	PKGS=$$(PATH="/opt/homebrew/opt/e2fsprogs/sbin:$(PATH)" \
+		go list -tags containers_image_openpgp ./... 2>/dev/null | grep -Ev '$(DARWIN_EXCLUDE_PKGS)'); \
 	if [ -n "$(TEST)" ]; then \
 		echo "Running specific test: $(TEST)"; \
 		PATH="/opt/homebrew/opt/e2fsprogs/sbin:$(PATH)" \
