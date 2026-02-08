@@ -176,7 +176,7 @@ components:
             $ref: "#/components/schemas/VolumeMount"
         hypervisor:
           type: string
-          enum: [cloud-hypervisor, qemu]
+          enum: [cloud-hypervisor, qemu, vz]
           description: Hypervisor to use for this instance. Defaults to server configuration.
           example: cloud-hypervisor
         skip_kernel_headers:
@@ -306,7 +306,7 @@ components:
           example: false
         hypervisor:
           type: string
-          enum: [cloud-hypervisor, qemu]
+          enum: [cloud-hypervisor, qemu, vz]
           description: Hypervisor running this instance
           example: cloud-hypervisor
     
