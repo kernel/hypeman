@@ -15,6 +15,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/go-containerregistry/pkg/v1/empty"
+	"github.com/google/go-containerregistry/pkg/v1/layout"
+	"github.com/google/go-containerregistry/pkg/v1/tarball"
 	"github.com/nrednav/cuid2"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/instances"
@@ -232,7 +235,103 @@ func (m *manager) ensureBuilderImage(ctx context.Context) {
 		return
 	}
 
-	m.logger.Info("builder image built successfully", "image", builderImage)
+	m.logger.Info("builder image built successfully, pushing to registry", "image", builderImage)
+
+	// Export image from Docker to a temporary tarball
+	tmpFile, err := os.CreateTemp("", "hypeman-builder-*.tar")
+	if err != nil {
+		m.logger.Warn("failed to create temp file for builder image export", "error", err)
+		return
+	}
+	tmpPath := tmpFile.Name()
+	tmpFile.Close()
+	defer os.Remove(tmpPath)
+
+	saveCmd := exec.CommandContext(ctx, "docker", "save", "-o", tmpPath, builderImage)
+	saveCmd.Env = append(os.Environ(), fmt.Sprintf("DOCKER_HOST=unix://%s", dockerSocket))
+	if saveOutput, saveErr := saveCmd.CombinedOutput(); saveErr != nil {
+		m.logger.Warn("failed to export builder image from Docker",
+			"error", saveErr,
+			"output", string(saveOutput))
+		return
+	}
+
+	// Load image from Docker save tarball
+	img, err := tarball.ImageFromPath(tmpPath, nil)
+	if err != nil {
+		m.logger.Warn("failed to load builder image from tarball", "error", err)
+		return
+	}
+
+	// Get image digest
+	digestHash, err := img.Digest()
+	if err != nil {
+		m.logger.Warn("failed to get builder image digest", "error", err)
+		return
+	}
+
+	// Write to OCI layout cache so the image manager can find it
+	cacheDir := m.paths.SystemOCICache()
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		m.logger.Warn("failed to create OCI cache directory", "error", err)
+		return
+	}
+
+	ociLayout, err := layout.FromPath(cacheDir)
+	if err != nil {
+		ociLayout, err = layout.Write(cacheDir, empty.Index)
+		if err != nil {
+			m.logger.Warn("failed to create OCI layout", "error", err)
+			return
+		}
+	}
+
+	if err := ociLayout.AppendImage(img, layout.WithAnnotations(map[string]string{
+		"org.opencontainers.image.ref.name": digestHash.Hex,
+	})); err != nil {
+		m.logger.Warn("failed to write builder image to OCI layout", "error", err)
+		return
+	}
+
+	// Import into image manager to trigger conversion to disk format
+	parts := strings.SplitN(builderImage, ":", 2)
+	imageName := parts[0]
+	imageTag := "latest"
+	if len(parts) == 2 {
+		imageTag = parts[1]
+	}
+	repo := fmt.Sprintf("%s/%s", registryHost, imageName)
+
+	if _, err := m.imageManager.ImportLocalImage(ctx, repo, imageTag, digestHash.String()); err != nil {
+		m.logger.Warn("failed to import builder image", "error", err)
+		return
+	}
+
+	m.logger.Info("builder image imported, waiting for conversion", "image", imageRef, "digest", digestHash.String())
+
+	// Wait for image conversion to complete before signaling ready
+	for attempt := 0; attempt < 120; attempt++ {
+		select {
+		case <-ctx.Done():
+			m.logger.Warn("context cancelled while waiting for builder image conversion")
+			return
+		default:
+		}
+
+		if imgInfo, err := m.imageManager.GetImage(ctx, imageRef); err == nil {
+			switch imgInfo.Status {
+			case images.StatusReady:
+				m.logger.Info("builder image ready", "image", imageRef)
+				return
+			case images.StatusFailed:
+				m.logger.Warn("builder image conversion failed", "image", imageRef)
+				return
+			}
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	m.logger.Warn("timed out waiting for builder image conversion", "image", imageRef)
 }
 
 // CreateBuild starts a new build job

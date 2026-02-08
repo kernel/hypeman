@@ -31,7 +31,7 @@ func (m *manager) deriveState(ctx context.Context, stored *StoredMetadata) state
 		return stateResult{State: StateStopped}
 	}
 
-	// 3. Socket exists - query hypervisor for actual state
+	// Socket exists - query hypervisor for actual state
 	hv, err := m.getHypervisor(stored.SocketPath, stored.HypervisorType)
 	if err != nil {
 		// Failed to create client - this is unexpected if socket exists
