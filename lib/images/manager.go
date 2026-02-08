@@ -113,18 +113,26 @@ func (m *manager) CreateImage(ctx context.Context, req CreateImageRequest) (*Ima
 
 	// Check if we already have this digest (deduplication)
 	if meta, err := readMetadata(m.paths, ref.Repository(), ref.DigestHex()); err == nil {
-		// We have this digest already
-		if meta.Status == StatusReady && ref.Tag() != "" {
-			// Update tag symlink to point to current digest
-			// (handles case where tag moved to new digest)
-			createTagSymlink(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex())
+		// Don't cache failed builds - allow retry
+		if meta.Status == StatusFailed {
+			// Clean up the failed build directory so we can retry
+			digestDir := filepath.Join(m.paths.ImagesDir(), ref.Repository(), ref.DigestHex())
+			os.RemoveAll(digestDir)
+			// Fall through to re-queue the build
+		} else {
+			// We have this digest already (ready, pending, pulling, or converting)
+			if meta.Status == StatusReady && ref.Tag() != "" {
+				// Update tag symlink to point to current digest
+				// (handles case where tag moved to new digest)
+				createTagSymlink(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex())
+			}
+			img := meta.toImage()
+			// Add queue position if pending
+			if meta.Status == StatusPending {
+				img.QueuePosition = m.queue.GetPosition(meta.Digest)
+			}
+			return img, nil
 		}
-		img := meta.toImage()
-		// Add queue position if pending
-		if meta.Status == StatusPending {
-			img.QueuePosition = m.queue.GetPosition(meta.Digest)
-		}
-		return img, nil
 	}
 
 	// Don't have this digest yet, queue the build
@@ -156,15 +164,22 @@ func (m *manager) ImportLocalImage(ctx context.Context, repo, reference, digest 
 
 	// Check if we already have this digest (deduplication)
 	if meta, err := readMetadata(m.paths, ref.Repository(), ref.DigestHex()); err == nil {
-		// We have this digest already
-		if meta.Status == StatusReady && ref.Tag() != "" {
-			createTagSymlink(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex())
+		// Don't cache failed builds - allow retry
+		if meta.Status == StatusFailed {
+			digestDir := filepath.Join(m.paths.ImagesDir(), ref.Repository(), ref.DigestHex())
+			os.RemoveAll(digestDir)
+			// Fall through to re-queue the build
+		} else {
+			// We have this digest already
+			if meta.Status == StatusReady && ref.Tag() != "" {
+				createTagSymlink(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex())
+			}
+			img := meta.toImage()
+			if meta.Status == StatusPending {
+				img.QueuePosition = m.queue.GetPosition(meta.Digest)
+			}
+			return img, nil
 		}
-		img := meta.toImage()
-		if meta.Status == StatusPending {
-			img.QueuePosition = m.queue.GetPosition(meta.Digest)
-		}
-		return img, nil
 	}
 
 	// Don't have this digest yet, queue the build

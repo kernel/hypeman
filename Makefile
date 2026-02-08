@@ -308,7 +308,7 @@ sign-darwin-identity: build-darwin
 # macOS development mode with hot reload (uses vz, no sudo needed)
 dev-darwin: build-embedded $(AIR)
 	@rm -f ./tmp/main
-	$(AIR) -c .air.darwin.toml
+	PATH="/opt/homebrew/opt/e2fsprogs/sbin:$(PATH)" $(AIR) -c .air.darwin.toml
 
 # Run without hot reload (for testing)
 run:
@@ -322,7 +322,7 @@ run-linux: ensure-ch-binaries ensure-caddy-binaries build-embedded build
 	./bin/hypeman
 
 run-darwin: sign-darwin
-	./bin/hypeman
+	PATH="/opt/homebrew/opt/e2fsprogs/sbin:$(PATH)" ./bin/hypeman
 
 # Quick test of vz package compilation
 .PHONY: test-vz-compile
