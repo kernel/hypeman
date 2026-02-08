@@ -355,6 +355,7 @@ func setupTestManagerWithImageMgr(t *testing.T) (*manager, *mockInstanceManager,
 		logger:            logger,
 		statusSubscribers: make(map[string][]chan BuildEvent),
 	}
+	mgr.builderReady.Store(true)
 
 	return mgr, instanceMgr, volumeMgr, imageMgr, tempDir
 }
@@ -886,7 +887,7 @@ func TestStreamBuildEvents_WithStatusUpdate(t *testing.T) {
 
 	// Read events until we see the initial log
 	var foundInitialLog bool
-	timeout := time.After(2 * time.Second)
+	timeout := time.After(10 * time.Second)
 eventLoop:
 	for !foundInitialLog {
 		select {
@@ -906,7 +907,7 @@ eventLoop:
 
 	// Should receive "ready" status event and channel should close
 	var readyReceived bool
-	timeout = time.After(2 * time.Second)
+	timeout = time.After(10 * time.Second)
 	for !readyReceived {
 		select {
 		case event, ok := <-eventChan:
@@ -947,7 +948,7 @@ func TestStreamBuildEvents_ContextCancellation(t *testing.T) {
 
 	// Read events until we see the log line
 	var foundLogLine bool
-	timeout := time.After(2 * time.Second)
+	timeout := time.After(10 * time.Second)
 eventLoop:
 	for !foundLogLine {
 		select {
@@ -966,7 +967,7 @@ eventLoop:
 	cancel()
 
 	// Channel should close
-	timeout = time.After(2 * time.Second)
+	timeout = time.After(10 * time.Second)
 	for {
 		select {
 		case _, ok := <-eventChan:

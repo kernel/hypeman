@@ -57,7 +57,7 @@ jobs:
         run: make test
 
   test-darwin:
-    runs-on: [self-hosted, macos, arm64, vz]
+    runs-on: [self-hosted, macos, arm64]
     concurrency:
       group: macos-ci
       cancel-in-progress: false
@@ -93,7 +93,7 @@ jobs:
           make clean
 
   e2e-install:
-    runs-on: [self-hosted, macos, arm64, vz]
+    runs-on: [self-hosted, macos, arm64]
     needs: test-darwin
     concurrency:
       group: macos-ci
