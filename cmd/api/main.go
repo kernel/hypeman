@@ -369,19 +369,6 @@ func run() error {
 		})
 	})
 
-	// Admin endpoints (authenticated but outside OpenAPI spec)
-	r.Route("/admin", func(r chi.Router) {
-		r.Use(middleware.RequestID)
-		r.Use(middleware.RealIP)
-		r.Use(middleware.Recoverer)
-		r.Use(mw.InjectLogger(logger))
-		r.Use(mw.AccessLogger(accessLogger))
-		r.Use(mw.JWTAuthMiddleware(cfg.JwtSecret))
-
-		// Mirror base images to local registry
-		r.Post("/mirror-base-image", api.MirrorBaseImageHandler(cfg.RegistryURL))
-	})
-
 	// Unauthenticated endpoints (outside group)
 	r.Get("/spec.yaml", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/vnd.oai.openapi")
