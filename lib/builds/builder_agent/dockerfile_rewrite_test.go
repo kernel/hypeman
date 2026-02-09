@@ -141,6 +141,40 @@ RUN echo hello`,
 			expected: `FROM ` + registryURL + `/onkernel/nodejs22-base:0.1.1
 RUN echo hello`,
 		},
+		{
+			name: "inter-stage FROM reference is not rewritten",
+			dockerfile: `FROM onkernel/nodejs22-base:0.1.1 AS builder
+RUN npm install
+FROM builder
+COPY --from=builder /app /app`,
+			expectedCount: 1,
+			expected: `FROM ` + registryURL + `/onkernel/nodejs22-base:0.1.1 AS builder
+RUN npm install
+FROM builder
+COPY --from=builder /app /app`,
+		},
+		{
+			name: "inter-stage reference case insensitive",
+			dockerfile: `FROM onkernel/nodejs22-base:0.1.1 AS Builder
+RUN npm install
+FROM builder
+COPY --from=builder /app /app`,
+			expectedCount: 1,
+			expected: `FROM ` + registryURL + `/onkernel/nodejs22-base:0.1.1 AS Builder
+RUN npm install
+FROM builder
+COPY --from=builder /app /app`,
+		},
+		{
+			name: "variable reference FROM is not rewritten",
+			dockerfile: `ARG BASE_IMAGE=onkernel/nodejs22-base:0.1.1
+FROM ${BASE_IMAGE}
+RUN echo hello`,
+			expectedCount: 0,
+			expected: `ARG BASE_IMAGE=onkernel/nodejs22-base:0.1.1
+FROM ${BASE_IMAGE}
+RUN echo hello`,
+		},
 	}
 
 	for _, tt := range tests {

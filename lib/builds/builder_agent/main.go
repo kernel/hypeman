@@ -937,6 +937,7 @@ func rewriteDockerfileFROMs(dockerfilePath, registryURL string, insecure bool, r
 
 	lines := strings.Split(string(content), "\n")
 	rewriteCount := 0
+	stageNames := make(map[string]bool)
 
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
@@ -971,6 +972,14 @@ func rewriteDockerfileFROMs(dockerfilePath, registryURL string, insecure bool, r
 
 		imageRef := parts[imageIdx]
 
+		// Record AS alias if present
+		for j := imageIdx + 1; j < len(parts)-1; j++ {
+			if strings.EqualFold(parts[j], "AS") {
+				stageNames[strings.ToLower(parts[j+1])] = true
+				break
+			}
+		}
+
 		// Skip if already referencing the local registry
 		if strings.HasPrefix(imageRef, registryURL+"/") {
 			continue
@@ -978,6 +987,16 @@ func rewriteDockerfileFROMs(dockerfilePath, registryURL string, insecure bool, r
 
 		// Skip scratch image (special case in Docker)
 		if imageRef == "scratch" {
+			continue
+		}
+
+		// Skip inter-stage references (e.g. FROM builder)
+		if stageNames[strings.ToLower(imageRef)] {
+			continue
+		}
+
+		// Skip variable references that can't be resolved
+		if strings.Contains(imageRef, "${") {
 			continue
 		}
 
