@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -20,6 +21,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -50,8 +52,8 @@ type BuildConfig struct {
 	Secrets          []SecretRef       `json:"secrets,omitempty"`
 	TimeoutSeconds   int               `json:"timeout_seconds"`
 	NetworkMode      string            `json:"network_mode"`
-	IsAdminBuild     bool              `json:"is_admin_build,omitempty"`
-	GlobalCacheKey   string            `json:"global_cache_key,omitempty"`
+	IsAdminBuild   bool   `json:"is_admin_build,omitempty"`
+	GlobalCacheKey string `json:"global_cache_key,omitempty"`
 }
 
 // SecretRef references a secret to inject during build
@@ -436,6 +438,23 @@ func runBuildProcess() {
 		log.Println("Using Dockerfile from config")
 	} else {
 		log.Println("Using Dockerfile from source")
+	}
+
+	// Rewrite Dockerfile FROM instructions to use locally mirrored base images
+	// This avoids pulling base image layers from Docker Hub during builds
+	// The function auto-detects which images exist in the local registry
+	registryHost := config.RegistryURL
+	if strings.HasPrefix(registryHost, "https://") {
+		registryHost = strings.TrimPrefix(registryHost, "https://")
+	} else if strings.HasPrefix(registryHost, "http://") {
+		registryHost = strings.TrimPrefix(registryHost, "http://")
+	}
+
+	rewriteCount, err := rewriteDockerfileFROMs(dockerfilePath, registryHost, config.RegistryInsecure, config.RegistryToken)
+	if err != nil {
+		log.Printf("Warning: failed to rewrite Dockerfile FROMs: %v", err)
+	} else if rewriteCount > 0 {
+		log.Printf("Rewrote %d FROM instruction(s) to use local base images", rewriteCount)
 	}
 
 	// Compute provenance
@@ -893,4 +912,192 @@ func getBuildkitVersion() string {
 	cmd := exec.Command("buildctl", "--version")
 	out, _ := cmd.Output()
 	return strings.TrimSpace(string(out))
+}
+
+// rewriteDockerfileFROMs rewrites FROM instructions in a Dockerfile to use locally
+// mirrored base images instead of pulling from external registries like Docker Hub.
+// This is the key mechanism for avoiding Docker Hub downloads during builds.
+//
+// For each FROM instruction, if the base image exists in the local registry, it's
+// rewritten to use the local registry reference. For example:
+//
+//	FROM onkernel/nodejs22-base:0.1.1
+//
+// becomes:
+//
+//	FROM 172.30.0.1:8080/onkernel/nodejs22-base:0.1.1
+//
+// The function handles multi-stage builds (multiple FROM instructions) and preserves
+// AS aliases and other Dockerfile syntax.
+func rewriteDockerfileFROMs(dockerfilePath, registryURL string, insecure bool, registryToken string) (int, error) {
+	content, err := os.ReadFile(dockerfilePath)
+	if err != nil {
+		return 0, fmt.Errorf("read dockerfile: %w", err)
+	}
+
+	lines := strings.Split(string(content), "\n")
+	rewriteCount := 0
+
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+
+		// Skip empty lines and comments
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+
+		// Check for FROM instruction (case insensitive)
+		upper := strings.ToUpper(trimmed)
+		if !strings.HasPrefix(upper, "FROM ") {
+			continue
+		}
+
+		// Parse the FROM instruction
+		// Formats: FROM image, FROM image AS name, FROM image:tag, FROM image:tag AS name
+		// Also: FROM --platform=xxx image ...
+		parts := strings.Fields(trimmed)
+		if len(parts) < 2 {
+			continue
+		}
+
+		// Find the image reference (skip FROM and any flags like --platform)
+		imageIdx := 1
+		for imageIdx < len(parts) && strings.HasPrefix(parts[imageIdx], "--") {
+			imageIdx++
+		}
+		if imageIdx >= len(parts) {
+			continue
+		}
+
+		imageRef := parts[imageIdx]
+
+		// Skip if already referencing the local registry
+		if strings.HasPrefix(imageRef, registryURL+"/") {
+			continue
+		}
+
+		// Skip scratch image (special case in Docker)
+		if imageRef == "scratch" {
+			continue
+		}
+
+		// Normalize the image reference
+		// Docker Hub images can be referenced as:
+		// - "nginx" (library image)
+		// - "nginx:1.21"
+		// - "library/nginx:1.21"
+		// - "docker.io/library/nginx:1.21"
+		// - "onkernel/nodejs22-base:0.1.1"
+		// - "docker.io/onkernel/nodejs22-base:0.1.1"
+		normalizedRef := normalizeImageRef(imageRef)
+
+		// Check if the image exists in the local registry
+		if !checkImageExistsInRegistry(registryURL, normalizedRef, insecure, registryToken) {
+			log.Printf("Base image not found locally, will pull from upstream: %s", imageRef)
+			continue
+		}
+
+		// Build the new image reference with the local registry
+		newImageRef := fmt.Sprintf("%s/%s", registryURL, normalizedRef)
+
+		// Reconstruct the FROM line with the new image reference
+		parts[imageIdx] = newImageRef
+		newLine := strings.Join(parts, " ")
+
+		// Preserve original indentation
+		indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+		lines[i] = indent + newLine
+
+		log.Printf("Rewriting FROM: %s -> %s", imageRef, newImageRef)
+		rewriteCount++
+	}
+
+	if rewriteCount == 0 {
+		return 0, nil
+	}
+
+	// Write the modified Dockerfile back
+	newContent := strings.Join(lines, "\n")
+	if err := os.WriteFile(dockerfilePath, []byte(newContent), 0644); err != nil {
+		return 0, fmt.Errorf("write dockerfile: %w", err)
+	}
+
+	return rewriteCount, nil
+}
+
+// checkImageExistsInRegistry checks if an image exists in the local registry
+// by making a HEAD request to the manifest endpoint.
+func checkImageExistsInRegistry(registryURL, imageRef string, insecure bool, registryToken string) bool {
+	// Parse the image reference to extract repo and tag
+	repo := imageRef
+	tag := "latest"
+
+	// Handle digest references (repo@sha256:...)
+	if strings.Contains(imageRef, "@") {
+		parts := strings.SplitN(imageRef, "@", 2)
+		repo = parts[0]
+		tag = parts[1] // This will be the full digest like sha256:abc123
+	} else if strings.Contains(imageRef, ":") {
+		// Handle tag references (repo:tag)
+		lastColon := strings.LastIndex(imageRef, ":")
+		repo = imageRef[:lastColon]
+		tag = imageRef[lastColon+1:]
+	}
+
+	// Build the manifest URL
+	scheme := "https"
+	if insecure {
+		scheme = "http"
+	}
+	url := fmt.Sprintf("%s://%s/v2/%s/manifests/%s", scheme, registryURL, repo, tag)
+
+	// Create HTTP client with appropriate TLS settings
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+	}
+	if insecure {
+		client.Transport = &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		}
+	}
+
+	// Make HEAD request to check if manifest exists
+	req, err := http.NewRequest(http.MethodHead, url, nil)
+	if err != nil {
+		log.Printf("Failed to create request for %s: %v", url, err)
+		return false
+	}
+
+	// Accept OCI and Docker manifest types
+	req.Header.Set("Accept", "application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json")
+
+	if registryToken != "" {
+		req.Header.Set("Authorization", "Bearer "+registryToken)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("Failed to check image %s in registry: %v", imageRef, err)
+		return false
+	}
+	defer resp.Body.Close()
+
+	// 200 means the image exists
+	return resp.StatusCode == http.StatusOK
+}
+
+// normalizeImageRef normalizes a Docker image reference for consistent lookup.
+// It handles various forms of Docker Hub image references:
+// - "nginx" -> "nginx" (library images stay as-is for simple lookup)
+// - "nginx:1.21" -> "nginx:1.21"
+// - "docker.io/library/nginx:1.21" -> "nginx:1.21"
+// - "docker.io/onkernel/nodejs22-base:0.1.1" -> "onkernel/nodejs22-base:0.1.1"
+func normalizeImageRef(ref string) string {
+	// Strip docker.io/ prefix if present
+	ref = strings.TrimPrefix(ref, "docker.io/")
+
+	// Strip library/ prefix for official images
+	ref = strings.TrimPrefix(ref, "library/")
+
+	return ref
 }

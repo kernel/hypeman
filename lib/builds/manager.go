@@ -248,6 +248,30 @@ func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourc
 		}
 	}
 
+	// Add pull access for base image repos so the builder agent can
+	// detect mirrored images via checkImageExistsInRegistry
+	dockerfileContent := req.Dockerfile
+	if dockerfileContent == "" {
+		tarballPath := m.paths.BuildSourceDir(id) + "/source.tar.gz"
+		if content, err := ExtractDockerfileFromTarball(tarballPath); err == nil {
+			dockerfileContent = content
+		}
+	}
+	if dockerfileContent != "" {
+		refs := ParseDockerfileFROMs(dockerfileContent)
+		seen := make(map[string]bool)
+		for _, ref := range refs {
+			repo := ref
+			if idx := strings.LastIndex(repo, ":"); idx > 0 {
+				repo = repo[:idx]
+			}
+			if !seen[repo] {
+				seen[repo] = true
+				repoAccess = append(repoAccess, RepoPermission{Repo: repo, Scope: "pull"})
+			}
+		}
+	}
+
 	registryToken, err := m.tokenGenerator.GenerateToken(id, repoAccess, tokenTTL)
 	if err != nil {
 		deleteBuild(m.paths, id)
@@ -314,6 +338,13 @@ func (m *manager) runBuild(ctx context.Context, id string, req CreateBuildReques
 	// Create timeout context
 	buildCtx, cancel := context.WithTimeout(ctx, time.Duration(policy.TimeoutSeconds)*time.Second)
 	defer cancel()
+
+	// Mirror base images for admin builds before launching the VM
+	if req.IsAdminBuild {
+		if err := m.mirrorBaseImagesForBuild(buildCtx, id, req); err != nil {
+			m.logger.Warn("failed to mirror base images", "id", id, "error", err)
+		}
+	}
 
 	// Run the build in a builder VM
 	result, err := m.executeBuild(buildCtx, id, req, policy)
@@ -1126,6 +1157,30 @@ func (m *manager) refreshBuildToken(buildID string, req *CreateBuildRequest) err
 				Repo:  fmt.Sprintf("cache/%s", req.CacheScope),
 				Scope: "push",
 			})
+		}
+	}
+
+	// Add pull access for base image repos so the builder agent can
+	// detect mirrored images via checkImageExistsInRegistry
+	dockerfileContent := req.Dockerfile
+	if dockerfileContent == "" {
+		tarballPath := m.paths.BuildSourceDir(buildID) + "/source.tar.gz"
+		if content, err := ExtractDockerfileFromTarball(tarballPath); err == nil {
+			dockerfileContent = content
+		}
+	}
+	if dockerfileContent != "" {
+		refs := ParseDockerfileFROMs(dockerfileContent)
+		seen := make(map[string]bool)
+		for _, ref := range refs {
+			repo := ref
+			if idx := strings.LastIndex(repo, ":"); idx > 0 {
+				repo = repo[:idx]
+			}
+			if !seen[repo] {
+				seen[repo] = true
+				repoAccess = append(repoAccess, RepoPermission{Repo: repo, Scope: "pull"})
+			}
 		}
 	}
 
