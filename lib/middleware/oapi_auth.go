@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -13,6 +14,9 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/kernel/hypeman/lib/logger"
 )
+
+// errRepoNotAllowed is returned when a valid token doesn't have access to the requested repository.
+var errRepoNotAllowed = errors.New("repository not allowed by token")
 
 type contextKey string
 
@@ -322,7 +326,7 @@ func validateRegistryToken(tokenString, jwtSecret, requestPath, method string) (
 	}
 
 	if !allowed {
-		return nil, fmt.Errorf("repository %s not allowed by token", repo)
+		return nil, fmt.Errorf("%w: %s", errRepoNotAllowed, repo)
 	}
 
 	// Check scope for write operations
@@ -377,6 +381,20 @@ func JwtAuth(jwtSecret string) func(http.Handler) http.Handler {
 							return
 						}
 						log.DebugContext(r.Context(), "registry token validation failed", "error", err)
+
+						// For read operations (GET/HEAD), if the token is valid but the
+						// repo isn't in the allowed list, return 502 Bad Gateway.
+						// BuildKit treats 5xx from a mirror as "mirror unavailable" and
+						// falls back to the upstream registry (Docker Hub). A 404 would
+						// be treated as "image doesn't exist" with no fallback.
+						if errors.Is(err, errRepoNotAllowed) && !isWriteOperation(r.Method) {
+							log.DebugContext(r.Context(), "returning 502 for mirror fallback",
+								"path", r.URL.Path)
+							w.Header().Set("Content-Type", "application/json")
+							w.WriteHeader(http.StatusBadGateway)
+							fmt.Fprintf(w, `{"errors":[{"code":"UNAVAILABLE","message":"image not mirrored"}]}`)
+							return
+						}
 					} else {
 						log.DebugContext(r.Context(), "failed to extract token", "error", err)
 					}

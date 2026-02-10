@@ -80,16 +80,17 @@ func (h *TokenHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Check if requested scope is allowed by the token
+		// Check if requested scope is allowed by the token.
+		// If not, still return a valid token — the subsequent manifest request
+		// will get a 404 (not found) instead of 403. This is critical for BuildKit
+		// mirror fallback: a 403 on the token endpoint is treated as a hard auth
+		// failure and prevents fallback to upstream registries like Docker Hub.
 		if scope != "" {
 			repo, actions := parseScope(scope)
 			if repo != "" && !h.isScopeAllowed(claims, repo, actions) {
-				log.DebugContext(r.Context(), "scope not allowed by token",
+				log.DebugContext(r.Context(), "scope not in token, returning token anyway for mirror fallback",
 					"requested_repo", repo,
-					"requested_actions", actions,
-					"allowed_repos", claims["repos"])
-				h.writeError(w, http.StatusForbidden, "DENIED", "requested scope not allowed")
-				return
+					"requested_actions", actions)
 			}
 		}
 

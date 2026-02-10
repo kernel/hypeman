@@ -12,7 +12,7 @@ tmp_dir = "tmp"
   exclude_regex = ["_test.go"]
   exclude_unchanged = false
   follow_symlink = false
-  full_bin = "sudo ./tmp/main"
+  full_bin = "sudo env DOCKER_CONFIG=$HOME/.docker ./tmp/main"
   include_dir = []
   include_ext = ["go", "tpl", "tmpl", "html", "yaml"]
   include_file = []

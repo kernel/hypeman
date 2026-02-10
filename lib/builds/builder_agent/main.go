@@ -50,8 +50,8 @@ type BuildConfig struct {
 	Secrets          []SecretRef       `json:"secrets,omitempty"`
 	TimeoutSeconds   int               `json:"timeout_seconds"`
 	NetworkMode      string            `json:"network_mode"`
-	IsAdminBuild     bool              `json:"is_admin_build,omitempty"`
-	GlobalCacheKey   string            `json:"global_cache_key,omitempty"`
+	IsAdminBuild   bool   `json:"is_admin_build,omitempty"`
+	GlobalCacheKey string `json:"global_cache_key,omitempty"`
 }
 
 // SecretRef references a secret to inject during build
@@ -644,6 +644,14 @@ func setupBuildkitdConfig(config *BuildConfig) error {
 	}
 	// If HTTPS without insecure and without CA, use system CA (no config needed)
 
+	// Configure docker.io to use the local registry as a mirror.
+	// BuildKit will try the mirror first for FROM pulls. Since base images
+	// are pre-cached server-side via mirrorBaseImagesForBuild(), the mirror
+	// will have them and serve them directly without pulling from Docker Hub.
+	tomlContent.WriteString("\n")
+	tomlContent.WriteString("[registry.\"docker.io\"]\n")
+	tomlContent.WriteString(fmt.Sprintf("  mirrors = [\"%s\"]\n", registryHost))
+
 	// Ensure config directory exists
 	buildkitDir := "/home/builder/.config/buildkit"
 	if err := os.MkdirAll(buildkitDir, 0755); err != nil {
@@ -894,3 +902,4 @@ func getBuildkitVersion() string {
 	out, _ := cmd.Output()
 	return strings.TrimSpace(string(out))
 }
+
