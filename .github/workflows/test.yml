@@ -55,3 +55,64 @@ jobs:
           TLS_TEST_DOMAIN: "test.hypeman-development.com"
           TLS_ALLOWED_DOMAINS: '*.hypeman-development.com'
         run: make test
+
+  test-darwin:
+    runs-on: [self-hosted, macos, arm64]
+    concurrency:
+      group: macos-ci-test-${{ github.ref }}
+      cancel-in-progress: true
+    env:
+      DATA_DIR: /tmp/hypeman-ci-${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+          cache: false
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_PASSWORD }}
+      - name: Install dependencies
+        run: |
+          brew list e2fsprogs &>/dev/null || brew install e2fsprogs
+          brew list erofs-utils &>/dev/null || brew install erofs-utils
+          go mod download
+      - name: Create run-scoped data directory
+        run: mkdir -p "$DATA_DIR"
+      - name: Generate OpenAPI code
+        run: make oapi-generate
+      - name: Build
+        run: make build
+      - name: Run tests
+        env:
+          DEFAULT_HYPERVISOR: vz
+          JWT_SECRET: ci-test-secret
+        run: make test
+      - name: Cleanup
+        if: always()
+        run: |
+          pkill -f "vz-shim.*$DATA_DIR" || true
+          rm -rf "$DATA_DIR"
+          make clean
+
+  e2e-install:
+    runs-on: [self-hosted, macos, arm64]
+    needs: test-darwin
+    concurrency:
+      group: macos-ci-e2e-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+          cache: false
+      - name: Install dependencies
+        run: brew list caddy &>/dev/null || brew install caddy
+      - name: Run E2E install test
+        run: bash scripts/e2e-install-test.sh
+      - name: Cleanup on failure
+        if: failure()
+        run: bash scripts/uninstall.sh || true
