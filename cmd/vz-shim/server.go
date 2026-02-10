@@ -246,7 +246,7 @@ func (s *ShimServer) handleVsockConnection(conn net.Conn) {
 	done := make(chan struct{}, 2)
 
 	go func() {
-		io.Copy(guestConn, conn)
+		io.Copy(guestConn, reader)
 		done <- struct{}{}
 	}()
 

@@ -366,8 +366,16 @@ else
 </dict>
 </plist>
 ENTITLEMENTS
-        codesign --force --sign - --entitlements "$ENTITLEMENTS_TMP" "${TMP_DIR}/${BINARY_NAME}" 2>/dev/null || true
-        [ -f "${TMP_DIR}/vz-shim" ] && codesign --force --sign - --entitlements "$ENTITLEMENTS_TMP" "${TMP_DIR}/vz-shim" 2>/dev/null || true
+        if ! codesign --force --sign - --entitlements "$ENTITLEMENTS_TMP" "${TMP_DIR}/${BINARY_NAME}"; then
+            rm -f "$ENTITLEMENTS_TMP"
+            error "Failed to codesign ${BINARY_NAME}. Virtualization.framework requires proper entitlements."
+        fi
+        if [ -f "${TMP_DIR}/vz-shim" ]; then
+            if ! codesign --force --sign - --entitlements "$ENTITLEMENTS_TMP" "${TMP_DIR}/vz-shim"; then
+                rm -f "$ENTITLEMENTS_TMP"
+                error "Failed to codesign vz-shim. Virtualization.framework requires proper entitlements."
+            fi
+        fi
         rm -f "$ENTITLEMENTS_TMP"
     fi
 fi
@@ -539,6 +547,12 @@ if [ "$OS" = "darwin" ]; then
             [[ -z "$line" ]] && continue
             key="${line%%=*}"
             value="${line#*=}"
+            # XML-escape special characters in the value
+            value="${value//&/&amp;}"
+            value="${value//</&lt;}"
+            value="${value//>/&gt;}"
+            value="${value//\"/&quot;}"
+            value="${value//\'/&apos;}"
             ENV_DICT="${ENV_DICT}
         <key>${key}</key>
         <string>${value}</string>"
