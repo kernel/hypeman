@@ -644,6 +644,14 @@ func setupBuildkitdConfig(config *BuildConfig) error {
 	}
 	// If HTTPS without insecure and without CA, use system CA (no config needed)
 
+	// Configure the local registry as a mirror for Docker Hub.
+	// When BuildKit encounters FROM instructions referencing docker.io images
+	// (e.g., node:20-alpine), it will try the local registry first before
+	// falling back to Docker Hub. This avoids redundant pulls from Docker Hub
+	// when base images have already been mirrored locally.
+	tomlContent.WriteString(fmt.Sprintf("\n[registry.\"docker.io\"]\n"))
+	tomlContent.WriteString(fmt.Sprintf("  mirrors = [\"%s\"]\n", registryHost))
+
 	// Ensure config directory exists
 	buildkitDir := "/home/builder/.config/buildkit"
 	if err := os.MkdirAll(buildkitDir, 0755); err != nil {
