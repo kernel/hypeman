@@ -277,6 +277,7 @@ clean:
 	rm -rf lib/ingress/binaries/
 	rm -f lib/system/guest_agent/guest-agent
 	rm -f lib/system/init/init
+	rm -f lib/hypervisor/vz/vz-shim/vz-shim
 
 # Prepare for release build (called by GoReleaser)
 # Downloads all embedded binaries and builds embedded components
@@ -291,10 +292,12 @@ release-prep: download-ch-binaries build-caddy-binaries build-embedded
 ENTITLEMENTS_FILE ?= vz.entitlements
 
 # Build vz-shim (subprocess that hosts vz VMs)
+# Also copies to embed directory so it gets embedded in the hypeman binary
 .PHONY: build-vz-shim
 build-vz-shim: | $(BIN_DIR)
 	@echo "Building vz-shim for macOS..."
 	go build -o $(BIN_DIR)/vz-shim ./cmd/vz-shim
+	cp $(BIN_DIR)/vz-shim lib/hypervisor/vz/vz-shim/vz-shim
 	@echo "Build complete: $(BIN_DIR)/vz-shim"
 
 # Sign vz-shim with entitlements
