@@ -174,6 +174,13 @@ func NewManager(
 func (m *manager) Start(ctx context.Context) error {
 	go func() {
 		m.ensureBuilderImage(ctx)
+		// Check if context was cancelled during builder image preparation
+		// (e.g., server shutdown). If so, don't attempt to recover builds.
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
 		// Recover pending builds only after the builder image is ready,
 		// otherwise recovered builds fail with "builder image is being prepared".
 		m.RecoverPendingBuilds()
@@ -193,12 +200,11 @@ func (m *manager) Start(ctx context.Context) error {
 //
 // This runs in a background goroutine during startup.
 func (m *manager) ensureBuilderImage(ctx context.Context) {
-	defer m.builderReady.Store(true)
-
 	if m.config.BuilderImage != "" {
 		// Explicit builder image configured - check if already available
 		if _, err := m.imageManager.GetImage(ctx, m.config.BuilderImage); err == nil {
 			m.logger.Info("builder image already available", "image", m.config.BuilderImage)
+			m.builderReady.Store(true)
 			return
 		}
 
@@ -212,7 +218,9 @@ func (m *manager) ensureBuilderImage(ctx context.Context) {
 		}
 		if err := m.waitForBuilderImageReady(ctx, m.config.BuilderImage); err != nil {
 			m.logger.Warn("builder image failed to become ready", "image", m.config.BuilderImage, "error", err)
+			return
 		}
+		m.builderReady.Store(true)
 		return
 	}
 
@@ -224,6 +232,7 @@ func (m *manager) ensureBuilderImage(ctx context.Context) {
 		return
 	}
 	m.config.BuilderImage = imageRef
+	m.builderReady.Store(true)
 	m.logger.Info("builder image ready", "image", imageRef)
 }
 
@@ -272,7 +281,9 @@ func (m *manager) buildBuilderFromDockerfile(ctx context.Context) (string, error
 		return "", fmt.Errorf("docker build: %s: %w", string(output), err)
 	}
 	defer func() {
-		rmCmd := exec.Command("docker", "rmi", localTag)
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		rmCmd := exec.CommandContext(cleanupCtx, "docker", "rmi", localTag)
 		rmCmd.Env = dockerEnv
 		rmCmd.Run()
 	}()
