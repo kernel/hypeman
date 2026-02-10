@@ -3,6 +3,7 @@ package builds
 import (
 	"bufio"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -15,6 +16,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/go-containerregistry/pkg/v1/empty"
+	"github.com/google/go-containerregistry/pkg/v1/layout"
+	"github.com/google/go-containerregistry/pkg/v1/tarball"
 	"github.com/nrednav/cuid2"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/instances"
@@ -22,6 +26,9 @@ import (
 	"github.com/kernel/hypeman/lib/volumes"
 	"go.opentelemetry.io/otel/metric"
 )
+
+//go:embed images/generic/Dockerfile
+var builderDockerfile []byte
 
 // Manager interface for the build system
 type Manager interface {
@@ -87,7 +94,6 @@ type Config struct {
 func DefaultConfig() Config {
 	return Config{
 		MaxConcurrentBuilds: 2,
-		BuilderImage:        "hypeman/builder:latest",
 		RegistryURL:         "localhost:8080",
 		DefaultTimeout:      600, // 10 minutes
 	}
@@ -161,100 +167,204 @@ func NewManager(
 		m.metrics = metrics
 	}
 
-	// Recover any pending builds from disk
-	m.RecoverPendingBuilds()
-
 	return m, nil
 }
 
 // Start starts the build manager's background services
 func (m *manager) Start(ctx context.Context) error {
-	go m.ensureBuilderImage(ctx)
+	go func() {
+		m.ensureBuilderImage(ctx)
+		// Recover pending builds only after the builder image is ready,
+		// otherwise recovered builds fail with "builder image is being prepared".
+		m.RecoverPendingBuilds()
+	}()
 	m.logger.Info("build manager started")
 	return nil
 }
 
-// ensureBuilderImage ensures the builder image is available in the registry.
-// If BUILDER_IMAGE is unset/empty, it builds from the embedded Dockerfile.
-// If BUILDER_IMAGE is set, it checks if the image exists.
+// ensureBuilderImage ensures the builder image is available in the image store.
+//
+// If BUILDER_IMAGE is set, it checks whether the image is already in the store
+// and attempts to pull it from a remote registry if not.
+//
+// If BUILDER_IMAGE is unset/empty, it builds the image from the embedded Dockerfile
+// using Docker, imports the result directly into the OCI layout cache (no docker push),
+// and triggers ext4 conversion via ImportLocalImage.
+//
 // This runs in a background goroutine during startup.
 func (m *manager) ensureBuilderImage(ctx context.Context) {
 	defer m.builderReady.Store(true)
 
-	builderImage := m.config.BuilderImage
-	if builderImage == "" {
-		builderImage = "hypeman/builder:latest"
-	}
+	if m.config.BuilderImage != "" {
+		// Explicit builder image configured - check if already available
+		if _, err := m.imageManager.GetImage(ctx, m.config.BuilderImage); err == nil {
+			m.logger.Info("builder image already available", "image", m.config.BuilderImage)
+			return
+		}
 
-	// Check if image already exists in the registry
-	registryHost := stripRegistryScheme(m.config.RegistryURL)
-	imageRef := fmt.Sprintf("%s/%s", registryHost, builderImage)
-	if _, err := m.imageManager.GetImage(ctx, imageRef); err == nil {
-		m.logger.Info("builder image already available", "image", imageRef)
+		// Not in store - try to pull it from remote registry
+		m.logger.Info("pulling builder image", "image", m.config.BuilderImage)
+		if _, err := m.imageManager.CreateImage(ctx, images.CreateImageRequest{
+			Name: m.config.BuilderImage,
+		}); err != nil {
+			m.logger.Warn("failed to pull builder image", "image", m.config.BuilderImage, "error", err)
+			return
+		}
+		if err := m.waitForBuilderImageReady(ctx, m.config.BuilderImage); err != nil {
+			m.logger.Warn("builder image failed to become ready", "image", m.config.BuilderImage, "error", err)
+		}
 		return
 	}
 
-	// Try to build the image using Docker
+	// No builder image configured - build from embedded Dockerfile
+	m.logger.Info("building builder image from embedded Dockerfile")
+	imageRef, err := m.buildBuilderFromDockerfile(ctx)
+	if err != nil {
+		m.logger.Warn("failed to build builder image", "error", err)
+		return
+	}
+	m.config.BuilderImage = imageRef
+	m.logger.Info("builder image ready", "image", imageRef)
+}
+
+// buildBuilderFromDockerfile builds the builder image from the embedded Dockerfile
+// and imports it into the image store without using docker push.
+//
+// The flow is:
+//  1. Write embedded Dockerfile to a temp directory
+//  2. Build with Docker (uses cwd as context for COPY directives)
+//  3. Export with docker save to a tarball
+//  4. Load tarball with go-containerregistry and write to the shared OCI layout cache
+//  5. Call ImportLocalImage to trigger ext4 conversion
+//  6. Wait for the image to be ready
+//
+// This is intended for development; in production, set BUILDER_IMAGE to a pre-built image.
+func (m *manager) buildBuilderFromDockerfile(ctx context.Context) (string, error) {
 	dockerSocket := m.config.DockerSocket
 	if dockerSocket == "" {
 		dockerSocket = "/var/run/docker.sock"
 	}
-
-	// Check if Docker socket exists
 	if _, err := os.Stat(dockerSocket); err != nil {
-		m.logger.Warn("Docker socket not found, skipping builder image build",
-			"socket", dockerSocket,
-			"error", err)
-		return
+		return "", fmt.Errorf("Docker socket not found at %s: %w", dockerSocket, err)
 	}
 
-	m.logger.Info("building builder image", "image", builderImage)
+	dockerEnv := append(os.Environ(), fmt.Sprintf("DOCKER_HOST=unix://%s", dockerSocket))
 
-	// Find the Dockerfile - look relative to the binary or in common locations
-	dockerfilePath := "lib/builds/images/generic/Dockerfile"
-	if _, err := os.Stat(dockerfilePath); err != nil {
-		// Try relative to executable
-		if execPath, err := os.Executable(); err == nil {
-			altPath := filepath.Join(filepath.Dir(execPath), "..", dockerfilePath)
-			if _, err := os.Stat(altPath); err == nil {
-				dockerfilePath = altPath
-			}
+	// Write embedded Dockerfile to temp dir
+	tmpDir, err := os.MkdirTemp("", "hypeman-builder-*")
+	if err != nil {
+		return "", fmt.Errorf("create temp dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	dockerfilePath := filepath.Join(tmpDir, "Dockerfile")
+	if err := os.WriteFile(dockerfilePath, builderDockerfile, 0644); err != nil {
+		return "", fmt.Errorf("write Dockerfile: %w", err)
+	}
+
+	// Build with Docker (context is cwd = repo root in development)
+	localTag := fmt.Sprintf("hypeman-builder-tmp:%d", time.Now().Unix())
+	m.logger.Info("building builder image with Docker", "tag", localTag)
+
+	buildCmd := exec.CommandContext(ctx, "docker", "build", "-t", localTag, "-f", dockerfilePath, ".")
+	buildCmd.Env = dockerEnv
+	if output, err := buildCmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("docker build: %s: %w", string(output), err)
+	}
+	defer func() {
+		rmCmd := exec.Command("docker", "rmi", localTag)
+		rmCmd.Env = dockerEnv
+		rmCmd.Run()
+	}()
+
+	// Export image to tarball (avoids docker push)
+	tarPath := filepath.Join(tmpDir, "builder.tar")
+	saveCmd := exec.CommandContext(ctx, "docker", "save", "-o", tarPath, localTag)
+	saveCmd.Env = dockerEnv
+	if output, err := saveCmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("docker save: %s: %w", string(output), err)
+	}
+
+	// Load tarball as a v1.Image
+	img, err := tarball.ImageFromPath(tarPath, nil)
+	if err != nil {
+		return "", fmt.Errorf("load image tarball: %w", err)
+	}
+
+	// Get image digest
+	digestHash, err := img.Digest()
+	if err != nil {
+		return "", fmt.Errorf("get image digest: %w", err)
+	}
+	digest := digestHash.String()   // "sha256:abc123..."
+	digestHex := digestHash.Hex      // "abc123..."
+
+	// Write directly to the shared OCI layout cache.
+	// This is the same cache used by the image manager's OCI client, so when
+	// ImportLocalImage triggers buildImage → pullAndExport, it will find the
+	// layers already cached and skip the network pull entirely.
+	cacheDir := m.paths.SystemOCICache()
+	layoutPath, err := layout.FromPath(cacheDir)
+	if err != nil {
+		layoutPath, err = layout.Write(cacheDir, empty.Index)
+		if err != nil {
+			return "", fmt.Errorf("create OCI layout: %w", err)
 		}
 	}
 
-	cmd := exec.CommandContext(ctx, "docker", "build", "-t", builderImage, "-f", dockerfilePath, ".")
-	cmd.Env = append(os.Environ(), fmt.Sprintf("DOCKER_HOST=unix://%s", dockerSocket))
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		m.logger.Warn("failed to build builder image",
-			"error", err,
-			"output", string(output))
-		return
+	if err := layoutPath.AppendImage(img, layout.WithAnnotations(map[string]string{
+		"org.opencontainers.image.ref.name": digestHex,
+	})); err != nil {
+		return "", fmt.Errorf("add image to OCI layout: %w", err)
 	}
 
-	m.logger.Info("builder image built successfully", "image", builderImage)
+	m.logger.Info("builder image added to OCI cache", "digest", digest)
 
-	// Tag the image with the registry prefix so it can be pushed
-	tagCmd := exec.CommandContext(ctx, "docker", "tag", builderImage, imageRef)
-	tagCmd.Env = append(os.Environ(), fmt.Sprintf("DOCKER_HOST=unix://%s", dockerSocket))
-	if tagOutput, err := tagCmd.CombinedOutput(); err != nil {
-		m.logger.Warn("failed to tag builder image for registry",
-			"error", err,
-			"output", string(tagOutput))
-		return
+	// Import into the image store (triggers async ext4 conversion).
+	// The repo includes the registry host so the image reference is consistent
+	// with how other images are stored and looked up.
+	registryHost := stripRegistryScheme(m.config.RegistryURL)
+	repo := registryHost + "/internal/builder"
+	reference := "latest"
+	imageRef := repo + ":" + reference
+
+	if _, err := m.imageManager.ImportLocalImage(ctx, repo, reference, digest); err != nil {
+		return "", fmt.Errorf("import builder image: %w", err)
 	}
 
-	// Push the image to the registry so builder VMs can pull it
-	pushCmd := exec.CommandContext(ctx, "docker", "push", imageRef)
-	pushCmd.Env = append(os.Environ(), fmt.Sprintf("DOCKER_HOST=unix://%s", dockerSocket))
-	if pushOutput, err := pushCmd.CombinedOutput(); err != nil {
-		m.logger.Warn("failed to push builder image to registry",
-			"error", err,
-			"output", string(pushOutput))
-		return
+	// Wait for ext4 conversion to complete
+	if err := m.waitForBuilderImageReady(ctx, imageRef); err != nil {
+		return "", fmt.Errorf("builder image conversion: %w", err)
 	}
 
-	m.logger.Info("builder image pushed to registry", "image", imageRef)
+	return imageRef, nil
+}
+
+// waitForBuilderImageReady polls the image manager until the image is ready.
+func (m *manager) waitForBuilderImageReady(ctx context.Context, imageRef string) error {
+	const maxAttempts = 240
+	const pollInterval = 500 * time.Millisecond
+
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		img, err := m.imageManager.GetImage(ctx, imageRef)
+		if err == nil {
+			switch img.Status {
+			case images.StatusReady:
+				return nil
+			case images.StatusFailed:
+				return fmt.Errorf("image conversion failed")
+			}
+		}
+		time.Sleep(pollInterval)
+	}
+
+	return fmt.Errorf("timeout waiting for builder image after %v", time.Duration(maxAttempts)*pollInterval)
 }
 
 // CreateBuild starts a new build job
