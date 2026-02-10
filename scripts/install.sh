@@ -348,11 +348,27 @@ else
     info "Extracting..."
     tar -xzf "${TMP_DIR}/${ARCHIVE_NAME}" -C "$TMP_DIR"
 
-    # On macOS, codesign after extraction
+    # On macOS, codesign after extraction with virtualization entitlements
     if [ "$OS" = "darwin" ]; then
         info "Signing binaries..."
-        codesign --force --sign - "${TMP_DIR}/${BINARY_NAME}" 2>/dev/null || true
-        [ -f "${TMP_DIR}/vz-shim" ] && codesign --force --sign - "${TMP_DIR}/vz-shim" 2>/dev/null || true
+        ENTITLEMENTS_TMP="${TMP_DIR}/vz.entitlements"
+        cat > "$ENTITLEMENTS_TMP" << 'ENTITLEMENTS'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.virtualization</key>
+	<true/>
+	<key>com.apple.security.network.server</key>
+	<true/>
+	<key>com.apple.security.network.client</key>
+	<true/>
+</dict>
+</plist>
+ENTITLEMENTS
+        codesign --force --sign - --entitlements "$ENTITLEMENTS_TMP" "${TMP_DIR}/${BINARY_NAME}" 2>/dev/null || true
+        [ -f "${TMP_DIR}/vz-shim" ] && codesign --force --sign - --entitlements "$ENTITLEMENTS_TMP" "${TMP_DIR}/vz-shim" 2>/dev/null || true
+        rm -f "$ENTITLEMENTS_TMP"
     fi
 fi
 
@@ -543,7 +559,7 @@ if [ "$OS" = "darwin" ]; then
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>${ENV_DICT}
+        <string>/opt/homebrew/opt/e2fsprogs/sbin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>${ENV_DICT}
     </dict>
     <key>KeepAlive</key>
     <true/>
