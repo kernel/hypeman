@@ -92,6 +92,27 @@ Set the builder image in your `.env`:
 BUILDER_IMAGE=onkernel/builder-generic:latest
 ```
 
+### 2a. Build with Pre-seeded Base Image Layers (Recommended)
+
+Pre-seeding eliminates the ~13s base image extraction on first tenant builds by warming
+BuildKit's content store at image build time.
+
+```bash
+# Pre-seed with default base images
+make build-builder-preseeded
+
+# Pre-seed with specific images
+make build-builder-preseeded PRESEED_IMAGES="docker.io/onkernel/nodejs22-base:0.1.1 docker.io/onkernel/python311-base:0.1.1"
+
+# Or use the script directly for more control
+./lib/builds/images/generic/preseed-layers.sh \
+  -t onkernel/builder-generic:latest \
+  docker.io/onkernel/nodejs22-base:0.1.1
+```
+
+The script requires `--privileged` Docker access to run buildkitd during the warmup.
+The resulting image is ~460MB larger due to pre-extracted filesystem layers.
+
 ### Building for Local Testing (without pushing)
 
 ```bash

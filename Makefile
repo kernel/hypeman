@@ -219,6 +219,13 @@ gen-jwt: $(GODOTENV)
 build-builder:
 	docker build -t hypeman/builder:latest -f lib/builds/images/generic/Dockerfile .
 
+# Build builder image with pre-seeded base image layers.
+# Pre-seeding eliminates the ~13s base image extraction on first tenant builds.
+# Usage: make build-builder-preseeded PRESEED_IMAGES="docker.io/onkernel/nodejs22-base:0.1.1"
+PRESEED_IMAGES ?= docker.io/onkernel/nodejs22-base:0.1.1
+build-builder-preseeded:
+	./lib/builds/images/generic/preseed-layers.sh -t hypeman/builder:latest $(PRESEED_IMAGES)
+
 # Alias for backwards compatibility
 build-builders: build-builder
 
