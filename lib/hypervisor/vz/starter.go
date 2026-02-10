@@ -57,8 +57,25 @@ func extractShim() (string, error) {
 			return
 		}
 
+		// Write embedded entitlements to a temp file for codesigning
+		entFile, err := os.CreateTemp("", "vz-entitlements-*.plist")
+		if err != nil {
+			os.Remove(f.Name())
+			shimErr = fmt.Errorf("create entitlements temp file: %w", err)
+			return
+		}
+		defer os.Remove(entFile.Name())
+
+		if _, err := entFile.Write(vzEntitlements); err != nil {
+			os.Remove(f.Name())
+			entFile.Close()
+			shimErr = fmt.Errorf("write entitlements file: %w", err)
+			return
+		}
+		entFile.Close()
+
 		// Codesign with entitlements for Virtualization.framework
-		cmd := exec.Command("codesign", "--sign", "-", "--entitlements", entitlementsPath(), "--force", f.Name())
+		cmd := exec.Command("codesign", "--sign", "-", "--entitlements", entFile.Name(), "--force", f.Name())
 		if out, err := cmd.CombinedOutput(); err != nil {
 			os.Remove(f.Name())
 			shimErr = fmt.Errorf("codesign vz-shim: %s: %w", string(out), err)
@@ -68,15 +85,6 @@ func extractShim() (string, error) {
 		shimPath = f.Name()
 	})
 	return shimPath, shimErr
-}
-
-// entitlementsPath returns the path to the vz.entitlements file.
-func entitlementsPath() string {
-	exe, err := os.Executable()
-	if err != nil {
-		return "vz.entitlements"
-	}
-	return filepath.Join(filepath.Dir(exe), "vz.entitlements")
 }
 
 // Starter implements hypervisor.VMStarter for Virtualization.framework.
