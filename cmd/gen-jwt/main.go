@@ -16,6 +16,7 @@ func main() {
 		os.Exit(1)
 	}
 	userID := flag.String("user-id", "test-user", "User ID to include in the JWT token")
+	registryPush := flag.String("registry-push", "", "Repository to grant push access to (e.g., hypeman/builder)")
 	flag.Parse()
 
 	claims := jwt.MapClaims{
@@ -23,6 +24,14 @@ func main() {
 		"iat": time.Now().Unix(),
 		"exp": time.Now().Add(24 * time.Hour).Unix(),
 	}
+
+	// Add registry push permissions if requested
+	if *registryPush != "" {
+		claims["repo_access"] = []map[string]string{
+			{"repo": *registryPush, "scope": "push"},
+		}
+	}
+
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	tokenString, err := token.SignedString([]byte(jwtSecret))
 	if err != nil {

@@ -621,13 +621,12 @@ func (s *ApiService) StatInstancePath(ctx context.Context, request oapi.StatInst
 		}, nil
 	}
 
-	// Create vsock dialer for this hypervisor type
-	dialer, err := hypervisor.NewVsockDialer(inst.HypervisorType, inst.VsockSocket, inst.VsockCID)
+	dialer, err := s.InstanceManager.GetVsockDialer(ctx, inst.Id)
 	if err != nil {
-		log.ErrorContext(ctx, "failed to create vsock dialer", "error", err)
+		log.ErrorContext(ctx, "failed to get vsock dialer", "error", err)
 		return oapi.StatInstancePath500JSONResponse{
 			Code:    "internal_error",
-			Message: "failed to create vsock dialer",
+			Message: "failed to get vsock dialer",
 		}, nil
 	}
 

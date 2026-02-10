@@ -1,6 +1,21 @@
 # Network Manager
 
-Manages the default virtual network for instances using a Linux bridge and TAP devices.
+Manages the default virtual network for instances.
+
+## Platform Support
+
+| Platform | Network Model | Implementation |
+|----------|---------------|----------------|
+| Linux | Bridge + TAP | Linux bridge with TAP devices per VM, iptables NAT |
+| macOS | NAT | Virtualization.framework built-in NAT (192.168.64.0/24) |
+
+On macOS, the network manager skips bridge/TAP creation since vz provides NAT networking automatically.
+
+---
+
+## Linux Networking
+
+On Linux, hypeman manages a virtual network using a Linux bridge and TAP devices.
 
 ## How Linux VM Networking Works
 

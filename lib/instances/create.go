@@ -113,6 +113,11 @@ func (m *manager) createInstance(
 	vsockSocket := m.paths.InstanceVsockSocket(id)
 	log.DebugContext(ctx, "generated vsock config", "instance_id", id, "cid", vsockCID)
 
+	// Override vsock socket path for vz (uses Virtio socket, not vhost-user)
+	if req.Hypervisor == hypervisor.TypeVZ || (req.Hypervisor == "" && m.defaultHypervisor == hypervisor.TypeVZ) {
+		vsockSocket = filepath.Join(m.paths.InstanceDir(id), "vz.vsock")
+	}
+
 	// 5. Check instance doesn't already exist
 	if _, err := m.loadMetadata(id); err == nil {
 		return nil, ErrAlreadyExists
@@ -712,8 +717,17 @@ func (m *manager) buildHypervisorConfig(ctx context.Context, inst *Instance, ima
 		PCIDevices:    pciDevices,
 		KernelPath:    kernelPath,
 		InitrdPath:    initrdPath,
-		KernelArgs:    "console=ttyS0",
+		KernelArgs:    m.kernelArgs(inst.HypervisorType),
 	}, nil
+}
+
+// kernelArgs returns the kernel command line arguments for the given hypervisor type.
+// vz uses hvc0 (virtio console), all others use ttyS0 (serial port).
+func (m *manager) kernelArgs(hvType hypervisor.Type) string {
+	if hvType == hypervisor.TypeVZ {
+		return "console=hvc0"
+	}
+	return "console=ttyS0"
 }
 
 func ptr[T any](v T) *T {
