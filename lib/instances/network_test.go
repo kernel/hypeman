@@ -254,6 +254,6 @@ func execCommand(ctx context.Context, inst *Instance, command ...string) (string
 // requireKVMAccess checks for KVM availability
 func requireKVMAccess(t *testing.T) {
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
-		t.Fatal("/dev/kvm not available - ensure KVM is enabled and user is in 'kvm' group")
+		t.Skip("/dev/kvm not available, skipping on this platform")
 	}
 }

@@ -3,11 +3,8 @@ package resources
 import (
 	"context"
 	"strings"
-	"syscall"
 
 	"github.com/c2h5oh/datasize"
-	"github.com/kernel/hypeman/cmd/api/config"
-	"github.com/kernel/hypeman/lib/paths"
 )
 
 // DiskResource implements Resource for disk space discovery and tracking.
@@ -19,48 +16,17 @@ type DiskResource struct {
 	volumeLister   VolumeLister
 }
 
-// NewDiskResource discovers disk capacity for the data directory.
-// If cfg.DiskLimit is set, uses that as capacity; otherwise auto-detects via statfs.
-func NewDiskResource(cfg *config.Config, p *paths.Paths, instLister InstanceLister, imgLister ImageLister, volLister VolumeLister) (*DiskResource, error) {
-	var capacity int64
-
-	if cfg.DiskLimit != "" {
-		// Parse configured limit
-		var ds datasize.ByteSize
-		if err := ds.UnmarshalText([]byte(cfg.DiskLimit)); err != nil {
-			return nil, err
-		}
-		capacity = int64(ds.Bytes())
-	} else {
-		// Auto-detect from filesystem
-		var stat syscall.Statfs_t
-		if err := syscall.Statfs(cfg.DataDir, &stat); err != nil {
-			return nil, err
-		}
-		// Total space = blocks * block size
-		capacity = int64(stat.Blocks) * int64(stat.Bsize)
-	}
-
-	return &DiskResource{
-		capacity:       capacity,
-		dataDir:        cfg.DataDir,
-		instanceLister: instLister,
-		imageLister:    imgLister,
-		volumeLister:   volLister,
-	}, nil
-}
-
 // Type returns the resource type.
 func (d *DiskResource) Type() ResourceType {
 	return ResourceDisk
 }
 
-// Capacity returns the total disk space in bytes.
+// Capacity returns the disk capacity in bytes.
 func (d *DiskResource) Capacity() int64 {
 	return d.capacity
 }
 
-// Allocated returns total disk space used by images, OCI cache, volumes, and overlays.
+// Allocated returns currently allocated disk space.
 func (d *DiskResource) Allocated(ctx context.Context) (int64, error) {
 	breakdown, err := d.GetBreakdown(ctx)
 	if err != nil {
@@ -73,13 +39,12 @@ func (d *DiskResource) Allocated(ctx context.Context) (int64, error) {
 func (d *DiskResource) GetBreakdown(ctx context.Context) (*DiskBreakdown, error) {
 	var breakdown DiskBreakdown
 
-	// Get image sizes (exported rootfs disks)
+	// Get image sizes
 	if d.imageLister != nil {
 		imageBytes, err := d.imageLister.TotalImageBytes(ctx)
 		if err == nil {
 			breakdown.Images = imageBytes
 		}
-		// Get OCI layer cache size
 		ociCacheBytes, err := d.imageLister.TotalOCICacheBytes(ctx)
 		if err == nil {
 			breakdown.OCICache = ociCacheBytes
@@ -94,7 +59,7 @@ func (d *DiskResource) GetBreakdown(ctx context.Context) (*DiskBreakdown, error)
 		}
 	}
 
-	// Get overlay sizes from instances (rootfs overlays + volume overlays)
+	// Get overlay sizes from instances
 	if d.instanceLister != nil {
 		instances, err := d.instanceLister.ListInstanceAllocations(ctx)
 		if err == nil {

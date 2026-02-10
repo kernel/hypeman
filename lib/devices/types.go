@@ -94,3 +94,10 @@ type PassthroughDevice struct {
 	Name      string `json:"name"`      // GPU name, e.g., "NVIDIA L40S"
 	Available bool   `json:"available"` // true if not attached to an instance
 }
+
+// MdevReconcileInfo contains information needed to reconcile mdevs for an instance
+type MdevReconcileInfo struct {
+	InstanceID string
+	MdevUUID   string
+	IsRunning  bool // true if instance's VMM is running or state is unknown
+}

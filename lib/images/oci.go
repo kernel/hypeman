@@ -64,11 +64,13 @@ func newOCIClient(cacheDir string) (*ociClient, error) {
 	return &ociClient{cacheDir: cacheDir}, nil
 }
 
-// currentPlatform returns the platform for the current host
-func currentPlatform() gcr.Platform {
+// vmPlatform returns the target platform for VM images.
+// Always returns Linux since hypeman VMs are always Linux guests,
+// regardless of the host OS (Linux or macOS).
+func vmPlatform() gcr.Platform {
 	return gcr.Platform{
 		Architecture: runtime.GOARCH,
-		OS:           runtime.GOOS,
+		OS:           "linux",
 	}
 }
 
@@ -77,6 +79,12 @@ func currentPlatform() gcr.Platform {
 // For multi-arch images, it returns the platform-specific manifest digest
 // (matching the current host platform) rather than the manifest index digest.
 func (c *ociClient) inspectManifest(ctx context.Context, imageRef string) (string, error) {
+	return c.inspectManifestWithPlatform(ctx, imageRef, vmPlatform())
+}
+
+// inspectManifestWithPlatform synchronously inspects a remote image to get its digest
+// for a specific platform.
+func (c *ociClient) inspectManifestWithPlatform(ctx context.Context, imageRef string, platform gcr.Platform) (string, error) {
 	ref, err := name.ParseReference(imageRef)
 	if err != nil {
 		return "", fmt.Errorf("parse image reference: %w", err)
@@ -89,7 +97,7 @@ func (c *ociClient) inspectManifest(ctx context.Context, imageRef string) (strin
 	img, err := remote.Image(ref,
 		remote.WithContext(ctx),
 		remote.WithAuthFromKeychain(authn.DefaultKeychain),
-		remote.WithPlatform(currentPlatform()))
+		remote.WithPlatform(platform))
 	if err != nil {
 		return "", fmt.Errorf("fetch manifest: %w", wrapRegistryError(err))
 	}
@@ -109,6 +117,10 @@ type pullResult struct {
 }
 
 func (c *ociClient) pullAndExport(ctx context.Context, imageRef, digest, exportDir string) (*pullResult, error) {
+	return c.pullAndExportWithPlatform(ctx, imageRef, digest, exportDir, vmPlatform())
+}
+
+func (c *ociClient) pullAndExportWithPlatform(ctx context.Context, imageRef, digest, exportDir string, platform gcr.Platform) (*pullResult, error) {
 	// Use a shared OCI layout for all images to enable automatic layer caching
 	// The cacheDir itself is the OCI layout root with shared blobs/sha256/ directory
 	// The digest is ALWAYS known at this point (from inspectManifest or digest reference)
@@ -117,7 +129,7 @@ func (c *ociClient) pullAndExport(ctx context.Context, imageRef, digest, exportD
 	// Check if this digest is already cached
 	if !c.existsInLayout(layoutTag) {
 		// Not cached, pull it using digest-based tag
-		if err := c.pullToOCILayout(ctx, imageRef, layoutTag); err != nil {
+		if err := c.pullToOCILayoutWithPlatform(ctx, imageRef, layoutTag, platform); err != nil {
 			return nil, fmt.Errorf("pull to oci layout: %w", err)
 		}
 	}
@@ -141,6 +153,10 @@ func (c *ociClient) pullAndExport(ctx context.Context, imageRef, digest, exportD
 }
 
 func (c *ociClient) pullToOCILayout(ctx context.Context, imageRef, layoutTag string) error {
+	return c.pullToOCILayoutWithPlatform(ctx, imageRef, layoutTag, vmPlatform())
+}
+
+func (c *ociClient) pullToOCILayoutWithPlatform(ctx context.Context, imageRef, layoutTag string, platform gcr.Platform) error {
 	ref, err := name.ParseReference(imageRef)
 	if err != nil {
 		return fmt.Errorf("parse image reference: %w", err)
@@ -152,7 +168,7 @@ func (c *ociClient) pullToOCILayout(ctx context.Context, imageRef, layoutTag str
 	img, err := remote.Image(ref,
 		remote.WithContext(ctx),
 		remote.WithAuthFromKeychain(authn.DefaultKeychain),
-		remote.WithPlatform(currentPlatform()))
+		remote.WithPlatform(platform))
 	if err != nil {
 		// Rate limits fail here immediately (429 is not retried by default)
 		return fmt.Errorf("fetch image manifest: %w", wrapRegistryError(err))

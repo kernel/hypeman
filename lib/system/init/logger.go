@@ -17,12 +17,17 @@ func NewLogger() *Logger {
 	l := &Logger{}
 
 	// Open serial console for output
-	// ttyS0 for x86_64, ttyAMA0 for ARM64 (PL011 UART)
-	if f, err := os.OpenFile("/dev/ttyAMA0", os.O_WRONLY, 0); err == nil {
-		l.console = f
-	} else if f, err := os.OpenFile("/dev/ttyS0", os.O_WRONLY, 0); err == nil {
-		l.console = f
-	} else {
+	// hvc0 for Virtualization.framework (vz) on macOS
+	// ttyAMA0 for ARM64 PL011 UART (cloud-hypervisor)
+	// ttyS0 for x86_64 (QEMU, cloud-hypervisor)
+	consoles := []string{"/dev/hvc0", "/dev/ttyAMA0", "/dev/ttyS0"}
+	for _, console := range consoles {
+		if f, err := os.OpenFile(console, os.O_WRONLY, 0); err == nil {
+			l.console = f
+			break
+		}
+	}
+	if l.console == nil {
 		// Fallback to stdout
 		l.console = os.Stdout
 	}

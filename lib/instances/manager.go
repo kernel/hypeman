@@ -7,8 +7,6 @@ import (
 
 	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/hypervisor"
-	"github.com/kernel/hypeman/lib/hypervisor/cloudhypervisor"
-	"github.com/kernel/hypeman/lib/hypervisor/qemu"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/network"
 	"github.com/kernel/hypeman/lib/paths"
@@ -44,6 +42,8 @@ type Manager interface {
 	// SetResourceValidator sets the validator for aggregate resource limit checking.
 	// Called after initialization to avoid circular dependencies.
 	SetResourceValidator(v ResourceValidator)
+	// GetVsockDialer returns a VsockDialer for the specified instance.
+	GetVsockDialer(ctx context.Context, instanceID string) (hypervisor.VsockDialer, error)
 }
 
 // ResourceLimits contains configurable resource limits for instances
@@ -79,6 +79,9 @@ type manager struct {
 	defaultHypervisor hypervisor.Type // Default hypervisor type when not specified in request
 }
 
+// platformStarters is populated by platform-specific init functions.
+var platformStarters = make(map[hypervisor.Type]hypervisor.VMStarter)
+
 // NewManager creates a new instances manager.
 // If meter is nil, metrics are disabled.
 // defaultHypervisor specifies which hypervisor to use when not specified in requests.
@@ -88,20 +91,23 @@ func NewManager(p *paths.Paths, imageManager images.Manager, systemManager syste
 		defaultHypervisor = hypervisor.TypeCloudHypervisor
 	}
 
+	// Initialize VM starters from platform-specific init functions
+	vmStarters := make(map[hypervisor.Type]hypervisor.VMStarter, len(platformStarters))
+	for hvType, starter := range platformStarters {
+		vmStarters[hvType] = starter
+	}
+
 	m := &manager{
-		paths:          p,
-		imageManager:   imageManager,
-		systemManager:  systemManager,
-		networkManager: networkManager,
-		deviceManager:  deviceManager,
-		volumeManager:  volumeManager,
-		limits:         limits,
-		instanceLocks:  sync.Map{},
-		hostTopology:   detectHostTopology(), // Detect and cache host topology
-		vmStarters: map[hypervisor.Type]hypervisor.VMStarter{
-			hypervisor.TypeCloudHypervisor: cloudhypervisor.NewStarter(),
-			hypervisor.TypeQEMU:            qemu.NewStarter(),
-		},
+		paths:             p,
+		imageManager:      imageManager,
+		systemManager:     systemManager,
+		networkManager:    networkManager,
+		deviceManager:     deviceManager,
+		volumeManager:     volumeManager,
+		limits:            limits,
+		instanceLocks:     sync.Map{},
+		hostTopology:      detectHostTopology(), // Detect and cache host topology
+		vmStarters:        vmStarters,
 		defaultHypervisor: defaultHypervisor,
 	}
 
@@ -125,14 +131,7 @@ func (m *manager) SetResourceValidator(v ResourceValidator) {
 // getHypervisor creates a hypervisor client for the given socket and type.
 // Used for connecting to already-running VMs (e.g., for state queries).
 func (m *manager) getHypervisor(socketPath string, hvType hypervisor.Type) (hypervisor.Hypervisor, error) {
-	switch hvType {
-	case hypervisor.TypeCloudHypervisor:
-		return cloudhypervisor.New(socketPath)
-	case hypervisor.TypeQEMU:
-		return qemu.New(socketPath)
-	default:
-		return nil, fmt.Errorf("unsupported hypervisor type: %s", hvType)
-	}
+	return hypervisor.NewClient(hvType, socketPath)
 }
 
 // getVMStarter returns the VM starter for the given hypervisor type.

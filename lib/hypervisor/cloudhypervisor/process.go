@@ -15,6 +15,9 @@ import (
 
 func init() {
 	hypervisor.RegisterSocketName(hypervisor.TypeCloudHypervisor, "ch.sock")
+	hypervisor.RegisterClientFactory(hypervisor.TypeCloudHypervisor, func(socketPath string) (hypervisor.Hypervisor, error) {
+		return New(socketPath)
+	})
 }
 
 // Starter implements hypervisor.VMStarter for Cloud Hypervisor.

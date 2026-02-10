@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nrednav/cuid2"
@@ -77,6 +78,9 @@ type Config struct {
 	// RegistrySecret is the secret used to sign registry access tokens
 	// This should be the same secret used by the registry middleware
 	RegistrySecret string
+
+	// DockerSocket is the path to the Docker socket for building the builder image
+	DockerSocket string
 }
 
 // DefaultConfig returns the default build manager configuration
@@ -113,6 +117,7 @@ type manager struct {
 	logger          *slog.Logger
 	metrics         *Metrics
 	createMu        sync.Mutex
+	builderReady    atomic.Bool
 
 	// Status subscription system for SSE streaming
 	statusSubscribers map[string][]chan BuildEvent
@@ -164,11 +169,70 @@ func NewManager(
 
 // Start starts the build manager's background services
 func (m *manager) Start(ctx context.Context) error {
-	// Note: We no longer use a global vsock listener.
-	// Instead, we connect TO each builder VM's vsock socket directly.
-	// This follows the Cloud Hypervisor vsock pattern where host initiates connections.
+	go m.ensureBuilderImage(ctx)
 	m.logger.Info("build manager started")
 	return nil
+}
+
+// ensureBuilderImage ensures the builder image is available in the registry.
+// If BUILDER_IMAGE is unset/empty, it builds from the embedded Dockerfile.
+// If BUILDER_IMAGE is set, it checks if the image exists.
+// This runs in a background goroutine during startup.
+func (m *manager) ensureBuilderImage(ctx context.Context) {
+	defer m.builderReady.Store(true)
+
+	builderImage := m.config.BuilderImage
+	if builderImage == "" {
+		builderImage = "hypeman/builder:latest"
+	}
+
+	// Check if image already exists in the registry
+	registryHost := stripRegistryScheme(m.config.RegistryURL)
+	imageRef := fmt.Sprintf("%s/%s", registryHost, builderImage)
+	if _, err := m.imageManager.GetImage(ctx, imageRef); err == nil {
+		m.logger.Info("builder image already available", "image", imageRef)
+		return
+	}
+
+	// Try to build the image using Docker
+	dockerSocket := m.config.DockerSocket
+	if dockerSocket == "" {
+		dockerSocket = "/var/run/docker.sock"
+	}
+
+	// Check if Docker socket exists
+	if _, err := os.Stat(dockerSocket); err != nil {
+		m.logger.Warn("Docker socket not found, skipping builder image build",
+			"socket", dockerSocket,
+			"error", err)
+		return
+	}
+
+	m.logger.Info("building builder image", "image", builderImage)
+
+	// Find the Dockerfile - look relative to the binary or in common locations
+	dockerfilePath := "lib/builds/images/generic/Dockerfile"
+	if _, err := os.Stat(dockerfilePath); err != nil {
+		// Try relative to executable
+		if execPath, err := os.Executable(); err == nil {
+			altPath := filepath.Join(filepath.Dir(execPath), "..", dockerfilePath)
+			if _, err := os.Stat(altPath); err == nil {
+				dockerfilePath = altPath
+			}
+		}
+	}
+
+	cmd := exec.CommandContext(ctx, "docker", "build", "-t", builderImage, "-f", dockerfilePath, ".")
+	cmd.Env = append(os.Environ(), fmt.Sprintf("DOCKER_HOST=unix://%s", dockerSocket))
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		m.logger.Warn("failed to build builder image",
+			"error", err,
+			"output", string(output))
+		return
+	}
+
+	m.logger.Info("builder image built successfully", "image", builderImage)
 }
 
 // CreateBuild starts a new build job
@@ -331,12 +395,9 @@ func (m *manager) runBuild(ctx context.Context, id string, req CreateBuildReques
 		return
 	}
 
-	// Save build logs (regardless of success/failure)
-	if result.Logs != "" {
-		if err := appendLog(m.paths, id, []byte(result.Logs)); err != nil {
-			m.logger.Warn("failed to save build logs", "id", id, "error", err)
-		}
-	}
+	// Note: Logs are now streamed via vsock "log" messages and written incrementally
+	// in waitForResult, so we no longer need to save them here.
+	// The result.Logs field is kept for backward compatibility but is redundant.
 
 	if !result.Success {
 		m.logger.Error("build failed", "id", id, "error", result.Error, "duration", duration)
@@ -387,6 +448,10 @@ func (m *manager) runBuild(ctx context.Context, id string, req CreateBuildReques
 
 // executeBuild runs the build in a builder VM
 func (m *manager) executeBuild(ctx context.Context, id string, req CreateBuildRequest, policy *BuildPolicy) (*BuildResult, error) {
+	if !m.builderReady.Load() {
+		return nil, fmt.Errorf("builder image is being prepared, please retry shortly")
+	}
+
 	// Create a volume with the source data
 	sourceVolID := fmt.Sprintf("build-source-%s", id)
 	sourcePath := m.paths.BuildSourceDir(id) + "/source.tar.gz"
@@ -480,7 +545,7 @@ func (m *manager) executeBuild(ctx context.Context, id string, req CreateBuildRe
 
 	// Wait for build result via vsock
 	// The builder agent will send the result when complete
-	result, err := m.waitForResult(ctx, inst)
+	result, err := m.waitForResult(ctx, id, inst)
 	if err != nil {
 		return nil, fmt.Errorf("wait for result: %w", err)
 	}
@@ -489,7 +554,7 @@ func (m *manager) executeBuild(ctx context.Context, id string, req CreateBuildRe
 }
 
 // waitForResult waits for the build result from the builder agent via vsock
-func (m *manager) waitForResult(ctx context.Context, inst *instances.Instance) (*BuildResult, error) {
+func (m *manager) waitForResult(ctx context.Context, buildID string, inst *instances.Instance) (*BuildResult, error) {
 	// Wait a bit for the VM to start and the builder agent to listen on vsock
 	time.Sleep(3 * time.Second)
 
@@ -504,9 +569,14 @@ func (m *manager) waitForResult(ctx context.Context, inst *instances.Instance) (
 		default:
 		}
 
-		conn, err = m.dialBuilderVsock(inst.VsockSocket)
-		if err == nil {
-			break
+		dialer, dialerErr := m.instanceManager.GetVsockDialer(ctx, inst.Id)
+		if dialerErr == nil {
+			conn, err = dialer.DialVsock(ctx, BuildAgentVsockPort)
+			if err == nil {
+				break
+			}
+		} else {
+			err = dialerErr
 		}
 
 		m.logger.Debug("waiting for builder agent", "attempt", attempt+1, "error", err)
@@ -590,6 +660,14 @@ func (m *manager) waitForResult(ctx context.Context, inst *instances.Instance) (
 			}
 			m.logger.Info("sent secrets to agent", "count", len(secrets), "instance", inst.Id)
 
+		case "log":
+			// Stream log line to build log file immediately
+			if dr.response.Log != "" {
+				if err := appendLog(m.paths, buildID, []byte(dr.response.Log)); err != nil {
+					m.logger.Error("failed to append streamed log", "error", err, "build_id", buildID)
+				}
+			}
+
 		case "build_result":
 			// Build completed
 			if dr.response.Result == nil {
@@ -601,62 +679,6 @@ func (m *manager) waitForResult(ctx context.Context, inst *instances.Instance) (
 			m.logger.Warn("unexpected message type from agent", "type", dr.response.Type)
 		}
 	}
-}
-
-// dialBuilderVsock connects to a builder VM's vsock socket using Cloud Hypervisor's handshake
-func (m *manager) dialBuilderVsock(vsockSocketPath string) (net.Conn, error) {
-	// Connect to the Cloud Hypervisor vsock Unix socket
-	conn, err := net.DialTimeout("unix", vsockSocketPath, 5*time.Second)
-	if err != nil {
-		return nil, fmt.Errorf("dial vsock socket %s: %w", vsockSocketPath, err)
-	}
-
-	// Set deadline for handshake
-	if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("set handshake deadline: %w", err)
-	}
-
-	// Perform Cloud Hypervisor vsock handshake
-	// Format: "CONNECT <port>\n" -> "OK <port>\n"
-	handshakeCmd := fmt.Sprintf("CONNECT %d\n", BuildAgentVsockPort)
-	if _, err := conn.Write([]byte(handshakeCmd)); err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("send vsock handshake: %w", err)
-	}
-
-	// Read handshake response
-	reader := bufio.NewReader(conn)
-	response, err := reader.ReadString('\n')
-	if err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("read vsock handshake response: %w", err)
-	}
-
-	// Clear deadline after successful handshake
-	if err := conn.SetDeadline(time.Time{}); err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("clear deadline: %w", err)
-	}
-
-	response = strings.TrimSpace(response)
-	if !strings.HasPrefix(response, "OK ") {
-		conn.Close()
-		return nil, fmt.Errorf("vsock handshake failed: %s", response)
-	}
-
-	return &bufferedConn{Conn: conn, reader: reader}, nil
-}
-
-// bufferedConn wraps a net.Conn with a bufio.Reader to ensure any buffered
-// data from the handshake is properly drained before reading from the connection
-type bufferedConn struct {
-	net.Conn
-	reader *bufio.Reader
-}
-
-func (c *bufferedConn) Read(p []byte) (int, error) {
-	return c.reader.Read(p)
 }
 
 // updateStatus updates the build status

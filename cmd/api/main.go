@@ -130,11 +130,11 @@ func run() error {
 		logger.Warn("JWT_SECRET not configured - API authentication will fail")
 	}
 
-	// Verify KVM access (required for VM creation)
-	if err := checkKVMAccess(); err != nil {
-		return fmt.Errorf("KVM access check failed: %w\n\nEnsure:\n  1. KVM is enabled (check /dev/kvm exists)\n  2. User is in 'kvm' group: sudo usermod -aG kvm $USER\n  3. Log out and back in, or use: newgrp kvm", err)
+	// Verify hypervisor access (KVM on Linux, Virtualization.framework on macOS)
+	if err := checkHypervisorAccess(); err != nil {
+		return fmt.Errorf("hypervisor access check failed: %w", err)
 	}
-	logger.Info("KVM access verified")
+	logger.Info("Hypervisor access verified", "type", hypervisorAccessCheckName())
 
 	// Check if QEMU is available (optional - only warn if not present)
 	if _, err := (&qemu.Starter{}).GetBinaryPath(nil, ""); err != nil {
@@ -465,18 +465,3 @@ func run() error {
 	return err
 }
 
-// checkKVMAccess verifies KVM is available and the user has permission to use it
-func checkKVMAccess() error {
-	f, err := os.OpenFile("/dev/kvm", os.O_RDWR, 0)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf("/dev/kvm not found - KVM not enabled or not supported")
-		}
-		if os.IsPermission(err) {
-			return fmt.Errorf("permission denied accessing /dev/kvm - user not in 'kvm' group")
-		}
-		return fmt.Errorf("cannot access /dev/kvm: %w", err)
-	}
-	f.Close()
-	return nil
-}
