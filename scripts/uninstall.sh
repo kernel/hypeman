@@ -6,16 +6,12 @@
 #   curl -fsSL https://raw.githubusercontent.com/kernel/hypeman/main/scripts/uninstall.sh | bash
 #
 # Options (via environment variables):
-#   KEEP_DATA=false   - Remove data directory (/var/lib/hypeman) - kept by default
-#   KEEP_CONFIG=true  - Keep config directory (/etc/hypeman)
+#   KEEP_DATA=false   - Remove data directory - kept by default
+#   KEEP_CONFIG=true  - Keep config directory
 #
 
 set -e
 
-INSTALL_DIR="/opt/hypeman"
-DATA_DIR="/var/lib/hypeman"
-CONFIG_DIR="/etc/hypeman"
-SYSTEMD_DIR="/etc/systemd/system"
 SERVICE_NAME="hypeman"
 SERVICE_USER="hypeman"
 
@@ -31,49 +27,99 @@ warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 
 # =============================================================================
+# Detect OS
+# =============================================================================
+
+OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+if [ "$OS" != "linux" ] && [ "$OS" != "darwin" ]; then
+    error "Unsupported OS: $OS (supported: linux, darwin)"
+fi
+
+# =============================================================================
+# OS-conditional defaults
+# =============================================================================
+
+if [ "$OS" = "darwin" ]; then
+    INSTALL_DIR="/usr/local/bin"
+    DATA_DIR="$HOME/Library/Application Support/hypeman"
+    CONFIG_DIR="$HOME/.config/hypeman"
+else
+    INSTALL_DIR="/opt/hypeman"
+    DATA_DIR="/var/lib/hypeman"
+    CONFIG_DIR="/etc/hypeman"
+fi
+
+SYSTEMD_DIR="/etc/systemd/system"
+
+# =============================================================================
 # Pre-flight checks
 # =============================================================================
 
 info "Running pre-flight checks..."
 
-# Check for root or sudo access
 SUDO=""
-if [ "$EUID" -ne 0 ]; then
-    if ! command -v sudo >/dev/null 2>&1; then
-        error "This script requires root privileges. Please run as root or install sudo."
+if [ "$OS" = "linux" ]; then
+    if [ "$EUID" -ne 0 ]; then
+        if ! command -v sudo >/dev/null 2>&1; then
+            error "This script requires root privileges. Please run as root or install sudo."
+        fi
+        if ! sudo -n true 2>/dev/null; then
+            info "Requesting sudo privileges..."
+            if ! sudo -v < /dev/tty; then
+                error "Failed to obtain sudo privileges"
+            fi
+        fi
+        SUDO="sudo"
     fi
-    # Try passwordless sudo first, then prompt from terminal if needed
-    if ! sudo -n true 2>/dev/null; then
-        info "Requesting sudo privileges..."
-        if ! sudo -v < /dev/tty; then
-            error "Failed to obtain sudo privileges"
+elif [ "$OS" = "darwin" ]; then
+    if [ ! -w "$INSTALL_DIR" ] 2>/dev/null; then
+        if command -v sudo >/dev/null 2>&1; then
+            if ! sudo -n true 2>/dev/null; then
+                info "Requesting sudo privileges (needed for $INSTALL_DIR)..."
+                sudo -v < /dev/tty 2>/dev/null || true
+            fi
+            SUDO="sudo"
         fi
     fi
-    SUDO="sudo"
 fi
 
 # =============================================================================
 # Stop and disable service
 # =============================================================================
 
-if $SUDO systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
-    info "Stopping ${SERVICE_NAME} service..."
-    $SUDO systemctl stop "$SERVICE_NAME"
-fi
+if [ "$OS" = "darwin" ]; then
+    PLIST_PATH="$HOME/Library/LaunchAgents/com.kernel.hypeman.plist"
+    if [ -f "$PLIST_PATH" ]; then
+        info "Stopping ${SERVICE_NAME} service..."
+        launchctl unload "$PLIST_PATH" 2>/dev/null || true
+    fi
+else
+    if $SUDO systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+        info "Stopping ${SERVICE_NAME} service..."
+        $SUDO systemctl stop "$SERVICE_NAME"
+    fi
 
-if $SUDO systemctl is-enabled --quiet "$SERVICE_NAME" 2>/dev/null; then
-    info "Disabling ${SERVICE_NAME} service..."
-    $SUDO systemctl disable "$SERVICE_NAME"
+    if $SUDO systemctl is-enabled --quiet "$SERVICE_NAME" 2>/dev/null; then
+        info "Disabling ${SERVICE_NAME} service..."
+        $SUDO systemctl disable "$SERVICE_NAME"
+    fi
 fi
 
 # =============================================================================
-# Remove systemd service
+# Remove service files
 # =============================================================================
 
-if [ -f "${SYSTEMD_DIR}/${SERVICE_NAME}.service" ]; then
-    info "Removing systemd service..."
-    $SUDO rm -f "${SYSTEMD_DIR}/${SERVICE_NAME}.service"
-    $SUDO systemctl daemon-reload
+if [ "$OS" = "darwin" ]; then
+    if [ -f "$PLIST_PATH" ]; then
+        info "Removing launchd plist..."
+        rm -f "$PLIST_PATH"
+    fi
+else
+    if [ -f "${SYSTEMD_DIR}/${SERVICE_NAME}.service" ]; then
+        info "Removing systemd service..."
+        $SUDO rm -f "${SYSTEMD_DIR}/${SERVICE_NAME}.service"
+        $SUDO systemctl daemon-reload
+    fi
 fi
 
 # =============================================================================
@@ -82,13 +128,31 @@ fi
 
 info "Removing binaries..."
 
-# Remove wrapper scripts from /usr/local/bin
-$SUDO rm -f /usr/local/bin/hypeman
-$SUDO rm -f /usr/local/bin/hypeman-token
+if [ "$OS" = "darwin" ]; then
+    $SUDO rm -f "${INSTALL_DIR}/hypeman-api"
+    $SUDO rm -f "${INSTALL_DIR}/vz-shim"
+    $SUDO rm -f "${INSTALL_DIR}/hypeman-token"
+    $SUDO rm -f "${INSTALL_DIR}/hypeman"
+else
+    # Remove wrapper scripts from /usr/local/bin
+    $SUDO rm -f /usr/local/bin/hypeman
+    $SUDO rm -f /usr/local/bin/hypeman-token
 
-# Remove install directory
-if [ -d "$INSTALL_DIR" ]; then
-    $SUDO rm -rf "$INSTALL_DIR"
+    # Remove install directory
+    if [ -d "$INSTALL_DIR" ]; then
+        $SUDO rm -rf "$INSTALL_DIR"
+    fi
+fi
+
+# =============================================================================
+# Kill orphan vz-shim processes (macOS)
+# =============================================================================
+
+if [ "$OS" = "darwin" ]; then
+    if pgrep -f vz-shim >/dev/null 2>&1; then
+        info "Killing orphan vz-shim processes..."
+        pkill -f vz-shim 2>/dev/null || true
+    fi
 fi
 
 # =============================================================================
@@ -100,7 +164,11 @@ if [ -d "$DATA_DIR" ]; then
         info "Keeping data directory: ${DATA_DIR}"
     else
         info "Removing data directory: ${DATA_DIR}"
-        $SUDO rm -rf "$DATA_DIR"
+        if [ "$OS" = "darwin" ]; then
+            rm -rf "$DATA_DIR"
+        else
+            $SUDO rm -rf "$DATA_DIR"
+        fi
     fi
 fi
 
@@ -113,20 +181,26 @@ if [ -d "$CONFIG_DIR" ]; then
         warn "Keeping config directory: ${CONFIG_DIR}"
     else
         info "Removing config directory: ${CONFIG_DIR}"
-        $SUDO rm -rf "$CONFIG_DIR"
+        if [ "$OS" = "darwin" ]; then
+            rm -rf "$CONFIG_DIR"
+        else
+            $SUDO rm -rf "$CONFIG_DIR"
+        fi
     fi
 fi
 
 # =============================================================================
-# Remove hypeman user
+# Remove hypeman user (Linux only)
 # =============================================================================
 
-if id "$SERVICE_USER" &>/dev/null; then
-    if [ "${KEEP_DATA:-true}" = "true" ]; then
-        info "Keeping system user: ${SERVICE_USER} (data is preserved)"
-    else
-        info "Removing system user: ${SERVICE_USER}"
-        $SUDO userdel "$SERVICE_USER" 2>/dev/null || true
+if [ "$OS" = "linux" ]; then
+    if id "$SERVICE_USER" &>/dev/null; then
+        if [ "${KEEP_DATA:-true}" = "true" ]; then
+            info "Keeping system user: ${SERVICE_USER} (data is preserved)"
+        else
+            info "Removing system user: ${SERVICE_USER}"
+            $SUDO userdel "$SERVICE_USER" 2>/dev/null || true
+        fi
     fi
 fi
 
@@ -150,19 +224,33 @@ echo ""
 
 if [ "${KEEP_DATA:-true}" = "true" ] && [ -d "$DATA_DIR" ]; then
     info "Data directory preserved: ${DATA_DIR}"
-    echo "  To remove: sudo rm -rf ${DATA_DIR}"
+    if [ "$OS" = "darwin" ]; then
+        echo "  To remove: rm -rf \"${DATA_DIR}\""
+    else
+        echo "  To remove: sudo rm -rf ${DATA_DIR}"
+    fi
     echo ""
 fi
 
 if [ "${KEEP_CONFIG:-false}" = "true" ] && [ -d "$CONFIG_DIR" ]; then
     info "Config directory preserved: ${CONFIG_DIR}"
-    echo "  To remove: sudo rm -rf ${CONFIG_DIR}"
+    if [ "$OS" = "darwin" ]; then
+        echo "  To remove: rm -rf \"${CONFIG_DIR}\""
+    else
+        echo "  To remove: sudo rm -rf ${CONFIG_DIR}"
+    fi
     echo ""
 fi
 
-warn "Note: Caddy or Cloud Hypervisor processes may still be running."
-echo "  Check with: ps aux | grep -E 'caddy|cloud-h'"
-echo "  Kill all:   sudo pkill -f caddy; sudo pkill -f cloud-h"
+if [ "$OS" = "darwin" ]; then
+    warn "Note: vz-shim processes may still be running."
+    echo "  Check with: ps aux | grep vz-shim"
+    echo "  Kill all:   pkill -f vz-shim"
+else
+    warn "Note: Caddy or Cloud Hypervisor processes may still be running."
+    echo "  Check with: ps aux | grep -E 'caddy|cloud-h'"
+    echo "  Kill all:   sudo pkill -f caddy; sudo pkill -f cloud-h"
+fi
 echo ""
 
 echo "To reinstall:"
