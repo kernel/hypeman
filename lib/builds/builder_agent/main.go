@@ -268,7 +268,9 @@ func handleHostConnection(conn net.Conn) {
 			})
 
 			// Start streaming logs to host
+			logsDone := make(chan struct{})
 			go func() {
+				defer close(logsDone)
 				for logLine := range logChan {
 					encoderLock.Lock()
 					err := encoder.Encode(VsockMessage{Type: "log", Log: logLine})
@@ -283,6 +285,10 @@ func handleHostConnection(conn net.Conn) {
 			// Wait for build to complete and send result to host
 			go func() {
 				<-buildDone
+				// Wait for all buffered log messages to be sent before sending the result.
+				// This prevents the host from receiving build_result before all logs,
+				// which would cause it to close the connection and lose remaining logs.
+				<-logsDone
 
 				buildResultLock.Lock()
 				result := buildResult

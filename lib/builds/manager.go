@@ -233,6 +233,28 @@ func (m *manager) ensureBuilderImage(ctx context.Context) {
 	}
 
 	m.logger.Info("builder image built successfully", "image", builderImage)
+
+	// Tag the image with the registry prefix so it can be pushed
+	tagCmd := exec.CommandContext(ctx, "docker", "tag", builderImage, imageRef)
+	tagCmd.Env = append(os.Environ(), fmt.Sprintf("DOCKER_HOST=unix://%s", dockerSocket))
+	if tagOutput, err := tagCmd.CombinedOutput(); err != nil {
+		m.logger.Warn("failed to tag builder image for registry",
+			"error", err,
+			"output", string(tagOutput))
+		return
+	}
+
+	// Push the image to the registry so builder VMs can pull it
+	pushCmd := exec.CommandContext(ctx, "docker", "push", imageRef)
+	pushCmd.Env = append(os.Environ(), fmt.Sprintf("DOCKER_HOST=unix://%s", dockerSocket))
+	if pushOutput, err := pushCmd.CombinedOutput(); err != nil {
+		m.logger.Warn("failed to push builder image to registry",
+			"error", err,
+			"output", string(pushOutput))
+		return
+	}
+
+	m.logger.Info("builder image pushed to registry", "image", imageRef)
 }
 
 // CreateBuild starts a new build job
@@ -395,9 +417,14 @@ func (m *manager) runBuild(ctx context.Context, id string, req CreateBuildReques
 		return
 	}
 
-	// Note: Logs are now streamed via vsock "log" messages and written incrementally
-	// in waitForResult, so we no longer need to save them here.
-	// The result.Logs field is kept for backward compatibility but is redundant.
+	// Save complete build logs from result.Logs as the authoritative log file.
+	// Streamed "log" messages may have dropped lines due to channel overflow,
+	// so we overwrite with the complete buffer to ensure no logs are lost.
+	if result.Logs != "" {
+		if err := writeLog(m.paths, id, []byte(result.Logs)); err != nil {
+			m.logger.Warn("failed to save build logs", "id", id, "error", err)
+		}
+	}
 
 	if !result.Success {
 		m.logger.Error("build failed", "id", id, "error", result.Error, "duration", duration)
