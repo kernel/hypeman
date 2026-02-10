@@ -1,12 +1,12 @@
 # Instance Manager
 
-Manages VM instance lifecycle using Cloud Hypervisor.
+Manages VM instance lifecycle across multiple hypervisors (Cloud Hypervisor, QEMU on Linux; vz on macOS).
 
 ## Design Decisions
 
 ### Why State Machine? (state.go)
 
-**What:** Single-hop state transitions matching Cloud Hypervisor's actual states
+**What:** Single-hop state transitions matching hypervisor states
 
 **Why:**
 - Validates transitions before execution (prevents invalid operations)
@@ -132,6 +132,6 @@ TestStorageOperations - metadata persistence, directory cleanup
 
 - `lib/images` - Image manager for OCI image validation
 - `lib/system` - System manager for kernel/initrd files
-- `lib/vmm` - Cloud Hypervisor client for VM operations
-- System tools: `mkfs.erofs`, `cpio`, `gzip`
+- `lib/hypervisor` - Hypervisor abstraction for VM operations
+- System tools: `mkfs.erofs`, `cpio`, `gzip` (Linux); `mkfs.ext4` (macOS)
 

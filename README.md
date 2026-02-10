@@ -21,7 +21,13 @@
 
 ## Requirements
 
-Hypeman server runs on **Linux** with **KVM** virtualization support. The CLI can run locally on the server or connect remotely from any machine.
+### Linux (Production)
+Hypeman server runs on **Linux** with **KVM** virtualization support. Supports Cloud Hypervisor and QEMU as hypervisors.
+
+### macOS (Experimental)
+Hypeman also supports **macOS** (11.0+) using Apple's **Virtualization.framework** via the `vz` hypervisor. See [macOS Support](#macos-support) below.
+
+The CLI can run locally on the server or connect remotely from any machine.
 
 ## Quick Start
 
@@ -152,6 +158,59 @@ hypeman logs --source hypeman my-app
 ```
 
 For all available commands, run `hypeman --help`.
+
+## macOS Support
+
+Hypeman supports macOS using Apple's Virtualization.framework through the `vz` hypervisor. This provides native virtualization on Apple Silicon Macs (Intel Macs are not supported).
+
+### Requirements
+
+- macOS 11.0+ (macOS 14.0+ required for snapshot/restore on ARM64)
+- Apple Silicon (M1/M2/M3) recommended
+- Caddy: `brew install caddy`
+- e2fsprogs: `brew install e2fsprogs` (for ext4 disk images)
+
+### Quick Start (macOS)
+
+```bash
+# Install dependencies
+brew install caddy e2fsprogs
+
+# Add e2fsprogs to PATH (it's keg-only)
+export PATH="/opt/homebrew/opt/e2fsprogs/bin:/opt/homebrew/opt/e2fsprogs/sbin:$PATH"
+
+# Configure environment
+cp .env.darwin.example .env
+
+# Create data directory
+mkdir -p ~/Library/Application\ Support/hypeman
+
+# Run with hot reload (auto-detects macOS, builds, signs, and runs)
+make dev
+```
+
+The `make dev` command automatically detects macOS and handles building with vz support and signing with required entitlements.
+
+### Key Differences from Linux
+
+| Feature | Linux | macOS |
+|---------|-------|-------|
+| Hypervisors | Cloud Hypervisor, QEMU | vz (Virtualization.framework) |
+| Networking | TAP devices, bridges, iptables | NAT (built-in, automatic) |
+| Rate Limiting | HTB/tc | Not supported |
+| GPU Passthrough | VFIO | Not supported |
+| Disk Format | qcow2, raw | raw only |
+| Snapshots | Always available | macOS 14+ ARM64 only |
+
+### Limitations
+
+- **Networking**: macOS uses NAT networking automatically. No manual bridge/TAP configuration needed, but ingress requires discovering the VM's NAT IP.
+- **Rate Limiting**: Network and disk I/O rate limiting is not available on macOS.
+- **GPU**: PCI device passthrough is not supported on macOS.
+- **Disk Images**: qcow2 format is not directly supported; use raw disk images.
+- **Snapshots**: Requires macOS 14.0+ on Apple Silicon (ARM64).
+
+For detailed development setup, see [DEVELOPMENT.md](DEVELOPMENT.md).
 
 ## Development
 

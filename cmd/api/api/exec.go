@@ -12,7 +12,6 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/kernel/hypeman/lib/guest"
-	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/instances"
 	"github.com/kernel/hypeman/lib/logger"
 	mw "github.com/kernel/hypeman/lib/middleware"
@@ -132,10 +131,9 @@ func (s *ApiService) ExecHandler(w http.ResponseWriter, r *http.Request) {
 	// Create WebSocket read/writer wrapper that handles resize messages
 	wsConn := &wsReadWriter{ws: ws, ctx: ctx, resizeChan: resizeChan}
 
-	// Create vsock dialer for this hypervisor type
-	dialer, err := hypervisor.NewVsockDialer(hypervisor.Type(inst.HypervisorType), inst.VsockSocket, inst.VsockCID)
+	dialer, err := s.InstanceManager.GetVsockDialer(ctx, inst.Id)
 	if err != nil {
-		log.ErrorContext(ctx, "failed to create vsock dialer", "error", err)
+		log.ErrorContext(ctx, "failed to get vsock dialer", "error", err)
 		ws.WriteMessage(websocket.BinaryMessage, []byte(fmt.Sprintf("Error: %v\r\n", err)))
 		ws.WriteMessage(websocket.TextMessage, []byte(`{"exitCode":127}`))
 		return
