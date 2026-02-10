@@ -27,12 +27,12 @@ func TestNormalizeToLocalRef(t *testing.T) {
 		{
 			name:     "docker hub official image with tag",
 			input:    "docker.io/library/alpine:3.21",
-			expected: "alpine:3.21",
+			expected: "library/alpine:3.21",
 		},
 		{
 			name:     "docker hub official image short form",
 			input:    "alpine:3.21",
-			expected: "alpine:3.21",
+			expected: "library/alpine:3.21",
 		},
 		{
 			name:     "docker hub image with index.docker.io",
@@ -52,12 +52,12 @@ func TestNormalizeToLocalRef(t *testing.T) {
 		{
 			name:     "image with latest tag",
 			input:    "nginx:latest",
-			expected: "nginx:latest",
+			expected: "library/nginx:latest",
 		},
 		{
 			name:     "image without tag uses latest",
 			input:    "nginx",
-			expected: "nginx:latest",
+			expected: "library/nginx:latest",
 		},
 	}
 

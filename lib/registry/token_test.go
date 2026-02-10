@@ -91,8 +91,10 @@ func TestTokenHandler_BearerAuth(t *testing.T) {
 func TestTokenHandler_ScopeValidation(t *testing.T) {
 	handler := NewTokenHandler(testJWTSecret)
 
-	t.Run("scope not in token is rejected", func(t *testing.T) {
-		// Token allows builds/build-123, but request is for builds/other
+	t.Run("scope not in token still returns token for mirror fallback", func(t *testing.T) {
+		// Token allows builds/build-123, but request is for builds/other.
+		// Token endpoint returns 200 anyway — access control is enforced
+		// at the middleware layer. This enables BuildKit mirror fallback.
 		registryToken := generateRegistryToken(t, "build-123", []string{"builds/build-123"}, "push", time.Hour)
 		basicAuth := base64.StdEncoding.EncodeToString([]byte(registryToken + ":"))
 
@@ -102,11 +104,13 @@ func TestTokenHandler_ScopeValidation(t *testing.T) {
 		rr := httptest.NewRecorder()
 		handler.ServeHTTP(rr, req)
 
-		assert.Equal(t, http.StatusForbidden, rr.Code)
+		assert.Equal(t, http.StatusOK, rr.Code)
 	})
 
-	t.Run("push action with pull-only token is rejected", func(t *testing.T) {
-		// Token only has pull scope
+	t.Run("push action with pull-only token still returns token for mirror fallback", func(t *testing.T) {
+		// Token only has pull scope but requests push.
+		// Token endpoint returns 200 anyway — access control is enforced
+		// at the middleware layer.
 		registryToken := generateRegistryToken(t, "build-123", []string{"builds/build-123"}, "pull", time.Hour)
 		basicAuth := base64.StdEncoding.EncodeToString([]byte(registryToken + ":"))
 
@@ -116,7 +120,7 @@ func TestTokenHandler_ScopeValidation(t *testing.T) {
 		rr := httptest.NewRecorder()
 		handler.ServeHTTP(rr, req)
 
-		assert.Equal(t, http.StatusForbidden, rr.Code)
+		assert.Equal(t, http.StatusOK, rr.Code)
 	})
 
 	t.Run("pull action with push token is allowed", func(t *testing.T) {

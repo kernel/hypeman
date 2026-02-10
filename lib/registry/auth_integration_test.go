@@ -105,9 +105,10 @@ func TestBuildKitAuthFlow(t *testing.T) {
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 	})
 
-	t.Run("authenticated request for unauthorized repo returns 403", func(t *testing.T) {
-		// Token only allows access to builds/build-123 and cache/org-test
-		// Request for a different repo should fail with 403
+	t.Run("authenticated request for unauthorized repo returns token for mirror fallback", func(t *testing.T) {
+		// Token only allows access to builds/build-123 and cache/org-test.
+		// Token endpoint returns 200 anyway — access control is enforced
+		// at the middleware layer. This enables BuildKit mirror fallback.
 		req, err := http.NewRequest(http.MethodGet, server.URL+"/v2/token?scope=repository:builds/other-build:push&service=hypeman", nil)
 		require.NoError(t, err)
 
@@ -118,7 +119,7 @@ func TestBuildKitAuthFlow(t *testing.T) {
 		require.NoError(t, err)
 		defer resp.Body.Close()
 
-		assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
 	})
 }
 
@@ -156,9 +157,9 @@ func TestDockerConfigCredentialLookup(t *testing.T) {
 			expectedStatus: http.StatusOK,
 		},
 		{
-			name:           "unauthorized repo",
+			name:           "unauthorized repo returns token for mirror fallback",
 			scope:          "repository:builds/other:push",
-			expectedStatus: http.StatusForbidden,
+			expectedStatus: http.StatusOK,
 		},
 	}
 
