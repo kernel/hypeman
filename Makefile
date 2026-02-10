@@ -1,5 +1,5 @@
 SHELL := /bin/bash
-.PHONY: oapi-generate generate-vmm-client generate-wire generate-all dev build build-linux build-darwin test test-linux test-darwin install-tools gen-jwt download-ch-binaries download-ch-spec ensure-ch-binaries build-caddy-binaries build-caddy ensure-caddy-binaries  release-prep clean build-embedded
+.PHONY: oapi-generate generate-vmm-client generate-wire generate-all dev build build-linux test test-linux test-darwin install-tools gen-jwt download-ch-binaries download-ch-spec ensure-ch-binaries build-caddy-binaries build-caddy ensure-caddy-binaries  release-prep clean build-embedded
 
 # Directory where local binaries will be installed
 BIN_DIR ?= $(CURDIR)/bin
@@ -198,15 +198,17 @@ endif
 build-linux: ensure-ch-binaries ensure-caddy-binaries build-embedded | $(BIN_DIR)
 	go build -tags containers_image_openpgp -o $(BIN_DIR)/hypeman ./cmd/api
 
-# Build for macOS (no CH/Caddy needed; guest binaries cross-compiled for Linux)
-build-darwin: build-embedded | $(BIN_DIR)
-	go build -tags containers_image_openpgp -o $(BIN_DIR)/hypeman ./cmd/api
-
 # Build all binaries
 build-all: build
 
 # Run in development mode with hot reload
-dev: dev-linux
+# On macOS, redirects to dev-darwin which uses vz instead of cloud-hypervisor
+dev:
+	@if [ "$$(uname)" = "Darwin" ]; then \
+		$(MAKE) dev-darwin; \
+	else \
+		$(MAKE) dev-linux; \
+	fi
 
 # Linux development mode with hot reload
 dev-linux: ensure-ch-binaries ensure-caddy-binaries build-embedded $(AIR)
@@ -238,7 +240,7 @@ test-linux: ensure-ch-binaries ensure-caddy-binaries build-embedded
 # Uses 'go list' to discover compilable packages, then filters out packages
 # whose test files reference Linux-only symbols (network, devices, system/init).
 DARWIN_EXCLUDE_PKGS := /lib/network|/lib/devices|/lib/system/init
-test-darwin: build-embedded
+test-darwin: build-embedded sign-vz-shim
 	@VERBOSE_FLAG=""; \
 	if [ -n "$(VERBOSE)" ]; then VERBOSE_FLAG="-v"; fi; \
 	PKGS=$$(PATH="/opt/homebrew/opt/e2fsprogs/sbin:$(PATH)" \
@@ -282,3 +284,95 @@ clean:
 release-prep: download-ch-binaries build-caddy-binaries build-embedded
 	go mod tidy
 
+# =============================================================================
+# macOS (vz/Virtualization.framework) targets
+# =============================================================================
+
+# Entitlements file for macOS codesigning
+ENTITLEMENTS_FILE ?= vz.entitlements
+
+# Build vz-shim (subprocess that hosts vz VMs)
+# Also copies to embed directory so it gets embedded in the hypeman binary
+.PHONY: build-vz-shim
+build-vz-shim: | $(BIN_DIR)
+	@echo "Building vz-shim for macOS..."
+	go build -o $(BIN_DIR)/vz-shim ./cmd/vz-shim
+	cp $(BIN_DIR)/vz-shim lib/hypervisor/vz/vz-shim/vz-shim
+	@echo "Build complete: $(BIN_DIR)/vz-shim"
+
+# Sign vz-shim with entitlements
+.PHONY: sign-vz-shim
+sign-vz-shim: build-vz-shim
+	@echo "Signing $(BIN_DIR)/vz-shim with entitlements..."
+	codesign --sign - --entitlements $(ENTITLEMENTS_FILE) --force $(BIN_DIR)/vz-shim
+	@echo "Signed: $(BIN_DIR)/vz-shim"
+
+# Build for macOS with vz support
+# Note: This builds without embedded CH/Caddy binaries since vz doesn't need them
+# Guest-agent and init are cross-compiled for Linux (they run inside the VM)
+.PHONY: build-darwin
+build-darwin: build-embedded build-vz-shim | $(BIN_DIR)
+	@echo "Building hypeman for macOS with vz support..."
+	go build -tags containers_image_openpgp -o $(BIN_DIR)/hypeman ./cmd/api
+	@echo "Build complete: $(BIN_DIR)/hypeman"
+
+# Sign the binary with entitlements (required for Virtualization.framework)
+# Usage: make sign-darwin
+.PHONY: sign-darwin
+sign-darwin: build-darwin sign-vz-shim
+	@echo "Signing $(BIN_DIR)/hypeman with entitlements..."
+	codesign --sign - --entitlements $(ENTITLEMENTS_FILE) --force $(BIN_DIR)/hypeman
+	@echo "Verifying signature..."
+	codesign --display --entitlements - $(BIN_DIR)/hypeman
+
+# Sign with a specific identity (for distribution)
+# Usage: make sign-darwin-identity IDENTITY="Developer ID Application: Your Name"
+.PHONY: sign-darwin-identity
+sign-darwin-identity: build-darwin
+	@if [ -z "$(IDENTITY)" ]; then \
+		echo "Error: IDENTITY not set. Usage: make sign-darwin-identity IDENTITY='Developer ID Application: ...'"; \
+		exit 1; \
+	fi
+	@echo "Signing $(BIN_DIR)/hypeman with identity: $(IDENTITY)"
+	codesign --sign "$(IDENTITY)" --entitlements $(ENTITLEMENTS_FILE) --force --options runtime $(BIN_DIR)/hypeman
+	@echo "Verifying signature..."
+	codesign --verify --verbose $(BIN_DIR)/hypeman
+
+# Run on macOS with vz support (development mode)
+# Automatically signs the binary before running
+.PHONY: dev-darwin
+# macOS development mode with hot reload (uses vz, no sudo needed)
+dev-darwin: build-embedded $(AIR)
+	@rm -f ./tmp/main
+	PATH="/opt/homebrew/opt/e2fsprogs/sbin:$(PATH)" $(AIR) -c .air.darwin.toml
+
+# Run without hot reload (for testing)
+run:
+	@if [ "$$(uname)" = "Darwin" ]; then \
+		$(MAKE) run-darwin; \
+	else \
+		$(MAKE) run-linux; \
+	fi
+
+run-linux: ensure-ch-binaries ensure-caddy-binaries build-embedded build
+	./bin/hypeman
+
+run-darwin: sign-darwin
+	PATH="/opt/homebrew/opt/e2fsprogs/sbin:$(PATH)" ./bin/hypeman
+
+# Quick test of vz package compilation
+.PHONY: test-vz-compile
+test-vz-compile:
+	@echo "Testing vz package compilation..."
+	go build ./lib/hypervisor/vz/...
+	@echo "vz package compiles successfully"
+
+# Verify entitlements on a signed binary
+.PHONY: verify-entitlements
+verify-entitlements:
+	@if [ ! -f $(BIN_DIR)/hypeman ]; then \
+		echo "Error: $(BIN_DIR)/hypeman not found. Run 'make sign-darwin' first."; \
+		exit 1; \
+	fi
+	@echo "Entitlements on $(BIN_DIR)/hypeman:"
+	codesign --display --entitlements - $(BIN_DIR)/hypeman

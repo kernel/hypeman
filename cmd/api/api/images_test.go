@@ -225,12 +225,13 @@ func TestCreateImage_Idempotent(t *testing.T) {
 		t.Fatal("Build failed - this is the root cause of test failures")
 	}
 
-	// Status can be "pending" (still processing) or "ready" (already completed in fast CI)
+	// Status can be "pending" (still queued), "pulling" (pull started), or "ready" (completed)
 	// The key idempotency invariant is that the digest is the same (verified above)
 	require.Contains(t, []oapi.ImageStatus{
 		oapi.ImageStatus(images.StatusPending),
+		oapi.ImageStatus(images.StatusPulling),
 		oapi.ImageStatus(images.StatusReady),
-	}, img2.Status, "status should be pending or ready")
+	}, img2.Status, "status should be pending, pulling, or ready")
 
 	// If still pending, should have queue position
 	if img2.Status == oapi.ImageStatus(images.StatusPending) {
