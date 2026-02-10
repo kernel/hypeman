@@ -191,6 +191,18 @@ func appendLog(p *paths.Paths, id string, data []byte) error {
 	return nil
 }
 
+// writeLog writes the complete build log file, replacing any existing content.
+// This is used to persist the authoritative complete logs from result.Logs,
+// which may contain lines that were dropped during streaming due to channel overflow.
+func writeLog(p *paths.Paths, id string, data []byte) error {
+	if err := ensureLogsDir(p, id); err != nil {
+		return err
+	}
+
+	logPath := p.BuildLog(id)
+	return os.WriteFile(logPath, data, 0644)
+}
+
 // readLog reads the build log file
 func readLog(p *paths.Paths, id string) ([]byte, error) {
 	logPath := p.BuildLog(id)
