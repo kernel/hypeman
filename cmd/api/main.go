@@ -465,5 +465,3 @@ func run() error {
 	return err
 }
 
-// checkHypervisorAccess and hypervisorAccessCheckName are defined in
-// hypervisor_check_linux.go and hypervisor_check_darwin.go

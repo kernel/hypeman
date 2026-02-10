@@ -71,7 +71,7 @@ func (m *manager) buildInitrd(ctx context.Context, arch string) (string, error) 
 	}
 
 	// Download and add kernel headers tarball (for DKMS support)
-	if err := downloadKernelHeaders(arch, rootfsDir); err != nil {
+	if err := downloadKernelHeaders(ctx, arch, rootfsDir); err != nil {
 		return "", fmt.Errorf("download kernel headers: %w", err)
 	}
 
@@ -162,7 +162,7 @@ func computeInitrdHash(arch string) string {
 }
 
 // downloadKernelHeaders downloads kernel headers tarball and adds it to the initrd rootfs
-func downloadKernelHeaders(arch, rootfsDir string) error {
+func downloadKernelHeaders(ctx context.Context, arch, rootfsDir string) error {
 	url, ok := KernelHeaderURLs[DefaultKernelVersion][arch]
 	if !ok {
 		// No headers available for this arch, skip (non-fatal)
@@ -178,7 +178,12 @@ func downloadKernelHeaders(arch, rootfsDir string) error {
 		},
 	}
 
-	resp, err := client.Get(url)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("create request: %w", err)
+	}
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("http get: %w", err)
 	}

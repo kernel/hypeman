@@ -3,7 +3,6 @@
 package vz
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -33,8 +32,15 @@ func NewClient(socketPath string) (*Client, error) {
 		Timeout:   30 * time.Second,
 	}
 
-	// Verify connectivity
-	resp, err := httpClient.Get("http://vz-shim/api/v1/vmm.ping")
+	// Verify connectivity with a short timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://vz-shim/api/v1/vmm.ping", nil)
+	if err != nil {
+		return nil, fmt.Errorf("ping shim: %w", err)
+	}
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("ping shim: %w", err)
 	}
@@ -46,7 +52,6 @@ func NewClient(socketPath string) (*Client, error) {
 	}, nil
 }
 
-// Verify Client implements the interface
 var _ hypervisor.Hypervisor = (*Client)(nil)
 
 // vmInfoResponse matches the shim's VMInfoResponse structure.
@@ -54,15 +59,8 @@ type vmInfoResponse struct {
 	State string `json:"state"`
 }
 
-// Capabilities returns the features supported by vz.
 func (c *Client) Capabilities() hypervisor.Capabilities {
 	return hypervisor.Capabilities{
-		// Snapshot NOT supported: Virtualization.framework does not support
-		// save/restore for Linux guest VMs - only macOS guests work.
-		// This is an undocumented limitation of the framework.
-		// See: https://github.com/cirruslabs/tart/issues/1177
-		// See: https://github.com/cirruslabs/tart/issues/796
-		// See: https://github.com/utmapp/UTM/issues/6654
 		SupportsSnapshot:       false,
 		SupportsHotplugMemory:  false,
 		SupportsPause:          true,
@@ -72,58 +70,67 @@ func (c *Client) Capabilities() hypervisor.Capabilities {
 	}
 }
 
-// DeleteVM requests a graceful shutdown of the guest.
-func (c *Client) DeleteVM(ctx context.Context) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, "http://vz-shim/api/v1/vm.shutdown", nil)
+// doPut sends a PUT request to the shim and checks for success.
+func (c *Client) doPut(ctx context.Context, path string, body io.Reader) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, "http://vz-shim"+path, body)
 	if err != nil {
 		return err
 	}
-
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("shutdown request: %w", err)
+		return err
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("shutdown failed with status %d", resp.StatusCode)
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("%s failed with status %d: %s", path, resp.StatusCode, string(bodyBytes))
 	}
-
 	return nil
 }
 
-// Shutdown stops the VMM (shim) forcefully.
+// doGet sends a GET request to the shim and returns the response body.
+func (c *Client) doGet(ctx context.Context, path string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://vz-shim"+path, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	return io.ReadAll(resp.Body)
+}
+
+func (c *Client) DeleteVM(ctx context.Context) error {
+	return c.doPut(ctx, "/api/v1/vm.shutdown", nil)
+}
+
 func (c *Client) Shutdown(ctx context.Context) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, "http://vz-shim/api/v1/vmm.shutdown", nil)
 	if err != nil {
 		return err
 	}
-
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		// Connection reset is expected when shim exits
 		return nil
 	}
 	defer resp.Body.Close()
-
 	return nil
 }
 
-// GetVMInfo returns current VM state information.
 func (c *Client) GetVMInfo(ctx context.Context) (*hypervisor.VMInfo, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://vz-shim/api/v1/vm.info", nil)
-	if err != nil {
-		return nil, err
-	}
-
-	resp, err := c.httpClient.Do(req)
+	body, err := c.doGet(ctx, "/api/v1/vm.info")
 	if err != nil {
 		return nil, fmt.Errorf("get vm info: %w", err)
 	}
-	defer resp.Body.Close()
 
 	var info vmInfoResponse
-	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+	if err := json.Unmarshal(body, &info); err != nil {
 		return nil, fmt.Errorf("decode vm info: %w", err)
 	}
 
@@ -144,92 +151,22 @@ func (c *Client) GetVMInfo(ctx context.Context) (*hypervisor.VMInfo, error) {
 	return &hypervisor.VMInfo{State: state}, nil
 }
 
-// Pause suspends VM execution.
 func (c *Client) Pause(ctx context.Context) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, "http://vz-shim/api/v1/vm.pause", nil)
-	if err != nil {
-		return err
-	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("pause request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("pause failed with status %d", resp.StatusCode)
-	}
-
-	return nil
+	return c.doPut(ctx, "/api/v1/vm.pause", nil)
 }
 
-// Resume continues VM execution after pause.
 func (c *Client) Resume(ctx context.Context) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, "http://vz-shim/api/v1/vm.resume", nil)
-	if err != nil {
-		return err
-	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("resume request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("resume failed with status %d", resp.StatusCode)
-	}
-
-	return nil
+	return c.doPut(ctx, "/api/v1/vm.resume", nil)
 }
 
-// snapshotRequest matches the shim's SnapshotRequest structure.
-type snapshotRequest struct {
-	DestinationURL string `json:"destination_url"`
-}
-
-// Snapshot saves the VM state to a file. VM must be paused first.
-// Requires macOS 14+ on ARM64.
-// Note: destPath is expected to be a directory (matching CH convention).
-// vz expects a file path, so we append "vz-state" to the directory.
 func (c *Client) Snapshot(ctx context.Context, destPath string) error {
-	// vz SaveMachineStateToPath expects a file path, not a directory
-	// Append a fixed filename to match the directory-based API of other hypervisors
-	statePath := destPath + "/vz-state"
-
-	reqBody := snapshotRequest{DestinationURL: statePath}
-	body, err := json.Marshal(reqBody)
-	if err != nil {
-		return fmt.Errorf("marshal snapshot request: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, "http://vz-shim/api/v1/vm.snapshot", bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("snapshot request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("snapshot failed with status %d: %s", resp.StatusCode, string(bodyBytes))
-	}
-
-	return nil
+	return hypervisor.ErrNotSupported
 }
 
-// ResizeMemory is not supported by vz.
 func (c *Client) ResizeMemory(ctx context.Context, bytes int64) error {
-	return fmt.Errorf("memory resize not supported by vz")
+	return hypervisor.ErrNotSupported
 }
 
-// ResizeMemoryAndWait is not supported by vz.
 func (c *Client) ResizeMemoryAndWait(ctx context.Context, bytes int64, timeout time.Duration) error {
-	return fmt.Errorf("memory resize not supported by vz")
+	return hypervisor.ErrNotSupported
 }

@@ -66,9 +66,3 @@ func (m *manager) CleanupOrphanedTAPs(ctx context.Context, runningInstanceIDs []
 func (m *manager) CleanupOrphanedClasses(ctx context.Context) int {
 	return 0
 }
-
-// Note: On macOS with vz, network configuration is different:
-// - VMs get IP addresses via DHCP from macOS's NAT (192.168.64.x)
-// - No TAP devices are created - vz handles network internally
-// - No iptables/pf rules needed - NAT is built-in
-// - Rate limiting is not supported (no tc equivalent)

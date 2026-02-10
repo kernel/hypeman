@@ -7,8 +7,6 @@ import (
 
 	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/hypervisor"
-	"github.com/kernel/hypeman/lib/hypervisor/cloudhypervisor"
-	"github.com/kernel/hypeman/lib/hypervisor/qemu"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/network"
 	"github.com/kernel/hypeman/lib/paths"
@@ -81,8 +79,8 @@ type manager struct {
 	defaultHypervisor hypervisor.Type // Default hypervisor type when not specified in request
 }
 
-// additionalStarters is populated by platform-specific init functions.
-var additionalStarters = make(map[hypervisor.Type]hypervisor.VMStarter)
+// platformStarters is populated by platform-specific init functions.
+var platformStarters = make(map[hypervisor.Type]hypervisor.VMStarter)
 
 // NewManager creates a new instances manager.
 // If meter is nil, metrics are disabled.
@@ -93,14 +91,9 @@ func NewManager(p *paths.Paths, imageManager images.Manager, systemManager syste
 		defaultHypervisor = hypervisor.TypeCloudHypervisor
 	}
 
-	// Initialize base VM starters (CH and QEMU available on all platforms)
-	vmStarters := map[hypervisor.Type]hypervisor.VMStarter{
-		hypervisor.TypeCloudHypervisor: cloudhypervisor.NewStarter(),
-		hypervisor.TypeQEMU:            qemu.NewStarter(),
-	}
-
-	// Add platform-specific starters (e.g., vz on macOS)
-	for hvType, starter := range additionalStarters {
+	// Initialize VM starters from platform-specific init functions
+	vmStarters := make(map[hypervisor.Type]hypervisor.VMStarter, len(platformStarters))
+	for hvType, starter := range platformStarters {
 		vmStarters[hvType] = starter
 	}
 

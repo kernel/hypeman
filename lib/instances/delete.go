@@ -121,7 +121,6 @@ func (m *manager) deleteInstance(
 func (m *manager) killHypervisor(ctx context.Context, inst *Instance) error {
 	log := logger.FromContext(ctx)
 
-	// All hypervisors (cloud-hypervisor, QEMU, vz-shim) now run as external processes.
 	// If we have a PID, kill the process immediately
 	if inst.HypervisorPID != nil {
 		pid := *inst.HypervisorPID

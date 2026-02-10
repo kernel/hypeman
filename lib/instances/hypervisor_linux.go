@@ -2,6 +2,13 @@
 
 package instances
 
+import (
+	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/hypervisor/cloudhypervisor"
+	"github.com/kernel/hypeman/lib/hypervisor/qemu"
+)
+
 func init() {
-	// No additional starters on Linux - CH and QEMU are in the base set
+	platformStarters[hypervisor.TypeCloudHypervisor] = cloudhypervisor.NewStarter()
+	platformStarters[hypervisor.TypeQEMU] = qemu.NewStarter()
 }

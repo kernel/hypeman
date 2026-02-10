@@ -11,10 +11,11 @@ import (
 	"strings"
 
 	"github.com/Code-Hex/vz/v3"
+	"github.com/kernel/hypeman/lib/hypervisor/vz/shimconfig"
 )
 
 // createVM creates and configures a vz.VirtualMachine from ShimConfig.
-func createVM(config ShimConfig) (*vz.VirtualMachine, *vz.VirtualMachineConfiguration, error) {
+func createVM(config shimconfig.ShimConfig) (*vz.VirtualMachine, *vz.VirtualMachineConfiguration, error) {
 	// Prepare kernel command line (vz uses hvc0 for serial console)
 	kernelArgs := config.KernelArgs
 	if kernelArgs == "" {
@@ -74,10 +75,6 @@ func createVM(config ShimConfig) (*vz.VirtualMachine, *vz.VirtualMachineConfigur
 		return nil, nil, fmt.Errorf("invalid vm configuration: %w", err)
 	}
 
-	// Note: ValidateSaveRestoreSupport() returns true but Linux VM restore
-	// still fails with "invalid argument". This is an undocumented limitation
-	// of Virtualization.framework - only macOS guests support save/restore.
-
 	vm, err := vz.NewVirtualMachine(vmConfig)
 	if err != nil {
 		return nil, nil, fmt.Errorf("create virtual machine: %w", err)
@@ -131,7 +128,7 @@ func configureSerialConsole(vmConfig *vz.VirtualMachineConfiguration, logPath st
 	return nil
 }
 
-func configureNetwork(vmConfig *vz.VirtualMachineConfiguration, networks []NetworkConfig) error {
+func configureNetwork(vmConfig *vz.VirtualMachineConfiguration, networks []shimconfig.NetworkConfig) error {
 	var devices []*vz.VirtioNetworkDeviceConfiguration
 	if len(networks) == 0 {
 		dev, err := createNATNetworkDevice("")
@@ -163,40 +160,50 @@ func createNATNetworkDevice(macAddr string) (*vz.VirtioNetworkDeviceConfiguratio
 		return nil, fmt.Errorf("create network config: %w", err)
 	}
 
-	var mac *vz.MACAddress
-	if macAddr != "" {
-		hwAddr, parseErr := net.ParseMAC(macAddr)
-		if parseErr == nil {
-			mac, err = vz.NewMACAddress(hwAddr)
-			if err != nil {
-				slog.Warn("failed to create MAC from parsed address, generating random", "mac", macAddr, "error", err)
-				mac, err = vz.NewRandomLocallyAdministeredMACAddress()
-				if err != nil {
-					return nil, fmt.Errorf("generate MAC address: %w", err)
-				}
-			} else {
-				slog.Info("using specified MAC address", "mac", macAddr)
-			}
-		} else {
-			slog.Warn("failed to parse MAC address, generating random", "mac", macAddr, "error", parseErr)
-			mac, err = vz.NewRandomLocallyAdministeredMACAddress()
-			if err != nil {
-				return nil, fmt.Errorf("generate MAC address: %w", err)
-			}
-		}
-	} else {
-		mac, err = vz.NewRandomLocallyAdministeredMACAddress()
-		if err != nil {
-			return nil, fmt.Errorf("generate MAC address: %w", err)
-		}
-		slog.Info("generated random MAC address", "mac", mac.String())
+	mac, err := assignMACAddress(macAddr)
+	if err != nil {
+		return nil, err
 	}
 	networkConfig.SetMACAddress(mac)
 
 	return networkConfig, nil
 }
 
-func configureStorage(vmConfig *vz.VirtualMachineConfiguration, disks []DiskConfig) error {
+func assignMACAddress(macAddr string) (*vz.MACAddress, error) {
+	if macAddr == "" {
+		mac, err := vz.NewRandomLocallyAdministeredMACAddress()
+		if err != nil {
+			return nil, fmt.Errorf("generate MAC address: %w", err)
+		}
+		slog.Info("generated random MAC address", "mac", mac.String())
+		return mac, nil
+	}
+
+	hwAddr, err := net.ParseMAC(macAddr)
+	if err != nil {
+		slog.Warn("failed to parse MAC address, generating random", "mac", macAddr, "error", err)
+		mac, err := vz.NewRandomLocallyAdministeredMACAddress()
+		if err != nil {
+			return nil, fmt.Errorf("generate MAC address: %w", err)
+		}
+		return mac, nil
+	}
+
+	mac, err := vz.NewMACAddress(hwAddr)
+	if err != nil {
+		slog.Warn("failed to create MAC from parsed address, generating random", "mac", macAddr, "error", err)
+		mac, err := vz.NewRandomLocallyAdministeredMACAddress()
+		if err != nil {
+			return nil, fmt.Errorf("generate MAC address: %w", err)
+		}
+		return mac, nil
+	}
+
+	slog.Info("using specified MAC address", "mac", macAddr)
+	return mac, nil
+}
+
+func configureStorage(vmConfig *vz.VirtualMachineConfiguration, disks []shimconfig.DiskConfig) error {
 	var storageDevices []vz.StorageDeviceConfiguration
 
 	for _, disk := range disks {

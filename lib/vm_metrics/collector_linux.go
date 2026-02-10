@@ -1,3 +1,5 @@
+//go:build linux
+
 package vm_metrics
 
 import (

@@ -21,8 +21,7 @@ type stateResult struct {
 func (m *manager) deriveState(ctx context.Context, stored *StoredMetadata) stateResult {
 	log := logger.FromContext(ctx)
 
-	// All hypervisors (cloud-hypervisor, QEMU, vz-shim) are socket-based.
-	// Check if socket exists
+	// 1. Check if socket exists
 	if _, err := os.Stat(stored.SocketPath); err != nil {
 		// No socket - check for snapshot to distinguish Stopped vs Standby
 		if m.hasSnapshot(stored.DataDir) {
@@ -31,7 +30,7 @@ func (m *manager) deriveState(ctx context.Context, stored *StoredMetadata) state
 		return stateResult{State: StateStopped}
 	}
 
-	// 3. Socket exists - query hypervisor for actual state
+	// 2. Socket exists - query hypervisor for actual state
 	hv, err := m.getHypervisor(stored.SocketPath, stored.HypervisorType)
 	if err != nil {
 		// Failed to create client - this is unexpected if socket exists
@@ -44,24 +43,19 @@ func (m *manager) deriveState(ctx context.Context, stored *StoredMetadata) state
 		return stateResult{State: StateUnknown, Error: &errMsg}
 	}
 
-	return m.queryHypervisorState(ctx, stored, hv)
-}
-
-// queryHypervisorState queries a hypervisor instance for VM state.
-func (m *manager) queryHypervisorState(ctx context.Context, stored *StoredMetadata, hv hypervisor.Hypervisor) stateResult {
-	log := logger.FromContext(ctx)
-
 	info, err := hv.GetVMInfo(ctx)
 	if err != nil {
+		// Socket exists but hypervisor is unreachable - this is unexpected
 		errMsg := fmt.Sprintf("failed to query hypervisor: %v", err)
 		log.WarnContext(ctx, "failed to query hypervisor state",
 			"instance_id", stored.Id,
+			"socket", stored.SocketPath,
 			"error", err,
 		)
 		return stateResult{State: StateUnknown, Error: &errMsg}
 	}
 
-	// Map hypervisor state to our state
+	// 3. Map hypervisor state to our state
 	switch info.State {
 	case hypervisor.StateCreated:
 		return stateResult{State: StateCreated}

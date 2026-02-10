@@ -3,8 +3,10 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -33,11 +35,6 @@ type VMInfoResponse struct {
 	State string `json:"state"`
 }
 
-// SnapshotRequest is the request body for vm.snapshot.
-type SnapshotRequest struct {
-	DestinationURL string `json:"destination_url"`
-}
-
 // Handler returns the HTTP handler for the control API.
 func (s *ShimServer) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -48,7 +45,6 @@ func (s *ShimServer) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/v1/vm.resume", s.handleResume)
 	mux.HandleFunc("PUT /api/v1/vm.shutdown", s.handleShutdown)
 	mux.HandleFunc("PUT /api/v1/vm.power-button", s.handlePowerButton)
-	mux.HandleFunc("PUT /api/v1/vm.snapshot", s.handleSnapshot)
 	mux.HandleFunc("GET /api/v1/vmm.ping", s.handlePing)
 	mux.HandleFunc("PUT /api/v1/vmm.shutdown", s.handleVMMShutdown)
 
@@ -141,46 +137,6 @@ func (s *ShimServer) handlePowerButton(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *ShimServer) handleSnapshot(w http.ResponseWriter, r *http.Request) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	var req SnapshotRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("invalid request: %v", err), http.StatusBadRequest)
-		return
-	}
-
-	if req.DestinationURL == "" {
-		http.Error(w, "destination_url is required", http.StatusBadRequest)
-		return
-	}
-
-	// Check if save/restore is supported by this configuration
-	supported, err := s.vmConfig.ValidateSaveRestoreSupport()
-	if err != nil || !supported {
-		slog.Error("snapshot not supported", "error", err, "supported", supported)
-		http.Error(w, fmt.Sprintf("snapshot not supported: %v", err), http.StatusBadRequest)
-		return
-	}
-
-	// VM must be paused to save state
-	if s.vm.State() != vz.VirtualMachineStatePaused {
-		http.Error(w, "VM must be paused before snapshot", http.StatusBadRequest)
-		return
-	}
-
-	slog.Info("saving VM state", "path", req.DestinationURL)
-	if err := s.vm.SaveMachineStateToPath(req.DestinationURL); err != nil {
-		slog.Error("failed to save VM state", "error", err)
-		http.Error(w, fmt.Sprintf("snapshot failed: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	slog.Info("VM state saved", "path", req.DestinationURL)
-	w.WriteHeader(http.StatusNoContent)
-}
-
 func (s *ShimServer) handlePing(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("OK"))
@@ -242,8 +198,8 @@ func (s *ShimServer) handleVsockConnection(conn net.Conn) {
 	defer conn.Close()
 
 	// Read the CONNECT command
-	buf := make([]byte, 256)
-	n, err := conn.Read(buf)
+	reader := bufio.NewReader(conn)
+	cmd, err := reader.ReadString('\n')
 	if err != nil {
 		slog.Error("failed to read vsock handshake", "error", err)
 		return
@@ -251,7 +207,6 @@ func (s *ShimServer) handleVsockConnection(conn net.Conn) {
 
 	// Parse "CONNECT {port}\n"
 	var port uint32
-	cmd := string(buf[:n])
 	if _, err := fmt.Sscanf(cmd, "CONNECT %d\n", &port); err != nil {
 		slog.Error("invalid vsock handshake", "cmd", cmd, "error", err)
 		conn.Write([]byte(fmt.Sprintf("ERR invalid command: %s", cmd)))
@@ -291,30 +246,15 @@ func (s *ShimServer) handleVsockConnection(conn net.Conn) {
 	done := make(chan struct{}, 2)
 
 	go func() {
-		copyData(guestConn, conn)
+		io.Copy(guestConn, conn)
 		done <- struct{}{}
 	}()
 
 	go func() {
-		copyData(conn, guestConn)
+		io.Copy(conn, guestConn)
 		done <- struct{}{}
 	}()
 
 	// Wait for one direction to close
 	<-done
-}
-
-func copyData(dst, src net.Conn) {
-	buf := make([]byte, 32*1024)
-	for {
-		n, err := src.Read(buf)
-		if n > 0 {
-			if _, werr := dst.Write(buf[:n]); werr != nil {
-				return
-			}
-		}
-		if err != nil {
-			return
-		}
-	}
 }

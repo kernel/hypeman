@@ -11,8 +11,6 @@ import (
 
 // checkHypervisorAccess verifies Virtualization.framework is available on macOS
 func checkHypervisorAccess() error {
-	// Intel Macs are intentionally unsupported: Virtualization.framework on x86_64
-	// lacks nested virtualization and has critical kernel panics under load.
 	if runtime.GOARCH != "arm64" {
 		return fmt.Errorf("Virtualization.framework on macOS requires Apple Silicon (arm64), got %s", runtime.GOARCH)
 	}

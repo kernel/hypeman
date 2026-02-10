@@ -6,11 +6,6 @@ import (
 	"fmt"
 )
 
-const (
-	sysfsDevicesPath = "/sys/bus/pci/devices" // Not used on macOS
-	sysfsIOMMUPath   = "/sys/kernel/iommu_groups"
-)
-
 // ErrNotSupportedOnMacOS is returned for operations not supported on macOS
 var ErrNotSupportedOnMacOS = fmt.Errorf("PCI device passthrough is not supported on macOS")
 

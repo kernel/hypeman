@@ -210,8 +210,6 @@ func isTokenEndpoint(path string) bool {
 
 
 // extractRepoFromPath extracts the repository name from a registry path.
-// e.g., "/v2/builds/abc123/manifests/latest" -> "builds/abc123"
-// extractRepoFromPath extracts the repository name from a registry path.
 // Uses the docker/distribution router which properly handles repository names
 // that can contain slashes (e.g., "builds/abc123" from "/v2/builds/abc123/manifests/latest").
 func extractRepoFromPath(path string) string {

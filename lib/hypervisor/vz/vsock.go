@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -27,14 +26,11 @@ type VsockDialer struct {
 }
 
 // NewVsockDialer creates a new VsockDialer for vz.
-// The vsockSocket parameter should be the control socket path (vz.sock).
-// We derive the vsock proxy socket path from it (vz.vsock).
+// vsockSocket is the path to the vz.vsock Unix socket proxy.
+// vsockCID is unused because the vz proxy is per-VM (unlike QEMU which uses kernel AF_VSOCK with CID routing).
 func NewVsockDialer(vsockSocket string, vsockCID int64) hypervisor.VsockDialer {
-	// Derive vsock proxy socket path from control socket
-	dir := filepath.Dir(vsockSocket)
-	vsockProxySocket := filepath.Join(dir, "vz.vsock")
 	return &VsockDialer{
-		socketPath: vsockProxySocket,
+		socketPath: vsockSocket,
 	}
 }
 

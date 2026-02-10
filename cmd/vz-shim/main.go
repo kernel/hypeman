@@ -19,49 +19,8 @@ import (
 	"time"
 
 	"github.com/Code-Hex/vz/v3"
+	"github.com/kernel/hypeman/lib/hypervisor/vz/shimconfig"
 )
-
-// ShimConfig is the configuration passed from hypeman to the shim.
-type ShimConfig struct {
-	// Compute resources
-	VCPUs       int   `json:"vcpus"`
-	MemoryBytes int64 `json:"memory_bytes"`
-
-	// Storage
-	Disks []DiskConfig `json:"disks"`
-
-	// Network
-	Networks []NetworkConfig `json:"networks"`
-
-	// Console
-	SerialLogPath string `json:"serial_log_path"`
-
-	// Boot configuration
-	KernelPath string `json:"kernel_path"`
-	InitrdPath string `json:"initrd_path"`
-	KernelArgs string `json:"kernel_args"`
-
-	// Socket paths (where shim should listen)
-	ControlSocket string `json:"control_socket"`
-	VsockSocket   string `json:"vsock_socket"`
-
-	// Logging
-	LogPath string `json:"log_path"`
-
-	// Restore from snapshot (optional)
-	RestoreStatePath string `json:"restore_state_path,omitempty"`
-}
-
-// DiskConfig represents a disk attached to the VM.
-type DiskConfig struct {
-	Path     string `json:"path"`
-	Readonly bool   `json:"readonly"`
-}
-
-// NetworkConfig represents a network interface.
-type NetworkConfig struct {
-	MAC string `json:"mac"`
-}
 
 func main() {
 	configJSON := flag.String("config", "", "VM configuration as JSON")
@@ -72,7 +31,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	var config ShimConfig
+	var config shimconfig.ShimConfig
 	if err := json.Unmarshal([]byte(*configJSON), &config); err != nil {
 		fmt.Fprintf(os.Stderr, "error: invalid config JSON: %v\n", err)
 		os.Exit(1)
@@ -93,28 +52,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Either restore from snapshot or start fresh
-	// NOTE: Linux VM restore is NOT supported by Virtualization.framework
-	// This code path exists for potential future macOS guest support
-	if config.RestoreStatePath != "" {
-		slog.Info("restoring VM from snapshot", "path", config.RestoreStatePath)
-		if err := vm.RestoreMachineStateFromURL(config.RestoreStatePath); err != nil {
-			slog.Error("failed to restore VM from snapshot", "error", err)
-			os.Exit(1)
-		}
-		// After restore, VM is in paused state - resume it
-		if err := vm.Resume(); err != nil {
-			slog.Error("failed to resume VM after restore", "error", err)
-			os.Exit(1)
-		}
-		slog.Info("VM restored and resumed", "vcpus", config.VCPUs, "memory_mb", config.MemoryBytes/1024/1024)
-	} else {
-		if err := vm.Start(); err != nil {
-			slog.Error("failed to start VM", "error", err)
-			os.Exit(1)
-		}
-		slog.Info("VM started", "vcpus", config.VCPUs, "memory_mb", config.MemoryBytes/1024/1024)
+	if err := vm.Start(); err != nil {
+		slog.Error("failed to start VM", "error", err)
+		os.Exit(1)
 	}
+	slog.Info("VM started", "vcpus", config.VCPUs, "memory_mb", config.MemoryBytes/1024/1024)
 
 	// Create the shim server
 	server := NewShimServer(vm, vmConfig)
@@ -160,12 +102,13 @@ func main() {
 	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
 
 	// Monitor VM state
+	stateChanged := vm.StateChangedNotify()
 	go func() {
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case newState := <-vm.StateChangedNotify():
+			case newState := <-stateChanged:
 				slog.Info("VM state changed", "state", newState)
 				if newState == vz.VirtualMachineStateStopped || newState == vz.VirtualMachineStateError {
 					slog.Info("VM stopped, shutting down shim")
