@@ -161,15 +161,15 @@ func NewManager(
 		m.metrics = metrics
 	}
 
-	// Recover any pending builds from disk
-	m.RecoverPendingBuilds()
-
 	return m, nil
 }
 
 // Start starts the build manager's background services
 func (m *manager) Start(ctx context.Context) error {
-	go m.ensureBuilderImage(ctx)
+	go func() {
+		m.ensureBuilderImage(ctx)
+		m.RecoverPendingBuilds()
+	}()
 	m.logger.Info("build manager started")
 	return nil
 }

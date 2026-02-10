@@ -206,6 +206,15 @@ func convertToErofs(rootfsDir, diskPath string) (int64, error) {
 		return 0, fmt.Errorf("stat disk: %w", err)
 	}
 
+	// Align to sector boundary (required by macOS Virtualization.framework)
+	if stat.Size()%sectorSize != 0 {
+		alignedSize := alignToSector(stat.Size())
+		if err := os.Truncate(diskPath, alignedSize); err != nil {
+			return 0, fmt.Errorf("align disk to sector boundary: %w", err)
+		}
+		return alignedSize, nil
+	}
+
 	return stat.Size(), nil
 }
 
