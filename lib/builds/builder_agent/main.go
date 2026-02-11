@@ -523,7 +523,6 @@ func runBuildProcess() {
 	// Run the build
 	log.Println("=== Starting Build ===")
 	digest, _, err := runBuild(ctx, config, logWriter)
-	// Note: buildLogs is already written to logWriter via io.MultiWriter in runBuild
 
 	duration := time.Since(start).Milliseconds()
 
@@ -857,21 +856,21 @@ func runBuild(ctx context.Context, config *BuildConfig, logWriter io.Writer) (st
 	// Using tmpfs avoids this nested-overlayfs conflict.
 	buildkitRoot := "/var/lib/buildkit"
 	if err := os.MkdirAll(buildkitRoot, 0755); err != nil {
-		log.Printf("Warning: failed to create buildkit root dir: %v", err)
-	} else {
-		mountCmd := exec.Command("mount", "-t", "tmpfs", "-o", "size=3G", "tmpfs", buildkitRoot)
-		if output, err := mountCmd.CombinedOutput(); err != nil {
-			log.Printf("Warning: failed to mount tmpfs for buildkit: %v: %s", err, output)
-		} else {
-			log.Printf("Mounted tmpfs at %s for BuildKit snapshotter", buildkitRoot)
-		}
+		return "", "", fmt.Errorf("create buildkit root dir: %w", err)
 	}
+	mountCmd := exec.Command("mount", "-t", "tmpfs", "-o", "size=3G", "tmpfs", buildkitRoot)
+	if output, err := mountCmd.CombinedOutput(); err != nil {
+		return "", "", fmt.Errorf("mount tmpfs at %s (required for native overlayfs snapshotter): %v: %s", buildkitRoot, err, output)
+	}
+	log.Printf("Mounted tmpfs at %s for BuildKit snapshotter", buildkitRoot)
 
 	log.Printf("Running: buildctl-daemonless.sh %s", strings.Join(args, " "))
 
 	// Run buildctl-daemonless.sh
+	// buildctl writes progress (#1, #2, etc.) to stderr and a duplicate summary to stdout.
+	// Only pipe stderr to logWriter to avoid doubled output in build logs.
 	cmd := exec.CommandContext(ctx, "buildctl-daemonless.sh", args...)
-	cmd.Stdout = io.MultiWriter(logWriter, &buildLogs)
+	cmd.Stdout = &buildLogs
 	cmd.Stderr = io.MultiWriter(logWriter, &buildLogs)
 	// Set environment:
 	// - HOME and DOCKER_CONFIG: ensures buildctl finds the auth config at /root/.docker/config.json

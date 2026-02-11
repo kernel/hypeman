@@ -418,8 +418,8 @@ func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourc
 		{Repo: fmt.Sprintf("builds/%s", id), Scope: "push"},
 	}
 
-	// If the Dockerfile uses a base image from the internal registry, grant pull access
-	if baseRepo := extractInternalBaseImageRepo(req.Dockerfile, m.config.RegistryURL); baseRepo != "" {
+	// If the Dockerfile uses base images from the internal registry, grant pull access
+	for _, baseRepo := range extractInternalBaseImageRepos(req.Dockerfile, m.config.RegistryURL) {
 		repoAccess = append(repoAccess, RepoPermission{
 			Repo:  baseRepo,
 			Scope: "pull",
@@ -1272,8 +1272,8 @@ func (m *manager) refreshBuildToken(buildID string, req *CreateBuildRequest) err
 		{Repo: fmt.Sprintf("builds/%s", buildID), Scope: "push"},
 	}
 
-	// If the Dockerfile uses a base image from the internal registry, grant pull access
-	if baseRepo := extractInternalBaseImageRepo(req.Dockerfile, m.config.RegistryURL); baseRepo != "" {
+	// If the Dockerfile uses base images from the internal registry, grant pull access
+	for _, baseRepo := range extractInternalBaseImageRepos(req.Dockerfile, m.config.RegistryURL) {
 		repoAccess = append(repoAccess, RepoPermission{
 			Repo:  baseRepo,
 			Scope: "pull",
@@ -1378,15 +1378,17 @@ func (m *manager) createBuildConfigVolume(buildID, volID string) (string, error)
 	return diskPath, nil
 }
 
-// extractInternalBaseImageRepo parses the Dockerfile's FROM line and returns
-// the repository path if it references the internal registry. Returns empty
-// string if the base image is external (e.g., Docker Hub) or "scratch".
-func extractInternalBaseImageRepo(dockerfile, registryURL string) string {
+// extractInternalBaseImageRepos parses the Dockerfile's FROM lines and returns
+// all repository paths that reference the internal registry. Returns nil
+// if no base images reference the internal registry.
+func extractInternalBaseImageRepos(dockerfile, registryURL string) []string {
 	if dockerfile == "" {
-		return ""
+		return nil
 	}
 
 	registryHost := stripRegistryScheme(registryURL)
+	seen := make(map[string]bool)
+	var repos []string
 
 	scanner := bufio.NewScanner(strings.NewReader(dockerfile))
 	for scanner.Scan() {
@@ -1424,10 +1426,13 @@ func extractInternalBaseImageRepo(dockerfile, registryURL string) string {
 			repo = repo[:idx]
 		}
 
-		return repo
+		if !seen[repo] {
+			seen[repo] = true
+			repos = append(repos, repo)
+		}
 	}
 
-	return ""
+	return repos
 }
 
 // copyFile copies a file from src to dst
