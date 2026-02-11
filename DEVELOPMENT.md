@@ -257,46 +257,12 @@ The server will start on port 8080 (configurable via `PORT` environment variable
 
 ### Setting Up the Builder Image (for Dockerfile builds)
 
-The builder image is required for `hypeman build` to work. There are two modes:
-
-**Automatic mode (default):** When `BUILDER_IMAGE` is unset or empty, the server will automatically build and push the builder image on startup using Docker. This is the easiest way to get started — just ensure Docker is available and run `make dev`. If a build is requested while the builder image is still being prepared, the server returns a clear error asking you to retry shortly.
+The builder image is required for `hypeman build` to work. When `BUILDER_IMAGE` is unset or empty, the server will automatically build and push the builder image on startup using Docker. This is the easiest way to get started — just ensure Docker is available and run `make dev`. If a build is requested while the builder image is still being prepared, the server returns a clear error asking you to retry shortly.
 
 On macOS with Colima, set the Docker socket path:
 ```bash
 DOCKER_SOCKET=$HOME/.colima/default/docker.sock
 ```
-
-**Manual mode:** When `BUILDER_IMAGE` is explicitly set, the server assumes you manage your own image. Follow these steps:
-
-1. **Build the builder image** (requires Docker):
-   ```bash
-   docker build -t hypeman/builder:latest -f lib/builds/images/generic/Dockerfile .
-   ```
-
-2. **Start the Hypeman server** (if not already running):
-   ```bash
-   make dev
-   ```
-
-3. **Push to Hypeman's internal registry**:
-   ```bash
-   # Generate a token with registry push permissions
-   export JWT_SECRET="dev-secret-for-local-testing"
-   export HYPEMAN_API_KEY=$(go run ./cmd/gen-jwt -registry-push "hypeman/builder")
-   export HYPEMAN_BASE_URL="http://localhost:8080"
-
-   # Push using hypeman-cli
-   hypeman push hypeman/builder:latest
-   ```
-
-4. **Configure the builder image** in `.env`:
-   ```bash
-   BUILDER_IMAGE=localhost:8080/hypeman/builder:latest
-   ```
-
-5. **Restart the server** to pick up the new config.
-
-Now `hypeman build <directory>` will work for Dockerfile-based builds.
 
 ### Local OpenTelemetry (optional)
 
