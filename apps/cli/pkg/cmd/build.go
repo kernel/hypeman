@@ -53,6 +53,26 @@ Examples:
 			Usage: "Build timeout in seconds",
 			Value: 600,
 		},
+		&cli.StringFlag{
+			Name:  "base-image-digest",
+			Usage: "Pinned base image digest for reproducible builds",
+		},
+		&cli.StringFlag{
+			Name:  "cache-scope",
+			Usage: "Tenant-specific cache key prefix",
+		},
+		&cli.StringFlag{
+			Name:  "global-cache-key",
+			Usage: `Global cache identifier (e.g., "node", "python", "ubuntu")`,
+		},
+		&cli.StringFlag{
+			Name:  "is-admin-build",
+			Usage: `Set to "true" to grant push access to global cache (operator-only)`,
+		},
+		&cli.StringFlag{
+			Name:  "secrets",
+			Usage: `JSON array of secret references to inject during build (e.g., '[{"id":"npm_token"}]')`,
+		},
 	},
 	Commands: []*cli.Command{
 		&buildListCmd,
@@ -128,6 +148,22 @@ func handleBuild(ctx context.Context, cmd *cli.Command) error {
 
 	if dockerfileContent != "" {
 		params.Dockerfile = hypeman.Opt(dockerfileContent)
+	}
+
+	if v := cmd.String("base-image-digest"); v != "" {
+		params.BaseImageDigest = hypeman.Opt(v)
+	}
+	if v := cmd.String("cache-scope"); v != "" {
+		params.CacheScope = hypeman.Opt(v)
+	}
+	if v := cmd.String("global-cache-key"); v != "" {
+		params.GlobalCacheKey = hypeman.Opt(v)
+	}
+	if v := cmd.String("is-admin-build"); v != "" {
+		params.IsAdminBuild = hypeman.Opt(v)
+	}
+	if v := cmd.String("secrets"); v != "" {
+		params.Secrets = hypeman.Opt(v)
 	}
 
 	// Start build
