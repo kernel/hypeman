@@ -102,8 +102,8 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          gh repo clone kernel/cli /tmp/kernel-cli
-          cd /tmp/kernel-cli
+          gh repo clone kernel/hypeman-cli /tmp/hypeman-cli
+          cd /tmp/hypeman-cli
 
           # Try to fetch the cli-coverage-update branch from remote
           if git fetch origin cli-coverage-update 2>/dev/null; then
@@ -150,7 +150,7 @@ jobs:
         run: |
           cursor-agent -p "You are a CLI updater that implements missing CLI commands based on SDK updates.
 
-          The GitHub CLI is available as \`gh\` and authenticated via GH_TOKEN. Git is available. You have write access to the CLI repository (kernel/cli).
+          The GitHub CLI is available as \`gh\` and authenticated via GH_TOKEN. Git is available. You have write access to the CLI repository (kernel/hypeman-cli).
 
           # Context
           - SDK Repo: ${{ github.repository }} (current directory)
@@ -160,23 +160,23 @@ jobs:
           - Commit Author: ${{ steps.sdk-version.outputs.author }}
           - Trigger: ${{ github.event_name }} ${{ inputs.pr_number && format('(PR #{0})', inputs.pr_number) || '' }}
           - API Repo Location: /tmp/hypeman-api
-          - CLI Repo Location: /tmp/kernel-cli
+          - CLI Repo Location: /tmp/hypeman-cli
           - Update Branch Prefix: cli-coverage-update
 
           # Background
-          The Go SDK (this repo) was just updated by Stainless, and may contain new API methods. The CLI (kernel/cli) needs to be updated to expose these new methods as CLI commands.
+          The Go SDK (this repo) was just updated by Stainless, and may contain new API methods. The CLI (kernel/hypeman-cli) needs to be updated to expose these new methods as CLI commands.
 
           # Source Files
           - SDK api.md: Current directory - READ THIS FILE FIRST. This is the authoritative list of all SDK methods and their signatures.
           - SDK *.go files: Current directory - Contains param structs (e.g., InstanceNewParams, ImageNewParams) with all available options/fields.
           - API Spec: /tmp/hypeman-api/packages/api/stainless.yaml - SDK configuration with resources and methods
           - API Spec: /tmp/hypeman-api/packages/api/openapi.yaml - Full OpenAPI specification. CHECK for x-cli-skip: true on endpoints - skip those from CLI coverage.
-          - CLI: /tmp/kernel-cli - Existing CLI commands
+          - CLI: /tmp/hypeman-cli - Existing CLI commands
 
           # Task
 
           ## Step 1: Update SDK Version (ALWAYS DO THIS FIRST)
-          - Go to /tmp/kernel-cli
+          - Go to /tmp/hypeman-cli
           - Update go.mod to require the latest SDK: ${{ steps.sdk-version.outputs.module }}@${{ steps.sdk-version.outputs.version }}
           - Run: go get ${{ steps.sdk-version.outputs.module }}@${{ steps.sdk-version.outputs.version }}
           - Run: go mod tidy
@@ -245,7 +245,7 @@ jobs:
           - Commit with message describing SDK version bump and any new commands/flags
           - IMPORTANT: Do NOT force push! Use regular \`git push origin cli-coverage-update\` to preserve existing work on the branch
           - If push fails due to divergence, pull and rebase first: \`git pull --rebase origin cli-coverage-update\`
-          - Create or update the PR in kernel/cli
+          - Create or update the PR in kernel/hypeman-cli
 
           # SDK Method -> CLI Command Mapping Guide
           - client.Resource.New() -> kernel resource create
@@ -263,7 +263,7 @@ jobs:
           - Nested structs: VolumeMount.Path -> --volume-mount-path or separate flags
 
           # Implementation Guidelines
-          - Follow the existing CLI code patterns in /tmp/kernel-cli
+          - Follow the existing CLI code patterns in /tmp/hypeman-cli
           - Use cobra for command definitions
           - Use the Hypeman Go SDK (this repo) for API calls
           - Include proper flag definitions with descriptions matching SDK field comments
@@ -275,7 +275,7 @@ jobs:
           After pushing changes, create or update an evergreen PR using gh:
 
           1. Check if a PR already exists for the cli-coverage-update branch:
-             gh pr list --repo kernel/cli --head cli-coverage-update --json number
+             gh pr list --repo kernel/hypeman-cli --head cli-coverage-update --json number
 
           2. If PR exists, update it. If not, create a new one.
 
