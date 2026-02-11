@@ -182,6 +182,7 @@ func handleIngressList(ctx context.Context, cmd *cli.Command) error {
 	}
 
 	table := NewTableWriter(os.Stdout, "ID", "NAME", "HOSTNAME", "TARGET", "TLS", "CREATED")
+	table.TruncOrder = []int{2, 3, 5, 1} // HOSTNAME first, then TARGET, CREATED, NAME
 	for _, ing := range *ingresses {
 		// Extract first rule's hostname and target for display
 		hostname := ""
@@ -200,8 +201,8 @@ func handleIngressList(ctx context.Context, cmd *cli.Command) error {
 
 		table.AddRow(
 			TruncateID(ing.ID),
-			TruncateString(ing.Name, 20),
-			TruncateString(hostname, 25),
+			ing.Name,
+			hostname,
 			target,
 			tlsEnabled,
 			FormatTimeAgo(ing.CreatedAt),
