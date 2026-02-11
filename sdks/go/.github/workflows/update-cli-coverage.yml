@@ -1,0 +1,316 @@
+name: Update CLI Coverage
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to use for context (leave empty to use most recent merged PR)'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  update-cli-coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate app token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.ADMIN_APP_ID }}
+          private-key: ${{ secrets.ADMIN_APP_PRIVATE_KEY }}
+          owner: kernel
+
+      - name: Get PR info for manual dispatch
+        id: pr-info
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          if [ -n "${{ inputs.pr_number }}" ]; then
+            # Use provided PR number
+            PR_NUMBER="${{ inputs.pr_number }}"
+            echo "Using provided PR number: $PR_NUMBER"
+          else
+            # Get most recent merged PR
+            PR_NUMBER=$(gh pr list --repo ${{ github.repository }} --state merged --limit 1 --json number --jq '.[0].number')
+            echo "Using most recent merged PR: $PR_NUMBER"
+          fi
+
+          if [ -z "$PR_NUMBER" ]; then
+            echo "No PR found, will use HEAD commit"
+            echo "has_pr=false" >> $GITHUB_OUTPUT
+          else
+            # Get PR details
+            PR_DATA=$(gh pr view "$PR_NUMBER" --repo ${{ github.repository }} --json mergeCommit,author,title)
+            MERGE_SHA=$(echo "$PR_DATA" | jq -r '.mergeCommit.oid // empty')
+            PR_AUTHOR=$(echo "$PR_DATA" | jq -r '.author.login // empty')
+            PR_TITLE=$(echo "$PR_DATA" | jq -r '.title // empty')
+
+            echo "PR #$PR_NUMBER: $PR_TITLE"
+            echo "Merge commit: $MERGE_SHA"
+            echo "Author: $PR_AUTHOR"
+
+            echo "has_pr=true" >> $GITHUB_OUTPUT
+            echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
+            echo "merge_sha=$MERGE_SHA" >> $GITHUB_OUTPUT
+            echo "pr_author=$PR_AUTHOR" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Checkout SDK repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+          fetch-tags: true
+          # For manual dispatch with a specific PR, checkout the merge commit
+          ref: ${{ steps.pr-info.outputs.merge_sha || github.sha }}
+
+      - name: Install Cursor CLI
+        run: |
+          curl https://cursor.com/install -fsS | bash
+          echo "$HOME/.cursor/bin" >> $GITHUB_PATH
+
+      - name: Configure git identity
+        run: |
+          git config --global user.name "kernel-internal[bot]"
+          git config --global user.email "260533166+kernel-internal[bot]@users.noreply.github.com"
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: 'stable'
+
+      - name: Clone API repo
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          gh repo clone kernel/hypeman /tmp/hypeman-api -- --depth=1
+
+      - name: Clone CLI repo and checkout existing branch
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          gh repo clone kernel/cli /tmp/kernel-cli
+          cd /tmp/kernel-cli
+
+          # Check if the cli-coverage-update branch already exists on remote
+          if git ls-remote --exit-code --heads origin cli-coverage-update >/dev/null 2>&1; then
+            echo "Branch cli-coverage-update exists, checking it out..."
+            git fetch origin cli-coverage-update
+            git checkout cli-coverage-update
+            # Merge latest main to keep it up to date
+            git merge origin/main -m "Merge main into cli-coverage-update" --no-edit || true
+          else
+            echo "Branch cli-coverage-update does not exist, will create from main"
+          fi
+
+      - name: Get SDK version info
+        id: sdk-version
+        run: |
+          # Get the latest tag if available, otherwise use commit SHA
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -n "$LATEST_TAG" ]; then
+            echo "version=$LATEST_TAG" >> $GITHUB_OUTPUT
+            echo "SDK version: $LATEST_TAG"
+          else
+            CURRENT_SHA="${{ steps.pr-info.outputs.merge_sha || github.sha }}"
+            echo "version=$CURRENT_SHA" >> $GITHUB_OUTPUT
+            echo "SDK version: $CURRENT_SHA (no tag)"
+          fi
+
+          # Get the module path from go.mod
+          MODULE_PATH=$(head -1 go.mod | awk '{print $2}')
+          echo "module=$MODULE_PATH" >> $GITHUB_OUTPUT
+          echo "SDK module: $MODULE_PATH"
+
+          # Determine the commit author (from PR info for manual dispatch, or from push event)
+          if [ -n "${{ steps.pr-info.outputs.pr_author }}" ]; then
+            echo "author=${{ steps.pr-info.outputs.pr_author }}" >> $GITHUB_OUTPUT
+          else
+            echo "author=${{ github.event.head_commit.author.username || github.actor }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Update CLI coverage
+        env:
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          BRANCH_PREFIX: cli-coverage-update
+        run: |
+          cursor-agent -p "You are a CLI updater that implements missing CLI commands based on SDK updates.
+
+          The GitHub CLI is available as \`gh\` and authenticated via GH_TOKEN. Git is available. You have write access to the CLI repository (kernel/cli).
+
+          # Context
+          - SDK Repo: ${{ github.repository }} (current directory)
+          - SDK Module: ${{ steps.sdk-version.outputs.module }}
+          - SDK Version: ${{ steps.sdk-version.outputs.version }}
+          - Commit SHA: ${{ steps.pr-info.outputs.merge_sha || github.sha }}
+          - Commit Author: ${{ steps.sdk-version.outputs.author }}
+          - Trigger: ${{ github.event_name }} ${{ inputs.pr_number && format('(PR #{0})', inputs.pr_number) || '' }}
+          - API Repo Location: /tmp/hypeman-api
+          - CLI Repo Location: /tmp/kernel-cli
+          - Update Branch Prefix: cli-coverage-update
+
+          # Background
+          The Go SDK (this repo) was just updated by Stainless, and may contain new API methods. The CLI (kernel/cli) needs to be updated to expose these new methods as CLI commands.
+
+          # Source Files
+          - SDK api.md: Current directory - READ THIS FILE FIRST. This is the authoritative list of all SDK methods and their signatures.
+          - SDK *.go files: Current directory - Contains param structs (e.g., InstanceNewParams, ImageNewParams) with all available options/fields.
+          - API Spec: /tmp/hypeman-api/packages/api/stainless.yaml - SDK configuration with resources and methods
+          - API Spec: /tmp/hypeman-api/packages/api/openapi.yaml - Full OpenAPI specification. CHECK for x-cli-skip: true on endpoints - skip those from CLI coverage.
+          - CLI: /tmp/kernel-cli - Existing CLI commands
+
+          # Task
+
+          ## Step 1: Update SDK Version (ALWAYS DO THIS FIRST)
+          - Go to /tmp/kernel-cli
+          - Update go.mod to require the latest SDK: ${{ steps.sdk-version.outputs.module }}@${{ steps.sdk-version.outputs.version }}
+          - Run: go get ${{ steps.sdk-version.outputs.module }}@${{ steps.sdk-version.outputs.version }}
+          - Run: go mod tidy
+          - This ensures the CLI always uses the latest SDK, even if no new commands are added
+
+          ## Step 2: Full SDK Method Enumeration (CRITICAL - DO NOT SKIP)
+          You MUST perform a complete enumeration of ALL SDK methods and their parameters. Do NOT rely only on recent commits.
+
+          2a. Read the api.md file in the SDK repo root. This file lists EVERY SDK method in the format:
+              - \`client.Resource.Method(ctx, params)\` with links to param types
+              Extract a complete list of all methods.
+
+          2b. For EACH SDK method, read the corresponding param type from the Go source files.
+              For example:
+              - InstanceNewParams in instance.go -> lists all fields like \`Image\`, \`Region\`, \`VolumeMounts\`, etc.
+              - ImageNewParams in image.go -> lists all fields like \`Name\`, \`Tag\`, etc.
+              - VolumeNewParams in volume.go -> lists all fields like \`Name\`, \`Size\`, etc.
+              Each field in a Params struct represents an option that could be a CLI flag.
+
+          2c. Build a complete SDK coverage matrix:
+              | SDK Method | SDK Param Type | SDK Param Fields |
+              |------------|----------------|------------------|
+              | client.Instances.New | InstanceNewParams | Image, Region, VolumeMounts, ... |
+              | client.Instances.List | (none) | |
+              | client.Images.New | ImageNewParams | Name, Tag, ... |
+              | client.Volumes.New | VolumeNewParams | Name, Size, ... |
+              | ... | ... | ... |
+
+          ## Step 3: Full CLI Command Enumeration (CRITICAL - DO NOT SKIP)
+          Enumerate ALL existing CLI commands and their flags.
+
+          3a. Look at cmd/ directory structure for existing commands
+          3b. For each command file, extract:
+              - The command name/path (e.g., \`kernel instance create\`)
+              - All flags defined for that command
+          3c. Build a CLI coverage matrix:
+              | CLI Command | CLI Flags |
+              |-------------|-----------|
+              | kernel instance create | --image, --region, ... |
+              | kernel instance list | |
+              | ... | ... |
+
+          ## Step 4: Gap Analysis (CRITICAL - DO NOT SKIP)
+          Compare the SDK matrix (Step 2) with the CLI matrix (Step 3) to identify:
+
+          4a. Missing commands: SDK methods with NO corresponding CLI command
+          4b. Missing flags: SDK param fields with NO corresponding CLI flag
+          4c. Create a gap report:
+              ## Missing Commands
+              - client.Instances.Restore -> needs \`kernel instance restore\`
+              - client.Devices.ListAvailable -> needs \`kernel device list-available\`
+
+              ## Missing Flags
+              - InstanceNewParams.SomeNewField -> \`kernel instance create\` needs --some-new-field
+              - VolumeNewParams.Region -> \`kernel volume create\` needs --region
+
+          ## Step 5: Implement Missing Coverage
+          For each gap identified in Step 4:
+          - Implement missing commands following existing patterns
+          - Add missing flags to existing commands
+          - Run \`go build ./...\` to verify the code compiles
+
+          ## Step 6: Commit and Push
+          - You should already be on the cli-coverage-update branch (it was checked out during setup if it existed)
+          - If you're on main, create/switch to the cli-coverage-update branch
+          - Commit with message describing SDK version bump and any new commands/flags
+          - IMPORTANT: Do NOT force push! Use regular \`git push origin cli-coverage-update\` to preserve existing work on the branch
+          - If push fails due to divergence, pull and rebase first: \`git pull --rebase origin cli-coverage-update\`
+          - Create or update the PR in kernel/cli
+
+          # SDK Method -> CLI Command Mapping Guide
+          - client.Resource.New() -> kernel resource create
+          - client.Resource.List() -> kernel resource list
+          - client.Resource.Get() -> kernel resource get
+          - client.Resource.Delete() -> kernel resource delete
+          - client.Resource.Update() -> kernel resource update
+          - client.Resource.Sub.Action() -> kernel resource sub action
+          - client.Resource.CustomAction() -> kernel resource custom-action
+
+          # SDK Param Field -> CLI Flag Mapping Guide
+          - CamelCaseField -> --camel-case-field
+          - TimeoutSeconds -> --timeout-seconds
+          - IncludeDeleted -> --include-deleted
+          - Nested structs: VolumeMount.Path -> --volume-mount-path or separate flags
+
+          # Implementation Guidelines
+          - Follow the existing CLI code patterns in /tmp/kernel-cli
+          - Use cobra for command definitions
+          - Use the Hypeman Go SDK (this repo) for API calls
+          - Include proper flag definitions with descriptions matching SDK field comments
+          - Add help text for commands matching SDK method comments
+          - Handle errors appropriately
+          - Match the style of existing commands
+
+          # Output Format
+          After pushing changes, create or update an evergreen PR using gh:
+
+          1. Check if a PR already exists for the cli-coverage-update branch:
+             gh pr list --repo kernel/cli --head cli-coverage-update --json number
+
+          2. If PR exists, update it. If not, create a new one.
+
+          If new commands or flags were added:
+            Title: 'CLI: Update hypeman SDK to <version> and add new commands/flags'
+            Body:
+            'This PR updates the Hypeman Go SDK to ${{ steps.sdk-version.outputs.version }} and adds CLI commands/flags for new SDK methods.
+
+            ## SDK Update
+            - Updated hypeman-go to ${{ steps.sdk-version.outputs.version }}
+
+            ## Coverage Analysis
+            This PR was generated by performing a full enumeration of SDK methods and CLI commands.
+
+            ## New Commands
+            - \`kernel <resource> <action>\` for \`client.Resource.Action()\`
+
+            ## New Flags
+            - \`--flag-name\` for \`ResourceParams.FieldName\`
+
+            Triggered by: kernel/hypeman-go@${{ steps.pr-info.outputs.merge_sha || github.sha }}
+            Reviewer: @<commit_author>'
+
+          If only SDK version update (no coverage gaps found):
+            Title: 'CLI: Update Hypeman Go SDK to ${{ steps.sdk-version.outputs.version }}'
+            Body:
+            'This PR updates the Hypeman Go SDK dependency to the latest version.
+
+            ## SDK Update
+            - Updated hypeman-go to ${{ steps.sdk-version.outputs.version }}
+
+            ## Coverage Analysis
+            A full enumeration of SDK methods and CLI commands was performed. No coverage gaps were found.
+
+            Triggered by: kernel/hypeman-go@${{ steps.pr-info.outputs.merge_sha || github.sha }}
+            Reviewer: @<commit_author>'
+
+          # Constraints
+          - ALWAYS update the SDK version in go.mod - this is the primary purpose
+          - ALWAYS perform the full enumeration (Steps 2-4) - this is critical for finding gaps
+          - ALL SDK methods in api.md MUST have corresponding CLI commands, EXCEPT those marked with x-cli-skip in openapi.yaml
+          - SKIP endpoints marked with x-cli-skip: true in openapi.yaml - these are internal endpoints not suitable for CLI
+          - Streaming methods may have different CLI implementations (e.g., follow flags)
+          - Even if no coverage gaps are found, still create a PR for the SDK version bump
+          - Ensure code compiles before pushing
+          " --model opus-4.6 --force --output-format=text
