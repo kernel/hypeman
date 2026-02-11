@@ -25,6 +25,11 @@ func (c *OCIClient) InspectManifest(ctx context.Context, imageRef string) (strin
 	return c.client.inspectManifest(ctx, imageRef)
 }
 
+// InspectManifestForLinux is an alias for InspectManifest (all images target Linux)
+func (c *OCIClient) InspectManifestForLinux(ctx context.Context, imageRef string) (string, error) {
+	return c.InspectManifest(ctx, imageRef)
+}
+
 // PullAndUnpack pulls an OCI image and unpacks it to a directory (public for system manager).
 // Always targets Linux platform since hypeman VMs are Linux guests.
 func (c *OCIClient) PullAndUnpack(ctx context.Context, imageRef, digest, exportDir string) error {
@@ -33,4 +38,9 @@ func (c *OCIClient) PullAndUnpack(ctx context.Context, imageRef, digest, exportD
 		return fmt.Errorf("pull and unpack: %w", err)
 	}
 	return nil
+}
+
+// PullAndUnpackForLinux is an alias for PullAndUnpack (all images target Linux)
+func (c *OCIClient) PullAndUnpackForLinux(ctx context.Context, imageRef, digest, exportDir string) error {
+	return c.PullAndUnpack(ctx, imageRef, digest, exportDir)
 }
