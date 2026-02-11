@@ -19,6 +19,9 @@ var (
 )
 
 func init() {
+	cli.VersionPrinter = func(cmd *cli.Command) {
+		fmt.Fprintf(os.Stdout, "Hypeman CLI version %s\n", cmd.Root().Version)
+	}
 	Command = &cli.Command{
 		Name:    "hypeman",
 		Usage:   "CLI for the hypeman API",
