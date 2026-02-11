@@ -5,6 +5,9 @@ import (
 	"strings"
 
 	"github.com/c2h5oh/datasize"
+	"github.com/kernel/hypeman/cmd/api/config"
+	"github.com/kernel/hypeman/lib/paths"
+	"golang.org/x/sys/unix"
 )
 
 // DiskResource implements Resource for disk space discovery and tracking.
@@ -14,6 +17,36 @@ type DiskResource struct {
 	instanceLister InstanceLister
 	imageLister    ImageLister
 	volumeLister   VolumeLister
+}
+
+// NewDiskResource discovers disk capacity for the data directory.
+// If cfg.DiskLimit is set, uses that as capacity; otherwise auto-detects via statfs.
+func NewDiskResource(cfg *config.Config, p *paths.Paths, instLister InstanceLister, imgLister ImageLister, volLister VolumeLister) (*DiskResource, error) {
+	var capacity int64
+
+	if cfg.DiskLimit != "" {
+		// Parse configured limit
+		var ds datasize.ByteSize
+		if err := ds.UnmarshalText([]byte(cfg.DiskLimit)); err != nil {
+			return nil, err
+		}
+		capacity = int64(ds.Bytes())
+	} else {
+		// Auto-detect from filesystem
+		var stat unix.Statfs_t
+		if err := unix.Statfs(cfg.DataDir, &stat); err != nil {
+			return nil, err
+		}
+		capacity = int64(stat.Blocks) * int64(stat.Bsize)
+	}
+
+	return &DiskResource{
+		capacity:       capacity,
+		dataDir:        cfg.DataDir,
+		instanceLister: instLister,
+		imageLister:    imgLister,
+		volumeLister:   volLister,
+	}, nil
 }
 
 // Type returns the resource type.
