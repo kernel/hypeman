@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-containerregistry/pkg/v1/empty"
+	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/stretchr/testify/require"
 )
@@ -343,6 +345,79 @@ func countFiles(dir string) (int, error) {
 		return 0, err
 	}
 	return len(entries), nil
+}
+
+// TestImportLocalImageFromOCICache is an integration test that simulates the full
+// builder image import flow used by buildBuilderFromDockerfile:
+//
+// 1. Create a synthetic Docker image (simulates docker build output)
+// 2. Write it to the OCI layout cache with digest annotation (simulates buildBuilderFromDockerfile)
+// 3. Call ImportLocalImage (what buildBuilderFromDockerfile calls after writing to cache)
+// 4. Wait for the image to become ready (async build pipeline)
+// 5. Verify GetImage returns correct metadata (entrypoint, workdir, env)
+// 6. Verify GetDiskPath returns path to a valid ext4 disk file
+//
+// This proves the end-to-end flow: OCI cache write → ImportLocalImage → buildImage
+// → pullAndExport (cache hit) → ExportRootfs → ready.
+func TestImportLocalImageFromOCICache(t *testing.T) {
+	dataDir := t.TempDir()
+	p := paths.New(dataDir)
+	mgr, err := NewManager(p, 1, nil)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+
+	// Step 1: Create synthetic Docker image
+	img := createTestDockerImage(t)
+
+	imgDigest, err := img.Digest()
+	require.NoError(t, err)
+	digestStr := imgDigest.String() // "sha256:abc123..."
+	layoutTag := digestToLayoutTag(digestStr)
+
+	// Step 2: Write to OCI layout cache (same path the image manager uses)
+	cacheDir := p.SystemOCICache()
+	require.NoError(t, os.MkdirAll(cacheDir, 0755))
+
+	path, err := layout.Write(cacheDir, empty.Index)
+	require.NoError(t, err)
+
+	err = path.AppendImage(img, layout.WithAnnotations(map[string]string{
+		"org.opencontainers.image.ref.name": layoutTag,
+	}))
+	require.NoError(t, err)
+	t.Logf("Wrote image to OCI cache: digest=%s, layoutTag=%s", digestStr, layoutTag)
+
+	// Step 3: Call ImportLocalImage (what buildBuilderFromDockerfile does)
+	imported, err := mgr.ImportLocalImage(ctx, "localhost:8080/internal/builder", "latest", digestStr)
+	require.NoError(t, err)
+	require.NotNil(t, imported)
+	require.Equal(t, "localhost:8080/internal/builder:latest", imported.Name)
+	t.Logf("ImportLocalImage returned: name=%s, status=%s, digest=%s", imported.Name, imported.Status, imported.Digest)
+
+	// Step 4: Wait for the async build pipeline to complete
+	waitForReady(t, mgr, ctx, imported.Name)
+
+	// Step 5: Verify GetImage returns correct metadata
+	ready, err := mgr.GetImage(ctx, imported.Name)
+	require.NoError(t, err)
+	require.Equal(t, StatusReady, ready.Status)
+	require.Equal(t, digestStr, ready.Digest)
+	require.Equal(t, []string{"/usr/local/bin/guest-agent"}, ready.Entrypoint)
+	require.Equal(t, "/app", ready.WorkingDir)
+	require.Contains(t, ready.Env, "PATH")
+	require.NotNil(t, ready.SizeBytes)
+	require.Greater(t, *ready.SizeBytes, int64(0))
+	t.Logf("Image ready: entrypoint=%v, workdir=%s, size=%d", ready.Entrypoint, ready.WorkingDir, *ready.SizeBytes)
+
+	// Step 6: Verify GetDiskPath returns path to a valid disk file
+	diskPath, err := GetDiskPath(p, imported.Name, digestStr)
+	require.NoError(t, err)
+	diskStat, err := os.Stat(diskPath)
+	require.NoError(t, err, "disk file should exist at %s", diskPath)
+	require.False(t, diskStat.IsDir())
+	require.Greater(t, diskStat.Size(), int64(0), "disk file should not be empty")
+	t.Logf("Disk path verified: %s (%d bytes)", diskPath, diskStat.Size())
 }
 
 // waitForReady waits for an image build to complete

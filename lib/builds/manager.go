@@ -3,6 +3,7 @@ package builds
 import (
 	"bufio"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -12,8 +13,12 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/google/go-containerregistry/pkg/v1/empty"
+	"github.com/google/go-containerregistry/pkg/v1/layout"
+	"github.com/google/go-containerregistry/pkg/v1/tarball"
 	"github.com/nrednav/cuid2"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/instances"
@@ -21,6 +26,9 @@ import (
 	"github.com/kernel/hypeman/lib/volumes"
 	"go.opentelemetry.io/otel/metric"
 )
+
+//go:embed images/generic/Dockerfile
+var builderDockerfile []byte
 
 // Manager interface for the build system
 type Manager interface {
@@ -77,13 +85,15 @@ type Config struct {
 	// RegistrySecret is the secret used to sign registry access tokens
 	// This should be the same secret used by the registry middleware
 	RegistrySecret string
+
+	// DockerSocket is the path to the Docker socket for building the builder image
+	DockerSocket string
 }
 
 // DefaultConfig returns the default build manager configuration
 func DefaultConfig() Config {
 	return Config{
 		MaxConcurrentBuilds: 2,
-		BuilderImage:        "hypeman/builder:latest",
 		RegistryURL:         "localhost:8080",
 		DefaultTimeout:      600, // 10 minutes
 	}
@@ -113,6 +123,7 @@ type manager struct {
 	logger          *slog.Logger
 	metrics         *Metrics
 	createMu        sync.Mutex
+	builderReady    atomic.Bool
 
 	// Status subscription system for SSE streaming
 	statusSubscribers map[string][]chan BuildEvent
@@ -156,19 +167,204 @@ func NewManager(
 		m.metrics = metrics
 	}
 
-	// Recover any pending builds from disk
-	m.RecoverPendingBuilds()
-
 	return m, nil
 }
 
 // Start starts the build manager's background services
 func (m *manager) Start(ctx context.Context) error {
-	// Note: We no longer use a global vsock listener.
-	// Instead, we connect TO each builder VM's vsock socket directly.
-	// This follows the Cloud Hypervisor vsock pattern where host initiates connections.
+	go func() {
+		m.ensureBuilderImage(ctx)
+		// Recover pending builds only after the builder image is ready,
+		// otherwise recovered builds fail with "builder image is being prepared".
+		m.RecoverPendingBuilds()
+	}()
 	m.logger.Info("build manager started")
 	return nil
+}
+
+// ensureBuilderImage ensures the builder image is available in the image store.
+//
+// If BUILDER_IMAGE is set, it checks whether the image is already in the store
+// and attempts to pull it from a remote registry if not.
+//
+// If BUILDER_IMAGE is unset/empty, it builds the image from the embedded Dockerfile
+// using Docker, imports the result directly into the OCI layout cache (no docker push),
+// and triggers ext4 conversion via ImportLocalImage.
+//
+// This runs in a background goroutine during startup.
+func (m *manager) ensureBuilderImage(ctx context.Context) {
+	defer m.builderReady.Store(true)
+
+	if m.config.BuilderImage != "" {
+		// Explicit builder image configured - check if already available
+		if _, err := m.imageManager.GetImage(ctx, m.config.BuilderImage); err == nil {
+			m.logger.Info("builder image already available", "image", m.config.BuilderImage)
+			return
+		}
+
+		// Not in store - try to pull it from remote registry
+		m.logger.Info("pulling builder image", "image", m.config.BuilderImage)
+		if _, err := m.imageManager.CreateImage(ctx, images.CreateImageRequest{
+			Name: m.config.BuilderImage,
+		}); err != nil {
+			m.logger.Warn("failed to pull builder image", "image", m.config.BuilderImage, "error", err)
+			return
+		}
+		if err := m.waitForBuilderImageReady(ctx, m.config.BuilderImage); err != nil {
+			m.logger.Warn("builder image failed to become ready", "image", m.config.BuilderImage, "error", err)
+		}
+		return
+	}
+
+	// No builder image configured - build from embedded Dockerfile
+	m.logger.Info("building builder image from embedded Dockerfile")
+	imageRef, err := m.buildBuilderFromDockerfile(ctx)
+	if err != nil {
+		m.logger.Warn("failed to build builder image", "error", err)
+		return
+	}
+	m.config.BuilderImage = imageRef
+	m.logger.Info("builder image ready", "image", imageRef)
+}
+
+// buildBuilderFromDockerfile builds the builder image from the embedded Dockerfile
+// and imports it into the image store without using docker push.
+//
+// The flow is:
+//  1. Write embedded Dockerfile to a temp directory
+//  2. Build with Docker (uses cwd as context for COPY directives)
+//  3. Export with docker save to a tarball
+//  4. Load tarball with go-containerregistry and write to the shared OCI layout cache
+//  5. Call ImportLocalImage to trigger ext4 conversion
+//  6. Wait for the image to be ready
+//
+// This is intended for development; in production, set BUILDER_IMAGE to a pre-built image.
+func (m *manager) buildBuilderFromDockerfile(ctx context.Context) (string, error) {
+	dockerSocket := m.config.DockerSocket
+	if dockerSocket == "" {
+		dockerSocket = "/var/run/docker.sock"
+	}
+	if _, err := os.Stat(dockerSocket); err != nil {
+		return "", fmt.Errorf("Docker socket not found at %s: %w", dockerSocket, err)
+	}
+
+	dockerEnv := append(os.Environ(), fmt.Sprintf("DOCKER_HOST=unix://%s", dockerSocket))
+
+	// Write embedded Dockerfile to temp dir
+	tmpDir, err := os.MkdirTemp("", "hypeman-builder-*")
+	if err != nil {
+		return "", fmt.Errorf("create temp dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	dockerfilePath := filepath.Join(tmpDir, "Dockerfile")
+	if err := os.WriteFile(dockerfilePath, builderDockerfile, 0644); err != nil {
+		return "", fmt.Errorf("write Dockerfile: %w", err)
+	}
+
+	// Build with Docker (context is cwd = repo root in development)
+	localTag := fmt.Sprintf("hypeman-builder-tmp:%d", time.Now().Unix())
+	m.logger.Info("building builder image with Docker", "tag", localTag)
+
+	buildCmd := exec.CommandContext(ctx, "docker", "build", "-t", localTag, "-f", dockerfilePath, ".")
+	buildCmd.Env = dockerEnv
+	if output, err := buildCmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("docker build: %s: %w", string(output), err)
+	}
+	defer func() {
+		rmCmd := exec.Command("docker", "rmi", localTag)
+		rmCmd.Env = dockerEnv
+		rmCmd.Run()
+	}()
+
+	// Export image to tarball (avoids docker push)
+	tarPath := filepath.Join(tmpDir, "builder.tar")
+	saveCmd := exec.CommandContext(ctx, "docker", "save", "-o", tarPath, localTag)
+	saveCmd.Env = dockerEnv
+	if output, err := saveCmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("docker save: %s: %w", string(output), err)
+	}
+
+	// Load tarball as a v1.Image
+	img, err := tarball.ImageFromPath(tarPath, nil)
+	if err != nil {
+		return "", fmt.Errorf("load image tarball: %w", err)
+	}
+
+	// Get image digest
+	digestHash, err := img.Digest()
+	if err != nil {
+		return "", fmt.Errorf("get image digest: %w", err)
+	}
+	digest := digestHash.String()   // "sha256:abc123..."
+	digestHex := digestHash.Hex      // "abc123..."
+
+	// Write directly to the shared OCI layout cache.
+	// This is the same cache used by the image manager's OCI client, so when
+	// ImportLocalImage triggers buildImage → pullAndExport, it will find the
+	// layers already cached and skip the network pull entirely.
+	cacheDir := m.paths.SystemOCICache()
+	layoutPath, err := layout.FromPath(cacheDir)
+	if err != nil {
+		layoutPath, err = layout.Write(cacheDir, empty.Index)
+		if err != nil {
+			return "", fmt.Errorf("create OCI layout: %w", err)
+		}
+	}
+
+	if err := layoutPath.AppendImage(img, layout.WithAnnotations(map[string]string{
+		"org.opencontainers.image.ref.name": digestHex,
+	})); err != nil {
+		return "", fmt.Errorf("add image to OCI layout: %w", err)
+	}
+
+	m.logger.Info("builder image added to OCI cache", "digest", digest)
+
+	// Import into the image store (triggers async ext4 conversion).
+	// The repo includes the registry host so the image reference is consistent
+	// with how other images are stored and looked up.
+	registryHost := stripRegistryScheme(m.config.RegistryURL)
+	repo := registryHost + "/internal/builder"
+	reference := "latest"
+	imageRef := repo + ":" + reference
+
+	if _, err := m.imageManager.ImportLocalImage(ctx, repo, reference, digest); err != nil {
+		return "", fmt.Errorf("import builder image: %w", err)
+	}
+
+	// Wait for ext4 conversion to complete
+	if err := m.waitForBuilderImageReady(ctx, imageRef); err != nil {
+		return "", fmt.Errorf("builder image conversion: %w", err)
+	}
+
+	return imageRef, nil
+}
+
+// waitForBuilderImageReady polls the image manager until the image is ready.
+func (m *manager) waitForBuilderImageReady(ctx context.Context, imageRef string) error {
+	const maxAttempts = 240
+	const pollInterval = 500 * time.Millisecond
+
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		img, err := m.imageManager.GetImage(ctx, imageRef)
+		if err == nil {
+			switch img.Status {
+			case images.StatusReady:
+				return nil
+			case images.StatusFailed:
+				return fmt.Errorf("image conversion failed")
+			}
+		}
+		time.Sleep(pollInterval)
+	}
+
+	return fmt.Errorf("timeout waiting for builder image after %v", time.Duration(maxAttempts)*pollInterval)
 }
 
 // CreateBuild starts a new build job
@@ -220,6 +416,14 @@ func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourc
 
 	repoAccess := []RepoPermission{
 		{Repo: fmt.Sprintf("builds/%s", id), Scope: "push"},
+	}
+
+	// If the Dockerfile uses base images from the internal registry, grant pull access
+	for _, baseRepo := range extractInternalBaseImageRepos(req.Dockerfile, m.config.RegistryURL) {
+		repoAccess = append(repoAccess, RepoPermission{
+			Repo:  baseRepo,
+			Scope: "pull",
+		})
 	}
 
 	if req.IsAdminBuild {
@@ -362,9 +566,11 @@ func (m *manager) runBuild(ctx context.Context, id string, req CreateBuildReques
 		return
 	}
 
-	// Save build logs (regardless of success/failure)
+	// Save complete build logs from result.Logs as the authoritative log file.
+	// Streamed "log" messages may have dropped lines due to channel overflow,
+	// so we overwrite with the complete buffer to ensure no logs are lost.
 	if result.Logs != "" {
-		if err := appendLog(m.paths, id, []byte(result.Logs)); err != nil {
+		if err := writeLog(m.paths, id, []byte(result.Logs)); err != nil {
 			m.logger.Warn("failed to save build logs", "id", id, "error", err)
 		}
 	}
@@ -418,6 +624,10 @@ func (m *manager) runBuild(ctx context.Context, id string, req CreateBuildReques
 
 // executeBuild runs the build in a builder VM
 func (m *manager) executeBuild(ctx context.Context, id string, req CreateBuildRequest, policy *BuildPolicy) (*BuildResult, error) {
+	if !m.builderReady.Load() {
+		return nil, fmt.Errorf("builder image is being prepared, please retry shortly")
+	}
+
 	// Create a volume with the source data
 	sourceVolID := fmt.Sprintf("build-source-%s", id)
 	sourcePath := m.paths.BuildSourceDir(id) + "/source.tar.gz"
@@ -511,7 +721,7 @@ func (m *manager) executeBuild(ctx context.Context, id string, req CreateBuildRe
 
 	// Wait for build result via vsock
 	// The builder agent will send the result when complete
-	result, err := m.waitForResult(ctx, inst)
+	result, err := m.waitForResult(ctx, id, inst)
 	if err != nil {
 		return nil, fmt.Errorf("wait for result: %w", err)
 	}
@@ -520,7 +730,7 @@ func (m *manager) executeBuild(ctx context.Context, id string, req CreateBuildRe
 }
 
 // waitForResult waits for the build result from the builder agent via vsock
-func (m *manager) waitForResult(ctx context.Context, inst *instances.Instance) (*BuildResult, error) {
+func (m *manager) waitForResult(ctx context.Context, buildID string, inst *instances.Instance) (*BuildResult, error) {
 	// Wait a bit for the VM to start and the builder agent to listen on vsock
 	time.Sleep(3 * time.Second)
 
@@ -535,9 +745,14 @@ func (m *manager) waitForResult(ctx context.Context, inst *instances.Instance) (
 		default:
 		}
 
-		conn, err = m.dialBuilderVsock(inst.VsockSocket)
-		if err == nil {
-			break
+		dialer, dialerErr := m.instanceManager.GetVsockDialer(ctx, inst.Id)
+		if dialerErr == nil {
+			conn, err = dialer.DialVsock(ctx, BuildAgentVsockPort)
+			if err == nil {
+				break
+			}
+		} else {
+			err = dialerErr
 		}
 
 		m.logger.Debug("waiting for builder agent", "attempt", attempt+1, "error", err)
@@ -621,6 +836,14 @@ func (m *manager) waitForResult(ctx context.Context, inst *instances.Instance) (
 			}
 			m.logger.Info("sent secrets to agent", "count", len(secrets), "instance", inst.Id)
 
+		case "log":
+			// Stream log line to build log file immediately
+			if dr.response.Log != "" {
+				if err := appendLog(m.paths, buildID, []byte(dr.response.Log)); err != nil {
+					m.logger.Error("failed to append streamed log", "error", err, "build_id", buildID)
+				}
+			}
+
 		case "build_result":
 			// Build completed
 			if dr.response.Result == nil {
@@ -632,62 +855,6 @@ func (m *manager) waitForResult(ctx context.Context, inst *instances.Instance) (
 			m.logger.Warn("unexpected message type from agent", "type", dr.response.Type)
 		}
 	}
-}
-
-// dialBuilderVsock connects to a builder VM's vsock socket using Cloud Hypervisor's handshake
-func (m *manager) dialBuilderVsock(vsockSocketPath string) (net.Conn, error) {
-	// Connect to the Cloud Hypervisor vsock Unix socket
-	conn, err := net.DialTimeout("unix", vsockSocketPath, 5*time.Second)
-	if err != nil {
-		return nil, fmt.Errorf("dial vsock socket %s: %w", vsockSocketPath, err)
-	}
-
-	// Set deadline for handshake
-	if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("set handshake deadline: %w", err)
-	}
-
-	// Perform Cloud Hypervisor vsock handshake
-	// Format: "CONNECT <port>\n" -> "OK <port>\n"
-	handshakeCmd := fmt.Sprintf("CONNECT %d\n", BuildAgentVsockPort)
-	if _, err := conn.Write([]byte(handshakeCmd)); err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("send vsock handshake: %w", err)
-	}
-
-	// Read handshake response
-	reader := bufio.NewReader(conn)
-	response, err := reader.ReadString('\n')
-	if err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("read vsock handshake response: %w", err)
-	}
-
-	// Clear deadline after successful handshake
-	if err := conn.SetDeadline(time.Time{}); err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("clear deadline: %w", err)
-	}
-
-	response = strings.TrimSpace(response)
-	if !strings.HasPrefix(response, "OK ") {
-		conn.Close()
-		return nil, fmt.Errorf("vsock handshake failed: %s", response)
-	}
-
-	return &bufferedConn{Conn: conn, reader: reader}, nil
-}
-
-// bufferedConn wraps a net.Conn with a bufio.Reader to ensure any buffered
-// data from the handshake is properly drained before reading from the connection
-type bufferedConn struct {
-	net.Conn
-	reader *bufio.Reader
-}
-
-func (c *bufferedConn) Read(p []byte) (int, error) {
-	return c.reader.Read(p)
 }
 
 // updateStatus updates the build status
@@ -1136,6 +1303,14 @@ func (m *manager) refreshBuildToken(buildID string, req *CreateBuildRequest) err
 		{Repo: fmt.Sprintf("builds/%s", buildID), Scope: "push"},
 	}
 
+	// If the Dockerfile uses base images from the internal registry, grant pull access
+	for _, baseRepo := range extractInternalBaseImageRepos(req.Dockerfile, m.config.RegistryURL) {
+		repoAccess = append(repoAccess, RepoPermission{
+			Repo:  baseRepo,
+			Scope: "pull",
+		})
+	}
+
 	if req.IsAdminBuild {
 		// Admin build: push access to global cache
 		if req.GlobalCacheKey != "" {
@@ -1256,6 +1431,65 @@ func (m *manager) createBuildConfigVolume(buildID, volID string) (string, error)
 	}
 
 	return diskPath, nil
+}
+
+// extractInternalBaseImageRepos parses the Dockerfile's FROM lines and returns
+// all repository paths that reference the internal registry. Returns nil
+// if no base images reference the internal registry.
+func extractInternalBaseImageRepos(dockerfile, registryURL string) []string {
+	if dockerfile == "" {
+		return nil
+	}
+
+	registryHost := stripRegistryScheme(registryURL)
+	seen := make(map[string]bool)
+	var repos []string
+
+	scanner := bufio.NewScanner(strings.NewReader(dockerfile))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		upper := strings.ToUpper(line)
+		if !strings.HasPrefix(upper, "FROM ") {
+			continue
+		}
+
+		// Parse: FROM [--platform=...] image[:tag|@digest] [AS name]
+		parts := strings.Fields(line)
+		imageIdx := 1
+		for imageIdx < len(parts) && strings.HasPrefix(parts[imageIdx], "--") {
+			imageIdx++
+		}
+		if imageIdx >= len(parts) {
+			continue
+		}
+
+		imageRef := parts[imageIdx]
+		if strings.ToLower(imageRef) == "scratch" {
+			continue
+		}
+
+		// Check if the image references the internal registry
+		if !strings.HasPrefix(imageRef, registryHost+"/") {
+			continue
+		}
+
+		// Strip the registry host to get the repo path, then strip digest and tag.
+		// An image ref can have both: registry/org/img:v1@sha256:abc123
+		repo := strings.TrimPrefix(imageRef, registryHost+"/")
+		if idx := strings.LastIndex(repo, "@"); idx != -1 {
+			repo = repo[:idx]
+		}
+		if idx := strings.LastIndex(repo, ":"); idx != -1 {
+			repo = repo[:idx]
+		}
+
+		if !seen[repo] {
+			seen[repo] = true
+			repos = append(repos, repo)
+		}
+	}
+
+	return repos
 }
 
 // copyFile copies a file from src to dst

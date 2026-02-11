@@ -5,11 +5,22 @@ package hypervisor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"time"
 
 	"github.com/kernel/hypeman/lib/paths"
+)
+
+// Common errors
+var (
+	// ErrHypervisorNotRunning is returned when trying to connect to a hypervisor
+	// that is not currently running or cannot be reconnected to.
+	ErrHypervisorNotRunning = errors.New("hypervisor is not running")
+
+	// ErrNotSupported is returned when an operation is not supported by the hypervisor.
+	ErrNotSupported = errors.New("operation not supported by this hypervisor")
 )
 
 // Type identifies the hypervisor implementation
@@ -20,6 +31,8 @@ const (
 	TypeCloudHypervisor Type = "cloud-hypervisor"
 	// TypeQEMU is the QEMU VMM
 	TypeQEMU Type = "qemu"
+	// TypeVZ is the Virtualization.framework VMM (macOS only)
+	TypeVZ Type = "vz"
 )
 
 // socketNames maps hypervisor types to their socket filenames.
@@ -163,4 +176,24 @@ func NewVsockDialer(hvType Type, vsockSocket string, vsockCID int64) (VsockDiale
 		return nil, fmt.Errorf("no vsock dialer registered for hypervisor type: %s", hvType)
 	}
 	return factory(vsockSocket, vsockCID), nil
+}
+
+// ClientFactory creates Hypervisor client instances for a hypervisor type.
+type ClientFactory func(socketPath string) (Hypervisor, error)
+
+// clientFactories maps hypervisor types to their client factories.
+var clientFactories = make(map[Type]ClientFactory)
+
+// RegisterClientFactory registers a Hypervisor client factory.
+func RegisterClientFactory(t Type, factory ClientFactory) {
+	clientFactories[t] = factory
+}
+
+// NewClient creates a Hypervisor client for the given type and socket.
+func NewClient(hvType Type, socketPath string) (Hypervisor, error) {
+	factory, ok := clientFactories[hvType]
+	if !ok {
+		return nil, fmt.Errorf("no client factory registered for hypervisor type: %s", hvType)
+	}
+	return factory(socketPath)
 }

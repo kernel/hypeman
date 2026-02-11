@@ -49,16 +49,20 @@ func mountEssentials(log *Logger) error {
 	log.Info("mount", "mounted devpts/shm")
 
 	// Set up serial console now that /dev is mounted
-	// ttyS0 for x86_64, ttyAMA0 for ARM64 (PL011 UART)
-	if _, err := os.Stat("/dev/ttyAMA0"); err == nil {
-		log.SetConsole("/dev/ttyAMA0")
-		redirectToConsole("/dev/ttyAMA0")
-	} else if _, err := os.Stat("/dev/ttyS0"); err == nil {
-		log.SetConsole("/dev/ttyS0")
-		redirectToConsole("/dev/ttyS0")
+	// hvc0 for Virtualization.framework (vz) on macOS
+	// ttyAMA0 for ARM64 PL011 UART (cloud-hypervisor)
+	// ttyS0 for x86_64 (QEMU, cloud-hypervisor)
+	consoles := []string{"/dev/hvc0", "/dev/ttyAMA0", "/dev/ttyS0"}
+	for _, console := range consoles {
+		if _, err := os.Stat(console); err == nil {
+			log.SetConsole(console)
+			redirectToConsole(console)
+			log.Info("mount", "using console "+console)
+			break
+		}
 	}
 
-	log.Info("mount", "redirected to serial console")
+	log.Info("mount", "console setup complete")
 
 	return nil
 }

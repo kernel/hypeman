@@ -19,12 +19,14 @@ func NewOCIClient(cacheDir string) (*OCIClient, error) {
 	return &OCIClient{client: client}, nil
 }
 
-// InspectManifest inspects a remote image to get its digest (public for system manager)
+// InspectManifest inspects a remote image to get its digest (public for system manager).
+// Always targets Linux platform since hypeman VMs are Linux guests.
 func (c *OCIClient) InspectManifest(ctx context.Context, imageRef string) (string, error) {
 	return c.client.inspectManifest(ctx, imageRef)
 }
 
-// PullAndUnpack pulls an OCI image and unpacks it to a directory (public for system manager)
+// PullAndUnpack pulls an OCI image and unpacks it to a directory (public for system manager).
+// Always targets Linux platform since hypeman VMs are Linux guests.
 func (c *OCIClient) PullAndUnpack(ctx context.Context, imageRef, digest, exportDir string) error {
 	_, err := c.client.pullAndExport(ctx, imageRef, digest, exportDir)
 	if err != nil {
@@ -32,4 +34,3 @@ func (c *OCIClient) PullAndUnpack(ctx context.Context, imageRef, digest, exportD
 	}
 	return nil
 }
-

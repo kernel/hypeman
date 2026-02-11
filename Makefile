@@ -1,5 +1,5 @@
 SHELL := /bin/bash
-.PHONY: oapi-generate generate-vmm-client generate-wire generate-all dev build test install-tools gen-jwt download-ch-binaries download-ch-spec ensure-ch-binaries build-caddy-binaries build-caddy ensure-caddy-binaries  release-prep clean build-embedded
+.PHONY: oapi-generate generate-vmm-client generate-wire generate-all dev build build-linux build-darwin test test-linux test-darwin install-tools gen-jwt download-ch-binaries download-ch-spec ensure-ch-binaries build-caddy-binaries build-caddy ensure-caddy-binaries  release-prep clean build-embedded
 
 # Directory where local binaries will be installed
 BIN_DIR ?= $(CURDIR)/bin
@@ -174,33 +174,57 @@ ensure-caddy-binaries:
 	fi
 
 # Build guest-agent (guest binary) into its own directory for embedding
+# Cross-compile for Linux since it runs inside the VM
 lib/system/guest_agent/guest-agent: lib/system/guest_agent/*.go
-	@echo "Building guest-agent..."
-	cd lib/system/guest_agent && CGO_ENABLED=0 go build -ldflags="-s -w" -o guest-agent .
+	@echo "Building guest-agent for Linux..."
+	cd lib/system/guest_agent && CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o guest-agent .
 
 # Build init binary (runs as PID 1 in guest VM) for embedding
+# Cross-compile for Linux since it runs inside the VM
 lib/system/init/init: lib/system/init/*.go
-	@echo "Building init binary..."
-	cd lib/system/init && CGO_ENABLED=0 go build -ldflags="-s -w" -o init .
+	@echo "Building init binary for Linux..."
+	cd lib/system/init && CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o init .
 
 build-embedded: lib/system/guest_agent/guest-agent lib/system/init/init
 
 # Build the binary
-build: ensure-ch-binaries ensure-caddy-binaries build-embedded | $(BIN_DIR)
+build:
+ifeq ($(shell uname -s),Darwin)
+	$(MAKE) build-darwin
+else
+	$(MAKE) build-linux
+endif
+
+build-linux: ensure-ch-binaries ensure-caddy-binaries build-embedded | $(BIN_DIR)
+	go build -tags containers_image_openpgp -o $(BIN_DIR)/hypeman ./cmd/api
+
+# Build for macOS (no CH/Caddy needed; guest binaries cross-compiled for Linux)
+build-darwin: build-embedded | $(BIN_DIR)
 	go build -tags containers_image_openpgp -o $(BIN_DIR)/hypeman ./cmd/api
 
 # Build all binaries
 build-all: build
 
 # Run in development mode with hot reload
-dev: ensure-ch-binaries ensure-caddy-binaries build-embedded $(AIR)
+dev: dev-linux
+
+# Linux development mode with hot reload
+dev-linux: ensure-ch-binaries ensure-caddy-binaries build-embedded $(AIR)
 	@rm -f ./tmp/main
 	$(AIR) -c .air.toml
 
-# Run tests (as root for network capabilities, enables caching and parallelism)
+# Run tests
 # Usage: make test                              - runs all tests
 #        make test TEST=TestCreateInstanceWithNetwork  - runs specific test
-test: ensure-ch-binaries ensure-caddy-binaries build-embedded
+test:
+ifeq ($(shell uname -s),Darwin)
+	$(MAKE) test-darwin
+else
+	$(MAKE) test-linux
+endif
+
+# Linux tests (as root for network capabilities)
+test-linux: ensure-ch-binaries ensure-caddy-binaries build-embedded
 	@VERBOSE_FLAG=""; \
 	if [ -n "$(VERBOSE)" ]; then VERBOSE_FLAG="-v"; fi; \
 	if [ -n "$(TEST)" ]; then \
@@ -208,6 +232,24 @@ test: ensure-ch-binaries ensure-caddy-binaries build-embedded
 		sudo env "PATH=$$PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" go test -tags containers_image_openpgp -run=$(TEST) $$VERBOSE_FLAG -timeout=180s ./...; \
 	else \
 		sudo env "PATH=$$PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" go test -tags containers_image_openpgp $$VERBOSE_FLAG -timeout=180s ./...; \
+	fi
+
+# macOS tests (no sudo needed, adds e2fsprogs to PATH)
+# Uses 'go list' to discover compilable packages, then filters out packages
+# whose test files reference Linux-only symbols (network, devices, system/init).
+DARWIN_EXCLUDE_PKGS := /lib/network|/lib/devices|/lib/system/init
+test-darwin: build-embedded
+	@VERBOSE_FLAG=""; \
+	if [ -n "$(VERBOSE)" ]; then VERBOSE_FLAG="-v"; fi; \
+	PKGS=$$(PATH="/opt/homebrew/opt/e2fsprogs/sbin:$(PATH)" \
+		go list -tags containers_image_openpgp ./... 2>/dev/null | grep -Ev '$(DARWIN_EXCLUDE_PKGS)'); \
+	if [ -n "$(TEST)" ]; then \
+		echo "Running specific test: $(TEST)"; \
+		PATH="/opt/homebrew/opt/e2fsprogs/sbin:$(PATH)" \
+		go test -tags containers_image_openpgp -run=$(TEST) $$VERBOSE_FLAG -timeout=180s $$PKGS; \
+	else \
+		PATH="/opt/homebrew/opt/e2fsprogs/sbin:$(PATH)" \
+		go test -tags containers_image_openpgp $$VERBOSE_FLAG -timeout=180s $$PKGS; \
 	fi
 
 # Generate JWT token for testing
@@ -233,8 +275,10 @@ clean:
 	rm -rf lib/ingress/binaries/
 	rm -f lib/system/guest_agent/guest-agent
 	rm -f lib/system/init/init
+	rm -f lib/hypervisor/vz/vz-shim/vz-shim
 
 # Prepare for release build (called by GoReleaser)
 # Downloads all embedded binaries and builds embedded components
 release-prep: download-ch-binaries build-caddy-binaries build-embedded
 	go mod tidy
+

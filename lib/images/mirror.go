@@ -43,7 +43,7 @@ func MirrorBaseImage(ctx context.Context, registryURL string, req MirrorRequest,
 	img, err := remote.Image(srcRef,
 		remote.WithContext(ctx),
 		remote.WithAuthFromKeychain(authn.DefaultKeychain),
-		remote.WithPlatform(currentPlatform()))
+		remote.WithPlatform(vmPlatform()))
 	if err != nil {
 		return nil, fmt.Errorf("pull source image: %w", wrapRegistryError(err))
 	}

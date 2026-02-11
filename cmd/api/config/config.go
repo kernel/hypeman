@@ -115,6 +115,7 @@ type Config struct {
 	RegistryCACertFile        string // Path to CA certificate file for registry TLS verification
 	BuildTimeout              int    // Default build timeout in seconds
 	BuildSecretsDir           string // Directory containing build secrets (optional)
+	DockerSocket              string // Path to Docker socket (for building builder image)
 
 	// Hypervisor configuration
 	DefaultHypervisor string // Default hypervisor type: "cloud-hypervisor" or "qemu"
@@ -213,6 +214,7 @@ func Load() *Config {
 		RegistryCACertFile:        getEnv("REGISTRY_CA_CERT_FILE", ""), // Path to CA cert for registry TLS
 		BuildTimeout:              getEnvInt("BUILD_TIMEOUT", 600),
 		BuildSecretsDir:           getEnv("BUILD_SECRETS_DIR", ""), // Optional: path to directory with build secrets
+		DockerSocket:              getEnv("DOCKER_SOCKET", "/var/run/docker.sock"),
 
 		// Hypervisor configuration
 		DefaultHypervisor: getEnv("DEFAULT_HYPERVISOR", "cloud-hypervisor"),

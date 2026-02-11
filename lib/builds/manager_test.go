@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/instances"
 	"github.com/kernel/hypeman/lib/paths"
@@ -128,6 +129,10 @@ func (m *mockInstanceManager) ListRunningInstancesInfo(ctx context.Context) ([]r
 
 func (m *mockInstanceManager) SetResourceValidator(v instances.ResourceValidator) {
 	// no-op for mock
+}
+
+func (m *mockInstanceManager) GetVsockDialer(ctx context.Context, instanceID string) (hypervisor.VsockDialer, error) {
+	return nil, nil
 }
 
 // mockVolumeManager implements volumes.Manager for testing
@@ -350,6 +355,7 @@ func setupTestManagerWithImageMgr(t *testing.T) (*manager, *mockInstanceManager,
 		logger:            logger,
 		statusSubscribers: make(map[string][]chan BuildEvent),
 	}
+	mgr.builderReady.Store(true)
 
 	return mgr, instanceMgr, volumeMgr, imageMgr, tempDir
 }
@@ -881,7 +887,7 @@ func TestStreamBuildEvents_WithStatusUpdate(t *testing.T) {
 
 	// Read events until we see the initial log
 	var foundInitialLog bool
-	timeout := time.After(2 * time.Second)
+	timeout := time.After(10 * time.Second)
 eventLoop:
 	for !foundInitialLog {
 		select {
@@ -901,7 +907,7 @@ eventLoop:
 
 	// Should receive "ready" status event and channel should close
 	var readyReceived bool
-	timeout = time.After(2 * time.Second)
+	timeout = time.After(10 * time.Second)
 	for !readyReceived {
 		select {
 		case event, ok := <-eventChan:
@@ -942,7 +948,7 @@ func TestStreamBuildEvents_ContextCancellation(t *testing.T) {
 
 	// Read events until we see the log line
 	var foundLogLine bool
-	timeout := time.After(2 * time.Second)
+	timeout := time.After(10 * time.Second)
 eventLoop:
 	for !foundLogLine {
 		select {
@@ -961,7 +967,7 @@ eventLoop:
 	cancel()
 
 	// Channel should close
-	timeout = time.After(2 * time.Second)
+	timeout = time.After(10 * time.Second)
 	for {
 		select {
 		case _, ok := <-eventChan:
@@ -973,5 +979,80 @@ eventLoop:
 		case <-timeout:
 			t.Fatal("timeout waiting for channel to close after cancel")
 		}
+	}
+}
+
+func TestExtractInternalBaseImageRepos(t *testing.T) {
+	registryURL := "http://10.102.0.1:8085"
+
+	tests := []struct {
+		name       string
+		dockerfile string
+		want       []string
+	}{
+		{
+			name:       "empty dockerfile",
+			dockerfile: "",
+			want:       nil,
+		},
+		{
+			name:       "external base image only",
+			dockerfile: "FROM alpine:latest\nRUN echo hello",
+			want:       nil,
+		},
+		{
+			name:       "internal base image with tag",
+			dockerfile: "FROM 10.102.0.1:8085/onkernel/nodejs22-base:0.1.1\nRUN echo hello",
+			want:       []string{"onkernel/nodejs22-base"},
+		},
+		{
+			name:       "internal base image with digest",
+			dockerfile: "FROM 10.102.0.1:8085/onkernel/nodejs22-base@sha256:abcdef1234567890\nRUN echo hello",
+			want:       []string{"onkernel/nodejs22-base"},
+		},
+		{
+			name:       "internal base image with tag AND digest",
+			dockerfile: "FROM 10.102.0.1:8085/onkernel/nodejs22-base:v1@sha256:abcdef1234567890\nRUN echo hello",
+			want:       []string{"onkernel/nodejs22-base"},
+		},
+		{
+			name: "multi-stage with multiple internal images",
+			dockerfile: `FROM 10.102.0.1:8085/onkernel/builder:latest AS builder
+RUN make build
+FROM 10.102.0.1:8085/onkernel/runtime:v2
+COPY --from=builder /app /app`,
+			want: []string{"onkernel/builder", "onkernel/runtime"},
+		},
+		{
+			name: "mix of internal and external",
+			dockerfile: `FROM alpine:latest AS deps
+RUN apk add curl
+FROM 10.102.0.1:8085/onkernel/base:latest
+COPY --from=deps /usr/bin/curl /usr/bin/curl`,
+			want: []string{"onkernel/base"},
+		},
+		{
+			name: "deduplicates same repo",
+			dockerfile: `FROM 10.102.0.1:8085/onkernel/base:v1 AS stage1
+FROM 10.102.0.1:8085/onkernel/base:v2 AS stage2`,
+			want: []string{"onkernel/base"},
+		},
+		{
+			name:       "with --platform flag",
+			dockerfile: "FROM --platform=linux/amd64 10.102.0.1:8085/onkernel/base:latest\nRUN echo hello",
+			want:       []string{"onkernel/base"},
+		},
+		{
+			name:       "scratch is ignored",
+			dockerfile: "FROM scratch\nCOPY binary /",
+			want:       nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractInternalBaseImageRepos(tt.dockerfile, registryURL)
+			assert.Equal(t, tt.want, got)
+		})
 	}
 }

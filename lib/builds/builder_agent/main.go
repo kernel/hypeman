@@ -103,7 +103,62 @@ var (
 	// Encoder lock protects concurrent access to json.Encoder
 	// (the goroutine sending build_result and the main loop handling get_status)
 	encoderLock sync.Mutex
+
+	// Log streaming channel - logs are sent here and forwarded to host via vsock
+	logChan     = make(chan string, 1000)
+	logChanOnce sync.Once
 )
+
+// streamingLogWriter writes log lines to a channel for streaming to the host.
+// It also writes to a buffer to include all logs in the final result.
+type streamingLogWriter struct {
+	buffer   *bytes.Buffer
+	mu       sync.Mutex
+	closed   bool
+	closedMu sync.RWMutex
+}
+
+func newStreamingLogWriter() *streamingLogWriter {
+	return &streamingLogWriter{
+		buffer: &bytes.Buffer{},
+	}
+}
+
+func (w *streamingLogWriter) Write(p []byte) (n int, err error) {
+	w.mu.Lock()
+	w.buffer.Write(p)
+	w.mu.Unlock()
+
+	// Hold RLock through the send to prevent markClosed()+close(logChan)
+	// from racing between the check and the channel send.
+	w.closedMu.RLock()
+	if !w.closed {
+		line := string(p)
+		select {
+		case logChan <- line:
+		default:
+			// Channel full, drop the log line for streaming but it's still in buffer
+		}
+	}
+	w.closedMu.RUnlock()
+
+	// Also write to stdout for local debugging
+	os.Stdout.Write(p)
+
+	return len(p), nil
+}
+
+func (w *streamingLogWriter) markClosed() {
+	w.closedMu.Lock()
+	w.closed = true
+	w.closedMu.Unlock()
+}
+
+func (w *streamingLogWriter) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buffer.String()
+}
 
 func main() {
 	log.Println("=== Builder Agent Starting ===")
@@ -212,9 +267,28 @@ func handleHostConnection(conn net.Conn) {
 				close(secretsReady)
 			})
 
+			// Start streaming logs to host
+			logsDone := make(chan struct{})
+			go func() {
+				defer close(logsDone)
+				for logLine := range logChan {
+					encoderLock.Lock()
+					err := encoder.Encode(VsockMessage{Type: "log", Log: logLine})
+					encoderLock.Unlock()
+					if err != nil {
+						// Connection closed, stop streaming
+						return
+					}
+				}
+			}()
+
 			// Wait for build to complete and send result to host
 			go func() {
 				<-buildDone
+				// Wait for all buffered log messages to be sent before sending the result.
+				// This prevents the host from receiving build_result before all logs,
+				// which would cause it to close the connection and lose remaining logs.
+				<-logsDone
 
 				buildResultLock.Lock()
 				result := buildResult
@@ -341,12 +415,17 @@ func handleSecretsRequest(encoder *json.Encoder, decoder *json.Decoder) error {
 // runBuildProcess runs the actual build and stores the result
 func runBuildProcess() {
 	start := time.Now()
-	var logs bytes.Buffer
-	logWriter := io.MultiWriter(os.Stdout, &logs)
+	logWriter := newStreamingLogWriter()
 
 	log.SetOutput(logWriter)
 
 	defer func() {
+		// Mark writer as closed first to prevent writes to closed channel
+		logWriter.markClosed()
+		// Close log channel so streaming goroutine terminates
+		logChanOnce.Do(func() {
+			close(logChan)
+		})
 		close(buildDone)
 	}()
 
@@ -356,7 +435,7 @@ func runBuildProcess() {
 		setResult(BuildResult{
 			Success:    false,
 			Error:      fmt.Sprintf("load config: %v", err),
-			Logs:       logs.String(),
+			Logs:       logWriter.String(),
 			DurationMS: time.Since(start).Milliseconds(),
 		})
 		return
@@ -373,7 +452,7 @@ func runBuildProcess() {
 		setResult(BuildResult{
 			Success:    false,
 			Error:      fmt.Sprintf("setup registry auth: %v", err),
-			Logs:       logs.String(),
+			Logs:       logWriter.String(),
 			DurationMS: time.Since(start).Milliseconds(),
 		})
 		return
@@ -403,7 +482,7 @@ func runBuildProcess() {
 			setResult(BuildResult{
 				Success:    false,
 				Error:      "build timeout while waiting for secrets",
-				Logs:       logs.String(),
+				Logs:       logWriter.String(),
 				DurationMS: time.Since(start).Milliseconds(),
 			})
 			return
@@ -418,7 +497,7 @@ func runBuildProcess() {
 			setResult(BuildResult{
 				Success:    false,
 				Error:      "Dockerfile required: provide dockerfile parameter or include Dockerfile in source tarball",
-				Logs:       logs.String(),
+				Logs:       logWriter.String(),
 				DurationMS: time.Since(start).Milliseconds(),
 			})
 			return
@@ -428,7 +507,7 @@ func runBuildProcess() {
 			setResult(BuildResult{
 				Success:    false,
 				Error:      fmt.Sprintf("write dockerfile: %v", err),
-				Logs:       logs.String(),
+				Logs:       logWriter.String(),
 				DurationMS: time.Since(start).Milliseconds(),
 			})
 			return
@@ -443,8 +522,7 @@ func runBuildProcess() {
 
 	// Run the build
 	log.Println("=== Starting Build ===")
-	digest, buildLogs, err := runBuild(ctx, config, logWriter)
-	logs.WriteString(buildLogs)
+	digest, _, err := runBuild(ctx, config, logWriter)
 
 	duration := time.Since(start).Milliseconds()
 
@@ -452,7 +530,7 @@ func runBuildProcess() {
 		setResult(BuildResult{
 			Success:    false,
 			Error:      err.Error(),
-			Logs:       logs.String(),
+			Logs:       logWriter.String(),
 			Provenance: provenance,
 			DurationMS: duration,
 		})
@@ -466,7 +544,7 @@ func runBuildProcess() {
 	setResult(BuildResult{
 		Success:     true,
 		ImageDigest: digest,
-		Logs:        logs.String(),
+		Logs:        logWriter.String(),
 		Provenance:  provenance,
 		DurationMS:  duration,
 	})
@@ -692,10 +770,10 @@ func runBuild(ctx context.Context, config *BuildConfig, logWriter io.Writer) (st
 	// Build arguments
 	var outputOpts string
 	if useInsecureFlag {
-		outputOpts = fmt.Sprintf("type=image,name=%s,push=true,registry.insecure=true,oci-mediatypes=true", outputRef)
+		outputOpts = fmt.Sprintf("type=image,name=%s,push=true,registry.insecure=true,oci-mediatypes=true,compression=zstd,force-compression=true", outputRef)
 		log.Printf("Using HTTP registry (insecure mode): %s", registryHost)
 	} else {
-		outputOpts = fmt.Sprintf("type=image,name=%s,push=true,oci-mediatypes=true", outputRef)
+		outputOpts = fmt.Sprintf("type=image,name=%s,push=true,oci-mediatypes=true,compression=zstd,force-compression=true", outputRef)
 		log.Printf("Using HTTPS registry (secure mode): %s", registryHost)
 	}
 
@@ -778,19 +856,38 @@ func runBuild(ctx context.Context, config *BuildConfig, logWriter io.Writer) (st
 	buildkitdConfig := "/home/builder/.config/buildkit/buildkitd.toml"
 	log.Printf("Using buildkitd config: %s", buildkitdConfig)
 
+	// Mount a tmpfs for BuildKit's data directory.
+	// The VM rootfs is an overlayfs (read-only ext4 + writable ext4 upper layer).
+	// BuildKit's native overlayfs snapshotter creates char device 0:0 for whiteout
+	// markers, but mknod(char 0:0) fails on an overlayfs mount because the kernel
+	// treats it as an overlayfs whiteout rather than a regular device node.
+	// Using tmpfs avoids this nested-overlayfs conflict.
+	buildkitRoot := "/var/lib/buildkit"
+	if err := os.MkdirAll(buildkitRoot, 0755); err != nil {
+		return "", "", fmt.Errorf("create buildkit root dir: %w", err)
+	}
+	mountCmd := exec.Command("mount", "-t", "tmpfs", "-o", "size=3G", "tmpfs", buildkitRoot)
+	if output, err := mountCmd.CombinedOutput(); err != nil {
+		return "", "", fmt.Errorf("mount tmpfs at %s (required for native overlayfs snapshotter): %v: %s", buildkitRoot, err, output)
+	}
+	log.Printf("Mounted tmpfs at %s for BuildKit snapshotter", buildkitRoot)
+
 	log.Printf("Running: buildctl-daemonless.sh %s", strings.Join(args, " "))
 
 	// Run buildctl-daemonless.sh
+	// buildctl writes progress (#1, #2, etc.) to stderr and a duplicate summary to stdout.
+	// Only pipe stderr to logWriter to avoid doubled output in build logs.
 	cmd := exec.CommandContext(ctx, "buildctl-daemonless.sh", args...)
-	cmd.Stdout = io.MultiWriter(logWriter, &buildLogs)
+	cmd.Stdout = &buildLogs
 	cmd.Stderr = io.MultiWriter(logWriter, &buildLogs)
 	// Set environment:
 	// - HOME and DOCKER_CONFIG: ensures buildctl finds the auth config at /root/.docker/config.json
 	// - BUILDKITD_FLAGS: tells buildkitd to use our custom config for registry TLS settings
+	//   and to use native overlayfs snapshotter with a tmpfs-backed root directory
 	// Filter out existing values to avoid duplicates (first value wins in shell)
 	env := make([]string, 0, len(os.Environ())+3)
 	for _, e := range os.Environ() {
-		if !strings.HasPrefix(e, "DOCKER_CONFIG=") && 
+		if !strings.HasPrefix(e, "DOCKER_CONFIG=") &&
 		   !strings.HasPrefix(e, "BUILDKITD_FLAGS=") &&
 		   !strings.HasPrefix(e, "HOME=") {
 			env = append(env, e)
@@ -798,7 +895,7 @@ func runBuild(ctx context.Context, config *BuildConfig, logWriter io.Writer) (st
 	}
 	env = append(env, "HOME=/root")
 	env = append(env, "DOCKER_CONFIG=/root/.docker")
-	env = append(env, fmt.Sprintf("BUILDKITD_FLAGS=--config=%s", buildkitdConfig))
+	env = append(env, fmt.Sprintf("BUILDKITD_FLAGS=--config=%s --oci-worker-snapshotter=overlayfs --root=%s", buildkitdConfig, buildkitRoot))
 	cmd.Env = env
 
 	if err := cmd.Run(); err != nil {

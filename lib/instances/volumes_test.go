@@ -42,7 +42,7 @@ func execWithRetry(ctx context.Context, inst *Instance, command []string) (strin
 func TestVolumeMultiAttachReadOnly(t *testing.T) {
 	// Require KVM
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
-		t.Fatal("/dev/kvm not available - ensure KVM is enabled and user is in 'kvm' group")
+		t.Skip("/dev/kvm not available, skipping on this platform")
 	}
 
 	if testing.Short() {
@@ -334,7 +334,7 @@ func createTestTarGz(t *testing.T, files map[string][]byte) *bytes.Buffer {
 func TestVolumeFromArchive(t *testing.T) {
 	// Require KVM
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
-		t.Fatal("/dev/kvm not available - ensure KVM is enabled and user is in 'kvm' group")
+		t.Skip("/dev/kvm not available, skipping on this platform")
 	}
 
 	if testing.Short() {

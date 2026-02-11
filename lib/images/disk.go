@@ -108,6 +108,17 @@ func convertToCpio(rootfsDir, outputPath string) (int64, error) {
 	return stat.Size(), nil
 }
 
+// sectorSize is the block size for disk images (required by Virtualization.framework)
+const sectorSize = 4096
+
+// alignToSector rounds size up to the nearest sector boundary
+func alignToSector(size int64) int64 {
+	if size%sectorSize == 0 {
+		return size
+	}
+	return ((size / sectorSize) + 1) * sectorSize
+}
+
 // convertToExt4 converts a rootfs directory to an ext4 disk image using mkfs.ext4
 func convertToExt4(rootfsDir, diskPath string) (int64, error) {
 	// Calculate size of rootfs directory
@@ -124,6 +135,9 @@ func convertToExt4(rootfsDir, diskPath string) (int64, error) {
 	if diskSizeBytes < minSize {
 		diskSizeBytes = minSize
 	}
+
+	// Align to sector boundary (required by macOS Virtualization.framework)
+	diskSizeBytes = alignToSector(diskSizeBytes)
 
 	// Ensure parent directory exists
 	if err := os.MkdirAll(filepath.Dir(diskPath), 0755); err != nil {
@@ -142,7 +156,7 @@ func convertToExt4(rootfsDir, diskPath string) (int64, error) {
 	f.Close()
 
 	// Format as ext4 with rootfs contents using mkfs.ext4
-	// -b 4096: 4KB blocks (standard, matches VM page size)
+	// -b 4096: 4KB blocks (standard, matches VM page size and sector alignment)
 	// -O ^has_journal: Disable journal (not needed for read-only VM mounts)
 	// -d: Copy directory contents into filesystem
 	// -F: Force creation (file not block device)
@@ -152,10 +166,19 @@ func convertToExt4(rootfsDir, diskPath string) (int64, error) {
 		return 0, fmt.Errorf("mkfs.ext4 failed: %w, output: %s", err, output)
 	}
 
-	// Get actual disk size
+	// Verify final size is sector-aligned (mkfs.ext4 should preserve our truncated size)
 	stat, err := os.Stat(diskPath)
 	if err != nil {
 		return 0, fmt.Errorf("stat disk: %w", err)
+	}
+
+	// Re-align if mkfs.ext4 changed the size (shouldn't happen with -F on a regular file)
+	if stat.Size()%sectorSize != 0 {
+		alignedSize := alignToSector(stat.Size())
+		if err := os.Truncate(diskPath, alignedSize); err != nil {
+			return 0, fmt.Errorf("align disk to sector boundary: %w", err)
+		}
+		return alignedSize, nil
 	}
 
 	return stat.Size(), nil
@@ -183,6 +206,15 @@ func convertToErofs(rootfsDir, diskPath string) (int64, error) {
 		return 0, fmt.Errorf("stat disk: %w", err)
 	}
 
+	// Align to sector boundary (required by macOS Virtualization.framework)
+	if stat.Size()%sectorSize != 0 {
+		alignedSize := alignToSector(stat.Size())
+		if err := os.Truncate(diskPath, alignedSize); err != nil {
+			return 0, fmt.Errorf("align erofs disk to sector boundary: %w", err)
+		}
+		return alignedSize, nil
+	}
+
 	return stat.Size(), nil
 }
 
@@ -204,6 +236,9 @@ func dirSize(path string) (int64, error) {
 // CreateEmptyExt4Disk creates a sparse disk file and formats it as ext4.
 // Used for volumes and instance overlays that need empty writable filesystems.
 func CreateEmptyExt4Disk(diskPath string, sizeBytes int64) error {
+	// Align to sector boundary (required by macOS Virtualization.framework)
+	sizeBytes = alignToSector(sizeBytes)
+
 	// Ensure parent directory exists
 	if err := os.MkdirAll(filepath.Dir(diskPath), 0755); err != nil {
 		return fmt.Errorf("create disk parent dir: %w", err)
@@ -221,8 +256,8 @@ func CreateEmptyExt4Disk(diskPath string, sizeBytes int64) error {
 		return fmt.Errorf("truncate disk file: %w", err)
 	}
 
-	// Format as ext4
-	cmd := exec.Command("mkfs.ext4", "-F", diskPath)
+	// Format as ext4 with 4KB blocks (matches sector alignment)
+	cmd := exec.Command("mkfs.ext4", "-b", "4096", "-F", diskPath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("mkfs.ext4 failed: %w, output: %s", err, output)

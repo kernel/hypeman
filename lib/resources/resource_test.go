@@ -2,6 +2,7 @@ package resources
 
 import (
 	"context"
+	"runtime"
 	"testing"
 
 	"github.com/kernel/hypeman/cmd/api/config"
@@ -353,6 +354,9 @@ func TestGetFullStatus_ReturnsAllResourceAllocations(t *testing.T) {
 // TestNetworkResource_Allocated verifies network allocation tracking
 // uses max(download, upload) since they share the physical link.
 func TestNetworkResource_Allocated(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("network rate limiting not supported on this platform")
+	}
 	cfg := &config.Config{
 		DataDir:        t.TempDir(),
 		NetworkLimit:   "1Gbps", // 125MB/s

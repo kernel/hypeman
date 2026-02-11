@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -551,6 +552,11 @@ func (m *manager) ReconcileDevices(ctx context.Context) error {
 // This helps operators debug configuration issues.
 func (m *manager) validatePrerequisites(ctx context.Context) {
 	log := logger.FromContext(ctx)
+
+	// Skip GPU passthrough checks on macOS - not supported
+	if runtime.GOOS == "darwin" {
+		return
+	}
 
 	// Check IOMMU availability
 	iommuGroupsDir := "/sys/kernel/iommu_groups"
