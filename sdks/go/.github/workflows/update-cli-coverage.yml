@@ -94,7 +94,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          gh repo clone kernel/hypeman /tmp/hypeman-api -- --depth=1
+          gh repo clone kernel/hypeman /tmp/hypeman -- --depth=1
 
       - name: Clone CLI repo and checkout existing branch
         env:
@@ -157,7 +157,7 @@ jobs:
           - Commit SHA: ${{ steps.pr-info.outputs.merge_sha || github.sha }}
           - Commit Author: ${{ steps.sdk-version.outputs.author }}
           - Trigger: ${{ github.event_name }} ${{ inputs.pr_number && format('(PR #{0})', inputs.pr_number) || '' }}
-          - API Repo Location: /tmp/hypeman-api
+          - API Repo Location: /tmp/hypeman
           - CLI Repo Location: /tmp/hypeman-cli
           - Update Branch Prefix: cli-coverage-update
 
@@ -167,9 +167,19 @@ jobs:
           # Source Files
           - SDK api.md: Current directory - READ THIS FILE FIRST. This is the authoritative list of all SDK methods and their signatures.
           - SDK *.go files: Current directory - Contains param structs (e.g., InstanceNewParams, ImageNewParams) with all available options/fields.
-          - API Spec: /tmp/hypeman-api/packages/api/stainless.yaml - SDK configuration with resources and methods
-          - API Spec: /tmp/hypeman-api/packages/api/openapi.yaml - Full OpenAPI specification. CHECK for x-cli-skip: true on endpoints - skip those from CLI coverage.
-          - CLI: /tmp/hypeman-cli - Existing CLI commands
+          - API Spec: /tmp/hypeman/stainless.yaml - SDK configuration with resources and methods
+          - API Spec: /tmp/hypeman/openapi.yaml - Full OpenAPI specification. CHECK for x-cli-skip: true on endpoints - skip those from CLI coverage.
+          - CLI: /tmp/hypeman-cli - Existing CLI commands (in pkg/cmd/ directory)
+
+          # CLI Architecture
+          The CLI uses urfave/cli/v3 (NOT cobra). Commands are defined in /tmp/hypeman-cli/pkg/cmd/:
+          - Root command: pkg/cmd/cmd.go
+          - Resource commands: pkg/cmd/{resource}cmd.go (e.g., imagecmd.go, volumecmd.go, devicecmd.go, ingresscmd.go)
+          - Top-level commands: pkg/cmd/{command}.go (e.g., run.go, ps.go, rm.go, logs.go, exec.go, cp.go)
+          - Lifecycle commands: pkg/cmd/lifecycle.go (stop, start, standby, restore)
+          - Build commands: pkg/cmd/build.go
+          - Utilities: pkg/cmd/cmdutil.go, pkg/cmd/format.go
+          - Entry point: cmd/hypeman/main.go
 
           # Task
 
@@ -206,15 +216,17 @@ jobs:
           ## Step 3: Full CLI Command Enumeration (CRITICAL - DO NOT SKIP)
           Enumerate ALL existing CLI commands and their flags.
 
-          3a. Look at cmd/ directory structure for existing commands
+          3a. Look at pkg/cmd/ directory for existing command files
           3b. For each command file, extract:
-              - The command name/path (e.g., \`hypeman instance create\`)
+              - The command name/path (e.g., \`hypeman run\`, \`hypeman image list\`)
               - All flags defined for that command
           3c. Build a CLI coverage matrix:
               | CLI Command | CLI Flags |
               |-------------|-----------|
-              | hypeman instance create | --image, --region, ... |
-              | hypeman instance list | |
+              | hypeman run | --name, --image, --quiet, ... |
+              | hypeman ps | --quiet, --format, ... |
+              | hypeman image list | --format, ... |
+              | hypeman volume create | --name, ... |
               | ... | ... |
 
           ## Step 4: Gap Analysis (CRITICAL - DO NOT SKIP)
@@ -224,17 +236,17 @@ jobs:
           4b. Missing flags: SDK param fields with NO corresponding CLI flag
           4c. Create a gap report:
               ## Missing Commands
-              - client.Instances.Restore -> needs \`hypeman instance restore\`
-              - client.Devices.ListAvailable -> needs \`hypeman device list-available\`
+              - client.SomeResource.SomeMethod -> needs new CLI command
 
               ## Missing Flags
-              - InstanceNewParams.SomeNewField -> \`hypeman instance create\` needs --some-new-field
+              - InstanceNewParams.SomeNewField -> \`hypeman run\` needs --some-new-field
               - VolumeNewParams.Region -> \`hypeman volume create\` needs --region
 
           ## Step 5: Implement Missing Coverage
           For each gap identified in Step 4:
-          - Implement missing commands following existing patterns
+          - Implement missing commands following existing patterns in pkg/cmd/
           - Add missing flags to existing commands
+          - Use urfave/cli/v3 for command and flag definitions (NOT cobra)
           - Run \`go build ./...\` to verify the code compiles
 
           ## Step 6: Commit and Push
@@ -246,24 +258,58 @@ jobs:
           - Create or update the PR in kernel/hypeman-cli
 
           # SDK Method -> CLI Command Mapping Guide
-          - client.Resource.New() -> hypeman resource create
-          - client.Resource.List() -> hypeman resource list
-          - client.Resource.Get() -> hypeman resource get
-          - client.Resource.Delete() -> hypeman resource delete
-          - client.Resource.Update() -> hypeman resource update
-          - client.Resource.Sub.Action() -> hypeman resource sub action
-          - client.Resource.CustomAction() -> hypeman resource custom-action
+          Instance operations use Docker-style top-level commands:
+          - client.Instances.New() -> hypeman run
+          - client.Instances.List() -> hypeman ps
+          - client.Instances.Delete() -> hypeman rm
+          - client.Instances.Get() -> (used internally by other commands)
+          - client.Instances.Logs() -> hypeman logs
+          - client.Instances.Stop() -> hypeman stop
+          - client.Instances.Start() -> hypeman start
+          - client.Instances.Standby() -> hypeman standby
+          - client.Instances.Restore() -> hypeman restore
+          - client.Instances.Stat() -> (used internally by cp)
+
+          Resource group commands use subcommands:
+          - client.Images.New() -> hypeman image create
+          - client.Images.List() -> hypeman image list
+          - client.Images.Get() -> hypeman image get
+          - client.Images.Delete() -> hypeman image delete
+          - client.Volumes.New() -> hypeman volume create
+          - client.Volumes.List() -> hypeman volume list
+          - client.Volumes.Get() -> hypeman volume get
+          - client.Volumes.Delete() -> hypeman volume delete
+          - client.Volumes.NewFromArchive() -> (used internally by push)
+          - client.Instances.Volumes.Attach() -> hypeman volume attach
+          - client.Instances.Volumes.Detach() -> hypeman volume detach
+          - client.Devices.New() -> hypeman device register
+          - client.Devices.List() -> hypeman device list
+          - client.Devices.Get() -> hypeman device get
+          - client.Devices.Delete() -> hypeman device delete
+          - client.Devices.ListAvailable() -> hypeman device available
+          - client.Ingresses.New() -> hypeman ingress create
+          - client.Ingresses.List() -> hypeman ingress list
+          - client.Ingresses.Get() -> hypeman ingress get
+          - client.Ingresses.Delete() -> hypeman ingress delete
+          - client.Builds.New() -> hypeman build create (or used internally)
+          - client.Builds.List() -> hypeman build list
+          - client.Builds.Get() -> hypeman build get
+          - client.Builds.Cancel() -> hypeman build cancel
+          - client.Builds.Events() -> (used internally for streaming build output)
+          - client.Resources.Get() -> hypeman resources
+          - client.Health.Check() -> (internal, no CLI needed)
 
           # SDK Param Field -> CLI Flag Mapping Guide
           - CamelCaseField -> --camel-case-field
           - TimeoutSeconds -> --timeout-seconds
           - IncludeDeleted -> --include-deleted
-          - Nested structs: VolumeMount.Path -> --volume-mount-path or separate flags
+          - Optional fields use hypeman.Opt() wrapper in SDK calls
 
           # Implementation Guidelines
-          - Follow the existing CLI code patterns in /tmp/hypeman-cli
-          - Use cobra for command definitions
-          - Use the Hypeman Go SDK (this repo) for API calls
+          - Follow the existing CLI code patterns in /tmp/hypeman-cli/pkg/cmd/
+          - Use urfave/cli/v3 for command definitions (cli.Command struct with Flags, Action, etc.)
+          - Use the Hypeman Go SDK (this repo) for API calls: hypeman.NewClient(getDefaultRequestOptions(cmd)...)
+          - Use existing helpers: ShowJSON() for output, ResolveInstance() for name resolution, FormatTimeAgo() for timestamps
           - Include proper flag definitions with descriptions matching SDK field comments
           - Add help text for commands matching SDK method comments
           - Handle errors appropriately
@@ -289,10 +335,10 @@ jobs:
             This PR was generated by performing a full enumeration of SDK methods and CLI commands.
 
             ## New Commands
-            - \`hypeman <resource> <action>\` for \`client.Resource.Action()\`
+            - \`hypeman <command>\` for \`client.Resource.Action()\`
 
             ## New Flags
-            - \`--flag-name\` for \`ResourceParams.FieldName\`
+            - \`--flag-name\` on \`hypeman <command>\` for \`ResourceParams.FieldName\`
 
             Triggered by: kernel/hypeman-go@${{ steps.pr-info.outputs.merge_sha || github.sha }}
             Reviewer: @<commit_author>'
@@ -314,9 +360,9 @@ jobs:
           # Constraints
           - ALWAYS update the SDK version in go.mod - this is the primary purpose
           - ALWAYS perform the full enumeration (Steps 2-4) - this is critical for finding gaps
-          - ALL SDK methods in api.md MUST have corresponding CLI commands, EXCEPT those marked with x-cli-skip in openapi.yaml
+          - ALL SDK methods in api.md MUST have corresponding CLI commands, EXCEPT those marked with x-cli-skip in openapi.yaml or noted as internal-only in the mapping guide above
           - SKIP endpoints marked with x-cli-skip: true in openapi.yaml - these are internal endpoints not suitable for CLI
-          - Streaming methods may have different CLI implementations (e.g., follow flags)
+          - Streaming methods may have different CLI implementations (e.g., build events are streamed internally)
           - Even if no coverage gaps are found, still create a PR for the SDK version bump
           - Ensure code compiles before pushing
           " --model opus-4.6 --force --output-format=text
