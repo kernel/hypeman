@@ -110,6 +110,8 @@ func formatHypervisor(hv hypeman.InstanceHypervisor) string {
 		return "ch"
 	case hypeman.InstanceHypervisorQemu:
 		return "qemu"
+	case hypeman.InstanceHypervisorVz:
+		return "vz"
 	default:
 		if hv == "" {
 			return "ch" // default
