@@ -17,7 +17,7 @@ builds:
     main: ./cmd/hypeman/main.go
     mod_timestamp: '{{ .CommitTimestamp }}'
     ldflags:
-      - '-s -w -X main.version={{.Version}} -X main.commit={{.Commit}}'
+      - '-s -w -X github.com/kernel/hypeman-cli/pkg/cmd.version={{.Version}}'
 
   - id: linux
     goos: [linux]
@@ -28,7 +28,7 @@ builds:
     main: ./cmd/hypeman/main.go
     mod_timestamp: '{{ .CommitTimestamp }}'
     ldflags:
-      - '-s -w -X main.version={{.Version}} -X main.commit={{.Commit}}'
+      - '-s -w -X github.com/kernel/hypeman-cli/pkg/cmd.version={{.Version}}'
 
   - id: windows
     goos: [windows]
@@ -37,7 +37,7 @@ builds:
     main: ./cmd/hypeman/main.go
     mod_timestamp: '{{ .CommitTimestamp }}'
     ldflags:
-      - '-s -w -X main.version={{.Version}} -X main.commit={{.Commit}}'
+      - '-s -w -X github.com/kernel/hypeman-cli/pkg/cmd.version={{.Version}}'
 
 archives:
   - id: linux-archive

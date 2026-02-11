@@ -1,5 +1,3 @@
-// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
-
 package cmd
 
 import (
@@ -21,6 +19,9 @@ var (
 )
 
 func init() {
+	cli.VersionPrinter = func(cmd *cli.Command) {
+		fmt.Fprintf(os.Stdout, "Hypeman CLI version %s\n", cmd.Root().Version)
+	}
 	Command = &cli.Command{
 		Name:    "hypeman",
 		Usage:   "CLI for the hypeman API",
@@ -84,63 +85,6 @@ func init() {
 		&resourcesCmd,
 		&deviceCmd,
 		{
-				Name:     "health",
-				Category: "API RESOURCE",
-				Commands: []*cli.Command{
-					&healthCheck,
-				},
-			},
-			{
-				Name:     "images",
-				Category: "API RESOURCE",
-				Commands: []*cli.Command{
-					&imagesCreate,
-					&imagesList,
-					&imagesGet,
-				},
-			},
-			{
-				Name:     "instances",
-				Category: "API RESOURCE",
-				Commands: []*cli.Command{
-					&instancesCreate,
-					&instancesList,
-					&instancesGet,
-					&instancesRestore,
-					&instancesLogs,
-					&instancesDelete,
-					&instancesStandby,
-					&instancesStart,
-					&instancesStop,
-				},
-			},
-			{
-				Name:     "instances:volumes",
-				Category: "API RESOURCE",
-				Commands: []*cli.Command{
-					&instancesVolumesAttach,
-					&instancesVolumesDetach,
-				},
-			},
-			{
-				Name:     "volumes",
-				Category: "API RESOURCE",
-				Commands: []*cli.Command{
-					&volumesCreate,
-					&volumesList,
-					&volumesGet,
-				},
-			},
-			{
-				Name:     "ingresses",
-				Category: "API RESOURCE",
-				Commands: []*cli.Command{
-					&ingressesCreate,
-					&ingressesList,
-					&ingressesGet,
-				},
-			},
-			{
 				Name:            "@manpages",
 				Usage:           "Generate documentation for 'man'",
 				UsageText:       "hypeman @manpages [-o hypeman.1] [--gzip]",
