@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/kernel/hypeman-go"
 	"github.com/kernel/hypeman-go/option"
@@ -154,8 +153,8 @@ func showAvailableDevicesTable(data []byte) error {
 		return nil
 	}
 
-	fmt.Println("PCI ADDRESS      VENDOR              DEVICE              IOMMU   DRIVER")
-	fmt.Println(strings.Repeat("-", 80))
+	table := NewTableWriter(os.Stdout, "PCI ADDRESS", "VENDOR", "DEVICE", "IOMMU", "DRIVER")
+	table.TruncOrder = []int{2, 1} // DEVICE first, then VENDOR
 
 	devices.ForEach(func(key, value gjson.Result) bool {
 		pciAddr := value.Get("pci_address").String()
@@ -163,33 +162,28 @@ func showAvailableDevicesTable(data []byte) error {
 		deviceID := value.Get("device_id").String()
 		vendorName := value.Get("vendor_name").String()
 		deviceName := value.Get("device_name").String()
-		iommuGroup := value.Get("iommu_group").Int()
+		iommuGroup := fmt.Sprintf("%d", value.Get("iommu_group").Int())
 		driver := value.Get("current_driver").String()
 
-		// Format vendor info
 		vendor := vendorName
 		if vendor == "" {
 			vendor = vendorID
-		} else if len(vendor) > 18 {
-			vendor = vendor[:15] + "..."
 		}
 
-		// Format device info
 		device := deviceName
 		if device == "" {
 			device = deviceID
-		} else if len(device) > 18 {
-			device = device[:15] + "..."
 		}
 
 		if driver == "" {
 			driver = "-"
 		}
 
-		fmt.Printf("%-16s %-19s %-19s %-7d %s\n", pciAddr, vendor, device, iommuGroup, driver)
+		table.AddRow(pciAddr, vendor, device, iommuGroup, driver)
 		return true
 	})
 
+	table.Render()
 	return nil
 }
 
@@ -274,20 +268,12 @@ func showDeviceListTable(data []byte) error {
 		return nil
 	}
 
-	fmt.Println("ID                    NAME                TYPE   PCI ADDRESS      VFIO   ATTACHED TO")
-	fmt.Println(strings.Repeat("-", 90))
+	table := NewTableWriter(os.Stdout, "ID", "NAME", "TYPE", "PCI ADDRESS", "VFIO", "ATTACHED TO")
+	table.TruncOrder = []int{0, 1, 5} // ID first, then NAME, ATTACHED TO
 
 	devices.ForEach(func(key, value gjson.Result) bool {
 		id := value.Get("id").String()
-		if len(id) > 20 {
-			id = id[:17] + "..."
-		}
-
 		name := value.Get("name").String()
-		if len(name) > 20 {
-			name = name[:17] + "..."
-		}
-
 		deviceType := value.Get("type").String()
 		pciAddr := value.Get("pci_address").String()
 
@@ -299,14 +285,13 @@ func showDeviceListTable(data []byte) error {
 		attachedTo := value.Get("attached_to").String()
 		if attachedTo == "" {
 			attachedTo = "-"
-		} else if len(attachedTo) > 15 {
-			attachedTo = attachedTo[:12] + "..."
 		}
 
-		fmt.Printf("%-21s %-19s %-6s %-16s %-6s %s\n", id, name, deviceType, pciAddr, vfio, attachedTo)
+		table.AddRow(id, name, deviceType, pciAddr, vfio, attachedTo)
 		return true
 	})
 
+	table.Render()
 	return nil
 }
 

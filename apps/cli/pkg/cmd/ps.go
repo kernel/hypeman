@@ -73,11 +73,12 @@ func handlePs(ctx context.Context, cmd *cli.Command) error {
 	}
 
 	table := NewTableWriter(os.Stdout, "INSTANCE ID", "NAME", "IMAGE", "STATE", "GPU", "HV", "CREATED")
+	table.TruncOrder = []int{2, 4, 6, 1} // IMAGE first, then GPU, CREATED, NAME
 	for _, inst := range filtered {
 		table.AddRow(
 			TruncateID(inst.ID),
-			TruncateString(inst.Name, 20),
-			TruncateString(inst.Image, 25),
+			inst.Name,
+			inst.Image,
 			string(inst.State),
 			formatGPU(inst.GPU),
 			formatHypervisor(inst.Hypervisor),

@@ -4,19 +4,30 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/kernel/hypeman-go"
+	"golang.org/x/term"
 )
 
-// TableWriter provides simple table formatting for CLI output
+// TableWriter provides simple table formatting for CLI output with
+// terminal-width-aware column sizing.
 type TableWriter struct {
 	w       io.Writer
 	headers []string
-	widths  []int
+	widths  []int    // natural widths (max of header and cell values)
 	rows    [][]string
+
+	// TruncOrder specifies column indices in truncation priority order.
+	// The first index in the slice is truncated first when the table is
+	// too wide for the terminal. Columns not listed are never truncated.
+	TruncOrder []int
 }
+
+const columnGap = 2 // spaces between columns
 
 // NewTableWriter creates a new table writer
 func NewTableWriter(w io.Writer, headers ...string) *TableWriter {
@@ -46,21 +57,110 @@ func (t *TableWriter) AddRow(cells ...string) {
 	t.rows = append(t.rows, row)
 }
 
-// Render outputs the table
+// getTerminalWidth returns the terminal width. It tries the stdout
+// file descriptor first, then the COLUMNS env var, then defaults to 80.
+func getTerminalWidth() int {
+	if w, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil && w > 0 {
+		return w
+	}
+	if cols := os.Getenv("COLUMNS"); cols != "" {
+		if w, err := strconv.Atoi(cols); err == nil && w > 0 {
+			return w
+		}
+	}
+	return 80
+}
+
+// renderWidths computes the final column widths, shrinking columns in
+// TruncOrder as needed to fit within the terminal width.
+func (t *TableWriter) renderWidths() []int {
+	n := len(t.headers)
+	widths := make([]int, n)
+	copy(widths, t.widths)
+
+	termWidth := getTerminalWidth()
+
+	// Total space: column widths + gaps (no trailing gap on last column)
+	total := func() int {
+		s := 0
+		for _, w := range widths {
+			s += w
+		}
+		s += columnGap * (n - 1)
+		return s
+	}
+
+	if total() <= termWidth {
+		return widths
+	}
+
+	// Shrink columns in TruncOrder until the table fits
+	for _, col := range t.TruncOrder {
+		if col < 0 || col >= n {
+			continue
+		}
+		excess := total() - termWidth
+		if excess <= 0 {
+			break
+		}
+		// Minimum width: at least the header length, but no less than 5
+		minW := len(t.headers[col])
+		if minW < 5 {
+			minW = 5
+		}
+		canShrink := widths[col] - minW
+		if canShrink <= 0 {
+			continue
+		}
+		shrink := excess
+		if shrink > canShrink {
+			shrink = canShrink
+		}
+		widths[col] -= shrink
+	}
+
+	return widths
+}
+
+// Render outputs the table, dynamically fitting columns to the terminal width.
 func (t *TableWriter) Render() {
+	widths := t.renderWidths()
+	last := len(t.headers) - 1
+
 	// Print headers
 	for i, h := range t.headers {
-		fmt.Fprintf(t.w, "%-*s", t.widths[i]+2, h)
+		cell := truncateCell(h, widths[i])
+		if i < last {
+			fmt.Fprintf(t.w, "%-*s", widths[i]+columnGap, cell)
+		} else {
+			fmt.Fprint(t.w, cell)
+		}
 	}
 	fmt.Fprintln(t.w)
 
 	// Print rows
 	for _, row := range t.rows {
 		for i, cell := range row {
-			fmt.Fprintf(t.w, "%-*s", t.widths[i]+2, cell)
+			cell = truncateCell(cell, widths[i])
+			if i < last {
+				fmt.Fprintf(t.w, "%-*s", widths[i]+columnGap, cell)
+			} else {
+				fmt.Fprint(t.w, cell)
+			}
 		}
 		fmt.Fprintln(t.w)
 	}
+}
+
+// truncateCell truncates s to fit within maxWidth, appending "..." if needed.
+func truncateCell(s string, maxWidth int) string {
+	if len(s) <= maxWidth {
+		return s
+	}
+	if maxWidth <= 3 {
+		return s[:maxWidth]
+	}
+	return s[:maxWidth-3] + "..."
 }
 
 // FormatTimeAgo formats a time as "X ago" string

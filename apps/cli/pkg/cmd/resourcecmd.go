@@ -105,22 +105,20 @@ func showResourcesTable(data []byte) error {
 	if allocations.Exists() && allocations.IsArray() && len(allocations.Array()) > 0 {
 		fmt.Println()
 		fmt.Println("ALLOCATIONS:")
-		fmt.Println("INSTANCE                      CPU    MEMORY     DISK       DISK I/O    NET DOWN    NET UP")
-		fmt.Println(strings.Repeat("-", 95))
+		table := NewTableWriter(os.Stdout, "INSTANCE", "CPU", "MEMORY", "DISK", "DISK I/O", "NET DOWN", "NET UP")
+		table.TruncOrder = []int{0} // Only truncate INSTANCE name if needed
 		allocations.ForEach(func(key, value gjson.Result) bool {
 			name := value.Get("instance_name").String()
-			if len(name) > 28 {
-				name = name[:25] + "..."
-			}
-			cpu := value.Get("cpu").Int()
+			cpu := fmt.Sprintf("%d", value.Get("cpu").Int())
 			mem := formatBytes(value.Get("memory_bytes").Int())
 			disk := formatBytes(value.Get("disk_bytes").Int())
 			diskIO := formatDiskBps(value.Get("disk_io_bps").Int())
 			netDown := formatBps(value.Get("network_download_bps").Int())
 			netUp := formatBps(value.Get("network_upload_bps").Int())
-			fmt.Printf("%-28s  %3d    %-9s  %-9s  %-10s  %-10s  %s\n", name, cpu, mem, disk, diskIO, netDown, netUp)
+			table.AddRow(name, cpu, mem, disk, diskIO, netDown, netUp)
 			return true
 		})
+		table.Render()
 	}
 
 	return nil
