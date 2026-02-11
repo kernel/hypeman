@@ -13,6 +13,11 @@ on:
         required: false
         type: string
 
+# Only run one instance at a time; cancel older runs when a new push arrives
+concurrency:
+  group: update-cli-coverage
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
