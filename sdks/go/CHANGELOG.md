@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.9.8 (2026-02-11)
+
+Full Changelog: [v0.9.7...v0.9.8](https://github.com/kernel/hypeman-go/compare/v0.9.7...v0.9.8)
+
 ## 0.9.7 (2026-02-11)
 
 Full Changelog: [v0.9.6...v0.9.7](https://github.com/kernel/hypeman-go/compare/v0.9.6...v0.9.7)
