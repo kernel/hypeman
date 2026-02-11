@@ -294,8 +294,15 @@ func createSourceTarball(contextPath string) (*bytes.Buffer, error) {
 }
 
 var buildListCmd = cli.Command{
-	Name:            "list",
-	Usage:           "List builds",
+	Name:  "list",
+	Usage: "List builds",
+	Flags: []cli.Flag{
+		&cli.BoolFlag{
+			Name:    "quiet",
+			Aliases: []string{"q"},
+			Usage:   "Only display build IDs",
+		},
+	},
 	Action:          handleBuildList,
 	HideHelpCommand: true,
 }
@@ -341,6 +348,15 @@ func handleBuildList(ctx context.Context, cmd *cli.Command) error {
 	builds, err := client.Builds.List(ctx, opts...)
 	if err != nil {
 		return err
+	}
+
+	quietMode := cmd.Bool("quiet")
+
+	if quietMode {
+		for _, b := range *builds {
+			fmt.Println(b.ID)
+		}
+		return nil
 	}
 
 	if len(*builds) == 0 {

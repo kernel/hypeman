@@ -271,7 +271,7 @@ func handleIngressDelete(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 
-	fmt.Fprintf(os.Stderr, "Ingress %s deleted.\n", id)
+	fmt.Fprintf(os.Stderr, "Deleted ingress %s\n", id)
 	return nil
 }
 
