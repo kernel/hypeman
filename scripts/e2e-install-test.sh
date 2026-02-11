@@ -81,7 +81,6 @@ info "Phase 4: Validating installation..."
 # Check binaries
 if [ "$OS" = "darwin" ]; then
     [ -x /usr/local/bin/hypeman-api ] || fail "hypeman-api binary not found"
-    [ -x /usr/local/bin/vz-shim ] || fail "vz-shim binary not found"
     pass "Binaries installed correctly"
 
     # Check launchd service
@@ -109,6 +108,50 @@ else
     [ -f /etc/hypeman/config ] || fail "Config file not found"
 fi
 pass "Config file exists"
+
+# =============================================================================
+# Phase 4b: Testing CLI commands
+# =============================================================================
+info "Phase 4b: Testing CLI commands..."
+
+# Determine config file path
+if [ "$OS" = "darwin" ]; then
+    CONFIG_FILE="$HOME/.config/hypeman/config"
+else
+    CONFIG_FILE="/etc/hypeman/config"
+fi
+
+# Source config to get JWT_SECRET and PORT
+set -a
+source "$CONFIG_FILE"
+set +a
+
+# Generate API token using hypeman-token
+if [ "$OS" = "darwin" ]; then
+    API_KEY=$("/usr/local/bin/hypeman-token" -user-id "e2e-test-user")
+else
+    API_KEY=$("/opt/hypeman/bin/hypeman-token" -user-id "e2e-test-user")
+fi
+[ -n "$API_KEY" ] || fail "Failed to generate API token"
+pass "Generated API token"
+
+# Set CLI env
+export HYPEMAN_API_KEY="$API_KEY"
+export HYPEMAN_BASE_URL="http://localhost:${PORT:-8080}"
+
+# Determine CLI path
+if [ "$OS" = "darwin" ]; then
+    HYPEMAN_CMD="/usr/local/bin/hypeman"
+else
+    HYPEMAN_CMD="/usr/local/bin/hypeman"
+fi
+
+# Test CLI commands
+$HYPEMAN_CMD ps || fail "hypeman ps failed"
+pass "hypeman ps works"
+
+$HYPEMAN_CMD images || fail "hypeman images failed"
+pass "hypeman images works"
 
 # =============================================================================
 # Phase 5: Cleanup

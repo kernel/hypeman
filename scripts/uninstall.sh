@@ -130,7 +130,6 @@ info "Removing binaries..."
 
 if [ "$OS" = "darwin" ]; then
     $SUDO rm -f "${INSTALL_DIR}/hypeman-api"
-    $SUDO rm -f "${INSTALL_DIR}/vz-shim"
     $SUDO rm -f "${INSTALL_DIR}/hypeman-token"
     $SUDO rm -f "${INSTALL_DIR}/hypeman"
 else
@@ -141,17 +140,6 @@ else
     # Remove install directory
     if [ -d "$INSTALL_DIR" ]; then
         $SUDO rm -rf "$INSTALL_DIR"
-    fi
-fi
-
-# =============================================================================
-# Kill orphan vz-shim processes (macOS)
-# =============================================================================
-
-if [ "$OS" = "darwin" ]; then
-    if pgrep -f vz-shim >/dev/null 2>&1; then
-        info "Killing orphan vz-shim processes..."
-        pkill -f vz-shim 2>/dev/null || true
     fi
 fi
 
@@ -243,9 +231,8 @@ if [ "${KEEP_CONFIG:-false}" = "true" ] && [ -d "$CONFIG_DIR" ]; then
 fi
 
 if [ "$OS" = "darwin" ]; then
-    warn "Note: vz-shim processes may still be running."
+    warn "Note: vz-shim processes managed by hypeman may still be running."
     echo "  Check with: ps aux | grep vz-shim"
-    echo "  Kill all:   pkill -f vz-shim"
 else
     warn "Note: Caddy or Cloud Hypervisor processes may still be running."
     echo "  Check with: ps aux | grep -E 'caddy|cloud-h'"

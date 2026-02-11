@@ -247,12 +247,10 @@ if [ -n "$BINARY_DIR" ]; then
     info "Copying binaries from ${BINARY_DIR}..."
 
     if [ "$OS" = "darwin" ]; then
-        for f in "${BINARY_NAME}" "vz-shim" "hypeman-token" ".env.darwin.example"; do
+        for f in "${BINARY_NAME}" "hypeman-token" ".env.darwin.example"; do
             [ -f "${BINARY_DIR}/${f}" ] || error "File ${f} not found in ${BINARY_DIR}"
         done
-        cp "${BINARY_DIR}/vz-shim" "${TMP_DIR}/vz-shim"
         cp "${BINARY_DIR}/.env.darwin.example" "${TMP_DIR}/.env.darwin.example"
-        chmod +x "${TMP_DIR}/vz-shim"
     else
         for f in "${BINARY_NAME}" "hypeman-token" ".env.example"; do
             [ -f "${BINARY_DIR}/${f}" ] || error "File ${f} not found in ${BINARY_DIR}"
@@ -283,34 +281,24 @@ elif [ -n "$BRANCH" ]; then
     info "Building binaries (this may take a few minutes)..."
     cd "$BUILD_DIR"
 
+    if ! make build >> "$BUILD_LOG" 2>&1; then
+        echo ""
+        echo -e "${RED}Build failed. Full build log:${NC}"
+        cat "$BUILD_LOG"
+        error "Build failed"
+    fi
     if [ "$OS" = "darwin" ]; then
-        # macOS: build darwin targets and sign
-        if ! make build-darwin >> "$BUILD_LOG" 2>&1; then
-            echo ""
-            echo -e "${RED}Build failed. Full build log:${NC}"
-            cat "$BUILD_LOG"
-            error "Build failed"
-        fi
         if ! make sign-darwin >> "$BUILD_LOG" 2>&1; then
             echo ""
             echo -e "${RED}Signing failed. Full build log:${NC}"
             cat "$BUILD_LOG"
             error "Signing failed"
         fi
-        cp "bin/hypeman" "${TMP_DIR}/${BINARY_NAME}"
-        cp "bin/vz-shim" "${TMP_DIR}/vz-shim"
         cp ".env.darwin.example" "${TMP_DIR}/.env.darwin.example"
     else
-        # Linux: standard build
-        if ! make build >> "$BUILD_LOG" 2>&1; then
-            echo ""
-            echo -e "${RED}Build failed. Full build log:${NC}"
-            cat "$BUILD_LOG"
-            error "Build failed"
-        fi
-        cp "bin/hypeman" "${TMP_DIR}/${BINARY_NAME}"
         cp ".env.example" "${TMP_DIR}/.env.example"
     fi
+    cp "bin/hypeman" "${TMP_DIR}/${BINARY_NAME}"
 
     # Build hypeman-token (not included in make build)
     if ! go build -o "${TMP_DIR}/hypeman-token" ./cmd/gen-jwt >> "$BUILD_LOG" 2>&1; then
@@ -367,7 +355,6 @@ else
 </plist>
 ENTITLEMENTS
         codesign --force --sign - --entitlements "$ENTITLEMENTS_TMP" "${TMP_DIR}/${BINARY_NAME}" 2>/dev/null || true
-        [ -f "${TMP_DIR}/vz-shim" ] && codesign --force --sign - --entitlements "$ENTITLEMENTS_TMP" "${TMP_DIR}/vz-shim" 2>/dev/null || true
         rm -f "$ENTITLEMENTS_TMP"
     fi
 fi
@@ -400,12 +387,6 @@ $SUDO install -m 755 "${TMP_DIR}/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
 # Install hypeman-token binary
 info "Installing hypeman-token to ${INSTALL_DIR}..."
 $SUDO install -m 755 "${TMP_DIR}/hypeman-token" "${INSTALL_DIR}/hypeman-token"
-
-# Install vz-shim on macOS
-if [ "$OS" = "darwin" ] && [ -f "${TMP_DIR}/vz-shim" ]; then
-    info "Installing vz-shim to ${INSTALL_DIR}..."
-    $SUDO install -m 755 "${TMP_DIR}/vz-shim" "${INSTALL_DIR}/vz-shim"
-fi
 
 if [ "$OS" = "linux" ]; then
     # Install wrapper script to /usr/local/bin for easy access
@@ -713,7 +694,6 @@ echo ""
 
 if [ "$OS" = "darwin" ]; then
     echo "  API Binary:   ${INSTALL_DIR}/${BINARY_NAME}"
-    echo "  VZ Shim:      ${INSTALL_DIR}/vz-shim"
     echo "  CLI:          ${INSTALL_DIR}/hypeman"
     echo "  Token tool:   ${INSTALL_DIR}/hypeman-token"
     echo "  Config:       ${CONFIG_FILE}"

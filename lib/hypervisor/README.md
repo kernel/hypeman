@@ -17,7 +17,7 @@ Hypeman originally supported only Cloud Hypervisor. This abstraction layer allow
 |------------|----------|---------------|-------------------|
 | Cloud Hypervisor | Linux | External process | HTTP API over Unix socket |
 | QEMU | Linux | External process | QMP over Unix socket |
-| vz | macOS | In-process | Direct API calls |
+| vz | macOS | Subprocess (vz-shim) | gRPC over Unix socket |
 
 ## How It Works
 
@@ -26,7 +26,7 @@ The abstraction defines two key interfaces:
 1. **Hypervisor** - VM lifecycle operations (create, boot, pause, resume, snapshot, restore, shutdown)
 2. **VMStarter** - VM startup and configuration (start binary, get binary path)
 
-Each implementation translates generic configuration to its native format. Cloud Hypervisor and QEMU run as external processes with socket-based control. The vz implementation runs VMs in-process using Apple's Virtualization.framework.
+Each implementation translates generic configuration to its native format. Cloud Hypervisor and QEMU run as external processes with socket-based control. The vz implementation runs VMs as separate vz-shim subprocesses using Apple's Virtualization.framework.
 
 Before using optional features, callers check capabilities:
 
@@ -44,8 +44,8 @@ if hv.Capabilities().SupportsSnapshot {
 - TAP devices and Linux bridges for networking
 
 ### macOS (vz)
-- VMs run in-process (no separate PID)
-- VMs stop if hypeman stops (cannot reconnect)
+- VMs run as separate vz-shim subprocesses (detached process group)
+- State persists across hypeman restarts (reconnect via socket)
 - NAT networking via Virtualization.framework
 - Requires code signing with virtualization entitlement
 
