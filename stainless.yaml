@@ -24,17 +24,6 @@ targets:
     production_repo: kernel/hypeman-go
     options:
       enable_v2: true
-  cli:
-    edition: cli.2025-10-08
-    binary_name: hypeman
-    production_repo: kernel/hypeman-cli
-    options:
-      go_sdk_package: github.com/kernel/hypeman-go
-    publish:
-      homebrew:
-        tap_repo: kernel/homebrew-tap
-        homepage: https://github.com/kernel/hypeman
-        description: orchestrate cloud-hypervisor VMs
   typescript:
     edition: typescript.2025-10-10
     package_name: "@onkernel/hypeman"
