@@ -2,7 +2,10 @@ name: Update CLI Coverage
 
 on:
   push:
-    branches: [main]
+    branches: 
+    - main
+    # TODO: remove pre-merge. this is to test the workflow works
+    - cli-updater
   workflow_dispatch:
     inputs:
       pr_number:
