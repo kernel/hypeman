@@ -12,6 +12,7 @@ import (
 
 	"github.com/kernel/hypeman-go"
 	"github.com/kernel/hypeman-go/option"
+	"github.com/tidwall/gjson"
 	"github.com/urfave/cli/v3"
 )
 
@@ -23,6 +24,11 @@ var buildCmd = cli.Command{
 
 The path argument specifies the build context directory containing the
 source code and Dockerfile. If not specified, the current directory is used.
+
+Subcommands are available for managing builds:
+  hypeman build list       List builds
+  hypeman build get <id>   Get build details
+  hypeman build cancel <id> Cancel a build
 
 Examples:
   # Build from current directory
@@ -47,6 +53,11 @@ Examples:
 			Usage: "Build timeout in seconds",
 			Value: 600,
 		},
+	},
+	Commands: []*cli.Command{
+		&buildListCmd,
+		&buildGetCmd,
+		&buildCancelCmd,
 	},
 	Action:          handleBuild,
 	HideHelpCommand: true,
@@ -280,4 +291,143 @@ func createSourceTarball(contextPath string) (*bytes.Buffer, error) {
 	}
 
 	return buf, nil
+}
+
+var buildListCmd = cli.Command{
+	Name:            "list",
+	Usage:           "List builds",
+	Action:          handleBuildList,
+	HideHelpCommand: true,
+}
+
+var buildGetCmd = cli.Command{
+	Name:      "get",
+	Usage:     "Get build details",
+	ArgsUsage: "<id>",
+	Action:    handleBuildGet,
+	HideHelpCommand: true,
+}
+
+var buildCancelCmd = cli.Command{
+	Name:      "cancel",
+	Usage:     "Cancel a build",
+	ArgsUsage: "<id>",
+	Action:    handleBuildCancel,
+	HideHelpCommand: true,
+}
+
+func handleBuildList(ctx context.Context, cmd *cli.Command) error {
+	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
+
+	var opts []option.RequestOption
+	if cmd.Root().Bool("debug") {
+		opts = append(opts, debugMiddlewareOption)
+	}
+
+	format := cmd.Root().String("format")
+	transform := cmd.Root().String("transform")
+
+	if format != "auto" {
+		var res []byte
+		opts = append(opts, option.WithResponseBodyInto(&res))
+		_, err := client.Builds.List(ctx, opts...)
+		if err != nil {
+			return err
+		}
+		obj := gjson.ParseBytes(res)
+		return ShowJSON(os.Stdout, "build list", obj, format, transform)
+	}
+
+	builds, err := client.Builds.List(ctx, opts...)
+	if err != nil {
+		return err
+	}
+
+	if len(*builds) == 0 {
+		fmt.Fprintln(os.Stderr, "No builds found.")
+		return nil
+	}
+
+	table := NewTableWriter(os.Stdout, "ID", "STATUS", "IMAGE", "DURATION", "CREATED")
+	table.TruncOrder = []int{2, 0, 4} // IMAGE first, then ID, CREATED
+	for _, b := range *builds {
+		imageRef := b.ImageRef
+		if imageRef == "" {
+			imageRef = "-"
+		}
+
+		duration := "-"
+		if b.DurationMs > 0 {
+			secs := b.DurationMs / 1000
+			if secs < 60 {
+				duration = fmt.Sprintf("%ds", secs)
+			} else {
+				duration = fmt.Sprintf("%dm%ds", secs/60, secs%60)
+			}
+		}
+
+		table.AddRow(
+			TruncateID(b.ID),
+			string(b.Status),
+			imageRef,
+			duration,
+			FormatTimeAgo(b.CreatedAt),
+		)
+	}
+	table.Render()
+
+	return nil
+}
+
+func handleBuildGet(ctx context.Context, cmd *cli.Command) error {
+	args := cmd.Args().Slice()
+	if len(args) < 1 {
+		return fmt.Errorf("build ID required\nUsage: hypeman build get <id>")
+	}
+
+	id := args[0]
+
+	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
+
+	var opts []option.RequestOption
+	if cmd.Root().Bool("debug") {
+		opts = append(opts, debugMiddlewareOption)
+	}
+
+	var res []byte
+	opts = append(opts, option.WithResponseBodyInto(&res))
+	_, err := client.Builds.Get(ctx, id, opts...)
+	if err != nil {
+		return err
+	}
+
+	format := cmd.Root().String("format")
+	transform := cmd.Root().String("transform")
+
+	obj := gjson.ParseBytes(res)
+	return ShowJSON(os.Stdout, "build get", obj, format, transform)
+}
+
+func handleBuildCancel(ctx context.Context, cmd *cli.Command) error {
+	args := cmd.Args().Slice()
+	if len(args) < 1 {
+		return fmt.Errorf("build ID required\nUsage: hypeman build cancel <id>")
+	}
+
+	id := args[0]
+
+	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
+
+	var opts []option.RequestOption
+	if cmd.Root().Bool("debug") {
+		opts = append(opts, debugMiddlewareOption)
+	}
+
+	err := client.Builds.Cancel(ctx, id, opts...)
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintf(os.Stderr, "Cancelled build %s\n", id)
+	return nil
 }

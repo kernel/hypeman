@@ -81,7 +81,9 @@ func init() {
 		&startCmd,
 		&standbyCmd,
 		&restoreCmd,
+		&imageCmd,
 		&ingressCmd,
+		&volumeCmd,
 		&resourcesCmd,
 		&deviceCmd,
 		{
