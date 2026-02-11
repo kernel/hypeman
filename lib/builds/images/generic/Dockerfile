@@ -1,5 +1,5 @@
 # Generic Builder Image
-# Contains rootless BuildKit + builder agent + guest-agent for debugging
+# Contains BuildKit + builder agent + guest-agent for debugging
 # Builds any Dockerfile provided by the user
 
 # Use non-rootless buildkit to avoid potential credential handling issues
@@ -33,8 +33,7 @@ FROM alpine:3.21
 RUN apk add --no-cache \
     ca-certificates \
     git \
-    curl \
-    fuse-overlayfs
+    curl
 
 # Copy BuildKit binaries from official image
 COPY --from=buildkit /usr/bin/buildctl /usr/bin/buildctl

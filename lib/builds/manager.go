@@ -1418,11 +1418,13 @@ func extractInternalBaseImageRepos(dockerfile, registryURL string) []string {
 			continue
 		}
 
-		// Strip the registry host to get the repo path, then strip tag/digest
+		// Strip the registry host to get the repo path, then strip digest and tag.
+		// An image ref can have both: registry/org/img:v1@sha256:abc123
 		repo := strings.TrimPrefix(imageRef, registryHost+"/")
 		if idx := strings.LastIndex(repo, "@"); idx != -1 {
 			repo = repo[:idx]
-		} else if idx := strings.LastIndex(repo, ":"); idx != -1 {
+		}
+		if idx := strings.LastIndex(repo, ":"); idx != -1 {
 			repo = repo[:idx]
 		}
 
