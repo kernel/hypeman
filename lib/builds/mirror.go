@@ -50,6 +50,9 @@ func (m *manager) mirrorBaseImagesForBuild(ctx context.Context, id string, req C
 	var repoPerms []RepoPermission
 	for _, ref := range refs {
 		repo := ref
+		if idx := strings.LastIndex(repo, "@"); idx != -1 {
+			repo = repo[:idx]
+		}
 		if idx := strings.LastIndex(repo, ":"); idx > 0 {
 			repo = repo[:idx]
 		}
