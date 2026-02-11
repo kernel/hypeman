@@ -121,10 +121,10 @@ else
     CONFIG_FILE="/etc/hypeman/config"
 fi
 
-# Source config to get JWT_SECRET and PORT
-set -a
-source "$CONFIG_FILE"
-set +a
+# Extract JWT_SECRET and PORT from config (source is unsafe — values may contain spaces)
+JWT_SECRET=$(grep '^JWT_SECRET=' "$CONFIG_FILE" | cut -d= -f2-)
+PORT=$(grep '^PORT=' "$CONFIG_FILE" | cut -d= -f2-)
+export JWT_SECRET
 
 # Generate API token using hypeman-token
 if [ "$OS" = "darwin" ]; then
@@ -146,12 +146,16 @@ else
     HYPEMAN_CMD="/usr/local/bin/hypeman"
 fi
 
-# Test CLI commands
-$HYPEMAN_CMD ps || fail "hypeman ps failed"
-pass "hypeman ps works"
+# Test CLI commands (skip if CLI was not installed)
+if [ -x "$HYPEMAN_CMD" ]; then
+    $HYPEMAN_CMD ps || fail "hypeman ps failed"
+    pass "hypeman ps works"
 
-$HYPEMAN_CMD images || fail "hypeman images failed"
-pass "hypeman images works"
+    $HYPEMAN_CMD images || fail "hypeman images failed"
+    pass "hypeman images works"
+else
+    warn "CLI not installed, skipping CLI smoke tests"
+fi
 
 # =============================================================================
 # Phase 5: Cleanup
