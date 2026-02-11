@@ -100,15 +100,15 @@ jobs:
           gh repo clone kernel/cli /tmp/kernel-cli
           cd /tmp/kernel-cli
 
-          # Check if the cli-coverage-update branch already exists on remote
-          if git ls-remote --exit-code --heads origin cli-coverage-update >/dev/null 2>&1; then
+          # Try to fetch the cli-coverage-update branch from remote
+          if git fetch origin cli-coverage-update 2>/dev/null; then
             echo "Branch cli-coverage-update exists, checking it out..."
-            git fetch origin cli-coverage-update
             git checkout cli-coverage-update
             # Merge latest main to keep it up to date
             git merge origin/main -m "Merge main into cli-coverage-update" --no-edit || true
           else
-            echo "Branch cli-coverage-update does not exist, will create from main"
+            echo "Branch cli-coverage-update does not exist, creating from main..."
+            git checkout -b cli-coverage-update
           fi
 
       - name: Get SDK version info
