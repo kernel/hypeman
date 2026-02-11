@@ -6,22 +6,30 @@ import "runtime"
 type KernelVersion string
 
 const (
-	// Kernel_202601152 is the current kernel version with vGPU support
+	// Kernel_202601152 is the previous kernel version with vGPU support
 	Kernel_202601152 KernelVersion = "ch-6.12.8-kernel-1.3-202601152"
+
+	// Kernel_202602101 is the current kernel version with overlayfs redirect_dir and index support
+	Kernel_202602101 KernelVersion = "ch-6.12.8-kernel-1.4-202602101"
 )
 
 var (
 	// DefaultKernelVersion is the kernel version used for new instances
-	DefaultKernelVersion = Kernel_202601152
+	DefaultKernelVersion = Kernel_202602101
 
 	// SupportedKernelVersions lists all supported kernel versions
 	SupportedKernelVersions = []KernelVersion{
+		Kernel_202602101,
 		Kernel_202601152,
 	}
 )
 
 // KernelDownloadURLs maps kernel versions and architectures to download URLs
 var KernelDownloadURLs = map[KernelVersion]map[string]string{
+	Kernel_202602101: {
+		"x86_64":  "https://github.com/kernel/linux/releases/download/ch-6.12.8-kernel-1.4-202602101/vmlinux-x86_64",
+		"aarch64": "https://github.com/kernel/linux/releases/download/ch-6.12.8-kernel-1.4-202602101/Image-arm64",
+	},
 	Kernel_202601152: {
 		"x86_64":  "https://github.com/kernel/linux/releases/download/ch-6.12.8-kernel-1.3-202601152/vmlinux-x86_64",
 		"aarch64": "https://github.com/kernel/linux/releases/download/ch-6.12.8-kernel-1.3-202601152/Image-arm64",
@@ -31,6 +39,10 @@ var KernelDownloadURLs = map[KernelVersion]map[string]string{
 // KernelHeaderURLs maps kernel versions and architectures to kernel header tarball URLs
 // These tarballs contain kernel headers needed for DKMS to build out-of-tree modules (e.g., NVIDIA vGPU drivers)
 var KernelHeaderURLs = map[KernelVersion]map[string]string{
+	Kernel_202602101: {
+		"x86_64":  "https://github.com/kernel/linux/releases/download/ch-6.12.8-kernel-1.4-202602101/kernel-headers-x86_64.tar.gz",
+		"aarch64": "https://github.com/kernel/linux/releases/download/ch-6.12.8-kernel-1.4-202602101/kernel-headers-aarch64.tar.gz",
+	},
 	Kernel_202601152: {
 		"x86_64":  "https://github.com/kernel/linux/releases/download/ch-6.12.8-kernel-1.3-202601152/kernel-headers-x86_64.tar.gz",
 		"aarch64": "https://github.com/kernel/linux/releases/download/ch-6.12.8-kernel-1.3-202601152/kernel-headers-aarch64.tar.gz",

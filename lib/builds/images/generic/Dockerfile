@@ -46,17 +46,17 @@ COPY --from=buildkit /usr/bin/buildkit-runc /usr/bin/runc
 COPY --from=agent-builder /builder-agent /usr/bin/builder-agent
 COPY --from=agent-builder /guest-agent /usr/bin/guest-agent
 
-# Create unprivileged user for rootless BuildKit
+# Create builder user and directories (kept for config path compatibility)
+# Running as root inside ephemeral microVM - the VM is the security boundary
 RUN adduser -D -u 1000 builder && \
     mkdir -p /home/builder/.local/share/buildkit /config /run/secrets /src && \
     chown -R builder:builder /home/builder /config /run/secrets /src
 
-# Switch to unprivileged user
-USER builder
 WORKDIR /src
 
 # Set environment for buildkit in microVM
-ENV BUILDKITD_FLAGS=""
+# Use native overlayfs snapshotter (faster than fuse-overlayfs, requires root)
+ENV BUILDKITD_FLAGS="--oci-worker-snapshotter=overlayfs"
 ENV HOME=/home/builder
 ENV XDG_RUNTIME_DIR=/home/builder/.local/share
 

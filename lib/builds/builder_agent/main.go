@@ -763,10 +763,10 @@ func runBuild(ctx context.Context, config *BuildConfig, logWriter io.Writer) (st
 	// Build arguments
 	var outputOpts string
 	if useInsecureFlag {
-		outputOpts = fmt.Sprintf("type=image,name=%s,push=true,registry.insecure=true,oci-mediatypes=true", outputRef)
+		outputOpts = fmt.Sprintf("type=image,name=%s,push=true,registry.insecure=true,oci-mediatypes=true,compression=zstd,force-compression=true", outputRef)
 		log.Printf("Using HTTP registry (insecure mode): %s", registryHost)
 	} else {
-		outputOpts = fmt.Sprintf("type=image,name=%s,push=true,oci-mediatypes=true", outputRef)
+		outputOpts = fmt.Sprintf("type=image,name=%s,push=true,oci-mediatypes=true,compression=zstd,force-compression=true", outputRef)
 		log.Printf("Using HTTPS registry (secure mode): %s", registryHost)
 	}
 
@@ -849,6 +849,24 @@ func runBuild(ctx context.Context, config *BuildConfig, logWriter io.Writer) (st
 	buildkitdConfig := "/home/builder/.config/buildkit/buildkitd.toml"
 	log.Printf("Using buildkitd config: %s", buildkitdConfig)
 
+	// Mount a tmpfs for BuildKit's data directory.
+	// The VM rootfs is an overlayfs (read-only ext4 + writable ext4 upper layer).
+	// BuildKit's native overlayfs snapshotter creates char device 0:0 for whiteout
+	// markers, but mknod(char 0:0) fails on an overlayfs mount because the kernel
+	// treats it as an overlayfs whiteout rather than a regular device node.
+	// Using tmpfs avoids this nested-overlayfs conflict.
+	buildkitRoot := "/var/lib/buildkit"
+	if err := os.MkdirAll(buildkitRoot, 0755); err != nil {
+		log.Printf("Warning: failed to create buildkit root dir: %v", err)
+	} else {
+		mountCmd := exec.Command("mount", "-t", "tmpfs", "-o", "size=3G", "tmpfs", buildkitRoot)
+		if output, err := mountCmd.CombinedOutput(); err != nil {
+			log.Printf("Warning: failed to mount tmpfs for buildkit: %v: %s", err, output)
+		} else {
+			log.Printf("Mounted tmpfs at %s for BuildKit snapshotter", buildkitRoot)
+		}
+	}
+
 	log.Printf("Running: buildctl-daemonless.sh %s", strings.Join(args, " "))
 
 	// Run buildctl-daemonless.sh
@@ -858,10 +876,11 @@ func runBuild(ctx context.Context, config *BuildConfig, logWriter io.Writer) (st
 	// Set environment:
 	// - HOME and DOCKER_CONFIG: ensures buildctl finds the auth config at /root/.docker/config.json
 	// - BUILDKITD_FLAGS: tells buildkitd to use our custom config for registry TLS settings
+	//   and to use native overlayfs snapshotter with a tmpfs-backed root directory
 	// Filter out existing values to avoid duplicates (first value wins in shell)
 	env := make([]string, 0, len(os.Environ())+3)
 	for _, e := range os.Environ() {
-		if !strings.HasPrefix(e, "DOCKER_CONFIG=") && 
+		if !strings.HasPrefix(e, "DOCKER_CONFIG=") &&
 		   !strings.HasPrefix(e, "BUILDKITD_FLAGS=") &&
 		   !strings.HasPrefix(e, "HOME=") {
 			env = append(env, e)
@@ -869,7 +888,7 @@ func runBuild(ctx context.Context, config *BuildConfig, logWriter io.Writer) (st
 	}
 	env = append(env, "HOME=/root")
 	env = append(env, "DOCKER_CONFIG=/root/.docker")
-	env = append(env, fmt.Sprintf("BUILDKITD_FLAGS=--config=%s", buildkitdConfig))
+	env = append(env, fmt.Sprintf("BUILDKITD_FLAGS=--config=%s --oci-worker-snapshotter=overlayfs --root=%s", buildkitdConfig, buildkitRoot))
 	cmd.Env = env
 
 	if err := cmd.Run(); err != nil {

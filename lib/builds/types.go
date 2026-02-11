@@ -208,8 +208,8 @@ type BuildResult struct {
 func DefaultBuildPolicy() BuildPolicy {
 	return BuildPolicy{
 		TimeoutSeconds: 600,  // 10 minutes
-		MemoryMB:       2048, // 2GB
-		CPUs:           2,
+		MemoryMB:       4096, // 4GB
+		CPUs:           4,
 		NetworkMode:    "egress", // Allow outbound for dependency downloads
 	}
 }
