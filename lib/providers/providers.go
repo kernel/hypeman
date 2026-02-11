@@ -259,6 +259,7 @@ func ProvideBuildManager(p *paths.Paths, cfg *config.Config, instanceManager ins
 		RegistryCACert:      registryCACert,
 		DefaultTimeout:      cfg.BuildTimeout,
 		RegistrySecret:      cfg.JwtSecret, // Use same secret for registry tokens
+		DockerSocket:        cfg.DockerSocket,
 	}
 
 	// Apply defaults if not set
