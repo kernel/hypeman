@@ -18,6 +18,7 @@ var ingressCmd = cli.Command{
 	Commands: []*cli.Command{
 		&ingressCreateCmd,
 		&ingressListCmd,
+		&ingressGetCmd,
 		&ingressDeleteCmd,
 	},
 	HideHelpCommand: true,
@@ -73,6 +74,14 @@ var ingressListCmd = cli.Command{
 		},
 	},
 	Action:          handleIngressList,
+	HideHelpCommand: true,
+}
+
+var ingressGetCmd = cli.Command{
+	Name:      "get",
+	Usage:     "Get ingress details",
+	ArgsUsage: "<id>",
+	Action:    handleIngressGet,
 	HideHelpCommand: true,
 }
 
@@ -213,6 +222,35 @@ func handleIngressList(ctx context.Context, cmd *cli.Command) error {
 	return nil
 }
 
+func handleIngressGet(ctx context.Context, cmd *cli.Command) error {
+	args := cmd.Args().Slice()
+	if len(args) < 1 {
+		return fmt.Errorf("ingress ID required\nUsage: hypeman ingress get <id>")
+	}
+
+	id := args[0]
+
+	client := hypeman.NewClient(getDefaultRequestOptions(cmd)...)
+
+	var opts []option.RequestOption
+	if cmd.Root().Bool("debug") {
+		opts = append(opts, debugMiddlewareOption)
+	}
+
+	var res []byte
+	opts = append(opts, option.WithResponseBodyInto(&res))
+	_, err := client.Ingresses.Get(ctx, id, opts...)
+	if err != nil {
+		return err
+	}
+
+	format := cmd.Root().String("format")
+	transform := cmd.Root().String("transform")
+
+	obj := gjson.ParseBytes(res)
+	return ShowJSON(os.Stdout, "ingress get", obj, format, transform)
+}
+
 func handleIngressDelete(ctx context.Context, cmd *cli.Command) error {
 	args := cmd.Args().Slice()
 	if len(args) < 1 {
@@ -233,7 +271,7 @@ func handleIngressDelete(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 
-	fmt.Fprintf(os.Stderr, "Ingress %s deleted.\n", id)
+	fmt.Fprintf(os.Stderr, "Deleted ingress %s\n", id)
 	return nil
 }
 

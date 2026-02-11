@@ -99,6 +99,15 @@ Examples:
 			Name:  "bandwidth-up",
 			Usage: `Upload bandwidth limit (e.g., "1Gbps", "125MB/s")`,
 		},
+		// Boot option flags
+		&cli.BoolFlag{
+			Name:  "skip-guest-agent",
+			Usage: "Skip guest-agent installation during boot (exec and stat APIs will not work)",
+		},
+		&cli.BoolFlag{
+			Name:  "skip-kernel-headers",
+			Usage: "Skip kernel headers installation during boot for faster startup (DKMS will not work)",
+		},
 	},
 	Action:          handleRun,
 	HideHelpCommand: true,
@@ -217,6 +226,14 @@ func handleRun(ctx context.Context, cmd *cli.Command) error {
 	diskIO := cmd.String("disk-io")
 	if diskIO != "" {
 		params.DiskIoBps = hypeman.Opt(diskIO)
+	}
+
+	// Boot options
+	if cmd.IsSet("skip-guest-agent") {
+		params.SkipGuestAgent = hypeman.Opt(cmd.Bool("skip-guest-agent"))
+	}
+	if cmd.IsSet("skip-kernel-headers") {
+		params.SkipKernelHeaders = hypeman.Opt(cmd.Bool("skip-kernel-headers"))
 	}
 
 	fmt.Fprintf(os.Stderr, "Creating instance %s...\n", name)
