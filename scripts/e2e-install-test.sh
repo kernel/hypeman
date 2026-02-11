@@ -153,6 +153,36 @@ if [ -x "$HYPEMAN_CMD" ]; then
 
     $HYPEMAN_CMD images || fail "hypeman images failed"
     pass "hypeman images works"
+
+    # VM lifecycle test
+    E2E_VM_NAME="e2e-test-vm"
+
+    $HYPEMAN_CMD pull alpine:latest || fail "hypeman pull failed"
+    pass "hypeman pull works"
+
+    $HYPEMAN_CMD run --name "$E2E_VM_NAME" alpine:latest || fail "hypeman run failed"
+    pass "hypeman run works"
+
+    # Wait for VM to be ready
+    VM_READY=false
+    for i in $(seq 1 30); do
+        if $HYPEMAN_CMD exec "$E2E_VM_NAME" -- echo "hello" >/dev/null 2>&1; then
+            VM_READY=true
+            break
+        fi
+        sleep 2
+    done
+    [ "$VM_READY" = true ] || fail "VM did not become ready within 60s"
+
+    OUTPUT=$($HYPEMAN_CMD exec "$E2E_VM_NAME" -- echo "hello from e2e") || fail "hypeman exec failed"
+    echo "$OUTPUT" | grep -q "hello from e2e" || fail "hypeman exec output mismatch: $OUTPUT"
+    pass "hypeman exec works"
+
+    $HYPEMAN_CMD stop "$E2E_VM_NAME" || fail "hypeman stop failed"
+    pass "hypeman stop works"
+
+    $HYPEMAN_CMD rm "$E2E_VM_NAME" || fail "hypeman rm failed"
+    pass "hypeman rm works"
 else
     warn "CLI not installed, skipping CLI smoke tests"
 fi
