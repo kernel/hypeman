@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.9.7 (2026-02-11)
+
+Full Changelog: [v0.9.6...v0.9.7](https://github.com/kernel/hypeman-go/compare/v0.9.6...v0.9.7)
+
+### Bug Fixes
+
+* **encoder:** correctly serialize NullStruct ([e693834](https://github.com/kernel/hypeman-go/commit/e693834704b3541d4a5f260b547026bae8a19b1b))
+
+
+### Refactors
+
+* cross-platform foundation for macOS support ([8adc4f3](https://github.com/kernel/hypeman-go/commit/8adc4f38026abee34ad85c15509e90f47644a0d0))
+
 ## 0.9.6 (2026-01-30)
 
 Full Changelog: [v0.9.0...v0.9.6](https://github.com/kernel/hypeman-go/compare/v0.9.0...v0.9.6)

@@ -28,7 +28,7 @@ Or to pin the version:
 <!-- x-release-please-start-version -->
 
 ```sh
-go get -u 'github.com/kernel/hypeman-go@v0.9.6'
+go get -u 'github.com/kernel/hypeman-go@v0.9.7'
 ```
 
 <!-- x-release-please-end -->
