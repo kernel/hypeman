@@ -203,7 +203,7 @@ type Instance struct {
 	HotplugSize string `json:"hotplug_size"`
 	// Hypervisor running this instance
 	//
-	// Any of "cloud-hypervisor", "qemu".
+	// Any of "cloud-hypervisor", "qemu", "vz".
 	Hypervisor InstanceHypervisor `json:"hypervisor"`
 	// Network configuration of the instance
 	Network InstanceNetwork `json:"network"`
@@ -301,6 +301,7 @@ type InstanceHypervisor string
 const (
 	InstanceHypervisorCloudHypervisor InstanceHypervisor = "cloud-hypervisor"
 	InstanceHypervisorQemu            InstanceHypervisor = "qemu"
+	InstanceHypervisorVz              InstanceHypervisor = "vz"
 )
 
 // Network configuration of the instance
@@ -472,7 +473,7 @@ type InstanceNewParams struct {
 	GPU InstanceNewParamsGPU `json:"gpu,omitzero"`
 	// Hypervisor to use for this instance. Defaults to server configuration.
 	//
-	// Any of "cloud-hypervisor", "qemu".
+	// Any of "cloud-hypervisor", "qemu", "vz".
 	Hypervisor InstanceNewParamsHypervisor `json:"hypervisor,omitzero"`
 	// Network configuration for the instance
 	Network InstanceNewParamsNetwork `json:"network,omitzero"`
@@ -510,6 +511,7 @@ type InstanceNewParamsHypervisor string
 const (
 	InstanceNewParamsHypervisorCloudHypervisor InstanceNewParamsHypervisor = "cloud-hypervisor"
 	InstanceNewParamsHypervisorQemu            InstanceNewParamsHypervisor = "qemu"
+	InstanceNewParamsHypervisorVz              InstanceNewParamsHypervisor = "vz"
 )
 
 // Network configuration for the instance
