@@ -178,7 +178,7 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 		return 0, nil, fmt.Errorf("connect to vz-shim: %w", err)
 	}
 
-	cmd.Process.Release()
+	go cmd.Wait()
 
 	return pid, client, nil
 }
