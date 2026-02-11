@@ -297,6 +297,7 @@ ENTITLEMENTS_FILE ?= vz.entitlements
 build-vz-shim: | $(BIN_DIR)
 	@echo "Building vz-shim for macOS..."
 	go build -o $(BIN_DIR)/vz-shim ./cmd/vz-shim
+	mkdir -p lib/hypervisor/vz/vz-shim
 	cp $(BIN_DIR)/vz-shim lib/hypervisor/vz/vz-shim/vz-shim
 	@echo "Build complete: $(BIN_DIR)/vz-shim"
 
