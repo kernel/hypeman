@@ -358,7 +358,11 @@ func (m *manager) waitForBuilderImageReady(ctx context.Context, imageRef string)
 			case images.StatusReady:
 				return nil
 			case images.StatusFailed:
-				return fmt.Errorf("image conversion failed")
+				errDetail := "unknown"
+				if img.Error != nil {
+					errDetail = *img.Error
+				}
+				return fmt.Errorf("image conversion failed: %s", errDetail)
 			}
 		}
 		time.Sleep(pollInterval)
@@ -943,7 +947,11 @@ func (m *manager) waitForImageReady(ctx context.Context, id string) error {
 				m.logger.Debug("image is ready", "id", id, "image_ref", imageRef, "attempts", attempt+1)
 				return nil
 			case images.StatusFailed:
-				return fmt.Errorf("image conversion failed")
+				errDetail := "unknown"
+				if img.Error != nil {
+					errDetail = *img.Error
+				}
+				return fmt.Errorf("image conversion failed: %s", errDetail)
 			case images.StatusPending, images.StatusPulling, images.StatusConverting:
 				// Still processing, continue polling
 			}

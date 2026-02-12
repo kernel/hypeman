@@ -218,6 +218,7 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef) {
 	tempDir := filepath.Join(buildDir, "rootfs")
 
 	if err := os.MkdirAll(buildDir, 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "image build failed: create build dir: %v\n", err)
 		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("create build dir: %w", err))
 		m.recordBuildMetrics(ctx, buildStart, "failed")
 		return
@@ -233,6 +234,7 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef) {
 	// Pull the image (digest is always known, uses cache if already pulled)
 	result, err := m.ociClient.pullAndExport(ctx, ref.String(), ref.Digest(), tempDir)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "image build failed: pull and export %s: %v\n", ref.String(), err)
 		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("pull and export: %w", err))
 		m.recordPullMetrics(ctx, "failed")
 		m.recordBuildMetrics(ctx, buildStart, "failed")
@@ -254,9 +256,9 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef) {
 	m.updateStatusByDigest(ref, StatusConverting, nil)
 
 	diskPath := digestPath(m.paths, ref.Repository(), ref.DigestHex())
-	// Use default image format (ext4 for now, easy to switch to erofs later)
 	diskSize, err := ExportRootfs(tempDir, diskPath, DefaultImageFormat)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "image build failed: convert to %s for %s: %v\n", DefaultImageFormat, ref.String(), err)
 		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("convert to %s: %w", DefaultImageFormat, err))
 		return
 	}

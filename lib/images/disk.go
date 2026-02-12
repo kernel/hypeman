@@ -187,8 +187,15 @@ func convertToExt4(rootfsDir, diskPath string) (int64, error) {
 	return stat.Size(), nil
 }
 
-// convertToErofs converts a rootfs directory to an erofs disk image using mkfs.erofs
+// convertToErofs converts a rootfs directory to an erofs disk image using mkfs.erofs.
+// If mkfs.erofs is not installed, it falls back to ext4 with a warning.
 func convertToErofs(rootfsDir, diskPath string) (int64, error) {
+	// Check if mkfs.erofs is available
+	if _, err := exec.LookPath("mkfs.erofs"); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: mkfs.erofs not found, falling back to ext4\n")
+		return convertToExt4(rootfsDir, diskPath)
+	}
+
 	// Ensure parent directory exists
 	if err := os.MkdirAll(filepath.Dir(diskPath), 0755); err != nil {
 		return 0, fmt.Errorf("create disk parent dir: %w", err)
