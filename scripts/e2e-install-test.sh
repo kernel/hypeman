@@ -159,7 +159,16 @@ E2E_VM_NAME="e2e-test-vm"
 $HYPEMAN_CMD pull alpine:latest || fail "hypeman pull failed"
 pass "hypeman pull works"
 
-$HYPEMAN_CMD run --name "$E2E_VM_NAME" alpine:latest || fail "hypeman run failed"
+# Wait for image to be available (pull is async)
+IMAGE_READY=false
+for i in $(seq 1 30); do
+    if $HYPEMAN_CMD run --name "$E2E_VM_NAME" alpine:latest 2>&1; then
+        IMAGE_READY=true
+        break
+    fi
+    sleep 2
+done
+[ "$IMAGE_READY" = true ] || fail "hypeman run failed (image not ready after 60s)"
 pass "hypeman run works"
 
 # Wait for VM to be ready
