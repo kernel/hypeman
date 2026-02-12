@@ -84,7 +84,7 @@ Examples:
 		// Hypervisor flag
 		&cli.StringFlag{
 			Name:  "hypervisor",
-			Usage: `Hypervisor to use: "cloud-hypervisor" or "qemu"`,
+			Usage: `Hypervisor to use: "cloud-hypervisor", "qemu", or "vz"`,
 		},
 		// Resource limit flags
 		&cli.StringFlag{
@@ -107,6 +107,12 @@ Examples:
 		&cli.BoolFlag{
 			Name:  "skip-kernel-headers",
 			Usage: "Skip kernel headers installation during boot for faster startup (DKMS will not work)",
+		},
+		// Volume mount flags
+		&cli.StringSliceFlag{
+			Name:    "volume",
+			Aliases: []string{"v"},
+			Usage:   `Attach volume at creation (format: volume-id:/mount/path[:ro[:overlay=SIZE]]). Can be repeated.`,
 		},
 	},
 	Action:          handleRun,
@@ -217,8 +223,10 @@ func handleRun(ctx context.Context, cmd *cli.Command) error {
 			params.Hypervisor = hypeman.InstanceNewParamsHypervisorCloudHypervisor
 		case "qemu":
 			params.Hypervisor = hypeman.InstanceNewParamsHypervisorQemu
+		case "vz":
+			params.Hypervisor = hypeman.InstanceNewParamsHypervisorVz
 		default:
-			return fmt.Errorf("invalid hypervisor: %s (must be 'cloud-hypervisor' or 'qemu')", hypervisor)
+			return fmt.Errorf("invalid hypervisor: %s (must be 'cloud-hypervisor', 'qemu', or 'vz')", hypervisor)
 		}
 	}
 
@@ -234,6 +242,20 @@ func handleRun(ctx context.Context, cmd *cli.Command) error {
 	}
 	if cmd.IsSet("skip-kernel-headers") {
 		params.SkipKernelHeaders = hypeman.Opt(cmd.Bool("skip-kernel-headers"))
+	}
+
+	// Volume mounts
+	volumeSpecs := cmd.StringSlice("volume")
+	if len(volumeSpecs) > 0 {
+		var mounts []hypeman.VolumeMountParam
+		for _, spec := range volumeSpecs {
+			mount, err := parseVolumeSpec(spec)
+			if err != nil {
+				return fmt.Errorf("invalid volume spec %q: %w", spec, err)
+			}
+			mounts = append(mounts, mount)
+		}
+		params.Volumes = mounts
 	}
 
 	fmt.Fprintf(os.Stderr, "Creating instance %s...\n", name)
@@ -313,6 +335,53 @@ func waitForImageReady(ctx context.Context, client *hypeman.Client, img *hypeman
 			}
 		}
 	}
+}
+
+// parseVolumeSpec parses a volume mount specification string.
+// Format: volume-id:/mount/path[:ro[:overlay=SIZE]]
+// Examples:
+//
+//	my-vol:/data
+//	my-vol:/data:ro
+//	my-vol:/data:ro:overlay=10GB
+func parseVolumeSpec(spec string) (hypeman.VolumeMountParam, error) {
+	parts := strings.SplitN(spec, ":", 2)
+	if len(parts) < 2 {
+		return hypeman.VolumeMountParam{}, fmt.Errorf("expected format volume-id:/mount/path[:ro[:overlay=SIZE]]")
+	}
+
+	volumeID := parts[0]
+	if volumeID == "" {
+		return hypeman.VolumeMountParam{}, fmt.Errorf("volume ID cannot be empty")
+	}
+
+	remaining := parts[1]
+	// Split remaining by colon to get mount path and options
+	segments := strings.Split(remaining, ":")
+	mountPath := segments[0]
+	if mountPath == "" {
+		return hypeman.VolumeMountParam{}, fmt.Errorf("mount path cannot be empty")
+	}
+
+	mount := hypeman.VolumeMountParam{
+		VolumeID:  volumeID,
+		MountPath: mountPath,
+	}
+
+	// Parse optional flags
+	for _, seg := range segments[1:] {
+		switch {
+		case seg == "ro":
+			mount.Readonly = hypeman.Opt(true)
+		case strings.HasPrefix(seg, "overlay="):
+			mount.Overlay = hypeman.Opt(true)
+			mount.OverlaySize = hypeman.Opt(strings.TrimPrefix(seg, "overlay="))
+		default:
+			return hypeman.VolumeMountParam{}, fmt.Errorf("unknown option %q", seg)
+		}
+	}
+
+	return mount, nil
 }
 
 // showImageStatus prints image build status to stderr
