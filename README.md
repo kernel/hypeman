@@ -21,27 +21,25 @@
 
 ## Requirements
 
-### Linux (Production)
-Hypeman server runs on **Linux** with **KVM** virtualization support. Supports Cloud Hypervisor and QEMU as hypervisors.
+### Linux
+**KVM** virtualization support required. Supports Cloud Hypervisor and QEMU as hypervisors.
 
-### macOS (Experimental)
-Hypeman also supports **macOS** (11.0+) using Apple's **Virtualization.framework** via the `vz` hypervisor. See [macOS Support](#macos-support) below.
-
-The CLI can run locally on the server or connect remotely from any machine.
+### macOS
+**macOS 11.0+** on Apple Silicon. Uses Apple's Virtualization.framework via the `vz` hypervisor.
 
 ## Quick Start
 
-Install Hypeman on your Linux server:
+Install Hypeman (Linux and macOS supported):
 
 ```bash
 curl -fsSL https://get.hypeman.sh | bash
 ```
 
-This installs both the Hypeman server and CLI. The installer handles all dependencies, KVM access, and network configuration automatically.
+This installs both the Hypeman server and CLI. The installer handles all dependencies and configuration automatically.
 
-## CLI Installation (Remote Access)
+## CLI Installation
 
-To connect to a Hypeman server from another machine, install just the CLI:
+To use Hypeman via the CLI on a separate machine:
 
 **Homebrew:**
 ```bash
@@ -53,17 +51,11 @@ brew install kernel/tap/hypeman
 go install 'github.com/kernel/hypeman-cli/cmd/hypeman@latest'
 ```
 
-**Configure remote access:**
+**Configure CLI access:**
 
-1. On the server, generate an API token:
 ```bash
-hypeman-token
-```
-
-2. On your local machine, set the environment variables:
-```bash
-export HYPEMAN_API_KEY="<token-from-server>"
-export HYPEMAN_BASE_URL="http://<server-ip>:8080"
+export HYPEMAN_API_KEY="<token>"
+export HYPEMAN_BASE_URL="http://<host>:8080"
 ```
 
 ## Usage
@@ -158,59 +150,6 @@ hypeman logs --source hypeman my-app
 ```
 
 For all available commands, run `hypeman --help`.
-
-## macOS Support
-
-Hypeman supports macOS using Apple's Virtualization.framework through the `vz` hypervisor. This provides native virtualization on Apple Silicon Macs (Intel Macs are not supported).
-
-### Requirements
-
-- macOS 11.0+ (macOS 14.0+ required for snapshot/restore on ARM64)
-- Apple Silicon (M1/M2/M3) recommended
-- Caddy: `brew install caddy`
-- e2fsprogs: `brew install e2fsprogs` (for ext4 disk images)
-
-### Quick Start (macOS)
-
-```bash
-# Install dependencies
-brew install caddy e2fsprogs
-
-# Add e2fsprogs to PATH (it's keg-only)
-export PATH="/opt/homebrew/opt/e2fsprogs/bin:/opt/homebrew/opt/e2fsprogs/sbin:$PATH"
-
-# Configure environment
-cp .env.darwin.example .env
-
-# Create data directory
-mkdir -p ~/Library/Application\ Support/hypeman
-
-# Run with hot reload (auto-detects macOS, builds, signs, and runs)
-make dev
-```
-
-The `make dev` command automatically detects macOS and handles building with vz support and signing with required entitlements.
-
-### Key Differences from Linux
-
-| Feature | Linux | macOS |
-|---------|-------|-------|
-| Hypervisors | Cloud Hypervisor, QEMU | vz (Virtualization.framework) |
-| Networking | TAP devices, bridges, iptables | NAT (built-in, automatic) |
-| Rate Limiting | HTB/tc | Not supported |
-| GPU Passthrough | VFIO | Not supported |
-| Disk Format | qcow2, raw | raw only |
-| Snapshots | Always available | macOS 14+ ARM64 only |
-
-### Limitations
-
-- **Networking**: macOS uses NAT networking automatically. No manual bridge/TAP configuration needed, but ingress requires discovering the VM's NAT IP.
-- **Rate Limiting**: Network and disk I/O rate limiting is not available on macOS.
-- **GPU**: PCI device passthrough is not supported on macOS.
-- **Disk Images**: qcow2 format is not directly supported; use raw disk images.
-- **Snapshots**: Requires macOS 14.0+ on Apple Silicon (ARM64).
-
-For detailed development setup, see [DEVELOPMENT.md](DEVELOPMENT.md).
 
 ## Development
 
