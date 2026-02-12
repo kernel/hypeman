@@ -347,7 +347,7 @@ dev-darwin: build-embedded $(AIR)
 	@rm -f ./tmp/main
 	PATH="/opt/homebrew/opt/e2fsprogs/sbin:$(PATH)" $(AIR) -c .air.darwin.toml
 
-# Run without hot reload (for testing)
+# Run without hot reload (for agents)
 run:
 	@if [ "$$(uname)" = "Darwin" ]; then \
 		$(MAKE) run-darwin; \
