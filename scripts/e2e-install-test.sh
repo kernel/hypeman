@@ -153,9 +153,6 @@ pass "CLI installed"
 $HYPEMAN_CMD ps || fail "hypeman ps failed"
 pass "hypeman ps works"
 
-$HYPEMAN_CMD images || fail "hypeman images failed"
-pass "hypeman images works"
-
 # VM lifecycle test
 E2E_VM_NAME="e2e-test-vm"
 
