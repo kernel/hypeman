@@ -33,13 +33,14 @@ warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 
 # Find the most recent release that has a specific artifact available
-# Usage: find_release_with_artifact <repo> <archive_prefix> <os> <arch>
+# Usage: find_release_with_artifact <repo> <archive_prefix> <os> <arch> [ext]
 # Returns: version tag (e.g., v0.5.0) or empty string if not found
 find_release_with_artifact() {
     local repo="$1"
     local archive_prefix="$2"
     local os="$3"
     local arch="$4"
+    local ext="${5:-tar.gz}"
 
     # Fetch recent release tags (up to 10)
     local tags
@@ -51,7 +52,7 @@ find_release_with_artifact() {
     # Check each release for the artifact
     for tag in $tags; do
         local version_num="${tag#v}"
-        local artifact_name="${archive_prefix}_${version_num}_${os}_${arch}.tar.gz"
+        local artifact_name="${archive_prefix}_${version_num}_${os}_${arch}.${ext}"
         local artifact_url="https://github.com/${repo}/releases/download/${tag}/${artifact_name}"
 
         # Check if artifact exists (follow redirects, fail silently)
@@ -627,11 +628,20 @@ fi
 
 CLI_REPO="kernel/hypeman-cli"
 
+# CLI releases use goreleaser naming: "macos" not "darwin", .zip not .tar.gz on macOS
+if [ "$OS" = "darwin" ]; then
+    CLI_OS="macos"
+    CLI_EXT="zip"
+else
+    CLI_OS="$OS"
+    CLI_EXT="tar.gz"
+fi
+
 if [ -z "$CLI_VERSION" ] || [ "$CLI_VERSION" == "latest" ]; then
     info "Fetching latest CLI version with available artifacts..."
-    CLI_VERSION=$(find_release_with_artifact "$CLI_REPO" "hypeman" "$OS" "$ARCH" || true)
+    CLI_VERSION=$(find_release_with_artifact "$CLI_REPO" "hypeman" "$CLI_OS" "$ARCH" "$CLI_EXT" || true)
     if [ -z "$CLI_VERSION" ]; then
-        warn "Failed to find a CLI release with artifacts for ${OS}/${ARCH}, skipping CLI installation"
+        warn "Failed to find a CLI release with artifacts for ${CLI_OS}/${ARCH}, skipping CLI installation"
     fi
 fi
 
@@ -639,14 +649,18 @@ if [ -n "$CLI_VERSION" ]; then
     info "Installing Hypeman CLI version: $CLI_VERSION"
 
     CLI_VERSION_NUM="${CLI_VERSION#v}"
-    CLI_ARCHIVE_NAME="hypeman_${CLI_VERSION_NUM}_${OS}_${ARCH}.tar.gz"
+    CLI_ARCHIVE_NAME="hypeman_${CLI_VERSION_NUM}_${CLI_OS}_${ARCH}.${CLI_EXT}"
     CLI_DOWNLOAD_URL="https://github.com/${CLI_REPO}/releases/download/${CLI_VERSION}/${CLI_ARCHIVE_NAME}"
 
     info "Downloading CLI ${CLI_ARCHIVE_NAME}..."
     if curl -fsSL "$CLI_DOWNLOAD_URL" -o "${TMP_DIR}/${CLI_ARCHIVE_NAME}"; then
         info "Extracting CLI..."
         mkdir -p "${TMP_DIR}/cli"
-        tar -xzf "${TMP_DIR}/${CLI_ARCHIVE_NAME}" -C "${TMP_DIR}/cli"
+        if [ "$CLI_EXT" = "zip" ]; then
+            unzip -qo "${TMP_DIR}/${CLI_ARCHIVE_NAME}" -d "${TMP_DIR}/cli"
+        else
+            tar -xzf "${TMP_DIR}/${CLI_ARCHIVE_NAME}" -C "${TMP_DIR}/cli"
+        fi
 
         if [ "$OS" = "darwin" ]; then
             info "Installing hypeman CLI to ${INSTALL_DIR}..."

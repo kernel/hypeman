@@ -146,46 +146,45 @@ else
     HYPEMAN_CMD="/usr/local/bin/hypeman"
 fi
 
-# Test CLI commands (skip if CLI was not installed)
-if [ -x "$HYPEMAN_CMD" ]; then
-    $HYPEMAN_CMD ps || fail "hypeman ps failed"
-    pass "hypeman ps works"
+# Verify CLI was installed
+[ -x "$HYPEMAN_CMD" ] || fail "hypeman CLI not found at $HYPEMAN_CMD"
+pass "CLI installed"
 
-    $HYPEMAN_CMD images || fail "hypeman images failed"
-    pass "hypeman images works"
+$HYPEMAN_CMD ps || fail "hypeman ps failed"
+pass "hypeman ps works"
 
-    # VM lifecycle test
-    E2E_VM_NAME="e2e-test-vm"
+$HYPEMAN_CMD images || fail "hypeman images failed"
+pass "hypeman images works"
 
-    $HYPEMAN_CMD pull alpine:latest || fail "hypeman pull failed"
-    pass "hypeman pull works"
+# VM lifecycle test
+E2E_VM_NAME="e2e-test-vm"
 
-    $HYPEMAN_CMD run --name "$E2E_VM_NAME" alpine:latest || fail "hypeman run failed"
-    pass "hypeman run works"
+$HYPEMAN_CMD pull alpine:latest || fail "hypeman pull failed"
+pass "hypeman pull works"
 
-    # Wait for VM to be ready
-    VM_READY=false
-    for i in $(seq 1 30); do
-        if $HYPEMAN_CMD exec "$E2E_VM_NAME" -- echo "hello" >/dev/null 2>&1; then
-            VM_READY=true
-            break
-        fi
-        sleep 2
-    done
-    [ "$VM_READY" = true ] || fail "VM did not become ready within 60s"
+$HYPEMAN_CMD run --name "$E2E_VM_NAME" alpine:latest || fail "hypeman run failed"
+pass "hypeman run works"
 
-    OUTPUT=$($HYPEMAN_CMD exec "$E2E_VM_NAME" -- echo "hello from e2e") || fail "hypeman exec failed"
-    echo "$OUTPUT" | grep -q "hello from e2e" || fail "hypeman exec output mismatch: $OUTPUT"
-    pass "hypeman exec works"
+# Wait for VM to be ready
+VM_READY=false
+for i in $(seq 1 30); do
+    if $HYPEMAN_CMD exec "$E2E_VM_NAME" -- echo "hello" >/dev/null 2>&1; then
+        VM_READY=true
+        break
+    fi
+    sleep 2
+done
+[ "$VM_READY" = true ] || fail "VM did not become ready within 60s"
 
-    $HYPEMAN_CMD stop "$E2E_VM_NAME" || fail "hypeman stop failed"
-    pass "hypeman stop works"
+OUTPUT=$($HYPEMAN_CMD exec "$E2E_VM_NAME" -- echo "hello from e2e") || fail "hypeman exec failed"
+echo "$OUTPUT" | grep -q "hello from e2e" || fail "hypeman exec output mismatch: $OUTPUT"
+pass "hypeman exec works"
 
-    $HYPEMAN_CMD rm "$E2E_VM_NAME" || fail "hypeman rm failed"
-    pass "hypeman rm works"
-else
-    warn "CLI not installed, skipping CLI smoke tests"
-fi
+$HYPEMAN_CMD stop "$E2E_VM_NAME" || fail "hypeman stop failed"
+pass "hypeman stop works"
+
+$HYPEMAN_CMD rm "$E2E_VM_NAME" || fail "hypeman rm failed"
+pass "hypeman rm works"
 
 # =============================================================================
 # Phase 5: Cleanup
