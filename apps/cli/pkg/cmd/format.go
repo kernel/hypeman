@@ -58,9 +58,14 @@ func (t *TableWriter) AddRow(cells ...string) {
 }
 
 // getTerminalWidth returns the terminal width. It tries the stdout
-// file descriptor first, then the COLUMNS env var, then defaults to 80.
+// file descriptor first, then falls back to stderr (which remains
+// connected to the terminal even when stdout is piped), then the
+// COLUMNS env var, then defaults to 80.
 func getTerminalWidth() int {
 	if w, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil && w > 0 {
+		return w
+	}
+	if w, _, err := term.GetSize(int(os.Stderr.Fd())); err == nil && w > 0 {
 		return w
 	}
 	if cols := os.Getenv("COLUMNS"); cols != "" {
