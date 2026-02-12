@@ -374,19 +374,6 @@ The `make dev` command automatically detects macOS and:
 - Signs with required entitlements
 - Runs with hot reload (no sudo required)
 
-### Alternative Commands
-
-```bash
-# Build and sign only (no hot reload)
-make sign-darwin
-
-# Verify entitlements are correct
-make verify-entitlements
-
-# Run manually after signing
-./bin/hypeman
-```
-
 ### Key Differences from Linux Development
 
 | Aspect | Linux | macOS |
@@ -457,22 +444,9 @@ Note: Full integration tests require Linux. On macOS, focus on unit tests and ma
 
 ### Known Limitations
 
-1. **Disk Format**: vz only supports raw disk images (not qcow2). Convert images:
-   ```bash
-   qemu-img convert -f qcow2 -O raw disk.qcow2 disk.raw
-   ```
+1. **Disk Format**: vz only supports raw disk images (not qcow2). The image pipeline handles conversion automatically.
 
-2. **Snapshots**: Only available on macOS 14+ (Sonoma) on Apple Silicon:
-   ```go
-   // Check support at runtime
-   valid, err := vmConfig.ValidateSaveRestoreSupport()
-   ```
-
-3. **Network Ingress**: VMs get DHCP addresses from macOS NAT. To access a VM's services:
-   - Query the VM's IP via guest agent
-   - Use vsock for internal communication (no NAT traversal needed)
-
-4. **In-Process VMM**: Unlike CH/QEMU which run as separate processes, vz VMs run in the hypeman process. If hypeman crashes, all VMs stop.
+2. **Snapshots**: Not currently supported on the vz hypervisor.
 
 ### Troubleshooting
 
