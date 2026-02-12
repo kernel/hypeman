@@ -1229,33 +1229,35 @@ func createErofsFromRegistry(config *BuildConfig, digest string) string {
 		}
 		blobResp.Body.Close()
 		log.Printf("  Layer %d/%d extracted (%d bytes)", i+1, len(layers), layer.Size)
-	}
 
-	// Process OCI whiteout files (.wh. prefixed files)
-	filepath.Walk(exportDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil
-		}
-		name := info.Name()
-		if strings.HasPrefix(name, ".wh.") {
-			if name == ".wh..wh..opq" {
-				// Opaque whiteout: remove all siblings
-				dir := filepath.Dir(path)
-				entries, _ := os.ReadDir(dir)
-				for _, e := range entries {
-					if e.Name() != ".wh..wh..opq" {
-						os.RemoveAll(filepath.Join(dir, e.Name()))
-					}
-				}
-			} else {
-				// Regular whiteout: remove the target file
-				target := filepath.Join(filepath.Dir(path), strings.TrimPrefix(name, ".wh."))
-				os.RemoveAll(target)
+		// Process OCI whiteout files for THIS layer before extracting the next.
+		// Whiteouts must be applied per-layer: a whiteout in layer N deletes files
+		// from layers 0..N-1, but must not affect files added by layers N+1..last.
+		filepath.Walk(exportDir, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return nil
 			}
-			os.Remove(path)
-		}
-		return nil
-	})
+			name := info.Name()
+			if strings.HasPrefix(name, ".wh.") {
+				if name == ".wh..wh..opq" {
+					// Opaque whiteout: remove all siblings
+					dir := filepath.Dir(path)
+					entries, _ := os.ReadDir(dir)
+					for _, e := range entries {
+						if e.Name() != ".wh..wh..opq" {
+							os.RemoveAll(filepath.Join(dir, e.Name()))
+						}
+					}
+				} else {
+					// Regular whiteout: remove the target file
+					target := filepath.Join(filepath.Dir(path), strings.TrimPrefix(name, ".wh."))
+					os.RemoveAll(target)
+				}
+				os.Remove(path)
+			}
+			return nil
+		})
+	}
 
 	// Create erofs disk
 	erofsDst := config.SourcePath + "/.hypeman-rootfs.erofs"

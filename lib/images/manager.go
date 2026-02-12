@@ -226,10 +226,20 @@ func (m *manager) RegisterPrebuiltImage(ctx context.Context, repo, digestStr, im
 		}
 	}
 
-	// Get disk size
+	// Align to sector boundary (required by hypervisors, same as convertToErofs in disk.go)
 	diskInfo, err := os.Stat(dstPath)
 	if err != nil {
 		return fmt.Errorf("stat prebuilt disk: %w", err)
+	}
+	if diskInfo.Size()%sectorSize != 0 {
+		alignedSize := alignToSector(diskInfo.Size())
+		if err := os.Truncate(dstPath, alignedSize); err != nil {
+			return fmt.Errorf("align prebuilt disk to sector boundary: %w", err)
+		}
+		diskInfo, err = os.Stat(dstPath)
+		if err != nil {
+			return fmt.Errorf("stat aligned prebuilt disk: %w", err)
+		}
 	}
 
 	// Extract metadata from OCI cache with retry.
