@@ -650,7 +650,7 @@ if [ -n "$CLI_VERSION" ]; then
 
         if [ "$OS" = "darwin" ]; then
             info "Installing hypeman CLI to ${INSTALL_DIR}..."
-            install -m 755 "${TMP_DIR}/cli/hypeman" "${INSTALL_DIR}/hypeman"
+            $SUDO install -m 755 "${TMP_DIR}/cli/hypeman" "${INSTALL_DIR}/hypeman"
         else
             # Install CLI binary
             info "Installing hypeman CLI to ${INSTALL_DIR}..."
