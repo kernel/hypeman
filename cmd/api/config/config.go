@@ -208,7 +208,7 @@ func Load() *Config {
 
 		// Build system configuration
 		MaxConcurrentSourceBuilds: getEnvInt("MAX_CONCURRENT_SOURCE_BUILDS", 2),
-		BuilderImage:              getEnv("BUILDER_IMAGE", "hypeman/builder:latest"),
+		BuilderImage:              getEnv("BUILDER_IMAGE", ""),
 		RegistryURL:               getEnv("REGISTRY_URL", "localhost:8080"),
 		RegistryInsecure:          getEnvBool("REGISTRY_INSECURE", false),
 		RegistryCACertFile:        getEnv("REGISTRY_CA_CERT_FILE", ""), // Path to CA cert for registry TLS

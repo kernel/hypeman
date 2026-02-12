@@ -202,6 +202,10 @@ type BuildResult struct {
 
 	// DurationMS is the build duration in milliseconds
 	DurationMS int64 `json:"duration_ms"`
+
+	// ErofsDiskPath is the relative path to a pre-built erofs disk on the source volume.
+	// When set, the host can skip the slow umoci unpack + mkfs.erofs conversion pipeline.
+	ErofsDiskPath string `json:"erofs_disk_path,omitempty"`
 }
 
 // DefaultBuildPolicy returns the default build policy
