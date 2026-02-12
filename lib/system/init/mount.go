@@ -85,7 +85,7 @@ func waitForDevice(device string, timeout time.Duration) error {
 }
 
 // setupOverlay sets up the overlay filesystem:
-// - /dev/vda: readonly rootfs (ext4)
+// - /dev/vda: readonly rootfs (erofs or ext4, auto-detected)
 // - /dev/vdb: writable overlay disk (ext4)
 // - /overlay/newroot: merged overlay filesystem
 func setupOverlay(log *Logger) error {
@@ -105,8 +105,9 @@ func setupOverlay(log *Logger) error {
 		}
 	}
 
-	// Mount readonly rootfs from /dev/vda (ext4 filesystem)
-	if err := mount("/dev/vda", "/lower", "ext4", "ro"); err != nil {
+	// Mount readonly rootfs from /dev/vda.
+	// Filesystem type is auto-detected to support both ext4 (legacy) and erofs (default).
+	if err := mount("/dev/vda", "/lower", "", "ro"); err != nil {
 		return fmt.Errorf("mount rootfs: %w", err)
 	}
 	log.Info("overlay", "mounted rootfs from /dev/vda")
@@ -179,9 +180,13 @@ func bindMountsToNewRoot(log *Logger) error {
 	return nil
 }
 
-// mount executes a mount command
+// mount executes a mount command.
+// If fstype is empty, the kernel auto-detects the filesystem type.
 func mount(source, target, fstype, options string) error {
-	args := []string{"-t", fstype}
+	var args []string
+	if fstype != "" {
+		args = append(args, "-t", fstype)
+	}
 	if options != "" {
 		args = append(args, "-o", options)
 	}

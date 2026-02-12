@@ -14,12 +14,15 @@ type ExportFormat string
 
 const (
 	FormatExt4  ExportFormat = "ext4"  // Read-only ext4 (app images, default)
-	FormatErofs ExportFormat = "erofs" // Read-only compressed (future: when kernel supports it)
+	FormatErofs ExportFormat = "erofs" // Read-only compressed with LZ4 (faster creation, smaller images)
 	FormatCpio  ExportFormat = "cpio"  // Uncompressed archive (initrd, fast boot)
 )
 
-// DefaultImageFormat is the default export format for OCI images
-const DefaultImageFormat = FormatExt4
+// DefaultImageFormat is the default export format for OCI images.
+// erofs is used because app rootfs disks are read-only in the VM (mounted
+// as the lower layer of an overlayfs). erofs with LZ4 compression produces
+// smaller disk images and is faster to create than ext4.
+const DefaultImageFormat = FormatErofs
 
 // ExportRootfs exports rootfs directory in specified format (public for system manager)
 func ExportRootfs(rootfsDir, outputPath string, format ExportFormat) (int64, error) {
