@@ -803,6 +803,11 @@ func (m *manager) extractPrebuiltErofs(ctx context.Context, id, sourceVolID stri
 		umountCmd.Run()
 	}()
 
+	// Sanitize the path from the VM to prevent path traversal (defense in depth)
+	if filepath.IsAbs(result.ErofsDiskPath) || strings.Contains(result.ErofsDiskPath, "..") {
+		return fmt.Errorf("invalid erofs disk path from VM: %s", result.ErofsDiskPath)
+	}
+
 	// Check that the erofs file exists on the volume
 	erofsSrc := filepath.Join(mountPoint, result.ErofsDiskPath)
 	if _, err := os.Stat(erofsSrc); err != nil {
