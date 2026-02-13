@@ -431,7 +431,23 @@ func TestIsLocalRegistry(t *testing.T) {
 		{"localhost/some/image", true},
 		{"127.0.0.1:5000/test/image", true},
 		{"127.0.0.1/test", true},
-		{"10.102.0.1:8080/tenant/app", true}, // VM gateway IP
+		{"127.0.0.100:8080/test", true}, // Any 127.x.x.x
+
+		// RFC 1918 private IPs - 10.0.0.0/8
+		{"10.102.0.1:8080/tenant/app", true},
+		{"10.0.0.1:5000/builds/abc", true},
+		{"10.255.255.255/image", true},
+
+		// RFC 1918 private IPs - 172.16.0.0/12 (172.16-31.x.x)
+		{"172.30.0.1:8080/builds/xyz", true}, // Production gateway
+		{"172.16.0.1:8080/image", true},
+		{"172.31.255.255/image", true},
+		{"172.15.0.1/image", false}, // Outside 172.16-31 range
+		{"172.32.0.1/image", false}, // Outside 172.16-31 range
+
+		// RFC 1918 private IPs - 192.168.0.0/16
+		{"192.168.1.1:8080/image", true},
+		{"192.168.0.1/builds/test", true},
 
 		// Remote registries - should use cached path
 		{"docker.io/library/alpine", false},
@@ -439,10 +455,11 @@ func TestIsLocalRegistry(t *testing.T) {
 		{"gcr.io/project/image", false},
 		{"quay.io/organization/image", false},
 		{"registry.example.com/image", false},
+		{"8.8.8.8:5000/image", false}, // Public IP
 
 		// Edge cases
-		{"alpine", false},           // Simple name implies docker.io
-		{"myimage:latest", false},   // Simple name with tag implies docker.io
+		{"alpine", false},              // Simple name implies docker.io
+		{"myimage:latest", false},      // Simple name with tag implies docker.io
 		{"localregistry/image", false}, // Not localhost, just starts with "local"
 	}
 

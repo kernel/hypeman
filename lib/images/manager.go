@@ -498,7 +498,7 @@ func (m *manager) TotalOCICacheBytes(ctx context.Context) (int64, error) {
 }
 
 // isLocalRegistry checks if a repository reference points to a local registry.
-// Local registries include localhost and 127.0.0.1 variants.
+// Local registries include localhost, loopback, and private IP addresses (RFC 1918).
 // For local registries, we skip the OCI cache since images are only pulled once.
 func isLocalRegistry(repository string) bool {
 	// Extract the registry host from the repository
@@ -510,16 +510,41 @@ func isLocalRegistry(repository string) bool {
 
 	host := parts[0]
 
+	// Strip port if present (e.g., "172.30.0.1:8080" -> "172.30.0.1")
+	if colonIdx := strings.LastIndex(host, ":"); colonIdx != -1 {
+		host = host[:colonIdx]
+	}
+
 	// Check for localhost patterns
 	if strings.HasPrefix(host, "localhost") {
 		return true
 	}
-	if strings.HasPrefix(host, "127.0.0.1") {
+
+	// Check for loopback
+	if strings.HasPrefix(host, "127.") {
 		return true
 	}
-	// Internal VM communication uses 10.102.0.1 (gateway IP)
-	if strings.HasPrefix(host, "10.102.0.1") {
+
+	// Check for RFC 1918 private IP addresses (used by gateway IPs)
+	// 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
+	if strings.HasPrefix(host, "10.") {
 		return true
+	}
+	if strings.HasPrefix(host, "192.168.") {
+		return true
+	}
+	// 172.16.0.0 - 172.31.255.255
+	if strings.HasPrefix(host, "172.") {
+		// Extract second octet
+		octets := strings.Split(host, ".")
+		if len(octets) >= 2 {
+			var second int
+			if _, err := fmt.Sscanf(octets[1], "%d", &second); err == nil {
+				if second >= 16 && second <= 31 {
+					return true
+				}
+			}
+		}
 	}
 
 	return false
