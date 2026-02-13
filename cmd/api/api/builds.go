@@ -41,7 +41,7 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 
 	// Parse multipart form fields
 	var sourceData []byte
-	var baseImageDigest, cacheScope, dockerfile string
+	var baseImageDigest, cacheScope, dockerfile, imageName string
 	var timeoutSeconds int
 	var secrets []builds.SecretRef
 
@@ -118,6 +118,15 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 					Message: "secrets must be a JSON array of {\"id\": \"...\", \"env_var\": \"...\"} objects",
 				}, nil
 			}
+		case "image_name":
+			data, err := io.ReadAll(part)
+			if err != nil {
+				return oapi.CreateBuild400JSONResponse{
+					Code:    "invalid_request",
+					Message: "failed to read image_name field",
+				}, nil
+			}
+			imageName = string(data)
 		}
 		part.Close()
 	}
@@ -138,6 +147,7 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 		CacheScope:      cacheScope,
 		Dockerfile:      dockerfile,
 		Secrets:         secrets,
+		ImageName:       imageName,
 	}
 
 	// Apply timeout if provided

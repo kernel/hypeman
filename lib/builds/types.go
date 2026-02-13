@@ -52,6 +52,10 @@ type CreateBuildRequest struct {
 
 	// Secrets are secret references to inject during build
 	Secrets []SecretRef `json:"secrets,omitempty"`
+
+	// ImageName optionally sets a custom image name for the build output.
+	// When set, the image is pushed to {registry}/{image_name} instead of {registry}/builds/{id}.
+	ImageName string `json:"image_name,omitempty"`
 }
 
 // BuildPolicy defines resource limits and network policy for a build
@@ -137,6 +141,10 @@ type BuildConfig struct {
 
 	// NetworkMode is "isolated" or "egress"
 	NetworkMode string `json:"network_mode"`
+
+	// ImageName optionally sets a custom image name for the build output.
+	// When set, the image is pushed to {registry}/{image_name} instead of {registry}/builds/{id}.
+	ImageName string `json:"image_name,omitempty"`
 }
 
 // BuildEvent represents a typed SSE event for build streaming

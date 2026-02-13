@@ -48,6 +48,7 @@ type BuildConfig struct {
 	Secrets         []SecretRef       `json:"secrets,omitempty"`
 	TimeoutSeconds  int               `json:"timeout_seconds"`
 	NetworkMode     string            `json:"network_mode"`
+	ImageName       string            `json:"image_name,omitempty"`
 }
 
 // SecretRef references a secret to inject during build
@@ -535,6 +536,9 @@ func runBuild(ctx context.Context, config *BuildConfig, logWriter io.Writer) (st
 
 	// Build output reference
 	outputRef := fmt.Sprintf("%s/builds/%s", config.RegistryURL, config.JobID)
+	if config.ImageName != "" {
+		outputRef = fmt.Sprintf("%s/%s", config.RegistryURL, config.ImageName)
+	}
 
 	// Build arguments
 	// Use registry.insecure=true for internal HTTP registries

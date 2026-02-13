@@ -189,7 +189,11 @@ func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourc
 
 	// Generate scoped registry token for this build
 	// Token grants push access to the build output repo and cache repo
-	allowedRepos := []string{fmt.Sprintf("builds/%s", id)}
+	outputRepo := fmt.Sprintf("builds/%s", id)
+	if req.ImageName != "" {
+		outputRepo = req.ImageName
+	}
+	allowedRepos := []string{outputRepo}
 	if req.CacheScope != "" {
 		allowedRepos = append(allowedRepos, fmt.Sprintf("cache/%s", req.CacheScope))
 	}
@@ -216,6 +220,7 @@ func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourc
 		Secrets:         req.Secrets,
 		TimeoutSeconds:  policy.TimeoutSeconds,
 		NetworkMode:     policy.NetworkMode,
+		ImageName:       req.ImageName,
 	}
 	if err := writeBuildConfig(m.paths, id, buildConfig); err != nil {
 		deleteBuild(m.paths, id)
@@ -294,6 +299,9 @@ func (m *manager) runBuild(ctx context.Context, id string, req CreateBuildReques
 
 	m.logger.Info("build succeeded", "id", id, "digest", result.ImageDigest, "duration", duration)
 	imageRef := fmt.Sprintf("%s/builds/%s", m.config.RegistryURL, id)
+	if req.ImageName != "" {
+		imageRef = fmt.Sprintf("%s/%s", m.config.RegistryURL, req.ImageName)
+	}
 	m.updateBuildComplete(id, StatusReady, &result.ImageDigest, nil, &result.Provenance, &durationMS)
 
 	// Update with image ref
@@ -984,7 +992,11 @@ func (m *manager) refreshBuildToken(buildID string, req *CreateBuildRequest) err
 	}
 
 	// Generate allowed repos list
-	allowedRepos := []string{fmt.Sprintf("builds/%s", buildID)}
+	outputRepo := fmt.Sprintf("builds/%s", buildID)
+	if req.ImageName != "" {
+		outputRepo = req.ImageName
+	}
+	allowedRepos := []string{outputRepo}
 	if req.CacheScope != "" {
 		allowedRepos = append(allowedRepos, fmt.Sprintf("cache/%s", req.CacheScope))
 	}
