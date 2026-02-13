@@ -224,9 +224,8 @@ func redirectToConsole(device string) {
 }
 
 // copyGuestAgent copies the guest-agent binary to the target location in the new root.
-// It skips copying if:
-// - skipGuestAgent config option is true
-// - The destination file already exists (lazy copy optimization)
+// Always copies from initrd to ensure the binary matches the current version and is not
+// corrupted (e.g., after a force-kill that left the overlay in a dirty state).
 func copyGuestAgent(log *Logger, skipGuestAgent bool) error {
 	const (
 		src = "/usr/local/bin/guest-agent"
@@ -236,12 +235,6 @@ func copyGuestAgent(log *Logger, skipGuestAgent bool) error {
 	// Check for skip via config
 	if skipGuestAgent {
 		log.Info("hypeman-init:agent", "skipping guest-agent copy (skip_guest_agent=true)")
-		return nil
-	}
-
-	// Check if destination already exists (lazy copy - skip if already present)
-	if _, err := os.Stat(dst); err == nil {
-		log.Info("hypeman-init:agent", "guest-agent already exists, skipping copy")
 		return nil
 	}
 
@@ -256,7 +249,7 @@ func copyGuestAgent(log *Logger, skipGuestAgent bool) error {
 		return fmt.Errorf("read source: %w", err)
 	}
 
-	// Write to destination
+	// Write to destination (always overwrite to ensure correct binary after restarts)
 	if err := os.WriteFile(dst, data, 0755); err != nil {
 		return fmt.Errorf("write destination: %w", err)
 	}
