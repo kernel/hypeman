@@ -198,13 +198,19 @@ func TestVZBasicLifecycle(t *testing.T) {
 	assert.Equal(t, StateRunning, inst.State)
 	t.Log("Instance restarted")
 
-	// Wait for guest agent after restart
-	err = waitForExecAgent(ctx, mgr, inst.Id, 30*time.Second)
-	require.NoError(t, err, "guest agent should be ready after restart")
-
-	// Verify exec still works after restart
-	output, exitCode, err = vzExecCommand(ctx, inst, "echo", "restarted")
-	require.NoError(t, err)
+	// Wait for guest agent after restart by retrying exec directly.
+	// We can't use waitForExecAgent here because the serial log may still
+	// contain the "[guest-agent] listening" message from the first boot.
+	var execErr error
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		output, exitCode, execErr = vzExecCommand(ctx, inst, "echo", "restarted")
+		if execErr == nil && exitCode == 0 {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	require.NoError(t, execErr, "exec after restart should succeed")
 	require.Equal(t, 0, exitCode)
 	assert.Equal(t, "restarted", strings.TrimSpace(output))
 	t.Log("Exec after restart passed")
