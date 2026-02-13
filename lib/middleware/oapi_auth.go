@@ -17,8 +17,10 @@ type contextKey string
 
 const userIDKey contextKey = "user_id"
 
-// registryPathPattern matches /v2/{repository}/... paths
-var registryPathPattern = regexp.MustCompile(`^/v2/([^/]+(?:/[^/]+)?)/`)
+// registryPathPattern matches /v2/{repository}/(manifests|blobs|tags)/... paths.
+// Repository names can have arbitrary depth (e.g., "org/team/myapp"), so we match
+// greedily up to the known OCI Distribution Spec endpoint path segments.
+var registryPathPattern = regexp.MustCompile(`^/v2/(.+)/(?:manifests|blobs|tags)/`)
 
 // RegistryTokenClaims contains the claims for a scoped registry access token.
 // This mirrors the type in lib/builds/registry_token.go to avoid circular imports.
