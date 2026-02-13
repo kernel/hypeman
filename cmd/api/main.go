@@ -304,7 +304,7 @@ func run() error {
 		r.Use(middleware.RealIP)
 		r.Use(middleware.Logger)
 		r.Use(middleware.Recoverer)
-		r.Use(mw.JwtAuth(app.Config.JwtSecret, app.Config.SubnetCIDR))
+		r.Use(mw.JwtAuth(app.Config.JwtSecret))
 
 		// Token endpoint for Docker Registry Token Authentication
 		// This is called by clients (like BuildKit) after receiving a 401 with WWW-Authenticate

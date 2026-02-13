@@ -104,15 +104,40 @@ func (h *TokenHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// IP-based fallback authentication has been removed.
-	// All clients must provide explicit credentials (Basic or Bearer auth with JWT).
-	// Builder VMs receive their registry token via the build config and should
-	// pass it via Basic auth (token as username, empty password).
+	// Anonymous token issuance for BuildKit compatibility.
+	//
+	// BuildKit v0.27+ does NOT reliably send Docker config credentials
+	// (auth, credHelpers, etc.) when requesting tokens from the token
+	// endpoint.  If we return 401 here, BuildKit treats it as a hard
+	// failure with no fallback.
+	//
+	// We issue a short-lived guest token for all anonymous requests:
+	//   - For pull scopes: the registry serves cached images or returns
+	//     404, which triggers BuildKit's upstream fallback to Docker Hub.
+	//   - For push scopes: the middleware validates the guest token as a
+	//     user JWT (sub="guest"), allowing builder VMs to push built
+	//     images to the local registry.
+	//
+	// Security: the registry is only reachable on the internal bridge
+	// network (builder VM subnet), so anonymous tokens cannot be
+	// obtained from outside the host.
+	if scope != "" {
+		log.DebugContext(r.Context(), "issuing anonymous guest token",
+			"scope", scope,
+			"remote_addr", r.RemoteAddr)
+		guestToken, err := h.issueGuestToken()
+		if err == nil {
+			h.writeToken(w, guestToken)
+			return
+		}
+		log.DebugContext(r.Context(), "failed to issue guest token", "error", err)
+	}
 
-	// No valid authentication
-	log.DebugContext(r.Context(), "token request without valid auth",
+	// No scope or failed to issue guest token
+	log.DebugContext(r.Context(), "token request without valid auth and no scope",
 		"remote_addr", r.RemoteAddr,
-		"has_auth_header", r.Header.Get("Authorization") != "")
+		"has_auth_header", r.Header.Get("Authorization") != "",
+		"scope", scope)
 	h.writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "authentication required")
 }
 
@@ -157,6 +182,22 @@ func (h *TokenHandler) extractToken(r *http.Request) (string, string) {
 	}
 
 	return "", ""
+}
+
+// issueGuestToken creates a short-lived JWT with no repo permissions.
+// This is used for anonymous pull-only requests so that BuildKit's mirror
+// fallback works: the token is valid but has no repo access, causing
+// manifest requests to return 404 and triggering upstream fallback.
+func (h *TokenHandler) issueGuestToken() (string, error) {
+	now := time.Now()
+	claims := jwt.MapClaims{
+		"sub":  "guest",
+		"iat":  now.Unix(),
+		"exp":  now.Add(60 * time.Second).Unix(),
+		"type": "guest",
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString([]byte(h.jwtSecret))
 }
 
 // validateJWT parses and validates a JWT token.

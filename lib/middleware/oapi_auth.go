@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"strings"
 
@@ -213,43 +212,6 @@ func isTokenEndpoint(path string) bool {
 	return path == "/v2/token" || path == "/v2/token/"
 }
 
-// isInternalVMRequest checks if the request is from an internal VM network.
-// This is used as a fallback for builder VMs that don't have token auth yet.
-//
-// SECURITY: We only trust RemoteAddr, not X-Real-IP or X-Forwarded-For headers,
-// as those can be spoofed by attackers to bypass authentication.
-func isInternalVMRequest(r *http.Request, subnetCIDR ...string) bool {
-	// Use only RemoteAddr - never trust client-supplied headers for auth decisions
-	ipStr := r.RemoteAddr
-
-	// RemoteAddr is "IP:port" format, extract just the IP
-	if idx := strings.LastIndex(ipStr, ":"); idx != -1 {
-		ipStr = ipStr[:idx]
-	}
-
-	ip := net.ParseIP(ipStr)
-	if ip == nil {
-		return false
-	}
-
-	// If a subnet CIDR is provided, check if the IP belongs to it
-	for _, cidr := range subnetCIDR {
-		if cidr == "" {
-			continue
-		}
-		_, subnet, err := net.ParseCIDR(cidr)
-		if err != nil {
-			continue
-		}
-		if subnet.Contains(ip) {
-			return true
-		}
-	}
-
-	// Legacy fallback for hardcoded 10.102.x.x (original default subnet)
-	return strings.HasPrefix(ipStr, "10.102.")
-}
-
 // extractRepoFromPath extracts the repository name from a registry path.
 // Uses the docker/distribution router which properly handles repository names
 // that can contain slashes (e.g., "builds/abc123" from "/v2/builds/abc123/manifests/latest").
@@ -373,8 +335,9 @@ func validateRegistryToken(tokenString, jwtSecret, requestPath, method string) (
 }
 
 // JwtAuth creates a chi middleware that validates JWT bearer tokens.
-// Optional subnetCIDR parameter allows specifying the VM subnet for internal VM auth fallback.
-func JwtAuth(jwtSecret string, subnetCIDR ...string) func(http.Handler) http.Handler {
+// For registry paths (/v2/...), it supports both Bearer and Basic auth (for BuildKit compatibility).
+// For all other paths, it requires a Bearer token with a valid user JWT.
+func JwtAuth(jwtSecret string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			log := logger.FromContext(r.Context())
@@ -452,17 +415,6 @@ func JwtAuth(jwtSecret string, subnetCIDR ...string) func(http.Handler) http.Han
 					} else {
 						log.DebugContext(r.Context(), "failed to extract token", "error", err)
 					}
-				}
-
-				// Fallback: Allow internal VM network for registry pushes
-				// This is a transitional fallback for older builder images without token auth
-				if isInternalVMRequest(r, subnetCIDR...) {
-					log.DebugContext(r.Context(), "allowing internal VM request via IP fallback (deprecated)",
-						"remote_addr", r.RemoteAddr,
-						"path", r.URL.Path)
-					ctx := context.WithValue(r.Context(), userIDKey, "internal-builder-legacy")
-					next.ServeHTTP(w, r.WithContext(ctx))
-					return
 				}
 
 				// Registry auth failed - return 401 with WWW-Authenticate header

@@ -13,7 +13,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -583,38 +582,18 @@ func setupRegistryAuth(config *BuildConfig) error {
 		registryHost = strings.TrimPrefix(registryHost, "http://")
 	}
 
-	token := config.RegistryToken
-
-	if token == "" {
-		log.Println("No registry token provided, skipping auth setup")
-		return nil
-	}
-
-	// Docker config format expects base64-encoded "username:password" or just the token
-	// For bearer tokens, we use the token directly as the "auth" value
-	// Format: base64(token + ":") - empty password
-	authValue := base64.StdEncoding.EncodeToString([]byte(token + ":"))
-
-	// Create the Docker config structure
-	// Note: Docker config uses host without scheme (e.g., "10.102.0.1:8443")
-	// We use both auth (Basic) and identitytoken (JWT) to support different BuildKit versions
-	dockerConfig := map[string]interface{}{
-		"auths": map[string]interface{}{
-			registryHost: map[string]string{
-				"auth":          authValue, // Basic auth: base64(jwt:)
-				"identitytoken": token,     // JWT directly for OAuth2-style auth
-			},
-		},
-		"credsStore":  "",
-		"credHelpers": map[string]string{},
-	}
+	// Write an empty Docker config so BuildKit doesn't try to use any
+	// host-level credential stores.  Authentication with our registry is
+	// handled server-side: the token endpoint issues anonymous guest tokens
+	// for all scoped requests, so BuildKit needs no client-side credentials.
+	dockerConfig := map[string]interface{}{}
 
 	configData, err := json.MarshalIndent(dockerConfig, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal docker config: %w", err)
 	}
 
-	log.Printf("Docker config created for registry %s (auth length: %d)", registryHost, len(authValue))
+	log.Printf("Docker config created for registry %s (server-side guest tokens)", registryHost)
 
 	// Write to both root and builder user config dirs
 	dockerDirs := []string{
