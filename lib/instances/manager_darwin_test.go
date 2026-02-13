@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
@@ -100,7 +101,10 @@ func TestVZBasicLifecycle(t *testing.T) {
 		Hypervisor:     hypervisor.TypeVZ,
 		Env:            map[string]string{"TEST_VAR": "hello"},
 	})
-	require.NoError(t, err)
+	if err != nil {
+		dumpVZShimLogs(t, tmpDir)
+		require.NoError(t, err)
+	}
 	require.NotNil(t, inst)
 	assert.Equal(t, StateRunning, inst.State)
 	assert.Equal(t, hypervisor.TypeVZ, inst.HypervisorType)
@@ -213,7 +217,10 @@ func TestVZExecAndShutdown(t *testing.T) {
 		NetworkEnabled: false,
 		Hypervisor:     hypervisor.TypeVZ,
 	})
-	require.NoError(t, err)
+	if err != nil {
+		dumpVZShimLogs(t, tmpDir)
+		require.NoError(t, err)
+	}
 	assert.Equal(t, StateRunning, inst.State)
 	t.Logf("Instance created: %s", inst.Id)
 
@@ -261,6 +268,18 @@ func TestVZExecAndShutdown(t *testing.T) {
 	_, err = mgr.GetInstance(ctx, inst.Id)
 	assert.ErrorIs(t, err, ErrNotFound)
 	t.Log("Instance deleted")
+}
+
+// dumpVZShimLogs logs any vz-shim log files found under tmpDir for debugging CI failures.
+func dumpVZShimLogs(t *testing.T, tmpDir string) {
+	t.Helper()
+	logFiles, _ := filepath.Glob(filepath.Join(tmpDir, "guests", "*", "logs", "vz-shim.log"))
+	for _, logFile := range logFiles {
+		content, err := os.ReadFile(logFile)
+		if err == nil && len(content) > 0 {
+			t.Logf("vz-shim log (%s):\n%s", logFile, string(content))
+		}
+	}
 }
 
 // checkProcessGone verifies a process no longer exists.
