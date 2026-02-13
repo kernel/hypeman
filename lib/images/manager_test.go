@@ -420,6 +420,40 @@ func TestImportLocalImageFromOCICache(t *testing.T) {
 	t.Logf("Disk path verified: %s (%d bytes)", diskPath, diskStat.Size())
 }
 
+// TestIsLocalRegistry tests the isLocalRegistry helper function
+func TestIsLocalRegistry(t *testing.T) {
+	tests := []struct {
+		repository string
+		isLocal    bool
+	}{
+		// Local registries - should use streaming
+		{"localhost:8080/internal/builder", true},
+		{"localhost/some/image", true},
+		{"127.0.0.1:5000/test/image", true},
+		{"127.0.0.1/test", true},
+		{"10.102.0.1:8080/tenant/app", true}, // VM gateway IP
+
+		// Remote registries - should use cached path
+		{"docker.io/library/alpine", false},
+		{"ghcr.io/owner/repo", false},
+		{"gcr.io/project/image", false},
+		{"quay.io/organization/image", false},
+		{"registry.example.com/image", false},
+
+		// Edge cases
+		{"alpine", false},           // Simple name implies docker.io
+		{"myimage:latest", false},   // Simple name with tag implies docker.io
+		{"localregistry/image", false}, // Not localhost, just starts with "local"
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.repository, func(t *testing.T) {
+			result := isLocalRegistry(tt.repository)
+			require.Equal(t, tt.isLocal, result, "isLocalRegistry(%q) should be %v", tt.repository, tt.isLocal)
+		})
+	}
+}
+
 // waitForReady waits for an image build to complete
 func waitForReady(t *testing.T, mgr Manager, ctx context.Context, imageName string) {
 	for i := 0; i < 600; i++ {

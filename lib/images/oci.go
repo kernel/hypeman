@@ -3,7 +3,10 @@ package images
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 
@@ -423,4 +426,220 @@ type containerMetadata struct {
 	Cmd        []string
 	Env        map[string]string
 	WorkingDir string
+}
+
+// streamingUnpack extracts layers directly from registry to target directory
+// without writing to the OCI cache first. This is faster for one-time conversions
+// (like building images from a local registry) because it eliminates the
+// cache write/read cycle.
+//
+// The flow is: Registry Blob -> HTTP -> go-containerregistry -> tar extraction -> rootfs/
+// vs traditional: Registry Blob -> HTTP -> OCI Cache -> umoci -> rootfs/
+func (c *ociClient) streamingUnpack(ctx context.Context, imageRef string, targetDir string) (*pullResult, error) {
+	return c.streamingUnpackWithPlatform(ctx, imageRef, targetDir, vmPlatform())
+}
+
+func (c *ociClient) streamingUnpackWithPlatform(ctx context.Context, imageRef string, targetDir string, platform gcr.Platform) (*pullResult, error) {
+	ref, err := name.ParseReference(imageRef)
+	if err != nil {
+		return nil, fmt.Errorf("parse image reference: %w", err)
+	}
+
+	// Fetch image from registry (lazy - doesn't download layer blobs yet)
+	img, err := remote.Image(ref,
+		remote.WithContext(ctx),
+		remote.WithAuthFromKeychain(authn.DefaultKeychain),
+		remote.WithPlatform(platform))
+	if err != nil {
+		return nil, fmt.Errorf("fetch image manifest: %w", wrapRegistryError(err))
+	}
+
+	// Get image digest for return value
+	imgDigest, err := img.Digest()
+	if err != nil {
+		return nil, fmt.Errorf("get image digest: %w", err)
+	}
+
+	// Pre-create target directory
+	if err := os.MkdirAll(targetDir, 0755); err != nil {
+		return nil, fmt.Errorf("create target dir: %w", err)
+	}
+
+	// Get layers in order
+	layers, err := img.Layers()
+	if err != nil {
+		return nil, fmt.Errorf("get layers: %w", err)
+	}
+
+	// Extract each layer in order, applying whiteouts between layers
+	for i, layer := range layers {
+		mediaType, err := layer.MediaType()
+		if err != nil {
+			return nil, fmt.Errorf("get layer %d mediatype: %w", i, err)
+		}
+
+		// Get uncompressed reader - go-containerregistry handles decompression
+		// automatically based on the media type (gzip, zstd, etc.)
+		reader, err := layer.Uncompressed()
+		if err != nil {
+			return nil, fmt.Errorf("get layer %d reader: %w", i, err)
+		}
+
+		// Extract layer using tar
+		if err := extractTarStream(ctx, reader, targetDir); err != nil {
+			reader.Close()
+			return nil, fmt.Errorf("extract layer %d (%s): %w", i, mediaType, err)
+		}
+		reader.Close()
+
+		// Process whiteouts after each layer
+		if err := processWhiteouts(targetDir); err != nil {
+			return nil, fmt.Errorf("process whiteouts for layer %d: %w", i, err)
+		}
+	}
+
+	// Extract metadata from image config
+	meta, err := extractMetadataFromImage(img)
+	if err != nil {
+		return nil, fmt.Errorf("extract metadata: %w", err)
+	}
+
+	return &pullResult{
+		Metadata: meta,
+		Digest:   imgDigest.String(),
+	}, nil
+}
+
+// extractTarStream extracts a tar stream to the target directory using the tar command.
+// This is more reliable than Go's archive/tar for handling all edge cases
+// (special files, permissions, extended attributes, etc.)
+func extractTarStream(ctx context.Context, reader io.Reader, targetDir string) error {
+	// Use tar command for extraction - handles all edge cases properly
+	cmd := exec.CommandContext(ctx, "tar", "-xf", "-", "-C", targetDir, "--no-same-owner")
+	cmd.Stdin = reader
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("tar extraction failed: %w", err)
+	}
+	return nil
+}
+
+// processWhiteouts handles OCI whiteout files in the target directory.
+// Whiteouts are special marker files that indicate deletion in layered filesystems:
+// - .wh.<filename>: Delete the file/directory named <filename>
+// - .wh..wh..opq: Delete all siblings (opaque directory marker)
+//
+// This function walks the directory, collects whiteouts, then processes them.
+func processWhiteouts(targetDir string) error {
+	// Collect whiteouts first, then process (to avoid modifying while walking)
+	type whiteout struct {
+		path     string // Path to the whiteout file
+		isOpaque bool   // True if this is an opaque whiteout
+	}
+	var whiteouts []whiteout
+
+	err := filepath.Walk(targetDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			// Skip files we can't access
+			return nil
+		}
+
+		name := info.Name()
+
+		// Check for opaque whiteout (.wh..wh..opq)
+		if name == ".wh..wh..opq" {
+			whiteouts = append(whiteouts, whiteout{path: path, isOpaque: true})
+			return nil
+		}
+
+		// Check for regular whiteout (.wh.<filename>)
+		if strings.HasPrefix(name, ".wh.") {
+			whiteouts = append(whiteouts, whiteout{path: path, isOpaque: false})
+			return nil
+		}
+
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("walk directory: %w", err)
+	}
+
+	// Process whiteouts
+	for _, wh := range whiteouts {
+		if wh.isOpaque {
+			// Opaque whiteout: remove all siblings in the parent directory
+			// that existed BEFORE this layer (we can't tell, so we remove all)
+			parentDir := filepath.Dir(wh.path)
+			entries, err := os.ReadDir(parentDir)
+			if err != nil {
+				return fmt.Errorf("read dir for opaque whiteout %s: %w", parentDir, err)
+			}
+
+			for _, entry := range entries {
+				// Skip the opaque marker itself and other whiteouts
+				if entry.Name() == ".wh..wh..opq" || strings.HasPrefix(entry.Name(), ".wh.") {
+					continue
+				}
+				entryPath := filepath.Join(parentDir, entry.Name())
+				if err := os.RemoveAll(entryPath); err != nil {
+					return fmt.Errorf("remove %s for opaque whiteout: %w", entryPath, err)
+				}
+			}
+
+			// Remove the opaque marker itself
+			if err := os.Remove(wh.path); err != nil {
+				return fmt.Errorf("remove opaque marker %s: %w", wh.path, err)
+			}
+		} else {
+			// Regular whiteout: remove the target file
+			// .wh.filename -> delete filename
+			whiteoutFile := filepath.Base(wh.path)
+			targetName := strings.TrimPrefix(whiteoutFile, ".wh.")
+			targetPath := filepath.Join(filepath.Dir(wh.path), targetName)
+
+			// Remove the target (may not exist if it was never created)
+			if err := os.RemoveAll(targetPath); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("remove %s for whiteout: %w", targetPath, err)
+			}
+
+			// Remove the whiteout marker itself
+			if err := os.Remove(wh.path); err != nil {
+				return fmt.Errorf("remove whiteout marker %s: %w", wh.path, err)
+			}
+		}
+	}
+
+	return nil
+}
+
+// extractMetadataFromImage extracts container metadata directly from a go-containerregistry
+// image object. This is used by streamingUnpack to get metadata without needing
+// the OCI cache.
+func extractMetadataFromImage(img gcr.Image) (*containerMetadata, error) {
+	configFile, err := img.ConfigFile()
+	if err != nil {
+		return nil, fmt.Errorf("get config file: %w", err)
+	}
+
+	meta := &containerMetadata{
+		Entrypoint: configFile.Config.Entrypoint,
+		Cmd:        configFile.Config.Cmd,
+		Env:        make(map[string]string),
+		WorkingDir: configFile.Config.WorkingDir,
+	}
+
+	// Parse environment variables
+	for _, env := range configFile.Config.Env {
+		for i := 0; i < len(env); i++ {
+			if env[i] == '=' {
+				key := env[:i]
+				val := env[i+1:]
+				meta.Env[key] = val
+				break
+			}
+		}
+	}
+
+	return meta, nil
 }

@@ -230,8 +230,23 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef) {
 
 	m.updateStatusByDigest(ref, StatusPulling, nil)
 
-	// Pull the image (digest is always known, uses cache if already pulled)
-	result, err := m.ociClient.pullAndExport(ctx, ref.String(), ref.Digest(), tempDir)
+	// Choose pull strategy based on registry type and cache state
+	var result *pullResult
+	var err error
+
+	layoutTag := digestToLayoutTag(ref.Digest())
+	alreadyCached := m.ociClient.existsInLayout(layoutTag)
+
+	if isLocalRegistry(ref.Repository()) && !alreadyCached {
+		// For local registry images that aren't cached, use streaming to bypass OCI cache
+		// This is faster because the image will only be pulled once
+		result, err = m.ociClient.streamingUnpack(ctx, ref.String(), tempDir)
+	} else {
+		// For remote registries OR already-cached images, use the cached path
+		// This benefits from layer deduplication on repeated pulls
+		result, err = m.ociClient.pullAndExport(ctx, ref.String(), ref.Digest(), tempDir)
+	}
+
 	if err != nil {
 		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("pull and export: %w", err))
 		m.recordPullMetrics(ctx, "failed")
@@ -476,4 +491,32 @@ func (m *manager) TotalOCICacheBytes(ctx context.Context) (int64, error) {
 		total += size
 	}
 	return total, nil
+}
+
+// isLocalRegistry checks if a repository reference points to a local registry.
+// Local registries include localhost and 127.0.0.1 variants.
+// For local registries, we skip the OCI cache since images are only pulled once.
+func isLocalRegistry(repository string) bool {
+	// Extract the registry host from the repository
+	// Repository format: registry/path/to/image or path/to/image (implies docker.io)
+	parts := strings.SplitN(repository, "/", 2)
+	if len(parts) < 2 {
+		return false // Simple name like "alpine", implies docker.io
+	}
+
+	host := parts[0]
+
+	// Check for localhost patterns
+	if strings.HasPrefix(host, "localhost") {
+		return true
+	}
+	if strings.HasPrefix(host, "127.0.0.1") {
+		return true
+	}
+	// Internal VM communication uses 10.102.0.1 (gateway IP)
+	if strings.HasPrefix(host, "10.102.0.1") {
+		return true
+	}
+
+	return false
 }

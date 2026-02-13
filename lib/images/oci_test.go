@@ -349,6 +349,165 @@ func TestDockerSaveTarballToOCILayoutRoundtrip(t *testing.T) {
 	t.Log("Full roundtrip verified: docker save tarball → OCI layout → existsInLayout → extractMetadata → unpackLayers")
 }
 
+// TestProcessWhiteoutsRegular tests regular whiteout file handling.
+// A file named .wh.<filename> indicates that <filename> should be deleted.
+func TestProcessWhiteoutsRegular(t *testing.T) {
+	targetDir := t.TempDir()
+
+	// Create some files that will be "whited out" (deleted)
+	require.NoError(t, os.WriteFile(filepath.Join(targetDir, "keep-me.txt"), []byte("keep"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(targetDir, "delete-me.txt"), []byte("delete"), 0644))
+	require.NoError(t, os.MkdirAll(filepath.Join(targetDir, "subdir"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(targetDir, "subdir", "nested.txt"), []byte("nested"), 0644))
+
+	// Create whiteout markers
+	// .wh.delete-me.txt means delete "delete-me.txt"
+	require.NoError(t, os.WriteFile(filepath.Join(targetDir, ".wh.delete-me.txt"), []byte{}, 0644))
+	// .wh.subdir means delete the entire "subdir" directory
+	require.NoError(t, os.WriteFile(filepath.Join(targetDir, ".wh.subdir"), []byte{}, 0644))
+
+	// Process whiteouts
+	err := processWhiteouts(targetDir)
+	require.NoError(t, err)
+
+	// Verify results
+	// keep-me.txt should still exist
+	_, err = os.Stat(filepath.Join(targetDir, "keep-me.txt"))
+	require.NoError(t, err, "keep-me.txt should still exist")
+
+	// delete-me.txt should be gone
+	_, err = os.Stat(filepath.Join(targetDir, "delete-me.txt"))
+	require.True(t, os.IsNotExist(err), "delete-me.txt should be deleted")
+
+	// subdir should be gone
+	_, err = os.Stat(filepath.Join(targetDir, "subdir"))
+	require.True(t, os.IsNotExist(err), "subdir should be deleted")
+
+	// Whiteout markers should also be removed
+	_, err = os.Stat(filepath.Join(targetDir, ".wh.delete-me.txt"))
+	require.True(t, os.IsNotExist(err), "whiteout marker should be removed")
+	_, err = os.Stat(filepath.Join(targetDir, ".wh.subdir"))
+	require.True(t, os.IsNotExist(err), "whiteout marker should be removed")
+}
+
+// TestProcessWhiteoutsOpaque tests opaque directory handling.
+// .wh..wh..opq in a directory means "delete all siblings" (opaque directory marker).
+func TestProcessWhiteoutsOpaque(t *testing.T) {
+	targetDir := t.TempDir()
+
+	// Create a directory with files from a "previous layer"
+	subdir := filepath.Join(targetDir, "overlay-dir")
+	require.NoError(t, os.MkdirAll(subdir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(subdir, "old-file1.txt"), []byte("old1"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(subdir, "old-file2.txt"), []byte("old2"), 0644))
+	require.NoError(t, os.MkdirAll(filepath.Join(subdir, "old-subdir"), 0755))
+
+	// Create opaque whiteout - this should delete all siblings
+	require.NoError(t, os.WriteFile(filepath.Join(subdir, ".wh..wh..opq"), []byte{}, 0644))
+
+	// Create a new file "from the current layer" - but note that opaque removes everything
+	// In real OCI, the new files would be in the same tar stream BEFORE the opaque marker is processed
+	// For testing, we verify opaque removes everything and then removes itself
+
+	// Process whiteouts
+	err := processWhiteouts(targetDir)
+	require.NoError(t, err)
+
+	// The parent directory should still exist but be empty (opaque marker removed too)
+	entries, err := os.ReadDir(subdir)
+	require.NoError(t, err)
+	require.Empty(t, entries, "opaque directory should be empty after processing")
+
+	// Parent directory itself should still exist
+	stat, err := os.Stat(subdir)
+	require.NoError(t, err)
+	require.True(t, stat.IsDir())
+}
+
+// TestProcessWhiteoutsNonexistentTarget tests that whiteouts for non-existent files don't error.
+// This can happen when a layer creates and deletes a file in the same layer.
+func TestProcessWhiteoutsNonexistentTarget(t *testing.T) {
+	targetDir := t.TempDir()
+
+	// Create a whiteout for a file that doesn't exist
+	require.NoError(t, os.WriteFile(filepath.Join(targetDir, ".wh.nonexistent.txt"), []byte{}, 0644))
+
+	// Process whiteouts - should not error
+	err := processWhiteouts(targetDir)
+	require.NoError(t, err)
+
+	// Whiteout marker should be removed
+	_, err = os.Stat(filepath.Join(targetDir, ".wh.nonexistent.txt"))
+	require.True(t, os.IsNotExist(err), "whiteout marker should be removed")
+}
+
+// TestExtractTarStream tests the tar extraction helper function.
+func TestExtractTarStream(t *testing.T) {
+	// Create a tar archive in memory
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+
+	files := []struct {
+		name    string
+		content string
+		mode    int64
+		isDir   bool
+	}{
+		{name: "dir/", isDir: true, mode: 0755},
+		{name: "dir/file.txt", content: "hello world", mode: 0644},
+		{name: "executable", content: "#!/bin/bash\necho hi", mode: 0755},
+	}
+
+	for _, f := range files {
+		if f.isDir {
+			require.NoError(t, tw.WriteHeader(&tar.Header{
+				Name:     f.name,
+				Typeflag: tar.TypeDir,
+				Mode:     f.mode,
+			}))
+		} else {
+			require.NoError(t, tw.WriteHeader(&tar.Header{
+				Name:     f.name,
+				Size:     int64(len(f.content)),
+				Typeflag: tar.TypeReg,
+				Mode:     f.mode,
+			}))
+			_, err := tw.Write([]byte(f.content))
+			require.NoError(t, err)
+		}
+	}
+	require.NoError(t, tw.Close())
+
+	// Extract to temp directory
+	targetDir := t.TempDir()
+	err := extractTarStream(context.Background(), &buf, targetDir)
+	require.NoError(t, err)
+
+	// Verify extracted files
+	content, err := os.ReadFile(filepath.Join(targetDir, "dir", "file.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "hello world", string(content))
+
+	content, err = os.ReadFile(filepath.Join(targetDir, "executable"))
+	require.NoError(t, err)
+	assert.Equal(t, "#!/bin/bash\necho hi", string(content))
+}
+
+// TestExtractMetadataFromImage tests metadata extraction directly from go-containerregistry image.
+func TestExtractMetadataFromImage(t *testing.T) {
+	// Create a synthetic Docker image with known config
+	img := createTestDockerImage(t)
+
+	// Extract metadata
+	meta, err := extractMetadataFromImage(img)
+	require.NoError(t, err)
+
+	// Verify metadata matches what we set in createTestDockerImage
+	assert.Equal(t, []string{"/usr/local/bin/guest-agent"}, meta.Entrypoint)
+	assert.Equal(t, "/app", meta.WorkingDir)
+	assert.Contains(t, meta.Env, "PATH")
+}
+
 // TestDockerSaveToOCILayoutCacheHit verifies that pullAndExport correctly
 // detects a cache hit when the image has already been written to OCI layout
 // (via AppendImage), skipping the remote pull entirely. This is the exact
