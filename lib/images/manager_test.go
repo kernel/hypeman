@@ -422,6 +422,71 @@ func TestImportLocalImageFromOCICache(t *testing.T) {
 	t.Logf("Disk path verified: %s (%d bytes)", diskPath, diskStat.Size())
 }
 
+// TestImportLocalImageFromOCICacheWithLocalRegistry tests that local registry images
+// use streamingUnpackFromLayout (the fast path) instead of pullAndExport.
+// This is the actual production path for builder VM images.
+func TestImportLocalImageFromOCICacheWithLocalRegistry(t *testing.T) {
+	dataDir := t.TempDir()
+	p := paths.New(dataDir)
+	mgr, err := NewManager(p, 1, nil)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+
+	// Step 1: Create synthetic Docker image
+	img := createTestDockerImage(t)
+
+	imgDigest, err := img.Digest()
+	require.NoError(t, err)
+	digestStr := imgDigest.String()
+	layoutTag := digestToLayoutTag(digestStr)
+
+	// Step 2: Write to OCI layout cache (simulates registry pre-caching on push)
+	cacheDir := p.SystemOCICache()
+	require.NoError(t, os.MkdirAll(cacheDir, 0755))
+
+	path, err := layout.Write(cacheDir, empty.Index)
+	require.NoError(t, err)
+
+	err = path.AppendImage(img, layout.WithAnnotations(map[string]string{
+		"org.opencontainers.image.ref.name": layoutTag,
+	}))
+	require.NoError(t, err)
+	t.Logf("Wrote image to OCI cache: digest=%s, layoutTag=%s", digestStr, layoutTag)
+
+	// Step 3: Call ImportLocalImage with a LOCAL registry reference (172.30.x.x)
+	// This should trigger streamingUnpackFromLayout (fast path)
+	imported, err := mgr.ImportLocalImage(ctx, "172.30.0.1:8080/builds/testbuild", "latest", digestStr)
+	require.NoError(t, err)
+	require.NotNil(t, imported)
+	require.Equal(t, "172.30.0.1:8080/builds/testbuild:latest", imported.Name)
+	t.Logf("ImportLocalImage returned: name=%s, status=%s, digest=%s", imported.Name, imported.Status, imported.Digest)
+
+	// Step 4: Wait for the async build pipeline to complete
+	waitForReady(t, mgr, ctx, imported.Name)
+
+	// Step 5: Verify GetImage returns correct metadata
+	ready, err := mgr.GetImage(ctx, imported.Name)
+	require.NoError(t, err)
+	require.Equal(t, StatusReady, ready.Status)
+	require.Equal(t, digestStr, ready.Digest)
+	require.Equal(t, []string{"/usr/local/bin/guest-agent"}, ready.Entrypoint)
+	require.Equal(t, "/app", ready.WorkingDir)
+	require.Contains(t, ready.Env, "PATH")
+	require.NotNil(t, ready.SizeBytes)
+	require.Greater(t, *ready.SizeBytes, int64(0))
+	t.Logf("Image ready via streaming from layout: entrypoint=%v, workdir=%s, size=%d", ready.Entrypoint, ready.WorkingDir, *ready.SizeBytes)
+
+	// Step 6: Verify GetDiskPath returns path to a valid disk file
+	diskPath, err := GetDiskPath(p, imported.Name, digestStr)
+	require.NoError(t, err)
+	diskStat, err := os.Stat(diskPath)
+	require.NoError(t, err, "disk file should exist at %s", diskPath)
+	require.False(t, diskStat.IsDir())
+	require.Greater(t, diskStat.Size(), int64(0), "disk file should not be empty")
+	t.Logf("Disk path verified: %s (%d bytes)", diskPath, diskStat.Size())
+}
+
 // TestIsLocalRegistry tests the isLocalRegistry helper function
 func TestIsLocalRegistry(t *testing.T) {
 	tests := []struct {
