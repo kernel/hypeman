@@ -99,18 +99,24 @@ func run() (exitCode int) {
 			logf("Keeping instance %s (--keep flag set)", instanceID)
 		}
 		if createdSGID != "" {
-			if instanceID != "" && !*keep {
-				logf("Waiting for instance to terminate before deleting security group...")
-				w := ec2.NewInstanceTerminatedWaiter(svc)
-				_ = w.Wait(cleanCtx, &ec2.DescribeInstancesInput{
-					InstanceIds: []string{instanceID},
-				}, 5*time.Minute)
-			}
-			logf("Deleting security group %s...", createdSGID)
-			if _, err := svc.DeleteSecurityGroup(cleanCtx, &ec2.DeleteSecurityGroupInput{
-				GroupId: aws.String(createdSGID),
-			}); err != nil {
-				logf("Warning: failed to delete security group: %v", err)
+			if instanceID != "" && *keep {
+				// Instance is kept running and still references the SG;
+				// attempting to delete it would fail, so skip cleanup.
+				logf("Keeping security group %s (attached to kept instance %s)", createdSGID, instanceID)
+			} else {
+				if instanceID != "" {
+					logf("Waiting for instance to terminate before deleting security group...")
+					w := ec2.NewInstanceTerminatedWaiter(svc)
+					_ = w.Wait(cleanCtx, &ec2.DescribeInstancesInput{
+						InstanceIds: []string{instanceID},
+					}, 5*time.Minute)
+				}
+				logf("Deleting security group %s...", createdSGID)
+				if _, err := svc.DeleteSecurityGroup(cleanCtx, &ec2.DeleteSecurityGroupInput{
+					GroupId: aws.String(createdSGID),
+				}); err != nil {
+					logf("Warning: failed to delete security group: %v", err)
+				}
 			}
 		}
 	}()
@@ -403,31 +409,39 @@ func run() (exitCode int) {
 			logf("Launch benchmark failed: %v", err)
 			return 1
 		}
-		chStats := computeStats(chLaunchTimes)
-		qemuStats := computeStats(qemuLaunchTimes)
 
 		fmt.Println()
 		logf("VM Launch Benchmark (50 iterations):")
-		logf("  Cloud Hypervisor: median=%s avg=%s min=%s max=%s p95=%s",
-			chStats.median.Round(time.Millisecond), chStats.avg.Round(time.Millisecond),
-			chStats.min.Round(time.Millisecond), chStats.max.Round(time.Millisecond),
-			chStats.p95.Round(time.Millisecond))
-		logf("  QEMU:             median=%s avg=%s min=%s max=%s p95=%s",
-			qemuStats.median.Round(time.Millisecond), qemuStats.avg.Round(time.Millisecond),
-			qemuStats.min.Round(time.Millisecond), qemuStats.max.Round(time.Millisecond),
-			qemuStats.p95.Round(time.Millisecond))
 
-		// Store stats for final summary.
-		timings["ch_median"] = chStats.median
-		timings["ch_avg"] = chStats.avg
-		timings["ch_min"] = chStats.min
-		timings["ch_max"] = chStats.max
-		timings["ch_p95"] = chStats.p95
-		timings["qemu_median"] = qemuStats.median
-		timings["qemu_avg"] = qemuStats.avg
-		timings["qemu_min"] = qemuStats.min
-		timings["qemu_max"] = qemuStats.max
-		timings["qemu_p95"] = qemuStats.p95
+		if len(chLaunchTimes) > 0 {
+			chStats := computeStats(chLaunchTimes)
+			logf("  Cloud Hypervisor: median=%s avg=%s min=%s max=%s p95=%s",
+				chStats.median.Round(time.Millisecond), chStats.avg.Round(time.Millisecond),
+				chStats.min.Round(time.Millisecond), chStats.max.Round(time.Millisecond),
+				chStats.p95.Round(time.Millisecond))
+			timings["ch_median"] = chStats.median
+			timings["ch_avg"] = chStats.avg
+			timings["ch_min"] = chStats.min
+			timings["ch_max"] = chStats.max
+			timings["ch_p95"] = chStats.p95
+		} else {
+			logf("  Cloud Hypervisor: all iterations failed — no stats available")
+		}
+
+		if len(qemuLaunchTimes) > 0 {
+			qemuStats := computeStats(qemuLaunchTimes)
+			logf("  QEMU:             median=%s avg=%s min=%s max=%s p95=%s",
+				qemuStats.median.Round(time.Millisecond), qemuStats.avg.Round(time.Millisecond),
+				qemuStats.min.Round(time.Millisecond), qemuStats.max.Round(time.Millisecond),
+				qemuStats.p95.Round(time.Millisecond))
+			timings["qemu_median"] = qemuStats.median
+			timings["qemu_avg"] = qemuStats.avg
+			timings["qemu_min"] = qemuStats.min
+			timings["qemu_max"] = qemuStats.max
+			timings["qemu_p95"] = qemuStats.p95
+		} else {
+			logf("  QEMU:             all iterations failed — no stats available")
+		}
 	} else {
 		logf("Skipping smoke test (--skip-smoke)")
 	}
@@ -466,23 +480,33 @@ func run() (exitCode int) {
 	if _, ok := timings["smoke"]; ok {
 		fmt.Printf("  Launch -> Smoke Test:   %s\n", timings["smoke"].Round(time.Second))
 	}
-	if _, ok := timings["ch_median"]; ok {
+	_, hasCH := timings["ch_median"]
+	_, hasQEMU := timings["qemu_median"]
+	if hasCH || hasQEMU {
 		fmt.Println()
 		fmt.Println("VM Launch Latency (50 iterations):")
-		fmt.Println("  Cloud Hypervisor:")
-		fmt.Printf("    Median: %s  Avg: %s  Min: %s  Max: %s  P95: %s\n",
-			timings["ch_median"].Round(time.Millisecond),
-			timings["ch_avg"].Round(time.Millisecond),
-			timings["ch_min"].Round(time.Millisecond),
-			timings["ch_max"].Round(time.Millisecond),
-			timings["ch_p95"].Round(time.Millisecond))
-		fmt.Println("  QEMU:")
-		fmt.Printf("    Median: %s  Avg: %s  Min: %s  Max: %s  P95: %s\n",
-			timings["qemu_median"].Round(time.Millisecond),
-			timings["qemu_avg"].Round(time.Millisecond),
-			timings["qemu_min"].Round(time.Millisecond),
-			timings["qemu_max"].Round(time.Millisecond),
-			timings["qemu_p95"].Round(time.Millisecond))
+		if hasCH {
+			fmt.Println("  Cloud Hypervisor:")
+			fmt.Printf("    Median: %s  Avg: %s  Min: %s  Max: %s  P95: %s\n",
+				timings["ch_median"].Round(time.Millisecond),
+				timings["ch_avg"].Round(time.Millisecond),
+				timings["ch_min"].Round(time.Millisecond),
+				timings["ch_max"].Round(time.Millisecond),
+				timings["ch_p95"].Round(time.Millisecond))
+		} else {
+			fmt.Println("  Cloud Hypervisor: all iterations failed")
+		}
+		if hasQEMU {
+			fmt.Println("  QEMU:")
+			fmt.Printf("    Median: %s  Avg: %s  Min: %s  Max: %s  P95: %s\n",
+				timings["qemu_median"].Round(time.Millisecond),
+				timings["qemu_avg"].Round(time.Millisecond),
+				timings["qemu_min"].Round(time.Millisecond),
+				timings["qemu_max"].Round(time.Millisecond),
+				timings["qemu_p95"].Round(time.Millisecond))
+		} else {
+			fmt.Println("  QEMU: all iterations failed")
+		}
 	}
 	if !*skipBenchmark && hostScore > 0 {
 		fmt.Println()
@@ -849,7 +873,16 @@ func waitForImageReady(ctx context.Context, client *ssh.Client) error {
 				if err != nil {
 					continue
 				}
-				if strings.Contains(full, "ready") {
+				// Check that the specific alpine line shows "ready",
+				// not just any image in the list.
+				alpineReady := false
+				for _, line := range strings.Split(full, "\n") {
+					if strings.Contains(line, "alpine") && strings.Contains(line, "ready") {
+						alpineReady = true
+						break
+					}
+				}
+				if alpineReady {
 					return nil
 				}
 				logf("Image status: %s", strings.TrimSpace(full))
