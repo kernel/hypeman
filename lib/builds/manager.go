@@ -657,18 +657,19 @@ func (m *manager) runBuild(ctx context.Context, id string, req CreateBuildReques
 	// The builder pushed to builds/{id} but the user wants it as image_name.
 	imageRef := buildRepo
 	if req.ImageName != "" {
-		imageRef = stripImageTag(req.ImageName)
+		repo := stripImageTag(req.ImageName)
 		tag := extractImageTag(req.ImageName)
 		if tag == "" {
 			tag = "latest"
 		}
-		if _, err := m.imageManager.ImportLocalImage(buildCtx, imageRef, tag, result.ImageDigest); err != nil {
+		if _, err := m.imageManager.ImportLocalImage(buildCtx, repo, tag, result.ImageDigest); err != nil {
 			m.logger.Warn("failed to re-tag image", "build_id", id, "image_name", req.ImageName, "error", err)
 			// Don't fail the build - the image is still accessible via builds/{id}
 		} else {
+			imageRef = repo + ":" + tag
 			m.logger.Info("re-tagged build image", "build_id", id, "from", buildRepo, "to", imageRef)
 			// Wait for the re-tagged image to be ready
-			if err := m.waitForImageReady(buildCtx, imageRef); err != nil {
+			if err := m.waitForImageReady(buildCtx, repo); err != nil {
 				m.logger.Warn("re-tagged image conversion timed out", "build_id", id, "image_name", req.ImageName, "error", err)
 			}
 		}
