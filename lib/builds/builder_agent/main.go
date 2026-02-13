@@ -365,7 +365,16 @@ func runBuildProcess() {
 	buildConfig = config
 	buildConfigLock.Unlock()
 
-	// Setup registry authentication before running the build
+	// Setup registry authentication and BuildKit config before running the build
+	if err := setupBuildKitConfig(config.RegistryURL); err != nil {
+		setResult(BuildResult{
+			Success:    false,
+			Error:      fmt.Sprintf("setup buildkit config: %v", err),
+			Logs:       logs.String(),
+			DurationMS: time.Since(start).Milliseconds(),
+		})
+		return
+	}
 	if err := setupRegistryAuth(config.RegistryURL, config.RegistryToken); err != nil {
 		setResult(BuildResult{
 			Success:    false,
@@ -488,8 +497,44 @@ func loadConfig() (*BuildConfig, error) {
 	return &config, nil
 }
 
-// setupRegistryAuth creates a Docker config.json with the registry token for authentication.
-// BuildKit uses this file to authenticate when pushing images.
+// setupBuildKitConfig writes a buildkitd.toml that tells BuildKit to use HTTP (not HTTPS)
+// for the internal hypeman registry. Without this, BuildKit defaults to HTTPS which fails
+// for our internal registry. Importantly, this does NOT set the registry as a Docker Hub
+// mirror — BuildKit will resolve Docker Hub images directly from Docker Hub.
+func setupBuildKitConfig(registryURL string) error {
+	if registryURL == "" {
+		return nil
+	}
+
+	// Write buildkitd.toml with HTTP config for the internal registry
+	tomlContent := fmt.Sprintf(`[registry."%s"]
+  http = true
+  insecure = true
+`, registryURL)
+
+	// Write to both root and builder user config dirs
+	configDirs := []string{
+		"/home/builder/.config/buildkit",
+		"/root/.config/buildkit",
+	}
+
+	for _, dir := range configDirs {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return fmt.Errorf("create buildkit config dir %s: %w", dir, err)
+		}
+		configPath := filepath.Join(dir, "buildkitd.toml")
+		if err := os.WriteFile(configPath, []byte(tomlContent), 0644); err != nil {
+			return fmt.Errorf("write buildkit config %s: %w", configPath, err)
+		}
+		log.Printf("BuildKit config written to %s (http=true for %s)", configPath, registryURL)
+	}
+
+	return nil
+}
+
+// setupRegistryAuth creates Docker config.json files with the registry token for authentication.
+// BuildKit uses these files to authenticate when pushing images.
+// Writes to both root and builder user dirs to cover all execution contexts.
 func setupRegistryAuth(registryURL, token string) error {
 	if token == "" {
 		log.Println("No registry token provided, skipping auth setup")
@@ -515,19 +560,27 @@ func setupRegistryAuth(registryURL, token string) error {
 		return fmt.Errorf("marshal docker config: %w", err)
 	}
 
-	// Ensure ~/.docker directory exists
-	dockerDir := "/home/builder/.docker"
-	if err := os.MkdirAll(dockerDir, 0700); err != nil {
-		return fmt.Errorf("create docker config dir: %w", err)
+	log.Printf("Docker config created for registry %s (auth length: %d)", registryURL, len(authValue))
+
+	// Write to both root and builder user config dirs
+	dockerDirs := []string{
+		"/root/.docker",
+		"/home/builder/.docker",
 	}
 
-	// Write config.json
-	configPath := filepath.Join(dockerDir, "config.json")
-	if err := os.WriteFile(configPath, configData, 0600); err != nil {
-		return fmt.Errorf("write docker config: %w", err)
+	for _, dockerDir := range dockerDirs {
+		if err := os.MkdirAll(dockerDir, 0700); err != nil {
+			return fmt.Errorf("create docker config dir %s: %w", dockerDir, err)
+		}
+
+		configPath := filepath.Join(dockerDir, "config.json")
+		if err := os.WriteFile(configPath, configData, 0600); err != nil {
+			return fmt.Errorf("write docker config %s: %w", configPath, err)
+		}
+
+		log.Printf("Registry auth configured at %s", configPath)
 	}
 
-	log.Printf("Registry auth configured for %s", registryURL)
 	return nil
 }
 
@@ -575,8 +628,13 @@ func runBuild(ctx context.Context, config *BuildConfig, logWriter io.Writer) (st
 	cmd := exec.CommandContext(ctx, "buildctl-daemonless.sh", args...)
 	cmd.Stdout = io.MultiWriter(logWriter, &buildLogs)
 	cmd.Stderr = io.MultiWriter(logWriter, &buildLogs)
-	// Use BUILDKITD_FLAGS from environment (set in Dockerfile) or empty for default
-	cmd.Env = os.Environ()
+	// Set environment: inherit from OS, then set DOCKER_CONFIG explicitly.
+	// When running through rootlesskit, buildctl/buildkitd may not find the
+	// Docker config at the default path because HOME can differ inside the
+	// user namespace. Setting DOCKER_CONFIG ensures credentials are found.
+	env := os.Environ()
+	env = append(env, "DOCKER_CONFIG=/home/builder/.docker")
+	cmd.Env = env
 
 	if err := cmd.Run(); err != nil {
 		return "", buildLogs.String(), fmt.Errorf("buildctl failed: %w", err)

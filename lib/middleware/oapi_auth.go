@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"net"
 	"net/http"
 	"regexp"
 	"strings"
@@ -18,7 +19,10 @@ type contextKey string
 const userIDKey contextKey = "user_id"
 
 // registryPathPattern matches /v2/{repository}/... paths
-var registryPathPattern = regexp.MustCompile(`^/v2/([^/]+(?:/[^/]+)?)/`)
+// Repository can have multiple path segments (e.g., "builds/abc123", "myorg/myapp", "a/b/c").
+// We capture everything between /v2/ and the last known OCI API segment
+// (manifests|blobs|tags|referrers).
+var registryPathPattern = regexp.MustCompile(`^/v2/(.+?)/(manifests|blobs|tags|referrers)/`)
 
 // RegistryTokenClaims contains the claims for a scoped registry access token.
 // This mirrors the type in lib/builds/registry_token.go to avoid circular imports.
@@ -181,22 +185,41 @@ func isRegistryPath(path string) bool {
 	return strings.HasPrefix(path, "/v2/")
 }
 
-// isInternalVMRequest checks if the request is from an internal VM network (10.102.x.x)
+// isInternalVMRequest checks if the request is from an internal VM network.
 // This is used as a fallback for builder VMs that don't have token auth yet.
 //
 // SECURITY: We only trust RemoteAddr, not X-Real-IP or X-Forwarded-For headers,
 // as those can be spoofed by attackers to bypass authentication.
-func isInternalVMRequest(r *http.Request) bool {
+func isInternalVMRequest(r *http.Request, subnetCIDR ...string) bool {
 	// Use only RemoteAddr - never trust client-supplied headers for auth decisions
-	ip := r.RemoteAddr
+	ipStr := r.RemoteAddr
 
 	// RemoteAddr is "IP:port" format, extract just the IP
-	if idx := strings.LastIndex(ip, ":"); idx != -1 {
-		ip = ip[:idx]
+	if idx := strings.LastIndex(ipStr, ":"); idx != -1 {
+		ipStr = ipStr[:idx]
 	}
 
-	// Check if it's from the VM network (10.102.x.x)
-	return strings.HasPrefix(ip, "10.102.")
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		return false
+	}
+
+	// If a subnet CIDR is provided, check if the IP belongs to it
+	for _, cidr := range subnetCIDR {
+		if cidr == "" {
+			continue
+		}
+		_, subnet, err := net.ParseCIDR(cidr)
+		if err != nil {
+			continue
+		}
+		if subnet.Contains(ip) {
+			return true
+		}
+	}
+
+	// Legacy fallback for hardcoded 10.102.x.x (original default subnet)
+	return strings.HasPrefix(ipStr, "10.102.")
 }
 
 // extractRepoFromPath extracts the repository name from a registry path.
@@ -268,8 +291,9 @@ func validateRegistryToken(tokenString, jwtSecret, requestPath, method string) (
 	return claims, nil
 }
 
-// JwtAuth creates a chi middleware that validates JWT bearer tokens
-func JwtAuth(jwtSecret string) func(http.Handler) http.Handler {
+// JwtAuth creates a chi middleware that validates JWT bearer tokens.
+// Optional subnetCIDR parameter allows specifying the VM subnet for internal VM auth fallback.
+func JwtAuth(jwtSecret string, subnetCIDR ...string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			log := logger.FromContext(r.Context())
@@ -321,9 +345,9 @@ func JwtAuth(jwtSecret string) func(http.Handler) http.Handler {
 					}
 				}
 
-				// Fallback: Allow internal VM network (10.102.x.x) for registry pushes
+				// Fallback: Allow internal VM network for registry pushes
 				// This is a transitional fallback for older builder images without token auth
-				if isInternalVMRequest(r) {
+				if isInternalVMRequest(r, subnetCIDR...) {
 					log.DebugContext(r.Context(), "allowing internal VM request via IP fallback (deprecated)",
 						"remote_addr", r.RemoteAddr,
 						"path", r.URL.Path)

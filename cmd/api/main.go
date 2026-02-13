@@ -18,7 +18,6 @@ import (
 	"github.com/ghodss/yaml"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	nethttpmiddleware "github.com/oapi-codegen/nethttp-middleware"
 	"github.com/kernel/hypeman"
 	"github.com/kernel/hypeman/cmd/api/api"
 	"github.com/kernel/hypeman/cmd/api/config"
@@ -29,6 +28,7 @@ import (
 	"github.com/kernel/hypeman/lib/oapi"
 	"github.com/kernel/hypeman/lib/otel"
 	"github.com/kernel/hypeman/lib/vmm"
+	nethttpmiddleware "github.com/oapi-codegen/nethttp-middleware"
 	"github.com/riandyrn/otelchi"
 	"golang.org/x/sync/errgroup"
 )
@@ -267,7 +267,7 @@ func run() error {
 		r.Use(middleware.RealIP)
 		r.Use(middleware.Logger)
 		r.Use(middleware.Recoverer)
-		r.Use(mw.JwtAuth(app.Config.JwtSecret))
+		r.Use(mw.JwtAuth(app.Config.JwtSecret, app.Config.SubnetCIDR))
 		r.Mount("/", app.Registry.Handler())
 	})
 
