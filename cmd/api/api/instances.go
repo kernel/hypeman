@@ -111,6 +111,11 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		env = *request.Body.Env
 	}
 
+	metadata := make(map[string]string)
+	if request.Body.Metadata != nil {
+		metadata = *request.Body.Metadata
+	}
+
 	// Parse network enabled (default: true)
 	networkEnabled := true
 	if request.Body.Network != nil && request.Body.Network.Enabled != nil {
@@ -216,6 +221,7 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		NetworkBandwidthDownload: networkBandwidthDownload,
 		NetworkBandwidthUpload:   networkBandwidthUpload,
 		Env:                      env,
+		Metadata:                 metadata,
 		NetworkEnabled:           networkEnabled,
 		Devices:                  deviceRefs,
 		Volumes:                  volumes,
@@ -664,6 +670,10 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 
 	if len(inst.Env) > 0 {
 		oapiInst.Env = &inst.Env
+	}
+
+	if len(inst.Metadata) > 0 {
+		oapiInst.Metadata = &inst.Metadata
 	}
 
 	// Convert volume attachments

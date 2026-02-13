@@ -246,6 +246,9 @@ type CreateInstanceRequest struct {
 	// Image OCI image reference
 	Image string `json:"image"`
 
+	// Metadata User-defined key-value metadata
+	Metadata *map[string]string `json:"metadata,omitempty"`
+
 	// Name Human-readable name (lowercase letters, digits, and dashes only; cannot start or end with a dash)
 	Name string `json:"name"`
 
@@ -491,6 +494,9 @@ type Instance struct {
 
 	// Image OCI image reference
 	Image string `json:"image"`
+
+	// Metadata User-defined key-value metadata
+	Metadata *map[string]string `json:"metadata,omitempty"`
 
 	// Name Human-readable name
 	Name string `json:"name"`

@@ -144,6 +144,14 @@ components:
           example:
             PORT: "3000"
             NODE_ENV: production
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+          description: User-defined key-value metadata for the instance
+          example:
+            team: backend
+            purpose: staging
         network:
           type: object
           description: Network configuration for the instance
@@ -227,6 +235,11 @@ components:
           additionalProperties:
             type: string
           description: Environment variables
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+          description: User-defined key-value metadata
         network:
           type: object
           description: Network configuration of the instance

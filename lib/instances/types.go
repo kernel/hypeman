@@ -46,9 +46,10 @@ type StoredMetadata struct {
 
 	// Configuration
 	Env            map[string]string
-	NetworkEnabled bool   // Whether instance has networking enabled (uses default network)
-	IP             string // Assigned IP address (empty if NetworkEnabled=false)
-	MAC            string // Assigned MAC address (empty if NetworkEnabled=false)
+	Metadata       map[string]string // User-defined key-value metadata
+	NetworkEnabled bool              // Whether instance has networking enabled (uses default network)
+	IP             string            // Assigned IP address (empty if NetworkEnabled=false)
+	MAC            string            // Assigned MAC address (empty if NetworkEnabled=false)
 
 	// Attached volumes
 	Volumes []VolumeAttachment // Volumes attached to this instance
@@ -106,6 +107,7 @@ type CreateInstanceRequest struct {
 	NetworkBandwidthUpload   int64              // Upload rate limit bytes/sec (0 = auto, proportional to CPU)
 	DiskIOBps                int64              // Disk I/O rate limit bytes/sec (0 = auto, proportional to CPU)
 	Env                      map[string]string  // Optional environment variables
+	Metadata                 map[string]string  // Optional user-defined key-value metadata
 	NetworkEnabled           bool               // Whether to enable networking (uses default network)
 	Devices                  []string           // Device IDs or names to attach (GPU passthrough)
 	Volumes                  []VolumeAttachment // Volumes to attach at creation time
