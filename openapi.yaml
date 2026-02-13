@@ -1548,6 +1548,23 @@ paths:
           schema:
             type: string
           description: Instance ID or name
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                entrypoint:
+                  type: array
+                  items:
+                    type: string
+                  description: Override image entrypoint for this run. Omit to keep previous value.
+                cmd:
+                  type: array
+                  items:
+                    type: string
+                  description: Override image CMD for this run. Omit to keep previous value.
       responses:
         200:
           description: Instance started

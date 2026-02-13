@@ -28,7 +28,7 @@ type Manager interface {
 	StandbyInstance(ctx context.Context, id string) (*Instance, error)
 	RestoreInstance(ctx context.Context, id string) (*Instance, error)
 	StopInstance(ctx context.Context, id string) (*Instance, error)
-	StartInstance(ctx context.Context, id string) (*Instance, error)
+	StartInstance(ctx context.Context, id string, req StartInstanceRequest) (*Instance, error)
 	StreamInstanceLogs(ctx context.Context, id string, tail int, follow bool, source LogSource) (<-chan string, error)
 	RotateLogs(ctx context.Context, maxBytes int64, maxFiles int) error
 	AttachVolume(ctx context.Context, id string, volumeId string, req AttachVolumeRequest) (*Instance, error)
@@ -197,12 +197,12 @@ func (m *manager) StopInstance(ctx context.Context, id string) (*Instance, error
 	return m.stopInstance(ctx, id)
 }
 
-// StartInstance starts a stopped instance
-func (m *manager) StartInstance(ctx context.Context, id string) (*Instance, error) {
+// StartInstance starts a stopped instance with optional command overrides
+func (m *manager) StartInstance(ctx context.Context, id string, req StartInstanceRequest) (*Instance, error) {
 	lock := m.getInstanceLock(id)
 	lock.Lock()
 	defer lock.Unlock()
-	return m.startInstance(ctx, id)
+	return m.startInstance(ctx, id, req)
 }
 
 // ListInstances returns all instances

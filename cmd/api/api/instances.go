@@ -479,7 +479,18 @@ func (s *ApiService) StartInstance(ctx context.Context, request oapi.StartInstan
 	}
 	log := logger.FromContext(ctx)
 
-	result, err := s.InstanceManager.StartInstance(ctx, inst.Id)
+	// Parse optional command overrides from request body
+	var startReq instances.StartInstanceRequest
+	if request.Body != nil {
+		if request.Body.Entrypoint != nil {
+			startReq.Entrypoint = *request.Body.Entrypoint
+		}
+		if request.Body.Cmd != nil {
+			startReq.Cmd = *request.Body.Cmd
+		}
+	}
+
+	result, err := s.InstanceManager.StartInstance(ctx, inst.Id, startReq)
 	if err != nil {
 		switch {
 		case errors.Is(err, instances.ErrInvalidState):

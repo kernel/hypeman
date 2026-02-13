@@ -17,6 +17,7 @@ import (
 func (m *manager) startInstance(
 	ctx context.Context,
 	id string,
+	req StartInstanceRequest,
 ) (*Instance, error) {
 	start := time.Now()
 	log := logger.FromContext(ctx)
@@ -44,6 +45,16 @@ func (m *manager) startInstance(
 	if inst.State != StateStopped {
 		log.ErrorContext(ctx, "invalid state for start", "instance_id", id, "state", inst.State)
 		return nil, fmt.Errorf("%w: cannot start from state %s, must be Stopped", ErrInvalidState, inst.State)
+	}
+
+	// 2a. Clear stale exit info from previous run and apply command overrides
+	stored.ExitCode = nil
+	stored.ExitMessage = ""
+	if len(req.Entrypoint) > 0 {
+		stored.Entrypoint = req.Entrypoint
+	}
+	if len(req.Cmd) > 0 {
+		stored.Cmd = req.Cmd
 	}
 
 	// 2b. Validate aggregate resource limits before allocating resources (if configured)

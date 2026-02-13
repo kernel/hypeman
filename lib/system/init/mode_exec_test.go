@@ -19,9 +19,9 @@ func TestDescribeExitCode(t *testing.T) {
 			contains: "success",
 		},
 		{
-			name:     "generic error",
+			name:     "generic exit code",
 			code:     1,
-			contains: "error",
+			contains: "exit code 1",
 		},
 		{
 			name:     "permission denied",
@@ -56,7 +56,7 @@ func TestDescribeExitCode(t *testing.T) {
 		{
 			name:     "generic non-zero",
 			code:     42,
-			contains: "error",
+			contains: "exit code 42",
 		},
 	}
 

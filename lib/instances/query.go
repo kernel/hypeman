@@ -1,9 +1,9 @@
 package instances
 
 import (
-	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -128,19 +128,19 @@ func (m *manager) parseExitSentinel(ctx context.Context, stored *StoredMetadata)
 	log := logger.FromContext(ctx)
 
 	logPath := m.paths.InstanceAppLog(stored.Id)
-	f, err := os.Open(logPath)
-	if err != nil {
-		return // Log file doesn't exist, nothing to parse
-	}
-	defer f.Close()
 
-	// Scan the file looking for the sentinel line.
-	// The sentinel is near the end of the file (written just before reboot),
-	// but we scan from the beginning since log files are typically small
-	// (serial console output, not application logs).
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := scanner.Text()
+	// Read the tail of the log file. The sentinel is written near the end
+	// (just before reboot), so we only need the last few KB even if the
+	// serial console log is large from a chatty app.
+	const tailSize = 8192
+	data, err := readTail(logPath, tailSize)
+	if err != nil {
+		return // Log file doesn't exist or can't be read
+	}
+
+	// Scan lines from the tail looking for the sentinel
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
 		code, msg, ok := parseExitSentinelLine(line)
 		if ok {
 			stored.ExitCode = &code
@@ -158,11 +158,42 @@ func (m *manager) parseExitSentinel(ctx context.Context, stored *StoredMetadata)
 	}
 }
 
+// readTail reads the last n bytes of a file. If the file is smaller than n,
+// the entire file is returned.
+func readTail(path string, n int64) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+
+	offset := info.Size() - n
+	if offset < 0 {
+		offset = 0
+	}
+
+	if offset > 0 {
+		if _, err := f.Seek(offset, io.SeekStart); err != nil {
+			return nil, err
+		}
+	}
+
+	return io.ReadAll(f)
+}
+
 // parseExitSentinelLine parses a single log line looking for the HYPEMAN-EXIT sentinel.
 // The sentinel format is embedded in a log line like:
 // 2026-02-13T15:26:27Z [INFO] [hypeman-init:entrypoint] HYPEMAN-EXIT code=127 message="command not found"
 // Returns the exit code, message, and whether parsing was successful.
 func parseExitSentinelLine(line string) (int, string, bool) {
+	// Strip whitespace -- serial console (TTY) adds \r to line endings
+	line = strings.TrimSpace(line)
+
 	idx := strings.Index(line, exitSentinelPrefix)
 	if idx < 0 {
 		return 0, "", false

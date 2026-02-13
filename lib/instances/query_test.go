@@ -70,6 +70,13 @@ func TestParseExitSentinelLine(t *testing.T) {
 			line:   "HYPEMAN-EXIT code=abc message=\"error\"",
 			wantOK: false,
 		},
+		{
+			name:     "line with carriage return from serial console",
+			line:     "2026-02-13T15:26:27Z [INFO] [hypeman-init:entrypoint] HYPEMAN-EXIT code=0 message=\"success\"\r",
+			wantOK:   true,
+			wantCode: 0,
+			wantMsg:  "success",
+		},
 	}
 
 	for _, tc := range tests {

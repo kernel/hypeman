@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/kernel/hypeman/lib/vmconfig"
 )
@@ -163,7 +164,7 @@ func describeExitCode(code int) string {
 		}
 		return desc
 	default:
-		return "error"
+		return fmt.Sprintf("exit code %d", code)
 	}
 }
 
@@ -175,20 +176,33 @@ func formatExitSentinel(code int, message string) string {
 
 // checkOOMKill checks /dev/kmsg for recent OOM kill messages.
 // Returns true if an OOM kill was detected.
+// Uses a 1s timeout to avoid hanging if /dev/kmsg blocks at end of buffer.
 func checkOOMKill() bool {
-	f, err := os.Open("/dev/kmsg")
+	f, err := os.OpenFile("/dev/kmsg", os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return false
 	}
 	defer f.Close()
 
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		if isOOMLine(scanner.Text()) {
-			return true
+	// Use a goroutine with timeout since /dev/kmsg can still block in some cases
+	result := make(chan bool, 1)
+	go func() {
+		scanner := bufio.NewScanner(f)
+		for scanner.Scan() {
+			if isOOMLine(scanner.Text()) {
+				result <- true
+				return
+			}
 		}
+		result <- false
+	}()
+
+	select {
+	case found := <-result:
+		return found
+	case <-time.After(1 * time.Second):
+		return false
 	}
-	return false
 }
 
 // isOOMLine returns true if a kernel log line indicates an OOM kill event.

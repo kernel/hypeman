@@ -749,6 +749,23 @@ func TestBasicEndToEnd(t *testing.T) {
 
 	t.Log("Graceful stop test passed!")
 
+	// Test restart: StartInstance should clear stale exit info and boot the VM
+	t.Log("Testing restart after stop...")
+	restartedInst, err := manager.StartInstance(ctx, inst.Id, StartInstanceRequest{})
+	require.NoError(t, err, "StartInstance should succeed")
+	assert.Equal(t, StateRunning, restartedInst.State, "Instance should be Running after restart")
+
+	// Verify exit info was cleared
+	retrieved, err = manager.GetInstance(ctx, inst.Id)
+	require.NoError(t, err)
+	assert.Nil(t, retrieved.ExitCode, "ExitCode should be nil after restart (stale exit info cleared)")
+	assert.Empty(t, retrieved.ExitMessage, "ExitMessage should be empty after restart")
+	t.Log("Restart test passed -- exit info cleared!")
+
+	// Stop again before deleting
+	_, err = manager.StopInstance(ctx, inst.Id)
+	require.NoError(t, err)
+
 	// Delete instance
 	t.Log("Deleting instance...")
 	err = manager.DeleteInstance(ctx, inst.Id)

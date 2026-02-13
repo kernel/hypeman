@@ -143,6 +143,12 @@ type CreateInstanceRequest struct {
 	SkipGuestAgent           bool               // Skip guest-agent installation (disables exec/stat API)
 }
 
+// StartInstanceRequest is the domain request for starting a stopped instance
+type StartInstanceRequest struct {
+	Entrypoint []string // Override entrypoint (nil = keep previous/image default)
+	Cmd        []string // Override cmd (nil = keep previous/image default)
+}
+
 // AttachVolumeRequest is the domain request for attaching a volume (used for API compatibility)
 type AttachVolumeRequest struct {
 	MountPath string
