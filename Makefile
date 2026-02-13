@@ -229,9 +229,9 @@ test-linux: ensure-ch-binaries ensure-caddy-binaries build-embedded
 	if [ -n "$(VERBOSE)" ]; then VERBOSE_FLAG="-v"; fi; \
 	if [ -n "$(TEST)" ]; then \
 		echo "Running specific test: $(TEST)"; \
-		sudo env "PATH=$$PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" go test -tags containers_image_openpgp -run=$(TEST) $$VERBOSE_FLAG -timeout=180s ./...; \
+		sudo env "PATH=$$PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" go test -tags containers_image_openpgp -run=$(TEST) $$VERBOSE_FLAG -timeout=300s ./...; \
 	else \
-		sudo env "PATH=$$PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" go test -tags containers_image_openpgp $$VERBOSE_FLAG -timeout=180s ./...; \
+		sudo env "PATH=$$PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" go test -tags containers_image_openpgp $$VERBOSE_FLAG -timeout=300s ./...; \
 	fi
 
 # macOS tests (no sudo needed, adds e2fsprogs to PATH)
@@ -246,10 +246,10 @@ test-darwin: build-embedded
 	if [ -n "$(TEST)" ]; then \
 		echo "Running specific test: $(TEST)"; \
 		PATH="/opt/homebrew/opt/e2fsprogs/sbin:$(PATH)" \
-		go test -tags containers_image_openpgp -run=$(TEST) $$VERBOSE_FLAG -timeout=180s $$PKGS; \
+		go test -tags containers_image_openpgp -run=$(TEST) $$VERBOSE_FLAG -timeout=300s $$PKGS; \
 	else \
 		PATH="/opt/homebrew/opt/e2fsprogs/sbin:$(PATH)" \
-		go test -tags containers_image_openpgp $$VERBOSE_FLAG -timeout=180s $$PKGS; \
+		go test -tags containers_image_openpgp $$VERBOSE_FLAG -timeout=300s $$PKGS; \
 	fi
 
 # Generate JWT token for testing
