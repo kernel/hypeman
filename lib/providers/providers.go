@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/c2h5oh/datasize"
@@ -251,10 +252,31 @@ func ProvideBuildManager(p *paths.Paths, cfg *config.Config, instanceManager ins
 		log.Info("registry CA certificate loaded", "file", cfg.RegistryCACertFile)
 	}
 
+	// Rewrite localhost in RegistryURL to the subnet gateway IP so builder VMs
+	// (which run in their own network namespace) can reach the host registry.
+	// Inside a VM, "localhost" refers to the VM itself, not the host.
+	registryURL := cfg.RegistryURL
+	if registryURL == "" {
+		registryURL = "localhost:8080"
+	}
+	if strings.HasPrefix(registryURL, "localhost:") || strings.HasPrefix(registryURL, "127.0.0.1:") {
+		gateway := cfg.SubnetGateway
+		if gateway == "" {
+			var err error
+			gateway, err = network.DeriveGateway(cfg.SubnetCIDR)
+			if err != nil {
+				return nil, fmt.Errorf("derive gateway for registry URL rewrite: %w", err)
+			}
+		}
+		port := strings.SplitN(registryURL, ":", 2)[1]
+		registryURL = gateway + ":" + port
+		log.Info("rewrote registry URL for builder VMs", "original", cfg.RegistryURL, "rewritten", registryURL)
+	}
+
 	buildConfig := builds.Config{
 		MaxConcurrentBuilds: cfg.MaxConcurrentSourceBuilds,
 		BuilderImage:        cfg.BuilderImage,
-		RegistryURL:         cfg.RegistryURL,
+		RegistryURL:         registryURL,
 		RegistryInsecure:    cfg.RegistryInsecure,
 		RegistryCACert:      registryCACert,
 		DefaultTimeout:      cfg.BuildTimeout,
@@ -267,9 +289,6 @@ func ProvideBuildManager(p *paths.Paths, cfg *config.Config, instanceManager ins
 	}
 	if buildConfig.BuilderImage == "" {
 		buildConfig.BuilderImage = "hypeman/builder:latest"
-	}
-	if buildConfig.RegistryURL == "" {
-		buildConfig.RegistryURL = "localhost:8080"
 	}
 	if buildConfig.DefaultTimeout == 0 {
 		buildConfig.DefaultTimeout = 600
