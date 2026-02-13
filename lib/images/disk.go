@@ -265,4 +265,3 @@ func CreateEmptyExt4Disk(diskPath string, sizeBytes int64) error {
 
 	return nil
 }
-

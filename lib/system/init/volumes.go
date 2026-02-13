@@ -110,4 +110,3 @@ func mountVolumeReadWrite(log *Logger, vol vmconfig.VolumeMount, mountPath strin
 	log.Info("hypeman-init:volumes", fmt.Sprintf("mounted %s at %s (rw)", vol.Device, vol.Path))
 	return nil
 }
-

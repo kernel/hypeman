@@ -601,8 +601,8 @@ func setupRegistryAuth(config *BuildConfig) error {
 	dockerConfig := map[string]interface{}{
 		"auths": map[string]interface{}{
 			registryHost: map[string]string{
-				"auth":          authValue,      // Basic auth: base64(jwt:)
-				"identitytoken": token,          // JWT directly for OAuth2-style auth
+				"auth":          authValue, // Basic auth: base64(jwt:)
+				"identitytoken": token,     // JWT directly for OAuth2-style auth
 			},
 		},
 		"credsStore":  "",
@@ -1007,4 +1007,3 @@ func getBuildkitVersion() string {
 	out, _ := cmd.Output()
 	return strings.TrimSpace(string(out))
 }
-

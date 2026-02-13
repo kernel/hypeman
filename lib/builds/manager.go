@@ -19,11 +19,11 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/empty"
 	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
-	"github.com/nrednav/cuid2"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/instances"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/kernel/hypeman/lib/volumes"
+	"github.com/nrednav/cuid2"
 	"go.opentelemetry.io/otel/metric"
 )
 
@@ -296,8 +296,8 @@ func (m *manager) buildBuilderFromDockerfile(ctx context.Context) (string, error
 	if err != nil {
 		return "", fmt.Errorf("get image digest: %w", err)
 	}
-	digest := digestHash.String()   // "sha256:abc123..."
-	digestHex := digestHash.Hex      // "abc123..."
+	digest := digestHash.String() // "sha256:abc123..."
+	digestHex := digestHash.Hex   // "abc123..."
 
 	// Write directly to the shared OCI layout cache.
 	// This is the same cache used by the image manager's OCI client, so when
