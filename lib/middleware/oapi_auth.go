@@ -393,6 +393,24 @@ func JwtAuth(jwtSecret string) func(http.Handler) http.Handler {
 							fmt.Fprintf(w, `{"errors":[{"code":"UNAVAILABLE","message":"image not mirrored"}]}`)
 							return
 						}
+
+						// Fallback: try to validate as a regular user JWT token
+						// This allows `hypeman push` from the CLI with a user token
+						userClaims := jwt.MapClaims{}
+						userToken, parseErr := jwt.ParseWithClaims(token, userClaims, func(token *jwt.Token) (interface{}, error) {
+							if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+								return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+							}
+							return []byte(jwtSecret), nil
+						})
+						if parseErr == nil && userToken.Valid {
+							if sub, ok := userClaims["sub"].(string); ok && sub != "" && !strings.HasPrefix(sub, "builder-") {
+								log.DebugContext(r.Context(), "registry request authenticated via user JWT", "user", sub)
+								ctx := context.WithValue(r.Context(), userIDKey, sub)
+								next.ServeHTTP(w, r.WithContext(ctx))
+								return
+							}
+						}
 					} else {
 						log.DebugContext(r.Context(), "failed to extract token", "error", err)
 					}

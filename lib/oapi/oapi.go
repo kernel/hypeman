@@ -841,6 +841,10 @@ type CreateBuildMultipartBody struct {
 	// Admin builds will also export to this location.
 	GlobalCacheKey *string `json:"global_cache_key,omitempty"`
 
+	// ImageName Custom image name for the build output. When set, the image is pushed
+	// to {registry}/{image_name} instead of {registry}/builds/{id}.
+	ImageName *string `json:"image_name,omitempty"`
+
 	// IsAdminBuild Set to "true" to grant push access to global cache (operator-only).
 	// Admin builds can populate the shared global cache that all tenant builds read from.
 	IsAdminBuild *string `json:"is_admin_build,omitempty"`
