@@ -111,6 +111,25 @@ func stripRegistryScheme(registryURL string) string {
 	return registryURL
 }
 
+// stripImageTag removes a tag or digest from an image name.
+// Examples: "repo:tag" -> "repo", "repo@sha256:..." -> "repo", "host:5000/repo:tag" -> "host:5000/repo"
+func stripImageTag(imageName string) string {
+	// Strip digest reference first
+	if idx := strings.Index(imageName, "@"); idx != -1 {
+		return imageName[:idx]
+	}
+	// Find last colon — could be a tag or part of a port
+	lastColon := strings.LastIndex(imageName, ":")
+	if lastColon == -1 {
+		return imageName
+	}
+	// If there's a slash after the last colon, the colon is part of a port (e.g., "host:5000/repo")
+	if strings.Contains(imageName[lastColon:], "/") {
+		return imageName
+	}
+	return imageName[:lastColon]
+}
+
 type manager struct {
 	config          Config
 	paths           *paths.Paths
@@ -195,7 +214,7 @@ func (m *manager) Start(ctx context.Context) error {
 func (m *manager) ensureBuilderImage(ctx context.Context) {
 	defer m.builderReady.Store(true)
 
-	if m.config.BuilderImage != "" {
+	if m.config.BuilderImage != "" && m.config.BuilderImage != "none" {
 		// Explicit builder image configured - check if already available
 		if _, err := m.imageManager.GetImage(ctx, m.config.BuilderImage); err == nil {
 			m.logger.Info("builder image already available", "image", m.config.BuilderImage)
@@ -266,7 +285,7 @@ func (m *manager) buildBuilderFromDockerfile(ctx context.Context) (string, error
 	localTag := fmt.Sprintf("hypeman-builder-tmp:%d", time.Now().Unix())
 	m.logger.Info("building builder image with Docker", "tag", localTag)
 
-	buildCmd := exec.CommandContext(ctx, "docker", "build", "-t", localTag, "-f", dockerfilePath, ".")
+	buildCmd := exec.CommandContext(ctx, "docker", "build", "--network=host", "-t", localTag, "-f", dockerfilePath, ".")
 	buildCmd.Env = dockerEnv
 	if output, err := buildCmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("docker build: %s: %w", string(output), err)
@@ -417,7 +436,7 @@ func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourc
 
 	outputRepo := fmt.Sprintf("builds/%s", id)
 	if req.ImageName != "" {
-		outputRepo = req.ImageName
+		outputRepo = stripImageTag(req.ImageName)
 	}
 	repoAccess := []RepoPermission{
 		{Repo: outputRepo, Scope: "push"},
@@ -596,7 +615,13 @@ func (m *manager) runBuild(ctx context.Context, id string, req CreateBuildReques
 	// This fixes the race condition (KERNEL-863) where build reports "ready"
 	// but image conversion hasn't finished yet.
 	// Use buildCtx to respect the build timeout during image wait.
-	if err := m.waitForImageReady(buildCtx, id); err != nil {
+	// Use the short image name (without registry host prefix) to match what
+	// triggerConversion stores in the image manager.
+	waitRepo := fmt.Sprintf("builds/%s", id)
+	if req.ImageName != "" {
+		waitRepo = stripImageTag(req.ImageName)
+	}
+	if err := m.waitForImageReady(buildCtx, waitRepo); err != nil {
 		// Recalculate duration to include image wait time
 		duration = time.Since(start)
 		durationMS = duration.Milliseconds()
@@ -617,7 +642,7 @@ func (m *manager) runBuild(ctx context.Context, id string, req CreateBuildReques
 	// image_ref can be used directly with `hypeman run`.
 	imageRef := fmt.Sprintf("builds/%s", id)
 	if req.ImageName != "" {
-		imageRef = req.ImageName
+		imageRef = stripImageTag(req.ImageName)
 	}
 	m.updateBuildComplete(id, StatusReady, &result.ImageDigest, nil, &result.Provenance, &durationMS)
 
@@ -927,17 +952,16 @@ func (m *manager) updateBuildComplete(id string, status string, digest *string, 
 }
 
 // waitForImageReady polls the image manager until the build's image is ready.
+// imageRef should be the short repo name (e.g., "builds/abc123" or "myapp")
+// matching what triggerConversion stores in the image manager.
 // This ensures that when a build reports "ready", the image is actually usable
 // for instance creation (fixes KERNEL-863 race condition).
-func (m *manager) waitForImageReady(ctx context.Context, id string) error {
-	registryHost := stripRegistryScheme(m.config.RegistryURL)
-	imageRef := fmt.Sprintf("%s/builds/%s", registryHost, id)
-
+func (m *manager) waitForImageReady(ctx context.Context, imageRef string) error {
 	// Poll for up to 60 seconds (image conversion is typically fast)
 	const maxAttempts = 120
 	const pollInterval = 500 * time.Millisecond
 
-	m.logger.Debug("waiting for image to be ready", "id", id, "image_ref", imageRef)
+	m.logger.Debug("waiting for image to be ready", "image_ref", imageRef)
 
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		select {
@@ -950,7 +974,7 @@ func (m *manager) waitForImageReady(ctx context.Context, id string) error {
 		if err == nil {
 			switch img.Status {
 			case images.StatusReady:
-				m.logger.Debug("image is ready", "id", id, "image_ref", imageRef, "attempts", attempt+1)
+				m.logger.Debug("image is ready", "image_ref", imageRef, "attempts", attempt+1)
 				return nil
 			case images.StatusFailed:
 				return fmt.Errorf("image conversion failed")
@@ -1311,7 +1335,7 @@ func (m *manager) refreshBuildToken(buildID string, req *CreateBuildRequest) err
 	// Generate per-repo access list (same logic as CreateBuild)
 	outputRepo := fmt.Sprintf("builds/%s", buildID)
 	if req.ImageName != "" {
-		outputRepo = req.ImageName
+		outputRepo = stripImageTag(req.ImageName)
 	}
 	repoAccess := []RepoPermission{
 		{Repo: outputRepo, Scope: "push"},

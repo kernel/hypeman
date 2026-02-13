@@ -41,20 +41,19 @@ func TestBuildKitAuthFlow(t *testing.T) {
 	// Generate a valid registry token (like what builder VM would have)
 	registryToken := generateTestToken(t, jwtSecret, "build-123", []string{"builds/build-123", "cache/org-test"}, "push")
 
-	t.Run("anonymous token request for cache import returns auth challenge", func(t *testing.T) {
-		// This simulates BuildKit's first request to token endpoint (anonymous)
-		// when trying to import cache
+	t.Run("anonymous token request for cache import returns guest token", func(t *testing.T) {
+		// Anonymous requests with scope return a guest token for BuildKit compat.
+		// BuildKit v0.27+ doesn't reliably send credentials on token requests.
 		resp, err := http.Get(server.URL + "/v2/token?scope=repository:cache/org-test:pull&service=hypeman")
 		require.NoError(t, err)
 		defer resp.Body.Close()
 
-		// Should get 401 with WWW-Authenticate header
-		assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
 
-		wwwAuth := resp.Header.Get("WWW-Authenticate")
-		assert.NotEmpty(t, wwwAuth, "WWW-Authenticate header must be present")
-		assert.Contains(t, wwwAuth, "Basic", "should challenge with Basic auth")
-		assert.Contains(t, wwwAuth, "realm=", "should include realm")
+		var tokenResp TokenResponse
+		err = json.NewDecoder(resp.Body).Decode(&tokenResp)
+		require.NoError(t, err)
+		assert.NotEmpty(t, tokenResp.Token, "guest token should be returned")
 	})
 
 	t.Run("authenticated token request for cache import succeeds", func(t *testing.T) {
@@ -78,17 +77,19 @@ func TestBuildKitAuthFlow(t *testing.T) {
 		assert.NotEmpty(t, tokenResp.Token)
 	})
 
-	t.Run("anonymous token request for image push returns auth challenge", func(t *testing.T) {
-		// This simulates BuildKit's first request when pushing an image
+	t.Run("anonymous token request for image push returns guest token", func(t *testing.T) {
+		// Anonymous push requests also return guest tokens.
+		// The middleware validates the guest token and allows push from builder VMs.
 		resp, err := http.Get(server.URL + "/v2/token?scope=repository:builds/build-123:push,pull&service=hypeman")
 		require.NoError(t, err)
 		defer resp.Body.Close()
 
-		assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
 
-		wwwAuth := resp.Header.Get("WWW-Authenticate")
-		assert.NotEmpty(t, wwwAuth, "WWW-Authenticate header must be present")
-		assert.Contains(t, wwwAuth, "Basic")
+		var tokenResp TokenResponse
+		err = json.NewDecoder(resp.Body).Decode(&tokenResp)
+		require.NoError(t, err)
+		assert.NotEmpty(t, tokenResp.Token, "guest token should be returned")
 	})
 
 	t.Run("authenticated token request for image push succeeds", func(t *testing.T) {

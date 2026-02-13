@@ -242,10 +242,10 @@ func (m *manager) setupIPTablesRules(ctx context.Context, subnet, bridgeName str
 	natComment, fwdOutComment, fwdInComment := iptablesComments(bridgeName)
 
 	// Clean up legacy rules with generic comments (from before multi-tenant fix)
-	// Only delete if they exist and match our subnet (avoid removing other instances' rules)
-	m.deleteNATRuleByComment(legacyCommentNAT)
-	m.deleteForwardRuleByComment(legacyCommentFwdOut)
-	m.deleteForwardRuleByComment(legacyCommentFwdIn)
+	// Only delete if they match our subnet/bridge (avoid removing other instances' rules)
+	m.deleteNATRuleByComment(legacyCommentNAT, subnet)
+	m.deleteForwardRuleByComment(legacyCommentFwdOut, bridgeName)
+	m.deleteForwardRuleByComment(legacyCommentFwdIn, bridgeName)
 
 	// Add MASQUERADE rule if not exists (position doesn't matter in POSTROUTING)
 	masqStatus, err := m.ensureNATRule(subnet, uplink, natComment)
@@ -286,7 +286,7 @@ func (m *manager) ensureNATRule(subnet, uplink, comment string) (string, error) 
 	}
 
 	// Delete any existing rule with our comment (handles uplink changes)
-	m.deleteNATRuleByComment(comment)
+	m.deleteNATRuleByComment(comment, "")
 
 	// Add rule with comment
 	addCmd := exec.Command("iptables", "-t", "nat", "-A", "POSTROUTING",
@@ -302,8 +302,10 @@ func (m *manager) ensureNATRule(subnet, uplink, comment string) (string, error) 
 	return "added", nil
 }
 
-// deleteNATRuleByComment deletes any NAT POSTROUTING rule containing our comment
-func (m *manager) deleteNATRuleByComment(comment string) {
+// deleteNATRuleByComment deletes NAT POSTROUTING rules matching the comment.
+// If matchSubnet is non-empty, only rules that also contain the subnet string are deleted.
+// This prevents one deployment from accidentally removing another deployment's rules.
+func (m *manager) deleteNATRuleByComment(comment string, matchSubnet string) {
 	// List NAT POSTROUTING rules
 	cmd := exec.Command("iptables", "-t", "nat", "-L", "POSTROUTING", "--line-numbers", "-n")
 	cmd.SysProcAttr = &syscall.SysProcAttr{
@@ -318,11 +320,15 @@ func (m *manager) deleteNATRuleByComment(comment string) {
 	var ruleNums []string
 	lines := strings.Split(string(output), "\n")
 	for _, line := range lines {
-		if strings.Contains(line, comment) {
-			fields := strings.Fields(line)
-			if len(fields) > 0 {
-				ruleNums = append(ruleNums, fields[0])
-			}
+		if !strings.Contains(line, comment) {
+			continue
+		}
+		if matchSubnet != "" && !strings.Contains(line, matchSubnet) {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) > 0 {
+			ruleNums = append(ruleNums, fields[0])
 		}
 	}
 
@@ -344,7 +350,7 @@ func (m *manager) ensureForwardRule(inIface, outIface, ctstate, comment string, 
 	}
 
 	// Delete any existing rule with our comment (handles interface/position changes)
-	m.deleteForwardRuleByComment(comment)
+	m.deleteForwardRuleByComment(comment, "")
 
 	// Insert at specified position with comment
 	addCmd := exec.Command("iptables", "-I", "FORWARD", fmt.Sprintf("%d", position),
@@ -392,10 +398,12 @@ func (m *manager) isForwardRuleCorrect(inIface, outIface, comment string, positi
 	return false
 }
 
-// deleteForwardRuleByComment deletes any FORWARD rule containing our comment
-func (m *manager) deleteForwardRuleByComment(comment string) {
-	// List FORWARD rules
-	cmd := exec.Command("iptables", "-L", "FORWARD", "--line-numbers", "-n")
+// deleteForwardRuleByComment deletes FORWARD rules matching the comment.
+// If matchBridge is non-empty, only rules that also contain the bridge name are deleted.
+// This prevents one deployment from accidentally removing another deployment's rules.
+func (m *manager) deleteForwardRuleByComment(comment string, matchBridge string) {
+	// List FORWARD rules with -v to include interface names for matching
+	cmd := exec.Command("iptables", "-L", "FORWARD", "--line-numbers", "-n", "-v")
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
 	}
@@ -408,11 +416,15 @@ func (m *manager) deleteForwardRuleByComment(comment string) {
 	var ruleNums []string
 	lines := strings.Split(string(output), "\n")
 	for _, line := range lines {
-		if strings.Contains(line, comment) {
-			fields := strings.Fields(line)
-			if len(fields) > 0 {
-				ruleNums = append(ruleNums, fields[0])
-			}
+		if !strings.Contains(line, comment) {
+			continue
+		}
+		if matchBridge != "" && !strings.Contains(line, matchBridge) {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) > 0 {
+			ruleNums = append(ruleNums, fields[0])
 		}
 	}
 
