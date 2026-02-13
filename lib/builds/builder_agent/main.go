@@ -50,8 +50,9 @@ type BuildConfig struct {
 	Secrets          []SecretRef       `json:"secrets,omitempty"`
 	TimeoutSeconds   int               `json:"timeout_seconds"`
 	NetworkMode      string            `json:"network_mode"`
-	IsAdminBuild   bool   `json:"is_admin_build,omitempty"`
-	GlobalCacheKey string `json:"global_cache_key,omitempty"`
+	IsAdminBuild     bool              `json:"is_admin_build,omitempty"`
+	GlobalCacheKey   string            `json:"global_cache_key,omitempty"`
+	ImageName        string            `json:"image_name,omitempty"`
 }
 
 // SecretRef references a secret to inject during build
@@ -761,6 +762,9 @@ func runBuild(ctx context.Context, config *BuildConfig, logWriter io.Writer) (st
 
 	// Build output reference (use host without scheme)
 	outputRef := fmt.Sprintf("%s/builds/%s", registryHost, config.JobID)
+	if config.ImageName != "" {
+		outputRef = fmt.Sprintf("%s/%s", registryHost, config.ImageName)
+	}
 
 	// Determine protocol:
 	// - RegistryInsecure=true means use HTTP (plaintext), needs registry.insecure=true in buildctl

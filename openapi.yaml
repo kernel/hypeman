@@ -2421,6 +2421,11 @@ paths:
                 timeout_seconds:
                   type: integer
                   description: Build timeout (default 600)
+                image_name:
+                  type: string
+                  description: |
+                    Custom image name for the build output. When set, the image is pushed
+                    to {registry}/{image_name} instead of {registry}/builds/{id}.
                 secrets:
                   type: string
                   description: |

@@ -62,6 +62,10 @@ type CreateBuildRequest struct {
 	// Used with IsAdminBuild to target cache/global/{key}.
 	// Regular builds import from cache/global/{key} with pull-only access.
 	GlobalCacheKey string `json:"global_cache_key,omitempty"`
+
+	// ImageName optionally sets a custom image name for the build output.
+	// When set, the image is pushed to {registry}/{image_name} instead of {registry}/builds/{id}.
+	ImageName string `json:"image_name,omitempty"`
 }
 
 // BuildPolicy defines resource limits and network policy for a build
@@ -159,6 +163,9 @@ type BuildConfig struct {
 
 	// GlobalCacheKey is the global cache identifier (e.g., "node", "python", "ubuntu", "browser")
 	GlobalCacheKey string `json:"global_cache_key,omitempty"`
+
+	// ImageName optionally sets a custom image name for the build output.
+	ImageName string `json:"image_name,omitempty"`
 }
 
 // BuildEvent represents a typed SSE event for build streaming
