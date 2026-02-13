@@ -134,6 +134,9 @@ func (m *manager) stopInstance(
 		return nil, fmt.Errorf("save metadata: %w", err)
 	}
 
+	// 9. Persist exit info from serial console (under lock, safe from races)
+	m.persistExitInfo(ctx, id)
+
 	// Record metrics
 	if m.metrics != nil {
 		m.recordDuration(ctx, m.metrics.stopDuration, start, "success", stored.HypervisorType)

@@ -33,14 +33,6 @@ func (m *manager) deriveState(ctx context.Context, stored *StoredMetadata) state
 		if m.hasSnapshot(stored.DataDir) {
 			return stateResult{State: StateStandby}
 		}
-
-		// VM is stopped -- lazily parse exit info from serial console log
-		// if not already populated. This runs once when the state is first
-		// queried after the VM dies.
-		if stored.ExitCode == nil {
-			m.parseExitSentinel(ctx, stored)
-		}
-
 		return stateResult{State: StateStopped}
 	}
 
@@ -118,16 +110,26 @@ func (m *manager) toInstance(ctx context.Context, meta *metadata) Instance {
 		StateError:     result.Error,
 		HasSnapshot:    m.hasSnapshot(meta.StoredMetadata.DataDir),
 	}
+
+	// If VM is stopped and exit info isn't persisted yet, populate in-memory
+	// from the serial console log. This is read-only -- no metadata writes.
+	// Persistence happens under lock in stopInstance or persistExitInfo.
+	if inst.State == StateStopped && inst.ExitCode == nil {
+		if code, msg, ok := m.parseExitSentinel(inst.Id); ok {
+			inst.ExitCode = &code
+			inst.ExitMessage = msg
+		}
+	}
+
 	return inst
 }
 
 // parseExitSentinel reads the last lines of the serial console log to find the
-// HYPEMAN-EXIT sentinel written by init before shutdown. If found, it persists
-// the exit code and message to metadata so subsequent queries don't re-parse.
-func (m *manager) parseExitSentinel(ctx context.Context, stored *StoredMetadata) {
-	log := logger.FromContext(ctx)
-
-	logPath := m.paths.InstanceAppLog(stored.Id)
+// HYPEMAN-EXIT sentinel written by init before shutdown.
+// Returns the exit code, message, and whether a sentinel was found.
+// This is a pure reader with no side effects.
+func (m *manager) parseExitSentinel(id string) (int, string, bool) {
+	logPath := m.paths.InstanceAppLog(id)
 
 	// Read the tail of the log file. The sentinel is written near the end
 	// (just before reboot), so we only need the last few KB even if the
@@ -135,7 +137,7 @@ func (m *manager) parseExitSentinel(ctx context.Context, stored *StoredMetadata)
 	const tailSize = 8192
 	data, err := readTail(logPath, tailSize)
 	if err != nil {
-		return // Log file doesn't exist or can't be read
+		return 0, "", false
 	}
 
 	// Scan lines from the tail looking for the sentinel
@@ -143,18 +145,38 @@ func (m *manager) parseExitSentinel(ctx context.Context, stored *StoredMetadata)
 	for _, line := range lines {
 		code, msg, ok := parseExitSentinelLine(line)
 		if ok {
-			stored.ExitCode = &code
-			stored.ExitMessage = msg
-
-			// Persist to metadata so we don't re-parse next time
-			meta := &metadata{StoredMetadata: *stored}
-			if err := m.saveMetadata(meta); err != nil {
-				log.WarnContext(ctx, "failed to persist exit info", "instance_id", stored.Id, "error", err)
-			} else {
-				log.DebugContext(ctx, "parsed exit info from serial log", "instance_id", stored.Id, "exit_code", code, "exit_message", msg)
-			}
-			return
+			return code, msg, true
 		}
+	}
+	return 0, "", false
+}
+
+// persistExitInfo parses exit info from the serial console and persists it to
+// metadata. Must be called under the instance lock.
+func (m *manager) persistExitInfo(ctx context.Context, id string) {
+	log := logger.FromContext(ctx)
+
+	meta, err := m.loadMetadata(id)
+	if err != nil {
+		return
+	}
+
+	// Already persisted
+	if meta.ExitCode != nil {
+		return
+	}
+
+	code, msg, ok := m.parseExitSentinel(id)
+	if !ok {
+		return
+	}
+
+	meta.ExitCode = &code
+	meta.ExitMessage = msg
+	if err := m.saveMetadata(meta); err != nil {
+		log.WarnContext(ctx, "failed to persist exit info", "instance_id", id, "error", err)
+	} else {
+		log.DebugContext(ctx, "parsed exit info from serial log", "instance_id", id, "exit_code", code, "exit_message", msg)
 	}
 }
 
