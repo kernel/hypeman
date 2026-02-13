@@ -179,13 +179,17 @@ func TestExecWithDebianMinimal(t *testing.T) {
 	// Create Debian 12 slim image (minimal, no iproute2)
 	createAndWaitForImage(t, svc, "docker.io/library/debian:12-slim", 60*time.Second)
 
-	// Create instance (network disabled in test environment)
+	// Create instance with a long-running command so the VM stays alive for exec.
+	// Debian's default CMD is "bash" which exits immediately (no stdin),
+	// and init shuts down the VM after the entrypoint exits.
 	t.Log("Creating Debian instance...")
 	networkEnabled := false
+	cmdOverride := []string{"sleep", "infinity"}
 	instResp, err := svc.CreateInstance(ctx(), oapi.CreateInstanceRequestObject{
 		Body: &oapi.CreateInstanceRequest{
 			Name:  "debian-exec-test",
 			Image: "docker.io/library/debian:12-slim",
+			Cmd:   &cmdOverride,
 			Network: &struct {
 				BandwidthDownload *string `json:"bandwidth_download,omitempty"`
 				BandwidthUpload   *string `json:"bandwidth_upload,omitempty"`
@@ -238,11 +242,7 @@ func TestExecWithDebianMinimal(t *testing.T) {
 		}
 	}
 
-	// Verify the app exited but VM is still usable (key behavior this test validates)
-	logs = collectTestLogs(t, svc, inst.Id, 200)
-	assert.Contains(t, logs, "[exec] app exited with code", "App should have exited")
-
-	// Test exec commands work even though the main app (bash) has exited
+	// Test exec commands work while the app is running
 	dialer2, err := hypervisor.NewVsockDialer(actualInst.HypervisorType, actualInst.VsockSocket, actualInst.VsockCID)
 	require.NoError(t, err)
 

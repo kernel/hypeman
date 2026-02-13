@@ -97,6 +97,7 @@ func TestVolumeMultiAttachReadOnly(t *testing.T) {
 		HotplugSize:    512 * 1024 * 1024,
 		OverlaySize:    1024 * 1024 * 1024,
 		Vcpus:          1,
+		Cmd:            []string{"sleep", "infinity"}, // Keep VM alive for exec
 		NetworkEnabled: false,
 		Volumes: []VolumeAttachment{
 			{VolumeID: vol.Id, MountPath: "/data", Readonly: false},
@@ -139,6 +140,7 @@ func TestVolumeMultiAttachReadOnly(t *testing.T) {
 		HotplugSize:    512 * 1024 * 1024,
 		OverlaySize:    1024 * 1024 * 1024,
 		Vcpus:          1,
+		Cmd:            []string{"sleep", "infinity"}, // Keep VM alive for exec
 		NetworkEnabled: false,
 		Volumes: []VolumeAttachment{
 			{VolumeID: vol.Id, MountPath: "/data", Readonly: true},
@@ -155,6 +157,7 @@ func TestVolumeMultiAttachReadOnly(t *testing.T) {
 		HotplugSize:    512 * 1024 * 1024,
 		OverlaySize:    1024 * 1024 * 1024,
 		Vcpus:          1,
+		Cmd:            []string{"sleep", "infinity"}, // Keep VM alive for exec
 		NetworkEnabled: false,
 		Volumes: []VolumeAttachment{
 			{VolumeID: vol.Id, MountPath: "/data", Readonly: true, Overlay: true, OverlaySize: 100 * 1024 * 1024}, // 100MB overlay
@@ -274,6 +277,7 @@ func TestOverlayDiskCleanupOnDelete(t *testing.T) {
 		HotplugSize:    512 * 1024 * 1024,
 		OverlaySize:    1024 * 1024 * 1024,
 		Vcpus:          1,
+		Cmd:            []string{"sleep", "infinity"}, // Keep VM alive for exec
 		NetworkEnabled: false,
 		Volumes: []VolumeAttachment{
 			{VolumeID: vol.Id, MountPath: "/data", Readonly: true, Overlay: true, OverlaySize: 100 * 1024 * 1024},
@@ -398,6 +402,7 @@ func TestVolumeFromArchive(t *testing.T) {
 		HotplugSize:    512 * 1024 * 1024,
 		OverlaySize:    1024 * 1024 * 1024,
 		Vcpus:          1,
+		Cmd:            []string{"sleep", "infinity"}, // Keep VM alive for exec
 		NetworkEnabled: false,
 		Volumes: []VolumeAttachment{
 			{VolumeID: vol.Id, MountPath: "/archive", Readonly: true},
