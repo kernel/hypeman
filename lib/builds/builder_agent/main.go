@@ -1180,7 +1180,17 @@ func createErofsFromRegistry(config *BuildConfig, digest string) string {
 
 	log.Printf("Image has %d layers, extracting...", len(layers))
 
-	// Download and extract each layer
+	// Download and extract each layer with proper OCI whiteout handling.
+	//
+	// OCI whiteout semantics require careful ordering:
+	// - Opaque whiteouts (.wh..wh..opq): "replace this directory entirely with
+	//   this layer's contents." Must clear the directory BEFORE extracting the
+	//   layer, otherwise the layer's own files get deleted.
+	// - Regular whiteouts (.wh.foo): "delete foo from lower layers." Safe to
+	//   process AFTER extracting the layer.
+	//
+	// Approach: download blob to temp file, pre-scan tar for opaque whiteouts,
+	// clear those directories, extract the full tar, then handle regular whiteouts.
 	for i, layer := range layers {
 		blobURL := fmt.Sprintf("%s/v2/%s/blobs/%s", baseURL, repo, layer.Digest)
 		blobReq, err := http.NewRequest("GET", blobURL, nil)
@@ -1203,56 +1213,88 @@ func createErofsFromRegistry(config *BuildConfig, digest string) string {
 			return ""
 		}
 
-		// Determine decompression based on media type
-		tarFlags := "-xf"
-		if strings.Contains(layer.MediaType, "gzip") {
-			tarFlags = "-xzf"
+		// Save blob to temp file so we can scan it for whiteouts before extracting
+		blobFile, err := os.CreateTemp("", "layer-*.blob")
+		if err != nil {
+			blobResp.Body.Close()
+			log.Printf("Warning: erofs creation failed (create temp for layer %d): %v", i, err)
+			return ""
 		}
-		// For zstd, use zstd pipe
-		if strings.Contains(layer.MediaType, "zstd") {
-			// Use zstd decompression via pipe
-			tarCmd := exec.Command("sh", "-c", fmt.Sprintf("zstd -d | tar -xf - -C %s", exportDir))
-			tarCmd.Stdin = blobResp.Body
-			if out, err := tarCmd.CombinedOutput(); err != nil {
-				blobResp.Body.Close()
-				log.Printf("Warning: erofs creation failed (extract zstd layer %d): %v: %s", i, err, out)
-				return ""
-			}
-		} else {
-			tarCmd := exec.Command("tar", tarFlags, "-", "-C", exportDir)
-			tarCmd.Stdin = blobResp.Body
-			if out, err := tarCmd.CombinedOutput(); err != nil {
-				blobResp.Body.Close()
-				log.Printf("Warning: erofs creation failed (extract layer %d): %v: %s", i, err, out)
-				return ""
-			}
+		if _, err := io.Copy(blobFile, blobResp.Body); err != nil {
+			blobResp.Body.Close()
+			blobFile.Close()
+			os.Remove(blobFile.Name())
+			log.Printf("Warning: erofs creation failed (save layer %d): %v", i, err)
+			return ""
 		}
 		blobResp.Body.Close()
+		blobFile.Close()
+		blobPath := blobFile.Name()
+
+		// Build the decompression + tar pipeline command based on media type
+		var decompressListCmd, decompressExtractCmd string
+		if strings.Contains(layer.MediaType, "zstd") {
+			decompressListCmd = fmt.Sprintf("zstd -d < %s | tar -tf -", blobPath)
+			decompressExtractCmd = fmt.Sprintf("zstd -d < %s | tar -xf - -C %s", blobPath, exportDir)
+		} else if strings.Contains(layer.MediaType, "gzip") {
+			decompressListCmd = fmt.Sprintf("tar -tzf %s", blobPath)
+			decompressExtractCmd = fmt.Sprintf("tar -xzf %s -C %s", blobPath, exportDir)
+		} else {
+			decompressListCmd = fmt.Sprintf("tar -tf %s", blobPath)
+			decompressExtractCmd = fmt.Sprintf("tar -xf %s -C %s", blobPath, exportDir)
+		}
+
+		// Pre-scan: list tar entries to find opaque whiteouts (.wh..wh..opq).
+		// These must be processed BEFORE extraction so the layer's own files
+		// in that directory are preserved.
+		listCmd := exec.Command("sh", "-c", decompressListCmd)
+		listOut, err := listCmd.Output()
+		if err != nil {
+			os.Remove(blobPath)
+			log.Printf("Warning: erofs creation failed (list layer %d): %v", i, err)
+			return ""
+		}
+		for _, entry := range strings.Split(string(listOut), "\n") {
+			entry = strings.TrimPrefix(entry, "./")
+			if strings.HasSuffix(entry, "/.wh..wh..opq") || entry == ".wh..wh..opq" {
+				// Opaque whiteout: clear the target directory before extraction
+				opaqueDir := filepath.Join(exportDir, filepath.Dir(entry))
+				if info, err := os.Stat(opaqueDir); err == nil && info.IsDir() {
+					entries, _ := os.ReadDir(opaqueDir)
+					for _, e := range entries {
+						os.RemoveAll(filepath.Join(opaqueDir, e.Name()))
+					}
+				}
+			}
+		}
+
+		// Extract the full layer
+		extractCmd := exec.Command("sh", "-c", decompressExtractCmd)
+		if out, err := extractCmd.CombinedOutput(); err != nil {
+			os.Remove(blobPath)
+			log.Printf("Warning: erofs creation failed (extract layer %d): %v: %s", i, err, out)
+			return ""
+		}
+		os.Remove(blobPath)
 		log.Printf("  Layer %d/%d extracted (%d bytes)", i+1, len(layers), layer.Size)
 
-		// Process OCI whiteout files for THIS layer before extracting the next.
-		// Whiteouts must be applied per-layer: a whiteout in layer N deletes files
-		// from layers 0..N-1, but must not affect files added by layers N+1..last.
+		// Post-extract: process regular whiteouts and clean up opaque whiteout markers.
+		// Regular whiteouts (.wh.foo) delete a specific file from lower layers.
+		// Since we extract the full layer first, the whiteout marker and its target
+		// may both exist — remove both.
 		filepath.Walk(exportDir, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				return nil
 			}
 			name := info.Name()
-			if strings.HasPrefix(name, ".wh.") {
-				if name == ".wh..wh..opq" {
-					// Opaque whiteout: remove all siblings
-					dir := filepath.Dir(path)
-					entries, _ := os.ReadDir(dir)
-					for _, e := range entries {
-						if e.Name() != ".wh..wh..opq" {
-							os.RemoveAll(filepath.Join(dir, e.Name()))
-						}
-					}
-				} else {
-					// Regular whiteout: remove the target file
-					target := filepath.Join(filepath.Dir(path), strings.TrimPrefix(name, ".wh."))
-					os.RemoveAll(target)
-				}
+			if name == ".wh..wh..opq" {
+				// Opaque whiteout marker: just remove the marker file.
+				// The directory was already cleared before extraction.
+				os.Remove(path)
+			} else if strings.HasPrefix(name, ".wh.") {
+				// Regular whiteout: remove the target file from lower layers
+				target := filepath.Join(filepath.Dir(path), strings.TrimPrefix(name, ".wh."))
+				os.RemoveAll(target)
 				os.Remove(path)
 			}
 			return nil
