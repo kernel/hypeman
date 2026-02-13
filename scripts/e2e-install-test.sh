@@ -140,11 +140,7 @@ export HYPEMAN_API_KEY="$API_KEY"
 export HYPEMAN_BASE_URL="http://localhost:${PORT:-8080}"
 
 # Determine CLI path
-if [ "$OS" = "darwin" ]; then
-    HYPEMAN_CMD="/usr/local/bin/hypeman"
-else
-    HYPEMAN_CMD="/usr/local/bin/hypeman"
-fi
+HYPEMAN_CMD="/usr/local/bin/hypeman"
 
 # Verify CLI was installed
 [ -x "$HYPEMAN_CMD" ] || fail "hypeman CLI not found at $HYPEMAN_CMD"
