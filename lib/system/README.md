@@ -70,8 +70,12 @@ It replaces the previous shell-based init script with cleaner logic and structur
 - ✅ Hand off to systemd via chroot + exec (systemd mode)
 
 **Two boot modes:**
-- **Exec mode** (default): Init chroots to container rootfs, runs entrypoint as child process, then waits on guest-agent to keep VM alive
+- **Exec mode** (default): Init chroots to container rootfs, runs entrypoint as child process. When the app exits, init logs exit info and cleanly shuts down the VM via `reboot(POWER_OFF)`.
 - **Systemd mode** (auto-detected on host): Init chroots to container rootfs, then execs /sbin/init so systemd becomes PID 1
+
+**Graceful shutdown:** The host sends a `Shutdown` gRPC RPC to the guest-agent, which signals PID 1 (init). Init forwards the signal to the entrypoint child process. If the app doesn't exit within the stop timeout, the host falls back to a hard hypervisor kill.
+
+**Exit info propagation:** When the entrypoint exits, init writes a machine-parseable `HYPEMAN-EXIT` sentinel to the serial console with the exit code and a human-readable description (signal names, OOM detection via `/dev/kmsg`, shell conventions for 126/127). The host lazily parses this from the serial log when it discovers the VM has stopped, and persists `exit_code`/`exit_message` to instance metadata and the API.
 
 **Environment variables:** In exec mode, env vars are passed directly to the entrypoint and guest-agent processes. In systemd mode, env vars are written to `/etc/hypeman/env` and loaded via `EnvironmentFile` in the `hypeman-agent.service` unit.
 
