@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"os"
@@ -326,6 +327,7 @@ func run() (exitCode int) {
 		logf("Image ready")
 
 		// --- Cloud Hypervisor (default) ---
+		logf("Smoke test: launching cloud-hypervisor VM...")
 		chStart := time.Now()
 		out, err = sshRun(sshClient, "sudo hypeman run --name alpine-ch alpine:latest")
 		if err != nil {
@@ -333,21 +335,23 @@ func run() (exitCode int) {
 			return 1
 		}
 		timings["ch_run"] = time.Since(chStart)
-		logf("Smoke test: cloud-hypervisor instance launched (%s)\n%s",
+		logf("Smoke test: cloud-hypervisor run returned (%s)\n%s",
 			timings["ch_run"].Round(time.Millisecond), strings.TrimSpace(out))
 
-		// Verify CH instance is running.
-		time.Sleep(2 * time.Second)
-		out, err = sshRun(sshClient, "sudo hypeman ps")
+		// Verify CH instance with exec — this is the real test.
+		logf("Smoke test: verifying cloud-hypervisor VM with exec...")
+		if err := waitForGuestAgent(ctx, sshClient, "alpine-ch"); err != nil {
+			logf("Cloud-hypervisor VM exec failed — VM may have crashed")
+			dumpVMDiagnostics(sshClient, "alpine-ch", "cloud-hypervisor")
+			logf("Cloud-hypervisor exec verification failed: %v", err)
+			return 1
+		}
+		out, err = sshRun(sshClient, "sudo hypeman exec alpine-ch -- uname -a")
 		if err != nil {
-			logf("Failed to list instances: %v\n%s", err, out)
+			logf("Failed to exec uname in CH VM: %v\n%s", err, out)
 			return 1
 		}
-		if !strings.Contains(out, "alpine-ch") {
-			logf("Cloud-hypervisor instance not found in ps:\n%s", strings.TrimSpace(out))
-			return 1
-		}
-		logf("Smoke test: cloud-hypervisor instance verified running")
+		logf("Smoke test: cloud-hypervisor exec verified: %s", strings.TrimSpace(out))
 
 		// Stop CH before QEMU — both use the same rootfs.ext4 and the
 		// filesystem lock prevents concurrent access.
@@ -358,6 +362,7 @@ func run() (exitCode int) {
 		time.Sleep(1 * time.Second)
 
 		// --- QEMU ---
+		logf("Smoke test: launching QEMU VM...")
 		qemuStart := time.Now()
 		out, err = sshRun(sshClient, "sudo hypeman run --name alpine-qemu --hypervisor qemu alpine:latest")
 		if err != nil {
@@ -366,28 +371,63 @@ func run() (exitCode int) {
 			return 1
 		}
 		timings["qemu_run"] = time.Since(qemuStart)
-		logf("Smoke test: qemu instance launched (%s)\n%s",
+		logf("Smoke test: qemu run returned (%s)\n%s",
 			timings["qemu_run"].Round(time.Millisecond), strings.TrimSpace(out))
 
-		// Verify QEMU instance is running.
-		time.Sleep(2 * time.Second)
-		out, err = sshRun(sshClient, "sudo hypeman ps")
+		// Verify QEMU instance with exec.
+		logf("Smoke test: verifying QEMU VM with exec...")
+		if err := waitForGuestAgent(ctx, sshClient, "alpine-qemu"); err != nil {
+			logf("QEMU VM exec failed — VM may have crashed")
+			dumpVMDiagnostics(sshClient, "alpine-qemu", "qemu")
+			logf("QEMU exec verification failed: %v", err)
+			return 1
+		}
+		out, err = sshRun(sshClient, "sudo hypeman exec alpine-qemu -- uname -a")
 		if err != nil {
-			logf("Failed to list instances: %v\n%s", err, out)
+			logf("Failed to exec uname in QEMU VM: %v\n%s", err, out)
 			return 1
 		}
-		if !strings.Contains(out, "alpine-qemu") {
-			logf("QEMU instance not found in ps output:\n%s", strings.TrimSpace(out))
-			return 1
-		}
-		logf("Smoke test: qemu instance verified running")
+		logf("Smoke test: qemu exec verified: %s", strings.TrimSpace(out))
 
 		// Clean up smoke test instances.
 		sshRun(sshClient, "sudo hypeman stop alpine-qemu")
 		sshRun(sshClient, "sudo hypeman rm alpine-qemu")
 
 		timings["smoke"] = time.Since(startTime)
-		logf("All smoke tests passed! Both cloud-hypervisor and QEMU work with nested virtualization.")
+		logf("All smoke tests passed! Both cloud-hypervisor and QEMU VMs verified with exec.")
+
+		// --- VM launch benchmark (50 iterations per hypervisor) ---
+		logf("Starting VM launch benchmark (50 iterations per hypervisor)...")
+		chLaunchTimes, qemuLaunchTimes, err := runLaunchBenchmark(ctx, sshClient, 50)
+		if err != nil {
+			logf("Launch benchmark failed: %v", err)
+			return 1
+		}
+		chStats := computeStats(chLaunchTimes)
+		qemuStats := computeStats(qemuLaunchTimes)
+
+		fmt.Println()
+		logf("VM Launch Benchmark (50 iterations):")
+		logf("  Cloud Hypervisor: median=%s avg=%s min=%s max=%s p95=%s",
+			chStats.median.Round(time.Millisecond), chStats.avg.Round(time.Millisecond),
+			chStats.min.Round(time.Millisecond), chStats.max.Round(time.Millisecond),
+			chStats.p95.Round(time.Millisecond))
+		logf("  QEMU:             median=%s avg=%s min=%s max=%s p95=%s",
+			qemuStats.median.Round(time.Millisecond), qemuStats.avg.Round(time.Millisecond),
+			qemuStats.min.Round(time.Millisecond), qemuStats.max.Round(time.Millisecond),
+			qemuStats.p95.Round(time.Millisecond))
+
+		// Store stats for final summary.
+		timings["ch_median"] = chStats.median
+		timings["ch_avg"] = chStats.avg
+		timings["ch_min"] = chStats.min
+		timings["ch_max"] = chStats.max
+		timings["ch_p95"] = chStats.p95
+		timings["qemu_median"] = qemuStats.median
+		timings["qemu_avg"] = qemuStats.avg
+		timings["qemu_min"] = qemuStats.min
+		timings["qemu_max"] = qemuStats.max
+		timings["qemu_p95"] = qemuStats.p95
 	} else {
 		logf("Skipping smoke test (--skip-smoke)")
 	}
@@ -419,18 +459,30 @@ func run() (exitCode int) {
 	fmt.Printf("  Results: %s\n", *instanceType)
 	fmt.Println("═══════════════════════════════════════════")
 	fmt.Println()
-	fmt.Println("Timing:")
+	fmt.Println("Instance Boot:")
 	fmt.Printf("  Launch -> Running:      %s\n", timings["running"].Round(time.Second))
 	fmt.Printf("  Launch -> SSH Ready:    %s\n", timings["ssh"].Round(time.Second))
 	fmt.Printf("  Launch -> Installed:    %s\n", timings["installed"].Round(time.Second))
-	if t, ok := timings["ch_run"]; ok {
-		fmt.Printf("  Cloud Hypervisor run:   %s\n", t.Round(time.Millisecond))
+	if _, ok := timings["smoke"]; ok {
+		fmt.Printf("  Launch -> Smoke Test:   %s\n", timings["smoke"].Round(time.Second))
 	}
-	if t, ok := timings["qemu_run"]; ok {
-		fmt.Printf("  QEMU run:               %s\n", t.Round(time.Millisecond))
-	}
-	if t, ok := timings["smoke"]; ok {
-		fmt.Printf("  Launch -> Smoke Test:   %s\n", t.Round(time.Second))
+	if _, ok := timings["ch_median"]; ok {
+		fmt.Println()
+		fmt.Println("VM Launch Latency (50 iterations):")
+		fmt.Println("  Cloud Hypervisor:")
+		fmt.Printf("    Median: %s  Avg: %s  Min: %s  Max: %s  P95: %s\n",
+			timings["ch_median"].Round(time.Millisecond),
+			timings["ch_avg"].Round(time.Millisecond),
+			timings["ch_min"].Round(time.Millisecond),
+			timings["ch_max"].Round(time.Millisecond),
+			timings["ch_p95"].Round(time.Millisecond))
+		fmt.Println("  QEMU:")
+		fmt.Printf("    Median: %s  Avg: %s  Min: %s  Max: %s  P95: %s\n",
+			timings["qemu_median"].Round(time.Millisecond),
+			timings["qemu_avg"].Round(time.Millisecond),
+			timings["qemu_min"].Round(time.Millisecond),
+			timings["qemu_max"].Round(time.Millisecond),
+			timings["qemu_p95"].Round(time.Millisecond))
 	}
 	if !*skipBenchmark && hostScore > 0 {
 		fmt.Println()
@@ -440,8 +492,6 @@ func run() (exitCode int) {
 			fmt.Printf("  VM score:               %.2f iterations/sec\n", vmScore)
 			overhead := (1.0 - vmScore/hostScore) * 100
 			fmt.Printf("  Virtualization overhead: %.1f%%\n", overhead)
-		} else {
-			fmt.Printf("  VM score:               N/A (L2 VMs not supported)\n")
 		}
 		if t, ok := timings["benchmark"]; ok {
 			fmt.Printf("  Launch -> Benchmark:    %s\n", t.Round(time.Second))
@@ -689,6 +739,16 @@ until curl -sf https://checkip.amazonaws.com > /dev/null 2>&1; do sleep 1; done
 apt-get update -qq
 apt-get install -y -qq git make curl qemu-system-x86 build-essential
 
+# Configure KVM module parameters for nested virtualization.
+# NOTE: Do NOT rmmod/modprobe kvm_intel at runtime — reloading the module
+# corrupts VMX state and makes VM crashes significantly more frequent.
+# Instead, set modprobe.d options so the module loads correctly on boot.
+# The APICv disable reduces (but does not eliminate) a Nitro hypervisor bug
+# where VMCS VM-Exit interrupt info is set to 0xffffffff during nested VMX.
+echo "options kvm_intel nested=1 enable_apicv=0" > /etc/modprobe.d/kvm-nested.conf
+echo "KVM nested: $(cat /sys/module/kvm_intel/parameters/nested 2>/dev/null || echo 'N/A')"
+echo "KVM APICv:  $(cat /sys/module/kvm_intel/parameters/enable_apicv 2>/dev/null || echo 'N/A')"
+
 # Install Go (needed for BRANCH mode)
 curl -fsSL https://go.dev/dl/go1.25.4.linux-amd64.tar.gz | tar -C /usr/local -xz
 export PATH=$PATH:/usr/local/go/bin
@@ -796,6 +856,165 @@ func waitForImageReady(ctx context.Context, client *ssh.Client) error {
 			}
 		}
 	}
+}
+
+// stats holds computed statistics for a set of durations.
+type stats struct {
+	median, avg, min, max, p95 time.Duration
+}
+
+// computeStats computes median, average, min, max, and p95 from a slice of durations.
+func computeStats(durations []time.Duration) stats {
+	if len(durations) == 0 {
+		return stats{}
+	}
+	sorted := make([]time.Duration, len(durations))
+	copy(sorted, durations)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+
+	var sum time.Duration
+	for _, d := range sorted {
+		sum += d
+	}
+
+	n := len(sorted)
+	s := stats{
+		min: sorted[0],
+		max: sorted[n-1],
+		avg: time.Duration(int64(sum) / int64(n)),
+	}
+	// Median.
+	if n%2 == 0 {
+		s.median = (sorted[n/2-1] + sorted[n/2]) / 2
+	} else {
+		s.median = sorted[n/2]
+	}
+	// P95.
+	p95idx := int(math.Ceil(float64(n)*0.95)) - 1
+	if p95idx >= n {
+		p95idx = n - 1
+	}
+	s.p95 = sorted[p95idx]
+	return s
+}
+
+// dumpVMDiagnostics prints debug info when a VM fails to respond to exec.
+func dumpVMDiagnostics(client *ssh.Client, instanceName, hypervisor string) {
+	logf("--- VM Diagnostics for %s (%s) ---", instanceName, hypervisor)
+
+	// Instance status from hypeman.
+	out, _ := sshRun(client, fmt.Sprintf("sudo hypeman ps"))
+	logf("hypeman ps:\n%s", strings.TrimSpace(out))
+
+	// Inspect the instance for detailed info.
+	out, _ = sshRun(client, fmt.Sprintf("sudo hypeman inspect %s 2>&1", instanceName))
+	logf("hypeman inspect %s:\n%s", instanceName, strings.TrimSpace(out))
+
+	// Check if the VMM process is actually running.
+	out, _ = sshRun(client, fmt.Sprintf("ps aux | grep -E '(cloud-hypervisor|qemu)' | grep -v grep"))
+	logf("VMM processes:\n%s", strings.TrimSpace(out))
+
+	// Journal logs from hypeman service.
+	out, _ = sshRun(client, "sudo journalctl -u hypeman --no-pager -n 50")
+	logf("hypeman service logs (last 50):\n%s", strings.TrimSpace(out))
+
+	// KVM-related dmesg.
+	out, _ = sshRun(client, "sudo dmesg | grep -iE '(kvm|virt|vmx)' | tail -20")
+	logf("KVM dmesg:\n%s", strings.TrimSpace(out))
+
+	logf("--- End diagnostics ---")
+}
+
+// runLaunchBenchmark runs N iterations of VM launch+exec for each hypervisor,
+// returning the per-iteration durations. Each iteration creates a VM, waits for
+// exec to work, then tears it down.
+func runLaunchBenchmark(ctx context.Context, client *ssh.Client, iterations int) (chTimes, qemuTimes []time.Duration, err error) {
+	chTimes = make([]time.Duration, 0, iterations)
+	qemuTimes = make([]time.Duration, 0, iterations)
+
+	// Ensure image is available.
+	sshRun(client, "sudo hypeman pull alpine:latest 2>/dev/null")
+	waitForImageReady(ctx, client)
+
+	// Cloud Hypervisor benchmark.
+	logf("Launch benchmark: Cloud Hypervisor (%d iterations)...", iterations)
+	for i := 0; i < iterations; i++ {
+		name := fmt.Sprintf("bench-ch-%d", i)
+		start := time.Now()
+		out, err := sshRun(client, fmt.Sprintf("sudo hypeman run --name %s alpine:latest", name))
+		if err != nil {
+			logf("  CH iteration %d failed to run: %v\n%s", i, err, out)
+			// Clean up and skip.
+			sshRun(client, fmt.Sprintf("sudo hypeman stop %s 2>/dev/null", name))
+			sshRun(client, fmt.Sprintf("sudo hypeman rm %s 2>/dev/null", name))
+			continue
+		}
+		// Wait for exec to work (with a shorter timeout for benchmarks).
+		execOK := false
+		deadline := time.Now().Add(60 * time.Second)
+		for time.Now().Before(deadline) {
+			out, err := sshRun(client, fmt.Sprintf("sudo hypeman exec %s -- echo ok", name))
+			if err == nil && strings.Contains(out, "ok") {
+				execOK = true
+				break
+			}
+			time.Sleep(1 * time.Second)
+		}
+		elapsed := time.Since(start)
+		if execOK {
+			chTimes = append(chTimes, elapsed)
+			if (i+1)%10 == 0 {
+				logf("  CH: %d/%d done (last: %s)", i+1, iterations, elapsed.Round(time.Millisecond))
+			}
+		} else {
+			logf("  CH iteration %d: exec timeout", i)
+		}
+		// Tear down.
+		sshRun(client, fmt.Sprintf("sudo hypeman stop %s", name))
+		sshRun(client, fmt.Sprintf("sudo hypeman rm %s", name))
+	}
+
+	// QEMU benchmark.
+	logf("Launch benchmark: QEMU (%d iterations)...", iterations)
+	for i := 0; i < iterations; i++ {
+		name := fmt.Sprintf("bench-qemu-%d", i)
+		start := time.Now()
+		out, err := sshRun(client, fmt.Sprintf("sudo hypeman run --name %s --hypervisor qemu alpine:latest", name))
+		if err != nil {
+			logf("  QEMU iteration %d failed to run: %v\n%s", i, err, out)
+			sshRun(client, fmt.Sprintf("sudo hypeman stop %s 2>/dev/null", name))
+			sshRun(client, fmt.Sprintf("sudo hypeman rm %s 2>/dev/null", name))
+			continue
+		}
+		execOK := false
+		deadline := time.Now().Add(60 * time.Second)
+		for time.Now().Before(deadline) {
+			out, err := sshRun(client, fmt.Sprintf("sudo hypeman exec %s -- echo ok", name))
+			if err == nil && strings.Contains(out, "ok") {
+				execOK = true
+				break
+			}
+			time.Sleep(1 * time.Second)
+		}
+		elapsed := time.Since(start)
+		if execOK {
+			qemuTimes = append(qemuTimes, elapsed)
+			if (i+1)%10 == 0 {
+				logf("  QEMU: %d/%d done (last: %s)", i+1, iterations, elapsed.Round(time.Millisecond))
+			}
+		} else {
+			logf("  QEMU iteration %d: exec timeout", i)
+		}
+		sshRun(client, fmt.Sprintf("sudo hypeman stop %s", name))
+		sshRun(client, fmt.Sprintf("sudo hypeman rm %s", name))
+	}
+
+	if len(chTimes) == 0 && len(qemuTimes) == 0 {
+		return nil, nil, fmt.Errorf("all launch benchmark iterations failed")
+	}
+	logf("Launch benchmark complete: %d/%d CH, %d/%d QEMU succeeded",
+		len(chTimes), iterations, len(qemuTimes), iterations)
+	return chTimes, qemuTimes, nil
 }
 
 // waitForUserdata polls for the /tmp/userdata-complete marker file.
