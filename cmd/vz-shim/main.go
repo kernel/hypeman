@@ -49,11 +49,13 @@ func main() {
 	vm, vmConfig, err := createVM(config)
 	if err != nil {
 		slog.Error("failed to create VM", "error", err)
+		fmt.Fprintf(os.Stderr, "failed to create VM: %v\n", err)
 		os.Exit(1)
 	}
 
 	if err := vm.Start(); err != nil {
 		slog.Error("failed to start VM", "error", err)
+		fmt.Fprintf(os.Stderr, "failed to start VM: %v\n", err)
 		os.Exit(1)
 	}
 	slog.Info("VM started", "vcpus", config.VCPUs, "memory_mb", config.MemoryBytes/1024/1024)
