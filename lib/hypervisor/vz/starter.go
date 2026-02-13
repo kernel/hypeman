@@ -38,7 +38,7 @@ var (
 // extractShim extracts the embedded vz-shim binary to a temp file and codesigns it.
 func extractShim() (string, error) {
 	shimOnce.Do(func() {
-		f, err := os.CreateTemp("", "vz-shim-*")
+		f, err := os.Create(filepath.Join(os.TempDir(), "vz-shim"))
 		if err != nil {
 			shimErr = fmt.Errorf("create temp file: %w", err)
 			return
