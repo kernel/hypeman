@@ -158,7 +158,7 @@ func (m *manager) maybePeristExitInfo(ctx context.Context, id string) {
 	m.persistExitInfo(ctx, id)
 }
 
-// CreateInstance creates and starts a new instance
+// t CreateInstance creates and starts a new instance
 func (m *manager) CreateInstance(ctx context.Context, req CreateInstanceRequest) (*Instance, error) {
 	// Note: ID is generated inside createInstance, so we can't lock before calling it.
 	// This is safe because:
@@ -253,7 +253,11 @@ func (m *manager) GetInstance(ctx context.Context, idOrName string) (*Instance, 
 		}
 	}
 	if len(nameMatches) == 1 {
-		return &nameMatches[0], nil
+		inst := &nameMatches[0]
+		if inst.State == StateStopped && inst.ExitCode != nil {
+			m.maybePeristExitInfo(ctx, inst.Id)
+		}
+		return inst, nil
 	}
 	if len(nameMatches) > 1 {
 		return nil, ErrAmbiguousName
@@ -267,7 +271,11 @@ func (m *manager) GetInstance(ctx context.Context, idOrName string) (*Instance, 
 		}
 	}
 	if len(prefixMatches) == 1 {
-		return &prefixMatches[0], nil
+		inst := &prefixMatches[0]
+		if inst.State == StateStopped && inst.ExitCode != nil {
+			m.maybePeristExitInfo(ctx, inst.Id)
+		}
+		return inst, nil
 	}
 	if len(prefixMatches) > 1 {
 		return nil, ErrAmbiguousName
