@@ -99,7 +99,7 @@ func (m *mockInstanceManager) StopInstance(ctx context.Context, id string) (*ins
 	return nil, instances.ErrNotFound
 }
 
-func (m *mockInstanceManager) StartInstance(ctx context.Context, id string) (*instances.Instance, error) {
+func (m *mockInstanceManager) StartInstance(ctx context.Context, id string, req instances.StartInstanceRequest) (*instances.Instance, error) {
 	return nil, nil
 }
 
