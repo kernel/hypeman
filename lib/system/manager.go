@@ -62,13 +62,13 @@ func (m *manager) GetKernelPath(version KernelVersion) (string, error) {
 func (m *manager) GetInitrdPath() (string, error) {
 	arch := GetArch()
 	latestLink := m.paths.SystemInitrdLatest(arch)
-	
+
 	// Read the symlink to get the timestamp
 	target, err := os.Readlink(latestLink)
 	if err != nil {
 		return "", fmt.Errorf("read latest symlink: %w", err)
 	}
-	
+
 	return m.paths.SystemInitrdTimestamp(target, arch), nil
 }
 
@@ -76,4 +76,3 @@ func (m *manager) GetInitrdPath() (string, error) {
 func (m *manager) GetDefaultKernelVersion() KernelVersion {
 	return DefaultKernelVersion
 }
-

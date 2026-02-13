@@ -15,15 +15,15 @@ const (
 
 // Device represents a registered PCI device for passthrough
 type Device struct {
-	Id          string     `json:"id"`           // cuid2 identifier
-	Name        string     `json:"name"`         // user-provided globally unique name
-	Type        DeviceType `json:"type"`         // gpu or pci
-	PCIAddress  string     `json:"pci_address"`  // e.g., "0000:a2:00.0"
-	VendorID    string     `json:"vendor_id"`    // e.g., "10de"
-	DeviceID    string     `json:"device_id"`    // e.g., "27b8"
-	IOMMUGroup  int        `json:"iommu_group"`  // IOMMU group number
+	Id          string     `json:"id"`            // cuid2 identifier
+	Name        string     `json:"name"`          // user-provided globally unique name
+	Type        DeviceType `json:"type"`          // gpu or pci
+	PCIAddress  string     `json:"pci_address"`   // e.g., "0000:a2:00.0"
+	VendorID    string     `json:"vendor_id"`     // e.g., "10de"
+	DeviceID    string     `json:"device_id"`     // e.g., "27b8"
+	IOMMUGroup  int        `json:"iommu_group"`   // IOMMU group number
 	BoundToVFIO bool       `json:"bound_to_vfio"` // whether device is bound to vfio-pci
-	AttachedTo  *string    `json:"attached_to"`  // instance ID if attached, nil otherwise
+	AttachedTo  *string    `json:"attached_to"`   // instance ID if attached, nil otherwise
 	CreatedAt   time.Time  `json:"created_at"`
 }
 
@@ -52,5 +52,3 @@ var DeviceNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]+$`)
 func ValidateDeviceName(name string) bool {
 	return DeviceNamePattern.MatchString(name)
 }
-
-

@@ -527,7 +527,7 @@ func TestBuildQueue_ConcurrencyLimit(t *testing.T) {
 	queue := NewBuildQueue(2) // Max 2 concurrent
 
 	started := make(chan string, 5)
-	
+
 	// Enqueue 5 builds with blocking start functions
 	for i := 0; i < 5; i++ {
 		id := string(rune('A' + i))

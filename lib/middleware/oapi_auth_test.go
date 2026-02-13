@@ -201,4 +201,3 @@ func TestJwtAuth_RequiresAuthorization(t *testing.T) {
 		assert.Contains(t, rr.Body.String(), "invalid token")
 	})
 }
-

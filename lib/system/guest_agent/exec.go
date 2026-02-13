@@ -258,4 +258,3 @@ func (s *guestServer) buildEnv(envMap map[string]string) []string {
 
 	return env
 }
-

@@ -320,4 +320,3 @@ func buildToOAPI(b *builds.Build) oapi.Build {
 
 	return oapiBuild
 }
-

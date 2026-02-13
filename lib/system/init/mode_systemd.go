@@ -97,4 +97,3 @@ WantedBy=multi-user.target
 	// Use relative path for the symlink
 	return os.Symlink("../hypeman-agent.service", symlinkPath)
 }
-

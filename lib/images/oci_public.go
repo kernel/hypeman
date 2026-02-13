@@ -32,4 +32,3 @@ func (c *OCIClient) PullAndUnpack(ctx context.Context, imageRef, digest, exportD
 	}
 	return nil
 }
-

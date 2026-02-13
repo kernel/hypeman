@@ -123,4 +123,3 @@ func listVolumeIDs(p *paths.Paths) ([]string, error) {
 
 	return ids, nil
 }
-

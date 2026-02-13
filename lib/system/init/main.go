@@ -94,4 +94,3 @@ func dropToShell() {
 	cmd.Run()
 	os.Exit(1)
 }
-

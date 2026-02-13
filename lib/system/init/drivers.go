@@ -187,4 +187,3 @@ func injectNvidiaLibraries(log *Logger) error {
 	log.Info("gpu", fmt.Sprintf("injected NVIDIA driver libraries (version: %s)", version))
 	return nil
 }
-

@@ -33,7 +33,7 @@ type ExecRequest struct {
 	TTY          bool              `json:"tty"`
 	Env          map[string]string `json:"env,omitempty"`
 	Cwd          string            `json:"cwd,omitempty"`
-	Timeout      int32             `json:"timeout,omitempty"`       // seconds
+	Timeout      int32             `json:"timeout,omitempty"`        // seconds
 	WaitForAgent int32             `json:"wait_for_agent,omitempty"` // seconds to wait for guest agent to be ready
 }
 
