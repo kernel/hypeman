@@ -1,14 +1,20 @@
 package instances
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
 )
+
+// exitSentinelPrefix is the machine-parseable prefix written by init to serial console.
+const exitSentinelPrefix = "HYPEMAN-EXIT "
 
 // stateResult holds the result of state derivation
 type stateResult struct {
@@ -27,6 +33,14 @@ func (m *manager) deriveState(ctx context.Context, stored *StoredMetadata) state
 		if m.hasSnapshot(stored.DataDir) {
 			return stateResult{State: StateStandby}
 		}
+
+		// VM is stopped -- lazily parse exit info from serial console log
+		// if not already populated. This runs once when the state is first
+		// queried after the VM dies.
+		if stored.ExitCode == nil {
+			m.parseExitSentinel(ctx, stored)
+		}
+
 		return stateResult{State: StateStopped}
 	}
 
@@ -105,6 +119,93 @@ func (m *manager) toInstance(ctx context.Context, meta *metadata) Instance {
 		HasSnapshot:    m.hasSnapshot(meta.StoredMetadata.DataDir),
 	}
 	return inst
+}
+
+// parseExitSentinel reads the last lines of the serial console log to find the
+// HYPEMAN-EXIT sentinel written by init before shutdown. If found, it persists
+// the exit code and message to metadata so subsequent queries don't re-parse.
+func (m *manager) parseExitSentinel(ctx context.Context, stored *StoredMetadata) {
+	log := logger.FromContext(ctx)
+
+	logPath := m.paths.InstanceAppLog(stored.Id)
+	f, err := os.Open(logPath)
+	if err != nil {
+		return // Log file doesn't exist, nothing to parse
+	}
+	defer f.Close()
+
+	// Scan the file looking for the sentinel line.
+	// The sentinel is near the end of the file (written just before reboot),
+	// but we scan from the beginning since log files are typically small
+	// (serial console output, not application logs).
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Text()
+		code, msg, ok := parseExitSentinelLine(line)
+		if ok {
+			stored.ExitCode = &code
+			stored.ExitMessage = msg
+
+			// Persist to metadata so we don't re-parse next time
+			meta := &metadata{StoredMetadata: *stored}
+			if err := m.saveMetadata(meta); err != nil {
+				log.WarnContext(ctx, "failed to persist exit info", "instance_id", stored.Id, "error", err)
+			} else {
+				log.DebugContext(ctx, "parsed exit info from serial log", "instance_id", stored.Id, "exit_code", code, "exit_message", msg)
+			}
+			return
+		}
+	}
+}
+
+// parseExitSentinelLine parses a single log line looking for the HYPEMAN-EXIT sentinel.
+// The sentinel format is embedded in a log line like:
+// 2026-02-13T15:26:27Z [INFO] [hypeman-init:entrypoint] HYPEMAN-EXIT code=127 message="command not found"
+// Returns the exit code, message, and whether parsing was successful.
+func parseExitSentinelLine(line string) (int, string, bool) {
+	idx := strings.Index(line, exitSentinelPrefix)
+	if idx < 0 {
+		return 0, "", false
+	}
+
+	// Extract the part after "HYPEMAN-EXIT "
+	sentinel := line[idx+len(exitSentinelPrefix):]
+
+	// Parse code=N
+	if !strings.HasPrefix(sentinel, "code=") {
+		return 0, "", false
+	}
+	sentinel = sentinel[5:] // skip "code="
+
+	// Find the end of the code number
+	spaceIdx := strings.Index(sentinel, " ")
+	if spaceIdx < 0 {
+		// Just a code, no message
+		code, err := strconv.Atoi(sentinel)
+		if err != nil {
+			return 0, "", false
+		}
+		return code, "", true
+	}
+
+	code, err := strconv.Atoi(sentinel[:spaceIdx])
+	if err != nil {
+		return 0, "", false
+	}
+
+	// Parse message="..."
+	rest := sentinel[spaceIdx+1:]
+	if strings.HasPrefix(rest, "message=") {
+		msgStr := rest[8:] // skip "message="
+		// Unquote the message (it's Go-quoted via %q)
+		if unquoted, err := strconv.Unquote(msgStr); err == nil {
+			return code, unquoted, true
+		}
+		// If unquoting fails, use raw value (strip quotes if present)
+		return code, strings.Trim(msgStr, "\""), true
+	}
+
+	return code, "", true
 }
 
 // listInstances returns all instances

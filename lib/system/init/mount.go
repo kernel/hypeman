@@ -41,12 +41,12 @@ func mountEssentials(log *Logger) error {
 	}
 	if err := syscall.Mount("cgroup2", "/sys/fs/cgroup", "cgroup2", 0, ""); err != nil {
 		// Non-fatal: some kernels may not have cgroup2 support
-		log.Info("mount", "cgroup2 mount failed (non-fatal): "+err.Error())
+		log.Info("hypeman-init:mount", "cgroup2 mount failed (non-fatal): "+err.Error())
 	} else {
-		log.Info("mount", "mounted cgroup2")
+		log.Info("hypeman-init:mount", "mounted cgroup2")
 	}
 
-	log.Info("mount", "mounted devpts/shm")
+	log.Info("hypeman-init:mount", "mounted devpts/shm")
 
 	// Set up serial console now that /dev is mounted
 	// hvc0 for Virtualization.framework (vz) on macOS
@@ -57,12 +57,12 @@ func mountEssentials(log *Logger) error {
 		if _, err := os.Stat(console); err == nil {
 			log.SetConsole(console)
 			redirectToConsole(console)
-			log.Info("mount", "using console "+console)
+			log.Info("hypeman-init:mount", "using console "+console)
 			break
 		}
 	}
 
-	log.Info("mount", "console setup complete")
+	log.Info("hypeman-init:mount", "console setup complete")
 
 	return nil
 }
@@ -110,7 +110,7 @@ func setupOverlay(log *Logger) error {
 	if err := mount("/dev/vda", "/lower", "", "ro"); err != nil {
 		return fmt.Errorf("mount rootfs: %w", err)
 	}
-	log.Info("overlay", "mounted rootfs from /dev/vda")
+	log.Info("hypeman-init:overlay", "mounted rootfs from /dev/vda")
 
 	// Mount writable overlay disk from /dev/vdb
 	if err := mount("/dev/vdb", "/overlay", "ext4", ""); err != nil {
@@ -123,13 +123,13 @@ func setupOverlay(log *Logger) error {
 			return fmt.Errorf("mkdir %s: %w", dir, err)
 		}
 	}
-	log.Info("overlay", "mounted overlay disk from /dev/vdb")
+	log.Info("hypeman-init:overlay", "mounted overlay disk from /dev/vdb")
 
 	// Create overlay filesystem
 	if err := mountOverlay("/lower", "/overlay/upper", "/overlay/work", "/overlay/newroot"); err != nil {
 		return fmt.Errorf("mount overlay: %w", err)
 	}
-	log.Info("overlay", "created overlay filesystem")
+	log.Info("hypeman-init:overlay", "created overlay filesystem")
 
 	return nil
 }
@@ -162,7 +162,7 @@ func bindMountsToNewRoot(log *Logger) error {
 		}
 	}
 
-	log.Info("bind", "bound mounts to new root")
+	log.Info("hypeman-init:bind", "bound mounts to new root")
 
 	// Set up /dev symlinks for process substitution inside the container
 	symlinks := []struct{ target, link string }{
@@ -240,13 +240,13 @@ func copyGuestAgent(log *Logger, skipGuestAgent bool) error {
 
 	// Check for skip via config
 	if skipGuestAgent {
-		log.Info("agent", "skipping guest-agent copy (skip_guest_agent=true)")
+		log.Info("hypeman-init:agent", "skipping guest-agent copy (skip_guest_agent=true)")
 		return nil
 	}
 
 	// Check if destination already exists (lazy copy - skip if already present)
 	if _, err := os.Stat(dst); err == nil {
-		log.Info("agent", "guest-agent already exists, skipping copy")
+		log.Info("hypeman-init:agent", "guest-agent already exists, skipping copy")
 		return nil
 	}
 
@@ -266,7 +266,7 @@ func copyGuestAgent(log *Logger, skipGuestAgent bool) error {
 		return fmt.Errorf("write destination: %w", err)
 	}
 
-	log.Info("agent", "copied guest-agent to /opt/hypeman/")
+	log.Info("hypeman-init:agent", "copied guest-agent to /opt/hypeman/")
 	return nil
 }
 

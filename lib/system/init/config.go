@@ -30,7 +30,7 @@ func readConfig(log *Logger) (*vmconfig.Config, error) {
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("mount config disk: %s: %s", err, output)
 	}
-	log.Info("config", "mounted config disk")
+	log.Info("hypeman-init:config", "mounted config disk")
 
 	// Read and parse config.json
 	data, err := os.ReadFile(configFile)
@@ -51,6 +51,6 @@ func readConfig(log *Logger) (*vmconfig.Config, error) {
 		cfg.Env = make(map[string]string)
 	}
 
-	log.Info("config", "parsed configuration")
+	log.Info("hypeman-init:config", "parsed configuration")
 	return &cfg, nil
 }

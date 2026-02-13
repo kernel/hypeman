@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strings"
 	"syscall"
 
@@ -15,20 +17,20 @@ import (
 // - The init binary remains PID 1
 // - Guest-agent runs as a background process
 // - The container entrypoint runs as a child process
-// - After entrypoint exits, guest-agent keeps VM alive
+// - After entrypoint exits, init logs exit info and cleanly shuts down the VM
 func runExecMode(log *Logger, cfg *vmconfig.Config) {
 	const newroot = "/overlay/newroot"
 
 	// Change root to the new filesystem using chroot (consistent with systemd mode)
-	log.Info("exec", "executing chroot")
+	log.Info("hypeman-init:setup", "executing chroot")
 	if err := syscall.Chroot(newroot); err != nil {
-		log.Error("exec", "chroot failed", err)
+		log.Error("hypeman-init:setup", "chroot failed", err)
 		dropToShell()
 	}
 
 	// Change to new root directory
 	if err := os.Chdir("/"); err != nil {
-		log.Error("exec", "chdir / failed", err)
+		log.Error("hypeman-init:setup", "chdir / failed", err)
 		dropToShell()
 	}
 
@@ -40,15 +42,15 @@ func runExecMode(log *Logger, cfg *vmconfig.Config) {
 	// Pass environment variables so they're available via hypeman exec
 	var agentCmd *exec.Cmd
 	if cfg.SkipGuestAgent {
-		log.Info("exec", "skipping guest-agent (skip_guest_agent=true)")
+		log.Info("hypeman-init:setup", "skipping guest-agent (skip_guest_agent=true)")
 	} else {
-		log.Info("exec", "starting guest-agent in background")
+		log.Info("hypeman-init:setup", "starting guest-agent in background")
 		agentCmd = exec.Command("/opt/hypeman/guest-agent")
 		agentCmd.Env = buildEnv(cfg.Env)
 		agentCmd.Stdout = os.Stdout
 		agentCmd.Stderr = os.Stderr
 		if err := agentCmd.Start(); err != nil {
-			log.Error("exec", "failed to start guest-agent", err)
+			log.Error("hypeman-init:setup", "failed to start guest-agent", err)
 		}
 	}
 
@@ -62,12 +64,12 @@ func runExecMode(log *Logger, cfg *vmconfig.Config) {
 	entrypoint := shellQuoteArgs(cfg.Entrypoint)
 	cmd := shellQuoteArgs(cfg.Cmd)
 
-	log.Info("exec", fmt.Sprintf("workdir=%s entrypoint=%v cmd=%v", workdir, cfg.Entrypoint, cfg.Cmd))
+	log.Info("hypeman-init:entrypoint", fmt.Sprintf("workdir=%s entrypoint=%v cmd=%v", workdir, cfg.Entrypoint, cfg.Cmd))
 
 	// Construct the shell command to run
 	shellCmd := fmt.Sprintf("cd %s && exec %s %s", shellQuote(workdir), entrypoint, cmd)
 
-	log.Info("exec", "launching entrypoint")
+	log.Info("hypeman-init:entrypoint", "launching entrypoint")
 
 	// Run the entrypoint without stdin (defaults to /dev/null).
 	// This matches the old shell script behavior where the app ran in background with &
@@ -81,32 +83,119 @@ func runExecMode(log *Logger, cfg *vmconfig.Config) {
 	appCmd.Env = buildEnv(cfg.Env)
 
 	if err := appCmd.Start(); err != nil {
-		log.Error("exec", "failed to start entrypoint", err)
+		log.Error("hypeman-init:entrypoint", "failed to start entrypoint", err)
 		dropToShell()
 	}
 
-	log.Info("exec", fmt.Sprintf("container app started (PID %d)", appCmd.Process.Pid))
+	log.Info("hypeman-init:entrypoint", fmt.Sprintf("container app started (PID %d)", appCmd.Process.Pid))
+
+	// Set up signal forwarding: when init receives a signal (e.g. from guest-agent
+	// Shutdown RPC), forward it to the entrypoint child process so it can gracefully
+	// shut down. This is how Docker/containerd works -- SIGTERM to PID 1 gets
+	// forwarded to the app.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT, syscall.SIGINT)
+	go func() {
+		for sig := range sigCh {
+			if appCmd.Process != nil {
+				appCmd.Process.Signal(sig)
+			}
+		}
+	}()
 
 	// Wait for app to exit
 	err := appCmd.Wait()
+	signal.Stop(sigCh)
+
 	exitCode := 0
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
-			exitCode = exitErr.ExitCode()
+			// Go's ExitCode() returns -1 when the process was killed by a signal.
+			// Check WaitStatus directly to get the signal and compute 128+signal
+			// (the standard shell convention for signal-killed processes).
+			if ws, ok := exitErr.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+				exitCode = 128 + int(ws.Signal())
+			} else {
+				exitCode = exitErr.ExitCode()
+			}
 		}
 	}
 
-	log.Info("exec", fmt.Sprintf("app exited with code %d", exitCode))
+	// Build human-readable exit description
+	exitMsg := describeExitCode(exitCode)
 
-	// Wait for guest-agent (keeps init alive, prevents kernel panic)
-	// The guest-agent runs forever, so this effectively keeps the VM alive
-	// until it's explicitly terminated
-	if agentCmd != nil && agentCmd.Process != nil {
-		agentCmd.Wait()
+	// Log the exit with appropriate level
+	if exitCode == 0 {
+		log.Info("hypeman-init:entrypoint", "app exited with code 0 (success)")
+	} else {
+		log.Error("hypeman-init:entrypoint", fmt.Sprintf("app exited with code %d (%s)", exitCode, exitMsg), nil)
 	}
 
-	// Exit with the app's exit code
-	syscall.Exit(exitCode)
+	// Write machine-parseable exit sentinel to serial console.
+	// The host reads this lazily from the serial console log file when it
+	// discovers the VM has stopped (socket gone -> Stopped state).
+	log.Info("hypeman-init:entrypoint", formatExitSentinel(exitCode, exitMsg))
+
+	// Clean shutdown: use reboot(POWER_OFF) instead of syscall.Exit to avoid
+	// kernel panic ("Attempted to kill init!"). This cleanly terminates the VM
+	// and causes the hypervisor process to exit on the host.
+	syscall.Sync()
+	syscall.Reboot(syscall.LINUX_REBOOT_CMD_POWER_OFF)
+}
+
+// describeExitCode returns a human-readable description of an exit code.
+func describeExitCode(code int) string {
+	switch {
+	case code == 0:
+		return "success"
+	case code == 126:
+		return "permission denied (command not executable)"
+	case code == 127:
+		return "command not found"
+	case code > 128:
+		sig := syscall.Signal(code - 128)
+		desc := fmt.Sprintf("killed by signal %d (%s)", code-128, sig.String())
+		// Check for OOM on SIGKILL
+		if code == 137 { // 128 + 9 (SIGKILL)
+			if checkOOMKill() {
+				desc += " - OOM"
+			}
+		}
+		return desc
+	default:
+		return "error"
+	}
+}
+
+// formatExitSentinel returns a machine-parseable sentinel line for the host to parse.
+// Format: HYPEMAN-EXIT code=<N> message="<description>"
+func formatExitSentinel(code int, message string) string {
+	return fmt.Sprintf("HYPEMAN-EXIT code=%d message=%q", code, message)
+}
+
+// checkOOMKill checks /dev/kmsg for recent OOM kill messages.
+// Returns true if an OOM kill was detected.
+func checkOOMKill() bool {
+	f, err := os.Open("/dev/kmsg")
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		if isOOMLine(scanner.Text()) {
+			return true
+		}
+	}
+	return false
+}
+
+// isOOMLine returns true if a kernel log line indicates an OOM kill event.
+func isOOMLine(line string) bool {
+	return strings.Contains(line, "Out of memory") ||
+		strings.Contains(line, "oom-kill") ||
+		strings.Contains(line, "oom_reaper")
 }
 
 // buildEnv constructs environment variables from the config.

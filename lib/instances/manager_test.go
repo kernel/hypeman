@@ -733,6 +733,22 @@ func TestBasicEndToEnd(t *testing.T) {
 	}
 	streamCancel()
 
+	// Test graceful stop: StopInstance sends Shutdown RPC -> init forwards SIGTERM
+	// -> app exits -> init writes exit sentinel -> reboot(POWER_OFF) -> VM stops cleanly
+	t.Log("Testing graceful stop via StopInstance...")
+	stoppedInst, err := manager.StopInstance(ctx, inst.Id)
+	require.NoError(t, err, "StopInstance should succeed")
+	assert.Equal(t, StateStopped, stoppedInst.State, "Instance should be in Stopped state after StopInstance")
+
+	// Verify the instance reports Stopped on subsequent query and exit info is populated
+	retrieved, err = manager.GetInstance(ctx, inst.Id)
+	require.NoError(t, err)
+	assert.Equal(t, StateStopped, retrieved.State, "Instance should remain Stopped")
+	require.NotNil(t, retrieved.ExitCode, "ExitCode should be populated after stop")
+	t.Logf("Exit code after graceful stop: %d, message: %q", *retrieved.ExitCode, retrieved.ExitMessage)
+
+	t.Log("Graceful stop test passed!")
+
 	// Delete instance
 	t.Log("Deleting instance...")
 	err = manager.DeleteInstance(ctx, inst.Id)
@@ -761,6 +777,182 @@ func TestBasicEndToEnd(t *testing.T) {
 	assert.ErrorIs(t, err, volumes.ErrNotFound)
 
 	t.Log("Instance and volume lifecycle test complete!")
+}
+
+// TestAppExitPropagation verifies the full exit info pipeline when an app exits on its own:
+// app exits -> init writes HYPEMAN-EXIT sentinel -> reboot(POWER_OFF) -> VM stops ->
+// host lazily parses sentinel from serial log -> ExitCode/ExitMessage in metadata.
+// Uses alpine with a non-existent command override to get exit code 127 ("command not found").
+func TestAppExitPropagation(t *testing.T) {
+	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
+		t.Skip("/dev/kvm not available, skipping on this platform")
+	}
+
+	manager, tmpDir := setupTestManager(t)
+	ctx := context.Background()
+	p := paths.New(tmpDir)
+
+	imageManager, err := images.NewManager(p, 1, nil)
+	require.NoError(t, err)
+
+	t.Log("Pulling alpine:latest image...")
+	alpineImage, err := imageManager.CreateImage(ctx, images.CreateImageRequest{
+		Name: "docker.io/library/alpine:latest",
+	})
+	require.NoError(t, err)
+
+	// Wait for image to be ready
+	imageName := alpineImage.Name
+	for i := 0; i < 60; i++ {
+		img, err := imageManager.GetImage(ctx, imageName)
+		if err == nil && img.Status == images.StatusReady {
+			alpineImage = img
+			break
+		}
+		if err == nil && img.Status == images.StatusFailed {
+			t.Fatalf("Image build failed: %s", *img.Error)
+		}
+		time.Sleep(1 * time.Second)
+	}
+	require.Equal(t, images.StatusReady, alpineImage.Status)
+	t.Log("Alpine image ready")
+
+	// Ensure system files
+	systemManager := system.NewManager(p)
+	err = systemManager.EnsureSystemFiles(ctx)
+	require.NoError(t, err)
+
+	// Create instance with a non-existent command (like `docker run alpine /nonexistent`).
+	// This overrides alpine's default CMD ("/bin/sh") with a command that doesn't exist,
+	// causing exit code 127 ("command not found").
+	inst, err := manager.CreateInstance(ctx, CreateInstanceRequest{
+		Name:        "test-exit-propagation",
+		Image:       "docker.io/library/alpine:latest",
+		Size:        512 * 1024 * 1024, // 512MB
+		HotplugSize: 0,
+		OverlaySize: 2 * 1024 * 1024 * 1024, // 2GB
+		Vcpus:       1,
+		Cmd:         []string{"/nonexistent-command"},
+	})
+	require.NoError(t, err)
+	t.Logf("Instance created: %s", inst.Id)
+
+	// Wait for VM to reach running state first
+	err = waitForVMReady(ctx, inst.SocketPath, 10*time.Second)
+	require.NoError(t, err, "VM should reach running state")
+
+	// Wait for the VM to stop on its own (/nonexistent-command exits 127 immediately).
+	// Poll GetInstance until state becomes Stopped (init writes sentinel then reboots).
+	t.Log("Waiting for VM to stop on its own (expecting exit 127)...")
+	var finalInst *Instance
+	for i := 0; i < 60; i++ { // up to 60 seconds
+		got, err := manager.GetInstance(ctx, inst.Id)
+		if err == nil && got.State == StateStopped {
+			finalInst = got
+			break
+		}
+		time.Sleep(1 * time.Second)
+	}
+	require.NotNil(t, finalInst, "Instance should reach Stopped state within 60 seconds")
+	assert.Equal(t, StateStopped, finalInst.State)
+
+	// Verify exit info was propagated from the serial console sentinel
+	require.NotNil(t, finalInst.ExitCode, "ExitCode should be populated after app exits")
+	assert.Equal(t, 127, *finalInst.ExitCode, "Non-existent command should exit with code 127")
+	assert.Contains(t, finalInst.ExitMessage, "command not found", "Exit message should say command not found")
+	t.Logf("Exit info propagated: code=%d message=%q", *finalInst.ExitCode, finalInst.ExitMessage)
+
+	// Cleanup
+	err = manager.DeleteInstance(ctx, inst.Id)
+	require.NoError(t, err)
+
+	t.Log("App exit propagation test complete!")
+}
+
+// TestOOMExitPropagation verifies that OOM kills are detected and reported.
+// Creates a VM with low memory and runs a command that allocates more than available,
+// triggering the OOM killer. Verifies exit code 137 and "OOM" in the exit message.
+func TestOOMExitPropagation(t *testing.T) {
+	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
+		t.Skip("/dev/kvm not available, skipping on this platform")
+	}
+
+	manager, tmpDir := setupTestManager(t)
+	ctx := context.Background()
+	p := paths.New(tmpDir)
+
+	imageManager, err := images.NewManager(p, 1, nil)
+	require.NoError(t, err)
+
+	t.Log("Pulling alpine:latest image...")
+	alpineImage, err := imageManager.CreateImage(ctx, images.CreateImageRequest{
+		Name: "docker.io/library/alpine:latest",
+	})
+	require.NoError(t, err)
+
+	imageName := alpineImage.Name
+	for i := 0; i < 60; i++ {
+		img, err := imageManager.GetImage(ctx, imageName)
+		if err == nil && img.Status == images.StatusReady {
+			alpineImage = img
+			break
+		}
+		if err == nil && img.Status == images.StatusFailed {
+			t.Fatalf("Image build failed: %s", *img.Error)
+		}
+		time.Sleep(1 * time.Second)
+	}
+	require.Equal(t, images.StatusReady, alpineImage.Status)
+	t.Log("Alpine image ready")
+
+	systemManager := system.NewManager(p)
+	err = systemManager.EnsureSystemFiles(ctx)
+	require.NoError(t, err)
+
+	// Create instance with minimal memory (256MB) and a command that allocates
+	// anonymous memory until the OOM killer fires and kills the process with SIGKILL.
+	// We use a shell script that creates a large string variable in a loop, forcing
+	// the shell process to grow its RSS until OOM kills it.
+	inst, err := manager.CreateInstance(ctx, CreateInstanceRequest{
+		Name:        "test-oom",
+		Image:       "docker.io/library/alpine:latest",
+		Size:        128 * 1024 * 1024, // 128MB -- small enough for OOM
+		HotplugSize: 0,
+		OverlaySize: 2 * 1024 * 1024 * 1024, // 2GB
+		Vcpus:       1,
+		Cmd:         []string{"sh", "-c", "a=x; while true; do a=$a$a$a$a; done"},
+	})
+	require.NoError(t, err)
+	t.Logf("Instance created: %s (128MB RAM, will OOM)", inst.Id)
+
+	err = waitForVMReady(ctx, inst.SocketPath, 10*time.Second)
+	require.NoError(t, err, "VM should reach running state")
+
+	// Wait for the VM to stop (OOM kill -> init detects -> sentinel -> reboot)
+	t.Log("Waiting for VM to stop after OOM...")
+	var finalInst *Instance
+	for i := 0; i < 90; i++ { // up to 90 seconds (OOM may take time with low memory)
+		got, err := manager.GetInstance(ctx, inst.Id)
+		if err == nil && got.State == StateStopped {
+			finalInst = got
+			break
+		}
+		time.Sleep(1 * time.Second)
+	}
+	require.NotNil(t, finalInst, "Instance should reach Stopped state within 90 seconds")
+	assert.Equal(t, StateStopped, finalInst.State)
+
+	// Verify exit info shows OOM
+	require.NotNil(t, finalInst.ExitCode, "ExitCode should be populated after OOM")
+	assert.Equal(t, 137, *finalInst.ExitCode, "OOM kill should result in exit code 137 (SIGKILL)")
+	assert.Contains(t, finalInst.ExitMessage, "OOM", "Exit message should indicate OOM")
+	t.Logf("OOM exit info propagated: code=%d message=%q", *finalInst.ExitCode, finalInst.ExitMessage)
+
+	// Cleanup
+	err = manager.DeleteInstance(ctx, inst.Id)
+	require.NoError(t, err)
+
+	t.Log("OOM exit propagation test complete!")
 }
 
 // TestEntrypointEnvVars verifies that environment variables are passed to the entrypoint process.

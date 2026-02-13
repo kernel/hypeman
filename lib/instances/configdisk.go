@@ -47,9 +47,20 @@ func (m *manager) createConfigDisk(ctx context.Context, inst *Instance, imageInf
 
 // buildGuestConfig creates the vmconfig.Config struct for the guest init binary.
 func (m *manager) buildGuestConfig(ctx context.Context, inst *Instance, imageInfo *images.Image, netConfig *network.NetworkConfig) *vmconfig.Config {
+	// Use instance overrides if set, otherwise fall back to image defaults
+	// (like docker run <image> <command> overriding CMD)
+	entrypoint := imageInfo.Entrypoint
+	if len(inst.Entrypoint) > 0 {
+		entrypoint = inst.Entrypoint
+	}
+	cmd := imageInfo.Cmd
+	if len(inst.Cmd) > 0 {
+		cmd = inst.Cmd
+	}
+
 	cfg := &vmconfig.Config{
-		Entrypoint: imageInfo.Entrypoint,
-		Cmd:        imageInfo.Cmd,
+		Entrypoint: entrypoint,
+		Cmd:        cmd,
 		Workdir:    imageInfo.WorkingDir,
 		Env:        mergeEnv(imageInfo.Env, inst.Env),
 		InitMode:   "exec",

@@ -45,7 +45,7 @@ func configureNetwork(log *Logger, cfg *vmconfig.Config) error {
 		return fmt.Errorf("write resolv.conf: %w", err)
 	}
 
-	log.Info("network", fmt.Sprintf("configured eth0 with %s", addr))
+	log.Info("hypeman-init:network", fmt.Sprintf("configured eth0 with %s", addr))
 	return nil
 }
 

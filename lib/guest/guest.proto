@@ -17,6 +17,9 @@ service GuestService {
   
   // StatPath returns information about a path in the guest filesystem
   rpc StatPath(StatPathRequest) returns (StatPathResponse);
+  
+  // Shutdown requests graceful VM shutdown by signaling init (PID 1)
+  rpc Shutdown(ShutdownRequest) returns (ShutdownResponse);
 }
 
 // ExecRequest represents messages from client to server
@@ -143,3 +146,11 @@ message StatPathResponse {
   int64 size = 7;            // File size
   string error = 8;          // Error message if stat failed (e.g., permission denied)
 }
+
+// ShutdownRequest requests graceful VM shutdown
+message ShutdownRequest {
+  int32 signal = 1;          // Signal to send to init (PID 1), 0 = SIGTERM (default)
+}
+
+// ShutdownResponse acknowledges the shutdown request
+message ShutdownResponse {}

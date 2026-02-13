@@ -21,25 +21,25 @@ func runSystemdMode(log *Logger, cfg *vmconfig.Config) {
 	// Inject hypeman-agent.service (skip if guest-agent was not copied)
 	// Pass environment variables so they're available via hypeman exec
 	if cfg.SkipGuestAgent {
-		log.Info("systemd", "skipping agent service injection (skip_guest_agent=true)")
+		log.Info("hypeman-init:systemd", "skipping agent service injection (skip_guest_agent=true)")
 	} else {
-		log.Info("systemd", "injecting hypeman-agent.service")
+		log.Info("hypeman-init:systemd", "injecting hypeman-agent.service")
 		if err := injectAgentService(newroot, cfg.Env); err != nil {
-			log.Error("systemd", "failed to inject service", err)
+			log.Error("hypeman-init:systemd", "failed to inject service", err)
 			// Continue anyway - VM will work, just without agent
 		}
 	}
 
 	// Change root to the new filesystem using chroot
-	log.Info("systemd", "executing chroot")
+	log.Info("hypeman-init:systemd", "executing chroot")
 	if err := syscall.Chroot(newroot); err != nil {
-		log.Error("systemd", "chroot failed", err)
+		log.Error("hypeman-init:systemd", "chroot failed", err)
 		dropToShell()
 	}
 
 	// Change to new root directory
 	if err := os.Chdir("/"); err != nil {
-		log.Error("systemd", "chdir / failed", err)
+		log.Error("hypeman-init:systemd", "chdir / failed", err)
 		dropToShell()
 	}
 
@@ -51,13 +51,13 @@ func runSystemdMode(log *Logger, cfg *vmconfig.Config) {
 	}
 
 	// Exec systemd - this replaces the current process
-	log.Info("systemd", fmt.Sprintf("exec %v", argv))
+	log.Info("hypeman-init:systemd", fmt.Sprintf("exec %v", argv))
 
 	// syscall.Exec replaces the current process with the new one
 	// Use buildEnv to include user's environment variables from the image/instance config
 	err := syscall.Exec(argv[0], argv, buildEnv(cfg.Env))
 	if err != nil {
-		log.Error("systemd", fmt.Sprintf("exec %s failed", argv[0]), err)
+		log.Error("hypeman-init:systemd", fmt.Sprintf("exec %s failed", argv[0]), err)
 		dropToShell()
 	}
 }

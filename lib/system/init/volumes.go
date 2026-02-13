@@ -12,29 +12,29 @@ import (
 // mountVolumes mounts attached volumes according to the configuration.
 // Supports three modes: ro (read-only), rw (read-write), and overlay.
 func mountVolumes(log *Logger, cfg *vmconfig.Config) error {
-	log.Info("volumes", "mounting volumes")
+	log.Info("hypeman-init:volumes", "mounting volumes")
 
 	for _, vol := range cfg.VolumeMounts {
 		mountPath := filepath.Join("/overlay/newroot", vol.Path)
 
 		// Create mount point
 		if err := os.MkdirAll(mountPath, 0755); err != nil {
-			log.Error("volumes", fmt.Sprintf("mkdir %s failed", vol.Path), err)
+			log.Error("hypeman-init:volumes", fmt.Sprintf("mkdir %s failed", vol.Path), err)
 			continue
 		}
 
 		switch vol.Mode {
 		case "overlay":
 			if err := mountVolumeOverlay(log, vol, mountPath); err != nil {
-				log.Error("volumes", fmt.Sprintf("mount overlay %s failed", vol.Path), err)
+				log.Error("hypeman-init:volumes", fmt.Sprintf("mount overlay %s failed", vol.Path), err)
 			}
 		case "ro":
 			if err := mountVolumeReadOnly(log, vol, mountPath); err != nil {
-				log.Error("volumes", fmt.Sprintf("mount ro %s failed", vol.Path), err)
+				log.Error("hypeman-init:volumes", fmt.Sprintf("mount ro %s failed", vol.Path), err)
 			}
 		default: // "rw"
 			if err := mountVolumeReadWrite(log, vol, mountPath); err != nil {
-				log.Error("volumes", fmt.Sprintf("mount rw %s failed", vol.Path), err)
+				log.Error("hypeman-init:volumes", fmt.Sprintf("mount rw %s failed", vol.Path), err)
 			}
 		}
 	}
@@ -84,7 +84,7 @@ func mountVolumeOverlay(log *Logger, vol vmconfig.VolumeMount, mountPath string)
 		return fmt.Errorf("mount overlay: %s: %s", err, output)
 	}
 
-	log.Info("volumes", fmt.Sprintf("mounted %s at %s (overlay via %s)", vol.Device, vol.Path, vol.OverlayDevice))
+	log.Info("hypeman-init:volumes", fmt.Sprintf("mounted %s at %s (overlay via %s)", vol.Device, vol.Path, vol.OverlayDevice))
 	return nil
 }
 
@@ -96,7 +96,7 @@ func mountVolumeReadOnly(log *Logger, vol vmconfig.VolumeMount, mountPath string
 		return fmt.Errorf("%s: %s", err, output)
 	}
 
-	log.Info("volumes", fmt.Sprintf("mounted %s at %s (ro)", vol.Device, vol.Path))
+	log.Info("hypeman-init:volumes", fmt.Sprintf("mounted %s at %s (ro)", vol.Device, vol.Path))
 	return nil
 }
 
@@ -107,7 +107,7 @@ func mountVolumeReadWrite(log *Logger, vol vmconfig.VolumeMount, mountPath strin
 		return fmt.Errorf("%s: %s", err, output)
 	}
 
-	log.Info("volumes", fmt.Sprintf("mounted %s at %s (rw)", vol.Device, vol.Path))
+	log.Info("hypeman-init:volumes", fmt.Sprintf("mounted %s at %s (rw)", vol.Device, vol.Path))
 	return nil
 }
 

@@ -25,23 +25,23 @@ func setupKernelHeaders(log *Logger) error {
 		return fmt.Errorf("uname: %w", err)
 	}
 	runningKernel := int8ArrayToString(uname.Release[:])
-	log.Info("headers", "running kernel: "+runningKernel)
+	log.Info("hypeman-init:headers", "running kernel: "+runningKernel)
 
 	// Check if headers tarball exists in initrd
 	if _, err := os.Stat(headersTarball); os.IsNotExist(err) {
-		log.Info("headers", "no kernel headers tarball found, skipping")
+		log.Info("hypeman-init:headers", "no kernel headers tarball found, skipping")
 		return nil
 	}
 
 	// Clean up mismatched kernel modules directories
 	if err := cleanupMismatchedModules(log, runningKernel); err != nil {
-		log.Info("headers", "warning: failed to cleanup mismatched modules: "+err.Error())
+		log.Info("hypeman-init:headers", "warning: failed to cleanup mismatched modules: "+err.Error())
 		// Non-fatal, continue
 	}
 
 	// Clean up mismatched kernel headers directories
 	if err := cleanupMismatchedHeaders(log, runningKernel); err != nil {
-		log.Info("headers", "warning: failed to cleanup mismatched headers: "+err.Error())
+		log.Info("hypeman-init:headers", "warning: failed to cleanup mismatched headers: "+err.Error())
 		// Non-fatal, continue
 	}
 
@@ -60,7 +60,7 @@ func setupKernelHeaders(log *Logger) error {
 	if err := extractTarGz(headersTarball, headersDir); err != nil {
 		return fmt.Errorf("extract headers: %w", err)
 	}
-	log.Info("headers", "extracted kernel headers to "+headersDir)
+	log.Info("hypeman-init:headers", "extracted kernel headers to "+headersDir)
 
 	// Create build symlink
 	buildLink := filepath.Join(modulesDir, "build")
@@ -70,7 +70,7 @@ func setupKernelHeaders(log *Logger) error {
 	if err := os.Symlink(symlinkTarget, buildLink); err != nil {
 		return fmt.Errorf("create build symlink: %w", err)
 	}
-	log.Info("headers", "created build symlink")
+	log.Info("hypeman-init:headers", "created build symlink")
 
 	return nil
 }
@@ -91,7 +91,7 @@ func cleanupMismatchedModules(log *Logger, runningKernel string) error {
 		}
 		if entry.Name() != runningKernel {
 			path := filepath.Join(newrootLibModules, entry.Name())
-			log.Info("headers", "removing mismatched modules: "+entry.Name())
+			log.Info("hypeman-init:headers", "removing mismatched modules: "+entry.Name())
 			if err := os.RemoveAll(path); err != nil {
 				return fmt.Errorf("remove %s: %w", path, err)
 			}
@@ -120,7 +120,7 @@ func cleanupMismatchedHeaders(log *Logger, runningKernel string) error {
 		// Remove any linux-headers-* directory that doesn't match
 		if strings.HasPrefix(entry.Name(), "linux-headers-") && entry.Name() != expectedName {
 			path := filepath.Join(newrootUsrSrc, entry.Name())
-			log.Info("headers", "removing mismatched headers: "+entry.Name())
+			log.Info("hypeman-init:headers", "removing mismatched headers: "+entry.Name())
 			if err := os.RemoveAll(path); err != nil {
 				return fmt.Errorf("remove %s: %w", path, err)
 			}

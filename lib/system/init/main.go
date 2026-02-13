@@ -17,31 +17,31 @@ import (
 
 func main() {
 	log := NewLogger()
-	log.Info("boot", "init starting")
+	log.Info("hypeman-init:boot", "init starting")
 
 	// Phase 1: Mount additional filesystems (proc/sys/dev already mounted by init.sh)
 	if err := mountEssentials(log); err != nil {
-		log.Error("mount", "failed to mount essentials", err)
+		log.Error("hypeman-init:mount", "failed to mount essentials", err)
 		dropToShell()
 	}
 
 	// Phase 2: Setup overlay rootfs
 	if err := setupOverlay(log); err != nil {
-		log.Error("overlay", "failed to setup overlay", err)
+		log.Error("hypeman-init:overlay", "failed to setup overlay", err)
 		dropToShell()
 	}
 
 	// Phase 3: Read and parse config
 	cfg, err := readConfig(log)
 	if err != nil {
-		log.Error("config", "failed to read config", err)
+		log.Error("hypeman-init:config", "failed to read config", err)
 		dropToShell()
 	}
 
 	// Phase 4: Configure network (shared between modes)
 	if cfg.NetworkEnabled {
 		if err := configureNetwork(log, cfg); err != nil {
-			log.Error("network", "failed to configure network", err)
+			log.Error("hypeman-init:network", "failed to configure network", err)
 			// Continue anyway - network isn't always required
 		}
 	}
@@ -49,39 +49,39 @@ func main() {
 	// Phase 5: Mount volumes
 	if len(cfg.VolumeMounts) > 0 {
 		if err := mountVolumes(log, cfg); err != nil {
-			log.Error("volumes", "failed to mount volumes", err)
+			log.Error("hypeman-init:volumes", "failed to mount volumes", err)
 			// Continue anyway
 		}
 	}
 
 	// Phase 6: Bind mount filesystems to new root
 	if err := bindMountsToNewRoot(log); err != nil {
-		log.Error("bind", "failed to bind mounts", err)
+		log.Error("hypeman-init:bind", "failed to bind mounts", err)
 		dropToShell()
 	}
 
 	// Phase 7: Copy guest-agent to target location (skips if already exists or skip_guest_agent=true)
 	if err := copyGuestAgent(log, cfg.SkipGuestAgent); err != nil {
-		log.Error("agent", "failed to copy guest-agent", err)
+		log.Error("hypeman-init:agent", "failed to copy guest-agent", err)
 		// Continue anyway - exec will still work, just no remote access
 	}
 
 	// Phase 8: Setup kernel headers for DKMS (can be skipped via config)
 	if cfg.SkipKernelHeaders {
-		log.Info("headers", "skipping kernel headers setup (skip_kernel_headers=true)")
+		log.Info("hypeman-init:headers", "skipping kernel headers setup (skip_kernel_headers=true)")
 	} else {
 		if err := setupKernelHeaders(log); err != nil {
-			log.Error("headers", "failed to setup kernel headers", err)
+			log.Error("hypeman-init:headers", "failed to setup kernel headers", err)
 			// Continue anyway - only needed for DKMS module building
 		}
 	}
 
 	// Phase 9: Mode-specific execution
 	if cfg.InitMode == "systemd" {
-		log.Info("mode", "entering systemd mode")
+		log.Info("hypeman-init:mode", "entering systemd mode")
 		runSystemdMode(log, cfg)
 	} else {
-		log.Info("mode", "entering exec mode")
+		log.Info("hypeman-init:mode", "entering exec mode")
 		runExecMode(log, cfg)
 	}
 }

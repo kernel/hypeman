@@ -196,6 +196,18 @@ components:
             The instance will still run, but remote command execution will be unavailable.
           default: false
           example: false
+        entrypoint:
+          type: array
+          items:
+            type: string
+          description: Override image entrypoint (like docker run --entrypoint). Omit to use image default.
+          example: ["/bin/sh", "-c"]
+        cmd:
+          type: array
+          items:
+            type: string
+          description: Override image CMD (like docker run <image> <command>). Omit to use image default.
+          example: ["echo", "hello"]
         # Future: port_mappings, timeout_seconds
     
     Instance:
@@ -300,6 +312,15 @@ components:
           description: Stop timestamp (RFC3339)
           example: "2025-01-15T12:30:00Z"
           nullable: true
+        exit_code:
+          type: integer
+          description: App exit code (null if VM hasn't exited)
+          nullable: true
+          example: 137
+        exit_message:
+          type: string
+          description: Human-readable description of exit (e.g., "command not found", "killed by signal 9 (SIGKILL) - OOM")
+          example: "killed by signal 9 (SIGKILL)"
         has_snapshot:
           type: boolean
           description: Whether a snapshot exists for this instance

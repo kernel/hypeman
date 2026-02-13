@@ -523,6 +523,22 @@ func TestQEMUBasicEndToEnd(t *testing.T) {
 	assert.Equal(t, "test_value", strings.TrimSpace(output), "Environment variable should be accessible via exec")
 	t.Log("Environment variable accessible via exec!")
 
+	// Test graceful stop: StopInstance sends Shutdown RPC -> init forwards SIGTERM
+	// -> app exits -> init writes exit sentinel -> reboot(POWER_OFF) -> VM stops cleanly
+	t.Log("Testing graceful stop via StopInstance...")
+	stoppedInst, err := manager.StopInstance(ctx, inst.Id)
+	require.NoError(t, err, "StopInstance should succeed")
+	assert.Equal(t, StateStopped, stoppedInst.State, "Instance should be in Stopped state after StopInstance")
+
+	// Verify the instance reports Stopped on subsequent query and exit info is populated
+	retrieved, err = manager.GetInstance(ctx, inst.Id)
+	require.NoError(t, err)
+	assert.Equal(t, StateStopped, retrieved.State, "Instance should remain Stopped")
+	require.NotNil(t, retrieved.ExitCode, "ExitCode should be populated after stop")
+	t.Logf("Exit code after graceful stop: %d, message: %q", *retrieved.ExitCode, retrieved.ExitMessage)
+
+	t.Log("Graceful stop test passed!")
+
 	// Delete instance
 	t.Log("Deleting instance...")
 	err = manager.DeleteInstance(ctx, inst.Id)

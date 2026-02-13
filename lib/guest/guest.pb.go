@@ -1184,6 +1184,88 @@ func (x *StatPathResponse) GetError() string {
 	return ""
 }
 
+// ShutdownRequest requests graceful VM shutdown
+type ShutdownRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Signal        int32                  `protobuf:"varint,1,opt,name=signal,proto3" json:"signal,omitempty"` // Signal to send to init (PID 1), 0 = SIGTERM (default)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ShutdownRequest) Reset() {
+	*x = ShutdownRequest{}
+	mi := &file_lib_guest_guest_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ShutdownRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ShutdownRequest) ProtoMessage() {}
+
+func (x *ShutdownRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_lib_guest_guest_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ShutdownRequest.ProtoReflect.Descriptor instead.
+func (*ShutdownRequest) Descriptor() ([]byte, []int) {
+	return file_lib_guest_guest_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *ShutdownRequest) GetSignal() int32 {
+	if x != nil {
+		return x.Signal
+	}
+	return 0
+}
+
+// ShutdownResponse acknowledges the shutdown request
+type ShutdownResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ShutdownResponse) Reset() {
+	*x = ShutdownResponse{}
+	mi := &file_lib_guest_guest_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ShutdownResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ShutdownResponse) ProtoMessage() {}
+
+func (x *ShutdownResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_lib_guest_guest_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ShutdownResponse.ProtoReflect.Descriptor instead.
+func (*ShutdownResponse) Descriptor() ([]byte, []int) {
+	return file_lib_guest_guest_proto_rawDescGZIP(), []int{16}
+}
+
 var File_lib_guest_guest_proto protoreflect.FileDescriptor
 
 const file_lib_guest_guest_proto_rawDesc = "" +
@@ -1273,12 +1355,16 @@ const file_lib_guest_guest_proto_rawDesc = "" +
 	"linkTarget\x12\x12\n" +
 	"\x04mode\x18\x06 \x01(\rR\x04mode\x12\x12\n" +
 	"\x04size\x18\a \x01(\x03R\x04size\x12\x14\n" +
-	"\x05error\x18\b \x01(\tR\x05error2\x96\x02\n" +
+	"\x05error\x18\b \x01(\tR\x05error\")\n" +
+	"\x0fShutdownRequest\x12\x16\n" +
+	"\x06signal\x18\x01 \x01(\x05R\x06signal\"\x12\n" +
+	"\x10ShutdownResponse2\xd3\x02\n" +
 	"\fGuestService\x123\n" +
 	"\x04Exec\x12\x12.guest.ExecRequest\x1a\x13.guest.ExecResponse(\x010\x01\x12F\n" +
 	"\vCopyToGuest\x12\x19.guest.CopyToGuestRequest\x1a\x1a.guest.CopyToGuestResponse(\x01\x12L\n" +
 	"\rCopyFromGuest\x12\x1b.guest.CopyFromGuestRequest\x1a\x1c.guest.CopyFromGuestResponse0\x01\x12;\n" +
-	"\bStatPath\x12\x16.guest.StatPathRequest\x1a\x17.guest.StatPathResponseB'Z%github.com/onkernel/hypeman/lib/guestb\x06proto3"
+	"\bStatPath\x12\x16.guest.StatPathRequest\x1a\x17.guest.StatPathResponse\x12;\n" +
+	"\bShutdown\x12\x16.guest.ShutdownRequest\x1a\x17.guest.ShutdownResponseB'Z%github.com/onkernel/hypeman/lib/guestb\x06proto3"
 
 var (
 	file_lib_guest_guest_proto_rawDescOnce sync.Once
@@ -1292,7 +1378,7 @@ func file_lib_guest_guest_proto_rawDescGZIP() []byte {
 	return file_lib_guest_guest_proto_rawDescData
 }
 
-var file_lib_guest_guest_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
+var file_lib_guest_guest_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
 var file_lib_guest_guest_proto_goTypes = []any{
 	(*ExecRequest)(nil),           // 0: guest.ExecRequest
 	(*ExecStart)(nil),             // 1: guest.ExecStart
@@ -1309,12 +1395,14 @@ var file_lib_guest_guest_proto_goTypes = []any{
 	(*CopyFromGuestError)(nil),    // 12: guest.CopyFromGuestError
 	(*StatPathRequest)(nil),       // 13: guest.StatPathRequest
 	(*StatPathResponse)(nil),      // 14: guest.StatPathResponse
-	nil,                           // 15: guest.ExecStart.EnvEntry
+	(*ShutdownRequest)(nil),       // 15: guest.ShutdownRequest
+	(*ShutdownResponse)(nil),      // 16: guest.ShutdownResponse
+	nil,                           // 17: guest.ExecStart.EnvEntry
 }
 var file_lib_guest_guest_proto_depIdxs = []int32{
 	1,  // 0: guest.ExecRequest.start:type_name -> guest.ExecStart
 	2,  // 1: guest.ExecRequest.resize:type_name -> guest.WindowSize
-	15, // 2: guest.ExecStart.env:type_name -> guest.ExecStart.EnvEntry
+	17, // 2: guest.ExecStart.env:type_name -> guest.ExecStart.EnvEntry
 	5,  // 3: guest.CopyToGuestRequest.start:type_name -> guest.CopyToGuestStart
 	6,  // 4: guest.CopyToGuestRequest.end:type_name -> guest.CopyToGuestEnd
 	10, // 5: guest.CopyFromGuestResponse.header:type_name -> guest.CopyFromGuestHeader
@@ -1324,12 +1412,14 @@ var file_lib_guest_guest_proto_depIdxs = []int32{
 	4,  // 9: guest.GuestService.CopyToGuest:input_type -> guest.CopyToGuestRequest
 	8,  // 10: guest.GuestService.CopyFromGuest:input_type -> guest.CopyFromGuestRequest
 	13, // 11: guest.GuestService.StatPath:input_type -> guest.StatPathRequest
-	3,  // 12: guest.GuestService.Exec:output_type -> guest.ExecResponse
-	7,  // 13: guest.GuestService.CopyToGuest:output_type -> guest.CopyToGuestResponse
-	9,  // 14: guest.GuestService.CopyFromGuest:output_type -> guest.CopyFromGuestResponse
-	14, // 15: guest.GuestService.StatPath:output_type -> guest.StatPathResponse
-	12, // [12:16] is the sub-list for method output_type
-	8,  // [8:12] is the sub-list for method input_type
+	15, // 12: guest.GuestService.Shutdown:input_type -> guest.ShutdownRequest
+	3,  // 13: guest.GuestService.Exec:output_type -> guest.ExecResponse
+	7,  // 14: guest.GuestService.CopyToGuest:output_type -> guest.CopyToGuestResponse
+	9,  // 15: guest.GuestService.CopyFromGuest:output_type -> guest.CopyFromGuestResponse
+	14, // 16: guest.GuestService.StatPath:output_type -> guest.StatPathResponse
+	16, // 17: guest.GuestService.Shutdown:output_type -> guest.ShutdownResponse
+	13, // [13:18] is the sub-list for method output_type
+	8,  // [8:13] is the sub-list for method input_type
 	8,  // [8:8] is the sub-list for extension type_name
 	8,  // [8:8] is the sub-list for extension extendee
 	0,  // [0:8] is the sub-list for field type_name
@@ -1367,7 +1457,7 @@ func file_lib_guest_guest_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_lib_guest_guest_proto_rawDesc), len(file_lib_guest_guest_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   16,
+			NumMessages:   18,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

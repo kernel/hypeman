@@ -658,3 +658,23 @@ func CopyFromInstance(ctx context.Context, dialer hypervisor.VsockDialer, opts C
 	}
 	return nil
 }
+
+// ShutdownInstance sends a shutdown signal to the guest VM's init process (PID 1).
+// The guest-agent forwards the signal to init, which forwards it to the entrypoint.
+// sig is the signal number to send (0 = SIGTERM default).
+func ShutdownInstance(ctx context.Context, dialer hypervisor.VsockDialer, sig int32) error {
+	grpcConn, err := GetOrCreateConn(ctx, dialer)
+	if err != nil {
+		return fmt.Errorf("get grpc connection: %w", err)
+	}
+
+	client := NewGuestServiceClient(grpcConn)
+	_, err = client.Shutdown(ctx, &ShutdownRequest{
+		Signal: sig,
+	})
+	if err != nil {
+		return fmt.Errorf("shutdown RPC: %w", err)
+	}
+
+	return nil
+}
