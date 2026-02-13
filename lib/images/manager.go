@@ -41,16 +41,17 @@ type Manager interface {
 }
 
 type manager struct {
-	paths     *paths.Paths
-	ociClient *ociClient
-	queue     *BuildQueue
-	createMu  sync.Mutex
-	metrics   *Metrics
+	paths       *paths.Paths
+	ociClient   *ociClient
+	queue       *BuildQueue
+	createMu    sync.Mutex
+	metrics     *Metrics
+	registryURL string // Internal registry URL for fallback lookups (e.g., "localhost:8081")
 }
 
 // NewManager creates a new image manager.
 // If meter is nil, metrics are disabled.
-func NewManager(p *paths.Paths, maxConcurrentBuilds int, meter metric.Meter) (Manager, error) {
+func NewManager(p *paths.Paths, maxConcurrentBuilds int, meter metric.Meter, registryURL ...string) (Manager, error) {
 	// Create cache directory under dataDir for OCI layouts
 	cacheDir := p.SystemOCICache()
 	ociClient, err := newOCIClient(cacheDir)
@@ -58,10 +59,16 @@ func NewManager(p *paths.Paths, maxConcurrentBuilds int, meter metric.Meter) (Ma
 		return nil, fmt.Errorf("create oci client: %w", err)
 	}
 
+	var regURL string
+	if len(registryURL) > 0 {
+		regURL = registryURL[0]
+	}
+
 	m := &manager{
-		paths:     p,
-		ociClient: ociClient,
-		queue:     NewBuildQueue(maxConcurrentBuilds),
+		paths:       p,
+		ociClient:   ociClient,
+		queue:       NewBuildQueue(maxConcurrentBuilds),
+		registryURL: regURL,
 	}
 
 	// Initialize metrics if meter is provided
@@ -356,9 +363,32 @@ func (m *manager) GetImage(ctx context.Context, name string) (*Image, error) {
 		return nil, fmt.Errorf("%w: %s", ErrInvalidName, err.Error())
 	}
 
+	img, err := m.getImageByRef(ref)
+	if err == nil {
+		return img, nil
+	}
+
+	// Fallback: if the name was normalized to docker.io (short name like "myapp"),
+	// also try looking it up with common internal registry prefixes.
+	// This handles backward compatibility for images stored with the registry host prefix
+	// (e.g., "localhost:8081/myapp" stored before the prefix-stripping fix).
+	if err == ErrNotFound && m.registryURL != "" {
+		prefixedName := m.registryURL + "/" + name
+		if prefixedRef, parseErr := ParseNormalizedRef(prefixedName); parseErr == nil {
+			if img, fallbackErr := m.getImageByRef(prefixedRef); fallbackErr == nil {
+				return img, nil
+			}
+		}
+	}
+
+	return nil, err
+}
+
+func (m *manager) getImageByRef(ref *NormalizedRef) (*Image, error) {
 	repository := ref.Repository()
 
 	var digestHex string
+	var err error
 
 	if ref.IsDigest() {
 		// Direct digest lookup
