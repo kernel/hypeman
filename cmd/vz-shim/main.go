@@ -61,7 +61,7 @@ func main() {
 	slog.Info("VM started", "vcpus", config.VCPUs, "memory_mb", config.MemoryBytes/1024/1024)
 
 	// Create the shim server
-	server := NewShimServer(vm, vmConfig)
+	server := NewShimServer(vm, vmConfig, cancel)
 
 	// Start control socket listener (remove stale socket from previous run)
 	os.Remove(config.ControlSocket)

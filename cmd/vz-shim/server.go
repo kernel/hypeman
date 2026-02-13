@@ -4,6 +4,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -19,14 +20,16 @@ import (
 type ShimServer struct {
 	vm       *vz.VirtualMachine
 	vmConfig *vz.VirtualMachineConfiguration
+	cancel   context.CancelFunc
 	mu       sync.RWMutex
 }
 
 // NewShimServer creates a new shim server.
-func NewShimServer(vm *vz.VirtualMachine, vmConfig *vz.VirtualMachineConfiguration) *ShimServer {
+func NewShimServer(vm *vz.VirtualMachine, vmConfig *vz.VirtualMachineConfiguration, cancel context.CancelFunc) *ShimServer {
 	return &ShimServer{
 		vm:       vm,
 		vmConfig: vmConfig,
+		cancel:   cancel,
 	}
 }
 
@@ -151,7 +154,9 @@ func (s *ShimServer) handleVMMShutdown(w http.ResponseWriter, r *http.Request) {
 		if s.vm.CanStop() {
 			s.vm.Stop()
 		}
-		// Process will exit when VM stops (monitored in main)
+		// Ensure process terminates even if VM is already stopped
+		// (e.g. CanStop() returned false because the VM already stopped).
+		s.cancel()
 	}()
 }
 
