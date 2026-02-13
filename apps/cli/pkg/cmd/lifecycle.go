@@ -19,9 +19,19 @@ var stopCmd = cli.Command{
 }
 
 var startCmd = cli.Command{
-	Name:            "start",
-	Usage:           "Start a stopped instance",
-	ArgsUsage:       "<instance>",
+	Name:      "start",
+	Usage:     "Start a stopped instance",
+	ArgsUsage: "<instance>",
+	Flags: []cli.Flag{
+		&cli.StringSliceFlag{
+			Name:  "entrypoint",
+			Usage: "Override image entrypoint for this run (can be repeated for multiple args)",
+		},
+		&cli.StringSliceFlag{
+			Name:  "cmd",
+			Usage: "Override image CMD for this run (can be repeated for multiple args)",
+		},
+	},
 	Action:          handleStart,
 	HideHelpCommand: true,
 }
@@ -89,9 +99,18 @@ func handleStart(ctx context.Context, cmd *cli.Command) error {
 		opts = append(opts, debugMiddlewareOption)
 	}
 
+	params := hypeman.InstanceStartParams{}
+
+	if entrypoint := cmd.StringSlice("entrypoint"); len(entrypoint) > 0 {
+		params.Entrypoint = entrypoint
+	}
+	if cmdArgs := cmd.StringSlice("cmd"); len(cmdArgs) > 0 {
+		params.Cmd = cmdArgs
+	}
+
 	fmt.Fprintf(os.Stderr, "Starting %s...\n", args[0])
 
-	instance, err := client.Instances.Start(ctx, instanceID, opts...)
+	instance, err := client.Instances.Start(ctx, instanceID, params, opts...)
 	if err != nil {
 		return err
 	}

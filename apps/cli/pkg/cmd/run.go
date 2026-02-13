@@ -108,6 +108,21 @@ Examples:
 			Name:  "skip-kernel-headers",
 			Usage: "Skip kernel headers installation during boot for faster startup (DKMS will not work)",
 		},
+		// Entrypoint and CMD overrides
+		&cli.StringSliceFlag{
+			Name:  "entrypoint",
+			Usage: "Override image entrypoint (can be repeated for multiple args)",
+		},
+		&cli.StringSliceFlag{
+			Name:  "cmd",
+			Usage: "Override image CMD (can be repeated for multiple args)",
+		},
+		// Metadata flags
+		&cli.StringSliceFlag{
+			Name:    "metadata",
+			Aliases: []string{"l"},
+			Usage:   "Set metadata key-value pair (KEY=VALUE, can be repeated)",
+		},
 		// Volume mount flags
 		&cli.StringSliceFlag{
 			Name:    "volume",
@@ -242,6 +257,29 @@ func handleRun(ctx context.Context, cmd *cli.Command) error {
 	}
 	if cmd.IsSet("skip-kernel-headers") {
 		params.SkipKernelHeaders = hypeman.Opt(cmd.Bool("skip-kernel-headers"))
+	}
+
+	// Entrypoint and CMD overrides
+	if entrypoint := cmd.StringSlice("entrypoint"); len(entrypoint) > 0 {
+		params.Entrypoint = entrypoint
+	}
+	if cmdArgs := cmd.StringSlice("cmd"); len(cmdArgs) > 0 {
+		params.Cmd = cmdArgs
+	}
+
+	// Metadata
+	metadataSpecs := cmd.StringSlice("metadata")
+	if len(metadataSpecs) > 0 {
+		metadata := make(map[string]string)
+		for _, m := range metadataSpecs {
+			parts := strings.SplitN(m, "=", 2)
+			if len(parts) == 2 {
+				metadata[parts[0]] = parts[1]
+			} else {
+				fmt.Fprintf(os.Stderr, "Warning: ignoring malformed metadata: %s\n", m)
+			}
+		}
+		params.Metadata = metadata
 	}
 
 	// Volume mounts
