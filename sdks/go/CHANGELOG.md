@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.10.0 (2026-02-13)
+
+Full Changelog: [v0.9.8...v0.10.0](https://github.com/kernel/hypeman-go/compare/v0.9.8...v0.10.0)
+
+### Features
+
+* Add metadata field to instances ([8ce4014](https://github.com/kernel/hypeman-go/commit/8ce40145c0f6db8e928efa9c2909521a6d452579))
+* Better stop behavior ([12cfb4e](https://github.com/kernel/hypeman-go/commit/12cfb4e4ddfc198c65b09efeb73c8db0fd609f5f))
+
 ## 0.9.8 (2026-02-11)
 
 Full Changelog: [v0.9.7...v0.9.8](https://github.com/kernel/hypeman-go/compare/v0.9.7...v0.9.8)
