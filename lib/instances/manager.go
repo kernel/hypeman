@@ -149,16 +149,16 @@ func (m *manager) getInstanceLock(id string) *sync.RWMutex {
 	return lock.(*sync.RWMutex)
 }
 
-// maybePeristExitInfo persists exit info to metadata under the instance write lock.
+// maybePersistExitInfo persists exit info to metadata under the instance write lock.
 // Called from read paths when in-memory exit info was parsed but not yet persisted.
-func (m *manager) maybePeristExitInfo(ctx context.Context, id string) {
+func (m *manager) maybePersistExitInfo(ctx context.Context, id string) {
 	lock := m.getInstanceLock(id)
 	lock.Lock()
 	defer lock.Unlock()
 	m.persistExitInfo(ctx, id)
 }
 
-// t CreateInstance creates and starts a new instance
+// CreateInstance creates and starts a new instance
 func (m *manager) CreateInstance(ctx context.Context, req CreateInstanceRequest) (*Instance, error) {
 	// Note: ID is generated inside createInstance, so we can't lock before calling it.
 	// This is safe because:
@@ -234,7 +234,7 @@ func (m *manager) GetInstance(ctx context.Context, idOrName string) (*Instance, 
 		// If VM is stopped with unpersisted exit info, persist under write lock.
 		// This handles the "app exited on its own" case where stopInstance wasn't called.
 		if inst.State == StateStopped && inst.ExitCode != nil {
-			m.maybePeristExitInfo(ctx, inst.Id)
+			m.maybePersistExitInfo(ctx, inst.Id)
 		}
 		return inst, nil
 	}
@@ -255,7 +255,7 @@ func (m *manager) GetInstance(ctx context.Context, idOrName string) (*Instance, 
 	if len(nameMatches) == 1 {
 		inst := &nameMatches[0]
 		if inst.State == StateStopped && inst.ExitCode != nil {
-			m.maybePeristExitInfo(ctx, inst.Id)
+			m.maybePersistExitInfo(ctx, inst.Id)
 		}
 		return inst, nil
 	}
@@ -273,7 +273,7 @@ func (m *manager) GetInstance(ctx context.Context, idOrName string) (*Instance, 
 	if len(prefixMatches) == 1 {
 		inst := &prefixMatches[0]
 		if inst.State == StateStopped && inst.ExitCode != nil {
-			m.maybePeristExitInfo(ctx, inst.Id)
+			m.maybePersistExitInfo(ctx, inst.Id)
 		}
 		return inst, nil
 	}
