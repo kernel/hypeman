@@ -388,11 +388,13 @@ func TestImportLocalImageFromOCICache(t *testing.T) {
 	require.NoError(t, err)
 	t.Logf("Wrote image to OCI cache: digest=%s, layoutTag=%s", digestStr, layoutTag)
 
-	// Step 3: Call ImportLocalImage (what buildBuilderFromDockerfile does)
-	imported, err := mgr.ImportLocalImage(ctx, "localhost:8080/internal/builder", "latest", digestStr)
+	// Step 3: Call ImportLocalImage with a non-local registry reference
+	// We use a remote registry reference so the build uses the cached path (not streaming).
+	// The streaming path is only for local registries where the image is already available.
+	imported, err := mgr.ImportLocalImage(ctx, "registry.example.com/internal/builder", "latest", digestStr)
 	require.NoError(t, err)
 	require.NotNil(t, imported)
-	require.Equal(t, "localhost:8080/internal/builder:latest", imported.Name)
+	require.Equal(t, "registry.example.com/internal/builder:latest", imported.Name)
 	t.Logf("ImportLocalImage returned: name=%s, status=%s, digest=%s", imported.Name, imported.Status, imported.Digest)
 
 	// Step 4: Wait for the async build pipeline to complete
