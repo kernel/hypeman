@@ -205,6 +205,8 @@ type Instance struct {
 	//
 	// Any of "cloud-hypervisor", "qemu", "vz".
 	Hypervisor InstanceHypervisor `json:"hypervisor"`
+	// User-defined key-value metadata
+	Metadata map[string]string `json:"metadata"`
 	// Network configuration of the instance
 	Network InstanceNetwork `json:"network"`
 	// Writable overlay disk size (human-readable)
@@ -234,6 +236,7 @@ type Instance struct {
 		HasSnapshot respjson.Field
 		HotplugSize respjson.Field
 		Hypervisor  respjson.Field
+		Metadata    respjson.Field
 		Network     respjson.Field
 		OverlaySize respjson.Field
 		Size        respjson.Field
@@ -475,6 +478,8 @@ type InstanceNewParams struct {
 	//
 	// Any of "cloud-hypervisor", "qemu", "vz".
 	Hypervisor InstanceNewParamsHypervisor `json:"hypervisor,omitzero"`
+	// User-defined key-value metadata for the instance
+	Metadata map[string]string `json:"metadata,omitzero"`
 	// Network configuration for the instance
 	Network InstanceNewParamsNetwork `json:"network,omitzero"`
 	// Volumes to attach to the instance at creation time

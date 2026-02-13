@@ -40,6 +40,10 @@ func TestInstanceNewWithOptionalParams(t *testing.T) {
 		},
 		HotplugSize: hypeman.String("2GB"),
 		Hypervisor:  hypeman.InstanceNewParamsHypervisorCloudHypervisor,
+		Metadata: map[string]string{
+			"team":    "backend",
+			"purpose": "staging",
+		},
 		Network: hypeman.InstanceNewParamsNetwork{
 			BandwidthDownload: hypeman.String("1Gbps"),
 			BandwidthUpload:   hypeman.String("1Gbps"),
