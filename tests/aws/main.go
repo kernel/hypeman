@@ -399,10 +399,13 @@ func run() (exitCode int) {
 		var err error
 		hostScore, vmScore, err = runCoreMark(ctx, sshClient)
 		if err != nil {
-			// VM benchmark may fail in L2 nested virt (VMs crash).
-			// Treat as warning if we at least got the host score.
-			if hostScore > 0 {
-				logf("CoreMark VM benchmark failed (host score available): %v", err)
+			// VM benchmark may fail in L2 nested virt where VMs crash
+			// inside a VM. Only treat as a warning for non-bare-metal
+			// instances (which use nested/L2 virtualization); on bare
+			// metal the VM benchmark is expected to work.
+			isBareMetal := strings.Contains(*instanceType, "metal")
+			if hostScore > 0 && !isBareMetal {
+				logf("CoreMark VM benchmark failed (L2 nested virt, host score available): %v", err)
 			} else {
 				logf("CoreMark benchmark failed: %v", err)
 				return 1
