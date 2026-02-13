@@ -409,13 +409,18 @@ func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourc
 	// Token grants per-repo access based on build type:
 	// - Regular builds: push to builds/{id}, push to cache/{tenant}, pull from cache/global/{runtime}
 	// - Admin builds: push to builds/{id}, push to cache/global/{runtime}
+	// - When ImageName is set: push to {image_name} instead of builds/{id}
 	tokenTTL := time.Duration(policy.TimeoutSeconds) * time.Second
 	if tokenTTL < 30*time.Minute {
 		tokenTTL = 30 * time.Minute // Minimum 30 minutes
 	}
 
+	outputRepo := fmt.Sprintf("builds/%s", id)
+	if req.ImageName != "" {
+		outputRepo = req.ImageName
+	}
 	repoAccess := []RepoPermission{
-		{Repo: fmt.Sprintf("builds/%s", id), Scope: "push"},
+		{Repo: outputRepo, Scope: "push"},
 	}
 
 	// If the Dockerfile uses base images from the internal registry, grant pull access
@@ -499,6 +504,7 @@ func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourc
 		NetworkMode:      policy.NetworkMode,
 		IsAdminBuild:     req.IsAdminBuild,
 		GlobalCacheKey:   req.GlobalCacheKey,
+		ImageName:        req.ImageName,
 	}
 	if err := writeBuildConfig(m.paths, id, buildConfig); err != nil {
 		deleteBuild(m.paths, id)
@@ -585,8 +591,6 @@ func (m *manager) runBuild(ctx context.Context, id string, req CreateBuildReques
 	}
 
 	m.logger.Info("build succeeded", "id", id, "digest", result.ImageDigest, "duration", duration)
-	registryHost := stripRegistryScheme(m.config.RegistryURL)
-	imageRef := fmt.Sprintf("%s/builds/%s", registryHost, id)
 
 	// Wait for image to be ready before reporting build as complete.
 	// This fixes the race condition (KERNEL-863) where build reports "ready"
@@ -609,6 +613,12 @@ func (m *manager) runBuild(ctx context.Context, id string, req CreateBuildReques
 	duration = time.Since(start)
 	durationMS = duration.Milliseconds()
 
+	// Use the short image name (without registry host prefix) so the returned
+	// image_ref can be used directly with `hypeman run`.
+	imageRef := fmt.Sprintf("builds/%s", id)
+	if req.ImageName != "" {
+		imageRef = req.ImageName
+	}
 	m.updateBuildComplete(id, StatusReady, &result.ImageDigest, nil, &result.Provenance, &durationMS)
 
 	// Update with image ref
@@ -1299,8 +1309,12 @@ func (m *manager) refreshBuildToken(buildID string, req *CreateBuildRequest) err
 	}
 
 	// Generate per-repo access list (same logic as CreateBuild)
+	outputRepo := fmt.Sprintf("builds/%s", buildID)
+	if req.ImageName != "" {
+		outputRepo = req.ImageName
+	}
 	repoAccess := []RepoPermission{
-		{Repo: fmt.Sprintf("builds/%s", buildID), Scope: "push"},
+		{Repo: outputRepo, Scope: "push"},
 	}
 
 	// If the Dockerfile uses base images from the internal registry, grant pull access
