@@ -111,6 +111,24 @@ func stripRegistryScheme(registryURL string) string {
 	return registryURL
 }
 
+// stripImageTag removes a tag from an image name (e.g., "repo:tag" -> "repo").
+// Digest references ("repo@sha256:...") are also stripped.
+func stripImageTag(imageName string) string {
+	if idx := strings.Index(imageName, "@"); idx != -1 {
+		return imageName[:idx]
+	}
+	// Find last colon, but skip colons that are part of a port (e.g., "host:5000/repo:tag")
+	lastColon := strings.LastIndex(imageName, ":")
+	if lastColon == -1 {
+		return imageName
+	}
+	// If there's a slash after the last colon, it's a port, not a tag
+	if strings.Contains(imageName[lastColon:], "/") {
+		return imageName
+	}
+	return imageName[:lastColon]
+}
+
 type manager struct {
 	config          Config
 	paths           *paths.Paths
@@ -417,7 +435,7 @@ func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourc
 
 	outputRepo := fmt.Sprintf("builds/%s", id)
 	if req.ImageName != "" {
-		outputRepo = req.ImageName
+		outputRepo = stripImageTag(req.ImageName)
 	}
 	repoAccess := []RepoPermission{
 		{Repo: outputRepo, Scope: "push"},
@@ -596,7 +614,13 @@ func (m *manager) runBuild(ctx context.Context, id string, req CreateBuildReques
 	// This fixes the race condition (KERNEL-863) where build reports "ready"
 	// but image conversion hasn't finished yet.
 	// Use buildCtx to respect the build timeout during image wait.
-	if err := m.waitForImageReady(buildCtx, id); err != nil {
+	// Use the short image name (without registry host prefix) to match what
+	// triggerConversion stores in the image manager.
+	outputRepo := fmt.Sprintf("builds/%s", id)
+	if req.ImageName != "" {
+		outputRepo = stripImageTag(req.ImageName)
+	}
+	if err := m.waitForImageReady(buildCtx, outputRepo); err != nil {
 		// Recalculate duration to include image wait time
 		duration = time.Since(start)
 		durationMS = duration.Milliseconds()
@@ -929,15 +953,12 @@ func (m *manager) updateBuildComplete(id string, status string, digest *string, 
 // waitForImageReady polls the image manager until the build's image is ready.
 // This ensures that when a build reports "ready", the image is actually usable
 // for instance creation (fixes KERNEL-863 race condition).
-func (m *manager) waitForImageReady(ctx context.Context, id string) error {
-	registryHost := stripRegistryScheme(m.config.RegistryURL)
-	imageRef := fmt.Sprintf("%s/builds/%s", registryHost, id)
-
+func (m *manager) waitForImageReady(ctx context.Context, imageRef string) error {
 	// Poll for up to 60 seconds (image conversion is typically fast)
 	const maxAttempts = 120
 	const pollInterval = 500 * time.Millisecond
 
-	m.logger.Debug("waiting for image to be ready", "id", id, "image_ref", imageRef)
+	m.logger.Debug("waiting for image to be ready", "image_ref", imageRef)
 
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		select {
@@ -950,7 +971,7 @@ func (m *manager) waitForImageReady(ctx context.Context, id string) error {
 		if err == nil {
 			switch img.Status {
 			case images.StatusReady:
-				m.logger.Debug("image is ready", "id", id, "image_ref", imageRef, "attempts", attempt+1)
+				m.logger.Debug("image is ready", "image_ref", imageRef, "attempts", attempt+1)
 				return nil
 			case images.StatusFailed:
 				return fmt.Errorf("image conversion failed")
@@ -1311,7 +1332,7 @@ func (m *manager) refreshBuildToken(buildID string, req *CreateBuildRequest) err
 	// Generate per-repo access list (same logic as CreateBuild)
 	outputRepo := fmt.Sprintf("builds/%s", buildID)
 	if req.ImageName != "" {
-		outputRepo = req.ImageName
+		outputRepo = stripImageTag(req.ImageName)
 	}
 	repoAccess := []RepoPermission{
 		{Repo: outputRepo, Scope: "push"},

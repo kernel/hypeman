@@ -454,15 +454,25 @@ func JwtAuth(jwtSecret string, subnetCIDR ...string) func(http.Handler) http.Han
 					}
 				}
 
-				// Fallback: Allow internal VM network for registry pushes
-				// This is a transitional fallback for older builder images without token auth
+				// Fallback: Allow internal VM network for registry pushes to builds/* repos only.
+				// This is a transitional fallback for older builder images without token auth.
+				// Restrict to builds/* repos to prevent untrusted workloads from accessing
+				// arbitrary registry repositories.
 				if isInternalVMRequest(r, subnetCIDR...) {
-					log.DebugContext(r.Context(), "allowing internal VM request via IP fallback (deprecated)",
+					repo := extractRepoFromPath(r.URL.Path)
+					if strings.HasPrefix(repo, "builds/") || r.URL.Path == "/v2/" || r.URL.Path == "/v2" {
+						log.DebugContext(r.Context(), "allowing internal VM request via IP fallback (deprecated)",
+							"remote_addr", r.RemoteAddr,
+							"path", r.URL.Path,
+							"repo", repo)
+						ctx := context.WithValue(r.Context(), userIDKey, "internal-builder-legacy")
+						next.ServeHTTP(w, r.WithContext(ctx))
+						return
+					}
+					log.InfoContext(r.Context(), "internal VM request denied - repo not allowed via IP fallback",
 						"remote_addr", r.RemoteAddr,
-						"path", r.URL.Path)
-					ctx := context.WithValue(r.Context(), userIDKey, "internal-builder-legacy")
-					next.ServeHTTP(w, r.WithContext(ctx))
-					return
+						"path", r.URL.Path,
+						"repo", repo)
 				}
 
 				// Registry auth failed - return 401 with WWW-Authenticate header
