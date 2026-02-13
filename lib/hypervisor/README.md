@@ -17,7 +17,7 @@ Hypeman originally supported only Cloud Hypervisor. This abstraction layer allow
 |------------|----------|---------------|-------------------|
 | Cloud Hypervisor | Linux | External process | HTTP API over Unix socket |
 | QEMU | Linux | External process | QMP over Unix socket |
-| vz | macOS | Subprocess (vz-shim) | gRPC over Unix socket |
+| vz | macOS | Subprocess (vz-shim) | HTTP API over Unix socket |
 
 ## How It Works
 

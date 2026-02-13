@@ -355,7 +355,9 @@ else
 </dict>
 </plist>
 ENTITLEMENTS
-        codesign --force --sign - --entitlements "$ENTITLEMENTS_TMP" "${TMP_DIR}/${BINARY_NAME}" 2>/dev/null || true
+        if ! codesign --force --sign - --entitlements "$ENTITLEMENTS_TMP" "${TMP_DIR}/${BINARY_NAME}" 2>/dev/null; then
+            warn "codesign failed — vz hypervisor will not work without virtualization entitlement"
+        fi
         rm -f "$ENTITLEMENTS_TMP"
     fi
 fi
