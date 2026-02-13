@@ -508,6 +508,50 @@ func TestExtractMetadataFromImage(t *testing.T) {
 	assert.Contains(t, meta.Env, "PATH")
 }
 
+// TestStreamingUnpackFromLayout tests that streamingUnpackFromLayout correctly
+// extracts layers from a pre-cached OCI layout without using umoci.
+// This is the fast path for local registry images.
+func TestStreamingUnpackFromLayout(t *testing.T) {
+	// Create synthetic image and write to OCI layout
+	img := createTestDockerImage(t)
+
+	imgDigest, err := img.Digest()
+	require.NoError(t, err)
+	digestStr := imgDigest.String()
+	layoutTag := digestToLayoutTag(digestStr)
+
+	cacheDir := t.TempDir()
+	path, err := layout.Write(cacheDir, empty.Index)
+	require.NoError(t, err)
+
+	err = path.AppendImage(img, layout.WithAnnotations(map[string]string{
+		"org.opencontainers.image.ref.name": layoutTag,
+	}))
+	require.NoError(t, err)
+	t.Logf("Wrote image to OCI cache: digest=%s, layoutTag=%s", digestStr, layoutTag)
+
+	// Create OCI client pointing at same cache dir
+	client, err := newOCIClient(cacheDir)
+	require.NoError(t, err)
+
+	// Extract using streamingUnpackFromLayout
+	targetDir := t.TempDir()
+	result, err := client.streamingUnpackFromLayout(context.Background(), layoutTag, targetDir)
+	require.NoError(t, err)
+
+	// Verify result
+	assert.Equal(t, digestStr, result.Digest)
+	assert.Equal(t, []string{"/usr/local/bin/guest-agent"}, result.Metadata.Entrypoint)
+	assert.Equal(t, "/app", result.Metadata.WorkingDir)
+	assert.Contains(t, result.Metadata.Env, "PATH")
+
+	// Verify files were extracted (our test image has a test file)
+	entries, err := os.ReadDir(targetDir)
+	require.NoError(t, err)
+	assert.Greater(t, len(entries), 0, "should have extracted some files")
+	t.Logf("Extracted %d entries to %s", len(entries), targetDir)
+}
+
 // TestDockerSaveToOCILayoutCacheHit verifies that pullAndExport correctly
 // detects a cache hit when the image has already been written to OCI layout
 // (via AppendImage), skipping the remote pull entirely. This is the exact

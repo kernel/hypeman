@@ -239,17 +239,24 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef) {
 	alreadyCached := m.ociClient.existsInLayout(layoutTag)
 
 	log := logger.FromContext(ctx)
-	// Use streaming for remote registries when image isn't cached yet.
-	// For local registries, we must use the cached path because:
-	// 1. The registry pre-caches the image to OCI layout on push
-	// 2. streamingUnpack would need auth to pull from local registry
-	// 3. The cached path reads directly from disk (no auth needed)
-	// TODO: Implement streamingUnpackFromLayout to stream from local cache for speed
-	if !isLocalRegistry(ref.Repository()) && !alreadyCached {
-		log.InfoContext(ctx, "using streaming unpack for uncached remote image", "ref", ref.String())
-		result, err = m.ociClient.streamingUnpack(ctx, ref.String(), tempDir)
+	if isLocalRegistry(ref.Repository()) {
+		// For local registries, use streaming to bypass slow umoci.
+		// Local images are one-time conversions (no layer dedup benefit).
+		if alreadyCached {
+			// Stream directly from OCI cache (no network auth needed)
+			log.InfoContext(ctx, "using streaming unpack from layout for local registry image", "ref", ref.String())
+			result, err = m.ociClient.streamingUnpackFromLayout(ctx, layoutTag, tempDir)
+		} else {
+			// Rare case: local registry image not in cache yet
+			// This would need network auth - fall back to error for now
+			// (In practice, registry always pre-caches on push)
+			log.InfoContext(ctx, "using streaming unpack for uncached local image", "ref", ref.String())
+			result, err = m.ociClient.streamingUnpack(ctx, ref.String(), tempDir)
+		}
 	} else {
-		log.InfoContext(ctx, "using cached unpack", "ref", ref.String(), "local", isLocalRegistry(ref.Repository()), "cached", alreadyCached)
+		// For remote registries, use the cached path (pullAndExport).
+		// This enables layer deduplication across multiple pulls of related images.
+		log.InfoContext(ctx, "using cached unpack for remote image", "ref", ref.String(), "cached", alreadyCached)
 		result, err = m.ociClient.pullAndExport(ctx, ref.String(), ref.Digest(), tempDir)
 	}
 

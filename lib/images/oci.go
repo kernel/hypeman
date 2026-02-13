@@ -510,6 +510,82 @@ func (c *ociClient) streamingUnpackWithPlatform(ctx context.Context, imageRef st
 	}, nil
 }
 
+// streamingUnpackFromLayout extracts layers from the local OCI cache to target directory
+// without using umoci. This is faster than pullAndExport for local registry images because:
+// 1. No network auth required (reads directly from disk)
+// 2. Direct tar extraction is 1.6-2.8x faster than umoci
+//
+// The flow is: OCI Cache Blob -> go-containerregistry -> tar extraction -> rootfs/
+// vs pullAndExport: OCI Cache Blob -> umoci -> rootfs/
+func (c *ociClient) streamingUnpackFromLayout(ctx context.Context, layoutTag string, targetDir string) (*pullResult, error) {
+	// Open OCI layout from local cache
+	path, err := layout.FromPath(c.cacheDir)
+	if err != nil {
+		return nil, fmt.Errorf("open oci layout: %w", err)
+	}
+
+	// Get the image by annotation tag from the layout
+	img, err := imageByAnnotation(path, layoutTag)
+	if err != nil {
+		return nil, fmt.Errorf("find image by tag %s: %w", layoutTag, err)
+	}
+
+	// Get image digest for return value
+	imgDigest, err := img.Digest()
+	if err != nil {
+		return nil, fmt.Errorf("get image digest: %w", err)
+	}
+
+	// Pre-create target directory
+	if err := os.MkdirAll(targetDir, 0755); err != nil {
+		return nil, fmt.Errorf("create target dir: %w", err)
+	}
+
+	// Get layers in order
+	layers, err := img.Layers()
+	if err != nil {
+		return nil, fmt.Errorf("get layers: %w", err)
+	}
+
+	// Extract each layer in order, applying whiteouts between layers
+	for i, layer := range layers {
+		mediaType, err := layer.MediaType()
+		if err != nil {
+			return nil, fmt.Errorf("get layer %d mediatype: %w", i, err)
+		}
+
+		// Get uncompressed reader - go-containerregistry handles decompression
+		// automatically based on the media type (gzip, zstd, etc.)
+		reader, err := layer.Uncompressed()
+		if err != nil {
+			return nil, fmt.Errorf("get layer %d reader: %w", i, err)
+		}
+
+		// Extract layer using tar
+		if err := extractTarStream(ctx, reader, targetDir); err != nil {
+			reader.Close()
+			return nil, fmt.Errorf("extract layer %d (%s): %w", i, mediaType, err)
+		}
+		reader.Close()
+
+		// Process whiteouts after each layer
+		if err := processWhiteouts(targetDir); err != nil {
+			return nil, fmt.Errorf("process whiteouts for layer %d: %w", i, err)
+		}
+	}
+
+	// Extract metadata from image config
+	meta, err := extractMetadataFromImage(img)
+	if err != nil {
+		return nil, fmt.Errorf("extract metadata: %w", err)
+	}
+
+	return &pullResult{
+		Metadata: meta,
+		Digest:   imgDigest.String(),
+	}, nil
+}
+
 // extractTarStream extracts a tar stream to the target directory using the tar command.
 // This is more reliable than Go's archive/tar for handling all edge cases
 // (special files, permissions, extended attributes, etc.)
