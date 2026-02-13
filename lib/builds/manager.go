@@ -298,9 +298,13 @@ func (m *manager) runBuild(ctx context.Context, id string, req CreateBuildReques
 	}
 
 	m.logger.Info("build succeeded", "id", id, "digest", result.ImageDigest, "duration", duration)
-	imageRef := fmt.Sprintf("%s/builds/%s", m.config.RegistryURL, id)
+	// Use the short image name (without registry host prefix) so the returned
+	// image_ref can be used directly with `hypeman run`.
+	// The registry stores images under the path repo (e.g., "builds/{id}" or "{imageName}")
+	// and ParseNormalizedRef handles the Docker Hub normalization.
+	imageRef := fmt.Sprintf("builds/%s", id)
 	if req.ImageName != "" {
-		imageRef = fmt.Sprintf("%s/%s", m.config.RegistryURL, req.ImageName)
+		imageRef = req.ImageName
 	}
 	m.updateBuildComplete(id, StatusReady, &result.ImageDigest, nil, &result.Provenance, &durationMS)
 

@@ -70,14 +70,6 @@ func (r *Registry) Handler() http.Handler {
 				pathRepo := matches[1]
 				reference := matches[2]
 
-				// Include the host to form the full repository path
-				// This preserves the registry host (e.g., "10.102.0.1:8083/builds/xxx")
-				// instead of normalizing to docker.io
-				fullRepo := pathRepo
-				if req.Host != "" {
-					fullRepo = req.Host + "/" + pathRepo
-				}
-
 				body, err := io.ReadAll(req.Body)
 				req.Body.Close()
 				if err != nil {
@@ -102,7 +94,11 @@ func (r *Registry) Handler() http.Handler {
 				r.handler.ServeHTTP(wrapper, req)
 
 				if wrapper.statusCode == http.StatusCreated {
-					go r.triggerConversion(fullRepo, reference, digest)
+					// Use pathRepo (without registry host prefix) so pushed images
+					// are stored under their short name. This ensures consistency:
+					// `hypeman push myapp` stores as "docker.io/library/myapp:latest"
+					// which matches what `hypeman run myapp` looks up.
+					go r.triggerConversion(pathRepo, reference, digest)
 				}
 				return
 			}

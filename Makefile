@@ -183,6 +183,11 @@ build: ensure-ch-binaries ensure-caddy-binaries build-embedded | $(BIN_DIR)
 # Build all binaries
 build-all: build
 
+# Run without live reload (build once and run)
+run: build
+	sudo setcap cap_net_admin,cap_net_bind_service=+eip $(BIN_DIR)/hypeman
+	$(BIN_DIR)/hypeman
+
 # Run in development mode with hot reload
 dev: ensure-ch-binaries ensure-caddy-binaries build-embedded $(AIR)
 	@rm -f ./tmp/main

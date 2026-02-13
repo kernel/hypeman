@@ -65,7 +65,7 @@ func ProvidePaths(cfg *config.Config) *paths.Paths {
 // ProvideImageManager provides the image manager
 func ProvideImageManager(p *paths.Paths, cfg *config.Config) (images.Manager, error) {
 	meter := otel.GetMeterProvider().Meter("hypeman")
-	return images.NewManager(p, cfg.MaxConcurrentBuilds, meter)
+	return images.NewManager(p, cfg.MaxConcurrentBuilds, meter, cfg.RegistryURL)
 }
 
 // ProvideSystemManager provides the system manager
