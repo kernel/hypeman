@@ -133,14 +133,14 @@ func (r *InstanceService) Standby(ctx context.Context, id string, opts ...option
 }
 
 // Start a stopped instance
-func (r *InstanceService) Start(ctx context.Context, id string, opts ...option.RequestOption) (res *Instance, err error) {
+func (r *InstanceService) Start(ctx context.Context, id string, body InstanceStartParams, opts ...option.RequestOption) (res *Instance, err error) {
 	opts = slices.Concat(r.Options, opts)
 	if id == "" {
 		err = errors.New("missing required id parameter")
 		return
 	}
 	path := fmt.Sprintf("instances/%s/start", id)
-	err = requestconfig.ExecuteNewRequest(ctx, http.MethodPost, path, nil, &res, opts...)
+	err = requestconfig.ExecuteNewRequest(ctx, http.MethodPost, path, body, &res, opts...)
 	return
 }
 
@@ -195,6 +195,11 @@ type Instance struct {
 	DiskIoBps string `json:"disk_io_bps"`
 	// Environment variables
 	Env map[string]string `json:"env"`
+	// App exit code (null if VM hasn't exited)
+	ExitCode int64 `json:"exit_code,nullable"`
+	// Human-readable description of exit (e.g., "command not found", "killed by signal
+	// 9 (SIGKILL) - OOM")
+	ExitMessage string `json:"exit_message"`
 	// GPU information attached to the instance
 	GPU InstanceGPU `json:"gpu"`
 	// Whether a snapshot exists for this instance
@@ -205,6 +210,8 @@ type Instance struct {
 	//
 	// Any of "cloud-hypervisor", "qemu", "vz".
 	Hypervisor InstanceHypervisor `json:"hypervisor"`
+	// User-defined key-value metadata
+	Metadata map[string]string `json:"metadata"`
 	// Network configuration of the instance
 	Network InstanceNetwork `json:"network"`
 	// Writable overlay disk size (human-readable)
@@ -230,10 +237,13 @@ type Instance struct {
 		State       respjson.Field
 		DiskIoBps   respjson.Field
 		Env         respjson.Field
+		ExitCode    respjson.Field
+		ExitMessage respjson.Field
 		GPU         respjson.Field
 		HasSnapshot respjson.Field
 		HotplugSize respjson.Field
 		Hypervisor  respjson.Field
+		Metadata    respjson.Field
 		Network     respjson.Field
 		OverlaySize respjson.Field
 		Size        respjson.Field
@@ -465,8 +475,14 @@ type InstanceNewParams struct {
 	SkipKernelHeaders param.Opt[bool] `json:"skip_kernel_headers,omitzero"`
 	// Number of virtual CPUs
 	Vcpus param.Opt[int64] `json:"vcpus,omitzero"`
+	// Override image CMD (like docker run <image> <command>). Omit to use image
+	// default.
+	Cmd []string `json:"cmd,omitzero"`
 	// Device IDs or names to attach for GPU/PCI passthrough
 	Devices []string `json:"devices,omitzero"`
+	// Override image entrypoint (like docker run --entrypoint). Omit to use image
+	// default.
+	Entrypoint []string `json:"entrypoint,omitzero"`
 	// Environment variables
 	Env map[string]string `json:"env,omitzero"`
 	// GPU configuration for the instance
@@ -475,6 +491,8 @@ type InstanceNewParams struct {
 	//
 	// Any of "cloud-hypervisor", "qemu", "vz".
 	Hypervisor InstanceNewParamsHypervisor `json:"hypervisor,omitzero"`
+	// User-defined key-value metadata for the instance
+	Metadata map[string]string `json:"metadata,omitzero"`
 	// Network configuration for the instance
 	Network InstanceNewParamsNetwork `json:"network,omitzero"`
 	// Volumes to attach to the instance at creation time
@@ -571,6 +589,22 @@ const (
 	InstanceLogsParamsSourceVmm     InstanceLogsParamsSource = "vmm"
 	InstanceLogsParamsSourceHypeman InstanceLogsParamsSource = "hypeman"
 )
+
+type InstanceStartParams struct {
+	// Override image CMD for this run. Omit to keep previous value.
+	Cmd []string `json:"cmd,omitzero"`
+	// Override image entrypoint for this run. Omit to keep previous value.
+	Entrypoint []string `json:"entrypoint,omitzero"`
+	paramObj
+}
+
+func (r InstanceStartParams) MarshalJSON() (data []byte, err error) {
+	type shadow InstanceStartParams
+	return param.MarshalObject(r, (*shadow)(&r))
+}
+func (r *InstanceStartParams) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
 
 type InstanceStatParams struct {
 	// Path to stat in the guest filesystem

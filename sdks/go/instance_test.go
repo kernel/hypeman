@@ -27,10 +27,12 @@ func TestInstanceNewWithOptionalParams(t *testing.T) {
 		option.WithAPIKey("My API Key"),
 	)
 	_, err := client.Instances.New(context.TODO(), hypeman.InstanceNewParams{
-		Image:     "docker.io/library/alpine:latest",
-		Name:      "my-workload-1",
-		Devices:   []string{"l4-gpu"},
-		DiskIoBps: hypeman.String("100MB/s"),
+		Image:      "docker.io/library/alpine:latest",
+		Name:       "my-workload-1",
+		Cmd:        []string{"echo", "hello"},
+		Devices:    []string{"l4-gpu"},
+		DiskIoBps:  hypeman.String("100MB/s"),
+		Entrypoint: []string{"/bin/sh", "-c"},
 		Env: map[string]string{
 			"PORT":     "3000",
 			"NODE_ENV": "production",
@@ -40,6 +42,10 @@ func TestInstanceNewWithOptionalParams(t *testing.T) {
 		},
 		HotplugSize: hypeman.String("2GB"),
 		Hypervisor:  hypeman.InstanceNewParamsHypervisorCloudHypervisor,
+		Metadata: map[string]string{
+			"team":    "backend",
+			"purpose": "staging",
+		},
 		Network: hypeman.InstanceNewParamsNetwork{
 			BandwidthDownload: hypeman.String("1Gbps"),
 			BandwidthUpload:   hypeman.String("1Gbps"),
@@ -182,7 +188,7 @@ func TestInstanceStandby(t *testing.T) {
 	}
 }
 
-func TestInstanceStart(t *testing.T) {
+func TestInstanceStartWithOptionalParams(t *testing.T) {
 	t.Skip("Prism tests are disabled")
 	baseURL := "http://localhost:4010"
 	if envURL, ok := os.LookupEnv("TEST_API_BASE_URL"); ok {
@@ -195,7 +201,14 @@ func TestInstanceStart(t *testing.T) {
 		option.WithBaseURL(baseURL),
 		option.WithAPIKey("My API Key"),
 	)
-	_, err := client.Instances.Start(context.TODO(), "id")
+	_, err := client.Instances.Start(
+		context.TODO(),
+		"id",
+		hypeman.InstanceStartParams{
+			Cmd:        []string{"string"},
+			Entrypoint: []string{"string"},
+		},
+	)
 	if err != nil {
 		var apierr *hypeman.Error
 		if errors.As(err, &apierr) {
