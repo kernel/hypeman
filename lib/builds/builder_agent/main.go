@@ -573,6 +573,7 @@ func loadConfig() (*BuildConfig, error) {
 // setupRegistryAuth creates a Docker config.json with the registry token for authentication,
 // and a buildkitd.toml for TLS configuration.
 // BuildKit uses these files to authenticate and configure TLS when pushing images.
+// Writes to both root and builder user dirs to cover all execution contexts.
 func setupRegistryAuth(config *BuildConfig) error {
 	// Parse registry host (strip any scheme prefix for backwards compatibility)
 	registryHost := config.RegistryURL
@@ -613,32 +614,26 @@ func setupRegistryAuth(config *BuildConfig) error {
 		return fmt.Errorf("marshal docker config: %w", err)
 	}
 
-	// Ensure ~/.docker directory exists
-	dockerDir := "/home/builder/.docker"
-	if err := os.MkdirAll(dockerDir, 0700); err != nil {
-		return fmt.Errorf("create docker config dir: %w", err)
-	}
-
-	// Write config.json
-	configPath := filepath.Join(dockerDir, "config.json")
-	if err := os.WriteFile(configPath, configData, 0600); err != nil {
-		return fmt.Errorf("write docker config: %w", err)
-	}
-
 	log.Printf("Docker config created for registry %s (auth length: %d)", registryHost, len(authValue))
 
-	// Also write to /root/.docker for rootless buildkit that may run as root
-	rootDockerDir := "/root/.docker"
-	if err := os.MkdirAll(rootDockerDir, 0700); err == nil {
-		rootConfigPath := filepath.Join(rootDockerDir, "config.json")
-		if err := os.WriteFile(rootConfigPath, configData, 0600); err != nil {
-			log.Printf("Warning: failed to write root docker config: %v", err)
-		} else {
-			log.Printf("Registry auth configured at %s", rootConfigPath)
-		}
+	// Write to both root and builder user config dirs
+	dockerDirs := []string{
+		"/root/.docker",
+		"/home/builder/.docker",
 	}
 
-	log.Printf("Registry auth configured at %s", configPath)
+	for _, dockerDir := range dockerDirs {
+		if err := os.MkdirAll(dockerDir, 0700); err != nil {
+			return fmt.Errorf("create docker config dir %s: %w", dockerDir, err)
+		}
+
+		configPath := filepath.Join(dockerDir, "config.json")
+		if err := os.WriteFile(configPath, configData, 0600); err != nil {
+			return fmt.Errorf("write docker config %s: %w", configPath, err)
+		}
+
+		log.Printf("Registry auth configured at %s", configPath)
+	}
 
 	// Setup buildkitd.toml for TLS configuration
 	if err := setupBuildkitdConfig(config); err != nil {
@@ -745,6 +740,15 @@ func setupBuildkitdConfig(config *BuildConfig) error {
 
 	log.Printf("BuildKit config written to %s for registry %s (https=%v, insecure=%v, hasCA=%v)",
 		tomlPath, registryHost, isHTTPS, config.RegistryInsecure, hasCA)
+
+	// Also write to /root/.config/buildkit for rootless buildkit
+	rootBuildkitDir := "/root/.config/buildkit"
+	if err := os.MkdirAll(rootBuildkitDir, 0755); err == nil {
+		rootTomlPath := filepath.Join(rootBuildkitDir, "buildkitd.toml")
+		if err := os.WriteFile(rootTomlPath, []byte(tomlContent.String()), 0644); err != nil {
+			log.Printf("Warning: failed to write root buildkitd.toml: %v", err)
+		}
+	}
 
 	return nil
 }
@@ -892,8 +896,8 @@ func runBuild(ctx context.Context, config *BuildConfig, logWriter io.Writer) (st
 	env := make([]string, 0, len(os.Environ())+3)
 	for _, e := range os.Environ() {
 		if !strings.HasPrefix(e, "DOCKER_CONFIG=") &&
-		   !strings.HasPrefix(e, "BUILDKITD_FLAGS=") &&
-		   !strings.HasPrefix(e, "HOME=") {
+			!strings.HasPrefix(e, "BUILDKITD_FLAGS=") &&
+			!strings.HasPrefix(e, "HOME=") {
 			env = append(env, e)
 		}
 	}
