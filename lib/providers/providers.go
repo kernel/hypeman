@@ -265,8 +265,9 @@ func ProvideBuildManager(p *paths.Paths, cfg *config.Config, instanceManager ins
 	if buildConfig.MaxConcurrentBuilds == 0 {
 		buildConfig.MaxConcurrentBuilds = 2
 	}
-	// If BuilderImage is empty, ensureBuilderImage will build from embedded Dockerfile
-	// (requires Docker socket). No default is set to allow this path.
+	if buildConfig.BuilderImage == "" {
+		buildConfig.BuilderImage = "hypeman/builder:latest"
+	}
 	if buildConfig.RegistryURL == "" {
 		buildConfig.RegistryURL = "localhost:8080"
 	}

@@ -33,9 +33,7 @@ FROM alpine:3.21
 RUN apk add --no-cache \
     ca-certificates \
     git \
-    curl \
-    erofs-utils \
-    zstd
+    curl
 
 # Copy BuildKit binaries from official image
 COPY --from=buildkit /usr/bin/buildctl /usr/bin/buildctl

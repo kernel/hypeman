@@ -266,7 +266,7 @@ func (m *manager) buildBuilderFromDockerfile(ctx context.Context) (string, error
 	localTag := fmt.Sprintf("hypeman-builder-tmp:%d", time.Now().Unix())
 	m.logger.Info("building builder image with Docker", "tag", localTag)
 
-	buildCmd := exec.CommandContext(ctx, "docker", "build", "--network=host", "-t", localTag, "-f", dockerfilePath, ".")
+	buildCmd := exec.CommandContext(ctx, "docker", "build", "-t", localTag, "-f", dockerfilePath, ".")
 	buildCmd.Env = dockerEnv
 	if output, err := buildCmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("docker build: %s: %w", string(output), err)
@@ -358,11 +358,7 @@ func (m *manager) waitForBuilderImageReady(ctx context.Context, imageRef string)
 			case images.StatusReady:
 				return nil
 			case images.StatusFailed:
-				errDetail := "unknown"
-				if img.Error != nil {
-					errDetail = *img.Error
-				}
-				return fmt.Errorf("image conversion failed: %s", errDetail)
+				return fmt.Errorf("image conversion failed")
 			}
 		}
 		time.Sleep(pollInterval)
@@ -592,12 +588,11 @@ func (m *manager) runBuild(ctx context.Context, id string, req CreateBuildReques
 	registryHost := stripRegistryScheme(m.config.RegistryURL)
 	imageRef := fmt.Sprintf("%s/builds/%s", registryHost, id)
 
-	// If the pre-built erofs disk was successfully registered, skip the slow
-	// image conversion pipeline. Otherwise, fall back to waiting for the
-	// existing push → unpack → convert pipeline.
-	if result.ErofsDiskPath != "" {
-		m.logger.Info("using pre-built erofs disk, skipping image conversion wait", "id", id)
-	} else if err := m.waitForImageReady(buildCtx, id); err != nil {
+	// Wait for image to be ready before reporting build as complete.
+	// This fixes the race condition (KERNEL-863) where build reports "ready"
+	// but image conversion hasn't finished yet.
+	// Use buildCtx to respect the build timeout during image wait.
+	if err := m.waitForImageReady(buildCtx, id); err != nil {
 		// Recalculate duration to include image wait time
 		duration = time.Since(start)
 		durationMS = duration.Milliseconds()
@@ -654,14 +649,6 @@ func (m *manager) executeBuild(ctx context.Context, id string, req CreateBuildRe
 		return nil, fmt.Errorf("create source volume: %w", err)
 	}
 	defer m.volumeManager.DeleteVolume(context.Background(), sourceVolID)
-
-	// Ensure the source volume has enough free space for in-VM erofs creation.
-	// The volume is sized to fit the source content, but the builder agent needs
-	// extra space to extract image layers and create the erofs disk (~200-500MB).
-	if err := m.ensureMinVolumeSize(sourceVolID, 512*1024*1024); err != nil {
-		m.logger.Warn("failed to resize source volume for erofs optimization", "error", err)
-		// Non-fatal: build will still work, just without in-VM erofs optimization
-	}
 
 	// Create config volume with build.json for the builder agent
 	configVolID := fmt.Sprintf("build-config-%s", id)
@@ -739,110 +726,7 @@ func (m *manager) executeBuild(ctx context.Context, id string, req CreateBuildRe
 		return nil, fmt.Errorf("wait for result: %w", err)
 	}
 
-	// If the builder VM created a pre-built erofs disk, extract it from the
-	// source volume and register it directly as a ready image. This skips the
-	// slow host-side umoci unpack + mkfs.erofs conversion pipeline.
-	if result != nil && result.Success && result.ErofsDiskPath != "" {
-		if err := m.extractPrebuiltErofs(ctx, id, sourceVolID, result); err != nil {
-			m.logger.Warn("prebuilt erofs extraction failed, using fallback", "id", id, "error", err)
-			result.ErofsDiskPath = "" // Clear so runBuild uses fallback
-		}
-	}
-
 	return result, nil
-}
-
-// ensureMinVolumeSize expands the source volume's ext4 image to at least minBytes
-// so the builder agent has enough space for erofs creation.
-func (m *manager) ensureMinVolumeSize(volID string, minBytes int64) error {
-	volPath := m.paths.VolumeData(volID)
-
-	info, err := os.Stat(volPath)
-	if err != nil {
-		return fmt.Errorf("stat volume: %w", err)
-	}
-
-	if info.Size() >= minBytes {
-		return nil // Already large enough
-	}
-
-	// Expand the sparse file
-	if err := os.Truncate(volPath, minBytes); err != nil {
-		return fmt.Errorf("truncate volume: %w", err)
-	}
-
-	// Resize the ext4 filesystem to fill the expanded file
-	resizeCmd := exec.Command("resize2fs", volPath)
-	if output, err := resizeCmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("resize2fs: %w: %s", err, output)
-	}
-
-	m.logger.Info("source volume resized for erofs optimization", "vol", volID, "size_mb", minBytes/1024/1024)
-	return nil
-}
-
-// extractPrebuiltErofs mounts the source volume, copies the pre-built erofs disk
-// to a temp location, and registers it as a ready image via the image manager.
-func (m *manager) extractPrebuiltErofs(ctx context.Context, id, sourceVolID string, result *BuildResult) error {
-	volPath := m.paths.VolumeData(sourceVolID)
-
-	// Create a temp mount point
-	mountPoint, err := os.MkdirTemp("", "hypeman-erofs-extract-*")
-	if err != nil {
-		return fmt.Errorf("create temp mount point: %w", err)
-	}
-	defer os.RemoveAll(mountPoint)
-
-	// Mount the source volume read-only
-	mountCmd := exec.Command("mount", "-o", "loop,ro", volPath, mountPoint)
-	if output, err := mountCmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("mount source volume: %w: %s", err, output)
-	}
-	defer func() {
-		umountCmd := exec.Command("umount", mountPoint)
-		umountCmd.Run()
-	}()
-
-	// Sanitize the path from the VM to prevent path traversal (defense in depth)
-	if filepath.IsAbs(result.ErofsDiskPath) || strings.Contains(result.ErofsDiskPath, "..") {
-		return fmt.Errorf("invalid erofs disk path from VM: %s", result.ErofsDiskPath)
-	}
-
-	// Check that the erofs file exists on the volume
-	erofsSrc := filepath.Join(mountPoint, result.ErofsDiskPath)
-	if _, err := os.Stat(erofsSrc); err != nil {
-		return fmt.Errorf("erofs disk not found on volume: %w", err)
-	}
-
-	// Copy the erofs file to a temp location (so we can unmount the volume)
-	tmpErofs, err := os.CreateTemp("", "hypeman-prebuilt-*.erofs")
-	if err != nil {
-		return fmt.Errorf("create temp erofs file: %w", err)
-	}
-	tmpErofsPath := tmpErofs.Name()
-	tmpErofs.Close()
-	defer os.Remove(tmpErofsPath) // Clean up if RegisterPrebuiltImage moves it
-
-	srcData, err := os.ReadFile(erofsSrc)
-	if err != nil {
-		return fmt.Errorf("read erofs from volume: %w", err)
-	}
-	if err := os.WriteFile(tmpErofsPath, srcData, 0644); err != nil {
-		return fmt.Errorf("write temp erofs: %w", err)
-	}
-
-	// Register the pre-built image
-	registryHost := stripRegistryScheme(m.config.RegistryURL)
-	repo := fmt.Sprintf("%s/builds/%s", registryHost, id)
-	imageName := repo + ":latest"
-
-	m.logger.Info("registering pre-built erofs image", "id", id, "digest", result.ImageDigest)
-	if err := m.imageManager.RegisterPrebuiltImage(ctx, repo, result.ImageDigest, imageName, tmpErofsPath); err != nil {
-		return fmt.Errorf("register prebuilt image: %w", err)
-	}
-
-	m.logger.Info("pre-built erofs image registered successfully", "id", id)
-	return nil
 }
 
 // waitForResult waits for the build result from the builder agent via vsock
@@ -1059,11 +943,7 @@ func (m *manager) waitForImageReady(ctx context.Context, id string) error {
 				m.logger.Debug("image is ready", "id", id, "image_ref", imageRef, "attempts", attempt+1)
 				return nil
 			case images.StatusFailed:
-				errDetail := "unknown"
-				if img.Error != nil {
-					errDetail = *img.Error
-				}
-				return fmt.Errorf("image conversion failed: %s", errDetail)
+				return fmt.Errorf("image conversion failed")
 			case images.StatusPending, images.StatusPulling, images.StatusConverting:
 				// Still processing, continue polling
 			}

@@ -20,7 +20,6 @@ import (
 	"io"
 	"log"
 	"net"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -63,13 +62,12 @@ type SecretRef struct {
 
 // BuildResult is sent back to the host
 type BuildResult struct {
-	Success       bool            `json:"success"`
-	ImageDigest   string          `json:"image_digest,omitempty"`
-	Error         string          `json:"error,omitempty"`
-	Logs          string          `json:"logs,omitempty"`
-	Provenance    BuildProvenance `json:"provenance"`
-	DurationMS    int64           `json:"duration_ms"`
-	ErofsDiskPath string          `json:"erofs_disk_path,omitempty"`
+	Success     bool            `json:"success"`
+	ImageDigest string          `json:"image_digest,omitempty"`
+	Error       string          `json:"error,omitempty"`
+	Logs        string          `json:"logs,omitempty"`
+	Provenance  BuildProvenance `json:"provenance"`
+	DurationMS  int64           `json:"duration_ms"`
 }
 
 // BuildProvenance records build inputs
@@ -543,19 +541,12 @@ func runBuildProcess() {
 	log.Printf("=== Build Complete: %s ===", digest)
 	provenance.Timestamp = time.Now()
 
-	// Try to create erofs disk by pulling the image from the registry.
-	// After the buildctl push, the image is in the registry. We pull the layers
-	// with curl, extract them, and run mkfs.erofs. This avoids the slow host-side
-	// umoci unpack step entirely.
-	erofsDiskPath := createErofsFromRegistry(config, digest)
-
 	setResult(BuildResult{
-		Success:       true,
-		ImageDigest:   digest,
-		Logs:          logWriter.String(),
-		Provenance:    provenance,
-		DurationMS:    duration,
-		ErofsDiskPath: erofsDiskPath,
+		Success:     true,
+		ImageDigest: digest,
+		Logs:        logWriter.String(),
+		Provenance:  provenance,
+		DurationMS:  duration,
 	})
 }
 
@@ -1007,274 +998,5 @@ func getBuildkitVersion() string {
 	cmd := exec.Command("buildctl", "--version")
 	out, _ := cmd.Output()
 	return strings.TrimSpace(string(out))
-}
-
-// createErofsFromRegistry pulls the image from the local registry, extracts layers,
-// and creates an erofs disk. Returns the relative path on the source volume, or ""
-// if any step fails (graceful fallback to host-side pipeline).
-func createErofsFromRegistry(config *BuildConfig, digest string) string {
-	// Check if mkfs.erofs is available
-	if _, err := exec.LookPath("mkfs.erofs"); err != nil {
-		log.Printf("mkfs.erofs not available, skipping in-VM erofs creation")
-		return ""
-	}
-
-	log.Println("=== Creating erofs disk from registry image ===")
-	start := time.Now()
-
-	// Build the registry base URL
-	registryHost := config.RegistryURL
-	if strings.HasPrefix(registryHost, "https://") {
-		registryHost = strings.TrimPrefix(registryHost, "https://")
-	} else if strings.HasPrefix(registryHost, "http://") {
-		registryHost = strings.TrimPrefix(registryHost, "http://")
-	}
-
-	scheme := "https"
-	if config.RegistryInsecure {
-		scheme = "http"
-	}
-	baseURL := fmt.Sprintf("%s://%s", scheme, registryHost)
-	repo := fmt.Sprintf("builds/%s", config.JobID)
-
-	// Create a tmpfs-backed temp dir for layer extraction (source volume may be small).
-	// The extracted rootfs (~100-500MB) lives briefly in RAM, then mkfs.erofs compresses
-	// it down to a much smaller erofs file on the source volume.
-	exportDir := "/tmp/erofs-extract"
-	os.MkdirAll(exportDir, 0755)
-	mountCmd := exec.Command("mount", "-t", "tmpfs", "-o", "size=2G", "tmpfs", exportDir)
-	if out, err := mountCmd.CombinedOutput(); err != nil {
-		log.Printf("Warning: erofs creation failed (mount tmpfs): %v: %s", err, out)
-		return ""
-	}
-	defer func() {
-		exec.Command("umount", exportDir).Run()
-		os.Remove(exportDir)
-	}()
-
-	// Create HTTP client (skip TLS verification for insecure registries)
-	client := &http.Client{Timeout: 120 * time.Second}
-	if config.RegistryInsecure {
-		client.Transport = &http.Transport{
-			TLSClientConfig: nil, // default, no custom TLS
-		}
-	}
-
-	// Get auth token
-	authHeader := ""
-	if config.RegistryToken != "" {
-		authHeader = "Bearer " + config.RegistryToken
-	}
-
-	// Fetch manifest
-	manifestURL := fmt.Sprintf("%s/v2/%s/manifests/latest", baseURL, repo)
-	req, err := http.NewRequest("GET", manifestURL, nil)
-	if err != nil {
-		log.Printf("Warning: erofs creation failed (create manifest request): %v", err)
-		return ""
-	}
-	req.Header.Set("Accept", "application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json")
-	if authHeader != "" {
-		req.Header.Set("Authorization", authHeader)
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Printf("Warning: erofs creation failed (fetch manifest): %v", err)
-		return ""
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		log.Printf("Warning: erofs creation failed (manifest status %d)", resp.StatusCode)
-		return ""
-	}
-
-	// Parse the manifest - could be a direct manifest or an OCI index
-	var rawManifest json.RawMessage
-	if err := json.NewDecoder(resp.Body).Decode(&rawManifest); err != nil {
-		log.Printf("Warning: erofs creation failed (decode manifest): %v", err)
-		return ""
-	}
-	resp.Body.Close()
-
-	// Check if it's a manifest list/index by looking for "manifests" key
-	var index struct {
-		MediaType string `json:"mediaType"`
-		Manifests []struct {
-			MediaType string `json:"mediaType"`
-			Digest    string `json:"digest"`
-			Platform  *struct {
-				Architecture string `json:"architecture"`
-				OS           string `json:"os"`
-			} `json:"platform"`
-		} `json:"manifests"`
-	}
-
-	type layerInfo struct {
-		MediaType string `json:"mediaType"`
-		Digest    string `json:"digest"`
-		Size      int64  `json:"size"`
-	}
-	var layers []layerInfo
-
-	if err := json.Unmarshal(rawManifest, &index); err == nil && len(index.Manifests) > 0 {
-		// It's an OCI index - find the amd64/linux manifest
-		log.Printf("Manifest is an index with %d entries, resolving platform manifest...", len(index.Manifests))
-		var platformDigest string
-		for _, m := range index.Manifests {
-			if m.Platform != nil && m.Platform.Architecture == "amd64" && m.Platform.OS == "linux" {
-				platformDigest = m.Digest
-				break
-			}
-		}
-		if platformDigest == "" && len(index.Manifests) > 0 {
-			// Fall back to first manifest
-			platformDigest = index.Manifests[0].Digest
-		}
-		if platformDigest == "" {
-			log.Printf("Warning: erofs creation failed: no suitable platform manifest found")
-			return ""
-		}
-
-		// Fetch the platform-specific manifest
-		platURL := fmt.Sprintf("%s/v2/%s/manifests/%s", baseURL, repo, platformDigest)
-		platReq, err := http.NewRequest("GET", platURL, nil)
-		if err != nil {
-			log.Printf("Warning: erofs creation failed (create platform manifest request): %v", err)
-			return ""
-		}
-		platReq.Header.Set("Accept", "application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json")
-		if authHeader != "" {
-			platReq.Header.Set("Authorization", authHeader)
-		}
-		platResp, err := client.Do(platReq)
-		if err != nil {
-			log.Printf("Warning: erofs creation failed (fetch platform manifest): %v", err)
-			return ""
-		}
-		defer platResp.Body.Close()
-		if platResp.StatusCode != 200 {
-			log.Printf("Warning: erofs creation failed (platform manifest status %d)", platResp.StatusCode)
-			return ""
-		}
-
-		var platManifest struct {
-			Layers []layerInfo `json:"layers"`
-		}
-		if err := json.NewDecoder(platResp.Body).Decode(&platManifest); err != nil {
-			log.Printf("Warning: erofs creation failed (decode platform manifest): %v", err)
-			return ""
-		}
-		layers = platManifest.Layers
-	} else {
-		// It's a direct manifest
-		var directManifest struct {
-			Layers []layerInfo `json:"layers"`
-		}
-		if err := json.Unmarshal(rawManifest, &directManifest); err != nil {
-			log.Printf("Warning: erofs creation failed (decode direct manifest): %v", err)
-			return ""
-		}
-		layers = directManifest.Layers
-	}
-
-	log.Printf("Image has %d layers, extracting...", len(layers))
-
-	// Download and extract each layer
-	for i, layer := range layers {
-		blobURL := fmt.Sprintf("%s/v2/%s/blobs/%s", baseURL, repo, layer.Digest)
-		blobReq, err := http.NewRequest("GET", blobURL, nil)
-		if err != nil {
-			log.Printf("Warning: erofs creation failed (create blob request for layer %d): %v", i, err)
-			return ""
-		}
-		if authHeader != "" {
-			blobReq.Header.Set("Authorization", authHeader)
-		}
-
-		blobResp, err := client.Do(blobReq)
-		if err != nil {
-			log.Printf("Warning: erofs creation failed (fetch layer %d): %v", i, err)
-			return ""
-		}
-		if blobResp.StatusCode != 200 {
-			blobResp.Body.Close()
-			log.Printf("Warning: erofs creation failed (layer %d status %d)", i, blobResp.StatusCode)
-			return ""
-		}
-
-		// Determine decompression based on media type
-		tarFlags := "-xf"
-		if strings.Contains(layer.MediaType, "gzip") {
-			tarFlags = "-xzf"
-		}
-		// For zstd, use zstd pipe
-		if strings.Contains(layer.MediaType, "zstd") {
-			// Use zstd decompression via pipe
-			tarCmd := exec.Command("sh", "-c", fmt.Sprintf("zstd -d | tar -xf - -C %s", exportDir))
-			tarCmd.Stdin = blobResp.Body
-			if out, err := tarCmd.CombinedOutput(); err != nil {
-				blobResp.Body.Close()
-				log.Printf("Warning: erofs creation failed (extract zstd layer %d): %v: %s", i, err, out)
-				return ""
-			}
-		} else {
-			tarCmd := exec.Command("tar", tarFlags, "-", "-C", exportDir)
-			tarCmd.Stdin = blobResp.Body
-			if out, err := tarCmd.CombinedOutput(); err != nil {
-				blobResp.Body.Close()
-				log.Printf("Warning: erofs creation failed (extract layer %d): %v: %s", i, err, out)
-				return ""
-			}
-		}
-		blobResp.Body.Close()
-		log.Printf("  Layer %d/%d extracted (%d bytes)", i+1, len(layers), layer.Size)
-
-		// Process OCI whiteout files for THIS layer before extracting the next.
-		// Whiteouts must be applied per-layer: a whiteout in layer N deletes files
-		// from layers 0..N-1, but must not affect files added by layers N+1..last.
-		filepath.Walk(exportDir, func(path string, info os.FileInfo, err error) error {
-			if err != nil {
-				return nil
-			}
-			name := info.Name()
-			if strings.HasPrefix(name, ".wh.") {
-				if name == ".wh..wh..opq" {
-					// Opaque whiteout: remove all siblings
-					dir := filepath.Dir(path)
-					entries, _ := os.ReadDir(dir)
-					for _, e := range entries {
-						if e.Name() != ".wh..wh..opq" {
-							os.RemoveAll(filepath.Join(dir, e.Name()))
-						}
-					}
-				} else {
-					// Regular whiteout: remove the target file
-					target := filepath.Join(filepath.Dir(path), strings.TrimPrefix(name, ".wh."))
-					os.RemoveAll(target)
-				}
-				os.Remove(path)
-			}
-			return nil
-		})
-	}
-
-	// Create erofs disk
-	erofsDst := config.SourcePath + "/.hypeman-rootfs.erofs"
-	log.Println("Running mkfs.erofs...")
-	erofsCmd := exec.Command("mkfs.erofs", "-zlz4", erofsDst, exportDir)
-	if erofsOut, erofsErr := erofsCmd.CombinedOutput(); erofsErr != nil {
-		log.Printf("Warning: erofs creation failed (mkfs.erofs): %v: %s", erofsErr, erofsOut)
-		return ""
-	}
-
-	// Sync to ensure the erofs file is flushed to the block device before
-	// the host tries to mount and read the source volume.
-	syncCmd := exec.Command("sync")
-	syncCmd.Run()
-
-	elapsed := time.Since(start)
-	log.Printf("erofs disk created at %s in %v", erofsDst, elapsed)
-	return ".hypeman-rootfs.erofs"
 }
 
