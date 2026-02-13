@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/v1/layout"
+	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/paths"
 	"go.opentelemetry.io/otel/metric"
 )
@@ -237,13 +238,16 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef) {
 	layoutTag := digestToLayoutTag(ref.Digest())
 	alreadyCached := m.ociClient.existsInLayout(layoutTag)
 
+	log := logger.FromContext(ctx)
 	if isLocalRegistry(ref.Repository()) && !alreadyCached {
 		// For local registry images that aren't cached, use streaming to bypass OCI cache
 		// This is faster because the image will only be pulled once
+		log.InfoContext(ctx, "using streaming unpack for local registry image", "ref", ref.String())
 		result, err = m.ociClient.streamingUnpack(ctx, ref.String(), tempDir)
 	} else {
 		// For remote registries OR already-cached images, use the cached path
 		// This benefits from layer deduplication on repeated pulls
+		log.InfoContext(ctx, "using cached unpack", "ref", ref.String(), "local", isLocalRegistry(ref.Repository()), "cached", alreadyCached)
 		result, err = m.ociClient.pullAndExport(ctx, ref.String(), ref.Digest(), tempDir)
 	}
 
