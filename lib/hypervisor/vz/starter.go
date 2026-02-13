@@ -180,18 +180,31 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 
 	client, err := s.waitForShim(ctx, controlSocket, 30*time.Second)
 	if err != nil {
+		// Read shim log file for diagnostics (before instance dir cleanup deletes it)
+		shimLog := ""
+		if logData, readErr := os.ReadFile(logPath); readErr == nil && len(logData) > 0 {
+			shimLog = string(logData)
+		}
+
 		// Check if shim already exited (crashed during startup)
 		select {
 		case waitErr := <-waitDone:
 			stderr := shimStderr.String()
+			details := ""
 			if stderr != "" {
-				return 0, nil, fmt.Errorf("vz-shim exited early: %v (stderr: %s)", waitErr, stderr)
+				details += fmt.Sprintf(" (stderr: %s)", stderr)
 			}
-			return 0, nil, fmt.Errorf("vz-shim exited early: %v", waitErr)
+			if shimLog != "" {
+				details += fmt.Sprintf(" (shim log: %s)", shimLog)
+			}
+			return 0, nil, fmt.Errorf("vz-shim exited early: %v%s", waitErr, details)
 		default:
 			// Shim still running but socket not available
 			cmd.Process.Kill()
 			<-waitDone
+		}
+		if shimLog != "" {
+			return 0, nil, fmt.Errorf("connect to vz-shim: %w (shim log: %s)", err, shimLog)
 		}
 		return 0, nil, fmt.Errorf("connect to vz-shim: %w", err)
 	}
