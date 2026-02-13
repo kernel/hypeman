@@ -161,6 +161,9 @@ func (m *manager) createInstance(
 	if req.Env == nil {
 		req.Env = make(map[string]string)
 	}
+	if req.Metadata == nil {
+		req.Metadata = make(map[string]string)
+	}
 
 	// 7. Determine network based on NetworkEnabled flag
 	networkName := ""
@@ -290,6 +293,7 @@ func (m *manager) createInstance(
 		NetworkBandwidthUpload:   req.NetworkBandwidthUpload,   // Will be set by caller if using resource manager
 		DiskIOBps:                req.DiskIOBps,                // Will be set by caller if using resource manager
 		Env:                      req.Env,
+		Metadata:                 req.Metadata,
 		NetworkEnabled:           req.NetworkEnabled,
 		CreatedAt:                time.Now(),
 		StartedAt:                nil,

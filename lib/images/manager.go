@@ -29,12 +29,6 @@ type Manager interface {
 	// ImportLocalImage imports an image that was pushed to the local OCI cache.
 	// Unlike CreateImage, it does not resolve from a remote registry.
 	ImportLocalImage(ctx context.Context, repo, reference, digest string) (*Image, error)
-	// RegisterPrebuiltImage registers a pre-built erofs disk as a ready image.
-	// This skips the slow umoci unpack + mkfs.erofs conversion pipeline by using
-	// a disk that was already built inside the builder VM.
-	// The diskSrcPath is a temporary file that will be moved/copied to the image store.
-	// Metadata is extracted from the OCI cache (populated asynchronously by registry push).
-	RegisterPrebuiltImage(ctx context.Context, repo, digest, name string, diskSrcPath string) error
 	GetImage(ctx context.Context, name string) (*Image, error)
 	DeleteImage(ctx context.Context, name string) error
 	RecoverInterruptedBuilds()
@@ -192,110 +186,6 @@ func (m *manager) ImportLocalImage(ctx context.Context, repo, reference, digest 
 	return m.createAndQueueImage(ref)
 }
 
-// RegisterPrebuiltImage registers a pre-built erofs disk as a ready image,
-// skipping the slow umoci unpack + mkfs conversion pipeline.
-func (m *manager) RegisterPrebuiltImage(ctx context.Context, repo, digestStr, imageName string, diskSrcPath string) error {
-	digestHex := strings.TrimPrefix(digestStr, "sha256:")
-
-	m.createMu.Lock()
-	defer m.createMu.Unlock()
-
-	// Check if this digest already exists and is ready (another path completed first)
-	if meta, err := readMetadata(m.paths, repo, digestHex); err == nil {
-		if meta.Status == StatusReady {
-			return nil // Already done
-		}
-	}
-
-	// Create the digest directory
-	dir := digestDir(m.paths, repo, digestHex)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("create digest directory: %w", err)
-	}
-
-	// Move/copy the pre-built erofs disk to the image store path
-	dstPath := digestPath(m.paths, repo, digestHex)
-	if err := os.Rename(diskSrcPath, dstPath); err != nil {
-		// Rename failed (cross-device), fall back to copy
-		srcData, readErr := os.ReadFile(diskSrcPath)
-		if readErr != nil {
-			return fmt.Errorf("read prebuilt disk: %w", readErr)
-		}
-		if writeErr := os.WriteFile(dstPath, srcData, 0644); writeErr != nil {
-			return fmt.Errorf("write prebuilt disk: %w", writeErr)
-		}
-	}
-
-	// Align to sector boundary (required by hypervisors, same as convertToErofs in disk.go)
-	diskInfo, err := os.Stat(dstPath)
-	if err != nil {
-		return fmt.Errorf("stat prebuilt disk: %w", err)
-	}
-	if diskInfo.Size()%sectorSize != 0 {
-		alignedSize := alignToSector(diskInfo.Size())
-		if err := os.Truncate(dstPath, alignedSize); err != nil {
-			return fmt.Errorf("align prebuilt disk to sector boundary: %w", err)
-		}
-		diskInfo, err = os.Stat(dstPath)
-		if err != nil {
-			return fmt.Errorf("stat aligned prebuilt disk: %w", err)
-		}
-	}
-
-	// Extract metadata from OCI cache with retry.
-	// The registry push handler populates the OCI cache asynchronously,
-	// so it may not be available immediately after the build completes.
-	layoutTag := digestToLayoutTag(digestStr)
-	var containerMeta *containerMetadata
-	for attempt := 0; attempt < 20; attempt++ {
-		containerMeta, err = m.ociClient.extractOCIMetadata(layoutTag)
-		if err == nil {
-			break
-		}
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("context cancelled waiting for OCI metadata: %w", ctx.Err())
-		case <-time.After(500 * time.Millisecond):
-		}
-	}
-	if err != nil {
-		// Metadata not available - write with empty metadata rather than failing.
-		// The image is still bootable, just without entrypoint/cmd/env info.
-		containerMeta = &containerMetadata{
-			Env: make(map[string]string),
-		}
-		fmt.Fprintf(os.Stderr, "Warning: could not extract OCI metadata for prebuilt image %s: %v\n", imageName, err)
-	}
-
-	// Write metadata with status=ready
-	meta := &imageMetadata{
-		Name:       imageName,
-		Digest:     digestStr,
-		Status:     StatusReady,
-		SizeBytes:  diskInfo.Size(),
-		Entrypoint: containerMeta.Entrypoint,
-		Cmd:        containerMeta.Cmd,
-		Env:        containerMeta.Env,
-		WorkingDir: containerMeta.WorkingDir,
-		CreatedAt:  time.Now(),
-	}
-
-	if err := writeMetadata(m.paths, repo, digestHex, meta); err != nil {
-		return fmt.Errorf("write metadata: %w", err)
-	}
-
-	// Create tag symlink (e.g., "latest" -> digest hex)
-	// Parse the image name to extract the tag
-	normalized, parseErr := ParseNormalizedRef(imageName)
-	if parseErr == nil && normalized.Tag() != "" {
-		if symlinkErr := createTagSymlink(m.paths, repo, normalized.Tag(), digestHex); symlinkErr != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to create tag symlink for prebuilt image: %v\n", symlinkErr)
-		}
-	}
-
-	return nil
-}
-
 func (m *manager) createAndQueueImage(ref *ResolvedRef) (*Image, error) {
 	meta := &imageMetadata{
 		Name:      ref.String(),
@@ -328,7 +218,6 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef) {
 	tempDir := filepath.Join(buildDir, "rootfs")
 
 	if err := os.MkdirAll(buildDir, 0755); err != nil {
-		fmt.Fprintf(os.Stderr, "image build failed: create build dir: %v\n", err)
 		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("create build dir: %w", err))
 		m.recordBuildMetrics(ctx, buildStart, "failed")
 		return
@@ -344,7 +233,6 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef) {
 	// Pull the image (digest is always known, uses cache if already pulled)
 	result, err := m.ociClient.pullAndExport(ctx, ref.String(), ref.Digest(), tempDir)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "image build failed: pull and export %s: %v\n", ref.String(), err)
 		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("pull and export: %w", err))
 		m.recordPullMetrics(ctx, "failed")
 		m.recordBuildMetrics(ctx, buildStart, "failed")
@@ -366,9 +254,9 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef) {
 	m.updateStatusByDigest(ref, StatusConverting, nil)
 
 	diskPath := digestPath(m.paths, ref.Repository(), ref.DigestHex())
+	// Use default image format (ext4 for now, easy to switch to erofs later)
 	diskSize, err := ExportRootfs(tempDir, diskPath, DefaultImageFormat)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "image build failed: convert to %s for %s: %v\n", DefaultImageFormat, ref.String(), err)
 		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("convert to %s: %w", DefaultImageFormat, err))
 		return
 	}

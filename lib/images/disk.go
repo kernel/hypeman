@@ -14,15 +14,12 @@ type ExportFormat string
 
 const (
 	FormatExt4  ExportFormat = "ext4"  // Read-only ext4 (app images, default)
-	FormatErofs ExportFormat = "erofs" // Read-only compressed with LZ4 (faster creation, smaller images)
+	FormatErofs ExportFormat = "erofs" // Read-only compressed (future: when kernel supports it)
 	FormatCpio  ExportFormat = "cpio"  // Uncompressed archive (initrd, fast boot)
 )
 
-// DefaultImageFormat is the default export format for OCI images.
-// erofs is used because app rootfs disks are read-only in the VM (mounted
-// as the lower layer of an overlayfs). erofs with LZ4 compression produces
-// smaller disk images and is faster to create than ext4.
-const DefaultImageFormat = FormatErofs
+// DefaultImageFormat is the default export format for OCI images
+const DefaultImageFormat = FormatExt4
 
 // ExportRootfs exports rootfs directory in specified format (public for system manager)
 func ExportRootfs(rootfsDir, outputPath string, format ExportFormat) (int64, error) {
@@ -187,15 +184,8 @@ func convertToExt4(rootfsDir, diskPath string) (int64, error) {
 	return stat.Size(), nil
 }
 
-// convertToErofs converts a rootfs directory to an erofs disk image using mkfs.erofs.
-// If mkfs.erofs is not installed, it falls back to ext4 with a warning.
+// convertToErofs converts a rootfs directory to an erofs disk image using mkfs.erofs
 func convertToErofs(rootfsDir, diskPath string) (int64, error) {
-	// Check if mkfs.erofs is available
-	if _, err := exec.LookPath("mkfs.erofs"); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: mkfs.erofs not found, falling back to ext4\n")
-		return convertToExt4(rootfsDir, diskPath)
-	}
-
 	// Ensure parent directory exists
 	if err := os.MkdirAll(filepath.Dir(diskPath), 0755); err != nil {
 		return 0, fmt.Errorf("create disk parent dir: %w", err)

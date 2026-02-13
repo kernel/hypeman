@@ -271,15 +271,6 @@ func (m *mockImageManager) ImportLocalImage(ctx context.Context, repo, reference
 	return img, nil
 }
 
-func (m *mockImageManager) RegisterPrebuiltImage(ctx context.Context, repo, digest, name string, diskSrcPath string) error {
-	m.images[name] = &images.Image{
-		Name:   name,
-		Digest: digest,
-		Status: images.StatusReady,
-	}
-	return nil
-}
-
 func (m *mockImageManager) GetImage(ctx context.Context, name string) (*images.Image, error) {
 	if m.getImageErr != nil {
 		return nil, m.getImageErr
