@@ -235,20 +235,21 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef) {
 	var result *pullResult
 	var err error
 
+	layoutTag := digestToLayoutTag(ref.Digest())
+	alreadyCached := m.ociClient.existsInLayout(layoutTag)
+
 	log := logger.FromContext(ctx)
-	if isLocalRegistry(ref.Repository()) {
-		// For local registry images, always use streaming to bypass OCI cache and umoci.
-		// This is faster because:
-		// 1. Image is already local (no network benefit from caching)
-		// 2. Direct tar extraction is 1.6-2.8x faster than umoci
-		// 3. Registry already caches the image, so existsInLayout is always true anyway
-		log.InfoContext(ctx, "using streaming unpack for local registry image", "ref", ref.String())
+	// Use streaming for remote registries when image isn't cached yet.
+	// For local registries, we must use the cached path because:
+	// 1. The registry pre-caches the image to OCI layout on push
+	// 2. streamingUnpack would need auth to pull from local registry
+	// 3. The cached path reads directly from disk (no auth needed)
+	// TODO: Implement streamingUnpackFromLayout to stream from local cache for speed
+	if !isLocalRegistry(ref.Repository()) && !alreadyCached {
+		log.InfoContext(ctx, "using streaming unpack for uncached remote image", "ref", ref.String())
 		result, err = m.ociClient.streamingUnpack(ctx, ref.String(), tempDir)
 	} else {
-		// For remote registries, use the cached path for layer deduplication benefits
-		layoutTag := digestToLayoutTag(ref.Digest())
-		alreadyCached := m.ociClient.existsInLayout(layoutTag)
-		log.InfoContext(ctx, "using cached unpack", "ref", ref.String(), "cached", alreadyCached)
+		log.InfoContext(ctx, "using cached unpack", "ref", ref.String(), "local", isLocalRegistry(ref.Repository()), "cached", alreadyCached)
 		result, err = m.ociClient.pullAndExport(ctx, ref.String(), ref.Digest(), tempDir)
 	}
 
