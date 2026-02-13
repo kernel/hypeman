@@ -141,27 +141,20 @@ func TestTokenHandler_ScopeValidation(t *testing.T) {
 func TestTokenHandler_NoAuth(t *testing.T) {
 	handler := NewTokenHandler(testJWTSecret)
 
-	t.Run("no auth with scope returns guest token", func(t *testing.T) {
-		// Anonymous requests with a scope get a guest token for BuildKit compatibility.
-		// BuildKit v0.27+ does not reliably send credentials on token requests,
-		// so we issue a guest token that the middleware validates as a user JWT.
+	t.Run("no auth returns 401", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/v2/token?scope=repository:builds/build-123:push", nil)
 		req.RemoteAddr = "10.102.0.5:12345"
 
 		rr := httptest.NewRecorder()
 		handler.ServeHTTP(rr, req)
 
-		assert.Equal(t, http.StatusOK, rr.Code)
-
-		var tokenResp TokenResponse
-		err := json.NewDecoder(rr.Body).Decode(&tokenResp)
-		require.NoError(t, err)
-		assert.NotEmpty(t, tokenResp.Token)
+		assert.Equal(t, http.StatusUnauthorized, rr.Code)
 	})
 
-	t.Run("no auth without scope returns 401", func(t *testing.T) {
-		// Requests without a scope still get 401 (e.g. probing /v2/token directly).
-		req := httptest.NewRequest(http.MethodGet, "/v2/token", nil)
+	t.Run("no auth returns WWW-Authenticate header for Basic auth challenge", func(t *testing.T) {
+		// This test verifies that anonymous token requests get a proper auth challenge.
+		// BuildKit needs this header to know it should retry with credentials.
+		req := httptest.NewRequest(http.MethodGet, "/v2/token?scope=repository:cache/org-123:pull", nil)
 		req.RemoteAddr = "172.30.0.5:12345"
 
 		rr := httptest.NewRecorder()
@@ -169,6 +162,7 @@ func TestTokenHandler_NoAuth(t *testing.T) {
 
 		assert.Equal(t, http.StatusUnauthorized, rr.Code)
 
+		// Verify WWW-Authenticate header is present and correct
 		wwwAuth := rr.Header().Get("WWW-Authenticate")
 		assert.NotEmpty(t, wwwAuth, "WWW-Authenticate header should be present on 401")
 		assert.Contains(t, wwwAuth, "Basic", "should challenge with Basic auth")

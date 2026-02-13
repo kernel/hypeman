@@ -130,6 +130,25 @@ func stripImageTag(imageName string) string {
 	return imageName[:lastColon]
 }
 
+// extractImageTag extracts the tag from an image name.
+// Returns empty string if no tag is present.
+// Examples: "repo:v1" -> "v1", "repo" -> "", "repo@sha256:..." -> ""
+func extractImageTag(imageName string) string {
+	// Digest references don't have tags
+	if strings.Contains(imageName, "@") {
+		return ""
+	}
+	lastColon := strings.LastIndex(imageName, ":")
+	if lastColon == -1 {
+		return ""
+	}
+	// If there's a slash after the last colon, it's a port not a tag
+	if strings.Contains(imageName[lastColon:], "/") {
+		return ""
+	}
+	return imageName[lastColon+1:]
+}
+
 type manager struct {
 	config          Config
 	paths           *paths.Paths
@@ -428,18 +447,23 @@ func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourc
 	// Token grants per-repo access based on build type:
 	// - Regular builds: push to builds/{id}, push to cache/{tenant}, pull from cache/global/{runtime}
 	// - Admin builds: push to builds/{id}, push to cache/global/{runtime}
-	// - When ImageName is set: push to {image_name} instead of builds/{id}
+	// - When ImageName is set: also push to {image_name} for future direct push support
 	tokenTTL := time.Duration(policy.TimeoutSeconds) * time.Second
 	if tokenTTL < 30*time.Minute {
 		tokenTTL = 30 * time.Minute // Minimum 30 minutes
 	}
 
-	outputRepo := fmt.Sprintf("builds/%s", id)
-	if req.ImageName != "" {
-		outputRepo = stripImageTag(req.ImageName)
-	}
+	// The builder always pushes to builds/{id}. When image_name is set, the
+	// server renames the image after the push, so we need push access to
+	// builds/{id}. We also grant push access to the image_name repo in case
+	// future builder versions push there directly.
+	buildRepo := fmt.Sprintf("builds/%s", id)
 	repoAccess := []RepoPermission{
-		{Repo: outputRepo, Scope: "push"},
+		{Repo: buildRepo, Scope: "push"},
+	}
+	if req.ImageName != "" {
+		imageRepo := stripImageTag(req.ImageName)
+		repoAccess = append(repoAccess, RepoPermission{Repo: imageRepo, Scope: "push"})
 	}
 
 	// If the Dockerfile uses base images from the internal registry, grant pull access
@@ -611,17 +635,12 @@ func (m *manager) runBuild(ctx context.Context, id string, req CreateBuildReques
 
 	m.logger.Info("build succeeded", "id", id, "digest", result.ImageDigest, "duration", duration)
 
-	// Wait for image to be ready before reporting build as complete.
+	// Wait for build image to be ready before reporting build as complete.
+	// The builder always pushes to builds/{id}, so that's what we wait for.
 	// This fixes the race condition (KERNEL-863) where build reports "ready"
 	// but image conversion hasn't finished yet.
-	// Use buildCtx to respect the build timeout during image wait.
-	// Use the short image name (without registry host prefix) to match what
-	// triggerConversion stores in the image manager.
-	waitRepo := fmt.Sprintf("builds/%s", id)
-	if req.ImageName != "" {
-		waitRepo = stripImageTag(req.ImageName)
-	}
-	if err := m.waitForImageReady(buildCtx, waitRepo); err != nil {
+	buildRepo := fmt.Sprintf("builds/%s", id)
+	if err := m.waitForImageReady(buildCtx, buildRepo); err != nil {
 		// Recalculate duration to include image wait time
 		duration = time.Since(start)
 		durationMS = duration.Milliseconds()
@@ -634,16 +653,31 @@ func (m *manager) runBuild(ctx context.Context, id string, req CreateBuildReques
 		return
 	}
 
+	// If image_name is set, re-tag the image so it's accessible by that name.
+	// The builder pushed to builds/{id} but the user wants it as image_name.
+	imageRef := buildRepo
+	if req.ImageName != "" {
+		imageRef = stripImageTag(req.ImageName)
+		tag := extractImageTag(req.ImageName)
+		if tag == "" {
+			tag = "latest"
+		}
+		if _, err := m.imageManager.ImportLocalImage(buildCtx, imageRef, tag, result.ImageDigest); err != nil {
+			m.logger.Warn("failed to re-tag image", "build_id", id, "image_name", req.ImageName, "error", err)
+			// Don't fail the build - the image is still accessible via builds/{id}
+		} else {
+			m.logger.Info("re-tagged build image", "build_id", id, "from", buildRepo, "to", imageRef)
+			// Wait for the re-tagged image to be ready
+			if err := m.waitForImageReady(buildCtx, imageRef); err != nil {
+				m.logger.Warn("re-tagged image conversion timed out", "build_id", id, "image_name", req.ImageName, "error", err)
+			}
+		}
+	}
+
 	// Recalculate duration to include image wait time for accurate reporting
 	duration = time.Since(start)
 	durationMS = duration.Milliseconds()
 
-	// Use the short image name (without registry host prefix) so the returned
-	// image_ref can be used directly with `hypeman run`.
-	imageRef := fmt.Sprintf("builds/%s", id)
-	if req.ImageName != "" {
-		imageRef = stripImageTag(req.ImageName)
-	}
 	m.updateBuildComplete(id, StatusReady, &result.ImageDigest, nil, &result.Provenance, &durationMS)
 
 	// Update with image ref
@@ -1333,12 +1367,13 @@ func (m *manager) refreshBuildToken(buildID string, req *CreateBuildRequest) err
 	}
 
 	// Generate per-repo access list (same logic as CreateBuild)
-	outputRepo := fmt.Sprintf("builds/%s", buildID)
-	if req.ImageName != "" {
-		outputRepo = stripImageTag(req.ImageName)
-	}
+	buildRepo := fmt.Sprintf("builds/%s", buildID)
 	repoAccess := []RepoPermission{
-		{Repo: outputRepo, Scope: "push"},
+		{Repo: buildRepo, Scope: "push"},
+	}
+	if req.ImageName != "" {
+		imageRepo := stripImageTag(req.ImageName)
+		repoAccess = append(repoAccess, RepoPermission{Repo: imageRepo, Scope: "push"})
 	}
 
 	// If the Dockerfile uses base images from the internal registry, grant pull access
