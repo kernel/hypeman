@@ -14,14 +14,64 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kernel/hypeman/cmd/api/config"
+	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/guest"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
+	"github.com/kernel/hypeman/lib/network"
 	"github.com/kernel/hypeman/lib/paths"
+	"github.com/kernel/hypeman/lib/resources"
 	"github.com/kernel/hypeman/lib/system"
+	"github.com/kernel/hypeman/lib/volumes"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// setupVZTestManager creates a test manager with a short temp directory path.
+// macOS has a 104-byte limit on Unix socket paths, and t.TempDir() creates paths
+// under /var/folders/... which are too long for the nested socket paths used by vz-shim.
+func setupVZTestManager(t *testing.T) (*manager, string) {
+	tmpDir, err := os.MkdirTemp("/tmp", "vz-")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(tmpDir) })
+
+	cfg := &config.Config{
+		DataDir:    tmpDir,
+		BridgeName: "vmbr0",
+		SubnetCIDR: "10.100.0.0/16",
+		DNSServer:  "1.1.1.1",
+	}
+
+	p := paths.New(tmpDir)
+	imageManager, err := images.NewManager(p, 1, nil)
+	require.NoError(t, err)
+
+	systemManager := system.NewManager(p)
+	networkManager := network.NewManager(p, cfg, nil)
+	deviceManager := devices.NewManager(p)
+	volumeManager := volumes.NewManager(p, 0, nil)
+	limits := ResourceLimits{
+		MaxOverlaySize:       100 * 1024 * 1024 * 1024,
+		MaxVcpusPerInstance:  0,
+		MaxMemoryPerInstance: 0,
+	}
+	mgr := NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, "", nil, nil).(*manager)
+
+	resourceMgr := resources.NewManager(cfg, p)
+	resourceMgr.SetInstanceLister(mgr)
+	resourceMgr.SetImageLister(imageManager)
+	resourceMgr.SetVolumeLister(volumeManager)
+	err = resourceMgr.Initialize(context.Background())
+	require.NoError(t, err)
+	mgr.SetResourceValidator(resourceMgr)
+
+	t.Cleanup(func() {
+		cleanupOrphanedProcesses(t, mgr)
+	})
+
+	return mgr, tmpDir
+}
 
 // vzExecCommand runs a command in the guest via vsock exec.
 func vzExecCommand(ctx context.Context, inst *Instance, command ...string) (string, int, error) {
@@ -55,7 +105,7 @@ func TestVZBasicLifecycle(t *testing.T) {
 		t.Skip("vz tests require macOS")
 	}
 
-	mgr, tmpDir := setupTestManager(t)
+	mgr, tmpDir := setupVZTestManager(t)
 	ctx := context.Background()
 	p := paths.New(tmpDir)
 
@@ -176,7 +226,7 @@ func TestVZExecAndShutdown(t *testing.T) {
 		t.Skip("vz tests require macOS")
 	}
 
-	mgr, tmpDir := setupTestManager(t)
+	mgr, tmpDir := setupVZTestManager(t)
 	ctx := context.Background()
 	p := paths.New(tmpDir)
 
