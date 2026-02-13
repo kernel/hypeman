@@ -15,14 +15,14 @@ func TestCalculateGuestTopology(t *testing.T) {
 	}
 
 	tests := []struct {
-		name              string
-		vcpus             int
-		host              *HostTopology
-		expectNil         bool
-		expectedThreads   *int
-		expectedCores     *int
-		expectedDies      *int
-		expectedPackages  *int
+		name             string
+		vcpus            int
+		host             *HostTopology
+		expectNil        bool
+		expectedThreads  *int
+		expectedCores    *int
+		expectedDies     *int
+		expectedPackages *int
 	}{
 		{
 			name:      "1 vCPU - use CH defaults",
@@ -178,4 +178,3 @@ func TestCalculateGuestTopologyNoSMT(t *testing.T) {
 func intPtr(i int) *int {
 	return &i
 }
-

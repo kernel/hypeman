@@ -169,4 +169,3 @@ func (m *Metrics) RecordCpSession(ctx context.Context, start time.Time, directio
 			))
 	}
 }
-

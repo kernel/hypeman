@@ -41,7 +41,7 @@ func createTestTarGz(t *testing.T, files map[string][]byte) *bytes.Buffer {
 func TestExtractTarGz_Basic(t *testing.T) {
 	// Create a simple archive
 	files := map[string][]byte{
-		"hello.txt":     []byte("Hello, World!"),
+		"hello.txt":      []byte("Hello, World!"),
 		"dir/nested.txt": []byte("Nested content"),
 	}
 	archive := createTestTarGz(t, files)
@@ -237,9 +237,9 @@ func TestExtractTarGz_PreventsTarBomb(t *testing.T) {
 func TestExtractTarGz_Attack_DotDotSlashVariants(t *testing.T) {
 	// Test various path traversal patterns that attackers commonly try
 	testCases := []struct {
-		name     string
-		path     string
-		wantErr  bool
+		name    string
+		path    string
+		wantErr bool
 	}{
 		{"double dot basic", "../etc/passwd", true},
 		{"double dot nested", "foo/../../etc/passwd", true},
@@ -411,4 +411,3 @@ func TestExtractTarGz_Attack_ZeroSizeClaimLargeContent(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrArchiveTooLarge)
 }
-

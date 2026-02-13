@@ -11,17 +11,17 @@ import (
 func TestGenerateMAC(t *testing.T) {
 	// Generate 100 MACs to test uniqueness and format
 	seen := make(map[string]bool)
-	
+
 	for i := 0; i < 100; i++ {
 		mac, err := generateMAC()
 		require.NoError(t, err)
-		
+
 		// Check format (XX:XX:XX:XX:XX:XX)
 		require.Len(t, mac, 17, "MAC should be 17 chars")
-		
+
 		// Check starts with 02:00:00 (locally administered)
 		require.True(t, mac[:8] == "02:00:00", "MAC should start with 02:00:00")
-		
+
 		// Check uniqueness
 		require.False(t, seen[mac], "MAC should be unique")
 		seen[mac] = true
@@ -50,7 +50,7 @@ func TestGenerateTAPName(t *testing.T) {
 			want:       "hype-abcd1234",
 		},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := GenerateTAPName(tt.instanceID)
@@ -87,7 +87,7 @@ func TestIncrementIP(t *testing.T) {
 			want: "192.168.2.0",
 		},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ip := parseIP(tt.ip)
@@ -232,4 +232,3 @@ func TestFormatTcRate(t *testing.T) {
 		})
 	}
 }
-

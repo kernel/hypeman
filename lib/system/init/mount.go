@@ -264,4 +264,3 @@ func copyGuestAgent(log *Logger, skipGuestAgent bool) error {
 	log.Info("agent", "copied guest-agent to /opt/hypeman/")
 	return nil
 }
-
