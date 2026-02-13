@@ -201,3 +201,30 @@ func TestJwtAuth_RequiresAuthorization(t *testing.T) {
 		assert.Contains(t, rr.Body.String(), "invalid token")
 	})
 }
+
+func TestExtractRepoFromPath(t *testing.T) {
+	tests := []struct {
+		name     string
+		path     string
+		expected string
+	}{
+		{"simple repo with manifests", "/v2/builds/abc123/manifests/latest", "builds/abc123"},
+		{"simple repo with blobs", "/v2/builds/abc123/blobs/sha256:abc", "builds/abc123"},
+		{"simple repo with tags", "/v2/builds/abc123/tags/list", "builds/abc123"},
+		{"simple repo with referrers", "/v2/builds/abc123/referrers/sha256:abc", "builds/abc123"},
+		{"repo named blobs", "/v2/team/blobs/manifests/latest", "team/blobs"},
+		{"repo named manifests", "/v2/team/manifests/blobs/sha256:abc", "team/manifests"},
+		{"repo named tags", "/v2/team/tags/manifests/latest", "team/tags"},
+		{"repo named referrers", "/v2/team/referrers/blobs/sha256:abc", "team/referrers"},
+		{"deeply nested repo with reserved name", "/v2/org/team/blobs/manifests/latest", "org/team/blobs"},
+		{"base path returns empty", "/v2/", ""},
+		{"no api segment returns empty", "/v2/builds/abc123", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := extractRepoFromPath(tt.path)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}

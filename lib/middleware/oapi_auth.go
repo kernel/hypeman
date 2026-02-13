@@ -22,7 +22,7 @@ const userIDKey contextKey = "user_id"
 // Repository can have multiple path segments (e.g., "builds/abc123", "myorg/myapp", "a/b/c").
 // We capture everything between /v2/ and the last known OCI API segment
 // (manifests|blobs|tags|referrers).
-var registryPathPattern = regexp.MustCompile(`^/v2/(.+?)/(manifests|blobs|tags|referrers)/`)
+var registryPathPattern = regexp.MustCompile(`^/v2/(.+)/(manifests|blobs|tags|referrers)/`)
 
 // RegistryTokenClaims contains the claims for a scoped registry access token.
 // This mirrors the type in lib/builds/registry_token.go to avoid circular imports.
