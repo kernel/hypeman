@@ -1310,10 +1310,29 @@ func createErofsFromRegistry(config *BuildConfig, digest string) string {
 		return ""
 	}
 
-	// Sync to ensure the erofs file is flushed to the block device before
-	// the host tries to mount and read the source volume.
-	syncCmd := exec.Command("sync")
-	syncCmd.Run()
+	// Ensure the erofs file is fully flushed to the block device before the
+	// host reads the source volume. sync(2) alone is insufficient — it only
+	// queues writes. We need fsync on the file AND the directory entry, then
+	// a global sync to push through the virtio-blk layer.
+	if f, err := os.Open(erofsDst); err == nil {
+		f.Sync() // fsync the file data + metadata
+		f.Close()
+	}
+	if d, err := os.Open(config.SourcePath); err == nil {
+		d.Sync() // fsync the directory entry
+		d.Close()
+	}
+	// Unmount the source volume filesystem to force all buffered writes
+	// through to the block device. Re-mount is not needed since we're done.
+	// Change cwd away from the volume first so umount can succeed.
+	os.Chdir("/")
+	umountCmd := exec.Command("umount", config.SourcePath)
+	if out, err := umountCmd.CombinedOutput(); err != nil {
+		log.Printf("Warning: umount source failed (sync fallback): %v: %s", err, out)
+		// Fall back to sync if umount fails
+		exec.Command("sync").Run()
+		time.Sleep(500 * time.Millisecond)
+	}
 
 	elapsed := time.Since(start)
 	log.Printf("erofs disk created at %s in %v", erofsDst, elapsed)
