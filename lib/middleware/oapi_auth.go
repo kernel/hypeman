@@ -367,19 +367,19 @@ func JwtAuth(jwtSecret string) func(http.Handler) http.Handler {
 					if err == nil {
 						log.DebugContext(r.Context(), "extracted token for registry request", "auth_type", authType)
 
-						// Try to validate as a registry-scoped token
-						registryClaims, err := validateRegistryToken(token, jwtSecret, r.URL.Path, r.Method)
-						if err == nil {
-							// Valid registry token - set build ID as user for audit trail
-							log.DebugContext(r.Context(), "registry token validated",
-								"build_id", registryClaims.BuildID,
-								"repos", registryClaims.Repositories,
-								"scope", registryClaims.Scope)
-							ctx := context.WithValue(r.Context(), userIDKey, "builder-"+registryClaims.BuildID)
-							next.ServeHTTP(w, r.WithContext(ctx))
-							return
-						}
-						log.DebugContext(r.Context(), "registry token validation failed", "error", err)
+					// Try to validate as a registry-scoped token
+					registryClaims, err := validateRegistryToken(token, jwtSecret, r.URL.Path, r.Method)
+					if err == nil {
+						// Valid registry token - set build ID as user for audit trail
+						log.DebugContext(r.Context(), "registry token validated",
+							"build_id", registryClaims.BuildID,
+							"repos", registryClaims.Repositories,
+							"scope", registryClaims.Scope)
+						ctx := context.WithValue(r.Context(), userIDKey, "builder-"+registryClaims.BuildID)
+						next.ServeHTTP(w, r.WithContext(ctx))
+						return
+					}
+					log.DebugContext(r.Context(), "registry token validation failed", "error", err)
 
 						// For read operations (GET/HEAD), if the token is valid but the
 						// repo isn't in the allowed list, return 502 Bad Gateway.
