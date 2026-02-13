@@ -29,7 +29,7 @@ func NewClient(socketPath string) (*Client, error) {
 	}
 	httpClient := &http.Client{
 		Transport: transport,
-		Timeout:   30 * time.Second,
+		Timeout:   10 * time.Second,
 	}
 
 	// Verify connectivity with a short timeout
