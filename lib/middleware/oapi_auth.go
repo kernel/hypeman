@@ -404,8 +404,14 @@ func JwtAuth(jwtSecret string) func(http.Handler) http.Handler {
 							}
 							return []byte(jwtSecret), nil
 						})
-						if parseErr == nil && userToken.Valid {
-							if sub, ok := userClaims["sub"].(string); ok && sub != "" && !strings.HasPrefix(sub, "builder-") {
+					if parseErr == nil && userToken.Valid {
+						// Reject guest tokens - they are anonymous and must not bypass repo authorization
+						if tokenType, _ := userClaims["type"].(string); tokenType == "guest" {
+							log.DebugContext(r.Context(), "rejected guest token for registry access")
+							writeRegistryUnauthorized(w, r)
+							return
+						}
+						if sub, ok := userClaims["sub"].(string); ok && sub != "" && !strings.HasPrefix(sub, "builder-") {
 								log.DebugContext(r.Context(), "registry request authenticated via user JWT", "user", sub)
 								ctx := context.WithValue(r.Context(), userIDKey, sub)
 								next.ServeHTTP(w, r.WithContext(ctx))

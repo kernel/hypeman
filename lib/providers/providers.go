@@ -259,7 +259,18 @@ func ProvideBuildManager(p *paths.Paths, cfg *config.Config, instanceManager ins
 	if registryURL == "" {
 		registryURL = "localhost:8080"
 	}
-	if strings.HasPrefix(registryURL, "localhost:") || strings.HasPrefix(registryURL, "127.0.0.1:") {
+	// Strip scheme before checking for localhost so that "http://localhost:8080"
+	// is rewritten the same way as "localhost:8080".
+	scheme := ""
+	hostPort := registryURL
+	if strings.HasPrefix(hostPort, "https://") {
+		scheme = "https://"
+		hostPort = strings.TrimPrefix(hostPort, "https://")
+	} else if strings.HasPrefix(hostPort, "http://") {
+		scheme = "http://"
+		hostPort = strings.TrimPrefix(hostPort, "http://")
+	}
+	if strings.HasPrefix(hostPort, "localhost:") || strings.HasPrefix(hostPort, "127.0.0.1:") {
 		gateway := cfg.SubnetGateway
 		if gateway == "" {
 			var err error
@@ -268,8 +279,8 @@ func ProvideBuildManager(p *paths.Paths, cfg *config.Config, instanceManager ins
 				return nil, fmt.Errorf("derive gateway for registry URL rewrite: %w", err)
 			}
 		}
-		port := strings.SplitN(registryURL, ":", 2)[1]
-		registryURL = gateway + ":" + port
+		port := strings.SplitN(hostPort, ":", 2)[1]
+		registryURL = scheme + gateway + ":" + port
 		log.Info("rewrote registry URL for builder VMs", "original", cfg.RegistryURL, "rewritten", registryURL)
 	}
 
