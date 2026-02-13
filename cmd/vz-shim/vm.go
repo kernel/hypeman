@@ -259,7 +259,7 @@ func computeCPUCount(requested int) uint {
 
 func computeMemorySize(requested uint64) uint64 {
 	if requested == 0 {
-		requested = 2 * 1024 * 1024 * 1024 // 2GB default
+		requested = 2 * 1024 * 1024 * 1024 // 2GB safety default (caller normally provides this)
 	}
 
 	maxAllowed := vz.VirtualMachineConfigurationMaximumAllowedMemorySize()

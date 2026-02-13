@@ -5,6 +5,7 @@
 package vz
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -157,9 +158,10 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 		return 0, nil, fmt.Errorf("get vz-shim binary: %w", err)
 	}
 
+	var shimStderr bytes.Buffer
 	cmd := exec.Command(shimBinary, "-config", string(configJSON))
 	cmd.Stdout = nil
-	cmd.Stderr = nil
+	cmd.Stderr = &shimStderr
 	cmd.Stdin = nil
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Setpgid: true,
@@ -172,13 +174,40 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 	pid := cmd.Process.Pid
 	log.InfoContext(ctx, "vz-shim started", "pid", pid, "control_socket", controlSocket)
 
+	// Wait for shim in a goroutine so we can detect early exit
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- cmd.Wait() }()
+
 	client, err := s.waitForShim(ctx, controlSocket, 30*time.Second)
 	if err != nil {
-		cmd.Process.Kill()
+		// Read shim log file for diagnostics (before instance dir cleanup deletes it)
+		shimLog := ""
+		if logData, readErr := os.ReadFile(logPath); readErr == nil && len(logData) > 0 {
+			shimLog = string(logData)
+		}
+
+		// Check if shim already exited (crashed during startup)
+		select {
+		case waitErr := <-waitDone:
+			stderr := shimStderr.String()
+			details := ""
+			if stderr != "" {
+				details += fmt.Sprintf(" (stderr: %s)", stderr)
+			}
+			if shimLog != "" {
+				details += fmt.Sprintf(" (shim log: %s)", shimLog)
+			}
+			return 0, nil, fmt.Errorf("vz-shim exited early: %v%s", waitErr, details)
+		default:
+			// Shim still running but socket not available
+			cmd.Process.Kill()
+			<-waitDone
+		}
+		if shimLog != "" {
+			return 0, nil, fmt.Errorf("connect to vz-shim: %w (shim log: %s)", err, shimLog)
+		}
 		return 0, nil, fmt.Errorf("connect to vz-shim: %w", err)
 	}
-
-	go cmd.Wait()
 
 	return pid, client, nil
 }

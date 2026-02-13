@@ -104,20 +104,17 @@ func (s *ShimServer) handleShutdown(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Request graceful shutdown via guest
+	// Send ACPI power button (graceful shutdown signal to guest).
+	// The caller (instance manager) handles timeout/force-kill if the guest
+	// doesn't shut down in time. Force-kill is in handleVMMShutdown / killHypervisor.
 	success, err := s.vm.RequestStop()
 	if err != nil || !success {
-		slog.Warn("RequestStop failed, trying Stop", "error", err)
-		if s.vm.CanStop() {
-			if err := s.vm.Stop(); err != nil {
-				slog.Error("failed to stop VM", "error", err)
-				http.Error(w, fmt.Sprintf("shutdown failed: %v", err), http.StatusInternalServerError)
-				return
-			}
-		}
+		slog.Error("RequestStop failed", "error", err, "success", success)
+		http.Error(w, fmt.Sprintf("shutdown failed: %v", err), http.StatusInternalServerError)
+		return
 	}
 
-	slog.Info("VM shutdown requested")
+	slog.Info("VM graceful shutdown requested (ACPI power button)")
 	w.WriteHeader(http.StatusNoContent)
 }
 
