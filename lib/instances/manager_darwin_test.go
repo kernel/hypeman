@@ -185,11 +185,76 @@ func TestVZBasicLifecycle(t *testing.T) {
 	t.Log("Instance stopped")
 
 	// Verify hypervisor process is gone
-	if inst.HypervisorPID != nil {
+	oldPID := inst.HypervisorPID
+	if oldPID != nil {
 		time.Sleep(500 * time.Millisecond)
-		err := checkProcessGone(*inst.HypervisorPID)
+		err := checkProcessGone(*oldPID)
 		assert.NoError(t, err, "hypervisor process should be gone after stop")
 	}
+
+	// Restart test
+	t.Log("Starting instance (restart after stop)...")
+	inst, err = mgr.StartInstance(ctx, inst.Id)
+	require.NoError(t, err)
+	assert.Equal(t, StateRunning, inst.State)
+	t.Logf("Instance restarted: %s (pid: %v)", inst.Id, inst.HypervisorPID)
+
+	// Re-read instance to get updated vsock info
+	inst, err = mgr.GetInstance(ctx, inst.Id)
+	require.NoError(t, err)
+
+	// Wait for exec to actually work after restart
+	// (can't rely on waitForExecAgent - logs from first boot still contain the marker)
+	t.Log("Waiting for exec to work after restart...")
+	var execErr error
+	for i := 0; i < 30; i++ {
+		time.Sleep(1 * time.Second)
+		// Re-read instance each time in case vsock info updates
+		inst, err = mgr.GetInstance(ctx, inst.Id)
+		if err != nil {
+			continue
+		}
+		output, exitCode, execErr = vzExecCommand(ctx, inst, "echo", "after-restart")
+		if execErr == nil && exitCode == 0 {
+			break
+		}
+		t.Logf("Exec attempt %d: err=%v", i+1, execErr)
+	}
+	if execErr != nil {
+		dumpVZShimLogs(t, tmpDir)
+		// Dump ALL log files
+		allLogs, _ := filepath.Glob(filepath.Join(tmpDir, "guests", "*", "logs", "*"))
+		for _, logFile := range allLogs {
+			content, err := os.ReadFile(logFile)
+			if err == nil && len(content) > 0 {
+				if len(content) > 4000 {
+					content = content[len(content)-4000:]
+				}
+				t.Logf("log file (%s):\n%s", logFile, string(content))
+			} else if err == nil {
+				t.Logf("log file (%s): EMPTY", logFile)
+			}
+		}
+		// Check if vz-shim is still running
+		if inst.HypervisorPID != nil {
+			err := checkProcessGone(*inst.HypervisorPID)
+			if err != nil {
+				t.Logf("vz-shim process %d is still running", *inst.HypervisorPID)
+			} else {
+				t.Logf("vz-shim process %d is GONE (crashed?)", *inst.HypervisorPID)
+			}
+		}
+	}
+	require.NoError(t, execErr, "exec should succeed after restart")
+	require.Equal(t, 0, exitCode)
+	assert.Equal(t, "after-restart", strings.TrimSpace(output))
+	t.Log("Exec after restart passed")
+
+	// Stop again before delete
+	t.Log("Stopping instance before delete...")
+	inst, err = mgr.StopInstance(ctx, inst.Id)
+	require.NoError(t, err)
+	assert.Equal(t, StateStopped, inst.State)
 
 	// Delete test
 	t.Log("Deleting instance...")
