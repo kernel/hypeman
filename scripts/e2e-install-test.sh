@@ -30,7 +30,7 @@ cd "$REPO_DIR"
 # Phase 1: Clean slate
 # =============================================================================
 info "Phase 1: Cleaning previous installation..."
-bash scripts/uninstall.sh 2>/dev/null || true
+KEEP_DATA=false bash scripts/uninstall.sh 2>/dev/null || true
 
 # =============================================================================
 # Phase 2: Install from source
