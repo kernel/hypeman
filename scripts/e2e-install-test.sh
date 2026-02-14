@@ -152,13 +152,13 @@ pass "hypeman ps works"
 # VM lifecycle test
 E2E_VM_NAME="e2e-test-vm"
 
-$HYPEMAN_CMD pull alpine:latest || fail "hypeman pull failed"
+$HYPEMAN_CMD pull nginx:alpine || fail "hypeman pull failed"
 pass "hypeman pull works"
 
 # Wait for image to be available (pull is async)
 IMAGE_READY=false
 for i in $(seq 1 30); do
-    if $HYPEMAN_CMD run --name "$E2E_VM_NAME" alpine:latest 2>&1; then
+    if $HYPEMAN_CMD run --name "$E2E_VM_NAME" nginx:alpine 2>&1; then
         IMAGE_READY=true
         break
     fi
