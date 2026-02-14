@@ -77,12 +77,13 @@ func TestWaitForImageReady_Success(t *testing.T) {
 	ctx := context.Background()
 	buildID := "test-build-123"
 
-	// Set the image to ready in the mock
-	imageRef := mgr.config.RegistryURL + "/builds/" + buildID
+	// Set the image to ready in the mock using the same ref format as production:
+	// builds/{id} is what runBuild passes to waitForImageReady
+	imageRef := "builds/" + buildID
 	imageMgr.SetImageReady(imageRef)
 
 	// waitForImageReady should succeed immediately
-	err := mgr.waitForImageReady(ctx, buildID)
+	err := mgr.waitForImageReady(ctx, imageRef)
 	require.NoError(t, err)
 }
 
@@ -93,7 +94,7 @@ func TestWaitForImageReady_WaitsForConversion(t *testing.T) {
 
 	ctx := context.Background()
 	buildID := "test-build-456"
-	imageRef := mgr.config.RegistryURL + "/builds/" + buildID
+	imageRef := "builds/" + buildID
 
 	// Start with image in pending status
 	imageMgr.images[imageRef] = &images.Image{
@@ -111,7 +112,7 @@ func TestWaitForImageReady_WaitsForConversion(t *testing.T) {
 
 	// waitForImageReady should poll and eventually succeed
 	start := time.Now()
-	err := mgr.waitForImageReady(ctx, buildID)
+	err := mgr.waitForImageReady(ctx, imageRef)
 	elapsed := time.Since(start)
 
 	require.NoError(t, err)
@@ -127,7 +128,7 @@ func TestWaitForImageReady_ContextCancelled(t *testing.T) {
 	defer cancel()
 
 	buildID := "test-build-789"
-	imageRef := mgr.config.RegistryURL + "/builds/" + buildID
+	imageRef := "builds/" + buildID
 
 	// Image stays in pending status forever
 	imageMgr.images[imageRef] = &images.Image{
@@ -136,7 +137,7 @@ func TestWaitForImageReady_ContextCancelled(t *testing.T) {
 	}
 
 	// waitForImageReady should return context error
-	err := mgr.waitForImageReady(ctx, buildID)
+	err := mgr.waitForImageReady(ctx, imageRef)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
 }
@@ -148,7 +149,7 @@ func TestWaitForImageReady_Failed(t *testing.T) {
 
 	ctx := context.Background()
 	buildID := "test-build-failed"
-	imageRef := mgr.config.RegistryURL + "/builds/" + buildID
+	imageRef := "builds/" + buildID
 
 	// Image is in failed status
 	imageMgr.images[imageRef] = &images.Image{
@@ -157,7 +158,7 @@ func TestWaitForImageReady_Failed(t *testing.T) {
 	}
 
 	// waitForImageReady should return error immediately
-	err := mgr.waitForImageReady(ctx, buildID)
+	err := mgr.waitForImageReady(ctx, imageRef)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "image conversion failed")
 }
