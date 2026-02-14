@@ -194,7 +194,7 @@ func TestVZBasicLifecycle(t *testing.T) {
 
 	// Restart test
 	t.Log("Starting instance (restart after stop)...")
-	inst, err = mgr.StartInstance(ctx, inst.Id)
+	inst, err = mgr.StartInstance(ctx, inst.Id, StartInstanceRequest{})
 	require.NoError(t, err)
 	assert.Equal(t, StateRunning, inst.State)
 	t.Logf("Instance restarted: %s (pid: %v)", inst.Id, inst.HypervisorPID)
