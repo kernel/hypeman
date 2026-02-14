@@ -129,21 +129,18 @@ func configureSerialConsole(vmConfig *vz.VirtualMachineConfiguration, logPath st
 }
 
 func configureNetwork(vmConfig *vz.VirtualMachineConfiguration, networks []shimconfig.NetworkConfig) error {
-	var devices []*vz.VirtioNetworkDeviceConfiguration
 	if len(networks) == 0 {
-		dev, err := createNATNetworkDevice("")
+		// No networks configured (NetworkEnabled=false) — do not attach any NIC.
+		return nil
+	}
+
+	var devices []*vz.VirtioNetworkDeviceConfiguration
+	for _, netConfig := range networks {
+		dev, err := createNATNetworkDevice(netConfig.MAC)
 		if err != nil {
 			return err
 		}
 		devices = append(devices, dev)
-	} else {
-		for _, netConfig := range networks {
-			dev, err := createNATNetworkDevice(netConfig.MAC)
-			if err != nil {
-				return err
-			}
-			devices = append(devices, dev)
-		}
 	}
 	vmConfig.SetNetworkDevicesVirtualMachineConfiguration(devices)
 	return nil
