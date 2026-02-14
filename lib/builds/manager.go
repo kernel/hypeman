@@ -266,7 +266,7 @@ func (m *manager) buildBuilderFromDockerfile(ctx context.Context) (string, error
 	localTag := fmt.Sprintf("hypeman-builder-tmp:%d", time.Now().Unix())
 	m.logger.Info("building builder image with Docker", "tag", localTag)
 
-	buildCmd := exec.CommandContext(ctx, "docker", "build", "--network=host", "-t", localTag, "-f", dockerfilePath, ".")
+	buildCmd := exec.CommandContext(ctx, "docker", "build", "-t", localTag, "-f", dockerfilePath, ".")
 	buildCmd.Env = dockerEnv
 	if output, err := buildCmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("docker build: %s: %w", string(output), err)
@@ -409,7 +409,7 @@ func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourc
 	// Token grants per-repo access based on build type:
 	// - Regular builds: push to builds/{id}, push to cache/{tenant}, pull from cache/global/{runtime}
 	// - Admin builds: push to builds/{id}, push to cache/global/{runtime}
-	// - When ImageName is set: also push to {image_name} for future direct push support
+	// - When ImageName is set, the server re-tags the image after the build completes
 	tokenTTL := time.Duration(policy.TimeoutSeconds) * time.Second
 	if tokenTTL < 30*time.Minute {
 		tokenTTL = 30 * time.Minute // Minimum 30 minutes
