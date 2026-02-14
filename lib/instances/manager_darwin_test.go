@@ -149,6 +149,7 @@ func TestVZBasicLifecycle(t *testing.T) {
 		Vcpus:          1,
 		NetworkEnabled: false,
 		Hypervisor:     hypervisor.TypeVZ,
+		Cmd:            []string{"sleep", "infinity"},
 		Env:            map[string]string{"TEST_VAR": "hello"},
 	})
 	if err != nil {
@@ -313,6 +314,7 @@ func TestVZExecAndShutdown(t *testing.T) {
 		Vcpus:          1,
 		NetworkEnabled: false,
 		Hypervisor:     hypervisor.TypeVZ,
+		Cmd:            []string{"sleep", "infinity"},
 	})
 	if err != nil {
 		dumpVZShimLogs(t, tmpDir)
