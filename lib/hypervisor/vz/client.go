@@ -5,10 +5,12 @@ package vz
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"syscall"
 	"time"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
@@ -116,11 +118,26 @@ func (c *Client) Shutdown(ctx context.Context) error {
 	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		// Connection reset is expected when shim exits
-		return nil
+		// Connection reset / EOF is expected when the shim exits in
+		// response to the shutdown request. Any other error means the
+		// request may not have reached the shim.
+		if isExpectedShutdownError(err) {
+			return nil
+		}
+		return fmt.Errorf("shutdown shim: %w", err)
 	}
 	defer resp.Body.Close()
 	return nil
+}
+
+// isExpectedShutdownError reports whether err is a connection-closed error
+// that is expected when the vz-shim process exits after handling a shutdown
+// request.
+func isExpectedShutdownError(err error) bool {
+	return errors.Is(err, io.EOF) ||
+		errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, syscall.EPIPE) ||
+		errors.Is(err, net.ErrClosed)
 }
 
 func (c *Client) GetVMInfo(ctx context.Context) (*hypervisor.VMInfo, error) {
