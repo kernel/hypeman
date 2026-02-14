@@ -227,3 +227,4 @@ func TestBuildQueue_Counts(t *testing.T) {
 
 	close(done)
 }
+

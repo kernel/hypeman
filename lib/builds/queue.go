@@ -168,3 +168,4 @@ func (q *BuildQueue) QueueLength() int {
 	defer q.mu.Unlock()
 	return len(q.active) + len(q.pending)
 }
+

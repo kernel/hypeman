@@ -28,7 +28,7 @@ func (m *manager) downloadKernel(version KernelVersion, arch string) error {
 			return nil // Follow redirects
 		},
 	}
-
+	
 	resp, err := client.Get(url)
 	if err != nil {
 		return fmt.Errorf("http get: %w", err)
@@ -78,3 +78,4 @@ func (m *manager) ensureKernel(version KernelVersion) (string, error) {
 
 	return kernelPath, nil
 }
+

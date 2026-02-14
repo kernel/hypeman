@@ -62,3 +62,5 @@ func (p *FileSecretProvider) GetSecrets(ctx context.Context, secretIDs []string)
 
 // Ensure FileSecretProvider implements SecretProvider
 var _ SecretProvider = (*FileSecretProvider)(nil)
+
+

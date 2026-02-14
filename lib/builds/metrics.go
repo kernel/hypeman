@@ -82,3 +82,4 @@ func (m *Metrics) RegisterQueueCallbacks(queue *BuildQueue, meter metric.Meter) 
 	)
 	return err
 }
+

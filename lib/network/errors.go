@@ -9,3 +9,4 @@ var (
 	// ErrNameExists is returned when an instance name already exists
 	ErrNameExists = errors.New("instance name already exists")
 )
+

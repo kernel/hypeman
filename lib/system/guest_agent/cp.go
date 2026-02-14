@@ -399,3 +399,4 @@ func (s *guestServer) copyFromGuestDir(rootPath string, followLinks bool, stream
 	log.Printf("[guest-agent] copy-from-guest complete: %d entries from %s", len(entries), rootPath)
 	return nil
 }
+

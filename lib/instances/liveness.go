@@ -152,3 +152,4 @@ func (a *instanceLivenessAdapter) DetectSuspiciousVMMProcesses(ctx context.Conte
 
 	return suspiciousCount
 }
+

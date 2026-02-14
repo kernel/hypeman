@@ -12,3 +12,4 @@ var (
 	// ErrBuildFailed is returned when building initrd fails
 	ErrBuildFailed = errors.New("build failed")
 )
+

@@ -12,3 +12,4 @@ func (s *ApiService) GetHealth(ctx context.Context, request oapi.GetHealthReques
 		Status: oapi.Ok,
 	}, nil
 }
+

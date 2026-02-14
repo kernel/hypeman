@@ -88,3 +88,4 @@ func TestIsSystemdImage(t *testing.T) {
 		})
 	}
 }
+

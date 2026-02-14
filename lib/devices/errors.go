@@ -36,3 +36,5 @@ var (
 	// ErrIOMMUGroupConflict is returned when not all devices in IOMMU group can be passed through
 	ErrIOMMUGroupConflict = errors.New("IOMMU group contains other devices that must also be passed through")
 )
+
+

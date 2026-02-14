@@ -51,3 +51,4 @@ func (s *guestServer) StatPath(ctx context.Context, req *pb.StatPathRequest) (*p
 
 	return resp, nil
 }
+

@@ -356,10 +356,6 @@ func (m *manager) GetImage(ctx context.Context, name string) (*Image, error) {
 		return nil, fmt.Errorf("%w: %s", ErrInvalidName, err.Error())
 	}
 
-	return m.getImageByRef(ref)
-}
-
-func (m *manager) getImageByRef(ref *NormalizedRef) (*Image, error) {
 	repository := ref.Repository()
 
 	var digestHex string

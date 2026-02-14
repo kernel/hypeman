@@ -99,3 +99,5 @@ func TestNoOpSecretProvider(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, secrets)
 }
+
+

@@ -4,8 +4,8 @@ import (
 	"log"
 	"time"
 
-	pb "github.com/kernel/hypeman/lib/guest"
 	"github.com/mdlayher/vsock"
+	pb "github.com/kernel/hypeman/lib/guest"
 	"google.golang.org/grpc"
 )
 

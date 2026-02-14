@@ -8,3 +8,4 @@ var (
 	ErrAlreadyExists = errors.New("volume already exists")
 	ErrAmbiguousName = errors.New("multiple volumes with the same name")
 )
+

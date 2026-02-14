@@ -163,3 +163,5 @@ func availableDeviceToOAPI(d devices.AvailableDevice) oapi.AvailableDevice {
 		CurrentDriver: d.CurrentDriver,
 	}
 }
+
+
