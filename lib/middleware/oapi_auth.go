@@ -212,6 +212,7 @@ func isTokenEndpoint(path string) bool {
 	return path == "/v2/token" || path == "/v2/token/"
 }
 
+
 // extractRepoFromPath extracts the repository name from a registry path.
 // Uses the docker/distribution router which properly handles repository names
 // that can contain slashes (e.g., "builds/abc123" from "/v2/builds/abc123/manifests/latest").
@@ -251,7 +252,7 @@ func writeRegistryUnauthorized(w http.ResponseWriter, r *http.Request) {
 	}
 	host := r.Host
 	tokenURL := fmt.Sprintf("%s://%s/v2/token", scheme, host)
-
+	
 	// Use Bearer challenge pointing to our token endpoint
 	challenge := fmt.Sprintf(`Bearer realm="%s",service="hypeman"`, tokenURL)
 	w.Header().Set("WWW-Authenticate", challenge)
@@ -334,9 +335,7 @@ func validateRegistryToken(tokenString, jwtSecret, requestPath, method string) (
 	return claims, nil
 }
 
-// JwtAuth creates a chi middleware that validates JWT bearer tokens.
-// For registry paths (/v2/...), it supports both Bearer and Basic auth (for BuildKit compatibility).
-// For all other paths, it requires a Bearer token with a valid user JWT.
+// JwtAuth creates a chi middleware that validates JWT bearer tokens
 func JwtAuth(jwtSecret string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -356,30 +355,30 @@ func JwtAuth(jwtSecret string) func(http.Handler) http.Handler {
 					return
 				}
 
-				if authHeader != "" {
-					// Try to extract token (supports both Bearer and Basic auth)
-					log.InfoContext(r.Context(), "registry request with auth header",
-						"path", r.URL.Path,
-						"method", r.Method,
-						"auth_type", strings.Split(authHeader, " ")[0],
-						"remote_addr", r.RemoteAddr)
-					token, authType, err := extractTokenFromAuth(authHeader)
-					if err == nil {
-						log.DebugContext(r.Context(), "extracted token for registry request", "auth_type", authType)
+			if authHeader != "" {
+				// Try to extract token (supports both Bearer and Basic auth)
+				log.InfoContext(r.Context(), "registry request with auth header",
+					"path", r.URL.Path,
+					"method", r.Method,
+					"auth_type", strings.Split(authHeader, " ")[0],
+					"remote_addr", r.RemoteAddr)
+				token, authType, err := extractTokenFromAuth(authHeader)
+				if err == nil {
+					log.DebugContext(r.Context(), "extracted token for registry request", "auth_type", authType)
 
-					// Try to validate as a registry-scoped token
-					registryClaims, err := validateRegistryToken(token, jwtSecret, r.URL.Path, r.Method)
-					if err == nil {
-						// Valid registry token - set build ID as user for audit trail
-						log.DebugContext(r.Context(), "registry token validated",
-							"build_id", registryClaims.BuildID,
-							"repos", registryClaims.Repositories,
-							"scope", registryClaims.Scope)
-						ctx := context.WithValue(r.Context(), userIDKey, "builder-"+registryClaims.BuildID)
-						next.ServeHTTP(w, r.WithContext(ctx))
-						return
-					}
-					log.DebugContext(r.Context(), "registry token validation failed", "error", err)
+						// Try to validate as a registry-scoped token
+						registryClaims, err := validateRegistryToken(token, jwtSecret, r.URL.Path, r.Method)
+						if err == nil {
+							// Valid registry token - set build ID as user for audit trail
+							log.DebugContext(r.Context(), "registry token validated",
+								"build_id", registryClaims.BuildID,
+								"repos", registryClaims.Repositories,
+								"scope", registryClaims.Scope)
+							ctx := context.WithValue(r.Context(), userIDKey, "builder-"+registryClaims.BuildID)
+							next.ServeHTTP(w, r.WithContext(ctx))
+							return
+						}
+						log.DebugContext(r.Context(), "registry token validation failed", "error", err)
 
 						// For read operations (GET/HEAD), if the token is valid but the
 						// repo isn't in the allowed list, return 502 Bad Gateway.
@@ -399,9 +398,9 @@ func JwtAuth(jwtSecret string) func(http.Handler) http.Handler {
 					}
 				}
 
-			// Registry auth failed - return 401 with WWW-Authenticate header
-			// This tells clients (like BuildKit) where to get a token
-			if authHeader == "" {
+				// Registry auth failed - return 401 with WWW-Authenticate header
+				// This tells clients (like BuildKit) where to get a token
+				if authHeader == "" {
 					log.InfoContext(r.Context(), "registry request WITHOUT auth header",
 						"path", r.URL.Path,
 						"method", r.Method,

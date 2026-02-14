@@ -363,19 +363,17 @@ func (m *manager) getImageByRef(ref *NormalizedRef) (*Image, error) {
 	repository := ref.Repository()
 
 	var digestHex string
-	var err error
-
 	if ref.IsDigest() {
 		// Direct digest lookup
 		digestHex = ref.DigestHex()
 	} else {
 		// Tag lookup - resolve symlink
 		tag := ref.Tag()
-
-		digestHex, err = resolveTag(m.paths, repository, tag)
+		d, err := resolveTag(m.paths, repository, tag)
 		if err != nil {
 			return nil, err
 		}
+		digestHex = d
 	}
 
 	meta, err := readMetadata(m.paths, repository, digestHex)
