@@ -458,9 +458,7 @@ YAMLEOF
         fi
 
         # Expand ~ to $HOME in data_dir (launchd doesn't do shell expansion)
-        if [ "$OS" = "darwin" ]; then
-            sed -i '' "s|~/|${HOME}/|g" "${TMP_DIR}/config.yaml"
-        fi
+        sed -i '' "s|~/|${HOME}/|g" "${TMP_DIR}/config.yaml"
 
         # Set jwt_secret in the config
         if grep -q '^jwt_secret:' "${TMP_DIR}/config.yaml"; then
