@@ -299,8 +299,13 @@ func Load(configPath string) (*Config, error) {
 	// Environment variables use SCREAMING_SNAKE_CASE (e.g., JWT_SECRET, DATA_DIR)
 	// They map to flat snake_case koanf keys (e.g., jwt_secret, data_dir)
 	// Note: delim must be "" to prevent unflattening (e.g., DATA_DIR → data.dir)
-	envProvider := env.Provider("", "", func(s string) string {
-		return strings.ToLower(s)
+	envProvider := env.ProviderWithValue("", "", func(key string, value string) (string, interface{}) {
+		// Skip empty environment variables to preserve default/YAML values.
+		// This matches the old getEnv() behavior which checked value != "".
+		if value == "" {
+			return "", nil
+		}
+		return strings.ToLower(key), value
 	})
 	_ = k.Load(envProvider, nil)
 
