@@ -84,7 +84,7 @@ Hypeman is configured via YAML config files.
 |-----------|-------------|
 | Server | `/etc/hypeman/config.yaml` (Linux) or `~/.config/hypeman/config.yaml` (macOS) |
 | CLI | `~/.config/hypeman/cli.yaml` |
-| Token tool | Reads server config automatically |
+
 
 See [`config.example.yaml`](config.example.yaml) (Linux) and [`config.example.darwin.yaml`](config.example.darwin.yaml) (macOS) for all available server options.
 
