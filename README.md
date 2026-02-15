@@ -78,13 +78,13 @@ Environment variables (`HYPEMAN_BASE_URL`, `HYPEMAN_API_KEY`) and CLI flags (`--
 
 ## Configuration
 
-Hypeman uses YAML config files with environment variable overrides.
+Hypeman is configured via YAML config files.
 
-| Component | Config File | Env Override |
-|-----------|-------------|--------------|
-| Server | `/etc/hypeman/config.yaml` (Linux) or `~/.config/hypeman/config.yaml` (macOS) | `CONFIG_PATH`, plus `__`-delimited env vars (e.g. `PORT`, `CADDY__LISTEN_ADDRESS`) |
-| CLI | `~/.config/hypeman/cli.yaml` | `HYPEMAN_BASE_URL`, `HYPEMAN_API_KEY` |
-| Token tool | Reads server config automatically | `JWT_SECRET` |
+| Component | Config File |
+|-----------|-------------|
+| Server | `/etc/hypeman/config.yaml` (Linux) or `~/.config/hypeman/config.yaml` (macOS) |
+| CLI | `~/.config/hypeman/cli.yaml` |
+| Token tool | Reads server config automatically |
 
 See [`config.example.yaml`](config.example.yaml) (Linux) and [`config.example.darwin.yaml`](config.example.darwin.yaml) (macOS) for all available server options.
 

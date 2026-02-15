@@ -89,8 +89,6 @@ root  hard  nofile  65536
 
 ## Configuration
 
-### Config files
-
 Hypeman reads configuration from a YAML config file. See `config.example.yaml` (Linux) and `config.example.darwin.yaml` (macOS) for all available settings with comments.
 
 The config file is searched in these locations (first match wins):
@@ -98,41 +96,39 @@ The config file is searched in these locations (first match wins):
 - `/etc/hypeman/config.yaml` (Linux)
 - `~/.config/hypeman/config.yaml` (all platforms)
 
-### Environment variable overrides
+Common settings:
 
-Any config key can be overridden via environment variables. Top-level keys use `SCREAMING_SNAKE_CASE` directly. Nested keys use double-underscore (`__`) as the nesting separator:
+| Key | Description | Default |
+|-----|-------------|---------|
+| `port` | HTTP server port | `8080` |
+| `data_dir` | Data directory for VM images, volumes, etc. | `/var/lib/hypeman` |
+| `jwt_secret` | Secret key for JWT authentication (required) | _(empty)_ |
+| `env` | Deployment environment (filters telemetry) | `unset` |
+| `network.bridge_name` | Network bridge for VM networking | `vmbr0` |
+| `network.subnet_cidr` | CIDR for the VM network subnet | `10.100.0.0/16` |
+| `network.uplink_interface` | Host interface for VM internet access | _(auto-detect)_ |
+| `network.dns_server` | DNS server for VMs | `1.1.1.1` |
+| `caddy.listen_address` | Address for Caddy ingress listeners | `0.0.0.0` |
+| `caddy.admin_address` | Address for Caddy admin API | `127.0.0.1` |
+| `caddy.admin_port` | Port for Caddy admin API | `2019` |
+| `caddy.stop_on_shutdown` | Stop Caddy when hypeman shuts down | `false` |
+| `logging.level` | Log level (debug, info, warn, error) | `info` |
+| `otel.enabled` | Enable OpenTelemetry traces/metrics | `false` |
+| `otel.endpoint` | OTLP gRPC endpoint | `127.0.0.1:4317` |
+| `limits.max_concurrent_builds` | Max concurrent image builds | `1` |
+| `limits.max_overlay_size` | Max overlay filesystem size | `100GB` |
+| `acme.email` | Email for ACME certificate registration | _(empty)_ |
+| `acme.dns_provider` | DNS provider for ACME challenges | _(empty)_ |
+| `acme.cloudflare_api_token` | Cloudflare API token | _(empty)_ |
+| `build.docker_socket` | Path to Docker socket | `/var/run/docker.sock` |
 
-| YAML path | Env var | Default |
-|-----------|---------|---------|
-| `port` | `PORT` | `8080` |
-| `data_dir` | `DATA_DIR` | `/var/lib/hypeman` |
-| `jwt_secret` | `JWT_SECRET` | _(empty)_ |
-| `env` | `ENV` | `unset` |
-| `network.bridge_name` | `NETWORK__BRIDGE_NAME` | `vmbr0` |
-| `network.subnet_cidr` | `NETWORK__SUBNET_CIDR` | `10.100.0.0/16` |
-| `network.uplink_interface` | `NETWORK__UPLINK_INTERFACE` | _(auto-detect)_ |
-| `network.dns_server` | `NETWORK__DNS_SERVER` | `1.1.1.1` |
-| `caddy.listen_address` | `CADDY__LISTEN_ADDRESS` | `0.0.0.0` |
-| `caddy.admin_address` | `CADDY__ADMIN_ADDRESS` | `127.0.0.1` |
-| `caddy.admin_port` | `CADDY__ADMIN_PORT` | `2019` |
-| `caddy.stop_on_shutdown` | `CADDY__STOP_ON_SHUTDOWN` | `false` |
-| `logging.level` | `LOGGING__LEVEL` | `info` |
-| `otel.enabled` | `OTEL__ENABLED` | `false` |
-| `otel.endpoint` | `OTEL__ENDPOINT` | `127.0.0.1:4317` |
-| `limits.max_concurrent_builds` | `LIMITS__MAX_CONCURRENT_BUILDS` | `1` |
-| `limits.max_overlay_size` | `LIMITS__MAX_OVERLAY_SIZE` | `100GB` |
-| `acme.email` | `ACME__EMAIL` | _(empty)_ |
-| `acme.dns_provider` | `ACME__DNS_PROVIDER` | _(empty)_ |
-| `acme.cloudflare_api_token` | `ACME__CLOUDFLARE_API_TOKEN` | _(empty)_ |
-| `build.docker_socket` | `BUILD__DOCKER_SOCKET` | `/var/run/docker.sock` |
-
-The pattern is: nest with `__`, uppercase everything. For example, `caddy.listen_address` becomes `CADDY__LISTEN_ADDRESS`.
+Environment variables can also override any config key using `__` as the nesting separator (e.g. `CADDY__LISTEN_ADDRESS` overrides `caddy.listen_address`).
 
 **Important: Subnet Configuration**
 
 The default subnet `10.100.0.0/16` is chosen to avoid common conflicts. Hypeman will detect conflicts with existing routes on startup and fail with guidance.
 
-If you need a different subnet, set `network.subnet_cidr` in your config file (or `NETWORK__SUBNET_CIDR` env var). The gateway is automatically derived as the first IP in the subnet (e.g., `10.100.0.0/16` → `10.100.0.1`).
+If you need a different subnet, set `network.subnet_cidr` in your config file. The gateway is automatically derived as the first IP in the subnet (e.g., `10.100.0.0/16` → `10.100.0.1`).
 
 **Alternative subnets if needed:**
 
@@ -149,7 +145,7 @@ network:
 
 **Finding the uplink interface (`network.uplink_interface`)**
 
-`network.uplink_interface` (env: `NETWORK__UPLINK_INTERFACE`) tells Hypeman which host interface to use for routing VM traffic to the outside world (for iptables MASQUERADE rules). On many hosts this is `eth0`, but laptops and more complex setups often use Wi-Fi or other names.
+`network.uplink_interface` tells Hypeman which host interface to use for routing VM traffic to the outside world (for iptables MASQUERADE rules). On many hosts this is `eth0`, but laptops and more complex setups often use Wi-Fi or other names.
 
 **Quick way to discover it:**
 
@@ -164,10 +160,11 @@ Look for the `dev` field in the output, for example:
 1.1.1.1 via 192.168.12.1 dev wlp2s0 src 192.168.12.98
 ```
 
-In this case, `wlp2s0` is the uplink interface, so you would set:
+In this case, `wlp2s0` is the uplink interface, so you would set in your config file:
 
-```bash
-UPLINK_INTERFACE=wlp2s0
+```yaml
+network:
+  uplink_interface: wlp2s0
 ```
 
 You can also inspect all routes:
@@ -187,12 +184,10 @@ To enable TLS ingresses:
 1. Configure ACME credentials in your `config.yaml`:
 
 ```yaml
-# Required for any TLS ingress
-acme_email: admin@example.com
-
-# For Cloudflare
-acme_dns_provider: cloudflare
-cloudflare_api_token: your-api-token
+acme:
+  email: admin@example.com
+  dns_provider: cloudflare
+  cloudflare_api_token: your-api-token
 ```
 
 2. Create an ingress with TLS enabled:
@@ -211,7 +206,7 @@ curl -X POST http://localhost:8080/v1/ingresses \
   }'
 ```
 
-Certificates are stored in `$DATA_DIR/caddy/data/` and auto-renewed by Caddy.
+Certificates are stored in `<data_dir>/caddy/data/` and auto-renewed by Caddy.
 
 ### Setup
 
@@ -259,15 +254,16 @@ make gen-jwt
 make dev
 ```
 
-The server will start on port 8080 (configurable via `PORT` environment variable).
+The server will start on port 8080 (configurable via `port` in config.yaml).
 
 ### Setting Up the Builder Image (for Dockerfile builds)
 
-The builder image is required for `hypeman build` to work. When `BUILDER_IMAGE` is unset or empty, the server will automatically build and push the builder image on startup using Docker. This is the easiest way to get started — just ensure Docker is available and run `make dev`. If a build is requested while the builder image is still being prepared, the server returns a clear error asking you to retry shortly.
+The builder image is required for `hypeman build` to work. When `build.builder_image` is unset or empty, the server will automatically build and push the builder image on startup using Docker. This is the easiest way to get started — just ensure Docker is available and run `make dev`. If a build is requested while the builder image is still being prepared, the server returns a clear error asking you to retry shortly.
 
-On macOS with Colima, set the Docker socket path:
-```bash
-DOCKER_SOCKET=$HOME/.colima/default/docker.sock
+On macOS with Colima, set the Docker socket path in your config file:
+```yaml
+build:
+  docker_socket: ~/.colima/default/docker.sock
 ```
 
 ### Local OpenTelemetry (optional)
@@ -295,7 +291,8 @@ docker run -d --name lgtm \
 
 # Enable OTel in config.yaml (set env to your name to filter your telemetry)
 # Add to your config.yaml:
-#   otel_enabled: true
+#   otel:
+#     enabled: true
 #   env: yourname
 
 # Restart dev server
@@ -483,7 +480,7 @@ brew install caddy
 - Check: `sw_vers` and `uname -m` (should be arm64)
 
 **VM fails to start**
-- Check serial log: `$DATA_DIR/instances/<id>/serial.log`
+- Check serial log: `<data_dir>/instances/<id>/serial.log`
 - Ensure kernel and initrd paths are correct in config
 
 **IOMMU/VFIO warnings at startup**
