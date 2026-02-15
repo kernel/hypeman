@@ -426,7 +426,7 @@ if [ ! -f "$CONFIG_FILE" ]; then
     JWT_SECRET=$(openssl rand -hex 32)
 
     if [ "$OS" = "darwin" ]; then
-        # macOS config - use template if available, otherwise generate
+        # macOS config - use template from source or download it
         if [ -f "${TMP_DIR}/config.example.darwin.yaml" ]; then
             info "Using macOS config template from source..."
             cp "${TMP_DIR}/config.example.darwin.yaml" "${TMP_DIR}/config.yaml"
@@ -434,35 +434,7 @@ if [ ! -f "$CONFIG_FILE" ]; then
             info "Downloading macOS config template..."
             CONFIG_URL="https://raw.githubusercontent.com/${REPO}/${VERSION}/config.example.darwin.yaml"
             if ! curl -fsSL "$CONFIG_URL" -o "${TMP_DIR}/config.yaml"; then
-                warn "Failed to download config template, generating minimal config..."
-                cat > "${TMP_DIR}/config.yaml" << YAMLEOF
-jwt_secret: "${JWT_SECRET}"
-data_dir: "${DATA_DIR}"
-port: "8080"
-hypervisor:
-  default: vz
-network:
-  dns_server: 8.8.8.8
-logging:
-  level: debug
-caddy:
-  listen_address: 0.0.0.0
-  admin_address: 127.0.0.1
-  admin_port: 2019
-  internal_dns_port: 5354
-  stop_on_shutdown: false
-registry:
-  url: 192.168.64.1:8080
-  insecure: true
-build:
-  builder_image: none
-  docker_socket: /var/run/docker.sock
-  max_concurrent_source_builds: 2
-  timeout: 600
-limits:
-  max_vcpus_per_instance: 4
-  max_memory_per_instance: 8GB
-YAMLEOF
+                error "Failed to download config template from ${CONFIG_URL}"
             fi
         fi
 
@@ -506,7 +478,7 @@ YAMLEOF
         info "Installing config file at ${CONFIG_FILE}..."
         install -m 600 "${TMP_DIR}/config.yaml" "$CONFIG_FILE"
     else
-        # Linux config - use template if available, otherwise generate
+        # Linux config - use template from source or download it
         if [ -f "${TMP_DIR}/config.example.yaml" ]; then
             info "Using config template from source..."
             cp "${TMP_DIR}/config.example.yaml" "${TMP_DIR}/config.yaml"
@@ -514,14 +486,7 @@ YAMLEOF
             info "Downloading config template..."
             CONFIG_URL="https://raw.githubusercontent.com/${REPO}/${VERSION}/config.example.yaml"
             if ! curl -fsSL "$CONFIG_URL" -o "${TMP_DIR}/config.yaml"; then
-                warn "Failed to download config template, generating minimal config..."
-                cat > "${TMP_DIR}/config.yaml" << YAMLEOF
-jwt_secret: "${JWT_SECRET}"
-data_dir: /var/lib/hypeman
-caddy:
-  admin_port: 2019
-  internal_dns_port: 5353
-YAMLEOF
+                error "Failed to download config template from ${CONFIG_URL}"
             fi
         fi
 
