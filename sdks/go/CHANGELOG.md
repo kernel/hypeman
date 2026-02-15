@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.11.0 (2026-02-15)
+
+Full Changelog: [v0.10.0...v0.11.0](https://github.com/kernel/hypeman-go/compare/v0.10.0...v0.11.0)
+
+### Features
+
+* Add image_name parameter to builds ([36ea383](https://github.com/kernel/hypeman-go/commit/36ea383988ce81b907a893220bbc983e8143a1d2))
+
 ## 0.10.0 (2026-02-13)
 
 Full Changelog: [v0.9.8...v0.10.0](https://github.com/kernel/hypeman-go/compare/v0.9.8...v0.10.0)
