@@ -264,19 +264,20 @@ func defaultConfig() *Config {
 //
 // The configPath parameter specifies an explicit config file path.
 // If empty, searches default locations based on OS.
-func Load(configPath string) *Config {
+// Returns an error if an explicitly provided configPath cannot be loaded.
+func Load(configPath string) (*Config, error) {
 	k := koanf.New(".")
 
 	// 1. Load defaults first
 	defaults := defaultConfig()
 	if err := k.Load(structs.Provider(defaults, "koanf"), nil); err != nil {
-		// Should never happen with our struct
-		panic(fmt.Sprintf("failed to load default config: %v", err))
+		return nil, fmt.Errorf("failed to load default config: %w", err)
 	}
 
-	// 2. Load from YAML config file (if exists)
-	if configPath == "" {
-		// Search default paths
+	// 2. Load from YAML config file
+	explicitPath := configPath != ""
+	if !explicitPath {
+		// Search default paths (best-effort, file may not exist)
 		for _, path := range GetDefaultConfigPaths() {
 			if _, err := os.Stat(path); err == nil {
 				configPath = path
@@ -285,8 +286,13 @@ func Load(configPath string) *Config {
 		}
 	}
 	if configPath != "" {
-		// Ignore errors - file may not exist
-		_ = k.Load(file.Provider(configPath), yaml.Parser())
+		if err := k.Load(file.Provider(configPath), yaml.Parser()); err != nil {
+			if explicitPath {
+				// Explicit path must be loadable
+				return nil, fmt.Errorf("failed to load config from %s: %w", configPath, err)
+			}
+			// Auto-discovered path failed — continue with defaults + env
+		}
 	}
 
 	// 3. Overlay environment variables (highest precedence)
@@ -301,10 +307,10 @@ func Load(configPath string) *Config {
 	// 4. Unmarshal to Config struct
 	var cfg Config
 	if err := k.Unmarshal("", &cfg); err != nil {
-		panic(fmt.Sprintf("failed to unmarshal config: %v", err))
+		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
 
-	return &cfg
+	return &cfg, nil
 }
 
 // Validate checks configuration values for correctness.

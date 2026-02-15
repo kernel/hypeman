@@ -56,7 +56,10 @@ func ProvideContext(log *slog.Logger) context.Context {
 // Config path can be specified via CONFIG_PATH env var or defaults to platform-specific locations.
 func ProvideConfig() *config.Config {
 	configPath := os.Getenv("CONFIG_PATH")
-	cfg := config.Load(configPath)
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		panic(fmt.Sprintf("failed to load configuration: %v", err))
+	}
 	if err := cfg.Validate(); err != nil {
 		panic(fmt.Sprintf("invalid configuration: %v", err))
 	}
