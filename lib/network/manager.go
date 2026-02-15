@@ -71,28 +71,28 @@ func (m *manager) Initialize(ctx context.Context, runningInstanceIDs []string) e
 	log := logger.FromContext(ctx)
 
 	// Derive gateway from subnet if not explicitly configured
-	gateway := m.config.SubnetGateway
+	gateway := m.config.Network.SubnetGateway
 	if gateway == "" {
 		var err error
-		gateway, err = DeriveGateway(m.config.SubnetCIDR)
+		gateway, err = DeriveGateway(m.config.Network.SubnetCIDR)
 		if err != nil {
 			return fmt.Errorf("derive gateway from subnet: %w", err)
 		}
 	}
 
 	log.InfoContext(ctx, "initializing network manager",
-		"bridge", m.config.BridgeName,
-		"subnet", m.config.SubnetCIDR,
+		"bridge", m.config.Network.BridgeName,
+		"subnet", m.config.Network.SubnetCIDR,
 		"gateway", gateway)
 
 	// Check for subnet conflicts with existing host routes before creating bridge
-	if err := m.checkSubnetConflicts(ctx, m.config.SubnetCIDR); err != nil {
+	if err := m.checkSubnetConflicts(ctx, m.config.Network.SubnetCIDR); err != nil {
 		return err
 	}
 
 	// Ensure default network bridge exists and iptables rules are configured
 	// createBridge is idempotent - handles both new and existing bridges
-	if err := m.createBridge(ctx, m.config.BridgeName, gateway, m.config.SubnetCIDR); err != nil {
+	if err := m.createBridge(ctx, m.config.Network.BridgeName, gateway, m.config.Network.SubnetCIDR); err != nil {
 		return fmt.Errorf("setup default network: %w", err)
 	}
 
@@ -113,7 +113,7 @@ func (m *manager) Initialize(ctx context.Context, runningInstanceIDs []string) e
 // getDefaultNetwork gets the default network details from kernel state
 func (m *manager) getDefaultNetwork(ctx context.Context) (*Network, error) {
 	// Query from kernel
-	state, err := m.queryNetworkState(m.config.BridgeName)
+	state, err := m.queryNetworkState(m.config.Network.BridgeName)
 	if err != nil {
 		return nil, ErrNotFound
 	}
@@ -122,7 +122,7 @@ func (m *manager) getDefaultNetwork(ctx context.Context) (*Network, error) {
 		Name:      "default",
 		Subnet:    state.Subnet,
 		Gateway:   state.Gateway,
-		Bridge:    m.config.BridgeName,
+		Bridge:    m.config.Network.BridgeName,
 		Isolated:  true,
 		Default:   true,
 		CreatedAt: time.Time{}, // Unknown for default
@@ -132,23 +132,23 @@ func (m *manager) getDefaultNetwork(ctx context.Context) (*Network, error) {
 // SetupHTB initializes HTB qdisc on the bridge for upload fair sharing.
 // capacityBps is the total network capacity in bytes per second.
 func (m *manager) SetupHTB(ctx context.Context, capacityBps int64) error {
-	return m.setupBridgeHTB(ctx, m.config.BridgeName, capacityBps)
+	return m.setupBridgeHTB(ctx, m.config.Network.BridgeName, capacityBps)
 }
 
 // GetUploadBurstMultiplier returns the configured multiplier for upload burst ceiling.
 // Defaults to 4 if not configured.
 func (m *manager) GetUploadBurstMultiplier() int {
-	if m.config.UploadBurstMultiplier < 1 {
+	if m.config.Network.UploadBurstMultiplier < 1 {
 		return DefaultUploadBurstMultiplier
 	}
-	return m.config.UploadBurstMultiplier
+	return m.config.Network.UploadBurstMultiplier
 }
 
 // GetDownloadBurstMultiplier returns the configured multiplier for download burst bucket.
 // Defaults to 4 if not configured.
 func (m *manager) GetDownloadBurstMultiplier() int {
-	if m.config.DownloadBurstMultiplier < 1 {
+	if m.config.Network.DownloadBurstMultiplier < 1 {
 		return DefaultDownloadBurstMultiplier
 	}
-	return m.config.DownloadBurstMultiplier
+	return m.config.Network.DownloadBurstMultiplier
 }

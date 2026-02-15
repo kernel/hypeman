@@ -58,15 +58,15 @@ func run() error {
 	}
 
 	// Configure GPU profile cache TTL
-	devices.SetGPUProfileCacheTTL(cfg.GPUProfileCacheTTL)
+	devices.SetGPUProfileCacheTTL(cfg.GPU.ProfileCacheTTL)
 
 	// Initialize OpenTelemetry (before wire initialization)
 	otelCfg := otel.Config{
-		Enabled:           cfg.OtelEnabled,
-		Endpoint:          cfg.OtelEndpoint,
-		ServiceName:       cfg.OtelServiceName,
-		ServiceInstanceID: cfg.OtelServiceInstanceID,
-		Insecure:          cfg.OtelInsecure,
+		Enabled:           cfg.Otel.Enabled,
+		Endpoint:          cfg.Otel.Endpoint,
+		ServiceName:       cfg.Otel.ServiceName,
+		ServiceInstanceID: cfg.Otel.ServiceInstanceID,
+		Insecure:          cfg.Otel.Insecure,
 		Version:           cfg.Version,
 		Env:               cfg.Env,
 	}
@@ -126,8 +126,8 @@ func run() error {
 	logger := app.Logger
 
 	// Log OTel status
-	if cfg.OtelEnabled {
-		logger.Info("OpenTelemetry enabled", "endpoint", cfg.OtelEndpoint, "service", cfg.OtelServiceName)
+	if cfg.Otel.Enabled {
+		logger.Info("OpenTelemetry enabled", "endpoint", cfg.Otel.Endpoint, "service", cfg.Otel.ServiceName)
 	}
 
 	// Validate JWT secret is configured
@@ -148,12 +148,12 @@ func run() error {
 
 	// Validate log rotation config
 	var logMaxSize datasize.ByteSize
-	if err := logMaxSize.UnmarshalText([]byte(app.Config.LogMaxSize)); err != nil {
-		return fmt.Errorf("invalid LOG_MAX_SIZE %q: %w", app.Config.LogMaxSize, err)
+	if err := logMaxSize.UnmarshalText([]byte(app.Config.Logging.MaxSize)); err != nil {
+		return fmt.Errorf("invalid LOG_MAX_SIZE %q: %w", app.Config.Logging.MaxSize, err)
 	}
-	logRotateInterval, err := time.ParseDuration(app.Config.LogRotateInterval)
+	logRotateInterval, err := time.ParseDuration(app.Config.Logging.RotateInterval)
 	if err != nil {
-		return fmt.Errorf("invalid LOG_ROTATE_INTERVAL %q: %w", app.Config.LogRotateInterval, err)
+		return fmt.Errorf("invalid LOG_ROTATE_INTERVAL %q: %w", app.Config.Logging.RotateInterval, err)
 	}
 
 	// Ensure system files (kernel, initrd) exist before starting server
@@ -242,7 +242,7 @@ func run() error {
 		logger.Error("failed to initialize ingress manager", "error", err)
 		return fmt.Errorf("initialize ingress manager: %w", err)
 	}
-	logger.Info("Ingress manager initialized", "listen_addr", cfg.CaddyListenAddress, "admin", app.IngressManager.AdminURL())
+	logger.Info("Ingress manager initialized", "listen_addr", cfg.Caddy.ListenAddress, "admin", app.IngressManager.AdminURL())
 
 	// Create router
 	r := chi.NewRouter()
@@ -326,8 +326,8 @@ func run() error {
 		r.Use(middleware.Recoverer)
 
 		// OpenTelemetry tracing middleware FIRST (creates span context)
-		if cfg.OtelEnabled {
-			r.Use(otelchi.Middleware(cfg.OtelServiceName, otelchi.WithChiRoutes(r)))
+		if cfg.Otel.Enabled {
+			r.Use(otelchi.Middleware(cfg.Otel.ServiceName, otelchi.WithChiRoutes(r)))
 		}
 
 		// Inject logger into request context for handlers to use
@@ -450,16 +450,16 @@ func run() error {
 		ticker := time.NewTicker(logRotateInterval)
 		defer ticker.Stop()
 
-		logger.Info("log rotation scheduler started", "interval", app.Config.LogRotateInterval, "max_size", logMaxSize, "max_files", app.Config.LogMaxFiles)
+		logger.Info("log rotation scheduler started", "interval", app.Config.Logging.RotateInterval, "max_size", logMaxSize, "max_files", app.Config.Logging.MaxFiles)
 		for {
 			select {
 			case <-gctx.Done():
 				return nil
 			case <-ticker.C:
-				if err := app.InstanceManager.RotateLogs(gctx, int64(logMaxSize), app.Config.LogMaxFiles); err != nil {
+				if err := app.InstanceManager.RotateLogs(gctx, int64(logMaxSize), app.Config.Logging.MaxFiles); err != nil {
 					logger.Error("log rotation failed", "error", err)
 				} else {
-					logger.Info("log rotation completed", "max_size", logMaxSize, "max_files", app.Config.LogMaxFiles)
+					logger.Info("log rotation completed", "max_size", logMaxSize, "max_files", app.Config.Logging.MaxFiles)
 				}
 			}
 		}

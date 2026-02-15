@@ -37,10 +37,12 @@ func setupTestManager(t *testing.T) (*manager, string) {
 	tmpDir := t.TempDir()
 
 	cfg := &config.Config{
-		DataDir:    tmpDir,
-		BridgeName: "vmbr0",
-		SubnetCIDR: "10.100.0.0/16",
-		DNSServer:  "1.1.1.1",
+		DataDir: tmpDir,
+		Network: config.NetworkConfig{
+			BridgeName: "vmbr0",
+			SubnetCIDR: "10.100.0.0/16",
+			DNSServer:  "1.1.1.1",
+		},
 	}
 
 	p := paths.New(tmpDir)
@@ -243,10 +245,12 @@ func TestBasicEndToEnd(t *testing.T) {
 
 	// Initialize network for ingress testing
 	networkManager := network.NewManager(p, &config.Config{
-		DataDir:    tmpDir,
-		BridgeName: "vmbr0",
-		SubnetCIDR: "10.100.0.0/16",
-		DNSServer:  "1.1.1.1",
+		DataDir: tmpDir,
+		Network: config.NetworkConfig{
+			BridgeName: "vmbr0",
+			SubnetCIDR: "10.100.0.0/16",
+			DNSServer:  "1.1.1.1",
+		},
 	}, nil)
 	t.Log("Initializing network...")
 	err = networkManager.Initialize(ctx, nil)
@@ -1021,10 +1025,12 @@ func TestEntrypointEnvVars(t *testing.T) {
 
 	// Initialize network (needed for loopback interface in guest)
 	networkManager := network.NewManager(p, &config.Config{
-		DataDir:    tmpDir,
-		BridgeName: "vmbr0",
-		SubnetCIDR: "10.100.0.0/16",
-		DNSServer:  "1.1.1.1",
+		DataDir: tmpDir,
+		Network: config.NetworkConfig{
+			BridgeName: "vmbr0",
+			SubnetCIDR: "10.100.0.0/16",
+			DNSServer:  "1.1.1.1",
+		},
 	}, nil)
 	t.Log("Initializing network...")
 	err = networkManager.Initialize(ctx, nil)
@@ -1139,14 +1145,15 @@ func TestStorageOperations(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	cfg := &config.Config{
-		DataDir:        tmpDir,
-		BridgeName:     "vmbr0",
-		SubnetCIDR:     "10.100.0.0/16",
-		DNSServer:      "1.1.1.1",
-		OversubCPU:     1.0,
-		OversubMemory:  1.0,
-		OversubDisk:    1.0,
-		OversubNetwork: 1.0,
+		DataDir: tmpDir,
+		Network: config.NetworkConfig{
+			BridgeName: "vmbr0",
+			SubnetCIDR: "10.100.0.0/16",
+			DNSServer:  "1.1.1.1",
+		},
+		Oversubscription: config.OversubscriptionConfig{
+			CPU: 1.0, Memory: 1.0, Disk: 1.0, Network: 1.0,
+		},
 	}
 
 	p := paths.New(tmpDir)

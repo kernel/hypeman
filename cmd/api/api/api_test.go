@@ -25,10 +25,12 @@ import (
 // newTestService creates an ApiService for testing with automatic cleanup
 func newTestService(t *testing.T) *ApiService {
 	cfg := &config.Config{
-		DataDir:    t.TempDir(),
-		BridgeName: "vmbr0",
-		SubnetCIDR: "10.100.0.0/16",
-		DNSServer:  "1.1.1.1",
+		DataDir: t.TempDir(),
+		Network: config.NetworkConfig{
+			BridgeName: "vmbr0",
+			SubnetCIDR: "10.100.0.0/16",
+			DNSServer:  "1.1.1.1",
+		},
 	}
 
 	p := paths.New(cfg.DataDir)

@@ -19,72 +19,77 @@ data_dir: /var/lib/hypeman
 # Server configuration
 # port: 8080
 
-# Network configuration
-# bridge_name: vmbr0
-# subnet_cidr: 10.100.0.0/16
-# subnet_gateway: ""          # empty = derived from subnet_cidr
-# uplink_interface: ""        # empty = auto-detect from default route
-# dns_server: 1.1.1.1
+# =============================================================================
+# Network Configuration
+# =============================================================================
+# network:
+#   bridge_name: vmbr0
+#   subnet_cidr: 10.100.0.0/16
+#   subnet_gateway: ""            # empty = derived from subnet_cidr
+#   uplink_interface: ""          # empty = auto-detect from default route
+#   dns_server: 1.1.1.1
 
+# =============================================================================
 # Logging
-# log_level: info             # debug, info, warn, error
+# =============================================================================
+# logging:
+#   level: info                   # debug, info, warn, error
 
 # =============================================================================
 # Caddy / Ingress Configuration
 # =============================================================================
-# caddy_listen_address: 0.0.0.0
-# caddy_admin_address: 127.0.0.1
-# caddy_admin_port: 0                # 0 = random (for dev); install script sets to 2019 for production
-# internal_dns_port: 0               # 0 = random (for dev); install script sets to 5353 for production
-# caddy_stop_on_shutdown: false       # Set to true if you want Caddy to stop when hypeman stops
+# caddy:
+#   listen_address: 0.0.0.0
+#   admin_address: 127.0.0.1
+#   admin_port: 0                 # 0 = random (for dev); install script sets to 2019 for production
+#   internal_dns_port: 0          # 0 = random (for dev); install script sets to 5353 for production
+#   stop_on_shutdown: false       # Set to true if you want Caddy to stop when hypeman stops
 
 # =============================================================================
 # TLS / ACME Configuration (for HTTPS ingresses)
 # =============================================================================
 # Required for TLS ingresses:
-# acme_email: admin@example.com
-# acme_dns_provider: cloudflare
-
-# IMPORTANT: You must specify which domains are allowed for TLS certificates.
-# This prevents typos and ensures you only request certificates for domains you control.
-# tls_allowed_domains: "*.example.com,api.other.com"
-# Supports:
-#   - Exact matches: api.example.com
-#   - Wildcard subdomains: *.example.com (matches foo.example.com, NOT foo.bar.example.com)
-# If not set, no TLS ingresses are allowed.
-
-# Optional ACME settings:
-# acme_ca: ""                         # empty = Let's Encrypt production
-#                                      # Use https://acme-staging-v02.api.letsencrypt.org/directory for testing
-
-# DNS propagation settings (applies to all providers):
-# dns_propagation_timeout: 2m          # Max time to wait for DNS propagation
-# dns_resolvers: "1.1.1.1,8.8.8.8"    # Custom DNS resolvers for propagation checking
-
-# Cloudflare DNS Provider (acme_dns_provider: cloudflare)
-# cloudflare_api_token: your-api-token
-# Token needs Zone:DNS:Edit permissions for the domains you want certificates for
+# acme:
+#   email: admin@example.com
+#   dns_provider: cloudflare
+#
+#   IMPORTANT: You must specify which domains are allowed for TLS certificates.
+#   This prevents typos and ensures you only request certificates for domains you control.
+#   allowed_domains: "*.example.com,api.other.com"
+#   Supports:
+#     - Exact matches: api.example.com
+#     - Wildcard subdomains: *.example.com (matches foo.example.com, NOT foo.bar.example.com)
+#   If not set, no TLS ingresses are allowed.
+#
+#   Optional ACME settings:
+#   ca: ""                        # empty = Let's Encrypt production
+#                                 # Use https://acme-staging-v02.api.letsencrypt.org/directory for testing
+#
+#   DNS propagation settings (applies to all providers):
+#   dns_propagation_timeout: 2m   # Max time to wait for DNS propagation
+#   dns_resolvers: "1.1.1.1,8.8.8.8"  # Custom DNS resolvers for propagation checking
+#
+#   Cloudflare DNS Provider (dns_provider: cloudflare)
+#   cloudflare_api_token: your-api-token
+#   Token needs Zone:DNS:Edit permissions for the domains you want certificates for
 
 # =============================================================================
 # OpenTelemetry Configuration
 # =============================================================================
-# otel_enabled: false
-# otel_endpoint: 127.0.0.1:4317
-# otel_service_name: hypeman
-# otel_service_instance_id: ""         # default: hostname
-# otel_insecure: true
-# env: dev                             # deployment environment
+# otel:
+#   enabled: false
+#   endpoint: 127.0.0.1:4317
+#   service_name: hypeman
+#   service_instance_id: ""       # default: hostname
+#   insecure: true
+# env: dev                        # deployment environment
 
 # =============================================================================
 # Resource Limits
 # =============================================================================
-# Per-instance limits
-# max_vcpus_per_instance: 16
-# max_memory_per_instance: 32GB
-
-# Aggregate limits (0 or empty = unlimited)
-# max_total_volume_storage: ""
-
-# Other limits
-# max_concurrent_builds: 1
-# max_overlay_size: 100GB
+# limits:
+#   max_vcpus_per_instance: 16
+#   max_memory_per_instance: 32GB
+#   max_total_volume_storage: ""  # 0 or empty = unlimited
+#   max_concurrent_builds: 1
+#   max_overlay_size: 100GB

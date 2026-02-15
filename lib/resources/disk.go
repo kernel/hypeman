@@ -20,14 +20,14 @@ type DiskResource struct {
 }
 
 // NewDiskResource discovers disk capacity for the data directory.
-// If cfg.DiskLimit is set, uses that as capacity; otherwise auto-detects via statfs.
+// If cfg.Capacity.Disk is set, uses that as capacity; otherwise auto-detects via statfs.
 func NewDiskResource(cfg *config.Config, p *paths.Paths, instLister InstanceLister, imgLister ImageLister, volLister VolumeLister) (*DiskResource, error) {
 	var capacity int64
 
-	if cfg.DiskLimit != "" {
+	if cfg.Capacity.Disk != "" {
 		// Parse configured limit
 		var ds datasize.ByteSize
-		if err := ds.UnmarshalText([]byte(cfg.DiskLimit)); err != nil {
+		if err := ds.UnmarshalText([]byte(cfg.Capacity.Disk)); err != nil {
 			return nil, err
 		}
 		capacity = int64(ds.Bytes())

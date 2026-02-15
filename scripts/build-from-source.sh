@@ -83,7 +83,7 @@ fi
 # Copy config example files for config template
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 if [ "$OS" = "darwin" ]; then
-    cp "config.darwin.example.yaml" "${OUTPUT_DIR}/config.darwin.example.yaml"
+    cp "config.example.darwin.yaml" "${OUTPUT_DIR}/config.example.darwin.yaml"
 else
     cp "config.example.yaml" "${OUTPUT_DIR}/config.example.yaml"
 fi

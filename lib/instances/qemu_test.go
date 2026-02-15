@@ -35,10 +35,12 @@ func setupTestManagerForQEMU(t *testing.T) (*manager, string) {
 	tmpDir := t.TempDir()
 
 	cfg := &config.Config{
-		DataDir:    tmpDir,
-		BridgeName: "vmbr0",
-		SubnetCIDR: "10.100.0.0/16",
-		DNSServer:  "1.1.1.1",
+		DataDir: tmpDir,
+		Network: config.NetworkConfig{
+			BridgeName: "vmbr0",
+			SubnetCIDR: "10.100.0.0/16",
+			DNSServer:  "1.1.1.1",
+		},
 	}
 
 	p := paths.New(tmpDir)
@@ -236,10 +238,12 @@ func TestQEMUBasicEndToEnd(t *testing.T) {
 
 	// Initialize network
 	networkManager := network.NewManager(p, &config.Config{
-		DataDir:    tmpDir,
-		BridgeName: "vmbr0",
-		SubnetCIDR: "10.100.0.0/16",
-		DNSServer:  "1.1.1.1",
+		DataDir: tmpDir,
+		Network: config.NetworkConfig{
+			BridgeName: "vmbr0",
+			SubnetCIDR: "10.100.0.0/16",
+			DNSServer:  "1.1.1.1",
+		},
 	}, nil)
 	t.Log("Initializing network...")
 	err = networkManager.Initialize(ctx, nil)
@@ -624,10 +628,12 @@ func TestQEMUEntrypointEnvVars(t *testing.T) {
 
 	// Initialize network (needed for loopback interface in guest)
 	networkManager := network.NewManager(p, &config.Config{
-		DataDir:    tmpDir,
-		BridgeName: "vmbr0",
-		SubnetCIDR: "10.100.0.0/16",
-		DNSServer:  "1.1.1.1",
+		DataDir: tmpDir,
+		Network: config.NetworkConfig{
+			BridgeName: "vmbr0",
+			SubnetCIDR: "10.100.0.0/16",
+			DNSServer:  "1.1.1.1",
+		},
 	}, nil)
 	t.Log("Initializing network...")
 	err = networkManager.Initialize(ctx, nil)

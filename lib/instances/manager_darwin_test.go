@@ -37,10 +37,12 @@ func setupVZTestManager(t *testing.T) (*manager, string) {
 	t.Cleanup(func() { os.RemoveAll(tmpDir) })
 
 	cfg := &config.Config{
-		DataDir:    tmpDir,
-		BridgeName: "vmbr0",
-		SubnetCIDR: "10.100.0.0/16",
-		DNSServer:  "1.1.1.1",
+		DataDir: tmpDir,
+		Network: config.NetworkConfig{
+			BridgeName: "vmbr0",
+			SubnetCIDR: "10.100.0.0/16",
+			DNSServer:  "1.1.1.1",
+		},
 	}
 
 	p := paths.New(tmpDir)

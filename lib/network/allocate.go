@@ -81,7 +81,7 @@ func (m *manager) CreateAllocation(ctx context.Context, req AllocateRequest) (*N
 		MAC:       mac,
 		Gateway:   network.Gateway,
 		Netmask:   netmask,
-		DNS:       m.config.DNSServer,
+		DNS:       m.config.Network.DNSServer,
 		TAPDevice: tap,
 	}, nil
 }

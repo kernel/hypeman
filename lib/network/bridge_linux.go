@@ -52,7 +52,7 @@ func (m *manager) checkSubnetConflicts(ctx context.Context, subnet string) error
 			}
 
 			// Skip if this is our own bridge (already configured from previous run)
-			if ifaceName == m.config.BridgeName {
+			if ifaceName == m.config.Network.BridgeName {
 				continue
 			}
 
@@ -185,8 +185,8 @@ const (
 // Uses explicit config if set, otherwise auto-detects from default route.
 func (m *manager) getUplinkInterface() (string, error) {
 	// Explicit config takes precedence
-	if m.config.UplinkInterface != "" {
-		return m.config.UplinkInterface, nil
+	if m.config.Network.UplinkInterface != "" {
+		return m.config.Network.UplinkInterface, nil
 	}
 
 	// Auto-detect from default route
@@ -722,7 +722,7 @@ func formatTcRate(bytesPerSec int64) string {
 // deleteTAPDevice removes TAP device and its associated HTB class on the bridge.
 func (m *manager) deleteTAPDevice(tapName string) error {
 	// Remove HTB class from bridge before deleting TAP
-	m.removeVMClass(m.config.BridgeName, tapName)
+	m.removeVMClass(m.config.Network.BridgeName, tapName)
 
 	link, err := netlink.LinkByName(tapName)
 	if err != nil {
@@ -832,7 +832,7 @@ func (m *manager) CleanupOrphanedTAPs(ctx context.Context, runningInstanceIDs []
 // Returns the number of classes deleted.
 func (m *manager) CleanupOrphanedClasses(ctx context.Context) int {
 	log := logger.FromContext(ctx)
-	bridgeName := m.config.BridgeName
+	bridgeName := m.config.Network.BridgeName
 
 	// List all HTB classes on the bridge
 	cmd := exec.Command("tc", "class", "show", "dev", bridgeName)

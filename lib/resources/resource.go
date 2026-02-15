@@ -228,15 +228,15 @@ func (m *Manager) GetOversubRatio(rt ResourceType) float64 {
 	var ratio float64
 	switch rt {
 	case ResourceCPU:
-		ratio = m.cfg.OversubCPU
+		ratio = m.cfg.Oversubscription.CPU
 	case ResourceMemory:
-		ratio = m.cfg.OversubMemory
+		ratio = m.cfg.Oversubscription.Memory
 	case ResourceDisk:
-		ratio = m.cfg.OversubDisk
+		ratio = m.cfg.Oversubscription.Disk
 	case ResourceNetwork:
-		ratio = m.cfg.OversubNetwork
+		ratio = m.cfg.Oversubscription.Network
 	case ResourceDiskIO:
-		ratio = m.cfg.OversubDiskIO
+		ratio = m.cfg.Oversubscription.DiskIO
 	default:
 		return 1.0
 	}
@@ -282,7 +282,7 @@ func (m *Manager) GetStatus(ctx context.Context, rt ResourceType) (*ResourceStat
 
 	// Add source info for network
 	if rt == ResourceNetwork {
-		if m.cfg.NetworkLimit != "" {
+		if m.cfg.Capacity.Network != "" {
 			status.Source = SourceConfigured
 		} else {
 			status.Source = SourceDetected
@@ -483,11 +483,11 @@ func (m *Manager) NetworkCapacity() int64 {
 // DiskIOCapacity returns the disk I/O capacity in bytes/sec.
 // Uses configured DISK_IO_LIMIT if set, otherwise defaults to 1 GB/s.
 func (m *Manager) DiskIOCapacity() int64 {
-	if m.cfg.DiskIOLimit == "" {
+	if m.cfg.Capacity.DiskIO == "" {
 		return 1 * 1000 * 1000 * 1000 // 1 GB/s default
 	}
 	// Parse the limit using the same format as network (e.g., "500MB/s")
-	capacity, err := parseDiskIOLimit(m.cfg.DiskIOLimit)
+	capacity, err := parseDiskIOLimit(m.cfg.Capacity.DiskIO)
 	if err != nil {
 		return 1 * 1000 * 1000 * 1000 // 1 GB/s fallback
 	}
@@ -534,7 +534,7 @@ func (m *Manager) DefaultDiskIOBandwidth(vcpus int) (ioBps, burstBps int64) {
 		return 0, 0
 	}
 
-	ratio := m.cfg.OversubDiskIO
+	ratio := m.cfg.Oversubscription.DiskIO
 	if ratio <= 0 {
 		ratio = 2.0 // Default 2x oversubscription for disk I/O
 	}
@@ -579,7 +579,7 @@ func (m *Manager) MaxImageStorageBytes() int64 {
 	}
 
 	capacity := diskRes.Capacity()
-	fraction := m.cfg.MaxImageStorage
+	fraction := m.cfg.Limits.MaxImageStorage
 	if fraction <= 0 {
 		fraction = 0.2 // Default 20%
 	}
@@ -617,7 +617,7 @@ func (m *Manager) HasSufficientImageStorage(ctx context.Context) error {
 	max := m.MaxImageStorageBytes()
 	if max > 0 && current >= max {
 		return fmt.Errorf("image storage limit exceeded: %d bytes used, limit is %d bytes (%.0f%% of disk)",
-			current, max, m.cfg.MaxImageStorage*100)
+			current, max, m.cfg.Limits.MaxImageStorage*100)
 	}
 
 	return nil

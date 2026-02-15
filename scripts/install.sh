@@ -248,10 +248,10 @@ if [ -n "$BINARY_DIR" ]; then
     info "Copying binaries from ${BINARY_DIR}..."
 
     if [ "$OS" = "darwin" ]; then
-        for f in "${BINARY_NAME}" "hypeman-token" "config.darwin.example.yaml"; do
+        for f in "${BINARY_NAME}" "hypeman-token" "config.example.darwin.yaml"; do
             [ -f "${BINARY_DIR}/${f}" ] || error "File ${f} not found in ${BINARY_DIR}"
         done
-        cp "${BINARY_DIR}/config.darwin.example.yaml" "${TMP_DIR}/config.darwin.example.yaml"
+        cp "${BINARY_DIR}/config.example.darwin.yaml" "${TMP_DIR}/config.example.darwin.yaml"
     else
         for f in "${BINARY_NAME}" "hypeman-token" "config.example.yaml"; do
             [ -f "${BINARY_DIR}/${f}" ] || error "File ${f} not found in ${BINARY_DIR}"
@@ -295,7 +295,7 @@ elif [ -n "$BRANCH" ]; then
             cat "$BUILD_LOG"
             error "Signing failed"
         fi
-        cp "config.darwin.example.yaml" "${TMP_DIR}/config.darwin.example.yaml"
+        cp "config.example.darwin.yaml" "${TMP_DIR}/config.example.darwin.yaml"
     else
         cp "config.example.yaml" "${TMP_DIR}/config.example.yaml"
     fi
@@ -426,33 +426,40 @@ if [ ! -f "$CONFIG_FILE" ]; then
 
     if [ "$OS" = "darwin" ]; then
         # macOS config - use template if available, otherwise generate
-        if [ -f "${TMP_DIR}/config.darwin.example.yaml" ]; then
+        if [ -f "${TMP_DIR}/config.example.darwin.yaml" ]; then
             info "Using macOS config template from source..."
-            cp "${TMP_DIR}/config.darwin.example.yaml" "${TMP_DIR}/config.yaml"
+            cp "${TMP_DIR}/config.example.darwin.yaml" "${TMP_DIR}/config.yaml"
         else
             info "Downloading macOS config template..."
-            CONFIG_URL="https://raw.githubusercontent.com/${REPO}/${VERSION}/config.darwin.example.yaml"
+            CONFIG_URL="https://raw.githubusercontent.com/${REPO}/${VERSION}/config.example.darwin.yaml"
             if ! curl -fsSL "$CONFIG_URL" -o "${TMP_DIR}/config.yaml"; then
                 warn "Failed to download config template, generating minimal config..."
                 cat > "${TMP_DIR}/config.yaml" << YAMLEOF
 jwt_secret: "${JWT_SECRET}"
 data_dir: "${DATA_DIR}"
 port: "8080"
-log_level: debug
-default_hypervisor: vz
-dns_server: 8.8.8.8
-caddy_listen_address: 0.0.0.0
-caddy_admin_address: 127.0.0.1
-caddy_admin_port: 2019
-internal_dns_port: 5354
-caddy_stop_on_shutdown: false
-registry_url: 192.168.64.1:8080
-registry_insecure: true
-builder_image: hypeman/builder:latest
-max_concurrent_source_builds: 2
-build_timeout: 600
-max_vcpus_per_instance: 4
-max_memory_per_instance: 8GB
+hypervisor:
+  default: vz
+network:
+  dns_server: 8.8.8.8
+logging:
+  level: debug
+caddy:
+  listen_address: 0.0.0.0
+  admin_address: 127.0.0.1
+  admin_port: 2019
+  internal_dns_port: 5354
+  stop_on_shutdown: false
+registry:
+  url: 192.168.64.1:8080
+  insecure: true
+build:
+  builder_image: hypeman/builder:latest
+  max_concurrent_source_builds: 2
+  timeout: 600
+limits:
+  max_vcpus_per_instance: 4
+  max_memory_per_instance: 8GB
 YAMLEOF
             fi
         fi
@@ -478,12 +485,19 @@ YAMLEOF
         fi
         if [ -n "$DOCKER_SOCKET" ]; then
             info "Detected Docker socket: ${DOCKER_SOCKET}"
-            if grep -q '^docker_socket:' "${TMP_DIR}/config.yaml"; then
-                sed -i '' "s|^docker_socket:.*|docker_socket: \"${DOCKER_SOCKET}\"|" "${TMP_DIR}/config.yaml"
-            elif grep -q '^# docker_socket:' "${TMP_DIR}/config.yaml"; then
-                sed -i '' "s|^# docker_socket:.*|docker_socket: \"${DOCKER_SOCKET}\"|" "${TMP_DIR}/config.yaml"
+            # Docker socket is nested under build: in the config
+            if grep -q '^build:' "${TMP_DIR}/config.yaml"; then
+                # build: section exists, check for docker_socket within it
+                if grep -q '^  docker_socket:' "${TMP_DIR}/config.yaml"; then
+                    sed -i '' "s|^  docker_socket:.*|  docker_socket: \"${DOCKER_SOCKET}\"|" "${TMP_DIR}/config.yaml"
+                else
+                    # Append docker_socket after the build: block
+                    sed -i '' "/^build:/a\\
+  docker_socket: \"${DOCKER_SOCKET}\"" "${TMP_DIR}/config.yaml"
+                fi
             else
-                echo "docker_socket: \"${DOCKER_SOCKET}\"" >> "${TMP_DIR}/config.yaml"
+                # No build: section, add one
+                printf "\nbuild:\n  docker_socket: \"%s\"\n" "${DOCKER_SOCKET}" >> "${TMP_DIR}/config.yaml"
             fi
         fi
 
@@ -502,8 +516,9 @@ YAMLEOF
                 cat > "${TMP_DIR}/config.yaml" << YAMLEOF
 jwt_secret: "${JWT_SECRET}"
 data_dir: /var/lib/hypeman
-caddy_admin_port: 2019
-internal_dns_port: 5353
+caddy:
+  admin_port: 2019
+  internal_dns_port: 5353
 YAMLEOF
             fi
         fi
@@ -513,12 +528,12 @@ YAMLEOF
             sed -i "s|^jwt_secret:.*|jwt_secret: \"${JWT_SECRET}\"|" "${TMP_DIR}/config.yaml"
         fi
 
-        # Set fixed ports for production
-        if grep -q '^# caddy_admin_port:' "${TMP_DIR}/config.yaml"; then
-            sed -i "s|^# caddy_admin_port:.*|caddy_admin_port: 2019|" "${TMP_DIR}/config.yaml"
-        fi
-        if grep -q '^# internal_dns_port:' "${TMP_DIR}/config.yaml"; then
-            sed -i "s|^# internal_dns_port:.*|internal_dns_port: 5353|" "${TMP_DIR}/config.yaml"
+        # Set fixed ports for production (nested under caddy:)
+        # Uncomment the caddy block and set ports
+        if grep -q '^# caddy:' "${TMP_DIR}/config.yaml"; then
+            sed -i "s|^# caddy:|caddy:|" "${TMP_DIR}/config.yaml"
+            sed -i "s|^#   admin_port:.*|  admin_port: 2019|" "${TMP_DIR}/config.yaml"
+            sed -i "s|^#   internal_dns_port:.*|  internal_dns_port: 5353|" "${TMP_DIR}/config.yaml"
         fi
 
         info "Installing config file at ${CONFIG_FILE}..."

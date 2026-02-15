@@ -74,7 +74,7 @@ func ProvidePaths(cfg *config.Config) *paths.Paths {
 // ProvideImageManager provides the image manager
 func ProvideImageManager(p *paths.Paths, cfg *config.Config) (images.Manager, error) {
 	meter := otel.GetMeterProvider().Meter("hypeman")
-	return images.NewManager(p, cfg.MaxConcurrentBuilds, meter)
+	return images.NewManager(p, cfg.Limits.MaxConcurrentBuilds, meter)
 }
 
 // ProvideSystemManager provides the system manager
@@ -97,16 +97,16 @@ func ProvideDeviceManager(p *paths.Paths) devices.Manager {
 func ProvideInstanceManager(p *paths.Paths, cfg *config.Config, imageManager images.Manager, systemManager system.Manager, networkManager network.Manager, deviceManager devices.Manager, volumeManager volumes.Manager) (instances.Manager, error) {
 	// Parse max overlay size from config
 	var maxOverlaySize datasize.ByteSize
-	if err := maxOverlaySize.UnmarshalText([]byte(cfg.MaxOverlaySize)); err != nil {
-		return nil, fmt.Errorf("failed to parse MAX_OVERLAY_SIZE '%s': %w (expected format like '100GB', '50G', '10GiB')", cfg.MaxOverlaySize, err)
+	if err := maxOverlaySize.UnmarshalText([]byte(cfg.Limits.MaxOverlaySize)); err != nil {
+		return nil, fmt.Errorf("failed to parse MAX_OVERLAY_SIZE '%s': %w (expected format like '100GB', '50G', '10GiB')", cfg.Limits.MaxOverlaySize, err)
 	}
 
 	// Parse max memory per instance (empty or "0" means unlimited)
 	var maxMemoryPerInstance int64
-	if cfg.MaxMemoryPerInstance != "" && cfg.MaxMemoryPerInstance != "0" {
+	if cfg.Limits.MaxMemoryPerInstance != "" && cfg.Limits.MaxMemoryPerInstance != "0" {
 		var memSize datasize.ByteSize
-		if err := memSize.UnmarshalText([]byte(cfg.MaxMemoryPerInstance)); err != nil {
-			return nil, fmt.Errorf("failed to parse MAX_MEMORY_PER_INSTANCE '%s': %w", cfg.MaxMemoryPerInstance, err)
+		if err := memSize.UnmarshalText([]byte(cfg.Limits.MaxMemoryPerInstance)); err != nil {
+			return nil, fmt.Errorf("failed to parse MAX_MEMORY_PER_INSTANCE '%s': %w", cfg.Limits.MaxMemoryPerInstance, err)
 		}
 		maxMemoryPerInstance = int64(memSize)
 	}
@@ -115,13 +115,13 @@ func ProvideInstanceManager(p *paths.Paths, cfg *config.Config, imageManager ima
 	// in the ResourceManager, wired up via SetResourceValidator after initialization.
 	limits := instances.ResourceLimits{
 		MaxOverlaySize:       int64(maxOverlaySize),
-		MaxVcpusPerInstance:  cfg.MaxVcpusPerInstance,
+		MaxVcpusPerInstance:  cfg.Limits.MaxVcpusPerInstance,
 		MaxMemoryPerInstance: maxMemoryPerInstance,
 	}
 
 	meter := otel.GetMeterProvider().Meter("hypeman")
 	tracer := otel.GetTracerProvider().Tracer("hypeman")
-	defaultHypervisor := hypervisor.Type(cfg.DefaultHypervisor)
+	defaultHypervisor := hypervisor.Type(cfg.Hypervisor.Default)
 	return instances.NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, defaultHypervisor, meter, tracer), nil
 }
 
@@ -129,10 +129,10 @@ func ProvideInstanceManager(p *paths.Paths, cfg *config.Config, imageManager ima
 func ProvideVolumeManager(p *paths.Paths, cfg *config.Config) (volumes.Manager, error) {
 	// Parse max total volume storage (empty or "0" means unlimited)
 	var maxTotalVolumeStorage int64
-	if cfg.MaxTotalVolumeStorage != "" && cfg.MaxTotalVolumeStorage != "0" {
+	if cfg.Limits.MaxTotalVolumeStorage != "" && cfg.Limits.MaxTotalVolumeStorage != "0" {
 		var storageSize datasize.ByteSize
-		if err := storageSize.UnmarshalText([]byte(cfg.MaxTotalVolumeStorage)); err != nil {
-			return nil, fmt.Errorf("failed to parse MAX_TOTAL_VOLUME_STORAGE '%s': %w", cfg.MaxTotalVolumeStorage, err)
+		if err := storageSize.UnmarshalText([]byte(cfg.Limits.MaxTotalVolumeStorage)); err != nil {
+			return nil, fmt.Errorf("failed to parse MAX_TOTAL_VOLUME_STORAGE '%s': %w", cfg.Limits.MaxTotalVolumeStorage, err)
 		}
 		maxTotalVolumeStorage = int64(storageSize)
 	}
@@ -183,20 +183,20 @@ func ProvideVMMetricsManager(instanceManager instances.Manager) (*vm_metrics.Man
 // ProvideIngressManager provides the ingress manager
 func ProvideIngressManager(p *paths.Paths, cfg *config.Config, instanceManager instances.Manager) (ingress.Manager, error) {
 	// Parse DNS provider - fail if invalid
-	dnsProvider, err := ingress.ParseDNSProvider(cfg.AcmeDnsProvider)
+	dnsProvider, err := ingress.ParseDNSProvider(cfg.ACME.DNSProvider)
 	if err != nil {
 		return nil, fmt.Errorf("invalid ACME_DNS_PROVIDER: %w", err)
 	}
 
 	// Validate DNS propagation timeout if set (must be a valid Go duration string)
-	if cfg.DnsPropagationTimeout != "" {
-		if _, err := time.ParseDuration(cfg.DnsPropagationTimeout); err != nil {
-			return nil, fmt.Errorf("invalid DNS_PROPAGATION_TIMEOUT %q: %w (expected format like '2m', '120s', '1h')", cfg.DnsPropagationTimeout, err)
+	if cfg.ACME.DNSPropagationTimeout != "" {
+		if _, err := time.ParseDuration(cfg.ACME.DNSPropagationTimeout); err != nil {
+			return nil, fmt.Errorf("invalid DNS_PROPAGATION_TIMEOUT %q: %w (expected format like '2m', '120s', '1h')", cfg.ACME.DNSPropagationTimeout, err)
 		}
 	}
 
 	// Use config value for internal DNS port, fall back to default (0 = random) if not set
-	internalDNSPort := cfg.InternalDNSPort
+	internalDNSPort := cfg.Caddy.InternalDNSPort
 	if internalDNSPort == 0 {
 		internalDNSPort = ingress.DefaultDNSPort
 	}
@@ -210,25 +210,25 @@ func ProvideIngressManager(p *paths.Paths, cfg *config.Config, instanceManager i
 	}
 
 	ingressConfig := ingress.Config{
-		ListenAddress:  cfg.CaddyListenAddress,
-		AdminAddress:   cfg.CaddyAdminAddress,
-		AdminPort:      cfg.CaddyAdminPort,
+		ListenAddress:  cfg.Caddy.ListenAddress,
+		AdminAddress:   cfg.Caddy.AdminAddress,
+		AdminPort:      cfg.Caddy.AdminPort,
 		DNSPort:        internalDNSPort,
-		StopOnShutdown: cfg.CaddyStopOnShutdown,
+		StopOnShutdown: cfg.Caddy.StopOnShutdown,
 		ACME: ingress.ACMEConfig{
-			Email:                 cfg.AcmeEmail,
+			Email:                 cfg.ACME.Email,
 			DNSProvider:           dnsProvider,
-			CA:                    cfg.AcmeCA,
-			DNSPropagationTimeout: cfg.DnsPropagationTimeout,
-			DNSResolvers:          cfg.DnsResolvers,
-			AllowedDomains:        cfg.TlsAllowedDomains,
-			CloudflareAPIToken:    cfg.CloudflareApiToken,
+			CA:                    cfg.ACME.CA,
+			DNSPropagationTimeout: cfg.ACME.DNSPropagationTimeout,
+			DNSResolvers:          cfg.ACME.DNSResolvers,
+			AllowedDomains:        cfg.ACME.AllowedDomains,
+			CloudflareAPIToken:    cfg.ACME.CloudflareAPIToken,
 		},
 		APIIngress: ingress.APIIngressConfig{
-			Hostname:     cfg.ApiHostname,
+			Hostname:     cfg.API.Hostname,
 			Port:         apiPort,
-			TLS:          cfg.ApiTLS,
-			RedirectHTTP: cfg.ApiRedirectHTTP,
+			TLS:          cfg.API.TLS,
+			RedirectHTTP: cfg.API.RedirectHTTP,
 		},
 	}
 
@@ -248,43 +248,43 @@ func ProvideIngressManager(p *paths.Paths, cfg *config.Config, instanceManager i
 func ProvideBuildManager(p *paths.Paths, cfg *config.Config, instanceManager instances.Manager, volumeManager volumes.Manager, imageManager images.Manager, log *slog.Logger) (builds.Manager, error) {
 	// Read CA cert file if specified
 	var registryCACert string
-	if cfg.RegistryCACertFile != "" {
-		certData, err := os.ReadFile(cfg.RegistryCACertFile)
+	if cfg.Registry.CACertFile != "" {
+		certData, err := os.ReadFile(cfg.Registry.CACertFile)
 		if err != nil {
 			return nil, fmt.Errorf("read registry CA cert file: %w", err)
 		}
 		registryCACert = string(certData)
-		log.Info("registry CA certificate loaded", "file", cfg.RegistryCACertFile)
+		log.Info("registry CA certificate loaded", "file", cfg.Registry.CACertFile)
 	}
 
 	// Rewrite localhost in RegistryURL to the subnet gateway IP so builder VMs
 	// (which run in their own network namespace) can reach the host registry.
 	// Inside a VM, "localhost" refers to the VM itself, not the host.
-	registryURL := cfg.RegistryURL
+	registryURL := cfg.Registry.URL
 	if registryURL == "" {
 		registryURL = "localhost:8080"
 	}
 	if strings.HasPrefix(registryURL, "localhost:") || strings.HasPrefix(registryURL, "127.0.0.1:") {
-		gateway := cfg.SubnetGateway
+		gateway := cfg.Network.SubnetGateway
 		if gateway == "" {
 			var err error
-			gateway, err = network.DeriveGateway(cfg.SubnetCIDR)
+			gateway, err = network.DeriveGateway(cfg.Network.SubnetCIDR)
 			if err != nil {
 				return nil, fmt.Errorf("derive gateway for registry URL rewrite: %w", err)
 			}
 		}
 		port := strings.SplitN(registryURL, ":", 2)[1]
 		registryURL = gateway + ":" + port
-		log.Info("rewrote registry URL for builder VMs", "original", cfg.RegistryURL, "rewritten", registryURL)
+		log.Info("rewrote registry URL for builder VMs", "original", cfg.Registry.URL, "rewritten", registryURL)
 	}
 
 	buildConfig := builds.Config{
-		MaxConcurrentBuilds: cfg.MaxConcurrentSourceBuilds,
-		BuilderImage:        cfg.BuilderImage,
+		MaxConcurrentBuilds: cfg.Build.MaxConcurrentSourceBuilds,
+		BuilderImage:        cfg.Build.BuilderImage,
 		RegistryURL:         registryURL,
-		RegistryInsecure:    cfg.RegistryInsecure,
+		RegistryInsecure:    cfg.Registry.Insecure,
 		RegistryCACert:      registryCACert,
-		DefaultTimeout:      cfg.BuildTimeout,
+		DefaultTimeout:      cfg.Build.Timeout,
 		RegistrySecret:      cfg.JwtSecret, // Use same secret for registry tokens
 	}
 
@@ -301,9 +301,9 @@ func ProvideBuildManager(p *paths.Paths, cfg *config.Config, instanceManager ins
 
 	// Configure secret provider (use NoOpSecretProvider as fallback to avoid nil panics)
 	var secretProvider builds.SecretProvider
-	if cfg.BuildSecretsDir != "" {
-		secretProvider = builds.NewFileSecretProvider(cfg.BuildSecretsDir)
-		log.Info("build secrets enabled", "dir", cfg.BuildSecretsDir)
+	if cfg.Build.SecretsDir != "" {
+		secretProvider = builds.NewFileSecretProvider(cfg.Build.SecretsDir)
+		log.Info("build secrets enabled", "dir", cfg.Build.SecretsDir)
 	} else {
 		secretProvider = &builds.NoOpSecretProvider{}
 	}

@@ -151,11 +151,10 @@ func createTestManager(t *testing.T, limits ResourceLimits) *manager {
 	t.Helper()
 	tmpDir := t.TempDir()
 	cfg := &config.Config{
-		DataDir:        tmpDir,
-		OversubCPU:     1.0,
-		OversubMemory:  1.0,
-		OversubDisk:    1.0,
-		OversubNetwork: 1.0,
+		DataDir: tmpDir,
+		Oversubscription: config.OversubscriptionConfig{
+			CPU: 1.0, Memory: 1.0, Disk: 1.0, Network: 1.0,
+		},
 	}
 	p := paths.New(cfg.DataDir)
 

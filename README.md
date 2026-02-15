@@ -82,11 +82,11 @@ Hypeman uses YAML config files with environment variable overrides.
 
 | Component | Config File | Env Override |
 |-----------|-------------|--------------|
-| Server | `/etc/hypeman/config.yaml` (Linux) or `~/.config/hypeman/config.yaml` (macOS) | `CONFIG_PATH`, plus individual env vars like `PORT`, `JWT_SECRET`, etc. |
+| Server | `/etc/hypeman/config.yaml` (Linux) or `~/.config/hypeman/config.yaml` (macOS) | `CONFIG_PATH`, plus `__`-delimited env vars (e.g. `PORT`, `CADDY__LISTEN_ADDRESS`) |
 | CLI | `~/.config/hypeman/cli.yaml` | `HYPEMAN_BASE_URL`, `HYPEMAN_API_KEY` |
 | Token tool | Reads server config automatically | `JWT_SECRET` |
 
-See [`config.example.yaml`](config.example.yaml) (Linux) and [`config.darwin.example.yaml`](config.darwin.example.yaml) (macOS) for all available server options.
+See [`config.example.yaml`](config.example.yaml) (Linux) and [`config.example.darwin.yaml`](config.example.darwin.yaml) (macOS) for all available server options.
 
 ## Usage
 

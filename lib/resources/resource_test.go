@@ -45,11 +45,10 @@ func (m *mockVolumeLister) TotalVolumeBytes(ctx context.Context) (int64, error) 
 
 func TestNewManager(t *testing.T) {
 	cfg := &config.Config{
-		DataDir:        t.TempDir(),
-		OversubCPU:     2.0,
-		OversubMemory:  1.5,
-		OversubDisk:    1.0,
-		OversubNetwork: 1.0,
+		DataDir: t.TempDir(),
+		Oversubscription: config.OversubscriptionConfig{
+			CPU: 2.0, Memory: 1.5, Disk: 1.0, Network: 1.0,
+		},
 	}
 	p := paths.New(cfg.DataDir)
 
@@ -59,11 +58,10 @@ func TestNewManager(t *testing.T) {
 
 func TestGetOversubRatio(t *testing.T) {
 	cfg := &config.Config{
-		DataDir:        t.TempDir(),
-		OversubCPU:     2.0,
-		OversubMemory:  1.5,
-		OversubDisk:    1.0,
-		OversubNetwork: 3.0,
+		DataDir: t.TempDir(),
+		Oversubscription: config.OversubscriptionConfig{
+			CPU: 2.0, Memory: 1.5, Disk: 1.0, Network: 3.0,
+		},
 	}
 	p := paths.New(cfg.DataDir)
 
@@ -78,12 +76,11 @@ func TestGetOversubRatio(t *testing.T) {
 
 func TestDefaultNetworkBandwidth(t *testing.T) {
 	cfg := &config.Config{
-		DataDir:        t.TempDir(),
-		OversubCPU:     1.0,
-		OversubMemory:  1.0,
-		OversubDisk:    1.0,
-		OversubNetwork: 1.0,
-		NetworkLimit:   "10Gbps", // 1.25 GB/s = 1,250,000,000 bytes/sec
+		DataDir: t.TempDir(),
+		Oversubscription: config.OversubscriptionConfig{
+			CPU: 1.0, Memory: 1.0, Disk: 1.0, Network: 1.0,
+		},
+		Capacity: config.CapacityConfig{Network: "10Gbps"}, // 1.25 GB/s = 1,250,000,000 bytes/sec
 	}
 	p := paths.New(cfg.DataDir)
 
@@ -111,11 +108,10 @@ func TestDefaultNetworkBandwidth(t *testing.T) {
 
 func TestDefaultNetworkBandwidth_ZeroCPU(t *testing.T) {
 	cfg := &config.Config{
-		DataDir:        t.TempDir(),
-		OversubCPU:     1.0,
-		OversubMemory:  1.0,
-		OversubDisk:    1.0,
-		OversubNetwork: 1.0,
+		DataDir: t.TempDir(),
+		Oversubscription: config.OversubscriptionConfig{
+			CPU: 1.0, Memory: 1.0, Disk: 1.0, Network: 1.0,
+		},
 	}
 	p := paths.New(cfg.DataDir)
 
@@ -224,11 +220,10 @@ func TestIsActiveState(t *testing.T) {
 
 func TestHasSufficientDiskForPull(t *testing.T) {
 	cfg := &config.Config{
-		DataDir:        t.TempDir(),
-		OversubCPU:     1.0,
-		OversubMemory:  1.0,
-		OversubDisk:    1.0,
-		OversubNetwork: 1.0,
+		DataDir: t.TempDir(),
+		Oversubscription: config.OversubscriptionConfig{
+			CPU: 1.0, Memory: 1.0, Disk: 1.0, Network: 1.0,
+		},
 	}
 	p := paths.New(cfg.DataDir)
 
@@ -252,11 +247,10 @@ func TestHasSufficientDiskForPull(t *testing.T) {
 // This catches a bug where CPU/Memory SetInstanceLister was not being called.
 func TestInitialize_SetsInstanceListersForAllResources(t *testing.T) {
 	cfg := &config.Config{
-		DataDir:        t.TempDir(),
-		OversubCPU:     1.0,
-		OversubMemory:  1.0,
-		OversubDisk:    1.0,
-		OversubNetwork: 1.0,
+		DataDir: t.TempDir(),
+		Oversubscription: config.OversubscriptionConfig{
+			CPU: 1.0, Memory: 1.0, Disk: 1.0, Network: 1.0,
+		},
 	}
 	p := paths.New(cfg.DataDir)
 
@@ -301,12 +295,11 @@ func TestInitialize_SetsInstanceListersForAllResources(t *testing.T) {
 // returns correct allocations for all resource types.
 func TestGetFullStatus_ReturnsAllResourceAllocations(t *testing.T) {
 	cfg := &config.Config{
-		DataDir:        t.TempDir(),
-		OversubCPU:     2.0,
-		OversubMemory:  1.5,
-		OversubDisk:    1.0,
-		OversubNetwork: 1.0,
-		NetworkLimit:   "10Gbps",
+		DataDir: t.TempDir(),
+		Oversubscription: config.OversubscriptionConfig{
+			CPU: 2.0, Memory: 1.5, Disk: 1.0, Network: 1.0,
+		},
+		Capacity: config.CapacityConfig{Network: "10Gbps"},
 	}
 	p := paths.New(cfg.DataDir)
 
@@ -358,9 +351,9 @@ func TestNetworkResource_Allocated(t *testing.T) {
 		t.Skip("network rate limiting not supported on this platform")
 	}
 	cfg := &config.Config{
-		DataDir:        t.TempDir(),
-		NetworkLimit:   "1Gbps", // 125MB/s
-		OversubNetwork: 1.0,
+		DataDir:  t.TempDir(),
+		Capacity: config.CapacityConfig{Network: "1Gbps"}, // 125MB/s
+		Oversubscription: config.OversubscriptionConfig{Network: 1.0},
 	}
 
 	mockLister := &mockInstanceLister{
@@ -383,12 +376,11 @@ func TestNetworkResource_Allocated(t *testing.T) {
 // TestMaxImageStorage verifies the image storage limit calculation
 func TestMaxImageStorage(t *testing.T) {
 	cfg := &config.Config{
-		DataDir:         t.TempDir(),
-		MaxImageStorage: 0.2, // 20%
-		OversubCPU:      1.0,
-		OversubMemory:   1.0,
-		OversubDisk:     1.0,
-		OversubNetwork:  1.0,
+		DataDir: t.TempDir(),
+		Limits:  config.LimitsConfig{MaxImageStorage: 0.2}, // 20%
+		Oversubscription: config.OversubscriptionConfig{
+			CPU: 1.0, Memory: 1.0, Disk: 1.0, Network: 1.0,
+		},
 	}
 	p := paths.New(cfg.DataDir)
 
@@ -419,11 +411,10 @@ func TestMaxImageStorage(t *testing.T) {
 // includes OCI cache and volume overlays
 func TestDiskBreakdown_IncludesOCICacheAndVolumeOverlays(t *testing.T) {
 	cfg := &config.Config{
-		DataDir:        t.TempDir(),
-		OversubCPU:     1.0,
-		OversubMemory:  1.0,
-		OversubDisk:    1.0,
-		OversubNetwork: 1.0,
+		DataDir: t.TempDir(),
+		Oversubscription: config.OversubscriptionConfig{
+			CPU: 1.0, Memory: 1.0, Disk: 1.0, Network: 1.0,
+		},
 	}
 	p := paths.New(cfg.DataDir)
 

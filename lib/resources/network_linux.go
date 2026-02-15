@@ -21,21 +21,21 @@ type NetworkResource struct {
 }
 
 // NewNetworkResource discovers network capacity.
-// If cfg.NetworkLimit is set, uses that; otherwise auto-detects from uplink interface.
+// If cfg.Capacity.Network is set, uses that; otherwise auto-detects from uplink interface.
 func NewNetworkResource(ctx context.Context, cfg *config.Config, instLister InstanceLister) (*NetworkResource, error) {
 	var capacity int64
 	log := logger.FromContext(ctx)
 
-	if cfg.NetworkLimit != "" {
+	if cfg.Capacity.Network != "" {
 		// Parse configured limit (e.g., "10Gbps", "1GB/s")
-		parsed, err := ParseBandwidth(cfg.NetworkLimit)
+		parsed, err := ParseBandwidth(cfg.Capacity.Network)
 		if err != nil {
 			return nil, fmt.Errorf("parse network limit: %w", err)
 		}
 		capacity = parsed
 	} else {
 		// Auto-detect from uplink interface
-		uplink, err := getUplinkInterface(cfg.UplinkInterface)
+		uplink, err := getUplinkInterface(cfg.Network.UplinkInterface)
 		if err != nil {
 			// No uplink found - network limiting disabled
 			log.WarnContext(ctx, "no uplink interface found, network limiting disabled", "error", err)
