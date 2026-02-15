@@ -97,10 +97,12 @@ func TestGPUInference(t *testing.T) {
 	p := paths.New(persistentTestDataDir)
 
 	cfg := &config.Config{
-		DataDir:    persistentTestDataDir,
-		BridgeName: "vmbr0",
-		SubnetCIDR: "10.100.0.0/16",
-		DNSServer:  "1.1.1.1",
+		DataDir: persistentTestDataDir,
+		Network: config.NetworkConfig{
+			BridgeName: "vmbr0",
+			SubnetCIDR: "10.100.0.0/16",
+			DNSServer:  "1.1.1.1",
+		},
 	}
 
 	// Initialize managers

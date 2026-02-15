@@ -63,10 +63,12 @@ func TestNVIDIAModuleLoading(t *testing.T) {
 	p := paths.New(tmpDir)
 
 	cfg := &config.Config{
-		DataDir:    tmpDir,
-		BridgeName: "vmbr0",
-		SubnetCIDR: "10.100.0.0/16",
-		DNSServer:  "1.1.1.1",
+		DataDir: tmpDir,
+		Network: config.NetworkConfig{
+			BridgeName: "vmbr0",
+			SubnetCIDR: "10.100.0.0/16",
+			DNSServer:  "1.1.1.1",
+		},
 	}
 
 	// Initialize managers
@@ -308,10 +310,12 @@ func TestNVMLDetection(t *testing.T) {
 
 	p := paths.New(persistentTestDataDir)
 	cfg := &config.Config{
-		DataDir:    persistentTestDataDir,
-		BridgeName: "vmbr0",
-		SubnetCIDR: "10.100.0.0/16",
-		DNSServer:  "1.1.1.1",
+		DataDir: persistentTestDataDir,
+		Network: config.NetworkConfig{
+			BridgeName: "vmbr0",
+			SubnetCIDR: "10.100.0.0/16",
+			DNSServer:  "1.1.1.1",
+		},
 	}
 
 	imageMgr, err := images.NewManager(p, 1, nil)

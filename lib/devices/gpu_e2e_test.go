@@ -60,10 +60,12 @@ func TestGPUPassthrough(t *testing.T) {
 	p := paths.New(tmpDir)
 
 	cfg := &config.Config{
-		DataDir:    tmpDir,
-		BridgeName: "vmbr0",
-		SubnetCIDR: "10.100.0.0/16",
-		DNSServer:  "1.1.1.1",
+		DataDir: tmpDir,
+		Network: config.NetworkConfig{
+			BridgeName: "vmbr0",
+			SubnetCIDR: "10.100.0.0/16",
+			DNSServer:  "1.1.1.1",
+		},
 	}
 
 	// Initialize managers (nil meter/tracer disables metrics/tracing)
