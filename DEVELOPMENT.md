@@ -136,9 +136,9 @@ If you need a different subnet, set `SUBNET_CIDR` in your environment. The gatew
 
 **Example:**
 
-```bash
-# In your .env file
-SUBNET_CIDR=172.30.0.0/16
+```yaml
+# In your config.yaml
+subnet_cidr: 172.30.0.0/16
 ```
 
 **Finding the uplink interface (`UPLINK_INTERFACE`)**
@@ -178,15 +178,15 @@ Hypeman uses Caddy with automatic ACME certificates for TLS termination. Certifi
 
 To enable TLS ingresses:
 
-1. Configure ACME credentials in your `.env`:
+1. Configure ACME credentials in your `config.yaml`:
 
-```bash
+```yaml
 # Required for any TLS ingress
-ACME_EMAIL=admin@example.com
+acme_email: admin@example.com
 
 # For Cloudflare
-ACME_DNS_PROVIDER=cloudflare
-CLOUDFLARE_API_TOKEN=your-api-token
+acme_dns_provider: cloudflare
+cloudflare_api_token: your-api-token
 ```
 
 2. Create an ingress with TLS enabled:
@@ -210,8 +210,8 @@ Certificates are stored in `$DATA_DIR/caddy/data/` and auto-renewed by Caddy.
 ### Setup
 
 ```bash
-cp .env.example .env
-# Edit .env and set JWT_SECRET and other configuration values
+cp config.example.yaml ~/.config/hypeman/config.yaml
+# Edit config.yaml and set jwt_secret and other configuration values
 ```
 
 ### Data directory
@@ -287,9 +287,10 @@ docker run -d --name lgtm \
 # If developing on a remote server, forward the port to your local machine (or YOLO):
 # ssh -L 3001:localhost:3000 your-server  (then open http://localhost:3001)
 
-# Enable OTel in .env (set ENV to your name to filter your telemetry)
-echo "OTEL_ENABLED=true" >> .env
-echo "ENV=yourname" >> .env
+# Enable OTel in config.yaml (set env to your name to filter your telemetry)
+# Add to your config.yaml:
+#   otel_enabled: true
+#   env: yourname
 
 # Restart dev server
 make dev
@@ -359,8 +360,9 @@ export PATH="/opt/homebrew/opt/e2fsprogs/bin:/opt/homebrew/opt/e2fsprogs/sbin:$P
 # Add to ~/.zshrc for persistence
 
 # 3. Configure environment
-cp .env.darwin.example .env
-# Edit .env as needed (defaults work for local development)
+mkdir -p ~/.config/hypeman
+cp config.darwin.example.yaml ~/.config/hypeman/config.yaml
+# Edit config.yaml as needed (defaults work for local development)
 
 # 4. Create data directory
 mkdir -p ~/Library/Application\ Support/hypeman
@@ -387,7 +389,7 @@ The `make dev` command automatically detects macOS and:
 
 ### macOS-Specific Configuration
 
-The following environment variables work differently on macOS (see `.env.darwin.example`):
+The following config keys work differently on macOS (see `config.darwin.example.yaml`):
 
 | Variable | Linux | macOS |
 |----------|-------|-------|
@@ -463,8 +465,8 @@ brew install caddy
 
 **"address already in use" on port 5353**
 - Port 5353 is used by mDNSResponder (Bonjour) on macOS
-- Use port 5354 instead: `INTERNAL_DNS_PORT=5354` in `.env`
-- The `.env.darwin.example` already has this configured correctly
+- Use port 5354 instead: `internal_dns_port: 5354` in `config.yaml`
+- The `config.darwin.example.yaml` already has this configured correctly
 
 **"Virtualization.framework is not available"**
 - Ensure you're on macOS 11.0+

@@ -101,43 +101,30 @@ else
     fi
 fi
 
-# Check config
+# Check config files
 if [ "$OS" = "darwin" ]; then
-    [ -f "$HOME/.config/hypeman/config" ] || fail "Config file not found"
+    [ -f "$HOME/.config/hypeman/config.yaml" ] || fail "Server config file not found"
 else
-    [ -f /etc/hypeman/config ] || fail "Config file not found"
+    [ -f /etc/hypeman/config.yaml ] || fail "Server config file not found"
 fi
-pass "Config file exists"
+pass "Server config file exists"
+
+[ -f "$HOME/.config/hypeman/cli.yaml" ] || fail "CLI config file not found"
+pass "CLI config file exists"
 
 # =============================================================================
 # Phase 4b: Testing CLI commands
 # =============================================================================
 info "Phase 4b: Testing CLI commands..."
 
-# Determine config file path
-if [ "$OS" = "darwin" ]; then
-    CONFIG_FILE="$HOME/.config/hypeman/config"
-else
-    CONFIG_FILE="/etc/hypeman/config"
-fi
-
-# Extract JWT_SECRET and PORT from config (source is unsafe — values may contain spaces)
-JWT_SECRET=$(grep '^JWT_SECRET=' "$CONFIG_FILE" | cut -d= -f2-)
-PORT=$(grep '^PORT=' "$CONFIG_FILE" | cut -d= -f2-)
-export JWT_SECRET
-
-# Generate API token using hypeman-token
+# hypeman-token should be able to find jwt_secret from config.yaml automatically
 if [ "$OS" = "darwin" ]; then
     API_KEY=$("/usr/local/bin/hypeman-token" -user-id "e2e-test-user")
 else
-    API_KEY=$("/opt/hypeman/bin/hypeman-token" -user-id "e2e-test-user")
+    API_KEY=$("/usr/local/bin/hypeman-token" -user-id "e2e-test-user")
 fi
-[ -n "$API_KEY" ] || fail "Failed to generate API token"
-pass "Generated API token"
-
-# Set CLI env
-export HYPEMAN_API_KEY="$API_KEY"
-export HYPEMAN_BASE_URL="http://localhost:${PORT:-8080}"
+[ -n "$API_KEY" ] || fail "Failed to generate API token (hypeman-token should find jwt_secret from config.yaml)"
+pass "hypeman-token reads jwt_secret from config.yaml"
 
 # Determine CLI path
 HYPEMAN_CMD="/usr/local/bin/hypeman"

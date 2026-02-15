@@ -53,8 +53,10 @@ func ProvideContext(log *slog.Logger) context.Context {
 
 // ProvideConfig provides the application configuration.
 // Panics if configuration is invalid (prevents startup with bad config).
+// Config path can be specified via CONFIG_PATH env var or defaults to platform-specific locations.
 func ProvideConfig() *config.Config {
-	cfg := config.Load()
+	configPath := os.Getenv("CONFIG_PATH")
+	cfg := config.Load(configPath)
 	if err := cfg.Validate(); err != nil {
 		panic(fmt.Sprintf("invalid configuration: %v", err))
 	}

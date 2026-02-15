@@ -101,7 +101,7 @@ else
     CONFIG_DIR="${CONFIG_DIR:-/etc/hypeman}"
 fi
 
-CONFIG_FILE="${CONFIG_DIR}/config"
+CONFIG_FILE="${CONFIG_DIR}/config.yaml"
 SYSTEMD_DIR="/etc/systemd/system"
 
 # =============================================================================
@@ -248,15 +248,15 @@ if [ -n "$BINARY_DIR" ]; then
     info "Copying binaries from ${BINARY_DIR}..."
 
     if [ "$OS" = "darwin" ]; then
-        for f in "${BINARY_NAME}" "hypeman-token" ".env.darwin.example"; do
+        for f in "${BINARY_NAME}" "hypeman-token" "config.darwin.example.yaml"; do
             [ -f "${BINARY_DIR}/${f}" ] || error "File ${f} not found in ${BINARY_DIR}"
         done
-        cp "${BINARY_DIR}/.env.darwin.example" "${TMP_DIR}/.env.darwin.example"
+        cp "${BINARY_DIR}/config.darwin.example.yaml" "${TMP_DIR}/config.darwin.example.yaml"
     else
-        for f in "${BINARY_NAME}" "hypeman-token" ".env.example"; do
+        for f in "${BINARY_NAME}" "hypeman-token" "config.example.yaml"; do
             [ -f "${BINARY_DIR}/${f}" ] || error "File ${f} not found in ${BINARY_DIR}"
         done
-        cp "${BINARY_DIR}/.env.example" "${TMP_DIR}/.env.example"
+        cp "${BINARY_DIR}/config.example.yaml" "${TMP_DIR}/config.example.yaml"
     fi
 
     cp "${BINARY_DIR}/${BINARY_NAME}" "${TMP_DIR}/${BINARY_NAME}"
@@ -295,9 +295,9 @@ elif [ -n "$BRANCH" ]; then
             cat "$BUILD_LOG"
             error "Signing failed"
         fi
-        cp ".env.darwin.example" "${TMP_DIR}/.env.darwin.example"
+        cp "config.darwin.example.yaml" "${TMP_DIR}/config.darwin.example.yaml"
     else
-        cp ".env.example" "${TMP_DIR}/.env.example"
+        cp "config.example.yaml" "${TMP_DIR}/config.example.yaml"
     fi
     cp "bin/hypeman" "${TMP_DIR}/${BINARY_NAME}"
 
@@ -392,17 +392,9 @@ info "Installing hypeman-token to ${INSTALL_DIR}..."
 $SUDO install -m 755 "${TMP_DIR}/hypeman-token" "${INSTALL_DIR}/hypeman-token"
 
 if [ "$OS" = "linux" ]; then
-    # Install wrapper script to /usr/local/bin for easy access
-    info "Installing hypeman-token wrapper to /usr/local/bin..."
-    $SUDO tee /usr/local/bin/hypeman-token > /dev/null << EOF
-#!/bin/bash
-# Wrapper script for hypeman-token that loads config from ${CONFIG_FILE}
-set -a
-source ${CONFIG_FILE}
-set +a
-exec ${INSTALL_DIR}/hypeman-token "\$@"
-EOF
-    $SUDO chmod 755 /usr/local/bin/hypeman-token
+    # Symlink to /usr/local/bin for easy access
+    info "Linking hypeman-token to /usr/local/bin..."
+    $SUDO ln -sf "${INSTALL_DIR}/hypeman-token" /usr/local/bin/hypeman-token
 fi
 
 # =============================================================================
@@ -429,26 +421,51 @@ fi
 # =============================================================================
 
 if [ ! -f "$CONFIG_FILE" ]; then
+    info "Generating JWT secret..."
+    JWT_SECRET=$(openssl rand -hex 32)
+
     if [ "$OS" = "darwin" ]; then
-        # macOS config
-        if [ -f "${TMP_DIR}/.env.darwin.example" ]; then
+        # macOS config - use template if available, otherwise generate
+        if [ -f "${TMP_DIR}/config.darwin.example.yaml" ]; then
             info "Using macOS config template from source..."
-            cp "${TMP_DIR}/.env.darwin.example" "${TMP_DIR}/config"
+            cp "${TMP_DIR}/config.darwin.example.yaml" "${TMP_DIR}/config.yaml"
         else
             info "Downloading macOS config template..."
-            CONFIG_URL="https://raw.githubusercontent.com/${REPO}/${VERSION}/.env.darwin.example"
-            if ! curl -fsSL "$CONFIG_URL" -o "${TMP_DIR}/config"; then
-                error "Failed to download config template from ${CONFIG_URL}"
+            CONFIG_URL="https://raw.githubusercontent.com/${REPO}/${VERSION}/config.darwin.example.yaml"
+            if ! curl -fsSL "$CONFIG_URL" -o "${TMP_DIR}/config.yaml"; then
+                warn "Failed to download config template, generating minimal config..."
+                cat > "${TMP_DIR}/config.yaml" << YAMLEOF
+jwt_secret: "${JWT_SECRET}"
+data_dir: "${DATA_DIR}"
+port: "8080"
+log_level: debug
+default_hypervisor: vz
+dns_server: 8.8.8.8
+caddy_listen_address: 0.0.0.0
+caddy_admin_address: 127.0.0.1
+caddy_admin_port: 2019
+internal_dns_port: 5354
+caddy_stop_on_shutdown: false
+registry_url: 192.168.64.1:8080
+registry_insecure: true
+builder_image: hypeman/builder:latest
+max_concurrent_source_builds: 2
+build_timeout: 600
+max_vcpus_per_instance: 4
+max_memory_per_instance: 8GB
+YAMLEOF
             fi
         fi
 
-        # Expand ~ to $HOME (launchd doesn't do shell expansion)
-        sed -i '' "s|~/|${HOME}/|g" "${TMP_DIR}/config"
+        # Expand ~ to $HOME in data_dir (launchd doesn't do shell expansion)
+        if [ "$OS" = "darwin" ]; then
+            sed -i '' "s|~/|${HOME}/|g" "${TMP_DIR}/config.yaml"
+        fi
 
-        # Generate random JWT secret
-        info "Generating JWT secret..."
-        JWT_SECRET=$(openssl rand -hex 32)
-        sed -i '' "s/^JWT_SECRET=.*/JWT_SECRET=${JWT_SECRET}/" "${TMP_DIR}/config"
+        # Set jwt_secret in the config
+        if grep -q '^jwt_secret:' "${TMP_DIR}/config.yaml"; then
+            sed -i '' "s|^jwt_secret:.*|jwt_secret: \"${JWT_SECRET}\"|" "${TMP_DIR}/config.yaml"
+        fi
 
         # Auto-detect Docker socket
         DOCKER_SOCKET=""
@@ -461,45 +478,57 @@ if [ ! -f "$CONFIG_FILE" ]; then
         fi
         if [ -n "$DOCKER_SOCKET" ]; then
             info "Detected Docker socket: ${DOCKER_SOCKET}"
-            if grep -q '^DOCKER_SOCKET=' "${TMP_DIR}/config"; then
-                sed -i '' "s|^DOCKER_SOCKET=.*|DOCKER_SOCKET=${DOCKER_SOCKET}|" "${TMP_DIR}/config"
-            elif grep -q '^# DOCKER_SOCKET=' "${TMP_DIR}/config"; then
-                sed -i '' "s|^# DOCKER_SOCKET=.*|DOCKER_SOCKET=${DOCKER_SOCKET}|" "${TMP_DIR}/config"
+            if grep -q '^docker_socket:' "${TMP_DIR}/config.yaml"; then
+                sed -i '' "s|^docker_socket:.*|docker_socket: \"${DOCKER_SOCKET}\"|" "${TMP_DIR}/config.yaml"
+            elif grep -q '^# docker_socket:' "${TMP_DIR}/config.yaml"; then
+                sed -i '' "s|^# docker_socket:.*|docker_socket: \"${DOCKER_SOCKET}\"|" "${TMP_DIR}/config.yaml"
             else
-                echo "DOCKER_SOCKET=${DOCKER_SOCKET}" >> "${TMP_DIR}/config"
+                echo "docker_socket: \"${DOCKER_SOCKET}\"" >> "${TMP_DIR}/config.yaml"
             fi
         fi
 
         info "Installing config file at ${CONFIG_FILE}..."
-        install -m 600 "${TMP_DIR}/config" "$CONFIG_FILE"
+        install -m 600 "${TMP_DIR}/config.yaml" "$CONFIG_FILE"
     else
-        # Linux config
-        if [ -f "${TMP_DIR}/.env.example" ]; then
+        # Linux config - use template if available, otherwise generate
+        if [ -f "${TMP_DIR}/config.example.yaml" ]; then
             info "Using config template from source..."
-            cp "${TMP_DIR}/.env.example" "${TMP_DIR}/config"
+            cp "${TMP_DIR}/config.example.yaml" "${TMP_DIR}/config.yaml"
         else
             info "Downloading config template..."
-            CONFIG_URL="https://raw.githubusercontent.com/${REPO}/${VERSION}/.env.example"
-            if ! curl -fsSL "$CONFIG_URL" -o "${TMP_DIR}/config"; then
-                error "Failed to download config template from ${CONFIG_URL}"
+            CONFIG_URL="https://raw.githubusercontent.com/${REPO}/${VERSION}/config.example.yaml"
+            if ! curl -fsSL "$CONFIG_URL" -o "${TMP_DIR}/config.yaml"; then
+                warn "Failed to download config template, generating minimal config..."
+                cat > "${TMP_DIR}/config.yaml" << YAMLEOF
+jwt_secret: "${JWT_SECRET}"
+data_dir: /var/lib/hypeman
+caddy_admin_port: 2019
+internal_dns_port: 5353
+YAMLEOF
             fi
         fi
 
-        # Generate random JWT secret
-        info "Generating JWT secret..."
-        JWT_SECRET=$(openssl rand -hex 32)
-        sed -i "s/^JWT_SECRET=$/JWT_SECRET=${JWT_SECRET}/" "${TMP_DIR}/config"
+        # Set jwt_secret in the config
+        if grep -q '^jwt_secret:' "${TMP_DIR}/config.yaml"; then
+            sed -i "s|^jwt_secret:.*|jwt_secret: \"${JWT_SECRET}\"|" "${TMP_DIR}/config.yaml"
+        fi
 
-        # Set fixed ports for production (instead of random ports used in dev)
-        sed -i "s/^# CADDY_ADMIN_PORT=.*/CADDY_ADMIN_PORT=2019/" "${TMP_DIR}/config"
-        sed -i "s/^# INTERNAL_DNS_PORT=.*/INTERNAL_DNS_PORT=5353/" "${TMP_DIR}/config"
+        # Set fixed ports for production
+        if grep -q '^# caddy_admin_port:' "${TMP_DIR}/config.yaml"; then
+            sed -i "s|^# caddy_admin_port:.*|caddy_admin_port: 2019|" "${TMP_DIR}/config.yaml"
+        fi
+        if grep -q '^# internal_dns_port:' "${TMP_DIR}/config.yaml"; then
+            sed -i "s|^# internal_dns_port:.*|internal_dns_port: 5353|" "${TMP_DIR}/config.yaml"
+        fi
 
         info "Installing config file at ${CONFIG_FILE}..."
-        $SUDO install -m 640 "${TMP_DIR}/config" "$CONFIG_FILE"
+        $SUDO install -m 640 "${TMP_DIR}/config.yaml" "$CONFIG_FILE"
         $SUDO chown root:root "$CONFIG_FILE"
     fi
 else
     info "Config file already exists at ${CONFIG_FILE}, skipping..."
+    # Read JWT_SECRET from existing config for CLI token generation
+    JWT_SECRET=$(grep '^jwt_secret:' "$CONFIG_FILE" 2>/dev/null | sed 's/^jwt_secret:[[:space:]]*//' | tr -d '"' || true)
 fi
 
 # =============================================================================
@@ -513,21 +542,6 @@ if [ "$OS" = "darwin" ]; then
     mkdir -p "$PLIST_DIR"
 
     info "Installing launchd service..."
-
-    # Build environment variables from config file
-    ENV_DICT=""
-    if [ -f "$CONFIG_FILE" ]; then
-        while IFS= read -r line; do
-            # Skip comments and empty lines
-            [[ "$line" =~ ^[[:space:]]*# ]] && continue
-            [[ -z "$line" ]] && continue
-            key="${line%%=*}"
-            value="${line#*=}"
-            ENV_DICT="${ENV_DICT}
-        <key>${key}</key>
-        <string>${value}</string>"
-        done < "$CONFIG_FILE"
-    fi
 
     cat > "$PLIST_PATH" << PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -543,7 +557,9 @@ if [ "$OS" = "darwin" ]; then
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>/opt/homebrew/opt/e2fsprogs/sbin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>${ENV_DICT}
+        <string>/opt/homebrew/opt/e2fsprogs/sbin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>CONFIG_PATH</key>
+        <string>${CONFIG_FILE}</string>
     </dict>
     <key>KeepAlive</key>
     <true/>
@@ -571,7 +587,7 @@ After=network.target
 [Service]
 Type=simple
 Environment="HOME=${DATA_DIR}"
-EnvironmentFile=${CONFIG_FILE}
+Environment="CONFIG_PATH=${CONFIG_FILE}"
 ExecStart=${INSTALL_DIR}/${BINARY_NAME}
 Restart=on-failure
 RestartSec=5
@@ -670,20 +686,47 @@ if [ -n "$CLI_VERSION" ]; then
         else
             # Install CLI binary
             info "Installing hypeman CLI to ${INSTALL_DIR}..."
-            $SUDO install -m 755 "${TMP_DIR}/cli/hypeman" "${INSTALL_DIR}/hypeman-cli"
+            $SUDO install -m 755 "${TMP_DIR}/cli/hypeman" "${INSTALL_DIR}/hypeman"
 
-            # Install wrapper script to /usr/local/bin for PATH access
-            info "Installing hypeman wrapper to /usr/local/bin..."
-            $SUDO tee /usr/local/bin/hypeman > /dev/null << WRAPPER
-#!/bin/bash
-# Wrapper script for hypeman CLI that auto-generates API token
-set -a
-source ${CONFIG_FILE}
-set +a
-export HYPEMAN_API_KEY=\$(${INSTALL_DIR}/hypeman-token -user-id "cli-user-\$(whoami)" 2>/dev/null)
-exec ${INSTALL_DIR}/hypeman-cli "\$@"
-WRAPPER
-            $SUDO chmod 755 /usr/local/bin/hypeman
+            # Symlink to /usr/local/bin for PATH access
+            info "Linking hypeman to /usr/local/bin..."
+            $SUDO ln -sf "${INSTALL_DIR}/hypeman" /usr/local/bin/hypeman
+        fi
+
+        # Generate CLI config file with a pre-authenticated token
+        CLI_CONFIG_DIR="$HOME/.config/hypeman"
+        CLI_CONFIG_FILE="${CLI_CONFIG_DIR}/cli.yaml"
+        if [ ! -f "$CLI_CONFIG_FILE" ]; then
+            info "Generating CLI configuration..."
+            mkdir -p "$CLI_CONFIG_DIR"
+
+            # Determine the port from config
+            CLI_PORT="8080"
+            if [ -f "$CONFIG_FILE" ]; then
+                PARSED_PORT=$(grep '^port:' "$CONFIG_FILE" 2>/dev/null | sed 's/^port:[[:space:]]*//' | tr -d '"' || true)
+                if [ -n "$PARSED_PORT" ]; then
+                    CLI_PORT="$PARSED_PORT"
+                fi
+            fi
+
+            # Generate a long-lived CLI token
+            CLI_TOKEN=$("${INSTALL_DIR}/hypeman-token" -user-id "cli-$(whoami)" -duration 8760h 2>/dev/null || true)
+            if [ -z "$CLI_TOKEN" ]; then
+                warn "Failed to generate CLI token. You may need to run: hypeman-token -user-id cli-$(whoami) > token and add it to ${CLI_CONFIG_FILE}"
+                cat > "$CLI_CONFIG_FILE" << CLIEOF
+base_url: http://localhost:${CLI_PORT}
+api_key: ""
+CLIEOF
+            else
+                cat > "$CLI_CONFIG_FILE" << CLIEOF
+base_url: http://localhost:${CLI_PORT}
+api_key: "${CLI_TOKEN}"
+CLIEOF
+            fi
+            chmod 600 "$CLI_CONFIG_FILE"
+            info "CLI configured at ${CLI_CONFIG_FILE}"
+        else
+            info "CLI config already exists at ${CLI_CONFIG_FILE}, skipping..."
         fi
     else
         warn "Failed to download CLI from ${CLI_DOWNLOAD_URL}, skipping CLI installation"
@@ -712,7 +755,8 @@ if [ "$OS" = "darwin" ]; then
     echo "  API Binary:   ${INSTALL_DIR}/${BINARY_NAME}"
     echo "  CLI:          ${INSTALL_DIR}/hypeman"
     echo "  Token tool:   ${INSTALL_DIR}/hypeman-token"
-    echo "  Config:       ${CONFIG_FILE}"
+    echo "  Server config: ${CONFIG_FILE}"
+    echo "  CLI config:   ~/.config/hypeman/cli.yaml"
     echo "  Data:         ${DATA_DIR}"
     echo "  Service:      ~/Library/LaunchAgents/com.kernel.hypeman.plist"
     echo "  Logs:         ${DATA_DIR}/logs/hypeman.log"
@@ -720,7 +764,8 @@ else
     echo "  API Binary:   ${INSTALL_DIR}/${BINARY_NAME}"
     echo "  CLI:          /usr/local/bin/hypeman"
     echo "  Token tool:   /usr/local/bin/hypeman-token"
-    echo "  Config:       ${CONFIG_FILE}"
+    echo "  Server config: ${CONFIG_FILE}"
+    echo "  CLI config:   ~/.config/hypeman/cli.yaml"
     echo "  Data:         ${DATA_DIR}"
     echo "  Service:      ${SERVICE_NAME}.service"
 fi
@@ -728,7 +773,7 @@ fi
 echo ""
 echo ""
 echo "Next steps:"
-echo "  - (Optional) Edit ${CONFIG_FILE} to configure your installation"
+echo "  - (Optional) Edit ${CONFIG_FILE} to configure your server"
 echo ""
 echo "Get Started:"
 echo "╭──────────────────────────────────────────╮"

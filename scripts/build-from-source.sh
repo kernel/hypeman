@@ -80,8 +80,13 @@ if ! go build -o "${OUTPUT_DIR}/hypeman-token" ./cmd/gen-jwt >> "$BUILD_LOG" 2>&
     error "Failed to build hypeman-token"
 fi
 
-# Copy .env.example for config template
-cp ".env.example" "${OUTPUT_DIR}/.env.example"
+# Copy config example files for config template
+OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+if [ "$OS" = "darwin" ]; then
+    cp "config.darwin.example.yaml" "${OUTPUT_DIR}/config.darwin.example.yaml"
+else
+    cp "config.example.yaml" "${OUTPUT_DIR}/config.example.yaml"
+fi
 
 info "Build complete"
 info "Binaries are available in: ${OUTPUT_DIR}"

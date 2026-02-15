@@ -1,0 +1,128 @@
+# =============================================================================
+# macOS (Darwin) Configuration for Hypeman
+# =============================================================================
+# Copy this file to ~/.config/hypeman/config.yaml and customize for your
+# environment.
+#
+# Configuration precedence (highest to lowest):
+#   1. Environment variables (e.g., JWT_SECRET, PORT)
+#   2. This YAML config file
+#   3. Built-in defaults
+#
+# Key differences from Linux (config.example.yaml):
+# - default_hypervisor: Use "vz" (Virtualization.framework) instead of cloud-hypervisor/qemu
+# - data_dir: Uses macOS conventions (~/Library/Application Support)
+# - Network settings: bridge_name, subnet_cidr, etc. are IGNORED (vz uses NAT)
+# - Rate limiting: Not supported on macOS (no tc/HTB equivalent)
+# - GPU passthrough: Not supported on macOS
+# =============================================================================
+
+# Required - used to sign and verify API tokens
+jwt_secret: dev-secret-change-me
+
+# Data directory - use macOS conventions
+# Note: ~ is NOT expanded; use full path or let the install script fill this in
+data_dir: ~/Library/Application Support/hypeman
+
+# Server configuration
+port: "8080"
+
+# Logging
+log_level: debug
+
+# =============================================================================
+# Hypervisor Configuration (IMPORTANT FOR MACOS)
+# =============================================================================
+# On macOS, use "vz" (Virtualization.framework)
+# - "cloud-hypervisor" and "qemu" are NOT supported on macOS
+default_hypervisor: vz
+
+# =============================================================================
+# Network Configuration (DIFFERENT ON MACOS)
+# =============================================================================
+# On macOS with vz, network is handled automatically via NAT:
+# - VMs get IP addresses from 192.168.64.0/24 via DHCP
+# - No TAP devices, bridges, or iptables needed
+# - The following settings are IGNORED on macOS:
+#   bridge_name, subnet_cidr, subnet_gateway, uplink_interface
+
+# DNS Server for VMs (used by guest for resolution)
+dns_server: 8.8.8.8
+
+# =============================================================================
+# Caddy / Ingress Configuration
+# =============================================================================
+caddy_listen_address: 0.0.0.0
+caddy_admin_address: 127.0.0.1
+caddy_admin_port: 2019
+# Note: 5353 is used by mDNSResponder (Bonjour) on macOS, using 5354 instead
+internal_dns_port: 5354
+caddy_stop_on_shutdown: false
+
+# =============================================================================
+# Build System Configuration
+# =============================================================================
+# For builds on macOS with vz, the registry URL needs to be accessible from
+# NAT VMs. Since vz uses 192.168.64.0/24 for NAT, the host is at 192.168.64.1.
+#
+# IMPORTANT: "host.docker.internal" does NOT work in vz VMs - that's a Docker
+# Desktop-specific hostname. Use the NAT gateway IP instead.
+#
+# Registry URL (the host's hypeman API, accessible from VMs)
+registry_url: 192.168.64.1:8080
+# Use HTTP (not HTTPS) since hypeman's internal registry uses plaintext
+registry_insecure: true
+
+builder_image: hypeman/builder:latest
+max_concurrent_source_builds: 2
+build_timeout: 600
+
+# =============================================================================
+# Resource Limits (same as Linux)
+# =============================================================================
+# Per-instance limits
+max_vcpus_per_instance: 4
+max_memory_per_instance: 8GB
+
+# Aggregate limits (0 or empty = unlimited)
+# max_total_volume_storage: ""
+
+# =============================================================================
+# OpenTelemetry (optional, same as Linux)
+# =============================================================================
+# otel_enabled: false
+# otel_endpoint: 127.0.0.1:4317
+# otel_service_name: hypeman
+# otel_insecure: true
+# env: dev
+
+# =============================================================================
+# TLS / ACME Configuration (same as Linux)
+# =============================================================================
+# acme_email: admin@example.com
+# acme_dns_provider: cloudflare
+# tls_allowed_domains: "*.example.com"
+# cloudflare_api_token: ""
+
+# =============================================================================
+# macOS Limitations
+# =============================================================================
+# The following features are NOT AVAILABLE on macOS:
+#
+# 1. GPU Passthrough (VFIO, mdev)
+#    - gpu_profile_cache_ttl is ignored
+#    - Device registration/binding will fail
+#
+# 2. Network Rate Limiting
+#    - upload_burst_multiplier, download_burst_multiplier are ignored
+#    - No tc/HTB equivalent on macOS
+#
+# 3. CPU/Memory Hotplug
+#    - Resize operations not supported
+#
+# 4. Disk I/O Limiting
+#    - disk_io_limit, oversub_disk_io are ignored
+#
+# 5. Snapshots (requires macOS 14+ on Apple Silicon)
+#    - SaveMachineStateToPath/RestoreMachineStateFromURL require macOS 14+
+#    - Only supported on ARM64 (Apple Silicon) Macs

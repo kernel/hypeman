@@ -45,7 +45,9 @@ func main() {
 
 func run() error {
 	// Load config early for OTel initialization
-	cfg := config.Load()
+	// Config path can be specified via CONFIG_PATH env var or defaults to platform-specific locations
+	configPath := os.Getenv("CONFIG_PATH")
+	cfg := config.Load(configPath)
 
 	// Validate configuration before proceeding
 	if err := cfg.Validate(); err != nil {

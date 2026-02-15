@@ -11,7 +11,6 @@ $(BIN_DIR):
 OAPI_CODEGEN ?= $(BIN_DIR)/oapi-codegen
 AIR ?= $(BIN_DIR)/air
 WIRE ?= $(BIN_DIR)/wire
-GODOTENV ?= $(BIN_DIR)/godotenv
 XCADDY ?= $(BIN_DIR)/xcaddy
 
 # Install oapi-codegen
@@ -26,15 +25,11 @@ $(AIR): | $(BIN_DIR)
 $(WIRE): | $(BIN_DIR)
 	GOBIN=$(BIN_DIR) go install github.com/google/wire/cmd/wire@latest
 
-# Install godotenv for loading .env files
-$(GODOTENV): | $(BIN_DIR)
-	GOBIN=$(BIN_DIR) go install github.com/joho/godotenv/cmd/godotenv@latest
-
 # Install xcaddy for building Caddy with plugins
 $(XCADDY): | $(BIN_DIR)
 	GOBIN=$(BIN_DIR) go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
 
-install-tools: $(OAPI_CODEGEN) $(AIR) $(WIRE) $(GODOTENV) $(XCADDY)
+install-tools: $(OAPI_CODEGEN) $(AIR) $(WIRE) $(XCADDY)
 
 # Download Cloud Hypervisor binaries
 download-ch-binaries:
@@ -261,8 +256,9 @@ test-darwin: build-embedded sign-vz-shim
 
 # Generate JWT token for testing
 # Usage: make gen-jwt [USER_ID=test-user]
-gen-jwt: $(GODOTENV)
-	@$(GODOTENV) -f .env go run ./cmd/gen-jwt -user-id $${USER_ID:-test-user}
+# hypeman-token reads jwt_secret from config.yaml automatically
+gen-jwt:
+	@go run ./cmd/gen-jwt -user-id $${USER_ID:-test-user}
 
 # Build the generic builder image for builds
 build-builder:

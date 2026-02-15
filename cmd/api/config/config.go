@@ -3,10 +3,16 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"runtime"
 	"runtime/debug"
-	"strconv"
+	"strings"
 
-	"github.com/joho/godotenv"
+	"github.com/knadh/koanf/parsers/yaml"
+	"github.com/knadh/koanf/providers/env"
+	"github.com/knadh/koanf/providers/file"
+	"github.com/knadh/koanf/providers/structs"
+	"github.com/knadh/koanf/v2"
 )
 
 func getHostname() string {
@@ -50,231 +56,255 @@ func getBuildVersion() string {
 }
 
 type Config struct {
-	Port                string
-	DataDir             string
-	BridgeName          string
-	SubnetCIDR          string
-	SubnetGateway       string
-	UplinkInterface     string
-	JwtSecret           string
-	DNSServer           string
-	MaxConcurrentBuilds int
-	MaxOverlaySize      string
-	LogMaxSize          string
-	LogMaxFiles         int
-	LogRotateInterval   string
+	Port                string `koanf:"port"`
+	DataDir             string `koanf:"data_dir"`
+	BridgeName          string `koanf:"bridge_name"`
+	SubnetCIDR          string `koanf:"subnet_cidr"`
+	SubnetGateway       string `koanf:"subnet_gateway"`
+	UplinkInterface     string `koanf:"uplink_interface"`
+	JwtSecret           string `koanf:"jwt_secret"`
+	DNSServer           string `koanf:"dns_server"`
+	MaxConcurrentBuilds int    `koanf:"max_concurrent_builds"`
+	MaxOverlaySize      string `koanf:"max_overlay_size"`
+	LogMaxSize          string `koanf:"log_max_size"`
+	LogMaxFiles         int    `koanf:"log_max_files"`
+	LogRotateInterval   string `koanf:"log_rotate_interval"`
 
 	// Resource limits - per instance
-	MaxVcpusPerInstance  int    // Max vCPUs for a single VM (0 = unlimited)
-	MaxMemoryPerInstance string // Max memory for a single VM (0 = unlimited)
+	MaxVcpusPerInstance  int    `koanf:"max_vcpus_per_instance"`  // Max vCPUs for a single VM (0 = unlimited)
+	MaxMemoryPerInstance string `koanf:"max_memory_per_instance"` // Max memory for a single VM (0 = unlimited)
 
 	// Resource limits - aggregate
 	// Note: CPU/memory aggregate limits are now handled via oversubscription ratios (OVERSUB_CPU, OVERSUB_MEMORY)
-	MaxTotalVolumeStorage string // Total volume storage limit (0 = unlimited)
+	MaxTotalVolumeStorage string `koanf:"max_total_volume_storage"` // Total volume storage limit (0 = unlimited)
 
 	// OpenTelemetry configuration
-	OtelEnabled           bool   // Enable OpenTelemetry
-	OtelEndpoint          string // OTLP endpoint (gRPC)
-	OtelServiceName       string // Service name for tracing
-	OtelServiceInstanceID string // Service instance ID (default: hostname)
-	OtelInsecure          bool   // Disable TLS for OTLP
-	Version               string // Application version for telemetry
-	Env                   string // Deployment environment (e.g., dev, staging, prod)
+	OtelEnabled           bool   `koanf:"otel_enabled"`             // Enable OpenTelemetry
+	OtelEndpoint          string `koanf:"otel_endpoint"`            // OTLP endpoint (gRPC)
+	OtelServiceName       string `koanf:"otel_service_name"`        // Service name for tracing
+	OtelServiceInstanceID string `koanf:"otel_service_instance_id"` // Service instance ID (default: hostname)
+	OtelInsecure          bool   `koanf:"otel_insecure"`            // Disable TLS for OTLP
+	Version               string `koanf:"version"`                  // Application version for telemetry
+	Env                   string `koanf:"env"`                      // Deployment environment (e.g., dev, staging, prod)
 
 	// Logging configuration
-	LogLevel string // Default log level (debug, info, warn, error)
+	LogLevel string `koanf:"log_level"` // Default log level (debug, info, warn, error)
 
 	// Caddy / Ingress configuration
-	CaddyListenAddress  string // Address for Caddy to listen on
-	CaddyAdminAddress   string // Address for Caddy admin API
-	CaddyAdminPort      int    // Port for Caddy admin API
-	InternalDNSPort     int    // Port for internal DNS server (used for dynamic upstreams)
-	CaddyStopOnShutdown bool   // Stop Caddy when hypeman shuts down
+	CaddyListenAddress  string `koanf:"caddy_listen_address"`   // Address for Caddy to listen on
+	CaddyAdminAddress   string `koanf:"caddy_admin_address"`    // Address for Caddy admin API
+	CaddyAdminPort      int    `koanf:"caddy_admin_port"`       // Port for Caddy admin API
+	InternalDNSPort     int    `koanf:"internal_dns_port"`      // Port for internal DNS server (used for dynamic upstreams)
+	CaddyStopOnShutdown bool   `koanf:"caddy_stop_on_shutdown"` // Stop Caddy when hypeman shuts down
 
 	// ACME / TLS configuration
-	AcmeEmail             string // ACME account email (required for TLS ingresses)
-	AcmeDnsProvider       string // DNS provider: "cloudflare"
-	AcmeCA                string // ACME CA URL (empty = Let's Encrypt production)
-	DnsPropagationTimeout string // Max time to wait for DNS propagation (e.g., "2m")
-	DnsResolvers          string // Comma-separated DNS resolvers for propagation checking
-	TlsAllowedDomains     string // Comma-separated list of allowed domain patterns for TLS (e.g., "*.example.com,api.example.com")
+	AcmeEmail             string `koanf:"acme_email"`              // ACME account email (required for TLS ingresses)
+	AcmeDnsProvider       string `koanf:"acme_dns_provider"`       // DNS provider: "cloudflare"
+	AcmeCA                string `koanf:"acme_ca"`                 // ACME CA URL (empty = Let's Encrypt production)
+	DnsPropagationTimeout string `koanf:"dns_propagation_timeout"` // Max time to wait for DNS propagation (e.g., "2m")
+	DnsResolvers          string `koanf:"dns_resolvers"`           // Comma-separated DNS resolvers for propagation checking
+	TlsAllowedDomains     string `koanf:"tls_allowed_domains"`     // Comma-separated list of allowed domain patterns for TLS (e.g., "*.example.com,api.example.com")
 
 	// Cloudflare configuration (if AcmeDnsProvider=cloudflare)
-	CloudflareApiToken string // Cloudflare API token
+	CloudflareApiToken string `koanf:"cloudflare_api_token"` // Cloudflare API token
 
 	// API ingress configuration - exposes Hypeman API via Caddy
-	ApiHostname     string // Hostname for API access (e.g., hypeman.hostname.kernel.sh). Empty = disabled.
-	ApiTLS          bool   // Enable TLS for API hostname
-	ApiRedirectHTTP bool   // Redirect HTTP to HTTPS for API hostname
+	ApiHostname     string `koanf:"api_hostname"`      // Hostname for API access (e.g., hypeman.hostname.kernel.sh). Empty = disabled.
+	ApiTLS          bool   `koanf:"api_tls"`           // Enable TLS for API hostname
+	ApiRedirectHTTP bool   `koanf:"api_redirect_http"` // Redirect HTTP to HTTPS for API hostname
 
 	// Build system configuration
-	MaxConcurrentSourceBuilds int    // Max concurrent source-to-image builds
-	BuilderImage              string // OCI image for builder VMs
-	RegistryURL               string // URL of registry for built images
-	RegistryInsecure          bool   // Skip TLS verification for registry (for self-signed certs)
-	RegistryCACertFile        string // Path to CA certificate file for registry TLS verification
-	BuildTimeout              int    // Default build timeout in seconds
-	BuildSecretsDir           string // Directory containing build secrets (optional)
-	DockerSocket              string // Path to Docker socket (for building builder image)
+	MaxConcurrentSourceBuilds int    `koanf:"max_concurrent_source_builds"` // Max concurrent source-to-image builds
+	BuilderImage              string `koanf:"builder_image"`                // OCI image for builder VMs
+	RegistryURL               string `koanf:"registry_url"`                 // URL of registry for built images
+	RegistryInsecure          bool   `koanf:"registry_insecure"`            // Skip TLS verification for registry (for self-signed certs)
+	RegistryCACertFile        string `koanf:"registry_ca_cert_file"`        // Path to CA certificate file for registry TLS verification
+	BuildTimeout              int    `koanf:"build_timeout"`                // Default build timeout in seconds
+	BuildSecretsDir           string `koanf:"build_secrets_dir"`            // Directory containing build secrets (optional)
+	DockerSocket              string `koanf:"docker_socket"`                // Path to Docker socket (for building builder image)
 
 	// Hypervisor configuration
-	DefaultHypervisor string // Default hypervisor type: "cloud-hypervisor" or "qemu"
+	DefaultHypervisor string `koanf:"default_hypervisor"` // Default hypervisor type: "cloud-hypervisor" or "qemu"
 
 	// GPU configuration
-	GPUProfileCacheTTL string // TTL for GPU profile metadata cache (e.g., "30m")
+	GPUProfileCacheTTL string `koanf:"gpu_profile_cache_ttl"` // TTL for GPU profile metadata cache (e.g., "30m")
 
 	// Oversubscription ratios (1.0 = no oversubscription, 2.0 = 2x oversubscription)
-	OversubCPU     float64 // CPU oversubscription ratio
-	OversubMemory  float64 // Memory oversubscription ratio
-	OversubDisk    float64 // Disk oversubscription ratio
-	OversubNetwork float64 // Network oversubscription ratio
-	OversubDiskIO  float64 // Disk I/O oversubscription ratio
+	OversubCPU     float64 `koanf:"oversub_cpu"`      // CPU oversubscription ratio
+	OversubMemory  float64 `koanf:"oversub_memory"`   // Memory oversubscription ratio
+	OversubDisk    float64 `koanf:"oversub_disk"`     // Disk oversubscription ratio
+	OversubNetwork float64 `koanf:"oversub_network"`  // Network oversubscription ratio
+	OversubDiskIO  float64 `koanf:"oversub_disk_io"`  // Disk I/O oversubscription ratio
 
 	// Network rate limiting
-	UploadBurstMultiplier   int // Multiplier for upload burst ceiling vs guaranteed rate (default: 4)
-	DownloadBurstMultiplier int // Multiplier for download burst bucket vs rate (default: 4)
+	UploadBurstMultiplier   int `koanf:"upload_burst_multiplier"`   // Multiplier for upload burst ceiling vs guaranteed rate (default: 4)
+	DownloadBurstMultiplier int `koanf:"download_burst_multiplier"` // Multiplier for download burst bucket vs rate (default: 4)
 
 	// Resource capacity limits (empty = auto-detect from host)
-	DiskLimit       string  // Hard disk limit for DataDir, e.g. "500GB"
-	NetworkLimit    string  // Hard network limit, e.g. "10Gbps" (empty = detect from uplink speed)
-	DiskIOLimit     string  // Hard disk I/O limit, e.g. "500MB/s" (empty = auto-detect from disk type)
-	MaxImageStorage float64 // Max image storage as fraction of disk (0.2 = 20%), counts OCI cache + rootfs
+	DiskLimit       string  `koanf:"disk_limit"`        // Hard disk limit for DataDir, e.g. "500GB"
+	NetworkLimit    string  `koanf:"network_limit"`     // Hard network limit, e.g. "10Gbps" (empty = detect from uplink speed)
+	DiskIOLimit     string  `koanf:"disk_io_limit"`     // Hard disk I/O limit, e.g. "500MB/s" (empty = auto-detect from disk type)
+	MaxImageStorage float64 `koanf:"max_image_storage"` // Max image storage as fraction of disk (0.2 = 20%), counts OCI cache + rootfs
 }
 
-// Load loads configuration from environment variables
-// Automatically loads .env file if present
-func Load() *Config {
-	// Try to load .env file (fail silently if not present)
-	_ = godotenv.Load()
+// GetDefaultConfigPaths returns the default config file paths to search.
+// Returns paths in order of precedence (first found wins).
+func GetDefaultConfigPaths() []string {
+	home, _ := os.UserHomeDir()
+	if runtime.GOOS == "darwin" {
+		return []string{
+			filepath.Join(home, ".config", "hypeman", "config.yaml"),
+		}
+	}
+	// Linux: check /etc first, then user config
+	return []string{
+		"/etc/hypeman/config.yaml",
+		filepath.Join(home, ".config", "hypeman", "config.yaml"),
+	}
+}
 
-	cfg := &Config{
-		Port:                getEnv("PORT", "8080"),
-		DataDir:             getEnv("DATA_DIR", "/var/lib/hypeman"),
-		BridgeName:          getEnv("BRIDGE_NAME", "vmbr0"),
-		SubnetCIDR:          getEnv("SUBNET_CIDR", "10.100.0.0/16"),
-		SubnetGateway:       getEnv("SUBNET_GATEWAY", ""),   // empty = derived as first IP from subnet
-		UplinkInterface:     getEnv("UPLINK_INTERFACE", ""), // empty = auto-detect from default route
-		JwtSecret:           getEnv("JWT_SECRET", ""),
-		DNSServer:           getEnv("DNS_SERVER", "1.1.1.1"),
-		MaxConcurrentBuilds: getEnvInt("MAX_CONCURRENT_BUILDS", 1),
-		MaxOverlaySize:      getEnv("MAX_OVERLAY_SIZE", "100GB"),
-		LogMaxSize:          getEnv("LOG_MAX_SIZE", "50MB"),
-		LogMaxFiles:         getEnvInt("LOG_MAX_FILES", 1),
-		LogRotateInterval:   getEnv("LOG_ROTATE_INTERVAL", "5m"),
+// defaultConfig returns a Config struct with all default values set.
+func defaultConfig() *Config {
+	return &Config{
+		Port:                "8080",
+		DataDir:             "/var/lib/hypeman",
+		BridgeName:          "vmbr0",
+		SubnetCIDR:          "10.100.0.0/16",
+		SubnetGateway:       "", // empty = derived as first IP from subnet
+		UplinkInterface:     "", // empty = auto-detect from default route
+		JwtSecret:           "",
+		DNSServer:           "1.1.1.1",
+		MaxConcurrentBuilds: 1,
+		MaxOverlaySize:      "100GB",
+		LogMaxSize:          "50MB",
+		LogMaxFiles:         1,
+		LogRotateInterval:   "5m",
 
 		// Resource limits - per instance (0 = unlimited)
-		MaxVcpusPerInstance:  getEnvInt("MAX_VCPUS_PER_INSTANCE", 16),
-		MaxMemoryPerInstance: getEnv("MAX_MEMORY_PER_INSTANCE", "32GB"),
+		MaxVcpusPerInstance:  16,
+		MaxMemoryPerInstance: "32GB",
 
 		// Resource limits - aggregate
-		// Note: CPU/memory aggregate limits are now handled via oversubscription ratios
-		MaxTotalVolumeStorage: getEnv("MAX_TOTAL_VOLUME_STORAGE", ""),
+		MaxTotalVolumeStorage: "",
 
 		// OpenTelemetry configuration
-		OtelEnabled:           getEnvBool("OTEL_ENABLED", false),
-		OtelEndpoint:          getEnv("OTEL_ENDPOINT", "127.0.0.1:4317"),
-		OtelServiceName:       getEnv("OTEL_SERVICE_NAME", "hypeman"),
-		OtelServiceInstanceID: getEnv("OTEL_SERVICE_INSTANCE_ID", getHostname()),
-		OtelInsecure:          getEnvBool("OTEL_INSECURE", true),
-		Version:               getEnv("VERSION", getBuildVersion()),
-		Env:                   getEnv("ENV", "unset"),
+		OtelEnabled:           false,
+		OtelEndpoint:          "127.0.0.1:4317",
+		OtelServiceName:       "hypeman",
+		OtelServiceInstanceID: getHostname(),
+		OtelInsecure:          true,
+		Version:               getBuildVersion(),
+		Env:                   "unset",
 
 		// Logging configuration
-		LogLevel: getEnv("LOG_LEVEL", "info"),
+		LogLevel: "info",
 
 		// Caddy / Ingress configuration
-		CaddyListenAddress: getEnv("CADDY_LISTEN_ADDRESS", "0.0.0.0"),
-		CaddyAdminAddress:  getEnv("CADDY_ADMIN_ADDRESS", "127.0.0.1"),
-		CaddyAdminPort:     getEnvInt("CADDY_ADMIN_PORT", 0),  // 0 = random port to prevent conflicts on shared dev machines
-		InternalDNSPort:    getEnvInt("INTERNAL_DNS_PORT", 0), // 0 = random port; used for dynamic upstream resolution
-		// Set to false if you're likely to frequently update hypeman
-		CaddyStopOnShutdown: getEnvBool("CADDY_STOP_ON_SHUTDOWN", true),
+		CaddyListenAddress:  "0.0.0.0",
+		CaddyAdminAddress:   "127.0.0.1",
+		CaddyAdminPort:      0, // 0 = random port to prevent conflicts on shared dev machines
+		InternalDNSPort:     0, // 0 = random port; used for dynamic upstream resolution
+		CaddyStopOnShutdown: true,
 
 		// ACME / TLS configuration
-		AcmeEmail:             getEnv("ACME_EMAIL", ""),
-		AcmeDnsProvider:       getEnv("ACME_DNS_PROVIDER", ""),
-		AcmeCA:                getEnv("ACME_CA", ""),
-		DnsPropagationTimeout: getEnv("DNS_PROPAGATION_TIMEOUT", ""),
-		DnsResolvers:          getEnv("DNS_RESOLVERS", ""),
-		TlsAllowedDomains:     getEnv("TLS_ALLOWED_DOMAINS", ""), // Empty = no TLS domains allowed
+		AcmeEmail:             "",
+		AcmeDnsProvider:       "",
+		AcmeCA:                "",
+		DnsPropagationTimeout: "",
+		DnsResolvers:          "",
+		TlsAllowedDomains:     "",
 
 		// Cloudflare configuration
-		CloudflareApiToken: getEnv("CLOUDFLARE_API_TOKEN", ""),
+		CloudflareApiToken: "",
 
 		// API ingress configuration
-		ApiHostname:     getEnv("API_HOSTNAME", ""),  // Empty = disabled
-		ApiTLS:          getEnvBool("API_TLS", true), // Default to TLS enabled
-		ApiRedirectHTTP: getEnvBool("API_REDIRECT_HTTP", true),
+		ApiHostname:     "",   // Empty = disabled
+		ApiTLS:          true, // Default to TLS enabled
+		ApiRedirectHTTP: true,
 
 		// Build system configuration
-		MaxConcurrentSourceBuilds: getEnvInt("MAX_CONCURRENT_SOURCE_BUILDS", 2),
-		BuilderImage:              getEnv("BUILDER_IMAGE", "hypeman/builder:latest"),
-		RegistryURL:               getEnv("REGISTRY_URL", "localhost:8080"),
-		RegistryInsecure:          getEnvBool("REGISTRY_INSECURE", false),
-		RegistryCACertFile:        getEnv("REGISTRY_CA_CERT_FILE", ""), // Path to CA cert for registry TLS
-		BuildTimeout:              getEnvInt("BUILD_TIMEOUT", 600),
-		BuildSecretsDir:           getEnv("BUILD_SECRETS_DIR", ""), // Optional: path to directory with build secrets
-		DockerSocket:              getEnv("DOCKER_SOCKET", "/var/run/docker.sock"),
+		MaxConcurrentSourceBuilds: 2,
+		BuilderImage:              "hypeman/builder:latest",
+		RegistryURL:               "localhost:8080",
+		RegistryInsecure:          false,
+		RegistryCACertFile:        "",
+		BuildTimeout:              600,
+		BuildSecretsDir:           "",
+		DockerSocket:              "/var/run/docker.sock",
 
 		// Hypervisor configuration
-		DefaultHypervisor: getEnv("DEFAULT_HYPERVISOR", "cloud-hypervisor"),
+		DefaultHypervisor: "cloud-hypervisor",
 
 		// GPU configuration
-		GPUProfileCacheTTL: getEnv("GPU_PROFILE_CACHE_TTL", "30m"),
+		GPUProfileCacheTTL: "30m",
 
 		// Oversubscription ratios (1.0 = no oversubscription)
-		OversubCPU:     getEnvFloat("OVERSUB_CPU", 4.0),
-		OversubMemory:  getEnvFloat("OVERSUB_MEMORY", 1.0),
-		OversubDisk:    getEnvFloat("OVERSUB_DISK", 1.0),
-		OversubNetwork: getEnvFloat("OVERSUB_NETWORK", 2.0),
-		OversubDiskIO:  getEnvFloat("OVERSUB_DISK_IO", 2.0),
+		OversubCPU:     4.0,
+		OversubMemory:  1.0,
+		OversubDisk:    1.0,
+		OversubNetwork: 2.0,
+		OversubDiskIO:  2.0,
 
 		// Network rate limiting
-		UploadBurstMultiplier:   getEnvInt("UPLOAD_BURST_MULTIPLIER", 4),
-		DownloadBurstMultiplier: getEnvInt("DOWNLOAD_BURST_MULTIPLIER", 4),
+		UploadBurstMultiplier:   4,
+		DownloadBurstMultiplier: 4,
 
 		// Resource capacity limits (empty = auto-detect)
-		DiskLimit:       getEnv("DISK_LIMIT", ""),
-		NetworkLimit:    getEnv("NETWORK_LIMIT", ""),
-		DiskIOLimit:     getEnv("DISK_IO_LIMIT", ""),
-		MaxImageStorage: getEnvFloat("MAX_IMAGE_STORAGE", 0.2), // 20% of disk by default
+		DiskLimit:       "",
+		NetworkLimit:    "",
+		DiskIOLimit:     "",
+		MaxImageStorage: 0.2, // 20% of disk by default
 	}
-
-	return cfg
 }
 
-func getEnv(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return defaultValue
-}
+// Load loads configuration with the following precedence (highest to lowest):
+// 1. Environment variables (e.g., PORT, DATA_DIR, JWT_SECRET)
+// 2. YAML config file (if found)
+// 3. Default values
+//
+// The configPath parameter specifies an explicit config file path.
+// If empty, searches default locations based on OS.
+func Load(configPath string) *Config {
+	k := koanf.New(".")
 
-func getEnvInt(key string, defaultValue int) int {
-	if value := os.Getenv(key); value != "" {
-		if intVal, err := strconv.Atoi(value); err == nil {
-			return intVal
+	// 1. Load defaults first
+	defaults := defaultConfig()
+	if err := k.Load(structs.Provider(defaults, "koanf"), nil); err != nil {
+		// Should never happen with our struct
+		panic(fmt.Sprintf("failed to load default config: %v", err))
+	}
+
+	// 2. Load from YAML config file (if exists)
+	if configPath == "" {
+		// Search default paths
+		for _, path := range GetDefaultConfigPaths() {
+			if _, err := os.Stat(path); err == nil {
+				configPath = path
+				break
+			}
 		}
 	}
-	return defaultValue
-}
-
-func getEnvBool(key string, defaultValue bool) bool {
-	if value := os.Getenv(key); value != "" {
-		if boolVal, err := strconv.ParseBool(value); err == nil {
-			return boolVal
-		}
+	if configPath != "" {
+		// Ignore errors - file may not exist
+		_ = k.Load(file.Provider(configPath), yaml.Parser())
 	}
-	return defaultValue
-}
 
-func getEnvFloat(key string, defaultValue float64) float64 {
-	if value := os.Getenv(key); value != "" {
-		if floatVal, err := strconv.ParseFloat(value, 64); err == nil {
-			return floatVal
-		}
+	// 3. Overlay environment variables (highest precedence)
+	// Environment variables use SCREAMING_SNAKE_CASE (e.g., JWT_SECRET, DATA_DIR)
+	// They map to flat snake_case koanf keys (e.g., jwt_secret, data_dir)
+	// Note: delim must be "" to prevent unflattening (e.g., DATA_DIR → data.dir)
+	envProvider := env.Provider("", "", func(s string) string {
+		return strings.ToLower(s)
+	})
+	_ = k.Load(envProvider, nil)
+
+	// 4. Unmarshal to Config struct
+	var cfg Config
+	if err := k.Unmarshal("", &cfg); err != nil {
+		panic(fmt.Sprintf("failed to unmarshal config: %v", err))
 	}
-	return defaultValue
+
+	return &cfg
 }
 
 // Validate checks configuration values for correctness.

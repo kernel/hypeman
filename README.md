@@ -35,15 +35,25 @@ Install Hypeman (Linux and macOS supported):
 curl -fsSL https://get.hypeman.sh | bash
 ```
 
-This installs both the Hypeman server and CLI. The installer handles all dependencies and configuration automatically.
+This installs the Hypeman server, CLI, and token tool. The installer:
+- Generates a YAML config file with a random JWT secret
+- Starts the server as a system service (launchd on macOS, systemd on Linux)
+- Creates a CLI config file (`~/.config/hypeman/cli.yaml`) with a pre-authenticated token
 
-## CLI Installation
+No environment variables needed -- just run `hypeman` commands immediately after install.
 
-To use Hypeman via the CLI on a separate machine:
+## Remote CLI Access
 
-**Homebrew:**
+To use the Hypeman CLI from a **different machine** than the server:
+
+**Homebrew (macOS):**
 ```bash
 brew install kernel/tap/hypeman
+```
+
+**Linux:**
+```bash
+curl -fsSL https://get.hypeman.sh/cli | bash
 ```
 
 **Go:**
@@ -51,12 +61,32 @@ brew install kernel/tap/hypeman
 go install 'github.com/kernel/hypeman-cli/cmd/hypeman@latest'
 ```
 
-**Configure CLI access:**
+Then create a CLI config file at `~/.config/hypeman/cli.yaml`:
+
+```yaml
+base_url: http://<server-host>:8080
+api_key: "<token>"
+```
+
+To generate a token, run `hypeman-token` on the server:
 
 ```bash
-export HYPEMAN_API_KEY="<token>"
-export HYPEMAN_BASE_URL="http://<host>:8080"
+hypeman-token -user-id "my-user" -duration 8760h
 ```
+
+Environment variables (`HYPEMAN_BASE_URL`, `HYPEMAN_API_KEY`) and CLI flags (`--base-url`) also work and take precedence over the config file.
+
+## Configuration
+
+Hypeman uses YAML config files with environment variable overrides.
+
+| Component | Config File | Env Override |
+|-----------|-------------|--------------|
+| Server | `/etc/hypeman/config.yaml` (Linux) or `~/.config/hypeman/config.yaml` (macOS) | `CONFIG_PATH`, plus individual env vars like `PORT`, `JWT_SECRET`, etc. |
+| CLI | `~/.config/hypeman/cli.yaml` | `HYPEMAN_BASE_URL`, `HYPEMAN_API_KEY` |
+| Token tool | Reads server config automatically | `JWT_SECRET` |
+
+See [`config.example.yaml`](config.example.yaml) (Linux) and [`config.darwin.example.yaml`](config.darwin.example.yaml) (macOS) for all available server options.
 
 ## Usage
 

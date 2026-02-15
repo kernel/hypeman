@@ -123,7 +123,7 @@ else
 fi
 
 # =============================================================================
-# Remove binaries and wrappers
+# Remove binaries and symlinks
 # =============================================================================
 
 info "Removing binaries..."
@@ -133,7 +133,7 @@ if [ "$OS" = "darwin" ]; then
     $SUDO rm -f "${INSTALL_DIR}/hypeman-token"
     $SUDO rm -f "${INSTALL_DIR}/hypeman"
 else
-    # Remove wrapper scripts from /usr/local/bin
+    # Remove symlinks from /usr/local/bin
     $SUDO rm -f /usr/local/bin/hypeman
     $SUDO rm -f /usr/local/bin/hypeman-token
 
