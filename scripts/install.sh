@@ -528,7 +528,8 @@ YAMLEOF
 else
     info "Config file already exists at ${CONFIG_FILE}, skipping..."
     # Read JWT_SECRET from existing config for CLI token generation
-    JWT_SECRET=$($SUDO grep '^jwt_secret:' "$CONFIG_FILE" 2>/dev/null | sed 's/^jwt_secret:[[:space:]]*//' | tr -d '"' || true)
+    # Handle: leading whitespace, single/double quotes, trailing whitespace
+    JWT_SECRET=$($SUDO grep -E '^[[:space:]]*jwt_secret[[:space:]]*:' "$CONFIG_FILE" 2>/dev/null | head -1 | sed 's/^[[:space:]]*jwt_secret[[:space:]]*:[[:space:]]*//' | tr -d "\"'" | sed 's/[[:space:]]*$//' || true)
 fi
 
 # =============================================================================
@@ -703,7 +704,7 @@ if [ -n "$CLI_VERSION" ]; then
             # Determine the port from config
             CLI_PORT="8080"
             if [ -f "$CONFIG_FILE" ]; then
-                PARSED_PORT=$(grep '^port:' "$CONFIG_FILE" 2>/dev/null | sed 's/^port:[[:space:]]*//' | tr -d '"' || true)
+                PARSED_PORT=$(grep -E '^[[:space:]]*port[[:space:]]*:' "$CONFIG_FILE" 2>/dev/null | head -1 | sed 's/^[[:space:]]*port[[:space:]]*:[[:space:]]*//' | tr -d "\"'" | sed 's/[[:space:]]*$//' || true)
                 if [ -n "$PARSED_PORT" ]; then
                     CLI_PORT="$PARSED_PORT"
                 fi

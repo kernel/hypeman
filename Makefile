@@ -256,9 +256,9 @@ test-darwin: build-embedded sign-vz-shim
 
 # Generate JWT token for testing
 # Usage: make gen-jwt [USER_ID=test-user]
-# hypeman-token reads jwt_secret from config.yaml automatically
+# Checks CONFIG_PATH, then local config.yaml, then default config paths
 gen-jwt:
-	@go run ./cmd/gen-jwt -user-id $${USER_ID:-test-user}
+	@CONFIG_PATH=$${CONFIG_PATH:-$$([ -f config.yaml ] && echo config.yaml)} go run ./cmd/gen-jwt -user-id $${USER_ID:-test-user}
 
 # Build the generic builder image for builds
 build-builder:
