@@ -126,6 +126,10 @@ fi
 [ -n "$API_KEY" ] || fail "Failed to generate API token (hypeman-token should find jwt_secret from config.yaml)"
 pass "hypeman-token reads jwt_secret from config.yaml"
 
+# Export env vars for CLI auth (needed until the CLI release with cli.yaml support)
+export HYPEMAN_BASE_URL="http://localhost:${PORT}"
+export HYPEMAN_API_KEY="$API_KEY"
+
 # Determine CLI path
 HYPEMAN_CMD="/usr/local/bin/hypeman"
 
