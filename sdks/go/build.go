@@ -252,6 +252,9 @@ type BuildNewParams struct {
 	// specified, the build will import from cache/global/{key}. Admin builds will also
 	// export to this location.
 	GlobalCacheKey param.Opt[string] `json:"global_cache_key,omitzero"`
+	// Custom image name for the build output. When set, the image is pushed to
+	// {registry}/{image_name} instead of {registry}/builds/{id}.
+	ImageName param.Opt[string] `json:"image_name,omitzero"`
 	// Set to "true" to grant push access to global cache (operator-only). Admin builds
 	// can populate the shared global cache that all tenant builds read from.
 	IsAdminBuild param.Opt[string] `json:"is_admin_build,omitzero"`
