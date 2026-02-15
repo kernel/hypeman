@@ -10,6 +10,7 @@ import (
 	"strconv"
 
 	"github.com/kernel/hypeman/lib/builds"
+	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/oapi"
 )
@@ -155,6 +156,17 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 			Code:    "invalid_request",
 			Message: "source is required",
 		}, nil
+	}
+
+	// Validate image_name early so the user gets a fast 400 instead of
+	// a successful build that silently falls back to builds/{id}.
+	if imageName != "" {
+		if _, err := images.ParseNormalizedRef(imageName); err != nil {
+			return oapi.CreateBuild400JSONResponse{
+				Code:    "invalid_request",
+				Message: fmt.Sprintf("invalid image_name: %v", err),
+			}, nil
+		}
 	}
 
 	// Note: Dockerfile validation happens in the builder agent.
