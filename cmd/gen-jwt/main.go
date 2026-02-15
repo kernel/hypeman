@@ -4,31 +4,14 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
-	"runtime"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/knadh/koanf/parsers/yaml"
 	"github.com/knadh/koanf/providers/file"
 	"github.com/knadh/koanf/v2"
+	"github.com/kernel/hypeman/cmd/api/config"
 )
-
-// getServerConfigPaths returns the default config file paths to search for jwt_secret.
-// This matches the paths used by hypeman-api.
-func getServerConfigPaths() []string {
-	home, _ := os.UserHomeDir()
-	if runtime.GOOS == "darwin" {
-		return []string{
-			filepath.Join(home, ".config", "hypeman", "config.yaml"),
-		}
-	}
-	// Linux: check /etc first, then user config
-	return []string{
-		"/etc/hypeman/config.yaml",
-		filepath.Join(home, ".config", "hypeman", "config.yaml"),
-	}
-}
 
 // getJWTSecret retrieves the JWT secret with the following precedence:
 // 1. JWT_SECRET environment variable
@@ -41,7 +24,7 @@ func getJWTSecret() string {
 
 	// 2. Try to read from config files
 	k := koanf.New(".")
-	for _, path := range getServerConfigPaths() {
+	for _, path := range config.GetDefaultConfigPaths() {
 		if err := k.Load(file.Provider(path), yaml.Parser()); err == nil {
 			if s := k.String("jwt_secret"); s != "" {
 				return s
@@ -61,7 +44,7 @@ func main() {
 	if jwtSecret == "" {
 		fmt.Fprintf(os.Stderr, "Error: JWT_SECRET not found.\n")
 		fmt.Fprintf(os.Stderr, "Set JWT_SECRET environment variable or ensure jwt_secret is configured in:\n")
-		for _, path := range getServerConfigPaths() {
+		for _, path := range config.GetDefaultConfigPaths() {
 			fmt.Fprintf(os.Stderr, "  - %s\n", path)
 		}
 		os.Exit(1)

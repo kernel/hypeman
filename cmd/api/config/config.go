@@ -264,7 +264,8 @@ func defaultConfig() *Config {
 //
 // The configPath parameter specifies an explicit config file path.
 // If empty, searches default locations based on OS.
-func Load(configPath string) *Config {
+// Returns an error if an explicitly provided configPath cannot be loaded.
+func Load(configPath string) (*Config, error) {
 	k := koanf.New(".")
 
 	// 1. Load defaults first
@@ -275,6 +276,7 @@ func Load(configPath string) *Config {
 	}
 
 	// 2. Load from YAML config file (if exists)
+	explicitConfig := configPath != ""
 	if configPath == "" {
 		// Search default paths
 		for _, path := range GetDefaultConfigPaths() {
@@ -285,8 +287,12 @@ func Load(configPath string) *Config {
 		}
 	}
 	if configPath != "" {
-		// Ignore errors - file may not exist
-		_ = k.Load(file.Provider(configPath), yaml.Parser())
+		if err := k.Load(file.Provider(configPath), yaml.Parser()); err != nil {
+			if explicitConfig {
+				return nil, fmt.Errorf("failed to load config file %s: %w", configPath, err)
+			}
+			// Auto-discovered path: ignore errors (file may have been removed between stat and load)
+		}
 	}
 
 	// 3. Overlay environment variables (highest precedence)
@@ -304,7 +310,7 @@ func Load(configPath string) *Config {
 		panic(fmt.Sprintf("failed to unmarshal config: %v", err))
 	}
 
-	return &cfg
+	return &cfg, nil
 }
 
 // Validate checks configuration values for correctness.

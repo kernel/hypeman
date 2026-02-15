@@ -710,7 +710,7 @@ if [ -n "$CLI_VERSION" ]; then
             fi
 
             # Generate a long-lived CLI token
-            CLI_TOKEN=$("${INSTALL_DIR}/hypeman-token" -user-id "cli-$(whoami)" -duration 8760h 2>/dev/null || true)
+            CLI_TOKEN=$(JWT_SECRET="${JWT_SECRET}" "${INSTALL_DIR}/hypeman-token" -user-id "cli-$(whoami)" -duration 8760h 2>/dev/null || true)
             if [ -z "$CLI_TOKEN" ]; then
                 warn "Failed to generate CLI token. You may need to run: hypeman-token -user-id cli-$(whoami) > token and add it to ${CLI_CONFIG_FILE}"
                 cat > "$CLI_CONFIG_FILE" << CLIEOF
