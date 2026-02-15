@@ -112,7 +112,7 @@ jobs:
       - name: Install dependencies
         run: brew list caddy &>/dev/null || brew install caddy
       - name: Run E2E install test
-        run: CLI_BRANCH=koanf-yaml-config bash scripts/e2e-install-test.sh
+        run: bash scripts/e2e-install-test.sh
       - name: Cleanup on failure
         if: failure()
         run: bash scripts/uninstall.sh || true
