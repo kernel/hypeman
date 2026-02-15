@@ -73,6 +73,10 @@ Examples:
 			Name:  "secrets",
 			Usage: `JSON array of secret references to inject during build (e.g., '[{"id":"npm_token"}]')`,
 		},
+		&cli.StringFlag{
+			Name:  "image-name",
+			Usage: `Custom image name for the build output (pushed to {registry}/{image_name} instead of {registry}/builds/{id})`,
+		},
 	},
 	Commands: []*cli.Command{
 		&buildListCmd,
@@ -164,6 +168,9 @@ func handleBuild(ctx context.Context, cmd *cli.Command) error {
 	}
 	if v := cmd.String("secrets"); v != "" {
 		params.Secrets = hypeman.Opt(v)
+	}
+	if v := cmd.String("image-name"); v != "" {
+		params.ImageName = hypeman.Opt(v)
 	}
 
 	// Start build
