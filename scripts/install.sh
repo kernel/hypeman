@@ -444,6 +444,8 @@ if [ ! -f "$CONFIG_FILE" ]; then
         # Set jwt_secret in the config
         if grep -q '^jwt_secret:' "${TMP_DIR}/config.yaml"; then
             sed -i '' "s|^jwt_secret:.*|jwt_secret: \"${JWT_SECRET}\"|" "${TMP_DIR}/config.yaml"
+        else
+            error "Config template missing jwt_secret field — cannot configure authentication"
         fi
 
         # Auto-detect Docker socket
@@ -491,6 +493,8 @@ if [ ! -f "$CONFIG_FILE" ]; then
         # Set jwt_secret in the config
         if grep -q '^jwt_secret:' "${TMP_DIR}/config.yaml"; then
             sed -i "s|^jwt_secret:.*|jwt_secret: \"${JWT_SECRET}\"|" "${TMP_DIR}/config.yaml"
+        else
+            error "Config template missing jwt_secret field — cannot configure authentication"
         fi
 
         # Set fixed ports for production (nested under caddy:)
