@@ -262,7 +262,7 @@ func defaultConfig() *Config {
 
 		Build: BuildConfig{
 			MaxConcurrentSourceBuilds: 2,
-			BuilderImage:              "hypeman/builder:latest",
+			BuilderImage:              "none",
 			Timeout:                   600,
 			SecretsDir:                "",
 			DockerSocket:              "/var/run/docker.sock",
