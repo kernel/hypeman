@@ -454,7 +454,8 @@ registry:
   url: 192.168.64.1:8080
   insecure: true
 build:
-  builder_image: hypeman/builder:latest
+  builder_image: none
+  docker_socket: /var/run/docker.sock
   max_concurrent_source_builds: 2
   timeout: 600
 limits:
@@ -491,9 +492,9 @@ YAMLEOF
                 if grep -q '^  docker_socket:' "${TMP_DIR}/config.yaml"; then
                     sed -i '' "s|^  docker_socket:.*|  docker_socket: \"${DOCKER_SOCKET}\"|" "${TMP_DIR}/config.yaml"
                 else
-                    # Append docker_socket after the build: block
-                    sed -i '' "/^build:/a\\
-  docker_socket: \"${DOCKER_SOCKET}\"" "${TMP_DIR}/config.yaml"
+                    # Append docker_socket after the build: line (BSD-compatible)
+                    sed -i '' "s|^build:|build:\\
+  docker_socket: \"${DOCKER_SOCKET}\"|" "${TMP_DIR}/config.yaml"
                 fi
             else
                 # No build: section, add one

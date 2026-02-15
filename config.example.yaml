@@ -85,6 +85,15 @@ data_dir: /var/lib/hypeman
 # env: dev                        # deployment environment
 
 # =============================================================================
+# Build Configuration
+# =============================================================================
+# build:
+#   builder_image: none             # "none" = built on first run
+#   docker_socket: /var/run/docker.sock
+#   max_concurrent_source_builds: 2
+#   timeout: 600
+
+# =============================================================================
 # Resource Limits
 # =============================================================================
 # limits:

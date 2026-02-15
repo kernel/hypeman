@@ -76,7 +76,8 @@ registry:
   insecure: true
 
 build:
-  builder_image: hypeman/builder:latest
+  builder_image: none
+  docker_socket: /var/run/docker.sock
   max_concurrent_source_builds: 2
   timeout: 600
 
