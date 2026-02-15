@@ -15,15 +15,25 @@ import (
 
 // getJWTSecret retrieves the JWT secret with the following precedence:
 // 1. JWT_SECRET environment variable
-// 2. jwt_secret from config.yaml files (same paths as hypeman-api)
+// 2. jwt_secret from CONFIG_PATH config file (if set)
+// 3. jwt_secret from default config.yaml paths (same as hypeman-api)
 func getJWTSecret() string {
 	// 1. Check environment variable first (highest precedence)
 	if s := os.Getenv("JWT_SECRET"); s != "" {
 		return s
 	}
 
-	// 2. Try to read from config files
+	// 2. Try CONFIG_PATH first (same as hypeman-api), then default paths
 	k := koanf.New(".")
+	if configPath := os.Getenv("CONFIG_PATH"); configPath != "" {
+		if err := k.Load(file.Provider(configPath), yaml.Parser()); err == nil {
+			if s := k.String("jwt_secret"); s != "" {
+				return s
+			}
+		}
+	}
+
+	// 3. Try default config file paths
 	for _, path := range config.GetDefaultConfigPaths() {
 		if err := k.Load(file.Provider(path), yaml.Parser()); err == nil {
 			if s := k.String("jwt_secret"); s != "" {
@@ -43,7 +53,7 @@ func main() {
 	jwtSecret := getJWTSecret()
 	if jwtSecret == "" {
 		fmt.Fprintf(os.Stderr, "Error: JWT_SECRET not found.\n")
-		fmt.Fprintf(os.Stderr, "Set JWT_SECRET environment variable or ensure jwt_secret is configured in:\n")
+		fmt.Fprintf(os.Stderr, "Set JWT_SECRET environment variable, set CONFIG_PATH, or ensure jwt_secret is configured in:\n")
 		for _, path := range config.GetDefaultConfigPaths() {
 			fmt.Fprintf(os.Stderr, "  - %s\n", path)
 		}

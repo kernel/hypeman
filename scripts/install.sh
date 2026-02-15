@@ -528,7 +528,7 @@ YAMLEOF
 else
     info "Config file already exists at ${CONFIG_FILE}, skipping..."
     # Read JWT_SECRET from existing config for CLI token generation
-    JWT_SECRET=$(grep '^jwt_secret:' "$CONFIG_FILE" 2>/dev/null | sed 's/^jwt_secret:[[:space:]]*//' | tr -d '"' || true)
+    JWT_SECRET=$($SUDO grep '^jwt_secret:' "$CONFIG_FILE" 2>/dev/null | sed 's/^jwt_secret:[[:space:]]*//' | tr -d '"' || true)
 fi
 
 # =============================================================================
