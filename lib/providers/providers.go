@@ -288,17 +288,6 @@ func ProvideBuildManager(p *paths.Paths, cfg *config.Config, instanceManager ins
 		RegistrySecret:      cfg.JwtSecret, // Use same secret for registry tokens
 	}
 
-	// Apply defaults if not set
-	if buildConfig.MaxConcurrentBuilds == 0 {
-		buildConfig.MaxConcurrentBuilds = 2
-	}
-	if buildConfig.BuilderImage == "" {
-		buildConfig.BuilderImage = "hypeman/builder:latest"
-	}
-	if buildConfig.DefaultTimeout == 0 {
-		buildConfig.DefaultTimeout = 600
-	}
-
 	// Configure secret provider (use NoOpSecretProvider as fallback to avoid nil panics)
 	var secretProvider builds.SecretProvider
 	if cfg.Build.SecretsDir != "" {
