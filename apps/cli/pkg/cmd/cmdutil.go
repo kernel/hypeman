@@ -27,9 +27,12 @@ func getDefaultRequestOptions(cmd *cli.Command) []option.RequestOption {
 		option.WithHeader("User-Agent", fmt.Sprintf("Hypeman/CLI %s", Version)),
 	}
 
-	// Override base URL if the --base-url flag is provided
-	if baseURL := cmd.String("base-url"); baseURL != "" {
+	if baseURL := resolveBaseURL(cmd); baseURL != "" {
 		opts = append(opts, option.WithBaseURL(baseURL))
+	}
+
+	if apiKey := resolveAPIKey(); apiKey != "" {
+		opts = append(opts, option.WithAPIKey(apiKey))
 	}
 
 	return opts

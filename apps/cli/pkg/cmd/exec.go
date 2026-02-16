@@ -145,18 +145,12 @@ func handleExec(ctx context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	// Get base URL and API key
-	baseURL := cmd.Root().String("base-url")
-	if baseURL == "" {
-		baseURL = os.Getenv("HYPEMAN_BASE_URL")
-	}
-	if baseURL == "" {
-		baseURL = "http://localhost:8080"
-	}
+	// Get base URL and API key (flag > env > config file)
+	baseURL := resolveBaseURL(cmd)
 
-	apiKey := os.Getenv("HYPEMAN_API_KEY")
+	apiKey := resolveAPIKey()
 	if apiKey == "" {
-		return fmt.Errorf("HYPEMAN_API_KEY environment variable required")
+		return fmt.Errorf("API key required: set HYPEMAN_API_KEY or configure api_key in ~/.config/hypeman/cli.yaml")
 	}
 
 	// Build WebSocket URL
