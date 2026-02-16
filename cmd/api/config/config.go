@@ -393,5 +393,11 @@ func (c *Config) Validate() error {
 	if c.Network.DownloadBurstMultiplier < 1 {
 		return fmt.Errorf("network.download_burst_multiplier must be >= 1, got %v", c.Network.DownloadBurstMultiplier)
 	}
+	if c.Build.MaxConcurrentSourceBuilds <= 0 {
+		return fmt.Errorf("build.max_concurrent_source_builds must be positive, got %d", c.Build.MaxConcurrentSourceBuilds)
+	}
+	if c.Build.Timeout <= 0 {
+		return fmt.Errorf("build.timeout must be positive, got %d", c.Build.Timeout)
+	}
 	return nil
 }
