@@ -288,6 +288,16 @@ func ProvideBuildManager(p *paths.Paths, cfg *config.Config, instanceManager ins
 		RegistrySecret:      cfg.JwtSecret, // Use same secret for registry tokens
 	}
 
+	// Safety-net: ensure critical build config values are never zero, even if
+	// explicitly set to 0 in YAML. A zero concurrent-builds limit would starve
+	// the build queue, and a zero timeout would expire builds immediately.
+	if buildConfig.MaxConcurrentBuilds == 0 {
+		buildConfig.MaxConcurrentBuilds = 2
+	}
+	if buildConfig.DefaultTimeout == 0 {
+		buildConfig.DefaultTimeout = 600
+	}
+
 	// Configure secret provider (use NoOpSecretProvider as fallback to avoid nil panics)
 	var secretProvider builds.SecretProvider
 	if cfg.Build.SecretsDir != "" {
