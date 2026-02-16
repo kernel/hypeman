@@ -88,7 +88,7 @@ data_dir: /var/lib/hypeman
 # Build Configuration
 # =============================================================================
 # build:
-#   builder_image: none             # "none" = built on first run
+#   builder_image: ""               # empty = built from Dockerfile on first run
 #   docker_socket: /var/run/docker.sock
 #   max_concurrent_source_builds: 2
 #   timeout: 600

@@ -262,7 +262,7 @@ func defaultConfig() *Config {
 
 		Build: BuildConfig{
 			MaxConcurrentSourceBuilds: 2,
-			BuilderImage:              "none",
+			BuilderImage:              "", // empty = build from embedded Dockerfile on first run
 			Timeout:                   600,
 			SecretsDir:                "",
 			DockerSocket:              "/var/run/docker.sock",

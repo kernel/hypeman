@@ -76,7 +76,7 @@ registry:
   insecure: true
 
 build:
-  builder_image: none
+  # builder_image: ""  # empty (default) = built from Dockerfile on first run
   docker_socket: /var/run/docker.sock
   max_concurrent_source_builds: 2
   timeout: 600

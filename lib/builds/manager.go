@@ -195,7 +195,7 @@ func (m *manager) Start(ctx context.Context) error {
 func (m *manager) ensureBuilderImage(ctx context.Context) {
 	defer m.builderReady.Store(true)
 
-	if m.config.BuilderImage != "" && m.config.BuilderImage != "none" {
+	if m.config.BuilderImage != "" {
 		// Explicit builder image configured - check if already available
 		if _, err := m.imageManager.GetImage(ctx, m.config.BuilderImage); err == nil {
 			m.logger.Info("builder image already available", "image", m.config.BuilderImage)
