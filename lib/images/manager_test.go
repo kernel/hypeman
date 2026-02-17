@@ -44,14 +44,14 @@ func TestCreateImage(t *testing.T) {
 	require.NoError(t, err)
 	digestHex := strings.SplitN(img.Digest, ":", 2)[1]
 
-	// Check erofs disk file
+	// Check rootfs disk file (erofs on Linux, ext4 on Darwin)
 	diskPath := digestPath(paths.New(dataDir), ref.Repository(), digestHex)
 	diskStat, err := os.Stat(diskPath)
 	require.NoError(t, err)
 	require.False(t, diskStat.IsDir(), "disk path should be a file")
-	require.Greater(t, diskStat.Size(), int64(1000000), "erofs disk should be at least 1MB")
+	require.Greater(t, diskStat.Size(), int64(1000000), "rootfs disk should be at least 1MB")
 	require.Equal(t, diskStat.Size(), *img.SizeBytes, "disk size should match metadata")
-	t.Logf("EROFS disk: path=%s, size=%d bytes", diskPath, diskStat.Size())
+	t.Logf("Rootfs disk (%s): path=%s, size=%d bytes", DefaultImageFormat, diskPath, diskStat.Size())
 
 	// Check metadata file
 	metadataPath := metadataPath(paths.New(dataDir), ref.Repository(), digestHex)

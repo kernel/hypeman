@@ -62,12 +62,12 @@ func digestDir(p *paths.Paths, repository, digestHex string) string {
 }
 
 // digestPath returns the path to the rootfs disk file for a digest
-// Uses .erofs extension (read-only compressed format for rootfs images)
+// Uses .erofs on Linux (compressed) or .ext4 on Darwin (VZ kernel lacks erofs support)
 func digestPath(p *paths.Paths, repository, digestHex string) string {
 	return p.ImageDigestPath(repository, digestHex)
 }
 
-// GetDiskPath returns the filesystem path to an image's rootfs.erofs file (public for instances manager)
+// GetDiskPath returns the filesystem path to an image's rootfs disk file (public for instances manager)
 func GetDiskPath(p *paths.Paths, imageName string, digest string) (string, error) {
 	// Parse image name to get repository
 	ref, err := ParseNormalizedRef(imageName)

@@ -266,7 +266,7 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef) {
 	m.updateStatusByDigest(ref, StatusConverting, nil)
 
 	diskPath := digestPath(m.paths, ref.Repository(), ref.DigestHex())
-	// Use default image format (erofs: read-only compressed with LZ4)
+	// Use default image format (erofs on Linux, ext4 on Darwin)
 	diskSize, err := ExportRootfs(tempDir, diskPath, DefaultImageFormat)
 	if err != nil {
 		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("convert to %s: %w", DefaultImageFormat, err))
