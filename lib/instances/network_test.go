@@ -61,6 +61,9 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 	t.Log("Network initialized")
 
 	// Verify that ensureDockerForwardJump restores Docker's FORWARD chain
+	// when it gets wiped (e.g., by a hypervisor firewall rebuild).
+	// Note: no extra privilege guard needed — make test-linux runs the entire
+	// suite under sudo, so iptables commands have the required permissions.
 	t.Run("DockerForwardChainRestored", func(t *testing.T) {
 		// Check if DOCKER-FORWARD chain exists (Docker must be running on host)
 		checkChain := exec.Command("iptables", "-L", "DOCKER-FORWARD", "-n")
@@ -71,6 +74,16 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 		// Verify jump currently exists
 		checkJump := exec.Command("iptables", "-C", "FORWARD", "-j", "DOCKER-FORWARD")
 		require.NoError(t, checkJump.Run(), "DOCKER-FORWARD jump should exist before test")
+
+		// Safety net: restore the jump if the test fails or aborts after we delete it,
+		// so we don't leave the host's Docker networking broken.
+		t.Cleanup(func() {
+			check := exec.Command("iptables", "-C", "FORWARD", "-j", "DOCKER-FORWARD")
+			if check.Run() != nil {
+				restore := exec.Command("iptables", "-A", "FORWARD", "-j", "DOCKER-FORWARD")
+				_ = restore.Run()
+			}
+		})
 
 		// Simulate the hypervisor flush: delete the jump
 		delJump := exec.Command("iptables", "-D", "FORWARD", "-j", "DOCKER-FORWARD")

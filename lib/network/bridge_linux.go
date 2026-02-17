@@ -419,6 +419,11 @@ func (m *manager) deleteForwardRuleByComment(comment string) {
 // ensureDockerForwardJump checks if Docker's DOCKER-FORWARD chain exists but is
 // unreachable from the FORWARD chain, and restores the jump if missing.
 // This is a no-op if Docker is not installed or the jump already exists.
+//
+// Note: this cannot mis-order DOCKER-FORWARD vs DOCKER-USER because it only acts
+// when the jump is completely absent (chain was flushed). If DOCKER-USER's jump
+// still exists, DOCKER-FORWARD's jump is almost certainly still there too — they
+// get wiped together — and the early -C check returns before we insert anything.
 func (m *manager) ensureDockerForwardJump(ctx context.Context) {
 	log := logger.FromContext(ctx)
 
@@ -459,7 +464,7 @@ func (m *manager) ensureDockerForwardJump(ctx context.Context) {
 // lastHypemanForwardRulePosition returns the line number of the last hypeman-managed
 // rule in the FORWARD chain, or 0 if none are found.
 func (m *manager) lastHypemanForwardRulePosition() int {
-	cmd := exec.Command("iptables", "-L", "FORWARD", "--line-numbers", "-n")
+	cmd := exec.Command("iptables", "-L", "FORWARD", "--line-numbers", "-n", "-v")
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
 	}
