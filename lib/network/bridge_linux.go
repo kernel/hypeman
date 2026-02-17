@@ -441,8 +441,10 @@ func (m *manager) ensureDockerForwardJump(ctx context.Context) {
 	}
 
 	// DOCKER-FORWARD chain exists but the jump from FORWARD is missing — restore it.
-	// Append so it's evaluated after hypeman's specific accept rules.
-	addJump := exec.Command("iptables", "-A", "FORWARD", "-j", "DOCKER-FORWARD")
+	// Insert right after hypeman's last rule so the jump is evaluated before any
+	// explicit DROP/REJECT rules that an external firewall tool may have added.
+	insertPos := m.lastHypemanForwardRulePosition() + 1
+	addJump := exec.Command("iptables", "-I", "FORWARD", fmt.Sprintf("%d", insertPos), "-j", "DOCKER-FORWARD")
 	addJump.SysProcAttr = &syscall.SysProcAttr{
 		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
 	}
@@ -451,7 +453,32 @@ func (m *manager) ensureDockerForwardJump(ctx context.Context) {
 		return
 	}
 
-	log.WarnContext(ctx, "restored missing jump to DOCKER-FORWARD in FORWARD chain")
+	log.WarnContext(ctx, "restored missing jump to DOCKER-FORWARD in FORWARD chain", "position", insertPos)
+}
+
+// lastHypemanForwardRulePosition returns the line number of the last hypeman-managed
+// rule in the FORWARD chain, or 0 if none are found.
+func (m *manager) lastHypemanForwardRulePosition() int {
+	cmd := exec.Command("iptables", "-L", "FORWARD", "--line-numbers", "-n")
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+	}
+	output, err := cmd.Output()
+	if err != nil {
+		return 0
+	}
+
+	lastPos := 0
+	for _, line := range strings.Split(string(output), "\n") {
+		if !strings.Contains(line, "hypeman-") {
+			continue
+		}
+		var pos int
+		if _, err := fmt.Sscanf(line, "%d", &pos); err == nil && pos > lastPos {
+			lastPos = pos
+		}
+	}
+	return lastPos
 }
 
 // createTAPDevice creates TAP device and attaches to bridge.
