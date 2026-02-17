@@ -73,7 +73,7 @@ func TestInstanceNewWithOptionalParams(t *testing.T) {
 	}
 }
 
-func TestInstanceList(t *testing.T) {
+func TestInstanceListWithOptionalParams(t *testing.T) {
 	t.Skip("Prism tests are disabled")
 	baseURL := "http://localhost:4010"
 	if envURL, ok := os.LookupEnv("TEST_API_BASE_URL"); ok {
@@ -86,7 +86,12 @@ func TestInstanceList(t *testing.T) {
 		option.WithBaseURL(baseURL),
 		option.WithAPIKey("My API Key"),
 	)
-	_, err := client.Instances.List(context.TODO())
+	_, err := client.Instances.List(context.TODO(), hypeman.InstanceListParams{
+		Metadata: map[string]string{
+			"foo": "string",
+		},
+		State: hypeman.InstanceListParamsStateCreated,
+	})
 	if err != nil {
 		var apierr *hypeman.Error
 		if errors.As(err, &apierr) {

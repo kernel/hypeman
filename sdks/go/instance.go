@@ -51,10 +51,10 @@ func (r *InstanceService) New(ctx context.Context, body InstanceNewParams, opts 
 }
 
 // List instances
-func (r *InstanceService) List(ctx context.Context, opts ...option.RequestOption) (res *[]Instance, err error) {
+func (r *InstanceService) List(ctx context.Context, query InstanceListParams, opts ...option.RequestOption) (res *[]Instance, err error) {
 	opts = slices.Concat(r.Options, opts)
 	path := "instances"
-	err = requestconfig.ExecuteNewRequest(ctx, http.MethodGet, path, nil, &res, opts...)
+	err = requestconfig.ExecuteNewRequest(ctx, http.MethodGet, path, query, &res, opts...)
 	return
 }
 
@@ -552,6 +552,40 @@ func (r InstanceNewParamsNetwork) MarshalJSON() (data []byte, err error) {
 func (r *InstanceNewParamsNetwork) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, r)
 }
+
+type InstanceListParams struct {
+	// Filter instances by metadata key-value pairs. Uses deepObject style:
+	// ?metadata[team]=backend&metadata[env]=staging Multiple entries are ANDed
+	// together. All specified key-value pairs must match.
+	Metadata map[string]string `query:"metadata,omitzero" json:"-"`
+	// Filter instances by state (e.g., Running, Stopped)
+	//
+	// Any of "Created", "Running", "Paused", "Shutdown", "Stopped", "Standby",
+	// "Unknown".
+	State InstanceListParamsState `query:"state,omitzero" json:"-"`
+	paramObj
+}
+
+// URLQuery serializes [InstanceListParams]'s query parameters as `url.Values`.
+func (r InstanceListParams) URLQuery() (v url.Values, err error) {
+	return apiquery.MarshalWithSettings(r, apiquery.QuerySettings{
+		ArrayFormat:  apiquery.ArrayQueryFormatComma,
+		NestedFormat: apiquery.NestedQueryFormatBrackets,
+	})
+}
+
+// Filter instances by state (e.g., Running, Stopped)
+type InstanceListParamsState string
+
+const (
+	InstanceListParamsStateCreated  InstanceListParamsState = "Created"
+	InstanceListParamsStateRunning  InstanceListParamsState = "Running"
+	InstanceListParamsStatePaused   InstanceListParamsState = "Paused"
+	InstanceListParamsStateShutdown InstanceListParamsState = "Shutdown"
+	InstanceListParamsStateStopped  InstanceListParamsState = "Stopped"
+	InstanceListParamsStateStandby  InstanceListParamsState = "Standby"
+	InstanceListParamsStateUnknown  InstanceListParamsState = "Unknown"
+)
 
 type InstanceLogsParams struct {
 	// Continue streaming new lines after initial output
