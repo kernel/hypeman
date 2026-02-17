@@ -21,11 +21,24 @@ import (
 	"github.com/samber/lo"
 )
 
-// ListInstances lists all instances
+// ListInstances lists instances, optionally filtered by state and/or metadata.
 func (s *ApiService) ListInstances(ctx context.Context, request oapi.ListInstancesRequestObject) (oapi.ListInstancesResponseObject, error) {
 	log := logger.FromContext(ctx)
 
-	domainInsts, err := s.InstanceManager.ListInstances(ctx)
+	// Convert OAPI params to domain filter
+	var filter *instances.ListInstancesFilter
+	if request.Params.State != nil || request.Params.Metadata != nil {
+		filter = &instances.ListInstancesFilter{}
+		if request.Params.State != nil {
+			state := instances.State(*request.Params.State)
+			filter.State = &state
+		}
+		if request.Params.Metadata != nil {
+			filter.Metadata = *request.Params.Metadata
+		}
+	}
+
+	domainInsts, err := s.InstanceManager.ListInstances(ctx, filter)
 	if err != nil {
 		log.ErrorContext(ctx, "failed to list instances", "error", err)
 		return oapi.ListInstances500JSONResponse{

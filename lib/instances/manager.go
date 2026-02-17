@@ -18,7 +18,7 @@ import (
 )
 
 type Manager interface {
-	ListInstances(ctx context.Context) ([]Instance, error)
+	ListInstances(ctx context.Context, filter *ListInstancesFilter) ([]Instance, error)
 	CreateInstance(ctx context.Context, req CreateInstanceRequest) (*Instance, error)
 	// GetInstance returns an instance by ID, name, or ID prefix.
 	// Lookup order: exact ID match -> exact name match -> ID prefix match.
@@ -214,11 +214,25 @@ func (m *manager) StartInstance(ctx context.Context, id string, req StartInstanc
 	return m.startInstance(ctx, id, req)
 }
 
-// ListInstances returns all instances
-func (m *manager) ListInstances(ctx context.Context) ([]Instance, error) {
+// ListInstances returns instances, optionally filtered by the given criteria.
+// Pass nil to return all instances.
+func (m *manager) ListInstances(ctx context.Context, filter *ListInstancesFilter) ([]Instance, error) {
 	// No lock - eventual consistency is acceptable for list operations.
 	// State is derived dynamically, so list is always reasonably current.
-	return m.listInstances(ctx)
+	all, err := m.listInstances(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if filter == nil {
+		return all, nil
+	}
+	filtered := make([]Instance, 0, len(all))
+	for i := range all {
+		if filter.Matches(&all[i]) {
+			filtered = append(filtered, all[i])
+		}
+	}
+	return filtered, nil
 }
 
 // GetInstance returns an instance by ID, name, or ID prefix.
@@ -240,7 +254,7 @@ func (m *manager) GetInstance(ctx context.Context, idOrName string) (*Instance, 
 	}
 
 	// 2. List all instances for name and prefix matching
-	instances, err := m.ListInstances(ctx)
+	instances, err := m.ListInstances(ctx, nil)
 	if err != nil {
 		return nil, err
 	}

@@ -37,10 +37,12 @@ func newMockInstanceManager() *mockInstanceManager {
 	}
 }
 
-func (m *mockInstanceManager) ListInstances(ctx context.Context) ([]instances.Instance, error) {
+func (m *mockInstanceManager) ListInstances(ctx context.Context, filter *instances.ListInstancesFilter) ([]instances.Instance, error) {
 	var result []instances.Instance
 	for _, inst := range m.instances {
-		result = append(result, *inst)
+		if filter == nil || filter.Matches(inst) {
+			result = append(result, *inst)
+		}
 	}
 	return result, nil
 }

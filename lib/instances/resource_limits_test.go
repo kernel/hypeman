@@ -203,7 +203,7 @@ func TestResourceLimits_ZeroMeansUnlimited(t *testing.T) {
 // cleanupTestProcesses kills any Cloud Hypervisor processes started during test
 func cleanupTestProcesses(t *testing.T, mgr *manager) {
 	t.Helper()
-	instances, err := mgr.ListInstances(context.Background())
+	instances, err := mgr.ListInstances(context.Background(), nil)
 	if err != nil {
 		return
 	}
