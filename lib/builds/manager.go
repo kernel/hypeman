@@ -948,42 +948,20 @@ func (m *manager) updateBuildComplete(id string, status string, digest *string, 
 	m.notifyStatusChange(id, status)
 }
 
-// waitForImageReady polls the image manager until the build's image is ready.
+// waitForImageReady blocks until the build's image reaches a terminal state.
 // imageRef should be the short repo name (e.g., "builds/abc123" or "myapp")
 // matching what triggerConversion stores in the image manager.
 // This ensures that when a build reports "ready", the image is actually usable
 // for instance creation (fixes KERNEL-863 race condition).
 func (m *manager) waitForImageReady(ctx context.Context, imageRef string) error {
-	// Poll for up to 60 seconds (image conversion is typically fast)
-	const maxAttempts = 120
-	const pollInterval = 500 * time.Millisecond
-
 	m.logger.Debug("waiting for image to be ready", "image_ref", imageRef)
 
-	for attempt := 0; attempt < maxAttempts; attempt++ {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		img, err := m.imageManager.GetImage(ctx, imageRef)
-		if err == nil {
-			switch img.Status {
-			case images.StatusReady:
-				m.logger.Debug("image is ready", "image_ref", imageRef, "attempts", attempt+1)
-				return nil
-			case images.StatusFailed:
-				return fmt.Errorf("image conversion failed")
-			case images.StatusPending, images.StatusPulling, images.StatusConverting:
-				// Still processing, continue polling
-			}
-		}
-		// Image not found or still processing, wait and retry
-		time.Sleep(pollInterval)
+	if err := m.imageManager.WaitForReady(ctx, imageRef); err != nil {
+		return err
 	}
 
-	return fmt.Errorf("timeout waiting for image to be ready after %v", time.Duration(maxAttempts)*pollInterval)
+	m.logger.Debug("image is ready", "image_ref", imageRef)
+	return nil
 }
 
 // subscribeToStatus adds a subscriber channel for status updates on a build

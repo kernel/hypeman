@@ -62,7 +62,7 @@ func digestDir(p *paths.Paths, repository, digestHex string) string {
 }
 
 // digestPath returns the path to the rootfs disk file for a digest
-// Currently uses .ext4 extension (can change to .erofs when kernel supports it)
+// Uses .erofs extension (read-only compressed format for rootfs images)
 func digestPath(p *paths.Paths, repository, digestHex string) string {
 	return p.ImageDigestPath(repository, digestHex)
 }

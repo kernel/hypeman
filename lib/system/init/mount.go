@@ -85,7 +85,7 @@ func waitForDevice(device string, timeout time.Duration) error {
 }
 
 // setupOverlay sets up the overlay filesystem:
-// - /dev/vda: readonly rootfs (ext4)
+// - /dev/vda: readonly rootfs (erofs or ext4)
 // - /dev/vdb: writable overlay disk (ext4)
 // - /overlay/newroot: merged overlay filesystem
 func setupOverlay(log *Logger) error {
@@ -105,9 +105,12 @@ func setupOverlay(log *Logger) error {
 		}
 	}
 
-	// Mount readonly rootfs from /dev/vda (ext4 filesystem)
-	if err := mount("/dev/vda", "/lower", "ext4", "ro"); err != nil {
-		return fmt.Errorf("mount rootfs: %w", err)
+	// Mount readonly rootfs from /dev/vda
+	// Try erofs first (new default), fall back to ext4 (legacy images)
+	if err := mount("/dev/vda", "/lower", "erofs", "ro"); err != nil {
+		if err := mount("/dev/vda", "/lower", "ext4", "ro"); err != nil {
+			return fmt.Errorf("mount rootfs: %w", err)
+		}
 	}
 	log.Info("hypeman-init:overlay", "mounted rootfs from /dev/vda")
 

@@ -89,7 +89,7 @@ func (p *Paths) ImageDigestDir(repository, digestHex string) string {
 
 // ImageDigestPath returns the path to the rootfs disk file for a digest.
 func (p *Paths) ImageDigestPath(repository, digestHex string) string {
-	return filepath.Join(p.ImageDigestDir(repository, digestHex), "rootfs.ext4")
+	return filepath.Join(p.ImageDigestDir(repository, digestHex), "rootfs.erofs")
 }
 
 // ImageMetadata returns the path to metadata.json for a digest.

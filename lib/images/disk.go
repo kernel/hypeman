@@ -14,12 +14,12 @@ type ExportFormat string
 
 const (
 	FormatExt4  ExportFormat = "ext4"  // Read-only ext4 (app images, default)
-	FormatErofs ExportFormat = "erofs" // Read-only compressed (future: when kernel supports it)
+	FormatErofs ExportFormat = "erofs" // Read-only compressed with LZ4 (default for app images)
 	FormatCpio  ExportFormat = "cpio"  // Uncompressed archive (initrd, fast boot)
 )
 
 // DefaultImageFormat is the default export format for OCI images
-const DefaultImageFormat = FormatExt4
+const DefaultImageFormat = FormatErofs
 
 // ExportRootfs exports rootfs directory in specified format (public for system manager)
 func ExportRootfs(rootfsDir, outputPath string, format ExportFormat) (int64, error) {
