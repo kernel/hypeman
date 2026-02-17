@@ -108,11 +108,14 @@ func setupOverlay(log *Logger) error {
 	// Mount readonly rootfs from /dev/vda
 	// Try erofs first (new default), fall back to ext4 (legacy images)
 	if err := mount("/dev/vda", "/lower", "erofs", "ro"); err != nil {
+		log.Info("hypeman-init:overlay", "erofs mount failed, trying ext4: "+err.Error())
 		if err := mount("/dev/vda", "/lower", "ext4", "ro"); err != nil {
 			return fmt.Errorf("mount rootfs: %w", err)
 		}
+		log.Info("hypeman-init:overlay", "mounted rootfs from /dev/vda (ext4 fallback)")
+	} else {
+		log.Info("hypeman-init:overlay", "mounted rootfs from /dev/vda (erofs)")
 	}
-	log.Info("hypeman-init:overlay", "mounted rootfs from /dev/vda")
 
 	// Mount writable overlay disk from /dev/vdb
 	if err := mount("/dev/vdb", "/overlay", "ext4", ""); err != nil {
