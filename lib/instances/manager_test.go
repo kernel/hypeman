@@ -321,7 +321,7 @@ func TestBasicEndToEnd(t *testing.T) {
 	assert.Equal(t, StateRunning, retrieved.State)
 
 	// List instances
-	instances, err := manager.ListInstances(ctx)
+	instances, err := manager.ListInstances(ctx, nil)
 	require.NoError(t, err)
 	assert.Len(t, instances, 1)
 	assert.Equal(t, inst.Id, instances[0].Id)

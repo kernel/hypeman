@@ -171,7 +171,7 @@ func run() error {
 	// Include Unknown state: we couldn't confirm their state, but they might still
 	// have a running VMM. Better to leave a stale TAP than crash a running VM.
 	var preserveTAPs []string
-	allInstances, err := app.InstanceManager.ListInstances(app.Ctx)
+	allInstances, err := app.InstanceManager.ListInstances(app.Ctx, nil)
 	if err != nil {
 		// On error, skip TAP cleanup entirely to avoid crashing running VMs.
 		// Pass nil to Initialize to skip cleanup.

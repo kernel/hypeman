@@ -1294,6 +1294,26 @@ paths:
       operationId: listInstances
       security:
         - bearerAuth: []
+      parameters:
+        - name: state
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/InstanceState"
+          description: Filter instances by state (e.g., Running, Stopped)
+        - name: metadata
+          in: query
+          required: false
+          style: deepObject
+          explode: true
+          schema:
+            type: object
+            additionalProperties:
+              type: string
+          description: |
+            Filter instances by metadata key-value pairs. Uses deepObject style:
+            ?metadata[team]=backend&metadata[env]=staging
+            Multiple entries are ANDed together. All specified key-value pairs must match.
       responses:
         200:
           description: List of instances

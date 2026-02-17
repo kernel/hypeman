@@ -114,6 +114,32 @@ func (i *Instance) GetHypervisorType() string {
 	return string(i.HypervisorType)
 }
 
+// ListInstancesFilter contains optional filters for listing instances.
+// All fields are ANDed together: an instance must match every specified filter.
+type ListInstancesFilter struct {
+	State    *State            // Filter by instance state
+	Metadata map[string]string // Filter by metadata key-value pairs (all must match)
+}
+
+// Matches returns true if the given instance satisfies all filter criteria.
+func (f *ListInstancesFilter) Matches(inst *Instance) bool {
+	if f == nil {
+		return true
+	}
+	if f.State != nil && inst.State != *f.State {
+		return false
+	}
+	for k, v := range f.Metadata {
+		if inst.Metadata == nil {
+			return false
+		}
+		if actual, ok := inst.Metadata[k]; !ok || actual != v {
+			return false
+		}
+	}
+	return true
+}
+
 // GPUConfig contains GPU configuration for instance creation
 type GPUConfig struct {
 	Profile string // vGPU profile name (e.g., "L40S-1Q")
