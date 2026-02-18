@@ -77,7 +77,7 @@ func (r *VolumeService) NewFromArchive(ctx context.Context, body io.Reader, para
 	opts = slices.Concat(r.Options, opts)
 	opts = append([]option.RequestOption{option.WithRequestBody("application/gzip", body)}, opts...)
 	path := "volumes/from-archive"
-	err = requestconfig.ExecuteNewRequest(ctx, http.MethodPost, path, nil, &res, opts...)
+	err = requestconfig.ExecuteNewRequest(ctx, http.MethodPost, path, params, &res, opts...)
 	return
 }
 
