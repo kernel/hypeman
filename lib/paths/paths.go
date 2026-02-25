@@ -1,7 +1,10 @@
 // Package paths provides centralized path construction for hypeman data directory.
 package paths
 
-import "path/filepath"
+import (
+	"path/filepath"
+	"runtime"
+)
 
 // Paths provides typed path construction for the hypeman data directory.
 type Paths struct {
@@ -88,8 +91,13 @@ func (p *Paths) ImageDigestDir(repository, digestHex string) string {
 }
 
 // ImageDigestPath returns the path to the rootfs disk file for a digest.
+// Uses .erofs on Linux (compressed) and .ext4 on Darwin (VZ kernel lacks erofs support).
 func (p *Paths) ImageDigestPath(repository, digestHex string) string {
-	return filepath.Join(p.ImageDigestDir(repository, digestHex), "rootfs.ext4")
+	ext := "erofs"
+	if runtime.GOOS == "darwin" {
+		ext = "ext4"
+	}
+	return filepath.Join(p.ImageDigestDir(repository, digestHex), "rootfs."+ext)
 }
 
 // ImageMetadata returns the path to metadata.json for a digest.

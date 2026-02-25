@@ -97,17 +97,19 @@ func TestWaitForImageReady_WaitsForConversion(t *testing.T) {
 	imageRef := "builds/" + buildID
 
 	// Start with image in pending status
+	imageMgr.mu.Lock()
 	imageMgr.images[imageRef] = &images.Image{
 		Name:   imageRef,
 		Status: images.StatusPending,
 	}
+	imageMgr.mu.Unlock()
 
 	// Simulate conversion completing after a short delay
 	go func() {
 		time.Sleep(100 * time.Millisecond)
-		imageMgr.images[imageRef].Status = images.StatusConverting
+		imageMgr.SetImageStatus(imageRef, images.StatusConverting)
 		time.Sleep(100 * time.Millisecond)
-		imageMgr.images[imageRef].Status = images.StatusReady
+		imageMgr.SetImageStatus(imageRef, images.StatusReady)
 	}()
 
 	// waitForImageReady should poll and eventually succeed
@@ -131,10 +133,12 @@ func TestWaitForImageReady_ContextCancelled(t *testing.T) {
 	imageRef := "builds/" + buildID
 
 	// Image stays in pending status forever
+	imageMgr.mu.Lock()
 	imageMgr.images[imageRef] = &images.Image{
 		Name:   imageRef,
 		Status: images.StatusPending,
 	}
+	imageMgr.mu.Unlock()
 
 	// waitForImageReady should return context error
 	err := mgr.waitForImageReady(ctx, imageRef)
@@ -152,10 +156,12 @@ func TestWaitForImageReady_Failed(t *testing.T) {
 	imageRef := "builds/" + buildID
 
 	// Image is in failed status
+	imageMgr.mu.Lock()
 	imageMgr.images[imageRef] = &images.Image{
 		Name:   imageRef,
 		Status: images.StatusFailed,
 	}
+	imageMgr.mu.Unlock()
 
 	// waitForImageReady should return error immediately
 	err := mgr.waitForImageReady(ctx, imageRef)

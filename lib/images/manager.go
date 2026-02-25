@@ -23,6 +23,12 @@ const (
 	StatusFailed     = "failed"
 )
 
+// StatusEvent represents a terminal status change for image readiness notifications.
+type StatusEvent struct {
+	Status string
+	Err    error
+}
+
 type Manager interface {
 	ListImages(ctx context.Context) ([]Image, error)
 	CreateImage(ctx context.Context, req CreateImageRequest) (*Image, error)
@@ -38,14 +44,19 @@ type Manager interface {
 	// TotalOCICacheBytes returns the total size of the OCI layer cache.
 	// Used by the resource manager for disk capacity tracking.
 	TotalOCICacheBytes(ctx context.Context) (int64, error)
+	// WaitForReady blocks until the image identified by name reaches a terminal
+	// state (ready or failed) or the context is cancelled.
+	WaitForReady(ctx context.Context, name string) error
 }
 
 type manager struct {
-	paths     *paths.Paths
-	ociClient *ociClient
-	queue     *BuildQueue
-	createMu  sync.Mutex
-	metrics   *Metrics
+	paths            *paths.Paths
+	ociClient        *ociClient
+	queue            *BuildQueue
+	createMu         sync.Mutex
+	metrics          *Metrics
+	readySubscribers map[string][]chan StatusEvent // keyed by digestHex
+	subscriberMu     sync.RWMutex
 }
 
 // NewManager creates a new image manager.
@@ -59,9 +70,10 @@ func NewManager(p *paths.Paths, maxConcurrentBuilds int, meter metric.Meter) (Ma
 	}
 
 	m := &manager{
-		paths:     p,
-		ociClient: ociClient,
-		queue:     NewBuildQueue(maxConcurrentBuilds),
+		paths:            p,
+		ociClient:        ociClient,
+		queue:            NewBuildQueue(maxConcurrentBuilds),
+		readySubscribers: make(map[string][]chan StatusEvent),
 	}
 
 	// Initialize metrics if meter is provided
@@ -254,7 +266,7 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef) {
 	m.updateStatusByDigest(ref, StatusConverting, nil)
 
 	diskPath := digestPath(m.paths, ref.Repository(), ref.DigestHex())
-	// Use default image format (ext4 for now, easy to switch to erofs later)
+	// Use default image format (erofs on Linux, ext4 on Darwin)
 	diskSize, err := ExportRootfs(tempDir, diskPath, DefaultImageFormat)
 	if err != nil {
 		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("convert to %s: %w", DefaultImageFormat, err))
@@ -285,6 +297,9 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef) {
 		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("write final metadata: %w", err))
 		return
 	}
+
+	// Notify subscribers that image is ready
+	m.notifyReady(ref.DigestHex(), StatusReady, nil)
 
 	// Only create/update tag symlink on successful completion
 	if ref.Tag() != "" {
@@ -317,6 +332,11 @@ func (m *manager) updateStatusByDigest(ref *ResolvedRef, status string, err erro
 	}
 
 	writeMetadata(m.paths, ref.Repository(), ref.DigestHex(), meta)
+
+	// Notify subscribers of terminal status
+	if status == StatusReady || status == StatusFailed {
+		m.notifyReady(ref.DigestHex(), status, err)
+	}
 }
 
 func (m *manager) RecoverInterruptedBuilds() {
@@ -475,4 +495,113 @@ func (m *manager) TotalOCICacheBytes(ctx context.Context) (int64, error) {
 		total += size
 	}
 	return total, nil
+}
+
+// WaitForReady blocks until the image reaches a terminal state (ready or failed)
+// or the context is cancelled.
+//
+// The image may not exist yet when this is called (e.g., the registry's
+// triggerConversion goroutine hasn't called ImportLocalImage yet), so we
+// poll briefly for the image to appear before subscribing for notifications.
+func (m *manager) WaitForReady(ctx context.Context, name string) error {
+	// Wait for the image to appear in the store. In the build flow, the
+	// registry triggers ImportLocalImage asynchronously after a push, so the
+	// image may not exist when the build manager calls WaitForReady.
+	const maxWaitForExist = 30 * time.Second
+	const pollInterval = 100 * time.Millisecond
+
+	var img *Image
+	deadline := time.Now().Add(maxWaitForExist)
+	for {
+		got, err := m.GetImage(ctx, name)
+		if err == nil {
+			img = got
+			break
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("get image: %w", err)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(pollInterval):
+		}
+	}
+
+	// Check if already in terminal state
+	switch img.Status {
+	case StatusReady:
+		return nil
+	case StatusFailed:
+		return fmt.Errorf("image conversion failed")
+	}
+
+	digestHex := strings.TrimPrefix(img.Digest, "sha256:")
+
+	// Subscribe BEFORE re-checking to avoid TOCTOU race
+	ch := make(chan StatusEvent, 1)
+	m.subscribeToReady(digestHex, ch)
+	defer m.unsubscribeFromReady(digestHex, ch)
+
+	// Re-check after subscribing to close the race window
+	img, err := m.GetImage(ctx, name)
+	if err == nil {
+		switch img.Status {
+		case StatusReady:
+			return nil
+		case StatusFailed:
+			return fmt.Errorf("image conversion failed")
+		}
+	}
+
+	// Wait for notification or context cancellation
+	select {
+	case event := <-ch:
+		if event.Status == StatusReady {
+			return nil
+		}
+		return fmt.Errorf("image conversion failed")
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// subscribeToReady registers a channel for terminal status notifications on a digest.
+func (m *manager) subscribeToReady(digestHex string, ch chan StatusEvent) {
+	m.subscriberMu.Lock()
+	defer m.subscriberMu.Unlock()
+	m.readySubscribers[digestHex] = append(m.readySubscribers[digestHex], ch)
+}
+
+// unsubscribeFromReady removes a subscriber channel.
+func (m *manager) unsubscribeFromReady(digestHex string, ch chan StatusEvent) {
+	m.subscriberMu.Lock()
+	defer m.subscriberMu.Unlock()
+
+	subscribers := m.readySubscribers[digestHex]
+	for i, sub := range subscribers {
+		if sub == ch {
+			m.readySubscribers[digestHex] = append(subscribers[:i], subscribers[i+1:]...)
+			break
+		}
+	}
+
+	if len(m.readySubscribers[digestHex]) == 0 {
+		delete(m.readySubscribers, digestHex)
+	}
+}
+
+// notifyReady broadcasts a terminal status event to all subscribers for a digest.
+func (m *manager) notifyReady(digestHex string, status string, err error) {
+	m.subscriberMu.RLock()
+	defer m.subscriberMu.RUnlock()
+
+	event := StatusEvent{Status: status, Err: err}
+	for _, ch := range m.readySubscribers[digestHex] {
+		// Non-blocking send — drop if channel is full
+		select {
+		case ch <- event:
+		default:
+		}
+	}
 }

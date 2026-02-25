@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 
 	"github.com/u-root/u-root/pkg/cpio"
 )
@@ -13,13 +14,20 @@ import (
 type ExportFormat string
 
 const (
-	FormatExt4  ExportFormat = "ext4"  // Read-only ext4 (app images, default)
-	FormatErofs ExportFormat = "erofs" // Read-only compressed (future: when kernel supports it)
+	FormatExt4  ExportFormat = "ext4"  // Read-only ext4 (legacy, used on Darwin)
+	FormatErofs ExportFormat = "erofs" // Read-only compressed with LZ4 (default on Linux)
 	FormatCpio  ExportFormat = "cpio"  // Uncompressed archive (initrd, fast boot)
 )
 
-// DefaultImageFormat is the default export format for OCI images
-const DefaultImageFormat = FormatExt4
+// DefaultImageFormat is the default export format for OCI images.
+// On Linux, we use erofs (compressed, read-only) for smaller images.
+// On Darwin, we use ext4 because the VZ kernel doesn't have erofs support.
+var DefaultImageFormat = func() ExportFormat {
+	if runtime.GOOS == "darwin" {
+		return FormatExt4
+	}
+	return FormatErofs
+}()
 
 // ExportRootfs exports rootfs directory in specified format (public for system manager)
 func ExportRootfs(rootfsDir, outputPath string, format ExportFormat) (int64, error) {

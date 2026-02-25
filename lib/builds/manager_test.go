@@ -3,10 +3,12 @@ package builds
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -237,6 +239,7 @@ func (m *mockSecretProvider) GetSecrets(ctx context.Context, secretIDs []string)
 
 // mockImageManager implements images.Manager for testing
 type mockImageManager struct {
+	mu          sync.RWMutex
 	images      map[string]*images.Image
 	getImageErr error
 }
@@ -274,11 +277,15 @@ func (m *mockImageManager) ImportLocalImage(ctx context.Context, repo, reference
 }
 
 func (m *mockImageManager) GetImage(ctx context.Context, name string) (*images.Image, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	if m.getImageErr != nil {
 		return nil, m.getImageErr
 	}
 	if img, ok := m.images[name]; ok {
-		return img, nil
+		// Return a copy to avoid races on the Status field
+		imgCopy := *img
+		return &imgCopy, nil
 	}
 	return nil, images.ErrNotFound
 }
@@ -298,11 +305,46 @@ func (m *mockImageManager) TotalOCICacheBytes(ctx context.Context) (int64, error
 	return 0, nil
 }
 
+func (m *mockImageManager) WaitForReady(ctx context.Context, name string) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		m.mu.RLock()
+		img, ok := m.images[name]
+		var status string
+		if ok {
+			status = img.Status
+		}
+		m.mu.RUnlock()
+		switch status {
+		case images.StatusReady:
+			return nil
+		case images.StatusFailed:
+			return fmt.Errorf("image conversion failed")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 // SetImageReady sets an image to ready status for testing
 func (m *mockImageManager) SetImageReady(name string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.images[name] = &images.Image{
 		Name:   name,
 		Status: images.StatusReady,
+	}
+}
+
+// SetImageStatus sets an image's status in a thread-safe way for testing
+func (m *mockImageManager) SetImageStatus(name, status string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if img, ok := m.images[name]; ok {
+		img.Status = status
 	}
 }
 
