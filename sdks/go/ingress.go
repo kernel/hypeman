@@ -80,13 +80,13 @@ func (r *IngressService) Get(ctx context.Context, id string, opts ...option.Requ
 
 type Ingress struct {
 	// Auto-generated unique identifier
-	ID string `json:"id,required"`
+	ID string `json:"id" api:"required"`
 	// Creation timestamp (RFC3339)
-	CreatedAt time.Time `json:"created_at,required" format:"date-time"`
+	CreatedAt time.Time `json:"created_at" api:"required" format:"date-time"`
 	// Human-readable name
-	Name string `json:"name,required"`
+	Name string `json:"name" api:"required"`
 	// Routing rules for this ingress
-	Rules []IngressRule `json:"rules,required"`
+	Rules []IngressRule `json:"rules" api:"required"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
 		ID          respjson.Field
@@ -113,7 +113,7 @@ type IngressMatch struct {
 	// Pattern hostnames use named captures in curly braces (e.g., {instance}, {app})
 	// that extract parts of the hostname for routing. The extracted values can be
 	// referenced in the target.instance field.
-	Hostname string `json:"hostname,required"`
+	Hostname string `json:"hostname" api:"required"`
 	// Host port to listen on for this rule (default 80)
 	Port int64 `json:"port"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
@@ -150,7 +150,7 @@ type IngressMatchParam struct {
 	// Pattern hostnames use named captures in curly braces (e.g., {instance}, {app})
 	// that extract parts of the hostname for routing. The extracted values can be
 	// referenced in the target.instance field.
-	Hostname string `json:"hostname,required"`
+	Hostname string `json:"hostname" api:"required"`
 	// Host port to listen on for this rule (default 80)
 	Port param.Opt[int64] `json:"port,omitzero"`
 	paramObj
@@ -165,8 +165,8 @@ func (r *IngressMatchParam) UnmarshalJSON(data []byte) error {
 }
 
 type IngressRule struct {
-	Match  IngressMatch  `json:"match,required"`
-	Target IngressTarget `json:"target,required"`
+	Match  IngressMatch  `json:"match" api:"required"`
+	Target IngressTarget `json:"target" api:"required"`
 	// Auto-create HTTP to HTTPS redirect for this hostname (only applies when tls is
 	// enabled)
 	RedirectHTTP bool `json:"redirect_http"`
@@ -200,8 +200,8 @@ func (r IngressRule) ToParam() IngressRuleParam {
 
 // The properties Match, Target are required.
 type IngressRuleParam struct {
-	Match  IngressMatchParam  `json:"match,omitzero,required"`
-	Target IngressTargetParam `json:"target,omitzero,required"`
+	Match  IngressMatchParam  `json:"match,omitzero" api:"required"`
+	Target IngressTargetParam `json:"target,omitzero" api:"required"`
 	// Auto-create HTTP to HTTPS redirect for this hostname (only applies when tls is
 	// enabled)
 	RedirectHTTP param.Opt[bool] `json:"redirect_http,omitzero"`
@@ -227,9 +227,9 @@ type IngressTarget struct {
 	//
 	// When using pattern hostnames, the instance is resolved dynamically at request
 	// time.
-	Instance string `json:"instance,required"`
+	Instance string `json:"instance" api:"required"`
 	// Target port on the instance
-	Port int64 `json:"port,required"`
+	Port int64 `json:"port" api:"required"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
 		Instance    respjson.Field
@@ -264,9 +264,9 @@ type IngressTargetParam struct {
 	//
 	// When using pattern hostnames, the instance is resolved dynamically at request
 	// time.
-	Instance string `json:"instance,required"`
+	Instance string `json:"instance" api:"required"`
 	// Target port on the instance
-	Port int64 `json:"port,required"`
+	Port int64 `json:"port" api:"required"`
 	paramObj
 }
 
@@ -281,9 +281,9 @@ func (r *IngressTargetParam) UnmarshalJSON(data []byte) error {
 type IngressNewParams struct {
 	// Human-readable name (lowercase letters, digits, and dashes only; cannot start or
 	// end with a dash)
-	Name string `json:"name,required"`
+	Name string `json:"name" api:"required"`
 	// Routing rules for this ingress
-	Rules []IngressRuleParam `json:"rules,omitzero,required"`
+	Rules []IngressRuleParam `json:"rules,omitzero" api:"required"`
 	paramObj
 }
 

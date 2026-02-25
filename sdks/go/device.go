@@ -87,15 +87,15 @@ func (r *DeviceService) ListAvailable(ctx context.Context, opts ...option.Reques
 
 type AvailableDevice struct {
 	// PCI device ID (hex)
-	DeviceID string `json:"device_id,required"`
+	DeviceID string `json:"device_id" api:"required"`
 	// IOMMU group number
-	IommuGroup int64 `json:"iommu_group,required"`
+	IommuGroup int64 `json:"iommu_group" api:"required"`
 	// PCI address
-	PciAddress string `json:"pci_address,required"`
+	PciAddress string `json:"pci_address" api:"required"`
 	// PCI vendor ID (hex)
-	VendorID string `json:"vendor_id,required"`
+	VendorID string `json:"vendor_id" api:"required"`
 	// Currently bound driver (null if none)
-	CurrentDriver string `json:"current_driver,nullable"`
+	CurrentDriver string `json:"current_driver" api:"nullable"`
 	// Human-readable device name
 	DeviceName string `json:"device_name"`
 	// Human-readable vendor name
@@ -122,7 +122,7 @@ func (r *AvailableDevice) UnmarshalJSON(data []byte) error {
 
 type Device struct {
 	// Auto-generated unique identifier (CUID2 format)
-	ID string `json:"id,required"`
+	ID string `json:"id" api:"required"`
 	// Whether the device is currently bound to the vfio-pci driver, which is required
 	// for VM passthrough.
 	//
@@ -130,23 +130,23 @@ type Device struct {
 	//     The device's native driver has been unloaded.
 	//   - false: Device is using its native driver (e.g., nvidia) or no driver. Hypeman
 	//     will automatically bind to vfio-pci when attaching to an instance.
-	BoundToVfio bool `json:"bound_to_vfio,required"`
+	BoundToVfio bool `json:"bound_to_vfio" api:"required"`
 	// Registration timestamp (RFC3339)
-	CreatedAt time.Time `json:"created_at,required" format:"date-time"`
+	CreatedAt time.Time `json:"created_at" api:"required" format:"date-time"`
 	// PCI device ID (hex)
-	DeviceID string `json:"device_id,required"`
+	DeviceID string `json:"device_id" api:"required"`
 	// IOMMU group number
-	IommuGroup int64 `json:"iommu_group,required"`
+	IommuGroup int64 `json:"iommu_group" api:"required"`
 	// PCI address
-	PciAddress string `json:"pci_address,required"`
+	PciAddress string `json:"pci_address" api:"required"`
 	// Type of PCI device
 	//
 	// Any of "gpu", "pci".
-	Type DeviceType `json:"type,required"`
+	Type DeviceType `json:"type" api:"required"`
 	// PCI vendor ID (hex)
-	VendorID string `json:"vendor_id,required"`
+	VendorID string `json:"vendor_id" api:"required"`
 	// Instance ID if attached
-	AttachedTo string `json:"attached_to,nullable"`
+	AttachedTo string `json:"attached_to" api:"nullable"`
 	// Device name (user-provided or auto-generated from PCI address)
 	Name string `json:"name"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
@@ -182,7 +182,7 @@ const (
 
 type DeviceNewParams struct {
 	// PCI address of the device (required, e.g., "0000:a2:00.0")
-	PciAddress string `json:"pci_address,required"`
+	PciAddress string `json:"pci_address" api:"required"`
 	// Optional globally unique device name. If not provided, a name is auto-generated
 	// from the PCI address (e.g., "pci-0000-a2-00-0")
 	Name param.Opt[string] `json:"name,omitzero"`

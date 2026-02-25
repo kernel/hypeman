@@ -71,11 +71,11 @@ func (r *DiskBreakdown) UnmarshalJSON(data []byte) error {
 // Available vGPU profile
 type GPUProfile struct {
 	// Number of instances that can be created with this profile
-	Available int64 `json:"available,required"`
+	Available int64 `json:"available" api:"required"`
 	// Frame buffer size in MB
-	FramebufferMB int64 `json:"framebuffer_mb,required"`
+	FramebufferMB int64 `json:"framebuffer_mb" api:"required"`
 	// Profile name (user-facing)
-	Name string `json:"name,required"`
+	Name string `json:"name" api:"required"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
 		Available     respjson.Field
@@ -97,11 +97,11 @@ type GPUResourceStatus struct {
 	// GPU mode (vgpu for SR-IOV/mdev, passthrough for whole GPU)
 	//
 	// Any of "vgpu", "passthrough".
-	Mode GPUResourceStatusMode `json:"mode,required"`
+	Mode GPUResourceStatusMode `json:"mode" api:"required"`
 	// Total slots (VFs for vGPU, physical GPUs for passthrough)
-	TotalSlots int64 `json:"total_slots,required"`
+	TotalSlots int64 `json:"total_slots" api:"required"`
 	// Slots currently in use
-	UsedSlots int64 `json:"used_slots,required"`
+	UsedSlots int64 `json:"used_slots" api:"required"`
 	// Physical GPUs (only in passthrough mode)
 	Devices []PassthroughDevice `json:"devices"`
 	// Available vGPU profiles (only in vGPU mode)
@@ -135,9 +135,9 @@ const (
 // Physical GPU available for passthrough
 type PassthroughDevice struct {
 	// Whether this GPU is available (not attached to an instance)
-	Available bool `json:"available,required"`
+	Available bool `json:"available" api:"required"`
 	// GPU name
-	Name string `json:"name,required"`
+	Name string `json:"name" api:"required"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
 		Available   respjson.Field
@@ -193,17 +193,17 @@ func (r *ResourceAllocation) UnmarshalJSON(data []byte) error {
 
 type ResourceStatus struct {
 	// Currently allocated resources
-	Allocated int64 `json:"allocated,required"`
+	Allocated int64 `json:"allocated" api:"required"`
 	// Available for allocation (effective_limit - allocated)
-	Available int64 `json:"available,required"`
+	Available int64 `json:"available" api:"required"`
 	// Raw host capacity
-	Capacity int64 `json:"capacity,required"`
+	Capacity int64 `json:"capacity" api:"required"`
 	// Capacity after oversubscription (capacity \* ratio)
-	EffectiveLimit int64 `json:"effective_limit,required"`
+	EffectiveLimit int64 `json:"effective_limit" api:"required"`
 	// Oversubscription ratio applied
-	OversubRatio float64 `json:"oversub_ratio,required"`
+	OversubRatio float64 `json:"oversub_ratio" api:"required"`
 	// Resource type
-	Type string `json:"type,required"`
+	Type string `json:"type" api:"required"`
 	// How capacity was determined (detected, configured)
 	Source string `json:"source"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
@@ -227,15 +227,15 @@ func (r *ResourceStatus) UnmarshalJSON(data []byte) error {
 }
 
 type Resources struct {
-	Allocations   []ResourceAllocation `json:"allocations,required"`
-	CPU           ResourceStatus       `json:"cpu,required"`
-	Disk          ResourceStatus       `json:"disk,required"`
-	Memory        ResourceStatus       `json:"memory,required"`
-	Network       ResourceStatus       `json:"network,required"`
+	Allocations   []ResourceAllocation `json:"allocations" api:"required"`
+	CPU           ResourceStatus       `json:"cpu" api:"required"`
+	Disk          ResourceStatus       `json:"disk" api:"required"`
+	Memory        ResourceStatus       `json:"memory" api:"required"`
+	Network       ResourceStatus       `json:"network" api:"required"`
 	DiskBreakdown DiskBreakdown        `json:"disk_breakdown"`
 	DiskIo        ResourceStatus       `json:"disk_io"`
 	// GPU resource status. Null if no GPUs available.
-	GPU GPUResourceStatus `json:"gpu,nullable"`
+	GPU GPUResourceStatus `json:"gpu" api:"nullable"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
 		Allocations   respjson.Field

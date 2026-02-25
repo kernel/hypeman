@@ -42,7 +42,7 @@ func (r *HealthService) Check(ctx context.Context, opts ...option.RequestOption)
 
 type HealthCheckResponse struct {
 	// Any of "ok".
-	Status HealthCheckResponseStatus `json:"status,required"`
+	Status HealthCheckResponseStatus `json:"status" api:"required"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
 		Status      respjson.Field

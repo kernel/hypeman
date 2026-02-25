@@ -67,9 +67,9 @@ func (r *InstanceVolumeService) Detach(ctx context.Context, volumeID string, bod
 }
 
 type InstanceVolumeAttachParams struct {
-	ID string `path:"id,required" json:"-"`
+	ID string `path:"id" api:"required" json:"-"`
 	// Path where volume should be mounted
-	MountPath string `json:"mount_path,required"`
+	MountPath string `json:"mount_path" api:"required"`
 	// Mount as read-only
 	Readonly param.Opt[bool] `json:"readonly,omitzero"`
 	paramObj
@@ -84,6 +84,6 @@ func (r *InstanceVolumeAttachParams) UnmarshalJSON(data []byte) error {
 }
 
 type InstanceVolumeDetachParams struct {
-	ID string `path:"id,required" json:"-"`
+	ID string `path:"id" api:"required" json:"-"`
 	paramObj
 }

@@ -79,29 +79,29 @@ func (r *ImageService) Get(ctx context.Context, name string, opts ...option.Requ
 
 type Image struct {
 	// Creation timestamp (RFC3339)
-	CreatedAt time.Time `json:"created_at,required" format:"date-time"`
+	CreatedAt time.Time `json:"created_at" api:"required" format:"date-time"`
 	// Resolved manifest digest
-	Digest string `json:"digest,required"`
+	Digest string `json:"digest" api:"required"`
 	// Normalized OCI image reference (tag or digest)
-	Name string `json:"name,required"`
+	Name string `json:"name" api:"required"`
 	// Build status
 	//
 	// Any of "pending", "pulling", "converting", "ready", "failed".
-	Status ImageStatus `json:"status,required"`
+	Status ImageStatus `json:"status" api:"required"`
 	// CMD from container metadata
-	Cmd []string `json:"cmd,nullable"`
+	Cmd []string `json:"cmd" api:"nullable"`
 	// Entrypoint from container metadata
-	Entrypoint []string `json:"entrypoint,nullable"`
+	Entrypoint []string `json:"entrypoint" api:"nullable"`
 	// Environment variables from container metadata
 	Env map[string]string `json:"env"`
 	// Error message if status is failed
-	Error string `json:"error,nullable"`
+	Error string `json:"error" api:"nullable"`
 	// Position in build queue (null if not queued)
-	QueuePosition int64 `json:"queue_position,nullable"`
+	QueuePosition int64 `json:"queue_position" api:"nullable"`
 	// Disk size in bytes (null until ready)
-	SizeBytes int64 `json:"size_bytes,nullable"`
+	SizeBytes int64 `json:"size_bytes" api:"nullable"`
 	// Working directory from container metadata
-	WorkingDir string `json:"working_dir,nullable"`
+	WorkingDir string `json:"working_dir" api:"nullable"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
 		CreatedAt     respjson.Field
@@ -139,7 +139,7 @@ const (
 
 type ImageNewParams struct {
 	// OCI image reference (e.g., docker.io/library/nginx:latest)
-	Name string `json:"name,required"`
+	Name string `json:"name" api:"required"`
 	paramObj
 }
 

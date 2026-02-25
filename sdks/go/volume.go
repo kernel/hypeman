@@ -95,13 +95,13 @@ func (r *VolumeService) Get(ctx context.Context, id string, opts ...option.Reque
 
 type Volume struct {
 	// Unique identifier
-	ID string `json:"id,required"`
+	ID string `json:"id" api:"required"`
 	// Creation timestamp (RFC3339)
-	CreatedAt time.Time `json:"created_at,required" format:"date-time"`
+	CreatedAt time.Time `json:"created_at" api:"required" format:"date-time"`
 	// Volume name
-	Name string `json:"name,required"`
+	Name string `json:"name" api:"required"`
 	// Size in gigabytes
-	SizeGB int64 `json:"size_gb,required"`
+	SizeGB int64 `json:"size_gb" api:"required"`
 	// List of current attachments (empty if not attached)
 	Attachments []VolumeAttachment `json:"attachments"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
@@ -124,11 +124,11 @@ func (r *Volume) UnmarshalJSON(data []byte) error {
 
 type VolumeAttachment struct {
 	// ID of the instance this volume is attached to
-	InstanceID string `json:"instance_id,required"`
+	InstanceID string `json:"instance_id" api:"required"`
 	// Mount path in the guest
-	MountPath string `json:"mount_path,required"`
+	MountPath string `json:"mount_path" api:"required"`
 	// Whether the attachment is read-only
-	Readonly bool `json:"readonly,required"`
+	Readonly bool `json:"readonly" api:"required"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
 		InstanceID  respjson.Field
@@ -147,9 +147,9 @@ func (r *VolumeAttachment) UnmarshalJSON(data []byte) error {
 
 type VolumeNewParams struct {
 	// Volume name
-	Name string `json:"name,required"`
+	Name string `json:"name" api:"required"`
 	// Size in gigabytes
-	SizeGB int64 `json:"size_gb,required"`
+	SizeGB int64 `json:"size_gb" api:"required"`
 	// Optional custom identifier (auto-generated if not provided)
 	ID param.Opt[string] `json:"id,omitzero"`
 	paramObj
@@ -165,9 +165,9 @@ func (r *VolumeNewParams) UnmarshalJSON(data []byte) error {
 
 type VolumeNewFromArchiveParams struct {
 	// Volume name
-	Name string `query:"name,required" json:"-"`
+	Name string `query:"name" api:"required" json:"-"`
 	// Maximum size in GB (extraction fails if content exceeds this)
-	SizeGB int64 `query:"size_gb,required" json:"-"`
+	SizeGB int64 `query:"size_gb" api:"required" json:"-"`
 	// Optional custom volume ID (auto-generated if not provided)
 	ID param.Opt[string] `query:"id,omitzero" json:"-"`
 	paramObj

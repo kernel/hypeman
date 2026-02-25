@@ -171,13 +171,13 @@ func (r *InstanceService) Stop(ctx context.Context, id string, opts ...option.Re
 
 type Instance struct {
 	// Auto-generated unique identifier (CUID2 format)
-	ID string `json:"id,required"`
+	ID string `json:"id" api:"required"`
 	// Creation timestamp (RFC3339)
-	CreatedAt time.Time `json:"created_at,required" format:"date-time"`
+	CreatedAt time.Time `json:"created_at" api:"required" format:"date-time"`
 	// OCI image reference
-	Image string `json:"image,required"`
+	Image string `json:"image" api:"required"`
 	// Human-readable name
-	Name string `json:"name,required"`
+	Name string `json:"name" api:"required"`
 	// Instance state:
 	//
 	// - Created: VMM created but not started (Cloud Hypervisor native)
@@ -190,13 +190,13 @@ type Instance struct {
 	//
 	// Any of "Created", "Running", "Paused", "Shutdown", "Stopped", "Standby",
 	// "Unknown".
-	State InstanceState `json:"state,required"`
+	State InstanceState `json:"state" api:"required"`
 	// Disk I/O rate limit (human-readable, e.g., "100MB/s")
 	DiskIoBps string `json:"disk_io_bps"`
 	// Environment variables
 	Env map[string]string `json:"env"`
 	// App exit code (null if VM hasn't exited)
-	ExitCode int64 `json:"exit_code,nullable"`
+	ExitCode int64 `json:"exit_code" api:"nullable"`
 	// Human-readable description of exit (e.g., "command not found", "killed by signal
 	// 9 (SIGKILL) - OOM")
 	ExitMessage string `json:"exit_message"`
@@ -219,11 +219,11 @@ type Instance struct {
 	// Base memory size (human-readable)
 	Size string `json:"size"`
 	// Start timestamp (RFC3339)
-	StartedAt time.Time `json:"started_at,nullable" format:"date-time"`
+	StartedAt time.Time `json:"started_at" api:"nullable" format:"date-time"`
 	// Error message if state couldn't be determined (only set when state is Unknown)
-	StateError string `json:"state_error,nullable"`
+	StateError string `json:"state_error" api:"nullable"`
 	// Stop timestamp (RFC3339)
-	StoppedAt time.Time `json:"stopped_at,nullable" format:"date-time"`
+	StoppedAt time.Time `json:"stopped_at" api:"nullable" format:"date-time"`
 	// Number of virtual CPUs
 	Vcpus int64 `json:"vcpus"`
 	// Volumes attached to the instance
@@ -323,9 +323,9 @@ type InstanceNetwork struct {
 	// Whether instance is attached to the default network
 	Enabled bool `json:"enabled"`
 	// Assigned IP address (null if no network)
-	IP string `json:"ip,nullable"`
+	IP string `json:"ip" api:"nullable"`
 	// Assigned MAC address (null if no network)
-	Mac string `json:"mac,nullable"`
+	Mac string `json:"mac" api:"nullable"`
 	// Network name (always "default" when enabled)
 	Name string `json:"name"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
@@ -349,10 +349,10 @@ func (r *InstanceNetwork) UnmarshalJSON(data []byte) error {
 
 type PathInfo struct {
 	// Whether the path exists
-	Exists bool `json:"exists,required"`
+	Exists bool `json:"exists" api:"required"`
 	// Error message if stat failed (e.g., permission denied). Only set when exists is
 	// false due to an error rather than the path not existing.
-	Error string `json:"error,nullable"`
+	Error string `json:"error" api:"nullable"`
 	// True if this is a directory
 	IsDir bool `json:"is_dir"`
 	// True if this is a regular file
@@ -360,7 +360,7 @@ type PathInfo struct {
 	// True if this is a symbolic link (only set when follow_links=false)
 	IsSymlink bool `json:"is_symlink"`
 	// Symlink target path (only set when is_symlink=true)
-	LinkTarget string `json:"link_target,nullable"`
+	LinkTarget string `json:"link_target" api:"nullable"`
 	// File mode (Unix permissions)
 	Mode int64 `json:"mode"`
 	// File size in bytes
@@ -388,9 +388,9 @@ func (r *PathInfo) UnmarshalJSON(data []byte) error {
 
 type VolumeMount struct {
 	// Path where volume is mounted in the guest
-	MountPath string `json:"mount_path,required"`
+	MountPath string `json:"mount_path" api:"required"`
 	// Volume identifier
-	VolumeID string `json:"volume_id,required"`
+	VolumeID string `json:"volume_id" api:"required"`
 	// Create per-instance overlay for writes (requires readonly=true)
 	Overlay bool `json:"overlay"`
 	// Max overlay size as human-readable string (e.g., "1GB"). Required if
@@ -428,9 +428,9 @@ func (r VolumeMount) ToParam() VolumeMountParam {
 // The properties MountPath, VolumeID are required.
 type VolumeMountParam struct {
 	// Path where volume is mounted in the guest
-	MountPath string `json:"mount_path,required"`
+	MountPath string `json:"mount_path" api:"required"`
 	// Volume identifier
-	VolumeID string `json:"volume_id,required"`
+	VolumeID string `json:"volume_id" api:"required"`
 	// Create per-instance overlay for writes (requires readonly=true)
 	Overlay param.Opt[bool] `json:"overlay,omitzero"`
 	// Max overlay size as human-readable string (e.g., "1GB"). Required if
@@ -451,10 +451,10 @@ func (r *VolumeMountParam) UnmarshalJSON(data []byte) error {
 
 type InstanceNewParams struct {
 	// OCI image reference
-	Image string `json:"image,required"`
+	Image string `json:"image" api:"required"`
 	// Human-readable name (lowercase letters, digits, and dashes only; cannot start or
 	// end with a dash)
-	Name string `json:"name,required"`
+	Name string `json:"name" api:"required"`
 	// Disk I/O rate limit (e.g., "100MB/s", "500MB/s"). Defaults to proportional share
 	// based on CPU allocation if configured.
 	DiskIoBps param.Opt[string] `json:"disk_io_bps,omitzero"`
@@ -642,7 +642,7 @@ func (r *InstanceStartParams) UnmarshalJSON(data []byte) error {
 
 type InstanceStatParams struct {
 	// Path to stat in the guest filesystem
-	Path string `query:"path,required" json:"-"`
+	Path string `query:"path" api:"required" json:"-"`
 	// Follow symbolic links (like stat vs lstat)
 	FollowLinks param.Opt[bool] `query:"follow_links,omitzero" json:"-"`
 	paramObj

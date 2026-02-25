@@ -110,30 +110,30 @@ func (r *BuildService) Get(ctx context.Context, id string, opts ...option.Reques
 
 type Build struct {
 	// Build job identifier
-	ID string `json:"id,required"`
+	ID string `json:"id" api:"required"`
 	// Build creation timestamp
-	CreatedAt time.Time `json:"created_at,required" format:"date-time"`
+	CreatedAt time.Time `json:"created_at" api:"required" format:"date-time"`
 	// Build job status
 	//
 	// Any of "queued", "building", "pushing", "ready", "failed", "cancelled".
-	Status BuildStatus `json:"status,required"`
+	Status BuildStatus `json:"status" api:"required"`
 	// Instance ID of the builder VM (for debugging)
-	BuilderInstanceID string `json:"builder_instance_id,nullable"`
+	BuilderInstanceID string `json:"builder_instance_id" api:"nullable"`
 	// Build completion timestamp
-	CompletedAt time.Time `json:"completed_at,nullable" format:"date-time"`
+	CompletedAt time.Time `json:"completed_at" api:"nullable" format:"date-time"`
 	// Build duration in milliseconds
-	DurationMs int64 `json:"duration_ms,nullable"`
+	DurationMs int64 `json:"duration_ms" api:"nullable"`
 	// Error message (only when status is failed)
-	Error string `json:"error,nullable"`
+	Error string `json:"error" api:"nullable"`
 	// Digest of built image (only when status is ready)
-	ImageDigest string `json:"image_digest,nullable"`
+	ImageDigest string `json:"image_digest" api:"nullable"`
 	// Full image reference (only when status is ready)
-	ImageRef   string          `json:"image_ref,nullable"`
+	ImageRef   string          `json:"image_ref" api:"nullable"`
 	Provenance BuildProvenance `json:"provenance"`
 	// Position in build queue (only when status is queued)
-	QueuePosition int64 `json:"queue_position,nullable"`
+	QueuePosition int64 `json:"queue_position" api:"nullable"`
 	// Build start timestamp
-	StartedAt time.Time `json:"started_at,nullable" format:"date-time"`
+	StartedAt time.Time `json:"started_at" api:"nullable" format:"date-time"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
 		ID                respjson.Field
@@ -161,11 +161,11 @@ func (r *Build) UnmarshalJSON(data []byte) error {
 
 type BuildEvent struct {
 	// Event timestamp
-	Timestamp time.Time `json:"timestamp,required" format:"date-time"`
+	Timestamp time.Time `json:"timestamp" api:"required" format:"date-time"`
 	// Event type
 	//
 	// Any of "log", "status", "heartbeat".
-	Type BuildEventType `json:"type,required"`
+	Type BuildEventType `json:"type" api:"required"`
 	// Log line content (only for type=log)
 	Content string `json:"content"`
 	// New build status (only for type=status)
@@ -241,7 +241,7 @@ const (
 
 type BuildNewParams struct {
 	// Source tarball (tar.gz) containing application code and optionally a Dockerfile
-	Source io.Reader `json:"source,omitzero,required" format:"binary"`
+	Source io.Reader `json:"source,omitzero" api:"required" format:"binary"`
 	// Optional pinned base image digest
 	BaseImageDigest param.Opt[string] `json:"base_image_digest,omitzero"`
 	// Tenant-specific cache key prefix
