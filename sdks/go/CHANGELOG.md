@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.12.0 (2026-02-26)
+
+Full Changelog: [v0.11.0...v0.12.0](https://github.com/kernel/hypeman-go/compare/v0.11.0...v0.12.0)
+
+### Features
+
+* add metadata and state filtering to GET /instances ([8149c9f](https://github.com/kernel/hypeman-go/commit/8149c9fe5e9b36aa5709767e7f3986d6778bd432))
+* Disable default hotplug memory allocation ([4c65d5c](https://github.com/kernel/hypeman-go/commit/4c65d5c271ac3a620da549b47ece553e1860aaf6))
+
+
+### Bug Fixes
+
+* allow canceling a request while it is waiting to retry ([daa2281](https://github.com/kernel/hypeman-go/commit/daa2281e6e9833ae4dba2b9b6870014ceb0b2fff))
+* send query params for NewFromArchive ([a8c45a6](https://github.com/kernel/hypeman-go/commit/a8c45a69e83c96137c772d999a115972f0e6a003))
+
+
+### Chores
+
+* **internal:** move custom custom `json` tags to `api` ([d04f6ed](https://github.com/kernel/hypeman-go/commit/d04f6ed70c95357f323aa4e76b3a6ad8ebd12ec3))
+* **internal:** remove mock server code ([b511676](https://github.com/kernel/hypeman-go/commit/b51167627fc0cd0f947633cb8694f4ee0756c268))
+* update mock server docs ([d2ae478](https://github.com/kernel/hypeman-go/commit/d2ae478d46fb67550a3b35d4261218f9368709f0))
+
 ## 0.11.0 (2026-02-15)
 
 Full Changelog: [v0.10.0...v0.11.0](https://github.com/kernel/hypeman-go/compare/v0.10.0...v0.11.0)
