@@ -246,6 +246,8 @@ type BuildNewParams struct {
 	BaseImageDigest param.Opt[string] `json:"base_image_digest,omitzero"`
 	// Tenant-specific cache key prefix
 	CacheScope param.Opt[string] `json:"cache_scope,omitzero"`
+	// Number of vCPUs for builder VM (default 2)
+	CPUs param.Opt[int64] `json:"cpus,omitzero"`
 	// Dockerfile content. Required if not included in the source tarball.
 	Dockerfile param.Opt[string] `json:"dockerfile,omitzero"`
 	// Global cache identifier (e.g., "node", "python", "ubuntu", "browser"). When
@@ -258,6 +260,8 @@ type BuildNewParams struct {
 	// Set to "true" to grant push access to global cache (operator-only). Admin builds
 	// can populate the shared global cache that all tenant builds read from.
 	IsAdminBuild param.Opt[string] `json:"is_admin_build,omitzero"`
+	// Memory limit for builder VM in MB (default 2048)
+	MemoryMB param.Opt[int64] `json:"memory_mb,omitzero"`
 	// JSON array of secret references to inject during build. Each object has "id"
 	// (required) for use with --mount=type=secret,id=... Example: [{"id":
 	// "npm_token"}, {"id": "github_token"}]

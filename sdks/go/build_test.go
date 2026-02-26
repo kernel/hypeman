@@ -32,10 +32,12 @@ func TestBuildNewWithOptionalParams(t *testing.T) {
 		Source:          io.Reader(bytes.NewBuffer([]byte("some file contents"))),
 		BaseImageDigest: hypeman.String("base_image_digest"),
 		CacheScope:      hypeman.String("cache_scope"),
+		CPUs:            hypeman.Int(0),
 		Dockerfile:      hypeman.String("dockerfile"),
 		GlobalCacheKey:  hypeman.String("global_cache_key"),
 		ImageName:       hypeman.String("image_name"),
 		IsAdminBuild:    hypeman.String("is_admin_build"),
+		MemoryMB:        hypeman.Int(0),
 		Secrets:         hypeman.String("secrets"),
 		TimeoutSeconds:  hypeman.Int(0),
 	})
