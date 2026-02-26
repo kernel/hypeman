@@ -458,7 +458,8 @@ type InstanceNewParams struct {
 	// Disk I/O rate limit (e.g., "100MB/s", "500MB/s"). Defaults to proportional share
 	// based on CPU allocation if configured.
 	DiskIoBps param.Opt[string] `json:"disk_io_bps,omitzero"`
-	// Additional memory for hotplug (human-readable format like "3GB", "1G")
+	// Additional memory for hotplug (human-readable format like "3GB", "1G"). Omit to
+	// disable hotplug memory.
 	HotplugSize param.Opt[string] `json:"hotplug_size,omitzero"`
 	// Writable overlay disk size (human-readable format like "10GB", "50G")
 	OverlaySize param.Opt[string] `json:"overlay_size,omitzero"`
