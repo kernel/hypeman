@@ -212,6 +212,12 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 			MemoryMB:       memoryMB,
 			CPUs:           cpus,
 		}
+		if err := domainReq.BuildPolicy.Validate(); err != nil {
+			return oapi.CreateBuild400JSONResponse{
+				Code:    "invalid_request",
+				Message: err.Error(),
+			}, nil
+		}
 	}
 
 	build, err := s.BuildManager.CreateBuild(ctx, domainReq, sourceData)
