@@ -129,9 +129,6 @@ func (m *manager) createInstance(
 		size = 1 * 1024 * 1024 * 1024 // 1GB default
 	}
 	hotplugSize := req.HotplugSize
-	if hotplugSize == 0 {
-		hotplugSize = 3 * 1024 * 1024 * 1024 // 3GB default
-	}
 	overlaySize := req.OverlaySize
 	if overlaySize == 0 {
 		overlaySize = 10 * 1024 * 1024 * 1024 // 10GB default

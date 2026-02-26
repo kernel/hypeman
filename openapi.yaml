@@ -119,8 +119,7 @@ components:
           example: "2GB"
         hotplug_size:
           type: string
-          description: Additional memory for hotplug (human-readable format like "3GB", "1G")
-          default: "3GB"
+          description: Additional memory for hotplug (human-readable format like "3GB", "1G"). Omit to disable hotplug memory.
           example: "2GB"
         overlay_size:
           type: string
