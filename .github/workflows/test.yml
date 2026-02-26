@@ -20,9 +20,11 @@ jobs:
       - name: Install dependencies
         run: |
           set -xe
-          if ! command -v mkfs.erofs &> /dev/null; then
+          if ! command -v mkfs.erofs &> /dev/null || \
+             ! command -v mkfs.ext4 &> /dev/null || \
+             ! command -v iptables &> /dev/null; then
             sudo apt-get update
-            sudo apt-get install -y erofs-utils
+            sudo apt-get install -y erofs-utils e2fsprogs iptables
           fi
           go mod download
       
