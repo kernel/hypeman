@@ -2440,6 +2440,12 @@ paths:
                 timeout_seconds:
                   type: integer
                   description: Build timeout (default 600)
+                memory_mb:
+                  type: integer
+                  description: Memory limit for builder VM in MB (default 2048)
+                cpus:
+                  type: integer
+                  description: Number of vCPUs for builder VM (default 2)
                 image_name:
                   type: string
                   description: |
