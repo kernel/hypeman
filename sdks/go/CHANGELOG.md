@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.13.0 (2026-02-26)
+
+Full Changelog: [v0.12.0...v0.13.0](https://github.com/kernel/hypeman-go/compare/v0.12.0...v0.13.0)
+
+### Features
+
+* wire up memory_mb and cpus in builds API ([ed09f5a](https://github.com/kernel/hypeman-go/commit/ed09f5a0bc3c60e7ccf6da1101d23311107c7118))
+
 ## 0.12.0 (2026-02-26)
 
 Full Changelog: [v0.11.0...v0.12.0](https://github.com/kernel/hypeman-go/compare/v0.11.0...v0.12.0)
