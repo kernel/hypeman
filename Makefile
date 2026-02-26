@@ -228,12 +228,13 @@ endif
 # Linux tests (as root for network capabilities)
 test-linux: ensure-ch-binaries ensure-caddy-binaries build-embedded
 	@VERBOSE_FLAG=""; \
+	TEST_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$$PATH"; \
 	if [ -n "$(VERBOSE)" ]; then VERBOSE_FLAG="-v"; fi; \
 	if [ -n "$(TEST)" ]; then \
 		echo "Running specific test: $(TEST)"; \
-		sudo env "PATH=$$PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" go test -tags containers_image_openpgp -run=$(TEST) $$VERBOSE_FLAG -timeout=300s ./...; \
+		sudo env "PATH=$$TEST_PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" go test -tags containers_image_openpgp -run=$(TEST) $$VERBOSE_FLAG -timeout=300s ./...; \
 	else \
-		sudo env "PATH=$$PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" go test -tags containers_image_openpgp $$VERBOSE_FLAG -timeout=300s ./...; \
+		sudo env "PATH=$$TEST_PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" go test -tags containers_image_openpgp $$VERBOSE_FLAG -timeout=300s ./...; \
 	fi
 
 # macOS tests (no sudo needed, adds e2fsprogs to PATH)
