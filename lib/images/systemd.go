@@ -36,4 +36,3 @@ func IsSystemdImage(entrypoint, cmd []string) bool {
 
 	return false
 }
-

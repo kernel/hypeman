@@ -351,8 +351,8 @@ func TestNetworkResource_Allocated(t *testing.T) {
 		t.Skip("network rate limiting not supported on this platform")
 	}
 	cfg := &config.Config{
-		DataDir:  t.TempDir(),
-		Capacity: config.CapacityConfig{Network: "1Gbps"}, // 125MB/s
+		DataDir:          t.TempDir(),
+		Capacity:         config.CapacityConfig{Network: "1Gbps"}, // 125MB/s
 		Oversubscription: config.OversubscriptionConfig{Network: 1.0},
 	}
 

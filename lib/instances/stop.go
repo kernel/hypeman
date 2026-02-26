@@ -3,6 +3,7 @@ package instances
 import (
 	"context"
 	"fmt"
+	"syscall"
 	"time"
 
 	"github.com/kernel/hypeman/lib/devices"
@@ -46,9 +47,7 @@ func (m *manager) tryGracefulGuestShutdown(ctx context.Context, inst *Instance, 
 	// Send shutdown signal (best-effort, fire and forget)
 	shutdownCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	if err := guest.ShutdownInstance(shutdownCtx, dialer, 0); err != nil {
-		log.WarnContext(ctx, "shutdown RPC failed (will fall back to hypervisor shutdown)", "instance_id", inst.Id, "error", err)
-		cancel()
-		return false
+		log.WarnContext(ctx, "shutdown RPC failed; still waiting for process exit before fallback", "instance_id", inst.Id, "error", err)
 	}
 	cancel()
 
@@ -66,8 +65,37 @@ func (m *manager) tryGracefulGuestShutdown(ctx context.Context, inst *Instance, 
 	return false
 }
 
+// forceKillHypervisorProcess sends SIGKILL to the hypervisor process if it's still running
+// and waits briefly for it to exit.
+func (m *manager) forceKillHypervisorProcess(ctx context.Context, inst *Instance) error {
+	log := logger.FromContext(ctx)
+
+	if inst.HypervisorPID == nil {
+		return nil
+	}
+
+	pid := *inst.HypervisorPID
+	if err := syscall.Kill(pid, 0); err != nil {
+		// Process is already gone (likely ESRCH).
+		return nil
+	}
+
+	log.WarnContext(ctx, "hypervisor still running after shutdown fallback, sending SIGKILL", "instance_id", inst.Id, "pid", pid)
+	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
+		return fmt.Errorf("sigkill hypervisor pid %d: %w", pid, err)
+	}
+
+	if !WaitForProcessExit(pid, 5*time.Second) {
+		return fmt.Errorf("hypervisor pid %d still alive after SIGKILL", pid)
+	}
+
+	log.DebugContext(ctx, "hypervisor process force-killed", "instance_id", inst.Id, "pid", pid)
+	return nil
+}
+
 // stopInstance gracefully stops a running instance.
-// Flow: send Shutdown RPC -> wait for VM to power off -> fall back to hypervisor shutdown.
+// Flow: send Shutdown RPC -> wait for VM to power off ->
+// fall back to hypervisor shutdown -> final SIGKILL if still alive.
 // Multi-hop orchestration: Running → Shutdown → Stopped
 func (m *manager) stopInstance(
 	ctx context.Context,
@@ -120,8 +148,14 @@ func (m *manager) stopInstance(
 	if !gracefulShutdown {
 		log.DebugContext(ctx, "shutting down hypervisor (fallback)", "instance_id", id)
 		if err := m.shutdownHypervisor(ctx, &inst); err != nil {
-			// Log but continue - try to clean up anyway
+			// Continue to final SIGKILL fallback if graceful shutdown API fails.
 			log.WarnContext(ctx, "failed to shutdown hypervisor", "instance_id", id, "error", err)
+		}
+
+		// Final fallback: force-kill the process if it's still alive.
+		if err := m.forceKillHypervisorProcess(ctx, &inst); err != nil {
+			log.ErrorContext(ctx, "failed to force-kill hypervisor process", "instance_id", id, "error", err)
+			return nil, err
 		}
 	}
 

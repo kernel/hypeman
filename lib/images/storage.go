@@ -12,8 +12,8 @@ import (
 )
 
 type imageMetadata struct {
-	Name       string              `json:"name"`     // Normalized ref (tag or digest)
-	Digest     string              `json:"digest"`   // Always present: sha256:...
+	Name       string              `json:"name"`   // Normalized ref (tag or digest)
+	Digest     string              `json:"digest"` // Always present: sha256:...
 	Status     string              `json:"status"`
 	Error      *string             `json:"error,omitempty"`
 	Request    *CreateImageRequest `json:"request,omitempty"`
@@ -193,7 +193,7 @@ func resolveTag(p *paths.Paths, repository, tag string) (string, error) {
 // listTags returns all tags for a repository
 func listTags(p *paths.Paths, repository string) ([]string, error) {
 	repoDir := p.ImageRepositoryDir(repository)
-	
+
 	entries, err := os.ReadDir(repoDir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -209,7 +209,7 @@ func listTags(p *paths.Paths, repository string) ([]string, error) {
 		if err != nil {
 			continue
 		}
-		
+
 		if info.Mode()&os.ModeSymlink != 0 {
 			tags = append(tags, entry.Name())
 		}
@@ -272,7 +272,7 @@ func digestExists(p *paths.Paths, repository, digestHex string) bool {
 // deleteTag removes a tag symlink (does not delete the digest directory)
 func deleteTag(p *paths.Paths, repository, tag string) error {
 	linkPath := tagSymlinkPath(p, repository, tag)
-	
+
 	// Check if symlink exists
 	if _, err := os.Lstat(linkPath); err != nil {
 		if os.IsNotExist(err) {

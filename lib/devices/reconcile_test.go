@@ -15,8 +15,8 @@ import (
 
 // mockLivenessChecker implements InstanceLivenessChecker for testing
 type mockLivenessChecker struct {
-	runningInstances map[string]bool      // instanceID -> isRunning
-	instanceDevices  map[string][]string  // instanceID -> deviceIDs
+	runningInstances map[string]bool     // instanceID -> isRunning
+	instanceDevices  map[string][]string // instanceID -> deviceIDs
 }
 
 func newMockLivenessChecker() *mockLivenessChecker {
@@ -55,15 +55,15 @@ func setupTestManager(t *testing.T) (*manager, *paths.Paths, string) {
 	t.Helper()
 	tmpDir := t.TempDir()
 	p := paths.New(tmpDir)
-	
+
 	// Create devices directory
 	require.NoError(t, os.MkdirAll(p.DevicesDir(), 0755))
-	
+
 	mgr := &manager{
 		paths:      p,
 		vfioBinder: NewVFIOBinder(),
 	}
-	
+
 	return mgr, p, tmpDir
 }
 
@@ -72,10 +72,10 @@ func createTestDevice(t *testing.T, p *paths.Paths, device *Device) {
 	t.Helper()
 	deviceDir := p.DeviceDir(device.Id)
 	require.NoError(t, os.MkdirAll(deviceDir, 0755))
-	
+
 	data, err := json.MarshalIndent(device, "", "  ")
 	require.NoError(t, err)
-	
+
 	require.NoError(t, os.WriteFile(p.DeviceMetadata(device.Id), data, 0644))
 }
 
@@ -89,7 +89,7 @@ func createTestInstanceDir(t *testing.T, p *paths.Paths, instanceID string) {
 func TestReconcileDevices_NoDevices(t *testing.T) {
 	mgr, _, _ := setupTestManager(t)
 	ctx := context.Background()
-	
+
 	err := mgr.ReconcileDevices(ctx)
 	require.NoError(t, err)
 }
@@ -97,10 +97,10 @@ func TestReconcileDevices_NoDevices(t *testing.T) {
 func TestReconcileDevices_OrphanedAttachment_NoLivenessChecker(t *testing.T) {
 	mgr, p, _ := setupTestManager(t)
 	ctx := context.Background()
-	
+
 	instanceID := "orphaned-instance-123"
 	deviceID := "device-abc"
-	
+
 	// Create device with AttachedTo pointing to non-existent instance
 	device := &Device{
 		Id:         deviceID,
@@ -113,13 +113,13 @@ func TestReconcileDevices_OrphanedAttachment_NoLivenessChecker(t *testing.T) {
 		CreatedAt:  time.Now(),
 	}
 	createTestDevice(t, p, device)
-	
+
 	// Don't create the instance directory - it's orphaned
-	
+
 	// Run reconciliation
 	err := mgr.ReconcileDevices(ctx)
 	require.NoError(t, err)
-	
+
 	// Verify attachment was cleared
 	updatedDevice, err := mgr.loadDevice(deviceID)
 	require.NoError(t, err)
@@ -129,10 +129,10 @@ func TestReconcileDevices_OrphanedAttachment_NoLivenessChecker(t *testing.T) {
 func TestReconcileDevices_ValidAttachment_NoLivenessChecker(t *testing.T) {
 	mgr, p, _ := setupTestManager(t)
 	ctx := context.Background()
-	
+
 	instanceID := "valid-instance-123"
 	deviceID := "device-abc"
-	
+
 	// Create device with AttachedTo pointing to existing instance
 	device := &Device{
 		Id:         deviceID,
@@ -145,14 +145,14 @@ func TestReconcileDevices_ValidAttachment_NoLivenessChecker(t *testing.T) {
 		CreatedAt:  time.Now(),
 	}
 	createTestDevice(t, p, device)
-	
+
 	// Create the instance directory - it exists
 	createTestInstanceDir(t, p, instanceID)
-	
+
 	// Run reconciliation
 	err := mgr.ReconcileDevices(ctx)
 	require.NoError(t, err)
-	
+
 	// Verify attachment was NOT cleared (instance exists)
 	updatedDevice, err := mgr.loadDevice(deviceID)
 	require.NoError(t, err)
@@ -163,14 +163,14 @@ func TestReconcileDevices_ValidAttachment_NoLivenessChecker(t *testing.T) {
 func TestReconcileDevices_OrphanedAttachment_WithLivenessChecker(t *testing.T) {
 	mgr, p, _ := setupTestManager(t)
 	ctx := context.Background()
-	
+
 	// Set up liveness checker
 	liveness := newMockLivenessChecker()
 	mgr.livenessChecker = liveness
-	
+
 	instanceID := "stopped-instance-123"
 	deviceID := "device-abc"
-	
+
 	// Create device with AttachedTo
 	device := &Device{
 		Id:         deviceID,
@@ -183,15 +183,15 @@ func TestReconcileDevices_OrphanedAttachment_WithLivenessChecker(t *testing.T) {
 		CreatedAt:  time.Now(),
 	}
 	createTestDevice(t, p, device)
-	
+
 	// Create instance directory but mark as NOT running
 	createTestInstanceDir(t, p, instanceID)
 	liveness.setRunning(instanceID, false) // Stopped/standby
-	
+
 	// Run reconciliation
 	err := mgr.ReconcileDevices(ctx)
 	require.NoError(t, err)
-	
+
 	// Verify attachment was cleared (instance not running)
 	updatedDevice, err := mgr.loadDevice(deviceID)
 	require.NoError(t, err)
@@ -201,14 +201,14 @@ func TestReconcileDevices_OrphanedAttachment_WithLivenessChecker(t *testing.T) {
 func TestReconcileDevices_ValidAttachment_WithLivenessChecker(t *testing.T) {
 	mgr, p, _ := setupTestManager(t)
 	ctx := context.Background()
-	
+
 	// Set up liveness checker
 	liveness := newMockLivenessChecker()
 	mgr.livenessChecker = liveness
-	
+
 	instanceID := "running-instance-123"
 	deviceID := "device-abc"
-	
+
 	// Create device with AttachedTo
 	device := &Device{
 		Id:         deviceID,
@@ -221,15 +221,15 @@ func TestReconcileDevices_ValidAttachment_WithLivenessChecker(t *testing.T) {
 		CreatedAt:  time.Now(),
 	}
 	createTestDevice(t, p, device)
-	
+
 	// Create instance and mark as running
 	createTestInstanceDir(t, p, instanceID)
 	liveness.setRunning(instanceID, true) // Running
-	
+
 	// Run reconciliation
 	err := mgr.ReconcileDevices(ctx)
 	require.NoError(t, err)
-	
+
 	// Verify attachment was NOT cleared (instance is running)
 	updatedDevice, err := mgr.loadDevice(deviceID)
 	require.NoError(t, err)
@@ -240,18 +240,18 @@ func TestReconcileDevices_ValidAttachment_WithLivenessChecker(t *testing.T) {
 func TestReconcileDevices_TwoWayMismatch_InstanceRefsUnknownDevice(t *testing.T) {
 	mgr, _, _ := setupTestManager(t)
 	ctx := context.Background()
-	
+
 	// Set up liveness checker with instance that references unknown device
 	liveness := newMockLivenessChecker()
 	mgr.livenessChecker = liveness
-	
+
 	instanceID := "instance-with-ghost-device"
 	unknownDeviceID := "device-that-doesnt-exist"
-	
+
 	// Instance references a device that doesn't exist
 	liveness.setInstanceDevices(instanceID, []string{unknownDeviceID})
 	liveness.setRunning(instanceID, true)
-	
+
 	// Run reconciliation - should not error, just log the mismatch
 	err := mgr.ReconcileDevices(ctx)
 	require.NoError(t, err)
@@ -261,14 +261,14 @@ func TestReconcileDevices_TwoWayMismatch_InstanceRefsUnknownDevice(t *testing.T)
 func TestReconcileDevices_TwoWayMismatch_DeviceAttachedToNil(t *testing.T) {
 	mgr, p, _ := setupTestManager(t)
 	ctx := context.Background()
-	
+
 	// Set up liveness checker
 	liveness := newMockLivenessChecker()
 	mgr.livenessChecker = liveness
-	
+
 	instanceID := "instance-123"
 	deviceID := "device-abc"
-	
+
 	// Create device with NO AttachedTo
 	device := &Device{
 		Id:         deviceID,
@@ -281,16 +281,16 @@ func TestReconcileDevices_TwoWayMismatch_DeviceAttachedToNil(t *testing.T) {
 		CreatedAt:  time.Now(),
 	}
 	createTestDevice(t, p, device)
-	
+
 	// Instance claims to have this device
 	liveness.setInstanceDevices(instanceID, []string{deviceID})
 	liveness.setRunning(instanceID, true)
-	
+
 	// Run reconciliation - should log mismatch but not error
 	err := mgr.ReconcileDevices(ctx)
 	require.NoError(t, err)
 	// Note: This is a log-only mismatch, device state should remain unchanged
-	
+
 	updatedDevice, err := mgr.loadDevice(deviceID)
 	require.NoError(t, err)
 	assert.Nil(t, updatedDevice.AttachedTo, "Device should remain unattached (log-only mismatch)")
@@ -299,15 +299,15 @@ func TestReconcileDevices_TwoWayMismatch_DeviceAttachedToNil(t *testing.T) {
 func TestReconcileDevices_TwoWayMismatch_DeviceAttachedToWrongInstance(t *testing.T) {
 	mgr, p, _ := setupTestManager(t)
 	ctx := context.Background()
-	
+
 	// Set up liveness checker
 	liveness := newMockLivenessChecker()
 	mgr.livenessChecker = liveness
-	
+
 	instanceID1 := "instance-1"
 	instanceID2 := "instance-2"
 	deviceID := "device-abc"
-	
+
 	// Create device attached to instance-1
 	device := &Device{
 		Id:         deviceID,
@@ -320,21 +320,21 @@ func TestReconcileDevices_TwoWayMismatch_DeviceAttachedToWrongInstance(t *testin
 		CreatedAt:  time.Now(),
 	}
 	createTestDevice(t, p, device)
-	
+
 	// Both instances exist and are running
 	createTestInstanceDir(t, p, instanceID1)
 	createTestInstanceDir(t, p, instanceID2)
 	liveness.setRunning(instanceID1, true)
 	liveness.setRunning(instanceID2, true)
-	
+
 	// instance-2 claims to have this device (mismatch!)
 	liveness.setInstanceDevices(instanceID2, []string{deviceID})
-	
+
 	// Run reconciliation - should log mismatch but not error
 	err := mgr.ReconcileDevices(ctx)
 	require.NoError(t, err)
 	// Note: This is a log-only mismatch, device state should remain unchanged
-	
+
 	updatedDevice, err := mgr.loadDevice(deviceID)
 	require.NoError(t, err)
 	require.NotNil(t, updatedDevice.AttachedTo)
@@ -344,15 +344,15 @@ func TestReconcileDevices_TwoWayMismatch_DeviceAttachedToWrongInstance(t *testin
 func TestReconcileDevices_MultipleDevices(t *testing.T) {
 	mgr, p, _ := setupTestManager(t)
 	ctx := context.Background()
-	
+
 	// Set up liveness checker
 	liveness := newMockLivenessChecker()
 	mgr.livenessChecker = liveness
-	
+
 	runningInstanceID := "running-instance"
 	stoppedInstanceID := "stopped-instance"
 	orphanedInstanceID := "orphaned-instance"
-	
+
 	// Device 1: Attached to running instance - should stay attached
 	device1 := &Device{
 		Id:         "device-1",
@@ -364,7 +364,7 @@ func TestReconcileDevices_MultipleDevices(t *testing.T) {
 		AttachedTo: &runningInstanceID,
 		CreatedAt:  time.Now(),
 	}
-	
+
 	// Device 2: Attached to stopped instance - should be cleared
 	device2 := &Device{
 		Id:         "device-2",
@@ -376,7 +376,7 @@ func TestReconcileDevices_MultipleDevices(t *testing.T) {
 		AttachedTo: &stoppedInstanceID,
 		CreatedAt:  time.Now(),
 	}
-	
+
 	// Device 3: Attached to non-existent instance - should be cleared
 	device3 := &Device{
 		Id:         "device-3",
@@ -388,7 +388,7 @@ func TestReconcileDevices_MultipleDevices(t *testing.T) {
 		AttachedTo: &orphanedInstanceID,
 		CreatedAt:  time.Now(),
 	}
-	
+
 	// Device 4: Not attached - should stay unattached
 	device4 := &Device{
 		Id:         "device-4",
@@ -400,41 +400,41 @@ func TestReconcileDevices_MultipleDevices(t *testing.T) {
 		AttachedTo: nil,
 		CreatedAt:  time.Now(),
 	}
-	
+
 	createTestDevice(t, p, device1)
 	createTestDevice(t, p, device2)
 	createTestDevice(t, p, device3)
 	createTestDevice(t, p, device4)
-	
+
 	// Set up instance states
 	createTestInstanceDir(t, p, runningInstanceID)
 	createTestInstanceDir(t, p, stoppedInstanceID)
 	// Don't create orphanedInstanceID directory
-	
+
 	liveness.setRunning(runningInstanceID, true)
 	liveness.setRunning(stoppedInstanceID, false)
 	// orphanedInstanceID doesn't exist in liveness checker
-	
+
 	// Run reconciliation
 	err := mgr.ReconcileDevices(ctx)
 	require.NoError(t, err)
-	
+
 	// Verify device 1 stays attached (running instance)
 	d1, err := mgr.loadDevice("device-1")
 	require.NoError(t, err)
 	require.NotNil(t, d1.AttachedTo)
 	assert.Equal(t, runningInstanceID, *d1.AttachedTo)
-	
+
 	// Verify device 2 is cleared (stopped instance)
 	d2, err := mgr.loadDevice("device-2")
 	require.NoError(t, err)
 	assert.Nil(t, d2.AttachedTo)
-	
+
 	// Verify device 3 is cleared (orphaned instance)
 	d3, err := mgr.loadDevice("device-3")
 	require.NoError(t, err)
 	assert.Nil(t, d3.AttachedTo)
-	
+
 	// Verify device 4 stays unattached
 	d4, err := mgr.loadDevice("device-4")
 	require.NoError(t, err)
@@ -443,14 +443,14 @@ func TestReconcileDevices_MultipleDevices(t *testing.T) {
 
 func TestSetLivenessChecker(t *testing.T) {
 	mgr, _, _ := setupTestManager(t)
-	
+
 	// Initially nil
 	assert.Nil(t, mgr.livenessChecker)
-	
+
 	// Set liveness checker
 	liveness := newMockLivenessChecker()
 	mgr.SetLivenessChecker(liveness)
-	
+
 	// Verify it was set
 	assert.Equal(t, liveness, mgr.livenessChecker)
 }
@@ -458,16 +458,16 @@ func TestSetLivenessChecker(t *testing.T) {
 func TestIsInstanceOrphaned_NoLivenessChecker(t *testing.T) {
 	mgr, p, _ := setupTestManager(t)
 	ctx := context.Background()
-	
+
 	existingInstanceID := "existing-instance"
 	missingInstanceID := "missing-instance"
-	
+
 	// Create one instance directory
 	createTestInstanceDir(t, p, existingInstanceID)
-	
+
 	// Existing instance is NOT orphaned
 	assert.False(t, mgr.isInstanceOrphaned(ctx, existingInstanceID))
-	
+
 	// Missing instance IS orphaned
 	assert.True(t, mgr.isInstanceOrphaned(ctx, missingInstanceID))
 }
@@ -475,24 +475,24 @@ func TestIsInstanceOrphaned_NoLivenessChecker(t *testing.T) {
 func TestIsInstanceOrphaned_WithLivenessChecker(t *testing.T) {
 	mgr, p, _ := setupTestManager(t)
 	ctx := context.Background()
-	
+
 	// Set up liveness checker
 	liveness := newMockLivenessChecker()
 	mgr.livenessChecker = liveness
-	
+
 	runningInstanceID := "running-instance"
 	stoppedInstanceID := "stopped-instance"
-	
+
 	// Both instances have directories
 	createTestInstanceDir(t, p, runningInstanceID)
 	createTestInstanceDir(t, p, stoppedInstanceID)
-	
+
 	liveness.setRunning(runningInstanceID, true)
 	liveness.setRunning(stoppedInstanceID, false)
-	
+
 	// Running instance is NOT orphaned
 	assert.False(t, mgr.isInstanceOrphaned(ctx, runningInstanceID))
-	
+
 	// Stopped instance IS orphaned (even though directory exists)
 	assert.True(t, mgr.isInstanceOrphaned(ctx, stoppedInstanceID))
 }
@@ -500,16 +500,16 @@ func TestIsInstanceOrphaned_WithLivenessChecker(t *testing.T) {
 func TestReconcileDevices_NoDevicesDirectory(t *testing.T) {
 	tmpDir := t.TempDir()
 	p := paths.New(tmpDir)
-	
+
 	// Don't create devices directory
-	
+
 	mgr := &manager{
 		paths:      p,
 		vfioBinder: NewVFIOBinder(),
 	}
-	
+
 	ctx := context.Background()
-	
+
 	// Should not error when directory doesn't exist
 	err := mgr.ReconcileDevices(ctx)
 	require.NoError(t, err)
@@ -518,7 +518,7 @@ func TestReconcileDevices_NoDevicesDirectory(t *testing.T) {
 func TestReconcileStats(t *testing.T) {
 	// Verify stats struct has expected fields
 	stats := reconcileStats{}
-	
+
 	stats.orphanedCleared = 1
 	stats.resetAttempted = 2
 	stats.resetSucceeded = 3
@@ -526,7 +526,7 @@ func TestReconcileStats(t *testing.T) {
 	stats.mismatches = 5
 	stats.suspiciousVMM = 6
 	stats.errors = 7
-	
+
 	assert.Equal(t, 1, stats.orphanedCleared)
 	assert.Equal(t, 2, stats.resetAttempted)
 	assert.Equal(t, 3, stats.resetSucceeded)
@@ -541,7 +541,7 @@ func TestReconcileStats(t *testing.T) {
 func TestResetOrphanedDevice_NonExistentPCIAddress(t *testing.T) {
 	mgr, p, _ := setupTestManager(t)
 	ctx := context.Background()
-	
+
 	// Create device with fake PCI address that doesn't exist
 	device := &Device{
 		Id:          "test-device",
@@ -554,15 +554,15 @@ func TestResetOrphanedDevice_NonExistentPCIAddress(t *testing.T) {
 		CreatedAt:   time.Now(),
 	}
 	createTestDevice(t, p, device)
-	
+
 	stats := &reconcileStats{}
-	
+
 	// Should not panic, should handle errors gracefully
 	mgr.resetOrphanedDevice(ctx, device, stats)
-	
+
 	// Reset was attempted
 	assert.Equal(t, 1, stats.resetAttempted)
-	
+
 	// May fail due to non-existent device, that's expected
 	// The key is it doesn't panic
 }
@@ -580,7 +580,7 @@ func verifyDeviceDir(t *testing.T, p *paths.Paths, deviceID string) bool {
 func TestReconcileDevices_CorruptedDeviceMetadata(t *testing.T) {
 	mgr, p, _ := setupTestManager(t)
 	ctx := context.Background()
-	
+
 	// Create a valid device
 	validDevice := &Device{
 		Id:         "valid-device",
@@ -592,21 +592,20 @@ func TestReconcileDevices_CorruptedDeviceMetadata(t *testing.T) {
 		CreatedAt:  time.Now(),
 	}
 	createTestDevice(t, p, validDevice)
-	
+
 	// Create a corrupted device directory with invalid JSON
 	corruptedID := "corrupted-device"
 	corruptedDir := p.DeviceDir(corruptedID)
 	require.NoError(t, os.MkdirAll(corruptedDir, 0755))
 	corruptedPath := filepath.Join(corruptedDir, "metadata.json")
 	require.NoError(t, os.WriteFile(corruptedPath, []byte("not valid json{{{"), 0644))
-	
+
 	// Should not error - should skip corrupted device and continue
 	err := mgr.ReconcileDevices(ctx)
 	require.NoError(t, err)
-	
+
 	// Valid device should still be loadable
 	d, err := mgr.loadDevice("valid-device")
 	require.NoError(t, err)
 	assert.Equal(t, "valid-gpu", d.Name)
 }
-

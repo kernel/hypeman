@@ -469,4 +469,3 @@ func run() error {
 	slog.Info("all goroutines finished")
 	return err
 }
-

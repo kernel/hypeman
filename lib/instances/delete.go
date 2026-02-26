@@ -49,16 +49,18 @@ func (m *manager) deleteInstance(
 	}
 
 	// 4. If running, try graceful guest shutdown before force kill.
+	gracefulShutdown := false
 	if inst.State == StateRunning {
 		stopTimeout := resolveStopTimeout(stored)
-		if !m.tryGracefulGuestShutdown(ctx, &inst, stopTimeout) {
+		gracefulShutdown = m.tryGracefulGuestShutdown(ctx, &inst, stopTimeout)
+		if !gracefulShutdown {
 			log.DebugContext(ctx, "graceful shutdown before delete did not complete", "instance_id", id)
 		}
 	}
 
 	// 5. If hypervisor might be running, force kill it
 	// Also attempt kill for StateUnknown since we can't be sure if hypervisor is running
-	if inst.State.RequiresVMM() || inst.State == StateUnknown {
+	if !gracefulShutdown && (inst.State.RequiresVMM() || inst.State == StateUnknown) {
 		log.DebugContext(ctx, "stopping hypervisor", "instance_id", id, "state", inst.State)
 		if err := m.killHypervisor(ctx, &inst); err != nil {
 			// Log error but continue with cleanup

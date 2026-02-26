@@ -39,4 +39,3 @@ func SwaggerUIHandler(w http.ResponseWriter, r *http.Request) {
 </html>`
 	w.Write([]byte(html))
 }
-
