@@ -91,7 +91,7 @@ type StoredMetadata struct {
 	SkipGuestAgent    bool // Skip guest-agent installation (disables exec/stat API)
 
 	// Shutdown configuration
-	StopTimeout int // Grace period in seconds for graceful stop (0 = use default 10s)
+	StopTimeout int // Grace period in seconds for graceful stop (0 = use default 5s)
 
 	// Exit information (populated from serial console sentinel when VM stops)
 	ExitCode    *int   // App exit code, nil if VM hasn't exited

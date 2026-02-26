@@ -14,11 +14,60 @@ import (
 )
 
 // DefaultStopTimeout is the default grace period for graceful shutdown (seconds).
-// Similar to Docker's default of 10s.
-const DefaultStopTimeout = 10
+const DefaultStopTimeout = 5
+
+// resolveStopTimeout returns the configured stop timeout in seconds,
+// falling back to the package default when unset/invalid.
+func resolveStopTimeout(stored *StoredMetadata) int {
+	stopTimeout := stored.StopTimeout
+	if stopTimeout <= 0 {
+		stopTimeout = DefaultStopTimeout
+	}
+	return stopTimeout
+}
+
+// tryGracefulGuestShutdown asks guest init to shut down and waits for the
+// hypervisor process to exit. Returns true if the process exited in time.
+func (m *manager) tryGracefulGuestShutdown(ctx context.Context, inst *Instance, stopTimeout int) bool {
+	log := logger.FromContext(ctx)
+
+	if inst.SkipGuestAgent {
+		log.DebugContext(ctx, "guest-agent disabled, skipping graceful guest shutdown", "instance_id", inst.Id)
+		return false
+	}
+
+	log.DebugContext(ctx, "sending graceful shutdown signal to guest", "instance_id", inst.Id, "timeout_seconds", stopTimeout)
+	dialer, dialerErr := hypervisor.NewVsockDialer(inst.HypervisorType, inst.VsockSocket, inst.VsockCID)
+	if dialerErr != nil {
+		log.WarnContext(ctx, "could not create vsock dialer for graceful shutdown", "instance_id", inst.Id, "error", dialerErr)
+		return false
+	}
+
+	// Send shutdown signal (best-effort, fire and forget)
+	shutdownCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	if err := guest.ShutdownInstance(shutdownCtx, dialer, 0); err != nil {
+		log.WarnContext(ctx, "shutdown RPC failed (will fall back to hypervisor shutdown)", "instance_id", inst.Id, "error", err)
+		cancel()
+		return false
+	}
+	cancel()
+
+	// Wait for the hypervisor process to exit (init calls reboot(POWER_OFF))
+	if inst.HypervisorPID != nil {
+		if WaitForProcessExit(*inst.HypervisorPID, time.Duration(stopTimeout)*time.Second) {
+			log.DebugContext(ctx, "VM shut down gracefully", "instance_id", inst.Id)
+			return true
+		}
+
+		log.WarnContext(ctx, "graceful shutdown timed out, falling back to hypervisor shutdown", "instance_id", inst.Id)
+		return false
+	}
+
+	return false
+}
 
 // stopInstance gracefully stops a running instance.
-// Flow: send Shutdown RPC -> wait for VM to power off -> fall back to hard kill.
+// Flow: send Shutdown RPC -> wait for VM to power off -> fall back to hypervisor shutdown.
 // Multi-hop orchestration: Running → Shutdown → Stopped
 func (m *manager) stopInstance(
 	ctx context.Context,
@@ -63,41 +112,13 @@ func (m *manager) stopInstance(
 	}
 
 	// 4. Graceful shutdown: send signal to guest init via Shutdown RPC,
-	// then wait for VM to power off cleanly. Fall back to hard kill on timeout.
-	stopTimeout := stored.StopTimeout
-	if stopTimeout <= 0 {
-		stopTimeout = DefaultStopTimeout
-	}
+	// then wait for VM to power off cleanly. Fall back to hypervisor shutdown on timeout.
+	stopTimeout := resolveStopTimeout(stored)
+	gracefulShutdown := m.tryGracefulGuestShutdown(ctx, &inst, stopTimeout)
 
-	gracefulShutdown := false
-	if !stored.SkipGuestAgent {
-		log.DebugContext(ctx, "sending graceful shutdown signal to guest", "instance_id", id, "timeout_seconds", stopTimeout)
-		dialer, dialerErr := hypervisor.NewVsockDialer(stored.HypervisorType, stored.VsockSocket, stored.VsockCID)
-		if dialerErr != nil {
-			log.WarnContext(ctx, "could not create vsock dialer for graceful shutdown", "instance_id", id, "error", dialerErr)
-		} else {
-			// Send shutdown signal (best-effort, fire and forget)
-			shutdownCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			if err := guest.ShutdownInstance(shutdownCtx, dialer, 0); err != nil {
-				log.WarnContext(ctx, "shutdown RPC failed (will hard kill)", "instance_id", id, "error", err)
-			}
-			cancel()
-
-			// Wait for the hypervisor process to exit (init calls reboot(POWER_OFF))
-			if inst.HypervisorPID != nil {
-				if WaitForProcessExit(*inst.HypervisorPID, time.Duration(stopTimeout)*time.Second) {
-					log.DebugContext(ctx, "VM shut down gracefully", "instance_id", id)
-					gracefulShutdown = true
-				} else {
-					log.WarnContext(ctx, "graceful shutdown timed out, falling back to hard kill", "instance_id", id)
-				}
-			}
-		}
-	}
-
-	// 5. Hard kill if graceful shutdown didn't work
+	// 5. Fallback hypervisor shutdown if guest graceful shutdown didn't work
 	if !gracefulShutdown {
-		log.DebugContext(ctx, "shutting down hypervisor (hard kill)", "instance_id", id)
+		log.DebugContext(ctx, "shutting down hypervisor (fallback)", "instance_id", id)
 		if err := m.shutdownHypervisor(ctx, &inst); err != nil {
 			// Log but continue - try to clean up anyway
 			log.WarnContext(ctx, "failed to shutdown hypervisor", "instance_id", id, "error", err)
