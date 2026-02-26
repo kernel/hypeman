@@ -224,13 +224,13 @@ func DefaultBuildPolicy() BuildPolicy {
 // ApplyDefaults fills in default values for a build policy
 func (p *BuildPolicy) ApplyDefaults() {
 	defaults := DefaultBuildPolicy()
-	if p.TimeoutSeconds == 0 {
+	if p.TimeoutSeconds <= 0 {
 		p.TimeoutSeconds = defaults.TimeoutSeconds
 	}
-	if p.MemoryMB == 0 {
+	if p.MemoryMB <= 0 {
 		p.MemoryMB = defaults.MemoryMB
 	}
-	if p.CPUs == 0 {
+	if p.CPUs <= 0 {
 		p.CPUs = defaults.CPUs
 	}
 	if p.NetworkMode == "" {
