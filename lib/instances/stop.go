@@ -85,8 +85,25 @@ func (m *manager) forceKillHypervisorProcess(ctx context.Context, inst *Instance
 		return fmt.Errorf("sigkill hypervisor pid %d: %w", pid, err)
 	}
 
-	if !WaitForProcessExit(pid, 5*time.Second) {
-		return fmt.Errorf("hypervisor pid %d still alive after SIGKILL", pid)
+	// Wait for process to die and reap it to avoid zombie false positives.
+	reaped := false
+	for i := 0; i < 50; i++ { // 50 * 100ms = 5s
+		var wstatus syscall.WaitStatus
+		wpid, err := syscall.Wait4(pid, &wstatus, syscall.WNOHANG, nil)
+		if err != nil || wpid == pid {
+			// Process reaped, or not our child (ECHILD) and no longer trackable here.
+			reaped = true
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	if !reaped {
+		// Timed out waiting for reap; if process still exists, treat as failure.
+		if err := syscall.Kill(pid, 0); err == nil {
+			return fmt.Errorf("hypervisor pid %d still alive after SIGKILL", pid)
+		}
+		log.WarnContext(ctx, "timeout waiting to reap hypervisor process after SIGKILL", "instance_id", inst.Id, "pid", pid)
 	}
 
 	log.DebugContext(ctx, "hypervisor process force-killed", "instance_id", inst.Id, "pid", pid)
