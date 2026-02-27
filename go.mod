@@ -30,7 +30,7 @@ require (
 	github.com/miekg/dns v1.1.68
 	github.com/nrednav/cuid2 v1.1.0
 	github.com/oapi-codegen/nethttp-middleware v1.1.2
-	github.com/oapi-codegen/runtime v1.1.2
+	github.com/oapi-codegen/runtime v1.2.0
 	github.com/opencontainers/go-digest v1.0.0
 	github.com/opencontainers/image-spec v1.1.1
 	github.com/opencontainers/runtime-spec v1.2.1
