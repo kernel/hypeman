@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"os"
 	"time"
 
@@ -47,6 +48,11 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 		}
 
 		forked, forkErr := m.forkInstanceFromStoppedOrStandby(ctx, id, req)
+		if forkErr == nil {
+			if err := m.rotateSourceVsockForRestore(ctx, id, forked.Id); err != nil {
+				forkErr = fmt.Errorf("prepare source snapshot for restore: %w", err)
+			}
+		}
 		log.InfoContext(ctx, "restoring source instance after running fork", "source_instance_id", id)
 		_, restoreErr := m.restoreInstance(ctx, id)
 
@@ -65,6 +71,48 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 	default:
 		return nil, fmt.Errorf("%w: cannot fork from state %s (must be Stopped or Standby, or Running with from_running=true)", ErrInvalidState, source.State)
 	}
+}
+
+func (m *manager) rotateSourceVsockForRestore(ctx context.Context, sourceID, forkID string) error {
+	meta, err := m.loadMetadata(sourceID)
+	if err != nil {
+		return fmt.Errorf("reload source metadata: %w", err)
+	}
+	stored := &meta.StoredMetadata
+
+	newCID := generateForkSourceVsockCID(sourceID, forkID, stored.VsockCID)
+	if newCID == stored.VsockCID {
+		return nil
+	}
+
+	starter, err := m.getVMStarter(stored.HypervisorType)
+	if err != nil {
+		return fmt.Errorf("get vm starter: %w", err)
+	}
+
+	if err := starter.PrepareFork(ctx, hypervisor.ForkPrepareRequest{
+		SnapshotConfigPath: m.paths.InstanceSnapshotConfig(sourceID),
+		VsockCID:           newCID,
+		VsockSocket:        stored.VsockSocket,
+	}); err != nil {
+		return fmt.Errorf("rewrite source snapshot vsock state: %w", err)
+	}
+
+	stored.VsockCID = newCID
+	if err := m.saveMetadata(meta); err != nil {
+		return fmt.Errorf("save source metadata: %w", err)
+	}
+	return nil
+}
+
+func generateForkSourceVsockCID(sourceID, forkID string, current int64) int64 {
+	const cidRange = int64(4294967292)
+	seed := crc32.ChecksumIEEE([]byte(sourceID + ":" + forkID))
+	cid := (int64(seed) % cidRange) + 3
+	if cid == current {
+		cid = ((cid - 3 + 1) % cidRange) + 3
+	}
+	return cid
 }
 
 func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id string, req ForkInstanceRequest) (*Instance, error) {
@@ -135,9 +183,10 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 	forkMeta.ExitCode = nil
 	forkMeta.ExitMessage = ""
 
+	// Keep the original CID for snapshot-based forks.
+	// Rewriting CID in restored memory snapshots is not reliable across
+	// hypervisors.
 	if source.State == StateStandby {
-		// Keep the original CID for snapshot-based forks.
-		// Rewriting CID in restored memory snapshots is not reliable for CH.
 		forkMeta.VsockCID = stored.VsockCID
 	} else {
 		forkMeta.VsockCID = generateVsockCID(forkID)

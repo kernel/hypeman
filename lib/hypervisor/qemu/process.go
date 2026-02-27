@@ -270,13 +270,6 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 	return pid, hv, nil
 }
 
-// PrepareFork is not supported for QEMU in the current implementation.
-func (s *Starter) PrepareFork(ctx context.Context, req hypervisor.ForkPrepareRequest) error {
-	_ = ctx
-	_ = req
-	return hypervisor.ErrNotSupported
-}
-
 // vmConfigFile is the name of the file where VM config is saved for restore.
 const vmConfigFile = "qemu-config.json"
 

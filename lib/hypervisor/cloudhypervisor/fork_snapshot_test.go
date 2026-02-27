@@ -59,7 +59,7 @@ func TestRewriteSnapshotConfigForFork(t *testing.T) {
 	assert.Equal(t, "/dst/guests/b/logs/app.log", serial["file"])
 
 	vsock := updated["vsock"].(map[string]any)
-	assert.Equal(t, float64(200), vsock["cid"])
+	assert.Equal(t, float64(100), vsock["cid"])
 	assert.Equal(t, "/dst/guests/b/vsock.sock", vsock["socket"])
 
 	netCfg := updated["net"].([]any)[0].(map[string]any)

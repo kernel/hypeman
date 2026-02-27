@@ -70,11 +70,11 @@ func rewriteStringValues(value any, mapper func(string) string) any {
 }
 
 func updateVsockConfig(config map[string]any, cid int64, socketPath string) {
+	_ = cid // Keep snapshot CID stable for CH restores; only rewrite socket path.
 	vsock, ok := config["vsock"].(map[string]any)
 	if !ok || vsock == nil {
 		return
 	}
-	vsock["cid"] = cid
 	if socketPath != "" {
 		vsock["socket"] = socketPath
 	}

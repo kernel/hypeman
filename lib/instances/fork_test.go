@@ -22,25 +22,28 @@ import (
 func TestForkInstanceNotSupportedHypervisor(t *testing.T) {
 	manager, _ := setupTestManager(t)
 	ctx := context.Background()
+	if _, err := manager.getVMStarter(hypervisor.TypeVZ); err != nil {
+		t.Skip("vz starter not available on this platform")
+	}
 
-	sourceID := "fork-qemu-source"
+	sourceID := "fork-vz-source"
 	require.NoError(t, manager.ensureDirectories(sourceID))
 
 	meta := &metadata{StoredMetadata: StoredMetadata{
 		Id:                sourceID,
-		Name:              "fork-qemu-source",
+		Name:              "fork-vz-source",
 		Image:             "docker.io/library/alpine:latest",
 		CreatedAt:         time.Now(),
-		HypervisorType:    hypervisor.TypeQEMU,
+		HypervisorType:    hypervisor.TypeVZ,
 		HypervisorVersion: "test",
-		SocketPath:        paths.New(manager.paths.DataDir()).InstanceSocket(sourceID, "qemu.sock"),
+		SocketPath:        paths.New(manager.paths.DataDir()).InstanceSocket(sourceID, "vz.sock"),
 		DataDir:           paths.New(manager.paths.DataDir()).InstanceDir(sourceID),
 		VsockCID:          42,
 		VsockSocket:       paths.New(manager.paths.DataDir()).InstanceVsockSocket(sourceID),
 	}}
 	require.NoError(t, manager.saveMetadata(meta))
 
-	_, err := manager.ForkInstance(ctx, sourceID, ForkInstanceRequest{Name: "fork-qemu-copy"})
+	_, err := manager.ForkInstance(ctx, sourceID, ForkInstanceRequest{Name: "fork-vz-copy"})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrNotSupported)
 }
