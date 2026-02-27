@@ -1,12 +1,16 @@
 package instances
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
+	"strings"
 	"time"
 
+	"github.com/kernel/hypeman/lib/guest"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/network"
@@ -70,6 +74,23 @@ func (m *manager) restoreInstance(
 		return nil, fmt.Errorf("get vm starter: %w", err)
 	}
 
+	var allocatedNet *network.Allocation
+	releaseNetwork := func() {
+		if !stored.NetworkEnabled {
+			return
+		}
+		if allocatedNet != nil {
+			if err := m.networkManager.ReleaseAllocation(ctx, allocatedNet); err != nil {
+				log.WarnContext(ctx, "failed to release allocated network", "instance_id", id, "error", err)
+			}
+			return
+		}
+		netAlloc, _ := m.networkManager.GetAllocation(ctx, id)
+		if err := m.networkManager.ReleaseAllocation(ctx, netAlloc); err != nil {
+			log.WarnContext(ctx, "failed to release network", "instance_id", id, "error", err)
+		}
+	}
+
 	// 4. Recreate or allocate network if network enabled
 	if stored.NetworkEnabled {
 		var networkSpan trace.Span
@@ -96,6 +117,16 @@ func (m *manager) restoreInstance(
 				log.ErrorContext(ctx, "failed to allocate network", "instance_id", id, "error", err)
 				return nil, fmt.Errorf("allocate network: %w", err)
 			}
+			allocatedNet = &network.Allocation{
+				InstanceID:   id,
+				InstanceName: stored.Name,
+				Network:      "default",
+				IP:           netConfig.IP,
+				MAC:          netConfig.MAC,
+				TAPDevice:    netConfig.TAPDevice,
+				Gateway:      netConfig.Gateway,
+				Netmask:      netConfig.Netmask,
+			}
 			stored.IP = netConfig.IP
 			stored.MAC = netConfig.MAC
 
@@ -115,13 +146,11 @@ func (m *manager) restoreInstance(
 				}
 				if errors.Is(err, hypervisor.ErrNotSupported) {
 					log.ErrorContext(ctx, "forked standby network rewrite not supported for hypervisor", "instance_id", id, "hypervisor", stored.HypervisorType)
-					netAlloc, _ := m.networkManager.GetAllocation(ctx, id)
-					m.networkManager.ReleaseAllocation(ctx, netAlloc)
+					releaseNetwork()
 					return nil, fmt.Errorf("%w: standby fork restore network rewrite is not supported for hypervisor %s", ErrNotSupported, stored.HypervisorType)
 				}
 				log.ErrorContext(ctx, "failed to patch snapshot network identity", "instance_id", id, "error", err)
-				netAlloc, _ := m.networkManager.GetAllocation(ctx, id)
-				m.networkManager.ReleaseAllocation(ctx, netAlloc)
+				releaseNetwork()
 				return nil, fmt.Errorf("rewrite snapshot config: %w", err)
 			}
 		} else {
@@ -153,10 +182,7 @@ func (m *manager) restoreInstance(
 	if err != nil {
 		log.ErrorContext(ctx, "failed to restore from snapshot", "instance_id", id, "error", err)
 		// Cleanup network on failure
-		if stored.NetworkEnabled {
-			netAlloc, _ := m.networkManager.GetAllocation(ctx, id)
-			m.networkManager.ReleaseAllocation(ctx, netAlloc)
-		}
+		releaseNetwork()
 		return nil, err
 	}
 
@@ -176,14 +202,23 @@ func (m *manager) restoreInstance(
 		log.ErrorContext(ctx, "failed to resume VM", "instance_id", id, "error", err)
 		// Cleanup on failure
 		hv.Shutdown(ctx)
-		if stored.NetworkEnabled {
-			netAlloc, _ := m.networkManager.GetAllocation(ctx, id)
-			m.networkManager.ReleaseAllocation(ctx, netAlloc)
-		}
+		releaseNetwork()
 		return nil, fmt.Errorf("resume vm failed: %w", err)
 	}
 	if resumeSpan != nil {
 		resumeSpan.End()
+	}
+
+	// Forked standby restores may allocate a fresh identity while the guest memory snapshot
+	// still has the source VM's old IP configuration. Reconfigure guest networking after
+	// resume so host ingress to the new private IP works reliably.
+	if allocatedNet != nil && !stored.SkipGuestAgent {
+		if err := reconfigureGuestNetwork(ctx, stored, allocatedNet); err != nil {
+			log.ErrorContext(ctx, "failed to configure guest network after restore", "instance_id", id, "error", err)
+			_ = hv.Shutdown(ctx)
+			releaseNetwork()
+			return nil, fmt.Errorf("configure guest network after restore: %w", err)
+		}
 	}
 
 	// 8. Delete snapshot after successful restore
@@ -235,4 +270,49 @@ func (m *manager) restoreFromSnapshot(
 
 	log.DebugContext(ctx, "VM restored from snapshot successfully", "instance_id", stored.Id, "pid", pid)
 	return pid, hv, nil
+}
+
+func reconfigureGuestNetwork(ctx context.Context, stored *StoredMetadata, alloc *network.Allocation) error {
+	prefix, err := netmaskToPrefix(alloc.Netmask)
+	if err != nil {
+		return err
+	}
+
+	dialer, err := hypervisor.NewVsockDialer(stored.HypervisorType, stored.VsockSocket, stored.VsockCID)
+	if err != nil {
+		return fmt.Errorf("create vsock dialer: %w", err)
+	}
+
+	cmd := fmt.Sprintf(
+		"ip addr replace %s/%d dev eth0 && ip link set dev eth0 up && ip route replace default via %s dev eth0",
+		alloc.IP, prefix, alloc.Gateway,
+	)
+
+	var stdout, stderr bytes.Buffer
+	exit, err := guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{
+		Command:      []string{"sh", "-c", cmd},
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+		WaitForAgent: 120 * time.Second,
+	})
+	if err != nil {
+		return fmt.Errorf("exec network reconfiguration command: %w", err)
+	}
+	if exit.Code != 0 {
+		return fmt.Errorf("network reconfiguration command failed (exit=%d, stdout=%q, stderr=%q)", exit.Code, strings.TrimSpace(stdout.String()), strings.TrimSpace(stderr.String()))
+	}
+
+	return nil
+}
+
+func netmaskToPrefix(mask string) (int, error) {
+	ip := net.ParseIP(mask).To4()
+	if ip == nil {
+		return 0, fmt.Errorf("invalid netmask: %q", mask)
+	}
+	ones, bits := net.IPMask(ip).Size()
+	if bits != 32 {
+		return 0, fmt.Errorf("invalid netmask bits: %q", mask)
+	}
+	return ones, nil
 }

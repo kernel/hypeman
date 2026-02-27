@@ -227,6 +227,13 @@ components:
           pattern: ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$
           maxLength: 63
           example: my-workload-1-fork
+        from_running:
+          type: boolean
+          description: |
+            Allow forking from a running source instance.
+            When true and source is Running, the source is put into standby, forked, then restored back to Running.
+          default: false
+          example: false
     
     Instance:
       type: object
@@ -1528,7 +1535,7 @@ paths:
 
   /instances/{id}/fork:
     post:
-      summary: Fork an instance from stopped or standby state
+      summary: Fork an instance from stopped, standby, or running (with from_running=true)
       operationId: forkInstance
       security:
         - bearerAuth: []
@@ -1565,7 +1572,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
         409:
-          description: Conflict - invalid state or target name conflict
+          description: Conflict - invalid state (including running without from_running=true) or target name conflict
           content:
             application/json:
               schema:

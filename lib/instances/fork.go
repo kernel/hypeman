@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"regexp"
 	"time"
 
 	"github.com/kernel/hypeman/lib/forkvm"
@@ -29,6 +28,52 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 	if err != nil {
 		return nil, err
 	}
+	source := m.toInstance(ctx, meta)
+
+	switch source.State {
+	case StateRunning:
+		if !req.FromRunning {
+			return nil, fmt.Errorf("%w: cannot fork from state %s (set from_running=true to allow standby+restore flow)", ErrInvalidState, source.State)
+		}
+
+		if err := m.validateForkSupport(ctx, source.HypervisorType); err != nil {
+			return nil, err
+		}
+
+		log.InfoContext(ctx, "fork from running requested; transitioning source to standby",
+			"source_instance_id", id, "hypervisor", source.HypervisorType)
+		if _, err := m.standbyInstance(ctx, id); err != nil {
+			return nil, fmt.Errorf("standby source instance: %w", err)
+		}
+
+		forked, forkErr := m.forkInstanceFromStoppedOrStandby(ctx, id, req)
+		log.InfoContext(ctx, "restoring source instance after running fork", "source_instance_id", id)
+		_, restoreErr := m.restoreInstance(ctx, id)
+
+		if restoreErr != nil {
+			if forkErr != nil {
+				return nil, fmt.Errorf("fork failed: %v; additionally failed to restore source instance: %w", forkErr, restoreErr)
+			}
+			return nil, fmt.Errorf("restore source instance after fork: %w", restoreErr)
+		}
+		if forkErr != nil {
+			return nil, forkErr
+		}
+		return forked, nil
+	case StateStopped, StateStandby:
+		return m.forkInstanceFromStoppedOrStandby(ctx, id, req)
+	default:
+		return nil, fmt.Errorf("%w: cannot fork from state %s (must be Stopped or Standby, or Running with from_running=true)", ErrInvalidState, source.State)
+	}
+}
+
+func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id string, req ForkInstanceRequest) (*Instance, error) {
+	log := logger.FromContext(ctx)
+
+	meta, err := m.loadMetadata(id)
+	if err != nil {
+		return nil, err
+	}
 
 	source := m.toInstance(ctx, meta)
 	stored := &meta.StoredMetadata
@@ -40,8 +85,12 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 		return nil, fmt.Errorf("%w: cannot fork from state %s (must be Stopped or Standby)", ErrInvalidState, source.State)
 	}
 
+	if err := m.validateForkSupport(ctx, stored.HypervisorType); err != nil {
+		return nil, err
+	}
+
 	if stored.NetworkEnabled {
-		exists, err := m.networkManager.NameExists(ctx, req.Name, id)
+		exists, err := m.networkManager.NameExists(ctx, req.Name, "")
 		if err != nil {
 			return nil, fmt.Errorf("check instance name availability: %w", err)
 		}
@@ -82,10 +131,17 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 	forkMeta.HypervisorPID = nil
 	forkMeta.SocketPath = m.paths.InstanceSocket(forkID, starter.SocketName())
 	forkMeta.DataDir = dstDir
-	forkMeta.VsockCID = generateVsockCID(forkID)
 	forkMeta.VsockSocket = m.paths.InstanceVsockSocket(forkID)
 	forkMeta.ExitCode = nil
 	forkMeta.ExitMessage = ""
+
+	if source.State == StateStandby {
+		// Keep the original CID for snapshot-based forks.
+		// Rewriting CID in restored memory snapshots is not reliable for CH.
+		forkMeta.VsockCID = stored.VsockCID
+	} else {
+		forkMeta.VsockCID = generateVsockCID(forkID)
+	}
 
 	if forkMeta.NetworkEnabled {
 		// Clear inherited network identity. For stopped instances this is regenerated on start,
@@ -114,14 +170,6 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 			}
 			return nil, fmt.Errorf("prepare fork snapshot state: %w", err)
 		}
-	} else {
-		// Validate fork support for stopped-state forks as well.
-		if err := starter.PrepareFork(ctx, hypervisor.ForkPrepareRequest{}); err != nil {
-			if errors.Is(err, hypervisor.ErrNotSupported) {
-				return nil, fmt.Errorf("%w: fork is not supported for hypervisor %s", ErrNotSupported, stored.HypervisorType)
-			}
-			return nil, fmt.Errorf("prepare fork state: %w", err)
-		}
 	}
 
 	newMeta := &metadata{StoredMetadata: forkMeta}
@@ -139,16 +187,23 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 	return &forked, nil
 }
 
+func (m *manager) validateForkSupport(ctx context.Context, hvType hypervisor.Type) error {
+	starter, err := m.getVMStarter(hvType)
+	if err != nil {
+		return fmt.Errorf("get vm starter: %w", err)
+	}
+	if err := starter.PrepareFork(ctx, hypervisor.ForkPrepareRequest{}); err != nil {
+		if errors.Is(err, hypervisor.ErrNotSupported) {
+			return fmt.Errorf("%w: fork is not supported for hypervisor %s", ErrNotSupported, hvType)
+		}
+		return fmt.Errorf("prepare fork state: %w", err)
+	}
+	return nil
+}
+
 func validateForkRequest(req ForkInstanceRequest) error {
-	if req.Name == "" {
-		return fmt.Errorf("name is required")
-	}
-	if len(req.Name) > 63 {
-		return fmt.Errorf("name must be 63 characters or less")
-	}
-	namePattern := regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
-	if !namePattern.MatchString(req.Name) {
-		return fmt.Errorf("name must contain only lowercase letters, digits, and dashes; cannot start or end with a dash")
+	if err := validateInstanceName(req.Name); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidRequest, err)
 	}
 	return nil
 }

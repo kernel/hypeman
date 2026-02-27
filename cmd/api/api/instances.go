@@ -468,7 +468,8 @@ func (s *ApiService) ForkInstance(ctx context.Context, request oapi.ForkInstance
 	}
 
 	result, err := s.InstanceManager.ForkInstance(ctx, inst.Id, instances.ForkInstanceRequest{
-		Name: request.Body.Name,
+		Name:        request.Body.Name,
+		FromRunning: request.Body.FromRunning != nil && *request.Body.FromRunning,
 	})
 	if err != nil {
 		switch {
@@ -482,6 +483,11 @@ func (s *ApiService) ForkInstance(ctx context.Context, request oapi.ForkInstance
 				Code:    "invalid_state",
 				Message: err.Error(),
 			}, nil
+		case errors.Is(err, instances.ErrInvalidRequest):
+			return oapi.ForkInstance400JSONResponse{
+				Code:    "invalid_request",
+				Message: err.Error(),
+			}, nil
 		case errors.Is(err, instances.ErrAlreadyExists), errors.Is(err, network.ErrNameExists):
 			return oapi.ForkInstance409JSONResponse{
 				Code:    "name_conflict",
@@ -493,14 +499,6 @@ func (s *ApiService) ForkInstance(ctx context.Context, request oapi.ForkInstance
 				Message: err.Error(),
 			}, nil
 		default:
-			// Validation errors (for example invalid fork name) are user input issues.
-			if strings.Contains(err.Error(), "name") {
-				return oapi.ForkInstance400JSONResponse{
-					Code:    "invalid_request",
-					Message: err.Error(),
-				}, nil
-			}
-
 			log.ErrorContext(ctx, "failed to fork instance", "error", err)
 			return oapi.ForkInstance500JSONResponse{
 				Code:    "internal_error",

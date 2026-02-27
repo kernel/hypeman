@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -258,6 +259,7 @@ func TestForkInstance_Success(t *testing.T) {
 	assert.Equal(t, source.Id, mockMgr.lastID)
 	require.NotNil(t, mockMgr.lastReq)
 	assert.Equal(t, "forked-instance", mockMgr.lastReq.Name)
+	assert.False(t, mockMgr.lastReq.FromRunning)
 }
 
 func TestForkInstance_NotSupported(t *testing.T) {
@@ -294,6 +296,93 @@ func TestForkInstance_NotSupported(t *testing.T) {
 	notSupported, ok := resp.(oapi.ForkInstance501JSONResponse)
 	require.True(t, ok, "expected 501 response")
 	assert.Equal(t, "not_supported", notSupported.Code)
+}
+
+func TestForkInstance_InvalidRequest(t *testing.T) {
+	svc := newTestService(t)
+
+	source := instances.Instance{
+		StoredMetadata: instances.StoredMetadata{
+			Id:             "src-instance",
+			Name:           "src-instance",
+			Image:          "docker.io/library/alpine:latest",
+			CreatedAt:      time.Now(),
+			HypervisorType: hypervisor.TypeCloudHypervisor,
+		},
+		State: instances.StateStopped,
+	}
+
+	mockMgr := &captureForkManager{
+		Manager: svc.InstanceManager,
+		err:     fmt.Errorf("%w: name is required", instances.ErrInvalidRequest),
+	}
+	svc.InstanceManager = mockMgr
+
+	resp, err := svc.ForkInstance(
+		mw.WithResolvedInstance(ctx(), source.Id, source),
+		oapi.ForkInstanceRequestObject{
+			Id: source.Id,
+			Body: &oapi.ForkInstanceRequest{
+				Name: "",
+			},
+		},
+	)
+	require.NoError(t, err)
+
+	badReq, ok := resp.(oapi.ForkInstance400JSONResponse)
+	require.True(t, ok, "expected 400 response")
+	assert.Equal(t, "invalid_request", badReq.Code)
+}
+
+func TestForkInstance_FromRunningFlagForwarded(t *testing.T) {
+	svc := newTestService(t)
+
+	now := time.Now()
+	source := instances.Instance{
+		StoredMetadata: instances.StoredMetadata{
+			Id:             "src-instance",
+			Name:           "src-instance",
+			Image:          "docker.io/library/alpine:latest",
+			CreatedAt:      now,
+			HypervisorType: hypervisor.TypeCloudHypervisor,
+		},
+		State: instances.StateRunning,
+	}
+
+	forked := &instances.Instance{
+		StoredMetadata: instances.StoredMetadata{
+			Id:             "forked-instance",
+			Name:           "forked-instance",
+			Image:          "docker.io/library/alpine:latest",
+			CreatedAt:      now,
+			HypervisorType: hypervisor.TypeCloudHypervisor,
+		},
+		State: instances.StateStandby,
+	}
+
+	mockMgr := &captureForkManager{
+		Manager: svc.InstanceManager,
+		result:  forked,
+	}
+	svc.InstanceManager = mockMgr
+
+	fromRunning := true
+	resp, err := svc.ForkInstance(
+		mw.WithResolvedInstance(ctx(), source.Id, source),
+		oapi.ForkInstanceRequestObject{
+			Id: source.Id,
+			Body: &oapi.ForkInstanceRequest{
+				Name:        "forked-instance",
+				FromRunning: &fromRunning,
+			},
+		},
+	)
+	require.NoError(t, err)
+
+	_, ok := resp.(oapi.ForkInstance201JSONResponse)
+	require.True(t, ok, "expected 201 response")
+	require.NotNil(t, mockMgr.lastReq)
+	assert.True(t, mockMgr.lastReq.FromRunning)
 }
 
 func TestInstanceLifecycle_StopStart(t *testing.T) {

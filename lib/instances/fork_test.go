@@ -2,7 +2,11 @@ package instances
 
 import (
 	"context"
+	"fmt"
+	"io"
+	"net/http"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -39,7 +43,7 @@ func TestForkInstanceNotSupportedHypervisor(t *testing.T) {
 	assert.ErrorIs(t, err, ErrNotSupported)
 }
 
-func TestForkCloudHypervisorStoppedAndStandby(t *testing.T) {
+func TestForkCloudHypervisorFromRunningNetwork(t *testing.T) {
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Skip("/dev/kvm not available, skipping on this platform")
 	}
@@ -50,15 +54,15 @@ func TestForkCloudHypervisorStoppedAndStandby(t *testing.T) {
 	imageManager, err := images.NewManager(paths.New(tmpDir), 1, nil)
 	require.NoError(t, err)
 
-	t.Log("Ensuring alpine image...")
-	alpineImage, err := imageManager.CreateImage(ctx, images.CreateImageRequest{Name: "docker.io/library/alpine:latest"})
+	t.Log("Ensuring nginx image...")
+	nginxImage, err := imageManager.CreateImage(ctx, images.CreateImageRequest{Name: "docker.io/library/nginx:alpine"})
 	require.NoError(t, err)
 
-	imageName := alpineImage.Name
+	imageName := nginxImage.Name
 	for i := 0; i < 60; i++ {
 		img, err := imageManager.GetImage(ctx, imageName)
 		if err == nil && img.Status == images.StatusReady {
-			alpineImage = img
+			nginxImage = img
 			break
 		}
 		if err == nil && img.Status == images.StatusFailed {
@@ -66,95 +70,93 @@ func TestForkCloudHypervisorStoppedAndStandby(t *testing.T) {
 		}
 		time.Sleep(1 * time.Second)
 	}
-	require.Equal(t, images.StatusReady, alpineImage.Status, "Image should be ready after 60 seconds")
+	require.Equal(t, images.StatusReady, nginxImage.Status, "Image should be ready after 60 seconds")
 
 	systemManager := manager.systemManager
 	require.NoError(t, systemManager.EnsureSystemFiles(ctx))
 
 	require.NoError(t, manager.networkManager.Initialize(ctx, nil))
 
-	createReq := CreateInstanceRequest{
-		Image:          "docker.io/library/alpine:latest",
+	source, err := manager.CreateInstance(ctx, CreateInstanceRequest{
+		Name:           "fork-running-src",
+		Image:          "docker.io/library/nginx:alpine",
 		Size:           2 * 1024 * 1024 * 1024,
 		HotplugSize:    256 * 1024 * 1024,
 		OverlaySize:    10 * 1024 * 1024 * 1024,
 		Vcpus:          1,
 		NetworkEnabled: true,
-		Entrypoint:     []string{"sh", "-c"},
-		Cmd:            []string{"while true; do sleep 3600; done"},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = manager.DeleteInstance(context.Background(), source.Id) })
+	require.NoError(t, waitForVMReady(ctx, source.SocketPath, 5*time.Second))
+	require.NoError(t, waitForLogMessage(ctx, manager, source.Id, "start worker processes", 15*time.Second))
+
+	assert.NotEmpty(t, source.IP)
+	assert.NotEmpty(t, source.MAC)
+	assertHostCanReachNginx(t, source.IP, 80, 60*time.Second)
+
+	// Default behavior remains strict: running source requires explicit opt-in.
+	_, err = manager.ForkInstance(ctx, source.Id, ForkInstanceRequest{Name: "fork-running-no-flag"})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidState)
+
+	// Fork from running (internally: standby source -> copy fork -> restore source).
+	forked, err := manager.ForkInstance(ctx, source.Id, ForkInstanceRequest{
+		Name:        "fork-running-copy",
+		FromRunning: true,
+	})
+	require.NoError(t, err)
+	require.Equal(t, StateStandby, forked.State)
+	forkedID := forked.Id
+	t.Cleanup(func() { _ = manager.DeleteInstance(context.Background(), forkedID) })
+
+	// Source should be restored and still reachable by its private IP.
+	sourceAfterFork, err := manager.GetInstance(ctx, source.Id)
+	require.NoError(t, err)
+	require.Equal(t, StateRunning, sourceAfterFork.State)
+	require.NotEmpty(t, sourceAfterFork.IP)
+	assertHostCanReachNginx(t, sourceAfterFork.IP, 80, 60*time.Second)
+
+	// Restore fork and validate both VMs are independently reachable on private IPs.
+	forked, err = manager.RestoreInstance(ctx, forkedID)
+	require.NoError(t, err)
+	require.Equal(t, StateRunning, forked.State)
+	require.NoError(t, waitForVMReady(ctx, forked.SocketPath, 5*time.Second))
+
+	assert.NotEmpty(t, forked.IP)
+	assert.NotEmpty(t, forked.MAC)
+	assert.NotEqual(t, sourceAfterFork.IP, forked.IP)
+	assert.NotEqual(t, sourceAfterFork.MAC, forked.MAC)
+	assertHostCanReachNginx(t, forked.IP, 80, 60*time.Second)
+	assertHostCanReachNginx(t, sourceAfterFork.IP, 80, 60*time.Second)
+}
+
+func assertHostCanReachNginx(t *testing.T, ip string, port int, timeout time.Duration) {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	url := fmt.Sprintf("http://%s:%d/", ip, port)
+	client := &http.Client{Timeout: 3 * time.Second}
+
+	var lastErr error
+	for time.Now().Before(deadline) {
+		resp, err := client.Get(url)
+		if err == nil {
+			body, readErr := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if readErr == nil && resp.StatusCode == http.StatusOK && strings.Contains(string(body), "Welcome to nginx!") {
+				return
+			}
+			if readErr != nil {
+				lastErr = fmt.Errorf("read body: %w", readErr)
+			} else {
+				lastErr = fmt.Errorf("status=%d body=%q", resp.StatusCode, string(body))
+			}
+		} else {
+			lastErr = err
+		}
+		time.Sleep(500 * time.Millisecond)
 	}
 
-	// Stopped source fork flow.
-	sourceStopped, err := manager.CreateInstance(ctx, CreateInstanceRequest{
-		Name:           "fork-stop-src",
-		Image:          createReq.Image,
-		Size:           createReq.Size,
-		HotplugSize:    createReq.HotplugSize,
-		OverlaySize:    createReq.OverlaySize,
-		Vcpus:          createReq.Vcpus,
-		NetworkEnabled: createReq.NetworkEnabled,
-		Entrypoint:     createReq.Entrypoint,
-		Cmd:            createReq.Cmd,
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = manager.DeleteInstance(context.Background(), sourceStopped.Id) })
-	require.NoError(t, waitForVMReady(ctx, sourceStopped.SocketPath, 5*time.Second))
-
-	sourceStopped, err = manager.StopInstance(ctx, sourceStopped.Id)
-	require.NoError(t, err)
-	require.Equal(t, StateStopped, sourceStopped.State)
-
-	forkStopped, err := manager.ForkInstance(ctx, sourceStopped.Id, ForkInstanceRequest{Name: "fork-stop-copy"})
-	require.NoError(t, err)
-	require.Equal(t, StateStopped, forkStopped.State)
-	t.Cleanup(func() { _ = manager.DeleteInstance(context.Background(), forkStopped.Id) })
-
-	sourceStopped, err = manager.StartInstance(ctx, sourceStopped.Id, StartInstanceRequest{})
-	require.NoError(t, err)
-	forkStopped, err = manager.StartInstance(ctx, forkStopped.Id, StartInstanceRequest{})
-	require.NoError(t, err)
-	require.NoError(t, waitForVMReady(ctx, sourceStopped.SocketPath, 5*time.Second))
-	require.NoError(t, waitForVMReady(ctx, forkStopped.SocketPath, 5*time.Second))
-
-	assert.NotEmpty(t, sourceStopped.IP)
-	assert.NotEmpty(t, forkStopped.IP)
-	assert.NotEqual(t, sourceStopped.IP, forkStopped.IP)
-	assert.NotEqual(t, sourceStopped.MAC, forkStopped.MAC)
-
-	// Standby source fork flow.
-	sourceStandby, err := manager.CreateInstance(ctx, CreateInstanceRequest{
-		Name:           "fork-standby-src",
-		Image:          createReq.Image,
-		Size:           createReq.Size,
-		HotplugSize:    createReq.HotplugSize,
-		OverlaySize:    createReq.OverlaySize,
-		Vcpus:          createReq.Vcpus,
-		NetworkEnabled: createReq.NetworkEnabled,
-		Entrypoint:     createReq.Entrypoint,
-		Cmd:            createReq.Cmd,
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = manager.DeleteInstance(context.Background(), sourceStandby.Id) })
-	require.NoError(t, waitForVMReady(ctx, sourceStandby.SocketPath, 5*time.Second))
-
-	sourceStandby, err = manager.StandbyInstance(ctx, sourceStandby.Id)
-	require.NoError(t, err)
-	require.Equal(t, StateStandby, sourceStandby.State)
-
-	forkStandby, err := manager.ForkInstance(ctx, sourceStandby.Id, ForkInstanceRequest{Name: "fork-standby-copy"})
-	require.NoError(t, err)
-	require.Equal(t, StateStandby, forkStandby.State)
-	t.Cleanup(func() { _ = manager.DeleteInstance(context.Background(), forkStandby.Id) })
-
-	sourceStandby, err = manager.RestoreInstance(ctx, sourceStandby.Id)
-	require.NoError(t, err)
-	forkStandby, err = manager.RestoreInstance(ctx, forkStandby.Id)
-	require.NoError(t, err)
-	require.NoError(t, waitForVMReady(ctx, sourceStandby.SocketPath, 5*time.Second))
-	require.NoError(t, waitForVMReady(ctx, forkStandby.SocketPath, 5*time.Second))
-
-	assert.NotEmpty(t, sourceStandby.IP)
-	assert.NotEmpty(t, forkStandby.IP)
-	assert.NotEqual(t, sourceStandby.IP, forkStandby.IP)
-	assert.NotEqual(t, sourceStandby.MAC, forkStandby.MAC)
+	require.NoError(t, lastErr, "host should reach %s within %s", url, timeout)
 }

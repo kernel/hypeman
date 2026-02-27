@@ -183,7 +183,7 @@ func (m *manager) DeleteInstance(ctx context.Context, id string) error {
 	return err
 }
 
-// ForkInstance creates a forked copy of a stopped or standby instance.
+// ForkInstance creates a forked copy of an instance.
 func (m *manager) ForkInstance(ctx context.Context, id string, req ForkInstanceRequest) (*Instance, error) {
 	lock := m.getInstanceLock(id)
 	lock.Lock()

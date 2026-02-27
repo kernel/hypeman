@@ -87,9 +87,11 @@ func copyRegularFile(srcPath, dstPath string, perms fs.FileMode) error {
 	if err != nil {
 		return err
 	}
-	defer dst.Close()
-
 	if _, err := io.Copy(dst, src); err != nil {
+		_ = dst.Close()
+		return err
+	}
+	if err := dst.Close(); err != nil {
 		return err
 	}
 
