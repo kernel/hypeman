@@ -20,4 +20,7 @@ var (
 
 	// ErrInsufficientResources is returned when resources (CPU, memory, network, GPU) are not available
 	ErrInsufficientResources = errors.New("insufficient resources")
+
+	// ErrNotSupported is returned when an operation is not supported for the instance hypervisor
+	ErrNotSupported = errors.New("operation not supported")
 )

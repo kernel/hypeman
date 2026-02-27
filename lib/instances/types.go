@@ -175,6 +175,11 @@ type StartInstanceRequest struct {
 	Cmd        []string // Override cmd (nil = keep previous/image default)
 }
 
+// ForkInstanceRequest is the domain request for forking a stopped/standby instance.
+type ForkInstanceRequest struct {
+	Name string // Required: name for the new forked instance
+}
+
 // AttachVolumeRequest is the domain request for attaching a volume (used for API compatibility)
 type AttachVolumeRequest struct {
 	MountPath string

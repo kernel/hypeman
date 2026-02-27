@@ -6,8 +6,10 @@ import (
 	"os"
 	"time"
 
+	"github.com/kernel/hypeman/lib/forkvm"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
+	"github.com/kernel/hypeman/lib/network"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -64,20 +66,63 @@ func (m *manager) restoreInstance(
 	// 3. Get snapshot directory
 	snapshotDir := m.paths.InstanceSnapshotLatest(id)
 
-	// 4. Recreate TAP device if network enabled
+	// 4. Recreate or allocate network if network enabled
 	if stored.NetworkEnabled {
 		var networkSpan trace.Span
 		if m.metrics != nil && m.metrics.tracer != nil {
 			ctx, networkSpan = m.metrics.tracer.Start(ctx, "RestoreNetwork")
 		}
-		log.InfoContext(ctx, "recreating network for restore", "instance_id", id, "network", "default",
-			"download_bps", stored.NetworkBandwidthDownload, "upload_bps", stored.NetworkBandwidthUpload)
-		if err := m.networkManager.RecreateAllocation(ctx, id, stored.NetworkBandwidthDownload, stored.NetworkBandwidthUpload); err != nil {
-			if networkSpan != nil {
-				networkSpan.End()
+		// If IP/MAC is empty (forked standby flow), allocate a fresh identity and
+		// patch the copied snapshot config before restore.
+		if stored.IP == "" || stored.MAC == "" {
+			log.InfoContext(ctx, "allocating fresh network identity for standby restore",
+				"instance_id", id, "network", "default",
+				"download_bps", stored.NetworkBandwidthDownload, "upload_bps", stored.NetworkBandwidthUpload)
+			netConfig, err := m.networkManager.CreateAllocation(ctx, network.AllocateRequest{
+				InstanceID:    id,
+				InstanceName:  stored.Name,
+				DownloadBps:   stored.NetworkBandwidthDownload,
+				UploadBps:     stored.NetworkBandwidthUpload,
+				UploadCeilBps: stored.NetworkBandwidthUpload * int64(m.networkManager.GetUploadBurstMultiplier()),
+			})
+			if err != nil {
+				if networkSpan != nil {
+					networkSpan.End()
+				}
+				log.ErrorContext(ctx, "failed to allocate network", "instance_id", id, "error", err)
+				return nil, fmt.Errorf("allocate network: %w", err)
 			}
-			log.ErrorContext(ctx, "failed to recreate network", "instance_id", id, "error", err)
-			return nil, fmt.Errorf("recreate network: %w", err)
+			stored.IP = netConfig.IP
+			stored.MAC = netConfig.MAC
+
+			if err := forkvm.RewriteSnapshotConfig(m.paths.InstanceSnapshotConfig(id), forkvm.SnapshotRewriteOptions{
+				VsockCID:    &stored.VsockCID,
+				VsockSocket: stored.VsockSocket,
+				Network: &forkvm.SnapshotNetworkConfig{
+					TAPDevice: netConfig.TAPDevice,
+					IP:        netConfig.IP,
+					MAC:       netConfig.MAC,
+					Netmask:   netConfig.Netmask,
+				},
+			}); err != nil {
+				if networkSpan != nil {
+					networkSpan.End()
+				}
+				log.ErrorContext(ctx, "failed to patch snapshot network identity", "instance_id", id, "error", err)
+				netAlloc, _ := m.networkManager.GetAllocation(ctx, id)
+				m.networkManager.ReleaseAllocation(ctx, netAlloc)
+				return nil, fmt.Errorf("rewrite snapshot config: %w", err)
+			}
+		} else {
+			log.InfoContext(ctx, "recreating network for restore", "instance_id", id, "network", "default",
+				"download_bps", stored.NetworkBandwidthDownload, "upload_bps", stored.NetworkBandwidthUpload)
+			if err := m.networkManager.RecreateAllocation(ctx, id, stored.NetworkBandwidthDownload, stored.NetworkBandwidthUpload); err != nil {
+				if networkSpan != nil {
+					networkSpan.End()
+				}
+				log.ErrorContext(ctx, "failed to recreate network", "instance_id", id, "error", err)
+				return nil, fmt.Errorf("recreate network: %w", err)
+			}
 		}
 		if networkSpan != nil {
 			networkSpan.End()
