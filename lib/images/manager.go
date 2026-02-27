@@ -432,17 +432,23 @@ func (m *manager) DeleteImage(ctx context.Context, name string) error {
 		return err
 	}
 
+	// Hold createMu during orphan check and delete to prevent race with CreateImage.
+	// Without this lock, a concurrent CreateImage could create a new tag pointing to
+	// the same digest between our count check and delete, leaving a dangling symlink.
+	m.createMu.Lock()
+	defer m.createMu.Unlock()
+
 	// Check if the digest is now orphaned (no other tags reference it)
 	count, err := countTagsForDigest(m.paths, repository, digestHex)
 	if err != nil {
-		// Log but don't fail - tag was already deleted successfully
+		fmt.Fprintf(os.Stderr, "Warning: failed to count tags for digest %s: %v\n", digestHex, err)
 		return nil
 	}
 
 	if count == 0 {
 		// Digest is orphaned, delete it
 		if err := deleteDigest(m.paths, repository, digestHex); err != nil {
-			// Log but don't fail - tag was already deleted successfully
+			fmt.Fprintf(os.Stderr, "Warning: failed to delete orphaned digest %s: %v\n", digestHex, err)
 			return nil
 		}
 	}
