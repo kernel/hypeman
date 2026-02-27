@@ -288,3 +288,32 @@ func deleteTag(p *paths.Paths, repository, tag string) error {
 
 	return nil
 }
+
+// countTagsForDigest counts how many tags in a repository point to a given digest
+func countTagsForDigest(p *paths.Paths, repository, digestHex string) (int, error) {
+	tags, err := listTags(p, repository)
+	if err != nil {
+		return 0, err
+	}
+
+	count := 0
+	for _, tag := range tags {
+		target, err := resolveTag(p, repository, tag)
+		if err != nil {
+			continue
+		}
+		if target == digestHex {
+			count++
+		}
+	}
+	return count, nil
+}
+
+// deleteDigest removes a digest directory and all its contents
+func deleteDigest(p *paths.Paths, repository, digestHex string) error {
+	dir := digestDir(p, repository, digestHex)
+	if err := os.RemoveAll(dir); err != nil {
+		return fmt.Errorf("remove digest directory: %w", err)
+	}
+	return nil
+}

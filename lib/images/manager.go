@@ -421,7 +421,33 @@ func (m *manager) DeleteImage(ctx context.Context, name string) error {
 	repository := ref.Repository()
 	tag := ref.Tag()
 
-	return deleteTag(m.paths, repository, tag)
+	// Resolve the tag to get the digest before deleting
+	digestHex, err := resolveTag(m.paths, repository, tag)
+	if err != nil {
+		return err
+	}
+
+	// Delete the tag symlink
+	if err := deleteTag(m.paths, repository, tag); err != nil {
+		return err
+	}
+
+	// Check if the digest is now orphaned (no other tags reference it)
+	count, err := countTagsForDigest(m.paths, repository, digestHex)
+	if err != nil {
+		// Log but don't fail - tag was already deleted successfully
+		return nil
+	}
+
+	if count == 0 {
+		// Digest is orphaned, delete it
+		if err := deleteDigest(m.paths, repository, digestHex); err != nil {
+			// Log but don't fail - tag was already deleted successfully
+			return nil
+		}
+	}
+
+	return nil
 }
 
 // TotalImageBytes returns the total size of all ready images on disk.

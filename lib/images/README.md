@@ -90,7 +90,7 @@ Content-addressable storage with tag symlinks (similar to Docker/Unikraft):
 - Pulling same tag twice updates the symlink if digest changed
 - OCI cache uses digest hex as layout tag for true content-addressable caching
 - Shared blob storage enables automatic layer deduplication across all images
-- Old digests remain until explicitly garbage collected
+- Orphaned digests are automatically deleted when the last tag referencing them is removed
 - Symlinks only created after successful build (status: ready)
 
 ## Reference Handling (reference.go)
