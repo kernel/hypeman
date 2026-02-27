@@ -451,7 +451,7 @@ Note: Full integration tests require Linux. On macOS, focus on unit tests and ma
 
 1. **Disk Format**: vz only supports raw disk images (not qcow2). The image pipeline handles conversion automatically.
 
-2. **Snapshots**: Not currently supported on the vz hypervisor.
+2. **Snapshot Compatibility**: vz save/restore requires macOS 14.0+ on Apple Silicon and a VM configuration that passes save/restore validation.
 
 ### Troubleshooting
 
@@ -478,6 +478,7 @@ brew install caddy
 **"snapshot not supported"**
 - Requires macOS 14.0+ on Apple Silicon
 - Check: `sw_vers` and `uname -m` (should be arm64)
+- Ensure the VM has been paused before standby and has a save/restore-compatible configuration
 
 **VM fails to start**
 - Check serial log: `<data_dir>/instances/<id>/serial.log`

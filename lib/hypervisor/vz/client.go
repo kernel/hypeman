@@ -3,12 +3,14 @@
 package vz
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"runtime"
 	"time"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
@@ -59,9 +61,13 @@ type vmInfoResponse struct {
 	State string `json:"state"`
 }
 
+type snapshotRequest struct {
+	DestinationPath string `json:"destination_path"`
+}
+
 func (c *Client) Capabilities() hypervisor.Capabilities {
 	return hypervisor.Capabilities{
-		SupportsSnapshot:       false,
+		SupportsSnapshot:       runtime.GOARCH == "arm64",
 		SupportsHotplugMemory:  false,
 		SupportsPause:          true,
 		SupportsVsock:          true,
@@ -136,13 +142,13 @@ func (c *Client) GetVMInfo(ctx context.Context) (*hypervisor.VMInfo, error) {
 
 	var state hypervisor.VMState
 	switch info.State {
-	case "Running":
+	case "Running", "Resuming":
 		state = hypervisor.StateRunning
-	case "Paused":
+	case "Paused", "Pausing", "Saving":
 		state = hypervisor.StatePaused
-	case "Starting":
+	case "Starting", "Restoring":
 		state = hypervisor.StateCreated
-	case "Shutdown", "Stopped", "Error":
+	case "Shutdown", "Stopped", "Stopping", "Error":
 		state = hypervisor.StateShutdown
 	default:
 		state = hypervisor.StateShutdown
@@ -160,7 +166,12 @@ func (c *Client) Resume(ctx context.Context) error {
 }
 
 func (c *Client) Snapshot(ctx context.Context, destPath string) error {
-	return hypervisor.ErrNotSupported
+	req := snapshotRequest{DestinationPath: destPath}
+	body, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("marshal snapshot request: %w", err)
+	}
+	return c.doPut(ctx, "/api/v1/vm.snapshot", bytes.NewReader(body))
 }
 
 func (c *Client) ResizeMemory(ctx context.Context, bytes int64) error {

@@ -123,10 +123,10 @@ hypeman stop my-app
 # Start a stopped VM
 hypeman start my-app
 
-# Put the VM to sleep (paused)
+# Put the VM in standby (snapshot to disk, stop hypervisor)
 hypeman standby my-app
 
-# Wake the VM (resumed)
+# Restore the VM from standby
 hypeman restore my-app
 
 # Delete all VMs

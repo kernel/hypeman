@@ -10,29 +10,38 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sync"
 
 	"github.com/Code-Hex/vz/v3"
+	"github.com/kernel/hypeman/lib/hypervisor/vz/shimconfig"
 )
 
 // ShimServer handles control API and vsock proxy for a vz VM.
 type ShimServer struct {
-	vm       *vz.VirtualMachine
-	vmConfig *vz.VirtualMachineConfiguration
-	mu       sync.RWMutex
+	vm         *vz.VirtualMachine
+	vmConfig   *vz.VirtualMachineConfiguration
+	shimConfig shimconfig.ShimConfig
+	mu         sync.RWMutex
 }
 
 // NewShimServer creates a new shim server.
-func NewShimServer(vm *vz.VirtualMachine, vmConfig *vz.VirtualMachineConfiguration) *ShimServer {
+func NewShimServer(vm *vz.VirtualMachine, vmConfig *vz.VirtualMachineConfiguration, config shimconfig.ShimConfig) *ShimServer {
 	return &ShimServer{
-		vm:       vm,
-		vmConfig: vmConfig,
+		vm:         vm,
+		vmConfig:   vmConfig,
+		shimConfig: config,
 	}
 }
 
 // VMInfoResponse matches the cloud-hypervisor VmInfo structure.
 type VMInfoResponse struct {
 	State string `json:"state"`
+}
+
+type snapshotRequest struct {
+	DestinationPath string `json:"destination_path"`
 }
 
 // Handler returns the HTTP handler for the control API.
@@ -44,6 +53,7 @@ func (s *ShimServer) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/v1/vm.pause", s.handlePause)
 	mux.HandleFunc("PUT /api/v1/vm.resume", s.handleResume)
 	mux.HandleFunc("PUT /api/v1/vm.shutdown", s.handleShutdown)
+	mux.HandleFunc("PUT /api/v1/vm.snapshot", s.handleSnapshot)
 	mux.HandleFunc("PUT /api/v1/vm.power-button", s.handlePowerButton)
 	mux.HandleFunc("GET /api/v1/vmm.ping", s.handlePing)
 	mux.HandleFunc("PUT /api/v1/vmm.shutdown", s.handleVMMShutdown)
@@ -118,6 +128,77 @@ func (s *ShimServer) handleShutdown(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (s *ShimServer) handleSnapshot(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var req snapshotRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, fmt.Sprintf("invalid snapshot request: %v", err), http.StatusBadRequest)
+		return
+	}
+	if req.DestinationPath == "" {
+		http.Error(w, "destination_path is required", http.StatusBadRequest)
+		return
+	}
+	if s.vm.State() != vz.VirtualMachineStatePaused {
+		http.Error(w, "vm must be paused before snapshot", http.StatusBadRequest)
+		return
+	}
+	if err := validateSaveRestoreSupport(s.vmConfig); err != nil {
+		http.Error(w, fmt.Sprintf("save/restore not supported: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	if err := os.MkdirAll(req.DestinationPath, 0755); err != nil {
+		http.Error(w, fmt.Sprintf("create snapshot dir failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+	snapshotComplete := false
+	defer func() {
+		if !snapshotComplete {
+			_ = os.RemoveAll(req.DestinationPath)
+		}
+	}()
+
+	machineStatePath := filepath.Join(req.DestinationPath, shimconfig.SnapshotMachineStateFile)
+	if err := os.RemoveAll(machineStatePath); err != nil {
+		http.Error(w, fmt.Sprintf("prepare machine state path failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+	if err := saveMachineState(s.vm, machineStatePath); err != nil {
+		http.Error(w, fmt.Sprintf("save machine state failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	manifestPath := filepath.Join(req.DestinationPath, shimconfig.SnapshotManifestFile)
+	tmpManifestPath := manifestPath + ".tmp"
+	manifest := shimconfig.SnapshotManifest{
+		Hypervisor:       "vz",
+		MachineStateFile: shimconfig.SnapshotMachineStateFile,
+		ShimConfig:       s.shimConfig,
+	}
+	// This field is runtime-only; restore path is populated by the caller on restore.
+	manifest.ShimConfig.RestoreMachineStatePath = ""
+	manifestBytes, err := json.Marshal(manifest)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("marshal manifest failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+	if err := os.WriteFile(tmpManifestPath, manifestBytes, 0644); err != nil {
+		http.Error(w, fmt.Sprintf("write manifest failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+	if err := os.Rename(tmpManifestPath, manifestPath); err != nil {
+		http.Error(w, fmt.Sprintf("finalize manifest failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	snapshotComplete = true
+	slog.Info("VM snapshot saved", "destination", req.DestinationPath, "machine_state", machineStatePath)
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *ShimServer) handlePowerButton(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -173,6 +254,10 @@ func vzStateToString(state vz.VirtualMachineState) string {
 		return "Resuming"
 	case vz.VirtualMachineStateStopping:
 		return "Stopping"
+	case vz.VirtualMachineStateSaving:
+		return "Saving"
+	case vz.VirtualMachineStateRestoring:
+		return "Restoring"
 	default:
 		return "Unknown"
 	}

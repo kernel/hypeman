@@ -46,22 +46,36 @@ func main() {
 	slog.Info("vz-shim starting", "control_socket", config.ControlSocket, "vsock_socket", config.VsockSocket)
 
 	// Create the VM
-	vm, vmConfig, err := createVM(config)
+	vm, vmConfig, err := createVM(&config)
 	if err != nil {
 		slog.Error("failed to create VM", "error", err)
 		fmt.Fprintf(os.Stderr, "failed to create VM: %v\n", err)
 		os.Exit(1)
 	}
 
-	if err := vm.Start(); err != nil {
-		slog.Error("failed to start VM", "error", err)
-		fmt.Fprintf(os.Stderr, "failed to start VM: %v\n", err)
-		os.Exit(1)
+	if config.RestoreMachineStatePath != "" {
+		if err := validateSaveRestoreSupport(vmConfig); err != nil {
+			slog.Error("save/restore not supported for VM config", "error", err)
+			fmt.Fprintf(os.Stderr, "save/restore not supported for VM config: %v\n", err)
+			os.Exit(1)
+		}
+		if err := restoreMachineState(vm, config.RestoreMachineStatePath); err != nil {
+			slog.Error("failed to restore VM machine state", "error", err, "path", config.RestoreMachineStatePath)
+			fmt.Fprintf(os.Stderr, "failed to restore VM machine state: %v\n", err)
+			os.Exit(1)
+		}
+		slog.Info("VM restored from machine state", "path", config.RestoreMachineStatePath, "state", vm.State())
+	} else {
+		if err := vm.Start(); err != nil {
+			slog.Error("failed to start VM", "error", err)
+			fmt.Fprintf(os.Stderr, "failed to start VM: %v\n", err)
+			os.Exit(1)
+		}
+		slog.Info("VM started", "vcpus", config.VCPUs, "memory_mb", config.MemoryBytes/1024/1024)
 	}
-	slog.Info("VM started", "vcpus", config.VCPUs, "memory_mb", config.MemoryBytes/1024/1024)
 
 	// Create the shim server
-	server := NewShimServer(vm, vmConfig)
+	server := NewShimServer(vm, vmConfig, config)
 
 	// Start control socket listener (remove stale socket from previous run)
 	os.Remove(config.ControlSocket)
