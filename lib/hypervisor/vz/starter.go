@@ -217,6 +217,13 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 	return 0, nil, hypervisor.ErrNotSupported
 }
 
+// PrepareFork is not supported for vz.
+func (s *Starter) PrepareFork(ctx context.Context, req hypervisor.ForkPrepareRequest) error {
+	_ = ctx
+	_ = req
+	return hypervisor.ErrNotSupported
+}
+
 func (s *Starter) waitForShim(ctx context.Context, socketPath string, timeout time.Duration) (*Client, error) {
 	deadline := time.Now().Add(timeout)
 

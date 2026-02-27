@@ -2,11 +2,11 @@ package instances
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"time"
 
-	"github.com/kernel/hypeman/lib/forkvm"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/network"
@@ -65,6 +65,10 @@ func (m *manager) restoreInstance(
 
 	// 3. Get snapshot directory
 	snapshotDir := m.paths.InstanceSnapshotLatest(id)
+	starter, err := m.getVMStarter(stored.HypervisorType)
+	if err != nil {
+		return nil, fmt.Errorf("get vm starter: %w", err)
+	}
 
 	// 4. Recreate or allocate network if network enabled
 	if stored.NetworkEnabled {
@@ -95,10 +99,11 @@ func (m *manager) restoreInstance(
 			stored.IP = netConfig.IP
 			stored.MAC = netConfig.MAC
 
-			if err := forkvm.RewriteSnapshotConfig(m.paths.InstanceSnapshotConfig(id), forkvm.SnapshotRewriteOptions{
-				VsockCID:    &stored.VsockCID,
-				VsockSocket: stored.VsockSocket,
-				Network: &forkvm.SnapshotNetworkConfig{
+			if err := starter.PrepareFork(ctx, hypervisor.ForkPrepareRequest{
+				SnapshotConfigPath: m.paths.InstanceSnapshotConfig(id),
+				VsockCID:           stored.VsockCID,
+				VsockSocket:        stored.VsockSocket,
+				Network: &hypervisor.ForkNetworkConfig{
 					TAPDevice: netConfig.TAPDevice,
 					IP:        netConfig.IP,
 					MAC:       netConfig.MAC,
@@ -107,6 +112,12 @@ func (m *manager) restoreInstance(
 			}); err != nil {
 				if networkSpan != nil {
 					networkSpan.End()
+				}
+				if errors.Is(err, hypervisor.ErrNotSupported) {
+					log.ErrorContext(ctx, "forked standby network rewrite not supported for hypervisor", "instance_id", id, "hypervisor", stored.HypervisorType)
+					netAlloc, _ := m.networkManager.GetAllocation(ctx, id)
+					m.networkManager.ReleaseAllocation(ctx, netAlloc)
+					return nil, fmt.Errorf("%w: standby fork restore network rewrite is not supported for hypervisor %s", ErrNotSupported, stored.HypervisorType)
 				}
 				log.ErrorContext(ctx, "failed to patch snapshot network identity", "instance_id", id, "error", err)
 				netAlloc, _ := m.networkManager.GetAllocation(ctx, id)

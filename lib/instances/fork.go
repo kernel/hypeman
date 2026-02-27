@@ -2,6 +2,7 @@ package instances
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -31,10 +32,6 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 
 	source := m.toInstance(ctx, meta)
 	stored := &meta.StoredMetadata
-
-	if stored.HypervisorType != hypervisor.TypeCloudHypervisor {
-		return nil, fmt.Errorf("%w: fork is only supported for hypervisor %s (got %s)", ErrNotSupported, hypervisor.TypeCloudHypervisor, stored.HypervisorType)
-	}
 
 	switch source.State {
 	case StateStopped, StateStandby:
@@ -99,19 +96,31 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 
 	if source.State == StateStandby {
 		snapshotConfigPath := m.paths.InstanceSnapshotConfig(forkID)
-		netCfg := (*forkvm.SnapshotNetworkConfig)(nil)
+		netCfg := (*hypervisor.ForkNetworkConfig)(nil)
 		if forkMeta.NetworkEnabled {
-			netCfg = &forkvm.SnapshotNetworkConfig{TAPDevice: network.GenerateTAPName(forkID)}
+			netCfg = &hypervisor.ForkNetworkConfig{TAPDevice: network.GenerateTAPName(forkID)}
 		}
-		if err := forkvm.RewriteSnapshotConfig(snapshotConfigPath, forkvm.SnapshotRewriteOptions{
-			SourceDataDir: stored.DataDir,
-			TargetDataDir: forkMeta.DataDir,
-			VsockCID:      &forkMeta.VsockCID,
-			VsockSocket:   forkMeta.VsockSocket,
-			SerialLogPath: m.paths.InstanceAppLog(forkID),
-			Network:       netCfg,
+		if err := starter.PrepareFork(ctx, hypervisor.ForkPrepareRequest{
+			SnapshotConfigPath: snapshotConfigPath,
+			SourceDataDir:      stored.DataDir,
+			TargetDataDir:      forkMeta.DataDir,
+			VsockCID:           forkMeta.VsockCID,
+			VsockSocket:        forkMeta.VsockSocket,
+			SerialLogPath:      m.paths.InstanceAppLog(forkID),
+			Network:            netCfg,
 		}); err != nil {
-			return nil, fmt.Errorf("rewrite fork snapshot config: %w", err)
+			if errors.Is(err, hypervisor.ErrNotSupported) {
+				return nil, fmt.Errorf("%w: fork is not supported for hypervisor %s", ErrNotSupported, stored.HypervisorType)
+			}
+			return nil, fmt.Errorf("prepare fork snapshot state: %w", err)
+		}
+	} else {
+		// Validate fork support for stopped-state forks as well.
+		if err := starter.PrepareFork(ctx, hypervisor.ForkPrepareRequest{}); err != nil {
+			if errors.Is(err, hypervisor.ErrNotSupported) {
+				return nil, fmt.Errorf("%w: fork is not supported for hypervisor %s", ErrNotSupported, stored.HypervisorType)
+			}
+			return nil, fmt.Errorf("prepare fork state: %w", err)
 		}
 	}
 
