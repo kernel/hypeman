@@ -212,7 +212,6 @@ func isTokenEndpoint(path string) bool {
 	return path == "/v2/token" || path == "/v2/token/"
 }
 
-
 // extractRepoFromPath extracts the repository name from a registry path.
 // Uses the docker/distribution router which properly handles repository names
 // that can contain slashes (e.g., "builds/abc123" from "/v2/builds/abc123/manifests/latest").
@@ -252,7 +251,7 @@ func writeRegistryUnauthorized(w http.ResponseWriter, r *http.Request) {
 	}
 	host := r.Host
 	tokenURL := fmt.Sprintf("%s://%s/v2/token", scheme, host)
-	
+
 	// Use Bearer challenge pointing to our token endpoint
 	challenge := fmt.Sprintf(`Bearer realm="%s",service="hypeman"`, tokenURL)
 	w.Header().Set("WWW-Authenticate", challenge)
@@ -355,16 +354,16 @@ func JwtAuth(jwtSecret string) func(http.Handler) http.Handler {
 					return
 				}
 
-			if authHeader != "" {
-				// Try to extract token (supports both Bearer and Basic auth)
-				log.InfoContext(r.Context(), "registry request with auth header",
-					"path", r.URL.Path,
-					"method", r.Method,
-					"auth_type", strings.Split(authHeader, " ")[0],
-					"remote_addr", r.RemoteAddr)
-				token, authType, err := extractTokenFromAuth(authHeader)
-				if err == nil {
-					log.DebugContext(r.Context(), "extracted token for registry request", "auth_type", authType)
+				if authHeader != "" {
+					// Try to extract token (supports both Bearer and Basic auth)
+					log.InfoContext(r.Context(), "registry request with auth header",
+						"path", r.URL.Path,
+						"method", r.Method,
+						"auth_type", strings.Split(authHeader, " ")[0],
+						"remote_addr", r.RemoteAddr)
+					token, authType, err := extractTokenFromAuth(authHeader)
+					if err == nil {
+						log.DebugContext(r.Context(), "extracted token for registry request", "auth_type", authType)
 
 						// Try to validate as a registry-scoped token
 						registryClaims, err := validateRegistryToken(token, jwtSecret, r.URL.Path, r.Method)

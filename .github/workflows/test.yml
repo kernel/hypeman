@@ -44,6 +44,20 @@ jobs:
 
       - name: Build
         run: make build
+
+      - name: Check gofmt
+        run: |
+          set -euo pipefail
+          go_files="$(git ls-files '*.go')"
+          if [ -z "$go_files" ]; then
+            exit 0
+          fi
+          unformatted="$(echo "$go_files" | xargs gofmt -l)"
+          if [ -n "$unformatted" ]; then
+            echo "The following files are not gofmt-formatted:"
+            echo "$unformatted"
+            exit 1
+          fi
      
       - name: Run tests
         env:
@@ -87,6 +101,21 @@ jobs:
         run: make oapi-generate
       - name: Build
         run: make build
+
+      - name: Check gofmt
+        run: |
+          set -euo pipefail
+          go_files="$(git ls-files '*.go')"
+          if [ -z "$go_files" ]; then
+            exit 0
+          fi
+          unformatted="$(echo "$go_files" | xargs gofmt -l)"
+          if [ -n "$unformatted" ]; then
+            echo "The following files are not gofmt-formatted:"
+            echo "$unformatted"
+            exit 1
+          fi
+
       - name: Run tests
         env:
           DEFAULT_HYPERVISOR: vz

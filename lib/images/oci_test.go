@@ -86,12 +86,13 @@ func TestExtractMetadataSucceedsOnBuildKitCache(t *testing.T) {
 //
 // Layout structure:
 // cacheDir/
-//   ├── oci-layout          (OCI layout version marker)
-//   ├── index.json          (points to manifest)
-//   └── blobs/sha256/
-//       ├── <manifest>      (image manifest with buildkit config mediatype)
-//       ├── <config>        (buildkit cache config blob)
-//       └── <layer>         (dummy layer)
+//
+//	├── oci-layout          (OCI layout version marker)
+//	├── index.json          (points to manifest)
+//	└── blobs/sha256/
+//	    ├── <manifest>      (image manifest with buildkit config mediatype)
+//	    ├── <config>        (buildkit cache config blob)
+//	    └── <layer>         (dummy layer)
 func createBuildKitCacheLayout(cacheDir, layoutTag string) error {
 	// Create directory structure
 	blobsDir := filepath.Join(cacheDir, "blobs", "sha256")

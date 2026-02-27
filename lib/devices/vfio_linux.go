@@ -13,9 +13,9 @@ import (
 )
 
 const (
-	vfioDriverPath  = "/sys/bus/pci/drivers/vfio-pci"
-	pciDriversPath  = "/sys/bus/pci/drivers"
-	vfioDevicePath  = "/dev/vfio"
+	vfioDriverPath = "/sys/bus/pci/drivers/vfio-pci"
+	pciDriversPath = "/sys/bus/pci/drivers"
+	vfioDevicePath = "/dev/vfio"
 )
 
 // VFIOBinder handles binding and unbinding devices to/from VFIO
@@ -149,16 +149,15 @@ func (v *VFIOBinder) unbindFromDriver(pciAddress, driver string) error {
 // setDriverOverride sets the driver_override for a device
 func (v *VFIOBinder) setDriverOverride(pciAddress, driver string) error {
 	overridePath := filepath.Join(sysfsDevicesPath, pciAddress, "driver_override")
-	
+
 	// Empty string clears the override
 	content := driver
 	if driver == "" {
 		content = "\n" // Writing newline clears the override
 	}
-	
+
 	return os.WriteFile(overridePath, []byte(content), 0200)
 }
-
 
 // bindDeviceToVFIO binds a specific device to vfio-pci using bind
 func (v *VFIOBinder) bindDeviceToVFIO(pciAddress string) error {
@@ -176,13 +175,13 @@ func (v *VFIOBinder) triggerDriverProbe(pciAddress string) error {
 // This service keeps /dev/nvidia* open and blocks driver unbind
 func (v *VFIOBinder) stopNvidiaPersistenced() error {
 	slog.Debug("stopping nvidia-persistenced service")
-	
+
 	// Try systemctl first (works as root)
 	cmd := exec.Command("systemctl", "stop", "nvidia-persistenced")
 	if err := cmd.Run(); err == nil {
 		return nil
 	}
-	
+
 	// Fall back to killing the process directly (works with CAP_KILL or as root)
 	// This is less clean but allows running with capabilities instead of full root
 	cmd = exec.Command("pkill", "-TERM", "nvidia-persistenced")
@@ -195,7 +194,7 @@ func (v *VFIOBinder) stopNvidiaPersistenced() error {
 		}
 		return fmt.Errorf("failed to stop nvidia-persistenced (try: sudo systemctl stop nvidia-persistenced)")
 	}
-	
+
 	// Wait for process to exit with polling instead of arbitrary sleep
 	return v.waitForProcessExit("nvidia-persistenced", 2*time.Second)
 }
@@ -204,7 +203,7 @@ func (v *VFIOBinder) stopNvidiaPersistenced() error {
 func (v *VFIOBinder) waitForProcessExit(processName string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	pollInterval := 100 * time.Millisecond
-	
+
 	for time.Now().Before(deadline) {
 		checkCmd := exec.Command("pgrep", processName)
 		if checkCmd.Run() != nil {
@@ -213,7 +212,7 @@ func (v *VFIOBinder) waitForProcessExit(processName string, timeout time.Duratio
 		}
 		time.Sleep(pollInterval)
 	}
-	
+
 	// Timeout - process still running
 	slog.Warn("timeout waiting for process to exit", "process", processName, "timeout", timeout)
 	return nil // Continue anyway, the bind might still work
@@ -222,7 +221,7 @@ func (v *VFIOBinder) waitForProcessExit(processName string, timeout time.Duratio
 // startNvidiaPersistenced starts the nvidia-persistenced service
 func (v *VFIOBinder) startNvidiaPersistenced() error {
 	slog.Debug("starting nvidia-persistenced service")
-	
+
 	// Try systemctl first (works as root)
 	cmd := exec.Command("systemctl", "start", "nvidia-persistenced")
 	if err := cmd.Run(); err != nil {
@@ -308,5 +307,3 @@ func (v *VFIOBinder) isPCIBridge(pciAddress string) bool {
 func GetDeviceSysfsPath(pciAddress string) string {
 	return filepath.Join(sysfsDevicesPath, pciAddress) + "/"
 }
-
-

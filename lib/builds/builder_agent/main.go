@@ -50,8 +50,8 @@ type BuildConfig struct {
 	Secrets          []SecretRef       `json:"secrets,omitempty"`
 	TimeoutSeconds   int               `json:"timeout_seconds"`
 	NetworkMode      string            `json:"network_mode"`
-	IsAdminBuild   bool   `json:"is_admin_build,omitempty"`
-	GlobalCacheKey string `json:"global_cache_key,omitempty"`
+	IsAdminBuild     bool              `json:"is_admin_build,omitempty"`
+	GlobalCacheKey   string            `json:"global_cache_key,omitempty"`
 }
 
 // SecretRef references a secret to inject during build
@@ -599,8 +599,8 @@ func setupRegistryAuth(config *BuildConfig) error {
 	dockerConfig := map[string]interface{}{
 		"auths": map[string]interface{}{
 			registryHost: map[string]string{
-				"auth":          authValue,      // Basic auth: base64(jwt:)
-				"identitytoken": token,          // JWT directly for OAuth2-style auth
+				"auth":          authValue, // Basic auth: base64(jwt:)
+				"identitytoken": token,     // JWT directly for OAuth2-style auth
 			},
 		},
 		"credsStore":  "",
@@ -888,8 +888,8 @@ func runBuild(ctx context.Context, config *BuildConfig, logWriter io.Writer) (st
 	env := make([]string, 0, len(os.Environ())+3)
 	for _, e := range os.Environ() {
 		if !strings.HasPrefix(e, "DOCKER_CONFIG=") &&
-		   !strings.HasPrefix(e, "BUILDKITD_FLAGS=") &&
-		   !strings.HasPrefix(e, "HOME=") {
+			!strings.HasPrefix(e, "BUILDKITD_FLAGS=") &&
+			!strings.HasPrefix(e, "HOME=") {
 			env = append(env, e)
 		}
 	}
@@ -999,4 +999,3 @@ func getBuildkitVersion() string {
 	out, _ := cmd.Output()
 	return strings.TrimSpace(string(out))
 }
-

@@ -194,4 +194,3 @@ func ExtractTarGz(r io.Reader, destDir string, maxBytes int64) (int64, error) {
 
 	return extractedBytes, nil
 }
-
