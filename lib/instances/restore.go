@@ -284,7 +284,7 @@ func reconfigureGuestNetwork(ctx context.Context, stored *StoredMetadata, alloc 
 	}
 
 	cmd := fmt.Sprintf(
-		"ip addr replace %s/%d dev eth0 && ip link set dev eth0 up && ip route replace default via %s dev eth0",
+		"ip -4 addr flush dev eth0 scope global && ip addr add %s/%d dev eth0 && ip link set dev eth0 up && ip route replace default via %s dev eth0",
 		alloc.IP, prefix, alloc.Gateway,
 	)
 

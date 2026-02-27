@@ -1,6 +1,7 @@
 package instances
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kernel/hypeman/lib/guest"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/paths"
@@ -127,6 +129,7 @@ func TestForkCloudHypervisorFromRunningNetwork(t *testing.T) {
 	assert.NotEmpty(t, forked.MAC)
 	assert.NotEqual(t, sourceAfterFork.IP, forked.IP)
 	assert.NotEqual(t, sourceAfterFork.MAC, forked.MAC)
+	assertGuestHasOnlyExpectedIPv4(t, forked, forked.IP, 30*time.Second)
 	assertHostCanReachNginx(t, forked.IP, 80, 60*time.Second)
 	assertHostCanReachNginx(t, sourceAfterFork.IP, 80, 60*time.Second)
 }
@@ -159,4 +162,60 @@ func assertHostCanReachNginx(t *testing.T, ip string, port int, timeout time.Dur
 	}
 
 	require.NoError(t, lastErr, "host should reach %s within %s", url, timeout)
+}
+
+func assertGuestHasOnlyExpectedIPv4(t *testing.T, inst *Instance, expectedIP string, timeout time.Duration) {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		output, exitCode, err := execInInstance(context.Background(), inst, "sh", "-c", "ip -4 -o addr show dev eth0 scope global | awk '{print $4}'")
+		if err == nil && exitCode == 0 {
+			var cidrs []string
+			for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+				if trimmed := strings.TrimSpace(line); trimmed != "" {
+					cidrs = append(cidrs, trimmed)
+				}
+			}
+
+			if len(cidrs) == 1 && strings.HasPrefix(cidrs[0], expectedIP+"/") {
+				return
+			}
+
+			lastErr = fmt.Errorf("expected only %s on eth0, got %v", expectedIP, cidrs)
+		} else if err != nil {
+			lastErr = err
+		} else {
+			lastErr = fmt.Errorf("ip addr command exit code %d, output=%q", exitCode, output)
+		}
+
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	require.NoError(t, lastErr, "guest should expose only the fork IP on eth0 within %s", timeout)
+}
+
+func execInInstance(ctx context.Context, inst *Instance, command ...string) (string, int, error) {
+	dialer, err := hypervisor.NewVsockDialer(inst.HypervisorType, inst.VsockSocket, inst.VsockCID)
+	if err != nil {
+		return "", -1, err
+	}
+
+	var stdout, stderr bytes.Buffer
+	exit, err := guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{
+		Command:      command,
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+		WaitForAgent: 30 * time.Second,
+	})
+	if err != nil {
+		return "", -1, err
+	}
+
+	output := stdout.String()
+	if stderr.Len() > 0 {
+		output += "\nSTDERR: " + stderr.String()
+	}
+	return output, exit.Code, nil
 }
