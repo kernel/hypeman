@@ -1,34 +1,16 @@
-package forkvm
+package cloudhypervisor
 
 import (
 	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/kernel/hypeman/lib/hypervisor"
 )
 
-// SnapshotNetworkConfig contains network identity fields in CH snapshot config.json.
-type SnapshotNetworkConfig struct {
-	TAPDevice string
-	IP        string
-	MAC       string
-	Netmask   string
-}
-
-// SnapshotRewriteOptions controls identity/path rewrites for CH snapshot config.json.
-type SnapshotRewriteOptions struct {
-	SourceDataDir string
-	TargetDataDir string
-
-	VsockCID    *int64
-	VsockSocket string
-
-	SerialLogPath string
-	Network       *SnapshotNetworkConfig
-}
-
-// RewriteSnapshotConfig rewrites cloud-hypervisor snapshot config.json for a forked instance.
-func RewriteSnapshotConfig(configPath string, opts SnapshotRewriteOptions) error {
+// rewriteSnapshotConfigForFork rewrites Cloud Hypervisor snapshot config.json for a forked instance.
+func rewriteSnapshotConfigForFork(configPath string, req hypervisor.ForkPrepareRequest) error {
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return fmt.Errorf("read snapshot config: %w", err)
@@ -39,21 +21,19 @@ func RewriteSnapshotConfig(configPath string, opts SnapshotRewriteOptions) error
 		return fmt.Errorf("unmarshal snapshot config: %w", err)
 	}
 
-	if opts.SourceDataDir != "" && opts.TargetDataDir != "" && opts.SourceDataDir != opts.TargetDataDir {
+	if req.SourceDataDir != "" && req.TargetDataDir != "" && req.SourceDataDir != req.TargetDataDir {
 		configAny := rewriteStringValues(config, func(s string) string {
-			return strings.ReplaceAll(s, opts.SourceDataDir, opts.TargetDataDir)
+			return strings.ReplaceAll(s, req.SourceDataDir, req.TargetDataDir)
 		})
 		config = configAny.(map[string]any)
 	}
 
-	if opts.VsockCID != nil || opts.VsockSocket != "" {
-		updateVsockConfig(config, opts.VsockCID, opts.VsockSocket)
+	updateVsockConfig(config, req.VsockCID, req.VsockSocket)
+	if req.SerialLogPath != "" {
+		updateSerialConfig(config, req.SerialLogPath)
 	}
-	if opts.SerialLogPath != "" {
-		updateSerialConfig(config, opts.SerialLogPath)
-	}
-	if opts.Network != nil {
-		updateNetworkConfig(config, *opts.Network)
+	if req.Network != nil {
+		updateNetworkConfig(config, req.Network)
 	}
 
 	updated, err := json.MarshalIndent(config, "", "  ")
@@ -89,14 +69,12 @@ func rewriteStringValues(value any, mapper func(string) string) any {
 	}
 }
 
-func updateVsockConfig(config map[string]any, cid *int64, socketPath string) {
+func updateVsockConfig(config map[string]any, cid int64, socketPath string) {
 	vsock, ok := config["vsock"].(map[string]any)
 	if !ok || vsock == nil {
 		return
 	}
-	if cid != nil {
-		vsock["cid"] = *cid
-	}
+	vsock["cid"] = cid
 	if socketPath != "" {
 		vsock["socket"] = socketPath
 	}
@@ -110,7 +88,7 @@ func updateSerialConfig(config map[string]any, logPath string) {
 	serial["file"] = logPath
 }
 
-func updateNetworkConfig(config map[string]any, netCfg SnapshotNetworkConfig) {
+func updateNetworkConfig(config map[string]any, netCfg *hypervisor.ForkNetworkConfig) {
 	nets, ok := config["net"].([]any)
 	if !ok {
 		return

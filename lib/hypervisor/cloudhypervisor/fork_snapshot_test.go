@@ -1,4 +1,4 @@
-package forkvm
+package cloudhypervisor
 
 import (
 	"encoding/json"
@@ -6,11 +6,12 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestRewriteSnapshotConfig(t *testing.T) {
+func TestRewriteSnapshotConfigForFork(t *testing.T) {
 	tmp := t.TempDir()
 	configPath := filepath.Join(tmp, "config.json")
 
@@ -29,14 +30,13 @@ func TestRewriteSnapshotConfig(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(configPath, data, 0644))
 
-	cid := int64(200)
-	err = RewriteSnapshotConfig(configPath, SnapshotRewriteOptions{
+	err = rewriteSnapshotConfigForFork(configPath, hypervisor.ForkPrepareRequest{
 		SourceDataDir: "/src/guests/a",
 		TargetDataDir: "/dst/guests/b",
-		VsockCID:      &cid,
+		VsockCID:      200,
 		VsockSocket:   "/dst/guests/b/vsock.sock",
 		SerialLogPath: "/dst/guests/b/logs/app.log",
-		Network: &SnapshotNetworkConfig{
+		Network: &hypervisor.ForkNetworkConfig{
 			TAPDevice: "hype-new",
 			IP:        "10.0.0.20",
 			MAC:       "02:00:00:00:00:02",

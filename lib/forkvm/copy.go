@@ -67,7 +67,7 @@ func CopyGuestDirectory(srcDir, dstDir string) error {
 			return nil
 
 		case mode&os.ModeSocket != 0:
-			// Runtime socket (e.g., ch.sock); the forked instance will create its own.
+			// Runtime socket; the forked instance will create its own.
 			return nil
 
 		default:
