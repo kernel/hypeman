@@ -9,6 +9,7 @@ import (
 	"github.com/c2h5oh/datasize"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/instances"
+	mw "github.com/kernel/hypeman/lib/middleware"
 	"github.com/kernel/hypeman/lib/oapi"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/kernel/hypeman/lib/system"
@@ -137,6 +138,24 @@ type captureCreateManager struct {
 	lastReq *instances.CreateInstanceRequest
 }
 
+type captureForkManager struct {
+	instances.Manager
+	lastID  string
+	lastReq *instances.ForkInstanceRequest
+	result  *instances.Instance
+	err     error
+}
+
+func (m *captureForkManager) ForkInstance(ctx context.Context, id string, req instances.ForkInstanceRequest) (*instances.Instance, error) {
+	reqCopy := req
+	m.lastID = id
+	m.lastReq = &reqCopy
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.result, nil
+}
+
 func (m *captureCreateManager) CreateInstance(ctx context.Context, req instances.CreateInstanceRequest) (*instances.Instance, error) {
 	reqCopy := req
 	m.lastReq = &reqCopy
@@ -188,6 +207,93 @@ func TestCreateInstance_OmittedHotplugSizeDefaultsToZero(t *testing.T) {
 	var hotplugBytes datasize.ByteSize
 	require.NoError(t, hotplugBytes.UnmarshalText([]byte(*instance.HotplugSize)))
 	assert.Equal(t, int64(0), int64(hotplugBytes), "response should report zero hotplug_size when omitted")
+}
+
+func TestForkInstance_Success(t *testing.T) {
+	svc := newTestService(t)
+
+	now := time.Now()
+	source := instances.Instance{
+		StoredMetadata: instances.StoredMetadata{
+			Id:             "src-instance",
+			Name:           "src-instance",
+			Image:          "docker.io/library/alpine:latest",
+			CreatedAt:      now,
+			HypervisorType: hypervisor.TypeCloudHypervisor,
+		},
+		State: instances.StateStopped,
+	}
+
+	forked := &instances.Instance{
+		StoredMetadata: instances.StoredMetadata{
+			Id:             "forked-instance",
+			Name:           "forked-instance",
+			Image:          "docker.io/library/alpine:latest",
+			CreatedAt:      now,
+			HypervisorType: hypervisor.TypeCloudHypervisor,
+		},
+		State: instances.StateStopped,
+	}
+
+	mockMgr := &captureForkManager{
+		Manager: svc.InstanceManager,
+		result:  forked,
+	}
+	svc.InstanceManager = mockMgr
+
+	resp, err := svc.ForkInstance(
+		mw.WithResolvedInstance(ctx(), source.Id, source),
+		oapi.ForkInstanceRequestObject{
+			Id: source.Id,
+			Body: &oapi.ForkInstanceRequest{
+				Name: "forked-instance",
+			},
+		},
+	)
+	require.NoError(t, err)
+
+	created, ok := resp.(oapi.ForkInstance201JSONResponse)
+	require.True(t, ok, "expected 201 response")
+	assert.Equal(t, "forked-instance", created.Name)
+	assert.Equal(t, source.Id, mockMgr.lastID)
+	require.NotNil(t, mockMgr.lastReq)
+	assert.Equal(t, "forked-instance", mockMgr.lastReq.Name)
+}
+
+func TestForkInstance_NotSupported(t *testing.T) {
+	svc := newTestService(t)
+
+	source := instances.Instance{
+		StoredMetadata: instances.StoredMetadata{
+			Id:             "src-instance",
+			Name:           "src-instance",
+			Image:          "docker.io/library/alpine:latest",
+			CreatedAt:      time.Now(),
+			HypervisorType: hypervisor.TypeQEMU,
+		},
+		State: instances.StateStopped,
+	}
+
+	mockMgr := &captureForkManager{
+		Manager: svc.InstanceManager,
+		err:     instances.ErrNotSupported,
+	}
+	svc.InstanceManager = mockMgr
+
+	resp, err := svc.ForkInstance(
+		mw.WithResolvedInstance(ctx(), source.Id, source),
+		oapi.ForkInstanceRequestObject{
+			Id: source.Id,
+			Body: &oapi.ForkInstanceRequest{
+				Name: "forked-instance",
+			},
+		},
+	)
+	require.NoError(t, err)
+
+	notSupported, ok := resp.(oapi.ForkInstance501JSONResponse)
+	require.True(t, ok, "expected 501 response")
+	assert.Equal(t, "not_supported", notSupported.Code)
 }
 
 func TestInstanceLifecycle_StopStart(t *testing.T) {
