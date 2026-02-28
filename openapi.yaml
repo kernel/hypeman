@@ -597,6 +597,10 @@ components:
           type: string
           description: Temporary field for CI SDK sync validation
           example: probe
+        automation_probe_phase:
+          type: string
+          description: Temporary second field to force SDK regeneration
+          example: phase-2
     
     IngressMatch:
       type: object
