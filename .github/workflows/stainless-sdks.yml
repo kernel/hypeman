@@ -66,9 +66,17 @@ jobs:
           TS_SHA="$(jq -r '.typescript.commit.completed.commit.sha // .typescript.commit.commit.sha // empty' /tmp/stainless-outcomes.json)"
           TS_OWNER="$(jq -r '.typescript.commit.completed.commit.repo.owner // .typescript.commit.commit.repo.owner // empty' /tmp/stainless-outcomes.json)"
           TS_REPO="$(jq -r '.typescript.commit.completed.commit.repo.name // .typescript.commit.commit.repo.name // empty' /tmp/stainless-outcomes.json)"
+          TS_INSTALL_URL="$(jq -r '.typescript.install_url // empty' /tmp/stainless-outcomes.json)"
 
-          if [ -z "${GO_SHA}" ] || [ -z "${GO_OWNER}" ] || [ -z "${GO_REPO}" ] || [ -z "${TS_SHA}" ] || [ -z "${TS_OWNER}" ] || [ -z "${TS_REPO}" ]; then
-            echo "No Go/TypeScript commit coordinates found in outcomes; skipping sync."
+          if [ -z "${GO_SHA}" ] || [ -z "${GO_OWNER}" ] || [ -z "${GO_REPO}" ]; then
+            echo "No Go commit coordinates found in outcomes; skipping sync."
+            jq . /tmp/stainless-outcomes.json
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ -z "${TS_INSTALL_URL}" ] && { [ -z "${TS_SHA}" ] || [ -z "${TS_OWNER}" ] || [ -z "${TS_REPO}" ]; }; then
+            echo "No TypeScript source coordinates found in outcomes; skipping sync."
             jq . /tmp/stainless-outcomes.json
             echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
@@ -78,6 +86,28 @@ jobs:
             echo "STAINLESS_SYNC_GITHUB_TOKEN is required to fetch generated SDK commits."
             exit 1
           fi
+
+          sync_from_install_url() {
+            local install_url="$1"
+            local destination="$2"
+            local tmp_archive
+            local tmp_extract
+
+            tmp_archive="$(mktemp)"
+            tmp_extract="$(mktemp -d)"
+
+            curl --fail --location --silent --show-error "${install_url}" --output "${tmp_archive}"
+            tar -xzf "${tmp_archive}" -C "${tmp_extract}"
+
+            rm -rf "${destination}"
+            mkdir -p "${destination}"
+
+            if [ -d "${tmp_extract}/package" ]; then
+              cp -a "${tmp_extract}/package/." "${destination}/"
+            else
+              cp -a "${tmp_extract}/." "${destination}/"
+            fi
+          }
 
           sync_target() {
             local owner="$1"
@@ -107,7 +137,15 @@ jobs:
           }
 
           sync_target "${GO_OWNER}" "${GO_REPO}" "${GO_SHA}" "sdks/go" "sdks/go"
-          sync_target "${TS_OWNER}" "${TS_REPO}" "${TS_SHA}" "sdks/ts" "sdks/ts"
+
+          if [ -n "${TS_INSTALL_URL}" ]; then
+            sync_from_install_url "${TS_INSTALL_URL}" "sdks/ts"
+          else
+            if [ "${TS_OWNER}" = "stainless-sdks" ] && [ "${TS_REPO}" = "hypeman-typescript" ]; then
+              TS_REPO="hypeman-ts"
+            fi
+            sync_target "${TS_OWNER}" "${TS_REPO}" "${TS_SHA}" "sdks/ts" "sdks/ts"
+          fi
 
           if git diff --quiet -- sdks/go sdks/ts; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
