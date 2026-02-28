@@ -67,11 +67,21 @@ jobs:
       - name: Install dependencies
         run: |
           set -xe
+          apt_retry() {
+            local attempts=0
+            until sudo "$@"; do
+              attempts=$((attempts + 1))
+              if [ "$attempts" -ge 10 ]; then
+                return 1
+              fi
+              sleep 10
+            done
+          }
           if ! command -v mkfs.erofs &> /dev/null || \
              ! command -v mkfs.ext4 &> /dev/null || \
              ! command -v iptables &> /dev/null; then
-            sudo apt-get update
-            sudo apt-get install -y erofs-utils e2fsprogs iptables
+            apt_retry apt-get update
+            apt_retry apt-get install -y erofs-utils e2fsprogs iptables
           fi
           go mod download
 

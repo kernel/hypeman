@@ -52,9 +52,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ -z "${OUTCOMES_JSON}" ]; then
-            echo "Missing Stainless outcomes JSON"
-            exit 1
+          if [ -z "${OUTCOMES_JSON}" ] || [ "${OUTCOMES_JSON}" = "null" ] || [ "${OUTCOMES_JSON}" = "{}" ]; then
+            echo "No Stainless outcomes available (likely no SDK changes)."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
           printf '%s' "${OUTCOMES_JSON}" > /tmp/stainless-outcomes.json
@@ -66,9 +67,10 @@ jobs:
           TS_REPO="$(jq -r '.typescript.commit.completed.commit.repo.name // .typescript.commit.commit.repo.name // empty' /tmp/stainless-outcomes.json)"
 
           if [ -z "${GO_SHA}" ] || [ -z "${GO_OWNER}" ] || [ -z "${GO_REPO}" ] || [ -z "${TS_SHA}" ] || [ -z "${TS_OWNER}" ] || [ -z "${TS_REPO}" ]; then
-            echo "Unable to parse Go/TypeScript commit coordinates from Stainless outcomes"
+            echo "No Go/TypeScript commit coordinates found in outcomes; skipping sync."
             jq . /tmp/stainless-outcomes.json
-            exit 1
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
           sync_target() {
