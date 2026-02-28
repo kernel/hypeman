@@ -1,0 +1,6 @@
+.prism.log
+dist/
+/hypeman
+.env
+hypeman/**
+bin/hypeman

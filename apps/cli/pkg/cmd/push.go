@@ -1,0 +1,102 @@
+package cmd
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"net/url"
+	"os"
+	"strings"
+
+	"github.com/google/go-containerregistry/pkg/authn"
+	"github.com/google/go-containerregistry/pkg/name"
+	"github.com/google/go-containerregistry/pkg/v1/daemon"
+	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"github.com/urfave/cli/v3"
+)
+
+var pushCmd = cli.Command{
+	Name:            "push",
+	Usage:           "Push a local Docker image to hypeman",
+	ArgsUsage:       "<image> [target-name]",
+	Action:          handlePush,
+	HideHelpCommand: true,
+}
+
+func handlePush(ctx context.Context, cmd *cli.Command) error {
+	args := cmd.Args().Slice()
+	if len(args) < 1 {
+		return fmt.Errorf("image reference required\nUsage: hypeman push <image>")
+	}
+
+	sourceImage := args[0]
+	targetName := sourceImage
+	if len(args) > 1 {
+		targetName = args[1]
+	}
+
+	baseURL := resolveBaseURL(cmd)
+
+	parsedURL, err := url.Parse(baseURL)
+	if err != nil {
+		return fmt.Errorf("invalid base URL: %w", err)
+	}
+
+	registryHost := parsedURL.Host
+
+	fmt.Fprintf(os.Stderr, "Loading image %s from Docker...\n", sourceImage)
+
+	srcRef, err := name.ParseReference(sourceImage)
+	if err != nil {
+		return fmt.Errorf("invalid source image: %w", err)
+	}
+
+	img, err := daemon.Image(srcRef)
+	if err != nil {
+		return fmt.Errorf("load image: %w", err)
+	}
+
+	// Build target reference - server computes digest from manifest
+	targetRef := registryHost + "/" + strings.TrimPrefix(targetName, "/")
+	fmt.Fprintf(os.Stderr, "Pushing to %s...\n", targetRef)
+
+	dstRef, err := name.ParseReference(targetRef, name.Insecure)
+	if err != nil {
+		return fmt.Errorf("invalid target: %w", err)
+	}
+
+	token := resolveAPIKey()
+
+	// Use custom transport that always sends Basic auth header
+	transport := &authTransport{
+		base:  http.DefaultTransport,
+		token: token,
+	}
+
+	err = remote.Write(dstRef, img,
+		remote.WithContext(ctx),
+		remote.WithAuth(authn.Anonymous),
+		remote.WithTransport(transport),
+	)
+	if err != nil {
+		return fmt.Errorf("push failed: %w", err)
+	}
+
+	fmt.Fprintf(os.Stderr, "Pushed %s\n", targetRef)
+	return nil
+}
+
+// authTransport adds Basic auth header to all requests
+type authTransport struct {
+	base  http.RoundTripper
+	token string
+}
+
+func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if t.token != "" {
+		// Clone request to avoid modifying the original (RoundTripper contract)
+		req = req.Clone(req.Context())
+		req.Header.Set("Authorization", "Bearer "+t.token)
+	}
+	return t.base.RoundTrip(req)
+}
