@@ -49,6 +49,7 @@ jobs:
         id: sync_sdks
         env:
           OUTCOMES_JSON: ${{ steps.stainless_build.outputs.outcomes }}
+          STAINLESS_SYNC_GITHUB_TOKEN: ${{ secrets.STAINLESS_SYNC_GITHUB_TOKEN }}
         run: |
           set -euo pipefail
 
@@ -73,13 +74,18 @@ jobs:
             exit 0
           fi
 
+          if [ -z "${STAINLESS_SYNC_GITHUB_TOKEN:-}" ]; then
+            echo "STAINLESS_SYNC_GITHUB_TOKEN is required to fetch generated SDK commits."
+            exit 1
+          fi
+
           sync_target() {
             local owner="$1"
             local repo="$2"
             local sha="$3"
             local monorepo_subpath="$4"
             local destination="$5"
-            local source_url="https://github.com/${owner}/${repo}.git"
+            local source_url="https://x-access-token:${STAINLESS_SYNC_GITHUB_TOKEN}@github.com/${owner}/${repo}.git"
 
             local tmp_repo
             tmp_repo="$(mktemp -d)"
