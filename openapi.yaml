@@ -593,6 +593,10 @@ components:
           type: string
           enum: [ok]
           example: ok
+        automation_probe:
+          type: string
+          description: Temporary field for CI SDK sync validation
+          example: probe
     
     IngressMatch:
       type: object
