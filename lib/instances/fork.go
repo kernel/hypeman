@@ -181,7 +181,7 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 	}
 
 	now := time.Now()
-	forkMeta := meta.StoredMetadata
+	forkMeta := cloneStoredMetadataForFork(meta.StoredMetadata)
 	forkMeta.Id = forkID
 	forkMeta.Name = req.Name
 	forkMeta.CreatedAt = now
@@ -340,4 +340,35 @@ func (m *manager) cleanupForkInstanceOnError(ctx context.Context, forkID string)
 		return nil
 	}
 	return err
+}
+
+func cloneStoredMetadataForFork(src StoredMetadata) StoredMetadata {
+	dst := src
+
+	if src.Env != nil {
+		dst.Env = make(map[string]string, len(src.Env))
+		for k, v := range src.Env {
+			dst.Env[k] = v
+		}
+	}
+	if src.Metadata != nil {
+		dst.Metadata = make(map[string]string, len(src.Metadata))
+		for k, v := range src.Metadata {
+			dst.Metadata[k] = v
+		}
+	}
+	if src.Volumes != nil {
+		dst.Volumes = append([]VolumeAttachment(nil), src.Volumes...)
+	}
+	if src.Devices != nil {
+		dst.Devices = append([]string(nil), src.Devices...)
+	}
+	if src.Entrypoint != nil {
+		dst.Entrypoint = append([]string(nil), src.Entrypoint...)
+	}
+	if src.Cmd != nil {
+		dst.Cmd = append([]string(nil), src.Cmd...)
+	}
+
+	return dst
 }

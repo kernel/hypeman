@@ -107,6 +107,34 @@ func TestCleanupForkInstanceOnError(t *testing.T) {
 	assert.ErrorIs(t, err, ErrNotFound)
 }
 
+func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
+	src := StoredMetadata{
+		Env:        map[string]string{"A": "1"},
+		Metadata:   map[string]string{"m": "x"},
+		Volumes:    []VolumeAttachment{{VolumeID: "vol-1", MountPath: "/data"}},
+		Devices:    []string{"0000:01:00.0"},
+		Entrypoint: []string{"/bin/sh", "-c"},
+		Cmd:        []string{"echo", "hello"},
+	}
+
+	cloned := cloneStoredMetadataForFork(src)
+	require.Equal(t, src, cloned)
+
+	cloned.Env["A"] = "2"
+	cloned.Metadata["m"] = "y"
+	cloned.Volumes[0].MountPath = "/mnt"
+	cloned.Devices[0] = "0000:02:00.0"
+	cloned.Entrypoint[0] = "/usr/bin/env"
+	cloned.Cmd[0] = "printf"
+
+	require.Equal(t, "1", src.Env["A"])
+	require.Equal(t, "x", src.Metadata["m"])
+	require.Equal(t, "/data", src.Volumes[0].MountPath)
+	require.Equal(t, "0000:01:00.0", src.Devices[0])
+	require.Equal(t, "/bin/sh", src.Entrypoint[0])
+	require.Equal(t, "echo", src.Cmd[0])
+}
+
 func TestForkCloudHypervisorFromRunningNetwork(t *testing.T) {
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Skip("/dev/kvm not available, skipping on this platform")
