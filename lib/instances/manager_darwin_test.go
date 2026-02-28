@@ -500,14 +500,14 @@ func TestVZStandbyAndRestore(t *testing.T) {
 	t.Log("Instance restored and running")
 
 	// Re-read instance and verify exec works after restore.
-	inst, err = mgr.GetInstance(ctx, inst.Id)
+	inst, err = mgr.GetInstance(ctx, instanceID)
 	require.NoError(t, err)
 
 	t.Log("Waiting for exec to work after restore...")
 	var execErr error
 	for i := 0; i < 30; i++ {
 		time.Sleep(1 * time.Second)
-		inst, err = mgr.GetInstance(ctx, inst.Id)
+		inst, err = mgr.GetInstance(ctx, instanceID)
 		if err != nil {
 			continue
 		}

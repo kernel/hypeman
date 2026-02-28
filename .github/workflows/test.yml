@@ -61,6 +61,7 @@ jobs:
      
       - name: Run tests
         env:
+          GO_TEST_TIMEOUT: 600s
           # Docker auth for tests running as root (sudo)
           DOCKER_CONFIG: /home/debianuser/.docker
           # TLS/ACME testing (optional - tests will skip if not configured)
@@ -118,6 +119,7 @@ jobs:
 
       - name: Run tests
         env:
+          GO_TEST_TIMEOUT: 600s
           DEFAULT_HYPERVISOR: vz
           JWT_SECRET: ci-test-secret
         run: make test
