@@ -39,6 +39,7 @@ func handlePs(ctx context.Context, cmd *cli.Command) error {
 
 	instances, err := client.Instances.List(
 		ctx,
+		hypeman.InstanceListParams{},
 		opts...,
 	)
 	if err != nil {

@@ -42,7 +42,7 @@ func handleRm(ctx context.Context, cmd *cli.Command) error {
 	// If --all, get all instance IDs
 	var identifiers []string
 	if all {
-		instances, err := client.Instances.List(ctx)
+		instances, err := client.Instances.List(ctx, hypeman.InstanceListParams{})
 		if err != nil {
 			return fmt.Errorf("failed to list instances: %w", err)
 		}
@@ -120,4 +120,3 @@ func handleRm(ctx context.Context, cmd *cli.Command) error {
 
 	return lastErr
 }
-

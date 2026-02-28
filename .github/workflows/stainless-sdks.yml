@@ -16,11 +16,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  STAINLESS_ORG: ${{ vars.STAINLESS_ORG }}
   STAINLESS_PROJECT: ${{ vars.STAINLESS_PROJECT }}
   OAS_PATH: openapi.yaml
   CONFIG_PATH: stainless.yaml
-  TEMP_CONFIG_PATH: stainless.pr.yaml
 
 jobs:
   build-and-sync:
@@ -36,24 +34,15 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Create PR-scoped Stainless config
-        run: |
-          cp "${CONFIG_PATH}" "${TEMP_CONFIG_PATH}"
-          sed -i "s|production_repo: kernel/hypeman#stl-go-main|production_repo: kernel/hypeman#stl-go-pr-${{ github.event.pull_request.number }}|g" "${TEMP_CONFIG_PATH}"
-          sed -i "s|production_repo: kernel/hypeman#stl-ts-main|production_repo: kernel/hypeman#stl-ts-pr-${{ github.event.pull_request.number }}|g" "${TEMP_CONFIG_PATH}"
-
       - name: Run Stainless build
         id: stainless_build
         uses: stainless-api/upload-openapi-spec-action/build@v1
         with:
           stainless_api_key: ${{ secrets.STAINLESS_API_KEY }}
-          org: ${{ env.STAINLESS_ORG }}
           project: ${{ env.STAINLESS_PROJECT }}
           oas_path: ${{ env.OAS_PATH }}
-          config_path: ${{ env.TEMP_CONFIG_PATH }}
-          make_comment: true
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          fail_on: error
+          config_path: ${{ env.CONFIG_PATH }}
+          branch: ${{ github.event.pull_request.head.ref }}
           commit_message: "chore(stainless): update SDKs for PR #${{ github.event.pull_request.number }}"
 
       - name: Sync generated SDKs into monorepo
@@ -69,26 +58,48 @@ jobs:
           fi
 
           printf '%s' "${OUTCOMES_JSON}" > /tmp/stainless-outcomes.json
-          GO_SHA="$(jq -r '.go.commit.completed.commit.sha // empty' /tmp/stainless-outcomes.json)"
-          TS_SHA="$(jq -r '.typescript.commit.completed.commit.sha // empty' /tmp/stainless-outcomes.json)"
+          GO_SHA="$(jq -r '.go.commit.completed.commit.sha // .go.commit.commit.sha // empty' /tmp/stainless-outcomes.json)"
+          GO_OWNER="$(jq -r '.go.commit.completed.commit.repo.owner // .go.commit.commit.repo.owner // empty' /tmp/stainless-outcomes.json)"
+          GO_REPO="$(jq -r '.go.commit.completed.commit.repo.name // .go.commit.commit.repo.name // empty' /tmp/stainless-outcomes.json)"
+          TS_SHA="$(jq -r '.typescript.commit.completed.commit.sha // .typescript.commit.commit.sha // empty' /tmp/stainless-outcomes.json)"
+          TS_OWNER="$(jq -r '.typescript.commit.completed.commit.repo.owner // .typescript.commit.commit.repo.owner // empty' /tmp/stainless-outcomes.json)"
+          TS_REPO="$(jq -r '.typescript.commit.completed.commit.repo.name // .typescript.commit.commit.repo.name // empty' /tmp/stainless-outcomes.json)"
 
-          if [ -z "${GO_SHA}" ] || [ -z "${TS_SHA}" ]; then
-            echo "Unable to parse Go/TypeScript commit SHAs from Stainless outcomes"
+          if [ -z "${GO_SHA}" ] || [ -z "${GO_OWNER}" ] || [ -z "${GO_REPO}" ] || [ -z "${TS_SHA}" ] || [ -z "${TS_OWNER}" ] || [ -z "${TS_REPO}" ]; then
+            echo "Unable to parse Go/TypeScript commit coordinates from Stainless outcomes"
             jq . /tmp/stainless-outcomes.json
             exit 1
           fi
 
-          git fetch origin "${GO_SHA}" "${TS_SHA}"
+          sync_target() {
+            local owner="$1"
+            local repo="$2"
+            local sha="$3"
+            local monorepo_subpath="$4"
+            local destination="$5"
+            local source_url="https://github.com/${owner}/${repo}.git"
 
-          tmp_dir="$(mktemp -d)"
-          mkdir -p "${tmp_dir}/go" "${tmp_dir}/ts"
-          git archive "${GO_SHA}" | tar -x -C "${tmp_dir}/go"
-          git archive "${TS_SHA}" | tar -x -C "${tmp_dir}/ts"
+            local tmp_repo
+            tmp_repo="$(mktemp -d)"
 
-          rm -rf sdks/go sdks/ts
-          mkdir -p sdks/go sdks/ts
-          rsync -a --delete "${tmp_dir}/go"/ sdks/go/
-          rsync -a --delete "${tmp_dir}/ts"/ sdks/ts/
+            git -C "${tmp_repo}" init --quiet
+            git -C "${tmp_repo}" remote add origin "${source_url}"
+            git -C "${tmp_repo}" fetch --depth=1 origin "${sha}"
+
+            rm -rf "${destination}"
+            mkdir -p "${destination}"
+
+            if git -C "${tmp_repo}" cat-file -e "FETCH_HEAD:${monorepo_subpath}" 2>/dev/null; then
+              local strip_components
+              strip_components="$(awk -F/ '{print NF}' <<< "${monorepo_subpath}")"
+              git -C "${tmp_repo}" archive FETCH_HEAD "${monorepo_subpath}" | tar -x -C "${destination}" --strip-components="${strip_components}"
+            else
+              git -C "${tmp_repo}" archive FETCH_HEAD | tar -x -C "${destination}"
+            fi
+          }
+
+          sync_target "${GO_OWNER}" "${GO_REPO}" "${GO_SHA}" "sdks/go" "sdks/go"
+          sync_target "${TS_OWNER}" "${TS_REPO}" "${TS_SHA}" "sdks/ts" "sdks/ts"
 
           if git diff --quiet -- sdks/go sdks/ts; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
@@ -104,11 +115,13 @@ jobs:
 
       - name: Run Go SDK tests
         if: steps.sync_sdks.outputs.changed == 'true'
-        run: go test ./...
+        run: GOWORK=off go test ./...
         working-directory: ./sdks/go
 
       - name: Run CLI tests
         if: steps.sync_sdks.outputs.changed == 'true'
+        env:
+          GOWORK: ${{ github.workspace }}/go.work
         run: go test ./...
         working-directory: ./apps/cli
 

@@ -18,7 +18,7 @@ import (
 type TableWriter struct {
 	w       io.Writer
 	headers []string
-	widths  []int    // natural widths (max of header and cell values)
+	widths  []int // natural widths (max of header and cell values)
 	rows    [][]string
 
 	// TruncOrder specifies column indices in truncation priority order.
@@ -261,7 +261,7 @@ func randomSuffix(n int) string {
 // Returns an error if the identifier is ambiguous or not found.
 func ResolveInstance(ctx context.Context, client *hypeman.Client, identifier string) (string, error) {
 	// List all instances
-	instances, err := client.Instances.List(ctx)
+	instances, err := client.Instances.List(ctx, hypeman.InstanceListParams{})
 	if err != nil {
 		return "", fmt.Errorf("failed to list instances: %w", err)
 	}
@@ -297,4 +297,3 @@ func ResolveInstance(ctx context.Context, client *hypeman.Client, identifier str
 		return "", fmt.Errorf("ambiguous instance identifier %q matches: %s", identifier, strings.Join(ids, ", "))
 	}
 }
-
