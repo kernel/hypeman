@@ -15,7 +15,8 @@ History import workflow (path-native, blame-correct):
 1. Rewrite source history into a target subdirectory using `git filter-repo` (preferred) or `git filter-branch` fallback.
 2. Prefix imported tags with a namespace (for example `legacy/cli/`, `legacy/sdk-go/`, `legacy/sdk-ts/`).
 3. Merge rewritten histories with `git merge --allow-unrelated-histories --no-ff`.
-4. Verify with:
+4. Anchor non-main imported refs with `git merge -s ours --no-ff <ref>` so all source commits are reachable from the migration branch without changing tree contents.
+5. Verify with:
    - `git log -- <imported-path>/<file>`
    - `git blame <imported-path>/<file>`
 
