@@ -18,8 +18,9 @@ import (
 
 // Client implements hypervisor.Hypervisor via HTTP to the vz-shim process.
 type Client struct {
-	socketPath string
-	httpClient *http.Client
+	socketPath            string
+	httpClient            *http.Client
+	longRunningHTTPClient *http.Client
 }
 
 // NewClient creates a new vz shim client.
@@ -32,6 +33,9 @@ func NewClient(socketPath string) (*Client, error) {
 	httpClient := &http.Client{
 		Transport: transport,
 		Timeout:   10 * time.Second,
+	}
+	longRunningHTTPClient := &http.Client{
+		Transport: transport,
 	}
 
 	// Verify connectivity with a short timeout
@@ -49,8 +53,9 @@ func NewClient(socketPath string) (*Client, error) {
 	resp.Body.Close()
 
 	return &Client{
-		socketPath: socketPath,
-		httpClient: httpClient,
+		socketPath:            socketPath,
+		httpClient:            httpClient,
+		longRunningHTTPClient: longRunningHTTPClient,
 	}, nil
 }
 
@@ -78,6 +83,10 @@ func (c *Client) Capabilities() hypervisor.Capabilities {
 
 // doPut sends a PUT request to the shim and checks for success.
 func (c *Client) doPut(ctx context.Context, path string, body io.Reader) error {
+	return c.doPutWithClient(ctx, c.httpClient, path, body)
+}
+
+func (c *Client) doPutWithClient(ctx context.Context, client *http.Client, path string, body io.Reader) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, "http://vz-shim"+path, body)
 	if err != nil {
 		return err
@@ -85,7 +94,7 @@ func (c *Client) doPut(ctx context.Context, path string, body io.Reader) error {
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := c.httpClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}
@@ -171,7 +180,9 @@ func (c *Client) Snapshot(ctx context.Context, destPath string) error {
 	if err != nil {
 		return fmt.Errorf("marshal snapshot request: %w", err)
 	}
-	return c.doPut(ctx, "/api/v1/vm.snapshot", bytes.NewReader(body))
+	// Snapshot duration scales with guest RAM size, so rely on caller context
+	// rather than the default short client timeout.
+	return c.doPutWithClient(ctx, c.longRunningHTTPClient, "/api/v1/vm.snapshot", bytes.NewReader(body))
 }
 
 func (c *Client) ResizeMemory(ctx context.Context, bytes int64) error {

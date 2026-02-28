@@ -24,5 +24,6 @@ func saveMachineState(vm *vz.VirtualMachine, snapshotPath string) error {
 }
 
 func restoreMachineState(vm *vz.VirtualMachine, snapshotPath string) error {
+	// The vz wrapper accepts a filesystem path and constructs a file URL internally.
 	return vm.RestoreMachineStateFromURL(snapshotPath)
 }
