@@ -2,6 +2,37 @@
 
 This document covers development setup, configuration, and contributing to Hypeman.
 
+## Monorepo Migration Notes
+
+The monorepo now includes:
+
+- `cmd/`, `lib/`, `integration/` for server code
+- `apps/cli` for CLI code
+- `sdks/go` and `sdks/ts` for Stainless SDK code
+
+History import workflow (path-native, blame-correct):
+
+1. Rewrite source history into a target subdirectory using `git filter-repo` (preferred) or `git filter-branch` fallback.
+2. Prefix imported tags with a namespace (for example `legacy/cli/`, `legacy/sdk-go/`, `legacy/sdk-ts/`).
+3. Merge rewritten histories with `git merge --allow-unrelated-histories --no-ff`.
+4. Verify with:
+   - `git log -- <imported-path>/<file>`
+   - `git blame <imported-path>/<file>`
+
+Rollback commands during migration:
+
+```bash
+# Abort in-progress merge
+git merge --abort
+
+# Reset working tree to last commit on migration branch
+git reset --hard HEAD
+
+# Remove imported refs created during staging
+git for-each-ref --format='%(refname)' refs/heads/import/ | while read -r ref; do git update-ref -d "$ref"; done
+git for-each-ref --format='%(refname)' refs/tags/legacy/ | while read -r ref; do git update-ref -d "$ref"; done
+```
+
 ## Prerequisites
 
 ### Linux (Default)

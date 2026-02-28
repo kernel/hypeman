@@ -21,13 +21,13 @@ targets:
     # [docs]: https://www.stainless.com/docs/reference/editions
     edition: go.2025-10-08
     package_name: hypeman
-    production_repo: kernel/hypeman-go
+    production_repo: kernel/hypeman#stl-go-main
     options:
       enable_v2: true
   typescript:
     edition: typescript.2025-10-10
     package_name: "@onkernel/hypeman"
-    production_repo: onkernel/hypeman-ts
+    production_repo: kernel/hypeman#stl-ts-main
     publish:
       npm: true
 

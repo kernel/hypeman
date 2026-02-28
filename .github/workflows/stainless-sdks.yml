@@ -1,4 +1,4 @@
-name: Stainless SDK preview on PRs
+name: Stainless SDK Sync on PRs
 
 on:
   pull_request:
@@ -6,7 +6,10 @@ on:
       - opened
       - synchronize
       - reopened
-      - closed
+    paths:
+      - openapi.yaml
+      - stainless.yaml
+      - .github/workflows/stainless-sdks.yml
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
@@ -17,49 +20,125 @@ env:
   STAINLESS_PROJECT: ${{ vars.STAINLESS_PROJECT }}
   OAS_PATH: openapi.yaml
   CONFIG_PATH: stainless.yaml
+  TEMP_CONFIG_PATH: stainless.pr.yaml
 
 jobs:
-  preview:
-    if: github.event.action != 'closed'
+  build-and-sync:
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       pull-requests: write
+      id-token: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 0
 
-      - name: Run preview builds
-        uses: stainless-api/upload-openapi-spec-action/preview@v1
+      - name: Create PR-scoped Stainless config
+        run: |
+          cp "${CONFIG_PATH}" "${TEMP_CONFIG_PATH}"
+          sed -i "s|production_repo: kernel/hypeman#stl-go-main|production_repo: kernel/hypeman#stl-go-pr-${{ github.event.pull_request.number }}|g" "${TEMP_CONFIG_PATH}"
+          sed -i "s|production_repo: kernel/hypeman#stl-ts-main|production_repo: kernel/hypeman#stl-ts-pr-${{ github.event.pull_request.number }}|g" "${TEMP_CONFIG_PATH}"
+
+      - name: Run Stainless build
+        id: stainless_build
+        uses: stainless-api/upload-openapi-spec-action/build@v1
         with:
           stainless_api_key: ${{ secrets.STAINLESS_API_KEY }}
           org: ${{ env.STAINLESS_ORG }}
           project: ${{ env.STAINLESS_PROJECT }}
           oas_path: ${{ env.OAS_PATH }}
-          config_path: ${{ env.CONFIG_PATH }}
+          config_path: ${{ env.TEMP_CONFIG_PATH }}
           make_comment: true
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          fail_on: error
+          commit_message: "chore(stainless): update SDKs for PR #${{ github.event.pull_request.number }}"
 
-  merge:
-    if: github.event.action == 'closed' && github.event.pull_request.merged == true
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: write
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 2
+      - name: Sync generated SDKs into monorepo
+        id: sync_sdks
+        env:
+          OUTCOMES_JSON: ${{ steps.stainless_build.outputs.outcomes }}
+        run: |
+          set -euo pipefail
 
-      - name: Run merge build
-        uses: stainless-api/upload-openapi-spec-action/merge@v1
+          if [ -z "${OUTCOMES_JSON}" ]; then
+            echo "Missing Stainless outcomes JSON"
+            exit 1
+          fi
+
+          printf '%s' "${OUTCOMES_JSON}" > /tmp/stainless-outcomes.json
+          GO_SHA="$(jq -r '.go.commit.completed.commit.sha // empty' /tmp/stainless-outcomes.json)"
+          TS_SHA="$(jq -r '.typescript.commit.completed.commit.sha // empty' /tmp/stainless-outcomes.json)"
+
+          if [ -z "${GO_SHA}" ] || [ -z "${TS_SHA}" ]; then
+            echo "Unable to parse Go/TypeScript commit SHAs from Stainless outcomes"
+            jq . /tmp/stainless-outcomes.json
+            exit 1
+          fi
+
+          git fetch origin "${GO_SHA}" "${TS_SHA}"
+
+          tmp_dir="$(mktemp -d)"
+          mkdir -p "${tmp_dir}/go" "${tmp_dir}/ts"
+          git archive "${GO_SHA}" | tar -x -C "${tmp_dir}/go"
+          git archive "${TS_SHA}" | tar -x -C "${tmp_dir}/ts"
+
+          rm -rf sdks/go sdks/ts
+          mkdir -p sdks/go sdks/ts
+          rsync -a --delete "${tmp_dir}/go"/ sdks/go/
+          rsync -a --delete "${tmp_dir}/ts"/ sdks/ts/
+
+          if git diff --quiet -- sdks/go sdks/ts; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Go
+        if: steps.sync_sdks.outputs.changed == 'true'
+        uses: actions/setup-go@v5
         with:
-          stainless_api_key: ${{ secrets.STAINLESS_API_KEY }}
-          org: ${{ env.STAINLESS_ORG }}
-          project: ${{ env.STAINLESS_PROJECT }}
-          oas_path: ${{ env.OAS_PATH }}
-          make_comment: true
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          go-version: '1.25.4'
+
+      - name: Run Go SDK tests
+        if: steps.sync_sdks.outputs.changed == 'true'
+        run: go test ./...
+        working-directory: ./sdks/go
+
+      - name: Run CLI tests
+        if: steps.sync_sdks.outputs.changed == 'true'
+        run: go test ./...
+        working-directory: ./apps/cli
+
+      - name: Set up Node
+        if: steps.sync_sdks.outputs.changed == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Set up pnpm
+        if: steps.sync_sdks.outputs.changed == 'true'
+        uses: pnpm/action-setup@v4
+        with:
+          version: '10.24.0'
+
+      - name: Run TypeScript SDK tests
+        if: steps.sync_sdks.outputs.changed == 'true'
+        run: |
+          ./scripts/bootstrap
+          ./scripts/test
+        working-directory: ./sdks/ts
+
+      - name: Commit synced SDK changes
+        if: steps.sync_sdks.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add sdks/go sdks/ts
+          git commit -m "chore(stainless): sync SDKs for PR #${{ github.event.pull_request.number }}"
+
+      - name: Push synced SDK changes
+        if: steps.sync_sdks.outputs.changed == 'true'
+        run: git push origin "HEAD:${{ github.event.pull_request.head.ref }}"

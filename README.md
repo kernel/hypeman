@@ -60,6 +60,7 @@ curl -fsSL https://get.hypeman.sh/cli | bash
 ```bash
 go install 'github.com/kernel/hypeman-cli/cmd/hypeman@latest'
 ```
+The CLI and SDK source now lives in this monorepo; external package/release identities are mirrored for compatibility.
 
 Then create a CLI config file at `~/.config/hypeman/cli.yaml`:
 
@@ -182,6 +183,13 @@ hypeman logs --source hypeman my-app
 For all available commands, run `hypeman --help`.
 
 ## Development
+
+Monorepo layout:
+
+- `cmd/`, `lib/`, `integration/`: Hypeman server and API
+- `apps/cli`: Hypeman CLI source
+- `sdks/go`: Stainless-generated Go SDK source
+- `sdks/ts`: Stainless-generated TypeScript SDK source
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for build instructions, configuration options, and contributing guidelines.
 

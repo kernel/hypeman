@@ -1,4 +1,4 @@
-name: Release Hypeman API
+name: Release Hypeman Monorepo
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  release-server:
     runs-on: [self-hosted, linux, x64, kvm]
     steps:
       - name: Checkout
@@ -34,3 +34,41 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  release-components:
+    needs: release-server
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.25.4'
+
+      - name: Verify CLI and Go SDK release build
+        run: go test ./...
+        working-directory: ./apps/cli
+
+      - name: Verify Go SDK tests
+        run: go test ./...
+        working-directory: ./sdks/go
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: '10.24.0'
+
+      - name: Verify TypeScript SDK build
+        run: |
+          ./scripts/bootstrap
+          ./scripts/build
+        working-directory: ./sdks/ts

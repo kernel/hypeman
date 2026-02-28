@@ -9,7 +9,7 @@
 #   VERSION      - Install specific API version (default: latest)
 #   CLI_VERSION  - Install specific CLI version (default: latest)
 #   BRANCH       - Build from source using this branch (for development/testing)
-#   CLI_BRANCH   - Build CLI from source using this branch of kernel/hypeman-cli
+#   CLI_BRANCH   - Build CLI from source using this branch of kernel/hypeman
 #   BINARY_DIR   - Use binaries from this directory instead of building/downloading
 #   INSTALL_DIR  - Binary installation directory (default: /opt/hypeman/bin on Linux, /usr/local/bin on macOS)
 #   DATA_DIR     - Data directory (default: /var/lib/hypeman on Linux, ~/Library/Application Support/hypeman on macOS)
@@ -161,6 +161,11 @@ count=0
 
 if [ "$count" -gt 1 ]; then
     error "BRANCH, VERSION, and BINARY_DIR are mutually exclusive"
+fi
+
+# When building API from source, default CLI source branch to the same branch.
+if [ -n "$BRANCH" ] && [ -z "$CLI_BRANCH" ]; then
+    CLI_BRANCH="$BRANCH"
 fi
 
 # Additional checks for build-from-source mode
@@ -629,22 +634,22 @@ fi
 # Install Hypeman CLI
 # =============================================================================
 
-CLI_REPO="kernel/hypeman-cli"
+CLI_RELEASE_REPO="kernel/hypeman-cli"
 CLI_INSTALLED=false
 
 if [ -n "$CLI_BRANCH" ]; then
     # Build CLI from source
-    info "Building CLI from source (branch: $CLI_BRANCH)..."
+    info "Building CLI from monorepo source (branch: $CLI_BRANCH)..."
     command -v go >/dev/null 2>&1 || error "go is required for CLI_BRANCH mode but not installed"
 
-    CLI_BUILD_DIR="${TMP_DIR}/hypeman-cli"
-    if ! git clone --branch "$CLI_BRANCH" --depth 1 -q "https://github.com/${CLI_REPO}.git" "$CLI_BUILD_DIR" 2>&1; then
-        error "Failed to clone CLI repository (branch: $CLI_BRANCH)"
+    CLI_BUILD_DIR="${TMP_DIR}/hypeman"
+    if ! git clone --branch "$CLI_BRANCH" --depth 1 -q "https://github.com/${REPO}.git" "$CLI_BUILD_DIR" 2>&1; then
+        error "Failed to clone monorepo for CLI build (branch: $CLI_BRANCH)"
     fi
 
     info "Compiling CLI..."
     mkdir -p "${TMP_DIR}/cli-bin"
-    if ! (cd "$CLI_BUILD_DIR" && go build -o "${TMP_DIR}/cli-bin/hypeman" ./cmd/hypeman 2>&1); then
+    if ! (cd "$CLI_BUILD_DIR" && go build -o "${TMP_DIR}/cli-bin/hypeman" ./apps/cli/cmd/hypeman 2>&1); then
         error "Failed to build CLI from source"
     fi
 
@@ -668,7 +673,7 @@ else
 
     if [ -z "$CLI_VERSION" ] || [ "$CLI_VERSION" == "latest" ]; then
         info "Fetching latest CLI version with available artifacts..."
-        CLI_VERSION=$(find_release_with_artifact "$CLI_REPO" "hypeman" "$CLI_OS" "$ARCH" "$CLI_EXT" || true)
+        CLI_VERSION=$(find_release_with_artifact "$CLI_RELEASE_REPO" "hypeman" "$CLI_OS" "$ARCH" "$CLI_EXT" || true)
         if [ -z "$CLI_VERSION" ]; then
             warn "Failed to find a CLI release with artifacts for ${CLI_OS}/${ARCH}, skipping CLI installation"
         fi
@@ -679,7 +684,7 @@ else
 
         CLI_VERSION_NUM="${CLI_VERSION#v}"
         CLI_ARCHIVE_NAME="hypeman_${CLI_VERSION_NUM}_${CLI_OS}_${ARCH}.${CLI_EXT}"
-        CLI_DOWNLOAD_URL="https://github.com/${CLI_REPO}/releases/download/${CLI_VERSION}/${CLI_ARCHIVE_NAME}"
+        CLI_DOWNLOAD_URL="https://github.com/${CLI_RELEASE_REPO}/releases/download/${CLI_VERSION}/${CLI_ARCHIVE_NAME}"
 
         info "Downloading CLI ${CLI_ARCHIVE_NAME}..."
         if curl -fsSL "$CLI_DOWNLOAD_URL" -o "${TMP_DIR}/${CLI_ARCHIVE_NAME}"; then

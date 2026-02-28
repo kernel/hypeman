@@ -1,5 +1,5 @@
 SHELL := /bin/bash
-.PHONY: oapi-generate generate-vmm-client generate-wire generate-all dev build build-linux test test-linux test-darwin install-tools gen-jwt download-ch-binaries download-ch-spec ensure-ch-binaries build-caddy-binaries build-caddy ensure-caddy-binaries  release-prep clean build-embedded
+.PHONY: oapi-generate generate-vmm-client generate-wire generate-all dev build build-linux test test-linux test-darwin test-cli test-sdk-go test-sdk-ts test-monorepo install-tools gen-jwt download-ch-binaries download-ch-spec ensure-ch-binaries build-caddy-binaries build-caddy ensure-caddy-binaries release-prep clean build-embedded
 
 # Directory where local binaries will be installed
 BIN_DIR ?= $(CURDIR)/bin
@@ -225,6 +225,21 @@ ifeq ($(shell uname -s),Darwin)
 else
 	$(MAKE) test-linux
 endif
+
+# Run monorepo component tests
+test-monorepo: test test-cli test-sdk-go test-sdk-ts
+
+# Run CLI tests against local workspace dependencies
+test-cli:
+	cd apps/cli && go test ./...
+
+# Run Go SDK tests
+test-sdk-go:
+	cd sdks/go && go test ./...
+
+# Run TypeScript SDK tests
+test-sdk-ts:
+	cd sdks/ts && pnpm install --frozen-lockfile && pnpm test
 
 # Linux tests (as root for network capabilities)
 test-linux: ensure-ch-binaries ensure-caddy-binaries build-embedded

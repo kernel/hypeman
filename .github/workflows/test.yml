@@ -2,21 +2,68 @@ name: Test
 
 on:
   push: {}
+  pull_request: {}
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      server: ${{ steps.filter.outputs.server }}
+      cli: ${{ steps.filter.outputs.cli }}
+      sdk_go: ${{ steps.filter.outputs.sdk_go }}
+      sdk_ts: ${{ steps.filter.outputs.sdk_ts }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            server:
+              - 'cmd/**'
+              - 'lib/**'
+              - 'integration/**'
+              - 'scripts/**'
+              - 'openapi.yaml'
+              - 'go.mod'
+              - 'go.sum'
+              - 'Makefile'
+              - '.github/workflows/test.yml'
+              - '!apps/cli/**'
+              - '!sdks/**'
+            cli:
+              - 'apps/cli/**'
+              - 'sdks/go/**'
+              - 'openapi.yaml'
+              - 'stainless.yaml'
+              - 'go.work'
+              - '.github/workflows/stainless-sdks.yml'
+              - '.github/workflows/test.yml'
+            sdk_go:
+              - 'sdks/go/**'
+              - 'openapi.yaml'
+              - 'stainless.yaml'
+              - '.github/workflows/stainless-sdks.yml'
+              - '.github/workflows/test.yml'
+            sdk_ts:
+              - 'sdks/ts/**'
+              - 'openapi.yaml'
+              - 'stainless.yaml'
+              - '.github/workflows/stainless-sdks.yml'
+              - '.github/workflows/test.yml'
+
   test:
+    needs: changes
+    if: needs.changes.outputs.server == 'true'
     runs-on: [self-hosted, linux, x64, kvm]
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          # Not necessary to upload cache on self-hosted runner(s)
-          # ~/go/pkg/mod and ~/.cache/go-build stay on disk between runs automatically.
           cache: false
           go-version: '1.25.4'
-      
+
       - name: Install dependencies
         run: |
           set -xe
@@ -27,9 +74,7 @@ jobs:
             sudo apt-get install -y erofs-utils e2fsprogs iptables
           fi
           go mod download
-      
-      # Avoids rate limits when running the tests
-      # Tests includes pulling, then converting to disk images
+
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
@@ -58,12 +103,10 @@ jobs:
             echo "$unformatted"
             exit 1
           fi
-     
+
       - name: Run tests
         env:
-          # Docker auth for tests running as root (sudo)
           DOCKER_CONFIG: /home/debianuser/.docker
-          # TLS/ACME testing (optional - tests will skip if not configured)
           ACME_EMAIL: ${{ secrets.ACME_EMAIL }}
           ACME_DNS_PROVIDER: "cloudflare"
           ACME_CA: "https://acme-staging-v02.api.letsencrypt.org/directory"
@@ -73,6 +116,8 @@ jobs:
         run: make test
 
   test-darwin:
+    needs: changes
+    if: needs.changes.outputs.server == 'true'
     runs-on: [self-hosted, macos, arm64]
     concurrency:
       group: macos-ci-test-${{ github.ref }}
@@ -101,7 +146,6 @@ jobs:
         run: make oapi-generate
       - name: Build
         run: make build
-
       - name: Check gofmt
         run: |
           set -euo pipefail
@@ -115,7 +159,6 @@ jobs:
             echo "$unformatted"
             exit 1
           fi
-
       - name: Run tests
         env:
           DEFAULT_HYPERVISOR: vz
@@ -129,8 +172,9 @@ jobs:
           make clean
 
   e2e-install:
+    needs: [changes, test-darwin]
+    if: needs.changes.outputs.server == 'true'
     runs-on: [self-hosted, macos, arm64]
-    needs: test-darwin
     concurrency:
       group: macos-ci-e2e-${{ github.ref }}
       cancel-in-progress: true
@@ -147,3 +191,53 @@ jobs:
       - name: Cleanup on failure
         if: failure()
         run: bash scripts/uninstall.sh || true
+
+  test-cli:
+    needs: changes
+    if: needs.changes.outputs.cli == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          cache: true
+          go-version: '1.25.4'
+      - name: Run CLI tests
+        run: go test ./...
+        working-directory: ./apps/cli
+
+  test-sdk-go:
+    needs: changes
+    if: needs.changes.outputs.sdk_go == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          cache: true
+          go-version-file: ./sdks/go/go.mod
+      - name: Run Go SDK tests
+        run: go test ./...
+        working-directory: ./sdks/go
+
+  test-sdk-ts:
+    needs: changes
+    if: needs.changes.outputs.sdk_ts == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: '10.24.0'
+      - name: Run TypeScript SDK tests
+        run: |
+          ./scripts/bootstrap
+          ./scripts/test
+        working-directory: ./sdks/ts

@@ -1,0 +1,64 @@
+name: Mirror Monorepo Components
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: "Monorepo ref to mirror (branch, tag, or SHA)"
+        required: true
+        default: "main"
+      dry_run:
+        description: "Preview only (no pushes)"
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source ref
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.source_ref }}
+
+      - name: Configure mirror remotes
+        env:
+          MIRROR_PUSH_TOKEN: ${{ secrets.MIRROR_PUSH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MIRROR_PUSH_TOKEN}" ]; then
+            echo "MIRROR_PUSH_TOKEN is required"
+            exit 1
+          fi
+
+          git remote add mirror-cli "https://x-access-token:${MIRROR_PUSH_TOKEN}@github.com/kernel/hypeman-cli.git"
+          git remote add mirror-sdk-go "https://x-access-token:${MIRROR_PUSH_TOKEN}@github.com/kernel/hypeman-go.git"
+          git remote add mirror-sdk-ts "https://x-access-token:${MIRROR_PUSH_TOKEN}@github.com/onkernel/hypeman-ts.git"
+
+      - name: Build subtree branches
+        run: |
+          set -euo pipefail
+          git subtree split --prefix=apps/cli -b mirror-cli-branch
+          git subtree split --prefix=sdks/go -b mirror-sdk-go-branch
+          git subtree split --prefix=sdks/ts -b mirror-sdk-ts-branch
+
+      - name: Preview mirror pushes
+        if: ${{ inputs.dry_run == true }}
+        run: |
+          echo "Dry run enabled. Would push:"
+          echo "  mirror-cli-branch -> kernel/hypeman-cli:main"
+          echo "  mirror-sdk-go-branch -> kernel/hypeman-go:main"
+          echo "  mirror-sdk-ts-branch -> onkernel/hypeman-ts:main"
+
+      - name: Push mirrors
+        if: ${{ inputs.dry_run != true }}
+        run: |
+          set -euo pipefail
+          git push mirror-cli mirror-cli-branch:main --force-with-lease
+          git push mirror-sdk-go mirror-sdk-go-branch:main --force-with-lease
+          git push mirror-sdk-ts mirror-sdk-ts-branch:main --force-with-lease

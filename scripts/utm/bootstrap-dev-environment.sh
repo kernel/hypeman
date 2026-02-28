@@ -100,9 +100,6 @@ mkdir -p ~/code
 
 REPOS=(
     "kernel/hypeman"
-    "kernel/hypeman-ts"
-    "kernel/hypeman-go"
-    "kernel/hypeman-cli"
     "kernel/linux"
 )
 
