@@ -48,6 +48,65 @@ func TestForkInstanceNotSupportedHypervisor(t *testing.T) {
 	assert.ErrorIs(t, err, ErrNotSupported)
 }
 
+func TestResolveForkTargetState_DefaultsToSourceState(t *testing.T) {
+	tests := []struct {
+		name   string
+		source State
+		want   State
+	}{
+		{name: "running", source: StateRunning, want: StateRunning},
+		{name: "standby", source: StateStandby, want: StateStandby},
+		{name: "stopped", source: StateStopped, want: StateStopped},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := resolveForkTargetState("", tc.source)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestValidateForkRequest_InvalidTargetState(t *testing.T) {
+	err := validateForkRequest(ForkInstanceRequest{
+		Name:        "fork-invalid-target",
+		TargetState: State("Created"),
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidRequest)
+}
+
+func TestCleanupForkInstanceOnError(t *testing.T) {
+	manager, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	forkID := "fork-cleanup-target"
+	require.NoError(t, manager.ensureDirectories(forkID))
+
+	meta := &metadata{StoredMetadata: StoredMetadata{
+		Id:                forkID,
+		Name:              "fork-cleanup-target",
+		Image:             "docker.io/library/alpine:latest",
+		CreatedAt:         time.Now(),
+		HypervisorType:    hypervisor.TypeCloudHypervisor,
+		HypervisorVersion: "test",
+		SocketPath:        paths.New(manager.paths.DataDir()).InstanceSocket(forkID, "cloud-hypervisor.sock"),
+		DataDir:           paths.New(manager.paths.DataDir()).InstanceDir(forkID),
+		VsockCID:          43,
+		VsockSocket:       paths.New(manager.paths.DataDir()).InstanceVsockSocket(forkID),
+	}}
+	require.NoError(t, manager.saveMetadata(meta))
+
+	require.DirExists(t, meta.DataDir)
+	require.NoError(t, manager.cleanupForkInstanceOnError(ctx, forkID))
+	assert.NoDirExists(t, meta.DataDir)
+
+	_, err := manager.loadMetadata(forkID)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrNotFound)
+}
+
 func TestForkCloudHypervisorFromRunningNetwork(t *testing.T) {
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Skip("/dev/kvm not available, skipping on this platform")
@@ -109,9 +168,10 @@ func TestForkCloudHypervisorFromRunningNetwork(t *testing.T) {
 	forked, err := manager.ForkInstance(ctx, source.Id, ForkInstanceRequest{
 		Name:        "fork-running-copy",
 		FromRunning: true,
+		TargetState: StateRunning,
 	})
 	require.NoError(t, err)
-	require.Equal(t, StateStandby, forked.State)
+	require.Equal(t, StateRunning, forked.State)
 	forkedID := forked.Id
 	t.Cleanup(func() { _ = manager.DeleteInstance(context.Background(), forkedID) })
 
@@ -122,10 +182,7 @@ func TestForkCloudHypervisorFromRunningNetwork(t *testing.T) {
 	require.NotEmpty(t, sourceAfterFork.IP)
 	assertHostCanReachNginx(t, sourceAfterFork.IP, 80, 60*time.Second)
 
-	// Restore fork and validate both VMs are independently reachable on private IPs.
-	forked, err = manager.RestoreInstance(ctx, forkedID)
-	require.NoError(t, err)
-	require.Equal(t, StateRunning, forked.State)
+	// Fork should already be running with target_state=Running.
 	require.NoError(t, waitForVMReady(ctx, forked.SocketPath, 5*time.Second))
 
 	assert.NotEmpty(t, forked.IP)

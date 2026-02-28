@@ -260,6 +260,7 @@ func TestForkInstance_Success(t *testing.T) {
 	require.NotNil(t, mockMgr.lastReq)
 	assert.Equal(t, "forked-instance", mockMgr.lastReq.Name)
 	assert.False(t, mockMgr.lastReq.FromRunning)
+	assert.Equal(t, instances.State(""), mockMgr.lastReq.TargetState)
 }
 
 func TestForkInstance_NotSupported(t *testing.T) {
@@ -367,6 +368,7 @@ func TestForkInstance_FromRunningFlagForwarded(t *testing.T) {
 	svc.InstanceManager = mockMgr
 
 	fromRunning := true
+	targetState := oapi.ForkTargetStateRunning
 	resp, err := svc.ForkInstance(
 		mw.WithResolvedInstance(ctx(), source.Id, source),
 		oapi.ForkInstanceRequestObject{
@@ -374,6 +376,7 @@ func TestForkInstance_FromRunningFlagForwarded(t *testing.T) {
 			Body: &oapi.ForkInstanceRequest{
 				Name:        "forked-instance",
 				FromRunning: &fromRunning,
+				TargetState: &targetState,
 			},
 		},
 	)
@@ -383,6 +386,7 @@ func TestForkInstance_FromRunningFlagForwarded(t *testing.T) {
 	require.True(t, ok, "expected 201 response")
 	require.NotNil(t, mockMgr.lastReq)
 	assert.True(t, mockMgr.lastReq.FromRunning)
+	assert.Equal(t, instances.StateRunning, mockMgr.lastReq.TargetState)
 }
 
 func TestInstanceLifecycle_StopStart(t *testing.T) {

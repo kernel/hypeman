@@ -179,6 +179,7 @@ type StartInstanceRequest struct {
 type ForkInstanceRequest struct {
 	Name        string // Required: name for the new forked instance
 	FromRunning bool   // Optional: allow forking from Running by auto standby/fork/restore
+	TargetState State  // Optional: desired final state of forked instance (Stopped, Standby, Running). Empty means inherit source state.
 }
 
 // AttachVolumeRequest is the domain request for attaching a volume (used for API compatibility)

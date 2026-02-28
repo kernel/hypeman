@@ -467,9 +467,15 @@ func (s *ApiService) ForkInstance(ctx context.Context, request oapi.ForkInstance
 		}, nil
 	}
 
+	targetState := instances.State("")
+	if request.Body.TargetState != nil {
+		targetState = instances.State(*request.Body.TargetState)
+	}
+
 	result, err := s.InstanceManager.ForkInstance(ctx, inst.Id, instances.ForkInstanceRequest{
 		Name:        request.Body.Name,
 		FromRunning: request.Body.FromRunning != nil && *request.Body.FromRunning,
+		TargetState: targetState,
 	})
 	if err != nil {
 		switch {

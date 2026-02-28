@@ -13,6 +13,7 @@ OAPI_CODEGEN_VERSION ?= v2.5.1
 AIR ?= $(BIN_DIR)/air
 WIRE ?= $(BIN_DIR)/wire
 XCADDY ?= $(BIN_DIR)/xcaddy
+TEST_TIMEOUT ?= 10m
 
 # Install oapi-codegen
 $(OAPI_CODEGEN): | $(BIN_DIR)
@@ -233,9 +234,9 @@ test-linux: ensure-ch-binaries ensure-caddy-binaries build-embedded
 	if [ -n "$(VERBOSE)" ]; then VERBOSE_FLAG="-v"; fi; \
 	if [ -n "$(TEST)" ]; then \
 		echo "Running specific test: $(TEST)"; \
-		sudo env "PATH=$$TEST_PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" go test -tags containers_image_openpgp -run=$(TEST) $$VERBOSE_FLAG -timeout=300s ./...; \
+		sudo env "PATH=$$TEST_PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" go test -tags containers_image_openpgp -run=$(TEST) $$VERBOSE_FLAG -timeout=$(TEST_TIMEOUT) ./...; \
 	else \
-		sudo env "PATH=$$TEST_PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" go test -tags containers_image_openpgp $$VERBOSE_FLAG -timeout=300s ./...; \
+		sudo env "PATH=$$TEST_PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" go test -tags containers_image_openpgp $$VERBOSE_FLAG -timeout=$(TEST_TIMEOUT) ./...; \
 	fi
 
 # macOS tests (no sudo needed, adds e2fsprogs to PATH)
@@ -250,10 +251,10 @@ test-darwin: build-embedded sign-vz-shim
 	if [ -n "$(TEST)" ]; then \
 		echo "Running specific test: $(TEST)"; \
 		PATH="/opt/homebrew/opt/e2fsprogs/sbin:$(PATH)" \
-		go test -tags containers_image_openpgp -run=$(TEST) $$VERBOSE_FLAG -timeout=300s $$PKGS; \
+		go test -tags containers_image_openpgp -run=$(TEST) $$VERBOSE_FLAG -timeout=$(TEST_TIMEOUT) $$PKGS; \
 	else \
 		PATH="/opt/homebrew/opt/e2fsprogs/sbin:$(PATH)" \
-		go test -tags containers_image_openpgp $$VERBOSE_FLAG -timeout=300s $$PKGS; \
+		go test -tags containers_image_openpgp $$VERBOSE_FLAG -timeout=$(TEST_TIMEOUT) $$PKGS; \
 	fi
 
 # Generate JWT token for testing

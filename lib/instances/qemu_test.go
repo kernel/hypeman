@@ -930,6 +930,7 @@ func TestQEMUForkFromRunningNetwork(t *testing.T) {
 	forked, err := manager.ForkInstance(ctx, source.Id, ForkInstanceRequest{
 		Name:        "qemu-fork-running-copy",
 		FromRunning: true,
+		TargetState: StateStandby,
 	})
 	require.NoError(t, err)
 	require.Equal(t, StateStandby, forked.State)

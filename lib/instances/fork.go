@@ -30,6 +30,10 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 		return nil, err
 	}
 	source := m.toInstance(ctx, meta)
+	targetState, err := resolveForkTargetState(req.TargetState, source.State)
+	if err != nil {
+		return nil, err
+	}
 
 	switch source.State {
 	case StateRunning:
@@ -51,6 +55,9 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 		if forkErr == nil {
 			if err := m.rotateSourceVsockForRestore(ctx, id, forked.Id); err != nil {
 				forkErr = fmt.Errorf("prepare source snapshot for restore: %w", err)
+				if cleanupErr := m.cleanupForkInstanceOnError(ctx, forked.Id); cleanupErr != nil {
+					forkErr = fmt.Errorf("%v; additionally failed to cleanup forked instance %s: %v", forkErr, forked.Id, cleanupErr)
+				}
 			}
 		}
 		log.InfoContext(ctx, "restoring source instance after running fork", "source_instance_id", id)
@@ -65,9 +72,13 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 		if forkErr != nil {
 			return nil, forkErr
 		}
-		return forked, nil
+		return m.applyForkTargetState(ctx, forked.Id, targetState)
 	case StateStopped, StateStandby:
-		return m.forkInstanceFromStoppedOrStandby(ctx, id, req)
+		forked, err := m.forkInstanceFromStoppedOrStandby(ctx, id, req)
+		if err != nil {
+			return nil, err
+		}
+		return m.applyForkTargetState(ctx, forked.Id, targetState)
 	default:
 		return nil, fmt.Errorf("%w: cannot fork from state %s (must be Stopped or Standby, or Running with from_running=true)", ErrInvalidState, source.State)
 	}
@@ -254,5 +265,79 @@ func validateForkRequest(req ForkInstanceRequest) error {
 	if err := validateInstanceName(req.Name); err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidRequest, err)
 	}
+	if req.TargetState != "" && req.TargetState != StateStopped && req.TargetState != StateStandby && req.TargetState != StateRunning {
+		return fmt.Errorf("%w: invalid fork target state %q (must be one of %s, %s, %s)", ErrInvalidRequest, req.TargetState, StateStopped, StateStandby, StateRunning)
+	}
 	return nil
+}
+
+func resolveForkTargetState(requested State, sourceState State) (State, error) {
+	if requested == "" {
+		switch sourceState {
+		case StateRunning, StateStandby, StateStopped:
+			return sourceState, nil
+		default:
+			return "", fmt.Errorf("%w: cannot derive fork target state from source state %s", ErrInvalidState, sourceState)
+		}
+	}
+	return requested, nil
+}
+
+func (m *manager) applyForkTargetState(ctx context.Context, forkID string, target State) (*Instance, error) {
+	lock := m.getInstanceLock(forkID)
+	lock.Lock()
+	defer lock.Unlock()
+
+	current, err := m.getInstance(ctx, forkID)
+	if err != nil {
+		return nil, err
+	}
+	if current.State == target {
+		return current, nil
+	}
+
+	switch current.State {
+	case StateStopped:
+		switch target {
+		case StateRunning:
+			return m.startInstance(ctx, forkID, StartInstanceRequest{})
+		case StateStandby:
+			if _, err := m.startInstance(ctx, forkID, StartInstanceRequest{}); err != nil {
+				return nil, fmt.Errorf("start forked instance for standby transition: %w", err)
+			}
+			return m.standbyInstance(ctx, forkID)
+		}
+	case StateStandby:
+		switch target {
+		case StateRunning:
+			return m.restoreInstance(ctx, forkID)
+		case StateStopped:
+			if err := os.RemoveAll(m.paths.InstanceSnapshotLatest(forkID)); err != nil {
+				return nil, fmt.Errorf("remove fork snapshot: %w", err)
+			}
+			return m.getInstance(ctx, forkID)
+		}
+	case StateRunning:
+		switch target {
+		case StateStandby:
+			return m.standbyInstance(ctx, forkID)
+		case StateStopped:
+			return m.stopInstance(ctx, forkID)
+		}
+	}
+
+	return nil, fmt.Errorf("%w: cannot transition forked instance from %s to %s", ErrInvalidState, current.State, target)
+}
+
+func (m *manager) cleanupForkInstanceOnError(ctx context.Context, forkID string) error {
+	lock := m.getInstanceLock(forkID)
+	lock.Lock()
+	defer lock.Unlock()
+
+	err := m.deleteInstance(ctx, forkID)
+	if err == nil || errors.Is(err, ErrNotFound) {
+		m.instanceLocks.Delete(forkID)
+		return nil
+	}
+	return err
 }
