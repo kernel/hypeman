@@ -51,7 +51,7 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 			return nil, fmt.Errorf("standby source instance: %w", err)
 		}
 
-		forked, forkErr := m.forkInstanceFromStoppedOrStandby(ctx, id, req)
+		forked, forkErr := m.forkInstanceFromStoppedOrStandby(ctx, id, req, true)
 		if forkErr == nil {
 			if err := m.rotateSourceVsockForRestore(ctx, id, forked.Id); err != nil {
 				forkErr = fmt.Errorf("prepare source snapshot for restore: %w", err)
@@ -74,7 +74,7 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 		}
 		return m.applyForkTargetState(ctx, forked.Id, targetState)
 	case StateStopped, StateStandby:
-		forked, err := m.forkInstanceFromStoppedOrStandby(ctx, id, req)
+		forked, err := m.forkInstanceFromStoppedOrStandby(ctx, id, req, false)
 		if err != nil {
 			return nil, err
 		}
@@ -101,17 +101,20 @@ func (m *manager) rotateSourceVsockForRestore(ctx context.Context, sourceID, for
 		return fmt.Errorf("get vm starter: %w", err)
 	}
 
-	if err := starter.PrepareFork(ctx, hypervisor.ForkPrepareRequest{
+	prepareResult, err := starter.PrepareFork(ctx, hypervisor.ForkPrepareRequest{
 		SnapshotConfigPath: m.paths.InstanceSnapshotConfig(sourceID),
 		VsockCID:           newCID,
 		VsockSocket:        stored.VsockSocket,
-	}); err != nil {
+	})
+	if err != nil {
 		return fmt.Errorf("rewrite source snapshot vsock state: %w", err)
 	}
 
-	stored.VsockCID = newCID
-	if err := m.saveMetadata(meta); err != nil {
-		return fmt.Errorf("save source metadata: %w", err)
+	if prepareResult.VsockCIDUpdated {
+		stored.VsockCID = newCID
+		if err := m.saveMetadata(meta); err != nil {
+			return fmt.Errorf("save source metadata: %w", err)
+		}
 	}
 	return nil
 }
@@ -126,7 +129,7 @@ func generateForkSourceVsockCID(sourceID, forkID string, current int64) int64 {
 	return cid
 }
 
-func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id string, req ForkInstanceRequest) (*Instance, error) {
+func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id string, req ForkInstanceRequest, supportValidated bool) (*Instance, error) {
 	log := logger.FromContext(ctx)
 
 	meta, err := m.loadMetadata(id)
@@ -144,8 +147,10 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 		return nil, fmt.Errorf("%w: cannot fork from state %s (must be Stopped or Standby)", ErrInvalidState, source.State)
 	}
 
-	if err := m.validateForkSupport(ctx, stored.HypervisorType); err != nil {
-		return nil, err
+	if !supportValidated {
+		if err := m.validateForkSupport(ctx, stored.HypervisorType); err != nil {
+			return nil, err
+		}
 	}
 
 	if stored.NetworkEnabled {
@@ -216,7 +221,7 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 		if forkMeta.NetworkEnabled {
 			netCfg = &hypervisor.ForkNetworkConfig{TAPDevice: network.GenerateTAPName(forkID)}
 		}
-		if err := starter.PrepareFork(ctx, hypervisor.ForkPrepareRequest{
+		if _, err := starter.PrepareFork(ctx, hypervisor.ForkPrepareRequest{
 			SnapshotConfigPath: snapshotConfigPath,
 			SourceDataDir:      stored.DataDir,
 			TargetDataDir:      forkMeta.DataDir,
@@ -252,7 +257,7 @@ func (m *manager) validateForkSupport(ctx context.Context, hvType hypervisor.Typ
 	if err != nil {
 		return fmt.Errorf("get vm starter: %w", err)
 	}
-	if err := starter.PrepareFork(ctx, hypervisor.ForkPrepareRequest{}); err != nil {
+	if _, err := starter.PrepareFork(ctx, hypervisor.ForkPrepareRequest{}); err != nil {
 		if errors.Is(err, hypervisor.ErrNotSupported) {
 			return fmt.Errorf("%w: fork is not supported for hypervisor %s", ErrNotSupported, hvType)
 		}

@@ -130,7 +130,7 @@ func (m *manager) restoreInstance(
 			stored.IP = netConfig.IP
 			stored.MAC = netConfig.MAC
 
-			if err := starter.PrepareFork(ctx, hypervisor.ForkPrepareRequest{
+			if _, err := starter.PrepareFork(ctx, hypervisor.ForkPrepareRequest{
 				SnapshotConfigPath: m.paths.InstanceSnapshotConfig(id),
 				VsockCID:           stored.VsockCID,
 				VsockSocket:        stored.VsockSocket,

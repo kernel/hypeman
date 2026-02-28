@@ -3,10 +3,12 @@ package instances
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -133,6 +135,77 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 	require.Equal(t, "0000:01:00.0", src.Devices[0])
 	require.Equal(t, "/bin/sh", src.Entrypoint[0])
 	require.Equal(t, "echo", src.Cmd[0])
+}
+
+func TestRotateSourceVsockForRestore_CloudHypervisorDoesNotPersistCIDRewrite(t *testing.T) {
+	manager, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	sourceID := "fork-rotate-ch-source"
+	forkID := "fork-rotate-ch-fork"
+	require.NoError(t, manager.ensureDirectories(sourceID))
+
+	snapshotConfigPath := manager.paths.InstanceSnapshotConfig(sourceID)
+	require.NoError(t, os.MkdirAll(filepath.Dir(snapshotConfigPath), 0755))
+	require.NoError(t, os.WriteFile(snapshotConfigPath, []byte(`{"vsock":{"cid":100,"socket":"/tmp/vsock.sock"}}`), 0644))
+
+	meta := &metadata{StoredMetadata: StoredMetadata{
+		Id:             sourceID,
+		Name:           sourceID,
+		CreatedAt:      time.Now(),
+		HypervisorType: hypervisor.TypeCloudHypervisor,
+		SocketPath:     manager.paths.InstanceSocket(sourceID, "cloud-hypervisor.sock"),
+		DataDir:        manager.paths.InstanceDir(sourceID),
+		VsockCID:       100,
+		VsockSocket:    manager.paths.InstanceVsockSocket(sourceID),
+	}}
+	require.NoError(t, manager.saveMetadata(meta))
+
+	expectedCID := generateForkSourceVsockCID(sourceID, forkID, meta.StoredMetadata.VsockCID)
+	require.NotEqual(t, meta.StoredMetadata.VsockCID, expectedCID)
+
+	require.NoError(t, manager.rotateSourceVsockForRestore(ctx, sourceID, forkID))
+
+	updated, err := manager.loadMetadata(sourceID)
+	require.NoError(t, err)
+	assert.Equal(t, int64(100), updated.StoredMetadata.VsockCID)
+}
+
+func TestRotateSourceVsockForRestore_QEMUPersistsCIDRewrite(t *testing.T) {
+	manager, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	sourceID := "fork-rotate-qemu-source"
+	forkID := "fork-rotate-qemu-fork"
+	require.NoError(t, manager.ensureDirectories(sourceID))
+
+	snapshotConfigPath := manager.paths.InstanceSnapshotConfig(sourceID)
+	snapshotDir := filepath.Dir(snapshotConfigPath)
+	require.NoError(t, os.MkdirAll(snapshotDir, 0755))
+	require.NoError(t, os.WriteFile(snapshotConfigPath, []byte(`{}`), 0644))
+
+	qemuConfig, err := json.Marshal(hypervisor.VMConfig{VsockCID: 100, VsockSocket: manager.paths.InstanceVsockSocket(sourceID)})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(snapshotDir, "qemu-config.json"), qemuConfig, 0644))
+
+	meta := &metadata{StoredMetadata: StoredMetadata{
+		Id:             sourceID,
+		Name:           sourceID,
+		CreatedAt:      time.Now(),
+		HypervisorType: hypervisor.TypeQEMU,
+		SocketPath:     manager.paths.InstanceSocket(sourceID, "qemu.sock"),
+		DataDir:        manager.paths.InstanceDir(sourceID),
+		VsockCID:       100,
+		VsockSocket:    manager.paths.InstanceVsockSocket(sourceID),
+	}}
+	require.NoError(t, manager.saveMetadata(meta))
+
+	expectedCID := generateForkSourceVsockCID(sourceID, forkID, meta.StoredMetadata.VsockCID)
+	require.NoError(t, manager.rotateSourceVsockForRestore(ctx, sourceID, forkID))
+
+	updated, err := manager.loadMetadata(sourceID)
+	require.NoError(t, err)
+	assert.Equal(t, expectedCID, updated.StoredMetadata.VsockCID)
 }
 
 func TestForkCloudHypervisorFromRunningNetwork(t *testing.T) {

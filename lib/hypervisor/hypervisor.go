@@ -86,7 +86,7 @@ type VMStarter interface {
 	// For snapshot-based forks, implementations can rewrite snapshot config with
 	// fork identity (paths, vsock, network). Hypervisors that don't support fork
 	// should return ErrNotSupported.
-	PrepareFork(ctx context.Context, req ForkPrepareRequest) error
+	PrepareFork(ctx context.Context, req ForkPrepareRequest) (ForkPrepareResult, error)
 }
 
 // ForkNetworkConfig contains network identity fields for fork preparation.
@@ -111,6 +111,13 @@ type ForkPrepareRequest struct {
 
 	SerialLogPath string
 	Network       *ForkNetworkConfig
+}
+
+// ForkPrepareResult describes which optional fork rewrites were actually applied.
+type ForkPrepareResult struct {
+	// VsockCIDUpdated indicates whether snapshot state was updated to use
+	// ForkPrepareRequest.VsockCID.
+	VsockCIDUpdated bool
 }
 
 // Hypervisor defines the interface for VM control operations.

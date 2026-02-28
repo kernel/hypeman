@@ -12,10 +12,10 @@ import (
 
 // PrepareFork prepares QEMU fork state by rewriting snapshot VM config when a
 // snapshot path is provided. For stopped forks (no snapshot), this is a no-op.
-func (s *Starter) PrepareFork(ctx context.Context, req hypervisor.ForkPrepareRequest) error {
+func (s *Starter) PrepareFork(ctx context.Context, req hypervisor.ForkPrepareRequest) (hypervisor.ForkPrepareResult, error) {
 	_ = ctx
 	if req.SnapshotConfigPath == "" {
-		return nil
+		return hypervisor.ForkPrepareResult{}, nil
 	}
 
 	snapshotDir := filepath.Dir(req.SnapshotConfigPath)
@@ -24,9 +24,9 @@ func (s *Starter) PrepareFork(ctx context.Context, req hypervisor.ForkPrepareReq
 		// The generic path points to CH's config.json; for QEMU, require qemu-config.json.
 		expectedPath := filepath.Join(snapshotDir, vmConfigFile)
 		if _, statErr := os.Stat(expectedPath); statErr != nil {
-			return fmt.Errorf("load qemu snapshot config %q: %w", expectedPath, err)
+			return hypervisor.ForkPrepareResult{}, fmt.Errorf("load qemu snapshot config %q: %w", expectedPath, err)
 		}
-		return fmt.Errorf("load qemu snapshot config: %w", err)
+		return hypervisor.ForkPrepareResult{}, fmt.Errorf("load qemu snapshot config: %w", err)
 	}
 
 	if req.SourceDataDir != "" && req.TargetDataDir != "" && req.SourceDataDir != req.TargetDataDir {
@@ -61,9 +61,11 @@ func (s *Starter) PrepareFork(ctx context.Context, req hypervisor.ForkPrepareReq
 	}
 
 	if err := saveVMConfig(snapshotDir, cfg); err != nil {
-		return fmt.Errorf("write qemu snapshot config: %w", err)
+		return hypervisor.ForkPrepareResult{}, fmt.Errorf("write qemu snapshot config: %w", err)
 	}
-	return nil
+	return hypervisor.ForkPrepareResult{
+		VsockCIDUpdated: req.VsockCID > 0,
+	}, nil
 }
 
 func rewriteQEMUConfigPaths(cfg hypervisor.VMConfig, sourceDir, targetDir string) hypervisor.VMConfig {

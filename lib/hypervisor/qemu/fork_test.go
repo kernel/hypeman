@@ -12,7 +12,9 @@ import (
 
 func TestPrepareFork_NoSnapshotPathIsNoOp(t *testing.T) {
 	starter := NewStarter()
-	require.NoError(t, starter.PrepareFork(context.Background(), hypervisor.ForkPrepareRequest{}))
+	result, err := starter.PrepareFork(context.Background(), hypervisor.ForkPrepareRequest{})
+	require.NoError(t, err)
+	assert.False(t, result.VsockCIDUpdated)
 }
 
 func TestPrepareFork_RewritesSnapshotConfig(t *testing.T) {
@@ -45,7 +47,7 @@ func TestPrepareFork_RewritesSnapshotConfig(t *testing.T) {
 	}
 	require.NoError(t, saveVMConfig(snapshotDir, initial))
 
-	err := starter.PrepareFork(context.Background(), hypervisor.ForkPrepareRequest{
+	result, err := starter.PrepareFork(context.Background(), hypervisor.ForkPrepareRequest{
 		SnapshotConfigPath: filepath.Join(snapshotDir, "config.json"),
 		SourceDataDir:      sourceDir,
 		TargetDataDir:      targetDir,
@@ -60,6 +62,7 @@ func TestPrepareFork_RewritesSnapshotConfig(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
+	assert.True(t, result.VsockCIDUpdated)
 
 	updated, err := loadVMConfig(snapshotDir)
 	require.NoError(t, err)
