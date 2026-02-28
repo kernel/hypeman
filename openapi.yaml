@@ -601,6 +601,10 @@ components:
           type: string
           description: Temporary second field to force SDK regeneration
           example: phase-2
+        automation_probe_nonce:
+          type: string
+          description: Temporary third field to force another SDK regeneration
+          example: n-3
     
     IngressMatch:
       type: object
