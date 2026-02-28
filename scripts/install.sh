@@ -642,9 +642,15 @@ if [ -n "$CLI_BRANCH" ]; then
     info "Building CLI from monorepo source (branch: $CLI_BRANCH)..."
     command -v go >/dev/null 2>&1 || error "go is required for CLI_BRANCH mode but not installed"
 
-    CLI_BUILD_DIR="${TMP_DIR}/hypeman"
-    if ! git clone --branch "$CLI_BRANCH" --depth 1 -q "https://github.com/${REPO}.git" "$CLI_BUILD_DIR" 2>&1; then
-        error "Failed to clone monorepo for CLI build (branch: $CLI_BRANCH)"
+    # Reuse API source checkout when possible to avoid re-cloning into the same temp path.
+    CLI_BUILD_DIR="${TMP_DIR}/hypeman-cli"
+    if [ -n "$BRANCH" ] && [ "$CLI_BRANCH" = "$BRANCH" ] && [ -d "${TMP_DIR}/hypeman" ]; then
+        CLI_BUILD_DIR="${TMP_DIR}/hypeman"
+    else
+        rm -rf "$CLI_BUILD_DIR"
+        if ! git clone --branch "$CLI_BRANCH" --depth 1 -q "https://github.com/${REPO}.git" "$CLI_BUILD_DIR" 2>&1; then
+            error "Failed to clone monorepo for CLI build (branch: $CLI_BRANCH)"
+        fi
     fi
 
     info "Compiling CLI..."
