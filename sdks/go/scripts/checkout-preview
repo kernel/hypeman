@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+
+set -e
+
+cd "$(dirname "$0")/.."
+
+# Checkout a preview branch from the stainless-sdks mirror.
+#
+# Usage:
+#   ./scripts/checkout-preview <branch>     # Checkout preview/<branch>
+#   ./scripts/checkout-preview -b <branch>  # Checkout exact branch name
+
+STAINLESS_REMOTE="git@github.com:stainless-sdks/hypeman-go.git"
+
+usage() {
+  echo "Usage: $0 [-b] <branch>"
+  echo ""
+  echo "Checkout a branch from the stainless-sdks/hypeman-go mirror."
+  echo ""
+  echo "Options:"
+  echo "  -b    Use exact branch name instead of preview/<branch>"
+  echo ""
+  echo "Examples:"
+  echo "  $0 devices          # Checkout preview/devices"
+  echo "  $0 -b main          # Checkout main"
+  echo "  $0 -b preview/foo   # Checkout preview/foo"
+  exit 1
+}
+
+ensure_stainless_remote() {
+  if ! git remote get-url stainless >/dev/null 2>&1; then
+    echo "==> Adding stainless remote..."
+    git remote add stainless "${STAINLESS_REMOTE}"
+  fi
+}
+
+EXACT_BRANCH=false
+
+while getopts "bh" opt; do
+  case $opt in
+    b) EXACT_BRANCH=true ;;
+    h) usage ;;
+    *) usage ;;
+  esac
+done
+shift $((OPTIND - 1))
+
+if [ $# -lt 1 ]; then
+  usage
+fi
+
+BRANCH="$1"
+
+if [ "$EXACT_BRANCH" = false ]; then
+  BRANCH="preview/${BRANCH}"
+fi
+
+ensure_stainless_remote
+
+echo "==> Fetching from stainless remote..."
+git fetch stainless
+
+echo "==> Checking out ${BRANCH}..."
+git checkout -B "${BRANCH}" "stainless/${BRANCH}"
+
+echo ""
+echo "Switched to branch '${BRANCH}' tracking stainless/${BRANCH}"

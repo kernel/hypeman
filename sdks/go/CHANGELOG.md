@@ -1,0 +1,202 @@
+# Changelog
+
+## 0.13.0 (2026-02-26)
+
+Full Changelog: [v0.12.0...v0.13.0](https://github.com/kernel/hypeman-go/compare/v0.12.0...v0.13.0)
+
+### Features
+
+* wire up memory_mb and cpus in builds API ([ed09f5a](https://github.com/kernel/hypeman-go/commit/ed09f5a0bc3c60e7ccf6da1101d23311107c7118))
+
+## 0.12.0 (2026-02-26)
+
+Full Changelog: [v0.11.0...v0.12.0](https://github.com/kernel/hypeman-go/compare/v0.11.0...v0.12.0)
+
+### Features
+
+* add metadata and state filtering to GET /instances ([8149c9f](https://github.com/kernel/hypeman-go/commit/8149c9fe5e9b36aa5709767e7f3986d6778bd432))
+* Disable default hotplug memory allocation ([4c65d5c](https://github.com/kernel/hypeman-go/commit/4c65d5c271ac3a620da549b47ece553e1860aaf6))
+
+
+### Bug Fixes
+
+* allow canceling a request while it is waiting to retry ([daa2281](https://github.com/kernel/hypeman-go/commit/daa2281e6e9833ae4dba2b9b6870014ceb0b2fff))
+* send query params for NewFromArchive ([a8c45a6](https://github.com/kernel/hypeman-go/commit/a8c45a69e83c96137c772d999a115972f0e6a003))
+
+
+### Chores
+
+* **internal:** move custom custom `json` tags to `api` ([d04f6ed](https://github.com/kernel/hypeman-go/commit/d04f6ed70c95357f323aa4e76b3a6ad8ebd12ec3))
+* **internal:** remove mock server code ([b511676](https://github.com/kernel/hypeman-go/commit/b51167627fc0cd0f947633cb8694f4ee0756c268))
+* update mock server docs ([d2ae478](https://github.com/kernel/hypeman-go/commit/d2ae478d46fb67550a3b35d4261218f9368709f0))
+
+## 0.11.0 (2026-02-15)
+
+Full Changelog: [v0.10.0...v0.11.0](https://github.com/kernel/hypeman-go/compare/v0.10.0...v0.11.0)
+
+### Features
+
+* Add image_name parameter to builds ([36ea383](https://github.com/kernel/hypeman-go/commit/36ea383988ce81b907a893220bbc983e8143a1d2))
+
+## 0.10.0 (2026-02-13)
+
+Full Changelog: [v0.9.8...v0.10.0](https://github.com/kernel/hypeman-go/compare/v0.9.8...v0.10.0)
+
+### Features
+
+* Add metadata field to instances ([8ce4014](https://github.com/kernel/hypeman-go/commit/8ce40145c0f6db8e928efa9c2909521a6d452579))
+* Better stop behavior ([12cfb4e](https://github.com/kernel/hypeman-go/commit/12cfb4e4ddfc198c65b09efeb73c8db0fd609f5f))
+
+## 0.9.8 (2026-02-11)
+
+Full Changelog: [v0.9.7...v0.9.8](https://github.com/kernel/hypeman-go/compare/v0.9.7...v0.9.8)
+
+## 0.9.7 (2026-02-11)
+
+Full Changelog: [v0.9.6...v0.9.7](https://github.com/kernel/hypeman-go/compare/v0.9.6...v0.9.7)
+
+### Bug Fixes
+
+* **encoder:** correctly serialize NullStruct ([e693834](https://github.com/kernel/hypeman-go/commit/e693834704b3541d4a5f260b547026bae8a19b1b))
+
+
+### Refactors
+
+* cross-platform foundation for macOS support ([8adc4f3](https://github.com/kernel/hypeman-go/commit/8adc4f38026abee34ad85c15509e90f47644a0d0))
+
+## 0.9.6 (2026-01-30)
+
+Full Changelog: [v0.9.0...v0.9.6](https://github.com/kernel/hypeman-go/compare/v0.9.0...v0.9.6)
+
+### Features
+
+* add boot time optimizations for faster VM startup ([3992761](https://github.com/kernel/hypeman-go/commit/3992761e3ad8ebb0cc22fb7408199b068e9d8013))
+* Add to stainless config new API endpoints ([de008e8](https://github.com/kernel/hypeman-go/commit/de008e89fadbaedde6554181618fb03c71b49465))
+* **api:** manual updates ([f60e600](https://github.com/kernel/hypeman-go/commit/f60e60015bb9ce18c7083963d9ecd11c980de495))
+* **builds:** implement two-tier build cache with per-repo token scopes ([0e29d03](https://github.com/kernel/hypeman-go/commit/0e29d03d94cf50a0d0e83c323f7ed9f2e15f3e61))
+* **client:** add a convenient param.SetJSON helper ([7fea166](https://github.com/kernel/hypeman-go/commit/7fea1660f3d17d8a35f5d2f6aa352b553785624b))
+* Use resources module for input validation ([af678e8](https://github.com/kernel/hypeman-go/commit/af678e8c794307a6bd47476acff3ca42a7a52546))
+
+## 0.9.0 (2026-01-05)
+
+Full Changelog: [v0.8.0...v0.9.0](https://github.com/kernel/hypeman-go/compare/v0.8.0...v0.9.0)
+
+### Features
+
+* QEMU support ([d708091](https://github.com/kernel/hypeman-go/commit/d70809169d136df3f1efbf961f2a90084e1f9fa5))
+* Resource accounting ([4141287](https://github.com/kernel/hypeman-go/commit/414128770e8137ed2a40d404f0f4ac06ea1a0731))
+
+## 0.8.0 (2025-12-23)
+
+Full Changelog: [v0.7.0...v0.8.0](https://github.com/kernel/hypeman-go/compare/v0.7.0...v0.8.0)
+
+### Features
+
+* add hypeman cp for file copy to/from running VMs ([49ea898](https://github.com/kernel/hypeman-go/commit/49ea89852eed5e0893febc4c68d295a0d1a8bfe5))
+* **encoder:** support bracket encoding form-data object members ([8ab31e8](https://github.com/kernel/hypeman-go/commit/8ab31e89c70baa967842c1c160d0b49db44b089a))
+* gpu passthrough ([067a01b](https://github.com/kernel/hypeman-go/commit/067a01b4ac06e82c2db6b165127144afa18a691d))
+
+
+### Bug Fixes
+
+* skip usage tests that don't work with Prism ([d62b246](https://github.com/kernel/hypeman-go/commit/d62b2466715247e7d083ab7ef33040e5da036bd8))
+
+
+### Chores
+
+* add float64 to valid types for RegisterFieldValidator ([b4666fd](https://github.com/kernel/hypeman-go/commit/b4666fd1bfcdd17b0a4d4bf88541670cd40c8b1c))
+
+## 0.7.0 (2025-12-11)
+
+Full Changelog: [v0.6.0...v0.7.0](https://github.com/kernel/hypeman-go/compare/v0.6.0...v0.7.0)
+
+### Features
+
+* Operational logs over API: hypeman.log, vmm.log ([ec614f5](https://github.com/kernel/hypeman-go/commit/ec614f5bdc0e110f31cec905d6deb7f1d460305b))
+* Support TLS for ingress ([973a5d8](https://github.com/kernel/hypeman-go/commit/973a5d8b65601e70801ed4570f76980d01c92198))
+
+
+### Bug Fixes
+
+* incorrect reporting of Stopped, add better error reporting ([dc27cbd](https://github.com/kernel/hypeman-go/commit/dc27cbdc7985c1db74b19501f1eb7a5da6442041))
+
+## 0.6.0 (2025-12-06)
+
+Full Changelog: [v0.5.0...v0.6.0](https://github.com/kernel/hypeman-go/compare/v0.5.0...v0.6.0)
+
+### Features
+
+* Start and Stop VM ([b992228](https://github.com/kernel/hypeman-go/commit/b99222818b197010ba324c2e2477047e5bf13802))
+
+
+### Bug Fixes
+
+* **mcp:** correct code tool API endpoint ([0d87152](https://github.com/kernel/hypeman-go/commit/0d8715273698dab9bb6c276352a13605ddd272a5))
+* rename param to avoid collision ([f1ec9d5](https://github.com/kernel/hypeman-go/commit/f1ec9d52e3f5f6c8398bdded04a4ed9cfbd8151b))
+
+
+### Chores
+
+* elide duplicate aliases ([9be276f](https://github.com/kernel/hypeman-go/commit/9be276faa6d683ddffe3a21c969b44f13acface0))
+* **internal:** codegen related update ([f3de06d](https://github.com/kernel/hypeman-go/commit/f3de06d220faf866b70829862cd1b76ee4e8fbf8))
+
+## 0.5.0 (2025-12-05)
+
+Full Changelog: [v0.4.0...v0.5.0](https://github.com/kernel/hypeman-go/compare/v0.4.0...v0.5.0)
+
+### Features
+
+* add Push and PushImage functions for OCI registry push ([7417cc8](https://github.com/kernel/hypeman-go/commit/7417cc8a56c7d11c535ac7ab9a7b3d21d80bd2b4))
+* Ingress ([c751d1a](https://github.com/kernel/hypeman-go/commit/c751d1a6bba5ca619c03f833f27251c6d3b855a7))
+* Initialize volume with data ([32d4047](https://github.com/kernel/hypeman-go/commit/32d404746df0a3e9d83e7651105e6c6daa16476f))
+* try to fix name collision in codegen ([8173a73](https://github.com/kernel/hypeman-go/commit/8173a73d0317d35870d5a3cec8f3fdec56fcf362))
+* Volume readonly multi-attach ([bac3fd2](https://github.com/kernel/hypeman-go/commit/bac3fd2cee3325dc3d1b31e6077ad1f1ce13340c))
+* Volumes ([099f9b8](https://github.com/kernel/hypeman-go/commit/099f9b8a2553087e117c8c8a9731900081d713f0))
+
+## 0.4.0 (2025-11-26)
+
+Full Changelog: [v0.3.0...v0.4.0](https://github.com/kernel/hypeman-go/compare/v0.3.0...v0.4.0)
+
+### Features
+
+* Generate log streaming ([f444c22](https://github.com/kernel/hypeman-go/commit/f444c22bd9eb0ad06e66b3ca167171ddec2836e4))
+
+## 0.3.0 (2025-11-26)
+
+Full Changelog: [v0.2.0...v0.3.0](https://github.com/kernel/hypeman-go/compare/v0.2.0...v0.3.0)
+
+### Features
+
+* Remove exec from openapi spec ([ee8d1bb](https://github.com/kernel/hypeman-go/commit/ee8d1bb586a130c0b6629603ca4edb489f671889))
+
+## 0.2.0 (2025-11-26)
+
+Full Changelog: [v0.1.0...v0.2.0](https://github.com/kernel/hypeman-go/compare/v0.1.0...v0.2.0)
+
+### Features
+
+* **api:** add exec ([f3992ff](https://github.com/kernel/hypeman-go/commit/f3992ffe807e7006a25ae2211cd5cb25fb599bff))
+
+## 0.1.0 (2025-11-26)
+
+Full Changelog: [v0.0.3...v0.1.0](https://github.com/kernel/hypeman-go/compare/v0.0.3...v0.1.0)
+
+### Features
+
+* Network manager ([7864aba](https://github.com/kernel/hypeman-go/commit/7864abadad29bcfbb61d2c35a7135ef2407d6c47))
+
+## 0.0.3 (2025-11-19)
+
+Full Changelog: [v0.0.2...v0.0.3](https://github.com/kernel/hypeman-go/compare/v0.0.2...v0.0.3)
+
+### Bug Fixes
+
+* **client:** correctly specify Accept header with */* instead of empty ([ac1a646](https://github.com/kernel/hypeman-go/commit/ac1a64697c333aecdc6a463fe760b99635ba8b72))
+
+## 0.0.2 (2025-11-11)
+
+Full Changelog: [v0.0.1...v0.0.2](https://github.com/kernel/hypeman-go/compare/v0.0.1...v0.0.2)
+
+### Chores
+
+* update SDK settings ([ecdeb35](https://github.com/kernel/hypeman-go/commit/ecdeb354a1d6a82a1d2afc1742ca02b25eb3218f))
