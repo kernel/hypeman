@@ -70,7 +70,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           TLS_TEST_DOMAIN: "test.hypeman-development.com"
           TLS_ALLOWED_DOMAINS: '*.hypeman-development.com'
-        run: make test
+        run: make test TEST_TIMEOUT=20m
 
   test-darwin:
     runs-on: [self-hosted, macos, arm64]

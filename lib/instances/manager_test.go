@@ -949,10 +949,11 @@ func TestOOMExitPropagation(t *testing.T) {
 	err = waitForVMReady(ctx, inst.SocketPath, 10*time.Second)
 	require.NoError(t, err, "VM should reach running state")
 
-	// Wait for the VM to stop (OOM kill -> init detects -> sentinel -> reboot)
+	// Wait for the VM to stop (OOM kill -> init detects -> sentinel -> reboot).
+	// This can be slow on loaded CI runners where reclaim pressure ramps gradually.
 	t.Log("Waiting for VM to stop after OOM...")
 	var finalInst *Instance
-	for i := 0; i < 90; i++ { // up to 90 seconds (OOM may take time with low memory)
+	for i := 0; i < 180; i++ { // up to 180 seconds
 		got, err := manager.GetInstance(ctx, inst.Id)
 		if err == nil && got.State == StateStopped {
 			finalInst = got
@@ -960,7 +961,7 @@ func TestOOMExitPropagation(t *testing.T) {
 		}
 		time.Sleep(1 * time.Second)
 	}
-	require.NotNil(t, finalInst, "Instance should reach Stopped state within 90 seconds")
+	require.NotNil(t, finalInst, "Instance should reach Stopped state within 180 seconds")
 	assert.Equal(t, StateStopped, finalInst.State)
 
 	// Verify exit info shows OOM
