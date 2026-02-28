@@ -37,6 +37,15 @@ KEEP_DATA=false bash scripts/uninstall.sh 2>/dev/null || true
 # =============================================================================
 info "Phase 2: Installing from source..."
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
+if [ "$BRANCH" = "HEAD" ]; then
+    if [ -n "${GITHUB_HEAD_REF:-}" ]; then
+        BRANCH="$GITHUB_HEAD_REF"
+    elif [ -n "${GITHUB_REF_NAME:-}" ]; then
+        BRANCH="$GITHUB_REF_NAME"
+    else
+        fail "Unable to determine branch for source install (detached HEAD without GitHub branch context)"
+    fi
+fi
 # Build CLI from source too when CLI_BRANCH is set (e.g., for testing unreleased CLI features)
 BRANCH="$BRANCH" CLI_BRANCH="${CLI_BRANCH:-}" bash scripts/install.sh
 
