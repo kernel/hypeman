@@ -79,6 +79,20 @@ func TestValidateForkRequest_InvalidTargetState(t *testing.T) {
 	assert.ErrorIs(t, err, ErrInvalidRequest)
 }
 
+func TestValidateForkVolumeSafety(t *testing.T) {
+	err := validateForkVolumeSafety([]VolumeAttachment{
+		{VolumeID: "vol-rw", MountPath: "/data", Readonly: false},
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrNotSupported)
+
+	err = validateForkVolumeSafety([]VolumeAttachment{
+		{VolumeID: "vol-ro", MountPath: "/data", Readonly: true, Overlay: false},
+		{VolumeID: "vol-cow", MountPath: "/tmp", Readonly: true, Overlay: true},
+	})
+	require.NoError(t, err)
+}
+
 func TestCleanupForkInstanceOnError(t *testing.T) {
 	manager, _ := setupTestManager(t)
 	ctx := context.Background()

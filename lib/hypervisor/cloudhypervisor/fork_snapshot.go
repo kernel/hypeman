@@ -23,7 +23,10 @@ func rewriteSnapshotConfigForFork(configPath string, req hypervisor.ForkPrepareR
 
 	if req.SourceDataDir != "" && req.TargetDataDir != "" && req.SourceDataDir != req.TargetDataDir {
 		configAny := rewriteStringValues(config, func(s string) string {
-			return strings.ReplaceAll(s, req.SourceDataDir, req.TargetDataDir)
+			if s == req.SourceDataDir || strings.HasPrefix(s, req.SourceDataDir+"/") {
+				return req.TargetDataDir + strings.TrimPrefix(s, req.SourceDataDir)
+			}
+			return s
 		})
 		config = configAny.(map[string]any)
 	}

@@ -154,6 +154,9 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 			return nil, err
 		}
 	}
+	if err := validateForkVolumeSafety(stored.Volumes); err != nil {
+		return nil, err
+	}
 
 	if stored.NetworkEnabled {
 		exists, err := m.networkManager.NameExists(ctx, req.Name, "")
@@ -274,6 +277,15 @@ func validateForkRequest(req ForkInstanceRequest) error {
 	}
 	if req.TargetState != "" && req.TargetState != StateStopped && req.TargetState != StateStandby && req.TargetState != StateRunning {
 		return fmt.Errorf("%w: invalid fork target state %q (must be one of %s, %s, %s)", ErrInvalidRequest, req.TargetState, StateStopped, StateStandby, StateRunning)
+	}
+	return nil
+}
+
+func validateForkVolumeSafety(volumes []VolumeAttachment) error {
+	for _, vol := range volumes {
+		if !vol.Readonly {
+			return fmt.Errorf("%w: cannot fork instance with writable volume %q mounted at %q; use readonly+overlay for safe concurrent forks", ErrNotSupported, vol.VolumeID, vol.MountPath)
+		}
 	}
 	return nil
 }
