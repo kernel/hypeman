@@ -121,6 +121,8 @@ Common settings:
 | `acme.dns_provider` | DNS provider for ACME challenges | _(empty)_ |
 | `acme.cloudflare_api_token` | Cloudflare API token | _(empty)_ |
 | `build.docker_socket` | Path to Docker socket | `/var/run/docker.sock` |
+| `hypervisor.default` | Default hypervisor type (`cloud-hypervisor`, `firecracker`, `qemu`, `vz`) | `cloud-hypervisor` |
+| `hypervisor.firecracker_binary_path` | Optional runtime path to external Firecracker binary | _(empty = embedded)_ |
 
 Environment variables can also override any config key using `__` as the nesting separator (e.g. `CADDY__LISTEN_ADDRESS` overrides `caddy.listen_address`).
 
@@ -255,6 +257,22 @@ make dev
 ```
 
 The server will start on port 8080 (configurable via `port` in config.yaml).
+
+### Shared-Machine Local Config
+
+When developing on a shared host, avoid global paths like `/etc/hypeman` and `/var/lib/hypeman`.
+Use a workspace-local config and data directory instead:
+
+```bash
+mkdir -p .tmp/hypeman-data
+cp config.example.yaml .tmp/hypeman.config.yaml
+
+# Edit .tmp/hypeman.config.yaml:
+#   data_dir: /absolute/path/to/your/repo/.tmp/hypeman-data
+#   jwt_secret: dev-secret
+
+CONFIG_PATH="$(pwd)/.tmp/hypeman.config.yaml" make dev
+```
 
 ### Setting Up the Builder Image (for Dockerfile builds)
 

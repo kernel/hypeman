@@ -187,8 +187,12 @@ func (m *manager) DeleteInstance(ctx context.Context, id string) error {
 func (m *manager) ForkInstance(ctx context.Context, id string, req ForkInstanceRequest) (*Instance, error) {
 	lock := m.getInstanceLock(id)
 	lock.Lock()
-	defer lock.Unlock()
-	return m.forkInstance(ctx, id, req)
+	forked, targetState, err := m.forkInstance(ctx, id, req)
+	lock.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	return m.applyForkTargetState(ctx, forked.Id, targetState)
 }
 
 // StandbyInstance puts an instance in standby (pause, snapshot, delete VMM)

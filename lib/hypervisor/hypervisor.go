@@ -29,6 +29,8 @@ type Type string
 const (
 	// TypeCloudHypervisor is the Cloud Hypervisor VMM
 	TypeCloudHypervisor Type = "cloud-hypervisor"
+	// TypeFirecracker is the Firecracker VMM
+	TypeFirecracker Type = "firecracker"
 	// TypeQEMU is the QEMU VMM
 	TypeQEMU Type = "qemu"
 	// TypeVZ is the Virtualization.framework VMM (macOS only)

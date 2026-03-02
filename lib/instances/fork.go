@@ -16,39 +16,41 @@ import (
 	"gvisor.dev/gvisor/pkg/cleanup"
 )
 
-// forkInstance creates a new instance by cloning a stopped or standby source instance.
-func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceRequest) (*Instance, error) {
+// forkInstance creates a new instance by cloning a stopped or standby source
+// instance. It returns the newly created fork and the requested final target
+// state; callers apply the target state transition outside the source lock.
+func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceRequest) (*Instance, State, error) {
 	log := logger.FromContext(ctx)
 	log.InfoContext(ctx, "forking instance", "source_instance_id", id, "fork_name", req.Name)
 
 	if err := validateForkRequest(req); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	meta, err := m.loadMetadata(id)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	source := m.toInstance(ctx, meta)
 	targetState, err := resolveForkTargetState(req.TargetState, source.State)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	switch source.State {
 	case StateRunning:
 		if !req.FromRunning {
-			return nil, fmt.Errorf("%w: cannot fork from state %s (set from_running=true to allow standby+restore flow)", ErrInvalidState, source.State)
+			return nil, "", fmt.Errorf("%w: cannot fork from state %s (set from_running=true to allow standby+restore flow)", ErrInvalidState, source.State)
 		}
 
 		if err := m.validateForkSupport(ctx, source.HypervisorType); err != nil {
-			return nil, err
+			return nil, "", err
 		}
 
 		log.InfoContext(ctx, "fork from running requested; transitioning source to standby",
 			"source_instance_id", id, "hypervisor", source.HypervisorType)
 		if _, err := m.standbyInstance(ctx, id); err != nil {
-			return nil, fmt.Errorf("standby source instance: %w", err)
+			return nil, "", fmt.Errorf("standby source instance: %w", err)
 		}
 
 		forked, forkErr := m.forkInstanceFromStoppedOrStandby(ctx, id, req, true)
@@ -65,22 +67,22 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 
 		if restoreErr != nil {
 			if forkErr != nil {
-				return nil, fmt.Errorf("fork failed: %v; additionally failed to restore source instance: %w", forkErr, restoreErr)
+				return nil, "", fmt.Errorf("fork failed: %v; additionally failed to restore source instance: %w", forkErr, restoreErr)
 			}
-			return nil, fmt.Errorf("restore source instance after fork: %w", restoreErr)
+			return nil, "", fmt.Errorf("restore source instance after fork: %w", restoreErr)
 		}
 		if forkErr != nil {
-			return nil, forkErr
+			return nil, "", forkErr
 		}
-		return m.applyForkTargetState(ctx, forked.Id, targetState)
+		return forked, targetState, nil
 	case StateStopped, StateStandby:
 		forked, err := m.forkInstanceFromStoppedOrStandby(ctx, id, req, false)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
-		return m.applyForkTargetState(ctx, forked.Id, targetState)
+		return forked, targetState, nil
 	default:
-		return nil, fmt.Errorf("%w: cannot fork from state %s (must be Stopped or Standby, or Running with from_running=true)", ErrInvalidState, source.State)
+		return nil, "", fmt.Errorf("%w: cannot fork from state %s (must be Stopped or Standby, or Running with from_running=true)", ErrInvalidState, source.State)
 	}
 }
 
@@ -373,6 +375,22 @@ func cloneStoredMetadataForFork(src StoredMetadata) StoredMetadata {
 	}
 	if src.Cmd != nil {
 		dst.Cmd = append([]string(nil), src.Cmd...)
+	}
+	if src.HypervisorPID != nil {
+		pid := *src.HypervisorPID
+		dst.HypervisorPID = &pid
+	}
+	if src.StartedAt != nil {
+		startedAt := *src.StartedAt
+		dst.StartedAt = &startedAt
+	}
+	if src.StoppedAt != nil {
+		stoppedAt := *src.StoppedAt
+		dst.StoppedAt = &stoppedAt
+	}
+	if src.ExitCode != nil {
+		exitCode := *src.ExitCode
+		dst.ExitCode = &exitCode
 	}
 
 	return dst

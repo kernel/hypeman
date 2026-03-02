@@ -421,7 +421,39 @@ func (m *manager) DeleteImage(ctx context.Context, name string) error {
 	repository := ref.Repository()
 	tag := ref.Tag()
 
-	return deleteTag(m.paths, repository, tag)
+	// Resolve the tag to get the digest before deleting
+	digestHex, err := resolveTag(m.paths, repository, tag)
+	if err != nil {
+		return err
+	}
+
+	// Delete the tag symlink
+	if err := deleteTag(m.paths, repository, tag); err != nil {
+		return err
+	}
+
+	// Hold createMu during orphan check and delete to prevent race with CreateImage.
+	// Without this lock, a concurrent CreateImage could create a new tag pointing to
+	// the same digest between our count check and delete, leaving a dangling symlink.
+	m.createMu.Lock()
+	defer m.createMu.Unlock()
+
+	// Check if the digest is now orphaned (no other tags reference it)
+	count, err := countTagsForDigest(m.paths, repository, digestHex)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to count tags for digest %s: %v\n", digestHex, err)
+		return nil
+	}
+
+	if count == 0 {
+		// Digest is orphaned, delete it
+		if err := deleteDigest(m.paths, repository, digestHex); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to delete orphaned digest %s: %v\n", digestHex, err)
+			return nil
+		}
+	}
+
+	return nil
 }
 
 // TotalImageBytes returns the total size of all ready images on disk.

@@ -110,13 +110,22 @@ func TestCleanupForkInstanceOnError(t *testing.T) {
 }
 
 func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
+	startedAt := time.Now().Add(-2 * time.Minute)
+	stoppedAt := time.Now().Add(-1 * time.Minute)
+	pid := 1234
+	exitCode := 17
+
 	src := StoredMetadata{
-		Env:        map[string]string{"A": "1"},
-		Metadata:   map[string]string{"m": "x"},
-		Volumes:    []VolumeAttachment{{VolumeID: "vol-1", MountPath: "/data"}},
-		Devices:    []string{"0000:01:00.0"},
-		Entrypoint: []string{"/bin/sh", "-c"},
-		Cmd:        []string{"echo", "hello"},
+		Env:           map[string]string{"A": "1"},
+		Metadata:      map[string]string{"m": "x"},
+		Volumes:       []VolumeAttachment{{VolumeID: "vol-1", MountPath: "/data"}},
+		Devices:       []string{"0000:01:00.0"},
+		Entrypoint:    []string{"/bin/sh", "-c"},
+		Cmd:           []string{"echo", "hello"},
+		StartedAt:     &startedAt,
+		StoppedAt:     &stoppedAt,
+		HypervisorPID: &pid,
+		ExitCode:      &exitCode,
 	}
 
 	cloned := cloneStoredMetadataForFork(src)
@@ -128,6 +137,11 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 	cloned.Devices[0] = "0000:02:00.0"
 	cloned.Entrypoint[0] = "/usr/bin/env"
 	cloned.Cmd[0] = "printf"
+	*cloned.HypervisorPID = 4321
+	*cloned.ExitCode = 42
+	now := time.Now()
+	*cloned.StartedAt = now
+	*cloned.StoppedAt = now
 
 	require.Equal(t, "1", src.Env["A"])
 	require.Equal(t, "x", src.Metadata["m"])
@@ -135,6 +149,10 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 	require.Equal(t, "0000:01:00.0", src.Devices[0])
 	require.Equal(t, "/bin/sh", src.Entrypoint[0])
 	require.Equal(t, "echo", src.Cmd[0])
+	require.Equal(t, 1234, *src.HypervisorPID)
+	require.Equal(t, 17, *src.ExitCode)
+	require.Equal(t, startedAt, *src.StartedAt)
+	require.Equal(t, stoppedAt, *src.StoppedAt)
 }
 
 func TestRotateSourceVsockForRestore_CloudHypervisorDoesNotPersistCIDRewrite(t *testing.T) {
