@@ -91,7 +91,7 @@ type StoredMetadata struct {
 	SkipGuestAgent    bool // Skip guest-agent installation (disables exec/stat API)
 
 	// Shutdown configuration
-	StopTimeout int // Grace period in seconds for graceful stop (0 = use default 10s)
+	StopTimeout int // Grace period in seconds for graceful stop (0 = use default 5s)
 
 	// Exit information (populated from serial console sentinel when VM stops)
 	ExitCode    *int   // App exit code, nil if VM hasn't exited
@@ -150,7 +150,7 @@ type CreateInstanceRequest struct {
 	Name                     string             // Required
 	Image                    string             // Required: OCI reference
 	Size                     int64              // Base memory in bytes (default: 1GB)
-	HotplugSize              int64              // Hotplug memory in bytes (default: 3GB)
+	HotplugSize              int64              // Hotplug memory in bytes (default: 0, set explicitly to enable)
 	OverlaySize              int64              // Overlay disk size in bytes (default: 10GB)
 	Vcpus                    int                // Default 2
 	NetworkBandwidthDownload int64              // Download rate limit bytes/sec (0 = auto, proportional to CPU)

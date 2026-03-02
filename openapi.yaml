@@ -119,8 +119,7 @@ components:
           example: "2GB"
         hotplug_size:
           type: string
-          description: Additional memory for hotplug (human-readable format like "3GB", "1G")
-          default: "3GB"
+          description: Additional memory for hotplug (human-readable format like "3GB", "1G"). Omit to disable hotplug memory.
           example: "2GB"
         overlay_size:
           type: string
@@ -2441,6 +2440,12 @@ paths:
                 timeout_seconds:
                   type: integer
                   description: Build timeout (default 600)
+                memory_mb:
+                  type: integer
+                  description: Memory limit for builder VM in MB (default 2048)
+                cpus:
+                  type: integer
+                  description: Number of vCPUs for builder VM (default 2)
                 image_name:
                   type: string
                   description: |

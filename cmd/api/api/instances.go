@@ -72,7 +72,7 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		size = int64(sizeBytes)
 	}
 
-	// Parse hotplug_size (default: 3GB)
+	// Parse hotplug_size (optional; omitted/empty means no hotplug memory)
 	hotplugSize := int64(0)
 	if request.Body.HotplugSize != nil && *request.Body.HotplugSize != "" {
 		var hotplugBytes datasize.ByteSize

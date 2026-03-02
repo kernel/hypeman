@@ -210,22 +210,9 @@ func run() error {
 		return fmt.Errorf("reconcile device state: %w", err)
 	}
 
-	// Reconcile mdev devices (clears orphaned vGPUs from crashed VMs)
-	// Build mdev info from instances - only destroys mdevs tracked by hypeman
+	// Reconcile mdev devices (clears orphaned vGPUs from previous runs)
 	logger.Info("Reconciling mdev devices...")
-	var mdevInfos []devices.MdevReconcileInfo
-	if allInstances != nil {
-		for _, inst := range allInstances {
-			if inst.GPUMdevUUID != "" {
-				mdevInfos = append(mdevInfos, devices.MdevReconcileInfo{
-					InstanceID: inst.Id,
-					MdevUUID:   inst.GPUMdevUUID,
-					IsRunning:  inst.State == instances.StateRunning || inst.State == instances.StateUnknown,
-				})
-			}
-		}
-	}
-	if err := devices.ReconcileMdevs(app.Ctx, mdevInfos); err != nil {
+	if err := devices.ReconcileMdevs(app.Ctx, nil); err != nil {
 		// Log but don't fail - mdev cleanup is best-effort
 		logger.Warn("failed to reconcile mdev devices", "error", err)
 	}
@@ -469,4 +456,3 @@ func run() error {
 	slog.Info("all goroutines finished")
 	return err
 }
-

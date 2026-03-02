@@ -178,9 +178,9 @@ func TestRegistryTokenClaims_RepoAccess(t *testing.T) {
 	})
 
 	t.Run("IsPullAllowedForRepo", func(t *testing.T) {
-		assert.True(t, claims.IsPullAllowedForRepo("builds/abc123"))   // push implies pull
+		assert.True(t, claims.IsPullAllowedForRepo("builds/abc123")) // push implies pull
 		assert.True(t, claims.IsPullAllowedForRepo("cache/global/node"))
-		assert.True(t, claims.IsPullAllowedForRepo("cache/tenant-x"))  // push implies pull
+		assert.True(t, claims.IsPullAllowedForRepo("cache/tenant-x")) // push implies pull
 		assert.False(t, claims.IsPullAllowedForRepo("builds/other"))
 	})
 

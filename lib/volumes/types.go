@@ -39,4 +39,3 @@ type CreateVolumeFromArchiveRequest struct {
 	SizeGb int     // Maximum size in GB (extraction fails if content exceeds this)
 	Id     *string // Optional custom ID
 }
-

@@ -127,11 +127,11 @@ func TestVMStats_CPUSeconds(t *testing.T) {
 
 func TestVMStats_MemoryUtilizationRatio(t *testing.T) {
 	tests := []struct {
-		name         string
-		rss          uint64
-		allocated    int64
-		expectRatio  *float64
-		expectNil    bool
+		name        string
+		rss         uint64
+		allocated   int64
+		expectRatio *float64
+		expectNil   bool
 	}{
 		{
 			name:        "normal ratio",
@@ -184,7 +184,7 @@ func TestVMStats_MemoryUtilizationRatio(t *testing.T) {
 
 func TestBuildInstanceInfo(t *testing.T) {
 	pid := 1234
-	
+
 	// With network enabled
 	info := BuildInstanceInfo("abc123", "my-vm", &pid, true, 4, 4*1024*1024*1024)
 	assert.Equal(t, "abc123", info.ID)
@@ -193,7 +193,7 @@ func TestBuildInstanceInfo(t *testing.T) {
 	assert.Equal(t, 4, info.AllocatedVcpus)
 	assert.Equal(t, int64(4*1024*1024*1024), info.AllocatedMemoryBytes)
 	assert.NotEmpty(t, info.TAPDevice, "should have TAP device when network enabled")
-	
+
 	// Without network enabled
 	info = BuildInstanceInfo("abc123", "my-vm", &pid, false, 4, 4*1024*1024*1024)
 	assert.Empty(t, info.TAPDevice, "should not have TAP device when network disabled")

@@ -2,7 +2,10 @@
 // inside ephemeral Cloud Hypervisor microVMs for multi-tenant isolation.
 package builds
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // Build status constants
 const (
@@ -211,6 +214,13 @@ type BuildResult struct {
 	DurationMS int64 `json:"duration_ms"`
 }
 
+const (
+	// MaxBuildCPUs is the maximum number of vCPUs for a builder VM
+	MaxBuildCPUs = 8
+	// MaxBuildMemoryMB is the maximum memory in MB for a builder VM (16GB)
+	MaxBuildMemoryMB = 16384
+)
+
 // DefaultBuildPolicy returns the default build policy
 func DefaultBuildPolicy() BuildPolicy {
 	return BuildPolicy{
@@ -224,16 +234,28 @@ func DefaultBuildPolicy() BuildPolicy {
 // ApplyDefaults fills in default values for a build policy
 func (p *BuildPolicy) ApplyDefaults() {
 	defaults := DefaultBuildPolicy()
-	if p.TimeoutSeconds == 0 {
+	if p.TimeoutSeconds <= 0 {
 		p.TimeoutSeconds = defaults.TimeoutSeconds
 	}
-	if p.MemoryMB == 0 {
+	if p.MemoryMB <= 0 {
 		p.MemoryMB = defaults.MemoryMB
 	}
-	if p.CPUs == 0 {
+	if p.CPUs <= 0 {
 		p.CPUs = defaults.CPUs
 	}
 	if p.NetworkMode == "" {
 		p.NetworkMode = defaults.NetworkMode
 	}
+}
+
+// Validate checks that the build policy values are within allowed limits.
+// Returns an error if any value exceeds the maximum.
+func (p *BuildPolicy) Validate() error {
+	if p.CPUs > MaxBuildCPUs {
+		return fmt.Errorf("cpus exceeds maximum of %d", MaxBuildCPUs)
+	}
+	if p.MemoryMB > MaxBuildMemoryMB {
+		return fmt.Errorf("memory_mb exceeds maximum of %d MB", MaxBuildMemoryMB)
+	}
+	return nil
 }

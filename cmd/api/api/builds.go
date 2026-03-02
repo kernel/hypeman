@@ -43,7 +43,7 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 	// Parse multipart form fields
 	var sourceData []byte
 	var baseImageDigest, cacheScope, dockerfile, globalCacheKey, imageName string
-	var timeoutSeconds int
+	var timeoutSeconds, memoryMB, cpus int
 	var isAdminBuild bool
 	var secrets []builds.SecretRef
 
@@ -105,6 +105,28 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 			}
 			if v, err := strconv.Atoi(string(data)); err == nil {
 				timeoutSeconds = v
+			}
+		case "memory_mb":
+			data, err := io.ReadAll(part)
+			if err != nil {
+				return oapi.CreateBuild400JSONResponse{
+					Code:    "invalid_request",
+					Message: "failed to read memory_mb field",
+				}, nil
+			}
+			if v, err := strconv.Atoi(string(data)); err == nil {
+				memoryMB = v
+			}
+		case "cpus":
+			data, err := io.ReadAll(part)
+			if err != nil {
+				return oapi.CreateBuild400JSONResponse{
+					Code:    "invalid_request",
+					Message: "failed to read cpus field",
+				}, nil
+			}
+			if v, err := strconv.Atoi(string(data)); err == nil {
+				cpus = v
 			}
 		case "secrets":
 			data, err := io.ReadAll(part)
@@ -183,10 +205,18 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 		ImageName:       imageName,
 	}
 
-	// Apply timeout if provided
-	if timeoutSeconds > 0 {
+	// Apply build policy if any field was provided
+	if timeoutSeconds > 0 || memoryMB > 0 || cpus > 0 {
 		domainReq.BuildPolicy = &builds.BuildPolicy{
 			TimeoutSeconds: timeoutSeconds,
+			MemoryMB:       memoryMB,
+			CPUs:           cpus,
+		}
+		if err := domainReq.BuildPolicy.Validate(); err != nil {
+			return oapi.CreateBuild400JSONResponse{
+				Code:    "invalid_request",
+				Message: err.Error(),
+			}, nil
 		}
 	}
 

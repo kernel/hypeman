@@ -1,10 +1,14 @@
 package api
 
 import (
+	"context"
 	"os"
 	"testing"
 	"time"
 
+	"github.com/c2h5oh/datasize"
+	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/instances"
 	"github.com/kernel/hypeman/lib/oapi"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/kernel/hypeman/lib/system"
@@ -126,6 +130,64 @@ func TestCreateInstance_InvalidSizeFormat(t *testing.T) {
 	require.True(t, ok, "expected 400 response")
 	assert.Equal(t, "invalid_size", badReq.Code)
 	assert.Contains(t, badReq.Message, "invalid size format")
+}
+
+type captureCreateManager struct {
+	instances.Manager
+	lastReq *instances.CreateInstanceRequest
+}
+
+func (m *captureCreateManager) CreateInstance(ctx context.Context, req instances.CreateInstanceRequest) (*instances.Instance, error) {
+	reqCopy := req
+	m.lastReq = &reqCopy
+
+	now := time.Now()
+	return &instances.Instance{
+		StoredMetadata: instances.StoredMetadata{
+			Id:             "inst-hotplug-default",
+			Name:           req.Name,
+			Image:          req.Image,
+			Size:           req.Size,
+			HotplugSize:    req.HotplugSize,
+			OverlaySize:    req.OverlaySize,
+			Vcpus:          req.Vcpus,
+			CreatedAt:      now,
+			HypervisorType: hypervisor.TypeCloudHypervisor,
+		},
+		State: instances.StateRunning,
+	}, nil
+}
+
+func TestCreateInstance_OmittedHotplugSizeDefaultsToZero(t *testing.T) {
+	svc := newTestService(t)
+
+	origMgr := svc.InstanceManager
+	mockMgr := &captureCreateManager{Manager: origMgr}
+	svc.InstanceManager = mockMgr
+
+	size := "1GB"
+	overlaySize := "10GB"
+	resp, err := svc.CreateInstance(ctx(), oapi.CreateInstanceRequestObject{
+		Body: &oapi.CreateInstanceRequest{
+			Name:        "test-no-hotplug",
+			Image:       "docker.io/library/alpine:latest",
+			Size:        &size,
+			OverlaySize: &overlaySize,
+		},
+	})
+	require.NoError(t, err)
+
+	created, ok := resp.(oapi.CreateInstance201JSONResponse)
+	require.True(t, ok, "expected 201 response")
+	assert.NotNil(t, mockMgr.lastReq, "CreateInstance should be called")
+	assert.Equal(t, int64(0), mockMgr.lastReq.HotplugSize, "omitted hotplug_size should not allocate default memory")
+
+	instance := oapi.Instance(created)
+	require.NotNil(t, instance.HotplugSize)
+
+	var hotplugBytes datasize.ByteSize
+	require.NoError(t, hotplugBytes.UnmarshalText([]byte(*instance.HotplugSize)))
+	assert.Equal(t, int64(0), int64(hotplugBytes), "response should report zero hotplug_size when omitted")
 }
 
 func TestInstanceLifecycle_StopStart(t *testing.T) {

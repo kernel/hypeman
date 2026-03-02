@@ -161,5 +161,3 @@ func TestErrors(t *testing.T) {
 		assert.Contains(t, ErrInvalidName.Error(), "pattern")
 	})
 }
-
-

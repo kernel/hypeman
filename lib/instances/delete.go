@@ -30,6 +30,7 @@ func (m *manager) deleteInstance(
 	}
 
 	inst := m.toInstance(ctx, meta)
+	stored := &meta.StoredMetadata
 	log.DebugContext(ctx, "loaded instance", "instance_id", id, "state", inst.State)
 
 	// 2. Get network allocation BEFORE killing VMM (while we can still query it)
@@ -47,9 +48,19 @@ func (m *manager) deleteInstance(
 		guest.CloseConn(dialer.Key())
 	}
 
-	// 4. If hypervisor might be running, force kill it
+	// 4. If running, try graceful guest shutdown before force kill.
+	gracefulShutdown := false
+	if inst.State == StateRunning {
+		stopTimeout := resolveStopTimeout(stored)
+		gracefulShutdown = m.tryGracefulGuestShutdown(ctx, &inst, stopTimeout)
+		if !gracefulShutdown {
+			log.DebugContext(ctx, "graceful shutdown before delete did not complete", "instance_id", id)
+		}
+	}
+
+	// 5. If hypervisor might be running, force kill it
 	// Also attempt kill for StateUnknown since we can't be sure if hypervisor is running
-	if inst.State.RequiresVMM() || inst.State == StateUnknown {
+	if !gracefulShutdown && (inst.State.RequiresVMM() || inst.State == StateUnknown) {
 		log.DebugContext(ctx, "stopping hypervisor", "instance_id", id, "state", inst.State)
 		if err := m.killHypervisor(ctx, &inst); err != nil {
 			// Log error but continue with cleanup
@@ -58,7 +69,7 @@ func (m *manager) deleteInstance(
 		}
 	}
 
-	// 5. Release network allocation
+	// 6. Release network allocation
 	if inst.NetworkEnabled {
 		log.DebugContext(ctx, "releasing network", "instance_id", id, "network", "default")
 		if err := m.networkManager.ReleaseAllocation(ctx, networkAlloc); err != nil {
@@ -67,7 +78,7 @@ func (m *manager) deleteInstance(
 		}
 	}
 
-	// 6. Detach and auto-unbind devices from VFIO
+	// 7. Detach and auto-unbind devices from VFIO
 	if len(inst.Devices) > 0 && m.deviceManager != nil {
 		for _, deviceID := range inst.Devices {
 			log.DebugContext(ctx, "detaching device", "id", id, "device", deviceID)
@@ -84,7 +95,7 @@ func (m *manager) deleteInstance(
 		}
 	}
 
-	// 6b. Detach volumes
+	// 7b. Detach volumes
 	if len(inst.Volumes) > 0 {
 		log.DebugContext(ctx, "detaching volumes", "instance_id", id, "count", len(inst.Volumes))
 		for _, volAttach := range inst.Volumes {
@@ -95,7 +106,7 @@ func (m *manager) deleteInstance(
 		}
 	}
 
-	// 6c. Destroy vGPU mdev device if present
+	// 7c. Destroy vGPU mdev device if present
 	if inst.GPUMdevUUID != "" {
 		log.InfoContext(ctx, "destroying vGPU mdev", "instance_id", id, "uuid", inst.GPUMdevUUID)
 		if err := devices.DestroyMdev(ctx, inst.GPUMdevUUID); err != nil {
@@ -104,7 +115,7 @@ func (m *manager) deleteInstance(
 		}
 	}
 
-	// 7. Delete all instance data
+	// 8. Delete all instance data
 	log.DebugContext(ctx, "deleting instance data", "instance_id", id)
 	if err := m.deleteInstanceData(id); err != nil {
 		log.ErrorContext(ctx, "failed to delete instance data", "instance_id", id, "error", err)

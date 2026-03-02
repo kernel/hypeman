@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nrednav/cuid2"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/paths"
+	"github.com/nrednav/cuid2"
 	"go.opentelemetry.io/otel/metric"
 )
 
