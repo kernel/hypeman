@@ -137,16 +137,6 @@ func runExecMode(log *Logger, cfg *vmconfig.Config) {
 	// discovers the VM has stopped (socket gone -> Stopped state).
 	log.Info("hypeman-init:entrypoint", formatExitSentinel(exitCode, exitMsg))
 
-	// Keep VM alive by waiting on the guest-agent. The agent runs forever,
-	// so the VM stays accessible via `hm exec` even after the entrypoint
-	// exits (e.g. alpine's /bin/sh exits immediately without stdin).
-	// The VM is shut down when a stop/delete signal arrives (forwarded above)
-	// or when the guest-agent's Shutdown RPC sends SIGTERM to PID 1.
-	if agentCmd != nil && agentCmd.Process != nil {
-		log.Info("hypeman-init:entrypoint", "entrypoint finished, waiting on guest-agent to keep VM alive")
-		agentCmd.Wait()
-	}
-
 	// Clean shutdown: use reboot(POWER_OFF) instead of syscall.Exit to avoid
 	// kernel panic ("Attempted to kill init!"). This cleanly terminates the VM
 	// and causes the hypervisor process to exit on the host.
