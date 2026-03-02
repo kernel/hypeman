@@ -216,6 +216,36 @@ components:
           description: Override image CMD (like docker run <image> <command>). Omit to use image default.
           example: ["echo", "hello"]
         # Future: port_mappings, timeout_seconds
+
+    ForkInstanceRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          description: Name for the forked instance (lowercase letters, digits, and dashes only; cannot start or end with a dash)
+          pattern: ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$
+          maxLength: 63
+          example: my-workload-1-fork
+        from_running:
+          type: boolean
+          description: |
+            Allow forking from a running source instance.
+            When true and source is Running, the source is put into standby, forked, then restored back to Running.
+          default: false
+          example: false
+        target_state:
+          $ref: "#/components/schemas/ForkTargetState"
+          description: |
+            Optional final state for the forked instance.
+            Default is the source instance state at fork time.
+            For example, forking from Running defaults the fork result to Running.
+
+    ForkTargetState:
+      type: string
+      description: Target state for the forked instance after fork completes
+      enum: [Stopped, Standby, Running]
+      example: Running
     
     Instance:
       type: object
@@ -1504,6 +1534,63 @@ paths:
                 $ref: "#/components/schemas/Error"
         409:
           description: Conflict - instance not in standby or no snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /instances/{id}/fork:
+    post:
+      summary: Fork an instance from stopped, standby, or running (with from_running=true)
+      operationId: forkInstance
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Source instance ID or name
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ForkInstanceRequest"
+      responses:
+        201:
+          description: Forked instance created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Instance"
+        400:
+          description: Bad request - invalid fork request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        404:
+          description: Source instance not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Conflict - invalid state (including running without from_running=true) or target name conflict
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        501:
+          description: Not implemented - fork not supported by this hypervisor
           content:
             application/json:
               schema:

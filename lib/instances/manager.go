@@ -25,6 +25,7 @@ type Manager interface {
 	// Returns ErrAmbiguousName if prefix matches multiple instances.
 	GetInstance(ctx context.Context, idOrName string) (*Instance, error)
 	DeleteInstance(ctx context.Context, id string) error
+	ForkInstance(ctx context.Context, id string, req ForkInstanceRequest) (*Instance, error)
 	StandbyInstance(ctx context.Context, id string) (*Instance, error)
 	RestoreInstance(ctx context.Context, id string) (*Instance, error)
 	StopInstance(ctx context.Context, id string) (*Instance, error)
@@ -180,6 +181,26 @@ func (m *manager) DeleteInstance(ctx context.Context, id string) error {
 		m.instanceLocks.Delete(id)
 	}
 	return err
+}
+
+// ForkInstance creates a forked copy of an instance.
+func (m *manager) ForkInstance(ctx context.Context, id string, req ForkInstanceRequest) (*Instance, error) {
+	lock := m.getInstanceLock(id)
+	lock.Lock()
+	forked, targetState, err := m.forkInstance(ctx, id, req)
+	lock.Unlock()
+	if err != nil {
+		return nil, err
+	}
+
+	inst, err := m.applyForkTargetState(ctx, forked.Id, targetState)
+	if err != nil {
+		if cleanupErr := m.cleanupForkInstanceOnError(ctx, forked.Id); cleanupErr != nil {
+			return nil, fmt.Errorf("apply fork target state: %w; additionally failed to cleanup forked instance %s: %v", err, forked.Id, cleanupErr)
+		}
+		return nil, fmt.Errorf("apply fork target state: %w", err)
+	}
+	return inst, nil
 }
 
 // StandbyInstance puts an instance in standby (pause, snapshot, delete VMM)

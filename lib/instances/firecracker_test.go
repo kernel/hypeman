@@ -76,7 +76,7 @@ func createNginxImageAndWait(t *testing.T, ctx context.Context, imageManager ima
 	})
 	require.NoError(t, err)
 
-	for i := 0; i < 60; i++ {
+	for i := 0; i < 180; i++ {
 		img, err := imageManager.GetImage(ctx, nginxImage.Name)
 		if err == nil && img.Status == images.StatusReady {
 			return
@@ -315,4 +315,69 @@ func TestFirecrackerNetworkLifecycle(t *testing.T) {
 
 	_, err = mgr.networkManager.GetAllocation(ctx, inst.Id)
 	require.Error(t, err, "network allocation should be removed on delete")
+}
+
+func TestFirecrackerForkFromRunningNetwork(t *testing.T) {
+	requireFirecrackerIntegrationPrereqs(t)
+
+	mgr, tmpDir := setupTestManagerForFirecracker(t)
+	ctx := context.Background()
+	p := paths.New(tmpDir)
+
+	imageManager, err := images.NewManager(p, 1, nil)
+	require.NoError(t, err)
+	createNginxImageAndWait(t, ctx, imageManager)
+
+	systemManager := system.NewManager(p)
+	require.NoError(t, systemManager.EnsureSystemFiles(ctx))
+	require.NoError(t, mgr.networkManager.Initialize(ctx, nil))
+
+	source, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
+		Name:           "fc-fork-running-src",
+		Image:          "docker.io/library/nginx:alpine",
+		Size:           2 * 1024 * 1024 * 1024,
+		HotplugSize:    256 * 1024 * 1024,
+		OverlaySize:    10 * 1024 * 1024 * 1024,
+		Vcpus:          1,
+		NetworkEnabled: true,
+		Hypervisor:     hypervisor.TypeFirecracker,
+	})
+	require.NoError(t, err)
+	sourceID := source.Id
+	t.Cleanup(func() { _ = mgr.DeleteInstance(context.Background(), sourceID) })
+	assert.NotEmpty(t, source.IP)
+	assert.NotEmpty(t, source.MAC)
+
+	_, err = mgr.ForkInstance(ctx, sourceID, ForkInstanceRequest{Name: "fc-fork-running-no-flag"})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidState)
+
+	forked, err := mgr.ForkInstance(ctx, sourceID, ForkInstanceRequest{
+		Name:        "fc-fork-running-copy",
+		FromRunning: true,
+		TargetState: StateRunning,
+	})
+	require.NoError(t, err)
+	require.Equal(t, StateRunning, forked.State)
+	forkID := forked.Id
+	t.Cleanup(func() { _ = mgr.DeleteInstance(context.Background(), forkID) })
+	assert.NotEmpty(t, forked.IP)
+	assert.NotEmpty(t, forked.MAC)
+	assert.Equal(t, mgr.paths.InstanceVsockSocket(forkID), forked.VsockSocket)
+
+	forkMeta, err := mgr.loadMetadata(forkID)
+	require.NoError(t, err)
+	assert.Equal(t, mgr.paths.InstanceVsockSocket(forkID), forkMeta.StoredMetadata.VsockSocket)
+
+	sourceAfterFork, err := mgr.GetInstance(ctx, sourceID)
+	require.NoError(t, err)
+	require.Equal(t, StateRunning, sourceAfterFork.State)
+	assert.NotEmpty(t, sourceAfterFork.IP)
+	assert.NotEmpty(t, sourceAfterFork.MAC)
+
+	assertHostCanReachNginx(t, sourceAfterFork.IP, 80, 60*time.Second)
+	assertHostCanReachNginx(t, forked.IP, 80, 60*time.Second)
+	assertHostCanReachNginx(t, sourceAfterFork.IP, 80, 60*time.Second)
+	assert.NotEqual(t, sourceAfterFork.IP, forked.IP)
+	assert.NotEqual(t, sourceAfterFork.MAC, forked.MAC)
 }

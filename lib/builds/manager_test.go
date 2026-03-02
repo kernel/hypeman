@@ -84,6 +84,10 @@ func (m *mockInstanceManager) DeleteInstance(ctx context.Context, id string) err
 	return nil
 }
 
+func (m *mockInstanceManager) ForkInstance(ctx context.Context, id string, req instances.ForkInstanceRequest) (*instances.Instance, error) {
+	return nil, instances.ErrNotFound
+}
+
 func (m *mockInstanceManager) StandbyInstance(ctx context.Context, id string) (*instances.Instance, error) {
 	return nil, nil
 }

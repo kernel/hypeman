@@ -83,6 +83,43 @@ type VMStarter interface {
 	// - QEMU: would start with -incoming or -loadvm flags (not yet implemented)
 	// Returns the process ID and a Hypervisor client. The VM is in paused state after restore.
 	RestoreVM(ctx context.Context, p *paths.Paths, version string, socketPath string, snapshotPath string) (pid int, hv Hypervisor, err error)
+
+	// PrepareFork allows hypervisors to prepare forked instance state.
+	// For snapshot-based forks, implementations can rewrite snapshot config with
+	// fork identity (paths, vsock, network). Hypervisors that don't support fork
+	// should return ErrNotSupported.
+	PrepareFork(ctx context.Context, req ForkPrepareRequest) (ForkPrepareResult, error)
+}
+
+// ForkNetworkConfig contains network identity fields for fork preparation.
+type ForkNetworkConfig struct {
+	TAPDevice string
+	IP        string
+	MAC       string
+	Netmask   string
+}
+
+// ForkPrepareRequest contains hypervisor-specific fork preparation inputs.
+type ForkPrepareRequest struct {
+	// SnapshotConfigPath is optional. When empty, implementations should only
+	// validate fork support and return without snapshot rewrites.
+	SnapshotConfigPath string
+
+	SourceDataDir string
+	TargetDataDir string
+
+	VsockCID    int64
+	VsockSocket string
+
+	SerialLogPath string
+	Network       *ForkNetworkConfig
+}
+
+// ForkPrepareResult describes which optional fork rewrites were actually applied.
+type ForkPrepareResult struct {
+	// VsockCIDUpdated indicates whether snapshot state was updated to use
+	// ForkPrepareRequest.VsockCID.
+	VsockCIDUpdated bool
 }
 
 // Hypervisor defines the interface for VM control operations.

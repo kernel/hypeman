@@ -94,7 +94,8 @@ type instanceInfo struct {
 }
 
 type restoreMetadata struct {
-	NetworkOverrides []networkOverride `json:"network_overrides,omitempty"`
+	NetworkOverrides      []networkOverride `json:"network_overrides,omitempty"`
+	SnapshotSourceDataDir string            `json:"snapshot_source_data_dir,omitempty"`
 }
 
 func toBootSource(cfg hypervisor.VMConfig) bootSource {
@@ -216,6 +217,10 @@ func saveRestoreMetadata(instanceDir string, networkConfigs []networkInterface) 
 		})
 	}
 
+	return saveRestoreMetadataState(instanceDir, &meta)
+}
+
+func saveRestoreMetadataState(instanceDir string, meta *restoreMetadata) error {
 	data, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal firecracker restore metadata: %w", err)

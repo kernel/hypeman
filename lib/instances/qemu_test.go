@@ -865,3 +865,93 @@ func TestQEMUStandbyAndRestore(t *testing.T) {
 
 	t.Log("QEMU standby/restore test complete!")
 }
+
+func TestQEMUForkFromRunningNetwork(t *testing.T) {
+	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
+		t.Skip("/dev/kvm not available, skipping on this platform")
+	}
+
+	starter := qemu.NewStarter()
+	if _, err := starter.GetBinaryPath(nil, ""); err != nil {
+		t.Fatalf("QEMU not available: %v", err)
+	}
+
+	manager, tmpDir := setupTestManagerForQEMU(t)
+	ctx := context.Background()
+	p := paths.New(tmpDir)
+
+	imageManager, err := images.NewManager(p, 1, nil)
+	require.NoError(t, err)
+
+	t.Log("Ensuring nginx image...")
+	nginxImage, err := imageManager.CreateImage(ctx, images.CreateImageRequest{Name: "docker.io/library/nginx:alpine"})
+	require.NoError(t, err)
+
+	imageName := nginxImage.Name
+	for i := 0; i < 60; i++ {
+		img, err := imageManager.GetImage(ctx, imageName)
+		if err == nil && img.Status == images.StatusReady {
+			nginxImage = img
+			break
+		}
+		if err == nil && img.Status == images.StatusFailed {
+			t.Fatalf("image build failed: %s", *img.Error)
+		}
+		time.Sleep(1 * time.Second)
+	}
+	require.Equal(t, images.StatusReady, nginxImage.Status, "Image should be ready after 60 seconds")
+
+	require.NoError(t, manager.systemManager.EnsureSystemFiles(ctx))
+	require.NoError(t, manager.networkManager.Initialize(ctx, nil))
+
+	source, err := manager.CreateInstance(ctx, CreateInstanceRequest{
+		Name:           "qemu-fork-running-src",
+		Image:          "docker.io/library/nginx:alpine",
+		Size:           2 * 1024 * 1024 * 1024,
+		HotplugSize:    256 * 1024 * 1024,
+		OverlaySize:    10 * 1024 * 1024 * 1024,
+		Vcpus:          1,
+		NetworkEnabled: true,
+		Hypervisor:     hypervisor.TypeQEMU,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = manager.DeleteInstance(context.Background(), source.Id) })
+	require.NoError(t, waitForQEMUReady(ctx, source.SocketPath, 10*time.Second))
+	require.NoError(t, waitForLogMessage(ctx, manager, source.Id, "start worker processes", 15*time.Second))
+
+	assert.NotEmpty(t, source.IP)
+	assert.NotEmpty(t, source.MAC)
+	assertHostCanReachNginx(t, source.IP, 80, 60*time.Second)
+
+	_, err = manager.ForkInstance(ctx, source.Id, ForkInstanceRequest{Name: "qemu-fork-running-no-flag"})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidState)
+
+	forked, err := manager.ForkInstance(ctx, source.Id, ForkInstanceRequest{
+		Name:        "qemu-fork-running-copy",
+		FromRunning: true,
+		TargetState: StateStandby,
+	})
+	require.NoError(t, err)
+	require.Equal(t, StateStandby, forked.State)
+	forkedID := forked.Id
+	t.Cleanup(func() { _ = manager.DeleteInstance(context.Background(), forkedID) })
+
+	sourceAfterFork, err := manager.GetInstance(ctx, source.Id)
+	require.NoError(t, err)
+	require.Equal(t, StateRunning, sourceAfterFork.State)
+	require.NotEmpty(t, sourceAfterFork.IP)
+	assertHostCanReachNginx(t, sourceAfterFork.IP, 80, 60*time.Second)
+
+	forked, err = manager.RestoreInstance(ctx, forkedID)
+	require.NoError(t, err)
+	require.Equal(t, StateRunning, forked.State)
+	require.NoError(t, waitForQEMUReady(ctx, forked.SocketPath, 10*time.Second))
+
+	assert.NotEmpty(t, forked.IP)
+	assert.NotEmpty(t, forked.MAC)
+	assert.NotEqual(t, sourceAfterFork.IP, forked.IP)
+	assert.NotEqual(t, sourceAfterFork.MAC, forked.MAC)
+	assertHostCanReachNginx(t, forked.IP, 80, 60*time.Second)
+	assertHostCanReachNginx(t, sourceAfterFork.IP, 80, 60*time.Second)
+}

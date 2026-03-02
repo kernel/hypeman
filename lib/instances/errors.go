@@ -9,6 +9,9 @@ var (
 	// ErrInvalidState is returned when a state transition is not valid
 	ErrInvalidState = errors.New("invalid state transition")
 
+	// ErrInvalidRequest is returned when request validation fails
+	ErrInvalidRequest = errors.New("invalid request")
+
 	// ErrAlreadyExists is returned when creating an instance that already exists
 	ErrAlreadyExists = errors.New("instance already exists")
 
@@ -20,4 +23,7 @@ var (
 
 	// ErrInsufficientResources is returned when resources (CPU, memory, network, GPU) are not available
 	ErrInsufficientResources = errors.New("insufficient resources")
+
+	// ErrNotSupported is returned when an operation is not supported for the instance hypervisor
+	ErrNotSupported = errors.New("operation not supported")
 )

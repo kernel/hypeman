@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -36,6 +38,8 @@ func NewStarter() *Starter {
 }
 
 var _ hypervisor.VMStarter = (*Starter)(nil)
+
+var snapshotSourceAliasMu sync.Mutex
 
 func (s *Starter) SocketName() string {
 	return "fc.sock"
@@ -106,12 +110,89 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 	if err != nil {
 		return 0, nil, fmt.Errorf("load firecracker restore metadata: %w", err)
 	}
-	if err := hv.loadSnapshot(ctx, snapshotPath, meta.NetworkOverrides); err != nil {
+	err = func() error {
+		snapshotSourceAliasMu.Lock()
+		defer snapshotSourceAliasMu.Unlock()
+		return withSnapshotSourceDirAlias(meta, filepath.Dir(socketPath), func() error {
+			return hv.loadSnapshot(ctx, snapshotPath, meta.NetworkOverrides)
+		})
+	}()
+	if err != nil {
 		return 0, nil, fmt.Errorf("load firecracker snapshot: %w", err)
+	}
+	if meta.SnapshotSourceDataDir != "" {
+		meta.SnapshotSourceDataDir = ""
+		if err := saveRestoreMetadataState(filepath.Dir(socketPath), meta); err != nil {
+			return 0, nil, fmt.Errorf("clear firecracker snapshot source alias metadata: %w", err)
+		}
 	}
 
 	cu.Release()
 	return pid, hv, nil
+}
+
+func withSnapshotSourceDirAlias(meta *restoreMetadata, targetDataDir string, run func() error) error {
+	if meta == nil || meta.SnapshotSourceDataDir == "" {
+		return run()
+	}
+
+	sourceDataDir := filepath.Clean(meta.SnapshotSourceDataDir)
+	targetDataDir = filepath.Clean(targetDataDir)
+	if sourceDataDir == targetDataDir {
+		return run()
+	}
+	if rel, err := filepath.Rel(sourceDataDir, targetDataDir); err == nil && rel != "." && !strings.HasPrefix(rel, "..") {
+		return fmt.Errorf("invalid snapshot source alias: target data dir %q must not be nested under source data dir %q", targetDataDir, sourceDataDir)
+	}
+	if rel, err := filepath.Rel(targetDataDir, sourceDataDir); err == nil && rel != "." && !strings.HasPrefix(rel, "..") {
+		return fmt.Errorf("invalid snapshot source alias: source data dir %q must not be nested under target data dir %q", sourceDataDir, targetDataDir)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(sourceDataDir), 0755); err != nil {
+		return fmt.Errorf("ensure snapshot source parent dir: %w", err)
+	}
+
+	backupDataDir := ""
+	if _, err := os.Stat(sourceDataDir); err == nil {
+		backupDataDir = fmt.Sprintf("%s.fork-bak.%d", sourceDataDir, time.Now().UnixNano())
+		if err := os.Rename(sourceDataDir, backupDataDir); err != nil {
+			return fmt.Errorf("backup snapshot source data dir: %w", err)
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("stat snapshot source data dir: %w", err)
+	}
+
+	if err := os.Symlink(targetDataDir, sourceDataDir); err != nil {
+		if backupDataDir != "" {
+			_ = os.Rename(backupDataDir, sourceDataDir)
+		}
+		return fmt.Errorf("symlink snapshot source data dir: %w", err)
+	}
+
+	runErr := run()
+
+	removeErr := os.Remove(sourceDataDir)
+	restoreErr := error(nil)
+	if backupDataDir != "" {
+		restoreErr = os.Rename(backupDataDir, sourceDataDir)
+	}
+
+	if runErr != nil {
+		if removeErr != nil {
+			return fmt.Errorf("%v; cleanup snapshot source symlink: %w", runErr, removeErr)
+		}
+		if restoreErr != nil {
+			return fmt.Errorf("%v; restore snapshot source data dir: %w", runErr, restoreErr)
+		}
+		return runErr
+	}
+	if removeErr != nil {
+		return fmt.Errorf("cleanup snapshot source symlink: %w", removeErr)
+	}
+	if restoreErr != nil {
+		return fmt.Errorf("restore snapshot source data dir: %w", restoreErr)
+	}
+	return nil
 }
 
 func (s *Starter) startProcess(_ context.Context, p *paths.Paths, version string, socketPath string) (int, error) {
