@@ -3,6 +3,8 @@ package instances
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -194,7 +196,26 @@ func (m *manager) stopInstance(
 		}
 	}
 
-	// 8. Update metadata (clear PID, mdev UUID, set StoppedAt)
+	// 8. Always remove stale runtime sockets after process exit.
+	// If graceful guest shutdown exits before shutdownHypervisor() is called, these
+	// files may still exist and cause state derivation as Unknown or bind conflicts.
+	_ = os.Remove(inst.SocketPath)
+	_ = os.Remove(inst.VsockSocket)
+	if matches, err := filepath.Glob(inst.VsockSocket + "_*"); err == nil {
+		for _, match := range matches {
+			_ = os.Remove(match)
+		}
+	}
+
+	// 9. Ensure terminal stop semantics: no snapshot should remain in Stopped state.
+	// This prevents stale snapshot directories from deriving state as Standby and
+	// blocking future StartInstance calls with invalid_state.
+	snapshotDir := m.paths.InstanceSnapshotLatest(id)
+	if err := os.RemoveAll(snapshotDir); err != nil {
+		log.WarnContext(ctx, "failed to remove stale snapshot directory on stop", "instance_id", id, "snapshot_dir", snapshotDir, "error", err)
+	}
+
+	// 10. Update metadata (clear PID, mdev UUID, set StoppedAt)
 	now := time.Now()
 	stored.StoppedAt = &now
 	stored.HypervisorPID = nil
@@ -206,7 +227,7 @@ func (m *manager) stopInstance(
 		return nil, fmt.Errorf("save metadata: %w", err)
 	}
 
-	// 9. Persist exit info from serial console (under lock, safe from races)
+	// 11. Persist exit info from serial console (under lock, safe from races)
 	m.persistExitInfo(ctx, id)
 
 	// Record metrics

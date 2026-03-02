@@ -154,7 +154,8 @@ type CapacityConfig struct {
 
 // HypervisorConfig holds hypervisor settings.
 type HypervisorConfig struct {
-	Default string `koanf:"default"`
+	Default               string `koanf:"default"`
+	FirecrackerBinaryPath string `koanf:"firecracker_binary_path"`
 }
 
 // GPUConfig holds GPU-related settings.
@@ -297,7 +298,8 @@ func defaultConfig() *Config {
 		},
 
 		Hypervisor: HypervisorConfig{
-			Default: "cloud-hypervisor",
+			Default:               "cloud-hypervisor",
+			FirecrackerBinaryPath: "",
 		},
 
 		GPU: GPUConfig{

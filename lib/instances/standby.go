@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
@@ -101,6 +103,15 @@ func (m *manager) standbyInstance(
 		log.WarnContext(ctx, "failed to shutdown hypervisor gracefully, snapshot still valid", "instance_id", id, "error", err)
 	}
 
+	// Firecracker vsock sockets can persist across standby/restore if the process
+	// exits ungracefully. Remove stale sockets before restore attempts.
+	_ = os.Remove(inst.VsockSocket)
+	if matches, err := filepath.Glob(inst.VsockSocket + "_*"); err == nil {
+		for _, match := range matches {
+			_ = os.Remove(match)
+		}
+	}
+
 	// 9. Release network allocation (delete TAP device)
 	// TAP devices with explicit Owner/Group fields do NOT auto-delete when VMM exits
 	// They must be explicitly deleted
@@ -160,6 +171,10 @@ func createSnapshot(ctx context.Context, hv hypervisor.Hypervisor, snapshotDir s
 // shutdownHypervisor gracefully shuts down the hypervisor process via API
 func (m *manager) shutdownHypervisor(ctx context.Context, inst *Instance) error {
 	log := logger.FromContext(ctx)
+	defer func() {
+		// Clean stale sockets even if graceful shutdown fails.
+		_ = os.Remove(inst.SocketPath)
+	}()
 
 	// Try to connect to hypervisor
 	hv, err := m.getHypervisor(inst.SocketPath, inst.HypervisorType)
@@ -171,15 +186,29 @@ func (m *manager) shutdownHypervisor(ctx context.Context, inst *Instance) error 
 
 	// Try graceful shutdown
 	log.DebugContext(ctx, "sending shutdown command to hypervisor", "instance_id", inst.Id)
-	hv.Shutdown(ctx)
+	shutdownErr := hv.Shutdown(ctx)
 
 	// Wait for process to exit
 	if inst.HypervisorPID != nil {
 		if !WaitForProcessExit(*inst.HypervisorPID, 2*time.Second) {
-			log.WarnContext(ctx, "hypervisor did not exit gracefully in time", "instance_id", inst.Id, "pid", *inst.HypervisorPID)
+			log.WarnContext(ctx, "hypervisor did not exit gracefully in time, force killing process", "instance_id", inst.Id, "pid", *inst.HypervisorPID)
+			if err := syscall.Kill(*inst.HypervisorPID, syscall.SIGKILL); err != nil && err != syscall.ESRCH {
+				return fmt.Errorf("force kill hypervisor pid %d: %w", *inst.HypervisorPID, err)
+			}
+			if !WaitForProcessExit(*inst.HypervisorPID, 2*time.Second) {
+				// The process may have spawned children in its own process group.
+				_ = syscall.Kill(-*inst.HypervisorPID, syscall.SIGKILL)
+				if !WaitForProcessExit(*inst.HypervisorPID, 2*time.Second) {
+					return fmt.Errorf("hypervisor pid %d did not exit after SIGKILL", *inst.HypervisorPID)
+				}
+			}
 		} else {
 			log.DebugContext(ctx, "hypervisor shutdown gracefully", "instance_id", inst.Id, "pid", *inst.HypervisorPID)
 		}
+	}
+
+	if shutdownErr != nil && shutdownErr != hypervisor.ErrNotSupported {
+		return fmt.Errorf("graceful hypervisor shutdown failed: %w", shutdownErr)
 	}
 
 	return nil

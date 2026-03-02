@@ -53,6 +53,12 @@ type NetworkConfig struct {
 	IP        string
 	MAC       string
 	Netmask   string
+	// DownloadBps limits host->guest bandwidth in bytes/sec (0 = unlimited).
+	// Firecracker maps this to API rate limiters; other hypervisors may ignore it.
+	DownloadBps int64
+	// UploadBps limits guest->host bandwidth in bytes/sec (0 = unlimited).
+	// Firecracker maps this to API rate limiters; other hypervisors may ignore it.
+	UploadBps int64
 }
 
 // VMInfo contains current VM state information

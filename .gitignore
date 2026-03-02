@@ -33,6 +33,7 @@ scripts/utm/images/
 
 # IDE and editor
 .cursor/
+.refs/
 
 # Build artifacts
 api
