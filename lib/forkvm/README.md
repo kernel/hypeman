@@ -53,16 +53,21 @@ instead of reusing the source identity.
 ## VZ (Virtualization.framework)
 
 - Stopped-source fork is supported (directory clone, no snapshot rewrite).
-- Standby and running-source fork are supported by rewriting the copied VZ
-  snapshot manifest (`config.json`) for fork-local runtime paths.
-- VZ fork preparation rewrites:
-  - Instance-local paths in serialized shim config (disks, kernel/initrd,
-    serial log, control/vsock sockets, shim log).
+- Standby-source fork is supported (snapshot copy + VZ manifest rewrite +
+  restore).
+- Running-source fork is supported (standby source -> fork from standby ->
+  restore source).
+- VZ fork preparation rewrites instance-local paths in serialized shim config:
+  disks, kernel/initrd, serial log, control socket, vsock socket, shim log.
 - VZ keeps snapshotted NIC identity unchanged during fork prep because
-  save/restore validation can reject machine-state restore when device identity
+  save/restore validation can reject machine-state restore when NIC identity
   fields are mutated.
-- Vsock CID rewrites are not required for VZ fork flows because VZ uses a
-  per-VM Unix vsock proxy socket for routing.
+- For forked standby restores with networking, a fresh network allocation is
+  applied post-restore via the generic restore networking flow.
+- Vsock socket naming is resolved generically through hypervisor registration
+  (`vz.vsock` for VZ), so no instance-layer VZ-specific branching is required.
+- Vsock CID rewrites are not required for VZ fork flows because VZ routing is
+  socket-path based.
 
 ## Operational constraints
 
