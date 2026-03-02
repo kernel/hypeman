@@ -54,10 +54,12 @@ type NetworkConfig struct {
 	MAC       string
 	Netmask   string
 	// DownloadBps limits host->guest bandwidth in bytes/sec (0 = unlimited).
-	// Firecracker maps this to API rate limiters; other hypervisors may ignore it.
+	// Hypeman enforces this host-side via TAP shaping for all hypervisors.
+	// Firecracker also maps it to per-interface API rate limiters.
 	DownloadBps int64
 	// UploadBps limits guest->host bandwidth in bytes/sec (0 = unlimited).
-	// Firecracker maps this to API rate limiters; other hypervisors may ignore it.
+	// Hypeman enforces this host-side via TAP shaping for all hypervisors.
+	// Firecracker also maps it to per-interface API rate limiters.
 	UploadBps int64
 }
 

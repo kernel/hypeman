@@ -127,7 +127,8 @@ func (f *Firecracker) configureForBoot(ctx context.Context, cfg hypervisor.VMCon
 		if _, err := f.do(ctx, http.MethodPut, "/serial", serialDevice{
 			SerialOutPath: cfg.SerialLogPath,
 		}, http.StatusNoContent); err != nil {
-			// Some Firecracker builds do not expose the /serial endpoint.
+			// The /serial endpoint was added in Firecracker v1.14.0.
+			// Keep this fallback for custom/older binaries that may not expose it.
 			if !strings.Contains(err.Error(), "Invalid request method and/or path") {
 				return fmt.Errorf("configure serial: %w", err)
 			}
