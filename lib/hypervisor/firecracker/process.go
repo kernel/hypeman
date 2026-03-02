@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -37,6 +38,8 @@ func NewStarter() *Starter {
 }
 
 var _ hypervisor.VMStarter = (*Starter)(nil)
+
+var snapshotSourceAliasMu sync.Mutex
 
 func (s *Starter) SocketName() string {
 	return "fc.sock"
@@ -107,9 +110,14 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 	if err != nil {
 		return 0, nil, fmt.Errorf("load firecracker restore metadata: %w", err)
 	}
-	if err := withSnapshotSourceDirAlias(meta, filepath.Dir(socketPath), func() error {
-		return hv.loadSnapshot(ctx, snapshotPath, meta.NetworkOverrides)
-	}); err != nil {
+	err = func() error {
+		snapshotSourceAliasMu.Lock()
+		defer snapshotSourceAliasMu.Unlock()
+		return withSnapshotSourceDirAlias(meta, filepath.Dir(socketPath), func() error {
+			return hv.loadSnapshot(ctx, snapshotPath, meta.NetworkOverrides)
+		})
+	}()
+	if err != nil {
 		return 0, nil, fmt.Errorf("load firecracker snapshot: %w", err)
 	}
 	if meta.SnapshotSourceDataDir != "" {
