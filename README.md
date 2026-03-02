@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <strong>Run containerized workloads in VMs, powered by <a href="https://github.com/cloud-hypervisor/cloud-hypervisor">Cloud Hypervisor</a>.</strong>
+  <strong>Run containerized workloads in VMs, powered by Cloud Hypervisor, Firecracker, QEMU, and Apple Virtualization.framework.</strong>
  <img alt="GitHub License" src="https://img.shields.io/github/license/kernel/hypeman">
   <a href="https://discord.gg/FBrveQRcud"><img src="https://img.shields.io/discord/1342243238748225556?logo=discord&logoColor=white&color=7289DA" alt="Discord"></a>
 </p>
@@ -22,7 +22,7 @@
 ## Requirements
 
 ### Linux
-**KVM** virtualization support required. Supports Cloud Hypervisor and QEMU as hypervisors.
+**KVM** virtualization support required. Supports Cloud Hypervisor, Firecracker, and QEMU as hypervisors.
 
 ### macOS
 **macOS 11.0+** on Apple Silicon. Uses Apple's Virtualization.framework via the `vz` hypervisor.

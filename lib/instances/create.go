@@ -657,11 +657,16 @@ func (m *manager) buildHypervisorConfig(ctx context.Context, inst *Instance, ima
 	// Network configuration
 	var networks []hypervisor.NetworkConfig
 	if netConfig != nil {
+		// Instance-level bandwidth limits are persisted in metadata, then passed
+		// into per-interface hypervisor config so VMMs like Firecracker can map
+		// them to device-level API rate limiters.
 		networks = append(networks, hypervisor.NetworkConfig{
-			TAPDevice: netConfig.TAPDevice,
-			IP:        netConfig.IP,
-			MAC:       netConfig.MAC,
-			Netmask:   netConfig.Netmask,
+			TAPDevice:   netConfig.TAPDevice,
+			IP:          netConfig.IP,
+			MAC:         netConfig.MAC,
+			Netmask:     netConfig.Netmask,
+			DownloadBps: inst.NetworkBandwidthDownload,
+			UploadBps:   inst.NetworkBandwidthUpload,
 		})
 	}
 

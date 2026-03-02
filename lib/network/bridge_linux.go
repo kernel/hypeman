@@ -251,6 +251,13 @@ func (m *manager) setupIPTablesRules(ctx context.Context, subnet, bridgeName str
 
 	log.InfoContext(ctx, "iptables FORWARD ready", "outbound", fwdOutStatus, "inbound", fwdInStatus)
 
+	// Restore Docker's FORWARD chain jumps if they were lost.
+	// On systems where an external tool (e.g., hypervisor firewall management) periodically
+	// rebuilds the FORWARD chain, Docker's jump rules can be wiped out. Docker only inserts
+	// them at daemon start, so they stay missing until Docker is restarted. Since hypeman
+	// already re-ensures its own rules here, we also restore Docker's if needed.
+	m.ensureDockerForwardJump(ctx)
+
 	return nil
 }
 
@@ -407,6 +414,76 @@ func (m *manager) deleteForwardRuleByComment(comment string) {
 		}
 		delCmd.Run() // ignore error
 	}
+}
+
+// ensureDockerForwardJump checks if Docker's DOCKER-FORWARD chain exists but is
+// unreachable from the FORWARD chain, and restores the jump if missing.
+// This is a no-op if Docker is not installed or the jump already exists.
+//
+// Note: this cannot mis-order DOCKER-FORWARD vs DOCKER-USER because it only acts
+// when the jump is completely absent (chain was flushed). If DOCKER-USER's jump
+// still exists, DOCKER-FORWARD's jump is almost certainly still there too — they
+// get wiped together — and the early -C check returns before we insert anything.
+func (m *manager) ensureDockerForwardJump(ctx context.Context) {
+	log := logger.FromContext(ctx)
+
+	// Check if DOCKER-FORWARD chain exists (Docker is installed and configured)
+	checkChain := exec.Command("iptables", "-L", "DOCKER-FORWARD", "-n")
+	checkChain.SysProcAttr = &syscall.SysProcAttr{
+		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+	}
+	if checkChain.Run() != nil {
+		return // Chain doesn't exist — Docker not installed or not configured
+	}
+
+	// Check if jump already exists in FORWARD
+	checkJump := exec.Command("iptables", "-C", "FORWARD", "-j", "DOCKER-FORWARD")
+	checkJump.SysProcAttr = &syscall.SysProcAttr{
+		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+	}
+	if checkJump.Run() == nil {
+		return // Jump already present
+	}
+
+	// DOCKER-FORWARD chain exists but the jump from FORWARD is missing — restore it.
+	// Insert right after hypeman's last rule so the jump is evaluated before any
+	// explicit DROP/REJECT rules that an external firewall tool may have added.
+	insertPos := m.lastHypemanForwardRulePosition() + 1
+	addJump := exec.Command("iptables", "-I", "FORWARD", fmt.Sprintf("%d", insertPos), "-j", "DOCKER-FORWARD")
+	addJump.SysProcAttr = &syscall.SysProcAttr{
+		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+	}
+	if err := addJump.Run(); err != nil {
+		log.WarnContext(ctx, "failed to restore Docker FORWARD chain jump", "error", err)
+		return
+	}
+
+	log.WarnContext(ctx, "restored missing jump to DOCKER-FORWARD in FORWARD chain", "position", insertPos)
+}
+
+// lastHypemanForwardRulePosition returns the line number of the last hypeman-managed
+// rule in the FORWARD chain, or 0 if none are found.
+func (m *manager) lastHypemanForwardRulePosition() int {
+	cmd := exec.Command("iptables", "-L", "FORWARD", "--line-numbers", "-n", "-v")
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+	}
+	output, err := cmd.Output()
+	if err != nil {
+		return 0
+	}
+
+	lastPos := 0
+	for _, line := range strings.Split(string(output), "\n") {
+		if !strings.Contains(line, "hypeman-") {
+			continue
+		}
+		var pos int
+		if _, err := fmt.Sscanf(line, "%d", &pos); err == nil && pos > lastPos {
+			lastPos = pos
+		}
+	}
+	return lastPos
 }
 
 // createTAPDevice creates TAP device and attaches to bridge.

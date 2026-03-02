@@ -83,6 +83,11 @@ func (p *Paths) SystemBinary(version, arch string) string {
 	return filepath.Join(p.dataDir, "system", "binaries", version, arch, "cloud-hypervisor")
 }
 
+// FirecrackerBinary returns the path to a firecracker VMM binary.
+func (p *Paths) FirecrackerBinary(version, arch string) string {
+	return filepath.Join(p.dataDir, "system", "binaries", "firecracker", version, arch, "firecracker")
+}
+
 // Image path methods
 
 // ImageDigestDir returns the directory for a specific image digest.

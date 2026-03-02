@@ -1,5 +1,5 @@
 SHELL := /bin/bash
-.PHONY: oapi-generate generate-vmm-client generate-wire generate-all dev build build-linux test test-linux test-darwin install-tools gen-jwt download-ch-binaries download-ch-spec ensure-ch-binaries build-caddy-binaries build-caddy ensure-caddy-binaries  release-prep clean build-embedded
+.PHONY: oapi-generate generate-vmm-client generate-wire generate-all dev build build-linux test test-linux test-darwin install-tools gen-jwt download-ch-binaries download-firecracker-binaries download-ch-spec ensure-ch-binaries ensure-firecracker-binaries build-caddy-binaries build-caddy ensure-caddy-binaries release-prep clean build-embedded
 
 # Directory where local binaries will be installed
 BIN_DIR ?= $(CURDIR)/bin
@@ -14,6 +14,7 @@ OAPI_CODEGEN_VERSION ?= v2.5.1
 AIR ?= $(BIN_DIR)/air
 WIRE ?= $(BIN_DIR)/wire
 XCADDY ?= $(BIN_DIR)/xcaddy
+TEST_TIMEOUT ?= $(GO_TEST_TIMEOUT)
 
 # Install oapi-codegen (pinned to match committed generated code)
 $(OAPI_CODEGEN): | $(BIN_DIR)
@@ -50,6 +51,24 @@ download-ch-binaries:
 		https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/v49.0/cloud-hypervisor-static-aarch64
 	@chmod +x lib/vmm/binaries/cloud-hypervisor/v*/*/cloud-hypervisor
 	@echo "Binaries downloaded successfully"
+
+# Firecracker version to embed
+FIRECRACKER_VERSION := v1.14.2
+
+# Download Firecracker binaries
+download-firecracker-binaries:
+	@echo "Downloading Firecracker binaries..."
+	@mkdir -p lib/hypervisor/firecracker/binaries/firecracker/$(FIRECRACKER_VERSION)/{x86_64,aarch64}
+	@echo "Downloading $(FIRECRACKER_VERSION) for x86_64..."
+	@curl -L "https://github.com/firecracker-microvm/firecracker/releases/download/$(FIRECRACKER_VERSION)/firecracker-$(FIRECRACKER_VERSION)-x86_64.tgz" \
+		| tar -xzO "release-$(FIRECRACKER_VERSION)-x86_64/firecracker-$(FIRECRACKER_VERSION)-x86_64" \
+		> lib/hypervisor/firecracker/binaries/firecracker/$(FIRECRACKER_VERSION)/x86_64/firecracker
+	@echo "Downloading $(FIRECRACKER_VERSION) for aarch64..."
+	@curl -L "https://github.com/firecracker-microvm/firecracker/releases/download/$(FIRECRACKER_VERSION)/firecracker-$(FIRECRACKER_VERSION)-aarch64.tgz" \
+		| tar -xzO "release-$(FIRECRACKER_VERSION)-aarch64/firecracker-$(FIRECRACKER_VERSION)-aarch64" \
+		> lib/hypervisor/firecracker/binaries/firecracker/$(FIRECRACKER_VERSION)/aarch64/firecracker
+	@chmod +x lib/hypervisor/firecracker/binaries/firecracker/$(FIRECRACKER_VERSION)/*/firecracker
+	@echo "Firecracker binaries downloaded successfully"
 
 # Caddy version and modules
 CADDY_VERSION := v2.10.2
@@ -154,6 +173,22 @@ ensure-ch-binaries:
 		$(MAKE) download-ch-binaries; \
 	fi
 
+# Check if Firecracker binaries exist, download if missing
+.PHONY: ensure-firecracker-binaries
+ensure-firecracker-binaries:
+	@ARCH=$$(uname -m); \
+	if [ "$$ARCH" = "x86_64" ]; then \
+		FC_ARCH=x86_64; \
+	elif [ "$$ARCH" = "aarch64" ] || [ "$$ARCH" = "arm64" ]; then \
+		FC_ARCH=aarch64; \
+	else \
+		echo "Unsupported architecture: $$ARCH"; exit 1; \
+	fi; \
+	if [ ! -f lib/hypervisor/firecracker/binaries/firecracker/$(FIRECRACKER_VERSION)/$$FC_ARCH/firecracker ]; then \
+		echo "Firecracker binaries not found, downloading..."; \
+		$(MAKE) download-firecracker-binaries; \
+	fi
+
 # Check if Caddy binaries exist, build if missing
 .PHONY: ensure-caddy-binaries
 ensure-caddy-binaries:
@@ -192,7 +227,7 @@ else
 	$(MAKE) build-linux
 endif
 
-build-linux: ensure-ch-binaries ensure-caddy-binaries build-embedded | $(BIN_DIR)
+build-linux: ensure-ch-binaries ensure-firecracker-binaries ensure-caddy-binaries build-embedded | $(BIN_DIR)
 	go build -tags containers_image_openpgp -o $(BIN_DIR)/hypeman ./cmd/api
 
 # Build all binaries
@@ -213,7 +248,7 @@ dev:
 	fi
 
 # Linux development mode with hot reload
-dev-linux: ensure-ch-binaries ensure-caddy-binaries build-embedded $(AIR)
+dev-linux: ensure-ch-binaries ensure-firecracker-binaries ensure-caddy-binaries build-embedded $(AIR)
 	@rm -f ./tmp/main
 	$(AIR) -c .air.toml
 
@@ -228,15 +263,15 @@ else
 endif
 
 # Linux tests (as root for network capabilities)
-test-linux: ensure-ch-binaries ensure-caddy-binaries build-embedded
+test-linux: ensure-ch-binaries ensure-firecracker-binaries ensure-caddy-binaries build-embedded
 	@VERBOSE_FLAG=""; \
 	TEST_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$$PATH"; \
 	if [ -n "$(VERBOSE)" ]; then VERBOSE_FLAG="-v"; fi; \
 	if [ -n "$(TEST)" ]; then \
 		echo "Running specific test: $(TEST)"; \
-		sudo env "PATH=$$TEST_PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" go test -tags containers_image_openpgp -run=$(TEST) $$VERBOSE_FLAG -timeout=$(GO_TEST_TIMEOUT) ./...; \
+		sudo env "PATH=$$TEST_PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" go test -tags containers_image_openpgp -run=$(TEST) $$VERBOSE_FLAG -timeout=$(TEST_TIMEOUT) ./...; \
 	else \
-		sudo env "PATH=$$TEST_PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" go test -tags containers_image_openpgp $$VERBOSE_FLAG -timeout=$(GO_TEST_TIMEOUT) ./...; \
+		sudo env "PATH=$$TEST_PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" go test -tags containers_image_openpgp $$VERBOSE_FLAG -timeout=$(TEST_TIMEOUT) ./...; \
 	fi
 
 # macOS tests (no sudo needed, adds e2fsprogs to PATH)
@@ -251,10 +286,10 @@ test-darwin: build-embedded sign-vz-shim
 	if [ -n "$(TEST)" ]; then \
 		echo "Running specific test: $(TEST)"; \
 		PATH="/opt/homebrew/opt/e2fsprogs/sbin:$(PATH)" \
-		go test -tags containers_image_openpgp -run=$(TEST) $$VERBOSE_FLAG -timeout=$(GO_TEST_TIMEOUT) $$PKGS; \
+		go test -tags containers_image_openpgp -run=$(TEST) $$VERBOSE_FLAG -timeout=$(TEST_TIMEOUT) $$PKGS; \
 	else \
 		PATH="/opt/homebrew/opt/e2fsprogs/sbin:$(PATH)" \
-		go test -tags containers_image_openpgp $$VERBOSE_FLAG -timeout=$(GO_TEST_TIMEOUT) $$PKGS; \
+		go test -tags containers_image_openpgp $$VERBOSE_FLAG -timeout=$(TEST_TIMEOUT) $$PKGS; \
 	fi
 
 # Generate JWT token for testing
@@ -278,6 +313,7 @@ e2e-build-test:
 clean:
 	rm -rf $(BIN_DIR)
 	rm -rf lib/vmm/binaries/cloud-hypervisor/
+	rm -rf lib/hypervisor/firecracker/binaries/firecracker/
 	rm -rf lib/ingress/binaries/
 	rm -f lib/system/guest_agent/guest-agent
 	rm -f lib/system/init/init
@@ -285,7 +321,7 @@ clean:
 
 # Prepare for release build (called by GoReleaser)
 # Downloads all embedded binaries and builds embedded components
-release-prep: download-ch-binaries build-caddy-binaries build-embedded
+release-prep: download-ch-binaries download-firecracker-binaries build-caddy-binaries build-embedded
 	go mod tidy
 
 # =============================================================================
