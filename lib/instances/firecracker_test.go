@@ -4,7 +4,6 @@ package instances
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -358,9 +357,6 @@ func TestFirecrackerForkFromRunningNetwork(t *testing.T) {
 		FromRunning: true,
 		TargetState: StateRunning,
 	})
-	if err != nil && errors.Is(err, ErrNotSupported) {
-		t.Skipf("running fork requires guest-agent readiness in this environment: %v", err)
-	}
 	require.NoError(t, err)
 	require.Equal(t, StateRunning, forked.State)
 	forkID := forked.Id

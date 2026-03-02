@@ -110,13 +110,11 @@ func ensureGuestAgentReadyForRunningFork(ctx context.Context, source *StoredMeta
 		WaitForAgent: 120 * time.Second,
 	})
 	if err != nil {
-		return fmt.Errorf("%w: wait for guest agent readiness before running fork: %w", ErrNotSupported, err)
+		return fmt.Errorf("wait for guest agent readiness before running fork: %w", err)
 	}
 	if exit.Code != 0 {
 		return fmt.Errorf(
-			"%w: "+
-				"guest agent readiness probe failed before running fork (exit=%d, stdout=%q, stderr=%q)",
-			ErrNotSupported,
+			"guest agent readiness probe failed before running fork (exit=%d, stdout=%q, stderr=%q)",
 			exit.Code, strings.TrimSpace(stdout.String()), strings.TrimSpace(stderr.String()),
 		)
 	}
