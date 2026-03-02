@@ -159,6 +159,52 @@ func TestForkInstance_CleansUpOnTargetTransitionError(t *testing.T) {
 	assert.Equal(t, sourceID, entries[0].Name())
 }
 
+func TestForkInstanceRejectsDuplicateNameForNonNetworkedSource(t *testing.T) {
+	manager, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	sourceID := "fork-duplicate-name-source"
+	require.NoError(t, manager.ensureDirectories(sourceID))
+
+	now := time.Now()
+	sourceMeta := &metadata{StoredMetadata: StoredMetadata{
+		Id:                sourceID,
+		Name:              sourceID,
+		Image:             "docker.io/library/alpine:latest",
+		CreatedAt:         now,
+		StoppedAt:         &now,
+		HypervisorType:    hypervisor.TypeCloudHypervisor,
+		HypervisorVersion: "test",
+		SocketPath:        paths.New(manager.paths.DataDir()).InstanceSocket(sourceID, "cloud-hypervisor.sock"),
+		DataDir:           paths.New(manager.paths.DataDir()).InstanceDir(sourceID),
+		VsockCID:          42,
+		VsockSocket:       paths.New(manager.paths.DataDir()).InstanceVsockSocket(sourceID),
+	}}
+	require.NoError(t, manager.saveMetadata(sourceMeta))
+
+	existingID := "fork-duplicate-name-existing"
+	require.NoError(t, manager.ensureDirectories(existingID))
+	existingMeta := &metadata{StoredMetadata: StoredMetadata{
+		Id:                existingID,
+		Name:              "duplicate-name",
+		Image:             "docker.io/library/alpine:latest",
+		CreatedAt:         now,
+		StoppedAt:         &now,
+		HypervisorType:    hypervisor.TypeCloudHypervisor,
+		HypervisorVersion: "test",
+		SocketPath:        paths.New(manager.paths.DataDir()).InstanceSocket(existingID, "cloud-hypervisor.sock"),
+		DataDir:           paths.New(manager.paths.DataDir()).InstanceDir(existingID),
+		VsockCID:          43,
+		VsockSocket:       paths.New(manager.paths.DataDir()).InstanceVsockSocket(existingID),
+	}}
+	require.NoError(t, manager.saveMetadata(existingMeta))
+
+	_, err := manager.ForkInstance(ctx, sourceID, ForkInstanceRequest{Name: "duplicate-name"})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrAlreadyExists)
+	assert.Contains(t, err.Error(), "already exists")
+}
+
 func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 	startedAt := time.Now().Add(-2 * time.Minute)
 	stoppedAt := time.Now().Add(-1 * time.Minute)

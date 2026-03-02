@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -21,7 +22,7 @@ import (
 
 // forkInstance creates a new instance by cloning a stopped or standby source
 // instance. It returns the newly created fork and the requested final target
-// state; callers apply the target state transition outside the source lock.
+// state; callers apply remaining target state transitions outside the source lock.
 func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceRequest) (*Instance, State, error) {
 	log := logger.FromContext(ctx)
 	log.InfoContext(ctx, "forking instance", "source_instance_id", id, "fork_name", req.Name)
@@ -68,6 +69,22 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 				}
 			}
 		}
+
+		// For Firecracker running-source forks, restoring the fork may temporarily alias
+		// the source data directory. Restore the fork while source remains standby and
+		// under lock, then restore the source.
+		if forkErr == nil && targetState == StateRunning {
+			restoredFork, err := m.applyForkTargetState(ctx, forked.Id, StateRunning)
+			if err != nil {
+				forkErr = fmt.Errorf("restore forked instance before source restore: %w", err)
+				if cleanupErr := m.cleanupForkInstanceOnError(ctx, forked.Id); cleanupErr != nil {
+					forkErr = fmt.Errorf("%v; additionally failed to cleanup forked instance %s: %v", forkErr, forked.Id, cleanupErr)
+				}
+			} else {
+				forked = restoredFork
+			}
+		}
+
 		log.InfoContext(ctx, "restoring source instance after running fork", "source_instance_id", id)
 		_, restoreErr := m.restoreInstance(ctx, id)
 
@@ -193,6 +210,13 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 		return nil, err
 	}
 
+	existsByMetadata, err := m.instanceNameExists(req.Name)
+	if err != nil {
+		return nil, fmt.Errorf("check instance name availability: %w", err)
+	}
+	if existsByMetadata {
+		return nil, fmt.Errorf("%w: instance name '%s' already exists", ErrAlreadyExists, req.Name)
+	}
 	if stored.NetworkEnabled {
 		exists, err := m.networkManager.NameExists(ctx, req.Name, "")
 		if err != nil {
@@ -323,6 +347,25 @@ func validateForkVolumeSafety(volumes []VolumeAttachment) error {
 		}
 	}
 	return nil
+}
+
+func (m *manager) instanceNameExists(name string) (bool, error) {
+	metaFiles, err := m.listMetadataFiles()
+	if err != nil {
+		return false, err
+	}
+
+	for _, metaFile := range metaFiles {
+		id := filepath.Base(filepath.Dir(metaFile))
+		meta, err := m.loadMetadata(id)
+		if err != nil {
+			continue
+		}
+		if meta.Name == name {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func resolveForkTargetState(requested State, sourceState State) (State, error) {
