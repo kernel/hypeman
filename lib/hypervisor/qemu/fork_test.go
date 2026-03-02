@@ -31,7 +31,7 @@ func TestPrepareFork_RewritesSnapshotConfig(t *testing.T) {
 		VsockSocket:   sourceDir + "/vsock/vsock.sock",
 		KernelPath:    sourceDir + "/kernel/vmlinuz",
 		InitrdPath:    sourceDir + "/kernel/initrd",
-		KernelArgs:    "console=ttyS0 root=" + sourceDir + "/rootfs",
+		KernelArgs:    "console=ttyS0 root=" + sourceDir + "/rootfs note=keep-" + sourceDir + "-as-substring",
 		Disks: []hypervisor.DiskConfig{
 			{Path: sourceDir + "/overlay.raw"},
 			{Path: "/volumes/volume-data.raw"},
@@ -72,7 +72,7 @@ func TestPrepareFork_RewritesSnapshotConfig(t *testing.T) {
 	assert.Equal(t, targetDir+"/logs/fork-app.log", updated.SerialLogPath)
 	assert.Equal(t, targetDir+"/kernel/vmlinuz", updated.KernelPath)
 	assert.Equal(t, targetDir+"/kernel/initrd", updated.InitrdPath)
-	assert.Contains(t, updated.KernelArgs, targetDir+"/rootfs")
+	assert.Equal(t, initial.KernelArgs, updated.KernelArgs)
 	assert.Equal(t, targetDir+"/overlay.raw", updated.Disks[0].Path)
 	assert.Equal(t, "/volumes/volume-data.raw", updated.Disks[1].Path, "non-instance paths should remain unchanged")
 	require.Len(t, updated.Networks, 1)

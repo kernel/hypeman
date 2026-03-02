@@ -70,7 +70,10 @@ func (s *Starter) PrepareFork(ctx context.Context, req hypervisor.ForkPrepareReq
 
 func rewriteQEMUConfigPaths(cfg hypervisor.VMConfig, sourceDir, targetDir string) hypervisor.VMConfig {
 	replace := func(value string) string {
-		return strings.ReplaceAll(value, sourceDir, targetDir)
+		if value == sourceDir || strings.HasPrefix(value, sourceDir+"/") {
+			return targetDir + strings.TrimPrefix(value, sourceDir)
+		}
+		return value
 	}
 
 	for i := range cfg.Disks {
@@ -81,7 +84,6 @@ func rewriteQEMUConfigPaths(cfg hypervisor.VMConfig, sourceDir, targetDir string
 	cfg.VsockSocket = replace(cfg.VsockSocket)
 	cfg.KernelPath = replace(cfg.KernelPath)
 	cfg.InitrdPath = replace(cfg.InitrdPath)
-	cfg.KernelArgs = replace(cfg.KernelArgs)
 
 	return cfg
 }

@@ -123,6 +123,42 @@ func TestCleanupForkInstanceOnError(t *testing.T) {
 	assert.ErrorIs(t, err, ErrNotFound)
 }
 
+func TestForkInstance_CleansUpOnTargetTransitionError(t *testing.T) {
+	manager, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	sourceID := "fork-target-transition-source"
+	require.NoError(t, manager.ensureDirectories(sourceID))
+
+	now := time.Now()
+	meta := &metadata{StoredMetadata: StoredMetadata{
+		Id:                sourceID,
+		Name:              sourceID,
+		Image:             "docker.io/library/nonexistent:latest",
+		CreatedAt:         now,
+		StoppedAt:         &now,
+		HypervisorType:    hypervisor.TypeCloudHypervisor,
+		HypervisorVersion: "test",
+		SocketPath:        paths.New(manager.paths.DataDir()).InstanceSocket(sourceID, "cloud-hypervisor.sock"),
+		DataDir:           paths.New(manager.paths.DataDir()).InstanceDir(sourceID),
+		VsockCID:          42,
+		VsockSocket:       paths.New(manager.paths.DataDir()).InstanceVsockSocket(sourceID),
+	}}
+	require.NoError(t, manager.saveMetadata(meta))
+
+	_, err := manager.ForkInstance(ctx, sourceID, ForkInstanceRequest{
+		Name:        "fork-target-transition-copy",
+		TargetState: StateRunning,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "apply fork target state")
+
+	entries, err := os.ReadDir(manager.paths.GuestsDir())
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, sourceID, entries[0].Name())
+}
+
 func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 	startedAt := time.Now().Add(-2 * time.Minute)
 	stoppedAt := time.Now().Add(-1 * time.Minute)
