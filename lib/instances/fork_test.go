@@ -21,7 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestForkInstanceNotSupportedHypervisor(t *testing.T) {
+func TestForkInstance_VZStoppedSourceSupported(t *testing.T) {
 	manager, _ := setupTestManager(t)
 	ctx := context.Background()
 	if _, err := manager.getVMStarter(hypervisor.TypeVZ); err != nil {
@@ -45,9 +45,12 @@ func TestForkInstanceNotSupportedHypervisor(t *testing.T) {
 	}}
 	require.NoError(t, manager.saveMetadata(meta))
 
-	_, err := manager.ForkInstance(ctx, sourceID, ForkInstanceRequest{Name: "fork-vz-copy"})
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrNotSupported)
+	forked, err := manager.ForkInstance(ctx, sourceID, ForkInstanceRequest{Name: "fork-vz-copy"})
+	require.NoError(t, err)
+	require.NotNil(t, forked)
+	assert.Equal(t, StateStopped, forked.State)
+	assert.Equal(t, hypervisor.TypeVZ, forked.HypervisorType)
+	assert.NotEqual(t, sourceID, forked.Id)
 }
 
 func TestResolveForkTargetState_DefaultsToSourceState(t *testing.T) {

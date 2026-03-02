@@ -256,12 +256,6 @@ func (s *Starter) startShim(ctx context.Context, p *paths.Paths, version string,
 	return pid, client, nil
 }
 
-// PrepareFork is not supported for vz.
-func (s *Starter) PrepareFork(ctx context.Context, req hypervisor.ForkPrepareRequest) (hypervisor.ForkPrepareResult, error) {
-	_ = ctx
-	_ = req
-	return hypervisor.ForkPrepareResult{}, hypervisor.ErrNotSupported
-}
 func (s *Starter) waitForShim(ctx context.Context, socketPath string, timeout time.Duration) (*Client, error) {
 	deadline := time.Now().Add(timeout)
 

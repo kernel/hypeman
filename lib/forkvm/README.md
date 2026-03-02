@@ -52,9 +52,17 @@ instead of reusing the source identity.
 
 ## VZ (Virtualization.framework)
 
-- Fork is not supported.
-- Snapshot restore for Linux guests is not available in this mode, so standby
-  snapshot-based fork mechanics cannot be implemented.
+- Stopped-source fork is supported (directory clone, no snapshot rewrite).
+- Standby and running-source fork are supported by rewriting the copied VZ
+  snapshot manifest (`config.json`) for fork-local runtime paths.
+- VZ fork preparation rewrites:
+  - Instance-local paths in serialized shim config (disks, kernel/initrd,
+    serial log, control/vsock sockets, shim log).
+- VZ keeps snapshotted NIC identity unchanged during fork prep because
+  save/restore validation can reject machine-state restore when device identity
+  fields are mutated.
+- Vsock CID rewrites are not required for VZ fork flows because VZ uses a
+  per-VM Unix vsock proxy socket for routing.
 
 ## Operational constraints
 

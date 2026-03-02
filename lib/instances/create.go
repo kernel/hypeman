@@ -109,13 +109,12 @@ func (m *manager) createInstance(
 
 	// 4. Generate vsock configuration
 	vsockCID := generateVsockCID(id)
-	vsockSocket := m.paths.InstanceVsockSocket(id)
-	log.DebugContext(ctx, "generated vsock config", "instance_id", id, "cid", vsockCID)
-
-	// Override vsock socket path for vz (uses Virtio socket, not vhost-user)
-	if req.Hypervisor == hypervisor.TypeVZ || (req.Hypervisor == "" && m.defaultHypervisor == hypervisor.TypeVZ) {
-		vsockSocket = filepath.Join(m.paths.InstanceDir(id), "vz.vsock")
+	hvTypeForVsock := req.Hypervisor
+	if hvTypeForVsock == "" {
+		hvTypeForVsock = m.defaultHypervisor
 	}
+	vsockSocket := m.instanceVsockSocketPath(id, hvTypeForVsock)
+	log.DebugContext(ctx, "generated vsock config", "instance_id", id, "cid", vsockCID)
 
 	// 5. Check instance doesn't already exist
 	if _, err := m.loadMetadata(id); err == nil {

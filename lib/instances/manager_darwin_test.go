@@ -533,6 +533,137 @@ func TestVZStandbyAndRestore(t *testing.T) {
 	assert.NoDirExists(t, p.InstanceDir(instanceID))
 }
 
+// TestVZForkFromRunningNetwork mirrors the running-source fork flow validated for
+// cloud-hypervisor, but on macOS VZ.
+func TestVZForkFromRunningNetwork(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("vz tests require macOS")
+	}
+	if runtime.GOARCH != "arm64" {
+		t.Skip("vz running fork requires Apple Silicon (arm64)")
+	}
+	if !isMacOS14OrLater(t) {
+		t.Skip("vz running fork requires macOS 14+")
+	}
+	ensureMkfsExt4Available(t)
+
+	mgr, tmpDir := setupVZTestManager(t)
+	ctx := context.Background()
+	p := paths.New(tmpDir)
+
+	imageManager, err := images.NewManager(p, 1, nil)
+	require.NoError(t, err)
+
+	t.Log("Pulling alpine:latest image...")
+	alpineImage, err := imageManager.CreateImage(ctx, images.CreateImageRequest{
+		Name: "docker.io/library/alpine:latest",
+	})
+	require.NoError(t, err)
+
+	alpineRef, err := images.ParseNormalizedRef(alpineImage.Name)
+	require.NoError(t, err)
+	waitName := alpineImage.Name
+	if alpineImage.Digest != "" {
+		waitName = alpineRef.Repository() + "@" + alpineImage.Digest
+	}
+
+	waitCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
+	err = imageManager.WaitForReady(waitCtx, waitName)
+	require.NoError(t, err, "Image should become ready")
+
+	alpineImage, err = imageManager.GetImage(ctx, waitName)
+	require.NoError(t, err)
+	require.Equal(t, images.StatusReady, alpineImage.Status, "Image should be ready")
+	t.Log("Alpine image ready")
+
+	systemManager := system.NewManager(p)
+	err = systemManager.EnsureSystemFiles(ctx)
+	require.NoError(t, err)
+	t.Log("System files ready")
+
+	source, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
+		Name:           "test-vz-fork-src",
+		Image:          "docker.io/library/alpine:latest",
+		Size:           2 * 1024 * 1024 * 1024,
+		OverlaySize:    10 * 1024 * 1024 * 1024,
+		Vcpus:          1,
+		NetworkEnabled: true,
+		Hypervisor:     hypervisor.TypeVZ,
+		Cmd:            []string{"sleep", "infinity"},
+	})
+	if err != nil {
+		dumpVZShimLogs(t, tmpDir)
+		require.NoError(t, err)
+	}
+	require.Equal(t, StateRunning, source.State)
+	require.NotEmpty(t, source.IP)
+	require.NotEmpty(t, source.MAC)
+
+	sourceID := source.Id
+	t.Cleanup(func() { _ = mgr.DeleteInstance(context.Background(), sourceID) })
+
+	err = waitForExecAgent(ctx, mgr, sourceID, 30*time.Second)
+	require.NoError(t, err, "source guest agent should be ready")
+
+	output, exitCode, err := vzExecCommand(ctx, source, "echo", "source-before-fork")
+	require.NoError(t, err)
+	require.Equal(t, 0, exitCode)
+	assert.Equal(t, "source-before-fork", strings.TrimSpace(output))
+
+	// Running fork requires explicit opt-in.
+	_, err = mgr.ForkInstance(ctx, sourceID, ForkInstanceRequest{Name: "test-vz-fork-no-flag"})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidState)
+
+	forked, err := mgr.ForkInstance(ctx, sourceID, ForkInstanceRequest{
+		Name:        "test-vz-fork-copy",
+		FromRunning: true,
+		TargetState: StateRunning,
+	})
+	if err != nil {
+		dumpVZShimLogs(t, tmpDir)
+		require.NoError(t, err)
+	}
+	require.Equal(t, StateRunning, forked.State)
+	require.NotEqual(t, sourceID, forked.Id)
+	forkID := forked.Id
+	t.Cleanup(func() { _ = mgr.DeleteInstance(context.Background(), forkID) })
+
+	sourceAfterFork, err := mgr.GetInstance(ctx, sourceID)
+	require.NoError(t, err)
+	require.Equal(t, StateRunning, sourceAfterFork.State)
+	require.NotEmpty(t, sourceAfterFork.IP)
+	require.NotEmpty(t, sourceAfterFork.MAC)
+	require.False(t, sourceAfterFork.HasSnapshot)
+
+	forked, err = mgr.GetInstance(ctx, forkID)
+	require.NoError(t, err)
+	require.Equal(t, StateRunning, forked.State)
+	require.NotEmpty(t, forked.IP)
+	require.NotEmpty(t, forked.MAC)
+	require.False(t, forked.HasSnapshot)
+
+	// Fork gets a fresh network identity.
+	assert.NotEqual(t, sourceAfterFork.IP, forked.IP)
+	assert.NotEqual(t, sourceAfterFork.MAC, forked.MAC)
+
+	err = waitForExecAgent(ctx, mgr, sourceID, 30*time.Second)
+	require.NoError(t, err, "source guest agent should recover after restore")
+	err = waitForExecAgent(ctx, mgr, forkID, 30*time.Second)
+	require.NoError(t, err, "fork guest agent should be ready")
+
+	output, exitCode, err = vzExecCommand(ctx, sourceAfterFork, "echo", "source-after-fork")
+	require.NoError(t, err)
+	require.Equal(t, 0, exitCode)
+	assert.Equal(t, "source-after-fork", strings.TrimSpace(output))
+
+	output, exitCode, err = vzExecCommand(ctx, forked, "echo", "fork-after-restore")
+	require.NoError(t, err)
+	require.Equal(t, 0, exitCode)
+	assert.Equal(t, "fork-after-restore", strings.TrimSpace(output))
+}
+
 // dumpVZShimLogs logs any vz-shim log files found under tmpDir for debugging CI failures.
 func dumpVZShimLogs(t *testing.T, tmpDir string) {
 	t.Helper()
