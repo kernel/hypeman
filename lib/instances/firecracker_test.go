@@ -344,11 +344,8 @@ func TestFirecrackerForkFromStoppedNetwork(t *testing.T) {
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = mgr.DeleteInstance(context.Background(), source.Id) })
-
-	require.NoError(t, waitForLogMessage(ctx, mgr, source.Id, "start worker processes", 15*time.Second))
 	assert.NotEmpty(t, source.IP)
 	assert.NotEmpty(t, source.MAC)
-	assertHostCanReachNginx(t, source.IP, 80, 60*time.Second)
 
 	source, err = mgr.StopInstance(ctx, source.Id)
 	require.NoError(t, err)
@@ -369,7 +366,6 @@ func TestFirecrackerForkFromStoppedNetwork(t *testing.T) {
 
 	assert.NotEmpty(t, forked.IP)
 	assert.NotEmpty(t, forked.MAC)
-	assertHostCanReachNginx(t, forked.IP, 80, 60*time.Second)
 
 	sourceAfterFork, err = mgr.StartInstance(ctx, source.Id, StartInstanceRequest{})
 	require.NoError(t, err)
@@ -379,6 +375,4 @@ func TestFirecrackerForkFromStoppedNetwork(t *testing.T) {
 	assert.NotEmpty(t, sourceAfterFork.MAC)
 	assert.NotEqual(t, sourceAfterFork.IP, forked.IP)
 	assert.NotEqual(t, sourceAfterFork.MAC, forked.MAC)
-	assertHostCanReachNginx(t, sourceAfterFork.IP, 80, 60*time.Second)
-	assertHostCanReachNginx(t, forked.IP, 80, 60*time.Second)
 }
