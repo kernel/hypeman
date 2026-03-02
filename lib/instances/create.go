@@ -113,7 +113,7 @@ func (m *manager) createInstance(
 	if hvTypeForVsock == "" {
 		hvTypeForVsock = m.defaultHypervisor
 	}
-	vsockSocket := m.instanceVsockSocketPath(id, hvTypeForVsock)
+	vsockSocket := m.paths.InstanceSocket(id, hypervisor.VsockSocketNameForType(hvTypeForVsock))
 	log.DebugContext(ctx, "generated vsock config", "instance_id", id, "cid", vsockCID)
 
 	// 5. Check instance doesn't already exist

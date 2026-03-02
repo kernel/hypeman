@@ -41,6 +41,10 @@ const (
 // Registered by each hypervisor package's init() function.
 var socketNames = make(map[Type]string)
 
+// vsockSocketNames maps hypervisor types to their vsock socket filenames.
+// Registered by hypervisor packages when they use socket-based vsock routing.
+var vsockSocketNames = make(map[Type]string)
+
 // RegisterSocketName registers the socket filename for a hypervisor type.
 // Called by each hypervisor implementation's init() function.
 func RegisterSocketName(t Type, name string) {
@@ -54,6 +58,20 @@ func SocketNameForType(t Type) string {
 		return name
 	}
 	return string(t) + ".sock"
+}
+
+// RegisterVsockSocketName registers the vsock socket filename for a hypervisor type.
+func RegisterVsockSocketName(t Type, name string) {
+	vsockSocketNames[t] = name
+}
+
+// VsockSocketNameForType returns the vsock socket filename for a hypervisor type.
+// Falls back to "vsock.sock" when a hypervisor doesn't require a custom name.
+func VsockSocketNameForType(t Type) string {
+	if name, ok := vsockSocketNames[t]; ok {
+		return name
+	}
+	return "vsock.sock"
 }
 
 // VMStarter handles the full VM startup sequence.

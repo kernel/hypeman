@@ -259,7 +259,7 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 	forkMeta.HypervisorPID = nil
 	forkMeta.SocketPath = m.paths.InstanceSocket(forkID, starter.SocketName())
 	forkMeta.DataDir = dstDir
-	forkMeta.VsockSocket = m.instanceVsockSocketPath(forkID, forkMeta.HypervisorType)
+	forkMeta.VsockSocket = m.paths.InstanceSocket(forkID, hypervisor.VsockSocketNameForType(forkMeta.HypervisorType))
 	forkMeta.ExitCode = nil
 	forkMeta.ExitMessage = ""
 

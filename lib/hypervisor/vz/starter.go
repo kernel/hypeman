@@ -24,6 +24,7 @@ import (
 
 func init() {
 	hypervisor.RegisterSocketName(hypervisor.TypeVZ, "vz.sock")
+	hypervisor.RegisterVsockSocketName(hypervisor.TypeVZ, "vz.vsock")
 	hypervisor.RegisterVsockDialerFactory(hypervisor.TypeVZ, NewVsockDialer)
 	hypervisor.RegisterClientFactory(hypervisor.TypeVZ, func(socketPath string) (hypervisor.Hypervisor, error) {
 		return NewClient(socketPath)
