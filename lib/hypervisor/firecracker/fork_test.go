@@ -2,6 +2,8 @@ package firecracker
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
@@ -16,11 +18,26 @@ func TestPrepareFork_NoSnapshotPathIsSupported(t *testing.T) {
 	assert.False(t, result.VsockCIDUpdated)
 }
 
-func TestPrepareFork_SnapshotRewriteNotSupported(t *testing.T) {
+func TestPrepareFork_SnapshotRewritePersistsRestoreMetadata(t *testing.T) {
 	starter := NewStarter()
+	tmp := t.TempDir()
+	targetDir := filepath.Join(tmp, "target")
+	require.NoError(t, os.MkdirAll(targetDir, 0755))
+	require.NoError(t, saveRestoreMetadata(targetDir, []networkInterface{{IfaceID: "eth0", HostDevName: "tap-old"}}))
+
 	_, err := starter.PrepareFork(context.Background(), hypervisor.ForkPrepareRequest{
-		SnapshotConfigPath: "/tmp/snapshot-latest/config.json",
+		SnapshotConfigPath: filepath.Join(targetDir, "snapshots", "snapshot-latest", "config.json"),
+		SourceDataDir:      filepath.Join(tmp, "source"),
+		TargetDataDir:      targetDir,
+		Network: &hypervisor.ForkNetworkConfig{
+			TAPDevice: "tap-new",
+		},
 	})
-	require.Error(t, err)
-	assert.ErrorIs(t, err, hypervisor.ErrNotSupported)
+	require.NoError(t, err)
+
+	meta, err := loadRestoreMetadata(targetDir)
+	require.NoError(t, err)
+	require.Len(t, meta.NetworkOverrides, 1)
+	assert.Equal(t, "tap-new", meta.NetworkOverrides[0].HostDevName)
+	assert.Equal(t, filepath.Join(tmp, "source"), meta.SnapshotSourceDataDir)
 }

@@ -376,3 +376,70 @@ func TestFirecrackerForkFromStoppedNetwork(t *testing.T) {
 	assert.NotEqual(t, sourceAfterFork.IP, forked.IP)
 	assert.NotEqual(t, sourceAfterFork.MAC, forked.MAC)
 }
+
+func TestFirecrackerForkFromStandbyNetwork(t *testing.T) {
+	requireFirecrackerIntegrationPrereqs(t)
+
+	mgr, tmpDir := setupTestManagerForFirecracker(t)
+	ctx := context.Background()
+	p := paths.New(tmpDir)
+
+	imageManager, err := images.NewManager(p, 1, nil)
+	require.NoError(t, err)
+	createNginxImageAndWait(t, ctx, imageManager)
+
+	systemManager := system.NewManager(p)
+	require.NoError(t, systemManager.EnsureSystemFiles(ctx))
+	require.NoError(t, mgr.networkManager.Initialize(ctx, nil))
+
+	source, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
+		Name:           "fc-fork-standby-src",
+		Image:          "docker.io/library/nginx:alpine",
+		Size:           2 * 1024 * 1024 * 1024,
+		HotplugSize:    256 * 1024 * 1024,
+		OverlaySize:    10 * 1024 * 1024 * 1024,
+		Vcpus:          1,
+		NetworkEnabled: true,
+		SkipGuestAgent: true,
+		Hypervisor:     hypervisor.TypeFirecracker,
+	})
+	require.NoError(t, err)
+	sourceID := source.Id
+	t.Cleanup(func() { _ = mgr.DeleteInstance(context.Background(), sourceID) })
+	assert.NotEmpty(t, source.IP)
+	assert.NotEmpty(t, source.MAC)
+
+	source, err = mgr.StandbyInstance(ctx, sourceID)
+	require.NoError(t, err)
+	require.Equal(t, StateStandby, source.State)
+	require.True(t, source.HasSnapshot)
+
+	forked, err := mgr.ForkInstance(ctx, sourceID, ForkInstanceRequest{
+		Name:        "fc-fork-standby-copy",
+		TargetState: StateRunning,
+	})
+	require.NoError(t, err)
+	require.Equal(t, StateRunning, forked.State)
+	forkID := forked.Id
+	t.Cleanup(func() { _ = mgr.DeleteInstance(context.Background(), forkID) })
+	assert.NotEmpty(t, forked.IP)
+	assert.NotEmpty(t, forked.MAC)
+	assert.Equal(t, mgr.paths.InstanceVsockSocket(forkID), forked.VsockSocket)
+
+	forkMeta, err := mgr.loadMetadata(forkID)
+	require.NoError(t, err)
+	assert.Equal(t, mgr.paths.InstanceVsockSocket(forkID), forkMeta.StoredMetadata.VsockSocket)
+
+	sourceAfterFork, err := mgr.GetInstance(ctx, sourceID)
+	require.NoError(t, err)
+	require.Equal(t, StateStandby, sourceAfterFork.State)
+	require.True(t, sourceAfterFork.HasSnapshot)
+
+	sourceAfterFork, err = mgr.RestoreInstance(ctx, sourceID)
+	require.NoError(t, err)
+	require.Equal(t, StateRunning, sourceAfterFork.State)
+	assert.NotEmpty(t, sourceAfterFork.IP)
+	assert.NotEmpty(t, sourceAfterFork.MAC)
+	assert.NotEqual(t, sourceAfterFork.IP, forked.IP)
+	assert.NotEqual(t, sourceAfterFork.MAC, forked.MAC)
+}
