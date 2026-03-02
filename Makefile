@@ -15,7 +15,7 @@ AIR ?= $(BIN_DIR)/air
 WIRE ?= $(BIN_DIR)/wire
 XCADDY ?= $(BIN_DIR)/xcaddy
 
-# Install oapi-codegen
+# Install oapi-codegen (pinned to match committed generated code)
 $(OAPI_CODEGEN): | $(BIN_DIR)
 	GOBIN=$(BIN_DIR) go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@$(OAPI_CODEGEN_VERSION)
 
