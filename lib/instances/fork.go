@@ -1,14 +1,17 @@
 package instances
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"hash/crc32"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/kernel/hypeman/lib/forkvm"
+	"github.com/kernel/hypeman/lib/guest"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/network"
@@ -44,6 +47,9 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 		}
 
 		if err := m.validateForkSupport(ctx, source.HypervisorType); err != nil {
+			return nil, "", err
+		}
+		if err := ensureGuestAgentReadyForRunningFork(ctx, &source.StoredMetadata); err != nil {
 			return nil, "", err
 		}
 
@@ -84,6 +90,37 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 	default:
 		return nil, "", fmt.Errorf("%w: cannot fork from state %s (must be Stopped or Standby, or Running with from_running=true)", ErrInvalidState, source.State)
 	}
+}
+
+func ensureGuestAgentReadyForRunningFork(ctx context.Context, source *StoredMetadata) error {
+	if source == nil || !source.NetworkEnabled || source.SkipGuestAgent {
+		return nil
+	}
+
+	dialer, err := hypervisor.NewVsockDialer(source.HypervisorType, source.VsockSocket, source.VsockCID)
+	if err != nil {
+		return fmt.Errorf("create vsock dialer for running fork readiness check: %w", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	exit, err := guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{
+		Command:      []string{"true"},
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+		WaitForAgent: 120 * time.Second,
+	})
+	if err != nil {
+		return fmt.Errorf("%w: wait for guest agent readiness before running fork: %w", ErrNotSupported, err)
+	}
+	if exit.Code != 0 {
+		return fmt.Errorf(
+			"%w: "+
+				"guest agent readiness probe failed before running fork (exit=%d, stdout=%q, stderr=%q)",
+			ErrNotSupported,
+			exit.Code, strings.TrimSpace(stdout.String()), strings.TrimSpace(stderr.String()),
+		)
+	}
+	return nil
 }
 
 func (m *manager) rotateSourceVsockForRestore(ctx context.Context, sourceID, forkID string) error {

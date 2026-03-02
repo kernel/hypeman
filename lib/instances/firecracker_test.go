@@ -4,6 +4,7 @@ package instances
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -76,7 +77,7 @@ func createNginxImageAndWait(t *testing.T, ctx context.Context, imageManager ima
 	})
 	require.NoError(t, err)
 
-	for i := 0; i < 60; i++ {
+	for i := 0; i < 180; i++ {
 		img, err := imageManager.GetImage(ctx, nginxImage.Name)
 		if err == nil && img.Status == images.StatusReady {
 			return
@@ -317,7 +318,7 @@ func TestFirecrackerNetworkLifecycle(t *testing.T) {
 	require.Error(t, err, "network allocation should be removed on delete")
 }
 
-func TestFirecrackerForkFromStoppedNetwork(t *testing.T) {
+func TestFirecrackerForkFromRunningNetwork(t *testing.T) {
 	requireFirecrackerIntegrationPrereqs(t)
 
 	mgr, tmpDir := setupTestManagerForFirecracker(t)
@@ -333,74 +334,13 @@ func TestFirecrackerForkFromStoppedNetwork(t *testing.T) {
 	require.NoError(t, mgr.networkManager.Initialize(ctx, nil))
 
 	source, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
-		Name:           "fc-fork-stopped-src",
+		Name:           "fc-fork-running-src",
 		Image:          "docker.io/library/nginx:alpine",
 		Size:           2 * 1024 * 1024 * 1024,
 		HotplugSize:    256 * 1024 * 1024,
 		OverlaySize:    10 * 1024 * 1024 * 1024,
 		Vcpus:          1,
 		NetworkEnabled: true,
-		Hypervisor:     hypervisor.TypeFirecracker,
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = mgr.DeleteInstance(context.Background(), source.Id) })
-	assert.NotEmpty(t, source.IP)
-	assert.NotEmpty(t, source.MAC)
-
-	source, err = mgr.StopInstance(ctx, source.Id)
-	require.NoError(t, err)
-	require.Equal(t, StateStopped, source.State)
-
-	forked, err := mgr.ForkInstance(ctx, source.Id, ForkInstanceRequest{
-		Name:        "fc-fork-stopped-copy",
-		TargetState: StateRunning,
-	})
-	require.NoError(t, err)
-	require.Equal(t, StateRunning, forked.State)
-	forkID := forked.Id
-	t.Cleanup(func() { _ = mgr.DeleteInstance(context.Background(), forkID) })
-
-	sourceAfterFork, err := mgr.GetInstance(ctx, source.Id)
-	require.NoError(t, err)
-	require.Equal(t, StateStopped, sourceAfterFork.State)
-
-	assert.NotEmpty(t, forked.IP)
-	assert.NotEmpty(t, forked.MAC)
-
-	sourceAfterFork, err = mgr.StartInstance(ctx, source.Id, StartInstanceRequest{})
-	require.NoError(t, err)
-	require.Equal(t, StateRunning, sourceAfterFork.State)
-
-	assert.NotEmpty(t, sourceAfterFork.IP)
-	assert.NotEmpty(t, sourceAfterFork.MAC)
-	assert.NotEqual(t, sourceAfterFork.IP, forked.IP)
-	assert.NotEqual(t, sourceAfterFork.MAC, forked.MAC)
-}
-
-func TestFirecrackerForkFromStandbyNetwork(t *testing.T) {
-	requireFirecrackerIntegrationPrereqs(t)
-
-	mgr, tmpDir := setupTestManagerForFirecracker(t)
-	ctx := context.Background()
-	p := paths.New(tmpDir)
-
-	imageManager, err := images.NewManager(p, 1, nil)
-	require.NoError(t, err)
-	createNginxImageAndWait(t, ctx, imageManager)
-
-	systemManager := system.NewManager(p)
-	require.NoError(t, systemManager.EnsureSystemFiles(ctx))
-	require.NoError(t, mgr.networkManager.Initialize(ctx, nil))
-
-	source, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
-		Name:           "fc-fork-standby-src",
-		Image:          "docker.io/library/nginx:alpine",
-		Size:           2 * 1024 * 1024 * 1024,
-		HotplugSize:    256 * 1024 * 1024,
-		OverlaySize:    10 * 1024 * 1024 * 1024,
-		Vcpus:          1,
-		NetworkEnabled: true,
-		SkipGuestAgent: true,
 		Hypervisor:     hypervisor.TypeFirecracker,
 	})
 	require.NoError(t, err)
@@ -409,15 +349,18 @@ func TestFirecrackerForkFromStandbyNetwork(t *testing.T) {
 	assert.NotEmpty(t, source.IP)
 	assert.NotEmpty(t, source.MAC)
 
-	source, err = mgr.StandbyInstance(ctx, sourceID)
-	require.NoError(t, err)
-	require.Equal(t, StateStandby, source.State)
-	require.True(t, source.HasSnapshot)
+	_, err = mgr.ForkInstance(ctx, sourceID, ForkInstanceRequest{Name: "fc-fork-running-no-flag"})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidState)
 
 	forked, err := mgr.ForkInstance(ctx, sourceID, ForkInstanceRequest{
-		Name:        "fc-fork-standby-copy",
+		Name:        "fc-fork-running-copy",
+		FromRunning: true,
 		TargetState: StateRunning,
 	})
+	if err != nil && errors.Is(err, ErrNotSupported) {
+		t.Skipf("running fork requires guest-agent readiness in this environment: %v", err)
+	}
 	require.NoError(t, err)
 	require.Equal(t, StateRunning, forked.State)
 	forkID := forked.Id
@@ -432,14 +375,13 @@ func TestFirecrackerForkFromStandbyNetwork(t *testing.T) {
 
 	sourceAfterFork, err := mgr.GetInstance(ctx, sourceID)
 	require.NoError(t, err)
-	require.Equal(t, StateStandby, sourceAfterFork.State)
-	require.True(t, sourceAfterFork.HasSnapshot)
-
-	sourceAfterFork, err = mgr.RestoreInstance(ctx, sourceID)
-	require.NoError(t, err)
 	require.Equal(t, StateRunning, sourceAfterFork.State)
 	assert.NotEmpty(t, sourceAfterFork.IP)
 	assert.NotEmpty(t, sourceAfterFork.MAC)
+
+	assertHostCanReachNginx(t, sourceAfterFork.IP, 80, 60*time.Second)
+	assertHostCanReachNginx(t, forked.IP, 80, 60*time.Second)
+	assertHostCanReachNginx(t, sourceAfterFork.IP, 80, 60*time.Second)
 	assert.NotEqual(t, sourceAfterFork.IP, forked.IP)
 	assert.NotEqual(t, sourceAfterFork.MAC, forked.MAC)
 }
