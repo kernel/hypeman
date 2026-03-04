@@ -78,6 +78,7 @@ resources:
       delete: delete /instances/{id}
       standby: post /instances/{id}/standby
       restore: post /instances/{id}/restore
+      fork: post /instances/{id}/fork
       start: post /instances/{id}/start
       stop: post /instances/{id}/stop
       logs: get /instances/{id}/logs
