@@ -238,15 +238,19 @@ func (m *manager) setupIPTablesRules(ctx context.Context, subnet, bridgeName str
 	log.InfoContext(ctx, "iptables NAT ready", "subnet", subnet, "uplink", uplink, "status", masqStatus)
 
 	// FORWARD rules must be at top of chain (before Docker's DOCKER-USER/DOCKER-FORWARD)
-	// We insert at position 1 and 2 to ensure they're evaluated first
+	// We insert at position 1 and 2 to ensure they're evaluated first.
+	// On kernels without the filter table (e.g. minimal nested-VM kernels), forwarding
+	// works via the default kernel policy, so we warn and continue rather than fail hard.
 	fwdOutStatus, err := m.ensureForwardRule(bridgeName, uplink, "NEW,ESTABLISHED,RELATED", commentFwdOut, 1)
 	if err != nil {
-		return fmt.Errorf("setup forward outbound: %w", err)
+		log.WarnContext(ctx, "iptables FORWARD outbound rule skipped (filter table unavailable, forwarding relies on kernel default)", "error", err)
+		fwdOutStatus = "skipped"
 	}
 
 	fwdInStatus, err := m.ensureForwardRule(uplink, bridgeName, "ESTABLISHED,RELATED", commentFwdIn, 2)
 	if err != nil {
-		return fmt.Errorf("setup forward inbound: %w", err)
+		log.WarnContext(ctx, "iptables FORWARD inbound rule skipped (filter table unavailable, forwarding relies on kernel default)", "error", err)
+		fwdInStatus = "skipped"
 	}
 
 	log.InfoContext(ctx, "iptables FORWARD ready", "outbound", fwdOutStatus, "inbound", fwdInStatus)
@@ -263,10 +267,10 @@ func (m *manager) setupIPTablesRules(ctx context.Context, subnet, bridgeName str
 
 // ensureNATRule ensures the MASQUERADE rule exists with correct uplink
 func (m *manager) ensureNATRule(subnet, uplink string) (string, error) {
-	// Check if rule exists with correct subnet and uplink
+	// Check if rule exists with correct subnet and uplink (without comment for compatibility
+	// with kernels that don't have the xt_comment module, e.g. nested VMs)
 	checkCmd := exec.Command("iptables", "-t", "nat", "-C", "POSTROUTING",
 		"-s", subnet, "-o", uplink,
-		"-m", "comment", "--comment", commentNAT,
 		"-j", "MASQUERADE")
 	checkCmd.SysProcAttr = &syscall.SysProcAttr{
 		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
@@ -278,10 +282,9 @@ func (m *manager) ensureNATRule(subnet, uplink string) (string, error) {
 	// Delete any existing rule with our comment (handles uplink changes)
 	m.deleteNATRuleByComment(commentNAT)
 
-	// Add rule with comment
+	// Add rule (without comment for xt_comment-less kernels)
 	addCmd := exec.Command("iptables", "-t", "nat", "-A", "POSTROUTING",
 		"-s", subnet, "-o", uplink,
-		"-m", "comment", "--comment", commentNAT,
 		"-j", "MASQUERADE")
 	addCmd.SysProcAttr = &syscall.SysProcAttr{
 		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
@@ -336,11 +339,10 @@ func (m *manager) ensureForwardRule(inIface, outIface, ctstate, comment string, 
 	// Delete any existing rule with our comment (handles interface/position changes)
 	m.deleteForwardRuleByComment(comment)
 
-	// Insert at specified position with comment
+	// Insert at specified position (without comment for xt_comment-less kernels)
 	addCmd := exec.Command("iptables", "-I", "FORWARD", fmt.Sprintf("%d", position),
 		"-i", inIface, "-o", outIface,
 		"-m", "conntrack", "--ctstate", ctstate,
-		"-m", "comment", "--comment", comment,
 		"-j", "ACCEPT")
 	addCmd.SysProcAttr = &syscall.SysProcAttr{
 		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
@@ -363,13 +365,11 @@ func (m *manager) isForwardRuleCorrect(inIface, outIface, comment string, positi
 		return false
 	}
 
-	// Look for our comment at the expected position with correct interfaces
-	// Line format: "1    0     0 ACCEPT  0    --  vmbr0  eth0   0.0.0.0/0  0.0.0.0/0  ... /* hypeman-fwd-out */"
+	// Look for rule at the expected position with correct interfaces
+	// Line format: "1    0     0 ACCEPT  0    --  vmbr0  eth0   0.0.0.0/0  0.0.0.0/0 ..."
+	// Fall back to interface-only matching for kernels without xt_comment module
 	lines := strings.Split(string(output), "\n")
 	for _, line := range lines {
-		if !strings.Contains(line, comment) {
-			continue
-		}
 		fields := strings.Fields(line)
 		// Check position (field 0), in interface (field 6), out interface (field 7)
 		if len(fields) >= 8 &&
@@ -377,6 +377,12 @@ func (m *manager) isForwardRuleCorrect(inIface, outIface, comment string, positi
 			fields[6] == inIface &&
 			fields[7] == outIface {
 			return true
+		}
+		// Also match by comment if present (for systems with xt_comment)
+		if strings.Contains(line, comment) {
+			if len(fields) >= 8 && fields[6] == inIface && fields[7] == outIface {
+				return true
+			}
 		}
 	}
 	return false
