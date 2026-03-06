@@ -265,13 +265,44 @@ func (m *manager) setupIPTablesRules(ctx context.Context, subnet, bridgeName str
 	return nil
 }
 
-// ensureNATRule ensures the MASQUERADE rule exists with correct uplink
-func (m *manager) ensureNATRule(subnet, uplink string) (string, error) {
-	// Check if rule exists with correct subnet and uplink (without comment for compatibility
-	// with kernels that don't have the xt_comment module, e.g. nested VMs)
-	checkCmd := exec.Command("iptables", "-t", "nat", "-C", "POSTROUTING",
-		"-s", subnet, "-o", uplink,
+// xtCommentEnabled returns true if the kernel supports the xt_comment iptables module.
+// Probed once on first call and cached. Uses xtCommentOnce from the manager struct.
+func (m *manager) xtCommentEnabled() bool {
+	m.xtCommentOnce.Do(func() {
+		m.xtCommentSupported = probeXTComment()
+	})
+	return m.xtCommentSupported
+}
+
+// probeXTComment checks whether the xt_comment kernel module is available by running
+// a -C (check) command with -m comment on a rule that will never exist. If xt_comment
+// is unavailable, iptables prints "Extension comment revision 0 not supported" to stderr.
+// If it's available but the rule just doesn't exist, iptables exits 1 with no such message.
+func probeXTComment() bool {
+	cmd := exec.Command("iptables", "-t", "nat", "-C", "POSTROUTING",
+		"-s", "192.0.2.0/30", "-o", "lo",
+		"-m", "comment", "--comment", "hypeman-probe",
 		"-j", "MASQUERADE")
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+	}
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	cmd.Run() // exit code doesn't matter; we inspect stderr
+	return !strings.Contains(stderr.String(), "not supported")
+}
+
+// ensureNATRule ensures the MASQUERADE rule exists with correct uplink.
+// Uses -m comment when the kernel supports xt_comment, omits it otherwise.
+func (m *manager) ensureNATRule(subnet, uplink string) (string, error) {
+	// Build the check args — include comment if the kernel supports it
+	checkArgs := []string{"-t", "nat", "-C", "POSTROUTING", "-s", subnet, "-o", uplink}
+	if m.xtCommentEnabled() {
+		checkArgs = append(checkArgs, "-m", "comment", "--comment", commentNAT)
+	}
+	checkArgs = append(checkArgs, "-j", "MASQUERADE")
+
+	checkCmd := exec.Command("iptables", checkArgs...)
 	checkCmd.SysProcAttr = &syscall.SysProcAttr{
 		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
 	}
@@ -279,13 +310,18 @@ func (m *manager) ensureNATRule(subnet, uplink string) (string, error) {
 		return "existing", nil
 	}
 
-	// Delete any existing rule with our comment (handles uplink changes)
-	m.deleteNATRuleByComment(commentNAT)
+	// Delete any existing hypeman NAT rule, matching by comment or subnet.
+	// This handles: uplink changes, and transitions between kernels with/without xt_comment.
+	m.deleteNATRule(subnet)
 
-	// Add rule (without comment for xt_comment-less kernels)
-	addCmd := exec.Command("iptables", "-t", "nat", "-A", "POSTROUTING",
-		"-s", subnet, "-o", uplink,
-		"-j", "MASQUERADE")
+	// Add rule, with comment if supported
+	addArgs := []string{"-t", "nat", "-A", "POSTROUTING", "-s", subnet, "-o", uplink}
+	if m.xtCommentEnabled() {
+		addArgs = append(addArgs, "-m", "comment", "--comment", commentNAT)
+	}
+	addArgs = append(addArgs, "-j", "MASQUERADE")
+
+	addCmd := exec.Command("iptables", addArgs...)
 	addCmd.SysProcAttr = &syscall.SysProcAttr{
 		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
 	}
@@ -295,9 +331,12 @@ func (m *manager) ensureNATRule(subnet, uplink string) (string, error) {
 	return "added", nil
 }
 
-// deleteNATRuleByComment deletes any NAT POSTROUTING rule containing our comment
-func (m *manager) deleteNATRuleByComment(comment string) {
-	// List NAT POSTROUTING rules
+// deleteNATRule deletes any hypeman MASQUERADE rule from POSTROUTING.
+// It matches rules two ways to handle both kernels with and without xt_comment,
+// and to correctly clean up old rules during upgrades/kernel transitions:
+//   - by comment string (for rules created with xt_comment support)
+//   - by MASQUERADE + source subnet match (for rules created without comment support)
+func (m *manager) deleteNATRule(subnet string) {
 	cmd := exec.Command("iptables", "-t", "nat", "-L", "POSTROUTING", "--line-numbers", "-n")
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
@@ -307,19 +346,22 @@ func (m *manager) deleteNATRuleByComment(comment string) {
 		return
 	}
 
-	// Find rule numbers with our comment (process in reverse to avoid renumbering issues)
+	seen := make(map[string]bool)
 	var ruleNums []string
-	lines := strings.Split(string(output), "\n")
-	for _, line := range lines {
-		if strings.Contains(line, comment) {
-			fields := strings.Fields(line)
-			if len(fields) > 0 {
-				ruleNums = append(ruleNums, fields[0])
-			}
+	for _, line := range strings.Split(string(output), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		matched := strings.Contains(line, commentNAT) ||
+			(strings.Contains(line, "MASQUERADE") && strings.Contains(line, subnet))
+		if matched && !seen[fields[0]] {
+			seen[fields[0]] = true
+			ruleNums = append(ruleNums, fields[0])
 		}
 	}
 
-	// Delete in reverse order
+	// Delete in reverse order to avoid rule renumbering
 	for i := len(ruleNums) - 1; i >= 0; i-- {
 		delCmd := exec.Command("iptables", "-t", "nat", "-D", "POSTROUTING", ruleNums[i])
 		delCmd.SysProcAttr = &syscall.SysProcAttr{
@@ -329,21 +371,28 @@ func (m *manager) deleteNATRuleByComment(comment string) {
 	}
 }
 
-// ensureForwardRule ensures a FORWARD rule exists at the correct position with correct interfaces
+// ensureForwardRule ensures a FORWARD rule exists at the correct position with correct interfaces.
+// Uses -m comment when the kernel supports xt_comment, omits it otherwise.
 func (m *manager) ensureForwardRule(inIface, outIface, ctstate, comment string, position int) (string, error) {
 	// Check if rule exists at correct position with correct interfaces
 	if m.isForwardRuleCorrect(inIface, outIface, comment, position) {
 		return "existing", nil
 	}
 
-	// Delete any existing rule with our comment (handles interface/position changes)
-	m.deleteForwardRuleByComment(comment)
+	// Delete any existing hypeman FORWARD rule for these interfaces, matching by
+	// comment or by interface pair to handle kernel transitions and config changes.
+	m.deleteForwardRule(inIface, outIface, comment)
 
-	// Insert at specified position (without comment for xt_comment-less kernels)
-	addCmd := exec.Command("iptables", "-I", "FORWARD", fmt.Sprintf("%d", position),
+	// Insert at position, with comment if the kernel supports xt_comment
+	addArgs := []string{"-I", "FORWARD", fmt.Sprintf("%d", position),
 		"-i", inIface, "-o", outIface,
-		"-m", "conntrack", "--ctstate", ctstate,
-		"-j", "ACCEPT")
+		"-m", "conntrack", "--ctstate", ctstate}
+	if m.xtCommentEnabled() {
+		addArgs = append(addArgs, "-m", "comment", "--comment", comment)
+	}
+	addArgs = append(addArgs, "-j", "ACCEPT")
+
+	addCmd := exec.Command("iptables", addArgs...)
 	addCmd.SysProcAttr = &syscall.SysProcAttr{
 		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
 	}
@@ -388,10 +437,14 @@ func (m *manager) isForwardRuleCorrect(inIface, outIface, comment string, positi
 	return false
 }
 
-// deleteForwardRuleByComment deletes any FORWARD rule containing our comment
-func (m *manager) deleteForwardRuleByComment(comment string) {
-	// List FORWARD rules
-	cmd := exec.Command("iptables", "-L", "FORWARD", "--line-numbers", "-n")
+// deleteForwardRule deletes any hypeman FORWARD rule matching the given in/out interface pair.
+// It matches rules two ways to handle both kernels with and without xt_comment,
+// and to correctly clean up old rules during upgrades/kernel transitions:
+//   - by comment string (for rules created with xt_comment support)
+//   - by in/out interface pair (for rules created without comment support)
+func (m *manager) deleteForwardRule(inIface, outIface, comment string) {
+	// Use -v to get interface columns in the output
+	cmd := exec.Command("iptables", "-L", "FORWARD", "--line-numbers", "-n", "-v")
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
 	}
@@ -400,19 +453,25 @@ func (m *manager) deleteForwardRuleByComment(comment string) {
 		return
 	}
 
-	// Find rule numbers with our comment (process in reverse to avoid renumbering issues)
+	seen := make(map[string]bool)
 	var ruleNums []string
-	lines := strings.Split(string(output), "\n")
-	for _, line := range lines {
-		if strings.Contains(line, comment) {
-			fields := strings.Fields(line)
-			if len(fields) > 0 {
-				ruleNums = append(ruleNums, fields[0])
-			}
+	for _, line := range strings.Split(string(output), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		// Match by comment (rules created with xt_comment support)
+		byComment := strings.Contains(line, comment)
+		// Match by interface pair (rules created without comment support)
+		// -v output: field[0]=num, field[6]=in-iface, field[7]=out-iface
+		byIface := len(fields) >= 8 && fields[6] == inIface && fields[7] == outIface
+		if (byComment || byIface) && !seen[fields[0]] {
+			seen[fields[0]] = true
+			ruleNums = append(ruleNums, fields[0])
 		}
 	}
 
-	// Delete in reverse order
+	// Delete in reverse order to avoid rule renumbering
 	for i := len(ruleNums) - 1; i >= 0; i-- {
 		delCmd := exec.Command("iptables", "-D", "FORWARD", ruleNums[i])
 		delCmd.SysProcAttr = &syscall.SysProcAttr{
@@ -469,6 +528,9 @@ func (m *manager) ensureDockerForwardJump(ctx context.Context) {
 
 // lastHypemanForwardRulePosition returns the line number of the last hypeman-managed
 // rule in the FORWARD chain, or 0 if none are found.
+// It identifies hypeman rules two ways:
+//   - by "hypeman-" comment string (normal kernels with xt_comment)
+//   - by bridge interface name (xt_comment-less kernels, where rules have no comment)
 func (m *manager) lastHypemanForwardRulePosition() int {
 	cmd := exec.Command("iptables", "-L", "FORWARD", "--line-numbers", "-n", "-v")
 	cmd.SysProcAttr = &syscall.SysProcAttr{
@@ -479,9 +541,12 @@ func (m *manager) lastHypemanForwardRulePosition() int {
 		return 0
 	}
 
+	bridgeName := m.config.Network.BridgeName
 	lastPos := 0
 	for _, line := range strings.Split(string(output), "\n") {
-		if !strings.Contains(line, "hypeman-") {
+		// Match by comment (normal kernels with xt_comment support)
+		// Match by bridge interface name (xt_comment-less kernels)
+		if !strings.Contains(line, "hypeman-") && !strings.Contains(line, bridgeName) {
 			continue
 		}
 		var pos int

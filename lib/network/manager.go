@@ -44,6 +44,11 @@ type manager struct {
 	config  *config.Config
 	mu      sync.Mutex // Protects network allocation operations (IP allocation)
 	metrics *Metrics
+
+	// xtComment tracks whether the xt_comment iptables module is available on this kernel.
+	// Probed once on first use via xtCommentOnce; result cached in xtCommentSupported.
+	xtCommentOnce      sync.Once
+	xtCommentSupported bool
 }
 
 // NewManager creates a new network manager.
