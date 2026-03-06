@@ -14,6 +14,16 @@ to work across implementations.
 For networked forks, the fork gets a fresh host/guest identity (IP, MAC, TAP)
 instead of reusing the source identity.
 
+## Fork data copy behavior
+
+- Guest directory copy is **sparse-only** for regular files.
+- Copy uses `SEEK_DATA`/`SEEK_HOLE` to preserve sparse holes and avoid
+  de-sparsifying large overlay images.
+- If sparse seeking is unsupported on the underlying filesystem, fork fails
+  with an explicit sparse-capability error (no dense-copy fallback).
+- Non-essential runtime artifacts are skipped during copy:
+  `logs/` subtree and runtime socket files.
+
 ## Cloud Hypervisor
 
 - Snapshot-based forks are supported by rewriting snapshot configuration before

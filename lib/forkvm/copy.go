@@ -1,15 +1,18 @@
 package forkvm
 
 import (
+	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 )
 
+var ErrSparseCopyUnsupported = errors.New("sparse copy unsupported")
+
 // CopyGuestDirectory recursively copies a guest directory to a new destination.
-// Runtime sockets are skipped because they are host-runtime artifacts.
+// Regular files are copied using sparse extent copy only (SEEK_DATA/SEEK_HOLE).
+// Runtime sockets and logs are skipped because they are host-runtime artifacts.
 func CopyGuestDirectory(srcDir, dstDir string) error {
 	srcInfo, err := os.Stat(srcDir)
 	if err != nil {
@@ -35,6 +38,9 @@ func CopyGuestDirectory(srcDir, dstDir string) error {
 		if relPath == "." {
 			return nil
 		}
+		if d.IsDir() && shouldSkipDirectory(relPath) {
+			return filepath.SkipDir
+		}
 
 		dstPath := filepath.Join(dstDir, relPath)
 		info, err := d.Info()
@@ -51,7 +57,7 @@ func CopyGuestDirectory(srcDir, dstDir string) error {
 			return nil
 
 		case mode.IsRegular():
-			if err := copyRegularFile(path, dstPath, mode.Perm()); err != nil {
+			if err := copyRegularFileSparse(path, dstPath, mode.Perm()); err != nil {
 				return fmt.Errorf("copy file %s: %w", path, err)
 			}
 			return nil
@@ -76,24 +82,6 @@ func CopyGuestDirectory(srcDir, dstDir string) error {
 	})
 }
 
-func copyRegularFile(srcPath, dstPath string, perms fs.FileMode) error {
-	src, err := os.Open(srcPath)
-	if err != nil {
-		return err
-	}
-	defer src.Close()
-
-	dst, err := os.OpenFile(dstPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, perms)
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(dst, src); err != nil {
-		_ = dst.Close()
-		return err
-	}
-	if err := dst.Close(); err != nil {
-		return err
-	}
-
-	return nil
+func shouldSkipDirectory(relPath string) bool {
+	return relPath == "logs"
 }

@@ -110,13 +110,17 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 }
 
 func ensureGuestAgentReadyForRunningFork(ctx context.Context, source *StoredMetadata) error {
-	if source == nil || !source.NetworkEnabled || source.SkipGuestAgent {
+	return ensureGuestAgentReadyForForkPhase(ctx, source, "before running fork")
+}
+
+func ensureGuestAgentReadyForForkPhase(ctx context.Context, inst *StoredMetadata, phase string) error {
+	if inst == nil || !inst.NetworkEnabled || inst.SkipGuestAgent {
 		return nil
 	}
 
-	dialer, err := hypervisor.NewVsockDialer(source.HypervisorType, source.VsockSocket, source.VsockCID)
+	dialer, err := hypervisor.NewVsockDialer(inst.HypervisorType, inst.VsockSocket, inst.VsockCID)
 	if err != nil {
-		return fmt.Errorf("create vsock dialer for running fork readiness check: %w", err)
+		return fmt.Errorf("create vsock dialer for %s readiness check: %w", phase, err)
 	}
 
 	var stdout, stderr bytes.Buffer
@@ -127,12 +131,12 @@ func ensureGuestAgentReadyForRunningFork(ctx context.Context, source *StoredMeta
 		WaitForAgent: 120 * time.Second,
 	})
 	if err != nil {
-		return fmt.Errorf("wait for guest agent readiness before running fork: %w", err)
+		return fmt.Errorf("wait for guest agent readiness %s: %w", phase, err)
 	}
 	if exit.Code != 0 {
 		return fmt.Errorf(
-			"guest agent readiness probe failed before running fork (exit=%d, stdout=%q, stderr=%q)",
-			exit.Code, strings.TrimSpace(stdout.String()), strings.TrimSpace(stderr.String()),
+			"guest agent readiness probe failed %s (exit=%d, stdout=%q, stderr=%q)",
+			phase, exit.Code, strings.TrimSpace(stdout.String()), strings.TrimSpace(stderr.String()),
 		)
 	}
 	return nil
@@ -241,6 +245,9 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 	defer cu.Clean()
 
 	if err := forkvm.CopyGuestDirectory(srcDir, dstDir); err != nil {
+		if errors.Is(err, forkvm.ErrSparseCopyUnsupported) {
+			return nil, fmt.Errorf("fork requires sparse-capable filesystem (SEEK_DATA/SEEK_HOLE unsupported): %w", err)
+		}
 		return nil, fmt.Errorf("clone guest directory: %w", err)
 	}
 

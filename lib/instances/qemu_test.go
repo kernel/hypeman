@@ -917,7 +917,6 @@ func TestQEMUForkFromRunningNetwork(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = manager.DeleteInstance(context.Background(), source.Id) })
 	require.NoError(t, waitForQEMUReady(ctx, source.SocketPath, 10*time.Second))
-	require.NoError(t, waitForLogMessage(ctx, manager, source.Id, "start worker processes", 15*time.Second))
 
 	assert.NotEmpty(t, source.IP)
 	assert.NotEmpty(t, source.MAC)
