@@ -21,7 +21,7 @@ var (
 	}
 )
 
-func copyRegularFileSparse(srcPath, dstPath string, perms fs.FileMode) error {
+func copyRegularFileSparse(srcPath, dstPath string, perms fs.FileMode) (retErr error) {
 	src, err := os.Open(srcPath)
 	if err != nil {
 		return err
@@ -38,7 +38,9 @@ func copyRegularFileSparse(srcPath, dstPath string, perms fs.FileMode) error {
 		return err
 	}
 	defer func() {
-		_ = dst.Close()
+		if cerr := dst.Close(); retErr == nil && cerr != nil {
+			retErr = cerr
+		}
 	}()
 
 	size := info.Size()
