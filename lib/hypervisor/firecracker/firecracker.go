@@ -39,7 +39,7 @@ func New(socketPath string) (*Firecracker, error) {
 		socketPath: socketPath,
 		client: &http.Client{
 			Transport: transport,
-			Timeout:   30 * time.Second,
+			Timeout:   90 * time.Second,
 		},
 	}, nil
 }

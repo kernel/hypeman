@@ -20,6 +20,7 @@ import (
 // TestCreateInstanceWithNetwork tests instance creation with network allocation
 // and verifies network connectivity persists after standby/restore
 func TestCreateInstanceWithNetwork(t *testing.T) {
+	t.Parallel()
 	// Require KVM access
 	requireKVMAccess(t)
 
@@ -60,48 +61,6 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 	require.NoError(t, err)
 	t.Log("Network initialized")
 
-	// Verify that ensureDockerForwardJump restores Docker's FORWARD chain
-	// when it gets wiped (e.g., by a hypervisor firewall rebuild).
-	// Note: no extra privilege guard needed — make test-linux runs the entire
-	// suite under sudo, so iptables commands have the required permissions.
-	t.Run("DockerForwardChainRestored", func(t *testing.T) {
-		// Check if DOCKER-FORWARD chain exists (Docker must be running on host)
-		checkChain := exec.Command("iptables", "-L", "DOCKER-FORWARD", "-n")
-		if checkChain.Run() != nil {
-			t.Skip("DOCKER-FORWARD chain not present (Docker not running), skipping")
-		}
-
-		// Verify jump currently exists
-		checkJump := exec.Command("iptables", "-C", "FORWARD", "-j", "DOCKER-FORWARD")
-		require.NoError(t, checkJump.Run(), "DOCKER-FORWARD jump should exist before test")
-
-		// Safety net: restore the jump if the test fails or aborts after we delete it,
-		// so we don't leave the host's Docker networking broken.
-		t.Cleanup(func() {
-			check := exec.Command("iptables", "-C", "FORWARD", "-j", "DOCKER-FORWARD")
-			if check.Run() != nil {
-				restore := exec.Command("iptables", "-A", "FORWARD", "-j", "DOCKER-FORWARD")
-				_ = restore.Run()
-			}
-		})
-
-		// Simulate the hypervisor flush: delete the jump
-		delJump := exec.Command("iptables", "-D", "FORWARD", "-j", "DOCKER-FORWARD")
-		require.NoError(t, delJump.Run(), "should be able to delete DOCKER-FORWARD jump")
-
-		// Confirm it's gone
-		checkGone := exec.Command("iptables", "-C", "FORWARD", "-j", "DOCKER-FORWARD")
-		require.Error(t, checkGone.Run(), "DOCKER-FORWARD jump should be gone after delete")
-
-		// Re-initialize network — this should restore the jump
-		err := manager.networkManager.Initialize(ctx, nil)
-		require.NoError(t, err)
-
-		// Verify jump is restored
-		checkRestored := exec.Command("iptables", "-C", "FORWARD", "-j", "DOCKER-FORWARD")
-		require.NoError(t, checkRestored.Run(), "ensureDockerForwardJump should have restored the DOCKER-FORWARD jump")
-	})
-
 	// Create instance with nginx:alpine and default network
 	t.Log("Creating instance with default network...")
 	inst, err := manager.CreateInstance(ctx, CreateInstanceRequest{
@@ -140,20 +99,21 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 	assert.Equal(t, uint8(netlink.OperUp), uint8(tap.Attrs().OperState))
 	t.Logf("TAP device verified: %s", alloc.TAPDevice)
 
-	// Verify TAP attached to bridge
-	bridge, err := netlink.LinkByName("vmbr0")
+	// Verify TAP attached to a bridge
+	master, err := netlink.LinkByIndex(tap.Attrs().MasterIndex)
 	require.NoError(t, err)
-	assert.Equal(t, bridge.Attrs().Index, tap.Attrs().MasterIndex, "TAP should be attached to bridge")
+	_, isBridge := master.(*netlink.Bridge)
+	assert.True(t, isBridge, "TAP should be attached to a bridge")
 
 	// Wait for nginx to start
 	t.Log("Waiting for nginx to start...")
-	err = waitForLogMessage(ctx, manager, inst.Id, "start worker processes", 15*time.Second)
+	err = waitForLogMessage(ctx, manager, inst.Id, "start worker processes", 45*time.Second)
 	require.NoError(t, err, "Nginx should start")
 	t.Log("Nginx is running")
 
 	// Wait for exec agent to be ready
 	t.Log("Waiting for exec agent...")
-	err = waitForLogMessage(ctx, manager, inst.Id, "[guest-agent] listening", 10*time.Second)
+	err = waitForLogMessage(ctx, manager, inst.Id, "[guest-agent] listening", 30*time.Second)
 	require.NoError(t, err, "Exec agent should be listening")
 	t.Log("Exec agent is ready")
 
@@ -264,6 +224,58 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 	t.Log("Network allocation released after delete")
 
 	t.Log("Network integration test complete!")
+}
+
+// TestDockerForwardChainRestored validates recovery from an external FORWARD-chain flush.
+// This test intentionally mutates host-global iptables state, so it must run non-parallel.
+func TestDockerForwardChainRestored(t *testing.T) {
+	// Require KVM access
+	requireKVMAccess(t)
+
+	manager, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	// Initialize network so hypeman rules are present before mutation.
+	require.NoError(t, manager.networkManager.Initialize(ctx, nil))
+
+	// Check if DOCKER-FORWARD chain exists (Docker must be running on host).
+	checkChain := exec.Command("iptables", "-L", "DOCKER-FORWARD", "-n")
+	if checkChain.Run() != nil {
+		t.Skip("DOCKER-FORWARD chain not present (Docker not running), skipping")
+	}
+
+	// Verify jump currently exists.
+	checkJump := exec.Command("iptables", "-C", "FORWARD", "-j", "DOCKER-FORWARD")
+	require.NoError(t, checkJump.Run(), "DOCKER-FORWARD jump should exist before test")
+
+	// Safety net: restore the jump if the test fails or aborts after we delete it,
+	// so we don't leave the host's Docker networking broken.
+	t.Cleanup(func() {
+		check := exec.Command("iptables", "-C", "FORWARD", "-j", "DOCKER-FORWARD")
+		if check.Run() != nil {
+			restore := exec.Command("iptables", "-A", "FORWARD", "-j", "DOCKER-FORWARD")
+			_ = restore.Run()
+		}
+	})
+
+	// Simulate the hypervisor flush: remove every jump.
+	for {
+		delJump := exec.Command("iptables", "-D", "FORWARD", "-j", "DOCKER-FORWARD")
+		if err := delJump.Run(); err != nil {
+			break
+		}
+	}
+
+	// Confirm it's gone.
+	checkGone := exec.Command("iptables", "-C", "FORWARD", "-j", "DOCKER-FORWARD")
+	require.Error(t, checkGone.Run(), "DOCKER-FORWARD jump should be gone after delete")
+
+	// Re-initialize network — this should restore the jump.
+	require.NoError(t, manager.networkManager.Initialize(ctx, nil))
+
+	// Verify jump is restored.
+	checkRestored := exec.Command("iptables", "-C", "FORWARD", "-j", "DOCKER-FORWARD")
+	require.NoError(t, checkRestored.Run(), "ensureDockerForwardJump should have restored the DOCKER-FORWARD jump")
 }
 
 // execCommand runs a command in the instance via vsock and returns stdout+stderr, exit code, and error

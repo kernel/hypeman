@@ -19,6 +19,7 @@ import (
 )
 
 func TestListInstances_Empty(t *testing.T) {
+	t.Parallel()
 	svc := newTestService(t)
 
 	resp, err := svc.ListInstances(ctx(), oapi.ListInstancesRequestObject{})
@@ -30,6 +31,7 @@ func TestListInstances_Empty(t *testing.T) {
 }
 
 func TestGetInstance_NotFound(t *testing.T) {
+	t.Parallel()
 	svc := newTestService(t)
 
 	// With middleware, not-found would be handled before reaching handler.
@@ -39,6 +41,7 @@ func TestGetInstance_NotFound(t *testing.T) {
 }
 
 func TestCreateInstance_ParsesHumanReadableSizes(t *testing.T) {
+	t.Parallel()
 	// Require KVM access for VM creation
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Skip("/dev/kvm not available, skipping on this platform")
@@ -105,6 +108,7 @@ func TestCreateInstance_ParsesHumanReadableSizes(t *testing.T) {
 }
 
 func TestCreateInstance_InvalidSizeFormat(t *testing.T) {
+	t.Parallel()
 	svc := newTestService(t)
 
 	// Test with invalid size format
@@ -179,6 +183,7 @@ func (m *captureCreateManager) CreateInstance(ctx context.Context, req instances
 }
 
 func TestCreateInstance_OmittedHotplugSizeDefaultsToZero(t *testing.T) {
+	t.Parallel()
 	svc := newTestService(t)
 
 	origMgr := svc.InstanceManager
@@ -211,6 +216,7 @@ func TestCreateInstance_OmittedHotplugSizeDefaultsToZero(t *testing.T) {
 }
 
 func TestForkInstance_Success(t *testing.T) {
+	t.Parallel()
 	svc := newTestService(t)
 
 	now := time.Now()
@@ -264,6 +270,7 @@ func TestForkInstance_Success(t *testing.T) {
 }
 
 func TestForkInstance_NotSupported(t *testing.T) {
+	t.Parallel()
 	svc := newTestService(t)
 
 	source := instances.Instance{
@@ -300,6 +307,7 @@ func TestForkInstance_NotSupported(t *testing.T) {
 }
 
 func TestForkInstance_InvalidRequest(t *testing.T) {
+	t.Parallel()
 	svc := newTestService(t)
 
 	source := instances.Instance{
@@ -336,6 +344,7 @@ func TestForkInstance_InvalidRequest(t *testing.T) {
 }
 
 func TestForkInstance_FromRunningFlagForwarded(t *testing.T) {
+	t.Parallel()
 	svc := newTestService(t)
 
 	now := time.Now()
@@ -390,6 +399,7 @@ func TestForkInstance_FromRunningFlagForwarded(t *testing.T) {
 }
 
 func TestInstanceLifecycle_StopStart(t *testing.T) {
+	t.Parallel()
 	// Require KVM access for VM creation
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Skip("/dev/kvm not available - skipping lifecycle test")

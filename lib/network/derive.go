@@ -37,18 +37,22 @@ func (m *manager) deriveAllocation(ctx context.Context, instanceID string) (*All
 		return nil, nil
 	}
 
-	// 3. Get default network configuration for Gateway and Netmask
-	defaultNet, err := m.getDefaultNetwork(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("get default network: %w", err)
-	}
-
-	// Calculate netmask from subnet
-	_, ipNet, err := net.ParseCIDR(defaultNet.Subnet)
+	// 3. Derive gateway/netmask from configured subnet.
+	// This avoids transient dependence on live bridge state when callers only need
+	// metadata-derived allocation details (e.g., immediately after instance create).
+	subnet := m.config.Network.SubnetCIDR
+	_, ipNet, err := net.ParseCIDR(subnet)
 	if err != nil {
 		return nil, fmt.Errorf("parse subnet CIDR: %w", err)
 	}
 	netmask := fmt.Sprintf("%d.%d.%d.%d", ipNet.Mask[0], ipNet.Mask[1], ipNet.Mask[2], ipNet.Mask[3])
+	gateway := m.config.Network.SubnetGateway
+	if gateway == "" {
+		gateway, err = DeriveGateway(subnet)
+		if err != nil {
+			return nil, fmt.Errorf("derive gateway from subnet: %w", err)
+		}
+	}
 
 	// 4. Use stored metadata to derive allocation (works for all hypervisors)
 	if meta.IP != "" && meta.MAC != "" {
@@ -75,7 +79,7 @@ func (m *manager) deriveAllocation(ctx context.Context, instanceID string) (*All
 			IP:           meta.IP,
 			MAC:          meta.MAC,
 			TAPDevice:    tap,
-			Gateway:      defaultNet.Gateway,
+			Gateway:      gateway,
 			Netmask:      netmask,
 			State:        state,
 		}, nil

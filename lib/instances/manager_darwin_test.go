@@ -40,11 +40,7 @@ func setupVZTestManager(t *testing.T) (*manager, string) {
 
 	cfg := &config.Config{
 		DataDir: tmpDir,
-		Network: config.NetworkConfig{
-			BridgeName: "vmbr0",
-			SubnetCIDR: "10.100.0.0/16",
-			DNSServer:  "1.1.1.1",
-		},
+		Network: newParallelTestNetworkConfig(t),
 	}
 
 	p := paths.New(tmpDir)
@@ -105,6 +101,7 @@ func vzExecCommand(ctx context.Context, inst *Instance, command ...string) (stri
 
 // TestVZBasicLifecycle tests the full vz instance lifecycle: create, exec, stop, start, delete.
 func TestVZBasicLifecycle(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS != "darwin" {
 		t.Skip("vz tests require macOS")
 	}
@@ -274,6 +271,7 @@ func TestVZBasicLifecycle(t *testing.T) {
 
 // TestVZExecAndShutdown focuses on exec behavior and graceful shutdown.
 func TestVZExecAndShutdown(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS != "darwin" {
 		t.Skip("vz tests require macOS")
 	}
@@ -375,6 +373,7 @@ func TestVZExecAndShutdown(t *testing.T) {
 
 // TestVZStandbyAndRestore tests the full standby/restore cycle for the vz hypervisor.
 func TestVZStandbyAndRestore(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS != "darwin" {
 		t.Skip("vz tests require macOS")
 	}
@@ -536,6 +535,7 @@ func TestVZStandbyAndRestore(t *testing.T) {
 // TestVZForkFromRunningNetwork mirrors the running-source fork flow validated for
 // cloud-hypervisor, but on macOS VZ.
 func TestVZForkFromRunningNetwork(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS != "darwin" {
 		t.Skip("vz tests require macOS")
 	}
@@ -734,6 +734,7 @@ func ensureMkfsExt4Available(t *testing.T) {
 }
 
 func TestVZSnapshotFeature(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS != "darwin" {
 		t.Skip("vz tests require macOS")
 	}

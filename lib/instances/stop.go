@@ -18,6 +18,8 @@ import (
 
 // DefaultStopTimeout is the default grace period for graceful shutdown (seconds).
 const DefaultStopTimeout = 5
+const shutdownRPCDeadline = 1500 * time.Millisecond
+const shutdownFailureFallbackWait = 500 * time.Millisecond
 
 // resolveStopTimeout returns the configured stop timeout in seconds,
 // falling back to the package default when unset/invalid.
@@ -46,16 +48,34 @@ func (m *manager) tryGracefulGuestShutdown(ctx context.Context, inst *Instance, 
 		return false
 	}
 
-	// Send shutdown signal (best-effort, fire and forget)
-	shutdownCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	if err := guest.ShutdownInstance(shutdownCtx, dialer, 0); err != nil {
-		log.WarnContext(ctx, "shutdown RPC failed; still waiting for process exit before fallback", "instance_id", inst.Id, "error", err)
+	sendShutdown := func() error {
+		shutdownCtx, cancel := context.WithTimeout(ctx, shutdownRPCDeadline)
+		defer cancel()
+		return guest.ShutdownInstance(shutdownCtx, dialer, 0)
 	}
-	cancel()
+
+	shutdownSent := false
+	if err := sendShutdown(); err != nil {
+		// Drop potentially stale pooled connection and retry once.
+		guest.CloseConn(dialer.Key())
+		if retryErr := sendShutdown(); retryErr != nil {
+			log.WarnContext(ctx, "shutdown RPC failed; falling back to hypervisor shutdown", "instance_id", inst.Id, "error", retryErr)
+		} else {
+			shutdownSent = true
+		}
+	} else {
+		shutdownSent = true
+	}
 
 	// Wait for the hypervisor process to exit (init calls reboot(POWER_OFF))
 	if inst.HypervisorPID != nil {
-		if WaitForProcessExit(*inst.HypervisorPID, time.Duration(stopTimeout)*time.Second) {
+		waitTimeout := time.Duration(stopTimeout) * time.Second
+		if !shutdownSent && waitTimeout > shutdownFailureFallbackWait {
+			// If we couldn't signal the guest, don't burn the full graceful timeout.
+			waitTimeout = shutdownFailureFallbackWait
+		}
+
+		if WaitForProcessExit(*inst.HypervisorPID, waitTimeout) {
 			log.DebugContext(ctx, "VM shut down gracefully", "instance_id", inst.Id)
 			return true
 		}

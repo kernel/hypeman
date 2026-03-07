@@ -7,6 +7,7 @@ import (
 )
 
 func TestCalculateGuestTopology(t *testing.T) {
+	t.Parallel()
 	// Host with 2 threads/core, 8 cores/socket, 2 sockets (common server config)
 	host := &HostTopology{
 		ThreadsPerCore: 2,
@@ -128,6 +129,7 @@ func TestCalculateGuestTopology(t *testing.T) {
 }
 
 func TestCalculateGuestTopologyNoSMT(t *testing.T) {
+	t.Parallel()
 	// Host without hyperthreading (1 thread/core)
 	host := &HostTopology{
 		ThreadsPerCore: 1,
