@@ -14,6 +14,8 @@ import (
 	"github.com/kernel/hypeman/lib/network"
 )
 
+const deleteGracefulShutdownTimeout = 2
+
 // deleteInstance stops and deletes an instance
 func (m *manager) deleteInstance(
 	ctx context.Context,
@@ -52,6 +54,9 @@ func (m *manager) deleteInstance(
 	gracefulShutdown := false
 	if inst.State == StateRunning {
 		stopTimeout := resolveStopTimeout(stored)
+		if stopTimeout > deleteGracefulShutdownTimeout {
+			stopTimeout = deleteGracefulShutdownTimeout
+		}
 		gracefulShutdown = m.tryGracefulGuestShutdown(ctx, &inst, stopTimeout)
 		if !gracefulShutdown {
 			log.DebugContext(ctx, "graceful shutdown before delete did not complete", "instance_id", id)
@@ -174,14 +179,33 @@ func (m *manager) killHypervisor(ctx context.Context, inst *Instance) error {
 // WaitForProcessExit polls for a process to exit, returns true if exited within timeout.
 // Exported for use in tests.
 func WaitForProcessExit(pid int, timeout time.Duration) bool {
+	if pid <= 0 {
+		return true
+	}
+
 	deadline := time.Now().Add(timeout)
 
 	for time.Now().Before(deadline) {
-		// Check if process still exists (signal 0 doesn't kill, just checks existence)
-		if err := syscall.Kill(pid, 0); err != nil {
-			// Process is gone (ESRCH = no such process)
+		// Reap exited child processes to avoid treating zombies as still-running.
+		var status syscall.WaitStatus
+		reapedPID, waitErr := syscall.Wait4(pid, &status, syscall.WNOHANG, nil)
+		switch {
+		case waitErr == nil && reapedPID == pid:
 			return true
+		case waitErr == nil && reapedPID == 0:
+			// Process still running (or wait status not yet available).
+		case waitErr == syscall.ECHILD:
+			// Not our child (or already reaped elsewhere). Fall back to existence check.
+			if err := syscall.Kill(pid, 0); err != nil {
+				return true
+			}
+		default:
+			// Best effort fallback on transient/unexpected wait errors.
+			if err := syscall.Kill(pid, 0); err != nil {
+				return true
+			}
 		}
+
 		// Still alive, wait a bit before checking again
 		// 10ms polling interval balances responsiveness with CPU usage
 		time.Sleep(10 * time.Millisecond)

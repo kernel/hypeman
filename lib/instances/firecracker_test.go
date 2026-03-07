@@ -28,11 +28,7 @@ func setupTestManagerForFirecracker(t *testing.T) (*manager, string) {
 	tmpDir := t.TempDir()
 	cfg := &config.Config{
 		DataDir: tmpDir,
-		Network: config.NetworkConfig{
-			BridgeName: "vmbr0",
-			SubnetCIDR: "10.100.0.0/16",
-			DNSServer:  "1.1.1.1",
-		},
+		Network: newParallelTestNetworkConfig(t),
 	}
 
 	p := paths.New(tmpDir)
@@ -91,6 +87,7 @@ func createNginxImageAndWait(t *testing.T, ctx context.Context, imageManager ima
 }
 
 func TestFirecrackerStandbyAndRestore(t *testing.T) {
+	t.Parallel()
 	requireFirecrackerIntegrationPrereqs(t)
 
 	mgr, tmpDir := setupTestManagerForFirecracker(t)
@@ -139,6 +136,7 @@ func TestFirecrackerStandbyAndRestore(t *testing.T) {
 }
 
 func TestFirecrackerStopClearsStaleSnapshot(t *testing.T) {
+	t.Parallel()
 	requireFirecrackerIntegrationPrereqs(t)
 
 	mgr, tmpDir := setupTestManagerForFirecracker(t)
@@ -201,6 +199,7 @@ func TestFirecrackerStopClearsStaleSnapshot(t *testing.T) {
 }
 
 func TestFirecrackerNetworkLifecycle(t *testing.T) {
+	t.Parallel()
 	requireFirecrackerIntegrationPrereqs(t)
 
 	mgr, tmpDir := setupTestManagerForFirecracker(t)
@@ -242,9 +241,10 @@ func TestFirecrackerNetworkLifecycle(t *testing.T) {
 	assert.True(t, strings.HasPrefix(tap.Attrs().Name, "hype-"))
 	assert.Equal(t, uint8(netlink.OperUp), uint8(tap.Attrs().OperState))
 
-	bridge, err := netlink.LinkByName("vmbr0")
+	master, err := netlink.LinkByIndex(tap.Attrs().MasterIndex)
 	require.NoError(t, err)
-	assert.Equal(t, bridge.Attrs().Index, tap.Attrs().MasterIndex)
+	_, isBridge := master.(*netlink.Bridge)
+	assert.True(t, isBridge, "TAP should be attached to a bridge")
 
 	require.NoError(t, waitForLogMessage(ctx, mgr, inst.Id, "start worker processes", 15*time.Second))
 	require.NoError(t, waitForLogMessage(ctx, mgr, inst.Id, "[guest-agent] listening", 10*time.Second))
@@ -318,6 +318,7 @@ func TestFirecrackerNetworkLifecycle(t *testing.T) {
 }
 
 func TestFirecrackerForkFromRunningNetwork(t *testing.T) {
+	t.Parallel()
 	requireFirecrackerIntegrationPrereqs(t)
 
 	mgr, tmpDir := setupTestManagerForFirecracker(t)
@@ -383,6 +384,7 @@ func TestFirecrackerForkFromRunningNetwork(t *testing.T) {
 }
 
 func TestFirecrackerSnapshotFeature(t *testing.T) {
+	t.Parallel()
 	requireFirecrackerIntegrationPrereqs(t)
 
 	mgr, tmpDir := setupTestManagerForFirecracker(t)

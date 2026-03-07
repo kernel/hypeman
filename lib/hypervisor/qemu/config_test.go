@@ -68,7 +68,7 @@ func TestBuildArgs_Disks(t *testing.T) {
 		if arg == "file=/path/to/rootfs.ext4,format=raw,if=none,id=drive0" {
 			foundDrive0 = true
 		}
-		if arg == "file=/path/to/data.ext4,format=raw,if=none,id=drive1,readonly=on" {
+		if arg == "file=/path/to/data.ext4,format=raw,if=none,id=drive1,readonly=on,file.locking=off" {
 			foundDrive1 = true
 		}
 	}

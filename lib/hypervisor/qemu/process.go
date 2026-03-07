@@ -33,6 +33,11 @@ const (
 
 	// socketDialTimeout is timeout for individual socket connection attempts
 	socketDialTimeout = 100 * time.Millisecond
+
+	// clientCreateTimeout is how long to retry QMP client creation after the
+	// socket appears. Under high parallel load the socket can accept connections
+	// slightly later than file creation/availability.
+	clientCreateTimeout = 3 * time.Second
 )
 
 func init() {
@@ -189,11 +194,20 @@ func (s *Starter) startQEMUProcess(ctx context.Context, p *paths.Paths, version 
 	}
 	log.DebugContext(ctx, "QMP socket ready", "duration_ms", time.Since(socketWaitStart).Milliseconds())
 
-	// Create QMP client
-	hv, err := New(socketPath)
-	if err != nil {
-		cu.Clean()
-		return 0, nil, nil, fmt.Errorf("create client: %w", err)
+	// Create QMP client. The socket file may exist before QEMU can actually
+	// accept monitor connections, so retry briefly on transient dial failures.
+	var hv *QEMU
+	clientDeadline := time.Now().Add(clientCreateTimeout)
+	for {
+		hv, err = New(socketPath)
+		if err == nil {
+			break
+		}
+		if time.Now().After(clientDeadline) {
+			cu.Clean()
+			return 0, nil, nil, fmt.Errorf("create client: %w", err)
+		}
+		time.Sleep(socketPollInterval)
 	}
 
 	return pid, hv, &cu, nil

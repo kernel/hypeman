@@ -38,11 +38,7 @@ func setupTestManager(t *testing.T) (*manager, string) {
 
 	cfg := &config.Config{
 		DataDir: tmpDir,
-		Network: config.NetworkConfig{
-			BridgeName: "vmbr0",
-			SubnetCIDR: "10.100.0.0/16",
-			DNSServer:  "1.1.1.1",
-		},
+		Network: newParallelTestNetworkConfig(t),
 	}
 
 	p := paths.New(tmpDir)
@@ -184,6 +180,7 @@ func cleanupOrphanedProcesses(t *testing.T, mgr *manager) {
 }
 
 func TestBasicEndToEnd(t *testing.T) {
+	t.Parallel()
 	// Require KVM access (don't skip, fail informatively)
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Skip("/dev/kvm not available, skipping on this platform")
@@ -246,11 +243,7 @@ func TestBasicEndToEnd(t *testing.T) {
 	// Initialize network for ingress testing
 	networkManager := network.NewManager(p, &config.Config{
 		DataDir: tmpDir,
-		Network: config.NetworkConfig{
-			BridgeName: "vmbr0",
-			SubnetCIDR: "10.100.0.0/16",
-			DNSServer:  "1.1.1.1",
-		},
+		Network: newParallelTestNetworkConfig(t),
 	}, nil)
 	t.Log("Initializing network...")
 	err = networkManager.Initialize(ctx, nil)
@@ -329,7 +322,7 @@ func TestBasicEndToEnd(t *testing.T) {
 	// Poll for logs to contain nginx startup message
 	var logs string
 	foundNginxStartup := false
-	for i := 0; i < 50; i++ { // Poll for up to 5 seconds (50 * 100ms)
+	for i := 0; i < 200; i++ { // Poll for up to 20 seconds (200 * 100ms)
 		logs, err = collectLogs(ctx, manager, inst.Id, 100)
 		require.NoError(t, err)
 
@@ -343,7 +336,7 @@ func TestBasicEndToEnd(t *testing.T) {
 	t.Logf("Instance logs (last 100 lines):\n%s", logs)
 
 	// Verify nginx started successfully
-	assert.True(t, foundNginxStartup, "Nginx should have started worker processes within 5 seconds")
+	assert.True(t, foundNginxStartup, "Nginx should have started worker processes within 20 seconds")
 
 	// Test ingress - route external traffic to nginx through Caddy
 	t.Log("Testing ingress routing to nginx...")
@@ -805,6 +798,7 @@ func TestBasicEndToEnd(t *testing.T) {
 // host lazily parses sentinel from serial log -> ExitCode/ExitMessage in metadata.
 // Uses alpine with a non-existent command override to get exit code 127 ("command not found").
 func TestAppExitPropagation(t *testing.T) {
+	t.Parallel()
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Skip("/dev/kvm not available, skipping on this platform")
 	}
@@ -894,6 +888,7 @@ func TestAppExitPropagation(t *testing.T) {
 // Creates a VM with low memory and runs a command that allocates more than available,
 // triggering the OOM killer. Verifies exit code 137 and "OOM" in the exit message.
 func TestOOMExitPropagation(t *testing.T) {
+	t.Parallel()
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Skip("/dev/kvm not available, skipping on this platform")
 	}
@@ -999,6 +994,7 @@ func TestOOMExitPropagation(t *testing.T) {
 // This uses bitnami/redis which configures REDIS_PASSWORD from an env var - if auth is required,
 // it proves the entrypoint received and used the env var.
 func TestEntrypointEnvVars(t *testing.T) {
+	t.Parallel()
 	if os.Getuid() != 0 {
 		t.Skip("Skipping test that requires root")
 	}
@@ -1045,11 +1041,7 @@ func TestEntrypointEnvVars(t *testing.T) {
 	// Initialize network (needed for loopback interface in guest)
 	networkManager := network.NewManager(p, &config.Config{
 		DataDir: tmpDir,
-		Network: config.NetworkConfig{
-			BridgeName: "vmbr0",
-			SubnetCIDR: "10.100.0.0/16",
-			DNSServer:  "1.1.1.1",
-		},
+		Network: newParallelTestNetworkConfig(t),
 	}, nil)
 	t.Log("Initializing network...")
 	err = networkManager.Initialize(ctx, nil)
@@ -1078,10 +1070,6 @@ func TestEntrypointEnvVars(t *testing.T) {
 	assert.Equal(t, StateRunning, inst.State)
 	t.Logf("Instance created: %s", inst.Id)
 
-	// Wait for redis to be ready (bitnami/redis takes longer to start)
-	t.Log("Waiting for redis to be ready...")
-	time.Sleep(15 * time.Second)
-
 	// Helper to run command in guest with retry
 	runCmd := func(command ...string) (string, int, error) {
 		var lastOutput string
@@ -1093,9 +1081,9 @@ func TestEntrypointEnvVars(t *testing.T) {
 			return "", -1, err
 		}
 
-		for attempt := 0; attempt < 5; attempt++ {
+		for attempt := 0; attempt < 20; attempt++ {
 			if attempt > 0 {
-				time.Sleep(200 * time.Millisecond)
+				time.Sleep(300 * time.Millisecond)
 			}
 
 			var stdout, stderr bytes.Buffer
@@ -1131,6 +1119,20 @@ func TestEntrypointEnvVars(t *testing.T) {
 		return lastOutput, lastExitCode, lastErr
 	}
 
+	// Wait until Redis is actually accepting authenticated commands.
+	t.Log("Waiting for redis to accept authenticated commands...")
+	redisReadyDeadline := time.Now().Add(120 * time.Second)
+	for {
+		output, exitCode, cmdErr := runCmd("redis-cli", "-a", testPassword, "PING")
+		if cmdErr == nil && exitCode == 0 && strings.Contains(output, "PONG") {
+			break
+		}
+		if time.Now().After(redisReadyDeadline) {
+			t.Fatalf("redis did not become ready in time; last output=%q exit=%d err=%v", output, exitCode, cmdErr)
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+
 	// Test 1: PING without auth should fail
 	t.Log("Testing redis PING without auth (should fail)...")
 	output, _, err := runCmd("redis-cli", "PING")
@@ -1160,16 +1162,13 @@ func TestEntrypointEnvVars(t *testing.T) {
 }
 
 func TestStorageOperations(t *testing.T) {
+	t.Parallel()
 	// Test storage layer without starting VMs
 	tmpDir := t.TempDir()
 
 	cfg := &config.Config{
 		DataDir: tmpDir,
-		Network: config.NetworkConfig{
-			BridgeName: "vmbr0",
-			SubnetCIDR: "10.100.0.0/16",
-			DNSServer:  "1.1.1.1",
-		},
+		Network: newParallelTestNetworkConfig(t),
 		Oversubscription: config.OversubscriptionConfig{
 			CPU: 1.0, Memory: 1.0, Disk: 1.0, Network: 1.0,
 		},
@@ -1240,6 +1239,7 @@ func TestStorageOperations(t *testing.T) {
 }
 
 func TestStandbyAndRestore(t *testing.T) {
+	t.Parallel()
 	// Require KVM access (don't skip, fail informatively)
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Skip("/dev/kvm not available, skipping on this platform")
@@ -1358,6 +1358,7 @@ func TestStandbyAndRestore(t *testing.T) {
 }
 
 func TestCloudHypervisorSnapshotFeature(t *testing.T) {
+	t.Parallel()
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Skip("/dev/kvm not available, skipping on this platform")
 	}
@@ -1372,6 +1373,7 @@ func TestCloudHypervisorSnapshotFeature(t *testing.T) {
 }
 
 func TestStateTransitions(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name       string
 		from       State

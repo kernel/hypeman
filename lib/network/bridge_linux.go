@@ -170,9 +170,9 @@ func (m *manager) createBridge(ctx context.Context, name, gateway, subnet string
 
 // Rule comments for identifying hypeman iptables rules
 const (
-	commentNAT    = "hypeman-nat"
-	commentFwdOut = "hypeman-fwd-out"
-	commentFwdIn  = "hypeman-fwd-in"
+	commentNATBase    = "hypeman-nat"
+	commentFwdOutBase = "hypeman-fwd-out"
+	commentFwdInBase  = "hypeman-fwd-in"
 )
 
 // HTB handles for traffic control
@@ -230,8 +230,12 @@ func (m *manager) setupIPTablesRules(ctx context.Context, subnet, bridgeName str
 	}
 	log.InfoContext(ctx, "uplink interface", "interface", uplink)
 
+	natComment := m.ruleComment(commentNATBase)
+	fwdOutComment := m.ruleComment(commentFwdOutBase)
+	fwdInComment := m.ruleComment(commentFwdInBase)
+
 	// Add MASQUERADE rule if not exists (position doesn't matter in POSTROUTING)
-	masqStatus, err := m.ensureNATRule(subnet, uplink)
+	masqStatus, err := m.ensureNATRule(subnet, uplink, natComment)
 	if err != nil {
 		return err
 	}
@@ -239,12 +243,12 @@ func (m *manager) setupIPTablesRules(ctx context.Context, subnet, bridgeName str
 
 	// FORWARD rules must be at top of chain (before Docker's DOCKER-USER/DOCKER-FORWARD)
 	// We insert at position 1 and 2 to ensure they're evaluated first
-	fwdOutStatus, err := m.ensureForwardRule(bridgeName, uplink, "NEW,ESTABLISHED,RELATED", commentFwdOut, 1)
+	fwdOutStatus, err := m.ensureForwardRule(bridgeName, uplink, "NEW,ESTABLISHED,RELATED", fwdOutComment, 1)
 	if err != nil {
 		return fmt.Errorf("setup forward outbound: %w", err)
 	}
 
-	fwdInStatus, err := m.ensureForwardRule(uplink, bridgeName, "ESTABLISHED,RELATED", commentFwdIn, 2)
+	fwdInStatus, err := m.ensureForwardRule(uplink, bridgeName, "ESTABLISHED,RELATED", fwdInComment, 2)
 	if err != nil {
 		return fmt.Errorf("setup forward inbound: %w", err)
 	}
@@ -262,11 +266,11 @@ func (m *manager) setupIPTablesRules(ctx context.Context, subnet, bridgeName str
 }
 
 // ensureNATRule ensures the MASQUERADE rule exists with correct uplink
-func (m *manager) ensureNATRule(subnet, uplink string) (string, error) {
+func (m *manager) ensureNATRule(subnet, uplink, comment string) (string, error) {
 	// Check if rule exists with correct subnet and uplink
 	checkCmd := exec.Command("iptables", "-t", "nat", "-C", "POSTROUTING",
 		"-s", subnet, "-o", uplink,
-		"-m", "comment", "--comment", commentNAT,
+		"-m", "comment", "--comment", comment,
 		"-j", "MASQUERADE")
 	checkCmd.SysProcAttr = &syscall.SysProcAttr{
 		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
@@ -276,12 +280,12 @@ func (m *manager) ensureNATRule(subnet, uplink string) (string, error) {
 	}
 
 	// Delete any existing rule with our comment (handles uplink changes)
-	m.deleteNATRuleByComment(commentNAT)
+	m.deleteNATRuleByComment(comment)
 
 	// Add rule with comment
 	addCmd := exec.Command("iptables", "-t", "nat", "-A", "POSTROUTING",
 		"-s", subnet, "-o", uplink,
-		"-m", "comment", "--comment", commentNAT,
+		"-m", "comment", "--comment", comment,
 		"-j", "MASQUERADE")
 	addCmd.SysProcAttr = &syscall.SysProcAttr{
 		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
@@ -290,6 +294,14 @@ func (m *manager) ensureNATRule(subnet, uplink string) (string, error) {
 		return "", fmt.Errorf("add masquerade rule: %w", err)
 	}
 	return "added", nil
+}
+
+// ruleComment returns a bridge-scoped iptables comment so concurrent managers
+// don't clobber each other's rules.
+func (m *manager) ruleComment(base string) string {
+	suffix := strings.ToLower(m.config.Network.BridgeName)
+	suffix = strings.ReplaceAll(suffix, " ", "-")
+	return fmt.Sprintf("%s-%s", base, suffix)
 }
 
 // deleteNATRuleByComment deletes any NAT POSTROUTING rule containing our comment
