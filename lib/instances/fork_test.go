@@ -35,7 +35,7 @@ func TestForkInstance_VZStoppedSourceSupported(t *testing.T) {
 	meta := &metadata{StoredMetadata: StoredMetadata{
 		Id:                sourceID,
 		Name:              "fork-vz-source",
-		Image:             "docker.io/library/alpine:latest",
+		Image:             integrationTestImageRef(t, "docker.io/library/alpine:latest"),
 		CreatedAt:         time.Now(),
 		HypervisorType:    hypervisor.TypeVZ,
 		HypervisorVersion: "test",
@@ -111,7 +111,7 @@ func TestCleanupForkInstanceOnError(t *testing.T) {
 	meta := &metadata{StoredMetadata: StoredMetadata{
 		Id:                forkID,
 		Name:              "fork-cleanup-target",
-		Image:             "docker.io/library/alpine:latest",
+		Image:             integrationTestImageRef(t, "docker.io/library/alpine:latest"),
 		CreatedAt:         time.Now(),
 		HypervisorType:    hypervisor.TypeCloudHypervisor,
 		HypervisorVersion: "test",
@@ -180,7 +180,7 @@ func TestForkInstanceRejectsDuplicateNameForNonNetworkedSource(t *testing.T) {
 	sourceMeta := &metadata{StoredMetadata: StoredMetadata{
 		Id:                sourceID,
 		Name:              sourceID,
-		Image:             "docker.io/library/alpine:latest",
+		Image:             integrationTestImageRef(t, "docker.io/library/alpine:latest"),
 		CreatedAt:         now,
 		StoppedAt:         &now,
 		HypervisorType:    hypervisor.TypeCloudHypervisor,
@@ -197,7 +197,7 @@ func TestForkInstanceRejectsDuplicateNameForNonNetworkedSource(t *testing.T) {
 	existingMeta := &metadata{StoredMetadata: StoredMetadata{
 		Id:                existingID,
 		Name:              "duplicate-name",
-		Image:             "docker.io/library/alpine:latest",
+		Image:             integrationTestImageRef(t, "docker.io/library/alpine:latest"),
 		CreatedAt:         now,
 		StoppedAt:         &now,
 		HypervisorType:    hypervisor.TypeCloudHypervisor,
@@ -348,7 +348,7 @@ func TestForkCloudHypervisorFromRunningNetwork(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Log("Ensuring nginx image...")
-	nginxImage, err := imageManager.CreateImage(ctx, images.CreateImageRequest{Name: "docker.io/library/nginx:alpine"})
+	nginxImage, err := imageManager.CreateImage(ctx, images.CreateImageRequest{Name: integrationTestImageRef(t, "docker.io/library/nginx:alpine")})
 	require.NoError(t, err)
 
 	imageName := nginxImage.Name
@@ -372,7 +372,7 @@ func TestForkCloudHypervisorFromRunningNetwork(t *testing.T) {
 
 	source, err := manager.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "fork-running-src",
-		Image:          "docker.io/library/nginx:alpine",
+		Image:          integrationTestImageRef(t, "docker.io/library/nginx:alpine"),
 		Size:           2 * 1024 * 1024 * 1024,
 		HotplugSize:    256 * 1024 * 1024,
 		OverlaySize:    10 * 1024 * 1024 * 1024,

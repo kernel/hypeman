@@ -30,7 +30,7 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 	// Pull nginx:alpine image (long-running workload)
 	t.Log("Pulling nginx:alpine image...")
 	nginxImage, err := manager.imageManager.CreateImage(ctx, images.CreateImageRequest{
-		Name: "docker.io/library/nginx:alpine",
+		Name: integrationTestImageRef(t, "docker.io/library/nginx:alpine"),
 	})
 	require.NoError(t, err)
 
@@ -65,7 +65,7 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 	t.Log("Creating instance with default network...")
 	inst, err := manager.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "test-net-instance",
-		Image:          "docker.io/library/nginx:alpine",
+		Image:          integrationTestImageRef(t, "docker.io/library/nginx:alpine"),
 		Size:           2 * 1024 * 1024 * 1024, // 2GB (needs extra room for initrd with NVIDIA libs)
 		HotplugSize:    512 * 1024 * 1024,
 		OverlaySize:    5 * 1024 * 1024 * 1024,
