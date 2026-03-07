@@ -187,6 +187,40 @@ func TestCreateIngress_DefaultPort(t *testing.T) {
 	assert.Equal(t, 80, ing.Rules[0].Match.GetPort()) // But GetPort returns 80
 }
 
+func TestCreateIngress_MetadataRoundTrip(t *testing.T) {
+	manager, _, _, cleanup := setupTestManager(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	reqMetadata := map[string]string{"team": "api", "env": "staging"}
+	req := CreateIngressRequest{
+		Name:     "metadata-ingress",
+		Metadata: reqMetadata,
+		Rules: []IngressRule{
+			{
+				Match:  IngressMatch{Hostname: "metadata.example.com"},
+				Target: IngressTarget{Instance: "my-api", Port: 8080},
+			},
+		},
+	}
+
+	ing, err := manager.Create(ctx, req)
+	require.NoError(t, err)
+	require.Equal(t, map[string]string{"team": "api", "env": "staging"}, ing.Metadata)
+
+	reqMetadata["team"] = "mutated"
+	require.Equal(t, "api", ing.Metadata["team"])
+
+	got, err := manager.Get(ctx, ing.ID)
+	require.NoError(t, err)
+	require.Equal(t, map[string]string{"team": "api", "env": "staging"}, got.Metadata)
+
+	listed, err := manager.List(ctx)
+	require.NoError(t, err)
+	require.Len(t, listed, 1)
+	require.Equal(t, map[string]string{"team": "api", "env": "staging"}, listed[0].Metadata)
+}
+
 func TestCreateIngress_InvalidName(t *testing.T) {
 	manager, _, _, cleanup := setupTestManager(t)
 	defer cleanup()

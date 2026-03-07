@@ -12,6 +12,7 @@ import (
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/network"
 	snapshotstore "github.com/kernel/hypeman/lib/snapshot"
+	"github.com/kernel/hypeman/lib/tags"
 	"github.com/nrednav/cuid2"
 	"gvisor.dev/gvisor/pkg/cleanup"
 )
@@ -124,6 +125,7 @@ func (m *manager) createSnapshot(ctx context.Context, id string, req CreateSnaps
 				Id:               snapshotID,
 				Name:             req.Name,
 				Kind:             req.Kind,
+				Metadata:         tags.Clone(req.Metadata),
 				SourceInstanceID: stored.Id,
 				SourceName:       stored.Name,
 				SourceHypervisor: stored.HypervisorType,
@@ -155,6 +157,7 @@ func (m *manager) createSnapshot(ctx context.Context, id string, req CreateSnaps
 				Id:               snapshotID,
 				Name:             req.Name,
 				Kind:             req.Kind,
+				Metadata:         tags.Clone(req.Metadata),
 				SourceInstanceID: stored.Id,
 				SourceName:       stored.Name,
 				SourceHypervisor: stored.HypervisorType,
@@ -457,6 +460,9 @@ func resolveSnapshotTargetState(kind SnapshotKind, requested State) (State, erro
 func validateCreateSnapshotRequest(req CreateSnapshotRequest) error {
 	if req.Kind != SnapshotKindStandby && req.Kind != SnapshotKindStopped {
 		return fmt.Errorf("%w: kind must be one of %s, %s", ErrInvalidRequest, SnapshotKindStandby, SnapshotKindStopped)
+	}
+	if err := tags.Validate(req.Metadata); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidRequest, err)
 	}
 	if req.Name != "" {
 		if err := validateInstanceName(req.Name); err != nil {

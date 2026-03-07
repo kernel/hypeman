@@ -6,6 +6,7 @@ import (
 
 	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/oapi"
+	"github.com/kernel/hypeman/lib/tags"
 )
 
 // ListDevices returns all registered devices
@@ -18,9 +19,12 @@ func (s *ApiService) ListDevices(ctx context.Context, request oapi.ListDevicesRe
 		}, nil
 	}
 
-	result := make([]oapi.Device, len(deviceList))
-	for i, d := range deviceList {
-		result[i] = deviceToOAPI(d)
+	result := make([]oapi.Device, 0, len(deviceList))
+	for _, d := range deviceList {
+		if !matchesMetadataFilter(d.Metadata, request.Params.Metadata) {
+			continue
+		}
+		result = append(result, deviceToOAPI(d))
 	}
 
 	return oapi.ListDevices200JSONResponse(result), nil
@@ -53,11 +57,17 @@ func (s *ApiService) CreateDevice(ctx context.Context, request oapi.CreateDevice
 	req := devices.CreateDeviceRequest{
 		Name:       name,
 		PCIAddress: request.Body.PciAddress,
+		Metadata:   toMapMetadata(request.Body.Metadata),
 	}
 
 	device, err := s.DeviceManager.CreateDevice(ctx, req)
 	if err != nil {
 		switch {
+		case errors.Is(err, tags.ErrInvalidMetadata):
+			return oapi.CreateDevice400JSONResponse{
+				Code:    "invalid_request",
+				Message: err.Error(),
+			}, nil
 		case errors.Is(err, devices.ErrInvalidName):
 			return oapi.CreateDevice400JSONResponse{
 				Code:    "invalid_name",
@@ -142,6 +152,7 @@ func deviceToOAPI(d devices.Device) oapi.Device {
 		Id:          d.Id,
 		Name:        &d.Name,
 		Type:        deviceType,
+		Metadata:    toOAPIMetadata(d.Metadata),
 		PciAddress:  d.PCIAddress,
 		VendorId:    d.VendorID,
 		DeviceId:    d.DeviceID,

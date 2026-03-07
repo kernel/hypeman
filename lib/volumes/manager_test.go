@@ -389,3 +389,31 @@ func TestMultiAttach_ConcurrentRWConflict(t *testing.T) {
 	assert.Len(t, vol.Attachments, 1, "Should have exactly one attachment")
 	assert.False(t, vol.Attachments[0].Readonly, "Attachment should be read-write")
 }
+
+func TestCreateVolume_MetadataRoundTrip(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "volume-metadata-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+
+	p := paths.New(tmpDir)
+	meta := &storedMetadata{
+		Id:          "vol-metadata-1",
+		Name:        "tagged-vol",
+		SizeGb:      10,
+		Attachments: []storedAttachment{},
+		Metadata:    map[string]string{"team": "backend", "env": "staging"},
+	}
+	require.NoError(t, os.MkdirAll(p.VolumeDir(meta.Id), 0755))
+	require.NoError(t, saveMetadata(p, meta))
+
+	loaded, err := loadMetadata(p, meta.Id)
+	require.NoError(t, err)
+	require.Equal(t, map[string]string{"team": "backend", "env": "staging"}, loaded.Metadata)
+
+	vol := (&manager{}).metadataToVolume(loaded)
+	require.Equal(t, map[string]string{"team": "backend", "env": "staging"}, vol.Metadata)
+
+	// Verify deep-copy behavior from persisted metadata.
+	loaded.Metadata["team"] = "mutated"
+	require.Equal(t, "backend", vol.Metadata["team"])
+}

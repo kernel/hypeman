@@ -22,6 +22,7 @@ import (
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/instances"
 	"github.com/kernel/hypeman/lib/paths"
+	"github.com/kernel/hypeman/lib/tags"
 	"github.com/kernel/hypeman/lib/volumes"
 	"github.com/nrednav/cuid2"
 	"go.opentelemetry.io/otel/metric"
@@ -370,6 +371,10 @@ func (m *manager) waitForBuilderImageReady(ctx context.Context, imageRef string)
 // CreateBuild starts a new build job
 func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourceData []byte) (*Build, error) {
 	m.logger.Info("creating build")
+	if err := tags.Validate(req.Metadata); err != nil {
+		return nil, err
+	}
+	req.Metadata = tags.Clone(req.Metadata)
 
 	// Apply defaults to build policy
 	policy := req.BuildPolicy
@@ -390,6 +395,7 @@ func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourc
 	meta := &buildMetadata{
 		ID:        id,
 		Status:    StatusQueued,
+		Metadata:  tags.Clone(req.Metadata),
 		Request:   &req,
 		CreatedAt: time.Now(),
 	}

@@ -13,6 +13,7 @@ import (
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/oapi"
+	"github.com/kernel/hypeman/lib/tags"
 )
 
 // ListBuilds returns all builds
@@ -28,9 +29,12 @@ func (s *ApiService) ListBuilds(ctx context.Context, request oapi.ListBuildsRequ
 		}, nil
 	}
 
-	oapiBuilds := make([]oapi.Build, len(domainBuilds))
-	for i, b := range domainBuilds {
-		oapiBuilds[i] = buildToOAPI(b)
+	oapiBuilds := make([]oapi.Build, 0, len(domainBuilds))
+	for _, b := range domainBuilds {
+		if b == nil || !matchesMetadataFilter(b.Metadata, request.Params.Metadata) {
+			continue
+		}
+		oapiBuilds = append(oapiBuilds, buildToOAPI(b))
 	}
 
 	return oapi.ListBuilds200JSONResponse(oapiBuilds), nil
@@ -46,6 +50,7 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 	var timeoutSeconds, memoryMB, cpus int
 	var isAdminBuild bool
 	var secrets []builds.SecretRef
+	var metadata map[string]string
 
 	for {
 		part, err := request.Body.NextPart()
@@ -169,6 +174,22 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 				}, nil
 			}
 			imageName = string(data)
+		case "metadata":
+			data, err := io.ReadAll(part)
+			if err != nil {
+				return oapi.CreateBuild400JSONResponse{
+					Code:    "invalid_request",
+					Message: "failed to read metadata field",
+				}, nil
+			}
+			parsed, err := parseMetadataJSON(string(data))
+			if err != nil {
+				return oapi.CreateBuild400JSONResponse{
+					Code:    "invalid_request",
+					Message: "metadata must be a JSON object with string key-value pairs",
+				}, nil
+			}
+			metadata = parsed
 		}
 		part.Close()
 	}
@@ -203,6 +224,7 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 		IsAdminBuild:    isAdminBuild,
 		GlobalCacheKey:  globalCacheKey,
 		ImageName:       imageName,
+		Metadata:        metadata,
 	}
 
 	// Apply build policy if any field was provided
@@ -223,6 +245,11 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 	build, err := s.BuildManager.CreateBuild(ctx, domainReq, sourceData)
 	if err != nil {
 		switch {
+		case errors.Is(err, tags.ErrInvalidMetadata):
+			return oapi.CreateBuild400JSONResponse{
+				Code:    "invalid_request",
+				Message: err.Error(),
+			}, nil
 		case errors.Is(err, builds.ErrDockerfileRequired):
 			return oapi.CreateBuild400JSONResponse{
 				Code:    "dockerfile_required",
@@ -359,6 +386,7 @@ func buildToOAPI(b *builds.Build) oapi.Build {
 	oapiBuild := oapi.Build{
 		Id:                b.ID,
 		Status:            oapi.BuildStatus(b.Status),
+		Metadata:          toOAPIMetadata(b.Metadata),
 		QueuePosition:     b.QueuePosition,
 		ImageDigest:       b.ImageDigest,
 		ImageRef:          b.ImageRef,

@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/kernel/hypeman/lib/paths"
+	"github.com/kernel/hypeman/lib/tags"
 	"go.opentelemetry.io/otel/metric"
 )
 
@@ -104,6 +105,10 @@ func (m *manager) ListImages(ctx context.Context) ([]Image, error) {
 }
 
 func (m *manager) CreateImage(ctx context.Context, req CreateImageRequest) (*Image, error) {
+	if err := tags.Validate(req.Metadata); err != nil {
+		return nil, err
+	}
+
 	// Parse and normalize
 	normalized, err := ParseNormalizedRef(req.Name)
 	if err != nil {
@@ -148,7 +153,7 @@ func (m *manager) CreateImage(ctx context.Context, req CreateImageRequest) (*Ima
 	}
 
 	// Don't have this digest yet, queue the build
-	return m.createAndQueueImage(ref)
+	return m.createAndQueueImage(ref, req)
 }
 
 // ImportLocalImage imports an image from the local OCI cache without resolving from a remote registry.
@@ -195,15 +200,19 @@ func (m *manager) ImportLocalImage(ctx context.Context, repo, reference, digest 
 	}
 
 	// Don't have this digest yet, queue the build
-	return m.createAndQueueImage(ref)
+	return m.createAndQueueImage(ref, CreateImageRequest{Name: imageRef})
 }
 
-func (m *manager) createAndQueueImage(ref *ResolvedRef) (*Image, error) {
+func (m *manager) createAndQueueImage(ref *ResolvedRef, req CreateImageRequest) (*Image, error) {
 	meta := &imageMetadata{
-		Name:      ref.String(),
-		Digest:    ref.Digest(),
-		Status:    StatusPending,
-		Request:   &CreateImageRequest{Name: ref.String()},
+		Name:   ref.String(),
+		Digest: ref.Digest(),
+		Status: StatusPending,
+		Request: &CreateImageRequest{
+			Name:     ref.String(),
+			Metadata: tags.Clone(req.Metadata),
+		},
+		Metadata:  tags.Clone(req.Metadata),
 		CreatedAt: time.Now(),
 	}
 
@@ -213,7 +222,7 @@ func (m *manager) createAndQueueImage(ref *ResolvedRef) (*Image, error) {
 	}
 
 	// Enqueue the build using digest as the queue key for deduplication
-	queuePos := m.queue.Enqueue(ref.Digest(), CreateImageRequest{Name: ref.String()}, func() {
+	queuePos := m.queue.Enqueue(ref.Digest(), CreateImageRequest{Name: ref.String(), Metadata: tags.Clone(req.Metadata)}, func() {
 		m.buildImage(context.Background(), ref)
 	})
 

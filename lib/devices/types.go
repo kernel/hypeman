@@ -3,6 +3,8 @@ package devices
 import (
 	"regexp"
 	"time"
+
+	"github.com/kernel/hypeman/lib/tags"
 )
 
 // DeviceType represents the type of PCI device
@@ -15,22 +17,24 @@ const (
 
 // Device represents a registered PCI device for passthrough
 type Device struct {
-	Id          string     `json:"id"`            // cuid2 identifier
-	Name        string     `json:"name"`          // user-provided globally unique name
-	Type        DeviceType `json:"type"`          // gpu or pci
-	PCIAddress  string     `json:"pci_address"`   // e.g., "0000:a2:00.0"
-	VendorID    string     `json:"vendor_id"`     // e.g., "10de"
-	DeviceID    string     `json:"device_id"`     // e.g., "27b8"
-	IOMMUGroup  int        `json:"iommu_group"`   // IOMMU group number
-	BoundToVFIO bool       `json:"bound_to_vfio"` // whether device is bound to vfio-pci
-	AttachedTo  *string    `json:"attached_to"`   // instance ID if attached, nil otherwise
-	CreatedAt   time.Time  `json:"created_at"`
+	Id          string        `json:"id"`                 // cuid2 identifier
+	Name        string        `json:"name"`               // user-provided globally unique name
+	Type        DeviceType    `json:"type"`               // gpu or pci
+	Metadata    tags.Metadata `json:"metadata,omitempty"` // user-defined key-value metadata
+	PCIAddress  string        `json:"pci_address"`        // e.g., "0000:a2:00.0"
+	VendorID    string        `json:"vendor_id"`          // e.g., "10de"
+	DeviceID    string        `json:"device_id"`          // e.g., "27b8"
+	IOMMUGroup  int           `json:"iommu_group"`        // IOMMU group number
+	BoundToVFIO bool          `json:"bound_to_vfio"`      // whether device is bound to vfio-pci
+	AttachedTo  *string       `json:"attached_to"`        // instance ID if attached, nil otherwise
+	CreatedAt   time.Time     `json:"created_at"`
 }
 
 // CreateDeviceRequest is the request to register a new device
 type CreateDeviceRequest struct {
-	Name       string `json:"name,omitempty"` // optional: globally unique name (auto-generated if not provided)
-	PCIAddress string `json:"pci_address"`    // required: PCI address (e.g., "0000:a2:00.0")
+	Name       string        `json:"name,omitempty"` // optional: globally unique name (auto-generated if not provided)
+	PCIAddress string        `json:"pci_address"`    // required: PCI address (e.g., "0000:a2:00.0")
+	Metadata   tags.Metadata `json:"metadata,omitempty"`
 }
 
 // AvailableDevice represents a PCI device discovered on the host

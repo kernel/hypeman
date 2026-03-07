@@ -23,9 +23,12 @@ func (s *ApiService) ListIngresses(ctx context.Context, request oapi.ListIngress
 		}, nil
 	}
 
-	oapiIngresses := make([]oapi.Ingress, len(ingresses))
-	for i, ing := range ingresses {
-		oapiIngresses[i] = ingressToOAPI(ing)
+	oapiIngresses := make([]oapi.Ingress, 0, len(ingresses))
+	for _, ing := range ingresses {
+		if !matchesMetadataFilter(ing.Metadata, request.Params.Metadata) {
+			continue
+		}
+		oapiIngresses = append(oapiIngresses, ingressToOAPI(ing))
 	}
 
 	return oapi.ListIngresses200JSONResponse(oapiIngresses), nil
@@ -37,8 +40,9 @@ func (s *ApiService) CreateIngress(ctx context.Context, request oapi.CreateIngre
 
 	// Convert OAPI request to domain request
 	domainReq := ingress.CreateIngressRequest{
-		Name:  request.Body.Name,
-		Rules: make([]ingress.IngressRule, len(request.Body.Rules)),
+		Name:     request.Body.Name,
+		Metadata: toMapMetadata(request.Body.Metadata),
+		Rules:    make([]ingress.IngressRule, len(request.Body.Rules)),
 	}
 
 	for i, rule := range request.Body.Rules {
@@ -180,6 +184,7 @@ func ingressToOAPI(ing ingress.Ingress) oapi.Ingress {
 	return oapi.Ingress{
 		Id:        ing.ID,
 		Name:      ing.Name,
+		Metadata:  toOAPIMetadata(ing.Metadata),
 		Rules:     rules,
 		CreatedAt: ing.CreatedAt,
 	}

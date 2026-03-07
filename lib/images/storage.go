@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/paths"
+	"github.com/kernel/hypeman/lib/tags"
 )
 
 type imageMetadata struct {
@@ -21,6 +22,7 @@ type imageMetadata struct {
 	Entrypoint []string            `json:"entrypoint,omitempty"`
 	Cmd        []string            `json:"cmd,omitempty"`
 	Env        map[string]string   `json:"env,omitempty"`
+	Metadata   tags.Metadata       `json:"metadata,omitempty"`
 	WorkingDir string              `json:"working_dir,omitempty"`
 	CreatedAt  time.Time           `json:"created_at"`
 }
@@ -47,6 +49,9 @@ func (m *imageMetadata) toImage() *Image {
 	}
 	if len(m.Env) > 0 {
 		img.Env = m.Env
+	}
+	if len(m.Metadata) > 0 {
+		img.Metadata = tags.Clone(m.Metadata)
 	}
 	if m.WorkingDir != "" {
 		img.WorkingDir = m.WorkingDir

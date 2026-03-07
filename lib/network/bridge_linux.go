@@ -864,14 +864,16 @@ func (m *manager) queryNetworkState(bridgeName string) (*Network, error) {
 
 // CleanupOrphanedTAPs removes TAP devices that aren't used by any running instance.
 // runningInstanceIDs is a list of instance IDs that currently have a running VMM.
-// Pass nil to skip cleanup entirely (used when we couldn't determine running instances).
+// Pass nil or an empty list to skip cleanup entirely (used when we couldn't
+// determine an authoritative list of running instances for this host).
 // Returns the number of TAPs deleted.
 func (m *manager) CleanupOrphanedTAPs(ctx context.Context, runningInstanceIDs []string) int {
 	log := logger.FromContext(ctx)
 
-	// If nil, skip cleanup entirely to avoid accidentally deleting TAPs for running VMs
-	if runningInstanceIDs == nil {
-		log.DebugContext(ctx, "skipping TAP cleanup (nil instance list)")
+	// Skip cleanup when we don't have an authoritative running set.
+	// This avoids deleting TAPs created by other concurrent hypeman processes/tests.
+	if len(runningInstanceIDs) == 0 {
+		log.DebugContext(ctx, "skipping TAP cleanup (empty instance list)")
 		return 0
 	}
 

@@ -97,6 +97,24 @@ components:
           type: string
           enum: [tcp, udp]
           default: tcp
+
+    MetadataTags:
+      type: object
+      maxProperties: 50
+      description: User-defined key-value metadata tags.
+      propertyNames:
+        type: string
+        minLength: 1
+        maxLength: 128
+        pattern: ^[A-Za-z0-9 _.:/=+@-]+$
+      additionalProperties:
+        type: string
+        minLength: 0
+        maxLength: 256
+        pattern: ^[A-Za-z0-9 _.:/=+@-]*$
+      example:
+        team: backend
+        env: staging
     
     CreateInstanceRequest:
       type: object
@@ -144,13 +162,7 @@ components:
             PORT: "3000"
             NODE_ENV: production
         metadata:
-          type: object
-          additionalProperties:
-            type: string
-          description: User-defined key-value metadata for the instance
-          example:
-            team: backend
-            purpose: staging
+          $ref: "#/components/schemas/MetadataTags"
         network:
           type: object
           description: Network configuration for the instance
@@ -274,6 +286,8 @@ components:
           example: baseline-standby
         kind:
           $ref: "#/components/schemas/SnapshotKind"
+        metadata:
+          $ref: "#/components/schemas/MetadataTags"
         source_instance_id:
           type: string
           description: Source instance ID at snapshot creation time
@@ -310,6 +324,8 @@ components:
           pattern: ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$
           maxLength: 63
           example: pre-upgrade
+        metadata:
+          $ref: "#/components/schemas/MetadataTags"
 
     RestoreSnapshotRequest:
       type: object
@@ -403,10 +419,7 @@ components:
             type: string
           description: Environment variables
         metadata:
-          type: object
-          additionalProperties:
-            type: string
-          description: User-defined key-value metadata
+          $ref: "#/components/schemas/MetadataTags"
         network:
           type: object
           description: Network configuration of the instance
@@ -582,6 +595,8 @@ components:
           type: string
           description: OCI image reference (e.g., docker.io/library/nginx:latest)
           example: docker.io/library/nginx:latest
+        metadata:
+          $ref: "#/components/schemas/MetadataTags"
     
     Image:
       type: object
@@ -637,6 +652,8 @@ components:
           description: Environment variables from container metadata
           example:
             PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+        metadata:
+          $ref: "#/components/schemas/MetadataTags"
         working_dir:
           type: string
           description: Working directory from container metadata
@@ -664,6 +681,8 @@ components:
           type: integer
           description: Size in gigabytes
           example: 10
+        metadata:
+          $ref: "#/components/schemas/MetadataTags"
     
     VolumeAttachment:
       type: object
@@ -698,6 +717,8 @@ components:
           type: integer
           description: Size in gigabytes
           example: 10
+        metadata:
+          $ref: "#/components/schemas/MetadataTags"
         attachments:
           type: array
           description: List of current attachments (empty if not attached)
@@ -803,6 +824,8 @@ components:
           items:
             $ref: "#/components/schemas/IngressRule"
           minItems: 1
+        metadata:
+          $ref: "#/components/schemas/MetadataTags"
     
     Ingress:
       type: object
@@ -816,6 +839,8 @@ components:
           type: string
           description: Human-readable name
           example: my-api-ingress
+        metadata:
+          $ref: "#/components/schemas/MetadataTags"
         rules:
           type: array
           description: Routing rules for this ingress
@@ -929,6 +954,8 @@ components:
           type: string
           description: PCI address of the device (required, e.g., "0000:a2:00.0")
           example: "0000:a2:00.0"
+        metadata:
+          $ref: "#/components/schemas/MetadataTags"
     
     Device:
       type: object
@@ -944,6 +971,8 @@ components:
           example: l4-gpu
         type:
           $ref: "#/components/schemas/DeviceType"
+        metadata:
+          $ref: "#/components/schemas/MetadataTags"
         pci_address:
           type: string
           description: PCI address
@@ -1089,6 +1118,8 @@ components:
           example: "build-abc123"
         status:
           $ref: "#/components/schemas/BuildStatus"
+        metadata:
+          $ref: "#/components/schemas/MetadataTags"
         queue_position:
           type: integer
           description: Position in build queue (only when status is queued)
@@ -1300,6 +1331,15 @@ paths:
       operationId: listImages
       security:
         - bearerAuth: []
+      parameters:
+        - name: metadata
+          in: query
+          required: false
+          style: deepObject
+          explode: true
+          schema:
+            $ref: "#/components/schemas/MetadataTags"
+          description: Filter images by metadata key-value pairs.
       responses:
         200:
           description: List of images
@@ -1443,9 +1483,7 @@ paths:
           style: deepObject
           explode: true
           schema:
-            type: object
-            additionalProperties:
-              type: string
+            $ref: "#/components/schemas/MetadataTags"
           description: |
             Filter instances by metadata key-value pairs. Uses deepObject style:
             ?metadata[team]=backend&metadata[env]=staging
@@ -1854,6 +1892,14 @@ paths:
           schema:
             type: string
           description: Filter snapshots by snapshot name
+        - name: metadata
+          in: query
+          required: false
+          style: deepObject
+          explode: true
+          schema:
+            $ref: "#/components/schemas/MetadataTags"
+          description: Filter snapshots by metadata key-value pairs.
       responses:
         200:
           description: List of snapshots
@@ -2338,6 +2384,15 @@ paths:
       operationId: listVolumes
       security:
         - bearerAuth: []
+      parameters:
+        - name: metadata
+          in: query
+          required: false
+          style: deepObject
+          explode: true
+          schema:
+            $ref: "#/components/schemas/MetadataTags"
+          description: Filter volumes by metadata key-value pairs.
       responses:
         200:
           description: List of volumes
@@ -2434,6 +2489,14 @@ paths:
             type: string
           description: Optional custom volume ID (auto-generated if not provided)
           example: vol-data-1
+        - name: metadata
+          in: query
+          required: false
+          style: deepObject
+          explode: true
+          schema:
+            $ref: "#/components/schemas/MetadataTags"
+          description: Metadata tags for the created volume.
       requestBody:
         required: true
         description: tar.gz archive file containing the volume content
@@ -2546,6 +2609,15 @@ paths:
       operationId: listDevices
       security:
         - bearerAuth: []
+      parameters:
+        - name: metadata
+          in: query
+          required: false
+          style: deepObject
+          explode: true
+          schema:
+            $ref: "#/components/schemas/MetadataTags"
+          description: Filter devices by metadata key-value pairs.
       responses:
         200:
           description: List of registered devices
@@ -2716,6 +2788,15 @@ paths:
       operationId: listIngresses
       security:
         - bearerAuth: []
+      parameters:
+        - name: metadata
+          in: query
+          required: false
+          style: deepObject
+          explode: true
+          schema:
+            $ref: "#/components/schemas/MetadataTags"
+          description: Filter ingresses by metadata key-value pairs.
       responses:
         200:
           description: List of ingresses
@@ -2858,6 +2939,15 @@ paths:
       operationId: listBuilds
       security:
         - bearerAuth: []
+      parameters:
+        - name: metadata
+          in: query
+          required: false
+          style: deepObject
+          explode: true
+          schema:
+            $ref: "#/components/schemas/MetadataTags"
+          description: Filter builds by metadata key-value pairs.
       responses:
         200:
           description: List of builds
@@ -2940,6 +3030,11 @@ paths:
                     Global cache identifier (e.g., "node", "python", "ubuntu", "browser").
                     When specified, the build will import from cache/global/{key}.
                     Admin builds will also export to this location.
+                metadata:
+                  type: string
+                  description: |
+                    JSON object of metadata tags.
+                    Example: {"team":"backend","env":"staging"}
       responses:
         202:
           description: Build created and queued

@@ -1,8 +1,11 @@
 package devices
 
 import (
+	"os"
 	"testing"
+	"time"
 
+	"github.com/kernel/hypeman/lib/paths"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -160,4 +163,33 @@ func TestErrors(t *testing.T) {
 		assert.Contains(t, ErrInUse.Error(), "in use")
 		assert.Contains(t, ErrInvalidName.Error(), "pattern")
 	})
+}
+
+func TestSaveLoadDevice_MetadataRoundTrip(t *testing.T) {
+	p := paths.New(t.TempDir())
+	mgr := &manager{
+		paths:      p,
+		vfioBinder: NewVFIOBinder(),
+	}
+
+	device := &Device{
+		Id:         "dev-meta-1",
+		Name:       "meta-device",
+		Type:       DeviceTypeGeneric,
+		Metadata:   map[string]string{"team": "platform", "env": "prod"},
+		PCIAddress: "0000:00:00.0",
+		VendorID:   "1234",
+		DeviceID:   "5678",
+		CreatedAt:  time.Now().UTC(),
+	}
+
+	require.NoError(t, os.MkdirAll(p.DeviceDir(device.Id), 0755))
+	require.NoError(t, mgr.saveDevice(device))
+
+	loaded, err := mgr.loadDevice(device.Id)
+	require.NoError(t, err)
+	require.Equal(t, map[string]string{"team": "platform", "env": "prod"}, loaded.Metadata)
+
+	device.Metadata["team"] = "mutated"
+	require.Equal(t, "platform", loaded.Metadata["team"])
 }

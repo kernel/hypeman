@@ -7,6 +7,7 @@ import (
 	"github.com/kernel/hypeman/lib/logger"
 	mw "github.com/kernel/hypeman/lib/middleware"
 	"github.com/kernel/hypeman/lib/oapi"
+	"github.com/kernel/hypeman/lib/tags"
 	"github.com/kernel/hypeman/lib/volumes"
 )
 
@@ -23,9 +24,12 @@ func (s *ApiService) ListVolumes(ctx context.Context, request oapi.ListVolumesRe
 		}, nil
 	}
 
-	oapiVols := make([]oapi.Volume, len(domainVols))
-	for i, vol := range domainVols {
-		oapiVols[i] = volumeToOAPI(vol)
+	oapiVols := make([]oapi.Volume, 0, len(domainVols))
+	for _, vol := range domainVols {
+		if !matchesMetadataFilter(vol.Metadata, request.Params.Metadata) {
+			continue
+		}
+		oapiVols = append(oapiVols, volumeToOAPI(vol))
 	}
 
 	return oapi.ListVolumes200JSONResponse(oapiVols), nil
@@ -43,9 +47,10 @@ func (s *ApiService) CreateVolume(ctx context.Context, request oapi.CreateVolume
 	}
 
 	domainReq := volumes.CreateVolumeRequest{
-		Name:   request.Body.Name,
-		SizeGb: request.Body.SizeGb,
-		Id:     request.Body.Id,
+		Name:     request.Body.Name,
+		SizeGb:   request.Body.SizeGb,
+		Id:       request.Body.Id,
+		Metadata: toMapMetadata(request.Body.Metadata),
 	}
 
 	vol, err := s.VolumeManager.CreateVolume(ctx, domainReq)
@@ -54,6 +59,12 @@ func (s *ApiService) CreateVolume(ctx context.Context, request oapi.CreateVolume
 			return oapi.CreateVolume409JSONResponse{
 				Code:    "already_exists",
 				Message: "volume with this ID already exists",
+			}, nil
+		}
+		if errors.Is(err, tags.ErrInvalidMetadata) {
+			return oapi.CreateVolume400JSONResponse{
+				Code:    "invalid_request",
+				Message: err.Error(),
 			}, nil
 		}
 		log.ErrorContext(ctx, "failed to create volume", "error", err, "name", request.Body.Name)
@@ -88,9 +99,10 @@ func (s *ApiService) CreateVolumeFromArchive(ctx context.Context, request oapi.C
 
 	// Create the volume from archive - stream directly without buffering
 	domainReq := volumes.CreateVolumeFromArchiveRequest{
-		Name:   request.Params.Name,
-		SizeGb: request.Params.SizeGb,
-		Id:     request.Params.Id,
+		Name:     request.Params.Name,
+		SizeGb:   request.Params.SizeGb,
+		Id:       request.Params.Id,
+		Metadata: toMapMetadata(request.Params.Metadata),
 	}
 
 	vol, err := s.VolumeManager.CreateVolumeFromArchive(ctx, domainReq, request.Body)
@@ -105,6 +117,12 @@ func (s *ApiService) CreateVolumeFromArchive(ctx context.Context, request oapi.C
 			return oapi.CreateVolumeFromArchive409JSONResponse{
 				Code:    "already_exists",
 				Message: "volume with this ID already exists",
+			}, nil
+		}
+		if errors.Is(err, tags.ErrInvalidMetadata) {
+			return oapi.CreateVolumeFromArchive400JSONResponse{
+				Code:    "invalid_request",
+				Message: err.Error(),
 			}, nil
 		}
 		log.ErrorContext(ctx, "failed to create volume from archive", "error", err, "name", request.Params.Name)
@@ -168,6 +186,7 @@ func volumeToOAPI(vol volumes.Volume) oapi.Volume {
 		Id:        vol.Id,
 		Name:      vol.Name,
 		SizeGb:    vol.SizeGb,
+		Metadata:  toOAPIMetadata(vol.Metadata),
 		CreatedAt: vol.CreatedAt,
 	}
 

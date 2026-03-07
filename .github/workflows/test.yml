@@ -38,7 +38,19 @@ jobs:
             sudo apt-get install -y erofs-utils e2fsprogs iptables
           fi
           go mod download
-      
+
+      - name: Verify Linux test toolchain
+        run: |
+          set -euo pipefail
+          TEST_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+          for bin in mkfs.erofs mkfs.ext4 iptables; do
+            if ! sudo env "PATH=$TEST_PATH" bash -lc "command -v '$bin' >/dev/null"; then
+              echo "missing required binary under sudo PATH: $bin"
+              exit 1
+            fi
+            sudo env "PATH=$TEST_PATH" bash -lc "command -v '$bin'"
+          done
+
       # Avoids rate limits when running the tests
       # Tests includes pulling, then converting to disk images
       - name: Login to Docker Hub

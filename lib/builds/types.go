@@ -5,6 +5,8 @@ package builds
 import (
 	"fmt"
 	"time"
+
+	"github.com/kernel/hypeman/lib/tags"
 )
 
 // Build status constants
@@ -21,6 +23,7 @@ const (
 type Build struct {
 	ID                string           `json:"id"`
 	Status            string           `json:"status"`
+	Metadata          tags.Metadata    `json:"metadata,omitempty"`
 	QueuePosition     *int             `json:"queue_position,omitempty"`
 	ImageDigest       *string          `json:"image_digest,omitempty"`
 	ImageRef          *string          `json:"image_ref,omitempty"`
@@ -69,6 +72,9 @@ type CreateBuildRequest struct {
 	// ImageName optionally sets a custom image name for the build output.
 	// When set, the image is pushed to {registry}/{image_name} instead of {registry}/builds/{id}.
 	ImageName string `json:"image_name,omitempty"`
+
+	// Metadata is optional user-defined key-value metadata for the build resource.
+	Metadata tags.Metadata `json:"metadata,omitempty"`
 }
 
 // BuildPolicy defines resource limits and network policy for a build
