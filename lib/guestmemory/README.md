@@ -64,14 +64,14 @@ hypeman rm --force "$ID"
 
 In one startup-focused sample run, absolute host footprint stayed far below guest memory size (for example, ~4GB guest with low host PSS on Cloud Hypervisor/Firecracker), while QEMU showed a larger fixed process overhead.
 
-Sample probe results (4GB idle guest):
+Sample probe results (4GB idle guest, rounded MB):
 
-| Hypervisor | Host RSS (kB) | Host PSS (kB) | Notes |
+| Hypervisor | Host RSS (MB) | Host PSS (MB) | Notes |
 |---|---:|---:|---|
-| Cloud Hypervisor (Linux) | ~352940 | ~29432 | Low actual host pressure when idle |
-| Firecracker (Linux) | ~301908 | ~27464 | Low actual host pressure when idle |
-| QEMU (Linux) | ~409984 | ~118581 | Higher fixed process overhead |
-| VZ (macOS) | ~23568 | N/A | RSS sampled with `ps` |
+| Cloud Hypervisor (Linux) | ~345 | ~29 | Low actual host pressure when idle |
+| Firecracker (Linux) | ~295 | ~27 | Low actual host pressure when idle |
+| QEMU (Linux) | ~400 | ~116 | Higher fixed process overhead |
+| VZ (macOS) | ~23 | N/A | RSS sampled with `ps` |
 
 ## Out of Scope
 
