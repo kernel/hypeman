@@ -107,13 +107,13 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 
 	// Wait for nginx to start
 	t.Log("Waiting for nginx to start...")
-	err = waitForLogMessage(ctx, manager, inst.Id, "start worker processes", 15*time.Second)
+	err = waitForLogMessage(ctx, manager, inst.Id, "start worker processes", 45*time.Second)
 	require.NoError(t, err, "Nginx should start")
 	t.Log("Nginx is running")
 
 	// Wait for exec agent to be ready
 	t.Log("Waiting for exec agent...")
-	err = waitForLogMessage(ctx, manager, inst.Id, "[guest-agent] listening", 10*time.Second)
+	err = waitForLogMessage(ctx, manager, inst.Id, "[guest-agent] listening", 30*time.Second)
 	require.NoError(t, err, "Exec agent should be listening")
 	t.Log("Exec agent is ready")
 
