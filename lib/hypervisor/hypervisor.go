@@ -29,6 +29,8 @@ type Type string
 const (
 	// TypeCloudHypervisor is the Cloud Hypervisor VMM
 	TypeCloudHypervisor Type = "cloud-hypervisor"
+	// TypeFirecracker is the Firecracker VMM
+	TypeFirecracker Type = "firecracker"
 	// TypeQEMU is the QEMU VMM
 	TypeQEMU Type = "qemu"
 	// TypeVZ is the Virtualization.framework VMM (macOS only)
@@ -38,6 +40,10 @@ const (
 // socketNames maps hypervisor types to their socket filenames.
 // Registered by each hypervisor package's init() function.
 var socketNames = make(map[Type]string)
+
+// vsockSocketNames maps hypervisor types to their vsock socket filenames.
+// Registered by hypervisor packages when they use socket-based vsock routing.
+var vsockSocketNames = make(map[Type]string)
 
 // RegisterSocketName registers the socket filename for a hypervisor type.
 // Called by each hypervisor implementation's init() function.
@@ -52,6 +58,20 @@ func SocketNameForType(t Type) string {
 		return name
 	}
 	return string(t) + ".sock"
+}
+
+// RegisterVsockSocketName registers the vsock socket filename for a hypervisor type.
+func RegisterVsockSocketName(t Type, name string) {
+	vsockSocketNames[t] = name
+}
+
+// VsockSocketNameForType returns the vsock socket filename for a hypervisor type.
+// Falls back to "vsock.sock" when a hypervisor doesn't require a custom name.
+func VsockSocketNameForType(t Type) string {
+	if name, ok := vsockSocketNames[t]; ok {
+		return name
+	}
+	return "vsock.sock"
 }
 
 // VMStarter handles the full VM startup sequence.
@@ -81,6 +101,43 @@ type VMStarter interface {
 	// - QEMU: would start with -incoming or -loadvm flags (not yet implemented)
 	// Returns the process ID and a Hypervisor client. The VM is in paused state after restore.
 	RestoreVM(ctx context.Context, p *paths.Paths, version string, socketPath string, snapshotPath string) (pid int, hv Hypervisor, err error)
+
+	// PrepareFork allows hypervisors to prepare forked instance state.
+	// For snapshot-based forks, implementations can rewrite snapshot config with
+	// fork identity (paths, vsock, network). Hypervisors that don't support fork
+	// should return ErrNotSupported.
+	PrepareFork(ctx context.Context, req ForkPrepareRequest) (ForkPrepareResult, error)
+}
+
+// ForkNetworkConfig contains network identity fields for fork preparation.
+type ForkNetworkConfig struct {
+	TAPDevice string
+	IP        string
+	MAC       string
+	Netmask   string
+}
+
+// ForkPrepareRequest contains hypervisor-specific fork preparation inputs.
+type ForkPrepareRequest struct {
+	// SnapshotConfigPath is optional. When empty, implementations should only
+	// validate fork support and return without snapshot rewrites.
+	SnapshotConfigPath string
+
+	SourceDataDir string
+	TargetDataDir string
+
+	VsockCID    int64
+	VsockSocket string
+
+	SerialLogPath string
+	Network       *ForkNetworkConfig
+}
+
+// ForkPrepareResult describes which optional fork rewrites were actually applied.
+type ForkPrepareResult struct {
+	// VsockCIDUpdated indicates whether snapshot state was updated to use
+	// ForkPrepareRequest.VsockCID.
+	VsockCIDUpdated bool
 }
 
 // Hypervisor defines the interface for VM control operations.

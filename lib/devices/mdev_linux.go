@@ -21,8 +21,10 @@ import (
 )
 
 const (
-	mdevBusPath = "/sys/class/mdev_bus"
-	mdevDevices = "/sys/bus/mdev/devices"
+	mdevBusPath             = "/sys/class/mdev_bus"
+	mdevDevices             = "/sys/bus/mdev/devices"
+	orphanedMdevGracePeriod = 5 * time.Minute
+	procPath                = "/proc"
 )
 
 // mdevMu protects mdev creation/destruction to prevent race conditions
@@ -606,16 +608,108 @@ func IsMdevInUse(mdevUUID string) bool {
 	return err == nil // Has a driver = in use
 }
 
-// ReconcileMdevs destroys orphaned mdevs that belong to hypeman but are no longer in use.
+func mdevIOMMUGroup(mdevUUID string) (int, error) {
+	iommuLink := filepath.Join(mdevDevices, mdevUUID, "iommu_group")
+	target, err := os.Readlink(iommuLink)
+	if err != nil {
+		return -1, fmt.Errorf("read iommu_group link: %w", err)
+	}
+
+	groupStr := filepath.Base(target)
+	group, err := strconv.Atoi(groupStr)
+	if err != nil {
+		return -1, fmt.Errorf("parse iommu_group %q: %w", groupStr, err)
+	}
+
+	return group, nil
+}
+
+func isVFIOGroupInUse(group int) (bool, error) {
+	groupPath := filepath.Join(vfioDevicePath, strconv.Itoa(group))
+	if _, err := os.Stat(groupPath); err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("stat vfio group path %s: %w", groupPath, err)
+	}
+
+	processes, err := os.ReadDir(procPath)
+	if err != nil {
+		return false, fmt.Errorf("read %s: %w", procPath, err)
+	}
+
+	for _, process := range processes {
+		if !process.IsDir() {
+			continue
+		}
+		if _, err := strconv.Atoi(process.Name()); err != nil {
+			continue // skip non-PID entries
+		}
+
+		fdPath := filepath.Join(procPath, process.Name(), "fd")
+		fds, err := os.ReadDir(fdPath)
+		if err != nil {
+			// Ignore disappearing processes and permission errors while scanning.
+			continue
+		}
+
+		for _, fd := range fds {
+			target, err := os.Readlink(filepath.Join(fdPath, fd.Name()))
+			if err != nil {
+				continue
+			}
+			if target == groupPath {
+				return true, nil
+			}
+		}
+	}
+
+	return false, nil
+}
+
+func mdevPastGracePeriod(mdevUUID string, gracePeriod time.Duration) (bool, time.Duration, error) {
+	if gracePeriod <= 0 {
+		return true, 0, nil
+	}
+
+	info, err := os.Stat(filepath.Join(mdevDevices, mdevUUID))
+	if err != nil {
+		return false, 0, fmt.Errorf("stat mdev path: %w", err)
+	}
+
+	age := time.Since(info.ModTime())
+	if age < 0 {
+		age = 0
+	}
+
+	return age >= gracePeriod, age, nil
+}
+
+// ReconcileMdevs destroys orphaned mdevs on managed VFs.
 // This is called on server startup to clean up stale mdevs from previous runs.
 //
-// Safety guarantees:
-//   - Only destroys mdevs that are tracked by hypeman instances (via hypemanMdevs map)
-//   - Never destroys mdevs created by other processes on the host
-//   - Skips mdevs that are currently bound to a driver (in use by a VM)
-//   - Skips mdevs for instances in Running or Unknown state
+// Policy:
+//   - Consider only mdevs whose parent VF is currently managed by hypeman (discoverable via /sys/class/mdev_bus)
+//   - Keep mdevs whose VFIO group has an open file handle (/dev/vfio/<group>)
+//   - Keep mdevs younger than a short grace period to avoid racing very recent state transitions
+//   - Delete all remaining mdevs
 func ReconcileMdevs(ctx context.Context, instanceInfos []MdevReconcileInfo) error {
 	log := logger.FromContext(ctx)
+	_ = instanceInfos
+
+	vfs, err := DiscoverVFs()
+	if err != nil {
+		return fmt.Errorf("discover managed VFs: %w", err)
+	}
+	if len(vfs) == 0 {
+		log.DebugContext(ctx, "no managed VFs found, skipping mdev reconciliation")
+		return nil
+	}
+
+	managedVFs := make(map[string]struct{}, len(vfs))
+	for _, vf := range vfs {
+		managedVFs[vf.PCIAddress] = struct{}{}
+	}
 
 	mdevs, err := ListMdevDevices()
 	if err != nil {
@@ -627,49 +721,71 @@ func ReconcileMdevs(ctx context.Context, instanceInfos []MdevReconcileInfo) erro
 		return nil
 	}
 
-	// Build lookup maps from instance info
-	// mdevUUID -> instanceID for mdevs managed by hypeman
-	hypemanMdevs := make(map[string]string, len(instanceInfos))
-	// instanceID -> isRunning for liveness check
-	instanceRunning := make(map[string]bool, len(instanceInfos))
-	for _, info := range instanceInfos {
-		if info.MdevUUID != "" {
-			hypemanMdevs[info.MdevUUID] = info.InstanceID
-			instanceRunning[info.InstanceID] = info.IsRunning
-		}
-	}
+	log.InfoContext(ctx, "reconciling mdev devices",
+		"total_mdevs", len(mdevs),
+		"managed_vfs", len(managedVFs),
+		"grace_period", orphanedMdevGracePeriod.String(),
+	)
 
-	log.InfoContext(ctx, "reconciling mdev devices", "total_mdevs", len(mdevs), "hypeman_mdevs", len(hypemanMdevs))
-
-	var destroyed, skippedNotOurs, skippedInUse, skippedRunning int
+	groupInUseCache := make(map[int]bool)
+	var destroyed, failedDestroy, skippedUnmanagedVF, skippedInUse, skippedGrace, skippedProbeError int
 	for _, mdev := range mdevs {
-		// Only consider mdevs that hypeman created
-		instanceID, isOurs := hypemanMdevs[mdev.UUID]
-		if !isOurs {
-			log.DebugContext(ctx, "skipping mdev not managed by hypeman", "uuid", mdev.UUID, "profile", mdev.ProfileName)
-			skippedNotOurs++
+		if _, ok := managedVFs[mdev.VFAddress]; !ok {
+			log.DebugContext(ctx, "skipping mdev on unmanaged VF", "uuid", mdev.UUID, "vf", mdev.VFAddress)
+			skippedUnmanagedVF++
 			continue
 		}
 
-		// Skip if instance is running or in unknown state (might still be using the mdev)
-		if instanceRunning[instanceID] {
-			log.DebugContext(ctx, "skipping mdev for running/unknown instance", "uuid", mdev.UUID, "instance_id", instanceID)
-			skippedRunning++
+		group, err := mdevIOMMUGroup(mdev.UUID)
+		if err != nil {
+			log.WarnContext(ctx, "failed to resolve mdev VFIO group, skipping cleanup", "uuid", mdev.UUID, "error", err)
+			skippedProbeError++
 			continue
 		}
 
-		// Check if mdev is bound to a driver (in use by VM)
-		if IsMdevInUse(mdev.UUID) {
-			log.WarnContext(ctx, "skipping mdev still bound to driver", "uuid", mdev.UUID, "instance_id", instanceID)
+		inUse, ok := groupInUseCache[group]
+		if !ok {
+			inUse, err = isVFIOGroupInUse(group)
+			if err != nil {
+				log.WarnContext(ctx, "failed to check VFIO group handles, skipping cleanup", "uuid", mdev.UUID, "vfio_group", group, "error", err)
+				skippedProbeError++
+				continue
+			}
+			groupInUseCache[group] = inUse
+		}
+		if inUse {
+			log.DebugContext(ctx, "skipping mdev with active VFIO group handle", "uuid", mdev.UUID, "vfio_group", group)
 			skippedInUse++
 			continue
 		}
 
-		// Safe to destroy - it's ours, instance is not running, and not bound to driver
-		log.InfoContext(ctx, "destroying orphaned mdev", "uuid", mdev.UUID, "profile", mdev.ProfileName, "instance_id", instanceID)
+		pastGracePeriod, age, err := mdevPastGracePeriod(mdev.UUID, orphanedMdevGracePeriod)
+		if err != nil {
+			log.WarnContext(ctx, "failed to determine mdev age, skipping cleanup", "uuid", mdev.UUID, "error", err)
+			skippedProbeError++
+			continue
+		}
+		if !pastGracePeriod {
+			log.DebugContext(ctx, "skipping recently created mdev during grace period",
+				"uuid", mdev.UUID,
+				"age", age.String(),
+				"grace_period", orphanedMdevGracePeriod.String(),
+			)
+			skippedGrace++
+			continue
+		}
+
+		log.InfoContext(ctx, "destroying orphaned mdev",
+			"uuid", mdev.UUID,
+			"profile", mdev.ProfileName,
+			"vf", mdev.VFAddress,
+			"vfio_group", group,
+			"age", age.String(),
+		)
 		if err := DestroyMdev(ctx, mdev.UUID); err != nil {
 			// Log error but continue - best effort cleanup
 			log.WarnContext(ctx, "failed to destroy orphaned mdev", "uuid", mdev.UUID, "error", err)
+			failedDestroy++
 			continue
 		}
 		destroyed++
@@ -677,9 +793,11 @@ func ReconcileMdevs(ctx context.Context, instanceInfos []MdevReconcileInfo) erro
 
 	log.InfoContext(ctx, "mdev reconciliation complete",
 		"destroyed", destroyed,
-		"skipped_not_ours", skippedNotOurs,
+		"failed_destroy", failedDestroy,
+		"skipped_unmanaged_vf", skippedUnmanagedVF,
 		"skipped_in_use", skippedInUse,
-		"skipped_running", skippedRunning,
+		"skipped_grace", skippedGrace,
+		"skipped_probe_error", skippedProbeError,
 	)
 
 	return nil

@@ -3,12 +3,14 @@
 package vz
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"runtime"
 	"time"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
@@ -16,8 +18,9 @@ import (
 
 // Client implements hypervisor.Hypervisor via HTTP to the vz-shim process.
 type Client struct {
-	socketPath string
-	httpClient *http.Client
+	socketPath            string
+	httpClient            *http.Client
+	longRunningHTTPClient *http.Client
 }
 
 // NewClient creates a new vz shim client.
@@ -30,6 +33,9 @@ func NewClient(socketPath string) (*Client, error) {
 	httpClient := &http.Client{
 		Transport: transport,
 		Timeout:   10 * time.Second,
+	}
+	longRunningHTTPClient := &http.Client{
+		Transport: transport,
 	}
 
 	// Verify connectivity with a short timeout
@@ -47,8 +53,9 @@ func NewClient(socketPath string) (*Client, error) {
 	resp.Body.Close()
 
 	return &Client{
-		socketPath: socketPath,
-		httpClient: httpClient,
+		socketPath:            socketPath,
+		httpClient:            httpClient,
+		longRunningHTTPClient: longRunningHTTPClient,
 	}, nil
 }
 
@@ -59,9 +66,13 @@ type vmInfoResponse struct {
 	State string `json:"state"`
 }
 
+type snapshotRequest struct {
+	DestinationPath string `json:"destination_path"`
+}
+
 func (c *Client) Capabilities() hypervisor.Capabilities {
 	return hypervisor.Capabilities{
-		SupportsSnapshot:       false,
+		SupportsSnapshot:       runtime.GOARCH == "arm64",
 		SupportsHotplugMemory:  false,
 		SupportsPause:          true,
 		SupportsVsock:          true,
@@ -72,6 +83,10 @@ func (c *Client) Capabilities() hypervisor.Capabilities {
 
 // doPut sends a PUT request to the shim and checks for success.
 func (c *Client) doPut(ctx context.Context, path string, body io.Reader) error {
+	return c.doPutWithClient(ctx, c.httpClient, path, body)
+}
+
+func (c *Client) doPutWithClient(ctx context.Context, client *http.Client, path string, body io.Reader) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, "http://vz-shim"+path, body)
 	if err != nil {
 		return err
@@ -79,7 +94,7 @@ func (c *Client) doPut(ctx context.Context, path string, body io.Reader) error {
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := c.httpClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}
@@ -136,13 +151,13 @@ func (c *Client) GetVMInfo(ctx context.Context) (*hypervisor.VMInfo, error) {
 
 	var state hypervisor.VMState
 	switch info.State {
-	case "Running":
+	case "Running", "Resuming":
 		state = hypervisor.StateRunning
-	case "Paused":
+	case "Paused", "Pausing", "Saving":
 		state = hypervisor.StatePaused
-	case "Starting":
+	case "Starting", "Restoring":
 		state = hypervisor.StateCreated
-	case "Shutdown", "Stopped", "Error":
+	case "Shutdown", "Stopped", "Stopping", "Error":
 		state = hypervisor.StateShutdown
 	default:
 		state = hypervisor.StateShutdown
@@ -160,7 +175,14 @@ func (c *Client) Resume(ctx context.Context) error {
 }
 
 func (c *Client) Snapshot(ctx context.Context, destPath string) error {
-	return hypervisor.ErrNotSupported
+	req := snapshotRequest{DestinationPath: destPath}
+	body, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("marshal snapshot request: %w", err)
+	}
+	// Snapshot duration scales with guest RAM size, so rely on caller context
+	// rather than the default short client timeout.
+	return c.doPutWithClient(ctx, c.longRunningHTTPClient, "/api/v1/vm.snapshot", bytes.NewReader(body))
 }
 
 func (c *Client) ResizeMemory(ctx context.Context, bytes int64) error {

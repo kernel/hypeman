@@ -72,7 +72,7 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		size = int64(sizeBytes)
 	}
 
-	// Parse hotplug_size (default: 3GB)
+	// Parse hotplug_size (optional; omitted/empty means no hotplug memory)
 	hotplugSize := int64(0)
 	if request.Body.HotplugSize != nil && *request.Body.HotplugSize != "" {
 		var hotplugBytes datasize.ByteSize
@@ -445,6 +445,74 @@ func (s *ApiService) RestoreInstance(ctx context.Context, request oapi.RestoreIn
 		}
 	}
 	return oapi.RestoreInstance200JSONResponse(instanceToOAPI(*result)), nil
+}
+
+// ForkInstance forks an instance from stopped or standby into a new instance.
+// The id parameter can be an instance ID, name, or ID prefix.
+// Note: Resolution is handled by ResolveResource middleware.
+func (s *ApiService) ForkInstance(ctx context.Context, request oapi.ForkInstanceRequestObject) (oapi.ForkInstanceResponseObject, error) {
+	inst := mw.GetResolvedInstance[instances.Instance](ctx)
+	if inst == nil {
+		return oapi.ForkInstance500JSONResponse{
+			Code:    "internal_error",
+			Message: "resource not resolved",
+		}, nil
+	}
+	log := logger.FromContext(ctx)
+
+	if request.Body == nil {
+		return oapi.ForkInstance400JSONResponse{
+			Code:    "invalid_request",
+			Message: "request body is required",
+		}, nil
+	}
+
+	targetState := instances.State("")
+	if request.Body.TargetState != nil {
+		targetState = instances.State(*request.Body.TargetState)
+	}
+
+	result, err := s.InstanceManager.ForkInstance(ctx, inst.Id, instances.ForkInstanceRequest{
+		Name:        request.Body.Name,
+		FromRunning: request.Body.FromRunning != nil && *request.Body.FromRunning,
+		TargetState: targetState,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, instances.ErrNotFound):
+			return oapi.ForkInstance404JSONResponse{
+				Code:    "not_found",
+				Message: "instance not found",
+			}, nil
+		case errors.Is(err, instances.ErrInvalidState):
+			return oapi.ForkInstance409JSONResponse{
+				Code:    "invalid_state",
+				Message: err.Error(),
+			}, nil
+		case errors.Is(err, instances.ErrInvalidRequest):
+			return oapi.ForkInstance400JSONResponse{
+				Code:    "invalid_request",
+				Message: err.Error(),
+			}, nil
+		case errors.Is(err, instances.ErrAlreadyExists), errors.Is(err, network.ErrNameExists):
+			return oapi.ForkInstance409JSONResponse{
+				Code:    "name_conflict",
+				Message: err.Error(),
+			}, nil
+		case errors.Is(err, instances.ErrNotSupported):
+			return oapi.ForkInstance501JSONResponse{
+				Code:    "not_supported",
+				Message: err.Error(),
+			}, nil
+		default:
+			log.ErrorContext(ctx, "failed to fork instance", "error", err)
+			return oapi.ForkInstance500JSONResponse{
+				Code:    "internal_error",
+				Message: "failed to fork instance",
+			}, nil
+		}
+	}
+	return oapi.ForkInstance201JSONResponse(instanceToOAPI(*result)), nil
 }
 
 // StopInstance gracefully stops a running instance

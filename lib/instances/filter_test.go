@@ -15,6 +15,7 @@ import (
 )
 
 func TestListInstancesFilter_Matches(t *testing.T) {
+	t.Parallel()
 	running := StateRunning
 	stopped := StateStopped
 
@@ -132,6 +133,7 @@ func TestListInstancesFilter_Matches(t *testing.T) {
 }
 
 func TestListInstancesFilter_Matches_NilMetadata(t *testing.T) {
+	t.Parallel()
 	inst := &Instance{
 		StoredMetadata: StoredMetadata{
 			Id:       "inst-2",
@@ -149,6 +151,7 @@ func TestListInstancesFilter_Matches_NilMetadata(t *testing.T) {
 // TestListInstances_WithFilter exercises the full ListInstances path using
 // on-disk metadata files (no KVM required).
 func TestListInstances_WithFilter(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 	p := paths.New(tmpDir)
 

@@ -71,6 +71,7 @@ resources:
       port_mapping: "#/components/schemas/PortMapping"
       instance: "#/components/schemas/Instance"
       path_info: "#/components/schemas/PathInfo"
+      instance_stats: "#/components/schemas/InstanceStats"
     methods:
       list: get /instances
       create: post /instances
@@ -78,10 +79,12 @@ resources:
       delete: delete /instances/{id}
       standby: post /instances/{id}/standby
       restore: post /instances/{id}/restore
+      fork: post /instances/{id}/fork
       start: post /instances/{id}/start
       stop: post /instances/{id}/stop
       logs: get /instances/{id}/logs
       stat: get /instances/{id}/stat
+      stats: get /instances/{id}/stats
     # Subresources define resources that are nested within another for more powerful
     # logical groupings, e.g. `cards.payments`.
     subresources:
@@ -89,6 +92,20 @@ resources:
         methods:
           attach: post /instances/{id}/volumes/{volumeId}
           detach: delete /instances/{id}/volumes/{volumeId}
+      snapshots:
+        methods:
+          create: post /instances/{id}/snapshots
+          restore: post /instances/{id}/snapshots/{snapshotId}/restore
+
+  snapshots:
+    models:
+      snapshot: "#/components/schemas/Snapshot"
+      snapshot_kind: "#/components/schemas/SnapshotKind"
+    methods:
+      list: get /snapshots
+      get: get /snapshots/{snapshotId}
+      delete: delete /snapshots/{snapshotId}
+      fork: post /snapshots/{snapshotId}/fork
 
   volumes:
     models:

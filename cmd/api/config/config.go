@@ -68,11 +68,11 @@ type NetworkConfig struct {
 
 // CaddyConfig holds Caddy reverse-proxy / ingress settings.
 type CaddyConfig struct {
-	ListenAddress  string `koanf:"listen_address"`
-	AdminAddress   string `koanf:"admin_address"`
-	AdminPort      int    `koanf:"admin_port"`
-	InternalDNSPort int   `koanf:"internal_dns_port"`
-	StopOnShutdown bool   `koanf:"stop_on_shutdown"`
+	ListenAddress   string `koanf:"listen_address"`
+	AdminAddress    string `koanf:"admin_address"`
+	AdminPort       int    `koanf:"admin_port"`
+	InternalDNSPort int    `koanf:"internal_dns_port"`
+	StopOnShutdown  bool   `koanf:"stop_on_shutdown"`
 }
 
 // ACMEConfig holds ACME / TLS certificate settings.
@@ -128,12 +128,12 @@ type RegistryConfig struct {
 
 // LimitsConfig holds per-instance and aggregate resource limits.
 type LimitsConfig struct {
-	MaxVcpusPerInstance  int    `koanf:"max_vcpus_per_instance"`
-	MaxMemoryPerInstance string `koanf:"max_memory_per_instance"`
-	MaxTotalVolumeStorage string `koanf:"max_total_volume_storage"`
-	MaxConcurrentBuilds  int    `koanf:"max_concurrent_builds"`
-	MaxOverlaySize       string `koanf:"max_overlay_size"`
-	MaxImageStorage      float64 `koanf:"max_image_storage"`
+	MaxVcpusPerInstance   int     `koanf:"max_vcpus_per_instance"`
+	MaxMemoryPerInstance  string  `koanf:"max_memory_per_instance"`
+	MaxTotalVolumeStorage string  `koanf:"max_total_volume_storage"`
+	MaxConcurrentBuilds   int     `koanf:"max_concurrent_builds"`
+	MaxOverlaySize        string  `koanf:"max_overlay_size"`
+	MaxImageStorage       float64 `koanf:"max_image_storage"`
 }
 
 // OversubscriptionConfig holds oversubscription ratios (1.0 = no oversubscription).
@@ -154,7 +154,8 @@ type CapacityConfig struct {
 
 // HypervisorConfig holds hypervisor settings.
 type HypervisorConfig struct {
-	Default string `koanf:"default"`
+	Default               string `koanf:"default"`
+	FirecrackerBinaryPath string `koanf:"firecracker_binary_path"`
 }
 
 // GPUConfig holds GPU-related settings.
@@ -170,19 +171,19 @@ type Config struct {
 	Env       string `koanf:"env"`
 	Version   string `koanf:"version"`
 
-	Network        NetworkConfig          `koanf:"network"`
-	Caddy          CaddyConfig            `koanf:"caddy"`
-	ACME           ACMEConfig             `koanf:"acme"`
-	API            APIConfig              `koanf:"api"`
-	Otel           OtelConfig             `koanf:"otel"`
-	Logging        LoggingConfig          `koanf:"logging"`
-	Build          BuildConfig            `koanf:"build"`
-	Registry       RegistryConfig         `koanf:"registry"`
-	Limits         LimitsConfig           `koanf:"limits"`
+	Network          NetworkConfig          `koanf:"network"`
+	Caddy            CaddyConfig            `koanf:"caddy"`
+	ACME             ACMEConfig             `koanf:"acme"`
+	API              APIConfig              `koanf:"api"`
+	Otel             OtelConfig             `koanf:"otel"`
+	Logging          LoggingConfig          `koanf:"logging"`
+	Build            BuildConfig            `koanf:"build"`
+	Registry         RegistryConfig         `koanf:"registry"`
+	Limits           LimitsConfig           `koanf:"limits"`
 	Oversubscription OversubscriptionConfig `koanf:"oversubscription"`
-	Capacity       CapacityConfig         `koanf:"capacity"`
-	Hypervisor     HypervisorConfig       `koanf:"hypervisor"`
-	GPU            GPUConfig              `koanf:"gpu"`
+	Capacity         CapacityConfig         `koanf:"capacity"`
+	Hypervisor       HypervisorConfig       `koanf:"hypervisor"`
+	GPU              GPUConfig              `koanf:"gpu"`
 }
 
 // GetDefaultConfigPaths returns the default config file paths to search.
@@ -200,7 +201,6 @@ func GetDefaultConfigPaths() []string {
 		filepath.Join(home, ".config", "hypeman", "config.yaml"),
 	}
 }
-
 
 // defaultConfig returns a Config struct with all default values set.
 func defaultConfig() *Config {
@@ -298,7 +298,8 @@ func defaultConfig() *Config {
 		},
 
 		Hypervisor: HypervisorConfig{
-			Default: "cloud-hypervisor",
+			Default:               "cloud-hypervisor",
+			FirecrackerBinaryPath: "",
 		},
 
 		GPU: GPUConfig{

@@ -36,11 +36,7 @@ func setupTestManagerForQEMU(t *testing.T) (*manager, string) {
 
 	cfg := &config.Config{
 		DataDir: tmpDir,
-		Network: config.NetworkConfig{
-			BridgeName: "vmbr0",
-			SubnetCIDR: "10.100.0.0/16",
-			DNSServer:  "1.1.1.1",
-		},
+		Network: newParallelTestNetworkConfig(t),
 	}
 
 	p := paths.New(tmpDir)
@@ -171,6 +167,7 @@ func (r *qemuInstanceResolver) ResolveInstance(ctx context.Context, nameOrID str
 // It tests: create, get, list, logs, network, ingress, volumes, exec, and delete.
 // It does NOT test: snapshot/standby, hot memory resize (not supported by QEMU in first pass).
 func TestQEMUBasicEndToEnd(t *testing.T) {
+	t.Parallel()
 	// Require KVM access
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Skip("/dev/kvm not available, skipping on this platform")
@@ -239,11 +236,7 @@ func TestQEMUBasicEndToEnd(t *testing.T) {
 	// Initialize network
 	networkManager := network.NewManager(p, &config.Config{
 		DataDir: tmpDir,
-		Network: config.NetworkConfig{
-			BridgeName: "vmbr0",
-			SubnetCIDR: "10.100.0.0/16",
-			DNSServer:  "1.1.1.1",
-		},
+		Network: newParallelTestNetworkConfig(t),
 	}, nil)
 	t.Log("Initializing network...")
 	err = networkManager.Initialize(ctx, nil)
@@ -324,7 +317,7 @@ func TestQEMUBasicEndToEnd(t *testing.T) {
 	// Poll for logs to contain nginx startup message
 	var logs string
 	foundNginxStartup := false
-	for i := 0; i < 50; i++ {
+	for i := 0; i < 200; i++ {
 		logs, err = collectQEMULogs(ctx, manager, inst.Id, 100)
 		require.NoError(t, err)
 
@@ -336,7 +329,7 @@ func TestQEMUBasicEndToEnd(t *testing.T) {
 	}
 
 	t.Logf("Instance logs (last 100 lines):\n%s", logs)
-	assert.True(t, foundNginxStartup, "Nginx should have started worker processes within 5 seconds")
+	assert.True(t, foundNginxStartup, "Nginx should have started worker processes within 20 seconds")
 
 	// Test ingress - route external traffic to nginx
 	t.Log("Testing ingress routing to nginx...")
@@ -577,6 +570,7 @@ func TestQEMUBasicEndToEnd(t *testing.T) {
 // This uses bitnami/redis which configures REDIS_PASSWORD from an env var - if auth is required,
 // it proves the entrypoint received and used the env var.
 func TestQEMUEntrypointEnvVars(t *testing.T) {
+	t.Parallel()
 	if os.Getuid() != 0 {
 		t.Skip("Skipping test that requires root")
 	}
@@ -629,11 +623,7 @@ func TestQEMUEntrypointEnvVars(t *testing.T) {
 	// Initialize network (needed for loopback interface in guest)
 	networkManager := network.NewManager(p, &config.Config{
 		DataDir: tmpDir,
-		Network: config.NetworkConfig{
-			BridgeName: "vmbr0",
-			SubnetCIDR: "10.100.0.0/16",
-			DNSServer:  "1.1.1.1",
-		},
+		Network: newParallelTestNetworkConfig(t),
 	}, nil)
 	t.Log("Initializing network...")
 	err = networkManager.Initialize(ctx, nil)
@@ -663,10 +653,6 @@ func TestQEMUEntrypointEnvVars(t *testing.T) {
 	assert.Equal(t, hypervisor.TypeQEMU, inst.HypervisorType, "Instance should use QEMU hypervisor")
 	t.Logf("Instance created: %s", inst.Id)
 
-	// Wait for redis to be ready (bitnami/redis takes longer to start)
-	t.Log("Waiting for redis to be ready...")
-	time.Sleep(15 * time.Second)
-
 	// Helper to run command in guest with retry
 	runCmd := func(command ...string) (string, int, error) {
 		var lastOutput string
@@ -678,9 +664,9 @@ func TestQEMUEntrypointEnvVars(t *testing.T) {
 			return "", -1, err
 		}
 
-		for attempt := 0; attempt < 5; attempt++ {
+		for attempt := 0; attempt < 20; attempt++ {
 			if attempt > 0 {
-				time.Sleep(200 * time.Millisecond)
+				time.Sleep(300 * time.Millisecond)
 			}
 
 			var stdout, stderr bytes.Buffer
@@ -716,6 +702,20 @@ func TestQEMUEntrypointEnvVars(t *testing.T) {
 		return lastOutput, lastExitCode, lastErr
 	}
 
+	// Wait until Redis is actually accepting authenticated commands.
+	t.Log("Waiting for redis to accept authenticated commands...")
+	redisReadyDeadline := time.Now().Add(120 * time.Second)
+	for {
+		output, exitCode, cmdErr := runCmd("redis-cli", "-a", testPassword, "PING")
+		if cmdErr == nil && exitCode == 0 && strings.Contains(output, "PONG") {
+			break
+		}
+		if time.Now().After(redisReadyDeadline) {
+			t.Fatalf("redis did not become ready in time; last output=%q exit=%d err=%v", output, exitCode, cmdErr)
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+
 	// Test 1: PING without auth should fail
 	t.Log("Testing redis PING without auth (should fail)...")
 	output, _, err := runCmd("redis-cli", "PING")
@@ -747,6 +747,7 @@ func TestQEMUEntrypointEnvVars(t *testing.T) {
 // TestQEMUStandbyAndRestore tests the standby/restore cycle with QEMU.
 // This tests QEMU's migrate-to-file snapshot mechanism.
 func TestQEMUStandbyAndRestore(t *testing.T) {
+	t.Parallel()
 	// Require KVM access
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Skip("/dev/kvm not available, skipping on this platform")
@@ -864,4 +865,114 @@ func TestQEMUStandbyAndRestore(t *testing.T) {
 	assert.NoDirExists(t, p.InstanceDir(inst.Id))
 
 	t.Log("QEMU standby/restore test complete!")
+}
+
+func TestQEMUForkFromRunningNetwork(t *testing.T) {
+	t.Parallel()
+	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
+		t.Skip("/dev/kvm not available, skipping on this platform")
+	}
+
+	starter := qemu.NewStarter()
+	if _, err := starter.GetBinaryPath(nil, ""); err != nil {
+		t.Fatalf("QEMU not available: %v", err)
+	}
+
+	manager, tmpDir := setupTestManagerForQEMU(t)
+	ctx := context.Background()
+	p := paths.New(tmpDir)
+
+	imageManager, err := images.NewManager(p, 1, nil)
+	require.NoError(t, err)
+
+	t.Log("Ensuring nginx image...")
+	nginxImage, err := imageManager.CreateImage(ctx, images.CreateImageRequest{Name: "docker.io/library/nginx:alpine"})
+	require.NoError(t, err)
+
+	imageName := nginxImage.Name
+	for i := 0; i < 60; i++ {
+		img, err := imageManager.GetImage(ctx, imageName)
+		if err == nil && img.Status == images.StatusReady {
+			nginxImage = img
+			break
+		}
+		if err == nil && img.Status == images.StatusFailed {
+			t.Fatalf("image build failed: %s", *img.Error)
+		}
+		time.Sleep(1 * time.Second)
+	}
+	require.Equal(t, images.StatusReady, nginxImage.Status, "Image should be ready after 60 seconds")
+
+	require.NoError(t, manager.systemManager.EnsureSystemFiles(ctx))
+	require.NoError(t, manager.networkManager.Initialize(ctx, nil))
+
+	source, err := manager.CreateInstance(ctx, CreateInstanceRequest{
+		Name:           "qemu-fork-running-src",
+		Image:          "docker.io/library/nginx:alpine",
+		Size:           2 * 1024 * 1024 * 1024,
+		HotplugSize:    256 * 1024 * 1024,
+		OverlaySize:    10 * 1024 * 1024 * 1024,
+		Vcpus:          1,
+		NetworkEnabled: true,
+		Hypervisor:     hypervisor.TypeQEMU,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = manager.DeleteInstance(context.Background(), source.Id) })
+	require.NoError(t, waitForQEMUReady(ctx, source.SocketPath, 10*time.Second))
+
+	assert.NotEmpty(t, source.IP)
+	assert.NotEmpty(t, source.MAC)
+	assertHostCanReachNginx(t, source.IP, 80, 60*time.Second)
+
+	_, err = manager.ForkInstance(ctx, source.Id, ForkInstanceRequest{Name: "qemu-fork-running-no-flag"})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidState)
+
+	forked, err := manager.ForkInstance(ctx, source.Id, ForkInstanceRequest{
+		Name:        "qemu-fork-running-copy",
+		FromRunning: true,
+		TargetState: StateStandby,
+	})
+	require.NoError(t, err)
+	require.Equal(t, StateStandby, forked.State)
+	forkedID := forked.Id
+	t.Cleanup(func() { _ = manager.DeleteInstance(context.Background(), forkedID) })
+
+	sourceAfterFork, err := manager.GetInstance(ctx, source.Id)
+	require.NoError(t, err)
+	require.Equal(t, StateRunning, sourceAfterFork.State)
+	require.NotEmpty(t, sourceAfterFork.IP)
+	assertHostCanReachNginx(t, sourceAfterFork.IP, 80, 60*time.Second)
+
+	forked, err = manager.RestoreInstance(ctx, forkedID)
+	require.NoError(t, err)
+	require.Equal(t, StateRunning, forked.State)
+	require.NoError(t, waitForQEMUReady(ctx, forked.SocketPath, 10*time.Second))
+
+	assert.NotEmpty(t, forked.IP)
+	assert.NotEmpty(t, forked.MAC)
+	assert.NotEqual(t, sourceAfterFork.IP, forked.IP)
+	assert.NotEqual(t, sourceAfterFork.MAC, forked.MAC)
+	assertHostCanReachNginx(t, forked.IP, 80, 60*time.Second)
+	assertHostCanReachNginx(t, sourceAfterFork.IP, 80, 60*time.Second)
+}
+
+func TestQEMUSnapshotFeature(t *testing.T) {
+	t.Parallel()
+	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
+		t.Skip("/dev/kvm not available, skipping on this platform")
+	}
+
+	starter := qemu.NewStarter()
+	if _, err := starter.GetBinaryPath(nil, ""); err != nil {
+		t.Skipf("QEMU not available: %v", err)
+	}
+
+	mgr, tmpDir := setupTestManagerForQEMU(t)
+	runStandbySnapshotScenario(t, mgr, tmpDir, snapshotScenarioConfig{
+		hypervisor: hypervisor.TypeQEMU,
+		sourceName: "qemu-snapshot-src",
+		snapshot:   "qemu-snapshot-1",
+		forkName:   "qemu-snapshot-fork",
+	})
 }

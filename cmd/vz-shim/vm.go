@@ -3,6 +3,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"fmt"
 	"log/slog"
 	"net"
@@ -15,7 +16,7 @@ import (
 )
 
 // createVM creates and configures a vz.VirtualMachine from ShimConfig.
-func createVM(config shimconfig.ShimConfig) (*vz.VirtualMachine, *vz.VirtualMachineConfiguration, error) {
+func createVM(config *shimconfig.ShimConfig) (*vz.VirtualMachine, *vz.VirtualMachineConfiguration, error) {
 	// Prepare kernel command line (vz uses hvc0 for serial console)
 	kernelArgs := config.KernelArgs
 	if kernelArgs == "" {
@@ -61,15 +62,19 @@ func createVM(config shimconfig.ShimConfig) (*vz.VirtualMachine, *vz.VirtualMach
 		return nil, nil, fmt.Errorf("configure storage: %w", err)
 	}
 
+	if err := configurePlatform(vmConfig, config); err != nil {
+		return nil, nil, fmt.Errorf("configure platform: %w", err)
+	}
+
 	vsockConfig, err := vz.NewVirtioSocketDeviceConfiguration()
 	if err != nil {
 		return nil, nil, fmt.Errorf("create vsock device: %w", err)
 	}
 	vmConfig.SetSocketDevicesVirtualMachineConfiguration([]vz.SocketDeviceConfiguration{vsockConfig})
 
-	if balloonConfig, err := vz.NewVirtioTraditionalMemoryBalloonDeviceConfiguration(); err == nil {
-		vmConfig.SetMemoryBalloonDevicesVirtualMachineConfiguration([]vz.MemoryBalloonDeviceConfiguration{balloonConfig})
-	}
+	// Do not attach memory balloon for now.
+	// Save/restore compatibility on VZ can fail with "invalid argument" for some
+	// Linux guest configurations when a balloon device is present.
 
 	if validated, err := vmConfig.Validate(); !validated || err != nil {
 		return nil, nil, fmt.Errorf("invalid vm configuration: %w", err)
@@ -81,6 +86,37 @@ func createVM(config shimconfig.ShimConfig) (*vz.VirtualMachine, *vz.VirtualMach
 	}
 
 	return vm, vmConfig, nil
+}
+
+func configurePlatform(vmConfig *vz.VirtualMachineConfiguration, config *shimconfig.ShimConfig) error {
+	var machineID *vz.GenericMachineIdentifier
+	var err error
+
+	if config.MachineIdentifierData != "" {
+		b, decodeErr := base64.StdEncoding.DecodeString(config.MachineIdentifierData)
+		if decodeErr != nil {
+			return fmt.Errorf("decode machine identifier data: %w", decodeErr)
+		}
+		machineID, err = vz.NewGenericMachineIdentifierWithData(b)
+		if err != nil {
+			return fmt.Errorf("recreate machine identifier: %w", err)
+		}
+	} else {
+		machineID, err = vz.NewGenericMachineIdentifier()
+		if err != nil {
+			return fmt.Errorf("create machine identifier: %w", err)
+		}
+		config.MachineIdentifierData = base64.StdEncoding.EncodeToString(machineID.DataRepresentation())
+	}
+
+	platformConfig, err := vz.NewGenericPlatformConfiguration(
+		vz.WithGenericMachineIdentifier(machineID),
+	)
+	if err != nil {
+		return fmt.Errorf("create generic platform config: %w", err)
+	}
+	vmConfig.SetPlatformVirtualMachineConfiguration(platformConfig)
+	return nil
 }
 
 func configureSerialConsole(vmConfig *vz.VirtualMachineConfiguration, logPath string) error {

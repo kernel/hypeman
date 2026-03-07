@@ -170,9 +170,9 @@ func (m *manager) createBridge(ctx context.Context, name, gateway, subnet string
 
 // Rule comments for identifying hypeman iptables rules
 const (
-	commentNAT    = "hypeman-nat"
-	commentFwdOut = "hypeman-fwd-out"
-	commentFwdIn  = "hypeman-fwd-in"
+	commentNATBase    = "hypeman-nat"
+	commentFwdOutBase = "hypeman-fwd-out"
+	commentFwdInBase  = "hypeman-fwd-in"
 )
 
 // HTB handles for traffic control
@@ -230,8 +230,12 @@ func (m *manager) setupIPTablesRules(ctx context.Context, subnet, bridgeName str
 	}
 	log.InfoContext(ctx, "uplink interface", "interface", uplink)
 
+	natComment := m.ruleComment(commentNATBase)
+	fwdOutComment := m.ruleComment(commentFwdOutBase)
+	fwdInComment := m.ruleComment(commentFwdInBase)
+
 	// Add MASQUERADE rule if not exists (position doesn't matter in POSTROUTING)
-	masqStatus, err := m.ensureNATRule(subnet, uplink)
+	masqStatus, err := m.ensureNATRule(subnet, uplink, natComment)
 	if err != nil {
 		return err
 	}
@@ -239,27 +243,34 @@ func (m *manager) setupIPTablesRules(ctx context.Context, subnet, bridgeName str
 
 	// FORWARD rules must be at top of chain (before Docker's DOCKER-USER/DOCKER-FORWARD)
 	// We insert at position 1 and 2 to ensure they're evaluated first
-	fwdOutStatus, err := m.ensureForwardRule(bridgeName, uplink, "NEW,ESTABLISHED,RELATED", commentFwdOut, 1)
+	fwdOutStatus, err := m.ensureForwardRule(bridgeName, uplink, "NEW,ESTABLISHED,RELATED", fwdOutComment, 1)
 	if err != nil {
 		return fmt.Errorf("setup forward outbound: %w", err)
 	}
 
-	fwdInStatus, err := m.ensureForwardRule(uplink, bridgeName, "ESTABLISHED,RELATED", commentFwdIn, 2)
+	fwdInStatus, err := m.ensureForwardRule(uplink, bridgeName, "ESTABLISHED,RELATED", fwdInComment, 2)
 	if err != nil {
 		return fmt.Errorf("setup forward inbound: %w", err)
 	}
 
 	log.InfoContext(ctx, "iptables FORWARD ready", "outbound", fwdOutStatus, "inbound", fwdInStatus)
 
+	// Restore Docker's FORWARD chain jumps if they were lost.
+	// On systems where an external tool (e.g., hypervisor firewall management) periodically
+	// rebuilds the FORWARD chain, Docker's jump rules can be wiped out. Docker only inserts
+	// them at daemon start, so they stay missing until Docker is restarted. Since hypeman
+	// already re-ensures its own rules here, we also restore Docker's if needed.
+	m.ensureDockerForwardJump(ctx)
+
 	return nil
 }
 
 // ensureNATRule ensures the MASQUERADE rule exists with correct uplink
-func (m *manager) ensureNATRule(subnet, uplink string) (string, error) {
+func (m *manager) ensureNATRule(subnet, uplink, comment string) (string, error) {
 	// Check if rule exists with correct subnet and uplink
 	checkCmd := exec.Command("iptables", "-t", "nat", "-C", "POSTROUTING",
 		"-s", subnet, "-o", uplink,
-		"-m", "comment", "--comment", commentNAT,
+		"-m", "comment", "--comment", comment,
 		"-j", "MASQUERADE")
 	checkCmd.SysProcAttr = &syscall.SysProcAttr{
 		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
@@ -269,12 +280,12 @@ func (m *manager) ensureNATRule(subnet, uplink string) (string, error) {
 	}
 
 	// Delete any existing rule with our comment (handles uplink changes)
-	m.deleteNATRuleByComment(commentNAT)
+	m.deleteNATRuleByComment(comment)
 
 	// Add rule with comment
 	addCmd := exec.Command("iptables", "-t", "nat", "-A", "POSTROUTING",
 		"-s", subnet, "-o", uplink,
-		"-m", "comment", "--comment", commentNAT,
+		"-m", "comment", "--comment", comment,
 		"-j", "MASQUERADE")
 	addCmd.SysProcAttr = &syscall.SysProcAttr{
 		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
@@ -283,6 +294,14 @@ func (m *manager) ensureNATRule(subnet, uplink string) (string, error) {
 		return "", fmt.Errorf("add masquerade rule: %w", err)
 	}
 	return "added", nil
+}
+
+// ruleComment returns a bridge-scoped iptables comment so concurrent managers
+// don't clobber each other's rules.
+func (m *manager) ruleComment(base string) string {
+	suffix := strings.ToLower(m.config.Network.BridgeName)
+	suffix = strings.ReplaceAll(suffix, " ", "-")
+	return fmt.Sprintf("%s-%s", base, suffix)
 }
 
 // deleteNATRuleByComment deletes any NAT POSTROUTING rule containing our comment
@@ -407,6 +426,76 @@ func (m *manager) deleteForwardRuleByComment(comment string) {
 		}
 		delCmd.Run() // ignore error
 	}
+}
+
+// ensureDockerForwardJump checks if Docker's DOCKER-FORWARD chain exists but is
+// unreachable from the FORWARD chain, and restores the jump if missing.
+// This is a no-op if Docker is not installed or the jump already exists.
+//
+// Note: this cannot mis-order DOCKER-FORWARD vs DOCKER-USER because it only acts
+// when the jump is completely absent (chain was flushed). If DOCKER-USER's jump
+// still exists, DOCKER-FORWARD's jump is almost certainly still there too — they
+// get wiped together — and the early -C check returns before we insert anything.
+func (m *manager) ensureDockerForwardJump(ctx context.Context) {
+	log := logger.FromContext(ctx)
+
+	// Check if DOCKER-FORWARD chain exists (Docker is installed and configured)
+	checkChain := exec.Command("iptables", "-L", "DOCKER-FORWARD", "-n")
+	checkChain.SysProcAttr = &syscall.SysProcAttr{
+		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+	}
+	if checkChain.Run() != nil {
+		return // Chain doesn't exist — Docker not installed or not configured
+	}
+
+	// Check if jump already exists in FORWARD
+	checkJump := exec.Command("iptables", "-C", "FORWARD", "-j", "DOCKER-FORWARD")
+	checkJump.SysProcAttr = &syscall.SysProcAttr{
+		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+	}
+	if checkJump.Run() == nil {
+		return // Jump already present
+	}
+
+	// DOCKER-FORWARD chain exists but the jump from FORWARD is missing — restore it.
+	// Insert right after hypeman's last rule so the jump is evaluated before any
+	// explicit DROP/REJECT rules that an external firewall tool may have added.
+	insertPos := m.lastHypemanForwardRulePosition() + 1
+	addJump := exec.Command("iptables", "-I", "FORWARD", fmt.Sprintf("%d", insertPos), "-j", "DOCKER-FORWARD")
+	addJump.SysProcAttr = &syscall.SysProcAttr{
+		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+	}
+	if err := addJump.Run(); err != nil {
+		log.WarnContext(ctx, "failed to restore Docker FORWARD chain jump", "error", err)
+		return
+	}
+
+	log.WarnContext(ctx, "restored missing jump to DOCKER-FORWARD in FORWARD chain", "position", insertPos)
+}
+
+// lastHypemanForwardRulePosition returns the line number of the last hypeman-managed
+// rule in the FORWARD chain, or 0 if none are found.
+func (m *manager) lastHypemanForwardRulePosition() int {
+	cmd := exec.Command("iptables", "-L", "FORWARD", "--line-numbers", "-n", "-v")
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+	}
+	output, err := cmd.Output()
+	if err != nil {
+		return 0
+	}
+
+	lastPos := 0
+	for _, line := range strings.Split(string(output), "\n") {
+		if !strings.Contains(line, "hypeman-") {
+			continue
+		}
+		var pos int
+		if _, err := fmt.Sscanf(line, "%d", &pos); err == nil && pos > lastPos {
+			lastPos = pos
+		}
+	}
+	return lastPos
 }
 
 // createTAPDevice creates TAP device and attaches to bridge.

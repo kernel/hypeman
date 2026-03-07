@@ -121,6 +121,8 @@ Common settings:
 | `acme.dns_provider` | DNS provider for ACME challenges | _(empty)_ |
 | `acme.cloudflare_api_token` | Cloudflare API token | _(empty)_ |
 | `build.docker_socket` | Path to Docker socket | `/var/run/docker.sock` |
+| `hypervisor.default` | Default hypervisor type (`cloud-hypervisor`, `firecracker`, `qemu`, `vz`) | `cloud-hypervisor` |
+| `hypervisor.firecracker_binary_path` | Optional runtime path to external Firecracker binary | _(empty = embedded)_ |
 
 Environment variables can also override any config key using `__` as the nesting separator (e.g. `CADDY__LISTEN_ADDRESS` overrides `caddy.listen_address`).
 
@@ -255,6 +257,22 @@ make dev
 ```
 
 The server will start on port 8080 (configurable via `port` in config.yaml).
+
+### Shared-Machine Local Config
+
+When developing on a shared host, avoid global paths like `/etc/hypeman` and `/var/lib/hypeman`.
+Use a workspace-local config and data directory instead:
+
+```bash
+mkdir -p .tmp/hypeman-data
+cp config.example.yaml .tmp/hypeman.config.yaml
+
+# Edit .tmp/hypeman.config.yaml:
+#   data_dir: /absolute/path/to/your/repo/.tmp/hypeman-data
+#   jwt_secret: dev-secret
+
+CONFIG_PATH="$(pwd)/.tmp/hypeman.config.yaml" make dev
+```
 
 ### Setting Up the Builder Image (for Dockerfile builds)
 
@@ -451,7 +469,7 @@ Note: Full integration tests require Linux. On macOS, focus on unit tests and ma
 
 1. **Disk Format**: vz only supports raw disk images (not qcow2). The image pipeline handles conversion automatically.
 
-2. **Snapshots**: Not currently supported on the vz hypervisor.
+2. **Snapshot Compatibility**: vz save/restore requires macOS 14.0+ on Apple Silicon and a VM configuration that passes save/restore validation.
 
 ### Troubleshooting
 
@@ -478,6 +496,7 @@ brew install caddy
 **"snapshot not supported"**
 - Requires macOS 14.0+ on Apple Silicon
 - Check: `sw_vers` and `uname -m` (should be arm64)
+- Ensure the VM has been paused before standby and has a save/restore-compatible configuration
 
 **VM fails to start**
 - Check serial log: `<data_dir>/instances/<id>/serial.log`

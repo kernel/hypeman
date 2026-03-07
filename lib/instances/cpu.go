@@ -36,16 +36,16 @@ func detectHostTopology() *HostTopology {
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := scanner.Text()
-		
+
 		// Parse key: value pairs
 		parts := strings.SplitN(line, ":", 2)
 		if len(parts) != 2 {
 			continue
 		}
-		
+
 		key := strings.TrimSpace(parts[0])
 		value := strings.TrimSpace(parts[1])
-		
+
 		switch key {
 		case "siblings":
 			if !hasSiblings {
@@ -109,7 +109,7 @@ func calculateGuestTopology(vcpus int, host *HostTopology) *vmm.CpuTopology {
 	if host.ThreadsPerCore > 1 && vcpus%host.ThreadsPerCore == 0 {
 		threadsPerCore = host.ThreadsPerCore
 		remainingCores := vcpus / threadsPerCore
-		
+
 		// Distribute cores across sockets if needed
 		if remainingCores <= host.CoresPerSocket {
 			coresPerDie = remainingCores
@@ -128,7 +128,7 @@ func calculateGuestTopology(vcpus int, host *HostTopology) *vmm.CpuTopology {
 	} else {
 		// Use 1 thread per core for simpler layout
 		threadsPerCore = 1
-		
+
 		if vcpus <= host.CoresPerSocket {
 			coresPerDie = vcpus
 			diesPerPackage = 1
@@ -162,4 +162,3 @@ func calculateGuestTopology(vcpus int, host *HostTopology) *vmm.CpuTopology {
 		Packages:       &packages,
 	}
 }
-

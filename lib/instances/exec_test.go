@@ -1,6 +1,7 @@
 package instances
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -21,9 +22,21 @@ import (
 func waitForExecAgent(ctx context.Context, mgr *manager, instanceID string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		logs, err := collectLogs(ctx, mgr, instanceID, 100)
-		if err == nil && strings.Contains(logs, "[guest-agent] listening on vsock port 2222") {
-			return nil
+		meta, err := mgr.loadMetadata(instanceID)
+		if err == nil {
+			dialer, derr := hypervisor.NewVsockDialer(meta.HypervisorType, meta.VsockSocket, meta.VsockCID)
+			if derr == nil {
+				var stdout, stderr bytes.Buffer
+				exit, eerr := guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{
+					Command:      []string{"true"},
+					Stdout:       &stdout,
+					Stderr:       &stderr,
+					WaitForAgent: 1 * time.Second,
+				})
+				if eerr == nil && exit.Code == 0 {
+					return nil
+				}
+			}
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
@@ -35,6 +48,7 @@ func waitForExecAgent(ctx context.Context, mgr *manager, instanceID string, time
 // TestExecConcurrent tests concurrent exec commands from multiple goroutines.
 // This validates that the exec infrastructure handles concurrent access correctly.
 func TestExecConcurrent(t *testing.T) {
+	t.Parallel()
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Skip("/dev/kvm not available, skipping on this platform")
 	}

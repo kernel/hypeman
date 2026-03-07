@@ -37,6 +37,7 @@ import (
 // It does NOT test nvidia-smi or CUDA functionality since that requires NVIDIA
 // guest drivers pre-installed in the image.
 func TestVGPU(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
@@ -58,11 +59,7 @@ func TestVGPU(t *testing.T) {
 
 	cfg := &config.Config{
 		DataDir: tmpDir,
-		Network: config.NetworkConfig{
-			BridgeName: "vmbr0",
-			SubnetCIDR: "10.100.0.0/16",
-			DNSServer:  "1.1.1.1",
-		},
+		Network: newParallelTestNetworkConfig(t),
 	}
 
 	// Create managers

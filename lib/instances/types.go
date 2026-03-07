@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/snapshot"
 )
 
 // State represents the instance state
@@ -91,7 +92,7 @@ type StoredMetadata struct {
 	SkipGuestAgent    bool // Skip guest-agent installation (disables exec/stat API)
 
 	// Shutdown configuration
-	StopTimeout int // Grace period in seconds for graceful stop (0 = use default 10s)
+	StopTimeout int // Grace period in seconds for graceful stop (0 = use default 5s)
 
 	// Exit information (populated from serial console sentinel when VM stops)
 	ExitCode    *int   // App exit code, nil if VM hasn't exited
@@ -150,7 +151,7 @@ type CreateInstanceRequest struct {
 	Name                     string             // Required
 	Image                    string             // Required: OCI reference
 	Size                     int64              // Base memory in bytes (default: 1GB)
-	HotplugSize              int64              // Hotplug memory in bytes (default: 3GB)
+	HotplugSize              int64              // Hotplug memory in bytes (default: 0, set explicitly to enable)
 	OverlaySize              int64              // Overlay disk size in bytes (default: 10GB)
 	Vcpus                    int                // Default 2
 	NetworkBandwidthDownload int64              // Download rate limit bytes/sec (0 = auto, proportional to CPU)
@@ -173,6 +174,48 @@ type CreateInstanceRequest struct {
 type StartInstanceRequest struct {
 	Entrypoint []string // Override entrypoint (nil = keep previous/image default)
 	Cmd        []string // Override cmd (nil = keep previous/image default)
+}
+
+// ForkInstanceRequest is the domain request for forking an instance.
+type ForkInstanceRequest struct {
+	Name        string // Required: name for the new forked instance
+	FromRunning bool   // Optional: allow forking from Running by auto standby/fork/restore
+	TargetState State  // Optional: desired final state of forked instance (Stopped, Standby, Running). Empty means inherit source state.
+}
+
+// SnapshotKind determines how snapshot data is captured and restored.
+type SnapshotKind = snapshot.SnapshotKind
+
+const (
+	// SnapshotKindStandby captures snapshot-based standby state (memory/device/disk).
+	SnapshotKindStandby = snapshot.SnapshotKindStandby
+	// SnapshotKindStopped captures stopped-state disk+metadata only.
+	SnapshotKindStopped = snapshot.SnapshotKindStopped
+)
+
+// Snapshot is a centrally stored immutable snapshot resource.
+type Snapshot = snapshot.Snapshot
+
+// ListSnapshotsFilter contains optional filters for listing snapshots.
+type ListSnapshotsFilter = snapshot.ListSnapshotsFilter
+
+// CreateSnapshotRequest is the domain request for creating a snapshot.
+type CreateSnapshotRequest struct {
+	Kind SnapshotKind // Required: Standby or Stopped
+	Name string       // Optional: unique per source instance
+}
+
+// RestoreSnapshotRequest is the domain request for restoring a snapshot in-place.
+type RestoreSnapshotRequest struct {
+	TargetState      State           // Optional
+	TargetHypervisor hypervisor.Type // Optional, allowed only for Stopped snapshots
+}
+
+// ForkSnapshotRequest is the domain request for forking from a snapshot.
+type ForkSnapshotRequest struct {
+	Name             string          // Required: name for the new instance
+	TargetState      State           // Optional
+	TargetHypervisor hypervisor.Type // Optional, allowed only for Stopped snapshots
 }
 
 // AttachVolumeRequest is the domain request for attaching a volume (used for API compatibility)

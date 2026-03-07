@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
@@ -110,13 +109,12 @@ func (m *manager) createInstance(
 
 	// 4. Generate vsock configuration
 	vsockCID := generateVsockCID(id)
-	vsockSocket := m.paths.InstanceVsockSocket(id)
-	log.DebugContext(ctx, "generated vsock config", "instance_id", id, "cid", vsockCID)
-
-	// Override vsock socket path for vz (uses Virtio socket, not vhost-user)
-	if req.Hypervisor == hypervisor.TypeVZ || (req.Hypervisor == "" && m.defaultHypervisor == hypervisor.TypeVZ) {
-		vsockSocket = filepath.Join(m.paths.InstanceDir(id), "vz.vsock")
+	hvTypeForVsock := req.Hypervisor
+	if hvTypeForVsock == "" {
+		hvTypeForVsock = m.defaultHypervisor
 	}
+	vsockSocket := m.paths.InstanceSocket(id, hypervisor.VsockSocketNameForType(hvTypeForVsock))
+	log.DebugContext(ctx, "generated vsock config", "instance_id", id, "cid", vsockCID)
 
 	// 5. Check instance doesn't already exist
 	if _, err := m.loadMetadata(id); err == nil {
@@ -129,9 +127,6 @@ func (m *manager) createInstance(
 		size = 1 * 1024 * 1024 * 1024 // 1GB default
 	}
 	hotplugSize := req.HotplugSize
-	if hotplugSize == 0 {
-		hotplugSize = 3 * 1024 * 1024 * 1024 // 3GB default
-	}
 	overlaySize := req.OverlaySize
 	if overlaySize == 0 {
 		overlaySize = 10 * 1024 * 1024 * 1024 // 10GB default
@@ -453,17 +448,8 @@ func (m *manager) createInstance(
 
 // validateCreateRequest validates the create instance request
 func validateCreateRequest(req CreateInstanceRequest) error {
-	if req.Name == "" {
-		return fmt.Errorf("name is required")
-	}
-	// Validate name format: lowercase letters, digits, dashes only
-	// No starting/ending with dashes, max 63 characters
-	if len(req.Name) > 63 {
-		return fmt.Errorf("name must be 63 characters or less")
-	}
-	namePattern := regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
-	if !namePattern.MatchString(req.Name) {
-		return fmt.Errorf("name must contain only lowercase letters, digits, and dashes; cannot start or end with a dash")
+	if err := validateInstanceName(req.Name); err != nil {
+		return err
 	}
 	if req.Image == "" {
 		return fmt.Errorf("image is required")
@@ -660,11 +646,16 @@ func (m *manager) buildHypervisorConfig(ctx context.Context, inst *Instance, ima
 	// Network configuration
 	var networks []hypervisor.NetworkConfig
 	if netConfig != nil {
+		// Instance-level bandwidth limits are persisted in metadata, then passed
+		// into per-interface hypervisor config so VMMs like Firecracker can map
+		// them to device-level API rate limiters.
 		networks = append(networks, hypervisor.NetworkConfig{
-			TAPDevice: netConfig.TAPDevice,
-			IP:        netConfig.IP,
-			MAC:       netConfig.MAC,
-			Netmask:   netConfig.Netmask,
+			TAPDevice:   netConfig.TAPDevice,
+			IP:          netConfig.IP,
+			MAC:         netConfig.MAC,
+			Netmask:     netConfig.Netmask,
+			DownloadBps: inst.NetworkBandwidthDownload,
+			UploadBps:   inst.NetworkBandwidthUpload,
 		})
 	}
 

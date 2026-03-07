@@ -14,6 +14,8 @@ import (
 	"github.com/kernel/hypeman/lib/network"
 )
 
+const deleteGracefulShutdownTimeout = 2
+
 // deleteInstance stops and deletes an instance
 func (m *manager) deleteInstance(
 	ctx context.Context,
@@ -30,6 +32,7 @@ func (m *manager) deleteInstance(
 	}
 
 	inst := m.toInstance(ctx, meta)
+	stored := &meta.StoredMetadata
 	log.DebugContext(ctx, "loaded instance", "instance_id", id, "state", inst.State)
 
 	// 2. Get network allocation BEFORE killing VMM (while we can still query it)
@@ -47,9 +50,22 @@ func (m *manager) deleteInstance(
 		guest.CloseConn(dialer.Key())
 	}
 
-	// 4. If hypervisor might be running, force kill it
+	// 4. If running, try graceful guest shutdown before force kill.
+	gracefulShutdown := false
+	if inst.State == StateRunning {
+		stopTimeout := resolveStopTimeout(stored)
+		if stopTimeout > deleteGracefulShutdownTimeout {
+			stopTimeout = deleteGracefulShutdownTimeout
+		}
+		gracefulShutdown = m.tryGracefulGuestShutdown(ctx, &inst, stopTimeout)
+		if !gracefulShutdown {
+			log.DebugContext(ctx, "graceful shutdown before delete did not complete", "instance_id", id)
+		}
+	}
+
+	// 5. If hypervisor might be running, force kill it
 	// Also attempt kill for StateUnknown since we can't be sure if hypervisor is running
-	if inst.State.RequiresVMM() || inst.State == StateUnknown {
+	if !gracefulShutdown && (inst.State.RequiresVMM() || inst.State == StateUnknown) {
 		log.DebugContext(ctx, "stopping hypervisor", "instance_id", id, "state", inst.State)
 		if err := m.killHypervisor(ctx, &inst); err != nil {
 			// Log error but continue with cleanup
@@ -58,7 +74,7 @@ func (m *manager) deleteInstance(
 		}
 	}
 
-	// 5. Release network allocation
+	// 6. Release network allocation
 	if inst.NetworkEnabled {
 		log.DebugContext(ctx, "releasing network", "instance_id", id, "network", "default")
 		if err := m.networkManager.ReleaseAllocation(ctx, networkAlloc); err != nil {
@@ -67,7 +83,7 @@ func (m *manager) deleteInstance(
 		}
 	}
 
-	// 6. Detach and auto-unbind devices from VFIO
+	// 7. Detach and auto-unbind devices from VFIO
 	if len(inst.Devices) > 0 && m.deviceManager != nil {
 		for _, deviceID := range inst.Devices {
 			log.DebugContext(ctx, "detaching device", "id", id, "device", deviceID)
@@ -84,7 +100,7 @@ func (m *manager) deleteInstance(
 		}
 	}
 
-	// 6b. Detach volumes
+	// 7b. Detach volumes
 	if len(inst.Volumes) > 0 {
 		log.DebugContext(ctx, "detaching volumes", "instance_id", id, "count", len(inst.Volumes))
 		for _, volAttach := range inst.Volumes {
@@ -95,7 +111,7 @@ func (m *manager) deleteInstance(
 		}
 	}
 
-	// 6c. Destroy vGPU mdev device if present
+	// 7c. Destroy vGPU mdev device if present
 	if inst.GPUMdevUUID != "" {
 		log.InfoContext(ctx, "destroying vGPU mdev", "instance_id", id, "uuid", inst.GPUMdevUUID)
 		if err := devices.DestroyMdev(ctx, inst.GPUMdevUUID); err != nil {
@@ -104,7 +120,7 @@ func (m *manager) deleteInstance(
 		}
 	}
 
-	// 7. Delete all instance data
+	// 8. Delete all instance data
 	log.DebugContext(ctx, "deleting instance data", "instance_id", id)
 	if err := m.deleteInstanceData(id); err != nil {
 		log.ErrorContext(ctx, "failed to delete instance data", "instance_id", id, "error", err)
@@ -163,14 +179,33 @@ func (m *manager) killHypervisor(ctx context.Context, inst *Instance) error {
 // WaitForProcessExit polls for a process to exit, returns true if exited within timeout.
 // Exported for use in tests.
 func WaitForProcessExit(pid int, timeout time.Duration) bool {
+	if pid <= 0 {
+		return true
+	}
+
 	deadline := time.Now().Add(timeout)
 
 	for time.Now().Before(deadline) {
-		// Check if process still exists (signal 0 doesn't kill, just checks existence)
-		if err := syscall.Kill(pid, 0); err != nil {
-			// Process is gone (ESRCH = no such process)
+		// Reap exited child processes to avoid treating zombies as still-running.
+		var status syscall.WaitStatus
+		reapedPID, waitErr := syscall.Wait4(pid, &status, syscall.WNOHANG, nil)
+		switch {
+		case waitErr == nil && reapedPID == pid:
 			return true
+		case waitErr == nil && reapedPID == 0:
+			// Process still running (or wait status not yet available).
+		case waitErr == syscall.ECHILD:
+			// Not our child (or already reaped elsewhere). Fall back to existence check.
+			if err := syscall.Kill(pid, 0); err != nil {
+				return true
+			}
+		default:
+			// Best effort fallback on transient/unexpected wait errors.
+			if err := syscall.Kill(pid, 0); err != nil {
+				return true
+			}
 		}
+
 		// Still alive, wait a bit before checking again
 		// 10ms polling interval balances responsiveness with CPU usage
 		time.Sleep(10 * time.Millisecond)

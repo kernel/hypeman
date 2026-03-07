@@ -24,6 +24,7 @@ import (
 
 func init() {
 	hypervisor.RegisterSocketName(hypervisor.TypeVZ, "vz.sock")
+	hypervisor.RegisterVsockSocketName(hypervisor.TypeVZ, "vz.vsock")
 	hypervisor.RegisterVsockDialerFactory(hypervisor.TypeVZ, NewVsockDialer)
 	hypervisor.RegisterClientFactory(hypervisor.TypeVZ, func(socketPath string) (hypervisor.Hypervisor, error) {
 		return NewClient(socketPath)
@@ -114,37 +115,77 @@ func (s *Starter) GetVersion(p *paths.Paths) (string, error) {
 
 // StartVM spawns a vz-shim subprocess to host the VM.
 func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, socketPath string, config hypervisor.VMConfig) (int, hypervisor.Hypervisor, error) {
-	log := logger.FromContext(ctx)
+	shimConfig := buildShimConfigFromVMConfig(config, socketPath)
+	return s.startShim(ctx, p, version, shimConfig, 30*time.Second)
+}
 
+// RestoreVM starts a vz-shim process and restores VM state from a snapshot.
+// The VM is in paused state after restore; caller should call Resume().
+func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string, socketPath string, snapshotPath string) (int, hypervisor.Hypervisor, error) {
+	manifestPath := filepath.Join(snapshotPath, shimconfig.SnapshotManifestFile)
+	manifestData, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return 0, nil, fmt.Errorf("read snapshot manifest: %w", err)
+	}
+
+	var manifest shimconfig.SnapshotManifest
+	if err := json.Unmarshal(manifestData, &manifest); err != nil {
+		return 0, nil, fmt.Errorf("decode snapshot manifest: %w", err)
+	}
+	if manifest.Hypervisor != "" && manifest.Hypervisor != string(hypervisor.TypeVZ) {
+		return 0, nil, fmt.Errorf("snapshot hypervisor mismatch: expected vz, got %s", manifest.Hypervisor)
+	}
+	if manifest.MachineStateFile == "" {
+		manifest.MachineStateFile = shimconfig.SnapshotMachineStateFile
+	}
+
+	restorePath := filepath.Join(snapshotPath, manifest.MachineStateFile)
+	if _, err := os.Stat(restorePath); err != nil {
+		return 0, nil, fmt.Errorf("snapshot machine state not found: %w", err)
+	}
+
+	shimConfig := manifest.ShimConfig
+	if shimConfig.KernelPath == "" || shimConfig.InitrdPath == "" {
+		return 0, nil, fmt.Errorf("invalid snapshot manifest: missing kernel/initrd in shim config")
+	}
 	instanceDir := filepath.Dir(socketPath)
-	controlSocket := socketPath
-	vsockSocket := filepath.Join(instanceDir, "vz.vsock")
-	logPath := filepath.Join(instanceDir, "logs", "vz-shim.log")
+	shimConfig.ControlSocket = socketPath
+	shimConfig.VsockSocket = filepath.Join(instanceDir, "vz.vsock")
+	shimConfig.LogPath = filepath.Join(instanceDir, "logs", "vz-shim.log")
+	shimConfig.RestoreMachineStatePath = restorePath
 
-	shimConfig := shimconfig.ShimConfig{
+	return s.startShim(ctx, p, version, shimConfig, 90*time.Second)
+}
+
+func buildShimConfigFromVMConfig(config hypervisor.VMConfig, socketPath string) shimconfig.ShimConfig {
+	instanceDir := filepath.Dir(socketPath)
+	cfg := shimconfig.ShimConfig{
 		VCPUs:         config.VCPUs,
 		MemoryBytes:   config.MemoryBytes,
 		SerialLogPath: config.SerialLogPath,
 		KernelPath:    config.KernelPath,
 		InitrdPath:    config.InitrdPath,
 		KernelArgs:    config.KernelArgs,
-		ControlSocket: controlSocket,
-		VsockSocket:   vsockSocket,
-		LogPath:       logPath,
+		ControlSocket: socketPath,
+		VsockSocket:   filepath.Join(instanceDir, "vz.vsock"),
+		LogPath:       filepath.Join(instanceDir, "logs", "vz-shim.log"),
 	}
-
 	for _, disk := range config.Disks {
-		shimConfig.Disks = append(shimConfig.Disks, shimconfig.DiskConfig{
+		cfg.Disks = append(cfg.Disks, shimconfig.DiskConfig{
 			Path:     disk.Path,
 			Readonly: disk.Readonly,
 		})
 	}
-
 	for _, net := range config.Networks {
-		shimConfig.Networks = append(shimConfig.Networks, shimconfig.NetworkConfig{
+		cfg.Networks = append(cfg.Networks, shimconfig.NetworkConfig{
 			MAC: net.MAC,
 		})
 	}
+	return cfg
+}
+
+func (s *Starter) startShim(ctx context.Context, p *paths.Paths, version string, shimConfig shimconfig.ShimConfig, timeout time.Duration) (int, hypervisor.Hypervisor, error) {
+	log := logger.FromContext(ctx)
 
 	configJSON, err := json.Marshal(shimConfig)
 	if err != nil {
@@ -172,17 +213,21 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 	}
 
 	pid := cmd.Process.Pid
-	log.InfoContext(ctx, "vz-shim started", "pid", pid, "control_socket", controlSocket)
+	log.InfoContext(ctx, "vz-shim started",
+		"pid", pid,
+		"control_socket", shimConfig.ControlSocket,
+		"restore_machine_state_path", shimConfig.RestoreMachineStatePath,
+	)
 
 	// Wait for shim in a goroutine so we can detect early exit
 	waitDone := make(chan error, 1)
 	go func() { waitDone <- cmd.Wait() }()
 
-	client, err := s.waitForShim(ctx, controlSocket, 30*time.Second)
+	client, err := s.waitForShim(ctx, shimConfig.ControlSocket, timeout)
 	if err != nil {
 		// Read shim log file for diagnostics (before instance dir cleanup deletes it)
 		shimLog := ""
-		if logData, readErr := os.ReadFile(logPath); readErr == nil && len(logData) > 0 {
+		if logData, readErr := os.ReadFile(shimConfig.LogPath); readErr == nil && len(logData) > 0 {
 			shimLog = string(logData)
 		}
 
@@ -210,11 +255,6 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 	}
 
 	return pid, client, nil
-}
-
-// RestoreVM is not supported by vz (Virtualization.framework cannot restore Linux guests).
-func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string, socketPath string, snapshotPath string) (int, hypervisor.Hypervisor, error) {
-	return 0, nil, hypervisor.ErrNotSupported
 }
 
 func (s *Starter) waitForShim(ctx context.Context, socketPath string, timeout time.Duration) (*Client, error) {

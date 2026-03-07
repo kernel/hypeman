@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nrednav/cuid2"
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/paths"
+	"github.com/nrednav/cuid2"
 )
 
 // InstanceLivenessChecker provides a way to check if an instance is running.

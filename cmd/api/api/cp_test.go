@@ -17,6 +17,7 @@ import (
 )
 
 func TestCpToAndFromInstance(t *testing.T) {
+	t.Parallel()
 	// Require KVM access for VM creation
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Skip("/dev/kvm not available, skipping on this platform")
@@ -156,6 +157,7 @@ func TestCpToAndFromInstance(t *testing.T) {
 }
 
 func TestCpDirectoryToInstance(t *testing.T) {
+	t.Parallel()
 	// Require KVM access for VM creation
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Skip("/dev/kvm not available, skipping on this platform")

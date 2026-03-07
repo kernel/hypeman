@@ -11,6 +11,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/empty"
 	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/kernel/hypeman/lib/paths"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -228,10 +229,10 @@ func TestDeleteImage(t *testing.T) {
 	_, err = mgr.GetImage(ctx, created.Name)
 	require.ErrorIs(t, err, ErrNotFound)
 
-	// But digest directory should still exist
+	// Digest directory should also be deleted (no orphaned digests)
 	digestDir := digestPath(paths.New(dataDir), ref.Repository(), digestHex)
 	_, err = os.Stat(digestDir)
-	require.NoError(t, err)
+	require.True(t, os.IsNotExist(err), "digest directory should be deleted when orphaned")
 }
 
 func TestDeleteImageNotFound(t *testing.T) {
@@ -243,6 +244,60 @@ func TestDeleteImageNotFound(t *testing.T) {
 
 	err = mgr.DeleteImage(ctx, "nonexistent:latest")
 	require.ErrorIs(t, err, ErrNotFound)
+}
+
+func TestDeleteImagePreservesSharedDigest(t *testing.T) {
+	dataDir := t.TempDir()
+	p := paths.New(dataDir)
+	mgr, err := NewManager(p, 1, nil)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	req := CreateImageRequest{
+		Name: "docker.io/library/alpine:latest",
+	}
+
+	created, err := mgr.CreateImage(ctx, req)
+	require.NoError(t, err)
+
+	waitForReady(t, mgr, ctx, created.Name)
+
+	// Get the digest
+	img, err := mgr.GetImage(ctx, created.Name)
+	require.NoError(t, err)
+	ref, err := ParseNormalizedRef(img.Name)
+	require.NoError(t, err)
+	digestHex := strings.SplitN(img.Digest, ":", 2)[1]
+
+	// Create a second tag pointing to the same digest
+	err = createTagSymlink(p, ref.Repository(), "v1.0", digestHex)
+	require.NoError(t, err)
+
+	// Delete the first tag
+	err = mgr.DeleteImage(ctx, created.Name)
+	require.NoError(t, err)
+
+	// First tag should be gone
+	_, err = mgr.GetImage(ctx, created.Name)
+	require.ErrorIs(t, err, ErrNotFound)
+
+	// Digest directory should still exist (shared by v1.0 tag)
+	digestDir := digestPath(p, ref.Repository(), digestHex)
+	_, err = os.Stat(digestDir)
+	require.NoError(t, err, "digest directory should be preserved when other tags reference it")
+
+	// Second tag should still work
+	img2, err := mgr.GetImage(ctx, "docker.io/library/alpine:v1.0")
+	require.NoError(t, err)
+	assert.Equal(t, img.Digest, img2.Digest)
+
+	// Now delete the second tag
+	err = mgr.DeleteImage(ctx, "docker.io/library/alpine:v1.0")
+	require.NoError(t, err)
+
+	// Now the digest directory should be deleted
+	_, err = os.Stat(digestDir)
+	require.True(t, os.IsNotExist(err), "digest directory should be deleted when last tag is removed")
 }
 
 func TestNormalizedRefParsing(t *testing.T) {

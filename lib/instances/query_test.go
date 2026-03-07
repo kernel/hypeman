@@ -8,10 +8,11 @@ import (
 )
 
 func TestParseExitSentinelLine(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
-		name    string
-		line    string
-		wantOK  bool
+		name     string
+		line     string
+		wantOK   bool
 		wantCode int
 		wantMsg  string
 	}{

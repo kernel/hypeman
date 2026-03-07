@@ -40,6 +40,7 @@ func execWithRetry(ctx context.Context, inst *Instance, command []string) (strin
 // 3. Attached read-only to multiple instances simultaneously
 // 4. Data persists and is readable from all instances
 func TestVolumeMultiAttachReadOnly(t *testing.T) {
+	t.Parallel()
 	// Require KVM
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Skip("/dev/kvm not available, skipping on this platform")
@@ -225,6 +226,7 @@ func TestVolumeMultiAttachReadOnly(t *testing.T) {
 // TestOverlayDiskCleanupOnDelete verifies that vol-overlays/ directory is removed
 // when an instance with overlay volumes is deleted.
 func TestOverlayDiskCleanupOnDelete(t *testing.T) {
+	t.Parallel()
 	// Skip in short mode - this is an integration test
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -336,6 +338,7 @@ func createTestTarGz(t *testing.T, files map[string][]byte) *bytes.Buffer {
 // TestVolumeFromArchive tests that a volume can be created from a tar.gz archive
 // and the files are accessible when mounted to an instance
 func TestVolumeFromArchive(t *testing.T) {
+	t.Parallel()
 	// Require KVM
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Skip("/dev/kvm not available, skipping on this platform")
