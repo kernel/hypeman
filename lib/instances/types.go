@@ -201,8 +201,9 @@ type ListSnapshotsFilter = snapshot.ListSnapshotsFilter
 
 // CreateSnapshotRequest is the domain request for creating a snapshot.
 type CreateSnapshotRequest struct {
-	Kind SnapshotKind // Required: Standby or Stopped
-	Name string       // Optional: unique per source instance
+	Kind     SnapshotKind      // Required: Standby or Stopped
+	Name     string            // Optional: unique per source instance
+	Metadata map[string]string // Optional user-defined key-value metadata
 }
 
 // RestoreSnapshotRequest is the domain request for restoring a snapshot in-place.

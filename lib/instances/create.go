@@ -13,6 +13,7 @@ import (
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/network"
 	"github.com/kernel/hypeman/lib/system"
+	"github.com/kernel/hypeman/lib/tags"
 	"github.com/kernel/hypeman/lib/volumes"
 	"github.com/nrednav/cuid2"
 	"go.opentelemetry.io/otel/attribute"
@@ -293,7 +294,7 @@ func (m *manager) createInstance(
 		NetworkBandwidthUpload:   req.NetworkBandwidthUpload,   // Will be set by caller if using resource manager
 		DiskIOBps:                req.DiskIOBps,                // Will be set by caller if using resource manager
 		Env:                      req.Env,
-		Metadata:                 req.Metadata,
+		Metadata:                 tags.Clone(req.Metadata),
 		NetworkEnabled:           req.NetworkEnabled,
 		CreatedAt:                time.Now(),
 		StartedAt:                nil,
@@ -465,6 +466,9 @@ func validateCreateRequest(req CreateInstanceRequest) error {
 	}
 	if req.Vcpus < 0 {
 		return fmt.Errorf("vcpus cannot be negative")
+	}
+	if err := tags.Validate(req.Metadata); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidRequest, err)
 	}
 
 	// Validate volume attachments

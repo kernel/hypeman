@@ -13,6 +13,7 @@ import (
 	"github.com/kernel/hypeman/lib/dns"
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/paths"
+	"github.com/kernel/hypeman/lib/tags"
 	"github.com/nrednav/cuid2"
 )
 
@@ -350,6 +351,7 @@ func (m *manager) Create(ctx context.Context, req CreateIngressRequest) (*Ingres
 	ingress := Ingress{
 		ID:        id,
 		Name:      req.Name,
+		Metadata:  tags.Clone(req.Metadata),
 		Rules:     req.Rules,
 		CreatedAt: time.Now().UTC(),
 	}
@@ -375,6 +377,7 @@ func (m *manager) Create(ctx context.Context, req CreateIngressRequest) (*Ingres
 	stored := &storedIngress{
 		ID:        ingress.ID,
 		Name:      ingress.Name,
+		Metadata:  tags.Clone(ingress.Metadata),
 		Rules:     ingress.Rules,
 		CreatedAt: ingress.CreatedAt.Format(time.RFC3339),
 	}
@@ -622,6 +625,7 @@ func storedToIngress(stored *storedIngress) *Ingress {
 	return &Ingress{
 		ID:        stored.ID,
 		Name:      stored.Name,
+		Metadata:  tags.Clone(stored.Metadata),
 		Rules:     stored.Rules,
 		CreatedAt: createdAt,
 	}

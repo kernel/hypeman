@@ -29,8 +29,9 @@ func (s *ApiService) CreateInstanceSnapshot(ctx context.Context, request oapi.Cr
 	}
 
 	result, err := s.InstanceManager.CreateSnapshot(ctx, inst.Id, instances.CreateSnapshotRequest{
-		Kind: instances.SnapshotKind(request.Body.Kind),
-		Name: name,
+		Kind:     instances.SnapshotKind(request.Body.Kind),
+		Name:     name,
+		Metadata: toMapMetadata(request.Body.Metadata),
 	})
 	if err != nil {
 		log := logger.FromContext(ctx)
@@ -104,7 +105,10 @@ func (s *ApiService) ListSnapshots(ctx context.Context, request oapi.ListSnapsho
 	if request.Params.Name != nil {
 		filter.Name = request.Params.Name
 	}
-	if filter.SourceInstanceID == nil && filter.Kind == nil && filter.Name == nil {
+	if request.Params.Metadata != nil {
+		filter.Metadata = toMapMetadata(request.Params.Metadata)
+	}
+	if filter.SourceInstanceID == nil && filter.Kind == nil && filter.Name == nil && len(filter.Metadata) == 0 {
 		filter = nil
 	}
 
@@ -195,6 +199,7 @@ func snapshotToOAPI(snapshot instances.Snapshot) oapi.Snapshot {
 	out := oapi.Snapshot{
 		Id:                 snapshot.Id,
 		Kind:               kind,
+		Metadata:           toOAPIMetadata(snapshot.Metadata),
 		SourceInstanceId:   snapshot.SourceInstanceID,
 		SourceInstanceName: snapshot.SourceName,
 		SourceHypervisor:   sourceHypervisor,

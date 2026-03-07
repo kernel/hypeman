@@ -10,6 +10,7 @@ import (
 
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/paths"
+	"github.com/kernel/hypeman/lib/tags"
 	"github.com/nrednav/cuid2"
 	"go.opentelemetry.io/otel/metric"
 )
@@ -110,6 +111,9 @@ func (m *manager) calculateTotalVolumeStorage(ctx context.Context) (int64, error
 // CreateVolume creates a new volume
 func (m *manager) CreateVolume(ctx context.Context, req CreateVolumeRequest) (*Volume, error) {
 	start := time.Now()
+	if err := tags.Validate(req.Metadata); err != nil {
+		return nil, err
+	}
 
 	// Generate or use provided ID
 	id := cuid2.Generate()
@@ -154,6 +158,7 @@ func (m *manager) CreateVolume(ctx context.Context, req CreateVolumeRequest) (*V
 		Id:        id,
 		Name:      req.Name,
 		SizeGb:    req.SizeGb,
+		Metadata:  tags.Clone(req.Metadata),
 		CreatedAt: now.Format(time.RFC3339),
 	}
 
@@ -172,6 +177,9 @@ func (m *manager) CreateVolume(ctx context.Context, req CreateVolumeRequest) (*V
 // The archive is safely extracted with size limits to prevent tar bombs.
 func (m *manager) CreateVolumeFromArchive(ctx context.Context, req CreateVolumeFromArchiveRequest, archive io.Reader) (*Volume, error) {
 	start := time.Now()
+	if err := tags.Validate(req.Metadata); err != nil {
+		return nil, err
+	}
 
 	// Generate or use provided ID
 	id := cuid2.Generate()
@@ -236,6 +244,7 @@ func (m *manager) CreateVolumeFromArchive(ctx context.Context, req CreateVolumeF
 		Id:        id,
 		Name:      req.Name,
 		SizeGb:    actualSizeGb,
+		Metadata:  tags.Clone(req.Metadata),
 		CreatedAt: now.Format(time.RFC3339),
 	}
 
@@ -420,6 +429,7 @@ func (m *manager) metadataToVolume(meta *storedMetadata) *Volume {
 		Id:          meta.Id,
 		Name:        meta.Name,
 		SizeGb:      meta.SizeGb,
+		Metadata:    tags.Clone(meta.Metadata),
 		CreatedAt:   createdAt,
 		Attachments: attachments,
 	}

@@ -8,6 +8,7 @@ import (
 	"github.com/kernel/hypeman/lib/logger"
 	mw "github.com/kernel/hypeman/lib/middleware"
 	"github.com/kernel/hypeman/lib/oapi"
+	"github.com/kernel/hypeman/lib/tags"
 )
 
 func (s *ApiService) ListImages(ctx context.Context, request oapi.ListImagesRequestObject) (oapi.ListImagesResponseObject, error) {
@@ -22,11 +23,13 @@ func (s *ApiService) ListImages(ctx context.Context, request oapi.ListImagesRequ
 		}, nil
 	}
 
-	oapiImages := make([]oapi.Image, len(domainImages))
-	for i, img := range domainImages {
-		oapiImages[i] = imageToOAPI(img)
+	oapiImages := make([]oapi.Image, 0, len(domainImages))
+	for _, img := range domainImages {
+		if !matchesMetadataFilter(img.Metadata, request.Params.Metadata) {
+			continue
+		}
+		oapiImages = append(oapiImages, imageToOAPI(img))
 	}
-
 	return oapi.ListImages200JSONResponse(oapiImages), nil
 }
 
@@ -34,12 +37,18 @@ func (s *ApiService) CreateImage(ctx context.Context, request oapi.CreateImageRe
 	log := logger.FromContext(ctx)
 
 	domainReq := images.CreateImageRequest{
-		Name: request.Body.Name,
+		Name:     request.Body.Name,
+		Metadata: toMapMetadata(request.Body.Metadata),
 	}
 
 	img, err := s.ImageManager.CreateImage(ctx, domainReq)
 	if err != nil {
 		switch {
+		case errors.Is(err, tags.ErrInvalidMetadata):
+			return oapi.CreateImage400JSONResponse{
+				Code:    "invalid_request",
+				Message: err.Error(),
+			}, nil
 		case errors.Is(err, images.ErrInvalidName):
 			return oapi.CreateImage400JSONResponse{
 				Code:    "invalid_name",
@@ -116,6 +125,9 @@ func imageToOAPI(img images.Image) oapi.Image {
 	}
 	if len(img.Env) > 0 {
 		oapiImg.Env = &img.Env
+	}
+	if len(img.Metadata) > 0 {
+		oapiImg.Metadata = toOAPIMetadata(img.Metadata)
 	}
 	if img.WorkingDir != "" {
 		oapiImg.WorkingDir = &img.WorkingDir

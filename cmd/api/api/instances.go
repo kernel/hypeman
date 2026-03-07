@@ -34,7 +34,7 @@ func (s *ApiService) ListInstances(ctx context.Context, request oapi.ListInstanc
 			filter.State = &state
 		}
 		if request.Params.Metadata != nil {
-			filter.Metadata = *request.Params.Metadata
+			filter.Metadata = toMapMetadata(request.Params.Metadata)
 		}
 	}
 
@@ -127,7 +127,7 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 
 	metadata := make(map[string]string)
 	if request.Body.Metadata != nil {
-		metadata = *request.Body.Metadata
+		metadata = toMapMetadata(request.Body.Metadata)
 	}
 
 	// Parse network enabled (default: true)
@@ -286,6 +286,11 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		case errors.Is(err, instances.ErrInsufficientResources):
 			return oapi.CreateInstance409JSONResponse{
 				Code:    "insufficient_resources",
+				Message: err.Error(),
+			}, nil
+		case errors.Is(err, instances.ErrInvalidRequest):
+			return oapi.CreateInstance400JSONResponse{
+				Code:    "invalid_request",
 				Message: err.Error(),
 			}, nil
 		default:
@@ -849,7 +854,7 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 	}
 
 	if len(inst.Metadata) > 0 {
-		oapiInst.Metadata = &inst.Metadata
+		oapiInst.Metadata = toOAPIMetadata(inst.Metadata)
 	}
 
 	// Convert volume attachments

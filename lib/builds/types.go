@@ -19,18 +19,19 @@ const (
 
 // Build represents a source-to-image build job
 type Build struct {
-	ID                string           `json:"id"`
-	Status            string           `json:"status"`
-	QueuePosition     *int             `json:"queue_position,omitempty"`
-	ImageDigest       *string          `json:"image_digest,omitempty"`
-	ImageRef          *string          `json:"image_ref,omitempty"`
-	Error             *string          `json:"error,omitempty"`
-	Provenance        *BuildProvenance `json:"provenance,omitempty"`
-	CreatedAt         time.Time        `json:"created_at"`
-	StartedAt         *time.Time       `json:"started_at,omitempty"`
-	CompletedAt       *time.Time       `json:"completed_at,omitempty"`
-	DurationMS        *int64           `json:"duration_ms,omitempty"`
-	BuilderInstanceID *string          `json:"builder_instance_id,omitempty"`
+	ID                string            `json:"id"`
+	Status            string            `json:"status"`
+	Metadata          map[string]string `json:"metadata,omitempty"`
+	QueuePosition     *int              `json:"queue_position,omitempty"`
+	ImageDigest       *string           `json:"image_digest,omitempty"`
+	ImageRef          *string           `json:"image_ref,omitempty"`
+	Error             *string           `json:"error,omitempty"`
+	Provenance        *BuildProvenance  `json:"provenance,omitempty"`
+	CreatedAt         time.Time         `json:"created_at"`
+	StartedAt         *time.Time        `json:"started_at,omitempty"`
+	CompletedAt       *time.Time        `json:"completed_at,omitempty"`
+	DurationMS        *int64            `json:"duration_ms,omitempty"`
+	BuilderInstanceID *string           `json:"builder_instance_id,omitempty"`
 }
 
 // CreateBuildRequest represents a request to create a new build
@@ -69,6 +70,9 @@ type CreateBuildRequest struct {
 	// ImageName optionally sets a custom image name for the build output.
 	// When set, the image is pushed to {registry}/{image_name} instead of {registry}/builds/{id}.
 	ImageName string `json:"image_name,omitempty"`
+
+	// Metadata is optional user-defined key-value metadata for the build resource.
+	Metadata map[string]string `json:"metadata,omitempty"`
 }
 
 // BuildPolicy defines resource limits and network policy for a build

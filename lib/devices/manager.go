@@ -12,6 +12,7 @@ import (
 
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/paths"
+	"github.com/kernel/hypeman/lib/tags"
 	"github.com/nrednav/cuid2"
 )
 
@@ -140,6 +141,9 @@ func (m *manager) ListAvailableDevices(ctx context.Context) ([]AvailableDevice, 
 
 func (m *manager) CreateDevice(ctx context.Context, req CreateDeviceRequest) (*Device, error) {
 	log := logger.FromContext(ctx)
+	if err := tags.Validate(req.Metadata); err != nil {
+		return nil, err
+	}
 
 	// Validate PCI address format (required)
 	if !ValidatePCIAddress(req.PCIAddress) {
@@ -185,6 +189,7 @@ func (m *manager) CreateDevice(ctx context.Context, req CreateDeviceRequest) (*D
 		Id:          id,
 		Name:        name,
 		Type:        DetermineDeviceType(deviceInfo),
+		Metadata:    tags.Clone(req.Metadata),
 		PCIAddress:  req.PCIAddress,
 		VendorID:    deviceInfo.VendorID,
 		DeviceID:    deviceInfo.DeviceID,

@@ -27,6 +27,7 @@ type storedMetadata struct {
 	Id          string             `json:"id"`
 	Name        string             `json:"name"`
 	SizeGb      int                `json:"size_gb"`
+	Metadata    map[string]string  `json:"metadata,omitempty"`
 	CreatedAt   string             `json:"created_at"` // RFC3339 format
 	Attachments []storedAttachment `json:"attachments,omitempty"`
 }
