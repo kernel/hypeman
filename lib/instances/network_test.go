@@ -258,9 +258,13 @@ func TestDockerForwardChainRestored(t *testing.T) {
 		}
 	})
 
-	// Simulate the hypervisor flush: delete the jump.
-	delJump := exec.Command("iptables", "-D", "FORWARD", "-j", "DOCKER-FORWARD")
-	require.NoError(t, delJump.Run(), "should be able to delete DOCKER-FORWARD jump")
+	// Simulate the hypervisor flush: remove every jump.
+	for {
+		delJump := exec.Command("iptables", "-D", "FORWARD", "-j", "DOCKER-FORWARD")
+		if err := delJump.Run(); err != nil {
+			break
+		}
+	}
 
 	// Confirm it's gone.
 	checkGone := exec.Command("iptables", "-C", "FORWARD", "-j", "DOCKER-FORWARD")

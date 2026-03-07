@@ -65,7 +65,7 @@ func NewVMM(socketPath string) (*VMM, error) {
 
 	httpClient := &http.Client{
 		Transport: &metricsRoundTripper{base: transport},
-		Timeout:   30 * time.Second,
+		Timeout:   120 * time.Second,
 	}
 
 	client, err := NewClientWithResponses("http://localhost/api/v1",

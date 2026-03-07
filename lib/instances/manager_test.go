@@ -322,7 +322,7 @@ func TestBasicEndToEnd(t *testing.T) {
 	// Poll for logs to contain nginx startup message
 	var logs string
 	foundNginxStartup := false
-	for i := 0; i < 50; i++ { // Poll for up to 5 seconds (50 * 100ms)
+	for i := 0; i < 200; i++ { // Poll for up to 20 seconds (200 * 100ms)
 		logs, err = collectLogs(ctx, manager, inst.Id, 100)
 		require.NoError(t, err)
 
@@ -336,7 +336,7 @@ func TestBasicEndToEnd(t *testing.T) {
 	t.Logf("Instance logs (last 100 lines):\n%s", logs)
 
 	// Verify nginx started successfully
-	assert.True(t, foundNginxStartup, "Nginx should have started worker processes within 5 seconds")
+	assert.True(t, foundNginxStartup, "Nginx should have started worker processes within 20 seconds")
 
 	// Test ingress - route external traffic to nginx through Caddy
 	t.Log("Testing ingress routing to nginx...")

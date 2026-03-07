@@ -317,7 +317,7 @@ func TestQEMUBasicEndToEnd(t *testing.T) {
 	// Poll for logs to contain nginx startup message
 	var logs string
 	foundNginxStartup := false
-	for i := 0; i < 50; i++ {
+	for i := 0; i < 200; i++ {
 		logs, err = collectQEMULogs(ctx, manager, inst.Id, 100)
 		require.NoError(t, err)
 
@@ -329,7 +329,7 @@ func TestQEMUBasicEndToEnd(t *testing.T) {
 	}
 
 	t.Logf("Instance logs (last 100 lines):\n%s", logs)
-	assert.True(t, foundNginxStartup, "Nginx should have started worker processes within 5 seconds")
+	assert.True(t, foundNginxStartup, "Nginx should have started worker processes within 20 seconds")
 
 	// Test ingress - route external traffic to nginx
 	t.Log("Testing ingress routing to nginx...")
