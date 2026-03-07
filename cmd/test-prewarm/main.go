@@ -17,11 +17,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/kernel/hypeman/lib/hypervisor/firecracker"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/kernel/hypeman/lib/system"
-	"github.com/kernel/hypeman/lib/vmm"
 )
 
 const (
@@ -109,16 +107,9 @@ func main() {
 		fatalf("prewarm system files: %v", err)
 	}
 
-	chBinaries := 0
-	for _, version := range vmm.SupportedVersions {
-		if _, err := vmm.GetBinaryPath(p, version); err != nil {
-			fatalf("prewarm cloud-hypervisor binary %s: %v", version, err)
-		}
-		chBinaries++
-	}
-	fcPath, err := firecracker.NewStarter().GetBinaryPath(p, "")
+	chBinaries, fcPath, err := ensureHypervisorBinaries(p)
 	if err != nil {
-		fatalf("prewarm firecracker binary: %v", err)
+		fatalf("prewarm hypervisor binaries: %v", err)
 	}
 
 	initrdPath, err := systemMgr.GetInitrdPath()
