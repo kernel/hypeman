@@ -101,6 +101,7 @@ func prepareIntegrationTestDataDir(t *testing.T, tmpDir string) {
 	}
 	linkSubdir(t, srcSystemDir, dstSystemDir, "kernel")
 	linkSubdir(t, srcSystemDir, dstSystemDir, "initrd")
+	linkSubdir(t, srcSystemDir, dstSystemDir, "binaries")
 
 	prewarmLogOnce.Do(func() {
 		t.Logf("using prewarmed test cache dir=%s registry=%s", prewarmDir, os.Getenv(testRegistryEnv))

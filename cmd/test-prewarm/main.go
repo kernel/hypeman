@@ -17,9 +17,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/kernel/hypeman/lib/hypervisor/firecracker"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/kernel/hypeman/lib/system"
+	"github.com/kernel/hypeman/lib/vmm"
 )
 
 const (
@@ -50,6 +52,8 @@ type prewarmManifest struct {
 		Arch          string `json:"arch"`
 		InitrdPath    string `json:"initrd_path"`
 		InitrdHash    string `json:"initrd_hash"`
+		CHBinaries    int    `json:"ch_binaries"`
+		FCBinaryPath  string `json:"fc_binary_path"`
 	} `json:"system"`
 }
 
@@ -104,6 +108,19 @@ func main() {
 	if err := systemMgr.EnsureSystemFiles(ctx); err != nil {
 		fatalf("prewarm system files: %v", err)
 	}
+
+	chBinaries := 0
+	for _, version := range vmm.SupportedVersions {
+		if _, err := vmm.GetBinaryPath(p, version); err != nil {
+			fatalf("prewarm cloud-hypervisor binary %s: %v", version, err)
+		}
+		chBinaries++
+	}
+	fcPath, err := firecracker.NewStarter().GetBinaryPath(p, "")
+	if err != nil {
+		fatalf("prewarm firecracker binary: %v", err)
+	}
+
 	initrdPath, err := systemMgr.GetInitrdPath()
 	if err != nil {
 		fatalf("get initrd path: %v", err)
@@ -117,6 +134,8 @@ func main() {
 	manifest.System.Arch = system.GetArch()
 	manifest.System.InitrdPath = initrdPath
 	manifest.System.InitrdHash = initrdHash
+	manifest.System.CHBinaries = chBinaries
+	manifest.System.FCBinaryPath = fcPath
 
 	manifestPath := filepath.Join(prewarmDir, "prewarm-manifest.json")
 	if err := writeJSON(manifestPath, manifest); err != nil {
