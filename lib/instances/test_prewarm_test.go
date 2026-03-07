@@ -3,6 +3,7 @@ package instances
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -99,21 +100,21 @@ func prepareIntegrationTestDataDir(t *testing.T, tmpDir string) {
 	if err := os.MkdirAll(dstSystemDir, 0755); err != nil {
 		t.Fatalf("mkdir %s: %v", dstSystemDir, err)
 	}
-	linkSubdir(t, srcSystemDir, dstSystemDir, "kernel")
-	linkSubdir(t, srcSystemDir, dstSystemDir, "initrd")
-	linkSubdir(t, srcSystemDir, dstSystemDir, "binaries")
+	linkSubdir(t, srcSystemDir, dstSystemDir, "kernel", true)
+	linkSubdir(t, srcSystemDir, dstSystemDir, "initrd", true)
+	linkSubdir(t, srcSystemDir, dstSystemDir, "binaries", runtime.GOOS == "linux")
 
 	prewarmLogOnce.Do(func() {
 		t.Logf("using prewarmed test cache dir=%s registry=%s", prewarmDir, os.Getenv(testRegistryEnv))
 	})
 }
 
-func linkSubdir(t *testing.T, srcSystemDir, dstSystemDir, subdir string) {
+func linkSubdir(t *testing.T, srcSystemDir, dstSystemDir, subdir string, required bool) {
 	t.Helper()
 
 	src := filepath.Join(srcSystemDir, subdir)
 	if _, err := os.Stat(src); err != nil {
-		if isTestPrewarmStrict() {
+		if required && isTestPrewarmStrict() {
 			t.Fatalf("prewarm system subdir missing at %s: %v", src, err)
 		}
 		return
