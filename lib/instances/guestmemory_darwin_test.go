@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kernel/hypeman/lib/guestmemory"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/stretchr/testify/assert"
@@ -31,6 +32,7 @@ func TestGuestMemoryPolicyVZ(t *testing.T) {
 	}
 
 	mgr, tmpDir := setupVZTestManager(t)
+	forceEnableGuestMemoryPolicyForVZTest(mgr)
 	ctx := context.Background()
 
 	createNginxImageAndWaitDarwin(t, ctx, mgr.imageManager)
@@ -67,6 +69,15 @@ func TestGuestMemoryPolicyVZ(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, instMeta.HypervisorPID)
 	assertLowIdleVZHostMemoryFootprint(t, *instMeta.HypervisorPID, 192*1024)
+}
+
+func forceEnableGuestMemoryPolicyForVZTest(mgr *manager) {
+	mgr.guestMemoryPolicy = guestmemory.Policy{
+		Enabled:            true,
+		KernelPageInitMode: guestmemory.KernelPageInitPerformance,
+		ReclaimEnabled:     true,
+		VZBalloonRequired:  true,
+	}.Normalize()
 }
 
 func createNginxImageAndWaitDarwin(t *testing.T, ctx context.Context, imageManager images.Manager) {

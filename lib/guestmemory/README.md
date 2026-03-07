@@ -13,6 +13,28 @@ The guest kernel page-init mode controls whether Linux eagerly touches pages:
 - `performance` mode sets `init_on_alloc=0 init_on_free=0` for better density and lower memory churn.
 - `hardened` mode sets `init_on_alloc=1 init_on_free=1` for stronger memory hygiene at some density/perf cost.
 
+## Configuration
+
+This feature is controlled by `hypervisor.memory` in server config and is default-off:
+
+```yaml
+hypervisor:
+  memory:
+    enabled: false
+    kernel_page_init_mode: hardened
+    reclaim_enabled: true
+    vz_balloon_required: true
+```
+
+To enable reclaim behavior and density-oriented kernel args, set:
+
+```yaml
+hypervisor:
+  memory:
+    enabled: true
+    kernel_page_init_mode: performance
+```
+
 ## Runtime Flow
 
 - Operator config (`hypervisor.memory`) is normalized into one policy.

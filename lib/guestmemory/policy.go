@@ -27,11 +27,11 @@ type Features struct {
 	RequireBalloon    bool
 }
 
-// DefaultPolicy returns default policy values for density-first environments.
+// DefaultPolicy returns conservative defaults (disabled reclaim, hardened page-init mode).
 func DefaultPolicy() Policy {
 	return Policy{
-		Enabled:            true,
-		KernelPageInitMode: KernelPageInitPerformance,
+		Enabled:            false,
+		KernelPageInitMode: KernelPageInitHardened,
 		ReclaimEnabled:     true,
 		VZBalloonRequired:  true,
 	}

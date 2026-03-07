@@ -35,8 +35,8 @@ port: "8080"
 hypervisor:
   default: vz
   memory:
-    enabled: true
-    kernel_page_init_mode: performance
+    enabled: false
+    kernel_page_init_mode: hardened
     reclaim_enabled: true
     vz_balloon_required: true
 

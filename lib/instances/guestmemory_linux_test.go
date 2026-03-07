@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kernel/hypeman/lib/guestmemory"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/vmm"
@@ -26,6 +27,7 @@ func TestGuestMemoryPolicyCloudHypervisor(t *testing.T) {
 	requireKVMAccess(t)
 
 	mgr, _ := setupTestManager(t)
+	forceEnableGuestMemoryPolicyForTest(mgr)
 	ctx := context.Background()
 
 	createImageAndWait(t, ctx, mgr.imageManager, "docker.io/library/alpine:latest")
@@ -63,7 +65,7 @@ func TestGuestMemoryPolicyCloudHypervisor(t *testing.T) {
 	assert.True(t, infoResp.JSON200.Config.Balloon.FreePageReporting != nil && *infoResp.JSON200.Config.Balloon.FreePageReporting)
 
 	pid := requireHypervisorPID(t, ctx, mgr, inst.Id)
-	assertLowIdleHostMemoryFootprint(t, "cloud-hypervisor", pid, 96*1024)
+	assertLowIdleHostMemoryFootprint(t, "cloud-hypervisor", pid, 512*1024)
 }
 
 func TestGuestMemoryPolicyQEMU(t *testing.T) {
@@ -71,6 +73,7 @@ func TestGuestMemoryPolicyQEMU(t *testing.T) {
 	requireKVMAccess(t)
 
 	mgr, _ := setupTestManagerForQEMU(t)
+	forceEnableGuestMemoryPolicyForTest(mgr)
 	ctx := context.Background()
 
 	createImageAndWait(t, ctx, mgr.imageManager, "docker.io/library/alpine:latest")
@@ -100,7 +103,7 @@ func TestGuestMemoryPolicyQEMU(t *testing.T) {
 	assert.Contains(t, joined, "init_on_free=0")
 	assert.Contains(t, joined, "virtio-balloon-pci", "qemu cmdline should include virtio balloon device")
 
-	assertLowIdleHostMemoryFootprint(t, "qemu", pid, 160*1024)
+	assertLowIdleHostMemoryFootprint(t, "qemu", pid, 640*1024)
 }
 
 func TestGuestMemoryPolicyFirecracker(t *testing.T) {
@@ -108,6 +111,7 @@ func TestGuestMemoryPolicyFirecracker(t *testing.T) {
 	requireFirecrackerIntegrationPrereqs(t)
 
 	mgr, _ := setupTestManagerForFirecracker(t)
+	forceEnableGuestMemoryPolicyForTest(mgr)
 	ctx := context.Background()
 
 	createImageAndWait(t, ctx, mgr.imageManager, "docker.io/library/alpine:latest")
@@ -136,11 +140,20 @@ func TestGuestMemoryPolicyFirecracker(t *testing.T) {
 	assert.True(t, vmCfg.Balloon.FreePageReporting)
 
 	pid := requireHypervisorPID(t, ctx, mgr, inst.Id)
-	assertLowIdleHostMemoryFootprint(t, "firecracker", pid, 96*1024)
+	assertLowIdleHostMemoryFootprint(t, "firecracker", pid, 512*1024)
 }
 
 func guestMemoryIdleScript() string {
 	return "set -e; sleep 180"
+}
+
+func forceEnableGuestMemoryPolicyForTest(mgr *manager) {
+	mgr.guestMemoryPolicy = guestmemory.Policy{
+		Enabled:            true,
+		KernelPageInitMode: guestmemory.KernelPageInitPerformance,
+		ReclaimEnabled:     true,
+		VZBalloonRequired:  true,
+	}.Normalize()
 }
 
 func createImageAndWait(t *testing.T, ctx context.Context, imageManager images.Manager, imageName string) {

@@ -310,8 +310,8 @@ func defaultConfig() *Config {
 			Default:               "cloud-hypervisor",
 			FirecrackerBinaryPath: "",
 			Memory: HypervisorMemoryConfig{
-				Enabled:            true,
-				KernelPageInitMode: "performance",
+				Enabled:            false,
+				KernelPageInitMode: "hardened",
 				ReclaimEnabled:     true,
 				VZBalloonRequired:  true,
 			},
