@@ -32,6 +32,7 @@ var binaryFS embed.FS
 var (
 	customBinaryPathMu sync.RWMutex
 	customBinaryPath   string
+	extractBinaryMu    sync.Mutex
 )
 
 var versionRegex = regexp.MustCompile(`v?\d+\.\d+\.\d+`)
@@ -90,6 +91,14 @@ func extractBinary(p *paths.Paths, version Version) (string, error) {
 		return extractPath, nil
 	}
 
+	extractBinaryMu.Lock()
+	defer extractBinaryMu.Unlock()
+
+	// Another goroutine may have already extracted the binary while we waited.
+	if err := validateExecutable(extractPath); err == nil {
+		return extractPath, nil
+	}
+
 	data, err := binaryFS.ReadFile(embeddedPath)
 	if err != nil {
 		return "", fmt.Errorf("embedded firecracker binary not found at %s (run `make download-firecracker-binaries` or set hypervisor.firecracker_binary_path): %w", embeddedPath, err)
@@ -98,9 +107,35 @@ func extractBinary(p *paths.Paths, version Version) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(extractPath), 0755); err != nil {
 		return "", fmt.Errorf("create firecracker binary directory: %w", err)
 	}
-	if err := os.WriteFile(extractPath, data, 0755); err != nil {
-		return "", fmt.Errorf("write firecracker binary: %w", err)
+
+	tmpFile, err := os.CreateTemp(filepath.Dir(extractPath), "firecracker-*")
+	if err != nil {
+		return "", fmt.Errorf("create firecracker temp binary: %w", err)
 	}
+	tmpPath := tmpFile.Name()
+	cleanupTmp := true
+	defer func() {
+		if cleanupTmp {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+
+	if _, err := tmpFile.Write(data); err != nil {
+		_ = tmpFile.Close()
+		return "", fmt.Errorf("write firecracker temp binary: %w", err)
+	}
+	if err := tmpFile.Chmod(0755); err != nil {
+		_ = tmpFile.Close()
+		return "", fmt.Errorf("chmod firecracker temp binary: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		return "", fmt.Errorf("close firecracker temp binary: %w", err)
+	}
+
+	if err := os.Rename(tmpPath, extractPath); err != nil {
+		return "", fmt.Errorf("install firecracker binary: %w", err)
+	}
+	cleanupTmp = false
 
 	return extractPath, nil
 }
