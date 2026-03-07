@@ -42,6 +42,27 @@ The guest kernel page-init mode controls whether Linux eagerly touches pages:
   - If `vz_balloon_required=true`, startup fails if balloon cannot be configured.
   - If `vz_balloon_required=false`, startup continues without balloon and logs a warning.
 
+## Quick CLI Experiment
+
+Use this A/B check to compare host RSS with policy enabled vs disabled:
+
+```bash
+# 1) Start API with config A (hypervisor.memory.enabled=true), then run:
+ID=$(hypeman run --hypervisor qemu --network=false --memory 1GB \
+  --entrypoint /bin/sh --entrypoint -c \
+  --cmd 'sleep 5; dd if=/dev/zero of=/dev/shm/hype-mem bs=1M count=256; sleep 5; rm -f /dev/shm/hype-mem; sleep 90' \
+  docker.io/library/alpine:latest | tail -n1)
+PID=$(jq -r '.HypervisorPID' "<data_dir>/guests/$ID/metadata.json")
+awk '/^VmRSS:/ {print $2 " kB"}' "/proc/$PID/status"  # Linux
+ps -o rss= -p "$PID"                                  # macOS
+hypeman rm --force "$ID"
+
+# 2) Restart API with config B (hypervisor.memory.enabled=false) and run the same command.
+# 3) Compare final/steady RSS between A and B.
+```
+
+In one startup-focused sample run, differences were small (typically a few MB), so this is best used as a reproducible sanity check, not a strict benchmark.
+
 ## Out of Scope
 
 - No API surface changes.
