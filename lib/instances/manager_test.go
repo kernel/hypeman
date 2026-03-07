@@ -1070,10 +1070,6 @@ func TestEntrypointEnvVars(t *testing.T) {
 	assert.Equal(t, StateRunning, inst.State)
 	t.Logf("Instance created: %s", inst.Id)
 
-	// Wait for redis to be ready (bitnami/redis takes longer to start)
-	t.Log("Waiting for redis to be ready...")
-	time.Sleep(15 * time.Second)
-
 	// Helper to run command in guest with retry
 	runCmd := func(command ...string) (string, int, error) {
 		var lastOutput string
@@ -1085,9 +1081,9 @@ func TestEntrypointEnvVars(t *testing.T) {
 			return "", -1, err
 		}
 
-		for attempt := 0; attempt < 5; attempt++ {
+		for attempt := 0; attempt < 20; attempt++ {
 			if attempt > 0 {
-				time.Sleep(200 * time.Millisecond)
+				time.Sleep(300 * time.Millisecond)
 			}
 
 			var stdout, stderr bytes.Buffer
@@ -1121,6 +1117,20 @@ func TestEntrypointEnvVars(t *testing.T) {
 		}
 
 		return lastOutput, lastExitCode, lastErr
+	}
+
+	// Wait until Redis is actually accepting authenticated commands.
+	t.Log("Waiting for redis to accept authenticated commands...")
+	redisReadyDeadline := time.Now().Add(45 * time.Second)
+	for {
+		output, exitCode, cmdErr := runCmd("redis-cli", "-a", testPassword, "PING")
+		if cmdErr == nil && exitCode == 0 && strings.Contains(output, "PONG") {
+			break
+		}
+		if time.Now().After(redisReadyDeadline) {
+			t.Fatalf("redis did not become ready in time; last output=%q exit=%d err=%v", output, exitCode, cmdErr)
+		}
+		time.Sleep(300 * time.Millisecond)
 	}
 
 	// Test 1: PING without auth should fail

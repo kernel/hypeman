@@ -24,7 +24,15 @@ func (m *manager) CreateAllocation(ctx context.Context, req AllocateRequest) (*N
 	// 1. Get default network
 	network, err := m.getDefaultNetwork(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("get default network: %w", err)
+		// Self-heal if bridge state was externally removed after initialization.
+		// This keeps allocations robust under highly concurrent test workloads.
+		if initErr := m.Initialize(ctx, nil); initErr != nil {
+			return nil, fmt.Errorf("get default network: %w", err)
+		}
+		network, err = m.getDefaultNetwork(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("get default network: %w", err)
+		}
 	}
 
 	// 2. Check name uniqueness (exclude current instance to allow restarts)
@@ -107,7 +115,14 @@ func (m *manager) RecreateAllocation(ctx context.Context, instanceID string, dow
 	// 2. Get default network details
 	network, err := m.getDefaultNetwork(ctx)
 	if err != nil {
-		return fmt.Errorf("get default network: %w", err)
+		// Same self-healing behavior as CreateAllocation.
+		if initErr := m.Initialize(ctx, nil); initErr != nil {
+			return fmt.Errorf("get default network: %w", err)
+		}
+		network, err = m.getDefaultNetwork(ctx)
+		if err != nil {
+			return fmt.Errorf("get default network: %w", err)
+		}
 	}
 
 	// 3. Recreate TAP device with same name and rate limits from instance metadata
