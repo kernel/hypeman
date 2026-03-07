@@ -22,6 +22,7 @@ import (
 )
 
 func TestForkInstance_VZStoppedSourceSupported(t *testing.T) {
+	t.Parallel()
 	manager, _ := setupTestManager(t)
 	ctx := context.Background()
 	if _, err := manager.getVMStarter(hypervisor.TypeVZ); err != nil {
@@ -54,6 +55,7 @@ func TestForkInstance_VZStoppedSourceSupported(t *testing.T) {
 }
 
 func TestResolveForkTargetState_DefaultsToSourceState(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		source State
@@ -74,6 +76,7 @@ func TestResolveForkTargetState_DefaultsToSourceState(t *testing.T) {
 }
 
 func TestValidateForkRequest_InvalidTargetState(t *testing.T) {
+	t.Parallel()
 	err := validateForkRequest(ForkInstanceRequest{
 		Name:        "fork-invalid-target",
 		TargetState: State("Created"),
@@ -83,6 +86,7 @@ func TestValidateForkRequest_InvalidTargetState(t *testing.T) {
 }
 
 func TestValidateForkVolumeSafety(t *testing.T) {
+	t.Parallel()
 	err := validateForkVolumeSafety([]VolumeAttachment{
 		{VolumeID: "vol-rw", MountPath: "/data", Readonly: false},
 	})
@@ -97,6 +101,7 @@ func TestValidateForkVolumeSafety(t *testing.T) {
 }
 
 func TestCleanupForkInstanceOnError(t *testing.T) {
+	t.Parallel()
 	manager, _ := setupTestManager(t)
 	ctx := context.Background()
 
@@ -127,6 +132,7 @@ func TestCleanupForkInstanceOnError(t *testing.T) {
 }
 
 func TestForkInstance_CleansUpOnTargetTransitionError(t *testing.T) {
+	t.Parallel()
 	manager, _ := setupTestManager(t)
 	ctx := context.Background()
 
@@ -163,6 +169,7 @@ func TestForkInstance_CleansUpOnTargetTransitionError(t *testing.T) {
 }
 
 func TestForkInstanceRejectsDuplicateNameForNonNetworkedSource(t *testing.T) {
+	t.Parallel()
 	manager, _ := setupTestManager(t)
 	ctx := context.Background()
 
@@ -209,6 +216,7 @@ func TestForkInstanceRejectsDuplicateNameForNonNetworkedSource(t *testing.T) {
 }
 
 func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
+	t.Parallel()
 	startedAt := time.Now().Add(-2 * time.Minute)
 	stoppedAt := time.Now().Add(-1 * time.Minute)
 	pid := 1234
@@ -255,6 +263,7 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 }
 
 func TestRotateSourceVsockForRestore_CloudHypervisorDoesNotPersistCIDRewrite(t *testing.T) {
+	t.Parallel()
 	manager, _ := setupTestManager(t)
 	ctx := context.Background()
 
@@ -289,6 +298,7 @@ func TestRotateSourceVsockForRestore_CloudHypervisorDoesNotPersistCIDRewrite(t *
 }
 
 func TestRotateSourceVsockForRestore_QEMUPersistsCIDRewrite(t *testing.T) {
+	t.Parallel()
 	manager, _ := setupTestManager(t)
 	ctx := context.Background()
 
@@ -326,6 +336,7 @@ func TestRotateSourceVsockForRestore_QEMUPersistsCIDRewrite(t *testing.T) {
 }
 
 func TestForkCloudHypervisorFromRunningNetwork(t *testing.T) {
+	t.Parallel()
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Skip("/dev/kvm not available, skipping on this platform")
 	}

@@ -17,6 +17,7 @@ import (
 )
 
 func TestValidateVolumeAttachments_MaxVolumes(t *testing.T) {
+	t.Parallel()
 	// Create 24 volumes (exceeds limit of 23)
 	volumes := make([]VolumeAttachment, 24)
 	for i := range volumes {
@@ -32,6 +33,7 @@ func TestValidateVolumeAttachments_MaxVolumes(t *testing.T) {
 }
 
 func TestValidateVolumeAttachments_SystemDirectory(t *testing.T) {
+	t.Parallel()
 	volumes := []VolumeAttachment{{
 		VolumeID:  "vol-1",
 		MountPath: "/etc/secrets", // system directory
@@ -43,6 +45,7 @@ func TestValidateVolumeAttachments_SystemDirectory(t *testing.T) {
 }
 
 func TestValidateVolumeAttachments_DuplicatePaths(t *testing.T) {
+	t.Parallel()
 	volumes := []VolumeAttachment{
 		{VolumeID: "vol-1", MountPath: "/mnt/data"},
 		{VolumeID: "vol-2", MountPath: "/mnt/data"}, // duplicate
@@ -54,6 +57,7 @@ func TestValidateVolumeAttachments_DuplicatePaths(t *testing.T) {
 }
 
 func TestValidateVolumeAttachments_RelativePath(t *testing.T) {
+	t.Parallel()
 	volumes := []VolumeAttachment{{
 		VolumeID:  "vol-1",
 		MountPath: "relative/path", // not absolute
@@ -65,6 +69,7 @@ func TestValidateVolumeAttachments_RelativePath(t *testing.T) {
 }
 
 func TestValidateVolumeAttachments_Valid(t *testing.T) {
+	t.Parallel()
 	volumes := []VolumeAttachment{
 		{VolumeID: "vol-1", MountPath: "/mnt/data"},
 		{VolumeID: "vol-2", MountPath: "/mnt/logs"},
@@ -75,6 +80,7 @@ func TestValidateVolumeAttachments_Valid(t *testing.T) {
 }
 
 func TestValidateVolumeAttachments_Empty(t *testing.T) {
+	t.Parallel()
 	err := validateVolumeAttachments(nil)
 	assert.NoError(t, err)
 
@@ -83,6 +89,7 @@ func TestValidateVolumeAttachments_Empty(t *testing.T) {
 }
 
 func TestValidateVolumeAttachments_OverlayRequiresReadonly(t *testing.T) {
+	t.Parallel()
 	// Overlay=true with Readonly=false should fail
 	volumes := []VolumeAttachment{{
 		VolumeID:    "vol-1",
@@ -98,6 +105,7 @@ func TestValidateVolumeAttachments_OverlayRequiresReadonly(t *testing.T) {
 }
 
 func TestValidateVolumeAttachments_OverlayRequiresSize(t *testing.T) {
+	t.Parallel()
 	// Overlay=true without OverlaySize should fail
 	volumes := []VolumeAttachment{{
 		VolumeID:    "vol-1",
@@ -113,6 +121,7 @@ func TestValidateVolumeAttachments_OverlayRequiresSize(t *testing.T) {
 }
 
 func TestValidateVolumeAttachments_OverlayValid(t *testing.T) {
+	t.Parallel()
 	// Valid overlay configuration
 	volumes := []VolumeAttachment{{
 		VolumeID:    "vol-1",
@@ -127,6 +136,7 @@ func TestValidateVolumeAttachments_OverlayValid(t *testing.T) {
 }
 
 func TestValidateVolumeAttachments_OverlayCountsAsTwoDevices(t *testing.T) {
+	t.Parallel()
 	// 12 regular volumes + 12 overlay volumes = 12 + 24 = 36 devices (exceeds 23)
 	// But let's be more precise: 11 overlay volumes = 22 devices, + 1 regular = 23 (at limit)
 	// 12 overlay volumes = 24 devices (exceeds limit)
@@ -170,6 +180,7 @@ func createTestManager(t *testing.T, limits ResourceLimits) *manager {
 }
 
 func TestResourceLimits_StructValues(t *testing.T) {
+	t.Parallel()
 	limits := ResourceLimits{
 		MaxOverlaySize:       10 * 1024 * 1024 * 1024, // 10GB
 		MaxVcpusPerInstance:  4,
@@ -182,6 +193,7 @@ func TestResourceLimits_StructValues(t *testing.T) {
 }
 
 func TestResourceLimits_ZeroMeansUnlimited(t *testing.T) {
+	t.Parallel()
 	// Zero values should mean unlimited
 	limits := ResourceLimits{
 		MaxOverlaySize:       100 * 1024 * 1024 * 1024,

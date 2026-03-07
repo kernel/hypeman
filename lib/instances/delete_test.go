@@ -10,11 +10,9 @@ import (
 )
 
 func TestWaitForProcessExit_ReapsZombieChild(t *testing.T) {
+	t.Parallel()
 	cmd := exec.Command("sh", "-c", "exit 0")
 	require.NoError(t, cmd.Start())
-
-	// Allow child to exit; until reaped it remains as a zombie.
-	time.Sleep(25 * time.Millisecond)
 
 	start := time.Now()
 	exited := WaitForProcessExit(cmd.Process.Pid, 500*time.Millisecond)
@@ -25,6 +23,7 @@ func TestWaitForProcessExit_ReapsZombieChild(t *testing.T) {
 }
 
 func TestWaitForProcessExit_TimesOutForRunningProcess(t *testing.T) {
+	t.Parallel()
 	cmd := exec.Command("sleep", "2")
 	require.NoError(t, cmd.Start())
 	defer func() {

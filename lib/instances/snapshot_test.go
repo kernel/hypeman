@@ -13,6 +13,7 @@ import (
 )
 
 func TestStoppedSnapshotLifecycleAndForkAfterSourceDeletion(t *testing.T) {
+	t.Parallel()
 	mgr, _ := setupTestManager(t)
 	ctx := context.Background()
 
@@ -58,6 +59,7 @@ func TestStoppedSnapshotLifecycleAndForkAfterSourceDeletion(t *testing.T) {
 }
 
 func TestStandbySnapshotRejectsTargetHypervisorOverride(t *testing.T) {
+	t.Parallel()
 	mgr, _ := setupTestManager(t)
 	ctx := context.Background()
 

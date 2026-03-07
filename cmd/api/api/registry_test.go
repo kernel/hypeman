@@ -47,6 +47,7 @@ func setupRegistryTest(t *testing.T) (*ApiService, string) {
 }
 
 func TestRegistryPushAndConvert(t *testing.T) {
+	t.Parallel()
 	svc, serverHost := setupRegistryTest(t)
 
 	// Pull a small image from Docker Hub to push to our registry
@@ -80,6 +81,7 @@ func TestRegistryPushAndConvert(t *testing.T) {
 }
 
 func TestRegistryVersionCheck(t *testing.T) {
+	t.Parallel()
 	_, serverHost := setupRegistryTest(t)
 
 	// Test /v2/ endpoint (version check)
@@ -92,6 +94,7 @@ func TestRegistryVersionCheck(t *testing.T) {
 }
 
 func TestRegistryPushAndCreateInstance(t *testing.T) {
+	t.Parallel()
 	// This is a full e2e test that requires KVM access
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Skip("/dev/kvm not available - skipping VM creation test")
@@ -174,6 +177,7 @@ func TestRegistryPushAndCreateInstance(t *testing.T) {
 // TestRegistryLayerCaching verifies that pushing the same image twice
 // reuses cached layers and doesn't re-upload them.
 func TestRegistryLayerCaching(t *testing.T) {
+	t.Parallel()
 	_, serverHost := setupRegistryTest(t)
 
 	// Pull alpine image from Docker Hub
@@ -257,6 +261,7 @@ func TestRegistryLayerCaching(t *testing.T) {
 // TestRegistrySharedLayerCaching verifies that pushing different images
 // that share layers reuses the cached shared layers.
 func TestRegistrySharedLayerCaching(t *testing.T) {
+	t.Parallel()
 	_, serverHost := setupRegistryTest(t)
 
 	// Pull alpine image (this will be our base)
@@ -338,6 +343,7 @@ func TestRegistrySharedLayerCaching(t *testing.T) {
 // TestRegistryTagPush verifies that pushing with a tag reference (not digest)
 // correctly triggers conversion. The server computes the digest from the manifest.
 func TestRegistryTagPush(t *testing.T) {
+	t.Parallel()
 	svc, serverHost := setupRegistryTest(t)
 
 	// Pull alpine image from Docker Hub
@@ -391,6 +397,7 @@ func TestRegistryTagPush(t *testing.T) {
 // Docker v2 manifest (as returned by local Docker daemon) is correctly converted
 // to OCI format and the image conversion succeeds.
 func TestRegistryDockerV2ManifestConversion(t *testing.T) {
+	t.Parallel()
 	svc, serverHost := setupRegistryTest(t)
 
 	// Pull alpine image from Docker Hub (OCI format)

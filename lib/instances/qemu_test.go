@@ -36,11 +36,7 @@ func setupTestManagerForQEMU(t *testing.T) (*manager, string) {
 
 	cfg := &config.Config{
 		DataDir: tmpDir,
-		Network: config.NetworkConfig{
-			BridgeName: "vmbr0",
-			SubnetCIDR: "10.100.0.0/16",
-			DNSServer:  "1.1.1.1",
-		},
+		Network: newParallelTestNetworkConfig(t),
 	}
 
 	p := paths.New(tmpDir)
@@ -171,6 +167,7 @@ func (r *qemuInstanceResolver) ResolveInstance(ctx context.Context, nameOrID str
 // It tests: create, get, list, logs, network, ingress, volumes, exec, and delete.
 // It does NOT test: snapshot/standby, hot memory resize (not supported by QEMU in first pass).
 func TestQEMUBasicEndToEnd(t *testing.T) {
+	t.Parallel()
 	// Require KVM access
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Skip("/dev/kvm not available, skipping on this platform")
@@ -239,11 +236,7 @@ func TestQEMUBasicEndToEnd(t *testing.T) {
 	// Initialize network
 	networkManager := network.NewManager(p, &config.Config{
 		DataDir: tmpDir,
-		Network: config.NetworkConfig{
-			BridgeName: "vmbr0",
-			SubnetCIDR: "10.100.0.0/16",
-			DNSServer:  "1.1.1.1",
-		},
+		Network: newParallelTestNetworkConfig(t),
 	}, nil)
 	t.Log("Initializing network...")
 	err = networkManager.Initialize(ctx, nil)
@@ -577,6 +570,7 @@ func TestQEMUBasicEndToEnd(t *testing.T) {
 // This uses bitnami/redis which configures REDIS_PASSWORD from an env var - if auth is required,
 // it proves the entrypoint received and used the env var.
 func TestQEMUEntrypointEnvVars(t *testing.T) {
+	t.Parallel()
 	if os.Getuid() != 0 {
 		t.Skip("Skipping test that requires root")
 	}
@@ -629,11 +623,7 @@ func TestQEMUEntrypointEnvVars(t *testing.T) {
 	// Initialize network (needed for loopback interface in guest)
 	networkManager := network.NewManager(p, &config.Config{
 		DataDir: tmpDir,
-		Network: config.NetworkConfig{
-			BridgeName: "vmbr0",
-			SubnetCIDR: "10.100.0.0/16",
-			DNSServer:  "1.1.1.1",
-		},
+		Network: newParallelTestNetworkConfig(t),
 	}, nil)
 	t.Log("Initializing network...")
 	err = networkManager.Initialize(ctx, nil)
@@ -747,6 +737,7 @@ func TestQEMUEntrypointEnvVars(t *testing.T) {
 // TestQEMUStandbyAndRestore tests the standby/restore cycle with QEMU.
 // This tests QEMU's migrate-to-file snapshot mechanism.
 func TestQEMUStandbyAndRestore(t *testing.T) {
+	t.Parallel()
 	// Require KVM access
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Skip("/dev/kvm not available, skipping on this platform")
@@ -867,6 +858,7 @@ func TestQEMUStandbyAndRestore(t *testing.T) {
 }
 
 func TestQEMUForkFromRunningNetwork(t *testing.T) {
+	t.Parallel()
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Skip("/dev/kvm not available, skipping on this platform")
 	}
@@ -956,6 +948,7 @@ func TestQEMUForkFromRunningNetwork(t *testing.T) {
 }
 
 func TestQEMUSnapshotFeature(t *testing.T) {
+	t.Parallel()
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Skip("/dev/kvm not available, skipping on this platform")
 	}

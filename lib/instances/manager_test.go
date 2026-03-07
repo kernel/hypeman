@@ -38,11 +38,7 @@ func setupTestManager(t *testing.T) (*manager, string) {
 
 	cfg := &config.Config{
 		DataDir: tmpDir,
-		Network: config.NetworkConfig{
-			BridgeName: "vmbr0",
-			SubnetCIDR: "10.100.0.0/16",
-			DNSServer:  "1.1.1.1",
-		},
+		Network: newParallelTestNetworkConfig(t),
 	}
 
 	p := paths.New(tmpDir)
@@ -184,6 +180,7 @@ func cleanupOrphanedProcesses(t *testing.T, mgr *manager) {
 }
 
 func TestBasicEndToEnd(t *testing.T) {
+	t.Parallel()
 	// Require KVM access (don't skip, fail informatively)
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Skip("/dev/kvm not available, skipping on this platform")
@@ -246,11 +243,7 @@ func TestBasicEndToEnd(t *testing.T) {
 	// Initialize network for ingress testing
 	networkManager := network.NewManager(p, &config.Config{
 		DataDir: tmpDir,
-		Network: config.NetworkConfig{
-			BridgeName: "vmbr0",
-			SubnetCIDR: "10.100.0.0/16",
-			DNSServer:  "1.1.1.1",
-		},
+		Network: newParallelTestNetworkConfig(t),
 	}, nil)
 	t.Log("Initializing network...")
 	err = networkManager.Initialize(ctx, nil)
@@ -805,6 +798,7 @@ func TestBasicEndToEnd(t *testing.T) {
 // host lazily parses sentinel from serial log -> ExitCode/ExitMessage in metadata.
 // Uses alpine with a non-existent command override to get exit code 127 ("command not found").
 func TestAppExitPropagation(t *testing.T) {
+	t.Parallel()
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Skip("/dev/kvm not available, skipping on this platform")
 	}
@@ -894,6 +888,7 @@ func TestAppExitPropagation(t *testing.T) {
 // Creates a VM with low memory and runs a command that allocates more than available,
 // triggering the OOM killer. Verifies exit code 137 and "OOM" in the exit message.
 func TestOOMExitPropagation(t *testing.T) {
+	t.Parallel()
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Skip("/dev/kvm not available, skipping on this platform")
 	}
@@ -999,6 +994,7 @@ func TestOOMExitPropagation(t *testing.T) {
 // This uses bitnami/redis which configures REDIS_PASSWORD from an env var - if auth is required,
 // it proves the entrypoint received and used the env var.
 func TestEntrypointEnvVars(t *testing.T) {
+	t.Parallel()
 	if os.Getuid() != 0 {
 		t.Skip("Skipping test that requires root")
 	}
@@ -1045,11 +1041,7 @@ func TestEntrypointEnvVars(t *testing.T) {
 	// Initialize network (needed for loopback interface in guest)
 	networkManager := network.NewManager(p, &config.Config{
 		DataDir: tmpDir,
-		Network: config.NetworkConfig{
-			BridgeName: "vmbr0",
-			SubnetCIDR: "10.100.0.0/16",
-			DNSServer:  "1.1.1.1",
-		},
+		Network: newParallelTestNetworkConfig(t),
 	}, nil)
 	t.Log("Initializing network...")
 	err = networkManager.Initialize(ctx, nil)
@@ -1160,16 +1152,13 @@ func TestEntrypointEnvVars(t *testing.T) {
 }
 
 func TestStorageOperations(t *testing.T) {
+	t.Parallel()
 	// Test storage layer without starting VMs
 	tmpDir := t.TempDir()
 
 	cfg := &config.Config{
 		DataDir: tmpDir,
-		Network: config.NetworkConfig{
-			BridgeName: "vmbr0",
-			SubnetCIDR: "10.100.0.0/16",
-			DNSServer:  "1.1.1.1",
-		},
+		Network: newParallelTestNetworkConfig(t),
 		Oversubscription: config.OversubscriptionConfig{
 			CPU: 1.0, Memory: 1.0, Disk: 1.0, Network: 1.0,
 		},
@@ -1240,6 +1229,7 @@ func TestStorageOperations(t *testing.T) {
 }
 
 func TestStandbyAndRestore(t *testing.T) {
+	t.Parallel()
 	// Require KVM access (don't skip, fail informatively)
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Skip("/dev/kvm not available, skipping on this platform")
@@ -1358,6 +1348,7 @@ func TestStandbyAndRestore(t *testing.T) {
 }
 
 func TestCloudHypervisorSnapshotFeature(t *testing.T) {
+	t.Parallel()
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Skip("/dev/kvm not available, skipping on this platform")
 	}
@@ -1372,6 +1363,7 @@ func TestCloudHypervisorSnapshotFeature(t *testing.T) {
 }
 
 func TestStateTransitions(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name       string
 		from       State
