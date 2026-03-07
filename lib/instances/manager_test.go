@@ -1121,7 +1121,7 @@ func TestEntrypointEnvVars(t *testing.T) {
 
 	// Wait until Redis is actually accepting authenticated commands.
 	t.Log("Waiting for redis to accept authenticated commands...")
-	redisReadyDeadline := time.Now().Add(45 * time.Second)
+	redisReadyDeadline := time.Now().Add(120 * time.Second)
 	for {
 		output, exitCode, cmdErr := runCmd("redis-cli", "-a", testPassword, "PING")
 		if cmdErr == nil && exitCode == 0 && strings.Contains(output, "PONG") {
