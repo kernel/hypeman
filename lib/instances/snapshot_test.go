@@ -92,7 +92,7 @@ func createStoppedSnapshotSourceFixture(t *testing.T, mgr *manager, id, name str
 	meta := &metadata{StoredMetadata: StoredMetadata{
 		Id:                id,
 		Name:              name,
-		Image:             "docker.io/library/alpine:latest",
+		Image:             integrationTestImageRef(t, "docker.io/library/alpine:latest"),
 		CreatedAt:         now,
 		StoppedAt:         &now,
 		HypervisorType:    hvType,

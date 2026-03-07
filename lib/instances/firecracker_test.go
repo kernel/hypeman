@@ -26,6 +26,7 @@ import (
 
 func setupTestManagerForFirecracker(t *testing.T) (*manager, string) {
 	tmpDir := t.TempDir()
+	prepareIntegrationTestDataDir(t, tmpDir)
 	cfg := &config.Config{
 		DataDir: tmpDir,
 		Network: newParallelTestNetworkConfig(t),
@@ -68,11 +69,11 @@ func createNginxImageAndWait(t *testing.T, ctx context.Context, imageManager ima
 	t.Helper()
 
 	nginxImage, err := imageManager.CreateImage(ctx, images.CreateImageRequest{
-		Name: "docker.io/library/nginx:alpine",
+		Name: integrationTestImageRef(t, "docker.io/library/nginx:alpine"),
 	})
 	require.NoError(t, err)
 
-	for i := 0; i < 180; i++ {
+	for i := 0; i < 60; i++ {
 		img, err := imageManager.GetImage(ctx, nginxImage.Name)
 		if err == nil && img.Status == images.StatusReady {
 			return
@@ -103,7 +104,7 @@ func TestFirecrackerStandbyAndRestore(t *testing.T) {
 
 	inst, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "test-firecracker-standby",
-		Image:          "docker.io/library/nginx:alpine",
+		Image:          integrationTestImageRef(t, "docker.io/library/nginx:alpine"),
 		Size:           1024 * 1024 * 1024,
 		OverlaySize:    10 * 1024 * 1024 * 1024,
 		Vcpus:          1,
@@ -152,7 +153,7 @@ func TestFirecrackerStopClearsStaleSnapshot(t *testing.T) {
 
 	inst, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "fc-stale-snapshot",
-		Image:          "docker.io/library/nginx:alpine",
+		Image:          integrationTestImageRef(t, "docker.io/library/nginx:alpine"),
 		Size:           1024 * 1024 * 1024,
 		OverlaySize:    10 * 1024 * 1024 * 1024,
 		Vcpus:          1,
@@ -218,7 +219,7 @@ func TestFirecrackerNetworkLifecycle(t *testing.T) {
 
 	inst, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "fc-net",
-		Image:          "docker.io/library/nginx:alpine",
+		Image:          integrationTestImageRef(t, "docker.io/library/nginx:alpine"),
 		Size:           2 * 1024 * 1024 * 1024,
 		HotplugSize:    512 * 1024 * 1024,
 		OverlaySize:    5 * 1024 * 1024 * 1024,
@@ -335,7 +336,7 @@ func TestFirecrackerForkFromRunningNetwork(t *testing.T) {
 
 	source, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "fc-fork-running-src",
-		Image:          "docker.io/library/nginx:alpine",
+		Image:          integrationTestImageRef(t, "docker.io/library/nginx:alpine"),
 		Size:           2 * 1024 * 1024 * 1024,
 		HotplugSize:    256 * 1024 * 1024,
 		OverlaySize:    10 * 1024 * 1024 * 1024,

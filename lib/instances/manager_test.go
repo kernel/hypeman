@@ -35,6 +35,7 @@ import (
 // setupTestManager creates a manager and registers cleanup for any orphaned processes
 func setupTestManager(t *testing.T) (*manager, string) {
 	tmpDir := t.TempDir()
+	prepareIntegrationTestDataDir(t, tmpDir)
 
 	cfg := &config.Config{
 		DataDir: tmpDir,
@@ -196,7 +197,7 @@ func TestBasicEndToEnd(t *testing.T) {
 	// Pull nginx image (runs a daemon, won't exit)
 	t.Log("Pulling nginx:alpine image...")
 	nginxImage, err := imageManager.CreateImage(ctx, images.CreateImageRequest{
-		Name: "docker.io/library/nginx:alpine",
+		Name: integrationTestImageRef(t, "docker.io/library/nginx:alpine"),
 	})
 	require.NoError(t, err)
 
@@ -253,7 +254,7 @@ func TestBasicEndToEnd(t *testing.T) {
 	// Create instance with real nginx image and attached volume
 	req := CreateInstanceRequest{
 		Name:           "test-nginx",
-		Image:          "docker.io/library/nginx:alpine",
+		Image:          integrationTestImageRef(t, "docker.io/library/nginx:alpine"),
 		Size:           2 * 1024 * 1024 * 1024,  // 2GB (needs extra room for initrd with NVIDIA libs)
 		HotplugSize:    512 * 1024 * 1024,       // 512MB
 		OverlaySize:    10 * 1024 * 1024 * 1024, // 10GB
@@ -280,7 +281,7 @@ func TestBasicEndToEnd(t *testing.T) {
 	// Verify instance fields
 	assert.NotEmpty(t, inst.Id)
 	assert.Equal(t, "test-nginx", inst.Name)
-	assert.Equal(t, "docker.io/library/nginx:alpine", inst.Image)
+	assert.Equal(t, integrationTestImageRef(t, "docker.io/library/nginx:alpine"), inst.Image)
 	assert.Equal(t, StateRunning, inst.State)
 	assert.False(t, inst.HasSnapshot)
 	assert.NotEmpty(t, inst.KernelVersion)
@@ -812,7 +813,7 @@ func TestAppExitPropagation(t *testing.T) {
 
 	t.Log("Pulling alpine:latest image...")
 	alpineImage, err := imageManager.CreateImage(ctx, images.CreateImageRequest{
-		Name: "docker.io/library/alpine:latest",
+		Name: integrationTestImageRef(t, "docker.io/library/alpine:latest"),
 	})
 	require.NoError(t, err)
 
@@ -842,7 +843,7 @@ func TestAppExitPropagation(t *testing.T) {
 	// causing exit code 127 ("command not found").
 	inst, err := manager.CreateInstance(ctx, CreateInstanceRequest{
 		Name:        "test-exit-propagation",
-		Image:       "docker.io/library/alpine:latest",
+		Image:       integrationTestImageRef(t, "docker.io/library/alpine:latest"),
 		Size:        512 * 1024 * 1024, // 512MB
 		HotplugSize: 0,
 		OverlaySize: 2 * 1024 * 1024 * 1024, // 2GB
@@ -902,7 +903,7 @@ func TestOOMExitPropagation(t *testing.T) {
 
 	t.Log("Pulling alpine:latest image...")
 	alpineImage, err := imageManager.CreateImage(ctx, images.CreateImageRequest{
-		Name: "docker.io/library/alpine:latest",
+		Name: integrationTestImageRef(t, "docker.io/library/alpine:latest"),
 	})
 	require.NoError(t, err)
 
@@ -943,7 +944,7 @@ func TestOOMExitPropagation(t *testing.T) {
 
 		inst, err := manager.CreateInstance(ctx, CreateInstanceRequest{
 			Name:        fmt.Sprintf("test-oom-%d", attempt),
-			Image:       "docker.io/library/alpine:latest",
+			Image:       integrationTestImageRef(t, "docker.io/library/alpine:latest"),
 			Size:        memBytes,
 			HotplugSize: 0,
 			OverlaySize: 2 * 1024 * 1024 * 1024, // 2GB
@@ -1010,7 +1011,7 @@ func TestEntrypointEnvVars(t *testing.T) {
 	// Pull bitnami/redis image
 	t.Log("Pulling bitnami/redis image...")
 	redisImage, err := imageManager.CreateImage(ctx, images.CreateImageRequest{
-		Name: "docker.io/bitnami/redis:latest",
+		Name: integrationTestImageRef(t, "docker.io/bitnami/redis:latest"),
 	})
 	require.NoError(t, err)
 
@@ -1052,7 +1053,7 @@ func TestEntrypointEnvVars(t *testing.T) {
 	testPassword := "test_secret_password_123"
 	req := CreateInstanceRequest{
 		Name:           "test-redis-env",
-		Image:          "docker.io/bitnami/redis:latest",
+		Image:          integrationTestImageRef(t, "docker.io/bitnami/redis:latest"),
 		Size:           2 * 1024 * 1024 * 1024,
 		HotplugSize:    512 * 1024 * 1024,
 		OverlaySize:    10 * 1024 * 1024 * 1024,
@@ -1255,7 +1256,7 @@ func TestStandbyAndRestore(t *testing.T) {
 	// Pull nginx image (reuse if already pulled in previous test)
 	t.Log("Ensuring nginx:alpine image...")
 	nginxImage, err := imageManager.CreateImage(ctx, images.CreateImageRequest{
-		Name: "docker.io/library/nginx:alpine",
+		Name: integrationTestImageRef(t, "docker.io/library/nginx:alpine"),
 	})
 	require.NoError(t, err)
 
@@ -1283,7 +1284,7 @@ func TestStandbyAndRestore(t *testing.T) {
 	t.Log("Creating instance...")
 	req := CreateInstanceRequest{
 		Name:           "test-standby",
-		Image:          "docker.io/library/nginx:alpine",
+		Image:          integrationTestImageRef(t, "docker.io/library/nginx:alpine"),
 		Size:           2 * 1024 * 1024 * 1024, // 2GB (needs extra room for initrd with NVIDIA libs)
 		HotplugSize:    512 * 1024 * 1024,
 		OverlaySize:    10 * 1024 * 1024 * 1024,

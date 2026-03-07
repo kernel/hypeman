@@ -65,6 +65,13 @@ jobs:
       - name: Build
         run: make build
 
+      - name: Prewarm test cache
+        env:
+          HYPEMAN_TEST_REGISTRY: 127.0.0.1:5001
+        run: |
+          export HYPEMAN_TEST_PREWARM_DIR="$HOME/.cache/hypeman-ci/linux-amd64"
+          go run ./cmd/test-prewarm
+
       - name: Check gofmt
         run: |
           set -euo pipefail
@@ -91,7 +98,11 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           TLS_TEST_DOMAIN: "test.hypeman-development.com"
           TLS_ALLOWED_DOMAINS: '*.hypeman-development.com'
-        run: make test TEST_TIMEOUT=20m
+          HYPEMAN_TEST_PREWARM_STRICT: "1"
+          HYPEMAN_TEST_REGISTRY: 127.0.0.1:5001
+        run: |
+          export HYPEMAN_TEST_PREWARM_DIR="$HOME/.cache/hypeman-ci/linux-amd64"
+          make test TEST_TIMEOUT=20m
 
   test-darwin:
     runs-on: [self-hosted, macos, arm64]
@@ -123,6 +134,13 @@ jobs:
       - name: Build
         run: make build
 
+      - name: Prewarm test cache
+        env:
+          HYPEMAN_TEST_REGISTRY: 127.0.0.1:5001
+        run: |
+          export HYPEMAN_TEST_PREWARM_DIR="$HOME/.cache/hypeman-ci/darwin-arm64"
+          go run ./cmd/test-prewarm
+
       - name: Check gofmt
         run: |
           set -euo pipefail
@@ -142,7 +160,11 @@ jobs:
           GO_TEST_TIMEOUT: 600s
           DEFAULT_HYPERVISOR: vz
           JWT_SECRET: ci-test-secret
-        run: make test
+          HYPEMAN_TEST_PREWARM_STRICT: "1"
+          HYPEMAN_TEST_REGISTRY: 127.0.0.1:5001
+        run: |
+          export HYPEMAN_TEST_PREWARM_DIR="$HOME/.cache/hypeman-ci/darwin-arm64"
+          make test
       - name: Cleanup
         if: always()
         run: |

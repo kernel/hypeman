@@ -33,6 +33,7 @@ import (
 // setupTestManagerForQEMU creates a manager configured to use QEMU as the default hypervisor
 func setupTestManagerForQEMU(t *testing.T) (*manager, string) {
 	tmpDir := t.TempDir()
+	prepareIntegrationTestDataDir(t, tmpDir)
 
 	cfg := &config.Config{
 		DataDir: tmpDir,
@@ -189,7 +190,7 @@ func TestQEMUBasicEndToEnd(t *testing.T) {
 	// Pull nginx image
 	t.Log("Pulling nginx:alpine image...")
 	nginxImage, err := imageManager.CreateImage(ctx, images.CreateImageRequest{
-		Name: "docker.io/library/nginx:alpine",
+		Name: integrationTestImageRef(t, "docker.io/library/nginx:alpine"),
 	})
 	require.NoError(t, err)
 
@@ -246,7 +247,7 @@ func TestQEMUBasicEndToEnd(t *testing.T) {
 	// Create instance with QEMU hypervisor
 	req := CreateInstanceRequest{
 		Name:           "test-nginx-qemu",
-		Image:          "docker.io/library/nginx:alpine",
+		Image:          integrationTestImageRef(t, "docker.io/library/nginx:alpine"),
 		Size:           2 * 1024 * 1024 * 1024,  // 2GB
 		HotplugSize:    512 * 1024 * 1024,       // 512MB (unused by QEMU, but part of the request)
 		OverlaySize:    10 * 1024 * 1024 * 1024, // 10GB
@@ -274,7 +275,7 @@ func TestQEMUBasicEndToEnd(t *testing.T) {
 	// Verify instance fields
 	assert.NotEmpty(t, inst.Id)
 	assert.Equal(t, "test-nginx-qemu", inst.Name)
-	assert.Equal(t, "docker.io/library/nginx:alpine", inst.Image)
+	assert.Equal(t, integrationTestImageRef(t, "docker.io/library/nginx:alpine"), inst.Image)
 	assert.Equal(t, StateRunning, inst.State)
 	assert.Equal(t, hypervisor.TypeQEMU, inst.HypervisorType)
 	assert.False(t, inst.HasSnapshot)
@@ -592,7 +593,7 @@ func TestQEMUEntrypointEnvVars(t *testing.T) {
 	// Pull bitnami/redis image
 	t.Log("Pulling bitnami/redis image...")
 	redisImage, err := imageManager.CreateImage(ctx, images.CreateImageRequest{
-		Name: "docker.io/bitnami/redis:latest",
+		Name: integrationTestImageRef(t, "docker.io/bitnami/redis:latest"),
 	})
 	require.NoError(t, err)
 
@@ -634,7 +635,7 @@ func TestQEMUEntrypointEnvVars(t *testing.T) {
 	testPassword := "test_secret_password_123"
 	req := CreateInstanceRequest{
 		Name:           "test-redis-env",
-		Image:          "docker.io/bitnami/redis:latest",
+		Image:          integrationTestImageRef(t, "docker.io/bitnami/redis:latest"),
 		Size:           2 * 1024 * 1024 * 1024,
 		HotplugSize:    512 * 1024 * 1024,
 		OverlaySize:    10 * 1024 * 1024 * 1024,
@@ -770,7 +771,7 @@ func TestQEMUStandbyAndRestore(t *testing.T) {
 	// Pull nginx image
 	t.Log("Pulling nginx:alpine image...")
 	nginxImage, err := imageManager.CreateImage(ctx, images.CreateImageRequest{
-		Name: "docker.io/library/nginx:alpine",
+		Name: integrationTestImageRef(t, "docker.io/library/nginx:alpine"),
 	})
 	require.NoError(t, err)
 
@@ -801,7 +802,7 @@ func TestQEMUStandbyAndRestore(t *testing.T) {
 	// Create instance with QEMU hypervisor (no network for simpler test)
 	req := CreateInstanceRequest{
 		Name:           "test-qemu-standby",
-		Image:          "docker.io/library/nginx:alpine",
+		Image:          integrationTestImageRef(t, "docker.io/library/nginx:alpine"),
 		Size:           2 * 1024 * 1024 * 1024,  // 2GB
 		HotplugSize:    512 * 1024 * 1024,       // 512MB (unused by QEMU)
 		OverlaySize:    10 * 1024 * 1024 * 1024, // 10GB
@@ -886,7 +887,7 @@ func TestQEMUForkFromRunningNetwork(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Log("Ensuring nginx image...")
-	nginxImage, err := imageManager.CreateImage(ctx, images.CreateImageRequest{Name: "docker.io/library/nginx:alpine"})
+	nginxImage, err := imageManager.CreateImage(ctx, images.CreateImageRequest{Name: integrationTestImageRef(t, "docker.io/library/nginx:alpine")})
 	require.NoError(t, err)
 
 	imageName := nginxImage.Name
@@ -908,7 +909,7 @@ func TestQEMUForkFromRunningNetwork(t *testing.T) {
 
 	source, err := manager.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "qemu-fork-running-src",
-		Image:          "docker.io/library/nginx:alpine",
+		Image:          integrationTestImageRef(t, "docker.io/library/nginx:alpine"),
 		Size:           2 * 1024 * 1024 * 1024,
 		HotplugSize:    256 * 1024 * 1024,
 		OverlaySize:    10 * 1024 * 1024 * 1024,

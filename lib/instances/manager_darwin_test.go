@@ -36,6 +36,7 @@ import (
 func setupVZTestManager(t *testing.T) (*manager, string) {
 	tmpDir, err := os.MkdirTemp("/tmp", "vz-")
 	require.NoError(t, err)
+	prepareIntegrationTestDataDir(t, tmpDir)
 	t.Cleanup(func() { os.RemoveAll(tmpDir) })
 
 	cfg := &config.Config{
@@ -116,7 +117,7 @@ func TestVZBasicLifecycle(t *testing.T) {
 
 	t.Log("Pulling alpine:latest image...")
 	alpineImage, err := imageManager.CreateImage(ctx, images.CreateImageRequest{
-		Name: "docker.io/library/alpine:latest",
+		Name: integrationTestImageRef(t, "docker.io/library/alpine:latest"),
 	})
 	require.NoError(t, err)
 
@@ -144,7 +145,7 @@ func TestVZBasicLifecycle(t *testing.T) {
 	// Create instance using vz hypervisor
 	inst, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "test-vz-lifecycle",
-		Image:          "docker.io/library/alpine:latest",
+		Image:          integrationTestImageRef(t, "docker.io/library/alpine:latest"),
 		Size:           2 * 1024 * 1024 * 1024,
 		OverlaySize:    10 * 1024 * 1024 * 1024,
 		Vcpus:          1,
@@ -286,7 +287,7 @@ func TestVZExecAndShutdown(t *testing.T) {
 
 	t.Log("Pulling alpine:latest image...")
 	alpineImage, err := imageManager.CreateImage(ctx, images.CreateImageRequest{
-		Name: "docker.io/library/alpine:latest",
+		Name: integrationTestImageRef(t, "docker.io/library/alpine:latest"),
 	})
 	require.NoError(t, err)
 
@@ -310,7 +311,7 @@ func TestVZExecAndShutdown(t *testing.T) {
 
 	inst, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "test-vz-exec",
-		Image:          "docker.io/library/alpine:latest",
+		Image:          integrationTestImageRef(t, "docker.io/library/alpine:latest"),
 		Size:           2 * 1024 * 1024 * 1024,
 		OverlaySize:    10 * 1024 * 1024 * 1024,
 		Vcpus:          1,
@@ -395,7 +396,7 @@ func TestVZStandbyAndRestore(t *testing.T) {
 
 	t.Log("Pulling alpine:latest image...")
 	alpineImage, err := imageManager.CreateImage(ctx, images.CreateImageRequest{
-		Name: "docker.io/library/alpine:latest",
+		Name: integrationTestImageRef(t, "docker.io/library/alpine:latest"),
 	})
 	require.NoError(t, err)
 
@@ -425,7 +426,7 @@ func TestVZStandbyAndRestore(t *testing.T) {
 	// Create instance using vz hypervisor
 	inst, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "test-vz-standby",
-		Image:          "docker.io/library/alpine:latest",
+		Image:          integrationTestImageRef(t, "docker.io/library/alpine:latest"),
 		Size:           2 * 1024 * 1024 * 1024,
 		OverlaySize:    10 * 1024 * 1024 * 1024,
 		Vcpus:          1,
@@ -556,7 +557,7 @@ func TestVZForkFromRunningNetwork(t *testing.T) {
 
 	t.Log("Pulling alpine:latest image...")
 	alpineImage, err := imageManager.CreateImage(ctx, images.CreateImageRequest{
-		Name: "docker.io/library/alpine:latest",
+		Name: integrationTestImageRef(t, "docker.io/library/alpine:latest"),
 	})
 	require.NoError(t, err)
 
@@ -584,7 +585,7 @@ func TestVZForkFromRunningNetwork(t *testing.T) {
 
 	source, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "test-vz-fork-src",
-		Image:          "docker.io/library/alpine:latest",
+		Image:          integrationTestImageRef(t, "docker.io/library/alpine:latest"),
 		Size:           2 * 1024 * 1024 * 1024,
 		OverlaySize:    10 * 1024 * 1024 * 1024,
 		Vcpus:          1,

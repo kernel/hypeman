@@ -39,14 +39,14 @@ func runStandbySnapshotScenario(t *testing.T, mgr *manager, tmpDir string, cfg s
 	}
 	imageManager, err := images.NewManager(p, 1, nil)
 	requireNoErr(err)
-	snapshottest.EnsureImageReady(t, ctx, p, imageManager, "docker.io/library/alpine:latest")
+	snapshottest.EnsureImageReady(t, ctx, p, imageManager, integrationTestImageRef(t, "docker.io/library/alpine:latest"))
 
 	systemManager := system.NewManager(p)
 	requireNoErr(systemManager.EnsureSystemFiles(ctx))
 
 	source, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           cfg.sourceName,
-		Image:          "docker.io/library/alpine:latest",
+		Image:          integrationTestImageRef(t, "docker.io/library/alpine:latest"),
 		Size:           1024 * 1024 * 1024,
 		OverlaySize:    10 * 1024 * 1024 * 1024,
 		Vcpus:          1,

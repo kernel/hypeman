@@ -67,12 +67,12 @@ func TestExecConcurrent(t *testing.T) {
 
 	t.Log("Pulling nginx:alpine image...")
 	_, err = imageManager.CreateImage(ctx, images.CreateImageRequest{
-		Name: "docker.io/library/nginx:alpine",
+		Name: integrationTestImageRef(t, "docker.io/library/nginx:alpine"),
 	})
 	require.NoError(t, err)
 
 	for i := 0; i < 60; i++ {
-		img, err := imageManager.GetImage(ctx, "docker.io/library/nginx:alpine")
+		img, err := imageManager.GetImage(ctx, integrationTestImageRef(t, "docker.io/library/nginx:alpine"))
 		if err == nil && img.Status == images.StatusReady {
 			break
 		}
@@ -89,7 +89,7 @@ func TestExecConcurrent(t *testing.T) {
 	t.Log("Creating nginx instance...")
 	inst, err := manager.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "exec-test",
-		Image:          "docker.io/library/nginx:alpine",
+		Image:          integrationTestImageRef(t, "docker.io/library/nginx:alpine"),
 		Size:           2 * 1024 * 1024 * 1024, // 2GB (needs extra room for initrd with NVIDIA libs)
 		HotplugSize:    512 * 1024 * 1024,
 		OverlaySize:    1024 * 1024 * 1024,
