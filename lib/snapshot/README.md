@@ -1,63 +1,71 @@
-# Snapshot Store
+# Snapshot Feature
 
-Manages snapshot metadata persistence and filtering for centrally stored VM snapshots.
+Snapshots are immutable point-in-time captures of a VM that can later be:
+- restored back into the original VM
+- forked into a new VM
+- listed, inspected, and deleted independently
 
-## Design Decisions
+## Snapshot Kinds
 
-### Why Separate Package?
+### `Standby`
+- Captures standby-style state, including memory/device snapshot state plus disks.
+- Intended for fast resume-style recovery.
+- Can be created from `Running` or `Standby`.
+- Does **not** allow hypervisor switching on restore/fork.
 
-**What:** Keep snapshot domain and storage logic in `lib/snapshot`, while `lib/instances` owns VM lifecycle orchestration.
+### `Stopped`
+- Captures disk-focused state from a stopped VM.
+- Intended for cold-start style restore/fork.
+- Can be created only from `Stopped`.
+- Allows optional hypervisor switching on restore/fork.
 
-**Why:**
-- Snapshot metadata storage is independent from hypervisor runtime control
-- Makes snapshot record behavior easier to test in isolation
-- Reduces lifecycle-file complexity in `lib/instances/snapshot.go`
+## Lifecycle
 
-### Why Record + Raw Metadata?
+### Create
+- `Standby` snapshot from `Running`:
+  - source VM is put into standby
+  - snapshot payload is copied
+  - source VM is restored to running
+- `Standby` snapshot from `Standby`:
+  - snapshot payload is copied directly
+- `Stopped` snapshot from `Stopped`:
+  - snapshot payload is copied directly
 
-**What:** Persist snapshot records as:
-- `snapshot` (immutable snapshot fields)
-- `stored_metadata` (opaque JSON blob for source instance metadata)
+### Restore (in-place)
+- Restore always applies to the original source VM.
+- Source VM must not be `Running`.
+- Default target states:
+  - `Standby` snapshot -> `Running`
+  - `Stopped` snapshot -> `Stopped`
+- Allowed target states:
+  - `Standby` snapshot -> `Running`, `Standby`, `Stopped`
+  - `Stopped` snapshot -> `Stopped`, `Running`
 
-**Why:**
-- Snapshot store does not need to understand instance internals
-- Instance package can evolve metadata fields without rewriting store logic
-- Keeps persistence layer focused on CRUD semantics
+### Fork (new VM)
+- Creates a new instance from snapshot artifacts.
+- Uses the same target-state rules as restore.
+- `target_hypervisor` is allowed only for `Stopped` snapshots.
 
-## Filesystem Layout
+### Delete
+- Removes snapshot metadata and payload.
+- Does not modify source or forked instances.
 
-```
-{$DATA_DIR}/snapshots/
-  {snapshot-id}/
-    snapshot.json     # Snapshot record (snapshot + stored_metadata JSON)
-    guest/            # Copied guest payload
-```
+## Safety Rules
 
-## API Surface
+- Snapshot creation rejects writable volume attachments.
+- Snapshot names must be unique per source instance.
+- Snapshot IDs are immutable.
+- Snapshot artifacts remain usable after source instance deletion.
 
-`Store` provides:
-- `SaveRecord`
-- `LoadRecord`
-- `ListRecords`
-- `List`
-- `Get`
-- `Delete`
-- `EnsureNameAvailable`
+## Stored Data
 
-Utilities:
-- `DirectoryFileSize` for payload sizing
+Each snapshot stores:
+- immutable snapshot metadata (`id`, `name`, `kind`, source identity, timestamp, size)
+- snapshot payload (`guest/`) used for restore/fork
+- source metadata needed to reconstruct VM runtime settings during restore/fork
 
-## Error Model
+## Sparse Copy Behavior
 
-- `ErrNotFound` when a snapshot record/directory does not exist
-- `ErrNameExists` when `EnsureNameAvailable` detects a duplicate snapshot name for a source instance
-
-`lib/instances` maps these to instance-domain errors (`ErrSnapshotNotFound`, `ErrAlreadyExists`) at package boundaries.
-
-## Testing
-
-`store_test.go` covers:
-- Save/load/list/delete lifecycle
-- Name uniqueness checks
-- Filter matching behavior
-- Payload file size utility
+Snapshot payload copy uses the same sparse-only guest copy path as fork.
+- If sparse extent copy cannot be guaranteed, operations fail explicitly.
+- No dense-copy fallback is used.

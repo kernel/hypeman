@@ -17,6 +17,7 @@ import (
 	"github.com/kernel/hypeman/lib/network"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/kernel/hypeman/lib/resources"
+	snapshottest "github.com/kernel/hypeman/lib/snapshot/testsupport"
 	"github.com/kernel/hypeman/lib/system"
 	"github.com/kernel/hypeman/lib/volumes"
 	"github.com/stretchr/testify/assert"
@@ -391,7 +392,7 @@ func TestFirecrackerSnapshotFeature(t *testing.T) {
 
 	imageManager, err := images.NewManager(p, 1, nil)
 	require.NoError(t, err)
-	ensureTestImageReady(t, ctx, p, imageManager, "docker.io/library/alpine:latest")
+	snapshottest.EnsureImageReady(t, ctx, p, imageManager, "docker.io/library/alpine:latest")
 
 	systemManager := system.NewManager(p)
 	require.NoError(t, systemManager.EnsureSystemFiles(ctx))

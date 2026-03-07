@@ -2,7 +2,6 @@ package instances
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -448,28 +447,11 @@ func (m *manager) resolveSnapshotTargetHypervisor(rec *snapshotRecord, requested
 }
 
 func resolveSnapshotTargetState(kind SnapshotKind, requested State) (State, error) {
-	if requested == "" {
-		switch kind {
-		case SnapshotKindStandby:
-			return StateRunning, nil
-		case SnapshotKindStopped:
-			return StateStopped, nil
-		default:
-			return "", fmt.Errorf("%w: unsupported snapshot kind %q", ErrInvalidRequest, kind)
-		}
+	resolved, err := snapshotstore.ResolveTargetState(kind, string(requested))
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", ErrInvalidRequest, err)
 	}
-
-	switch kind {
-	case SnapshotKindStandby:
-		if requested == StateRunning || requested == StateStandby || requested == StateStopped {
-			return requested, nil
-		}
-	case SnapshotKindStopped:
-		if requested == StateStopped || requested == StateRunning {
-			return requested, nil
-		}
-	}
-	return "", fmt.Errorf("%w: invalid target_state %q for snapshot kind %s", ErrInvalidRequest, requested, kind)
+	return State(resolved), nil
 }
 
 func validateCreateSnapshotRequest(req CreateSnapshotRequest) error {
@@ -529,13 +511,9 @@ func (m *manager) ensureInstanceNameAvailableForSnapshotFork(ctx context.Context
 }
 
 func (m *manager) saveSnapshotRecord(rec *snapshotRecord) error {
-	storedMetadata, err := json.Marshal(rec.StoredMetadata)
-	if err != nil {
-		return fmt.Errorf("marshal stored metadata: %w", err)
-	}
-	if err := m.snapshotStore().SaveRecord(&snapshotstore.Record{
+	if err := snapshotstore.SaveTypedRecord(m.snapshotStore(), &snapshotstore.TypedRecord[StoredMetadata]{
 		Snapshot:       rec.Snapshot,
-		StoredMetadata: storedMetadata,
+		StoredMetadata: rec.StoredMetadata,
 	}); err != nil {
 		return err
 	}
@@ -543,39 +521,29 @@ func (m *manager) saveSnapshotRecord(rec *snapshotRecord) error {
 }
 
 func (m *manager) loadSnapshotRecord(snapshotID string) (*snapshotRecord, error) {
-	record, err := m.snapshotStore().LoadRecord(snapshotID)
+	record, err := snapshotstore.LoadTypedRecord[StoredMetadata](m.snapshotStore(), snapshotID)
 	if err != nil {
 		if errors.Is(err, snapshotstore.ErrNotFound) {
 			return nil, ErrSnapshotNotFound
 		}
 		return nil, err
 	}
-
-	var storedMetadata StoredMetadata
-	if err := json.Unmarshal(record.StoredMetadata, &storedMetadata); err != nil {
-		return nil, fmt.Errorf("unmarshal stored metadata: %w", err)
-	}
-
-	var rec snapshotRecord
-	rec.Snapshot = record.Snapshot
-	rec.StoredMetadata = storedMetadata
-	return &rec, nil
+	return &snapshotRecord{
+		Snapshot:       record.Snapshot,
+		StoredMetadata: record.StoredMetadata,
+	}, nil
 }
 
 func (m *manager) listSnapshotRecords() ([]snapshotRecord, error) {
-	storedRecords, err := m.snapshotStore().ListRecords()
+	storedRecords, err := snapshotstore.ListTypedRecords[StoredMetadata](m.snapshotStore())
 	if err != nil {
 		return nil, err
 	}
 	records := make([]snapshotRecord, 0, len(storedRecords))
 	for _, stored := range storedRecords {
-		var storedMetadata StoredMetadata
-		if err := json.Unmarshal(stored.StoredMetadata, &storedMetadata); err != nil {
-			return nil, fmt.Errorf("unmarshal stored metadata for snapshot %s: %w", stored.Snapshot.Id, err)
-		}
 		records = append(records, snapshotRecord{
 			Snapshot:       stored.Snapshot,
-			StoredMetadata: storedMetadata,
+			StoredMetadata: stored.StoredMetadata,
 		})
 	}
 	return records, nil

@@ -111,3 +111,22 @@ func TestDirectoryFileSize(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(8), size)
 }
+
+func TestResolveTargetState(t *testing.T) {
+	t.Parallel()
+
+	state, err := ResolveTargetState(SnapshotKindStandby, "")
+	require.NoError(t, err)
+	require.Equal(t, StateRunning, state)
+
+	state, err = ResolveTargetState(SnapshotKindStopped, "")
+	require.NoError(t, err)
+	require.Equal(t, StateStopped, state)
+
+	state, err = ResolveTargetState(SnapshotKindStandby, StateStandby)
+	require.NoError(t, err)
+	require.Equal(t, StateStandby, state)
+
+	_, err = ResolveTargetState(SnapshotKindStopped, StateStandby)
+	require.Error(t, err)
+}
