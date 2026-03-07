@@ -24,7 +24,6 @@ import (
 	"github.com/kernel/hypeman/lib/network"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/kernel/hypeman/lib/resources"
-	snapshottest "github.com/kernel/hypeman/lib/snapshot/testsupport"
 	"github.com/kernel/hypeman/lib/system"
 	"github.com/kernel/hypeman/lib/volumes"
 	"github.com/stretchr/testify/assert"
@@ -967,66 +966,10 @@ func TestQEMUSnapshotFeature(t *testing.T) {
 	}
 
 	mgr, tmpDir := setupTestManagerForQEMU(t)
-	ctx := context.Background()
-	p := paths.New(tmpDir)
-
-	imageManager, err := images.NewManager(p, 1, nil)
-	require.NoError(t, err)
-	snapshottest.EnsureImageReady(t, ctx, p, imageManager, "docker.io/library/alpine:latest")
-
-	systemManager := system.NewManager(p)
-	require.NoError(t, systemManager.EnsureSystemFiles(ctx))
-
-	source, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
-		Name:           "qemu-snapshot-src",
-		Image:          "docker.io/library/alpine:latest",
-		Size:           1024 * 1024 * 1024,
-		OverlaySize:    10 * 1024 * 1024 * 1024,
-		Vcpus:          1,
-		NetworkEnabled: false,
-		Hypervisor:     hypervisor.TypeQEMU,
-		Cmd:            []string{"sleep", "infinity"},
+	runStandbySnapshotScenario(t, mgr, tmpDir, snapshotScenarioConfig{
+		hypervisor: hypervisor.TypeQEMU,
+		sourceName: "qemu-snapshot-src",
+		snapshot:   "qemu-snapshot-1",
+		forkName:   "qemu-snapshot-fork",
 	})
-	require.NoError(t, err)
-	sourceID := source.Id
-	sourceDeleted := false
-	t.Cleanup(func() {
-		if !sourceDeleted {
-			_ = mgr.DeleteInstance(context.Background(), sourceID)
-		}
-	})
-
-	_, err = mgr.StandbyInstance(ctx, sourceID)
-	require.NoError(t, err)
-
-	snapshot, err := mgr.CreateSnapshot(ctx, sourceID, CreateSnapshotRequest{
-		Kind: SnapshotKindStandby,
-		Name: "qemu-snapshot-1",
-	})
-	require.NoError(t, err)
-	require.Equal(t, SnapshotKindStandby, snapshot.Kind)
-
-	filter := &ListSnapshotsFilter{SourceInstanceID: &sourceID}
-	snapshots, err := mgr.ListSnapshots(ctx, filter)
-	require.NoError(t, err)
-	require.NotEmpty(t, snapshots)
-
-	gotSnapshot, err := mgr.GetSnapshot(ctx, snapshot.Id)
-	require.NoError(t, err)
-	require.Equal(t, snapshot.Id, gotSnapshot.Id)
-
-	require.NoError(t, mgr.DeleteInstance(ctx, sourceID))
-	sourceDeleted = true
-
-	_, err = mgr.GetSnapshot(ctx, snapshot.Id)
-	require.NoError(t, err, "snapshot should remain after source instance deletion")
-
-	forked, err := mgr.ForkSnapshot(ctx, snapshot.Id, ForkSnapshotRequest{
-		Name:        "qemu-snapshot-fork",
-		TargetState: StateStandby,
-	})
-	require.NoError(t, err)
-	require.Equal(t, StateStandby, forked.State)
-	forkID := forked.Id
-	t.Cleanup(func() { _ = mgr.DeleteInstance(context.Background(), forkID) })
 }

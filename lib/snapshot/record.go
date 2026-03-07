@@ -12,22 +12,6 @@ type TypedRecord[T any] struct {
 	StoredMetadata T
 }
 
-func BuildRecord[T any](snapshot Snapshot, metadata T) (*Record, error) {
-	return encodeTypedRecord(&TypedRecord[T]{
-		Snapshot:       snapshot,
-		StoredMetadata: metadata,
-	})
-}
-
-func DecodeRecordMetadata[T any](record *Record) (T, error) {
-	typed, err := decodeTypedRecord[T](record)
-	if err != nil {
-		var zero T
-		return zero, err
-	}
-	return typed.StoredMetadata, nil
-}
-
 func SaveTypedRecord[T any](store *Store, record *TypedRecord[T]) error {
 	if record == nil {
 		return fmt.Errorf("nil snapshot record")
