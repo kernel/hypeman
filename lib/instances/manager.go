@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/kernel/hypeman/lib/devices"
+	"github.com/kernel/hypeman/lib/guestmemory"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/network"
@@ -84,6 +85,7 @@ type manager struct {
 	// Hypervisor support
 	vmStarters        map[hypervisor.Type]hypervisor.VMStarter
 	defaultHypervisor hypervisor.Type // Default hypervisor type when not specified in request
+	guestMemoryPolicy guestmemory.Policy
 }
 
 // platformStarters is populated by platform-specific init functions.
@@ -92,11 +94,17 @@ var platformStarters = make(map[hypervisor.Type]hypervisor.VMStarter)
 // NewManager creates a new instances manager.
 // If meter is nil, metrics are disabled.
 // defaultHypervisor specifies which hypervisor to use when not specified in requests.
-func NewManager(p *paths.Paths, imageManager images.Manager, systemManager system.Manager, networkManager network.Manager, deviceManager devices.Manager, volumeManager volumes.Manager, limits ResourceLimits, defaultHypervisor hypervisor.Type, meter metric.Meter, tracer trace.Tracer) Manager {
+func NewManager(p *paths.Paths, imageManager images.Manager, systemManager system.Manager, networkManager network.Manager, deviceManager devices.Manager, volumeManager volumes.Manager, limits ResourceLimits, defaultHypervisor hypervisor.Type, meter metric.Meter, tracer trace.Tracer, memoryPolicy ...guestmemory.Policy) Manager {
 	// Validate and default the hypervisor type
 	if defaultHypervisor == "" {
 		defaultHypervisor = hypervisor.TypeCloudHypervisor
 	}
+
+	policy := guestmemory.DefaultPolicy()
+	if len(memoryPolicy) > 0 {
+		policy = memoryPolicy[0]
+	}
+	policy = policy.Normalize()
 
 	// Initialize VM starters from platform-specific init functions
 	vmStarters := make(map[hypervisor.Type]hypervisor.VMStarter, len(platformStarters))
@@ -116,6 +124,7 @@ func NewManager(p *paths.Paths, imageManager images.Manager, systemManager syste
 		hostTopology:      detectHostTopology(), // Detect and cache host topology
 		vmStarters:        vmStarters,
 		defaultHypervisor: defaultHypervisor,
+		guestMemoryPolicy: policy,
 	}
 
 	// Initialize metrics if meter is provided

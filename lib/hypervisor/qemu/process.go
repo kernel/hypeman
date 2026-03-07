@@ -204,12 +204,46 @@ func (s *Starter) startQEMUProcess(ctx context.Context, p *paths.Paths, version 
 func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, socketPath string, config hypervisor.VMConfig) (int, hypervisor.Hypervisor, error) {
 	log := logger.FromContext(ctx)
 
-	// Build command arguments: QMP socket + VM configuration
-	args := buildQMPArgs(socketPath)
-	args = append(args, BuildArgs(config)...)
+	// Some distro QEMU builds may not support newer balloon sub-options.
+	// Retry with progressively more conservative balloon args before failing.
+	attempts := []hypervisor.VMConfig{config}
+	if config.GuestMemory.EnableBalloon && (config.GuestMemory.FreePageReporting || config.GuestMemory.FreePageHinting) {
+		fallback := config
+		fallback.GuestMemory.FreePageReporting = false
+		fallback.GuestMemory.FreePageHinting = false
+		attempts = append(attempts, fallback)
+	}
+	if config.GuestMemory.EnableBalloon && config.GuestMemory.DeflateOnOOM {
+		fallback := config
+		fallback.GuestMemory.FreePageReporting = false
+		fallback.GuestMemory.FreePageHinting = false
+		fallback.GuestMemory.DeflateOnOOM = false
+		attempts = append(attempts, fallback)
+	}
 
-	pid, hv, cu, err := s.startQEMUProcess(ctx, p, version, socketPath, args)
-	if err != nil {
+	var (
+		pid    int
+		hv     *QEMU
+		cu     *cleanup.Cleanup
+		err    error
+		booted hypervisor.VMConfig
+	)
+	for i, attempt := range attempts {
+		// Build command arguments: QMP socket + VM configuration
+		args := buildQMPArgs(socketPath)
+		args = append(args, BuildArgs(attempt)...)
+		pid, hv, cu, err = s.startQEMUProcess(ctx, p, version, socketPath, args)
+		if err == nil {
+			booted = attempt
+			break
+		}
+		if i < len(attempts)-1 {
+			// Ensure a failed prior attempt doesn't keep the old socket path reserved.
+			_ = os.Remove(socketPath)
+			time.Sleep(100 * time.Millisecond)
+			log.WarnContext(ctx, "qemu start failed, retrying with reduced balloon features", "attempt", i+1, "error", err)
+			continue
+		}
 		return 0, nil, err
 	}
 	defer cu.Clean()
@@ -217,7 +251,7 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 	// Save config for potential restore later
 	// QEMU migration files only contain memory state, not device config
 	instanceDir := filepath.Dir(socketPath)
-	if err := saveVMConfig(instanceDir, config); err != nil {
+	if err := saveVMConfig(instanceDir, booted); err != nil {
 		// Non-fatal - restore just won't work
 		log.WarnContext(ctx, "failed to save VM config for restore", "error", err)
 	}

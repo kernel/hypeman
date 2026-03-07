@@ -113,6 +113,19 @@ func ToVMConfig(cfg hypervisor.VMConfig) vmm.VmConfig {
 		devices = &deviceConfigs
 	}
 
+	var balloon *vmm.BalloonConfig
+	if cfg.GuestMemory.EnableBalloon {
+		balloon = &vmm.BalloonConfig{
+			Size: 0,
+		}
+		if cfg.GuestMemory.DeflateOnOOM {
+			balloon.DeflateOnOom = ptr(true)
+		}
+		if cfg.GuestMemory.FreePageReporting {
+			balloon.FreePageReporting = ptr(true)
+		}
+	}
+
 	return vmm.VmConfig{
 		Payload: payload,
 		Cpus:    &cpus,
@@ -123,5 +136,6 @@ func ToVMConfig(cfg hypervisor.VMConfig) vmm.VmConfig {
 		Net:     nets,
 		Vsock:   vsock,
 		Devices: devices,
+		Balloon: balloon,
 	}
 }

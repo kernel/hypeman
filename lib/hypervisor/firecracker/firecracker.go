@@ -141,6 +141,14 @@ func (f *Firecracker) configureForBoot(ctx context.Context, cfg hypervisor.VMCon
 	if _, err := f.do(ctx, http.MethodPut, "/machine-config", toMachineConfiguration(cfg), http.StatusNoContent); err != nil {
 		return fmt.Errorf("configure machine: %w", err)
 	}
+	if balloonCfg := toBalloonConfig(cfg); balloonCfg != nil {
+		if _, err := f.do(ctx, http.MethodPut, "/balloon", balloonCfg, http.StatusNoContent); err != nil {
+			// Keep compatibility with older/custom binaries that may not expose balloon API.
+			if !strings.Contains(err.Error(), "Invalid request method and/or path") {
+				return fmt.Errorf("configure balloon: %w", err)
+			}
+		}
+	}
 
 	for _, driveCfg := range toDriveConfigs(cfg) {
 		path := "/drives/" + url.PathEscape(driveCfg.DriveID)

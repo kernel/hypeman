@@ -25,6 +25,20 @@ func BuildArgs(cfg hypervisor.VMConfig) []string {
 	memMB := cfg.MemoryBytes / (1024 * 1024)
 	args = append(args, "-m", fmt.Sprintf("%dM", memMB))
 
+	if cfg.GuestMemory.EnableBalloon {
+		balloonOpts := []string{"virtio-balloon-pci"}
+		if cfg.GuestMemory.DeflateOnOOM {
+			balloonOpts = append(balloonOpts, "deflate-on-oom=on")
+		}
+		if cfg.GuestMemory.FreePageReporting {
+			balloonOpts = append(balloonOpts, "free-page-reporting=on")
+		}
+		if cfg.GuestMemory.FreePageHinting {
+			balloonOpts = append(balloonOpts, "free-page-hint=on")
+		}
+		args = append(args, "-device", strings.Join(balloonOpts, ","))
+	}
+
 	// Kernel and initrd
 	if cfg.KernelPath != "" {
 		args = append(args, "-kernel", cfg.KernelPath)

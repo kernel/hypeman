@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/devices"
+	"github.com/kernel/hypeman/lib/guestmemory"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/logger"
@@ -700,6 +701,7 @@ func (m *manager) buildHypervisorConfig(ctx context.Context, inst *Instance, ima
 		MemoryBytes:   inst.Size,
 		HotplugBytes:  inst.HotplugSize,
 		Topology:      topology,
+		GuestMemory:   m.guestMemoryConfig(),
 		Disks:         disks,
 		Networks:      networks,
 		SerialLogPath: m.paths.InstanceAppLog(inst.Id),
@@ -715,10 +717,23 @@ func (m *manager) buildHypervisorConfig(ctx context.Context, inst *Instance, ima
 // kernelArgs returns the kernel command line arguments for the given hypervisor type.
 // vz uses hvc0 (virtio console), all others use ttyS0 (serial port).
 func (m *manager) kernelArgs(hvType hypervisor.Type) string {
+	console := "console=ttyS0"
 	if hvType == hypervisor.TypeVZ {
-		return "console=hvc0"
+		console = "console=hvc0"
 	}
-	return "console=ttyS0"
+	policyArgs := strings.Join(m.guestMemoryPolicy.KernelArgs(), " ")
+	return guestmemory.MergeKernelArgs(console, policyArgs)
+}
+
+func (m *manager) guestMemoryConfig() hypervisor.GuestMemoryConfig {
+	features := m.guestMemoryPolicy.FeaturesForHypervisor()
+	return hypervisor.GuestMemoryConfig{
+		EnableBalloon:     features.EnableBalloon,
+		FreePageReporting: features.FreePageReporting,
+		DeflateOnOOM:      features.DeflateOnOOM,
+		FreePageHinting:   features.FreePageHinting,
+		RequireBalloon:    features.RequireBalloon,
+	}
 }
 
 func ptr[T any](v T) *T {
