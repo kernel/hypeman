@@ -8,6 +8,17 @@ jobs:
     runs-on: [self-hosted, linux, x64, kvm]
     steps:
       - uses: actions/checkout@v4
+        with:
+          clean: false
+
+      - name: Clean workspace (preserve binary caches)
+        run: |
+          git reset --hard HEAD
+          git clean -ffdx \
+            -e lib/vmm/binaries/ \
+            -e lib/hypervisor/firecracker/binaries/ \
+            -e lib/ingress/binaries/ \
+            -e bin/
       
       - name: Set up Go
         uses: actions/setup-go@v6
@@ -35,9 +46,6 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
-
-      - name: Clean cached binaries
-        run: make clean
 
       - name: Generate OpenAPI code
         run: make oapi-generate
