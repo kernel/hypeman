@@ -6,12 +6,14 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/kernel/hypeman/cmd/api/config"
 )
 
 var testNetworkSeq atomic.Uint32
 var testNetworkByName sync.Map
+var testNetworkRunSeed = uint32(time.Now().UnixNano()) ^ uint32(os.Getpid()<<8)
 
 func newParallelTestNetworkConfig(t *testing.T) config.NetworkConfig {
 	t.Helper()
@@ -21,11 +23,12 @@ func newParallelTestNetworkConfig(t *testing.T) config.NetworkConfig {
 	}
 
 	seq := testNetworkSeq.Add(1)
-	pid := uint32(os.Getpid())
+	const subnetSpace = 50 * 250 // second octet 200-249, third octet 1-250
+	subnetIdx := (testNetworkRunSeed + seq - 1) % subnetSpace
 
-	bridge := fmt.Sprintf("hi%04x%03x", pid&0xffff, seq%0xfff)
-	secondOctet := int(((pid >> 4) % 100) + 100) // 100-199
-	thirdOctet := int((seq % 250) + 1)           // 1-250
+	bridge := fmt.Sprintf("hi%04x%03x", testNetworkRunSeed&0xffff, seq%0xfff)
+	secondOctet := 200 + int((subnetIdx / 250))
+	thirdOctet := int((subnetIdx % 250) + 1)
 
 	cfg := config.NetworkConfig{
 		BridgeName: bridge,
