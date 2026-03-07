@@ -17,7 +17,7 @@ Snapshots are immutable point-in-time captures of a VM that can later be:
 - Captures disk-focused state from a stopped VM.
 - Intended for cold-start style restore/fork.
 - Can be created only from `Stopped`.
-- Allows optional hypervisor switching on restore/fork.
+- Allows optional hypervisor switching on restore/fork because no memory state is carried across.
 
 ## Lifecycle
 
