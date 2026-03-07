@@ -34,13 +34,13 @@ func TestGuestMemoryPolicyCloudHypervisor(t *testing.T) {
 	inst, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "guestmem-ch",
 		Image:          "docker.io/library/alpine:latest",
-		Size:           1024 * 1024 * 1024,
+		Size:           4 * 1024 * 1024 * 1024,
 		OverlaySize:    5 * 1024 * 1024 * 1024,
 		Vcpus:          1,
 		NetworkEnabled: false,
 		Hypervisor:     hypervisor.TypeCloudHypervisor,
 		Entrypoint:     []string{"/bin/sh", "-c"},
-		Cmd:            []string{guestMemoryWorkloadScript()},
+		Cmd:            []string{guestMemoryIdleScript()},
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = mgr.DeleteInstance(ctx, inst.Id) })
@@ -63,7 +63,7 @@ func TestGuestMemoryPolicyCloudHypervisor(t *testing.T) {
 	assert.True(t, infoResp.JSON200.Config.Balloon.FreePageReporting != nil && *infoResp.JSON200.Config.Balloon.FreePageReporting)
 
 	pid := requireHypervisorPID(t, ctx, mgr, inst.Id)
-	runGuestMemoryReclaimProbe(t, pid)
+	assertLowIdleHostMemoryFootprint(t, "cloud-hypervisor", pid, 96*1024)
 }
 
 func TestGuestMemoryPolicyQEMU(t *testing.T) {
@@ -79,13 +79,13 @@ func TestGuestMemoryPolicyQEMU(t *testing.T) {
 	inst, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "guestmem-qemu",
 		Image:          "docker.io/library/alpine:latest",
-		Size:           1024 * 1024 * 1024,
+		Size:           4 * 1024 * 1024 * 1024,
 		OverlaySize:    5 * 1024 * 1024 * 1024,
 		Vcpus:          1,
 		NetworkEnabled: false,
 		Hypervisor:     hypervisor.TypeQEMU,
 		Entrypoint:     []string{"/bin/sh", "-c"},
-		Cmd:            []string{guestMemoryWorkloadScript()},
+		Cmd:            []string{guestMemoryIdleScript()},
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = mgr.DeleteInstance(ctx, inst.Id) })
@@ -100,7 +100,7 @@ func TestGuestMemoryPolicyQEMU(t *testing.T) {
 	assert.Contains(t, joined, "init_on_free=0")
 	assert.Contains(t, joined, "virtio-balloon-pci", "qemu cmdline should include virtio balloon device")
 
-	runGuestMemoryReclaimProbe(t, pid)
+	assertLowIdleHostMemoryFootprint(t, "qemu", pid, 160*1024)
 }
 
 func TestGuestMemoryPolicyFirecracker(t *testing.T) {
@@ -116,13 +116,13 @@ func TestGuestMemoryPolicyFirecracker(t *testing.T) {
 	inst, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "guestmem-fc",
 		Image:          "docker.io/library/alpine:latest",
-		Size:           1024 * 1024 * 1024,
+		Size:           4 * 1024 * 1024 * 1024,
 		OverlaySize:    5 * 1024 * 1024 * 1024,
 		Vcpus:          1,
 		NetworkEnabled: false,
 		Hypervisor:     hypervisor.TypeFirecracker,
 		Entrypoint:     []string{"/bin/sh", "-c"},
-		Cmd:            []string{guestMemoryWorkloadScript()},
+		Cmd:            []string{guestMemoryIdleScript()},
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = mgr.DeleteInstance(ctx, inst.Id) })
@@ -136,11 +136,11 @@ func TestGuestMemoryPolicyFirecracker(t *testing.T) {
 	assert.True(t, vmCfg.Balloon.FreePageReporting)
 
 	pid := requireHypervisorPID(t, ctx, mgr, inst.Id)
-	runGuestMemoryReclaimProbe(t, pid)
+	assertLowIdleHostMemoryFootprint(t, "firecracker", pid, 96*1024)
 }
 
-func guestMemoryWorkloadScript() string {
-	return "set -e; sleep 8; test -d /dev/shm || mkdir -p /dev/shm; dd if=/dev/zero of=/dev/shm/hype-mem bs=1M count=256 >/dev/null 2>&1; sleep 3; rm -f /dev/shm/hype-mem; sync; sleep 120"
+func guestMemoryIdleScript() string {
+	return "set -e; sleep 180"
 }
 
 func createImageAndWait(t *testing.T, ctx context.Context, imageManager images.Manager, imageName string) {
@@ -173,56 +173,36 @@ func requireHypervisorPID(t *testing.T, ctx context.Context, mgr *manager, insta
 	return *inst.HypervisorPID
 }
 
-func runGuestMemoryReclaimProbe(t *testing.T, pid int) {
+func assertLowIdleHostMemoryFootprint(t *testing.T, hypervisorName string, pid int, maxPSSKB int64) {
 	t.Helper()
 
-	baselineRSS := mustReadRSSBytes(t, pid)
-	peakRSS := baselineRSS
-	postPeakMinRSS := int64(0)
-	growthThreshold := int64(16 * 1024 * 1024)
-	dropSignalThreshold := int64(1 * 1024 * 1024)
-
-	// Wait for the in-guest workload to allocate memory and require a visible RSS increase.
-	deadline := time.Now().Add(50 * time.Second)
-	for time.Now().Before(deadline) {
-		rss := mustReadRSSBytes(t, pid)
-		if rss > peakRSS {
-			peakRSS = rss
-		}
-		if peakRSS > baselineRSS+growthThreshold {
-			postPeakMinRSS = rss
-			break
-		}
-		time.Sleep(500 * time.Millisecond)
+	// Give the guest a short settle window, then sample host memory.
+	time.Sleep(12 * time.Second)
+	var pssSamplesKB []int64
+	var rssSamplesKB []int64
+	for i := 0; i < 6; i++ {
+		pssSamplesKB = append(pssSamplesKB, mustReadPSSKB(t, pid))
+		rssSamplesKB = append(rssSamplesKB, mustReadRSSBytes(t, pid)/1024)
+		time.Sleep(1 * time.Second)
 	}
 
-	assert.Greaterf(
+	var pssSumKB int64
+	for _, v := range pssSamplesKB {
+		pssSumKB += v
+	}
+	avgPSSKB := pssSumKB / int64(len(pssSamplesKB))
+
+	assert.LessOrEqualf(
 		t,
-		peakRSS,
-		baselineRSS+growthThreshold,
-		"expected RSS to rise during workload (baseline=%d peak=%d growth_threshold=%d)",
-		baselineRSS,
-		peakRSS,
-		growthThreshold,
+		avgPSSKB,
+		maxPSSKB,
+		"expected low idle host memory footprint for %s (avg_pss_kb=%d max_pss_kb=%d rss_samples_kb=%v pss_samples_kb=%v)",
+		hypervisorName,
+		avgPSSKB,
+		maxPSSKB,
+		rssSamplesKB,
+		pssSamplesKB,
 	)
-
-	// Reclaim/drop signal is best-effort: backend flags are validated elsewhere in each test.
-	// Host RSS accounting and kernel reclaim timing can vary across systems.
-	recoveryDeadline := time.Now().Add(12 * time.Second)
-	for time.Now().Before(recoveryDeadline) {
-		rss := mustReadRSSBytes(t, pid)
-		if postPeakMinRSS == 0 || rss < postPeakMinRSS {
-			postPeakMinRSS = rss
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
-
-	drop := peakRSS - postPeakMinRSS
-	if drop >= dropSignalThreshold {
-		t.Logf("observed post-peak RSS drop: %d bytes (baseline=%d peak=%d min=%d)", drop, baselineRSS, peakRSS, postPeakMinRSS)
-		return
-	}
-	t.Logf("no clear post-peak RSS drop observed (baseline=%d peak=%d min=%d)", baselineRSS, peakRSS, postPeakMinRSS)
 }
 
 func mustReadRSSBytes(t *testing.T, pid int) int64 {
@@ -241,6 +221,25 @@ func mustReadRSSBytes(t *testing.T, pid int) int64 {
 		}
 	}
 	t.Fatalf("VmRSS not found in %s", statusPath)
+	return 0
+}
+
+func mustReadPSSKB(t *testing.T, pid int) int64 {
+	t.Helper()
+	smapsRollupPath := fmt.Sprintf("/proc/%d/smaps_rollup", pid)
+	data, err := os.ReadFile(smapsRollupPath)
+	require.NoError(t, err)
+
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "Pss:") {
+			fields := strings.Fields(line)
+			require.GreaterOrEqual(t, len(fields), 2)
+			kb, err := strconv.ParseInt(fields[1], 10, 64)
+			require.NoError(t, err)
+			return kb
+		}
+	}
+	t.Fatalf("Pss not found in %s", smapsRollupPath)
 	return 0
 }
 

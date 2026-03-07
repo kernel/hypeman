@@ -39,7 +39,7 @@ func TestGuestMemoryPolicyVZ(t *testing.T) {
 	inst, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "guestmem-vz",
 		Image:          "docker.io/library/nginx:alpine",
-		Size:           1024 * 1024 * 1024,
+		Size:           4 * 1024 * 1024 * 1024,
 		OverlaySize:    5 * 1024 * 1024 * 1024,
 		Vcpus:          1,
 		NetworkEnabled: false,
@@ -63,7 +63,10 @@ func TestGuestMemoryPolicyVZ(t *testing.T) {
 	require.NoError(t, err)
 	assert.GreaterOrEqual(t, info.MemoryBalloonDevices, 1, "vz shim should report attached memory balloon device")
 
-	runVZGuestMemoryReclaimProbe(t, ctx, mgr, inst.Id)
+	instMeta, err := mgr.GetInstance(ctx, inst.Id)
+	require.NoError(t, err)
+	require.NotNil(t, instMeta.HypervisorPID)
+	assertLowIdleVZHostMemoryFootprint(t, *instMeta.HypervisorPID, 192*1024)
 }
 
 func createNginxImageAndWaitDarwin(t *testing.T, ctx context.Context, imageManager images.Manager) {
@@ -125,61 +128,29 @@ func getVZVMInfo(socketPath string) (*vzVMInfo, error) {
 	return &info, nil
 }
 
-func runVZGuestMemoryReclaimProbe(t *testing.T, ctx context.Context, mgr *manager, instanceID string) {
+func assertLowIdleVZHostMemoryFootprint(t *testing.T, pid int, maxRSSKB int64) {
 	t.Helper()
 
-	inst, err := mgr.GetInstance(ctx, instanceID)
-	require.NoError(t, err)
-	require.NotNil(t, inst.HypervisorPID)
-	pid := *inst.HypervisorPID
-
-	baselineRSS := mustReadDarwinRSSBytes(t, pid)
-
-	workloadErr := make(chan error, 1)
-	go func() {
-		cmd := "set -e; test -d /dev/shm || mkdir -p /dev/shm; dd if=/dev/zero of=/dev/shm/hype-mem bs=1M count=128 >/dev/null 2>&1; sleep 2; rm -f /dev/shm/hype-mem; sync; sleep 2"
-		_, exitCode, err := vzExecCommand(ctx, inst, "sh", "-c", cmd)
-		if err != nil {
-			workloadErr <- err
-			return
-		}
-		if exitCode != 0 {
-			workloadErr <- fmt.Errorf("guest workload exited with code %d", exitCode)
-			return
-		}
-		workloadErr <- nil
-	}()
-
-	peakRSS := baselineRSS
-	ticker := time.NewTicker(250 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case err := <-workloadErr:
-			require.NoError(t, err)
-			goto done
-		case <-ticker.C:
-			rss := mustReadDarwinRSSBytes(t, pid)
-			if rss > peakRSS {
-				peakRSS = rss
-			}
-		}
+	time.Sleep(12 * time.Second)
+	var rssSamplesKB []int64
+	for i := 0; i < 6; i++ {
+		rssSamplesKB = append(rssSamplesKB, mustReadDarwinRSSBytes(t, pid)/1024)
+		time.Sleep(1 * time.Second)
 	}
-
-done:
-	assert.Greater(t, peakRSS, baselineRSS+(8*1024*1024))
-
-	deadline := time.Now().Add(10 * time.Second)
-	postRSS := mustReadDarwinRSSBytes(t, pid)
-	for time.Now().Before(deadline) {
-		postRSS = mustReadDarwinRSSBytes(t, pid)
-		if postRSS < peakRSS-(4*1024*1024) {
-			break
-		}
-		time.Sleep(250 * time.Millisecond)
+	var rssSumKB int64
+	for _, v := range rssSamplesKB {
+		rssSumKB += v
 	}
-	assert.Less(t, postRSS, peakRSS)
+	avgRSSKB := rssSumKB / int64(len(rssSamplesKB))
+	assert.LessOrEqualf(
+		t,
+		avgRSSKB,
+		maxRSSKB,
+		"expected low idle host memory footprint for vz (avg_rss_kb=%d max_rss_kb=%d rss_samples_kb=%v)",
+		avgRSSKB,
+		maxRSSKB,
+		rssSamplesKB,
+	)
 }
 
 func mustReadDarwinRSSBytes(t *testing.T, pid int) int64 {
