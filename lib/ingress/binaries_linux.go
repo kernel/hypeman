@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"syscall"
 
 	"github.com/kernel/hypeman/lib/paths"
 )
@@ -57,13 +58,29 @@ func ExtractCaddyBinary(p *paths.Paths) (string, error) {
 		return "", fmt.Errorf("create caddy binary dir: %w", err)
 	}
 
-	// Write binary to filesystem
-	if err := os.WriteFile(extractPath, data, 0755); err != nil {
+	lockFile, err := os.OpenFile(extractPath+".lock", os.O_CREATE|os.O_RDWR, 0644)
+	if err != nil {
+		return "", fmt.Errorf("open extraction lock: %w", err)
+	}
+	defer lockFile.Close()
+	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX); err != nil {
+		return "", fmt.Errorf("lock extraction: %w", err)
+	}
+	defer syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
+
+	// Another process may have extracted it while we waited for the lock.
+	if _, err := os.Stat(extractPath); err == nil {
+		if storedHash, err := os.ReadFile(hashPath); err == nil && string(storedHash) == embeddedHash {
+			return extractPath, nil
+		}
+	}
+
+	if err := atomicWriteExecutable(extractPath, data); err != nil {
 		return "", fmt.Errorf("write caddy binary: %w", err)
 	}
 
 	// Write hash file for future comparisons
-	if err := os.WriteFile(hashPath, []byte(embeddedHash), 0644); err != nil {
+	if err := atomicWriteFile(hashPath, []byte(embeddedHash), 0644); err != nil {
 		// Non-fatal - binary is extracted, just won't have hash for next time
 		// This could cause unnecessary re-extractions but won't break functionality
 		slog.Info("failed to write caddy binary hash file", "path", hashPath, "error", err)
@@ -75,4 +92,40 @@ func ExtractCaddyBinary(p *paths.Paths) (string, error) {
 // GetCaddyBinaryPath returns path to extracted binary, extracting if needed.
 func GetCaddyBinaryPath(p *paths.Paths) (string, error) {
 	return ExtractCaddyBinary(p)
+}
+
+func atomicWriteExecutable(path string, data []byte) error {
+	return atomicWriteFile(path, data, 0755)
+}
+
+func atomicWriteFile(path string, data []byte, mode os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmpFile, err := os.CreateTemp(dir, "caddy-*")
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+	cleanupTmp := true
+	defer func() {
+		if cleanupTmp {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+
+	if _, err := tmpFile.Write(data); err != nil {
+		_ = tmpFile.Close()
+		return fmt.Errorf("write temp file: %w", err)
+	}
+	if err := tmpFile.Chmod(mode); err != nil {
+		_ = tmpFile.Close()
+		return fmt.Errorf("chmod temp file: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		return fmt.Errorf("close temp file: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("install file: %w", err)
+	}
+	cleanupTmp = false
+	return nil
 }
