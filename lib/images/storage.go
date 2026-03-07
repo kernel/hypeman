@@ -22,7 +22,7 @@ type imageMetadata struct {
 	Entrypoint []string            `json:"entrypoint,omitempty"`
 	Cmd        []string            `json:"cmd,omitempty"`
 	Env        map[string]string   `json:"env,omitempty"`
-	Metadata   map[string]string   `json:"metadata,omitempty"`
+	Metadata   tags.Metadata       `json:"metadata,omitempty"`
 	WorkingDir string              `json:"working_dir,omitempty"`
 	CreatedAt  time.Time           `json:"created_at"`
 }

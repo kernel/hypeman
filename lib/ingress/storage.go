@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/kernel/hypeman/lib/paths"
+	"github.com/kernel/hypeman/lib/tags"
 )
 
 // Filesystem structure:
@@ -14,11 +15,11 @@ import (
 
 // storedIngress represents ingress data that is persisted to disk.
 type storedIngress struct {
-	ID        string            `json:"id"`
-	Name      string            `json:"name"`
-	Metadata  map[string]string `json:"metadata,omitempty"`
-	Rules     []IngressRule     `json:"rules"`
-	CreatedAt string            `json:"created_at"` // RFC3339 format
+	ID        string        `json:"id"`
+	Name      string        `json:"name"`
+	Metadata  tags.Metadata `json:"metadata,omitempty"`
+	Rules     []IngressRule `json:"rules"`
+	CreatedAt string        `json:"created_at"` // RFC3339 format
 }
 
 // ensureIngressDir creates the ingresses directory if it doesn't exist.

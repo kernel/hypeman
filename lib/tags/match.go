@@ -1,7 +1,7 @@
 package tags
 
 // Matches returns true when resource metadata satisfies all filter pairs.
-func Matches(resource map[string]string, filter map[string]string) bool {
+func Matches(resource Metadata, filter Metadata) bool {
 	if len(filter) == 0 {
 		return true
 	}

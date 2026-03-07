@@ -15,7 +15,7 @@ import (
 type buildMetadata struct {
 	ID              string              `json:"id"`
 	Status          string              `json:"status"`
-	Metadata        map[string]string   `json:"metadata,omitempty"`
+	Metadata        tags.Metadata       `json:"metadata,omitempty"`
 	Request         *CreateBuildRequest `json:"request,omitempty"`
 	ImageDigest     *string             `json:"image_digest,omitempty"`
 	ImageRef        *string             `json:"image_ref,omitempty"`

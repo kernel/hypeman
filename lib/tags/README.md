@@ -6,6 +6,8 @@ This package defines the product contract for user-provided metadata tags used a
 
 Metadata tags are optional string key/value pairs that let users label resources for ownership, environment, automation, and filtering.
 
+Domain code uses the shared `tags.Metadata` type alias so resource packages reference one metadata type consistently.
+
 Examples:
 - `team=backend`
 - `env=staging`

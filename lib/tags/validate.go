@@ -7,7 +7,7 @@ import (
 )
 
 // Validate enforces metadata constraints for all mutable resources.
-func Validate(metadata map[string]string) error {
+func Validate(metadata Metadata) error {
 	if len(metadata) == 0 {
 		return nil
 	}

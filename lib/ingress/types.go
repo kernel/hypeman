@@ -20,7 +20,7 @@ type Ingress struct {
 	Name string `json:"name"`
 
 	// Metadata is optional user-defined key-value metadata.
-	Metadata map[string]string `json:"metadata,omitempty"`
+	Metadata tags.Metadata `json:"metadata,omitempty"`
 
 	// Rules define the routing rules for this ingress.
 	Rules []IngressRule `json:"rules"`
@@ -178,7 +178,7 @@ type CreateIngressRequest struct {
 	Name string `json:"name"`
 
 	// Metadata is optional user-defined key-value metadata.
-	Metadata map[string]string `json:"metadata,omitempty"`
+	Metadata tags.Metadata `json:"metadata,omitempty"`
 
 	// Rules define the routing rules for this ingress.
 	Rules []IngressRule `json:"rules"`

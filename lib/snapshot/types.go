@@ -19,12 +19,12 @@ const (
 
 // Snapshot is a centrally stored immutable snapshot resource.
 type Snapshot struct {
-	Id               string            `json:"id"`
-	Name             string            `json:"name"`
-	Kind             SnapshotKind      `json:"kind"`
-	Metadata         map[string]string `json:"metadata,omitempty"`
-	SourceInstanceID string            `json:"source_instance_id"`
-	SourceName       string            `json:"source_instance_name"`
+	Id               string        `json:"id"`
+	Name             string        `json:"name"`
+	Kind             SnapshotKind  `json:"kind"`
+	Metadata         tags.Metadata `json:"metadata,omitempty"`
+	SourceInstanceID string        `json:"source_instance_id"`
+	SourceName       string        `json:"source_instance_name"`
 	SourceHypervisor hypervisor.Type
 	CreatedAt        time.Time `json:"created_at"`
 	SizeBytes        int64     `json:"size_bytes"`
@@ -35,7 +35,7 @@ type ListSnapshotsFilter struct {
 	SourceInstanceID *string
 	Kind             *SnapshotKind
 	Name             *string
-	Metadata         map[string]string
+	Metadata         tags.Metadata
 }
 
 // Matches returns true if the given snapshot satisfies all filter criteria.
