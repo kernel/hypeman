@@ -732,3 +732,95 @@ func ensureMkfsExt4Available(t *testing.T) {
 
 	t.Fatalf("mkfs.ext4 not found; install e2fsprogs and ensure it is on PATH")
 }
+
+func TestVZSnapshotFeature(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("vz tests require macOS")
+	}
+	if runtime.GOARCH != "arm64" {
+		t.Skip("vz tests require Apple Silicon (arm64)")
+	}
+	if !isMacOS14OrLater(t) {
+		t.Skip("vz snapshot test requires macOS 14+")
+	}
+	ensureMkfsExt4Available(t)
+
+	mgr, tmpDir := setupVZTestManager(t)
+	ctx := context.Background()
+	p := paths.New(tmpDir)
+
+	imageManager, err := images.NewManager(p, 1, nil)
+	require.NoError(t, err)
+	ensureTestImageReady(t, ctx, p, imageManager, "docker.io/library/alpine:latest")
+
+	systemManager := system.NewManager(p)
+	require.NoError(t, systemManager.EnsureSystemFiles(ctx))
+
+	source, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
+		Name:           "vz-snapshot-src",
+		Image:          "docker.io/library/alpine:latest",
+		Size:           1024 * 1024 * 1024,
+		OverlaySize:    10 * 1024 * 1024 * 1024,
+		Vcpus:          1,
+		NetworkEnabled: false,
+		Hypervisor:     hypervisor.TypeVZ,
+		Cmd:            []string{"sleep", "infinity"},
+	})
+	if err != nil {
+		dumpVZShimLogs(t, tmpDir)
+		require.NoError(t, err)
+	}
+	sourceID := source.Id
+	sourceDeleted := false
+	t.Cleanup(func() {
+		if !sourceDeleted {
+			_ = mgr.DeleteInstance(context.Background(), sourceID)
+		}
+	})
+
+	_, err = mgr.StandbyInstance(ctx, sourceID)
+	if err != nil {
+		dumpVZShimLogs(t, tmpDir)
+		require.NoError(t, err)
+	}
+
+	snapshot, err := mgr.CreateSnapshot(ctx, sourceID, CreateSnapshotRequest{
+		Kind: SnapshotKindStandby,
+		Name: "vz-snapshot-1",
+	})
+	if err != nil {
+		dumpVZShimLogs(t, tmpDir)
+		require.NoError(t, err)
+	}
+	require.Equal(t, SnapshotKindStandby, snapshot.Kind)
+
+	filter := &ListSnapshotsFilter{SourceInstanceID: &sourceID}
+	snapshots, err := mgr.ListSnapshots(ctx, filter)
+	require.NoError(t, err)
+	require.NotEmpty(t, snapshots)
+
+	gotSnapshot, err := mgr.GetSnapshot(ctx, snapshot.Id)
+	require.NoError(t, err)
+	require.Equal(t, snapshot.Id, gotSnapshot.Id)
+
+	require.NoError(t, mgr.DeleteInstance(ctx, sourceID))
+	sourceDeleted = true
+
+	_, err = mgr.GetSnapshot(ctx, snapshot.Id)
+	require.NoError(t, err, "snapshot should remain after source instance deletion")
+
+	forked, err := mgr.ForkSnapshot(ctx, snapshot.Id, ForkSnapshotRequest{
+		Name:        "vz-snapshot-fork",
+		TargetState: StateStandby,
+	})
+	if err != nil {
+		dumpVZShimLogs(t, tmpDir)
+		require.NoError(t, err)
+	}
+	require.Equal(t, StateStandby, forked.State)
+	forkID := forked.Id
+	t.Cleanup(func() { _ = mgr.DeleteInstance(context.Background(), forkID) })
+	currentFork, err := mgr.GetInstance(ctx, forkID)
+	require.NoError(t, err)
+	require.Equal(t, StateStandby, currentFork.State)
+}

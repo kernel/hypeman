@@ -246,6 +246,113 @@ components:
       description: Target state for the forked instance after fork completes
       enum: [Stopped, Standby, Running]
       example: Running
+
+    SnapshotKind:
+      type: string
+      description: Snapshot capture kind
+      enum: [Standby, Stopped]
+      example: Standby
+
+    SnapshotTargetState:
+      type: string
+      description: Target state when restoring or forking from a snapshot
+      enum: [Stopped, Standby, Running]
+      example: Running
+
+    Snapshot:
+      type: object
+      required: [id, kind, source_instance_id, source_instance_name, source_hypervisor, created_at, size_bytes]
+      properties:
+        id:
+          type: string
+          description: Auto-generated unique snapshot identifier
+          example: q7z1w7l2af4l8y7q1h7g2m3s
+        name:
+          type: string
+          description: Optional human-readable snapshot name (unique per source instance)
+          nullable: true
+          example: baseline-standby
+        kind:
+          $ref: "#/components/schemas/SnapshotKind"
+        source_instance_id:
+          type: string
+          description: Source instance ID at snapshot creation time
+          example: qilviffnqzck2jrim1x6s2b1
+        source_instance_name:
+          type: string
+          description: Source instance name at snapshot creation time
+          example: nginx1
+        source_hypervisor:
+          type: string
+          enum: [cloud-hypervisor, firecracker, qemu, vz]
+          description: Source instance hypervisor at snapshot creation time
+          example: cloud-hypervisor
+        created_at:
+          type: string
+          format: date-time
+          description: Snapshot creation timestamp
+          example: "2026-03-06T13:56:11Z"
+        size_bytes:
+          type: integer
+          format: int64
+          description: Total payload size in bytes
+          example: 104857600
+
+    CreateSnapshotRequest:
+      type: object
+      required: [kind]
+      properties:
+        kind:
+          $ref: "#/components/schemas/SnapshotKind"
+        name:
+          type: string
+          description: Optional snapshot name (lowercase letters, digits, and dashes only; cannot start or end with a dash)
+          pattern: ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$
+          maxLength: 63
+          example: pre-upgrade
+
+    RestoreSnapshotRequest:
+      type: object
+      properties:
+        target_state:
+          $ref: "#/components/schemas/SnapshotTargetState"
+          description: |
+            Optional final state after restore.
+            Defaults by snapshot kind:
+            - Standby snapshot defaults to Running
+            - Stopped snapshot defaults to Stopped
+        target_hypervisor:
+          type: string
+          enum: [cloud-hypervisor, firecracker, qemu, vz]
+          description: |
+            Optional hypervisor override. Allowed only when restoring from a Stopped snapshot.
+            Standby snapshots must restore with their original hypervisor.
+          example: qemu
+
+    ForkSnapshotRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          description: Name for the new instance (lowercase letters, digits, and dashes only; cannot start or end with a dash)
+          pattern: ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$
+          maxLength: 63
+          example: nginx-from-snap
+        target_state:
+          $ref: "#/components/schemas/SnapshotTargetState"
+          description: |
+            Optional final state for the forked instance.
+            Defaults by snapshot kind:
+            - Standby snapshot defaults to Running
+            - Stopped snapshot defaults to Stopped
+        target_hypervisor:
+          type: string
+          enum: [cloud-hypervisor, firecracker, qemu, vz]
+          description: |
+            Optional hypervisor override. Allowed only when forking from a Stopped snapshot.
+            Standby snapshots must fork with their original hypervisor.
+          example: cloud-hypervisor
     
     Instance:
       type: object
@@ -1591,6 +1698,284 @@ paths:
                 $ref: "#/components/schemas/Error"
         501:
           description: Not implemented - fork not supported by this hypervisor
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /instances/{id}/snapshots:
+    post:
+      summary: Create a snapshot for an instance
+      operationId: createInstanceSnapshot
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Source instance ID or name
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSnapshotRequest"
+      responses:
+        201:
+          description: Snapshot created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Snapshot"
+        400:
+          description: Bad request - invalid snapshot request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        404:
+          description: Source instance not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Conflict - invalid state or duplicate snapshot name
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        501:
+          description: Not implemented - operation unsupported by source hypervisor
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /instances/{id}/snapshots/{snapshotId}/restore:
+    post:
+      summary: Restore an instance from a snapshot in-place
+      operationId: restoreInstanceSnapshot
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Source instance ID or name
+        - name: snapshotId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Snapshot ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RestoreSnapshotRequest"
+      responses:
+        200:
+          description: Instance restored from snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Instance"
+        400:
+          description: Bad request - invalid restore request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        404:
+          description: Instance or snapshot not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Conflict - invalid source state or unsupported transition
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        501:
+          description: Not implemented - operation unsupported by target hypervisor
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /snapshots:
+    get:
+      summary: List snapshots
+      operationId: listSnapshots
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: source_instance_id
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Filter snapshots by source instance ID
+        - name: kind
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/SnapshotKind"
+          description: Filter snapshots by kind
+        - name: name
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Filter snapshots by snapshot name
+      responses:
+        200:
+          description: List of snapshots
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Snapshot"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /snapshots/{snapshotId}:
+    get:
+      summary: Get snapshot details
+      operationId: getSnapshot
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: snapshotId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Snapshot ID
+      responses:
+        200:
+          description: Snapshot details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Snapshot"
+        404:
+          description: Snapshot not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      summary: Delete a snapshot
+      operationId: deleteSnapshot
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: snapshotId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Snapshot ID
+      responses:
+        204:
+          description: Snapshot deleted
+        404:
+          description: Snapshot not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /snapshots/{snapshotId}/fork:
+    post:
+      summary: Fork a new instance from a snapshot
+      operationId: forkSnapshot
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: snapshotId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Snapshot ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ForkSnapshotRequest"
+      responses:
+        201:
+          description: Forked instance created from snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Instance"
+        400:
+          description: Bad request - invalid fork snapshot request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        404:
+          description: Snapshot not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Conflict - invalid target state or name conflict
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        501:
+          description: Not implemented - operation unsupported by target hypervisor
           content:
             application/json:
               schema:

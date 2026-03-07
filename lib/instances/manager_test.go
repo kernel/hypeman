@@ -28,6 +28,7 @@ import (
 	"github.com/kernel/hypeman/lib/system"
 	"github.com/kernel/hypeman/lib/vmm"
 	"github.com/kernel/hypeman/lib/volumes"
+	"github.com/samber/lo"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -1355,6 +1356,77 @@ func TestStandbyAndRestore(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Log("Standby/restore test complete!")
+}
+
+func TestCloudHypervisorSnapshotFeature(t *testing.T) {
+	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
+		t.Skip("/dev/kvm not available, skipping on this platform")
+	}
+
+	mgr, tmpDir := setupTestManager(t)
+	ctx := context.Background()
+	p := paths.New(tmpDir)
+
+	imageManager, err := images.NewManager(p, 1, nil)
+	require.NoError(t, err)
+	ensureTestImageReady(t, ctx, p, imageManager, "docker.io/library/alpine:latest")
+
+	systemManager := system.NewManager(p)
+	require.NoError(t, systemManager.EnsureSystemFiles(ctx))
+
+	source, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
+		Name:           "ch-snapshot-src",
+		Image:          "docker.io/library/alpine:latest",
+		Size:           1024 * 1024 * 1024,
+		OverlaySize:    10 * 1024 * 1024 * 1024,
+		Vcpus:          1,
+		NetworkEnabled: false,
+		Cmd:            []string{"sleep", "infinity"},
+	})
+	require.NoError(t, err)
+	sourceID := source.Id
+	sourceDeleted := false
+	t.Cleanup(func() {
+		if !sourceDeleted {
+			_ = mgr.DeleteInstance(context.Background(), sourceID)
+		}
+	})
+
+	_, err = mgr.StandbyInstance(ctx, sourceID)
+	require.NoError(t, err)
+
+	snapshot, err := mgr.CreateSnapshot(ctx, sourceID, CreateSnapshotRequest{
+		Kind: SnapshotKindStandby,
+		Name: "ch-snapshot-1",
+	})
+	require.NoError(t, err)
+	require.Equal(t, SnapshotKindStandby, snapshot.Kind)
+	require.Equal(t, sourceID, snapshot.SourceInstanceID)
+
+	filter := &ListSnapshotsFilter{SourceInstanceID: &sourceID}
+	snapshots, err := mgr.ListSnapshots(ctx, filter)
+	require.NoError(t, err)
+	require.NotEmpty(t, snapshots)
+	assert.True(t, lo.ContainsBy(snapshots, func(s Snapshot) bool { return s.Id == snapshot.Id }))
+
+	gotSnapshot, err := mgr.GetSnapshot(ctx, snapshot.Id)
+	require.NoError(t, err)
+	require.Equal(t, snapshot.Id, gotSnapshot.Id)
+
+	require.NoError(t, mgr.DeleteInstance(ctx, sourceID))
+	sourceDeleted = true
+
+	_, err = mgr.GetSnapshot(ctx, snapshot.Id)
+	require.NoError(t, err, "snapshot should remain after source instance deletion")
+
+	forked, err := mgr.ForkSnapshot(ctx, snapshot.Id, ForkSnapshotRequest{
+		Name:        "ch-snapshot-fork",
+		TargetState: StateStandby,
+	})
+	require.NoError(t, err)
+	require.Equal(t, StateStandby, forked.State)
+	forkID := forked.Id
+	t.Cleanup(func() { _ = mgr.DeleteInstance(context.Background(), forkID) })
 }
 
 func TestStateTransitions(t *testing.T) {

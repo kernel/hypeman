@@ -19,15 +19,21 @@ import (
 
 type Manager interface {
 	ListInstances(ctx context.Context, filter *ListInstancesFilter) ([]Instance, error)
+	ListSnapshots(ctx context.Context, filter *ListSnapshotsFilter) ([]Snapshot, error)
+	GetSnapshot(ctx context.Context, snapshotID string) (*Snapshot, error)
 	CreateInstance(ctx context.Context, req CreateInstanceRequest) (*Instance, error)
+	CreateSnapshot(ctx context.Context, id string, req CreateSnapshotRequest) (*Snapshot, error)
 	// GetInstance returns an instance by ID, name, or ID prefix.
 	// Lookup order: exact ID match -> exact name match -> ID prefix match.
 	// Returns ErrAmbiguousName if prefix matches multiple instances.
 	GetInstance(ctx context.Context, idOrName string) (*Instance, error)
 	DeleteInstance(ctx context.Context, id string) error
+	DeleteSnapshot(ctx context.Context, snapshotID string) error
 	ForkInstance(ctx context.Context, id string, req ForkInstanceRequest) (*Instance, error)
+	ForkSnapshot(ctx context.Context, snapshotID string, req ForkSnapshotRequest) (*Instance, error)
 	StandbyInstance(ctx context.Context, id string) (*Instance, error)
 	RestoreInstance(ctx context.Context, id string) (*Instance, error)
+	RestoreSnapshot(ctx context.Context, id string, snapshotID string, req RestoreSnapshotRequest) (*Instance, error)
 	StopInstance(ctx context.Context, id string) (*Instance, error)
 	StartInstance(ctx context.Context, id string, req StartInstanceRequest) (*Instance, error)
 	StreamInstanceLogs(ctx context.Context, id string, tail int, follow bool, source LogSource) (<-chan string, error)
@@ -183,6 +189,25 @@ func (m *manager) DeleteInstance(ctx context.Context, id string) error {
 	return err
 }
 
+func (m *manager) ListSnapshots(ctx context.Context, filter *ListSnapshotsFilter) ([]Snapshot, error) {
+	return m.listSnapshots(ctx, filter)
+}
+
+func (m *manager) GetSnapshot(ctx context.Context, snapshotID string) (*Snapshot, error) {
+	return m.getSnapshot(ctx, snapshotID)
+}
+
+func (m *manager) CreateSnapshot(ctx context.Context, id string, req CreateSnapshotRequest) (*Snapshot, error) {
+	lock := m.getInstanceLock(id)
+	lock.Lock()
+	defer lock.Unlock()
+	return m.createSnapshot(ctx, id, req)
+}
+
+func (m *manager) DeleteSnapshot(ctx context.Context, snapshotID string) error {
+	return m.deleteSnapshot(ctx, snapshotID)
+}
+
 // ForkInstance creates a forked copy of an instance.
 func (m *manager) ForkInstance(ctx context.Context, id string, req ForkInstanceRequest) (*Instance, error) {
 	lock := m.getInstanceLock(id)
@@ -211,6 +236,10 @@ func (m *manager) ForkInstance(ctx context.Context, id string, req ForkInstanceR
 	return inst, nil
 }
 
+func (m *manager) ForkSnapshot(ctx context.Context, snapshotID string, req ForkSnapshotRequest) (*Instance, error) {
+	return m.forkSnapshot(ctx, snapshotID, req)
+}
+
 // StandbyInstance puts an instance in standby (pause, snapshot, delete VMM)
 func (m *manager) StandbyInstance(ctx context.Context, id string) (*Instance, error) {
 	lock := m.getInstanceLock(id)
@@ -225,6 +254,13 @@ func (m *manager) RestoreInstance(ctx context.Context, id string) (*Instance, er
 	lock.Lock()
 	defer lock.Unlock()
 	return m.restoreInstance(ctx, id)
+}
+
+func (m *manager) RestoreSnapshot(ctx context.Context, id string, snapshotID string, req RestoreSnapshotRequest) (*Instance, error) {
+	lock := m.getInstanceLock(id)
+	lock.Lock()
+	defer lock.Unlock()
+	return m.restoreSnapshot(ctx, id, snapshotID, req)
 }
 
 // StopInstance gracefully stops a running instance

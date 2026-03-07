@@ -182,6 +182,71 @@ type ForkInstanceRequest struct {
 	TargetState State  // Optional: desired final state of forked instance (Stopped, Standby, Running). Empty means inherit source state.
 }
 
+// SnapshotKind determines how snapshot data is captured and restored.
+type SnapshotKind string
+
+const (
+	// SnapshotKindStandby captures snapshot-based standby state (memory/device/disk).
+	SnapshotKindStandby SnapshotKind = "Standby"
+	// SnapshotKindStopped captures stopped-state disk+metadata only.
+	SnapshotKindStopped SnapshotKind = "Stopped"
+)
+
+// Snapshot is a centrally stored immutable snapshot resource.
+type Snapshot struct {
+	Id               string       // Auto-generated unique identifier
+	Name             string       // Optional user-provided name (unique per source instance)
+	Kind             SnapshotKind // Snapshot capture kind
+	SourceInstanceID string       // Source instance ID at snapshot time
+	SourceName       string       // Source instance name at snapshot time
+	SourceHypervisor hypervisor.Type
+	CreatedAt        time.Time
+	SizeBytes        int64 // Total size in bytes for files in the snapshot payload
+}
+
+// ListSnapshotsFilter contains optional filters for listing snapshots.
+type ListSnapshotsFilter struct {
+	SourceInstanceID *string
+	Kind             *SnapshotKind
+	Name             *string
+}
+
+// Matches returns true if the given snapshot satisfies all filter criteria.
+func (f *ListSnapshotsFilter) Matches(snapshot *Snapshot) bool {
+	if f == nil {
+		return true
+	}
+	if f.SourceInstanceID != nil && snapshot.SourceInstanceID != *f.SourceInstanceID {
+		return false
+	}
+	if f.Kind != nil && snapshot.Kind != *f.Kind {
+		return false
+	}
+	if f.Name != nil && snapshot.Name != *f.Name {
+		return false
+	}
+	return true
+}
+
+// CreateSnapshotRequest is the domain request for creating a snapshot.
+type CreateSnapshotRequest struct {
+	Kind SnapshotKind // Required: Standby or Stopped
+	Name string       // Optional: unique per source instance
+}
+
+// RestoreSnapshotRequest is the domain request for restoring a snapshot in-place.
+type RestoreSnapshotRequest struct {
+	TargetState      State           // Optional
+	TargetHypervisor hypervisor.Type // Optional, allowed only for Stopped snapshots
+}
+
+// ForkSnapshotRequest is the domain request for forking from a snapshot.
+type ForkSnapshotRequest struct {
+	Name             string          // Required: name for the new instance
+	TargetState      State           // Optional
+	TargetHypervisor hypervisor.Type // Optional, allowed only for Stopped snapshots
+}
+
 // AttachVolumeRequest is the domain request for attaching a volume (used for API compatibility)
 type AttachVolumeRequest struct {
 	MountPath string

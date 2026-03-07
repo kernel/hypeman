@@ -49,6 +49,14 @@ func (m *mockInstanceManager) ListInstances(ctx context.Context, filter *instanc
 	return result, nil
 }
 
+func (m *mockInstanceManager) ListSnapshots(ctx context.Context, filter *instances.ListSnapshotsFilter) ([]instances.Snapshot, error) {
+	return nil, nil
+}
+
+func (m *mockInstanceManager) GetSnapshot(ctx context.Context, snapshotID string) (*instances.Snapshot, error) {
+	return nil, instances.ErrSnapshotNotFound
+}
+
 func (m *mockInstanceManager) CreateInstance(ctx context.Context, req instances.CreateInstanceRequest) (*instances.Instance, error) {
 	m.createCallCount++
 	if m.createFunc != nil {
@@ -75,6 +83,10 @@ func (m *mockInstanceManager) GetInstance(ctx context.Context, id string) (*inst
 	return nil, instances.ErrNotFound
 }
 
+func (m *mockInstanceManager) CreateSnapshot(ctx context.Context, id string, req instances.CreateSnapshotRequest) (*instances.Snapshot, error) {
+	return nil, instances.ErrNotSupported
+}
+
 func (m *mockInstanceManager) DeleteInstance(ctx context.Context, id string) error {
 	m.deleteCallCount++
 	if m.deleteFunc != nil {
@@ -84,7 +96,15 @@ func (m *mockInstanceManager) DeleteInstance(ctx context.Context, id string) err
 	return nil
 }
 
+func (m *mockInstanceManager) DeleteSnapshot(ctx context.Context, snapshotID string) error {
+	return instances.ErrSnapshotNotFound
+}
+
 func (m *mockInstanceManager) ForkInstance(ctx context.Context, id string, req instances.ForkInstanceRequest) (*instances.Instance, error) {
+	return nil, instances.ErrNotFound
+}
+
+func (m *mockInstanceManager) ForkSnapshot(ctx context.Context, snapshotID string, req instances.ForkSnapshotRequest) (*instances.Instance, error) {
 	return nil, instances.ErrNotFound
 }
 
@@ -94,6 +114,10 @@ func (m *mockInstanceManager) StandbyInstance(ctx context.Context, id string) (*
 
 func (m *mockInstanceManager) RestoreInstance(ctx context.Context, id string) (*instances.Instance, error) {
 	return nil, nil
+}
+
+func (m *mockInstanceManager) RestoreSnapshot(ctx context.Context, id string, snapshotID string, req instances.RestoreSnapshotRequest) (*instances.Instance, error) {
+	return nil, instances.ErrNotSupported
 }
 
 func (m *mockInstanceManager) StopInstance(ctx context.Context, id string) (*instances.Instance, error) {
