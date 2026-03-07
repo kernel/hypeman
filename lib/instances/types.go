@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/snapshot"
 )
 
 // State represents the instance state
@@ -183,50 +184,20 @@ type ForkInstanceRequest struct {
 }
 
 // SnapshotKind determines how snapshot data is captured and restored.
-type SnapshotKind string
+type SnapshotKind = snapshot.SnapshotKind
 
 const (
 	// SnapshotKindStandby captures snapshot-based standby state (memory/device/disk).
-	SnapshotKindStandby SnapshotKind = "Standby"
+	SnapshotKindStandby = snapshot.SnapshotKindStandby
 	// SnapshotKindStopped captures stopped-state disk+metadata only.
-	SnapshotKindStopped SnapshotKind = "Stopped"
+	SnapshotKindStopped = snapshot.SnapshotKindStopped
 )
 
 // Snapshot is a centrally stored immutable snapshot resource.
-type Snapshot struct {
-	Id               string       // Auto-generated unique identifier
-	Name             string       // Optional user-provided name (unique per source instance)
-	Kind             SnapshotKind // Snapshot capture kind
-	SourceInstanceID string       // Source instance ID at snapshot time
-	SourceName       string       // Source instance name at snapshot time
-	SourceHypervisor hypervisor.Type
-	CreatedAt        time.Time
-	SizeBytes        int64 // Total size in bytes for files in the snapshot payload
-}
+type Snapshot = snapshot.Snapshot
 
 // ListSnapshotsFilter contains optional filters for listing snapshots.
-type ListSnapshotsFilter struct {
-	SourceInstanceID *string
-	Kind             *SnapshotKind
-	Name             *string
-}
-
-// Matches returns true if the given snapshot satisfies all filter criteria.
-func (f *ListSnapshotsFilter) Matches(snapshot *Snapshot) bool {
-	if f == nil {
-		return true
-	}
-	if f.SourceInstanceID != nil && snapshot.SourceInstanceID != *f.SourceInstanceID {
-		return false
-	}
-	if f.Kind != nil && snapshot.Kind != *f.Kind {
-		return false
-	}
-	if f.Name != nil && snapshot.Name != *f.Name {
-		return false
-	}
-	return true
-}
+type ListSnapshotsFilter = snapshot.ListSnapshotsFilter
 
 // CreateSnapshotRequest is the domain request for creating a snapshot.
 type CreateSnapshotRequest struct {

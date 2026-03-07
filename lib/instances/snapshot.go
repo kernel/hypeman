@@ -5,47 +5,42 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/kernel/hypeman/lib/forkvm"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/network"
+	snapshotstore "github.com/kernel/hypeman/lib/snapshot"
 	"github.com/nrednav/cuid2"
 	"gvisor.dev/gvisor/pkg/cleanup"
 )
 
 type snapshotRecord struct {
-	Snapshot       Snapshot       `json:"snapshot"`
-	StoredMetadata StoredMetadata `json:"stored_metadata"`
+	Snapshot       Snapshot
+	StoredMetadata StoredMetadata
 }
 
 func (m *manager) listSnapshots(ctx context.Context, filter *ListSnapshotsFilter) ([]Snapshot, error) {
-	records, err := m.listSnapshotRecords()
+	_ = ctx
+	snapshots, err := m.snapshotStore().List(filter)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("list snapshots: %w", err)
 	}
-	out := make([]Snapshot, 0, len(records))
-	for _, rec := range records {
-		s := rec.Snapshot
-		if filter == nil || filter.Matches(&s) {
-			out = append(out, s)
-		}
-	}
-	return out, nil
+	return snapshots, nil
 }
 
 func (m *manager) getSnapshot(ctx context.Context, snapshotID string) (*Snapshot, error) {
 	_ = ctx
-	rec, err := m.loadSnapshotRecord(snapshotID)
+	snapshot, err := m.snapshotStore().Get(snapshotID)
 	if err != nil {
+		if errors.Is(err, snapshotstore.ErrNotFound) {
+			return nil, ErrSnapshotNotFound
+		}
 		return nil, err
 	}
-	s := rec.Snapshot
-	return &s, nil
+	return snapshot, nil
 }
 
 func (m *manager) createSnapshot(ctx context.Context, id string, req CreateSnapshotRequest) (*Snapshot, error) {
@@ -137,7 +132,7 @@ func (m *manager) createSnapshot(ctx context.Context, id string, req CreateSnaps
 			},
 			StoredMetadata: cloneStoredMetadataForFork(meta.StoredMetadata),
 		}
-		sizeBytes, err := directoryFileSize(snapshotGuestDir)
+		sizeBytes, err := snapshotstore.DirectoryFileSize(snapshotGuestDir)
 		if err != nil {
 			return nil, err
 		}
@@ -168,7 +163,7 @@ func (m *manager) createSnapshot(ctx context.Context, id string, req CreateSnaps
 			},
 			StoredMetadata: cloneStoredMetadataForFork(meta.StoredMetadata),
 		}
-		sizeBytes, err := directoryFileSize(snapshotGuestDir)
+		sizeBytes, err := snapshotstore.DirectoryFileSize(snapshotGuestDir)
 		if err != nil {
 			return nil, err
 		}
@@ -187,15 +182,11 @@ func (m *manager) createSnapshot(ctx context.Context, id string, req CreateSnaps
 
 func (m *manager) deleteSnapshot(ctx context.Context, snapshotID string) error {
 	_ = ctx
-	path := m.paths.SnapshotDir(snapshotID)
-	if _, err := os.Stat(path); err != nil {
-		if os.IsNotExist(err) {
+	if err := m.snapshotStore().Delete(snapshotID); err != nil {
+		if errors.Is(err, snapshotstore.ErrNotFound) {
 			return ErrSnapshotNotFound
 		}
-		return fmt.Errorf("stat snapshot dir: %w", err)
-	}
-	if err := os.RemoveAll(path); err != nil {
-		return fmt.Errorf("delete snapshot: %w", err)
+		return err
 	}
 	return nil
 }
@@ -503,18 +494,16 @@ func validateForkSnapshotRequest(req ForkSnapshotRequest) error {
 	return nil
 }
 
+func (m *manager) snapshotStore() *snapshotstore.Store {
+	return snapshotstore.NewStore(m.paths)
+}
+
 func (m *manager) ensureSnapshotNameAvailable(sourceInstanceID, snapshotName string) error {
-	if snapshotName == "" {
-		return nil
-	}
-	records, err := m.listSnapshotRecords()
-	if err != nil {
-		return err
-	}
-	for _, rec := range records {
-		if rec.Snapshot.SourceInstanceID == sourceInstanceID && rec.Snapshot.Name == snapshotName {
-			return fmt.Errorf("%w: snapshot name %q already exists for source instance %s", ErrAlreadyExists, snapshotName, sourceInstanceID)
+	if err := m.snapshotStore().EnsureNameAvailable(sourceInstanceID, snapshotName); err != nil {
+		if errors.Is(err, snapshotstore.ErrNameExists) {
+			return fmt.Errorf("%w: %v", ErrAlreadyExists, err)
 		}
+		return err
 	}
 	return nil
 }
@@ -540,83 +529,54 @@ func (m *manager) ensureInstanceNameAvailableForSnapshotFork(ctx context.Context
 }
 
 func (m *manager) saveSnapshotRecord(rec *snapshotRecord) error {
-	dir := m.paths.SnapshotDir(rec.Snapshot.Id)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("create snapshot directory: %w", err)
-	}
-	b, err := json.MarshalIndent(rec, "", "  ")
+	storedMetadata, err := json.Marshal(rec.StoredMetadata)
 	if err != nil {
-		return fmt.Errorf("marshal snapshot metadata: %w", err)
+		return fmt.Errorf("marshal stored metadata: %w", err)
 	}
-	if err := os.WriteFile(m.paths.SnapshotMetadata(rec.Snapshot.Id), b, 0644); err != nil {
-		return fmt.Errorf("write snapshot metadata: %w", err)
+	if err := m.snapshotStore().SaveRecord(&snapshotstore.Record{
+		Snapshot:       rec.Snapshot,
+		StoredMetadata: storedMetadata,
+	}); err != nil {
+		return err
 	}
 	return nil
 }
 
 func (m *manager) loadSnapshotRecord(snapshotID string) (*snapshotRecord, error) {
-	b, err := os.ReadFile(m.paths.SnapshotMetadata(snapshotID))
+	record, err := m.snapshotStore().LoadRecord(snapshotID)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, snapshotstore.ErrNotFound) {
 			return nil, ErrSnapshotNotFound
 		}
-		return nil, fmt.Errorf("read snapshot metadata: %w", err)
+		return nil, err
 	}
+
+	var storedMetadata StoredMetadata
+	if err := json.Unmarshal(record.StoredMetadata, &storedMetadata); err != nil {
+		return nil, fmt.Errorf("unmarshal stored metadata: %w", err)
+	}
+
 	var rec snapshotRecord
-	if err := json.Unmarshal(b, &rec); err != nil {
-		return nil, fmt.Errorf("unmarshal snapshot metadata: %w", err)
-	}
-	if rec.Snapshot.Id == "" {
-		rec.Snapshot.Id = snapshotID
-	}
+	rec.Snapshot = record.Snapshot
+	rec.StoredMetadata = storedMetadata
 	return &rec, nil
 }
 
 func (m *manager) listSnapshotRecords() ([]snapshotRecord, error) {
-	if err := os.MkdirAll(m.paths.SnapshotStoreDir(), 0755); err != nil {
-		return nil, fmt.Errorf("create snapshot store directory: %w", err)
-	}
-	entries, err := os.ReadDir(m.paths.SnapshotStoreDir())
+	storedRecords, err := m.snapshotStore().ListRecords()
 	if err != nil {
-		return nil, fmt.Errorf("read snapshot store directory: %w", err)
+		return nil, err
 	}
-	records := make([]snapshotRecord, 0, len(entries))
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
+	records := make([]snapshotRecord, 0, len(storedRecords))
+	for _, stored := range storedRecords {
+		var storedMetadata StoredMetadata
+		if err := json.Unmarshal(stored.StoredMetadata, &storedMetadata); err != nil {
+			return nil, fmt.Errorf("unmarshal stored metadata for snapshot %s: %w", stored.Snapshot.Id, err)
 		}
-		rec, err := m.loadSnapshotRecord(entry.Name())
-		if err != nil {
-			if errors.Is(err, ErrSnapshotNotFound) {
-				continue
-			}
-			return nil, err
-		}
-		records = append(records, *rec)
+		records = append(records, snapshotRecord{
+			Snapshot:       stored.Snapshot,
+			StoredMetadata: storedMetadata,
+		})
 	}
 	return records, nil
-}
-
-func directoryFileSize(root string) (int64, error) {
-	var total int64
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if d.IsDir() {
-			return nil
-		}
-		info, err := d.Info()
-		if err != nil {
-			return err
-		}
-		if info.Mode().IsRegular() {
-			total += info.Size()
-		}
-		return nil
-	})
-	if err != nil {
-		return 0, fmt.Errorf("walk snapshot payload: %w", err)
-	}
-	return total, nil
 }
