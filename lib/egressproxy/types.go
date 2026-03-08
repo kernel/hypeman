@@ -12,10 +12,10 @@ var (
 
 // InstanceConfig defines per-instance proxy behavior.
 type InstanceConfig struct {
-	InstanceID       string
-	SourceIP         string
-	TAPDevice        string
-	MockToRealEnvVar map[string]string // mock literal -> host env var name
+	InstanceID            string
+	SourceIP              string
+	TAPDevice             string
+	MockToRealSecretValue map[string]string // mock literal -> real secret value
 }
 
 // GuestConfig is injected into guest config.json when proxy mode is enabled.

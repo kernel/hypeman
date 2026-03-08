@@ -170,13 +170,14 @@ components:
               description: Whether to enable egress proxy mode.
               default: false
               example: true
-            mock_to_real_env_var:
-              type: object
-              additionalProperties:
+            mock_env_vars:
+              type: array
+              items:
                 type: string
-              description: Map of mock secret literal -> host environment variable name containing the real secret.
-              example:
-                mock_openai_key: OPENAI_API_KEY
+              description: |
+                Environment variable names (from `env`) that should be mocked inside the VM
+                as `mock-<ENV_VAR_NAME>` and rewritten back to their real values on egress.
+              example: [OUTBOUND_OPENAI_KEY]
         metadata:
           $ref: "#/components/schemas/MetadataTags"
         network:

@@ -12,7 +12,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,7 +19,7 @@ import (
 )
 
 type sourcePolicy struct {
-	MockToRealEnvVar map[string]string
+	MockToRealSecretValue map[string]string
 }
 
 // Service is a host-side per-process HTTP/HTTPS MITM egress proxy.
@@ -142,13 +141,13 @@ func (s *Service) RegisterInstance(ctx context.Context, gatewayIP string, cfg In
 		delete(s.policiesBySourceIP, prevIP)
 	}
 
-	policyMap := make(map[string]string, len(cfg.MockToRealEnvVar))
-	for mock, envVar := range cfg.MockToRealEnvVar {
-		policyMap[mock] = envVar
+	policyMap := make(map[string]string, len(cfg.MockToRealSecretValue))
+	for mock, real := range cfg.MockToRealSecretValue {
+		policyMap[mock] = real
 	}
 
 	s.sourceIPByInstance[cfg.InstanceID] = cfg.SourceIP
-	s.policiesBySourceIP[cfg.SourceIP] = sourcePolicy{MockToRealEnvVar: policyMap}
+	s.policiesBySourceIP[cfg.SourceIP] = sourcePolicy{MockToRealSecretValue: policyMap}
 
 	return GuestConfig{
 		Enabled:   true,
@@ -348,13 +347,9 @@ func (s *Service) resolveReplacements(sourceIP string) map[string]string {
 		return nil
 	}
 
-	resolved := make(map[string]string, len(policy.MockToRealEnvVar))
-	for mock, envVar := range policy.MockToRealEnvVar {
-		if mock == "" || envVar == "" {
-			continue
-		}
-		real, ok := os.LookupEnv(envVar)
-		if !ok || real == "" {
+	resolved := make(map[string]string, len(policy.MockToRealSecretValue))
+	for mock, real := range policy.MockToRealSecretValue {
+		if mock == "" || real == "" {
 			continue
 		}
 		resolved[mock] = real

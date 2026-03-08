@@ -160,3 +160,19 @@
 - Running this suite from a fresh copied worktree on `deft-kernel-dev` requires embedded binaries to exist (`lib/system/guest_agent/guest-agent`, `lib/system/init/init`, Cloud Hypervisor binary, Caddy binary).
 - `curlimages/curl` image can default/bundle proxy bypass behavior for loopback targets; test command explicitly clears `NO_PROXY` to force proxy routing.
 - For deterministic test behavior with ad-hoc TLS target server, command uses `curl -k` to avoid CA trustchain variance across guest images while still exercising HTTPS MITM path.
+
+## 2026-03-08 - Egress proxy mock env var model (no host env dependency)
+
+### API and behavior change
+- `egress_proxy` now uses `mock_env_vars` (list of env var names) instead of `mock_to_real_env_var`.
+- Real secret values are provided by callers in instance `env` and persisted in normal instance metadata env storage.
+- Guest env is rewritten at config generation so listed vars become `mock-<ENV_VAR_NAME>`.
+- MITM proxy rewrite map is now `mock literal -> real secret value` built from stored instance env.
+
+### Targeted validation commands run on `deft-kernel-dev` as root
+- `sudo -n /usr/local/go/bin/go test ./cmd/api/api -run "TestCreateInstance_(MapsEgressProxyMockEnvVars|OmittedHotplugSizeDefaultsToZero)" -count=1`
+- `sudo -n /usr/local/go/bin/go test ./lib/instances -run "TestValidateCreateRequest_EgressProxy" -count=1`
+- `sudo -n env HYPEMAN_TEST_REGISTRY=127.0.0.1:5001 /usr/local/go/bin/go test ./lib/instances -run TestEgressProxyRewritesHTTPSHeaders -count=1 -v`
+
+### Result
+- All targeted tests passed.

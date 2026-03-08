@@ -18,8 +18,6 @@ func TestEgressProxyRewritesHTTPSHeaders(t *testing.T) {
 	manager, _ := setupTestManager(t)
 	ctx := context.Background()
 
-	t.Setenv("HYPEMAN_TEST_REAL_OPENAI_KEY", "real-openai-key-123")
-
 	target := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = fmt.Fprint(w, r.Header.Get("Authorization"))
 	}))
@@ -53,13 +51,11 @@ func TestEgressProxyRewritesHTTPSHeaders(t *testing.T) {
 		Vcpus:          1,
 		NetworkEnabled: true,
 		EgressProxy: &EgressProxyConfig{
-			Enabled: true,
-			MockToRealEnvVar: map[string]string{
-				"mock_openai_key": "HYPEMAN_TEST_REAL_OPENAI_KEY",
-			},
+			Enabled:     true,
+			MockEnvVars: []string{"OUTBOUND_OPENAI_KEY"},
 		},
 		Env: map[string]string{
-			"OUTBOUND_OPENAI_KEY": "mock_openai_key",
+			"OUTBOUND_OPENAI_KEY": "real-openai-key-123",
 		},
 		Entrypoint: []string{"/bin/sh", "-lc"},
 		Cmd:        []string{"sleep 3600"},
@@ -75,6 +71,11 @@ func TestEgressProxyRewritesHTTPSHeaders(t *testing.T) {
 
 	require.NoError(t, waitForVMReady(ctx, inst.SocketPath, 10*time.Second))
 	require.NoError(t, waitForLogMessage(ctx, manager, inst.Id, "[guest-agent] listening", 45*time.Second))
+
+	envOutput, envExitCode, err := execCommand(ctx, inst, "sh", "-lc", "printf '%s' \"$OUTBOUND_OPENAI_KEY\"")
+	require.NoError(t, err)
+	require.Equal(t, 0, envExitCode)
+	require.Equal(t, "mock-OUTBOUND_OPENAI_KEY", envOutput)
 
 	cmd := fmt.Sprintf(
 		"NO_PROXY= no_proxy= curl -k -sS -H \"Authorization: Bearer $OUTBOUND_OPENAI_KEY\" %s",

@@ -471,11 +471,8 @@ func cloneStoredMetadataForFork(src StoredMetadata) StoredMetadata {
 		cfg := &EgressProxyConfig{
 			Enabled: src.EgressProxy.Enabled,
 		}
-		if src.EgressProxy.MockToRealEnvVar != nil {
-			cfg.MockToRealEnvVar = make(map[string]string, len(src.EgressProxy.MockToRealEnvVar))
-			for mock, envVar := range src.EgressProxy.MockToRealEnvVar {
-				cfg.MockToRealEnvVar[mock] = envVar
-			}
+		if src.EgressProxy.MockEnvVars != nil {
+			cfg.MockEnvVars = append([]string(nil), src.EgressProxy.MockEnvVars...)
 		}
 		dst.EgressProxy = cfg
 	}

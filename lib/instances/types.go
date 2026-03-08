@@ -31,10 +31,10 @@ type VolumeAttachment struct {
 }
 
 // EgressProxyConfig configures optional per-instance egress MITM behavior.
-// Real secret values are not stored here. Instead, mappings point to host env vars.
+// Real secret values are provided via Env and persisted there.
 type EgressProxyConfig struct {
-	Enabled          bool              // Whether egress proxy mode is enabled
-	MockToRealEnvVar map[string]string // mock literal -> host env var name with real secret
+	Enabled     bool     // Whether egress proxy mode is enabled
+	MockEnvVars []string // Env var names to mock in guest and rewrite on egress
 }
 
 // StoredMetadata represents instance metadata that is persisted to disk

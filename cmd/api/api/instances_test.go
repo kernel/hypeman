@@ -215,6 +215,47 @@ func TestCreateInstance_OmittedHotplugSizeDefaultsToZero(t *testing.T) {
 	assert.Equal(t, int64(0), int64(hotplugBytes), "response should report zero hotplug_size when omitted")
 }
 
+func TestCreateInstance_MapsEgressProxyMockEnvVars(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	origMgr := svc.InstanceManager
+	mockMgr := &captureCreateManager{Manager: origMgr}
+	svc.InstanceManager = mockMgr
+
+	enabled := true
+	mockEnvVars := []string{"OUTBOUND_OPENAI_KEY", "GITHUB_TOKEN"}
+	env := map[string]string{
+		"OUTBOUND_OPENAI_KEY": "real-openai-key-123",
+		"GITHUB_TOKEN":        "real-gh-token-456",
+	}
+
+	resp, err := svc.CreateInstance(ctx(), oapi.CreateInstanceRequestObject{
+		Body: &oapi.CreateInstanceRequest{
+			Name:  "test-egress-proxy-mock-env-vars",
+			Image: "docker.io/library/alpine:latest",
+			Env:   &env,
+			EgressProxy: &struct {
+				Enabled     *bool     `json:"enabled,omitempty"`
+				MockEnvVars *[]string `json:"mock_env_vars,omitempty"`
+			}{
+				Enabled:     &enabled,
+				MockEnvVars: &mockEnvVars,
+			},
+		},
+	})
+	require.NoError(t, err)
+	_, ok := resp.(oapi.CreateInstance201JSONResponse)
+	require.True(t, ok, "expected 201 response")
+
+	require.NotNil(t, mockMgr.lastReq)
+	require.NotNil(t, mockMgr.lastReq.EgressProxy)
+	assert.True(t, mockMgr.lastReq.EgressProxy.Enabled)
+	assert.Equal(t, []string{"OUTBOUND_OPENAI_KEY", "GITHUB_TOKEN"}, mockMgr.lastReq.EgressProxy.MockEnvVars)
+	assert.Equal(t, "real-openai-key-123", mockMgr.lastReq.Env["OUTBOUND_OPENAI_KEY"])
+	assert.Equal(t, "real-gh-token-456", mockMgr.lastReq.Env["GITHUB_TOKEN"])
+}
+
 func TestForkInstance_Success(t *testing.T) {
 	t.Parallel()
 	svc := newTestService(t)

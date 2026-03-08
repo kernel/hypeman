@@ -3,21 +3,64 @@ package instances
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/kernel/hypeman/lib/egressproxy"
 	"github.com/kernel/hypeman/lib/network"
 )
+
+const mockSecretPrefix = "mock-"
 
 func cloneEgressProxyConfig(cfg *EgressProxyConfig) *EgressProxyConfig {
 	if cfg == nil {
 		return nil
 	}
 	out := &EgressProxyConfig{Enabled: cfg.Enabled}
-	if cfg.MockToRealEnvVar != nil {
-		out.MockToRealEnvVar = make(map[string]string, len(cfg.MockToRealEnvVar))
-		for mock, envVar := range cfg.MockToRealEnvVar {
-			out.MockToRealEnvVar[mock] = envVar
+	if cfg.MockEnvVars != nil {
+		out.MockEnvVars = append([]string(nil), cfg.MockEnvVars...)
+	}
+	return out
+}
+
+func normalizeMockEnvVars(in []string) ([]string, error) {
+	if len(in) == 0 {
+		return nil, nil
+	}
+
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, name := range in {
+		trimmed := strings.TrimSpace(name)
+		if trimmed == "" {
+			return nil, fmt.Errorf("%w: egress proxy mock_env_vars entries must be non-empty", ErrInvalidRequest)
 		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+	return out, nil
+}
+
+func mockValueForEnvVar(name string) string {
+	return mockSecretPrefix + name
+}
+
+func buildEgressProxyReplacements(cfg *EgressProxyConfig, env map[string]string) map[string]string {
+	if cfg == nil || !cfg.Enabled || len(cfg.MockEnvVars) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(cfg.MockEnvVars))
+	for _, envVar := range cfg.MockEnvVars {
+		real := env[envVar]
+		if real == "" {
+			continue
+		}
+		out[mockValueForEnvVar(envVar)] = real
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }
@@ -52,10 +95,10 @@ func (m *manager) maybeRegisterEgressProxy(ctx context.Context, stored *StoredMe
 	}
 
 	guestCfg, err := svc.RegisterInstance(ctx, netConfig.Gateway, egressproxy.InstanceConfig{
-		InstanceID:       stored.Id,
-		SourceIP:         netConfig.IP,
-		TAPDevice:        netConfig.TAPDevice,
-		MockToRealEnvVar: stored.EgressProxy.MockToRealEnvVar,
+		InstanceID:            stored.Id,
+		SourceIP:              netConfig.IP,
+		TAPDevice:             netConfig.TAPDevice,
+		MockToRealSecretValue: buildEgressProxyReplacements(stored.EgressProxy, stored.Env),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("register instance with egress proxy: %w", err)

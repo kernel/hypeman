@@ -486,9 +486,18 @@ func validateCreateRequest(req CreateInstanceRequest) error {
 		if !req.NetworkEnabled {
 			return fmt.Errorf("%w: egress proxy requires network_enabled=true", ErrInvalidRequest)
 		}
-		for mock, envVar := range req.EgressProxy.MockToRealEnvVar {
-			if strings.TrimSpace(mock) == "" || strings.TrimSpace(envVar) == "" {
-				return fmt.Errorf("%w: egress proxy secret mappings must use non-empty mock and env var names", ErrInvalidRequest)
+		normalized, err := normalizeMockEnvVars(req.EgressProxy.MockEnvVars)
+		if err != nil {
+			return err
+		}
+		req.EgressProxy.MockEnvVars = normalized
+		for _, envVar := range normalized {
+			real, ok := req.Env[envVar]
+			if !ok {
+				return fmt.Errorf("%w: egress proxy mock env var %q must be present in env", ErrInvalidRequest, envVar)
+			}
+			if strings.TrimSpace(real) == "" {
+				return fmt.Errorf("%w: env var %q must be non-empty when listed in egress_proxy.mock_env_vars", ErrInvalidRequest, envVar)
 			}
 		}
 	}

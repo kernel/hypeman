@@ -10,18 +10,18 @@ When enabled for an instance, hypeman does three things:
 
 ## Secret substitution flow
 
-- Workloads inside the VM use mock secret values (for example `mock_openai_key`).
-- Per instance, hypeman stores a mapping of `mock value -> host environment variable name`.
+- API callers provide real secret values in instance `env`.
+- Per instance, `egress_proxy.mock_env_vars` lists which env var names should be mocked.
+- Inside the VM, each listed env var is rewritten to `mock-<ENV_VAR_NAME>` (for example `mock-OUTBOUND_OPENAI_KEY`).
 - For each outbound HTTP request (including HTTPS requests after MITM decryption), the proxy scans every HTTP header value.
-- Any occurrence of a configured mock value is replaced with the real value loaded from the host environment variable.
+- Any occurrence of a configured mock value is replaced with the real value loaded from the instance's stored `env`.
 - The modified request is then forwarded upstream.
 
 This keeps real secrets out of the VM while still allowing authenticated egress requests.
 
 ## Security behavior
 
-- Real secret values are not persisted in instance metadata.
-- Only host environment variable names are persisted.
+- Real secret values are persisted in the normal instance `env` metadata, which is already host-side state.
 - TLS interception requires guest trust of the proxy CA; hypeman installs this CA in the guest when proxy mode is enabled.
 - Egress enforcement is applied per instance TAP device and removed when the instance stops/standbys/deletes.
 
