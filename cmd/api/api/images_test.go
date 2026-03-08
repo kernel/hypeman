@@ -2,7 +2,6 @@ package api
 
 import (
 	"fmt"
-	"strings"
 	"testing"
 	"time"
 
@@ -42,8 +41,7 @@ func TestCreateImage_Async(t *testing.T) {
 	// Create images before alpine to populate the queue
 	t.Log("Creating image queue...")
 	queueImages := []string{
-		"docker.io/library/busybox:latest",
-		"docker.io/library/nginx:alpine",
+		apiTestImageRef(t, "docker.io/library/nginx:alpine"),
 	}
 	for _, name := range queueImages {
 		_, err := svc.CreateImage(ctx, oapi.CreateImageRequestObject{
@@ -54,9 +52,10 @@ func TestCreateImage_Async(t *testing.T) {
 
 	// Create alpine (should be last in queue)
 	t.Log("Creating alpine image (should be queued)...")
+	alpineName := apiTestImageRef(t, "docker.io/library/alpine:latest")
 	createResp, err := svc.CreateImage(ctx, oapi.CreateImageRequestObject{
 		Body: &oapi.CreateImageRequest{
-			Name: "docker.io/library/alpine:latest",
+			Name: alpineName,
 		},
 	})
 	require.NoError(t, err)
@@ -65,14 +64,16 @@ func TestCreateImage_Async(t *testing.T) {
 	require.True(t, ok, "expected 202 accepted response")
 
 	img := oapi.Image(acceptedResp)
-	require.Equal(t, "docker.io/library/alpine:latest", img.Name)
+	require.Equal(t, alpineName, img.Name)
 	require.NotEmpty(t, img.Digest, "digest should be populated immediately")
 	t.Logf("Image created: name=%s, digest=%s, initial_status=%s, queue_position=%v",
 		img.Name, img.Digest, img.Status, img.QueuePosition)
 
 	// Construct digest reference for polling: repository@digest
 	// GetImage expects format like "docker.io/library/alpine@sha256:..."
-	digestRef := "docker.io/library/alpine@" + img.Digest
+	alpineRef, err := images.ParseNormalizedRef(alpineName)
+	require.NoError(t, err)
+	digestRef := alpineRef.Repository() + "@" + img.Digest
 	t.Logf("Polling with digest reference: %s", digestRef)
 
 	// Poll until ready using digest (tag symlink doesn't exist until status=ready)
@@ -135,7 +136,7 @@ func TestCreateImage_InvalidTag(t *testing.T) {
 	t.Log("Creating image with invalid tag...")
 	createResp, err := svc.CreateImage(ctx, oapi.CreateImageRequestObject{
 		Body: &oapi.CreateImageRequest{
-			Name: "docker.io/library/busybox:foobar",
+			Name: apiTestImageRef(t, "docker.io/library/busybox:foobar"),
 		},
 	})
 	require.NoError(t, err)
@@ -181,13 +182,13 @@ func TestCreateImage_Idempotent(t *testing.T) {
 	ctx := ctx()
 
 	// Create first image to occupy queue position 0
-	t.Log("Creating first image (busybox) to occupy queue...")
+	t.Log("Creating first image (nginx) to occupy queue...")
 	_, err := svc.CreateImage(ctx, oapi.CreateImageRequestObject{
-		Body: &oapi.CreateImageRequest{Name: "docker.io/library/busybox:latest"},
+		Body: &oapi.CreateImageRequest{Name: apiTestImageRef(t, "docker.io/library/nginx:alpine")},
 	})
 	require.NoError(t, err)
 
-	imageName := "docker.io/library/alpine:3.18"
+	imageName := apiTestImageRef(t, "docker.io/library/alpine:latest")
 
 	// First call - should create and queue at position 1
 	t.Log("First CreateImage call (alpine)...")
@@ -245,9 +246,9 @@ func TestCreateImage_Idempotent(t *testing.T) {
 	}
 
 	// Construct digest reference: repository@digest
-	// Extract repository from imageName (strip tag part)
-	repository := strings.Split(imageName, ":")[0]
-	digestRef := repository + "@" + img1.Digest
+	imageRef, err := images.ParseNormalizedRef(imageName)
+	require.NoError(t, err)
+	digestRef := imageRef.Repository() + "@" + img1.Digest
 	t.Logf("Polling with digest reference: %s", digestRef)
 
 	// Wait for build to complete - poll by digest (tag symlink doesn't exist until status=ready)

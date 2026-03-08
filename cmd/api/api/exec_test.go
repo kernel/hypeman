@@ -29,6 +29,7 @@ func TestExecInstanceNonTTY(t *testing.T) {
 	}
 
 	svc := newTestService(t)
+	imageName := apiTestImageRef(t, "docker.io/library/nginx:alpine")
 
 	// Ensure system files (kernel and initrd) are available
 	t.Log("Ensuring system files...")
@@ -38,7 +39,7 @@ func TestExecInstanceNonTTY(t *testing.T) {
 	t.Log("System files ready")
 
 	// Create and wait for nginx image (has a proper long-running process)
-	createAndWaitForImage(t, svc, "docker.io/library/nginx:alpine", 30*time.Second)
+	createAndWaitForImage(t, svc, imageName, 30*time.Second)
 
 	// Create instance
 	t.Log("Creating instance...")
@@ -46,7 +47,7 @@ func TestExecInstanceNonTTY(t *testing.T) {
 	instResp, err := svc.CreateInstance(ctx(), oapi.CreateInstanceRequestObject{
 		Body: &oapi.CreateInstanceRequest{
 			Name:  "exec-test",
-			Image: "docker.io/library/nginx:alpine",
+			Image: imageName,
 			Network: &struct {
 				BandwidthDownload *string `json:"bandwidth_download,omitempty"`
 				BandwidthUpload   *string `json:"bandwidth_upload,omitempty"`
@@ -170,6 +171,7 @@ func TestExecWithDebianMinimal(t *testing.T) {
 	}
 
 	svc := newTestService(t)
+	imageName := apiTestImageRef(t, "docker.io/library/debian:12-slim")
 
 	// Ensure system files (kernel and initrd) are available
 	t.Log("Ensuring system files...")
@@ -179,7 +181,7 @@ func TestExecWithDebianMinimal(t *testing.T) {
 	t.Log("System files ready")
 
 	// Create Debian 12 slim image (minimal, no iproute2)
-	createAndWaitForImage(t, svc, "docker.io/library/debian:12-slim", 60*time.Second)
+	createAndWaitForImage(t, svc, imageName, 60*time.Second)
 
 	// Create instance with a long-running command so the VM stays alive for exec.
 	// Debian's default CMD is "bash" which exits immediately (no stdin),
@@ -190,7 +192,7 @@ func TestExecWithDebianMinimal(t *testing.T) {
 	instResp, err := svc.CreateInstance(ctx(), oapi.CreateInstanceRequestObject{
 		Body: &oapi.CreateInstanceRequest{
 			Name:  "debian-exec-test",
-			Image: "docker.io/library/debian:12-slim",
+			Image: imageName,
 			Cmd:   &cmdOverride,
 			Network: &struct {
 				BandwidthDownload *string `json:"bandwidth_download,omitempty"`
