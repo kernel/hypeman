@@ -50,7 +50,7 @@ func TestCreateInstance_ParsesHumanReadableSizes(t *testing.T) {
 	svc := newTestService(t)
 
 	// Create and wait for alpine image
-	createAndWaitForImage(t, svc, "docker.io/library/alpine:latest", 30*time.Second)
+	imageName := createAndWaitForImage(t, svc, "docker.io/library/alpine:latest", 30*time.Second)
 
 	// Ensure system files (kernel and initramfs) are available
 	t.Log("Ensuring system files (kernel and initramfs)...")
@@ -69,7 +69,7 @@ func TestCreateInstance_ParsesHumanReadableSizes(t *testing.T) {
 	resp, err := svc.CreateInstance(ctx(), oapi.CreateInstanceRequestObject{
 		Body: &oapi.CreateInstanceRequest{
 			Name:        "test-sizes",
-			Image:       "docker.io/library/alpine:latest",
+			Image:       imageName,
 			Size:        &size,
 			HotplugSize: &hotplugSize,
 			OverlaySize: &overlaySize,
@@ -491,7 +491,7 @@ func TestInstanceLifecycle_StopStart(t *testing.T) {
 	svc := newTestService(t)
 
 	// Use nginx:alpine so the VM runs a real workload (not just exits immediately)
-	createAndWaitForImage(t, svc, "docker.io/library/nginx:alpine", 60*time.Second)
+	imageName := createAndWaitForImage(t, svc, "docker.io/library/nginx:alpine", 60*time.Second)
 
 	// Ensure system files (kernel and initramfs) are available
 	t.Log("Ensuring system files (kernel and initramfs)...")
@@ -506,7 +506,7 @@ func TestInstanceLifecycle_StopStart(t *testing.T) {
 	createResp, err := svc.CreateInstance(ctx(), oapi.CreateInstanceRequestObject{
 		Body: &oapi.CreateInstanceRequest{
 			Name:  "test-lifecycle",
-			Image: "docker.io/library/nginx:alpine",
+			Image: imageName,
 			Network: &struct {
 				BandwidthDownload *string `json:"bandwidth_download,omitempty"`
 				BandwidthUpload   *string `json:"bandwidth_upload,omitempty"`
