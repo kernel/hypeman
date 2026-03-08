@@ -494,7 +494,7 @@ func execInInstance(ctx context.Context, inst *Instance, command ...string) (str
 		Command:      command,
 		Stdout:       &stdout,
 		Stderr:       &stderr,
-		WaitForAgent: 5 * time.Second,
+		WaitForAgent: 2 * time.Second,
 	})
 	if err != nil {
 		return "", -1, err

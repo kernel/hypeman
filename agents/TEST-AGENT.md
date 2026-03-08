@@ -112,3 +112,36 @@
 - Run 3: 97s (pass)
 - `lib/instances` package runtime in those runs:
   - 57.806s, 79.853s, 73.199s
+
+## 2026-03-08 - Rerun round (again): focused longest-test tuning
+
+### Fresh baseline no-cache full runs (before new changes)
+- Run 1: 88s (pass)
+- Run 2: 98s (pass)
+
+### What was analyzed
+- Re-profiled slow tests in `lib/instances`; longest remained running-network fork integration tests.
+- Tried a broader change (parallel source/fork reachability checks + additional guest-agent log wait) and observed regression/flakiness in tight loop (`[guest-agent] listening` log not reliably present in streamed logs). That experiment was reverted.
+
+### Final change kept
+- `lib/instances/fork_test.go`
+  - In `execInInstance`, changed `WaitForAgent` from `5s` to `2s`.
+  - This path is used by `assertGuestHasOnlyExpectedIPv4` in the Cloud Hypervisor running-fork test and still uses bounded polling around command execution.
+
+### Tight-loop validation for targeted long tests
+- Command:
+  - `go test -count=1 -tags containers_image_openpgp -run '^(TestForkCloudHypervisorFromRunningNetwork|TestQEMUForkFromRunningNetwork|TestFirecrackerForkFromRunningNetwork)$' -count=3 -timeout=30m ./lib/instances`
+- Result:
+  - Pass; package runtime 102.528s.
+
+### Isolated longest-test samples after final change
+- `TestForkCloudHypervisorFromRunningNetwork`: 26.14s
+- `TestQEMUForkFromRunningNetwork`: 11.09s
+- `TestFirecrackerForkFromRunningNetwork`: 27.58s
+
+### Required pre-commit gate (3 consecutive full no-cache runs)
+- Run 1: 121s (pass)
+- Run 2: 141s (pass)
+- Run 3: 96s (pass)
+- `lib/instances` runtime in those runs:
+  - 97.618s, 117.392s, 71.886s
