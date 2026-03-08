@@ -8,17 +8,32 @@ import (
 	"strings"
 )
 
-func applyEgressEnforcement(instanceID, tapDevice, gatewayIP string, proxyPort int) error {
+const (
+	enforcementSuffixPort80  = "80"
+	enforcementSuffixPort443 = "443"
+	enforcementSuffixAllTCP  = "all-tcp"
+)
+
+func applyEgressEnforcement(instanceID, tapDevice, gatewayIP string, proxyPort int, blockAllTCPEgress bool) error {
 	if instanceID == "" || tapDevice == "" || gatewayIP == "" || proxyPort <= 0 {
 		return fmt.Errorf("invalid egress enforcement inputs")
 	}
 
-	comment80 := enforcementComment(instanceID, "80")
-	comment443 := enforcementComment(instanceID, "443")
+	comment80 := enforcementComment(instanceID, enforcementSuffixPort80)
+	comment443 := enforcementComment(instanceID, enforcementSuffixPort443)
+	commentAllTCP := enforcementComment(instanceID, enforcementSuffixAllTCP)
 
-	// Clean old rules first so updates are idempotent (tap changes across restarts).
+	// Clean old rules first so updates are idempotent across restarts and mode changes.
 	_ = removeRuleByComment(comment80)
 	_ = removeRuleByComment(comment443)
+	_ = removeRuleByComment(commentAllTCP)
+
+	if blockAllTCPEgress {
+		if err := insertRejectAllTCPRule(tapDevice, gatewayIP, commentAllTCP); err != nil {
+			return fmt.Errorf("insert all-tcp egress enforcement: %w", err)
+		}
+		return nil
+	}
 
 	if err := insertRejectRule(tapDevice, gatewayIP, 80, comment80); err != nil {
 		return fmt.Errorf("insert port 80 egress enforcement: %w", err)
@@ -35,10 +50,12 @@ func removeEgressEnforcement(instanceID string) error {
 	if instanceID == "" {
 		return nil
 	}
-	comment80 := enforcementComment(instanceID, "80")
-	comment443 := enforcementComment(instanceID, "443")
+	comment80 := enforcementComment(instanceID, enforcementSuffixPort80)
+	comment443 := enforcementComment(instanceID, enforcementSuffixPort443)
+	commentAllTCP := enforcementComment(instanceID, enforcementSuffixAllTCP)
 	_ = removeRuleByComment(comment80)
 	_ = removeRuleByComment(comment443)
+	_ = removeRuleByComment(commentAllTCP)
 	return nil
 }
 
@@ -48,6 +65,21 @@ func insertRejectRule(tapDevice, gatewayIP string, port int, comment string) err
 		"-i", tapDevice,
 		"-p", "tcp",
 		"--dport", fmt.Sprintf("%d", port),
+		"!", "-d", gatewayIP,
+		"-m", "comment", "--comment", comment,
+		"-j", "REJECT",
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("iptables insert failed: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func insertRejectAllTCPRule(tapDevice, gatewayIP, comment string) error {
+	cmd := exec.Command(
+		"iptables", "-I", "FORWARD", "1",
+		"-i", tapDevice,
+		"-p", "tcp",
 		"!", "-d", gatewayIP,
 		"-m", "comment", "--comment", comment,
 		"-j", "REJECT",

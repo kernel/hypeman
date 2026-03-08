@@ -21,6 +21,13 @@ const (
 	StateUnknown  State = "Unknown"  // Failed to determine state (VMM query failed)
 )
 
+type EgressProxyEnforcementMode string
+
+const (
+	EgressProxyEnforcementModeAll           EgressProxyEnforcementMode = "all"
+	EgressProxyEnforcementModeHTTPHTTPSOnly EgressProxyEnforcementMode = "http_https_only"
+)
+
 // VolumeAttachment represents a volume attached to an instance
 type VolumeAttachment struct {
 	VolumeID    string // Volume ID
@@ -33,8 +40,9 @@ type VolumeAttachment struct {
 // EgressProxyConfig configures optional per-instance egress MITM behavior.
 // Real secret values are provided via Env and persisted there.
 type EgressProxyConfig struct {
-	Enabled     bool     // Whether egress proxy mode is enabled
-	MockEnvVars []string // Env var names to mock in guest and rewrite on egress
+	Enabled         bool                       // Whether egress proxy mode is enabled
+	MockEnvVars     []string                   // Env var names to mock in guest and rewrite on egress
+	EnforcementMode EgressProxyEnforcementMode // all (default) blocks direct non-proxy TCP egress, http_https_only blocks only 80/443
 }
 
 // StoredMetadata represents instance metadata that is persisted to disk

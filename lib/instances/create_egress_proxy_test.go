@@ -118,4 +118,53 @@ func TestValidateCreateRequest_EgressProxyDedupesMockEnvVars(t *testing.T) {
 	err := validateCreateRequest(req)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"OUTBOUND_OPENAI_KEY", "GITHUB_TOKEN"}, cfg.MockEnvVars)
+	assert.Equal(t, EgressProxyEnforcementModeAll, cfg.EnforcementMode)
+}
+
+func TestValidateCreateRequest_EgressProxyRejectsInvalidEnforcementMode(t *testing.T) {
+	t.Parallel()
+
+	req := CreateInstanceRequest{
+		Name:           "test-egress",
+		Image:          "docker.io/library/alpine:latest",
+		NetworkEnabled: true,
+		Env: map[string]string{
+			"OUTBOUND_OPENAI_KEY": "real-key",
+		},
+		EgressProxy: &EgressProxyConfig{
+			Enabled:         true,
+			EnforcementMode: EgressProxyEnforcementMode("bogus"),
+			MockEnvVars:     []string{"OUTBOUND_OPENAI_KEY"},
+		},
+	}
+
+	err := validateCreateRequest(req)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidRequest)
+	assert.Contains(t, err.Error(), "invalid egress proxy enforcement_mode")
+}
+
+func TestValidateCreateRequest_EgressProxyAllowsHTTPHTTPSOnlyMode(t *testing.T) {
+	t.Parallel()
+
+	cfg := &EgressProxyConfig{
+		Enabled:         true,
+		EnforcementMode: EgressProxyEnforcementModeHTTPHTTPSOnly,
+		MockEnvVars: []string{
+			"OUTBOUND_OPENAI_KEY",
+		},
+	}
+	req := CreateInstanceRequest{
+		Name:           "test-egress",
+		Image:          "docker.io/library/alpine:latest",
+		NetworkEnabled: true,
+		Env: map[string]string{
+			"OUTBOUND_OPENAI_KEY": "real-key",
+		},
+		EgressProxy: cfg,
+	}
+
+	err := validateCreateRequest(req)
+	require.NoError(t, err)
+	assert.Equal(t, EgressProxyEnforcementModeHTTPHTTPSOnly, cfg.EnforcementMode)
 }

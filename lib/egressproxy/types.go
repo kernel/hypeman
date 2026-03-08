@@ -15,6 +15,7 @@ type InstanceConfig struct {
 	InstanceID            string
 	SourceIP              string
 	TAPDevice             string
+	BlockAllTCPEgress     bool
 	MockToRealSecretValue map[string]string // mock literal -> real secret value
 }
 

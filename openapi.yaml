@@ -178,6 +178,15 @@ components:
                 Environment variable names (from `env`) that should be mocked inside the VM
                 as `mock-<ENV_VAR_NAME>` and rewritten back to their real values on egress.
               example: [OUTBOUND_OPENAI_KEY]
+            enforcement_mode:
+              type: string
+              enum: [all, http_https_only]
+              default: all
+              description: |
+                Egress proxy host enforcement mode.
+                `all` (default when proxy is enabled) rejects direct non-proxy TCP egress from the VM,
+                while `http_https_only` rejects direct egress only on TCP ports 80 and 443.
+              example: all
         metadata:
           $ref: "#/components/schemas/MetadataTags"
         network:

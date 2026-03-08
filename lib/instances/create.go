@@ -486,6 +486,11 @@ func validateCreateRequest(req CreateInstanceRequest) error {
 		if !req.NetworkEnabled {
 			return fmt.Errorf("%w: egress proxy requires network_enabled=true", ErrInvalidRequest)
 		}
+		mode, err := normalizeEgressProxyEnforcementMode(req.EgressProxy.EnforcementMode)
+		if err != nil {
+			return err
+		}
+		req.EgressProxy.EnforcementMode = mode
 		normalized, err := normalizeMockEnvVars(req.EgressProxy.MockEnvVars)
 		if err != nil {
 			return err

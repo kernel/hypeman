@@ -142,6 +142,11 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		if request.Body.EgressProxy.MockEnvVars != nil {
 			egressProxyConfig.MockEnvVars = append([]string(nil), (*request.Body.EgressProxy.MockEnvVars)...)
 		}
+		if request.Body.EgressProxy.EnforcementMode != nil {
+			egressProxyConfig.EnforcementMode = instances.EgressProxyEnforcementMode(*request.Body.EgressProxy.EnforcementMode)
+		} else if enabled {
+			egressProxyConfig.EnforcementMode = instances.EgressProxyEnforcementModeAll
+		}
 	}
 
 	// Parse network bandwidth limits (0 = auto)

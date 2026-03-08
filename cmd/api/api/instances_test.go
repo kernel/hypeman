@@ -236,8 +236,9 @@ func TestCreateInstance_MapsEgressProxyMockEnvVars(t *testing.T) {
 			Image: "docker.io/library/alpine:latest",
 			Env:   &env,
 			EgressProxy: &struct {
-				Enabled     *bool     `json:"enabled,omitempty"`
-				MockEnvVars *[]string `json:"mock_env_vars,omitempty"`
+				Enabled         *bool                                                 `json:"enabled,omitempty"`
+				EnforcementMode *oapi.CreateInstanceRequestEgressProxyEnforcementMode `json:"enforcement_mode,omitempty"`
+				MockEnvVars     *[]string                                             `json:"mock_env_vars,omitempty"`
 			}{
 				Enabled:     &enabled,
 				MockEnvVars: &mockEnvVars,
@@ -251,9 +252,50 @@ func TestCreateInstance_MapsEgressProxyMockEnvVars(t *testing.T) {
 	require.NotNil(t, mockMgr.lastReq)
 	require.NotNil(t, mockMgr.lastReq.EgressProxy)
 	assert.True(t, mockMgr.lastReq.EgressProxy.Enabled)
+	assert.Equal(t, instances.EgressProxyEnforcementModeAll, mockMgr.lastReq.EgressProxy.EnforcementMode)
 	assert.Equal(t, []string{"OUTBOUND_OPENAI_KEY", "GITHUB_TOKEN"}, mockMgr.lastReq.EgressProxy.MockEnvVars)
 	assert.Equal(t, "real-openai-key-123", mockMgr.lastReq.Env["OUTBOUND_OPENAI_KEY"])
 	assert.Equal(t, "real-gh-token-456", mockMgr.lastReq.Env["GITHUB_TOKEN"])
+}
+
+func TestCreateInstance_MapsEgressProxyEnforcementMode(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	origMgr := svc.InstanceManager
+	mockMgr := &captureCreateManager{Manager: origMgr}
+	svc.InstanceManager = mockMgr
+
+	enabled := true
+	mode := oapi.HttpHttpsOnly
+	env := map[string]string{
+		"OUTBOUND_OPENAI_KEY": "real-openai-key-123",
+	}
+	mockEnvVars := []string{"OUTBOUND_OPENAI_KEY"}
+
+	resp, err := svc.CreateInstance(ctx(), oapi.CreateInstanceRequestObject{
+		Body: &oapi.CreateInstanceRequest{
+			Name:  "test-egress-proxy-enforcement-mode",
+			Image: "docker.io/library/alpine:latest",
+			Env:   &env,
+			EgressProxy: &struct {
+				Enabled         *bool                                                 `json:"enabled,omitempty"`
+				EnforcementMode *oapi.CreateInstanceRequestEgressProxyEnforcementMode `json:"enforcement_mode,omitempty"`
+				MockEnvVars     *[]string                                             `json:"mock_env_vars,omitempty"`
+			}{
+				Enabled:         &enabled,
+				EnforcementMode: &mode,
+				MockEnvVars:     &mockEnvVars,
+			},
+		},
+	})
+	require.NoError(t, err)
+	_, ok := resp.(oapi.CreateInstance201JSONResponse)
+	require.True(t, ok, "expected 201 response")
+
+	require.NotNil(t, mockMgr.lastReq)
+	require.NotNil(t, mockMgr.lastReq.EgressProxy)
+	assert.Equal(t, instances.EgressProxyEnforcementModeHTTPHTTPSOnly, mockMgr.lastReq.EgressProxy.EnforcementMode)
 }
 
 func TestForkInstance_Success(t *testing.T) {

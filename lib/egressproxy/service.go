@@ -130,7 +130,7 @@ func (s *Service) RegisterInstance(ctx context.Context, gatewayIP string, cfg In
 		return GuestConfig{}, err
 	}
 
-	if err := applyEgressEnforcement(cfg.InstanceID, cfg.TAPDevice, gatewayIP, s.listenPort); err != nil {
+	if err := applyEgressEnforcement(cfg.InstanceID, cfg.TAPDevice, gatewayIP, s.listenPort, cfg.BlockAllTCPEgress); err != nil {
 		return GuestConfig{}, err
 	}
 

@@ -15,7 +15,10 @@ func cloneEgressProxyConfig(cfg *EgressProxyConfig) *EgressProxyConfig {
 	if cfg == nil {
 		return nil
 	}
-	out := &EgressProxyConfig{Enabled: cfg.Enabled}
+	out := &EgressProxyConfig{
+		Enabled:         cfg.Enabled,
+		EnforcementMode: cfg.EnforcementMode,
+	}
 	if cfg.MockEnvVars != nil {
 		out.MockEnvVars = append([]string(nil), cfg.MockEnvVars...)
 	}
@@ -45,6 +48,18 @@ func normalizeMockEnvVars(in []string) ([]string, error) {
 
 func mockValueForEnvVar(name string) string {
 	return mockSecretPrefix + name
+}
+
+func normalizeEgressProxyEnforcementMode(mode EgressProxyEnforcementMode) (EgressProxyEnforcementMode, error) {
+	trimmed := strings.TrimSpace(string(mode))
+	switch EgressProxyEnforcementMode(trimmed) {
+	case "", EgressProxyEnforcementModeAll:
+		return EgressProxyEnforcementModeAll, nil
+	case EgressProxyEnforcementModeHTTPHTTPSOnly:
+		return EgressProxyEnforcementModeHTTPHTTPSOnly, nil
+	default:
+		return "", fmt.Errorf("%w: invalid egress proxy enforcement_mode %q", ErrInvalidRequest, trimmed)
+	}
 }
 
 func buildEgressProxyReplacements(cfg *EgressProxyConfig, env map[string]string) map[string]string {
@@ -98,6 +113,7 @@ func (m *manager) maybeRegisterEgressProxy(ctx context.Context, stored *StoredMe
 		InstanceID:            stored.Id,
 		SourceIP:              netConfig.IP,
 		TAPDevice:             netConfig.TAPDevice,
+		BlockAllTCPEgress:     stored.EgressProxy.EnforcementMode != EgressProxyEnforcementModeHTTPHTTPSOnly,
 		MockToRealSecretValue: buildEgressProxyReplacements(stored.EgressProxy, stored.Env),
 	})
 	if err != nil {
