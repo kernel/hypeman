@@ -25,7 +25,7 @@ func TestEgressProxyRewritesHTTPSHeaders(t *testing.T) {
 	}))
 	defer target.Close()
 
-	imageRef := integrationTestImageRef(t, "docker.io/curlimages/curl:8.12.1")
+	imageRef := integrationTestImageRef(t, "docker.io/library/nginx:alpine")
 	t.Logf("Pulling %s image...", imageRef)
 	created, err := manager.imageManager.CreateImage(ctx, images.CreateImageRequest{Name: imageRef})
 	require.NoError(t, err)
@@ -76,7 +76,10 @@ func TestEgressProxyRewritesHTTPSHeaders(t *testing.T) {
 	require.NoError(t, waitForVMReady(ctx, inst.SocketPath, 10*time.Second))
 	require.NoError(t, waitForLogMessage(ctx, manager, inst.Id, "[guest-agent] listening", 45*time.Second))
 
-	cmd := fmt.Sprintf("NO_PROXY= no_proxy= curl -k -sS -H \"Authorization: Bearer $OUTBOUND_OPENAI_KEY\" %s", target.URL)
+	cmd := fmt.Sprintf(
+		"NO_PROXY= no_proxy= curl -k -sS -H \"Authorization: Bearer $OUTBOUND_OPENAI_KEY\" %s",
+		target.URL,
+	)
 	output, exitCode, err := execCommand(ctx, inst, "sh", "-lc", cmd)
 	require.NoError(t, err)
 	require.Equal(t, 0, exitCode, "curl output: %s", output)
