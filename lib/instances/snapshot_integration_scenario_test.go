@@ -3,6 +3,7 @@ package instances
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
@@ -63,6 +64,10 @@ func runStandbySnapshotScenario(t *testing.T, mgr *manager, tmpDir string, cfg s
 			_ = mgr.DeleteInstance(context.Background(), sourceID)
 		}
 	})
+
+	source, err = waitForInstanceState(ctx, mgr, sourceID, StateRunning, 20*time.Second)
+	requireNoErr(err)
+	require.Equal(t, StateRunning, source.State)
 
 	_, err = mgr.StandbyInstance(ctx, sourceID)
 	requireNoErr(err)

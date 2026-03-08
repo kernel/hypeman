@@ -50,6 +50,8 @@ func (m *manager) startInstance(
 	// 2a. Clear stale exit info from previous run and apply command overrides
 	stored.ExitCode = nil
 	stored.ExitMessage = ""
+	stored.ProgramStartedAt = nil
+	stored.GuestAgentReadyAt = nil
 	if len(req.Entrypoint) > 0 {
 		stored.Entrypoint = req.Entrypoint
 	}
@@ -151,14 +153,13 @@ func (m *manager) startInstance(
 		log.WarnContext(ctx, "failed to update metadata after VM start", "instance_id", id, "error", err)
 	}
 
+	// Return instance with derived state (should be Running now)
+	finalInst := m.toInstance(ctx, meta)
 	// Record metrics
 	if m.metrics != nil {
 		m.recordDuration(ctx, m.metrics.startDuration, start, "success", stored.HypervisorType)
-		m.recordStateTransition(ctx, string(StateStopped), string(StateRunning), stored.HypervisorType)
+		m.recordStateTransition(ctx, string(StateStopped), string(finalInst.State), stored.HypervisorType)
 	}
-
-	// Return instance with derived state (should be Running now)
-	finalInst := m.toInstance(ctx, meta)
 	log.InfoContext(ctx, "instance started successfully", "instance_id", id, "state", finalInst.State)
 	return &finalInst, nil
 }

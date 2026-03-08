@@ -79,7 +79,7 @@ Hypeman provides a single default network that all instances can optionally conn
 - Follows instance manager's pattern
 
 **Sources of truth:**
-- **Running VMs**: Query `GetVmInfo()` from Cloud Hypervisor - returns IP/MAC/TAP
+- **Active VMs** (`Running` or `Initializing`): Query `GetVmInfo()` from Cloud Hypervisor - returns IP/MAC/TAP
 - **Standby VMs**: Read `guests/{id}/snapshots/snapshot-latest/config.json` from snapshot
 - **Stopped VMs**: No network allocation
 
@@ -352,4 +352,3 @@ Cleanup happens automatically via `t.Cleanup()`, which runs even on test failure
 - **Integration tests** (TestInitializeIntegration, TestCreateAllocationIntegration, etc.): Require permissions, create real devices
 
 All tests run via `make test` - no separate commands needed.
-

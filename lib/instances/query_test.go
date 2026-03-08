@@ -2,6 +2,7 @@ package instances
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -88,6 +89,79 @@ func TestParseExitSentinelLine(t *testing.T) {
 				assert.Equal(t, tc.wantCode, code, "exit code mismatch")
 				assert.Equal(t, tc.wantMsg, msg, "exit message mismatch")
 			}
+		})
+	}
+}
+
+func TestParseProgramStartSentinelLine(t *testing.T) {
+	t.Parallel()
+
+	ts := "2026-03-08T15:09:26.123456789Z"
+	line := "2026-03-08T15:09:26Z [INFO] [hypeman-init:entrypoint] HYPEMAN-PROGRAM-START ts=" + ts + " mode=exec"
+
+	parsed, ok := parseProgramStartSentinelLine(line)
+	require.True(t, ok)
+	assert.Equal(t, ts, parsed.UTC().Format(time.RFC3339Nano))
+}
+
+func TestParseAgentReadySentinelLine(t *testing.T) {
+	t.Parallel()
+
+	ts := "2026-03-08T15:09:26.987654321Z"
+	line := "2026/03/08 15:09:26 [guest-agent] HYPEMAN-AGENT-READY ts=" + ts
+
+	parsed, ok := parseAgentReadySentinelLine(line)
+	require.True(t, ok)
+	assert.Equal(t, ts, parsed.UTC().Format(time.RFC3339Nano))
+}
+
+func TestDeriveRunningState(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+
+	tests := []struct {
+		name   string
+		stored StoredMetadata
+		want   State
+	}{
+		{
+			name: "initializing when program start marker missing",
+			stored: StoredMetadata{
+				SkipGuestAgent: false,
+			},
+			want: StateInitializing,
+		},
+		{
+			name: "initializing when guest-agent marker missing",
+			stored: StoredMetadata{
+				ProgramStartedAt: &now,
+				SkipGuestAgent:   false,
+			},
+			want: StateInitializing,
+		},
+		{
+			name: "running when both markers present",
+			stored: StoredMetadata{
+				ProgramStartedAt:  &now,
+				GuestAgentReadyAt: &now,
+				SkipGuestAgent:    false,
+			},
+			want: StateRunning,
+		},
+		{
+			name: "running when guest-agent is skipped",
+			stored: StoredMetadata{
+				ProgramStartedAt: &now,
+				SkipGuestAgent:   true,
+			},
+			want: StateRunning,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, deriveRunningState(&tt.stored))
 		})
 	}
 }

@@ -497,6 +497,14 @@ func cloneStoredMetadataForFork(src StoredMetadata) StoredMetadata {
 		stoppedAt := *src.StoppedAt
 		dst.StoppedAt = &stoppedAt
 	}
+	if src.ProgramStartedAt != nil {
+		programStartedAt := *src.ProgramStartedAt
+		dst.ProgramStartedAt = &programStartedAt
+	}
+	if src.GuestAgentReadyAt != nil {
+		guestAgentReadyAt := *src.GuestAgentReadyAt
+		dst.GuestAgentReadyAt = &guestAgentReadyAt
+	}
 	if src.ExitCode != nil {
 		exitCode := *src.ExitCode
 		dst.ExitCode = &exitCode

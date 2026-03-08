@@ -1,25 +1,33 @@
 package instances
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
 )
 
 // exitSentinelPrefix is the machine-parseable prefix written by init to serial console.
-const exitSentinelPrefix = "HYPEMAN-EXIT "
+const (
+	exitSentinelPrefix         = "HYPEMAN-EXIT "
+	programStartSentinelPrefix = "HYPEMAN-PROGRAM-START "
+	agentReadySentinelPrefix   = "HYPEMAN-AGENT-READY "
+)
 
 // stateResult holds the result of state derivation
 type stateResult struct {
-	State State
-	Error *string // Non-nil if state couldn't be determined
+	State               State
+	Error               *string // Non-nil if state couldn't be determined
+	BootMarkersHydrated bool
 }
 
 // deriveState determines instance state by checking socket and querying the hypervisor.
@@ -66,7 +74,11 @@ func (m *manager) deriveState(ctx context.Context, stored *StoredMetadata) state
 	case hypervisor.StateCreated:
 		return stateResult{State: StateCreated}
 	case hypervisor.StateRunning:
-		return stateResult{State: StateRunning}
+		hydrated := m.hydrateBootMarkersFromLogs(stored)
+		return stateResult{
+			State:               deriveRunningState(stored),
+			BootMarkersHydrated: hydrated,
+		}
 	case hypervisor.StatePaused:
 		return stateResult{State: StatePaused}
 	case hypervisor.StateShutdown:
@@ -80,6 +92,127 @@ func (m *manager) deriveState(ctx context.Context, stored *StoredMetadata) state
 		)
 		return stateResult{State: StateUnknown, Error: &errMsg}
 	}
+}
+
+func deriveRunningState(stored *StoredMetadata) State {
+	if stored.ProgramStartedAt == nil {
+		return StateInitializing
+	}
+	if stored.SkipGuestAgent {
+		return StateRunning
+	}
+	if stored.GuestAgentReadyAt == nil {
+		return StateInitializing
+	}
+	return StateRunning
+}
+
+// hydrateBootMarkersFromLogs fills missing boot markers from serial logs.
+// Returns true when at least one missing marker was found and populated.
+func (m *manager) hydrateBootMarkersFromLogs(stored *StoredMetadata) bool {
+	needProgram := stored.ProgramStartedAt == nil
+	needAgent := !stored.SkipGuestAgent && stored.GuestAgentReadyAt == nil
+	if !needProgram && !needAgent {
+		return false
+	}
+
+	programStartedAt, guestAgentReadyAt := m.parseBootMarkers(stored.Id)
+	hydrated := false
+	if needProgram && programStartedAt != nil {
+		stored.ProgramStartedAt = programStartedAt
+		hydrated = true
+	}
+	if needAgent && guestAgentReadyAt != nil {
+		stored.GuestAgentReadyAt = guestAgentReadyAt
+		hydrated = true
+	}
+	return hydrated
+}
+
+// parseBootMarkers scans app logs (including rotated files) and returns the
+// latest observed program-start and guest-agent-ready marker timestamps.
+func (m *manager) parseBootMarkers(id string) (*time.Time, *time.Time) {
+	logPaths := m.appLogPathsForMarkerScan(id)
+
+	var programStartedAt *time.Time
+	var guestAgentReadyAt *time.Time
+	for _, logPath := range logPaths {
+		f, err := os.Open(logPath)
+		if err != nil {
+			continue
+		}
+
+		scanner := bufio.NewScanner(f)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if ts, ok := parseProgramStartSentinelLine(line); ok {
+				programStartedAt = &ts
+			}
+			if ts, ok := parseAgentReadySentinelLine(line); ok {
+				guestAgentReadyAt = &ts
+			}
+		}
+		_ = f.Close()
+	}
+
+	return programStartedAt, guestAgentReadyAt
+}
+
+// appLogPathsForMarkerScan returns app log paths in chronological order
+// (oldest rotated file to newest active file).
+func (m *manager) appLogPathsForMarkerScan(id string) []string {
+	base := m.paths.InstanceAppLog(id)
+	matches, err := filepath.Glob(base + "*")
+	if err != nil {
+		return []string{base}
+	}
+
+	type logPathWithRank struct {
+		path string
+		rank int // higher rank means older rotated log; 0 means active file
+	}
+	paths := make([]logPathWithRank, 0, len(matches))
+	for _, path := range matches {
+		if path == base {
+			paths = append(paths, logPathWithRank{path: path, rank: 0})
+			continue
+		}
+
+		suffix := strings.TrimPrefix(path, base)
+		if !strings.HasPrefix(suffix, ".") {
+			continue
+		}
+		n, err := strconv.Atoi(strings.TrimPrefix(suffix, "."))
+		if err != nil || n <= 0 {
+			continue
+		}
+		paths = append(paths, logPathWithRank{path: path, rank: n})
+	}
+
+	if len(paths) == 0 {
+		return []string{base}
+	}
+
+	slices.SortFunc(paths, func(a, b logPathWithRank) int {
+		// Rotated logs first (older-to-newer by descending suffix), then active file.
+		switch {
+		case a.rank == 0 && b.rank != 0:
+			return 1
+		case a.rank != 0 && b.rank == 0:
+			return -1
+		case a.rank != b.rank:
+			// Larger suffix is older and should be read first.
+			return b.rank - a.rank
+		default:
+			return strings.Compare(a.path, b.path)
+		}
+	})
+
+	ordered := make([]string, 0, len(paths))
+	for _, p := range paths {
+		ordered = append(ordered, p.path)
+	}
+	return ordered
 }
 
 // hasSnapshot checks if a snapshot exists for an instance
@@ -105,10 +238,11 @@ func (m *manager) hasSnapshot(dataDir string) bool {
 func (m *manager) toInstance(ctx context.Context, meta *metadata) Instance {
 	result := m.deriveState(ctx, &meta.StoredMetadata)
 	inst := Instance{
-		StoredMetadata: meta.StoredMetadata,
-		State:          result.State,
-		StateError:     result.Error,
-		HasSnapshot:    m.hasSnapshot(meta.StoredMetadata.DataDir),
+		StoredMetadata:      meta.StoredMetadata,
+		State:               result.State,
+		StateError:          result.Error,
+		HasSnapshot:         m.hasSnapshot(meta.StoredMetadata.DataDir),
+		BootMarkersHydrated: result.BootMarkersHydrated,
 	}
 
 	// If VM is stopped and exit info isn't persisted yet, populate in-memory
@@ -142,7 +276,8 @@ func (m *manager) parseExitSentinel(id string) (int, string, bool) {
 
 	// Scan lines from the tail looking for the sentinel
 	lines := strings.Split(string(data), "\n")
-	for _, line := range lines {
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := lines[i]
 		code, msg, ok := parseExitSentinelLine(line)
 		if ok {
 			return code, msg, true
@@ -177,6 +312,43 @@ func (m *manager) persistExitInfo(ctx context.Context, id string) {
 		log.WarnContext(ctx, "failed to persist exit info", "instance_id", id, "error", err)
 	} else {
 		log.DebugContext(ctx, "parsed exit info from serial log", "instance_id", id, "exit_code", code, "exit_message", msg)
+	}
+}
+
+// persistBootMarkers parses program-start and guest-agent-ready markers from
+// serial logs and persists them to metadata. Must be called under instance lock.
+func (m *manager) persistBootMarkers(ctx context.Context, id string) {
+	log := logger.FromContext(ctx)
+
+	meta, err := m.loadMetadata(id)
+	if err != nil {
+		return
+	}
+
+	needProgram := meta.ProgramStartedAt == nil
+	needAgent := !meta.SkipGuestAgent && meta.GuestAgentReadyAt == nil
+	if !needProgram && !needAgent {
+		return
+	}
+
+	programStartedAt, guestAgentReadyAt := m.parseBootMarkers(id)
+	updated := false
+	if needProgram && programStartedAt != nil {
+		meta.ProgramStartedAt = programStartedAt
+		updated = true
+	}
+	if needAgent && guestAgentReadyAt != nil {
+		meta.GuestAgentReadyAt = guestAgentReadyAt
+		updated = true
+	}
+	if !updated {
+		return
+	}
+
+	if err := m.saveMetadata(meta); err != nil {
+		log.WarnContext(ctx, "failed to persist boot markers", "instance_id", id, "error", err)
+	} else {
+		log.DebugContext(ctx, "persisted boot markers from serial log", "instance_id", id)
 	}
 }
 
@@ -259,6 +431,38 @@ func parseExitSentinelLine(line string) (int, string, bool) {
 	}
 
 	return code, "", true
+}
+
+func parseProgramStartSentinelLine(line string) (time.Time, bool) {
+	return parseSentinelTimestamp(line, programStartSentinelPrefix)
+}
+
+func parseAgentReadySentinelLine(line string) (time.Time, bool) {
+	return parseSentinelTimestamp(line, agentReadySentinelPrefix)
+}
+
+func parseSentinelTimestamp(line, sentinelPrefix string) (time.Time, bool) {
+	line = strings.TrimSpace(line)
+
+	idx := strings.Index(line, sentinelPrefix)
+	if idx < 0 {
+		return time.Time{}, false
+	}
+
+	sentinel := line[idx+len(sentinelPrefix):]
+	for _, field := range strings.Fields(sentinel) {
+		if !strings.HasPrefix(field, "ts=") {
+			continue
+		}
+		ts := strings.TrimPrefix(field, "ts=")
+		parsed, err := time.Parse(time.RFC3339Nano, ts)
+		if err != nil {
+			return time.Time{}, false
+		}
+		return parsed, true
+	}
+
+	return time.Time{}, false
 }
 
 // listInstances returns all instances

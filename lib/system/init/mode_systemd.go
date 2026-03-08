@@ -52,6 +52,7 @@ func runSystemdMode(log *Logger, cfg *vmconfig.Config) {
 
 	// Exec systemd - this replaces the current process
 	log.Info("hypeman-init:systemd", fmt.Sprintf("exec %v", argv))
+	log.Info("hypeman-init:systemd", formatProgramStartSentinel("systemd"))
 
 	// syscall.Exec replaces the current process with the new one
 	// Use buildEnv to include user's environment variables from the image/instance config
@@ -77,8 +78,8 @@ ExecStart=/opt/hypeman/guest-agent
 EnvironmentFile=-/etc/hypeman/env
 Restart=always
 RestartSec=3
-StandardOutput=journal
-StandardError=journal
+StandardOutput=journal+console
+StandardError=journal+console
 
 [Install]
 WantedBy=multi-user.target

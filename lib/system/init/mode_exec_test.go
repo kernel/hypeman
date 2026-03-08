@@ -1,7 +1,11 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -153,4 +157,33 @@ func TestIsOOMLine(t *testing.T) {
 			assert.Equal(t, tc.want, isOOMLine(tc.line))
 		})
 	}
+}
+
+func TestFormatProgramStartSentinel(t *testing.T) {
+	result := formatProgramStartSentinel("exec")
+	assert.Contains(t, result, "HYPEMAN-PROGRAM-START")
+	assert.Contains(t, result, " mode=exec")
+	assert.Contains(t, result, " ts=")
+}
+
+func TestWaitForGuestAgentReady(t *testing.T) {
+	t.Parallel()
+
+	readyFile := filepath.Join(t.TempDir(), "ready")
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		_ = os.WriteFile(readyFile, []byte("ok"), 0644)
+	}()
+
+	err := waitForGuestAgentReady(readyFile, time.Second, nil)
+	require.NoError(t, err)
+}
+
+func TestWaitForGuestAgentReadyTimeout(t *testing.T) {
+	t.Parallel()
+
+	readyFile := filepath.Join(t.TempDir(), "missing")
+	err := waitForGuestAgentReady(readyFile, 100*time.Millisecond, nil)
+	require.Error(t, err)
+	assert.True(t, strings.Contains(err.Error(), "timed out"), "unexpected error: %v", err)
 }

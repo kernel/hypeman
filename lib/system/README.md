@@ -70,8 +70,14 @@ It replaces the previous shell-based init script with cleaner logic and structur
 - ✅ Hand off to systemd via chroot + exec (systemd mode)
 
 **Two boot modes:**
-- **Exec mode** (default): Init chroots to container rootfs, runs entrypoint as child process. When the app exits, init logs exit info and cleanly shuts down the VM via `reboot(POWER_OFF)`.
-- **Systemd mode** (auto-detected on host): Init chroots to container rootfs, then execs /sbin/init so systemd becomes PID 1
+- **Exec mode** (default): Init chroots to container rootfs, starts guest-agent, enforces a strict guest-agent readiness gate (10s), then launches the entrypoint as a child process. When the app exits, init logs exit info and cleanly shuts down the VM via `reboot(POWER_OFF)`.
+- **Systemd mode** (auto-detected on host): Init chroots to container rootfs, emits handoff marker, then execs /sbin/init so systemd becomes PID 1.
+
+**Boot progress sentinels:** Init and guest-agent emit machine-parseable markers to serial console:
+- `HYPEMAN-PROGRAM-START ts=... mode=...`
+- `HYPEMAN-AGENT-READY ts=...`
+
+Host state derivation uses these sentinels to report `Initializing` until both required markers are present (or until `skip_guest_agent=true` bypasses the agent marker requirement).
 
 **Graceful shutdown:** The host sends a `Shutdown` gRPC RPC to the guest-agent, which signals PID 1 (init). Init forwards the signal to the entrypoint child process. If the app doesn't exit within the stop timeout, the host falls back to hypervisor shutdown and then force-kills the hypervisor process if still needed.
 
@@ -179,7 +185,7 @@ lib/system/init/
     network.go        # Network configuration
     headers.go        # Kernel headers setup for DKMS
     volumes.go        # Volume mounting
-    mode_exec.go      # Exec mode: chroot, run entrypoint, wait on guest-agent
-    mode_systemd.go   # Systemd mode: chroot + exec /sbin/init
+    mode_exec.go      # Exec mode: chroot, strict agent gate, run entrypoint
+    mode_systemd.go   # Systemd mode: chroot + handoff marker + exec /sbin/init
     logger.go         # Human-readable logging to hypeman operations log
 ```

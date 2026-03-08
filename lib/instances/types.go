@@ -12,13 +12,14 @@ import (
 type State string
 
 const (
-	StateStopped  State = "Stopped"  // No VMM, no snapshot
-	StateCreated  State = "Created"  // VMM created but not booted (CH native)
-	StateRunning  State = "Running"  // VM running (CH native)
-	StatePaused   State = "Paused"   // VM paused (CH native)
-	StateShutdown State = "Shutdown" // VM shutdown, VMM exists (CH native)
-	StateStandby  State = "Standby"  // No VMM, snapshot exists
-	StateUnknown  State = "Unknown"  // Failed to determine state (VMM query failed)
+	StateStopped      State = "Stopped"      // No VMM, no snapshot
+	StateCreated      State = "Created"      // VMM created but not booted (CH native)
+	StateInitializing State = "Initializing" // VM running, guest init in progress
+	StateRunning      State = "Running"      // Guest program started and ready
+	StatePaused       State = "Paused"       // VM paused (CH native)
+	StateShutdown     State = "Shutdown"     // VM shutdown, VMM exists (CH native)
+	StateStandby      State = "Standby"      // No VMM, snapshot exists
+	StateUnknown      State = "Unknown"      // Failed to determine state (VMM query failed)
 )
 
 // VolumeAttachment represents a volume attached to an instance
@@ -60,6 +61,10 @@ type StoredMetadata struct {
 	CreatedAt time.Time
 	StartedAt *time.Time // Last time VM was started
 	StoppedAt *time.Time // Last time VM was stopped
+
+	// Boot progress markers (derived from guest serial log sentinels and persisted)
+	ProgramStartedAt  *time.Time // Set when guest program handoff/start boundary is reached
+	GuestAgentReadyAt *time.Time // Set when guest-agent is ready (unless skip_guest_agent=true)
 
 	// Versions
 	KernelVersion string // Kernel version (e.g., "ch-v6.12.9")
@@ -105,9 +110,10 @@ type Instance struct {
 	StoredMetadata
 
 	// Derived fields (not stored in metadata.json)
-	State       State   // Derived from socket + VMM query
-	StateError  *string // Error message if state couldn't be determined (non-nil when State=Unknown)
-	HasSnapshot bool    // Derived from filesystem check
+	State               State   // Derived from socket + VMM query + guest boot markers
+	StateError          *string // Error message if state couldn't be determined (non-nil when State=Unknown)
+	HasSnapshot         bool    // Derived from filesystem check
+	BootMarkersHydrated bool    // True when missing boot markers were hydrated from logs in this read
 }
 
 // GetHypervisorType returns the hypervisor type as a string.

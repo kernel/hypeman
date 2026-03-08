@@ -299,6 +299,8 @@ func (m *manager) createInstance(
 		CreatedAt:                time.Now(),
 		StartedAt:                nil,
 		StoppedAt:                nil,
+		ProgramStartedAt:         nil,
+		GuestAgentReadyAt:        nil,
 		KernelVersion:            string(kernelVer),
 		HypervisorType:           hvType,
 		HypervisorVersion:        hvVersion,
@@ -435,14 +437,13 @@ func (m *manager) createInstance(
 	// Success - release cleanup stack (prevent cleanup)
 	cu.Release()
 
+	// Return instance with derived state
+	finalInst := m.toInstance(ctx, meta)
 	// Record metrics
 	if m.metrics != nil {
 		m.recordDuration(ctx, m.metrics.createDuration, start, "success", hvType)
-		m.recordStateTransition(ctx, "stopped", string(StateRunning), hvType)
+		m.recordStateTransition(ctx, string(StateStopped), string(finalInst.State), hvType)
 	}
-
-	// Return instance with derived state
-	finalInst := m.toInstance(ctx, meta)
 	log.InfoContext(ctx, "instance created successfully", "instance_id", id, "name", req.Name, "state", finalInst.State, "hypervisor", hvType)
 	return &finalInst, nil
 }

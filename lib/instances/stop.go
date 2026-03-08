@@ -132,10 +132,10 @@ func (m *manager) forceKillHypervisorProcess(ctx context.Context, inst *Instance
 	return nil
 }
 
-// stopInstance gracefully stops a running instance.
+// stopInstance gracefully stops an active instance.
 // Flow: send Shutdown RPC -> wait for VM to power off ->
 // fall back to hypervisor shutdown -> final SIGKILL if still alive.
-// Multi-hop orchestration: Running → Shutdown → Stopped
+// Multi-hop orchestration: Running/Initializing → Shutdown → Stopped
 func (m *manager) stopInstance(
 	ctx context.Context,
 	id string,
@@ -162,10 +162,10 @@ func (m *manager) stopInstance(
 	stored := &meta.StoredMetadata
 	log.DebugContext(ctx, "loaded instance", "instance_id", id, "state", inst.State)
 
-	// 2. Validate state transition (must be Running to stop)
-	if inst.State != StateRunning {
+	// 2. Validate state transition (must be active to stop)
+	if inst.State != StateRunning && inst.State != StateInitializing {
 		log.ErrorContext(ctx, "invalid state for stop", "instance_id", id, "state", inst.State)
-		return nil, fmt.Errorf("%w: cannot stop from state %s, must be Running", ErrInvalidState, inst.State)
+		return nil, fmt.Errorf("%w: cannot stop from state %s, must be Running or Initializing", ErrInvalidState, inst.State)
 	}
 
 	// 3. Get network allocation BEFORE killing VMM (while we can still query it)
@@ -253,7 +253,7 @@ func (m *manager) stopInstance(
 	// Record metrics
 	if m.metrics != nil {
 		m.recordDuration(ctx, m.metrics.stopDuration, start, "success", stored.HypervisorType)
-		m.recordStateTransition(ctx, string(StateRunning), string(StateStopped), stored.HypervisorType)
+		m.recordStateTransition(ctx, string(inst.State), string(StateStopped), stored.HypervisorType)
 	}
 
 	// Return instance with derived state (should be Stopped now)

@@ -276,7 +276,7 @@ func TestQEMUBasicEndToEnd(t *testing.T) {
 	assert.NotEmpty(t, inst.Id)
 	assert.Equal(t, "test-nginx-qemu", inst.Name)
 	assert.Equal(t, integrationTestImageRef(t, "docker.io/library/nginx:alpine"), inst.Image)
-	assert.Equal(t, StateRunning, inst.State)
+	assert.Contains(t, []State{StateInitializing, StateRunning}, inst.State)
 	assert.Equal(t, hypervisor.TypeQEMU, inst.HypervisorType)
 	assert.False(t, inst.HasSnapshot)
 	assert.NotEmpty(t, inst.KernelVersion)
@@ -302,6 +302,8 @@ func TestQEMUBasicEndToEnd(t *testing.T) {
 	// Wait for VM to be fully running
 	err = waitForQEMUReady(ctx, inst.SocketPath, 10*time.Second)
 	require.NoError(t, err, "QEMU VM should reach running state")
+	inst, err = waitForInstanceState(ctx, manager, inst.Id, StateRunning, 20*time.Second)
+	require.NoError(t, err, "instance should reach Running state")
 
 	// Get instance
 	retrieved, err := manager.GetInstance(ctx, inst.Id)
@@ -650,7 +652,9 @@ func TestQEMUEntrypointEnvVars(t *testing.T) {
 	inst, err := mgr.CreateInstance(ctx, req)
 	require.NoError(t, err)
 	require.NotNil(t, inst)
-	assert.Equal(t, StateRunning, inst.State)
+	assert.Contains(t, []State{StateInitializing, StateRunning}, inst.State)
+	inst, err = waitForInstanceState(ctx, mgr, inst.Id, StateRunning, 20*time.Second)
+	require.NoError(t, err)
 	assert.Equal(t, hypervisor.TypeQEMU, inst.HypervisorType, "Instance should use QEMU hypervisor")
 	t.Logf("Instance created: %s", inst.Id)
 
@@ -816,7 +820,9 @@ func TestQEMUStandbyAndRestore(t *testing.T) {
 	inst, err := manager.CreateInstance(ctx, req)
 	require.NoError(t, err)
 	require.NotNil(t, inst)
-	assert.Equal(t, StateRunning, inst.State)
+	assert.Contains(t, []State{StateInitializing, StateRunning}, inst.State)
+	inst, err = waitForInstanceState(ctx, manager, inst.Id, StateRunning, 20*time.Second)
+	require.NoError(t, err)
 	assert.Equal(t, hypervisor.TypeQEMU, inst.HypervisorType)
 	t.Logf("Instance created: %s (hypervisor: %s)", inst.Id, inst.HypervisorType)
 
@@ -850,7 +856,9 @@ func TestQEMUStandbyAndRestore(t *testing.T) {
 	t.Log("Restoring instance...")
 	inst, err = manager.RestoreInstance(ctx, inst.Id)
 	require.NoError(t, err)
-	assert.Equal(t, StateRunning, inst.State)
+	assert.Contains(t, []State{StateInitializing, StateRunning}, inst.State)
+	inst, err = waitForInstanceState(ctx, manager, inst.Id, StateRunning, 20*time.Second)
+	require.NoError(t, err)
 	t.Log("Instance restored and running")
 
 	// Wait for VM to be running again
@@ -919,6 +927,8 @@ func TestQEMUForkFromRunningNetwork(t *testing.T) {
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = manager.DeleteInstance(context.Background(), source.Id) })
+	source, err = waitForInstanceState(ctx, manager, source.Id, StateRunning, 20*time.Second)
+	require.NoError(t, err)
 	require.NoError(t, waitForQEMUReady(ctx, source.SocketPath, 10*time.Second))
 
 	assert.NotEmpty(t, source.IP)
@@ -941,11 +951,18 @@ func TestQEMUForkFromRunningNetwork(t *testing.T) {
 
 	sourceAfterFork, err := manager.GetInstance(ctx, source.Id)
 	require.NoError(t, err)
+	if sourceAfterFork.State != StateRunning {
+		sourceAfterFork, err = waitForInstanceState(ctx, manager, source.Id, StateRunning, 20*time.Second)
+		require.NoError(t, err)
+	}
 	require.Equal(t, StateRunning, sourceAfterFork.State)
 	require.NotEmpty(t, sourceAfterFork.IP)
 	assertHostCanReachNginx(t, sourceAfterFork.IP, 80, 60*time.Second)
 
 	forked, err = manager.RestoreInstance(ctx, forkedID)
+	require.NoError(t, err)
+	require.Contains(t, []State{StateInitializing, StateRunning}, forked.State)
+	forked, err = waitForInstanceState(ctx, manager, forkedID, StateRunning, 20*time.Second)
 	require.NoError(t, err)
 	require.Equal(t, StateRunning, forked.State)
 	require.NoError(t, waitForQEMUReady(ctx, forked.SocketPath, 10*time.Second))

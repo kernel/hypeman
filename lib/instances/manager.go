@@ -165,6 +165,14 @@ func (m *manager) maybePersistExitInfo(ctx context.Context, id string) {
 	m.persistExitInfo(ctx, id)
 }
 
+// maybePersistBootMarkers persists boot markers to metadata under lock.
+func (m *manager) maybePersistBootMarkers(ctx context.Context, id string) {
+	lock := m.getInstanceLock(id)
+	lock.Lock()
+	defer lock.Unlock()
+	m.persistBootMarkers(ctx, id)
+}
+
 // CreateInstance creates and starts a new instance
 func (m *manager) CreateInstance(ctx context.Context, req CreateInstanceRequest) (*Instance, error) {
 	// Note: ID is generated inside createInstance, so we can't lock before calling it.
@@ -315,6 +323,9 @@ func (m *manager) GetInstance(ctx context.Context, idOrName string) (*Instance, 
 		if inst.State == StateStopped && inst.ExitCode != nil {
 			m.maybePersistExitInfo(ctx, inst.Id)
 		}
+		if (inst.State == StateRunning || inst.State == StateInitializing) && inst.BootMarkersHydrated {
+			m.maybePersistBootMarkers(ctx, inst.Id)
+		}
 		return inst, nil
 	}
 
@@ -336,6 +347,9 @@ func (m *manager) GetInstance(ctx context.Context, idOrName string) (*Instance, 
 		if inst.State == StateStopped && inst.ExitCode != nil {
 			m.maybePersistExitInfo(ctx, inst.Id)
 		}
+		if (inst.State == StateRunning || inst.State == StateInitializing) && inst.BootMarkersHydrated {
+			m.maybePersistBootMarkers(ctx, inst.Id)
+		}
 		return inst, nil
 	}
 	if len(nameMatches) > 1 {
@@ -353,6 +367,9 @@ func (m *manager) GetInstance(ctx context.Context, idOrName string) (*Instance, 
 		inst := &prefixMatches[0]
 		if inst.State == StateStopped && inst.ExitCode != nil {
 			m.maybePersistExitInfo(ctx, inst.Id)
+		}
+		if (inst.State == StateRunning || inst.State == StateInitializing) && inst.BootMarkersHydrated {
+			m.maybePersistBootMarkers(ctx, inst.Id)
 		}
 		return inst, nil
 	}
@@ -451,6 +468,7 @@ func (m *manager) ListInstanceAllocations(ctx context.Context) ([]resources.Inst
 
 // ListRunningInstancesInfo returns info needed for utilization metrics collection.
 // Used by the resource manager for VM utilization tracking.
+// Includes active VMs in Running or Initializing state.
 func (m *manager) ListRunningInstancesInfo(ctx context.Context) ([]resources.InstanceUtilizationInfo, error) {
 	instances, err := m.listInstances(ctx)
 	if err != nil {
@@ -459,8 +477,8 @@ func (m *manager) ListRunningInstancesInfo(ctx context.Context) ([]resources.Ins
 
 	infos := make([]resources.InstanceUtilizationInfo, 0, len(instances))
 	for _, inst := range instances {
-		// Only include running instances (they have a hypervisor process)
-		if inst.State != StateRunning {
+		// Only include active instances (they have a hypervisor process)
+		if inst.State != StateRunning && inst.State != StateInitializing {
 			continue
 		}
 

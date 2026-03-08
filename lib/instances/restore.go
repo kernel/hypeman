@@ -235,14 +235,13 @@ func (m *manager) restoreInstance(
 		log.WarnContext(ctx, "failed to update metadata after restore", "instance_id", id, "error", err)
 	}
 
+	// Return instance with derived state (should be Running now)
+	finalInst := m.toInstance(ctx, meta)
 	// Record metrics
 	if m.metrics != nil {
 		m.recordDuration(ctx, m.metrics.restoreDuration, start, "success", stored.HypervisorType)
-		m.recordStateTransition(ctx, string(StateStandby), string(StateRunning), stored.HypervisorType)
+		m.recordStateTransition(ctx, string(StateStandby), string(finalInst.State), stored.HypervisorType)
 	}
-
-	// Return instance with derived state (should be Running now)
-	finalInst := m.toInstance(ctx, meta)
 	log.InfoContext(ctx, "instance restored successfully", "instance_id", id, "state", finalInst.State)
 	return &finalInst, nil
 }
