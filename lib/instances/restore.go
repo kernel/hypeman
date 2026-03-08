@@ -75,9 +75,14 @@ func (m *manager) restoreInstance(
 	}
 
 	var allocatedNet *network.Allocation
+	proxyRegistered := false
 	releaseNetwork := func() {
 		if !stored.NetworkEnabled {
 			return
+		}
+		if proxyRegistered {
+			m.unregisterEgressProxyInstance(ctx, id)
+			proxyRegistered = false
 		}
 		if allocatedNet != nil {
 			if err := m.networkManager.ReleaseAllocation(ctx, allocatedNet); err != nil {
@@ -166,6 +171,33 @@ func (m *manager) restoreInstance(
 		}
 		if networkSpan != nil {
 			networkSpan.End()
+		}
+	}
+
+	// 4b. Register proxy/enforcement once network identity is active.
+	if stored.NetworkEnabled {
+		alloc, allocErr := m.networkManager.GetAllocation(ctx, id)
+		if allocErr != nil && stored.EgressProxy != nil && stored.EgressProxy.Enabled {
+			log.ErrorContext(ctx, "failed to fetch allocation for proxy setup", "instance_id", id, "error", allocErr)
+			releaseNetwork()
+			return nil, fmt.Errorf("get network allocation for proxy setup: %w", allocErr)
+		}
+		if allocErr == nil && alloc != nil {
+			proxyCfg := &network.NetworkConfig{
+				IP:        alloc.IP,
+				MAC:       alloc.MAC,
+				Gateway:   alloc.Gateway,
+				Netmask:   alloc.Netmask,
+				TAPDevice: alloc.TAPDevice,
+			}
+			if _, err := m.maybeRegisterEgressProxy(ctx, stored, proxyCfg); err != nil {
+				log.ErrorContext(ctx, "failed to configure egress proxy", "instance_id", id, "error", err)
+				releaseNetwork()
+				return nil, fmt.Errorf("configure egress proxy: %w", err)
+			}
+			if stored.EgressProxy != nil && stored.EgressProxy.Enabled {
+				proxyRegistered = true
+			}
 		}
 	}
 

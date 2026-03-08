@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/devices"
+	"github.com/kernel/hypeman/lib/egressproxy"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/logger"
@@ -296,6 +297,7 @@ func (m *manager) createInstance(
 		Env:                      req.Env,
 		Metadata:                 tags.Clone(req.Metadata),
 		NetworkEnabled:           req.NetworkEnabled,
+		EgressProxy:              cloneEgressProxyConfig(req.EgressProxy),
 		CreatedAt:                time.Now(),
 		StartedAt:                nil,
 		StoppedAt:                nil,
@@ -400,8 +402,21 @@ func (m *manager) createInstance(
 
 	// 16. Create config disk (needs Instance for buildVMConfig)
 	inst := &Instance{StoredMetadata: *stored}
+	var proxyGuestConfig *egressproxy.GuestConfig
+	if networkName != "" {
+		proxyGuestConfig, err = m.maybeRegisterEgressProxy(ctx, stored, netConfig)
+		if err != nil {
+			log.ErrorContext(ctx, "failed to configure egress proxy", "instance_id", id, "error", err)
+			return nil, fmt.Errorf("configure egress proxy: %w", err)
+		}
+		if proxyGuestConfig != nil {
+			cu.Add(func() {
+				m.unregisterEgressProxyInstance(ctx, id)
+			})
+		}
+	}
 	log.DebugContext(ctx, "creating config disk", "instance_id", id)
-	if err := m.createConfigDisk(ctx, inst, imageInfo, netConfig); err != nil {
+	if err := m.createConfigDisk(ctx, inst, imageInfo, netConfig, proxyGuestConfig); err != nil {
 		log.ErrorContext(ctx, "failed to create config disk", "instance_id", id, "error", err)
 		return nil, fmt.Errorf("create config disk: %w", err)
 	}
@@ -466,6 +481,16 @@ func validateCreateRequest(req CreateInstanceRequest) error {
 	}
 	if req.Vcpus < 0 {
 		return fmt.Errorf("vcpus cannot be negative")
+	}
+	if req.EgressProxy != nil && req.EgressProxy.Enabled {
+		if !req.NetworkEnabled {
+			return fmt.Errorf("%w: egress proxy requires network_enabled=true", ErrInvalidRequest)
+		}
+		for mock, envVar := range req.EgressProxy.MockToRealEnvVar {
+			if strings.TrimSpace(mock) == "" || strings.TrimSpace(envVar) == "" {
+				return fmt.Errorf("%w: egress proxy secret mappings must use non-empty mock and env var names", ErrInvalidRequest)
+			}
+		}
 	}
 	if err := tags.Validate(req.Metadata); err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidRequest, err)

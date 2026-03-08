@@ -199,6 +199,9 @@ func (m *manager) stopInstance(
 	}
 
 	// 6. Release network allocation (delete TAP device)
+	if inst.NetworkEnabled {
+		m.unregisterEgressProxyInstance(ctx, id)
+	}
 	if inst.NetworkEnabled && networkAlloc != nil {
 		log.DebugContext(ctx, "releasing network", "instance_id", id, "network", "default")
 		if err := m.networkManager.ReleaseAllocation(ctx, networkAlloc); err != nil {

@@ -161,6 +161,22 @@ components:
           example:
             PORT: "3000"
             NODE_ENV: production
+        egress_proxy:
+          type: object
+          description: Optional host-side HTTP/HTTPS MITM egress proxy mode.
+          properties:
+            enabled:
+              type: boolean
+              description: Whether to enable egress proxy mode.
+              default: false
+              example: true
+            mock_to_real_env_var:
+              type: object
+              additionalProperties:
+                type: string
+              description: Map of mock secret literal -> host environment variable name containing the real secret.
+              example:
+                mock_openai_key: OPENAI_API_KEY
         metadata:
           $ref: "#/components/schemas/MetadataTags"
         network:

@@ -29,6 +29,9 @@ type Config struct {
 	// Boot optimizations
 	SkipKernelHeaders bool `json:"skip_kernel_headers,omitempty"`
 	SkipGuestAgent    bool `json:"skip_guest_agent,omitempty"`
+
+	// Optional egress MITM proxy configuration.
+	EgressProxy *EgressProxyConfig `json:"egress_proxy,omitempty"`
 }
 
 // VolumeMount represents a volume mount configuration.
@@ -37,4 +40,11 @@ type VolumeMount struct {
 	Path          string `json:"path"`
 	Mode          string `json:"mode"` // "ro", "rw", or "overlay"
 	OverlayDevice string `json:"overlay_device,omitempty"`
+}
+
+// EgressProxyConfig configures guest-side trust and proxy endpoint wiring.
+type EgressProxyConfig struct {
+	Enabled   bool   `json:"enabled"`
+	ProxyURL  string `json:"proxy_url"`
+	CACertPEM string `json:"ca_cert_pem,omitempty"`
 }

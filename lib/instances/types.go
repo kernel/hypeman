@@ -30,6 +30,13 @@ type VolumeAttachment struct {
 	OverlaySize int64  // Size of overlay disk in bytes (max diff from base)
 }
 
+// EgressProxyConfig configures optional per-instance egress MITM behavior.
+// Real secret values are not stored here. Instead, mappings point to host env vars.
+type EgressProxyConfig struct {
+	Enabled          bool              // Whether egress proxy mode is enabled
+	MockToRealEnvVar map[string]string // mock literal -> host env var name with real secret
+}
+
 // StoredMetadata represents instance metadata that is persisted to disk
 type StoredMetadata struct {
 	// Identification
@@ -50,8 +57,9 @@ type StoredMetadata struct {
 	Env            map[string]string
 	Metadata       tags.Metadata // User-defined key-value metadata
 	NetworkEnabled bool          // Whether instance has networking enabled (uses default network)
-	IP             string        // Assigned IP address (empty if NetworkEnabled=false)
-	MAC            string        // Assigned MAC address (empty if NetworkEnabled=false)
+	EgressProxy    *EgressProxyConfig
+	IP             string // Assigned IP address (empty if NetworkEnabled=false)
+	MAC            string // Assigned MAC address (empty if NetworkEnabled=false)
 
 	// Attached volumes
 	Volumes []VolumeAttachment // Volumes attached to this instance
@@ -161,6 +169,7 @@ type CreateInstanceRequest struct {
 	Env                      map[string]string  // Optional environment variables
 	Metadata                 tags.Metadata      // Optional user-defined key-value metadata
 	NetworkEnabled           bool               // Whether to enable networking (uses default network)
+	EgressProxy              *EgressProxyConfig // Optional egress MITM proxy mode
 	Devices                  []string           // Device IDs or names to attach (GPU passthrough)
 	Volumes                  []VolumeAttachment // Volumes to attach at creation time
 	Hypervisor               hypervisor.Type    // Optional: hypervisor type (defaults to config)

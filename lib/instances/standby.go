@@ -116,6 +116,7 @@ func (m *manager) standbyInstance(
 	// TAP devices with explicit Owner/Group fields do NOT auto-delete when VMM exits
 	// They must be explicitly deleted
 	if inst.NetworkEnabled {
+		m.unregisterEgressProxyInstance(ctx, id)
 		log.DebugContext(ctx, "releasing network", "instance_id", id, "network", "default")
 		if err := m.networkManager.ReleaseAllocation(ctx, networkAlloc); err != nil {
 			// Log error but continue - snapshot was created successfully

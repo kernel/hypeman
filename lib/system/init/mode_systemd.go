@@ -43,6 +43,8 @@ func runSystemdMode(log *Logger, cfg *vmconfig.Config) {
 		dropToShell()
 	}
 
+	installEgressProxyCA(log, cfg)
+
 	// Build effective command from entrypoint + cmd
 	argv := append(cfg.Entrypoint, cfg.Cmd...)
 	if len(argv) == 0 {

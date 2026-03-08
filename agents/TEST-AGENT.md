@@ -145,3 +145,18 @@
 - Run 3: 96s (pass)
 - `lib/instances` runtime in those runs:
   - 97.618s, 117.392s, 71.886s
+
+## 2026-03-08 - Egress proxy integration test notes
+
+### New integration test
+- Added `TestEgressProxyRewritesHTTPSHeaders` in `lib/instances/egress_proxy_integration_test.go`.
+- Validates end-to-end behavior:
+  - VM egress HTTP(S) proxy mode enabled.
+  - Mock header secret in guest request.
+  - Host-side proxy rewrites header using real secret from host env var.
+  - Verified by HTTPS target server response body.
+
+### Practical gotchas observed
+- Running this suite from a fresh copied worktree on `deft-kernel-dev` requires embedded binaries to exist (`lib/system/guest_agent/guest-agent`, `lib/system/init/init`, Cloud Hypervisor binary, Caddy binary).
+- `curlimages/curl` image can default/bundle proxy bypass behavior for loopback targets; test command explicitly clears `NO_PROXY` to force proxy routing.
+- For deterministic test behavior with ad-hoc TLS target server, command uses `curl -k` to avoid CA trustchain variance across guest images while still exercising HTTPS MITM path.

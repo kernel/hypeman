@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/kernel/hypeman/lib/devices"
+	"github.com/kernel/hypeman/lib/egressproxy"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/network"
@@ -80,6 +81,8 @@ type manager struct {
 	instanceLocks     sync.Map          // map[string]*sync.RWMutex - per-instance locks
 	hostTopology      *HostTopology     // Cached host CPU topology
 	metrics           *Metrics
+	egressProxy       *egressproxy.Service
+	egressProxyMu     sync.Mutex
 
 	// Hypervisor support
 	vmStarters        map[hypervisor.Type]hypervisor.VMStarter

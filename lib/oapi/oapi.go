@@ -312,6 +312,15 @@ type CreateInstanceRequest struct {
 	// Env Environment variables
 	Env *map[string]string `json:"env,omitempty"`
 
+	// EgressProxy Optional host-side HTTP/HTTPS MITM egress proxy mode.
+	EgressProxy *struct {
+		// Enabled Whether to enable egress proxy mode.
+		Enabled *bool `json:"enabled,omitempty"`
+
+		// MockToRealEnvVar Map of mock secret literal -> host environment variable name.
+		MockToRealEnvVar *map[string]string `json:"mock_to_real_env_var,omitempty"`
+	} `json:"egress_proxy,omitempty"`
+
 	// Gpu GPU configuration for the instance
 	Gpu *GPUConfig `json:"gpu,omitempty"`
 

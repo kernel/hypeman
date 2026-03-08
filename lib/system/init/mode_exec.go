@@ -35,6 +35,8 @@ func runExecMode(log *Logger, cfg *vmconfig.Config) {
 		dropToShell()
 	}
 
+	installEgressProxyCA(log, cfg)
+
 	// Set up environment
 	os.Setenv("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 	os.Setenv("HOME", "/root")

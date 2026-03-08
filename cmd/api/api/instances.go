@@ -135,6 +135,17 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 	if request.Body.Network != nil && request.Body.Network.Enabled != nil {
 		networkEnabled = *request.Body.Network.Enabled
 	}
+	var egressProxyConfig *instances.EgressProxyConfig
+	if request.Body.EgressProxy != nil {
+		enabled := request.Body.EgressProxy.Enabled != nil && *request.Body.EgressProxy.Enabled
+		egressProxyConfig = &instances.EgressProxyConfig{Enabled: enabled}
+		if request.Body.EgressProxy.MockToRealEnvVar != nil {
+			egressProxyConfig.MockToRealEnvVar = make(map[string]string, len(*request.Body.EgressProxy.MockToRealEnvVar))
+			for mock, envVar := range *request.Body.EgressProxy.MockToRealEnvVar {
+				egressProxyConfig.MockToRealEnvVar[mock] = envVar
+			}
+		}
+	}
 
 	// Parse network bandwidth limits (0 = auto)
 	// Supports both bit-based (e.g., "1Gbps") and byte-based (e.g., "125MB/s") formats
@@ -255,6 +266,7 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		Env:                      env,
 		Metadata:                 metadata,
 		NetworkEnabled:           networkEnabled,
+		EgressProxy:              egressProxyConfig,
 		Devices:                  deviceRefs,
 		Volumes:                  volumes,
 		Hypervisor:               hvType,

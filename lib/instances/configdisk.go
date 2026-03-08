@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/kernel/hypeman/lib/egressproxy"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/network"
 	"github.com/kernel/hypeman/lib/vmconfig"
@@ -16,7 +17,7 @@ import (
 
 // createConfigDisk generates an ext4 disk with instance configuration.
 // The disk contains /config.json read by the guest init binary.
-func (m *manager) createConfigDisk(ctx context.Context, inst *Instance, imageInfo *images.Image, netConfig *network.NetworkConfig) error {
+func (m *manager) createConfigDisk(ctx context.Context, inst *Instance, imageInfo *images.Image, netConfig *network.NetworkConfig, proxyCfg *egressproxy.GuestConfig) error {
 	// Create temporary directory for config files
 	tmpDir, err := os.MkdirTemp("", "hypeman-config-*")
 	if err != nil {
@@ -25,7 +26,7 @@ func (m *manager) createConfigDisk(ctx context.Context, inst *Instance, imageInf
 	defer os.RemoveAll(tmpDir)
 
 	// Generate config.json
-	cfg := m.buildGuestConfig(ctx, inst, imageInfo, netConfig)
+	cfg := m.buildGuestConfig(ctx, inst, imageInfo, netConfig, proxyCfg)
 	configData, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
@@ -46,7 +47,7 @@ func (m *manager) createConfigDisk(ctx context.Context, inst *Instance, imageInf
 }
 
 // buildGuestConfig creates the vmconfig.Config struct for the guest init binary.
-func (m *manager) buildGuestConfig(ctx context.Context, inst *Instance, imageInfo *images.Image, netConfig *network.NetworkConfig) *vmconfig.Config {
+func (m *manager) buildGuestConfig(ctx context.Context, inst *Instance, imageInfo *images.Image, netConfig *network.NetworkConfig, proxyCfg *egressproxy.GuestConfig) *vmconfig.Config {
 	// Use instance overrides if set, otherwise fall back to image defaults
 	// (like docker run <image> <command> overriding CMD)
 	entrypoint := imageInfo.Entrypoint
@@ -77,6 +78,18 @@ func (m *manager) buildGuestConfig(ctx context.Context, inst *Instance, imageInf
 		cfg.GuestCIDR = netmaskToCIDR(netConfig.Netmask)
 		cfg.GuestGW = netConfig.Gateway
 		cfg.GuestDNS = netConfig.DNS
+	}
+
+	if proxyCfg != nil && proxyCfg.Enabled {
+		cfg.EgressProxy = &vmconfig.EgressProxyConfig{
+			Enabled:   true,
+			ProxyURL:  proxyCfg.ProxyURL,
+			CACertPEM: proxyCfg.CACertPEM,
+		}
+		cfg.Env["HTTP_PROXY"] = proxyCfg.ProxyURL
+		cfg.Env["HTTPS_PROXY"] = proxyCfg.ProxyURL
+		cfg.Env["http_proxy"] = proxyCfg.ProxyURL
+		cfg.Env["https_proxy"] = proxyCfg.ProxyURL
 	}
 
 	// Volume mounts
