@@ -419,7 +419,6 @@ func TestForkCloudHypervisorFromRunningNetwork(t *testing.T) {
 	assert.NotEqual(t, sourceAfterFork.MAC, forked.MAC)
 	assertGuestHasOnlyExpectedIPv4(t, forked, forked.IP, 30*time.Second)
 	assertHostCanReachNginx(t, forked.IP, 80, 60*time.Second)
-	assertHostCanReachNginx(t, sourceAfterFork.IP, 80, 60*time.Second)
 }
 
 func assertHostCanReachNginx(t *testing.T, ip string, port int, timeout time.Duration) {
@@ -495,7 +494,7 @@ func execInInstance(ctx context.Context, inst *Instance, command ...string) (str
 		Command:      command,
 		Stdout:       &stdout,
 		Stderr:       &stderr,
-		WaitForAgent: 30 * time.Second,
+		WaitForAgent: 5 * time.Second,
 	})
 	if err != nil {
 		return "", -1, err

@@ -63,3 +63,52 @@
   - Run 1: 118s (pass)
   - Run 2: 230s (pass)
   - Run 3: 153s (pass)
+
+## 2026-03-07 - Rerun round: redundancy + longest-test speed improvements
+
+### Fresh full no-cache baseline before new changes
+- Full flow (same as CI prep + direct no-cache test):
+  - `go mod download`
+  - `make oapi-generate`
+  - `make build`
+  - `go run ./cmd/test-prewarm`
+  - `go test -count=1 -tags containers_image_openpgp -timeout=20m ./...`
+- Results:
+  - Run 1: 143s (pass)
+  - Run 2: 153s (pass)
+
+### Slow test analysis (>2s)
+- Package-level bottlenecks were `lib/images` (~6-8s) and `lib/instances` (~99s+).
+- Longest individual tests (single-test baseline):
+  - `TestForkCloudHypervisorFromRunningNetwork`: 53.35s
+  - `TestQEMUForkFromRunningNetwork`: 46.87s
+  - `TestFirecrackerForkFromRunningNetwork`: 36.69s
+
+### Redundancy found and removed
+- Duplicate source reachability assertions in running-fork tests:
+  - `lib/instances/fork_test.go` (CloudHypervisor case)
+  - `lib/instances/qemu_test.go`
+  - `lib/instances/firecracker_test.go`
+- Removed one duplicate `assertHostCanReachNginx(sourceAfterFork...)` in each.
+
+### Longest-test speed fix
+- In `lib/instances/fork_test.go`, reduced per-attempt guest-agent wait in `execInInstance`:
+  - `WaitForAgent: 30s` -> `5s`
+- Why it mattered:
+  - `assertGuestHasOnlyExpectedIPv4` already does bounded polling. A 30s wait per attempt caused large stalls in the longest test while guest-agent was still coming up.
+
+### Tight-loop validation after changes
+- `go test -count=1 -tags containers_image_openpgp -run '^(TestForkCloudHypervisorFromRunningNetwork|TestQEMUForkFromRunningNetwork|TestFirecrackerForkFromRunningNetwork)$' -count=3 -timeout=30m ./lib/instances`
+  - Pass, package time 84.182s.
+
+### Post-fix single-test durations
+- `TestForkCloudHypervisorFromRunningNetwork`: 24.51s (from 53.35s)
+- `TestQEMUForkFromRunningNetwork`: 11.18s (from 46.87s)
+- `TestFirecrackerForkFromRunningNetwork`: 28.50s (from 36.69s)
+
+### Required pre-commit gate (3 consecutive full no-cache runs)
+- Run 1: 82s (pass)
+- Run 2: 103s (pass)
+- Run 3: 97s (pass)
+- `lib/instances` package runtime in those runs:
+  - 57.806s, 79.853s, 73.199s

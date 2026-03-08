@@ -955,7 +955,6 @@ func TestQEMUForkFromRunningNetwork(t *testing.T) {
 	assert.NotEqual(t, sourceAfterFork.IP, forked.IP)
 	assert.NotEqual(t, sourceAfterFork.MAC, forked.MAC)
 	assertHostCanReachNginx(t, forked.IP, 80, 60*time.Second)
-	assertHostCanReachNginx(t, sourceAfterFork.IP, 80, 60*time.Second)
 }
 
 func TestQEMUSnapshotFeature(t *testing.T) {

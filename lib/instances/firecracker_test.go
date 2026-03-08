@@ -410,7 +410,6 @@ func TestFirecrackerForkFromRunningNetwork(t *testing.T) {
 
 	assertHostCanReachNginx(t, sourceAfterFork.IP, 80, 60*time.Second)
 	assertHostCanReachNginx(t, forked.IP, 80, 60*time.Second)
-	assertHostCanReachNginx(t, sourceAfterFork.IP, 80, 60*time.Second)
 	assert.NotEqual(t, sourceAfterFork.IP, forked.IP)
 	assert.NotEqual(t, sourceAfterFork.MAC, forked.MAC)
 }
