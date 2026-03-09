@@ -1,12 +1,12 @@
-# Metadata Tags
+# Tags
 
-This package defines the product contract for user-provided metadata tags used across mutable Hypeman resources.
+This package defines the product contract for user-provided tags used across mutable Hypeman resources.
 
 ## What Tags Are
 
-Metadata tags are optional string key/value pairs that let users label resources for ownership, environment, automation, and filtering.
+Tags are optional string key/value pairs that let users label resources for ownership, environment, automation, and filtering.
 
-Domain code uses the shared `tags.Metadata` type alias so resource packages reference one metadata type consistently.
+Domain code uses the shared `tags.Tags` type alias so resource packages reference one tags type consistently.
 
 Examples:
 - `team=backend`
@@ -30,6 +30,6 @@ Examples:
 
 ## API Expectations
 
-- Create endpoints accept optional `metadata`.
-- Get/List responses include `metadata` when present.
-- List endpoints support filtering by `metadata[...]` where enabled.
+- Create endpoints accept optional `tags`.
+- Get/List responses include `tags` when present.
+- List endpoints support filtering by `tags[...]` where enabled.
