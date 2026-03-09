@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -15,6 +16,7 @@ const (
 )
 
 var apiRegistryLogOnce sync.Once
+var apiRegistryLogMessage string
 
 func apiTestImageRef(t *testing.T, source string) string {
 	t.Helper()
@@ -54,8 +56,11 @@ func apiTestImageRef(t *testing.T, source string) string {
 	}
 
 	apiRegistryLogOnce.Do(func() {
-		t.Logf("using test registry mirror source=%s mapped=%s", source, mapped)
+		apiRegistryLogMessage = fmt.Sprintf("using test registry mirror source=%s mapped=%s", source, mapped)
 	})
+	if apiRegistryLogMessage != "" {
+		t.Log(apiRegistryLogMessage)
+	}
 	return mapped
 }
 

@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -15,6 +16,7 @@ const (
 )
 
 var integrationRegistryLogOnce sync.Once
+var integrationRegistryLogMessage string
 
 func integrationTestImageRef(t *testing.T, source string) string {
 	t.Helper()
@@ -54,8 +56,11 @@ func integrationTestImageRef(t *testing.T, source string) string {
 	}
 
 	integrationRegistryLogOnce.Do(func() {
-		t.Logf("using test registry mirror source=%s mapped=%s", source, mapped)
+		integrationRegistryLogMessage = fmt.Sprintf("using test registry mirror source=%s mapped=%s", source, mapped)
 	})
+	if integrationRegistryLogMessage != "" {
+		t.Log(integrationRegistryLogMessage)
+	}
 	return mapped
 }
 

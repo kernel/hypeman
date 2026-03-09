@@ -28,6 +28,8 @@ type secretRewriteRule struct {
 	domainMatchers []domainMatcher
 }
 
+const defaultLeafCertCacheLimit = 512
+
 // Service is a host-side per-process HTTP/HTTPS MITM egress proxy.
 type Service struct {
 	mu sync.RWMutex
@@ -45,7 +47,9 @@ type Service struct {
 	caKey  *rsa.PrivateKey
 	caPEM  string
 
-	certCache map[string]*tls.Certificate
+	certCache      map[string]*tls.Certificate
+	certCacheOrder []string
+	certCacheLimit int
 
 	policiesBySourceIP map[string]sourcePolicy
 	sourceIPByInstance map[string]string
@@ -90,6 +94,7 @@ func NewServiceWithOptions(dataDir string, listenPort int, opts ServiceOptions) 
 		caKey:              caKey,
 		caPEM:              caPEM,
 		certCache:          make(map[string]*tls.Certificate),
+		certCacheLimit:     defaultLeafCertCacheLimit,
 		policiesBySourceIP: make(map[string]sourcePolicy),
 		sourceIPByInstance: make(map[string]string),
 	}, nil
@@ -406,7 +411,13 @@ func (s *Service) getOrCreateLeafCert(host string) (*tls.Certificate, error) {
 	if existing := s.certCache[host]; existing != nil {
 		return existing, nil
 	}
+	if s.certCacheLimit > 0 && len(s.certCache) >= s.certCacheLimit && len(s.certCacheOrder) > 0 {
+		evictHost := s.certCacheOrder[0]
+		s.certCacheOrder = s.certCacheOrder[1:]
+		delete(s.certCache, evictHost)
+	}
 	s.certCache[host] = cert
+	s.certCacheOrder = append(s.certCacheOrder, host)
 	return cert, nil
 }
 
