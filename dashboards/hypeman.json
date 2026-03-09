@@ -512,7 +512,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "hypeman_vm_memory_utilization_ratio{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}",
+          "expr": "hypeman_vm_memory_rss_bytes{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"} / clamp_min(hypeman_vm_allocated_memory_bytes{deployment_environment_name=~\"$env\", service_instance_id=~\"$instance\"}, 1)",
           "legendFormat": "{{instance_name}}",
           "refId": "A"
         }

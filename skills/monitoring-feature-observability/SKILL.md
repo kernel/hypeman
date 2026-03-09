@@ -23,13 +23,16 @@ Your task is to add monitoring for a specific feature or to perform a specific m
 - All API requests should support tracing.
 - Tracing should span down as far as reasonable, ideally all the way down unless there is a good reason not to.
 - For example, trace down into clients calling each hypervisor.
-- Low-cardinality labels only (for example, no VM name, IP address, or ID labels).
+- Per-instance identifiers (for example, `instance_id`) are allowed in trace attributes when they materially improve debugging or correlation.
+- Still avoid sensitive or unbounded attributes by default (for example, full guest paths, user identifiers, tokens, arbitrary payload fields).
 
 ## Metrics
 
 - Metrics should be created in Prometheus/OpenMetrics format using normal best practices.
 - Metrics are emitted via OTel instruments (counters/histograms/gauges) across subsystems (instances, images, network, and so on).
 - Low-cardinality labels only (for example, no VM name, IP address, or ID labels).
+- Per-VM metric labels are an explicit exception when operationally required (for example `instance_id`, `instance_name`) and should be guarded with budget/alerting.
+- Confirm with the user before adding any new high-cardinality metric label.
 - Use counters where advisable to avoid sampling errors in data.
 - Usually include timing histogram metrics.
 - Work with the user to agree on good application-level signals to monitor for a given feature, providing examples in terms of what it would look like on the `/metrics` endpoint.

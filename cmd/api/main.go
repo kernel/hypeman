@@ -309,8 +309,12 @@ func run() error {
 	r.Route("/v2", func(r chi.Router) {
 		r.Use(middleware.RequestID)
 		r.Use(middleware.RealIP)
-		r.Use(middleware.Logger)
 		r.Use(middleware.Recoverer)
+		if cfg.Otel.Enabled {
+			r.Use(otelchi.Middleware(cfg.Otel.ServiceName, otelchi.WithChiRoutes(r)))
+		}
+		r.Use(mw.InjectLogger(logger))
+		r.Use(mw.AccessLogger(accessLogger))
 		r.Use(mw.JwtAuth(app.Config.JwtSecret))
 
 		// Token endpoint for Docker Registry Token Authentication
@@ -482,7 +486,7 @@ func run() error {
 				if err := app.InstanceManager.RotateLogs(gctx, int64(logMaxSize), app.Config.Logging.MaxFiles); err != nil {
 					logger.Error("log rotation failed", "error", err)
 				} else {
-					logger.Info("log rotation completed", "max_size", logMaxSize, "max_files", app.Config.Logging.MaxFiles)
+					logger.Debug("log rotation completed", "max_size", logMaxSize, "max_files", app.Config.Logging.MaxFiles)
 				}
 			}
 		}

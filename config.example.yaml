@@ -87,6 +87,7 @@ data_dir: /var/lib/hypeman
 # metrics:
 #   listen_address: 127.0.0.1
 #   port: 9464
+#   vm_label_budget: 200
 #
 # otel:
 #   enabled: false

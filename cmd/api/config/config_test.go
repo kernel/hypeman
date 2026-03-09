@@ -15,6 +15,9 @@ func TestDefaultConfigIncludesMetricsSettings(t *testing.T) {
 	if cfg.Metrics.Port != 9464 {
 		t.Fatalf("expected default metrics.port to be 9464, got %d", cfg.Metrics.Port)
 	}
+	if cfg.Metrics.VMLabelBudget != 200 {
+		t.Fatalf("expected default metrics.vm_label_budget to be 200, got %d", cfg.Metrics.VMLabelBudget)
+	}
 	if cfg.Otel.MetricExportInterval != "60s" {
 		t.Fatalf("expected default otel.metric_export_interval to be 60s, got %q", cfg.Otel.MetricExportInterval)
 	}
@@ -23,6 +26,7 @@ func TestDefaultConfigIncludesMetricsSettings(t *testing.T) {
 func TestLoadEnvOverridesMetricsAndOtelInterval(t *testing.T) {
 	t.Setenv("METRICS__LISTEN_ADDRESS", "0.0.0.0")
 	t.Setenv("METRICS__PORT", "9999")
+	t.Setenv("METRICS__VM_LABEL_BUDGET", "350")
 	t.Setenv("OTEL__METRIC_EXPORT_INTERVAL", "15s")
 
 	tmp := t.TempDir()
@@ -41,6 +45,9 @@ func TestLoadEnvOverridesMetricsAndOtelInterval(t *testing.T) {
 	}
 	if cfg.Metrics.Port != 9999 {
 		t.Fatalf("expected metrics.port override, got %d", cfg.Metrics.Port)
+	}
+	if cfg.Metrics.VMLabelBudget != 350 {
+		t.Fatalf("expected metrics.vm_label_budget override, got %d", cfg.Metrics.VMLabelBudget)
 	}
 	if cfg.Otel.MetricExportInterval != "15s" {
 		t.Fatalf("expected otel.metric_export_interval override, got %q", cfg.Otel.MetricExportInterval)
@@ -64,5 +71,15 @@ func TestValidateRejectsInvalidMetricExportInterval(t *testing.T) {
 	err := cfg.Validate()
 	if err == nil {
 		t.Fatalf("expected validation error for invalid metric export interval")
+	}
+}
+
+func TestValidateRejectsInvalidVMLabelBudget(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Metrics.VMLabelBudget = 0
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatalf("expected validation error for invalid vm label budget")
 	}
 }

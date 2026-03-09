@@ -84,6 +84,13 @@ type CpResult struct {
 	BytesWritten int64  `json:"bytes_written,omitempty"`
 }
 
+func cpSpanAttributes(instanceID, direction string) []attribute.KeyValue {
+	return []attribute.KeyValue{
+		attribute.String("instance_id", instanceID),
+		attribute.String("direction", direction),
+	}
+}
+
 // CpHandler handles file copy requests via WebSocket
 func (s *ApiService) CpHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -146,12 +153,7 @@ func (s *ApiService) CpHandler(w http.ResponseWriter, r *http.Request) {
 	// Start OTEL span for tracing (WebSocket bypasses otelchi middleware)
 	tracer := otel.Tracer("hypeman/cp")
 	ctx, span := tracer.Start(ctx, "cp.session",
-		trace.WithAttributes(
-			attribute.String("instance_id", inst.Id),
-			attribute.String("direction", cpReq.Direction),
-			attribute.String("guest_path", cpReq.GuestPath),
-			attribute.String("subject", subject),
-		),
+		trace.WithAttributes(cpSpanAttributes(inst.Id, cpReq.Direction)...),
 	)
 	defer span.End()
 

@@ -98,6 +98,7 @@ type APIConfig struct {
 type MetricsConfig struct {
 	ListenAddress string `koanf:"listen_address"`
 	Port          int    `koanf:"port"`
+	VMLabelBudget int    `koanf:"vm_label_budget"`
 }
 
 // OtelConfig holds OpenTelemetry settings.
@@ -257,6 +258,7 @@ func defaultConfig() *Config {
 		Metrics: MetricsConfig{
 			ListenAddress: "127.0.0.1",
 			Port:          9464,
+			VMLabelBudget: 200,
 		},
 
 		Otel: OtelConfig{
@@ -393,6 +395,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Metrics.Port < 1 || c.Metrics.Port > 65535 {
 		return fmt.Errorf("metrics.port must be between 1 and 65535, got %d", c.Metrics.Port)
+	}
+	if c.Metrics.VMLabelBudget <= 0 {
+		return fmt.Errorf("metrics.vm_label_budget must be positive, got %d", c.Metrics.VMLabelBudget)
 	}
 	if c.Otel.MetricExportInterval != "" {
 		if _, err := time.ParseDuration(c.Otel.MetricExportInterval); err != nil {

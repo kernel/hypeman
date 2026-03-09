@@ -31,6 +31,7 @@ This keeps pull and push views aligned because both are sourced from the same OT
 | `OTEL__METRIC_EXPORT_INTERVAL` | OTLP metric push interval (when enabled) | `60s` |
 | `METRICS__LISTEN_ADDRESS` | Bind address for `/metrics` listener | `127.0.0.1` |
 | `METRICS__PORT` | Port for `/metrics` listener | `9464` |
+| `METRICS__VM_LABEL_BUDGET` | Warning threshold for observed per-VM labeled VM metrics | `200` |
 
 ## Metrics
 
@@ -90,6 +91,12 @@ This keeps pull and push views aligned because both are sourced from the same OT
 | `hypeman_exec_duration_seconds` | histogram | status | Command duration |
 | `hypeman_exec_bytes_sent_total` | counter | | Bytes to guest (stdin) |
 | `hypeman_exec_bytes_received_total` | counter | | Bytes from guest (stdout+stderr) |
+
+### VM Metrics Guardrails
+| Metric | Type | Description |
+|--------|------|-------------|
+| `hypeman_vm_metrics_instances_observed` | gauge | Current number of VM instances represented by per-VM labeled metrics |
+| `hypeman_vm_metrics_label_budget_exceeded_total` | counter | Count of transitions into over-budget VM metric label cardinality |
 
 ## Usage
 

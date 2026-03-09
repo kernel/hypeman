@@ -814,17 +814,17 @@ func (m *manager) waitForResult(ctx context.Context, buildID string, inst *insta
 	}
 	defer conn.Close()
 
-	m.logger.Info("connected to builder agent", "instance", inst.Id)
+	m.logger.Debug("connected to builder agent", "instance", inst.Id)
 
 	encoder := json.NewEncoder(conn)
 	decoder := json.NewDecoder(conn)
 
 	// Tell the agent we're ready - it may request secrets
-	m.logger.Info("sending host_ready to agent", "instance", inst.Id)
+	m.logger.Debug("sending host_ready to agent", "instance", inst.Id)
 	if err := encoder.Encode(VsockMessage{Type: "host_ready"}); err != nil {
 		return nil, fmt.Errorf("send host_ready: %w", err)
 	}
-	m.logger.Info("host_ready sent, waiting for agent messages", "instance", inst.Id)
+	m.logger.Debug("host_ready sent, waiting for agent messages", "instance", inst.Id)
 
 	// Handle messages from agent until we get the build result
 	for {
@@ -855,11 +855,11 @@ func (m *manager) waitForResult(ctx context.Context, buildID string, inst *insta
 		}
 
 		// Handle message based on type
-		m.logger.Info("received message from agent", "type", dr.response.Type, "instance", inst.Id)
+		m.logger.Debug("received message from agent", "type", dr.response.Type, "instance", inst.Id)
 		switch dr.response.Type {
 		case "get_secrets":
 			// Agent is requesting secrets
-			m.logger.Info("agent requesting secrets", "instance", inst.Id, "secret_ids", dr.response.SecretIDs)
+			m.logger.Debug("agent requesting secrets", "instance", inst.Id, "secret_ids", dr.response.SecretIDs)
 
 			// Fetch secrets from provider
 			secrets, err := m.secretProvider.GetSecrets(ctx, dr.response.SecretIDs)
@@ -872,7 +872,7 @@ func (m *manager) waitForResult(ctx context.Context, buildID string, inst *insta
 			if err := encoder.Encode(VsockMessage{Type: "secrets_response", Secrets: secrets}); err != nil {
 				return nil, fmt.Errorf("send secrets response: %w", err)
 			}
-			m.logger.Info("sent secrets to agent", "count", len(secrets), "instance", inst.Id)
+			m.logger.Debug("sent secrets to agent", "count", len(secrets), "instance", inst.Id)
 
 		case "log":
 			// Stream log line to build log file immediately
