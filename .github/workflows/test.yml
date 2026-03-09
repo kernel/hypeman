@@ -31,35 +31,12 @@ jobs:
       - name: Install dependencies
         run: |
           set -xe
-          has_libjpeg8() {
-            sudo ldconfig -p | grep -q 'libjpeg\.so\.8' || \
-              sudo find /usr/lib /lib -name 'libjpeg.so.8' -print -quit | grep -q .
-          }
-          has_libjpeg8=0
-          if has_libjpeg8; then
-            has_libjpeg8=1
-          fi
           if ! command -v mkfs.erofs &> /dev/null || \
              ! command -v mkfs.ext4 &> /dev/null || \
              ! command -v iptables &> /dev/null || \
-             [ "$has_libjpeg8" -eq 0 ]; then
+             ! command -v qemu-system-x86_64 &> /dev/null; then
             sudo apt-get update
-            sudo apt-get install -y erofs-utils e2fsprogs iptables
-
-            # Different runner images expose JPEG libs under different package names.
-            if ! has_libjpeg8; then
-              sudo apt-get install -y libjpeg-turbo8 || sudo apt-get install -y libjpeg62-turbo
-            fi
-
-            # Some images only provide libjpeg.so.62. Provide a compatibility symlink
-            # for qemu binaries linked against libjpeg.so.8.
-            if ! has_libjpeg8; then
-              jpeg_lib="$(sudo ldconfig -p | awk '/libjpeg\.so/{print $NF; exit}')"
-              if [ -n "$jpeg_lib" ]; then
-                sudo ln -sf "$jpeg_lib" "$(dirname "$jpeg_lib")/libjpeg.so.8"
-                sudo ldconfig
-              fi
-            fi
+            sudo apt-get install -y erofs-utils e2fsprogs iptables qemu-system-x86 qemu-utils
           fi
           go mod download
 
@@ -67,19 +44,15 @@ jobs:
         run: |
           set -euo pipefail
           TEST_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
-          has_libjpeg8() {
-            sudo ldconfig -p | grep -q 'libjpeg\.so\.8' || \
-              sudo find /usr/lib /lib -name 'libjpeg.so.8' -print -quit | grep -q .
-          }
-          for bin in mkfs.erofs mkfs.ext4 iptables; do
+          for bin in mkfs.erofs mkfs.ext4 iptables qemu-system-x86_64; do
             if ! sudo env "PATH=$TEST_PATH" bash -lc "command -v '$bin' >/dev/null"; then
               echo "missing required binary under sudo PATH: $bin"
               exit 1
             fi
             sudo env "PATH=$TEST_PATH" bash -lc "command -v '$bin'"
           done
-          if ! has_libjpeg8; then
-            echo "missing required runtime library: libjpeg.so.8"
+          if ! qemu-system-x86_64 --version >/dev/null 2>&1; then
+            echo "qemu-system-x86_64 failed to start (runtime deps missing)"
             exit 1
           fi
 
