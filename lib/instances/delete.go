@@ -127,6 +127,11 @@ func (m *manager) deleteInstance(
 		return fmt.Errorf("delete instance data: %w", err)
 	}
 
+	// 9. Delete snapshot schedule config for this instance.
+	if err := os.Remove(m.paths.InstanceSnapshotSchedule(id)); err != nil && !os.IsNotExist(err) {
+		log.WarnContext(ctx, "failed to delete snapshot schedule", "instance_id", id, "error", err)
+	}
+
 	log.InfoContext(ctx, "instance deleted successfully", "instance_id", id)
 	return nil
 }

@@ -369,6 +369,98 @@ components:
             Optional hypervisor override. Allowed only when forking from a Stopped snapshot.
             Standby snapshots must fork with their original hypervisor.
           example: cloud-hypervisor
+
+    SnapshotScheduleRetention:
+      type: object
+      description: Automatic cleanup policy for scheduled snapshots.
+      properties:
+        max_count:
+          type: integer
+          minimum: 1
+          description: Keep at most this many scheduled snapshots for the instance.
+          example: 7
+        max_age:
+          type: string
+          description: Delete scheduled snapshots older than this duration (Go duration format).
+          example: 168h
+
+    SetSnapshotScheduleRequest:
+      type: object
+      required: [kind, interval, retention]
+      properties:
+        kind:
+          $ref: "#/components/schemas/SnapshotKind"
+        interval:
+          type: string
+          description: Snapshot interval (Go duration format, minimum 1m).
+          example: 24h
+        name_prefix:
+          type: string
+          description: Optional prefix for auto-generated scheduled snapshot names.
+          pattern: ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$
+          maxLength: 63
+          nullable: true
+          example: nightly
+        metadata:
+          $ref: "#/components/schemas/MetadataTags"
+        retention:
+          $ref: "#/components/schemas/SnapshotScheduleRetention"
+          description: At least one of max_count or max_age must be provided.
+
+    SnapshotSchedule:
+      type: object
+      required: [instance_id, kind, interval, retention, next_run_at, created_at, updated_at]
+      properties:
+        instance_id:
+          type: string
+          description: Source instance ID.
+          example: qilviffnqzck2jrim1x6s2b1
+        kind:
+          $ref: "#/components/schemas/SnapshotKind"
+        interval:
+          type: string
+          description: Snapshot interval (Go duration format).
+          example: 24h
+        name_prefix:
+          type: string
+          nullable: true
+          description: Optional prefix used for generated scheduled snapshot names.
+          example: nightly
+        metadata:
+          $ref: "#/components/schemas/MetadataTags"
+        retention:
+          $ref: "#/components/schemas/SnapshotScheduleRetention"
+        next_run_at:
+          type: string
+          format: date-time
+          description: Next scheduled run time.
+          example: "2026-03-10T02:00:00Z"
+        last_run_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Last schedule execution time.
+          example: "2026-03-09T02:00:00Z"
+        last_snapshot_id:
+          type: string
+          nullable: true
+          description: Snapshot ID produced by the last successful run.
+          example: q7z1w7l2af4l8y7q1h7g2m3s
+        last_error:
+          type: string
+          nullable: true
+          description: Last schedule run error, if any.
+          example: "invalid state transition: stopped snapshot requires source in Stopped, got Running"
+        created_at:
+          type: string
+          format: date-time
+          description: Schedule creation timestamp.
+          example: "2026-03-09T01:00:00Z"
+        updated_at:
+          type: string
+          format: date-time
+          description: Schedule update timestamp.
+          example: "2026-03-09T01:30:00Z"
     
     Instance:
       type: object
@@ -1793,6 +1885,103 @@ paths:
                 $ref: "#/components/schemas/Error"
         501:
           description: Not implemented - operation unsupported by source hypervisor
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /instances/{id}/snapshot-schedule:
+    get:
+      summary: Get snapshot schedule for an instance
+      operationId: getInstanceSnapshotSchedule
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Source instance ID or name
+      responses:
+        200:
+          description: Snapshot schedule
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SnapshotSchedule"
+        404:
+          description: Snapshot schedule not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    put:
+      summary: Create or update snapshot schedule for an instance
+      operationId: setInstanceSnapshotSchedule
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Source instance ID or name
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetSnapshotScheduleRequest"
+      responses:
+        200:
+          description: Snapshot schedule updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SnapshotSchedule"
+        400:
+          description: Bad request - invalid schedule request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      summary: Delete snapshot schedule for an instance
+      operationId: deleteInstanceSnapshotSchedule
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Source instance ID or name
+      responses:
+        204:
+          description: Snapshot schedule deleted
+        404:
+          description: Snapshot schedule not found
           content:
             application/json:
               schema:

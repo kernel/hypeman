@@ -205,6 +205,16 @@ func (p *Paths) InstanceSnapshotConfig(id string) string {
 	return filepath.Join(p.InstanceSnapshotLatest(id), "config.json")
 }
 
+// InstanceSnapshotSchedule returns the path to the snapshot schedule config.
+func (p *Paths) InstanceSnapshotSchedule(id string) string {
+	return filepath.Join(p.SnapshotSchedulesDir(), id+".json")
+}
+
+// SnapshotSchedulesDir returns the root directory for instance snapshot schedules.
+func (p *Paths) SnapshotSchedulesDir() string {
+	return filepath.Join(p.dataDir, "snapshot-schedules")
+}
+
 // GuestsDir returns the root guests directory.
 func (p *Paths) GuestsDir() string {
 	return filepath.Join(p.dataDir, "guests")

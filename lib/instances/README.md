@@ -104,6 +104,19 @@ Any State → Stopped
 - Don't prefault pages (lazy loading)
 - Parallel with TAP device setup
 
+## Scheduled Snapshot Behavior
+
+- Schedules are configured per instance and persisted in the server data store (outside snapshot payloads).
+- A background scheduler evaluates due schedules every minute.
+- Each due run creates a normal snapshot (`Standby` or `Stopped`) using the schedule configuration.
+- Schedule runs advance to the next future interval (no backfill flood after downtime).
+- Each schedule stores operational status:
+  - `next_run_at`
+  - `last_run_at`
+  - `last_snapshot_id`
+  - `last_error`
+- Retention cleanup runs after successful scheduled snapshot creation and only affects scheduled snapshots for that instance.
+
 ## Reference Handling
 
 Instances use OCI image references directly:
@@ -134,4 +147,3 @@ TestStorageOperations - metadata persistence, directory cleanup
 - `lib/system` - System manager for kernel/initrd files
 - `lib/hypervisor` - Hypervisor abstraction for VM operations
 - System tools: `mkfs.erofs`, `cpio`, `gzip` (Linux); `mkfs.ext4` (macOS)
-

@@ -50,6 +50,29 @@ Snapshots are immutable point-in-time captures of a VM that can later be:
 - Removes snapshot metadata and payload.
 - Does not modify source or forked instances.
 
+## Scheduled Snapshots
+
+Per-instance schedules can create snapshots automatically on an interval.
+
+- Configure with:
+  - `PUT /instances/{id}/snapshot-schedule`
+- Inspect with:
+  - `GET /instances/{id}/snapshot-schedule`
+- Disable with:
+  - `DELETE /instances/{id}/snapshot-schedule`
+
+### Schedule Rules
+- `kind` chooses whether each run creates `Standby` or `Stopped` snapshots.
+- `interval` uses Go duration format (for example `1h`, `24h`).
+- `retention` is required and must set at least one of:
+  - `max_count`: keep only the newest N scheduled snapshots
+  - `max_age`: delete scheduled snapshots older than a duration
+- Optional `name_prefix` and `metadata` are applied to each scheduled snapshot.
+
+### Cleanup Scope
+- Retention cleanup only targets snapshots created by the schedule for that same instance.
+- Manually created snapshots are never deleted by schedule retention.
+
 ## Safety Rules
 
 - Snapshot creation rejects writable volume attachments.
