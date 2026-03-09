@@ -16,9 +16,7 @@ import (
 const (
 	snapshotScheduleMetadataKey        = scheduledsnapshots.MetadataKeyScheduled
 	snapshotScheduleMetadataInstanceID = scheduledsnapshots.MetadataKeySourceInstanceID
-	snapshotScheduleDefaultNamePrefix  = scheduledsnapshots.DefaultNamePrefix
 	maxSnapshotScheduleNamePrefixLen   = scheduledsnapshots.MaxNamePrefixLength
-	minSnapshotScheduleInterval        = scheduledsnapshots.MinInterval
 )
 
 func (m *manager) SetSnapshotSchedule(ctx context.Context, instanceID string, req SetSnapshotScheduleRequest) (*SnapshotSchedule, error) {
@@ -120,6 +118,21 @@ func (m *manager) RunSnapshotSchedules(ctx context.Context) error {
 		}
 
 		lock.Lock()
+		due, err = m.snapshotScheduleDueLocked(instanceID, now)
+		if err != nil {
+			lock.Unlock()
+			if errors.Is(err, ErrSnapshotScheduleNotFound) {
+				continue
+			}
+			runErrs = append(runErrs, fmt.Errorf("instance %s: %w", instanceID, err))
+			log.ErrorContext(ctx, "scheduled snapshot due-check failed", "instance_id", instanceID, "error", err)
+			continue
+		}
+		if !due {
+			lock.Unlock()
+			continue
+		}
+
 		err = m.runSnapshotScheduleForInstanceLocked(ctx, instanceID, now)
 		lock.Unlock()
 		if err != nil {
