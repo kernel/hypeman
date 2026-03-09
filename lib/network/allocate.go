@@ -7,6 +7,7 @@ import (
 	mathrand "math/rand"
 	"net"
 	"strings"
+	"time"
 
 	"github.com/kernel/hypeman/lib/logger"
 )
@@ -21,18 +22,10 @@ func (m *manager) CreateAllocation(ctx context.Context, req AllocateRequest) (*N
 
 	log := logger.FromContext(ctx)
 
-	// 1. Get default network
-	network, err := m.getDefaultNetwork(ctx)
+	// 1. Get default network (self-heals if kernel bridge state was removed/racing).
+	network, err := m.getOrInitDefaultNetwork(ctx)
 	if err != nil {
-		// Self-heal if bridge state was externally removed after initialization.
-		// This keeps allocations robust under highly concurrent test workloads.
-		if initErr := m.Initialize(ctx, nil); initErr != nil {
-			return nil, fmt.Errorf("get default network: %w", err)
-		}
-		network, err = m.getDefaultNetwork(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("get default network: %w", err)
-		}
+		return nil, err
 	}
 
 	// 2. Check name uniqueness (exclude current instance to allow restarts)
@@ -112,17 +105,10 @@ func (m *manager) RecreateAllocation(ctx context.Context, instanceID string, dow
 		return nil
 	}
 
-	// 2. Get default network details
-	network, err := m.getDefaultNetwork(ctx)
+	// 2. Get default network details (same self-healing behavior as CreateAllocation).
+	network, err := m.getOrInitDefaultNetwork(ctx)
 	if err != nil {
-		// Same self-healing behavior as CreateAllocation.
-		if initErr := m.Initialize(ctx, nil); initErr != nil {
-			return fmt.Errorf("get default network: %w", err)
-		}
-		network, err = m.getDefaultNetwork(ctx)
-		if err != nil {
-			return fmt.Errorf("get default network: %w", err)
-		}
+		return err
 	}
 
 	// 3. Recreate TAP device with same name and rate limits from instance metadata
@@ -170,6 +156,31 @@ func (m *manager) ReleaseAllocation(ctx context.Context, alloc *Allocation) erro
 		"ip", alloc.IP)
 
 	return nil
+}
+
+// getOrInitDefaultNetwork resolves the default network and self-heals by running
+// Initialize if bridge state is missing, then retries briefly to absorb netlink propagation delay.
+func (m *manager) getOrInitDefaultNetwork(ctx context.Context) (*Network, error) {
+	network, err := m.getDefaultNetwork(ctx)
+	if err == nil {
+		return network, nil
+	}
+
+	if initErr := m.Initialize(ctx, nil); initErr != nil {
+		return nil, fmt.Errorf("initialize network manager: %w", initErr)
+	}
+
+	const retries = 20
+	const retryDelay = 100 * time.Millisecond
+	for i := 0; i < retries; i++ {
+		network, err = m.getDefaultNetwork(ctx)
+		if err == nil {
+			return network, nil
+		}
+		time.Sleep(retryDelay)
+	}
+
+	return nil, fmt.Errorf("get default network after initialize: %w", err)
 }
 
 // allocateNextIP picks a random available IP in the subnet
