@@ -108,7 +108,8 @@ Any State → Stopped
 
 - Schedules are configured per instance and persisted in the server data store (outside snapshot payloads).
 - A background scheduler evaluates due schedules every minute.
-- Each due run creates a normal snapshot (`Standby` or `Stopped`) using the schedule configuration.
+- Each due run creates a normal snapshot (`Standby` or `Stopped`) using the schedule configuration; default kind is `Standby`.
+- `Standby` scheduled runs from `Running` sources perform a brief pause/resume cycle during each capture.
 - Scheduled snapshot `name_prefix` is optional and capped at 47 chars so generated names stay within the 63-char snapshot name limit.
 - Schedule runs advance to the next future interval (no backfill flood after downtime).
 - Each schedule stores operational status:

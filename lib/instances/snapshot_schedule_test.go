@@ -52,6 +52,25 @@ func TestSnapshotScheduleSetGetDelete(t *testing.T) {
 	assert.ErrorIs(t, err, ErrSnapshotScheduleNotFound)
 }
 
+func TestSnapshotScheduleDefaultsKindToStandby(t *testing.T) {
+	t.Parallel()
+	mgr, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	hvType := mgr.defaultHypervisor
+	sourceID := "snapshot-schedule-default-kind-src"
+	createStoppedSnapshotSourceFixture(t, mgr, sourceID, sourceID, hvType)
+
+	schedule, err := mgr.SetSnapshotSchedule(ctx, sourceID, SetSnapshotScheduleRequest{
+		Interval: time.Hour,
+		Retention: SnapshotScheduleRetention{
+			MaxCount: 1,
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, SnapshotKindStandby, schedule.Kind)
+}
+
 func TestRunSnapshotSchedulesCreatesSnapshotAndAppliesRetention(t *testing.T) {
 	t.Parallel()
 	mgr, _ := setupTestManager(t)

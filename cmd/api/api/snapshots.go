@@ -244,13 +244,15 @@ func (s *ApiService) SetInstanceSnapshotSchedule(ctx context.Context, request oa
 	}
 
 	req := instances.SetSnapshotScheduleRequest{
-		Kind:     instances.SnapshotKind(request.Body.Kind),
 		Interval: interval,
 		Metadata: toMapMetadata(request.Body.Metadata),
 		Retention: instances.SnapshotScheduleRetention{
 			MaxCount: 0,
 			MaxAge:   0,
 		},
+	}
+	if request.Body.Kind != nil {
+		req.Kind = instances.SnapshotKind(*request.Body.Kind)
 	}
 	if request.Body.NamePrefix != nil {
 		req.NamePrefix = *request.Body.NamePrefix

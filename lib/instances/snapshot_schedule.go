@@ -2,49 +2,27 @@ package instances
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/kernel/hypeman/lib/logger"
+	"github.com/kernel/hypeman/lib/scheduledsnapshots"
 	"github.com/kernel/hypeman/lib/tags"
 )
 
 const (
-	snapshotScheduleMetadataKey        = "hypeman.scheduled"
-	snapshotScheduleMetadataInstanceID = "hypeman.schedule_instance_id"
-	snapshotScheduleDefaultNamePrefix  = "scheduled"
-	snapshotScheduleNameTimestampFmt   = "20060102-150405"
-	maxSnapshotNameLen                 = 63
-	maxSnapshotScheduleNamePrefixLen   = maxSnapshotNameLen - len(snapshotScheduleNameTimestampFmt) - 1
-	minSnapshotScheduleInterval        = time.Minute
+	snapshotScheduleMetadataKey        = scheduledsnapshots.MetadataKeyScheduled
+	snapshotScheduleMetadataInstanceID = scheduledsnapshots.MetadataKeySourceInstanceID
+	snapshotScheduleDefaultNamePrefix  = scheduledsnapshots.DefaultNamePrefix
+	maxSnapshotScheduleNamePrefixLen   = scheduledsnapshots.MaxNamePrefixLength
+	minSnapshotScheduleInterval        = scheduledsnapshots.MinInterval
 )
 
-type snapshotScheduleStorage struct {
-	InstanceID     string                        `json:"instance_id"`
-	Kind           SnapshotKind                  `json:"kind"`
-	Interval       string                        `json:"interval"`
-	NamePrefix     string                        `json:"name_prefix,omitempty"`
-	Metadata       tags.Metadata                 `json:"metadata,omitempty"`
-	Retention      snapshotScheduleRetentionJSON `json:"retention"`
-	NextRunAt      time.Time                     `json:"next_run_at"`
-	LastRunAt      *time.Time                    `json:"last_run_at,omitempty"`
-	LastSnapshotID *string                       `json:"last_snapshot_id,omitempty"`
-	LastError      *string                       `json:"last_error,omitempty"`
-	CreatedAt      time.Time                     `json:"created_at"`
-	UpdatedAt      time.Time                     `json:"updated_at"`
-}
-
-type snapshotScheduleRetentionJSON struct {
-	MaxCount int    `json:"max_count,omitempty"`
-	MaxAge   string `json:"max_age,omitempty"`
-}
-
 func (m *manager) SetSnapshotSchedule(ctx context.Context, instanceID string, req SetSnapshotScheduleRequest) (*SnapshotSchedule, error) {
+	req = scheduledsnapshots.NormalizeSetRequest(req)
 	if err := validateSetSnapshotScheduleRequest(req); err != nil {
 		return nil, err
 	}
@@ -177,7 +155,7 @@ func (m *manager) runSnapshotScheduleForInstanceLocked(ctx context.Context, inst
 	}
 
 	runTime := now.UTC()
-	schedule.NextRunAt = nextSnapshotScheduleRun(schedule.NextRunAt, schedule.Interval, runTime)
+	schedule.NextRunAt = scheduledsnapshots.NextRun(schedule.NextRunAt, schedule.Interval, runTime)
 	schedule.LastRunAt = &runTime
 	schedule.LastSnapshotID = nil
 	schedule.LastError = nil
@@ -185,8 +163,8 @@ func (m *manager) runSnapshotScheduleForInstanceLocked(ctx context.Context, inst
 
 	snapshot, runErr := m.createSnapshot(ctx, instanceID, CreateSnapshotRequest{
 		Kind:     schedule.Kind,
-		Name:     buildScheduledSnapshotName(schedule.NamePrefix, runTime),
-		Metadata: buildScheduledSnapshotMetadata(instanceID, schedule.Metadata),
+		Name:     scheduledsnapshots.BuildSnapshotName(schedule.NamePrefix, runTime, validateInstanceName),
+		Metadata: scheduledsnapshots.BuildSnapshotMetadata(instanceID, schedule.Metadata),
 	})
 
 	if runErr != nil {
@@ -237,7 +215,7 @@ func (m *manager) cleanupScheduledSnapshots(ctx context.Context, instanceID stri
 	}
 	candidates := make([]candidate, 0, len(snapshots))
 	for _, snapshot := range snapshots {
-		if !isScheduledSnapshot(snapshot, instanceID) {
+		if !scheduledsnapshots.IsScheduledSnapshot(snapshot.Metadata, instanceID) {
 			continue
 		}
 		candidates = append(candidates, candidate{id: snapshot.Id, createdAt: snapshot.CreatedAt})
@@ -280,87 +258,12 @@ func (m *manager) cleanupScheduledSnapshots(ctx context.Context, instanceID stri
 }
 
 func isScheduledSnapshot(snapshot Snapshot, instanceID string) bool {
-	if snapshot.Metadata == nil {
-		return false
-	}
-	if snapshot.Metadata[snapshotScheduleMetadataKey] != "true" {
-		return false
-	}
-	return snapshot.Metadata[snapshotScheduleMetadataInstanceID] == instanceID
-}
-
-func buildScheduledSnapshotMetadata(instanceID string, userMetadata tags.Metadata) tags.Metadata {
-	metadata := tags.Clone(userMetadata)
-	if metadata == nil {
-		metadata = make(tags.Metadata)
-	}
-	metadata[snapshotScheduleMetadataKey] = "true"
-	metadata[snapshotScheduleMetadataInstanceID] = instanceID
-	return metadata
-}
-
-func buildScheduledSnapshotName(prefix string, runAt time.Time) string {
-	if prefix == "" {
-		prefix = snapshotScheduleDefaultNamePrefix
-	}
-
-	suffix := runAt.UTC().Format(snapshotScheduleNameTimestampFmt)
-
-	if len(prefix) > maxSnapshotScheduleNamePrefixLen {
-		prefix = strings.Trim(prefix[:maxSnapshotScheduleNamePrefixLen], "-")
-		if prefix == "" {
-			prefix = "s"
-		}
-	}
-
-	name := prefix + "-" + suffix
-	if err := validateInstanceName(name); err != nil {
-		return "s-" + suffix
-	}
-	return name
-}
-
-func nextSnapshotScheduleRun(previous time.Time, interval time.Duration, now time.Time) time.Time {
-	if interval <= 0 {
-		return now
-	}
-	if previous.IsZero() {
-		return now.Add(interval)
-	}
-	if now.Before(previous) {
-		return previous
-	}
-
-	steps := now.Sub(previous)/interval + 1
-	return previous.Add(time.Duration(steps) * interval)
+	return scheduledsnapshots.IsScheduledSnapshot(snapshot.Metadata, instanceID)
 }
 
 func validateSetSnapshotScheduleRequest(req SetSnapshotScheduleRequest) error {
-	if req.Kind != SnapshotKindStandby && req.Kind != SnapshotKindStopped {
-		return fmt.Errorf("%w: kind must be one of %s, %s", ErrInvalidRequest, SnapshotKindStandby, SnapshotKindStopped)
-	}
-	if req.Interval < minSnapshotScheduleInterval {
-		return fmt.Errorf("%w: interval must be at least %s", ErrInvalidRequest, minSnapshotScheduleInterval)
-	}
-	if req.NamePrefix != "" {
-		if err := validateInstanceName(req.NamePrefix); err != nil {
-			return fmt.Errorf("%w: %v", ErrInvalidRequest, err)
-		}
-		if len(req.NamePrefix) > maxSnapshotScheduleNamePrefixLen {
-			return fmt.Errorf("%w: name_prefix must be at most %d characters", ErrInvalidRequest, maxSnapshotScheduleNamePrefixLen)
-		}
-	}
-	if err := tags.Validate(req.Metadata); err != nil {
+	if err := scheduledsnapshots.ValidateSetRequest(req, validateInstanceName); err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidRequest, err)
-	}
-	if req.Retention.MaxCount < 0 {
-		return fmt.Errorf("%w: retention.max_count must be >= 0", ErrInvalidRequest)
-	}
-	if req.Retention.MaxAge < 0 {
-		return fmt.Errorf("%w: retention.max_age must be >= 0", ErrInvalidRequest)
-	}
-	if req.Retention.MaxCount == 0 && req.Retention.MaxAge == 0 {
-		return fmt.Errorf("%w: retention.max_count or retention.max_age must be set", ErrInvalidRequest)
 	}
 	return nil
 }
@@ -374,66 +277,18 @@ func (m *manager) getSnapshotScheduleUnlocked(instanceID string) (*SnapshotSched
 		return nil, fmt.Errorf("read snapshot schedule: %w", err)
 	}
 
-	var stored snapshotScheduleStorage
-	if err := json.Unmarshal(content, &stored); err != nil {
-		return nil, fmt.Errorf("unmarshal snapshot schedule: %w", err)
-	}
-
-	interval, err := time.ParseDuration(stored.Interval)
+	schedule, err := scheduledsnapshots.UnmarshalSchedule(content)
 	if err != nil {
-		return nil, fmt.Errorf("parse schedule interval %q: %w", stored.Interval, err)
+		return nil, err
 	}
-
-	var maxAge time.Duration
-	if stored.Retention.MaxAge != "" {
-		maxAge, err = time.ParseDuration(stored.Retention.MaxAge)
-		if err != nil {
-			return nil, fmt.Errorf("parse schedule retention max_age %q: %w", stored.Retention.MaxAge, err)
-		}
+	if schedule.Kind == "" {
+		schedule.Kind = scheduledsnapshots.DefaultKind
 	}
-
-	return &SnapshotSchedule{
-		InstanceID:     stored.InstanceID,
-		Kind:           stored.Kind,
-		Interval:       interval,
-		NamePrefix:     stored.NamePrefix,
-		Metadata:       tags.Clone(stored.Metadata),
-		Retention:      SnapshotScheduleRetention{MaxCount: stored.Retention.MaxCount, MaxAge: maxAge},
-		NextRunAt:      stored.NextRunAt,
-		LastRunAt:      stored.LastRunAt,
-		LastSnapshotID: stored.LastSnapshotID,
-		LastError:      stored.LastError,
-		CreatedAt:      stored.CreatedAt,
-		UpdatedAt:      stored.UpdatedAt,
-	}, nil
+	return schedule, nil
 }
 
 func (m *manager) saveSnapshotScheduleUnlocked(schedule *SnapshotSchedule) error {
-	if schedule == nil {
-		return fmt.Errorf("nil snapshot schedule")
-	}
-	interval := schedule.Interval.String()
-	maxAge := ""
-	if schedule.Retention.MaxAge > 0 {
-		maxAge = schedule.Retention.MaxAge.String()
-	}
-
-	stored := snapshotScheduleStorage{
-		InstanceID:     schedule.InstanceID,
-		Kind:           schedule.Kind,
-		Interval:       interval,
-		NamePrefix:     schedule.NamePrefix,
-		Metadata:       tags.Clone(schedule.Metadata),
-		Retention:      snapshotScheduleRetentionJSON{MaxCount: schedule.Retention.MaxCount, MaxAge: maxAge},
-		NextRunAt:      schedule.NextRunAt.UTC(),
-		LastRunAt:      schedule.LastRunAt,
-		LastSnapshotID: schedule.LastSnapshotID,
-		LastError:      schedule.LastError,
-		CreatedAt:      schedule.CreatedAt.UTC(),
-		UpdatedAt:      schedule.UpdatedAt.UTC(),
-	}
-
-	content, err := json.MarshalIndent(stored, "", "  ")
+	content, err := scheduledsnapshots.MarshalSchedule(schedule)
 	if err != nil {
 		return fmt.Errorf("marshal snapshot schedule: %w", err)
 	}
@@ -449,29 +304,5 @@ func (m *manager) saveSnapshotScheduleUnlocked(schedule *SnapshotSchedule) error
 }
 
 func (m *manager) listSnapshotScheduleInstanceIDs() ([]string, error) {
-	entries, err := os.ReadDir(m.paths.SnapshotSchedulesDir())
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("read snapshot schedules directory: %w", err)
-	}
-
-	instanceIDs := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		if !strings.HasSuffix(name, ".json") {
-			continue
-		}
-		instanceID := strings.TrimSuffix(name, ".json")
-		if instanceID == "" {
-			continue
-		}
-		instanceIDs = append(instanceIDs, instanceID)
-	}
-	sort.Strings(instanceIDs)
-	return instanceIDs, nil
+	return scheduledsnapshots.ListInstanceIDs(m.paths.SnapshotSchedulesDir())
 }
