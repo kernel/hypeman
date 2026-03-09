@@ -408,7 +408,7 @@ func (m *manager) applyForkTargetState(ctx context.Context, forkID string, targe
 	if err != nil {
 		return nil, err
 	}
-	if current.State == target {
+	if current.State == target || (target == StateRunning && current.State == StateInitializing) {
 		return returnWithReadiness(current, nil)
 	}
 
