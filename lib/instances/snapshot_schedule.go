@@ -113,22 +113,37 @@ func (m *manager) DeleteSnapshotSchedule(ctx context.Context, instanceID string)
 
 func (m *manager) RunSnapshotSchedules(ctx context.Context) error {
 	log := logger.FromContext(ctx)
-	instances, err := m.listInstances(ctx)
+	instanceIDs, err := m.listSnapshotScheduleInstanceIDs()
 	if err != nil {
-		return fmt.Errorf("list instances for scheduled snapshots: %w", err)
+		return fmt.Errorf("list snapshot schedules: %w", err)
 	}
 
 	now := time.Now().UTC()
 	var runErrs []error
 
-	for _, inst := range instances {
-		lock := m.getInstanceLock(inst.Id)
+	for _, instanceID := range instanceIDs {
+		lock := m.getInstanceLock(instanceID)
+		lock.RLock()
+		due, err := m.snapshotScheduleDueLocked(instanceID, now)
+		lock.RUnlock()
+		if err != nil {
+			if errors.Is(err, ErrSnapshotScheduleNotFound) {
+				continue
+			}
+			runErrs = append(runErrs, fmt.Errorf("instance %s: %w", instanceID, err))
+			log.ErrorContext(ctx, "scheduled snapshot due-check failed", "instance_id", instanceID, "error", err)
+			continue
+		}
+		if !due {
+			continue
+		}
+
 		lock.Lock()
-		err := m.runSnapshotScheduleForInstanceLocked(ctx, inst.Id, now)
+		err = m.runSnapshotScheduleForInstanceLocked(ctx, instanceID, now)
 		lock.Unlock()
 		if err != nil {
-			runErrs = append(runErrs, fmt.Errorf("instance %s: %w", inst.Id, err))
-			log.ErrorContext(ctx, "scheduled snapshot run failed", "instance_id", inst.Id, "error", err)
+			runErrs = append(runErrs, fmt.Errorf("instance %s: %w", instanceID, err))
+			log.ErrorContext(ctx, "scheduled snapshot run failed", "instance_id", instanceID, "error", err)
 		}
 	}
 
@@ -136,6 +151,14 @@ func (m *manager) RunSnapshotSchedules(ctx context.Context) error {
 		return errors.Join(runErrs...)
 	}
 	return nil
+}
+
+func (m *manager) snapshotScheduleDueLocked(instanceID string, now time.Time) (bool, error) {
+	schedule, err := m.getSnapshotScheduleUnlocked(instanceID)
+	if err != nil {
+		return false, err
+	}
+	return !now.Before(schedule.NextRunAt), nil
 }
 
 func (m *manager) runSnapshotScheduleForInstanceLocked(ctx context.Context, instanceID string, now time.Time) error {
@@ -421,4 +444,32 @@ func (m *manager) saveSnapshotScheduleUnlocked(schedule *SnapshotSchedule) error
 	}
 
 	return nil
+}
+
+func (m *manager) listSnapshotScheduleInstanceIDs() ([]string, error) {
+	entries, err := os.ReadDir(m.paths.SnapshotSchedulesDir())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read snapshot schedules directory: %w", err)
+	}
+
+	instanceIDs := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".json") {
+			continue
+		}
+		instanceID := strings.TrimSuffix(name, ".json")
+		if instanceID == "" {
+			continue
+		}
+		instanceIDs = append(instanceIDs, instanceID)
+	}
+	sort.Strings(instanceIDs)
+	return instanceIDs, nil
 }
