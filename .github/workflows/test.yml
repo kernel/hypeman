@@ -31,11 +31,16 @@ jobs:
       - name: Install dependencies
         run: |
           set -xe
+          has_libjpeg8=0
+          if ldconfig -p | grep -q 'libjpeg\.so\.8'; then
+            has_libjpeg8=1
+          fi
           if ! command -v mkfs.erofs &> /dev/null || \
              ! command -v mkfs.ext4 &> /dev/null || \
-             ! command -v iptables &> /dev/null; then
+             ! command -v iptables &> /dev/null || \
+             [ "$has_libjpeg8" -eq 0 ]; then
             sudo apt-get update
-            sudo apt-get install -y erofs-utils e2fsprogs iptables
+            sudo apt-get install -y erofs-utils e2fsprogs iptables libjpeg8
           fi
           go mod download
 
@@ -50,6 +55,10 @@ jobs:
             fi
             sudo env "PATH=$TEST_PATH" bash -lc "command -v '$bin'"
           done
+          if ! ldconfig -p | grep -q 'libjpeg\.so\.8'; then
+            echo "missing required runtime library: libjpeg.so.8"
+            exit 1
+          fi
 
       # Avoids rate limits when running the tests
       # Tests includes pulling, then converting to disk images
