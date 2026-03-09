@@ -31,8 +31,12 @@ jobs:
       - name: Install dependencies
         run: |
           set -xe
+          has_libjpeg8() {
+            sudo ldconfig -p | grep -q 'libjpeg\.so\.8' || \
+              sudo find /usr/lib /lib -name 'libjpeg.so.8' -print -quit | grep -q .
+          }
           has_libjpeg8=0
-          if sudo ldconfig -p | grep -q 'libjpeg\.so\.8'; then
+          if has_libjpeg8; then
             has_libjpeg8=1
           fi
           if ! command -v mkfs.erofs &> /dev/null || \
@@ -43,13 +47,13 @@ jobs:
             sudo apt-get install -y erofs-utils e2fsprogs iptables
 
             # Different runner images expose JPEG libs under different package names.
-            if ! sudo ldconfig -p | grep -q 'libjpeg\.so\.8'; then
+            if ! has_libjpeg8; then
               sudo apt-get install -y libjpeg-turbo8 || sudo apt-get install -y libjpeg62-turbo
             fi
 
             # Some images only provide libjpeg.so.62. Provide a compatibility symlink
             # for qemu binaries linked against libjpeg.so.8.
-            if ! sudo ldconfig -p | grep -q 'libjpeg\.so\.8'; then
+            if ! has_libjpeg8; then
               jpeg_lib="$(sudo ldconfig -p | awk '/libjpeg\.so/{print $NF; exit}')"
               if [ -n "$jpeg_lib" ]; then
                 sudo ln -sf "$jpeg_lib" "$(dirname "$jpeg_lib")/libjpeg.so.8"
@@ -63,6 +67,10 @@ jobs:
         run: |
           set -euo pipefail
           TEST_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+          has_libjpeg8() {
+            sudo ldconfig -p | grep -q 'libjpeg\.so\.8' || \
+              sudo find /usr/lib /lib -name 'libjpeg.so.8' -print -quit | grep -q .
+          }
           for bin in mkfs.erofs mkfs.ext4 iptables; do
             if ! sudo env "PATH=$TEST_PATH" bash -lc "command -v '$bin' >/dev/null"; then
               echo "missing required binary under sudo PATH: $bin"
@@ -70,7 +78,7 @@ jobs:
             fi
             sudo env "PATH=$TEST_PATH" bash -lc "command -v '$bin'"
           done
-          if ! sudo ldconfig -p | grep -q 'libjpeg\.so\.8'; then
+          if ! has_libjpeg8; then
             echo "missing required runtime library: libjpeg.so.8"
             exit 1
           fi
