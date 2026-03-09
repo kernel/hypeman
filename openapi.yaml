@@ -376,8 +376,8 @@ components:
       properties:
         max_count:
           type: integer
-          minimum: 1
-          description: Keep at most this many scheduled snapshots for the instance.
+          minimum: 0
+          description: Keep at most this many scheduled snapshots for the instance (0 disables count-based cleanup).
           example: 7
         max_age:
           type: string

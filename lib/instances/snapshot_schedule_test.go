@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kernel/hypeman/lib/scheduledsnapshots"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -128,7 +129,7 @@ func TestRunSnapshotSchedulesCreatesSnapshotAndAppliesRetention(t *testing.T) {
 	scheduledIDs := make(map[string]struct{})
 	manualCount := 0
 	for _, snapshot := range snaps {
-		if isScheduledSnapshot(snapshot, sourceID) {
+		if scheduledsnapshots.IsScheduledSnapshot(snapshot.Metadata, sourceID) {
 			scheduledIDs[snapshot.Id] = struct{}{}
 		} else {
 			manualCount++

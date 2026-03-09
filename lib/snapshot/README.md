@@ -66,7 +66,7 @@ Per-instance schedules can create snapshots automatically on an interval.
 - `Standby` scheduled runs against a `Running` source include a brief pause/resume cycle during capture.
 - `interval` uses Go duration format (for example `1h`, `24h`).
 - `retention` is required and must set at least one of:
-  - `max_count`: keep only the newest N scheduled snapshots
+  - `max_count`: keep only the newest N scheduled snapshots (`0` disables count-based cleanup)
   - `max_age`: delete scheduled snapshots older than a duration
 - Optional `name_prefix` (max 47 chars) and `metadata` are applied to each scheduled snapshot.
 

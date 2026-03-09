@@ -260,10 +260,6 @@ func (m *manager) cleanupScheduledSnapshots(ctx context.Context, instanceID stri
 	return nil
 }
 
-func isScheduledSnapshot(snapshot Snapshot, instanceID string) bool {
-	return scheduledsnapshots.IsScheduledSnapshot(snapshot.Metadata, instanceID)
-}
-
 func validateSetSnapshotScheduleRequest(req SetSnapshotScheduleRequest) error {
 	if err := scheduledsnapshots.ValidateSetRequest(req, validateInstanceName); err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidRequest, err)
