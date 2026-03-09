@@ -57,11 +57,6 @@ func (m *manager) restoreInstance(
 		return nil, fmt.Errorf("no snapshot available for instance %s", id)
 	}
 
-	// Boot markers are tied to a specific VM boot cycle and must be rebuilt for
-	// this restore run before transitioning to Running.
-	stored.ProgramStartedAt = nil
-	stored.GuestAgentReadyAt = nil
-
 	// 2b. Validate aggregate resource limits before allocating resources (if configured)
 	if m.resourceValidator != nil {
 		needsGPU := stored.GPUProfile != ""
