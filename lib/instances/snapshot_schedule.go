@@ -13,12 +13,6 @@ import (
 	"github.com/kernel/hypeman/lib/tags"
 )
 
-const (
-	snapshotScheduleMetadataKey        = scheduledsnapshots.MetadataKeyScheduled
-	snapshotScheduleMetadataInstanceID = scheduledsnapshots.MetadataKeySourceInstanceID
-	maxSnapshotScheduleNamePrefixLen   = scheduledsnapshots.MaxNamePrefixLength
-)
-
 func (m *manager) SetSnapshotSchedule(ctx context.Context, instanceID string, req SetSnapshotScheduleRequest) (*SnapshotSchedule, error) {
 	if err := validateSetSnapshotScheduleRequest(req); err != nil {
 		return nil, err

@@ -97,8 +97,8 @@ func TestRunSnapshotSchedulesCreatesSnapshotAndAppliesRetention(t *testing.T) {
 		Kind: SnapshotKindStopped,
 		Name: "older-scheduled",
 		Metadata: map[string]string{
-			snapshotScheduleMetadataKey:        "true",
-			snapshotScheduleMetadataInstanceID: sourceID,
+			scheduledsnapshots.MetadataKeyScheduled:        "true",
+			scheduledsnapshots.MetadataKeySourceInstanceID: sourceID,
 		},
 	})
 	require.NoError(t, err)
@@ -109,8 +109,8 @@ func TestRunSnapshotSchedulesCreatesSnapshotAndAppliesRetention(t *testing.T) {
 		Kind: SnapshotKindStopped,
 		Name: "newer-scheduled",
 		Metadata: map[string]string{
-			snapshotScheduleMetadataKey:        "true",
-			snapshotScheduleMetadataInstanceID: sourceID,
+			scheduledsnapshots.MetadataKeyScheduled:        "true",
+			scheduledsnapshots.MetadataKeySourceInstanceID: sourceID,
 		},
 	})
 	require.NoError(t, err)
@@ -184,7 +184,7 @@ func TestSnapshotScheduleNamePrefixLengthValidation(t *testing.T) {
 	sourceID := "snapshot-schedule-prefix-src"
 	createStoppedSnapshotSourceFixture(t, mgr, sourceID, sourceID, hvType)
 
-	tooLong := strings.Repeat("a", maxSnapshotScheduleNamePrefixLen+1)
+	tooLong := strings.Repeat("a", scheduledsnapshots.MaxNamePrefixLength+1)
 	_, err := mgr.SetSnapshotSchedule(ctx, sourceID, SetSnapshotScheduleRequest{
 		Interval:   time.Hour,
 		NamePrefix: tooLong,
@@ -196,7 +196,7 @@ func TestSnapshotScheduleNamePrefixLengthValidation(t *testing.T) {
 	assert.ErrorIs(t, err, ErrInvalidRequest)
 	assert.Contains(t, err.Error(), "name_prefix must be at most")
 
-	atLimit := strings.Repeat("a", maxSnapshotScheduleNamePrefixLen)
+	atLimit := strings.Repeat("a", scheduledsnapshots.MaxNamePrefixLength)
 	_, err = mgr.SetSnapshotSchedule(ctx, sourceID, SetSnapshotScheduleRequest{
 		Interval:   time.Hour,
 		NamePrefix: atLimit,
@@ -228,8 +228,8 @@ func TestDeleteInstanceKeepsScheduleUntilScheduledSnapshotsAreGone(t *testing.T)
 		Kind: SnapshotKindStopped,
 		Name: "scheduled-before-delete",
 		Metadata: map[string]string{
-			snapshotScheduleMetadataKey:        "true",
-			snapshotScheduleMetadataInstanceID: sourceID,
+			scheduledsnapshots.MetadataKeyScheduled:        "true",
+			scheduledsnapshots.MetadataKeySourceInstanceID: sourceID,
 		},
 	})
 	require.NoError(t, err)
@@ -273,8 +273,8 @@ func TestDeleteInstanceWithCountOnlyRetentionRemovesConvergedSchedule(t *testing
 		Kind: SnapshotKindStopped,
 		Name: "scheduled-before-delete-count-only",
 		Metadata: map[string]string{
-			snapshotScheduleMetadataKey:        "true",
-			snapshotScheduleMetadataInstanceID: sourceID,
+			scheduledsnapshots.MetadataKeyScheduled:        "true",
+			scheduledsnapshots.MetadataKeySourceInstanceID: sourceID,
 		},
 	})
 	require.NoError(t, err)
