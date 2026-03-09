@@ -468,17 +468,7 @@ func cloneStoredMetadataForFork(src StoredMetadata) StoredMetadata {
 		}
 	}
 	if src.EgressProxy != nil {
-		cfg := &EgressProxyConfig{
-			Enabled:         src.EgressProxy.Enabled,
-			EnforcementMode: src.EgressProxy.EnforcementMode,
-		}
-		if src.EgressProxy.MockEnvVars != nil {
-			cfg.MockEnvVars = append([]string(nil), src.EgressProxy.MockEnvVars...)
-		}
-		if src.EgressProxy.MockEnvVarDomains != nil {
-			cfg.MockEnvVarDomains = cloneMockEnvVarDomains(src.EgressProxy.MockEnvVarDomains)
-		}
-		dst.EgressProxy = cfg
+		dst.EgressProxy = cloneEgressProxyConfig(src.EgressProxy)
 	}
 	if src.Metadata != nil {
 		dst.Metadata = make(map[string]string, len(src.Metadata))

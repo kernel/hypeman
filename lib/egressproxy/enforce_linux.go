@@ -117,9 +117,5 @@ func removeRuleByComment(comment string) error {
 }
 
 func enforcementComment(instanceID, suffix string) string {
-	short := instanceID
-	if len(short) > 8 {
-		short = short[:8]
-	}
-	return fmt.Sprintf("hypeman-egress-%s-%s", short, suffix)
+	return fmt.Sprintf("hypeman-egress-%s-%s", instanceID, suffix)
 }

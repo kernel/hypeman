@@ -307,11 +307,6 @@ func (s *Service) handleConnect(w http.ResponseWriter, r *http.Request, sourceIP
 		return
 	}
 
-	if err := s.verifyUpstreamTLSDestination(targetAuthority, targetHost); err != nil {
-		_, _ = io.WriteString(clientConn, "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
-		return
-	}
-
 	_, _ = io.WriteString(clientConn, "HTTP/1.1 200 Connection Established\r\n\r\n")
 
 	cert, err := s.getOrCreateLeafCert(targetHost)
@@ -367,30 +362,6 @@ func (s *Service) handleConnect(w http.ResponseWriter, r *http.Request, sourceIP
 			return
 		}
 	}
-}
-
-func (s *Service) verifyUpstreamTLSDestination(targetAuthority, targetHost string) error {
-	addr := targetAuthority
-	if _, _, err := net.SplitHostPort(addr); err != nil {
-		addr = net.JoinHostPort(targetHost, "443")
-	}
-
-	tlsCfg := &tls.Config{ServerName: targetHost}
-	if s.transport != nil && s.transport.TLSClientConfig != nil {
-		tlsCfg.RootCAs = s.transport.TLSClientConfig.RootCAs
-	}
-
-	conn, err := tls.DialWithDialer(
-		&net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second},
-		"tcp",
-		addr,
-		tlsCfg,
-	)
-	if err != nil {
-		return err
-	}
-	_ = conn.Close()
-	return nil
 }
 
 func (s *Service) getOrCreateLeafCert(host string) (*tls.Certificate, error) {
