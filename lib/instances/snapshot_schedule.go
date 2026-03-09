@@ -28,21 +28,39 @@ func (m *manager) SetSnapshotSchedule(ctx context.Context, instanceID string, re
 
 	now := time.Now().UTC()
 	createdAt := now
+	var lastRunAt *time.Time
+	var lastSnapshotID *string
+	var lastError *string
 	if existing, err := m.getSnapshotScheduleUnlocked(instanceID); err == nil {
 		createdAt = existing.CreatedAt
+		if existing.LastRunAt != nil {
+			lastRunAtValue := *existing.LastRunAt
+			lastRunAt = &lastRunAtValue
+		}
+		if existing.LastSnapshotID != nil {
+			lastSnapshotIDValue := *existing.LastSnapshotID
+			lastSnapshotID = &lastSnapshotIDValue
+		}
+		if existing.LastError != nil {
+			lastErrorValue := *existing.LastError
+			lastError = &lastErrorValue
+		}
 	} else if !errors.Is(err, ErrSnapshotScheduleNotFound) {
 		return nil, err
 	}
 
 	schedule := &SnapshotSchedule{
-		InstanceID: instanceID,
-		Interval:   req.Interval,
-		NamePrefix: req.NamePrefix,
-		Metadata:   tags.Clone(req.Metadata),
-		Retention:  req.Retention,
-		NextRunAt:  now.Add(req.Interval),
-		CreatedAt:  createdAt,
-		UpdatedAt:  now,
+		InstanceID:     instanceID,
+		Interval:       req.Interval,
+		NamePrefix:     req.NamePrefix,
+		Metadata:       tags.Clone(req.Metadata),
+		Retention:      req.Retention,
+		NextRunAt:      now.Add(req.Interval),
+		LastRunAt:      lastRunAt,
+		LastSnapshotID: lastSnapshotID,
+		LastError:      lastError,
+		CreatedAt:      createdAt,
+		UpdatedAt:      now,
 	}
 
 	if err := m.saveSnapshotScheduleUnlocked(schedule); err != nil {

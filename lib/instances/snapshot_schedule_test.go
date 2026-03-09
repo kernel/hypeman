@@ -50,6 +50,55 @@ func TestSnapshotScheduleSetGetDelete(t *testing.T) {
 	assert.ErrorIs(t, err, ErrSnapshotScheduleNotFound)
 }
 
+func TestSnapshotScheduleUpdatePreservesOperationalHistory(t *testing.T) {
+	t.Parallel()
+	mgr, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	hvType := mgr.defaultHypervisor
+	sourceID := "snapshot-schedule-update-history-src"
+	createStoppedSnapshotSourceFixture(t, mgr, sourceID, sourceID, hvType)
+
+	created, err := mgr.SetSnapshotSchedule(ctx, sourceID, SetSnapshotScheduleRequest{
+		Interval: time.Hour,
+		Retention: SnapshotScheduleRetention{
+			MaxCount: 2,
+		},
+	})
+	require.NoError(t, err)
+
+	expectedLastRunAt := time.Now().UTC().Add(-10 * time.Minute).Truncate(time.Second)
+	expectedLastSnapshotID := "snapshot-123"
+	expectedLastError := "last run failed"
+
+	lock := mgr.getInstanceLock(sourceID)
+	lock.Lock()
+	schedule, err := mgr.getSnapshotScheduleUnlocked(sourceID)
+	require.NoError(t, err)
+	schedule.LastRunAt = &expectedLastRunAt
+	schedule.LastSnapshotID = &expectedLastSnapshotID
+	schedule.LastError = &expectedLastError
+	require.NoError(t, mgr.saveSnapshotScheduleUnlocked(schedule))
+	lock.Unlock()
+
+	updated, err := mgr.SetSnapshotSchedule(ctx, sourceID, SetSnapshotScheduleRequest{
+		Interval:   2 * time.Hour,
+		NamePrefix: "nightly",
+		Retention: SnapshotScheduleRetention{
+			MaxCount: 5,
+		},
+	})
+	require.NoError(t, err)
+
+	require.NotNil(t, updated.LastRunAt)
+	assert.Equal(t, expectedLastRunAt, *updated.LastRunAt)
+	require.NotNil(t, updated.LastSnapshotID)
+	assert.Equal(t, expectedLastSnapshotID, *updated.LastSnapshotID)
+	require.NotNil(t, updated.LastError)
+	assert.Equal(t, expectedLastError, *updated.LastError)
+	assert.Equal(t, created.CreatedAt, updated.CreatedAt)
+}
+
 func TestSnapshotScheduleUsesStoppedSnapshotWhenSourceIsStopped(t *testing.T) {
 	t.Parallel()
 	mgr, _ := setupTestManager(t)
