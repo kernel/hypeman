@@ -270,21 +270,17 @@ func (m *manager) cleanupScheduledSnapshots(ctx context.Context, instanceID stri
 		return nil
 	}
 
-	filter := &ListSnapshotsFilter{SourceInstanceID: &instanceID}
-	snapshots, err := m.listSnapshots(ctx, filter)
+	scheduledSnapshots, err := m.listScheduledSnapshotsByInstance(ctx, instanceID)
 	if err != nil {
-		return fmt.Errorf("list snapshots: %w", err)
+		return err
 	}
 
 	type candidate struct {
 		id        string
 		createdAt time.Time
 	}
-	candidates := make([]candidate, 0, len(snapshots))
-	for _, snapshot := range snapshots {
-		if !scheduledsnapshots.IsScheduledSnapshot(snapshot.Metadata, instanceID) {
-			continue
-		}
+	candidates := make([]candidate, 0, len(scheduledSnapshots))
+	for _, snapshot := range scheduledSnapshots {
 		candidates = append(candidates, candidate{id: snapshot.Id, createdAt: snapshot.CreatedAt})
 	}
 
@@ -371,19 +367,27 @@ func (m *manager) listSnapshotScheduleInstanceIDs() ([]string, error) {
 }
 
 func (m *manager) countScheduledSnapshots(ctx context.Context, instanceID string) (int, error) {
+	scheduledSnapshots, err := m.listScheduledSnapshotsByInstance(ctx, instanceID)
+	if err != nil {
+		return 0, err
+	}
+	return len(scheduledSnapshots), nil
+}
+
+func (m *manager) listScheduledSnapshotsByInstance(ctx context.Context, instanceID string) ([]Snapshot, error) {
 	filter := &ListSnapshotsFilter{SourceInstanceID: &instanceID}
 	snapshots, err := m.listSnapshots(ctx, filter)
 	if err != nil {
-		return 0, fmt.Errorf("list snapshots: %w", err)
+		return nil, fmt.Errorf("list snapshots: %w", err)
 	}
 
-	count := 0
+	scheduledSnapshots := make([]Snapshot, 0, len(snapshots))
 	for _, snapshot := range snapshots {
 		if scheduledsnapshots.IsScheduledSnapshot(snapshot.Metadata, instanceID) {
-			count++
+			scheduledSnapshots = append(scheduledSnapshots, snapshot)
 		}
 	}
-	return count, nil
+	return scheduledSnapshots, nil
 }
 
 func scheduledSnapshotKindForState(state State) (SnapshotKind, error) {

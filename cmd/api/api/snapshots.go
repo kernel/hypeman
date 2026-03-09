@@ -251,6 +251,9 @@ func (s *ApiService) SetInstanceSnapshotSchedule(ctx context.Context, request oa
 			MaxAge:   0,
 		},
 	}
+	if request.Body.Retention.MaxCount == nil && request.Body.Retention.MaxAge == nil {
+		return oapi.SetInstanceSnapshotSchedule400JSONResponse{Code: "invalid_request", Message: "retention must include max_count or max_age"}, nil
+	}
 	if request.Body.NamePrefix != nil {
 		req.NamePrefix = *request.Body.NamePrefix
 	}
