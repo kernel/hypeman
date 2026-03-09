@@ -67,7 +67,7 @@ Per-instance schedules can create snapshots automatically on an interval.
 - `retention` is required and must set at least one of:
   - `max_count`: keep only the newest N scheduled snapshots
   - `max_age`: delete scheduled snapshots older than a duration
-- Optional `name_prefix` and `metadata` are applied to each scheduled snapshot.
+- Optional `name_prefix` (max 47 chars) and `metadata` are applied to each scheduled snapshot.
 
 ### Cleanup Scope
 - Retention cleanup only targets snapshots created by the schedule for that same instance.

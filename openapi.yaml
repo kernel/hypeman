@@ -396,9 +396,9 @@ components:
           example: 24h
         name_prefix:
           type: string
-          description: Optional prefix for auto-generated scheduled snapshot names.
+          description: Optional prefix for auto-generated scheduled snapshot names (max 47 chars).
           pattern: ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$
-          maxLength: 63
+          maxLength: 47
           nullable: true
           example: nightly
         metadata:

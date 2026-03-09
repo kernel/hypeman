@@ -18,6 +18,9 @@ const (
 	snapshotScheduleMetadataKey        = "hypeman.scheduled"
 	snapshotScheduleMetadataInstanceID = "hypeman.schedule_instance_id"
 	snapshotScheduleDefaultNamePrefix  = "scheduled"
+	snapshotScheduleNameTimestampFmt   = "20060102-150405"
+	maxSnapshotNameLen                 = 63
+	maxSnapshotScheduleNamePrefixLen   = maxSnapshotNameLen - len(snapshotScheduleNameTimestampFmt) - 1
 	minSnapshotScheduleInterval        = time.Minute
 )
 
@@ -301,14 +304,10 @@ func buildScheduledSnapshotName(prefix string, runAt time.Time) string {
 		prefix = snapshotScheduleDefaultNamePrefix
 	}
 
-	suffix := runAt.UTC().Format("20060102-150405")
-	maxPrefixLen := 63 - len(suffix) - 1
-	if maxPrefixLen < 1 {
-		maxPrefixLen = 1
-	}
+	suffix := runAt.UTC().Format(snapshotScheduleNameTimestampFmt)
 
-	if len(prefix) > maxPrefixLen {
-		prefix = strings.Trim(prefix[:maxPrefixLen], "-")
+	if len(prefix) > maxSnapshotScheduleNamePrefixLen {
+		prefix = strings.Trim(prefix[:maxSnapshotScheduleNamePrefixLen], "-")
 		if prefix == "" {
 			prefix = "s"
 		}
@@ -346,6 +345,9 @@ func validateSetSnapshotScheduleRequest(req SetSnapshotScheduleRequest) error {
 	if req.NamePrefix != "" {
 		if err := validateInstanceName(req.NamePrefix); err != nil {
 			return fmt.Errorf("%w: %v", ErrInvalidRequest, err)
+		}
+		if len(req.NamePrefix) > maxSnapshotScheduleNamePrefixLen {
+			return fmt.Errorf("%w: name_prefix must be at most %d characters", ErrInvalidRequest, maxSnapshotScheduleNamePrefixLen)
 		}
 	}
 	if err := tags.Validate(req.Metadata); err != nil {

@@ -3,6 +3,7 @@ package instances
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -142,6 +143,40 @@ func TestSnapshotScheduleRequiresRetentionPolicy(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrInvalidRequest)
+}
+
+func TestSnapshotScheduleNamePrefixLengthValidation(t *testing.T) {
+	t.Parallel()
+	mgr, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	hvType := mgr.defaultHypervisor
+	sourceID := "snapshot-schedule-prefix-src"
+	createStoppedSnapshotSourceFixture(t, mgr, sourceID, sourceID, hvType)
+
+	tooLong := strings.Repeat("a", maxSnapshotScheduleNamePrefixLen+1)
+	_, err := mgr.SetSnapshotSchedule(ctx, sourceID, SetSnapshotScheduleRequest{
+		Kind:       SnapshotKindStopped,
+		Interval:   time.Hour,
+		NamePrefix: tooLong,
+		Retention: SnapshotScheduleRetention{
+			MaxCount: 1,
+		},
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidRequest)
+	assert.Contains(t, err.Error(), "name_prefix must be at most")
+
+	atLimit := strings.Repeat("a", maxSnapshotScheduleNamePrefixLen)
+	_, err = mgr.SetSnapshotSchedule(ctx, sourceID, SetSnapshotScheduleRequest{
+		Kind:       SnapshotKindStopped,
+		Interval:   time.Hour,
+		NamePrefix: atLimit,
+		Retention: SnapshotScheduleRetention{
+			MaxCount: 1,
+		},
+	})
+	require.NoError(t, err)
 }
 
 func TestDeleteInstanceRemovesSnapshotSchedule(t *testing.T) {
