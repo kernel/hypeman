@@ -26,7 +26,7 @@ type storageModel struct {
 }
 
 type retentionStorage struct {
-	MaxCount int    `json:"max_count,omitempty"`
+	MaxCount int    `json:"max_count"`
 	MaxAge   string `json:"max_age,omitempty"`
 }
 

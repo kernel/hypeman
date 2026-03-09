@@ -61,3 +61,27 @@ func TestMarshalUnmarshalScheduleRoundTrip(t *testing.T) {
 	require.NotNil(t, out.LastSnapshotID)
 	assert.Equal(t, *in.LastSnapshotID, *out.LastSnapshotID)
 }
+
+func TestMarshalSchedulePersistsZeroMaxCount(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	in := &Schedule{
+		InstanceID: "inst-1",
+		Interval:   time.Hour,
+		Retention: Retention{
+			MaxCount: 0,
+			MaxAge:   24 * time.Hour,
+		},
+		NextRunAt: now,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	raw, err := MarshalSchedule(in)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), "\"max_count\": 0")
+
+	out, err := UnmarshalSchedule(raw)
+	require.NoError(t, err)
+	assert.Equal(t, 0, out.Retention.MaxCount)
+	assert.Equal(t, 24*time.Hour, out.Retention.MaxAge)
+}

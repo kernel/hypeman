@@ -242,30 +242,28 @@ func (s *ApiService) SetInstanceSnapshotSchedule(ctx context.Context, request oa
 	if err != nil {
 		return oapi.SetInstanceSnapshotSchedule400JSONResponse{Code: "invalid_request", Message: "interval must be a valid duration"}, nil
 	}
-
-	req := instances.SetSnapshotScheduleRequest{
-		Interval: interval,
-		Metadata: toMapMetadata(request.Body.Metadata),
-		Retention: instances.SnapshotScheduleRetention{
-			MaxCount: 0,
-			MaxAge:   0,
-		},
-	}
 	if request.Body.Retention.MaxCount == nil && request.Body.Retention.MaxAge == nil {
 		return oapi.SetInstanceSnapshotSchedule400JSONResponse{Code: "invalid_request", Message: "retention must include max_count or max_age"}, nil
 	}
-	if request.Body.NamePrefix != nil {
-		req.NamePrefix = *request.Body.NamePrefix
-	}
+
+	retention := instances.SnapshotScheduleRetention{}
 	if request.Body.Retention.MaxCount != nil {
-		req.Retention.MaxCount = *request.Body.Retention.MaxCount
+		retention.MaxCount = *request.Body.Retention.MaxCount
 	}
 	if request.Body.Retention.MaxAge != nil {
 		maxAge, parseErr := time.ParseDuration(*request.Body.Retention.MaxAge)
 		if parseErr != nil {
 			return oapi.SetInstanceSnapshotSchedule400JSONResponse{Code: "invalid_request", Message: "retention.max_age must be a valid duration"}, nil
 		}
-		req.Retention.MaxAge = maxAge
+		retention.MaxAge = maxAge
+	}
+	req := instances.SetSnapshotScheduleRequest{
+		Interval:  interval,
+		Metadata:  toMapMetadata(request.Body.Metadata),
+		Retention: retention,
+	}
+	if request.Body.NamePrefix != nil {
+		req.NamePrefix = *request.Body.NamePrefix
 	}
 
 	schedule, err := scheduleManager.SetSnapshotSchedule(ctx, inst.Id, req)
@@ -335,9 +333,8 @@ func snapshotToOAPI(snapshot instances.Snapshot) oapi.Snapshot {
 }
 
 func snapshotScheduleToOAPI(schedule instances.SnapshotSchedule) oapi.SnapshotSchedule {
-	retention := oapi.SnapshotScheduleRetention{}
-	if schedule.Retention.MaxCount > 0 {
-		retention.MaxCount = lo.ToPtr(schedule.Retention.MaxCount)
+	retention := oapi.SnapshotScheduleRetention{
+		MaxCount: lo.ToPtr(schedule.Retention.MaxCount),
 	}
 	if schedule.Retention.MaxAge > 0 {
 		maxAge := schedule.Retention.MaxAge.String()
