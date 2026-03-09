@@ -16,9 +16,16 @@ func TestRewriteSnapshotConfigForFork(t *testing.T) {
 	configPath := filepath.Join(tmp, "config.json")
 
 	orig := map[string]any{
-		"disks":  []any{map[string]any{"path": "/src/guests/a/overlay.raw"}},
+		"disks": []any{
+			map[string]any{"path": "/src-data/guests/a/overlay.raw"},
+			map[string]any{"path": "/src-data/images/docker.io/library/alpine/sha256abcdef/rootfs.erofs"},
+		},
 		"serial": map[string]any{"file": "/src/guests/a/logs/app.log"},
 		"vsock":  map[string]any{"cid": float64(100), "socket": "/src/guests/a/vsock.sock"},
+		"payload": map[string]any{
+			"kernel": "/src-data/system/kernel/k1/x86_64/vmlinux",
+			"initrd": "/src-data/system/initrd/x86_64/latest/initrd",
+		},
 		"metadata": map[string]any{
 			"note": "keep-/src/guests/a-as-substring",
 		},
@@ -34,11 +41,11 @@ func TestRewriteSnapshotConfigForFork(t *testing.T) {
 	require.NoError(t, os.WriteFile(configPath, data, 0644))
 
 	err = rewriteSnapshotConfigForFork(configPath, hypervisor.ForkPrepareRequest{
-		SourceDataDir: "/src/guests/a",
-		TargetDataDir: "/dst/guests/b",
+		SourceDataDir: "/src-data/guests/a",
+		TargetDataDir: "/dst-data/guests/b",
 		VsockCID:      200,
-		VsockSocket:   "/dst/guests/b/vsock.sock",
-		SerialLogPath: "/dst/guests/b/logs/app.log",
+		VsockSocket:   "/dst-data/guests/b/vsock.sock",
+		SerialLogPath: "/dst-data/guests/b/logs/app.log",
 		Network: &hypervisor.ForkNetworkConfig{
 			TAPDevice: "hype-new",
 			IP:        "10.0.0.20",
@@ -56,14 +63,20 @@ func TestRewriteSnapshotConfigForFork(t *testing.T) {
 
 	disks := updated["disks"].([]any)
 	disk0 := disks[0].(map[string]any)
-	assert.Equal(t, "/dst/guests/b/overlay.raw", disk0["path"])
+	assert.Equal(t, "/dst-data/guests/b/overlay.raw", disk0["path"])
+	disk1 := disks[1].(map[string]any)
+	assert.Equal(t, "/dst-data/images/docker.io/library/alpine/sha256abcdef/rootfs.erofs", disk1["path"])
 
 	serial := updated["serial"].(map[string]any)
-	assert.Equal(t, "/dst/guests/b/logs/app.log", serial["file"])
+	assert.Equal(t, "/dst-data/guests/b/logs/app.log", serial["file"])
 
 	vsock := updated["vsock"].(map[string]any)
 	assert.Equal(t, float64(100), vsock["cid"])
-	assert.Equal(t, "/dst/guests/b/vsock.sock", vsock["socket"])
+	assert.Equal(t, "/dst-data/guests/b/vsock.sock", vsock["socket"])
+
+	payload := updated["payload"].(map[string]any)
+	assert.Equal(t, "/dst-data/system/kernel/k1/x86_64/vmlinux", payload["kernel"])
+	assert.Equal(t, "/dst-data/system/initrd/x86_64/latest/initrd", payload["initrd"])
 
 	netCfg := updated["net"].([]any)[0].(map[string]any)
 	assert.Equal(t, "hype-new", netCfg["tap"])

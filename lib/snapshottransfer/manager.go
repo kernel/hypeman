@@ -640,7 +640,7 @@ func (m *manager) checkStandbyCompatibility(desc SnapshotDescriptor) error {
 	if c.PlatformOS == "" || c.PlatformArch == "" {
 		return fmt.Errorf("%w: standby transfer requires platform metadata", ErrInvalidRequest)
 	}
-	if c.PlatformOS != runtime.GOOS || c.PlatformArch != runtime.GOARCH {
+	if c.PlatformOS != runtime.GOOS || !isSamePlatformArch(c.PlatformArch, runtime.GOARCH) {
 		return fmt.Errorf("%w: standby snapshot platform mismatch source=%s/%s destination=%s/%s", ErrConflict, c.PlatformOS, c.PlatformArch, runtime.GOOS, runtime.GOARCH)
 	}
 	if !isHypervisorSupportedOnPlatform(c.Hypervisor, runtime.GOOS) {
@@ -649,7 +649,7 @@ func (m *manager) checkStandbyCompatibility(desc SnapshotDescriptor) error {
 	if c.KernelVersion == "" || c.HypervisorVersion == "" {
 		return fmt.Errorf("%w: standby transfer requires kernel and hypervisor version metadata", ErrInvalidRequest)
 	}
-	kernelPath := m.paths.SystemKernel(c.KernelVersion, c.PlatformArch)
+	kernelPath := m.paths.SystemKernel(c.KernelVersion, normalizeKernelArch(c.PlatformArch))
 	if _, err := os.Stat(kernelPath); err != nil {
 		return fmt.Errorf("%w: required kernel version %s not available on destination", ErrConflict, c.KernelVersion)
 	}
@@ -658,6 +658,32 @@ func (m *manager) checkStandbyCompatibility(desc SnapshotDescriptor) error {
 		return fmt.Errorf("%w: standby hypervisor version mismatch source=%s destination=%s", ErrConflict, c.HypervisorVersion, localVersion)
 	}
 	return nil
+}
+
+func isSamePlatformArch(a, b string) bool {
+	return normalizePlatformArch(a) == normalizePlatformArch(b)
+}
+
+func normalizePlatformArch(arch string) string {
+	switch arch {
+	case "amd64", "x86_64":
+		return "amd64"
+	case "arm64", "aarch64":
+		return "arm64"
+	default:
+		return arch
+	}
+}
+
+func normalizeKernelArch(platformArch string) string {
+	switch normalizePlatformArch(platformArch) {
+	case "amd64":
+		return "x86_64"
+	case "arm64":
+		return "aarch64"
+	default:
+		return platformArch
+	}
 }
 
 func isHypervisorSupportedOnPlatform(hv hypervisor.Type, goos string) bool {

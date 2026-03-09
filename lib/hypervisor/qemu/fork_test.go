@@ -81,3 +81,38 @@ func TestPrepareFork_RewritesSnapshotConfig(t *testing.T) {
 	assert.Equal(t, "02:00:00:dd:ee:ff", updated.Networks[0].MAC)
 	assert.Equal(t, "255.255.0.0", updated.Networks[0].Netmask)
 }
+
+func TestPrepareFork_RewritesSnapshotConfigDataRootPaths(t *testing.T) {
+	starter := NewStarter()
+	snapshotDir := t.TempDir()
+
+	sourceDir := "/src-data/guests/source-id"
+	targetDir := "/dst-data/guests/fork-id"
+	initial := hypervisor.VMConfig{
+		VCPUs:         2,
+		MemoryBytes:   2 * 1024 * 1024 * 1024,
+		SerialLogPath: sourceDir + "/logs/app.log",
+		VsockCID:      12345,
+		VsockSocket:   sourceDir + "/vsock/vsock.sock",
+		KernelPath:    "/src-data/system/kernel/k1/x86_64/vmlinux",
+		InitrdPath:    "/src-data/system/initrd/x86_64/latest/initrd",
+		Disks: []hypervisor.DiskConfig{
+			{Path: sourceDir + "/overlay.raw"},
+			{Path: "/src-data/images/docker.io/library/alpine/sha256abcdef/rootfs.erofs"},
+		},
+	}
+	require.NoError(t, saveVMConfig(snapshotDir, initial))
+
+	_, err := starter.PrepareFork(context.Background(), hypervisor.ForkPrepareRequest{
+		SnapshotConfigPath: filepath.Join(snapshotDir, "config.json"),
+		SourceDataDir:      sourceDir,
+		TargetDataDir:      targetDir,
+	})
+	require.NoError(t, err)
+
+	updated, err := loadVMConfig(snapshotDir)
+	require.NoError(t, err)
+	assert.Equal(t, "/dst-data/system/kernel/k1/x86_64/vmlinux", updated.KernelPath)
+	assert.Equal(t, "/dst-data/system/initrd/x86_64/latest/initrd", updated.InitrdPath)
+	assert.Equal(t, "/dst-data/images/docker.io/library/alpine/sha256abcdef/rootfs.erofs", updated.Disks[1].Path)
+}

@@ -154,7 +154,7 @@ func TestPreflightImportStandbyCompatibilityPass(t *testing.T) {
 		hv = hypervisor.TypeVZ
 	}
 	kernelVersion := "test-kernel"
-	kernelPath := p.SystemKernel(kernelVersion, runtime.GOARCH)
+	kernelPath := p.SystemKernel(kernelVersion, normalizeKernelArch(runtime.GOARCH))
 	if err := os.MkdirAll(filepath.Dir(kernelPath), 0o755); err != nil {
 		t.Fatalf("mkdir kernel dir: %v", err)
 	}
@@ -181,6 +181,50 @@ func TestPreflightImportStandbyCompatibilityPass(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("expected standby preflight to pass, got %v", err)
+	}
+}
+
+func TestPreflightImportStandbyCompatibilityPassWithKernelArchAlias(t *testing.T) {
+	p := paths.New(t.TempDir())
+	mgr := NewManager(p, 1)
+
+	hv := hypervisor.TypeCloudHypervisor
+	if runtime.GOOS == "darwin" {
+		hv = hypervisor.TypeVZ
+	}
+	kernelVersion := "test-kernel-alias"
+	kernelPath := p.SystemKernel(kernelVersion, normalizeKernelArch(runtime.GOARCH))
+	if err := os.MkdirAll(filepath.Dir(kernelPath), 0o755); err != nil {
+		t.Fatalf("mkdir kernel dir: %v", err)
+	}
+	if err := os.WriteFile(kernelPath, []byte("kernel"), 0o644); err != nil {
+		t.Fatalf("write kernel file: %v", err)
+	}
+
+	platformArch := "x86_64"
+	if runtime.GOARCH == "arm64" {
+		platformArch = "aarch64"
+	}
+
+	err := mgr.PreflightImport(context.Background(), PreflightRequest{
+		Snapshot: SnapshotDescriptor{
+			SourceSnapshotID:   "src-standby-pass-alias",
+			SourceInstanceID:   "inst-1",
+			SourceInstanceName: "inst-1",
+			Kind:               snapshotstore.SnapshotKindStandby,
+			SourceHypervisor:   hv,
+			CreatedAt:          time.Now(),
+			Compat: SourceSnapshotCompat{
+				Hypervisor:        hv,
+				PlatformOS:        runtime.GOOS,
+				PlatformArch:      platformArch,
+				KernelVersion:     kernelVersion,
+				HypervisorVersion: "h1",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected standby preflight with arch alias to pass, got %v", err)
 	}
 }
 

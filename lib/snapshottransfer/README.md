@@ -45,6 +45,14 @@ It is async, resumable, and preserves sparse guest files.
 - Destination rejects conflicting snapshot/session state.
 - Source snapshot identity is preserved for transfer intent; conflicts fail fast instead of auto-overwrite.
 
+## Base image identity and dedupe
+
+- You are correct: `Standby` restore depends on immutable base artifacts outside the copied snapshot guest tree.
+- The transferred snapshot payload contains memory/device/overlay state, but the destination still needs the same immutable base image digest and kernel assets referenced by standby restore metadata.
+- v1 contract: prewarm destination with the same image digest(s) and kernel version(s) before cross-server standby restore.
+- This is intentionally deduplicated: image storage is content-addressed by digest under `images/<repository>/<digest>/...`, so many snapshots can reuse one extracted base image without duplicate storage.
+- Operationally, pull/import each required digest once on destination, then transfer any number of snapshots that reference it.
+
 ## Cancellation behavior
 
 - Source cancel marks the transfer cancelled and stops worker progress.
@@ -62,3 +70,14 @@ It is async, resumable, and preserves sparse guest files.
 
 - Source transfer workers are bounded by `snapshot_transfer.max_concurrent` (default `2`).
 - Jobs beyond that limit queue until workers are available.
+
+## Cross-Server Standby Validation (2026-03-09)
+
+- Source host: `deft-kernel-dev` (`http://127.0.0.1:18080`), destination host: `sjmiller609@184.107.66.129` (`http://184.107.66.129:18080`).
+- Method: ran `/tmp/run_snapshot_transfer_matrix.sh` over public internet with push transfer + destination fork/restore to `Running` for each hypervisor except `vz`.
+- Run id: `xfer20260309003904`.
+- Results:
+- `cloud-hypervisor`: PASS.
+- `qemu`: PASS.
+- `firecracker`: FAIL on destination restore with Firecracker snapshot load error `Set clock error: Invalid argument (os error 22)` (from destination `hypeman` logs).
+- Cleanup: test script deletes created source/destination instances and snapshots after each case.
