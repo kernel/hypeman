@@ -4,6 +4,7 @@ package network
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"net"
@@ -11,6 +12,7 @@ import (
 	"os/exec"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/vishvananda/netlink"
@@ -88,7 +90,7 @@ func (m *manager) createBridge(ctx context.Context, name, gateway, subnet string
 	existing, err := netlink.LinkByName(name)
 	if err == nil {
 		// Bridge exists - verify it has the expected gateway IP
-		addrs, err := netlink.AddrList(existing, netlink.FAMILY_V4)
+		addrs, err := addrListWithRetry(existing, netlink.FAMILY_V4)
 		if err != nil {
 			return fmt.Errorf("list bridge addresses: %w", err)
 		}
@@ -839,7 +841,7 @@ func (m *manager) queryNetworkState(bridgeName string) (*Network, error) {
 	}
 
 	// Get IP addresses
-	addrs, err := netlink.AddrList(link, netlink.FAMILY_V4)
+	addrs, err := addrListWithRetry(link, netlink.FAMILY_V4)
 	if err != nil {
 		return nil, fmt.Errorf("list addresses: %w", err)
 	}
@@ -860,6 +862,31 @@ func (m *manager) queryNetworkState(bridgeName string) (*Network, error) {
 		Gateway: gateway,
 		Subnet:  subnet,
 	}, nil
+}
+
+func addrListWithRetry(link netlink.Link, family int) ([]netlink.Addr, error) {
+	const attempts = 5
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		addrs, err := netlink.AddrList(link, family)
+		if err == nil {
+			return addrs, nil
+		}
+		lastErr = err
+		if !isRetryableNetlinkDumpError(err) || i == attempts-1 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return nil, lastErr
+}
+
+func isRetryableNetlinkDumpError(err error) bool {
+	// netlink can surface interrupted dump reads as this generic message.
+	if strings.Contains(err.Error(), "results may be incomplete or inconsistent") {
+		return true
+	}
+	return errors.Is(err, syscall.EINTR) || errors.Is(err, unix.EINTR)
 }
 
 // CleanupOrphanedTAPs removes TAP devices that aren't used by any running instance.
