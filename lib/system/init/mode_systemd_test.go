@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"al.essio.dev/pkg/shellescape"
@@ -174,4 +176,17 @@ func TestShellescape(t *testing.T) {
 			assert.Equal(t, tc.expected, result)
 		})
 	}
+}
+
+func TestInjectAgentServiceOmitsNetworkTargetDependency(t *testing.T) {
+	t.Parallel()
+
+	newroot := t.TempDir()
+	err := injectAgentService(newroot, map[string]string{})
+	assert.NoError(t, err)
+
+	servicePath := filepath.Join(newroot, "etc/systemd/system/hypeman-agent.service")
+	data, err := os.ReadFile(servicePath)
+	assert.NoError(t, err)
+	assert.NotContains(t, string(data), "network.target")
 }

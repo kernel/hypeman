@@ -13,9 +13,21 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sync"
 )
 
 func main() {
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case headersWorkerArg:
+			runKernelHeadersWorker(NewLogger(), initrdKernelHeadersPaths)
+			return
+		case headersWorkerGuestArg:
+			runKernelHeadersWorker(NewLogger(), guestKernelHeadersPaths)
+			return
+		}
+	}
+
 	log := NewLogger()
 	log.Info("hypeman-init:boot", "init starting")
 
@@ -38,21 +50,31 @@ func main() {
 		dropToShell()
 	}
 
-	// Phase 4: Configure network (shared between modes)
+	// Phase 4/5: Run independent setup tasks in parallel.
+	// Keep strict dependencies around mount -> overlay -> config and
+	// bind-mount barrier before mode handoff.
+	var setupWG sync.WaitGroup
 	if cfg.NetworkEnabled {
-		if err := configureNetwork(log, cfg); err != nil {
-			log.Error("hypeman-init:network", "failed to configure network", err)
-			// Continue anyway - network isn't always required
-		}
+		setupWG.Add(1)
+		go func() {
+			defer setupWG.Done()
+			if err := configureNetwork(log, cfg); err != nil {
+				log.Error("hypeman-init:network", "failed to configure network", err)
+				// Continue anyway - network isn't always required
+			}
+		}()
 	}
-
-	// Phase 5: Mount volumes
 	if len(cfg.VolumeMounts) > 0 {
-		if err := mountVolumes(log, cfg); err != nil {
-			log.Error("hypeman-init:volumes", "failed to mount volumes", err)
-			// Continue anyway
-		}
+		setupWG.Add(1)
+		go func() {
+			defer setupWG.Done()
+			if err := mountVolumes(log, cfg); err != nil {
+				log.Error("hypeman-init:volumes", "failed to mount volumes", err)
+				// Continue anyway
+			}
+		}()
 	}
+	setupWG.Wait()
 
 	// Phase 6: Bind mount filesystems to new root
 	if err := bindMountsToNewRoot(log); err != nil {
@@ -66,14 +88,12 @@ func main() {
 		// Continue anyway - exec will still work, just no remote access
 	}
 
-	// Phase 8: Setup kernel headers for DKMS (can be skipped via config)
+	// Phase 8: Start async kernel headers setup for exec mode.
+	// In systemd mode, service injection is handled during runSystemdMode.
 	if cfg.SkipKernelHeaders {
 		log.Info("hypeman-init:headers", "skipping kernel headers setup (skip_kernel_headers=true)")
-	} else {
-		if err := setupKernelHeaders(log); err != nil {
-			log.Error("hypeman-init:headers", "failed to setup kernel headers", err)
-			// Continue anyway - only needed for DKMS module building
-		}
+	} else if cfg.InitMode == "exec" {
+		startKernelHeadersWorkerAsync(log)
 	}
 
 	// Phase 9: Mode-specific execution

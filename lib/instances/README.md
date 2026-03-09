@@ -17,7 +17,7 @@ Manages VM instance lifecycle across multiple hypervisors (Cloud Hypervisor, QEM
 - `Stopped` - No VMM, no snapshot
 - `Created` - VMM created but not booted (CH native)
 - `Initializing` - VM is running while guest init is still in progress
-- `Running` - Guest program has started and instance is ready
+- `Running` - Guest program start boundary reached and guest-agent readiness observed (unless `skip_guest_agent=true`)
 - `Paused` - VM paused (CH native)
 - `Shutdown` - VM shutdown, VMM exists (CH native)
 - `Standby` - No VMM, snapshot exists (can restore)
@@ -68,9 +68,10 @@ Stopped → Created → Initializing → Running
 1. Start VMM process
 2. Create VM config
 3. Boot VM
-4. Wait for guest-agent readiness gate (exec mode, unless skipped)
+4. Wait for guest-agent readiness gate (event-driven, exec mode, unless skipped)
 5. Guest program start marker observed
-6. Expand memory (if hotplug configured)
+6. Kernel headers setup continues asynchronously (does not gate `Running`)
+7. Expand memory (if hotplug configured)
 ```
 
 **StandbyInstance:**

@@ -135,10 +135,12 @@ func TestRegistryPushAndCreateInstance(t *testing.T) {
 	// Create instance with pushed image
 	t.Log("Creating instance with pushed image...")
 	networkEnabled := false
+	cmd := []string{"sleep", "infinity"}
 	resp, err := svc.CreateInstance(ctx(), oapi.CreateInstanceRequestObject{
 		Body: &oapi.CreateInstanceRequest{
 			Name:  "test-pushed-image",
 			Image: imageName,
+			Cmd:   &cmd,
 			Network: &struct {
 				BandwidthDownload *string `json:"bandwidth_download,omitempty"`
 				BandwidthUpload   *string `json:"bandwidth_upload,omitempty"`

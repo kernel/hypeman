@@ -1,8 +1,8 @@
 package main
 
 import (
+	"errors"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -169,21 +169,45 @@ func TestFormatProgramStartSentinel(t *testing.T) {
 func TestWaitForGuestAgentReady(t *testing.T) {
 	t.Parallel()
 
-	readyFile := filepath.Join(t.TempDir(), "ready")
+	readyReader, readyWriter, err := os.Pipe()
+	require.NoError(t, err)
+	defer readyReader.Close()
 	go func() {
 		time.Sleep(50 * time.Millisecond)
-		_ = os.WriteFile(readyFile, []byte("ok"), 0644)
+		_, _ = readyWriter.Write([]byte{1})
+		_ = readyWriter.Close()
 	}()
 
-	err := waitForGuestAgentReady(readyFile, time.Second, nil)
+	err = waitForGuestAgentReady(readyReader, time.Second, nil)
 	require.NoError(t, err)
 }
 
 func TestWaitForGuestAgentReadyTimeout(t *testing.T) {
 	t.Parallel()
 
-	readyFile := filepath.Join(t.TempDir(), "missing")
-	err := waitForGuestAgentReady(readyFile, 100*time.Millisecond, nil)
+	readyReader, readyWriter, err := os.Pipe()
+	require.NoError(t, err)
+
+	err = waitForGuestAgentReady(readyReader, 100*time.Millisecond, nil)
 	require.Error(t, err)
 	assert.True(t, strings.Contains(err.Error(), "timed out"), "unexpected error: %v", err)
+
+	_ = readyWriter.Close()
+	_ = readyReader.Close()
+}
+
+func TestWaitForGuestAgentReadyProcessExit(t *testing.T) {
+	t.Parallel()
+
+	readyReader, readyWriter, err := os.Pipe()
+	require.NoError(t, err)
+	defer readyReader.Close()
+	defer readyWriter.Close()
+
+	agentExited := make(chan error, 1)
+	agentExited <- errors.New("exit status 1")
+
+	err = waitForGuestAgentReady(readyReader, time.Second, agentExited)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exited before readiness signal")
 }

@@ -83,6 +83,8 @@ Hypeman provides a single default network that all instances can optionally conn
 - **Standby VMs**: Read `guests/{id}/snapshots/snapshot-latest/config.json` from snapshot
 - **Stopped VMs**: No network allocation
 
+`Initializing` is treated as fully VMM-active for networking; startup work such as async kernel-headers setup does not change network allocation behavior.
+
 **Metadata storage:**
 ```
 /var/lib/hypeman/guests/{instance-id}/
