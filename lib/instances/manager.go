@@ -301,16 +301,25 @@ func (m *manager) ListInstances(ctx context.Context, filter *ListInstancesFilter
 	if err != nil {
 		return nil, err
 	}
-	if filter == nil {
-		return all, nil
+	result := all
+	if filter != nil {
+		filtered := make([]Instance, 0, len(all))
+		for i := range all {
+			if filter.Matches(&all[i]) {
+				filtered = append(filtered, all[i])
+			}
+		}
+		result = filtered
 	}
-	filtered := make([]Instance, 0, len(all))
-	for i := range all {
-		if filter.Matches(&all[i]) {
-			filtered = append(filtered, all[i])
+
+	for i := range result {
+		inst := result[i]
+		if (inst.State == StateRunning || inst.State == StateInitializing) && inst.BootMarkersHydrated {
+			m.maybePersistBootMarkers(ctx, inst.Id)
 		}
 	}
-	return filtered, nil
+
+	return result, nil
 }
 
 // GetInstance returns an instance by ID, name, or ID prefix.

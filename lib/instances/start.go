@@ -134,6 +134,9 @@ func (m *manager) startInstance(
 	}
 
 	// 6. Start hypervisor and boot VM (reuses logic from create)
+	bootStart := time.Now().UTC()
+	stored.StartedAt = &bootStart
+
 	log.InfoContext(ctx, "starting hypervisor and booting VM", "instance_id", id)
 	if err := m.startAndBootVM(ctx, stored, imageInfo, netConfig); err != nil {
 		log.ErrorContext(ctx, "failed to start and boot VM", "instance_id", id, "error", err)
@@ -144,9 +147,6 @@ func (m *manager) startInstance(
 	cu.Release()
 
 	// 7. Update metadata (set PID, StartedAt)
-	now := time.Now()
-	stored.StartedAt = &now
-
 	meta = &metadata{StoredMetadata: *stored}
 	if err := m.saveMetadata(meta); err != nil {
 		// VM is running but metadata failed - log but don't fail

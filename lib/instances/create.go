@@ -408,6 +408,11 @@ func (m *manager) createInstance(
 		return nil, fmt.Errorf("create config disk: %w", err)
 	}
 
+	// 17. Record boot start time before launching the VM so marker hydration
+	// can safely ignore stale sentinels from prior runs.
+	bootStart := time.Now().UTC()
+	stored.StartedAt = &bootStart
+
 	// 17. Save metadata
 	log.DebugContext(ctx, "saving instance metadata", "instance_id", id)
 	meta := &metadata{StoredMetadata: *stored}
@@ -423,10 +428,7 @@ func (m *manager) createInstance(
 		return nil, err
 	}
 
-	// 19. Update timestamp after VM is running
-	now := time.Now()
-	stored.StartedAt = &now
-
+	// 19. Persist runtime metadata updates after VM boot.
 	meta = &metadata{StoredMetadata: *stored}
 	if err := m.saveMetadata(meta); err != nil {
 		// VM is running but metadata failed - log but don't fail

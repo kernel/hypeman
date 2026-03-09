@@ -14,21 +14,22 @@ import (
 
 // CreateAllocation allocates IP/MAC/TAP for instance on the default network
 func (m *manager) CreateAllocation(ctx context.Context, req AllocateRequest) (*NetworkConfig, error) {
+	log := logger.FromContext(ctx)
+
+	// Resolve bridge/default network before taking allocation lock so
+	// self-heal retries don't block other allocation/release operations.
+	network, err := m.getOrInitDefaultNetwork(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	// Acquire lock to prevent concurrent allocations from:
 	// 1. Picking the same IP address
 	// 2. Creating duplicate instance names
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	log := logger.FromContext(ctx)
-
-	// 1. Get default network (self-heals if kernel bridge state was removed/racing).
-	network, err := m.getOrInitDefaultNetwork(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	// 2. Check name uniqueness (exclude current instance to allow restarts)
+	// 1. Check name uniqueness (exclude current instance to allow restarts)
 	exists, err := m.NameExists(ctx, req.InstanceName, req.InstanceID)
 	if err != nil {
 		return nil, fmt.Errorf("check name exists: %w", err)
@@ -38,7 +39,7 @@ func (m *manager) CreateAllocation(ctx context.Context, req AllocateRequest) (*N
 			ErrNameExists, req.InstanceName, network.Name)
 	}
 
-	// 3. Allocate random available IP
+	// 2. Allocate random available IP
 	// Random selection reduces predictability and helps distribute IPs across the subnet.
 	// This is especially useful for large /16 networks and reduces conflicts when
 	// moving standby VMs across hosts.
@@ -47,16 +48,16 @@ func (m *manager) CreateAllocation(ctx context.Context, req AllocateRequest) (*N
 		return nil, fmt.Errorf("allocate IP: %w", err)
 	}
 
-	// 4. Generate MAC (02:00:00:... format - locally administered)
+	// 3. Generate MAC (02:00:00:... format - locally administered)
 	mac, err := generateMAC()
 	if err != nil {
 		return nil, fmt.Errorf("generate MAC: %w", err)
 	}
 
-	// 5. Generate TAP name (tap-{first8chars-of-id})
+	// 4. Generate TAP name (tap-{first8chars-of-id})
 	tap := GenerateTAPName(req.InstanceID)
 
-	// 6. Create TAP device with bidirectional rate limiting
+	// 5. Create TAP device with bidirectional rate limiting
 	if err := m.createTAPDevice(tap, network.Bridge, network.Isolated, req.DownloadBps, req.UploadBps, req.UploadCeilBps); err != nil {
 		return nil, fmt.Errorf("create TAP device: %w", err)
 	}
@@ -72,11 +73,11 @@ func (m *manager) CreateAllocation(ctx context.Context, req AllocateRequest) (*N
 		"download_bps", req.DownloadBps,
 		"upload_bps", req.UploadBps)
 
-	// 7. Calculate netmask from subnet
+	// 6. Calculate netmask from subnet
 	_, ipNet, _ := net.ParseCIDR(network.Subnet)
 	netmask := fmt.Sprintf("%d.%d.%d.%d", ipNet.Mask[0], ipNet.Mask[1], ipNet.Mask[2], ipNet.Mask[3])
 
-	// 8. Return config (will be used in CH VmConfig)
+	// 7. Return config (will be used in CH VmConfig)
 	return &NetworkConfig{
 		IP:        ip,
 		MAC:       mac,
@@ -166,7 +167,9 @@ func (m *manager) getOrInitDefaultNetwork(ctx context.Context) (*Network, error)
 		return network, nil
 	}
 
-	if initErr := m.Initialize(ctx, nil); initErr != nil {
+	// Self-heal should never delete TAPs for active instances. We pass an empty
+	// preserve set so CleanupOrphanedTAPs is skipped in Initialize.
+	if initErr := m.Initialize(ctx, []string{}); initErr != nil {
 		return nil, fmt.Errorf("initialize network manager: %w", initErr)
 	}
 

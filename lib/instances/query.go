@@ -121,7 +121,7 @@ func (m *manager) hydrateBootMarkersFromLogs(stored *StoredMetadata) bool {
 		return false
 	}
 
-	programStartedAt, guestAgentReadyAt := m.parseBootMarkers(stored.Id, needProgram, needAgent)
+	programStartedAt, guestAgentReadyAt := m.parseBootMarkers(stored.Id, needProgram, needAgent, stored.StartedAt)
 	hydrated := false
 	if needProgram && programStartedAt != nil {
 		stored.ProgramStartedAt = programStartedAt
@@ -141,7 +141,8 @@ func (m *manager) hydrateBootMarkersFromLogs(stored *StoredMetadata) bool {
 
 // parseBootMarkers scans app logs (including rotated files) and returns the
 // latest observed program-start and guest-agent-ready marker timestamps.
-func (m *manager) parseBootMarkers(id string, needProgram bool, needAgent bool) (*time.Time, *time.Time) {
+// When startedAt is provided, markers older than this boot start are ignored.
+func (m *manager) parseBootMarkers(id string, needProgram bool, needAgent bool, startedAt *time.Time) (*time.Time, *time.Time) {
 	logPaths := m.appLogPathsForMarkerScan(id)
 
 	var programStartedAt *time.Time
@@ -156,10 +157,14 @@ func (m *manager) parseBootMarkers(id string, needProgram bool, needAgent bool) 
 		for scanner.Scan() {
 			line := scanner.Text()
 			if ts, ok := parseProgramStartSentinelLine(line); ok {
-				programStartedAt = &ts
+				if markerAtOrAfterBootStart(ts, startedAt) {
+					programStartedAt = &ts
+				}
 			}
 			if ts, ok := parseAgentReadySentinelLine(line); ok {
-				guestAgentReadyAt = &ts
+				if markerAtOrAfterBootStart(ts, startedAt) {
+					guestAgentReadyAt = &ts
+				}
 			}
 			if (!needProgram || programStartedAt != nil) && (!needAgent || guestAgentReadyAt != nil) {
 				_ = f.Close()
@@ -170,6 +175,13 @@ func (m *manager) parseBootMarkers(id string, needProgram bool, needAgent bool) 
 	}
 
 	return programStartedAt, guestAgentReadyAt
+}
+
+func markerAtOrAfterBootStart(marker time.Time, startedAt *time.Time) bool {
+	if startedAt == nil {
+		return true
+	}
+	return !marker.Before(startedAt.UTC())
 }
 
 func (m *manager) shouldScanBootMarkers(id string) bool {
@@ -369,7 +381,7 @@ func (m *manager) persistBootMarkers(ctx context.Context, id string) {
 		return
 	}
 
-	programStartedAt, guestAgentReadyAt := m.parseBootMarkers(id, needProgram, needAgent)
+	programStartedAt, guestAgentReadyAt := m.parseBootMarkers(id, needProgram, needAgent, meta.StartedAt)
 	updated := false
 	if needProgram && programStartedAt != nil {
 		meta.ProgramStartedAt = programStartedAt

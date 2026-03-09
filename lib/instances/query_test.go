@@ -212,3 +212,35 @@ func TestHydrateBootMarkersFromLogs_RescanThrottle(t *testing.T) {
 	require.NotNil(t, meta.ProgramStartedAt)
 	require.NotNil(t, meta.GuestAgentReadyAt)
 }
+
+func TestParseBootMarkers_IgnoresStaleMarkersBeforeBootStart(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	m := &manager{
+		paths: paths.New(tmpDir),
+	}
+
+	id := "boot-markers-instance"
+	logPath := m.paths.InstanceAppLog(id)
+	require.NoError(t, os.MkdirAll(filepath.Dir(logPath), 0o755))
+
+	bootStart := time.Date(2026, 3, 9, 4, 0, 0, 0, time.UTC)
+	staleProgram := bootStart.Add(-30 * time.Second)
+	staleAgent := bootStart.Add(-20 * time.Second)
+	freshProgram := bootStart.Add(2 * time.Second)
+	freshAgent := bootStart.Add(3 * time.Second)
+
+	logData := "" +
+		"HYPEMAN-PROGRAM-START ts=" + staleProgram.Format(time.RFC3339Nano) + " mode=exec\n" +
+		"HYPEMAN-AGENT-READY ts=" + staleAgent.Format(time.RFC3339Nano) + "\n" +
+		"HYPEMAN-PROGRAM-START ts=" + freshProgram.Format(time.RFC3339Nano) + " mode=exec\n" +
+		"HYPEMAN-AGENT-READY ts=" + freshAgent.Format(time.RFC3339Nano) + "\n"
+	require.NoError(t, os.WriteFile(logPath, []byte(logData), 0o644))
+
+	programStartedAt, guestAgentReadyAt := m.parseBootMarkers(id, true, true, &bootStart)
+	require.NotNil(t, programStartedAt)
+	require.NotNil(t, guestAgentReadyAt)
+	assert.Equal(t, freshProgram.Format(time.RFC3339Nano), programStartedAt.UTC().Format(time.RFC3339Nano))
+	assert.Equal(t, freshAgent.Format(time.RFC3339Nano), guestAgentReadyAt.UTC().Format(time.RFC3339Nano))
+}
