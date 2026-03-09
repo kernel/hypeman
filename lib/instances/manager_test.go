@@ -268,12 +268,8 @@ func TestBasicEndToEnd(t *testing.T) {
 	assert.Empty(t, vol.Attachments, "Volume should not be attached yet")
 
 	// Initialize network for ingress testing
-	networkManager := network.NewManager(p, &config.Config{
-		DataDir: tmpDir,
-		Network: newParallelTestNetworkConfig(t),
-	}, nil)
 	t.Log("Initializing network...")
-	err = networkManager.Initialize(ctx, nil)
+	err = manager.networkManager.Initialize(ctx, nil)
 	require.NoError(t, err)
 	t.Log("Network initialized")
 
@@ -1088,12 +1084,8 @@ func TestEntrypointEnvVars(t *testing.T) {
 	t.Log("System files ready")
 
 	// Initialize network (needed for loopback interface in guest)
-	networkManager := network.NewManager(p, &config.Config{
-		DataDir: tmpDir,
-		Network: newParallelTestNetworkConfig(t),
-	}, nil)
 	t.Log("Initializing network...")
-	err = networkManager.Initialize(ctx, nil)
+	err = mgr.networkManager.Initialize(ctx, nil)
 	require.NoError(t, err)
 	t.Log("Network initialized")
 
