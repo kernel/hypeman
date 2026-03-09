@@ -133,6 +133,10 @@ func (m *manager) startInstance(
 		return nil, fmt.Errorf("create config disk: %w", err)
 	}
 
+	if err := m.archiveAppLogForBoot(id); err != nil {
+		log.WarnContext(ctx, "failed to archive app log before start", "instance_id", id, "error", err)
+	}
+
 	// 6. Start hypervisor and boot VM (reuses logic from create)
 	bootStart := time.Now().UTC()
 	stored.StartedAt = &bootStart

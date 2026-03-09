@@ -141,13 +141,17 @@ func (m *manager) hydrateBootMarkersFromLogs(stored *StoredMetadata) bool {
 
 // parseBootMarkers scans app logs (including rotated files) and returns the
 // latest observed program-start and guest-agent-ready marker timestamps.
-// When startedAt is provided, markers older than this boot start are ignored.
+// When startedAt is provided, files last modified before this boot start are ignored.
 func (m *manager) parseBootMarkers(id string, needProgram bool, needAgent bool, startedAt *time.Time) (*time.Time, *time.Time) {
 	logPaths := m.appLogPathsForMarkerScan(id)
 
 	var programStartedAt *time.Time
 	var guestAgentReadyAt *time.Time
 	for _, logPath := range logPaths {
+		if !fileMayContainCurrentBootMarkers(logPath, startedAt) {
+			continue
+		}
+
 		f, err := os.Open(logPath)
 		if err != nil {
 			continue
@@ -157,14 +161,10 @@ func (m *manager) parseBootMarkers(id string, needProgram bool, needAgent bool, 
 		for scanner.Scan() {
 			line := scanner.Text()
 			if ts, ok := parseProgramStartSentinelLine(line); ok {
-				if markerAtOrAfterBootStart(ts, startedAt) {
-					programStartedAt = &ts
-				}
+				programStartedAt = &ts
 			}
 			if ts, ok := parseAgentReadySentinelLine(line); ok {
-				if markerAtOrAfterBootStart(ts, startedAt) {
-					guestAgentReadyAt = &ts
-				}
+				guestAgentReadyAt = &ts
 			}
 			if (!needProgram || programStartedAt != nil) && (!needAgent || guestAgentReadyAt != nil) {
 				_ = f.Close()
@@ -177,11 +177,15 @@ func (m *manager) parseBootMarkers(id string, needProgram bool, needAgent bool, 
 	return programStartedAt, guestAgentReadyAt
 }
 
-func markerAtOrAfterBootStart(marker time.Time, startedAt *time.Time) bool {
+func fileMayContainCurrentBootMarkers(path string, startedAt *time.Time) bool {
 	if startedAt == nil {
 		return true
 	}
-	return !marker.Before(startedAt.UTC())
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return !info.ModTime().UTC().Before(startedAt.UTC())
 }
 
 func (m *manager) shouldScanBootMarkers(id string) bool {

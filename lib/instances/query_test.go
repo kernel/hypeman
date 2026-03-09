@@ -223,20 +223,26 @@ func TestParseBootMarkers_IgnoresStaleMarkersBeforeBootStart(t *testing.T) {
 
 	id := "boot-markers-instance"
 	logPath := m.paths.InstanceAppLog(id)
+	rotatedLogPath := logPath + ".1"
 	require.NoError(t, os.MkdirAll(filepath.Dir(logPath), 0o755))
 
 	bootStart := time.Date(2026, 3, 9, 4, 0, 0, 0, time.UTC)
-	staleProgram := bootStart.Add(-30 * time.Second)
-	staleAgent := bootStart.Add(-20 * time.Second)
+	staleProgram := bootStart.Add(-2 * time.Minute)
+	staleAgent := bootStart.Add(-90 * time.Second)
 	freshProgram := bootStart.Add(2 * time.Second)
 	freshAgent := bootStart.Add(3 * time.Second)
 
-	logData := "" +
+	staleData := "" +
 		"HYPEMAN-PROGRAM-START ts=" + staleProgram.Format(time.RFC3339Nano) + " mode=exec\n" +
-		"HYPEMAN-AGENT-READY ts=" + staleAgent.Format(time.RFC3339Nano) + "\n" +
+		"HYPEMAN-AGENT-READY ts=" + staleAgent.Format(time.RFC3339Nano) + "\n"
+	require.NoError(t, os.WriteFile(rotatedLogPath, []byte(staleData), 0o644))
+	require.NoError(t, os.Chtimes(rotatedLogPath, bootStart.Add(-time.Minute), bootStart.Add(-time.Minute)))
+
+	freshData := "" +
 		"HYPEMAN-PROGRAM-START ts=" + freshProgram.Format(time.RFC3339Nano) + " mode=exec\n" +
 		"HYPEMAN-AGENT-READY ts=" + freshAgent.Format(time.RFC3339Nano) + "\n"
-	require.NoError(t, os.WriteFile(logPath, []byte(logData), 0o644))
+	require.NoError(t, os.WriteFile(logPath, []byte(freshData), 0o644))
+	require.NoError(t, os.Chtimes(logPath, bootStart.Add(time.Second), bootStart.Add(time.Second)))
 
 	programStartedAt, guestAgentReadyAt := m.parseBootMarkers(id, true, true, &bootStart)
 	require.NotNil(t, programStartedAt)

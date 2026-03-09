@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"time"
 
 	"github.com/kernel/hypeman/lib/logger"
 )
@@ -162,5 +163,24 @@ func rotateLogIfNeeded(path string, maxBytes int64, maxFiles int) error {
 		return fmt.Errorf("truncate log: %w", err)
 	}
 
+	return nil
+}
+
+// archiveAppLogForBoot moves the current serial console log out of the active
+// path before a new boot starts, preventing stale boot markers from prior runs
+// from affecting current state derivation.
+func (m *manager) archiveAppLogForBoot(id string) error {
+	logPath := m.paths.InstanceAppLog(id)
+	if _, err := os.Stat(logPath); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+
+	archivedPath := fmt.Sprintf("%s.prev.%d", logPath, time.Now().UTC().UnixNano())
+	if err := os.Rename(logPath, archivedPath); err != nil {
+		return err
+	}
 	return nil
 }
