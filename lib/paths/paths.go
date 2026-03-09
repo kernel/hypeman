@@ -210,6 +210,26 @@ func (p *Paths) GuestsDir() string {
 	return filepath.Join(p.dataDir, "guests")
 }
 
+// SnapshotStoreDir returns the root directory for centrally managed snapshots.
+func (p *Paths) SnapshotStoreDir() string {
+	return filepath.Join(p.dataDir, "snapshots")
+}
+
+// SnapshotDir returns the directory for a specific snapshot.
+func (p *Paths) SnapshotDir(snapshotID string) string {
+	return filepath.Join(p.SnapshotStoreDir(), snapshotID)
+}
+
+// SnapshotMetadata returns the path to snapshot metadata.json.
+func (p *Paths) SnapshotMetadata(snapshotID string) string {
+	return filepath.Join(p.SnapshotDir(snapshotID), "snapshot.json")
+}
+
+// SnapshotGuestDir returns the path to the copied guest payload for a snapshot.
+func (p *Paths) SnapshotGuestDir(snapshotID string) string {
+	return filepath.Join(p.SnapshotDir(snapshotID), "guest")
+}
+
 // Device path methods
 
 // DevicesDir returns the root devices directory.

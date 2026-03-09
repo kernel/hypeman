@@ -1,6 +1,10 @@
 package images
 
-import "time"
+import (
+	"time"
+
+	"github.com/kernel/hypeman/lib/tags"
+)
 
 // Image represents a container image converted to bootable disk
 type Image struct {
@@ -13,6 +17,7 @@ type Image struct {
 	Entrypoint    []string
 	Cmd           []string
 	Env           map[string]string
+	Tags          tags.Tags
 	WorkingDir    string
 	CreatedAt     time.Time
 }
@@ -20,4 +25,5 @@ type Image struct {
 // CreateImageRequest represents a request to create an image
 type CreateImageRequest struct {
 	Name string
+	Tags tags.Tags
 }

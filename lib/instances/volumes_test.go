@@ -40,6 +40,7 @@ func execWithRetry(ctx context.Context, inst *Instance, command []string) (strin
 // 3. Attached read-only to multiple instances simultaneously
 // 4. Data persists and is readable from all instances
 func TestVolumeMultiAttachReadOnly(t *testing.T) {
+	t.Parallel()
 	// Require KVM
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Skip("/dev/kvm not available, skipping on this platform")
@@ -59,12 +60,12 @@ func TestVolumeMultiAttachReadOnly(t *testing.T) {
 
 	t.Log("Pulling alpine image...")
 	_, err = imageManager.CreateImage(ctx, images.CreateImageRequest{
-		Name: "docker.io/library/alpine:latest",
+		Name: integrationTestImageRef(t, "docker.io/library/alpine:latest"),
 	})
 	require.NoError(t, err)
 
 	for i := 0; i < 60; i++ {
-		img, err := imageManager.GetImage(ctx, "docker.io/library/alpine:latest")
+		img, err := imageManager.GetImage(ctx, integrationTestImageRef(t, "docker.io/library/alpine:latest"))
 		if err == nil && img.Status == images.StatusReady {
 			break
 		}
@@ -92,7 +93,7 @@ func TestVolumeMultiAttachReadOnly(t *testing.T) {
 	t.Log("Phase 1: Creating writer instance with read-write volume...")
 	writerInst, err := manager.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "writer",
-		Image:          "docker.io/library/alpine:latest",
+		Image:          integrationTestImageRef(t, "docker.io/library/alpine:latest"),
 		Size:           2 * 1024 * 1024 * 1024, // 2GB (needs extra room for initrd with NVIDIA libs)
 		HotplugSize:    512 * 1024 * 1024,
 		OverlaySize:    1024 * 1024 * 1024,
@@ -135,7 +136,7 @@ func TestVolumeMultiAttachReadOnly(t *testing.T) {
 
 	reader1, err := manager.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "reader-1",
-		Image:          "docker.io/library/alpine:latest",
+		Image:          integrationTestImageRef(t, "docker.io/library/alpine:latest"),
 		Size:           2 * 1024 * 1024 * 1024, // 2GB (needs extra room for initrd with NVIDIA libs)
 		HotplugSize:    512 * 1024 * 1024,
 		OverlaySize:    1024 * 1024 * 1024,
@@ -152,7 +153,7 @@ func TestVolumeMultiAttachReadOnly(t *testing.T) {
 	// Reader 2 uses overlay mode: can read base data AND write to its own overlay
 	reader2, err := manager.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "reader-2-overlay",
-		Image:          "docker.io/library/alpine:latest",
+		Image:          integrationTestImageRef(t, "docker.io/library/alpine:latest"),
 		Size:           2 * 1024 * 1024 * 1024, // 2GB (needs extra room for initrd with NVIDIA libs)
 		HotplugSize:    512 * 1024 * 1024,
 		OverlaySize:    1024 * 1024 * 1024,
@@ -225,6 +226,7 @@ func TestVolumeMultiAttachReadOnly(t *testing.T) {
 // TestOverlayDiskCleanupOnDelete verifies that vol-overlays/ directory is removed
 // when an instance with overlay volumes is deleted.
 func TestOverlayDiskCleanupOnDelete(t *testing.T) {
+	t.Parallel()
 	// Skip in short mode - this is an integration test
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -245,12 +247,12 @@ func TestOverlayDiskCleanupOnDelete(t *testing.T) {
 
 	t.Log("Pulling alpine image...")
 	_, err = imageManager.CreateImage(ctx, images.CreateImageRequest{
-		Name: "docker.io/library/alpine:latest",
+		Name: integrationTestImageRef(t, "docker.io/library/alpine:latest"),
 	})
 	require.NoError(t, err)
 
 	for i := 0; i < 60; i++ {
-		img, err := imageManager.GetImage(ctx, "docker.io/library/alpine:latest")
+		img, err := imageManager.GetImage(ctx, integrationTestImageRef(t, "docker.io/library/alpine:latest"))
 		if err == nil && img.Status == images.StatusReady {
 			break
 		}
@@ -272,7 +274,7 @@ func TestOverlayDiskCleanupOnDelete(t *testing.T) {
 	// Create instance with overlay volume
 	inst, err := manager.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "overlay-cleanup-test",
-		Image:          "docker.io/library/alpine:latest",
+		Image:          integrationTestImageRef(t, "docker.io/library/alpine:latest"),
 		Size:           2 * 1024 * 1024 * 1024, // 2GB (needs extra room for initrd with NVIDIA libs)
 		HotplugSize:    512 * 1024 * 1024,
 		OverlaySize:    1024 * 1024 * 1024,
@@ -336,6 +338,7 @@ func createTestTarGz(t *testing.T, files map[string][]byte) *bytes.Buffer {
 // TestVolumeFromArchive tests that a volume can be created from a tar.gz archive
 // and the files are accessible when mounted to an instance
 func TestVolumeFromArchive(t *testing.T) {
+	t.Parallel()
 	// Require KVM
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Skip("/dev/kvm not available, skipping on this platform")
@@ -355,12 +358,12 @@ func TestVolumeFromArchive(t *testing.T) {
 
 	t.Log("Pulling alpine image...")
 	_, err = imageManager.CreateImage(ctx, images.CreateImageRequest{
-		Name: "docker.io/library/alpine:latest",
+		Name: integrationTestImageRef(t, "docker.io/library/alpine:latest"),
 	})
 	require.NoError(t, err)
 
 	for i := 0; i < 60; i++ {
-		img, err := imageManager.GetImage(ctx, "docker.io/library/alpine:latest")
+		img, err := imageManager.GetImage(ctx, integrationTestImageRef(t, "docker.io/library/alpine:latest"))
 		if err == nil && img.Status == images.StatusReady {
 			break
 		}
@@ -397,7 +400,7 @@ func TestVolumeFromArchive(t *testing.T) {
 	t.Log("Creating instance with archive volume...")
 	inst, err := manager.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "archive-reader",
-		Image:          "docker.io/library/alpine:latest",
+		Image:          integrationTestImageRef(t, "docker.io/library/alpine:latest"),
 		Size:           2 * 1024 * 1024 * 1024, // 2GB (needs extra room for initrd with NVIDIA libs)
 		HotplugSize:    512 * 1024 * 1024,
 		OverlaySize:    1024 * 1024 * 1024,

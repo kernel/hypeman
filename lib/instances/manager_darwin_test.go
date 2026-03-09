@@ -36,15 +36,12 @@ import (
 func setupVZTestManager(t *testing.T) (*manager, string) {
 	tmpDir, err := os.MkdirTemp("/tmp", "vz-")
 	require.NoError(t, err)
+	prepareIntegrationTestDataDir(t, tmpDir)
 	t.Cleanup(func() { os.RemoveAll(tmpDir) })
 
 	cfg := &config.Config{
 		DataDir: tmpDir,
-		Network: config.NetworkConfig{
-			BridgeName: "vmbr0",
-			SubnetCIDR: "10.100.0.0/16",
-			DNSServer:  "1.1.1.1",
-		},
+		Network: newParallelTestNetworkConfig(t),
 	}
 
 	p := paths.New(tmpDir)
@@ -105,6 +102,7 @@ func vzExecCommand(ctx context.Context, inst *Instance, command ...string) (stri
 
 // TestVZBasicLifecycle tests the full vz instance lifecycle: create, exec, stop, start, delete.
 func TestVZBasicLifecycle(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS != "darwin" {
 		t.Skip("vz tests require macOS")
 	}
@@ -119,7 +117,7 @@ func TestVZBasicLifecycle(t *testing.T) {
 
 	t.Log("Pulling alpine:latest image...")
 	alpineImage, err := imageManager.CreateImage(ctx, images.CreateImageRequest{
-		Name: "docker.io/library/alpine:latest",
+		Name: integrationTestImageRef(t, "docker.io/library/alpine:latest"),
 	})
 	require.NoError(t, err)
 
@@ -147,7 +145,7 @@ func TestVZBasicLifecycle(t *testing.T) {
 	// Create instance using vz hypervisor
 	inst, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "test-vz-lifecycle",
-		Image:          "docker.io/library/alpine:latest",
+		Image:          integrationTestImageRef(t, "docker.io/library/alpine:latest"),
 		Size:           2 * 1024 * 1024 * 1024,
 		OverlaySize:    10 * 1024 * 1024 * 1024,
 		Vcpus:          1,
@@ -274,6 +272,7 @@ func TestVZBasicLifecycle(t *testing.T) {
 
 // TestVZExecAndShutdown focuses on exec behavior and graceful shutdown.
 func TestVZExecAndShutdown(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS != "darwin" {
 		t.Skip("vz tests require macOS")
 	}
@@ -288,7 +287,7 @@ func TestVZExecAndShutdown(t *testing.T) {
 
 	t.Log("Pulling alpine:latest image...")
 	alpineImage, err := imageManager.CreateImage(ctx, images.CreateImageRequest{
-		Name: "docker.io/library/alpine:latest",
+		Name: integrationTestImageRef(t, "docker.io/library/alpine:latest"),
 	})
 	require.NoError(t, err)
 
@@ -312,7 +311,7 @@ func TestVZExecAndShutdown(t *testing.T) {
 
 	inst, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "test-vz-exec",
-		Image:          "docker.io/library/alpine:latest",
+		Image:          integrationTestImageRef(t, "docker.io/library/alpine:latest"),
 		Size:           2 * 1024 * 1024 * 1024,
 		OverlaySize:    10 * 1024 * 1024 * 1024,
 		Vcpus:          1,
@@ -375,6 +374,7 @@ func TestVZExecAndShutdown(t *testing.T) {
 
 // TestVZStandbyAndRestore tests the full standby/restore cycle for the vz hypervisor.
 func TestVZStandbyAndRestore(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS != "darwin" {
 		t.Skip("vz tests require macOS")
 	}
@@ -396,7 +396,7 @@ func TestVZStandbyAndRestore(t *testing.T) {
 
 	t.Log("Pulling alpine:latest image...")
 	alpineImage, err := imageManager.CreateImage(ctx, images.CreateImageRequest{
-		Name: "docker.io/library/alpine:latest",
+		Name: integrationTestImageRef(t, "docker.io/library/alpine:latest"),
 	})
 	require.NoError(t, err)
 
@@ -426,7 +426,7 @@ func TestVZStandbyAndRestore(t *testing.T) {
 	// Create instance using vz hypervisor
 	inst, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "test-vz-standby",
-		Image:          "docker.io/library/alpine:latest",
+		Image:          integrationTestImageRef(t, "docker.io/library/alpine:latest"),
 		Size:           2 * 1024 * 1024 * 1024,
 		OverlaySize:    10 * 1024 * 1024 * 1024,
 		Vcpus:          1,
@@ -536,6 +536,7 @@ func TestVZStandbyAndRestore(t *testing.T) {
 // TestVZForkFromRunningNetwork mirrors the running-source fork flow validated for
 // cloud-hypervisor, but on macOS VZ.
 func TestVZForkFromRunningNetwork(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS != "darwin" {
 		t.Skip("vz tests require macOS")
 	}
@@ -556,7 +557,7 @@ func TestVZForkFromRunningNetwork(t *testing.T) {
 
 	t.Log("Pulling alpine:latest image...")
 	alpineImage, err := imageManager.CreateImage(ctx, images.CreateImageRequest{
-		Name: "docker.io/library/alpine:latest",
+		Name: integrationTestImageRef(t, "docker.io/library/alpine:latest"),
 	})
 	require.NoError(t, err)
 
@@ -584,7 +585,7 @@ func TestVZForkFromRunningNetwork(t *testing.T) {
 
 	source, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "test-vz-fork-src",
-		Image:          "docker.io/library/alpine:latest",
+		Image:          integrationTestImageRef(t, "docker.io/library/alpine:latest"),
 		Size:           2 * 1024 * 1024 * 1024,
 		OverlaySize:    10 * 1024 * 1024 * 1024,
 		Vcpus:          1,
@@ -731,4 +732,29 @@ func ensureMkfsExt4Available(t *testing.T) {
 	}
 
 	t.Fatalf("mkfs.ext4 not found; install e2fsprogs and ensure it is on PATH")
+}
+
+func TestVZSnapshotFeature(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS != "darwin" {
+		t.Skip("vz tests require macOS")
+	}
+	if runtime.GOARCH != "arm64" {
+		t.Skip("vz tests require Apple Silicon (arm64)")
+	}
+	if !isMacOS14OrLater(t) {
+		t.Skip("vz snapshot test requires macOS 14+")
+	}
+	ensureMkfsExt4Available(t)
+
+	mgr, tmpDir := setupVZTestManager(t)
+	runStandbySnapshotScenario(t, mgr, tmpDir, snapshotScenarioConfig{
+		hypervisor: hypervisor.TypeVZ,
+		sourceName: "vz-snapshot-src",
+		snapshot:   "vz-snapshot-1",
+		forkName:   "vz-snapshot-fork",
+		onError: func() {
+			dumpVZShimLogs(t, tmpDir)
+		},
+	})
 }

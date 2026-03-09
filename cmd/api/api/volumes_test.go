@@ -9,6 +9,7 @@ import (
 )
 
 func TestListVolumes_Empty(t *testing.T) {
+	t.Parallel()
 	svc := newTestService(t)
 
 	resp, err := svc.ListVolumes(ctx(), oapi.ListVolumesRequestObject{})
@@ -20,6 +21,7 @@ func TestListVolumes_Empty(t *testing.T) {
 }
 
 func TestGetVolume_NotFound(t *testing.T) {
+	t.Parallel()
 	svc := newTestService(t)
 
 	// With middleware, not-found would be handled before reaching handler.
@@ -29,6 +31,7 @@ func TestGetVolume_NotFound(t *testing.T) {
 }
 
 func TestGetVolume_ByName(t *testing.T) {
+	t.Parallel()
 	svc := newTestService(t)
 
 	// Create a volume
@@ -54,6 +57,7 @@ func TestGetVolume_ByName(t *testing.T) {
 }
 
 func TestDeleteVolume_ByName(t *testing.T) {
+	t.Parallel()
 	svc := newTestService(t)
 
 	// Create a volume

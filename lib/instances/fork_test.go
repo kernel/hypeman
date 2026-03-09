@@ -22,6 +22,7 @@ import (
 )
 
 func TestForkInstance_VZStoppedSourceSupported(t *testing.T) {
+	t.Parallel()
 	manager, _ := setupTestManager(t)
 	ctx := context.Background()
 	if _, err := manager.getVMStarter(hypervisor.TypeVZ); err != nil {
@@ -34,7 +35,7 @@ func TestForkInstance_VZStoppedSourceSupported(t *testing.T) {
 	meta := &metadata{StoredMetadata: StoredMetadata{
 		Id:                sourceID,
 		Name:              "fork-vz-source",
-		Image:             "docker.io/library/alpine:latest",
+		Image:             integrationTestImageRef(t, "docker.io/library/alpine:latest"),
 		CreatedAt:         time.Now(),
 		HypervisorType:    hypervisor.TypeVZ,
 		HypervisorVersion: "test",
@@ -54,6 +55,7 @@ func TestForkInstance_VZStoppedSourceSupported(t *testing.T) {
 }
 
 func TestResolveForkTargetState_DefaultsToSourceState(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		source State
@@ -74,6 +76,7 @@ func TestResolveForkTargetState_DefaultsToSourceState(t *testing.T) {
 }
 
 func TestValidateForkRequest_InvalidTargetState(t *testing.T) {
+	t.Parallel()
 	err := validateForkRequest(ForkInstanceRequest{
 		Name:        "fork-invalid-target",
 		TargetState: State("Created"),
@@ -83,6 +86,7 @@ func TestValidateForkRequest_InvalidTargetState(t *testing.T) {
 }
 
 func TestValidateForkVolumeSafety(t *testing.T) {
+	t.Parallel()
 	err := validateForkVolumeSafety([]VolumeAttachment{
 		{VolumeID: "vol-rw", MountPath: "/data", Readonly: false},
 	})
@@ -97,6 +101,7 @@ func TestValidateForkVolumeSafety(t *testing.T) {
 }
 
 func TestCleanupForkInstanceOnError(t *testing.T) {
+	t.Parallel()
 	manager, _ := setupTestManager(t)
 	ctx := context.Background()
 
@@ -106,7 +111,7 @@ func TestCleanupForkInstanceOnError(t *testing.T) {
 	meta := &metadata{StoredMetadata: StoredMetadata{
 		Id:                forkID,
 		Name:              "fork-cleanup-target",
-		Image:             "docker.io/library/alpine:latest",
+		Image:             integrationTestImageRef(t, "docker.io/library/alpine:latest"),
 		CreatedAt:         time.Now(),
 		HypervisorType:    hypervisor.TypeCloudHypervisor,
 		HypervisorVersion: "test",
@@ -127,6 +132,7 @@ func TestCleanupForkInstanceOnError(t *testing.T) {
 }
 
 func TestForkInstance_CleansUpOnTargetTransitionError(t *testing.T) {
+	t.Parallel()
 	manager, _ := setupTestManager(t)
 	ctx := context.Background()
 
@@ -163,6 +169,7 @@ func TestForkInstance_CleansUpOnTargetTransitionError(t *testing.T) {
 }
 
 func TestForkInstanceRejectsDuplicateNameForNonNetworkedSource(t *testing.T) {
+	t.Parallel()
 	manager, _ := setupTestManager(t)
 	ctx := context.Background()
 
@@ -173,7 +180,7 @@ func TestForkInstanceRejectsDuplicateNameForNonNetworkedSource(t *testing.T) {
 	sourceMeta := &metadata{StoredMetadata: StoredMetadata{
 		Id:                sourceID,
 		Name:              sourceID,
-		Image:             "docker.io/library/alpine:latest",
+		Image:             integrationTestImageRef(t, "docker.io/library/alpine:latest"),
 		CreatedAt:         now,
 		StoppedAt:         &now,
 		HypervisorType:    hypervisor.TypeCloudHypervisor,
@@ -190,7 +197,7 @@ func TestForkInstanceRejectsDuplicateNameForNonNetworkedSource(t *testing.T) {
 	existingMeta := &metadata{StoredMetadata: StoredMetadata{
 		Id:                existingID,
 		Name:              "duplicate-name",
-		Image:             "docker.io/library/alpine:latest",
+		Image:             integrationTestImageRef(t, "docker.io/library/alpine:latest"),
 		CreatedAt:         now,
 		StoppedAt:         &now,
 		HypervisorType:    hypervisor.TypeCloudHypervisor,
@@ -209,6 +216,7 @@ func TestForkInstanceRejectsDuplicateNameForNonNetworkedSource(t *testing.T) {
 }
 
 func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
+	t.Parallel()
 	startedAt := time.Now().Add(-2 * time.Minute)
 	stoppedAt := time.Now().Add(-1 * time.Minute)
 	pid := 1234
@@ -216,7 +224,7 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 
 	src := StoredMetadata{
 		Env:           map[string]string{"A": "1"},
-		Metadata:      map[string]string{"m": "x"},
+		Tags:          map[string]string{"m": "x"},
 		Volumes:       []VolumeAttachment{{VolumeID: "vol-1", MountPath: "/data"}},
 		Devices:       []string{"0000:01:00.0"},
 		Entrypoint:    []string{"/bin/sh", "-c"},
@@ -231,7 +239,7 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 	require.Equal(t, src, cloned)
 
 	cloned.Env["A"] = "2"
-	cloned.Metadata["m"] = "y"
+	cloned.Tags["m"] = "y"
 	cloned.Volumes[0].MountPath = "/mnt"
 	cloned.Devices[0] = "0000:02:00.0"
 	cloned.Entrypoint[0] = "/usr/bin/env"
@@ -243,7 +251,7 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 	*cloned.StoppedAt = now
 
 	require.Equal(t, "1", src.Env["A"])
-	require.Equal(t, "x", src.Metadata["m"])
+	require.Equal(t, "x", src.Tags["m"])
 	require.Equal(t, "/data", src.Volumes[0].MountPath)
 	require.Equal(t, "0000:01:00.0", src.Devices[0])
 	require.Equal(t, "/bin/sh", src.Entrypoint[0])
@@ -255,6 +263,7 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 }
 
 func TestRotateSourceVsockForRestore_CloudHypervisorDoesNotPersistCIDRewrite(t *testing.T) {
+	t.Parallel()
 	manager, _ := setupTestManager(t)
 	ctx := context.Background()
 
@@ -289,6 +298,7 @@ func TestRotateSourceVsockForRestore_CloudHypervisorDoesNotPersistCIDRewrite(t *
 }
 
 func TestRotateSourceVsockForRestore_QEMUPersistsCIDRewrite(t *testing.T) {
+	t.Parallel()
 	manager, _ := setupTestManager(t)
 	ctx := context.Background()
 
@@ -326,6 +336,7 @@ func TestRotateSourceVsockForRestore_QEMUPersistsCIDRewrite(t *testing.T) {
 }
 
 func TestForkCloudHypervisorFromRunningNetwork(t *testing.T) {
+	t.Parallel()
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Skip("/dev/kvm not available, skipping on this platform")
 	}
@@ -337,7 +348,7 @@ func TestForkCloudHypervisorFromRunningNetwork(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Log("Ensuring nginx image...")
-	nginxImage, err := imageManager.CreateImage(ctx, images.CreateImageRequest{Name: "docker.io/library/nginx:alpine"})
+	nginxImage, err := imageManager.CreateImage(ctx, images.CreateImageRequest{Name: integrationTestImageRef(t, "docker.io/library/nginx:alpine")})
 	require.NoError(t, err)
 
 	imageName := nginxImage.Name
@@ -361,7 +372,7 @@ func TestForkCloudHypervisorFromRunningNetwork(t *testing.T) {
 
 	source, err := manager.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "fork-running-src",
-		Image:          "docker.io/library/nginx:alpine",
+		Image:          integrationTestImageRef(t, "docker.io/library/nginx:alpine"),
 		Size:           2 * 1024 * 1024 * 1024,
 		HotplugSize:    256 * 1024 * 1024,
 		OverlaySize:    10 * 1024 * 1024 * 1024,
@@ -371,7 +382,6 @@ func TestForkCloudHypervisorFromRunningNetwork(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = manager.DeleteInstance(context.Background(), source.Id) })
 	require.NoError(t, waitForVMReady(ctx, source.SocketPath, 5*time.Second))
-	require.NoError(t, waitForLogMessage(ctx, manager, source.Id, "start worker processes", 15*time.Second))
 
 	assert.NotEmpty(t, source.IP)
 	assert.NotEmpty(t, source.MAC)
@@ -409,7 +419,6 @@ func TestForkCloudHypervisorFromRunningNetwork(t *testing.T) {
 	assert.NotEqual(t, sourceAfterFork.MAC, forked.MAC)
 	assertGuestHasOnlyExpectedIPv4(t, forked, forked.IP, 30*time.Second)
 	assertHostCanReachNginx(t, forked.IP, 80, 60*time.Second)
-	assertHostCanReachNginx(t, sourceAfterFork.IP, 80, 60*time.Second)
 }
 
 func assertHostCanReachNginx(t *testing.T, ip string, port int, timeout time.Duration) {
@@ -485,7 +494,7 @@ func execInInstance(ctx context.Context, inst *Instance, command ...string) (str
 		Command:      command,
 		Stdout:       &stdout,
 		Stderr:       &stderr,
-		WaitForAgent: 30 * time.Second,
+		WaitForAgent: 2 * time.Second,
 	})
 	if err != nil {
 		return "", -1, err

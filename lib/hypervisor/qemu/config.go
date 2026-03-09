@@ -40,7 +40,9 @@ func BuildArgs(cfg hypervisor.VMConfig) []string {
 	for i, disk := range cfg.Disks {
 		driveOpts := fmt.Sprintf("file=%s,format=raw,if=none,id=drive%d", disk.Path, i)
 		if disk.Readonly {
-			driveOpts += ",readonly=on"
+			// Disable host-side file locking for shared readonly bases so multiple
+			// VMs can boot concurrently from the same image without lock contention.
+			driveOpts += ",readonly=on,file.locking=off"
 		}
 		if disk.IOBps > 0 {
 			driveOpts += fmt.Sprintf(",throttling.bps-total=%d", disk.IOBps)

@@ -26,4 +26,7 @@ var (
 
 	// ErrNotSupported is returned when an operation is not supported for the instance hypervisor
 	ErrNotSupported = errors.New("operation not supported")
+
+	// ErrSnapshotNotFound is returned when a snapshot is not found.
+	ErrSnapshotNotFound = errors.New("snapshot not found")
 )

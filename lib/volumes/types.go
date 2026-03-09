@@ -1,6 +1,10 @@
 package volumes
 
-import "time"
+import (
+	"time"
+
+	"github.com/kernel/hypeman/lib/tags"
+)
 
 // Attachment represents a volume attached to an instance
 type Attachment struct {
@@ -14,6 +18,7 @@ type Volume struct {
 	Id          string
 	Name        string
 	SizeGb      int
+	Tags        tags.Tags
 	CreatedAt   time.Time
 	Attachments []Attachment // List of current attachments (empty if not attached)
 }
@@ -23,6 +28,7 @@ type CreateVolumeRequest struct {
 	Name   string
 	SizeGb int
 	Id     *string // Optional custom ID
+	Tags   tags.Tags
 }
 
 // AttachVolumeRequest is the domain request for attaching a volume to an instance
@@ -38,4 +44,5 @@ type CreateVolumeFromArchiveRequest struct {
 	Name   string
 	SizeGb int     // Maximum size in GB (extraction fails if content exceeds this)
 	Id     *string // Optional custom ID
+	Tags   tags.Tags
 }

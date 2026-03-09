@@ -21,20 +21,20 @@ import (
 	"github.com/samber/lo"
 )
 
-// ListInstances lists instances, optionally filtered by state and/or metadata.
+// ListInstances lists instances, optionally filtered by state and/or tags.
 func (s *ApiService) ListInstances(ctx context.Context, request oapi.ListInstancesRequestObject) (oapi.ListInstancesResponseObject, error) {
 	log := logger.FromContext(ctx)
 
 	// Convert OAPI params to domain filter
 	var filter *instances.ListInstancesFilter
-	if request.Params.State != nil || request.Params.Metadata != nil {
+	if request.Params.State != nil || request.Params.Tags != nil {
 		filter = &instances.ListInstancesFilter{}
 		if request.Params.State != nil {
 			state := instances.State(*request.Params.State)
 			filter.State = &state
 		}
-		if request.Params.Metadata != nil {
-			filter.Metadata = *request.Params.Metadata
+		if request.Params.Tags != nil {
+			filter.Tags = toMapTags(request.Params.Tags)
 		}
 	}
 
@@ -125,9 +125,9 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		env = *request.Body.Env
 	}
 
-	metadata := make(map[string]string)
-	if request.Body.Metadata != nil {
-		metadata = *request.Body.Metadata
+	resourceTags := make(map[string]string)
+	if request.Body.Tags != nil {
+		resourceTags = toMapTags(request.Body.Tags)
 	}
 
 	// Parse network enabled (default: true)
@@ -253,7 +253,7 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		NetworkBandwidthDownload: networkBandwidthDownload,
 		NetworkBandwidthUpload:   networkBandwidthUpload,
 		Env:                      env,
-		Metadata:                 metadata,
+		Tags:                     resourceTags,
 		NetworkEnabled:           networkEnabled,
 		Devices:                  deviceRefs,
 		Volumes:                  volumes,
@@ -286,6 +286,11 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		case errors.Is(err, instances.ErrInsufficientResources):
 			return oapi.CreateInstance409JSONResponse{
 				Code:    "insufficient_resources",
+				Message: err.Error(),
+			}, nil
+		case errors.Is(err, instances.ErrInvalidRequest):
+			return oapi.CreateInstance400JSONResponse{
+				Code:    "invalid_request",
 				Message: err.Error(),
 			}, nil
 		default:
@@ -791,23 +796,21 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 		uploadBwStr = &s
 	}
 
-	// Build network object with ip/mac and bandwidth nested inside
-	netObj := &struct {
-		BandwidthDownload *string `json:"bandwidth_download,omitempty"`
-		BandwidthUpload   *string `json:"bandwidth_upload,omitempty"`
-		Enabled           *bool   `json:"enabled,omitempty"`
-		Ip                *string `json:"ip"`
-		Mac               *string `json:"mac"`
-		Name              *string `json:"name,omitempty"`
-	}{
-		Enabled:           lo.ToPtr(inst.NetworkEnabled),
-		BandwidthDownload: downloadBwStr,
-		BandwidthUpload:   uploadBwStr,
+	// Build network payload as JSON to avoid compile-time coupling to
+	// generated anonymous struct tags in oapi.Instance.Network.
+	networkPayload := map[string]any{
+		"enabled": inst.NetworkEnabled,
+	}
+	if downloadBwStr != nil {
+		networkPayload["bandwidth_download"] = *downloadBwStr
+	}
+	if uploadBwStr != nil {
+		networkPayload["bandwidth_upload"] = *uploadBwStr
 	}
 	if inst.NetworkEnabled {
-		netObj.Name = lo.ToPtr("default")
-		netObj.Ip = lo.ToPtr(inst.IP)
-		netObj.Mac = lo.ToPtr(inst.MAC)
+		networkPayload["name"] = "default"
+		networkPayload["ip"] = inst.IP
+		networkPayload["mac"] = inst.MAC
 	}
 
 	// Convert hypervisor type
@@ -831,13 +834,17 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 		OverlaySize: lo.ToPtr(overlaySizeStr),
 		Vcpus:       lo.ToPtr(inst.Vcpus),
 		DiskIoBps:   diskIoBpsStr,
-		Network:     netObj,
+		Network:     nil,
 		CreatedAt:   inst.CreatedAt,
 		StartedAt:   inst.StartedAt,
 		StoppedAt:   inst.StoppedAt,
 		ExitCode:    inst.ExitCode,
 		HasSnapshot: lo.ToPtr(inst.HasSnapshot),
 		Hypervisor:  &hvType,
+	}
+
+	if b, err := json.Marshal(networkPayload); err == nil {
+		_ = json.Unmarshal(b, &oapiInst.Network)
 	}
 
 	if inst.ExitMessage != "" {
@@ -848,8 +855,8 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 		oapiInst.Env = &inst.Env
 	}
 
-	if len(inst.Metadata) > 0 {
-		oapiInst.Metadata = &inst.Metadata
+	if len(inst.Tags) > 0 {
+		oapiInst.Tags = toOAPITags(inst.Tags)
 	}
 
 	// Convert volume attachments

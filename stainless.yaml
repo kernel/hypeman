@@ -92,6 +92,20 @@ resources:
         methods:
           attach: post /instances/{id}/volumes/{volumeId}
           detach: delete /instances/{id}/volumes/{volumeId}
+      snapshots:
+        methods:
+          create: post /instances/{id}/snapshots
+          restore: post /instances/{id}/snapshots/{snapshotId}/restore
+
+  snapshots:
+    models:
+      snapshot: "#/components/schemas/Snapshot"
+      snapshot_kind: "#/components/schemas/SnapshotKind"
+    methods:
+      list: get /snapshots
+      get: get /snapshots/{snapshotId}
+      delete: delete /snapshots/{snapshotId}
+      fork: post /snapshots/{snapshotId}/fork
 
   volumes:
     models:

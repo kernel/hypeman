@@ -60,6 +60,14 @@ const (
 	Pci DeviceType = "pci"
 )
 
+// Defines values for ForkSnapshotRequestTargetHypervisor.
+const (
+	ForkSnapshotRequestTargetHypervisorCloudHypervisor ForkSnapshotRequestTargetHypervisor = "cloud-hypervisor"
+	ForkSnapshotRequestTargetHypervisorFirecracker     ForkSnapshotRequestTargetHypervisor = "firecracker"
+	ForkSnapshotRequestTargetHypervisorQemu            ForkSnapshotRequestTargetHypervisor = "qemu"
+	ForkSnapshotRequestTargetHypervisorVz              ForkSnapshotRequestTargetHypervisor = "vz"
+)
+
 // Defines values for ForkTargetState.
 const (
 	ForkTargetStateRunning ForkTargetState = "Running"
@@ -104,6 +112,35 @@ const (
 	InstanceStateStandby  InstanceState = "Standby"
 	InstanceStateStopped  InstanceState = "Stopped"
 	InstanceStateUnknown  InstanceState = "Unknown"
+)
+
+// Defines values for RestoreSnapshotRequestTargetHypervisor.
+const (
+	RestoreSnapshotRequestTargetHypervisorCloudHypervisor RestoreSnapshotRequestTargetHypervisor = "cloud-hypervisor"
+	RestoreSnapshotRequestTargetHypervisorFirecracker     RestoreSnapshotRequestTargetHypervisor = "firecracker"
+	RestoreSnapshotRequestTargetHypervisorQemu            RestoreSnapshotRequestTargetHypervisor = "qemu"
+	RestoreSnapshotRequestTargetHypervisorVz              RestoreSnapshotRequestTargetHypervisor = "vz"
+)
+
+// Defines values for SnapshotSourceHypervisor.
+const (
+	CloudHypervisor SnapshotSourceHypervisor = "cloud-hypervisor"
+	Firecracker     SnapshotSourceHypervisor = "firecracker"
+	Qemu            SnapshotSourceHypervisor = "qemu"
+	Vz              SnapshotSourceHypervisor = "vz"
+)
+
+// Defines values for SnapshotKind.
+const (
+	SnapshotKindStandby SnapshotKind = "Standby"
+	SnapshotKindStopped SnapshotKind = "Stopped"
+)
+
+// Defines values for SnapshotTargetState.
+const (
+	SnapshotTargetStateRunning SnapshotTargetState = "Running"
+	SnapshotTargetStateStandby SnapshotTargetState = "Standby"
+	SnapshotTargetStateStopped SnapshotTargetState = "Stopped"
 )
 
 // Defines values for GetInstanceLogsParamsSource.
@@ -181,6 +218,9 @@ type Build struct {
 
 	// Status Build job status
 	Status BuildStatus `json:"status"`
+
+	// Tags User-defined key-value tags.
+	Tags *Tags `json:"tags,omitempty"`
 }
 
 // BuildEvent defines model for BuildEvent.
@@ -229,12 +269,18 @@ type CreateDeviceRequest struct {
 
 	// PciAddress PCI address of the device (required, e.g., "0000:a2:00.0")
 	PciAddress string `json:"pci_address"`
+
+	// Tags User-defined key-value tags.
+	Tags *Tags `json:"tags,omitempty"`
 }
 
 // CreateImageRequest defines model for CreateImageRequest.
 type CreateImageRequest struct {
 	// Name OCI image reference (e.g., docker.io/library/nginx:latest)
 	Name string `json:"name"`
+
+	// Tags User-defined key-value tags.
+	Tags *Tags `json:"tags,omitempty"`
 }
 
 // CreateIngressRequest defines model for CreateIngressRequest.
@@ -244,6 +290,9 @@ type CreateIngressRequest struct {
 
 	// Rules Routing rules for this ingress
 	Rules []IngressRule `json:"rules"`
+
+	// Tags User-defined key-value tags.
+	Tags *Tags `json:"tags,omitempty"`
 }
 
 // CreateInstanceRequest defines model for CreateInstanceRequest.
@@ -274,9 +323,6 @@ type CreateInstanceRequest struct {
 
 	// Image OCI image reference
 	Image string `json:"image"`
-
-	// Metadata User-defined key-value metadata for the instance
-	Metadata *map[string]string `json:"metadata,omitempty"`
 
 	// Name Human-readable name (lowercase letters, digits, and dashes only; cannot start or end with a dash)
 	Name string `json:"name"`
@@ -310,6 +356,9 @@ type CreateInstanceRequest struct {
 	// Recommended for workloads that don't need kernel module compilation.
 	SkipKernelHeaders *bool `json:"skip_kernel_headers,omitempty"`
 
+	// Tags User-defined key-value tags.
+	Tags *Tags `json:"tags,omitempty"`
+
 	// Vcpus Number of virtual CPUs
 	Vcpus *int `json:"vcpus,omitempty"`
 
@@ -319,6 +368,18 @@ type CreateInstanceRequest struct {
 
 // CreateInstanceRequestHypervisor Hypervisor to use for this instance. Defaults to server configuration.
 type CreateInstanceRequestHypervisor string
+
+// CreateSnapshotRequest defines model for CreateSnapshotRequest.
+type CreateSnapshotRequest struct {
+	// Kind Snapshot capture kind
+	Kind SnapshotKind `json:"kind"`
+
+	// Name Optional snapshot name (lowercase letters, digits, and dashes only; cannot start or end with a dash)
+	Name *string `json:"name,omitempty"`
+
+	// Tags User-defined key-value tags.
+	Tags *Tags `json:"tags,omitempty"`
+}
 
 // CreateVolumeRequest defines model for CreateVolumeRequest.
 type CreateVolumeRequest struct {
@@ -330,6 +391,9 @@ type CreateVolumeRequest struct {
 
 	// SizeGb Size in gigabytes
 	SizeGb int `json:"size_gb"`
+
+	// Tags User-defined key-value tags.
+	Tags *Tags `json:"tags,omitempty"`
 }
 
 // Device defines model for Device.
@@ -359,6 +423,9 @@ type Device struct {
 
 	// PciAddress PCI address
 	PciAddress string `json:"pci_address"`
+
+	// Tags User-defined key-value tags.
+	Tags *Tags `json:"tags,omitempty"`
 
 	// Type Type of PCI device
 	Type DeviceType `json:"type"`
@@ -419,6 +486,23 @@ type ForkInstanceRequest struct {
 	// TargetState Target state for the forked instance after fork completes
 	TargetState *ForkTargetState `json:"target_state,omitempty"`
 }
+
+// ForkSnapshotRequest defines model for ForkSnapshotRequest.
+type ForkSnapshotRequest struct {
+	// Name Name for the new instance (lowercase letters, digits, and dashes only; cannot start or end with a dash)
+	Name string `json:"name"`
+
+	// TargetHypervisor Optional hypervisor override. Allowed only when forking from a Stopped snapshot.
+	// Standby snapshots must fork with their original hypervisor.
+	TargetHypervisor *ForkSnapshotRequestTargetHypervisor `json:"target_hypervisor,omitempty"`
+
+	// TargetState Target state when restoring or forking from a snapshot
+	TargetState *SnapshotTargetState `json:"target_state,omitempty"`
+}
+
+// ForkSnapshotRequestTargetHypervisor Optional hypervisor override. Allowed only when forking from a Stopped snapshot.
+// Standby snapshots must fork with their original hypervisor.
+type ForkSnapshotRequestTargetHypervisor string
 
 // ForkTargetState Target state for the forked instance after fork completes
 type ForkTargetState string
@@ -502,6 +586,9 @@ type Image struct {
 	// Status Build status
 	Status ImageStatus `json:"status"`
 
+	// Tags User-defined key-value tags.
+	Tags *Tags `json:"tags,omitempty"`
+
 	// WorkingDir Working directory from container metadata
 	WorkingDir *string `json:"working_dir"`
 }
@@ -522,6 +609,9 @@ type Ingress struct {
 
 	// Rules Routing rules for this ingress
 	Rules []IngressRule `json:"rules"`
+
+	// Tags User-defined key-value tags.
+	Tags *Tags `json:"tags,omitempty"`
 }
 
 // IngressMatch defines model for IngressMatch.
@@ -599,9 +689,6 @@ type Instance struct {
 	// Image OCI image reference
 	Image string `json:"image"`
 
-	// Metadata User-defined key-value metadata
-	Metadata *map[string]string `json:"metadata,omitempty"`
-
 	// Name Human-readable name
 	Name string `json:"name"`
 
@@ -650,6 +737,9 @@ type Instance struct {
 
 	// StoppedAt Stop timestamp (RFC3339)
 	StoppedAt *time.Time `json:"stopped_at"`
+
+	// Tags User-defined key-value tags.
+	Tags *Tags `json:"tags,omitempty"`
 
 	// Vcpus Number of virtual CPUs
 	Vcpus *int `json:"vcpus,omitempty"`
@@ -814,6 +904,62 @@ type Resources struct {
 	Network ResourceStatus     `json:"network"`
 }
 
+// RestoreSnapshotRequest defines model for RestoreSnapshotRequest.
+type RestoreSnapshotRequest struct {
+	// TargetHypervisor Optional hypervisor override. Allowed only when restoring from a Stopped snapshot.
+	// Standby snapshots must restore with their original hypervisor.
+	TargetHypervisor *RestoreSnapshotRequestTargetHypervisor `json:"target_hypervisor,omitempty"`
+
+	// TargetState Target state when restoring or forking from a snapshot
+	TargetState *SnapshotTargetState `json:"target_state,omitempty"`
+}
+
+// RestoreSnapshotRequestTargetHypervisor Optional hypervisor override. Allowed only when restoring from a Stopped snapshot.
+// Standby snapshots must restore with their original hypervisor.
+type RestoreSnapshotRequestTargetHypervisor string
+
+// Snapshot defines model for Snapshot.
+type Snapshot struct {
+	// CreatedAt Snapshot creation timestamp
+	CreatedAt time.Time `json:"created_at"`
+
+	// Id Auto-generated unique snapshot identifier
+	Id string `json:"id"`
+
+	// Kind Snapshot capture kind
+	Kind SnapshotKind `json:"kind"`
+
+	// Name Optional human-readable snapshot name (unique per source instance)
+	Name *string `json:"name"`
+
+	// SizeBytes Total payload size in bytes
+	SizeBytes int64 `json:"size_bytes"`
+
+	// SourceHypervisor Source instance hypervisor at snapshot creation time
+	SourceHypervisor SnapshotSourceHypervisor `json:"source_hypervisor"`
+
+	// SourceInstanceId Source instance ID at snapshot creation time
+	SourceInstanceId string `json:"source_instance_id"`
+
+	// SourceInstanceName Source instance name at snapshot creation time
+	SourceInstanceName string `json:"source_instance_name"`
+
+	// Tags User-defined key-value tags.
+	Tags *Tags `json:"tags,omitempty"`
+}
+
+// SnapshotSourceHypervisor Source instance hypervisor at snapshot creation time
+type SnapshotSourceHypervisor string
+
+// SnapshotKind Snapshot capture kind
+type SnapshotKind string
+
+// SnapshotTargetState Target state when restoring or forking from a snapshot
+type SnapshotTargetState string
+
+// Tags User-defined key-value tags.
+type Tags map[string]string
+
 // Volume defines model for Volume.
 type Volume struct {
 	// Attachments List of current attachments (empty if not attached)
@@ -830,6 +976,9 @@ type Volume struct {
 
 	// SizeGb Size in gigabytes
 	SizeGb int `json:"size_gb"`
+
+	// Tags User-defined key-value tags.
+	Tags *Tags `json:"tags,omitempty"`
 }
 
 // VolumeAttachment defines model for VolumeAttachment.
@@ -860,6 +1009,12 @@ type VolumeMount struct {
 
 	// VolumeId Volume identifier
 	VolumeId string `json:"volume_id"`
+}
+
+// ListBuildsParams defines parameters for ListBuilds.
+type ListBuildsParams struct {
+	// Tags Filter builds by tag key-value pairs.
+	Tags *Tags `json:"tags,omitempty"`
 }
 
 // CreateBuildMultipartBody defines parameters for CreateBuild.
@@ -900,6 +1055,10 @@ type CreateBuildMultipartBody struct {
 	// Source Source tarball (tar.gz) containing application code and optionally a Dockerfile
 	Source openapi_types.File `json:"source"`
 
+	// Tags JSON object of tags.
+	// Example: {"team":"backend","env":"staging"}
+	Tags *string `json:"tags,omitempty"`
+
 	// TimeoutSeconds Build timeout (default 600)
 	TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
 }
@@ -910,15 +1069,33 @@ type GetBuildEventsParams struct {
 	Follow *bool `form:"follow,omitempty" json:"follow,omitempty"`
 }
 
+// ListDevicesParams defines parameters for ListDevices.
+type ListDevicesParams struct {
+	// Tags Filter devices by tag key-value pairs.
+	Tags *Tags `json:"tags,omitempty"`
+}
+
+// ListImagesParams defines parameters for ListImages.
+type ListImagesParams struct {
+	// Tags Filter images by tag key-value pairs.
+	Tags *Tags `json:"tags,omitempty"`
+}
+
+// ListIngressesParams defines parameters for ListIngresses.
+type ListIngressesParams struct {
+	// Tags Filter ingresses by tag key-value pairs.
+	Tags *Tags `json:"tags,omitempty"`
+}
+
 // ListInstancesParams defines parameters for ListInstances.
 type ListInstancesParams struct {
 	// State Filter instances by state (e.g., Running, Stopped)
 	State *InstanceState `form:"state,omitempty" json:"state,omitempty"`
 
-	// Metadata Filter instances by metadata key-value pairs. Uses deepObject style:
-	// ?metadata[team]=backend&metadata[env]=staging
+	// Tags Filter instances by tag key-value pairs. Uses deepObject style:
+	// ?tags[team]=backend&tags[env]=staging
 	// Multiple entries are ANDed together. All specified key-value pairs must match.
-	Metadata *map[string]string `json:"metadata,omitempty"`
+	Tags *Tags `json:"tags,omitempty"`
 }
 
 // GetInstanceLogsParams defines parameters for GetInstanceLogs.
@@ -957,6 +1134,27 @@ type StatInstancePathParams struct {
 	FollowLinks *bool `form:"follow_links,omitempty" json:"follow_links,omitempty"`
 }
 
+// ListSnapshotsParams defines parameters for ListSnapshots.
+type ListSnapshotsParams struct {
+	// SourceInstanceId Filter snapshots by source instance ID
+	SourceInstanceId *string `form:"source_instance_id,omitempty" json:"source_instance_id,omitempty"`
+
+	// Kind Filter snapshots by kind
+	Kind *SnapshotKind `form:"kind,omitempty" json:"kind,omitempty"`
+
+	// Name Filter snapshots by snapshot name
+	Name *string `form:"name,omitempty" json:"name,omitempty"`
+
+	// Tags Filter snapshots by tag key-value pairs.
+	Tags *Tags `json:"tags,omitempty"`
+}
+
+// ListVolumesParams defines parameters for ListVolumes.
+type ListVolumesParams struct {
+	// Tags Filter volumes by tag key-value pairs.
+	Tags *Tags `json:"tags,omitempty"`
+}
+
 // CreateVolumeFromArchiveParams defines parameters for CreateVolumeFromArchive.
 type CreateVolumeFromArchiveParams struct {
 	// Name Volume name
@@ -967,6 +1165,9 @@ type CreateVolumeFromArchiveParams struct {
 
 	// Id Optional custom volume ID (auto-generated if not provided)
 	Id *string `form:"id,omitempty" json:"id,omitempty"`
+
+	// Tags Tags for the created volume.
+	Tags *Tags `json:"tags,omitempty"`
 }
 
 // CreateBuildMultipartRequestBody defines body for CreateBuild for multipart/form-data ContentType.
@@ -987,11 +1188,20 @@ type CreateInstanceJSONRequestBody = CreateInstanceRequest
 // ForkInstanceJSONRequestBody defines body for ForkInstance for application/json ContentType.
 type ForkInstanceJSONRequestBody = ForkInstanceRequest
 
+// CreateInstanceSnapshotJSONRequestBody defines body for CreateInstanceSnapshot for application/json ContentType.
+type CreateInstanceSnapshotJSONRequestBody = CreateSnapshotRequest
+
+// RestoreInstanceSnapshotJSONRequestBody defines body for RestoreInstanceSnapshot for application/json ContentType.
+type RestoreInstanceSnapshotJSONRequestBody = RestoreSnapshotRequest
+
 // StartInstanceJSONRequestBody defines body for StartInstance for application/json ContentType.
 type StartInstanceJSONRequestBody StartInstanceJSONBody
 
 // AttachVolumeJSONRequestBody defines body for AttachVolume for application/json ContentType.
 type AttachVolumeJSONRequestBody = AttachVolumeRequest
+
+// ForkSnapshotJSONRequestBody defines body for ForkSnapshot for application/json ContentType.
+type ForkSnapshotJSONRequestBody = ForkSnapshotRequest
 
 // CreateVolumeJSONRequestBody defines body for CreateVolume for application/json ContentType.
 type CreateVolumeJSONRequestBody = CreateVolumeRequest
@@ -1070,7 +1280,7 @@ func WithRequestEditorFn(fn RequestEditorFn) ClientOption {
 // The interface specification for the client above.
 type ClientInterface interface {
 	// ListBuilds request
-	ListBuilds(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+	ListBuilds(ctx context.Context, params *ListBuildsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// CreateBuildWithBody request with any body
 	CreateBuildWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -1085,7 +1295,7 @@ type ClientInterface interface {
 	GetBuildEvents(ctx context.Context, id string, params *GetBuildEventsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ListDevices request
-	ListDevices(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+	ListDevices(ctx context.Context, params *ListDevicesParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// CreateDeviceWithBody request with any body
 	CreateDeviceWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -1105,7 +1315,7 @@ type ClientInterface interface {
 	GetHealth(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ListImages request
-	ListImages(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+	ListImages(ctx context.Context, params *ListImagesParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// CreateImageWithBody request with any body
 	CreateImageWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -1119,7 +1329,7 @@ type ClientInterface interface {
 	GetImage(ctx context.Context, name string, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ListIngresses request
-	ListIngresses(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+	ListIngresses(ctx context.Context, params *ListIngressesParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// CreateIngressWithBody request with any body
 	CreateIngressWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -1157,6 +1367,16 @@ type ClientInterface interface {
 	// RestoreInstance request
 	RestoreInstance(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// CreateInstanceSnapshotWithBody request with any body
+	CreateInstanceSnapshotWithBody(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	CreateInstanceSnapshot(ctx context.Context, id string, body CreateInstanceSnapshotJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// RestoreInstanceSnapshotWithBody request with any body
+	RestoreInstanceSnapshotWithBody(ctx context.Context, id string, snapshotId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	RestoreInstanceSnapshot(ctx context.Context, id string, snapshotId string, body RestoreInstanceSnapshotJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// StandbyInstance request
 	StandbyInstance(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -1185,8 +1405,22 @@ type ClientInterface interface {
 	// GetResources request
 	GetResources(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// ListSnapshots request
+	ListSnapshots(ctx context.Context, params *ListSnapshotsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// DeleteSnapshot request
+	DeleteSnapshot(ctx context.Context, snapshotId string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetSnapshot request
+	GetSnapshot(ctx context.Context, snapshotId string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ForkSnapshotWithBody request with any body
+	ForkSnapshotWithBody(ctx context.Context, snapshotId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	ForkSnapshot(ctx context.Context, snapshotId string, body ForkSnapshotJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// ListVolumes request
-	ListVolumes(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+	ListVolumes(ctx context.Context, params *ListVolumesParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// CreateVolumeWithBody request with any body
 	CreateVolumeWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -1203,8 +1437,8 @@ type ClientInterface interface {
 	GetVolume(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error)
 }
 
-func (c *Client) ListBuilds(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewListBuildsRequest(c.Server)
+func (c *Client) ListBuilds(ctx context.Context, params *ListBuildsParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListBuildsRequest(c.Server, params)
 	if err != nil {
 		return nil, err
 	}
@@ -1263,8 +1497,8 @@ func (c *Client) GetBuildEvents(ctx context.Context, id string, params *GetBuild
 	return c.Client.Do(req)
 }
 
-func (c *Client) ListDevices(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewListDevicesRequest(c.Server)
+func (c *Client) ListDevices(ctx context.Context, params *ListDevicesParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListDevicesRequest(c.Server, params)
 	if err != nil {
 		return nil, err
 	}
@@ -1347,8 +1581,8 @@ func (c *Client) GetHealth(ctx context.Context, reqEditors ...RequestEditorFn) (
 	return c.Client.Do(req)
 }
 
-func (c *Client) ListImages(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewListImagesRequest(c.Server)
+func (c *Client) ListImages(ctx context.Context, params *ListImagesParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListImagesRequest(c.Server, params)
 	if err != nil {
 		return nil, err
 	}
@@ -1407,8 +1641,8 @@ func (c *Client) GetImage(ctx context.Context, name string, reqEditors ...Reques
 	return c.Client.Do(req)
 }
 
-func (c *Client) ListIngresses(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewListIngressesRequest(c.Server)
+func (c *Client) ListIngresses(ctx context.Context, params *ListIngressesParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListIngressesRequest(c.Server, params)
 	if err != nil {
 		return nil, err
 	}
@@ -1575,6 +1809,54 @@ func (c *Client) RestoreInstance(ctx context.Context, id string, reqEditors ...R
 	return c.Client.Do(req)
 }
 
+func (c *Client) CreateInstanceSnapshotWithBody(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateInstanceSnapshotRequestWithBody(c.Server, id, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateInstanceSnapshot(ctx context.Context, id string, body CreateInstanceSnapshotJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateInstanceSnapshotRequest(c.Server, id, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) RestoreInstanceSnapshotWithBody(ctx context.Context, id string, snapshotId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewRestoreInstanceSnapshotRequestWithBody(c.Server, id, snapshotId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) RestoreInstanceSnapshot(ctx context.Context, id string, snapshotId string, body RestoreInstanceSnapshotJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewRestoreInstanceSnapshotRequest(c.Server, id, snapshotId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 func (c *Client) StandbyInstance(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewStandbyInstanceRequest(c.Server, id)
 	if err != nil {
@@ -1695,8 +1977,68 @@ func (c *Client) GetResources(ctx context.Context, reqEditors ...RequestEditorFn
 	return c.Client.Do(req)
 }
 
-func (c *Client) ListVolumes(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewListVolumesRequest(c.Server)
+func (c *Client) ListSnapshots(ctx context.Context, params *ListSnapshotsParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListSnapshotsRequest(c.Server, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) DeleteSnapshot(ctx context.Context, snapshotId string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewDeleteSnapshotRequest(c.Server, snapshotId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetSnapshot(ctx context.Context, snapshotId string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetSnapshotRequest(c.Server, snapshotId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ForkSnapshotWithBody(ctx context.Context, snapshotId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewForkSnapshotRequestWithBody(c.Server, snapshotId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ForkSnapshot(ctx context.Context, snapshotId string, body ForkSnapshotJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewForkSnapshotRequest(c.Server, snapshotId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ListVolumes(ctx context.Context, params *ListVolumesParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListVolumesRequest(c.Server, params)
 	if err != nil {
 		return nil, err
 	}
@@ -1768,7 +2110,7 @@ func (c *Client) GetVolume(ctx context.Context, id string, reqEditors ...Request
 }
 
 // NewListBuildsRequest generates requests for ListBuilds
-func NewListBuildsRequest(server string) (*http.Request, error) {
+func NewListBuildsRequest(server string, params *ListBuildsParams) (*http.Request, error) {
 	var err error
 
 	serverURL, err := url.Parse(server)
@@ -1784,6 +2126,28 @@ func NewListBuildsRequest(server string) (*http.Request, error) {
 	queryURL, err := serverURL.Parse(operationPath)
 	if err != nil {
 		return nil, err
+	}
+
+	if params != nil {
+		queryValues := queryURL.Query()
+
+		if params.Tags != nil {
+
+			if queryFrag, err := runtime.StyleParamWithLocation("deepObject", true, "tags", runtime.ParamLocationQuery, *params.Tags); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		queryURL.RawQuery = queryValues.Encode()
 	}
 
 	req, err := http.NewRequest("GET", queryURL.String(), nil)
@@ -1948,7 +2312,7 @@ func NewGetBuildEventsRequest(server string, id string, params *GetBuildEventsPa
 }
 
 // NewListDevicesRequest generates requests for ListDevices
-func NewListDevicesRequest(server string) (*http.Request, error) {
+func NewListDevicesRequest(server string, params *ListDevicesParams) (*http.Request, error) {
 	var err error
 
 	serverURL, err := url.Parse(server)
@@ -1964,6 +2328,28 @@ func NewListDevicesRequest(server string) (*http.Request, error) {
 	queryURL, err := serverURL.Parse(operationPath)
 	if err != nil {
 		return nil, err
+	}
+
+	if params != nil {
+		queryValues := queryURL.Query()
+
+		if params.Tags != nil {
+
+			if queryFrag, err := runtime.StyleParamWithLocation("deepObject", true, "tags", runtime.ParamLocationQuery, *params.Tags); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		queryURL.RawQuery = queryValues.Encode()
 	}
 
 	req, err := http.NewRequest("GET", queryURL.String(), nil)
@@ -2137,7 +2523,7 @@ func NewGetHealthRequest(server string) (*http.Request, error) {
 }
 
 // NewListImagesRequest generates requests for ListImages
-func NewListImagesRequest(server string) (*http.Request, error) {
+func NewListImagesRequest(server string, params *ListImagesParams) (*http.Request, error) {
 	var err error
 
 	serverURL, err := url.Parse(server)
@@ -2153,6 +2539,28 @@ func NewListImagesRequest(server string) (*http.Request, error) {
 	queryURL, err := serverURL.Parse(operationPath)
 	if err != nil {
 		return nil, err
+	}
+
+	if params != nil {
+		queryValues := queryURL.Query()
+
+		if params.Tags != nil {
+
+			if queryFrag, err := runtime.StyleParamWithLocation("deepObject", true, "tags", runtime.ParamLocationQuery, *params.Tags); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		queryURL.RawQuery = queryValues.Encode()
 	}
 
 	req, err := http.NewRequest("GET", queryURL.String(), nil)
@@ -2272,7 +2680,7 @@ func NewGetImageRequest(server string, name string) (*http.Request, error) {
 }
 
 // NewListIngressesRequest generates requests for ListIngresses
-func NewListIngressesRequest(server string) (*http.Request, error) {
+func NewListIngressesRequest(server string, params *ListIngressesParams) (*http.Request, error) {
 	var err error
 
 	serverURL, err := url.Parse(server)
@@ -2288,6 +2696,28 @@ func NewListIngressesRequest(server string) (*http.Request, error) {
 	queryURL, err := serverURL.Parse(operationPath)
 	if err != nil {
 		return nil, err
+	}
+
+	if params != nil {
+		queryValues := queryURL.Query()
+
+		if params.Tags != nil {
+
+			if queryFrag, err := runtime.StyleParamWithLocation("deepObject", true, "tags", runtime.ParamLocationQuery, *params.Tags); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		queryURL.RawQuery = queryValues.Encode()
 	}
 
 	req, err := http.NewRequest("GET", queryURL.String(), nil)
@@ -2444,9 +2874,9 @@ func NewListInstancesRequest(server string, params *ListInstancesParams) (*http.
 
 		}
 
-		if params.Metadata != nil {
+		if params.Tags != nil {
 
-			if queryFrag, err := runtime.StyleParamWithLocation("deepObject", true, "metadata", runtime.ParamLocationQuery, *params.Metadata); err != nil {
+			if queryFrag, err := runtime.StyleParamWithLocation("deepObject", true, "tags", runtime.ParamLocationQuery, *params.Tags); err != nil {
 				return nil, err
 			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
 				return nil, err
@@ -2744,6 +3174,107 @@ func NewRestoreInstanceRequest(server string, id string) (*http.Request, error) 
 	if err != nil {
 		return nil, err
 	}
+
+	return req, nil
+}
+
+// NewCreateInstanceSnapshotRequest calls the generic CreateInstanceSnapshot builder with application/json body
+func NewCreateInstanceSnapshotRequest(server string, id string, body CreateInstanceSnapshotJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateInstanceSnapshotRequestWithBody(server, id, "application/json", bodyReader)
+}
+
+// NewCreateInstanceSnapshotRequestWithBody generates requests for CreateInstanceSnapshot with any type of body
+func NewCreateInstanceSnapshotRequestWithBody(server string, id string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "id", runtime.ParamLocationPath, id)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/instances/%s/snapshots", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewRestoreInstanceSnapshotRequest calls the generic RestoreInstanceSnapshot builder with application/json body
+func NewRestoreInstanceSnapshotRequest(server string, id string, snapshotId string, body RestoreInstanceSnapshotJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewRestoreInstanceSnapshotRequestWithBody(server, id, snapshotId, "application/json", bodyReader)
+}
+
+// NewRestoreInstanceSnapshotRequestWithBody generates requests for RestoreInstanceSnapshot with any type of body
+func NewRestoreInstanceSnapshotRequestWithBody(server string, id string, snapshotId string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "id", runtime.ParamLocationPath, id)
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithLocation("simple", false, "snapshotId", runtime.ParamLocationPath, snapshotId)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/instances/%s/snapshots/%s/restore", pathParam0, pathParam1)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
 
 	return req, nil
 }
@@ -3087,8 +3618,220 @@ func NewGetResourcesRequest(server string) (*http.Request, error) {
 	return req, nil
 }
 
+// NewListSnapshotsRequest generates requests for ListSnapshots
+func NewListSnapshotsRequest(server string, params *ListSnapshotsParams) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/snapshots")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		queryValues := queryURL.Query()
+
+		if params.SourceInstanceId != nil {
+
+			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "source_instance_id", runtime.ParamLocationQuery, *params.SourceInstanceId); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		if params.Kind != nil {
+
+			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "kind", runtime.ParamLocationQuery, *params.Kind); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		if params.Name != nil {
+
+			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "name", runtime.ParamLocationQuery, *params.Name); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		if params.Tags != nil {
+
+			if queryFrag, err := runtime.StyleParamWithLocation("deepObject", true, "tags", runtime.ParamLocationQuery, *params.Tags); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		queryURL.RawQuery = queryValues.Encode()
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewDeleteSnapshotRequest generates requests for DeleteSnapshot
+func NewDeleteSnapshotRequest(server string, snapshotId string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "snapshotId", runtime.ParamLocationPath, snapshotId)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/snapshots/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("DELETE", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewGetSnapshotRequest generates requests for GetSnapshot
+func NewGetSnapshotRequest(server string, snapshotId string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "snapshotId", runtime.ParamLocationPath, snapshotId)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/snapshots/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewForkSnapshotRequest calls the generic ForkSnapshot builder with application/json body
+func NewForkSnapshotRequest(server string, snapshotId string, body ForkSnapshotJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewForkSnapshotRequestWithBody(server, snapshotId, "application/json", bodyReader)
+}
+
+// NewForkSnapshotRequestWithBody generates requests for ForkSnapshot with any type of body
+func NewForkSnapshotRequestWithBody(server string, snapshotId string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "snapshotId", runtime.ParamLocationPath, snapshotId)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/snapshots/%s/fork", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
 // NewListVolumesRequest generates requests for ListVolumes
-func NewListVolumesRequest(server string) (*http.Request, error) {
+func NewListVolumesRequest(server string, params *ListVolumesParams) (*http.Request, error) {
 	var err error
 
 	serverURL, err := url.Parse(server)
@@ -3104,6 +3847,28 @@ func NewListVolumesRequest(server string) (*http.Request, error) {
 	queryURL, err := serverURL.Parse(operationPath)
 	if err != nil {
 		return nil, err
+	}
+
+	if params != nil {
+		queryValues := queryURL.Query()
+
+		if params.Tags != nil {
+
+			if queryFrag, err := runtime.StyleParamWithLocation("deepObject", true, "tags", runtime.ParamLocationQuery, *params.Tags); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		queryURL.RawQuery = queryValues.Encode()
 	}
 
 	req, err := http.NewRequest("GET", queryURL.String(), nil)
@@ -3203,6 +3968,22 @@ func NewCreateVolumeFromArchiveRequestWithBody(server string, params *CreateVolu
 		if params.Id != nil {
 
 			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "id", runtime.ParamLocationQuery, *params.Id); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		if params.Tags != nil {
+
+			if queryFrag, err := runtime.StyleParamWithLocation("deepObject", true, "tags", runtime.ParamLocationQuery, *params.Tags); err != nil {
 				return nil, err
 			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
 				return nil, err
@@ -3341,7 +4122,7 @@ func WithBaseURL(baseURL string) ClientOption {
 // ClientWithResponsesInterface is the interface specification for the client with responses above.
 type ClientWithResponsesInterface interface {
 	// ListBuildsWithResponse request
-	ListBuildsWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListBuildsResponse, error)
+	ListBuildsWithResponse(ctx context.Context, params *ListBuildsParams, reqEditors ...RequestEditorFn) (*ListBuildsResponse, error)
 
 	// CreateBuildWithBodyWithResponse request with any body
 	CreateBuildWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateBuildResponse, error)
@@ -3356,7 +4137,7 @@ type ClientWithResponsesInterface interface {
 	GetBuildEventsWithResponse(ctx context.Context, id string, params *GetBuildEventsParams, reqEditors ...RequestEditorFn) (*GetBuildEventsResponse, error)
 
 	// ListDevicesWithResponse request
-	ListDevicesWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListDevicesResponse, error)
+	ListDevicesWithResponse(ctx context.Context, params *ListDevicesParams, reqEditors ...RequestEditorFn) (*ListDevicesResponse, error)
 
 	// CreateDeviceWithBodyWithResponse request with any body
 	CreateDeviceWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateDeviceResponse, error)
@@ -3376,7 +4157,7 @@ type ClientWithResponsesInterface interface {
 	GetHealthWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetHealthResponse, error)
 
 	// ListImagesWithResponse request
-	ListImagesWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListImagesResponse, error)
+	ListImagesWithResponse(ctx context.Context, params *ListImagesParams, reqEditors ...RequestEditorFn) (*ListImagesResponse, error)
 
 	// CreateImageWithBodyWithResponse request with any body
 	CreateImageWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateImageResponse, error)
@@ -3390,7 +4171,7 @@ type ClientWithResponsesInterface interface {
 	GetImageWithResponse(ctx context.Context, name string, reqEditors ...RequestEditorFn) (*GetImageResponse, error)
 
 	// ListIngressesWithResponse request
-	ListIngressesWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListIngressesResponse, error)
+	ListIngressesWithResponse(ctx context.Context, params *ListIngressesParams, reqEditors ...RequestEditorFn) (*ListIngressesResponse, error)
 
 	// CreateIngressWithBodyWithResponse request with any body
 	CreateIngressWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateIngressResponse, error)
@@ -3428,6 +4209,16 @@ type ClientWithResponsesInterface interface {
 	// RestoreInstanceWithResponse request
 	RestoreInstanceWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*RestoreInstanceResponse, error)
 
+	// CreateInstanceSnapshotWithBodyWithResponse request with any body
+	CreateInstanceSnapshotWithBodyWithResponse(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateInstanceSnapshotResponse, error)
+
+	CreateInstanceSnapshotWithResponse(ctx context.Context, id string, body CreateInstanceSnapshotJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateInstanceSnapshotResponse, error)
+
+	// RestoreInstanceSnapshotWithBodyWithResponse request with any body
+	RestoreInstanceSnapshotWithBodyWithResponse(ctx context.Context, id string, snapshotId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*RestoreInstanceSnapshotResponse, error)
+
+	RestoreInstanceSnapshotWithResponse(ctx context.Context, id string, snapshotId string, body RestoreInstanceSnapshotJSONRequestBody, reqEditors ...RequestEditorFn) (*RestoreInstanceSnapshotResponse, error)
+
 	// StandbyInstanceWithResponse request
 	StandbyInstanceWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*StandbyInstanceResponse, error)
 
@@ -3456,8 +4247,22 @@ type ClientWithResponsesInterface interface {
 	// GetResourcesWithResponse request
 	GetResourcesWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetResourcesResponse, error)
 
+	// ListSnapshotsWithResponse request
+	ListSnapshotsWithResponse(ctx context.Context, params *ListSnapshotsParams, reqEditors ...RequestEditorFn) (*ListSnapshotsResponse, error)
+
+	// DeleteSnapshotWithResponse request
+	DeleteSnapshotWithResponse(ctx context.Context, snapshotId string, reqEditors ...RequestEditorFn) (*DeleteSnapshotResponse, error)
+
+	// GetSnapshotWithResponse request
+	GetSnapshotWithResponse(ctx context.Context, snapshotId string, reqEditors ...RequestEditorFn) (*GetSnapshotResponse, error)
+
+	// ForkSnapshotWithBodyWithResponse request with any body
+	ForkSnapshotWithBodyWithResponse(ctx context.Context, snapshotId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ForkSnapshotResponse, error)
+
+	ForkSnapshotWithResponse(ctx context.Context, snapshotId string, body ForkSnapshotJSONRequestBody, reqEditors ...RequestEditorFn) (*ForkSnapshotResponse, error)
+
 	// ListVolumesWithResponse request
-	ListVolumesWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListVolumesResponse, error)
+	ListVolumesWithResponse(ctx context.Context, params *ListVolumesParams, reqEditors ...RequestEditorFn) (*ListVolumesResponse, error)
 
 	// CreateVolumeWithBodyWithResponse request with any body
 	CreateVolumeWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateVolumeResponse, error)
@@ -4107,6 +4912,60 @@ func (r RestoreInstanceResponse) StatusCode() int {
 	return 0
 }
 
+type CreateInstanceSnapshotResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON201      *Snapshot
+	JSON400      *Error
+	JSON404      *Error
+	JSON409      *Error
+	JSON500      *Error
+	JSON501      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r CreateInstanceSnapshotResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateInstanceSnapshotResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type RestoreInstanceSnapshotResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *Instance
+	JSON400      *Error
+	JSON404      *Error
+	JSON409      *Error
+	JSON500      *Error
+	JSON501      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r RestoreInstanceSnapshotResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r RestoreInstanceSnapshotResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
 type StandbyInstanceResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -4303,6 +5162,103 @@ func (r GetResourcesResponse) StatusCode() int {
 	return 0
 }
 
+type ListSnapshotsResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *[]Snapshot
+	JSON500      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r ListSnapshotsResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListSnapshotsResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type DeleteSnapshotResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON404      *Error
+	JSON500      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r DeleteSnapshotResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r DeleteSnapshotResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type GetSnapshotResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *Snapshot
+	JSON404      *Error
+	JSON500      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r GetSnapshotResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetSnapshotResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type ForkSnapshotResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON201      *Instance
+	JSON400      *Error
+	JSON404      *Error
+	JSON409      *Error
+	JSON500      *Error
+	JSON501      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r ForkSnapshotResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ForkSnapshotResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
 type ListVolumesResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -4428,8 +5384,8 @@ func (r GetVolumeResponse) StatusCode() int {
 }
 
 // ListBuildsWithResponse request returning *ListBuildsResponse
-func (c *ClientWithResponses) ListBuildsWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListBuildsResponse, error) {
-	rsp, err := c.ListBuilds(ctx, reqEditors...)
+func (c *ClientWithResponses) ListBuildsWithResponse(ctx context.Context, params *ListBuildsParams, reqEditors ...RequestEditorFn) (*ListBuildsResponse, error) {
+	rsp, err := c.ListBuilds(ctx, params, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
@@ -4473,8 +5429,8 @@ func (c *ClientWithResponses) GetBuildEventsWithResponse(ctx context.Context, id
 }
 
 // ListDevicesWithResponse request returning *ListDevicesResponse
-func (c *ClientWithResponses) ListDevicesWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListDevicesResponse, error) {
-	rsp, err := c.ListDevices(ctx, reqEditors...)
+func (c *ClientWithResponses) ListDevicesWithResponse(ctx context.Context, params *ListDevicesParams, reqEditors ...RequestEditorFn) (*ListDevicesResponse, error) {
+	rsp, err := c.ListDevices(ctx, params, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
@@ -4535,8 +5491,8 @@ func (c *ClientWithResponses) GetHealthWithResponse(ctx context.Context, reqEdit
 }
 
 // ListImagesWithResponse request returning *ListImagesResponse
-func (c *ClientWithResponses) ListImagesWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListImagesResponse, error) {
-	rsp, err := c.ListImages(ctx, reqEditors...)
+func (c *ClientWithResponses) ListImagesWithResponse(ctx context.Context, params *ListImagesParams, reqEditors ...RequestEditorFn) (*ListImagesResponse, error) {
+	rsp, err := c.ListImages(ctx, params, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
@@ -4579,8 +5535,8 @@ func (c *ClientWithResponses) GetImageWithResponse(ctx context.Context, name str
 }
 
 // ListIngressesWithResponse request returning *ListIngressesResponse
-func (c *ClientWithResponses) ListIngressesWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListIngressesResponse, error) {
-	rsp, err := c.ListIngresses(ctx, reqEditors...)
+func (c *ClientWithResponses) ListIngressesWithResponse(ctx context.Context, params *ListIngressesParams, reqEditors ...RequestEditorFn) (*ListIngressesResponse, error) {
+	rsp, err := c.ListIngresses(ctx, params, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
@@ -4701,6 +5657,40 @@ func (c *ClientWithResponses) RestoreInstanceWithResponse(ctx context.Context, i
 	return ParseRestoreInstanceResponse(rsp)
 }
 
+// CreateInstanceSnapshotWithBodyWithResponse request with arbitrary body returning *CreateInstanceSnapshotResponse
+func (c *ClientWithResponses) CreateInstanceSnapshotWithBodyWithResponse(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateInstanceSnapshotResponse, error) {
+	rsp, err := c.CreateInstanceSnapshotWithBody(ctx, id, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateInstanceSnapshotResponse(rsp)
+}
+
+func (c *ClientWithResponses) CreateInstanceSnapshotWithResponse(ctx context.Context, id string, body CreateInstanceSnapshotJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateInstanceSnapshotResponse, error) {
+	rsp, err := c.CreateInstanceSnapshot(ctx, id, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateInstanceSnapshotResponse(rsp)
+}
+
+// RestoreInstanceSnapshotWithBodyWithResponse request with arbitrary body returning *RestoreInstanceSnapshotResponse
+func (c *ClientWithResponses) RestoreInstanceSnapshotWithBodyWithResponse(ctx context.Context, id string, snapshotId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*RestoreInstanceSnapshotResponse, error) {
+	rsp, err := c.RestoreInstanceSnapshotWithBody(ctx, id, snapshotId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseRestoreInstanceSnapshotResponse(rsp)
+}
+
+func (c *ClientWithResponses) RestoreInstanceSnapshotWithResponse(ctx context.Context, id string, snapshotId string, body RestoreInstanceSnapshotJSONRequestBody, reqEditors ...RequestEditorFn) (*RestoreInstanceSnapshotResponse, error) {
+	rsp, err := c.RestoreInstanceSnapshot(ctx, id, snapshotId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseRestoreInstanceSnapshotResponse(rsp)
+}
+
 // StandbyInstanceWithResponse request returning *StandbyInstanceResponse
 func (c *ClientWithResponses) StandbyInstanceWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*StandbyInstanceResponse, error) {
 	rsp, err := c.StandbyInstance(ctx, id, reqEditors...)
@@ -4789,9 +5779,53 @@ func (c *ClientWithResponses) GetResourcesWithResponse(ctx context.Context, reqE
 	return ParseGetResourcesResponse(rsp)
 }
 
+// ListSnapshotsWithResponse request returning *ListSnapshotsResponse
+func (c *ClientWithResponses) ListSnapshotsWithResponse(ctx context.Context, params *ListSnapshotsParams, reqEditors ...RequestEditorFn) (*ListSnapshotsResponse, error) {
+	rsp, err := c.ListSnapshots(ctx, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListSnapshotsResponse(rsp)
+}
+
+// DeleteSnapshotWithResponse request returning *DeleteSnapshotResponse
+func (c *ClientWithResponses) DeleteSnapshotWithResponse(ctx context.Context, snapshotId string, reqEditors ...RequestEditorFn) (*DeleteSnapshotResponse, error) {
+	rsp, err := c.DeleteSnapshot(ctx, snapshotId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseDeleteSnapshotResponse(rsp)
+}
+
+// GetSnapshotWithResponse request returning *GetSnapshotResponse
+func (c *ClientWithResponses) GetSnapshotWithResponse(ctx context.Context, snapshotId string, reqEditors ...RequestEditorFn) (*GetSnapshotResponse, error) {
+	rsp, err := c.GetSnapshot(ctx, snapshotId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetSnapshotResponse(rsp)
+}
+
+// ForkSnapshotWithBodyWithResponse request with arbitrary body returning *ForkSnapshotResponse
+func (c *ClientWithResponses) ForkSnapshotWithBodyWithResponse(ctx context.Context, snapshotId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ForkSnapshotResponse, error) {
+	rsp, err := c.ForkSnapshotWithBody(ctx, snapshotId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseForkSnapshotResponse(rsp)
+}
+
+func (c *ClientWithResponses) ForkSnapshotWithResponse(ctx context.Context, snapshotId string, body ForkSnapshotJSONRequestBody, reqEditors ...RequestEditorFn) (*ForkSnapshotResponse, error) {
+	rsp, err := c.ForkSnapshot(ctx, snapshotId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseForkSnapshotResponse(rsp)
+}
+
 // ListVolumesWithResponse request returning *ListVolumesResponse
-func (c *ClientWithResponses) ListVolumesWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListVolumesResponse, error) {
-	rsp, err := c.ListVolumes(ctx, reqEditors...)
+func (c *ClientWithResponses) ListVolumesWithResponse(ctx context.Context, params *ListVolumesParams, reqEditors ...RequestEditorFn) (*ListVolumesResponse, error) {
+	rsp, err := c.ListVolumes(ctx, params, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
@@ -5945,6 +6979,128 @@ func ParseRestoreInstanceResponse(rsp *http.Response) (*RestoreInstanceResponse,
 	return response, nil
 }
 
+// ParseCreateInstanceSnapshotResponse parses an HTTP response from a CreateInstanceSnapshotWithResponse call
+func ParseCreateInstanceSnapshotResponse(rsp *http.Response) (*CreateInstanceSnapshotResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateInstanceSnapshotResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest Snapshot
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON201 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 501:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON501 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseRestoreInstanceSnapshotResponse parses an HTTP response from a RestoreInstanceSnapshotWithResponse call
+func ParseRestoreInstanceSnapshotResponse(rsp *http.Response) (*RestoreInstanceSnapshotResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &RestoreInstanceSnapshotResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest Instance
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 501:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON501 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseStandbyInstanceResponse parses an HTTP response from a StandbyInstanceWithResponse call
 func ParseStandbyInstanceResponse(rsp *http.Response) (*StandbyInstanceResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -6293,6 +7449,173 @@ func ParseGetResourcesResponse(rsp *http.Response) (*GetResourcesResponse, error
 	return response, nil
 }
 
+// ParseListSnapshotsResponse parses an HTTP response from a ListSnapshotsWithResponse call
+func ParseListSnapshotsResponse(rsp *http.Response) (*ListSnapshotsResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListSnapshotsResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest []Snapshot
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseDeleteSnapshotResponse parses an HTTP response from a DeleteSnapshotWithResponse call
+func ParseDeleteSnapshotResponse(rsp *http.Response) (*DeleteSnapshotResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &DeleteSnapshotResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetSnapshotResponse parses an HTTP response from a GetSnapshotWithResponse call
+func ParseGetSnapshotResponse(rsp *http.Response) (*GetSnapshotResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetSnapshotResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest Snapshot
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseForkSnapshotResponse parses an HTTP response from a ForkSnapshotWithResponse call
+func ParseForkSnapshotResponse(rsp *http.Response) (*ForkSnapshotResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ForkSnapshotResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest Instance
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON201 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 501:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON501 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseListVolumesResponse parses an HTTP response from a ListVolumesWithResponse call
 func ParseListVolumesResponse(rsp *http.Response) (*ListVolumesResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -6525,7 +7848,7 @@ func ParseGetVolumeResponse(rsp *http.Response) (*GetVolumeResponse, error) {
 type ServerInterface interface {
 	// List builds
 	// (GET /builds)
-	ListBuilds(w http.ResponseWriter, r *http.Request)
+	ListBuilds(w http.ResponseWriter, r *http.Request, params ListBuildsParams)
 	// Create a new build
 	// (POST /builds)
 	CreateBuild(w http.ResponseWriter, r *http.Request)
@@ -6540,7 +7863,7 @@ type ServerInterface interface {
 	GetBuildEvents(w http.ResponseWriter, r *http.Request, id string, params GetBuildEventsParams)
 	// List registered devices
 	// (GET /devices)
-	ListDevices(w http.ResponseWriter, r *http.Request)
+	ListDevices(w http.ResponseWriter, r *http.Request, params ListDevicesParams)
 	// Register a device for passthrough
 	// (POST /devices)
 	CreateDevice(w http.ResponseWriter, r *http.Request)
@@ -6558,7 +7881,7 @@ type ServerInterface interface {
 	GetHealth(w http.ResponseWriter, r *http.Request)
 	// List images
 	// (GET /images)
-	ListImages(w http.ResponseWriter, r *http.Request)
+	ListImages(w http.ResponseWriter, r *http.Request, params ListImagesParams)
 	// Pull and convert OCI image
 	// (POST /images)
 	CreateImage(w http.ResponseWriter, r *http.Request)
@@ -6570,7 +7893,7 @@ type ServerInterface interface {
 	GetImage(w http.ResponseWriter, r *http.Request, name string)
 	// List ingresses
 	// (GET /ingresses)
-	ListIngresses(w http.ResponseWriter, r *http.Request)
+	ListIngresses(w http.ResponseWriter, r *http.Request, params ListIngressesParams)
 	// Create ingress
 	// (POST /ingresses)
 	CreateIngress(w http.ResponseWriter, r *http.Request)
@@ -6601,6 +7924,12 @@ type ServerInterface interface {
 	// Restore instance from standby
 	// (POST /instances/{id}/restore)
 	RestoreInstance(w http.ResponseWriter, r *http.Request, id string)
+	// Create a snapshot for an instance
+	// (POST /instances/{id}/snapshots)
+	CreateInstanceSnapshot(w http.ResponseWriter, r *http.Request, id string)
+	// Restore an instance from a snapshot in-place
+	// (POST /instances/{id}/snapshots/{snapshotId}/restore)
+	RestoreInstanceSnapshot(w http.ResponseWriter, r *http.Request, id string, snapshotId string)
 	// Put instance in standby (pause, snapshot, delete VMM)
 	// (POST /instances/{id}/standby)
 	StandbyInstance(w http.ResponseWriter, r *http.Request, id string)
@@ -6625,9 +7954,21 @@ type ServerInterface interface {
 	// Get host resource capacity and allocations
 	// (GET /resources)
 	GetResources(w http.ResponseWriter, r *http.Request)
+	// List snapshots
+	// (GET /snapshots)
+	ListSnapshots(w http.ResponseWriter, r *http.Request, params ListSnapshotsParams)
+	// Delete a snapshot
+	// (DELETE /snapshots/{snapshotId})
+	DeleteSnapshot(w http.ResponseWriter, r *http.Request, snapshotId string)
+	// Get snapshot details
+	// (GET /snapshots/{snapshotId})
+	GetSnapshot(w http.ResponseWriter, r *http.Request, snapshotId string)
+	// Fork a new instance from a snapshot
+	// (POST /snapshots/{snapshotId}/fork)
+	ForkSnapshot(w http.ResponseWriter, r *http.Request, snapshotId string)
 	// List volumes
 	// (GET /volumes)
-	ListVolumes(w http.ResponseWriter, r *http.Request)
+	ListVolumes(w http.ResponseWriter, r *http.Request, params ListVolumesParams)
 	// Create empty volume
 	// (POST /volumes)
 	CreateVolume(w http.ResponseWriter, r *http.Request)
@@ -6648,7 +7989,7 @@ type Unimplemented struct{}
 
 // List builds
 // (GET /builds)
-func (_ Unimplemented) ListBuilds(w http.ResponseWriter, r *http.Request) {
+func (_ Unimplemented) ListBuilds(w http.ResponseWriter, r *http.Request, params ListBuildsParams) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -6678,7 +8019,7 @@ func (_ Unimplemented) GetBuildEvents(w http.ResponseWriter, r *http.Request, id
 
 // List registered devices
 // (GET /devices)
-func (_ Unimplemented) ListDevices(w http.ResponseWriter, r *http.Request) {
+func (_ Unimplemented) ListDevices(w http.ResponseWriter, r *http.Request, params ListDevicesParams) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -6714,7 +8055,7 @@ func (_ Unimplemented) GetHealth(w http.ResponseWriter, r *http.Request) {
 
 // List images
 // (GET /images)
-func (_ Unimplemented) ListImages(w http.ResponseWriter, r *http.Request) {
+func (_ Unimplemented) ListImages(w http.ResponseWriter, r *http.Request, params ListImagesParams) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -6738,7 +8079,7 @@ func (_ Unimplemented) GetImage(w http.ResponseWriter, r *http.Request, name str
 
 // List ingresses
 // (GET /ingresses)
-func (_ Unimplemented) ListIngresses(w http.ResponseWriter, r *http.Request) {
+func (_ Unimplemented) ListIngresses(w http.ResponseWriter, r *http.Request, params ListIngressesParams) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -6802,6 +8143,18 @@ func (_ Unimplemented) RestoreInstance(w http.ResponseWriter, r *http.Request, i
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
+// Create a snapshot for an instance
+// (POST /instances/{id}/snapshots)
+func (_ Unimplemented) CreateInstanceSnapshot(w http.ResponseWriter, r *http.Request, id string) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Restore an instance from a snapshot in-place
+// (POST /instances/{id}/snapshots/{snapshotId}/restore)
+func (_ Unimplemented) RestoreInstanceSnapshot(w http.ResponseWriter, r *http.Request, id string, snapshotId string) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
 // Put instance in standby (pause, snapshot, delete VMM)
 // (POST /instances/{id}/standby)
 func (_ Unimplemented) StandbyInstance(w http.ResponseWriter, r *http.Request, id string) {
@@ -6850,9 +8203,33 @@ func (_ Unimplemented) GetResources(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
+// List snapshots
+// (GET /snapshots)
+func (_ Unimplemented) ListSnapshots(w http.ResponseWriter, r *http.Request, params ListSnapshotsParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Delete a snapshot
+// (DELETE /snapshots/{snapshotId})
+func (_ Unimplemented) DeleteSnapshot(w http.ResponseWriter, r *http.Request, snapshotId string) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Get snapshot details
+// (GET /snapshots/{snapshotId})
+func (_ Unimplemented) GetSnapshot(w http.ResponseWriter, r *http.Request, snapshotId string) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Fork a new instance from a snapshot
+// (POST /snapshots/{snapshotId}/fork)
+func (_ Unimplemented) ForkSnapshot(w http.ResponseWriter, r *http.Request, snapshotId string) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
 // List volumes
 // (GET /volumes)
-func (_ Unimplemented) ListVolumes(w http.ResponseWriter, r *http.Request) {
+func (_ Unimplemented) ListVolumes(w http.ResponseWriter, r *http.Request, params ListVolumesParams) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -6892,14 +8269,27 @@ type MiddlewareFunc func(http.Handler) http.Handler
 // ListBuilds operation middleware
 func (siw *ServerInterfaceWrapper) ListBuilds(w http.ResponseWriter, r *http.Request) {
 
+	var err error
+
 	ctx := r.Context()
 
 	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
 
 	r = r.WithContext(ctx)
 
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListBuildsParams
+
+	// ------------- Optional query parameter "tags" -------------
+
+	err = runtime.BindQueryParameter("deepObject", true, false, "tags", r.URL.Query(), &params.Tags)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "tags", Err: err})
+		return
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ListBuilds(w, r)
+		siw.Handler.ListBuilds(w, r, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -7036,14 +8426,27 @@ func (siw *ServerInterfaceWrapper) GetBuildEvents(w http.ResponseWriter, r *http
 // ListDevices operation middleware
 func (siw *ServerInterfaceWrapper) ListDevices(w http.ResponseWriter, r *http.Request) {
 
+	var err error
+
 	ctx := r.Context()
 
 	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
 
 	r = r.WithContext(ctx)
 
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListDevicesParams
+
+	// ------------- Optional query parameter "tags" -------------
+
+	err = runtime.BindQueryParameter("deepObject", true, false, "tags", r.URL.Query(), &params.Tags)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "tags", Err: err})
+		return
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ListDevices(w, r)
+		siw.Handler.ListDevices(w, r, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -7172,14 +8575,27 @@ func (siw *ServerInterfaceWrapper) GetHealth(w http.ResponseWriter, r *http.Requ
 // ListImages operation middleware
 func (siw *ServerInterfaceWrapper) ListImages(w http.ResponseWriter, r *http.Request) {
 
+	var err error
+
 	ctx := r.Context()
 
 	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
 
 	r = r.WithContext(ctx)
 
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListImagesParams
+
+	// ------------- Optional query parameter "tags" -------------
+
+	err = runtime.BindQueryParameter("deepObject", true, false, "tags", r.URL.Query(), &params.Tags)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "tags", Err: err})
+		return
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ListImages(w, r)
+		siw.Handler.ListImages(w, r, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -7274,14 +8690,27 @@ func (siw *ServerInterfaceWrapper) GetImage(w http.ResponseWriter, r *http.Reque
 // ListIngresses operation middleware
 func (siw *ServerInterfaceWrapper) ListIngresses(w http.ResponseWriter, r *http.Request) {
 
+	var err error
+
 	ctx := r.Context()
 
 	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
 
 	r = r.WithContext(ctx)
 
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListIngressesParams
+
+	// ------------- Optional query parameter "tags" -------------
+
+	err = runtime.BindQueryParameter("deepObject", true, false, "tags", r.URL.Query(), &params.Tags)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "tags", Err: err})
+		return
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ListIngresses(w, r)
+		siw.Handler.ListIngresses(w, r, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -7395,11 +8824,11 @@ func (siw *ServerInterfaceWrapper) ListInstances(w http.ResponseWriter, r *http.
 		return
 	}
 
-	// ------------- Optional query parameter "metadata" -------------
+	// ------------- Optional query parameter "tags" -------------
 
-	err = runtime.BindQueryParameter("deepObject", true, false, "metadata", r.URL.Query(), &params.Metadata)
+	err = runtime.BindQueryParameter("deepObject", true, false, "tags", r.URL.Query(), &params.Tags)
 	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "metadata", Err: err})
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "tags", Err: err})
 		return
 	}
 
@@ -7607,6 +9036,77 @@ func (siw *ServerInterfaceWrapper) RestoreInstance(w http.ResponseWriter, r *htt
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.RestoreInstance(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateInstanceSnapshot operation middleware
+func (siw *ServerInterfaceWrapper) CreateInstanceSnapshot(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", chi.URLParam(r, "id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateInstanceSnapshot(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RestoreInstanceSnapshot operation middleware
+func (siw *ServerInterfaceWrapper) RestoreInstanceSnapshot(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", chi.URLParam(r, "id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "snapshotId" -------------
+	var snapshotId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "snapshotId", chi.URLParam(r, "snapshotId"), &snapshotId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "snapshotId", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RestoreInstanceSnapshot(w, r, id, snapshotId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -7897,8 +9397,76 @@ func (siw *ServerInterfaceWrapper) GetResources(w http.ResponseWriter, r *http.R
 	handler.ServeHTTP(w, r)
 }
 
-// ListVolumes operation middleware
-func (siw *ServerInterfaceWrapper) ListVolumes(w http.ResponseWriter, r *http.Request) {
+// ListSnapshots operation middleware
+func (siw *ServerInterfaceWrapper) ListSnapshots(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListSnapshotsParams
+
+	// ------------- Optional query parameter "source_instance_id" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "source_instance_id", r.URL.Query(), &params.SourceInstanceId)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "source_instance_id", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "kind" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "kind", r.URL.Query(), &params.Kind)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "kind", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "name" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "name", r.URL.Query(), &params.Name)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "name", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "tags" -------------
+
+	err = runtime.BindQueryParameter("deepObject", true, false, "tags", r.URL.Query(), &params.Tags)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "tags", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListSnapshots(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteSnapshot operation middleware
+func (siw *ServerInterfaceWrapper) DeleteSnapshot(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "snapshotId" -------------
+	var snapshotId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "snapshotId", chi.URLParam(r, "snapshotId"), &snapshotId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "snapshotId", Err: err})
+		return
+	}
 
 	ctx := r.Context()
 
@@ -7907,7 +9475,102 @@ func (siw *ServerInterfaceWrapper) ListVolumes(w http.ResponseWriter, r *http.Re
 	r = r.WithContext(ctx)
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ListVolumes(w, r)
+		siw.Handler.DeleteSnapshot(w, r, snapshotId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetSnapshot operation middleware
+func (siw *ServerInterfaceWrapper) GetSnapshot(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "snapshotId" -------------
+	var snapshotId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "snapshotId", chi.URLParam(r, "snapshotId"), &snapshotId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "snapshotId", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetSnapshot(w, r, snapshotId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ForkSnapshot operation middleware
+func (siw *ServerInterfaceWrapper) ForkSnapshot(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "snapshotId" -------------
+	var snapshotId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "snapshotId", chi.URLParam(r, "snapshotId"), &snapshotId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "snapshotId", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ForkSnapshot(w, r, snapshotId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListVolumes operation middleware
+func (siw *ServerInterfaceWrapper) ListVolumes(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListVolumesParams
+
+	// ------------- Optional query parameter "tags" -------------
+
+	err = runtime.BindQueryParameter("deepObject", true, false, "tags", r.URL.Query(), &params.Tags)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "tags", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListVolumes(w, r, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -7986,6 +9649,14 @@ func (siw *ServerInterfaceWrapper) CreateVolumeFromArchive(w http.ResponseWriter
 	err = runtime.BindQueryParameter("form", true, false, "id", r.URL.Query(), &params.Id)
 	if err != nil {
 		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "tags" -------------
+
+	err = runtime.BindQueryParameter("deepObject", true, false, "tags", r.URL.Query(), &params.Tags)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "tags", Err: err})
 		return
 	}
 
@@ -8254,6 +9925,12 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 		r.Post(options.BaseURL+"/instances/{id}/restore", wrapper.RestoreInstance)
 	})
 	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/instances/{id}/snapshots", wrapper.CreateInstanceSnapshot)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/instances/{id}/snapshots/{snapshotId}/restore", wrapper.RestoreInstanceSnapshot)
+	})
+	r.Group(func(r chi.Router) {
 		r.Post(options.BaseURL+"/instances/{id}/standby", wrapper.StandbyInstance)
 	})
 	r.Group(func(r chi.Router) {
@@ -8278,6 +9955,18 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 		r.Get(options.BaseURL+"/resources", wrapper.GetResources)
 	})
 	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/snapshots", wrapper.ListSnapshots)
+	})
+	r.Group(func(r chi.Router) {
+		r.Delete(options.BaseURL+"/snapshots/{snapshotId}", wrapper.DeleteSnapshot)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/snapshots/{snapshotId}", wrapper.GetSnapshot)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/snapshots/{snapshotId}/fork", wrapper.ForkSnapshot)
+	})
+	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/volumes", wrapper.ListVolumes)
 	})
 	r.Group(func(r chi.Router) {
@@ -8297,6 +9986,7 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 }
 
 type ListBuildsRequestObject struct {
+	Params ListBuildsParams
 }
 
 type ListBuildsResponseObject interface {
@@ -8499,6 +10189,7 @@ func (response GetBuildEvents500JSONResponse) VisitGetBuildEventsResponse(w http
 }
 
 type ListDevicesRequestObject struct {
+	Params ListDevicesParams
 }
 
 type ListDevicesResponseObject interface {
@@ -8723,6 +10414,7 @@ func (response GetHealth200JSONResponse) VisitGetHealthResponse(w http.ResponseW
 }
 
 type ListImagesRequestObject struct {
+	Params ListImagesParams
 }
 
 type ListImagesResponseObject interface {
@@ -8879,6 +10571,7 @@ func (response GetImage500JSONResponse) VisitGetImageResponse(w http.ResponseWri
 }
 
 type ListIngressesRequestObject struct {
+	Params ListIngressesParams
 }
 
 type ListIngressesResponseObject interface {
@@ -9362,6 +11055,133 @@ func (response RestoreInstance500JSONResponse) VisitRestoreInstanceResponse(w ht
 	return json.NewEncoder(w).Encode(response)
 }
 
+type CreateInstanceSnapshotRequestObject struct {
+	Id   string `json:"id"`
+	Body *CreateInstanceSnapshotJSONRequestBody
+}
+
+type CreateInstanceSnapshotResponseObject interface {
+	VisitCreateInstanceSnapshotResponse(w http.ResponseWriter) error
+}
+
+type CreateInstanceSnapshot201JSONResponse Snapshot
+
+func (response CreateInstanceSnapshot201JSONResponse) VisitCreateInstanceSnapshotResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateInstanceSnapshot400JSONResponse Error
+
+func (response CreateInstanceSnapshot400JSONResponse) VisitCreateInstanceSnapshotResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateInstanceSnapshot404JSONResponse Error
+
+func (response CreateInstanceSnapshot404JSONResponse) VisitCreateInstanceSnapshotResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateInstanceSnapshot409JSONResponse Error
+
+func (response CreateInstanceSnapshot409JSONResponse) VisitCreateInstanceSnapshotResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateInstanceSnapshot500JSONResponse Error
+
+func (response CreateInstanceSnapshot500JSONResponse) VisitCreateInstanceSnapshotResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateInstanceSnapshot501JSONResponse Error
+
+func (response CreateInstanceSnapshot501JSONResponse) VisitCreateInstanceSnapshotResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(501)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type RestoreInstanceSnapshotRequestObject struct {
+	Id         string `json:"id"`
+	SnapshotId string `json:"snapshotId"`
+	Body       *RestoreInstanceSnapshotJSONRequestBody
+}
+
+type RestoreInstanceSnapshotResponseObject interface {
+	VisitRestoreInstanceSnapshotResponse(w http.ResponseWriter) error
+}
+
+type RestoreInstanceSnapshot200JSONResponse Instance
+
+func (response RestoreInstanceSnapshot200JSONResponse) VisitRestoreInstanceSnapshotResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type RestoreInstanceSnapshot400JSONResponse Error
+
+func (response RestoreInstanceSnapshot400JSONResponse) VisitRestoreInstanceSnapshotResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type RestoreInstanceSnapshot404JSONResponse Error
+
+func (response RestoreInstanceSnapshot404JSONResponse) VisitRestoreInstanceSnapshotResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type RestoreInstanceSnapshot409JSONResponse Error
+
+func (response RestoreInstanceSnapshot409JSONResponse) VisitRestoreInstanceSnapshotResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type RestoreInstanceSnapshot500JSONResponse Error
+
+func (response RestoreInstanceSnapshot500JSONResponse) VisitRestoreInstanceSnapshotResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type RestoreInstanceSnapshot501JSONResponse Error
+
+func (response RestoreInstanceSnapshot501JSONResponse) VisitRestoreInstanceSnapshotResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(501)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
 type StandbyInstanceRequestObject struct {
 	Id string `json:"id"`
 }
@@ -9682,7 +11502,166 @@ func (response GetResources500JSONResponse) VisitGetResourcesResponse(w http.Res
 	return json.NewEncoder(w).Encode(response)
 }
 
+type ListSnapshotsRequestObject struct {
+	Params ListSnapshotsParams
+}
+
+type ListSnapshotsResponseObject interface {
+	VisitListSnapshotsResponse(w http.ResponseWriter) error
+}
+
+type ListSnapshots200JSONResponse []Snapshot
+
+func (response ListSnapshots200JSONResponse) VisitListSnapshotsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListSnapshots500JSONResponse Error
+
+func (response ListSnapshots500JSONResponse) VisitListSnapshotsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteSnapshotRequestObject struct {
+	SnapshotId string `json:"snapshotId"`
+}
+
+type DeleteSnapshotResponseObject interface {
+	VisitDeleteSnapshotResponse(w http.ResponseWriter) error
+}
+
+type DeleteSnapshot204Response struct {
+}
+
+func (response DeleteSnapshot204Response) VisitDeleteSnapshotResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeleteSnapshot404JSONResponse Error
+
+func (response DeleteSnapshot404JSONResponse) VisitDeleteSnapshotResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteSnapshot500JSONResponse Error
+
+func (response DeleteSnapshot500JSONResponse) VisitDeleteSnapshotResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetSnapshotRequestObject struct {
+	SnapshotId string `json:"snapshotId"`
+}
+
+type GetSnapshotResponseObject interface {
+	VisitGetSnapshotResponse(w http.ResponseWriter) error
+}
+
+type GetSnapshot200JSONResponse Snapshot
+
+func (response GetSnapshot200JSONResponse) VisitGetSnapshotResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetSnapshot404JSONResponse Error
+
+func (response GetSnapshot404JSONResponse) VisitGetSnapshotResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetSnapshot500JSONResponse Error
+
+func (response GetSnapshot500JSONResponse) VisitGetSnapshotResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ForkSnapshotRequestObject struct {
+	SnapshotId string `json:"snapshotId"`
+	Body       *ForkSnapshotJSONRequestBody
+}
+
+type ForkSnapshotResponseObject interface {
+	VisitForkSnapshotResponse(w http.ResponseWriter) error
+}
+
+type ForkSnapshot201JSONResponse Instance
+
+func (response ForkSnapshot201JSONResponse) VisitForkSnapshotResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ForkSnapshot400JSONResponse Error
+
+func (response ForkSnapshot400JSONResponse) VisitForkSnapshotResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ForkSnapshot404JSONResponse Error
+
+func (response ForkSnapshot404JSONResponse) VisitForkSnapshotResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ForkSnapshot409JSONResponse Error
+
+func (response ForkSnapshot409JSONResponse) VisitForkSnapshotResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ForkSnapshot500JSONResponse Error
+
+func (response ForkSnapshot500JSONResponse) VisitForkSnapshotResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ForkSnapshot501JSONResponse Error
+
+func (response ForkSnapshot501JSONResponse) VisitForkSnapshotResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(501)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
 type ListVolumesRequestObject struct {
+	Params ListVolumesParams
 }
 
 type ListVolumesResponseObject interface {
@@ -9981,6 +11960,12 @@ type StrictServerInterface interface {
 	// Restore instance from standby
 	// (POST /instances/{id}/restore)
 	RestoreInstance(ctx context.Context, request RestoreInstanceRequestObject) (RestoreInstanceResponseObject, error)
+	// Create a snapshot for an instance
+	// (POST /instances/{id}/snapshots)
+	CreateInstanceSnapshot(ctx context.Context, request CreateInstanceSnapshotRequestObject) (CreateInstanceSnapshotResponseObject, error)
+	// Restore an instance from a snapshot in-place
+	// (POST /instances/{id}/snapshots/{snapshotId}/restore)
+	RestoreInstanceSnapshot(ctx context.Context, request RestoreInstanceSnapshotRequestObject) (RestoreInstanceSnapshotResponseObject, error)
 	// Put instance in standby (pause, snapshot, delete VMM)
 	// (POST /instances/{id}/standby)
 	StandbyInstance(ctx context.Context, request StandbyInstanceRequestObject) (StandbyInstanceResponseObject, error)
@@ -10005,6 +11990,18 @@ type StrictServerInterface interface {
 	// Get host resource capacity and allocations
 	// (GET /resources)
 	GetResources(ctx context.Context, request GetResourcesRequestObject) (GetResourcesResponseObject, error)
+	// List snapshots
+	// (GET /snapshots)
+	ListSnapshots(ctx context.Context, request ListSnapshotsRequestObject) (ListSnapshotsResponseObject, error)
+	// Delete a snapshot
+	// (DELETE /snapshots/{snapshotId})
+	DeleteSnapshot(ctx context.Context, request DeleteSnapshotRequestObject) (DeleteSnapshotResponseObject, error)
+	// Get snapshot details
+	// (GET /snapshots/{snapshotId})
+	GetSnapshot(ctx context.Context, request GetSnapshotRequestObject) (GetSnapshotResponseObject, error)
+	// Fork a new instance from a snapshot
+	// (POST /snapshots/{snapshotId}/fork)
+	ForkSnapshot(ctx context.Context, request ForkSnapshotRequestObject) (ForkSnapshotResponseObject, error)
 	// List volumes
 	// (GET /volumes)
 	ListVolumes(ctx context.Context, request ListVolumesRequestObject) (ListVolumesResponseObject, error)
@@ -10052,8 +12049,10 @@ type strictHandler struct {
 }
 
 // ListBuilds operation middleware
-func (sh *strictHandler) ListBuilds(w http.ResponseWriter, r *http.Request) {
+func (sh *strictHandler) ListBuilds(w http.ResponseWriter, r *http.Request, params ListBuildsParams) {
 	var request ListBuildsRequestObject
+
+	request.Params = params
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
 		return sh.ssi.ListBuilds(ctx, request.(ListBuildsRequestObject))
@@ -10186,8 +12185,10 @@ func (sh *strictHandler) GetBuildEvents(w http.ResponseWriter, r *http.Request, 
 }
 
 // ListDevices operation middleware
-func (sh *strictHandler) ListDevices(w http.ResponseWriter, r *http.Request) {
+func (sh *strictHandler) ListDevices(w http.ResponseWriter, r *http.Request, params ListDevicesParams) {
 	var request ListDevicesRequestObject
+
+	request.Params = params
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
 		return sh.ssi.ListDevices(ctx, request.(ListDevicesRequestObject))
@@ -10341,8 +12342,10 @@ func (sh *strictHandler) GetHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 // ListImages operation middleware
-func (sh *strictHandler) ListImages(w http.ResponseWriter, r *http.Request) {
+func (sh *strictHandler) ListImages(w http.ResponseWriter, r *http.Request, params ListImagesParams) {
 	var request ListImagesRequestObject
+
+	request.Params = params
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
 		return sh.ssi.ListImages(ctx, request.(ListImagesRequestObject))
@@ -10448,8 +12451,10 @@ func (sh *strictHandler) GetImage(w http.ResponseWriter, r *http.Request, name s
 }
 
 // ListIngresses operation middleware
-func (sh *strictHandler) ListIngresses(w http.ResponseWriter, r *http.Request) {
+func (sh *strictHandler) ListIngresses(w http.ResponseWriter, r *http.Request, params ListIngressesParams) {
 	var request ListIngressesRequestObject
+
+	request.Params = params
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
 		return sh.ssi.ListIngresses(ctx, request.(ListIngressesRequestObject))
@@ -10749,6 +12754,73 @@ func (sh *strictHandler) RestoreInstance(w http.ResponseWriter, r *http.Request,
 	}
 }
 
+// CreateInstanceSnapshot operation middleware
+func (sh *strictHandler) CreateInstanceSnapshot(w http.ResponseWriter, r *http.Request, id string) {
+	var request CreateInstanceSnapshotRequestObject
+
+	request.Id = id
+
+	var body CreateInstanceSnapshotJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateInstanceSnapshot(ctx, request.(CreateInstanceSnapshotRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateInstanceSnapshot")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateInstanceSnapshotResponseObject); ok {
+		if err := validResponse.VisitCreateInstanceSnapshotResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// RestoreInstanceSnapshot operation middleware
+func (sh *strictHandler) RestoreInstanceSnapshot(w http.ResponseWriter, r *http.Request, id string, snapshotId string) {
+	var request RestoreInstanceSnapshotRequestObject
+
+	request.Id = id
+	request.SnapshotId = snapshotId
+
+	var body RestoreInstanceSnapshotJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RestoreInstanceSnapshot(ctx, request.(RestoreInstanceSnapshotRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RestoreInstanceSnapshot")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RestoreInstanceSnapshotResponseObject); ok {
+		if err := validResponse.VisitRestoreInstanceSnapshotResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // StandbyInstance operation middleware
 func (sh *strictHandler) StandbyInstance(w http.ResponseWriter, r *http.Request, id string) {
 	var request StandbyInstanceRequestObject
@@ -10972,9 +13044,122 @@ func (sh *strictHandler) GetResources(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// ListSnapshots operation middleware
+func (sh *strictHandler) ListSnapshots(w http.ResponseWriter, r *http.Request, params ListSnapshotsParams) {
+	var request ListSnapshotsRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListSnapshots(ctx, request.(ListSnapshotsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListSnapshots")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListSnapshotsResponseObject); ok {
+		if err := validResponse.VisitListSnapshotsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeleteSnapshot operation middleware
+func (sh *strictHandler) DeleteSnapshot(w http.ResponseWriter, r *http.Request, snapshotId string) {
+	var request DeleteSnapshotRequestObject
+
+	request.SnapshotId = snapshotId
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteSnapshot(ctx, request.(DeleteSnapshotRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteSnapshot")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteSnapshotResponseObject); ok {
+		if err := validResponse.VisitDeleteSnapshotResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetSnapshot operation middleware
+func (sh *strictHandler) GetSnapshot(w http.ResponseWriter, r *http.Request, snapshotId string) {
+	var request GetSnapshotRequestObject
+
+	request.SnapshotId = snapshotId
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetSnapshot(ctx, request.(GetSnapshotRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetSnapshot")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetSnapshotResponseObject); ok {
+		if err := validResponse.VisitGetSnapshotResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ForkSnapshot operation middleware
+func (sh *strictHandler) ForkSnapshot(w http.ResponseWriter, r *http.Request, snapshotId string) {
+	var request ForkSnapshotRequestObject
+
+	request.SnapshotId = snapshotId
+
+	var body ForkSnapshotJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ForkSnapshot(ctx, request.(ForkSnapshotRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ForkSnapshot")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ForkSnapshotResponseObject); ok {
+		if err := validResponse.VisitForkSnapshotResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // ListVolumes operation middleware
-func (sh *strictHandler) ListVolumes(w http.ResponseWriter, r *http.Request) {
+func (sh *strictHandler) ListVolumes(w http.ResponseWriter, r *http.Request, params ListVolumesParams) {
 	var request ListVolumesRequestObject
+
+	request.Params = params
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
 		return sh.ssi.ListVolumes(ctx, request.(ListVolumesRequestObject))
@@ -11110,183 +13295,201 @@ func (sh *strictHandler) GetVolume(w http.ResponseWriter, r *http.Request, id st
 // Base64 encoded, gzipped, json marshaled Swagger object
 var swaggerSpec = []string{
 
-	"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",
+	"H4sIAAAAAAAC/+x97XLbOJboq6B0d2vkHUmWP+I43ura69iJ29tx4hvH3rvTylUgEpLQJgE2AMpRUvk7",
+	"DzCPOE9yCwcAvwRKlGM78SZTUx2ZBPFxcHBwvs/nVsDjhDPClGwdfG7JYEpiDD8PlcLB9IpHaUzekj9T",
+	"IpV+nAieEKEogUYxT5kaJlhN9V8hkYGgiaKctQ5a51hN0c2UCIJm0AuSU55GIRoRBN+RsNVpkY84TiLS",
+	"OmhtxkxthljhVqel5ol+JJWgbNL60mkJgkPOorkZZozTSLUOxjiSpFMZ9kx3jbBE+pMufJP1N+I8Ipi1",
+	"vkCPf6ZUkLB18HtxGe+zxnz0BwmUHvxwhmmERxE5JjMakEUwBKkQhKlhKOiMiEVQHJn30RyNeMpCZNqh",
+	"NkujCNExYpyRjRIw2IyGVENCN9FDtw6USIkHMiHMaUhDzw4cnSLzGp0eo/aUfCwPsv10tN+q75LhmCx2",
+	"+msaY9bVwNXTcv1D22Lfr3Z9PVMex+lwIniaLPZ8+ubs7BLBS8TSeEREscf97aw/yhSZEKE7TAI6xGEo",
+	"iJT+9buXxbn1+/3+Ad4+6Pd7fd8sZ4SFXNSC1Lz2g3SrH5IlXTYCqe1/AaSvr06PTw/RERcJFxi+XRip",
+	"gthF8BTXVUSb8q748P95SqNwEetH+jERQ8qkwqwGB0/tSw0uPkZqSpD9Dl2dofaYCxSSUTqZUDbZaILv",
+	"mmBFRJFwiNXicDBVZNtQzpCiMZEKx0mr0xpzEeuPWiFWpKvfNBpQELxiON2i0WCLRy01OzmMZV3vrgmi",
+	"DMU0iqgkAWehLI5BmdrbrV9M4cAQIbiHQr3Qj1FMpMQTgtqabGrazZBUWKUSUYnGmEYkbLRHPkQwi/mD",
+	"jxANCVN0TMvn26BTF4+Cre0dL+2I8YQMQzqxN1G5+2N4rlFM96MQtPYvRB+0ebN1wJCCjBfHewmkGwYR",
+	"ZEwE0Tj+lcMlgs8I06dFj/cvMG7rf23mV/SmvZ83AZjnefMvndafKUnJMOGSmhkuUC77RqMRgBrBF/45",
+	"w6tle13AKKmwWH4+oMUdnEQzv0awuTBNv3RaCk9WfvJOt6nSTiCNdsgSFaglkS9mhHmYpIAzZV+UofOK",
+	"T1BEGUG2hd0LTRP1AL9EHEjiHcEhA//i4dfzvgXxMg9qetPvOi3C0lgDM+KTIjSnBAs1IiVg1lxhtqN8",
+	"drXgPy8dn8pdhSUZLqcg55QxEiLd0h5s0xKlEjjVheXDKbqmajgjQnrPHEzrN6qQbVHbVcSD6zGNyHCK",
+	"5dTMGIchnFccnZdW4uHWSuwvTjQRdB0CFyGR4uji18PtJ3vIDuCBoeSpCMwMFldS+Fp3b9oihcUIR5EX",
+	"N+rRbf07ehFD/BhwkR2Mursnw0CHmIbStexu6u47rSSVU/MLaLeeFdx9mgxo9Ir07/eeRR8BkTBSQq3M",
+	"5OcB3yRms9Ek4hqmc5Qy+mdaYrB76FTLCgrpi4KGJOwgDC80ycap4t0JYURoOoXGgsfAbRWYYNQmvUmv",
+	"gwaaL+xqLriLt7v9frc/aJXZ2Gi3O0lSDQqsFBF6gv/vd9z9dNj9W7/77H3+c9jrvv/rv/gQoCln7rhC",
+	"u862O/sd5CZbZNerE13Fyt+a+hen76M4ZqtPNZ1Yd6ePThcZB7PWkAfXRPQo34zoSGAx32QTyj4eRFgR",
+	"qcorX972TmEB61gCBDbRYFoTDBWhB9C4HfEbIgJNgSOiEU92NBGmSnYQ1nIzEC+kb8l/RwFm+iwY5oIL",
+	"RFiIbqiaIgztytCK512c0C41U211WjH++IqwiZq2DvZ2FvBcI3nb/ui+/zf3aOM/vKgu0oh4kPwtTxVl",
+	"EwSvza0+pRLlc6CKxCt3xEE3jYDNiyk7NZ9tZTPBQuD51++wW8iynTbCXO1WB7GH838zI0LQ0N2qR2fH",
+	"qB3Ra2LRHYmUoUHa7+8E0AB+Evsk4HGMWWiebfTQm5gqfZul+SVttEG94nb/3iLBlAOfEUVcLygDdQ0T",
+	"k8PQ0CHPdh47TYpEVjqHexWDngy29+T8clNTtgRLqaaCp5NpeVaWrK43Hyqvh5QPR4lvTlReo9PNN0gT",
+	"fRRRDZ2MyG/1+2fPN+Wgpf944v7Y6KFjAzKYvt4/LuzdI6dYEOCAQsQZOjq/RDiKeGDlz7FmVMd0kgoS",
+	"9ipqD+jddzgIU2KecOpjgCuYkTddRJBuN3+7Bh5sjijblHobusF6cCds9hVs2As2o4KzWLPCMyyopnEl",
+	"JdTn1us3xy+GL15ftQ70IQrTwGp0zt+8fdc6aO30+/2Wj9PRGLTijJ+cXx7BTun2U66SKJ0MJf3kIcOH",
+	"2fpQTGIujPhhv0HtaZlKG+4MweYMWjsnzw1ybZ0AXrlNCamE1q4X03EZY7ZPnvuwZTpPiJhR6dNR/Jq9",
+	"cztfoKmGMJVxWxIxIyJDWsDiXoH3CyKeht3CkJ3WmAoSCKzRrtVp/UlizQTNPmnUyefu+c6vOmh0+a+4",
+	"1XGUUEaWXOvfyfV6w8V1xHHY3brj25URpfteXOJr86K8vxYnSIYSrc6CKMjCGxqq6TDkN0xP2UNX7RuU",
+	"Nc6I60e9Ehz98+//uDrLedStk1FiKe3W9pOvpLQV2qq79sqf2ULSxL+My8S/iKuzf/79H24l33YRhGn8",
+	"DEt2HaP+KS/lv6ZETYko3Lhug/UjI0DA58jhS2H4kj6paARaIK58RkSE5wViaefU2uoDxarMSlAF58t+",
+	"p0nfNdIfryCdujd3MZ9UhZrtvp84eiblmdNzfb4tLW8yk2wiW9tn9uf24pRqZnRNk+FE84JDPMl0XMvM",
+	"cxfXNEHwRRe+MNsYRebwhqnuGY04V70B+68pYQj2DjaYfCQB0CktxKPD81OJbmgUgUQMhGDxOhiwdwVS",
+	"YJpLpf8rUtZBo1QhQWKuCLKMJgySwlyg8YiglGFn/+sNWBEqdoFVvLJguSaCkWg4JTgkQjaEjPkI2Y9q",
+	"gQNLHWOpiDAUOk3K8Dr+7ewCtY/nDMc0QL+ZXs94mEYEXaSJPsMbZeh1BiwRZEYYyCyaqaB2XD5GPFVd",
+	"Pu4qQYibYgydZToFa5yanZxfWvOm3OgN2FuiAUtYSEKYs7slJFJTrFDI2V/0iSVhudvi+BWg+8/yOrJP",
+	"pzULkrS8I9vV3XgNBki99hkVKsWRJm8lDs5rjzSWbg+nbgzpRYnBkq0MObEqG5KaCoimZzB7L/KxfjnP",
+	"MCf1ct4Fw4mcclUr511TFq6al+vkN922lk/J9F7SNr9vViURpJsmE4HBUHuXjMqtpW+AZv1urPDB8Bnb",
+	"MqgGqVQ8LpjcULuiKKRllWIZWDMedUOsMDB1DTlPM91F83U8N12ZI1J3vw0nI4/2WV9jlKEJneDRXJUl",
+	"qa2+7yB+rSrEzcW3LXVuIOZgk3Co+HJDOB0j17aJ3QucRoaKD2dj6uk5Y41yLSqVKKj4nFhyo7voJgG1",
+	"RLqDbqZUM1MSOSAAnb46K2oxegPWhYvlAB1nA2TdZl3qgwkac+iizUVhEhSMH2g030AYXZ310Ltstn+R",
+	"iGFFZ8T5xUyxRCNCGEqBCSchjA+XZnECqdQ3FVXVz+2NZFxoNkBZw+27HtJCZIzt7a6PQowVDUDhPqKV",
+	"9YBR1GyUHkmTblbkLRrxAsvcB96SCZVKVJwHUPvty6OdnZ1nVa5w+0m3v9XdevJuq3/Q1///W3M/g7v3",
+	"EvL1dVimLdaEUaQ+R5enx9uWBS2Poz7t4mf7Hz9i9WyP3shnn+KRmPyxgx/Ej8hPyo5z2wtqp5KIriOT",
+	"Gqt8FpeCYaPGonJrQ8k92T1yM+6ytgYS73TL+3CQ8pnereF3fRemKsFcabwvLG5hPfqp5gLzU1JQIFkb",
+	"WUC91sBjKq+fC4KvQ37DPPe2ZsLk0Nxnfs1uqiXr0RyRj5phJyESnKuxNBqkMjO6tft0d39nb3e/3/f4",
+	"BS0iPA/oMNA3UKMJvDk6RRGeE4HgG9QG0T9Eo4iPyoj+ZGdv/2n/2dZ203kYwbkZHDJe2X2F2hYif3U+",
+	"pu5NaVLb20/3dnZ2+nt727uNZmXZ+EaTcix/iSV5uvN0d2t/e7cRFHyKiBfOT6vqSxL6lLhJElGjdunK",
+	"hAR0TAMEnl5If4DaMVxhJNMBlM/kCIdDYdlL792hMI3kUt2xGcy2NG59cRopmkTEvIMNaSTPwMqPoSef",
+	"Xp4yRsQwc2Nboyfr3bZSV+rWkjVBJS/FEujOqAQuJGeeKInCA3NCV9I52M18Yu/r8MCuoSE2vNKiUzci",
+	"MxIVkcBcXXqyMRcEZXhiNq20KspmOKLhkLIk9aJELShfpgJ4UdMpwiOeKqO8gQ0rDgK2c5A9xppcN3Pz",
+	"eMnF9UorpL6JhyJlTHezUu9yGEX8Rm/xtYYN3OIY2a+do0uB6cuULEYVZd9L9NZ8YVRV+eMkVYgyxbV0",
+	"ysLRvAMjkRDaMSSIVBwoKQ6uNYdpu2nKXfr5lteaYXGKcDNeTjsfyArQHRsl7N1K2GJC1FAqrFZyLBpT",
+	"3kH7C2je2KlBf7hSAdIA7ozcPATQweujq9G2KxlO7gfiy8xyma4hbwS3sKAh6SE4XWAfcF6mlZN2oXiS",
+	"kDDT//QG7MIcleyRRHEqQed5beCgpoQKxAWd0PLA9tg8gH1vHVR02HRrdCx+uMihwktQitcfejxWRBgI",
+	"Ogf6ohec3YRWp2Vh3+q0LCUqg8Y99EAkNzovTPHk/HJdK10i+JhGnuWChtm+tZKZs1+92u1fdLf+j7FF",
+	"a3wDFo0yo5WOeUh6lRgVaN/s5jk5vzyvm1MWIISKs1tYU2ZH8FCOTN3sIGI15AFmaESQlWAc+uuLJRsk",
+	"572f+XjZscAxGaXjMRHD2KNce6nfI9PAGIwoQ2fPy/ys5pubSs3npc0BsXmMAxvf0Qz6HoVcZRmdAjTf",
+	"+7frLTHXcJ1XqN4qYdtYx9Aeep2FZKGT80uJctuPR1NX3t5az6Hz6VzSAEemR+PkTVlRwQbI2ZhDPs8/",
+	"tKpID58ce3lDdxBQezZJUjiGF2+7p2+uNuOQzDqlOYG9Zsojoue9UaAWM+cbmrs5lYjErE7TYRBDNj1A",
+	"BVhlJ7gxkArn1QMdxRWOhjLiyjObd/olgpeoffXS+O7pGXRQUtpK/bwAhRJ+73lPjKZIdcNewIBVlWnp",
+	"gHtlx3Iko1GvFJZXGtR3VH4lODIBnGV8zsMM3Mbz6/JG8+uVp9d24hv31LnINPAhPDo7NgxDwJnClBGB",
+	"YqKwDRctOHwBO9TqtLr6jgoxicGAOf735c5fNSr4DF2WKXGPFqK/7kWBWxO1oIlcNCMhijGjYyKVjVoo",
+	"jSynePvJ3oGJrQrJePfJXq/XW9db70XuntdoKzaNM1PBca8np1+3D/fglNdkLZ9b54fvfm0dtDZTKTYj",
+	"HuBoU44oOyj8nf2Zv4Af5s8RZV5nvkbheHS8EIZXNmnqO8s8P9ArYSTIEJKDAL/SxFQjz2jUjOgnEiKv",
+	"17rCEy2fGIz7Wvf0Wwew5VHUqhC4VrTTNwhio5+Wa0IdYwRt7JgpUzTK4/sWdaC3itCUS4NYFgJYEsKy",
+	"sJUoMr8Czmb6VPhiWEoE3L37KvvBjRHohiH1YPJ/WWkv1IKXAv/S1eettYmTZDXa+hnFjP41jd2zHvae",
+	"m+ibU/3b2NjKo7+Z/Oef/1eeP/1j689XV1f/PTv5z+PX9L+vovM3X+VLujy44ptGSNxZUAQYlkqREU1R",
+	"6QyrwMNQTblUNRC2b5DiKNYf99ARCH4HA9ZFr6giAkcHaNDCCe1ZwPcCHg9aqE0+4kCZrxBnSHdl/cc2",
+	"9MfnRv2jP/7sZMsv1T5C6ygm7IZkPp0yHYU8xpRtDNiA2b6QW4gEm77+FaIAJyoVRO+e5mGjORoJHOQO",
+	"YvngHfQZJ8mXjQEDCZd8VEKvIMFCZdFgbgRACjsr4zNgm5MQzXCUEmkl5AHL7iUQ+XUnRkfTy5QgoJuv",
+	"aFZrgOIVX7goOzju9zuefUS6nd7IiEpFGMq0HVQCoqO281Td75dIxX5/v7+Swc9waAn6wUlYzNXikLLB",
+	"WTIIDEMbwj2cKpU00KVr2mTOCPr13btzDQb97wVyHeWwyLbYCHk4SSJKpNERqgh4HescvNHyO/zp3W24",
+	"IKMkg8+iBr6YL2Bg9O7VBVJExJQZWt8ONDjHNNDrA/M/lTLVqEgxOjw6e7HRa5BsBmCbzX/JPr7LVlix",
+	"HDulWZ0uMMN4Dd8OOj3uaDbNntCcgQO3mpdcoMgQmPxcH6BLScruibBVxqpvdjKa55o3cwMMWhuux6RK",
+	"KQ7Q24xvxNlUsijVHBlcl/m5hG6t4cX4/Cz03inPFbyZrFxkSRt4+GCFrJ0Tru16UrD8+HsgDmees6pO",
+	"c72zXVSG6sH8qJHv/b1zKzvryqjrhqqVPdMLkQhZtFrzMLP7CNdalNc+UjWsNcIj/dqa3J1UcnWGpliy",
+	"vyh4WZFNtnaeNkraokdtar4uGq752EwpO1XOzT0zuxqH/2saRcabQdIJwxF6htoXpye/nb56tYG66M2b",
+	"s+pWLPvCtz8NotYcap+cX0IoGJZDZwGqd3rEueMw+UilkotRAI0Mqcuj5H4tRbJ5wyo27jC8zVmfF5bx",
+	"EIFr39Kt7/sLmlsa5va1sWqW2b2nULVa4uoL8yrTWfP4boPO7mU6pfAxH30o8gTO5/rWEWOdFvX4mx5K",
+	"TQJJiE7P80wbuVLKdV9Z07Pt3tbefm+r3+9t9Zuo6GIcLBn77PCo+eD9baOIOMCjgyA8IOOvUBFaxDbM",
+	"G45u8FyigWOvBy3DzxcY+cKxtSx4I/PrYmDe7eLwqgzFqki7dSLrmoXMLUmXdVFOlNWYR3vyt6/KqUWa",
+	"3szWdcF+NVxHeU1QwNMo1HzQSJ88I1aR0Ep/kqg8Bxkc1kt2zfgNKy/d6DD1+f0zJWKOrs7OShpvQcY2",
+	"xVKDhYPLQ80+8GStbdhewSqvnM0to9ceImKtSjULt9Wdx6cVVW7OhdJgaAPVW849es3elJmt0XiyZE0V",
+	"pUlIZsM09TFF+pULnLi8PD0uIQfGe1v7/f1n3f3R1l53N+xvdfHWzl53+wnuj3eCpzs1SQ6bu73c3pOl",
+	"fJrrA5UA8KCANHFo4YE+b5kryihVKHNT0wf5SHOXqMDGmrAc0AlYvyHdA9zEgX4TzTNOd+nH51gfavdt",
+	"An8t/+JimirNMsE3cpoqpP+CKeslWElheReGPhyg1xy+Ec6/k/GqyGGag9/UYvOqeNK2Hj3O8xMGs8Tu",
+	"AL3MCFxGIi1JbEtifxq6a52SweF6o+T2Zner4MLVaRkQtjotBxlw9Vp0+rIT8cYzFPHGp8wnOAJ6lzvV",
+	"pIpG9JM5cnrqVCoaGAkNw27WHTubRoCEQ3Pd1pnmjKeGvZKzj9ypvjpDbQgd/CuyApz+ayMz4xWP0O72",
+	"s91ne0+3n+01ChDIJ7iaGh+BH9Hi5FaS5iBJhy7Za83Sj84v4aLSl6BMYyOR27UX/DETwQPNGVKG8uyx",
+	"+eDPes+KcREhT0dRQcNjg6jA+b5Jqt8aW9SfNJrR8Zj9+Sm43v5D0Hjr457cHnkFqWwgP9d5WtRKLoho",
+	"ZNQ1qV/8ruuAUELWRne8JRJWgC6IQoA/XU2w9I2auf9YlHMxIBbiXsTa3dnZ2X/6ZLsRXtnZFQ7OEGTF",
+	"xVme2RkUjhi0RO23Fxdos4Bwpk/nE5kIIvXiTHCj95whm4KrX3KX1HLKjg9LapibHGts37O4FuRXlmOx",
+	"i7JABy+mjJtZOOVeaO/s9J/uPtl/0uwYW+loKD4upzC2nbX+CxIQOivtfBs02e8Oz5HuXYxxUJYGtrZ3",
+	"dp/sPd1fa1ZqrVkpgZmMqVJrTWz/6d6T3Z3trWZhSj5ttQ3AKx3YMu3yHDoPUnh2wwOKRdLbqbstfFzi",
+	"ouvkUm/N3P2z6uu3jnNvHqBNJfRKC36lqK2ZqCJDWggy3miik/CTSD1OXQp5zS429btd7mZ7jtX0lI35",
+	"ojliHeHQOi85NXWiGR8JCXNDwigJHe3KpETLS4E7VCQJClNiIWd4I4EtwLExySRYTYFZhQ8pm5QdwRcG",
+	"bCKymTksD8eHcW3DJtol6XeieSdSgJXRB0uEc3eaRsptKod+qWKxY0EmaYQFqvqWL5mynMcRZddNepfz",
+	"eMQjGiD9QVX0H/Mo4jdD/Ur+AmvZaLQ6/cEwtwZXRHkzOesLYDakMm6+hF/0Kjcqnkhw82+a7zehRkgT",
+	"ZZ3XRPRSC2/G/fqS0Y8FRC/Hq+5u9+uc1Go6LbmnLbrur0vbLcr6Trzzqj/MMn15TJHG2FORYMt8cGm9",
+	"vtWCNXGZS94iJ4DaTv/n4oHLcC3E5Ta6iJsZNKuabjebTUmC8ui7+0+e7jUMjP4qVntJFYWvYKxn8RKG",
+	"umanzppwbftP9p8929l98mx7Lf7IGUVq9qfOMFLcn0pCvwrP9qQP/1trUsYs4p9SjWmkPKFScr5bT+jL",
+	"kqObB8TUSN3LKhjlO+nE/DID3ozFXcItHZZYrkL+2TYZjwkojoYGbt18MhVHqkZzCHCCA6rmHgkQ34Bv",
+	"CcqaVAI7GvRemawHpLZvG5unKZdMR7ntvu0GR/9mJLsKLuw3zq8g01GdFPmmOqqRIY0zVljRUDRQEBiM",
+	"8BnQbzJgohssSxYA/TtQJOwU8gtXTUWmRfMqFA7Xs0IUuRHcF5zkLzpR3P7KdhakjhKTXIX4siu0/ghq",
+	"jgA8vZoo2D03sscNNljtgFGhD/YCvN1Xw1Ex88nS1DKlNCn5rbv+uM0yIy9+Z26w9ccrWPvX+bCaBALw",
+	"0c7Bgjzvu1NCiRpsUlysztl3D6HcRod9q2Buq/5+kHhu+/heYrgXtuOi4LLU3EHPfeWvJVYyOu51+zvd",
+	"/t67rZ2DJ3sHW1v3EU2QGS3qVLlPP23dPI228Xg32p8//XNr+nSyHe94XTTuIVdkJaFtJXWkXUNCRDV9",
+	"RzXtjSQRZaQrM/PHaqvxkjgho5RL8ByYvCUS2TpigKvKs+TUXpQXWTy8WOXAqSYXfQhnMjv7pbJMdfqn",
+	"x8unfSt7QnUifgSrTgXwqdlkILpt607TgoJeFU6PF5A1i/KhTMl4XkLi90so2G/24NZRKuvDbWeYp5Jw",
+	"h8nZF0tYk79eAJSPxC7PdlG5hIxRtJhcJPMfvdtUF+/sltZ5GxcysGw/2SunYDns/s2kXEHD3sHmL3/9",
+	"3933//Yv/rRbJdFREtENyRg45msy70L0C9LI1SuHqoIndEsqbJNVKYJjoHbBNTHUNcYfi/N90s902fPX",
+	"OF5YAogaMWXZ3ysX5K8ItYBoxjOkLo9q7IoSV7JbUVPm0cbJo0Jj1CZxouYuFtTp1DfW81Q5zDr0stF3",
+	"7GXff3YXMYGXS4MAf8AsvkVHIjehlS5EC/tfG3njV8odVx16jebbZiYsO6BW8q1JtaTy6bIq26bcNai1",
+	"bdTbJK2G/69RWbvOkJGfMlfS1JXWXqWfX2o1LKysMJP6vTFeZF9ZhpxKV3/8liCzSubVYWTGE0dzot1q",
+	"6kqTXUVQ0FpbABnAahBkhohFa8dyR9gz/DEbAThQLBe4ZVhHoUzUyXPImPTWpTCkY9cFTKNayOP519Vn",
+	"d1i1uBnLCrY7P0XvwbO0agn1qztbFeTMx+gsrwmvyRwJUkHV/EKTIeuuT7Ag4jA1aAj0CRYBj/PBIZTy",
+	"yxdQxo89OrkTLY3RAB2enwKWxJjBXY6uzlBExySYBxGxkXALHmwgT785Ou2aEN6s3gKUUFUAEJcC+/D8",
+	"FDLq2uKlrX5vuwclp3hCGE5o66C109uC/MIaDLDETci8AD+tuU2fQ7j1TkN7Oz83TfRXAsdEQfWL3z1m",
+	"K0WEyeQgwWEBTwqMTYKpsJxNEoExzUhkVH8Lzr+OwB+YW6JjAI6betFKNbeqRZK8sdv6XqODTDiTZkO3",
+	"+/1KAV+cZ1rd/EMa21c+biMuw1RTX/SEXWD5HKdjQf6l09rtb601n5XJUX3DXjKcqikX9BOBaT5ZEwi3",
+	"GvSUGXuHq9lFbMP8nAEKFU/Y7+/1fsk0jrGYO3DlsEq4rGPRiEQY0jOOXF3YHrKiH8TuySlPoxBqvyQm",
+	"Ab0moxgpLHqTTwiLYEpnZMDs7WES3WIBsc0x0reG0VuVj4YZ2uy+ITtEquc8nFegm3W3qbsDbqsM4LUr",
+	"G2d6k6SmxLGPopvk0DLg3qzYhGGm8lzDJiv0NQH3sjH96O2wkZ+kJniwLQSKEGSx8tsbfgsthH75nRuO",
+	"s3euwHb5ktMyAmVBlIY5J1AubOxNkWQK9Nrk2dfEwzidQAsLlGKUnLtyGQ+JiXhK5mrKmfmdjlKmUvN7",
+	"JPiNJEJfzDby2cLaZo61qAtVDGgM0ccmr4oec9NMcfPzNZl/6Q3YYRi7nDm2ZBKOJLdZxY0/KpUoK9wF",
+	"uFtTC98vLBzZKiMmo28xCaqZJk9VkqoeMgshyoZrQ3PIkSunJBwwxdFnYUoizL9sfs5H/AIcNcGhxpNC",
+	"E7Okzc80/FI3aznEevVDaOqRSQgAYNDSt8ugpX9PBNYcdSqnCAfgNasfFre0bQ42F8CtbFQhHGCGEp6k",
+	"keb9AKlMsvRSH5D6AkcRUnCU3LeaB4KdrFmPNbb78jhaS7sxjVaOEWR0LBym/u6+/zxJEgjiE7v/8+LN",
+	"awRXFdT/hmZ5OCbAiDJ9i2ZlqvTovQF7gYMpMnwTFPYYtGg4aOV1njdgrqm0poBuFxivX6AAvhmmQ8Nf",
+	"ej3dleHpDtDvn00vB/osJfFQ8WvCBq0vHVR4MaFqmo6yd+/9AK0zWF6UCAFqG9q/4RIX6RUWrkFzb2AW",
+	"Im5pbTRHGOUUqCjdjyjDYmnWJQ/oLQS1gIknsgiMzwNQ8QxaBwOn5Bm0OoMWYTN4ZjVBg9YXPwRslrB6",
+	"T3OTeMo2y5For9/fWO1JZOHrYaFLDfXx+7LAfW3fGeNhma5FxsMWo7cxLXoHbUV4YLcegPN5jkOXlOIn",
+	"i7eCxbPydIF5g++L94BB34gY3XGFA4Pi/Y4DWyqdGLSAoC6QOJzfnxE4qOPgcuQtih9VIXNRrNitO2UB",
+	"TDFy+Lf7APgH4+Zp+GHcZw81Lo5MwSiXlPpxoSNslkPEjl8iPiHqe8C4/kORUlct5Bvi72PBnxNi+b4c",
+	"aBVqtgkFOYvqlmqgsiA4lrYX01jLqhcwp+4FYQq9gKc9+6+TeCCu80PEJx8OkAFhxCcoooxI65OR2TD0",
+	"pWhhCR+ZvIrZdzY1aTDFbEIkapv7859//wdMirLJP//+D81Nm19w3DeNvz+EPn6YEizUiGD14QD9RkjS",
+	"xRGdEbcYiFUiMyLmaKdvSxDDK0+iUzlgA/aWqFQwmXn663UBTEyHtu6GXg9lKZFIAgihktzYuqAbtadH",
+	"hHdn2YDyQU90Z0HmsisoLEDfig4HwKeQMqoojqz81fJrz8yaS/qzqgZ3Qae/mr4o8lEZ7O2aCa5JYADE",
+	"vnMHL+yiUfvi4sVGD4GMYbACwgyAY867scxz7ydNWk2TDEUpExSAsqFNhRz3tfrfY9ummQLY9vgjaYDr",
+	"kvbXq4CNyoMIEjp4/ZQVmqiD/XBzqmGffvbY1firV9Defr3FIZyfZiNB+O722eHeIsxtscscZN9CBEZt",
+	"W3ssyzdZqqj5rZD+QW6NQiHW7OpA3GS5fDCx7IizcUQDhbpuLpAWIyaZqFZGkMdCDt7aWSPs1lUN6C3e",
+	"b5ul+JTamy4LVcmvvPu/PSqDrnON5EHHOa79vElWoc4xlQHX3xawpRvgxGbbNOxLdk6LWLRKIXUMz7Mr",
+	"Zym7dJyVaLYH8uFUU3bolFXvhgcgiscVgvgNCWElg2AhTP8xYfNltouunvESzdX3hZr9h+OCHlqL5UPz",
+	"x6TGCitg01RwmtWVqkMvW3nqHjfajuBZ+AUR7lSbiZpsdPmyzKcomJLg2izIlt1exhGcusrcTURf09+P",
+	"JPmakl9rcCwW5D9ZlAbCbg6rZQLuqU2reH/yLYywlnh7d3Zei2AeIIOzychprE3GQiznLNj4oUy9D3Kb",
+	"VUt7P6KTdJ5GkbN4zIhQeeGz4h2w+Rncklbz9u60Lb0OLt++6hIWcPBDy3yo/EyUq0d0txy+2TCzlJ9o",
+	"0kQmBFA5xKhnoL9i/427IMqS2//r9kub3v5ft1+aBPf/unNoUtxv3Buy9B+KND80x/2IkU8z3LQMNCBN",
+	"pmrQKg41a9WQSXXtfyg+1VagW4dTzeD6k1ltwqwWwbWUX82KAd4jx2rrpn0bk0yGbD5owyvnn/iDcaoP",
+	"q+WzGFkosV8ye9iUk1zktcpsge7H50BJM4wrXhsN1dX5gVx6fTjUPT3u2DJ0pnhcFiDyQMprN48HZ27t",
+	"uA+vuT6MR3SS8lQWY0+g6iCRNlgpImUC/NjY7vx6rmW8v2Ms7T/k1fHgfPVPvL8njr+6oYZ4GwvUKp7f",
+	"tWrK89v2UN/PlJ8wsWtvXVkLm0Zlo8ap0BVtaYrGpfpCi86Ovnn5ZBF0qQWVXFxAIEEcDNh/aPnjd0Vw",
+	"/P4XFyST9vvbe/CcsNn7X1ycDDtzqEKYEpRIhAVBh6+Pwew3geh1SIaWh+RV52FSnJlCzrbG6P84ASm3",
+	"fDaXkBwW/pSQGklIBXAtl5CyKir3KSKZQb6ZjOTwzQdwm1rjp5T0EFKSTMdjGlDCVJ4BeMFJzCYQf4Sx",
+	"ZczahwrOHaWLtrGUlJc2Ws6A5mnvHtyxJxv84YUjl2HvcfrIcxMVEzpxJL8M6+WR7w0f+g9LnB9eDnnM",
+	"KHZSrOLv5/hNgNjYJiD2MwgvubhuinmePJx3joB3z50UV/gd8iZ6epBd5NuzKHB5G996jTRlzuUBDuRC",
+	"ctVv6dLpIGGFWxMUSdkkK0h5Q9WUpyarytA+NFnZ9Kmw1WSA5Qlsr9+avOjRH4ABfc0VonESkZhA1rau",
+	"wSaoBJomCRdZ/TEqC6mI1yN/+tgUHWxNchtbsreDbMJmUNZlFURBb7+4XV6qGfHJ6qDabHAXQeqJqh2w",
+	"S2mSvHwwrPAHlBFZpDiSJCKBQjdTGkwhwlY/g/5NAC5Okg9ZSo2NA3QCJ7WYWQQGb0siKI6gyiOPTIHS",
+	"D7M4/nCwmAHu6uwMPjLBtSbX24cD5LK+ZReE1K2KEbN6FRGWCr22ccBtjUmCR5HZ0Q/6Fiqsb8PG0uYp",
+	"TwbMF1fLyI3tkI7Rh0KI7YeaGFtHUF/xifxW/FKnPlGVWYviSADgDG4SFrbqFDs08kfXbvX7vvwpDSN9",
+	"zTTuOdB3YTKv+CRLklVCZZwkTdHXThOweBbHS3AYtQvJzKUKear+KlVIhICPLXbXITdq48D8ofC1RlRm",
+	"S5G5dPCAfl71pcla4wWVJqqFfNLmr1kctzotOx9P9dyvj5iudrioZtM7UwiL/slprxPwXCb2hYjnys1h",
+	"61bUs9y2HMcPL++5+tbfGA2/gX4snwVljlWBvc0Lhz+uyElTqaXKi5nk+b4zkpV6qT8lZaXyRZ6m/3+g",
+	"iGrWWq3P88BCagZin2RWKm/xzaXTrNrGTwk1k1C5QGFqhqvUu/lhxc6MoKCUlSRPy57eVvbMksxlYIY6",
+	"hGypQSCneZuf3c/TW7AL3wkl7NRWfalLZ5Qv+nsguTU10RrR3G/EJ9lrtcAgfEMS7KqzPTQFzqCixb2M",
+	"yn0XZNgcuIwaF2kOVN6nrvDiT2JcUgMaTeltibFjPhd0gQXyTFk3iXAdXbZ8ai0BtlWgfnh5LZdVfnCJ",
+	"LeBCGNcxcEZ7TKGLBZthQfRsJziVpJMdmI6zW1+dnW3UHRqhlh4Z8X0YtG/HOVTKcsahvy6yoKFLUn90",
+	"dmxT2lOJRMp66E1MIXP8NSEJpKSkPJUIfAB7xXpjdVXQsoJihCkxTzhlauUs8qb3M5kvt0rS/cB0ygZv",
+	"//BqJVto97ERKaAd+va2C1guVClTZs9rpnNmK8pMZn3NfOART3XvC/XQ0JhGRM6lIrGx2Y3TCA4RpPew",
+	"2V/td8Z3rYOoklA9vAO+PgkRMZWSciYHbETGmitJiNBjQ8FJGpGC+cFn2bpQOKOa54b0fR+mLSiRBtYc",
+	"rOqgVq6OhpPEVUfzmU+ygm63ntJLsFUhOY9HPKIBiii7lqgd0WvDg6OZRJH+sbHU2DWE7+46t+3tT5aG",
+	"9Ckbc2/6P4OzGTL/CBTutELWnDH/0ZG1E1I8LI7+wEb7yZpcSdcEwREUAc3cbFGqaEQ/GVKnO6FS0cDU",
+	"TMIZ7KDcixmvN2BnRAndBguCAh5FJFBO17CZCB5sDtJ+fydIKMRD7BCYHBC8+tcxjHh0fgntTEmazoDp",
+	"P6Djd4fniGqYjrEVmQsTtYXt0enmmxXm/wsA0/9gecwscNmx8G/4T8vu+j6UtWdI1hxRniwTgHjywysM",
+	"LAf3U1vwOLUF4MSeraY9ETgAplhOUxXyG+bXDJgKqXLzs/lxuioUQuFgeuVKRX8f3K6tFrtqGLfAR3Eo",
+	"7ZpCYtKTfhN9vS3o+0jTOWnAuSUAE1MM6vDfAqZQ+I+G3XdvrCvC8Tu01FmIutS/383Zeuibz87BRfgV",
+	"4fFYjrnBNLcSKFlZ1D5l4YwrZbMgFYIwBalgctYywAkOqJp3EI5cNVVbHinTIeWF4EeC4Gt90/YG7G0W",
+	"SGnLM2npquNEKxRSeW16sNJTD72ZESHTUTY5BITJyHkAfFtQNcBRYCqRkvGYBIrOiCkRKmukr2wq95mW",
+	"Nx/Es9HupQXdYxM5/DgBu5ejhZU6Sp5ytekbLrJWzdI3ZL0WvGEKniJLfZ6HrqGpgr+Oys4z+DWtdYu3",
+	"r9bzXvtNf9Rw7LKXlH8S9tVXrvJHyYp3UXBOaZr0Icfwx5Z/oTDz0lEtOXitDgRv7NF1nx5WqwLBs8Ef",
+	"OhD8wuvk88jSUeGS21ZdBPj3hwj9h/UufugI8MeNW5qVkAugq6dEDSLBvwsMvJ8Q8G/sXX+LEPDvyt8T",
+	"Qni/nd/9d+XpaT0WM0/Pn0He9+ngaSK9IaC1zsHTUD2reV4qKF3ZNs3EJNvjj8TBW2XlGvy7A/vPlG0N",
+	"RIYCsNwtXCE3QPulRXgSJ2rutFF8DH43eU5BST+B954vcC5TOt9fvNot9LF3hx4OT2u1sT9TvT2YwjfP",
+	"h316/PjzuxXPXOli2dS3TheLYEpnpXitZSfYgigRpJvwBPSsoQGYhYe7yxQWvcknZLvvDdi7KXF/Ieqy",
+	"ZZAQhVSQQEVzRJniQBHMGH+RSHAtCcB7LuY+9W3x5L4UPD60q1lxH9ozZZVhuZtfPO+GWOHuzFGbJSq0",
+	"rzBZneGPNE5jIHiIMnTyHLXJRyVM8gY01pIPouMMpORjQEgoASc3ihPe6tdoNuknMpyMmsxySRqONzbN",
+	"CQpSqXjs9v70GLVxqnh3QpjeC83qj4GTTQSf0dDkyM2BOuORgepWDUDX1btqpsL6g+fChZncN+FhmlxI",
+	"k080KZMF4/bYOmiNKMMwuZUJL8pnynjg6vEwBT+4/Ow4zGn9vMKqVbY1JmohxwFRcY4izdFv/LzmHvM1",
+	"V/RkcHda6bZrlsW0mXNDQ5+D+8hgmjm+PKza+ur7sccXqhI/QtX5LBNI69Tm3xcK9h/ufnhodfnVI/bf",
+	"OiFO+C6oyqED3aMPYV7xAEcoJDMS8STWbKVp2+q0UhG1DlpTpZKDzc1It5tyqQ72+/v91pf3X/5/AAAA",
+	"//9dM5gHNB0BAA==",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file

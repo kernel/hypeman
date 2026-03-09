@@ -4,6 +4,9 @@ package instances
 
 import (
 	"context"
+	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,13 +29,10 @@ import (
 
 func setupTestManagerForFirecracker(t *testing.T) (*manager, string) {
 	tmpDir := t.TempDir()
+	prepareIntegrationTestDataDir(t, tmpDir)
 	cfg := &config.Config{
 		DataDir: tmpDir,
-		Network: config.NetworkConfig{
-			BridgeName: "vmbr0",
-			SubnetCIDR: "10.100.0.0/16",
-			DNSServer:  "1.1.1.1",
-		},
+		Network: newParallelTestNetworkConfig(t),
 	}
 
 	p := paths.New(tmpDir)
@@ -72,11 +72,11 @@ func createNginxImageAndWait(t *testing.T, ctx context.Context, imageManager ima
 	t.Helper()
 
 	nginxImage, err := imageManager.CreateImage(ctx, images.CreateImageRequest{
-		Name: "docker.io/library/nginx:alpine",
+		Name: integrationTestImageRef(t, "docker.io/library/nginx:alpine"),
 	})
 	require.NoError(t, err)
 
-	for i := 0; i < 180; i++ {
+	for i := 0; i < 60; i++ {
 		img, err := imageManager.GetImage(ctx, nginxImage.Name)
 		if err == nil && img.Status == images.StatusReady {
 			return
@@ -90,7 +90,33 @@ func createNginxImageAndWait(t *testing.T, ctx context.Context, imageManager ima
 	t.Fatalf("timed out waiting for image %q to become ready", nginxImage.Name)
 }
 
+func startGatewayProbeServer(t *testing.T, gatewayIP string) (string, func()) {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", net.JoinHostPort(gatewayIP, "0"))
+	require.NoError(t, err)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/probe", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("Connection successful"))
+	})
+
+	server := &http.Server{Handler: mux}
+	go func() {
+		_ = server.Serve(listener)
+	}()
+
+	cleanup := func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = server.Shutdown(shutdownCtx)
+	}
+
+	return fmt.Sprintf("http://%s/probe", listener.Addr().String()), cleanup
+}
+
 func TestFirecrackerStandbyAndRestore(t *testing.T) {
+	t.Parallel()
 	requireFirecrackerIntegrationPrereqs(t)
 
 	mgr, tmpDir := setupTestManagerForFirecracker(t)
@@ -106,7 +132,7 @@ func TestFirecrackerStandbyAndRestore(t *testing.T) {
 
 	inst, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "test-firecracker-standby",
-		Image:          "docker.io/library/nginx:alpine",
+		Image:          integrationTestImageRef(t, "docker.io/library/nginx:alpine"),
 		Size:           1024 * 1024 * 1024,
 		OverlaySize:    10 * 1024 * 1024 * 1024,
 		Vcpus:          1,
@@ -139,6 +165,7 @@ func TestFirecrackerStandbyAndRestore(t *testing.T) {
 }
 
 func TestFirecrackerStopClearsStaleSnapshot(t *testing.T) {
+	t.Parallel()
 	requireFirecrackerIntegrationPrereqs(t)
 
 	mgr, tmpDir := setupTestManagerForFirecracker(t)
@@ -154,7 +181,7 @@ func TestFirecrackerStopClearsStaleSnapshot(t *testing.T) {
 
 	inst, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "fc-stale-snapshot",
-		Image:          "docker.io/library/nginx:alpine",
+		Image:          integrationTestImageRef(t, "docker.io/library/nginx:alpine"),
 		Size:           1024 * 1024 * 1024,
 		OverlaySize:    10 * 1024 * 1024 * 1024,
 		Vcpus:          1,
@@ -201,6 +228,7 @@ func TestFirecrackerStopClearsStaleSnapshot(t *testing.T) {
 }
 
 func TestFirecrackerNetworkLifecycle(t *testing.T) {
+	t.Parallel()
 	requireFirecrackerIntegrationPrereqs(t)
 
 	mgr, tmpDir := setupTestManagerForFirecracker(t)
@@ -219,7 +247,7 @@ func TestFirecrackerNetworkLifecycle(t *testing.T) {
 
 	inst, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "fc-net",
-		Image:          "docker.io/library/nginx:alpine",
+		Image:          integrationTestImageRef(t, "docker.io/library/nginx:alpine"),
 		Size:           2 * 1024 * 1024 * 1024,
 		HotplugSize:    512 * 1024 * 1024,
 		OverlaySize:    5 * 1024 * 1024 * 1024,
@@ -242,18 +270,22 @@ func TestFirecrackerNetworkLifecycle(t *testing.T) {
 	assert.True(t, strings.HasPrefix(tap.Attrs().Name, "hype-"))
 	assert.Equal(t, uint8(netlink.OperUp), uint8(tap.Attrs().OperState))
 
-	bridge, err := netlink.LinkByName("vmbr0")
+	master, err := netlink.LinkByIndex(tap.Attrs().MasterIndex)
 	require.NoError(t, err)
-	assert.Equal(t, bridge.Attrs().Index, tap.Attrs().MasterIndex)
+	_, isBridge := master.(*netlink.Bridge)
+	assert.True(t, isBridge, "TAP should be attached to a bridge")
+
+	probeURL, stopProbeServer := startGatewayProbeServer(t, alloc.Gateway)
+	t.Cleanup(stopProbeServer)
 
 	require.NoError(t, waitForLogMessage(ctx, mgr, inst.Id, "start worker processes", 15*time.Second))
 	require.NoError(t, waitForLogMessage(ctx, mgr, inst.Id, "[guest-agent] listening", 10*time.Second))
 
-	// Retry to reduce flakiness while guest network stack settles.
+	// Retry while guest network stack settles.
 	var output string
 	var exitCode int
 	for i := 0; i < 10; i++ {
-		output, exitCode, err = execCommand(ctx, inst, "curl", "-s", "--connect-timeout", "10", "https://public-ping-bucket-kernel.s3.us-east-1.amazonaws.com/index.html")
+		output, exitCode, err = execCommand(ctx, inst, "curl", "-sS", "--connect-timeout", "10", probeURL)
 		if err == nil && exitCode == 0 {
 			break
 		}
@@ -293,7 +325,7 @@ func TestFirecrackerNetworkLifecycle(t *testing.T) {
 	assert.Equal(t, uint8(netlink.OperUp), uint8(tapRestored.Attrs().OperState))
 
 	for i := 0; i < 10; i++ {
-		output, exitCode, err = execCommand(ctx, inst, "curl", "-s", "https://public-ping-bucket-kernel.s3.us-east-1.amazonaws.com/index.html")
+		output, exitCode, err = execCommand(ctx, inst, "curl", "-sS", "--connect-timeout", "10", probeURL)
 		if err == nil && exitCode == 0 {
 			break
 		}
@@ -318,6 +350,7 @@ func TestFirecrackerNetworkLifecycle(t *testing.T) {
 }
 
 func TestFirecrackerForkFromRunningNetwork(t *testing.T) {
+	t.Parallel()
 	requireFirecrackerIntegrationPrereqs(t)
 
 	mgr, tmpDir := setupTestManagerForFirecracker(t)
@@ -334,7 +367,7 @@ func TestFirecrackerForkFromRunningNetwork(t *testing.T) {
 
 	source, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "fc-fork-running-src",
-		Image:          "docker.io/library/nginx:alpine",
+		Image:          integrationTestImageRef(t, "docker.io/library/nginx:alpine"),
 		Size:           2 * 1024 * 1024 * 1024,
 		HotplugSize:    256 * 1024 * 1024,
 		OverlaySize:    10 * 1024 * 1024 * 1024,
@@ -377,7 +410,19 @@ func TestFirecrackerForkFromRunningNetwork(t *testing.T) {
 
 	assertHostCanReachNginx(t, sourceAfterFork.IP, 80, 60*time.Second)
 	assertHostCanReachNginx(t, forked.IP, 80, 60*time.Second)
-	assertHostCanReachNginx(t, sourceAfterFork.IP, 80, 60*time.Second)
 	assert.NotEqual(t, sourceAfterFork.IP, forked.IP)
 	assert.NotEqual(t, sourceAfterFork.MAC, forked.MAC)
+}
+
+func TestFirecrackerSnapshotFeature(t *testing.T) {
+	t.Parallel()
+	requireFirecrackerIntegrationPrereqs(t)
+
+	mgr, tmpDir := setupTestManagerForFirecracker(t)
+	runStandbySnapshotScenario(t, mgr, tmpDir, snapshotScenarioConfig{
+		hypervisor: hypervisor.TypeFirecracker,
+		sourceName: "fc-snapshot-src",
+		snapshot:   "fc-snapshot-1",
+		forkName:   "fc-snapshot-fork",
+	})
 }

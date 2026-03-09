@@ -36,4 +36,4 @@ scripts/utm/images/
 .refs/
 
 # Build artifacts
-api
+/api

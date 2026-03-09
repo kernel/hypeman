@@ -110,13 +110,17 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 }
 
 func ensureGuestAgentReadyForRunningFork(ctx context.Context, source *StoredMetadata) error {
-	if source == nil || !source.NetworkEnabled || source.SkipGuestAgent {
+	return ensureGuestAgentReadyForForkPhase(ctx, source, "before running fork")
+}
+
+func ensureGuestAgentReadyForForkPhase(ctx context.Context, inst *StoredMetadata, phase string) error {
+	if inst == nil || !inst.NetworkEnabled || inst.SkipGuestAgent {
 		return nil
 	}
 
-	dialer, err := hypervisor.NewVsockDialer(source.HypervisorType, source.VsockSocket, source.VsockCID)
+	dialer, err := hypervisor.NewVsockDialer(inst.HypervisorType, inst.VsockSocket, inst.VsockCID)
 	if err != nil {
-		return fmt.Errorf("create vsock dialer for running fork readiness check: %w", err)
+		return fmt.Errorf("create vsock dialer for %s readiness check: %w", phase, err)
 	}
 
 	var stdout, stderr bytes.Buffer
@@ -127,12 +131,12 @@ func ensureGuestAgentReadyForRunningFork(ctx context.Context, source *StoredMeta
 		WaitForAgent: 120 * time.Second,
 	})
 	if err != nil {
-		return fmt.Errorf("wait for guest agent readiness before running fork: %w", err)
+		return fmt.Errorf("wait for guest agent readiness %s: %w", phase, err)
 	}
 	if exit.Code != 0 {
 		return fmt.Errorf(
-			"guest agent readiness probe failed before running fork (exit=%d, stdout=%q, stderr=%q)",
-			exit.Code, strings.TrimSpace(stdout.String()), strings.TrimSpace(stderr.String()),
+			"guest agent readiness probe failed %s (exit=%d, stdout=%q, stderr=%q)",
+			phase, exit.Code, strings.TrimSpace(stdout.String()), strings.TrimSpace(stderr.String()),
 		)
 	}
 	return nil
@@ -241,6 +245,9 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 	defer cu.Clean()
 
 	if err := forkvm.CopyGuestDirectory(srcDir, dstDir); err != nil {
+		if errors.Is(err, forkvm.ErrSparseCopyUnsupported) {
+			return nil, fmt.Errorf("fork requires sparse-capable filesystem (SEEK_DATA/SEEK_HOLE unsupported): %w", err)
+		}
 		return nil, fmt.Errorf("clone guest directory: %w", err)
 	}
 
@@ -385,41 +392,53 @@ func (m *manager) applyForkTargetState(ctx context.Context, forkID string, targe
 	lock.Lock()
 	defer lock.Unlock()
 
+	returnWithReadiness := func(inst *Instance, err error) (*Instance, error) {
+		if err != nil {
+			return nil, err
+		}
+		if inst != nil && inst.State == StateRunning {
+			if err := ensureGuestAgentReadyForForkPhase(ctx, &inst.StoredMetadata, "before returning running fork instance"); err != nil {
+				return nil, fmt.Errorf("wait for forked guest agent readiness: %w", err)
+			}
+		}
+		return inst, nil
+	}
+
 	current, err := m.getInstance(ctx, forkID)
 	if err != nil {
 		return nil, err
 	}
 	if current.State == target {
-		return current, nil
+		return returnWithReadiness(current, nil)
 	}
 
 	switch current.State {
 	case StateStopped:
 		switch target {
 		case StateRunning:
-			return m.startInstance(ctx, forkID, StartInstanceRequest{})
+			return returnWithReadiness(m.startInstance(ctx, forkID, StartInstanceRequest{}))
 		case StateStandby:
 			if _, err := m.startInstance(ctx, forkID, StartInstanceRequest{}); err != nil {
 				return nil, fmt.Errorf("start forked instance for standby transition: %w", err)
 			}
-			return m.standbyInstance(ctx, forkID)
+			return returnWithReadiness(m.standbyInstance(ctx, forkID))
 		}
 	case StateStandby:
 		switch target {
 		case StateRunning:
-			return m.restoreInstance(ctx, forkID)
+			return returnWithReadiness(m.restoreInstance(ctx, forkID))
 		case StateStopped:
 			if err := os.RemoveAll(m.paths.InstanceSnapshotLatest(forkID)); err != nil {
 				return nil, fmt.Errorf("remove fork snapshot: %w", err)
 			}
-			return m.getInstance(ctx, forkID)
+			return returnWithReadiness(m.getInstance(ctx, forkID))
 		}
 	case StateRunning:
 		switch target {
 		case StateStandby:
-			return m.standbyInstance(ctx, forkID)
+			return returnWithReadiness(m.standbyInstance(ctx, forkID))
 		case StateStopped:
-			return m.stopInstance(ctx, forkID)
+			return returnWithReadiness(m.stopInstance(ctx, forkID))
 		}
 	}
 
@@ -448,10 +467,10 @@ func cloneStoredMetadataForFork(src StoredMetadata) StoredMetadata {
 			dst.Env[k] = v
 		}
 	}
-	if src.Metadata != nil {
-		dst.Metadata = make(map[string]string, len(src.Metadata))
-		for k, v := range src.Metadata {
-			dst.Metadata[k] = v
+	if src.Tags != nil {
+		dst.Tags = make(map[string]string, len(src.Tags))
+		for k, v := range src.Tags {
+			dst.Tags[k] = v
 		}
 	}
 	if src.Volumes != nil {

@@ -8,12 +8,14 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/paths"
+	"github.com/kernel/hypeman/lib/tags"
 )
 
 // buildMetadata is the internal representation stored on disk
 type buildMetadata struct {
 	ID              string              `json:"id"`
 	Status          string              `json:"status"`
+	Tags            tags.Tags           `json:"tags,omitempty"`
 	Request         *CreateBuildRequest `json:"request,omitempty"`
 	ImageDigest     *string             `json:"image_digest,omitempty"`
 	ImageRef        *string             `json:"image_ref,omitempty"`
@@ -31,6 +33,7 @@ func (m *buildMetadata) toBuild() *Build {
 	return &Build{
 		ID:                m.ID,
 		Status:            m.Status,
+		Tags:              tags.Clone(m.Tags),
 		ImageDigest:       m.ImageDigest,
 		ImageRef:          m.ImageRef,
 		Error:             m.Error,
