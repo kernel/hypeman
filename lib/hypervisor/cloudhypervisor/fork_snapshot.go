@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
@@ -23,8 +22,8 @@ func rewriteSnapshotConfigForFork(configPath string, req hypervisor.ForkPrepareR
 	}
 
 	if req.SourceDataDir != "" && req.TargetDataDir != "" && req.SourceDataDir != req.TargetDataDir {
-		sourceRoot := snapshotDataRootDir(req.SourceDataDir)
-		targetRoot := snapshotDataRootDir(req.TargetDataDir)
+		sourceRoot := hypervisor.SnapshotDataRootDir(req.SourceDataDir)
+		targetRoot := hypervisor.SnapshotDataRootDir(req.TargetDataDir)
 		configAny := rewriteStringValues(config, func(s string) string {
 			if s == req.SourceDataDir || strings.HasPrefix(s, req.SourceDataDir+"/") {
 				return req.TargetDataDir + strings.TrimPrefix(s, req.SourceDataDir)
@@ -76,19 +75,6 @@ func rewriteStringValues(value any, mapper func(string) string) any {
 	default:
 		return value
 	}
-}
-
-func snapshotDataRootDir(instanceDir string) string {
-	clean := filepath.Clean(instanceDir)
-	parent := filepath.Dir(clean)
-	if parent == "." || parent == "/" || parent == clean {
-		return ""
-	}
-	root := filepath.Dir(parent)
-	if root == "." || root == "/" || root == parent {
-		return ""
-	}
-	return root
 }
 
 func updateVsockConfig(config map[string]any, cid int64, socketPath string) {

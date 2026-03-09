@@ -735,6 +735,9 @@ func (m *manager) CreateImportSession(ctx context.Context, req CreateSessionRequ
 	if len(req.Manifest.Chunks) == 0 && req.Manifest.DataSize > 0 {
 		return nil, fmt.Errorf("%w: manifest chunk list is empty", ErrInvalidRequest)
 	}
+	if err := validateImportManifest(req.Manifest); err != nil {
+		return nil, err
+	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -905,7 +908,14 @@ func (m *manager) materializeSnapshot(session *ImportSessionRecord) (*snapshotst
 	}
 
 	for _, entry := range session.Manifest.Entries {
-		target := filepath.Join(guestDir, entry.Path)
+		relPath, err := normalizeManifestPath(entry.Path)
+		if err != nil {
+			return nil, fmt.Errorf("%w: invalid manifest path %q: %v", ErrInvalidRequest, entry.Path, err)
+		}
+		if err := ensureNoSymlinkPath(guestDir, filepath.Dir(relPath)); err != nil {
+			return nil, fmt.Errorf("%w: unsafe manifest path %q: %v", ErrInvalidRequest, entry.Path, err)
+		}
+		target := filepath.Join(guestDir, relPath)
 		switch entry.Type {
 		case EntryTypeDirectory:
 			if err := os.MkdirAll(target, os.FileMode(entry.Mode)); err != nil {
@@ -919,6 +929,9 @@ func (m *manager) materializeSnapshot(session *ImportSessionRecord) (*snapshotst
 				return nil, fmt.Errorf("create symlink %s: %w", entry.Path, err)
 			}
 		case EntryTypeFile:
+			if err := ensurePathNotSymlink(target); err != nil {
+				return nil, fmt.Errorf("%w: unsafe manifest path %q: %v", ErrInvalidRequest, entry.Path, err)
+			}
 			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
 				return nil, err
 			}
@@ -940,7 +953,17 @@ func (m *manager) materializeSnapshot(session *ImportSessionRecord) (*snapshotst
 		if entry.Type != EntryTypeFile || len(entry.Extents) == 0 {
 			continue
 		}
-		target := filepath.Join(guestDir, entry.Path)
+		relPath, err := normalizeManifestPath(entry.Path)
+		if err != nil {
+			return nil, fmt.Errorf("%w: invalid manifest path %q: %v", ErrInvalidRequest, entry.Path, err)
+		}
+		if err := ensureNoSymlinkPath(guestDir, filepath.Dir(relPath)); err != nil {
+			return nil, fmt.Errorf("%w: unsafe manifest path %q: %v", ErrInvalidRequest, entry.Path, err)
+		}
+		target := filepath.Join(guestDir, relPath)
+		if err := ensurePathNotSymlink(target); err != nil {
+			return nil, fmt.Errorf("%w: unsafe manifest path %q: %v", ErrInvalidRequest, entry.Path, err)
+		}
 		f, err := os.OpenFile(target, os.O_WRONLY, os.FileMode(entry.Mode))
 		if err != nil {
 			return nil, err
@@ -1015,6 +1038,74 @@ func (m *manager) copySessionDataToWriter(session *ImportSessionRecord, dataOffs
 			return err
 		}
 		f.Close()
+	}
+	return nil
+}
+
+func validateImportManifest(manifest Manifest) error {
+	for _, entry := range manifest.Entries {
+		if _, err := normalizeManifestPath(entry.Path); err != nil {
+			return fmt.Errorf("%w: invalid manifest entry path %q: %v", ErrInvalidRequest, entry.Path, err)
+		}
+	}
+	return nil
+}
+
+func normalizeManifestPath(path string) (string, error) {
+	if path == "" {
+		return "", fmt.Errorf("path must not be empty")
+	}
+	clean := filepath.Clean(path)
+	if clean == "." {
+		return "", fmt.Errorf("path must not resolve to current directory")
+	}
+	if filepath.IsAbs(clean) {
+		return "", fmt.Errorf("path must be relative")
+	}
+	parentPrefix := ".." + string(os.PathSeparator)
+	if clean == ".." || strings.HasPrefix(clean, parentPrefix) {
+		return "", fmt.Errorf("path escapes snapshot root")
+	}
+	return clean, nil
+}
+
+func ensureNoSymlinkPath(baseDir, relPath string) error {
+	if relPath == "" || relPath == "." {
+		return nil
+	}
+	cur := baseDir
+	for _, part := range strings.Split(relPath, string(os.PathSeparator)) {
+		if part == "" || part == "." {
+			continue
+		}
+		if part == ".." {
+			return fmt.Errorf("path contains parent traversal")
+		}
+		cur = filepath.Join(cur, part)
+		info, err := os.Lstat(cur)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("path component %q is a symlink", part)
+		}
+	}
+	return nil
+}
+
+func ensurePathNotSymlink(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("target is a symlink")
 	}
 	return nil
 }

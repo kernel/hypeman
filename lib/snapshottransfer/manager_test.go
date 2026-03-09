@@ -228,6 +228,115 @@ func TestPreflightImportStandbyCompatibilityPassWithKernelArchAlias(t *testing.T
 	}
 }
 
+func TestCreateImportSessionRejectsUnsafeManifestPaths(t *testing.T) {
+	p := paths.New(t.TempDir())
+	mgr := NewManager(p, 1)
+
+	badPaths := []string{
+		"",
+		".",
+		"/etc/passwd",
+		"../escape",
+		"safe/../../escape",
+	}
+
+	for i, badPath := range badPaths {
+		_, err := mgr.CreateImportSession(context.Background(), CreateSessionRequest{
+			Snapshot: SnapshotDescriptor{
+				SourceSnapshotID:   fmt.Sprintf("src-bad-path-%d", i),
+				SourceInstanceID:   "inst-1",
+				SourceInstanceName: "inst-1",
+				Kind:               snapshotstore.SnapshotKindStopped,
+				SourceHypervisor:   hypervisor.TypeCloudHypervisor,
+				CreatedAt:          time.Now(),
+			},
+			Manifest: Manifest{
+				Version:   1,
+				ChunkSize: 4096,
+				DataSize:  0,
+				Entries: []ManifestEntry{
+					{Path: badPath, Type: EntryTypeFile, Mode: 0644, Size: 0},
+				},
+			},
+			StoredMetadata: json.RawMessage(`{}`),
+		})
+		if !errors.Is(err, ErrInvalidRequest) {
+			t.Fatalf("expected invalid request for path %q, got %v", badPath, err)
+		}
+	}
+}
+
+func TestCompleteImportSessionRejectsSymlinkTraversal(t *testing.T) {
+	p := paths.New(t.TempDir())
+	mgr := NewManager(p, 1)
+
+	session, err := mgr.CreateImportSession(context.Background(), CreateSessionRequest{
+		Snapshot: SnapshotDescriptor{
+			SourceSnapshotID:   "src-symlink-parent",
+			SourceInstanceID:   "inst-1",
+			SourceInstanceName: "inst-1",
+			Name:               "symlink-parent",
+			Kind:               snapshotstore.SnapshotKindStopped,
+			SourceHypervisor:   hypervisor.TypeCloudHypervisor,
+			CreatedAt:          time.Now(),
+		},
+		Manifest: Manifest{
+			Version:   1,
+			ChunkSize: 4096,
+			DataSize:  0,
+			Entries: []ManifestEntry{
+				{Path: "safe", Type: EntryTypeDirectory, Mode: 0755},
+				{Path: "safe/link", Type: EntryTypeSymlink, Mode: 0777, LinkTarget: "../../outside"},
+				{Path: "safe/link/payload.bin", Type: EntryTypeFile, Mode: 0644, Size: 0},
+			},
+		},
+		StoredMetadata: json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("CreateImportSession: %v", err)
+	}
+
+	_, err = mgr.CompleteImportSession(context.Background(), session.ID)
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("expected invalid request for symlink parent traversal, got %v", err)
+	}
+}
+
+func TestCompleteImportSessionRejectsFileTargetSymlink(t *testing.T) {
+	p := paths.New(t.TempDir())
+	mgr := NewManager(p, 1)
+
+	session, err := mgr.CreateImportSession(context.Background(), CreateSessionRequest{
+		Snapshot: SnapshotDescriptor{
+			SourceSnapshotID:   "src-symlink-target",
+			SourceInstanceID:   "inst-1",
+			SourceInstanceName: "inst-1",
+			Name:               "symlink-target",
+			Kind:               snapshotstore.SnapshotKindStopped,
+			SourceHypervisor:   hypervisor.TypeCloudHypervisor,
+			CreatedAt:          time.Now(),
+		},
+		Manifest: Manifest{
+			Version:   1,
+			ChunkSize: 4096,
+			DataSize:  0,
+			Entries: []ManifestEntry{
+				{Path: "leaf", Type: EntryTypeSymlink, Mode: 0777, LinkTarget: "outside"},
+				{Path: "leaf", Type: EntryTypeFile, Mode: 0644, Size: 0},
+			},
+		},
+		StoredMetadata: json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("CreateImportSession: %v", err)
+	}
+
+	_, err = mgr.CompleteImportSession(context.Background(), session.ID)
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("expected invalid request for symlink target write, got %v", err)
+	}
+}
+
 func TestTransferEndToEndStoppedSnapshot(t *testing.T) {
 	srcPaths := paths.New(t.TempDir())
 	dstPaths := paths.New(t.TempDir())

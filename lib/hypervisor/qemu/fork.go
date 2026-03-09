@@ -69,8 +69,8 @@ func (s *Starter) PrepareFork(ctx context.Context, req hypervisor.ForkPrepareReq
 }
 
 func rewriteQEMUConfigPaths(cfg hypervisor.VMConfig, sourceDir, targetDir string) hypervisor.VMConfig {
-	sourceRoot := snapshotDataRootDir(sourceDir)
-	targetRoot := snapshotDataRootDir(targetDir)
+	sourceRoot := hypervisor.SnapshotDataRootDir(sourceDir)
+	targetRoot := hypervisor.SnapshotDataRootDir(targetDir)
 	replace := func(value string) string {
 		if value == sourceDir || strings.HasPrefix(value, sourceDir+"/") {
 			return targetDir + strings.TrimPrefix(value, sourceDir)
@@ -91,17 +91,4 @@ func rewriteQEMUConfigPaths(cfg hypervisor.VMConfig, sourceDir, targetDir string
 	cfg.InitrdPath = replace(cfg.InitrdPath)
 
 	return cfg
-}
-
-func snapshotDataRootDir(instanceDir string) string {
-	clean := filepath.Clean(instanceDir)
-	parent := filepath.Dir(clean)
-	if parent == "." || parent == "/" || parent == clean {
-		return ""
-	}
-	root := filepath.Dir(parent)
-	if root == "." || root == "/" || root == parent {
-		return ""
-	}
-	return root
 }
