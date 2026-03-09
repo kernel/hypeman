@@ -111,6 +111,11 @@ func (m *manager) RunSnapshotSchedules(ctx context.Context) error {
 	var runErrs []error
 
 	for _, instanceID := range instanceIDs {
+		if err := ctx.Err(); err != nil {
+			runErrs = append(runErrs, fmt.Errorf("run snapshot schedules: %w", err))
+			break
+		}
+
 		lock := m.getInstanceLock(instanceID)
 		lock.RLock()
 		due, err := m.snapshotScheduleDueLocked(instanceID, now)

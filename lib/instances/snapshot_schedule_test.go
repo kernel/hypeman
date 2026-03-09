@@ -377,6 +377,39 @@ func TestRunSnapshotSchedulesAggregatesErrorsAcrossInstances(t *testing.T) {
 	assert.Contains(t, err.Error(), sourceB)
 }
 
+func TestRunSnapshotSchedulesStopsOnCanceledContext(t *testing.T) {
+	t.Parallel()
+	mgr, _ := setupTestManager(t)
+
+	hvType := mgr.defaultHypervisor
+	sourceID := "snapshot-schedule-canceled-context-src"
+	createStoppedSnapshotSourceFixture(t, mgr, sourceID, sourceID, hvType)
+
+	_, err := mgr.SetSnapshotSchedule(context.Background(), sourceID, SetSnapshotScheduleRequest{
+		Interval: time.Hour,
+		Retention: SnapshotScheduleRetention{
+			MaxCount: 1,
+		},
+	})
+	require.NoError(t, err)
+
+	markSnapshotScheduleDue(t, mgr, sourceID)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err = mgr.RunSnapshotSchedules(ctx)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.Canceled)
+
+	snapshots, err := mgr.ListSnapshots(context.Background(), &ListSnapshotsFilter{SourceInstanceID: &sourceID})
+	require.NoError(t, err)
+
+	for _, snapshot := range snapshots {
+		assert.False(t, scheduledsnapshots.IsScheduledSnapshot(snapshot.Metadata, sourceID), "canceled context should prevent scheduled snapshot runs")
+	}
+}
+
 func markSnapshotScheduleDue(t *testing.T, mgr *manager, instanceID string) {
 	t.Helper()
 	lock := mgr.getInstanceLock(instanceID)
