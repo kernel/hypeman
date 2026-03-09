@@ -178,6 +178,19 @@ components:
                 Environment variable names (from `env`) that should be mocked inside the VM
                 as `mock-<ENV_VAR_NAME>` and rewritten back to their real values on egress.
               example: [OUTBOUND_OPENAI_KEY]
+            mock_env_var_domains:
+              type: object
+              additionalProperties:
+                type: array
+                items:
+                  type: string
+              description: |
+                Optional per-mocked-env destination domain allowlist for secret substitution.
+                Keys are env var names from `mock_env_vars`; values are allowed destination
+                host patterns (`api.example.com`, `*.example.com`). If a mock env var is not
+                present in this map, substitution is allowed for all HTTPS destinations.
+              example:
+                OUTBOUND_OPENAI_KEY: [api.openai.com, "*.openai.com"]
             enforcement_mode:
               type: string
               enum: [all, http_https_only]

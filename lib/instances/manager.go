@@ -70,19 +70,20 @@ type ResourceValidator interface {
 }
 
 type manager struct {
-	paths             *paths.Paths
-	imageManager      images.Manager
-	systemManager     system.Manager
-	networkManager    network.Manager
-	deviceManager     devices.Manager
-	volumeManager     volumes.Manager
-	limits            ResourceLimits
-	resourceValidator ResourceValidator // Optional validator for aggregate resource limits
-	instanceLocks     sync.Map          // map[string]*sync.RWMutex - per-instance locks
-	hostTopology      *HostTopology     // Cached host CPU topology
-	metrics           *Metrics
-	egressProxy       *egressproxy.Service
-	egressProxyMu     sync.Mutex
+	paths                     *paths.Paths
+	imageManager              images.Manager
+	systemManager             system.Manager
+	networkManager            network.Manager
+	deviceManager             devices.Manager
+	volumeManager             volumes.Manager
+	limits                    ResourceLimits
+	resourceValidator         ResourceValidator // Optional validator for aggregate resource limits
+	instanceLocks             sync.Map          // map[string]*sync.RWMutex - per-instance locks
+	hostTopology              *HostTopology     // Cached host CPU topology
+	metrics                   *Metrics
+	egressProxy               *egressproxy.Service
+	egressProxyServiceOptions egressproxy.ServiceOptions
+	egressProxyMu             sync.Mutex
 
 	// Hypervisor support
 	vmStarters        map[hypervisor.Type]hypervisor.VMStarter

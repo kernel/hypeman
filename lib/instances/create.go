@@ -496,6 +496,11 @@ func validateCreateRequest(req CreateInstanceRequest) error {
 			return err
 		}
 		req.EgressProxy.MockEnvVars = normalized
+		normalizedDomains, err := normalizeMockEnvVarDomains(normalized, req.EgressProxy.MockEnvVarDomains)
+		if err != nil {
+			return err
+		}
+		req.EgressProxy.MockEnvVarDomains = normalizedDomains
 		for _, envVar := range normalized {
 			real, ok := req.Env[envVar]
 			if !ok {

@@ -2,12 +2,22 @@ package instances
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"fmt"
+	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/kernel/hypeman/lib/egressproxy"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/stretchr/testify/require"
 )
@@ -18,10 +28,20 @@ func TestEgressProxyRewritesHTTPSHeaders(t *testing.T) {
 	manager, _ := setupTestManager(t)
 	ctx := context.Background()
 
-	target := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	caPEM, cert := mustGenerateTLSChain(t, []string{"localhost"})
+	manager.egressProxyServiceOptions = egressproxy.ServiceOptions{
+		AdditionalRootCAPEM: []string{caPEM},
+	}
+
+	target := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = fmt.Fprint(w, r.Header.Get("Authorization"))
 	}))
+	target.TLS = &tls.Config{Certificates: []tls.Certificate{cert}}
+	target.StartTLS()
 	defer target.Close()
+	targetHostPort := strings.TrimPrefix(target.URL, "https://")
+	targetHost, targetPort, err := net.SplitHostPort(targetHostPort)
+	require.NoError(t, err)
 
 	imageRef := integrationTestImageRef(t, "docker.io/library/nginx:alpine")
 	t.Logf("Pulling %s image...", imageRef)
@@ -53,6 +73,9 @@ func TestEgressProxyRewritesHTTPSHeaders(t *testing.T) {
 		EgressProxy: &EgressProxyConfig{
 			Enabled:     true,
 			MockEnvVars: []string{"OUTBOUND_OPENAI_KEY"},
+			MockEnvVarDomains: map[string][]string{
+				"OUTBOUND_OPENAI_KEY": []string{"127.0.0.1"},
+			},
 		},
 		Env: map[string]string{
 			"OUTBOUND_OPENAI_KEY": "real-openai-key-123",
@@ -77,16 +100,83 @@ func TestEgressProxyRewritesHTTPSHeaders(t *testing.T) {
 	require.Equal(t, 0, envExitCode)
 	require.Equal(t, "mock-OUTBOUND_OPENAI_KEY", envOutput)
 
-	cmd := fmt.Sprintf(
-		"NO_PROXY= no_proxy= curl -k -sS -H \"Authorization: Bearer $OUTBOUND_OPENAI_KEY\" %s",
-		target.URL,
+	allowedCmd := fmt.Sprintf(
+		"NO_PROXY= no_proxy= curl -k -sS -H \"Authorization: Bearer $OUTBOUND_OPENAI_KEY\" https://%s:%s",
+		targetHost, targetPort,
 	)
-	output, exitCode, err := execCommand(ctx, inst, "sh", "-lc", cmd)
+	output, exitCode, err := execCommand(ctx, inst, "sh", "-lc", allowedCmd)
 	require.NoError(t, err)
 	require.Equal(t, 0, exitCode, "curl output: %s", output)
 	require.Contains(t, output, "Bearer real-openai-key-123")
-	require.NotContains(t, output, "mock_openai_key")
+
+	blockedCmd := fmt.Sprintf(
+		"NO_PROXY= no_proxy= curl -k -sS -H \"Authorization: Bearer $OUTBOUND_OPENAI_KEY\" https://localhost:%s",
+		targetPort,
+	)
+	blockedOutput, blockedExitCode, err := execCommand(ctx, inst, "sh", "-lc", blockedCmd)
+	require.NoError(t, err)
+	require.Equal(t, 0, blockedExitCode, "curl output: %s", blockedOutput)
+	require.Contains(t, blockedOutput, "Bearer mock-OUTBOUND_OPENAI_KEY")
 
 	require.NoError(t, manager.DeleteInstance(ctx, inst.Id))
 	deleted = true
+}
+
+func mustGenerateTLSChain(t *testing.T, dnsNames []string) (string, tls.Certificate) {
+	t.Helper()
+
+	caKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+
+	serialLimit := new(big.Int).Lsh(big.NewInt(1), 128)
+	caSerial, err := rand.Int(rand.Reader, serialLimit)
+	require.NoError(t, err)
+
+	now := time.Now()
+	caTemplate := &x509.Certificate{
+		SerialNumber: caSerial,
+		Subject: pkix.Name{
+			CommonName: "egress-proxy-test-ca",
+		},
+		NotBefore:             now.Add(-1 * time.Hour),
+		NotAfter:              now.Add(24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		MaxPathLen:            1,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	require.NoError(t, err)
+
+	caCert, err := x509.ParseCertificate(caDER)
+	require.NoError(t, err)
+
+	serverKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	serverSerial, err := rand.Int(rand.Reader, serialLimit)
+	require.NoError(t, err)
+
+	serverTemplate := &x509.Certificate{
+		SerialNumber: serverSerial,
+		Subject: pkix.Name{
+			CommonName: dnsNames[0],
+		},
+		NotBefore:    now.Add(-1 * time.Hour),
+		NotAfter:     now.Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames:     dnsNames,
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+		SubjectKeyId: []byte{1, 2, 3, 4},
+	}
+	serverDER, err := x509.CreateCertificate(rand.Reader, serverTemplate, caCert, &serverKey.PublicKey, caKey)
+	require.NoError(t, err)
+
+	serverCertPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: serverDER})
+	serverKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(serverKey)})
+	cert, err := tls.X509KeyPair(serverCertPEM, serverKeyPEM)
+	require.NoError(t, err)
+
+	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER})
+	return string(caPEM), cert
 }

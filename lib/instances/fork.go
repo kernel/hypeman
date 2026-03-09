@@ -475,6 +475,9 @@ func cloneStoredMetadataForFork(src StoredMetadata) StoredMetadata {
 		if src.EgressProxy.MockEnvVars != nil {
 			cfg.MockEnvVars = append([]string(nil), src.EgressProxy.MockEnvVars...)
 		}
+		if src.EgressProxy.MockEnvVarDomains != nil {
+			cfg.MockEnvVarDomains = cloneMockEnvVarDomains(src.EgressProxy.MockEnvVarDomains)
+		}
 		dst.EgressProxy = cfg
 	}
 	if src.Metadata != nil {

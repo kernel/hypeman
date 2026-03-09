@@ -12,11 +12,23 @@ var (
 
 // InstanceConfig defines per-instance proxy behavior.
 type InstanceConfig struct {
-	InstanceID            string
-	SourceIP              string
-	TAPDevice             string
-	BlockAllTCPEgress     bool
-	MockToRealSecretValue map[string]string // mock literal -> real secret value
+	InstanceID         string
+	SourceIP           string
+	TAPDevice          string
+	BlockAllTCPEgress  bool
+	SecretRewriteRules []SecretRewriteRuleConfig
+}
+
+// SecretRewriteRuleConfig defines one mocked secret substitution policy.
+type SecretRewriteRuleConfig struct {
+	MockValue      string
+	RealValue      string
+	AllowedDomains []string // optional exact or *.example.com patterns; empty means allow all
+}
+
+// ServiceOptions customizes service construction (primarily for tests).
+type ServiceOptions struct {
+	AdditionalRootCAPEM []string
 }
 
 // GuestConfig is injected into guest config.json when proxy mode is enabled.

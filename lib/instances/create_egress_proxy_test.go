@@ -168,3 +168,137 @@ func TestValidateCreateRequest_EgressProxyAllowsHTTPHTTPSOnlyMode(t *testing.T) 
 	require.NoError(t, err)
 	assert.Equal(t, EgressProxyEnforcementModeHTTPHTTPSOnly, cfg.EnforcementMode)
 }
+
+func TestValidateCreateRequest_EgressProxyRejectsUnknownDomainMapKey(t *testing.T) {
+	t.Parallel()
+
+	req := CreateInstanceRequest{
+		Name:           "test-egress",
+		Image:          "docker.io/library/alpine:latest",
+		NetworkEnabled: true,
+		Env: map[string]string{
+			"OUTBOUND_OPENAI_KEY": "real-key",
+		},
+		EgressProxy: &EgressProxyConfig{
+			Enabled:     true,
+			MockEnvVars: []string{"OUTBOUND_OPENAI_KEY"},
+			MockEnvVarDomains: map[string][]string{
+				"GITHUB_TOKEN": []string{"api.github.com"},
+			},
+		},
+	}
+
+	err := validateCreateRequest(req)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidRequest)
+	assert.Contains(t, err.Error(), "must be present in mock_env_vars")
+}
+
+func TestValidateCreateRequest_EgressProxyRejectsEmptyDomainList(t *testing.T) {
+	t.Parallel()
+
+	req := CreateInstanceRequest{
+		Name:           "test-egress",
+		Image:          "docker.io/library/alpine:latest",
+		NetworkEnabled: true,
+		Env: map[string]string{
+			"OUTBOUND_OPENAI_KEY": "real-key",
+		},
+		EgressProxy: &EgressProxyConfig{
+			Enabled:     true,
+			MockEnvVars: []string{"OUTBOUND_OPENAI_KEY"},
+			MockEnvVarDomains: map[string][]string{
+				"OUTBOUND_OPENAI_KEY": {},
+			},
+		},
+	}
+
+	err := validateCreateRequest(req)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidRequest)
+	assert.Contains(t, err.Error(), "must have at least one domain pattern")
+}
+
+func TestValidateCreateRequest_EgressProxyRejectsInvalidDomainPattern(t *testing.T) {
+	t.Parallel()
+
+	req := CreateInstanceRequest{
+		Name:           "test-egress",
+		Image:          "docker.io/library/alpine:latest",
+		NetworkEnabled: true,
+		Env: map[string]string{
+			"OUTBOUND_OPENAI_KEY": "real-key",
+		},
+		EgressProxy: &EgressProxyConfig{
+			Enabled:     true,
+			MockEnvVars: []string{"OUTBOUND_OPENAI_KEY"},
+			MockEnvVarDomains: map[string][]string{
+				"OUTBOUND_OPENAI_KEY": []string{"https://api.openai.com"},
+			},
+		},
+	}
+
+	err := validateCreateRequest(req)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidRequest)
+	assert.Contains(t, err.Error(), "invalid egress proxy domain pattern")
+}
+
+func TestValidateCreateRequest_EgressProxyNormalizesDomainPatterns(t *testing.T) {
+	t.Parallel()
+
+	cfg := &EgressProxyConfig{
+		Enabled:     true,
+		MockEnvVars: []string{"OUTBOUND_OPENAI_KEY"},
+		MockEnvVarDomains: map[string][]string{
+			" OUTBOUND_OPENAI_KEY ": {
+				" API.OpenAI.com ",
+				"*.OpenAI.com",
+				"api.openai.com",
+			},
+		},
+	}
+	req := CreateInstanceRequest{
+		Name:           "test-egress",
+		Image:          "docker.io/library/alpine:latest",
+		NetworkEnabled: true,
+		Env: map[string]string{
+			"OUTBOUND_OPENAI_KEY": "real-key",
+		},
+		EgressProxy: cfg,
+	}
+
+	err := validateCreateRequest(req)
+	require.NoError(t, err)
+	assert.Equal(t, map[string][]string{
+		"OUTBOUND_OPENAI_KEY": []string{"api.openai.com", "*.openai.com"},
+	}, cfg.MockEnvVarDomains)
+}
+
+func TestValidateCreateRequest_EgressProxyAllowsUnmappedMockEnvVarDomains(t *testing.T) {
+	t.Parallel()
+
+	cfg := &EgressProxyConfig{
+		Enabled:     true,
+		MockEnvVars: []string{"OUTBOUND_OPENAI_KEY", "GITHUB_TOKEN"},
+		MockEnvVarDomains: map[string][]string{
+			"OUTBOUND_OPENAI_KEY": []string{"api.openai.com"},
+		},
+	}
+	req := CreateInstanceRequest{
+		Name:           "test-egress",
+		Image:          "docker.io/library/alpine:latest",
+		NetworkEnabled: true,
+		Env: map[string]string{
+			"OUTBOUND_OPENAI_KEY": "real-key",
+			"GITHUB_TOKEN":        "real-gh-token",
+		},
+		EgressProxy: cfg,
+	}
+
+	err := validateCreateRequest(req)
+	require.NoError(t, err)
+	assert.Equal(t, map[string][]string{
+		"OUTBOUND_OPENAI_KEY": []string{"api.openai.com"},
+	}, cfg.MockEnvVarDomains)
+}

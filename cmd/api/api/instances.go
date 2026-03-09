@@ -142,6 +142,12 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		if request.Body.EgressProxy.MockEnvVars != nil {
 			egressProxyConfig.MockEnvVars = append([]string(nil), (*request.Body.EgressProxy.MockEnvVars)...)
 		}
+		if request.Body.EgressProxy.MockEnvVarDomains != nil {
+			egressProxyConfig.MockEnvVarDomains = make(map[string][]string, len(*request.Body.EgressProxy.MockEnvVarDomains))
+			for envVar, domains := range *request.Body.EgressProxy.MockEnvVarDomains {
+				egressProxyConfig.MockEnvVarDomains[envVar] = append([]string(nil), domains...)
+			}
+		}
 		if request.Body.EgressProxy.EnforcementMode != nil {
 			egressProxyConfig.EnforcementMode = instances.EgressProxyEnforcementMode(*request.Body.EgressProxy.EnforcementMode)
 		} else if enabled {

@@ -19,7 +19,13 @@ import (
 )
 
 type sourcePolicy struct {
-	MockToRealSecretValue map[string]string
+	secretRewriteRules []secretRewriteRule
+}
+
+type secretRewriteRule struct {
+	mockValue      string
+	realValue      string
+	domainMatchers []domainMatcher
 }
 
 // Service is a host-side per-process HTTP/HTTPS MITM egress proxy.
@@ -46,11 +52,20 @@ type Service struct {
 }
 
 func NewService(dataDir string, listenPort int) (*Service, error) {
+	return NewServiceWithOptions(dataDir, listenPort, ServiceOptions{})
+}
+
+func NewServiceWithOptions(dataDir string, listenPort int, opts ServiceOptions) (*Service, error) {
 	if listenPort <= 0 {
 		listenPort = DefaultListenPort
 	}
 
 	caCert, caKey, caPEM, err := loadOrCreateCA(dataDir)
+	if err != nil {
+		return nil, err
+	}
+
+	rootCAs, err := buildRootCAPool(opts)
 	if err != nil {
 		return nil, err
 	}
@@ -63,7 +78,7 @@ func NewService(dataDir string, listenPort int) (*Service, error) {
 		IdleConnTimeout:     90 * time.Second,
 		TLSHandshakeTimeout: 15 * time.Second,
 		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: true,
+			RootCAs: rootCAs,
 		},
 	}
 
@@ -78,6 +93,24 @@ func NewService(dataDir string, listenPort int) (*Service, error) {
 		policiesBySourceIP: make(map[string]sourcePolicy),
 		sourceIPByInstance: make(map[string]string),
 	}, nil
+}
+
+func buildRootCAPool(opts ServiceOptions) (*x509.CertPool, error) {
+	pool, err := x509.SystemCertPool()
+	if err != nil || pool == nil {
+		pool = x509.NewCertPool()
+	}
+
+	for _, pemData := range opts.AdditionalRootCAPEM {
+		trimmed := strings.TrimSpace(pemData)
+		if trimmed == "" {
+			continue
+		}
+		if ok := pool.AppendCertsFromPEM([]byte(trimmed)); !ok {
+			return nil, fmt.Errorf("append additional root CA PEM failed")
+		}
+	}
+	return pool, nil
 }
 
 func (s *Service) EnsureStarted(ctx context.Context, gatewayIP string) error {
@@ -141,19 +174,41 @@ func (s *Service) RegisterInstance(ctx context.Context, gatewayIP string, cfg In
 		delete(s.policiesBySourceIP, prevIP)
 	}
 
-	policyMap := make(map[string]string, len(cfg.MockToRealSecretValue))
-	for mock, real := range cfg.MockToRealSecretValue {
-		policyMap[mock] = real
+	rewriteRules, err := compileSecretRewriteRules(cfg.SecretRewriteRules)
+	if err != nil {
+		return GuestConfig{}, err
 	}
 
 	s.sourceIPByInstance[cfg.InstanceID] = cfg.SourceIP
-	s.policiesBySourceIP[cfg.SourceIP] = sourcePolicy{MockToRealSecretValue: policyMap}
+	s.policiesBySourceIP[cfg.SourceIP] = sourcePolicy{secretRewriteRules: rewriteRules}
 
 	return GuestConfig{
 		Enabled:   true,
 		ProxyURL:  s.proxyURLLocked(),
 		CACertPEM: s.caPEM,
 	}, nil
+}
+
+func compileSecretRewriteRules(cfgRules []SecretRewriteRuleConfig) ([]secretRewriteRule, error) {
+	if len(cfgRules) == 0 {
+		return nil, nil
+	}
+	out := make([]secretRewriteRule, 0, len(cfgRules))
+	for _, cfg := range cfgRules {
+		if cfg.MockValue == "" || cfg.RealValue == "" {
+			continue
+		}
+		matchers, err := compileDomainMatchers(cfg.AllowedDomains)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, secretRewriteRule{
+			mockValue:      cfg.MockValue,
+			realValue:      cfg.RealValue,
+			domainMatchers: matchers,
+		})
+	}
+	return out, nil
 }
 
 func (s *Service) UnregisterInstance(_ context.Context, instanceID string) {
@@ -208,7 +263,7 @@ func (s *Service) handleHTTPProxyRequest(w http.ResponseWriter, r *http.Request,
 	}
 
 	outReq.RequestURI = ""
-	s.applyHeaderReplacements(sourceIP, outReq.Header)
+	s.applyHeaderReplacements(sourceIP, "", outReq.Header, false)
 
 	resp, err := s.transport.RoundTrip(outReq)
 	if err != nil {
@@ -241,9 +296,19 @@ func (s *Service) handleConnect(w http.ResponseWriter, r *http.Request, sourceIP
 	}
 	defer clientConn.Close()
 
+	targetAuthority := strings.TrimSpace(r.Host)
+	targetHost := normalizeDestinationHost(targetAuthority)
+	if targetHost == "" {
+		return
+	}
+
+	if err := s.verifyUpstreamTLSDestination(targetAuthority, targetHost); err != nil {
+		_, _ = io.WriteString(clientConn, "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
+		return
+	}
+
 	_, _ = io.WriteString(clientConn, "HTTP/1.1 200 Connection Established\r\n\r\n")
 
-	targetHost := normalizeHost(r.Host)
 	cert, err := s.getOrCreateLeafCert(targetHost)
 	if err != nil {
 		return
@@ -271,14 +336,14 @@ func (s *Service) handleConnect(w http.ResponseWriter, r *http.Request, sourceIP
 			req.URL = &url.URL{}
 		}
 		if req.Host == "" {
-			req.Host = r.Host
+			req.Host = targetAuthority
 		}
 		req.URL.Scheme = "https"
-		req.URL.Host = req.Host
+		req.URL.Host = targetAuthority
 		req.RequestURI = ""
 		req.Header = cloneHeader(req.Header)
 		removeHopByHopHeaders(req.Header)
-		s.applyHeaderReplacements(sourceIP, req.Header)
+		s.applyHeaderReplacements(sourceIP, targetHost, req.Header, true)
 
 		resp, err := s.transport.RoundTrip(req)
 		if err != nil {
@@ -297,6 +362,30 @@ func (s *Service) handleConnect(w http.ResponseWriter, r *http.Request, sourceIP
 			return
 		}
 	}
+}
+
+func (s *Service) verifyUpstreamTLSDestination(targetAuthority, targetHost string) error {
+	addr := targetAuthority
+	if _, _, err := net.SplitHostPort(addr); err != nil {
+		addr = net.JoinHostPort(targetHost, "443")
+	}
+
+	tlsCfg := &tls.Config{ServerName: targetHost}
+	if s.transport != nil && s.transport.TLSClientConfig != nil {
+		tlsCfg.RootCAs = s.transport.TLSClientConfig.RootCAs
+	}
+
+	conn, err := tls.DialWithDialer(
+		&net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second},
+		"tcp",
+		addr,
+		tlsCfg,
+	)
+	if err != nil {
+		return err
+	}
+	_ = conn.Close()
+	return nil
 }
 
 func (s *Service) getOrCreateLeafCert(host string) (*tls.Certificate, error) {
@@ -321,17 +410,17 @@ func (s *Service) getOrCreateLeafCert(host string) (*tls.Certificate, error) {
 	return cert, nil
 }
 
-func (s *Service) applyHeaderReplacements(sourceIP string, headers http.Header) {
-	replacements := s.resolveReplacements(sourceIP)
-	if len(replacements) == 0 {
+func (s *Service) applyHeaderReplacements(sourceIP, destinationHost string, headers http.Header, isHTTPS bool) {
+	rules := s.resolveRewriteRules(sourceIP, destinationHost, isHTTPS)
+	if len(rules) == 0 {
 		return
 	}
 
 	for key, vals := range headers {
 		for i := range vals {
 			updated := vals[i]
-			for mock, real := range replacements {
-				updated = strings.ReplaceAll(updated, mock, real)
+			for _, rule := range rules {
+				updated = strings.ReplaceAll(updated, rule.mockValue, rule.realValue)
 			}
 			vals[i] = updated
 		}
@@ -339,7 +428,16 @@ func (s *Service) applyHeaderReplacements(sourceIP string, headers http.Header) 
 	}
 }
 
-func (s *Service) resolveReplacements(sourceIP string) map[string]string {
+func (s *Service) resolveRewriteRules(sourceIP, destinationHost string, isHTTPS bool) []secretRewriteRule {
+	if !isHTTPS {
+		return nil
+	}
+
+	host := normalizeDestinationHost(destinationHost)
+	if host == "" {
+		return nil
+	}
+
 	s.mu.RLock()
 	policy, ok := s.policiesBySourceIP[sourceIP]
 	s.mu.RUnlock()
@@ -347,12 +445,15 @@ func (s *Service) resolveReplacements(sourceIP string) map[string]string {
 		return nil
 	}
 
-	resolved := make(map[string]string, len(policy.MockToRealSecretValue))
-	for mock, real := range policy.MockToRealSecretValue {
-		if mock == "" || real == "" {
+	resolved := make([]secretRewriteRule, 0, len(policy.secretRewriteRules))
+	for _, rule := range policy.secretRewriteRules {
+		if rule.mockValue == "" || rule.realValue == "" {
 			continue
 		}
-		resolved[mock] = real
+		if !matchesAnyDomain(host, rule.domainMatchers) {
+			continue
+		}
+		resolved = append(resolved, rule)
 	}
 	return resolved
 }

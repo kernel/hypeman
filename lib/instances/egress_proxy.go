@@ -22,6 +22,9 @@ func cloneEgressProxyConfig(cfg *EgressProxyConfig) *EgressProxyConfig {
 	if cfg.MockEnvVars != nil {
 		out.MockEnvVars = append([]string(nil), cfg.MockEnvVars...)
 	}
+	if cfg.MockEnvVarDomains != nil {
+		out.MockEnvVarDomains = cloneMockEnvVarDomains(cfg.MockEnvVarDomains)
+	}
 	return out
 }
 
@@ -50,6 +53,17 @@ func mockValueForEnvVar(name string) string {
 	return mockSecretPrefix + name
 }
 
+func cloneMockEnvVarDomains(in map[string][]string) map[string][]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string][]string, len(in))
+	for envVar, patterns := range in {
+		out[envVar] = append([]string(nil), patterns...)
+	}
+	return out
+}
+
 func normalizeEgressProxyEnforcementMode(mode EgressProxyEnforcementMode) (EgressProxyEnforcementMode, error) {
 	trimmed := strings.TrimSpace(string(mode))
 	switch EgressProxyEnforcementMode(trimmed) {
@@ -62,17 +76,68 @@ func normalizeEgressProxyEnforcementMode(mode EgressProxyEnforcementMode) (Egres
 	}
 }
 
-func buildEgressProxyReplacements(cfg *EgressProxyConfig, env map[string]string) map[string]string {
+func normalizeMockEnvVarDomains(mockEnvVars []string, in map[string][]string) (map[string][]string, error) {
+	if len(in) == 0 {
+		return nil, nil
+	}
+
+	allowedVars := make(map[string]struct{}, len(mockEnvVars))
+	for _, name := range mockEnvVars {
+		allowedVars[name] = struct{}{}
+	}
+
+	out := make(map[string][]string, len(in))
+	for rawEnvVar, rawPatterns := range in {
+		envVar := strings.TrimSpace(rawEnvVar)
+		if envVar == "" {
+			return nil, fmt.Errorf("%w: egress proxy mock_env_var_domains key must be non-empty", ErrInvalidRequest)
+		}
+		if _, ok := allowedVars[envVar]; !ok {
+			return nil, fmt.Errorf("%w: egress proxy mock_env_var_domains key %q must be present in mock_env_vars", ErrInvalidRequest, envVar)
+		}
+		if len(rawPatterns) == 0 {
+			return nil, fmt.Errorf("%w: egress proxy mock_env_var_domains[%q] must have at least one domain pattern", ErrInvalidRequest, envVar)
+		}
+
+		seen := make(map[string]struct{}, len(rawPatterns))
+		patterns := make([]string, 0, len(rawPatterns))
+		for _, rawPattern := range rawPatterns {
+			normalized, err := egressproxy.NormalizeAllowedDomainPattern(rawPattern)
+			if err != nil {
+				return nil, fmt.Errorf("%w: invalid egress proxy domain pattern %q for %q: %v", ErrInvalidRequest, rawPattern, envVar, err)
+			}
+			if _, ok := seen[normalized]; ok {
+				continue
+			}
+			seen[normalized] = struct{}{}
+			patterns = append(patterns, normalized)
+		}
+		if len(patterns) == 0 {
+			return nil, fmt.Errorf("%w: egress proxy mock_env_var_domains[%q] must include at least one valid domain pattern", ErrInvalidRequest, envVar)
+		}
+		out[envVar] = patterns
+	}
+	return out, nil
+}
+
+func buildEgressProxyRewriteRules(cfg *EgressProxyConfig, env map[string]string) []egressproxy.SecretRewriteRuleConfig {
 	if cfg == nil || !cfg.Enabled || len(cfg.MockEnvVars) == 0 {
 		return nil
 	}
-	out := make(map[string]string, len(cfg.MockEnvVars))
+	out := make([]egressproxy.SecretRewriteRuleConfig, 0, len(cfg.MockEnvVars))
 	for _, envVar := range cfg.MockEnvVars {
 		real := env[envVar]
 		if real == "" {
 			continue
 		}
-		out[mockValueForEnvVar(envVar)] = real
+		rule := egressproxy.SecretRewriteRuleConfig{
+			MockValue: mockValueForEnvVar(envVar),
+			RealValue: real,
+		}
+		if cfg.MockEnvVarDomains != nil && len(cfg.MockEnvVarDomains[envVar]) > 0 {
+			rule.AllowedDomains = append([]string(nil), cfg.MockEnvVarDomains[envVar]...)
+		}
+		out = append(out, rule)
 	}
 	if len(out) == 0 {
 		return nil
@@ -88,7 +153,7 @@ func (m *manager) getOrCreateEgressProxyService() (*egressproxy.Service, error) 
 		return m.egressProxy, nil
 	}
 
-	svc, err := egressproxy.NewService(m.paths.DataDir(), egressproxy.DefaultListenPort)
+	svc, err := egressproxy.NewServiceWithOptions(m.paths.DataDir(), egressproxy.DefaultListenPort, m.egressProxyServiceOptions)
 	if err != nil {
 		return nil, err
 	}
@@ -110,11 +175,11 @@ func (m *manager) maybeRegisterEgressProxy(ctx context.Context, stored *StoredMe
 	}
 
 	guestCfg, err := svc.RegisterInstance(ctx, netConfig.Gateway, egressproxy.InstanceConfig{
-		InstanceID:            stored.Id,
-		SourceIP:              netConfig.IP,
-		TAPDevice:             netConfig.TAPDevice,
-		BlockAllTCPEgress:     stored.EgressProxy.EnforcementMode != EgressProxyEnforcementModeHTTPHTTPSOnly,
-		MockToRealSecretValue: buildEgressProxyReplacements(stored.EgressProxy, stored.Env),
+		InstanceID:         stored.Id,
+		SourceIP:           netConfig.IP,
+		TAPDevice:          netConfig.TAPDevice,
+		BlockAllTCPEgress:  stored.EgressProxy.EnforcementMode != EgressProxyEnforcementModeHTTPHTTPSOnly,
+		SecretRewriteRules: buildEgressProxyRewriteRules(stored.EgressProxy, stored.Env),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("register instance with egress proxy: %w", err)

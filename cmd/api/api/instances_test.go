@@ -225,6 +225,9 @@ func TestCreateInstance_MapsEgressProxyMockEnvVars(t *testing.T) {
 
 	enabled := true
 	mockEnvVars := []string{"OUTBOUND_OPENAI_KEY", "GITHUB_TOKEN"}
+	mockEnvVarDomains := map[string][]string{
+		"OUTBOUND_OPENAI_KEY": []string{"api.openai.com", "*.openai.com"},
+	}
 	env := map[string]string{
 		"OUTBOUND_OPENAI_KEY": "real-openai-key-123",
 		"GITHUB_TOKEN":        "real-gh-token-456",
@@ -236,12 +239,14 @@ func TestCreateInstance_MapsEgressProxyMockEnvVars(t *testing.T) {
 			Image: "docker.io/library/alpine:latest",
 			Env:   &env,
 			EgressProxy: &struct {
-				Enabled         *bool                                                 `json:"enabled,omitempty"`
-				EnforcementMode *oapi.CreateInstanceRequestEgressProxyEnforcementMode `json:"enforcement_mode,omitempty"`
-				MockEnvVars     *[]string                                             `json:"mock_env_vars,omitempty"`
+				Enabled           *bool                                                 `json:"enabled,omitempty"`
+				EnforcementMode   *oapi.CreateInstanceRequestEgressProxyEnforcementMode `json:"enforcement_mode,omitempty"`
+				MockEnvVarDomains *map[string][]string                                  `json:"mock_env_var_domains,omitempty"`
+				MockEnvVars       *[]string                                             `json:"mock_env_vars,omitempty"`
 			}{
-				Enabled:     &enabled,
-				MockEnvVars: &mockEnvVars,
+				Enabled:           &enabled,
+				MockEnvVarDomains: &mockEnvVarDomains,
+				MockEnvVars:       &mockEnvVars,
 			},
 		},
 	})
@@ -254,6 +259,7 @@ func TestCreateInstance_MapsEgressProxyMockEnvVars(t *testing.T) {
 	assert.True(t, mockMgr.lastReq.EgressProxy.Enabled)
 	assert.Equal(t, instances.EgressProxyEnforcementModeAll, mockMgr.lastReq.EgressProxy.EnforcementMode)
 	assert.Equal(t, []string{"OUTBOUND_OPENAI_KEY", "GITHUB_TOKEN"}, mockMgr.lastReq.EgressProxy.MockEnvVars)
+	assert.Equal(t, map[string][]string{"OUTBOUND_OPENAI_KEY": []string{"api.openai.com", "*.openai.com"}}, mockMgr.lastReq.EgressProxy.MockEnvVarDomains)
 	assert.Equal(t, "real-openai-key-123", mockMgr.lastReq.Env["OUTBOUND_OPENAI_KEY"])
 	assert.Equal(t, "real-gh-token-456", mockMgr.lastReq.Env["GITHUB_TOKEN"])
 }
@@ -279,9 +285,10 @@ func TestCreateInstance_MapsEgressProxyEnforcementMode(t *testing.T) {
 			Image: "docker.io/library/alpine:latest",
 			Env:   &env,
 			EgressProxy: &struct {
-				Enabled         *bool                                                 `json:"enabled,omitempty"`
-				EnforcementMode *oapi.CreateInstanceRequestEgressProxyEnforcementMode `json:"enforcement_mode,omitempty"`
-				MockEnvVars     *[]string                                             `json:"mock_env_vars,omitempty"`
+				Enabled           *bool                                                 `json:"enabled,omitempty"`
+				EnforcementMode   *oapi.CreateInstanceRequestEgressProxyEnforcementMode `json:"enforcement_mode,omitempty"`
+				MockEnvVarDomains *map[string][]string                                  `json:"mock_env_var_domains,omitempty"`
+				MockEnvVars       *[]string                                             `json:"mock_env_vars,omitempty"`
 			}{
 				Enabled:         &enabled,
 				EnforcementMode: &mode,
