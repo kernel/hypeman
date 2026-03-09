@@ -17,7 +17,7 @@ import (
 type storedIngress struct {
 	ID        string        `json:"id"`
 	Name      string        `json:"name"`
-	Metadata  tags.Metadata `json:"metadata,omitempty"`
+	Tags      tags.Tags     `json:"tags,omitempty"`
 	Rules     []IngressRule `json:"rules"`
 	CreatedAt string        `json:"created_at"` // RFC3339 format
 }

@@ -371,10 +371,10 @@ func (m *manager) waitForBuilderImageReady(ctx context.Context, imageRef string)
 // CreateBuild starts a new build job
 func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourceData []byte) (*Build, error) {
 	m.logger.Info("creating build")
-	if err := tags.Validate(req.Metadata); err != nil {
+	if err := tags.Validate(req.Tags); err != nil {
 		return nil, err
 	}
-	req.Metadata = tags.Clone(req.Metadata)
+	req.Tags = tags.Clone(req.Tags)
 
 	// Apply defaults to build policy
 	policy := req.BuildPolicy
@@ -395,7 +395,7 @@ func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourc
 	meta := &buildMetadata{
 		ID:        id,
 		Status:    StatusQueued,
-		Metadata:  tags.Clone(req.Metadata),
+		Tags:      tags.Clone(req.Tags),
 		Request:   &req,
 		CreatedAt: time.Now(),
 	}

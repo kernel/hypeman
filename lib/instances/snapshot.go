@@ -125,7 +125,7 @@ func (m *manager) createSnapshot(ctx context.Context, id string, req CreateSnaps
 				Id:               snapshotID,
 				Name:             req.Name,
 				Kind:             req.Kind,
-				Metadata:         tags.Clone(req.Metadata),
+				Tags:             tags.Clone(req.Tags),
 				SourceInstanceID: stored.Id,
 				SourceName:       stored.Name,
 				SourceHypervisor: stored.HypervisorType,
@@ -157,7 +157,7 @@ func (m *manager) createSnapshot(ctx context.Context, id string, req CreateSnaps
 				Id:               snapshotID,
 				Name:             req.Name,
 				Kind:             req.Kind,
-				Metadata:         tags.Clone(req.Metadata),
+				Tags:             tags.Clone(req.Tags),
 				SourceInstanceID: stored.Id,
 				SourceName:       stored.Name,
 				SourceHypervisor: stored.HypervisorType,
@@ -461,7 +461,7 @@ func validateCreateSnapshotRequest(req CreateSnapshotRequest) error {
 	if req.Kind != SnapshotKindStandby && req.Kind != SnapshotKindStopped {
 		return fmt.Errorf("%w: kind must be one of %s, %s", ErrInvalidRequest, SnapshotKindStandby, SnapshotKindStopped)
 	}
-	if err := tags.Validate(req.Metadata); err != nil {
+	if err := tags.Validate(req.Tags); err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidRequest, err)
 	}
 	if req.Name != "" {

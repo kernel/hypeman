@@ -141,7 +141,7 @@ func (m *manager) ListAvailableDevices(ctx context.Context) ([]AvailableDevice, 
 
 func (m *manager) CreateDevice(ctx context.Context, req CreateDeviceRequest) (*Device, error) {
 	log := logger.FromContext(ctx)
-	if err := tags.Validate(req.Metadata); err != nil {
+	if err := tags.Validate(req.Tags); err != nil {
 		return nil, err
 	}
 
@@ -189,7 +189,7 @@ func (m *manager) CreateDevice(ctx context.Context, req CreateDeviceRequest) (*D
 		Id:          id,
 		Name:        name,
 		Type:        DetermineDeviceType(deviceInfo),
-		Metadata:    tags.Clone(req.Metadata),
+		Tags:        tags.Clone(req.Tags),
 		PCIAddress:  req.PCIAddress,
 		VendorID:    deviceInfo.VendorID,
 		DeviceID:    deviceInfo.DeviceID,
