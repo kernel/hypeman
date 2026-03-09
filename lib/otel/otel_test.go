@@ -69,3 +69,32 @@ func TestInitMetricsHandlerAlwaysAvailable(t *testing.T) {
 		})
 	}
 }
+
+func TestInitRepeatedDoesNotFail(t *testing.T) {
+	cfg := Config{
+		Enabled:              false,
+		ServiceName:          "hypeman-test",
+		ServiceInstanceID:    "test-instance-repeat",
+		MetricExportInterval: "60s",
+		Version:              "test",
+		Env:                  "test",
+	}
+
+	provider1, shutdown1, err := Init(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("first init telemetry: %v", err)
+	}
+	t.Cleanup(func() { _ = shutdown1(context.Background()) })
+	if provider1.MetricsHandler == nil {
+		t.Fatalf("expected first metrics handler")
+	}
+
+	provider2, shutdown2, err := Init(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("second init telemetry: %v", err)
+	}
+	t.Cleanup(func() { _ = shutdown2(context.Background()) })
+	if provider2.MetricsHandler == nil {
+		t.Fatalf("expected second metrics handler")
+	}
+}

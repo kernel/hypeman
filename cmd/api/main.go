@@ -449,17 +449,21 @@ func run() error {
 		shutdownCtx, cancel := context.WithTimeout(shutdownCtx, 30*time.Second)
 		defer cancel()
 
-		if err := srv.Shutdown(shutdownCtx); err != nil {
+		var shutdownErrs []error
+
+		if err := srv.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("failed to shutdown http server", "error", err)
-			return err
+			shutdownErrs = append(shutdownErrs, fmt.Errorf("shutdown http server: %w", err))
+		} else {
+			logger.Info("http server shutdown complete")
 		}
-		logger.Info("http server shutdown complete")
 
 		if err := metricsSrv.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("failed to shutdown metrics server", "error", err)
-			return err
+			shutdownErrs = append(shutdownErrs, fmt.Errorf("shutdown metrics server: %w", err))
+		} else {
+			logger.Info("metrics server shutdown complete")
 		}
-		logger.Info("metrics server shutdown complete")
 
 		// Shutdown ingress manager (stops Caddy if CADDY_STOP_ON_SHUTDOWN=true)
 		if err := app.IngressManager.Shutdown(shutdownCtx); err != nil {
@@ -469,7 +473,7 @@ func run() error {
 			logger.Info("ingress manager shutdown complete")
 		}
 
-		return nil
+		return errors.Join(shutdownErrs...)
 	})
 
 	// Log rotation scheduler

@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	goruntime "runtime"
-	"strings"
+	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -51,6 +51,25 @@ type Provider struct {
 	LogHandler     slog.Handler
 	MetricsHandler http.Handler
 	startTime      time.Time
+}
+
+var runtimeMetricsState struct {
+	mu      sync.Mutex
+	started bool
+}
+
+func startRuntimeMetricsOnce(meterProvider metric.MeterProvider) (bool, error) {
+	runtimeMetricsState.mu.Lock()
+	defer runtimeMetricsState.mu.Unlock()
+
+	if runtimeMetricsState.started {
+		return false, nil
+	}
+	if err := otelruntime.Start(otelruntime.WithMeterProvider(meterProvider)); err != nil {
+		return false, err
+	}
+	runtimeMetricsState.started = true
+	return true, nil
 }
 
 // Init initializes OpenTelemetry with the given configuration.
@@ -165,20 +184,21 @@ func Init(ctx context.Context, cfg Config) (*Provider, func(context.Context) err
 	))
 
 	// Start runtime metrics collection.
-	if err := otelruntime.Start(otelruntime.WithMeterProvider(meterProvider)); err != nil {
-		// Tests may initialize telemetry more than once in the same process.
-		// Treat "already started" as non-fatal and keep app metrics active.
-		if !strings.Contains(strings.ToLower(err.Error()), "already") {
-			if tracerProvider != nil {
-				tracerProvider.Shutdown(ctx)
-			}
-			meterProvider.Shutdown(ctx)
-			if loggerProvider != nil {
-				loggerProvider.Shutdown(ctx)
-			}
-			return nil, nil, fmt.Errorf("start runtime metrics: %w", err)
+	startedRuntimeMetrics, err := startRuntimeMetricsOnce(meterProvider)
+	if err != nil {
+		if tracerProvider != nil {
+			tracerProvider.Shutdown(ctx)
 		}
-		slog.Warn("runtime metrics instrumentation already initialized; skipping duplicate start", "error", err)
+		meterProvider.Shutdown(ctx)
+		if loggerProvider != nil {
+			loggerProvider.Shutdown(ctx)
+		}
+		return nil, nil, fmt.Errorf("start runtime metrics: %w", err)
+	}
+	if !startedRuntimeMetrics {
+		// Tests may initialize telemetry more than once in the same process.
+		// Runtime instrumentation is process-scoped, so skip duplicate starts.
+		slog.Warn("runtime metrics instrumentation already initialized; skipping duplicate start")
 	}
 
 	tracer := otel.Tracer(cfg.ServiceName)
