@@ -268,7 +268,11 @@ func (s *Service) handleHTTPProxyRequest(w http.ResponseWriter, r *http.Request,
 	}
 
 	outReq.RequestURI = ""
-	s.applyHeaderReplacements(sourceIP, "", outReq.Header, false)
+	destinationHost := normalizeDestinationHost(outReq.URL.Host)
+	if destinationHost == "" {
+		destinationHost = normalizeDestinationHost(outReq.Host)
+	}
+	s.applyHeaderReplacements(sourceIP, destinationHost, outReq.Header, false)
 
 	resp, err := s.transport.RoundTrip(outReq)
 	if err != nil {
