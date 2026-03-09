@@ -361,9 +361,6 @@ func (m *manager) GetInstance(ctx context.Context, idOrName string) (*Instance, 
 		if inst.State == StateStopped && inst.ExitCode != nil {
 			m.maybePersistExitInfo(ctx, inst.Id)
 		}
-		if (inst.State == StateRunning || inst.State == StateInitializing) && inst.BootMarkersHydrated {
-			m.maybePersistBootMarkers(ctx, inst.Id)
-		}
 		return inst, nil
 	}
 	if len(nameMatches) > 1 {
@@ -381,9 +378,6 @@ func (m *manager) GetInstance(ctx context.Context, idOrName string) (*Instance, 
 		inst := &prefixMatches[0]
 		if inst.State == StateStopped && inst.ExitCode != nil {
 			m.maybePersistExitInfo(ctx, inst.Id)
-		}
-		if (inst.State == StateRunning || inst.State == StateInitializing) && inst.BootMarkersHydrated {
-			m.maybePersistBootMarkers(ctx, inst.Id)
 		}
 		return inst, nil
 	}
