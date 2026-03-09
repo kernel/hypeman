@@ -240,6 +240,9 @@ func (m *manager) stopInstance(
 	stored.StoppedAt = &now
 	stored.HypervisorPID = nil
 	stored.GPUMdevUUID = "" // Clear mdev UUID since we destroyed it
+	// Boot markers are per-boot-run and must not carry across stop/restore/start.
+	stored.ProgramStartedAt = nil
+	stored.GuestAgentReadyAt = nil
 
 	meta = &metadata{StoredMetadata: *stored}
 	if err := m.saveMetadata(meta); err != nil {

@@ -13,7 +13,6 @@ var ValidTransitions = map[State][]State{
 	},
 	StateInitializing: {
 		StateRunning,  // guest init complete
-		StatePaused,   // pause
 		StateShutdown, // shutdown
 	},
 	StateRunning: {

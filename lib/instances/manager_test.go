@@ -1450,6 +1450,7 @@ func TestStateTransitions(t *testing.T) {
 		{"Stopped to Running", StateStopped, StateRunning, true},
 		{"Stopped to Initializing", StateStopped, StateInitializing, true},
 		{"Standby to Running", StateStandby, StateRunning, true},
+		{"Initializing to Paused", StateInitializing, StatePaused, true},
 	}
 
 	for _, tt := range tests {
