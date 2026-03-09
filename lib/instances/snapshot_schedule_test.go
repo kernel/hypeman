@@ -170,6 +170,43 @@ func TestDeleteInstanceRemovesSnapshotSchedule(t *testing.T) {
 	assert.True(t, os.IsNotExist(statErr))
 }
 
+func TestRunSnapshotSchedulesAggregatesErrorsAcrossInstances(t *testing.T) {
+	t.Parallel()
+	mgr, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	hvType := mgr.defaultHypervisor
+	sourceA := "snapshot-schedule-error-src-a"
+	sourceB := "snapshot-schedule-error-src-b"
+	createStoppedSnapshotSourceFixture(t, mgr, sourceA, sourceA, hvType)
+	createStoppedSnapshotSourceFixture(t, mgr, sourceB, sourceB, hvType)
+
+	_, err := mgr.SetSnapshotSchedule(ctx, sourceA, SetSnapshotScheduleRequest{
+		Kind:     SnapshotKindStandby, // Invalid against Stopped source state, should fail during run.
+		Interval: time.Hour,
+		Retention: SnapshotScheduleRetention{
+			MaxCount: 1,
+		},
+	})
+	require.NoError(t, err)
+	_, err = mgr.SetSnapshotSchedule(ctx, sourceB, SetSnapshotScheduleRequest{
+		Kind:     SnapshotKindStandby, // Invalid against Stopped source state, should fail during run.
+		Interval: time.Hour,
+		Retention: SnapshotScheduleRetention{
+			MaxCount: 1,
+		},
+	})
+	require.NoError(t, err)
+
+	markSnapshotScheduleDue(t, mgr, sourceA)
+	markSnapshotScheduleDue(t, mgr, sourceB)
+
+	err = mgr.RunSnapshotSchedules(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), sourceA)
+	assert.Contains(t, err.Error(), sourceB)
+}
+
 func markSnapshotScheduleDue(t *testing.T, mgr *manager, instanceID string) {
 	t.Helper()
 	lock := mgr.getInstanceLock(instanceID)

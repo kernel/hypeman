@@ -119,7 +119,7 @@ func (m *manager) RunSnapshotSchedules(ctx context.Context) error {
 	}
 
 	now := time.Now().UTC()
-	var runErr error
+	var runErrs []error
 
 	for _, inst := range instances {
 		lock := m.getInstanceLock(inst.Id)
@@ -127,12 +127,15 @@ func (m *manager) RunSnapshotSchedules(ctx context.Context) error {
 		err := m.runSnapshotScheduleForInstanceLocked(ctx, inst.Id, now)
 		lock.Unlock()
 		if err != nil {
-			runErr = err
+			runErrs = append(runErrs, fmt.Errorf("instance %s: %w", inst.Id, err))
 			log.ErrorContext(ctx, "scheduled snapshot run failed", "instance_id", inst.Id, "error", err)
 		}
 	}
 
-	return runErr
+	if len(runErrs) > 0 {
+		return errors.Join(runErrs...)
+	}
+	return nil
 }
 
 func (m *manager) runSnapshotScheduleForInstanceLocked(ctx context.Context, instanceID string, now time.Time) error {
