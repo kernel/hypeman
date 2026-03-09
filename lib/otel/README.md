@@ -4,11 +4,19 @@ Provides OpenTelemetry initialization and metric definitions for Hypeman.
 
 ## Features
 
-- OTLP export for traces, metrics, and logs (gRPC)
+- Always-on Prometheus pull metrics via `/metrics`
+- Optional OTLP push export for traces, metrics, and logs (gRPC)
 - Runtime metrics (Go GC, goroutines, memory)
 - Application-specific metrics per subsystem
 - Log bridging from slog to OTel (viewable in Grafana/Loki)
-- Graceful degradation (failures don't crash the app)
+- Single metric instrumentation pipeline shared by pull and push paths
+
+## Dual Export Model
+
+Hypeman always exposes metrics on `/metrics` (pull), by default on `127.0.0.1:9464`.  
+If `otel.enabled=true`, it also pushes the same metric stream on a schedule to OTLP.
+
+This keeps pull and push views aligned because both are sourced from the same OTel meter provider/instruments.
 
 ## Configuration
 
@@ -20,6 +28,9 @@ Provides OpenTelemetry initialization and metric definitions for Hypeman.
 | `OTEL_SERVICE_NAME` | Service name | `hypeman` |
 | `OTEL_SERVICE_INSTANCE_ID` | Instance ID (`service.instance.id` attribute) | hostname |
 | `OTEL_INSECURE` | Disable TLS for OTLP | `true` |
+| `OTEL__METRIC_EXPORT_INTERVAL` | OTLP metric push interval (when enabled) | `60s` |
+| `METRICS__LISTEN_ADDRESS` | Bind address for `/metrics` listener | `127.0.0.1` |
+| `METRICS__PORT` | Port for `/metrics` listener | `9464` |
 
 ## Metrics
 
@@ -84,15 +95,17 @@ Provides OpenTelemetry initialization and metric definitions for Hypeman.
 
 ```go
 provider, shutdown, err := otel.Init(ctx, otel.Config{
-    Enabled:     true,
-    Endpoint:    "localhost:4317",
-    ServiceName: "hypeman",
+    Enabled:              true,
+    Endpoint:             "localhost:4317",
+    ServiceName:          "hypeman",
+    MetricExportInterval: "60s",
 })
 defer shutdown(ctx)
 
 meter := provider.Meter       // Use for creating metrics
 tracer := provider.Tracer     // Use for creating traces
 logHandler := provider.LogHandler // Use with slog for logs to OTel
+metricsHandler := provider.MetricsHandler // Attach to GET /metrics
 ```
 
 ## Logs
@@ -101,4 +114,3 @@ Logs are exported via the OTel log bridge (`otelslog`). When OTel is enabled, al
 - `subsystem` attribute (API, IMAGES, INSTANCES, etc.)
 - `trace_id` and `span_id` when available
 - Service attributes (name, instance, environment)
-
