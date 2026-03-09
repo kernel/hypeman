@@ -410,6 +410,9 @@ func (m *manager) createInstance(
 
 	// 17. Record boot start time before launching the VM so marker hydration
 	// can safely ignore stale sentinels from prior runs.
+	if err := m.archiveAppLogForBoot(id); err != nil {
+		log.WarnContext(ctx, "failed to archive app log before create boot", "instance_id", id, "error", err)
+	}
 	bootStart := time.Now().UTC()
 	stored.StartedAt = &bootStart
 

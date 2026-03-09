@@ -250,3 +250,66 @@ func TestParseBootMarkers_IgnoresStaleMarkersBeforeBootStart(t *testing.T) {
 	assert.Equal(t, freshProgram.Format(time.RFC3339Nano), programStartedAt.UTC().Format(time.RFC3339Nano))
 	assert.Equal(t, freshAgent.Format(time.RFC3339Nano), guestAgentReadyAt.UTC().Format(time.RFC3339Nano))
 }
+
+func TestParseBootMarkers_ReturnsLatestMarkerFromNewestLog(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	m := &manager{
+		paths: paths.New(tmpDir),
+	}
+
+	id := "latest-marker-instance"
+	logPath := m.paths.InstanceAppLog(id)
+	rotatedLogPath := logPath + ".1"
+	require.NoError(t, os.MkdirAll(filepath.Dir(logPath), 0o755))
+
+	oldProgram := time.Date(2026, 3, 9, 4, 0, 0, 0, time.UTC)
+	oldAgent := oldProgram.Add(500 * time.Millisecond)
+	newProgram := oldProgram.Add(3 * time.Second)
+	newProgramLatest := oldProgram.Add(4 * time.Second)
+	newAgent := oldProgram.Add(3500 * time.Millisecond)
+
+	require.NoError(t, os.WriteFile(rotatedLogPath, []byte(
+		"HYPEMAN-PROGRAM-START ts="+oldProgram.Format(time.RFC3339Nano)+" mode=exec\n"+
+			"HYPEMAN-AGENT-READY ts="+oldAgent.Format(time.RFC3339Nano)+"\n",
+	), 0o644))
+
+	require.NoError(t, os.WriteFile(logPath, []byte(
+		"HYPEMAN-PROGRAM-START ts="+newProgram.Format(time.RFC3339Nano)+" mode=exec\n"+
+			"HYPEMAN-AGENT-READY ts="+newAgent.Format(time.RFC3339Nano)+"\n"+
+			"HYPEMAN-PROGRAM-START ts="+newProgramLatest.Format(time.RFC3339Nano)+" mode=exec\n",
+	), 0o644))
+
+	programStartedAt, guestAgentReadyAt := m.parseBootMarkers(id, true, true, nil)
+	require.NotNil(t, programStartedAt)
+	require.NotNil(t, guestAgentReadyAt)
+	assert.Equal(t, newProgramLatest.Format(time.RFC3339Nano), programStartedAt.UTC().Format(time.RFC3339Nano))
+	assert.Equal(t, newAgent.Format(time.RFC3339Nano), guestAgentReadyAt.UTC().Format(time.RFC3339Nano))
+}
+
+func TestAppLogPathsForMarkerScan_IgnoresArchivedLogs(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	m := &manager{
+		paths: paths.New(tmpDir),
+	}
+
+	id := "log-order-instance"
+	logPath := m.paths.InstanceAppLog(id)
+	require.NoError(t, os.MkdirAll(filepath.Dir(logPath), 0o755))
+
+	for _, p := range []string{
+		logPath,
+		logPath + ".1",
+		logPath + ".2",
+		logPath + ".prev.12345",
+		logPath + "-debug-copy",
+	} {
+		require.NoError(t, os.WriteFile(p, []byte("x\n"), 0o644))
+	}
+
+	paths := m.appLogPathsForMarkerScan(id)
+	require.Equal(t, []string{logPath + ".2", logPath + ".1", logPath}, paths)
+}

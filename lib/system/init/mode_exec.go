@@ -228,22 +228,38 @@ func waitForGuestAgentReady(readyReader *os.File, timeout time.Duration, agentEx
 		readyErr <- err
 	}()
 
+	agentExitCh := agentExited
+	var agentExitErr error
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 
-	select {
-	case err := <-readyErr:
-		if err != nil {
-			return fmt.Errorf("failed waiting for guest-agent readiness signal: %w", err)
+	for {
+		select {
+		case err := <-readyErr:
+			if err != nil {
+				if agentExitCh == nil {
+					if agentExitErr == nil {
+						return fmt.Errorf("guest-agent exited before readiness signal")
+					}
+					return fmt.Errorf("guest-agent exited before readiness signal: %w", agentExitErr)
+				}
+				return fmt.Errorf("failed waiting for guest-agent readiness signal: %w", err)
+			}
+			return nil
+		case err := <-agentExitCh:
+			agentExitErr = err
+			// Keep waiting for the readiness read to complete. If the agent wrote
+			// readiness and then exited, the read succeeds and startup proceeds.
+			agentExitCh = nil
+		case <-timer.C:
+			if agentExitCh == nil {
+				if agentExitErr == nil {
+					return fmt.Errorf("guest-agent exited before readiness signal")
+				}
+				return fmt.Errorf("guest-agent exited before readiness signal: %w", agentExitErr)
+			}
+			return fmt.Errorf("timed out after %s waiting for guest-agent readiness signal", timeout)
 		}
-		return nil
-	case err := <-agentExited:
-		if err == nil {
-			return fmt.Errorf("guest-agent exited before readiness signal")
-		}
-		return fmt.Errorf("guest-agent exited before readiness signal: %w", err)
-	case <-timer.C:
-		return fmt.Errorf("timed out after %s waiting for guest-agent readiness signal", timeout)
 	}
 }
 

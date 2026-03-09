@@ -211,3 +211,23 @@ func TestWaitForGuestAgentReadyProcessExit(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "exited before readiness signal")
 }
+
+func TestWaitForGuestAgentReadyReadyWinsAfterExitSignal(t *testing.T) {
+	t.Parallel()
+
+	readyReader, readyWriter, err := os.Pipe()
+	require.NoError(t, err)
+	defer readyReader.Close()
+	defer readyWriter.Close()
+
+	agentExited := make(chan error, 1)
+	agentExited <- errors.New("exit status 1")
+
+	go func() {
+		time.Sleep(25 * time.Millisecond)
+		_, _ = readyWriter.Write([]byte{1})
+	}()
+
+	err = waitForGuestAgentReady(readyReader, time.Second, agentExited)
+	require.NoError(t, err)
+}

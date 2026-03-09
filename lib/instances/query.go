@@ -140,14 +140,15 @@ func (m *manager) hydrateBootMarkersFromLogs(stored *StoredMetadata) bool {
 }
 
 // parseBootMarkers scans app logs (including rotated files) and returns the
-// latest observed program-start and guest-agent-ready marker timestamps.
+// newest observed program-start and guest-agent-ready marker timestamps.
 // When startedAt is provided, files last modified before this boot start are ignored.
 func (m *manager) parseBootMarkers(id string, needProgram bool, needAgent bool, startedAt *time.Time) (*time.Time, *time.Time) {
 	logPaths := m.appLogPathsForMarkerScan(id)
 
 	var programStartedAt *time.Time
 	var guestAgentReadyAt *time.Time
-	for _, logPath := range logPaths {
+	for i := len(logPaths) - 1; i >= 0; i-- {
+		logPath := logPaths[i]
 		if !fileMayContainCurrentBootMarkers(logPath, startedAt) {
 			continue
 		}
@@ -161,17 +162,22 @@ func (m *manager) parseBootMarkers(id string, needProgram bool, needAgent bool, 
 		for scanner.Scan() {
 			line := scanner.Text()
 			if ts, ok := parseProgramStartSentinelLine(line); ok {
-				programStartedAt = &ts
+				if programStartedAt == nil || ts.After(*programStartedAt) {
+					t := ts
+					programStartedAt = &t
+				}
 			}
 			if ts, ok := parseAgentReadySentinelLine(line); ok {
-				guestAgentReadyAt = &ts
-			}
-			if (!needProgram || programStartedAt != nil) && (!needAgent || guestAgentReadyAt != nil) {
-				_ = f.Close()
-				return programStartedAt, guestAgentReadyAt
+				if guestAgentReadyAt == nil || ts.After(*guestAgentReadyAt) {
+					t := ts
+					guestAgentReadyAt = &t
+				}
 			}
 		}
 		_ = f.Close()
+		if (!needProgram || programStartedAt != nil) && (!needAgent || guestAgentReadyAt != nil) {
+			return programStartedAt, guestAgentReadyAt
+		}
 	}
 
 	return programStartedAt, guestAgentReadyAt
@@ -216,10 +222,11 @@ func (m *manager) nowUTC() time.Time {
 // (oldest rotated file to newest active file).
 func (m *manager) appLogPathsForMarkerScan(id string) []string {
 	base := m.paths.InstanceAppLog(id)
-	matches, err := filepath.Glob(base + "*")
+	rotatedMatches, err := filepath.Glob(base + ".*")
 	if err != nil {
 		return []string{base}
 	}
+	matches := append([]string{base}, rotatedMatches...)
 
 	type logPathWithRank struct {
 		path string

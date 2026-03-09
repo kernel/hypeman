@@ -226,7 +226,7 @@ func (m *manager) restoreInstance(
 	os.RemoveAll(snapshotDir) // Best effort, ignore errors
 
 	// 9. Update timestamp
-	now := time.Now()
+	now := time.Now().UTC()
 	stored.StartedAt = &now
 
 	meta = &metadata{StoredMetadata: *stored}
