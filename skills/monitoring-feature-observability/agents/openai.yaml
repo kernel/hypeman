@@ -1,0 +1,3 @@
+interface:
+  display_name: "Feature Monitoring"
+  short_description: "Instrument Hypeman logs, traces, and metrics"
