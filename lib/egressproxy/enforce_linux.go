@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"unicode"
 )
 
 const (
@@ -97,9 +98,10 @@ func removeRuleByComment(comment string) error {
 		return err
 	}
 
+	commentMarker := fmt.Sprintf("/* %s */", comment)
 	var ruleNums []string
 	for _, line := range strings.Split(string(output), "\n") {
-		if !strings.Contains(line, comment) {
+		if !strings.Contains(line, commentMarker) {
 			continue
 		}
 		fields := strings.Fields(line)
@@ -117,5 +119,23 @@ func removeRuleByComment(comment string) error {
 }
 
 func enforcementComment(instanceID, suffix string) string {
-	return fmt.Sprintf("hypeman-egress-%s-%s", instanceID, suffix)
+	safeID := sanitizeInstanceIDForComment(instanceID)
+	return fmt.Sprintf("hypeman-egress-%s-%s", safeID, suffix)
+}
+
+func sanitizeInstanceIDForComment(instanceID string) string {
+	cleaned := strings.Map(func(r rune) rune {
+		switch {
+		case unicode.IsLetter(r), unicode.IsDigit(r):
+			return r
+		case r == '-', r == '_', r == '.':
+			return r
+		default:
+			return '_'
+		}
+	}, strings.TrimSpace(instanceID))
+	if cleaned == "" {
+		return "unknown"
+	}
+	return cleaned
 }

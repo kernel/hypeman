@@ -28,7 +28,7 @@ func TestCpToAndFromInstance(t *testing.T) {
 	}
 
 	svc := newTestService(t)
-	imageName := apiTestImageRef(t, "docker.io/library/nginx:alpine")
+	imageName := "docker.io/library/nginx:alpine"
 
 	// Ensure system files (kernel and initrd) are available
 	t.Log("Ensuring system files...")
@@ -38,7 +38,7 @@ func TestCpToAndFromInstance(t *testing.T) {
 	t.Log("System files ready")
 
 	// Create and wait for nginx image (has a long-running process)
-	createAndWaitForImage(t, svc, imageName, 30*time.Second)
+	imageName = createAndWaitForImage(t, svc, imageName, 30*time.Second)
 
 	// Create instance
 	t.Log("Creating instance...")
@@ -169,7 +169,7 @@ func TestCpDirectoryToInstance(t *testing.T) {
 	}
 
 	svc := newTestService(t)
-	imageName := apiTestImageRef(t, "docker.io/library/nginx:alpine")
+	imageName := "docker.io/library/nginx:alpine"
 
 	// Ensure system files
 	t.Log("Ensuring system files...")
@@ -178,7 +178,7 @@ func TestCpDirectoryToInstance(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create and wait for nginx image (has a long-running process)
-	createAndWaitForImage(t, svc, imageName, 30*time.Second)
+	imageName = createAndWaitForImage(t, svc, imageName, 30*time.Second)
 
 	// Create instance
 	t.Log("Creating instance...")
