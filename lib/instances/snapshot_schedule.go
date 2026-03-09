@@ -225,11 +225,18 @@ func (m *manager) runSnapshotScheduleForInstanceLocked(ctx context.Context, inst
 			errMsg := countErr.Error()
 			schedule.LastError = &errMsg
 			cleanupErr = fmt.Errorf("count scheduled snapshots: %w", countErr)
-		} else if remaining == 0 {
-			if err := os.Remove(m.paths.InstanceSnapshotSchedule(instanceID)); err != nil && !os.IsNotExist(err) {
-				return fmt.Errorf("delete snapshot schedule after source deletion: %w", err)
+		} else {
+			shouldDeleteSchedule := remaining == 0
+			if !shouldDeleteSchedule && schedule.Retention.MaxAge == 0 && schedule.Retention.MaxCount > 0 && remaining <= schedule.Retention.MaxCount {
+				// Count-only retention has converged for deleted instances: no future run can reduce count.
+				shouldDeleteSchedule = true
 			}
-			return nil
+			if shouldDeleteSchedule {
+				if err := os.Remove(m.paths.InstanceSnapshotSchedule(instanceID)); err != nil && !os.IsNotExist(err) {
+					return fmt.Errorf("delete snapshot schedule after source deletion: %w", err)
+				}
+				return nil
+			}
 		}
 	}
 

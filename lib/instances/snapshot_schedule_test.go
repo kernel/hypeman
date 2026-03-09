@@ -219,7 +219,7 @@ func TestDeleteInstanceKeepsScheduleUntilScheduledSnapshotsAreGone(t *testing.T)
 	_, err := mgr.SetSnapshotSchedule(ctx, sourceID, SetSnapshotScheduleRequest{
 		Interval: time.Hour,
 		Retention: SnapshotScheduleRetention{
-			MaxCount: 3,
+			MaxAge: 24 * time.Hour,
 		},
 	})
 	require.NoError(t, err)
@@ -243,6 +243,44 @@ func TestDeleteInstanceKeepsScheduleUntilScheduledSnapshotsAreGone(t *testing.T)
 	require.FileExists(t, mgr.paths.InstanceSnapshotSchedule(sourceID))
 
 	require.NoError(t, mgr.DeleteSnapshot(ctx, scheduledSnapshot.Id))
+
+	markSnapshotScheduleDue(t, mgr, sourceID)
+	require.NoError(t, mgr.RunSnapshotSchedules(ctx))
+
+	_, statErr := os.Stat(mgr.paths.InstanceSnapshotSchedule(sourceID))
+	require.Error(t, statErr)
+	assert.True(t, os.IsNotExist(statErr))
+}
+
+func TestDeleteInstanceWithCountOnlyRetentionRemovesConvergedSchedule(t *testing.T) {
+	t.Parallel()
+	mgr, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	hvType := mgr.defaultHypervisor
+	sourceID := "snapshot-schedule-delete-count-only-src"
+	createStoppedSnapshotSourceFixture(t, mgr, sourceID, sourceID, hvType)
+
+	_, err := mgr.SetSnapshotSchedule(ctx, sourceID, SetSnapshotScheduleRequest{
+		Interval: time.Hour,
+		Retention: SnapshotScheduleRetention{
+			MaxCount: 3,
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = mgr.CreateSnapshot(ctx, sourceID, CreateSnapshotRequest{
+		Kind: SnapshotKindStopped,
+		Name: "scheduled-before-delete-count-only",
+		Metadata: map[string]string{
+			snapshotScheduleMetadataKey:        "true",
+			snapshotScheduleMetadataInstanceID: sourceID,
+		},
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, mgr.DeleteInstance(ctx, sourceID))
+	require.FileExists(t, mgr.paths.InstanceSnapshotSchedule(sourceID))
 
 	markSnapshotScheduleDue(t, mgr, sourceID)
 	require.NoError(t, mgr.RunSnapshotSchedules(ctx))
