@@ -388,13 +388,6 @@ components:
       type: object
       required: [interval, retention]
       properties:
-        kind:
-          $ref: "#/components/schemas/SnapshotKind"
-          description: |
-            Optional snapshot kind for each scheduled run.
-            Defaults to `Standby` when omitted.
-            `Standby` runs against running instances by briefly pausing and resuming the VM during capture.
-          default: Standby
         interval:
           type: string
           description: Snapshot interval (Go duration format, minimum 1m).
@@ -414,14 +407,12 @@ components:
 
     SnapshotSchedule:
       type: object
-      required: [instance_id, kind, interval, retention, next_run_at, created_at, updated_at]
+      required: [instance_id, interval, retention, next_run_at, created_at, updated_at]
       properties:
         instance_id:
           type: string
           description: Source instance ID.
           example: qilviffnqzck2jrim1x6s2b1
-        kind:
-          $ref: "#/components/schemas/SnapshotKind"
         interval:
           type: string
           description: Snapshot interval (Go duration format).
@@ -1936,8 +1927,10 @@ paths:
     put:
       summary: Create or update snapshot schedule for an instance
       description: |
-        If `kind` is omitted, the schedule defaults to `Standby`.
-        For running instances, scheduled `Standby` snapshots perform a brief pause/resume cycle each run.
+        Scheduled runs automatically choose snapshot behavior from current instance state:
+        - `Running` or `Standby` source: create a `Standby` snapshot.
+        - `Stopped` source: create a `Stopped` snapshot.
+        For running instances, this includes a brief pause/resume cycle during each capture.
       operationId: setInstanceSnapshotSchedule
       security:
         - bearerAuth: []

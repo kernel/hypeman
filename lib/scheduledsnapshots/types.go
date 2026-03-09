@@ -3,7 +3,6 @@ package scheduledsnapshots
 import (
 	"time"
 
-	"github.com/kernel/hypeman/lib/snapshot"
 	"github.com/kernel/hypeman/lib/tags"
 )
 
@@ -15,7 +14,6 @@ const (
 	MaxSnapshotNameLength       = 63
 	MaxNamePrefixLength         = MaxSnapshotNameLength - len(NameTimestampFormat) - 1
 	MinInterval                 = time.Minute
-	DefaultKind                 = snapshot.SnapshotKindStandby
 )
 
 // Retention defines automatic cleanup rules for scheduled snapshots.
@@ -27,7 +25,6 @@ type Retention struct {
 // Schedule defines periodic snapshot capture for a single instance.
 type Schedule struct {
 	InstanceID     string
-	Kind           snapshot.SnapshotKind
 	Interval       time.Duration
 	NamePrefix     string
 	Metadata       tags.Metadata
@@ -42,7 +39,6 @@ type Schedule struct {
 
 // SetRequest configures or updates a schedule for an instance.
 type SetRequest struct {
-	Kind       snapshot.SnapshotKind
 	Interval   time.Duration
 	NamePrefix string
 	Metadata   tags.Metadata

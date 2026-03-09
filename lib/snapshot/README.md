@@ -62,7 +62,10 @@ Per-instance schedules can create snapshots automatically on an interval.
   - `DELETE /instances/{id}/snapshot-schedule`
 
 ### Schedule Rules
-- `kind` is optional and defaults to `Standby`; set it to choose `Standby` or `Stopped` runs explicitly.
+- Schedules do not take a snapshot kind input.
+- Each run auto-selects behavior from current source state:
+  - `Running`/`Standby` source -> `Standby` snapshot
+  - `Stopped` source -> `Stopped` snapshot
 - `Standby` scheduled runs against a `Running` source include a brief pause/resume cycle during capture.
 - `interval` uses Go duration format (for example `1h`, `24h`).
 - `retention` is required and must set at least one of:
@@ -73,6 +76,7 @@ Per-instance schedules can create snapshots automatically on an interval.
 ### Cleanup Scope
 - Retention cleanup only targets snapshots created by the schedule for that same instance.
 - Manually created snapshots are never deleted by schedule retention.
+- If the source instance is deleted, the schedule remains until scheduled snapshots for that instance are gone, then self-deletes.
 
 ## Safety Rules
 

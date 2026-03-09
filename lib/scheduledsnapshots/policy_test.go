@@ -5,15 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kernel/hypeman/lib/snapshot"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-func TestNormalizeSetRequestDefaultsKind(t *testing.T) {
-	req := NormalizeSetRequest(SetRequest{})
-	assert.Equal(t, snapshot.SnapshotKindStandby, req.Kind)
-}
 
 func TestValidateSetRequestNamePrefixLimit(t *testing.T) {
 	validateName := func(name string) error {
@@ -24,7 +18,6 @@ func TestValidateSetRequestNamePrefixLimit(t *testing.T) {
 	}
 
 	req := SetRequest{
-		Kind:       snapshot.SnapshotKindStandby,
 		Interval:   time.Hour,
 		NamePrefix: strings.Repeat("a", MaxNamePrefixLength+1),
 		Retention: Retention{
@@ -42,7 +35,6 @@ func TestMarshalUnmarshalScheduleRoundTrip(t *testing.T) {
 	id := "snap-1"
 	in := &Schedule{
 		InstanceID:     "inst-1",
-		Kind:           snapshot.SnapshotKindStandby,
 		Interval:       2 * time.Hour,
 		NamePrefix:     "nightly",
 		Metadata:       map[string]string{"env": "test"},
@@ -60,7 +52,6 @@ func TestMarshalUnmarshalScheduleRoundTrip(t *testing.T) {
 	out, err := UnmarshalSchedule(raw)
 	require.NoError(t, err)
 	assert.Equal(t, in.InstanceID, out.InstanceID)
-	assert.Equal(t, in.Kind, out.Kind)
 	assert.Equal(t, in.Interval, out.Interval)
 	assert.Equal(t, in.NamePrefix, out.NamePrefix)
 	assert.Equal(t, in.Retention.MaxCount, out.Retention.MaxCount)

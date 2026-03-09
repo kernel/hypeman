@@ -22,7 +22,6 @@ func TestSnapshotScheduleSetGetDelete(t *testing.T) {
 	createStoppedSnapshotSourceFixture(t, mgr, sourceID, "snapshot-schedule-src", hvType)
 
 	schedule, err := mgr.SetSnapshotSchedule(ctx, sourceID, SetSnapshotScheduleRequest{
-		Kind:       SnapshotKindStopped,
 		Interval:   2 * time.Hour,
 		NamePrefix: "nightly",
 		Metadata:   map[string]string{"env": "test"},
@@ -32,7 +31,6 @@ func TestSnapshotScheduleSetGetDelete(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, sourceID, schedule.InstanceID)
-	require.Equal(t, SnapshotKindStopped, schedule.Kind)
 	require.Equal(t, 2*time.Hour, schedule.Interval)
 	require.Equal(t, "nightly", schedule.NamePrefix)
 	require.Equal(t, 5, schedule.Retention.MaxCount)
@@ -41,7 +39,6 @@ func TestSnapshotScheduleSetGetDelete(t *testing.T) {
 	loaded, err := mgr.GetSnapshotSchedule(ctx, sourceID)
 	require.NoError(t, err)
 	assert.Equal(t, schedule.InstanceID, loaded.InstanceID)
-	assert.Equal(t, schedule.Kind, loaded.Kind)
 	assert.Equal(t, schedule.Interval, loaded.Interval)
 	assert.Equal(t, schedule.Retention.MaxCount, loaded.Retention.MaxCount)
 	assert.Equal(t, "test", loaded.Metadata["env"])
@@ -53,23 +50,38 @@ func TestSnapshotScheduleSetGetDelete(t *testing.T) {
 	assert.ErrorIs(t, err, ErrSnapshotScheduleNotFound)
 }
 
-func TestSnapshotScheduleDefaultsKindToStandby(t *testing.T) {
+func TestSnapshotScheduleUsesStoppedSnapshotWhenSourceIsStopped(t *testing.T) {
 	t.Parallel()
 	mgr, _ := setupTestManager(t)
 	ctx := context.Background()
 
 	hvType := mgr.defaultHypervisor
-	sourceID := "snapshot-schedule-default-kind-src"
+	sourceID := "snapshot-schedule-auto-kind-stopped-src"
 	createStoppedSnapshotSourceFixture(t, mgr, sourceID, sourceID, hvType)
 
-	schedule, err := mgr.SetSnapshotSchedule(ctx, sourceID, SetSnapshotScheduleRequest{
+	_, err := mgr.SetSnapshotSchedule(ctx, sourceID, SetSnapshotScheduleRequest{
 		Interval: time.Hour,
 		Retention: SnapshotScheduleRetention{
 			MaxCount: 1,
 		},
 	})
 	require.NoError(t, err)
-	assert.Equal(t, SnapshotKindStandby, schedule.Kind)
+
+	markSnapshotScheduleDue(t, mgr, sourceID)
+	require.NoError(t, mgr.RunSnapshotSchedules(ctx))
+
+	snaps, err := mgr.ListSnapshots(ctx, &ListSnapshotsFilter{SourceInstanceID: &sourceID})
+	require.NoError(t, err)
+
+	foundScheduled := false
+	for _, snapshot := range snaps {
+		if !scheduledsnapshots.IsScheduledSnapshot(snapshot.Metadata, sourceID) {
+			continue
+		}
+		foundScheduled = true
+		assert.Equal(t, SnapshotKindStopped, snapshot.Kind)
+	}
+	require.True(t, foundScheduled, "expected at least one scheduled snapshot")
 }
 
 func TestRunSnapshotSchedulesCreatesSnapshotAndAppliesRetention(t *testing.T) {
@@ -110,7 +122,6 @@ func TestRunSnapshotSchedulesCreatesSnapshotAndAppliesRetention(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = mgr.SetSnapshotSchedule(ctx, sourceID, SetSnapshotScheduleRequest{
-		Kind:       SnapshotKindStopped,
 		Interval:   time.Hour,
 		NamePrefix: "nightly",
 		Retention: SnapshotScheduleRetention{
@@ -158,7 +169,6 @@ func TestSnapshotScheduleRequiresRetentionPolicy(t *testing.T) {
 	createStoppedSnapshotSourceFixture(t, mgr, sourceID, "snapshot-schedule-validate-src", hvType)
 
 	_, err := mgr.SetSnapshotSchedule(ctx, sourceID, SetSnapshotScheduleRequest{
-		Kind:     SnapshotKindStopped,
 		Interval: time.Hour,
 	})
 	require.Error(t, err)
@@ -176,7 +186,6 @@ func TestSnapshotScheduleNamePrefixLengthValidation(t *testing.T) {
 
 	tooLong := strings.Repeat("a", maxSnapshotScheduleNamePrefixLen+1)
 	_, err := mgr.SetSnapshotSchedule(ctx, sourceID, SetSnapshotScheduleRequest{
-		Kind:       SnapshotKindStopped,
 		Interval:   time.Hour,
 		NamePrefix: tooLong,
 		Retention: SnapshotScheduleRetention{
@@ -189,7 +198,6 @@ func TestSnapshotScheduleNamePrefixLengthValidation(t *testing.T) {
 
 	atLimit := strings.Repeat("a", maxSnapshotScheduleNamePrefixLen)
 	_, err = mgr.SetSnapshotSchedule(ctx, sourceID, SetSnapshotScheduleRequest{
-		Kind:       SnapshotKindStopped,
 		Interval:   time.Hour,
 		NamePrefix: atLimit,
 		Retention: SnapshotScheduleRetention{
@@ -199,7 +207,7 @@ func TestSnapshotScheduleNamePrefixLengthValidation(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestDeleteInstanceRemovesSnapshotSchedule(t *testing.T) {
+func TestDeleteInstanceKeepsScheduleUntilScheduledSnapshotsAreGone(t *testing.T) {
 	t.Parallel()
 	mgr, _ := setupTestManager(t)
 	ctx := context.Background()
@@ -209,16 +217,35 @@ func TestDeleteInstanceRemovesSnapshotSchedule(t *testing.T) {
 	createStoppedSnapshotSourceFixture(t, mgr, sourceID, "snapshot-schedule-delete-src", hvType)
 
 	_, err := mgr.SetSnapshotSchedule(ctx, sourceID, SetSnapshotScheduleRequest{
-		Kind:     SnapshotKindStopped,
 		Interval: time.Hour,
 		Retention: SnapshotScheduleRetention{
 			MaxCount: 3,
 		},
 	})
 	require.NoError(t, err)
+
+	scheduledSnapshot, err := mgr.CreateSnapshot(ctx, sourceID, CreateSnapshotRequest{
+		Kind: SnapshotKindStopped,
+		Name: "scheduled-before-delete",
+		Metadata: map[string]string{
+			snapshotScheduleMetadataKey:        "true",
+			snapshotScheduleMetadataInstanceID: sourceID,
+		},
+	})
+	require.NoError(t, err)
 	require.FileExists(t, mgr.paths.InstanceSnapshotSchedule(sourceID))
 
 	require.NoError(t, mgr.DeleteInstance(ctx, sourceID))
+	require.FileExists(t, mgr.paths.InstanceSnapshotSchedule(sourceID))
+
+	markSnapshotScheduleDue(t, mgr, sourceID)
+	require.NoError(t, mgr.RunSnapshotSchedules(ctx))
+	require.FileExists(t, mgr.paths.InstanceSnapshotSchedule(sourceID))
+
+	require.NoError(t, mgr.DeleteSnapshot(ctx, scheduledSnapshot.Id))
+
+	markSnapshotScheduleDue(t, mgr, sourceID)
+	require.NoError(t, mgr.RunSnapshotSchedules(ctx))
 
 	_, statErr := os.Stat(mgr.paths.InstanceSnapshotSchedule(sourceID))
 	require.Error(t, statErr)
@@ -237,7 +264,6 @@ func TestRunSnapshotSchedulesAggregatesErrorsAcrossInstances(t *testing.T) {
 	createStoppedSnapshotSourceFixture(t, mgr, sourceB, sourceB, hvType)
 
 	_, err := mgr.SetSnapshotSchedule(ctx, sourceA, SetSnapshotScheduleRequest{
-		Kind:     SnapshotKindStandby, // Invalid against Stopped source state, should fail during run.
 		Interval: time.Hour,
 		Retention: SnapshotScheduleRetention{
 			MaxCount: 1,
@@ -245,7 +271,6 @@ func TestRunSnapshotSchedulesAggregatesErrorsAcrossInstances(t *testing.T) {
 	})
 	require.NoError(t, err)
 	_, err = mgr.SetSnapshotSchedule(ctx, sourceB, SetSnapshotScheduleRequest{
-		Kind:     SnapshotKindStandby, // Invalid against Stopped source state, should fail during run.
 		Interval: time.Hour,
 		Retention: SnapshotScheduleRetention{
 			MaxCount: 1,
@@ -255,6 +280,9 @@ func TestRunSnapshotSchedulesAggregatesErrorsAcrossInstances(t *testing.T) {
 
 	markSnapshotScheduleDue(t, mgr, sourceA)
 	markSnapshotScheduleDue(t, mgr, sourceB)
+
+	require.NoError(t, os.WriteFile(mgr.paths.InstanceSnapshotSchedule(sourceA), []byte("{"), 0644))
+	require.NoError(t, os.WriteFile(mgr.paths.InstanceSnapshotSchedule(sourceB), []byte("{"), 0644))
 
 	err = mgr.RunSnapshotSchedules(ctx)
 	require.Error(t, err)

@@ -108,8 +108,10 @@ Any State → Stopped
 
 - Schedules are configured per instance and persisted in the server data store (outside snapshot payloads).
 - A background scheduler evaluates due schedules every minute.
-- Each due run creates a normal snapshot (`Standby` or `Stopped`) using the schedule configuration; default kind is `Standby`.
-- `Standby` scheduled runs from `Running` sources perform a brief pause/resume cycle during each capture.
+- Each due run chooses snapshot behavior from current source state:
+  - `Running`/`Standby` sources use `Standby` snapshots.
+  - `Stopped` sources use `Stopped` snapshots.
+- `Standby` runs from `Running` sources perform a brief pause/resume cycle during capture.
 - Scheduled snapshot `name_prefix` is optional and capped at 47 chars so generated names stay within the 63-char snapshot name limit.
 - Schedule runs advance to the next future interval (no backfill flood after downtime).
 - Each schedule stores operational status:
@@ -118,6 +120,8 @@ Any State → Stopped
   - `last_snapshot_id`
   - `last_error`
 - Retention cleanup runs after successful scheduled snapshot creation and only affects scheduled snapshots for that instance.
+- If an instance is deleted, its schedule is retained so retention can continue cleaning existing scheduled snapshots.
+- Once the deleted instance has no scheduled snapshots left, the scheduler removes that schedule automatically.
 
 ## Reference Handling
 

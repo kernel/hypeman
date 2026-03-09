@@ -8,13 +8,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kernel/hypeman/lib/snapshot"
 	"github.com/kernel/hypeman/lib/tags"
 )
 
 type storageModel struct {
 	InstanceID     string           `json:"instance_id"`
-	Kind           string           `json:"kind"`
 	Interval       string           `json:"interval"`
 	NamePrefix     string           `json:"name_prefix,omitempty"`
 	Metadata       tags.Metadata    `json:"metadata,omitempty"`
@@ -43,7 +41,6 @@ func MarshalSchedule(schedule *Schedule) ([]byte, error) {
 
 	model := storageModel{
 		InstanceID:     schedule.InstanceID,
-		Kind:           string(schedule.Kind),
 		Interval:       schedule.Interval.String(),
 		NamePrefix:     schedule.NamePrefix,
 		Metadata:       tags.Clone(schedule.Metadata),
@@ -79,7 +76,6 @@ func UnmarshalSchedule(content []byte) (*Schedule, error) {
 
 	return &Schedule{
 		InstanceID:     model.InstanceID,
-		Kind:           snapshot.SnapshotKind(model.Kind),
 		Interval:       interval,
 		NamePrefix:     model.NamePrefix,
 		Metadata:       tags.Clone(model.Metadata),

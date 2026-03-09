@@ -3,9 +3,10 @@
 This feature lets users attach a periodic snapshot policy to an instance.
 
 - A schedule runs on a fixed interval (for example `1h` or `24h`).
-- Each run creates a normal instance snapshot (`Standby` or `Stopped`).
-- If `kind` is omitted, the schedule defaults to `Standby`.
-- `Standby` captures from a running instance by doing a brief pause/resume cycle during the snapshot operation.
+- Each run auto-selects snapshot behavior from current instance state:
+  - `Running` or `Standby` source -> `Standby` snapshot
+  - `Stopped` source -> `Stopped` snapshot
+- For running sources, scheduled capture includes a brief pause/resume cycle during snapshot creation.
 - Each schedule stores runtime status (`next_run_at`, `last_run_at`, `last_snapshot_id`, `last_error`).
 
 Retention cleanup is required per schedule and can use either or both:
@@ -15,3 +16,6 @@ Retention cleanup is required per schedule and can use either or both:
 
 Cleanup only applies to snapshots created by that schedule for that same source instance.
 Manual snapshots are never deleted by scheduled retention.
+
+If the source instance is deleted, the schedule is kept so retention can continue cleaning previously created scheduled snapshots.
+Once no scheduled snapshots remain for that deleted instance, the scheduler removes the stale schedule automatically.

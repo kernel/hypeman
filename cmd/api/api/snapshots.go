@@ -251,9 +251,6 @@ func (s *ApiService) SetInstanceSnapshotSchedule(ctx context.Context, request oa
 			MaxAge:   0,
 		},
 	}
-	if request.Body.Kind != nil {
-		req.Kind = instances.SnapshotKind(*request.Body.Kind)
-	}
 	if request.Body.NamePrefix != nil {
 		req.NamePrefix = *request.Body.NamePrefix
 	}
@@ -344,7 +341,6 @@ func snapshotScheduleToOAPI(schedule instances.SnapshotSchedule) oapi.SnapshotSc
 
 	out := oapi.SnapshotSchedule{
 		InstanceId: schedule.InstanceID,
-		Kind:       oapi.SnapshotKind(schedule.Kind),
 		Interval:   schedule.Interval.String(),
 		Metadata:   toOAPIMetadata(schedule.Metadata),
 		Retention:  retention,

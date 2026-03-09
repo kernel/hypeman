@@ -5,21 +5,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kernel/hypeman/lib/snapshot"
 	"github.com/kernel/hypeman/lib/tags"
 )
 
-func NormalizeSetRequest(req SetRequest) SetRequest {
-	if req.Kind == "" {
-		req.Kind = DefaultKind
-	}
-	return req
-}
-
 func ValidateSetRequest(req SetRequest, validateName func(name string) error) error {
-	if req.Kind != snapshot.SnapshotKindStandby && req.Kind != snapshot.SnapshotKindStopped {
-		return fmt.Errorf("kind must be one of %s, %s", snapshot.SnapshotKindStandby, snapshot.SnapshotKindStopped)
-	}
 	if req.Interval < MinInterval {
 		return fmt.Errorf("interval must be at least %s", MinInterval)
 	}
