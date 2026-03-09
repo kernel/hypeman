@@ -1,9 +1,12 @@
 package instances
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/kernel/hypeman/lib/paths"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -164,4 +167,48 @@ func TestDeriveRunningState(t *testing.T) {
 			assert.Equal(t, tt.want, deriveRunningState(&tt.stored))
 		})
 	}
+}
+
+func TestHydrateBootMarkersFromLogs_RescanThrottle(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	m := &manager{
+		paths: paths.New(tmpDir),
+	}
+
+	now := time.Date(2026, 3, 8, 12, 0, 0, 0, time.UTC)
+	m.now = func() time.Time { return now }
+
+	meta := &StoredMetadata{
+		Id:             "test-instance",
+		SkipGuestAgent: false,
+	}
+
+	// First call finds nothing and schedules a deferred rescan.
+	hydrated := m.hydrateBootMarkersFromLogs(meta)
+	require.False(t, hydrated)
+	require.Nil(t, meta.ProgramStartedAt)
+	require.Nil(t, meta.GuestAgentReadyAt)
+
+	logPath := m.paths.InstanceAppLog(meta.Id)
+	require.NoError(t, os.MkdirAll(filepath.Dir(logPath), 0o755))
+	err := os.WriteFile(logPath, []byte(
+		"HYPEMAN-AGENT-READY ts=2026-03-08T12:00:00Z\n"+
+			"HYPEMAN-PROGRAM-START ts=2026-03-08T12:00:01Z mode=exec\n",
+	), 0o644)
+	require.NoError(t, err)
+
+	// Immediate second call should be throttled and skip scanning.
+	hydrated = m.hydrateBootMarkersFromLogs(meta)
+	require.False(t, hydrated)
+	require.Nil(t, meta.ProgramStartedAt)
+	require.Nil(t, meta.GuestAgentReadyAt)
+
+	// Once the rescan interval has elapsed, markers are hydrated.
+	now = now.Add(bootMarkerRescanInterval + time.Millisecond)
+	hydrated = m.hydrateBootMarkersFromLogs(meta)
+	require.True(t, hydrated)
+	require.NotNil(t, meta.ProgramStartedAt)
+	require.NotNil(t, meta.GuestAgentReadyAt)
 }

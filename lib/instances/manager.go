@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/hypervisor"
@@ -78,8 +79,10 @@ type manager struct {
 	limits            ResourceLimits
 	resourceValidator ResourceValidator // Optional validator for aggregate resource limits
 	instanceLocks     sync.Map          // map[string]*sync.RWMutex - per-instance locks
+	bootMarkerScans   sync.Map          // map[string]time.Time next allowed boot-marker rescan
 	hostTopology      *HostTopology     // Cached host CPU topology
 	metrics           *Metrics
+	now               func() time.Time
 
 	// Hypervisor support
 	vmStarters        map[hypervisor.Type]hypervisor.VMStarter
@@ -113,9 +116,11 @@ func NewManager(p *paths.Paths, imageManager images.Manager, systemManager syste
 		volumeManager:     volumeManager,
 		limits:            limits,
 		instanceLocks:     sync.Map{},
+		bootMarkerScans:   sync.Map{},
 		hostTopology:      detectHostTopology(), // Detect and cache host topology
 		vmStarters:        vmStarters,
 		defaultHypervisor: defaultHypervisor,
+		now:               time.Now,
 	}
 
 	// Initialize metrics if meter is provided

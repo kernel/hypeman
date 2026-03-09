@@ -21,6 +21,7 @@ const (
 	exitSentinelPrefix         = "HYPEMAN-EXIT "
 	programStartSentinelPrefix = "HYPEMAN-PROGRAM-START "
 	agentReadySentinelPrefix   = "HYPEMAN-AGENT-READY "
+	bootMarkerRescanInterval   = 1 * time.Second
 )
 
 // stateResult holds the result of state derivation
@@ -113,10 +114,14 @@ func (m *manager) hydrateBootMarkersFromLogs(stored *StoredMetadata) bool {
 	needProgram := stored.ProgramStartedAt == nil
 	needAgent := !stored.SkipGuestAgent && stored.GuestAgentReadyAt == nil
 	if !needProgram && !needAgent {
+		m.clearBootMarkerRescan(stored.Id)
+		return false
+	}
+	if !m.shouldScanBootMarkers(stored.Id) {
 		return false
 	}
 
-	programStartedAt, guestAgentReadyAt := m.parseBootMarkers(stored.Id)
+	programStartedAt, guestAgentReadyAt := m.parseBootMarkers(stored.Id, needProgram, needAgent)
 	hydrated := false
 	if needProgram && programStartedAt != nil {
 		stored.ProgramStartedAt = programStartedAt
@@ -126,12 +131,17 @@ func (m *manager) hydrateBootMarkersFromLogs(stored *StoredMetadata) bool {
 		stored.GuestAgentReadyAt = guestAgentReadyAt
 		hydrated = true
 	}
+	if hydrated {
+		m.clearBootMarkerRescan(stored.Id)
+	} else {
+		m.deferBootMarkerRescan(stored.Id)
+	}
 	return hydrated
 }
 
 // parseBootMarkers scans app logs (including rotated files) and returns the
 // latest observed program-start and guest-agent-ready marker timestamps.
-func (m *manager) parseBootMarkers(id string) (*time.Time, *time.Time) {
+func (m *manager) parseBootMarkers(id string, needProgram bool, needAgent bool) (*time.Time, *time.Time) {
 	logPaths := m.appLogPathsForMarkerScan(id)
 
 	var programStartedAt *time.Time
@@ -151,11 +161,39 @@ func (m *manager) parseBootMarkers(id string) (*time.Time, *time.Time) {
 			if ts, ok := parseAgentReadySentinelLine(line); ok {
 				guestAgentReadyAt = &ts
 			}
+			if (!needProgram || programStartedAt != nil) && (!needAgent || guestAgentReadyAt != nil) {
+				_ = f.Close()
+				return programStartedAt, guestAgentReadyAt
+			}
 		}
 		_ = f.Close()
 	}
 
 	return programStartedAt, guestAgentReadyAt
+}
+
+func (m *manager) shouldScanBootMarkers(id string) bool {
+	if nextAny, ok := m.bootMarkerScans.Load(id); ok {
+		if next, ok := nextAny.(time.Time); ok && m.nowUTC().Before(next) {
+			return false
+		}
+	}
+	return true
+}
+
+func (m *manager) deferBootMarkerRescan(id string) {
+	m.bootMarkerScans.Store(id, m.nowUTC().Add(bootMarkerRescanInterval))
+}
+
+func (m *manager) clearBootMarkerRescan(id string) {
+	m.bootMarkerScans.Delete(id)
+}
+
+func (m *manager) nowUTC() time.Time {
+	if m.now != nil {
+		return m.now().UTC()
+	}
+	return time.Now().UTC()
 }
 
 // appLogPathsForMarkerScan returns app log paths in chronological order
@@ -331,7 +369,7 @@ func (m *manager) persistBootMarkers(ctx context.Context, id string) {
 		return
 	}
 
-	programStartedAt, guestAgentReadyAt := m.parseBootMarkers(id)
+	programStartedAt, guestAgentReadyAt := m.parseBootMarkers(id, needProgram, needAgent)
 	updated := false
 	if needProgram && programStartedAt != nil {
 		meta.ProgramStartedAt = programStartedAt
