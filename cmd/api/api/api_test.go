@@ -17,6 +17,7 @@ import (
 	"github.com/kernel/hypeman/lib/oapi"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/kernel/hypeman/lib/resources"
+	"github.com/kernel/hypeman/lib/snapshottransfer"
 	"github.com/kernel/hypeman/lib/system"
 	"github.com/kernel/hypeman/lib/volumes"
 	"github.com/stretchr/testify/require"
@@ -56,13 +57,14 @@ func newTestService(t *testing.T) *ApiService {
 	})
 
 	return &ApiService{
-		Config:          cfg,
-		ImageManager:    imageMgr,
-		InstanceManager: instanceMgr,
-		VolumeManager:   volumeMgr,
-		NetworkManager:  networkMgr,
-		DeviceManager:   deviceMgr,
-		ResourceManager: resourceMgr,
+		Config:           cfg,
+		ImageManager:     imageMgr,
+		InstanceManager:  instanceMgr,
+		VolumeManager:    volumeMgr,
+		NetworkManager:   networkMgr,
+		DeviceManager:    deviceMgr,
+		SnapshotTransfer: snapshottransfer.NewManager(p, 1),
+		ResourceManager:  resourceMgr,
 	}
 }
 

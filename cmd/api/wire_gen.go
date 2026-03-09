@@ -19,6 +19,7 @@ import (
 	"github.com/kernel/hypeman/lib/providers"
 	"github.com/kernel/hypeman/lib/registry"
 	"github.com/kernel/hypeman/lib/resources"
+	"github.com/kernel/hypeman/lib/snapshottransfer"
 	"github.com/kernel/hypeman/lib/system"
 	"github.com/kernel/hypeman/lib/vm_metrics"
 	"github.com/kernel/hypeman/lib/volumes"
@@ -60,6 +61,7 @@ func initializeApp() (*application, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	snapshottransferManager := providers.ProvideSnapshotTransferManager(paths, config)
 	resourcesManager, err := providers.ProvideResourceManager(context, config, paths, manager, instancesManager, volumesManager)
 	if err != nil {
 		return nil, nil, err
@@ -72,7 +74,7 @@ func initializeApp() (*application, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	apiService := api.New(config, manager, instancesManager, volumesManager, networkManager, devicesManager, ingressManager, buildsManager, resourcesManager, vm_metricsManager)
+	apiService := api.New(config, manager, instancesManager, volumesManager, networkManager, devicesManager, ingressManager, buildsManager, snapshottransferManager, resourcesManager, vm_metricsManager)
 	mainApplication := &application{
 		Ctx:              context,
 		Logger:           logger,
@@ -85,6 +87,7 @@ func initializeApp() (*application, func(), error) {
 		VolumeManager:    volumesManager,
 		IngressManager:   ingressManager,
 		BuildManager:     buildsManager,
+		SnapshotTransfer: snapshottransferManager,
 		ResourceManager:  resourcesManager,
 		VMMetricsManager: vm_metricsManager,
 		Registry:         registry,
@@ -109,6 +112,7 @@ type application struct {
 	VolumeManager    volumes.Manager
 	IngressManager   ingress.Manager
 	BuildManager     builds.Manager
+	SnapshotTransfer snapshottransfer.Manager
 	ResourceManager  *resources.Manager
 	VMMetricsManager *vm_metrics.Manager
 	Registry         *registry.Registry

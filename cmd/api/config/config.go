@@ -163,6 +163,11 @@ type GPUConfig struct {
 	ProfileCacheTTL string `koanf:"profile_cache_ttl"`
 }
 
+// SnapshotTransferConfig holds cross-server snapshot transfer settings.
+type SnapshotTransferConfig struct {
+	MaxConcurrent int `koanf:"max_concurrent"`
+}
+
 // Config is the top-level Hypeman server configuration.
 type Config struct {
 	Port      string `koanf:"port"`
@@ -184,6 +189,7 @@ type Config struct {
 	Capacity         CapacityConfig         `koanf:"capacity"`
 	Hypervisor       HypervisorConfig       `koanf:"hypervisor"`
 	GPU              GPUConfig              `koanf:"gpu"`
+	SnapshotTransfer SnapshotTransferConfig `koanf:"snapshot_transfer"`
 }
 
 // GetDefaultConfigPaths returns the default config file paths to search.
@@ -305,6 +311,10 @@ func defaultConfig() *Config {
 		GPU: GPUConfig{
 			ProfileCacheTTL: "30m",
 		},
+
+		SnapshotTransfer: SnapshotTransferConfig{
+			MaxConcurrent: 2,
+		},
 	}
 }
 
@@ -399,6 +409,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Build.Timeout <= 0 {
 		return fmt.Errorf("build.timeout must be positive, got %d", c.Build.Timeout)
+	}
+	if c.SnapshotTransfer.MaxConcurrent <= 0 {
+		return fmt.Errorf("snapshot_transfer.max_concurrent must be positive, got %d", c.SnapshotTransfer.MaxConcurrent)
 	}
 	return nil
 }

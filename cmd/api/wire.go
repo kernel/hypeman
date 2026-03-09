@@ -18,6 +18,7 @@ import (
 	"github.com/kernel/hypeman/lib/providers"
 	"github.com/kernel/hypeman/lib/registry"
 	"github.com/kernel/hypeman/lib/resources"
+	"github.com/kernel/hypeman/lib/snapshottransfer"
 	"github.com/kernel/hypeman/lib/system"
 	"github.com/kernel/hypeman/lib/vm_metrics"
 	"github.com/kernel/hypeman/lib/volumes"
@@ -36,6 +37,7 @@ type application struct {
 	VolumeManager    volumes.Manager
 	IngressManager   ingress.Manager
 	BuildManager     builds.Manager
+	SnapshotTransfer snapshottransfer.Manager
 	ResourceManager  *resources.Manager
 	VMMetricsManager *vm_metrics.Manager
 	Registry         *registry.Registry
@@ -57,6 +59,7 @@ func initializeApp() (*application, func(), error) {
 		providers.ProvideVolumeManager,
 		providers.ProvideIngressManager,
 		providers.ProvideBuildManager,
+		providers.ProvideSnapshotTransferManager,
 		providers.ProvideResourceManager,
 		providers.ProvideVMMetricsManager,
 		providers.ProvideRegistry,

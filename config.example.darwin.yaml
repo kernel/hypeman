@@ -81,6 +81,9 @@ build:
   max_concurrent_source_builds: 2
   timeout: 600
 
+snapshot_transfer:
+  max_concurrent: 2
+
 # =============================================================================
 # Resource Limits (same as Linux)
 # =============================================================================

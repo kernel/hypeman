@@ -10,6 +10,7 @@ import (
 	"github.com/kernel/hypeman/lib/network"
 	"github.com/kernel/hypeman/lib/oapi"
 	"github.com/kernel/hypeman/lib/resources"
+	"github.com/kernel/hypeman/lib/snapshottransfer"
 	"github.com/kernel/hypeman/lib/vm_metrics"
 	"github.com/kernel/hypeman/lib/volumes"
 )
@@ -24,6 +25,7 @@ type ApiService struct {
 	DeviceManager    devices.Manager
 	IngressManager   ingress.Manager
 	BuildManager     builds.Manager
+	SnapshotTransfer snapshottransfer.Manager
 	ResourceManager  *resources.Manager
 	VMMetricsManager *vm_metrics.Manager
 }
@@ -40,6 +42,7 @@ func New(
 	deviceManager devices.Manager,
 	ingressManager ingress.Manager,
 	buildManager builds.Manager,
+	snapshotTransferManager snapshottransfer.Manager,
 	resourceManager *resources.Manager,
 	vmMetricsManager *vm_metrics.Manager,
 ) *ApiService {
@@ -52,6 +55,7 @@ func New(
 		DeviceManager:    deviceManager,
 		IngressManager:   ingressManager,
 		BuildManager:     buildManager,
+		SnapshotTransfer: snapshotTransferManager,
 		ResourceManager:  resourceManager,
 		VMMetricsManager: vmMetricsManager,
 	}

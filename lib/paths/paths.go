@@ -2,6 +2,7 @@
 package paths
 
 import (
+	"fmt"
 	"path/filepath"
 	"runtime"
 )
@@ -228,6 +229,51 @@ func (p *Paths) SnapshotMetadata(snapshotID string) string {
 // SnapshotGuestDir returns the path to the copied guest payload for a snapshot.
 func (p *Paths) SnapshotGuestDir(snapshotID string) string {
 	return filepath.Join(p.SnapshotDir(snapshotID), "guest")
+}
+
+// SnapshotTransfersDir returns the root directory for source snapshot transfer jobs.
+func (p *Paths) SnapshotTransfersDir() string {
+	return filepath.Join(p.dataDir, "snapshot-transfers")
+}
+
+// SnapshotTransferDir returns the directory for a specific transfer job.
+func (p *Paths) SnapshotTransferDir(transferID string) string {
+	return filepath.Join(p.SnapshotTransfersDir(), transferID)
+}
+
+// SnapshotTransferMetadata returns the path to transfer metadata.json.
+func (p *Paths) SnapshotTransferMetadata(transferID string) string {
+	return filepath.Join(p.SnapshotTransferDir(transferID), "transfer.json")
+}
+
+// SnapshotTransferManifest returns the path to transfer manifest.json.
+func (p *Paths) SnapshotTransferManifest(transferID string) string {
+	return filepath.Join(p.SnapshotTransferDir(transferID), "manifest.json")
+}
+
+// SnapshotImportSessionsDir returns the root directory for destination import sessions.
+func (p *Paths) SnapshotImportSessionsDir() string {
+	return filepath.Join(p.dataDir, "snapshot-import-sessions")
+}
+
+// SnapshotImportSessionDir returns the directory for a destination import session.
+func (p *Paths) SnapshotImportSessionDir(sessionID string) string {
+	return filepath.Join(p.SnapshotImportSessionsDir(), sessionID)
+}
+
+// SnapshotImportSessionMetadata returns the path to import session metadata.json.
+func (p *Paths) SnapshotImportSessionMetadata(sessionID string) string {
+	return filepath.Join(p.SnapshotImportSessionDir(sessionID), "session.json")
+}
+
+// SnapshotImportSessionChunksDir returns the chunk storage directory for an import session.
+func (p *Paths) SnapshotImportSessionChunksDir(sessionID string) string {
+	return filepath.Join(p.SnapshotImportSessionDir(sessionID), "chunks")
+}
+
+// SnapshotImportSessionChunk returns path for a specific import session chunk payload.
+func (p *Paths) SnapshotImportSessionChunk(sessionID string, chunkIndex int) string {
+	return filepath.Join(p.SnapshotImportSessionChunksDir(sessionID), fmt.Sprintf("%06d.bin", chunkIndex))
 }
 
 // Device path methods

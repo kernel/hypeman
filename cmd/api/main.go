@@ -394,6 +394,10 @@ func run() error {
 		logger.Error("failed to start build manager", "error", err)
 		return err
 	}
+	if err := app.SnapshotTransfer.Start(gctx); err != nil {
+		logger.Error("failed to start snapshot transfer manager", "error", err)
+		return err
+	}
 
 	// Run the server
 	grp.Go(func() error {

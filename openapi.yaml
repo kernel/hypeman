@@ -369,6 +369,242 @@ components:
             Optional hypervisor override. Allowed only when forking from a Stopped snapshot.
             Standby snapshots must fork with their original hypervisor.
           example: cloud-hypervisor
+
+    SnapshotTransferStatus:
+      type: string
+      enum: [queued, running, completed, failed, cancelled]
+      example: running
+
+    SnapshotTransfer:
+      type: object
+      required: [id, snapshot_id, destination_url, status, created_at, chunks_total, chunks_transferred, bytes_transferred, data_size]
+      properties:
+        id:
+          type: string
+          example: f2i2m6mew39p7yl7szhxv3tl
+        snapshot_id:
+          type: string
+          description: Source snapshot ID from the source server.
+          example: q7z1w7l2af4l8y7q1h7g2m3s
+        destination_url:
+          type: string
+          description: Destination server base URL.
+          example: https://dest-hypeman.internal:8080
+        destination_session_id:
+          type: string
+          nullable: true
+          description: Destination import session ID once established.
+        status:
+          $ref: "#/components/schemas/SnapshotTransferStatus"
+        error:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+        chunks_total:
+          type: integer
+          example: 12
+        chunks_transferred:
+          type: integer
+          example: 8
+        bytes_transferred:
+          type: integer
+          format: int64
+          example: 33554432
+        data_size:
+          type: integer
+          format: int64
+          example: 50331648
+
+    StartSnapshotTransferRequest:
+      type: object
+      required: [destination_url]
+      properties:
+        destination_url:
+          type: string
+          description: Destination Hypeman server base URL.
+          example: https://dest-hypeman.internal:8080
+
+    SourceSnapshotCompat:
+      type: object
+      required: [hypervisor, platform_os, platform_arch]
+      properties:
+        kernel_version:
+          type: string
+        hypervisor_version:
+          type: string
+        hypervisor:
+          type: string
+          enum: [cloud-hypervisor, firecracker, qemu, vz]
+        platform_os:
+          type: string
+          example: linux
+        platform_arch:
+          type: string
+          example: amd64
+
+    SnapshotDescriptor:
+      type: object
+      required: [source_snapshot_id, source_instance_id, source_instance_name, kind, source_hypervisor, created_at, size_bytes, compat]
+      properties:
+        source_snapshot_id:
+          type: string
+        source_instance_id:
+          type: string
+        source_instance_name:
+          type: string
+        name:
+          type: string
+        kind:
+          $ref: "#/components/schemas/SnapshotKind"
+        source_hypervisor:
+          type: string
+          enum: [cloud-hypervisor, firecracker, qemu, vz]
+        metadata:
+          $ref: "#/components/schemas/MetadataTags"
+        created_at:
+          type: string
+          format: date-time
+        size_bytes:
+          type: integer
+          format: int64
+        compat:
+          $ref: "#/components/schemas/SourceSnapshotCompat"
+
+    SnapshotDataExtent:
+      type: object
+      required: [file_offset, length, data_offset]
+      properties:
+        file_offset:
+          type: integer
+          format: int64
+        length:
+          type: integer
+          format: int64
+        data_offset:
+          type: integer
+          format: int64
+
+    SnapshotImportManifestEntryType:
+      type: string
+      enum: [directory, file, symlink]
+
+    SnapshotImportManifestEntry:
+      type: object
+      required: [path, type, mode]
+      properties:
+        path:
+          type: string
+        type:
+          $ref: "#/components/schemas/SnapshotImportManifestEntryType"
+        mode:
+          type: integer
+        size:
+          type: integer
+          format: int64
+        link_target:
+          type: string
+        extents:
+          type: array
+          items:
+            $ref: "#/components/schemas/SnapshotDataExtent"
+
+    SnapshotChunkDescriptor:
+      type: object
+      required: [index, offset, size, sha256]
+      properties:
+        index:
+          type: integer
+        offset:
+          type: integer
+          format: int64
+        size:
+          type: integer
+          format: int64
+        sha256:
+          type: string
+
+    SnapshotImportManifest:
+      type: object
+      required: [version, chunk_size, data_size, entries, chunks]
+      properties:
+        version:
+          type: integer
+        chunk_size:
+          type: integer
+          format: int64
+        data_size:
+          type: integer
+          format: int64
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/SnapshotImportManifestEntry"
+        chunks:
+          type: array
+          items:
+            $ref: "#/components/schemas/SnapshotChunkDescriptor"
+
+    SnapshotImportSessionStatus:
+      type: string
+      enum: [created, receiving, completed, cancelled]
+
+    SnapshotImportSession:
+      type: object
+      required: [id, source_snapshot_id, status, committed_chunk_ids, chunks_total, data_size, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        source_snapshot_id:
+          type: string
+        status:
+          $ref: "#/components/schemas/SnapshotImportSessionStatus"
+        committed_chunk_ids:
+          type: array
+          items:
+            type: integer
+        chunks_total:
+          type: integer
+        data_size:
+          type: integer
+          format: int64
+        imported_snapshot_id:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    SnapshotImportPreflightRequest:
+      type: object
+      required: [snapshot]
+      properties:
+        snapshot:
+          $ref: "#/components/schemas/SnapshotDescriptor"
+
+    SnapshotImportSessionCreateRequest:
+      type: object
+      required: [snapshot, manifest, stored_metadata]
+      properties:
+        snapshot:
+          $ref: "#/components/schemas/SnapshotDescriptor"
+        manifest:
+          $ref: "#/components/schemas/SnapshotImportManifest"
+        stored_metadata:
+          type: object
+          additionalProperties: true
     
     Instance:
       type: object
@@ -2022,6 +2258,387 @@ paths:
                 $ref: "#/components/schemas/Error"
         501:
           description: Not implemented - operation unsupported by target hypervisor
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /snapshots/{snapshotId}/transfers:
+    post:
+      summary: Start async push transfer of a snapshot to a remote Hypeman server
+      operationId: startSnapshotTransfer
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: snapshotId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Source snapshot ID
+        - name: X-Hypeman-Destination-Token
+          in: header
+          required: true
+          schema:
+            type: string
+          description: Destination server bearer token for server-to-server session calls.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StartSnapshotTransferRequest"
+      responses:
+        202:
+          description: Snapshot transfer accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SnapshotTransfer"
+        400:
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        404:
+          description: Snapshot not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Destination preflight conflict or incompatibility
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /snapshot-transfers:
+    get:
+      summary: List snapshot transfer jobs
+      operationId: listSnapshotTransfers
+      security:
+        - bearerAuth: []
+      responses:
+        200:
+          description: Transfer jobs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SnapshotTransfer"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /snapshot-transfers/{transferId}:
+    get:
+      summary: Get snapshot transfer job status
+      operationId: getSnapshotTransfer
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: transferId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Transfer job ID
+      responses:
+        200:
+          description: Snapshot transfer job
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SnapshotTransfer"
+        404:
+          description: Transfer job not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /snapshot-transfers/{transferId}/cancel:
+    post:
+      summary: Cancel a snapshot transfer job
+      operationId: cancelSnapshotTransfer
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: transferId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Transfer job ID
+      responses:
+        204:
+          description: Transfer cancelled
+        404:
+          description: Transfer job not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /snapshot-import-sessions/preflight:
+    post:
+      summary: Destination preflight check for snapshot import conflict and compatibility
+      operationId: preflightSnapshotImportSession
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SnapshotImportPreflightRequest"
+      responses:
+        204:
+          description: Preflight passed
+        400:
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Conflict or incompatible destination state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /snapshot-import-sessions:
+    post:
+      summary: Create or resume a destination snapshot import session
+      operationId: createSnapshotImportSession
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SnapshotImportSessionCreateRequest"
+      responses:
+        201:
+          description: Snapshot import session created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SnapshotImportSession"
+        200:
+          description: Snapshot import session resumed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SnapshotImportSession"
+        400:
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /snapshot-import-sessions/{sessionId}:
+    get:
+      summary: Get destination snapshot import session progress
+      operationId: getSnapshotImportSession
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Import session ID
+      responses:
+        200:
+          description: Snapshot import session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SnapshotImportSession"
+        404:
+          description: Import session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /snapshot-import-sessions/{sessionId}/chunks/{chunkIndex}:
+    put:
+      summary: Upload one snapshot import chunk
+      operationId: uploadSnapshotImportChunk
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Import session ID
+        - name: chunkIndex
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 0
+          description: Manifest chunk index
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        204:
+          description: Chunk committed
+        400:
+          description: Invalid request (checksum/size/index)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        404:
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Conflict (session state)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /snapshot-import-sessions/{sessionId}/complete:
+    post:
+      summary: Finalize snapshot import into destination snapshot store
+      operationId: completeSnapshotImportSession
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Import session ID
+      responses:
+        201:
+          description: Imported snapshot metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Snapshot"
+        404:
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Conflict (missing chunks/session state)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /snapshot-import-sessions/{sessionId}/cancel:
+    post:
+      summary: Cancel snapshot import session and delete partial payload
+      operationId: cancelSnapshotImportSession
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Import session ID
+      responses:
+        204:
+          description: Import session cancelled
+        404:
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Conflict (cannot cancel completed)
           content:
             application/json:
               schema:

@@ -124,10 +124,33 @@ const (
 
 // Defines values for SnapshotSourceHypervisor.
 const (
-	CloudHypervisor SnapshotSourceHypervisor = "cloud-hypervisor"
-	Firecracker     SnapshotSourceHypervisor = "firecracker"
-	Qemu            SnapshotSourceHypervisor = "qemu"
-	Vz              SnapshotSourceHypervisor = "vz"
+	SnapshotSourceHypervisorCloudHypervisor SnapshotSourceHypervisor = "cloud-hypervisor"
+	SnapshotSourceHypervisorFirecracker     SnapshotSourceHypervisor = "firecracker"
+	SnapshotSourceHypervisorQemu            SnapshotSourceHypervisor = "qemu"
+	SnapshotSourceHypervisorVz              SnapshotSourceHypervisor = "vz"
+)
+
+// Defines values for SnapshotDescriptorSourceHypervisor.
+const (
+	SnapshotDescriptorSourceHypervisorCloudHypervisor SnapshotDescriptorSourceHypervisor = "cloud-hypervisor"
+	SnapshotDescriptorSourceHypervisorFirecracker     SnapshotDescriptorSourceHypervisor = "firecracker"
+	SnapshotDescriptorSourceHypervisorQemu            SnapshotDescriptorSourceHypervisor = "qemu"
+	SnapshotDescriptorSourceHypervisorVz              SnapshotDescriptorSourceHypervisor = "vz"
+)
+
+// Defines values for SnapshotImportManifestEntryType.
+const (
+	Directory SnapshotImportManifestEntryType = "directory"
+	File      SnapshotImportManifestEntryType = "file"
+	Symlink   SnapshotImportManifestEntryType = "symlink"
+)
+
+// Defines values for SnapshotImportSessionStatus.
+const (
+	SnapshotImportSessionStatusCancelled SnapshotImportSessionStatus = "cancelled"
+	SnapshotImportSessionStatusCompleted SnapshotImportSessionStatus = "completed"
+	SnapshotImportSessionStatusCreated   SnapshotImportSessionStatus = "created"
+	SnapshotImportSessionStatusReceiving SnapshotImportSessionStatus = "receiving"
 )
 
 // Defines values for SnapshotKind.
@@ -141,6 +164,23 @@ const (
 	SnapshotTargetStateRunning SnapshotTargetState = "Running"
 	SnapshotTargetStateStandby SnapshotTargetState = "Standby"
 	SnapshotTargetStateStopped SnapshotTargetState = "Stopped"
+)
+
+// Defines values for SnapshotTransferStatus.
+const (
+	SnapshotTransferStatusCancelled SnapshotTransferStatus = "cancelled"
+	SnapshotTransferStatusCompleted SnapshotTransferStatus = "completed"
+	SnapshotTransferStatusFailed    SnapshotTransferStatus = "failed"
+	SnapshotTransferStatusQueued    SnapshotTransferStatus = "queued"
+	SnapshotTransferStatusRunning   SnapshotTransferStatus = "running"
+)
+
+// Defines values for SourceSnapshotCompatHypervisor.
+const (
+	CloudHypervisor SourceSnapshotCompatHypervisor = "cloud-hypervisor"
+	Firecracker     SourceSnapshotCompatHypervisor = "firecracker"
+	Qemu            SourceSnapshotCompatHypervisor = "qemu"
+	Vz              SourceSnapshotCompatHypervisor = "vz"
 )
 
 // Defines values for GetInstanceLogsParamsSource.
@@ -954,11 +994,141 @@ type Snapshot struct {
 // SnapshotSourceHypervisor Source instance hypervisor at snapshot creation time
 type SnapshotSourceHypervisor string
 
+// SnapshotChunkDescriptor defines model for SnapshotChunkDescriptor.
+type SnapshotChunkDescriptor struct {
+	Index  int    `json:"index"`
+	Offset int64  `json:"offset"`
+	Sha256 string `json:"sha256"`
+	Size   int64  `json:"size"`
+}
+
+// SnapshotDataExtent defines model for SnapshotDataExtent.
+type SnapshotDataExtent struct {
+	DataOffset int64 `json:"data_offset"`
+	FileOffset int64 `json:"file_offset"`
+	Length     int64 `json:"length"`
+}
+
+// SnapshotDescriptor defines model for SnapshotDescriptor.
+type SnapshotDescriptor struct {
+	Compat    SourceSnapshotCompat `json:"compat"`
+	CreatedAt time.Time            `json:"created_at"`
+
+	// Kind Snapshot capture kind
+	Kind SnapshotKind `json:"kind"`
+
+	// Metadata User-defined key-value metadata tags.
+	Metadata           *MetadataTags                      `json:"metadata,omitempty"`
+	Name               *string                            `json:"name,omitempty"`
+	SizeBytes          int64                              `json:"size_bytes"`
+	SourceHypervisor   SnapshotDescriptorSourceHypervisor `json:"source_hypervisor"`
+	SourceInstanceId   string                             `json:"source_instance_id"`
+	SourceInstanceName string                             `json:"source_instance_name"`
+	SourceSnapshotId   string                             `json:"source_snapshot_id"`
+}
+
+// SnapshotDescriptorSourceHypervisor defines model for SnapshotDescriptor.SourceHypervisor.
+type SnapshotDescriptorSourceHypervisor string
+
+// SnapshotImportManifest defines model for SnapshotImportManifest.
+type SnapshotImportManifest struct {
+	ChunkSize int64                         `json:"chunk_size"`
+	Chunks    []SnapshotChunkDescriptor     `json:"chunks"`
+	DataSize  int64                         `json:"data_size"`
+	Entries   []SnapshotImportManifestEntry `json:"entries"`
+	Version   int                           `json:"version"`
+}
+
+// SnapshotImportManifestEntry defines model for SnapshotImportManifestEntry.
+type SnapshotImportManifestEntry struct {
+	Extents    *[]SnapshotDataExtent           `json:"extents,omitempty"`
+	LinkTarget *string                         `json:"link_target,omitempty"`
+	Mode       int                             `json:"mode"`
+	Path       string                          `json:"path"`
+	Size       *int64                          `json:"size,omitempty"`
+	Type       SnapshotImportManifestEntryType `json:"type"`
+}
+
+// SnapshotImportManifestEntryType defines model for SnapshotImportManifestEntryType.
+type SnapshotImportManifestEntryType string
+
+// SnapshotImportPreflightRequest defines model for SnapshotImportPreflightRequest.
+type SnapshotImportPreflightRequest struct {
+	Snapshot SnapshotDescriptor `json:"snapshot"`
+}
+
+// SnapshotImportSession defines model for SnapshotImportSession.
+type SnapshotImportSession struct {
+	ChunksTotal        int                         `json:"chunks_total"`
+	CommittedChunkIds  []int                       `json:"committed_chunk_ids"`
+	CreatedAt          time.Time                   `json:"created_at"`
+	DataSize           int64                       `json:"data_size"`
+	Id                 string                      `json:"id"`
+	ImportedSnapshotId *string                     `json:"imported_snapshot_id"`
+	SourceSnapshotId   string                      `json:"source_snapshot_id"`
+	Status             SnapshotImportSessionStatus `json:"status"`
+	UpdatedAt          time.Time                   `json:"updated_at"`
+}
+
+// SnapshotImportSessionCreateRequest defines model for SnapshotImportSessionCreateRequest.
+type SnapshotImportSessionCreateRequest struct {
+	Manifest       SnapshotImportManifest `json:"manifest"`
+	Snapshot       SnapshotDescriptor     `json:"snapshot"`
+	StoredMetadata map[string]interface{} `json:"stored_metadata"`
+}
+
+// SnapshotImportSessionStatus defines model for SnapshotImportSessionStatus.
+type SnapshotImportSessionStatus string
+
 // SnapshotKind Snapshot capture kind
 type SnapshotKind string
 
 // SnapshotTargetState Target state when restoring or forking from a snapshot
 type SnapshotTargetState string
+
+// SnapshotTransfer defines model for SnapshotTransfer.
+type SnapshotTransfer struct {
+	BytesTransferred  int64      `json:"bytes_transferred"`
+	ChunksTotal       int        `json:"chunks_total"`
+	ChunksTransferred int        `json:"chunks_transferred"`
+	CompletedAt       *time.Time `json:"completed_at"`
+	CreatedAt         time.Time  `json:"created_at"`
+	DataSize          int64      `json:"data_size"`
+
+	// DestinationSessionId Destination import session ID once established.
+	DestinationSessionId *string `json:"destination_session_id"`
+
+	// DestinationUrl Destination server base URL.
+	DestinationUrl string  `json:"destination_url"`
+	Error          *string `json:"error"`
+	Id             string  `json:"id"`
+
+	// SnapshotId Source snapshot ID from the source server.
+	SnapshotId string                 `json:"snapshot_id"`
+	StartedAt  *time.Time             `json:"started_at"`
+	Status     SnapshotTransferStatus `json:"status"`
+}
+
+// SnapshotTransferStatus defines model for SnapshotTransferStatus.
+type SnapshotTransferStatus string
+
+// SourceSnapshotCompat defines model for SourceSnapshotCompat.
+type SourceSnapshotCompat struct {
+	Hypervisor        SourceSnapshotCompatHypervisor `json:"hypervisor"`
+	HypervisorVersion *string                        `json:"hypervisor_version,omitempty"`
+	KernelVersion     *string                        `json:"kernel_version,omitempty"`
+	PlatformArch      string                         `json:"platform_arch"`
+	PlatformOs        string                         `json:"platform_os"`
+}
+
+// SourceSnapshotCompatHypervisor defines model for SourceSnapshotCompat.Hypervisor.
+type SourceSnapshotCompatHypervisor string
+
+// StartSnapshotTransferRequest defines model for StartSnapshotTransferRequest.
+type StartSnapshotTransferRequest struct {
+	// DestinationUrl Destination Hypeman server base URL.
+	DestinationUrl string `json:"destination_url"`
+}
 
 // Volume defines model for Volume.
 type Volume struct {
@@ -1149,6 +1319,12 @@ type ListSnapshotsParams struct {
 	Metadata *MetadataTags `json:"metadata,omitempty"`
 }
 
+// StartSnapshotTransferParams defines parameters for StartSnapshotTransfer.
+type StartSnapshotTransferParams struct {
+	// XHypemanDestinationToken Destination server bearer token for server-to-server session calls.
+	XHypemanDestinationToken string `json:"X-Hypeman-Destination-Token"`
+}
+
 // ListVolumesParams defines parameters for ListVolumes.
 type ListVolumesParams struct {
 	// Metadata Filter volumes by metadata key-value pairs.
@@ -1200,8 +1376,17 @@ type StartInstanceJSONRequestBody StartInstanceJSONBody
 // AttachVolumeJSONRequestBody defines body for AttachVolume for application/json ContentType.
 type AttachVolumeJSONRequestBody = AttachVolumeRequest
 
+// CreateSnapshotImportSessionJSONRequestBody defines body for CreateSnapshotImportSession for application/json ContentType.
+type CreateSnapshotImportSessionJSONRequestBody = SnapshotImportSessionCreateRequest
+
+// PreflightSnapshotImportSessionJSONRequestBody defines body for PreflightSnapshotImportSession for application/json ContentType.
+type PreflightSnapshotImportSessionJSONRequestBody = SnapshotImportPreflightRequest
+
 // ForkSnapshotJSONRequestBody defines body for ForkSnapshot for application/json ContentType.
 type ForkSnapshotJSONRequestBody = ForkSnapshotRequest
+
+// StartSnapshotTransferJSONRequestBody defines body for StartSnapshotTransfer for application/json ContentType.
+type StartSnapshotTransferJSONRequestBody = StartSnapshotTransferRequest
 
 // CreateVolumeJSONRequestBody defines body for CreateVolume for application/json ContentType.
 type CreateVolumeJSONRequestBody = CreateVolumeRequest
@@ -1405,6 +1590,37 @@ type ClientInterface interface {
 	// GetResources request
 	GetResources(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// CreateSnapshotImportSessionWithBody request with any body
+	CreateSnapshotImportSessionWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	CreateSnapshotImportSession(ctx context.Context, body CreateSnapshotImportSessionJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// PreflightSnapshotImportSessionWithBody request with any body
+	PreflightSnapshotImportSessionWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	PreflightSnapshotImportSession(ctx context.Context, body PreflightSnapshotImportSessionJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetSnapshotImportSession request
+	GetSnapshotImportSession(ctx context.Context, sessionId string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CancelSnapshotImportSession request
+	CancelSnapshotImportSession(ctx context.Context, sessionId string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// UploadSnapshotImportChunkWithBody request with any body
+	UploadSnapshotImportChunkWithBody(ctx context.Context, sessionId string, chunkIndex int, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CompleteSnapshotImportSession request
+	CompleteSnapshotImportSession(ctx context.Context, sessionId string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ListSnapshotTransfers request
+	ListSnapshotTransfers(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetSnapshotTransfer request
+	GetSnapshotTransfer(ctx context.Context, transferId string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CancelSnapshotTransfer request
+	CancelSnapshotTransfer(ctx context.Context, transferId string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// ListSnapshots request
 	ListSnapshots(ctx context.Context, params *ListSnapshotsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -1418,6 +1634,11 @@ type ClientInterface interface {
 	ForkSnapshotWithBody(ctx context.Context, snapshotId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	ForkSnapshot(ctx context.Context, snapshotId string, body ForkSnapshotJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// StartSnapshotTransferWithBody request with any body
+	StartSnapshotTransferWithBody(ctx context.Context, snapshotId string, params *StartSnapshotTransferParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	StartSnapshotTransfer(ctx context.Context, snapshotId string, params *StartSnapshotTransferParams, body StartSnapshotTransferJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ListVolumes request
 	ListVolumes(ctx context.Context, params *ListVolumesParams, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -1977,6 +2198,138 @@ func (c *Client) GetResources(ctx context.Context, reqEditors ...RequestEditorFn
 	return c.Client.Do(req)
 }
 
+func (c *Client) CreateSnapshotImportSessionWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateSnapshotImportSessionRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateSnapshotImportSession(ctx context.Context, body CreateSnapshotImportSessionJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateSnapshotImportSessionRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PreflightSnapshotImportSessionWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPreflightSnapshotImportSessionRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PreflightSnapshotImportSession(ctx context.Context, body PreflightSnapshotImportSessionJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPreflightSnapshotImportSessionRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetSnapshotImportSession(ctx context.Context, sessionId string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetSnapshotImportSessionRequest(c.Server, sessionId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CancelSnapshotImportSession(ctx context.Context, sessionId string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCancelSnapshotImportSessionRequest(c.Server, sessionId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) UploadSnapshotImportChunkWithBody(ctx context.Context, sessionId string, chunkIndex int, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUploadSnapshotImportChunkRequestWithBody(c.Server, sessionId, chunkIndex, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CompleteSnapshotImportSession(ctx context.Context, sessionId string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCompleteSnapshotImportSessionRequest(c.Server, sessionId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ListSnapshotTransfers(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListSnapshotTransfersRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetSnapshotTransfer(ctx context.Context, transferId string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetSnapshotTransferRequest(c.Server, transferId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CancelSnapshotTransfer(ctx context.Context, transferId string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCancelSnapshotTransferRequest(c.Server, transferId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 func (c *Client) ListSnapshots(ctx context.Context, params *ListSnapshotsParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewListSnapshotsRequest(c.Server, params)
 	if err != nil {
@@ -2027,6 +2380,30 @@ func (c *Client) ForkSnapshotWithBody(ctx context.Context, snapshotId string, co
 
 func (c *Client) ForkSnapshot(ctx context.Context, snapshotId string, body ForkSnapshotJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewForkSnapshotRequest(c.Server, snapshotId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) StartSnapshotTransferWithBody(ctx context.Context, snapshotId string, params *StartSnapshotTransferParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewStartSnapshotTransferRequestWithBody(c.Server, snapshotId, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) StartSnapshotTransfer(ctx context.Context, snapshotId string, params *StartSnapshotTransferParams, body StartSnapshotTransferJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewStartSnapshotTransferRequest(c.Server, snapshotId, params, body)
 	if err != nil {
 		return nil, err
 	}
@@ -3618,6 +3995,326 @@ func NewGetResourcesRequest(server string) (*http.Request, error) {
 	return req, nil
 }
 
+// NewCreateSnapshotImportSessionRequest calls the generic CreateSnapshotImportSession builder with application/json body
+func NewCreateSnapshotImportSessionRequest(server string, body CreateSnapshotImportSessionJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateSnapshotImportSessionRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewCreateSnapshotImportSessionRequestWithBody generates requests for CreateSnapshotImportSession with any type of body
+func NewCreateSnapshotImportSessionRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/snapshot-import-sessions")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewPreflightSnapshotImportSessionRequest calls the generic PreflightSnapshotImportSession builder with application/json body
+func NewPreflightSnapshotImportSessionRequest(server string, body PreflightSnapshotImportSessionJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewPreflightSnapshotImportSessionRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewPreflightSnapshotImportSessionRequestWithBody generates requests for PreflightSnapshotImportSession with any type of body
+func NewPreflightSnapshotImportSessionRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/snapshot-import-sessions/preflight")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewGetSnapshotImportSessionRequest generates requests for GetSnapshotImportSession
+func NewGetSnapshotImportSessionRequest(server string, sessionId string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "sessionId", runtime.ParamLocationPath, sessionId)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/snapshot-import-sessions/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewCancelSnapshotImportSessionRequest generates requests for CancelSnapshotImportSession
+func NewCancelSnapshotImportSessionRequest(server string, sessionId string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "sessionId", runtime.ParamLocationPath, sessionId)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/snapshot-import-sessions/%s/cancel", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewUploadSnapshotImportChunkRequestWithBody generates requests for UploadSnapshotImportChunk with any type of body
+func NewUploadSnapshotImportChunkRequestWithBody(server string, sessionId string, chunkIndex int, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "sessionId", runtime.ParamLocationPath, sessionId)
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithLocation("simple", false, "chunkIndex", runtime.ParamLocationPath, chunkIndex)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/snapshot-import-sessions/%s/chunks/%s", pathParam0, pathParam1)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("PUT", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewCompleteSnapshotImportSessionRequest generates requests for CompleteSnapshotImportSession
+func NewCompleteSnapshotImportSessionRequest(server string, sessionId string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "sessionId", runtime.ParamLocationPath, sessionId)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/snapshot-import-sessions/%s/complete", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewListSnapshotTransfersRequest generates requests for ListSnapshotTransfers
+func NewListSnapshotTransfersRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/snapshot-transfers")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewGetSnapshotTransferRequest generates requests for GetSnapshotTransfer
+func NewGetSnapshotTransferRequest(server string, transferId string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "transferId", runtime.ParamLocationPath, transferId)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/snapshot-transfers/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewCancelSnapshotTransferRequest generates requests for CancelSnapshotTransfer
+func NewCancelSnapshotTransferRequest(server string, transferId string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "transferId", runtime.ParamLocationPath, transferId)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/snapshot-transfers/%s/cancel", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewListSnapshotsRequest generates requests for ListSnapshots
 func NewListSnapshotsRequest(server string, params *ListSnapshotsParams) (*http.Request, error) {
 	var err error
@@ -3826,6 +4523,66 @@ func NewForkSnapshotRequestWithBody(server string, snapshotId string, contentTyp
 	}
 
 	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewStartSnapshotTransferRequest calls the generic StartSnapshotTransfer builder with application/json body
+func NewStartSnapshotTransferRequest(server string, snapshotId string, params *StartSnapshotTransferParams, body StartSnapshotTransferJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewStartSnapshotTransferRequestWithBody(server, snapshotId, params, "application/json", bodyReader)
+}
+
+// NewStartSnapshotTransferRequestWithBody generates requests for StartSnapshotTransfer with any type of body
+func NewStartSnapshotTransferRequestWithBody(server string, snapshotId string, params *StartSnapshotTransferParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "snapshotId", runtime.ParamLocationPath, snapshotId)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/snapshots/%s/transfers", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithLocation("simple", false, "X-Hypeman-Destination-Token", runtime.ParamLocationHeader, params.XHypemanDestinationToken)
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Hypeman-Destination-Token", headerParam0)
+
+	}
 
 	return req, nil
 }
@@ -4247,6 +5004,37 @@ type ClientWithResponsesInterface interface {
 	// GetResourcesWithResponse request
 	GetResourcesWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetResourcesResponse, error)
 
+	// CreateSnapshotImportSessionWithBodyWithResponse request with any body
+	CreateSnapshotImportSessionWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateSnapshotImportSessionResponse, error)
+
+	CreateSnapshotImportSessionWithResponse(ctx context.Context, body CreateSnapshotImportSessionJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateSnapshotImportSessionResponse, error)
+
+	// PreflightSnapshotImportSessionWithBodyWithResponse request with any body
+	PreflightSnapshotImportSessionWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PreflightSnapshotImportSessionResponse, error)
+
+	PreflightSnapshotImportSessionWithResponse(ctx context.Context, body PreflightSnapshotImportSessionJSONRequestBody, reqEditors ...RequestEditorFn) (*PreflightSnapshotImportSessionResponse, error)
+
+	// GetSnapshotImportSessionWithResponse request
+	GetSnapshotImportSessionWithResponse(ctx context.Context, sessionId string, reqEditors ...RequestEditorFn) (*GetSnapshotImportSessionResponse, error)
+
+	// CancelSnapshotImportSessionWithResponse request
+	CancelSnapshotImportSessionWithResponse(ctx context.Context, sessionId string, reqEditors ...RequestEditorFn) (*CancelSnapshotImportSessionResponse, error)
+
+	// UploadSnapshotImportChunkWithBodyWithResponse request with any body
+	UploadSnapshotImportChunkWithBodyWithResponse(ctx context.Context, sessionId string, chunkIndex int, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UploadSnapshotImportChunkResponse, error)
+
+	// CompleteSnapshotImportSessionWithResponse request
+	CompleteSnapshotImportSessionWithResponse(ctx context.Context, sessionId string, reqEditors ...RequestEditorFn) (*CompleteSnapshotImportSessionResponse, error)
+
+	// ListSnapshotTransfersWithResponse request
+	ListSnapshotTransfersWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListSnapshotTransfersResponse, error)
+
+	// GetSnapshotTransferWithResponse request
+	GetSnapshotTransferWithResponse(ctx context.Context, transferId string, reqEditors ...RequestEditorFn) (*GetSnapshotTransferResponse, error)
+
+	// CancelSnapshotTransferWithResponse request
+	CancelSnapshotTransferWithResponse(ctx context.Context, transferId string, reqEditors ...RequestEditorFn) (*CancelSnapshotTransferResponse, error)
+
 	// ListSnapshotsWithResponse request
 	ListSnapshotsWithResponse(ctx context.Context, params *ListSnapshotsParams, reqEditors ...RequestEditorFn) (*ListSnapshotsResponse, error)
 
@@ -4260,6 +5048,11 @@ type ClientWithResponsesInterface interface {
 	ForkSnapshotWithBodyWithResponse(ctx context.Context, snapshotId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ForkSnapshotResponse, error)
 
 	ForkSnapshotWithResponse(ctx context.Context, snapshotId string, body ForkSnapshotJSONRequestBody, reqEditors ...RequestEditorFn) (*ForkSnapshotResponse, error)
+
+	// StartSnapshotTransferWithBodyWithResponse request with any body
+	StartSnapshotTransferWithBodyWithResponse(ctx context.Context, snapshotId string, params *StartSnapshotTransferParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*StartSnapshotTransferResponse, error)
+
+	StartSnapshotTransferWithResponse(ctx context.Context, snapshotId string, params *StartSnapshotTransferParams, body StartSnapshotTransferJSONRequestBody, reqEditors ...RequestEditorFn) (*StartSnapshotTransferResponse, error)
 
 	// ListVolumesWithResponse request
 	ListVolumesWithResponse(ctx context.Context, params *ListVolumesParams, reqEditors ...RequestEditorFn) (*ListVolumesResponse, error)
@@ -5162,6 +5955,224 @@ func (r GetResourcesResponse) StatusCode() int {
 	return 0
 }
 
+type CreateSnapshotImportSessionResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *SnapshotImportSession
+	JSON201      *SnapshotImportSession
+	JSON400      *Error
+	JSON409      *Error
+	JSON500      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r CreateSnapshotImportSessionResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateSnapshotImportSessionResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type PreflightSnapshotImportSessionResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON400      *Error
+	JSON409      *Error
+	JSON500      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r PreflightSnapshotImportSessionResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r PreflightSnapshotImportSessionResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type GetSnapshotImportSessionResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *SnapshotImportSession
+	JSON404      *Error
+	JSON500      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r GetSnapshotImportSessionResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetSnapshotImportSessionResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type CancelSnapshotImportSessionResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON404      *Error
+	JSON409      *Error
+	JSON500      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r CancelSnapshotImportSessionResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CancelSnapshotImportSessionResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type UploadSnapshotImportChunkResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON400      *Error
+	JSON404      *Error
+	JSON409      *Error
+	JSON500      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r UploadSnapshotImportChunkResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r UploadSnapshotImportChunkResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type CompleteSnapshotImportSessionResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON201      *Snapshot
+	JSON404      *Error
+	JSON409      *Error
+	JSON500      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r CompleteSnapshotImportSessionResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CompleteSnapshotImportSessionResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type ListSnapshotTransfersResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *[]SnapshotTransfer
+	JSON500      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r ListSnapshotTransfersResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListSnapshotTransfersResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type GetSnapshotTransferResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *SnapshotTransfer
+	JSON404      *Error
+	JSON500      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r GetSnapshotTransferResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetSnapshotTransferResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type CancelSnapshotTransferResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON404      *Error
+	JSON500      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r CancelSnapshotTransferResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CancelSnapshotTransferResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
 type ListSnapshotsResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -5253,6 +6264,32 @@ func (r ForkSnapshotResponse) Status() string {
 
 // StatusCode returns HTTPResponse.StatusCode
 func (r ForkSnapshotResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type StartSnapshotTransferResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON202      *SnapshotTransfer
+	JSON400      *Error
+	JSON404      *Error
+	JSON409      *Error
+	JSON500      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r StartSnapshotTransferResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r StartSnapshotTransferResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
@@ -5779,6 +6816,103 @@ func (c *ClientWithResponses) GetResourcesWithResponse(ctx context.Context, reqE
 	return ParseGetResourcesResponse(rsp)
 }
 
+// CreateSnapshotImportSessionWithBodyWithResponse request with arbitrary body returning *CreateSnapshotImportSessionResponse
+func (c *ClientWithResponses) CreateSnapshotImportSessionWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateSnapshotImportSessionResponse, error) {
+	rsp, err := c.CreateSnapshotImportSessionWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateSnapshotImportSessionResponse(rsp)
+}
+
+func (c *ClientWithResponses) CreateSnapshotImportSessionWithResponse(ctx context.Context, body CreateSnapshotImportSessionJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateSnapshotImportSessionResponse, error) {
+	rsp, err := c.CreateSnapshotImportSession(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateSnapshotImportSessionResponse(rsp)
+}
+
+// PreflightSnapshotImportSessionWithBodyWithResponse request with arbitrary body returning *PreflightSnapshotImportSessionResponse
+func (c *ClientWithResponses) PreflightSnapshotImportSessionWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PreflightSnapshotImportSessionResponse, error) {
+	rsp, err := c.PreflightSnapshotImportSessionWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePreflightSnapshotImportSessionResponse(rsp)
+}
+
+func (c *ClientWithResponses) PreflightSnapshotImportSessionWithResponse(ctx context.Context, body PreflightSnapshotImportSessionJSONRequestBody, reqEditors ...RequestEditorFn) (*PreflightSnapshotImportSessionResponse, error) {
+	rsp, err := c.PreflightSnapshotImportSession(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePreflightSnapshotImportSessionResponse(rsp)
+}
+
+// GetSnapshotImportSessionWithResponse request returning *GetSnapshotImportSessionResponse
+func (c *ClientWithResponses) GetSnapshotImportSessionWithResponse(ctx context.Context, sessionId string, reqEditors ...RequestEditorFn) (*GetSnapshotImportSessionResponse, error) {
+	rsp, err := c.GetSnapshotImportSession(ctx, sessionId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetSnapshotImportSessionResponse(rsp)
+}
+
+// CancelSnapshotImportSessionWithResponse request returning *CancelSnapshotImportSessionResponse
+func (c *ClientWithResponses) CancelSnapshotImportSessionWithResponse(ctx context.Context, sessionId string, reqEditors ...RequestEditorFn) (*CancelSnapshotImportSessionResponse, error) {
+	rsp, err := c.CancelSnapshotImportSession(ctx, sessionId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCancelSnapshotImportSessionResponse(rsp)
+}
+
+// UploadSnapshotImportChunkWithBodyWithResponse request with arbitrary body returning *UploadSnapshotImportChunkResponse
+func (c *ClientWithResponses) UploadSnapshotImportChunkWithBodyWithResponse(ctx context.Context, sessionId string, chunkIndex int, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UploadSnapshotImportChunkResponse, error) {
+	rsp, err := c.UploadSnapshotImportChunkWithBody(ctx, sessionId, chunkIndex, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUploadSnapshotImportChunkResponse(rsp)
+}
+
+// CompleteSnapshotImportSessionWithResponse request returning *CompleteSnapshotImportSessionResponse
+func (c *ClientWithResponses) CompleteSnapshotImportSessionWithResponse(ctx context.Context, sessionId string, reqEditors ...RequestEditorFn) (*CompleteSnapshotImportSessionResponse, error) {
+	rsp, err := c.CompleteSnapshotImportSession(ctx, sessionId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCompleteSnapshotImportSessionResponse(rsp)
+}
+
+// ListSnapshotTransfersWithResponse request returning *ListSnapshotTransfersResponse
+func (c *ClientWithResponses) ListSnapshotTransfersWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListSnapshotTransfersResponse, error) {
+	rsp, err := c.ListSnapshotTransfers(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListSnapshotTransfersResponse(rsp)
+}
+
+// GetSnapshotTransferWithResponse request returning *GetSnapshotTransferResponse
+func (c *ClientWithResponses) GetSnapshotTransferWithResponse(ctx context.Context, transferId string, reqEditors ...RequestEditorFn) (*GetSnapshotTransferResponse, error) {
+	rsp, err := c.GetSnapshotTransfer(ctx, transferId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetSnapshotTransferResponse(rsp)
+}
+
+// CancelSnapshotTransferWithResponse request returning *CancelSnapshotTransferResponse
+func (c *ClientWithResponses) CancelSnapshotTransferWithResponse(ctx context.Context, transferId string, reqEditors ...RequestEditorFn) (*CancelSnapshotTransferResponse, error) {
+	rsp, err := c.CancelSnapshotTransfer(ctx, transferId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCancelSnapshotTransferResponse(rsp)
+}
+
 // ListSnapshotsWithResponse request returning *ListSnapshotsResponse
 func (c *ClientWithResponses) ListSnapshotsWithResponse(ctx context.Context, params *ListSnapshotsParams, reqEditors ...RequestEditorFn) (*ListSnapshotsResponse, error) {
 	rsp, err := c.ListSnapshots(ctx, params, reqEditors...)
@@ -5821,6 +6955,23 @@ func (c *ClientWithResponses) ForkSnapshotWithResponse(ctx context.Context, snap
 		return nil, err
 	}
 	return ParseForkSnapshotResponse(rsp)
+}
+
+// StartSnapshotTransferWithBodyWithResponse request with arbitrary body returning *StartSnapshotTransferResponse
+func (c *ClientWithResponses) StartSnapshotTransferWithBodyWithResponse(ctx context.Context, snapshotId string, params *StartSnapshotTransferParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*StartSnapshotTransferResponse, error) {
+	rsp, err := c.StartSnapshotTransferWithBody(ctx, snapshotId, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseStartSnapshotTransferResponse(rsp)
+}
+
+func (c *ClientWithResponses) StartSnapshotTransferWithResponse(ctx context.Context, snapshotId string, params *StartSnapshotTransferParams, body StartSnapshotTransferJSONRequestBody, reqEditors ...RequestEditorFn) (*StartSnapshotTransferResponse, error) {
+	rsp, err := c.StartSnapshotTransfer(ctx, snapshotId, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseStartSnapshotTransferResponse(rsp)
 }
 
 // ListVolumesWithResponse request returning *ListVolumesResponse
@@ -7449,6 +8600,380 @@ func ParseGetResourcesResponse(rsp *http.Response) (*GetResourcesResponse, error
 	return response, nil
 }
 
+// ParseCreateSnapshotImportSessionResponse parses an HTTP response from a CreateSnapshotImportSessionWithResponse call
+func ParseCreateSnapshotImportSessionResponse(rsp *http.Response) (*CreateSnapshotImportSessionResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateSnapshotImportSessionResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest SnapshotImportSession
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest SnapshotImportSession
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON201 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParsePreflightSnapshotImportSessionResponse parses an HTTP response from a PreflightSnapshotImportSessionWithResponse call
+func ParsePreflightSnapshotImportSessionResponse(rsp *http.Response) (*PreflightSnapshotImportSessionResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &PreflightSnapshotImportSessionResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetSnapshotImportSessionResponse parses an HTTP response from a GetSnapshotImportSessionWithResponse call
+func ParseGetSnapshotImportSessionResponse(rsp *http.Response) (*GetSnapshotImportSessionResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetSnapshotImportSessionResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest SnapshotImportSession
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCancelSnapshotImportSessionResponse parses an HTTP response from a CancelSnapshotImportSessionWithResponse call
+func ParseCancelSnapshotImportSessionResponse(rsp *http.Response) (*CancelSnapshotImportSessionResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CancelSnapshotImportSessionResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseUploadSnapshotImportChunkResponse parses an HTTP response from a UploadSnapshotImportChunkWithResponse call
+func ParseUploadSnapshotImportChunkResponse(rsp *http.Response) (*UploadSnapshotImportChunkResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &UploadSnapshotImportChunkResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCompleteSnapshotImportSessionResponse parses an HTTP response from a CompleteSnapshotImportSessionWithResponse call
+func ParseCompleteSnapshotImportSessionResponse(rsp *http.Response) (*CompleteSnapshotImportSessionResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CompleteSnapshotImportSessionResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest Snapshot
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON201 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseListSnapshotTransfersResponse parses an HTTP response from a ListSnapshotTransfersWithResponse call
+func ParseListSnapshotTransfersResponse(rsp *http.Response) (*ListSnapshotTransfersResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListSnapshotTransfersResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest []SnapshotTransfer
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetSnapshotTransferResponse parses an HTTP response from a GetSnapshotTransferWithResponse call
+func ParseGetSnapshotTransferResponse(rsp *http.Response) (*GetSnapshotTransferResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetSnapshotTransferResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest SnapshotTransfer
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCancelSnapshotTransferResponse parses an HTTP response from a CancelSnapshotTransferWithResponse call
+func ParseCancelSnapshotTransferResponse(rsp *http.Response) (*CancelSnapshotTransferResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CancelSnapshotTransferResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseListSnapshotsResponse parses an HTTP response from a ListSnapshotsWithResponse call
 func ParseListSnapshotsResponse(rsp *http.Response) (*ListSnapshotsResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -7610,6 +9135,60 @@ func ParseForkSnapshotResponse(rsp *http.Response) (*ForkSnapshotResponse, error
 			return nil, err
 		}
 		response.JSON501 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseStartSnapshotTransferResponse parses an HTTP response from a StartSnapshotTransferWithResponse call
+func ParseStartSnapshotTransferResponse(rsp *http.Response) (*StartSnapshotTransferResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &StartSnapshotTransferResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest SnapshotTransfer
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
 
 	}
 
@@ -7954,6 +9533,33 @@ type ServerInterface interface {
 	// Get host resource capacity and allocations
 	// (GET /resources)
 	GetResources(w http.ResponseWriter, r *http.Request)
+	// Create or resume a destination snapshot import session
+	// (POST /snapshot-import-sessions)
+	CreateSnapshotImportSession(w http.ResponseWriter, r *http.Request)
+	// Destination preflight check for snapshot import conflict and compatibility
+	// (POST /snapshot-import-sessions/preflight)
+	PreflightSnapshotImportSession(w http.ResponseWriter, r *http.Request)
+	// Get destination snapshot import session progress
+	// (GET /snapshot-import-sessions/{sessionId})
+	GetSnapshotImportSession(w http.ResponseWriter, r *http.Request, sessionId string)
+	// Cancel snapshot import session and delete partial payload
+	// (POST /snapshot-import-sessions/{sessionId}/cancel)
+	CancelSnapshotImportSession(w http.ResponseWriter, r *http.Request, sessionId string)
+	// Upload one snapshot import chunk
+	// (PUT /snapshot-import-sessions/{sessionId}/chunks/{chunkIndex})
+	UploadSnapshotImportChunk(w http.ResponseWriter, r *http.Request, sessionId string, chunkIndex int)
+	// Finalize snapshot import into destination snapshot store
+	// (POST /snapshot-import-sessions/{sessionId}/complete)
+	CompleteSnapshotImportSession(w http.ResponseWriter, r *http.Request, sessionId string)
+	// List snapshot transfer jobs
+	// (GET /snapshot-transfers)
+	ListSnapshotTransfers(w http.ResponseWriter, r *http.Request)
+	// Get snapshot transfer job status
+	// (GET /snapshot-transfers/{transferId})
+	GetSnapshotTransfer(w http.ResponseWriter, r *http.Request, transferId string)
+	// Cancel a snapshot transfer job
+	// (POST /snapshot-transfers/{transferId}/cancel)
+	CancelSnapshotTransfer(w http.ResponseWriter, r *http.Request, transferId string)
 	// List snapshots
 	// (GET /snapshots)
 	ListSnapshots(w http.ResponseWriter, r *http.Request, params ListSnapshotsParams)
@@ -7966,6 +9572,9 @@ type ServerInterface interface {
 	// Fork a new instance from a snapshot
 	// (POST /snapshots/{snapshotId}/fork)
 	ForkSnapshot(w http.ResponseWriter, r *http.Request, snapshotId string)
+	// Start async push transfer of a snapshot to a remote Hypeman server
+	// (POST /snapshots/{snapshotId}/transfers)
+	StartSnapshotTransfer(w http.ResponseWriter, r *http.Request, snapshotId string, params StartSnapshotTransferParams)
 	// List volumes
 	// (GET /volumes)
 	ListVolumes(w http.ResponseWriter, r *http.Request, params ListVolumesParams)
@@ -8203,6 +9812,60 @@ func (_ Unimplemented) GetResources(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
+// Create or resume a destination snapshot import session
+// (POST /snapshot-import-sessions)
+func (_ Unimplemented) CreateSnapshotImportSession(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Destination preflight check for snapshot import conflict and compatibility
+// (POST /snapshot-import-sessions/preflight)
+func (_ Unimplemented) PreflightSnapshotImportSession(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Get destination snapshot import session progress
+// (GET /snapshot-import-sessions/{sessionId})
+func (_ Unimplemented) GetSnapshotImportSession(w http.ResponseWriter, r *http.Request, sessionId string) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Cancel snapshot import session and delete partial payload
+// (POST /snapshot-import-sessions/{sessionId}/cancel)
+func (_ Unimplemented) CancelSnapshotImportSession(w http.ResponseWriter, r *http.Request, sessionId string) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Upload one snapshot import chunk
+// (PUT /snapshot-import-sessions/{sessionId}/chunks/{chunkIndex})
+func (_ Unimplemented) UploadSnapshotImportChunk(w http.ResponseWriter, r *http.Request, sessionId string, chunkIndex int) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Finalize snapshot import into destination snapshot store
+// (POST /snapshot-import-sessions/{sessionId}/complete)
+func (_ Unimplemented) CompleteSnapshotImportSession(w http.ResponseWriter, r *http.Request, sessionId string) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// List snapshot transfer jobs
+// (GET /snapshot-transfers)
+func (_ Unimplemented) ListSnapshotTransfers(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Get snapshot transfer job status
+// (GET /snapshot-transfers/{transferId})
+func (_ Unimplemented) GetSnapshotTransfer(w http.ResponseWriter, r *http.Request, transferId string) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Cancel a snapshot transfer job
+// (POST /snapshot-transfers/{transferId}/cancel)
+func (_ Unimplemented) CancelSnapshotTransfer(w http.ResponseWriter, r *http.Request, transferId string) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
 // List snapshots
 // (GET /snapshots)
 func (_ Unimplemented) ListSnapshots(w http.ResponseWriter, r *http.Request, params ListSnapshotsParams) {
@@ -8224,6 +9887,12 @@ func (_ Unimplemented) GetSnapshot(w http.ResponseWriter, r *http.Request, snaps
 // Fork a new instance from a snapshot
 // (POST /snapshots/{snapshotId}/fork)
 func (_ Unimplemented) ForkSnapshot(w http.ResponseWriter, r *http.Request, snapshotId string) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Start async push transfer of a snapshot to a remote Hypeman server
+// (POST /snapshots/{snapshotId}/transfers)
+func (_ Unimplemented) StartSnapshotTransfer(w http.ResponseWriter, r *http.Request, snapshotId string, params StartSnapshotTransferParams) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -9397,6 +11066,261 @@ func (siw *ServerInterfaceWrapper) GetResources(w http.ResponseWriter, r *http.R
 	handler.ServeHTTP(w, r)
 }
 
+// CreateSnapshotImportSession operation middleware
+func (siw *ServerInterfaceWrapper) CreateSnapshotImportSession(w http.ResponseWriter, r *http.Request) {
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateSnapshotImportSession(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// PreflightSnapshotImportSession operation middleware
+func (siw *ServerInterfaceWrapper) PreflightSnapshotImportSession(w http.ResponseWriter, r *http.Request) {
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.PreflightSnapshotImportSession(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetSnapshotImportSession operation middleware
+func (siw *ServerInterfaceWrapper) GetSnapshotImportSession(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "sessionId" -------------
+	var sessionId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "sessionId", chi.URLParam(r, "sessionId"), &sessionId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "sessionId", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetSnapshotImportSession(w, r, sessionId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CancelSnapshotImportSession operation middleware
+func (siw *ServerInterfaceWrapper) CancelSnapshotImportSession(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "sessionId" -------------
+	var sessionId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "sessionId", chi.URLParam(r, "sessionId"), &sessionId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "sessionId", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CancelSnapshotImportSession(w, r, sessionId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UploadSnapshotImportChunk operation middleware
+func (siw *ServerInterfaceWrapper) UploadSnapshotImportChunk(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "sessionId" -------------
+	var sessionId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "sessionId", chi.URLParam(r, "sessionId"), &sessionId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "sessionId", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "chunkIndex" -------------
+	var chunkIndex int
+
+	err = runtime.BindStyledParameterWithOptions("simple", "chunkIndex", chi.URLParam(r, "chunkIndex"), &chunkIndex, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "chunkIndex", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UploadSnapshotImportChunk(w, r, sessionId, chunkIndex)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CompleteSnapshotImportSession operation middleware
+func (siw *ServerInterfaceWrapper) CompleteSnapshotImportSession(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "sessionId" -------------
+	var sessionId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "sessionId", chi.URLParam(r, "sessionId"), &sessionId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "sessionId", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CompleteSnapshotImportSession(w, r, sessionId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListSnapshotTransfers operation middleware
+func (siw *ServerInterfaceWrapper) ListSnapshotTransfers(w http.ResponseWriter, r *http.Request) {
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListSnapshotTransfers(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetSnapshotTransfer operation middleware
+func (siw *ServerInterfaceWrapper) GetSnapshotTransfer(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "transferId" -------------
+	var transferId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "transferId", chi.URLParam(r, "transferId"), &transferId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "transferId", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetSnapshotTransfer(w, r, transferId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CancelSnapshotTransfer operation middleware
+func (siw *ServerInterfaceWrapper) CancelSnapshotTransfer(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "transferId" -------------
+	var transferId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "transferId", chi.URLParam(r, "transferId"), &transferId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "transferId", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CancelSnapshotTransfer(w, r, transferId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ListSnapshots operation middleware
 func (siw *ServerInterfaceWrapper) ListSnapshots(w http.ResponseWriter, r *http.Request) {
 
@@ -9538,6 +11462,65 @@ func (siw *ServerInterfaceWrapper) ForkSnapshot(w http.ResponseWriter, r *http.R
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.ForkSnapshot(w, r, snapshotId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// StartSnapshotTransfer operation middleware
+func (siw *ServerInterfaceWrapper) StartSnapshotTransfer(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "snapshotId" -------------
+	var snapshotId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "snapshotId", chi.URLParam(r, "snapshotId"), &snapshotId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "snapshotId", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params StartSnapshotTransferParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "X-Hypeman-Destination-Token" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Hypeman-Destination-Token")]; found {
+		var XHypemanDestinationToken string
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "X-Hypeman-Destination-Token", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Hypeman-Destination-Token", valueList[0], &XHypemanDestinationToken, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "X-Hypeman-Destination-Token", Err: err})
+			return
+		}
+
+		params.XHypemanDestinationToken = XHypemanDestinationToken
+
+	} else {
+		err := fmt.Errorf("Header parameter X-Hypeman-Destination-Token is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "X-Hypeman-Destination-Token", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.StartSnapshotTransfer(w, r, snapshotId, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -9955,6 +11938,33 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 		r.Get(options.BaseURL+"/resources", wrapper.GetResources)
 	})
 	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/snapshot-import-sessions", wrapper.CreateSnapshotImportSession)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/snapshot-import-sessions/preflight", wrapper.PreflightSnapshotImportSession)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/snapshot-import-sessions/{sessionId}", wrapper.GetSnapshotImportSession)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/snapshot-import-sessions/{sessionId}/cancel", wrapper.CancelSnapshotImportSession)
+	})
+	r.Group(func(r chi.Router) {
+		r.Put(options.BaseURL+"/snapshot-import-sessions/{sessionId}/chunks/{chunkIndex}", wrapper.UploadSnapshotImportChunk)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/snapshot-import-sessions/{sessionId}/complete", wrapper.CompleteSnapshotImportSession)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/snapshot-transfers", wrapper.ListSnapshotTransfers)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/snapshot-transfers/{transferId}", wrapper.GetSnapshotTransfer)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/snapshot-transfers/{transferId}/cancel", wrapper.CancelSnapshotTransfer)
+	})
+	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/snapshots", wrapper.ListSnapshots)
 	})
 	r.Group(func(r chi.Router) {
@@ -9965,6 +11975,9 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	})
 	r.Group(func(r chi.Router) {
 		r.Post(options.BaseURL+"/snapshots/{snapshotId}/fork", wrapper.ForkSnapshot)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/snapshots/{snapshotId}/transfers", wrapper.StartSnapshotTransfer)
 	})
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/volumes", wrapper.ListVolumes)
@@ -11502,6 +13515,372 @@ func (response GetResources500JSONResponse) VisitGetResourcesResponse(w http.Res
 	return json.NewEncoder(w).Encode(response)
 }
 
+type CreateSnapshotImportSessionRequestObject struct {
+	Body *CreateSnapshotImportSessionJSONRequestBody
+}
+
+type CreateSnapshotImportSessionResponseObject interface {
+	VisitCreateSnapshotImportSessionResponse(w http.ResponseWriter) error
+}
+
+type CreateSnapshotImportSession200JSONResponse SnapshotImportSession
+
+func (response CreateSnapshotImportSession200JSONResponse) VisitCreateSnapshotImportSessionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateSnapshotImportSession201JSONResponse SnapshotImportSession
+
+func (response CreateSnapshotImportSession201JSONResponse) VisitCreateSnapshotImportSessionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateSnapshotImportSession400JSONResponse Error
+
+func (response CreateSnapshotImportSession400JSONResponse) VisitCreateSnapshotImportSessionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateSnapshotImportSession409JSONResponse Error
+
+func (response CreateSnapshotImportSession409JSONResponse) VisitCreateSnapshotImportSessionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateSnapshotImportSession500JSONResponse Error
+
+func (response CreateSnapshotImportSession500JSONResponse) VisitCreateSnapshotImportSessionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type PreflightSnapshotImportSessionRequestObject struct {
+	Body *PreflightSnapshotImportSessionJSONRequestBody
+}
+
+type PreflightSnapshotImportSessionResponseObject interface {
+	VisitPreflightSnapshotImportSessionResponse(w http.ResponseWriter) error
+}
+
+type PreflightSnapshotImportSession204Response struct {
+}
+
+func (response PreflightSnapshotImportSession204Response) VisitPreflightSnapshotImportSessionResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type PreflightSnapshotImportSession400JSONResponse Error
+
+func (response PreflightSnapshotImportSession400JSONResponse) VisitPreflightSnapshotImportSessionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type PreflightSnapshotImportSession409JSONResponse Error
+
+func (response PreflightSnapshotImportSession409JSONResponse) VisitPreflightSnapshotImportSessionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type PreflightSnapshotImportSession500JSONResponse Error
+
+func (response PreflightSnapshotImportSession500JSONResponse) VisitPreflightSnapshotImportSessionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetSnapshotImportSessionRequestObject struct {
+	SessionId string `json:"sessionId"`
+}
+
+type GetSnapshotImportSessionResponseObject interface {
+	VisitGetSnapshotImportSessionResponse(w http.ResponseWriter) error
+}
+
+type GetSnapshotImportSession200JSONResponse SnapshotImportSession
+
+func (response GetSnapshotImportSession200JSONResponse) VisitGetSnapshotImportSessionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetSnapshotImportSession404JSONResponse Error
+
+func (response GetSnapshotImportSession404JSONResponse) VisitGetSnapshotImportSessionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetSnapshotImportSession500JSONResponse Error
+
+func (response GetSnapshotImportSession500JSONResponse) VisitGetSnapshotImportSessionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CancelSnapshotImportSessionRequestObject struct {
+	SessionId string `json:"sessionId"`
+}
+
+type CancelSnapshotImportSessionResponseObject interface {
+	VisitCancelSnapshotImportSessionResponse(w http.ResponseWriter) error
+}
+
+type CancelSnapshotImportSession204Response struct {
+}
+
+func (response CancelSnapshotImportSession204Response) VisitCancelSnapshotImportSessionResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type CancelSnapshotImportSession404JSONResponse Error
+
+func (response CancelSnapshotImportSession404JSONResponse) VisitCancelSnapshotImportSessionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CancelSnapshotImportSession409JSONResponse Error
+
+func (response CancelSnapshotImportSession409JSONResponse) VisitCancelSnapshotImportSessionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CancelSnapshotImportSession500JSONResponse Error
+
+func (response CancelSnapshotImportSession500JSONResponse) VisitCancelSnapshotImportSessionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UploadSnapshotImportChunkRequestObject struct {
+	SessionId  string `json:"sessionId"`
+	ChunkIndex int    `json:"chunkIndex"`
+	Body       io.Reader
+}
+
+type UploadSnapshotImportChunkResponseObject interface {
+	VisitUploadSnapshotImportChunkResponse(w http.ResponseWriter) error
+}
+
+type UploadSnapshotImportChunk204Response struct {
+}
+
+func (response UploadSnapshotImportChunk204Response) VisitUploadSnapshotImportChunkResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type UploadSnapshotImportChunk400JSONResponse Error
+
+func (response UploadSnapshotImportChunk400JSONResponse) VisitUploadSnapshotImportChunkResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UploadSnapshotImportChunk404JSONResponse Error
+
+func (response UploadSnapshotImportChunk404JSONResponse) VisitUploadSnapshotImportChunkResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UploadSnapshotImportChunk409JSONResponse Error
+
+func (response UploadSnapshotImportChunk409JSONResponse) VisitUploadSnapshotImportChunkResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UploadSnapshotImportChunk500JSONResponse Error
+
+func (response UploadSnapshotImportChunk500JSONResponse) VisitUploadSnapshotImportChunkResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CompleteSnapshotImportSessionRequestObject struct {
+	SessionId string `json:"sessionId"`
+}
+
+type CompleteSnapshotImportSessionResponseObject interface {
+	VisitCompleteSnapshotImportSessionResponse(w http.ResponseWriter) error
+}
+
+type CompleteSnapshotImportSession201JSONResponse Snapshot
+
+func (response CompleteSnapshotImportSession201JSONResponse) VisitCompleteSnapshotImportSessionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CompleteSnapshotImportSession404JSONResponse Error
+
+func (response CompleteSnapshotImportSession404JSONResponse) VisitCompleteSnapshotImportSessionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CompleteSnapshotImportSession409JSONResponse Error
+
+func (response CompleteSnapshotImportSession409JSONResponse) VisitCompleteSnapshotImportSessionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CompleteSnapshotImportSession500JSONResponse Error
+
+func (response CompleteSnapshotImportSession500JSONResponse) VisitCompleteSnapshotImportSessionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListSnapshotTransfersRequestObject struct {
+}
+
+type ListSnapshotTransfersResponseObject interface {
+	VisitListSnapshotTransfersResponse(w http.ResponseWriter) error
+}
+
+type ListSnapshotTransfers200JSONResponse []SnapshotTransfer
+
+func (response ListSnapshotTransfers200JSONResponse) VisitListSnapshotTransfersResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListSnapshotTransfers500JSONResponse Error
+
+func (response ListSnapshotTransfers500JSONResponse) VisitListSnapshotTransfersResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetSnapshotTransferRequestObject struct {
+	TransferId string `json:"transferId"`
+}
+
+type GetSnapshotTransferResponseObject interface {
+	VisitGetSnapshotTransferResponse(w http.ResponseWriter) error
+}
+
+type GetSnapshotTransfer200JSONResponse SnapshotTransfer
+
+func (response GetSnapshotTransfer200JSONResponse) VisitGetSnapshotTransferResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetSnapshotTransfer404JSONResponse Error
+
+func (response GetSnapshotTransfer404JSONResponse) VisitGetSnapshotTransferResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetSnapshotTransfer500JSONResponse Error
+
+func (response GetSnapshotTransfer500JSONResponse) VisitGetSnapshotTransferResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CancelSnapshotTransferRequestObject struct {
+	TransferId string `json:"transferId"`
+}
+
+type CancelSnapshotTransferResponseObject interface {
+	VisitCancelSnapshotTransferResponse(w http.ResponseWriter) error
+}
+
+type CancelSnapshotTransfer204Response struct {
+}
+
+func (response CancelSnapshotTransfer204Response) VisitCancelSnapshotTransferResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type CancelSnapshotTransfer404JSONResponse Error
+
+func (response CancelSnapshotTransfer404JSONResponse) VisitCancelSnapshotTransferResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CancelSnapshotTransfer500JSONResponse Error
+
+func (response CancelSnapshotTransfer500JSONResponse) VisitCancelSnapshotTransferResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
 type ListSnapshotsRequestObject struct {
 	Params ListSnapshotsParams
 }
@@ -11656,6 +14035,61 @@ type ForkSnapshot501JSONResponse Error
 func (response ForkSnapshot501JSONResponse) VisitForkSnapshotResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(501)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type StartSnapshotTransferRequestObject struct {
+	SnapshotId string `json:"snapshotId"`
+	Params     StartSnapshotTransferParams
+	Body       *StartSnapshotTransferJSONRequestBody
+}
+
+type StartSnapshotTransferResponseObject interface {
+	VisitStartSnapshotTransferResponse(w http.ResponseWriter) error
+}
+
+type StartSnapshotTransfer202JSONResponse SnapshotTransfer
+
+func (response StartSnapshotTransfer202JSONResponse) VisitStartSnapshotTransferResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(202)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type StartSnapshotTransfer400JSONResponse Error
+
+func (response StartSnapshotTransfer400JSONResponse) VisitStartSnapshotTransferResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type StartSnapshotTransfer404JSONResponse Error
+
+func (response StartSnapshotTransfer404JSONResponse) VisitStartSnapshotTransferResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type StartSnapshotTransfer409JSONResponse Error
+
+func (response StartSnapshotTransfer409JSONResponse) VisitStartSnapshotTransferResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type StartSnapshotTransfer500JSONResponse Error
+
+func (response StartSnapshotTransfer500JSONResponse) VisitStartSnapshotTransferResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
 
 	return json.NewEncoder(w).Encode(response)
 }
@@ -11990,6 +14424,33 @@ type StrictServerInterface interface {
 	// Get host resource capacity and allocations
 	// (GET /resources)
 	GetResources(ctx context.Context, request GetResourcesRequestObject) (GetResourcesResponseObject, error)
+	// Create or resume a destination snapshot import session
+	// (POST /snapshot-import-sessions)
+	CreateSnapshotImportSession(ctx context.Context, request CreateSnapshotImportSessionRequestObject) (CreateSnapshotImportSessionResponseObject, error)
+	// Destination preflight check for snapshot import conflict and compatibility
+	// (POST /snapshot-import-sessions/preflight)
+	PreflightSnapshotImportSession(ctx context.Context, request PreflightSnapshotImportSessionRequestObject) (PreflightSnapshotImportSessionResponseObject, error)
+	// Get destination snapshot import session progress
+	// (GET /snapshot-import-sessions/{sessionId})
+	GetSnapshotImportSession(ctx context.Context, request GetSnapshotImportSessionRequestObject) (GetSnapshotImportSessionResponseObject, error)
+	// Cancel snapshot import session and delete partial payload
+	// (POST /snapshot-import-sessions/{sessionId}/cancel)
+	CancelSnapshotImportSession(ctx context.Context, request CancelSnapshotImportSessionRequestObject) (CancelSnapshotImportSessionResponseObject, error)
+	// Upload one snapshot import chunk
+	// (PUT /snapshot-import-sessions/{sessionId}/chunks/{chunkIndex})
+	UploadSnapshotImportChunk(ctx context.Context, request UploadSnapshotImportChunkRequestObject) (UploadSnapshotImportChunkResponseObject, error)
+	// Finalize snapshot import into destination snapshot store
+	// (POST /snapshot-import-sessions/{sessionId}/complete)
+	CompleteSnapshotImportSession(ctx context.Context, request CompleteSnapshotImportSessionRequestObject) (CompleteSnapshotImportSessionResponseObject, error)
+	// List snapshot transfer jobs
+	// (GET /snapshot-transfers)
+	ListSnapshotTransfers(ctx context.Context, request ListSnapshotTransfersRequestObject) (ListSnapshotTransfersResponseObject, error)
+	// Get snapshot transfer job status
+	// (GET /snapshot-transfers/{transferId})
+	GetSnapshotTransfer(ctx context.Context, request GetSnapshotTransferRequestObject) (GetSnapshotTransferResponseObject, error)
+	// Cancel a snapshot transfer job
+	// (POST /snapshot-transfers/{transferId}/cancel)
+	CancelSnapshotTransfer(ctx context.Context, request CancelSnapshotTransferRequestObject) (CancelSnapshotTransferResponseObject, error)
 	// List snapshots
 	// (GET /snapshots)
 	ListSnapshots(ctx context.Context, request ListSnapshotsRequestObject) (ListSnapshotsResponseObject, error)
@@ -12002,6 +14463,9 @@ type StrictServerInterface interface {
 	// Fork a new instance from a snapshot
 	// (POST /snapshots/{snapshotId}/fork)
 	ForkSnapshot(ctx context.Context, request ForkSnapshotRequestObject) (ForkSnapshotResponseObject, error)
+	// Start async push transfer of a snapshot to a remote Hypeman server
+	// (POST /snapshots/{snapshotId}/transfers)
+	StartSnapshotTransfer(ctx context.Context, request StartSnapshotTransferRequestObject) (StartSnapshotTransferResponseObject, error)
 	// List volumes
 	// (GET /volumes)
 	ListVolumes(ctx context.Context, request ListVolumesRequestObject) (ListVolumesResponseObject, error)
@@ -13044,6 +15508,251 @@ func (sh *strictHandler) GetResources(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// CreateSnapshotImportSession operation middleware
+func (sh *strictHandler) CreateSnapshotImportSession(w http.ResponseWriter, r *http.Request) {
+	var request CreateSnapshotImportSessionRequestObject
+
+	var body CreateSnapshotImportSessionJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateSnapshotImportSession(ctx, request.(CreateSnapshotImportSessionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateSnapshotImportSession")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateSnapshotImportSessionResponseObject); ok {
+		if err := validResponse.VisitCreateSnapshotImportSessionResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// PreflightSnapshotImportSession operation middleware
+func (sh *strictHandler) PreflightSnapshotImportSession(w http.ResponseWriter, r *http.Request) {
+	var request PreflightSnapshotImportSessionRequestObject
+
+	var body PreflightSnapshotImportSessionJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.PreflightSnapshotImportSession(ctx, request.(PreflightSnapshotImportSessionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "PreflightSnapshotImportSession")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(PreflightSnapshotImportSessionResponseObject); ok {
+		if err := validResponse.VisitPreflightSnapshotImportSessionResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetSnapshotImportSession operation middleware
+func (sh *strictHandler) GetSnapshotImportSession(w http.ResponseWriter, r *http.Request, sessionId string) {
+	var request GetSnapshotImportSessionRequestObject
+
+	request.SessionId = sessionId
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetSnapshotImportSession(ctx, request.(GetSnapshotImportSessionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetSnapshotImportSession")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetSnapshotImportSessionResponseObject); ok {
+		if err := validResponse.VisitGetSnapshotImportSessionResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CancelSnapshotImportSession operation middleware
+func (sh *strictHandler) CancelSnapshotImportSession(w http.ResponseWriter, r *http.Request, sessionId string) {
+	var request CancelSnapshotImportSessionRequestObject
+
+	request.SessionId = sessionId
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CancelSnapshotImportSession(ctx, request.(CancelSnapshotImportSessionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CancelSnapshotImportSession")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CancelSnapshotImportSessionResponseObject); ok {
+		if err := validResponse.VisitCancelSnapshotImportSessionResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UploadSnapshotImportChunk operation middleware
+func (sh *strictHandler) UploadSnapshotImportChunk(w http.ResponseWriter, r *http.Request, sessionId string, chunkIndex int) {
+	var request UploadSnapshotImportChunkRequestObject
+
+	request.SessionId = sessionId
+	request.ChunkIndex = chunkIndex
+
+	request.Body = r.Body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UploadSnapshotImportChunk(ctx, request.(UploadSnapshotImportChunkRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UploadSnapshotImportChunk")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UploadSnapshotImportChunkResponseObject); ok {
+		if err := validResponse.VisitUploadSnapshotImportChunkResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CompleteSnapshotImportSession operation middleware
+func (sh *strictHandler) CompleteSnapshotImportSession(w http.ResponseWriter, r *http.Request, sessionId string) {
+	var request CompleteSnapshotImportSessionRequestObject
+
+	request.SessionId = sessionId
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CompleteSnapshotImportSession(ctx, request.(CompleteSnapshotImportSessionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CompleteSnapshotImportSession")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CompleteSnapshotImportSessionResponseObject); ok {
+		if err := validResponse.VisitCompleteSnapshotImportSessionResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListSnapshotTransfers operation middleware
+func (sh *strictHandler) ListSnapshotTransfers(w http.ResponseWriter, r *http.Request) {
+	var request ListSnapshotTransfersRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListSnapshotTransfers(ctx, request.(ListSnapshotTransfersRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListSnapshotTransfers")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListSnapshotTransfersResponseObject); ok {
+		if err := validResponse.VisitListSnapshotTransfersResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetSnapshotTransfer operation middleware
+func (sh *strictHandler) GetSnapshotTransfer(w http.ResponseWriter, r *http.Request, transferId string) {
+	var request GetSnapshotTransferRequestObject
+
+	request.TransferId = transferId
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetSnapshotTransfer(ctx, request.(GetSnapshotTransferRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetSnapshotTransfer")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetSnapshotTransferResponseObject); ok {
+		if err := validResponse.VisitGetSnapshotTransferResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CancelSnapshotTransfer operation middleware
+func (sh *strictHandler) CancelSnapshotTransfer(w http.ResponseWriter, r *http.Request, transferId string) {
+	var request CancelSnapshotTransferRequestObject
+
+	request.TransferId = transferId
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CancelSnapshotTransfer(ctx, request.(CancelSnapshotTransferRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CancelSnapshotTransfer")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CancelSnapshotTransferResponseObject); ok {
+		if err := validResponse.VisitCancelSnapshotTransferResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // ListSnapshots operation middleware
 func (sh *strictHandler) ListSnapshots(w http.ResponseWriter, r *http.Request, params ListSnapshotsParams) {
 	var request ListSnapshotsRequestObject
@@ -13148,6 +15857,40 @@ func (sh *strictHandler) ForkSnapshot(w http.ResponseWriter, r *http.Request, sn
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(ForkSnapshotResponseObject); ok {
 		if err := validResponse.VisitForkSnapshotResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// StartSnapshotTransfer operation middleware
+func (sh *strictHandler) StartSnapshotTransfer(w http.ResponseWriter, r *http.Request, snapshotId string, params StartSnapshotTransferParams) {
+	var request StartSnapshotTransferRequestObject
+
+	request.SnapshotId = snapshotId
+	request.Params = params
+
+	var body StartSnapshotTransferJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.StartSnapshotTransfer(ctx, request.(StartSnapshotTransferRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "StartSnapshotTransfer")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(StartSnapshotTransferResponseObject); ok {
+		if err := validResponse.VisitStartSnapshotTransferResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -13295,201 +16038,227 @@ func (sh *strictHandler) GetVolume(w http.ResponseWriter, r *http.Request, id st
 // Base64 encoded, gzipped, json marshaled Swagger object
 var swaggerSpec = []string{
 
-	"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",
-	"qQaH/cN+68v7L/8/AAD//9ibNZqCHgEA",
+	"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",
+	"6PZSr1JTAQA=",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file

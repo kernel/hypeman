@@ -24,6 +24,7 @@ import (
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/kernel/hypeman/lib/registry"
 	"github.com/kernel/hypeman/lib/resources"
+	"github.com/kernel/hypeman/lib/snapshottransfer"
 	"github.com/kernel/hypeman/lib/system"
 	"github.com/kernel/hypeman/lib/vm_metrics"
 	"github.com/kernel/hypeman/lib/volumes"
@@ -303,4 +304,9 @@ func ProvideBuildManager(p *paths.Paths, cfg *config.Config, instanceManager ins
 
 	meter := otel.GetMeterProvider().Meter("hypeman")
 	return builds.NewManager(p, buildConfig, instanceManager, volumeManager, imageManager, secretProvider, log, meter)
+}
+
+// ProvideSnapshotTransferManager provides the cross-server snapshot transfer manager.
+func ProvideSnapshotTransferManager(p *paths.Paths, cfg *config.Config) snapshottransfer.Manager {
+	return snapshottransfer.NewManager(p, cfg.SnapshotTransfer.MaxConcurrent)
 }
