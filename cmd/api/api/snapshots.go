@@ -271,6 +271,8 @@ func (s *ApiService) SetInstanceSnapshotSchedule(ctx context.Context, request oa
 		switch {
 		case errors.Is(err, instances.ErrInvalidRequest):
 			return oapi.SetInstanceSnapshotSchedule400JSONResponse{Code: "invalid_request", Message: err.Error()}, nil
+		case errors.Is(err, instances.ErrNotFound):
+			return oapi.SetInstanceSnapshotSchedule404JSONResponse{Code: "not_found", Message: "instance not found"}, nil
 		default:
 			log.ErrorContext(ctx, "failed to set snapshot schedule", "error", err)
 			return oapi.SetInstanceSnapshotSchedule500JSONResponse{Code: "internal_error", Message: "failed to set snapshot schedule"}, nil
