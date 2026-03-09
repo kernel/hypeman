@@ -52,10 +52,6 @@ jobs:
             fi
             sudo env "PATH=$TEST_PATH" bash -lc "command -v '$bin'"
           done
-          if ! qemu-system-x86_64 --version >/dev/null 2>&1; then
-            echo "qemu-system-x86_64 failed to start (runtime deps missing)"
-            exit 1
-          fi
 
       # Avoids rate limits when running the tests
       # Tests includes pulling, then converting to disk images

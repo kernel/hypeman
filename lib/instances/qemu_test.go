@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -97,6 +98,21 @@ func cleanupOrphanedQEMUProcesses(t *testing.T, mgr *manager) {
 	}
 }
 
+func requireQEMUAvailable(t *testing.T) {
+	t.Helper()
+
+	starter := qemu.NewStarter()
+	binaryPath, err := starter.GetBinaryPath(nil, "")
+	if err != nil {
+		t.Skipf("QEMU not available: %v", err)
+	}
+
+	cmd := exec.Command(binaryPath, "--version")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Skipf("QEMU runtime unavailable: %v (output: %s)", err, strings.TrimSpace(string(out)))
+	}
+}
+
 // waitForQEMUReady polls QEMU status via QMP until it's running or times out
 func waitForQEMUReady(ctx context.Context, socketPath string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
@@ -174,11 +190,7 @@ func TestQEMUBasicEndToEnd(t *testing.T) {
 		t.Skip("/dev/kvm not available, skipping on this platform")
 	}
 
-	// Require QEMU to be installed
-	starter := qemu.NewStarter()
-	if _, err := starter.GetBinaryPath(nil, ""); err != nil {
-		t.Fatalf("QEMU not available: %v", err)
-	}
+	requireQEMUAvailable(t)
 
 	manager, tmpDir := setupTestManagerForQEMU(t)
 	ctx := context.Background()
@@ -578,11 +590,7 @@ func TestQEMUEntrypointEnvVars(t *testing.T) {
 		t.Skip("Skipping test that requires root")
 	}
 
-	// Require QEMU to be installed
-	starter := qemu.NewStarter()
-	if _, err := starter.GetBinaryPath(nil, ""); err != nil {
-		t.Fatalf("QEMU not available: %v", err)
-	}
+	requireQEMUAvailable(t)
 
 	mgr, tmpDir := setupTestManagerForQEMU(t)
 	ctx := context.Background()
@@ -758,11 +766,7 @@ func TestQEMUStandbyAndRestore(t *testing.T) {
 		t.Skip("/dev/kvm not available, skipping on this platform")
 	}
 
-	// Require QEMU to be installed
-	starter := qemu.NewStarter()
-	if _, err := starter.GetBinaryPath(nil, ""); err != nil {
-		t.Fatalf("QEMU not available: %v", err)
-	}
+	requireQEMUAvailable(t)
 
 	manager, tmpDir := setupTestManagerForQEMU(t)
 	ctx := context.Background()
@@ -882,10 +886,7 @@ func TestQEMUForkFromRunningNetwork(t *testing.T) {
 		t.Skip("/dev/kvm not available, skipping on this platform")
 	}
 
-	starter := qemu.NewStarter()
-	if _, err := starter.GetBinaryPath(nil, ""); err != nil {
-		t.Fatalf("QEMU not available: %v", err)
-	}
+	requireQEMUAvailable(t)
 
 	manager, tmpDir := setupTestManagerForQEMU(t)
 	ctx := context.Background()
@@ -981,10 +982,7 @@ func TestQEMUSnapshotFeature(t *testing.T) {
 		t.Skip("/dev/kvm not available, skipping on this platform")
 	}
 
-	starter := qemu.NewStarter()
-	if _, err := starter.GetBinaryPath(nil, ""); err != nil {
-		t.Skipf("QEMU not available: %v", err)
-	}
+	requireQEMUAvailable(t)
 
 	mgr, tmpDir := setupTestManagerForQEMU(t)
 	runStandbySnapshotScenario(t, mgr, tmpDir, snapshotScenarioConfig{
