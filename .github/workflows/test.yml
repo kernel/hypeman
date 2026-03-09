@@ -34,7 +34,8 @@ jobs:
           if ! command -v mkfs.erofs &> /dev/null || \
              ! command -v mkfs.ext4 &> /dev/null || \
              ! command -v iptables &> /dev/null || \
-             ! command -v qemu-system-x86_64 &> /dev/null; then
+             ! command -v qemu-system-x86_64 &> /dev/null || \
+             ! qemu-system-x86_64 --version >/dev/null 2>&1; then
             sudo apt-get update
             sudo apt-get install -y erofs-utils e2fsprogs iptables qemu-system-x86 qemu-utils
           fi
