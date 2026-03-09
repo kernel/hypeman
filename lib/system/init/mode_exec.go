@@ -229,6 +229,7 @@ func waitForGuestAgentReady(readyReader *os.File, timeout time.Duration, agentEx
 	}()
 
 	agentExitCh := agentExited
+	agentExitObserved := false
 	var agentExitErr error
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
@@ -237,7 +238,7 @@ func waitForGuestAgentReady(readyReader *os.File, timeout time.Duration, agentEx
 		select {
 		case err := <-readyErr:
 			if err != nil {
-				if agentExitCh == nil {
+				if agentExitObserved {
 					if agentExitErr == nil {
 						return fmt.Errorf("guest-agent exited before readiness signal")
 					}
@@ -248,11 +249,12 @@ func waitForGuestAgentReady(readyReader *os.File, timeout time.Duration, agentEx
 			return nil
 		case err := <-agentExitCh:
 			agentExitErr = err
+			agentExitObserved = true
 			// Keep waiting for the readiness read to complete. If the agent wrote
 			// readiness and then exited, the read succeeds and startup proceeds.
 			agentExitCh = nil
 		case <-timer.C:
-			if agentExitCh == nil {
+			if agentExitObserved {
 				if agentExitErr == nil {
 					return fmt.Errorf("guest-agent exited before readiness signal")
 				}
