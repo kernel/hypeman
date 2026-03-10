@@ -225,10 +225,9 @@ func (m *manager) restoreInstance(
 	log.InfoContext(ctx, "deleting snapshot after successful restore", "instance_id", id)
 	os.RemoveAll(snapshotDir) // Best effort, ignore errors
 
-	// 9. Update timestamp
-	now := time.Now().UTC()
-	stored.StartedAt = &now
-
+	// 9. Persist runtime metadata updates without resetting StartedAt.
+	// Restore resumes an existing boot; preserving StartedAt keeps marker
+	// hydration scoped to the original boot timeline.
 	meta = &metadata{StoredMetadata: *stored}
 	if err := m.saveMetadata(meta); err != nil {
 		// VM is running but metadata failed
