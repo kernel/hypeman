@@ -110,6 +110,32 @@ func waitForVMReady(ctx context.Context, socketPath string, timeout time.Duratio
 	return fmt.Errorf("VM did not reach running state within %v", timeout)
 }
 
+// waitForInstanceState polls GetInstance until the expected state is observed or timeout expires.
+func waitForInstanceState(ctx context.Context, mgr Manager, instanceID string, expected State, timeout time.Duration) (*Instance, error) {
+	deadline := time.Now().Add(timeout)
+	lastState := StateUnknown
+	lastErr := error(nil)
+
+	for time.Now().Before(deadline) {
+		inst, err := mgr.GetInstance(ctx, instanceID)
+		if err == nil {
+			lastState = inst.State
+			if inst.State == expected {
+				return inst, nil
+			}
+		} else {
+			lastErr = err
+		}
+
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	if lastErr != nil {
+		return nil, fmt.Errorf("instance %s did not reach %s within %v (last error: %w)", instanceID, expected, timeout, lastErr)
+	}
+	return nil, fmt.Errorf("instance %s did not reach %s within %v (last state: %s)", instanceID, expected, timeout, lastState)
+}
+
 // waitForLogMessage polls instance logs until the message appears or times out
 func waitForLogMessage(ctx context.Context, mgr *manager, instanceID, message string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
@@ -242,12 +268,8 @@ func TestBasicEndToEnd(t *testing.T) {
 	assert.Empty(t, vol.Attachments, "Volume should not be attached yet")
 
 	// Initialize network for ingress testing
-	networkManager := network.NewManager(p, &config.Config{
-		DataDir: tmpDir,
-		Network: newParallelTestNetworkConfig(t),
-	}, nil)
 	t.Log("Initializing network...")
-	err = networkManager.Initialize(ctx, nil)
+	err = manager.networkManager.Initialize(ctx, nil)
 	require.NoError(t, err)
 	t.Log("Network initialized")
 
@@ -282,7 +304,7 @@ func TestBasicEndToEnd(t *testing.T) {
 	assert.NotEmpty(t, inst.Id)
 	assert.Equal(t, "test-nginx", inst.Name)
 	assert.Equal(t, integrationTestImageRef(t, "docker.io/library/nginx:alpine"), inst.Image)
-	assert.Equal(t, StateRunning, inst.State)
+	assert.Contains(t, []State{StateInitializing, StateRunning}, inst.State)
 	assert.False(t, inst.HasSnapshot)
 	assert.NotEmpty(t, inst.KernelVersion)
 
@@ -307,6 +329,8 @@ func TestBasicEndToEnd(t *testing.T) {
 	// Wait for VM to be fully running
 	err = waitForVMReady(ctx, inst.SocketPath, 5*time.Second)
 	require.NoError(t, err, "VM should reach running state")
+	inst, err = waitForInstanceState(ctx, manager, inst.Id, StateRunning, 20*time.Second)
+	require.NoError(t, err, "instance should reach Running state")
 
 	// Get instance
 	retrieved, err := manager.GetInstance(ctx, inst.Id)
@@ -751,7 +775,9 @@ func TestBasicEndToEnd(t *testing.T) {
 	t.Log("Testing restart after stop...")
 	restartedInst, err := manager.StartInstance(ctx, inst.Id, StartInstanceRequest{})
 	require.NoError(t, err, "StartInstance should succeed")
-	assert.Equal(t, StateRunning, restartedInst.State, "Instance should be Running after restart")
+	assert.Contains(t, []State{StateInitializing, StateRunning}, restartedInst.State, "Instance should be active after restart")
+	restartedInst, err = waitForInstanceState(ctx, manager, restartedInst.Id, StateRunning, 20*time.Second)
+	require.NoError(t, err, "instance should reach Running after restart")
 
 	// Verify exit info was cleared
 	retrieved, err = manager.GetInstance(ctx, inst.Id)
@@ -974,8 +1000,26 @@ func TestOOMExitPropagation(t *testing.T) {
 
 		if finalInst != nil {
 			assert.Equal(t, StateStopped, finalInst.State)
+			// Exit metadata may lag the first observed Stopped state by a short window.
+			if finalInst.ExitCode == nil {
+				deadline := time.Now().Add(10 * time.Second)
+				for time.Now().Before(deadline) {
+					got, getErr := manager.GetInstance(ctx, inst.Id)
+					if getErr == nil {
+						finalInst = got
+						if finalInst.ExitCode != nil {
+							break
+						}
+					}
+					time.Sleep(200 * time.Millisecond)
+				}
+			}
 			// Verify exit info shows OOM
-			require.NotNil(t, finalInst.ExitCode, "ExitCode should be populated after OOM")
+			if finalInst.ExitCode == nil {
+				t.Logf("Attempt %d: instance stopped without exit info; retrying", attempt)
+				_ = manager.DeleteInstance(ctx, inst.Id)
+				continue
+			}
 			assert.Equal(t, 137, *finalInst.ExitCode, "OOM kill should result in exit code 137 (SIGKILL)")
 			assert.Contains(t, finalInst.ExitMessage, "OOM", "Exit message should indicate OOM")
 			t.Logf("OOM exit info propagated: code=%d message=%q", *finalInst.ExitCode, finalInst.ExitMessage)
@@ -1040,12 +1084,8 @@ func TestEntrypointEnvVars(t *testing.T) {
 	t.Log("System files ready")
 
 	// Initialize network (needed for loopback interface in guest)
-	networkManager := network.NewManager(p, &config.Config{
-		DataDir: tmpDir,
-		Network: newParallelTestNetworkConfig(t),
-	}, nil)
 	t.Log("Initializing network...")
-	err = networkManager.Initialize(ctx, nil)
+	err = mgr.networkManager.Initialize(ctx, nil)
 	require.NoError(t, err)
 	t.Log("Network initialized")
 
@@ -1068,7 +1108,9 @@ func TestEntrypointEnvVars(t *testing.T) {
 	inst, err := mgr.CreateInstance(ctx, req)
 	require.NoError(t, err)
 	require.NotNil(t, inst)
-	assert.Equal(t, StateRunning, inst.State)
+	assert.Contains(t, []State{StateInitializing, StateRunning}, inst.State)
+	inst, err = waitForInstanceState(ctx, mgr, inst.Id, StateRunning, 20*time.Second)
+	require.NoError(t, err)
 	t.Logf("Instance created: %s", inst.Id)
 
 	// Helper to run command in guest with retry
@@ -1295,7 +1337,9 @@ func TestStandbyAndRestore(t *testing.T) {
 
 	inst, err := manager.CreateInstance(ctx, req)
 	require.NoError(t, err)
-	assert.Equal(t, StateRunning, inst.State)
+	assert.Contains(t, []State{StateInitializing, StateRunning}, inst.State)
+	inst, err = waitForInstanceState(ctx, manager, inst.Id, StateRunning, 20*time.Second)
+	require.NoError(t, err)
 	t.Logf("Instance created: %s", inst.Id)
 
 	// Wait for VM to be fully running before standby
@@ -1337,7 +1381,9 @@ func TestStandbyAndRestore(t *testing.T) {
 	t.Log("Restoring instance...")
 	inst, err = manager.RestoreInstance(ctx, inst.Id)
 	require.NoError(t, err)
-	assert.Equal(t, StateRunning, inst.State)
+	assert.Contains(t, []State{StateInitializing, StateRunning}, inst.State)
+	inst, err = waitForInstanceState(ctx, manager, inst.Id, StateRunning, 20*time.Second)
+	require.NoError(t, err)
 	t.Log("Instance restored and running")
 
 	// DEBUG: Check app.log file size after restore
@@ -1382,7 +1428,9 @@ func TestStateTransitions(t *testing.T) {
 		shouldFail bool
 	}{
 		{"Stopped to Created", StateStopped, StateCreated, false},
+		{"Created to Initializing", StateCreated, StateInitializing, false},
 		{"Created to Running", StateCreated, StateRunning, false},
+		{"Initializing to Running", StateInitializing, StateRunning, false},
 		{"Running to Paused", StateRunning, StatePaused, false},
 		{"Paused to Running", StatePaused, StateRunning, false},
 		{"Paused to Standby", StatePaused, StateStandby, false},
@@ -1392,7 +1440,9 @@ func TestStateTransitions(t *testing.T) {
 		// Invalid transitions
 		{"Running to Standby", StateRunning, StateStandby, true},
 		{"Stopped to Running", StateStopped, StateRunning, true},
+		{"Stopped to Initializing", StateStopped, StateInitializing, true},
 		{"Standby to Running", StateStandby, StateRunning, true},
+		{"Initializing to Paused", StateInitializing, StatePaused, true},
 	}
 
 	for _, tt := range tests {

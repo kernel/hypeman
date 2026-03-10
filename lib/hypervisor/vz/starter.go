@@ -160,15 +160,17 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 func buildShimConfigFromVMConfig(config hypervisor.VMConfig, socketPath string) shimconfig.ShimConfig {
 	instanceDir := filepath.Dir(socketPath)
 	cfg := shimconfig.ShimConfig{
-		VCPUs:         config.VCPUs,
-		MemoryBytes:   config.MemoryBytes,
-		SerialLogPath: config.SerialLogPath,
-		KernelPath:    config.KernelPath,
-		InitrdPath:    config.InitrdPath,
-		KernelArgs:    config.KernelArgs,
-		ControlSocket: socketPath,
-		VsockSocket:   filepath.Join(instanceDir, "vz.vsock"),
-		LogPath:       filepath.Join(instanceDir, "logs", "vz-shim.log"),
+		VCPUs:                config.VCPUs,
+		MemoryBytes:          config.MemoryBytes,
+		SerialLogPath:        config.SerialLogPath,
+		KernelPath:           config.KernelPath,
+		InitrdPath:           config.InitrdPath,
+		KernelArgs:           config.KernelArgs,
+		EnableMemoryBalloon:  config.GuestMemory.EnableBalloon,
+		RequireMemoryBalloon: config.GuestMemory.RequireBalloon,
+		ControlSocket:        socketPath,
+		VsockSocket:          filepath.Join(instanceDir, "vz.vsock"),
+		LogPath:              filepath.Join(instanceDir, "logs", "vz-shim.log"),
 	}
 	for _, disk := range config.Disks {
 		cfg.Disks = append(cfg.Disks, shimconfig.DiskConfig{

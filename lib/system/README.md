@@ -70,8 +70,17 @@ It replaces the previous shell-based init script with cleaner logic and structur
 - ✅ Hand off to systemd via chroot + exec (systemd mode)
 
 **Two boot modes:**
-- **Exec mode** (default): Init chroots to container rootfs, runs entrypoint as child process. When the app exits, init logs exit info and cleanly shuts down the VM via `reboot(POWER_OFF)`.
-- **Systemd mode** (auto-detected on host): Init chroots to container rootfs, then execs /sbin/init so systemd becomes PID 1
+- **Exec mode** (default): Init chroots to container rootfs, starts guest-agent, and waits on an event-driven readiness signal (pipe FD, 10s timeout) before launching the entrypoint. When the app exits, init logs exit info and cleanly shuts down the VM via `reboot(POWER_OFF)`.
+- **Systemd mode** (auto-detected on host): Init injects systemd units (guest-agent plus async kernel-headers worker), emits handoff marker, then execs /sbin/init so systemd becomes PID 1.
+
+**Boot progress sentinels:** Init and guest-agent emit machine-parseable markers to serial console:
+- `HYPEMAN-PROGRAM-START ts=... mode=...`
+- `HYPEMAN-AGENT-READY ts=...`
+- `HYPEMAN-HEADERS-START ts=...`
+- `HYPEMAN-HEADERS-READY ts=...`
+- `HYPEMAN-HEADERS-FAILED ts=... error="..."`
+
+Host state derivation uses these sentinels to report `Initializing` until both required markers are present (or until `skip_guest_agent=true` bypasses the agent marker requirement).
 
 **Graceful shutdown:** The host sends a `Shutdown` gRPC RPC to the guest-agent, which signals PID 1 (init). Init forwards the signal to the entrypoint child process. If the app doesn't exit within the stop timeout, the host falls back to hypervisor shutdown and then force-kills the hypervisor process if still needed.
 
@@ -87,13 +96,16 @@ via `INIT_MODE` in the config disk.
 
 ## Kernel Headers
 
-Kernel headers are bundled in the initrd and automatically installed at boot, enabling DKMS to build out-of-tree kernel modules (e.g., NVIDIA vGPU drivers).
+Kernel headers are bundled in the initrd and installed asynchronously after boot handoff, enabling DKMS to build out-of-tree kernel modules (e.g., NVIDIA vGPU drivers) without delaying `Running`.
 
 **Why:** Guest images come with headers for their native kernel (e.g., Ubuntu's 5.15), but hypeman VMs run a custom kernel. Without matching headers, DKMS cannot compile drivers.
 
-**How:** The initrd includes `kernel-headers.tar.gz` from the same release as the kernel. At boot, init extracts headers to `/usr/src/linux-headers-{version}/`, creates the `/lib/modules/{version}/build` symlink, and removes mismatched headers from the guest image.
+**How:** The initrd includes `kernel-headers.tar.gz` from the same release as the kernel. A background worker (exec mode) or injected systemd oneshot unit (systemd mode) performs installation:
+- writes `/run/hypeman/kernel-headers.status` as `pending|running|ready|failed`
+- fast-path skips extraction when matching headers + build symlink are already valid
+- otherwise extracts headers to `/usr/src/linux-headers-{version}/`, creates `/lib/modules/{version}/build`, and removes mismatched headers from the guest image
 
-**Result:** Guests can `apt install nvidia-driver-xxx` and DKMS builds modules for the running kernel automatically.
+**Result:** Guests can `apt install nvidia-driver-xxx` and DKMS builds modules for the running kernel automatically once headers status reaches `ready`.
 
 ## Kernel Sources
 
@@ -172,14 +184,14 @@ Files downloaded/built once per version, reused for all instances using that ver
 
 ```
 lib/system/init/
-    main.go           # Entry point, orchestrates boot
+    main.go           # Entry point, orchestrates staged boot
     init.sh           # Shell wrapper (mounts /proc, /sys, /dev before Go runtime)
     mount.go          # Mount operations (overlay, bind mounts)
     config.go         # Parse config disk
     network.go        # Network configuration
     headers.go        # Kernel headers setup for DKMS
     volumes.go        # Volume mounting
-    mode_exec.go      # Exec mode: chroot, run entrypoint, wait on guest-agent
-    mode_systemd.go   # Systemd mode: chroot + exec /sbin/init
+    mode_exec.go      # Exec mode: chroot, event-driven agent gate, run entrypoint
+    mode_systemd.go   # Systemd mode: inject units + chroot + handoff marker + exec /sbin/init
     logger.go         # Human-readable logging to hypeman operations log
 ```

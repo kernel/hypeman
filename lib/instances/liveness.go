@@ -42,7 +42,7 @@ func (a *instanceLivenessAdapter) IsInstanceRunning(ctx context.Context, instanc
 
 	// Consider instance "running" if the VMM is active (any of these states means VM is using the device)
 	switch inst.State {
-	case StateRunning, StatePaused, StateCreated:
+	case StateRunning, StateInitializing, StatePaused, StateCreated:
 		return true
 	default:
 		// StateStopped, StateStandby, StateShutdown, StateUnknown

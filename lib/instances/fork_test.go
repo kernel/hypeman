@@ -380,7 +380,10 @@ func TestForkCloudHypervisorFromRunningNetwork(t *testing.T) {
 		NetworkEnabled: true,
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = manager.DeleteInstance(context.Background(), source.Id) })
+	sourceID := source.Id
+	t.Cleanup(func() { _ = manager.DeleteInstance(context.Background(), sourceID) })
+	source, err = waitForInstanceState(ctx, manager, source.Id, StateRunning, 20*time.Second)
+	require.NoError(t, err)
 	require.NoError(t, waitForVMReady(ctx, source.SocketPath, 5*time.Second))
 
 	assert.NotEmpty(t, source.IP)
@@ -399,6 +402,9 @@ func TestForkCloudHypervisorFromRunningNetwork(t *testing.T) {
 		TargetState: StateRunning,
 	})
 	require.NoError(t, err)
+	require.Contains(t, []State{StateInitializing, StateRunning}, forked.State)
+	forked, err = waitForInstanceState(ctx, manager, forked.Id, StateRunning, 20*time.Second)
+	require.NoError(t, err)
 	require.Equal(t, StateRunning, forked.State)
 	forkedID := forked.Id
 	t.Cleanup(func() { _ = manager.DeleteInstance(context.Background(), forkedID) })
@@ -406,6 +412,10 @@ func TestForkCloudHypervisorFromRunningNetwork(t *testing.T) {
 	// Source should be restored and still reachable by its private IP.
 	sourceAfterFork, err := manager.GetInstance(ctx, source.Id)
 	require.NoError(t, err)
+	if sourceAfterFork.State != StateRunning {
+		sourceAfterFork, err = waitForInstanceState(ctx, manager, source.Id, StateRunning, 20*time.Second)
+		require.NoError(t, err)
+	}
 	require.Equal(t, StateRunning, sourceAfterFork.State)
 	require.NotEmpty(t, sourceAfterFork.IP)
 	assertHostCanReachNginx(t, sourceAfterFork.IP, 80, 60*time.Second)

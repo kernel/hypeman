@@ -73,3 +73,21 @@ func TestSnapshotParamPaths(t *testing.T) {
 	assert.False(t, load.ResumeVM)
 	require.Len(t, load.NetworkOverrides, 1)
 }
+
+func TestToBalloonConfig(t *testing.T) {
+	cfg := hypervisor.VMConfig{
+		GuestMemory: hypervisor.GuestMemoryConfig{
+			EnableBalloon:     true,
+			DeflateOnOOM:      true,
+			FreePageHinting:   true,
+			FreePageReporting: true,
+		},
+	}
+
+	b := toBalloonConfig(cfg)
+	require.NotNil(t, b)
+	assert.Equal(t, int64(0), b.AmountMib)
+	assert.True(t, b.DeflateOnOOM)
+	assert.True(t, b.FreePageHinting)
+	assert.True(t, b.FreePageReporting)
+}

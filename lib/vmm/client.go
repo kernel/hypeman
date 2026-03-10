@@ -16,6 +16,8 @@ import (
 	"go.opentelemetry.io/otel/metric"
 )
 
+const cloudHypervisorSocketReadyTimeout = 10 * time.Second
+
 // VMM wraps the generated Cloud Hypervisor client (API v0.3.0)
 type VMM struct {
 	*ClientWithResponses
@@ -147,11 +149,12 @@ func StartProcessWithArgs(ctx context.Context, p *paths.Paths, version CHVersion
 
 	pid := cmd.Process.Pid
 
-	// Wait for socket to be ready (use fresh context with timeout, not parent context)
-	waitCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// Wait for socket to be ready (use fresh context with timeout, not parent context).
+	// CI can be heavily loaded; a larger budget avoids transient CH boot races.
+	waitCtx, cancel := context.WithTimeout(context.Background(), cloudHypervisorSocketReadyTimeout)
 	defer cancel()
 
-	if err := waitForSocket(waitCtx, socketPath, 5*time.Second); err != nil {
+	if err := waitForSocket(waitCtx, socketPath, cloudHypervisorSocketReadyTimeout); err != nil {
 		// Read vmm.log to understand why socket wasn't created
 		vmmLogPath := filepath.Join(logsDir, "vmm.log")
 		if logData, readErr := os.ReadFile(vmmLogPath); readErr == nil && len(logData) > 0 {

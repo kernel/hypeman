@@ -8,6 +8,7 @@ type VMConfig struct {
 	MemoryBytes  int64
 	HotplugBytes int64
 	Topology     *CPUTopology
+	GuestMemory  GuestMemoryConfig
 
 	// Storage
 	Disks []DiskConfig
@@ -29,6 +30,16 @@ type VMConfig struct {
 	KernelPath string
 	InitrdPath string
 	KernelArgs string
+}
+
+// GuestMemoryConfig contains hypervisor-agnostic guest memory feature toggles.
+type GuestMemoryConfig struct {
+	EnableBalloon     bool
+	FreePageReporting bool
+	DeflateOnOOM      bool
+	FreePageHinting   bool
+	// RequireBalloon controls whether VM startup should fail if balloon setup fails.
+	RequireBalloon bool
 }
 
 // CPUTopology defines the virtual CPU topology

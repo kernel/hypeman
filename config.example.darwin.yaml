@@ -34,6 +34,11 @@ port: "8080"
 # - "cloud-hypervisor" and "qemu" are NOT supported on macOS
 hypervisor:
   default: vz
+  memory:
+    enabled: false
+    kernel_page_init_mode: hardened
+    reclaim_enabled: true
+    vz_balloon_required: true
 
 # =============================================================================
 # Network Configuration (DIFFERENT ON MACOS)

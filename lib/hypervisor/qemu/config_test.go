@@ -159,3 +159,20 @@ func TestBuildArgs_NoSerialLog(t *testing.T) {
 	assert.Contains(t, args, "-serial")
 	assert.Contains(t, args, "stdio")
 }
+
+func TestBuildArgs_GuestMemoryBalloon(t *testing.T) {
+	cfg := hypervisor.VMConfig{
+		VCPUs:       1,
+		MemoryBytes: 512 * 1024 * 1024,
+		GuestMemory: hypervisor.GuestMemoryConfig{
+			EnableBalloon:     true,
+			DeflateOnOOM:      true,
+			FreePageReporting: true,
+			FreePageHinting:   true,
+		},
+	}
+
+	args := BuildArgs(cfg)
+	assert.Contains(t, args, "-device")
+	assert.Contains(t, args, "virtio-balloon-pci,deflate-on-oom=on,free-page-reporting=on,free-page-hint=on")
+}
