@@ -396,7 +396,7 @@ func (m *manager) applyForkTargetState(ctx context.Context, forkID string, targe
 		if err != nil {
 			return nil, err
 		}
-		if inst != nil && inst.State == StateRunning {
+		if inst != nil && (inst.State == StateRunning || inst.State == StateInitializing) {
 			if err := ensureGuestAgentReadyForForkPhase(ctx, &inst.StoredMetadata, "before returning running fork instance"); err != nil {
 				return nil, fmt.Errorf("wait for forked guest agent readiness: %w", err)
 			}
