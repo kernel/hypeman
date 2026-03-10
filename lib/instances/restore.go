@@ -190,10 +190,23 @@ func (m *manager) restoreInstance(
 				Netmask:   alloc.Netmask,
 				TAPDevice: alloc.TAPDevice,
 			}
-			if _, err := m.maybeRegisterEgressProxy(ctx, stored, proxyCfg); err != nil {
+			proxyGuestConfig, err := m.maybeRegisterEgressProxy(ctx, stored, proxyCfg)
+			if err != nil {
 				log.ErrorContext(ctx, "failed to configure egress proxy", "instance_id", id, "error", err)
 				releaseNetwork()
 				return nil, fmt.Errorf("configure egress proxy: %w", err)
+			}
+			imageInfo, err := m.imageManager.GetImage(ctx, stored.Image)
+			if err != nil {
+				log.ErrorContext(ctx, "failed to load image for config disk refresh", "instance_id", id, "image", stored.Image, "error", err)
+				releaseNetwork()
+				return nil, fmt.Errorf("get image for restore config disk: %w", err)
+			}
+			instForConfig := &Instance{StoredMetadata: *stored}
+			if err := m.createConfigDisk(ctx, instForConfig, imageInfo, proxyCfg, proxyGuestConfig); err != nil {
+				log.ErrorContext(ctx, "failed to refresh config disk for restore", "instance_id", id, "error", err)
+				releaseNetwork()
+				return nil, fmt.Errorf("refresh restore config disk: %w", err)
 			}
 			if stored.EgressProxy != nil && stored.EgressProxy.Enabled {
 				proxyRegistered = true

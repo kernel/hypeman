@@ -41,6 +41,7 @@ func TestCreateImage_Async(t *testing.T) {
 	// Create images before alpine to populate the queue
 	t.Log("Creating image queue...")
 	queueImages := []string{
+		apiTestImageRef(t, "docker.io/library/busybox:latest"),
 		apiTestImageRef(t, "docker.io/library/nginx:alpine"),
 	}
 	for _, name := range queueImages {
