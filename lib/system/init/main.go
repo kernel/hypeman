@@ -89,8 +89,10 @@ func main() {
 		}()
 		setupWG.Wait()
 	} else {
-		runNetworkSetup()
+		// When /etc (or /etc/*) is volume-mounted, configure network after volumes
+		// so resolv.conf is written into the mounted path instead of being hidden.
 		runVolumesSetup()
+		runNetworkSetup()
 	}
 
 	// Phase 6: Bind mount filesystems to new root
