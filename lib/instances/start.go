@@ -159,6 +159,11 @@ func (m *manager) startInstance(
 
 	// Return instance with derived state (should be Running now)
 	finalInst := m.toInstance(ctx, meta)
+	if finalInst.BootMarkersHydrated {
+		if err := m.saveMetadata(meta); err != nil {
+			log.WarnContext(ctx, "failed to persist hydrated boot markers after start", "instance_id", id, "error", err)
+		}
+	}
 	// Record metrics
 	if m.metrics != nil {
 		m.recordDuration(ctx, m.metrics.startDuration, start, "success", stored.HypervisorType)
