@@ -12,7 +12,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 )
 
@@ -151,12 +150,4 @@ func signHostCertificate(caCert *x509.Certificate, caKey *rsa.PrivateKey, host s
 		}
 	}
 	return &tlsCert, nil
-}
-
-func normalizeHost(rawHost string) string {
-	host := strings.TrimSpace(rawHost)
-	if h, _, err := net.SplitHostPort(host); err == nil {
-		return h
-	}
-	return host
 }
