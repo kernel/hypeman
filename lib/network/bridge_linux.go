@@ -4,6 +4,7 @@ package network
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"net"
@@ -11,11 +12,30 @@ import (
 	"os/exec"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
 )
+
+const netlinkDumpRetryCount = 3
+
+func listBridgeAddrsWithRetry(link netlink.Link) ([]netlink.Addr, error) {
+	var err error
+	for i := 0; i < netlinkDumpRetryCount; i++ {
+		addrs, listErr := netlink.AddrList(link, netlink.FAMILY_V4)
+		if listErr == nil {
+			return addrs, nil
+		}
+		if !errors.Is(listErr, netlink.ErrDumpInterrupted) {
+			return nil, listErr
+		}
+		err = listErr
+		time.Sleep(10 * time.Millisecond)
+	}
+	return nil, err
+}
 
 // checkSubnetConflicts checks if the configured subnet conflicts with existing routes.
 // Returns an error if a conflict is detected, with guidance on how to resolve it.
@@ -88,7 +108,7 @@ func (m *manager) createBridge(ctx context.Context, name, gateway, subnet string
 	existing, err := netlink.LinkByName(name)
 	if err == nil {
 		// Bridge exists - verify it has the expected gateway IP
-		addrs, err := netlink.AddrList(existing, netlink.FAMILY_V4)
+		addrs, err := listBridgeAddrsWithRetry(existing)
 		if err != nil {
 			return fmt.Errorf("list bridge addresses: %w", err)
 		}
