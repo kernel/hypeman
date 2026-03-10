@@ -26,6 +26,13 @@ data_dir: /var/lib/hypeman
 #   default: cloud-hypervisor
 #   # Optional: use a custom Firecracker binary path instead of the embedded one.
 #   # firecracker_binary_path: /usr/local/bin/firecracker
+#   memory:
+#     enabled: false
+#     # performance: init_on_alloc=0 init_on_free=0 (better density)
+#     # hardened: init_on_alloc=1 init_on_free=1 (stronger hardening)
+#     kernel_page_init_mode: hardened
+#     reclaim_enabled: true
+#     vz_balloon_required: true
 
 # =============================================================================
 # Network Configuration

@@ -419,7 +419,7 @@ func TestInstanceLifecycle_StopStart(t *testing.T) {
 
 	// 1. Create instance
 	t.Log("Creating instance...")
-	networkEnabled := true
+	networkEnabled := false
 	createResp, err := svc.CreateInstance(ctx(), oapi.CreateInstanceRequestObject{
 		Body: &oapi.CreateInstanceRequest{
 			Name:  "test-lifecycle",

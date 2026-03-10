@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -37,7 +38,7 @@ const (
 	// clientCreateTimeout is how long to retry QMP client creation after the
 	// socket appears. Under high parallel load the socket can accept connections
 	// slightly later than file creation/availability.
-	clientCreateTimeout = 3 * time.Second
+	clientCreateTimeout = 10 * time.Second
 )
 
 func init() {
@@ -186,11 +187,7 @@ func (s *Starter) startQEMUProcess(ctx context.Context, p *paths.Paths, version 
 	socketWaitStart := time.Now()
 	if err := waitForSocket(socketPath, socketWaitTimeout); err != nil {
 		cu.Clean()
-		vmmLogPath := filepath.Join(logsDir, "vmm.log")
-		if logData, readErr := os.ReadFile(vmmLogPath); readErr == nil && len(logData) > 0 {
-			return 0, nil, nil, fmt.Errorf("%w; vmm.log: %s", err, string(logData))
-		}
-		return 0, nil, nil, err
+		return 0, nil, nil, appendVMMLog(err, logsDir)
 	}
 	log.DebugContext(ctx, "QMP socket ready", "duration_ms", time.Since(socketWaitStart).Milliseconds())
 
@@ -205,7 +202,7 @@ func (s *Starter) startQEMUProcess(ctx context.Context, p *paths.Paths, version 
 		}
 		if time.Now().After(clientDeadline) {
 			cu.Clean()
-			return 0, nil, nil, fmt.Errorf("create client: %w", err)
+			return 0, nil, nil, appendVMMLog(fmt.Errorf("create client: %w", err), logsDir)
 		}
 		time.Sleep(socketPollInterval)
 	}
@@ -218,12 +215,61 @@ func (s *Starter) startQEMUProcess(ctx context.Context, p *paths.Paths, version 
 func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, socketPath string, config hypervisor.VMConfig) (int, hypervisor.Hypervisor, error) {
 	log := logger.FromContext(ctx)
 
-	// Build command arguments: QMP socket + VM configuration
-	args := buildQMPArgs(socketPath)
-	args = append(args, BuildArgs(config)...)
+	// Some distro QEMU builds may not support newer balloon sub-options.
+	// Retry with progressively more conservative balloon args before failing.
+	attempts := []hypervisor.VMConfig{config}
+	if config.GuestMemory.EnableBalloon && (config.GuestMemory.FreePageReporting || config.GuestMemory.FreePageHinting) {
+		fallback := config
+		fallback.GuestMemory.FreePageReporting = false
+		fallback.GuestMemory.FreePageHinting = false
+		attempts = append(attempts, fallback)
+	}
+	if config.GuestMemory.EnableBalloon && config.GuestMemory.DeflateOnOOM {
+		fallback := config
+		fallback.GuestMemory.FreePageReporting = false
+		fallback.GuestMemory.FreePageHinting = false
+		fallback.GuestMemory.DeflateOnOOM = false
+		attempts = append(attempts, fallback)
+	}
 
-	pid, hv, cu, err := s.startQEMUProcess(ctx, p, version, socketPath, args)
-	if err != nil {
+	var (
+		pid     int
+		hv      *QEMU
+		cu      *cleanup.Cleanup
+		err     error
+		booted  hypervisor.VMConfig
+		started bool
+	)
+	for i, attempt := range attempts {
+		// Retry the same attempt once for transient monitor/socket startup races.
+		for transientRetry := 0; transientRetry < 2; transientRetry++ {
+			// Build command arguments: QMP socket + VM configuration
+			args := buildQMPArgs(socketPath)
+			args = append(args, BuildArgs(attempt)...)
+			pid, hv, cu, err = s.startQEMUProcess(ctx, p, version, socketPath, args)
+			if err == nil {
+				booted = attempt
+				started = true
+				break
+			}
+			if transientRetry == 0 && shouldRetrySameConfig(err) {
+				_ = os.Remove(socketPath)
+				time.Sleep(100 * time.Millisecond)
+				log.WarnContext(ctx, "qemu start hit transient startup race, retrying with same configuration", "error", err)
+				continue
+			}
+			break
+		}
+		if started {
+			break
+		}
+		if i < len(attempts)-1 && shouldRetryWithReducedBalloon(err) {
+			// Ensure a failed prior attempt doesn't keep the old socket path reserved.
+			_ = os.Remove(socketPath)
+			time.Sleep(100 * time.Millisecond)
+			log.WarnContext(ctx, "qemu start failed, retrying with reduced balloon features", "attempt", i+1, "error", err)
+			continue
+		}
 		return 0, nil, err
 	}
 	defer cu.Clean()
@@ -231,13 +277,60 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 	// Save config for potential restore later
 	// QEMU migration files only contain memory state, not device config
 	instanceDir := filepath.Dir(socketPath)
-	if err := saveVMConfig(instanceDir, config); err != nil {
+	if err := saveVMConfig(instanceDir, booted); err != nil {
 		// Non-fatal - restore just won't work
 		log.WarnContext(ctx, "failed to save VM config for restore", "error", err)
 	}
 
 	cu.Release()
 	return pid, hv, nil
+}
+
+func appendVMMLog(err error, logsDir string) error {
+	vmmLogPath := filepath.Join(logsDir, "vmm.log")
+	if logData, readErr := os.ReadFile(vmmLogPath); readErr == nil && len(logData) > 0 {
+		return fmt.Errorf("%w; vmm.log: %s", err, string(logData))
+	}
+	return err
+}
+
+func shouldRetrySameConfig(err error) bool {
+	if err == nil {
+		return false
+	}
+	if shouldRetryWithReducedBalloon(err) {
+		return false
+	}
+
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "connection refused") ||
+		strings.Contains(msg, "no such file or directory") ||
+		strings.Contains(msg, "timed out")
+}
+
+func shouldRetryWithReducedBalloon(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	msg := strings.ToLower(err.Error())
+	mentionsBalloonOption := strings.Contains(msg, "virtio-balloon") ||
+		strings.Contains(msg, "free-page-reporting") ||
+		strings.Contains(msg, "free-page-hint") ||
+		strings.Contains(msg, "deflate-on-oom")
+	if !mentionsBalloonOption {
+		return false
+	}
+
+	return strings.Contains(msg, "not found") ||
+		strings.Contains(msg, "unknown property") ||
+		strings.Contains(msg, "unknown option") ||
+		strings.Contains(msg, "invalid parameter") ||
+		strings.Contains(msg, "invalid option") ||
+		strings.Contains(msg, "invalid value") ||
+		strings.Contains(msg, "requires 'iothread'") ||
+		strings.Contains(msg, "requires iothread") ||
+		strings.Contains(msg, "is unexpected")
 }
 
 // RestoreVM starts QEMU and restores VM state from a snapshot.

@@ -13,9 +13,25 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync"
+
+	"github.com/kernel/hypeman/lib/vmconfig"
 )
 
 func main() {
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case headersWorkerArg:
+			runKernelHeadersWorker(NewLogger(), initrdKernelHeadersPaths)
+			return
+		case headersWorkerGuestArg:
+			runKernelHeadersWorker(NewLogger(), guestKernelHeadersPaths)
+			return
+		}
+	}
+
 	log := NewLogger()
 	log.Info("hypeman-init:boot", "init starting")
 
@@ -38,20 +54,45 @@ func main() {
 		dropToShell()
 	}
 
-	// Phase 4: Configure network (shared between modes)
-	if cfg.NetworkEnabled {
+	runNetworkSetup := func() {
+		if !cfg.NetworkEnabled {
+			return
+		}
 		if err := configureNetwork(log, cfg); err != nil {
 			log.Error("hypeman-init:network", "failed to configure network", err)
 			// Continue anyway - network isn't always required
 		}
 	}
-
-	// Phase 5: Mount volumes
-	if len(cfg.VolumeMounts) > 0 {
+	runVolumesSetup := func() {
+		if len(cfg.VolumeMounts) == 0 {
+			return
+		}
 		if err := mountVolumes(log, cfg); err != nil {
 			log.Error("hypeman-init:volumes", "failed to mount volumes", err)
 			// Continue anyway
 		}
+	}
+
+	// Phase 4/5: Run setup tasks.
+	// Network + volume setup are parallelized only when mounted paths are disjoint
+	// from /etc, because network setup writes /overlay/newroot/etc/resolv.conf.
+	if shouldRunNetworkAndVolumesInParallel(cfg) {
+		var setupWG sync.WaitGroup
+		setupWG.Add(2)
+		go func() {
+			defer setupWG.Done()
+			runNetworkSetup()
+		}()
+		go func() {
+			defer setupWG.Done()
+			runVolumesSetup()
+		}()
+		setupWG.Wait()
+	} else {
+		// When /etc (or /etc/*) is volume-mounted, configure network after volumes
+		// so resolv.conf is written into the mounted path instead of being hidden.
+		runVolumesSetup()
+		runNetworkSetup()
 	}
 
 	// Phase 6: Bind mount filesystems to new root
@@ -66,14 +107,12 @@ func main() {
 		// Continue anyway - exec will still work, just no remote access
 	}
 
-	// Phase 8: Setup kernel headers for DKMS (can be skipped via config)
+	// Phase 8: Start async kernel headers setup for exec mode.
+	// In systemd mode, service injection is handled during runSystemdMode.
 	if cfg.SkipKernelHeaders {
 		log.Info("hypeman-init:headers", "skipping kernel headers setup (skip_kernel_headers=true)")
-	} else {
-		if err := setupKernelHeaders(log); err != nil {
-			log.Error("hypeman-init:headers", "failed to setup kernel headers", err)
-			// Continue anyway - only needed for DKMS module building
-		}
+	} else if cfg.InitMode == "exec" {
+		startKernelHeadersWorkerAsync(log)
 	}
 
 	// Phase 9: Mode-specific execution
@@ -84,6 +123,22 @@ func main() {
 		log.Info("hypeman-init:mode", "entering exec mode")
 		runExecMode(log, cfg)
 	}
+}
+
+func shouldRunNetworkAndVolumesInParallel(cfg *vmconfig.Config) bool {
+	if !cfg.NetworkEnabled || len(cfg.VolumeMounts) == 0 {
+		return false
+	}
+
+	for _, vol := range cfg.VolumeMounts {
+		// Normalize to an absolute path inside the guest.
+		mountPath := filepath.Clean("/" + strings.TrimPrefix(vol.Path, "/"))
+		if mountPath == "/" || mountPath == "/etc" || strings.HasPrefix(mountPath, "/etc/") {
+			return false
+		}
+	}
+
+	return true
 }
 
 // dropToShell drops to an interactive shell for debugging when boot fails

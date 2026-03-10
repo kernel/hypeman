@@ -32,6 +32,10 @@ type ShimConfig struct {
 	InitrdPath string `json:"initrd_path"`
 	KernelArgs string `json:"kernel_args"`
 
+	// Guest memory reclaim
+	EnableMemoryBalloon  bool `json:"enable_memory_balloon,omitempty"`
+	RequireMemoryBalloon bool `json:"require_memory_balloon,omitempty"`
+
 	// Socket paths (where shim should listen)
 	ControlSocket string `json:"control_socket"`
 	VsockSocket   string `json:"vsock_socket"`

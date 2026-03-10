@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"syscall"
 
 	"al.essio.dev/pkg/shellescape"
@@ -29,6 +30,16 @@ func runSystemdMode(log *Logger, cfg *vmconfig.Config) {
 			// Continue anyway - VM will work, just without agent
 		}
 	}
+	if cfg.SkipKernelHeaders {
+		log.Info("hypeman-init:systemd", "skipping kernel headers service injection (skip_kernel_headers=true)")
+	} else {
+		log.Info("hypeman-init:systemd", "injecting hypeman-kernel-headers.service")
+		if err := injectHeadersService(newroot); err != nil {
+			log.Error("hypeman-init:systemd", "failed to inject headers service", err)
+			_ = writeKernelHeadersStatus(initrdKernelHeadersPaths.statusPath, headersStatusFailed)
+			log.Info("hypeman-init:systemd", formatHeadersFailedSentinel(err))
+		}
+	}
 
 	// Change root to the new filesystem using chroot
 	log.Info("hypeman-init:systemd", "executing chroot")
@@ -52,6 +63,7 @@ func runSystemdMode(log *Logger, cfg *vmconfig.Config) {
 
 	// Exec systemd - this replaces the current process
 	log.Info("hypeman-init:systemd", fmt.Sprintf("exec %v", argv))
+	log.Info("hypeman-init:systemd", formatProgramStartSentinel("systemd"))
 
 	// syscall.Exec replaces the current process with the new one
 	// Use buildEnv to include user's environment variables from the image/instance config
@@ -68,8 +80,6 @@ func runSystemdMode(log *Logger, cfg *vmconfig.Config) {
 func injectAgentService(newroot string, env map[string]string) error {
 	serviceContent := `[Unit]
 Description=Hypeman Guest Agent
-After=network.target
-Wants=network.target
 
 [Service]
 Type=simple
@@ -77,8 +87,8 @@ ExecStart=/opt/hypeman/guest-agent
 EnvironmentFile=-/etc/hypeman/env
 Restart=always
 RestartSec=3
-StandardOutput=journal
-StandardError=journal
+StandardOutput=journal+console
+StandardError=journal+console
 
 [Install]
 WantedBy=multi-user.target
@@ -116,7 +126,10 @@ WantedBy=multi-user.target
 	// Enable the service by creating a symlink in wants directory
 	symlinkPath := wantsDir + "/hypeman-agent.service"
 	// Use relative path for the symlink
-	return os.Symlink("../hypeman-agent.service", symlinkPath)
+	if err := os.Symlink("../hypeman-agent.service", symlinkPath); err != nil && !os.IsExist(err) {
+		return err
+	}
+	return nil
 }
 
 // buildEnvFileContent creates systemd environment file content from env map.
@@ -140,4 +153,98 @@ func buildEnvFileContent(env map[string]string) string {
 	}
 
 	return content
+}
+
+func injectHeadersService(newroot string) error {
+	if err := stageKernelHeadersAssetsForSystemd(newroot); err != nil {
+		return err
+	}
+	if err := writeKernelHeadersStatus(initrdKernelHeadersPaths.statusPath, headersStatusPending); err != nil {
+		return err
+	}
+
+	serviceContent := `[Unit]
+Description=Hypeman Kernel Headers Setup
+After=local-fs.target
+ConditionPathExists=/opt/hypeman/hypeman-init
+ConditionPathExists=/opt/hypeman/kernel-headers.tar.gz
+
+[Service]
+Type=oneshot
+ExecStart=/opt/hypeman/hypeman-init --headers-worker-guest
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target
+`
+
+	serviceDir := filepath.Join(newroot, "etc/systemd/system")
+	wantsDir := filepath.Join(serviceDir, "multi-user.target.wants")
+	if err := os.MkdirAll(serviceDir, 0755); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(wantsDir, 0755); err != nil {
+		return err
+	}
+
+	servicePath := filepath.Join(serviceDir, "hypeman-kernel-headers.service")
+	if err := os.WriteFile(servicePath, []byte(serviceContent), 0644); err != nil {
+		return err
+	}
+
+	symlinkPath := filepath.Join(wantsDir, "hypeman-kernel-headers.service")
+	if err := os.Symlink("../hypeman-kernel-headers.service", symlinkPath); err != nil && !os.IsExist(err) {
+		return err
+	}
+	return nil
+}
+
+func stageKernelHeadersAssetsForSystemd(newroot string) error {
+	const (
+		dstDir        = "opt/hypeman"
+		dstInitBinRel = "opt/hypeman/hypeman-init"
+		dstTarballRel = "opt/hypeman/kernel-headers.tar.gz"
+		sourceTarball = "/kernel-headers.tar.gz"
+	)
+
+	srcInitBin, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolve init binary path: %w", err)
+	}
+
+	guestDstDir := filepath.Join(newroot, dstDir)
+	if err := os.MkdirAll(guestDstDir, 0755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", guestDstDir, err)
+	}
+
+	initData, err := os.ReadFile(srcInitBin)
+	if err != nil {
+		return fmt.Errorf("read init binary: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(newroot, dstInitBinRel), initData, 0755); err != nil {
+		return fmt.Errorf("write init binary: %w", err)
+	}
+
+	if _, err := os.Stat(sourceTarball); err != nil {
+		return fmt.Errorf("stat headers tarball: %w", err)
+	}
+
+	targetTarball := filepath.Join(newroot, dstTarballRel)
+	if _, err := os.Stat(targetTarball); os.IsNotExist(err) {
+		if err := os.WriteFile(targetTarball, []byte{}, 0644); err != nil {
+			return fmt.Errorf("create target tarball file: %w", err)
+		}
+	} else if err != nil {
+		return fmt.Errorf("stat target tarball file: %w", err)
+	}
+
+	if err := bindMount(sourceTarball, targetTarball); err != nil {
+		return fmt.Errorf("bind mount headers tarball: %w", err)
+	}
+
+	return nil
 }

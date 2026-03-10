@@ -196,7 +196,7 @@ func run() error {
 		// Initialize to empty slice (not nil) so cleanup runs even with no running VMs
 		preserveTAPs = []string{}
 		for _, inst := range allInstances {
-			if inst.State == instances.StateRunning || inst.State == instances.StateUnknown {
+			if inst.State == instances.StateRunning || inst.State == instances.StateInitializing || inst.State == instances.StateUnknown {
 				preserveTAPs = append(preserveTAPs, inst.Id)
 			}
 		}

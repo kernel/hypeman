@@ -163,8 +163,17 @@ type CapacityConfig struct {
 
 // HypervisorConfig holds hypervisor settings.
 type HypervisorConfig struct {
-	Default               string `koanf:"default"`
-	FirecrackerBinaryPath string `koanf:"firecracker_binary_path"`
+	Default               string                 `koanf:"default"`
+	FirecrackerBinaryPath string                 `koanf:"firecracker_binary_path"`
+	Memory                HypervisorMemoryConfig `koanf:"memory"`
+}
+
+// HypervisorMemoryConfig holds guest memory management settings.
+type HypervisorMemoryConfig struct {
+	Enabled            bool   `koanf:"enabled"`
+	KernelPageInitMode string `koanf:"kernel_page_init_mode"`
+	ReclaimEnabled     bool   `koanf:"reclaim_enabled"`
+	VZBalloonRequired  bool   `koanf:"vz_balloon_required"`
 }
 
 // GPUConfig holds GPU-related settings.
@@ -323,6 +332,12 @@ func defaultConfig() *Config {
 		Hypervisor: HypervisorConfig{
 			Default:               "cloud-hypervisor",
 			FirecrackerBinaryPath: "",
+			Memory: HypervisorMemoryConfig{
+				Enabled:            false,
+				KernelPageInitMode: "hardened",
+				ReclaimEnabled:     true,
+				VZBalloonRequired:  true,
+			},
 		},
 
 		GPU: GPUConfig{
@@ -443,6 +458,9 @@ func (c *Config) Validate() error {
 	}
 	if c.SnapshotTransfer.MaxConcurrent <= 0 {
 		return fmt.Errorf("snapshot_transfer.max_concurrent must be positive, got %d", c.SnapshotTransfer.MaxConcurrent)
+	}
+	if c.Hypervisor.Memory.KernelPageInitMode != "performance" && c.Hypervisor.Memory.KernelPageInitMode != "hardened" {
+		return fmt.Errorf("hypervisor.memory.kernel_page_init_mode must be one of {performance,hardened}, got %q", c.Hypervisor.Memory.KernelPageInitMode)
 	}
 	return nil
 }

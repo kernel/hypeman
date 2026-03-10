@@ -8,6 +8,8 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/kernel/hypeman/lib/logger"
 )
@@ -29,6 +31,23 @@ var ErrTailNotFound = fmt.Errorf("tail command not found: required for log strea
 
 // ErrLogNotFound is returned when the requested log file doesn't exist
 var ErrLogNotFound = fmt.Errorf("log file not found")
+
+var appLogNoiseMarkers = []string{
+	"HYPEMAN-PROGRAM-START",
+	"HYPEMAN-AGENT-READY",
+	"HYPEMAN-HEADERS-START",
+	"HYPEMAN-HEADERS-READY",
+	"HYPEMAN-HEADERS-FAILED",
+}
+
+func shouldSkipAppLogLine(line string) bool {
+	for _, marker := range appLogNoiseMarkers {
+		if strings.Contains(line, marker) {
+			return true
+		}
+	}
+	return false
+}
 
 // streamInstanceLogs streams instance logs from the specified source
 // Returns last N lines, then continues following if follow=true
@@ -90,11 +109,15 @@ func (m *manager) streamInstanceLogs(ctx context.Context, id string, tail int, f
 
 		scanner := bufio.NewScanner(stdout)
 		for scanner.Scan() {
+			line := scanner.Text()
+			if source == LogSourceApp && shouldSkipAppLogLine(line) {
+				continue
+			}
 			select {
 			case <-ctx.Done():
 				log.DebugContext(ctx, "log stream cancelled", "instance_id", id)
 				return
-			case out <- scanner.Text():
+			case out <- line:
 			}
 		}
 
@@ -162,5 +185,24 @@ func rotateLogIfNeeded(path string, maxBytes int64, maxFiles int) error {
 		return fmt.Errorf("truncate log: %w", err)
 	}
 
+	return nil
+}
+
+// archiveAppLogForBoot moves the current serial console log out of the active
+// path before a new boot starts, preventing stale boot markers from prior runs
+// from affecting current state derivation.
+func (m *manager) archiveAppLogForBoot(id string) error {
+	logPath := m.paths.InstanceAppLog(id)
+	if _, err := os.Stat(logPath); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+
+	archivedPath := fmt.Sprintf("%s.prev.%d", logPath, time.Now().UTC().UnixNano())
+	if err := os.Rename(logPath, archivedPath); err != nil {
+		return err
+	}
 	return nil
 }
