@@ -15,7 +15,7 @@ type storageModel struct {
 	InstanceID     string           `json:"instance_id"`
 	Interval       string           `json:"interval"`
 	NamePrefix     string           `json:"name_prefix,omitempty"`
-	Metadata       tags.Metadata    `json:"metadata,omitempty"`
+	Metadata       tags.Tags        `json:"metadata,omitempty"`
 	Retention      retentionStorage `json:"retention"`
 	NextRunAt      time.Time        `json:"next_run_at"`
 	LastRunAt      *time.Time       `json:"last_run_at,omitempty"`

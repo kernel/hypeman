@@ -30,9 +30,9 @@ func (s *ApiService) CreateInstanceSnapshot(ctx context.Context, request oapi.Cr
 	}
 
 	result, err := s.InstanceManager.CreateSnapshot(ctx, inst.Id, instances.CreateSnapshotRequest{
-		Kind:     instances.SnapshotKind(request.Body.Kind),
-		Name:     name,
-		Metadata: toMapMetadata(request.Body.Metadata),
+		Kind: instances.SnapshotKind(request.Body.Kind),
+		Name: name,
+		Tags: toMapTags(request.Body.Tags),
 	})
 	if err != nil {
 		log := logger.FromContext(ctx)
@@ -106,10 +106,10 @@ func (s *ApiService) ListSnapshots(ctx context.Context, request oapi.ListSnapsho
 	if request.Params.Name != nil {
 		filter.Name = request.Params.Name
 	}
-	if request.Params.Metadata != nil {
-		filter.Metadata = toMapMetadata(request.Params.Metadata)
+	if request.Params.Tags != nil {
+		filter.Tags = toMapTags(request.Params.Tags)
 	}
-	if filter.SourceInstanceID == nil && filter.Kind == nil && filter.Name == nil && len(filter.Metadata) == 0 {
+	if filter.SourceInstanceID == nil && filter.Kind == nil && filter.Name == nil && len(filter.Tags) == 0 {
 		filter = nil
 	}
 
@@ -259,7 +259,7 @@ func (s *ApiService) SetInstanceSnapshotSchedule(ctx context.Context, request oa
 	}
 	req := instances.SetSnapshotScheduleRequest{
 		Interval:  interval,
-		Metadata:  toMapMetadata(request.Body.Metadata),
+		Metadata:  toMapTags(request.Body.Metadata),
 		Retention: retention,
 	}
 	if request.Body.NamePrefix != nil {
@@ -318,7 +318,7 @@ func snapshotToOAPI(snapshot instances.Snapshot) oapi.Snapshot {
 	out := oapi.Snapshot{
 		Id:                 snapshot.Id,
 		Kind:               kind,
-		Metadata:           toOAPIMetadata(snapshot.Metadata),
+		Tags:               toOAPITags(snapshot.Tags),
 		SourceInstanceId:   snapshot.SourceInstanceID,
 		SourceInstanceName: snapshot.SourceName,
 		SourceHypervisor:   sourceHypervisor,
@@ -344,7 +344,7 @@ func snapshotScheduleToOAPI(schedule instances.SnapshotSchedule) oapi.SnapshotSc
 	out := oapi.SnapshotSchedule{
 		InstanceId: schedule.InstanceID,
 		Interval:   schedule.Interval.String(),
-		Metadata:   toOAPIMetadata(schedule.Metadata),
+		Metadata:   toOAPITags(schedule.Metadata),
 		Retention:  retention,
 		NextRunAt:  schedule.NextRunAt,
 		CreatedAt:  schedule.CreatedAt,

@@ -9,14 +9,15 @@ import (
 
 // otelMetrics holds the OpenTelemetry instruments for VM metrics.
 type otelMetrics struct {
-	cpuSecondsTotal        metric.Float64ObservableCounter
-	allocatedVcpus         metric.Int64ObservableGauge
-	memoryRSSBytes         metric.Int64ObservableGauge
-	memoryVMSBytes         metric.Int64ObservableGauge
-	allocatedMemoryBytes   metric.Int64ObservableGauge
-	networkRxBytesTotal    metric.Int64ObservableCounter
-	networkTxBytesTotal    metric.Int64ObservableCounter
-	memoryUtilizationRatio metric.Float64ObservableGauge
+	cpuSecondsTotal          metric.Float64ObservableCounter
+	allocatedVcpus           metric.Int64ObservableGauge
+	memoryRSSBytes           metric.Int64ObservableGauge
+	memoryVMSBytes           metric.Int64ObservableGauge
+	allocatedMemoryBytes     metric.Int64ObservableGauge
+	networkRxBytesTotal      metric.Int64ObservableCounter
+	networkTxBytesTotal      metric.Int64ObservableCounter
+	instancesObserved        metric.Int64ObservableGauge
+	labelBudgetExceededTotal metric.Int64ObservableCounter
 }
 
 // newOTelMetrics creates and registers all VM utilization metrics.
@@ -91,11 +92,19 @@ func newOTelMetrics(meter metric.Meter, m *Manager) (*otelMetrics, error) {
 		return nil, err
 	}
 
-	// Memory utilization ratio (RSS / allocated)
-	memoryUtilizationRatio, err := meter.Float64ObservableGauge(
-		"hypeman_vm_memory_utilization_ratio",
-		metric.WithDescription("Memory utilization ratio (RSS / allocated memory)"),
-		metric.WithUnit("1"),
+	// Number of instances currently represented by per-VM metrics.
+	instancesObserved, err := meter.Int64ObservableGauge(
+		"hypeman_vm_metrics_instances_observed",
+		metric.WithDescription("Current number of VM instances represented by per-VM labeled metrics"),
+		metric.WithUnit("{instance}"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	labelBudgetExceededTotal, err := meter.Int64ObservableCounter(
+		"hypeman_vm_metrics_label_budget_exceeded_total",
+		metric.WithDescription("Total number of transitions into over-budget VM metric label cardinality"),
 	)
 	if err != nil {
 		return nil, err
@@ -109,6 +118,10 @@ func newOTelMetrics(meter metric.Meter, m *Manager) (*otelMetrics, error) {
 				// Log error but don't fail the callback
 				return nil
 			}
+			observed := len(stats)
+			o.ObserveInt64(instancesObserved, int64(observed))
+			m.observeVMLabelBudget(ctx, observed)
+			o.ObserveInt64(labelBudgetExceededTotal, m.vmLabelBudgetEventCount())
 
 			for _, s := range stats {
 				attrs := metric.WithAttributes(
@@ -128,11 +141,6 @@ func newOTelMetrics(meter metric.Meter, m *Manager) (*otelMetrics, error) {
 				o.ObserveInt64(memoryVMSBytes, int64(s.MemoryVMSBytes), attrs)
 				o.ObserveInt64(networkRxBytesTotal, int64(s.NetRxBytes), attrs)
 				o.ObserveInt64(networkTxBytesTotal, int64(s.NetTxBytes), attrs)
-
-				// Compute utilization ratio
-				if ratio := s.MemoryUtilizationRatio(); ratio != nil {
-					o.ObserveFloat64(memoryUtilizationRatio, *ratio, attrs)
-				}
 			}
 
 			return nil
@@ -144,20 +152,22 @@ func newOTelMetrics(meter metric.Meter, m *Manager) (*otelMetrics, error) {
 		allocatedMemoryBytes,
 		networkRxBytesTotal,
 		networkTxBytesTotal,
-		memoryUtilizationRatio,
+		instancesObserved,
+		labelBudgetExceededTotal,
 	)
 	if err != nil {
 		return nil, err
 	}
 
 	return &otelMetrics{
-		cpuSecondsTotal:        cpuSecondsTotal,
-		allocatedVcpus:         allocatedVcpus,
-		memoryRSSBytes:         memoryRSSBytes,
-		memoryVMSBytes:         memoryVMSBytes,
-		allocatedMemoryBytes:   allocatedMemoryBytes,
-		networkRxBytesTotal:    networkRxBytesTotal,
-		networkTxBytesTotal:    networkTxBytesTotal,
-		memoryUtilizationRatio: memoryUtilizationRatio,
+		cpuSecondsTotal:          cpuSecondsTotal,
+		allocatedVcpus:           allocatedVcpus,
+		memoryRSSBytes:           memoryRSSBytes,
+		memoryVMSBytes:           memoryVMSBytes,
+		allocatedMemoryBytes:     allocatedMemoryBytes,
+		networkRxBytesTotal:      networkRxBytesTotal,
+		networkTxBytesTotal:      networkTxBytesTotal,
+		instancesObserved:        instancesObserved,
+		labelBudgetExceededTotal: labelBudgetExceededTotal,
 	}, nil
 }

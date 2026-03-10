@@ -92,11 +92,17 @@ limits:
 # =============================================================================
 # OpenTelemetry (optional, same as Linux)
 # =============================================================================
+# metrics:
+#   listen_address: 127.0.0.1
+#   port: 9464
+#   vm_label_budget: 200
+#
 # otel:
 #   enabled: false
 #   endpoint: 127.0.0.1:4317
 #   service_name: hypeman
 #   insecure: true
+#   metric_export_interval: 60s
 # env: dev
 
 # =============================================================================

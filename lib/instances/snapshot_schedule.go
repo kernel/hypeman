@@ -213,9 +213,9 @@ func (m *manager) runSnapshotScheduleForInstanceLocked(ctx context.Context, inst
 		}
 
 		snapshot, runErr := m.createSnapshot(ctx, instanceID, CreateSnapshotRequest{
-			Kind:     snapshotKind,
-			Name:     scheduledsnapshots.BuildSnapshotName(schedule.NamePrefix, runTime, validateInstanceName),
-			Metadata: scheduledsnapshots.BuildSnapshotMetadata(instanceID, schedule.Metadata),
+			Kind: snapshotKind,
+			Name: scheduledsnapshots.BuildSnapshotName(schedule.NamePrefix, runTime, validateInstanceName),
+			Tags: scheduledsnapshots.BuildSnapshotMetadata(instanceID, schedule.Metadata),
 		})
 		if runErr != nil {
 			errMsg := runErr.Error()
@@ -388,7 +388,7 @@ func (m *manager) listScheduledSnapshotsByInstance(ctx context.Context, instance
 
 	scheduledSnapshots := make([]Snapshot, 0, len(snapshots))
 	for _, snapshot := range snapshots {
-		if scheduledsnapshots.IsScheduledSnapshot(snapshot.Metadata, instanceID) {
+		if scheduledsnapshots.IsScheduledSnapshot(snapshot.Tags, instanceID) {
 			scheduledSnapshots = append(scheduledSnapshots, snapshot)
 		}
 	}

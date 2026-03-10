@@ -31,7 +31,7 @@ func (s *ApiService) ListBuilds(ctx context.Context, request oapi.ListBuildsRequ
 
 	oapiBuilds := make([]oapi.Build, 0, len(domainBuilds))
 	for _, b := range domainBuilds {
-		if b == nil || !matchesMetadataFilter(b.Metadata, request.Params.Metadata) {
+		if b == nil || !matchesTagsFilter(b.Tags, request.Params.Tags) {
 			continue
 		}
 		oapiBuilds = append(oapiBuilds, buildToOAPI(b))
@@ -50,7 +50,7 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 	var timeoutSeconds, memoryMB, cpus int
 	var isAdminBuild bool
 	var secrets []builds.SecretRef
-	var metadata map[string]string
+	var resourceTags map[string]string
 
 	for {
 		part, err := request.Body.NextPart()
@@ -174,22 +174,22 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 				}, nil
 			}
 			imageName = string(data)
-		case "metadata":
+		case "tags":
 			data, err := io.ReadAll(part)
 			if err != nil {
 				return oapi.CreateBuild400JSONResponse{
 					Code:    "invalid_request",
-					Message: "failed to read metadata field",
+					Message: "failed to read tags field",
 				}, nil
 			}
-			parsed, err := parseMetadataJSON(string(data))
+			parsed, err := parseTagsJSON(string(data))
 			if err != nil {
 				return oapi.CreateBuild400JSONResponse{
 					Code:    "invalid_request",
-					Message: "metadata must be a JSON object with string key-value pairs",
+					Message: "tags must be a JSON object with string key-value pairs",
 				}, nil
 			}
-			metadata = parsed
+			resourceTags = parsed
 		}
 		part.Close()
 	}
@@ -224,7 +224,7 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 		IsAdminBuild:    isAdminBuild,
 		GlobalCacheKey:  globalCacheKey,
 		ImageName:       imageName,
-		Metadata:        metadata,
+		Tags:            resourceTags,
 	}
 
 	// Apply build policy if any field was provided
@@ -245,7 +245,7 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 	build, err := s.BuildManager.CreateBuild(ctx, domainReq, sourceData)
 	if err != nil {
 		switch {
-		case errors.Is(err, tags.ErrInvalidMetadata):
+		case errors.Is(err, tags.ErrInvalidTags):
 			return oapi.CreateBuild400JSONResponse{
 				Code:    "invalid_request",
 				Message: err.Error(),
@@ -386,7 +386,7 @@ func buildToOAPI(b *builds.Build) oapi.Build {
 	oapiBuild := oapi.Build{
 		Id:                b.ID,
 		Status:            oapi.BuildStatus(b.Status),
-		Metadata:          toOAPIMetadata(b.Metadata),
+		Tags:              toOAPITags(b.Tags),
 		QueuePosition:     b.QueuePosition,
 		ImageDigest:       b.ImageDigest,
 		ImageRef:          b.ImageRef,

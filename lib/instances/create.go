@@ -162,8 +162,8 @@ func (m *manager) createInstance(
 	if req.Env == nil {
 		req.Env = make(map[string]string)
 	}
-	if req.Metadata == nil {
-		req.Metadata = make(map[string]string)
+	if req.Tags == nil {
+		req.Tags = make(map[string]string)
 	}
 
 	// 7. Determine network based on NetworkEnabled flag
@@ -294,7 +294,7 @@ func (m *manager) createInstance(
 		NetworkBandwidthUpload:   req.NetworkBandwidthUpload,   // Will be set by caller if using resource manager
 		DiskIOBps:                req.DiskIOBps,                // Will be set by caller if using resource manager
 		Env:                      req.Env,
-		Metadata:                 tags.Clone(req.Metadata),
+		Tags:                     tags.Clone(req.Tags),
 		NetworkEnabled:           req.NetworkEnabled,
 		CreatedAt:                time.Now(),
 		StartedAt:                nil,
@@ -467,7 +467,7 @@ func validateCreateRequest(req CreateInstanceRequest) error {
 	if req.Vcpus < 0 {
 		return fmt.Errorf("vcpus cannot be negative")
 	}
-	if err := tags.Validate(req.Metadata); err != nil {
+	if err := tags.Validate(req.Tags); err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidRequest, err)
 	}
 

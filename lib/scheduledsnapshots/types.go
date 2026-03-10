@@ -27,7 +27,7 @@ type Schedule struct {
 	InstanceID     string
 	Interval       time.Duration
 	NamePrefix     string
-	Metadata       tags.Metadata
+	Metadata       tags.Tags
 	Retention      Retention
 	NextRunAt      time.Time
 	LastRunAt      *time.Time
@@ -41,6 +41,6 @@ type Schedule struct {
 type SetRequest struct {
 	Interval   time.Duration
 	NamePrefix string
-	Metadata   tags.Metadata
+	Metadata   tags.Tags
 	Retention  Retention
 }

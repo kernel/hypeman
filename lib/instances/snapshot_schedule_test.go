@@ -124,7 +124,7 @@ func TestSnapshotScheduleUsesStoppedSnapshotWhenSourceIsStopped(t *testing.T) {
 
 	foundScheduled := false
 	for _, snapshot := range snaps {
-		if !scheduledsnapshots.IsScheduledSnapshot(snapshot.Metadata, sourceID) {
+		if !scheduledsnapshots.IsScheduledSnapshot(snapshot.Tags, sourceID) {
 			continue
 		}
 		foundScheduled = true
@@ -145,7 +145,7 @@ func TestRunSnapshotSchedulesCreatesSnapshotAndAppliesRetention(t *testing.T) {
 	older, err := mgr.CreateSnapshot(ctx, sourceID, CreateSnapshotRequest{
 		Kind: SnapshotKindStopped,
 		Name: "older-scheduled",
-		Metadata: map[string]string{
+		Tags: map[string]string{
 			scheduledsnapshots.MetadataKeyScheduled:        "true",
 			scheduledsnapshots.MetadataKeySourceInstanceID: sourceID,
 		},
@@ -157,7 +157,7 @@ func TestRunSnapshotSchedulesCreatesSnapshotAndAppliesRetention(t *testing.T) {
 	newer, err := mgr.CreateSnapshot(ctx, sourceID, CreateSnapshotRequest{
 		Kind: SnapshotKindStopped,
 		Name: "newer-scheduled",
-		Metadata: map[string]string{
+		Tags: map[string]string{
 			scheduledsnapshots.MetadataKeyScheduled:        "true",
 			scheduledsnapshots.MetadataKeySourceInstanceID: sourceID,
 		},
@@ -189,7 +189,7 @@ func TestRunSnapshotSchedulesCreatesSnapshotAndAppliesRetention(t *testing.T) {
 	scheduledIDs := make(map[string]struct{})
 	manualCount := 0
 	for _, snapshot := range snaps {
-		if scheduledsnapshots.IsScheduledSnapshot(snapshot.Metadata, sourceID) {
+		if scheduledsnapshots.IsScheduledSnapshot(snapshot.Tags, sourceID) {
 			scheduledIDs[snapshot.Id] = struct{}{}
 		} else {
 			manualCount++
@@ -276,7 +276,7 @@ func TestDeleteInstanceKeepsScheduleUntilScheduledSnapshotsAreGone(t *testing.T)
 	scheduledSnapshot, err := mgr.CreateSnapshot(ctx, sourceID, CreateSnapshotRequest{
 		Kind: SnapshotKindStopped,
 		Name: "scheduled-before-delete",
-		Metadata: map[string]string{
+		Tags: map[string]string{
 			scheduledsnapshots.MetadataKeyScheduled:        "true",
 			scheduledsnapshots.MetadataKeySourceInstanceID: sourceID,
 		},
@@ -321,7 +321,7 @@ func TestDeleteInstanceWithCountOnlyRetentionRemovesConvergedSchedule(t *testing
 	_, err = mgr.CreateSnapshot(ctx, sourceID, CreateSnapshotRequest{
 		Kind: SnapshotKindStopped,
 		Name: "scheduled-before-delete-count-only",
-		Metadata: map[string]string{
+		Tags: map[string]string{
 			scheduledsnapshots.MetadataKeyScheduled:        "true",
 			scheduledsnapshots.MetadataKeySourceInstanceID: sourceID,
 		},
@@ -406,7 +406,7 @@ func TestRunSnapshotSchedulesStopsOnCanceledContext(t *testing.T) {
 	require.NoError(t, err)
 
 	for _, snapshot := range snapshots {
-		assert.False(t, scheduledsnapshots.IsScheduledSnapshot(snapshot.Metadata, sourceID), "canceled context should prevent scheduled snapshot runs")
+		assert.False(t, scheduledsnapshots.IsScheduledSnapshot(snapshot.Tags, sourceID), "canceled context should prevent scheduled snapshot runs")
 	}
 }
 

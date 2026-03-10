@@ -10,5 +10,5 @@ const (
 	MaxValueLength = 256
 )
 
-// Allowed characters are aligned with the AWS-like strict metadata contract.
+// Allowed characters are aligned with the AWS-like strict tag contract.
 var allowedPattern = regexp.MustCompile(`^[A-Za-z0-9 _.:/=+@-]+$`)

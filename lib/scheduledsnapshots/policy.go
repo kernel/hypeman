@@ -38,17 +38,17 @@ func ValidateSetRequest(req SetRequest, validateName func(name string) error) er
 	return nil
 }
 
-func BuildSnapshotMetadata(instanceID string, userMetadata tags.Metadata) tags.Metadata {
+func BuildSnapshotMetadata(instanceID string, userMetadata tags.Tags) tags.Tags {
 	metadata := tags.Clone(userMetadata)
 	if metadata == nil {
-		metadata = make(tags.Metadata)
+		metadata = make(tags.Tags)
 	}
 	metadata[MetadataKeyScheduled] = "true"
 	metadata[MetadataKeySourceInstanceID] = instanceID
 	return metadata
 }
 
-func IsScheduledSnapshot(metadata tags.Metadata, instanceID string) bool {
+func IsScheduledSnapshot(metadata tags.Tags, instanceID string) bool {
 	if metadata == nil {
 		return false
 	}

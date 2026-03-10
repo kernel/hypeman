@@ -13,7 +13,7 @@ func TestImageMetadataToImage_ClonesMetadata(t *testing.T) {
 		Name:      "docker.io/library/alpine:latest",
 		Digest:    "sha256:abc",
 		Status:    StatusReady,
-		Metadata:  map[string]string{"team": "backend", "env": "staging"},
+		Tags:      map[string]string{"team": "backend", "env": "staging"},
 		SizeBytes: 123,
 		CreatedAt: createdAt,
 	}
@@ -21,12 +21,12 @@ func TestImageMetadataToImage_ClonesMetadata(t *testing.T) {
 	img := source.toImage()
 	require.Equal(t, source.Name, img.Name)
 	require.Equal(t, source.Digest, img.Digest)
-	require.Equal(t, map[string]string{"team": "backend", "env": "staging"}, img.Metadata)
+	require.Equal(t, map[string]string{"team": "backend", "env": "staging"}, img.Tags)
 	require.NotNil(t, img.SizeBytes)
 	require.Equal(t, int64(123), *img.SizeBytes)
 
-	source.Metadata["team"] = "mutated"
-	require.Equal(t, "backend", img.Metadata["team"])
+	source.Tags["team"] = "mutated"
+	require.Equal(t, "backend", img.Tags["team"])
 }
 
 func TestImageMetadataToImage_EmptyMetadataOmitted(t *testing.T) {
@@ -37,5 +37,5 @@ func TestImageMetadataToImage_EmptyMetadataOmitted(t *testing.T) {
 		CreatedAt: time.Now().UTC(),
 	}).toImage()
 
-	require.Nil(t, img.Metadata)
+	require.Nil(t, img.Tags)
 }

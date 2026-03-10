@@ -14,6 +14,8 @@ import (
 	"go.opentelemetry.io/otel/metric"
 )
 
+const unmatchedRouteLabel = "__unmatched__"
+
 // HTTPMetrics holds the OTel metrics for HTTP requests.
 type HTTPMetrics struct {
 	requestsTotal   metric.Int64Counter
@@ -62,7 +64,7 @@ func (m *HTTPMetrics) Middleware(next http.Handler) http.Handler {
 		// Get route pattern if available (chi specific)
 		routePattern := chi.RouteContext(r.Context()).RoutePattern()
 		if routePattern == "" {
-			routePattern = r.URL.Path
+			routePattern = unmatchedRouteLabel
 		}
 
 		// Record metrics

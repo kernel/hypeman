@@ -2,6 +2,7 @@ package vm_metrics
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 
 	"github.com/kernel/hypeman/lib/logger"
@@ -12,14 +13,21 @@ import (
 // Manager collects and exposes VM resource utilization metrics.
 // It reads from /proc and TAP interfaces to gather real-time statistics.
 type Manager struct {
-	mu     sync.RWMutex
-	source InstanceSource
-	otel   *otelMetrics
+	mu                    sync.RWMutex
+	source                InstanceSource
+	otel                  *otelMetrics
+	log                   *slog.Logger
+	vmLabelBudget         int
+	vmLabelBudgetExceeded bool
+	vmLabelBudgetEvents   int64
 }
 
 // NewManager creates a new VM metrics manager.
 func NewManager() *Manager {
-	return &Manager{}
+	return &Manager{
+		log:           slog.Default(),
+		vmLabelBudget: 200,
+	}
 }
 
 // SetInstanceSource sets the source for instance information.
@@ -28,6 +36,26 @@ func (m *Manager) SetInstanceSource(source InstanceSource) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.source = source
+}
+
+// SetLogger sets the logger used for guardrail transition logs.
+func (m *Manager) SetLogger(log *slog.Logger) {
+	if log == nil {
+		log = slog.Default()
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.log = log
+}
+
+// SetVMLabelBudget sets the max expected number of per-VM labeled series.
+func (m *Manager) SetVMLabelBudget(budget int) {
+	if budget <= 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.vmLabelBudget = budget
 }
 
 // InitializeOTel sets up OpenTelemetry metrics.
@@ -47,6 +75,42 @@ func (m *Manager) InitializeOTel(meter metric.Meter) error {
 	m.mu.Unlock()
 
 	return nil
+}
+
+// observeVMLabelBudget checks current per-VM metric cardinality against budget.
+// Returns true when transitioning into over-budget state.
+func (m *Manager) observeVMLabelBudget(ctx context.Context, observedInstances int) bool {
+	m.mu.Lock()
+	budget := m.vmLabelBudget
+	if budget <= 0 {
+		budget = 1
+	}
+	log := m.log
+	wasOverBudget := m.vmLabelBudgetExceeded
+	isOverBudget := observedInstances > budget
+	if isOverBudget && !wasOverBudget {
+		m.vmLabelBudgetEvents++
+	}
+	m.vmLabelBudgetExceeded = isOverBudget
+	m.mu.Unlock()
+
+	if log == nil {
+		log = slog.Default()
+	}
+	if isOverBudget && !wasOverBudget {
+		log.WarnContext(ctx, "vm metrics label budget exceeded", "observed_instances", observedInstances, "budget", budget)
+		return true
+	}
+	if !isOverBudget && wasOverBudget {
+		log.InfoContext(ctx, "vm metrics label budget recovered", "observed_instances", observedInstances, "budget", budget)
+	}
+	return false
+}
+
+func (m *Manager) vmLabelBudgetEventCount() int64 {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.vmLabelBudgetEvents
 }
 
 // GetInstanceStats collects metrics for a single instance.
