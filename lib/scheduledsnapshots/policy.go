@@ -91,6 +91,6 @@ func NextRun(previous time.Time, interval time.Duration, now time.Time) time.Tim
 		return previous
 	}
 
-	steps := now.Sub(previous)/interval + 1
+	steps := int64(now.Sub(previous)/interval) + 1
 	return previous.Add(time.Duration(steps) * interval)
 }

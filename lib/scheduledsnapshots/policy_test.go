@@ -85,3 +85,13 @@ func TestMarshalSchedulePersistsZeroMaxCount(t *testing.T) {
 	assert.Equal(t, 0, out.Retention.MaxCount)
 	assert.Equal(t, 24*time.Hour, out.Retention.MaxAge)
 }
+
+func TestNextRunUsesIntervalStepCount(t *testing.T) {
+	previous := time.Date(2026, 3, 10, 10, 0, 0, 0, time.UTC)
+	interval := time.Hour
+
+	// 2.5 intervals later should advance to the next whole interval boundary.
+	now := previous.Add(2*time.Hour + 30*time.Minute)
+	next := NextRun(previous, interval, now)
+	assert.Equal(t, previous.Add(3*time.Hour), next)
+}
