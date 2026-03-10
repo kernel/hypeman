@@ -51,7 +51,7 @@ type SnapshotDescriptor struct {
 	Name               string                     `json:"name"`
 	Kind               snapshotstore.SnapshotKind `json:"kind"`
 	SourceHypervisor   hypervisor.Type            `json:"source_hypervisor"`
-	Metadata           tags.Metadata              `json:"metadata,omitempty"`
+	Tags               tags.Tags                  `json:"tags,omitempty"`
 	CreatedAt          time.Time                  `json:"created_at"`
 	SizeBytes          int64                      `json:"size_bytes"`
 	Compat             SourceSnapshotCompat       `json:"compat"`

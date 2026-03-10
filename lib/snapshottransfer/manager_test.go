@@ -383,8 +383,8 @@ func TestTransferEndToEndStoppedSnapshot(t *testing.T) {
 		t.Fatalf("expected one destination snapshot, got %d", len(records))
 	}
 	rec := records[0]
-	if rec.Snapshot.Metadata[transferSourceSnapshotIDTag] != sourceSnapshotID {
-		t.Fatalf("expected source snapshot tag=%s, got %q", sourceSnapshotID, rec.Snapshot.Metadata[transferSourceSnapshotIDTag])
+	if rec.Snapshot.Tags[transferSourceSnapshotIDTag] != sourceSnapshotID {
+		t.Fatalf("expected source snapshot tag=%s, got %q", sourceSnapshotID, rec.Snapshot.Tags[transferSourceSnapshotIDTag])
 	}
 
 	got, err := os.ReadFile(filepath.Join(dstPaths.SnapshotGuestDir(rec.Snapshot.Id), "dir", "nested.txt"))
@@ -483,7 +483,7 @@ func seedSourceSnapshot(p *paths.Paths, snapshotID string, files map[string][]by
 			Id:               snapshotID,
 			Name:             "transfer-test",
 			Kind:             snapshotstore.SnapshotKindStopped,
-			Metadata:         map[string]string{"test": "true"},
+			Tags:             map[string]string{"test": "true"},
 			SourceInstanceID: "inst-1",
 			SourceName:       "inst-1",
 			SourceHypervisor: hypervisor.TypeCloudHypervisor,

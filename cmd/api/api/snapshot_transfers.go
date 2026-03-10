@@ -254,7 +254,7 @@ func fromOAPISnapshotDescriptor(d oapi.SnapshotDescriptor) snapshottransfer.Snap
 		Name:               name,
 		Kind:               snapshotstore.SnapshotKind(d.Kind),
 		SourceHypervisor:   hypervisor.Type(d.SourceHypervisor),
-		Metadata:           toMapMetadata(d.Metadata),
+		Tags:               toMapTags(d.Metadata),
 		CreatedAt:          d.CreatedAt,
 		SizeBytes:          d.SizeBytes,
 		Compat: snapshottransfer.SourceSnapshotCompat{

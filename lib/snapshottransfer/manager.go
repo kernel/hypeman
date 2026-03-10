@@ -576,7 +576,7 @@ func snapshotDescriptorFromRecord(rec *snapshotstore.Record) SnapshotDescriptor 
 		Name:               rec.Snapshot.Name,
 		Kind:               rec.Snapshot.Kind,
 		SourceHypervisor:   rec.Snapshot.SourceHypervisor,
-		Metadata:           tags.Clone(rec.Snapshot.Metadata),
+		Tags:               tags.Clone(rec.Snapshot.Tags),
 		CreatedAt:          rec.Snapshot.CreatedAt,
 		SizeBytes:          rec.Snapshot.SizeBytes,
 		Compat:             compat,
@@ -612,7 +612,7 @@ func (m *manager) checkConflicts(desc SnapshotDescriptor) error {
 	}
 	for i := range recs {
 		r := recs[i]
-		if r.Snapshot.Metadata != nil && r.Snapshot.Metadata[transferSourceSnapshotIDTag] == desc.SourceSnapshotID {
+		if r.Snapshot.Tags != nil && r.Snapshot.Tags[transferSourceSnapshotIDTag] == desc.SourceSnapshotID {
 			return fmt.Errorf("%w: snapshot already imported from source snapshot %s", ErrConflict, desc.SourceSnapshotID)
 		}
 	}
@@ -981,18 +981,18 @@ func (m *manager) materializeSnapshot(session *ImportSessionRecord) (*snapshotst
 		f.Close()
 	}
 
-	metadata := tags.Clone(session.Snapshot.Metadata)
-	if metadata == nil {
-		metadata = tags.Metadata{}
+	resourceTags := tags.Clone(session.Snapshot.Tags)
+	if resourceTags == nil {
+		resourceTags = tags.Tags{}
 	}
-	metadata[transferSourceSnapshotIDTag] = session.Snapshot.SourceSnapshotID
+	resourceTags[transferSourceSnapshotIDTag] = session.Snapshot.SourceSnapshotID
 
 	record := &snapshotstore.Record{
 		Snapshot: snapshotstore.Snapshot{
 			Id:               snapshotID,
 			Name:             session.Snapshot.Name,
 			Kind:             session.Snapshot.Kind,
-			Metadata:         metadata,
+			Tags:             resourceTags,
 			SourceInstanceID: session.Snapshot.SourceInstanceID,
 			SourceName:       session.Snapshot.SourceInstanceName,
 			SourceHypervisor: session.Snapshot.SourceHypervisor,

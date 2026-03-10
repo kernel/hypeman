@@ -170,7 +170,7 @@ func seedSnapshotForAPI(p *paths.Paths, snapshotID string) error {
 			Id:               snapshotID,
 			Name:             "api-seed",
 			Kind:             snapshotstore.SnapshotKindStopped,
-			Metadata:         map[string]string{"seed": "true"},
+			Tags:             map[string]string{"seed": "true"},
 			SourceInstanceID: "inst-api",
 			SourceName:       "inst-api",
 			SourceHypervisor: hypervisor.TypeCloudHypervisor,
