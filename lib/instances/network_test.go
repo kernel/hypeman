@@ -74,6 +74,7 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NotNil(t, inst)
+	require.Contains(t, []State{StateInitializing, StateRunning}, inst.State)
 	t.Logf("Instance created: %s", inst.Id)
 
 	// Wait for VM to be fully ready
@@ -117,6 +118,10 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 	require.NoError(t, err, "Exec agent should be listening")
 	t.Log("Exec agent is ready")
 
+	// Standby requires running state; create may still return Initializing.
+	inst, err = waitForInstanceState(ctx, manager, inst.Id, StateRunning, 20*time.Second)
+	require.NoError(t, err)
+
 	// Test initial internet connectivity via exec
 	t.Log("Testing initial internet connectivity via exec...")
 	output, exitCode, err := execCommand(ctx, inst, "curl", "-s", "--connect-timeout", "10", "https://public-ping-bucket-kernel.s3.us-east-1.amazonaws.com/index.html")
@@ -154,6 +159,9 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 	// Restore instance
 	t.Log("Restoring instance from standby...")
 	inst, err = manager.RestoreInstance(ctx, inst.Id)
+	require.NoError(t, err)
+	assert.Contains(t, []State{StateInitializing, StateRunning}, inst.State)
+	inst, err = waitForInstanceState(ctx, manager, inst.Id, StateRunning, 20*time.Second)
 	require.NoError(t, err)
 	assert.Equal(t, StateRunning, inst.State)
 	t.Log("Instance restored and running")
