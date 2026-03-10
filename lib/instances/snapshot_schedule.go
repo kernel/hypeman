@@ -107,7 +107,6 @@ func (m *manager) RunSnapshotSchedules(ctx context.Context) error {
 		return fmt.Errorf("list snapshot schedules: %w", err)
 	}
 
-	now := time.Now().UTC()
 	var runErrs []error
 
 	for _, instanceID := range instanceIDs {
@@ -116,9 +115,10 @@ func (m *manager) RunSnapshotSchedules(ctx context.Context) error {
 			break
 		}
 
+		readNow := time.Now().UTC()
 		lock := m.getInstanceLock(instanceID)
 		lock.RLock()
-		due, err := m.snapshotScheduleDueLocked(instanceID, now)
+		due, err := m.snapshotScheduleDueLocked(instanceID, readNow)
 		lock.RUnlock()
 		if err != nil {
 			if errors.Is(err, ErrSnapshotScheduleNotFound) {
@@ -133,7 +133,8 @@ func (m *manager) RunSnapshotSchedules(ctx context.Context) error {
 		}
 
 		lock.Lock()
-		due, err = m.snapshotScheduleDueLocked(instanceID, now)
+		runNow := time.Now().UTC()
+		due, err = m.snapshotScheduleDueLocked(instanceID, runNow)
 		if err != nil {
 			lock.Unlock()
 			if errors.Is(err, ErrSnapshotScheduleNotFound) {
@@ -148,7 +149,7 @@ func (m *manager) RunSnapshotSchedules(ctx context.Context) error {
 			continue
 		}
 
-		err = m.runSnapshotScheduleForInstanceLocked(ctx, instanceID, now)
+		err = m.runSnapshotScheduleForInstanceLocked(ctx, instanceID, runNow)
 		lock.Unlock()
 		if err != nil {
 			runErrs = append(runErrs, fmt.Errorf("instance %s: %w", instanceID, err))
