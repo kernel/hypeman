@@ -416,7 +416,7 @@ func (m *manager) createInstance(
 	bootStart := time.Now().UTC()
 	stored.StartedAt = &bootStart
 
-	// 17. Save metadata
+	// 18. Save metadata
 	log.DebugContext(ctx, "saving instance metadata", "instance_id", id)
 	meta := &metadata{StoredMetadata: *stored}
 	if err := m.saveMetadata(meta); err != nil {
@@ -424,14 +424,14 @@ func (m *manager) createInstance(
 		return nil, fmt.Errorf("save metadata: %w", err)
 	}
 
-	// 18. Start VMM and boot VM
+	// 19. Start VMM and boot VM
 	log.InfoContext(ctx, "starting VMM and booting VM", "instance_id", id)
 	if err := m.startAndBootVM(ctx, stored, imageInfo, netConfig); err != nil {
 		log.ErrorContext(ctx, "failed to start and boot VM", "instance_id", id, "error", err)
 		return nil, err
 	}
 
-	// 19. Persist runtime metadata updates after VM boot.
+	// 20. Persist runtime metadata updates after VM boot.
 	meta = &metadata{StoredMetadata: *stored}
 	if err := m.saveMetadata(meta); err != nil {
 		// VM is running but metadata failed - log but don't fail
