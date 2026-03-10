@@ -19,8 +19,8 @@ type Ingress struct {
 	// Name is a human-readable name for the ingress.
 	Name string `json:"name"`
 
-	// Metadata is optional user-defined key-value metadata.
-	Metadata tags.Metadata `json:"metadata,omitempty"`
+	// Tags are optional user-defined key-value tags.
+	Tags tags.Tags `json:"tags,omitempty"`
 
 	// Rules define the routing rules for this ingress.
 	Rules []IngressRule `json:"rules"`
@@ -177,8 +177,8 @@ type CreateIngressRequest struct {
 	// Name is a human-readable name for the ingress.
 	Name string `json:"name"`
 
-	// Metadata is optional user-defined key-value metadata.
-	Metadata tags.Metadata `json:"metadata,omitempty"`
+	// Tags are optional user-defined key-value tags.
+	Tags tags.Tags `json:"tags,omitempty"`
 
 	// Rules define the routing rules for this ingress.
 	Rules []IngressRule `json:"rules"`
@@ -193,8 +193,8 @@ func (r *CreateIngressRequest) Validate() error {
 	if len(r.Rules) == 0 {
 		return &ValidationError{Field: "rules", Message: "at least one rule is required"}
 	}
-	if err := tags.Validate(r.Metadata); err != nil {
-		return &ValidationError{Field: "metadata", Message: err.Error()}
+	if err := tags.Validate(r.Tags); err != nil {
+		return &ValidationError{Field: "tags", Message: err.Error()}
 	}
 
 	for i, rule := range r.Rules {

@@ -22,7 +22,7 @@ type imageMetadata struct {
 	Entrypoint []string            `json:"entrypoint,omitempty"`
 	Cmd        []string            `json:"cmd,omitempty"`
 	Env        map[string]string   `json:"env,omitempty"`
-	Metadata   tags.Metadata       `json:"metadata,omitempty"`
+	Tags       tags.Tags           `json:"tags,omitempty"`
 	WorkingDir string              `json:"working_dir,omitempty"`
 	CreatedAt  time.Time           `json:"created_at"`
 }
@@ -50,8 +50,8 @@ func (m *imageMetadata) toImage() *Image {
 	if len(m.Env) > 0 {
 		img.Env = m.Env
 	}
-	if len(m.Metadata) > 0 {
-		img.Metadata = tags.Clone(m.Metadata)
+	if len(m.Tags) > 0 {
+		img.Tags = tags.Clone(m.Tags)
 	}
 	if m.WorkingDir != "" {
 		img.WorkingDir = m.WorkingDir

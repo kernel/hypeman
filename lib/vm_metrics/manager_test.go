@@ -4,7 +4,9 @@ package vm_metrics
 
 import (
 	"context"
+	"log/slog"
 	"os"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -201,4 +203,53 @@ func TestBuildInstanceInfo(t *testing.T) {
 
 func ptrFloat64(v float64) *float64 {
 	return &v
+}
+
+type recordedLog struct {
+	level slog.Level
+	msg   string
+}
+
+type recordingHandler struct {
+	mu      sync.Mutex
+	records []recordedLog
+}
+
+func (h *recordingHandler) Enabled(_ context.Context, _ slog.Level) bool { return true }
+
+func (h *recordingHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.records = append(h.records, recordedLog{level: r.Level, msg: r.Message})
+	return nil
+}
+
+func (h *recordingHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
+func (h *recordingHandler) WithGroup(_ string) slog.Handler      { return h }
+
+func (h *recordingHandler) count(level slog.Level, msg string) int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	count := 0
+	for _, r := range h.records {
+		if r.level == level && r.msg == msg {
+			count++
+		}
+	}
+	return count
+}
+
+func TestManager_ObserveVMLabelBudget_LogsTransitions(t *testing.T) {
+	mgr := NewManager()
+	mgr.SetVMLabelBudget(1)
+
+	recorder := &recordingHandler{}
+	mgr.SetLogger(slog.New(recorder))
+
+	assert.True(t, mgr.observeVMLabelBudget(context.Background(), 2), "first over-budget observation should return true")
+	assert.False(t, mgr.observeVMLabelBudget(context.Background(), 3), "remaining over-budget should not trigger transition")
+	assert.False(t, mgr.observeVMLabelBudget(context.Background(), 1), "recovery should not count as breach transition")
+
+	assert.Equal(t, 1, recorder.count(slog.LevelWarn, "vm metrics label budget exceeded"))
+	assert.Equal(t, 1, recorder.count(slog.LevelInfo, "vm metrics label budget recovered"))
 }

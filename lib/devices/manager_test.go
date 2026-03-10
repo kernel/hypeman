@@ -176,7 +176,7 @@ func TestSaveLoadDevice_MetadataRoundTrip(t *testing.T) {
 		Id:         "dev-meta-1",
 		Name:       "meta-device",
 		Type:       DeviceTypeGeneric,
-		Metadata:   map[string]string{"team": "platform", "env": "prod"},
+		Tags:       map[string]string{"team": "platform", "env": "prod"},
 		PCIAddress: "0000:00:00.0",
 		VendorID:   "1234",
 		DeviceID:   "5678",
@@ -188,8 +188,8 @@ func TestSaveLoadDevice_MetadataRoundTrip(t *testing.T) {
 
 	loaded, err := mgr.loadDevice(device.Id)
 	require.NoError(t, err)
-	require.Equal(t, map[string]string{"team": "platform", "env": "prod"}, loaded.Metadata)
+	require.Equal(t, map[string]string{"team": "platform", "env": "prod"}, loaded.Tags)
 
-	device.Metadata["team"] = "mutated"
-	require.Equal(t, "platform", loaded.Metadata["team"])
+	device.Tags["team"] = "mutated"
+	require.Equal(t, "platform", loaded.Tags["team"])
 }

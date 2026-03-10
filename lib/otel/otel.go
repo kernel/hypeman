@@ -5,15 +5,20 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	goruntime "runtime"
+	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/contrib/bridges/otelslog"
 	otelruntime "go.opentelemetry.io/contrib/instrumentation/runtime"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	otelprometheus "go.opentelemetry.io/otel/exporters/prometheus"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/propagation"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
@@ -26,13 +31,14 @@ import (
 
 // Config holds OpenTelemetry configuration.
 type Config struct {
-	Enabled           bool
-	Endpoint          string
-	ServiceName       string
-	ServiceInstanceID string
-	Insecure          bool
-	Version           string
-	Env               string
+	Enabled              bool
+	Endpoint             string
+	ServiceName          string
+	ServiceInstanceID    string
+	Insecure             bool
+	MetricExportInterval string
+	Version              string
+	Env                  string
 }
 
 // Provider holds initialized OTel providers.
@@ -43,23 +49,33 @@ type Provider struct {
 	Tracer         trace.Tracer
 	Meter          metric.Meter
 	LogHandler     slog.Handler
+	MetricsHandler http.Handler
 	startTime      time.Time
+}
+
+var runtimeMetricsState struct {
+	mu      sync.Mutex
+	started bool
+}
+
+func startRuntimeMetricsOnce(meterProvider metric.MeterProvider) (bool, error) {
+	runtimeMetricsState.mu.Lock()
+	defer runtimeMetricsState.mu.Unlock()
+
+	if runtimeMetricsState.started {
+		return false, nil
+	}
+	if err := otelruntime.Start(otelruntime.WithMeterProvider(meterProvider)); err != nil {
+		return false, err
+	}
+	runtimeMetricsState.started = true
+	return true, nil
 }
 
 // Init initializes OpenTelemetry with the given configuration.
 // Returns a shutdown function that should be called on application exit.
-// If OTel is disabled, returns a no-op shutdown function.
 func Init(ctx context.Context, cfg Config) (*Provider, func(context.Context) error, error) {
-	if !cfg.Enabled {
-		// Return no-op provider when disabled
-		return &Provider{
-			Tracer:    otel.Tracer(cfg.ServiceName),
-			Meter:     otel.Meter(cfg.ServiceName),
-			startTime: time.Now(),
-		}, func(context.Context) error { return nil }, nil
-	}
-
-	// Create resource with service information
+	// Create resource with service information.
 	res, err := resource.Merge(
 		resource.Default(),
 		resource.NewWithAttributes(
@@ -74,110 +90,159 @@ func Init(ctx context.Context, cfg Config) (*Provider, func(context.Context) err
 		return nil, nil, fmt.Errorf("create resource: %w", err)
 	}
 
-	// Create trace exporter
-	traceOpts := []otlptracegrpc.Option{
-		otlptracegrpc.WithEndpoint(cfg.Endpoint),
-	}
-	if cfg.Insecure {
-		traceOpts = append(traceOpts, otlptracegrpc.WithInsecure())
-	}
-	traceExporter, err := otlptracegrpc.New(ctx, traceOpts...)
+	// Create Prometheus pull exporter and registry (required for always-on /metrics).
+	promRegistry := prometheus.NewRegistry()
+	promExporter, err := otelprometheus.New(otelprometheus.WithRegisterer(promRegistry))
 	if err != nil {
-		return nil, nil, fmt.Errorf("create trace exporter: %w", err)
+		return nil, nil, fmt.Errorf("create prometheus exporter: %w", err)
 	}
 
-	// Create tracer provider
-	tracerProvider := sdktrace.NewTracerProvider(
-		sdktrace.WithBatcher(traceExporter),
-		sdktrace.WithResource(res),
-	)
-
-	// Create metric exporter
-	metricOpts := []otlpmetricgrpc.Option{
-		otlpmetricgrpc.WithEndpoint(cfg.Endpoint),
-	}
-	if cfg.Insecure {
-		metricOpts = append(metricOpts, otlpmetricgrpc.WithInsecure())
-	}
-	metricExporter, err := otlpmetricgrpc.New(ctx, metricOpts...)
-	if err != nil {
-		tracerProvider.Shutdown(ctx)
-		return nil, nil, fmt.Errorf("create metric exporter: %w", err)
-	}
-
-	// Create meter provider
-	meterProvider := sdkmetric.NewMeterProvider(
-		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExporter)),
+	meterProviderOpts := []sdkmetric.Option{
+		sdkmetric.WithReader(promExporter),
 		sdkmetric.WithResource(res),
-	)
-
-	// Create log exporter
-	logOpts := []otlploggrpc.Option{
-		otlploggrpc.WithEndpoint(cfg.Endpoint),
-	}
-	if cfg.Insecure {
-		logOpts = append(logOpts, otlploggrpc.WithInsecure())
-	}
-	logExporter, err := otlploggrpc.New(ctx, logOpts...)
-	if err != nil {
-		tracerProvider.Shutdown(ctx)
-		meterProvider.Shutdown(ctx)
-		return nil, nil, fmt.Errorf("create log exporter: %w", err)
 	}
 
-	// Create logger provider
-	loggerProvider := sdklog.NewLoggerProvider(
-		sdklog.WithProcessor(sdklog.NewBatchProcessor(logExporter)),
-		sdklog.WithResource(res),
-	)
+	// Add OTLP metric push reader when enabled. Failures are non-fatal.
+	if cfg.Enabled {
+		metricOpts := []otlpmetricgrpc.Option{
+			otlpmetricgrpc.WithEndpoint(cfg.Endpoint),
+		}
+		if cfg.Insecure {
+			metricOpts = append(metricOpts, otlpmetricgrpc.WithInsecure())
+		}
+		metricExporter, metricErr := otlpmetricgrpc.New(ctx, metricOpts...)
+		if metricErr != nil {
+			slog.Warn("failed to initialize OTLP metric push exporter; continuing with pull metrics only", "error", metricErr)
+		} else {
+			periodicOpts := []sdkmetric.PeriodicReaderOption{}
+			if cfg.MetricExportInterval != "" {
+				if interval, parseErr := time.ParseDuration(cfg.MetricExportInterval); parseErr != nil {
+					slog.Warn("invalid OTLP metric export interval; using default", "value", cfg.MetricExportInterval, "error", parseErr)
+				} else {
+					periodicOpts = append(periodicOpts, sdkmetric.WithInterval(interval))
+				}
+			}
+			meterProviderOpts = append(meterProviderOpts, sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExporter, periodicOpts...)))
+		}
+	}
 
-	// Set global providers
-	otel.SetTracerProvider(tracerProvider)
+	// Create meter provider with at least the Prometheus pull reader.
+	meterProvider := sdkmetric.NewMeterProvider(meterProviderOpts...)
+
+	var tracerProvider *sdktrace.TracerProvider
+	var loggerProvider *sdklog.LoggerProvider
+	var logHandler slog.Handler
+
+	if cfg.Enabled {
+		// Create trace provider (exporting when OTLP trace exporter initializes successfully).
+		traceOpts := []otlptracegrpc.Option{
+			otlptracegrpc.WithEndpoint(cfg.Endpoint),
+		}
+		if cfg.Insecure {
+			traceOpts = append(traceOpts, otlptracegrpc.WithInsecure())
+		}
+		traceExporter, traceErr := otlptracegrpc.New(ctx, traceOpts...)
+		if traceErr != nil {
+			slog.Warn("failed to initialize OTLP trace exporter; continuing without trace export", "error", traceErr)
+			tracerProvider = sdktrace.NewTracerProvider(
+				sdktrace.WithResource(res),
+			)
+		} else {
+			tracerProvider = sdktrace.NewTracerProvider(
+				sdktrace.WithBatcher(traceExporter),
+				sdktrace.WithResource(res),
+			)
+		}
+
+		// Create log exporter/provider. Failures are non-fatal.
+		logOpts := []otlploggrpc.Option{
+			otlploggrpc.WithEndpoint(cfg.Endpoint),
+		}
+		if cfg.Insecure {
+			logOpts = append(logOpts, otlploggrpc.WithInsecure())
+		}
+		logExporter, logErr := otlploggrpc.New(ctx, logOpts...)
+		if logErr != nil {
+			slog.Warn("failed to initialize OTLP log exporter; continuing without OTLP log export", "error", logErr)
+		} else {
+			loggerProvider = sdklog.NewLoggerProvider(
+				sdklog.WithProcessor(sdklog.NewBatchProcessor(logExporter)),
+				sdklog.WithResource(res),
+			)
+			logHandler = otelslog.NewHandler(cfg.ServiceName, otelslog.WithLoggerProvider(loggerProvider))
+		}
+	}
+
+	// Set global providers.
+	if tracerProvider != nil {
+		otel.SetTracerProvider(tracerProvider)
+	}
 	otel.SetMeterProvider(meterProvider)
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
 		propagation.TraceContext{},
 		propagation.Baggage{},
 	))
 
-	// Start runtime metrics collection
-	if err := otelruntime.Start(otelruntime.WithMeterProvider(meterProvider)); err != nil {
-		tracerProvider.Shutdown(ctx)
+	// Start runtime metrics collection.
+	startedRuntimeMetrics, err := startRuntimeMetricsOnce(meterProvider)
+	if err != nil {
+		if tracerProvider != nil {
+			tracerProvider.Shutdown(ctx)
+		}
 		meterProvider.Shutdown(ctx)
-		loggerProvider.Shutdown(ctx)
+		if loggerProvider != nil {
+			loggerProvider.Shutdown(ctx)
+		}
 		return nil, nil, fmt.Errorf("start runtime metrics: %w", err)
 	}
+	if !startedRuntimeMetrics {
+		// Tests may initialize telemetry more than once in the same process.
+		// Runtime instrumentation is process-scoped, so skip duplicate starts.
+		slog.Warn("runtime metrics instrumentation already initialized; skipping duplicate start")
+	}
 
-	// Create slog handler that bridges to OTel
-	logHandler := otelslog.NewHandler(cfg.ServiceName, otelslog.WithLoggerProvider(loggerProvider))
+	tracer := otel.Tracer(cfg.ServiceName)
+	if tracerProvider != nil {
+		tracer = tracerProvider.Tracer(cfg.ServiceName)
+	}
 
 	provider := &Provider{
 		TracerProvider: tracerProvider,
 		MeterProvider:  meterProvider,
 		LoggerProvider: loggerProvider,
-		Tracer:         tracerProvider.Tracer(cfg.ServiceName),
+		Tracer:         tracer,
 		Meter:          meterProvider.Meter(cfg.ServiceName),
 		LogHandler:     logHandler,
+		MetricsHandler: promhttp.HandlerFor(promRegistry, promhttp.HandlerOpts{}),
 		startTime:      time.Now(),
 	}
 
-	// Register system metrics (uptime, info)
+	// Register system metrics (uptime, info).
 	if err := provider.registerSystemMetrics(cfg); err != nil {
-		tracerProvider.Shutdown(ctx)
+		if tracerProvider != nil {
+			tracerProvider.Shutdown(ctx)
+		}
 		meterProvider.Shutdown(ctx)
-		loggerProvider.Shutdown(ctx)
+		if loggerProvider != nil {
+			loggerProvider.Shutdown(ctx)
+		}
 		return nil, nil, fmt.Errorf("register system metrics: %w", err)
 	}
 
 	shutdown := func(ctx context.Context) error {
 		var errs []error
-		if err := tracerProvider.Shutdown(ctx); err != nil {
-			errs = append(errs, fmt.Errorf("shutdown tracer: %w", err))
+		if tracerProvider != nil {
+			if err := tracerProvider.Shutdown(ctx); err != nil {
+				errs = append(errs, fmt.Errorf("shutdown tracer: %w", err))
+			}
 		}
 		if err := meterProvider.Shutdown(ctx); err != nil {
 			errs = append(errs, fmt.Errorf("shutdown meter: %w", err))
 		}
-		if err := loggerProvider.Shutdown(ctx); err != nil {
-			errs = append(errs, fmt.Errorf("shutdown logger: %w", err))
+		if loggerProvider != nil {
+			if err := loggerProvider.Shutdown(ctx); err != nil {
+				errs = append(errs, fmt.Errorf("shutdown logger: %w", err))
+			}
 		}
 		if len(errs) > 0 {
 			return fmt.Errorf("shutdown errors: %v", errs)

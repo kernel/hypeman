@@ -111,7 +111,7 @@ func (m *manager) calculateTotalVolumeStorage(ctx context.Context) (int64, error
 // CreateVolume creates a new volume
 func (m *manager) CreateVolume(ctx context.Context, req CreateVolumeRequest) (*Volume, error) {
 	start := time.Now()
-	if err := tags.Validate(req.Metadata); err != nil {
+	if err := tags.Validate(req.Tags); err != nil {
 		return nil, err
 	}
 
@@ -158,7 +158,7 @@ func (m *manager) CreateVolume(ctx context.Context, req CreateVolumeRequest) (*V
 		Id:        id,
 		Name:      req.Name,
 		SizeGb:    req.SizeGb,
-		Metadata:  tags.Clone(req.Metadata),
+		Tags:      tags.Clone(req.Tags),
 		CreatedAt: now.Format(time.RFC3339),
 	}
 
@@ -177,7 +177,7 @@ func (m *manager) CreateVolume(ctx context.Context, req CreateVolumeRequest) (*V
 // The archive is safely extracted with size limits to prevent tar bombs.
 func (m *manager) CreateVolumeFromArchive(ctx context.Context, req CreateVolumeFromArchiveRequest, archive io.Reader) (*Volume, error) {
 	start := time.Now()
-	if err := tags.Validate(req.Metadata); err != nil {
+	if err := tags.Validate(req.Tags); err != nil {
 		return nil, err
 	}
 
@@ -244,7 +244,7 @@ func (m *manager) CreateVolumeFromArchive(ctx context.Context, req CreateVolumeF
 		Id:        id,
 		Name:      req.Name,
 		SizeGb:    actualSizeGb,
-		Metadata:  tags.Clone(req.Metadata),
+		Tags:      tags.Clone(req.Tags),
 		CreatedAt: now.Format(time.RFC3339),
 	}
 
@@ -429,7 +429,7 @@ func (m *manager) metadataToVolume(meta *storedMetadata) *Volume {
 		Id:          meta.Id,
 		Name:        meta.Name,
 		SizeGb:      meta.SizeGb,
-		Metadata:    tags.Clone(meta.Metadata),
+		Tags:        tags.Clone(meta.Tags),
 		CreatedAt:   createdAt,
 		Attachments: attachments,
 	}

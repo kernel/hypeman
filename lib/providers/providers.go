@@ -167,8 +167,10 @@ func ProvideResourceManager(ctx context.Context, cfg *config.Config, p *paths.Pa
 }
 
 // ProvideVMMetricsManager provides the VM metrics manager for utilization tracking
-func ProvideVMMetricsManager(instanceManager instances.Manager) (*vm_metrics.Manager, error) {
+func ProvideVMMetricsManager(instanceManager instances.Manager, cfg *config.Config, log *slog.Logger) (*vm_metrics.Manager, error) {
 	mgr := vm_metrics.NewManager()
+	mgr.SetVMLabelBudget(cfg.Metrics.VMLabelBudget)
+	mgr.SetLogger(log)
 
 	// Adapt instance manager to vm_metrics.InstanceSource interface
 	adapter := vm_metrics.NewInstanceManagerAdapter(instanceManager)

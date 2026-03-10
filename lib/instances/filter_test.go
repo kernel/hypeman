@@ -24,7 +24,7 @@ func TestListInstancesFilter_Matches(t *testing.T) {
 			Id:    "inst-1",
 			Name:  "web-server",
 			Image: "nginx:latest",
-			Metadata: map[string]string{
+			Tags: map[string]string{
 				"team": "backend",
 				"env":  "staging",
 			},
@@ -58,30 +58,30 @@ func TestListInstancesFilter_Matches(t *testing.T) {
 			want:   false,
 		},
 		{
-			name: "single metadata key matches",
+			name: "single tag key matches",
 			filter: &ListInstancesFilter{
-				Metadata: map[string]string{"team": "backend"},
+				Tags: map[string]string{"team": "backend"},
 			},
 			want: true,
 		},
 		{
-			name: "single metadata key wrong value",
+			name: "single tag key wrong value",
 			filter: &ListInstancesFilter{
-				Metadata: map[string]string{"team": "frontend"},
+				Tags: map[string]string{"team": "frontend"},
 			},
 			want: false,
 		},
 		{
-			name: "metadata key does not exist",
+			name: "tag key does not exist",
 			filter: &ListInstancesFilter{
-				Metadata: map[string]string{"project": "alpha"},
+				Tags: map[string]string{"project": "alpha"},
 			},
 			want: false,
 		},
 		{
-			name: "multiple metadata keys all match",
+			name: "multiple tag keys all match",
 			filter: &ListInstancesFilter{
-				Metadata: map[string]string{
+				Tags: map[string]string{
 					"team": "backend",
 					"env":  "staging",
 				},
@@ -89,9 +89,9 @@ func TestListInstancesFilter_Matches(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "multiple metadata keys partial match",
+			name: "multiple tag keys partial match",
 			filter: &ListInstancesFilter{
-				Metadata: map[string]string{
+				Tags: map[string]string{
 					"team": "backend",
 					"env":  "production",
 				},
@@ -99,26 +99,26 @@ func TestListInstancesFilter_Matches(t *testing.T) {
 			want: false,
 		},
 		{
-			name: "state and metadata combined match",
+			name: "state and tags combined match",
 			filter: &ListInstancesFilter{
-				State:    &running,
-				Metadata: map[string]string{"team": "backend"},
+				State: &running,
+				Tags:  map[string]string{"team": "backend"},
 			},
 			want: true,
 		},
 		{
-			name: "state matches but metadata does not",
+			name: "state matches but tags do not",
 			filter: &ListInstancesFilter{
-				State:    &running,
-				Metadata: map[string]string{"team": "frontend"},
+				State: &running,
+				Tags:  map[string]string{"team": "frontend"},
 			},
 			want: false,
 		},
 		{
-			name: "metadata matches but state does not",
+			name: "tags match but state does not",
 			filter: &ListInstancesFilter{
-				State:    &stopped,
-				Metadata: map[string]string{"team": "backend"},
+				State: &stopped,
+				Tags:  map[string]string{"team": "backend"},
 			},
 			want: false,
 		},
@@ -136,16 +136,16 @@ func TestListInstancesFilter_Matches_NilMetadata(t *testing.T) {
 	t.Parallel()
 	inst := &Instance{
 		StoredMetadata: StoredMetadata{
-			Id:       "inst-2",
-			Metadata: nil,
+			Id:   "inst-2",
+			Tags: nil,
 		},
 		State: StateRunning,
 	}
 
 	filter := &ListInstancesFilter{
-		Metadata: map[string]string{"team": "backend"},
+		Tags: map[string]string{"team": "backend"},
 	}
-	assert.False(t, filter.Matches(inst), "should not match when instance has no metadata")
+	assert.False(t, filter.Matches(inst), "should not match when instance has no tags")
 }
 
 // TestListInstances_WithFilter exercises the full ListInstances path using
@@ -157,13 +157,13 @@ func TestListInstances_WithFilter(t *testing.T) {
 
 	mgr := &manager{paths: p}
 
-	// Create three instances with different metadata on disk
+	// Create three instances with different tags on disk
 	instances := []StoredMetadata{
 		{
 			Id:             "inst-a",
 			Name:           "web",
 			Image:          "nginx:latest",
-			Metadata:       map[string]string{"team": "backend", "env": "prod"},
+			Tags:           map[string]string{"team": "backend", "env": "prod"},
 			CreatedAt:      time.Now(),
 			HypervisorType: hypervisor.TypeCloudHypervisor,
 			SocketPath:     "/nonexistent/a.sock",
@@ -173,7 +173,7 @@ func TestListInstances_WithFilter(t *testing.T) {
 			Id:             "inst-b",
 			Name:           "worker",
 			Image:          "python:3",
-			Metadata:       map[string]string{"team": "backend", "env": "staging"},
+			Tags:           map[string]string{"team": "backend", "env": "staging"},
 			CreatedAt:      time.Now(),
 			HypervisorType: hypervisor.TypeCloudHypervisor,
 			SocketPath:     "/nonexistent/b.sock",
@@ -183,7 +183,7 @@ func TestListInstances_WithFilter(t *testing.T) {
 			Id:             "inst-c",
 			Name:           "frontend",
 			Image:          "node:20",
-			Metadata:       map[string]string{"team": "frontend", "env": "prod"},
+			Tags:           map[string]string{"team": "frontend", "env": "prod"},
 			CreatedAt:      time.Now(),
 			HypervisorType: hypervisor.TypeCloudHypervisor,
 			SocketPath:     "/nonexistent/c.sock",
@@ -206,9 +206,9 @@ func TestListInstances_WithFilter(t *testing.T) {
 		assert.Len(t, result, 3)
 	})
 
-	t.Run("filter by single metadata key", func(t *testing.T) {
+	t.Run("filter by single tag key", func(t *testing.T) {
 		result, err := mgr.ListInstances(ctx, &ListInstancesFilter{
-			Metadata: map[string]string{"team": "backend"},
+			Tags: map[string]string{"team": "backend"},
 		})
 		require.NoError(t, err)
 		assert.Len(t, result, 2)
@@ -216,18 +216,18 @@ func TestListInstances_WithFilter(t *testing.T) {
 		assert.ElementsMatch(t, []string{"web", "worker"}, names)
 	})
 
-	t.Run("filter by two metadata keys", func(t *testing.T) {
+	t.Run("filter by two tag keys", func(t *testing.T) {
 		result, err := mgr.ListInstances(ctx, &ListInstancesFilter{
-			Metadata: map[string]string{"team": "backend", "env": "prod"},
+			Tags: map[string]string{"team": "backend", "env": "prod"},
 		})
 		require.NoError(t, err)
 		require.Len(t, result, 1)
 		assert.Equal(t, "web", result[0].Name)
 	})
 
-	t.Run("filter by metadata with no matches", func(t *testing.T) {
+	t.Run("filter by tags with no matches", func(t *testing.T) {
 		result, err := mgr.ListInstances(ctx, &ListInstancesFilter{
-			Metadata: map[string]string{"team": "devops"},
+			Tags: map[string]string{"team": "devops"},
 		})
 		require.NoError(t, err)
 		assert.Empty(t, result)
@@ -250,11 +250,11 @@ func TestListInstances_WithFilter(t *testing.T) {
 		assert.Empty(t, result)
 	})
 
-	t.Run("filter by state and metadata combined", func(t *testing.T) {
+	t.Run("filter by state and tags combined", func(t *testing.T) {
 		stopped := StateStopped
 		result, err := mgr.ListInstances(ctx, &ListInstancesFilter{
-			State:    &stopped,
-			Metadata: map[string]string{"env": "prod"},
+			State: &stopped,
+			Tags:  map[string]string{"env": "prod"},
 		})
 		require.NoError(t, err)
 		assert.Len(t, result, 2)

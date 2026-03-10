@@ -64,7 +64,7 @@ func initializeApp() (*application, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	vm_metricsManager, err := providers.ProvideVMMetricsManager(instancesManager)
+	vm_metricsManager, err := providers.ProvideVMMetricsManager(instancesManager, config, logger)
 	if err != nil {
 		return nil, nil, err
 	}
