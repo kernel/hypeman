@@ -68,8 +68,8 @@ type StoredMetadata struct {
 	Tags           tags.Tags // User-defined key-value tags
 	NetworkEnabled bool      // Whether instance has networking enabled (uses default network)
 	EgressProxy    *EgressProxyConfig
-	IP             string    // Assigned IP address (empty if NetworkEnabled=false)
-	MAC            string    // Assigned MAC address (empty if NetworkEnabled=false)
+	IP             string // Assigned IP address (empty if NetworkEnabled=false)
+	MAC            string // Assigned MAC address (empty if NetworkEnabled=false)
 
 	// Attached volumes
 	Volumes []VolumeAttachment // Volumes attached to this instance
