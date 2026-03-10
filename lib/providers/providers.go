@@ -13,6 +13,7 @@ import (
 	"github.com/kernel/hypeman/cmd/api/config"
 	"github.com/kernel/hypeman/lib/builds"
 	"github.com/kernel/hypeman/lib/devices"
+	"github.com/kernel/hypeman/lib/guestmemory"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/hypervisor/firecracker"
 	"github.com/kernel/hypeman/lib/images"
@@ -125,7 +126,13 @@ func ProvideInstanceManager(p *paths.Paths, cfg *config.Config, imageManager ima
 	meter := otel.GetMeterProvider().Meter("hypeman")
 	tracer := otel.GetTracerProvider().Tracer("hypeman")
 	defaultHypervisor := hypervisor.Type(cfg.Hypervisor.Default)
-	return instances.NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, defaultHypervisor, meter, tracer), nil
+	memoryPolicy := guestmemory.Policy{
+		Enabled:            cfg.Hypervisor.Memory.Enabled,
+		KernelPageInitMode: guestmemory.KernelPageInitMode(cfg.Hypervisor.Memory.KernelPageInitMode),
+		ReclaimEnabled:     cfg.Hypervisor.Memory.ReclaimEnabled,
+		VZBalloonRequired:  cfg.Hypervisor.Memory.VZBalloonRequired,
+	}
+	return instances.NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, defaultHypervisor, meter, tracer, memoryPolicy), nil
 }
 
 // ProvideVolumeManager provides the volume manager

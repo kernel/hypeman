@@ -37,7 +37,8 @@ func NewShimServer(vm *vz.VirtualMachine, vmConfig *vz.VirtualMachineConfigurati
 
 // VMInfoResponse matches the cloud-hypervisor VmInfo structure.
 type VMInfoResponse struct {
-	State string `json:"state"`
+	State                string `json:"state"`
+	MemoryBalloonDevices int    `json:"memory_balloon_devices,omitempty"`
 }
 
 type snapshotRequest struct {
@@ -66,7 +67,10 @@ func (s *ShimServer) handleVMInfo(w http.ResponseWriter, r *http.Request) {
 	defer s.mu.RUnlock()
 
 	state := vzStateToString(s.vm.State())
-	resp := VMInfoResponse{State: state}
+	resp := VMInfoResponse{
+		State:                state,
+		MemoryBalloonDevices: len(s.vm.MemoryBalloonDevices()),
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)

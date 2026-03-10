@@ -13,6 +13,12 @@ import (
 	"github.com/kernel/hypeman/lib/vmconfig"
 )
 
+const (
+	guestAgentReadyFilePath = "/run/hypeman/guest-agent-ready"
+	guestAgentReadyTimeout  = 10 * time.Second
+	guestAgentReadyFDEnv    = "HYPEMAN_AGENT_READY_FD"
+)
+
 // runExecMode runs the container in exec mode (default).
 // This is the Docker-like behavior where:
 // - The init binary remains PID 1
@@ -45,14 +51,48 @@ func runExecMode(log *Logger, cfg *vmconfig.Config) {
 	if cfg.SkipGuestAgent {
 		log.Info("hypeman-init:setup", "skipping guest-agent (skip_guest_agent=true)")
 	} else {
+		// Clear stale readiness marker from previous runs.
+		_ = os.Remove(guestAgentReadyFilePath)
+
+		readyPipeReader, readyPipeWriter, err := os.Pipe()
+		if err != nil {
+			log.Error("hypeman-init:setup", "failed to create guest-agent readiness pipe", err)
+			syscall.Sync()
+			syscall.Reboot(syscall.LINUX_REBOOT_CMD_POWER_OFF)
+		}
+
 		log.Info("hypeman-init:setup", "starting guest-agent in background")
 		agentCmd = exec.Command("/opt/hypeman/guest-agent")
-		agentCmd.Env = buildEnv(cfg.Env)
+		agentCmd.Env = append(
+			buildEnv(cfg.Env),
+			"HYPEMAN_AGENT_READY_FILE="+guestAgentReadyFilePath,
+			fmt.Sprintf("%s=%d", guestAgentReadyFDEnv, 3),
+		)
+		agentCmd.ExtraFiles = []*os.File{readyPipeWriter}
 		agentCmd.Stdout = os.Stdout
 		agentCmd.Stderr = os.Stderr
 		if err := agentCmd.Start(); err != nil {
+			_ = readyPipeReader.Close()
+			_ = readyPipeWriter.Close()
 			log.Error("hypeman-init:setup", "failed to start guest-agent", err)
+			syscall.Sync()
+			syscall.Reboot(syscall.LINUX_REBOOT_CMD_POWER_OFF)
 		}
+		_ = readyPipeWriter.Close()
+
+		agentExited := make(chan error, 1)
+		go func() {
+			agentExited <- agentCmd.Wait()
+		}()
+
+		// Strict startup gate: do not launch the guest program until agent is ready.
+		if err := waitForGuestAgentReady(readyPipeReader, guestAgentReadyTimeout, agentExited); err != nil {
+			_ = readyPipeReader.Close()
+			log.Error("hypeman-init:setup", "guest-agent readiness gate failed; not launching entrypoint", err)
+			syscall.Sync()
+			syscall.Reboot(syscall.LINUX_REBOOT_CMD_POWER_OFF)
+		}
+		_ = readyPipeReader.Close()
 	}
 
 	// Build the entrypoint command
@@ -88,6 +128,8 @@ func runExecMode(log *Logger, cfg *vmconfig.Config) {
 		dropToShell()
 	}
 
+	// Program-start sentinel used by host state derivation.
+	log.Info("hypeman-init:entrypoint", formatProgramStartSentinel("exec"))
 	log.Info("hypeman-init:entrypoint", fmt.Sprintf("container app started (PID %d)", appCmd.Process.Pid))
 
 	// Set up signal forwarding: when init receives a signal (e.g. from guest-agent
@@ -172,6 +214,55 @@ func describeExitCode(code int) string {
 // Format: HYPEMAN-EXIT code=<N> message="<description>"
 func formatExitSentinel(code int, message string) string {
 	return fmt.Sprintf("HYPEMAN-EXIT code=%d message=%q", code, message)
+}
+
+func formatProgramStartSentinel(mode string) string {
+	return fmt.Sprintf("HYPEMAN-PROGRAM-START ts=%s mode=%s", time.Now().UTC().Format(time.RFC3339Nano), mode)
+}
+
+func waitForGuestAgentReady(readyReader *os.File, timeout time.Duration, agentExited <-chan error) error {
+	readyErr := make(chan error, 1)
+	go func() {
+		var b [1]byte
+		_, err := readyReader.Read(b[:])
+		readyErr <- err
+	}()
+
+	agentExitCh := agentExited
+	agentExitObserved := false
+	var agentExitErr error
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	for {
+		select {
+		case err := <-readyErr:
+			if err != nil {
+				if agentExitObserved {
+					if agentExitErr == nil {
+						return fmt.Errorf("guest-agent exited before readiness signal")
+					}
+					return fmt.Errorf("guest-agent exited before readiness signal: %w", agentExitErr)
+				}
+				return fmt.Errorf("failed waiting for guest-agent readiness signal: %w", err)
+			}
+			return nil
+		case err := <-agentExitCh:
+			agentExitErr = err
+			agentExitObserved = true
+			// Keep waiting for the readiness read to complete. If the agent wrote
+			// readiness and then exited, the read succeeds and startup proceeds.
+			agentExitCh = nil
+		case <-timer.C:
+			if agentExitObserved {
+				if agentExitErr == nil {
+					return fmt.Errorf("guest-agent exited before readiness signal")
+				}
+				return fmt.Errorf("guest-agent exited before readiness signal: %w", agentExitErr)
+			}
+			return fmt.Errorf("timed out after %s waiting for guest-agent readiness signal", timeout)
+		}
+	}
 }
 
 // checkOOMKill checks /dev/kmsg for recent OOM kill messages.

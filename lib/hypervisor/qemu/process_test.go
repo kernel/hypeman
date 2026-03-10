@@ -1,6 +1,7 @@
 package qemu
 
 import (
+	"errors"
 	"os/exec"
 	"regexp"
 	"testing"
@@ -97,6 +98,81 @@ func TestGetVersion_ParsesVersionCorrectly(t *testing.T) {
 				require.GreaterOrEqual(t, len(matches), 2, "Should find version match")
 				assert.Equal(t, tt.expected, matches[1], "Parsed version should match expected")
 			}
+		})
+	}
+}
+
+func TestShouldRetryWithReducedBalloon(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "unsupported free page reporting",
+			err:  errors.New("Property 'virtio-balloon-device.free-page-reporting' not found"),
+			want: true,
+		},
+		{
+			name: "unsupported deflate option",
+			err:  errors.New("Parameter 'deflate-on-oom' is unexpected"),
+			want: true,
+		},
+		{
+			name: "free-page-hint requires iothread",
+			err:  errors.New("qemu-system-x86_64: -device virtio-balloon-pci,...: 'free-page-hint' requires 'iothread' to be set"),
+			want: true,
+		},
+		{
+			name: "non-balloon start error",
+			err:  errors.New("wait for socket /tmp/qemu.sock: timed out after 10s"),
+			want: false,
+		},
+		{
+			name: "transient monitor connection refused",
+			err:  errors.New("create client: create qemu client: create socket monitor: dial unix /tmp/qemu.sock: connect: connection refused"),
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, shouldRetryWithReducedBalloon(tt.err))
+		})
+	}
+}
+
+func TestShouldRetrySameConfig(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "monitor connection refused",
+			err:  errors.New("create client: dial unix /tmp/qemu.sock: connect: connection refused"),
+			want: true,
+		},
+		{
+			name: "socket race no such file",
+			err:  errors.New("create socket monitor: dial unix /tmp/qemu.sock: connect: no such file or directory"),
+			want: true,
+		},
+		{
+			name: "timeout",
+			err:  errors.New("wait for socket /tmp/qemu.sock: timed out after 10s"),
+			want: true,
+		},
+		{
+			name: "explicit balloon incompatibility should not use same-config retry",
+			err:  errors.New("vmm.log: Property 'virtio-balloon-device.free-page-reporting' not found"),
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, shouldRetrySameConfig(tt.err))
 		})
 	}
 }

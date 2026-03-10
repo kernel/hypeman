@@ -45,11 +45,12 @@ components:
     
     InstanceState:
       type: string
-      enum: [Created, Running, Paused, Shutdown, Stopped, Standby, Unknown]
+      enum: [Created, Initializing, Running, Paused, Shutdown, Stopped, Standby, Unknown]
       description: |
         Instance state:
         - Created: VMM created but not started (Cloud Hypervisor native)
-        - Running: VM is actively running (Cloud Hypervisor native)
+        - Initializing: VM is running while guest init is still in progress
+        - Running: Guest program has started and instance is ready
         - Paused: VM is paused (Cloud Hypervisor native)
         - Shutdown: VM shut down but VMM exists (Cloud Hypervisor native)
         - Stopped: No VMM running, no snapshot exists
