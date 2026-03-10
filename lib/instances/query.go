@@ -147,6 +147,7 @@ func (m *manager) parseBootMarkers(id string, needProgram bool, needAgent bool, 
 
 	var programStartedAt *time.Time
 	var guestAgentReadyAt *time.Time
+	// Iterate newest-to-oldest so we can stop once all required markers are found.
 	for i := len(logPaths) - 1; i >= 0; i-- {
 		logPath := logPaths[i]
 		if !fileMayContainCurrentBootMarkers(logPath, startedAt) {
@@ -174,7 +175,11 @@ func (m *manager) parseBootMarkers(id string, needProgram bool, needAgent bool, 
 				}
 			}
 		}
+		scanErr := scanner.Err()
 		_ = f.Close()
+		if scanErr != nil {
+			continue
+		}
 		if (!needProgram || programStartedAt != nil) && (!needAgent || guestAgentReadyAt != nil) {
 			return programStartedAt, guestAgentReadyAt
 		}
