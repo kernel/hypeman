@@ -1,12 +1,12 @@
 package tags
 
-// Clone returns a deep copy of metadata map and normalizes empty maps to nil.
-func Clone(metadata Metadata) Metadata {
-	if len(metadata) == 0 {
+// Clone returns a deep copy of a tag map and normalizes empty maps to nil.
+func Clone(resourceTags Tags) Tags {
+	if len(resourceTags) == 0 {
 		return nil
 	}
-	out := make(Metadata, len(metadata))
-	for k, v := range metadata {
+	out := make(Tags, len(resourceTags))
+	for k, v := range resourceTags {
 		out[k] = v
 	}
 	return out

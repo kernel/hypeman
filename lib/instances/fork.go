@@ -470,10 +470,10 @@ func cloneStoredMetadataForFork(src StoredMetadata) StoredMetadata {
 	if src.EgressProxy != nil {
 		dst.EgressProxy = cloneEgressProxyConfig(src.EgressProxy)
 	}
-	if src.Metadata != nil {
-		dst.Metadata = make(map[string]string, len(src.Metadata))
-		for k, v := range src.Metadata {
-			dst.Metadata[k] = v
+	if src.Tags != nil {
+		dst.Tags = make(map[string]string, len(src.Tags))
+		for k, v := range src.Tags {
+			dst.Tags[k] = v
 		}
 	}
 	if src.Volumes != nil {

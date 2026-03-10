@@ -20,7 +20,7 @@ func TestBuildMetadataReadWrite_MetadataRoundTrip(t *testing.T) {
 	meta := &buildMetadata{
 		ID:        id,
 		Status:    StatusQueued,
-		Metadata:  map[string]string{"team": "backend", "env": "staging"},
+		Tags:      map[string]string{"team": "backend", "env": "staging"},
 		CreatedAt: time.Now().UTC().Truncate(time.Second),
 	}
 
@@ -28,11 +28,11 @@ func TestBuildMetadataReadWrite_MetadataRoundTrip(t *testing.T) {
 
 	loaded, err := readMetadata(p, id)
 	require.NoError(t, err)
-	require.Equal(t, map[string]string{"team": "backend", "env": "staging"}, loaded.Metadata)
+	require.Equal(t, map[string]string{"team": "backend", "env": "staging"}, loaded.Tags)
 
 	build := loaded.toBuild()
-	require.Equal(t, map[string]string{"team": "backend", "env": "staging"}, build.Metadata)
+	require.Equal(t, map[string]string{"team": "backend", "env": "staging"}, build.Tags)
 
-	loaded.Metadata["team"] = "mutated"
-	require.Equal(t, "backend", build.Metadata["team"])
+	loaded.Tags["team"] = "mutated"
+	require.Equal(t, "backend", build.Tags["team"])
 }

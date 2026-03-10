@@ -26,7 +26,7 @@ func (s *ApiService) ListVolumes(ctx context.Context, request oapi.ListVolumesRe
 
 	oapiVols := make([]oapi.Volume, 0, len(domainVols))
 	for _, vol := range domainVols {
-		if !matchesMetadataFilter(vol.Metadata, request.Params.Metadata) {
+		if !matchesTagsFilter(vol.Tags, request.Params.Tags) {
 			continue
 		}
 		oapiVols = append(oapiVols, volumeToOAPI(vol))
@@ -47,10 +47,10 @@ func (s *ApiService) CreateVolume(ctx context.Context, request oapi.CreateVolume
 	}
 
 	domainReq := volumes.CreateVolumeRequest{
-		Name:     request.Body.Name,
-		SizeGb:   request.Body.SizeGb,
-		Id:       request.Body.Id,
-		Metadata: toMapMetadata(request.Body.Metadata),
+		Name:   request.Body.Name,
+		SizeGb: request.Body.SizeGb,
+		Id:     request.Body.Id,
+		Tags:   toMapTags(request.Body.Tags),
 	}
 
 	vol, err := s.VolumeManager.CreateVolume(ctx, domainReq)
@@ -61,7 +61,7 @@ func (s *ApiService) CreateVolume(ctx context.Context, request oapi.CreateVolume
 				Message: "volume with this ID already exists",
 			}, nil
 		}
-		if errors.Is(err, tags.ErrInvalidMetadata) {
+		if errors.Is(err, tags.ErrInvalidTags) {
 			return oapi.CreateVolume400JSONResponse{
 				Code:    "invalid_request",
 				Message: err.Error(),
@@ -99,10 +99,10 @@ func (s *ApiService) CreateVolumeFromArchive(ctx context.Context, request oapi.C
 
 	// Create the volume from archive - stream directly without buffering
 	domainReq := volumes.CreateVolumeFromArchiveRequest{
-		Name:     request.Params.Name,
-		SizeGb:   request.Params.SizeGb,
-		Id:       request.Params.Id,
-		Metadata: toMapMetadata(request.Params.Metadata),
+		Name:   request.Params.Name,
+		SizeGb: request.Params.SizeGb,
+		Id:     request.Params.Id,
+		Tags:   toMapTags(request.Params.Tags),
 	}
 
 	vol, err := s.VolumeManager.CreateVolumeFromArchive(ctx, domainReq, request.Body)
@@ -119,7 +119,7 @@ func (s *ApiService) CreateVolumeFromArchive(ctx context.Context, request oapi.C
 				Message: "volume with this ID already exists",
 			}, nil
 		}
-		if errors.Is(err, tags.ErrInvalidMetadata) {
+		if errors.Is(err, tags.ErrInvalidTags) {
 			return oapi.CreateVolumeFromArchive400JSONResponse{
 				Code:    "invalid_request",
 				Message: err.Error(),
@@ -186,7 +186,7 @@ func volumeToOAPI(vol volumes.Volume) oapi.Volume {
 		Id:        vol.Id,
 		Name:      vol.Name,
 		SizeGb:    vol.SizeGb,
-		Metadata:  toOAPIMetadata(vol.Metadata),
+		Tags:      toOAPITags(vol.Tags),
 		CreatedAt: vol.CreatedAt,
 	}
 

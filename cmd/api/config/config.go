@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"strings"
+	"time"
 
 	"github.com/knadh/koanf/parsers/yaml"
 	"github.com/knadh/koanf/providers/env"
@@ -93,13 +94,21 @@ type APIConfig struct {
 	RedirectHTTP bool   `koanf:"redirect_http"`
 }
 
+// MetricsConfig holds metrics endpoint settings.
+type MetricsConfig struct {
+	ListenAddress string `koanf:"listen_address"`
+	Port          int    `koanf:"port"`
+	VMLabelBudget int    `koanf:"vm_label_budget"`
+}
+
 // OtelConfig holds OpenTelemetry settings.
 type OtelConfig struct {
-	Enabled           bool   `koanf:"enabled"`
-	Endpoint          string `koanf:"endpoint"`
-	ServiceName       string `koanf:"service_name"`
-	ServiceInstanceID string `koanf:"service_instance_id"`
-	Insecure          bool   `koanf:"insecure"`
+	Enabled              bool   `koanf:"enabled"`
+	Endpoint             string `koanf:"endpoint"`
+	ServiceName          string `koanf:"service_name"`
+	ServiceInstanceID    string `koanf:"service_instance_id"`
+	Insecure             bool   `koanf:"insecure"`
+	MetricExportInterval string `koanf:"metric_export_interval"`
 }
 
 // LoggingConfig holds log rotation and level settings.
@@ -175,6 +184,7 @@ type Config struct {
 	Caddy            CaddyConfig            `koanf:"caddy"`
 	ACME             ACMEConfig             `koanf:"acme"`
 	API              APIConfig              `koanf:"api"`
+	Metrics          MetricsConfig          `koanf:"metrics"`
 	Otel             OtelConfig             `koanf:"otel"`
 	Logging          LoggingConfig          `koanf:"logging"`
 	Build            BuildConfig            `koanf:"build"`
@@ -245,12 +255,19 @@ func defaultConfig() *Config {
 			RedirectHTTP: true,
 		},
 
+		Metrics: MetricsConfig{
+			ListenAddress: "127.0.0.1",
+			Port:          9464,
+			VMLabelBudget: 200,
+		},
+
 		Otel: OtelConfig{
-			Enabled:           false,
-			Endpoint:          "127.0.0.1:4317",
-			ServiceName:       "hypeman",
-			ServiceInstanceID: getHostname(),
-			Insecure:          true,
+			Enabled:              false,
+			Endpoint:             "127.0.0.1:4317",
+			ServiceName:          "hypeman",
+			ServiceInstanceID:    getHostname(),
+			Insecure:             true,
+			MetricExportInterval: "60s",
 		},
 
 		Logging: LoggingConfig{
@@ -373,6 +390,20 @@ func Load(configPath string) (*Config, error) {
 // Validate checks configuration values for correctness.
 // Returns an error if any configuration value is invalid.
 func (c *Config) Validate() error {
+	if strings.TrimSpace(c.Metrics.ListenAddress) == "" {
+		return fmt.Errorf("metrics.listen_address must not be empty")
+	}
+	if c.Metrics.Port < 1 || c.Metrics.Port > 65535 {
+		return fmt.Errorf("metrics.port must be between 1 and 65535, got %d", c.Metrics.Port)
+	}
+	if c.Metrics.VMLabelBudget <= 0 {
+		return fmt.Errorf("metrics.vm_label_budget must be positive, got %d", c.Metrics.VMLabelBudget)
+	}
+	if c.Otel.MetricExportInterval != "" {
+		if _, err := time.ParseDuration(c.Otel.MetricExportInterval); err != nil {
+			return fmt.Errorf("otel.metric_export_interval must be a valid duration, got %q: %w", c.Otel.MetricExportInterval, err)
+		}
+	}
 	if c.Oversubscription.CPU <= 0 {
 		return fmt.Errorf("oversubscription.cpu must be positive, got %v", c.Oversubscription.CPU)
 	}

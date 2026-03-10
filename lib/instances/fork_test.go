@@ -224,7 +224,7 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 
 	src := StoredMetadata{
 		Env:           map[string]string{"A": "1"},
-		Metadata:      map[string]string{"m": "x"},
+		Tags:          map[string]string{"m": "x"},
 		Volumes:       []VolumeAttachment{{VolumeID: "vol-1", MountPath: "/data"}},
 		Devices:       []string{"0000:01:00.0"},
 		Entrypoint:    []string{"/bin/sh", "-c"},
@@ -239,7 +239,7 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 	require.Equal(t, src, cloned)
 
 	cloned.Env["A"] = "2"
-	cloned.Metadata["m"] = "y"
+	cloned.Tags["m"] = "y"
 	cloned.Volumes[0].MountPath = "/mnt"
 	cloned.Devices[0] = "0000:02:00.0"
 	cloned.Entrypoint[0] = "/usr/bin/env"
@@ -251,7 +251,7 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 	*cloned.StoppedAt = now
 
 	require.Equal(t, "1", src.Env["A"])
-	require.Equal(t, "x", src.Metadata["m"])
+	require.Equal(t, "x", src.Tags["m"])
 	require.Equal(t, "/data", src.Volumes[0].MountPath)
 	require.Equal(t, "0000:01:00.0", src.Devices[0])
 	require.Equal(t, "/bin/sh", src.Entrypoint[0])

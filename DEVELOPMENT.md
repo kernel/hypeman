@@ -115,6 +115,10 @@ Common settings:
 | `logging.level` | Log level (debug, info, warn, error) | `info` |
 | `otel.enabled` | Enable OpenTelemetry traces/metrics | `false` |
 | `otel.endpoint` | OTLP gRPC endpoint | `127.0.0.1:4317` |
+| `otel.metric_export_interval` | OTLP metric push interval | `60s` |
+| `metrics.listen_address` | Bind address for `/metrics` endpoint | `127.0.0.1` |
+| `metrics.port` | Port for `/metrics` endpoint | `9464` |
+| `metrics.vm_label_budget` | Warning threshold for observed per-VM metric labels | `200` |
 | `limits.max_concurrent_builds` | Max concurrent image builds | `1` |
 | `limits.max_overlay_size` | Max overlay filesystem size | `100GB` |
 | `acme.email` | Email for ACME certificate registration | _(empty)_ |

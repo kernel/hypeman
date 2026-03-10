@@ -24,7 +24,7 @@ func TestStoreSaveLoadListDelete(t *testing.T) {
 			Id:               "snap1",
 			Name:             "baseline",
 			Kind:             SnapshotKindStandby,
-			Metadata:         map[string]string{"team": "backend", "env": "staging"},
+			Tags:             map[string]string{"team": "backend", "env": "staging"},
 			SourceInstanceID: "inst1",
 			SourceName:       "vm1",
 			SourceHypervisor: hypervisor.TypeQEMU,
@@ -39,7 +39,7 @@ func TestStoreSaveLoadListDelete(t *testing.T) {
 	got, err := store.LoadRecord(record.Snapshot.Id)
 	require.NoError(t, err)
 	require.Equal(t, record.Snapshot.Id, got.Snapshot.Id)
-	require.Equal(t, record.Snapshot.Metadata, got.Snapshot.Metadata)
+	require.Equal(t, record.Snapshot.Tags, got.Snapshot.Tags)
 	require.JSONEq(t, string(record.StoredMetadata), string(got.StoredMetadata))
 
 	listed, err := store.List(nil)
@@ -87,26 +87,26 @@ func TestListSnapshotsFilterMatches(t *testing.T) {
 		SourceInstanceID: &sourceID,
 		Kind:             &kind,
 		Name:             &name,
-		Metadata:         map[string]string{"team": "backend", "env": "staging"},
+		Tags:             map[string]string{"team": "backend", "env": "staging"},
 	}
 
 	require.True(t, filter.Matches(&Snapshot{
 		SourceInstanceID: "inst1",
 		Kind:             SnapshotKindStandby,
 		Name:             "snap",
-		Metadata:         map[string]string{"team": "backend", "env": "staging"},
+		Tags:             map[string]string{"team": "backend", "env": "staging"},
 	}))
 	require.False(t, filter.Matches(&Snapshot{
 		SourceInstanceID: "inst2",
 		Kind:             SnapshotKindStandby,
 		Name:             "snap",
-		Metadata:         map[string]string{"team": "backend", "env": "staging"},
+		Tags:             map[string]string{"team": "backend", "env": "staging"},
 	}))
 	require.False(t, filter.Matches(&Snapshot{
 		SourceInstanceID: "inst1",
 		Kind:             SnapshotKindStandby,
 		Name:             "snap",
-		Metadata:         map[string]string{"team": "backend", "env": "prod"},
+		Tags:             map[string]string{"team": "backend", "env": "prod"},
 	}))
 }
 

@@ -83,7 +83,7 @@ func ExtractCaddyBinary(p *paths.Paths) (string, error) {
 	if err := atomicWriteFile(hashPath, []byte(embeddedHash), 0644); err != nil {
 		// Non-fatal - binary is extracted, just won't have hash for next time
 		// This could cause unnecessary re-extractions but won't break functionality
-		slog.Info("failed to write caddy binary hash file", "path", hashPath, "error", err)
+		slog.Warn("failed to write caddy binary hash file", "path", hashPath, "error", err)
 	}
 
 	return extractPath, nil
