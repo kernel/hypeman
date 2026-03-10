@@ -31,12 +31,28 @@ jobs:
       - name: Install dependencies
         run: |
           set -xe
+          apt_update_with_retry() {
+            local attempts=5
+            local sleep_seconds=30
+            local n=1
+            while [ "$n" -le "$attempts" ]; do
+              if sudo apt-get update; then
+                return 0
+              fi
+              if [ "$n" -eq "$attempts" ]; then
+                return 1
+              fi
+              echo "apt-get update failed (attempt ${n}/${attempts}); retrying in ${sleep_seconds}s..."
+              sleep "$sleep_seconds"
+              n=$((n + 1))
+            done
+          }
           if ! command -v mkfs.erofs &> /dev/null || \
              ! command -v mkfs.ext4 &> /dev/null || \
              ! command -v iptables &> /dev/null || \
              ! command -v qemu-system-x86_64 &> /dev/null || \
              ! qemu-system-x86_64 --version >/dev/null 2>&1; then
-            sudo apt-get update
+            apt_update_with_retry
             sudo apt-get install -y erofs-utils e2fsprogs iptables qemu-system-x86 qemu-utils
           fi
           go mod download
