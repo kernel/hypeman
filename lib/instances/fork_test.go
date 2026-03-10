@@ -380,7 +380,8 @@ func TestForkCloudHypervisorFromRunningNetwork(t *testing.T) {
 		NetworkEnabled: true,
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = manager.DeleteInstance(context.Background(), source.Id) })
+	sourceID := source.Id
+	t.Cleanup(func() { _ = manager.DeleteInstance(context.Background(), sourceID) })
 	source, err = waitForInstanceState(ctx, manager, source.Id, StateRunning, 20*time.Second)
 	require.NoError(t, err)
 	require.NoError(t, waitForVMReady(ctx, source.SocketPath, 5*time.Second))
