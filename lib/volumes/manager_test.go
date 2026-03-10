@@ -401,19 +401,19 @@ func TestCreateVolume_MetadataRoundTrip(t *testing.T) {
 		Name:        "tagged-vol",
 		SizeGb:      10,
 		Attachments: []storedAttachment{},
-		Metadata:    map[string]string{"team": "backend", "env": "staging"},
+		Tags:        map[string]string{"team": "backend", "env": "staging"},
 	}
 	require.NoError(t, os.MkdirAll(p.VolumeDir(meta.Id), 0755))
 	require.NoError(t, saveMetadata(p, meta))
 
 	loaded, err := loadMetadata(p, meta.Id)
 	require.NoError(t, err)
-	require.Equal(t, map[string]string{"team": "backend", "env": "staging"}, loaded.Metadata)
+	require.Equal(t, map[string]string{"team": "backend", "env": "staging"}, loaded.Tags)
 
 	vol := (&manager{}).metadataToVolume(loaded)
-	require.Equal(t, map[string]string{"team": "backend", "env": "staging"}, vol.Metadata)
+	require.Equal(t, map[string]string{"team": "backend", "env": "staging"}, vol.Tags)
 
 	// Verify deep-copy behavior from persisted metadata.
-	loaded.Metadata["team"] = "mutated"
-	require.Equal(t, "backend", vol.Metadata["team"])
+	loaded.Tags["team"] = "mutated"
+	require.Equal(t, "backend", vol.Tags["team"])
 }

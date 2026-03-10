@@ -21,7 +21,7 @@ func (s *ApiService) ListDevices(ctx context.Context, request oapi.ListDevicesRe
 
 	result := make([]oapi.Device, 0, len(deviceList))
 	for _, d := range deviceList {
-		if !matchesMetadataFilter(d.Metadata, request.Params.Metadata) {
+		if !matchesTagsFilter(d.Tags, request.Params.Tags) {
 			continue
 		}
 		result = append(result, deviceToOAPI(d))
@@ -57,13 +57,13 @@ func (s *ApiService) CreateDevice(ctx context.Context, request oapi.CreateDevice
 	req := devices.CreateDeviceRequest{
 		Name:       name,
 		PCIAddress: request.Body.PciAddress,
-		Metadata:   toMapMetadata(request.Body.Metadata),
+		Tags:       toMapTags(request.Body.Tags),
 	}
 
 	device, err := s.DeviceManager.CreateDevice(ctx, req)
 	if err != nil {
 		switch {
-		case errors.Is(err, tags.ErrInvalidMetadata):
+		case errors.Is(err, tags.ErrInvalidTags):
 			return oapi.CreateDevice400JSONResponse{
 				Code:    "invalid_request",
 				Message: err.Error(),
@@ -152,7 +152,7 @@ func deviceToOAPI(d devices.Device) oapi.Device {
 		Id:          d.Id,
 		Name:        &d.Name,
 		Type:        deviceType,
-		Metadata:    toOAPIMetadata(d.Metadata),
+		Tags:        toOAPITags(d.Tags),
 		PciAddress:  d.PCIAddress,
 		VendorId:    d.VendorID,
 		DeviceId:    d.DeviceID,

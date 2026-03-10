@@ -48,10 +48,10 @@ type StoredMetadata struct {
 
 	// Configuration
 	Env            map[string]string
-	Metadata       tags.Metadata // User-defined key-value metadata
-	NetworkEnabled bool          // Whether instance has networking enabled (uses default network)
-	IP             string        // Assigned IP address (empty if NetworkEnabled=false)
-	MAC            string        // Assigned MAC address (empty if NetworkEnabled=false)
+	Tags           tags.Tags // User-defined key-value tags
+	NetworkEnabled bool      // Whether instance has networking enabled (uses default network)
+	IP             string    // Assigned IP address (empty if NetworkEnabled=false)
+	MAC            string    // Assigned MAC address (empty if NetworkEnabled=false)
 
 	// Attached volumes
 	Volumes []VolumeAttachment // Volumes attached to this instance
@@ -119,8 +119,8 @@ func (i *Instance) GetHypervisorType() string {
 // ListInstancesFilter contains optional filters for listing instances.
 // All fields are ANDed together: an instance must match every specified filter.
 type ListInstancesFilter struct {
-	State    *State        // Filter by instance state
-	Metadata tags.Metadata // Filter by metadata key-value pairs (all must match)
+	State *State    // Filter by instance state
+	Tags  tags.Tags // Filter by tag key-value pairs (all must match)
 }
 
 // Matches returns true if the given instance satisfies all filter criteria.
@@ -131,11 +131,11 @@ func (f *ListInstancesFilter) Matches(inst *Instance) bool {
 	if f.State != nil && inst.State != *f.State {
 		return false
 	}
-	for k, v := range f.Metadata {
-		if inst.Metadata == nil {
+	for k, v := range f.Tags {
+		if inst.Tags == nil {
 			return false
 		}
-		if actual, ok := inst.Metadata[k]; !ok || actual != v {
+		if actual, ok := inst.Tags[k]; !ok || actual != v {
 			return false
 		}
 	}
@@ -159,7 +159,7 @@ type CreateInstanceRequest struct {
 	NetworkBandwidthUpload   int64              // Upload rate limit bytes/sec (0 = auto, proportional to CPU)
 	DiskIOBps                int64              // Disk I/O rate limit bytes/sec (0 = auto, proportional to CPU)
 	Env                      map[string]string  // Optional environment variables
-	Metadata                 tags.Metadata      // Optional user-defined key-value metadata
+	Tags                     tags.Tags          // Optional user-defined key-value tags
 	NetworkEnabled           bool               // Whether to enable networking (uses default network)
 	Devices                  []string           // Device IDs or names to attach (GPU passthrough)
 	Volumes                  []VolumeAttachment // Volumes to attach at creation time
@@ -202,9 +202,9 @@ type ListSnapshotsFilter = snapshot.ListSnapshotsFilter
 
 // CreateSnapshotRequest is the domain request for creating a snapshot.
 type CreateSnapshotRequest struct {
-	Kind     SnapshotKind  // Required: Standby or Stopped
-	Name     string        // Optional: unique per source instance
-	Metadata tags.Metadata // Optional user-defined key-value metadata
+	Kind SnapshotKind // Required: Standby or Stopped
+	Name string       // Optional: unique per source instance
+	Tags tags.Tags    // Optional user-defined key-value tags
 }
 
 // RestoreSnapshotRequest is the domain request for restoring a snapshot in-place.

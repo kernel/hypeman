@@ -15,6 +15,10 @@ import (
 	"github.com/kernel/hypeman/lib/instances"
 	"github.com/kernel/hypeman/lib/logger"
 	mw "github.com/kernel/hypeman/lib/middleware"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 var upgrader = websocket.Upgrader{
@@ -44,6 +48,13 @@ type ResizeMessage struct {
 		Rows uint32 `json:"rows"`
 		Cols uint32 `json:"cols"`
 	} `json:"resize"`
+}
+
+func execSpanAttributes(instanceID string, tty bool) []attribute.KeyValue {
+	return []attribute.KeyValue{
+		attribute.String("instance_id", instanceID),
+		attribute.Bool("tty", tty),
+	}
 }
 
 // ExecHandler handles exec requests via WebSocket for bidirectional streaming
@@ -108,6 +119,11 @@ func (s *ApiService) ExecHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Start OTEL span for tracing (WebSocket bypasses otelchi middleware).
+	tracer := otel.Tracer("hypeman/exec")
+	ctx, span := tracer.Start(ctx, "exec.session", trace.WithAttributes(execSpanAttributes(inst.Id, execReq.TTY)...))
+	defer span.End()
+
 	// Audit log: exec session started
 	log.InfoContext(ctx, "exec session started",
 		"instance_id", inst.Id,
@@ -133,6 +149,8 @@ func (s *ApiService) ExecHandler(w http.ResponseWriter, r *http.Request) {
 
 	dialer, err := s.InstanceManager.GetVsockDialer(ctx, inst.Id)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		log.ErrorContext(ctx, "failed to get vsock dialer", "error", err)
 		ws.WriteMessage(websocket.BinaryMessage, []byte(fmt.Sprintf("Error: %v\r\n", err)))
 		ws.WriteMessage(websocket.TextMessage, []byte(`{"exitCode":127}`))
@@ -158,6 +176,8 @@ func (s *ApiService) ExecHandler(w http.ResponseWriter, r *http.Request) {
 	duration := time.Since(startTime)
 
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		log.ErrorContext(ctx, "exec failed",
 			"error", err,
 			"instance_id", inst.Id,
@@ -180,6 +200,8 @@ func (s *ApiService) ExecHandler(w http.ResponseWriter, r *http.Request) {
 		"exit_code", exit.Code,
 		"duration_ms", duration.Milliseconds(),
 	)
+	span.SetAttributes(attribute.Int("exit_code", exit.Code))
+	span.SetStatus(codes.Ok, "")
 
 	// Send close frame with exit code in JSON
 	closeMsg := fmt.Sprintf(`{"exitCode":%d}`, exit.Code)

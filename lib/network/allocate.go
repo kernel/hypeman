@@ -7,6 +7,7 @@ import (
 	mathrand "math/rand"
 	"net"
 	"strings"
+	"time"
 
 	"github.com/kernel/hypeman/lib/logger"
 )
@@ -22,17 +23,9 @@ func (m *manager) CreateAllocation(ctx context.Context, req AllocateRequest) (*N
 	log := logger.FromContext(ctx)
 
 	// 1. Get default network
-	network, err := m.getDefaultNetwork(ctx)
+	network, err := m.getDefaultNetworkWithSelfHeal(ctx)
 	if err != nil {
-		// Self-heal if bridge state was externally removed after initialization.
-		// This keeps allocations robust under highly concurrent test workloads.
-		if initErr := m.Initialize(ctx, nil); initErr != nil {
-			return nil, fmt.Errorf("get default network: %w", err)
-		}
-		network, err = m.getDefaultNetwork(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("get default network: %w", err)
-		}
+		return nil, fmt.Errorf("get default network: %w", err)
 	}
 
 	// 2. Check name uniqueness (exclude current instance to allow restarts)
@@ -113,16 +106,9 @@ func (m *manager) RecreateAllocation(ctx context.Context, instanceID string, dow
 	}
 
 	// 2. Get default network details
-	network, err := m.getDefaultNetwork(ctx)
+	network, err := m.getDefaultNetworkWithSelfHeal(ctx)
 	if err != nil {
-		// Same self-healing behavior as CreateAllocation.
-		if initErr := m.Initialize(ctx, nil); initErr != nil {
-			return fmt.Errorf("get default network: %w", err)
-		}
-		network, err = m.getDefaultNetwork(ctx)
-		if err != nil {
-			return fmt.Errorf("get default network: %w", err)
-		}
+		return fmt.Errorf("get default network: %w", err)
 	}
 
 	// 3. Recreate TAP device with same name and rate limits from instance metadata
@@ -237,6 +223,31 @@ func (m *manager) allocateNextIP(ctx context.Context, subnet string) (string, er
 	}
 
 	return "", fmt.Errorf("no available IPs in subnet %s after %d random attempts and full scan", subnet, maxRetries)
+}
+
+func (m *manager) getDefaultNetworkWithSelfHeal(ctx context.Context) (*Network, error) {
+	network, err := m.getDefaultNetwork(ctx)
+	if err == nil {
+		return network, nil
+	}
+
+	// Self-heal if bridge state was externally removed after initialization.
+	// After re-initialization, kernel bridge/IP state may take a brief moment to become visible.
+	if initErr := m.Initialize(ctx, nil); initErr != nil {
+		return nil, err
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		network, err = m.getDefaultNetwork(ctx)
+		if err == nil {
+			return network, nil
+		}
+		if time.Now().After(deadline) {
+			return nil, err
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 // incrementIP increments IP address by n

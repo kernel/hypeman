@@ -2,4 +2,4 @@ package tags
 
 import "errors"
 
-var ErrInvalidMetadata = errors.New("invalid metadata")
+var ErrInvalidTags = errors.New("invalid tags")

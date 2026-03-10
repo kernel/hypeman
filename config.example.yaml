@@ -84,12 +84,18 @@ data_dir: /var/lib/hypeman
 # =============================================================================
 # OpenTelemetry Configuration
 # =============================================================================
+# metrics:
+#   listen_address: 127.0.0.1
+#   port: 9464
+#   vm_label_budget: 200
+#
 # otel:
 #   enabled: false
 #   endpoint: 127.0.0.1:4317
 #   service_name: hypeman
 #   service_instance_id: ""       # default: hostname
 #   insecure: true
+#   metric_export_interval: 60s
 # env: dev                        # deployment environment
 
 # =============================================================================

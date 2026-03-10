@@ -99,8 +99,8 @@ func (f *CaddyLogForwarder) forwardLogLine(ctx context.Context, line string) {
 
 	var entry caddyLogEntry
 	if err := json.Unmarshal([]byte(line), &entry); err != nil {
-		// If we can't parse, log raw line at info level
-		f.logger.InfoContext(ctx, "caddy: "+line)
+		// If we can't parse, keep raw line at debug to avoid info noise.
+		f.logger.DebugContext(ctx, "caddy: "+line)
 		return
 	}
 

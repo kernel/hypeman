@@ -4,6 +4,9 @@ package instances
 
 import (
 	"context"
+	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -85,6 +88,31 @@ func createNginxImageAndWait(t *testing.T, ctx context.Context, imageManager ima
 	}
 
 	t.Fatalf("timed out waiting for image %q to become ready", nginxImage.Name)
+}
+
+func startGatewayProbeServer(t *testing.T, gatewayIP string) (string, func()) {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", net.JoinHostPort(gatewayIP, "0"))
+	require.NoError(t, err)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/probe", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("Connection successful"))
+	})
+
+	server := &http.Server{Handler: mux}
+	go func() {
+		_ = server.Serve(listener)
+	}()
+
+	cleanup := func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = server.Shutdown(shutdownCtx)
+	}
+
+	return fmt.Sprintf("http://%s/probe", listener.Addr().String()), cleanup
 }
 
 func TestFirecrackerStandbyAndRestore(t *testing.T) {
@@ -247,14 +275,17 @@ func TestFirecrackerNetworkLifecycle(t *testing.T) {
 	_, isBridge := master.(*netlink.Bridge)
 	assert.True(t, isBridge, "TAP should be attached to a bridge")
 
+	probeURL, stopProbeServer := startGatewayProbeServer(t, alloc.Gateway)
+	t.Cleanup(stopProbeServer)
+
 	require.NoError(t, waitForLogMessage(ctx, mgr, inst.Id, "start worker processes", 15*time.Second))
 	require.NoError(t, waitForLogMessage(ctx, mgr, inst.Id, "[guest-agent] listening", 10*time.Second))
 
-	// Retry to reduce flakiness while guest network stack settles.
+	// Retry while guest network stack settles.
 	var output string
 	var exitCode int
 	for i := 0; i < 10; i++ {
-		output, exitCode, err = execCommand(ctx, inst, "curl", "-s", "--connect-timeout", "10", "https://public-ping-bucket-kernel.s3.us-east-1.amazonaws.com/index.html")
+		output, exitCode, err = execCommand(ctx, inst, "curl", "-sS", "--connect-timeout", "10", probeURL)
 		if err == nil && exitCode == 0 {
 			break
 		}
@@ -294,7 +325,7 @@ func TestFirecrackerNetworkLifecycle(t *testing.T) {
 	assert.Equal(t, uint8(netlink.OperUp), uint8(tapRestored.Attrs().OperState))
 
 	for i := 0; i < 10; i++ {
-		output, exitCode, err = execCommand(ctx, inst, "curl", "-s", "https://public-ping-bucket-kernel.s3.us-east-1.amazonaws.com/index.html")
+		output, exitCode, err = execCommand(ctx, inst, "curl", "-sS", "--connect-timeout", "10", probeURL)
 		if err == nil && exitCode == 0 {
 			break
 		}
@@ -379,7 +410,6 @@ func TestFirecrackerForkFromRunningNetwork(t *testing.T) {
 
 	assertHostCanReachNginx(t, sourceAfterFork.IP, 80, 60*time.Second)
 	assertHostCanReachNginx(t, forked.IP, 80, 60*time.Second)
-	assertHostCanReachNginx(t, sourceAfterFork.IP, 80, 60*time.Second)
 	assert.NotEqual(t, sourceAfterFork.IP, forked.IP)
 	assert.NotEqual(t, sourceAfterFork.MAC, forked.MAC)
 }
