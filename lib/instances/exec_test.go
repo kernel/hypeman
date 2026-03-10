@@ -21,26 +21,60 @@ import (
 // waitForExecAgent polls until exec-agent is ready
 func waitForExecAgent(ctx context.Context, mgr *manager, instanceID string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
+	lastState := StateUnknown
+	var lastErr error
+
 	for time.Now().Before(deadline) {
-		meta, err := mgr.loadMetadata(instanceID)
-		if err == nil {
-			dialer, derr := hypervisor.NewVsockDialer(meta.HypervisorType, meta.VsockSocket, meta.VsockCID)
-			if derr == nil {
-				var stdout, stderr bytes.Buffer
-				exit, eerr := guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{
-					Command:      []string{"true"},
-					Stdout:       &stdout,
-					Stderr:       &stderr,
-					WaitForAgent: 1 * time.Second,
-				})
-				if eerr == nil && exit.Code == 0 {
-					return nil
-				}
-			}
+		inst, err := mgr.GetInstance(ctx, instanceID)
+		if err != nil {
+			lastErr = err
+			time.Sleep(500 * time.Millisecond)
+			continue
 		}
+
+		lastState = inst.State
+		if inst.State != StateRunning {
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+
+		meta, err := mgr.loadMetadata(instanceID)
+		if err != nil {
+			lastErr = err
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+
+		dialer, err := hypervisor.NewVsockDialer(meta.HypervisorType, meta.VsockSocket, meta.VsockCID)
+		if err != nil {
+			lastErr = err
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+
+		var stdout, stderr bytes.Buffer
+		exit, err := guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{
+			Command:      []string{"true"},
+			Stdout:       &stdout,
+			Stderr:       &stderr,
+			WaitForAgent: 1 * time.Second,
+		})
+		if err == nil && exit.Code == 0 {
+			return nil
+		}
+		if err != nil {
+			lastErr = err
+		} else {
+			lastErr = fmt.Errorf("unexpected exit code: %d", exit.Code)
+		}
+
 		time.Sleep(500 * time.Millisecond)
 	}
-	return context.DeadlineExceeded
+
+	if lastErr != nil {
+		return fmt.Errorf("exec-agent not ready for instance %s within %v (last state: %s): %w", instanceID, timeout, lastState, lastErr)
+	}
+	return fmt.Errorf("exec-agent not ready for instance %s within %v (last state: %s)", instanceID, timeout, lastState)
 }
 
 // Note: execCommand is defined in network_test.go

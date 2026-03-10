@@ -17,13 +17,13 @@ type Image struct {
 	Entrypoint    []string
 	Cmd           []string
 	Env           map[string]string
-	Metadata      tags.Metadata
+	Tags          tags.Tags
 	WorkingDir    string
 	CreatedAt     time.Time
 }
 
 // CreateImageRequest represents a request to create an image
 type CreateImageRequest struct {
-	Name     string
-	Metadata tags.Metadata
+	Name string
+	Tags tags.Tags
 }

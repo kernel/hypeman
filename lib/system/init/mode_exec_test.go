@@ -1,7 +1,11 @@
 package main
 
 import (
+	"errors"
+	"os"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -153,4 +157,77 @@ func TestIsOOMLine(t *testing.T) {
 			assert.Equal(t, tc.want, isOOMLine(tc.line))
 		})
 	}
+}
+
+func TestFormatProgramStartSentinel(t *testing.T) {
+	result := formatProgramStartSentinel("exec")
+	assert.Contains(t, result, "HYPEMAN-PROGRAM-START")
+	assert.Contains(t, result, " mode=exec")
+	assert.Contains(t, result, " ts=")
+}
+
+func TestWaitForGuestAgentReady(t *testing.T) {
+	t.Parallel()
+
+	readyReader, readyWriter, err := os.Pipe()
+	require.NoError(t, err)
+	defer readyReader.Close()
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		_, _ = readyWriter.Write([]byte{1})
+		_ = readyWriter.Close()
+	}()
+
+	err = waitForGuestAgentReady(readyReader, time.Second, nil)
+	require.NoError(t, err)
+}
+
+func TestWaitForGuestAgentReadyTimeout(t *testing.T) {
+	t.Parallel()
+
+	readyReader, readyWriter, err := os.Pipe()
+	require.NoError(t, err)
+
+	err = waitForGuestAgentReady(readyReader, 100*time.Millisecond, nil)
+	require.Error(t, err)
+	assert.True(t, strings.Contains(err.Error(), "timed out"), "unexpected error: %v", err)
+
+	_ = readyWriter.Close()
+	_ = readyReader.Close()
+}
+
+func TestWaitForGuestAgentReadyProcessExit(t *testing.T) {
+	t.Parallel()
+
+	readyReader, readyWriter, err := os.Pipe()
+	require.NoError(t, err)
+	defer readyReader.Close()
+	defer readyWriter.Close()
+
+	agentExited := make(chan error, 1)
+	agentExited <- errors.New("exit status 1")
+
+	err = waitForGuestAgentReady(readyReader, time.Second, agentExited)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exited before readiness signal")
+}
+
+func TestWaitForGuestAgentReadyReadyWinsAfterExitSignal(t *testing.T) {
+	t.Parallel()
+
+	readyReader, readyWriter, err := os.Pipe()
+	require.NoError(t, err)
+	defer readyReader.Close()
+	defer readyWriter.Close()
+
+	agentExited := make(chan error, 1)
+	agentExited <- errors.New("exit status 1")
+
+	go func() {
+		time.Sleep(25 * time.Millisecond)
+		_, _ = readyWriter.Write([]byte{1})
+	}()
+
+	err = waitForGuestAgentReady(readyReader, time.Second, agentExited)
+	require.NoError(t, err)
 }

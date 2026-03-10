@@ -1,30 +1,49 @@
 package instances
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
 )
 
 // exitSentinelPrefix is the machine-parseable prefix written by init to serial console.
-const exitSentinelPrefix = "HYPEMAN-EXIT "
+const (
+	exitSentinelPrefix         = "HYPEMAN-EXIT "
+	programStartSentinelPrefix = "HYPEMAN-PROGRAM-START "
+	agentReadySentinelPrefix   = "HYPEMAN-AGENT-READY "
+	bootMarkerRescanInterval   = 1 * time.Second
+)
 
 // stateResult holds the result of state derivation
 type stateResult struct {
-	State State
-	Error *string // Non-nil if state couldn't be determined
+	State               State
+	Error               *string // Non-nil if state couldn't be determined
+	BootMarkersHydrated bool
 }
 
 // deriveState determines instance state by checking socket and querying the hypervisor.
 // Returns StateUnknown with an error message if the socket exists but hypervisor is unreachable.
 func (m *manager) deriveState(ctx context.Context, stored *StoredMetadata) stateResult {
+	return m.deriveStateWithOptions(ctx, stored, true)
+}
+
+// deriveStateWithoutHydration determines instance state without scanning serial logs
+// to hydrate missing boot markers.
+func (m *manager) deriveStateWithoutHydration(ctx context.Context, stored *StoredMetadata) stateResult {
+	return m.deriveStateWithOptions(ctx, stored, false)
+}
+
+func (m *manager) deriveStateWithOptions(ctx context.Context, stored *StoredMetadata, hydrateBootMarkers bool) stateResult {
 	log := logger.FromContext(ctx)
 
 	// 1. Check if socket exists
@@ -66,7 +85,14 @@ func (m *manager) deriveState(ctx context.Context, stored *StoredMetadata) state
 	case hypervisor.StateCreated:
 		return stateResult{State: StateCreated}
 	case hypervisor.StateRunning:
-		return stateResult{State: StateRunning}
+		hydrated := false
+		if hydrateBootMarkers {
+			hydrated = m.hydrateBootMarkersFromLogs(stored)
+		}
+		return stateResult{
+			State:               deriveRunningState(stored),
+			BootMarkersHydrated: hydrated,
+		}
 	case hypervisor.StatePaused:
 		return stateResult{State: StatePaused}
 	case hypervisor.StateShutdown:
@@ -80,6 +106,192 @@ func (m *manager) deriveState(ctx context.Context, stored *StoredMetadata) state
 		)
 		return stateResult{State: StateUnknown, Error: &errMsg}
 	}
+}
+
+func deriveRunningState(stored *StoredMetadata) State {
+	if stored.ProgramStartedAt == nil {
+		return StateInitializing
+	}
+	if stored.SkipGuestAgent {
+		return StateRunning
+	}
+	if stored.GuestAgentReadyAt == nil {
+		return StateInitializing
+	}
+	return StateRunning
+}
+
+// hydrateBootMarkersFromLogs fills missing boot markers from serial logs.
+// Returns true when at least one missing marker was found and populated.
+func (m *manager) hydrateBootMarkersFromLogs(stored *StoredMetadata) bool {
+	needProgram := stored.ProgramStartedAt == nil
+	needAgent := !stored.SkipGuestAgent && stored.GuestAgentReadyAt == nil
+	if !needProgram && !needAgent {
+		m.clearBootMarkerRescan(stored.Id)
+		return false
+	}
+	if !m.shouldScanBootMarkers(stored.Id) {
+		return false
+	}
+
+	programStartedAt, guestAgentReadyAt := m.parseBootMarkers(stored.Id, needProgram, needAgent, stored.StartedAt)
+	hydrated := false
+	if needProgram && programStartedAt != nil {
+		stored.ProgramStartedAt = programStartedAt
+		hydrated = true
+	}
+	if needAgent && guestAgentReadyAt != nil {
+		stored.GuestAgentReadyAt = guestAgentReadyAt
+		hydrated = true
+	}
+	if hydrated {
+		m.clearBootMarkerRescan(stored.Id)
+	} else {
+		m.deferBootMarkerRescan(stored.Id)
+	}
+	return hydrated
+}
+
+// parseBootMarkers scans app logs (including rotated files) and returns the
+// newest observed program-start and guest-agent-ready marker timestamps.
+// When startedAt is provided, files last modified before this boot start are ignored.
+func (m *manager) parseBootMarkers(id string, needProgram bool, needAgent bool, startedAt *time.Time) (*time.Time, *time.Time) {
+	logPaths := m.appLogPathsForMarkerScan(id)
+
+	var programStartedAt *time.Time
+	var guestAgentReadyAt *time.Time
+	// Iterate newest-to-oldest so we can stop once all required markers are found.
+	for i := len(logPaths) - 1; i >= 0; i-- {
+		logPath := logPaths[i]
+		if !fileMayContainCurrentBootMarkers(logPath, startedAt) {
+			continue
+		}
+
+		f, err := os.Open(logPath)
+		if err != nil {
+			continue
+		}
+
+		scanner := bufio.NewScanner(f)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if ts, ok := parseProgramStartSentinelLine(line); ok {
+				if programStartedAt == nil || ts.After(*programStartedAt) {
+					t := ts
+					programStartedAt = &t
+				}
+			}
+			if ts, ok := parseAgentReadySentinelLine(line); ok {
+				if guestAgentReadyAt == nil || ts.After(*guestAgentReadyAt) {
+					t := ts
+					guestAgentReadyAt = &t
+				}
+			}
+		}
+		scanErr := scanner.Err()
+		_ = f.Close()
+		if scanErr != nil {
+			continue
+		}
+		if (!needProgram || programStartedAt != nil) && (!needAgent || guestAgentReadyAt != nil) {
+			return programStartedAt, guestAgentReadyAt
+		}
+	}
+
+	return programStartedAt, guestAgentReadyAt
+}
+
+func fileMayContainCurrentBootMarkers(path string, startedAt *time.Time) bool {
+	if startedAt == nil {
+		return true
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return !info.ModTime().UTC().Before(startedAt.UTC())
+}
+
+func (m *manager) shouldScanBootMarkers(id string) bool {
+	if nextAny, ok := m.bootMarkerScans.Load(id); ok {
+		if next, ok := nextAny.(time.Time); ok && m.nowUTC().Before(next) {
+			return false
+		}
+	}
+	return true
+}
+
+func (m *manager) deferBootMarkerRescan(id string) {
+	m.bootMarkerScans.Store(id, m.nowUTC().Add(bootMarkerRescanInterval))
+}
+
+func (m *manager) clearBootMarkerRescan(id string) {
+	m.bootMarkerScans.Delete(id)
+}
+
+func (m *manager) nowUTC() time.Time {
+	if m.now != nil {
+		return m.now().UTC()
+	}
+	return time.Now().UTC()
+}
+
+// appLogPathsForMarkerScan returns app log paths in chronological order
+// (oldest rotated file to newest active file).
+func (m *manager) appLogPathsForMarkerScan(id string) []string {
+	base := m.paths.InstanceAppLog(id)
+	rotatedMatches, err := filepath.Glob(base + ".*")
+	if err != nil {
+		return []string{base}
+	}
+	matches := append([]string{base}, rotatedMatches...)
+
+	type logPathWithRank struct {
+		path string
+		rank int // higher rank means older rotated log; 0 means active file
+	}
+	paths := make([]logPathWithRank, 0, len(matches))
+	for _, path := range matches {
+		if path == base {
+			paths = append(paths, logPathWithRank{path: path, rank: 0})
+			continue
+		}
+
+		suffix := strings.TrimPrefix(path, base)
+		if !strings.HasPrefix(suffix, ".") {
+			continue
+		}
+		n, err := strconv.Atoi(strings.TrimPrefix(suffix, "."))
+		if err != nil || n <= 0 {
+			continue
+		}
+		paths = append(paths, logPathWithRank{path: path, rank: n})
+	}
+
+	if len(paths) == 0 {
+		return []string{base}
+	}
+
+	slices.SortFunc(paths, func(a, b logPathWithRank) int {
+		// Rotated logs first (older-to-newer by descending suffix), then active file.
+		switch {
+		case a.rank == 0 && b.rank != 0:
+			return 1
+		case a.rank != 0 && b.rank == 0:
+			return -1
+		case a.rank != b.rank:
+			// Larger suffix is older and should be read first.
+			return b.rank - a.rank
+		default:
+			return strings.Compare(a.path, b.path)
+		}
+	})
+
+	ordered := make([]string, 0, len(paths))
+	for _, p := range paths {
+		ordered = append(ordered, p.path)
+	}
+	return ordered
 }
 
 // hasSnapshot checks if a snapshot exists for an instance
@@ -103,12 +315,27 @@ func (m *manager) hasSnapshot(dataDir string) bool {
 
 // toInstance converts stored metadata to Instance with derived fields
 func (m *manager) toInstance(ctx context.Context, meta *metadata) Instance {
-	result := m.deriveState(ctx, &meta.StoredMetadata)
+	return m.toInstanceWithStateDerivation(ctx, meta, true)
+}
+
+func (m *manager) toInstanceWithoutHydration(ctx context.Context, meta *metadata) Instance {
+	return m.toInstanceWithStateDerivation(ctx, meta, false)
+}
+
+func (m *manager) toInstanceWithStateDerivation(ctx context.Context, meta *metadata, hydrateBootMarkers bool) Instance {
+	var result stateResult
+	if hydrateBootMarkers {
+		result = m.deriveState(ctx, &meta.StoredMetadata)
+	} else {
+		result = m.deriveStateWithoutHydration(ctx, &meta.StoredMetadata)
+	}
+
 	inst := Instance{
-		StoredMetadata: meta.StoredMetadata,
-		State:          result.State,
-		StateError:     result.Error,
-		HasSnapshot:    m.hasSnapshot(meta.StoredMetadata.DataDir),
+		StoredMetadata:      meta.StoredMetadata,
+		State:               result.State,
+		StateError:          result.Error,
+		HasSnapshot:         m.hasSnapshot(meta.StoredMetadata.DataDir),
+		BootMarkersHydrated: result.BootMarkersHydrated,
 	}
 
 	// If VM is stopped and exit info isn't persisted yet, populate in-memory
@@ -142,7 +369,8 @@ func (m *manager) parseExitSentinel(id string) (int, string, bool) {
 
 	// Scan lines from the tail looking for the sentinel
 	lines := strings.Split(string(data), "\n")
-	for _, line := range lines {
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := lines[i]
 		code, msg, ok := parseExitSentinelLine(line)
 		if ok {
 			return code, msg, true
@@ -177,6 +405,43 @@ func (m *manager) persistExitInfo(ctx context.Context, id string) {
 		log.WarnContext(ctx, "failed to persist exit info", "instance_id", id, "error", err)
 	} else {
 		log.DebugContext(ctx, "parsed exit info from serial log", "instance_id", id, "exit_code", code, "exit_message", msg)
+	}
+}
+
+// persistBootMarkers parses program-start and guest-agent-ready markers from
+// serial logs and persists them to metadata. Must be called under instance lock.
+func (m *manager) persistBootMarkers(ctx context.Context, id string) {
+	log := logger.FromContext(ctx)
+
+	meta, err := m.loadMetadata(id)
+	if err != nil {
+		return
+	}
+
+	needProgram := meta.ProgramStartedAt == nil
+	needAgent := !meta.SkipGuestAgent && meta.GuestAgentReadyAt == nil
+	if !needProgram && !needAgent {
+		return
+	}
+
+	programStartedAt, guestAgentReadyAt := m.parseBootMarkers(id, needProgram, needAgent, meta.StartedAt)
+	updated := false
+	if needProgram && programStartedAt != nil {
+		meta.ProgramStartedAt = programStartedAt
+		updated = true
+	}
+	if needAgent && guestAgentReadyAt != nil {
+		meta.GuestAgentReadyAt = guestAgentReadyAt
+		updated = true
+	}
+	if !updated {
+		return
+	}
+
+	if err := m.saveMetadata(meta); err != nil {
+		log.WarnContext(ctx, "failed to persist boot markers", "instance_id", id, "error", err)
+	} else {
+		log.DebugContext(ctx, "persisted boot markers from serial log", "instance_id", id)
 	}
 }
 
@@ -259,6 +524,38 @@ func parseExitSentinelLine(line string) (int, string, bool) {
 	}
 
 	return code, "", true
+}
+
+func parseProgramStartSentinelLine(line string) (time.Time, bool) {
+	return parseSentinelTimestamp(line, programStartSentinelPrefix)
+}
+
+func parseAgentReadySentinelLine(line string) (time.Time, bool) {
+	return parseSentinelTimestamp(line, agentReadySentinelPrefix)
+}
+
+func parseSentinelTimestamp(line, sentinelPrefix string) (time.Time, bool) {
+	line = strings.TrimSpace(line)
+
+	idx := strings.Index(line, sentinelPrefix)
+	if idx < 0 {
+		return time.Time{}, false
+	}
+
+	sentinel := line[idx+len(sentinelPrefix):]
+	for _, field := range strings.Fields(sentinel) {
+		if !strings.HasPrefix(field, "ts=") {
+			continue
+		}
+		ts := strings.TrimPrefix(field, "ts=")
+		parsed, err := time.Parse(time.RFC3339Nano, ts)
+		if err != nil {
+			return time.Time{}, false
+		}
+		return parsed, true
+	}
+
+	return time.Time{}, false
 }
 
 // listInstances returns all instances

@@ -12,13 +12,14 @@ import (
 type State string
 
 const (
-	StateStopped  State = "Stopped"  // No VMM, no snapshot
-	StateCreated  State = "Created"  // VMM created but not booted (CH native)
-	StateRunning  State = "Running"  // VM running (CH native)
-	StatePaused   State = "Paused"   // VM paused (CH native)
-	StateShutdown State = "Shutdown" // VM shutdown, VMM exists (CH native)
-	StateStandby  State = "Standby"  // No VMM, snapshot exists
-	StateUnknown  State = "Unknown"  // Failed to determine state (VMM query failed)
+	StateStopped      State = "Stopped"      // No VMM, no snapshot
+	StateCreated      State = "Created"      // VMM created but not booted (CH native)
+	StateInitializing State = "Initializing" // VM running, guest init in progress
+	StateRunning      State = "Running"      // Guest program started and ready
+	StatePaused       State = "Paused"       // VM paused (CH native)
+	StateShutdown     State = "Shutdown"     // VM shutdown, VMM exists (CH native)
+	StateStandby      State = "Standby"      // No VMM, snapshot exists
+	StateUnknown      State = "Unknown"      // Failed to determine state (VMM query failed)
 )
 
 // VolumeAttachment represents a volume attached to an instance
@@ -48,18 +49,22 @@ type StoredMetadata struct {
 
 	// Configuration
 	Env            map[string]string
-	Metadata       tags.Metadata // User-defined key-value metadata
-	NetworkEnabled bool          // Whether instance has networking enabled (uses default network)
-	IP             string        // Assigned IP address (empty if NetworkEnabled=false)
-	MAC            string        // Assigned MAC address (empty if NetworkEnabled=false)
+	Tags           tags.Tags // User-defined key-value tags
+	NetworkEnabled bool      // Whether instance has networking enabled (uses default network)
+	IP             string    // Assigned IP address (empty if NetworkEnabled=false)
+	MAC            string    // Assigned MAC address (empty if NetworkEnabled=false)
 
 	// Attached volumes
 	Volumes []VolumeAttachment // Volumes attached to this instance
 
 	// Timestamps (stored for historical tracking)
 	CreatedAt time.Time
-	StartedAt *time.Time // Last time VM was started
+	StartedAt *time.Time // Boot epoch start time (set on create/start; preserved across standby restore)
 	StoppedAt *time.Time // Last time VM was stopped
+
+	// Boot progress markers (derived from guest serial log sentinels and persisted)
+	ProgramStartedAt  *time.Time // Set when guest program handoff/start boundary is reached
+	GuestAgentReadyAt *time.Time // Set when guest-agent is ready (unless skip_guest_agent=true)
 
 	// Versions
 	KernelVersion string // Kernel version (e.g., "ch-v6.12.9")
@@ -105,9 +110,10 @@ type Instance struct {
 	StoredMetadata
 
 	// Derived fields (not stored in metadata.json)
-	State       State   // Derived from socket + VMM query
-	StateError  *string // Error message if state couldn't be determined (non-nil when State=Unknown)
-	HasSnapshot bool    // Derived from filesystem check
+	State               State   // Derived from socket + VMM query + guest boot markers
+	StateError          *string // Error message if state couldn't be determined (non-nil when State=Unknown)
+	HasSnapshot         bool    // Derived from filesystem check
+	BootMarkersHydrated bool    // True when missing boot markers were hydrated from logs in this read
 }
 
 // GetHypervisorType returns the hypervisor type as a string.
@@ -119,8 +125,8 @@ func (i *Instance) GetHypervisorType() string {
 // ListInstancesFilter contains optional filters for listing instances.
 // All fields are ANDed together: an instance must match every specified filter.
 type ListInstancesFilter struct {
-	State    *State        // Filter by instance state
-	Metadata tags.Metadata // Filter by metadata key-value pairs (all must match)
+	State *State    // Filter by instance state
+	Tags  tags.Tags // Filter by tag key-value pairs (all must match)
 }
 
 // Matches returns true if the given instance satisfies all filter criteria.
@@ -131,11 +137,11 @@ func (f *ListInstancesFilter) Matches(inst *Instance) bool {
 	if f.State != nil && inst.State != *f.State {
 		return false
 	}
-	for k, v := range f.Metadata {
-		if inst.Metadata == nil {
+	for k, v := range f.Tags {
+		if inst.Tags == nil {
 			return false
 		}
-		if actual, ok := inst.Metadata[k]; !ok || actual != v {
+		if actual, ok := inst.Tags[k]; !ok || actual != v {
 			return false
 		}
 	}
@@ -159,7 +165,7 @@ type CreateInstanceRequest struct {
 	NetworkBandwidthUpload   int64              // Upload rate limit bytes/sec (0 = auto, proportional to CPU)
 	DiskIOBps                int64              // Disk I/O rate limit bytes/sec (0 = auto, proportional to CPU)
 	Env                      map[string]string  // Optional environment variables
-	Metadata                 tags.Metadata      // Optional user-defined key-value metadata
+	Tags                     tags.Tags          // Optional user-defined key-value tags
 	NetworkEnabled           bool               // Whether to enable networking (uses default network)
 	Devices                  []string           // Device IDs or names to attach (GPU passthrough)
 	Volumes                  []VolumeAttachment // Volumes to attach at creation time
@@ -202,9 +208,9 @@ type ListSnapshotsFilter = snapshot.ListSnapshotsFilter
 
 // CreateSnapshotRequest is the domain request for creating a snapshot.
 type CreateSnapshotRequest struct {
-	Kind     SnapshotKind  // Required: Standby or Stopped
-	Name     string        // Optional: unique per source instance
-	Metadata tags.Metadata // Optional user-defined key-value metadata
+	Kind SnapshotKind // Required: Standby or Stopped
+	Name string       // Optional: unique per source instance
+	Tags tags.Tags    // Optional user-defined key-value tags
 }
 
 // RestoreSnapshotRequest is the domain request for restoring a snapshot in-place.

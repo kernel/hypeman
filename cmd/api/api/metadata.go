@@ -8,35 +8,35 @@ import (
 	"github.com/kernel/hypeman/lib/tags"
 )
 
-func toMapMetadata(metadata *oapi.MetadataTags) map[string]string {
-	if metadata == nil {
+func toMapTags(resourceTags *oapi.Tags) map[string]string {
+	if resourceTags == nil {
 		return nil
 	}
-	return tags.Clone(map[string]string(*metadata))
+	return tags.Clone(map[string]string(*resourceTags))
 }
 
-func toOAPIMetadata(metadata map[string]string) *oapi.MetadataTags {
-	if len(metadata) == 0 {
+func toOAPITags(resourceTags map[string]string) *oapi.Tags {
+	if len(resourceTags) == 0 {
 		return nil
 	}
-	cloned := oapi.MetadataTags(tags.Clone(metadata))
+	cloned := oapi.Tags(tags.Clone(resourceTags))
 	return &cloned
 }
 
-func matchesMetadataFilter(metadata map[string]string, filter *oapi.MetadataTags) bool {
+func matchesTagsFilter(resourceTags map[string]string, filter *oapi.Tags) bool {
 	if filter == nil {
 		return true
 	}
-	return tags.Matches(metadata, map[string]string(*filter))
+	return tags.Matches(resourceTags, map[string]string(*filter))
 }
 
-func parseMetadataJSON(raw string) (map[string]string, error) {
+func parseTagsJSON(raw string) (map[string]string, error) {
 	if raw == "" {
 		return nil, nil
 	}
-	var metadata map[string]string
-	if err := json.Unmarshal([]byte(raw), &metadata); err != nil {
-		return nil, fmt.Errorf("parse metadata JSON: %w", err)
+	var resourceTags map[string]string
+	if err := json.Unmarshal([]byte(raw), &resourceTags); err != nil {
+		return nil, fmt.Errorf("parse tags JSON: %w", err)
 	}
-	return metadata, nil
+	return resourceTags, nil
 }

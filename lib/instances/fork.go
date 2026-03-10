@@ -396,7 +396,7 @@ func (m *manager) applyForkTargetState(ctx context.Context, forkID string, targe
 		if err != nil {
 			return nil, err
 		}
-		if inst != nil && inst.State == StateRunning {
+		if inst != nil && (inst.State == StateRunning || inst.State == StateInitializing) {
 			if err := ensureGuestAgentReadyForForkPhase(ctx, &inst.StoredMetadata, "before returning running fork instance"); err != nil {
 				return nil, fmt.Errorf("wait for forked guest agent readiness: %w", err)
 			}
@@ -408,7 +408,7 @@ func (m *manager) applyForkTargetState(ctx context.Context, forkID string, targe
 	if err != nil {
 		return nil, err
 	}
-	if current.State == target {
+	if current.State == target || (target == StateRunning && current.State == StateInitializing) {
 		return returnWithReadiness(current, nil)
 	}
 
@@ -467,10 +467,10 @@ func cloneStoredMetadataForFork(src StoredMetadata) StoredMetadata {
 			dst.Env[k] = v
 		}
 	}
-	if src.Metadata != nil {
-		dst.Metadata = make(map[string]string, len(src.Metadata))
-		for k, v := range src.Metadata {
-			dst.Metadata[k] = v
+	if src.Tags != nil {
+		dst.Tags = make(map[string]string, len(src.Tags))
+		for k, v := range src.Tags {
+			dst.Tags[k] = v
 		}
 	}
 	if src.Volumes != nil {
@@ -496,6 +496,14 @@ func cloneStoredMetadataForFork(src StoredMetadata) StoredMetadata {
 	if src.StoppedAt != nil {
 		stoppedAt := *src.StoppedAt
 		dst.StoppedAt = &stoppedAt
+	}
+	if src.ProgramStartedAt != nil {
+		programStartedAt := *src.ProgramStartedAt
+		dst.ProgramStartedAt = &programStartedAt
+	}
+	if src.GuestAgentReadyAt != nil {
+		guestAgentReadyAt := *src.GuestAgentReadyAt
+		dst.GuestAgentReadyAt = &guestAgentReadyAt
 	}
 	if src.ExitCode != nil {
 		exitCode := *src.ExitCode

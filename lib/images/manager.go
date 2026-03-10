@@ -105,7 +105,7 @@ func (m *manager) ListImages(ctx context.Context) ([]Image, error) {
 }
 
 func (m *manager) CreateImage(ctx context.Context, req CreateImageRequest) (*Image, error) {
-	if err := tags.Validate(req.Metadata); err != nil {
+	if err := tags.Validate(req.Tags); err != nil {
 		return nil, err
 	}
 
@@ -209,10 +209,10 @@ func (m *manager) createAndQueueImage(ref *ResolvedRef, req CreateImageRequest) 
 		Digest: ref.Digest(),
 		Status: StatusPending,
 		Request: &CreateImageRequest{
-			Name:     ref.String(),
-			Metadata: tags.Clone(req.Metadata),
+			Name: ref.String(),
+			Tags: tags.Clone(req.Tags),
 		},
-		Metadata:  tags.Clone(req.Metadata),
+		Tags:      tags.Clone(req.Tags),
 		CreatedAt: time.Now(),
 	}
 
@@ -222,7 +222,7 @@ func (m *manager) createAndQueueImage(ref *ResolvedRef, req CreateImageRequest) 
 	}
 
 	// Enqueue the build using digest as the queue key for deduplication
-	queuePos := m.queue.Enqueue(ref.Digest(), CreateImageRequest{Name: ref.String(), Metadata: tags.Clone(req.Metadata)}, func() {
+	queuePos := m.queue.Enqueue(ref.Digest(), CreateImageRequest{Name: ref.String(), Tags: tags.Clone(req.Tags)}, func() {
 		m.buildImage(context.Background(), ref)
 	})
 

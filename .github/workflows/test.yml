@@ -31,11 +31,29 @@ jobs:
       - name: Install dependencies
         run: |
           set -xe
+          apt_update_with_retry() {
+            local attempts=5
+            local sleep_seconds=30
+            local n=1
+            while [ "$n" -le "$attempts" ]; do
+              if sudo apt-get update; then
+                return 0
+              fi
+              if [ "$n" -eq "$attempts" ]; then
+                return 1
+              fi
+              echo "apt-get update failed (attempt ${n}/${attempts}); retrying in ${sleep_seconds}s..."
+              sleep "$sleep_seconds"
+              n=$((n + 1))
+            done
+          }
           if ! command -v mkfs.erofs &> /dev/null || \
              ! command -v mkfs.ext4 &> /dev/null || \
-             ! command -v iptables &> /dev/null; then
-            sudo apt-get update
-            sudo apt-get install -y erofs-utils e2fsprogs iptables
+             ! command -v iptables &> /dev/null || \
+             ! command -v qemu-system-x86_64 &> /dev/null || \
+             ! qemu-system-x86_64 --version >/dev/null 2>&1; then
+            apt_update_with_retry
+            sudo apt-get install -y erofs-utils e2fsprogs iptables qemu-system-x86 qemu-utils
           fi
           go mod download
 
@@ -43,7 +61,7 @@ jobs:
         run: |
           set -euo pipefail
           TEST_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
-          for bin in mkfs.erofs mkfs.ext4 iptables; do
+          for bin in mkfs.erofs mkfs.ext4 iptables qemu-system-x86_64; do
             if ! sudo env "PATH=$TEST_PATH" bash -lc "command -v '$bin' >/dev/null"; then
               echo "missing required binary under sudo PATH: $bin"
               exit 1

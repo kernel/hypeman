@@ -23,7 +23,7 @@ const (
 type Build struct {
 	ID                string           `json:"id"`
 	Status            string           `json:"status"`
-	Metadata          tags.Metadata    `json:"metadata,omitempty"`
+	Tags              tags.Tags        `json:"tags,omitempty"`
 	QueuePosition     *int             `json:"queue_position,omitempty"`
 	ImageDigest       *string          `json:"image_digest,omitempty"`
 	ImageRef          *string          `json:"image_ref,omitempty"`
@@ -73,8 +73,8 @@ type CreateBuildRequest struct {
 	// When set, the image is pushed to {registry}/{image_name} instead of {registry}/builds/{id}.
 	ImageName string `json:"image_name,omitempty"`
 
-	// Metadata is optional user-defined key-value metadata for the build resource.
-	Metadata tags.Metadata `json:"metadata,omitempty"`
+	// Tags are optional user-defined key-value tags for the build resource.
+	Tags tags.Tags `json:"tags,omitempty"`
 }
 
 // BuildPolicy defines resource limits and network policy for a build
