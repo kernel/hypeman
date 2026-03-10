@@ -34,6 +34,16 @@ type stateResult struct {
 // deriveState determines instance state by checking socket and querying the hypervisor.
 // Returns StateUnknown with an error message if the socket exists but hypervisor is unreachable.
 func (m *manager) deriveState(ctx context.Context, stored *StoredMetadata) stateResult {
+	return m.deriveStateWithOptions(ctx, stored, true)
+}
+
+// deriveStateWithoutHydration determines instance state without scanning serial logs
+// to hydrate missing boot markers.
+func (m *manager) deriveStateWithoutHydration(ctx context.Context, stored *StoredMetadata) stateResult {
+	return m.deriveStateWithOptions(ctx, stored, false)
+}
+
+func (m *manager) deriveStateWithOptions(ctx context.Context, stored *StoredMetadata, hydrateBootMarkers bool) stateResult {
 	log := logger.FromContext(ctx)
 
 	// 1. Check if socket exists
@@ -75,7 +85,10 @@ func (m *manager) deriveState(ctx context.Context, stored *StoredMetadata) state
 	case hypervisor.StateCreated:
 		return stateResult{State: StateCreated}
 	case hypervisor.StateRunning:
-		hydrated := m.hydrateBootMarkersFromLogs(stored)
+		hydrated := false
+		if hydrateBootMarkers {
+			hydrated = m.hydrateBootMarkersFromLogs(stored)
+		}
 		return stateResult{
 			State:               deriveRunningState(stored),
 			BootMarkersHydrated: hydrated,
@@ -302,7 +315,21 @@ func (m *manager) hasSnapshot(dataDir string) bool {
 
 // toInstance converts stored metadata to Instance with derived fields
 func (m *manager) toInstance(ctx context.Context, meta *metadata) Instance {
-	result := m.deriveState(ctx, &meta.StoredMetadata)
+	return m.toInstanceWithStateDerivation(ctx, meta, true)
+}
+
+func (m *manager) toInstanceWithoutHydration(ctx context.Context, meta *metadata) Instance {
+	return m.toInstanceWithStateDerivation(ctx, meta, false)
+}
+
+func (m *manager) toInstanceWithStateDerivation(ctx context.Context, meta *metadata, hydrateBootMarkers bool) Instance {
+	var result stateResult
+	if hydrateBootMarkers {
+		result = m.deriveState(ctx, &meta.StoredMetadata)
+	} else {
+		result = m.deriveStateWithoutHydration(ctx, &meta.StoredMetadata)
+	}
+
 	inst := Instance{
 		StoredMetadata:      meta.StoredMetadata,
 		State:               result.State,

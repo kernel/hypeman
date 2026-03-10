@@ -442,13 +442,8 @@ func (m *manager) createInstance(
 	// Success - release cleanup stack (prevent cleanup)
 	cu.Release()
 
-	// Return instance with derived state
-	finalInst := m.toInstance(ctx, meta)
-	if finalInst.BootMarkersHydrated {
-		if err := m.saveMetadata(meta); err != nil {
-			log.WarnContext(ctx, "failed to persist hydrated boot markers after create", "instance_id", id, "error", err)
-		}
-	}
+	// Return instance state from current metadata without forcing a log scan.
+	finalInst := m.toInstanceWithoutHydration(ctx, meta)
 	// Record metrics
 	if m.metrics != nil {
 		m.recordDuration(ctx, m.metrics.createDuration, start, "success", hvType)

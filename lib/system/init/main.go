@@ -13,7 +13,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"sync"
+
+	"github.com/kernel/hypeman/lib/vmconfig"
 )
 
 func main() {
@@ -50,31 +54,44 @@ func main() {
 		dropToShell()
 	}
 
-	// Phase 4/5: Run independent setup tasks in parallel.
-	// Keep strict dependencies around mount -> overlay -> config and
-	// bind-mount barrier before mode handoff.
-	var setupWG sync.WaitGroup
-	if cfg.NetworkEnabled {
-		setupWG.Add(1)
+	runNetworkSetup := func() {
+		if !cfg.NetworkEnabled {
+			return
+		}
+		if err := configureNetwork(log, cfg); err != nil {
+			log.Error("hypeman-init:network", "failed to configure network", err)
+			// Continue anyway - network isn't always required
+		}
+	}
+	runVolumesSetup := func() {
+		if len(cfg.VolumeMounts) == 0 {
+			return
+		}
+		if err := mountVolumes(log, cfg); err != nil {
+			log.Error("hypeman-init:volumes", "failed to mount volumes", err)
+			// Continue anyway
+		}
+	}
+
+	// Phase 4/5: Run setup tasks.
+	// Network + volume setup are parallelized only when mounted paths are disjoint
+	// from /etc, because network setup writes /overlay/newroot/etc/resolv.conf.
+	if shouldRunNetworkAndVolumesInParallel(cfg) {
+		var setupWG sync.WaitGroup
+		setupWG.Add(2)
 		go func() {
 			defer setupWG.Done()
-			if err := configureNetwork(log, cfg); err != nil {
-				log.Error("hypeman-init:network", "failed to configure network", err)
-				// Continue anyway - network isn't always required
-			}
+			runNetworkSetup()
 		}()
-	}
-	if len(cfg.VolumeMounts) > 0 {
-		setupWG.Add(1)
 		go func() {
 			defer setupWG.Done()
-			if err := mountVolumes(log, cfg); err != nil {
-				log.Error("hypeman-init:volumes", "failed to mount volumes", err)
-				// Continue anyway
-			}
+			runVolumesSetup()
 		}()
+		setupWG.Wait()
+	} else {
+		runNetworkSetup()
+		runVolumesSetup()
 	}
-	setupWG.Wait()
 
 	// Phase 6: Bind mount filesystems to new root
 	if err := bindMountsToNewRoot(log); err != nil {
@@ -104,6 +121,22 @@ func main() {
 		log.Info("hypeman-init:mode", "entering exec mode")
 		runExecMode(log, cfg)
 	}
+}
+
+func shouldRunNetworkAndVolumesInParallel(cfg *vmconfig.Config) bool {
+	if !cfg.NetworkEnabled || len(cfg.VolumeMounts) == 0 {
+		return false
+	}
+
+	for _, vol := range cfg.VolumeMounts {
+		// Normalize to an absolute path inside the guest.
+		mountPath := filepath.Clean("/" + strings.TrimPrefix(vol.Path, "/"))
+		if mountPath == "/" || mountPath == "/etc" || strings.HasPrefix(mountPath, "/etc/") {
+			return false
+		}
+	}
+
+	return true
 }
 
 // dropToShell drops to an interactive shell for debugging when boot fails

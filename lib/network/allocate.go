@@ -167,9 +167,9 @@ func (m *manager) getOrInitDefaultNetwork(ctx context.Context) (*Network, error)
 		return network, nil
 	}
 
-	// Self-heal should never delete TAPs for active instances. We pass an empty
-	// preserve set so CleanupOrphanedTAPs is skipped in Initialize.
-	if initErr := m.Initialize(ctx, []string{}); initErr != nil {
+	// Self-heal should never delete TAPs for active instances. We pass nil so
+	// CleanupOrphanedTAPs is skipped in Initialize.
+	if initErr := m.Initialize(ctx, nil); initErr != nil {
 		return nil, fmt.Errorf("initialize network manager: %w", initErr)
 	}
 

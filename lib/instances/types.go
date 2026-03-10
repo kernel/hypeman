@@ -59,7 +59,7 @@ type StoredMetadata struct {
 
 	// Timestamps (stored for historical tracking)
 	CreatedAt time.Time
-	StartedAt *time.Time // Last time VM was started
+	StartedAt *time.Time // Boot epoch start time (set on create/start; preserved across standby restore)
 	StoppedAt *time.Time // Last time VM was stopped
 
 	// Boot progress markers (derived from guest serial log sentinels and persisted)
