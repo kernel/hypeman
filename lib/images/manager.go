@@ -115,6 +115,13 @@ func (m *manager) CreateImage(ctx context.Context, req CreateImageRequest) (*Ima
 		return nil, fmt.Errorf("%w: %s", ErrInvalidName, err.Error())
 	}
 
+	// Check if the image already exists locally (e.g. build images pushed to
+	// the local registry). This avoids a remote registry call for images that
+	// were created via ImportLocalImage.
+	if img, err := m.GetImage(ctx, req.Name); err == nil {
+		return img, nil
+	}
+
 	// Resolve to get digest (validates existence)
 	// Add a 2-second timeout to ensure fast failure on rate limits or errors
 	resolveCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
