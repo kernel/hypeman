@@ -190,7 +190,12 @@ func (m *manager) shutdownHypervisor(ctx context.Context, inst *Instance) error 
 
 	// Wait for process to exit
 	if inst.HypervisorPID != nil {
-		if !WaitForProcessExit(*inst.HypervisorPID, 2*time.Second) {
+		waitTimeout := 2 * time.Second
+		if shutdownErr == hypervisor.ErrNotSupported {
+			// If the hypervisor has no shutdown API, waiting for a graceful exit is pointless.
+			waitTimeout = 0
+		}
+		if !WaitForProcessExit(*inst.HypervisorPID, waitTimeout) {
 			log.WarnContext(ctx, "hypervisor did not exit gracefully in time, force killing process", "instance_id", inst.Id, "pid", *inst.HypervisorPID)
 			if err := syscall.Kill(*inst.HypervisorPID, syscall.SIGKILL); err != nil && err != syscall.ESRCH {
 				return fmt.Errorf("force kill hypervisor pid %d: %w", *inst.HypervisorPID, err)
