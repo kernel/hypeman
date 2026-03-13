@@ -62,7 +62,7 @@ func TestSnapshotParamPaths(t *testing.T) {
 	create := toSnapshotCreateParams("/tmp/snapshot-latest")
 	assert.Equal(t, "/tmp/snapshot-latest/state", create.SnapshotPath)
 	assert.Equal(t, "/tmp/snapshot-latest/memory", create.MemFilePath)
-	assert.Equal(t, "Full", create.SnapshotType)
+	assert.Equal(t, "Diff", create.SnapshotType)
 
 	load := toSnapshotLoadParams("/tmp/snapshot-latest", []networkOverride{
 		{IfaceID: "eth0", HostDevName: "hype-abc123"},

@@ -199,9 +199,9 @@ func (p *Paths) InstanceSnapshotLatest(id string) string {
 	return filepath.Join(p.InstanceSnapshots(id), "snapshot-latest")
 }
 
-// InstanceSnapshotFirecrackerBase returns the hidden retained Firecracker diff base.
-func (p *Paths) InstanceSnapshotFirecrackerBase(id string) string {
-	return filepath.Join(p.InstanceSnapshots(id), "firecracker-base")
+// InstanceSnapshotBase returns the hidden retained snapshot base.
+func (p *Paths) InstanceSnapshotBase(id string) string {
+	return filepath.Join(p.InstanceSnapshots(id), "snapshot-base")
 }
 
 // InstanceSnapshotConfig returns the path to the snapshot config.json file.

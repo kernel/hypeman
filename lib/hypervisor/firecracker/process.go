@@ -45,6 +45,10 @@ func (s *Starter) SocketName() string {
 	return "fc.sock"
 }
 
+func (s *Starter) Capabilities() hypervisor.Capabilities {
+	return (&Firecracker{}).Capabilities()
+}
+
 func (s *Starter) GetBinaryPath(p *paths.Paths, version string) (string, error) {
 	return resolveBinaryPath(p, version)
 }

@@ -83,6 +83,9 @@ type VMStarter interface {
 	// Uses short names to stay within Unix socket path length limits (SUN_LEN ~108 bytes).
 	SocketName() string
 
+	// Capabilities returns static capabilities for this hypervisor type.
+	Capabilities() Capabilities
+
 	// GetBinaryPath returns the path to the hypervisor binary, extracting if needed.
 	GetBinaryPath(p *paths.Paths, version string) (string, error)
 
@@ -197,6 +200,10 @@ type Capabilities struct {
 
 	// SupportsDiskIOLimit indicates if disk I/O rate limiting is available
 	SupportsDiskIOLimit bool
+
+	// SupportsSnapshotBaseReuse indicates snapshots can safely reuse a retained
+	// on-disk base across restore/standby cycles.
+	SupportsSnapshotBaseReuse bool
 }
 
 // VsockDialer provides vsock connectivity to a guest VM.

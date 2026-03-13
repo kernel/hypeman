@@ -103,6 +103,10 @@ func (s *Starter) SocketName() string {
 	return "vz.sock"
 }
 
+func (s *Starter) Capabilities() hypervisor.Capabilities {
+	return (&Client{}).Capabilities()
+}
+
 // GetBinaryPath extracts the embedded vz-shim and returns its path.
 func (s *Starter) GetBinaryPath(p *paths.Paths, version string) (string, error) {
 	return extractShim()

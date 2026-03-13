@@ -36,6 +36,10 @@ func (s *Starter) SocketName() string {
 	return "ch.sock"
 }
 
+func (s *Starter) Capabilities() hypervisor.Capabilities {
+	return (&CloudHypervisor{}).Capabilities()
+}
+
 // GetBinaryPath returns the path to the Cloud Hypervisor binary.
 func (s *Starter) GetBinaryPath(p *paths.Paths, version string) (string, error) {
 	chVersion := vmm.CHVersion(version)

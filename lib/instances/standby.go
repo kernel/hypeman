@@ -88,24 +88,24 @@ func (m *manager) standbyInstance(
 
 	// 7. Create snapshot
 	snapshotDir := m.paths.InstanceSnapshotLatest(id)
-	retainedBaseDir := m.paths.InstanceSnapshotFirecrackerBase(id)
+	retainedBaseDir := m.paths.InstanceSnapshotBase(id)
 	promotedRetainedBase := false
-	if stored.HypervisorType == hypervisor.TypeFirecracker {
+	if hv.Capabilities().SupportsSnapshotBaseReuse {
 		var err error
-		promotedRetainedBase, err = prepareFirecrackerSnapshotTarget(snapshotDir, retainedBaseDir)
+		promotedRetainedBase, err = prepareRetainedSnapshotTarget(snapshotDir, retainedBaseDir)
 		if err != nil {
 			_ = hv.Resume(ctx)
-			return nil, fmt.Errorf("prepare firecracker snapshot target: %w", err)
+			return nil, fmt.Errorf("prepare retained snapshot target: %w", err)
 		}
 	}
 	log.DebugContext(ctx, "creating snapshot", "instance_id", id, "snapshot_dir", snapshotDir)
-	if err := createSnapshot(ctx, hv, snapshotDir, stored.HypervisorType); err != nil {
+	if err := createSnapshot(ctx, hv, snapshotDir, hv.Capabilities().SupportsSnapshotBaseReuse); err != nil {
 		// Snapshot failed - try to resume VM
 		log.ErrorContext(ctx, "snapshot failed, attempting to resume VM", "instance_id", id, "error", err)
 		hv.Resume(ctx)
 		if promotedRetainedBase {
-			if rollbackErr := restoreFirecrackerRetainedBase(snapshotDir, retainedBaseDir); rollbackErr != nil {
-				log.WarnContext(ctx, "failed to restore firecracker retained snapshot base after snapshot error", "instance_id", id, "error", rollbackErr)
+			if rollbackErr := restoreRetainedSnapshotBase(snapshotDir, retainedBaseDir); rollbackErr != nil {
+				log.WarnContext(ctx, "failed to restore retained snapshot base after snapshot error", "instance_id", id, "error", rollbackErr)
 			}
 		}
 		return nil, fmt.Errorf("create snapshot: %w", err)
@@ -162,12 +162,12 @@ func (m *manager) standbyInstance(
 }
 
 // createSnapshot creates a snapshot using the hypervisor interface
-func createSnapshot(ctx context.Context, hv hypervisor.Hypervisor, snapshotDir string, hvType hypervisor.Type) error {
+func createSnapshot(ctx context.Context, hv hypervisor.Hypervisor, snapshotDir string, reuseSnapshotBase bool) error {
 	log := logger.FromContext(ctx)
 
-	// Firecracker diff snapshots can reuse the previous memory file as a base.
-	// Other hypervisors keep the existing behavior of recreating the directory.
-	if hvType != hypervisor.TypeFirecracker {
+	// Hypervisors that do not reuse an on-disk snapshot base keep recreating the
+	// directory before each snapshot.
+	if !reuseSnapshotBase {
 		os.RemoveAll(snapshotDir)
 	}
 
@@ -186,7 +186,7 @@ func createSnapshot(ctx context.Context, hv hypervisor.Hypervisor, snapshotDir s
 	return nil
 }
 
-func prepareFirecrackerSnapshotTarget(snapshotDir string, retainedBaseDir string) (bool, error) {
+func prepareRetainedSnapshotTarget(snapshotDir string, retainedBaseDir string) (bool, error) {
 	if _, err := os.Stat(snapshotDir); err == nil {
 		return false, nil
 	} else if !os.IsNotExist(err) {
@@ -205,7 +205,7 @@ func prepareFirecrackerSnapshotTarget(snapshotDir string, retainedBaseDir string
 	return false, nil
 }
 
-func restoreFirecrackerRetainedBase(snapshotDir string, retainedBaseDir string) error {
+func restoreRetainedSnapshotBase(snapshotDir string, retainedBaseDir string) error {
 	if err := os.RemoveAll(retainedBaseDir); err != nil {
 		return err
 	}

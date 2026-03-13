@@ -64,6 +64,10 @@ func (s *Starter) SocketName() string {
 	return "qemu.sock"
 }
 
+func (s *Starter) Capabilities() hypervisor.Capabilities {
+	return (&QEMU{}).Capabilities()
+}
+
 // GetBinaryPath returns the path to the QEMU binary.
 // QEMU is expected to be installed on the system.
 func (s *Starter) GetBinaryPath(p *paths.Paths, version string) (string, error) {
