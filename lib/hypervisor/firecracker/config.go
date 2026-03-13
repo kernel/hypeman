@@ -203,7 +203,7 @@ func toSnapshotCreateParams(snapshotDir string) snapshotCreateParams {
 	return snapshotCreateParams{
 		MemFilePath:  snapshotMemoryPath(snapshotDir),
 		SnapshotPath: snapshotStatePath(snapshotDir),
-		SnapshotType: "Full",
+		SnapshotType: "Diff",
 	}
 }
 

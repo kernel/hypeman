@@ -155,6 +155,11 @@ func TestFirecrackerStandbyAndRestore(t *testing.T) {
 	inst, err = waitForInstanceState(ctx, mgr, inst.Id, StateRunning, 20*time.Second)
 	require.NoError(t, err)
 	assert.Equal(t, StateRunning, inst.State)
+	assert.False(t, inst.HasSnapshot, "running instances should not expose retained firecracker diff bases as standby snapshots")
+	_, err = os.Stat(p.InstanceSnapshotLatest(inst.Id))
+	assert.True(t, os.IsNotExist(err), "running instances should not keep snapshot-latest after restore")
+	_, err = os.Stat(p.InstanceSnapshotFirecrackerBase(inst.Id))
+	require.NoError(t, err, "firecracker should retain its hidden diff base after restore")
 
 	inst, err = mgr.StopInstance(ctx, inst.Id)
 	require.NoError(t, err)
@@ -219,6 +224,9 @@ func TestFirecrackerStopClearsStaleSnapshot(t *testing.T) {
 	snapshotDir := p.InstanceSnapshotLatest(inst.Id)
 	require.NoError(t, os.MkdirAll(snapshotDir, 0755))
 	require.NoError(t, os.WriteFile(filepath.Join(snapshotDir, "stale-marker"), []byte("stale"), 0644))
+	retainedBaseDir := p.InstanceSnapshotFirecrackerBase(inst.Id)
+	require.NoError(t, os.MkdirAll(retainedBaseDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(retainedBaseDir, "base-marker"), []byte("base"), 0644))
 
 	beforeStop, err := mgr.GetInstance(ctx, inst.Id)
 	require.NoError(t, err)
@@ -233,6 +241,8 @@ func TestFirecrackerStopClearsStaleSnapshot(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, StateStopped, retrieved.State)
 	assert.False(t, retrieved.HasSnapshot, "state derivation should remain Stopped after stop")
+	_, err = os.Stat(retainedBaseDir)
+	assert.True(t, os.IsNotExist(err), "stopped instances should not retain hidden firecracker diff bases")
 
 	inst, err = mgr.StartInstance(ctx, inst.Id, StartInstanceRequest{})
 	require.NoError(t, err)

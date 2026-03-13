@@ -221,9 +221,17 @@ func (m *manager) restoreInstance(
 		}
 	}
 
-	// 8. Delete snapshot after successful restore
-	log.InfoContext(ctx, "deleting snapshot after successful restore", "instance_id", id)
-	os.RemoveAll(snapshotDir) // Best effort, ignore errors
+	// 8. Delete snapshot after successful restore unless Firecracker is keeping it
+	// as the base for the next diff snapshot.
+	if stored.HypervisorType == hypervisor.TypeFirecracker {
+		retainedBaseDir := m.paths.InstanceSnapshotFirecrackerBase(id)
+		if err := restoreFirecrackerRetainedBase(snapshotDir, retainedBaseDir); err != nil {
+			log.WarnContext(ctx, "failed to retain firecracker snapshot base after restore", "instance_id", id, "error", err)
+		}
+	} else {
+		log.InfoContext(ctx, "deleting snapshot after successful restore", "instance_id", id)
+		os.RemoveAll(snapshotDir) // Best effort, ignore errors
+	}
 
 	// 9. Persist runtime metadata updates without resetting StartedAt.
 	// Restore resumes an existing boot; preserving StartedAt keeps marker

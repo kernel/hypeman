@@ -88,11 +88,26 @@ func (m *manager) standbyInstance(
 
 	// 7. Create snapshot
 	snapshotDir := m.paths.InstanceSnapshotLatest(id)
+	retainedBaseDir := m.paths.InstanceSnapshotFirecrackerBase(id)
+	promotedRetainedBase := false
+	if stored.HypervisorType == hypervisor.TypeFirecracker {
+		var err error
+		promotedRetainedBase, err = prepareFirecrackerSnapshotTarget(snapshotDir, retainedBaseDir)
+		if err != nil {
+			_ = hv.Resume(ctx)
+			return nil, fmt.Errorf("prepare firecracker snapshot target: %w", err)
+		}
+	}
 	log.DebugContext(ctx, "creating snapshot", "instance_id", id, "snapshot_dir", snapshotDir)
-	if err := createSnapshot(ctx, hv, snapshotDir); err != nil {
+	if err := createSnapshot(ctx, hv, snapshotDir, stored.HypervisorType); err != nil {
 		// Snapshot failed - try to resume VM
 		log.ErrorContext(ctx, "snapshot failed, attempting to resume VM", "instance_id", id, "error", err)
 		hv.Resume(ctx)
+		if promotedRetainedBase {
+			if rollbackErr := restoreFirecrackerRetainedBase(snapshotDir, retainedBaseDir); rollbackErr != nil {
+				log.WarnContext(ctx, "failed to restore firecracker retained snapshot base after snapshot error", "instance_id", id, "error", rollbackErr)
+			}
+		}
 		return nil, fmt.Errorf("create snapshot: %w", err)
 	}
 
@@ -147,11 +162,14 @@ func (m *manager) standbyInstance(
 }
 
 // createSnapshot creates a snapshot using the hypervisor interface
-func createSnapshot(ctx context.Context, hv hypervisor.Hypervisor, snapshotDir string) error {
+func createSnapshot(ctx context.Context, hv hypervisor.Hypervisor, snapshotDir string, hvType hypervisor.Type) error {
 	log := logger.FromContext(ctx)
 
-	// Remove old snapshot
-	os.RemoveAll(snapshotDir)
+	// Firecracker diff snapshots can reuse the previous memory file as a base.
+	// Other hypervisors keep the existing behavior of recreating the directory.
+	if hvType != hypervisor.TypeFirecracker {
+		os.RemoveAll(snapshotDir)
+	}
 
 	// Create snapshot directory
 	if err := os.MkdirAll(snapshotDir, 0755); err != nil {
@@ -165,6 +183,35 @@ func createSnapshot(ctx context.Context, hv hypervisor.Hypervisor, snapshotDir s
 	}
 
 	log.DebugContext(ctx, "snapshot created successfully", "snapshot_dir", snapshotDir)
+	return nil
+}
+
+func prepareFirecrackerSnapshotTarget(snapshotDir string, retainedBaseDir string) (bool, error) {
+	if _, err := os.Stat(snapshotDir); err == nil {
+		return false, nil
+	} else if !os.IsNotExist(err) {
+		return false, err
+	}
+
+	if _, err := os.Stat(retainedBaseDir); err == nil {
+		if err := os.Rename(retainedBaseDir, snapshotDir); err != nil {
+			return false, err
+		}
+		return true, nil
+	} else if !os.IsNotExist(err) {
+		return false, err
+	}
+
+	return false, nil
+}
+
+func restoreFirecrackerRetainedBase(snapshotDir string, retainedBaseDir string) error {
+	if err := os.RemoveAll(retainedBaseDir); err != nil {
+		return err
+	}
+	if err := os.Rename(snapshotDir, retainedBaseDir); err != nil {
+		return err
+	}
 	return nil
 }
 
