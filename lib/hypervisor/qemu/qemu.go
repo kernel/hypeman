@@ -37,6 +37,10 @@ var _ hypervisor.Hypervisor = (*QEMU)(nil)
 
 // Capabilities returns the features supported by QEMU.
 func (q *QEMU) Capabilities() hypervisor.Capabilities {
+	return capabilities()
+}
+
+func capabilities() hypervisor.Capabilities {
 	return hypervisor.Capabilities{
 		SupportsSnapshot:          true,  // Uses QMP migrate file:// for snapshot
 		SupportsHotplugMemory:     false, // Not implemented - balloon not configured

@@ -15,6 +15,7 @@ import (
 
 func init() {
 	hypervisor.RegisterSocketName(hypervisor.TypeCloudHypervisor, "ch.sock")
+	hypervisor.RegisterCapabilities(hypervisor.TypeCloudHypervisor, capabilities())
 	hypervisor.RegisterClientFactory(hypervisor.TypeCloudHypervisor, func(socketPath string) (hypervisor.Hypervisor, error) {
 		return New(socketPath)
 	})
@@ -34,10 +35,6 @@ var _ hypervisor.VMStarter = (*Starter)(nil)
 // SocketName returns the socket filename for Cloud Hypervisor.
 func (s *Starter) SocketName() string {
 	return "ch.sock"
-}
-
-func (s *Starter) Capabilities() hypervisor.Capabilities {
-	return (&CloudHypervisor{}).Capabilities()
 }
 
 // GetBinaryPath returns the path to the Cloud Hypervisor binary.

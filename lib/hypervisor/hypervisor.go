@@ -45,6 +45,10 @@ var socketNames = make(map[Type]string)
 // Registered by hypervisor packages when they use socket-based vsock routing.
 var vsockSocketNames = make(map[Type]string)
 
+// capabilitiesByType maps hypervisor types to their static capabilities.
+// Registered by each hypervisor package's init() function.
+var capabilitiesByType = make(map[Type]Capabilities)
+
 // RegisterSocketName registers the socket filename for a hypervisor type.
 // Called by each hypervisor implementation's init() function.
 func RegisterSocketName(t Type, name string) {
@@ -74,6 +78,17 @@ func VsockSocketNameForType(t Type) string {
 	return "vsock.sock"
 }
 
+// RegisterCapabilities registers static capabilities for a hypervisor type.
+func RegisterCapabilities(t Type, caps Capabilities) {
+	capabilitiesByType[t] = caps
+}
+
+// CapabilitiesForType returns static capabilities for a hypervisor type.
+func CapabilitiesForType(t Type) (Capabilities, bool) {
+	caps, ok := capabilitiesByType[t]
+	return caps, ok
+}
+
 // VMStarter handles the full VM startup sequence.
 // Each hypervisor implements its own startup flow:
 // - Cloud Hypervisor: starts process, configures via HTTP API, boots via HTTP API
@@ -82,9 +97,6 @@ type VMStarter interface {
 	// SocketName returns the socket filename for this hypervisor.
 	// Uses short names to stay within Unix socket path length limits (SUN_LEN ~108 bytes).
 	SocketName() string
-
-	// Capabilities returns static capabilities for this hypervisor type.
-	Capabilities() Capabilities
 
 	// GetBinaryPath returns the path to the hypervisor binary, extracting if needed.
 	GetBinaryPath(p *paths.Paths, version string) (string, error)

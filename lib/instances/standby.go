@@ -89,8 +89,9 @@ func (m *manager) standbyInstance(
 	// 7. Create snapshot
 	snapshotDir := m.paths.InstanceSnapshotLatest(id)
 	retainedBaseDir := m.paths.InstanceSnapshotBase(id)
+	reuseSnapshotBase := m.supportsSnapshotBaseReuse(stored.HypervisorType)
 	promotedRetainedBase := false
-	if hv.Capabilities().SupportsSnapshotBaseReuse {
+	if reuseSnapshotBase {
 		var err error
 		promotedRetainedBase, err = prepareRetainedSnapshotTarget(snapshotDir, retainedBaseDir)
 		if err != nil {
@@ -99,7 +100,7 @@ func (m *manager) standbyInstance(
 		}
 	}
 	log.DebugContext(ctx, "creating snapshot", "instance_id", id, "snapshot_dir", snapshotDir)
-	if err := createSnapshot(ctx, hv, snapshotDir, hv.Capabilities().SupportsSnapshotBaseReuse); err != nil {
+	if err := createSnapshot(ctx, hv, snapshotDir, reuseSnapshotBase); err != nil {
 		// Snapshot failed - try to resume VM
 		log.ErrorContext(ctx, "snapshot failed, attempting to resume VM", "instance_id", id, "error", err)
 		hv.Resume(ctx)

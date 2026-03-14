@@ -71,6 +71,10 @@ type snapshotRequest struct {
 }
 
 func (c *Client) Capabilities() hypervisor.Capabilities {
+	return capabilities()
+}
+
+func capabilities() hypervisor.Capabilities {
 	return hypervisor.Capabilities{
 		SupportsSnapshot:          runtime.GOARCH == "arm64",
 		SupportsHotplugMemory:     false,

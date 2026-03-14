@@ -25,6 +25,7 @@ const (
 
 func init() {
 	hypervisor.RegisterSocketName(hypervisor.TypeFirecracker, "fc.sock")
+	hypervisor.RegisterCapabilities(hypervisor.TypeFirecracker, capabilities())
 	hypervisor.RegisterClientFactory(hypervisor.TypeFirecracker, func(socketPath string) (hypervisor.Hypervisor, error) {
 		return New(socketPath)
 	})
@@ -43,10 +44,6 @@ var snapshotSourceAliasMu sync.Mutex
 
 func (s *Starter) SocketName() string {
 	return "fc.sock"
-}
-
-func (s *Starter) Capabilities() hypervisor.Capabilities {
-	return (&Firecracker{}).Capabilities()
 }
 
 func (s *Starter) GetBinaryPath(p *paths.Paths, version string) (string, error) {

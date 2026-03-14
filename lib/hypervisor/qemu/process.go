@@ -43,6 +43,7 @@ const (
 
 func init() {
 	hypervisor.RegisterSocketName(hypervisor.TypeQEMU, "qemu.sock")
+	hypervisor.RegisterCapabilities(hypervisor.TypeQEMU, capabilities())
 	hypervisor.RegisterClientFactory(hypervisor.TypeQEMU, func(socketPath string) (hypervisor.Hypervisor, error) {
 		return New(socketPath)
 	})
@@ -62,10 +63,6 @@ var _ hypervisor.VMStarter = (*Starter)(nil)
 // SocketName returns the socket filename for QEMU.
 func (s *Starter) SocketName() string {
 	return "qemu.sock"
-}
-
-func (s *Starter) Capabilities() hypervisor.Capabilities {
-	return (&QEMU{}).Capabilities()
 }
 
 // GetBinaryPath returns the path to the QEMU binary.

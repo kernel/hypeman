@@ -47,6 +47,10 @@ func New(socketPath string) (*Firecracker, error) {
 var _ hypervisor.Hypervisor = (*Firecracker)(nil)
 
 func (f *Firecracker) Capabilities() hypervisor.Capabilities {
+	return capabilities()
+}
+
+func capabilities() hypervisor.Capabilities {
 	return hypervisor.Capabilities{
 		SupportsSnapshot:          true,
 		SupportsHotplugMemory:     false,

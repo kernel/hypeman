@@ -32,6 +32,10 @@ var _ hypervisor.Hypervisor = (*CloudHypervisor)(nil)
 
 // Capabilities returns the features supported by Cloud Hypervisor.
 func (c *CloudHypervisor) Capabilities() hypervisor.Capabilities {
+	return capabilities()
+}
+
+func capabilities() hypervisor.Capabilities {
 	return hypervisor.Capabilities{
 		SupportsSnapshot:          true,
 		SupportsHotplugMemory:     true,

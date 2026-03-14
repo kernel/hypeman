@@ -165,11 +165,11 @@ func (m *manager) getVMStarter(hvType hypervisor.Type) (hypervisor.VMStarter, er
 }
 
 func (m *manager) supportsSnapshotBaseReuse(hvType hypervisor.Type) bool {
-	starter, err := m.getVMStarter(hvType)
-	if err != nil {
+	caps, ok := hypervisor.CapabilitiesForType(hvType)
+	if !ok {
 		return false
 	}
-	return starter.Capabilities().SupportsSnapshotBaseReuse
+	return caps.SupportsSnapshotBaseReuse
 }
 
 // getInstanceLock returns or creates a lock for a specific instance
