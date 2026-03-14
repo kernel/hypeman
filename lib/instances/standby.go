@@ -105,8 +105,10 @@ func (m *manager) standbyInstance(
 		log.ErrorContext(ctx, "snapshot failed, attempting to resume VM", "instance_id", id, "error", err)
 		hv.Resume(ctx)
 		if promotedRetainedBase {
-			if rollbackErr := restoreRetainedSnapshotBase(snapshotDir, retainedBaseDir); rollbackErr != nil {
-				log.WarnContext(ctx, "failed to restore retained snapshot base after snapshot error", "instance_id", id, "error", rollbackErr)
+			// Snapshot errors can happen after partial file writes; discard the
+			// promoted base to avoid reusing potentially corrupted data.
+			if rollbackErr := os.RemoveAll(snapshotDir); rollbackErr != nil {
+				log.WarnContext(ctx, "failed to discard promoted snapshot target after snapshot error", "instance_id", id, "error", rollbackErr)
 			}
 		}
 		return nil, fmt.Errorf("create snapshot: %w", err)
