@@ -138,6 +138,64 @@ func TestCreateInstance_InvalidSizeFormat(t *testing.T) {
 	assert.Contains(t, badReq.Message, "invalid size format")
 }
 
+// TestCreateInstance_AutoPullImage verifies that CreateInstance automatically
+// pulls an image that hasn't been pulled yet, rather than returning an error.
+// This covers the bug where `hypeman run nginx:alpine` fails if the image
+// hasn't been pre-pulled with `hypeman pull`.
+func TestCreateInstance_AutoPullImage(t *testing.T) {
+	t.Parallel()
+	// Require KVM access for VM creation
+	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
+		t.Skip("/dev/kvm not available, skipping on this platform")
+	}
+
+	svc := newTestService(t)
+
+	// Ensure system files (kernel and initramfs) are available
+	t.Log("Ensuring system files (kernel and initramfs)...")
+	systemMgr := system.NewManager(paths.New(svc.Config.DataDir))
+	err := systemMgr.EnsureSystemFiles(ctx())
+	require.NoError(t, err)
+
+	// Verify the image does NOT exist locally before CreateInstance
+	_, err = svc.ImageManager.GetImage(ctx(), "docker.io/library/alpine:latest")
+	require.Error(t, err, "image should not exist locally before auto-pull test")
+
+	// CreateInstance without pre-pulling — should auto-pull the image
+	t.Log("Creating instance without pre-pulling image (expecting auto-pull)...")
+	networkEnabled := false
+	resp, err := svc.CreateInstance(ctx(), oapi.CreateInstanceRequestObject{
+		Body: &oapi.CreateInstanceRequest{
+			Name:  "test-auto-pull",
+			Image: "docker.io/library/alpine:latest",
+			Network: &struct {
+				BandwidthDownload *string `json:"bandwidth_download,omitempty"`
+				BandwidthUpload   *string `json:"bandwidth_upload,omitempty"`
+				Enabled           *bool   `json:"enabled,omitempty"`
+			}{
+				Enabled: &networkEnabled,
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	created, ok := resp.(oapi.CreateInstance201JSONResponse)
+	require.True(t, ok, "expected 201 response — auto-pull should make the image available")
+
+	instance := oapi.Instance(created)
+	assert.Equal(t, "test-auto-pull", instance.Name)
+	assert.Equal(t, "docker.io/library/alpine:latest", instance.Image)
+	t.Logf("Instance created via auto-pull: id=%s state=%s", instance.Id, instance.State)
+
+	// Verify the image now exists locally
+	img, err := svc.ImageManager.GetImage(ctx(), "docker.io/library/alpine:latest")
+	require.NoError(t, err, "image should exist after auto-pull")
+	assert.Equal(t, "ready", img.Status)
+
+	// Cleanup
+	_, _ = svc.DeleteInstance(ctxWithInstance(svc, instance.Id), oapi.DeleteInstanceRequestObject{Id: instance.Id})
+}
+
 type captureCreateManager struct {
 	instances.Manager
 	lastReq *instances.CreateInstanceRequest

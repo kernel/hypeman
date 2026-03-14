@@ -89,15 +89,32 @@ func (m *manager) createInstance(
 		return nil, err
 	}
 
-	// 2. Validate image exists and is ready
+	// 2. Validate image exists and is ready; auto-pull if not found
 	log.DebugContext(ctx, "validating image", "image", req.Image)
 	imageInfo, err := m.imageManager.GetImage(ctx, req.Image)
 	if err != nil {
-		log.ErrorContext(ctx, "failed to get image", "image", req.Image, "error", err)
 		if err == images.ErrNotFound {
-			return nil, fmt.Errorf("image %s: %w", req.Image, err)
+			// Auto-pull: image not found locally, trigger a pull and wait for it
+			log.InfoContext(ctx, "image not found locally, auto-pulling", "image", req.Image)
+			_, pullErr := m.imageManager.CreateImage(ctx, images.CreateImageRequest{Name: req.Image})
+			if pullErr != nil {
+				log.ErrorContext(ctx, "failed to auto-pull image", "image", req.Image, "error", pullErr)
+				return nil, fmt.Errorf("auto-pull image %s: %w", req.Image, pullErr)
+			}
+			if waitErr := m.imageManager.WaitForReady(ctx, req.Image); waitErr != nil {
+				log.ErrorContext(ctx, "image auto-pull failed", "image", req.Image, "error", waitErr)
+				return nil, fmt.Errorf("auto-pull image %s: %w", req.Image, waitErr)
+			}
+			// Re-fetch after successful pull
+			imageInfo, err = m.imageManager.GetImage(ctx, req.Image)
+			if err != nil {
+				log.ErrorContext(ctx, "failed to get image after auto-pull", "image", req.Image, "error", err)
+				return nil, fmt.Errorf("get image after auto-pull: %w", err)
+			}
+		} else {
+			log.ErrorContext(ctx, "failed to get image", "image", req.Image, "error", err)
+			return nil, fmt.Errorf("get image: %w", err)
 		}
-		return nil, fmt.Errorf("get image: %w", err)
 	}
 
 	if imageInfo.Status != images.StatusReady {
