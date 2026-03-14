@@ -42,13 +42,14 @@ func (q *QEMU) Capabilities() hypervisor.Capabilities {
 
 func capabilities() hypervisor.Capabilities {
 	return hypervisor.Capabilities{
-		SupportsSnapshot:          true,  // Uses QMP migrate file:// for snapshot
-		SupportsHotplugMemory:     false, // Not implemented - balloon not configured
-		SupportsPause:             true,
-		SupportsVsock:             true,
-		SupportsGPUPassthrough:    true,
-		SupportsDiskIOLimit:       true,
-		SupportsSnapshotBaseReuse: false,
+		SupportsSnapshot:            true,  // Uses QMP migrate file:// for snapshot
+		SupportsHotplugMemory:       false, // Not implemented - balloon not configured
+		SupportsPause:               true,
+		SupportsVsock:               true,
+		SupportsGPUPassthrough:      true,
+		SupportsDiskIOLimit:         true,
+		SupportsGracefulVMMShutdown: true,
+		SupportsSnapshotBaseReuse:   false,
 	}
 }
 

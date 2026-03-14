@@ -76,13 +76,14 @@ func (c *Client) Capabilities() hypervisor.Capabilities {
 
 func capabilities() hypervisor.Capabilities {
 	return hypervisor.Capabilities{
-		SupportsSnapshot:          runtime.GOARCH == "arm64",
-		SupportsHotplugMemory:     false,
-		SupportsPause:             true,
-		SupportsVsock:             true,
-		SupportsGPUPassthrough:    false,
-		SupportsDiskIOLimit:       false,
-		SupportsSnapshotBaseReuse: false,
+		SupportsSnapshot:            runtime.GOARCH == "arm64",
+		SupportsHotplugMemory:       false,
+		SupportsPause:               true,
+		SupportsVsock:               true,
+		SupportsGPUPassthrough:      false,
+		SupportsDiskIOLimit:         false,
+		SupportsGracefulVMMShutdown: true,
+		SupportsSnapshotBaseReuse:   false,
 	}
 }
 

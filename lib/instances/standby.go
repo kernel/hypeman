@@ -90,10 +90,10 @@ func (m *manager) standbyInstance(
 	snapshotDir := m.paths.InstanceSnapshotLatest(id)
 	retainedBaseDir := m.paths.InstanceSnapshotBase(id)
 	reuseSnapshotBase := m.supportsSnapshotBaseReuse(stored.HypervisorType)
-	promotedRetainedBase := false
+	promotedExistingBase := false
 	if reuseSnapshotBase {
 		var err error
-		promotedRetainedBase, err = prepareRetainedSnapshotTarget(snapshotDir, retainedBaseDir)
+		promotedExistingBase, err = prepareRetainedSnapshotTarget(snapshotDir, retainedBaseDir)
 		if err != nil {
 			_ = hv.Resume(ctx)
 			return nil, fmt.Errorf("prepare retained snapshot target: %w", err)
@@ -104,7 +104,7 @@ func (m *manager) standbyInstance(
 		// Snapshot failed - try to resume VM
 		log.ErrorContext(ctx, "snapshot failed, attempting to resume VM", "instance_id", id, "error", err)
 		hv.Resume(ctx)
-		if promotedRetainedBase {
+		if promotedExistingBase {
 			if rollbackErr := restoreRetainedSnapshotBase(snapshotDir, retainedBaseDir); rollbackErr != nil {
 				log.WarnContext(ctx, "failed to restore retained snapshot base after snapshot error", "instance_id", id, "error", rollbackErr)
 			}
@@ -187,6 +187,9 @@ func createSnapshot(ctx context.Context, hv hypervisor.Hypervisor, snapshotDir s
 	return nil
 }
 
+// prepareRetainedSnapshotTarget moves a retained snapshot base into place when needed.
+// The returned bool reports whether an existing retained base was promoted, so callers
+// know if they should move it back on snapshot failure.
 func prepareRetainedSnapshotTarget(snapshotDir string, retainedBaseDir string) (bool, error) {
 	if _, err := os.Stat(snapshotDir); err == nil {
 		return false, nil
@@ -232,14 +235,19 @@ func (m *manager) shutdownHypervisor(ctx context.Context, inst *Instance) error 
 		return nil
 	}
 
-	// Try graceful shutdown
-	log.DebugContext(ctx, "sending shutdown command to hypervisor", "instance_id", inst.Id)
-	shutdownErr := hv.Shutdown(ctx)
+	caps := hv.Capabilities()
+	shutdownErr := hypervisor.ErrNotSupported
+	if caps.SupportsGracefulVMMShutdown {
+		log.DebugContext(ctx, "sending shutdown command to hypervisor", "instance_id", inst.Id)
+		shutdownErr = hv.Shutdown(ctx)
+	} else {
+		log.DebugContext(ctx, "skipping graceful hypervisor shutdown; hypervisor does not support it", "instance_id", inst.Id)
+	}
 
 	// Wait for process to exit
 	if inst.HypervisorPID != nil {
 		waitTimeout := 2 * time.Second
-		if shutdownErr == hypervisor.ErrNotSupported {
+		if !caps.SupportsGracefulVMMShutdown || shutdownErr == hypervisor.ErrNotSupported {
 			// If the hypervisor has no shutdown API, waiting for a graceful exit is pointless.
 			waitTimeout = 0
 		}

@@ -213,6 +213,10 @@ type Capabilities struct {
 	// SupportsDiskIOLimit indicates if disk I/O rate limiting is available
 	SupportsDiskIOLimit bool
 
+	// SupportsGracefulVMMShutdown indicates the hypervisor exposes an API to
+	// ask the VMM process itself to exit cleanly.
+	SupportsGracefulVMMShutdown bool
+
 	// SupportsSnapshotBaseReuse indicates snapshots can safely reuse a retained
 	// on-disk base across restore/standby cycles.
 	SupportsSnapshotBaseReuse bool
