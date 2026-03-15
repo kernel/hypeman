@@ -105,8 +105,8 @@ func (m *manager) standbyInstance(
 		log.ErrorContext(ctx, "snapshot failed, attempting to resume VM", "instance_id", id, "error", err)
 		hv.Resume(ctx)
 		if promotedExistingBase {
-			if rollbackErr := restoreRetainedSnapshotBase(snapshotDir, retainedBaseDir); rollbackErr != nil {
-				log.WarnContext(ctx, "failed to restore retained snapshot base after snapshot error", "instance_id", id, "error", rollbackErr)
+			if rollbackErr := discardPromotedRetainedSnapshotTarget(snapshotDir); rollbackErr != nil {
+				log.WarnContext(ctx, "failed to discard promoted snapshot target after snapshot error", "instance_id", id, "error", rollbackErr)
 			}
 		}
 		return nil, fmt.Errorf("create snapshot: %w", err)
@@ -189,7 +189,7 @@ func createSnapshot(ctx context.Context, hv hypervisor.Hypervisor, snapshotDir s
 
 // prepareRetainedSnapshotTarget moves a retained snapshot base into place when needed.
 // The returned bool reports whether an existing retained base was promoted, so callers
-// know if they should move it back on snapshot failure.
+// know if they should discard the promoted target on snapshot failure.
 func prepareRetainedSnapshotTarget(snapshotDir string, retainedBaseDir string) (bool, error) {
 	if _, err := os.Stat(snapshotDir); err == nil {
 		return false, nil
@@ -207,6 +207,10 @@ func prepareRetainedSnapshotTarget(snapshotDir string, retainedBaseDir string) (
 	}
 
 	return false, nil
+}
+
+func discardPromotedRetainedSnapshotTarget(snapshotDir string) error {
+	return os.RemoveAll(snapshotDir)
 }
 
 func restoreRetainedSnapshotBase(snapshotDir string, retainedBaseDir string) error {
