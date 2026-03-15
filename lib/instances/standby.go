@@ -263,13 +263,13 @@ func (m *manager) shutdownHypervisor(ctx context.Context, inst *Instance) error 
 				log.DebugContext(ctx, "hypervisor shutdown gracefully", "instance_id", inst.Id, "pid", pid)
 			} else {
 				log.WarnContext(ctx, "hypervisor did not exit gracefully in time, force killing process", "instance_id", inst.Id, "pid", pid)
-				if err := forceKillHypervisorProcess(pid); err != nil {
+				if err := forceKillHypervisorPID(pid); err != nil {
 					return err
 				}
 			}
 		} else {
 			log.DebugContext(ctx, "skipping graceful exit wait; force killing hypervisor process", "instance_id", inst.Id, "pid", pid)
-			if err := forceKillHypervisorProcess(pid); err != nil {
+			if err := forceKillHypervisorPID(pid); err != nil {
 				return err
 			}
 		}
@@ -282,7 +282,7 @@ func (m *manager) shutdownHypervisor(ctx context.Context, inst *Instance) error 
 	return nil
 }
 
-func forceKillHypervisorProcess(pid int) error {
+func forceKillHypervisorPID(pid int) error {
 	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
 		if err == syscall.ESRCH {
 			return nil
