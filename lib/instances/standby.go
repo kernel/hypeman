@@ -95,7 +95,9 @@ func (m *manager) standbyInstance(
 		var err error
 		promotedExistingBase, err = prepareRetainedSnapshotTarget(snapshotDir, retainedBaseDir)
 		if err != nil {
-			_ = hv.Resume(ctx)
+			if resumeErr := hv.Resume(ctx); resumeErr != nil {
+				log.ErrorContext(ctx, "failed to resume VM after retained snapshot target preparation error", "instance_id", id, "error", resumeErr)
+			}
 			return nil, fmt.Errorf("prepare retained snapshot target: %w", err)
 		}
 	}
@@ -103,7 +105,9 @@ func (m *manager) standbyInstance(
 	if err := createSnapshot(ctx, hv, snapshotDir, reuseSnapshotBase); err != nil {
 		// Snapshot failed - try to resume VM
 		log.ErrorContext(ctx, "snapshot failed, attempting to resume VM", "instance_id", id, "error", err)
-		hv.Resume(ctx)
+		if resumeErr := hv.Resume(ctx); resumeErr != nil {
+			log.ErrorContext(ctx, "failed to resume VM after snapshot error", "instance_id", id, "error", resumeErr)
+		}
 		if promotedExistingBase {
 			if rollbackErr := discardPromotedRetainedSnapshotTarget(snapshotDir); rollbackErr != nil {
 				log.WarnContext(ctx, "failed to discard promoted snapshot target after snapshot error", "instance_id", id, "error", rollbackErr)
@@ -166,8 +170,8 @@ func (m *manager) standbyInstance(
 func createSnapshot(ctx context.Context, hv hypervisor.Hypervisor, snapshotDir string, reuseSnapshotBase bool) error {
 	log := logger.FromContext(ctx)
 
-	// Hypervisors that do not reuse an on-disk snapshot base keep recreating the
-	// directory before each snapshot.
+	// Remove old snapshot if the hypervisor does not support reusing snapshots
+	// (diff-based snapshots).
 	if !reuseSnapshotBase {
 		os.RemoveAll(snapshotDir)
 	}
@@ -248,27 +252,20 @@ func (m *manager) shutdownHypervisor(ctx context.Context, inst *Instance) error 
 		log.DebugContext(ctx, "skipping graceful hypervisor shutdown; hypervisor does not support it", "instance_id", inst.Id)
 	}
 
-	// Wait for process to exit
 	if inst.HypervisorPID != nil {
-		waitTimeout := 2 * time.Second
-		if !caps.SupportsGracefulVMMShutdown || shutdownErr == hypervisor.ErrNotSupported {
-			// If the hypervisor has no shutdown API, waiting for a graceful exit is pointless.
-			waitTimeout = 0
-		}
-		if !WaitForProcessExit(*inst.HypervisorPID, waitTimeout) {
-			log.WarnContext(ctx, "hypervisor did not exit gracefully in time, force killing process", "instance_id", inst.Id, "pid", *inst.HypervisorPID)
-			if err := syscall.Kill(*inst.HypervisorPID, syscall.SIGKILL); err != nil && err != syscall.ESRCH {
-				return fmt.Errorf("force kill hypervisor pid %d: %w", *inst.HypervisorPID, err)
-			}
-			if !WaitForProcessExit(*inst.HypervisorPID, 2*time.Second) {
-				// The process may have spawned children in its own process group.
-				_ = syscall.Kill(-*inst.HypervisorPID, syscall.SIGKILL)
-				if !WaitForProcessExit(*inst.HypervisorPID, 2*time.Second) {
-					return fmt.Errorf("hypervisor pid %d did not exit after SIGKILL", *inst.HypervisorPID)
-				}
-			}
+		pid := *inst.HypervisorPID
+		shouldWaitForGracefulExit := caps.SupportsGracefulVMMShutdown && shutdownErr != hypervisor.ErrNotSupported
+		if shouldWaitForGracefulExit && WaitForProcessExit(pid, 2*time.Second) {
+			log.DebugContext(ctx, "hypervisor shutdown gracefully", "instance_id", inst.Id, "pid", pid)
 		} else {
-			log.DebugContext(ctx, "hypervisor shutdown gracefully", "instance_id", inst.Id, "pid", *inst.HypervisorPID)
+			if shouldWaitForGracefulExit {
+				log.WarnContext(ctx, "hypervisor did not exit gracefully in time, force killing process", "instance_id", inst.Id, "pid", pid)
+			} else {
+				log.DebugContext(ctx, "skipping graceful exit wait; force killing hypervisor process", "instance_id", inst.Id, "pid", pid)
+			}
+			if err := forceKillHypervisorProcess(pid); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -276,5 +273,24 @@ func (m *manager) shutdownHypervisor(ctx context.Context, inst *Instance) error 
 		return fmt.Errorf("graceful hypervisor shutdown failed: %w", shutdownErr)
 	}
 
+	return nil
+}
+
+func forceKillHypervisorProcess(pid int) error {
+	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
+		if err == syscall.ESRCH {
+			return nil
+		}
+		return fmt.Errorf("force kill hypervisor pid %d: %w", pid, err)
+	}
+	if WaitForProcessExit(pid, 2*time.Second) {
+		return nil
+	}
+
+	// The process may have spawned children in its own process group.
+	_ = syscall.Kill(-pid, syscall.SIGKILL)
+	if !WaitForProcessExit(pid, 2*time.Second) {
+		return fmt.Errorf("hypervisor pid %d did not exit after SIGKILL", pid)
+	}
 	return nil
 }
