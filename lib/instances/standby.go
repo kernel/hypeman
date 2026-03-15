@@ -244,25 +244,31 @@ func (m *manager) shutdownHypervisor(ctx context.Context, inst *Instance) error 
 	}
 
 	caps := hv.Capabilities()
+
+	// Try graceful shutdown
 	shutdownErr := hypervisor.ErrNotSupported
-	if caps.SupportsGracefulVMMShutdown {
+	if !caps.SupportsGracefulVMMShutdown {
+		log.DebugContext(ctx, "skipping graceful hypervisor shutdown; hypervisor does not support it", "instance_id", inst.Id)
+	} else {
 		log.DebugContext(ctx, "sending shutdown command to hypervisor", "instance_id", inst.Id)
 		shutdownErr = hv.Shutdown(ctx)
-	} else {
-		log.DebugContext(ctx, "skipping graceful hypervisor shutdown; hypervisor does not support it", "instance_id", inst.Id)
 	}
 
+	// Wait for process to exit
 	if inst.HypervisorPID != nil {
 		pid := *inst.HypervisorPID
 		shouldWaitForGracefulExit := caps.SupportsGracefulVMMShutdown && shutdownErr != hypervisor.ErrNotSupported
-		if shouldWaitForGracefulExit && WaitForProcessExit(pid, 2*time.Second) {
-			log.DebugContext(ctx, "hypervisor shutdown gracefully", "instance_id", inst.Id, "pid", pid)
-		} else {
-			if shouldWaitForGracefulExit {
-				log.WarnContext(ctx, "hypervisor did not exit gracefully in time, force killing process", "instance_id", inst.Id, "pid", pid)
+		if shouldWaitForGracefulExit {
+			if WaitForProcessExit(pid, 2*time.Second) {
+				log.DebugContext(ctx, "hypervisor shutdown gracefully", "instance_id", inst.Id, "pid", pid)
 			} else {
-				log.DebugContext(ctx, "skipping graceful exit wait; force killing hypervisor process", "instance_id", inst.Id, "pid", pid)
+				log.WarnContext(ctx, "hypervisor did not exit gracefully in time, force killing process", "instance_id", inst.Id, "pid", pid)
+				if err := forceKillHypervisorProcess(pid); err != nil {
+					return err
+				}
 			}
+		} else {
+			log.DebugContext(ctx, "skipping graceful exit wait; force killing hypervisor process", "instance_id", inst.Id, "pid", pid)
 			if err := forceKillHypervisorProcess(pid); err != nil {
 				return err
 			}
