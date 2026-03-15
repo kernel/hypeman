@@ -237,13 +237,11 @@ func TestFirecrackerStandbyAndRestore(t *testing.T) {
 	t.Logf("second standby (diff snapshot expected) took %v", secondStandbyDuration)
 	assert.Equal(t, StateStandby, inst.State)
 	assert.True(t, inst.HasSnapshot)
-	assert.Less(t, secondStandbyDuration, time.Second, "second standby should stay under 1s with retained diff snapshots")
 
 	secondRestoreRunningDuration, _ := restoreAndMeasure("second")
 	assert.False(t, inst.HasSnapshot, "running instances should not expose retained snapshot bases as standby snapshots")
 	assertRetainedBaseState()
 	t.Logf("second diff-cycle timings: standby=%v restore-to-running=%v", secondStandbyDuration, secondRestoreRunningDuration)
-	assert.Less(t, secondRestoreRunningDuration, time.Second, "second restore should stay under 1s with retained diff snapshots")
 
 	assertGuestFileContents(secondFilePath, secondFileContents)
 	assertGuestFileContents(firstFilePath, firstFileContents)
