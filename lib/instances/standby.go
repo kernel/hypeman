@@ -191,12 +191,15 @@ func createSnapshot(ctx context.Context, hv hypervisor.Hypervisor, snapshotDir s
 	return nil
 }
 
-// prepareRetainedSnapshotTarget moves a retained snapshot base into place when needed.
+// prepareRetainedSnapshotTarget clears any stale snapshot target from a prior failed
+// standby attempt, then moves a retained snapshot base into place when needed.
 // The returned bool reports whether an existing retained base was promoted, so callers
 // know if they should discard the promoted target on snapshot failure.
 func prepareRetainedSnapshotTarget(snapshotDir string, retainedBaseDir string) (bool, error) {
 	if _, err := os.Stat(snapshotDir); err == nil {
-		return false, nil
+		if err := os.RemoveAll(snapshotDir); err != nil {
+			return false, err
+		}
 	} else if !os.IsNotExist(err) {
 		return false, err
 	}

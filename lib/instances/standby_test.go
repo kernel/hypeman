@@ -36,3 +36,25 @@ func TestDiscardPromotedRetainedSnapshotTargetAfterSnapshotError(t *testing.T) {
 	_, err = os.Stat(retainedBaseDir)
 	assert.True(t, os.IsNotExist(err), "snapshot failures should not restore the promoted base for reuse")
 }
+
+func TestPrepareRetainedSnapshotTargetDiscardsStaleSnapshotDirBeforeRetry(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	snapshotDir := filepath.Join(root, "snapshot-latest")
+	retainedBaseDir := filepath.Join(root, "snapshot-base")
+
+	require.NoError(t, os.MkdirAll(snapshotDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(snapshotDir, "memory"), []byte("partial"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(snapshotDir, "state"), []byte("partial"), 0644))
+
+	promotedExistingBase, err := prepareRetainedSnapshotTarget(snapshotDir, retainedBaseDir)
+	require.NoError(t, err)
+	assert.False(t, promotedExistingBase, "stale snapshot cleanup should not report a promoted retained base")
+
+	_, err = os.Stat(snapshotDir)
+	assert.True(t, os.IsNotExist(err), "stale snapshot targets should be discarded before retrying standby")
+
+	_, err = os.Stat(retainedBaseDir)
+	assert.True(t, os.IsNotExist(err), "cleanup without a retained base should leave the retained base location empty")
+}
