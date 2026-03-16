@@ -1,6 +1,8 @@
 package firecracker
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
@@ -59,10 +61,24 @@ func TestToNetworkInterfaces(t *testing.T) {
 }
 
 func TestSnapshotParamPaths(t *testing.T) {
-	create := toSnapshotCreateParams("/tmp/snapshot-latest")
-	assert.Equal(t, "/tmp/snapshot-latest/state", create.SnapshotPath)
-	assert.Equal(t, "/tmp/snapshot-latest/memory", create.MemFilePath)
-	assert.Equal(t, "Full", create.SnapshotType)
+	t.Run("uses full snapshots when no retained base exists", func(t *testing.T) {
+		snapshotDir := filepath.Join(t.TempDir(), "snapshot-latest")
+		create := toSnapshotCreateParams(snapshotDir)
+		assert.Equal(t, filepath.Join(snapshotDir, "state"), create.SnapshotPath)
+		assert.Equal(t, filepath.Join(snapshotDir, "memory"), create.MemFilePath)
+		assert.Equal(t, "Full", create.SnapshotType)
+	})
+
+	t.Run("uses diff snapshots when retained base memory exists", func(t *testing.T) {
+		snapshotDir := filepath.Join(t.TempDir(), "snapshot-latest")
+		require.NoError(t, os.MkdirAll(snapshotDir, 0755))
+		require.NoError(t, os.WriteFile(filepath.Join(snapshotDir, "memory"), []byte("base"), 0644))
+
+		create := toSnapshotCreateParams(snapshotDir)
+		assert.Equal(t, filepath.Join(snapshotDir, "state"), create.SnapshotPath)
+		assert.Equal(t, filepath.Join(snapshotDir, "memory"), create.MemFilePath)
+		assert.Equal(t, "Diff", create.SnapshotType)
+	})
 
 	load := toSnapshotLoadParams("/tmp/snapshot-latest", []networkOverride{
 		{IfaceID: "eth0", HostDevName: "hype-abc123"},

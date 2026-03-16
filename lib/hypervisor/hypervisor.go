@@ -45,6 +45,10 @@ var socketNames = make(map[Type]string)
 // Registered by hypervisor packages when they use socket-based vsock routing.
 var vsockSocketNames = make(map[Type]string)
 
+// capabilitiesByType maps hypervisor types to their static capabilities.
+// Registered by each hypervisor package's init() function.
+var capabilitiesByType = make(map[Type]Capabilities)
+
 // RegisterSocketName registers the socket filename for a hypervisor type.
 // Called by each hypervisor implementation's init() function.
 func RegisterSocketName(t Type, name string) {
@@ -72,6 +76,17 @@ func VsockSocketNameForType(t Type) string {
 		return name
 	}
 	return "vsock.sock"
+}
+
+// RegisterCapabilities registers static capabilities for a hypervisor type.
+func RegisterCapabilities(t Type, caps Capabilities) {
+	capabilitiesByType[t] = caps
+}
+
+// CapabilitiesForType returns static capabilities for a hypervisor type.
+func CapabilitiesForType(t Type) (Capabilities, bool) {
+	caps, ok := capabilitiesByType[t]
+	return caps, ok
 }
 
 // VMStarter handles the full VM startup sequence.
@@ -197,6 +212,14 @@ type Capabilities struct {
 
 	// SupportsDiskIOLimit indicates if disk I/O rate limiting is available
 	SupportsDiskIOLimit bool
+
+	// SupportsGracefulVMMShutdown indicates the hypervisor exposes an API to
+	// ask the VMM process itself to exit cleanly.
+	SupportsGracefulVMMShutdown bool
+
+	// SupportsSnapshotBaseReuse indicates snapshots can safely reuse a retained
+	// on-disk base across restore/standby cycles.
+	SupportsSnapshotBaseReuse bool
 }
 
 // VsockDialer provides vsock connectivity to a guest VM.

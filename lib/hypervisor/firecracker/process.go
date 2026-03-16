@@ -25,6 +25,7 @@ const (
 
 func init() {
 	hypervisor.RegisterSocketName(hypervisor.TypeFirecracker, "fc.sock")
+	hypervisor.RegisterCapabilities(hypervisor.TypeFirecracker, capabilities())
 	hypervisor.RegisterClientFactory(hypervisor.TypeFirecracker, func(socketPath string) (hypervisor.Hypervisor, error) {
 		return New(socketPath)
 	})
