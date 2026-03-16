@@ -135,23 +135,39 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 	if request.Body.Network != nil && request.Body.Network.Enabled != nil {
 		networkEnabled = *request.Body.Network.Enabled
 	}
-	var egressProxyConfig *instances.EgressProxyConfig
-	if request.Body.EgressProxy != nil {
-		enabled := request.Body.EgressProxy.Enabled != nil && *request.Body.EgressProxy.Enabled
-		egressProxyConfig = &instances.EgressProxyConfig{Enabled: enabled}
-		if request.Body.EgressProxy.MockEnvVars != nil {
-			egressProxyConfig.MockEnvVars = append([]string(nil), (*request.Body.EgressProxy.MockEnvVars)...)
-		}
-		if request.Body.EgressProxy.MockEnvVarDomains != nil {
-			egressProxyConfig.MockEnvVarDomains = make(map[string][]string, len(*request.Body.EgressProxy.MockEnvVarDomains))
-			for envVar, domains := range *request.Body.EgressProxy.MockEnvVarDomains {
-				egressProxyConfig.MockEnvVarDomains[envVar] = append([]string(nil), domains...)
-			}
-		}
-		if request.Body.EgressProxy.EnforcementMode != nil {
-			egressProxyConfig.EnforcementMode = instances.EgressProxyEnforcementMode(*request.Body.EgressProxy.EnforcementMode)
+	var networkEgress *instances.NetworkEgressPolicy
+	if request.Body.Network != nil && request.Body.Network.Egress != nil {
+		enabled := request.Body.Network.Egress.Enabled != nil && *request.Body.Network.Egress.Enabled
+		networkEgress = &instances.NetworkEgressPolicy{Enabled: enabled}
+		if request.Body.Network.Egress.Enforcement != nil && request.Body.Network.Egress.Enforcement.Mode != nil {
+			networkEgress.EnforcementMode = instances.EgressEnforcementMode(*request.Body.Network.Egress.Enforcement.Mode)
 		} else if enabled {
-			egressProxyConfig.EnforcementMode = instances.EgressProxyEnforcementModeAll
+			networkEgress.EnforcementMode = instances.EgressEnforcementModeAll
+		}
+	}
+	var credentials map[string]instances.CredentialPolicy
+	if request.Body.Credentials != nil {
+		credentials = make(map[string]instances.CredentialPolicy, len(*request.Body.Credentials))
+		for credentialName, credential := range *request.Body.Credentials {
+			policy := instances.CredentialPolicy{
+				Source: instances.CredentialSource{
+					Env: credential.Source.Env,
+				},
+				Inject: make([]instances.CredentialInjectRule, 0, len(credential.Inject)),
+			}
+			for _, inject := range credential.Inject {
+				rule := instances.CredentialInjectRule{
+					As: instances.CredentialInjectAs{
+						Header: inject.As.Header,
+						Format: inject.As.Format,
+					},
+				}
+				if inject.Hosts != nil {
+					rule.Hosts = append([]string(nil), (*inject.Hosts)...)
+				}
+				policy.Inject = append(policy.Inject, rule)
+			}
+			credentials[credentialName] = policy
 		}
 	}
 
@@ -274,7 +290,8 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		Env:                      env,
 		Tags:                     resourceTags,
 		NetworkEnabled:           networkEnabled,
-		EgressProxy:              egressProxyConfig,
+		NetworkEgress:            networkEgress,
+		Credentials:              credentials,
 		Devices:                  deviceRefs,
 		Volumes:                  volumes,
 		Hypervisor:               hvType,

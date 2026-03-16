@@ -298,7 +298,8 @@ func (m *manager) createInstance(
 		Env:                      req.Env,
 		Tags:                     tags.Clone(req.Tags),
 		NetworkEnabled:           req.NetworkEnabled,
-		EgressProxy:              cloneEgressProxyConfig(req.EgressProxy),
+		NetworkEgress:            cloneNetworkEgressPolicy(req.NetworkEgress),
+		Credentials:              cloneCredentialPolicies(req.Credentials),
 		CreatedAt:                time.Now(),
 		StartedAt:                nil,
 		StoppedAt:                nil,
@@ -489,33 +490,27 @@ func validateCreateRequest(req CreateInstanceRequest) error {
 	if req.Vcpus < 0 {
 		return fmt.Errorf("vcpus cannot be negative")
 	}
-	if req.EgressProxy != nil && req.EgressProxy.Enabled {
+	if req.NetworkEgress != nil && req.NetworkEgress.Enabled {
 		if !req.NetworkEnabled {
-			return fmt.Errorf("%w: egress proxy requires network_enabled=true", ErrInvalidRequest)
+			return fmt.Errorf("%w: network.egress requires network.enabled=true", ErrInvalidRequest)
 		}
-		mode, err := normalizeEgressProxyEnforcementMode(req.EgressProxy.EnforcementMode)
+		mode, err := normalizeEgressEnforcementMode(req.NetworkEgress.EnforcementMode)
 		if err != nil {
 			return err
 		}
-		req.EgressProxy.EnforcementMode = mode
-		normalized, err := normalizeMockEnvVars(req.EgressProxy.MockEnvVars)
-		if err != nil {
-			return err
+		req.NetworkEgress.EnforcementMode = mode
+	}
+	normalizedCredentials, err := normalizeCredentialPolicies(req.Credentials)
+	if err != nil {
+		return err
+	}
+	req.Credentials = normalizedCredentials
+	if len(normalizedCredentials) > 0 {
+		if req.NetworkEgress == nil || !req.NetworkEgress.Enabled {
+			return fmt.Errorf("%w: credentials require network.egress.enabled=true", ErrInvalidRequest)
 		}
-		req.EgressProxy.MockEnvVars = normalized
-		normalizedDomains, err := normalizeMockEnvVarDomains(normalized, req.EgressProxy.MockEnvVarDomains)
-		if err != nil {
+		if err := validateCredentialEnvBindings(normalizedCredentials, req.Env); err != nil {
 			return err
-		}
-		req.EgressProxy.MockEnvVarDomains = normalizedDomains
-		for _, envVar := range normalized {
-			real, ok := req.Env[envVar]
-			if !ok {
-				return fmt.Errorf("%w: egress proxy mock env var %q must be present in env", ErrInvalidRequest, envVar)
-			}
-			if strings.TrimSpace(real) == "" {
-				return fmt.Errorf("%w: env var %q must be non-empty when listed in egress_proxy.mock_env_vars", ErrInvalidRequest, envVar)
-			}
 		}
 	}
 	if err := tags.Validate(req.Tags); err != nil {

@@ -142,9 +142,10 @@ func TestRegistryPushAndCreateInstance(t *testing.T) {
 			Image: imageName,
 			Cmd:   &cmd,
 			Network: &struct {
-				BandwidthDownload *string `json:"bandwidth_download,omitempty"`
-				BandwidthUpload   *string `json:"bandwidth_upload,omitempty"`
-				Enabled           *bool   `json:"enabled,omitempty"`
+				BandwidthDownload *string                                  `json:"bandwidth_download,omitempty"`
+				BandwidthUpload   *string                                  `json:"bandwidth_upload,omitempty"`
+				Egress            *oapi.CreateInstanceRequestNetworkEgress `json:"egress,omitempty"`
+				Enabled           *bool                                    `json:"enabled,omitempty"`
 			}{
 				Enabled: &networkEnabled,
 			},

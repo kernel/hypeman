@@ -22,11 +22,11 @@ const (
 	StateUnknown      State = "Unknown"      // Failed to determine state (VMM query failed)
 )
 
-type EgressProxyEnforcementMode string
+type EgressEnforcementMode string
 
 const (
-	EgressProxyEnforcementModeAll           EgressProxyEnforcementMode = "all"
-	EgressProxyEnforcementModeHTTPHTTPSOnly EgressProxyEnforcementMode = "http_https_only"
+	EgressEnforcementModeAll           EgressEnforcementMode = "all"
+	EgressEnforcementModeHTTPHTTPSOnly EgressEnforcementMode = "http_https_only"
 )
 
 // VolumeAttachment represents a volume attached to an instance
@@ -38,13 +38,34 @@ type VolumeAttachment struct {
 	OverlaySize int64  // Size of overlay disk in bytes (max diff from base)
 }
 
-// EgressProxyConfig configures optional per-instance egress MITM behavior.
-// Real secret values are provided via Env and persisted there.
-type EgressProxyConfig struct {
-	Enabled           bool                       // Whether egress proxy mode is enabled
-	MockEnvVars       []string                   // Env var names to mock in guest and rewrite on egress
-	MockEnvVarDomains map[string][]string        // Optional env var -> allowed destination domain patterns for substitution
-	EnforcementMode   EgressProxyEnforcementMode // all (default) blocks direct non-proxy TCP egress, http_https_only blocks only 80/443
+// NetworkEgressPolicy configures host-mediated outbound networking behavior.
+type NetworkEgressPolicy struct {
+	Enabled         bool                  // Whether host-mediated egress policy is enabled
+	EnforcementMode EgressEnforcementMode // all (default) blocks direct non-proxy TCP egress, http_https_only blocks only 80/443
+}
+
+// CredentialSource references where real credential material is loaded from.
+type CredentialSource struct {
+	Env string // Host env variable name
+}
+
+// CredentialInjectAs describes how the credential is materialized for outbound requests.
+// Header templating is currently supported; future types (e.g., request signing) can extend this.
+type CredentialInjectAs struct {
+	Header string // Header name to set/mutate
+	Format string // Format template containing ${value}
+}
+
+// CredentialInjectRule scopes a credential injection policy to destination hosts.
+type CredentialInjectRule struct {
+	Hosts []string           // Optional host patterns (api.example.com, *.example.com); empty means all
+	As    CredentialInjectAs // Current v1 injection shape
+}
+
+// CredentialPolicy configures one host-managed credential brokering policy.
+type CredentialPolicy struct {
+	Source CredentialSource
+	Inject []CredentialInjectRule
 }
 
 // StoredMetadata represents instance metadata that is persisted to disk
@@ -67,7 +88,8 @@ type StoredMetadata struct {
 	Env            map[string]string
 	Tags           tags.Tags // User-defined key-value tags
 	NetworkEnabled bool      // Whether instance has networking enabled (uses default network)
-	EgressProxy    *EgressProxyConfig
+	NetworkEgress  *NetworkEgressPolicy
+	Credentials    map[string]CredentialPolicy
 	IP             string // Assigned IP address (empty if NetworkEnabled=false)
 	MAC            string // Assigned MAC address (empty if NetworkEnabled=false)
 
@@ -172,27 +194,28 @@ type GPUConfig struct {
 
 // CreateInstanceRequest is the domain request for creating an instance
 type CreateInstanceRequest struct {
-	Name                     string             // Required
-	Image                    string             // Required: OCI reference
-	Size                     int64              // Base memory in bytes (default: 1GB)
-	HotplugSize              int64              // Hotplug memory in bytes (default: 0, set explicitly to enable)
-	OverlaySize              int64              // Overlay disk size in bytes (default: 10GB)
-	Vcpus                    int                // Default 2
-	NetworkBandwidthDownload int64              // Download rate limit bytes/sec (0 = auto, proportional to CPU)
-	NetworkBandwidthUpload   int64              // Upload rate limit bytes/sec (0 = auto, proportional to CPU)
-	DiskIOBps                int64              // Disk I/O rate limit bytes/sec (0 = auto, proportional to CPU)
-	Env                      map[string]string  // Optional environment variables
-	Tags                     tags.Tags          // Optional user-defined key-value tags
-	NetworkEnabled           bool               // Whether to enable networking (uses default network)
-	EgressProxy              *EgressProxyConfig // Optional egress MITM proxy mode
-	Devices                  []string           // Device IDs or names to attach (GPU passthrough)
-	Volumes                  []VolumeAttachment // Volumes to attach at creation time
-	Hypervisor               hypervisor.Type    // Optional: hypervisor type (defaults to config)
-	GPU                      *GPUConfig         // Optional: vGPU configuration
-	Entrypoint               []string           // Override image entrypoint (nil = use image default)
-	Cmd                      []string           // Override image cmd (nil = use image default)
-	SkipKernelHeaders        bool               // Skip kernel headers installation (disables DKMS)
-	SkipGuestAgent           bool               // Skip guest-agent installation (disables exec/stat API)
+	Name                     string                      // Required
+	Image                    string                      // Required: OCI reference
+	Size                     int64                       // Base memory in bytes (default: 1GB)
+	HotplugSize              int64                       // Hotplug memory in bytes (default: 0, set explicitly to enable)
+	OverlaySize              int64                       // Overlay disk size in bytes (default: 10GB)
+	Vcpus                    int                         // Default 2
+	NetworkBandwidthDownload int64                       // Download rate limit bytes/sec (0 = auto, proportional to CPU)
+	NetworkBandwidthUpload   int64                       // Upload rate limit bytes/sec (0 = auto, proportional to CPU)
+	DiskIOBps                int64                       // Disk I/O rate limit bytes/sec (0 = auto, proportional to CPU)
+	Env                      map[string]string           // Optional environment variables
+	Tags                     tags.Tags                   // Optional user-defined key-value tags
+	NetworkEnabled           bool                        // Whether to enable networking (uses default network)
+	NetworkEgress            *NetworkEgressPolicy        // Optional host-mediated egress policy
+	Credentials              map[string]CredentialPolicy // Optional host-managed credential brokering policies
+	Devices                  []string                    // Device IDs or names to attach (GPU passthrough)
+	Volumes                  []VolumeAttachment          // Volumes to attach at creation time
+	Hypervisor               hypervisor.Type             // Optional: hypervisor type (defaults to config)
+	GPU                      *GPUConfig                  // Optional: vGPU configuration
+	Entrypoint               []string                    // Override image entrypoint (nil = use image default)
+	Cmd                      []string                    // Override image cmd (nil = use image default)
+	SkipKernelHeaders        bool                        // Skip kernel headers installation (disables DKMS)
+	SkipGuestAgent           bool                        // Skip guest-agent installation (disables exec/stat API)
 }
 
 // StartInstanceRequest is the domain request for starting a stopped instance

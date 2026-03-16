@@ -49,9 +49,10 @@ func TestExecInstanceNonTTY(t *testing.T) {
 			Name:  "exec-test",
 			Image: imageName,
 			Network: &struct {
-				BandwidthDownload *string `json:"bandwidth_download,omitempty"`
-				BandwidthUpload   *string `json:"bandwidth_upload,omitempty"`
-				Enabled           *bool   `json:"enabled,omitempty"`
+				BandwidthDownload *string                                  `json:"bandwidth_download,omitempty"`
+				BandwidthUpload   *string                                  `json:"bandwidth_upload,omitempty"`
+				Egress            *oapi.CreateInstanceRequestNetworkEgress `json:"egress,omitempty"`
+				Enabled           *bool                                    `json:"enabled,omitempty"`
 			}{
 				Enabled: &networkEnabled,
 			},
@@ -195,9 +196,10 @@ func TestExecWithDebianMinimal(t *testing.T) {
 			Image: imageName,
 			Cmd:   &cmdOverride,
 			Network: &struct {
-				BandwidthDownload *string `json:"bandwidth_download,omitempty"`
-				BandwidthUpload   *string `json:"bandwidth_upload,omitempty"`
-				Enabled           *bool   `json:"enabled,omitempty"`
+				BandwidthDownload *string                                  `json:"bandwidth_download,omitempty"`
+				BandwidthUpload   *string                                  `json:"bandwidth_upload,omitempty"`
+				Egress            *oapi.CreateInstanceRequestNetworkEgress `json:"egress,omitempty"`
+				Enabled           *bool                                    `json:"enabled,omitempty"`
 			}{
 				Enabled: &networkEnabled,
 			},

@@ -48,9 +48,10 @@ func TestCpToAndFromInstance(t *testing.T) {
 			Name:  "cp-test",
 			Image: imageName,
 			Network: &struct {
-				BandwidthDownload *string `json:"bandwidth_download,omitempty"`
-				BandwidthUpload   *string `json:"bandwidth_upload,omitempty"`
-				Enabled           *bool   `json:"enabled,omitempty"`
+				BandwidthDownload *string                                  `json:"bandwidth_download,omitempty"`
+				BandwidthUpload   *string                                  `json:"bandwidth_upload,omitempty"`
+				Egress            *oapi.CreateInstanceRequestNetworkEgress `json:"egress,omitempty"`
+				Enabled           *bool                                    `json:"enabled,omitempty"`
 			}{
 				Enabled: &networkEnabled,
 			},
@@ -188,9 +189,10 @@ func TestCpDirectoryToInstance(t *testing.T) {
 			Name:  "cp-dir-test",
 			Image: imageName,
 			Network: &struct {
-				BandwidthDownload *string `json:"bandwidth_download,omitempty"`
-				BandwidthUpload   *string `json:"bandwidth_upload,omitempty"`
-				Enabled           *bool   `json:"enabled,omitempty"`
+				BandwidthDownload *string                                  `json:"bandwidth_download,omitempty"`
+				BandwidthUpload   *string                                  `json:"bandwidth_upload,omitempty"`
+				Egress            *oapi.CreateInstanceRequestNetworkEgress `json:"egress,omitempty"`
+				Enabled           *bool                                    `json:"enabled,omitempty"`
 			}{
 				Enabled: &networkEnabled,
 			},

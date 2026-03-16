@@ -74,9 +74,10 @@ func TestCreateInstance_ParsesHumanReadableSizes(t *testing.T) {
 			HotplugSize: &hotplugSize,
 			OverlaySize: &overlaySize,
 			Network: &struct {
-				BandwidthDownload *string `json:"bandwidth_download,omitempty"`
-				BandwidthUpload   *string `json:"bandwidth_upload,omitempty"`
-				Enabled           *bool   `json:"enabled,omitempty"`
+				BandwidthDownload *string                                  `json:"bandwidth_download,omitempty"`
+				BandwidthUpload   *string                                  `json:"bandwidth_upload,omitempty"`
+				Egress            *oapi.CreateInstanceRequestNetworkEgress `json:"egress,omitempty"`
+				Enabled           *bool                                    `json:"enabled,omitempty"`
 			}{
 				Enabled: &networkEnabled,
 			},
@@ -121,9 +122,10 @@ func TestCreateInstance_InvalidSizeFormat(t *testing.T) {
 			Image: "docker.io/library/alpine:latest",
 			Size:  &invalidSize,
 			Network: &struct {
-				BandwidthDownload *string `json:"bandwidth_download,omitempty"`
-				BandwidthUpload   *string `json:"bandwidth_upload,omitempty"`
-				Enabled           *bool   `json:"enabled,omitempty"`
+				BandwidthDownload *string                                  `json:"bandwidth_download,omitempty"`
+				BandwidthUpload   *string                                  `json:"bandwidth_upload,omitempty"`
+				Egress            *oapi.CreateInstanceRequestNetworkEgress `json:"egress,omitempty"`
+				Enabled           *bool                                    `json:"enabled,omitempty"`
 			}{
 				Enabled: &networkEnabled,
 			},
@@ -215,7 +217,7 @@ func TestCreateInstance_OmittedHotplugSizeDefaultsToZero(t *testing.T) {
 	assert.Equal(t, int64(0), int64(hotplugBytes), "response should report zero hotplug_size when omitted")
 }
 
-func TestCreateInstance_MapsEgressProxyMockEnvVars(t *testing.T) {
+func TestCreateInstance_MapsNetworkEgressCredentials(t *testing.T) {
 	t.Parallel()
 	svc := newTestService(t)
 
@@ -223,10 +225,36 @@ func TestCreateInstance_MapsEgressProxyMockEnvVars(t *testing.T) {
 	mockMgr := &captureCreateManager{Manager: origMgr}
 	svc.InstanceManager = mockMgr
 
-	enabled := true
-	mockEnvVars := []string{"OUTBOUND_OPENAI_KEY", "GITHUB_TOKEN"}
-	mockEnvVarDomains := map[string][]string{
-		"OUTBOUND_OPENAI_KEY": []string{"api.openai.com", "*.openai.com"},
+	networkEnabled := true
+	egressEnabled := true
+	credentials := map[string]oapi.CreateInstanceRequestCredential{
+		"OUTBOUND_OPENAI_KEY": {
+			Source: oapi.CreateInstanceRequestCredentialSource{
+				Env: "OUTBOUND_OPENAI_KEY",
+			},
+			Inject: []oapi.CreateInstanceRequestCredentialInject{
+				{
+					Hosts: &[]string{"api.openai.com", "*.openai.com"},
+					As: oapi.CreateInstanceRequestCredentialInjectAs{
+						Header: "Authorization",
+						Format: "Bearer ${value}",
+					},
+				},
+			},
+		},
+		"GITHUB_TOKEN": {
+			Source: oapi.CreateInstanceRequestCredentialSource{
+				Env: "GITHUB_TOKEN",
+			},
+			Inject: []oapi.CreateInstanceRequestCredentialInject{
+				{
+					As: oapi.CreateInstanceRequestCredentialInjectAs{
+						Header: "X-GitHub-Token",
+						Format: "${value}",
+					},
+				},
+			},
+		},
 	}
 	env := map[string]string{
 		"OUTBOUND_OPENAI_KEY": "real-openai-key-123",
@@ -238,16 +266,18 @@ func TestCreateInstance_MapsEgressProxyMockEnvVars(t *testing.T) {
 			Name:  "test-egress-proxy-mock-env-vars",
 			Image: "docker.io/library/alpine:latest",
 			Env:   &env,
-			EgressProxy: &struct {
-				Enabled           *bool                                                 `json:"enabled,omitempty"`
-				EnforcementMode   *oapi.CreateInstanceRequestEgressProxyEnforcementMode `json:"enforcement_mode,omitempty"`
-				MockEnvVarDomains *map[string][]string                                  `json:"mock_env_var_domains,omitempty"`
-				MockEnvVars       *[]string                                             `json:"mock_env_vars,omitempty"`
+			Network: &struct {
+				BandwidthDownload *string                                  `json:"bandwidth_download,omitempty"`
+				BandwidthUpload   *string                                  `json:"bandwidth_upload,omitempty"`
+				Egress            *oapi.CreateInstanceRequestNetworkEgress `json:"egress,omitempty"`
+				Enabled           *bool                                    `json:"enabled,omitempty"`
 			}{
-				Enabled:           &enabled,
-				MockEnvVarDomains: &mockEnvVarDomains,
-				MockEnvVars:       &mockEnvVars,
+				Enabled: &networkEnabled,
+				Egress: &oapi.CreateInstanceRequestNetworkEgress{
+					Enabled: &egressEnabled,
+				},
 			},
+			Credentials: &credentials,
 		},
 	})
 	require.NoError(t, err)
@@ -255,16 +285,18 @@ func TestCreateInstance_MapsEgressProxyMockEnvVars(t *testing.T) {
 	require.True(t, ok, "expected 201 response")
 
 	require.NotNil(t, mockMgr.lastReq)
-	require.NotNil(t, mockMgr.lastReq.EgressProxy)
-	assert.True(t, mockMgr.lastReq.EgressProxy.Enabled)
-	assert.Equal(t, instances.EgressProxyEnforcementModeAll, mockMgr.lastReq.EgressProxy.EnforcementMode)
-	assert.Equal(t, []string{"OUTBOUND_OPENAI_KEY", "GITHUB_TOKEN"}, mockMgr.lastReq.EgressProxy.MockEnvVars)
-	assert.Equal(t, map[string][]string{"OUTBOUND_OPENAI_KEY": []string{"api.openai.com", "*.openai.com"}}, mockMgr.lastReq.EgressProxy.MockEnvVarDomains)
+	require.NotNil(t, mockMgr.lastReq.NetworkEgress)
+	assert.True(t, mockMgr.lastReq.NetworkEgress.Enabled)
+	assert.Equal(t, instances.EgressEnforcementModeAll, mockMgr.lastReq.NetworkEgress.EnforcementMode)
+	assert.Equal(t, "OUTBOUND_OPENAI_KEY", mockMgr.lastReq.Credentials["OUTBOUND_OPENAI_KEY"].Source.Env)
+	assert.Equal(t, []string{"api.openai.com", "*.openai.com"}, mockMgr.lastReq.Credentials["OUTBOUND_OPENAI_KEY"].Inject[0].Hosts)
+	assert.Equal(t, "Authorization", mockMgr.lastReq.Credentials["OUTBOUND_OPENAI_KEY"].Inject[0].As.Header)
+	assert.Equal(t, "Bearer ${value}", mockMgr.lastReq.Credentials["OUTBOUND_OPENAI_KEY"].Inject[0].As.Format)
 	assert.Equal(t, "real-openai-key-123", mockMgr.lastReq.Env["OUTBOUND_OPENAI_KEY"])
 	assert.Equal(t, "real-gh-token-456", mockMgr.lastReq.Env["GITHUB_TOKEN"])
 }
 
-func TestCreateInstance_MapsEgressProxyEnforcementMode(t *testing.T) {
+func TestCreateInstance_MapsNetworkEgressEnforcementMode(t *testing.T) {
 	t.Parallel()
 	svc := newTestService(t)
 
@@ -272,28 +304,48 @@ func TestCreateInstance_MapsEgressProxyEnforcementMode(t *testing.T) {
 	mockMgr := &captureCreateManager{Manager: origMgr}
 	svc.InstanceManager = mockMgr
 
-	enabled := true
+	networkEnabled := true
+	egressEnabled := true
 	mode := oapi.HttpHttpsOnly
 	env := map[string]string{
 		"OUTBOUND_OPENAI_KEY": "real-openai-key-123",
 	}
-	mockEnvVars := []string{"OUTBOUND_OPENAI_KEY"}
+	credentials := map[string]oapi.CreateInstanceRequestCredential{
+		"OUTBOUND_OPENAI_KEY": {
+			Source: oapi.CreateInstanceRequestCredentialSource{
+				Env: "OUTBOUND_OPENAI_KEY",
+			},
+			Inject: []oapi.CreateInstanceRequestCredentialInject{
+				{
+					As: oapi.CreateInstanceRequestCredentialInjectAs{
+						Header: "Authorization",
+						Format: "Bearer ${value}",
+					},
+				},
+			},
+		},
+	}
 
 	resp, err := svc.CreateInstance(ctx(), oapi.CreateInstanceRequestObject{
 		Body: &oapi.CreateInstanceRequest{
 			Name:  "test-egress-proxy-enforcement-mode",
 			Image: "docker.io/library/alpine:latest",
 			Env:   &env,
-			EgressProxy: &struct {
-				Enabled           *bool                                                 `json:"enabled,omitempty"`
-				EnforcementMode   *oapi.CreateInstanceRequestEgressProxyEnforcementMode `json:"enforcement_mode,omitempty"`
-				MockEnvVarDomains *map[string][]string                                  `json:"mock_env_var_domains,omitempty"`
-				MockEnvVars       *[]string                                             `json:"mock_env_vars,omitempty"`
+			Network: &struct {
+				BandwidthDownload *string                                  `json:"bandwidth_download,omitempty"`
+				BandwidthUpload   *string                                  `json:"bandwidth_upload,omitempty"`
+				Egress            *oapi.CreateInstanceRequestNetworkEgress `json:"egress,omitempty"`
+				Enabled           *bool                                    `json:"enabled,omitempty"`
 			}{
-				Enabled:         &enabled,
-				EnforcementMode: &mode,
-				MockEnvVars:     &mockEnvVars,
+				Enabled: &networkEnabled,
+				Egress: &oapi.CreateInstanceRequestNetworkEgress{
+					Enabled: &egressEnabled,
+					Enforcement: &oapi.CreateInstanceRequestNetworkEgressEnforcement{
+						Mode: &mode,
+					},
+				},
 			},
+			Credentials: &credentials,
 		},
 	})
 	require.NoError(t, err)
@@ -301,8 +353,8 @@ func TestCreateInstance_MapsEgressProxyEnforcementMode(t *testing.T) {
 	require.True(t, ok, "expected 201 response")
 
 	require.NotNil(t, mockMgr.lastReq)
-	require.NotNil(t, mockMgr.lastReq.EgressProxy)
-	assert.Equal(t, instances.EgressProxyEnforcementModeHTTPHTTPSOnly, mockMgr.lastReq.EgressProxy.EnforcementMode)
+	require.NotNil(t, mockMgr.lastReq.NetworkEgress)
+	assert.Equal(t, instances.EgressEnforcementModeHTTPHTTPSOnly, mockMgr.lastReq.NetworkEgress.EnforcementMode)
 }
 
 func TestForkInstance_Success(t *testing.T) {
@@ -515,9 +567,10 @@ func TestInstanceLifecycle_StopStart(t *testing.T) {
 			Name:  "test-lifecycle",
 			Image: imageName,
 			Network: &struct {
-				BandwidthDownload *string `json:"bandwidth_download,omitempty"`
-				BandwidthUpload   *string `json:"bandwidth_upload,omitempty"`
-				Enabled           *bool   `json:"enabled,omitempty"`
+				BandwidthDownload *string                                  `json:"bandwidth_download,omitempty"`
+				BandwidthUpload   *string                                  `json:"bandwidth_upload,omitempty"`
+				Egress            *oapi.CreateInstanceRequestNetworkEgress `json:"egress,omitempty"`
+				Enabled           *bool                                    `json:"enabled,omitempty"`
 			}{
 				Enabled: &networkEnabled,
 			},

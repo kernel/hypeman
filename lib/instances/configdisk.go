@@ -86,9 +86,9 @@ func (m *manager) buildGuestConfig(ctx context.Context, inst *Instance, imageInf
 			ProxyURL:  proxyCfg.ProxyURL,
 			CACertPEM: proxyCfg.CACertPEM,
 		}
-		if inst.EgressProxy != nil {
-			for _, envVar := range inst.EgressProxy.MockEnvVars {
-				cfg.Env[envVar] = mockValueForEnvVar(envVar)
+		if len(inst.Credentials) > 0 {
+			for credentialName := range inst.Credentials {
+				cfg.Env[credentialName] = mockValueForCredential(credentialName)
 			}
 		}
 		cfg.Env["HTTP_PROXY"] = proxyCfg.ProxyURL

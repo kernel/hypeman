@@ -467,8 +467,11 @@ func cloneStoredMetadataForFork(src StoredMetadata) StoredMetadata {
 			dst.Env[k] = v
 		}
 	}
-	if src.EgressProxy != nil {
-		dst.EgressProxy = cloneEgressProxyConfig(src.EgressProxy)
+	if src.NetworkEgress != nil {
+		dst.NetworkEgress = cloneNetworkEgressPolicy(src.NetworkEgress)
+	}
+	if src.Credentials != nil {
+		dst.Credentials = cloneCredentialPolicies(src.Credentials)
 	}
 	if src.Tags != nil {
 		dst.Tags = make(map[string]string, len(src.Tags))

@@ -70,11 +70,21 @@ func TestEgressProxyRewritesHTTPSHeaders(t *testing.T) {
 		OverlaySize:    5 * 1024 * 1024 * 1024,
 		Vcpus:          1,
 		NetworkEnabled: true,
-		EgressProxy: &EgressProxyConfig{
-			Enabled:     true,
-			MockEnvVars: []string{"OUTBOUND_OPENAI_KEY"},
-			MockEnvVarDomains: map[string][]string{
-				"OUTBOUND_OPENAI_KEY": []string{"127.0.0.1"},
+		NetworkEgress: &NetworkEgressPolicy{
+			Enabled: true,
+		},
+		Credentials: map[string]CredentialPolicy{
+			"OUTBOUND_OPENAI_KEY": {
+				Source: CredentialSource{Env: "OUTBOUND_OPENAI_KEY"},
+				Inject: []CredentialInjectRule{
+					{
+						Hosts: []string{"127.0.0.1"},
+						As: CredentialInjectAs{
+							Header: "Authorization",
+							Format: "Bearer ${value}",
+						},
+					},
+				},
 			},
 		},
 		Env: map[string]string{
