@@ -164,6 +164,14 @@ func (m *manager) getVMStarter(hvType hypervisor.Type) (hypervisor.VMStarter, er
 	return starter, nil
 }
 
+func (m *manager) supportsSnapshotBaseReuse(hvType hypervisor.Type) bool {
+	caps, ok := hypervisor.CapabilitiesForType(hvType)
+	if !ok {
+		return false
+	}
+	return caps.SupportsSnapshotBaseReuse
+}
+
 // getInstanceLock returns or creates a lock for a specific instance
 func (m *manager) getInstanceLock(id string) *sync.RWMutex {
 	lock, _ := m.instanceLocks.LoadOrStore(id, &sync.RWMutex{})

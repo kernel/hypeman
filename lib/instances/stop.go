@@ -234,6 +234,12 @@ func (m *manager) stopInstance(
 	if err := os.RemoveAll(snapshotDir); err != nil {
 		log.WarnContext(ctx, "failed to remove stale snapshot directory on stop", "instance_id", id, "snapshot_dir", snapshotDir, "error", err)
 	}
+	if m.supportsSnapshotBaseReuse(stored.HypervisorType) {
+		retainedBaseDir := m.paths.InstanceSnapshotBase(id)
+		if err := os.RemoveAll(retainedBaseDir); err != nil {
+			log.WarnContext(ctx, "failed to remove retained snapshot base on stop", "instance_id", id, "snapshot_dir", retainedBaseDir, "error", err)
+		}
+	}
 
 	// 10. Update metadata (clear PID, mdev UUID, set StoppedAt)
 	now := time.Now()
