@@ -85,7 +85,7 @@ func (m *manager) createInstance(
 	}
 
 	// 1. Validate request
-	if err := validateCreateRequest(req); err != nil {
+	if err := validateCreateRequest(&req); err != nil {
 		log.ErrorContext(ctx, "invalid create request", "error", err)
 		return nil, err
 	}
@@ -470,8 +470,12 @@ func (m *manager) createInstance(
 	return &finalInst, nil
 }
 
-// validateCreateRequest validates the create instance request
-func validateCreateRequest(req CreateInstanceRequest) error {
+// validateCreateRequest validates the create instance request.
+// The request is mutated in-place to persist normalized egress/credential policy fields.
+func validateCreateRequest(req *CreateInstanceRequest) error {
+	if req == nil {
+		return fmt.Errorf("%w: request is required", ErrInvalidRequest)
+	}
 	if err := validateInstanceName(req.Name); err != nil {
 		return err
 	}

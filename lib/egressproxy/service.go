@@ -276,7 +276,8 @@ func (s *Service) handleHTTPProxyRequest(w http.ResponseWriter, r *http.Request,
 
 	resp, err := s.transport.RoundTrip(outReq)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("proxy upstream error: %v", err), http.StatusBadGateway)
+		slog.Warn("egress proxy upstream request failed", "destination_host", destinationHost, "error", err)
+		http.Error(w, "proxy upstream error", http.StatusBadGateway)
 		return
 	}
 	defer resp.Body.Close()

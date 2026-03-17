@@ -1,7 +1,12 @@
 package egressproxy
 
 import (
+	"context"
+	"errors"
+	"net"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -88,4 +93,32 @@ func TestApplyHeaderReplacementsHTTPSOnlyAndDomainGated(t *testing.T) {
 	}
 	svc.applyHeaderReplacements("10.0.0.2", "api.openai.com", httpAllowedDomain, false)
 	require.Equal(t, "Bearer mock-OUTBOUND_OPENAI_KEY", httpAllowedDomain.Get("Authorization"))
+}
+
+func TestHandleHTTPProxyRequest_DoesNotLeakUpstreamErrorDetails(t *testing.T) {
+	t.Parallel()
+
+	sentinelErr := errors.New("dial failed: test internal network detail")
+	svc := &Service{
+		transport: &http.Transport{
+			DialContext: func(context.Context, string, string) (net.Conn, error) {
+				return nil, sentinelErr
+			},
+		},
+		policiesBySourceIP: map[string]sourcePolicy{},
+		sourceIPByInstance: map[string]string{},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "http://api.example.com/v1/chat/completions", nil)
+	rec := httptest.NewRecorder()
+
+	svc.ServeHTTP(rec, req)
+
+	resp := rec.Result()
+	require.Equal(t, http.StatusBadGateway, resp.StatusCode)
+	body := rec.Body.String()
+	require.Contains(t, body, "proxy upstream error")
+	require.NotContains(t, body, sentinelErr.Error())
+	require.NotContains(t, body, "dial failed")
+	require.False(t, strings.Contains(body, "internal network detail"))
 }
