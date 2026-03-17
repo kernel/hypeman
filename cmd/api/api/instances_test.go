@@ -50,6 +50,8 @@ func TestCreateInstance_AutoPullImage(t *testing.T) {
 
 	// NOTE: intentionally NOT calling createAndWaitForImage here.
 	// The auto-pull logic in CreateInstance should handle pulling the image.
+	// The auto-pull has a 5s timeout — alpine:latest is small enough to
+	// complete within that window.
 
 	// Ensure system files (kernel and initramfs) are available
 	t.Log("Ensuring system files (kernel and initramfs)...")
