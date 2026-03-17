@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/kernel/hypeman/lib/scopes"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -333,5 +334,73 @@ func TestJwtAuth_RequiresAuthorization(t *testing.T) {
 
 		assert.Equal(t, http.StatusUnauthorized, rr.Code)
 		assert.Contains(t, rr.Body.String(), "invalid token")
+	})
+}
+
+// generateScopedToken creates a user JWT token with specific permission scopes.
+func generateScopedToken(t *testing.T, userID string, perms []string) string {
+	claims := jwt.MapClaims{
+		"sub":         userID,
+		"iat":         time.Now().Unix(),
+		"exp":         time.Now().Add(time.Hour).Unix(),
+		"permissions": perms,
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	tokenString, err := token.SignedString([]byte(testJWTSecret))
+	require.NoError(t, err)
+	return tokenString
+}
+
+func TestJwtAuth_ScopedPermissions(t *testing.T) {
+	// Handler that checks what permissions are in the context
+	nextHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		perms := scopes.GetPermissions(r.Context())
+		if perms == nil {
+			w.Header().Set("X-Perms", "full-access")
+		} else {
+			w.Header().Set("X-Perms", "scoped")
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+
+	handler := JwtAuth(testJWTSecret)(nextHandler)
+
+	t.Run("legacy token without permissions has full access", func(t *testing.T) {
+		token := generateUserToken(t, "user-123")
+
+		req := httptest.NewRequest(http.MethodGet, "/instances", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+
+		assert.Equal(t, http.StatusOK, rr.Code)
+		assert.Equal(t, "full-access", rr.Header().Get("X-Perms"))
+	})
+
+	t.Run("scoped token has permissions in context", func(t *testing.T) {
+		token := generateScopedToken(t, "user-456", []string{"instance:read", "image:read"})
+
+		req := httptest.NewRequest(http.MethodGet, "/instances", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+
+		assert.Equal(t, http.StatusOK, rr.Code)
+		assert.Equal(t, "scoped", rr.Header().Get("X-Perms"))
+	})
+
+	t.Run("wildcard scope token has permissions in context", func(t *testing.T) {
+		token := generateScopedToken(t, "user-789", []string{"*"})
+
+		req := httptest.NewRequest(http.MethodGet, "/instances", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+
+		assert.Equal(t, http.StatusOK, rr.Code)
+		assert.Equal(t, "scoped", rr.Header().Get("X-Perms"))
 	})
 }

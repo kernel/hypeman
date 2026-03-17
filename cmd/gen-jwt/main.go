@@ -8,6 +8,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/kernel/hypeman/cmd/api/config"
+	"github.com/kernel/hypeman/lib/scopes"
 	"github.com/knadh/koanf/parsers/yaml"
 	"github.com/knadh/koanf/providers/file"
 	"github.com/knadh/koanf/v2"
@@ -48,7 +49,18 @@ func getJWTSecret() string {
 func main() {
 	userID := flag.String("user-id", "test-user", "User ID to include in the JWT token")
 	duration := flag.Duration("duration", 24*time.Hour, "Token validity duration (e.g., 24h, 720h, 8760h)")
+	scopesFlag := flag.String("scopes", "", "Comma-separated list of permission scopes (e.g., instance:read,instance:write). Empty means full access.")
+	listScopes := flag.Bool("list-scopes", false, "List all available scopes and exit")
 	flag.Parse()
+
+	if *listScopes {
+		fmt.Println("Available scopes:")
+		for _, s := range scopes.AllScopes {
+			fmt.Printf("  %s\n", s)
+		}
+		fmt.Println("  * (wildcard — grants all permissions)")
+		os.Exit(0)
+	}
 
 	jwtSecret := getJWTSecret()
 	if jwtSecret == "" {
@@ -65,6 +77,18 @@ func main() {
 		"iat": time.Now().Unix(),
 		"exp": time.Now().Add(*duration).Unix(),
 	}
+
+	// Add scoped permissions if specified
+	if *scopesFlag != "" {
+		parsed, err := scopes.ParseScopes(*scopesFlag)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Run with -list-scopes to see available scopes.\n")
+			os.Exit(1)
+		}
+		claims["permissions"] = scopes.ScopeStrings(parsed)
+	}
+
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	tokenString, err := token.SignedString([]byte(jwtSecret))
 	if err != nil {

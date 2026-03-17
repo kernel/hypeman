@@ -29,6 +29,7 @@ import (
 	"github.com/kernel/hypeman/lib/instances"
 	mw "github.com/kernel/hypeman/lib/middleware"
 	"github.com/kernel/hypeman/lib/oapi"
+	"github.com/kernel/hypeman/lib/scopes"
 	"github.com/kernel/hypeman/lib/otel"
 	"github.com/kernel/hypeman/lib/registry"
 	"github.com/kernel/hypeman/lib/vmm"
@@ -285,6 +286,7 @@ func run() error {
 		mw.InjectLogger(logger),
 		mw.AccessLogger(accessLogger),
 		mw.JwtAuth(app.Config.JwtSecret),
+		scopes.RequireScope(scopes.InstanceWrite),
 		mw.ResolveResource(app.ApiService.NewResolvers(), api.ResolverErrorResponder),
 	).Get("/instances/{id}/exec", app.ApiService.ExecHandler)
 
@@ -296,6 +298,7 @@ func run() error {
 		mw.InjectLogger(logger),
 		mw.AccessLogger(accessLogger),
 		mw.JwtAuth(app.Config.JwtSecret),
+		scopes.RequireScope(scopes.InstanceWrite),
 		mw.ResolveResource(app.ApiService.NewResolvers(), api.ResolverErrorResponder),
 	).Get("/instances/{id}/cp", app.ApiService.CpHandler)
 
@@ -365,6 +368,9 @@ func run() error {
 			ErrorHandler: mw.OapiErrorHandler,
 		}
 		r.Use(nethttpmiddleware.OapiRequestValidatorWithOptions(spec, validatorOptions))
+
+		// Scoped permissions — enforce per-route scope requirements
+		r.Use(scopes.Middleware())
 
 		// Resource resolver middleware - resolves IDs/names/prefixes before handlers
 		// Enriches context with resolved resource and logger with resolved ID
