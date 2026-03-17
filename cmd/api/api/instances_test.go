@@ -186,7 +186,6 @@ func TestCreateInstance_InvalidSizeFormat(t *testing.T) {
 	assert.Contains(t, badReq.Message, "invalid size format")
 }
 
-
 type captureCreateManager struct {
 	instances.Manager
 	lastReq *instances.CreateInstanceRequest
