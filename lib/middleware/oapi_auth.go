@@ -497,7 +497,9 @@ func JwtAuth(jwtSecret string) func(http.Handler) http.Handler {
 
 // extractPermissions reads the "permissions" claim from a JWT MapClaims
 // and stores the parsed scopes in the context. If the claim is absent,
-// the context is returned unmodified (meaning full access).
+// the context is returned unmodified (meaning full access). If the claim
+// is present but malformed, an empty permission set is stored (deny all)
+// to prevent privilege escalation.
 func extractPermissions(ctx context.Context, claims jwt.MapClaims) context.Context {
 	raw, ok := claims["permissions"]
 	if !ok {
@@ -508,7 +510,8 @@ func extractPermissions(ctx context.Context, claims jwt.MapClaims) context.Conte
 	// as []interface{}.
 	arr, ok := raw.([]interface{})
 	if !ok {
-		return ctx
+		// permissions claim present but not a valid array — deny all
+		return scopes.ContextWithPermissions(ctx, []scopes.Scope{})
 	}
 
 	perms := make([]scopes.Scope, 0, len(arr))

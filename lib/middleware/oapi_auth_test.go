@@ -403,4 +403,31 @@ func TestJwtAuth_ScopedPermissions(t *testing.T) {
 		assert.Equal(t, http.StatusOK, rr.Code)
 		assert.Equal(t, "scoped", rr.Header().Get("X-Perms"))
 	})
+
+	t.Run("malformed permissions claim denies all", func(t *testing.T) {
+		// Create a token where permissions is a string instead of an array
+		claims := jwt.MapClaims{
+			"sub":         "user-bad",
+			"iat":         time.Now().Unix(),
+			"exp":         time.Now().Add(time.Hour).Unix(),
+			"permissions": "not-an-array",
+		}
+		token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+		tokenString, err := token.SignedString([]byte(testJWTSecret))
+		require.NoError(t, err)
+
+		req := httptest.NewRequest(http.MethodGet, "/instances", nil)
+		req.Header.Set("Authorization", "Bearer "+tokenString)
+
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+
+		assert.Equal(t, http.StatusOK, rr.Code)
+		// Should be scoped with empty permissions (not full-access)
+		assert.Equal(t, "scoped", rr.Header().Get("X-Perms"))
+
+		// Verify it actually denies access
+		ctx := scopes.ContextWithPermissions(req.Context(), []scopes.Scope{})
+		assert.False(t, scopes.HasScope(ctx, scopes.InstanceRead))
+	})
 }
