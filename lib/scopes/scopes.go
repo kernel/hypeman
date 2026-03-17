@@ -166,9 +166,19 @@ func RequireScope(required Scope) func(http.Handler) http.Handler {
 	}
 }
 
-// routeScopes maps "METHOD /path-pattern" to the required scope.
+// PublicRoutes lists route keys ("METHOD /path") that are intentionally
+// unscoped — they do not require authentication or scope checks.
+// The test uses this to distinguish "intentionally public" from "forgot to
+// add a scope mapping".
+var PublicRoutes = map[string]bool{
+	"GET /spec.yaml": true,
+	"GET /spec.json": true,
+	"GET /swagger":   true,
+}
+
+// RouteScopes maps "METHOD /path-pattern" to the required scope.
 // Path patterns use chi-style {param} placeholders.
-var routeScopes = map[string]Scope{
+var RouteScopes = map[string]Scope{
 	// Builds
 	"GET /builds":             BuildRead,
 	"POST /builds":            BuildWrite,
@@ -240,6 +250,6 @@ var routeScopes = map[string]Scope{
 // and true if found, or ("", false) if the route is not mapped.
 func ScopeForRoute(method, pattern string) (Scope, bool) {
 	key := method + " " + pattern
-	s, ok := routeScopes[key]
+	s, ok := RouteScopes[key]
 	return s, ok
 }
