@@ -19,38 +19,38 @@ type Scope string
 
 const (
 	// Instance scopes
-	InstanceRead  Scope = "instance:read"
-	InstanceWrite Scope = "instance:write"  // create, start, stop, standby, restore, fork, exec, cp
+	InstanceRead   Scope = "instance:read"
+	InstanceWrite  Scope = "instance:write" // create, start, stop, standby, restore, fork, exec, cp
 	InstanceDelete Scope = "instance:delete"
 
 	// Image scopes
-	ImageRead  Scope = "image:read"
-	ImageWrite Scope = "image:write" // pull/create
+	ImageRead   Scope = "image:read"
+	ImageWrite  Scope = "image:write" // pull/create
 	ImageDelete Scope = "image:delete"
 
 	// Volume scopes
-	VolumeRead  Scope = "volume:read"
-	VolumeWrite Scope = "volume:write" // create, attach, detach
+	VolumeRead   Scope = "volume:read"
+	VolumeWrite  Scope = "volume:write" // create, attach, detach
 	VolumeDelete Scope = "volume:delete"
 
 	// Snapshot scopes
-	SnapshotRead  Scope = "snapshot:read"
-	SnapshotWrite Scope = "snapshot:write" // create, restore, fork
+	SnapshotRead   Scope = "snapshot:read"
+	SnapshotWrite  Scope = "snapshot:write" // create, restore, fork
 	SnapshotDelete Scope = "snapshot:delete"
 
 	// Build scopes
-	BuildRead  Scope = "build:read"
-	BuildWrite Scope = "build:write" // create
+	BuildRead   Scope = "build:read"
+	BuildWrite  Scope = "build:write"  // create
 	BuildDelete Scope = "build:delete" // cancel
 
 	// Device scopes
-	DeviceRead  Scope = "device:read"
-	DeviceWrite Scope = "device:write" // register
+	DeviceRead   Scope = "device:read"
+	DeviceWrite  Scope = "device:write"  // register
 	DeviceDelete Scope = "device:delete" // unregister
 
 	// Ingress scopes
-	IngressRead  Scope = "ingress:read"
-	IngressWrite Scope = "ingress:write"
+	IngressRead   Scope = "ingress:read"
+	IngressWrite  Scope = "ingress:write"
 	IngressDelete Scope = "ingress:delete"
 
 	// Resource/health scopes (read-only)
@@ -170,69 +170,69 @@ func RequireScope(required Scope) func(http.Handler) http.Handler {
 // Path patterns use chi-style {param} placeholders.
 var routeScopes = map[string]Scope{
 	// Builds
-	"GET /builds":              BuildRead,
-	"POST /builds":             BuildWrite,
-	"DELETE /builds/{id}":      BuildDelete,
-	"GET /builds/{id}":         BuildRead,
-	"GET /builds/{id}/events":  BuildRead,
+	"GET /builds":             BuildRead,
+	"POST /builds":            BuildWrite,
+	"DELETE /builds/{id}":     BuildDelete,
+	"GET /builds/{id}":        BuildRead,
+	"GET /builds/{id}/events": BuildRead,
 
 	// Devices
-	"GET /devices":             DeviceRead,
-	"POST /devices":            DeviceWrite,
-	"GET /devices/available":   DeviceRead,
-	"DELETE /devices/{id}":     DeviceDelete,
-	"GET /devices/{id}":        DeviceRead,
+	"GET /devices":           DeviceRead,
+	"POST /devices":          DeviceWrite,
+	"GET /devices/available": DeviceRead,
+	"DELETE /devices/{id}":   DeviceDelete,
+	"GET /devices/{id}":      DeviceRead,
 
 	// Health & Resources
-	"GET /health":              ResourceRead,
-	"GET /resources":           ResourceRead,
+	"GET /health":    ResourceRead,
+	"GET /resources": ResourceRead,
 
 	// Images
-	"GET /images":              ImageRead,
-	"POST /images":             ImageWrite,
-	"DELETE /images/{name}":    ImageDelete,
-	"GET /images/{name}":       ImageRead,
+	"GET /images":           ImageRead,
+	"POST /images":          ImageWrite,
+	"DELETE /images/{name}": ImageDelete,
+	"GET /images/{name}":    ImageRead,
 
 	// Ingresses
-	"GET /ingresses":           IngressRead,
-	"POST /ingresses":          IngressWrite,
-	"DELETE /ingresses/{id}":   IngressDelete,
-	"GET /ingresses/{id}":      IngressRead,
+	"GET /ingresses":         IngressRead,
+	"POST /ingresses":        IngressWrite,
+	"DELETE /ingresses/{id}": IngressDelete,
+	"GET /ingresses/{id}":    IngressRead,
 
 	// Instances
-	"GET /instances":                                              InstanceRead,
-	"POST /instances":                                             InstanceWrite,
-	"DELETE /instances/{id}":                                      InstanceDelete,
-	"GET /instances/{id}":                                         InstanceRead,
-	"POST /instances/{id}/fork":                                   InstanceWrite,
-	"GET /instances/{id}/logs":                                    InstanceRead,
-	"POST /instances/{id}/restore":                                InstanceWrite,
-	"POST /instances/{id}/snapshots":                              SnapshotWrite,
-	"POST /instances/{id}/snapshots/{snapshotId}/restore":         SnapshotWrite,
-	"POST /instances/{id}/standby":                                InstanceWrite,
-	"POST /instances/{id}/start":                                  InstanceWrite,
-	"GET /instances/{id}/stat":                                    InstanceRead,
-	"GET /instances/{id}/stats":                                   InstanceRead,
-	"POST /instances/{id}/stop":                                   InstanceWrite,
-	"DELETE /instances/{id}/volumes/{volumeId}":                   VolumeWrite,
-	"POST /instances/{id}/volumes/{volumeId}":                     VolumeWrite,
+	"GET /instances":                                      InstanceRead,
+	"POST /instances":                                     InstanceWrite,
+	"DELETE /instances/{id}":                              InstanceDelete,
+	"GET /instances/{id}":                                 InstanceRead,
+	"POST /instances/{id}/fork":                           InstanceWrite,
+	"GET /instances/{id}/logs":                            InstanceRead,
+	"POST /instances/{id}/restore":                        InstanceWrite,
+	"POST /instances/{id}/snapshots":                      SnapshotWrite,
+	"POST /instances/{id}/snapshots/{snapshotId}/restore": SnapshotWrite,
+	"POST /instances/{id}/standby":                        InstanceWrite,
+	"POST /instances/{id}/start":                          InstanceWrite,
+	"GET /instances/{id}/stat":                            InstanceRead,
+	"GET /instances/{id}/stats":                           InstanceRead,
+	"POST /instances/{id}/stop":                           InstanceWrite,
+	"DELETE /instances/{id}/volumes/{volumeId}":           VolumeWrite,
+	"POST /instances/{id}/volumes/{volumeId}":             VolumeWrite,
 
 	// WebSocket endpoints (outside OpenAPI but still authed)
-	"GET /instances/{id}/exec":                                    InstanceWrite,
-	"GET /instances/{id}/cp":                                      InstanceWrite,
+	"GET /instances/{id}/exec": InstanceWrite,
+	"GET /instances/{id}/cp":   InstanceWrite,
 
 	// Snapshots
-	"GET /snapshots":                      SnapshotRead,
-	"DELETE /snapshots/{snapshotId}":       SnapshotDelete,
-	"GET /snapshots/{snapshotId}":          SnapshotRead,
-	"POST /snapshots/{snapshotId}/fork":    SnapshotWrite,
+	"GET /snapshots":                    SnapshotRead,
+	"DELETE /snapshots/{snapshotId}":    SnapshotDelete,
+	"GET /snapshots/{snapshotId}":       SnapshotRead,
+	"POST /snapshots/{snapshotId}/fork": SnapshotWrite,
 
 	// Volumes
-	"GET /volumes":             VolumeRead,
-	"POST /volumes":            VolumeWrite,
+	"GET /volumes":               VolumeRead,
+	"POST /volumes":              VolumeWrite,
 	"POST /volumes/from-archive": VolumeWrite,
-	"DELETE /volumes/{id}":     VolumeDelete,
-	"GET /volumes/{id}":        VolumeRead,
+	"DELETE /volumes/{id}":       VolumeDelete,
+	"GET /volumes/{id}":          VolumeRead,
 }
 
 // ScopeForRoute looks up the required scope for a given HTTP method and
