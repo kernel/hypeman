@@ -221,9 +221,17 @@ func (m *manager) restoreInstance(
 		}
 	}
 
-	// 8. Delete snapshot after successful restore
-	log.InfoContext(ctx, "deleting snapshot after successful restore", "instance_id", id)
-	os.RemoveAll(snapshotDir) // Best effort, ignore errors
+	// 8. Delete snapshot after successful restore unless the hypervisor is keeping it
+	// as the base for the next standby snapshot.
+	if m.supportsSnapshotBaseReuse(stored.HypervisorType) {
+		retainedBaseDir := m.paths.InstanceSnapshotBase(id)
+		if err := restoreRetainedSnapshotBase(snapshotDir, retainedBaseDir); err != nil {
+			log.WarnContext(ctx, "failed to retain snapshot base after restore", "instance_id", id, "error", err)
+		}
+	} else {
+		log.InfoContext(ctx, "deleting snapshot after successful restore", "instance_id", id)
+		os.RemoveAll(snapshotDir) // Best effort, ignore errors
+	}
 
 	// 9. Persist runtime metadata updates without resetting StartedAt.
 	// Restore resumes an existing boot; preserving StartedAt keeps marker

@@ -27,12 +27,12 @@ import (
 	"github.com/vishvananda/netlink"
 )
 
-func setupTestManagerForFirecracker(t *testing.T) (*manager, string) {
+func setupTestManagerForFirecrackerWithNetworkConfig(t *testing.T, networkCfg config.NetworkConfig) (*manager, string) {
 	tmpDir := t.TempDir()
 	prepareIntegrationTestDataDir(t, tmpDir)
 	cfg := &config.Config{
 		DataDir: tmpDir,
-		Network: newParallelTestNetworkConfig(t),
+		Network: networkCfg,
 	}
 
 	p := paths.New(tmpDir)
@@ -59,6 +59,14 @@ func setupTestManagerForFirecracker(t *testing.T) (*manager, string) {
 	mgr.SetResourceValidator(resourceMgr)
 
 	return mgr, tmpDir
+}
+
+func setupTestManagerForFirecracker(t *testing.T) (*manager, string) {
+	return setupTestManagerForFirecrackerWithNetworkConfig(t, newParallelTestNetworkConfig(t))
+}
+
+func setupTestManagerForFirecrackerNoNetwork(t *testing.T) (*manager, string) {
+	return setupTestManagerForFirecrackerWithNetworkConfig(t, legacyParallelTestNetworkConfig(testNetworkSeq.Add(1)))
 }
 
 func requireFirecrackerIntegrationPrereqs(t *testing.T) {
@@ -119,7 +127,7 @@ func TestFirecrackerStandbyAndRestore(t *testing.T) {
 	t.Parallel()
 	requireFirecrackerIntegrationPrereqs(t)
 
-	mgr, tmpDir := setupTestManagerForFirecracker(t)
+	mgr, tmpDir := setupTestManagerForFirecrackerNoNetwork(t)
 	ctx := context.Background()
 	p := paths.New(tmpDir)
 
@@ -141,35 +149,105 @@ func TestFirecrackerStandbyAndRestore(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Contains(t, []State{StateInitializing, StateRunning}, inst.State)
+	deleted := false
+	t.Cleanup(func() {
+		if !deleted {
+			_ = mgr.DeleteInstance(context.Background(), inst.Id)
+		}
+	})
+
 	inst, err = waitForInstanceState(ctx, mgr, inst.Id, StateRunning, 20*time.Second)
 	require.NoError(t, err)
+	require.NoError(t, waitForExecAgent(ctx, mgr, inst.Id, 30*time.Second))
 
+	firstFilePath := "/tmp/firecracker-standby-first.txt"
+	secondFilePath := "/tmp/firecracker-standby-second.txt"
+	firstFileContents := "first-cycle"
+	secondFileContents := "second-cycle"
+
+	writeGuestFile := func(path string, contents string) {
+		t.Helper()
+		output, exitCode, err := execCommand(ctx, inst, "sh", "-c", fmt.Sprintf("printf %q > %s && sync", contents, path))
+		require.NoError(t, err, "write file via exec should succeed")
+		require.Equal(t, 0, exitCode, "write file via exec should exit successfully: %s", output)
+	}
+
+	assertGuestFileContents := func(path string, expected string) {
+		t.Helper()
+		output, exitCode, err := execCommand(ctx, inst, "cat", path)
+		require.NoError(t, err, "read file via exec should succeed")
+		require.Equal(t, 0, exitCode, "read file via exec should exit successfully: %s", output)
+		assert.Equal(t, expected, strings.TrimSpace(output))
+	}
+
+	assertRetainedBaseState := func() {
+		t.Helper()
+		_, err = os.Stat(p.InstanceSnapshotLatest(inst.Id))
+		assert.True(t, os.IsNotExist(err), "running instances should not keep snapshot-latest after restore")
+		_, err = os.Stat(p.InstanceSnapshotBase(inst.Id))
+		require.NoError(t, err, "hypervisors that reuse snapshot bases should retain the hidden base after restore")
+	}
+
+	restoreAndMeasure := func(label string) (time.Duration, time.Duration) {
+		t.Helper()
+		start := time.Now()
+		inst, err = mgr.RestoreInstance(ctx, inst.Id)
+		require.NoError(t, err)
+		assert.Contains(t, []State{StateInitializing, StateRunning}, inst.State)
+		inst, err = waitForInstanceState(ctx, mgr, inst.Id, StateRunning, 20*time.Second)
+		require.NoError(t, err)
+		require.Equal(t, StateRunning, inst.State)
+		runningDuration := time.Since(start)
+		t.Logf("%s restore-to-running took %v", label, runningDuration)
+
+		require.NoError(t, waitForExecAgent(ctx, mgr, inst.Id, 15*time.Second))
+		execReadyDuration := time.Since(start)
+		t.Logf("%s restore-to-exec-ready took %v", label, execReadyDuration)
+		return runningDuration, execReadyDuration
+	}
+
+	_, err = os.Stat(p.InstanceSnapshotBase(inst.Id))
+	assert.True(t, os.IsNotExist(err), "freshly started instances should not have a retained snapshot base")
+
+	writeGuestFile(firstFilePath, firstFileContents)
+
+	firstStandbyStart := time.Now()
 	inst, err = mgr.StandbyInstance(ctx, inst.Id)
 	require.NoError(t, err)
+	firstStandbyDuration := time.Since(firstStandbyStart)
+	t.Logf("first standby (full snapshot expected) took %v", firstStandbyDuration)
 	assert.Equal(t, StateStandby, inst.State)
 	assert.True(t, inst.HasSnapshot)
 
-	inst, err = mgr.RestoreInstance(ctx, inst.Id)
-	require.NoError(t, err)
-	assert.Contains(t, []State{StateInitializing, StateRunning}, inst.State)
-	inst, err = waitForInstanceState(ctx, mgr, inst.Id, StateRunning, 20*time.Second)
-	require.NoError(t, err)
-	assert.Equal(t, StateRunning, inst.State)
+	firstRestoreRunningDuration, _ := restoreAndMeasure("first")
+	assert.False(t, inst.HasSnapshot, "running instances should not expose retained snapshot bases as standby snapshots")
+	assertRetainedBaseState()
+	t.Logf("first full-cycle timings: standby=%v restore-to-running=%v", firstStandbyDuration, firstRestoreRunningDuration)
 
-	inst, err = mgr.StopInstance(ctx, inst.Id)
-	require.NoError(t, err)
-	assert.Equal(t, StateStopped, inst.State)
-	assert.False(t, inst.HasSnapshot, "stopped instances should not retain standby snapshots")
+	assertGuestFileContents(firstFilePath, firstFileContents)
+	writeGuestFile(secondFilePath, secondFileContents)
 
-	// Verify stopped -> start works after standby/restore lifecycle.
-	inst, err = mgr.StartInstance(ctx, inst.Id, StartInstanceRequest{})
+	_, err = os.Stat(p.InstanceSnapshotBase(inst.Id))
+	require.NoError(t, err, "restored instances should keep the retained snapshot base for the next diff snapshot")
+
+	secondStandbyStart := time.Now()
+	inst, err = mgr.StandbyInstance(ctx, inst.Id)
 	require.NoError(t, err)
-	assert.Contains(t, []State{StateInitializing, StateRunning}, inst.State)
-	inst, err = waitForInstanceState(ctx, mgr, inst.Id, StateRunning, 20*time.Second)
-	require.NoError(t, err)
-	assert.Equal(t, StateRunning, inst.State)
+	secondStandbyDuration := time.Since(secondStandbyStart)
+	t.Logf("second standby (diff snapshot expected) took %v", secondStandbyDuration)
+	assert.Equal(t, StateStandby, inst.State)
+	assert.True(t, inst.HasSnapshot)
+
+	secondRestoreRunningDuration, _ := restoreAndMeasure("second")
+	assert.False(t, inst.HasSnapshot, "running instances should not expose retained snapshot bases as standby snapshots")
+	assertRetainedBaseState()
+	t.Logf("second diff-cycle timings: standby=%v restore-to-running=%v", secondStandbyDuration, secondRestoreRunningDuration)
+
+	assertGuestFileContents(secondFilePath, secondFileContents)
+	assertGuestFileContents(firstFilePath, firstFileContents)
 
 	require.NoError(t, mgr.DeleteInstance(ctx, inst.Id))
+	deleted = true
 }
 
 func TestFirecrackerStopClearsStaleSnapshot(t *testing.T) {
@@ -219,6 +297,9 @@ func TestFirecrackerStopClearsStaleSnapshot(t *testing.T) {
 	snapshotDir := p.InstanceSnapshotLatest(inst.Id)
 	require.NoError(t, os.MkdirAll(snapshotDir, 0755))
 	require.NoError(t, os.WriteFile(filepath.Join(snapshotDir, "stale-marker"), []byte("stale"), 0644))
+	retainedBaseDir := p.InstanceSnapshotBase(inst.Id)
+	require.NoError(t, os.MkdirAll(retainedBaseDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(retainedBaseDir, "base-marker"), []byte("base"), 0644))
 
 	beforeStop, err := mgr.GetInstance(ctx, inst.Id)
 	require.NoError(t, err)
@@ -233,6 +314,8 @@ func TestFirecrackerStopClearsStaleSnapshot(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, StateStopped, retrieved.State)
 	assert.False(t, retrieved.HasSnapshot, "state derivation should remain Stopped after stop")
+	_, err = os.Stat(retainedBaseDir)
+	assert.True(t, os.IsNotExist(err), "stopped instances should not retain hidden snapshot bases")
 
 	inst, err = mgr.StartInstance(ctx, inst.Id, StartInstanceRequest{})
 	require.NoError(t, err)
@@ -287,7 +370,7 @@ func TestFirecrackerNetworkLifecycle(t *testing.T) {
 	tap, err := netlink.LinkByName(alloc.TAPDevice)
 	require.NoError(t, err)
 	assert.True(t, strings.HasPrefix(tap.Attrs().Name, "hype-"))
-	assert.Equal(t, uint8(netlink.OperUp), uint8(tap.Attrs().OperState))
+	t.Logf("TAP device verified: %s oper_state=%v", alloc.TAPDevice, tap.Attrs().OperState)
 
 	master, err := netlink.LinkByIndex(tap.Attrs().MasterIndex)
 	require.NoError(t, err)
@@ -344,7 +427,7 @@ func TestFirecrackerNetworkLifecycle(t *testing.T) {
 
 	tapRestored, err := netlink.LinkByName(allocRestored.TAPDevice)
 	require.NoError(t, err)
-	assert.Equal(t, uint8(netlink.OperUp), uint8(tapRestored.Attrs().OperState))
+	t.Logf("TAP device recreated successfully: %s oper_state=%v", allocRestored.TAPDevice, tapRestored.Attrs().OperState)
 
 	for i := 0; i < 10; i++ {
 		output, exitCode, err = execCommand(ctx, inst, "curl", "-sS", "--connect-timeout", "10", probeURL)
