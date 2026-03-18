@@ -40,6 +40,56 @@ func TestGetInstance_NotFound(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestCreateInstance_AutoPullImage(t *testing.T) {
+	t.Parallel()
+	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
+		t.Skip("/dev/kvm not available, skipping on this platform")
+	}
+
+	svc := newTestService(t)
+
+	// NOTE: intentionally NOT calling createAndWaitForImage here.
+	// The auto-pull logic in CreateInstance should handle pulling the image.
+	// The auto-pull has a 5s timeout — alpine:latest is small enough to
+	// complete within that window.
+
+	// Ensure system files (kernel and initramfs) are available
+	t.Log("Ensuring system files (kernel and initramfs)...")
+	systemMgr := system.NewManager(paths.New(svc.Config.DataDir))
+	err := systemMgr.EnsureSystemFiles(ctx())
+	require.NoError(t, err)
+
+	t.Log("Creating instance without pre-pulling image (testing auto-pull)...")
+	networkEnabled := false
+	resp, err := svc.CreateInstance(ctx(), oapi.CreateInstanceRequestObject{
+		Body: &oapi.CreateInstanceRequest{
+			Name:  "test-auto-pull",
+			Image: "docker.io/library/alpine:latest",
+			Network: &struct {
+				BandwidthDownload *string `json:"bandwidth_download,omitempty"`
+				BandwidthUpload   *string `json:"bandwidth_upload,omitempty"`
+				Enabled           *bool   `json:"enabled,omitempty"`
+			}{
+				Enabled: &networkEnabled,
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	created, ok := resp.(oapi.CreateInstance201JSONResponse)
+	require.True(t, ok, "expected 201 response — auto-pull should have fetched the image")
+	t.Logf("Instance created via auto-pull: %s", created.Id)
+
+	// Cleanup: delete the instance
+	instanceID := created.Id
+	t.Log("Deleting instance...")
+	deleteResp, err := svc.DeleteInstance(ctxWithInstance(svc, instanceID), oapi.DeleteInstanceRequestObject{Id: instanceID})
+	require.NoError(t, err)
+	_, ok = deleteResp.(oapi.DeleteInstance204Response)
+	require.True(t, ok, "expected 204 response for delete")
+	t.Log("Instance deleted successfully")
+}
+
 func TestCreateInstance_ParsesHumanReadableSizes(t *testing.T) {
 	t.Parallel()
 	// Require KVM access for VM creation

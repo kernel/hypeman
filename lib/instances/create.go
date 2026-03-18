@@ -90,15 +90,37 @@ func (m *manager) createInstance(
 		return nil, err
 	}
 
-	// 2. Validate image exists and is ready
+	// 2. Validate image exists and is ready; auto-pull if not found
 	log.DebugContext(ctx, "validating image", "image", req.Image)
 	imageInfo, err := m.imageManager.GetImage(ctx, req.Image)
 	if err != nil {
-		log.ErrorContext(ctx, "failed to get image", "image", req.Image, "error", err)
 		if err == images.ErrNotFound {
-			return nil, fmt.Errorf("image %s: %w", req.Image, err)
+			// Auto-pull: image not found locally, kick off the pull in the
+			// background and wait up to 5 seconds for it to complete.
+			log.InfoContext(ctx, "image not found locally, auto-pulling", "image", req.Image)
+			_, pullErr := m.imageManager.CreateImage(ctx, images.CreateImageRequest{Name: req.Image})
+			if pullErr != nil {
+				log.ErrorContext(ctx, "failed to auto-pull image", "image", req.Image, "error", pullErr)
+				return nil, fmt.Errorf("auto-pull image %s: %w", req.Image, pullErr)
+			}
+			// Wait with a short timeout — if the pull doesn't finish in time
+			// we return an error but let it continue in the background.
+			pullCtx, pullCancel := context.WithTimeout(ctx, 5*time.Second)
+			defer pullCancel()
+			if waitErr := m.imageManager.WaitForReady(pullCtx, req.Image); waitErr != nil {
+				log.InfoContext(ctx, "image pull not ready within timeout, pull continues in background", "image", req.Image, "error", waitErr)
+				return nil, fmt.Errorf("%w: image %s is being pulled, please try again shortly", ErrImageNotReady, req.Image)
+			}
+			// Re-fetch after successful pull
+			imageInfo, err = m.imageManager.GetImage(ctx, req.Image)
+			if err != nil {
+				log.ErrorContext(ctx, "failed to get image after auto-pull", "image", req.Image, "error", err)
+				return nil, fmt.Errorf("get image after auto-pull: %w", err)
+			}
+		} else {
+			log.ErrorContext(ctx, "failed to get image", "image", req.Image, "error", err)
+			return nil, fmt.Errorf("get image: %w", err)
 		}
-		return nil, fmt.Errorf("get image: %w", err)
 	}
 
 	if imageInfo.Status != images.StatusReady {
