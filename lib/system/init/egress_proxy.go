@@ -23,10 +23,20 @@ func installEgressProxyCA(log *Logger, cfg *vmconfig.Config) {
 		return
 	}
 
-	cmd := exec.Command("/bin/sh", "-c", "if command -v update-ca-certificates >/dev/null 2>&1; then update-ca-certificates >/dev/null 2>&1; fi")
+	updateCACertificatesPath, err := lookupUpdateCACertificatesPath()
+	if err != nil {
+		log.Info("hypeman-init:egress-proxy", "installed egress proxy CA certificate, but update-ca-certificates was not found; guest trust store refresh skipped")
+		return
+	}
+
+	cmd := exec.Command(updateCACertificatesPath)
 	if err := cmd.Run(); err != nil {
 		log.Error("hypeman-init:egress-proxy", "failed to run update-ca-certificates", err)
 		return
 	}
-	log.Info("hypeman-init:egress-proxy", "installed egress proxy CA certificate")
+	log.Info("hypeman-init:egress-proxy", "installed egress proxy CA certificate and refreshed the guest trust store")
+}
+
+func lookupUpdateCACertificatesPath() (string, error) {
+	return exec.LookPath("update-ca-certificates")
 }

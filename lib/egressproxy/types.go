@@ -12,17 +12,17 @@ var (
 
 // InstanceConfig defines per-instance proxy behavior.
 type InstanceConfig struct {
-	InstanceID         string
-	SourceIP           string
-	TAPDevice          string
-	BlockAllTCPEgress  bool
-	SecretRewriteRules []SecretRewriteRuleConfig
+	InstanceID        string
+	SourceIP          string
+	TAPDevice         string
+	BlockAllTCPEgress bool
+	HeaderInjectRules []HeaderInjectRuleConfig
 }
 
-// SecretRewriteRuleConfig defines one mocked secret substitution policy.
-type SecretRewriteRuleConfig struct {
-	MockValue      string
-	RealValue      string
+// HeaderInjectRuleConfig defines one host-managed outbound header injection policy.
+type HeaderInjectRuleConfig struct {
+	HeaderName     string
+	HeaderValue    string
 	AllowedDomains []string // optional exact or *.example.com patterns; empty means allow all
 }
 

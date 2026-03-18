@@ -407,17 +407,15 @@ func (m *manager) createInstance(
 	// 16. Create config disk (needs Instance for buildVMConfig)
 	inst := &Instance{StoredMetadata: *stored}
 	var proxyGuestConfig *egressproxy.GuestConfig
-	if networkName != "" {
-		proxyGuestConfig, err = m.maybeRegisterEgressProxy(ctx, stored, netConfig)
-		if err != nil {
-			log.ErrorContext(ctx, "failed to configure egress proxy", "instance_id", id, "error", err)
-			return nil, fmt.Errorf("configure egress proxy: %w", err)
-		}
-		if proxyGuestConfig != nil {
-			cu.Add(func() {
-				m.unregisterEgressProxyInstance(ctx, id)
-			})
-		}
+	proxyGuestConfig, err = m.maybeRegisterEgressProxy(ctx, stored, netConfig)
+	if err != nil {
+		log.ErrorContext(ctx, "failed to configure egress proxy", "instance_id", id, "error", err)
+		return nil, fmt.Errorf("configure egress proxy: %w", err)
+	}
+	if proxyGuestConfig != nil {
+		cu.Add(func() {
+			m.unregisterEgressProxyInstance(ctx, id)
+		})
 	}
 	log.DebugContext(ctx, "creating config disk", "instance_id", id)
 	if err := m.createConfigDisk(ctx, inst, imageInfo, netConfig, proxyGuestConfig); err != nil {

@@ -111,7 +111,7 @@ func TestEgressProxyRewritesHTTPSHeaders(t *testing.T) {
 	require.Equal(t, "mock-OUTBOUND_OPENAI_KEY", envOutput)
 
 	allowedCmd := fmt.Sprintf(
-		"NO_PROXY= no_proxy= curl -k -sS -H \"Authorization: Bearer $OUTBOUND_OPENAI_KEY\" https://%s:%s",
+		"NO_PROXY= no_proxy= curl -k -sS https://%s:%s",
 		targetHost, targetPort,
 	)
 	output, exitCode, err := execCommand(ctx, inst, "sh", "-lc", allowedCmd)
@@ -120,13 +120,13 @@ func TestEgressProxyRewritesHTTPSHeaders(t *testing.T) {
 	require.Contains(t, output, "Bearer real-openai-key-123")
 
 	blockedCmd := fmt.Sprintf(
-		"NO_PROXY= no_proxy= curl -k -sS -H \"Authorization: Bearer $OUTBOUND_OPENAI_KEY\" https://localhost:%s",
+		"NO_PROXY= no_proxy= curl -k -sS https://localhost:%s",
 		targetPort,
 	)
 	blockedOutput, blockedExitCode, err := execCommand(ctx, inst, "sh", "-lc", blockedCmd)
 	require.NoError(t, err)
 	require.Equal(t, 0, blockedExitCode, "curl output: %s", blockedOutput)
-	require.Contains(t, blockedOutput, "Bearer mock-OUTBOUND_OPENAI_KEY")
+	require.Equal(t, "", blockedOutput)
 
 	require.NoError(t, manager.DeleteInstance(ctx, inst.Id))
 	deleted = true

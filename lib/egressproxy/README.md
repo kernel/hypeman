@@ -23,9 +23,9 @@ When enabled for an instance, hypeman does three things:
   - `all` (default when proxy is enabled): reject direct non-proxy TCP egress from the VM TAP interface.
   - `http_https_only`: reject direct TCP egress only on destination ports `80` and `443`.
 - Inside the VM, each credential key is rewritten to `mock-<CREDENTIAL_NAME>` (for example `mock-OUTBOUND_OPENAI_KEY`).
-- Substitution is applied to HTTPS requests only after MITM decryption.
+- Header injection is applied to HTTPS requests only after MITM decryption.
 - For HTTPS egress, the proxy validates upstream TLS certificates with the host trust store before forwarding.
-- The proxy scans each HTTP header value and replaces configured mock values with real values only when the verified destination host matches the credential allowlist (if configured).
+- The proxy materializes the configured `inject[*].as.header` using `inject[*].as.format` with the real value only when the verified destination host matches the credential allowlist (if configured).
 - The modified request is then forwarded upstream.
 
 This keeps real secrets out of the VM while still allowing authenticated egress requests.
@@ -39,6 +39,6 @@ This keeps real secrets out of the VM while still allowing authenticated egress 
 
 ## Limits of enforcement
 
-- Header replacement is applied to HTTP headers only (not request/response bodies).
+- Header injection is applied to HTTP headers only (not request/response bodies).
 - Non-HTTP protocols or custom ports are not rewritten by the MITM layer.
 - Plain HTTP requests are not eligible for secret substitution.

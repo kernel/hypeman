@@ -56,7 +56,7 @@ func TestDomainMatcherSingleLevelWildcard(t *testing.T) {
 	require.False(t, matchesAnyDomain("a.b.openai.com", matchers))
 }
 
-func TestApplyHeaderReplacementsHTTPSOnlyAndDomainGated(t *testing.T) {
+func TestApplyHeaderInjectionsHTTPSOnlyAndDomainGated(t *testing.T) {
 	t.Parallel()
 
 	matchers, err := compileDomainMatchers([]string{"api.openai.com"})
@@ -65,10 +65,10 @@ func TestApplyHeaderReplacementsHTTPSOnlyAndDomainGated(t *testing.T) {
 	svc := &Service{
 		policiesBySourceIP: map[string]sourcePolicy{
 			"10.0.0.2": {
-				secretRewriteRules: []secretRewriteRule{
+				headerInjectRules: []headerInjectRule{
 					{
-						mockValue:      "mock-OUTBOUND_OPENAI_KEY",
-						realValue:      "real-openai-key-123",
+						headerName:     "Authorization",
+						headerValue:    "Bearer real-openai-key-123",
 						domainMatchers: matchers,
 					},
 				},
@@ -76,22 +76,20 @@ func TestApplyHeaderReplacementsHTTPSOnlyAndDomainGated(t *testing.T) {
 		},
 	}
 
-	httpsAllowed := http.Header{
-		"Authorization": []string{"Bearer mock-OUTBOUND_OPENAI_KEY"},
-	}
-	svc.applyHeaderReplacements("10.0.0.2", "api.openai.com", httpsAllowed, true)
+	httpsAllowed := http.Header{}
+	svc.applyHeaderInjections("10.0.0.2", "api.openai.com", httpsAllowed, true)
 	require.Equal(t, "Bearer real-openai-key-123", httpsAllowed.Get("Authorization"))
 
 	httpsBlocked := http.Header{
 		"Authorization": []string{"Bearer mock-OUTBOUND_OPENAI_KEY"},
 	}
-	svc.applyHeaderReplacements("10.0.0.2", "api.github.com", httpsBlocked, true)
+	svc.applyHeaderInjections("10.0.0.2", "api.github.com", httpsBlocked, true)
 	require.Equal(t, "Bearer mock-OUTBOUND_OPENAI_KEY", httpsBlocked.Get("Authorization"))
 
 	httpAllowedDomain := http.Header{
 		"Authorization": []string{"Bearer mock-OUTBOUND_OPENAI_KEY"},
 	}
-	svc.applyHeaderReplacements("10.0.0.2", "api.openai.com", httpAllowedDomain, false)
+	svc.applyHeaderInjections("10.0.0.2", "api.openai.com", httpAllowedDomain, false)
 	require.Equal(t, "Bearer mock-OUTBOUND_OPENAI_KEY", httpAllowedDomain.Get("Authorization"))
 }
 

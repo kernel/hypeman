@@ -132,11 +132,17 @@ components:
 
     CreateInstanceRequestNetworkEgress:
       type: object
-      description: Host-mediated outbound network policy.
+      description: |
+        Host-mediated outbound network policy.
+        Omit this object, or set `enabled: false`, to preserve normal direct outbound networking
+        when `network.enabled` is true.
       properties:
         enabled:
           type: boolean
-          description: Whether to enable host-mediated outbound egress.
+          description: |
+            Whether to enable the mediated egress path.
+            When false or omitted, the instance keeps normal direct outbound networking and
+            host-managed credential rewriting is disabled.
           default: false
           example: true
         enforcement:
@@ -148,7 +154,10 @@ components:
       properties:
         env:
           type: string
-          description: Host environment variable that stores the real credential value.
+          description: |
+            Name of the real credential in the request `env` map.
+            The guest-visible env var key can receive a mock placeholder, while the mediated
+            egress path resolves that placeholder back to this real value only on the host.
           example: OUTBOUND_OPENAI_KEY
 
     CreateInstanceRequestCredentialInjectAs:
@@ -242,8 +251,10 @@ components:
         credentials:
           type: object
           description: |
-            Host-managed credential brokering policies keyed by guest-visible credential name.
-            The guest receives mock values while real values remain host-scoped.
+            Host-managed credential brokering policies keyed by guest-visible env var name.
+            Those guest env vars receive mock placeholder values, while the real values remain
+            host-scoped in the request `env` map and are only materialized on the mediated
+            egress path according to each credential's `source` and `inject` rules.
           additionalProperties:
             $ref: "#/components/schemas/CreateInstanceRequestCredential"
           example:

@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/textproto"
 	"net/url"
 	"strconv"
 	"strings"
@@ -19,12 +20,12 @@ import (
 )
 
 type sourcePolicy struct {
-	secretRewriteRules []secretRewriteRule
+	headerInjectRules []headerInjectRule
 }
 
-type secretRewriteRule struct {
-	mockValue      string
-	realValue      string
+type headerInjectRule struct {
+	headerName     string
+	headerValue    string
 	domainMatchers []domainMatcher
 }
 
@@ -179,13 +180,13 @@ func (s *Service) RegisterInstance(ctx context.Context, gatewayIP string, cfg In
 		delete(s.policiesBySourceIP, prevIP)
 	}
 
-	rewriteRules, err := compileSecretRewriteRules(cfg.SecretRewriteRules)
+	injectRules, err := compileHeaderInjectRules(cfg.HeaderInjectRules)
 	if err != nil {
 		return GuestConfig{}, err
 	}
 
 	s.sourceIPByInstance[cfg.InstanceID] = cfg.SourceIP
-	s.policiesBySourceIP[cfg.SourceIP] = sourcePolicy{secretRewriteRules: rewriteRules}
+	s.policiesBySourceIP[cfg.SourceIP] = sourcePolicy{headerInjectRules: injectRules}
 
 	return GuestConfig{
 		Enabled:   true,
@@ -194,22 +195,22 @@ func (s *Service) RegisterInstance(ctx context.Context, gatewayIP string, cfg In
 	}, nil
 }
 
-func compileSecretRewriteRules(cfgRules []SecretRewriteRuleConfig) ([]secretRewriteRule, error) {
+func compileHeaderInjectRules(cfgRules []HeaderInjectRuleConfig) ([]headerInjectRule, error) {
 	if len(cfgRules) == 0 {
 		return nil, nil
 	}
-	out := make([]secretRewriteRule, 0, len(cfgRules))
+	out := make([]headerInjectRule, 0, len(cfgRules))
 	for _, cfg := range cfgRules {
-		if cfg.MockValue == "" || cfg.RealValue == "" {
+		if strings.TrimSpace(cfg.HeaderName) == "" || cfg.HeaderValue == "" {
 			continue
 		}
 		matchers, err := compileDomainMatchers(cfg.AllowedDomains)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, secretRewriteRule{
-			mockValue:      cfg.MockValue,
-			realValue:      cfg.RealValue,
+		out = append(out, headerInjectRule{
+			headerName:     textproto.CanonicalMIMEHeaderKey(strings.TrimSpace(cfg.HeaderName)),
+			headerValue:    cfg.HeaderValue,
 			domainMatchers: matchers,
 		})
 	}
@@ -272,7 +273,7 @@ func (s *Service) handleHTTPProxyRequest(w http.ResponseWriter, r *http.Request,
 	if destinationHost == "" {
 		destinationHost = normalizeDestinationHost(outReq.Host)
 	}
-	s.applyHeaderReplacements(sourceIP, destinationHost, outReq.Header, false)
+	s.applyHeaderInjections(sourceIP, destinationHost, outReq.Header, false)
 
 	resp, err := s.transport.RoundTrip(outReq)
 	if err != nil {
@@ -348,7 +349,7 @@ func (s *Service) handleConnect(w http.ResponseWriter, r *http.Request, sourceIP
 		req.RequestURI = ""
 		req.Header = cloneHeader(req.Header)
 		removeHopByHopHeaders(req.Header)
-		s.applyHeaderReplacements(sourceIP, targetHost, req.Header, true)
+		s.applyHeaderInjections(sourceIP, targetHost, req.Header, true)
 
 		resp, err := s.transport.RoundTrip(req)
 		if err != nil {
@@ -397,25 +398,18 @@ func (s *Service) getOrCreateLeafCert(host string) (*tls.Certificate, error) {
 	return cert, nil
 }
 
-func (s *Service) applyHeaderReplacements(sourceIP, destinationHost string, headers http.Header, isHTTPS bool) {
-	rules := s.resolveRewriteRules(sourceIP, destinationHost, isHTTPS)
+func (s *Service) applyHeaderInjections(sourceIP, destinationHost string, headers http.Header, isHTTPS bool) {
+	rules := s.resolveHeaderInjectRules(sourceIP, destinationHost, isHTTPS)
 	if len(rules) == 0 {
 		return
 	}
 
-	for key, vals := range headers {
-		for i := range vals {
-			updated := vals[i]
-			for _, rule := range rules {
-				updated = strings.ReplaceAll(updated, rule.mockValue, rule.realValue)
-			}
-			vals[i] = updated
-		}
-		headers[key] = vals
+	for _, rule := range rules {
+		headers.Set(rule.headerName, rule.headerValue)
 	}
 }
 
-func (s *Service) resolveRewriteRules(sourceIP, destinationHost string, isHTTPS bool) []secretRewriteRule {
+func (s *Service) resolveHeaderInjectRules(sourceIP, destinationHost string, isHTTPS bool) []headerInjectRule {
 	if !isHTTPS {
 		return nil
 	}
@@ -432,9 +426,9 @@ func (s *Service) resolveRewriteRules(sourceIP, destinationHost string, isHTTPS 
 		return nil
 	}
 
-	resolved := make([]secretRewriteRule, 0, len(policy.secretRewriteRules))
-	for _, rule := range policy.secretRewriteRules {
-		if rule.mockValue == "" || rule.realValue == "" {
+	resolved := make([]headerInjectRule, 0, len(policy.headerInjectRules))
+	for _, rule := range policy.headerInjectRules {
+		if rule.headerName == "" || rule.headerValue == "" {
 			continue
 		}
 		if !matchesAnyDomain(host, rule.domainMatchers) {

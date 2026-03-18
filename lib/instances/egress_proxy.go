@@ -159,7 +159,7 @@ func validateCredentialEnvBindings(credentials map[string]CredentialPolicy, env 
 	return nil
 }
 
-func buildEgressProxyRewriteRules(egressPolicy *NetworkEgressPolicy, credentials map[string]CredentialPolicy, env map[string]string) []egressproxy.SecretRewriteRuleConfig {
+func buildEgressProxyInjectRules(egressPolicy *NetworkEgressPolicy, credentials map[string]CredentialPolicy, env map[string]string) []egressproxy.HeaderInjectRuleConfig {
 	if egressPolicy == nil || !egressPolicy.Enabled || len(credentials) == 0 {
 		return nil
 	}
@@ -169,7 +169,7 @@ func buildEgressProxyRewriteRules(egressPolicy *NetworkEgressPolicy, credentials
 	}
 	sort.Strings(names)
 
-	out := make([]egressproxy.SecretRewriteRuleConfig, 0, len(names))
+	out := make([]egressproxy.HeaderInjectRuleConfig, 0)
 	for _, credentialName := range names {
 		policy := credentials[credentialName]
 		real := strings.TrimSpace(env[policy.Source.Env])
@@ -177,44 +177,21 @@ func buildEgressProxyRewriteRules(egressPolicy *NetworkEgressPolicy, credentials
 			continue
 		}
 
-		rule := egressproxy.SecretRewriteRuleConfig{
-			MockValue: mockValueForCredential(credentialName),
-			RealValue: real,
+		for _, inject := range policy.Inject {
+			rule := egressproxy.HeaderInjectRuleConfig{
+				HeaderName:  inject.As.Header,
+				HeaderValue: strings.ReplaceAll(inject.As.Format, "${value}", real),
+			}
+			if len(inject.Hosts) > 0 {
+				rule.AllowedDomains = append([]string(nil), inject.Hosts...)
+			}
+			out = append(out, rule)
 		}
-
-		domains, unrestricted := collectCredentialAllowedDomains(policy.Inject)
-		if !unrestricted && len(domains) > 0 {
-			rule.AllowedDomains = domains
-		}
-
-		out = append(out, rule)
 	}
 	if len(out) == 0 {
 		return nil
 	}
 	return out
-}
-
-func collectCredentialAllowedDomains(injectRules []CredentialInjectRule) ([]string, bool) {
-	if len(injectRules) == 0 {
-		return nil, true
-	}
-	seen := map[string]struct{}{}
-	out := make([]string, 0)
-	for _, inject := range injectRules {
-		// Empty hosts means "all destinations".
-		if len(inject.Hosts) == 0 {
-			return nil, true
-		}
-		for _, host := range inject.Hosts {
-			if _, ok := seen[host]; ok {
-				continue
-			}
-			seen[host] = struct{}{}
-			out = append(out, host)
-		}
-	}
-	return out, false
 }
 
 func (m *manager) getOrCreateEgressProxyService() (*egressproxy.Service, error) {
@@ -247,11 +224,11 @@ func (m *manager) maybeRegisterEgressProxy(ctx context.Context, stored *StoredMe
 	}
 
 	guestCfg, err := svc.RegisterInstance(ctx, netConfig.Gateway, egressproxy.InstanceConfig{
-		InstanceID:         stored.Id,
-		SourceIP:           netConfig.IP,
-		TAPDevice:          netConfig.TAPDevice,
-		BlockAllTCPEgress:  stored.NetworkEgress.EnforcementMode != EgressEnforcementModeHTTPHTTPSOnly,
-		SecretRewriteRules: buildEgressProxyRewriteRules(stored.NetworkEgress, stored.Credentials, stored.Env),
+		InstanceID:        stored.Id,
+		SourceIP:          netConfig.IP,
+		TAPDevice:         netConfig.TAPDevice,
+		BlockAllTCPEgress: stored.NetworkEgress.EnforcementMode != EgressEnforcementModeHTTPHTTPSOnly,
+		HeaderInjectRules: buildEgressProxyInjectRules(stored.NetworkEgress, stored.Credentials, stored.Env),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("register instance with egress proxy: %w", err)
