@@ -43,7 +43,7 @@ func newTestService(t *testing.T) *ApiService {
 	limits := instances.ResourceLimits{
 		MaxOverlaySize: 100 * 1024 * 1024 * 1024, // 100GB
 	}
-	instanceMgr := instances.NewManager(p, imageMgr, systemMgr, networkMgr, deviceMgr, volumeMgr, limits, "", nil, nil)
+	instanceMgr := instances.NewManager(p, imageMgr, systemMgr, networkMgr, deviceMgr, volumeMgr, limits, "", instances.SnapshotPolicy{}, nil, nil)
 
 	// Initialize network manager (creates bridge for network-enabled tests)
 	if err := networkMgr.Initialize(ctx(), nil); err != nil {

@@ -17,6 +17,7 @@ import (
 	"github.com/kernel/hypeman/lib/network"
 	"github.com/kernel/hypeman/lib/oapi"
 	"github.com/kernel/hypeman/lib/resources"
+	"github.com/kernel/hypeman/lib/snapshot"
 	"github.com/kernel/hypeman/lib/vm_metrics"
 	"github.com/samber/lo"
 )
@@ -264,6 +265,16 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		SkipKernelHeaders:        request.Body.SkipKernelHeaders != nil && *request.Body.SkipKernelHeaders,
 		SkipGuestAgent:           request.Body.SkipGuestAgent != nil && *request.Body.SkipGuestAgent,
 	}
+	if request.Body.SnapshotPolicy != nil {
+		snapshotPolicy, err := toInstanceSnapshotPolicy(*request.Body.SnapshotPolicy)
+		if err != nil {
+			return oapi.CreateInstance400JSONResponse{
+				Code:    "invalid_snapshot_policy",
+				Message: err.Error(),
+			}, nil
+		}
+		domainReq.SnapshotPolicy = snapshotPolicy
+	}
 
 	inst, err := s.InstanceManager.CreateInstance(ctx, domainReq)
 	if err != nil {
@@ -401,7 +412,19 @@ func (s *ApiService) StandbyInstance(ctx context.Context, request oapi.StandbyIn
 	}
 	log := logger.FromContext(ctx)
 
-	result, err := s.InstanceManager.StandbyInstance(ctx, inst.Id)
+	standbyReq := instances.StandbyInstanceRequest{}
+	if request.Body != nil && request.Body.Compression != nil {
+		compression, err := toDomainSnapshotCompressionConfig(*request.Body.Compression)
+		if err != nil {
+			return oapi.StandbyInstance400JSONResponse{
+				Code:    "invalid_snapshot_compression",
+				Message: err.Error(),
+			}, nil
+		}
+		standbyReq.Compression = compression
+	}
+
+	result, err := s.InstanceManager.StandbyInstance(ctx, inst.Id, standbyReq)
 	if err != nil {
 		switch {
 		case errors.Is(err, instances.ErrInvalidState):
@@ -858,6 +881,10 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 	if len(inst.Metadata) > 0 {
 		oapiInst.Metadata = toOAPIMetadata(inst.Metadata)
 	}
+	if inst.SnapshotPolicy != nil {
+		oapiPolicy, _ := toOAPISnapshotPolicy(*inst.SnapshotPolicy)
+		oapiInst.SnapshotPolicy = &oapiPolicy
+	}
 
 	// Convert volume attachments
 	if len(inst.Volumes) > 0 {
@@ -891,4 +918,57 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 	}
 
 	return oapiInst
+}
+
+func toDomainSnapshotCompressionConfig(cfg oapi.SnapshotCompressionConfig) (*snapshot.SnapshotCompressionConfig, error) {
+	out := &snapshot.SnapshotCompressionConfig{
+		Enabled: cfg.Enabled,
+	}
+	if cfg.Algorithm != nil {
+		out.Algorithm = snapshot.SnapshotCompressionAlgorithm(*cfg.Algorithm)
+	}
+	if cfg.Level != nil {
+		level := *cfg.Level
+		out.Level = &level
+	}
+	return out, nil
+}
+
+func toInstanceSnapshotPolicy(policy oapi.SnapshotPolicy) (*instances.SnapshotPolicy, error) {
+	out := &instances.SnapshotPolicy{}
+	if policy.Compression != nil {
+		compression, err := toDomainSnapshotCompressionConfig(*policy.Compression)
+		if err != nil {
+			return nil, err
+		}
+		out.Compression = compression
+	}
+	return out, nil
+}
+
+func toOAPISnapshotCompressionConfig(cfg snapshot.SnapshotCompressionConfig) (oapi.SnapshotCompressionConfig, error) {
+	out := oapi.SnapshotCompressionConfig{
+		Enabled: cfg.Enabled,
+	}
+	if cfg.Algorithm != "" {
+		algo := oapi.SnapshotCompressionConfigAlgorithm(cfg.Algorithm)
+		out.Algorithm = &algo
+	}
+	if cfg.Level != nil {
+		level := *cfg.Level
+		out.Level = &level
+	}
+	return out, nil
+}
+
+func toOAPISnapshotPolicy(policy instances.SnapshotPolicy) (oapi.SnapshotPolicy, error) {
+	out := oapi.SnapshotPolicy{}
+	if policy.Compression != nil {
+		compression, err := toOAPISnapshotCompressionConfig(*policy.Compression)
+		if err != nil {
+			return oapi.SnapshotPolicy{}, err
+		}
+		out.Compression = &compression
+	}
+	return out, nil
 }

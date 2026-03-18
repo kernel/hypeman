@@ -46,7 +46,7 @@ func setupTestManagerForFirecracker(t *testing.T) (*manager, string) {
 		MaxVcpusPerInstance:  0,
 		MaxMemoryPerInstance: 0,
 	}
-	mgr := NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, hypervisor.TypeFirecracker, nil, nil).(*manager)
+	mgr := NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, hypervisor.TypeFirecracker, SnapshotPolicy{}, nil, nil).(*manager)
 
 	resourceMgr := resources.NewManager(cfg, p)
 	resourceMgr.SetInstanceLister(mgr)
@@ -114,7 +114,7 @@ func TestFirecrackerStandbyAndRestore(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, StateRunning, inst.State)
 
-	inst, err = mgr.StandbyInstance(ctx, inst.Id)
+	inst, err = mgr.StandbyInstance(ctx, inst.Id, StandbyInstanceRequest{})
 	require.NoError(t, err)
 	assert.Equal(t, StateStandby, inst.State)
 	assert.True(t, inst.HasSnapshot)
@@ -164,7 +164,7 @@ func TestFirecrackerStopClearsStaleSnapshot(t *testing.T) {
 	require.Equal(t, StateRunning, inst.State)
 
 	// Establish a realistic standby/restore lifecycle first.
-	inst, err = mgr.StandbyInstance(ctx, inst.Id)
+	inst, err = mgr.StandbyInstance(ctx, inst.Id, StandbyInstanceRequest{})
 	require.NoError(t, err)
 	require.Equal(t, StateStandby, inst.State)
 	require.True(t, inst.HasSnapshot)
@@ -264,7 +264,7 @@ func TestFirecrackerNetworkLifecycle(t *testing.T) {
 	require.Equal(t, 0, exitCode)
 	require.Contains(t, output, "Connection successful")
 
-	inst, err = mgr.StandbyInstance(ctx, inst.Id)
+	inst, err = mgr.StandbyInstance(ctx, inst.Id, StandbyInstanceRequest{})
 	require.NoError(t, err)
 	assert.Equal(t, StateStandby, inst.State)
 	assert.True(t, inst.HasSnapshot)

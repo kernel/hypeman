@@ -158,6 +158,18 @@ type HypervisorConfig struct {
 	FirecrackerBinaryPath string `koanf:"firecracker_binary_path"`
 }
 
+// SnapshotCompressionDefaultConfig holds default snapshot compression settings.
+type SnapshotCompressionDefaultConfig struct {
+	Enabled   bool   `koanf:"enabled"`
+	Algorithm string `koanf:"algorithm"`
+	Level     int    `koanf:"level"`
+}
+
+// SnapshotConfig holds snapshot defaults.
+type SnapshotConfig struct {
+	CompressionDefault SnapshotCompressionDefaultConfig `koanf:"compression_default"`
+}
+
 // GPUConfig holds GPU-related settings.
 type GPUConfig struct {
 	ProfileCacheTTL string `koanf:"profile_cache_ttl"`
@@ -183,6 +195,7 @@ type Config struct {
 	Oversubscription OversubscriptionConfig `koanf:"oversubscription"`
 	Capacity         CapacityConfig         `koanf:"capacity"`
 	Hypervisor       HypervisorConfig       `koanf:"hypervisor"`
+	Snapshot         SnapshotConfig         `koanf:"snapshot"`
 	GPU              GPUConfig              `koanf:"gpu"`
 }
 
@@ -302,6 +315,14 @@ func defaultConfig() *Config {
 			FirecrackerBinaryPath: "",
 		},
 
+		Snapshot: SnapshotConfig{
+			CompressionDefault: SnapshotCompressionDefaultConfig{
+				Enabled:   false,
+				Algorithm: "zstd",
+				Level:     1,
+			},
+		},
+
 		GPU: GPUConfig{
 			ProfileCacheTTL: "30m",
 		},
@@ -399,6 +420,14 @@ func (c *Config) Validate() error {
 	}
 	if c.Build.Timeout <= 0 {
 		return fmt.Errorf("build.timeout must be positive, got %d", c.Build.Timeout)
+	}
+	if c.Snapshot.CompressionDefault.Level < 1 {
+		return fmt.Errorf("snapshot.compression_default.level must be >= 1, got %d", c.Snapshot.CompressionDefault.Level)
+	}
+	switch strings.ToLower(c.Snapshot.CompressionDefault.Algorithm) {
+	case "", "zstd", "lz4":
+	default:
+		return fmt.Errorf("snapshot.compression_default.algorithm must be one of zstd or lz4, got %q", c.Snapshot.CompressionDefault.Algorithm)
 	}
 	return nil
 }

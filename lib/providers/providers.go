@@ -24,6 +24,7 @@ import (
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/kernel/hypeman/lib/registry"
 	"github.com/kernel/hypeman/lib/resources"
+	"github.com/kernel/hypeman/lib/snapshot"
 	"github.com/kernel/hypeman/lib/system"
 	"github.com/kernel/hypeman/lib/vm_metrics"
 	"github.com/kernel/hypeman/lib/volumes"
@@ -125,7 +126,15 @@ func ProvideInstanceManager(p *paths.Paths, cfg *config.Config, imageManager ima
 	meter := otel.GetMeterProvider().Meter("hypeman")
 	tracer := otel.GetTracerProvider().Tracer("hypeman")
 	defaultHypervisor := hypervisor.Type(cfg.Hypervisor.Default)
-	return instances.NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, defaultHypervisor, meter, tracer), nil
+	level := cfg.Snapshot.CompressionDefault.Level
+	snapshotDefaults := instances.SnapshotPolicy{
+		Compression: &snapshot.SnapshotCompressionConfig{
+			Enabled:   cfg.Snapshot.CompressionDefault.Enabled,
+			Algorithm: snapshot.SnapshotCompressionAlgorithm(strings.ToLower(cfg.Snapshot.CompressionDefault.Algorithm)),
+			Level:     &level,
+		},
+	}
+	return instances.NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, defaultHypervisor, snapshotDefaults, meter, tracer), nil
 }
 
 // ProvideVolumeManager provides the volume manager

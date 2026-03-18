@@ -64,7 +64,7 @@ func runStandbySnapshotScenario(t *testing.T, mgr *manager, tmpDir string, cfg s
 		}
 	})
 
-	_, err = mgr.StandbyInstance(ctx, sourceID)
+	_, err = mgr.StandbyInstance(ctx, sourceID, StandbyInstanceRequest{})
 	requireNoErr(err)
 
 	snapshot, err := mgr.CreateSnapshot(ctx, sourceID, CreateSnapshotRequest{

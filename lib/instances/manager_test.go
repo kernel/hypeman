@@ -55,7 +55,7 @@ func setupTestManager(t *testing.T) (*manager, string) {
 		MaxVcpusPerInstance:  0,                        // unlimited
 		MaxMemoryPerInstance: 0,                        // unlimited
 	}
-	mgr := NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, "", nil, nil).(*manager)
+	mgr := NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, "", SnapshotPolicy{}, nil, nil).(*manager)
 
 	// Set up resource validation using the real ResourceManager
 	resourceMgr := resources.NewManager(cfg, p)
@@ -1186,7 +1186,7 @@ func TestStorageOperations(t *testing.T) {
 		MaxVcpusPerInstance:  0,                        // unlimited
 		MaxMemoryPerInstance: 0,                        // unlimited
 	}
-	manager := NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, "", nil, nil).(*manager)
+	manager := NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, "", SnapshotPolicy{}, nil, nil).(*manager)
 
 	// Test metadata doesn't exist initially
 	_, err := manager.loadMetadata("nonexistent")
@@ -1304,7 +1304,7 @@ func TestStandbyAndRestore(t *testing.T) {
 
 	// Standby instance
 	t.Log("Standing by instance...")
-	inst, err = manager.StandbyInstance(ctx, inst.Id)
+	inst, err = manager.StandbyInstance(ctx, inst.Id, StandbyInstanceRequest{})
 	require.NoError(t, err)
 	assert.Equal(t, StateStandby, inst.State)
 	assert.True(t, inst.HasSnapshot)

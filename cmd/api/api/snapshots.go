@@ -10,6 +10,7 @@ import (
 	mw "github.com/kernel/hypeman/lib/middleware"
 	"github.com/kernel/hypeman/lib/network"
 	"github.com/kernel/hypeman/lib/oapi"
+	"github.com/kernel/hypeman/lib/snapshot"
 	"github.com/samber/lo"
 )
 
@@ -27,11 +28,20 @@ func (s *ApiService) CreateInstanceSnapshot(ctx context.Context, request oapi.Cr
 	if request.Body.Name != nil {
 		name = *request.Body.Name
 	}
+	var compression *snapshot.SnapshotCompressionConfig
+	if request.Body.Compression != nil {
+		var err error
+		compression, err = toDomainSnapshotCompressionConfig(*request.Body.Compression)
+		if err != nil {
+			return oapi.CreateInstanceSnapshot400JSONResponse{Code: "invalid_snapshot_compression", Message: err.Error()}, nil
+		}
+	}
 
 	result, err := s.InstanceManager.CreateSnapshot(ctx, inst.Id, instances.CreateSnapshotRequest{
-		Kind:     instances.SnapshotKind(request.Body.Kind),
-		Name:     name,
-		Metadata: toMapMetadata(request.Body.Metadata),
+		Kind:        instances.SnapshotKind(request.Body.Kind),
+		Name:        name,
+		Metadata:    toMapMetadata(request.Body.Metadata),
+		Compression: compression,
 	})
 	if err != nil {
 		log := logger.FromContext(ctx)
@@ -206,6 +216,23 @@ func snapshotToOAPI(snapshot instances.Snapshot) oapi.Snapshot {
 		CreatedAt:          snapshot.CreatedAt,
 		SizeBytes:          snapshot.SizeBytes,
 		Name:               lo.ToPtr(snapshot.Name),
+	}
+	if snapshot.CompressionState != "" {
+		state := oapi.SnapshotCompressionState(snapshot.CompressionState)
+		out.CompressionState = &state
+	}
+	if snapshot.CompressionError != "" {
+		out.CompressionError = lo.ToPtr(snapshot.CompressionError)
+	}
+	if snapshot.Compression != nil {
+		compression, _ := toOAPISnapshotCompressionConfig(*snapshot.Compression)
+		out.Compression = &compression
+	}
+	if snapshot.CompressedSizeBytes != nil {
+		out.CompressedSizeBytes = snapshot.CompressedSizeBytes
+	}
+	if snapshot.UncompressedSizeBytes != nil {
+		out.UncompressedSizeBytes = snapshot.UncompressedSizeBytes
 	}
 	if snapshot.Name == "" {
 		out.Name = nil

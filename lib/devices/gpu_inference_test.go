@@ -116,7 +116,7 @@ func TestGPUInference(t *testing.T) {
 	limits := instances.ResourceLimits{
 		MaxOverlaySize: 100 * 1024 * 1024 * 1024,
 	}
-	instanceMgr := instances.NewManager(p, imageMgr, systemMgr, networkMgr, deviceMgr, volumeMgr, limits, "", nil, nil)
+	instanceMgr := instances.NewManager(p, imageMgr, systemMgr, networkMgr, deviceMgr, volumeMgr, limits, "", instances.SnapshotPolicy{}, nil, nil)
 
 	// Step 1: Build custom CUDA+Ollama image
 	t.Log("Step 1: Building custom CUDA+Ollama Docker image...")
