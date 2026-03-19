@@ -194,6 +194,14 @@ func buildEgressProxyInjectRules(egressPolicy *NetworkEgressPolicy, credentials 
 	return out
 }
 
+// getEgressProxyIfExists returns the egress proxy service if it has been created,
+// or nil if no instance has registered with the proxy yet.
+func (m *manager) getEgressProxyIfExists() *egressproxy.Service {
+	m.egressProxyMu.Lock()
+	defer m.egressProxyMu.Unlock()
+	return m.egressProxy
+}
+
 func (m *manager) getOrCreateEgressProxyService() (*egressproxy.Service, error) {
 	m.egressProxyMu.Lock()
 	defer m.egressProxyMu.Unlock()

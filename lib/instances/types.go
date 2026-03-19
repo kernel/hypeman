@@ -224,6 +224,13 @@ type StartInstanceRequest struct {
 	Cmd        []string // Override cmd (nil = keep previous/image default)
 }
 
+// UpdateInstanceRequest is the domain request for updating a running instance.
+// Currently supports updating env vars referenced by credential policies
+// to enable secret/key rotation without instance restart.
+type UpdateInstanceRequest struct {
+	Env map[string]string // Updated environment variables (merged with existing)
+}
+
 // ForkInstanceRequest is the domain request for forking an instance.
 type ForkInstanceRequest struct {
 	Name        string // Required: name for the new forked instance

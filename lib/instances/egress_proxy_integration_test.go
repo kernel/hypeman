@@ -128,6 +128,33 @@ func TestEgressProxyRewritesHTTPSHeaders(t *testing.T) {
 	require.Equal(t, 0, blockedExitCode, "curl output: %s", blockedOutput)
 	require.Equal(t, "", blockedOutput)
 
+	// === Key rotation: update credential env and verify new value is used ===
+	t.Log("Updating egress proxy credential env for key rotation...")
+	updated, err := manager.UpdateInstance(ctx, inst.Id, UpdateInstanceRequest{
+		Env: map[string]string{
+			"OUTBOUND_OPENAI_KEY": "rotated-key-456",
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "rotated-key-456", updated.Env["OUTBOUND_OPENAI_KEY"])
+
+	// Guest-visible env should still show the mock value (secrets never reach guest)
+	envAfterUpdate, envExitCode2, err := execCommand(ctx, inst, "sh", "-lc", "printf '%s' \"$OUTBOUND_OPENAI_KEY\"")
+	require.NoError(t, err)
+	require.Equal(t, 0, envExitCode2)
+	require.Equal(t, "mock-OUTBOUND_OPENAI_KEY", envAfterUpdate)
+
+	// Egress proxy should now inject the rotated key
+	rotatedCmd := fmt.Sprintf(
+		"NO_PROXY= no_proxy= curl -k -sS https://%s:%s",
+		targetHost, targetPort,
+	)
+	rotatedOutput, rotatedExitCode, err := execCommand(ctx, inst, "sh", "-lc", rotatedCmd)
+	require.NoError(t, err)
+	require.Equal(t, 0, rotatedExitCode, "curl output: %s", rotatedOutput)
+	require.Contains(t, rotatedOutput, "Bearer rotated-key-456")
+	require.NotContains(t, rotatedOutput, "real-openai-key-123")
+
 	require.NoError(t, manager.DeleteInstance(ctx, inst.Id))
 	deleted = true
 }

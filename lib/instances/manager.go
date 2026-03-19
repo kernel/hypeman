@@ -39,6 +39,7 @@ type Manager interface {
 	RestoreSnapshot(ctx context.Context, id string, snapshotID string, req RestoreSnapshotRequest) (*Instance, error)
 	StopInstance(ctx context.Context, id string) (*Instance, error)
 	StartInstance(ctx context.Context, id string, req StartInstanceRequest) (*Instance, error)
+	UpdateInstance(ctx context.Context, id string, req UpdateInstanceRequest) (*Instance, error)
 	StreamInstanceLogs(ctx context.Context, id string, tail int, follow bool, source LogSource) (<-chan string, error)
 	RotateLogs(ctx context.Context, maxBytes int64, maxFiles int) error
 	AttachVolume(ctx context.Context, id string, volumeId string, req AttachVolumeRequest) (*Instance, error)
@@ -311,6 +312,14 @@ func (m *manager) StartInstance(ctx context.Context, id string, req StartInstanc
 	lock.Lock()
 	defer lock.Unlock()
 	return m.startInstance(ctx, id, req)
+}
+
+// UpdateInstance updates mutable properties of a running instance
+func (m *manager) UpdateInstance(ctx context.Context, id string, req UpdateInstanceRequest) (*Instance, error) {
+	lock := m.getInstanceLock(id)
+	lock.Lock()
+	defer lock.Unlock()
+	return m.updateInstance(ctx, id, req)
 }
 
 // ListInstances returns instances, optionally filtered by the given criteria.
