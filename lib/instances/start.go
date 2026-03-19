@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/devices"
+	"github.com/kernel/hypeman/lib/egressproxy"
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/network"
 	"go.opentelemetry.io/otel/trace"
@@ -105,6 +106,20 @@ func (m *manager) startInstance(
 		})
 	}
 
+	var proxyGuestConfig *egressproxy.GuestConfig
+	if stored.NetworkEnabled {
+		proxyGuestConfig, err = m.maybeRegisterEgressProxy(ctx, stored, netConfig)
+		if err != nil {
+			log.ErrorContext(ctx, "failed to configure egress proxy", "instance_id", id, "error", err)
+			return nil, fmt.Errorf("configure egress proxy: %w", err)
+		}
+		if proxyGuestConfig != nil {
+			cu.Add(func() {
+				m.unregisterEgressProxyInstance(ctx, id)
+			})
+		}
+	}
+
 	// 4b. Recreate vGPU mdev if this instance had a GPU profile
 	// Note: GPU availability was already validated in step 2b
 	if stored.GPUProfile != "" {
@@ -128,7 +143,7 @@ func (m *manager) startInstance(
 	// 5. Regenerate config disk with new network configuration
 	instForConfig := &Instance{StoredMetadata: *stored}
 	log.DebugContext(ctx, "regenerating config disk", "instance_id", id)
-	if err := m.createConfigDisk(ctx, instForConfig, imageInfo, netConfig); err != nil {
+	if err := m.createConfigDisk(ctx, instForConfig, imageInfo, netConfig, proxyGuestConfig); err != nil {
 		log.ErrorContext(ctx, "failed to create config disk", "instance_id", id, "error", err)
 		return nil, fmt.Errorf("create config disk: %w", err)
 	}

@@ -34,6 +34,7 @@ type Allocation struct {
 	TAPDevice    string
 	Gateway      string // Gateway IP for this network
 	Netmask      string // Netmask in dotted decimal notation
+	DNS          string // DNS server for guest configuration
 	State        string // "running", "standby" (derived from CH or snapshot)
 }
 

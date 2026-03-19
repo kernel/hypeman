@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/devices"
+	"github.com/kernel/hypeman/lib/egressproxy"
 	"github.com/kernel/hypeman/lib/guestmemory"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
@@ -84,7 +85,7 @@ func (m *manager) createInstance(
 	}
 
 	// 1. Validate request
-	if err := validateCreateRequest(req); err != nil {
+	if err := validateCreateRequest(&req); err != nil {
 		log.ErrorContext(ctx, "invalid create request", "error", err)
 		return nil, err
 	}
@@ -319,6 +320,8 @@ func (m *manager) createInstance(
 		Env:                      req.Env,
 		Tags:                     tags.Clone(req.Tags),
 		NetworkEnabled:           req.NetworkEnabled,
+		NetworkEgress:            cloneNetworkEgressPolicy(req.NetworkEgress),
+		Credentials:              cloneCredentialPolicies(req.Credentials),
 		CreatedAt:                time.Now(),
 		StartedAt:                nil,
 		StoppedAt:                nil,
@@ -425,8 +428,19 @@ func (m *manager) createInstance(
 
 	// 16. Create config disk (needs Instance for buildVMConfig)
 	inst := &Instance{StoredMetadata: *stored}
+	var proxyGuestConfig *egressproxy.GuestConfig
+	proxyGuestConfig, err = m.maybeRegisterEgressProxy(ctx, stored, netConfig)
+	if err != nil {
+		log.ErrorContext(ctx, "failed to configure egress proxy", "instance_id", id, "error", err)
+		return nil, fmt.Errorf("configure egress proxy: %w", err)
+	}
+	if proxyGuestConfig != nil {
+		cu.Add(func() {
+			m.unregisterEgressProxyInstance(ctx, id)
+		})
+	}
 	log.DebugContext(ctx, "creating config disk", "instance_id", id)
-	if err := m.createConfigDisk(ctx, inst, imageInfo, netConfig); err != nil {
+	if err := m.createConfigDisk(ctx, inst, imageInfo, netConfig, proxyGuestConfig); err != nil {
 		log.ErrorContext(ctx, "failed to create config disk", "instance_id", id, "error", err)
 		return nil, fmt.Errorf("create config disk: %w", err)
 	}
@@ -476,8 +490,12 @@ func (m *manager) createInstance(
 	return &finalInst, nil
 }
 
-// validateCreateRequest validates the create instance request
-func validateCreateRequest(req CreateInstanceRequest) error {
+// validateCreateRequest validates the create instance request.
+// The request is mutated in-place to persist normalized egress/credential policy fields.
+func validateCreateRequest(req *CreateInstanceRequest) error {
+	if req == nil {
+		return fmt.Errorf("%w: request is required", ErrInvalidRequest)
+	}
 	if err := validateInstanceName(req.Name); err != nil {
 		return err
 	}
@@ -495,6 +513,29 @@ func validateCreateRequest(req CreateInstanceRequest) error {
 	}
 	if req.Vcpus < 0 {
 		return fmt.Errorf("vcpus cannot be negative")
+	}
+	if req.NetworkEgress != nil && req.NetworkEgress.Enabled {
+		if !req.NetworkEnabled {
+			return fmt.Errorf("%w: network.egress requires network.enabled=true", ErrInvalidRequest)
+		}
+		mode, err := normalizeEgressEnforcementMode(req.NetworkEgress.EnforcementMode)
+		if err != nil {
+			return err
+		}
+		req.NetworkEgress.EnforcementMode = mode
+	}
+	normalizedCredentials, err := normalizeCredentialPolicies(req.Credentials)
+	if err != nil {
+		return err
+	}
+	req.Credentials = normalizedCredentials
+	if len(normalizedCredentials) > 0 {
+		if req.NetworkEgress == nil || !req.NetworkEgress.Enabled {
+			return fmt.Errorf("%w: credentials require network.egress.enabled=true", ErrInvalidRequest)
+		}
+		if err := validateCredentialEnvBindings(normalizedCredentials, req.Env); err != nil {
+			return err
+		}
 	}
 	if err := tags.Validate(req.Tags); err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidRequest, err)

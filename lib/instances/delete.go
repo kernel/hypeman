@@ -76,6 +76,7 @@ func (m *manager) deleteInstance(
 
 	// 6. Release network allocation
 	if inst.NetworkEnabled {
+		m.unregisterEgressProxyInstance(ctx, id)
 		log.DebugContext(ctx, "releasing network", "instance_id", id, "network", "default")
 		if err := m.networkManager.ReleaseAllocation(ctx, networkAlloc); err != nil {
 			// Log error but continue with cleanup
