@@ -128,7 +128,7 @@ func TestUpdateCredentials_MergesNewCredentialWithExisting(t *testing.T) {
 			NetworkEnabled: true,
 			NetworkEgress:  &NetworkEgressPolicy{Enabled: true},
 			Env: map[string]string{
-				"OPENAI_KEY":  "openai-secret",
+				"OPENAI_KEY":    "openai-secret",
 				"ANTHROPIC_KEY": "anthropic-secret",
 			},
 			Credentials: map[string]CredentialPolicy{
