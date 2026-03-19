@@ -37,6 +37,7 @@ type Manager interface {
 	StandbyInstance(ctx context.Context, id string) (*Instance, error)
 	RestoreInstance(ctx context.Context, id string) (*Instance, error)
 	RestoreSnapshot(ctx context.Context, id string, snapshotID string, req RestoreSnapshotRequest) (*Instance, error)
+	UpdateInstance(ctx context.Context, id string, req UpdateInstanceRequest) (*Instance, error)
 	StopInstance(ctx context.Context, id string) (*Instance, error)
 	StartInstance(ctx context.Context, id string, req StartInstanceRequest) (*Instance, error)
 	StreamInstanceLogs(ctx context.Context, id string, tail int, follow bool, source LogSource) (<-chan string, error)
@@ -295,6 +296,15 @@ func (m *manager) RestoreSnapshot(ctx context.Context, id string, snapshotID str
 	lock.Lock()
 	defer lock.Unlock()
 	return m.restoreSnapshot(ctx, id, snapshotID, req)
+}
+
+// UpdateInstance updates a running instance's env values and refreshes egress
+// proxy inject rules. Used for credential key rotation without instance restart.
+func (m *manager) UpdateInstance(ctx context.Context, id string, req UpdateInstanceRequest) (*Instance, error) {
+	lock := m.getInstanceLock(id)
+	lock.Lock()
+	defer lock.Unlock()
+	return m.updateInstance(ctx, id, req)
 }
 
 // StopInstance gracefully stops a running instance

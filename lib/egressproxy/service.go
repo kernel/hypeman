@@ -217,6 +217,27 @@ func compileHeaderInjectRules(cfgRules []HeaderInjectRuleConfig) ([]headerInject
 	return out, nil
 }
 
+// UpdateInstanceInjectRules atomically replaces the header injection rules
+// for an already-registered instance without re-applying iptables enforcement.
+// Returns an error if the instance is not currently registered.
+func (s *Service) UpdateInstanceInjectRules(instanceID string, rules []HeaderInjectRuleConfig) error {
+	compiled, err := compileHeaderInjectRules(rules)
+	if err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	sourceIP, ok := s.sourceIPByInstance[instanceID]
+	if !ok {
+		return fmt.Errorf("instance %s is not registered with the egress proxy", instanceID)
+	}
+
+	s.policiesBySourceIP[sourceIP] = sourcePolicy{headerInjectRules: compiled}
+	return nil
+}
+
 func (s *Service) UnregisterInstance(_ context.Context, instanceID string) {
 	s.mu.Lock()
 	sourceIP, ok := s.sourceIPByInstance[instanceID]

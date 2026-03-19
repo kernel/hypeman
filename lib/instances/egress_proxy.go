@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/kernel/hypeman/lib/egressproxy"
+	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/network"
 )
 
@@ -235,6 +236,69 @@ func (m *manager) maybeRegisterEgressProxy(ctx context.Context, stored *StoredMe
 	}
 
 	return &guestCfg, nil
+}
+
+// updateInstance merges new env values into the stored metadata and refreshes
+// the egress proxy inject rules so credential rotations take effect immediately
+// on a running instance.
+func (m *manager) updateInstance(ctx context.Context, id string, req UpdateInstanceRequest) (*Instance, error) {
+	log := logger.FromContext(ctx)
+
+	meta, err := m.loadMetadata(id)
+	if err != nil {
+		return nil, ErrNotFound
+	}
+
+	// Derive state to ensure instance is running
+	inst := m.toInstance(ctx, meta)
+	if inst.State != StateRunning && inst.State != StateInitializing {
+		return nil, fmt.Errorf("%w: instance must be running to update (current state: %s)", ErrInvalidState, inst.State)
+	}
+
+	if len(req.Env) == 0 {
+		return &inst, nil
+	}
+
+	// Merge new env values into existing env
+	if meta.Env == nil {
+		meta.Env = make(map[string]string)
+	}
+	for k, v := range req.Env {
+		meta.Env[k] = v
+	}
+
+	// Validate that credential env bindings are still satisfied after the merge
+	if len(meta.Credentials) > 0 {
+		if err := validateCredentialEnvBindings(meta.Credentials, meta.Env); err != nil {
+			return nil, err
+		}
+	}
+
+	// Update egress proxy inject rules if egress proxy is active
+	if meta.NetworkEgress != nil && meta.NetworkEgress.Enabled && len(meta.Credentials) > 0 {
+		m.egressProxyMu.Lock()
+		svc := m.egressProxy
+		m.egressProxyMu.Unlock()
+
+		if svc != nil {
+			newRules := buildEgressProxyInjectRules(meta.NetworkEgress, meta.Credentials, meta.Env)
+			if err := svc.UpdateInstanceInjectRules(id, newRules); err != nil {
+				log.ErrorContext(ctx, "failed to update egress proxy inject rules", "instance_id", id, "error", err)
+				return nil, fmt.Errorf("update egress proxy inject rules: %w", err)
+			}
+			log.InfoContext(ctx, "updated egress proxy inject rules", "instance_id", id)
+		}
+	}
+
+	// Persist updated metadata
+	if err := m.saveMetadata(meta); err != nil {
+		log.ErrorContext(ctx, "failed to save metadata after update", "instance_id", id, "error", err)
+		return nil, fmt.Errorf("save metadata: %w", err)
+	}
+
+	updated := m.toInstance(ctx, meta)
+	log.InfoContext(ctx, "instance updated", "instance_id", id)
+	return &updated, nil
 }
 
 func (m *manager) unregisterEgressProxyInstance(ctx context.Context, instanceID string) {

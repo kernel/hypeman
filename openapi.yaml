@@ -203,6 +203,21 @@ components:
             $ref: "#/components/schemas/CreateInstanceRequestCredentialInject"
           minItems: 1
 
+    UpdateInstanceRequest:
+      type: object
+      properties:
+        env:
+          type: object
+          additionalProperties:
+            type: string
+          description: |
+            Environment variable values to merge into the existing instance env.
+            Primarily used for credential key rotation: update the env vars
+            referenced by credential policies so the egress proxy injects the
+            new secret values on subsequent outbound requests.
+          example:
+            OUTBOUND_OPENAI_KEY: sk-new-rotated-key
+
     CreateInstanceRequest:
       type: object
       required: [name, image]
@@ -1718,7 +1733,56 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
-  
+    patch:
+      summary: Update instance settings (e.g. rotate credential secrets)
+      operationId: updateInstance
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Instance ID or name
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateInstanceRequest"
+      responses:
+        200:
+          description: Instance updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Instance"
+        400:
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        404:
+          description: Instance not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Invalid state (instance not running)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /instances/{id}/standby:
     post:
       summary: Put instance in standby (pause, snapshot, delete VMM)

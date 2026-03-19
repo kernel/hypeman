@@ -218,6 +218,12 @@ type CreateInstanceRequest struct {
 	SkipGuestAgent           bool                        // Skip guest-agent installation (disables exec/stat API)
 }
 
+// UpdateInstanceRequest is the domain request for updating a running instance.
+// Currently supports updating env values for credential key rotation.
+type UpdateInstanceRequest struct {
+	Env map[string]string // Env values to merge into existing env (only credential-source keys are required)
+}
+
 // StartInstanceRequest is the domain request for starting a stopped instance
 type StartInstanceRequest struct {
 	Entrypoint []string // Override entrypoint (nil = keep previous/image default)

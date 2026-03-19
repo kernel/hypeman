@@ -425,6 +425,57 @@ func (s *ApiService) DeleteInstance(ctx context.Context, request oapi.DeleteInst
 	return oapi.DeleteInstance204Response{}, nil
 }
 
+// UpdateInstance updates a running instance (e.g. rotate credential secrets).
+// The id parameter can be an instance ID, name, or ID prefix.
+// Note: Resolution is handled by ResolveResource middleware.
+func (s *ApiService) UpdateInstance(ctx context.Context, request oapi.UpdateInstanceRequestObject) (oapi.UpdateInstanceResponseObject, error) {
+	log := logger.FromContext(ctx)
+
+	inst := mw.GetResolvedInstance[instances.Instance](ctx)
+	if inst == nil {
+		return oapi.UpdateInstance500JSONResponse{
+			Code:    "internal_error",
+			Message: "resource not resolved",
+		}, nil
+	}
+
+	env := make(map[string]string)
+	if request.Body.Env != nil {
+		env = *request.Body.Env
+	}
+
+	updated, err := s.InstanceManager.UpdateInstance(ctx, inst.Id, instances.UpdateInstanceRequest{
+		Env: env,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, instances.ErrInvalidState):
+			return oapi.UpdateInstance409JSONResponse{
+				Code:    "invalid_state",
+				Message: err.Error(),
+			}, nil
+		case errors.Is(err, instances.ErrInvalidRequest):
+			return oapi.UpdateInstance400JSONResponse{
+				Code:    "invalid_request",
+				Message: err.Error(),
+			}, nil
+		case errors.Is(err, instances.ErrNotFound):
+			return oapi.UpdateInstance404JSONResponse{
+				Code:    "not_found",
+				Message: err.Error(),
+			}, nil
+		default:
+			log.ErrorContext(ctx, "failed to update instance", "error", err, "instance_id", inst.Id)
+			return oapi.UpdateInstance500JSONResponse{
+				Code:    "internal_error",
+				Message: "failed to update instance",
+			}, nil
+		}
+	}
+
+	return oapi.UpdateInstance200JSONResponse(instanceToOAPI(*updated)), nil
+}
+
 // StandbyInstance puts an instance in standby (pause, snapshot, delete VMM)
 // The id parameter can be an instance ID, name, or ID prefix
 // Note: Resolution is handled by ResolveResource middleware

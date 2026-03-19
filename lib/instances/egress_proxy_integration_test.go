@@ -132,6 +132,128 @@ func TestEgressProxyRewritesHTTPSHeaders(t *testing.T) {
 	deleted = true
 }
 
+func TestEgressProxySecretUpdateOnRunningInstance(t *testing.T) {
+	requireKVMAccess(t)
+
+	manager, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	caPEM, cert := mustGenerateTLSChain(t, []string{"localhost"})
+	manager.egressProxyServiceOptions = egressproxy.ServiceOptions{
+		AdditionalRootCAPEM: []string{caPEM},
+	}
+
+	target := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprint(w, r.Header.Get("Authorization"))
+	}))
+	target.TLS = &tls.Config{Certificates: []tls.Certificate{cert}}
+	target.StartTLS()
+	defer target.Close()
+	targetHostPort := strings.TrimPrefix(target.URL, "https://")
+	targetHost, targetPort, err := net.SplitHostPort(targetHostPort)
+	require.NoError(t, err)
+
+	imageRef := integrationTestImageRef(t, "docker.io/library/nginx:alpine")
+	t.Logf("Pulling %s image...", imageRef)
+	created, err := manager.imageManager.CreateImage(ctx, images.CreateImageRequest{Name: imageRef})
+	require.NoError(t, err)
+
+	for i := 0; i < 120; i++ {
+		img, err := manager.imageManager.GetImage(ctx, created.Name)
+		if err == nil && img.Status == images.StatusReady {
+			break
+		}
+		time.Sleep(1 * time.Second)
+	}
+	img, err := manager.imageManager.GetImage(ctx, created.Name)
+	require.NoError(t, err)
+	require.Equal(t, images.StatusReady, img.Status)
+
+	require.NoError(t, manager.systemManager.EnsureSystemFiles(ctx))
+	require.NoError(t, manager.networkManager.Initialize(ctx, nil))
+
+	inst, err := manager.CreateInstance(ctx, CreateInstanceRequest{
+		Name:           "test-egress-update",
+		Image:          imageRef,
+		Size:           2 * 1024 * 1024 * 1024,
+		HotplugSize:    512 * 1024 * 1024,
+		OverlaySize:    5 * 1024 * 1024 * 1024,
+		Vcpus:          1,
+		NetworkEnabled: true,
+		NetworkEgress: &NetworkEgressPolicy{
+			Enabled: true,
+		},
+		Credentials: map[string]CredentialPolicy{
+			"OUTBOUND_OPENAI_KEY": {
+				Source: CredentialSource{Env: "OUTBOUND_OPENAI_KEY"},
+				Inject: []CredentialInjectRule{
+					{
+						Hosts: []string{"127.0.0.1"},
+						As: CredentialInjectAs{
+							Header: "Authorization",
+							Format: "Bearer ${value}",
+						},
+					},
+				},
+			},
+		},
+		Env: map[string]string{
+			"OUTBOUND_OPENAI_KEY": "original-key-111",
+		},
+		Entrypoint: []string{"/bin/sh", "-lc"},
+		Cmd:        []string{"sleep 3600"},
+	})
+	require.NoError(t, err)
+
+	deleted := false
+	t.Cleanup(func() {
+		if !deleted {
+			_ = manager.DeleteInstance(context.Background(), inst.Id)
+		}
+	})
+
+	require.NoError(t, waitForVMReady(ctx, inst.SocketPath, 10*time.Second))
+	require.NoError(t, waitForLogMessage(ctx, manager, inst.Id, "[guest-agent] listening", 45*time.Second))
+
+	// Step 1: Verify initial credential is injected
+	curlCmd := fmt.Sprintf(
+		"NO_PROXY= no_proxy= curl -k -sS https://%s:%s",
+		targetHost, targetPort,
+	)
+	output, exitCode, err := execCommand(ctx, inst, "sh", "-lc", curlCmd)
+	require.NoError(t, err)
+	require.Equal(t, 0, exitCode, "curl output: %s", output)
+	require.Contains(t, output, "Bearer original-key-111")
+	t.Log("Initial credential injection verified")
+
+	// Step 2: Rotate the secret via UpdateInstance
+	updated, err := manager.UpdateInstance(ctx, inst.Id, UpdateInstanceRequest{
+		Env: map[string]string{
+			"OUTBOUND_OPENAI_KEY": "rotated-key-222",
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "rotated-key-222", updated.Env["OUTBOUND_OPENAI_KEY"])
+	t.Log("Secret updated via UpdateInstance")
+
+	// Step 3: Verify the rotated credential is now injected by the proxy
+	output, exitCode, err = execCommand(ctx, inst, "sh", "-lc", curlCmd)
+	require.NoError(t, err)
+	require.Equal(t, 0, exitCode, "curl output: %s", output)
+	require.Contains(t, output, "Bearer rotated-key-222")
+	t.Log("Rotated credential injection verified")
+
+	// Step 4: Verify the guest still sees the mock value (not the real secret)
+	envOutput, envExitCode, err := execCommand(ctx, inst, "sh", "-lc", "printf '%s' \"$OUTBOUND_OPENAI_KEY\"")
+	require.NoError(t, err)
+	require.Equal(t, 0, envExitCode)
+	require.Equal(t, "mock-OUTBOUND_OPENAI_KEY", envOutput)
+	t.Log("Guest env still shows mock value after rotation")
+
+	require.NoError(t, manager.DeleteInstance(ctx, inst.Id))
+	deleted = true
+}
+
 func mustGenerateTLSChain(t *testing.T, dnsNames []string) (string, tls.Certificate) {
 	t.Helper()
 
