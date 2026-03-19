@@ -1,12 +1,16 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/getkin/kin-openapi/openapi3"
+	"github.com/getkin/kin-openapi/openapi3filter"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/kernel/hypeman/lib/scopes"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -333,5 +337,182 @@ func TestJwtAuth_RequiresAuthorization(t *testing.T) {
 
 		assert.Equal(t, http.StatusUnauthorized, rr.Code)
 		assert.Contains(t, rr.Body.String(), "invalid token")
+	})
+}
+
+// generateScopedToken creates a user JWT token with specific permission scopes.
+func generateScopedToken(t *testing.T, userID string, perms []string) string {
+	claims := jwt.MapClaims{
+		"sub":         userID,
+		"iat":         time.Now().Unix(),
+		"exp":         time.Now().Add(time.Hour).Unix(),
+		"permissions": perms,
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	tokenString, err := token.SignedString([]byte(testJWTSecret))
+	require.NoError(t, err)
+	return tokenString
+}
+
+func TestJwtAuth_ScopedPermissions(t *testing.T) {
+	// Handler that checks what permissions are in the context
+	nextHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		perms := scopes.GetPermissions(r.Context())
+		if perms == nil {
+			w.Header().Set("X-Perms", "full-access")
+		} else {
+			w.Header().Set("X-Perms", "scoped")
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+
+	handler := JwtAuth(testJWTSecret)(nextHandler)
+
+	t.Run("legacy token without permissions has full access", func(t *testing.T) {
+		token := generateUserToken(t, "user-123")
+
+		req := httptest.NewRequest(http.MethodGet, "/instances", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+
+		assert.Equal(t, http.StatusOK, rr.Code)
+		assert.Equal(t, "full-access", rr.Header().Get("X-Perms"))
+	})
+
+	t.Run("scoped token has permissions in context", func(t *testing.T) {
+		token := generateScopedToken(t, "user-456", []string{"instance:read", "image:read"})
+
+		req := httptest.NewRequest(http.MethodGet, "/instances", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+
+		assert.Equal(t, http.StatusOK, rr.Code)
+		assert.Equal(t, "scoped", rr.Header().Get("X-Perms"))
+	})
+
+	t.Run("wildcard scope token has permissions in context", func(t *testing.T) {
+		token := generateScopedToken(t, "user-789", []string{"*"})
+
+		req := httptest.NewRequest(http.MethodGet, "/instances", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+
+		assert.Equal(t, http.StatusOK, rr.Code)
+		assert.Equal(t, "scoped", rr.Header().Get("X-Perms"))
+	})
+
+	t.Run("malformed permissions claim denies all", func(t *testing.T) {
+		// Create a token where permissions is a string instead of an array
+		claims := jwt.MapClaims{
+			"sub":         "user-bad",
+			"iat":         time.Now().Unix(),
+			"exp":         time.Now().Add(time.Hour).Unix(),
+			"permissions": "not-an-array",
+		}
+		token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+		tokenString, err := token.SignedString([]byte(testJWTSecret))
+		require.NoError(t, err)
+
+		req := httptest.NewRequest(http.MethodGet, "/instances", nil)
+		req.Header.Set("Authorization", "Bearer "+tokenString)
+
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+
+		assert.Equal(t, http.StatusOK, rr.Code)
+		// Should be scoped with empty permissions (not full-access)
+		assert.Equal(t, "scoped", rr.Header().Get("X-Perms"))
+
+		// Verify it actually denies access
+		ctx := scopes.ContextWithPermissions(req.Context(), []scopes.Scope{})
+		assert.False(t, scopes.HasScope(ctx, scopes.InstanceRead))
+	})
+}
+
+// newBearerAuthInput creates an openapi3filter.AuthenticationInput for a bearer
+// token request, suitable for testing OapiAuthenticationFunc.
+func newBearerAuthInput(t *testing.T, token string) *openapi3filter.AuthenticationInput {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/instances", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	return &openapi3filter.AuthenticationInput{
+		RequestValidationInput: &openapi3filter.RequestValidationInput{
+			Request: req,
+		},
+		SecurityScheme: &openapi3.SecurityScheme{
+			Type:   "http",
+			Scheme: "bearer",
+		},
+	}
+}
+
+func TestOapiAuthenticationFunc_ScopedPermissions(t *testing.T) {
+	authFunc := OapiAuthenticationFunc(testJWTSecret)
+
+	t.Run("legacy token without permissions has full access", func(t *testing.T) {
+		token := generateUserToken(t, "user-100")
+		input := newBearerAuthInput(t, token)
+
+		err := authFunc(context.Background(), input)
+		require.NoError(t, err)
+
+		// After auth, context should have no permissions (full access)
+		ctx := input.RequestValidationInput.Request.Context()
+		assert.True(t, scopes.HasFullAccess(ctx))
+		assert.True(t, scopes.HasScope(ctx, scopes.InstanceRead))
+		assert.True(t, scopes.HasScope(ctx, scopes.InstanceDelete))
+	})
+
+	t.Run("scoped token stores permissions in context", func(t *testing.T) {
+		token := generateScopedToken(t, "user-200", []string{"instance:read", "image:read"})
+		input := newBearerAuthInput(t, token)
+
+		err := authFunc(context.Background(), input)
+		require.NoError(t, err)
+
+		ctx := input.RequestValidationInput.Request.Context()
+		assert.False(t, scopes.HasFullAccess(ctx))
+		assert.True(t, scopes.HasScope(ctx, scopes.InstanceRead))
+		assert.True(t, scopes.HasScope(ctx, scopes.ImageRead))
+		assert.False(t, scopes.HasScope(ctx, scopes.InstanceWrite))
+		assert.False(t, scopes.HasScope(ctx, scopes.BuildRead))
+	})
+
+	t.Run("wildcard scoped token grants all", func(t *testing.T) {
+		token := generateScopedToken(t, "user-300", []string{"*"})
+		input := newBearerAuthInput(t, token)
+
+		err := authFunc(context.Background(), input)
+		require.NoError(t, err)
+
+		ctx := input.RequestValidationInput.Request.Context()
+		assert.True(t, scopes.HasScope(ctx, scopes.InstanceRead))
+		assert.True(t, scopes.HasScope(ctx, scopes.BuildDelete))
+	})
+
+	t.Run("malformed permissions claim denies all", func(t *testing.T) {
+		claims := jwt.MapClaims{
+			"sub":         "user-400",
+			"iat":         time.Now().Unix(),
+			"exp":         time.Now().Add(time.Hour).Unix(),
+			"permissions": "not-an-array",
+		}
+		token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+		tokenString, err := token.SignedString([]byte(testJWTSecret))
+		require.NoError(t, err)
+
+		input := newBearerAuthInput(t, tokenString)
+		err = authFunc(context.Background(), input)
+		require.NoError(t, err)
+
+		ctx := input.RequestValidationInput.Request.Context()
+		assert.False(t, scopes.HasFullAccess(ctx))
+		assert.False(t, scopes.HasScope(ctx, scopes.InstanceRead))
 	})
 }
