@@ -135,6 +135,10 @@ func (m *mockInstanceManager) StartInstance(ctx context.Context, id string, req 
 	return nil, nil
 }
 
+func (m *mockInstanceManager) UpdateInstanceEnv(ctx context.Context, id string, req instances.UpdateInstanceEnvRequest) (*instances.Instance, error) {
+	return nil, nil
+}
+
 func (m *mockInstanceManager) StreamInstanceLogs(ctx context.Context, id string, tail int, follow bool, source instances.LogSource) (<-chan string, error) {
 	return nil, nil
 }
