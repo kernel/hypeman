@@ -131,6 +131,10 @@ func (m *mockInstanceManager) StopInstance(ctx context.Context, id string) (*ins
 	return nil, instances.ErrNotFound
 }
 
+func (m *mockInstanceManager) UpdateInstance(ctx context.Context, id string, req instances.UpdateInstanceRequest) (*instances.Instance, error) {
+	return nil, nil
+}
+
 func (m *mockInstanceManager) StartInstance(ctx context.Context, id string, req instances.StartInstanceRequest) (*instances.Instance, error) {
 	return nil, nil
 }
