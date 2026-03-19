@@ -200,10 +200,15 @@ func toRateLimiter(limit int64, burst int64) *rateLimiter {
 }
 
 func toSnapshotCreateParams(snapshotDir string) snapshotCreateParams {
+	snapshotType := "Full"
+	if _, err := os.Stat(snapshotMemoryPath(snapshotDir)); err == nil {
+		snapshotType = "Diff"
+	}
+
 	return snapshotCreateParams{
 		MemFilePath:  snapshotMemoryPath(snapshotDir),
 		SnapshotPath: snapshotStatePath(snapshotDir),
-		SnapshotType: "Full",
+		SnapshotType: snapshotType,
 	}
 }
 

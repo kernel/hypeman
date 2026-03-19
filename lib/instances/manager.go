@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/devices"
+	"github.com/kernel/hypeman/lib/egressproxy"
 	"github.com/kernel/hypeman/lib/guestmemory"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
@@ -71,19 +72,22 @@ type ResourceValidator interface {
 }
 
 type manager struct {
-	paths             *paths.Paths
-	imageManager      images.Manager
-	systemManager     system.Manager
-	networkManager    network.Manager
-	deviceManager     devices.Manager
-	volumeManager     volumes.Manager
-	limits            ResourceLimits
-	resourceValidator ResourceValidator // Optional validator for aggregate resource limits
-	instanceLocks     sync.Map          // map[string]*sync.RWMutex - per-instance locks
-	bootMarkerScans   sync.Map          // map[string]time.Time next allowed boot-marker rescan
-	hostTopology      *HostTopology     // Cached host CPU topology
-	metrics           *Metrics
-	now               func() time.Time
+	paths                     *paths.Paths
+	imageManager              images.Manager
+	systemManager             system.Manager
+	networkManager            network.Manager
+	deviceManager             devices.Manager
+	volumeManager             volumes.Manager
+	limits                    ResourceLimits
+	resourceValidator         ResourceValidator // Optional validator for aggregate resource limits
+	instanceLocks             sync.Map          // map[string]*sync.RWMutex - per-instance locks
+	bootMarkerScans           sync.Map          // map[string]time.Time next allowed boot-marker rescan
+	hostTopology              *HostTopology     // Cached host CPU topology
+	metrics                   *Metrics
+	now                       func() time.Time
+	egressProxy               *egressproxy.Service
+	egressProxyServiceOptions egressproxy.ServiceOptions
+	egressProxyMu             sync.Mutex
 
 	// Hypervisor support
 	vmStarters        map[hypervisor.Type]hypervisor.VMStarter
@@ -162,6 +166,14 @@ func (m *manager) getVMStarter(hvType hypervisor.Type) (hypervisor.VMStarter, er
 		return nil, fmt.Errorf("no VM starter for hypervisor type: %s", hvType)
 	}
 	return starter, nil
+}
+
+func (m *manager) supportsSnapshotBaseReuse(hvType hypervisor.Type) bool {
+	caps, ok := hypervisor.CapabilitiesForType(hvType)
+	if !ok {
+		return false
+	}
+	return caps.SupportsSnapshotBaseReuse
 }
 
 // getInstanceLock returns or creates a lock for a specific instance

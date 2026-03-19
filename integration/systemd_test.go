@@ -75,7 +75,7 @@ func TestSystemdMode(t *testing.T) {
 		instanceManager.DeleteInstance(ctx, "systemd-test")
 	})
 
-	imageName := "docker.io/jrei/systemd-ubuntu:22.04"
+	imageName := integrationTestImageRef(t, "docker.io/jrei/systemd-ubuntu:22.04")
 
 	// Pull the systemd image
 	t.Log("Pulling systemd image:", imageName)

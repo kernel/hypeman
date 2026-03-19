@@ -54,6 +54,13 @@ func runSystemdMode(log *Logger, cfg *vmconfig.Config) {
 		dropToShell()
 	}
 
+	if err := installEgressProxyCA(log, cfg); err != nil {
+		log.Error("hypeman-init:egress-proxy", "egress proxy CA certificate setup failed", err)
+		log.Info("hypeman-init:systemd", formatExitSentinel(78, fmt.Sprintf("egress proxy CA certificate setup failed: %v", err)))
+		syscall.Sync()
+		syscall.Reboot(syscall.LINUX_REBOOT_CMD_POWER_OFF)
+	}
+
 	// Build effective command from entrypoint + cmd
 	argv := append(cfg.Entrypoint, cfg.Cmd...)
 	if len(argv) == 0 {

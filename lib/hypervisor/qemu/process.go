@@ -43,6 +43,7 @@ const (
 
 func init() {
 	hypervisor.RegisterSocketName(hypervisor.TypeQEMU, "qemu.sock")
+	hypervisor.RegisterCapabilities(hypervisor.TypeQEMU, capabilities())
 	hypervisor.RegisterClientFactory(hypervisor.TypeQEMU, func(socketPath string) (hypervisor.Hypervisor, error) {
 		return New(socketPath)
 	})

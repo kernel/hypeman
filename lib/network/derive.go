@@ -81,6 +81,7 @@ func (m *manager) deriveAllocation(ctx context.Context, instanceID string) (*All
 			TAPDevice:    tap,
 			Gateway:      gateway,
 			Netmask:      netmask,
+			DNS:          m.config.Network.DNSServer,
 			State:        state,
 		}, nil
 	}
