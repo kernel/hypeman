@@ -64,6 +64,13 @@ func TestParseExitSentinelLine(t *testing.T) {
 			wantOK: false,
 		},
 		{
+			name:     "egress proxy CA setup failure (code 78)",
+			line:     `2026-03-19T10:00:00Z [INFO] [hypeman-init:entrypoint] HYPEMAN-EXIT code=78 message="egress proxy CA certificate setup failed: update-ca-certificates: exit status 1"`,
+			wantOK:   true,
+			wantCode: 78,
+			wantMsg:  "egress proxy CA certificate setup failed: update-ca-certificates: exit status 1",
+		},
+		{
 			name:     "sentinel without message",
 			line:     "HYPEMAN-EXIT code=42",
 			wantOK:   true,

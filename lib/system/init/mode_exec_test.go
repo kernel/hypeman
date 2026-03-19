@@ -104,6 +104,12 @@ func TestFormatExitSentinel(t *testing.T) {
 			message: `error: "bad thing"`,
 			want:    `HYPEMAN-EXIT code=1 message="error: \"bad thing\""`,
 		},
+		{
+			name:    "egress proxy CA setup failure (EX_CONFIG)",
+			code:    78,
+			message: "egress proxy CA certificate setup failed: update-ca-certificates: exit status 1",
+			want:    `HYPEMAN-EXIT code=78 message="egress proxy CA certificate setup failed: update-ca-certificates: exit status 1"`,
+		},
 	}
 
 	for _, tc := range tests {
