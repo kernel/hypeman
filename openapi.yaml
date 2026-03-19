@@ -2235,6 +2235,72 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
   
+  /instances/{id}/update-egress-secrets:
+    post:
+      summary: Update egress proxy secret env values on a running instance
+      description: >
+        Updates the real credential values used by the egress proxy for header
+        injection (e.g. for key rotation). The instance must be running with
+        egress proxy enabled. Only env vars referenced by existing credential
+        policies may be updated. The guest continues to see mock values.
+      operationId: updateEgressSecrets
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Instance ID or name
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - env
+              properties:
+                env:
+                  type: object
+                  additionalProperties:
+                    type: string
+                  description: >
+                    Map of environment variable names to new secret values.
+                    Each key must be referenced by an existing credential policy.
+      responses:
+        200:
+          description: Egress proxy secrets updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Instance"
+        400:
+          description: Invalid request (missing or unreferenced env vars)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        404:
+          description: Instance not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Conflict - instance not in correct state or egress not enabled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /instances/{id}/logs:
     get:
       summary: Stream instance logs (SSE)

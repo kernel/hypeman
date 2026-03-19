@@ -798,6 +798,57 @@ func (s *ApiService) StatInstancePath(ctx context.Context, request oapi.StatInst
 	return response, nil
 }
 
+// UpdateEgressSecrets updates egress proxy secret env values on a running instance
+// The id parameter can be an instance ID, name, or ID prefix
+// Note: Resolution is handled by ResolveResource middleware
+func (s *ApiService) UpdateEgressSecrets(ctx context.Context, request oapi.UpdateEgressSecretsRequestObject) (oapi.UpdateEgressSecretsResponseObject, error) {
+	inst := mw.GetResolvedInstance[instances.Instance](ctx)
+	if inst == nil {
+		return oapi.UpdateEgressSecrets500JSONResponse{
+			Code:    "internal_error",
+			Message: "resource not resolved",
+		}, nil
+	}
+	log := logger.FromContext(ctx)
+
+	if request.Body == nil {
+		return oapi.UpdateEgressSecrets400JSONResponse{
+			Code:    "invalid_request",
+			Message: "request body is required",
+		}, nil
+	}
+
+	env := make(map[string]string)
+	if request.Body.Env != nil {
+		env = request.Body.Env
+	}
+
+	result, err := s.InstanceManager.UpdateEgressSecrets(ctx, inst.Id, instances.UpdateEgressSecretsRequest{
+		Env: env,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, instances.ErrInvalidState):
+			return oapi.UpdateEgressSecrets409JSONResponse{
+				Code:    "invalid_state",
+				Message: err.Error(),
+			}, nil
+		case errors.Is(err, instances.ErrInvalidRequest):
+			return oapi.UpdateEgressSecrets400JSONResponse{
+				Code:    "invalid_request",
+				Message: err.Error(),
+			}, nil
+		default:
+			log.ErrorContext(ctx, "failed to update egress secrets", "error", err)
+			return oapi.UpdateEgressSecrets500JSONResponse{
+				Code:    "internal_error",
+				Message: "failed to update egress secrets",
+			}, nil
+		}
+	}
+	return oapi.UpdateEgressSecrets200JSONResponse(instanceToOAPI(*result)), nil
+}
+
 // AttachVolume attaches a volume to an instance (not yet implemented)
 func (s *ApiService) AttachVolume(ctx context.Context, request oapi.AttachVolumeRequestObject) (oapi.AttachVolumeResponseObject, error) {
 	return oapi.AttachVolume500JSONResponse{

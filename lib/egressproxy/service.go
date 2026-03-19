@@ -217,6 +217,28 @@ func compileHeaderInjectRules(cfgRules []HeaderInjectRuleConfig) ([]headerInject
 	return out, nil
 }
 
+// UpdateHeaderInjectRules replaces the header injection rules for an already-registered
+// instance. Unlike RegisterInstance this does NOT re-apply iptables enforcement — it
+// only updates the in-memory policy used for MITM header rewriting. The instance must
+// have been previously registered via RegisterInstance.
+func (s *Service) UpdateHeaderInjectRules(instanceID string, rules []HeaderInjectRuleConfig) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	sourceIP, ok := s.sourceIPByInstance[instanceID]
+	if !ok {
+		return fmt.Errorf("instance %s not registered with egress proxy", instanceID)
+	}
+
+	compiled, err := compileHeaderInjectRules(rules)
+	if err != nil {
+		return err
+	}
+
+	s.policiesBySourceIP[sourceIP] = sourcePolicy{headerInjectRules: compiled}
+	return nil
+}
+
 func (s *Service) UnregisterInstance(_ context.Context, instanceID string) {
 	s.mu.Lock()
 	sourceIP, ok := s.sourceIPByInstance[instanceID]

@@ -267,6 +267,11 @@ type ForkSnapshotRequest struct {
 	TargetHypervisor hypervisor.Type // Optional, allowed only for Stopped snapshots
 }
 
+// UpdateEgressSecretsRequest is the domain request for updating egress proxy credential env values.
+type UpdateEgressSecretsRequest struct {
+	Env map[string]string // Map of env var names to new secret values
+}
+
 // AttachVolumeRequest is the domain request for attaching a volume (used for API compatibility)
 type AttachVolumeRequest struct {
 	MountPath string

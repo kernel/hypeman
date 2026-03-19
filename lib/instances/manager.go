@@ -41,6 +41,7 @@ type Manager interface {
 	StartInstance(ctx context.Context, id string, req StartInstanceRequest) (*Instance, error)
 	StreamInstanceLogs(ctx context.Context, id string, tail int, follow bool, source LogSource) (<-chan string, error)
 	RotateLogs(ctx context.Context, maxBytes int64, maxFiles int) error
+	UpdateEgressSecrets(ctx context.Context, id string, req UpdateEgressSecretsRequest) (*Instance, error)
 	AttachVolume(ctx context.Context, id string, volumeId string, req AttachVolumeRequest) (*Instance, error)
 	DetachVolume(ctx context.Context, id string, volumeId string) (*Instance, error)
 	// ListInstanceAllocations returns resource allocations for all instances.
@@ -439,6 +440,17 @@ func (m *manager) RotateLogs(ctx context.Context, maxBytes int64, maxFiles int) 
 		}
 	}
 	return lastErr
+}
+
+// UpdateEgressSecrets updates the real credential values used by the egress proxy
+// for header injection on a running instance. This enables key rotation without
+// restarting the VM. The guest continues to see mock values — only the host-side
+// proxy rules are updated.
+func (m *manager) UpdateEgressSecrets(ctx context.Context, id string, req UpdateEgressSecretsRequest) (*Instance, error) {
+	lock := m.getInstanceLock(id)
+	lock.Lock()
+	defer lock.Unlock()
+	return m.updateEgressSecrets(ctx, id, req)
 }
 
 // AttachVolume attaches a volume to an instance (not yet implemented)
