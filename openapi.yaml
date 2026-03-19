@@ -2235,6 +2235,58 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
   
+  /instances/{id}/env:
+    patch:
+      summary: Update instance environment variables
+      operationId: updateInstanceEnv
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Instance ID or name
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [env]
+              properties:
+                env:
+                  type: object
+                  additionalProperties:
+                    type: string
+                  description: Environment variables to update (merged with existing env)
+      responses:
+        200:
+          description: Instance updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Instance"
+        404:
+          description: Instance not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Conflict - instance not in correct state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /instances/{id}/logs:
     get:
       summary: Stream instance logs (SSE)

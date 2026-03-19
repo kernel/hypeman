@@ -41,6 +41,7 @@ type Manager interface {
 	StartInstance(ctx context.Context, id string, req StartInstanceRequest) (*Instance, error)
 	StreamInstanceLogs(ctx context.Context, id string, tail int, follow bool, source LogSource) (<-chan string, error)
 	RotateLogs(ctx context.Context, maxBytes int64, maxFiles int) error
+	UpdateInstanceEnv(ctx context.Context, id string, env map[string]string) (*Instance, error)
 	AttachVolume(ctx context.Context, id string, volumeId string, req AttachVolumeRequest) (*Instance, error)
 	DetachVolume(ctx context.Context, id string, volumeId string) (*Instance, error)
 	// ListInstanceAllocations returns resource allocations for all instances.

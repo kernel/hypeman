@@ -1177,6 +1177,12 @@ type ListInstancesParams struct {
 	Tags *Tags `json:"tags,omitempty"`
 }
 
+// UpdateInstanceEnvJSONBody defines parameters for UpdateInstanceEnv.
+type UpdateInstanceEnvJSONBody struct {
+	// Env Environment variables to update (merged with existing env)
+	Env map[string]string `json:"env"`
+}
+
 // GetInstanceLogsParams defines parameters for GetInstanceLogs.
 type GetInstanceLogsParams struct {
 	// Tail Number of lines to return from end
@@ -1263,6 +1269,9 @@ type CreateIngressJSONRequestBody = CreateIngressRequest
 
 // CreateInstanceJSONRequestBody defines body for CreateInstance for application/json ContentType.
 type CreateInstanceJSONRequestBody = CreateInstanceRequest
+
+// UpdateInstanceEnvJSONRequestBody defines body for UpdateInstanceEnv for application/json ContentType.
+type UpdateInstanceEnvJSONRequestBody UpdateInstanceEnvJSONBody
 
 // ForkInstanceJSONRequestBody defines body for ForkInstance for application/json ContentType.
 type ForkInstanceJSONRequestBody = ForkInstanceRequest
@@ -1434,6 +1443,11 @@ type ClientInterface interface {
 
 	// GetInstance request
 	GetInstance(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// UpdateInstanceEnvWithBody request with any body
+	UpdateInstanceEnvWithBody(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	UpdateInstanceEnv(ctx context.Context, id string, body UpdateInstanceEnvJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ForkInstanceWithBody request with any body
 	ForkInstanceWithBody(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -1830,6 +1844,30 @@ func (c *Client) DeleteInstance(ctx context.Context, id string, reqEditors ...Re
 
 func (c *Client) GetInstance(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetInstanceRequest(c.Server, id)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) UpdateInstanceEnvWithBody(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUpdateInstanceEnvRequestWithBody(c.Server, id, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) UpdateInstanceEnv(ctx context.Context, id string, body UpdateInstanceEnvJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUpdateInstanceEnvRequest(c.Server, id, body)
 	if err != nil {
 		return nil, err
 	}
@@ -3088,6 +3126,53 @@ func NewGetInstanceRequest(server string, id string) (*http.Request, error) {
 	return req, nil
 }
 
+// NewUpdateInstanceEnvRequest calls the generic UpdateInstanceEnv builder with application/json body
+func NewUpdateInstanceEnvRequest(server string, id string, body UpdateInstanceEnvJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewUpdateInstanceEnvRequestWithBody(server, id, "application/json", bodyReader)
+}
+
+// NewUpdateInstanceEnvRequestWithBody generates requests for UpdateInstanceEnv with any type of body
+func NewUpdateInstanceEnvRequestWithBody(server string, id string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "id", runtime.ParamLocationPath, id)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/instances/%s/env", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("PATCH", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
 // NewForkInstanceRequest calls the generic ForkInstance builder with application/json body
 func NewForkInstanceRequest(server string, id string, body ForkInstanceJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
@@ -4277,6 +4362,11 @@ type ClientWithResponsesInterface interface {
 	// GetInstanceWithResponse request
 	GetInstanceWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*GetInstanceResponse, error)
 
+	// UpdateInstanceEnvWithBodyWithResponse request with any body
+	UpdateInstanceEnvWithBodyWithResponse(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpdateInstanceEnvResponse, error)
+
+	UpdateInstanceEnvWithResponse(ctx context.Context, id string, body UpdateInstanceEnvJSONRequestBody, reqEditors ...RequestEditorFn) (*UpdateInstanceEnvResponse, error)
+
 	// ForkInstanceWithBodyWithResponse request with any body
 	ForkInstanceWithBodyWithResponse(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ForkInstanceResponse, error)
 
@@ -4910,6 +5000,31 @@ func (r GetInstanceResponse) Status() string {
 
 // StatusCode returns HTTPResponse.StatusCode
 func (r GetInstanceResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type UpdateInstanceEnvResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *Instance
+	JSON404      *Error
+	JSON409      *Error
+	JSON500      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r UpdateInstanceEnvResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r UpdateInstanceEnvResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
@@ -5699,6 +5814,23 @@ func (c *ClientWithResponses) GetInstanceWithResponse(ctx context.Context, id st
 		return nil, err
 	}
 	return ParseGetInstanceResponse(rsp)
+}
+
+// UpdateInstanceEnvWithBodyWithResponse request with arbitrary body returning *UpdateInstanceEnvResponse
+func (c *ClientWithResponses) UpdateInstanceEnvWithBodyWithResponse(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpdateInstanceEnvResponse, error) {
+	rsp, err := c.UpdateInstanceEnvWithBody(ctx, id, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUpdateInstanceEnvResponse(rsp)
+}
+
+func (c *ClientWithResponses) UpdateInstanceEnvWithResponse(ctx context.Context, id string, body UpdateInstanceEnvJSONRequestBody, reqEditors ...RequestEditorFn) (*UpdateInstanceEnvResponse, error) {
+	rsp, err := c.UpdateInstanceEnv(ctx, id, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUpdateInstanceEnvResponse(rsp)
 }
 
 // ForkInstanceWithBodyWithResponse request with arbitrary body returning *ForkInstanceResponse
@@ -6917,6 +7049,53 @@ func ParseGetInstanceResponse(rsp *http.Response) (*GetInstanceResponse, error) 
 	return response, nil
 }
 
+// ParseUpdateInstanceEnvResponse parses an HTTP response from a UpdateInstanceEnvWithResponse call
+func ParseUpdateInstanceEnvResponse(rsp *http.Response) (*UpdateInstanceEnvResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &UpdateInstanceEnvResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest Instance
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseForkInstanceResponse parses an HTTP response from a ForkInstanceWithResponse call
 func ParseForkInstanceResponse(rsp *http.Response) (*ForkInstanceResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -7994,6 +8173,9 @@ type ServerInterface interface {
 	// Get instance details
 	// (GET /instances/{id})
 	GetInstance(w http.ResponseWriter, r *http.Request, id string)
+	// Update instance environment variables
+	// (PATCH /instances/{id}/env)
+	UpdateInstanceEnv(w http.ResponseWriter, r *http.Request, id string)
 	// Fork an instance from stopped, standby, or running (with from_running=true)
 	// (POST /instances/{id}/fork)
 	ForkInstance(w http.ResponseWriter, r *http.Request, id string)
@@ -8201,6 +8383,12 @@ func (_ Unimplemented) DeleteInstance(w http.ResponseWriter, r *http.Request, id
 // Get instance details
 // (GET /instances/{id})
 func (_ Unimplemented) GetInstance(w http.ResponseWriter, r *http.Request, id string) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Update instance environment variables
+// (PATCH /instances/{id}/env)
+func (_ Unimplemented) UpdateInstanceEnv(w http.ResponseWriter, r *http.Request, id string) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -8995,6 +9183,37 @@ func (siw *ServerInterfaceWrapper) GetInstance(w http.ResponseWriter, r *http.Re
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetInstance(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateInstanceEnv operation middleware
+func (siw *ServerInterfaceWrapper) UpdateInstanceEnv(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", chi.URLParam(r, "id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateInstanceEnv(w, r, id)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -9995,6 +10214,9 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 		r.Get(options.BaseURL+"/instances/{id}", wrapper.GetInstance)
 	})
 	r.Group(func(r chi.Router) {
+		r.Patch(options.BaseURL+"/instances/{id}/env", wrapper.UpdateInstanceEnv)
+	})
+	r.Group(func(r chi.Router) {
 		r.Post(options.BaseURL+"/instances/{id}/fork", wrapper.ForkInstance)
 	})
 	r.Group(func(r chi.Router) {
@@ -10975,6 +11197,51 @@ func (response GetInstance404JSONResponse) VisitGetInstanceResponse(w http.Respo
 type GetInstance500JSONResponse Error
 
 func (response GetInstance500JSONResponse) VisitGetInstanceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateInstanceEnvRequestObject struct {
+	Id   string `json:"id"`
+	Body *UpdateInstanceEnvJSONRequestBody
+}
+
+type UpdateInstanceEnvResponseObject interface {
+	VisitUpdateInstanceEnvResponse(w http.ResponseWriter) error
+}
+
+type UpdateInstanceEnv200JSONResponse Instance
+
+func (response UpdateInstanceEnv200JSONResponse) VisitUpdateInstanceEnvResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateInstanceEnv404JSONResponse Error
+
+func (response UpdateInstanceEnv404JSONResponse) VisitUpdateInstanceEnvResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateInstanceEnv409JSONResponse Error
+
+func (response UpdateInstanceEnv409JSONResponse) VisitUpdateInstanceEnvResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateInstanceEnv500JSONResponse Error
+
+func (response UpdateInstanceEnv500JSONResponse) VisitUpdateInstanceEnvResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(500)
 
@@ -12030,6 +12297,9 @@ type StrictServerInterface interface {
 	// Get instance details
 	// (GET /instances/{id})
 	GetInstance(ctx context.Context, request GetInstanceRequestObject) (GetInstanceResponseObject, error)
+	// Update instance environment variables
+	// (PATCH /instances/{id}/env)
+	UpdateInstanceEnv(ctx context.Context, request UpdateInstanceEnvRequestObject) (UpdateInstanceEnvResponseObject, error)
 	// Fork an instance from stopped, standby, or running (with from_running=true)
 	// (POST /instances/{id}/fork)
 	ForkInstance(ctx context.Context, request ForkInstanceRequestObject) (ForkInstanceResponseObject, error)
@@ -12740,6 +13010,39 @@ func (sh *strictHandler) GetInstance(w http.ResponseWriter, r *http.Request, id 
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(GetInstanceResponseObject); ok {
 		if err := validResponse.VisitGetInstanceResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateInstanceEnv operation middleware
+func (sh *strictHandler) UpdateInstanceEnv(w http.ResponseWriter, r *http.Request, id string) {
+	var request UpdateInstanceEnvRequestObject
+
+	request.Id = id
+
+	var body UpdateInstanceEnvJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateInstanceEnv(ctx, request.(UpdateInstanceEnvRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateInstanceEnv")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateInstanceEnvResponseObject); ok {
+		if err := validResponse.VisitUpdateInstanceEnvResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -13548,43 +13851,45 @@ var swaggerSpec = []string{
 	"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",
-	"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",
+	"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",
+	"fPn/AQAA//+rdtAzoi4BAA==",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file

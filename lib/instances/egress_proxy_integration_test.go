@@ -128,6 +128,22 @@ func TestEgressProxyRewritesHTTPSHeaders(t *testing.T) {
 	require.Equal(t, 0, blockedExitCode, "curl output: %s", blockedOutput)
 	require.Equal(t, "", blockedOutput)
 
+	// Rotate credential via UpdateInstanceEnv and verify new value is injected
+	rotatedInst, err := manager.UpdateInstanceEnv(ctx, inst.Id, map[string]string{
+		"OUTBOUND_OPENAI_KEY": "rotated-key-456",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "rotated-key-456", rotatedInst.Env["OUTBOUND_OPENAI_KEY"])
+
+	rotatedCmd := fmt.Sprintf(
+		"NO_PROXY= no_proxy= curl -k -sS https://%s:%s",
+		targetHost, targetPort,
+	)
+	rotatedOutput, rotatedExitCode, err := execCommand(ctx, inst, "sh", "-lc", rotatedCmd)
+	require.NoError(t, err)
+	require.Equal(t, 0, rotatedExitCode, "curl output: %s", rotatedOutput)
+	require.Contains(t, rotatedOutput, "Bearer rotated-key-456")
+
 	require.NoError(t, manager.DeleteInstance(ctx, inst.Id))
 	deleted = true
 }

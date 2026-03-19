@@ -929,3 +929,44 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 
 	return oapiInst
 }
+
+// UpdateInstanceEnv updates environment variables on a running instance
+// and re-registers egress proxy inject rules for credential rotation.
+func (s *ApiService) UpdateInstanceEnv(ctx context.Context, request oapi.UpdateInstanceEnvRequestObject) (oapi.UpdateInstanceEnvResponseObject, error) {
+	inst := mw.GetResolvedInstance[instances.Instance](ctx)
+	if inst == nil {
+		return oapi.UpdateInstanceEnv500JSONResponse{
+			Code:    "internal_error",
+			Message: "resource not resolved",
+		}, nil
+	}
+	log := logger.FromContext(ctx)
+
+	result, err := s.InstanceManager.UpdateInstanceEnv(ctx, inst.Id, request.Body.Env)
+	if err != nil {
+		switch {
+		case errors.Is(err, instances.ErrNotFound):
+			return oapi.UpdateInstanceEnv404JSONResponse{
+				Code:    "not_found",
+				Message: err.Error(),
+			}, nil
+		case errors.Is(err, instances.ErrInvalidState):
+			return oapi.UpdateInstanceEnv409JSONResponse{
+				Code:    "invalid_state",
+				Message: err.Error(),
+			}, nil
+		case errors.Is(err, instances.ErrInvalidRequest):
+			return oapi.UpdateInstanceEnv409JSONResponse{
+				Code:    "invalid_request",
+				Message: err.Error(),
+			}, nil
+		default:
+			log.ErrorContext(ctx, "failed to update instance env", "error", err)
+			return oapi.UpdateInstanceEnv500JSONResponse{
+				Code:    "internal_error",
+				Message: "failed to update instance env",
+			}, nil
+		}
+	}
+	return oapi.UpdateInstanceEnv200JSONResponse(instanceToOAPI(*result)), nil
+}
