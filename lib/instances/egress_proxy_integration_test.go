@@ -128,6 +128,25 @@ func TestEgressProxyRewritesHTTPSHeaders(t *testing.T) {
 	require.Equal(t, 0, blockedExitCode, "curl output: %s", blockedOutput)
 	require.Equal(t, "", blockedOutput)
 
+	// --- Key rotation: update env with a new secret value ---
+	rotatedInst, err := manager.UpdateInstanceEnv(ctx, inst.Id, map[string]string{
+		"OUTBOUND_OPENAI_KEY": "rotated-key-456",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "rotated-key-456", rotatedInst.Env["OUTBOUND_OPENAI_KEY"])
+
+	// The proxy should now inject the rotated key.
+	rotatedOutput, rotatedExitCode, err := execCommand(ctx, inst, "sh", "-lc", allowedCmd)
+	require.NoError(t, err)
+	require.Equal(t, 0, rotatedExitCode, "curl output: %s", rotatedOutput)
+	require.Contains(t, rotatedOutput, "Bearer rotated-key-456")
+
+	// The guest env must NOT change (still sees mock value).
+	envAfter, envAfterCode, err := execCommand(ctx, inst, "sh", "-lc", "printf '%s' \"$OUTBOUND_OPENAI_KEY\"")
+	require.NoError(t, err)
+	require.Equal(t, 0, envAfterCode)
+	require.Equal(t, "mock-OUTBOUND_OPENAI_KEY", envAfter)
+
 	require.NoError(t, manager.DeleteInstance(ctx, inst.Id))
 	deleted = true
 }

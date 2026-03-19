@@ -41,6 +41,7 @@ type Manager interface {
 	StartInstance(ctx context.Context, id string, req StartInstanceRequest) (*Instance, error)
 	StreamInstanceLogs(ctx context.Context, id string, tail int, follow bool, source LogSource) (<-chan string, error)
 	RotateLogs(ctx context.Context, maxBytes int64, maxFiles int) error
+	UpdateInstanceEnv(ctx context.Context, id string, env map[string]string) (*Instance, error)
 	AttachVolume(ctx context.Context, id string, volumeId string, req AttachVolumeRequest) (*Instance, error)
 	DetachVolume(ctx context.Context, id string, volumeId string) (*Instance, error)
 	// ListInstanceAllocations returns resource allocations for all instances.
@@ -439,6 +440,49 @@ func (m *manager) RotateLogs(ctx context.Context, maxBytes int64, maxFiles int) 
 		}
 	}
 	return lastErr
+}
+
+// UpdateInstanceEnv replaces the instance's env vars, re-validates credential
+// bindings, persists the change, and atomically updates the egress proxy inject
+// rules so rotated secrets take effect without a restart.
+func (m *manager) UpdateInstanceEnv(ctx context.Context, id string, env map[string]string) (*Instance, error) {
+	lock := m.getInstanceLock(id)
+	lock.Lock()
+	defer lock.Unlock()
+	return m.updateInstanceEnv(ctx, id, env)
+}
+
+func (m *manager) updateInstanceEnv(ctx context.Context, id string, env map[string]string) (*Instance, error) {
+	meta, err := m.loadMetadata(id)
+	if err != nil {
+		return nil, err
+	}
+
+	// Validate credential bindings against the new env.
+	if len(meta.Credentials) > 0 {
+		if err := validateCredentialEnvBindings(meta.Credentials, env); err != nil {
+			return nil, err
+		}
+	}
+
+	meta.Env = env
+	if err := m.saveMetadata(meta); err != nil {
+		return nil, fmt.Errorf("persist env update: %w", err)
+	}
+
+	// If the egress proxy is active, update inject rules in-place.
+	if meta.NetworkEgress != nil && meta.NetworkEgress.Enabled && len(meta.Credentials) > 0 {
+		svc, err := m.getOrCreateEgressProxyService()
+		if err != nil {
+			return nil, fmt.Errorf("get egress proxy service: %w", err)
+		}
+		rules := buildEgressProxyInjectRules(meta.NetworkEgress, meta.Credentials, meta.Env)
+		if err := svc.UpdateInjectRules(id, rules); err != nil {
+			return nil, fmt.Errorf("update egress proxy inject rules: %w", err)
+		}
+	}
+
+	return m.getInstance(ctx, id)
 }
 
 // AttachVolume attaches a volume to an instance (not yet implemented)

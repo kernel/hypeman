@@ -217,6 +217,27 @@ func compileHeaderInjectRules(cfgRules []HeaderInjectRuleConfig) ([]headerInject
 	return out, nil
 }
 
+// UpdateInjectRules atomically replaces the header-inject rules for a
+// registered instance.  Unlike RegisterInstance it does NOT re-apply iptables
+// enforcement, which makes it suitable for credential rotation on a running VM.
+// Returns ErrInstanceNotRegistered if the instance has not been registered.
+func (s *Service) UpdateInjectRules(instanceID string, rules []HeaderInjectRuleConfig) error {
+	compiled, err := compileHeaderInjectRules(rules)
+	if err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	sourceIP, ok := s.sourceIPByInstance[instanceID]
+	if !ok {
+		return ErrInstanceNotRegistered
+	}
+	s.policiesBySourceIP[sourceIP] = sourcePolicy{headerInjectRules: compiled}
+	return nil
+}
+
 func (s *Service) UnregisterInstance(_ context.Context, instanceID string) {
 	s.mu.Lock()
 	sourceIP, ok := s.sourceIPByInstance[instanceID]

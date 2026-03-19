@@ -798,6 +798,48 @@ func (s *ApiService) StatInstancePath(ctx context.Context, request oapi.StatInst
 	return response, nil
 }
 
+// UpdateInstanceEnv replaces the instance's env vars and updates egress proxy rules.
+// The id parameter can be an instance ID, name, or ID prefix.
+// Note: Resolution is handled by ResolveResource middleware.
+func (s *ApiService) UpdateInstanceEnv(ctx context.Context, request oapi.UpdateInstanceEnvRequestObject) (oapi.UpdateInstanceEnvResponseObject, error) {
+	inst := mw.GetResolvedInstance[instances.Instance](ctx)
+	if inst == nil {
+		return oapi.UpdateInstanceEnv500JSONResponse{
+			Code:    "internal_error",
+			Message: "resource not resolved",
+		}, nil
+	}
+	log := logger.FromContext(ctx)
+
+	result, err := s.InstanceManager.UpdateInstanceEnv(ctx, inst.Id, request.Body.Env)
+	if err != nil {
+		switch {
+		case errors.Is(err, instances.ErrNotFound):
+			return oapi.UpdateInstanceEnv404JSONResponse{
+				Code:    "not_found",
+				Message: "instance not found",
+			}, nil
+		case errors.Is(err, instances.ErrInvalidRequest):
+			return oapi.UpdateInstanceEnv400JSONResponse{
+				Code:    "invalid_request",
+				Message: err.Error(),
+			}, nil
+		case errors.Is(err, instances.ErrInvalidState):
+			return oapi.UpdateInstanceEnv409JSONResponse{
+				Code:    "invalid_state",
+				Message: err.Error(),
+			}, nil
+		default:
+			log.ErrorContext(ctx, "failed to update instance env", "error", err)
+			return oapi.UpdateInstanceEnv500JSONResponse{
+				Code:    "internal_error",
+				Message: "failed to update instance env",
+			}, nil
+		}
+	}
+	return oapi.UpdateInstanceEnv200JSONResponse(instanceToOAPI(*result)), nil
+}
+
 // AttachVolume attaches a volume to an instance (not yet implemented)
 func (s *ApiService) AttachVolume(ctx context.Context, request oapi.AttachVolumeRequestObject) (oapi.AttachVolumeResponseObject, error) {
 	return oapi.AttachVolume500JSONResponse{

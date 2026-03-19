@@ -120,3 +120,38 @@ func TestHandleHTTPProxyRequest_DoesNotLeakUpstreamErrorDetails(t *testing.T) {
 	require.NotContains(t, body, "dial failed")
 	require.False(t, strings.Contains(body, "internal network detail"))
 }
+
+func TestUpdateInjectRules(t *testing.T) {
+	t.Parallel()
+
+	matchers, err := compileDomainMatchers([]string{"api.openai.com"})
+	require.NoError(t, err)
+
+	svc := &Service{
+		sourceIPByInstance: map[string]string{
+			"inst-1": "10.0.0.2",
+		},
+		policiesBySourceIP: map[string]sourcePolicy{
+			"10.0.0.2": {
+				headerInjectRules: []headerInjectRule{
+					{headerName: "Authorization", headerValue: "Bearer old-key", domainMatchers: matchers},
+				},
+			},
+		},
+	}
+
+	// Update with a new key value.
+	err = svc.UpdateInjectRules("inst-1", []HeaderInjectRuleConfig{
+		{HeaderName: "Authorization", HeaderValue: "Bearer rotated-key", AllowedDomains: []string{"api.openai.com"}},
+	})
+	require.NoError(t, err)
+
+	// Verify the policy was swapped.
+	hdr := http.Header{}
+	svc.applyHeaderInjections("10.0.0.2", "api.openai.com", hdr, true)
+	require.Equal(t, "Bearer rotated-key", hdr.Get("Authorization"))
+
+	// Unregistered instance returns an error.
+	err = svc.UpdateInjectRules("no-such-instance", nil)
+	require.ErrorIs(t, err, ErrInstanceNotRegistered)
+}

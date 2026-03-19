@@ -7,7 +7,8 @@ const (
 )
 
 var (
-	ErrGatewayMismatch = errors.New("egress proxy already initialized with different gateway")
+	ErrGatewayMismatch       = errors.New("egress proxy already initialized with different gateway")
+	ErrInstanceNotRegistered = errors.New("instance not registered with egress proxy")
 )
 
 // InstanceConfig defines per-instance proxy behavior.
