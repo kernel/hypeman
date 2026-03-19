@@ -20,6 +20,7 @@ import (
 
 // waitForExecAgent polls until exec-agent is ready
 func waitForExecAgent(ctx context.Context, mgr *manager, instanceID string, timeout time.Duration) error {
+	timeout = integrationTestTimeout(timeout)
 	deadline := time.Now().Add(timeout)
 	lastState := StateUnknown
 	var lastErr error
