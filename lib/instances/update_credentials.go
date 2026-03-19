@@ -8,10 +8,12 @@ import (
 	"github.com/kernel/hypeman/lib/logger"
 )
 
-// updateCredentials replaces the credential policies for an instance.
-// If the instance has an active egress proxy registration (i.e., it is running),
-// the proxy policy is updated atomically. For stopped/standby instances, only
-// the stored metadata is updated — the proxy policy will be applied on next start/restore.
+// updateCredentials merges credential policies into an instance's existing set.
+// Credentials included in the request are added or updated by name; credentials
+// not mentioned are left unchanged. If the instance has an active egress proxy
+// registration (i.e., it is running), the proxy policy is updated atomically.
+// For stopped/standby instances, only the stored metadata is updated — the proxy
+// policy will be applied on next start/restore.
 func (m *manager) updateCredentials(ctx context.Context, id string, req UpdateCredentialsRequest) (*Instance, error) {
 	log := logger.FromContext(ctx)
 	log.InfoContext(ctx, "updating credentials", "instance_id", id)
@@ -30,14 +32,13 @@ func (m *manager) updateCredentials(ctx context.Context, id string, req UpdateCr
 		}
 	}
 
-	// 3. Normalize and validate credential policies
+	// 3. Normalize and validate the incoming credential policies
 	normalized, err := normalizeCredentialPolicies(req.Credentials)
 	if err != nil {
 		return nil, err
 	}
 
-	// 4. Validate credential env bindings against the provided env map
-	// Merge stored env with request env (request values override stored values)
+	// 4. Merge env: stored env + request env (request values override)
 	mergedEnv := make(map[string]string, len(stored.Env)+len(req.Env))
 	for k, v := range stored.Env {
 		mergedEnv[k] = v
@@ -46,14 +47,24 @@ func (m *manager) updateCredentials(ctx context.Context, id string, req UpdateCr
 		mergedEnv[k] = v
 	}
 
-	if len(normalized) > 0 {
-		if err := validateCredentialEnvBindings(normalized, mergedEnv); err != nil {
+	// 5. Merge credentials: start from existing, overlay with incoming
+	mergedCreds := cloneCredentialPolicies(stored.Credentials)
+	if mergedCreds == nil {
+		mergedCreds = make(map[string]CredentialPolicy)
+	}
+	for name, policy := range normalized {
+		mergedCreds[name] = policy
+	}
+
+	// 6. Validate env bindings for the full merged credential set
+	if len(mergedCreds) > 0 {
+		if err := validateCredentialEnvBindings(mergedCreds, mergedEnv); err != nil {
 			return nil, err
 		}
 	}
 
-	// 5. Update stored metadata
-	stored.Credentials = cloneCredentialPolicies(normalized)
+	// 7. Update stored metadata
+	stored.Credentials = mergedCreds
 	stored.Env = mergedEnv
 
 	// 6. Update proxy policy if instance has an active egress proxy registration

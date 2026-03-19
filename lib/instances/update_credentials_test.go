@@ -82,7 +82,7 @@ func TestUpdateCredentials_ValidatesEnvBinding(t *testing.T) {
 	assert.Contains(t, err.Error(), "must be present in env")
 }
 
-func TestUpdateCredentials_ClearsCredentials(t *testing.T) {
+func TestUpdateCredentials_PreservesExistingWhenNilRequest(t *testing.T) {
 	t.Parallel()
 
 	m := setupCredentialsTestManager(t, &metadata{
@@ -103,6 +103,7 @@ func TestUpdateCredentials_ClearsCredentials(t *testing.T) {
 		},
 	})
 
+	// PATCH with nil credentials should preserve existing credentials
 	result, err := m.updateCredentials(t.Context(), "test-inst", UpdateCredentialsRequest{
 		Credentials: nil,
 		Env:         map[string]string{},
@@ -112,7 +113,120 @@ func TestUpdateCredentials_ClearsCredentials(t *testing.T) {
 
 	reloaded, err := m.loadMetadata("test-inst")
 	require.NoError(t, err)
-	assert.Empty(t, reloaded.StoredMetadata.Credentials)
+	require.Len(t, reloaded.StoredMetadata.Credentials, 1)
+	_, ok := reloaded.StoredMetadata.Credentials["MY_KEY"]
+	assert.True(t, ok, "existing credential should be preserved")
+}
+
+func TestUpdateCredentials_MergesNewCredentialWithExisting(t *testing.T) {
+	t.Parallel()
+
+	m := setupCredentialsTestManager(t, &metadata{
+		StoredMetadata: StoredMetadata{
+			Id:             "test-inst",
+			Name:           "test",
+			NetworkEnabled: true,
+			NetworkEgress:  &NetworkEgressPolicy{Enabled: true},
+			Env: map[string]string{
+				"OPENAI_KEY":  "openai-secret",
+				"ANTHROPIC_KEY": "anthropic-secret",
+			},
+			Credentials: map[string]CredentialPolicy{
+				"OPENAI_KEY": {
+					Source: CredentialSource{Env: "OPENAI_KEY"},
+					Inject: []CredentialInjectRule{
+						{
+							Hosts: []string{"api.openai.com"},
+							As:    CredentialInjectAs{Header: "Authorization", Format: "Bearer ${value}"},
+						},
+					},
+				},
+			},
+		},
+	})
+
+	// PATCH: add a new credential without touching the existing one
+	result, err := m.updateCredentials(t.Context(), "test-inst", UpdateCredentialsRequest{
+		Credentials: map[string]CredentialPolicy{
+			"ANTHROPIC_KEY": {
+				Source: CredentialSource{Env: "ANTHROPIC_KEY"},
+				Inject: []CredentialInjectRule{
+					{
+						Hosts: []string{"api.anthropic.com"},
+						As:    CredentialInjectAs{Header: "x-api-key", Format: "${value}"},
+					},
+				},
+			},
+		},
+		Env: map[string]string{},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	reloaded, err := m.loadMetadata("test-inst")
+	require.NoError(t, err)
+	require.Len(t, reloaded.StoredMetadata.Credentials, 2)
+
+	// Existing credential preserved
+	openai, ok := reloaded.StoredMetadata.Credentials["OPENAI_KEY"]
+	require.True(t, ok, "existing OPENAI_KEY credential should be preserved")
+	assert.Equal(t, "OPENAI_KEY", openai.Source.Env)
+	assert.Equal(t, []string{"api.openai.com"}, openai.Inject[0].Hosts)
+
+	// New credential added
+	anthropic, ok := reloaded.StoredMetadata.Credentials["ANTHROPIC_KEY"]
+	require.True(t, ok, "new ANTHROPIC_KEY credential should be added")
+	assert.Equal(t, "ANTHROPIC_KEY", anthropic.Source.Env)
+	assert.Equal(t, []string{"api.anthropic.com"}, anthropic.Inject[0].Hosts)
+}
+
+func TestUpdateCredentials_OverridesExistingByName(t *testing.T) {
+	t.Parallel()
+
+	m := setupCredentialsTestManager(t, &metadata{
+		StoredMetadata: StoredMetadata{
+			Id:             "test-inst",
+			Name:           "test",
+			NetworkEnabled: true,
+			NetworkEgress:  &NetworkEgressPolicy{Enabled: true},
+			Env:            map[string]string{"MY_KEY": "old-secret"},
+			Credentials: map[string]CredentialPolicy{
+				"MY_KEY": {
+					Source: CredentialSource{Env: "MY_KEY"},
+					Inject: []CredentialInjectRule{
+						{
+							Hosts: []string{"api.old.com"},
+							As:    CredentialInjectAs{Header: "Authorization", Format: "Bearer ${value}"},
+						},
+					},
+				},
+			},
+		},
+	})
+
+	// PATCH: update existing credential with new hosts
+	result, err := m.updateCredentials(t.Context(), "test-inst", UpdateCredentialsRequest{
+		Credentials: map[string]CredentialPolicy{
+			"MY_KEY": {
+				Source: CredentialSource{Env: "MY_KEY"},
+				Inject: []CredentialInjectRule{
+					{
+						Hosts: []string{"api.new.com"},
+						As:    CredentialInjectAs{Header: "Authorization", Format: "Bearer ${value}"},
+					},
+				},
+			},
+		},
+		Env: map[string]string{},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	reloaded, err := m.loadMetadata("test-inst")
+	require.NoError(t, err)
+	require.Len(t, reloaded.StoredMetadata.Credentials, 1)
+	policy := reloaded.StoredMetadata.Credentials["MY_KEY"]
+	assert.Equal(t, []string{"api.new.com"}, policy.Inject[0].Hosts, "credential should be updated with new hosts")
 }
 
 func TestUpdateCredentials_MergesEnv(t *testing.T) {
