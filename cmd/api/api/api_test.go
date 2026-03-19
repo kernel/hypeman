@@ -153,6 +153,7 @@ func ctxWithImage(svc *ApiService, name string) context.Context {
 // Returns the image name on success, or fails the test on error/timeout.
 func createAndWaitForImage(t *testing.T, svc *ApiService, imageName string, timeout time.Duration) string {
 	t.Helper()
+	imageName = apiTestImageRef(t, imageName)
 
 	t.Logf("Creating image %s...", imageName)
 	imgResp, err := svc.CreateImage(ctx(), oapi.CreateImageRequestObject{

@@ -52,7 +52,7 @@ func TestRegistryPushAndConvert(t *testing.T) {
 
 	// Pull a small image from Docker Hub to push to our registry
 	t.Log("Pulling alpine:latest from Docker Hub...")
-	srcRef, err := name.ParseReference("docker.io/library/alpine:latest")
+	srcRef, err := name.ParseReference(apiTestImageRef(t, "docker.io/library/alpine:latest"))
 	require.NoError(t, err)
 
 	img, err := remote.Image(srcRef, remote.WithAuthFromKeychain(authn.DefaultKeychain))
@@ -110,7 +110,7 @@ func TestRegistryPushAndCreateInstance(t *testing.T) {
 
 	// Pull and push alpine
 	t.Log("Pulling alpine:latest...")
-	srcRef, err := name.ParseReference("docker.io/library/alpine:latest")
+	srcRef, err := name.ParseReference(apiTestImageRef(t, "docker.io/library/alpine:latest"))
 	require.NoError(t, err)
 
 	img, err := remote.Image(srcRef, remote.WithAuthFromKeychain(authn.DefaultKeychain))
@@ -142,9 +142,10 @@ func TestRegistryPushAndCreateInstance(t *testing.T) {
 			Image: imageName,
 			Cmd:   &cmd,
 			Network: &struct {
-				BandwidthDownload *string `json:"bandwidth_download,omitempty"`
-				BandwidthUpload   *string `json:"bandwidth_upload,omitempty"`
-				Enabled           *bool   `json:"enabled,omitempty"`
+				BandwidthDownload *string                                  `json:"bandwidth_download,omitempty"`
+				BandwidthUpload   *string                                  `json:"bandwidth_upload,omitempty"`
+				Egress            *oapi.CreateInstanceRequestNetworkEgress `json:"egress,omitempty"`
+				Enabled           *bool                                    `json:"enabled,omitempty"`
 			}{
 				Enabled: &networkEnabled,
 			},
@@ -184,7 +185,7 @@ func TestRegistryLayerCaching(t *testing.T) {
 
 	// Pull alpine image from Docker Hub
 	t.Log("Pulling alpine:latest from Docker Hub...")
-	srcRef, err := name.ParseReference("docker.io/library/alpine:latest")
+	srcRef, err := name.ParseReference(apiTestImageRef(t, "docker.io/library/alpine:latest"))
 	require.NoError(t, err)
 
 	img, err := remote.Image(srcRef, remote.WithAuthFromKeychain(authn.DefaultKeychain))
@@ -268,7 +269,7 @@ func TestRegistrySharedLayerCaching(t *testing.T) {
 
 	// Pull alpine image (this will be our base)
 	t.Log("Pulling alpine:latest...")
-	alpineRef, err := name.ParseReference("docker.io/library/alpine:latest")
+	alpineRef, err := name.ParseReference(apiTestImageRef(t, "docker.io/library/alpine:latest"))
 	require.NoError(t, err)
 	alpineImg, err := remote.Image(alpineRef, remote.WithAuthFromKeychain(authn.DefaultKeychain))
 	require.NoError(t, err)
@@ -300,7 +301,7 @@ func TestRegistrySharedLayerCaching(t *testing.T) {
 	// Now pull a different alpine-based image (e.g., alpine:3.18)
 	// which should share the base layer with alpine:latest
 	t.Log("Pulling alpine:3.18 (shares base layer)...")
-	alpine318Ref, err := name.ParseReference("docker.io/library/alpine:3.18")
+	alpine318Ref, err := name.ParseReference(apiTestImageRef(t, "docker.io/library/alpine:3.18"))
 	require.NoError(t, err)
 	alpine318Img, err := remote.Image(alpine318Ref, remote.WithAuthFromKeychain(authn.DefaultKeychain))
 	require.NoError(t, err)
@@ -350,7 +351,7 @@ func TestRegistryTagPush(t *testing.T) {
 
 	// Pull alpine image from Docker Hub
 	t.Log("Pulling alpine:latest from Docker Hub...")
-	srcRef, err := name.ParseReference("docker.io/library/alpine:latest")
+	srcRef, err := name.ParseReference(apiTestImageRef(t, "docker.io/library/alpine:latest"))
 	require.NoError(t, err)
 
 	img, err := remote.Image(srcRef, remote.WithAuthFromKeychain(authn.DefaultKeychain))
@@ -404,7 +405,7 @@ func TestRegistryDockerV2ManifestConversion(t *testing.T) {
 
 	// Pull alpine image from Docker Hub (OCI format)
 	t.Log("Pulling alpine:latest from Docker Hub...")
-	srcRef, err := name.ParseReference("docker.io/library/alpine:latest")
+	srcRef, err := name.ParseReference(apiTestImageRef(t, "docker.io/library/alpine:latest"))
 	require.NoError(t, err)
 
 	img, err := remote.Image(srcRef, remote.WithAuthFromKeychain(authn.DefaultKeychain))

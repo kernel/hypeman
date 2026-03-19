@@ -135,6 +135,41 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 	if request.Body.Network != nil && request.Body.Network.Enabled != nil {
 		networkEnabled = *request.Body.Network.Enabled
 	}
+	var networkEgress *instances.NetworkEgressPolicy
+	if request.Body.Network != nil && request.Body.Network.Egress != nil {
+		enabled := request.Body.Network.Egress.Enabled != nil && *request.Body.Network.Egress.Enabled
+		networkEgress = &instances.NetworkEgressPolicy{Enabled: enabled}
+		if request.Body.Network.Egress.Enforcement != nil && request.Body.Network.Egress.Enforcement.Mode != nil {
+			networkEgress.EnforcementMode = instances.EgressEnforcementMode(*request.Body.Network.Egress.Enforcement.Mode)
+		} else if enabled {
+			networkEgress.EnforcementMode = instances.EgressEnforcementModeAll
+		}
+	}
+	var credentials map[string]instances.CredentialPolicy
+	if request.Body.Credentials != nil {
+		credentials = make(map[string]instances.CredentialPolicy, len(*request.Body.Credentials))
+		for credentialName, credential := range *request.Body.Credentials {
+			policy := instances.CredentialPolicy{
+				Source: instances.CredentialSource{
+					Env: credential.Source.Env,
+				},
+				Inject: make([]instances.CredentialInjectRule, 0, len(credential.Inject)),
+			}
+			for _, inject := range credential.Inject {
+				rule := instances.CredentialInjectRule{
+					As: instances.CredentialInjectAs{
+						Header: inject.As.Header,
+						Format: inject.As.Format,
+					},
+				}
+				if inject.Hosts != nil {
+					rule.Hosts = append([]string(nil), (*inject.Hosts)...)
+				}
+				policy.Inject = append(policy.Inject, rule)
+			}
+			credentials[credentialName] = policy
+		}
+	}
 
 	// Parse network bandwidth limits (0 = auto)
 	// Supports both bit-based (e.g., "1Gbps") and byte-based (e.g., "125MB/s") formats
@@ -255,6 +290,8 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		Env:                      env,
 		Tags:                     resourceTags,
 		NetworkEnabled:           networkEnabled,
+		NetworkEgress:            networkEgress,
+		Credentials:              credentials,
 		Devices:                  deviceRefs,
 		Volumes:                  volumes,
 		Hypervisor:               hvType,

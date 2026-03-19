@@ -41,6 +41,13 @@ func runExecMode(log *Logger, cfg *vmconfig.Config) {
 		dropToShell()
 	}
 
+	if err := installEgressProxyCA(log, cfg); err != nil {
+		log.Error("hypeman-init:egress-proxy", "egress proxy CA certificate setup failed", err)
+		log.Info("hypeman-init:entrypoint", formatExitSentinel(78, fmt.Sprintf("egress proxy CA certificate setup failed: %v", err)))
+		syscall.Sync()
+		syscall.Reboot(syscall.LINUX_REBOOT_CMD_POWER_OFF)
+	}
+
 	// Set up environment
 	os.Setenv("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 	os.Setenv("HOME", "/root")
