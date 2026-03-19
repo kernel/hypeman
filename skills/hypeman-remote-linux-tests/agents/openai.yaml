@@ -1,0 +1,4 @@
+interface:
+  display_name: "Hypeman Remote Linux Tests"
+  short_description: "Run Hypeman tests on a remote Linux hypervisor host"
+  default_prompt: "Run Hypeman tests on a remote Linux host, prepare prerequisites, and report actionable failures."

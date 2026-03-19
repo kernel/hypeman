@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/kernel/hypeman/lib/hypervisor"
 	snapshotstore "github.com/kernel/hypeman/lib/snapshot"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -84,6 +85,33 @@ func TestResolveSnapshotCompressionPolicyPrecedence(t *testing.T) {
 	assert.Equal(t, snapshotstore.SnapshotCompressionAlgorithmZstd, cfg.Algorithm)
 	require.NotNil(t, cfg.Level)
 	assert.Equal(t, 2, *cfg.Level)
+}
+
+func TestResolveStandbyCompressionPolicyCloudHypervisorDefault(t *testing.T) {
+	t.Parallel()
+
+	m := &manager{}
+
+	cfg, err := m.resolveStandbyCompressionPolicy(&StoredMetadata{
+		HypervisorType: hypervisor.TypeCloudHypervisor,
+	}, nil)
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+	assert.True(t, cfg.Enabled)
+	assert.Equal(t, snapshotstore.SnapshotCompressionAlgorithmLz4, cfg.Algorithm)
+	assert.Nil(t, cfg.Level)
+
+	cfg, err = m.resolveStandbyCompressionPolicy(&StoredMetadata{
+		HypervisorType: hypervisor.TypeCloudHypervisor,
+	}, &snapshotstore.SnapshotCompressionConfig{Enabled: false})
+	require.NoError(t, err)
+	assert.Nil(t, cfg)
+
+	cfg, err = m.resolveStandbyCompressionPolicy(&StoredMetadata{
+		HypervisorType: hypervisor.TypeQEMU,
+	}, nil)
+	require.NoError(t, err)
+	assert.Nil(t, cfg)
 }
 
 func TestValidateCreateRequestSnapshotPolicy(t *testing.T) {

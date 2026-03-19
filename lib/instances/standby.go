@@ -62,13 +62,11 @@ func (m *manager) standbyInstance(
 	// fails before any state transition side effects.
 	var compressionPolicy *snapshotstore.SnapshotCompressionConfig
 	if !skipCompression {
-		policy, err := m.resolveSnapshotCompressionPolicy(stored, req.Compression)
+		policy, err := m.resolveStandbyCompressionPolicy(stored, req.Compression)
 		if err != nil {
 			return nil, err
 		}
-		if policy.Enabled {
-			compressionPolicy = &policy
-		}
+		compressionPolicy = policy
 	}
 
 	// 3. Get network allocation BEFORE killing VMM (while we can still query it)

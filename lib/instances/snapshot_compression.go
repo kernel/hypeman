@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
 	snapshotstore "github.com/kernel/hypeman/lib/snapshot"
 	"github.com/klauspost/compress/zstd"
@@ -103,6 +104,55 @@ func (m *manager) resolveSnapshotCompressionPolicy(stored *StoredMetadata, overr
 	return snapshotstore.SnapshotCompressionConfig{Enabled: false}, nil
 }
 
+func defaultCloudHypervisorStandbyCompressionPolicy() snapshotstore.SnapshotCompressionConfig {
+	return snapshotstore.SnapshotCompressionConfig{
+		Enabled:   true,
+		Algorithm: snapshotstore.SnapshotCompressionAlgorithmLz4,
+	}
+}
+
+func (m *manager) resolveStandbyCompressionPolicy(stored *StoredMetadata, override *snapshotstore.SnapshotCompressionConfig) (*snapshotstore.SnapshotCompressionConfig, error) {
+	if override != nil {
+		cfg, err := normalizeCompressionConfig(override)
+		if err != nil {
+			return nil, err
+		}
+		if !cfg.Enabled {
+			return nil, nil
+		}
+		return &cfg, nil
+	}
+
+	if stored != nil && stored.SnapshotPolicy != nil && stored.SnapshotPolicy.Compression != nil {
+		cfg, err := normalizeCompressionConfig(stored.SnapshotPolicy.Compression)
+		if err != nil {
+			return nil, err
+		}
+		if !cfg.Enabled {
+			return nil, nil
+		}
+		return &cfg, nil
+	}
+
+	if m.snapshotDefaults.Compression != nil {
+		cfg, err := normalizeCompressionConfig(m.snapshotDefaults.Compression)
+		if err != nil {
+			return nil, err
+		}
+		if !cfg.Enabled {
+			return nil, nil
+		}
+		return &cfg, nil
+	}
+
+	if stored != nil && stored.HypervisorType == hypervisor.TypeCloudHypervisor {
+		cfg := defaultCloudHypervisorStandbyCompressionPolicy()
+		return &cfg, nil
+	}
+
+	return nil, nil
+}
+
 func (m *manager) snapshotJobKeyForInstance(instanceID string) string {
 	return "instance:" + instanceID
 }
@@ -192,10 +242,32 @@ func (m *manager) waitCompressionJob(key string, timeout time.Duration) {
 	}
 }
 
-func (m *manager) ensureSnapshotMemoryReady(ctx context.Context, snapshotDir, jobKey string) error {
+func (m *manager) waitCompressionJobContext(ctx context.Context, key string) error {
+	m.compressionMu.Lock()
+	job := m.compressionJobs[key]
+	m.compressionMu.Unlock()
+	if job == nil {
+		return nil
+	}
+
+	select {
+	case <-job.done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (m *manager) ensureSnapshotMemoryReady(ctx context.Context, snapshotDir, jobKey string, waitForCompression bool) error {
 	if jobKey != "" {
-		m.cancelCompressionJob(jobKey)
-		m.waitCompressionJob(jobKey, 2*time.Second)
+		if waitForCompression {
+			if err := m.waitCompressionJobContext(ctx, jobKey); err != nil {
+				return err
+			}
+		} else {
+			m.cancelCompressionJob(jobKey)
+			m.waitCompressionJob(jobKey, 2*time.Second)
+		}
 	}
 
 	if _, ok := findRawSnapshotMemoryFile(snapshotDir); ok {
@@ -269,8 +341,8 @@ func compressSnapshotMemoryFile(ctx context.Context, rawPath string, cfg snapsho
 
 	compressedPath := compressedPathFor(rawPath, cfg.Algorithm)
 	tmpPath := compressedPath + ".tmp"
+	removeCompressedSnapshotArtifacts(rawPath)
 	_ = os.Remove(tmpPath)
-	_ = os.Remove(compressedPath)
 
 	if err := runCompression(ctx, rawPath, tmpPath, cfg); err != nil {
 		_ = os.Remove(tmpPath)
@@ -323,6 +395,9 @@ func runCompression(ctx context.Context, srcPath, dstPath string, cfg snapshotst
 		}
 	case snapshotstore.SnapshotCompressionAlgorithmLz4:
 		enc := lz4.NewWriter(dst)
+		if err := enc.Apply(lz4.CompressionLevelOption(lz4.Fast)); err != nil {
+			return fmt.Errorf("configure lz4 encoder: %w", err)
+		}
 		if err := copyWithContext(ctx, enc, src); err != nil {
 			_ = enc.Close()
 			return err
@@ -376,6 +451,7 @@ func decompressSnapshotMemoryFile(ctx context.Context, compressedPath string, al
 		_ = os.Remove(tmpRawPath)
 		return fmt.Errorf("finalize decompressed snapshot: %w", err)
 	}
+	removeCompressedSnapshotArtifacts(rawPath)
 	return nil
 }
 
@@ -385,6 +461,17 @@ func compressedPathFor(rawPath string, algorithm snapshotstore.SnapshotCompressi
 		return rawPath + ".lz4"
 	default:
 		return rawPath + ".zst"
+	}
+}
+
+func removeCompressedSnapshotArtifacts(rawPath string) {
+	for _, path := range []string{
+		rawPath + ".zst",
+		rawPath + ".zst.tmp",
+		rawPath + ".lz4",
+		rawPath + ".lz4.tmp",
+	} {
+		_ = os.Remove(path)
 	}
 }
 

@@ -31,6 +31,63 @@ Snapshots are immutable point-in-time captures of a VM that can later be:
 - `Stopped` snapshot from `Stopped`:
   - snapshot payload is copied directly
 
+## Snapshot Compression
+
+Snapshot memory compression is optional and is **off by default**.
+
+The current exception is cloud-hypervisor standby snapshots: if no request, instance,
+or server policy is set, Hypeman defaults that path to `lz4` so standby snapshots
+store compressed guest memory by default on Linux.
+
+- Compression applies only to `Standby` snapshots, because only standby snapshots contain guest memory state.
+- `Stopped` snapshots cannot use compression because they do not include resumable RAM state.
+- Compression affects only the memory snapshot file, not the entire snapshot directory.
+
+### When compression runs
+
+- A standby operation can request compression explicitly.
+- A snapshot create request can request compression explicitly.
+- If the request does not specify compression, Hypeman falls back to:
+  - the instance's `snapshot_policy`
+  - then the server's global `snapshot.compression_default`
+- Effective precedence is:
+  - request override
+  - instance default
+  - server default
+  - then the cloud-hypervisor standby fallback (`lz4`) when no other policy is set
+
+Compression runs **asynchronously after the snapshot is already durable on disk**.
+
+- This keeps the standby path fast.
+- While compression is running, the snapshot remains valid and reports `compression_state=compressing`.
+- Once finished, the snapshot reports `compression_state=compressed` and exposes compressed/uncompressed size metadata.
+- If compression fails, the snapshot reports `compression_state=error` and keeps the error message for inspection.
+
+### Restore behavior with compressed snapshots
+
+Restore prefers correctness first and resume latency second.
+
+- If a restore starts while compression is still running, Hypeman will not let restore race the compressor.
+- For cloud-hypervisor standby restores, Hypeman waits for the in-flight compression job to finish.
+- For the other hypervisors, Hypeman cancels the in-flight compression job and waits briefly for it to stop.
+- If the snapshot memory has already been compressed, Hypeman expands it back to the raw memory file before asking the hypervisor to restore.
+- This means compression is never allowed to race with restore.
+
+In practice, the tradeoff is:
+
+- standby stays fast because compression is not on the hot path
+- restore from a compressed standby snapshot pays decompression cost
+- restore from an uncompressed standby snapshot avoids that cost entirely
+
+### Supported algorithms
+
+- `zstd`
+  - default when compression is enabled
+  - supports configurable levels
+- `lz4`
+  - optimized for lower decompression overhead
+  - does not currently accept a level setting
+
 ### Restore (in-place)
 - Restore always applies to the original source VM.
 - Source VM must not be `Running`.
