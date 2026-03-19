@@ -39,9 +39,9 @@ data_dir: /var/lib/hypeman
 #       pressure_high_watermark_available_percent: 10
 #       pressure_low_watermark_available_percent: 15
 #       protected_floor_percent: 50
-#       protected_floor_min_bytes: 512MiB
-#       min_adjustment_bytes: 64MiB
-#       per_vm_max_step_bytes: 256MiB
+#       protected_floor_min_bytes: 512MB
+#       min_adjustment_bytes: 64MB
+#       per_vm_max_step_bytes: 256MB
 #       per_vm_cooldown: 5s
 
 # =============================================================================

@@ -35,9 +35,9 @@ hypervisor:
       pressure_high_watermark_available_percent: 10
       pressure_low_watermark_available_percent: 15
       protected_floor_percent: 50
-      protected_floor_min_bytes: 512MiB
-      min_adjustment_bytes: 64MiB
-      per_vm_max_step_bytes: 256MiB
+      protected_floor_min_bytes: 512MB
+      min_adjustment_bytes: 64MB
+      per_vm_max_step_bytes: 256MB
       per_vm_cooldown: 5s
 ```
 
@@ -77,7 +77,7 @@ Active reclaim never shrinks a guest below its protected floor:
 Example:
 
 - a 4 GiB guest with `protected_floor_percent=50` has a 2 GiB floor
-- if `protected_floor_min_bytes=512MiB`, the effective floor is still 2 GiB
+- if `protected_floor_min_bytes=512MB`, the effective floor is still 2 GiB
 - Hypeman can reclaim at most 2 GiB from that guest
 
 Reclaim is also rate-limited:
