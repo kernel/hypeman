@@ -59,6 +59,8 @@ store compressed guest memory by default on Linux.
 Compression runs **asynchronously after the snapshot is already durable on disk**.
 
 - This keeps the standby path fast.
+- Standby can return successfully while compression is still running in the background.
+- That means a later restore can arrive before compression has finished.
 - While compression is running, the snapshot remains valid and reports `compression_state=compressing`.
 - Once finished, the snapshot reports `compression_state=compressed` and exposes compressed/uncompressed size metadata.
 - If compression fails, the snapshot reports `compression_state=error` and keeps the error message for inspection.
