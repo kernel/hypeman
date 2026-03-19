@@ -353,14 +353,8 @@ func snapshotScheduleToOAPI(schedule instances.SnapshotSchedule) oapi.SnapshotSc
 	if schedule.NamePrefix != "" {
 		out.NamePrefix = lo.ToPtr(schedule.NamePrefix)
 	}
-	if schedule.LastRunAt != nil {
-		out.LastRunAt = schedule.LastRunAt
-	}
-	if schedule.LastSnapshotID != nil {
-		out.LastSnapshotId = schedule.LastSnapshotID
-	}
-	if schedule.LastError != nil {
-		out.LastError = schedule.LastError
-	}
+	out.LastRunAt = schedule.LastRunAt
+	out.LastSnapshotId = schedule.LastSnapshotID
+	out.LastError = schedule.LastError
 	return out
 }
