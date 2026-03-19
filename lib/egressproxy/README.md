@@ -37,6 +37,10 @@ This keeps real secrets out of the VM while still allowing authenticated egress 
 - Egress enforcement is applied per instance TAP device and removed when the instance stops/standbys/deletes.
 - Enforcement intentionally targets TCP egress only. DNS/other non-TCP traffic is not rewritten and is not blocked by `all` mode.
 
+## Credential rotation
+
+Credentials can be updated at runtime via `PATCH /instances/{id}/credentials` without restarting the VM or touching the guest. The endpoint uses merge semantics: only credentials included in the request are added or updated by name; credentials not mentioned are left unchanged. The proxy picks up new values immediately for running instances. For stopped or standby instances, the updated config takes effect on next start/restore.
+
 ## Limits of enforcement
 
 - Header injection is applied to HTTP headers only (not request/response bodies).
