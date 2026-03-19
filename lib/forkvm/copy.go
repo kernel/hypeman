@@ -42,6 +42,9 @@ func CopyGuestDirectory(srcDir, dstDir string) error {
 		if d.IsDir() && shouldSkipDirectory(relPath) {
 			return filepath.SkipDir
 		}
+		if shouldSkipRegularFile(relPath) {
+			return nil
+		}
 
 		dstPath := filepath.Join(dstDir, relPath)
 		info, err := d.Info()
@@ -58,9 +61,6 @@ func CopyGuestDirectory(srcDir, dstDir string) error {
 			return nil
 
 		case mode.IsRegular():
-			if shouldSkipRegularFile(relPath) {
-				return nil
-			}
 			if err := copyRegularFileSparse(path, dstPath, mode.Perm()); err != nil {
 				return fmt.Errorf("copy file %s: %w", path, err)
 			}
