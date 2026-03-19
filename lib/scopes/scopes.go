@@ -60,8 +60,8 @@ const (
 	All Scope = "*"
 )
 
-// AllScopes is the complete list of valid scopes (excluding wildcard).
-var AllScopes = []Scope{
+// allScopes is the complete list of valid scopes (excluding wildcard).
+var allScopes = []Scope{
 	InstanceRead, InstanceWrite, InstanceDelete,
 	ImageRead, ImageWrite, ImageDelete,
 	VolumeRead, VolumeWrite, VolumeDelete,
@@ -72,12 +72,19 @@ var AllScopes = []Scope{
 	ResourceRead,
 }
 
+// AllScopes returns the complete list of valid scopes (excluding wildcard).
+func AllScopes() []Scope {
+	out := make([]Scope, len(allScopes))
+	copy(out, allScopes)
+	return out
+}
+
 // Valid returns true if s is a recognized scope.
 func (s Scope) Valid() bool {
 	if s == All {
 		return true
 	}
-	return slices.Contains(AllScopes, s)
+	return slices.Contains(allScopes, s)
 }
 
 // ParseScopes parses a comma-separated scope string into a slice of Scopes.
@@ -91,7 +98,7 @@ func ParseScopes(s string) ([]Scope, error) {
 	for _, p := range parts {
 		sc := Scope(strings.TrimSpace(p))
 		if !sc.Valid() {
-			return nil, fmt.Errorf("unknown scope: %q", p)
+			return nil, fmt.Errorf("unknown scope: %q", sc)
 		}
 		out = append(out, sc)
 	}
@@ -176,6 +183,14 @@ var PublicRoutes = map[string]bool{
 	"GET /swagger":   true,
 }
 
+// DirectScopeRoutes lists route keys that enforce scopes via RequireScope
+// middleware directly (not via the Middleware() scope checker). These are
+// outside the OpenAPI router group (e.g. WebSocket endpoints).
+var DirectScopeRoutes = map[string]Scope{
+	"GET /instances/{id}/exec": InstanceWrite,
+	"GET /instances/{id}/cp":   InstanceWrite,
+}
+
 // RouteScopes maps "METHOD /path-pattern" to the required scope.
 // Path patterns use chi-style {param} placeholders.
 var RouteScopes = map[string]Scope{
@@ -226,10 +241,6 @@ var RouteScopes = map[string]Scope{
 	"POST /instances/{id}/stop":                           InstanceWrite,
 	"DELETE /instances/{id}/volumes/{volumeId}":           VolumeWrite,
 	"POST /instances/{id}/volumes/{volumeId}":             VolumeWrite,
-
-	// WebSocket endpoints (outside OpenAPI but still authed)
-	"GET /instances/{id}/exec": InstanceWrite,
-	"GET /instances/{id}/cp":   InstanceWrite,
 
 	// Snapshots
 	"GET /snapshots":                    SnapshotRead,

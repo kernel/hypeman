@@ -55,7 +55,7 @@ func main() {
 
 	if *listScopes {
 		fmt.Println("Available scopes:")
-		for _, s := range scopes.AllScopes {
+		for _, s := range scopes.AllScopes() {
 			fmt.Printf("  %s\n", s)
 		}
 		fmt.Println("  * (wildcard — grants all permissions)")

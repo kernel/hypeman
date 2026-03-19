@@ -514,10 +514,15 @@ func extractPermissions(ctx context.Context, claims jwt.MapClaims) context.Conte
 		return scopes.ContextWithPermissions(ctx, []scopes.Scope{})
 	}
 
+	log := logger.FromContext(ctx)
 	perms := make([]scopes.Scope, 0, len(arr))
 	for _, v := range arr {
 		if s, ok := v.(string); ok {
-			perms = append(perms, scopes.Scope(s))
+			sc := scopes.Scope(s)
+			if !sc.Valid() {
+				log.WarnContext(ctx, "invalid scope in token permissions claim", "scope", s)
+			}
+			perms = append(perms, sc)
 		}
 	}
 	return scopes.ContextWithPermissions(ctx, perms)

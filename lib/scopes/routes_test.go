@@ -61,6 +61,9 @@ func TestAllRoutesHaveScopes(t *testing.T) {
 		if _, hasScope := scopes.RouteScopes[key]; hasScope {
 			return nil
 		}
+		if _, hasScope := scopes.DirectScopeRoutes[key]; hasScope {
+			return nil
+		}
 		if scopes.PublicRoutes[key] {
 			return nil
 		}
@@ -110,6 +113,11 @@ func TestRouteScopesHaveNoStaleEntries(t *testing.T) {
 			t.Errorf("RouteScopes contains %q but no such route exists — remove the stale entry from lib/scopes/scopes.go", key)
 		}
 	}
+	for key := range scopes.DirectScopeRoutes {
+		if !registered[key] {
+			t.Errorf("DirectScopeRoutes contains %q but no such route exists — remove the stale entry from lib/scopes/scopes.go", key)
+		}
+	}
 }
 
 // TestPublicRoutesAreNotInRouteScopes ensures that routes marked as public
@@ -118,5 +126,14 @@ func TestPublicRoutesAreNotInRouteScopes(t *testing.T) {
 	for key := range scopes.PublicRoutes {
 		_, hasScope := scopes.RouteScopes[key]
 		assert.False(t, hasScope, fmt.Sprintf("route %s is in both PublicRoutes and RouteScopes — pick one", key))
+	}
+}
+
+// TestDirectScopeRoutesAreNotInRouteScopes ensures that routes using
+// RequireScope directly don't also appear in the middleware RouteScopes map.
+func TestDirectScopeRoutesAreNotInRouteScopes(t *testing.T) {
+	for key := range scopes.DirectScopeRoutes {
+		_, hasScope := scopes.RouteScopes[key]
+		assert.False(t, hasScope, fmt.Sprintf("route %s is in both DirectScopeRoutes and RouteScopes — pick one", key))
 	}
 }
