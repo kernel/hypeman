@@ -163,6 +163,10 @@ func (m *mockInstanceManager) SetResourceValidator(v instances.ResourceValidator
 	// no-op for mock
 }
 
+func (m *mockInstanceManager) UpdateInstanceEnv(ctx context.Context, id string, env map[string]string) (*instances.Instance, error) {
+	return nil, nil
+}
+
 func (m *mockInstanceManager) GetVsockDialer(ctx context.Context, instanceID string) (hypervisor.VsockDialer, error) {
 	return nil, nil
 }
