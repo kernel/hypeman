@@ -267,6 +267,11 @@ type ForkSnapshotRequest struct {
 	TargetHypervisor hypervisor.Type // Optional, allowed only for Stopped snapshots
 }
 
+// UpdateInstanceEnvRequest is the domain request for updating env vars on a running instance.
+type UpdateInstanceEnvRequest struct {
+	Env map[string]string // Env vars to merge into the existing env
+}
+
 // AttachVolumeRequest is the domain request for attaching a volume (used for API compatibility)
 type AttachVolumeRequest struct {
 	MountPath string

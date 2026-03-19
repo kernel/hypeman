@@ -2140,6 +2140,70 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
   
+  /instances/{id}/env:
+    patch:
+      summary: Update instance environment variables
+      description: |
+        Updates environment variables on a running instance and re-registers egress proxy
+        rules with the new values. This enables credential rotation without restarting the
+        instance. Only the provided env vars are updated; existing vars not in the request
+        are preserved. The instance must be running and have egress proxy enabled with
+        credentials configured.
+      operationId: updateInstanceEnv
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Instance ID or name
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [env]
+              properties:
+                env:
+                  type: object
+                  additionalProperties:
+                    type: string
+                  description: Environment variables to update (merged with existing env)
+      responses:
+        200:
+          description: Environment updated and egress proxy rules refreshed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Instance"
+        400:
+          description: Invalid request (e.g., missing required credential env vars)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        404:
+          description: Instance not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Conflict - instance not in valid state for env update
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /instances/{id}/stop:
     post:
       summary: Stop instance (graceful shutdown)

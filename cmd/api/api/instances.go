@@ -637,6 +637,56 @@ func (s *ApiService) StartInstance(ctx context.Context, request oapi.StartInstan
 	return oapi.StartInstance200JSONResponse(instanceToOAPI(*result)), nil
 }
 
+// UpdateInstanceEnv updates environment variables on a running instance and refreshes
+// egress proxy rules. Enables credential rotation without instance restart.
+func (s *ApiService) UpdateInstanceEnv(ctx context.Context, request oapi.UpdateInstanceEnvRequestObject) (oapi.UpdateInstanceEnvResponseObject, error) {
+	inst := mw.GetResolvedInstance[instances.Instance](ctx)
+	if inst == nil {
+		return oapi.UpdateInstanceEnv500JSONResponse{
+			Code:    "internal_error",
+			Message: "resource not resolved",
+		}, nil
+	}
+	log := logger.FromContext(ctx)
+
+	if request.Body == nil || request.Body.Env == nil {
+		return oapi.UpdateInstanceEnv400JSONResponse{
+			Code:    "invalid_request",
+			Message: "request body with env is required",
+		}, nil
+	}
+
+	result, err := s.InstanceManager.UpdateInstanceEnv(ctx, inst.Id, instances.UpdateInstanceEnvRequest{
+		Env: request.Body.Env,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, instances.ErrInvalidState):
+			return oapi.UpdateInstanceEnv409JSONResponse{
+				Code:    "invalid_state",
+				Message: err.Error(),
+			}, nil
+		case errors.Is(err, instances.ErrInvalidRequest):
+			return oapi.UpdateInstanceEnv400JSONResponse{
+				Code:    "invalid_request",
+				Message: err.Error(),
+			}, nil
+		case errors.Is(err, instances.ErrNotFound):
+			return oapi.UpdateInstanceEnv404JSONResponse{
+				Code:    "not_found",
+				Message: "instance not found",
+			}, nil
+		default:
+			log.ErrorContext(ctx, "failed to update instance env", "error", err)
+			return oapi.UpdateInstanceEnv500JSONResponse{
+				Code:    "internal_error",
+				Message: "failed to update instance env",
+			}, nil
+		}
+	}
+	return oapi.UpdateInstanceEnv200JSONResponse(instanceToOAPI(*result)), nil
+}
+
 // logsStreamResponse implements oapi.GetInstanceLogsResponseObject with proper SSE flushing
 type logsStreamResponse struct {
 	logChan <-chan string

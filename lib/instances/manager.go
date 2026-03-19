@@ -39,6 +39,9 @@ type Manager interface {
 	RestoreSnapshot(ctx context.Context, id string, snapshotID string, req RestoreSnapshotRequest) (*Instance, error)
 	StopInstance(ctx context.Context, id string) (*Instance, error)
 	StartInstance(ctx context.Context, id string, req StartInstanceRequest) (*Instance, error)
+	// UpdateInstanceEnv merges new env vars into a running instance and re-registers
+	// egress proxy rules so that rotated credentials take effect immediately.
+	UpdateInstanceEnv(ctx context.Context, id string, req UpdateInstanceEnvRequest) (*Instance, error)
 	StreamInstanceLogs(ctx context.Context, id string, tail int, follow bool, source LogSource) (<-chan string, error)
 	RotateLogs(ctx context.Context, maxBytes int64, maxFiles int) error
 	AttachVolume(ctx context.Context, id string, volumeId string, req AttachVolumeRequest) (*Instance, error)
