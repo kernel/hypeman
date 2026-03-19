@@ -203,6 +203,35 @@ components:
             $ref: "#/components/schemas/CreateInstanceRequestCredentialInject"
           minItems: 1
 
+    UpdateCredentialsRequest:
+      type: object
+      properties:
+        credentials:
+          type: object
+          description: |
+            Replacement credential brokering policies keyed by guest-visible env var name.
+            This is a **full replacement** — the provided map replaces the existing credentials entirely.
+            Omit this field or pass an empty object to clear all credentials.
+          additionalProperties:
+            $ref: "#/components/schemas/CreateInstanceRequestCredential"
+          example:
+            OUTBOUND_OPENAI_KEY:
+              source:
+                env: OUTBOUND_OPENAI_KEY
+              inject:
+                - hosts: [api.openai.com, "*.openai.com"]
+                  as:
+                    header: Authorization
+                    format: "Bearer ${value}"
+        env:
+          type: object
+          additionalProperties:
+            type: string
+          description: |
+            Environment variable updates. Values here are merged with the existing env map
+            (new keys are added, existing keys are overwritten). Use this to supply or rotate
+            the real secret values referenced by credential policies.
+
     CreateInstanceRequest:
       type: object
       required: [name, image]
@@ -2397,6 +2426,59 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
   
+  /instances/{id}/credentials:
+    put:
+      summary: Update instance credentials
+      description: |
+        Replaces credential brokering policies for an instance. Real secrets stay on the
+        host; the proxy rewrites headers at request time, so updating credentials does NOT
+        require any VM-side changes.
+
+        If the instance is running with an active egress proxy, the proxy policy is updated
+        atomically. For stopped or standby instances, the updated config is persisted and
+        takes effect on next start/restore.
+      operationId: updateInstanceCredentials
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Instance ID or name
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCredentialsRequest"
+      responses:
+        200:
+          description: Credentials updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Instance"
+        400:
+          description: Bad request - invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        404:
+          description: Instance not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /instances/{id}/volumes/{volumeId}:
     post:
       summary: Attach volume to instance

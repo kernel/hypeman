@@ -41,6 +41,7 @@ type Manager interface {
 	StartInstance(ctx context.Context, id string, req StartInstanceRequest) (*Instance, error)
 	StreamInstanceLogs(ctx context.Context, id string, tail int, follow bool, source LogSource) (<-chan string, error)
 	RotateLogs(ctx context.Context, maxBytes int64, maxFiles int) error
+	UpdateCredentials(ctx context.Context, id string, req UpdateCredentialsRequest) (*Instance, error)
 	AttachVolume(ctx context.Context, id string, volumeId string, req AttachVolumeRequest) (*Instance, error)
 	DetachVolume(ctx context.Context, id string, volumeId string) (*Instance, error)
 	// ListInstanceAllocations returns resource allocations for all instances.
@@ -439,6 +440,14 @@ func (m *manager) RotateLogs(ctx context.Context, maxBytes int64, maxFiles int) 
 		}
 	}
 	return lastErr
+}
+
+// UpdateCredentials replaces the credential policies for an instance.
+func (m *manager) UpdateCredentials(ctx context.Context, id string, req UpdateCredentialsRequest) (*Instance, error) {
+	lock := m.getInstanceLock(id)
+	lock.Lock()
+	defer lock.Unlock()
+	return m.updateCredentials(ctx, id, req)
 }
 
 // AttachVolume attaches a volume to an instance (not yet implemented)

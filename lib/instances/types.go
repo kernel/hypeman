@@ -267,6 +267,13 @@ type ForkSnapshotRequest struct {
 	TargetHypervisor hypervisor.Type // Optional, allowed only for Stopped snapshots
 }
 
+// UpdateCredentialsRequest is the domain request for replacing instance credentials.
+// This is a full replacement — the provided credentials map replaces the existing one entirely.
+type UpdateCredentialsRequest struct {
+	Credentials map[string]CredentialPolicy // New credential policies (replaces existing)
+	Env         map[string]string           // Updated env map containing real secret values
+}
+
 // AttachVolumeRequest is the domain request for attaching a volume (used for API compatibility)
 type AttachVolumeRequest struct {
 	MountPath string

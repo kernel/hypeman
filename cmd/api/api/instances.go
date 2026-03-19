@@ -798,6 +798,83 @@ func (s *ApiService) StatInstancePath(ctx context.Context, request oapi.StatInst
 	return response, nil
 }
 
+// UpdateInstanceCredentials replaces credential brokering policies for an instance
+func (s *ApiService) UpdateInstanceCredentials(ctx context.Context, request oapi.UpdateInstanceCredentialsRequestObject) (oapi.UpdateInstanceCredentialsResponseObject, error) {
+	inst := mw.GetResolvedInstance[instances.Instance](ctx)
+	if inst == nil {
+		return oapi.UpdateInstanceCredentials500JSONResponse{
+			Code:    "internal_error",
+			Message: "resource not resolved",
+		}, nil
+	}
+	log := logger.FromContext(ctx)
+
+	if request.Body == nil {
+		return oapi.UpdateInstanceCredentials400JSONResponse{
+			Code:    "invalid_request",
+			Message: "request body is required",
+		}, nil
+	}
+
+	// Convert OAPI credentials to domain type
+	var credentials map[string]instances.CredentialPolicy
+	if request.Body.Credentials != nil {
+		credentials = make(map[string]instances.CredentialPolicy, len(*request.Body.Credentials))
+		for credentialName, credential := range *request.Body.Credentials {
+			policy := instances.CredentialPolicy{
+				Source: instances.CredentialSource{
+					Env: credential.Source.Env,
+				},
+				Inject: make([]instances.CredentialInjectRule, 0, len(credential.Inject)),
+			}
+			for _, inject := range credential.Inject {
+				rule := instances.CredentialInjectRule{
+					As: instances.CredentialInjectAs{
+						Header: inject.As.Header,
+						Format: inject.As.Format,
+					},
+				}
+				if inject.Hosts != nil {
+					rule.Hosts = append([]string(nil), (*inject.Hosts)...)
+				}
+				policy.Inject = append(policy.Inject, rule)
+			}
+			credentials[credentialName] = policy
+		}
+	}
+
+	env := make(map[string]string)
+	if request.Body.Env != nil {
+		env = *request.Body.Env
+	}
+
+	result, err := s.InstanceManager.UpdateCredentials(ctx, inst.Id, instances.UpdateCredentialsRequest{
+		Credentials: credentials,
+		Env:         env,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, instances.ErrNotFound):
+			return oapi.UpdateInstanceCredentials404JSONResponse{
+				Code:    "not_found",
+				Message: "instance not found",
+			}, nil
+		case errors.Is(err, instances.ErrInvalidRequest):
+			return oapi.UpdateInstanceCredentials400JSONResponse{
+				Code:    "invalid_request",
+				Message: err.Error(),
+			}, nil
+		default:
+			log.ErrorContext(ctx, "failed to update credentials", "error", err)
+			return oapi.UpdateInstanceCredentials500JSONResponse{
+				Code:    "internal_error",
+				Message: "failed to update credentials",
+			}, nil
+		}
+	}
+	return oapi.UpdateInstanceCredentials200JSONResponse(instanceToOAPI(*result)), nil
+}
+
 // AttachVolume attaches a volume to an instance (not yet implemented)
 func (s *ApiService) AttachVolume(ctx context.Context, request oapi.AttachVolumeRequestObject) (oapi.AttachVolumeResponseObject, error) {
 	return oapi.AttachVolume500JSONResponse{

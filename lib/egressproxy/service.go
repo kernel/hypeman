@@ -217,6 +217,27 @@ func compileHeaderInjectRules(cfgRules []HeaderInjectRuleConfig) ([]headerInject
 	return out, nil
 }
 
+// UpdateInstancePolicy atomically replaces the header inject rules for an
+// already-registered instance without touching iptables enforcement rules.
+// Returns ErrInstanceNotRegistered if the instance has no active policy.
+func (s *Service) UpdateInstancePolicy(instanceID string, rules []HeaderInjectRuleConfig) error {
+	compiled, err := compileHeaderInjectRules(rules)
+	if err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	sourceIP, ok := s.sourceIPByInstance[instanceID]
+	if !ok {
+		return ErrInstanceNotRegistered
+	}
+
+	s.policiesBySourceIP[sourceIP] = sourcePolicy{headerInjectRules: compiled}
+	return nil
+}
+
 func (s *Service) UnregisterInstance(_ context.Context, instanceID string) {
 	s.mu.Lock()
 	sourceIP, ok := s.sourceIPByInstance[instanceID]
