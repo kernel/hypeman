@@ -217,6 +217,26 @@ func compileHeaderInjectRules(cfgRules []HeaderInjectRuleConfig) ([]headerInject
 	return out, nil
 }
 
+// UpdateInstancePolicy updates the header injection rules for an already-registered instance.
+// Returns false if the instance is not registered (no-op).
+func (s *Service) UpdateInstancePolicy(instanceID string, rules []HeaderInjectRuleConfig) (bool, error) {
+	compiled, err := compileHeaderInjectRules(rules)
+	if err != nil {
+		return false, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	sourceIP, ok := s.sourceIPByInstance[instanceID]
+	if !ok {
+		return false, nil
+	}
+
+	s.policiesBySourceIP[sourceIP] = sourcePolicy{headerInjectRules: compiled}
+	return true, nil
+}
+
 func (s *Service) UnregisterInstance(_ context.Context, instanceID string) {
 	s.mu.Lock()
 	sourceIP, ok := s.sourceIPByInstance[instanceID]

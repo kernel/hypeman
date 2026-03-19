@@ -191,6 +191,25 @@ func TestCreateInstance_InvalidSizeFormat(t *testing.T) {
 	assert.Contains(t, badReq.Message, "invalid size format")
 }
 
+type captureUpdateCredentialsManager struct {
+	instances.Manager
+	lastID          string
+	lastCredentials map[string]instances.CredentialPolicy
+	lastEnv         map[string]string
+	result          *instances.Instance
+	err             error
+}
+
+func (m *captureUpdateCredentialsManager) UpdateInstanceCredentials(ctx context.Context, id string, credentials map[string]instances.CredentialPolicy, env map[string]string) (*instances.Instance, error) {
+	m.lastID = id
+	m.lastCredentials = credentials
+	m.lastEnv = env
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.result, nil
+}
+
 type captureCreateManager struct {
 	instances.Manager
 	lastReq *instances.CreateInstanceRequest
@@ -687,4 +706,190 @@ func waitForState(t *testing.T, svc *ApiService, instanceID string, expectedStat
 		time.Sleep(100 * time.Millisecond)
 	}
 	t.Fatalf("Timeout waiting for instance to reach %s state", expectedState)
+}
+
+func TestUpdateInstanceCredentials_Success(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	now := time.Now()
+	source := instances.Instance{
+		StoredMetadata: instances.StoredMetadata{
+			Id:             "inst-creds",
+			Name:           "inst-creds",
+			Image:          "docker.io/library/alpine:latest",
+			CreatedAt:      now,
+			HypervisorType: hypervisor.TypeCloudHypervisor,
+		},
+		State: instances.StateRunning,
+	}
+
+	mockMgr := &captureUpdateCredentialsManager{
+		Manager: svc.InstanceManager,
+		result:  &source,
+	}
+	svc.InstanceManager = mockMgr
+
+	credentials := map[string]oapi.CreateInstanceRequestCredential{
+		"OPENAI_KEY": {
+			Source: oapi.CreateInstanceRequestCredentialSource{Env: "OPENAI_KEY"},
+			Inject: []oapi.CreateInstanceRequestCredentialInject{
+				{
+					Hosts: &[]string{"api.openai.com"},
+					As: oapi.CreateInstanceRequestCredentialInjectAs{
+						Header: "Authorization",
+						Format: "Bearer ${value}",
+					},
+				},
+			},
+		},
+	}
+	env := map[string]string{"OPENAI_KEY": "sk-rotated-key"}
+
+	resp, err := svc.UpdateInstanceCredentials(
+		mw.WithResolvedInstance(ctx(), source.Id, source),
+		oapi.UpdateInstanceCredentialsRequestObject{
+			Id: source.Id,
+			Body: &oapi.UpdateInstanceCredentialsRequest{
+				Credentials: credentials,
+				Env:         &env,
+			},
+		},
+	)
+	require.NoError(t, err)
+
+	ok200, ok := resp.(oapi.UpdateInstanceCredentials200JSONResponse)
+	require.True(t, ok, "expected 200 response, got %T", resp)
+	assert.Equal(t, "inst-creds", ok200.Id)
+
+	// Verify domain conversion
+	assert.Equal(t, source.Id, mockMgr.lastID)
+	require.Contains(t, mockMgr.lastCredentials, "OPENAI_KEY")
+	policy := mockMgr.lastCredentials["OPENAI_KEY"]
+	assert.Equal(t, "OPENAI_KEY", policy.Source.Env)
+	require.Len(t, policy.Inject, 1)
+	assert.Equal(t, []string{"api.openai.com"}, policy.Inject[0].Hosts)
+	assert.Equal(t, "Authorization", policy.Inject[0].As.Header)
+	assert.Equal(t, "Bearer ${value}", policy.Inject[0].As.Format)
+	assert.Equal(t, "sk-rotated-key", mockMgr.lastEnv["OPENAI_KEY"])
+}
+
+func TestUpdateInstanceCredentials_EmptyCredentialsClears(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	now := time.Now()
+	source := instances.Instance{
+		StoredMetadata: instances.StoredMetadata{
+			Id:             "inst-clear-creds",
+			Name:           "inst-clear-creds",
+			Image:          "docker.io/library/alpine:latest",
+			CreatedAt:      now,
+			HypervisorType: hypervisor.TypeCloudHypervisor,
+		},
+		State: instances.StateRunning,
+	}
+
+	mockMgr := &captureUpdateCredentialsManager{
+		Manager: svc.InstanceManager,
+		result:  &source,
+	}
+	svc.InstanceManager = mockMgr
+
+	resp, err := svc.UpdateInstanceCredentials(
+		mw.WithResolvedInstance(ctx(), source.Id, source),
+		oapi.UpdateInstanceCredentialsRequestObject{
+			Id: source.Id,
+			Body: &oapi.UpdateInstanceCredentialsRequest{
+				Credentials: map[string]oapi.CreateInstanceRequestCredential{},
+			},
+		},
+	)
+	require.NoError(t, err)
+
+	_, ok := resp.(oapi.UpdateInstanceCredentials200JSONResponse)
+	require.True(t, ok, "expected 200 response")
+	assert.Empty(t, mockMgr.lastCredentials)
+}
+
+func TestUpdateInstanceCredentials_InvalidRequest(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	source := instances.Instance{
+		StoredMetadata: instances.StoredMetadata{
+			Id:             "inst-invalid-creds",
+			Name:           "inst-invalid-creds",
+			Image:          "docker.io/library/alpine:latest",
+			CreatedAt:      time.Now(),
+			HypervisorType: hypervisor.TypeCloudHypervisor,
+		},
+		State: instances.StateRunning,
+	}
+
+	mockMgr := &captureUpdateCredentialsManager{
+		Manager: svc.InstanceManager,
+		err:     fmt.Errorf("%w: credentials require network.egress.enabled=true", instances.ErrInvalidRequest),
+	}
+	svc.InstanceManager = mockMgr
+
+	resp, err := svc.UpdateInstanceCredentials(
+		mw.WithResolvedInstance(ctx(), source.Id, source),
+		oapi.UpdateInstanceCredentialsRequestObject{
+			Id: source.Id,
+			Body: &oapi.UpdateInstanceCredentialsRequest{
+				Credentials: map[string]oapi.CreateInstanceRequestCredential{
+					"KEY": {
+						Source: oapi.CreateInstanceRequestCredentialSource{Env: "KEY"},
+						Inject: []oapi.CreateInstanceRequestCredentialInject{
+							{As: oapi.CreateInstanceRequestCredentialInjectAs{Header: "X-Key", Format: "${value}"}},
+						},
+					},
+				},
+			},
+		},
+	)
+	require.NoError(t, err)
+
+	badReq, ok := resp.(oapi.UpdateInstanceCredentials400JSONResponse)
+	require.True(t, ok, "expected 400 response, got %T", resp)
+	assert.Equal(t, "invalid_request", badReq.Code)
+	assert.Contains(t, badReq.Message, "credentials require network.egress.enabled=true")
+}
+
+func TestUpdateInstanceCredentials_NotFound(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	source := instances.Instance{
+		StoredMetadata: instances.StoredMetadata{
+			Id:             "inst-gone",
+			Name:           "inst-gone",
+			Image:          "docker.io/library/alpine:latest",
+			CreatedAt:      time.Now(),
+			HypervisorType: hypervisor.TypeCloudHypervisor,
+		},
+		State: instances.StateRunning,
+	}
+
+	mockMgr := &captureUpdateCredentialsManager{
+		Manager: svc.InstanceManager,
+		err:     instances.ErrNotFound,
+	}
+	svc.InstanceManager = mockMgr
+
+	resp, err := svc.UpdateInstanceCredentials(
+		mw.WithResolvedInstance(ctx(), source.Id, source),
+		oapi.UpdateInstanceCredentialsRequestObject{
+			Id: source.Id,
+			Body: &oapi.UpdateInstanceCredentialsRequest{
+				Credentials: map[string]oapi.CreateInstanceRequestCredential{},
+			},
+		},
+	)
+	require.NoError(t, err)
+
+	notFound, ok := resp.(oapi.UpdateInstanceCredentials404JSONResponse)
+	require.True(t, ok, "expected 404 response, got %T", resp)
+	assert.Equal(t, "not_found", notFound.Code)
 }

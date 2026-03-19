@@ -52,6 +52,10 @@ type Manager interface {
 	// SetResourceValidator sets the validator for aggregate resource limit checking.
 	// Called after initialization to avoid circular dependencies.
 	SetResourceValidator(v ResourceValidator)
+	// UpdateInstanceCredentials replaces the credential policies for an instance.
+	// It updates stored metadata and the live egress proxy policy (if running).
+	// The env map provides real secret values referenced by credential sources.
+	UpdateInstanceCredentials(ctx context.Context, id string, credentials map[string]CredentialPolicy, env map[string]string) (*Instance, error)
 	// GetVsockDialer returns a VsockDialer for the specified instance.
 	GetVsockDialer(ctx context.Context, instanceID string) (hypervisor.VsockDialer, error)
 }
@@ -439,6 +443,14 @@ func (m *manager) RotateLogs(ctx context.Context, maxBytes int64, maxFiles int) 
 		}
 	}
 	return lastErr
+}
+
+// UpdateInstanceCredentials replaces the credential policies for an instance.
+func (m *manager) UpdateInstanceCredentials(ctx context.Context, id string, credentials map[string]CredentialPolicy, env map[string]string) (*Instance, error) {
+	lock := m.getInstanceLock(id)
+	lock.Lock()
+	defer lock.Unlock()
+	return m.updateInstanceCredentials(ctx, id, credentials, env)
 }
 
 // AttachVolume attaches a volume to an instance (not yet implemented)
