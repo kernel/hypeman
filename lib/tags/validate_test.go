@@ -18,15 +18,15 @@ func TestValidate(t *testing.T) {
 
 	err := Validate(map[string]string{"": "x"})
 	require.Error(t, err)
-	require.ErrorIs(t, err, ErrInvalidMetadata)
+	require.ErrorIs(t, err, ErrInvalidTags)
 
 	err = Validate(map[string]string{"tēam": "backend"})
 	require.Error(t, err)
-	require.ErrorIs(t, err, ErrInvalidMetadata)
+	require.ErrorIs(t, err, ErrInvalidTags)
 
 	err = Validate(map[string]string{"team": "支付"})
 	require.Error(t, err)
-	require.ErrorIs(t, err, ErrInvalidMetadata)
+	require.ErrorIs(t, err, ErrInvalidTags)
 
 	tooMany := make(map[string]string, MaxEntries+1)
 	for i := 0; i < MaxEntries+1; i++ {
@@ -34,15 +34,15 @@ func TestValidate(t *testing.T) {
 	}
 	err = Validate(tooMany)
 	require.Error(t, err)
-	require.ErrorIs(t, err, ErrInvalidMetadata)
+	require.ErrorIs(t, err, ErrInvalidTags)
 
 	longKey := map[string]string{strings.Repeat("a", MaxKeyLength+1): "v"}
 	err = Validate(longKey)
 	require.Error(t, err)
-	require.ErrorIs(t, err, ErrInvalidMetadata)
+	require.ErrorIs(t, err, ErrInvalidTags)
 
 	longValue := map[string]string{"key": strings.Repeat("a", MaxValueLength+1)}
 	err = Validate(longValue)
 	require.Error(t, err)
-	require.ErrorIs(t, err, ErrInvalidMetadata)
+	require.ErrorIs(t, err, ErrInvalidTags)
 }

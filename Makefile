@@ -1,5 +1,5 @@
 SHELL := /bin/bash
-.PHONY: oapi-generate generate-vmm-client generate-wire generate-all dev build build-linux test test-linux test-darwin install-tools gen-jwt download-ch-binaries download-firecracker-binaries download-ch-spec ensure-ch-binaries ensure-firecracker-binaries build-caddy-binaries build-caddy ensure-caddy-binaries release-prep clean build-embedded
+.PHONY: oapi-generate generate-vmm-client generate-wire generate-all dev build build-linux test test-linux test-darwin test-guestmemory-linux test-guestmemory-vz install-tools gen-jwt download-ch-binaries download-firecracker-binaries download-ch-spec ensure-ch-binaries ensure-firecracker-binaries build-caddy-binaries build-caddy ensure-caddy-binaries release-prep clean build-embedded
 
 # Directory where local binaries will be installed
 BIN_DIR ?= $(CURDIR)/bin
@@ -299,6 +299,21 @@ test-darwin: build-embedded sign-vz-shim
 		PATH="/opt/homebrew/opt/e2fsprogs/sbin:$(PATH)" \
 		go test -tags containers_image_openpgp $$VERBOSE_FLAG -timeout=$(TEST_TIMEOUT) $$PKGS; \
 	fi
+
+# Manual-only guest memory policy integration tests (Linux hypervisors).
+test-guestmemory-linux: ensure-ch-binaries ensure-firecracker-binaries ensure-caddy-binaries build-embedded
+	@TEST_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$$PATH"; \
+	GUESTMEM_TIMEOUT="$${GUESTMEMORY_TEST_TIMEOUT:-15m}"; \
+	echo "Running manual guest memory integration tests (CloudHypervisor, QEMU, Firecracker)"; \
+	sudo env "PATH=$$TEST_PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" "HYPEMAN_RUN_GUESTMEMORY_TESTS=1" \
+		go test -tags containers_image_openpgp -run='^TestGuestMemoryPolicy(CloudHypervisor|QEMU|Firecracker)$$' -timeout="$$GUESTMEM_TIMEOUT" ./lib/instances
+
+# Manual-only guest memory policy integration test (macOS VZ).
+test-guestmemory-vz: build-embedded sign-vz-shim
+	@echo "Running manual guest memory integration test (VZ)"; \
+	PATH="/opt/homebrew/opt/e2fsprogs/sbin:$(PATH)" \
+	HYPEMAN_RUN_GUESTMEMORY_TESTS=1 \
+	go test -tags containers_image_openpgp -run='^TestGuestMemoryPolicyVZ$$' -timeout=$(TEST_TIMEOUT) ./lib/instances
 
 # Generate JWT token for testing
 # Usage: make gen-jwt [USER_ID=test-user]

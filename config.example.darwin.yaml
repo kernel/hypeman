@@ -34,6 +34,11 @@ port: "8080"
 # - "cloud-hypervisor" and "qemu" are NOT supported on macOS
 hypervisor:
   default: vz
+  memory:
+    enabled: false
+    kernel_page_init_mode: hardened
+    reclaim_enabled: true
+    vz_balloon_required: true
 
 # =============================================================================
 # Network Configuration (DIFFERENT ON MACOS)
@@ -92,11 +97,17 @@ limits:
 # =============================================================================
 # OpenTelemetry (optional, same as Linux)
 # =============================================================================
+# metrics:
+#   listen_address: 127.0.0.1
+#   port: 9464
+#   vm_label_budget: 200
+#
 # otel:
 #   enabled: false
 #   endpoint: 127.0.0.1:4317
 #   service_name: hypeman
 #   insecure: true
+#   metric_export_interval: 60s
 # env: dev
 
 # =============================================================================

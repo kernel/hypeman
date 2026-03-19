@@ -15,6 +15,7 @@ import (
 
 func init() {
 	hypervisor.RegisterSocketName(hypervisor.TypeCloudHypervisor, "ch.sock")
+	hypervisor.RegisterCapabilities(hypervisor.TypeCloudHypervisor, capabilities())
 	hypervisor.RegisterClientFactory(hypervisor.TypeCloudHypervisor, func(socketPath string) (hypervisor.Hypervisor, error) {
 		return New(socketPath)
 	})

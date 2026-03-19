@@ -194,8 +194,8 @@ func TestCreateIngress_MetadataRoundTrip(t *testing.T) {
 
 	reqMetadata := map[string]string{"team": "api", "env": "staging"}
 	req := CreateIngressRequest{
-		Name:     "metadata-ingress",
-		Metadata: reqMetadata,
+		Name: "metadata-ingress",
+		Tags: reqMetadata,
 		Rules: []IngressRule{
 			{
 				Match:  IngressMatch{Hostname: "metadata.example.com"},
@@ -206,19 +206,19 @@ func TestCreateIngress_MetadataRoundTrip(t *testing.T) {
 
 	ing, err := manager.Create(ctx, req)
 	require.NoError(t, err)
-	require.Equal(t, map[string]string{"team": "api", "env": "staging"}, ing.Metadata)
+	require.Equal(t, map[string]string{"team": "api", "env": "staging"}, ing.Tags)
 
 	reqMetadata["team"] = "mutated"
-	require.Equal(t, "api", ing.Metadata["team"])
+	require.Equal(t, "api", ing.Tags["team"])
 
 	got, err := manager.Get(ctx, ing.ID)
 	require.NoError(t, err)
-	require.Equal(t, map[string]string{"team": "api", "env": "staging"}, got.Metadata)
+	require.Equal(t, map[string]string{"team": "api", "env": "staging"}, got.Tags)
 
 	listed, err := manager.List(ctx)
 	require.NoError(t, err)
 	require.Len(t, listed, 1)
-	require.Equal(t, map[string]string{"team": "api", "env": "staging"}, listed[0].Metadata)
+	require.Equal(t, map[string]string{"team": "api", "env": "staging"}, listed[0].Tags)
 }
 
 func TestCreateIngress_InvalidName(t *testing.T) {

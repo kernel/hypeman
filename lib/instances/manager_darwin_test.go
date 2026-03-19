@@ -159,7 +159,7 @@ func TestVZBasicLifecycle(t *testing.T) {
 		require.NoError(t, err)
 	}
 	require.NotNil(t, inst)
-	assert.Equal(t, StateRunning, inst.State)
+	assert.Contains(t, []State{StateInitializing, StateRunning}, inst.State)
 	assert.Equal(t, hypervisor.TypeVZ, inst.HypervisorType)
 	t.Logf("Instance created: %s (hypervisor: %s)", inst.Id, inst.HypervisorType)
 
@@ -199,7 +199,7 @@ func TestVZBasicLifecycle(t *testing.T) {
 	t.Log("Starting instance (restart after stop)...")
 	inst, err = mgr.StartInstance(ctx, inst.Id, StartInstanceRequest{})
 	require.NoError(t, err)
-	assert.Equal(t, StateRunning, inst.State)
+	assert.Contains(t, []State{StateInitializing, StateRunning}, inst.State)
 	t.Logf("Instance restarted: %s (pid: %v)", inst.Id, inst.HypervisorPID)
 
 	// Re-read instance to get updated vsock info
@@ -323,7 +323,7 @@ func TestVZExecAndShutdown(t *testing.T) {
 		dumpVZShimLogs(t, tmpDir)
 		require.NoError(t, err)
 	}
-	assert.Equal(t, StateRunning, inst.State)
+	assert.Contains(t, []State{StateInitializing, StateRunning}, inst.State)
 	t.Logf("Instance created: %s", inst.Id)
 
 	t.Cleanup(func() {
@@ -439,7 +439,7 @@ func TestVZStandbyAndRestore(t *testing.T) {
 		require.NoError(t, err)
 	}
 	require.NotNil(t, inst)
-	assert.Equal(t, StateRunning, inst.State)
+	assert.Contains(t, []State{StateInitializing, StateRunning}, inst.State)
 	assert.Equal(t, hypervisor.TypeVZ, inst.HypervisorType)
 	t.Logf("Instance created: %s (hypervisor: %s)", inst.Id, inst.HypervisorType)
 
@@ -495,7 +495,7 @@ func TestVZStandbyAndRestore(t *testing.T) {
 		dumpVZShimLogs(t, tmpDir)
 		require.NoError(t, err)
 	}
-	assert.Equal(t, StateRunning, inst.State)
+	assert.Contains(t, []State{StateInitializing, StateRunning}, inst.State)
 	assert.False(t, inst.HasSnapshot)
 	t.Log("Instance restored and running")
 
@@ -597,7 +597,7 @@ func TestVZForkFromRunningNetwork(t *testing.T) {
 		dumpVZShimLogs(t, tmpDir)
 		require.NoError(t, err)
 	}
-	require.Equal(t, StateRunning, source.State)
+	require.Contains(t, []State{StateInitializing, StateRunning}, source.State)
 	require.NotEmpty(t, source.IP)
 	require.NotEmpty(t, source.MAC)
 
@@ -606,6 +606,8 @@ func TestVZForkFromRunningNetwork(t *testing.T) {
 
 	err = waitForExecAgent(ctx, mgr, sourceID, 30*time.Second)
 	require.NoError(t, err, "source guest agent should be ready")
+	source, err = waitForInstanceState(ctx, mgr, sourceID, StateRunning, 30*time.Second)
+	require.NoError(t, err)
 
 	output, exitCode, err := vzExecCommand(ctx, source, "echo", "source-before-fork")
 	require.NoError(t, err)
@@ -626,13 +628,19 @@ func TestVZForkFromRunningNetwork(t *testing.T) {
 		dumpVZShimLogs(t, tmpDir)
 		require.NoError(t, err)
 	}
-	require.Equal(t, StateRunning, forked.State)
+	require.Contains(t, []State{StateInitializing, StateRunning}, forked.State)
 	require.NotEqual(t, sourceID, forked.Id)
 	forkID := forked.Id
 	t.Cleanup(func() { _ = mgr.DeleteInstance(context.Background(), forkID) })
+	forked, err = waitForInstanceState(ctx, mgr, forkID, StateRunning, 30*time.Second)
+	require.NoError(t, err)
 
 	sourceAfterFork, err := mgr.GetInstance(ctx, sourceID)
 	require.NoError(t, err)
+	if sourceAfterFork.State != StateRunning {
+		sourceAfterFork, err = waitForInstanceState(ctx, mgr, sourceID, StateRunning, 30*time.Second)
+		require.NoError(t, err)
+	}
 	require.Equal(t, StateRunning, sourceAfterFork.State)
 	require.NotEmpty(t, sourceAfterFork.IP)
 	require.NotEmpty(t, sourceAfterFork.MAC)
@@ -640,6 +648,10 @@ func TestVZForkFromRunningNetwork(t *testing.T) {
 
 	forked, err = mgr.GetInstance(ctx, forkID)
 	require.NoError(t, err)
+	if forked.State != StateRunning {
+		forked, err = waitForInstanceState(ctx, mgr, forkID, StateRunning, 30*time.Second)
+		require.NoError(t, err)
+	}
 	require.Equal(t, StateRunning, forked.State)
 	require.NotEmpty(t, forked.IP)
 	require.NotEmpty(t, forked.MAC)

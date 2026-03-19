@@ -12,13 +12,21 @@ import (
 type State string
 
 const (
-	StateStopped  State = "Stopped"  // No VMM, no snapshot
-	StateCreated  State = "Created"  // VMM created but not booted (CH native)
-	StateRunning  State = "Running"  // VM running (CH native)
-	StatePaused   State = "Paused"   // VM paused (CH native)
-	StateShutdown State = "Shutdown" // VM shutdown, VMM exists (CH native)
-	StateStandby  State = "Standby"  // No VMM, snapshot exists
-	StateUnknown  State = "Unknown"  // Failed to determine state (VMM query failed)
+	StateStopped      State = "Stopped"      // No VMM, no snapshot
+	StateCreated      State = "Created"      // VMM created but not booted (CH native)
+	StateInitializing State = "Initializing" // VM running, guest init in progress
+	StateRunning      State = "Running"      // Guest program started and ready
+	StatePaused       State = "Paused"       // VM paused (CH native)
+	StateShutdown     State = "Shutdown"     // VM shutdown, VMM exists (CH native)
+	StateStandby      State = "Standby"      // No VMM, snapshot exists
+	StateUnknown      State = "Unknown"      // Failed to determine state (VMM query failed)
+)
+
+type EgressEnforcementMode string
+
+const (
+	EgressEnforcementModeAll           EgressEnforcementMode = "all"
+	EgressEnforcementModeHTTPHTTPSOnly EgressEnforcementMode = "http_https_only"
 )
 
 // VolumeAttachment represents a volume attached to an instance
@@ -28,6 +36,36 @@ type VolumeAttachment struct {
 	Readonly    bool   // Whether mounted read-only
 	Overlay     bool   // If true, create per-instance overlay for writes (requires Readonly=true)
 	OverlaySize int64  // Size of overlay disk in bytes (max diff from base)
+}
+
+// NetworkEgressPolicy configures host-mediated outbound networking behavior.
+type NetworkEgressPolicy struct {
+	Enabled         bool                  // Whether host-mediated egress policy is enabled
+	EnforcementMode EgressEnforcementMode // all (default) blocks direct non-proxy TCP egress, http_https_only blocks only 80/443
+}
+
+// CredentialSource references where real credential material is loaded from.
+type CredentialSource struct {
+	Env string // Host env variable name
+}
+
+// CredentialInjectAs describes how the credential is materialized for outbound requests.
+// Header templating is currently supported; future types (e.g., request signing) can extend this.
+type CredentialInjectAs struct {
+	Header string // Header name to set/mutate
+	Format string // Format template containing ${value}
+}
+
+// CredentialInjectRule scopes a credential injection policy to destination hosts.
+type CredentialInjectRule struct {
+	Hosts []string           // Optional host patterns (api.example.com, *.example.com); empty means all
+	As    CredentialInjectAs // Current v1 injection shape
+}
+
+// CredentialPolicy configures one host-managed credential brokering policy.
+type CredentialPolicy struct {
+	Source CredentialSource
+	Inject []CredentialInjectRule
 }
 
 // StoredMetadata represents instance metadata that is persisted to disk
@@ -48,18 +86,24 @@ type StoredMetadata struct {
 
 	// Configuration
 	Env            map[string]string
-	Metadata       tags.Metadata // User-defined key-value metadata
-	NetworkEnabled bool          // Whether instance has networking enabled (uses default network)
-	IP             string        // Assigned IP address (empty if NetworkEnabled=false)
-	MAC            string        // Assigned MAC address (empty if NetworkEnabled=false)
+	Tags           tags.Tags // User-defined key-value tags
+	NetworkEnabled bool      // Whether instance has networking enabled (uses default network)
+	NetworkEgress  *NetworkEgressPolicy
+	Credentials    map[string]CredentialPolicy
+	IP             string // Assigned IP address (empty if NetworkEnabled=false)
+	MAC            string // Assigned MAC address (empty if NetworkEnabled=false)
 
 	// Attached volumes
 	Volumes []VolumeAttachment // Volumes attached to this instance
 
 	// Timestamps (stored for historical tracking)
 	CreatedAt time.Time
-	StartedAt *time.Time // Last time VM was started
+	StartedAt *time.Time // Boot epoch start time (set on create/start; preserved across standby restore)
 	StoppedAt *time.Time // Last time VM was stopped
+
+	// Boot progress markers (derived from guest serial log sentinels and persisted)
+	ProgramStartedAt  *time.Time // Set when guest program handoff/start boundary is reached
+	GuestAgentReadyAt *time.Time // Set when guest-agent is ready (unless skip_guest_agent=true)
 
 	// Versions
 	KernelVersion string // Kernel version (e.g., "ch-v6.12.9")
@@ -108,9 +152,10 @@ type Instance struct {
 	StoredMetadata
 
 	// Derived fields (not stored in metadata.json)
-	State       State   // Derived from socket + VMM query
-	StateError  *string // Error message if state couldn't be determined (non-nil when State=Unknown)
-	HasSnapshot bool    // Derived from filesystem check
+	State               State   // Derived from socket + VMM query + guest boot markers
+	StateError          *string // Error message if state couldn't be determined (non-nil when State=Unknown)
+	HasSnapshot         bool    // Derived from filesystem check
+	BootMarkersHydrated bool    // True when missing boot markers were hydrated from logs in this read
 }
 
 // GetHypervisorType returns the hypervisor type as a string.
@@ -122,8 +167,8 @@ func (i *Instance) GetHypervisorType() string {
 // ListInstancesFilter contains optional filters for listing instances.
 // All fields are ANDed together: an instance must match every specified filter.
 type ListInstancesFilter struct {
-	State    *State        // Filter by instance state
-	Metadata tags.Metadata // Filter by metadata key-value pairs (all must match)
+	State *State    // Filter by instance state
+	Tags  tags.Tags // Filter by tag key-value pairs (all must match)
 }
 
 // Matches returns true if the given instance satisfies all filter criteria.
@@ -134,11 +179,11 @@ func (f *ListInstancesFilter) Matches(inst *Instance) bool {
 	if f.State != nil && inst.State != *f.State {
 		return false
 	}
-	for k, v := range f.Metadata {
-		if inst.Metadata == nil {
+	for k, v := range f.Tags {
+		if inst.Tags == nil {
 			return false
 		}
-		if actual, ok := inst.Metadata[k]; !ok || actual != v {
+		if actual, ok := inst.Tags[k]; !ok || actual != v {
 			return false
 		}
 	}
@@ -152,27 +197,29 @@ type GPUConfig struct {
 
 // CreateInstanceRequest is the domain request for creating an instance
 type CreateInstanceRequest struct {
-	Name                     string             // Required
-	Image                    string             // Required: OCI reference
-	Size                     int64              // Base memory in bytes (default: 1GB)
-	HotplugSize              int64              // Hotplug memory in bytes (default: 0, set explicitly to enable)
-	OverlaySize              int64              // Overlay disk size in bytes (default: 10GB)
-	Vcpus                    int                // Default 2
-	NetworkBandwidthDownload int64              // Download rate limit bytes/sec (0 = auto, proportional to CPU)
-	NetworkBandwidthUpload   int64              // Upload rate limit bytes/sec (0 = auto, proportional to CPU)
-	DiskIOBps                int64              // Disk I/O rate limit bytes/sec (0 = auto, proportional to CPU)
-	Env                      map[string]string  // Optional environment variables
-	Metadata                 tags.Metadata      // Optional user-defined key-value metadata
-	NetworkEnabled           bool               // Whether to enable networking (uses default network)
-	Devices                  []string           // Device IDs or names to attach (GPU passthrough)
-	Volumes                  []VolumeAttachment // Volumes to attach at creation time
-	Hypervisor               hypervisor.Type    // Optional: hypervisor type (defaults to config)
-	GPU                      *GPUConfig         // Optional: vGPU configuration
-	Entrypoint               []string           // Override image entrypoint (nil = use image default)
-	Cmd                      []string           // Override image cmd (nil = use image default)
-	SkipKernelHeaders        bool               // Skip kernel headers installation (disables DKMS)
-	SkipGuestAgent           bool               // Skip guest-agent installation (disables exec/stat API)
-	SnapshotPolicy           *SnapshotPolicy    // Optional snapshot policy defaults for this instance
+	Name                     string                      // Required
+	Image                    string                      // Required: OCI reference
+	Size                     int64                       // Base memory in bytes (default: 1GB)
+	HotplugSize              int64                       // Hotplug memory in bytes (default: 0, set explicitly to enable)
+	OverlaySize              int64                       // Overlay disk size in bytes (default: 10GB)
+	Vcpus                    int                         // Default 2
+	NetworkBandwidthDownload int64                       // Download rate limit bytes/sec (0 = auto, proportional to CPU)
+	NetworkBandwidthUpload   int64                       // Upload rate limit bytes/sec (0 = auto, proportional to CPU)
+	DiskIOBps                int64                       // Disk I/O rate limit bytes/sec (0 = auto, proportional to CPU)
+	Env                      map[string]string           // Optional environment variables
+	Tags                     tags.Tags                   // Optional user-defined key-value tags
+	NetworkEnabled           bool                        // Whether to enable networking (uses default network)
+	NetworkEgress            *NetworkEgressPolicy        // Optional host-mediated egress policy
+	Credentials              map[string]CredentialPolicy // Optional host-managed credential brokering policies
+	Devices                  []string                    // Device IDs or names to attach (GPU passthrough)
+	Volumes                  []VolumeAttachment          // Volumes to attach at creation time
+	Hypervisor               hypervisor.Type             // Optional: hypervisor type (defaults to config)
+	GPU                      *GPUConfig                  // Optional: vGPU configuration
+	Entrypoint               []string                    // Override image entrypoint (nil = use image default)
+	Cmd                      []string                    // Override image cmd (nil = use image default)
+	SkipKernelHeaders        bool                        // Skip kernel headers installation (disables DKMS)
+	SkipGuestAgent           bool                        // Skip guest-agent installation (disables exec/stat API)
+	SnapshotPolicy           *SnapshotPolicy             // Optional snapshot policy defaults for this instance
 }
 
 // StartInstanceRequest is the domain request for starting a stopped instance
@@ -208,7 +255,7 @@ type ListSnapshotsFilter = snapshot.ListSnapshotsFilter
 type CreateSnapshotRequest struct {
 	Kind        SnapshotKind                        // Required: Standby or Stopped
 	Name        string                              // Optional: unique per source instance
-	Metadata    tags.Metadata                       // Optional user-defined key-value metadata
+	Tags        tags.Tags                           // Optional user-defined key-value tags
 	Compression *snapshot.SnapshotCompressionConfig // Optional compression override
 }
 

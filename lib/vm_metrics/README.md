@@ -22,9 +22,20 @@ This approach works for both Cloud Hypervisor and QEMU without requiring any in-
 | `hypeman_vm_allocated_memory_bytes` | Gauge | Total allocated memory |
 | `hypeman_vm_network_rx_bytes_total` | Counter | Network bytes received |
 | `hypeman_vm_network_tx_bytes_total` | Counter | Network bytes transmitted |
-| `hypeman_vm_memory_utilization_ratio` | Gauge | RSS / allocated memory |
+| `hypeman_vm_metrics_instances_observed` | Gauge | Number of instances currently represented by per-VM metrics |
+| `hypeman_vm_metrics_label_budget_exceeded_total` | Counter | Transitions into over-budget per-VM metric cardinality |
 
-All metrics include `instance_id` and `instance_name` labels.
+Per-VM utilization series include `instance_id` and `instance_name` labels.
+
+## Cardinality Guardrail
+
+Per-VM labels are intentionally retained for operational visibility. Use the label budget guardrail to detect growth:
+
+- Config key: `metrics.vm_label_budget` (env: `METRICS__VM_LABEL_BUDGET`, default `200`)
+- `hypeman_vm_metrics_instances_observed` reports current per-VM series driver
+- `hypeman_vm_metrics_label_budget_exceeded_total` increments when moving from under-budget to over-budget
+
+When observed instances exceed budget, Hypeman logs a one-time WARN transition and emits a one-time INFO recovery when back under budget.
 
 ## API Endpoint
 
@@ -48,6 +59,8 @@ Returns current utilization for a specific instance:
   "memory_utilization_ratio": 0.125
 }
 ```
+
+Note: `memory_utilization_ratio` is part of the API response for convenience, but not exported as a standalone Prometheus metric.
 
 ## Architecture
 

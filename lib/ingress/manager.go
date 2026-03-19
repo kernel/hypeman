@@ -351,7 +351,7 @@ func (m *manager) Create(ctx context.Context, req CreateIngressRequest) (*Ingres
 	ingress := Ingress{
 		ID:        id,
 		Name:      req.Name,
-		Metadata:  tags.Clone(req.Metadata),
+		Tags:      tags.Clone(req.Tags),
 		Rules:     req.Rules,
 		CreatedAt: time.Now().UTC(),
 	}
@@ -377,7 +377,7 @@ func (m *manager) Create(ctx context.Context, req CreateIngressRequest) (*Ingres
 	stored := &storedIngress{
 		ID:        ingress.ID,
 		Name:      ingress.Name,
-		Metadata:  tags.Clone(ingress.Metadata),
+		Tags:      tags.Clone(ingress.Tags),
 		Rules:     ingress.Rules,
 		CreatedAt: ingress.CreatedAt.Format(time.RFC3339),
 	}
@@ -625,7 +625,7 @@ func storedToIngress(stored *storedIngress) *Ingress {
 	return &Ingress{
 		ID:        stored.ID,
 		Name:      stored.Name,
-		Metadata:  tags.Clone(stored.Metadata),
+		Tags:      tags.Clone(stored.Tags),
 		Rules:     stored.Rules,
 		CreatedAt: createdAt,
 	}

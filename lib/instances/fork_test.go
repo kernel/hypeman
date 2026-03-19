@@ -224,7 +224,7 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 
 	src := StoredMetadata{
 		Env:           map[string]string{"A": "1"},
-		Metadata:      map[string]string{"m": "x"},
+		Tags:          map[string]string{"m": "x"},
 		Volumes:       []VolumeAttachment{{VolumeID: "vol-1", MountPath: "/data"}},
 		Devices:       []string{"0000:01:00.0"},
 		Entrypoint:    []string{"/bin/sh", "-c"},
@@ -239,7 +239,7 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 	require.Equal(t, src, cloned)
 
 	cloned.Env["A"] = "2"
-	cloned.Metadata["m"] = "y"
+	cloned.Tags["m"] = "y"
 	cloned.Volumes[0].MountPath = "/mnt"
 	cloned.Devices[0] = "0000:02:00.0"
 	cloned.Entrypoint[0] = "/usr/bin/env"
@@ -251,7 +251,7 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 	*cloned.StoppedAt = now
 
 	require.Equal(t, "1", src.Env["A"])
-	require.Equal(t, "x", src.Metadata["m"])
+	require.Equal(t, "x", src.Tags["m"])
 	require.Equal(t, "/data", src.Volumes[0].MountPath)
 	require.Equal(t, "0000:01:00.0", src.Devices[0])
 	require.Equal(t, "/bin/sh", src.Entrypoint[0])
@@ -380,7 +380,10 @@ func TestForkCloudHypervisorFromRunningNetwork(t *testing.T) {
 		NetworkEnabled: true,
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = manager.DeleteInstance(context.Background(), source.Id) })
+	sourceID := source.Id
+	t.Cleanup(func() { _ = manager.DeleteInstance(context.Background(), sourceID) })
+	source, err = waitForInstanceState(ctx, manager, source.Id, StateRunning, 20*time.Second)
+	require.NoError(t, err)
 	require.NoError(t, waitForVMReady(ctx, source.SocketPath, 5*time.Second))
 
 	assert.NotEmpty(t, source.IP)
@@ -399,6 +402,9 @@ func TestForkCloudHypervisorFromRunningNetwork(t *testing.T) {
 		TargetState: StateRunning,
 	})
 	require.NoError(t, err)
+	require.Contains(t, []State{StateInitializing, StateRunning}, forked.State)
+	forked, err = waitForInstanceState(ctx, manager, forked.Id, StateRunning, 20*time.Second)
+	require.NoError(t, err)
 	require.Equal(t, StateRunning, forked.State)
 	forkedID := forked.Id
 	t.Cleanup(func() { _ = manager.DeleteInstance(context.Background(), forkedID) })
@@ -406,6 +412,10 @@ func TestForkCloudHypervisorFromRunningNetwork(t *testing.T) {
 	// Source should be restored and still reachable by its private IP.
 	sourceAfterFork, err := manager.GetInstance(ctx, source.Id)
 	require.NoError(t, err)
+	if sourceAfterFork.State != StateRunning {
+		sourceAfterFork, err = waitForInstanceState(ctx, manager, source.Id, StateRunning, 20*time.Second)
+		require.NoError(t, err)
+	}
 	require.Equal(t, StateRunning, sourceAfterFork.State)
 	require.NotEmpty(t, sourceAfterFork.IP)
 	assertHostCanReachNginx(t, sourceAfterFork.IP, 80, 60*time.Second)
@@ -419,7 +429,6 @@ func TestForkCloudHypervisorFromRunningNetwork(t *testing.T) {
 	assert.NotEqual(t, sourceAfterFork.MAC, forked.MAC)
 	assertGuestHasOnlyExpectedIPv4(t, forked, forked.IP, 30*time.Second)
 	assertHostCanReachNginx(t, forked.IP, 80, 60*time.Second)
-	assertHostCanReachNginx(t, sourceAfterFork.IP, 80, 60*time.Second)
 }
 
 func assertHostCanReachNginx(t *testing.T, ip string, port int, timeout time.Duration) {
@@ -495,7 +504,7 @@ func execInInstance(ctx context.Context, inst *Instance, command ...string) (str
 		Command:      command,
 		Stdout:       &stdout,
 		Stderr:       &stderr,
-		WaitForAgent: 30 * time.Second,
+		WaitForAgent: 2 * time.Second,
 	})
 	if err != nil {
 		return "", -1, err

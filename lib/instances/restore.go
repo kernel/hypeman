@@ -78,9 +78,14 @@ func (m *manager) restoreInstance(
 	}
 
 	var allocatedNet *network.Allocation
+	proxyRegistered := false
 	releaseNetwork := func() {
 		if !stored.NetworkEnabled {
 			return
+		}
+		if proxyRegistered {
+			m.unregisterEgressProxyInstance(ctx, id)
+			proxyRegistered = false
 		}
 		if allocatedNet != nil {
 			if err := m.networkManager.ReleaseAllocation(ctx, allocatedNet); err != nil {
@@ -129,6 +134,7 @@ func (m *manager) restoreInstance(
 				TAPDevice:    netConfig.TAPDevice,
 				Gateway:      netConfig.Gateway,
 				Netmask:      netConfig.Netmask,
+				DNS:          netConfig.DNS,
 			}
 			stored.IP = netConfig.IP
 			stored.MAC = netConfig.MAC
@@ -170,6 +176,43 @@ func (m *manager) restoreInstance(
 		if networkSpan != nil {
 			networkSpan.End()
 		}
+	}
+
+	// 4b. Register proxy/enforcement once network identity is active.
+	// Restore config disk refresh is only required for instances using network egress mediation.
+	if requiresRestoreConfigDiskRefresh(stored) {
+		alloc, allocErr := m.networkManager.GetAllocation(ctx, id)
+		if allocErr != nil {
+			log.ErrorContext(ctx, "failed to fetch allocation for proxy setup", "instance_id", id, "error", allocErr)
+			releaseNetwork()
+			return nil, fmt.Errorf("get network allocation for proxy setup: %w", allocErr)
+		}
+		if alloc == nil {
+			log.ErrorContext(ctx, "missing allocation for proxy setup", "instance_id", id)
+			releaseNetwork()
+			return nil, fmt.Errorf("get network allocation for proxy setup: allocation not found")
+		}
+
+		proxyCfg := networkConfigFromAllocation(alloc)
+		proxyGuestConfig, err := m.maybeRegisterEgressProxy(ctx, stored, proxyCfg)
+		if err != nil {
+			log.ErrorContext(ctx, "failed to configure egress proxy", "instance_id", id, "error", err)
+			releaseNetwork()
+			return nil, fmt.Errorf("configure egress proxy: %w", err)
+		}
+		imageInfo, err := m.imageManager.GetImage(ctx, stored.Image)
+		if err != nil {
+			log.ErrorContext(ctx, "failed to load image for config disk refresh", "instance_id", id, "image", stored.Image, "error", err)
+			releaseNetwork()
+			return nil, fmt.Errorf("get image for restore config disk: %w", err)
+		}
+		instForConfig := &Instance{StoredMetadata: *stored}
+		if err := m.createConfigDisk(ctx, instForConfig, imageInfo, proxyCfg, proxyGuestConfig); err != nil {
+			log.ErrorContext(ctx, "failed to refresh config disk for restore", "instance_id", id, "error", err)
+			releaseNetwork()
+			return nil, fmt.Errorf("refresh restore config disk: %w", err)
+		}
+		proxyRegistered = true
 	}
 
 	// 5. Transition: Standby → Paused (start hypervisor + restore)
@@ -224,28 +267,34 @@ func (m *manager) restoreInstance(
 		}
 	}
 
-	// 8. Delete snapshot after successful restore
-	log.InfoContext(ctx, "deleting snapshot after successful restore", "instance_id", id)
-	os.RemoveAll(snapshotDir) // Best effort, ignore errors
+	// 8. Delete snapshot after successful restore unless the hypervisor is keeping it
+	// as the base for the next standby snapshot.
+	if m.supportsSnapshotBaseReuse(stored.HypervisorType) {
+		retainedBaseDir := m.paths.InstanceSnapshotBase(id)
+		if err := restoreRetainedSnapshotBase(snapshotDir, retainedBaseDir); err != nil {
+			log.WarnContext(ctx, "failed to retain snapshot base after restore", "instance_id", id, "error", err)
+		}
+	} else {
+		log.InfoContext(ctx, "deleting snapshot after successful restore", "instance_id", id)
+		os.RemoveAll(snapshotDir) // Best effort, ignore errors
+	}
 
-	// 9. Update timestamp
-	now := time.Now()
-	stored.StartedAt = &now
-
+	// 9. Persist runtime metadata updates without resetting StartedAt.
+	// Restore resumes an existing boot; preserving StartedAt keeps marker
+	// hydration scoped to the original boot timeline.
 	meta = &metadata{StoredMetadata: *stored}
 	if err := m.saveMetadata(meta); err != nil {
 		// VM is running but metadata failed
 		log.WarnContext(ctx, "failed to update metadata after restore", "instance_id", id, "error", err)
 	}
 
+	// Return instance state from current metadata without forcing a log scan.
+	finalInst := m.toInstanceWithoutHydration(ctx, meta)
 	// Record metrics
 	if m.metrics != nil {
 		m.recordDuration(ctx, m.metrics.restoreDuration, start, "success", stored.HypervisorType)
-		m.recordStateTransition(ctx, string(StateStandby), string(StateRunning), stored.HypervisorType)
+		m.recordStateTransition(ctx, string(StateStandby), string(finalInst.State), stored.HypervisorType)
 	}
-
-	// Return instance with derived state (should be Running now)
-	finalInst := m.toInstance(ctx, meta)
 	log.InfoContext(ctx, "instance restored successfully", "instance_id", id, "state", finalInst.State)
 	return &finalInst, nil
 }
@@ -306,6 +355,24 @@ func reconfigureGuestNetwork(ctx context.Context, stored *StoredMetadata, alloc 
 	}
 
 	return nil
+}
+
+func networkConfigFromAllocation(alloc *network.Allocation) *network.NetworkConfig {
+	if alloc == nil {
+		return nil
+	}
+	return &network.NetworkConfig{
+		IP:        alloc.IP,
+		MAC:       alloc.MAC,
+		Gateway:   alloc.Gateway,
+		Netmask:   alloc.Netmask,
+		DNS:       alloc.DNS,
+		TAPDevice: alloc.TAPDevice,
+	}
+}
+
+func requiresRestoreConfigDiskRefresh(stored *StoredMetadata) bool {
+	return stored != nil && stored.NetworkEnabled && stored.NetworkEgress != nil && stored.NetworkEgress.Enabled
 }
 
 func netmaskToPrefix(mask string) (int, error) {

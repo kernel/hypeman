@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/devices"
+	"github.com/kernel/hypeman/lib/egressproxy"
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/network"
 	"go.opentelemetry.io/otel/trace"
@@ -50,6 +51,8 @@ func (m *manager) startInstance(
 	// 2a. Clear stale exit info from previous run and apply command overrides
 	stored.ExitCode = nil
 	stored.ExitMessage = ""
+	stored.ProgramStartedAt = nil
+	stored.GuestAgentReadyAt = nil
 	if len(req.Entrypoint) > 0 {
 		stored.Entrypoint = req.Entrypoint
 	}
@@ -103,6 +106,20 @@ func (m *manager) startInstance(
 		})
 	}
 
+	var proxyGuestConfig *egressproxy.GuestConfig
+	if stored.NetworkEnabled {
+		proxyGuestConfig, err = m.maybeRegisterEgressProxy(ctx, stored, netConfig)
+		if err != nil {
+			log.ErrorContext(ctx, "failed to configure egress proxy", "instance_id", id, "error", err)
+			return nil, fmt.Errorf("configure egress proxy: %w", err)
+		}
+		if proxyGuestConfig != nil {
+			cu.Add(func() {
+				m.unregisterEgressProxyInstance(ctx, id)
+			})
+		}
+	}
+
 	// 4b. Recreate vGPU mdev if this instance had a GPU profile
 	// Note: GPU availability was already validated in step 2b
 	if stored.GPUProfile != "" {
@@ -126,12 +143,19 @@ func (m *manager) startInstance(
 	// 5. Regenerate config disk with new network configuration
 	instForConfig := &Instance{StoredMetadata: *stored}
 	log.DebugContext(ctx, "regenerating config disk", "instance_id", id)
-	if err := m.createConfigDisk(ctx, instForConfig, imageInfo, netConfig); err != nil {
+	if err := m.createConfigDisk(ctx, instForConfig, imageInfo, netConfig, proxyGuestConfig); err != nil {
 		log.ErrorContext(ctx, "failed to create config disk", "instance_id", id, "error", err)
 		return nil, fmt.Errorf("create config disk: %w", err)
 	}
 
+	if err := m.archiveAppLogForBoot(id); err != nil {
+		log.WarnContext(ctx, "failed to archive app log before start", "instance_id", id, "error", err)
+	}
+
 	// 6. Start hypervisor and boot VM (reuses logic from create)
+	bootStart := time.Now().UTC()
+	stored.StartedAt = &bootStart
+
 	log.InfoContext(ctx, "starting hypervisor and booting VM", "instance_id", id)
 	if err := m.startAndBootVM(ctx, stored, imageInfo, netConfig); err != nil {
 		log.ErrorContext(ctx, "failed to start and boot VM", "instance_id", id, "error", err)
@@ -142,23 +166,19 @@ func (m *manager) startInstance(
 	cu.Release()
 
 	// 7. Update metadata (set PID, StartedAt)
-	now := time.Now()
-	stored.StartedAt = &now
-
 	meta = &metadata{StoredMetadata: *stored}
 	if err := m.saveMetadata(meta); err != nil {
 		// VM is running but metadata failed - log but don't fail
 		log.WarnContext(ctx, "failed to update metadata after VM start", "instance_id", id, "error", err)
 	}
 
+	// Return instance state from current metadata without forcing a log scan.
+	finalInst := m.toInstanceWithoutHydration(ctx, meta)
 	// Record metrics
 	if m.metrics != nil {
 		m.recordDuration(ctx, m.metrics.startDuration, start, "success", stored.HypervisorType)
-		m.recordStateTransition(ctx, string(StateStopped), string(StateRunning), stored.HypervisorType)
+		m.recordStateTransition(ctx, string(StateStopped), string(finalInst.State), stored.HypervisorType)
 	}
-
-	// Return instance with derived state (should be Running now)
-	finalInst := m.toInstance(ctx, meta)
 	log.InfoContext(ctx, "instance started successfully", "instance_id", id, "state", finalInst.State)
 	return &finalInst, nil
 }

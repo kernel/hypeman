@@ -1,4 +1,4 @@
 package tags
 
-// Metadata is the shared domain type for resource metadata tags.
-type Metadata = map[string]string
+// Tags is the shared domain type for resource tags.
+type Tags = map[string]string

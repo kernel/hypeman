@@ -7,8 +7,13 @@ import "fmt"
 var ValidTransitions = map[State][]State{
 	// Cloud Hypervisor native transitions
 	StateCreated: {
-		StateRunning,  // boot VM
-		StateShutdown, // shutdown before boot
+		StateInitializing, // boot VM (guest init in progress)
+		StateRunning,      // boot VM (fast path; markers already available)
+		StateShutdown,     // shutdown before boot
+	},
+	StateInitializing: {
+		StateRunning,  // guest init complete
+		StateShutdown, // shutdown
 	},
 	StateRunning: {
 		StatePaused,   // pause
@@ -68,7 +73,7 @@ func (s State) IsTerminal() bool {
 // RequiresVMM returns true if this state requires a running VMM process
 func (s State) RequiresVMM() bool {
 	switch s {
-	case StateCreated, StateRunning, StatePaused, StateShutdown:
+	case StateCreated, StateInitializing, StateRunning, StatePaused, StateShutdown:
 		return true
 	case StateStopped, StateStandby, StateUnknown:
 		return false

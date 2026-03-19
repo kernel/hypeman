@@ -72,9 +72,19 @@ func createVM(config *shimconfig.ShimConfig) (*vz.VirtualMachine, *vz.VirtualMac
 	}
 	vmConfig.SetSocketDevicesVirtualMachineConfiguration([]vz.SocketDeviceConfiguration{vsockConfig})
 
-	// Do not attach memory balloon for now.
-	// Save/restore compatibility on VZ can fail with "invalid argument" for some
-	// Linux guest configurations when a balloon device is present.
+	if config.EnableMemoryBalloon {
+		balloonConfig, err := vz.NewVirtioTraditionalMemoryBalloonDeviceConfiguration()
+		if err != nil {
+			if config.RequireMemoryBalloon {
+				return nil, nil, fmt.Errorf("create memory balloon device: %w", err)
+			}
+			slog.Warn("memory balloon unavailable, continuing without balloon", "error", err)
+		} else {
+			vmConfig.SetMemoryBalloonDevicesVirtualMachineConfiguration([]vz.MemoryBalloonDeviceConfiguration{
+				balloonConfig,
+			})
+		}
+	}
 
 	if validated, err := vmConfig.Validate(); !validated || err != nil {
 		return nil, nil, fmt.Errorf("invalid vm configuration: %w", err)

@@ -28,6 +28,7 @@ func TestCpToAndFromInstance(t *testing.T) {
 	}
 
 	svc := newTestService(t)
+	imageName := "docker.io/library/nginx:alpine"
 
 	// Ensure system files (kernel and initrd) are available
 	t.Log("Ensuring system files...")
@@ -37,7 +38,7 @@ func TestCpToAndFromInstance(t *testing.T) {
 	t.Log("System files ready")
 
 	// Create and wait for nginx image (has a long-running process)
-	createAndWaitForImage(t, svc, "docker.io/library/nginx:alpine", 30*time.Second)
+	imageName = createAndWaitForImage(t, svc, imageName, 30*time.Second)
 
 	// Create instance
 	t.Log("Creating instance...")
@@ -45,11 +46,12 @@ func TestCpToAndFromInstance(t *testing.T) {
 	instResp, err := svc.CreateInstance(ctx(), oapi.CreateInstanceRequestObject{
 		Body: &oapi.CreateInstanceRequest{
 			Name:  "cp-test",
-			Image: "docker.io/library/nginx:alpine",
+			Image: imageName,
 			Network: &struct {
-				BandwidthDownload *string `json:"bandwidth_download,omitempty"`
-				BandwidthUpload   *string `json:"bandwidth_upload,omitempty"`
-				Enabled           *bool   `json:"enabled,omitempty"`
+				BandwidthDownload *string                                  `json:"bandwidth_download,omitempty"`
+				BandwidthUpload   *string                                  `json:"bandwidth_upload,omitempty"`
+				Egress            *oapi.CreateInstanceRequestNetworkEgress `json:"egress,omitempty"`
+				Enabled           *bool                                    `json:"enabled,omitempty"`
 			}{
 				Enabled: &networkEnabled,
 			},
@@ -168,6 +170,7 @@ func TestCpDirectoryToInstance(t *testing.T) {
 	}
 
 	svc := newTestService(t)
+	imageName := "docker.io/library/nginx:alpine"
 
 	// Ensure system files
 	t.Log("Ensuring system files...")
@@ -176,7 +179,7 @@ func TestCpDirectoryToInstance(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create and wait for nginx image (has a long-running process)
-	createAndWaitForImage(t, svc, "docker.io/library/nginx:alpine", 30*time.Second)
+	imageName = createAndWaitForImage(t, svc, imageName, 30*time.Second)
 
 	// Create instance
 	t.Log("Creating instance...")
@@ -184,11 +187,12 @@ func TestCpDirectoryToInstance(t *testing.T) {
 	instResp, err := svc.CreateInstance(ctx(), oapi.CreateInstanceRequestObject{
 		Body: &oapi.CreateInstanceRequest{
 			Name:  "cp-dir-test",
-			Image: "docker.io/library/nginx:alpine",
+			Image: imageName,
 			Network: &struct {
-				BandwidthDownload *string `json:"bandwidth_download,omitempty"`
-				BandwidthUpload   *string `json:"bandwidth_upload,omitempty"`
-				Enabled           *bool   `json:"enabled,omitempty"`
+				BandwidthDownload *string                                  `json:"bandwidth_download,omitempty"`
+				BandwidthUpload   *string                                  `json:"bandwidth_upload,omitempty"`
+				Egress            *oapi.CreateInstanceRequestNetworkEgress `json:"egress,omitempty"`
+				Enabled           *bool                                    `json:"enabled,omitempty"`
 			}{
 				Enabled: &networkEnabled,
 			},

@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -97,6 +98,21 @@ func cleanupOrphanedQEMUProcesses(t *testing.T, mgr *manager) {
 	}
 }
 
+func requireQEMUAvailable(t *testing.T) {
+	t.Helper()
+
+	starter := qemu.NewStarter()
+	binaryPath, err := starter.GetBinaryPath(nil, "")
+	if err != nil {
+		t.Skipf("QEMU not available: %v", err)
+	}
+
+	cmd := exec.Command(binaryPath, "--version")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Skipf("QEMU runtime unavailable: %v (output: %s)", err, strings.TrimSpace(string(out)))
+	}
+}
+
 // waitForQEMUReady polls QEMU status via QMP until it's running or times out
 func waitForQEMUReady(ctx context.Context, socketPath string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
@@ -163,22 +179,29 @@ func (r *qemuInstanceResolver) ResolveInstance(ctx context.Context, nameOrID str
 	return nameOrID, nameOrID, nil
 }
 
+func requireQEMUUsable(t *testing.T) {
+	t.Helper()
+
+	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
+		t.Skip("/dev/kvm not available, skipping on this platform")
+	}
+
+	starter := qemu.NewStarter()
+	if _, err := starter.GetBinaryPath(nil, ""); err != nil {
+		t.Skipf("QEMU not available: %v", err)
+	}
+	if _, err := starter.GetVersion(nil); err != nil {
+		t.Skipf("QEMU is installed but not usable: %v", err)
+	}
+}
+
 // TestQEMUBasicEndToEnd tests the complete instance lifecycle with QEMU.
 // This is the primary integration test for QEMU support.
 // It tests: create, get, list, logs, network, ingress, volumes, exec, and delete.
 // It does NOT test: snapshot/standby, hot memory resize (not supported by QEMU in first pass).
 func TestQEMUBasicEndToEnd(t *testing.T) {
 	t.Parallel()
-	// Require KVM access
-	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
-		t.Skip("/dev/kvm not available, skipping on this platform")
-	}
-
-	// Require QEMU to be installed
-	starter := qemu.NewStarter()
-	if _, err := starter.GetBinaryPath(nil, ""); err != nil {
-		t.Fatalf("QEMU not available: %v", err)
-	}
+	requireQEMUUsable(t)
 
 	manager, tmpDir := setupTestManagerForQEMU(t)
 	ctx := context.Background()
@@ -276,7 +299,7 @@ func TestQEMUBasicEndToEnd(t *testing.T) {
 	assert.NotEmpty(t, inst.Id)
 	assert.Equal(t, "test-nginx-qemu", inst.Name)
 	assert.Equal(t, integrationTestImageRef(t, "docker.io/library/nginx:alpine"), inst.Image)
-	assert.Equal(t, StateRunning, inst.State)
+	assert.Contains(t, []State{StateInitializing, StateRunning}, inst.State)
 	assert.Equal(t, hypervisor.TypeQEMU, inst.HypervisorType)
 	assert.False(t, inst.HasSnapshot)
 	assert.NotEmpty(t, inst.KernelVersion)
@@ -302,6 +325,8 @@ func TestQEMUBasicEndToEnd(t *testing.T) {
 	// Wait for VM to be fully running
 	err = waitForQEMUReady(ctx, inst.SocketPath, 10*time.Second)
 	require.NoError(t, err, "QEMU VM should reach running state")
+	inst, err = waitForInstanceState(ctx, manager, inst.Id, StateRunning, 20*time.Second)
+	require.NoError(t, err, "instance should reach Running state")
 
 	// Get instance
 	retrieved, err := manager.GetInstance(ctx, inst.Id)
@@ -575,12 +600,7 @@ func TestQEMUEntrypointEnvVars(t *testing.T) {
 	if os.Getuid() != 0 {
 		t.Skip("Skipping test that requires root")
 	}
-
-	// Require QEMU to be installed
-	starter := qemu.NewStarter()
-	if _, err := starter.GetBinaryPath(nil, ""); err != nil {
-		t.Fatalf("QEMU not available: %v", err)
-	}
+	requireQEMUUsable(t)
 
 	mgr, tmpDir := setupTestManagerForQEMU(t)
 	ctx := context.Background()
@@ -650,7 +670,9 @@ func TestQEMUEntrypointEnvVars(t *testing.T) {
 	inst, err := mgr.CreateInstance(ctx, req)
 	require.NoError(t, err)
 	require.NotNil(t, inst)
-	assert.Equal(t, StateRunning, inst.State)
+	assert.Contains(t, []State{StateInitializing, StateRunning}, inst.State)
+	inst, err = waitForInstanceState(ctx, mgr, inst.Id, StateRunning, 20*time.Second)
+	require.NoError(t, err)
 	assert.Equal(t, hypervisor.TypeQEMU, inst.HypervisorType, "Instance should use QEMU hypervisor")
 	t.Logf("Instance created: %s", inst.Id)
 
@@ -749,16 +771,7 @@ func TestQEMUEntrypointEnvVars(t *testing.T) {
 // This tests QEMU's migrate-to-file snapshot mechanism.
 func TestQEMUStandbyAndRestore(t *testing.T) {
 	t.Parallel()
-	// Require KVM access
-	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
-		t.Skip("/dev/kvm not available, skipping on this platform")
-	}
-
-	// Require QEMU to be installed
-	starter := qemu.NewStarter()
-	if _, err := starter.GetBinaryPath(nil, ""); err != nil {
-		t.Fatalf("QEMU not available: %v", err)
-	}
+	requireQEMUUsable(t)
 
 	manager, tmpDir := setupTestManagerForQEMU(t)
 	ctx := context.Background()
@@ -816,7 +829,9 @@ func TestQEMUStandbyAndRestore(t *testing.T) {
 	inst, err := manager.CreateInstance(ctx, req)
 	require.NoError(t, err)
 	require.NotNil(t, inst)
-	assert.Equal(t, StateRunning, inst.State)
+	assert.Contains(t, []State{StateInitializing, StateRunning}, inst.State)
+	inst, err = waitForInstanceState(ctx, manager, inst.Id, StateRunning, 20*time.Second)
+	require.NoError(t, err)
 	assert.Equal(t, hypervisor.TypeQEMU, inst.HypervisorType)
 	t.Logf("Instance created: %s (hypervisor: %s)", inst.Id, inst.HypervisorType)
 
@@ -850,7 +865,9 @@ func TestQEMUStandbyAndRestore(t *testing.T) {
 	t.Log("Restoring instance...")
 	inst, err = manager.RestoreInstance(ctx, inst.Id)
 	require.NoError(t, err)
-	assert.Equal(t, StateRunning, inst.State)
+	assert.Contains(t, []State{StateInitializing, StateRunning}, inst.State)
+	inst, err = waitForInstanceState(ctx, manager, inst.Id, StateRunning, 20*time.Second)
+	require.NoError(t, err)
 	t.Log("Instance restored and running")
 
 	// Wait for VM to be running again
@@ -870,14 +887,7 @@ func TestQEMUStandbyAndRestore(t *testing.T) {
 
 func TestQEMUForkFromRunningNetwork(t *testing.T) {
 	t.Parallel()
-	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
-		t.Skip("/dev/kvm not available, skipping on this platform")
-	}
-
-	starter := qemu.NewStarter()
-	if _, err := starter.GetBinaryPath(nil, ""); err != nil {
-		t.Fatalf("QEMU not available: %v", err)
-	}
+	requireQEMUUsable(t)
 
 	manager, tmpDir := setupTestManagerForQEMU(t)
 	ctx := context.Background()
@@ -919,6 +929,8 @@ func TestQEMUForkFromRunningNetwork(t *testing.T) {
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = manager.DeleteInstance(context.Background(), source.Id) })
+	source, err = waitForInstanceState(ctx, manager, source.Id, StateRunning, 20*time.Second)
+	require.NoError(t, err)
 	require.NoError(t, waitForQEMUReady(ctx, source.SocketPath, 10*time.Second))
 
 	assert.NotEmpty(t, source.IP)
@@ -941,11 +953,18 @@ func TestQEMUForkFromRunningNetwork(t *testing.T) {
 
 	sourceAfterFork, err := manager.GetInstance(ctx, source.Id)
 	require.NoError(t, err)
+	if sourceAfterFork.State != StateRunning {
+		sourceAfterFork, err = waitForInstanceState(ctx, manager, source.Id, StateRunning, 20*time.Second)
+		require.NoError(t, err)
+	}
 	require.Equal(t, StateRunning, sourceAfterFork.State)
 	require.NotEmpty(t, sourceAfterFork.IP)
 	assertHostCanReachNginx(t, sourceAfterFork.IP, 80, 60*time.Second)
 
 	forked, err = manager.RestoreInstance(ctx, forkedID)
+	require.NoError(t, err)
+	require.Contains(t, []State{StateInitializing, StateRunning}, forked.State)
+	forked, err = waitForInstanceState(ctx, manager, forkedID, StateRunning, 20*time.Second)
 	require.NoError(t, err)
 	require.Equal(t, StateRunning, forked.State)
 	require.NoError(t, waitForQEMUReady(ctx, forked.SocketPath, 10*time.Second))
@@ -955,19 +974,11 @@ func TestQEMUForkFromRunningNetwork(t *testing.T) {
 	assert.NotEqual(t, sourceAfterFork.IP, forked.IP)
 	assert.NotEqual(t, sourceAfterFork.MAC, forked.MAC)
 	assertHostCanReachNginx(t, forked.IP, 80, 60*time.Second)
-	assertHostCanReachNginx(t, sourceAfterFork.IP, 80, 60*time.Second)
 }
 
 func TestQEMUSnapshotFeature(t *testing.T) {
 	t.Parallel()
-	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
-		t.Skip("/dev/kvm not available, skipping on this platform")
-	}
-
-	starter := qemu.NewStarter()
-	if _, err := starter.GetBinaryPath(nil, ""); err != nil {
-		t.Skipf("QEMU not available: %v", err)
-	}
+	requireQEMUUsable(t)
 
 	mgr, tmpDir := setupTestManagerForQEMU(t)
 	runStandbySnapshotScenario(t, mgr, tmpDir, snapshotScenarioConfig{

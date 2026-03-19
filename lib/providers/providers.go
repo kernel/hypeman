@@ -13,6 +13,7 @@ import (
 	"github.com/kernel/hypeman/cmd/api/config"
 	"github.com/kernel/hypeman/lib/builds"
 	"github.com/kernel/hypeman/lib/devices"
+	"github.com/kernel/hypeman/lib/guestmemory"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/hypervisor/firecracker"
 	"github.com/kernel/hypeman/lib/images"
@@ -134,7 +135,13 @@ func ProvideInstanceManager(p *paths.Paths, cfg *config.Config, imageManager ima
 			Level:     &level,
 		},
 	}
-	return instances.NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, defaultHypervisor, snapshotDefaults, meter, tracer), nil
+	memoryPolicy := guestmemory.Policy{
+		Enabled:            cfg.Hypervisor.Memory.Enabled,
+		KernelPageInitMode: guestmemory.KernelPageInitMode(cfg.Hypervisor.Memory.KernelPageInitMode),
+		ReclaimEnabled:     cfg.Hypervisor.Memory.ReclaimEnabled,
+		VZBalloonRequired:  cfg.Hypervisor.Memory.VZBalloonRequired,
+	}
+	return instances.NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, defaultHypervisor, snapshotDefaults, meter, tracer, memoryPolicy), nil
 }
 
 // ProvideVolumeManager provides the volume manager
@@ -176,8 +183,10 @@ func ProvideResourceManager(ctx context.Context, cfg *config.Config, p *paths.Pa
 }
 
 // ProvideVMMetricsManager provides the VM metrics manager for utilization tracking
-func ProvideVMMetricsManager(instanceManager instances.Manager) (*vm_metrics.Manager, error) {
+func ProvideVMMetricsManager(instanceManager instances.Manager, cfg *config.Config, log *slog.Logger) (*vm_metrics.Manager, error) {
 	mgr := vm_metrics.NewManager()
+	mgr.SetVMLabelBudget(cfg.Metrics.VMLabelBudget)
+	mgr.SetLogger(log)
 
 	// Adapt instance manager to vm_metrics.InstanceSource interface
 	adapter := vm_metrics.NewInstanceManagerAdapter(instanceManager)

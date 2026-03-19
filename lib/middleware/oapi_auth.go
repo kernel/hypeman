@@ -13,6 +13,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/mux"
 	"github.com/kernel/hypeman/lib/logger"
+	"github.com/kernel/hypeman/lib/scopes"
 )
 
 // errRepoNotAllowed is returned when a valid token doesn't have access to the requested repository.
@@ -119,6 +120,10 @@ func OapiAuthenticationFunc(jwtSecret string) openapi3filter.AuthenticationFunc 
 
 		// Update the context with user ID
 		newCtx := context.WithValue(ctx, userIDKey, userID)
+
+		// Extract scoped permissions from the "permissions" claim.
+		// Tokens without this claim get full access (backward compatibility).
+		newCtx = extractPermissions(newCtx, claims)
 
 		// Update the request with the new context
 		*input.RequestValidationInput.Request = *input.RequestValidationInput.Request.WithContext(newCtx)
@@ -480,8 +485,45 @@ func JwtAuth(jwtSecret string) func(http.Handler) http.Handler {
 			// Update the context with user ID
 			newCtx := context.WithValue(r.Context(), userIDKey, userID)
 
+			// Extract scoped permissions from the "permissions" claim.
+			// Tokens without this claim get full access (backward compatibility).
+			newCtx = extractPermissions(newCtx, claims)
+
 			// Call next handler with updated context
 			next.ServeHTTP(w, r.WithContext(newCtx))
 		})
 	}
+}
+
+// extractPermissions reads the "permissions" claim from a JWT MapClaims
+// and stores the parsed scopes in the context. If the claim is absent,
+// the context is returned unmodified (meaning full access). If the claim
+// is present but malformed, an empty permission set is stored (deny all)
+// to prevent privilege escalation.
+func extractPermissions(ctx context.Context, claims jwt.MapClaims) context.Context {
+	raw, ok := claims["permissions"]
+	if !ok {
+		return ctx // no permissions claim — legacy full-access token
+	}
+
+	// The claim is a JSON array of strings, which jwt.MapClaims decodes
+	// as []interface{}.
+	arr, ok := raw.([]interface{})
+	if !ok {
+		// permissions claim present but not a valid array — deny all
+		return scopes.ContextWithPermissions(ctx, []scopes.Scope{})
+	}
+
+	log := logger.FromContext(ctx)
+	perms := make([]scopes.Scope, 0, len(arr))
+	for _, v := range arr {
+		if s, ok := v.(string); ok {
+			sc := scopes.Scope(s)
+			if !sc.Valid() {
+				log.WarnContext(ctx, "invalid scope in token permissions claim", "scope", s)
+			}
+			perms = append(perms, sc)
+		}
+	}
+	return scopes.ContextWithPermissions(ctx, perms)
 }

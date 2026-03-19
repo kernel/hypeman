@@ -89,7 +89,7 @@ func TestResolveSnapshotCompressionPolicyPrecedence(t *testing.T) {
 func TestValidateCreateRequestSnapshotPolicy(t *testing.T) {
 	t.Parallel()
 
-	err := validateCreateRequest(CreateInstanceRequest{
+	req := &CreateInstanceRequest{
 		Name:  "compression-test",
 		Image: "docker.io/library/alpine:latest",
 		SnapshotPolicy: &SnapshotPolicy{
@@ -99,7 +99,8 @@ func TestValidateCreateRequestSnapshotPolicy(t *testing.T) {
 				Level:     intPtr(0),
 			},
 		},
-	})
+	}
+	err := validateCreateRequest(req)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrInvalidRequest))
 }

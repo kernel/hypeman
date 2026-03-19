@@ -199,6 +199,11 @@ func (p *Paths) InstanceSnapshotLatest(id string) string {
 	return filepath.Join(p.InstanceSnapshots(id), "snapshot-latest")
 }
 
+// InstanceSnapshotBase returns the hidden retained snapshot base.
+func (p *Paths) InstanceSnapshotBase(id string) string {
+	return filepath.Join(p.InstanceSnapshots(id), "snapshot-base")
+}
+
 // InstanceSnapshotConfig returns the path to the snapshot config.json file.
 // Cloud Hypervisor creates config.json in the snapshot directory.
 func (p *Paths) InstanceSnapshotConfig(id string) string {

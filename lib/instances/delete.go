@@ -50,9 +50,9 @@ func (m *manager) deleteInstance(
 		guest.CloseConn(dialer.Key())
 	}
 
-	// 4. If running, try graceful guest shutdown before force kill.
+	// 4. If active, try graceful guest shutdown before force kill.
 	gracefulShutdown := false
-	if inst.State == StateRunning {
+	if inst.State == StateRunning || inst.State == StateInitializing {
 		stopTimeout := resolveStopTimeout(stored)
 		if stopTimeout > deleteGracefulShutdownTimeout {
 			stopTimeout = deleteGracefulShutdownTimeout
@@ -76,6 +76,7 @@ func (m *manager) deleteInstance(
 
 	// 6. Release network allocation
 	if inst.NetworkEnabled {
+		m.unregisterEgressProxyInstance(ctx, id)
 		log.DebugContext(ctx, "releasing network", "instance_id", id, "network", "default")
 		if err := m.networkManager.ReleaseAllocation(ctx, networkAlloc); err != nil {
 			// Log error but continue with cleanup

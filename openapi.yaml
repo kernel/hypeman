@@ -45,11 +45,12 @@ components:
     
     InstanceState:
       type: string
-      enum: [Created, Running, Paused, Shutdown, Stopped, Standby, Unknown]
+      enum: [Created, Initializing, Running, Paused, Shutdown, Stopped, Standby, Unknown]
       description: |
         Instance state:
         - Created: VMM created but not started (Cloud Hypervisor native)
-        - Running: VM is actively running (Cloud Hypervisor native)
+        - Initializing: VM is running while guest init is still in progress
+        - Running: Guest program has started and instance is ready
         - Paused: VM is paused (Cloud Hypervisor native)
         - Shutdown: VM shut down but VMM exists (Cloud Hypervisor native)
         - Stopped: No VMM running, no snapshot exists
@@ -98,10 +99,10 @@ components:
           enum: [tcp, udp]
           default: tcp
 
-    MetadataTags:
+    Tags:
       type: object
       maxProperties: 50
-      description: User-defined key-value metadata tags.
+      description: User-defined key-value tags.
       propertyNames:
         type: string
         minLength: 1
@@ -116,6 +117,92 @@ components:
         team: backend
         env: staging
     
+    CreateInstanceRequestNetworkEgressEnforcement:
+      type: object
+      description: Egress enforcement policy applied when mediation is enabled.
+      properties:
+        mode:
+          type: string
+          enum: [all, http_https_only]
+          default: all
+          description: |
+            `all` (default) rejects direct non-mediated TCP egress from the VM,
+            while `http_https_only` rejects direct egress only on TCP ports 80 and 443.
+          example: all
+
+    CreateInstanceRequestNetworkEgress:
+      type: object
+      description: |
+        Host-mediated outbound network policy.
+        Omit this object, or set `enabled: false`, to preserve normal direct outbound networking
+        when `network.enabled` is true.
+      properties:
+        enabled:
+          type: boolean
+          description: |
+            Whether to enable the mediated egress path.
+            When false or omitted, the instance keeps normal direct outbound networking and
+            host-managed credential rewriting is disabled.
+          default: false
+          example: true
+        enforcement:
+          $ref: "#/components/schemas/CreateInstanceRequestNetworkEgressEnforcement"
+
+    CreateInstanceRequestCredentialSource:
+      type: object
+      required: [env]
+      properties:
+        env:
+          type: string
+          description: |
+            Name of the real credential in the request `env` map.
+            The guest-visible env var key can receive a mock placeholder, while the mediated
+            egress path resolves that placeholder back to this real value only on the host.
+          example: OUTBOUND_OPENAI_KEY
+
+    CreateInstanceRequestCredentialInjectAs:
+      type: object
+      required: [header, format]
+      description: |
+        Current v1 transform shape. Header templating is supported now; other transform
+        types (for example request signing) can be added in future revisions.
+      properties:
+        header:
+          type: string
+          description: Header name to set/mutate for matching outbound requests.
+          example: Authorization
+        format:
+          type: string
+          description: Template that must include `${value}`.
+          example: "Bearer ${value}"
+
+    CreateInstanceRequestCredentialInject:
+      type: object
+      required: [as]
+      properties:
+        hosts:
+          type: array
+          items:
+            type: string
+          description: |
+            Optional destination host patterns (`api.example.com`, `*.example.com`).
+            Omit to allow injection on all destinations.
+          example: [api.openai.com, "*.openai.com"]
+        as:
+          $ref: "#/components/schemas/CreateInstanceRequestCredentialInjectAs"
+
+    CreateInstanceRequestCredential:
+      type: object
+      required: [source, inject]
+      properties:
+        source:
+          $ref: "#/components/schemas/CreateInstanceRequestCredentialSource"
+        inject:
+          type: array
+          items:
+            $ref: "#/components/schemas/CreateInstanceRequestCredentialInject"
+          minItems: 1
+
     CreateInstanceRequest:
       type: object
       required: [name, image]
@@ -161,8 +248,26 @@ components:
           example:
             PORT: "3000"
             NODE_ENV: production
-        metadata:
-          $ref: "#/components/schemas/MetadataTags"
+        credentials:
+          type: object
+          description: |
+            Host-managed credential brokering policies keyed by guest-visible env var name.
+            Those guest env vars receive mock placeholder values, while the real values remain
+            host-scoped in the request `env` map and are only materialized on the mediated
+            egress path according to each credential's `source` and `inject` rules.
+          additionalProperties:
+            $ref: "#/components/schemas/CreateInstanceRequestCredential"
+          example:
+            OUTBOUND_OPENAI_KEY:
+              source:
+                env: OUTBOUND_OPENAI_KEY
+              inject:
+                - hosts: [api.openai.com, "*.openai.com"]
+                  as:
+                    header: Authorization
+                    format: "Bearer ${value}"
+        tags:
+          $ref: "#/components/schemas/Tags"
         network:
           type: object
           description: Network configuration for the instance
@@ -180,6 +285,8 @@ components:
               type: string
               description: Upload bandwidth limit (VM→external, e.g., "1Gbps", "125MB/s"). Defaults to proportional share based on CPU allocation.
               example: "1Gbps"
+            egress:
+              $ref: "#/components/schemas/CreateInstanceRequestNetworkEgress"
         devices:
           type: array
           items:
@@ -288,8 +395,8 @@ components:
           example: baseline-standby
         kind:
           $ref: "#/components/schemas/SnapshotKind"
-        metadata:
-          $ref: "#/components/schemas/MetadataTags"
+        tags:
+          $ref: "#/components/schemas/Tags"
         source_instance_id:
           type: string
           description: Source instance ID at snapshot creation time
@@ -374,8 +481,8 @@ components:
           pattern: ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$
           maxLength: 63
           example: pre-upgrade
-        metadata:
-          $ref: "#/components/schemas/MetadataTags"
+        tags:
+          $ref: "#/components/schemas/Tags"
         compression:
           $ref: "#/components/schemas/SnapshotCompressionConfig"
 
@@ -476,8 +583,8 @@ components:
           additionalProperties:
             type: string
           description: Environment variables
-        metadata:
-          $ref: "#/components/schemas/MetadataTags"
+        tags:
+          $ref: "#/components/schemas/Tags"
         network:
           type: object
           description: Network configuration of the instance
@@ -655,8 +762,8 @@ components:
           type: string
           description: OCI image reference (e.g., docker.io/library/nginx:latest)
           example: docker.io/library/nginx:latest
-        metadata:
-          $ref: "#/components/schemas/MetadataTags"
+        tags:
+          $ref: "#/components/schemas/Tags"
     
     Image:
       type: object
@@ -712,8 +819,8 @@ components:
           description: Environment variables from container metadata
           example:
             PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-        metadata:
-          $ref: "#/components/schemas/MetadataTags"
+        tags:
+          $ref: "#/components/schemas/Tags"
         working_dir:
           type: string
           description: Working directory from container metadata
@@ -741,8 +848,8 @@ components:
           type: integer
           description: Size in gigabytes
           example: 10
-        metadata:
-          $ref: "#/components/schemas/MetadataTags"
+        tags:
+          $ref: "#/components/schemas/Tags"
     
     VolumeAttachment:
       type: object
@@ -777,8 +884,8 @@ components:
           type: integer
           description: Size in gigabytes
           example: 10
-        metadata:
-          $ref: "#/components/schemas/MetadataTags"
+        tags:
+          $ref: "#/components/schemas/Tags"
         attachments:
           type: array
           description: List of current attachments (empty if not attached)
@@ -884,8 +991,8 @@ components:
           items:
             $ref: "#/components/schemas/IngressRule"
           minItems: 1
-        metadata:
-          $ref: "#/components/schemas/MetadataTags"
+        tags:
+          $ref: "#/components/schemas/Tags"
     
     Ingress:
       type: object
@@ -899,8 +1006,8 @@ components:
           type: string
           description: Human-readable name
           example: my-api-ingress
-        metadata:
-          $ref: "#/components/schemas/MetadataTags"
+        tags:
+          $ref: "#/components/schemas/Tags"
         rules:
           type: array
           description: Routing rules for this ingress
@@ -1014,8 +1121,8 @@ components:
           type: string
           description: PCI address of the device (required, e.g., "0000:a2:00.0")
           example: "0000:a2:00.0"
-        metadata:
-          $ref: "#/components/schemas/MetadataTags"
+        tags:
+          $ref: "#/components/schemas/Tags"
     
     Device:
       type: object
@@ -1031,8 +1138,8 @@ components:
           example: l4-gpu
         type:
           $ref: "#/components/schemas/DeviceType"
-        metadata:
-          $ref: "#/components/schemas/MetadataTags"
+        tags:
+          $ref: "#/components/schemas/Tags"
         pci_address:
           type: string
           description: PCI address
@@ -1178,8 +1285,8 @@ components:
           example: "build-abc123"
         status:
           $ref: "#/components/schemas/BuildStatus"
-        metadata:
-          $ref: "#/components/schemas/MetadataTags"
+        tags:
+          $ref: "#/components/schemas/Tags"
         queue_position:
           type: integer
           description: Position in build queue (only when status is queued)
@@ -1392,14 +1499,14 @@ paths:
       security:
         - bearerAuth: []
       parameters:
-        - name: metadata
+        - name: tags
           in: query
           required: false
           style: deepObject
           explode: true
           schema:
-            $ref: "#/components/schemas/MetadataTags"
-          description: Filter images by metadata key-value pairs.
+            $ref: "#/components/schemas/Tags"
+          description: Filter images by tag key-value pairs.
       responses:
         200:
           description: List of images
@@ -1537,16 +1644,16 @@ paths:
           schema:
             $ref: "#/components/schemas/InstanceState"
           description: Filter instances by state (e.g., Running, Stopped)
-        - name: metadata
+        - name: tags
           in: query
           required: false
           style: deepObject
           explode: true
           schema:
-            $ref: "#/components/schemas/MetadataTags"
+            $ref: "#/components/schemas/Tags"
           description: |
-            Filter instances by metadata key-value pairs. Uses deepObject style:
-            ?metadata[team]=backend&metadata[env]=staging
+            Filter instances by tag key-value pairs. Uses deepObject style:
+            ?tags[team]=backend&tags[env]=staging
             Multiple entries are ANDed together. All specified key-value pairs must match.
       responses:
         200:
@@ -1964,14 +2071,14 @@ paths:
           schema:
             type: string
           description: Filter snapshots by snapshot name
-        - name: metadata
+        - name: tags
           in: query
           required: false
           style: deepObject
           explode: true
           schema:
-            $ref: "#/components/schemas/MetadataTags"
-          description: Filter snapshots by metadata key-value pairs.
+            $ref: "#/components/schemas/Tags"
+          description: Filter snapshots by tag key-value pairs.
       responses:
         200:
           description: List of snapshots
@@ -2457,14 +2564,14 @@ paths:
       security:
         - bearerAuth: []
       parameters:
-        - name: metadata
+        - name: tags
           in: query
           required: false
           style: deepObject
           explode: true
           schema:
-            $ref: "#/components/schemas/MetadataTags"
-          description: Filter volumes by metadata key-value pairs.
+            $ref: "#/components/schemas/Tags"
+          description: Filter volumes by tag key-value pairs.
       responses:
         200:
           description: List of volumes
@@ -2561,14 +2668,14 @@ paths:
             type: string
           description: Optional custom volume ID (auto-generated if not provided)
           example: vol-data-1
-        - name: metadata
+        - name: tags
           in: query
           required: false
           style: deepObject
           explode: true
           schema:
-            $ref: "#/components/schemas/MetadataTags"
-          description: Metadata tags for the created volume.
+            $ref: "#/components/schemas/Tags"
+          description: Tags for the created volume.
       requestBody:
         required: true
         description: tar.gz archive file containing the volume content
@@ -2682,14 +2789,14 @@ paths:
       security:
         - bearerAuth: []
       parameters:
-        - name: metadata
+        - name: tags
           in: query
           required: false
           style: deepObject
           explode: true
           schema:
-            $ref: "#/components/schemas/MetadataTags"
-          description: Filter devices by metadata key-value pairs.
+            $ref: "#/components/schemas/Tags"
+          description: Filter devices by tag key-value pairs.
       responses:
         200:
           description: List of registered devices
@@ -2861,14 +2968,14 @@ paths:
       security:
         - bearerAuth: []
       parameters:
-        - name: metadata
+        - name: tags
           in: query
           required: false
           style: deepObject
           explode: true
           schema:
-            $ref: "#/components/schemas/MetadataTags"
-          description: Filter ingresses by metadata key-value pairs.
+            $ref: "#/components/schemas/Tags"
+          description: Filter ingresses by tag key-value pairs.
       responses:
         200:
           description: List of ingresses
@@ -3012,14 +3119,14 @@ paths:
       security:
         - bearerAuth: []
       parameters:
-        - name: metadata
+        - name: tags
           in: query
           required: false
           style: deepObject
           explode: true
           schema:
-            $ref: "#/components/schemas/MetadataTags"
-          description: Filter builds by metadata key-value pairs.
+            $ref: "#/components/schemas/Tags"
+          description: Filter builds by tag key-value pairs.
       responses:
         200:
           description: List of builds
@@ -3102,10 +3209,10 @@ paths:
                     Global cache identifier (e.g., "node", "python", "ubuntu", "browser").
                     When specified, the build will import from cache/global/{key}.
                     Admin builds will also export to this location.
-                metadata:
+                tags:
                   type: string
                   description: |
-                    JSON object of metadata tags.
+                    JSON object of tags.
                     Example: {"team":"backend","env":"staging"}
       responses:
         202:

@@ -22,20 +22,20 @@ import (
 	"github.com/samber/lo"
 )
 
-// ListInstances lists instances, optionally filtered by state and/or metadata.
+// ListInstances lists instances, optionally filtered by state and/or tags.
 func (s *ApiService) ListInstances(ctx context.Context, request oapi.ListInstancesRequestObject) (oapi.ListInstancesResponseObject, error) {
 	log := logger.FromContext(ctx)
 
 	// Convert OAPI params to domain filter
 	var filter *instances.ListInstancesFilter
-	if request.Params.State != nil || request.Params.Metadata != nil {
+	if request.Params.State != nil || request.Params.Tags != nil {
 		filter = &instances.ListInstancesFilter{}
 		if request.Params.State != nil {
 			state := instances.State(*request.Params.State)
 			filter.State = &state
 		}
-		if request.Params.Metadata != nil {
-			filter.Metadata = toMapMetadata(request.Params.Metadata)
+		if request.Params.Tags != nil {
+			filter.Tags = toMapTags(request.Params.Tags)
 		}
 	}
 
@@ -126,15 +126,50 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		env = *request.Body.Env
 	}
 
-	metadata := make(map[string]string)
-	if request.Body.Metadata != nil {
-		metadata = toMapMetadata(request.Body.Metadata)
+	resourceTags := make(map[string]string)
+	if request.Body.Tags != nil {
+		resourceTags = toMapTags(request.Body.Tags)
 	}
 
 	// Parse network enabled (default: true)
 	networkEnabled := true
 	if request.Body.Network != nil && request.Body.Network.Enabled != nil {
 		networkEnabled = *request.Body.Network.Enabled
+	}
+	var networkEgress *instances.NetworkEgressPolicy
+	if request.Body.Network != nil && request.Body.Network.Egress != nil {
+		enabled := request.Body.Network.Egress.Enabled != nil && *request.Body.Network.Egress.Enabled
+		networkEgress = &instances.NetworkEgressPolicy{Enabled: enabled}
+		if request.Body.Network.Egress.Enforcement != nil && request.Body.Network.Egress.Enforcement.Mode != nil {
+			networkEgress.EnforcementMode = instances.EgressEnforcementMode(*request.Body.Network.Egress.Enforcement.Mode)
+		} else if enabled {
+			networkEgress.EnforcementMode = instances.EgressEnforcementModeAll
+		}
+	}
+	var credentials map[string]instances.CredentialPolicy
+	if request.Body.Credentials != nil {
+		credentials = make(map[string]instances.CredentialPolicy, len(*request.Body.Credentials))
+		for credentialName, credential := range *request.Body.Credentials {
+			policy := instances.CredentialPolicy{
+				Source: instances.CredentialSource{
+					Env: credential.Source.Env,
+				},
+				Inject: make([]instances.CredentialInjectRule, 0, len(credential.Inject)),
+			}
+			for _, inject := range credential.Inject {
+				rule := instances.CredentialInjectRule{
+					As: instances.CredentialInjectAs{
+						Header: inject.As.Header,
+						Format: inject.As.Format,
+					},
+				}
+				if inject.Hosts != nil {
+					rule.Hosts = append([]string(nil), (*inject.Hosts)...)
+				}
+				policy.Inject = append(policy.Inject, rule)
+			}
+			credentials[credentialName] = policy
+		}
 	}
 
 	// Parse network bandwidth limits (0 = auto)
@@ -254,8 +289,10 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		NetworkBandwidthDownload: networkBandwidthDownload,
 		NetworkBandwidthUpload:   networkBandwidthUpload,
 		Env:                      env,
-		Metadata:                 metadata,
+		Tags:                     resourceTags,
 		NetworkEnabled:           networkEnabled,
+		NetworkEgress:            networkEgress,
+		Credentials:              credentials,
 		Devices:                  deviceRefs,
 		Volumes:                  volumes,
 		Hypervisor:               hvType,
@@ -878,8 +915,8 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 		oapiInst.Env = &inst.Env
 	}
 
-	if len(inst.Metadata) > 0 {
-		oapiInst.Metadata = toOAPIMetadata(inst.Metadata)
+	if len(inst.Tags) > 0 {
+		oapiInst.Tags = toOAPITags(inst.Tags)
 	}
 	if inst.SnapshotPolicy != nil {
 		oapiPolicy, _ := toOAPISnapshotPolicy(*inst.SnapshotPolicy)

@@ -29,8 +29,11 @@ const (
 
 var defaultImages = []string{
 	"docker.io/library/alpine:latest",
+	"docker.io/library/alpine:3.18",
+	"docker.io/library/debian:12-slim",
 	"docker.io/library/nginx:alpine",
 	"docker.io/bitnami/redis:latest",
+	"docker.io/jrei/systemd-ubuntu:22.04",
 }
 
 type manifestImage struct {

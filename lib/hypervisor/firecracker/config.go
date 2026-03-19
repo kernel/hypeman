@@ -52,6 +52,13 @@ type serialDevice struct {
 	SerialOutPath string `json:"serial_out_path"`
 }
 
+type balloon struct {
+	AmountMib         int64 `json:"amount_mib"`
+	DeflateOnOOM      bool  `json:"deflate_on_oom"`
+	FreePageHinting   bool  `json:"free_page_hinting,omitempty"`
+	FreePageReporting bool  `json:"free_page_reporting,omitempty"`
+}
+
 type instanceActionInfo struct {
 	ActionType string `json:"action_type"`
 }
@@ -160,6 +167,18 @@ func toVsockConfig(cfg hypervisor.VMConfig) *vsock {
 	}
 }
 
+func toBalloonConfig(cfg hypervisor.VMConfig) *balloon {
+	if !cfg.GuestMemory.EnableBalloon {
+		return nil
+	}
+	return &balloon{
+		AmountMib:         0,
+		DeflateOnOOM:      cfg.GuestMemory.DeflateOnOOM,
+		FreePageHinting:   cfg.GuestMemory.FreePageHinting,
+		FreePageReporting: cfg.GuestMemory.FreePageReporting,
+	}
+}
+
 func toRateLimiter(limit int64, burst int64) *rateLimiter {
 	if limit <= 0 {
 		return nil
@@ -181,10 +200,15 @@ func toRateLimiter(limit int64, burst int64) *rateLimiter {
 }
 
 func toSnapshotCreateParams(snapshotDir string) snapshotCreateParams {
+	snapshotType := "Full"
+	if _, err := os.Stat(snapshotMemoryPath(snapshotDir)); err == nil {
+		snapshotType = "Diff"
+	}
+
 	return snapshotCreateParams{
 		MemFilePath:  snapshotMemoryPath(snapshotDir),
 		SnapshotPath: snapshotStatePath(snapshotDir),
-		SnapshotType: "Full",
+		SnapshotType: snapshotType,
 	}
 }
 

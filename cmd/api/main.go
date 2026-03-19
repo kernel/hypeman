@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -29,6 +31,7 @@ import (
 	"github.com/kernel/hypeman/lib/oapi"
 	"github.com/kernel/hypeman/lib/otel"
 	"github.com/kernel/hypeman/lib/registry"
+	"github.com/kernel/hypeman/lib/scopes"
 	"github.com/kernel/hypeman/lib/vmm"
 	nethttpmiddleware "github.com/oapi-codegen/nethttp-middleware"
 	"github.com/riandyrn/otelchi"
@@ -41,6 +44,19 @@ func main() {
 		os.Exit(1)
 	}
 	slog.Info("main() exiting normally")
+}
+
+func metricsServerAddress(cfg *config.Config) string {
+	return net.JoinHostPort(cfg.Metrics.ListenAddress, strconv.Itoa(cfg.Metrics.Port))
+}
+
+func newMetricsServer(addr string, handler http.Handler) *http.Server {
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", handler)
+	return &http.Server{
+		Addr:    addr,
+		Handler: mux,
+	}
 }
 
 func run() error {
@@ -62,34 +78,32 @@ func run() error {
 
 	// Initialize OpenTelemetry (before wire initialization)
 	otelCfg := otel.Config{
-		Enabled:           cfg.Otel.Enabled,
-		Endpoint:          cfg.Otel.Endpoint,
-		ServiceName:       cfg.Otel.ServiceName,
-		ServiceInstanceID: cfg.Otel.ServiceInstanceID,
-		Insecure:          cfg.Otel.Insecure,
-		Version:           cfg.Version,
-		Env:               cfg.Env,
+		Enabled:              cfg.Otel.Enabled,
+		Endpoint:             cfg.Otel.Endpoint,
+		ServiceName:          cfg.Otel.ServiceName,
+		ServiceInstanceID:    cfg.Otel.ServiceInstanceID,
+		Insecure:             cfg.Otel.Insecure,
+		MetricExportInterval: cfg.Otel.MetricExportInterval,
+		Version:              cfg.Version,
+		Env:                  cfg.Env,
 	}
 
 	otelProvider, otelShutdown, err := otel.Init(context.Background(), otelCfg)
 	if err != nil {
-		// Log warning but don't fail - graceful degradation
-		slog.Warn("failed to initialize OpenTelemetry, continuing without telemetry", "error", err)
+		return fmt.Errorf("initialize telemetry: %w", err)
 	}
-	if otelShutdown != nil {
-		defer func() {
-			slog.Info("shutting down OpenTelemetry")
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			if err := otelShutdown(shutdownCtx); err != nil {
-				slog.Warn("error shutting down OpenTelemetry", "error", err)
-			}
-			slog.Info("OpenTelemetry shutdown complete")
-		}()
-	}
+	defer func() {
+		slog.Info("shutting down OpenTelemetry")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := otelShutdown(shutdownCtx); err != nil {
+			slog.Warn("error shutting down OpenTelemetry", "error", err)
+		}
+		slog.Info("OpenTelemetry shutdown complete")
+	}()
 
-	// Initialize guest and vmm metrics if OTel is enabled
-	if otelProvider != nil && otelProvider.Meter != nil {
+	// Initialize guest and vmm metrics.
+	if otelProvider.Meter != nil {
 		guestMetrics, err := guest.NewMetrics(otelProvider.Meter)
 		if err == nil {
 			guest.SetMetrics(guestMetrics)
@@ -101,7 +115,7 @@ func run() error {
 	}
 
 	// Set global OTel log handler for logger package
-	if otelProvider != nil && otelProvider.LogHandler != nil {
+	if otelProvider.LogHandler != nil {
 		otel.SetGlobalLogHandler(otelProvider.LogHandler)
 	}
 
@@ -127,7 +141,9 @@ func run() error {
 
 	// Log OTel status
 	if cfg.Otel.Enabled {
-		logger.Info("OpenTelemetry enabled", "endpoint", cfg.Otel.Endpoint, "service", cfg.Otel.ServiceName)
+		logger.Info("OpenTelemetry push enabled", "endpoint", cfg.Otel.Endpoint, "service", cfg.Otel.ServiceName, "metric_export_interval", cfg.Otel.MetricExportInterval)
+	} else {
+		logger.Info("OpenTelemetry push disabled; Prometheus pull metrics remain available")
 	}
 
 	// Validate JWT secret is configured
@@ -181,7 +197,7 @@ func run() error {
 		// Initialize to empty slice (not nil) so cleanup runs even with no running VMs
 		preserveTAPs = []string{}
 		for _, inst := range allInstances {
-			if inst.State == instances.StateRunning || inst.State == instances.StateUnknown {
+			if inst.State == instances.StateRunning || inst.State == instances.StateInitializing || inst.State == instances.StateUnknown {
 				preserveTAPs = append(preserveTAPs, inst.Id)
 			}
 		}
@@ -237,7 +253,7 @@ func run() error {
 	// Prepare HTTP metrics middleware (applied inside API group, not globally)
 	// Global application breaks WebSocket (Hijacker) and SSE (Flusher)
 	var httpMetricsMw func(http.Handler) http.Handler
-	if otelProvider != nil && otelProvider.Meter != nil {
+	if otelProvider.Meter != nil {
 		httpMetrics, err := mw.NewHTTPMetrics(otelProvider.Meter)
 		if err == nil {
 			httpMetricsMw = httpMetrics.Middleware
@@ -270,6 +286,7 @@ func run() error {
 		mw.InjectLogger(logger),
 		mw.AccessLogger(accessLogger),
 		mw.JwtAuth(app.Config.JwtSecret),
+		scopes.RequireScope(scopes.InstanceWrite),
 		mw.ResolveResource(app.ApiService.NewResolvers(), api.ResolverErrorResponder),
 	).Get("/instances/{id}/exec", app.ApiService.ExecHandler)
 
@@ -281,6 +298,7 @@ func run() error {
 		mw.InjectLogger(logger),
 		mw.AccessLogger(accessLogger),
 		mw.JwtAuth(app.Config.JwtSecret),
+		scopes.RequireScope(scopes.InstanceWrite),
 		mw.ResolveResource(app.ApiService.NewResolvers(), api.ResolverErrorResponder),
 	).Get("/instances/{id}/cp", app.ApiService.CpHandler)
 
@@ -294,8 +312,12 @@ func run() error {
 	r.Route("/v2", func(r chi.Router) {
 		r.Use(middleware.RequestID)
 		r.Use(middleware.RealIP)
-		r.Use(middleware.Logger)
 		r.Use(middleware.Recoverer)
+		if cfg.Otel.Enabled {
+			r.Use(otelchi.Middleware(cfg.Otel.ServiceName, otelchi.WithChiRoutes(r)))
+		}
+		r.Use(mw.InjectLogger(logger))
+		r.Use(mw.AccessLogger(accessLogger))
 		r.Use(mw.JwtAuth(app.Config.JwtSecret))
 
 		// Token endpoint for Docker Registry Token Authentication
@@ -347,6 +369,9 @@ func run() error {
 		}
 		r.Use(nethttpmiddleware.OapiRequestValidatorWithOptions(spec, validatorOptions))
 
+		// Scoped permissions — enforce per-route scope requirements
+		r.Use(scopes.Middleware())
+
 		// Resource resolver middleware - resolves IDs/names/prefixes before handlers
 		// Enriches context with resolved resource and logger with resolved ID
 		r.Use(mw.ResolveResource(app.ApiService.NewResolvers(), api.ResolverErrorResponder))
@@ -386,6 +411,12 @@ func run() error {
 		Handler: r,
 	}
 
+	metricsAddr := metricsServerAddress(cfg)
+	if otelProvider.MetricsHandler == nil {
+		return fmt.Errorf("metrics handler is not initialized")
+	}
+	metricsSrv := newMetricsServer(metricsAddr, otelProvider.MetricsHandler)
+
 	// Error group for coordinated shutdown
 	grp, gctx := errgroup.WithContext(ctx)
 
@@ -405,6 +436,15 @@ func run() error {
 		return nil
 	})
 
+	grp.Go(func() error {
+		logger.Info("starting metrics endpoint", "addr", metricsAddr, "path", "/metrics")
+		if err := metricsSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Error("metrics server error", "error", err)
+			return err
+		}
+		return nil
+	})
+
 	// Shutdown handler
 	grp.Go(func() error {
 		<-gctx.Done()
@@ -415,11 +455,21 @@ func run() error {
 		shutdownCtx, cancel := context.WithTimeout(shutdownCtx, 30*time.Second)
 		defer cancel()
 
-		if err := srv.Shutdown(shutdownCtx); err != nil {
+		var shutdownErrs []error
+
+		if err := srv.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("failed to shutdown http server", "error", err)
-			return err
+			shutdownErrs = append(shutdownErrs, fmt.Errorf("shutdown http server: %w", err))
+		} else {
+			logger.Info("http server shutdown complete")
 		}
-		logger.Info("http server shutdown complete")
+
+		if err := metricsSrv.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Error("failed to shutdown metrics server", "error", err)
+			shutdownErrs = append(shutdownErrs, fmt.Errorf("shutdown metrics server: %w", err))
+		} else {
+			logger.Info("metrics server shutdown complete")
+		}
 
 		// Shutdown ingress manager (stops Caddy if CADDY_STOP_ON_SHUTDOWN=true)
 		if err := app.IngressManager.Shutdown(shutdownCtx); err != nil {
@@ -429,7 +479,7 @@ func run() error {
 			logger.Info("ingress manager shutdown complete")
 		}
 
-		return nil
+		return errors.Join(shutdownErrs...)
 	})
 
 	// Log rotation scheduler
@@ -446,7 +496,7 @@ func run() error {
 				if err := app.InstanceManager.RotateLogs(gctx, int64(logMaxSize), app.Config.Logging.MaxFiles); err != nil {
 					logger.Error("log rotation failed", "error", err)
 				} else {
-					logger.Info("log rotation completed", "max_size", logMaxSize, "max_files", app.Config.Logging.MaxFiles)
+					logger.Debug("log rotation completed", "max_size", logMaxSize, "max_files", app.Config.Logging.MaxFiles)
 				}
 			}
 		}

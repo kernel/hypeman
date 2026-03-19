@@ -125,7 +125,7 @@ func (m *manager) createSnapshot(ctx context.Context, id string, req CreateSnaps
 				Id:               snapshotID,
 				Name:             req.Name,
 				Kind:             req.Kind,
-				Metadata:         tags.Clone(req.Metadata),
+				Tags:             tags.Clone(req.Tags),
 				SourceInstanceID: stored.Id,
 				SourceName:       stored.Name,
 				SourceHypervisor: stored.HypervisorType,
@@ -175,7 +175,7 @@ func (m *manager) createSnapshot(ctx context.Context, id string, req CreateSnaps
 				Id:               snapshotID,
 				Name:             req.Name,
 				Kind:             req.Kind,
-				Metadata:         tags.Clone(req.Metadata),
+				Tags:             tags.Clone(req.Tags),
 				SourceInstanceID: stored.Id,
 				SourceName:       stored.Name,
 				SourceHypervisor: stored.HypervisorType,
@@ -492,7 +492,7 @@ func validateCreateSnapshotRequest(req CreateSnapshotRequest) error {
 	if _, err := normalizeCompressionConfig(req.Compression); err != nil {
 		return err
 	}
-	if err := tags.Validate(req.Metadata); err != nil {
+	if err := tags.Validate(req.Tags); err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidRequest, err)
 	}
 	if req.Name != "" {

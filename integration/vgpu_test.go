@@ -97,7 +97,7 @@ func TestVGPU(t *testing.T) {
 	t.Log("System files ready")
 
 	// Step 2: Pull alpine image (lightweight for testing)
-	imageName := "docker.io/library/alpine:latest"
+	imageName := integrationTestImageRef(t, "docker.io/library/alpine:latest")
 	t.Log("Step 2: Pulling alpine image...")
 	_, err = imageManager.CreateImage(ctx, images.CreateImageRequest{
 		Name: imageName,

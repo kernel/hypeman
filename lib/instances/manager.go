@@ -4,8 +4,11 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/kernel/hypeman/lib/devices"
+	"github.com/kernel/hypeman/lib/egressproxy"
+	"github.com/kernel/hypeman/lib/guestmemory"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/network"
@@ -69,24 +72,30 @@ type ResourceValidator interface {
 }
 
 type manager struct {
-	paths             *paths.Paths
-	imageManager      images.Manager
-	systemManager     system.Manager
-	networkManager    network.Manager
-	deviceManager     devices.Manager
-	volumeManager     volumes.Manager
-	limits            ResourceLimits
-	resourceValidator ResourceValidator // Optional validator for aggregate resource limits
-	instanceLocks     sync.Map          // map[string]*sync.RWMutex - per-instance locks
-	hostTopology      *HostTopology     // Cached host CPU topology
-	metrics           *Metrics
-	snapshotDefaults  SnapshotPolicy
-	compressionMu     sync.Mutex
-	compressionJobs   map[string]*compressionJob
+	paths                     *paths.Paths
+	imageManager              images.Manager
+	systemManager             system.Manager
+	networkManager            network.Manager
+	deviceManager             devices.Manager
+	volumeManager             volumes.Manager
+	limits                    ResourceLimits
+	resourceValidator         ResourceValidator // Optional validator for aggregate resource limits
+	instanceLocks             sync.Map          // map[string]*sync.RWMutex - per-instance locks
+	bootMarkerScans           sync.Map          // map[string]time.Time next allowed boot-marker rescan
+	hostTopology              *HostTopology     // Cached host CPU topology
+	metrics                   *Metrics
+	now                       func() time.Time
+	egressProxy               *egressproxy.Service
+	egressProxyServiceOptions egressproxy.ServiceOptions
+	egressProxyMu             sync.Mutex
+	snapshotDefaults          SnapshotPolicy
+	compressionMu             sync.Mutex
+	compressionJobs           map[string]*compressionJob
 
 	// Hypervisor support
 	vmStarters        map[hypervisor.Type]hypervisor.VMStarter
 	defaultHypervisor hypervisor.Type // Default hypervisor type when not specified in request
+	guestMemoryPolicy guestmemory.Policy
 }
 
 // platformStarters is populated by platform-specific init functions.
@@ -95,11 +104,17 @@ var platformStarters = make(map[hypervisor.Type]hypervisor.VMStarter)
 // NewManager creates a new instances manager.
 // If meter is nil, metrics are disabled.
 // defaultHypervisor specifies which hypervisor to use when not specified in requests.
-func NewManager(p *paths.Paths, imageManager images.Manager, systemManager system.Manager, networkManager network.Manager, deviceManager devices.Manager, volumeManager volumes.Manager, limits ResourceLimits, defaultHypervisor hypervisor.Type, snapshotDefaults SnapshotPolicy, meter metric.Meter, tracer trace.Tracer) Manager {
+func NewManager(p *paths.Paths, imageManager images.Manager, systemManager system.Manager, networkManager network.Manager, deviceManager devices.Manager, volumeManager volumes.Manager, limits ResourceLimits, defaultHypervisor hypervisor.Type, snapshotDefaults SnapshotPolicy, meter metric.Meter, tracer trace.Tracer, memoryPolicy ...guestmemory.Policy) Manager {
 	// Validate and default the hypervisor type
 	if defaultHypervisor == "" {
 		defaultHypervisor = hypervisor.TypeCloudHypervisor
 	}
+
+	policy := guestmemory.DefaultPolicy()
+	if len(memoryPolicy) > 0 {
+		policy = memoryPolicy[0]
+	}
+	policy = policy.Normalize()
 
 	// Initialize VM starters from platform-specific init functions
 	vmStarters := make(map[hypervisor.Type]hypervisor.VMStarter, len(platformStarters))
@@ -116,9 +131,12 @@ func NewManager(p *paths.Paths, imageManager images.Manager, systemManager syste
 		volumeManager:     volumeManager,
 		limits:            limits,
 		instanceLocks:     sync.Map{},
+		bootMarkerScans:   sync.Map{},
 		hostTopology:      detectHostTopology(), // Detect and cache host topology
 		vmStarters:        vmStarters,
 		defaultHypervisor: defaultHypervisor,
+		now:               time.Now,
+		guestMemoryPolicy: policy,
 		snapshotDefaults:  snapshotDefaults,
 		compressionJobs:   make(map[string]*compressionJob),
 	}
@@ -155,6 +173,14 @@ func (m *manager) getVMStarter(hvType hypervisor.Type) (hypervisor.VMStarter, er
 	return starter, nil
 }
 
+func (m *manager) supportsSnapshotBaseReuse(hvType hypervisor.Type) bool {
+	caps, ok := hypervisor.CapabilitiesForType(hvType)
+	if !ok {
+		return false
+	}
+	return caps.SupportsSnapshotBaseReuse
+}
+
 // getInstanceLock returns or creates a lock for a specific instance
 func (m *manager) getInstanceLock(id string) *sync.RWMutex {
 	lock, _ := m.instanceLocks.LoadOrStore(id, &sync.RWMutex{})
@@ -168,6 +194,14 @@ func (m *manager) maybePersistExitInfo(ctx context.Context, id string) {
 	lock.Lock()
 	defer lock.Unlock()
 	m.persistExitInfo(ctx, id)
+}
+
+// maybePersistBootMarkers persists boot markers to metadata under lock.
+func (m *manager) maybePersistBootMarkers(ctx context.Context, id string) {
+	lock := m.getInstanceLock(id)
+	lock.Lock()
+	defer lock.Unlock()
+	m.persistBootMarkers(ctx, id)
 }
 
 // CreateInstance creates and starts a new instance
@@ -293,16 +327,25 @@ func (m *manager) ListInstances(ctx context.Context, filter *ListInstancesFilter
 	if err != nil {
 		return nil, err
 	}
-	if filter == nil {
-		return all, nil
+	result := all
+	if filter != nil {
+		filtered := make([]Instance, 0, len(all))
+		for i := range all {
+			if filter.Matches(&all[i]) {
+				filtered = append(filtered, all[i])
+			}
+		}
+		result = filtered
 	}
-	filtered := make([]Instance, 0, len(all))
-	for i := range all {
-		if filter.Matches(&all[i]) {
-			filtered = append(filtered, all[i])
+
+	for i := range result {
+		inst := result[i]
+		if (inst.State == StateRunning || inst.State == StateInitializing) && inst.BootMarkersHydrated {
+			m.maybePersistBootMarkers(ctx, inst.Id)
 		}
 	}
-	return filtered, nil
+
+	return result, nil
 }
 
 // GetInstance returns an instance by ID, name, or ID prefix.
@@ -319,6 +362,9 @@ func (m *manager) GetInstance(ctx context.Context, idOrName string) (*Instance, 
 		// This handles the "app exited on its own" case where stopInstance wasn't called.
 		if inst.State == StateStopped && inst.ExitCode != nil {
 			m.maybePersistExitInfo(ctx, inst.Id)
+		}
+		if (inst.State == StateRunning || inst.State == StateInitializing) && inst.BootMarkersHydrated {
+			m.maybePersistBootMarkers(ctx, inst.Id)
 		}
 		return inst, nil
 	}
@@ -456,6 +502,7 @@ func (m *manager) ListInstanceAllocations(ctx context.Context) ([]resources.Inst
 
 // ListRunningInstancesInfo returns info needed for utilization metrics collection.
 // Used by the resource manager for VM utilization tracking.
+// Includes active VMs in Running or Initializing state.
 func (m *manager) ListRunningInstancesInfo(ctx context.Context) ([]resources.InstanceUtilizationInfo, error) {
 	instances, err := m.listInstances(ctx)
 	if err != nil {
@@ -464,8 +511,8 @@ func (m *manager) ListRunningInstancesInfo(ctx context.Context) ([]resources.Ins
 
 	infos := make([]resources.InstanceUtilizationInfo, 0, len(instances))
 	for _, inst := range instances {
-		// Only include running instances (they have a hypervisor process)
-		if inst.State != StateRunning {
+		// Only include active instances (they have a hypervisor process)
+		if inst.State != StateRunning && inst.State != StateInitializing {
 			continue
 		}
 

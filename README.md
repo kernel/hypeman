@@ -19,6 +19,16 @@
 
 ---
 
+## Features
+
+- **Docker-compatible CLI** — `run`, `exec`, `stop`, `ps`, `logs`, `pull` work like you'd expect
+- **Multiple hypervisors** — Cloud Hypervisor, Firecracker, QEMU on Linux; Virtualization.framework on macOS
+- **Standby & restore** — snapshot a VM to disk and resume it in milliseconds
+- **Built-in ingress** — reverse proxy with TLS termination and subdomain routing
+- **GPU passthrough** — vGPU and VFIO device support
+- **OCI image support** — pull and run standard container images
+- **Remote API** — JWT-authenticated server with a separate CLI client
+
 ## Requirements
 
 ### Linux
