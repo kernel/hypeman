@@ -167,6 +167,10 @@ func (m *mockInstanceManager) GetVsockDialer(ctx context.Context, instanceID str
 	return nil, nil
 }
 
+func (m *mockInstanceManager) UpdateInstanceEnv(ctx context.Context, id string, env map[string]string) (*instances.Instance, error) {
+	return nil, nil
+}
+
 // mockVolumeManager implements volumes.Manager for testing
 type mockVolumeManager struct {
 	volumes               map[string]*volumes.Volume
