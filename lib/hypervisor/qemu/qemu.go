@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/digitalocean/go-qemu/qemu"
@@ -16,6 +17,8 @@ type QEMU struct {
 	client     *Client
 	socketPath string // for self-removal from pool on error
 }
+
+var balloonTargetCache sync.Map
 
 // New returns a QEMU client for the given socket path.
 // Uses a connection pool to ensure only one connection per socket exists.
@@ -44,6 +47,7 @@ func capabilities() hypervisor.Capabilities {
 	return hypervisor.Capabilities{
 		SupportsSnapshot:            true,  // Uses QMP migrate file:// for snapshot
 		SupportsHotplugMemory:       false, // Not implemented - balloon not configured
+		SupportsBalloonControl:      true,
 		SupportsPause:               true,
 		SupportsVsock:               true,
 		SupportsGPUPassthrough:      true,
@@ -60,6 +64,7 @@ func (q *QEMU) DeleteVM(ctx context.Context) error {
 		Remove(q.socketPath)
 		return err
 	}
+	balloonTargetCache.Delete(q.socketPath)
 	return nil
 }
 
@@ -71,6 +76,7 @@ func (q *QEMU) Shutdown(ctx context.Context) error {
 	}
 	// Connection is gone after quit, remove from pool
 	Remove(q.socketPath)
+	balloonTargetCache.Delete(q.socketPath)
 	return nil
 }
 
@@ -174,4 +180,31 @@ func (q *QEMU) ResizeMemory(ctx context.Context, bytes int64) error {
 // Not implemented in first pass.
 func (q *QEMU) ResizeMemoryAndWait(ctx context.Context, bytes int64, timeout time.Duration) error {
 	return fmt.Errorf("memory resize not supported by QEMU implementation")
+}
+
+func (q *QEMU) SetTargetGuestMemoryBytes(ctx context.Context, bytes int64) error {
+	if bytes < 0 {
+		return fmt.Errorf("target guest memory %d must be non-negative", bytes)
+	}
+	if err := q.client.Balloon(bytes); err != nil {
+		Remove(q.socketPath)
+		return fmt.Errorf("set balloon target: %w", err)
+	}
+	balloonTargetCache.Store(q.socketPath, bytes)
+	return nil
+}
+
+func (q *QEMU) GetTargetGuestMemoryBytes(ctx context.Context) (int64, error) {
+	if target, ok := balloonTargetCache.Load(q.socketPath); ok {
+		if value, ok := target.(int64); ok {
+			return value, nil
+		}
+	}
+
+	bytes, err := q.client.QueryAssignedMemory()
+	if err != nil {
+		Remove(q.socketPath)
+		return 0, fmt.Errorf("query balloon target: %w", err)
+	}
+	return bytes, nil
 }

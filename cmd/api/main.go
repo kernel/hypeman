@@ -420,6 +420,14 @@ func run() error {
 		return err
 	}
 
+	grp.Go(func() error {
+		if app.GuestMemoryController == nil {
+			return nil
+		}
+		logger.Info("starting guest memory controller")
+		return app.GuestMemoryController.Start(gctx)
+	})
+
 	// Run the server
 	grp.Go(func() error {
 		logger.Info("starting hypeman API", "port", app.Config.Port)

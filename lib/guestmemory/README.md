@@ -1,102 +1,174 @@
-# Guest Memory Reclaim
+# Guest Memory
 
-This feature reduces host RAM waste from guest VMs by combining three behaviors:
+Hypeman's guest-memory feature combines passive reclaim and active reclaim.
 
-1. Lazy host allocation preservation:
-The VM is configured with requested memory capacity, but host pages should only back guest pages as they are touched.
+- Passive reclaim gives pages back to the host when the guest has already freed them.
+- Active reclaim asks the guest to give memory back by inflating its virtio balloon target.
+- Linux page-init tuning controls whether the guest eagerly scrubs pages on allocation/free.
 
-2. Guest-to-host reclaim:
-When the guest frees memory, virtio balloon/reporting/hinting features let the VMM return those pages to the host.
+The important distinction is that active ballooning is not `drop_caches`. Balloon inflation makes the guest kernel feel memory pressure, so the guest reclaims memory through its normal LRU and reclaim paths. That lets the guest keep hot working-set cache and evict colder pages first.
 
-3. Guest boot page-touch reduction:
-The guest kernel page-init mode controls whether Linux eagerly touches pages:
-- `performance` mode sets `init_on_alloc=0 init_on_free=0` for better density and lower memory churn.
-- `hardened` mode sets `init_on_alloc=1 init_on_free=1` for stronger memory hygiene at some density/perf cost.
+## What Happens At Runtime
 
-## Configuration
+When `hypervisor.memory.enabled=true`, Hypeman enables the guest-memory features each hypervisor supports:
 
-This feature is controlled by `hypervisor.memory` in server config and is default-off:
+- Cloud Hypervisor configures a balloon device with free-page reporting and deflate-on-oom.
+- QEMU adds a virtio balloon device and enables free-page reporting when available.
+- Firecracker configures ballooning with hinting/reporting and deflate-on-oom.
+- VZ attaches a traditional memory balloon device through `vz-shim`.
 
-```yaml
-hypervisor:
-  memory:
-    enabled: false
-    kernel_page_init_mode: hardened
-    reclaim_enabled: true
-    vz_balloon_required: true
-```
+When `kernel_page_init_mode=performance`, Hypeman also adds `init_on_alloc=0 init_on_free=0` to the guest kernel command line. That reduces unnecessary guest page touching during boot and steady-state reclaim. `hardened` keeps both flags enabled.
 
-To enable reclaim behavior and density-oriented kernel args, set:
+## Automatic Active Ballooning
+
+Automatic ballooning is controlled by `hypervisor.memory.active_ballooning`.
 
 ```yaml
 hypervisor:
   memory:
     enabled: true
+    reclaim_enabled: true
     kernel_page_init_mode: performance
+    active_ballooning:
+      enabled: true
+      poll_interval: 2s
+      pressure_high_watermark_available_percent: 10
+      pressure_low_watermark_available_percent: 15
+      protected_floor_percent: 50
+      protected_floor_min_bytes: 512MiB
+      min_adjustment_bytes: 64MiB
+      per_vm_max_step_bytes: 256MiB
+      per_vm_cooldown: 5s
 ```
 
-## Runtime Flow
+The automatic loop is pressure-driven by default:
 
-- Operator config (`hypervisor.memory`) is normalized into one policy.
-- The instances layer applies policy generically:
-  - merges kernel args with the selected page-init mode;
-  - sets generic memory feature toggles in `hypervisor.VMConfig.GuestMemory`.
-- Each hypervisor backend maps generic toggles to native mechanisms:
-  - Cloud Hypervisor: `balloon` config with free page reporting and deflate-on-oom.
-  - QEMU: `virtio-balloon-pci` device options.
-  - Firecracker: `/balloon` API with free page hinting/reporting.
-  - VZ: attach `VirtioTraditionalMemoryBalloon` device.
+1. Hypeman samples host memory pressure.
+2. If the host is under pressure, it computes a global reclaim target.
+3. Eligible VMs are asked to give back memory proportionally to their reclaimable headroom.
+4. Each hypervisor gets a new runtime balloon target.
+5. When the host is healthy again, Hypeman gradually deflates balloons back toward full guest memory.
 
-## Backend Behavior Matrix
+The controller uses hysteresis so it does not flap when available memory hovers near the threshold:
 
-| Hypervisor | Lazy allocation | Balloon | Free page reporting/hinting | Deflate on OOM |
-|---|---|---|---|---|
-| Cloud Hypervisor | Yes | Yes | Reporting | Yes |
-| QEMU | Yes | Yes | Reporting (+ hinting when enabled) | Yes |
-| Firecracker | Yes | Yes | Hinting + reporting | Yes |
-| VZ | macOS-managed | Yes | Host-managed + guest cooperation | Host-managed |
+- `pressure_high_watermark_available_percent` enters pressure mode.
+- `pressure_low_watermark_available_percent` exits pressure mode.
+
+### Host Pressure Signals
+
+Linux uses:
+
+- `/proc/meminfo` `MemAvailable` as the primary available-memory signal
+- `/proc/pressure/memory` PSI as a secondary stress signal
+
+macOS uses:
+
+- `vm_stat` free/speculative pages to estimate available memory
+- `memory_pressure -Q` as a secondary stress signal
+
+## Protected Floors And Allocation Rules
+
+Active reclaim never shrinks a guest below its protected floor:
+
+- `protected_floor_percent` reserves a percentage of assigned guest RAM
+- `protected_floor_min_bytes` reserves an absolute minimum
+- the larger of the two becomes the guest's floor
+
+Example:
+
+- a 4 GiB guest with `protected_floor_percent=50` has a 2 GiB floor
+- if `protected_floor_min_bytes=512MiB`, the effective floor is still 2 GiB
+- Hypeman can reclaim at most 2 GiB from that guest
+
+Reclaim is also rate-limited:
+
+- `min_adjustment_bytes` skips tiny target changes
+- `per_vm_max_step_bytes` caps how much one reconcile can change a guest
+- `per_vm_cooldown` prevents frequent small oscillations
+
+## Manual Reclaim API
+
+Hypeman also exposes a proactive reclaim endpoint:
+
+- `POST /resources/memory/reclaim`
+
+Request fields:
+
+- `reclaim_bytes`: required total reclaim target across eligible guests
+- `hold_for`: optional duration, default `5m`, max `1h`
+- `dry_run`: optional, computes the plan without applying it
+- `reason`: optional operator note for logs/traces
+
+Manual reclaim uses the same planner and protected floors as automatic reclaim. When `hold_for` is set, Hypeman keeps at least that much reclaim in place until the hold expires, even if host pressure clears sooner. Sending `reclaim_bytes=0` with `hold_for=0s` clears the hold and allows full deflation immediately.
+
+By design, Hypeman does not reclaim memory without a reason. Automatic reclaim only happens under real host pressure. Proactive reclaim without host pressure is only done when an operator explicitly asks for it through the API.
+
+## Passive Reclaim vs Active Ballooning
+
+Passive reclaim and active reclaim are complementary:
+
+- free-page reporting/hinting handles "the guest freed this already"
+- active ballooning handles "the host needs memory back now"
+
+Both are useful. Passive reporting improves density opportunistically. Active ballooning gives Hypeman a control loop for pressure events and explicit operator requests.
+
+## Hypervisor Expectations
+
+Cloud Hypervisor:
+
+- boot-time ballooning plus free-page reporting
+- runtime target changes through `/vm.resize`
+
+QEMU:
+
+- virtio balloon device on the VM command line
+- runtime target changes through QMP `balloon`
+
+Firecracker:
+
+- balloon config at boot with hinting/reporting
+- runtime target changes through the balloon API
+- if a custom or older binary lacks the runtime balloon endpoint, Hypeman skips active reclaim for that VM
+
+VZ:
+
+- traditional memory balloon device attached through `vz-shim`
+- runtime target changes through `vz-shim` balloon endpoints
 
 ## Failure Behavior
 
-- If policy is disabled, memory features are not applied.
-- If reclaim is disabled, balloon/reporting/hinting are not applied.
-- For VZ, balloon attachment is attempted when enabled.
-  - If `vz_balloon_required=true`, startup fails if balloon cannot be configured.
-  - If `vz_balloon_required=false`, startup continues without balloon and logs a warning.
+- If `hypervisor.memory.enabled=false`, none of the guest-memory features are configured.
+- If `reclaim_enabled=false`, passive reclaim and active ballooning are both disabled.
+- If `active_ballooning.enabled=false`, the background pressure loop stays off and the manual reclaim endpoint returns a feature-disabled error.
+- If a specific VM or hypervisor backend does not support runtime balloon control, Hypeman skips that VM and continues with the rest.
+- `deflate_on_oom` stays enabled where supported so guests can recover memory quickly during real guest-side pressure.
 
-## Quick CLI Experiment
+## Manual Integration Tests
 
-Use this A/B check to compare host memory footprint with policy enabled vs disabled:
+The guest-memory integration tests are manual by default and cover one test per hypervisor:
+
+- Linux: `TestGuestMemoryPolicyCloudHypervisor`
+- Linux: `TestGuestMemoryPolicyQEMU`
+- Linux: `TestGuestMemoryPolicyFirecracker`
+- macOS: `TestGuestMemoryPolicyVZ`
+
+All of them live in the existing `lib/instances` guest-memory test files and are gated by:
 
 ```bash
-# 1) Start API with config A (hypervisor.memory.enabled=true), then run:
-ID=$(hypeman run --hypervisor qemu --network=false --memory 1GB \
-  --entrypoint /bin/sh --entrypoint -c \
-  --cmd 'sleep 5; dd if=/dev/zero of=/dev/shm/hype-mem bs=1M count=256; sleep 5; rm -f /dev/shm/hype-mem; sleep 90' \
-  docker.io/library/alpine:latest | tail -n1)
-PID=$(jq -r '.HypervisorPID' "<data_dir>/guests/$ID/metadata.json")
-awk '/^Pss:/ {print $2 " kB"}' "/proc/$PID/smaps_rollup" # Linux (preferred)
-awk '/^VmRSS:/ {print $2 " kB"}' "/proc/$PID/status"      # Linux fallback
-ps -o rss= -p "$PID"                                  # macOS
-hypeman rm --force "$ID"
-
-# 2) Restart API with config B (hypervisor.memory.enabled=false) and run the same command.
-# 3) Compare final/steady host memory between A and B.
+HYPEMAN_RUN_GUESTMEMORY_TESTS=1
 ```
 
-In one startup-focused sample run, absolute host footprint stayed far below guest memory size (for example, ~4GB guest with low host PSS on Cloud Hypervisor/Firecracker), while QEMU showed a larger fixed process overhead.
+Run them with:
 
-Sample probe results (4GB idle guest, rounded MB):
+```bash
+make test-guestmemory-linux
+make test-guestmemory-vz
+```
 
-| Hypervisor | Host RSS (MB) | Host PSS (MB) | Notes |
-|---|---:|---:|---|
-| Cloud Hypervisor (Linux) | ~345 | ~29 | Low actual host pressure when idle |
-| Firecracker (Linux) | ~295 | ~27 | Low actual host pressure when idle |
-| QEMU (Linux) | ~400 | ~116 | Higher fixed process overhead |
-| VZ (macOS) | ~23 | N/A | RSS sampled with `ps` |
+The tests verify:
 
-## Out of Scope
-
-- No API surface changes.
-- No scheduler/admission logic changes.
-- No automatic background tuning loops outside hypervisor-supported reclaim mechanisms.
+- boot-time guest-memory configuration is present
+- runtime balloon target starts at full assigned memory
+- manual reclaim changes the target in the expected direction
+- protected floors prevent over-reclaim
+- clearing the manual hold deflates back to full guest memory

@@ -33,6 +33,16 @@ data_dir: /var/lib/hypeman
 #     kernel_page_init_mode: hardened
 #     reclaim_enabled: true
 #     vz_balloon_required: true
+#     active_ballooning:
+#       enabled: false
+#       poll_interval: 2s
+#       pressure_high_watermark_available_percent: 10
+#       pressure_low_watermark_available_percent: 15
+#       protected_floor_percent: 50
+#       protected_floor_min_bytes: 512MiB
+#       min_adjustment_bytes: 64MiB
+#       per_vm_max_step_bytes: 256MiB
+#       per_vm_cooldown: 5s
 
 # =============================================================================
 # Network Configuration

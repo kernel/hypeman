@@ -54,6 +54,7 @@ func capabilities() hypervisor.Capabilities {
 	return hypervisor.Capabilities{
 		SupportsSnapshot:            true,
 		SupportsHotplugMemory:       false,
+		SupportsBalloonControl:      true,
 		SupportsPause:               true,
 		SupportsVsock:               true,
 		SupportsGPUPassthrough:      false,
@@ -123,6 +124,40 @@ func (f *Firecracker) ResizeMemory(ctx context.Context, bytes int64) error {
 
 func (f *Firecracker) ResizeMemoryAndWait(ctx context.Context, bytes int64, timeout time.Duration) error {
 	return hypervisor.ErrNotSupported
+}
+
+func (f *Firecracker) SetTargetGuestMemoryBytes(ctx context.Context, bytes int64) error {
+	cfg, err := f.getVMConfig(ctx)
+	if err != nil {
+		return err
+	}
+	desiredBalloonMiB := cfg.MachineConfig.MemSizeMiB - bytesToMiB(bytes)
+	if desiredBalloonMiB < 0 {
+		return fmt.Errorf("target guest memory %d exceeds configured memory %d MiB", bytes, cfg.MachineConfig.MemSizeMiB)
+	}
+
+	body := map[string]int64{"amount_mib": desiredBalloonMiB}
+	if _, err := f.do(ctx, http.MethodPatch, "/balloon", body, http.StatusNoContent); err != nil {
+		if strings.Contains(err.Error(), "Invalid request method and/or path") {
+			if _, putErr := f.do(ctx, http.MethodPut, "/balloon", body, http.StatusNoContent); putErr != nil {
+				if strings.Contains(putErr.Error(), "Invalid request method and/or path") {
+					return hypervisor.ErrNotSupported
+				}
+				return fmt.Errorf("set balloon target: %w", putErr)
+			}
+			return nil
+		}
+		return fmt.Errorf("set balloon target: %w", err)
+	}
+	return nil
+}
+
+func (f *Firecracker) GetTargetGuestMemoryBytes(ctx context.Context) (int64, error) {
+	cfg, err := f.getVMConfig(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return (cfg.MachineConfig.MemSizeMiB - cfg.Balloon.AmountMiB) * 1024 * 1024, nil
 }
 
 func (f *Firecracker) configureForBoot(ctx context.Context, cfg hypervisor.VMConfig) error {
@@ -198,6 +233,31 @@ func (f *Firecracker) postAction(ctx context.Context, action string) error {
 		return fmt.Errorf("firecracker action %s failed: %w", action, err)
 	}
 	return nil
+}
+
+type firecrackerVMConfig struct {
+	MachineConfig struct {
+		MemSizeMiB int64 `json:"mem_size_mib"`
+	} `json:"machine-config"`
+	Balloon struct {
+		AmountMiB int64 `json:"amount_mib"`
+	} `json:"balloon"`
+}
+
+func (f *Firecracker) getVMConfig(ctx context.Context) (*firecrackerVMConfig, error) {
+	body, err := f.do(ctx, http.MethodGet, "/vm/config", nil, http.StatusOK)
+	if err != nil {
+		if strings.Contains(err.Error(), "Invalid request method and/or path") {
+			return nil, hypervisor.ErrNotSupported
+		}
+		return nil, fmt.Errorf("get vm config: %w", err)
+	}
+
+	var cfg firecrackerVMConfig
+	if err := json.Unmarshal(body, &cfg); err != nil {
+		return nil, fmt.Errorf("decode vm config: %w", err)
+	}
+	return &cfg, nil
 }
 
 func (f *Firecracker) do(ctx context.Context, method, path string, reqBody any, expectedStatus ...int) ([]byte, error) {
