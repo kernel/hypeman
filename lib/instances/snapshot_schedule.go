@@ -13,9 +13,23 @@ import (
 	"github.com/kernel/hypeman/lib/tags"
 )
 
+type SnapshotScheduleRetention = scheduledsnapshots.Retention
+type SnapshotSchedule = scheduledsnapshots.Schedule
+type SetSnapshotScheduleRequest = scheduledsnapshots.SetRequest
+
+// SnapshotScheduleManager provides schedule operations in addition to core instance APIs.
+type SnapshotScheduleManager interface {
+	SetSnapshotSchedule(ctx context.Context, instanceID string, req SetSnapshotScheduleRequest) (*SnapshotSchedule, error)
+	GetSnapshotSchedule(ctx context.Context, instanceID string) (*SnapshotSchedule, error)
+	DeleteSnapshotSchedule(ctx context.Context, instanceID string) error
+	RunSnapshotSchedules(ctx context.Context) error
+}
+
+var _ SnapshotScheduleManager = (*manager)(nil)
+
 func (m *manager) SetSnapshotSchedule(ctx context.Context, instanceID string, req SetSnapshotScheduleRequest) (*SnapshotSchedule, error) {
-	if err := validateSetSnapshotScheduleRequest(req); err != nil {
-		return nil, err
+	if err := scheduledsnapshots.ValidateSetRequest(req, validateInstanceName); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidRequest, err)
 	}
 
 	lock := m.getInstanceLock(instanceID)
@@ -193,38 +207,23 @@ func (m *manager) runSnapshotScheduleForInstanceLocked(ctx context.Context, inst
 	sourceMeta, sourceErr := m.loadMetadata(instanceID)
 	instanceMissing := errors.Is(sourceErr, ErrNotFound)
 	if sourceErr != nil && !instanceMissing {
-		errMsg := sourceErr.Error()
-		schedule.LastError = &errMsg
-		if saveErr := m.saveSnapshotScheduleUnlocked(schedule); saveErr != nil {
-			return fmt.Errorf("load source metadata: %w; save schedule: %v", sourceErr, saveErr)
-		}
-		return fmt.Errorf("load source metadata: %w", sourceErr)
+		return m.failScheduleRun(schedule, sourceErr, "load source metadata")
 	}
 
 	if !instanceMissing {
 		sourceState := m.toInstance(ctx, sourceMeta).State
 		snapshotKind, kindErr := scheduledSnapshotKindForState(sourceState)
 		if kindErr != nil {
-			errMsg := kindErr.Error()
-			schedule.LastError = &errMsg
-			if saveErr := m.saveSnapshotScheduleUnlocked(schedule); saveErr != nil {
-				return fmt.Errorf("resolve scheduled snapshot kind: %w; save schedule: %v", kindErr, saveErr)
-			}
-			return fmt.Errorf("resolve scheduled snapshot kind: %w", kindErr)
+			return m.failScheduleRun(schedule, kindErr, "resolve scheduled snapshot kind")
 		}
 
 		snapshot, runErr := m.createSnapshot(ctx, instanceID, CreateSnapshotRequest{
 			Kind: snapshotKind,
-			Name: scheduledsnapshots.BuildSnapshotName(schedule.NamePrefix, runTime, validateInstanceName),
+			Name: scheduledsnapshots.BuildSnapshotName(schedule.NamePrefix, runTime),
 			Tags: scheduledsnapshots.BuildSnapshotMetadata(instanceID, schedule.Metadata),
 		})
 		if runErr != nil {
-			errMsg := runErr.Error()
-			schedule.LastError = &errMsg
-			if saveErr := m.saveSnapshotScheduleUnlocked(schedule); saveErr != nil {
-				return fmt.Errorf("create scheduled snapshot: %w; save schedule: %v", runErr, saveErr)
-			}
-			return fmt.Errorf("create scheduled snapshot: %w", runErr)
+			return m.failScheduleRun(schedule, runErr, "create scheduled snapshot")
 		}
 
 		snapshotID := snapshot.Id
@@ -238,12 +237,13 @@ func (m *manager) runSnapshotScheduleForInstanceLocked(ctx context.Context, inst
 	}
 
 	if instanceMissing && cleanupErr == nil {
-		remaining, countErr := m.countScheduledSnapshots(ctx, instanceID)
-		if countErr != nil {
-			errMsg := countErr.Error()
+		scheduled, listErr := m.listScheduledSnapshotsByInstance(ctx, instanceID)
+		if listErr != nil {
+			errMsg := listErr.Error()
 			schedule.LastError = &errMsg
-			cleanupErr = fmt.Errorf("count scheduled snapshots: %w", countErr)
+			cleanupErr = fmt.Errorf("count scheduled snapshots: %w", listErr)
 		} else {
+			remaining := len(scheduled)
 			shouldDeleteSchedule := remaining == 0
 			if !shouldDeleteSchedule && schedule.Retention.MaxAge == 0 && schedule.Retention.MaxCount > 0 && remaining <= schedule.Retention.MaxCount {
 				// Count-only retention has converged for deleted instances: no future run can reduce count.
@@ -329,11 +329,13 @@ func (m *manager) cleanupScheduledSnapshots(ctx context.Context, instanceID stri
 	return nil
 }
 
-func validateSetSnapshotScheduleRequest(req SetSnapshotScheduleRequest) error {
-	if err := scheduledsnapshots.ValidateSetRequest(req, validateInstanceName); err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalidRequest, err)
+func (m *manager) failScheduleRun(schedule *SnapshotSchedule, err error, context string) error {
+	errMsg := err.Error()
+	schedule.LastError = &errMsg
+	if saveErr := m.saveSnapshotScheduleUnlocked(schedule); saveErr != nil {
+		return fmt.Errorf("%s: %w; save schedule: %v", context, err, saveErr)
 	}
-	return nil
+	return fmt.Errorf("%s: %w", context, err)
 }
 
 func (m *manager) getSnapshotScheduleUnlocked(instanceID string) (*SnapshotSchedule, error) {
@@ -370,14 +372,6 @@ func (m *manager) saveSnapshotScheduleUnlocked(schedule *SnapshotSchedule) error
 
 func (m *manager) listSnapshotScheduleInstanceIDs() ([]string, error) {
 	return scheduledsnapshots.ListInstanceIDs(m.paths.SnapshotSchedulesDir())
-}
-
-func (m *manager) countScheduledSnapshots(ctx context.Context, instanceID string) (int, error) {
-	scheduledSnapshots, err := m.listScheduledSnapshotsByInstance(ctx, instanceID)
-	if err != nil {
-		return 0, err
-	}
-	return len(scheduledSnapshots), nil
 }
 
 func (m *manager) listScheduledSnapshotsByInstance(ctx context.Context, instanceID string) ([]Snapshot, error) {

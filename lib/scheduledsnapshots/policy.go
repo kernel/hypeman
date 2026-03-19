@@ -2,7 +2,6 @@ package scheduledsnapshots
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/kernel/hypeman/lib/tags"
@@ -58,26 +57,11 @@ func IsScheduledSnapshot(metadata tags.Tags, instanceID string) bool {
 	return metadata[MetadataKeySourceInstanceID] == instanceID
 }
 
-func BuildSnapshotName(prefix string, runAt time.Time, validateName func(name string) error) string {
+func BuildSnapshotName(prefix string, runAt time.Time) string {
 	if prefix == "" {
 		prefix = DefaultNamePrefix
 	}
-
-	suffix := runAt.UTC().Format(NameTimestampFormat)
-	if len(prefix) > MaxNamePrefixLength {
-		prefix = strings.Trim(prefix[:MaxNamePrefixLength], "-")
-		if prefix == "" {
-			prefix = "s"
-		}
-	}
-
-	name := prefix + "-" + suffix
-	if validateName != nil {
-		if err := validateName(name); err != nil {
-			return "s-" + suffix
-		}
-	}
-	return name
+	return prefix + "-" + runAt.UTC().Format(NameTimestampFormat)
 }
 
 func NextRun(previous time.Time, interval time.Duration, now time.Time) time.Time {
