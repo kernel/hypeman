@@ -20,6 +20,8 @@ func TestCopyGuestDirectory(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(src, "overlay.raw"), []byte("overlay"), 0644))
 	require.NoError(t, os.WriteFile(filepath.Join(src, "logs", "app.log"), []byte("hello"), 0644))
 	require.NoError(t, os.WriteFile(filepath.Join(src, "snapshots", "snapshot-latest", "config.json"), []byte(`{}`), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(src, "snapshots", "snapshot-latest", "memory-ranges.lz4.tmp"), []byte("partial"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(src, "snapshots", "snapshot-latest", "memory-ranges.zst.tmp"), []byte("partial"), 0644))
 	require.NoError(t, os.Symlink("metadata.json", filepath.Join(src, "meta-link")))
 
 	require.NoError(t, CopyGuestDirectory(src, dst))
@@ -28,6 +30,8 @@ func TestCopyGuestDirectory(t *testing.T) {
 	assert.FileExists(t, filepath.Join(dst, "config.ext4"))
 	assert.FileExists(t, filepath.Join(dst, "overlay.raw"))
 	assert.FileExists(t, filepath.Join(dst, "snapshots", "snapshot-latest", "config.json"))
+	assert.NoFileExists(t, filepath.Join(dst, "snapshots", "snapshot-latest", "memory-ranges.lz4.tmp"))
+	assert.NoFileExists(t, filepath.Join(dst, "snapshots", "snapshot-latest", "memory-ranges.zst.tmp"))
 	assert.NoFileExists(t, filepath.Join(dst, "logs", "app.log"))
 	assert.FileExists(t, filepath.Join(dst, "meta-link"))
 
