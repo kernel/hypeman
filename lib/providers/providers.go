@@ -127,14 +127,7 @@ func ProvideInstanceManager(p *paths.Paths, cfg *config.Config, imageManager ima
 	meter := otel.GetMeterProvider().Meter("hypeman")
 	tracer := otel.GetTracerProvider().Tracer("hypeman")
 	defaultHypervisor := hypervisor.Type(cfg.Hypervisor.Default)
-	level := cfg.Snapshot.CompressionDefault.Level
-	snapshotDefaults := instances.SnapshotPolicy{
-		Compression: &snapshot.SnapshotCompressionConfig{
-			Enabled:   cfg.Snapshot.CompressionDefault.Enabled,
-			Algorithm: snapshot.SnapshotCompressionAlgorithm(strings.ToLower(cfg.Snapshot.CompressionDefault.Algorithm)),
-			Level:     &level,
-		},
-	}
+	snapshotDefaults := snapshotDefaultsFromConfig(cfg)
 	memoryPolicy := guestmemory.Policy{
 		Enabled:            cfg.Hypervisor.Memory.Enabled,
 		KernelPageInitMode: guestmemory.KernelPageInitMode(cfg.Hypervisor.Memory.KernelPageInitMode),
@@ -142,6 +135,19 @@ func ProvideInstanceManager(p *paths.Paths, cfg *config.Config, imageManager ima
 		VZBalloonRequired:  cfg.Hypervisor.Memory.VZBalloonRequired,
 	}
 	return instances.NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, defaultHypervisor, snapshotDefaults, meter, tracer, memoryPolicy), nil
+}
+
+func snapshotDefaultsFromConfig(cfg *config.Config) instances.SnapshotPolicy {
+	algorithm := snapshot.SnapshotCompressionAlgorithm(strings.ToLower(cfg.Snapshot.CompressionDefault.Algorithm))
+	compression := &snapshot.SnapshotCompressionConfig{
+		Enabled:   cfg.Snapshot.CompressionDefault.Enabled,
+		Algorithm: algorithm,
+	}
+	if algorithm == "" || algorithm == snapshot.SnapshotCompressionAlgorithmZstd {
+		level := cfg.Snapshot.CompressionDefault.Level
+		compression.Level = &level
+	}
+	return instances.SnapshotPolicy{Compression: compression}
 }
 
 // ProvideVolumeManager provides the volume manager

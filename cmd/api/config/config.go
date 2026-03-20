@@ -467,13 +467,14 @@ func (c *Config) Validate() error {
 	if c.Build.Timeout <= 0 {
 		return fmt.Errorf("build.timeout must be positive, got %d", c.Build.Timeout)
 	}
-	if c.Snapshot.CompressionDefault.Level < 1 {
-		return fmt.Errorf("snapshot.compression_default.level must be >= 1, got %d", c.Snapshot.CompressionDefault.Level)
-	}
-	switch strings.ToLower(c.Snapshot.CompressionDefault.Algorithm) {
+	algorithm := strings.ToLower(c.Snapshot.CompressionDefault.Algorithm)
+	switch algorithm {
 	case "", "zstd", "lz4":
 	default:
 		return fmt.Errorf("snapshot.compression_default.algorithm must be one of zstd or lz4, got %q", c.Snapshot.CompressionDefault.Algorithm)
+	}
+	if algorithm != "lz4" && c.Snapshot.CompressionDefault.Level < 1 {
+		return fmt.Errorf("snapshot.compression_default.level must be >= 1, got %d", c.Snapshot.CompressionDefault.Level)
 	}
 	if c.Hypervisor.Memory.KernelPageInitMode != "performance" && c.Hypervisor.Memory.KernelPageInitMode != "hardened" {
 		return fmt.Errorf("hypervisor.memory.kernel_page_init_mode must be one of {performance,hardened}, got %q", c.Hypervisor.Memory.KernelPageInitMode)
