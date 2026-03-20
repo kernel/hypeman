@@ -56,6 +56,16 @@ func TestValidateUpdateInstanceRequest(t *testing.T) {
 	})
 }
 
+func TestUpdateInstanceRulesServiceOrNil(t *testing.T) {
+	t.Parallel()
+
+	var svc *egressproxy.Service
+	assert.Nil(t, updateInstanceRulesServiceOrNil(svc))
+
+	typedSvc := updateInstanceRulesService(&fakeUpdateInstanceRulesService{})
+	require.NotNil(t, typedSvc)
+}
+
 type fakeUpdateInstanceRulesService struct {
 	calls [][]egressproxy.HeaderInjectRuleConfig
 	errs  []error

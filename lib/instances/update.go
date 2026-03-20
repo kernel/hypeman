@@ -54,7 +54,7 @@ func (m *manager) updateInstance(ctx context.Context, id string, req UpdateInsta
 		return nil, err
 	}
 
-	if err := applyUpdatedInstanceEnv(ctx, log, id, meta, prevEnv, nextEnv, m.saveMetadata, m.getEgressProxyIfExists()); err != nil {
+	if err := applyUpdatedInstanceEnv(ctx, log, id, meta, prevEnv, nextEnv, m.saveMetadata, updateInstanceRulesServiceOrNil(m.getEgressProxyIfExists())); err != nil {
 		return nil, err
 	}
 
@@ -108,6 +108,13 @@ func cloneEnvMap(in map[string]string) map[string]string {
 		out[k] = v
 	}
 	return out
+}
+
+func updateInstanceRulesServiceOrNil(svc *egressproxy.Service) updateInstanceRulesService {
+	if svc == nil {
+		return nil
+	}
+	return svc
 }
 
 func applyUpdatedInstanceEnv(ctx context.Context, log *slog.Logger, instanceID string, meta *metadata, prevEnv map[string]string, nextEnv map[string]string, save func(*metadata) error, svc updateInstanceRulesService) error {
