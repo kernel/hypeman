@@ -209,8 +209,9 @@ var RouteScopes = map[string]Scope{
 	"GET /devices/{id}":      DeviceRead,
 
 	// Health & Resources
-	"GET /health":    ResourceRead,
-	"GET /resources": ResourceRead,
+	"GET /health":                    ResourceRead,
+	"GET /resources":                 ResourceRead,
+	"POST /resources/memory/reclaim": ResourceRead,
 
 	// Images
 	"GET /images":           ImageRead,
