@@ -42,7 +42,7 @@ func CopyGuestDirectory(srcDir, dstDir string) error {
 		if d.IsDir() && shouldSkipDirectory(relPath) {
 			return filepath.SkipDir
 		}
-		if shouldSkipRegularFile(relPath) {
+		if !d.IsDir() && shouldSkipRegularFile(relPath) {
 			return nil
 		}
 

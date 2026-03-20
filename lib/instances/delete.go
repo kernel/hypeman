@@ -35,6 +35,14 @@ func (m *manager) deleteInstance(
 	stored := &meta.StoredMetadata
 	log.DebugContext(ctx, "loaded instance", "instance_id", id, "state", inst.State)
 
+	target, err := m.cancelAndWaitCompressionJob(ctx, m.snapshotJobKeyForInstance(id))
+	if err != nil {
+		return fmt.Errorf("wait for instance compression to stop: %w", err)
+	}
+	if target != nil {
+		m.recordSnapshotCompressionPreemption(ctx, snapshotCompressionPreemptionDeleteInstance, *target)
+	}
+
 	// 2. Get network allocation BEFORE killing VMM (while we can still query it)
 	var networkAlloc *network.Allocation
 	if inst.NetworkEnabled {

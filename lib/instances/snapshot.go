@@ -213,7 +213,13 @@ func (m *manager) createSnapshot(ctx context.Context, id string, req CreateSnaps
 }
 
 func (m *manager) deleteSnapshot(ctx context.Context, snapshotID string) error {
-	_ = ctx
+	target, err := m.cancelAndWaitCompressionJob(ctx, m.snapshotJobKeyForSnapshot(snapshotID))
+	if err != nil {
+		return fmt.Errorf("wait for snapshot compression to stop: %w", err)
+	}
+	if target != nil {
+		m.recordSnapshotCompressionPreemption(ctx, snapshotCompressionPreemptionDeleteSnapshot, *target)
+	}
 	if err := m.snapshotStore().Delete(snapshotID); err != nil {
 		if errors.Is(err, snapshotstore.ErrNotFound) {
 			return ErrSnapshotNotFound

@@ -1,9 +1,13 @@
 package instances
 
 import (
+	"context"
 	"errors"
+	"os"
 	"testing"
+	"time"
 
+	"github.com/kernel/hypeman/lib/hypervisor"
 	snapshotstore "github.com/kernel/hypeman/lib/snapshot"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -205,4 +209,112 @@ func TestValidateCreateSnapshotRequestRejectsStoppedCompression(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrInvalidRequest))
+}
+
+func TestDeleteInstanceCancelsCompressionJob(t *testing.T) {
+	t.Parallel()
+
+	mgr, _ := setupTestManager(t)
+	ctx := context.Background()
+	const instanceID = "delete-instance-compression"
+
+	require.NoError(t, mgr.ensureDirectories(instanceID))
+	now := time.Now()
+	require.NoError(t, mgr.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
+		Id:             instanceID,
+		Name:           instanceID,
+		DataDir:        mgr.paths.InstanceDir(instanceID),
+		HypervisorType: hypervisor.TypeCloudHypervisor,
+		CreatedAt:      now,
+		StoppedAt:      &now,
+	}}))
+
+	target := installCancelableCompressionJob(mgr, compressionTarget{
+		Key:         mgr.snapshotJobKeyForInstance(instanceID),
+		OwnerID:     instanceID,
+		SnapshotDir: mgr.paths.InstanceSnapshotLatest(instanceID),
+		Source:      snapshotCompressionSourceStandby,
+		Policy: snapshotstore.SnapshotCompressionConfig{
+			Enabled:   true,
+			Algorithm: snapshotstore.SnapshotCompressionAlgorithmZstd,
+			Level:     intPtr(1),
+		},
+	})
+
+	require.NoError(t, mgr.DeleteInstance(ctx, instanceID))
+	assertCompressionJobCanceled(t, mgr, target)
+	_, err := os.Stat(mgr.paths.InstanceDir(instanceID))
+	require.Error(t, err)
+	assert.True(t, os.IsNotExist(err))
+}
+
+func TestDeleteSnapshotCancelsCompressionJob(t *testing.T) {
+	t.Parallel()
+
+	mgr, _ := setupTestManager(t)
+	ctx := context.Background()
+	const snapshotID = "delete-snapshot-compression"
+
+	snapshotDir := mgr.paths.SnapshotGuestDir(snapshotID)
+	require.NoError(t, os.MkdirAll(snapshotDir, 0o755))
+	require.NoError(t, mgr.saveSnapshotRecord(&snapshotRecord{
+		Snapshot: Snapshot{
+			Id:        snapshotID,
+			Name:      snapshotID,
+			Kind:      SnapshotKindStandby,
+			CreatedAt: time.Now(),
+		},
+	}))
+
+	target := installCancelableCompressionJob(mgr, compressionTarget{
+		Key:         mgr.snapshotJobKeyForSnapshot(snapshotID),
+		SnapshotID:  snapshotID,
+		SnapshotDir: snapshotDir,
+		Source:      snapshotCompressionSourceSnapshot,
+		Policy: snapshotstore.SnapshotCompressionConfig{
+			Enabled:   true,
+			Algorithm: snapshotstore.SnapshotCompressionAlgorithmLz4,
+			Level:     intPtr(0),
+		},
+	})
+
+	require.NoError(t, mgr.DeleteSnapshot(ctx, snapshotID))
+	assertCompressionJobCanceled(t, mgr, target)
+	_, err := os.Stat(mgr.paths.SnapshotDir(snapshotID))
+	require.Error(t, err)
+	assert.True(t, os.IsNotExist(err))
+}
+
+func installCancelableCompressionJob(mgr *manager, target compressionTarget) *compressionTarget {
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+
+	mgr.compressionMu.Lock()
+	mgr.compressionJobs[target.Key] = &compressionJob{
+		cancel: cancel,
+		done:   done,
+		target: target,
+	}
+	mgr.compressionMu.Unlock()
+
+	go func() {
+		<-ctx.Done()
+		mgr.compressionMu.Lock()
+		delete(mgr.compressionJobs, target.Key)
+		mgr.compressionMu.Unlock()
+		close(done)
+	}()
+
+	return &target
+}
+
+func assertCompressionJobCanceled(t *testing.T, mgr *manager, target *compressionTarget) {
+	t.Helper()
+
+	require.Eventually(t, func() bool {
+		mgr.compressionMu.Lock()
+		defer mgr.compressionMu.Unlock()
+		_, ok := mgr.compressionJobs[target.Key]
+		return !ok
+	}, time.Second, 10*time.Millisecond)
 }

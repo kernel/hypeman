@@ -43,3 +43,17 @@ func TestCopyGuestDirectory(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "metadata.json", linkTarget)
 }
+
+func TestCopyGuestDirectory_DoesNotSkipTmpSuffixedDirectories(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "src")
+	dst := filepath.Join(t.TempDir(), "dst")
+
+	tmpDir := filepath.Join(src, "snapshots", "snapshot-latest", "memory-ranges.lz4.tmp")
+	require.NoError(t, os.MkdirAll(tmpDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "nested.txt"), []byte("nested"), 0644))
+
+	require.NoError(t, CopyGuestDirectory(src, dst))
+
+	assert.DirExists(t, filepath.Join(dst, "snapshots", "snapshot-latest", "memory-ranges.lz4.tmp"))
+	assert.FileExists(t, filepath.Join(dst, "snapshots", "snapshot-latest", "memory-ranges.lz4.tmp", "nested.txt"))
+}
