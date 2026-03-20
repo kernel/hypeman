@@ -464,6 +464,11 @@ func (s *ApiService) StandbyInstance(ctx context.Context, request oapi.StandbyIn
 	result, err := s.InstanceManager.StandbyInstance(ctx, inst.Id, standbyReq)
 	if err != nil {
 		switch {
+		case errors.Is(err, instances.ErrInvalidRequest):
+			return oapi.StandbyInstance400JSONResponse{
+				Code:    "invalid_request",
+				Message: err.Error(),
+			}, nil
 		case errors.Is(err, instances.ErrInvalidState):
 			return oapi.StandbyInstance409JSONResponse{
 				Code:    "invalid_state",
