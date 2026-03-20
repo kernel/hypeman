@@ -105,7 +105,15 @@ func (c *controller) reconcile(ctx context.Context, req reconcileRequest) (Manua
 
 	if req.force && !req.dryRun {
 		switch {
-		case req.requestedReclaim <= 0 || req.holdFor <= 0:
+		case req.requestedReclaim <= 0 && req.holdFor <= 0:
+			if state.manualHold != nil {
+				logFromContext(ctx, c.log).InfoContext(ctx,
+					"guest memory manual reclaim hold cleared",
+					"operation", "manual_reclaim",
+				)
+			}
+			state.manualHold = nil
+		case req.requestedReclaim > 0 && req.holdFor <= 0:
 			if state.manualHold != nil {
 				logFromContext(ctx, c.log).InfoContext(ctx,
 					"guest memory manual reclaim hold cleared",
@@ -194,6 +202,8 @@ func (c *controller) reconcile(ctx context.Context, req reconcileRequest) (Manua
 
 	manualTarget := int64(0)
 	if req.dryRun {
+		manualTarget = req.requestedReclaim
+	} else if req.force && req.requestedReclaim > 0 {
 		manualTarget = req.requestedReclaim
 	} else if state.manualHold != nil {
 		manualTarget = state.manualHold.reclaimBytes

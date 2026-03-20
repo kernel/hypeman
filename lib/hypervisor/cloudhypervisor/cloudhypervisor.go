@@ -228,10 +228,7 @@ func (c *CloudHypervisor) SetTargetGuestMemoryBytes(ctx context.Context, bytes i
 		return hypervisor.ErrNotSupported
 	}
 
-	assigned := info.JSON200.Config.Memory.Size
-	if info.JSON200.MemoryActualSize != nil {
-		assigned = *info.JSON200.MemoryActualSize + info.JSON200.Config.Balloon.Size
-	}
+	assigned := assignedGuestMemoryBytes(info.JSON200)
 	if bytes < 0 || bytes > assigned {
 		return fmt.Errorf("target guest memory %d is outside valid range [0,%d]", bytes, assigned)
 	}
@@ -264,6 +261,14 @@ func (c *CloudHypervisor) GetTargetGuestMemoryBytes(ctx context.Context) (int64,
 			return value, nil
 		}
 	}
-	assigned := info.JSON200.Config.Memory.Size
+	assigned := assignedGuestMemoryBytes(info.JSON200)
 	return assigned - info.JSON200.Config.Balloon.Size, nil
+}
+
+func assignedGuestMemoryBytes(info *vmm.VmInfo) int64 {
+	assigned := info.Config.Memory.Size
+	if info.MemoryActualSize != nil && info.Config.Balloon != nil {
+		assigned = *info.MemoryActualSize + info.Config.Balloon.Size
+	}
+	return assigned
 }

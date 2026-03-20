@@ -201,7 +201,7 @@ func (q *QEMU) GetTargetGuestMemoryBytes(ctx context.Context) (int64, error) {
 		}
 	}
 
-	bytes, err := q.client.QueryAssignedMemory()
+	bytes, err := q.client.QueryBalloon()
 	if err != nil {
 		Remove(q.socketPath)
 		return 0, fmt.Errorf("query balloon target: %w", err)

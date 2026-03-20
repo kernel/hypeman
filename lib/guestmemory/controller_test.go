@@ -144,3 +144,37 @@ func TestTriggerReclaimRespectsProtectedFloor(t *testing.T) {
 	assert.Equal(t, int64(768*mib), resp.Actions[0].TargetGuestMemoryBytes)
 	assert.Equal(t, int64(256*mib), resp.AppliedReclaimBytes)
 }
+
+func TestTriggerReclaimWithoutHoldAppliesRequestedReclaim(t *testing.T) {
+	const mib = int64(1024 * 1024)
+	src := &stubSource{
+		vms: []BalloonVM{
+			{ID: "a", Name: "a", HypervisorType: hypervisor.TypeCloudHypervisor, SocketPath: "a", AssignedMemoryBytes: 1024 * mib},
+		},
+	}
+	hv := &stubHypervisor{target: 1024 * mib, capabilities: hypervisor.Capabilities{SupportsBalloonControl: true}}
+	c := NewController(Policy{Enabled: true, ReclaimEnabled: true}, ActiveBallooningConfig{
+		Enabled:                true,
+		ProtectedFloorPercent:  50,
+		ProtectedFloorMinBytes: 0,
+		MinAdjustmentBytes:     1,
+		PerVMMaxStepBytes:      4096 * mib,
+		PerVMCooldown:          time.Second,
+	}, src, slog.New(slog.NewTextHandler(io.Discard, nil))).(*controller)
+	c.sampler = &stubSampler{sample: HostPressureSample{TotalBytes: 1024 * mib, AvailableBytes: 1024 * mib, AvailablePercent: 100}}
+	c.reconcileMu.newClient = func(t hypervisor.Type, socket string) (hypervisor.Hypervisor, error) {
+		return hv, nil
+	}
+
+	resp, err := c.TriggerReclaim(context.Background(), ManualReclaimRequest{ReclaimBytes: 256 * mib, HoldFor: 0})
+	require.NoError(t, err)
+	require.Len(t, resp.Actions, 1)
+	assert.Equal(t, int64(768*mib), resp.Actions[0].TargetGuestMemoryBytes)
+	assert.Equal(t, int64(256*mib), resp.AppliedReclaimBytes)
+	assert.Nil(t, resp.HoldUntil)
+
+	followup, err := c.TriggerReclaim(context.Background(), ManualReclaimRequest{})
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), followup.AppliedReclaimBytes)
+	assert.Equal(t, int64(1024*mib), hv.target)
+}
