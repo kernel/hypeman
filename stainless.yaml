@@ -42,6 +42,10 @@ environments:
 #
 # [configuration guide]: https://www.stainless.com/docs/guides/configure#resources
 resources:
+  $shared:
+    models:
+      snapshot_compression_config: "#/components/schemas/SnapshotCompressionConfig"
+
   health:
     # Configure the methods defined in this resource. Each key in the object is the
     # name of the method and the value is either an endpoint (for example, `get /foo`)
@@ -67,6 +71,7 @@ resources:
 
   instances:
     models:
+      snapshot_policy: "#/components/schemas/SnapshotPolicy"
       volume_mount: "#/components/schemas/VolumeMount"
       port_mapping: "#/components/schemas/PortMapping"
       instance: "#/components/schemas/Instance"
