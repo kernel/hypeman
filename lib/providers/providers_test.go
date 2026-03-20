@@ -9,6 +9,23 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestSnapshotDefaultsFromConfigDisabledReturnsNilCompression(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{
+		Snapshot: config.SnapshotConfig{
+			CompressionDefault: config.SnapshotCompressionDefaultConfig{
+				Enabled:   false,
+				Algorithm: "lz4",
+				Level:     7,
+			},
+		},
+	}
+
+	defaults := snapshotDefaultsFromConfig(cfg)
+	assert.Nil(t, defaults.Compression)
+}
+
 func TestSnapshotDefaultsFromConfigOmitsLevelForLZ4(t *testing.T) {
 	t.Parallel()
 

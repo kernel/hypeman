@@ -138,9 +138,13 @@ func ProvideInstanceManager(p *paths.Paths, cfg *config.Config, imageManager ima
 }
 
 func snapshotDefaultsFromConfig(cfg *config.Config) instances.SnapshotPolicy {
+	if !cfg.Snapshot.CompressionDefault.Enabled {
+		return instances.SnapshotPolicy{}
+	}
+
 	algorithm := snapshot.SnapshotCompressionAlgorithm(strings.ToLower(cfg.Snapshot.CompressionDefault.Algorithm))
 	compression := &snapshot.SnapshotCompressionConfig{
-		Enabled:   cfg.Snapshot.CompressionDefault.Enabled,
+		Enabled:   true,
 		Algorithm: algorithm,
 	}
 	if algorithm == "" || algorithm == snapshot.SnapshotCompressionAlgorithmZstd {
