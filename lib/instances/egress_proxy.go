@@ -7,7 +7,11 @@ import (
 	"strings"
 
 	"github.com/kernel/hypeman/lib/egressproxy"
+	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/network"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const mockSecretPrefix = "mock-"
@@ -232,7 +236,18 @@ func (m *manager) getOrCreateEgressProxyService() (*egressproxy.Service, error) 
 		return m.egressProxy, nil
 	}
 
-	svc, err := egressproxy.NewServiceWithOptions(m.paths.DataDir(), egressproxy.DefaultListenPort, m.egressProxyServiceOptions)
+	opts := m.egressProxyServiceOptions
+	if opts.Logger == nil {
+		opts.Logger = logger.NewSubsystemLogger(logger.SubsystemEgress, logger.NewConfig(), nil)
+	}
+	if opts.Meter == nil {
+		opts.Meter = m.meter
+	}
+	if opts.Tracer == nil {
+		opts.Tracer = m.tracer
+	}
+
+	svc, err := egressproxy.NewServiceWithOptions(m.paths.DataDir(), egressproxy.DefaultListenPort, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -248,8 +263,30 @@ func (m *manager) maybeRegisterEgressProxy(ctx context.Context, stored *StoredMe
 		return nil, fmt.Errorf("network.egress requires network.enabled=true")
 	}
 
+	rules := buildEgressProxyInjectRules(stored.NetworkEgress, stored.Credentials, stored.Env)
+	enforcementMode := string(stored.NetworkEgress.EnforcementMode)
+	if enforcementMode == "" {
+		enforcementMode = string(EgressEnforcementModeAll)
+	}
+
+	var span trace.Span
+	if m.tracer != nil {
+		ctx, span = m.tracer.Start(ctx, "MaybeRegisterEgressProxy")
+		span.SetAttributes(
+			attribute.String("operation", "register"),
+			attribute.String("enforcement_mode", enforcementMode),
+			attribute.Bool("proxy_enabled", true),
+			attribute.Int("inject_rule_count", len(rules)),
+		)
+		defer span.End()
+	}
+
 	svc, err := m.getOrCreateEgressProxyService()
 	if err != nil {
+		if span != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+		}
 		return nil, fmt.Errorf("create egress proxy service: %w", err)
 	}
 
@@ -258,9 +295,13 @@ func (m *manager) maybeRegisterEgressProxy(ctx context.Context, stored *StoredMe
 		SourceIP:          netConfig.IP,
 		TAPDevice:         netConfig.TAPDevice,
 		BlockAllTCPEgress: stored.NetworkEgress.EnforcementMode != EgressEnforcementModeHTTPHTTPSOnly,
-		HeaderInjectRules: buildEgressProxyInjectRules(stored.NetworkEgress, stored.Credentials, stored.Env),
+		HeaderInjectRules: rules,
 	})
 	if err != nil {
+		if span != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+		}
 		return nil, fmt.Errorf("register instance with egress proxy: %w", err)
 	}
 
@@ -268,12 +309,13 @@ func (m *manager) maybeRegisterEgressProxy(ctx context.Context, stored *StoredMe
 }
 
 func (m *manager) unregisterEgressProxyInstance(ctx context.Context, instanceID string) {
-	_ = ctx
 	m.egressProxyMu.Lock()
 	svc := m.egressProxy
 	m.egressProxyMu.Unlock()
 	if svc == nil {
 		return
 	}
-	svc.UnregisterInstance(context.Background(), instanceID)
+	if err := svc.UnregisterInstance(ctx, instanceID); err != nil {
+		logger.FromContext(ctx).WarnContext(ctx, "failed to unregister instance from egress proxy", "instance_id", instanceID, "error", err)
+	}
 }

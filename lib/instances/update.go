@@ -51,13 +51,13 @@ func (m *manager) updateInstance(ctx context.Context, id string, req UpdateInsta
 		oldRules := buildEgressProxyInjectRules(meta.NetworkEgress, meta.Credentials, prevEnv)
 		newRules := buildEgressProxyInjectRules(meta.NetworkEgress, meta.Credentials, meta.Env)
 
-		if err := svc.UpdateInstanceRules(id, newRules); err != nil {
+		if err := svc.UpdateInstanceRules(ctx, id, newRules); err != nil {
 			return nil, fmt.Errorf("update egress proxy rules: %w", err)
 		}
-		log.InfoContext(ctx, "updated egress proxy header inject rules", "instance_id", id)
+		log.DebugContext(ctx, "updated egress proxy header inject rules", "instance_id", id)
 
 		if err := m.saveMetadata(meta); err != nil {
-			if rollbackErr := svc.UpdateInstanceRules(id, oldRules); rollbackErr != nil {
+			if rollbackErr := svc.UpdateInstanceRules(ctx, id, oldRules); rollbackErr != nil {
 				return nil, fmt.Errorf("save metadata: %w (failed to roll back egress proxy rules: %v)", err, rollbackErr)
 			}
 			log.WarnContext(ctx, "rolled back egress proxy header inject rules after metadata save failure", "instance_id", id, "error", err)

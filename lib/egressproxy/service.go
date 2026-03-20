@@ -17,6 +17,11 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/kernel/hypeman/lib/logger"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type sourcePolicy struct {
@@ -54,6 +59,9 @@ type Service struct {
 
 	policiesBySourceIP map[string]sourcePolicy
 	sourceIPByInstance map[string]string
+	metrics            *metrics
+	tracer             trace.Tracer
+	log                *slog.Logger
 }
 
 func NewService(dataDir string, listenPort int) (*Service, error) {
@@ -87,7 +95,12 @@ func NewServiceWithOptions(dataDir string, listenPort int, opts ServiceOptions) 
 		},
 	}
 
-	return &Service{
+	log := opts.Logger
+	if log == nil {
+		log = logger.NewSubsystemLogger(logger.SubsystemEgress, logger.NewConfig(), nil)
+	}
+
+	svc := &Service{
 		dataDir:            dataDir,
 		listenPort:         listenPort,
 		transport:          transport,
@@ -98,7 +111,18 @@ func NewServiceWithOptions(dataDir string, listenPort int, opts ServiceOptions) 
 		certCacheLimit:     defaultLeafCertCacheLimit,
 		policiesBySourceIP: make(map[string]sourcePolicy),
 		sourceIPByInstance: make(map[string]string),
-	}, nil
+		tracer:             opts.Tracer,
+		log:                log,
+	}
+	if opts.Meter != nil {
+		metrics, err := newMetrics(opts.Meter, svc)
+		if err != nil {
+			return nil, err
+		}
+		svc.metrics = metrics
+	}
+
+	return svc, nil
 }
 
 func buildRootCAPool(opts ServiceOptions) (*x509.CertPool, error) {
@@ -145,7 +169,7 @@ func (s *Service) EnsureStarted(ctx context.Context, gatewayIP string) error {
 
 	go func() {
 		if serveErr := s.server.Serve(ln); serveErr != nil && serveErr != http.ErrServerClosed {
-			slog.Error("egress proxy server exited", "error", serveErr)
+			s.log.ErrorContext(context.Background(), "egress proxy server exited", "error", serveErr)
 		}
 	}()
 
@@ -165,11 +189,32 @@ func (s *Service) Shutdown(ctx context.Context) error {
 }
 
 func (s *Service) RegisterInstance(ctx context.Context, gatewayIP string, cfg InstanceConfig) (GuestConfig, error) {
+	start := time.Now()
+	log := s.loggerForContext(ctx)
+	result := "error"
+	var opErr error
+	enforcementMode := enforcementModeLabel(cfg.BlockAllTCPEgress)
+	ctx, span := s.startControlPlaneSpan(ctx, "EgressProxy.RegisterInstance",
+		attribute.String("operation", "register"),
+		attribute.String("enforcement_mode", enforcementMode),
+		attribute.Bool("proxy_enabled", true),
+		attribute.Int("inject_rule_count", len(cfg.HeaderInjectRules)),
+	)
+	defer func() {
+		s.finishControlPlaneSpan(span, result, opErr)
+		s.metrics.recordRegistration(ctx, "register", result, enforcementMode)
+		s.metrics.recordControlPlaneDuration(ctx, "register", result, time.Since(start).Seconds())
+	}()
+
 	if err := s.EnsureStarted(ctx, gatewayIP); err != nil {
+		log.WarnContext(ctx, "failed to ensure egress proxy service is started", "instance_id", cfg.InstanceID, "error", err)
+		opErr = err
 		return GuestConfig{}, err
 	}
 
 	if err := applyEgressEnforcement(cfg.InstanceID, cfg.TAPDevice, gatewayIP, s.listenPort, cfg.BlockAllTCPEgress); err != nil {
+		log.WarnContext(ctx, "failed to apply egress proxy enforcement", "instance_id", cfg.InstanceID, "error", err)
+		opErr = err
 		return GuestConfig{}, err
 	}
 
@@ -182,12 +227,16 @@ func (s *Service) RegisterInstance(ctx context.Context, gatewayIP string, cfg In
 
 	injectRules, err := compileHeaderInjectRules(cfg.HeaderInjectRules)
 	if err != nil {
+		log.WarnContext(ctx, "failed to compile egress proxy inject rules", "instance_id", cfg.InstanceID, "error", err)
+		opErr = err
 		return GuestConfig{}, err
 	}
 
 	s.sourceIPByInstance[cfg.InstanceID] = cfg.SourceIP
 	s.policiesBySourceIP[cfg.SourceIP] = sourcePolicy{headerInjectRules: injectRules}
 
+	result = "success"
+	log.DebugContext(ctx, "registered instance with egress proxy", "instance_id", cfg.InstanceID, "enforcement_mode", enforcementMode, "inject_rule_count", len(injectRules))
 	return GuestConfig{
 		Enabled:   true,
 		ProxyURL:  s.proxyURLLocked(),
@@ -219,25 +268,62 @@ func compileHeaderInjectRules(cfgRules []HeaderInjectRuleConfig) ([]headerInject
 
 // UpdateInstanceRules replaces the header inject rules for a registered instance.
 // Returns an error if the instance is not currently registered.
-func (s *Service) UpdateInstanceRules(instanceID string, rules []HeaderInjectRuleConfig) error {
+func (s *Service) UpdateInstanceRules(ctx context.Context, instanceID string, rules []HeaderInjectRuleConfig) error {
+	start := time.Now()
+	log := s.loggerForContext(ctx)
+	result := "error"
+	var opErr error
+	ctx, span := s.startControlPlaneSpan(ctx, "EgressProxy.UpdateInstanceRules",
+		attribute.String("operation", "update"),
+		attribute.Bool("proxy_enabled", true),
+		attribute.Int("inject_rule_count", len(rules)),
+	)
+	defer func() {
+		s.finishControlPlaneSpan(span, result, opErr)
+		s.metrics.recordRuleUpdate(ctx, result)
+		s.metrics.recordControlPlaneDuration(ctx, "update", result, time.Since(start).Seconds())
+	}()
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	sourceIP, ok := s.sourceIPByInstance[instanceID]
 	if !ok {
-		return fmt.Errorf("instance %s is not registered with egress proxy", instanceID)
+		err := fmt.Errorf("instance %s is not registered with egress proxy", instanceID)
+		log.WarnContext(ctx, "failed to update egress proxy rules", "instance_id", instanceID, "error", err)
+		opErr = err
+		return err
 	}
 
 	compiled, err := compileHeaderInjectRules(rules)
 	if err != nil {
-		return fmt.Errorf("compile header inject rules: %w", err)
+		err = fmt.Errorf("compile header inject rules: %w", err)
+		log.WarnContext(ctx, "failed to compile egress proxy rules", "instance_id", instanceID, "error", err)
+		opErr = err
+		return err
 	}
 
 	s.policiesBySourceIP[sourceIP] = sourcePolicy{headerInjectRules: compiled}
+	result = "success"
+	log.DebugContext(ctx, "updated egress proxy rules", "instance_id", instanceID, "inject_rule_count", len(compiled))
 	return nil
 }
 
-func (s *Service) UnregisterInstance(_ context.Context, instanceID string) {
+func (s *Service) UnregisterInstance(ctx context.Context, instanceID string) error {
+	start := time.Now()
+	log := s.loggerForContext(ctx)
+	result := "error"
+	var opErr error
+	ctx, span := s.startControlPlaneSpan(ctx, "EgressProxy.UnregisterInstance",
+		attribute.String("operation", "unregister"),
+		attribute.Bool("proxy_enabled", true),
+	)
+	defer func() {
+		s.finishControlPlaneSpan(span, result, opErr)
+		s.metrics.recordRegistration(ctx, "unregister", result, "unknown")
+		s.metrics.recordControlPlaneDuration(ctx, "unregister", result, time.Since(start).Seconds())
+	}()
+
 	s.mu.Lock()
 	sourceIP, ok := s.sourceIPByInstance[instanceID]
 	if ok {
@@ -246,7 +332,15 @@ func (s *Service) UnregisterInstance(_ context.Context, instanceID string) {
 	}
 	s.mu.Unlock()
 
-	_ = removeEgressEnforcement(instanceID)
+	if err := removeEgressEnforcement(instanceID); err != nil {
+		log.WarnContext(ctx, "failed to remove egress proxy enforcement", "instance_id", instanceID, "error", err)
+		opErr = err
+		return err
+	}
+
+	result = "success"
+	log.DebugContext(ctx, "unregistered instance from egress proxy", "instance_id", instanceID)
+	return nil
 }
 
 func (s *Service) ProxyURL() string {
@@ -272,6 +366,10 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) handleHTTPProxyRequest(w http.ResponseWriter, r *http.Request, sourceIP string, insideTunnel bool) {
+	protocol := "http"
+	if insideTunnel {
+		protocol = "https"
+	}
 	outReq := r.Clone(r.Context())
 	outReq.Header = cloneHeader(r.Header)
 	removeHopByHopHeaders(outReq.Header)
@@ -293,11 +391,16 @@ func (s *Service) handleHTTPProxyRequest(w http.ResponseWriter, r *http.Request,
 	if destinationHost == "" {
 		destinationHost = normalizeDestinationHost(outReq.Host)
 	}
-	s.applyHeaderInjections(sourceIP, destinationHost, outReq.Header, false)
+	injected := s.applyHeaderInjections(sourceIP, destinationHost, outReq.Header, false) > 0
 
+	start := time.Now()
 	resp, err := s.transport.RoundTrip(outReq)
 	if err != nil {
-		slog.Warn("egress proxy upstream request failed", "destination_host", destinationHost, "error", err)
+		log := s.loggerForContext(r.Context())
+		log.WarnContext(r.Context(), "egress proxy upstream request failed", "protocol", protocol, "injected", injected, "error", err)
+		s.metrics.recordRequest(r.Context(), protocol, "upstream_error", injected)
+		s.metrics.recordUpstreamDuration(r.Context(), protocol, "upstream_error", time.Since(start).Seconds())
+		s.metrics.recordUpstreamFailure(r.Context(), protocol)
 		http.Error(w, "proxy upstream error", http.StatusBadGateway)
 		return
 	}
@@ -311,6 +414,8 @@ func (s *Service) handleHTTPProxyRequest(w http.ResponseWriter, r *http.Request,
 	}
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, resp.Body)
+	s.metrics.recordRequest(r.Context(), protocol, "success", injected)
+	s.metrics.recordUpstreamDuration(r.Context(), protocol, "success", time.Since(start).Seconds())
 }
 
 func (s *Service) handleConnect(w http.ResponseWriter, r *http.Request, sourceIP string) {
@@ -369,10 +474,16 @@ func (s *Service) handleConnect(w http.ResponseWriter, r *http.Request, sourceIP
 		req.RequestURI = ""
 		req.Header = cloneHeader(req.Header)
 		removeHopByHopHeaders(req.Header)
-		s.applyHeaderInjections(sourceIP, targetHost, req.Header, true)
+		injected := s.applyHeaderInjections(sourceIP, targetHost, req.Header, true) > 0
 
+		start := time.Now()
 		resp, err := s.transport.RoundTrip(req)
 		if err != nil {
+			log := s.loggerForContext(r.Context())
+			log.WarnContext(r.Context(), "egress proxy upstream request failed", "protocol", "https", "injected", injected, "error", err)
+			s.metrics.recordRequest(r.Context(), "https", "upstream_error", injected)
+			s.metrics.recordUpstreamDuration(r.Context(), "https", "upstream_error", time.Since(start).Seconds())
+			s.metrics.recordUpstreamFailure(r.Context(), "https")
 			_, _ = io.WriteString(tlsConn, "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
 			return
 		}
@@ -383,6 +494,8 @@ func (s *Service) handleConnect(w http.ResponseWriter, r *http.Request, sourceIP
 			return
 		}
 		resp.Body.Close()
+		s.metrics.recordRequest(r.Context(), "https", "success", injected)
+		s.metrics.recordUpstreamDuration(r.Context(), "https", "success", time.Since(start).Seconds())
 
 		if req.Close || resp.Close {
 			return
@@ -418,15 +531,16 @@ func (s *Service) getOrCreateLeafCert(host string) (*tls.Certificate, error) {
 	return cert, nil
 }
 
-func (s *Service) applyHeaderInjections(sourceIP, destinationHost string, headers http.Header, isHTTPS bool) {
+func (s *Service) applyHeaderInjections(sourceIP, destinationHost string, headers http.Header, isHTTPS bool) int {
 	rules := s.resolveHeaderInjectRules(sourceIP, destinationHost, isHTTPS)
 	if len(rules) == 0 {
-		return
+		return 0
 	}
 
 	for _, rule := range rules {
 		headers.Set(rule.headerName, rule.headerValue)
 	}
+	return len(rules)
 }
 
 func (s *Service) resolveHeaderInjectRules(sourceIP, destinationHost string, isHTTPS bool) []headerInjectRule {
@@ -493,4 +607,47 @@ func sourceIPFromRemoteAddr(remoteAddr string) string {
 		return remoteAddr
 	}
 	return host
+}
+
+func (s *Service) loggerForContext(ctx context.Context) *slog.Logger {
+	if ctx != nil {
+		log := logger.FromContext(ctx)
+		if log != nil && log != slog.Default() {
+			return log
+		}
+	}
+	if s.log != nil {
+		return s.log
+	}
+	return slog.Default()
+}
+
+func (s *Service) startControlPlaneSpan(ctx context.Context, name string, attrs ...attribute.KeyValue) (context.Context, trace.Span) {
+	if s.tracer == nil {
+		return ctx, nil
+	}
+	ctx, span := s.tracer.Start(ctx, name)
+	if len(attrs) > 0 {
+		span.SetAttributes(attrs...)
+	}
+	return ctx, span
+}
+
+func (s *Service) finishControlPlaneSpan(span trace.Span, result string, err error) {
+	if span == nil {
+		return
+	}
+	span.SetAttributes(attribute.String("result", result))
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+	span.End()
+}
+
+func enforcementModeLabel(blockAllTCPEgress bool) string {
+	if blockAllTCPEgress {
+		return "all"
+	}
+	return "http_https_only"
 }

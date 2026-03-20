@@ -85,6 +85,8 @@ type manager struct {
 	bootMarkerScans           sync.Map          // map[string]time.Time next allowed boot-marker rescan
 	hostTopology              *HostTopology     // Cached host CPU topology
 	metrics                   *Metrics
+	meter                     metric.Meter
+	tracer                    trace.Tracer
 	now                       func() time.Time
 	egressProxy               *egressproxy.Service
 	egressProxyServiceOptions egressproxy.ServiceOptions
@@ -134,6 +136,8 @@ func NewManager(p *paths.Paths, imageManager images.Manager, systemManager syste
 		vmStarters:        vmStarters,
 		defaultHypervisor: defaultHypervisor,
 		now:               time.Now,
+		meter:             meter,
+		tracer:            tracer,
 		guestMemoryPolicy: policy,
 	}
 
