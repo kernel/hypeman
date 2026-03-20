@@ -20,6 +20,11 @@ type QEMU struct {
 
 var balloonTargetCache sync.Map
 
+func clearBalloonTargetCache(socketPath string) {
+	balloonTargetCache.Delete(socketPath)
+	balloonTargetCache.Delete(hypervisor.SocketCacheKey(socketPath))
+}
+
 // New returns a QEMU client for the given socket path.
 // Uses a connection pool to ensure only one connection per socket exists.
 func New(socketPath string) (*QEMU, error) {
@@ -64,7 +69,7 @@ func (q *QEMU) DeleteVM(ctx context.Context) error {
 		Remove(q.socketPath)
 		return err
 	}
-	balloonTargetCache.Delete(q.socketPath)
+	clearBalloonTargetCache(q.socketPath)
 	return nil
 }
 
@@ -76,7 +81,7 @@ func (q *QEMU) Shutdown(ctx context.Context) error {
 	}
 	// Connection is gone after quit, remove from pool
 	Remove(q.socketPath)
-	balloonTargetCache.Delete(q.socketPath)
+	clearBalloonTargetCache(q.socketPath)
 	return nil
 }
 
@@ -190,12 +195,12 @@ func (q *QEMU) SetTargetGuestMemoryBytes(ctx context.Context, bytes int64) error
 		Remove(q.socketPath)
 		return fmt.Errorf("set balloon target: %w", err)
 	}
-	balloonTargetCache.Store(q.socketPath, bytes)
+	balloonTargetCache.Store(hypervisor.SocketCacheKey(q.socketPath), bytes)
 	return nil
 }
 
 func (q *QEMU) GetTargetGuestMemoryBytes(ctx context.Context) (int64, error) {
-	if target, ok := balloonTargetCache.Load(q.socketPath); ok {
+	if target, ok := balloonTargetCache.Load(hypervisor.SocketCacheKey(q.socketPath)); ok {
 		if value, ok := target.(int64); ok {
 			return value, nil
 		}

@@ -20,6 +20,11 @@ type CloudHypervisor struct {
 
 var balloonTargetCache sync.Map
 
+func clearBalloonTargetCache(socketPath string) {
+	balloonTargetCache.Delete(socketPath)
+	balloonTargetCache.Delete(hypervisor.SocketCacheKey(socketPath))
+}
+
 // New creates a new Cloud Hypervisor client for an existing VMM socket.
 func New(socketPath string) (*CloudHypervisor, error) {
 	client, err := vmm.NewVMM(socketPath)
@@ -63,7 +68,7 @@ func (c *CloudHypervisor) DeleteVM(ctx context.Context) error {
 	if resp.StatusCode() != 204 {
 		return fmt.Errorf("delete vm failed with status %d: %s", resp.StatusCode(), string(resp.Body))
 	}
-	balloonTargetCache.Delete(c.socketPath)
+	clearBalloonTargetCache(c.socketPath)
 	return nil
 }
 
@@ -77,7 +82,7 @@ func (c *CloudHypervisor) Shutdown(ctx context.Context) error {
 	if resp.StatusCode() != 204 {
 		return fmt.Errorf("shutdown vmm failed with status %d", resp.StatusCode())
 	}
-	balloonTargetCache.Delete(c.socketPath)
+	clearBalloonTargetCache(c.socketPath)
 	return nil
 }
 
@@ -241,7 +246,7 @@ func (c *CloudHypervisor) SetTargetGuestMemoryBytes(ctx context.Context, bytes i
 	if resp.StatusCode() != 204 {
 		return fmt.Errorf("set balloon target failed with status %d", resp.StatusCode())
 	}
-	balloonTargetCache.Store(c.socketPath, bytes)
+	balloonTargetCache.Store(hypervisor.SocketCacheKey(c.socketPath), bytes)
 	return nil
 }
 
@@ -256,7 +261,7 @@ func (c *CloudHypervisor) GetTargetGuestMemoryBytes(ctx context.Context) (int64,
 	if info.JSON200.Config.Balloon == nil {
 		return 0, hypervisor.ErrNotSupported
 	}
-	if target, ok := balloonTargetCache.Load(c.socketPath); ok {
+	if target, ok := balloonTargetCache.Load(hypervisor.SocketCacheKey(c.socketPath)); ok {
 		if value, ok := target.(int64); ok {
 			return value, nil
 		}

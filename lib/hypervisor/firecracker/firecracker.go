@@ -131,7 +131,7 @@ func (f *Firecracker) SetTargetGuestMemoryBytes(ctx context.Context, bytes int64
 	if err != nil {
 		return err
 	}
-	desiredBalloonMiB := cfg.MachineConfig.MemSizeMiB - bytesToMiB(bytes)
+	desiredBalloonMiB := cfg.MachineConfig.MemSizeMiB - guestTargetBytesToMiB(bytes)
 	if desiredBalloonMiB < 0 {
 		return fmt.Errorf("target guest memory %d exceeds configured memory %d MiB", bytes, cfg.MachineConfig.MemSizeMiB)
 	}
@@ -258,6 +258,18 @@ func (f *Firecracker) getVMConfig(ctx context.Context) (*firecrackerVMConfig, er
 		return nil, fmt.Errorf("decode vm config: %w", err)
 	}
 	return &cfg, nil
+}
+
+func guestTargetBytesToMiB(bytes int64) int64 {
+	if bytes <= 0 {
+		return 0
+	}
+	const mib = 1024 * 1024
+	out := bytes / mib
+	if bytes%mib != 0 {
+		out++
+	}
+	return out
 }
 
 func (f *Firecracker) do(ctx context.Context, method, path string, reqBody any, expectedStatus ...int) ([]byte, error) {

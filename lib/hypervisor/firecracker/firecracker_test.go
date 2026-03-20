@@ -24,3 +24,11 @@ func TestMapVMState(t *testing.T) {
 	_, err = mapVMState("Shutdown")
 	require.Error(t, err)
 }
+
+func TestGuestTargetBytesToMiB(t *testing.T) {
+	assert.Equal(t, int64(0), guestTargetBytesToMiB(0))
+	assert.Equal(t, int64(0), guestTargetBytesToMiB(-1))
+	assert.Equal(t, int64(1), guestTargetBytesToMiB(1))
+	assert.Equal(t, int64(1), guestTargetBytesToMiB(1024*1024))
+	assert.Equal(t, int64(2), guestTargetBytesToMiB(1024*1024+1))
+}
