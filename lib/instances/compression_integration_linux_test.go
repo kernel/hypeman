@@ -33,6 +33,8 @@ type compressionIntegrationHarness struct {
 }
 
 func TestCloudHypervisorStandbyRestoreCompressionScenarios(t *testing.T) {
+	t.Parallel()
+
 	runStandbyRestoreCompressionScenarios(t, compressionIntegrationHarness{
 		name:       "cloud-hypervisor",
 		hypervisor: hypervisor.TypeCloudHypervisor,
@@ -48,6 +50,8 @@ func TestCloudHypervisorStandbyRestoreCompressionScenarios(t *testing.T) {
 }
 
 func TestFirecrackerStandbyRestoreCompressionScenarios(t *testing.T) {
+	t.Parallel()
+
 	runStandbyRestoreCompressionScenarios(t, compressionIntegrationHarness{
 		name:       "firecracker",
 		hypervisor: hypervisor.TypeFirecracker,
@@ -59,6 +63,8 @@ func TestFirecrackerStandbyRestoreCompressionScenarios(t *testing.T) {
 }
 
 func TestQEMUStandbyRestoreCompressionScenarios(t *testing.T) {
+	t.Parallel()
+
 	runStandbyRestoreCompressionScenarios(t, compressionIntegrationHarness{
 		name:       "qemu",
 		hypervisor: hypervisor.TypeQEMU,
