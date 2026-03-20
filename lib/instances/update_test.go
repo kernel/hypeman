@@ -56,16 +56,6 @@ func TestValidateUpdateInstanceRequest(t *testing.T) {
 	})
 }
 
-func TestUpdateInstanceRulesServiceOrNil(t *testing.T) {
-	t.Parallel()
-
-	var svc *egressproxy.Service
-	assert.Nil(t, updateInstanceRulesServiceOrNil(svc))
-
-	typedSvc := updateInstanceRulesService(&fakeUpdateInstanceRulesService{})
-	require.NotNil(t, typedSvc)
-}
-
 type fakeUpdateInstanceRulesService struct {
 	calls [][]egressproxy.HeaderInjectRuleConfig
 	errs  []error
@@ -96,15 +86,13 @@ func TestApplyUpdatedInstanceEnvWithoutProxyService(t *testing.T) {
 	prevEnv := cloneEnvMap(meta.Env)
 	nextEnv := map[string]string{"OUTBOUND_OPENAI_KEY": "new"}
 
-	saveCalls := 0
 	err := applyUpdatedInstanceEnv(context.Background(), nil, meta.Id, meta, prevEnv, nextEnv, func(saved *metadata) error {
-		saveCalls++
-		assert.Equal(t, nextEnv, saved.Env)
+		t.Fatalf("save should not be called when proxy service is unavailable")
 		return nil
 	}, nil)
-	require.NoError(t, err)
-	assert.Equal(t, 1, saveCalls)
-	assert.Equal(t, nextEnv, meta.Env)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "egress proxy service unavailable")
+	assert.Equal(t, prevEnv, meta.Env)
 }
 
 func TestApplyUpdatedInstanceEnvRollsBackRulesOnSaveFailure(t *testing.T) {

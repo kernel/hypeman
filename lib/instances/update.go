@@ -54,7 +54,13 @@ func (m *manager) updateInstance(ctx context.Context, id string, req UpdateInsta
 		return nil, err
 	}
 
-	if err := applyUpdatedInstanceEnv(ctx, log, id, meta, prevEnv, nextEnv, m.saveMetadata, updateInstanceRulesServiceOrNil(m.getEgressProxyIfExists())); err != nil {
+	svc := m.getEgressProxyIfExists()
+	if svc == nil {
+		log.ErrorContext(ctx, "egress proxy service unavailable for credential update", "instance_id", id)
+		return nil, fmt.Errorf("egress proxy service unavailable")
+	}
+
+	if err := applyUpdatedInstanceEnv(ctx, log, id, meta, prevEnv, nextEnv, m.saveMetadata, svc); err != nil {
 		return nil, err
 	}
 
@@ -110,25 +116,13 @@ func cloneEnvMap(in map[string]string) map[string]string {
 	return out
 }
 
-func updateInstanceRulesServiceOrNil(svc *egressproxy.Service) updateInstanceRulesService {
-	if svc == nil {
-		return nil
-	}
-	return svc
-}
-
 func applyUpdatedInstanceEnv(ctx context.Context, log *slog.Logger, instanceID string, meta *metadata, prevEnv map[string]string, nextEnv map[string]string, save func(*metadata) error, svc updateInstanceRulesService) error {
 	if log == nil {
 		log = logger.FromContext(ctx)
 	}
 
 	if svc == nil {
-		meta.Env = nextEnv
-		if err := save(meta); err != nil {
-			meta.Env = prevEnv
-			return fmt.Errorf("save metadata: %w", err)
-		}
-		return nil
+		return fmt.Errorf("egress proxy service unavailable")
 	}
 
 	oldRules := buildEgressProxyInjectRules(meta.NetworkEgress, meta.Credentials, prevEnv)
