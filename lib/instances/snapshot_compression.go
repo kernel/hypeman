@@ -104,21 +104,32 @@ func normalizeCompressionConfig(cfg *snapshotstore.SnapshotCompressionConfig) (s
 }
 
 func (m *manager) resolveSnapshotCompressionPolicy(stored *StoredMetadata, override *snapshotstore.SnapshotCompressionConfig) (snapshotstore.SnapshotCompressionConfig, error) {
-	if override != nil {
-		return normalizeCompressionConfig(override)
+	cfg, err := m.resolveConfiguredCompressionPolicy(stored, override)
+	if err != nil {
+		return snapshotstore.SnapshotCompressionConfig{}, err
 	}
-	if stored != nil && stored.SnapshotPolicy != nil && stored.SnapshotPolicy.Compression != nil {
-		return normalizeCompressionConfig(stored.SnapshotPolicy.Compression)
-	}
-	if m.snapshotDefaults.Compression != nil {
-		return normalizeCompressionConfig(m.snapshotDefaults.Compression)
+	if cfg != nil {
+		return *cfg, nil
 	}
 	return snapshotstore.SnapshotCompressionConfig{Enabled: false}, nil
 }
 
 func (m *manager) resolveStandbyCompressionPolicy(stored *StoredMetadata, override *snapshotstore.SnapshotCompressionConfig) (*snapshotstore.SnapshotCompressionConfig, error) {
-	if override != nil {
-		cfg, err := normalizeCompressionConfig(override)
+	return m.resolveConfiguredCompressionPolicy(stored, override)
+}
+
+func (m *manager) resolveConfiguredCompressionPolicy(stored *StoredMetadata, override *snapshotstore.SnapshotCompressionConfig) (*snapshotstore.SnapshotCompressionConfig, error) {
+	candidates := []*snapshotstore.SnapshotCompressionConfig{override}
+	if stored != nil && stored.SnapshotPolicy != nil {
+		candidates = append(candidates, stored.SnapshotPolicy.Compression)
+	}
+	candidates = append(candidates, m.snapshotDefaults.Compression)
+
+	for _, candidate := range candidates {
+		if candidate == nil {
+			continue
+		}
+		cfg, err := normalizeCompressionConfig(candidate)
 		if err != nil {
 			return nil, err
 		}
@@ -127,29 +138,6 @@ func (m *manager) resolveStandbyCompressionPolicy(stored *StoredMetadata, overri
 		}
 		return &cfg, nil
 	}
-
-	if stored != nil && stored.SnapshotPolicy != nil && stored.SnapshotPolicy.Compression != nil {
-		cfg, err := normalizeCompressionConfig(stored.SnapshotPolicy.Compression)
-		if err != nil {
-			return nil, err
-		}
-		if !cfg.Enabled {
-			return nil, nil
-		}
-		return &cfg, nil
-	}
-
-	if m.snapshotDefaults.Compression != nil {
-		cfg, err := normalizeCompressionConfig(m.snapshotDefaults.Compression)
-		if err != nil {
-			return nil, err
-		}
-		if !cfg.Enabled {
-			return nil, nil
-		}
-		return &cfg, nil
-	}
-
 	return nil, nil
 }
 

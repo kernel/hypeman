@@ -249,6 +249,13 @@ func (m *manager) restoreSnapshot(ctx context.Context, id string, snapshotID str
 	if target != nil {
 		m.recordSnapshotCompressionPreemption(ctx, snapshotCompressionPreemptionRestoreSnapshot, *target)
 	}
+	target, err = m.cancelAndWaitCompressionJob(ctx, m.snapshotJobKeyForInstance(id))
+	if err != nil {
+		return nil, fmt.Errorf("wait for source instance compression to stop: %w", err)
+	}
+	if target != nil {
+		m.recordSnapshotCompressionPreemption(ctx, snapshotCompressionPreemptionRestoreSnapshot, *target)
+	}
 
 	if err := m.replaceInstanceWithSnapshotPayload(snapshotID, id); err != nil {
 		return nil, err
