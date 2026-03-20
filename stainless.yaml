@@ -153,6 +153,14 @@ resources:
       passthrough_device: "#/components/schemas/PassthroughDevice"
     methods:
       get: get /resources
+    subresources:
+      memory:
+        models:
+          reclaim_request: "#/components/schemas/MemoryReclaimRequest"
+          reclaim_action: "#/components/schemas/MemoryReclaimAction"
+          reclaim_response: "#/components/schemas/MemoryReclaimResponse"
+        methods:
+          reclaim: post /resources/memory/reclaim
 
   builds:
     models:
