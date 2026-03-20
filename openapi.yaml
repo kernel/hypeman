@@ -203,6 +203,21 @@ components:
             $ref: "#/components/schemas/CreateInstanceRequestCredentialInject"
           minItems: 1
 
+    UpdateInstanceRequest:
+      type: object
+      properties:
+        env:
+          type: object
+          minProperties: 1
+          additionalProperties:
+            type: string
+          description: |
+            Environment variables to update (merged with existing).
+            Only keys referenced by the instance's existing credential `source.env` bindings
+            are accepted. Use this to rotate real credential values without restarting the VM.
+          example:
+            OUTBOUND_OPENAI_KEY: new-rotated-key-456
+
     CreateInstanceRequest:
       type: object
       required: [name, image]
@@ -1780,7 +1795,60 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
-  
+    patch:
+      summary: Update instance properties
+      description: |
+        Update mutable properties of a running instance. Currently supports updating
+        only the environment variables referenced by existing credential policies,
+        enabling secret/key rotation without instance restart.
+      operationId: updateInstance
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Instance ID or name
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateInstanceRequest"
+      responses:
+        200:
+          description: Instance updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Instance"
+        400:
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        404:
+          description: Instance not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Invalid state (instance must be running or initializing)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /instances/{id}/standby:
     post:
       summary: Put instance in standby (pause, snapshot, delete VMM)

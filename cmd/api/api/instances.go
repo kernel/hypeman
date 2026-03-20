@@ -826,6 +826,62 @@ func (s *ApiService) StatInstancePath(ctx context.Context, request oapi.StatInst
 	return response, nil
 }
 
+// UpdateInstance updates mutable properties of a running instance.
+// Currently supports updating env vars referenced by credential policies for key rotation.
+// Note: Resolution is handled by ResolveResource middleware
+func (s *ApiService) UpdateInstance(ctx context.Context, request oapi.UpdateInstanceRequestObject) (oapi.UpdateInstanceResponseObject, error) {
+	inst := mw.GetResolvedInstance[instances.Instance](ctx)
+	if inst == nil {
+		return oapi.UpdateInstance500JSONResponse{
+			Code:    "internal_error",
+			Message: "resource not resolved",
+		}, nil
+	}
+	log := logger.FromContext(ctx)
+
+	if request.Body == nil {
+		return oapi.UpdateInstance400JSONResponse{
+			Code:    "invalid_request",
+			Message: "request body is required",
+		}, nil
+	}
+
+	env := make(map[string]string)
+	if request.Body.Env != nil {
+		env = *request.Body.Env
+	}
+
+	result, err := s.InstanceManager.UpdateInstance(ctx, inst.Id, instances.UpdateInstanceRequest{
+		Env: env,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, instances.ErrNotFound):
+			return oapi.UpdateInstance404JSONResponse{
+				Code:    "not_found",
+				Message: "instance not found",
+			}, nil
+		case errors.Is(err, instances.ErrInvalidState):
+			return oapi.UpdateInstance409JSONResponse{
+				Code:    "invalid_state",
+				Message: err.Error(),
+			}, nil
+		case errors.Is(err, instances.ErrInvalidRequest):
+			return oapi.UpdateInstance400JSONResponse{
+				Code:    "invalid_request",
+				Message: err.Error(),
+			}, nil
+		default:
+			log.ErrorContext(ctx, "failed to update instance", "error", err)
+			return oapi.UpdateInstance500JSONResponse{
+				Code:    "internal_error",
+				Message: "failed to update instance",
+			}, nil
+		}
+	}
+	return oapi.UpdateInstance200JSONResponse(instanceToOAPI(*result)), nil
+}
+
 // AttachVolume attaches a volume to an instance (not yet implemented)
 func (s *ApiService) AttachVolume(ctx context.Context, request oapi.AttachVolumeRequestObject) (oapi.AttachVolumeResponseObject, error) {
 	return oapi.AttachVolume500JSONResponse{
