@@ -152,11 +152,13 @@ func (m *manager) createSnapshot(ctx context.Context, id string, req CreateSnaps
 		}
 		if effectiveCompression.Enabled {
 			m.startCompressionJob(ctx, compressionTarget{
-				Key:         m.snapshotJobKeyForSnapshot(snapshotID),
-				OwnerID:     stored.Id,
-				SnapshotID:  snapshotID,
-				SnapshotDir: snapshotGuestDir,
-				Policy:      effectiveCompression,
+				Key:            m.snapshotJobKeyForSnapshot(snapshotID),
+				OwnerID:        stored.Id,
+				SnapshotID:     snapshotID,
+				SnapshotDir:    snapshotGuestDir,
+				HypervisorType: stored.HypervisorType,
+				Source:         snapshotCompressionSourceSnapshot,
+				Policy:         effectiveCompression,
 			})
 		}
 		cu.Release()
@@ -240,8 +242,12 @@ func (m *manager) restoreSnapshot(ctx context.Context, id string, snapshotID str
 		return nil, err
 	}
 
-	if err := m.cancelAndWaitCompressionJob(ctx, m.snapshotJobKeyForSnapshot(snapshotID)); err != nil {
+	target, err := m.cancelAndWaitCompressionJob(ctx, m.snapshotJobKeyForSnapshot(snapshotID))
+	if err != nil {
 		return nil, fmt.Errorf("wait for snapshot compression to stop: %w", err)
+	}
+	if target != nil {
+		m.recordSnapshotCompressionPreemption(ctx, snapshotCompressionPreemptionRestoreSnapshot, *target)
 	}
 
 	if err := m.replaceInstanceWithSnapshotPayload(snapshotID, id); err != nil {
@@ -358,8 +364,12 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 	})
 	defer cu.Clean()
 
-	if err := m.cancelAndWaitCompressionJob(ctx, m.snapshotJobKeyForSnapshot(snapshotID)); err != nil {
+	target, err := m.cancelAndWaitCompressionJob(ctx, m.snapshotJobKeyForSnapshot(snapshotID))
+	if err != nil {
 		return nil, fmt.Errorf("wait for snapshot compression to stop: %w", err)
+	}
+	if target != nil {
+		m.recordSnapshotCompressionPreemption(ctx, snapshotCompressionPreemptionForkSnapshot, *target)
 	}
 
 	if err := forkvm.CopyGuestDirectory(m.paths.SnapshotGuestDir(snapshotID), dstDir); err != nil {

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
@@ -24,14 +25,17 @@ const (
 type compressionJob struct {
 	cancel context.CancelFunc
 	done   chan struct{}
+	target compressionTarget
 }
 
 type compressionTarget struct {
-	Key         string
-	OwnerID     string
-	SnapshotID  string
-	SnapshotDir string
-	Policy      snapshotstore.SnapshotCompressionConfig
+	Key            string
+	OwnerID        string
+	SnapshotID     string
+	SnapshotDir    string
+	HypervisorType hypervisor.Type
+	Source         snapshotCompressionSource
+	Policy         snapshotstore.SnapshotCompressionConfig
 }
 
 func cloneCompressionConfig(cfg *snapshotstore.SnapshotCompressionConfig) *snapshotstore.SnapshotCompressionConfig {
@@ -174,12 +178,20 @@ func (m *manager) startCompressionJob(ctx context.Context, target compressionTar
 	job := &compressionJob{
 		cancel: cancel,
 		done:   make(chan struct{}),
+		target: target,
 	}
 	m.compressionJobs[target.Key] = job
 	m.compressionMu.Unlock()
 
 	go func() {
+		start := time.Now()
+		result := snapshotCompressionResultSuccess
+		var uncompressedSize int64
+		var compressedSize int64
+		metricsCtx := context.Background()
+
 		defer func() {
+			m.recordSnapshotCompressionJob(metricsCtx, target, result, start, uncompressedSize, compressedSize)
 			m.compressionMu.Lock()
 			delete(m.compressionJobs, target.Key)
 			m.compressionMu.Unlock()
@@ -195,14 +207,17 @@ func (m *manager) startCompressionJob(ctx context.Context, target compressionTar
 			return
 		}
 
-		uncompressedSize, compressedSize, err := compressSnapshotMemoryFile(jobCtx, rawPath, target.Policy)
+		var err error
+		uncompressedSize, compressedSize, err = compressSnapshotMemoryFile(jobCtx, rawPath, target.Policy)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
+				result = snapshotCompressionResultCanceled
 				if target.SnapshotID != "" {
 					_ = m.updateSnapshotCompressionMetadata(target.SnapshotID, snapshotstore.SnapshotCompressionStateNone, "", nil, nil, nil)
 				}
 				return
 			}
+			result = snapshotCompressionResultFailed
 			if target.SnapshotID != "" {
 				_ = m.updateSnapshotCompressionMetadata(target.SnapshotID, snapshotstore.SnapshotCompressionStateError, err.Error(), &target.Policy, nil, nil)
 			}
@@ -241,30 +256,59 @@ func (m *manager) waitCompressionJobContext(ctx context.Context, key string) err
 	}
 }
 
-func (m *manager) cancelAndWaitCompressionJob(ctx context.Context, key string) error {
+func (m *manager) cancelAndWaitCompressionJob(ctx context.Context, key string) (*compressionTarget, error) {
 	if key == "" {
-		return nil
+		return nil, nil
 	}
-	m.cancelCompressionJob(key)
-	return m.waitCompressionJobContext(ctx, key)
+
+	m.compressionMu.Lock()
+	job := m.compressionJobs[key]
+	if job != nil {
+		job.cancel()
+	}
+	m.compressionMu.Unlock()
+
+	if job == nil {
+		return nil, nil
+	}
+
+	select {
+	case <-job.done:
+		target := job.target
+		return &target, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
-func (m *manager) ensureSnapshotMemoryReady(ctx context.Context, snapshotDir, jobKey string) error {
+func (m *manager) ensureSnapshotMemoryReady(ctx context.Context, snapshotDir, jobKey string, hvType hypervisor.Type) error {
+	start := time.Now()
+
 	if jobKey != "" {
-		if err := m.cancelAndWaitCompressionJob(ctx, jobKey); err != nil {
+		target, err := m.cancelAndWaitCompressionJob(ctx, jobKey)
+		if err != nil {
 			return err
+		}
+		if target != nil {
+			m.recordSnapshotCompressionPreemption(ctx, snapshotCompressionPreemptionRestoreInstance, *target)
 		}
 	}
 
 	if rawPath, ok := findRawSnapshotMemoryFile(snapshotDir); ok {
 		removeCompressedSnapshotArtifacts(rawPath)
+		m.recordSnapshotRestoreMemoryPrepare(ctx, hvType, snapshotMemoryPreparePathRaw, snapshotCompressionResultSuccess, start)
 		return nil
 	}
 	compressedPath, algorithm, ok := findCompressedSnapshotMemoryFile(snapshotDir)
 	if !ok {
 		return nil
 	}
-	return decompressSnapshotMemoryFile(ctx, compressedPath, algorithm)
+	if err := decompressSnapshotMemoryFile(ctx, compressedPath, algorithm); err != nil {
+		m.recordSnapshotRestoreMemoryPrepare(ctx, hvType, snapshotMemoryPreparePathDecompress, snapshotCompressionResultFailed, start)
+		return err
+	}
+	m.recordSnapshotRestoreMemoryPrepare(ctx, hvType, snapshotMemoryPreparePathDecompress, snapshotCompressionResultSuccess, start)
+	return nil
 }
 
 func (m *manager) updateSnapshotCompressionMetadata(snapshotID, state, compressionError string, cfg *snapshotstore.SnapshotCompressionConfig, compressedSize, uncompressedSize *int64) error {

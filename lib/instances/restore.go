@@ -69,7 +69,15 @@ func (m *manager) restoreInstance(
 
 	// 3. Get snapshot directory
 	snapshotDir := m.paths.InstanceSnapshotLatest(id)
-	if err := m.ensureSnapshotMemoryReady(ctx, snapshotDir, m.snapshotJobKeyForInstance(id)); err != nil {
+	var prepareSnapshotSpan trace.Span
+	if m.metrics != nil && m.metrics.tracer != nil {
+		ctx, prepareSnapshotSpan = m.metrics.tracer.Start(ctx, "PrepareSnapshotMemory")
+	}
+	err = m.ensureSnapshotMemoryReady(ctx, snapshotDir, m.snapshotJobKeyForInstance(id), stored.HypervisorType)
+	if prepareSnapshotSpan != nil {
+		prepareSnapshotSpan.End()
+	}
+	if err != nil {
 		return nil, fmt.Errorf("prepare standby snapshot memory: %w", err)
 	}
 	starter, err := m.getVMStarter(stored.HypervisorType)

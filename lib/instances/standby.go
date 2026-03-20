@@ -180,10 +180,12 @@ func (m *manager) standbyInstance(
 
 	if compressionPolicy != nil {
 		m.startCompressionJob(ctx, compressionTarget{
-			Key:         m.snapshotJobKeyForInstance(stored.Id),
-			OwnerID:     stored.Id,
-			SnapshotDir: snapshotDir,
-			Policy:      *compressionPolicy,
+			Key:            m.snapshotJobKeyForInstance(stored.Id),
+			OwnerID:        stored.Id,
+			SnapshotDir:    snapshotDir,
+			HypervisorType: stored.HypervisorType,
+			Source:         snapshotCompressionSourceStandby,
+			Policy:         *compressionPolicy,
 		})
 	}
 
