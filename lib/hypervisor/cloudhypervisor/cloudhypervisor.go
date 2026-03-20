@@ -251,6 +251,12 @@ func (c *CloudHypervisor) SetTargetGuestMemoryBytes(ctx context.Context, bytes i
 }
 
 func (c *CloudHypervisor) GetTargetGuestMemoryBytes(ctx context.Context) (int64, error) {
+	if target, ok := balloonTargetCache.Load(hypervisor.SocketCacheKey(c.socketPath)); ok {
+		if value, ok := target.(int64); ok {
+			return value, nil
+		}
+	}
+
 	info, err := c.client.GetVmInfoWithResponse(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("get vm info for balloon read: %w", err)
@@ -260,11 +266,6 @@ func (c *CloudHypervisor) GetTargetGuestMemoryBytes(ctx context.Context) (int64,
 	}
 	if info.JSON200.Config.Balloon == nil {
 		return 0, hypervisor.ErrNotSupported
-	}
-	if target, ok := balloonTargetCache.Load(hypervisor.SocketCacheKey(c.socketPath)); ok {
-		if value, ok := target.(int64); ok {
-			return value, nil
-		}
 	}
 	assigned := assignedGuestMemoryBytes(info.JSON200)
 	return assigned - info.JSON200.Config.Balloon.Size, nil

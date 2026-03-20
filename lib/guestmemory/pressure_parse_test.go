@@ -29,7 +29,7 @@ func TestParseLinuxMeminfoRequiresTotalAndAvailable(t *testing.T) {
 	assert.Contains(t, err.Error(), "missing memory totals")
 }
 
-func TestParseLinuxPSI(t *testing.T) {
+func TestParseLinuxPSIAboveThresholdIsStressed(t *testing.T) {
 	t.Parallel()
 
 	stressed, err := parseLinuxPSI(`
@@ -38,6 +38,17 @@ full avg10=0.00 avg60=0.00 avg300=0.00 total=0
 `)
 	require.NoError(t, err)
 	assert.True(t, stressed)
+}
+
+func TestParseLinuxPSIBelowThresholdIsHealthy(t *testing.T) {
+	t.Parallel()
+
+	stressed, err := parseLinuxPSI(`
+some avg10=0.09 avg60=0.01 avg300=0.10 total=12345
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+`)
+	require.NoError(t, err)
+	assert.False(t, stressed)
 }
 
 func TestParseLinuxPSIZeroAvg10IsHealthy(t *testing.T) {

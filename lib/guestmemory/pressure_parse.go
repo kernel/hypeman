@@ -7,6 +7,8 @@ import (
 	"strings"
 )
 
+const linuxPSIStressAvg10Threshold = 0.1
+
 func parseLinuxMeminfo(data string) (int64, int64, error) {
 	var total, available int64
 	var sawTotal, sawAvailable bool
@@ -62,7 +64,7 @@ func parseLinuxPSI(data string) (bool, error) {
 			if err != nil {
 				return false, fmt.Errorf("parse psi avg10: %w", err)
 			}
-			return value > 0, nil
+			return value >= linuxPSIStressAvg10Threshold, nil
 		}
 	}
 
