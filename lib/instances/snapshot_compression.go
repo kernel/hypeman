@@ -186,8 +186,14 @@ func (m *manager) startCompressionJob(ctx context.Context, target compressionTar
 		log := logger.FromContext(ctx)
 		rawPath, ok := findRawSnapshotMemoryFile(target.SnapshotDir)
 		if !ok {
-			if _, _, found := findCompressedSnapshotMemoryFile(target.SnapshotDir); found && target.SnapshotID != "" {
-				_ = m.updateSnapshotCompressionMetadata(target.SnapshotID, snapshotstore.SnapshotCompressionStateCompressed, "", &target.Policy, nil, nil)
+			if compressedPath, algorithm, found := findCompressedSnapshotMemoryFile(target.SnapshotDir); found && target.SnapshotID != "" {
+				cfg := compressionMetadataForExistingArtifact(target.Policy, algorithm)
+				var compressedSize *int64
+				if st, statErr := os.Stat(compressedPath); statErr == nil {
+					size := st.Size()
+					compressedSize = &size
+				}
+				_ = m.updateSnapshotCompressionMetadata(target.SnapshotID, snapshotstore.SnapshotCompressionStateCompressed, "", &cfg, compressedSize, nil)
 			}
 			return
 		}
@@ -214,15 +220,6 @@ func (m *manager) startCompressionJob(ctx context.Context, target compressionTar
 			_ = m.updateSnapshotCompressionMetadata(target.SnapshotID, snapshotstore.SnapshotCompressionStateCompressed, "", &target.Policy, &compressedSize, &uncompressedSize)
 		}
 	}()
-}
-
-func (m *manager) cancelCompressionJob(key string) {
-	m.compressionMu.Lock()
-	job := m.compressionJobs[key]
-	m.compressionMu.Unlock()
-	if job != nil {
-		job.cancel()
-	}
 }
 
 func (m *manager) waitCompressionJobContext(ctx context.Context, key string) error {
@@ -517,6 +514,17 @@ func compressedPathFor(rawPath string, algorithm snapshotstore.SnapshotCompressi
 	default:
 		return rawPath + ".zst"
 	}
+}
+
+func compressionMetadataForExistingArtifact(policy snapshotstore.SnapshotCompressionConfig, algorithm snapshotstore.SnapshotCompressionAlgorithm) snapshotstore.SnapshotCompressionConfig {
+	cfg := snapshotstore.SnapshotCompressionConfig{
+		Enabled:   true,
+		Algorithm: algorithm,
+	}
+	if policy.Algorithm == algorithm {
+		cfg.Level = cloneCompressionConfig(&policy).Level
+	}
+	return cfg
 }
 
 func removeCompressedSnapshotArtifacts(rawPath string) {

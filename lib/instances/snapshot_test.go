@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
+	snapshotstore "github.com/kernel/hypeman/lib/snapshot"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -202,6 +203,38 @@ func TestCreateStandbySnapshotCancelsSourceInstanceCompressionJob(t *testing.T) 
 	require.NoError(t, err)
 	require.Equal(t, SnapshotKindStandby, snap.Kind)
 	assert.True(t, instanceCanceled.Load(), "instance compression job should be canceled before copying standby snapshot payload")
+}
+
+func TestCreateStandbySnapshotFromCompressedSourceCopiesRawMemory(t *testing.T) {
+	t.Parallel()
+
+	mgr, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	hvType := mgr.defaultHypervisor
+	sourceID := "snapshot-create-compressed-src"
+	createStandbySnapshotSourceFixture(t, mgr, sourceID, "snapshot-create-compressed-src", hvType)
+
+	rawPath := filepath.Join(mgr.paths.InstanceSnapshotLatest(sourceID), "memory-ranges")
+	require.NoError(t, os.WriteFile(rawPath, []byte("some guest memory"), 0644))
+	_, _, err := compressSnapshotMemoryFile(ctx, rawPath, snapshotstore.SnapshotCompressionConfig{
+		Enabled:   true,
+		Algorithm: snapshotstore.SnapshotCompressionAlgorithmZstd,
+		Level:     intPtr(1),
+	})
+	require.NoError(t, err)
+
+	snap, err := mgr.CreateSnapshot(ctx, sourceID, CreateSnapshotRequest{
+		Kind: SnapshotKindStandby,
+		Name: "standby-from-compressed",
+	})
+	require.NoError(t, err)
+
+	snapshotDir := mgr.paths.SnapshotGuestDir(snap.Id)
+	_, ok := findRawSnapshotMemoryFile(snapshotDir)
+	assert.True(t, ok, "snapshot copy should contain raw memory after preparing a compressed standby source")
+	_, _, ok = findCompressedSnapshotMemoryFile(snapshotDir)
+	assert.False(t, ok, "snapshot copy should not inherit compressed memory artifacts from the source standby instance")
 }
 
 func createStoppedSnapshotSourceFixture(t *testing.T, mgr *manager, id, name string, hvType hypervisor.Type) {

@@ -152,6 +152,29 @@ func TestResolveCompressionPolicyExplicitDisableOverridesDefaults(t *testing.T) 
 	assert.Nil(t, standbyCfg)
 }
 
+func TestCompressionMetadataForExistingArtifactUsesActualAlgorithm(t *testing.T) {
+	t.Parallel()
+
+	cfg := compressionMetadataForExistingArtifact(snapshotstore.SnapshotCompressionConfig{
+		Enabled:   true,
+		Algorithm: snapshotstore.SnapshotCompressionAlgorithmZstd,
+		Level:     intPtr(7),
+	}, snapshotstore.SnapshotCompressionAlgorithmLz4)
+	assert.True(t, cfg.Enabled)
+	assert.Equal(t, snapshotstore.SnapshotCompressionAlgorithmLz4, cfg.Algorithm)
+	assert.Nil(t, cfg.Level)
+
+	cfg = compressionMetadataForExistingArtifact(snapshotstore.SnapshotCompressionConfig{
+		Enabled:   true,
+		Algorithm: snapshotstore.SnapshotCompressionAlgorithmZstd,
+		Level:     intPtr(7),
+	}, snapshotstore.SnapshotCompressionAlgorithmZstd)
+	assert.True(t, cfg.Enabled)
+	assert.Equal(t, snapshotstore.SnapshotCompressionAlgorithmZstd, cfg.Algorithm)
+	require.NotNil(t, cfg.Level)
+	assert.Equal(t, 7, *cfg.Level)
+}
+
 func TestValidateCreateRequestSnapshotPolicy(t *testing.T) {
 	t.Parallel()
 

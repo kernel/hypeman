@@ -103,6 +103,9 @@ func (m *manager) createSnapshot(ctx context.Context, id string, req CreateSnaps
 			if target != nil {
 				m.recordSnapshotCompressionPreemption(ctx, snapshotCompressionPreemptionCreateSnapshot, *target)
 			}
+			if err := m.ensureSnapshotMemoryReady(ctx, m.paths.InstanceSnapshotLatest(id), "", stored.HypervisorType); err != nil {
+				return nil, fmt.Errorf("prepare source snapshot memory for copy: %w", err)
+			}
 		default:
 			return nil, fmt.Errorf("%w: standby snapshot requires source in %s or %s, got %s", ErrInvalidState, StateRunning, StateStandby, inst.State)
 		}
