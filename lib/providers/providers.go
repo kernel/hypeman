@@ -137,11 +137,11 @@ func ProvideInstanceManager(p *paths.Paths, cfg *config.Config, imageManager ima
 
 // ProvideGuestMemoryController provides the active ballooning controller.
 func ProvideGuestMemoryController(instanceManager instances.Manager, cfg *config.Config, log *slog.Logger) (guestmemory.Controller, error) {
-	pollInterval, err := time.ParseDuration(cfg.Hypervisor.Memory.ActiveBallooning.PollInterval)
+	pollInterval, err := parseRequiredDuration(cfg.Hypervisor.Memory.ActiveBallooning.PollInterval)
 	if err != nil {
 		return nil, fmt.Errorf("parse active ballooning poll interval: %w", err)
 	}
-	perVMCooldown, err := time.ParseDuration(cfg.Hypervisor.Memory.ActiveBallooning.PerVmCooldown)
+	perVMCooldown, err := parseRequiredDuration(cfg.Hypervisor.Memory.ActiveBallooning.PerVmCooldown)
 	if err != nil {
 		return nil, fmt.Errorf("parse active ballooning per-vm cooldown: %w", err)
 	}
@@ -194,6 +194,14 @@ func ProvideVolumeManager(p *paths.Paths, cfg *config.Config) (volumes.Manager, 
 
 	meter := otel.GetMeterProvider().Meter("hypeman")
 	return volumes.NewManager(p, maxTotalVolumeStorage, meter), nil
+}
+
+func parseRequiredDuration(value string) (time.Duration, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, fmt.Errorf("must not be empty")
+	}
+	return time.ParseDuration(value)
 }
 
 // ProvideRegistry provides the OCI registry for image push

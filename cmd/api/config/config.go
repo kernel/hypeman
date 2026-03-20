@@ -475,15 +475,11 @@ func (c *Config) Validate() error {
 	if c.Hypervisor.Memory.KernelPageInitMode != "performance" && c.Hypervisor.Memory.KernelPageInitMode != "hardened" {
 		return fmt.Errorf("hypervisor.memory.kernel_page_init_mode must be one of {performance,hardened}, got %q", c.Hypervisor.Memory.KernelPageInitMode)
 	}
-	if c.Hypervisor.Memory.ActiveBallooning.PollInterval != "" {
-		if _, err := time.ParseDuration(c.Hypervisor.Memory.ActiveBallooning.PollInterval); err != nil {
-			return fmt.Errorf("hypervisor.memory.active_ballooning.poll_interval must be a valid duration, got %q: %w", c.Hypervisor.Memory.ActiveBallooning.PollInterval, err)
-		}
+	if err := validateDuration("hypervisor.memory.active_ballooning.poll_interval", c.Hypervisor.Memory.ActiveBallooning.PollInterval); err != nil {
+		return err
 	}
-	if c.Hypervisor.Memory.ActiveBallooning.PerVmCooldown != "" {
-		if _, err := time.ParseDuration(c.Hypervisor.Memory.ActiveBallooning.PerVmCooldown); err != nil {
-			return fmt.Errorf("hypervisor.memory.active_ballooning.per_vm_cooldown must be a valid duration, got %q: %w", c.Hypervisor.Memory.ActiveBallooning.PerVmCooldown, err)
-		}
+	if err := validateDuration("hypervisor.memory.active_ballooning.per_vm_cooldown", c.Hypervisor.Memory.ActiveBallooning.PerVmCooldown); err != nil {
+		return err
 	}
 	if err := validateByteSize("hypervisor.memory.active_ballooning.protected_floor_min_bytes", c.Hypervisor.Memory.ActiveBallooning.ProtectedFloorMinBytes); err != nil {
 		return err
@@ -517,6 +513,16 @@ func validateByteSize(field string, value string) error {
 	var size datasize.ByteSize
 	if err := size.UnmarshalText([]byte(value)); err != nil {
 		return fmt.Errorf("%s must be a valid byte size, got %q: %w", field, value, err)
+	}
+	return nil
+}
+
+func validateDuration(field string, value string) error {
+	if strings.TrimSpace(value) == "" {
+		return fmt.Errorf("%s must not be empty", field)
+	}
+	if _, err := time.ParseDuration(value); err != nil {
+		return fmt.Errorf("%s must be a valid duration, got %q: %w", field, value, err)
 	}
 	return nil
 }

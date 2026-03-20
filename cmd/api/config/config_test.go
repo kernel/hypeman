@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -81,5 +82,23 @@ func TestValidateRejectsInvalidVMLabelBudget(t *testing.T) {
 	err := cfg.Validate()
 	if err == nil {
 		t.Fatalf("expected validation error for invalid vm label budget")
+	}
+}
+
+func TestValidateRejectsEmptyActiveBallooningDurations(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Hypervisor.Memory.ActiveBallooning.PollInterval = "   "
+
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "poll_interval must not be empty") {
+		t.Fatalf("expected poll_interval empty validation error, got %v", err)
+	}
+
+	cfg = defaultConfig()
+	cfg.Hypervisor.Memory.ActiveBallooning.PerVmCooldown = ""
+
+	err = cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "per_vm_cooldown must not be empty") {
+		t.Fatalf("expected per_vm_cooldown empty validation error, got %v", err)
 	}
 }

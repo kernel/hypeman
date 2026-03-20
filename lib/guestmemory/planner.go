@@ -63,14 +63,18 @@ func protectedFloorBytes(cfg ActiveBallooningConfig, assigned int64) int64 {
 }
 
 func nextPressureState(current HostPressureState, cfg ActiveBallooningConfig, sample HostPressureSample) HostPressureState {
+	availablePercent := sample.AvailablePercent
+	highWatermark := float64(cfg.PressureHighWatermarkAvailablePercent)
+	lowWatermark := float64(cfg.PressureLowWatermarkAvailablePercent)
+
 	switch current {
 	case HostPressureStatePressure:
-		if int(sample.AvailablePercent) >= cfg.PressureLowWatermarkAvailablePercent && !sample.Stressed {
+		if availablePercent >= lowWatermark && !sample.Stressed {
 			return HostPressureStateHealthy
 		}
 		return HostPressureStatePressure
 	default:
-		if int(sample.AvailablePercent) <= cfg.PressureHighWatermarkAvailablePercent || sample.Stressed {
+		if availablePercent <= highWatermark || sample.Stressed {
 			return HostPressureStatePressure
 		}
 		return HostPressureStateHealthy

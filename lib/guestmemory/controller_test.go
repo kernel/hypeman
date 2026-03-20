@@ -113,7 +113,9 @@ func TestPressureStateUsesHysteresis(t *testing.T) {
 	cfg.PressureLowWatermarkAvailablePercent = 15
 
 	assert.Equal(t, HostPressureStatePressure, nextPressureState(HostPressureStateHealthy, cfg, HostPressureSample{AvailablePercent: 9}))
+	assert.Equal(t, HostPressureStateHealthy, nextPressureState(HostPressureStateHealthy, cfg, HostPressureSample{AvailablePercent: 10.9}))
 	assert.Equal(t, HostPressureStatePressure, nextPressureState(HostPressureStatePressure, cfg, HostPressureSample{AvailablePercent: 12}))
+	assert.Equal(t, HostPressureStatePressure, nextPressureState(HostPressureStatePressure, cfg, HostPressureSample{AvailablePercent: 14.9}))
 	assert.Equal(t, HostPressureStateHealthy, nextPressureState(HostPressureStatePressure, cfg, HostPressureSample{AvailablePercent: 16}))
 }
 
