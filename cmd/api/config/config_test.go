@@ -5,6 +5,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/c2h5oh/datasize"
+	"github.com/kernel/hypeman/lib/guestmemory"
 )
 
 func TestDefaultConfigIncludesMetricsSettings(t *testing.T) {
@@ -100,5 +103,30 @@ func TestValidateRejectsEmptyActiveBallooningDurations(t *testing.T) {
 	err = cfg.Validate()
 	if err == nil || !strings.Contains(err.Error(), "per_vm_cooldown must not be empty") {
 		t.Fatalf("expected per_vm_cooldown empty validation error, got %v", err)
+	}
+}
+
+func TestDefaultConfigActiveBallooningMatchesGoDefaults(t *testing.T) {
+	cfg := defaultConfig()
+	want := guestmemory.DefaultActiveBallooningConfig()
+
+	parse := func(value string) int64 {
+		t.Helper()
+
+		var size datasize.ByteSize
+		if err := size.UnmarshalText([]byte(value)); err != nil {
+			t.Fatalf("parse default byte size %q: %v", value, err)
+		}
+		return int64(size)
+	}
+
+	if got := parse(cfg.Hypervisor.Memory.ActiveBallooning.ProtectedFloorMinBytes); got != want.ProtectedFloorMinBytes {
+		t.Fatalf("protected floor default mismatch: got %d want %d", got, want.ProtectedFloorMinBytes)
+	}
+	if got := parse(cfg.Hypervisor.Memory.ActiveBallooning.MinAdjustmentBytes); got != want.MinAdjustmentBytes {
+		t.Fatalf("min adjustment default mismatch: got %d want %d", got, want.MinAdjustmentBytes)
+	}
+	if got := parse(cfg.Hypervisor.Memory.ActiveBallooning.PerVmMaxStepBytes); got != want.PerVMMaxStepBytes {
+		t.Fatalf("per-vm max step default mismatch: got %d want %d", got, want.PerVMMaxStepBytes)
 	}
 }

@@ -119,20 +119,6 @@ func (c *Client) QueryBalloon() (int64, error) {
 	return info.Actual, nil
 }
 
-// QueryAssignedMemory returns the currently configured RAM size for the guest.
-func (c *Client) QueryAssignedMemory() (int64, error) {
-	info, err := c.raw.QueryMemorySizeSummary()
-	if err != nil {
-		return 0, err
-	}
-
-	total := int64(info.BaseMemory)
-	if info.PluggedMemory != nil {
-		total += int64(*info.PluggedMemory)
-	}
-	return total, nil
-}
-
 // Migrate initiates a migration to the given URI (typically "file:///path").
 // This is used for saving VM state to a file for snapshot/standby.
 func (c *Client) Migrate(uri string) error {
