@@ -4,7 +4,6 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/kernel/hypeman/lib/hypervisor"
 	snapshotstore "github.com/kernel/hypeman/lib/snapshot"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -37,10 +36,21 @@ func TestNormalizeCompressionConfig(t *testing.T) {
 	_, err = normalizeCompressionConfig(&snapshotstore.SnapshotCompressionConfig{
 		Enabled:   true,
 		Algorithm: snapshotstore.SnapshotCompressionAlgorithmLz4,
-		Level:     intPtr(1),
+		Level:     intPtr(10),
 	})
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrInvalidRequest))
+
+	cfg, err = normalizeCompressionConfig(&snapshotstore.SnapshotCompressionConfig{
+		Enabled:   true,
+		Algorithm: snapshotstore.SnapshotCompressionAlgorithmLz4,
+		Level:     intPtr(9),
+	})
+	require.NoError(t, err)
+	assert.True(t, cfg.Enabled)
+	assert.Equal(t, snapshotstore.SnapshotCompressionAlgorithmLz4, cfg.Algorithm)
+	require.NotNil(t, cfg.Level)
+	assert.Equal(t, 9, *cfg.Level)
 }
 
 func TestResolveSnapshotCompressionPolicyPrecedence(t *testing.T) {
@@ -78,7 +88,8 @@ func TestResolveSnapshotCompressionPolicyPrecedence(t *testing.T) {
 	cfg, err = m.resolveSnapshotCompressionPolicy(stored, nil)
 	require.NoError(t, err)
 	assert.Equal(t, snapshotstore.SnapshotCompressionAlgorithmLz4, cfg.Algorithm)
-	assert.Nil(t, cfg.Level)
+	require.NotNil(t, cfg.Level)
+	assert.Equal(t, 0, *cfg.Level)
 
 	cfg, err = m.resolveSnapshotCompressionPolicy(&StoredMetadata{}, nil)
 	require.NoError(t, err)
@@ -87,28 +98,25 @@ func TestResolveSnapshotCompressionPolicyPrecedence(t *testing.T) {
 	assert.Equal(t, 2, *cfg.Level)
 }
 
-func TestResolveStandbyCompressionPolicyCloudHypervisorDefault(t *testing.T) {
+func TestResolveStandbyCompressionPolicyIsOptInOnly(t *testing.T) {
 	t.Parallel()
 
 	m := &manager{}
 
 	cfg, err := m.resolveStandbyCompressionPolicy(&StoredMetadata{
-		HypervisorType: hypervisor.TypeCloudHypervisor,
+		HypervisorType: "cloud-hypervisor",
 	}, nil)
 	require.NoError(t, err)
-	require.NotNil(t, cfg)
-	assert.True(t, cfg.Enabled)
-	assert.Equal(t, snapshotstore.SnapshotCompressionAlgorithmLz4, cfg.Algorithm)
-	assert.Nil(t, cfg.Level)
+	assert.Nil(t, cfg)
 
 	cfg, err = m.resolveStandbyCompressionPolicy(&StoredMetadata{
-		HypervisorType: hypervisor.TypeCloudHypervisor,
+		HypervisorType: "cloud-hypervisor",
 	}, &snapshotstore.SnapshotCompressionConfig{Enabled: false})
 	require.NoError(t, err)
 	assert.Nil(t, cfg)
 
 	cfg, err = m.resolveStandbyCompressionPolicy(&StoredMetadata{
-		HypervisorType: hypervisor.TypeQEMU,
+		HypervisorType: "qemu",
 	}, nil)
 	require.NoError(t, err)
 	assert.Nil(t, cfg)

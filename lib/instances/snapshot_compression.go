@@ -18,8 +18,12 @@ import (
 )
 
 const (
-	defaultSnapshotCompressionZstdLevel = 1
-	maxSnapshotCompressionZstdLevel     = 19
+	defaultSnapshotCompressionZstdLevel = snapshotstore.DefaultSnapshotCompressionZstdLevel
+	minSnapshotCompressionZstdLevel     = snapshotstore.MinSnapshotCompressionZstdLevel
+	maxSnapshotCompressionZstdLevel     = snapshotstore.MaxSnapshotCompressionZstdLevel
+	defaultSnapshotCompressionLz4Level  = snapshotstore.DefaultSnapshotCompressionLz4Level
+	minSnapshotCompressionLz4Level      = snapshotstore.MinSnapshotCompressionLz4Level
+	maxSnapshotCompressionLz4Level      = snapshotstore.MaxSnapshotCompressionLz4Level
 )
 
 type compressionJob struct {
@@ -82,14 +86,19 @@ func normalizeCompressionConfig(cfg *snapshotstore.SnapshotCompressionConfig) (s
 		if cfg.Level != nil {
 			level = *cfg.Level
 		}
-		if level < 1 || level > maxSnapshotCompressionZstdLevel {
-			return snapshotstore.SnapshotCompressionConfig{}, fmt.Errorf("%w: invalid zstd level %d (must be between 1 and %d)", ErrInvalidRequest, level, maxSnapshotCompressionZstdLevel)
+		if level < minSnapshotCompressionZstdLevel || level > maxSnapshotCompressionZstdLevel {
+			return snapshotstore.SnapshotCompressionConfig{}, fmt.Errorf("%w: invalid zstd level %d (must be between %d and %d)", ErrInvalidRequest, level, minSnapshotCompressionZstdLevel, maxSnapshotCompressionZstdLevel)
 		}
 		normalized.Level = &level
 	case snapshotstore.SnapshotCompressionAlgorithmLz4:
+		level := defaultSnapshotCompressionLz4Level
 		if cfg.Level != nil {
-			return snapshotstore.SnapshotCompressionConfig{}, fmt.Errorf("%w: lz4 does not support level", ErrInvalidRequest)
+			level = *cfg.Level
 		}
+		if level < minSnapshotCompressionLz4Level || level > maxSnapshotCompressionLz4Level {
+			return snapshotstore.SnapshotCompressionConfig{}, fmt.Errorf("%w: invalid lz4 level %d (must be between %d and %d)", ErrInvalidRequest, level, minSnapshotCompressionLz4Level, maxSnapshotCompressionLz4Level)
+		}
+		normalized.Level = &level
 	}
 	return normalized, nil
 }
@@ -105,13 +114,6 @@ func (m *manager) resolveSnapshotCompressionPolicy(stored *StoredMetadata, overr
 		return normalizeCompressionConfig(m.snapshotDefaults.Compression)
 	}
 	return snapshotstore.SnapshotCompressionConfig{Enabled: false}, nil
-}
-
-func defaultCloudHypervisorStandbyCompressionPolicy() snapshotstore.SnapshotCompressionConfig {
-	return snapshotstore.SnapshotCompressionConfig{
-		Enabled:   true,
-		Algorithm: snapshotstore.SnapshotCompressionAlgorithmLz4,
-	}
 }
 
 func (m *manager) resolveStandbyCompressionPolicy(stored *StoredMetadata, override *snapshotstore.SnapshotCompressionConfig) (*snapshotstore.SnapshotCompressionConfig, error) {
@@ -145,11 +147,6 @@ func (m *manager) resolveStandbyCompressionPolicy(stored *StoredMetadata, overri
 		if !cfg.Enabled {
 			return nil, nil
 		}
-		return &cfg, nil
-	}
-
-	if stored != nil && stored.HypervisorType == hypervisor.TypeCloudHypervisor {
-		cfg := defaultCloudHypervisorStandbyCompressionPolicy()
 		return &cfg, nil
 	}
 
@@ -434,7 +431,11 @@ func runCompression(ctx context.Context, srcPath, dstPath string, cfg snapshotst
 		}
 	case snapshotstore.SnapshotCompressionAlgorithmLz4:
 		enc := lz4.NewWriter(dst)
-		if err := enc.Apply(lz4.CompressionLevelOption(lz4.Fast)); err != nil {
+		level := defaultSnapshotCompressionLz4Level
+		if cfg.Level != nil {
+			level = *cfg.Level
+		}
+		if err := enc.Apply(lz4.CompressionLevelOption(lz4CompressionLevel(level))); err != nil {
 			return fmt.Errorf("configure lz4 encoder: %w", err)
 		}
 		if err := copyWithContext(ctx, enc, src); err != nil {
@@ -448,6 +449,33 @@ func runCompression(ctx context.Context, srcPath, dstPath string, cfg snapshotst
 		return fmt.Errorf("%w: unsupported compression algorithm %q", ErrInvalidRequest, cfg.Algorithm)
 	}
 	return nil
+}
+
+func lz4CompressionLevel(level int) lz4.CompressionLevel {
+	switch level {
+	case 0:
+		return lz4.Fast
+	case 1:
+		return lz4.Level1
+	case 2:
+		return lz4.Level2
+	case 3:
+		return lz4.Level3
+	case 4:
+		return lz4.Level4
+	case 5:
+		return lz4.Level5
+	case 6:
+		return lz4.Level6
+	case 7:
+		return lz4.Level7
+	case 8:
+		return lz4.Level8
+	case 9:
+		return lz4.Level9
+	default:
+		return lz4.Fast
+	}
 }
 
 func decompressSnapshotMemoryFile(ctx context.Context, compressedPath string, algorithm snapshotstore.SnapshotCompressionAlgorithm) error {

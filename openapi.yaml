@@ -456,11 +456,13 @@ components:
         algorithm:
           type: string
           enum: [zstd, lz4]
-          description: Compression algorithm (defaults to zstd when enabled)
+          description: Compression algorithm (defaults to zstd when enabled). Ignored when enabled is false.
           example: zstd
         level:
           type: integer
-          description: Compression level for zstd only
+          minimum: 0
+          maximum: 19
+          description: Compression level. Allowed ranges are zstd=1-19 and lz4=0-9. When omitted, zstd defaults to 1 and lz4 defaults to 0. Ignored when enabled is false.
           example: 1
 
     SnapshotPolicy:

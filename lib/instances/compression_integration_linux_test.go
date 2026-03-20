@@ -29,7 +29,6 @@ type compressionIntegrationHarness struct {
 	setup            func(t *testing.T) (*manager, string)
 	requirePrereqs   func(t *testing.T)
 	waitHypervisorUp func(ctx context.Context, inst *Instance) error
-	testImplicitLZ4  bool
 }
 
 func TestCloudHypervisorStandbyRestoreCompressionScenarios(t *testing.T) {
@@ -45,7 +44,6 @@ func TestCloudHypervisorStandbyRestoreCompressionScenarios(t *testing.T) {
 		waitHypervisorUp: func(ctx context.Context, inst *Instance) error {
 			return waitForVMReady(ctx, inst.SocketPath, 10*time.Second)
 		},
-		testImplicitLZ4: true,
 	})
 }
 
@@ -186,20 +184,25 @@ func runStandbyRestoreCompressionScenarios(t *testing.T, harness compressionInte
 			},
 		},
 		{
-			name: "lz4",
+			name: "lz4-0",
 			cfg: &snapshotstore.SnapshotCompressionConfig{
 				Enabled:   true,
 				Algorithm: snapshotstore.SnapshotCompressionAlgorithmLz4,
+				Level:     intPtr(0),
+			},
+		},
+		{
+			name: "lz4-9",
+			cfg: &snapshotstore.SnapshotCompressionConfig{
+				Enabled:   true,
+				Algorithm: snapshotstore.SnapshotCompressionAlgorithmLz4,
+				Level:     intPtr(9),
 			},
 		},
 	}
 
 	for _, tc := range completedCases {
 		inst = runCompressionCycle(t, ctx, mgr, p, inst, harness.waitHypervisorUp, tc.name, tc.cfg, true)
-	}
-
-	if harness.testImplicitLZ4 {
-		inst = runCompressionCycle(t, ctx, mgr, p, inst, harness.waitHypervisorUp, "implicit-default-lz4", nil, true)
 	}
 
 	require.NoError(t, mgr.DeleteInstance(ctx, inst.Id))
@@ -235,7 +238,7 @@ func runCompressionCycle(
 
 	if waitForCompression {
 		waitForCompressionJobCompletion(t, mgr, jobKey, 3*time.Minute)
-		requireCompressedSnapshotFile(t, snapshotDir, effectiveCompressionForCycle(inst.HypervisorType, cfg))
+		requireCompressedSnapshotFile(t, snapshotDir, effectiveCompressionForCycle(cfg))
 	} else {
 		waitForCompressionJobStart(t, mgr, jobKey, 15*time.Second)
 	}
@@ -249,16 +252,13 @@ func runCompressionCycle(
 	return inst
 }
 
-func effectiveCompressionForCycle(hvType hypervisor.Type, cfg *snapshotstore.SnapshotCompressionConfig) snapshotstore.SnapshotCompressionConfig {
+func effectiveCompressionForCycle(cfg *snapshotstore.SnapshotCompressionConfig) snapshotstore.SnapshotCompressionConfig {
 	if cfg != nil {
 		normalized, err := normalizeCompressionConfig(cfg)
 		if err != nil {
 			panic(err)
 		}
 		return normalized
-	}
-	if hvType == hypervisor.TypeCloudHypervisor {
-		return defaultCloudHypervisorStandbyCompressionPolicy()
 	}
 	return snapshotstore.SnapshotCompressionConfig{Enabled: false}
 }

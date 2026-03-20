@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kernel/hypeman/lib/snapshot"
 	"github.com/knadh/koanf/parsers/yaml"
 	"github.com/knadh/koanf/providers/env"
 	"github.com/knadh/koanf/providers/file"
@@ -180,7 +181,7 @@ type HypervisorMemoryConfig struct {
 type SnapshotCompressionDefaultConfig struct {
 	Enabled   bool   `koanf:"enabled"`
 	Algorithm string `koanf:"algorithm"`
-	Level     int    `koanf:"level"`
+	Level     *int   `koanf:"level"`
 }
 
 // SnapshotConfig holds snapshot defaults.
@@ -351,7 +352,7 @@ func defaultConfig() *Config {
 			CompressionDefault: SnapshotCompressionDefaultConfig{
 				Enabled:   false,
 				Algorithm: "zstd",
-				Level:     1,
+				Level:     intPtr(snapshot.DefaultSnapshotCompressionZstdLevel),
 			},
 		},
 
@@ -468,16 +469,32 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("build.timeout must be positive, got %d", c.Build.Timeout)
 	}
 	algorithm := strings.ToLower(c.Snapshot.CompressionDefault.Algorithm)
-	switch algorithm {
-	case "", "zstd", "lz4":
-	default:
-		return fmt.Errorf("snapshot.compression_default.algorithm must be one of zstd or lz4, got %q", c.Snapshot.CompressionDefault.Algorithm)
-	}
-	if algorithm != "lz4" && c.Snapshot.CompressionDefault.Level < 1 {
-		return fmt.Errorf("snapshot.compression_default.level must be >= 1, got %d", c.Snapshot.CompressionDefault.Level)
+	if c.Snapshot.CompressionDefault.Enabled {
+		switch algorithm {
+		case "", "zstd", "lz4":
+		default:
+			return fmt.Errorf("snapshot.compression_default.algorithm must be one of zstd or lz4, got %q", c.Snapshot.CompressionDefault.Algorithm)
+		}
+		if c.Snapshot.CompressionDefault.Level != nil {
+			level := *c.Snapshot.CompressionDefault.Level
+			switch algorithm {
+			case "", "zstd":
+				if level < snapshot.MinSnapshotCompressionZstdLevel || level > snapshot.MaxSnapshotCompressionZstdLevel {
+					return fmt.Errorf("snapshot.compression_default.level must be between %d and %d for zstd, got %d", snapshot.MinSnapshotCompressionZstdLevel, snapshot.MaxSnapshotCompressionZstdLevel, level)
+				}
+			case "lz4":
+				if level < snapshot.MinSnapshotCompressionLz4Level || level > snapshot.MaxSnapshotCompressionLz4Level {
+					return fmt.Errorf("snapshot.compression_default.level must be between %d and %d for lz4, got %d", snapshot.MinSnapshotCompressionLz4Level, snapshot.MaxSnapshotCompressionLz4Level, level)
+				}
+			}
+		}
 	}
 	if c.Hypervisor.Memory.KernelPageInitMode != "performance" && c.Hypervisor.Memory.KernelPageInitMode != "hardened" {
 		return fmt.Errorf("hypervisor.memory.kernel_page_init_mode must be one of {performance,hardened}, got %q", c.Hypervisor.Memory.KernelPageInitMode)
 	}
 	return nil
+}
+
+func intPtr(v int) *int {
+	return &v
 }

@@ -44,6 +44,15 @@ const (
 )
 
 const (
+	DefaultSnapshotCompressionZstdLevel = 1
+	MinSnapshotCompressionZstdLevel     = 1
+	MaxSnapshotCompressionZstdLevel     = 19
+	DefaultSnapshotCompressionLz4Level  = 0
+	MinSnapshotCompressionLz4Level      = 0
+	MaxSnapshotCompressionLz4Level      = 9
+)
+
+const (
 	SnapshotCompressionStateNone        = "none"
 	SnapshotCompressionStateCompressing = "compressing"
 	SnapshotCompressionStateCompressed  = "compressed"

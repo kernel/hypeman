@@ -88,9 +88,43 @@ func TestValidateAllowsLZ4CompressionDefaultWithImplicitLevel(t *testing.T) {
 	cfg := defaultConfig()
 	cfg.Snapshot.CompressionDefault.Enabled = true
 	cfg.Snapshot.CompressionDefault.Algorithm = "lz4"
-	cfg.Snapshot.CompressionDefault.Level = 1
+	cfg.Snapshot.CompressionDefault.Level = nil
 
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("expected lz4 compression default to validate, got %v", err)
+	}
+}
+
+func TestValidateAllowsExplicitLZ4CompressionLevelRange(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Snapshot.CompressionDefault.Enabled = true
+	cfg.Snapshot.CompressionDefault.Algorithm = "lz4"
+	cfg.Snapshot.CompressionDefault.Level = intPtr(9)
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected lz4 level to validate, got %v", err)
+	}
+}
+
+func TestValidateRejectsInvalidLZ4CompressionLevel(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Snapshot.CompressionDefault.Enabled = true
+	cfg.Snapshot.CompressionDefault.Algorithm = "lz4"
+	cfg.Snapshot.CompressionDefault.Level = intPtr(10)
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatalf("expected validation error for invalid lz4 level")
+	}
+}
+
+func TestValidateAllowsDisabledSnapshotCompressionDefaultWithoutValidAlgorithm(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Snapshot.CompressionDefault.Enabled = false
+	cfg.Snapshot.CompressionDefault.Algorithm = "definitely-not-real"
+	cfg.Snapshot.CompressionDefault.Level = intPtr(999)
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected disabled snapshot compression default to ignore algorithm/level, got %v", err)
 	}
 }

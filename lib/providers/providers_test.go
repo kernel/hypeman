@@ -17,7 +17,7 @@ func TestSnapshotDefaultsFromConfigDisabledReturnsNilCompression(t *testing.T) {
 			CompressionDefault: config.SnapshotCompressionDefaultConfig{
 				Enabled:   false,
 				Algorithm: "lz4",
-				Level:     7,
+				Level:     intPtr(7),
 			},
 		},
 	}
@@ -34,7 +34,7 @@ func TestSnapshotDefaultsFromConfigOmitsLevelForLZ4(t *testing.T) {
 			CompressionDefault: config.SnapshotCompressionDefaultConfig{
 				Enabled:   true,
 				Algorithm: "lz4",
-				Level:     7,
+				Level:     intPtr(7),
 			},
 		},
 	}
@@ -43,7 +43,8 @@ func TestSnapshotDefaultsFromConfigOmitsLevelForLZ4(t *testing.T) {
 	require.NotNil(t, defaults.Compression)
 	assert.True(t, defaults.Compression.Enabled)
 	assert.Equal(t, snapshotstore.SnapshotCompressionAlgorithmLz4, defaults.Compression.Algorithm)
-	assert.Nil(t, defaults.Compression.Level)
+	require.NotNil(t, defaults.Compression.Level)
+	assert.Equal(t, 7, *defaults.Compression.Level)
 }
 
 func TestSnapshotDefaultsFromConfigKeepsZstdLevel(t *testing.T) {
@@ -54,7 +55,7 @@ func TestSnapshotDefaultsFromConfigKeepsZstdLevel(t *testing.T) {
 			CompressionDefault: config.SnapshotCompressionDefaultConfig{
 				Enabled:   true,
 				Algorithm: "zstd",
-				Level:     5,
+				Level:     intPtr(5),
 			},
 		},
 	}
@@ -63,4 +64,8 @@ func TestSnapshotDefaultsFromConfigKeepsZstdLevel(t *testing.T) {
 	require.NotNil(t, defaults.Compression)
 	require.NotNil(t, defaults.Compression.Level)
 	assert.Equal(t, 5, *defaults.Compression.Level)
+}
+
+func intPtr(v int) *int {
+	return &v
 }

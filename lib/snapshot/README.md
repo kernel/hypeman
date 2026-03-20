@@ -35,10 +35,6 @@ Snapshots are immutable point-in-time captures of a VM that can later be:
 
 Snapshot memory compression is optional and is **off by default**.
 
-The current exception is cloud-hypervisor standby snapshots: if no request, instance,
-or server policy is set, Hypeman defaults that path to `lz4` so standby snapshots
-store compressed guest memory by default on Linux.
-
 - Compression applies only to `Standby` snapshots, because only standby snapshots contain guest memory state.
 - `Stopped` snapshots cannot use compression because they do not include resumable RAM state.
 - Compression affects only the memory snapshot file, not the entire snapshot directory.
@@ -54,7 +50,7 @@ store compressed guest memory by default on Linux.
   - request override
   - instance default
   - server default
-  - then the cloud-hypervisor standby fallback (`lz4`) when no other policy is set
+  - otherwise no compression
 
 Compression runs **asynchronously after the snapshot is already durable on disk**.
 
@@ -85,10 +81,12 @@ In practice, the tradeoff is:
 
 - `zstd`
   - default when compression is enabled
-  - supports configurable levels
+  - supports levels `1-19`
+  - defaults to level `1` when no level is specified
 - `lz4`
   - optimized for lower decompression overhead
-  - does not currently accept a level setting
+  - supports levels `0-9`
+  - defaults to level `0` (fastest) when no level is specified
 
 ### Restore (in-place)
 - Restore always applies to the original source VM.

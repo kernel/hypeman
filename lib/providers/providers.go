@@ -147,8 +147,8 @@ func snapshotDefaultsFromConfig(cfg *config.Config) instances.SnapshotPolicy {
 		Enabled:   true,
 		Algorithm: algorithm,
 	}
-	if algorithm == "" || algorithm == snapshot.SnapshotCompressionAlgorithmZstd {
-		level := cfg.Snapshot.CompressionDefault.Level
+	if cfg.Snapshot.CompressionDefault.Level != nil {
+		level := *cfg.Snapshot.CompressionDefault.Level
 		compression.Level = &level
 	}
 	return instances.SnapshotPolicy{Compression: compression}
