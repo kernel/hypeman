@@ -237,8 +237,8 @@ func (c *controller) reconcile(ctx context.Context, req reconcileRequest) (Manua
 
 	applyCtx, applySpan := c.startChildSpan(ctx, "guestmemory.apply_balloon_targets")
 	for _, candidate := range candidates {
-		plannedTarget := plannedTargets[candidate.vm.ID]
-		if plannedTarget == 0 {
+		plannedTarget, ok := plannedTargets[candidate.vm.ID]
+		if !ok {
 			plannedTarget = candidate.vm.AssignedMemoryBytes
 		}
 
