@@ -194,6 +194,28 @@ func buildEgressProxyInjectRules(egressPolicy *NetworkEgressPolicy, credentials 
 	return out
 }
 
+func credentialSourceEnvNames(credentials map[string]CredentialPolicy) []string {
+	if len(credentials) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]struct{}, len(credentials))
+	names := make([]string, 0, len(credentials))
+	for _, policy := range credentials {
+		name := strings.TrimSpace(policy.Source.Env)
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
 // getEgressProxyIfExists returns the egress proxy service if it has been created,
 // or nil if no instance has registered with the proxy yet.
 func (m *manager) getEgressProxyIfExists() *egressproxy.Service {

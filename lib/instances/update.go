@@ -3,6 +3,7 @@ package instances
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"github.com/kernel/hypeman/lib/logger"
 )
@@ -29,44 +30,93 @@ func (m *manager) updateInstance(ctx context.Context, id string, req UpdateInsta
 		return nil, fmt.Errorf("%w: instance must be running or initializing to update (current state: %s)", ErrInvalidState, inst.State)
 	}
 
-	// 2. Merge new env vars into existing env
-	if len(req.Env) > 0 {
-		if meta.Env == nil {
-			meta.Env = make(map[string]string)
-		}
-		for k, v := range req.Env {
-			meta.Env[k] = v
-		}
+	if err := validateUpdateInstanceRequest(meta, req); err != nil {
+		return nil, err
 	}
 
-	// 3. If credentials are configured, validate bindings and update egress proxy rules
-	if len(meta.Credentials) > 0 && meta.NetworkEgress != nil && meta.NetworkEgress.Enabled {
-		if err := validateCredentialEnvBindings(meta.Credentials, meta.Env); err != nil {
-			return nil, err
-		}
+	prevEnv := cloneEnvMap(meta.Env)
+	if meta.Env == nil {
+		meta.Env = make(map[string]string)
+	}
+	for k, v := range req.Env {
+		meta.Env[k] = v
+	}
 
+	if err := validateCredentialEnvBindings(meta.Credentials, meta.Env); err != nil {
+		return nil, err
+	}
+
+	svc := m.getEgressProxyIfExists()
+	if svc != nil {
+		oldRules := buildEgressProxyInjectRules(meta.NetworkEgress, meta.Credentials, prevEnv)
 		newRules := buildEgressProxyInjectRules(meta.NetworkEgress, meta.Credentials, meta.Env)
 
-		svc := m.getEgressProxyIfExists()
-		if svc != nil {
-			if err := svc.UpdateInstanceRules(id, newRules); err != nil {
-				return nil, fmt.Errorf("update egress proxy rules: %w", err)
-			}
-			log.InfoContext(ctx, "updated egress proxy header inject rules", "instance_id", id)
+		if err := svc.UpdateInstanceRules(id, newRules); err != nil {
+			return nil, fmt.Errorf("update egress proxy rules: %w", err)
 		}
-	}
+		log.InfoContext(ctx, "updated egress proxy header inject rules", "instance_id", id)
 
-	// 4. Persist updated metadata
-	if err := m.saveMetadata(meta); err != nil {
-		return nil, fmt.Errorf("save metadata: %w", err)
+		if err := m.saveMetadata(meta); err != nil {
+			if rollbackErr := svc.UpdateInstanceRules(id, oldRules); rollbackErr != nil {
+				return nil, fmt.Errorf("save metadata: %w (failed to roll back egress proxy rules: %v)", err, rollbackErr)
+			}
+			log.WarnContext(ctx, "rolled back egress proxy header inject rules after metadata save failure", "instance_id", id, "error", err)
+			return nil, fmt.Errorf("save metadata: %w", err)
+		}
+	} else {
+		if err := m.saveMetadata(meta); err != nil {
+			return nil, fmt.Errorf("save metadata: %w", err)
+		}
 	}
 
 	log.InfoContext(ctx, "instance updated", "instance_id", id)
 
-	// 5. Return updated instance
 	updated, err := m.getInstance(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("get updated instance: %w", err)
 	}
 	return updated, nil
+}
+
+func validateUpdateInstanceRequest(meta *metadata, req UpdateInstanceRequest) error {
+	if len(req.Env) == 0 {
+		return fmt.Errorf("%w: env must include at least one credential source env var", ErrInvalidRequest)
+	}
+	if meta == nil || len(meta.Credentials) == 0 || meta.NetworkEgress == nil || !meta.NetworkEgress.Enabled {
+		return fmt.Errorf("%w: instance has no credential-backed env vars to update", ErrInvalidRequest)
+	}
+
+	allowedNames := credentialSourceEnvNames(meta.Credentials)
+	if len(allowedNames) == 0 {
+		return fmt.Errorf("%w: instance has no credential-backed env vars to update", ErrInvalidRequest)
+	}
+	allowedSet := make(map[string]struct{}, len(allowedNames))
+	for _, name := range allowedNames {
+		allowedSet[name] = struct{}{}
+	}
+
+	invalidKeys := make([]string, 0)
+	for key := range req.Env {
+		if _, ok := allowedSet[key]; ok {
+			continue
+		}
+		invalidKeys = append(invalidKeys, key)
+	}
+	if len(invalidKeys) > 0 {
+		sort.Strings(invalidKeys)
+		return fmt.Errorf("%w: env keys %v are not credential source env vars; allowed keys: %v", ErrInvalidRequest, invalidKeys, allowedNames)
+	}
+
+	return nil
+}
+
+func cloneEnvMap(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }

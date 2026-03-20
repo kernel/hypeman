@@ -208,11 +208,13 @@ components:
       properties:
         env:
           type: object
+          minProperties: 1
           additionalProperties:
             type: string
           description: |
             Environment variables to update (merged with existing).
-            For credential rotation, update the env vars referenced by credential policies.
+            Only keys referenced by the instance's existing credential `source.env` bindings
+            are accepted. Use this to rotate real credential values without restarting the VM.
           example:
             OUTBOUND_OPENAI_KEY: new-rotated-key-456
 
@@ -1735,8 +1737,8 @@ paths:
       summary: Update instance properties
       description: |
         Update mutable properties of a running instance. Currently supports updating
-        environment variables referenced by credential policies, enabling secret/key
-        rotation without instance restart.
+        only the environment variables referenced by existing credential policies,
+        enabling secret/key rotation without instance restart.
       operationId: updateInstance
       security:
         - bearerAuth: []
