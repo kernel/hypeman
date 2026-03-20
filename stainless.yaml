@@ -76,6 +76,7 @@ resources:
       list: get /instances
       create: post /instances
       get: get /instances/{id}
+      update: patch /instances/{id}
       delete: delete /instances/{id}
       standby: post /instances/{id}/standby
       restore: post /instances/{id}/restore
