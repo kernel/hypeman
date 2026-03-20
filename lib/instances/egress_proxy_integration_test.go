@@ -28,6 +28,11 @@ func TestEgressProxyRewritesHTTPSHeaders(t *testing.T) {
 	manager, _ := setupTestManager(t)
 	ctx := context.Background()
 
+	probeTarget := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprint(w, "proxy-ok")
+	}))
+	defer probeTarget.Close()
+
 	caPEM, cert := mustGenerateTLSChain(t, []string{"localhost"})
 	manager.egressProxyServiceOptions = egressproxy.ServiceOptions{
 		AdditionalRootCAPEM: []string{caPEM},
@@ -102,13 +107,45 @@ func TestEgressProxyRewritesHTTPSHeaders(t *testing.T) {
 		}
 	})
 
-	require.NoError(t, waitForVMReady(ctx, inst.SocketPath, 10*time.Second))
-	require.NoError(t, waitForLogMessage(ctx, manager, inst.Id, "[guest-agent] listening", 45*time.Second))
+	_, err = waitForInstanceState(ctx, manager, inst.Id, StateRunning, 5*time.Second)
+	if err != nil {
+		logs, logErr := collectLogs(ctx, manager, inst.Id, 200)
+		if logErr != nil {
+			t.Logf("failed to collect logs after Running timeout: %v", logErr)
+		} else {
+			t.Logf("app logs after Running timeout:\n%s", logs)
+		}
+		current, getErr := manager.GetInstance(ctx, inst.Id)
+		if getErr != nil {
+			t.Logf("failed to get instance after Running timeout: %v", getErr)
+		} else {
+			t.Logf("instance after Running timeout: state=%s program_started_at=%v guest_agent_ready_at=%v boot_markers_hydrated=%v", current.State, current.ProgramStartedAt, current.GuestAgentReadyAt, current.BootMarkersHydrated)
+		}
+	}
+	require.NoError(t, err)
 
-	envOutput, envExitCode, err := execCommand(ctx, inst, "sh", "-lc", "printf '%s' \"$OUTBOUND_OPENAI_KEY\"")
+	envOutput, envExitCode, err := execCommand(ctx, inst, "sh", "-lc", "printf '%s\\n%s\\n%s' \"$OUTBOUND_OPENAI_KEY\" \"$HTTP_PROXY\" \"$HTTPS_PROXY\"")
 	require.NoError(t, err)
 	require.Equal(t, 0, envExitCode)
-	require.Equal(t, "mock-OUTBOUND_OPENAI_KEY", envOutput)
+	envLines := strings.Split(strings.TrimSpace(envOutput), "\n")
+	require.Len(t, envLines, 3, "unexpected env output: %q", envOutput)
+	require.Equal(t, "mock-OUTBOUND_OPENAI_KEY", envLines[0])
+
+	alloc, err := manager.networkManager.GetAllocation(ctx, inst.Id)
+	require.NoError(t, err)
+	proxyURL := fmt.Sprintf("http://%s:%d", alloc.Gateway, egressproxy.DefaultListenPort)
+	require.Equal(t, proxyURL, envLines[1])
+	require.Equal(t, proxyURL, envLines[2])
+
+	probeCmd := fmt.Sprintf(
+		"NO_PROXY= no_proxy= curl -sS --proxy %s %s",
+		proxyURL,
+		probeTarget.URL,
+	)
+	probeOutput, probeExitCode, err := execCommand(ctx, inst, "sh", "-lc", probeCmd)
+	require.NoError(t, err)
+	require.Equal(t, 0, probeExitCode, "curl output: %s", probeOutput)
+	require.Equal(t, "proxy-ok", strings.TrimSpace(probeOutput))
 
 	allowedCmd := fmt.Sprintf(
 		"NO_PROXY= no_proxy= curl -k -sS https://%s:%s",
