@@ -8,8 +8,6 @@ import (
 )
 
 func TestValidateUpdateInstanceRequest(t *testing.T) {
-	t.Parallel()
-
 	baseMeta := &metadata{
 		StoredMetadata: StoredMetadata{
 			NetworkEgress: &NetworkEgressPolicy{Enabled: true},
@@ -22,7 +20,6 @@ func TestValidateUpdateInstanceRequest(t *testing.T) {
 	}
 
 	t.Run("requires at least one env key", func(t *testing.T) {
-		t.Parallel()
 		err := validateUpdateInstanceRequest(baseMeta, UpdateInstanceRequest{})
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrInvalidRequest)
@@ -30,7 +27,6 @@ func TestValidateUpdateInstanceRequest(t *testing.T) {
 	})
 
 	t.Run("rejects instances without credential backed envs", func(t *testing.T) {
-		t.Parallel()
 		err := validateUpdateInstanceRequest(&metadata{}, UpdateInstanceRequest{
 			Env: map[string]string{"OUTBOUND_OPENAI_KEY": "rotated"},
 		})
@@ -40,7 +36,6 @@ func TestValidateUpdateInstanceRequest(t *testing.T) {
 	})
 
 	t.Run("rejects unrelated env keys", func(t *testing.T) {
-		t.Parallel()
 		err := validateUpdateInstanceRequest(baseMeta, UpdateInstanceRequest{
 			Env: map[string]string{"UNRELATED_KEY": "value"},
 		})
@@ -51,7 +46,6 @@ func TestValidateUpdateInstanceRequest(t *testing.T) {
 	})
 
 	t.Run("allows credential source env keys", func(t *testing.T) {
-		t.Parallel()
 		err := validateUpdateInstanceRequest(baseMeta, UpdateInstanceRequest{
 			Env: map[string]string{"OUTBOUND_OPENAI_KEY": "rotated"},
 		})
