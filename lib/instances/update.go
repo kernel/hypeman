@@ -18,7 +18,8 @@ func (m *manager) updateInstance(ctx context.Context, id string, req UpdateInsta
 	// 1. Load and validate current state
 	meta, err := m.loadMetadata(id)
 	if err != nil {
-		return nil, ErrNotFound
+		log.ErrorContext(ctx, "failed to load instance metadata", "instance_id", id, "error", err)
+		return nil, err
 	}
 
 	inst, err := m.getInstance(ctx, id)
@@ -35,36 +36,41 @@ func (m *manager) updateInstance(ctx context.Context, id string, req UpdateInsta
 	}
 
 	prevEnv := cloneEnvMap(meta.Env)
-	if meta.Env == nil {
-		meta.Env = make(map[string]string)
+	nextEnv := cloneEnvMap(meta.Env)
+	if nextEnv == nil {
+		nextEnv = make(map[string]string)
 	}
 	for k, v := range req.Env {
-		meta.Env[k] = v
+		nextEnv[k] = v
 	}
 
-	if err := validateCredentialEnvBindings(meta.Credentials, meta.Env); err != nil {
+	if err := validateCredentialEnvBindings(meta.Credentials, nextEnv); err != nil {
 		return nil, err
 	}
 
 	svc := m.getEgressProxyIfExists()
 	if svc != nil {
 		oldRules := buildEgressProxyInjectRules(meta.NetworkEgress, meta.Credentials, prevEnv)
-		newRules := buildEgressProxyInjectRules(meta.NetworkEgress, meta.Credentials, meta.Env)
+		newRules := buildEgressProxyInjectRules(meta.NetworkEgress, meta.Credentials, nextEnv)
 
 		if err := svc.UpdateInstanceRules(ctx, id, newRules); err != nil {
 			return nil, fmt.Errorf("update egress proxy rules: %w", err)
 		}
 		log.DebugContext(ctx, "updated egress proxy header inject rules", "instance_id", id)
 
+		meta.Env = nextEnv
 		if err := m.saveMetadata(meta); err != nil {
 			if rollbackErr := svc.UpdateInstanceRules(ctx, id, oldRules); rollbackErr != nil {
 				return nil, fmt.Errorf("save metadata: %w (failed to roll back egress proxy rules: %v)", err, rollbackErr)
 			}
+			meta.Env = prevEnv
 			log.WarnContext(ctx, "rolled back egress proxy header inject rules after metadata save failure", "instance_id", id, "error", err)
 			return nil, fmt.Errorf("save metadata: %w", err)
 		}
 	} else {
+		meta.Env = nextEnv
 		if err := m.saveMetadata(meta); err != nil {
+			meta.Env = prevEnv
 			return nil, fmt.Errorf("save metadata: %w", err)
 		}
 	}
