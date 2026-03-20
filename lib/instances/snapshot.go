@@ -240,8 +240,9 @@ func (m *manager) restoreSnapshot(ctx context.Context, id string, snapshotID str
 		return nil, err
 	}
 
-	m.cancelCompressionJob(m.snapshotJobKeyForSnapshot(snapshotID))
-	m.waitCompressionJob(m.snapshotJobKeyForSnapshot(snapshotID), 2*time.Second)
+	if err := m.cancelAndWaitCompressionJob(ctx, m.snapshotJobKeyForSnapshot(snapshotID)); err != nil {
+		return nil, fmt.Errorf("wait for snapshot compression to stop: %w", err)
+	}
 
 	if err := m.replaceInstanceWithSnapshotPayload(snapshotID, id); err != nil {
 		return nil, err
@@ -357,8 +358,9 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 	})
 	defer cu.Clean()
 
-	m.cancelCompressionJob(m.snapshotJobKeyForSnapshot(snapshotID))
-	m.waitCompressionJob(m.snapshotJobKeyForSnapshot(snapshotID), 2*time.Second)
+	if err := m.cancelAndWaitCompressionJob(ctx, m.snapshotJobKeyForSnapshot(snapshotID)); err != nil {
+		return nil, fmt.Errorf("wait for snapshot compression to stop: %w", err)
+	}
 
 	if err := forkvm.CopyGuestDirectory(m.paths.SnapshotGuestDir(snapshotID), dstDir); err != nil {
 		if errors.Is(err, forkvm.ErrSparseCopyUnsupported) {

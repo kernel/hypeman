@@ -67,13 +67,13 @@ Compression runs **asynchronously after the snapshot is already durable on disk*
 
 ### Restore behavior with compressed snapshots
 
-Restore prefers correctness first and resume latency second.
+Restore always uses the same flow across hypervisors.
 
-- If a restore starts while compression is still running, Hypeman will not let restore race the compressor.
-- For cloud-hypervisor standby restores, Hypeman waits for the in-flight compression job to finish.
-- For the other hypervisors, Hypeman cancels the in-flight compression job and waits briefly for it to stop.
-- If the snapshot memory has already been compressed, Hypeman expands it back to the raw memory file before asking the hypervisor to restore.
-- This means compression is never allowed to race with restore.
+- If a restore starts while compression is still running, Hypeman cancels the in-flight compression job first.
+- Restore then synchronizes with that job so it is no longer mutating the snapshot files.
+- If the raw memory file still exists after cancellation, restore uses the raw file directly and removes any compressed sibling artifacts.
+- If the raw file is already gone, Hypeman expands the compressed file back to the raw memory file before asking the hypervisor to restore.
+- This means restore never races a live compressor, while still preferring the raw snapshot whenever it is still available.
 
 In practice, the tradeoff is:
 

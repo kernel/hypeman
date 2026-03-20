@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
@@ -226,22 +225,6 @@ func (m *manager) cancelCompressionJob(key string) {
 	}
 }
 
-func (m *manager) waitCompressionJob(key string, timeout time.Duration) {
-	m.compressionMu.Lock()
-	job := m.compressionJobs[key]
-	m.compressionMu.Unlock()
-	if job == nil {
-		return
-	}
-
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-	select {
-	case <-job.done:
-	case <-timer.C:
-	}
-}
-
 func (m *manager) waitCompressionJobContext(ctx context.Context, key string) error {
 	m.compressionMu.Lock()
 	job := m.compressionJobs[key]
@@ -258,19 +241,23 @@ func (m *manager) waitCompressionJobContext(ctx context.Context, key string) err
 	}
 }
 
-func (m *manager) ensureSnapshotMemoryReady(ctx context.Context, snapshotDir, jobKey string, waitForCompression bool) error {
+func (m *manager) cancelAndWaitCompressionJob(ctx context.Context, key string) error {
+	if key == "" {
+		return nil
+	}
+	m.cancelCompressionJob(key)
+	return m.waitCompressionJobContext(ctx, key)
+}
+
+func (m *manager) ensureSnapshotMemoryReady(ctx context.Context, snapshotDir, jobKey string) error {
 	if jobKey != "" {
-		if waitForCompression {
-			if err := m.waitCompressionJobContext(ctx, jobKey); err != nil {
-				return err
-			}
-		} else {
-			m.cancelCompressionJob(jobKey)
-			m.waitCompressionJob(jobKey, 2*time.Second)
+		if err := m.cancelAndWaitCompressionJob(ctx, jobKey); err != nil {
+			return err
 		}
 	}
 
-	if _, ok := findRawSnapshotMemoryFile(snapshotDir); ok {
+	if rawPath, ok := findRawSnapshotMemoryFile(snapshotDir); ok {
+		removeCompressedSnapshotArtifacts(rawPath)
 		return nil
 	}
 	compressedPath, algorithm, ok := findCompressedSnapshotMemoryFile(snapshotDir)
@@ -348,9 +335,17 @@ func compressSnapshotMemoryFile(ctx context.Context, rawPath string, cfg snapsho
 		_ = os.Remove(tmpPath)
 		return 0, 0, err
 	}
+	if err := ctx.Err(); err != nil {
+		_ = os.Remove(tmpPath)
+		return 0, 0, err
+	}
 	if err := os.Rename(tmpPath, compressedPath); err != nil {
 		_ = os.Remove(tmpPath)
 		return 0, 0, fmt.Errorf("finalize compressed snapshot: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		_ = os.Remove(compressedPath)
+		return 0, 0, err
 	}
 
 	compressedInfo, err := os.Stat(compressedPath)
