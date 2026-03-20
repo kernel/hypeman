@@ -177,7 +177,7 @@ func ProvideGuestMemoryController(instanceManager instances.Manager, cfg *config
 		PerVMCooldown:                         perVMCooldown,
 	}
 
-	return guestmemory.NewController(policy, controllerCfg, &guestMemoryInstanceSource{manager: instanceManager}, log), nil
+	return guestmemory.NewController(policy, controllerCfg, &guestMemoryInstanceSource{manager: instanceManager}, log.With("component", "guestmemory")), nil
 }
 
 // ProvideVolumeManager provides the volume manager

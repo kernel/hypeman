@@ -6,7 +6,12 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/guestmemory"
+	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/oapi"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const (
@@ -16,6 +21,7 @@ const (
 
 // ReclaimMemory triggers proactive guest memory reclaim via runtime ballooning.
 func (s *ApiService) ReclaimMemory(ctx context.Context, request oapi.ReclaimMemoryRequestObject) (oapi.ReclaimMemoryResponseObject, error) {
+	log := logger.FromContext(ctx)
 	if request.Body == nil {
 		return oapi.ReclaimMemory400JSONResponse{
 			Code:    "bad_request",
@@ -37,6 +43,20 @@ func (s *ApiService) ReclaimMemory(ctx context.Context, request oapi.ReclaimMemo
 		}, nil
 	}
 
+	tracer := otel.Tracer("hypeman/guestmemory")
+	ctx, span := tracer.Start(ctx, "guestmemory.manual_reclaim",
+		traceAttrsForManualReclaim(request.Body.ReclaimBytes, holdFor, request.Body.DryRun != nil && *request.Body.DryRun, request.Body.Reason != nil))
+	defer span.End()
+
+	log.InfoContext(ctx,
+		"manual guest memory reclaim requested",
+		"operation", "manual_reclaim",
+		"requested_reclaim_bytes", request.Body.ReclaimBytes,
+		"hold_for_seconds", holdFor.Seconds(),
+		"dry_run", request.Body.DryRun != nil && *request.Body.DryRun,
+		"reason_present", request.Body.Reason != nil,
+	)
+
 	resp, err := s.GuestMemoryController.TriggerReclaim(ctx, guestmemory.ManualReclaimRequest{
 		ReclaimBytes: request.Body.ReclaimBytes,
 		HoldFor:      holdFor,
@@ -46,11 +66,17 @@ func (s *ApiService) ReclaimMemory(ctx context.Context, request oapi.ReclaimMemo
 	if err != nil {
 		switch {
 		case errors.Is(err, guestmemory.ErrGuestMemoryDisabled), errors.Is(err, guestmemory.ErrActiveBallooningDisabled):
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+			log.WarnContext(ctx, "manual guest memory reclaim rejected", "operation", "manual_reclaim", "error", err)
 			return oapi.ReclaimMemory400JSONResponse{
 				Code:    "feature_disabled",
 				Message: err.Error(),
 			}, nil
 		default:
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+			log.ErrorContext(ctx, "manual guest memory reclaim failed", "operation", "manual_reclaim", "error", err)
 			return oapi.ReclaimMemory500JSONResponse{
 				Code:    "internal_error",
 				Message: err.Error(),
@@ -58,7 +84,34 @@ func (s *ApiService) ReclaimMemory(ctx context.Context, request oapi.ReclaimMemo
 		}
 	}
 
+	span.SetAttributes(
+		attribute.Int64("planned_reclaim_bytes", resp.PlannedReclaimBytes),
+		attribute.Int64("applied_reclaim_bytes", resp.AppliedReclaimBytes),
+		attribute.Int64("host_available_bytes", resp.HostAvailableBytes),
+		attribute.String("host_pressure_state", string(resp.HostPressureState)),
+		attribute.Int("action_count", len(resp.Actions)),
+	)
+	span.SetStatus(codes.Ok, "")
+	log.InfoContext(ctx,
+		"manual guest memory reclaim completed",
+		"operation", "manual_reclaim",
+		"planned_reclaim_bytes", resp.PlannedReclaimBytes,
+		"applied_reclaim_bytes", resp.AppliedReclaimBytes,
+		"host_available_bytes", resp.HostAvailableBytes,
+		"host_pressure_state", resp.HostPressureState,
+		"action_count", len(resp.Actions),
+	)
+
 	return oapi.ReclaimMemory200JSONResponse(memoryReclaimResponseToOAPI(resp)), nil
+}
+
+func traceAttrsForManualReclaim(reclaimBytes int64, holdFor time.Duration, dryRun bool, reasonPresent bool) trace.SpanStartOption {
+	return trace.WithAttributes(
+		attribute.Int64("requested_reclaim_bytes", reclaimBytes),
+		attribute.Float64("hold_for_seconds", holdFor.Seconds()),
+		attribute.Bool("dry_run", dryRun),
+		attribute.Bool("reason_present", reasonPresent),
+	)
 }
 
 func parseMemoryReclaimHold(req *oapi.MemoryReclaimRequest) (time.Duration, error) {

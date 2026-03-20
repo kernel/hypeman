@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 )
 
 func (c *controller) Start(ctx context.Context) error {
@@ -25,7 +28,7 @@ func (c *controller) Start(ctx context.Context) error {
 			return nil
 		case <-ticker.C:
 			if _, err := c.reconcile(ctx, reconcileRequest{}); err != nil {
-				c.log.WarnContext(ctx, "active ballooning reconcile failed", "error", err)
+				logFromContext(ctx, c.log).WarnContext(ctx, "active ballooning reconcile failed", "operation", "active_ballooning_reconcile", "trigger", "auto", "error", err)
 			}
 		}
 	}
@@ -59,36 +62,83 @@ type reconcileRequest struct {
 }
 
 func (c *controller) reconcile(ctx context.Context, req reconcileRequest) (ManualReclaimResponse, error) {
+	trigger := reconcileTrigger(req)
+	start := time.Now()
+	ctx, span := c.startReconcileSpan(ctx, req)
+	defer span.End()
+
 	state := &c.reconcileMu
 	<-state.mu
 	defer func() { state.mu <- struct{}{} }()
 
 	now := time.Now()
-	sample, err := c.sampler.Sample(ctx)
+	sampleCtx, sampleSpan := c.startChildSpan(ctx, "guestmemory.sample_host_pressure")
+	sample, err := c.sampler.Sample(sampleCtx)
 	if err != nil {
+		c.metrics.RecordSamplerError(ctx, "host_pressure")
+		sampleSpan.RecordError(err)
+		sampleSpan.SetStatus(codes.Error, err.Error())
+		sampleSpan.End()
+		c.recordReconcileError(ctx, trigger, start, span, err)
 		return ManualReclaimResponse{}, err
+	}
+	sampleSpan.SetAttributes(
+		attribute.Int64("host_available_bytes", sample.AvailableBytes),
+		attribute.Float64("host_available_percent", sample.AvailablePercent),
+		attribute.Bool("stressed", sample.Stressed),
+	)
+	sampleSpan.SetStatus(codes.Ok, "")
+	sampleSpan.End()
+
+	summary := reconcileSummary{
+		hostAvailable:     sample.AvailableBytes,
+		hostAvailablePerc: sample.AvailablePercent,
 	}
 
 	if state.manualHold != nil && !state.manualHold.until.IsZero() && now.After(state.manualHold.until) {
+		logFromContext(ctx, c.log).InfoContext(ctx,
+			"guest memory manual reclaim hold expired",
+			"operation", "manual_reclaim",
+		)
 		state.manualHold = nil
 	}
 
 	if req.force && !req.dryRun {
 		switch {
 		case req.requestedReclaim <= 0 || req.holdFor <= 0:
+			if state.manualHold != nil {
+				logFromContext(ctx, c.log).InfoContext(ctx,
+					"guest memory manual reclaim hold cleared",
+					"operation", "manual_reclaim",
+				)
+			}
 			state.manualHold = nil
 		default:
 			state.manualHold = &manualHold{
 				reclaimBytes: req.requestedReclaim,
 				until:        now.Add(req.holdFor),
 			}
+			logFromContext(ctx, c.log).InfoContext(ctx,
+				"guest memory manual reclaim hold set",
+				"operation", "manual_reclaim",
+				"requested_reclaim_bytes", req.requestedReclaim,
+				"hold_for_seconds", req.holdFor.Seconds(),
+			)
 		}
 	}
 
-	vms, err := c.source.ListBalloonVMs(ctx)
+	listCtx, listSpan := c.startChildSpan(ctx, "guestmemory.list_balloon_vms")
+	vms, err := c.source.ListBalloonVMs(listCtx)
 	if err != nil {
+		listSpan.RecordError(err)
+		listSpan.SetStatus(codes.Error, err.Error())
+		listSpan.End()
+		c.recordReconcileError(ctx, trigger, start, span, err)
 		return ManualReclaimResponse{}, err
 	}
+	listSpan.SetAttributes(attribute.Int("vm_count", len(vms)))
+	listSpan.SetStatus(codes.Ok, "")
+	listSpan.End()
 
 	candidates := make([]candidateState, 0, len(vms))
 	actions := make([]ManualReclaimAction, 0, len(vms))
@@ -130,8 +180,16 @@ func (c *controller) reconcile(ctx context.Context, req reconcileRequest) (Manua
 			maxReclaimBytes:         maxInt64(0, vm.AssignedMemoryBytes-protectedFloor),
 		})
 	}
+	summary.eligibleVMs = len(candidates)
 
+	previousPressure := state.pressureState
 	state.pressureState = nextPressureState(state.pressureState, c.config, sample)
+	summary.previousPressure = previousPressure
+	summary.currentPressure = state.pressureState
+	summary.pressureChanged = previousPressure != state.pressureState
+	if summary.pressureChanged {
+		c.metrics.RecordPressureTransition(ctx, previousPressure, state.pressureState)
+	}
 	autoTarget := automaticTargetBytes(state.pressureState, c.config, sample, currentTotalReclaim)
 
 	manualTarget := int64(0)
@@ -141,6 +199,10 @@ func (c *controller) reconcile(ctx context.Context, req reconcileRequest) (Manua
 		manualTarget = state.manualHold.reclaimBytes
 	}
 	totalTarget := maxInt64(autoTarget, manualTarget)
+	summary.autoTarget = autoTarget
+	summary.manualTarget = manualTarget
+	summary.effectiveTarget = totalTarget
+	summary.manualHoldActive = state.manualHold != nil
 
 	plannedTargets := planGuestTargets(c.config, candidates, totalTarget)
 
@@ -152,7 +214,18 @@ func (c *controller) reconcile(ctx context.Context, req reconcileRequest) (Manua
 		Actions:               make([]ManualReclaimAction, 0, len(actions)+len(candidates)),
 	}
 	resp.Actions = append(resp.Actions, actions...)
+	for _, action := range actions {
+		switch action.Status {
+		case "error":
+			summary.errorCount++
+		case "unsupported":
+			summary.unsupportedCount++
+		default:
+			summary.unchangedCount++
+		}
+	}
 
+	applyCtx, applySpan := c.startChildSpan(ctx, "guestmemory.apply_balloon_targets")
 	for _, candidate := range candidates {
 		plannedTarget := plannedTargets[candidate.vm.ID]
 		if plannedTarget == 0 {
@@ -195,9 +268,19 @@ func (c *controller) reconcile(ctx context.Context, req reconcileRequest) (Manua
 		resp.PlannedReclaimBytes += candidate.vm.AssignedMemoryBytes - plannedTarget
 
 		if !req.dryRun && appliedTarget != candidate.currentTargetGuestBytes {
-			if err := candidate.hv.SetTargetGuestMemoryBytes(ctx, appliedTarget); err != nil {
+			if err := candidate.hv.SetTargetGuestMemoryBytes(applyCtx, appliedTarget); err != nil {
 				action.Status = "error"
 				action.Error = err.Error()
+				logFromContext(ctx, c.log).WarnContext(ctx,
+					"guest memory reclaim action failed",
+					"operation", "active_ballooning_apply",
+					"trigger", trigger,
+					"instance_id", candidate.vm.ID,
+					"hypervisor", candidate.vm.HypervisorType,
+					"previous_target_guest_memory_bytes", candidate.currentTargetGuestBytes,
+					"target_guest_memory_bytes", appliedTarget,
+					"error", err,
+				)
 				resp.Actions = append(resp.Actions, action)
 				continue
 			}
@@ -212,7 +295,38 @@ func (c *controller) reconcile(ctx context.Context, req reconcileRequest) (Manua
 		action.AppliedReclaimBytes = candidate.vm.AssignedMemoryBytes - action.TargetGuestMemoryBytes
 		resp.AppliedReclaimBytes += action.AppliedReclaimBytes
 		resp.Actions = append(resp.Actions, action)
+
+		switch action.Status {
+		case "applied":
+			summary.appliedCount++
+		case "planned":
+			summary.plannedCount++
+		case "error":
+			summary.errorCount++
+		case "unsupported":
+			summary.unsupportedCount++
+		default:
+			summary.unchangedCount++
+		}
 	}
+	applySpan.SetAttributes(
+		attribute.Int("eligible_vms", summary.eligibleVMs),
+		attribute.Int("applied_vms", summary.appliedCount),
+		attribute.Int("planned_vms", summary.plannedCount),
+		attribute.Int("error_vms", summary.errorCount),
+	)
+	if summary.errorCount > 0 {
+		applySpan.SetStatus(codes.Error, "one or more balloon target updates failed")
+	} else {
+		applySpan.SetStatus(codes.Ok, "")
+	}
+	applySpan.End()
+
+	summary.plannedReclaim = resp.PlannedReclaimBytes
+	summary.appliedReclaim = resp.AppliedReclaimBytes
+	c.recordReconcileSuccess(ctx, trigger, req, span, start, summary, resp.Actions)
+	c.logPressureTransition(ctx, summary)
+	c.logReconcileSummary(ctx, req, summary, reconcileStatus(summary))
 
 	return resp, nil
 }

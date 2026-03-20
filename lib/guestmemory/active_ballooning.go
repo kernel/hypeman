@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 )
 
 var (
@@ -165,6 +167,8 @@ type controller struct {
 	source  Source
 	sampler PressureSampler
 	log     *slog.Logger
+	metrics *Metrics
+	tracer  trace.Tracer
 
 	reconcileMu syncState
 }
@@ -198,12 +202,19 @@ func NewControllerWithSampler(policy Policy, cfg ActiveBallooningConfig, source 
 		sampler = newHostPressureSampler()
 	}
 
+	metrics, err := NewMetrics(otel.GetMeterProvider().Meter("hypeman"))
+	if err != nil {
+		log.Warn("failed to initialize guest memory metrics", "error", err)
+	}
+
 	c := &controller{
 		policy:  policy.Normalize(),
 		config:  cfg.Normalize(),
 		source:  source,
 		sampler: sampler,
 		log:     log,
+		metrics: metrics,
+		tracer:  otel.Tracer("hypeman/guestmemory"),
 		reconcileMu: syncState{
 			mu:            make(chan struct{}, 1),
 			pressureState: HostPressureStateHealthy,

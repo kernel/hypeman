@@ -103,6 +103,37 @@ Manual reclaim uses the same planner and protected floors as automatic reclaim. 
 
 By design, Hypeman does not reclaim memory without a reason. Automatic reclaim only happens under real host pressure. Proactive reclaim without host pressure is only done when an operator explicitly asks for it through the API.
 
+## Observability
+
+Active ballooning emits structured logs, metrics, and traces so operators can tell whether reclaim is healthy and effective.
+
+Logs:
+
+- manual reclaim requests log start, success, and failure
+- pressure state transitions log the old and new state plus current host availability
+- per-VM apply failures log the affected `instance_id`, hypervisor, and requested target
+- automatic reconcile summaries log when pressure changes, reclaim is applied, or errors occur
+
+Metrics:
+
+- `hypeman_guestmemory_reconcile_total` and `hypeman_guestmemory_reconcile_duration_seconds`
+- `hypeman_guestmemory_reclaim_actions_total`
+- `hypeman_guestmemory_pressure_transitions_total`
+- `hypeman_guestmemory_sampler_errors_total`
+- `hypeman_guestmemory_reclaim_bytes`
+- `hypeman_guestmemory_host_available_bytes`
+- `hypeman_guestmemory_target_reclaim_bytes`
+- `hypeman_guestmemory_applied_reclaim_bytes`
+- `hypeman_guestmemory_manual_hold_active`
+- `hypeman_guestmemory_eligible_vms_total`
+- `hypeman_guestmemory_pressure_state`
+
+Traces:
+
+- manual API calls create a `guestmemory.manual_reclaim` span
+- each reconcile creates a `guestmemory.reconcile` span
+- child spans capture host pressure sampling, VM enumeration, and balloon target application
+
 ## Passive Reclaim vs Active Ballooning
 
 Passive reclaim and active reclaim are complementary:
