@@ -19,6 +19,7 @@ const loggerKey contextKey = "logger"
 const (
 	SubsystemAPI       = "API"
 	SubsystemCaddy     = "CADDY"
+	SubsystemEgress    = "EGRESS"
 	SubsystemImages    = "IMAGES"
 	SubsystemIngress   = "INGRESS"
 	SubsystemInstances = "INSTANCES"
@@ -56,7 +57,7 @@ func NewConfig() Config {
 
 	// Parse subsystem-specific levels
 	subsystems := []string{
-		SubsystemAPI, SubsystemCaddy, SubsystemImages, SubsystemIngress,
+		SubsystemAPI, SubsystemCaddy, SubsystemEgress, SubsystemImages, SubsystemIngress,
 		SubsystemInstances, SubsystemNetwork, SubsystemVolumes, SubsystemVMM,
 		SubsystemSystem, SubsystemExec,
 	}

@@ -1,6 +1,12 @@
 package egressproxy
 
-import "errors"
+import (
+	"errors"
+	"log/slog"
+
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
+)
 
 const (
 	DefaultListenPort = 18080
@@ -29,6 +35,9 @@ type HeaderInjectRuleConfig struct {
 // ServiceOptions customizes service construction (primarily for tests).
 type ServiceOptions struct {
 	AdditionalRootCAPEM []string
+	Logger              *slog.Logger
+	Meter               metric.Meter
+	Tracer              trace.Tracer
 }
 
 // GuestConfig is injected into guest config.json when proxy mode is enabled.
