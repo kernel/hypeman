@@ -96,6 +96,9 @@ func normalizeCompressionConfig(cfg *snapshotstore.SnapshotCompressionConfig) (s
 		Enabled:   true,
 		Algorithm: cfg.Algorithm,
 	}
+	if normalized.Algorithm != "" {
+		normalized.Algorithm = snapshotstore.SnapshotCompressionAlgorithm(strings.ToLower(string(normalized.Algorithm)))
+	}
 	switch normalized.Algorithm {
 	case "":
 		normalized.Algorithm = snapshotstore.SnapshotCompressionAlgorithmZstd

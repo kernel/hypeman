@@ -55,6 +55,16 @@ func TestNormalizeCompressionConfig(t *testing.T) {
 	assert.Equal(t, snapshotstore.SnapshotCompressionAlgorithmLz4, cfg.Algorithm)
 	require.NotNil(t, cfg.Level)
 	assert.Equal(t, 9, *cfg.Level)
+
+	cfg, err = normalizeCompressionConfig(&snapshotstore.SnapshotCompressionConfig{
+		Enabled:   true,
+		Algorithm: snapshotstore.SnapshotCompressionAlgorithm("ZSTD"),
+		Level:     intPtr(3),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, snapshotstore.SnapshotCompressionAlgorithmZstd, cfg.Algorithm)
+	require.NotNil(t, cfg.Level)
+	assert.Equal(t, 3, *cfg.Level)
 }
 
 func TestResolveSnapshotCompressionPolicyPrecedence(t *testing.T) {
