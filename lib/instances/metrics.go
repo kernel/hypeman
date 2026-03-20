@@ -45,6 +45,20 @@ const (
 	snapshotCompressionPreemptionDeleteSnapshot  snapshotCompressionPreemptionOperation = "delete_snapshot"
 )
 
+type snapshotCodecOperation string
+
+const (
+	snapshotCodecOperationCompress   snapshotCodecOperation = "compress"
+	snapshotCodecOperationDecompress snapshotCodecOperation = "decompress"
+)
+
+type snapshotCodecFallbackReason string
+
+const (
+	snapshotCodecFallbackReasonMissingBinary snapshotCodecFallbackReason = "missing_binary"
+	snapshotCodecFallbackReasonNotExecutable snapshotCodecFallbackReason = "not_executable"
+)
+
 // Metrics holds the metrics instruments for instance operations.
 type Metrics struct {
 	createDuration                       metric.Float64Histogram
@@ -57,6 +71,7 @@ type Metrics struct {
 	snapshotCompressionDuration          metric.Float64Histogram
 	snapshotCompressionSavedBytes        metric.Int64Histogram
 	snapshotCompressionRatio             metric.Float64Histogram
+	snapshotCodecFallbacksTotal          metric.Int64Counter
 	snapshotRestoreMemoryPrepareTotal    metric.Int64Counter
 	snapshotRestoreMemoryPrepareDuration metric.Float64Histogram
 	snapshotCompressionPreemptionsTotal  metric.Int64Counter
@@ -147,6 +162,14 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 	snapshotCompressionRatio, err := meter.Float64Histogram(
 		"hypeman_snapshot_compression_ratio",
 		metric.WithDescription("Compressed snapshot memory size divided by raw snapshot memory size"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	snapshotCodecFallbacksTotal, err := meter.Int64Counter(
+		"hypeman_snapshot_codec_fallbacks_total",
+		metric.WithDescription("Total number of snapshot codec fallbacks from native binaries to the Go implementation"),
 	)
 	if err != nil {
 		return nil, err
@@ -277,6 +300,7 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 		snapshotCompressionDuration:          snapshotCompressionDuration,
 		snapshotCompressionSavedBytes:        snapshotCompressionSavedBytes,
 		snapshotCompressionRatio:             snapshotCompressionRatio,
+		snapshotCodecFallbacksTotal:          snapshotCodecFallbacksTotal,
 		snapshotRestoreMemoryPrepareTotal:    snapshotRestoreMemoryPrepareTotal,
 		snapshotRestoreMemoryPrepareDuration: snapshotRestoreMemoryPrepareDuration,
 		snapshotCompressionPreemptionsTotal:  snapshotCompressionPreemptionsTotal,
@@ -382,4 +406,16 @@ func (m *manager) recordSnapshotCompressionPreemption(ctx context.Context, opera
 	attrs := snapshotCompressionAttributes(target.HypervisorType, target.Policy.Algorithm, target.Source)
 	attrs = append(attrs, attribute.String("operation", string(operation)))
 	m.metrics.snapshotCompressionPreemptionsTotal.Add(ctx, 1, metric.WithAttributes(attrs...))
+}
+
+func (m *manager) recordSnapshotCodecFallback(ctx context.Context, algorithm snapshotstore.SnapshotCompressionAlgorithm, operation snapshotCodecOperation, reason snapshotCodecFallbackReason) {
+	if m.metrics == nil {
+		return
+	}
+
+	m.metrics.snapshotCodecFallbacksTotal.Add(ctx, 1, metric.WithAttributes(
+		attribute.String("algorithm", string(algorithm)),
+		attribute.String("operation", string(operation)),
+		attribute.String("reason", string(reason)),
+	))
 }

@@ -44,6 +44,7 @@ func TestSnapshotCompressionMetrics_RecordAndObserve(t *testing.T) {
 
 	target := m.compressionJobs["job-1"].target
 	m.recordSnapshotCompressionJob(t.Context(), target, snapshotCompressionResultSuccess, time.Now().Add(-2*time.Second), 1024, 256)
+	m.recordSnapshotCodecFallback(t.Context(), snapshotstore.SnapshotCompressionAlgorithmLz4, snapshotCodecOperationCompress, snapshotCodecFallbackReasonMissingBinary)
 	m.recordSnapshotRestoreMemoryPrepare(t.Context(), hypervisor.TypeCloudHypervisor, snapshotMemoryPreparePathRaw, snapshotCompressionResultSuccess, time.Now().Add(-250*time.Millisecond))
 	m.recordSnapshotCompressionPreemption(t.Context(), snapshotCompressionPreemptionRestoreInstance, target)
 
@@ -55,6 +56,7 @@ func TestSnapshotCompressionMetrics_RecordAndObserve(t *testing.T) {
 		"hypeman_snapshot_compression_duration_seconds",
 		"hypeman_snapshot_compression_saved_bytes",
 		"hypeman_snapshot_compression_ratio",
+		"hypeman_snapshot_codec_fallbacks_total",
 		"hypeman_snapshot_restore_memory_prepare_total",
 		"hypeman_snapshot_restore_memory_prepare_duration_seconds",
 		"hypeman_snapshot_compression_preemptions_total",
@@ -77,6 +79,15 @@ func TestSnapshotCompressionMetrics_RecordAndObserve(t *testing.T) {
 	require.Len(t, savedBytes.DataPoints, 1)
 	assert.Equal(t, uint64(1), savedBytes.DataPoints[0].Count)
 	assert.Equal(t, int64(768), savedBytes.DataPoints[0].Sum)
+
+	fallbackMetric := findMetric(t, rm, "hypeman_snapshot_codec_fallbacks_total")
+	fallbacks, ok := fallbackMetric.Data.(metricdata.Sum[int64])
+	require.True(t, ok)
+	require.Len(t, fallbacks.DataPoints, 1)
+	assert.Equal(t, int64(1), fallbacks.DataPoints[0].Value)
+	assert.Equal(t, "lz4", metricLabel(t, fallbacks.DataPoints[0].Attributes, "algorithm"))
+	assert.Equal(t, "compress", metricLabel(t, fallbacks.DataPoints[0].Attributes, "operation"))
+	assert.Equal(t, "missing_binary", metricLabel(t, fallbacks.DataPoints[0].Attributes, "reason"))
 
 	restorePrepMetric := findMetric(t, rm, "hypeman_snapshot_restore_memory_prepare_total")
 	restorePrep, ok := restorePrepMetric.Data.(metricdata.Sum[int64])

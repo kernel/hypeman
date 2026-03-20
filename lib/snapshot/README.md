@@ -88,6 +88,20 @@ In practice, the tradeoff is:
   - supports levels `0-9`
   - defaults to level `0` (fastest) when no level is specified
 
+### Native codec preference
+
+Compression and decompression try native system codecs first:
+
+- `zstd` snapshots prefer the `zstd` binary
+- `lz4` snapshots prefer the `lz4` binary
+
+If the native binary is missing or not executable, Hypeman falls back to the in-process Go implementation.
+
+- This fallback is operational, not a behavior change: snapshot artifacts remain the same `.zst` and `.lz4` formats.
+- A fallback emits a warning log with an install hint.
+- A fallback also increments `hypeman_snapshot_codec_fallbacks_total`.
+- If the native codec starts but fails for a real runtime reason, Hypeman does **not** silently fall back; it treats that as an error.
+
 ### Restore (in-place)
 - Restore always applies to the original source VM.
 - Source VM must not be `Running`.

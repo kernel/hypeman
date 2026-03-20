@@ -1,13 +1,17 @@
 package instances
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
@@ -40,6 +44,26 @@ type compressionTarget struct {
 	HypervisorType hypervisor.Type
 	Source         snapshotCompressionSource
 	Policy         snapshotstore.SnapshotCompressionConfig
+}
+
+type nativeCodecRuntime struct {
+	manager        *manager
+	lookPath       func(file string) (string, error)
+	commandContext func(ctx context.Context, name string, arg ...string) *exec.Cmd
+}
+
+func (r nativeCodecRuntime) lookPathFunc() func(string) (string, error) {
+	if r.lookPath != nil {
+		return r.lookPath
+	}
+	return exec.LookPath
+}
+
+func (r nativeCodecRuntime) commandContextFunc() func(context.Context, string, ...string) *exec.Cmd {
+	if r.commandContext != nil {
+		return r.commandContext
+	}
+	return exec.CommandContext
 }
 
 func cloneCompressionConfig(cfg *snapshotstore.SnapshotCompressionConfig) *snapshotstore.SnapshotCompressionConfig {
@@ -149,6 +173,125 @@ func (m *manager) snapshotJobKeyForSnapshot(snapshotID string) string {
 	return "snapshot:" + snapshotID
 }
 
+func nativeCodecBinaryName(algorithm snapshotstore.SnapshotCompressionAlgorithm) string {
+	switch algorithm {
+	case snapshotstore.SnapshotCompressionAlgorithmLz4:
+		return "lz4"
+	default:
+		return "zstd"
+	}
+}
+
+func nativeCodecInstallTip(algorithm snapshotstore.SnapshotCompressionAlgorithm) string {
+	switch algorithm {
+	case snapshotstore.SnapshotCompressionAlgorithmLz4:
+		return "install lz4 to enable native snapshot compression (for example: apt install lz4)"
+	default:
+		return "install zstd to enable native snapshot compression (for example: apt install zstd)"
+	}
+}
+
+func isNativeCodecUnavailable(err error) (snapshotCodecFallbackReason, bool) {
+	if err == nil {
+		return "", false
+	}
+	switch {
+	case errors.Is(err, exec.ErrNotFound), errors.Is(err, fs.ErrNotExist), errors.Is(err, os.ErrNotExist), errors.Is(err, syscall.ENOENT):
+		return snapshotCodecFallbackReasonMissingBinary, true
+	case errors.Is(err, fs.ErrPermission), errors.Is(err, os.ErrPermission), errors.Is(err, syscall.EACCES), errors.Is(err, syscall.EPERM):
+		return snapshotCodecFallbackReasonNotExecutable, true
+	default:
+		return "", false
+	}
+}
+
+func resolveNativeCodecPath(runtime nativeCodecRuntime, algorithm snapshotstore.SnapshotCompressionAlgorithm) (string, error) {
+	binaryName := nativeCodecBinaryName(algorithm)
+	if runtime.manager == nil {
+		return runtime.lookPathFunc()(binaryName)
+	}
+
+	runtime.manager.nativeCodecMu.Lock()
+	if runtime.manager.nativeCodecPaths == nil {
+		runtime.manager.nativeCodecPaths = make(map[string]string)
+	}
+	if path := runtime.manager.nativeCodecPaths[binaryName]; path != "" {
+		runtime.manager.nativeCodecMu.Unlock()
+		return path, nil
+	}
+	runtime.manager.nativeCodecMu.Unlock()
+
+	path, err := runtime.lookPathFunc()(binaryName)
+	if err != nil {
+		return "", err
+	}
+
+	runtime.manager.nativeCodecMu.Lock()
+	if runtime.manager.nativeCodecPaths == nil {
+		runtime.manager.nativeCodecPaths = make(map[string]string)
+	}
+	runtime.manager.nativeCodecPaths[binaryName] = path
+	runtime.manager.nativeCodecMu.Unlock()
+	return path, nil
+}
+
+func invalidateNativeCodecPath(runtime nativeCodecRuntime, algorithm snapshotstore.SnapshotCompressionAlgorithm, path string) {
+	if runtime.manager == nil {
+		return
+	}
+
+	binaryName := nativeCodecBinaryName(algorithm)
+	runtime.manager.nativeCodecMu.Lock()
+	defer runtime.manager.nativeCodecMu.Unlock()
+	if runtime.manager.nativeCodecPaths == nil {
+		return
+	}
+	if currentPath := runtime.manager.nativeCodecPaths[binaryName]; currentPath == path {
+		delete(runtime.manager.nativeCodecPaths, binaryName)
+	}
+}
+
+func recordNativeCodecFallback(ctx context.Context, runtime nativeCodecRuntime, algorithm snapshotstore.SnapshotCompressionAlgorithm, operation snapshotCodecOperation, reason snapshotCodecFallbackReason, nativeBinary string, err error) {
+	logger.FromContext(ctx).WarnContext(
+		ctx,
+		"native snapshot codec unavailable, falling back to go implementation",
+		"algorithm", string(algorithm),
+		"operation", string(operation),
+		"native_binary", nativeBinary,
+		"error", err,
+		"fallback_backend", "go",
+		"install_tip", nativeCodecInstallTip(algorithm),
+	)
+	if runtime.manager != nil {
+		runtime.manager.recordSnapshotCodecFallback(ctx, algorithm, operation, reason)
+	}
+}
+
+func runWithNativeFallback(ctx context.Context, runtime nativeCodecRuntime, algorithm snapshotstore.SnapshotCompressionAlgorithm, operation snapshotCodecOperation, nativeRunner func(binaryPath string) error, goRunner func() error) error {
+	binaryName := nativeCodecBinaryName(algorithm)
+	binaryPath, err := resolveNativeCodecPath(runtime, algorithm)
+	if err != nil {
+		reason, ok := isNativeCodecUnavailable(err)
+		if !ok {
+			return err
+		}
+		recordNativeCodecFallback(ctx, runtime, algorithm, operation, reason, binaryName, err)
+		return goRunner()
+	}
+
+	if err := nativeRunner(binaryPath); err != nil {
+		reason, ok := isNativeCodecUnavailable(err)
+		if !ok {
+			return err
+		}
+		invalidateNativeCodecPath(runtime, algorithm, binaryPath)
+		recordNativeCodecFallback(ctx, runtime, algorithm, operation, reason, binaryPath, err)
+		return goRunner()
+	}
+
+	return nil
+}
+
 func (m *manager) startCompressionJob(ctx context.Context, target compressionTarget) {
 	if target.Key == "" || !target.Policy.Enabled {
 		return
@@ -199,7 +342,7 @@ func (m *manager) startCompressionJob(ctx context.Context, target compressionTar
 		}
 
 		var err error
-		uncompressedSize, compressedSize, err = compressSnapshotMemoryFile(jobCtx, rawPath, target.Policy)
+		uncompressedSize, compressedSize, err = compressSnapshotMemoryFileWithRuntime(jobCtx, nativeCodecRuntime{manager: m}, rawPath, target.Policy)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				result = snapshotCompressionResultCanceled
@@ -285,7 +428,7 @@ func (m *manager) ensureSnapshotMemoryReady(ctx context.Context, snapshotDir, jo
 	if !ok {
 		return nil
 	}
-	if err := decompressSnapshotMemoryFile(ctx, compressedPath, algorithm); err != nil {
+	if err := decompressSnapshotMemoryFileWithRuntime(ctx, nativeCodecRuntime{manager: m}, compressedPath, algorithm); err != nil {
 		m.recordSnapshotRestoreMemoryPrepare(ctx, hvType, snapshotMemoryPreparePathDecompress, snapshotCompressionResultFailed, start)
 		return err
 	}
@@ -346,6 +489,10 @@ func snapshotMemoryFileCandidates(snapshotDir string) []string {
 }
 
 func compressSnapshotMemoryFile(ctx context.Context, rawPath string, cfg snapshotstore.SnapshotCompressionConfig) (int64, int64, error) {
+	return compressSnapshotMemoryFileWithRuntime(ctx, nativeCodecRuntime{}, rawPath, cfg)
+}
+
+func compressSnapshotMemoryFileWithRuntime(ctx context.Context, runtime nativeCodecRuntime, rawPath string, cfg snapshotstore.SnapshotCompressionConfig) (int64, int64, error) {
 	rawInfo, err := os.Stat(rawPath)
 	if err != nil {
 		return 0, 0, fmt.Errorf("stat raw memory snapshot: %w", err)
@@ -357,7 +504,7 @@ func compressSnapshotMemoryFile(ctx context.Context, rawPath string, cfg snapsho
 	removeCompressedSnapshotArtifacts(rawPath)
 	_ = os.Remove(tmpPath)
 
-	if err := runCompression(ctx, rawPath, tmpPath, cfg); err != nil {
+	if err := runNativeCompression(ctx, runtime, rawPath, tmpPath, cfg); err != nil {
 		_ = os.Remove(tmpPath)
 		return 0, 0, err
 	}
@@ -384,7 +531,22 @@ func compressSnapshotMemoryFile(ctx context.Context, rawPath string, cfg snapsho
 	return uncompressedSize, compressedInfo.Size(), nil
 }
 
-func runCompression(ctx context.Context, srcPath, dstPath string, cfg snapshotstore.SnapshotCompressionConfig) error {
+func runNativeCompression(ctx context.Context, runtime nativeCodecRuntime, srcPath, dstPath string, cfg snapshotstore.SnapshotCompressionConfig) error {
+	return runWithNativeFallback(
+		ctx,
+		runtime,
+		cfg.Algorithm,
+		snapshotCodecOperationCompress,
+		func(binaryPath string) error {
+			return runNativeCompressionCommand(ctx, runtime, binaryPath, srcPath, dstPath, cfg)
+		},
+		func() error {
+			return runGoCompression(ctx, srcPath, dstPath, cfg)
+		},
+	)
+}
+
+func runGoCompression(ctx context.Context, srcPath, dstPath string, cfg snapshotstore.SnapshotCompressionConfig) error {
 	src, err := os.Open(srcPath)
 	if err != nil {
 		return fmt.Errorf("open source snapshot: %w", err)
@@ -436,6 +598,37 @@ func runCompression(ctx context.Context, srcPath, dstPath string, cfg snapshotst
 	return nil
 }
 
+func runNativeCompressionCommand(ctx context.Context, runtime nativeCodecRuntime, binaryPath, srcPath, dstPath string, cfg snapshotstore.SnapshotCompressionConfig) error {
+	args := nativeCompressionArgs(srcPath, dstPath, cfg)
+	cmd := runtime.commandContextFunc()(ctx, binaryPath, args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		return formatNativeCodecError("compress", cfg.Algorithm, err, stderr.String())
+	}
+	return nil
+}
+
+func nativeCompressionArgs(srcPath, dstPath string, cfg snapshotstore.SnapshotCompressionConfig) []string {
+	switch cfg.Algorithm {
+	case snapshotstore.SnapshotCompressionAlgorithmLz4:
+		level := defaultSnapshotCompressionLz4Level
+		if cfg.Level != nil {
+			level = *cfg.Level
+		}
+		return []string{"-q", "-f", lz4NativeCompressionFlag(level), srcPath, dstPath}
+	default:
+		level := defaultSnapshotCompressionZstdLevel
+		if cfg.Level != nil {
+			level = *cfg.Level
+		}
+		return []string{"-q", "-f", fmt.Sprintf("-%d", level), "-o", dstPath, srcPath}
+	}
+}
+
 func lz4CompressionLevel(level int) lz4.CompressionLevel {
 	switch level {
 	case 0:
@@ -463,10 +656,50 @@ func lz4CompressionLevel(level int) lz4.CompressionLevel {
 	}
 }
 
+func lz4NativeCompressionFlag(level int) string {
+	if level == 0 {
+		return "--fast=1"
+	}
+	return fmt.Sprintf("-%d", level)
+}
+
 func decompressSnapshotMemoryFile(ctx context.Context, compressedPath string, algorithm snapshotstore.SnapshotCompressionAlgorithm) error {
+	return decompressSnapshotMemoryFileWithRuntime(ctx, nativeCodecRuntime{}, compressedPath, algorithm)
+}
+
+func decompressSnapshotMemoryFileWithRuntime(ctx context.Context, runtime nativeCodecRuntime, compressedPath string, algorithm snapshotstore.SnapshotCompressionAlgorithm) error {
 	rawPath := strings.TrimSuffix(strings.TrimSuffix(compressedPath, ".zst"), ".lz4")
 	tmpRawPath := rawPath + ".tmp"
 	_ = os.Remove(tmpRawPath)
+
+	if err := runNativeDecompression(ctx, runtime, compressedPath, tmpRawPath, algorithm); err != nil {
+		_ = os.Remove(tmpRawPath)
+		return err
+	}
+	if err := os.Rename(tmpRawPath, rawPath); err != nil {
+		_ = os.Remove(tmpRawPath)
+		return fmt.Errorf("finalize decompressed snapshot: %w", err)
+	}
+	removeCompressedSnapshotArtifacts(rawPath)
+	return nil
+}
+
+func runNativeDecompression(ctx context.Context, runtime nativeCodecRuntime, srcPath, dstPath string, algorithm snapshotstore.SnapshotCompressionAlgorithm) error {
+	return runWithNativeFallback(
+		ctx,
+		runtime,
+		algorithm,
+		snapshotCodecOperationDecompress,
+		func(binaryPath string) error {
+			return runNativeDecompressionCommand(ctx, runtime, binaryPath, srcPath, dstPath, algorithm)
+		},
+		func() error {
+			return runGoDecompression(ctx, srcPath, dstPath, algorithm)
+		},
+	)
+}
+
+func runGoDecompression(ctx context.Context, compressedPath, tmpRawPath string, algorithm snapshotstore.SnapshotCompressionAlgorithm) error {
 
 	src, err := os.Open(compressedPath)
 	if err != nil {
@@ -496,15 +729,40 @@ func decompressSnapshotMemoryFile(ctx context.Context, compressedPath string, al
 	}
 
 	if err := copyWithContext(ctx, dst, reader); err != nil {
-		_ = os.Remove(tmpRawPath)
 		return err
 	}
-	if err := os.Rename(tmpRawPath, rawPath); err != nil {
-		_ = os.Remove(tmpRawPath)
-		return fmt.Errorf("finalize decompressed snapshot: %w", err)
-	}
-	removeCompressedSnapshotArtifacts(rawPath)
 	return nil
+}
+
+func runNativeDecompressionCommand(ctx context.Context, runtime nativeCodecRuntime, binaryPath, srcPath, dstPath string, algorithm snapshotstore.SnapshotCompressionAlgorithm) error {
+	args := nativeDecompressionArgs(srcPath, dstPath, algorithm)
+	cmd := runtime.commandContextFunc()(ctx, binaryPath, args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		return formatNativeCodecError("decompress", algorithm, err, stderr.String())
+	}
+	return nil
+}
+
+func nativeDecompressionArgs(srcPath, dstPath string, algorithm snapshotstore.SnapshotCompressionAlgorithm) []string {
+	switch algorithm {
+	case snapshotstore.SnapshotCompressionAlgorithmLz4:
+		return []string{"-q", "-d", "-f", srcPath, dstPath}
+	default:
+		return []string{"-q", "-d", "-f", "-o", dstPath, srcPath}
+	}
+}
+
+func formatNativeCodecError(operation string, algorithm snapshotstore.SnapshotCompressionAlgorithm, err error, stderr string) error {
+	stderr = strings.TrimSpace(stderr)
+	if stderr == "" {
+		return fmt.Errorf("native %s %s: %w", algorithm, operation, err)
+	}
+	return fmt.Errorf("native %s %s: %w: %s", algorithm, operation, err, stderr)
 }
 
 func compressedPathFor(rawPath string, algorithm snapshotstore.SnapshotCompressionAlgorithm) string {

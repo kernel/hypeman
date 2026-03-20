@@ -91,6 +91,8 @@ type manager struct {
 	snapshotDefaults          SnapshotPolicy
 	compressionMu             sync.Mutex
 	compressionJobs           map[string]*compressionJob
+	nativeCodecMu             sync.Mutex
+	nativeCodecPaths          map[string]string
 
 	// Hypervisor support
 	vmStarters        map[hypervisor.Type]hypervisor.VMStarter
@@ -139,6 +141,7 @@ func NewManager(p *paths.Paths, imageManager images.Manager, systemManager syste
 		guestMemoryPolicy: policy,
 		snapshotDefaults:  snapshotDefaults,
 		compressionJobs:   make(map[string]*compressionJob),
+		nativeCodecPaths:  make(map[string]string),
 	}
 
 	// Initialize metrics if meter is provided
