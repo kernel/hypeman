@@ -188,12 +188,12 @@ func (m *manager) startCompressionJob(ctx context.Context, target compressionTar
 		if !ok {
 			if compressedPath, algorithm, found := findCompressedSnapshotMemoryFile(target.SnapshotDir); found && target.SnapshotID != "" {
 				cfg := compressionMetadataForExistingArtifact(target.Policy, algorithm)
-				var compressedSize *int64
+				var compressedSizeBytes *int64
 				if st, statErr := os.Stat(compressedPath); statErr == nil {
 					size := st.Size()
-					compressedSize = &size
+					compressedSizeBytes = &size
 				}
-				_ = m.updateSnapshotCompressionMetadata(target.SnapshotID, snapshotstore.SnapshotCompressionStateCompressed, "", &cfg, compressedSize, nil)
+				_ = m.updateSnapshotCompressionMetadata(target.SnapshotID, snapshotstore.SnapshotCompressionStateCompressed, "", &cfg, compressedSizeBytes, nil)
 			}
 			return
 		}
