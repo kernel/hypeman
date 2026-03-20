@@ -919,7 +919,7 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 		oapiInst.Tags = toOAPITags(inst.Tags)
 	}
 	if inst.SnapshotPolicy != nil {
-		oapiPolicy, _ := toOAPISnapshotPolicy(*inst.SnapshotPolicy)
+		oapiPolicy := toOAPISnapshotPolicy(*inst.SnapshotPolicy)
 		oapiInst.SnapshotPolicy = &oapiPolicy
 	}
 
@@ -983,7 +983,7 @@ func toInstanceSnapshotPolicy(policy oapi.SnapshotPolicy) (*instances.SnapshotPo
 	return out, nil
 }
 
-func toOAPISnapshotCompressionConfig(cfg snapshot.SnapshotCompressionConfig) (oapi.SnapshotCompressionConfig, error) {
+func toOAPISnapshotCompressionConfig(cfg snapshot.SnapshotCompressionConfig) oapi.SnapshotCompressionConfig {
 	out := oapi.SnapshotCompressionConfig{
 		Enabled: cfg.Enabled,
 	}
@@ -995,17 +995,14 @@ func toOAPISnapshotCompressionConfig(cfg snapshot.SnapshotCompressionConfig) (oa
 		level := *cfg.Level
 		out.Level = &level
 	}
-	return out, nil
+	return out
 }
 
-func toOAPISnapshotPolicy(policy instances.SnapshotPolicy) (oapi.SnapshotPolicy, error) {
+func toOAPISnapshotPolicy(policy instances.SnapshotPolicy) oapi.SnapshotPolicy {
 	out := oapi.SnapshotPolicy{}
 	if policy.Compression != nil {
-		compression, err := toOAPISnapshotCompressionConfig(*policy.Compression)
-		if err != nil {
-			return oapi.SnapshotPolicy{}, err
-		}
+		compression := toOAPISnapshotCompressionConfig(*policy.Compression)
 		out.Compression = &compression
 	}
-	return out, nil
+	return out
 }

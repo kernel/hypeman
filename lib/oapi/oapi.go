@@ -13024,11 +13024,12 @@ func (sh *strictHandler) StandbyInstance(w http.ResponseWriter, r *http.Request,
 	request.Id = id
 
 	var body StandbyInstanceJSONRequestBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	decoded, err := decodeOptionalJSONBody(r, &body)
+	if err != nil {
 		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
 		return
 	}
-	request.Body = &body
+	request.Body = decoded
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
 		return sh.ssi.StandbyInstance(ctx, request.(StandbyInstanceRequestObject))

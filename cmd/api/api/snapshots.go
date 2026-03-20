@@ -225,7 +225,7 @@ func snapshotToOAPI(snapshot instances.Snapshot) oapi.Snapshot {
 		out.CompressionError = lo.ToPtr(snapshot.CompressionError)
 	}
 	if snapshot.Compression != nil {
-		compression, _ := toOAPISnapshotCompressionConfig(*snapshot.Compression)
+		compression := toOAPISnapshotCompressionConfig(*snapshot.Compression)
 		out.Compression = &compression
 	}
 	if snapshot.CompressedSizeBytes != nil {
