@@ -44,28 +44,6 @@ Why:
 
 QEMU is usually provided by the host OS, so there is no matching bundled `ensure-qemu-binaries` target. If QEMU tests fail before boot, verify the system `qemu-system-*` binary separately.
 
-## Test Execution Pattern
-
-Start with one focused test:
-
-```bash
-go test ./lib/instances -run TestCloudHypervisorStandbyRestoreCompressionScenarios -count=1 -v
-```
-
-Then run the sibling hypervisor tests one at a time:
-
-```bash
-go test ./lib/instances -run TestFirecrackerStandbyRestoreCompressionScenarios -count=1 -v
-go test ./lib/instances -run TestQEMUStandbyRestoreCompressionScenarios -count=1 -v
-```
-
-For unit-only validation:
-
-```bash
-go test ./lib/instances -run 'TestNormalizeCompressionConfig|TestResolveSnapshotCompressionPolicyPrecedence' -count=1
-```
-
-Run one hypervisor at a time when the tests boot real VMs. This avoids noisy failures from competing KVM guests and makes logs much easier to interpret.
 
 ## Syncing Local Changes
 
@@ -96,12 +74,3 @@ Classify failures quickly:
   - symptom: test-specific lock or temp-file permission failures
   - fix: prefer no-network test setup when the test does not require networking; avoid unnecessary shared lock files
 
-## Reporting Guidance
-
-When reporting results, separate:
-
-1. Code failures
-2. Test harness issues
-3. Remote host environment issues
-
-This matters in Hypeman because Linux integration tests often fail before product code executes if the remote machine is missing bundled binaries, system tools, or short enough paths.
