@@ -3,10 +3,16 @@ package instances
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sort"
 
+	"github.com/kernel/hypeman/lib/egressproxy"
 	"github.com/kernel/hypeman/lib/logger"
 )
+
+type updateInstanceRulesService interface {
+	UpdateInstanceRules(ctx context.Context, instanceID string, rules []egressproxy.HeaderInjectRuleConfig) error
+}
 
 // updateInstance updates mutable properties of a running instance.
 // Currently supports updating env vars referenced by credential policies,
@@ -48,31 +54,8 @@ func (m *manager) updateInstance(ctx context.Context, id string, req UpdateInsta
 		return nil, err
 	}
 
-	svc := m.getEgressProxyIfExists()
-	if svc != nil {
-		oldRules := buildEgressProxyInjectRules(meta.NetworkEgress, meta.Credentials, prevEnv)
-		newRules := buildEgressProxyInjectRules(meta.NetworkEgress, meta.Credentials, nextEnv)
-
-		if err := svc.UpdateInstanceRules(ctx, id, newRules); err != nil {
-			return nil, fmt.Errorf("update egress proxy rules: %w", err)
-		}
-		log.DebugContext(ctx, "updated egress proxy header inject rules", "instance_id", id)
-
-		meta.Env = nextEnv
-		if err := m.saveMetadata(meta); err != nil {
-			if rollbackErr := svc.UpdateInstanceRules(ctx, id, oldRules); rollbackErr != nil {
-				return nil, fmt.Errorf("save metadata: %w (failed to roll back egress proxy rules: %v)", err, rollbackErr)
-			}
-			meta.Env = prevEnv
-			log.WarnContext(ctx, "rolled back egress proxy header inject rules after metadata save failure", "instance_id", id, "error", err)
-			return nil, fmt.Errorf("save metadata: %w", err)
-		}
-	} else {
-		meta.Env = nextEnv
-		if err := m.saveMetadata(meta); err != nil {
-			meta.Env = prevEnv
-			return nil, fmt.Errorf("save metadata: %w", err)
-		}
+	if err := applyUpdatedInstanceEnv(ctx, log, id, meta, prevEnv, nextEnv, m.saveMetadata, m.getEgressProxyIfExists()); err != nil {
+		return nil, err
 	}
 
 	log.InfoContext(ctx, "instance updated", "instance_id", id)
@@ -125,4 +108,40 @@ func cloneEnvMap(in map[string]string) map[string]string {
 		out[k] = v
 	}
 	return out
+}
+
+func applyUpdatedInstanceEnv(ctx context.Context, log *slog.Logger, instanceID string, meta *metadata, prevEnv map[string]string, nextEnv map[string]string, save func(*metadata) error, svc updateInstanceRulesService) error {
+	if log == nil {
+		log = logger.FromContext(ctx)
+	}
+
+	if svc == nil {
+		meta.Env = nextEnv
+		if err := save(meta); err != nil {
+			meta.Env = prevEnv
+			return fmt.Errorf("save metadata: %w", err)
+		}
+		return nil
+	}
+
+	oldRules := buildEgressProxyInjectRules(meta.NetworkEgress, meta.Credentials, prevEnv)
+	newRules := buildEgressProxyInjectRules(meta.NetworkEgress, meta.Credentials, nextEnv)
+
+	if err := svc.UpdateInstanceRules(ctx, instanceID, newRules); err != nil {
+		return fmt.Errorf("update egress proxy rules: %w", err)
+	}
+	log.DebugContext(ctx, "updated egress proxy header inject rules", "instance_id", instanceID)
+
+	meta.Env = nextEnv
+	if err := save(meta); err != nil {
+		if rollbackErr := svc.UpdateInstanceRules(ctx, instanceID, oldRules); rollbackErr != nil {
+			meta.Env = prevEnv
+			return fmt.Errorf("save metadata: %w (failed to roll back egress proxy rules: %v)", err, rollbackErr)
+		}
+		meta.Env = prevEnv
+		log.WarnContext(ctx, "rolled back egress proxy header inject rules after metadata save failure", "instance_id", instanceID, "error", err)
+		return fmt.Errorf("save metadata: %w", err)
+	}
+
+	return nil
 }

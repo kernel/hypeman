@@ -7,6 +7,11 @@ import (
 	"go.opentelemetry.io/otel/metric"
 )
 
+var (
+	controlPlaneDurationBuckets = []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 5}
+	upstreamDurationBuckets     = []float64{0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60}
+)
+
 type metrics struct {
 	registrations        metric.Int64Counter
 	ruleUpdates          metric.Int64Counter
@@ -46,6 +51,7 @@ func newMetrics(meter metric.Meter, svc *Service) (*metrics, error) {
 		"hypeman_egress_proxy_control_plane_duration_seconds",
 		metric.WithDescription("Duration of egress proxy control plane operations"),
 		metric.WithUnit("s"),
+		metric.WithExplicitBucketBoundaries(controlPlaneDurationBuckets...),
 	)
 	if err != nil {
 		return nil, err
@@ -53,7 +59,7 @@ func newMetrics(meter metric.Meter, svc *Service) (*metrics, error) {
 
 	requests, err := meter.Int64Counter(
 		"hypeman_egress_proxy_requests_total",
-		metric.WithDescription("Total number of egress proxy upstream request attempts"),
+		metric.WithDescription("Total number of egress proxy request handling outcomes"),
 	)
 	if err != nil {
 		return nil, err
@@ -63,6 +69,7 @@ func newMetrics(meter metric.Meter, svc *Service) (*metrics, error) {
 		"hypeman_egress_proxy_upstream_duration_seconds",
 		metric.WithDescription("Duration of egress proxy upstream requests"),
 		metric.WithUnit("s"),
+		metric.WithExplicitBucketBoundaries(upstreamDurationBuckets...),
 	)
 	if err != nil {
 		return nil, err

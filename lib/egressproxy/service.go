@@ -442,6 +442,9 @@ func (s *Service) handleConnect(w http.ResponseWriter, r *http.Request, sourceIP
 
 	cert, err := s.getOrCreateLeafCert(targetHost)
 	if err != nil {
+		log := s.loggerForContext(r.Context())
+		log.WarnContext(r.Context(), "egress proxy CONNECT setup failed", "stage", "leaf_cert", "destination_host", targetHost, "error", err)
+		s.metrics.recordRequest(r.Context(), "https", "connect_cert_error", false)
 		return
 	}
 
@@ -449,6 +452,9 @@ func (s *Service) handleConnect(w http.ResponseWriter, r *http.Request, sourceIP
 		Certificates: []tls.Certificate{*cert},
 	})
 	if err := tlsConn.Handshake(); err != nil {
+		log := s.loggerForContext(r.Context())
+		log.WarnContext(r.Context(), "egress proxy CONNECT setup failed", "stage", "client_tls_handshake", "destination_host", targetHost, "error", err)
+		s.metrics.recordRequest(r.Context(), "https", "connect_handshake_error", false)
 		return
 	}
 	defer tlsConn.Close()
