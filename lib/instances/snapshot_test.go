@@ -163,6 +163,47 @@ func TestRestoreSnapshotCancelsSourceInstanceCompressionJob(t *testing.T) {
 	assert.True(t, instanceCanceled.Load(), "instance compression job should be canceled before restore")
 }
 
+func TestCreateStandbySnapshotCancelsSourceInstanceCompressionJob(t *testing.T) {
+	t.Parallel()
+
+	mgr, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	hvType := mgr.defaultHypervisor
+	sourceID := "snapshot-create-src"
+	createStandbySnapshotSourceFixture(t, mgr, sourceID, "snapshot-create-src", hvType)
+
+	var instanceCanceled atomic.Bool
+	instanceDone := make(chan struct{})
+
+	mgr.compressionMu.Lock()
+	mgr.compressionJobs[mgr.snapshotJobKeyForInstance(sourceID)] = &compressionJob{
+		cancel: func() {
+			instanceCanceled.Store(true)
+			select {
+			case <-instanceDone:
+			default:
+				close(instanceDone)
+			}
+		},
+		done: instanceDone,
+		target: compressionTarget{
+			Key:         mgr.snapshotJobKeyForInstance(sourceID),
+			OwnerID:     sourceID,
+			SnapshotDir: mgr.paths.InstanceSnapshotLatest(sourceID),
+		},
+	}
+	mgr.compressionMu.Unlock()
+
+	snap, err := mgr.CreateSnapshot(ctx, sourceID, CreateSnapshotRequest{
+		Kind: SnapshotKindStandby,
+		Name: "standby-copy",
+	})
+	require.NoError(t, err)
+	require.Equal(t, SnapshotKindStandby, snap.Kind)
+	assert.True(t, instanceCanceled.Load(), "instance compression job should be canceled before copying standby snapshot payload")
+}
+
 func createStoppedSnapshotSourceFixture(t *testing.T, mgr *manager, id, name string, hvType hypervisor.Type) {
 	t.Helper()
 	require.NoError(t, mgr.ensureDirectories(id))

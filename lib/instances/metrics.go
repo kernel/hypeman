@@ -40,6 +40,7 @@ const (
 	snapshotCompressionPreemptionRestoreInstance snapshotCompressionPreemptionOperation = "restore_instance"
 	snapshotCompressionPreemptionRestoreSnapshot snapshotCompressionPreemptionOperation = "restore_snapshot"
 	snapshotCompressionPreemptionForkSnapshot    snapshotCompressionPreemptionOperation = "fork_snapshot"
+	snapshotCompressionPreemptionCreateSnapshot  snapshotCompressionPreemptionOperation = "create_snapshot"
 )
 
 // Metrics holds the metrics instruments for instance operations.

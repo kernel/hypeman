@@ -122,6 +122,36 @@ func TestResolveStandbyCompressionPolicyIsOptInOnly(t *testing.T) {
 	assert.Nil(t, cfg)
 }
 
+func TestResolveCompressionPolicyExplicitDisableOverridesDefaults(t *testing.T) {
+	t.Parallel()
+
+	m := &manager{
+		snapshotDefaults: SnapshotPolicy{
+			Compression: &snapshotstore.SnapshotCompressionConfig{
+				Enabled:   true,
+				Algorithm: snapshotstore.SnapshotCompressionAlgorithmZstd,
+				Level:     intPtr(3),
+			},
+		},
+	}
+
+	stored := &StoredMetadata{
+		SnapshotPolicy: &SnapshotPolicy{
+			Compression: &snapshotstore.SnapshotCompressionConfig{
+				Enabled: false,
+			},
+		},
+	}
+
+	cfg, err := m.resolveSnapshotCompressionPolicy(stored, nil)
+	require.NoError(t, err)
+	assert.False(t, cfg.Enabled)
+
+	standbyCfg, err := m.resolveStandbyCompressionPolicy(stored, nil)
+	require.NoError(t, err)
+	assert.Nil(t, standbyCfg)
+}
+
 func TestValidateCreateRequestSnapshotPolicy(t *testing.T) {
 	t.Parallel()
 

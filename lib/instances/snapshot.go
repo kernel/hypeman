@@ -96,7 +96,13 @@ func (m *manager) createSnapshot(ctx context.Context, id string, req CreateSnaps
 			}
 			restoreSource = true
 		case StateStandby:
-			// already ready to copy
+			target, err := m.cancelAndWaitCompressionJob(ctx, m.snapshotJobKeyForInstance(id))
+			if err != nil {
+				return nil, fmt.Errorf("wait for source instance compression to stop: %w", err)
+			}
+			if target != nil {
+				m.recordSnapshotCompressionPreemption(ctx, snapshotCompressionPreemptionCreateSnapshot, *target)
+			}
 		default:
 			return nil, fmt.Errorf("%w: standby snapshot requires source in %s or %s, got %s", ErrInvalidState, StateRunning, StateStandby, inst.State)
 		}
