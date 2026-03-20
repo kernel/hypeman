@@ -2,6 +2,7 @@ package instances
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -64,6 +65,9 @@ func (m *manager) standbyInstance(
 	if !skipCompression {
 		policy, err := m.resolveStandbyCompressionPolicy(stored, req.Compression)
 		if err != nil {
+			if !errors.Is(err, ErrInvalidRequest) {
+				err = fmt.Errorf("%w: %v", ErrInvalidRequest, err)
+			}
 			return nil, err
 		}
 		compressionPolicy = policy

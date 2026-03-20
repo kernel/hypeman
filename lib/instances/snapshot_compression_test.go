@@ -166,6 +166,23 @@ func TestResolveCompressionPolicyExplicitDisableOverridesDefaults(t *testing.T) 
 	assert.Nil(t, standbyCfg)
 }
 
+func TestResolveStandbyCompressionPolicyInvalidConfiguredDefaultIsInvalidRequest(t *testing.T) {
+	t.Parallel()
+
+	m := &manager{
+		snapshotDefaults: SnapshotPolicy{
+			Compression: &snapshotstore.SnapshotCompressionConfig{
+				Enabled:   true,
+				Algorithm: snapshotstore.SnapshotCompressionAlgorithm("brotli"),
+			},
+		},
+	}
+
+	_, err := m.resolveStandbyCompressionPolicy(&StoredMetadata{}, nil)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrInvalidRequest))
+}
+
 func TestCompressionMetadataForExistingArtifactUsesActualAlgorithm(t *testing.T) {
 	t.Parallel()
 
