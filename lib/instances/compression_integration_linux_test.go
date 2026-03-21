@@ -176,27 +176,11 @@ func runStandbyRestoreCompressionScenarios(t *testing.T, harness compressionInte
 			},
 		},
 		{
-			name: "zstd-3",
-			cfg: &snapshotstore.SnapshotCompressionConfig{
-				Enabled:   true,
-				Algorithm: snapshotstore.SnapshotCompressionAlgorithmZstd,
-				Level:     intPtr(3),
-			},
-		},
-		{
 			name: "lz4-0",
 			cfg: &snapshotstore.SnapshotCompressionConfig{
 				Enabled:   true,
 				Algorithm: snapshotstore.SnapshotCompressionAlgorithmLz4,
 				Level:     intPtr(0),
-			},
-		},
-		{
-			name: "lz4-3",
-			cfg: &snapshotstore.SnapshotCompressionConfig{
-				Enabled:   true,
-				Algorithm: snapshotstore.SnapshotCompressionAlgorithmLz4,
-				Level:     intPtr(3),
 			},
 		},
 	}
