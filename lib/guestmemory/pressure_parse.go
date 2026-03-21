@@ -82,7 +82,7 @@ func parseDarwinVMStatOutput(vmStatOut, memsizeOut string) (int64, int64, error)
 			parts := strings.Fields(line)
 			for i := 0; i < len(parts); i++ {
 				if parts[i] == "of" && i+1 < len(parts) {
-					n, err := strconv.ParseInt(strings.TrimSuffix(parts[i+1], " bytes)"), 10, 64)
+					n, err := strconv.ParseInt(parts[i+1], 10, 64)
 					if err == nil && n > 0 {
 						pageSize = n
 					}
