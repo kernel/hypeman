@@ -159,9 +159,9 @@ func runStandbyRestoreCompressionScenarios(t *testing.T, harness compressionInte
 	inFlightCompression := &snapshotstore.SnapshotCompressionConfig{
 		Enabled:   true,
 		Algorithm: snapshotstore.SnapshotCompressionAlgorithmZstd,
-		Level:     intPtr(19),
+		Level:     intPtr(3),
 	}
-	inst = runCompressionCycle(t, ctx, mgr, p, inst, harness.waitHypervisorUp, "in-flight-zstd-19", inFlightCompression, false)
+	inst = runCompressionCycle(t, ctx, mgr, p, inst, harness.waitHypervisorUp, "in-flight-zstd-3", inFlightCompression, false)
 
 	completedCases := []struct {
 		name string
@@ -176,11 +176,11 @@ func runStandbyRestoreCompressionScenarios(t *testing.T, harness compressionInte
 			},
 		},
 		{
-			name: "zstd-19",
+			name: "zstd-3",
 			cfg: &snapshotstore.SnapshotCompressionConfig{
 				Enabled:   true,
 				Algorithm: snapshotstore.SnapshotCompressionAlgorithmZstd,
-				Level:     intPtr(19),
+				Level:     intPtr(3),
 			},
 		},
 		{
@@ -192,11 +192,11 @@ func runStandbyRestoreCompressionScenarios(t *testing.T, harness compressionInte
 			},
 		},
 		{
-			name: "lz4-9",
+			name: "lz4-3",
 			cfg: &snapshotstore.SnapshotCompressionConfig{
 				Enabled:   true,
 				Algorithm: snapshotstore.SnapshotCompressionAlgorithmLz4,
-				Level:     intPtr(9),
+				Level:     intPtr(3),
 			},
 		},
 	}
