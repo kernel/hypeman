@@ -560,7 +560,12 @@ func runGoCompression(ctx context.Context, srcPath, dstPath string, cfg snapshot
 	if err != nil {
 		return fmt.Errorf("create compressed snapshot: %w", err)
 	}
-	defer dst.Close()
+	closed := false
+	defer func() {
+		if !closed {
+			dst.Close()
+		}
+	}()
 
 	switch cfg.Algorithm {
 	case snapshotstore.SnapshotCompressionAlgorithmZstd:
@@ -597,6 +602,10 @@ func runGoCompression(ctx context.Context, srcPath, dstPath string, cfg snapshot
 		}
 	default:
 		return fmt.Errorf("%w: unsupported compression algorithm %q", ErrInvalidRequest, cfg.Algorithm)
+	}
+	closed = true
+	if err := dst.Close(); err != nil {
+		return fmt.Errorf("close compressed snapshot file: %w", err)
 	}
 	return nil
 }
@@ -714,7 +723,12 @@ func runGoDecompression(ctx context.Context, compressedPath, tmpRawPath string, 
 	if err != nil {
 		return fmt.Errorf("create decompressed snapshot file: %w", err)
 	}
-	defer dst.Close()
+	closed := false
+	defer func() {
+		if !closed {
+			dst.Close()
+		}
+	}()
 
 	var reader io.Reader
 	switch algorithm {
@@ -733,6 +747,10 @@ func runGoDecompression(ctx context.Context, compressedPath, tmpRawPath string, 
 
 	if err := copyWithContext(ctx, dst, reader); err != nil {
 		return err
+	}
+	closed = true
+	if err := dst.Close(); err != nil {
+		return fmt.Errorf("close decompressed snapshot file: %w", err)
 	}
 	return nil
 }

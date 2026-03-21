@@ -321,6 +321,7 @@ components:
           description: Hypervisor to use for this instance. Defaults to server configuration.
           example: cloud-hypervisor
         snapshot_policy:
+          description: Snapshot compression policy for this instance. Controls compression settings applied when creating snapshots or entering standby.
           $ref: "#/components/schemas/SnapshotPolicy"
         skip_kernel_headers:
           type: boolean
@@ -501,6 +502,7 @@ components:
         tags:
           $ref: "#/components/schemas/Tags"
         compression:
+          description: Compression settings to use for this snapshot. Overrides instance and server defaults.
           $ref: "#/components/schemas/SnapshotCompressionConfig"
 
     StandbyInstanceRequest:
