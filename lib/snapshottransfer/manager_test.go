@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -112,6 +113,34 @@ func TestStartTransferPreflightFailureDoesNotCreateJob(t *testing.T) {
 	}
 	if len(jobs) != 0 {
 		t.Fatalf("expected no transfer jobs after failed preflight, got %d", len(jobs))
+	}
+}
+
+func TestStartTransferPreflightBadRequestReturnsInvalidRequest(t *testing.T) {
+	p := paths.New(t.TempDir())
+	mgr := NewManager(p, 1).(*manager)
+
+	const snapshotID = "snap-preflight-bad-request"
+	if err := seedSourceSnapshot(p, snapshotID, map[string][]byte{
+		"file.txt": []byte("payload"),
+	}); err != nil {
+		t.Fatalf("seed snapshot: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/snapshot-import-sessions/preflight" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		http.Error(w, `{"code":"invalid_request","message":"unsupported snapshot kind"}`, http.StatusBadRequest)
+	}))
+	defer server.Close()
+
+	_, err := mgr.StartTransfer(context.Background(), snapshotID, StartTransferRequest{
+		DestinationURL: server.URL,
+	}, "token")
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("expected preflight invalid request error, got %v", err)
 	}
 }
 
@@ -300,6 +329,14 @@ func TestCompleteImportSessionRejectsSymlinkTraversal(t *testing.T) {
 	if !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("expected invalid request for symlink parent traversal, got %v", err)
 	}
+
+	guestEntries, readErr := os.ReadDir(p.SnapshotStoreDir())
+	if readErr != nil && !os.IsNotExist(readErr) {
+		t.Fatalf("read snapshot store after failed import: %v", readErr)
+	}
+	if len(guestEntries) != 0 {
+		t.Fatalf("expected failed import to clean up partial guest data, found %d entries", len(guestEntries))
+	}
 }
 
 func TestCompleteImportSessionRejectsFileTargetSymlink(t *testing.T) {
@@ -394,6 +431,91 @@ func TestTransferEndToEndStoppedSnapshot(t *testing.T) {
 	if string(got) != "nested-data" {
 		t.Fatalf("imported payload mismatch: got=%q", string(got))
 	}
+}
+
+func TestUploadImportChunkDoesNotBlockOtherSessionsDuringBodyRead(t *testing.T) {
+	p := paths.New(t.TempDir())
+	mgr := NewManager(p, 1)
+
+	chunk := []byte("aaaa")
+	makeSession := func(id string) *ImportSession {
+		session, err := mgr.CreateImportSession(context.Background(), CreateSessionRequest{
+			Snapshot: SnapshotDescriptor{
+				SourceSnapshotID:   id,
+				SourceInstanceID:   id,
+				SourceInstanceName: id,
+				Kind:               snapshotstore.SnapshotKindStopped,
+				SourceHypervisor:   hypervisor.TypeCloudHypervisor,
+				CreatedAt:          time.Now(),
+				SizeBytes:          int64(len(chunk)),
+			},
+			Manifest: Manifest{
+				Version:   1,
+				ChunkSize: int64(len(chunk)),
+				DataSize:  int64(len(chunk)),
+				Chunks: []ChunkDescriptor{
+					{Index: 0, Offset: 0, Size: int64(len(chunk)), SHA256: sha256Hex(chunk)},
+				},
+			},
+			StoredMetadata: json.RawMessage(`{}`),
+		})
+		if err != nil {
+			t.Fatalf("CreateImportSession(%s): %v", id, err)
+		}
+		return session
+	}
+
+	sessionA := makeSession("src-slow")
+	sessionB := makeSession("src-fast")
+
+	slowReader := &blockingReader{
+		data:    chunk,
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- mgr.UploadImportChunk(context.Background(), sessionA.ID, 0, slowReader)
+	}()
+
+	<-slowReader.started
+
+	fastDone := make(chan error, 1)
+	go func() {
+		fastDone <- mgr.UploadImportChunk(context.Background(), sessionB.ID, 0, strings.NewReader(string(chunk)))
+	}()
+
+	select {
+	case err := <-fastDone:
+		if err != nil {
+			t.Fatalf("fast upload failed: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("fast upload blocked behind slow session body read")
+	}
+
+	close(slowReader.release)
+	if err := <-errCh; err != nil {
+		t.Fatalf("slow upload failed: %v", err)
+	}
+}
+
+type blockingReader struct {
+	data    []byte
+	started chan struct{}
+	release chan struct{}
+	read    bool
+}
+
+func (r *blockingReader) Read(p []byte) (int, error) {
+	if !r.read {
+		r.read = true
+		close(r.started)
+		<-r.release
+		n := copy(p, r.data)
+		return n, io.EOF
+	}
+	return 0, io.EOF
 }
 
 func TestStartResumesInterruptedJobOnStartup(t *testing.T) {

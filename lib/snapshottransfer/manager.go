@@ -412,8 +412,11 @@ func (m *manager) remotePreflight(ctx context.Context, destinationURL, destinati
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		if resp.StatusCode == http.StatusConflict || resp.StatusCode == http.StatusBadRequest {
+		if resp.StatusCode == http.StatusConflict {
 			return fmt.Errorf("%w: destination preflight failed: %s", ErrConflict, strings.TrimSpace(string(body)))
+		}
+		if resp.StatusCode == http.StatusBadRequest {
+			return fmt.Errorf("%w: destination preflight failed: %s", ErrInvalidRequest, strings.TrimSpace(string(body)))
 		}
 		return fmt.Errorf("destination preflight failed: status=%d body=%s", resp.StatusCode, string(body))
 	}
@@ -788,27 +791,33 @@ func (m *manager) GetImportSession(ctx context.Context, sessionID string) (*Impo
 
 func (m *manager) UploadImportChunk(ctx context.Context, sessionID string, chunkIndex int, body io.Reader) error {
 	_ = ctx
-	m.mu.Lock()
-	defer m.mu.Unlock()
 
+	m.mu.Lock()
 	rec, err := m.store.LoadSession(sessionID)
 	if err != nil {
+		m.mu.Unlock()
 		return err
 	}
 	if rec.Status == SessionStatusCancelled || rec.Status == SessionStatusCompleted {
+		m.mu.Unlock()
 		return fmt.Errorf("%w: session is in terminal state", ErrConflict)
 	}
 	if chunkIndex < 0 || chunkIndex >= len(rec.Manifest.Chunks) {
+		m.mu.Unlock()
 		return fmt.Errorf("%w: chunk index out of range", ErrInvalidRequest)
 	}
 	if rec.CommittedChunks[chunkIndex] {
+		m.mu.Unlock()
 		return nil
 	}
 	if chunkIndex > 0 && !rec.CommittedChunks[chunkIndex-1] {
+		m.mu.Unlock()
 		return fmt.Errorf("%w: out-of-order chunk commit rejected for index %d", ErrConflict, chunkIndex)
 	}
 
 	chunk := rec.Manifest.Chunks[chunkIndex]
+	m.mu.Unlock()
+
 	data, err := io.ReadAll(io.LimitReader(body, chunk.Size+1))
 	if err != nil {
 		return err
@@ -827,6 +836,24 @@ func (m *manager) UploadImportChunk(ctx context.Context, sessionID string, chunk
 	if err := os.WriteFile(chunkPath, data, 0600); err != nil {
 		return err
 	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	rec, err = m.store.LoadSession(sessionID)
+	if err != nil {
+		return err
+	}
+	if rec.Status == SessionStatusCancelled || rec.Status == SessionStatusCompleted {
+		return fmt.Errorf("%w: session is in terminal state", ErrConflict)
+	}
+	if rec.CommittedChunks[chunkIndex] {
+		return nil
+	}
+	if chunkIndex > 0 && !rec.CommittedChunks[chunkIndex-1] {
+		return fmt.Errorf("%w: out-of-order chunk commit rejected for index %d", ErrConflict, chunkIndex)
+	}
+
 	rec.CommittedChunks[chunkIndex] = true
 	rec.Status = SessionStatusReceiving
 	rec.UpdatedAt = time.Now()
@@ -891,7 +918,7 @@ func (m *manager) CancelImportSession(ctx context.Context, sessionID string) err
 	return m.store.SaveSession(rec)
 }
 
-func (m *manager) materializeSnapshot(session *ImportSessionRecord) (*snapshotstore.Snapshot, error) {
+func (m *manager) materializeSnapshot(session *ImportSessionRecord) (_ *snapshotstore.Snapshot, err error) {
 	store := snapshotstore.NewStore(m.paths)
 
 	if err := store.EnsureNameAvailable(session.Snapshot.SourceInstanceID, session.Snapshot.Name); err != nil {
@@ -902,10 +929,16 @@ func (m *manager) materializeSnapshot(session *ImportSessionRecord) (*snapshotst
 	}
 
 	snapshotID := cuid2.Generate()
+	snapshotDir := m.paths.SnapshotDir(snapshotID)
 	guestDir := m.paths.SnapshotGuestDir(snapshotID)
 	if err := os.MkdirAll(guestDir, 0755); err != nil {
 		return nil, fmt.Errorf("create imported snapshot guest dir: %w", err)
 	}
+	defer func() {
+		if err != nil {
+			_ = os.RemoveAll(snapshotDir)
+		}
+	}()
 
 	for _, entry := range session.Manifest.Entries {
 		relPath, err := normalizeManifestPath(entry.Path)
