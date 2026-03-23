@@ -469,11 +469,12 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("build.timeout must be positive, got %d", c.Build.Timeout)
 	}
 	algorithm := strings.ToLower(c.Snapshot.CompressionDefault.Algorithm)
+	c.Snapshot.CompressionDefault.Algorithm = algorithm
 	if c.Snapshot.CompressionDefault.Enabled {
 		switch algorithm {
 		case "", "zstd", "lz4":
 		default:
-			return fmt.Errorf("snapshot.compression_default.algorithm must be one of zstd or lz4, got %q", c.Snapshot.CompressionDefault.Algorithm)
+			return fmt.Errorf("snapshot.compression_default.algorithm must be one of zstd or lz4, got %q", algorithm)
 		}
 		if c.Snapshot.CompressionDefault.Level != nil {
 			level := *c.Snapshot.CompressionDefault.Level

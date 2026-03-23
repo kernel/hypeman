@@ -1023,10 +1023,30 @@ func toDomainSnapshotCompressionConfig(cfg oapi.SnapshotCompressionConfig) (*sna
 		Enabled: cfg.Enabled,
 	}
 	if cfg.Algorithm != nil {
-		out.Algorithm = snapshot.SnapshotCompressionAlgorithm(*cfg.Algorithm)
+		algo := snapshot.SnapshotCompressionAlgorithm(strings.ToLower(string(*cfg.Algorithm)))
+		switch algo {
+		case snapshot.SnapshotCompressionAlgorithmZstd, snapshot.SnapshotCompressionAlgorithmLz4:
+		default:
+			return nil, fmt.Errorf("algorithm must be one of zstd or lz4, got %q", *cfg.Algorithm)
+		}
+		out.Algorithm = algo
 	}
 	if cfg.Level != nil {
 		level := *cfg.Level
+		algo := out.Algorithm
+		if algo == "" {
+			algo = snapshot.SnapshotCompressionAlgorithmZstd
+		}
+		switch algo {
+		case snapshot.SnapshotCompressionAlgorithmZstd:
+			if level < snapshot.MinSnapshotCompressionZstdLevel || level > snapshot.MaxSnapshotCompressionZstdLevel {
+				return nil, fmt.Errorf("level must be between %d and %d for zstd, got %d", snapshot.MinSnapshotCompressionZstdLevel, snapshot.MaxSnapshotCompressionZstdLevel, level)
+			}
+		case snapshot.SnapshotCompressionAlgorithmLz4:
+			if level < snapshot.MinSnapshotCompressionLz4Level || level > snapshot.MaxSnapshotCompressionLz4Level {
+				return nil, fmt.Errorf("level must be between %d and %d for lz4, got %d", snapshot.MinSnapshotCompressionLz4Level, snapshot.MaxSnapshotCompressionLz4Level, level)
+			}
+		}
 		out.Level = &level
 	}
 	return out, nil

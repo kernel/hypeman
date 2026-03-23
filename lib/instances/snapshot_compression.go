@@ -339,7 +339,9 @@ func (m *manager) startCompressionJob(ctx context.Context, target compressionTar
 					size := st.Size()
 					compressedSizeBytes = &size
 				}
-				_ = m.updateSnapshotCompressionMetadata(target.SnapshotID, snapshotstore.SnapshotCompressionStateCompressed, "", &cfg, compressedSizeBytes, nil)
+				if metaErr := m.updateSnapshotCompressionMetadata(target.SnapshotID, snapshotstore.SnapshotCompressionStateCompressed, "", &cfg, compressedSizeBytes, nil); metaErr != nil {
+					log.ErrorContext(ctx, "failed to update snapshot compression metadata", "snapshot_id", target.SnapshotID, "error", metaErr)
+				}
 			}
 			return
 		}
@@ -350,20 +352,26 @@ func (m *manager) startCompressionJob(ctx context.Context, target compressionTar
 			if errors.Is(err, context.Canceled) {
 				result = snapshotCompressionResultCanceled
 				if target.SnapshotID != "" {
-					_ = m.updateSnapshotCompressionMetadata(target.SnapshotID, snapshotstore.SnapshotCompressionStateNone, "", nil, nil, nil)
+					if metaErr := m.updateSnapshotCompressionMetadata(target.SnapshotID, snapshotstore.SnapshotCompressionStateNone, "", nil, nil, nil); metaErr != nil {
+						log.ErrorContext(ctx, "failed to update snapshot compression metadata", "snapshot_id", target.SnapshotID, "error", metaErr)
+					}
 				}
 				return
 			}
 			result = snapshotCompressionResultFailed
 			if target.SnapshotID != "" {
-				_ = m.updateSnapshotCompressionMetadata(target.SnapshotID, snapshotstore.SnapshotCompressionStateError, err.Error(), &target.Policy, nil, nil)
+				if metaErr := m.updateSnapshotCompressionMetadata(target.SnapshotID, snapshotstore.SnapshotCompressionStateError, err.Error(), &target.Policy, nil, nil); metaErr != nil {
+					log.ErrorContext(ctx, "failed to update snapshot compression metadata", "snapshot_id", target.SnapshotID, "error", metaErr)
+				}
 			}
 			log.WarnContext(ctx, "snapshot compression failed", "snapshot_dir", target.SnapshotDir, "error", err)
 			return
 		}
 
 		if target.SnapshotID != "" {
-			_ = m.updateSnapshotCompressionMetadata(target.SnapshotID, snapshotstore.SnapshotCompressionStateCompressed, "", &target.Policy, &compressedSize, &uncompressedSize)
+			if metaErr := m.updateSnapshotCompressionMetadata(target.SnapshotID, snapshotstore.SnapshotCompressionStateCompressed, "", &target.Policy, &compressedSize, &uncompressedSize); metaErr != nil {
+				log.ErrorContext(ctx, "failed to update snapshot compression metadata", "snapshot_id", target.SnapshotID, "error", metaErr)
+			}
 		}
 	}()
 }

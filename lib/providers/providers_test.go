@@ -26,7 +26,7 @@ func TestSnapshotDefaultsFromConfigDisabledReturnsNilCompression(t *testing.T) {
 	assert.Nil(t, defaults.Compression)
 }
 
-func TestSnapshotDefaultsFromConfigOmitsLevelForLZ4(t *testing.T) {
+func TestSnapshotDefaultsFromConfigPreservesLevelForLZ4(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.Config{
