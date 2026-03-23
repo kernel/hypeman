@@ -244,6 +244,12 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 	})
 	defer cu.Clean()
 
+	if source.State == StateStandby {
+		if err := m.ensureSnapshotMemoryReady(ctx, m.paths.InstanceSnapshotLatest(id), m.snapshotJobKeyForInstance(id), stored.HypervisorType); err != nil {
+			return nil, fmt.Errorf("prepare standby snapshot for fork: %w", err)
+		}
+	}
+
 	if err := forkvm.CopyGuestDirectory(srcDir, dstDir); err != nil {
 		if errors.Is(err, forkvm.ErrSparseCopyUnsupported) {
 			return nil, fmt.Errorf("fork requires sparse-capable filesystem (SEEK_DATA/SEEK_HOLE unsupported): %w", err)

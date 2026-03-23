@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kernel/hypeman/lib/snapshot"
 	"github.com/c2h5oh/datasize"
+	"github.com/kernel/hypeman/lib/snapshot"
 	"github.com/knadh/koanf/parsers/yaml"
 	"github.com/knadh/koanf/providers/env"
 	"github.com/knadh/koanf/providers/file"
