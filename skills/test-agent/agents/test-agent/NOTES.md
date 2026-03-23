@@ -145,3 +145,69 @@
 - Run 3: 96s (pass)
 - `lib/instances` runtime in those runs:
   - 97.618s, 117.392s, 71.886s
+
+## 2026-03-23 - Current branch verification (`codex/pr43-fix-image-and-reclaim`)
+
+### What initially looked flaky but was actually command-shape drift
+- A fresh direct run without test-prewarm env exported failed in `lib/instances` with several image waits timing out at 60s:
+  - `TestEntrypointEnvVars`
+  - `TestQEMUEntrypointEnvVars`
+  - `TestQEMUForkFromRunningNetwork`
+  - `TestQEMUStandbyAndRestore`
+- Symptom:
+  - image status still `pending` after 60 seconds
+- Root cause:
+  - I ran `go run ./cmd/test-prewarm` but forgot to export:
+    - `HYPEMAN_TEST_PREWARM_DIR=/root/.cache/hypeman-ci/linux-x86_64`
+    - `HYPEMAN_TEST_REGISTRY=127.0.0.1:5001`
+  - Without those env vars, `integrationTestImageRef` in `lib/instances/test_prewarm_test.go` does not remap Docker Hub refs to the local registry mirror, so several tests pay cold remote-pull + queue time and the 60s readiness assumptions become invalid.
+- Conclusion:
+  - This was not a repository flake on the current branch; it was an incorrect manual command shape.
+
+### Fresh-cache CI-like runs on `deft-kernel-dev`
+- Remote workspace:
+  - `~/hm43`
+- Bootstrap:
+  - `make ensure-ch-binaries ensure-firecracker-binaries ensure-caddy-binaries build-embedded`
+- Smoke runs with fresh Go caches and correct prewarm env:
+  - flow:
+    - `go mod download`
+    - `make oapi-generate`
+    - `make build`
+    - `go run ./cmd/test-prewarm`
+    - `make test TEST_TIMEOUT=20m`
+  - results:
+    - Run 1: 221s (pass)
+    - Run 2: 208s (pass)
+- Strict no-cache runs with fresh Go caches and direct test execution:
+  - flow:
+    - `go mod download`
+    - `make oapi-generate`
+    - `make build`
+    - `go run ./cmd/test-prewarm`
+    - `go test -count=1 -tags containers_image_openpgp -timeout=20m ./...`
+  - results:
+    - Run 1: 211s (pass)
+    - Run 2: 210s (pass)
+
+### Current slowest individual tests (`lib/instances`, `go test -json`)
+- `TestCloudHypervisorStandbyRestoreCompressionScenarios`: 51.34s
+- `TestForkCloudHypervisorFromRunningNetwork`: 44.64s
+- `TestFirecrackerForkFromRunningNetwork`: 34.00s
+- `TestFirecrackerStopClearsStaleSnapshot`: 31.59s
+- `TestCreateInstanceWithNetwork`: 30.80s
+- `TestCompressSnapshotMemoryFileReturnsContextCanceledWhenNativeProcessIsKilled`: 30.00s
+- `TestQEMUStandbyRestoreCompressionScenarios`: 29.74s
+- `TestFirecrackerNetworkLifecycle`: 28.98s
+- `TestFirecrackerStandbyRestoreCompressionScenarios`: 27.91s
+- `TestQEMUForkFromRunningNetwork`: 27.02s
+
+### Assessment
+- No current-branch flakes reproduced once the command shape matched the repo’s intended prewarm setup.
+- The remaining cost is concentrated in `lib/instances` hypervisor integration coverage and looks mostly non-redundant:
+  - running-fork coverage is split across CH / Firecracker / QEMU
+  - standby/restore compression scenarios are split across hypervisors
+  - network lifecycle / create-instance / end-to-end tests each cover different surfaces
+- One environmental contributor on `deft-kernel-dev`:
+  - `lz4` and `zstd` are not installed, so snapshot compression tests fall back to the Go implementation, which likely inflates compression-scenario timings.
+- I did not make a test-quality code change in this pass because I did not find a low-risk redundancy or speed improvement that was clearly justified after the no-cache runs came back clean.
