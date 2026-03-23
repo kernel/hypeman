@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/paths"
+	snapshotstore "github.com/kernel/hypeman/lib/snapshot"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -213,6 +215,66 @@ func TestForkInstanceRejectsDuplicateNameForNonNetworkedSource(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrAlreadyExists)
 	assert.Contains(t, err.Error(), "already exists")
+}
+
+func TestForkInstanceFromStandbyCancelsCompressionJobAndCopiesRawMemory(t *testing.T) {
+	t.Parallel()
+
+	manager, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	sourceID := "fork-standby-compressed-src"
+	createStandbySnapshotSourceFixture(t, manager, sourceID, sourceID, manager.defaultHypervisor)
+
+	rawPath := filepath.Join(manager.paths.InstanceSnapshotLatest(sourceID), "memory-ranges")
+	require.NoError(t, os.WriteFile(rawPath, []byte("some guest memory"), 0o644))
+	snapshotConfigPath := manager.paths.InstanceSnapshotConfig(sourceID)
+	require.NoError(t, os.MkdirAll(filepath.Dir(snapshotConfigPath), 0o755))
+	require.NoError(t, os.WriteFile(snapshotConfigPath, []byte(`{}`), 0o644))
+
+	_, _, err := compressSnapshotMemoryFile(ctx, rawPath, snapshotstore.SnapshotCompressionConfig{
+		Enabled:   true,
+		Algorithm: snapshotstore.SnapshotCompressionAlgorithmZstd,
+		Level:     intPtr(1),
+	})
+	require.NoError(t, err)
+
+	var canceled atomic.Bool
+	done := make(chan struct{})
+
+	manager.compressionMu.Lock()
+	manager.compressionJobs[manager.snapshotJobKeyForInstance(sourceID)] = &compressionJob{
+		cancel: func() {
+			canceled.Store(true)
+			select {
+			case <-done:
+			default:
+				close(done)
+			}
+		},
+		done: done,
+		target: compressionTarget{
+			Key:         manager.snapshotJobKeyForInstance(sourceID),
+			OwnerID:     sourceID,
+			SnapshotDir: manager.paths.InstanceSnapshotLatest(sourceID),
+		},
+	}
+	manager.compressionMu.Unlock()
+
+	forked, err := manager.forkInstanceFromStoppedOrStandby(ctx, sourceID, ForkInstanceRequest{
+		Name:        "fork-standby-compressed-copy",
+		TargetState: StateStopped,
+	}, true)
+	require.NoError(t, err)
+	require.NotNil(t, forked)
+
+	assert.True(t, canceled.Load(), "standby compression job should be canceled before copying the source guest directory")
+
+	forkSnapshotDir := manager.paths.InstanceSnapshotLatest(forked.Id)
+	_, ok := findRawSnapshotMemoryFile(forkSnapshotDir)
+	assert.True(t, ok, "forked standby guest directory should contain raw memory after preparing the source snapshot")
+	_, _, ok = findCompressedSnapshotMemoryFile(forkSnapshotDir)
+	assert.False(t, ok, "forked standby guest directory should not retain compressed memory artifacts from the source instance")
 }
 
 func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {

@@ -108,7 +108,7 @@ func (m *mockInstanceManager) ForkSnapshot(ctx context.Context, snapshotID strin
 	return nil, instances.ErrNotFound
 }
 
-func (m *mockInstanceManager) StandbyInstance(ctx context.Context, id string) (*instances.Instance, error) {
+func (m *mockInstanceManager) StandbyInstance(ctx context.Context, id string, req instances.StandbyInstanceRequest) (*instances.Instance, error) {
 	return nil, nil
 }
 

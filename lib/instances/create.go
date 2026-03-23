@@ -342,6 +342,7 @@ func (m *manager) createInstance(
 		Cmd:                      req.Cmd,
 		SkipKernelHeaders:        req.SkipKernelHeaders,
 		SkipGuestAgent:           req.SkipGuestAgent,
+		SnapshotPolicy:           cloneSnapshotPolicy(req.SnapshotPolicy),
 	}
 
 	// 12. Ensure directories
@@ -540,6 +541,11 @@ func validateCreateRequest(req *CreateInstanceRequest) error {
 	}
 	if err := tags.Validate(req.Tags); err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidRequest, err)
+	}
+	if req.SnapshotPolicy != nil && req.SnapshotPolicy.Compression != nil {
+		if _, err := normalizeCompressionConfig(req.SnapshotPolicy.Compression); err != nil {
+			return err
+		}
 	}
 
 	// Validate volume attachments

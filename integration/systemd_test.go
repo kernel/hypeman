@@ -68,7 +68,7 @@ func TestSystemdMode(t *testing.T) {
 		MaxMemoryPerInstance: 0,
 	}
 
-	instanceManager := instances.NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, "", nil, nil)
+	instanceManager := instances.NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, "", instances.SnapshotPolicy{}, nil, nil)
 
 	// Cleanup any orphaned instances
 	t.Cleanup(func() {

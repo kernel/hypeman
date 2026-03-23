@@ -204,6 +204,14 @@ type captureForkManager struct {
 	err     error
 }
 
+type captureStandbyManager struct {
+	instances.Manager
+	lastID  string
+	lastReq *instances.StandbyInstanceRequest
+	result  *instances.Instance
+	err     error
+}
+
 type captureUpdateManager struct {
 	instances.Manager
 	lastID  string
@@ -213,6 +221,16 @@ type captureUpdateManager struct {
 }
 
 func (m *captureForkManager) ForkInstance(ctx context.Context, id string, req instances.ForkInstanceRequest) (*instances.Instance, error) {
+	reqCopy := req
+	m.lastID = id
+	m.lastReq = &reqCopy
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.result, nil
+}
+
+func (m *captureStandbyManager) StandbyInstance(ctx context.Context, id string, req instances.StandbyInstanceRequest) (*instances.Instance, error) {
 	reqCopy := req
 	m.lastID = id
 	m.lastReq = &reqCopy
@@ -675,6 +693,46 @@ func TestForkInstance_InvalidRequest(t *testing.T) {
 	badReq, ok := resp.(oapi.ForkInstance400JSONResponse)
 	require.True(t, ok, "expected 400 response")
 	assert.Equal(t, "invalid_request", badReq.Code)
+}
+
+func TestStandbyInstance_InvalidRequest(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	source := instances.Instance{
+		StoredMetadata: instances.StoredMetadata{
+			Id:             "standby-src",
+			Name:           "standby-src",
+			Image:          "docker.io/library/alpine:latest",
+			CreatedAt:      time.Now(),
+			HypervisorType: hypervisor.TypeCloudHypervisor,
+		},
+		State: instances.StateStopped,
+	}
+
+	mockMgr := &captureStandbyManager{
+		Manager: svc.InstanceManager,
+		err:     fmt.Errorf("%w: invalid snapshot compression level", instances.ErrInvalidRequest),
+	}
+	svc.InstanceManager = mockMgr
+
+	resp, err := svc.StandbyInstance(
+		mw.WithResolvedInstance(ctx(), source.Id, source),
+		oapi.StandbyInstanceRequestObject{
+			Id: source.Id,
+			Body: &oapi.StandbyInstanceRequest{
+				Compression: &oapi.SnapshotCompressionConfig{
+					Enabled: true,
+				},
+			},
+		},
+	)
+	require.NoError(t, err)
+
+	badReq, ok := resp.(oapi.StandbyInstance400JSONResponse)
+	require.True(t, ok, "expected 400 response")
+	assert.Equal(t, "invalid_request", badReq.Code)
+	assert.Contains(t, badReq.Message, "invalid snapshot compression level")
 }
 
 func TestForkInstance_FromRunningFlagForwarded(t *testing.T) {

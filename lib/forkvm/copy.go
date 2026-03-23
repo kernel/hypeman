@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 var ErrSparseCopyUnsupported = errors.New("sparse copy unsupported")
@@ -40,6 +41,9 @@ func CopyGuestDirectory(srcDir, dstDir string) error {
 		}
 		if d.IsDir() && shouldSkipDirectory(relPath) {
 			return filepath.SkipDir
+		}
+		if !d.IsDir() && shouldSkipRegularFile(relPath) {
+			return nil
 		}
 
 		dstPath := filepath.Join(dstDir, relPath)
@@ -84,4 +88,8 @@ func CopyGuestDirectory(srcDir, dstDir string) error {
 
 func shouldSkipDirectory(relPath string) bool {
 	return relPath == "logs"
+}
+
+func shouldSkipRegularFile(relPath string) bool {
+	return strings.HasSuffix(relPath, ".lz4.tmp") || strings.HasSuffix(relPath, ".zst.tmp")
 }

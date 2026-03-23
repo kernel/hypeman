@@ -320,6 +320,9 @@ components:
           enum: [cloud-hypervisor, firecracker, qemu, vz]
           description: Hypervisor to use for this instance. Defaults to server configuration.
           example: cloud-hypervisor
+        snapshot_policy:
+          description: Snapshot compression policy for this instance. Controls compression settings applied when creating snapshots or entering standby.
+          $ref: "#/components/schemas/SnapshotPolicy"
         skip_kernel_headers:
           type: boolean
           description: |
@@ -433,6 +436,56 @@ components:
           format: int64
           description: Total payload size in bytes
           example: 104857600
+        compression_state:
+          type: string
+          enum: [none, compressing, compressed, error]
+          description: Compression status of the snapshot payload memory file
+          example: compressed
+        compression_error:
+          type: string
+          description: Compression error message when compression_state is error
+          nullable: true
+          example: "write compressed stream: no space left on device"
+        compression:
+          $ref: "#/components/schemas/SnapshotCompressionConfig"
+        compressed_size_bytes:
+          type: integer
+          format: int64
+          nullable: true
+          description: Compressed memory payload size in bytes
+          example: 73400320
+        uncompressed_size_bytes:
+          type: integer
+          format: int64
+          nullable: true
+          description: Uncompressed memory payload size in bytes
+          example: 4294967296
+
+    SnapshotCompressionConfig:
+      type: object
+      required: [enabled]
+      properties:
+        enabled:
+          type: boolean
+          description: Enable snapshot memory compression
+          example: true
+        algorithm:
+          type: string
+          enum: [zstd, lz4]
+          description: Compression algorithm (defaults to zstd when enabled). Ignored when enabled is false.
+          example: zstd
+        level:
+          type: integer
+          minimum: 0
+          maximum: 19
+          description: Compression level. Allowed ranges are zstd=1-19 and lz4=0-9. When omitted, zstd defaults to 1 and lz4 defaults to 0. Ignored when enabled is false.
+          example: 1
+
+    SnapshotPolicy:
+      type: object
+      properties:
+        compression:
+          $ref: "#/components/schemas/SnapshotCompressionConfig"
 
     CreateSnapshotRequest:
       type: object
@@ -448,6 +501,15 @@ components:
           example: pre-upgrade
         tags:
           $ref: "#/components/schemas/Tags"
+        compression:
+          description: Compression settings to use for this snapshot. Overrides instance and server defaults.
+          $ref: "#/components/schemas/SnapshotCompressionConfig"
+
+    StandbyInstanceRequest:
+      type: object
+      properties:
+        compression:
+          $ref: "#/components/schemas/SnapshotCompressionConfig"
 
     RestoreSnapshotRequest:
       type: object
@@ -614,6 +676,8 @@ components:
           enum: [cloud-hypervisor, firecracker, qemu, vz]
           description: Hypervisor running this instance
           example: cloud-hypervisor
+        snapshot_policy:
+          $ref: "#/components/schemas/SnapshotPolicy"
     
     PathInfo:
       type: object
@@ -1947,6 +2011,12 @@ paths:
           schema:
             type: string
           description: Instance ID or name
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StandbyInstanceRequest"
       responses:
         200:
           description: Instance in standby
@@ -1954,6 +2024,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Instance"
+        400:
+          description: Invalid request payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         404:
           description: Instance not found
           content:

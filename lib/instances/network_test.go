@@ -134,7 +134,7 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 
 	// Standby instance
 	t.Log("Standing by instance...")
-	inst, err = manager.StandbyInstance(ctx, inst.Id)
+	inst, err = manager.StandbyInstance(ctx, inst.Id, StandbyInstanceRequest{})
 	require.NoError(t, err)
 	assert.Equal(t, StateStandby, inst.State)
 	assert.True(t, inst.HasSnapshot)

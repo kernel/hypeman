@@ -176,7 +176,7 @@ func createTestManager(t *testing.T, limits ResourceLimits) *manager {
 	deviceMgr := devices.NewManager(p)
 	volumeMgr := volumes.NewManager(p, 0, nil)
 
-	return NewManager(p, imageMgr, systemMgr, networkMgr, deviceMgr, volumeMgr, limits, "", nil, nil).(*manager)
+	return NewManager(p, imageMgr, systemMgr, networkMgr, deviceMgr, volumeMgr, limits, "", SnapshotPolicy{}, nil, nil).(*manager)
 }
 
 func TestResourceLimits_StructValues(t *testing.T) {

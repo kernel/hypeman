@@ -34,7 +34,7 @@ type Manager interface {
 	DeleteSnapshot(ctx context.Context, snapshotID string) error
 	ForkInstance(ctx context.Context, id string, req ForkInstanceRequest) (*Instance, error)
 	ForkSnapshot(ctx context.Context, snapshotID string, req ForkSnapshotRequest) (*Instance, error)
-	StandbyInstance(ctx context.Context, id string) (*Instance, error)
+	StandbyInstance(ctx context.Context, id string, req StandbyInstanceRequest) (*Instance, error)
 	RestoreInstance(ctx context.Context, id string) (*Instance, error)
 	RestoreSnapshot(ctx context.Context, id string, snapshotID string, req RestoreSnapshotRequest) (*Instance, error)
 	StopInstance(ctx context.Context, id string) (*Instance, error)
@@ -91,6 +91,11 @@ type manager struct {
 	egressProxy               *egressproxy.Service
 	egressProxyServiceOptions egressproxy.ServiceOptions
 	egressProxyMu             sync.Mutex
+	snapshotDefaults          SnapshotPolicy
+	compressionMu             sync.Mutex
+	compressionJobs           map[string]*compressionJob
+	nativeCodecMu             sync.Mutex
+	nativeCodecPaths          map[string]string
 
 	// Hypervisor support
 	vmStarters        map[hypervisor.Type]hypervisor.VMStarter
@@ -104,7 +109,7 @@ var platformStarters = make(map[hypervisor.Type]hypervisor.VMStarter)
 // NewManager creates a new instances manager.
 // If meter is nil, metrics are disabled.
 // defaultHypervisor specifies which hypervisor to use when not specified in requests.
-func NewManager(p *paths.Paths, imageManager images.Manager, systemManager system.Manager, networkManager network.Manager, deviceManager devices.Manager, volumeManager volumes.Manager, limits ResourceLimits, defaultHypervisor hypervisor.Type, meter metric.Meter, tracer trace.Tracer, memoryPolicy ...guestmemory.Policy) Manager {
+func NewManager(p *paths.Paths, imageManager images.Manager, systemManager system.Manager, networkManager network.Manager, deviceManager devices.Manager, volumeManager volumes.Manager, limits ResourceLimits, defaultHypervisor hypervisor.Type, snapshotDefaults SnapshotPolicy, meter metric.Meter, tracer trace.Tracer, memoryPolicy ...guestmemory.Policy) Manager {
 	// Validate and default the hypervisor type
 	if defaultHypervisor == "" {
 		defaultHypervisor = hypervisor.TypeCloudHypervisor
@@ -139,6 +144,9 @@ func NewManager(p *paths.Paths, imageManager images.Manager, systemManager syste
 		meter:             meter,
 		tracer:            tracer,
 		guestMemoryPolicy: policy,
+		snapshotDefaults:  snapshotDefaults,
+		compressionJobs:   make(map[string]*compressionJob),
+		nativeCodecPaths:  make(map[string]string),
 	}
 
 	// Initialize metrics if meter is provided
@@ -280,11 +288,11 @@ func (m *manager) ForkSnapshot(ctx context.Context, snapshotID string, req ForkS
 }
 
 // StandbyInstance puts an instance in standby (pause, snapshot, delete VMM)
-func (m *manager) StandbyInstance(ctx context.Context, id string) (*Instance, error) {
+func (m *manager) StandbyInstance(ctx context.Context, id string, req StandbyInstanceRequest) (*Instance, error) {
 	lock := m.getInstanceLock(id)
 	lock.Lock()
 	defer lock.Unlock()
-	return m.standbyInstance(ctx, id)
+	return m.standbyInstance(ctx, id, req, false)
 }
 
 // RestoreInstance restores an instance from standby

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/c2h5oh/datasize"
+	"github.com/kernel/hypeman/lib/snapshot"
 	"github.com/knadh/koanf/parsers/yaml"
 	"github.com/knadh/koanf/providers/env"
 	"github.com/knadh/koanf/providers/file"
@@ -191,6 +192,18 @@ type HypervisorActiveBallooningConfig struct {
 	PerVmCooldown                         string `koanf:"per_vm_cooldown"`
 }
 
+// SnapshotCompressionDefaultConfig holds default snapshot compression settings.
+type SnapshotCompressionDefaultConfig struct {
+	Enabled   bool   `koanf:"enabled"`
+	Algorithm string `koanf:"algorithm"`
+	Level     *int   `koanf:"level"`
+}
+
+// SnapshotConfig holds snapshot defaults.
+type SnapshotConfig struct {
+	CompressionDefault SnapshotCompressionDefaultConfig `koanf:"compression_default"`
+}
+
 // GPUConfig holds GPU-related settings.
 type GPUConfig struct {
 	ProfileCacheTTL string `koanf:"profile_cache_ttl"`
@@ -217,6 +230,7 @@ type Config struct {
 	Oversubscription OversubscriptionConfig `koanf:"oversubscription"`
 	Capacity         CapacityConfig         `koanf:"capacity"`
 	Hypervisor       HypervisorConfig       `koanf:"hypervisor"`
+	Snapshot         SnapshotConfig         `koanf:"snapshot"`
 	GPU              GPUConfig              `koanf:"gpu"`
 }
 
@@ -360,6 +374,14 @@ func defaultConfig() *Config {
 			},
 		},
 
+		Snapshot: SnapshotConfig{
+			CompressionDefault: SnapshotCompressionDefaultConfig{
+				Enabled:   false,
+				Algorithm: "zstd",
+				Level:     intPtr(snapshot.DefaultSnapshotCompressionZstdLevel),
+			},
+		},
+
 		GPU: GPUConfig{
 			ProfileCacheTTL: "30m",
 		},
@@ -472,6 +494,29 @@ func (c *Config) Validate() error {
 	if c.Build.Timeout <= 0 {
 		return fmt.Errorf("build.timeout must be positive, got %d", c.Build.Timeout)
 	}
+	algorithm := strings.ToLower(c.Snapshot.CompressionDefault.Algorithm)
+	c.Snapshot.CompressionDefault.Algorithm = algorithm
+	if c.Snapshot.CompressionDefault.Enabled {
+		switch algorithm {
+		case "", "zstd", "lz4":
+		default:
+			return fmt.Errorf("snapshot.compression_default.algorithm must be one of zstd or lz4, got %q", algorithm)
+		}
+		if c.Snapshot.CompressionDefault.Level != nil {
+			level := *c.Snapshot.CompressionDefault.Level
+			switch algorithm {
+			case "", "zstd":
+				if level < snapshot.MinSnapshotCompressionZstdLevel || level > snapshot.MaxSnapshotCompressionZstdLevel {
+					return fmt.Errorf("snapshot.compression_default.level must be between %d and %d for zstd, got %d", snapshot.MinSnapshotCompressionZstdLevel, snapshot.MaxSnapshotCompressionZstdLevel, level)
+				}
+			case "lz4":
+				if level < snapshot.MinSnapshotCompressionLz4Level || level > snapshot.MaxSnapshotCompressionLz4Level {
+					return fmt.Errorf("snapshot.compression_default.level must be between %d and %d for lz4, got %d", snapshot.MinSnapshotCompressionLz4Level, snapshot.MaxSnapshotCompressionLz4Level, level)
+				}
+			}
+		}
+		c.Snapshot.CompressionDefault.Algorithm = algorithm
+	}
 	if c.Hypervisor.Memory.KernelPageInitMode != "performance" && c.Hypervisor.Memory.KernelPageInitMode != "hardened" {
 		return fmt.Errorf("hypervisor.memory.kernel_page_init_mode must be one of {performance,hardened}, got %q", c.Hypervisor.Memory.KernelPageInitMode)
 	}
@@ -525,4 +570,8 @@ func validateDuration(field string, value string) error {
 		return fmt.Errorf("%s must be a valid duration, got %q: %w", field, value, err)
 	}
 	return nil
+}
+
+func intPtr(v int) *int {
+	return &v
 }
