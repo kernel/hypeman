@@ -2,6 +2,7 @@ package images
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -223,41 +224,43 @@ func listTags(p *paths.Paths, repository string) ([]string, error) {
 	return tags, nil
 }
 
-// listAllTags returns all tags across all repositories
-func listAllTags(p *paths.Paths) ([]*imageMetadata, error) {
+// listAllMetadata returns one metadata record per digest across all repositories.
+// Tagged images are discovered through tag symlinks, and digest-only images are
+// discovered directly from their metadata.json files.
+func listAllMetadata(p *paths.Paths) ([]*imageMetadata, error) {
 	imagesDir := p.ImagesDir()
-	var metas []*imageMetadata
+	seen := make(map[string]struct{})
+	metas := make([]*imageMetadata, 0)
 
-	// Walk the images directory to find all repositories
 	err := filepath.Walk(imagesDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil // Skip errors
 		}
 
-		// Check if this is a symlink (tag)
-		if info.Mode()&os.ModeSymlink != 0 {
-			// Read the symlink to get digest hex
+		switch {
+		case info.Mode()&os.ModeSymlink != 0:
 			digestHex, err := os.Readlink(path)
 			if err != nil {
 				return nil // Skip invalid symlinks
 			}
 
-			// Get repository from path
-			relPath, err := filepath.Rel(imagesDir, filepath.Dir(path))
+			repository, err := filepath.Rel(imagesDir, filepath.Dir(path))
 			if err != nil {
 				return nil
 			}
 
-			// Read metadata for this digest
-			meta, err := readMetadata(p, relPath, digestHex)
+			return appendMetadataIfNew(p, repository, digestHex, seen, &metas)
+		case !info.IsDir() && info.Name() == "metadata.json":
+			digestHex := filepath.Base(filepath.Dir(path))
+			repository, err := filepath.Rel(imagesDir, filepath.Dir(filepath.Dir(path)))
 			if err != nil {
-				return nil // Skip if metadata can't be read
+				return nil
 			}
 
-			metas = append(metas, meta)
+			return appendMetadataIfNew(p, repository, digestHex, seen, &metas)
+		default:
+			return nil
 		}
-
-		return nil
 	})
 
 	if err != nil && !os.IsNotExist(err) {
@@ -265,6 +268,22 @@ func listAllTags(p *paths.Paths) ([]*imageMetadata, error) {
 	}
 
 	return metas, nil
+}
+
+func appendMetadataIfNew(p *paths.Paths, repository, digestHex string, seen map[string]struct{}, metas *[]*imageMetadata) error {
+	key := repository + "@" + digestHex
+	if _, ok := seen[key]; ok {
+		return nil
+	}
+
+	meta, err := readMetadata(p, repository, digestHex)
+	if err != nil {
+		return nil // Skip if metadata can't be read
+	}
+
+	seen[key] = struct{}{}
+	*metas = append(*metas, meta)
+	return nil
 }
 
 // digestExists checks if a digest directory exists
@@ -312,6 +331,28 @@ func countTagsForDigest(p *paths.Paths, repository, digestHex string) (int, erro
 		}
 	}
 	return count, nil
+}
+
+func deleteTagsForDigest(p *paths.Paths, repository, digestHex string) error {
+	tags, err := listTags(p, repository)
+	if err != nil {
+		return err
+	}
+
+	for _, tag := range tags {
+		target, err := resolveTag(p, repository, tag)
+		if err != nil {
+			continue
+		}
+		if target != digestHex {
+			continue
+		}
+		if err := deleteTag(p, repository, tag); err != nil && !errors.Is(err, ErrNotFound) {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // deleteDigest removes a digest directory and all its contents

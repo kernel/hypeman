@@ -299,7 +299,9 @@ func (c *controller) reconcile(ctx context.Context, req reconcileRequest) (Manua
 			action.Status = "planned"
 			action.TargetGuestMemoryBytes = appliedTarget
 		}
-		action.AppliedReclaimBytes = candidate.vm.AssignedMemoryBytes - action.TargetGuestMemoryBytes
+		if !req.dryRun {
+			action.AppliedReclaimBytes = candidate.vm.AssignedMemoryBytes - action.TargetGuestMemoryBytes
+		}
 		resp.AppliedReclaimBytes += action.AppliedReclaimBytes
 		resp.Actions = append(resp.Actions, action)
 

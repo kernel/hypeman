@@ -1,12 +1,15 @@
 package api
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/oapi"
+	"github.com/kernel/hypeman/lib/paths"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -23,6 +26,38 @@ func TestListImages_Empty(t *testing.T) {
 	assert.Empty(t, list)
 }
 
+func TestListImages_FilterByTagsIncludesDigestOnlyImages(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	const digestRef = "docker.io/library/alpine@sha256:029a752048e32e843bd6defe3841186fb8d19a28dae8ec287f433bb9d6d1ad85"
+	seedReadyDigestOnlyImage(t, svc, digestRef, map[string]string{
+		"qa":      "pr43-qa-20260323134902",
+		"surface": "image",
+	})
+
+	getResp, err := svc.GetImage(ctxWithImage(svc, digestRef), oapi.GetImageRequestObject{Name: digestRef})
+	require.NoError(t, err)
+
+	gotImage, ok := getResp.(oapi.GetImage200JSONResponse)
+	require.True(t, ok, "expected 200 response")
+	require.NotNil(t, gotImage.Tags)
+	require.Equal(t, "pr43-qa-20260323134902", (*gotImage.Tags)["qa"])
+
+	filter := oapi.Tags{
+		"qa": "pr43-qa-20260323134902",
+	}
+	listResp, err := svc.ListImages(ctx(), oapi.ListImagesRequestObject{
+		Params: oapi.ListImagesParams{Tags: &filter},
+	})
+	require.NoError(t, err)
+
+	list, ok := listResp.(oapi.ListImages200JSONResponse)
+	require.True(t, ok, "expected 200 response")
+	require.Len(t, list, 1, "digest-only images with matching tags should be listed")
+	require.Equal(t, digestRef, list[0].Name)
+}
+
 func TestGetImage_NotFound(t *testing.T) {
 	t.Parallel()
 	svc := newTestService(t)
@@ -31,6 +66,22 @@ func TestGetImage_NotFound(t *testing.T) {
 	// For this test, we call the manager directly to verify the error.
 	_, err := svc.ImageManager.GetImage(ctx(), "non-existent:latest")
 	require.Error(t, err)
+}
+
+func TestDeleteImage_DigestOnlyImageDoesNotInternalError(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	const digestRef = "docker.io/library/alpine@sha256:029a752048e32e843bd6defe3841186fb8d19a28dae8ec287f433bb9d6d1ad85"
+	seedReadyDigestOnlyImage(t, svc, digestRef, map[string]string{
+		"qa": "pr43-delete-20260323134902",
+	})
+
+	resp, err := svc.DeleteImage(ctxWithImage(svc, digestRef), oapi.DeleteImageRequestObject{Name: digestRef})
+	require.NoError(t, err)
+
+	_, ok := resp.(oapi.DeleteImage204Response)
+	require.True(t, ok, "expected deleting an existing digest-only image not to return internal_error")
 }
 
 func TestCreateImage_Async(t *testing.T) {
@@ -312,4 +363,37 @@ func formatQueuePos(pos *int) string {
 		return "none"
 	}
 	return fmt.Sprintf("%d", *pos)
+}
+
+func seedReadyDigestOnlyImage(t *testing.T, svc *ApiService, imageRef string, imageTags map[string]string) {
+	t.Helper()
+
+	ref, err := images.ParseNormalizedRef(imageRef)
+	require.NoError(t, err)
+	require.True(t, ref.IsDigest(), "test helper expects a digest reference")
+
+	p := paths.New(svc.Config.DataDir)
+	digestDir := p.ImageDigestDir(ref.Repository(), ref.DigestHex())
+	require.NoError(t, os.MkdirAll(digestDir, 0o755))
+	require.NoError(t, os.WriteFile(p.ImageDigestPath(ref.Repository(), ref.DigestHex()), []byte("rootfs"), 0o644))
+
+	meta := struct {
+		Name      string            `json:"name"`
+		Digest    string            `json:"digest"`
+		Status    string            `json:"status"`
+		SizeBytes int64             `json:"size_bytes"`
+		Tags      map[string]string `json:"tags,omitempty"`
+		CreatedAt time.Time         `json:"created_at"`
+	}{
+		Name:      imageRef,
+		Digest:    "sha256:" + ref.DigestHex(),
+		Status:    "ready",
+		SizeBytes: int64(len("rootfs")),
+		Tags:      imageTags,
+		CreatedAt: time.Now().UTC(),
+	}
+
+	data, err := json.Marshal(meta)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(p.ImageMetadata(ref.Repository(), ref.DigestHex()), data, 0o644))
 }
