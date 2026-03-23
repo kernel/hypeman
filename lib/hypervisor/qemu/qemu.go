@@ -17,6 +17,12 @@ type QEMU struct {
 	socketPath string // for self-removal from pool on error
 }
 
+var balloonTargetCache hypervisor.BalloonTargetCache
+
+func clearBalloonTargetCache(socketPath string) {
+	balloonTargetCache.Delete(socketPath)
+}
+
 // New returns a QEMU client for the given socket path.
 // Uses a connection pool to ensure only one connection per socket exists.
 func New(socketPath string) (*QEMU, error) {
@@ -44,6 +50,7 @@ func capabilities() hypervisor.Capabilities {
 	return hypervisor.Capabilities{
 		SupportsSnapshot:            true,  // Uses QMP migrate file:// for snapshot
 		SupportsHotplugMemory:       false, // Not implemented - balloon not configured
+		SupportsBalloonControl:      true,
 		SupportsPause:               true,
 		SupportsVsock:               true,
 		SupportsGPUPassthrough:      true,
@@ -60,6 +67,7 @@ func (q *QEMU) DeleteVM(ctx context.Context) error {
 		Remove(q.socketPath)
 		return err
 	}
+	clearBalloonTargetCache(q.socketPath)
 	return nil
 }
 
@@ -71,6 +79,7 @@ func (q *QEMU) Shutdown(ctx context.Context) error {
 	}
 	// Connection is gone after quit, remove from pool
 	Remove(q.socketPath)
+	clearBalloonTargetCache(q.socketPath)
 	return nil
 }
 
@@ -174,4 +183,30 @@ func (q *QEMU) ResizeMemory(ctx context.Context, bytes int64) error {
 // Not implemented in first pass.
 func (q *QEMU) ResizeMemoryAndWait(ctx context.Context, bytes int64, timeout time.Duration) error {
 	return fmt.Errorf("memory resize not supported by QEMU implementation")
+}
+
+func (q *QEMU) SetTargetGuestMemoryBytes(ctx context.Context, bytes int64) error {
+	if bytes < 0 {
+		return fmt.Errorf("target guest memory %d must be non-negative", bytes)
+	}
+	if err := q.client.Balloon(bytes); err != nil {
+		Remove(q.socketPath)
+		return fmt.Errorf("set balloon target: %w", err)
+	}
+	balloonTargetCache.Store(q.socketPath, bytes)
+	return nil
+}
+
+func (q *QEMU) GetTargetGuestMemoryBytes(ctx context.Context) (int64, error) {
+	_ = ctx
+
+	if target, ok := balloonTargetCache.Load(q.socketPath); ok {
+		return target, nil
+	}
+
+	config, err := loadVMConfig(filepath.Dir(q.socketPath))
+	if err != nil {
+		return 0, fmt.Errorf("read qemu guest memory target: %w", err)
+	}
+	return config.MemoryBytes, nil
 }

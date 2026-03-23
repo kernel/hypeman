@@ -157,8 +157,12 @@ resources:
       gpu_resource_status: "#/components/schemas/GPUResourceStatus"
       gpu_profile: "#/components/schemas/GPUProfile"
       passthrough_device: "#/components/schemas/PassthroughDevice"
+      memory_reclaim_request: "#/components/schemas/MemoryReclaimRequest"
+      memory_reclaim_action: "#/components/schemas/MemoryReclaimAction"
+      memory_reclaim_response: "#/components/schemas/MemoryReclaimResponse"
     methods:
       get: get /resources
+      reclaim_memory: post /resources/memory/reclaim
 
   builds:
     models:

@@ -327,6 +327,7 @@ func (m *manager) restoreFromSnapshot(
 	if err != nil {
 		return 0, nil, fmt.Errorf("restore vm: %w", err)
 	}
+	pid = resolveRuntimeHypervisorPID(log, stored.SocketPath, pid)
 
 	log.DebugContext(ctx, "VM restored from snapshot successfully", "instance_id", stored.Id, "pid", pid)
 	return pid, hv, nil

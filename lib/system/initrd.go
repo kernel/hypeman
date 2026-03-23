@@ -75,8 +75,9 @@ func (m *manager) buildInitrd(ctx context.Context, arch string) (string, error) 
 		return "", fmt.Errorf("download kernel headers: %w", err)
 	}
 
-	// Generate timestamp for this build
-	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
+	// Use a unique build identifier so concurrent rebuilds against a shared
+	// prewarmed cache do not collide on the output directory.
+	timestamp := strconv.FormatInt(time.Now().UnixNano(), 10)
 
 	// Package as cpio.gz
 	outputPath := m.paths.SystemInitrdTimestamp(timestamp, arch)
@@ -95,12 +96,9 @@ func (m *manager) buildInitrd(ctx context.Context, arch string) (string, error) 
 		return "", fmt.Errorf("write hash file: %w", err)
 	}
 
-	// Update 'latest' symlink
+	// Update 'latest' symlink atomically so parallel rebuilds can safely race.
 	latestLink := m.paths.SystemInitrdLatest(arch)
-	// Remove old symlink if it exists
-	os.Remove(latestLink)
-	// Create new symlink (relative path)
-	if err := os.Symlink(timestamp, latestLink); err != nil {
+	if err := replaceSymlinkAtomic(latestLink, timestamp); err != nil {
 		return "", fmt.Errorf("create latest symlink: %w", err)
 	}
 

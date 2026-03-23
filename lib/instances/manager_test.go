@@ -112,6 +112,7 @@ func waitForVMReady(ctx context.Context, socketPath string, timeout time.Duratio
 
 // waitForInstanceState polls GetInstance until the expected state is observed or timeout expires.
 func waitForInstanceState(ctx context.Context, mgr Manager, instanceID string, expected State, timeout time.Duration) (*Instance, error) {
+	timeout = integrationTestTimeout(timeout)
 	deadline := time.Now().Add(timeout)
 	lastState := StateUnknown
 	lastErr := error(nil)
@@ -134,6 +135,13 @@ func waitForInstanceState(ctx context.Context, mgr Manager, instanceID string, e
 		return nil, fmt.Errorf("instance %s did not reach %s within %v (last error: %w)", instanceID, expected, timeout, lastErr)
 	}
 	return nil, fmt.Errorf("instance %s did not reach %s within %v (last state: %s)", instanceID, expected, timeout, lastState)
+}
+
+func integrationTestTimeout(timeout time.Duration) time.Duration {
+	if os.Getenv("CI") == "true" && timeout < 45*time.Second {
+		return 45 * time.Second
+	}
+	return timeout
 }
 
 // waitForLogMessage polls instance logs until the message appears or times out

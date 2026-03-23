@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/snapshot"
+	"github.com/c2h5oh/datasize"
 	"github.com/knadh/koanf/parsers/yaml"
 	"github.com/knadh/koanf/providers/env"
 	"github.com/knadh/koanf/providers/file"
@@ -171,10 +172,24 @@ type HypervisorConfig struct {
 
 // HypervisorMemoryConfig holds guest memory management settings.
 type HypervisorMemoryConfig struct {
-	Enabled            bool   `koanf:"enabled"`
-	KernelPageInitMode string `koanf:"kernel_page_init_mode"`
-	ReclaimEnabled     bool   `koanf:"reclaim_enabled"`
-	VZBalloonRequired  bool   `koanf:"vz_balloon_required"`
+	Enabled            bool                             `koanf:"enabled"`
+	KernelPageInitMode string                           `koanf:"kernel_page_init_mode"`
+	ReclaimEnabled     bool                             `koanf:"reclaim_enabled"`
+	VZBalloonRequired  bool                             `koanf:"vz_balloon_required"`
+	ActiveBallooning   HypervisorActiveBallooningConfig `koanf:"active_ballooning"`
+}
+
+// HypervisorActiveBallooningConfig holds runtime host-driven reclaim settings.
+type HypervisorActiveBallooningConfig struct {
+	Enabled                               bool   `koanf:"enabled"`
+	PollInterval                          string `koanf:"poll_interval"`
+	PressureHighWatermarkAvailablePercent int    `koanf:"pressure_high_watermark_available_percent"`
+	PressureLowWatermarkAvailablePercent  int    `koanf:"pressure_low_watermark_available_percent"`
+	ProtectedFloorPercent                 int    `koanf:"protected_floor_percent"`
+	ProtectedFloorMinBytes                string `koanf:"protected_floor_min_bytes"`
+	MinAdjustmentBytes                    string `koanf:"min_adjustment_bytes"`
+	PerVmMaxStepBytes                     string `koanf:"per_vm_max_step_bytes"`
+	PerVmCooldown                         string `koanf:"per_vm_cooldown"`
 }
 
 // SnapshotCompressionDefaultConfig holds default snapshot compression settings.
@@ -345,6 +360,17 @@ func defaultConfig() *Config {
 				KernelPageInitMode: "hardened",
 				ReclaimEnabled:     true,
 				VZBalloonRequired:  true,
+				ActiveBallooning: HypervisorActiveBallooningConfig{
+					Enabled:                               false,
+					PollInterval:                          "2s",
+					PressureHighWatermarkAvailablePercent: 10,
+					PressureLowWatermarkAvailablePercent:  15,
+					ProtectedFloorPercent:                 50,
+					ProtectedFloorMinBytes:                "536870912",
+					MinAdjustmentBytes:                    "67108864",
+					PerVmMaxStepBytes:                     "268435456",
+					PerVmCooldown:                         "5s",
+				},
 			},
 		},
 
@@ -493,6 +519,55 @@ func (c *Config) Validate() error {
 	}
 	if c.Hypervisor.Memory.KernelPageInitMode != "performance" && c.Hypervisor.Memory.KernelPageInitMode != "hardened" {
 		return fmt.Errorf("hypervisor.memory.kernel_page_init_mode must be one of {performance,hardened}, got %q", c.Hypervisor.Memory.KernelPageInitMode)
+	}
+	if err := validateDuration("hypervisor.memory.active_ballooning.poll_interval", c.Hypervisor.Memory.ActiveBallooning.PollInterval); err != nil {
+		return err
+	}
+	if err := validateDuration("hypervisor.memory.active_ballooning.per_vm_cooldown", c.Hypervisor.Memory.ActiveBallooning.PerVmCooldown); err != nil {
+		return err
+	}
+	if err := validateByteSize("hypervisor.memory.active_ballooning.protected_floor_min_bytes", c.Hypervisor.Memory.ActiveBallooning.ProtectedFloorMinBytes); err != nil {
+		return err
+	}
+	if err := validateByteSize("hypervisor.memory.active_ballooning.min_adjustment_bytes", c.Hypervisor.Memory.ActiveBallooning.MinAdjustmentBytes); err != nil {
+		return err
+	}
+	if err := validateByteSize("hypervisor.memory.active_ballooning.per_vm_max_step_bytes", c.Hypervisor.Memory.ActiveBallooning.PerVmMaxStepBytes); err != nil {
+		return err
+	}
+	ab := c.Hypervisor.Memory.ActiveBallooning
+	if ab.PressureHighWatermarkAvailablePercent <= 0 || ab.PressureHighWatermarkAvailablePercent >= 100 {
+		return fmt.Errorf("hypervisor.memory.active_ballooning.pressure_high_watermark_available_percent must be between 1 and 99, got %d", ab.PressureHighWatermarkAvailablePercent)
+	}
+	if ab.PressureLowWatermarkAvailablePercent <= 0 || ab.PressureLowWatermarkAvailablePercent >= 100 {
+		return fmt.Errorf("hypervisor.memory.active_ballooning.pressure_low_watermark_available_percent must be between 1 and 99, got %d", ab.PressureLowWatermarkAvailablePercent)
+	}
+	if ab.PressureLowWatermarkAvailablePercent <= ab.PressureHighWatermarkAvailablePercent {
+		return fmt.Errorf("hypervisor.memory.active_ballooning.pressure_low_watermark_available_percent must be greater than pressure_high_watermark_available_percent")
+	}
+	if ab.ProtectedFloorPercent <= 0 || ab.ProtectedFloorPercent >= 100 {
+		return fmt.Errorf("hypervisor.memory.active_ballooning.protected_floor_percent must be between 1 and 99, got %d", ab.ProtectedFloorPercent)
+	}
+	return nil
+}
+
+func validateByteSize(field string, value string) error {
+	if strings.TrimSpace(value) == "" {
+		return fmt.Errorf("%s must not be empty", field)
+	}
+	var size datasize.ByteSize
+	if err := size.UnmarshalText([]byte(value)); err != nil {
+		return fmt.Errorf("%s must be a valid byte size, got %q: %w", field, value, err)
+	}
+	return nil
+}
+
+func validateDuration(field string, value string) error {
+	if strings.TrimSpace(value) == "" {
+		return fmt.Errorf("%s must not be empty", field)
+	}
+	if _, err := time.ParseDuration(value); err != nil {
+		return fmt.Errorf("%s must be a valid duration, got %q: %w", field, value, err)
 	}
 	return nil
 }

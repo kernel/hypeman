@@ -67,7 +67,7 @@ func TestCpToAndFromInstance(t *testing.T) {
 	// Wait for guest-agent to be ready
 	t.Log("Waiting for guest-agent to start...")
 	agentReady := false
-	agentTimeout := time.After(15 * time.Second)
+	agentTimeout := time.After(integrationTestTimeout(15 * time.Second))
 	agentTicker := time.NewTicker(500 * time.Millisecond)
 	defer agentTicker.Stop()
 
@@ -207,7 +207,7 @@ func TestCpDirectoryToInstance(t *testing.T) {
 	// Wait for guest-agent
 	t.Log("Waiting for guest-agent...")
 	agentReady := false
-	agentTimeout := time.After(15 * time.Second)
+	agentTimeout := time.After(integrationTestTimeout(15 * time.Second))
 	agentTicker := time.NewTicker(500 * time.Millisecond)
 	defer agentTicker.Stop()
 

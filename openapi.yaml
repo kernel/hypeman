@@ -1474,6 +1474,111 @@ components:
           items:
             $ref: "#/components/schemas/ResourceAllocation"
 
+    MemoryReclaimRequest:
+      type: object
+      required: [reclaim_bytes]
+      properties:
+        reclaim_bytes:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Total bytes of guest memory to reclaim across eligible VMs.
+          example: 536870912
+        hold_for:
+          type: string
+          description: How long to keep the reclaim hold active (Go duration string). Defaults to 5m when omitted.
+          example: 5m
+        dry_run:
+          type: boolean
+          description: Calculate a reclaim plan without applying balloon changes or creating a hold.
+          default: false
+        reason:
+          type: string
+          maxLength: 256
+          description: Optional operator-provided reason attached to logs and traces.
+          example: prepare for another vm start
+
+    MemoryReclaimAction:
+      type: object
+      required:
+        - instance_id
+        - instance_name
+        - hypervisor
+        - assigned_memory_bytes
+        - protected_floor_bytes
+        - previous_target_guest_memory_bytes
+        - planned_target_guest_memory_bytes
+        - target_guest_memory_bytes
+        - applied_reclaim_bytes
+        - status
+      properties:
+        instance_id:
+          type: string
+        instance_name:
+          type: string
+        hypervisor:
+          type: string
+          enum: [cloud-hypervisor, firecracker, qemu, vz]
+        assigned_memory_bytes:
+          type: integer
+          format: int64
+        protected_floor_bytes:
+          type: integer
+          format: int64
+        previous_target_guest_memory_bytes:
+          type: integer
+          format: int64
+        planned_target_guest_memory_bytes:
+          type: integer
+          format: int64
+        target_guest_memory_bytes:
+          type: integer
+          format: int64
+        applied_reclaim_bytes:
+          type: integer
+          format: int64
+        status:
+          type: string
+          description: Result of this VM's reclaim step.
+          example: applied
+        error:
+          type: string
+          description: Error message when status is error or unsupported.
+
+    MemoryReclaimResponse:
+      type: object
+      required:
+        - requested_reclaim_bytes
+        - planned_reclaim_bytes
+        - applied_reclaim_bytes
+        - host_available_bytes
+        - host_pressure_state
+        - actions
+      properties:
+        requested_reclaim_bytes:
+          type: integer
+          format: int64
+        planned_reclaim_bytes:
+          type: integer
+          format: int64
+        applied_reclaim_bytes:
+          type: integer
+          format: int64
+        hold_until:
+          type: string
+          format: date-time
+          description: When the current manual reclaim hold expires.
+        host_available_bytes:
+          type: integer
+          format: int64
+        host_pressure_state:
+          type: string
+          enum: [healthy, pressure]
+        actions:
+          type: array
+          items:
+            $ref: "#/components/schemas/MemoryReclaimAction"
+
 paths:
   /health:
     get:
@@ -1504,6 +1609,48 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Resources"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /resources/memory/reclaim:
+    post:
+      summary: Trigger proactive guest memory reclaim
+      description: |
+        Requests runtime balloon inflation across reclaim-eligible guests. The same
+        planner used by host-pressure reclaim is applied, including protected floors
+        and per-VM step limits.
+      operationId: reclaimMemory
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MemoryReclaimRequest"
+      responses:
+        200:
+          description: Reclaim plan and applied results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemoryReclaimResponse"
+        400:
+          description: Invalid reclaim request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        401:
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         500:
           description: Internal server error
           content:

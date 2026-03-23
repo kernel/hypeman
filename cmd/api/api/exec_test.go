@@ -68,7 +68,7 @@ func TestExecInstanceNonTTY(t *testing.T) {
 	// Wait for nginx to be fully started (poll console logs)
 	t.Log("Waiting for nginx to start...")
 	nginxReady := false
-	nginxTimeout := time.After(15 * time.Second)
+	nginxTimeout := time.After(integrationTestTimeout(15 * time.Second))
 	nginxTicker := time.NewTicker(500 * time.Millisecond)
 	defer nginxTicker.Stop()
 
@@ -227,7 +227,7 @@ func TestExecWithDebianMinimal(t *testing.T) {
 	// This is the key difference: we wait for guest-agent, not the app (which exits immediately)
 	t.Log("Waiting for guest-agent to start...")
 	execAgentReady := false
-	agentTimeout := time.After(15 * time.Second)
+	agentTimeout := time.After(integrationTestTimeout(15 * time.Second))
 	agentTicker := time.NewTicker(500 * time.Millisecond)
 	defer agentTicker.Stop()
 
