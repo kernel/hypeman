@@ -176,4 +176,3 @@ func mustReadDarwinRSSBytes(t *testing.T, pid int) int64 {
 	require.NoError(t, err)
 	return kb * 1024
 }
-

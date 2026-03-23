@@ -378,4 +378,3 @@ func getFirecrackerVMConfig(socketPath string) (*firecrackerVMConfig, error) {
 	}
 	return &cfg, nil
 }
-
