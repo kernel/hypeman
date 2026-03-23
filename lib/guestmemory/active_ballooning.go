@@ -62,9 +62,10 @@ func (c ActiveBallooningConfig) Normalize() ActiveBallooningConfig {
 		c.PressureLowWatermarkAvailablePercent = d.PressureLowWatermarkAvailablePercent
 	}
 	if c.PressureLowWatermarkAvailablePercent <= c.PressureHighWatermarkAvailablePercent {
-		c.PressureLowWatermarkAvailablePercent = d.PressureLowWatermarkAvailablePercent
-		if c.PressureLowWatermarkAvailablePercent <= c.PressureHighWatermarkAvailablePercent {
+		c.PressureLowWatermarkAvailablePercent = c.PressureHighWatermarkAvailablePercent + 1
+		if c.PressureLowWatermarkAvailablePercent >= 100 {
 			c.PressureHighWatermarkAvailablePercent = d.PressureHighWatermarkAvailablePercent
+			c.PressureLowWatermarkAvailablePercent = d.PressureLowWatermarkAvailablePercent
 		}
 	}
 	if c.ProtectedFloorPercent <= 0 || c.ProtectedFloorPercent >= 100 {

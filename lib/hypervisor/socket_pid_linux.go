@@ -16,17 +16,13 @@ import (
 func ResolveProcessPID(socketPath string) (int, error) {
 	socketRef, err := socketRefForPath(socketPath)
 	if err == nil {
-		if pid, err := pidBySocketRef(socketRef); err == nil {
+		if pid, refErr := pidBySocketRef(socketRef); refErr == nil {
 			return pid, nil
 		}
 	}
 
-	if pid, err := pidByCmdline(socketPath); err == nil {
+	if pid, cmdErr := pidByCmdline(socketPath); cmdErr == nil {
 		return pid, nil
-	}
-
-	if err != nil {
-		return 0, err
 	}
 
 	return 0, fmt.Errorf("resolve process pid for socket %s: no owning process found", socketPath)
@@ -86,8 +82,10 @@ func pidByCmdline(socketPath string) (int, error) {
 		if err != nil || len(cmdline) == 0 {
 			continue
 		}
-		if strings.Contains(string(cmdline), socketPath) {
-			return pid, nil
+		for _, arg := range strings.Split(string(cmdline), "\x00") {
+			if arg == socketPath {
+				return pid, nil
+			}
 		}
 	}
 

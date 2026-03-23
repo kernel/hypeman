@@ -80,7 +80,7 @@ func (c *controller) reconcile(ctx context.Context, req reconcileRequest) (Manua
 		sampleSpan.SetStatus(codes.Error, err.Error())
 		sampleSpan.End()
 		c.recordReconcileError(ctx, trigger, start, span, err)
-		return ManualReclaimResponse{}, err
+		return ManualReclaimResponse{}, fmt.Errorf("sample host pressure: %w", err)
 	}
 	sampleSpan.SetAttributes(
 		attribute.Int64("host_available_bytes", sample.AvailableBytes),
@@ -104,8 +104,7 @@ func (c *controller) reconcile(ctx context.Context, req reconcileRequest) (Manua
 	}
 
 	if req.force && !req.dryRun {
-		switch {
-		case req.requestedReclaim <= 0 && req.holdFor <= 0:
+		if req.holdFor <= 0 {
 			if state.manualHold != nil {
 				logFromContext(ctx, c.log).InfoContext(ctx,
 					"guest memory manual reclaim hold cleared",
@@ -113,15 +112,7 @@ func (c *controller) reconcile(ctx context.Context, req reconcileRequest) (Manua
 				)
 			}
 			state.manualHold = nil
-		case req.requestedReclaim > 0 && req.holdFor <= 0:
-			if state.manualHold != nil {
-				logFromContext(ctx, c.log).InfoContext(ctx,
-					"guest memory manual reclaim hold cleared",
-					"operation", "manual_reclaim",
-				)
-			}
-			state.manualHold = nil
-		default:
+		} else {
 			state.manualHold = &manualHold{
 				reclaimBytes: req.requestedReclaim,
 				until:        now.Add(req.holdFor),
@@ -319,6 +310,17 @@ func (c *controller) reconcile(ctx context.Context, req reconcileRequest) (Manua
 			summary.unchangedCount++
 		}
 	}
+	// Prune lastApplied entries for VMs no longer in the candidate list.
+	activeVMs := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		activeVMs[candidate.vm.ID] = struct{}{}
+	}
+	for vmID := range state.lastApplied {
+		if _, ok := activeVMs[vmID]; !ok {
+			delete(state.lastApplied, vmID)
+		}
+	}
+
 	applySpan.SetAttributes(
 		attribute.Int("eligible_vms", summary.eligibleVMs),
 		attribute.Int("applied_vms", summary.appliedCount),

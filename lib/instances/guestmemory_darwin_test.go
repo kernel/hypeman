@@ -69,7 +69,7 @@ func TestGuestMemoryPolicyVZ(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, instMeta.HypervisorPID)
 	assertLowIdleVZHostMemoryFootprint(t, *instMeta.HypervisorPID, 192*1024)
-	assertActiveBallooningLifecycleVZ(t, ctx, inst)
+	assertActiveBallooningLifecycle(t, ctx, inst)
 }
 
 func forceEnableGuestMemoryPolicyForVZTest(mgr *manager) {
@@ -177,29 +177,3 @@ func mustReadDarwinRSSBytes(t *testing.T, pid int) int64 {
 	return kb * 1024
 }
 
-func assertActiveBallooningLifecycleVZ(t *testing.T, ctx context.Context, inst *Instance) {
-	t.Helper()
-
-	assigned := inst.Size + inst.HotplugSize
-	initialTarget := requireRuntimeGuestMemoryTarget(t, ctx, inst)
-	assert.Equal(t, assigned, initialTarget, "runtime balloon target should start at full assigned memory")
-
-	controller := newActiveBallooningTestController(t, inst)
-
-	reclaimResp := requireManualReclaimApplied(t, ctx, controller, inst, 1*1024*1024*1024, 5*time.Minute)
-	require.Len(t, reclaimResp.Actions, 1)
-	assert.NotNil(t, reclaimResp.HoldUntil)
-	assert.Equal(t, int64(1*1024*1024*1024), reclaimResp.Actions[0].AppliedReclaimBytes)
-	assert.Equal(t, assigned-int64(1*1024*1024*1024), reclaimResp.Actions[0].TargetGuestMemoryBytes)
-
-	clearResp := requireManualReclaimCleared(t, ctx, controller, inst)
-	assert.Nil(t, clearResp.HoldUntil)
-
-	floorResp := requireManualReclaimApplied(t, ctx, controller, inst, assigned, 5*time.Minute)
-	require.Len(t, floorResp.Actions, 1)
-	expectedFloor := assigned / 2
-	assert.Equal(t, expectedFloor, floorResp.Actions[0].TargetGuestMemoryBytes)
-	assert.Equal(t, assigned-expectedFloor, floorResp.Actions[0].AppliedReclaimBytes)
-
-	requireManualReclaimCleared(t, ctx, controller, inst)
-}
