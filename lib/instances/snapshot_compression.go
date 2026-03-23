@@ -417,7 +417,7 @@ func (m *manager) cancelAndWaitCompressionJob(ctx context.Context, key string) (
 	}
 }
 
-func (m *manager) ensureSnapshotMemoryReady(ctx context.Context, snapshotDir, jobKey string, hvType hypervisor.Type) error {
+func (m *manager) ensureSnapshotMemoryReady(ctx context.Context, snapshotDir, jobKey string, hvType hypervisor.Type, preemptionOp snapshotCompressionPreemptionOperation) error {
 	start := time.Now()
 
 	if jobKey != "" {
@@ -426,7 +426,7 @@ func (m *manager) ensureSnapshotMemoryReady(ctx context.Context, snapshotDir, jo
 			return err
 		}
 		if target != nil {
-			m.recordSnapshotCompressionPreemption(ctx, snapshotCompressionPreemptionRestoreInstance, *target)
+			m.recordSnapshotCompressionPreemption(ctx, preemptionOp, *target)
 		}
 	}
 

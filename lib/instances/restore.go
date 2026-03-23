@@ -73,7 +73,7 @@ func (m *manager) restoreInstance(
 	if m.metrics != nil && m.metrics.tracer != nil {
 		ctx, prepareSnapshotSpan = m.metrics.tracer.Start(ctx, "PrepareSnapshotMemory")
 	}
-	err = m.ensureSnapshotMemoryReady(ctx, snapshotDir, m.snapshotJobKeyForInstance(id), stored.HypervisorType)
+	err = m.ensureSnapshotMemoryReady(ctx, snapshotDir, m.snapshotJobKeyForInstance(id), stored.HypervisorType, snapshotCompressionPreemptionRestoreInstance)
 	if prepareSnapshotSpan != nil {
 		prepareSnapshotSpan.End()
 	}

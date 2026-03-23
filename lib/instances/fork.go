@@ -245,7 +245,7 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 	defer cu.Clean()
 
 	if source.State == StateStandby {
-		if err := m.ensureSnapshotMemoryReady(ctx, m.paths.InstanceSnapshotLatest(id), m.snapshotJobKeyForInstance(id), stored.HypervisorType); err != nil {
+		if err := m.ensureSnapshotMemoryReady(ctx, m.paths.InstanceSnapshotLatest(id), m.snapshotJobKeyForInstance(id), stored.HypervisorType, snapshotCompressionPreemptionForkInstance); err != nil {
 			return nil, fmt.Errorf("prepare standby snapshot for fork: %w", err)
 		}
 	}

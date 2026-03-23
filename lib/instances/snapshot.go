@@ -103,7 +103,7 @@ func (m *manager) createSnapshot(ctx context.Context, id string, req CreateSnaps
 			if target != nil {
 				m.recordSnapshotCompressionPreemption(ctx, snapshotCompressionPreemptionCreateSnapshot, *target)
 			}
-			if err := m.ensureSnapshotMemoryReady(ctx, m.paths.InstanceSnapshotLatest(id), "", stored.HypervisorType); err != nil {
+			if err := m.ensureSnapshotMemoryReady(ctx, m.paths.InstanceSnapshotLatest(id), "", stored.HypervisorType, snapshotCompressionPreemptionCreateSnapshot); err != nil {
 				return nil, fmt.Errorf("prepare source snapshot memory for copy: %w", err)
 			}
 		default:
@@ -393,7 +393,7 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 	if target != nil {
 		m.recordSnapshotCompressionPreemption(ctx, snapshotCompressionPreemptionForkSnapshot, *target)
 	}
-	if err := m.ensureSnapshotMemoryReady(ctx, m.paths.SnapshotGuestDir(snapshotID), "", rec.StoredMetadata.HypervisorType); err != nil {
+	if err := m.ensureSnapshotMemoryReady(ctx, m.paths.SnapshotGuestDir(snapshotID), "", rec.StoredMetadata.HypervisorType, snapshotCompressionPreemptionForkSnapshot); err != nil {
 		return nil, fmt.Errorf("prepare snapshot memory for fork: %w", err)
 	}
 

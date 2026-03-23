@@ -39,6 +39,7 @@ type snapshotCompressionPreemptionOperation string
 const (
 	snapshotCompressionPreemptionRestoreInstance snapshotCompressionPreemptionOperation = "restore_instance"
 	snapshotCompressionPreemptionRestoreSnapshot snapshotCompressionPreemptionOperation = "restore_snapshot"
+	snapshotCompressionPreemptionForkInstance    snapshotCompressionPreemptionOperation = "fork_instance"
 	snapshotCompressionPreemptionForkSnapshot    snapshotCompressionPreemptionOperation = "fork_snapshot"
 	snapshotCompressionPreemptionCreateSnapshot  snapshotCompressionPreemptionOperation = "create_snapshot"
 	snapshotCompressionPreemptionDeleteInstance  snapshotCompressionPreemptionOperation = "delete_instance"

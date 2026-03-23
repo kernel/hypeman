@@ -1,6 +1,7 @@
 package instances
 
 import (
+	"os"
 	"testing"
 	"time"
 
@@ -111,6 +112,59 @@ func TestSnapshotCompressionMetrics_RecordAndObserve(t *testing.T) {
 	assert.Equal(t, int64(1), active.DataPoints[0].Value)
 	assert.Equal(t, "lz4", metricLabel(t, active.DataPoints[0].Attributes, "algorithm"))
 	assert.Equal(t, "standby", metricLabel(t, active.DataPoints[0].Attributes, "source"))
+}
+
+func TestEnsureSnapshotMemoryReadyRecordsProvidedPreemptionOperation(t *testing.T) {
+	t.Parallel()
+
+	reader := otelmetric.NewManualReader()
+	provider := otelmetric.NewMeterProvider(otelmetric.WithReader(reader))
+
+	rawDir := t.TempDir()
+	rawPath := rawDir + "/memory-ranges"
+	require.NoError(t, os.WriteFile(rawPath, []byte("raw snapshot"), 0644))
+
+	jobDone := make(chan struct{})
+	m := &manager{
+		paths: paths.New(t.TempDir()),
+		compressionJobs: map[string]*compressionJob{
+			"job-1": {
+				done: jobDone,
+				target: compressionTarget{
+					Key:            "job-1",
+					HypervisorType: hypervisor.TypeCloudHypervisor,
+					Source:         snapshotCompressionSourceStandby,
+					Policy: snapshotstore.SnapshotCompressionConfig{
+						Enabled:   true,
+						Algorithm: snapshotstore.SnapshotCompressionAlgorithmLz4,
+					},
+				},
+			},
+		},
+	}
+	m.compressionJobs["job-1"].cancel = func() {
+		select {
+		case <-jobDone:
+		default:
+			close(jobDone)
+		}
+	}
+
+	metrics, err := newInstanceMetrics(provider.Meter("test"), nil, m)
+	require.NoError(t, err)
+	m.metrics = metrics
+
+	err = m.ensureSnapshotMemoryReady(t.Context(), rawDir, "job-1", hypervisor.TypeCloudHypervisor, snapshotCompressionPreemptionForkInstance)
+	require.NoError(t, err)
+
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(t.Context(), &rm))
+
+	preemptionsMetric := findMetric(t, rm, "hypeman_snapshot_compression_preemptions_total")
+	preemptions, ok := preemptionsMetric.Data.(metricdata.Sum[int64])
+	require.True(t, ok)
+	require.Len(t, preemptions.DataPoints, 1)
+	assert.Equal(t, "fork_instance", metricLabel(t, preemptions.DataPoints[0].Attributes, "operation"))
 }
 
 func assertMetricNames(t *testing.T, rm metricdata.ResourceMetrics, expected []string) {
