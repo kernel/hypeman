@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 
 	"github.com/digitalocean/go-qemu/qemu"
@@ -18,11 +17,10 @@ type QEMU struct {
 	socketPath string // for self-removal from pool on error
 }
 
-var balloonTargetCache sync.Map
+var balloonTargetCache hypervisor.BalloonTargetCache
 
 func clearBalloonTargetCache(socketPath string) {
 	balloonTargetCache.Delete(socketPath)
-	balloonTargetCache.Delete(hypervisor.SocketCacheKey(socketPath))
 }
 
 // New returns a QEMU client for the given socket path.
@@ -195,21 +193,20 @@ func (q *QEMU) SetTargetGuestMemoryBytes(ctx context.Context, bytes int64) error
 		Remove(q.socketPath)
 		return fmt.Errorf("set balloon target: %w", err)
 	}
-	balloonTargetCache.Store(hypervisor.SocketCacheKey(q.socketPath), bytes)
+	balloonTargetCache.Store(q.socketPath, bytes)
 	return nil
 }
 
 func (q *QEMU) GetTargetGuestMemoryBytes(ctx context.Context) (int64, error) {
-	if target, ok := balloonTargetCache.Load(hypervisor.SocketCacheKey(q.socketPath)); ok {
-		if value, ok := target.(int64); ok {
-			return value, nil
-		}
+	_ = ctx
+
+	if target, ok := balloonTargetCache.Load(q.socketPath); ok {
+		return target, nil
 	}
 
-	bytes, err := q.client.QueryBalloon()
+	config, err := loadVMConfig(filepath.Dir(q.socketPath))
 	if err != nil {
-		Remove(q.socketPath)
-		return 0, fmt.Errorf("query balloon target: %w", err)
+		return 0, fmt.Errorf("read qemu guest memory target: %w", err)
 	}
-	return bytes, nil
+	return config.MemoryBytes, nil
 }

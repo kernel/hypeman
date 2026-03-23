@@ -68,7 +68,13 @@ func (c *controller) reconcile(ctx context.Context, req reconcileRequest) (Manua
 	defer span.End()
 
 	state := &c.reconcileMu
-	<-state.mu
+	select {
+	case <-ctx.Done():
+		err := ctx.Err()
+		c.recordReconcileError(ctx, trigger, start, span, err)
+		return ManualReclaimResponse{}, err
+	case <-state.mu:
+	}
 	defer func() { state.mu <- struct{}{} }()
 
 	now := time.Now()
@@ -234,8 +240,7 @@ func (c *controller) reconcile(ctx context.Context, req reconcileRequest) (Manua
 		}
 
 		appliedTarget := plannedTarget
-		delta := plannedTarget - candidate.currentTargetGuestBytes
-		if absInt64(delta) < c.config.MinAdjustmentBytes {
+		if absInt64(appliedTarget-candidate.currentTargetGuestBytes) < c.config.MinAdjustmentBytes {
 			appliedTarget = candidate.currentTargetGuestBytes
 		}
 		if !req.force {
@@ -243,6 +248,7 @@ func (c *controller) reconcile(ctx context.Context, req reconcileRequest) (Manua
 				appliedTarget = candidate.currentTargetGuestBytes
 			}
 		}
+		delta := appliedTarget - candidate.currentTargetGuestBytes
 		if appliedTarget != candidate.currentTargetGuestBytes {
 			if delta > 0 {
 				appliedTarget = candidate.currentTargetGuestBytes + minInt64(delta, c.config.PerVMMaxStepBytes)

@@ -113,10 +113,70 @@ func TestPressureStateUsesHysteresis(t *testing.T) {
 	cfg.PressureLowWatermarkAvailablePercent = 15
 
 	assert.Equal(t, HostPressureStatePressure, nextPressureState(HostPressureStateHealthy, cfg, HostPressureSample{AvailablePercent: 9}))
+	assert.Equal(t, HostPressureStateHealthy, nextPressureState(HostPressureStateHealthy, cfg, HostPressureSample{AvailablePercent: 10}))
 	assert.Equal(t, HostPressureStateHealthy, nextPressureState(HostPressureStateHealthy, cfg, HostPressureSample{AvailablePercent: 10.9}))
 	assert.Equal(t, HostPressureStatePressure, nextPressureState(HostPressureStatePressure, cfg, HostPressureSample{AvailablePercent: 12}))
 	assert.Equal(t, HostPressureStatePressure, nextPressureState(HostPressureStatePressure, cfg, HostPressureSample{AvailablePercent: 14.9}))
 	assert.Equal(t, HostPressureStateHealthy, nextPressureState(HostPressureStatePressure, cfg, HostPressureSample{AvailablePercent: 16}))
+}
+
+func TestTriggerReclaimReturnsWhenContextIsCanceledWhileWaitingForLock(t *testing.T) {
+	const mib = int64(1024 * 1024)
+
+	src := &stubSource{
+		vms: []BalloonVM{
+			{ID: "a", Name: "a", HypervisorType: hypervisor.TypeCloudHypervisor, SocketPath: "a", AssignedMemoryBytes: 1024 * mib},
+		},
+	}
+
+	c := NewController(Policy{Enabled: true, ReclaimEnabled: true}, ActiveBallooningConfig{
+		Enabled:                true,
+		ProtectedFloorPercent:  50,
+		ProtectedFloorMinBytes: 0,
+		MinAdjustmentBytes:     1,
+		PerVMMaxStepBytes:      4096 * mib,
+		PerVMCooldown:          time.Second,
+	}, src, slog.New(slog.NewTextHandler(io.Discard, nil))).(*controller)
+	c.sampler = &stubSampler{sample: HostPressureSample{TotalBytes: 1024 * mib, AvailableBytes: 1024 * mib, AvailablePercent: 100}}
+
+	<-c.reconcileMu.mu
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := c.TriggerReclaim(ctx, ManualReclaimRequest{ReclaimBytes: 128 * mib})
+	require.ErrorIs(t, err, context.Canceled)
+
+	c.reconcileMu.mu <- struct{}{}
+}
+
+func TestTriggerReclaimMinAdjustmentKeepsCurrentTarget(t *testing.T) {
+	const mib = int64(1024 * 1024)
+
+	src := &stubSource{
+		vms: []BalloonVM{
+			{ID: "a", Name: "a", HypervisorType: hypervisor.TypeCloudHypervisor, SocketPath: "a", AssignedMemoryBytes: 1024 * mib},
+		},
+	}
+	hv := &stubHypervisor{target: 1024 * mib, capabilities: hypervisor.Capabilities{SupportsBalloonControl: true}}
+
+	c := NewController(Policy{Enabled: true, ReclaimEnabled: true}, ActiveBallooningConfig{
+		Enabled:                true,
+		ProtectedFloorPercent:  50,
+		ProtectedFloorMinBytes: 0,
+		MinAdjustmentBytes:     64 * mib,
+		PerVMMaxStepBytes:      64 * mib,
+		PerVMCooldown:          time.Minute,
+	}, src, slog.New(slog.NewTextHandler(io.Discard, nil))).(*controller)
+	c.sampler = &stubSampler{sample: HostPressureSample{TotalBytes: 1024 * mib, AvailableBytes: 1024 * mib, AvailablePercent: 100}}
+	c.reconcileMu.newClient = func(t hypervisor.Type, socket string) (hypervisor.Hypervisor, error) {
+		return hv, nil
+	}
+
+	resp, err := c.TriggerReclaim(context.Background(), ManualReclaimRequest{ReclaimBytes: 32 * mib})
+	require.NoError(t, err)
+	require.Len(t, resp.Actions, 1)
+	assert.Equal(t, "unchanged", resp.Actions[0].Status)
+	assert.Equal(t, int64(1024*mib), resp.Actions[0].TargetGuestMemoryBytes)
 }
 
 func TestTriggerReclaimRespectsProtectedFloor(t *testing.T) {

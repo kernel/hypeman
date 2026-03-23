@@ -5,7 +5,6 @@ package cloudhypervisor
 import (
 	"context"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
@@ -18,11 +17,10 @@ type CloudHypervisor struct {
 	socketPath string
 }
 
-var balloonTargetCache sync.Map
+var balloonTargetCache hypervisor.BalloonTargetCache
 
 func clearBalloonTargetCache(socketPath string) {
 	balloonTargetCache.Delete(socketPath)
-	balloonTargetCache.Delete(hypervisor.SocketCacheKey(socketPath))
 }
 
 // New creates a new Cloud Hypervisor client for an existing VMM socket.
@@ -246,15 +244,13 @@ func (c *CloudHypervisor) SetTargetGuestMemoryBytes(ctx context.Context, bytes i
 	if resp.StatusCode() != 204 {
 		return fmt.Errorf("set balloon target failed with status %d", resp.StatusCode())
 	}
-	balloonTargetCache.Store(hypervisor.SocketCacheKey(c.socketPath), bytes)
+	balloonTargetCache.Store(c.socketPath, bytes)
 	return nil
 }
 
 func (c *CloudHypervisor) GetTargetGuestMemoryBytes(ctx context.Context) (int64, error) {
-	if target, ok := balloonTargetCache.Load(hypervisor.SocketCacheKey(c.socketPath)); ok {
-		if value, ok := target.(int64); ok {
-			return value, nil
-		}
+	if target, ok := balloonTargetCache.Load(c.socketPath); ok {
+		return target, nil
 	}
 
 	info, err := c.client.GetVmInfoWithResponse(ctx)

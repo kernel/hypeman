@@ -74,7 +74,7 @@ func nextPressureState(current HostPressureState, cfg ActiveBallooningConfig, sa
 		}
 		return HostPressureStatePressure
 	default:
-		if availablePercent <= highWatermark || sample.Stressed {
+		if availablePercent < highWatermark || sample.Stressed {
 			return HostPressureStatePressure
 		}
 		return HostPressureStateHealthy
