@@ -56,7 +56,7 @@ func newMetrics(meter metric.Meter, m *manager) (*Metrics, error) {
 			o.ObserveInt64(buildQueueLength, int64(m.queue.QueueLength()))
 
 			// Count images by status
-			metas, err := listAllTags(m.paths)
+			metas, err := listAllMetadata(m.paths)
 			if err != nil {
 				return nil
 			}

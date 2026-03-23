@@ -91,9 +91,9 @@ func NewManager(p *paths.Paths, maxConcurrentBuilds int, meter metric.Meter) (Ma
 }
 
 func (m *manager) ListImages(ctx context.Context) ([]Image, error) {
-	metas, err := listAllTags(m.paths)
+	metas, err := listAllMetadata(m.paths)
 	if err != nil {
-		return nil, fmt.Errorf("list tags: %w", err)
+		return nil, fmt.Errorf("list images: %w", err)
 	}
 
 	images := make([]Image, 0, len(metas))
@@ -349,7 +349,7 @@ func (m *manager) updateStatusByDigest(ref *ResolvedRef, status string, err erro
 }
 
 func (m *manager) RecoverInterruptedBuilds() {
-	metas, err := listAllTags(m.paths)
+	metas, err := listAllMetadata(m.paths)
 	if err != nil {
 		return // Best effort
 	}
@@ -422,12 +422,24 @@ func (m *manager) DeleteImage(ctx context.Context, name string) error {
 		return fmt.Errorf("%w: %s", ErrInvalidName, err.Error())
 	}
 
-	// Only allow deleting by tag, not by digest
+	repository := ref.Repository()
+
+	// Hold createMu during delete so tag resolution, tag removal, and orphan checks
+	// stay consistent with concurrent creates for the same repository digest.
+	m.createMu.Lock()
+	defer m.createMu.Unlock()
+
 	if ref.IsDigest() {
-		return fmt.Errorf("cannot delete by digest, use tag name instead")
+		digestHex := ref.DigestHex()
+		if _, err := readMetadata(m.paths, repository, digestHex); err != nil {
+			return err
+		}
+		if err := deleteTagsForDigest(m.paths, repository, digestHex); err != nil {
+			return err
+		}
+		return deleteDigest(m.paths, repository, digestHex)
 	}
 
-	repository := ref.Repository()
 	tag := ref.Tag()
 
 	// Resolve the tag to get the digest before deleting
@@ -440,12 +452,6 @@ func (m *manager) DeleteImage(ctx context.Context, name string) error {
 	if err := deleteTag(m.paths, repository, tag); err != nil {
 		return err
 	}
-
-	// Hold createMu during orphan check and delete to prevent race with CreateImage.
-	// Without this lock, a concurrent CreateImage could create a new tag pointing to
-	// the same digest between our count check and delete, leaving a dangling symlink.
-	m.createMu.Lock()
-	defer m.createMu.Unlock()
 
 	// Check if the digest is now orphaned (no other tags reference it)
 	count, err := countTagsForDigest(m.paths, repository, digestHex)
