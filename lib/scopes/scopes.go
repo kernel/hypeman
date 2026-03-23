@@ -53,8 +53,9 @@ const (
 	IngressWrite  Scope = "ingress:write"
 	IngressDelete Scope = "ingress:delete"
 
-	// Resource/health scopes (read-only)
-	ResourceRead Scope = "resource:read"
+	// Resource/health scopes
+	ResourceRead  Scope = "resource:read"
+	ResourceWrite Scope = "resource:write"
 
 	// Wildcard scope — grants all permissions
 	All Scope = "*"
@@ -69,7 +70,7 @@ var allScopes = []Scope{
 	BuildRead, BuildWrite, BuildDelete,
 	DeviceRead, DeviceWrite, DeviceDelete,
 	IngressRead, IngressWrite, IngressDelete,
-	ResourceRead,
+	ResourceRead, ResourceWrite,
 }
 
 // AllScopes returns the complete list of valid scopes (excluding wildcard).
@@ -211,7 +212,7 @@ var RouteScopes = map[string]Scope{
 	// Health & Resources
 	"GET /health":                    ResourceRead,
 	"GET /resources":                 ResourceRead,
-	"POST /resources/memory/reclaim": ResourceRead,
+	"POST /resources/memory/reclaim": ResourceWrite,
 
 	// Images
 	"GET /images":           ImageRead,
