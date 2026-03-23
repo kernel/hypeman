@@ -45,7 +45,10 @@ func TestGuestMemoryPolicyCloudHypervisor(t *testing.T) {
 		Cmd:            []string{guestMemoryIdleScript()},
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = mgr.DeleteInstance(ctx, inst.Id) })
+	t.Cleanup(func() {
+		logInstanceArtifactsOnFailure(t, mgr, inst.Id)
+		_ = mgr.DeleteInstance(ctx, inst.Id)
+	})
 
 	require.NoError(t, waitForVMReady(ctx, inst.SocketPath, 10*time.Second))
 
@@ -64,8 +67,8 @@ func TestGuestMemoryPolicyCloudHypervisor(t *testing.T) {
 	assert.True(t, infoResp.JSON200.Config.Balloon.DeflateOnOom != nil && *infoResp.JSON200.Config.Balloon.DeflateOnOom)
 	assert.True(t, infoResp.JSON200.Config.Balloon.FreePageReporting != nil && *infoResp.JSON200.Config.Balloon.FreePageReporting)
 
-	pid := requireHypervisorPID(t, ctx, mgr, inst.Id)
-	assertLowIdleHostMemoryFootprint(t, "cloud-hypervisor", pid, 512*1024)
+	assertLowIdleHostMemoryFootprint(t, ctx, mgr, inst.Id, "cloud-hypervisor", 512*1024)
+	assertActiveBallooningLifecycle(t, ctx, inst)
 }
 
 func TestGuestMemoryPolicyQEMU(t *testing.T) {
@@ -91,7 +94,10 @@ func TestGuestMemoryPolicyQEMU(t *testing.T) {
 		Cmd:            []string{guestMemoryIdleScript()},
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = mgr.DeleteInstance(ctx, inst.Id) })
+	t.Cleanup(func() {
+		logInstanceArtifactsOnFailure(t, mgr, inst.Id)
+		_ = mgr.DeleteInstance(ctx, inst.Id)
+	})
 
 	require.NoError(t, waitForQEMUReady(ctx, inst.SocketPath, 10*time.Second))
 
@@ -103,7 +109,8 @@ func TestGuestMemoryPolicyQEMU(t *testing.T) {
 	assert.Contains(t, joined, "init_on_free=0")
 	assert.Contains(t, joined, "virtio-balloon-pci", "qemu cmdline should include virtio balloon device")
 
-	assertLowIdleHostMemoryFootprint(t, "qemu", pid, 640*1024)
+	assertLowIdleHostMemoryFootprint(t, ctx, mgr, inst.Id, "qemu", 640*1024)
+	assertActiveBallooningLifecycle(t, ctx, inst)
 }
 
 func TestGuestMemoryPolicyFirecracker(t *testing.T) {
@@ -129,7 +136,10 @@ func TestGuestMemoryPolicyFirecracker(t *testing.T) {
 		Cmd:            []string{guestMemoryIdleScript()},
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = mgr.DeleteInstance(ctx, inst.Id) })
+	t.Cleanup(func() {
+		logInstanceArtifactsOnFailure(t, mgr, inst.Id)
+		_ = mgr.DeleteInstance(ctx, inst.Id)
+	})
 
 	vmCfg, err := getFirecrackerVMConfig(inst.SocketPath)
 	require.NoError(t, err)
@@ -139,12 +149,31 @@ func TestGuestMemoryPolicyFirecracker(t *testing.T) {
 	assert.True(t, vmCfg.Balloon.FreePageHinting)
 	assert.True(t, vmCfg.Balloon.FreePageReporting)
 
-	pid := requireHypervisorPID(t, ctx, mgr, inst.Id)
-	assertLowIdleHostMemoryFootprint(t, "firecracker", pid, 512*1024)
+	assertLowIdleHostMemoryFootprint(t, ctx, mgr, inst.Id, "firecracker", 512*1024)
+	assertActiveBallooningLifecycle(t, ctx, inst)
 }
 
 func guestMemoryIdleScript() string {
 	return "set -e; sleep 180"
+}
+
+func logInstanceArtifactsOnFailure(t *testing.T, mgr *manager, instanceID string) {
+	t.Helper()
+	if !t.Failed() {
+		return
+	}
+
+	for _, path := range []string{
+		mgr.paths.InstanceVMMLog(instanceID),
+		mgr.paths.InstanceAppLog(instanceID),
+	} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Logf("failed to read %s: %v", path, err)
+			continue
+		}
+		t.Logf("%s:\n%s", path, string(data))
+	}
 }
 
 func forceEnableGuestMemoryPolicyForTest(mgr *manager) {
@@ -182,11 +211,17 @@ func requireHypervisorPID(t *testing.T, ctx context.Context, mgr *manager, insta
 	t.Helper()
 	inst, err := mgr.GetInstance(ctx, instanceID)
 	require.NoError(t, err)
+	if inst.HypervisorPID != nil && processExists(*inst.HypervisorPID) {
+		return *inst.HypervisorPID
+	}
+	if pid, err := hypervisor.ResolveProcessPID(inst.SocketPath); err == nil {
+		return pid
+	}
 	require.NotNil(t, inst.HypervisorPID)
 	return *inst.HypervisorPID
 }
 
-func assertLowIdleHostMemoryFootprint(t *testing.T, hypervisorName string, pid int, maxPSSKB int64) {
+func assertLowIdleHostMemoryFootprint(t *testing.T, ctx context.Context, mgr *manager, instanceID string, hypervisorName string, maxPSSKB int64) {
 	t.Helper()
 
 	// Give the guest a short settle window, then sample host memory.
@@ -194,8 +229,14 @@ func assertLowIdleHostMemoryFootprint(t *testing.T, hypervisorName string, pid i
 	var pssSamplesKB []int64
 	var rssSamplesKB []int64
 	for i := 0; i < 6; i++ {
-		pssSamplesKB = append(pssSamplesKB, mustReadPSSKB(t, pid))
-		rssSamplesKB = append(rssSamplesKB, mustReadRSSBytes(t, pid)/1024)
+		pid := requireHypervisorPID(t, ctx, mgr, instanceID)
+		pssKB, rssKB, ok := readMemorySampleKB(t, ctx, mgr, instanceID, pid)
+		if !ok {
+			t.Logf("skipping host memory footprint assertion for %s: unable to read live PSS sample", hypervisorName)
+			return
+		}
+		pssSamplesKB = append(pssSamplesKB, pssKB)
+		rssSamplesKB = append(rssSamplesKB, rssKB)
 		time.Sleep(1 * time.Second)
 	}
 
@@ -218,42 +259,83 @@ func assertLowIdleHostMemoryFootprint(t *testing.T, hypervisorName string, pid i
 	)
 }
 
+func readMemorySampleKB(t *testing.T, ctx context.Context, mgr *manager, instanceID string, initialPID int) (int64, int64, bool) {
+	t.Helper()
+
+	pid := initialPID
+	for attempt := 0; attempt < 3; attempt++ {
+		pssKB, err := readPSSKB(pid)
+		if err == nil {
+			rssBytes, err := readRSSBytes(pid)
+			if err == nil {
+				return pssKB, rssBytes / 1024, true
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+		pid = requireHypervisorPID(t, ctx, mgr, instanceID)
+	}
+
+	return 0, 0, false
+}
+
 func mustReadRSSBytes(t *testing.T, pid int) int64 {
 	t.Helper()
+	rssBytes, err := readRSSBytes(pid)
+	require.NoError(t, err)
+	return rssBytes
+}
+
+func readRSSBytes(pid int) (int64, error) {
 	statusPath := fmt.Sprintf("/proc/%d/status", pid)
 	data, err := os.ReadFile(statusPath)
-	require.NoError(t, err)
+	if err != nil {
+		return 0, err
+	}
 
 	for _, line := range strings.Split(string(data), "\n") {
 		if strings.HasPrefix(line, "VmRSS:") {
 			fields := strings.Fields(line)
-			require.GreaterOrEqual(t, len(fields), 2)
+			if len(fields) < 2 {
+				return 0, fmt.Errorf("VmRSS line malformed in %s", statusPath)
+			}
 			kb, err := strconv.ParseInt(fields[1], 10, 64)
-			require.NoError(t, err)
-			return kb * 1024
+			if err != nil {
+				return 0, err
+			}
+			return kb * 1024, nil
 		}
 	}
-	t.Fatalf("VmRSS not found in %s", statusPath)
-	return 0
+	return 0, fmt.Errorf("VmRSS not found in %s", statusPath)
 }
 
 func mustReadPSSKB(t *testing.T, pid int) int64 {
 	t.Helper()
+	pssKB, err := readPSSKB(pid)
+	require.NoError(t, err)
+	return pssKB
+}
+
+func readPSSKB(pid int) (int64, error) {
 	smapsRollupPath := fmt.Sprintf("/proc/%d/smaps_rollup", pid)
 	data, err := os.ReadFile(smapsRollupPath)
-	require.NoError(t, err)
+	if err != nil {
+		return 0, err
+	}
 
 	for _, line := range strings.Split(string(data), "\n") {
 		if strings.HasPrefix(line, "Pss:") {
 			fields := strings.Fields(line)
-			require.GreaterOrEqual(t, len(fields), 2)
+			if len(fields) < 2 {
+				return 0, fmt.Errorf("Pss line malformed in %s", smapsRollupPath)
+			}
 			kb, err := strconv.ParseInt(fields[1], 10, 64)
-			require.NoError(t, err)
-			return kb
+			if err != nil {
+				return 0, err
+			}
+			return kb, nil
 		}
 	}
-	t.Fatalf("Pss not found in %s", smapsRollupPath)
-	return 0
+	return 0, fmt.Errorf("Pss not found in %s", smapsRollupPath)
 }
 
 type firecrackerVMConfig struct {

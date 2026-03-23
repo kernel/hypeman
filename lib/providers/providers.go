@@ -135,6 +135,51 @@ func ProvideInstanceManager(p *paths.Paths, cfg *config.Config, imageManager ima
 	return instances.NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, defaultHypervisor, meter, tracer, memoryPolicy), nil
 }
 
+// ProvideGuestMemoryController provides the active ballooning controller.
+func ProvideGuestMemoryController(instanceManager instances.Manager, cfg *config.Config, log *slog.Logger) (guestmemory.Controller, error) {
+	pollInterval, err := parseRequiredDuration(cfg.Hypervisor.Memory.ActiveBallooning.PollInterval)
+	if err != nil {
+		return nil, fmt.Errorf("parse active ballooning poll interval: %w", err)
+	}
+	perVMCooldown, err := parseRequiredDuration(cfg.Hypervisor.Memory.ActiveBallooning.PerVmCooldown)
+	if err != nil {
+		return nil, fmt.Errorf("parse active ballooning per-vm cooldown: %w", err)
+	}
+	protectedFloorMinBytes, err := parseByteSize(cfg.Hypervisor.Memory.ActiveBallooning.ProtectedFloorMinBytes)
+	if err != nil {
+		return nil, fmt.Errorf("parse active ballooning protected floor: %w", err)
+	}
+	minAdjustmentBytes, err := parseByteSize(cfg.Hypervisor.Memory.ActiveBallooning.MinAdjustmentBytes)
+	if err != nil {
+		return nil, fmt.Errorf("parse active ballooning min adjustment: %w", err)
+	}
+	perVMMaxStepBytes, err := parseByteSize(cfg.Hypervisor.Memory.ActiveBallooning.PerVmMaxStepBytes)
+	if err != nil {
+		return nil, fmt.Errorf("parse active ballooning per-vm max step: %w", err)
+	}
+
+	policy := guestmemory.Policy{
+		Enabled:            cfg.Hypervisor.Memory.Enabled,
+		KernelPageInitMode: guestmemory.KernelPageInitMode(cfg.Hypervisor.Memory.KernelPageInitMode),
+		ReclaimEnabled:     cfg.Hypervisor.Memory.ReclaimEnabled,
+		VZBalloonRequired:  cfg.Hypervisor.Memory.VZBalloonRequired,
+	}
+
+	controllerCfg := guestmemory.ActiveBallooningConfig{
+		Enabled:                               cfg.Hypervisor.Memory.ActiveBallooning.Enabled,
+		PollInterval:                          pollInterval,
+		PressureHighWatermarkAvailablePercent: cfg.Hypervisor.Memory.ActiveBallooning.PressureHighWatermarkAvailablePercent,
+		PressureLowWatermarkAvailablePercent:  cfg.Hypervisor.Memory.ActiveBallooning.PressureLowWatermarkAvailablePercent,
+		ProtectedFloorPercent:                 cfg.Hypervisor.Memory.ActiveBallooning.ProtectedFloorPercent,
+		ProtectedFloorMinBytes:                protectedFloorMinBytes,
+		MinAdjustmentBytes:                    minAdjustmentBytes,
+		PerVMMaxStepBytes:                     perVMMaxStepBytes,
+		PerVMCooldown:                         perVMCooldown,
+	}
+
+	return guestmemory.NewController(policy, controllerCfg, &guestMemoryInstanceSource{manager: instanceManager}, log.With("component", "guestmemory")), nil
+}
+
 // ProvideVolumeManager provides the volume manager
 func ProvideVolumeManager(p *paths.Paths, cfg *config.Config) (volumes.Manager, error) {
 	// Parse max total volume storage (empty or "0" means unlimited)
@@ -149,6 +194,14 @@ func ProvideVolumeManager(p *paths.Paths, cfg *config.Config) (volumes.Manager, 
 
 	meter := otel.GetMeterProvider().Meter("hypeman")
 	return volumes.NewManager(p, maxTotalVolumeStorage, meter), nil
+}
+
+func parseRequiredDuration(value string) (time.Duration, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, fmt.Errorf("must not be empty")
+	}
+	return time.ParseDuration(value)
 }
 
 // ProvideRegistry provides the OCI registry for image push
@@ -190,6 +243,40 @@ func ProvideVMMetricsManager(instanceManager instances.Manager, cfg *config.Conf
 	}
 
 	return mgr, nil
+}
+
+type guestMemoryInstanceSource struct {
+	manager instances.Manager
+}
+
+func (s *guestMemoryInstanceSource) ListBalloonVMs(ctx context.Context) ([]guestmemory.BalloonVM, error) {
+	insts, err := s.manager.ListInstances(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	vms := make([]guestmemory.BalloonVM, 0, len(insts))
+	for _, inst := range insts {
+		if inst.State != instances.StateRunning && inst.State != instances.StateInitializing {
+			continue
+		}
+		vms = append(vms, guestmemory.BalloonVM{
+			ID:                  inst.Id,
+			Name:                inst.Name,
+			HypervisorType:      inst.HypervisorType,
+			SocketPath:          inst.SocketPath,
+			AssignedMemoryBytes: inst.Size + inst.HotplugSize,
+		})
+	}
+	return vms, nil
+}
+
+func parseByteSize(value string) (int64, error) {
+	var size datasize.ByteSize
+	if err := size.UnmarshalText([]byte(value)); err != nil {
+		return 0, err
+	}
+	return int64(size), nil
 }
 
 // ProvideIngressManager provides the ingress manager

@@ -217,7 +217,9 @@ lib/system/init/init: lib/system/init/*.go
 	@echo "Building init binary for Linux..."
 	cd lib/system/init && CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o init .
 
-build-embedded: lib/system/guest_agent/guest-agent lib/system/init/init
+build-embedded:
+	@$(MAKE) -B lib/system/guest_agent/guest-agent
+	@$(MAKE) -B lib/system/init/init
 
 # Build the binary
 build:
@@ -305,15 +307,18 @@ test-guestmemory-linux: ensure-ch-binaries ensure-firecracker-binaries ensure-ca
 	@TEST_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$$PATH"; \
 	GUESTMEM_TIMEOUT="$${GUESTMEMORY_TEST_TIMEOUT:-15m}"; \
 	echo "Running manual guest memory integration tests (CloudHypervisor, QEMU, Firecracker)"; \
-	sudo env "PATH=$$TEST_PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" "HYPEMAN_RUN_GUESTMEMORY_TESTS=1" \
-		go test -tags containers_image_openpgp -run='^TestGuestMemoryPolicy(CloudHypervisor|QEMU|Firecracker)$$' -timeout="$$GUESTMEM_TIMEOUT" ./lib/instances
+	for TEST_NAME in TestGuestMemoryPolicyCloudHypervisor TestGuestMemoryPolicyQEMU TestGuestMemoryPolicyFirecracker; do \
+		echo "Running $$TEST_NAME"; \
+		sudo env "PATH=$$TEST_PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" "HYPEMAN_RUN_GUESTMEMORY_TESTS=1" \
+			go test -count=1 -tags containers_image_openpgp -run="^$$TEST_NAME$$" -timeout="$$GUESTMEM_TIMEOUT" ./lib/instances || exit $$?; \
+	done
 
 # Manual-only guest memory policy integration test (macOS VZ).
 test-guestmemory-vz: build-embedded sign-vz-shim
 	@echo "Running manual guest memory integration test (VZ)"; \
 	PATH="/opt/homebrew/opt/e2fsprogs/sbin:$(PATH)" \
 	HYPEMAN_RUN_GUESTMEMORY_TESTS=1 \
-	go test -tags containers_image_openpgp -run='^TestGuestMemoryPolicyVZ$$' -timeout=$(TEST_TIMEOUT) ./lib/instances
+	go test -count=1 -tags containers_image_openpgp -run='^TestGuestMemoryPolicyVZ$$' -timeout=$(TEST_TIMEOUT) ./lib/instances
 
 # Generate JWT token for testing
 # Usage: make gen-jwt [USER_ID=test-user]

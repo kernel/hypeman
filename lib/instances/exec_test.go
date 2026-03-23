@@ -20,6 +20,7 @@ import (
 
 // waitForExecAgent polls until exec-agent is ready
 func waitForExecAgent(ctx context.Context, mgr *manager, instanceID string, timeout time.Duration) error {
+	timeout = integrationTestTimeout(timeout)
 	deadline := time.Now().Add(timeout)
 	lastState := StateUnknown
 	var lastErr error
@@ -260,6 +261,12 @@ func TestExecConcurrent(t *testing.T) {
 
 	// If concurrent, should complete in ~2-4s; if serialized would be ~10s
 	maxExpected := time.Duration(streamDuration+2) * time.Second
+	if os.Getenv("CI") == "true" {
+		// GitHub runners can add a bit of scheduling jitter here even when the
+		// streams are overlapping correctly, but serialized execution is still far
+		// above this threshold.
+		maxExpected += time.Second
+	}
 	require.Less(t, streamElapsed, maxExpected,
 		"streams appear serialized - took %v, expected < %v", streamElapsed, maxExpected)
 

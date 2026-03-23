@@ -13,7 +13,14 @@ import (
 
 // CloudHypervisor implements hypervisor.Hypervisor for Cloud Hypervisor VMM.
 type CloudHypervisor struct {
-	client *vmm.VMM
+	client     *vmm.VMM
+	socketPath string
+}
+
+var balloonTargetCache hypervisor.BalloonTargetCache
+
+func clearBalloonTargetCache(socketPath string) {
+	balloonTargetCache.Delete(socketPath)
 }
 
 // New creates a new Cloud Hypervisor client for an existing VMM socket.
@@ -23,7 +30,8 @@ func New(socketPath string) (*CloudHypervisor, error) {
 		return nil, fmt.Errorf("create vmm client: %w", err)
 	}
 	return &CloudHypervisor{
-		client: client,
+		client:     client,
+		socketPath: socketPath,
 	}, nil
 }
 
@@ -39,6 +47,7 @@ func capabilities() hypervisor.Capabilities {
 	return hypervisor.Capabilities{
 		SupportsSnapshot:            true,
 		SupportsHotplugMemory:       true,
+		SupportsBalloonControl:      true,
 		SupportsPause:               true,
 		SupportsVsock:               true,
 		SupportsGPUPassthrough:      true,
@@ -57,6 +66,7 @@ func (c *CloudHypervisor) DeleteVM(ctx context.Context) error {
 	if resp.StatusCode() != 204 {
 		return fmt.Errorf("delete vm failed with status %d: %s", resp.StatusCode(), string(resp.Body))
 	}
+	clearBalloonTargetCache(c.socketPath)
 	return nil
 }
 
@@ -70,6 +80,7 @@ func (c *CloudHypervisor) Shutdown(ctx context.Context) error {
 	if resp.StatusCode() != 204 {
 		return fmt.Errorf("shutdown vmm failed with status %d", resp.StatusCode())
 	}
+	clearBalloonTargetCache(c.socketPath)
 	return nil
 }
 
@@ -206,4 +217,60 @@ func (c *CloudHypervisor) ResizeMemoryAndWait(ctx context.Context, bytes int64, 
 
 	// Timeout reached, but resize was requested successfully
 	return nil
+}
+
+func (c *CloudHypervisor) SetTargetGuestMemoryBytes(ctx context.Context, bytes int64) error {
+	info, err := c.client.GetVmInfoWithResponse(ctx)
+	if err != nil {
+		return fmt.Errorf("get vm info for balloon update: %w", err)
+	}
+	if info.StatusCode() != 200 || info.JSON200 == nil {
+		return fmt.Errorf("get vm info for balloon update failed with status %d", info.StatusCode())
+	}
+	if info.JSON200.Config.Balloon == nil {
+		return hypervisor.ErrNotSupported
+	}
+
+	assigned := assignedGuestMemoryBytes(info.JSON200)
+	if bytes < 0 || bytes > assigned {
+		return fmt.Errorf("target guest memory %d is outside valid range [0,%d]", bytes, assigned)
+	}
+
+	desiredBalloon := assigned - bytes
+	resp, err := c.client.PutVmResizeWithResponse(ctx, vmm.VmResize{DesiredBalloon: &desiredBalloon})
+	if err != nil {
+		return fmt.Errorf("set balloon target: %w", err)
+	}
+	if resp.StatusCode() != 204 {
+		return fmt.Errorf("set balloon target failed with status %d", resp.StatusCode())
+	}
+	balloonTargetCache.Store(c.socketPath, bytes)
+	return nil
+}
+
+func (c *CloudHypervisor) GetTargetGuestMemoryBytes(ctx context.Context) (int64, error) {
+	if target, ok := balloonTargetCache.Load(c.socketPath); ok {
+		return target, nil
+	}
+
+	info, err := c.client.GetVmInfoWithResponse(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("get vm info for balloon read: %w", err)
+	}
+	if info.StatusCode() != 200 || info.JSON200 == nil {
+		return 0, fmt.Errorf("get vm info for balloon read failed with status %d", info.StatusCode())
+	}
+	if info.JSON200.Config.Balloon == nil {
+		return 0, hypervisor.ErrNotSupported
+	}
+	assigned := assignedGuestMemoryBytes(info.JSON200)
+	return assigned - info.JSON200.Config.Balloon.Size, nil
+}
+
+func assignedGuestMemoryBytes(info *vmm.VmInfo) int64 {
+	assigned := info.Config.Memory.Size
+	if info.MemoryActualSize != nil && info.Config.Balloon != nil {
+		assigned = *info.MemoryActualSize + info.Config.Balloon.Size
+	}
+	return assigned
 }

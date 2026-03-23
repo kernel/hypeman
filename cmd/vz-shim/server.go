@@ -45,6 +45,10 @@ type snapshotRequest struct {
 	DestinationPath string `json:"destination_path"`
 }
 
+type balloonRequest struct {
+	TargetGuestMemoryBytes int64 `json:"target_guest_memory_bytes"`
+}
+
 // Handler returns the HTTP handler for the control API.
 func (s *ShimServer) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -55,6 +59,8 @@ func (s *ShimServer) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/v1/vm.resume", s.handleResume)
 	mux.HandleFunc("PUT /api/v1/vm.shutdown", s.handleShutdown)
 	mux.HandleFunc("PUT /api/v1/vm.snapshot", s.handleSnapshot)
+	mux.HandleFunc("GET /api/v1/vm.balloon", s.handleGetBalloon)
+	mux.HandleFunc("PUT /api/v1/vm.balloon", s.handleSetBalloon)
 	mux.HandleFunc("PUT /api/v1/vm.power-button", s.handlePowerButton)
 	mux.HandleFunc("GET /api/v1/vmm.ping", s.handlePing)
 	mux.HandleFunc("PUT /api/v1/vmm.shutdown", s.handleVMMShutdown)
@@ -203,6 +209,46 @@ func (s *ShimServer) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (s *ShimServer) handleGetBalloon(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	device, err := s.getTraditionalBalloonDevice()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(balloonRequest{
+		TargetGuestMemoryBytes: int64(device.GetTargetVirtualMachineMemorySize()),
+	})
+}
+
+func (s *ShimServer) handleSetBalloon(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	device, err := s.getTraditionalBalloonDevice()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	var req balloonRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, fmt.Sprintf("invalid balloon request: %v", err), http.StatusBadRequest)
+		return
+	}
+	if req.TargetGuestMemoryBytes < 0 {
+		http.Error(w, "target_guest_memory_bytes must be non-negative", http.StatusBadRequest)
+		return
+	}
+
+	device.SetTargetVirtualMachineMemorySize(uint64(req.TargetGuestMemoryBytes))
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *ShimServer) handlePowerButton(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -217,6 +263,15 @@ func (s *ShimServer) handlePowerButton(w http.ResponseWriter, r *http.Request) {
 
 	slog.Info("power button sent")
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *ShimServer) getTraditionalBalloonDevice() (*vz.VirtioTraditionalMemoryBalloonDevice, error) {
+	for _, device := range s.vm.MemoryBalloonDevices() {
+		if traditional := vz.AsVirtioTraditionalMemoryBalloonDevice(device); traditional != nil {
+			return traditional, nil
+		}
+	}
+	return nil, fmt.Errorf("no memory balloon device configured")
 }
 
 func (s *ShimServer) handlePing(w http.ResponseWriter, r *http.Request) {

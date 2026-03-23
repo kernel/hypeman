@@ -3,6 +3,7 @@ package instances
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"time"
@@ -641,6 +642,7 @@ func (m *manager) startAndBootVM(
 	if err != nil {
 		return fmt.Errorf("start vm: %w", err)
 	}
+	pid = resolveRuntimeHypervisorPID(log, stored.SocketPath, pid)
 
 	// Store the PID for later cleanup
 	stored.HypervisorPID = &pid
@@ -657,6 +659,18 @@ func (m *manager) startAndBootVM(
 	}
 
 	return nil
+}
+
+func resolveRuntimeHypervisorPID(log *slog.Logger, socketPath string, fallbackPID int) int {
+	if processExists(fallbackPID) {
+		return fallbackPID
+	}
+	pid, err := hypervisor.ResolveProcessPID(socketPath)
+	if err != nil {
+		log.Debug("using fallback hypervisor pid", "socket_path", socketPath, "pid", fallbackPID, "error", err)
+		return fallbackPID
+	}
+	return pid
 }
 
 // buildHypervisorConfig creates a hypervisor-agnostic VM configuration

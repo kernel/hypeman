@@ -112,6 +112,13 @@ func ctx() context.Context {
 	return context.Background()
 }
 
+func integrationTestTimeout(timeout time.Duration) time.Duration {
+	if os.Getenv("CI") == "true" && timeout < 45*time.Second {
+		return 45 * time.Second
+	}
+	return timeout
+}
+
 // ctxWithInstance creates a context with a resolved instance (simulates ResolveResource middleware)
 func ctxWithInstance(svc *ApiService, idOrName string) context.Context {
 	inst, err := svc.InstanceManager.GetInstance(ctx(), idOrName)

@@ -105,6 +105,20 @@ func (c *Client) Run(cmd qmp.Command) ([]byte, error) {
 	return c.domain.Run(cmd)
 }
 
+// Balloon updates the guest-visible target RAM for the balloon device.
+func (c *Client) Balloon(bytes int64) error {
+	return c.raw.Balloon(bytes)
+}
+
+// QueryBalloon returns the current guest-visible RAM target for the balloon device.
+func (c *Client) QueryBalloon() (int64, error) {
+	info, err := c.raw.QueryBalloon()
+	if err != nil {
+		return 0, err
+	}
+	return info.Actual, nil
+}
+
 // Migrate initiates a migration to the given URI (typically "file:///path").
 // This is used for saving VM state to a file for snapshot/standby.
 func (c *Client) Migrate(uri string) error {
