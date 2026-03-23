@@ -393,6 +393,9 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 	if target != nil {
 		m.recordSnapshotCompressionPreemption(ctx, snapshotCompressionPreemptionForkSnapshot, *target)
 	}
+	if err := m.ensureSnapshotMemoryReady(ctx, m.paths.SnapshotGuestDir(snapshotID), "", rec.StoredMetadata.HypervisorType); err != nil {
+		return nil, fmt.Errorf("prepare snapshot memory for fork: %w", err)
+	}
 
 	if err := forkvm.CopyGuestDirectory(m.paths.SnapshotGuestDir(snapshotID), dstDir); err != nil {
 		if errors.Is(err, forkvm.ErrSparseCopyUnsupported) {

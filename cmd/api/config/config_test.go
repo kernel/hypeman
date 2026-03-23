@@ -87,11 +87,14 @@ func TestValidateRejectsInvalidVMLabelBudget(t *testing.T) {
 func TestValidateAllowsLZ4CompressionDefaultWithImplicitLevel(t *testing.T) {
 	cfg := defaultConfig()
 	cfg.Snapshot.CompressionDefault.Enabled = true
-	cfg.Snapshot.CompressionDefault.Algorithm = "lz4"
+	cfg.Snapshot.CompressionDefault.Algorithm = "LZ4"
 	cfg.Snapshot.CompressionDefault.Level = nil
 
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("expected lz4 compression default to validate, got %v", err)
+	}
+	if cfg.Snapshot.CompressionDefault.Algorithm != "lz4" {
+		t.Fatalf("expected algorithm to normalize to lowercase, got %q", cfg.Snapshot.CompressionDefault.Algorithm)
 	}
 }
 

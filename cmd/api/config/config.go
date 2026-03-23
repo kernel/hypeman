@@ -489,6 +489,7 @@ func (c *Config) Validate() error {
 				}
 			}
 		}
+		c.Snapshot.CompressionDefault.Algorithm = algorithm
 	}
 	if c.Hypervisor.Memory.KernelPageInitMode != "performance" && c.Hypervisor.Memory.KernelPageInitMode != "hardened" {
 		return fmt.Errorf("hypervisor.memory.kernel_page_init_mode must be one of {performance,hardened}, got %q", c.Hypervisor.Memory.KernelPageInitMode)
