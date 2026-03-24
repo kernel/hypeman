@@ -78,14 +78,15 @@ func run() error {
 
 	// Initialize OpenTelemetry (before wire initialization)
 	otelCfg := otel.Config{
-		Enabled:              cfg.Otel.Enabled,
-		Endpoint:             cfg.Otel.Endpoint,
-		ServiceName:          cfg.Otel.ServiceName,
-		ServiceInstanceID:    cfg.Otel.ServiceInstanceID,
-		Insecure:             cfg.Otel.Insecure,
-		MetricExportInterval: cfg.Otel.MetricExportInterval,
-		Version:              cfg.Version,
-		Env:                  cfg.Env,
+		Enabled:                  cfg.Otel.Enabled,
+		Endpoint:                 cfg.Otel.Endpoint,
+		ServiceName:              cfg.Otel.ServiceName,
+		ServiceInstanceID:        cfg.Otel.ServiceInstanceID,
+		Insecure:                 cfg.Otel.Insecure,
+		MetricExportInterval:     cfg.Otel.MetricExportInterval,
+		SuccessfulGetSampleRatio: cfg.Otel.SuccessfulGetSampleRatio,
+		Version:                  cfg.Version,
+		Env:                      cfg.Env,
 	}
 
 	otelProvider, otelShutdown, err := otel.Init(context.Background(), otelCfg)
@@ -149,7 +150,7 @@ func run() error {
 
 	// Log OTel status
 	if cfg.Otel.Enabled {
-		logger.Info("OpenTelemetry push enabled", "endpoint", cfg.Otel.Endpoint, "service", cfg.Otel.ServiceName, "metric_export_interval", cfg.Otel.MetricExportInterval)
+		logger.Info("OpenTelemetry push enabled", "endpoint", cfg.Otel.Endpoint, "service", cfg.Otel.ServiceName, "metric_export_interval", cfg.Otel.MetricExportInterval, "successful_get_sample_ratio", cfg.Otel.SuccessfulGetSampleRatio)
 	} else {
 		logger.Info("OpenTelemetry push disabled; Prometheus pull metrics remain available")
 	}
@@ -323,6 +324,7 @@ func run() error {
 		r.Use(middleware.Recoverer)
 		if cfg.Otel.Enabled {
 			r.Use(otelchi.Middleware(cfg.Otel.ServiceName, otelchi.WithChiRoutes(r)))
+			r.Use(otel.NewSuccessfulGETErrorTraceMiddleware(cfg.Otel.ServiceName))
 		}
 		r.Use(mw.InjectLogger(logger))
 		r.Use(mw.AccessLogger(accessLogger))
@@ -345,6 +347,7 @@ func run() error {
 		// OpenTelemetry tracing middleware FIRST (creates span context)
 		if cfg.Otel.Enabled {
 			r.Use(otelchi.Middleware(cfg.Otel.ServiceName, otelchi.WithChiRoutes(r)))
+			r.Use(otel.NewSuccessfulGETErrorTraceMiddleware(cfg.Otel.ServiceName))
 		}
 
 		// Inject logger into request context for handlers to use

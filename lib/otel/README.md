@@ -29,6 +29,7 @@ This keeps pull and push views aligned because both are sourced from the same OT
 | `OTEL_SERVICE_INSTANCE_ID` | Instance ID (`service.instance.id` attribute) | hostname |
 | `OTEL_INSECURE` | Disable TLS for OTLP | `true` |
 | `OTEL__METRIC_EXPORT_INTERVAL` | OTLP metric push interval (when enabled) | `60s` |
+| `OTEL__SUCCESSFUL_GET_SAMPLE_RATIO` | Sample rate for successful root HTTP `GET` traces | `0.1` |
 | `METRICS__LISTEN_ADDRESS` | Bind address for `/metrics` listener | `127.0.0.1` |
 | `METRICS__PORT` | Port for `/metrics` listener | `9464` |
 | `METRICS__VM_LABEL_BUDGET` | Warning threshold for observed per-VM labeled VM metrics | `200` |

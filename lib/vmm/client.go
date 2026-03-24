@@ -42,21 +42,31 @@ func (m *metricsRoundTripper) RoundTrip(req *http.Request) (*http.Response, erro
 		attribute.String("http.method", req.Method),
 		attribute.String("http.route", req.URL.Path),
 	)
-	ctx, span := m.tracer.Start(req.Context(), "hypervisor.http "+req.Method+" "+req.URL.Path, trace.WithAttributes(attrs...))
-	req = req.WithContext(ctx)
-	resp, err := m.base.RoundTrip(req)
-	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
-	} else {
-		span.SetAttributes(attribute.Int("http.status_code", resp.StatusCode))
-		if resp.StatusCode >= 400 {
-			span.SetStatus(codes.Error, resp.Status)
-		} else {
-			span.SetStatus(codes.Ok, "")
-		}
+	spanName := "hypervisor.http " + req.Method + " " + req.URL.Path
+	shouldTrace := hypervisor.ShouldTraceHypervisorHTTPSpan(req.Method, req.URL.Path)
+
+	var span trace.Span
+	if shouldTrace {
+		ctx, startedSpan := m.tracer.Start(req.Context(), spanName, trace.WithAttributes(attrs...))
+		span = startedSpan
+		req = req.WithContext(ctx)
 	}
-	span.End()
+	resp, err := m.base.RoundTrip(req)
+	switch {
+	case shouldTrace:
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+		} else {
+			span.SetAttributes(attribute.Int("http.status_code", resp.StatusCode))
+			if resp.StatusCode >= 400 {
+				span.SetStatus(codes.Error, resp.Status)
+			} else {
+				span.SetStatus(codes.Ok, "")
+			}
+		}
+		span.End()
+	}
 
 	// Record metrics using global VMMMetrics
 	if VMMMetrics != nil {

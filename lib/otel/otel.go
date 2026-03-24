@@ -31,14 +31,15 @@ import (
 
 // Config holds OpenTelemetry configuration.
 type Config struct {
-	Enabled              bool
-	Endpoint             string
-	ServiceName          string
-	ServiceInstanceID    string
-	Insecure             bool
-	MetricExportInterval string
-	Version              string
-	Env                  string
+	Enabled                  bool
+	Endpoint                 string
+	ServiceName              string
+	ServiceInstanceID        string
+	Insecure                 bool
+	MetricExportInterval     string
+	SuccessfulGetSampleRatio float64
+	Version                  string
+	Env                      string
 }
 
 // Provider holds initialized OTel providers.
@@ -145,11 +146,13 @@ func Init(ctx context.Context, cfg Config) (*Provider, func(context.Context) err
 		if traceErr != nil {
 			slog.Warn("failed to initialize OTLP trace exporter; continuing without trace export", "error", traceErr)
 			tracerProvider = sdktrace.NewTracerProvider(
+				sdktrace.WithSampler(newSuccessfulGETSampler(cfg.SuccessfulGetSampleRatio)),
 				sdktrace.WithResource(res),
 			)
 		} else {
 			tracerProvider = sdktrace.NewTracerProvider(
 				sdktrace.WithBatcher(traceExporter),
+				sdktrace.WithSampler(newSuccessfulGETSampler(cfg.SuccessfulGetSampleRatio)),
 				sdktrace.WithResource(res),
 			)
 		}
