@@ -121,6 +121,37 @@ If the native binary is missing or not executable, Hypeman falls back to the in-
 - Removes snapshot metadata and payload.
 - Does not modify source or forked instances.
 
+## Scheduled Snapshots
+
+Per-instance schedules can create snapshots automatically on an interval.
+
+- Configure with:
+  - `PUT /instances/{id}/snapshot-schedule`
+- Inspect with:
+  - `GET /instances/{id}/snapshot-schedule`
+- Disable with:
+  - `DELETE /instances/{id}/snapshot-schedule`
+
+### Schedule Rules
+- Schedules do not take a snapshot kind input.
+- Each run auto-selects behavior from current source state:
+  - `Running`/`Standby` source -> `Standby` snapshot
+  - `Stopped` source -> `Stopped` snapshot
+- `Standby` scheduled runs against a `Running` source include a brief pause/resume cycle during capture.
+- `interval` uses Go duration format (for example `1h`, `24h`).
+- The minimum interval is `1m`, but larger intervals are recommended for heavier or latency-sensitive workloads because running captures pause/resume the guest.
+- `retention` is required and must set at least one of:
+  - `max_count`: keep only the newest N scheduled snapshots (`0` disables count-based cleanup)
+  - `max_age`: delete scheduled snapshots older than a duration
+- Optional `name_prefix` (max 47 chars) and `metadata` are applied to each scheduled snapshot.
+- New schedules establish cadence at `now + interval + deterministic jitter` derived from the instance ID.
+- Updating only retention, metadata, or `name_prefix` preserves `next_run_at`; changing `interval` establishes a new cadence.
+
+### Cleanup Scope
+- Retention cleanup only targets snapshots created by the schedule for that same instance.
+- Manually created snapshots are never deleted by schedule retention.
+- If the source instance is deleted, the schedule remains until scheduled snapshots for that instance are gone, then self-deletes.
+
 ## Safety Rules
 
 - Snapshot creation rejects writable volume attachments.

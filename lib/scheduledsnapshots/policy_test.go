@@ -1,0 +1,116 @@
+package scheduledsnapshots
+
+import (
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestValidateSetRequestNamePrefixLimit(t *testing.T) {
+	validateName := func(name string) error {
+		if name == "" {
+			return assert.AnError
+		}
+		return nil
+	}
+
+	req := SetRequest{
+		Interval:   time.Hour,
+		NamePrefix: strings.Repeat("a", MaxNamePrefixLength+1),
+		Retention: Retention{
+			MaxCount: 1,
+		},
+	}
+	err := ValidateSetRequest(req, validateName)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "name_prefix must be at most")
+}
+
+func TestMarshalUnmarshalScheduleRoundTrip(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	last := now.Add(-time.Hour)
+	id := "snap-1"
+	in := &Schedule{
+		InstanceID:     "inst-1",
+		Interval:       2 * time.Hour,
+		NamePrefix:     "nightly",
+		Metadata:       map[string]string{"env": "test"},
+		Retention:      Retention{MaxCount: 3, MaxAge: 24 * time.Hour},
+		NextRunAt:      now,
+		LastRunAt:      &last,
+		LastSnapshotID: &id,
+		CreatedAt:      now.Add(-2 * time.Hour),
+		UpdatedAt:      now,
+	}
+
+	raw, err := MarshalSchedule(in)
+	require.NoError(t, err)
+
+	out, err := UnmarshalSchedule(raw)
+	require.NoError(t, err)
+	assert.Equal(t, in.InstanceID, out.InstanceID)
+	assert.Equal(t, in.Interval, out.Interval)
+	assert.Equal(t, in.NamePrefix, out.NamePrefix)
+	assert.Equal(t, in.Retention.MaxCount, out.Retention.MaxCount)
+	assert.Equal(t, in.Retention.MaxAge, out.Retention.MaxAge)
+	require.NotNil(t, out.LastRunAt)
+	assert.Equal(t, *in.LastRunAt, *out.LastRunAt)
+	require.NotNil(t, out.LastSnapshotID)
+	assert.Equal(t, *in.LastSnapshotID, *out.LastSnapshotID)
+}
+
+func TestMarshalSchedulePersistsZeroMaxCount(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	in := &Schedule{
+		InstanceID: "inst-1",
+		Interval:   time.Hour,
+		Retention: Retention{
+			MaxCount: 0,
+			MaxAge:   24 * time.Hour,
+		},
+		NextRunAt: now,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	raw, err := MarshalSchedule(in)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), "\"max_count\": 0")
+
+	out, err := UnmarshalSchedule(raw)
+	require.NoError(t, err)
+	assert.Equal(t, 0, out.Retention.MaxCount)
+	assert.Equal(t, 24*time.Hour, out.Retention.MaxAge)
+}
+
+func TestNextRunUsesIntervalStepCount(t *testing.T) {
+	previous := time.Date(2026, 3, 10, 10, 0, 0, 0, time.UTC)
+	interval := time.Hour
+
+	// 2.5 intervals later should advance to the next whole interval boundary.
+	now := previous.Add(2*time.Hour + 30*time.Minute)
+	next := NextRun(previous, interval, now)
+	assert.Equal(t, previous.Add(3*time.Hour), next)
+}
+
+func TestInitialNextRunAtUsesDeterministicBoundedJitter(t *testing.T) {
+	now := time.Date(2026, 3, 10, 10, 0, 0, 0, time.UTC)
+
+	first := InitialNextRunAt("inst-1", 24*time.Hour, now)
+	second := InitialNextRunAt("inst-1", 24*time.Hour, now.Add(3*time.Hour))
+
+	firstJitter := first.Sub(now.Add(24 * time.Hour))
+	secondJitter := second.Sub(now.Add(27 * time.Hour))
+
+	assert.Equal(t, firstJitter, secondJitter)
+	assert.GreaterOrEqual(t, firstJitter, time.Duration(0))
+	assert.Less(t, firstJitter, 5*time.Minute)
+
+	shortInterval := 15 * time.Minute
+	shortJitter := InitialNextRunAt("inst-1", shortInterval, now).Sub(now.Add(shortInterval))
+	assert.GreaterOrEqual(t, shortJitter, time.Duration(0))
+	assert.Less(t, shortJitter, shortInterval/10)
+}

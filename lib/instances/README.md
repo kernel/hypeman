@@ -108,6 +108,28 @@ Any State → Stopped
 - Don't prefault pages (lazy loading)
 - Parallel with TAP device setup
 
+## Scheduled Snapshot Behavior
+
+- Schedules are configured per instance and persisted in the server data store (outside snapshot payloads).
+- A background scheduler evaluates due schedules every minute.
+- Each due run chooses snapshot behavior from current source state:
+  - `Running`/`Standby` sources use `Standby` snapshots.
+  - `Stopped` sources use `Stopped` snapshots.
+- `Standby` runs from `Running` sources perform a brief pause/resume cycle during capture.
+- The minimum interval is `1m`, but larger intervals are recommended for heavier or latency-sensitive workloads because running captures pause/resume the guest.
+- Scheduled snapshot `name_prefix` is optional and capped at 47 chars so generated names stay within the 63-char snapshot name limit.
+- New schedules establish cadence at `now + interval + deterministic jitter` derived from the instance ID.
+- Updating only retention, metadata, or `name_prefix` preserves `next_run_at`; changing `interval` establishes a new cadence.
+- Schedule runs advance to the next future interval (no backfill flood after downtime).
+- Each schedule stores operational status:
+  - `next_run_at`
+  - `last_run_at`
+  - `last_snapshot_id`
+  - `last_error`
+- Retention cleanup runs after successful scheduled snapshot creation and only affects scheduled snapshots for that instance.
+- If an instance is deleted, its schedule is retained so retention can continue cleaning existing scheduled snapshots.
+- Once the deleted instance has no scheduled snapshots left, the scheduler removes that schedule automatically.
+
 ## Reference Handling
 
 Instances use OCI image references directly:

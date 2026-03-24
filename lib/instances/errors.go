@@ -29,4 +29,7 @@ var (
 
 	// ErrSnapshotNotFound is returned when a snapshot is not found.
 	ErrSnapshotNotFound = errors.New("snapshot not found")
+
+	// ErrSnapshotScheduleNotFound is returned when a snapshot schedule is not found.
+	ErrSnapshotScheduleNotFound = errors.New("snapshot schedule not found")
 )

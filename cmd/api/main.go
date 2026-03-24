@@ -510,6 +510,29 @@ func run() error {
 		}
 	})
 
+	// Snapshot schedule scheduler
+	if scheduleManager, ok := app.InstanceManager.(instances.SnapshotScheduleManager); ok {
+		const snapshotSchedulePollInterval = time.Minute
+		grp.Go(func() error {
+			ticker := time.NewTicker(snapshotSchedulePollInterval)
+			defer ticker.Stop()
+
+			logger.Info("snapshot schedule scheduler started", "interval", snapshotSchedulePollInterval)
+			for {
+				select {
+				case <-gctx.Done():
+					return nil
+				case <-ticker.C:
+					if err := scheduleManager.RunSnapshotSchedules(gctx); err != nil {
+						logger.Error("snapshot schedule run completed with errors", "error", err)
+					}
+				}
+			}
+		})
+	} else {
+		logger.Warn("snapshot schedule manager unavailable; scheduled snapshots disabled")
+	}
+
 	err = grp.Wait()
 	slog.Info("all goroutines finished")
 	return err

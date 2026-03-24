@@ -1,0 +1,658 @@
+package instances
+
+import (
+	"context"
+	"errors"
+	"os"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/kernel/hypeman/lib/scheduledsnapshots"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestSnapshotScheduleSetGetDelete(t *testing.T) {
+	t.Parallel()
+	mgr, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	hvType := mgr.defaultHypervisor
+	sourceID := "snapshot-schedule-src"
+	createStoppedSnapshotSourceFixture(t, mgr, sourceID, "snapshot-schedule-src", hvType)
+
+	schedule, err := mgr.SetSnapshotSchedule(ctx, sourceID, SetSnapshotScheduleRequest{
+		Interval:   2 * time.Hour,
+		NamePrefix: "nightly",
+		Metadata:   map[string]string{"env": "test"},
+		Retention: SnapshotScheduleRetention{
+			MaxCount: 5,
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, sourceID, schedule.InstanceID)
+	require.Equal(t, 2*time.Hour, schedule.Interval)
+	require.Equal(t, "nightly", schedule.NamePrefix)
+	require.Equal(t, 5, schedule.Retention.MaxCount)
+	assert.GreaterOrEqual(t, schedule.NextRunAt, mgr.now().UTC().Add(2*time.Hour))
+	assert.Less(t, schedule.NextRunAt, mgr.now().UTC().Add(2*time.Hour).Add(5*time.Minute))
+
+	loaded, err := mgr.GetSnapshotSchedule(ctx, sourceID)
+	require.NoError(t, err)
+	assert.Equal(t, schedule.InstanceID, loaded.InstanceID)
+	assert.Equal(t, schedule.Interval, loaded.Interval)
+	assert.Equal(t, schedule.Retention.MaxCount, loaded.Retention.MaxCount)
+	assert.Equal(t, "test", loaded.Metadata["env"])
+
+	require.NoError(t, mgr.DeleteSnapshotSchedule(ctx, sourceID))
+
+	_, err = mgr.GetSnapshotSchedule(ctx, sourceID)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrSnapshotScheduleNotFound)
+}
+
+func TestSnapshotScheduleUpdatePreservesOperationalHistory(t *testing.T) {
+	t.Parallel()
+	mgr, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	hvType := mgr.defaultHypervisor
+	sourceID := "snapshot-schedule-update-history-src"
+	createStoppedSnapshotSourceFixture(t, mgr, sourceID, sourceID, hvType)
+
+	created, err := mgr.SetSnapshotSchedule(ctx, sourceID, SetSnapshotScheduleRequest{
+		Interval: time.Hour,
+		Retention: SnapshotScheduleRetention{
+			MaxCount: 2,
+		},
+	})
+	require.NoError(t, err)
+
+	expectedLastRunAt := time.Now().UTC().Add(-10 * time.Minute).Truncate(time.Second)
+	expectedLastSnapshotID := "snapshot-123"
+	expectedLastError := "last run failed"
+
+	lock := mgr.getInstanceLock(sourceID)
+	lock.Lock()
+	schedule, err := mgr.getSnapshotScheduleUnlocked(sourceID)
+	require.NoError(t, err)
+	schedule.LastRunAt = &expectedLastRunAt
+	schedule.LastSnapshotID = &expectedLastSnapshotID
+	schedule.LastError = &expectedLastError
+	require.NoError(t, mgr.saveSnapshotScheduleUnlocked(schedule))
+	lock.Unlock()
+
+	updated, err := mgr.SetSnapshotSchedule(ctx, sourceID, SetSnapshotScheduleRequest{
+		Interval:   2 * time.Hour,
+		NamePrefix: "nightly",
+		Retention: SnapshotScheduleRetention{
+			MaxCount: 5,
+		},
+	})
+	require.NoError(t, err)
+
+	require.NotNil(t, updated.LastRunAt)
+	assert.Equal(t, expectedLastRunAt, *updated.LastRunAt)
+	require.NotNil(t, updated.LastSnapshotID)
+	assert.Equal(t, expectedLastSnapshotID, *updated.LastSnapshotID)
+	require.NotNil(t, updated.LastError)
+	assert.Equal(t, expectedLastError, *updated.LastError)
+	assert.Equal(t, created.CreatedAt, updated.CreatedAt)
+}
+
+func TestSnapshotScheduleConfigOnlyUpdatePreservesNextRunAt(t *testing.T) {
+	t.Parallel()
+	mgr, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	now := time.Date(2026, 3, 24, 10, 0, 0, 0, time.UTC)
+	mgr.now = func() time.Time { return now }
+
+	hvType := mgr.defaultHypervisor
+	sourceID := "snapshot-schedule-preserve-next-run-src"
+	createStoppedSnapshotSourceFixture(t, mgr, sourceID, sourceID, hvType)
+
+	created, err := mgr.SetSnapshotSchedule(ctx, sourceID, SetSnapshotScheduleRequest{
+		Interval: time.Hour,
+		Retention: SnapshotScheduleRetention{
+			MaxCount: 2,
+		},
+	})
+	require.NoError(t, err)
+
+	updatedNow := now.Add(30 * time.Minute)
+	mgr.now = func() time.Time { return updatedNow }
+
+	updated, err := mgr.SetSnapshotSchedule(ctx, sourceID, SetSnapshotScheduleRequest{
+		Interval:   time.Hour,
+		NamePrefix: "nightly",
+		Metadata:   map[string]string{"env": "prod"},
+		Retention: SnapshotScheduleRetention{
+			MaxCount: 5,
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, created.NextRunAt, updated.NextRunAt)
+	assert.Equal(t, updatedNow, updated.UpdatedAt)
+}
+
+func TestSnapshotScheduleIntervalUpdateRecomputesNextRunAt(t *testing.T) {
+	t.Parallel()
+	mgr, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	now := time.Date(2026, 3, 24, 10, 0, 0, 0, time.UTC)
+	mgr.now = func() time.Time { return now }
+
+	hvType := mgr.defaultHypervisor
+	sourceID := "snapshot-schedule-recompute-next-run-src"
+	createStoppedSnapshotSourceFixture(t, mgr, sourceID, sourceID, hvType)
+
+	created, err := mgr.SetSnapshotSchedule(ctx, sourceID, SetSnapshotScheduleRequest{
+		Interval: time.Hour,
+		Retention: SnapshotScheduleRetention{
+			MaxCount: 2,
+		},
+	})
+	require.NoError(t, err)
+
+	updatedNow := now.Add(30 * time.Minute)
+	mgr.now = func() time.Time { return updatedNow }
+
+	updated, err := mgr.SetSnapshotSchedule(ctx, sourceID, SetSnapshotScheduleRequest{
+		Interval: 2 * time.Hour,
+		Retention: SnapshotScheduleRetention{
+			MaxCount: 2,
+		},
+	})
+	require.NoError(t, err)
+	assert.NotEqual(t, created.NextRunAt, updated.NextRunAt)
+	assert.Equal(t, scheduledsnapshots.InitialNextRunAt(sourceID, 2*time.Hour, updatedNow), updated.NextRunAt)
+}
+
+func TestSnapshotScheduleUsesStoppedSnapshotWhenSourceIsStopped(t *testing.T) {
+	t.Parallel()
+	mgr, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	hvType := mgr.defaultHypervisor
+	sourceID := "snapshot-schedule-auto-kind-stopped-src"
+	createStoppedSnapshotSourceFixture(t, mgr, sourceID, sourceID, hvType)
+
+	_, err := mgr.SetSnapshotSchedule(ctx, sourceID, SetSnapshotScheduleRequest{
+		Interval: time.Hour,
+		Retention: SnapshotScheduleRetention{
+			MaxCount: 1,
+		},
+	})
+	require.NoError(t, err)
+
+	markSnapshotScheduleDue(t, mgr, sourceID)
+	require.NoError(t, mgr.RunSnapshotSchedules(ctx))
+
+	snaps, err := mgr.ListSnapshots(ctx, &ListSnapshotsFilter{SourceInstanceID: &sourceID})
+	require.NoError(t, err)
+
+	foundScheduled := false
+	for _, snapshot := range snaps {
+		if !scheduledsnapshots.IsScheduledSnapshot(snapshot.Tags, sourceID) {
+			continue
+		}
+		foundScheduled = true
+		assert.Equal(t, SnapshotKindStopped, snapshot.Kind)
+	}
+	require.True(t, foundScheduled, "expected at least one scheduled snapshot")
+}
+
+func TestRunSnapshotSchedulesCreatesSnapshotAndAppliesRetention(t *testing.T) {
+	t.Parallel()
+	mgr, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	hvType := mgr.defaultHypervisor
+	sourceID := "snapshot-schedule-run-src"
+	createStoppedSnapshotSourceFixture(t, mgr, sourceID, "snapshot-schedule-run-src", hvType)
+
+	older, err := mgr.CreateSnapshot(ctx, sourceID, CreateSnapshotRequest{
+		Kind: SnapshotKindStopped,
+		Name: "older-scheduled",
+		Tags: map[string]string{
+			scheduledsnapshots.MetadataKeyScheduled:        "true",
+			scheduledsnapshots.MetadataKeySourceInstanceID: sourceID,
+		},
+	})
+	require.NoError(t, err)
+
+	time.Sleep(1100 * time.Millisecond)
+
+	newer, err := mgr.CreateSnapshot(ctx, sourceID, CreateSnapshotRequest{
+		Kind: SnapshotKindStopped,
+		Name: "newer-scheduled",
+		Tags: map[string]string{
+			scheduledsnapshots.MetadataKeyScheduled:        "true",
+			scheduledsnapshots.MetadataKeySourceInstanceID: sourceID,
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = mgr.CreateSnapshot(ctx, sourceID, CreateSnapshotRequest{
+		Kind: SnapshotKindStopped,
+		Name: "manual-snapshot",
+	})
+	require.NoError(t, err)
+
+	_, err = mgr.SetSnapshotSchedule(ctx, sourceID, SetSnapshotScheduleRequest{
+		Interval:   time.Hour,
+		NamePrefix: "nightly",
+		Retention: SnapshotScheduleRetention{
+			MaxCount: 2,
+		},
+	})
+	require.NoError(t, err)
+
+	markSnapshotScheduleDue(t, mgr, sourceID)
+
+	require.NoError(t, mgr.RunSnapshotSchedules(ctx))
+
+	snaps, err := mgr.ListSnapshots(ctx, &ListSnapshotsFilter{SourceInstanceID: &sourceID})
+	require.NoError(t, err)
+
+	scheduledIDs := make(map[string]struct{})
+	manualCount := 0
+	for _, snapshot := range snaps {
+		if scheduledsnapshots.IsScheduledSnapshot(snapshot.Tags, sourceID) {
+			scheduledIDs[snapshot.Id] = struct{}{}
+		} else {
+			manualCount++
+		}
+	}
+
+	assert.Len(t, scheduledIDs, 2, "retention should keep only two scheduled snapshots")
+	assert.NotContains(t, scheduledIDs, older.Id, "oldest scheduled snapshot should be cleaned up")
+	assert.Contains(t, scheduledIDs, newer.Id, "newer pre-existing scheduled snapshot should be retained")
+	assert.Equal(t, 1, manualCount, "manual snapshots must not be auto-cleaned")
+
+	schedule, err := mgr.GetSnapshotSchedule(ctx, sourceID)
+	require.NoError(t, err)
+	require.NotNil(t, schedule.LastRunAt)
+	require.NotNil(t, schedule.LastSnapshotID)
+	assert.Nil(t, schedule.LastError)
+}
+
+func TestSnapshotScheduleRequiresRetentionPolicy(t *testing.T) {
+	t.Parallel()
+	mgr, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	hvType := mgr.defaultHypervisor
+	sourceID := "snapshot-schedule-validate-src"
+	createStoppedSnapshotSourceFixture(t, mgr, sourceID, "snapshot-schedule-validate-src", hvType)
+
+	_, err := mgr.SetSnapshotSchedule(ctx, sourceID, SetSnapshotScheduleRequest{
+		Interval: time.Hour,
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidRequest)
+}
+
+func TestSnapshotScheduleNamePrefixLengthValidation(t *testing.T) {
+	t.Parallel()
+	mgr, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	hvType := mgr.defaultHypervisor
+	sourceID := "snapshot-schedule-prefix-src"
+	createStoppedSnapshotSourceFixture(t, mgr, sourceID, sourceID, hvType)
+
+	tooLong := strings.Repeat("a", scheduledsnapshots.MaxNamePrefixLength+1)
+	_, err := mgr.SetSnapshotSchedule(ctx, sourceID, SetSnapshotScheduleRequest{
+		Interval:   time.Hour,
+		NamePrefix: tooLong,
+		Retention: SnapshotScheduleRetention{
+			MaxCount: 1,
+		},
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidRequest)
+	assert.Contains(t, err.Error(), "name_prefix must be at most")
+
+	atLimit := strings.Repeat("a", scheduledsnapshots.MaxNamePrefixLength)
+	_, err = mgr.SetSnapshotSchedule(ctx, sourceID, SetSnapshotScheduleRequest{
+		Interval:   time.Hour,
+		NamePrefix: atLimit,
+		Retention: SnapshotScheduleRetention{
+			MaxCount: 1,
+		},
+	})
+	require.NoError(t, err)
+}
+
+func TestDeleteInstanceKeepsScheduleUntilScheduledSnapshotsAreGone(t *testing.T) {
+	t.Parallel()
+	mgr, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	hvType := mgr.defaultHypervisor
+	sourceID := "snapshot-schedule-delete-src"
+	createStoppedSnapshotSourceFixture(t, mgr, sourceID, "snapshot-schedule-delete-src", hvType)
+
+	_, err := mgr.SetSnapshotSchedule(ctx, sourceID, SetSnapshotScheduleRequest{
+		Interval: time.Hour,
+		Retention: SnapshotScheduleRetention{
+			MaxAge: 24 * time.Hour,
+		},
+	})
+	require.NoError(t, err)
+
+	scheduledSnapshot, err := mgr.CreateSnapshot(ctx, sourceID, CreateSnapshotRequest{
+		Kind: SnapshotKindStopped,
+		Name: "scheduled-before-delete",
+		Tags: map[string]string{
+			scheduledsnapshots.MetadataKeyScheduled:        "true",
+			scheduledsnapshots.MetadataKeySourceInstanceID: sourceID,
+		},
+	})
+	require.NoError(t, err)
+	require.FileExists(t, mgr.paths.InstanceSnapshotSchedule(sourceID))
+
+	require.NoError(t, mgr.DeleteInstance(ctx, sourceID))
+	require.FileExists(t, mgr.paths.InstanceSnapshotSchedule(sourceID))
+
+	markSnapshotScheduleDue(t, mgr, sourceID)
+	require.NoError(t, mgr.RunSnapshotSchedules(ctx))
+	require.FileExists(t, mgr.paths.InstanceSnapshotSchedule(sourceID))
+
+	require.NoError(t, mgr.DeleteSnapshot(ctx, scheduledSnapshot.Id))
+
+	markSnapshotScheduleDue(t, mgr, sourceID)
+	require.NoError(t, mgr.RunSnapshotSchedules(ctx))
+
+	_, statErr := os.Stat(mgr.paths.InstanceSnapshotSchedule(sourceID))
+	require.Error(t, statErr)
+	assert.True(t, os.IsNotExist(statErr))
+}
+
+func TestDeleteInstanceWithCountOnlyRetentionRemovesConvergedSchedule(t *testing.T) {
+	t.Parallel()
+	mgr, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	hvType := mgr.defaultHypervisor
+	sourceID := "snapshot-schedule-delete-count-only-src"
+	createStoppedSnapshotSourceFixture(t, mgr, sourceID, sourceID, hvType)
+
+	_, err := mgr.SetSnapshotSchedule(ctx, sourceID, SetSnapshotScheduleRequest{
+		Interval: time.Hour,
+		Retention: SnapshotScheduleRetention{
+			MaxCount: 3,
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = mgr.CreateSnapshot(ctx, sourceID, CreateSnapshotRequest{
+		Kind: SnapshotKindStopped,
+		Name: "scheduled-before-delete-count-only",
+		Tags: map[string]string{
+			scheduledsnapshots.MetadataKeyScheduled:        "true",
+			scheduledsnapshots.MetadataKeySourceInstanceID: sourceID,
+		},
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, mgr.DeleteInstance(ctx, sourceID))
+	require.FileExists(t, mgr.paths.InstanceSnapshotSchedule(sourceID))
+
+	markSnapshotScheduleDue(t, mgr, sourceID)
+	require.NoError(t, mgr.RunSnapshotSchedules(ctx))
+
+	_, statErr := os.Stat(mgr.paths.InstanceSnapshotSchedule(sourceID))
+	require.Error(t, statErr)
+	assert.True(t, os.IsNotExist(statErr))
+}
+
+func TestRunSnapshotSchedulesAggregatesErrorsAcrossInstances(t *testing.T) {
+	t.Parallel()
+	mgr, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	hvType := mgr.defaultHypervisor
+	sourceA := "snapshot-schedule-error-src-a"
+	sourceB := "snapshot-schedule-error-src-b"
+	createStoppedSnapshotSourceFixture(t, mgr, sourceA, sourceA, hvType)
+	createStoppedSnapshotSourceFixture(t, mgr, sourceB, sourceB, hvType)
+
+	_, err := mgr.SetSnapshotSchedule(ctx, sourceA, SetSnapshotScheduleRequest{
+		Interval: time.Hour,
+		Retention: SnapshotScheduleRetention{
+			MaxCount: 1,
+		},
+	})
+	require.NoError(t, err)
+	_, err = mgr.SetSnapshotSchedule(ctx, sourceB, SetSnapshotScheduleRequest{
+		Interval: time.Hour,
+		Retention: SnapshotScheduleRetention{
+			MaxCount: 1,
+		},
+	})
+	require.NoError(t, err)
+
+	markSnapshotScheduleDue(t, mgr, sourceA)
+	markSnapshotScheduleDue(t, mgr, sourceB)
+
+	require.NoError(t, os.WriteFile(mgr.paths.InstanceSnapshotSchedule(sourceA), []byte("{"), 0644))
+	require.NoError(t, os.WriteFile(mgr.paths.InstanceSnapshotSchedule(sourceB), []byte("{"), 0644))
+
+	err = mgr.RunSnapshotSchedules(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), sourceA)
+	assert.Contains(t, err.Error(), sourceB)
+}
+
+func TestRunSnapshotSchedulesSaveFailureAfterSnapshotDoesNotDuplicate(t *testing.T) {
+	t.Parallel()
+	mgr, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	now := time.Date(2026, 3, 24, 10, 0, 0, 0, time.UTC)
+	mgr.now = func() time.Time { return now }
+
+	hvType := mgr.defaultHypervisor
+	sourceID := "snapshot-schedule-save-failure-src"
+	createStoppedSnapshotSourceFixture(t, mgr, sourceID, sourceID, hvType)
+
+	_, err := mgr.SetSnapshotSchedule(ctx, sourceID, SetSnapshotScheduleRequest{
+		Interval: time.Hour,
+		Retention: SnapshotScheduleRetention{
+			MaxCount: 2,
+		},
+	})
+	require.NoError(t, err)
+
+	markSnapshotScheduleDue(t, mgr, sourceID)
+
+	schedulePath := mgr.paths.InstanceSnapshotSchedule(sourceID)
+	originalWriteFile := mgr.writeFile
+	writeCount := 0
+	mgr.writeFile = func(name string, data []byte, perm os.FileMode) error {
+		if name == schedulePath {
+			writeCount++
+			if writeCount == 2 {
+				return errors.New("injected schedule save failure")
+			}
+		}
+		return originalWriteFile(name, data, perm)
+	}
+	defer func() {
+		mgr.writeFile = originalWriteFile
+	}()
+
+	err = mgr.RunSnapshotSchedules(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "save schedule after snapshot")
+
+	snapshots, err := mgr.ListSnapshots(ctx, &ListSnapshotsFilter{SourceInstanceID: &sourceID})
+	require.NoError(t, err)
+
+	scheduledCount := 0
+	for _, snapshot := range snapshots {
+		if scheduledsnapshots.IsScheduledSnapshot(snapshot.Tags, sourceID) {
+			scheduledCount++
+		}
+	}
+	assert.Equal(t, 1, scheduledCount)
+
+	schedule, err := mgr.GetSnapshotSchedule(ctx, sourceID)
+	require.NoError(t, err)
+	require.NotNil(t, schedule.LastRunAt)
+	assert.Equal(t, now.Add(59*time.Minute), schedule.NextRunAt)
+	assert.Nil(t, schedule.LastSnapshotID)
+	assert.Nil(t, schedule.LastError)
+
+	mgr.writeFile = originalWriteFile
+
+	err = mgr.RunSnapshotSchedules(ctx)
+	require.NoError(t, err)
+
+	snapshots, err = mgr.ListSnapshots(ctx, &ListSnapshotsFilter{SourceInstanceID: &sourceID})
+	require.NoError(t, err)
+	scheduledCount = 0
+	for _, snapshot := range snapshots {
+		if scheduledsnapshots.IsScheduledSnapshot(snapshot.Tags, sourceID) {
+			scheduledCount++
+		}
+	}
+	assert.Equal(t, 1, scheduledCount)
+}
+
+func TestRunSnapshotSchedulesCleanupFailurePreservesLastSnapshotIDAndDoesNotDuplicate(t *testing.T) {
+	t.Parallel()
+	mgr, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	now := time.Date(2026, 3, 24, 10, 0, 0, 0, time.UTC)
+	mgr.now = func() time.Time { return now }
+
+	hvType := mgr.defaultHypervisor
+	sourceID := "snapshot-schedule-cleanup-failure-src"
+	createStoppedSnapshotSourceFixture(t, mgr, sourceID, sourceID, hvType)
+
+	older, err := mgr.CreateSnapshot(ctx, sourceID, CreateSnapshotRequest{
+		Kind: SnapshotKindStopped,
+		Name: "older-scheduled",
+		Tags: map[string]string{
+			scheduledsnapshots.MetadataKeyScheduled:        "true",
+			scheduledsnapshots.MetadataKeySourceInstanceID: sourceID,
+		},
+	})
+	require.NoError(t, err)
+
+	originalDeleteSnapshotFn := mgr.deleteSnapshotFn
+	injectedDeleteErr := errors.New("injected snapshot delete failure")
+	mgr.deleteSnapshotFn = func(ctx context.Context, snapshotID string) error {
+		if snapshotID == older.Id {
+			return injectedDeleteErr
+		}
+		return originalDeleteSnapshotFn(ctx, snapshotID)
+	}
+	defer func() {
+		mgr.deleteSnapshotFn = originalDeleteSnapshotFn
+	}()
+
+	_, err = mgr.SetSnapshotSchedule(ctx, sourceID, SetSnapshotScheduleRequest{
+		Interval: time.Hour,
+		Retention: SnapshotScheduleRetention{
+			MaxCount: 1,
+		},
+	})
+	require.NoError(t, err)
+
+	markSnapshotScheduleDue(t, mgr, sourceID)
+
+	err = mgr.RunSnapshotSchedules(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cleanup scheduled snapshots")
+	assert.ErrorIs(t, err, injectedDeleteErr)
+
+	schedule, err := mgr.GetSnapshotSchedule(ctx, sourceID)
+	require.NoError(t, err)
+	require.NotNil(t, schedule.LastSnapshotID)
+	require.NotNil(t, schedule.LastError)
+
+	snapshots, err := mgr.ListSnapshots(ctx, &ListSnapshotsFilter{SourceInstanceID: &sourceID})
+	require.NoError(t, err)
+	scheduledCount := 0
+	lastSnapshotFound := false
+	for _, snapshot := range snapshots {
+		if !scheduledsnapshots.IsScheduledSnapshot(snapshot.Tags, sourceID) {
+			continue
+		}
+		scheduledCount++
+		if snapshot.Id == *schedule.LastSnapshotID {
+			lastSnapshotFound = true
+		}
+	}
+	assert.Equal(t, 2, scheduledCount)
+	assert.True(t, lastSnapshotFound)
+	require.DirExists(t, mgr.paths.SnapshotDir(older.Id))
+
+	err = mgr.RunSnapshotSchedules(ctx)
+	require.NoError(t, err)
+
+	snapshots, err = mgr.ListSnapshots(ctx, &ListSnapshotsFilter{SourceInstanceID: &sourceID})
+	require.NoError(t, err)
+	scheduledCount = 0
+	for _, snapshot := range snapshots {
+		if scheduledsnapshots.IsScheduledSnapshot(snapshot.Tags, sourceID) {
+			scheduledCount++
+		}
+	}
+	assert.Equal(t, 2, scheduledCount)
+	require.DirExists(t, mgr.paths.SnapshotDir(older.Id))
+}
+
+func TestRunSnapshotSchedulesStopsOnCanceledContext(t *testing.T) {
+	t.Parallel()
+	mgr, _ := setupTestManager(t)
+
+	hvType := mgr.defaultHypervisor
+	sourceID := "snapshot-schedule-canceled-context-src"
+	createStoppedSnapshotSourceFixture(t, mgr, sourceID, sourceID, hvType)
+
+	_, err := mgr.SetSnapshotSchedule(context.Background(), sourceID, SetSnapshotScheduleRequest{
+		Interval: time.Hour,
+		Retention: SnapshotScheduleRetention{
+			MaxCount: 1,
+		},
+	})
+	require.NoError(t, err)
+
+	markSnapshotScheduleDue(t, mgr, sourceID)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err = mgr.RunSnapshotSchedules(ctx)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.Canceled)
+
+	snapshots, err := mgr.ListSnapshots(context.Background(), &ListSnapshotsFilter{SourceInstanceID: &sourceID})
+	require.NoError(t, err)
+
+	for _, snapshot := range snapshots {
+		assert.False(t, scheduledsnapshots.IsScheduledSnapshot(snapshot.Tags, sourceID), "canceled context should prevent scheduled snapshot runs")
+	}
+}
+
+func markSnapshotScheduleDue(t *testing.T, mgr *manager, instanceID string) {
+	t.Helper()
+	lock := mgr.getInstanceLock(instanceID)
+	lock.Lock()
+	defer lock.Unlock()
+
+	schedule, err := mgr.getSnapshotScheduleUnlocked(instanceID)
+	require.NoError(t, err)
+	schedule.NextRunAt = mgr.now().UTC().Add(-time.Minute)
+	schedule.UpdatedAt = mgr.now().UTC()
+	require.NoError(t, mgr.saveSnapshotScheduleUnlocked(schedule))
+}

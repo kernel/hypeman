@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/instances"
@@ -203,6 +204,124 @@ func (s *ApiService) ForkSnapshot(ctx context.Context, request oapi.ForkSnapshot
 	return oapi.ForkSnapshot201JSONResponse(instanceToOAPI(*result)), nil
 }
 
+// GetInstanceSnapshotSchedule gets a snapshot schedule for the resolved instance.
+func (s *ApiService) GetInstanceSnapshotSchedule(ctx context.Context, request oapi.GetInstanceSnapshotScheduleRequestObject) (oapi.GetInstanceSnapshotScheduleResponseObject, error) {
+	inst := mw.GetResolvedInstance[instances.Instance](ctx)
+	if inst == nil {
+		return oapi.GetInstanceSnapshotSchedule500JSONResponse{Code: "internal_error", Message: "resource not resolved"}, nil
+	}
+
+	scheduleManager, ok := s.InstanceManager.(instances.SnapshotScheduleManager)
+	if !ok {
+		return oapi.GetInstanceSnapshotSchedule500JSONResponse{Code: "internal_error", Message: "snapshot scheduling is not available"}, nil
+	}
+
+	schedule, err := scheduleManager.GetSnapshotSchedule(ctx, inst.Id)
+	if err != nil {
+		log := logger.FromContext(ctx)
+		switch {
+		case errors.Is(err, instances.ErrSnapshotScheduleNotFound):
+			return oapi.GetInstanceSnapshotSchedule404JSONResponse{Code: "not_found", Message: "snapshot schedule not found"}, nil
+		case errors.Is(err, instances.ErrNotFound):
+			return oapi.GetInstanceSnapshotSchedule404JSONResponse{Code: "not_found", Message: "instance not found"}, nil
+		default:
+			log.ErrorContext(ctx, "failed to get snapshot schedule", "error", err)
+			return oapi.GetInstanceSnapshotSchedule500JSONResponse{Code: "internal_error", Message: "failed to get snapshot schedule"}, nil
+		}
+	}
+
+	return oapi.GetInstanceSnapshotSchedule200JSONResponse(snapshotScheduleToOAPI(*schedule)), nil
+}
+
+// SetInstanceSnapshotSchedule creates or updates a snapshot schedule for the resolved instance.
+func (s *ApiService) SetInstanceSnapshotSchedule(ctx context.Context, request oapi.SetInstanceSnapshotScheduleRequestObject) (oapi.SetInstanceSnapshotScheduleResponseObject, error) {
+	inst := mw.GetResolvedInstance[instances.Instance](ctx)
+	if inst == nil {
+		return oapi.SetInstanceSnapshotSchedule500JSONResponse{Code: "internal_error", Message: "resource not resolved"}, nil
+	}
+	if request.Body == nil {
+		return oapi.SetInstanceSnapshotSchedule400JSONResponse{Code: "invalid_request", Message: "request body is required"}, nil
+	}
+
+	scheduleManager, ok := s.InstanceManager.(instances.SnapshotScheduleManager)
+	if !ok {
+		return oapi.SetInstanceSnapshotSchedule500JSONResponse{Code: "internal_error", Message: "snapshot scheduling is not available"}, nil
+	}
+
+	interval, err := time.ParseDuration(request.Body.Interval)
+	if err != nil {
+		return oapi.SetInstanceSnapshotSchedule400JSONResponse{Code: "invalid_request", Message: "interval must be a valid duration"}, nil
+	}
+	if request.Body.Retention.MaxCount == nil && request.Body.Retention.MaxAge == nil {
+		return oapi.SetInstanceSnapshotSchedule400JSONResponse{Code: "invalid_request", Message: "retention must include max_count or max_age"}, nil
+	}
+
+	retention := instances.SnapshotScheduleRetention{}
+	if request.Body.Retention.MaxCount != nil {
+		retention.MaxCount = *request.Body.Retention.MaxCount
+	}
+	if request.Body.Retention.MaxAge != nil {
+		maxAge, parseErr := time.ParseDuration(*request.Body.Retention.MaxAge)
+		if parseErr != nil {
+			return oapi.SetInstanceSnapshotSchedule400JSONResponse{Code: "invalid_request", Message: "retention.max_age must be a valid duration"}, nil
+		}
+		retention.MaxAge = maxAge
+	}
+	req := instances.SetSnapshotScheduleRequest{
+		Interval:  interval,
+		Metadata:  toMapTags(request.Body.Metadata),
+		Retention: retention,
+	}
+	if request.Body.NamePrefix != nil {
+		req.NamePrefix = *request.Body.NamePrefix
+	}
+
+	schedule, err := scheduleManager.SetSnapshotSchedule(ctx, inst.Id, req)
+	if err != nil {
+		log := logger.FromContext(ctx)
+		switch {
+		case errors.Is(err, instances.ErrInvalidRequest):
+			return oapi.SetInstanceSnapshotSchedule400JSONResponse{Code: "invalid_request", Message: err.Error()}, nil
+		case errors.Is(err, instances.ErrNotFound):
+			return oapi.SetInstanceSnapshotSchedule404JSONResponse{Code: "not_found", Message: "instance not found"}, nil
+		default:
+			log.ErrorContext(ctx, "failed to set snapshot schedule", "error", err)
+			return oapi.SetInstanceSnapshotSchedule500JSONResponse{Code: "internal_error", Message: "failed to set snapshot schedule"}, nil
+		}
+	}
+
+	return oapi.SetInstanceSnapshotSchedule200JSONResponse(snapshotScheduleToOAPI(*schedule)), nil
+}
+
+// DeleteInstanceSnapshotSchedule deletes a snapshot schedule for the resolved instance.
+func (s *ApiService) DeleteInstanceSnapshotSchedule(ctx context.Context, request oapi.DeleteInstanceSnapshotScheduleRequestObject) (oapi.DeleteInstanceSnapshotScheduleResponseObject, error) {
+	inst := mw.GetResolvedInstance[instances.Instance](ctx)
+	if inst == nil {
+		return oapi.DeleteInstanceSnapshotSchedule500JSONResponse{Code: "internal_error", Message: "resource not resolved"}, nil
+	}
+
+	scheduleManager, ok := s.InstanceManager.(instances.SnapshotScheduleManager)
+	if !ok {
+		return oapi.DeleteInstanceSnapshotSchedule500JSONResponse{Code: "internal_error", Message: "snapshot scheduling is not available"}, nil
+	}
+
+	err := scheduleManager.DeleteSnapshotSchedule(ctx, inst.Id)
+	if err != nil {
+		log := logger.FromContext(ctx)
+		switch {
+		case errors.Is(err, instances.ErrSnapshotScheduleNotFound):
+			return oapi.DeleteInstanceSnapshotSchedule404JSONResponse{Code: "not_found", Message: "snapshot schedule not found"}, nil
+		case errors.Is(err, instances.ErrNotFound):
+			return oapi.DeleteInstanceSnapshotSchedule404JSONResponse{Code: "not_found", Message: "instance not found"}, nil
+		default:
+			log.ErrorContext(ctx, "failed to delete snapshot schedule", "error", err)
+			return oapi.DeleteInstanceSnapshotSchedule500JSONResponse{Code: "internal_error", Message: "failed to delete snapshot schedule"}, nil
+		}
+	}
+
+	return oapi.DeleteInstanceSnapshotSchedule204Response{}, nil
+}
+
 func snapshotToOAPI(snapshot instances.Snapshot) oapi.Snapshot {
 	kind := oapi.SnapshotKind(snapshot.Kind)
 	sourceHypervisor := oapi.SnapshotSourceHypervisor(snapshot.SourceHypervisor)
@@ -237,5 +356,32 @@ func snapshotToOAPI(snapshot instances.Snapshot) oapi.Snapshot {
 	if snapshot.Name == "" {
 		out.Name = nil
 	}
+	return out
+}
+
+func snapshotScheduleToOAPI(schedule instances.SnapshotSchedule) oapi.SnapshotSchedule {
+	retention := oapi.SnapshotScheduleRetention{
+		MaxCount: lo.ToPtr(schedule.Retention.MaxCount),
+	}
+	if schedule.Retention.MaxAge > 0 {
+		maxAge := schedule.Retention.MaxAge.String()
+		retention.MaxAge = &maxAge
+	}
+
+	out := oapi.SnapshotSchedule{
+		InstanceId: schedule.InstanceID,
+		Interval:   schedule.Interval.String(),
+		Metadata:   toOAPITags(schedule.Metadata),
+		Retention:  retention,
+		NextRunAt:  schedule.NextRunAt,
+		CreatedAt:  schedule.CreatedAt,
+		UpdatedAt:  schedule.UpdatedAt,
+	}
+	if schedule.NamePrefix != "" {
+		out.NamePrefix = lo.ToPtr(schedule.NamePrefix)
+	}
+	out.LastRunAt = schedule.LastRunAt
+	out.LastSnapshotId = schedule.LastSnapshotID
+	out.LastError = schedule.LastError
 	return out
 }
