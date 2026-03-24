@@ -24,17 +24,6 @@ type monitoringSnapshot struct {
 	imageStorageMax     int64
 }
 
-type monitoringMetrics struct {
-	capacity        metric.Int64ObservableGauge
-	effectiveLimit  metric.Int64ObservableGauge
-	allocated       metric.Int64ObservableGauge
-	oversubRatio    metric.Float64ObservableGauge
-	diskBreakdown   metric.Int64ObservableGauge
-	imageStorage    metric.Int64ObservableGauge
-	gpuSlots        metric.Int64ObservableGauge
-	gpuProfileSlots metric.Int64ObservableGauge
-}
-
 func (m *Manager) StartMonitoring(ctx context.Context, meter metric.Meter, refreshInterval time.Duration) error {
 	if meter == nil {
 		return nil
@@ -49,13 +38,11 @@ func (m *Manager) StartMonitoring(ctx context.Context, meter metric.Meter, refre
 		return nil
 	}
 	if !m.monitoring.metricsRegistered {
-		metrics, err := newMonitoringMetrics(meter, m)
-		if err != nil {
+		if err := newMonitoringMetrics(meter, m); err != nil {
 			m.monitoring.mu.Unlock()
 			return err
 		}
 		m.monitoring.metricsRegistered = true
-		_ = metrics
 	}
 	m.monitoring.mu.Unlock()
 
@@ -121,13 +108,13 @@ func (m *Manager) currentMonitoringSnapshot() (monitoringSnapshot, bool) {
 	return m.monitoring.snapshot, true
 }
 
-func newMonitoringMetrics(meter metric.Meter, mgr *Manager) (*monitoringMetrics, error) {
+func newMonitoringMetrics(meter metric.Meter, mgr *Manager) error {
 	capacity, err := meter.Int64ObservableGauge(
 		"hypeman_resources_capacity",
 		metric.WithDescription("Raw host capacity by resource type"),
 	)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	effectiveLimit, err := meter.Int64ObservableGauge(
@@ -135,7 +122,7 @@ func newMonitoringMetrics(meter metric.Meter, mgr *Manager) (*monitoringMetrics,
 		metric.WithDescription("Effective allocatable limit by resource type after oversubscription"),
 	)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	allocated, err := meter.Int64ObservableGauge(
@@ -143,7 +130,7 @@ func newMonitoringMetrics(meter metric.Meter, mgr *Manager) (*monitoringMetrics,
 		metric.WithDescription("Current allocated amount by resource type"),
 	)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	oversubRatio, err := meter.Float64ObservableGauge(
@@ -151,7 +138,7 @@ func newMonitoringMetrics(meter metric.Meter, mgr *Manager) (*monitoringMetrics,
 		metric.WithDescription("Oversubscription ratio by resource type"),
 	)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	diskBreakdown, err := meter.Int64ObservableGauge(
@@ -160,7 +147,7 @@ func newMonitoringMetrics(meter metric.Meter, mgr *Manager) (*monitoringMetrics,
 		metric.WithUnit("By"),
 	)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	imageStorage, err := meter.Int64ObservableGauge(
@@ -169,7 +156,7 @@ func newMonitoringMetrics(meter metric.Meter, mgr *Manager) (*monitoringMetrics,
 		metric.WithUnit("By"),
 	)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	gpuSlots, err := meter.Int64ObservableGauge(
@@ -177,7 +164,7 @@ func newMonitoringMetrics(meter metric.Meter, mgr *Manager) (*monitoringMetrics,
 		metric.WithDescription("Total and used GPU slots"),
 	)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	gpuProfileSlots, err := meter.Int64ObservableGauge(
@@ -185,7 +172,7 @@ func newMonitoringMetrics(meter metric.Meter, mgr *Manager) (*monitoringMetrics,
 		metric.WithDescription("Available GPU slots by vGPU profile"),
 	)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	if _, err := meter.RegisterCallback(func(ctx context.Context, o metric.Observer) error {
@@ -233,17 +220,8 @@ func newMonitoringMetrics(meter metric.Meter, mgr *Manager) (*monitoringMetrics,
 
 		return nil
 	}, capacity, effectiveLimit, allocated, oversubRatio, diskBreakdown, imageStorage, gpuSlots, gpuProfileSlots); err != nil {
-		return nil, err
+		return err
 	}
 
-	return &monitoringMetrics{
-		capacity:        capacity,
-		effectiveLimit:  effectiveLimit,
-		allocated:       allocated,
-		oversubRatio:    oversubRatio,
-		diskBreakdown:   diskBreakdown,
-		imageStorage:    imageStorage,
-		gpuSlots:        gpuSlots,
-		gpuProfileSlots: gpuProfileSlots,
-	}, nil
+	return nil
 }
