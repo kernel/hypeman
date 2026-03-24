@@ -175,8 +175,8 @@ func TestStartMonitoringRefreshesSnapshot(t *testing.T) {
 func TestStartMonitoringPublishesGPUMetrics(t *testing.T) {
 	mgr, _, _ := monitoringTestManager(t)
 
-	originalProvider := gpuStatusProvider
-	gpuStatusProvider = func() *GPUResourceStatus {
+	originalProvider := currentGPUStatusProvider()
+	setGPUStatusProvider(func() *GPUResourceStatus {
 		return &GPUResourceStatus{
 			Mode:       "vgpu",
 			TotalSlots: 8,
@@ -186,9 +186,9 @@ func TestStartMonitoringPublishesGPUMetrics(t *testing.T) {
 				{Name: "L40S-2Q", Available: 2},
 			},
 		}
-	}
+	})
 	defer func() {
-		gpuStatusProvider = originalProvider
+		setGPUStatusProvider(originalProvider)
 	}()
 
 	reader := otelmetric.NewManualReader()

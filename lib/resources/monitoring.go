@@ -3,9 +3,11 @@ package resources
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"sync"
 	"time"
 
+	"github.com/kernel/hypeman/lib/logger"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 )
@@ -59,6 +61,19 @@ func (m *Manager) StartMonitoring(ctx context.Context, meter metric.Meter, refre
 	m.monitoring.mu.Unlock()
 
 	go func() {
+		log := logger.FromContext(ctx)
+		defer func() {
+			if r := recover(); r != nil {
+				m.monitoring.mu.Lock()
+				m.monitoring.started = false
+				m.monitoring.mu.Unlock()
+				log.ErrorContext(ctx, "resource monitoring refresh loop panicked",
+					"panic", r,
+					"stack", string(debug.Stack()),
+				)
+			}
+		}()
+
 		ticker := time.NewTicker(refreshInterval)
 		defer ticker.Stop()
 
@@ -67,7 +82,9 @@ func (m *Manager) StartMonitoring(ctx context.Context, meter metric.Meter, refre
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				_ = m.refreshMonitoringSnapshot(ctx)
+				if err := m.refreshMonitoringSnapshot(ctx); err != nil {
+					log.WarnContext(ctx, "resource monitoring snapshot refresh failed", "error", err)
+				}
 			}
 		}
 	}()

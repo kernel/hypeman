@@ -32,7 +32,25 @@ const (
 	SourceConfigured SourceType = "configured" // Explicitly configured by operator
 )
 
-var gpuStatusProvider = GetGPUStatus
+var (
+	gpuStatusProviderMu sync.RWMutex
+	gpuStatusProvider   = GetGPUStatus
+)
+
+func currentGPUStatusProvider() func() *GPUResourceStatus {
+	gpuStatusProviderMu.RLock()
+	defer gpuStatusProviderMu.RUnlock()
+	return gpuStatusProvider
+}
+
+func setGPUStatusProvider(fn func() *GPUResourceStatus) {
+	if fn == nil {
+		fn = GetGPUStatus
+	}
+	gpuStatusProviderMu.Lock()
+	defer gpuStatusProviderMu.Unlock()
+	gpuStatusProvider = fn
+}
 
 // Resource represents a discoverable and allocatable host resource.
 type Resource interface {
@@ -366,7 +384,7 @@ func (m *Manager) GetFullStatus(ctx context.Context) (*FullResourceStatus, error
 	}
 
 	// Get GPU status
-	gpuStatus := gpuStatusProvider()
+	gpuStatus := currentGPUStatusProvider()()
 
 	return &FullResourceStatus{
 		CPU:         *cpuStatus,
