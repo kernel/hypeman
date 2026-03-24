@@ -144,39 +144,46 @@ func (h *tracingHypervisor) Capabilities() Capabilities {
 	return h.next.Capabilities()
 }
 
+func (h *tracingHypervisor) spanAttrs(attrs ...attribute.KeyValue) []attribute.KeyValue {
+	out := make([]attribute.KeyValue, 0, len(h.attrs)+len(attrs))
+	out = append(out, h.attrs...)
+	out = append(out, attrs...)
+	return out
+}
+
 func (h *tracingHypervisor) DeleteVM(ctx context.Context) (err error) {
-	ctx, span := startTraceSpan(ctx, h.tracer, "hypervisor.delete_vm", append(h.attrs, attribute.String("operation", "delete_vm"))...)
+	ctx, span := startTraceSpan(ctx, h.tracer, "hypervisor.delete_vm", h.spanAttrs(attribute.String("operation", "delete_vm"))...)
 	defer func() { finishTraceSpan(span, err) }()
 	return h.next.DeleteVM(ctx)
 }
 
 func (h *tracingHypervisor) Shutdown(ctx context.Context) (err error) {
-	ctx, span := startTraceSpan(ctx, h.tracer, "hypervisor.shutdown", append(h.attrs, attribute.String("operation", "shutdown"))...)
+	ctx, span := startTraceSpan(ctx, h.tracer, "hypervisor.shutdown", h.spanAttrs(attribute.String("operation", "shutdown"))...)
 	defer func() { finishTraceSpan(span, err) }()
 	return h.next.Shutdown(ctx)
 }
 
 func (h *tracingHypervisor) GetVMInfo(ctx context.Context) (_ *VMInfo, err error) {
-	ctx, span := startTraceSpan(ctx, h.tracer, "hypervisor.get_vm_info", append(h.attrs, attribute.String("operation", "get_vm_info"))...)
+	ctx, span := startTraceSpan(ctx, h.tracer, "hypervisor.get_vm_info", h.spanAttrs(attribute.String("operation", "get_vm_info"))...)
 	defer func() { finishTraceSpan(span, err) }()
 	return h.next.GetVMInfo(ctx)
 }
 
 func (h *tracingHypervisor) Pause(ctx context.Context) (err error) {
-	ctx, span := startTraceSpan(ctx, h.tracer, "hypervisor.pause", append(h.attrs, attribute.String("operation", "pause"))...)
+	ctx, span := startTraceSpan(ctx, h.tracer, "hypervisor.pause", h.spanAttrs(attribute.String("operation", "pause"))...)
 	defer func() { finishTraceSpan(span, err) }()
 	return h.next.Pause(ctx)
 }
 
 func (h *tracingHypervisor) Resume(ctx context.Context) (err error) {
-	ctx, span := startTraceSpan(ctx, h.tracer, "hypervisor.resume", append(h.attrs, attribute.String("operation", "resume"))...)
+	ctx, span := startTraceSpan(ctx, h.tracer, "hypervisor.resume", h.spanAttrs(attribute.String("operation", "resume"))...)
 	defer func() { finishTraceSpan(span, err) }()
 	return h.next.Resume(ctx)
 }
 
 func (h *tracingHypervisor) Snapshot(ctx context.Context, destPath string) (err error) {
 	ctx, span := startTraceSpan(ctx, h.tracer, "hypervisor.snapshot",
-		append(h.attrs,
+		h.spanAttrs(
 			attribute.String("operation", "snapshot"),
 		)...,
 	)
@@ -186,7 +193,7 @@ func (h *tracingHypervisor) Snapshot(ctx context.Context, destPath string) (err 
 
 func (h *tracingHypervisor) ResizeMemory(ctx context.Context, bytes int64) (err error) {
 	ctx, span := startTraceSpan(ctx, h.tracer, "hypervisor.resize_memory",
-		append(h.attrs,
+		h.spanAttrs(
 			attribute.String("operation", "resize_memory"),
 			attribute.Int64("memory_bytes", bytes),
 		)...,
@@ -197,7 +204,7 @@ func (h *tracingHypervisor) ResizeMemory(ctx context.Context, bytes int64) (err 
 
 func (h *tracingHypervisor) ResizeMemoryAndWait(ctx context.Context, bytes int64, timeout time.Duration) (err error) {
 	ctx, span := startTraceSpan(ctx, h.tracer, "hypervisor.resize_memory_and_wait",
-		append(h.attrs,
+		h.spanAttrs(
 			attribute.String("operation", "resize_memory_and_wait"),
 			attribute.Int64("memory_bytes", bytes),
 			attribute.Int64("timeout_seconds", int64(timeout.Seconds())),
@@ -209,7 +216,7 @@ func (h *tracingHypervisor) ResizeMemoryAndWait(ctx context.Context, bytes int64
 
 func (h *tracingHypervisor) SetTargetGuestMemoryBytes(ctx context.Context, bytes int64) (err error) {
 	ctx, span := startTraceSpan(ctx, h.tracer, "hypervisor.set_target_guest_memory_bytes",
-		append(h.attrs,
+		h.spanAttrs(
 			attribute.String("operation", "set_target_guest_memory_bytes"),
 			attribute.Int64("guest_memory_bytes", bytes),
 		)...,
@@ -220,7 +227,7 @@ func (h *tracingHypervisor) SetTargetGuestMemoryBytes(ctx context.Context, bytes
 
 func (h *tracingHypervisor) GetTargetGuestMemoryBytes(ctx context.Context) (_ int64, err error) {
 	ctx, span := startTraceSpan(ctx, h.tracer, "hypervisor.get_target_guest_memory_bytes",
-		append(h.attrs, attribute.String("operation", "get_target_guest_memory_bytes"))...,
+		h.spanAttrs(attribute.String("operation", "get_target_guest_memory_bytes"))...,
 	)
 	defer func() { finishTraceSpan(span, err) }()
 	return h.next.GetTargetGuestMemoryBytes(ctx)
