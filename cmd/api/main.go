@@ -324,7 +324,6 @@ func run() error {
 		r.Use(middleware.Recoverer)
 		if cfg.Otel.Enabled {
 			r.Use(otelchi.Middleware(cfg.Otel.ServiceName, otelchi.WithChiRoutes(r)))
-			r.Use(otel.NewSuccessfulGETErrorTraceMiddleware(cfg.Otel.ServiceName))
 		}
 		r.Use(mw.InjectLogger(logger))
 		r.Use(mw.AccessLogger(accessLogger))
@@ -347,7 +346,6 @@ func run() error {
 		// OpenTelemetry tracing middleware FIRST (creates span context)
 		if cfg.Otel.Enabled {
 			r.Use(otelchi.Middleware(cfg.Otel.ServiceName, otelchi.WithChiRoutes(r)))
-			r.Use(otel.NewSuccessfulGETErrorTraceMiddleware(cfg.Otel.ServiceName))
 		}
 
 		// Inject logger into request context for handlers to use

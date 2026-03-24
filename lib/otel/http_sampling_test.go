@@ -18,9 +18,7 @@ func TestSuccessfulGETSamplerDropsSuccessfulGETRequests(t *testing.T) {
 	recorder, router, shutdown := newHTTPTraceTestHarness(t, 0)
 	defer shutdown()
 
-	router.Get("/instances", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
+	router.Get("/instances", func(w http.ResponseWriter, r *http.Request) {})
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/instances", nil)
@@ -44,29 +42,8 @@ func TestSuccessfulGETSamplerKeepsSuccessfulPOSTRequests(t *testing.T) {
 	router.ServeHTTP(rr, req)
 
 	span := findEndedSpanByName(t, recorder.Ended(), "/instances")
-	if attrValue(span.Attributes(), "http.method") != http.MethodPost {
+	if got := attrValue(span.Attributes(), "http.method"); got != http.MethodPost {
 		t.Fatalf("expected POST span, got attrs %v", span.Attributes())
-	}
-}
-
-func TestSuccessfulGETSamplerKeepsUnsampledGETErrors(t *testing.T) {
-	recorder, router, shutdown := newHTTPTraceTestHarness(t, 0)
-	defer shutdown()
-
-	router.Get("/instances", func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "boom", http.StatusInternalServerError)
-	})
-
-	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/instances", nil)
-	router.ServeHTTP(rr, req)
-
-	span := findEndedSpanByName(t, recorder.Ended(), "/instances")
-	if attrValue(span.Attributes(), "sampled_from") != "unsampled_get_error" {
-		t.Fatalf("expected unsampled GET error fallback span, got attrs %v", span.Attributes())
-	}
-	if attrValue(span.Attributes(), "http.status_code") != "500" {
-		t.Fatalf("expected status code attr on fallback span, got attrs %v", span.Attributes())
 	}
 }
 
@@ -83,7 +60,6 @@ func newHTTPTraceTestHarness(t *testing.T, getRatio float64) (*tracetest.SpanRec
 
 	router := chi.NewRouter()
 	router.Use(otelchi.Middleware("hypeman-test", otelchi.WithChiRoutes(router)))
-	router.Use(NewSuccessfulGETErrorTraceMiddleware("hypeman-test"))
 
 	return recorder, router, func() {
 		otelapi.SetTracerProvider(previous)
