@@ -97,9 +97,17 @@ func TestValidateRejectsInvalidVMLabelBudget(t *testing.T) {
 
 func TestValidateRejectsInvalidResourceRefreshInterval(t *testing.T) {
 	cfg := defaultConfig()
-	cfg.Metrics.ResourceRefreshInterval = "not-a-duration"
+	cfg.Metrics.ResourceRefreshInterval = ""
 
 	err := cfg.Validate()
+	if err == nil {
+		t.Fatalf("expected validation error for empty resource refresh interval")
+	}
+
+	cfg = defaultConfig()
+	cfg.Metrics.ResourceRefreshInterval = "not-a-duration"
+
+	err = cfg.Validate()
 	if err == nil {
 		t.Fatalf("expected validation error for invalid resource refresh interval")
 	}
