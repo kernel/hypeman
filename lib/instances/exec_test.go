@@ -139,8 +139,9 @@ func TestExecConcurrent(t *testing.T) {
 		manager.DeleteInstance(ctx, inst.Id)
 	})
 
-	// Wait for exec-agent to be ready (retry here is OK - we're just waiting for startup)
-	err = waitForExecAgent(ctx, manager, inst.Id, 15*time.Second)
+	// This test exercises concurrent exec behavior, not boot-speed budgets.
+	// Give the guest a little more headroom on busy Linux CI runners.
+	err = waitForExecAgent(ctx, manager, inst.Id, 30*time.Second)
 	require.NoError(t, err, "exec-agent should be ready")
 
 	// Verify exec-agent works with a simple command first
