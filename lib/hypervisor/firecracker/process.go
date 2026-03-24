@@ -14,10 +14,6 @@ import (
 
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/paths"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/trace"
 	"gvisor.dev/gvisor/pkg/cleanup"
 )
 
@@ -66,20 +62,9 @@ func (s *Starter) GetVersion(p *paths.Paths) (string, error) {
 }
 
 func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, socketPath string, config hypervisor.VMConfig) (int, hypervisor.Hypervisor, error) {
-	processAttrs := hypervisor.TraceAttributesFromContext(ctx)
-	processAttrs = append(processAttrs,
-		attribute.String("operation", "start_process"),
-		attribute.String("hypervisor", string(hypervisor.TypeFirecracker)),
-	)
-	processCtx, processSpan := otel.Tracer("hypeman/hypervisor/firecracker").Start(ctx, "hypervisor.start_process", trace.WithAttributes(processAttrs...))
+	processCtx, processSpan := hypervisor.StartProcessSpan(ctx, hypervisor.TypeFirecracker)
 	pid, err := s.startProcess(processCtx, p, version, socketPath)
-	if err != nil {
-		processSpan.RecordError(err)
-		processSpan.SetStatus(codes.Error, err.Error())
-	} else {
-		processSpan.SetStatus(codes.Ok, "")
-	}
-	processSpan.End()
+	hypervisor.FinishTraceSpan(processSpan, err)
 	if err != nil {
 		return 0, nil, fmt.Errorf("start firecracker process: %w", err)
 	}
@@ -109,20 +94,9 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 }
 
 func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string, socketPath string, snapshotPath string) (int, hypervisor.Hypervisor, error) {
-	processAttrs := hypervisor.TraceAttributesFromContext(ctx)
-	processAttrs = append(processAttrs,
-		attribute.String("operation", "start_process"),
-		attribute.String("hypervisor", string(hypervisor.TypeFirecracker)),
-	)
-	processCtx, processSpan := otel.Tracer("hypeman/hypervisor/firecracker").Start(ctx, "hypervisor.start_process", trace.WithAttributes(processAttrs...))
+	processCtx, processSpan := hypervisor.StartProcessSpan(ctx, hypervisor.TypeFirecracker)
 	pid, err := s.startProcess(processCtx, p, version, socketPath)
-	if err != nil {
-		processSpan.RecordError(err)
-		processSpan.SetStatus(codes.Error, err.Error())
-	} else {
-		processSpan.SetStatus(codes.Ok, "")
-	}
-	processSpan.End()
+	hypervisor.FinishTraceSpan(processSpan, err)
 	if err != nil {
 		return 0, nil, fmt.Errorf("start firecracker process: %w", err)
 	}

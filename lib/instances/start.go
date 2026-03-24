@@ -7,7 +7,6 @@ import (
 
 	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/egressproxy"
-	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/network"
 	"go.opentelemetry.io/otel/attribute"
@@ -40,7 +39,7 @@ func (m *manager) startInstance(
 
 	inst := m.toInstance(ctx, meta)
 	stored := &meta.StoredMetadata
-	ctx = hypervisor.WithTraceAttributes(ctx, attribute.String("hypervisor", string(stored.HypervisorType)))
+	ctx = enrichInstancesTrace(ctx, attribute.String("hypervisor", string(stored.HypervisorType)))
 	log.DebugContext(ctx, "loaded instance", "instance_id", id, "state", inst.State)
 
 	// 2. Validate state (must be Stopped to start)

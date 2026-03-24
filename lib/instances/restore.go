@@ -43,7 +43,7 @@ func (m *manager) restoreInstance(
 
 	inst := m.toInstance(ctx, meta)
 	stored := &meta.StoredMetadata
-	ctx = hypervisor.WithTraceAttributes(ctx, attribute.String("hypervisor", string(stored.HypervisorType)))
+	ctx = enrichInstancesTrace(ctx, attribute.String("hypervisor", string(stored.HypervisorType)))
 	log.DebugContext(ctx, "loaded instance", "instance_id", id, "state", inst.State, "has_snapshot", inst.HasSnapshot)
 
 	// 2. Validate state

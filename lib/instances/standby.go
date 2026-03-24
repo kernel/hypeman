@@ -44,7 +44,7 @@ func (m *manager) standbyInstance(
 
 	inst := m.toInstance(ctx, meta)
 	stored := &meta.StoredMetadata
-	ctx = hypervisor.WithTraceAttributes(ctx, attribute.String("hypervisor", string(stored.HypervisorType)))
+	ctx = enrichInstancesTrace(ctx, attribute.String("hypervisor", string(stored.HypervisorType)))
 	log.DebugContext(ctx, "loaded instance", "instance_id", id, "state", inst.State)
 
 	// 2. Validate state transition (must be Running to start standby flow)

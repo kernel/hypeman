@@ -20,7 +20,6 @@ import (
 	"github.com/kernel/hypeman/lib/volumes"
 	"github.com/nrednav/cuid2"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
 	"gvisor.dev/gvisor/pkg/cleanup"
 )
 
@@ -137,8 +136,7 @@ func (m *manager) createInstance(
 
 	// 3. Generate instance ID (CUID2 for secure, collision-resistant IDs)
 	id := cuid2.Generate()
-	ctx = hypervisor.WithTraceAttributes(ctx, attribute.String("instance_id", id))
-	trace.SpanFromContext(ctx).SetAttributes(attribute.String("instance_id", id))
+	ctx = enrichInstancesTrace(ctx, attribute.String("instance_id", id))
 	log.DebugContext(ctx, "generated instance ID", "instance_id", id)
 
 	// 4. Generate vsock configuration
@@ -217,8 +215,7 @@ func (m *manager) createInstance(
 	// Enrich logger and trace span with hypervisor type
 	log = log.With("hypervisor", string(hvType))
 	ctx = logger.AddToContext(ctx, log)
-	ctx = hypervisor.WithTraceAttributes(ctx, attribute.String("hypervisor", string(hvType)))
-	trace.SpanFromContext(ctx).SetAttributes(attribute.String("hypervisor", string(hvType)))
+	ctx = enrichInstancesTrace(ctx, attribute.String("hypervisor", string(hvType)))
 
 	starter, err := m.getVMStarter(hvType)
 	if err != nil {

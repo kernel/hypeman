@@ -29,6 +29,12 @@ func (m *manager) startLifecycleStep(ctx context.Context, name string, attrs ...
 	}
 }
 
+func enrichInstancesTrace(ctx context.Context, attrs ...attribute.KeyValue) context.Context {
+	ctx = hypervisor.WithTraceAttributes(ctx, attrs...)
+	trace.SpanFromContext(ctx).SetAttributes(attrs...)
+	return ctx
+}
+
 func startInstancesSpan(ctx context.Context, tracer trace.Tracer, name string, attrs ...attribute.KeyValue) (context.Context, trace.Span) {
 	if len(attrs) == 0 {
 		return tracer.Start(ctx, name)

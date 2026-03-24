@@ -99,6 +99,22 @@ func traceSubsystemForType(hvType Type) string {
 	}
 }
 
+func StartImplementationSpan(ctx context.Context, hvType Type, name string, attrs ...attribute.KeyValue) (context.Context, trace.Span) {
+	baseAttrs := []attribute.KeyValue{
+		attribute.String("hypervisor", string(hvType)),
+	}
+	baseAttrs = append(baseAttrs, attrs...)
+	return startTraceSpan(ctx, otel.Tracer(traceSubsystemForType(hvType)), name, baseAttrs...)
+}
+
+func StartProcessSpan(ctx context.Context, hvType Type) (context.Context, trace.Span) {
+	return StartImplementationSpan(ctx, hvType, "hypervisor.start_process", attribute.String("operation", "start_process"))
+}
+
+func FinishTraceSpan(span trace.Span, err error) {
+	finishTraceSpan(span, err)
+}
+
 func startTraceSpan(ctx context.Context, tracer trace.Tracer, name string, attrs ...attribute.KeyValue) (context.Context, trace.Span) {
 	allAttrs := TraceAttributesFromContext(ctx)
 	if len(attrs) > 0 {
