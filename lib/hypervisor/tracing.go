@@ -162,7 +162,6 @@ func (h *tracingHypervisor) Snapshot(ctx context.Context, destPath string) (err 
 	ctx, span := startTraceSpan(ctx, h.tracer, "hypervisor.snapshot",
 		append(h.attrs,
 			attribute.String("operation", "snapshot"),
-			attribute.String("snapshot_kind", "standby"),
 		)...,
 	)
 	defer func() { finishTraceSpan(span, err) }()

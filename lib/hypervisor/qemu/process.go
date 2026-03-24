@@ -169,6 +169,8 @@ func (s *Starter) startQEMUProcess(ctx context.Context, p *paths.Paths, version 
 	instanceDir := filepath.Dir(socketPath)
 	logsDir := filepath.Join(instanceDir, "logs")
 	if err := os.MkdirAll(logsDir, 0755); err != nil {
+		processSpan.RecordError(err)
+		processSpan.SetStatus(codes.Error, err.Error())
 		return 0, nil, nil, fmt.Errorf("create logs directory: %w", err)
 	}
 
@@ -178,6 +180,8 @@ func (s *Starter) startQEMUProcess(ctx context.Context, p *paths.Paths, version 
 		0644,
 	)
 	if err != nil {
+		processSpan.RecordError(err)
+		processSpan.SetStatus(codes.Error, err.Error())
 		return 0, nil, nil, fmt.Errorf("create vmm log: %w", err)
 	}
 	defer vmmLogFile.Close()

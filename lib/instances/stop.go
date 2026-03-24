@@ -2,6 +2,7 @@ package instances
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -20,6 +21,8 @@ import (
 const DefaultStopTimeout = 5
 const shutdownRPCDeadline = 1500 * time.Millisecond
 const shutdownFailureFallbackWait = 500 * time.Millisecond
+
+var errGracefulShutdownFailed = errors.New("graceful guest shutdown did not complete")
 
 // resolveStopTimeout returns the configured stop timeout in seconds,
 // falling back to the package default when unset/invalid.
@@ -187,7 +190,11 @@ func (m *manager) stopInstance(
 		attribute.String("operation", "graceful_guest_shutdown"),
 	)
 	gracefulShutdown := m.tryGracefulGuestShutdown(gracefulCtx, &inst, stopTimeout)
-	gracefulSpanEnd(nil)
+	if gracefulShutdown {
+		gracefulSpanEnd(nil)
+	} else {
+		gracefulSpanEnd(errGracefulShutdownFailed)
+	}
 
 	// 5. Fallback hypervisor shutdown if guest graceful shutdown didn't work
 	if !gracefulShutdown {
