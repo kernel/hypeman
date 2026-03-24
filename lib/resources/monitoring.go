@@ -19,7 +19,6 @@ type monitoringState struct {
 }
 
 type monitoringSnapshot struct {
-	capturedAt          time.Time
 	status              FullResourceStatus
 	imageStorageCurrent int64
 	imageStorageMax     int64
@@ -96,8 +95,7 @@ func (m *Manager) refreshMonitoringSnapshot(ctx context.Context) error {
 	}
 
 	snapshot := monitoringSnapshot{
-		capturedAt: time.Now(),
-		status:     *status,
+		status: *status,
 	}
 	if status.DiskDetail != nil {
 		snapshot.imageStorageCurrent = status.DiskDetail.Images + status.DiskDetail.OCICache
