@@ -323,7 +323,7 @@ func (m *manager) cleanupScheduledSnapshots(ctx context.Context, instanceID stri
 
 	var errs []error
 	for snapshotID := range deleteIDs {
-		if err := m.deleteSnapshot(ctx, snapshotID); err != nil {
+		if err := m.deleteSnapshotFn(ctx, snapshotID); err != nil {
 			if errors.Is(err, ErrSnapshotNotFound) {
 				continue
 			}

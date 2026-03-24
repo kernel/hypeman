@@ -546,9 +546,17 @@ func TestRunSnapshotSchedulesCleanupFailurePreservesLastSnapshotIDAndDoesNotDupl
 		},
 	})
 	require.NoError(t, err)
-	require.NoError(t, os.Chmod(mgr.paths.SnapshotGuestDir(older.Id), 0))
+
+	originalDeleteSnapshotFn := mgr.deleteSnapshotFn
+	injectedDeleteErr := errors.New("injected snapshot delete failure")
+	mgr.deleteSnapshotFn = func(ctx context.Context, snapshotID string) error {
+		if snapshotID == older.Id {
+			return injectedDeleteErr
+		}
+		return originalDeleteSnapshotFn(ctx, snapshotID)
+	}
 	defer func() {
-		_ = os.Chmod(mgr.paths.SnapshotGuestDir(older.Id), 0755)
+		mgr.deleteSnapshotFn = originalDeleteSnapshotFn
 	}()
 
 	_, err = mgr.SetSnapshotSchedule(ctx, sourceID, SetSnapshotScheduleRequest{
@@ -564,6 +572,7 @@ func TestRunSnapshotSchedulesCleanupFailurePreservesLastSnapshotIDAndDoesNotDupl
 	err = mgr.RunSnapshotSchedules(ctx)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cleanup scheduled snapshots")
+	assert.ErrorIs(t, err, injectedDeleteErr)
 
 	schedule, err := mgr.GetSnapshotSchedule(ctx, sourceID)
 	require.NoError(t, err)
@@ -583,7 +592,7 @@ func TestRunSnapshotSchedulesCleanupFailurePreservesLastSnapshotIDAndDoesNotDupl
 			lastSnapshotFound = true
 		}
 	}
-	assert.Equal(t, 1, scheduledCount)
+	assert.Equal(t, 2, scheduledCount)
 	assert.True(t, lastSnapshotFound)
 	require.DirExists(t, mgr.paths.SnapshotDir(older.Id))
 
@@ -598,7 +607,7 @@ func TestRunSnapshotSchedulesCleanupFailurePreservesLastSnapshotIDAndDoesNotDupl
 			scheduledCount++
 		}
 	}
-	assert.Equal(t, 1, scheduledCount)
+	assert.Equal(t, 2, scheduledCount)
 	require.DirExists(t, mgr.paths.SnapshotDir(older.Id))
 }
 

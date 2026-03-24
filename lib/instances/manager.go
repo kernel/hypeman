@@ -90,6 +90,7 @@ type manager struct {
 	tracer                    trace.Tracer
 	now                       func() time.Time
 	writeFile                 func(string, []byte, os.FileMode) error
+	deleteSnapshotFn          func(context.Context, string) error
 	egressProxy               *egressproxy.Service
 	egressProxyServiceOptions egressproxy.ServiceOptions
 	egressProxyMu             sync.Mutex
@@ -151,6 +152,7 @@ func NewManager(p *paths.Paths, imageManager images.Manager, systemManager syste
 		compressionJobs:   make(map[string]*compressionJob),
 		nativeCodecPaths:  make(map[string]string),
 	}
+	m.deleteSnapshotFn = m.deleteSnapshot
 
 	// Initialize metrics if meter is provided
 	if meter != nil {
