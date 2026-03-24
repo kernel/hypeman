@@ -40,13 +40,17 @@ func (m *manager) SetSnapshotSchedule(ctx context.Context, instanceID string, re
 		return nil, err
 	}
 
-	now := time.Now().UTC()
+	now := m.now().UTC()
 	createdAt := now
+	nextRunAt := scheduledsnapshots.InitialNextRunAt(instanceID, req.Interval, now)
 	var lastRunAt *time.Time
 	var lastSnapshotID *string
 	var lastError *string
 	if existing, err := m.getSnapshotScheduleUnlocked(instanceID); err == nil {
 		createdAt = existing.CreatedAt
+		if existing.Interval == req.Interval && !existing.NextRunAt.IsZero() {
+			nextRunAt = existing.NextRunAt
+		}
 		if existing.LastRunAt != nil {
 			lastRunAtValue := *existing.LastRunAt
 			lastRunAt = &lastRunAtValue
@@ -69,7 +73,7 @@ func (m *manager) SetSnapshotSchedule(ctx context.Context, instanceID string, re
 		NamePrefix:     req.NamePrefix,
 		Metadata:       tags.Clone(req.Metadata),
 		Retention:      req.Retention,
-		NextRunAt:      now.Add(req.Interval),
+		NextRunAt:      nextRunAt,
 		LastRunAt:      lastRunAt,
 		LastSnapshotID: lastSnapshotID,
 		LastError:      lastError,
@@ -129,7 +133,7 @@ func (m *manager) RunSnapshotSchedules(ctx context.Context) error {
 			break
 		}
 
-		readNow := time.Now().UTC()
+		readNow := m.now().UTC()
 		lock := m.getInstanceLock(instanceID)
 		lock.RLock()
 		due, err := m.snapshotScheduleDueLocked(instanceID, readNow)
@@ -147,7 +151,7 @@ func (m *manager) RunSnapshotSchedules(ctx context.Context) error {
 		}
 
 		lock.Lock()
-		runNow := time.Now().UTC()
+		runNow := m.now().UTC()
 		due, err = m.snapshotScheduleDueLocked(instanceID, runNow)
 		if err != nil {
 			lock.Unlock()
@@ -210,6 +214,10 @@ func (m *manager) runSnapshotScheduleForInstanceLocked(ctx context.Context, inst
 		return m.failScheduleRun(schedule, sourceErr, "load source metadata")
 	}
 
+	if err := m.saveSnapshotScheduleUnlocked(schedule); err != nil {
+		return fmt.Errorf("save schedule before snapshot: %w", err)
+	}
+
 	if !instanceMissing {
 		sourceState := m.toInstance(ctx, sourceMeta).State
 		snapshotKind, kindErr := scheduledSnapshotKindForState(sourceState)
@@ -228,20 +236,30 @@ func (m *manager) runSnapshotScheduleForInstanceLocked(ctx context.Context, inst
 
 		snapshotID := snapshot.Id
 		schedule.LastSnapshotID = &snapshotID
+		if err := m.saveSnapshotScheduleUnlocked(schedule); err != nil {
+			return fmt.Errorf("save schedule after snapshot: %w", err)
+		}
 	}
 
 	cleanupErr := m.cleanupScheduledSnapshots(ctx, instanceID, schedule.Retention, runTime)
 	if cleanupErr != nil {
 		errMsg := cleanupErr.Error()
 		schedule.LastError = &errMsg
+		if saveErr := m.saveSnapshotScheduleUnlocked(schedule); saveErr != nil {
+			return fmt.Errorf("cleanup scheduled snapshots: %w; save schedule: %v", cleanupErr, saveErr)
+		}
+		return fmt.Errorf("cleanup scheduled snapshots: %w", cleanupErr)
 	}
 
-	if instanceMissing && cleanupErr == nil {
+	if instanceMissing {
 		scheduled, listErr := m.listScheduledSnapshotsByInstance(ctx, instanceID)
 		if listErr != nil {
 			errMsg := listErr.Error()
 			schedule.LastError = &errMsg
-			cleanupErr = fmt.Errorf("count scheduled snapshots: %w", listErr)
+			if saveErr := m.saveSnapshotScheduleUnlocked(schedule); saveErr != nil {
+				return fmt.Errorf("count scheduled snapshots: %w; save schedule: %v", listErr, saveErr)
+			}
+			return fmt.Errorf("count scheduled snapshots: %w", listErr)
 		} else {
 			remaining := len(scheduled)
 			shouldDeleteSchedule := remaining == 0
@@ -256,16 +274,6 @@ func (m *manager) runSnapshotScheduleForInstanceLocked(ctx context.Context, inst
 				return nil
 			}
 		}
-	}
-
-	if saveErr := m.saveSnapshotScheduleUnlocked(schedule); saveErr != nil {
-		if cleanupErr != nil {
-			return fmt.Errorf("cleanup scheduled snapshots: %w; save schedule: %v", cleanupErr, saveErr)
-		}
-		return fmt.Errorf("save schedule: %w", saveErr)
-	}
-	if cleanupErr != nil {
-		return fmt.Errorf("cleanup scheduled snapshots: %w", cleanupErr)
 	}
 
 	return nil
@@ -363,7 +371,11 @@ func (m *manager) saveSnapshotScheduleUnlocked(schedule *SnapshotSchedule) error
 	if err := os.MkdirAll(m.paths.SnapshotSchedulesDir(), 0755); err != nil {
 		return fmt.Errorf("create snapshot schedules directory: %w", err)
 	}
-	if err := os.WriteFile(m.paths.InstanceSnapshotSchedule(schedule.InstanceID), content, 0644); err != nil {
+	writeFile := m.writeFile
+	if writeFile == nil {
+		writeFile = os.WriteFile
+	}
+	if err := writeFile(m.paths.InstanceSnapshotSchedule(schedule.InstanceID), content, 0644); err != nil {
 		return fmt.Errorf("write snapshot schedule: %w", err)
 	}
 

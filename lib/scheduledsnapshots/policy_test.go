@@ -95,3 +95,22 @@ func TestNextRunUsesIntervalStepCount(t *testing.T) {
 	next := NextRun(previous, interval, now)
 	assert.Equal(t, previous.Add(3*time.Hour), next)
 }
+
+func TestInitialNextRunAtUsesDeterministicBoundedJitter(t *testing.T) {
+	now := time.Date(2026, 3, 10, 10, 0, 0, 0, time.UTC)
+
+	first := InitialNextRunAt("inst-1", 24*time.Hour, now)
+	second := InitialNextRunAt("inst-1", 24*time.Hour, now.Add(3*time.Hour))
+
+	firstJitter := first.Sub(now.Add(24 * time.Hour))
+	secondJitter := second.Sub(now.Add(27 * time.Hour))
+
+	assert.Equal(t, firstJitter, secondJitter)
+	assert.GreaterOrEqual(t, firstJitter, time.Duration(0))
+	assert.Less(t, firstJitter, 5*time.Minute)
+
+	shortInterval := 15 * time.Minute
+	shortJitter := InitialNextRunAt("inst-1", shortInterval, now).Sub(now.Add(shortInterval))
+	assert.GreaterOrEqual(t, shortJitter, time.Duration(0))
+	assert.Less(t, shortJitter, shortInterval/10)
+}

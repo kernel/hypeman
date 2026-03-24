@@ -116,7 +116,10 @@ Any State → Stopped
   - `Running`/`Standby` sources use `Standby` snapshots.
   - `Stopped` sources use `Stopped` snapshots.
 - `Standby` runs from `Running` sources perform a brief pause/resume cycle during capture.
+- The minimum interval is `1m`, but larger intervals are recommended for heavier or latency-sensitive workloads because running captures pause/resume the guest.
 - Scheduled snapshot `name_prefix` is optional and capped at 47 chars so generated names stay within the 63-char snapshot name limit.
+- New schedules establish cadence at `now + interval + deterministic jitter` derived from the instance ID.
+- Updating only retention, metadata, or `name_prefix` preserves `next_run_at`; changing `interval` establishes a new cadence.
 - Schedule runs advance to the next future interval (no backfill flood after downtime).
 - Each schedule stores operational status:
   - `next_run_at`

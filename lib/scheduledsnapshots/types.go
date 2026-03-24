@@ -14,6 +14,7 @@ const (
 	MaxSnapshotNameLength       = 63
 	MaxNamePrefixLength         = MaxSnapshotNameLength - len(NameTimestampFormat) - 1
 	MinInterval                 = time.Minute
+	maxCadenceJitter            = 5 * time.Minute
 )
 
 // Retention defines automatic cleanup rules for scheduled snapshots.

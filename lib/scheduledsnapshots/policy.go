@@ -2,6 +2,7 @@ package scheduledsnapshots
 
 import (
 	"fmt"
+	"hash/fnv"
 	"time"
 
 	"github.com/kernel/hypeman/lib/tags"
@@ -64,6 +65,10 @@ func BuildSnapshotName(prefix string, runAt time.Time) string {
 	return prefix + "-" + runAt.UTC().Format(NameTimestampFormat)
 }
 
+func InitialNextRunAt(instanceID string, interval time.Duration, now time.Time) time.Time {
+	return now.UTC().Add(interval).Add(cadenceJitter(instanceID, interval))
+}
+
 func NextRun(previous time.Time, interval time.Duration, now time.Time) time.Time {
 	if interval <= 0 {
 		return now
@@ -77,4 +82,22 @@ func NextRun(previous time.Time, interval time.Duration, now time.Time) time.Tim
 
 	steps := int64(now.Sub(previous)/interval) + 1
 	return previous.Add(time.Duration(steps) * interval)
+}
+
+func cadenceJitter(instanceID string, interval time.Duration) time.Duration {
+	if interval <= 0 {
+		return 0
+	}
+
+	maxJitter := interval / 10
+	if maxJitter > maxCadenceJitter {
+		maxJitter = maxCadenceJitter
+	}
+	if maxJitter <= 0 {
+		return 0
+	}
+
+	hasher := fnv.New64a()
+	_, _ = hasher.Write([]byte(instanceID))
+	return time.Duration(hasher.Sum64() % uint64(maxJitter))
 }

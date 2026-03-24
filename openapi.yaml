@@ -2329,6 +2329,10 @@ paths:
         - `Running` or `Standby` source: create a `Standby` snapshot.
         - `Stopped` source: create a `Stopped` snapshot.
         For running instances, this includes a brief pause/resume cycle during each capture.
+        The minimum supported interval is `1m`, but larger intervals are recommended for
+        heavier or latency-sensitive workloads.
+        Updating only retention, metadata, or `name_prefix` preserves the next scheduled
+        run; changing `interval` establishes a new cadence.
       operationId: setInstanceSnapshotSchedule
       security:
         - bearerAuth: []
