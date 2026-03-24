@@ -98,9 +98,10 @@ type APIConfig struct {
 
 // MetricsConfig holds metrics endpoint settings.
 type MetricsConfig struct {
-	ListenAddress string `koanf:"listen_address"`
-	Port          int    `koanf:"port"`
-	VMLabelBudget int    `koanf:"vm_label_budget"`
+	ListenAddress           string `koanf:"listen_address"`
+	Port                    int    `koanf:"port"`
+	VMLabelBudget           int    `koanf:"vm_label_budget"`
+	ResourceRefreshInterval string `koanf:"resource_refresh_interval"`
 }
 
 // OtelConfig holds OpenTelemetry settings.
@@ -294,9 +295,10 @@ func defaultConfig() *Config {
 		},
 
 		Metrics: MetricsConfig{
-			ListenAddress: "127.0.0.1",
-			Port:          9464,
-			VMLabelBudget: 200,
+			ListenAddress:           "127.0.0.1",
+			Port:                    9464,
+			VMLabelBudget:           200,
+			ResourceRefreshInterval: "120s",
 		},
 
 		Otel: OtelConfig{
@@ -461,6 +463,16 @@ func (c *Config) Validate() error {
 	}
 	if c.Metrics.VMLabelBudget <= 0 {
 		return fmt.Errorf("metrics.vm_label_budget must be positive, got %d", c.Metrics.VMLabelBudget)
+	}
+	if strings.TrimSpace(c.Metrics.ResourceRefreshInterval) == "" {
+		return fmt.Errorf("metrics.resource_refresh_interval must not be empty")
+	}
+	interval, err := time.ParseDuration(c.Metrics.ResourceRefreshInterval)
+	if err != nil {
+		return fmt.Errorf("metrics.resource_refresh_interval must be a valid duration, got %q: %w", c.Metrics.ResourceRefreshInterval, err)
+	}
+	if interval <= 0 {
+		return fmt.Errorf("metrics.resource_refresh_interval must be positive, got %q", c.Metrics.ResourceRefreshInterval)
 	}
 	if c.Otel.MetricExportInterval != "" {
 		if _, err := time.ParseDuration(c.Otel.MetricExportInterval); err != nil {

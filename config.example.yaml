@@ -105,6 +105,7 @@ data_dir: /var/lib/hypeman
 #   listen_address: 127.0.0.1
 #   port: 9464
 #   vm_label_budget: 200
+#   resource_refresh_interval: 120s
 #
 # otel:
 #   enabled: false

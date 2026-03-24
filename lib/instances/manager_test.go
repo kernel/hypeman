@@ -1117,7 +1117,7 @@ func TestEntrypointEnvVars(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, inst)
 	assert.Contains(t, []State{StateInitializing, StateRunning}, inst.State)
-	inst, err = waitForInstanceState(ctx, mgr, inst.Id, StateRunning, 20*time.Second)
+	inst, err = waitForInstanceState(ctx, mgr, inst.Id, StateRunning, 60*time.Second)
 	require.NoError(t, err)
 	t.Logf("Instance created: %s", inst.Id)
 

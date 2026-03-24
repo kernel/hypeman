@@ -31,6 +31,8 @@ type compressionIntegrationHarness struct {
 	waitHypervisorUp func(ctx context.Context, inst *Instance) error
 }
 
+const compressionGuestExecTimeout = 20 * time.Second
+
 func TestCloudHypervisorStandbyRestoreCompressionScenarios(t *testing.T) {
 	t.Parallel()
 
@@ -261,14 +263,20 @@ func waitForRunningAndExecReady(t *testing.T, ctx context.Context, mgr *manager,
 
 func writeGuestMarker(t *testing.T, ctx context.Context, inst *Instance, path string, value string) {
 	t.Helper()
-	output, exitCode, err := execCommand(ctx, inst, "sh", "-c", fmt.Sprintf("printf %q > %s && sync", value, path))
+	execCtx, cancel := context.WithTimeout(ctx, integrationTestTimeout(compressionGuestExecTimeout))
+	defer cancel()
+
+	output, exitCode, err := execCommand(execCtx, inst, "sh", "-c", fmt.Sprintf("printf %q > %s && sync", value, path))
 	require.NoError(t, err)
 	require.Equal(t, 0, exitCode, output)
 }
 
 func assertGuestMarker(t *testing.T, ctx context.Context, inst *Instance, path string, expected string) {
 	t.Helper()
-	output, exitCode, err := execCommand(ctx, inst, "cat", path)
+	execCtx, cancel := context.WithTimeout(ctx, integrationTestTimeout(compressionGuestExecTimeout))
+	defer cancel()
+
+	output, exitCode, err := execCommand(execCtx, inst, "cat", path)
 	require.NoError(t, err)
 	require.Equal(t, 0, exitCode, output)
 	assert.Equal(t, expected, output)

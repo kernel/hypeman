@@ -22,6 +22,9 @@ func TestDefaultConfigIncludesMetricsSettings(t *testing.T) {
 	if cfg.Metrics.VMLabelBudget != 200 {
 		t.Fatalf("expected default metrics.vm_label_budget to be 200, got %d", cfg.Metrics.VMLabelBudget)
 	}
+	if cfg.Metrics.ResourceRefreshInterval != "120s" {
+		t.Fatalf("expected default metrics.resource_refresh_interval to be 120s, got %q", cfg.Metrics.ResourceRefreshInterval)
+	}
 	if cfg.Otel.MetricExportInterval != "60s" {
 		t.Fatalf("expected default otel.metric_export_interval to be 60s, got %q", cfg.Otel.MetricExportInterval)
 	}
@@ -31,6 +34,7 @@ func TestLoadEnvOverridesMetricsAndOtelInterval(t *testing.T) {
 	t.Setenv("METRICS__LISTEN_ADDRESS", "0.0.0.0")
 	t.Setenv("METRICS__PORT", "9999")
 	t.Setenv("METRICS__VM_LABEL_BUDGET", "350")
+	t.Setenv("METRICS__RESOURCE_REFRESH_INTERVAL", "30s")
 	t.Setenv("OTEL__METRIC_EXPORT_INTERVAL", "15s")
 
 	tmp := t.TempDir()
@@ -52,6 +56,9 @@ func TestLoadEnvOverridesMetricsAndOtelInterval(t *testing.T) {
 	}
 	if cfg.Metrics.VMLabelBudget != 350 {
 		t.Fatalf("expected metrics.vm_label_budget override, got %d", cfg.Metrics.VMLabelBudget)
+	}
+	if cfg.Metrics.ResourceRefreshInterval != "30s" {
+		t.Fatalf("expected metrics.resource_refresh_interval override, got %q", cfg.Metrics.ResourceRefreshInterval)
 	}
 	if cfg.Otel.MetricExportInterval != "15s" {
 		t.Fatalf("expected otel.metric_export_interval override, got %q", cfg.Otel.MetricExportInterval)
@@ -85,6 +92,32 @@ func TestValidateRejectsInvalidVMLabelBudget(t *testing.T) {
 	err := cfg.Validate()
 	if err == nil {
 		t.Fatalf("expected validation error for invalid vm label budget")
+	}
+}
+
+func TestValidateRejectsInvalidResourceRefreshInterval(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Metrics.ResourceRefreshInterval = ""
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatalf("expected validation error for empty resource refresh interval")
+	}
+
+	cfg = defaultConfig()
+	cfg.Metrics.ResourceRefreshInterval = "not-a-duration"
+
+	err = cfg.Validate()
+	if err == nil {
+		t.Fatalf("expected validation error for invalid resource refresh interval")
+	}
+
+	cfg = defaultConfig()
+	cfg.Metrics.ResourceRefreshInterval = "0s"
+
+	err = cfg.Validate()
+	if err == nil {
+		t.Fatalf("expected validation error for non-positive resource refresh interval")
 	}
 }
 
