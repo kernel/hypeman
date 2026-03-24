@@ -13,7 +13,7 @@ import (
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/network"
 	snapshotstore "github.com/kernel/hypeman/lib/snapshot"
-	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 // StandbyInstance puts an instance in standby state
@@ -24,17 +24,16 @@ func (m *manager) standbyInstance(
 	id string,
 	req StandbyInstanceRequest,
 	skipCompression bool,
-) (*Instance, error) {
+) (_ *Instance, retErr error) {
 	start := time.Now()
 	log := logger.FromContext(ctx)
 	log.InfoContext(ctx, "putting instance in standby", "instance_id", id)
 
-	// Start tracing span if tracer is available
-	if m.metrics != nil && m.metrics.tracer != nil {
-		var span trace.Span
-		ctx, span = m.metrics.tracer.Start(ctx, "StandbyInstance")
-		defer span.End()
-	}
+	ctx, span := m.startLifecycleSpan(ctx, "instances.standby",
+		attribute.String("instance_id", id),
+		attribute.String("operation", "standby"),
+	)
+	defer func() { finishInstancesSpan(span, retErr) }()
 
 	// 1. Load instance
 	meta, err := m.loadMetadata(id)
@@ -45,6 +44,7 @@ func (m *manager) standbyInstance(
 
 	inst := m.toInstance(ctx, meta)
 	stored := &meta.StoredMetadata
+	ctx = hypervisor.WithTraceAttributes(ctx, attribute.String("hypervisor", string(stored.HypervisorType)))
 	log.DebugContext(ctx, "loaded instance", "instance_id", id, "state", inst.State)
 
 	// 2. Validate state transition (must be Running to start standby flow)
@@ -99,10 +99,17 @@ func (m *manager) standbyInstance(
 
 	// 6. Transition: Running → Paused
 	log.DebugContext(ctx, "pausing VM", "instance_id", id)
-	if err := hv.Pause(ctx); err != nil {
+	pauseCtx, pauseSpanEnd := m.startLifecycleStep(ctx, "pause_vm",
+		attribute.String("instance_id", id),
+		attribute.String("hypervisor", string(stored.HypervisorType)),
+		attribute.String("operation", "pause_vm"),
+	)
+	if err := hv.Pause(pauseCtx); err != nil {
+		pauseSpanEnd(err)
 		log.ErrorContext(ctx, "failed to pause VM", "instance_id", id, "error", err)
 		return nil, fmt.Errorf("pause vm failed: %w", err)
 	}
+	pauseSpanEnd(nil)
 
 	// 7. Create snapshot
 	snapshotDir := m.paths.InstanceSnapshotLatest(id)
@@ -120,7 +127,14 @@ func (m *manager) standbyInstance(
 		}
 	}
 	log.DebugContext(ctx, "creating snapshot", "instance_id", id, "snapshot_dir", snapshotDir)
-	if err := createSnapshot(ctx, hv, snapshotDir, reuseSnapshotBase); err != nil {
+	snapshotCtx, snapshotSpanEnd := m.startLifecycleStep(ctx, "create_snapshot",
+		attribute.String("instance_id", id),
+		attribute.String("hypervisor", string(stored.HypervisorType)),
+		attribute.String("operation", "create_snapshot"),
+		attribute.Bool("reuse_snapshot_base", reuseSnapshotBase),
+	)
+	if err := createSnapshot(snapshotCtx, hv, snapshotDir, reuseSnapshotBase); err != nil {
+		snapshotSpanEnd(err)
 		// Snapshot failed - try to resume VM
 		log.ErrorContext(ctx, "snapshot failed, attempting to resume VM", "instance_id", id, "error", err)
 		if resumeErr := hv.Resume(ctx); resumeErr != nil {
@@ -133,12 +147,21 @@ func (m *manager) standbyInstance(
 		}
 		return nil, fmt.Errorf("create snapshot: %w", err)
 	}
+	snapshotSpanEnd(nil)
 
 	// 8. Stop VMM gracefully (snapshot is complete)
 	log.DebugContext(ctx, "shutting down hypervisor", "instance_id", id)
-	if err := m.shutdownHypervisor(ctx, &inst); err != nil {
+	shutdownCtx, shutdownSpanEnd := m.startLifecycleStep(ctx, "shutdown_hypervisor",
+		attribute.String("instance_id", id),
+		attribute.String("hypervisor", string(stored.HypervisorType)),
+		attribute.String("operation", "shutdown_hypervisor"),
+	)
+	if err := m.shutdownHypervisor(shutdownCtx, &inst); err != nil {
+		shutdownSpanEnd(err)
 		// Log but continue - snapshot was created successfully
 		log.WarnContext(ctx, "failed to shutdown hypervisor gracefully, snapshot still valid", "instance_id", id, "error", err)
+	} else {
+		shutdownSpanEnd(nil)
 	}
 
 	// Firecracker vsock sockets can persist across standby/restore if the process
@@ -156,9 +179,17 @@ func (m *manager) standbyInstance(
 	if inst.NetworkEnabled {
 		m.unregisterEgressProxyInstance(ctx, id)
 		log.DebugContext(ctx, "releasing network", "instance_id", id, "network", "default")
-		if err := m.networkManager.ReleaseAllocation(ctx, networkAlloc); err != nil {
+		releaseNetworkCtx, releaseNetworkSpanEnd := m.startLifecycleStep(ctx, "release_network",
+			attribute.String("instance_id", id),
+			attribute.String("hypervisor", string(stored.HypervisorType)),
+			attribute.String("operation", "release_network"),
+		)
+		if err := m.networkManager.ReleaseAllocation(releaseNetworkCtx, networkAlloc); err != nil {
+			releaseNetworkSpanEnd(err)
 			// Log error but continue - snapshot was created successfully
 			log.WarnContext(ctx, "failed to release network, continuing with standby", "instance_id", id, "error", err)
+		} else {
+			releaseNetworkSpanEnd(nil)
 		}
 	}
 
@@ -183,7 +214,12 @@ func (m *manager) standbyInstance(
 	finalInst := m.toInstance(ctx, meta)
 
 	if compressionPolicy != nil {
-		m.startCompressionJob(ctx, compressionTarget{
+		compressionCtx, compressionSpanEnd := m.startLifecycleStep(ctx, "enqueue_snapshot_compression",
+			attribute.String("instance_id", id),
+			attribute.String("hypervisor", string(stored.HypervisorType)),
+			attribute.String("operation", "enqueue_snapshot_compression"),
+		)
+		m.startCompressionJob(compressionCtx, compressionTarget{
 			Key:            m.snapshotJobKeyForInstance(stored.Id),
 			OwnerID:        stored.Id,
 			SnapshotDir:    snapshotDir,
@@ -191,6 +227,7 @@ func (m *manager) standbyInstance(
 			Source:         snapshotCompressionSourceStandby,
 			Policy:         *compressionPolicy,
 		})
+		compressionSpanEnd(nil)
 	}
 
 	log.InfoContext(ctx, "instance put in standby successfully", "instance_id", id, "state", finalInst.State)

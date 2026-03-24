@@ -73,17 +73,15 @@ func generateVsockCID(instanceID string) int64 {
 func (m *manager) createInstance(
 	ctx context.Context,
 	req CreateInstanceRequest,
-) (*Instance, error) {
+) (_ *Instance, retErr error) {
 	start := time.Now()
 	log := logger.FromContext(ctx)
 	log.InfoContext(ctx, "creating instance", "name", req.Name, "image", req.Image, "vcpus", req.Vcpus)
 
-	// Start tracing span if tracer is available
-	if m.metrics != nil && m.metrics.tracer != nil {
-		var span trace.Span
-		ctx, span = m.metrics.tracer.Start(ctx, "CreateInstance")
-		defer span.End()
-	}
+	ctx, span := m.startLifecycleSpan(ctx, "instances.create",
+		attribute.String("operation", "create"),
+	)
+	defer func() { finishInstancesSpan(span, retErr) }()
 
 	// 1. Validate request
 	if err := validateCreateRequest(&req); err != nil {
@@ -93,36 +91,44 @@ func (m *manager) createInstance(
 
 	// 2. Validate image exists and is ready; auto-pull if not found
 	log.DebugContext(ctx, "validating image", "image", req.Image)
-	imageInfo, err := m.imageManager.GetImage(ctx, req.Image)
+	imageCtx, imageSpanEnd := m.startLifecycleStep(ctx, "resolve_image",
+		attribute.String("operation", "resolve_image"),
+	)
+	imageInfo, err := m.imageManager.GetImage(imageCtx, req.Image)
 	if err != nil {
 		if err == images.ErrNotFound {
 			// Auto-pull: image not found locally, kick off the pull in the
 			// background and wait up to 5 seconds for it to complete.
 			log.InfoContext(ctx, "image not found locally, auto-pulling", "image", req.Image)
-			_, pullErr := m.imageManager.CreateImage(ctx, images.CreateImageRequest{Name: req.Image})
+			_, pullErr := m.imageManager.CreateImage(imageCtx, images.CreateImageRequest{Name: req.Image})
 			if pullErr != nil {
+				imageSpanEnd(pullErr)
 				log.ErrorContext(ctx, "failed to auto-pull image", "image", req.Image, "error", pullErr)
 				return nil, fmt.Errorf("auto-pull image %s: %w", req.Image, pullErr)
 			}
 			// Wait with a short timeout — if the pull doesn't finish in time
 			// we return an error but let it continue in the background.
-			pullCtx, pullCancel := context.WithTimeout(ctx, 5*time.Second)
+			pullCtx, pullCancel := context.WithTimeout(imageCtx, 5*time.Second)
 			defer pullCancel()
 			if waitErr := m.imageManager.WaitForReady(pullCtx, req.Image); waitErr != nil {
+				imageSpanEnd(waitErr)
 				log.InfoContext(ctx, "image pull not ready within timeout, pull continues in background", "image", req.Image, "error", waitErr)
 				return nil, fmt.Errorf("%w: image %s is being pulled, please try again shortly", ErrImageNotReady, req.Image)
 			}
 			// Re-fetch after successful pull
-			imageInfo, err = m.imageManager.GetImage(ctx, req.Image)
+			imageInfo, err = m.imageManager.GetImage(imageCtx, req.Image)
 			if err != nil {
+				imageSpanEnd(err)
 				log.ErrorContext(ctx, "failed to get image after auto-pull", "image", req.Image, "error", err)
 				return nil, fmt.Errorf("get image after auto-pull: %w", err)
 			}
 		} else {
+			imageSpanEnd(err)
 			log.ErrorContext(ctx, "failed to get image", "image", req.Image, "error", err)
 			return nil, fmt.Errorf("get image: %w", err)
 		}
 	}
+	imageSpanEnd(nil)
 
 	if imageInfo.Status != images.StatusReady {
 		log.ErrorContext(ctx, "image not ready", "image", req.Image, "status", imageInfo.Status)
@@ -131,6 +137,8 @@ func (m *manager) createInstance(
 
 	// 3. Generate instance ID (CUID2 for secure, collision-resistant IDs)
 	id := cuid2.Generate()
+	ctx = hypervisor.WithTraceAttributes(ctx, attribute.String("instance_id", id))
+	trace.SpanFromContext(ctx).SetAttributes(attribute.String("instance_id", id))
 	log.DebugContext(ctx, "generated instance ID", "instance_id", id)
 
 	// 4. Generate vsock configuration
@@ -209,12 +217,8 @@ func (m *manager) createInstance(
 	// Enrich logger and trace span with hypervisor type
 	log = log.With("hypervisor", string(hvType))
 	ctx = logger.AddToContext(ctx, log)
-	if m.metrics != nil && m.metrics.tracer != nil {
-		span := trace.SpanFromContext(ctx)
-		if span.IsRecording() {
-			span.SetAttributes(attribute.String("hypervisor", string(hvType)))
-		}
-	}
+	ctx = hypervisor.WithTraceAttributes(ctx, attribute.String("hypervisor", string(hvType)))
+	trace.SpanFromContext(ctx).SetAttributes(attribute.String("hypervisor", string(hvType)))
 
 	starter, err := m.getVMStarter(hvType)
 	if err != nil {
@@ -364,13 +368,20 @@ func (m *manager) createInstance(
 	if networkName != "" {
 		log.DebugContext(ctx, "allocating network", "instance_id", id, "network", networkName,
 			"download_bps", stored.NetworkBandwidthDownload, "upload_bps", stored.NetworkBandwidthUpload)
-		netConfig, err = m.networkManager.CreateAllocation(ctx, network.AllocateRequest{
+		networkCtx, networkSpanEnd := m.startLifecycleStep(ctx, "allocate_network",
+			attribute.String("instance_id", id),
+			attribute.String("hypervisor", string(stored.HypervisorType)),
+			attribute.String("operation", "allocate_network"),
+			attribute.Bool("network_enabled", true),
+		)
+		netConfig, err = m.networkManager.CreateAllocation(networkCtx, network.AllocateRequest{
 			InstanceID:    id,
 			InstanceName:  req.Name,
 			DownloadBps:   stored.NetworkBandwidthDownload,
 			UploadBps:     stored.NetworkBandwidthUpload,
 			UploadCeilBps: stored.NetworkBandwidthUpload * int64(m.networkManager.GetUploadBurstMultiplier()),
 		})
+		networkSpanEnd(err)
 		if err != nil {
 			log.ErrorContext(ctx, "failed to allocate network", "instance_id", id, "network", networkName, "error", err)
 			return nil, fmt.Errorf("allocate network: %w", err)
@@ -442,10 +453,17 @@ func (m *manager) createInstance(
 		})
 	}
 	log.DebugContext(ctx, "creating config disk", "instance_id", id)
-	if err := m.createConfigDisk(ctx, inst, imageInfo, netConfig, proxyGuestConfig); err != nil {
+	configDiskCtx, configDiskSpanEnd := m.startLifecycleStep(ctx, "create_config_disk",
+		attribute.String("instance_id", id),
+		attribute.String("hypervisor", string(stored.HypervisorType)),
+		attribute.String("operation", "create_config_disk"),
+	)
+	if err := m.createConfigDisk(configDiskCtx, inst, imageInfo, netConfig, proxyGuestConfig); err != nil {
+		configDiskSpanEnd(err)
 		log.ErrorContext(ctx, "failed to create config disk", "instance_id", id, "error", err)
 		return nil, fmt.Errorf("create config disk: %w", err)
 	}
+	configDiskSpanEnd(nil)
 
 	// 17. Record boot start time before launching the VM so marker hydration
 	// can safely ignore stale sentinels from prior runs.
@@ -465,10 +483,17 @@ func (m *manager) createInstance(
 
 	// 19. Start VMM and boot VM
 	log.InfoContext(ctx, "starting VMM and booting VM", "instance_id", id)
-	if err := m.startAndBootVM(ctx, stored, imageInfo, netConfig); err != nil {
+	startVMCtx, startVMSpanEnd := m.startLifecycleStep(ctx, "start_vm",
+		attribute.String("instance_id", id),
+		attribute.String("hypervisor", string(stored.HypervisorType)),
+		attribute.String("operation", "start_vm"),
+	)
+	if err := m.startAndBootVM(startVMCtx, stored, imageInfo, netConfig); err != nil {
+		startVMSpanEnd(err)
 		log.ErrorContext(ctx, "failed to start and boot VM", "instance_id", id, "error", err)
 		return nil, err
 	}
+	startVMSpanEnd(nil)
 
 	// 20. Persist runtime metadata updates after VM boot.
 	meta = &metadata{StoredMetadata: *stored}

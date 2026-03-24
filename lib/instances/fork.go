@@ -17,15 +17,21 @@ import (
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/network"
 	"github.com/nrednav/cuid2"
+	"go.opentelemetry.io/otel/attribute"
 	"gvisor.dev/gvisor/pkg/cleanup"
 )
 
 // forkInstance creates a new instance by cloning a stopped or standby source
 // instance. It returns the newly created fork and the requested final target
 // state; callers apply remaining target state transitions outside the source lock.
-func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceRequest) (*Instance, State, error) {
+func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceRequest) (_ *Instance, _ State, retErr error) {
 	log := logger.FromContext(ctx)
 	log.InfoContext(ctx, "forking instance", "source_instance_id", id, "fork_name", req.Name)
+	ctx, span := m.startLifecycleSpan(ctx, "instances.fork",
+		attribute.String("instance_id", id),
+		attribute.String("operation", "fork"),
+	)
+	defer func() { finishInstancesSpan(span, retErr) }()
 
 	if err := validateForkRequest(req); err != nil {
 		return nil, "", err

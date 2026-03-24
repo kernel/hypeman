@@ -7,9 +7,10 @@ import (
 
 	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/egressproxy"
+	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/network"
-	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/attribute"
 	"gvisor.dev/gvisor/pkg/cleanup"
 )
 
@@ -19,17 +20,16 @@ func (m *manager) startInstance(
 	ctx context.Context,
 	id string,
 	req StartInstanceRequest,
-) (*Instance, error) {
+) (_ *Instance, retErr error) {
 	start := time.Now()
 	log := logger.FromContext(ctx)
 	log.InfoContext(ctx, "starting instance", "instance_id", id)
 
-	// Start tracing span if tracer is available
-	if m.metrics != nil && m.metrics.tracer != nil {
-		var span trace.Span
-		ctx, span = m.metrics.tracer.Start(ctx, "StartInstance")
-		defer span.End()
-	}
+	ctx, span := m.startLifecycleSpan(ctx, "instances.start",
+		attribute.String("instance_id", id),
+		attribute.String("operation", "start"),
+	)
+	defer func() { finishInstancesSpan(span, retErr) }()
 
 	// 1. Load instance
 	meta, err := m.loadMetadata(id)
@@ -40,6 +40,7 @@ func (m *manager) startInstance(
 
 	inst := m.toInstance(ctx, meta)
 	stored := &meta.StoredMetadata
+	ctx = hypervisor.WithTraceAttributes(ctx, attribute.String("hypervisor", string(stored.HypervisorType)))
 	log.DebugContext(ctx, "loaded instance", "instance_id", id, "state", inst.State)
 
 	// 2. Validate state (must be Stopped to start)
@@ -72,7 +73,13 @@ func (m *manager) startInstance(
 
 	// 3. Get image info (needed for buildHypervisorConfig)
 	log.DebugContext(ctx, "getting image info", "instance_id", id, "image", stored.Image)
-	imageInfo, err := m.imageManager.GetImage(ctx, stored.Image)
+	imageCtx, imageSpanEnd := m.startLifecycleStep(ctx, "resolve_image",
+		attribute.String("instance_id", id),
+		attribute.String("hypervisor", string(stored.HypervisorType)),
+		attribute.String("operation", "resolve_image"),
+	)
+	imageInfo, err := m.imageManager.GetImage(imageCtx, stored.Image)
+	imageSpanEnd(err)
 	if err != nil {
 		log.ErrorContext(ctx, "failed to get image", "instance_id", id, "image", stored.Image, "error", err)
 		return nil, fmt.Errorf("get image: %w", err)
@@ -86,10 +93,17 @@ func (m *manager) startInstance(
 	var netConfig *network.NetworkConfig
 	if stored.NetworkEnabled {
 		log.DebugContext(ctx, "allocating network for start", "instance_id", id, "network", "default")
-		netConfig, err = m.networkManager.CreateAllocation(ctx, network.AllocateRequest{
+		networkCtx, networkSpanEnd := m.startLifecycleStep(ctx, "allocate_network",
+			attribute.String("instance_id", id),
+			attribute.String("hypervisor", string(stored.HypervisorType)),
+			attribute.String("operation", "allocate_network"),
+			attribute.Bool("network_enabled", true),
+		)
+		netConfig, err = m.networkManager.CreateAllocation(networkCtx, network.AllocateRequest{
 			InstanceID:   id,
 			InstanceName: stored.Name,
 		})
+		networkSpanEnd(err)
 		if err != nil {
 			log.ErrorContext(ctx, "failed to allocate network", "instance_id", id, "error", err)
 			return nil, fmt.Errorf("allocate network: %w", err)
@@ -143,10 +157,17 @@ func (m *manager) startInstance(
 	// 5. Regenerate config disk with new network configuration
 	instForConfig := &Instance{StoredMetadata: *stored}
 	log.DebugContext(ctx, "regenerating config disk", "instance_id", id)
-	if err := m.createConfigDisk(ctx, instForConfig, imageInfo, netConfig, proxyGuestConfig); err != nil {
+	configDiskCtx, configDiskSpanEnd := m.startLifecycleStep(ctx, "create_config_disk",
+		attribute.String("instance_id", id),
+		attribute.String("hypervisor", string(stored.HypervisorType)),
+		attribute.String("operation", "create_config_disk"),
+	)
+	if err := m.createConfigDisk(configDiskCtx, instForConfig, imageInfo, netConfig, proxyGuestConfig); err != nil {
+		configDiskSpanEnd(err)
 		log.ErrorContext(ctx, "failed to create config disk", "instance_id", id, "error", err)
 		return nil, fmt.Errorf("create config disk: %w", err)
 	}
+	configDiskSpanEnd(nil)
 
 	if err := m.archiveAppLogForBoot(id); err != nil {
 		log.WarnContext(ctx, "failed to archive app log before start", "instance_id", id, "error", err)
@@ -157,10 +178,17 @@ func (m *manager) startInstance(
 	stored.StartedAt = &bootStart
 
 	log.InfoContext(ctx, "starting hypervisor and booting VM", "instance_id", id)
-	if err := m.startAndBootVM(ctx, stored, imageInfo, netConfig); err != nil {
+	startVMCtx, startVMSpanEnd := m.startLifecycleStep(ctx, "start_vm",
+		attribute.String("instance_id", id),
+		attribute.String("hypervisor", string(stored.HypervisorType)),
+		attribute.String("operation", "start_vm"),
+	)
+	if err := m.startAndBootVM(startVMCtx, stored, imageInfo, netConfig); err != nil {
+		startVMSpanEnd(err)
 		log.ErrorContext(ctx, "failed to start and boot VM", "instance_id", id, "error", err)
 		return nil, err
 	}
+	startVMSpanEnd(nil)
 
 	// Success - release cleanup stack (prevent cleanup)
 	cu.Release()

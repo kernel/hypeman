@@ -10,6 +10,10 @@ import (
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/kernel/hypeman/lib/vmm"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"gvisor.dev/gvisor/pkg/cleanup"
 )
 
@@ -62,7 +66,20 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 	}
 
 	// 1. Start the Cloud Hypervisor process
-	pid, err := vmm.StartProcess(ctx, p, chVersion, socketPath)
+	processAttrs := hypervisor.TraceAttributesFromContext(ctx)
+	processAttrs = append(processAttrs,
+		attribute.String("operation", "start_process"),
+		attribute.String("hypervisor", string(hypervisor.TypeCloudHypervisor)),
+	)
+	processCtx, processSpan := otel.Tracer("hypeman/hypervisor/cloudhypervisor").Start(ctx, "hypervisor.start_process", trace.WithAttributes(processAttrs...))
+	pid, err := vmm.StartProcess(processCtx, p, chVersion, socketPath)
+	if err != nil {
+		processSpan.RecordError(err)
+		processSpan.SetStatus(codes.Error, err.Error())
+	} else {
+		processSpan.SetStatus(codes.Ok, "")
+	}
+	processSpan.End()
 	if err != nil {
 		return 0, nil, fmt.Errorf("start process: %w", err)
 	}
@@ -117,7 +134,20 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 
 	// 1. Start the Cloud Hypervisor process
 	processStartTime := time.Now()
-	pid, err := vmm.StartProcess(ctx, p, chVersion, socketPath)
+	processAttrs := hypervisor.TraceAttributesFromContext(ctx)
+	processAttrs = append(processAttrs,
+		attribute.String("operation", "start_process"),
+		attribute.String("hypervisor", string(hypervisor.TypeCloudHypervisor)),
+	)
+	processCtx, processSpan := otel.Tracer("hypeman/hypervisor/cloudhypervisor").Start(ctx, "hypervisor.start_process", trace.WithAttributes(processAttrs...))
+	pid, err := vmm.StartProcess(processCtx, p, chVersion, socketPath)
+	if err != nil {
+		processSpan.RecordError(err)
+		processSpan.SetStatus(codes.Error, err.Error())
+	} else {
+		processSpan.SetStatus(codes.Ok, "")
+	}
+	processSpan.End()
 	if err != nil {
 		return 0, nil, fmt.Errorf("start process: %w", err)
 	}

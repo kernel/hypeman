@@ -124,7 +124,7 @@ func NewManager(p *paths.Paths, imageManager images.Manager, systemManager syste
 	// Initialize VM starters from platform-specific init functions
 	vmStarters := make(map[hypervisor.Type]hypervisor.VMStarter, len(platformStarters))
 	for hvType, starter := range platformStarters {
-		vmStarters[hvType] = starter
+		vmStarters[hvType] = hypervisor.WrapVMStarter(hvType, starter)
 	}
 
 	m := &manager{

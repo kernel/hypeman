@@ -11,9 +11,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/paths"
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const cloudHypervisorSocketReadyTimeout = 10 * time.Second
@@ -26,12 +30,33 @@ type VMM struct {
 
 // metricsRoundTripper wraps an http.RoundTripper to record metrics
 type metricsRoundTripper struct {
-	base http.RoundTripper
+	base   http.RoundTripper
+	tracer trace.Tracer
 }
 
 func (m *metricsRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	start := time.Now()
+	attrs := hypervisor.TraceAttributesFromContext(req.Context())
+	attrs = append(attrs,
+		attribute.String("operation", req.Method+" "+req.URL.Path),
+		attribute.String("http.method", req.Method),
+		attribute.String("http.route", req.URL.Path),
+	)
+	ctx, span := m.tracer.Start(req.Context(), "hypervisor.http "+req.Method+" "+req.URL.Path, trace.WithAttributes(attrs...))
+	req = req.WithContext(ctx)
 	resp, err := m.base.RoundTrip(req)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	} else {
+		span.SetAttributes(attribute.Int("http.status_code", resp.StatusCode))
+		if resp.StatusCode >= 400 {
+			span.SetStatus(codes.Error, resp.Status)
+		} else {
+			span.SetStatus(codes.Ok, "")
+		}
+	}
+	span.End()
 
 	// Record metrics using global VMMMetrics
 	if VMMMetrics != nil {
@@ -66,7 +91,7 @@ func NewVMM(socketPath string) (*VMM, error) {
 	}
 
 	httpClient := &http.Client{
-		Transport: &metricsRoundTripper{base: transport},
+		Transport: &metricsRoundTripper{base: transport, tracer: otel.Tracer("hypeman/vmm")},
 		Timeout:   120 * time.Second,
 	}
 
