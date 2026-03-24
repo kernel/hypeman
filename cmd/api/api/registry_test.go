@@ -265,7 +265,7 @@ func TestRegistryLayerCaching(t *testing.T) {
 // that share layers reuses the cached shared layers.
 func TestRegistrySharedLayerCaching(t *testing.T) {
 	t.Parallel()
-	_, serverHost := setupRegistryTest(t)
+	svc, serverHost := setupRegistryTest(t)
 
 	// Pull alpine image (this will be our base)
 	t.Log("Pulling alpine:latest...")
@@ -297,6 +297,7 @@ func TestRegistrySharedLayerCaching(t *testing.T) {
 	err = remote.Write(dstRef, alpineImg, remote.WithTransport(transport1))
 	require.NoError(t, err)
 	t.Logf("First push (alpine): %d blob uploads", firstPushBlobUploads)
+	waitForImageReady(t, svc, "shared/alpine@"+alpineDigest.String(), 60*time.Second)
 
 	// Now pull a different alpine-based image (e.g., alpine:3.18)
 	// which should share the base layer with alpine:latest
@@ -339,8 +340,7 @@ func TestRegistrySharedLayerCaching(t *testing.T) {
 	assert.LessOrEqual(t, secondPushBlobUploads, firstPushBlobUploads,
 		"Second push should upload same or fewer blobs due to layer sharing")
 
-	// Wait for async conversion
-	time.Sleep(2 * time.Second)
+	waitForImageReady(t, svc, "shared/alpine318@"+alpine318Digest.String(), 60*time.Second)
 }
 
 // TestRegistryTagPush verifies that pushing with a tag reference (not digest)
