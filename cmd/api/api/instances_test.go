@@ -61,7 +61,7 @@ func TestCreateInstance_AutoPullImage(t *testing.T) {
 
 	t.Log("Creating instance without pre-pulling image (testing auto-pull)...")
 	networkEnabled := false
-	resp, err := svc.CreateInstance(ctx(), oapi.CreateInstanceRequestObject{
+	createReq := oapi.CreateInstanceRequestObject{
 		Body: &oapi.CreateInstanceRequest{
 			Name:  "test-auto-pull",
 			Image: "docker.io/library/alpine:latest",
@@ -74,11 +74,29 @@ func TestCreateInstance_AutoPullImage(t *testing.T) {
 				Enabled: &networkEnabled,
 			},
 		},
-	})
-	require.NoError(t, err)
+	}
 
-	created, ok := resp.(oapi.CreateInstance201JSONResponse)
-	require.True(t, ok, "expected 201 response — auto-pull should have fetched the image")
+	deadline := time.Now().Add(integrationTestTimeout(15 * time.Second))
+	var created oapi.CreateInstance201JSONResponse
+	for {
+		resp, err := svc.CreateInstance(ctx(), createReq)
+		require.NoError(t, err)
+
+		if okResp, ok := resp.(oapi.CreateInstance201JSONResponse); ok {
+			created = okResp
+			break
+		}
+
+		notReadyResp, ok := resp.(oapi.CreateInstance400JSONResponse)
+		require.True(t, ok, "expected create to either succeed or report image_not_ready while auto-pull finishes")
+		require.Equal(t, "image_not_ready", notReadyResp.Code)
+
+		if time.Now().After(deadline) {
+			t.Fatalf("auto-pull did not finish before deadline: %s", notReadyResp.Message)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+
 	t.Logf("Instance created via auto-pull: %s", created.Id)
 
 	// Cleanup: delete the instance
@@ -86,7 +104,7 @@ func TestCreateInstance_AutoPullImage(t *testing.T) {
 	t.Log("Deleting instance...")
 	deleteResp, err := svc.DeleteInstance(ctxWithInstance(svc, instanceID), oapi.DeleteInstanceRequestObject{Id: instanceID})
 	require.NoError(t, err)
-	_, ok = deleteResp.(oapi.DeleteInstance204Response)
+	_, ok := deleteResp.(oapi.DeleteInstance204Response)
 	require.True(t, ok, "expected 204 response for delete")
 	t.Log("Instance deleted successfully")
 }
