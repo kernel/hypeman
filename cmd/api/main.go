@@ -382,7 +382,7 @@ func run() error {
 		// Mount API routes (authentication now handled by validation middleware)
 		oapi.HandlerWithOptions(strictHandler, oapi.ChiServerOptions{
 			BaseRouter:  r,
-			Middlewares: []oapi.MiddlewareFunc{},
+			Middlewares: []oapi.MiddlewareFunc{api.NormalizeOptionalStandbyBody},
 		})
 	})
 
@@ -425,6 +425,14 @@ func run() error {
 		logger.Error("failed to start build manager", "error", err)
 		return err
 	}
+
+	grp.Go(func() error {
+		if app.GuestMemoryController == nil {
+			return nil
+		}
+		logger.Info("starting guest memory controller")
+		return app.GuestMemoryController.Start(gctx)
+	})
 
 	// Run the server
 	grp.Go(func() error {

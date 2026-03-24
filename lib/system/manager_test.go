@@ -2,6 +2,8 @@ package system
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/kernel/hypeman/lib/paths"
@@ -63,4 +65,15 @@ func TestInitBinaryEmbedded(t *testing.T) {
 	// The Go init binary should be at least 1MB when statically linked
 	assert.NotEmpty(t, InitBinary, "init binary should be embedded")
 	assert.Greater(t, len(InitBinary), 100000, "init binary should be at least 100KB")
+}
+
+func TestInitrdEnsureLockKeyResolvesSymlinks(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "shared-initrd")
+	require.NoError(t, os.MkdirAll(target, 0755))
+
+	wrapperRoot := t.TempDir()
+	wrapper := filepath.Join(wrapperRoot, "initrd")
+	require.NoError(t, os.Symlink(target, wrapper))
+
+	assert.Equal(t, initrdEnsureLockKey(target), initrdEnsureLockKey(wrapper))
 }

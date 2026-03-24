@@ -17,6 +17,7 @@ import (
 	"github.com/kernel/hypeman/lib/network"
 	"github.com/kernel/hypeman/lib/oapi"
 	"github.com/kernel/hypeman/lib/resources"
+	"github.com/kernel/hypeman/lib/snapshot"
 	"github.com/kernel/hypeman/lib/vm_metrics"
 	"github.com/samber/lo"
 )
@@ -301,6 +302,16 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		SkipKernelHeaders:        request.Body.SkipKernelHeaders != nil && *request.Body.SkipKernelHeaders,
 		SkipGuestAgent:           request.Body.SkipGuestAgent != nil && *request.Body.SkipGuestAgent,
 	}
+	if request.Body.SnapshotPolicy != nil {
+		snapshotPolicy, err := toInstanceSnapshotPolicy(*request.Body.SnapshotPolicy)
+		if err != nil {
+			return oapi.CreateInstance400JSONResponse{
+				Code:    "invalid_snapshot_policy",
+				Message: err.Error(),
+			}, nil
+		}
+		domainReq.SnapshotPolicy = snapshotPolicy
+	}
 
 	inst, err := s.InstanceManager.CreateInstance(ctx, domainReq)
 	if err != nil {
@@ -438,9 +449,26 @@ func (s *ApiService) StandbyInstance(ctx context.Context, request oapi.StandbyIn
 	}
 	log := logger.FromContext(ctx)
 
-	result, err := s.InstanceManager.StandbyInstance(ctx, inst.Id)
+	standbyReq := instances.StandbyInstanceRequest{}
+	if request.Body != nil && request.Body.Compression != nil {
+		compression, err := toDomainSnapshotCompressionConfig(*request.Body.Compression)
+		if err != nil {
+			return oapi.StandbyInstance400JSONResponse{
+				Code:    "invalid_snapshot_compression",
+				Message: err.Error(),
+			}, nil
+		}
+		standbyReq.Compression = compression
+	}
+
+	result, err := s.InstanceManager.StandbyInstance(ctx, inst.Id, standbyReq)
 	if err != nil {
 		switch {
+		case errors.Is(err, instances.ErrInvalidRequest):
+			return oapi.StandbyInstance400JSONResponse{
+				Code:    "invalid_request",
+				Message: err.Error(),
+			}, nil
 		case errors.Is(err, instances.ErrInvalidState):
 			return oapi.StandbyInstance409JSONResponse{
 				Code:    "invalid_state",
@@ -798,6 +826,62 @@ func (s *ApiService) StatInstancePath(ctx context.Context, request oapi.StatInst
 	return response, nil
 }
 
+// UpdateInstance updates mutable properties of a running instance.
+// Currently supports updating env vars referenced by credential policies for key rotation.
+// Note: Resolution is handled by ResolveResource middleware
+func (s *ApiService) UpdateInstance(ctx context.Context, request oapi.UpdateInstanceRequestObject) (oapi.UpdateInstanceResponseObject, error) {
+	inst := mw.GetResolvedInstance[instances.Instance](ctx)
+	if inst == nil {
+		return oapi.UpdateInstance500JSONResponse{
+			Code:    "internal_error",
+			Message: "resource not resolved",
+		}, nil
+	}
+	log := logger.FromContext(ctx)
+
+	if request.Body == nil {
+		return oapi.UpdateInstance400JSONResponse{
+			Code:    "invalid_request",
+			Message: "request body is required",
+		}, nil
+	}
+
+	env := make(map[string]string)
+	if request.Body.Env != nil {
+		env = *request.Body.Env
+	}
+
+	result, err := s.InstanceManager.UpdateInstance(ctx, inst.Id, instances.UpdateInstanceRequest{
+		Env: env,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, instances.ErrNotFound):
+			return oapi.UpdateInstance404JSONResponse{
+				Code:    "not_found",
+				Message: "instance not found",
+			}, nil
+		case errors.Is(err, instances.ErrInvalidState):
+			return oapi.UpdateInstance409JSONResponse{
+				Code:    "invalid_state",
+				Message: err.Error(),
+			}, nil
+		case errors.Is(err, instances.ErrInvalidRequest):
+			return oapi.UpdateInstance400JSONResponse{
+				Code:    "invalid_request",
+				Message: err.Error(),
+			}, nil
+		default:
+			log.ErrorContext(ctx, "failed to update instance", "error", err)
+			return oapi.UpdateInstance500JSONResponse{
+				Code:    "internal_error",
+				Message: "failed to update instance",
+			}, nil
+		}
+	}
+	return oapi.UpdateInstance200JSONResponse(instanceToOAPI(*result)), nil
+}
+
 // AttachVolume attaches a volume to an instance (not yet implemented)
 func (s *ApiService) AttachVolume(ctx context.Context, request oapi.AttachVolumeRequestObject) (oapi.AttachVolumeResponseObject, error) {
 	return oapi.AttachVolume500JSONResponse{
@@ -895,6 +979,10 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 	if len(inst.Tags) > 0 {
 		oapiInst.Tags = toOAPITags(inst.Tags)
 	}
+	if inst.SnapshotPolicy != nil {
+		oapiPolicy := toOAPISnapshotPolicy(*inst.SnapshotPolicy)
+		oapiInst.SnapshotPolicy = &oapiPolicy
+	}
 
 	// Convert volume attachments
 	if len(inst.Volumes) > 0 {
@@ -928,4 +1016,74 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 	}
 
 	return oapiInst
+}
+
+func toDomainSnapshotCompressionConfig(cfg oapi.SnapshotCompressionConfig) (*snapshot.SnapshotCompressionConfig, error) {
+	out := &snapshot.SnapshotCompressionConfig{
+		Enabled: cfg.Enabled,
+	}
+	if cfg.Algorithm != nil {
+		algo := snapshot.SnapshotCompressionAlgorithm(strings.ToLower(string(*cfg.Algorithm)))
+		switch algo {
+		case snapshot.SnapshotCompressionAlgorithmZstd, snapshot.SnapshotCompressionAlgorithmLz4:
+		default:
+			return nil, fmt.Errorf("algorithm must be one of zstd or lz4, got %q", *cfg.Algorithm)
+		}
+		out.Algorithm = algo
+	}
+	if cfg.Level != nil {
+		level := *cfg.Level
+		algo := out.Algorithm
+		if algo == "" {
+			algo = snapshot.SnapshotCompressionAlgorithmZstd
+		}
+		switch algo {
+		case snapshot.SnapshotCompressionAlgorithmZstd:
+			if level < snapshot.MinSnapshotCompressionZstdLevel || level > snapshot.MaxSnapshotCompressionZstdLevel {
+				return nil, fmt.Errorf("level must be between %d and %d for zstd, got %d", snapshot.MinSnapshotCompressionZstdLevel, snapshot.MaxSnapshotCompressionZstdLevel, level)
+			}
+		case snapshot.SnapshotCompressionAlgorithmLz4:
+			if level < snapshot.MinSnapshotCompressionLz4Level || level > snapshot.MaxSnapshotCompressionLz4Level {
+				return nil, fmt.Errorf("level must be between %d and %d for lz4, got %d", snapshot.MinSnapshotCompressionLz4Level, snapshot.MaxSnapshotCompressionLz4Level, level)
+			}
+		}
+		out.Level = &level
+	}
+	return out, nil
+}
+
+func toInstanceSnapshotPolicy(policy oapi.SnapshotPolicy) (*instances.SnapshotPolicy, error) {
+	out := &instances.SnapshotPolicy{}
+	if policy.Compression != nil {
+		compression, err := toDomainSnapshotCompressionConfig(*policy.Compression)
+		if err != nil {
+			return nil, err
+		}
+		out.Compression = compression
+	}
+	return out, nil
+}
+
+func toOAPISnapshotCompressionConfig(cfg snapshot.SnapshotCompressionConfig) oapi.SnapshotCompressionConfig {
+	out := oapi.SnapshotCompressionConfig{
+		Enabled: cfg.Enabled,
+	}
+	if cfg.Algorithm != "" {
+		algo := oapi.SnapshotCompressionConfigAlgorithm(cfg.Algorithm)
+		out.Algorithm = &algo
+	}
+	if cfg.Level != nil {
+		level := *cfg.Level
+		out.Level = &level
+	}
+	return out
+}
+
+func toOAPISnapshotPolicy(policy instances.SnapshotPolicy) oapi.SnapshotPolicy {
+	out := oapi.SnapshotPolicy{}
+	if policy.Compression != nil {
+		compression := toOAPISnapshotCompressionConfig(*policy.Compression)
+		out.Compression = &compression
+	}
+	return out
 }

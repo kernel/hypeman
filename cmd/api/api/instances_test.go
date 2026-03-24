@@ -204,6 +204,22 @@ type captureForkManager struct {
 	err     error
 }
 
+type captureStandbyManager struct {
+	instances.Manager
+	lastID  string
+	lastReq *instances.StandbyInstanceRequest
+	result  *instances.Instance
+	err     error
+}
+
+type captureUpdateManager struct {
+	instances.Manager
+	lastID  string
+	lastReq *instances.UpdateInstanceRequest
+	result  *instances.Instance
+	err     error
+}
+
 func (m *captureForkManager) ForkInstance(ctx context.Context, id string, req instances.ForkInstanceRequest) (*instances.Instance, error) {
 	reqCopy := req
 	m.lastID = id
@@ -212,6 +228,41 @@ func (m *captureForkManager) ForkInstance(ctx context.Context, id string, req in
 		return nil, m.err
 	}
 	return m.result, nil
+}
+
+func (m *captureStandbyManager) StandbyInstance(ctx context.Context, id string, req instances.StandbyInstanceRequest) (*instances.Instance, error) {
+	reqCopy := req
+	m.lastID = id
+	m.lastReq = &reqCopy
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.result, nil
+}
+
+func (m *captureUpdateManager) UpdateInstance(ctx context.Context, id string, req instances.UpdateInstanceRequest) (*instances.Instance, error) {
+	reqCopy := req
+	m.lastID = id
+	m.lastReq = &reqCopy
+	if m.err != nil {
+		return nil, m.err
+	}
+	if m.result != nil {
+		return m.result, nil
+	}
+
+	now := time.Now()
+	return &instances.Instance{
+		StoredMetadata: instances.StoredMetadata{
+			Id:             id,
+			Name:           "updated-instance",
+			Image:          "docker.io/library/alpine:latest",
+			Env:            req.Env,
+			CreatedAt:      now,
+			HypervisorType: hypervisor.TypeCloudHypervisor,
+		},
+		State: instances.StateRunning,
+	}, nil
 }
 
 func (m *captureCreateManager) CreateInstance(ctx context.Context, req instances.CreateInstanceRequest) (*instances.Instance, error) {
@@ -408,6 +459,114 @@ func TestCreateInstance_MapsNetworkEgressEnforcementMode(t *testing.T) {
 	assert.Equal(t, instances.EgressEnforcementModeHTTPHTTPSOnly, mockMgr.lastReq.NetworkEgress.EnforcementMode)
 }
 
+func TestUpdateInstance_MapsEnvPatch(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	origMgr := svc.InstanceManager
+	now := time.Now()
+	mockMgr := &captureUpdateManager{
+		Manager: origMgr,
+		result: &instances.Instance{
+			StoredMetadata: instances.StoredMetadata{
+				Id:             "inst-update",
+				Name:           "inst-update",
+				Image:          "docker.io/library/alpine:latest",
+				Env:            map[string]string{"OUTBOUND_OPENAI_KEY": "rotated-key-456"},
+				CreatedAt:      now,
+				HypervisorType: hypervisor.TypeCloudHypervisor,
+			},
+			State: instances.StateRunning,
+		},
+	}
+	svc.InstanceManager = mockMgr
+
+	env := map[string]string{"OUTBOUND_OPENAI_KEY": "rotated-key-456"}
+	resolved := &instances.Instance{
+		StoredMetadata: instances.StoredMetadata{
+			Id:             "inst-update",
+			Name:           "inst-update",
+			Image:          "docker.io/library/alpine:latest",
+			CreatedAt:      now,
+			HypervisorType: hypervisor.TypeCloudHypervisor,
+		},
+		State: instances.StateRunning,
+	}
+
+	resp, err := svc.UpdateInstance(mw.WithResolvedInstance(ctx(), resolved.Id, resolved), oapi.UpdateInstanceRequestObject{
+		Id:   resolved.Id,
+		Body: &oapi.UpdateInstanceRequest{Env: &env},
+	})
+	require.NoError(t, err)
+	_, ok := resp.(oapi.UpdateInstance200JSONResponse)
+	require.True(t, ok, "expected 200 response")
+
+	require.NotNil(t, mockMgr.lastReq)
+	assert.Equal(t, resolved.Id, mockMgr.lastID)
+	assert.Equal(t, "rotated-key-456", mockMgr.lastReq.Env["OUTBOUND_OPENAI_KEY"])
+}
+
+func TestUpdateInstance_RequiresBody(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	now := time.Now()
+	resolved := &instances.Instance{
+		StoredMetadata: instances.StoredMetadata{
+			Id:             "inst-update",
+			Name:           "inst-update",
+			Image:          "docker.io/library/alpine:latest",
+			CreatedAt:      now,
+			HypervisorType: hypervisor.TypeCloudHypervisor,
+		},
+		State: instances.StateRunning,
+	}
+
+	resp, err := svc.UpdateInstance(mw.WithResolvedInstance(ctx(), resolved.Id, resolved), oapi.UpdateInstanceRequestObject{
+		Id: resolved.Id,
+	})
+	require.NoError(t, err)
+	badReq, ok := resp.(oapi.UpdateInstance400JSONResponse)
+	require.True(t, ok, "expected 400 response")
+	assert.Equal(t, "invalid_request", badReq.Code)
+	assert.Contains(t, badReq.Message, "request body is required")
+}
+
+func TestUpdateInstance_MapsInvalidRequestError(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	origMgr := svc.InstanceManager
+	mockMgr := &captureUpdateManager{
+		Manager: origMgr,
+		err:     fmt.Errorf("%w: env keys [UNRELATED_KEY] are not credential source env vars; allowed keys: [OUTBOUND_OPENAI_KEY]", instances.ErrInvalidRequest),
+	}
+	svc.InstanceManager = mockMgr
+
+	now := time.Now()
+	resolved := &instances.Instance{
+		StoredMetadata: instances.StoredMetadata{
+			Id:             "inst-update",
+			Name:           "inst-update",
+			Image:          "docker.io/library/alpine:latest",
+			CreatedAt:      now,
+			HypervisorType: hypervisor.TypeCloudHypervisor,
+		},
+		State: instances.StateRunning,
+	}
+	env := map[string]string{"UNRELATED_KEY": "value"}
+
+	resp, err := svc.UpdateInstance(mw.WithResolvedInstance(ctx(), resolved.Id, resolved), oapi.UpdateInstanceRequestObject{
+		Id:   resolved.Id,
+		Body: &oapi.UpdateInstanceRequest{Env: &env},
+	})
+	require.NoError(t, err)
+	badReq, ok := resp.(oapi.UpdateInstance400JSONResponse)
+	require.True(t, ok, "expected 400 response")
+	assert.Equal(t, "invalid_request", badReq.Code)
+	assert.Contains(t, badReq.Message, "UNRELATED_KEY")
+}
+
 func TestForkInstance_Success(t *testing.T) {
 	t.Parallel()
 	svc := newTestService(t)
@@ -534,6 +693,46 @@ func TestForkInstance_InvalidRequest(t *testing.T) {
 	badReq, ok := resp.(oapi.ForkInstance400JSONResponse)
 	require.True(t, ok, "expected 400 response")
 	assert.Equal(t, "invalid_request", badReq.Code)
+}
+
+func TestStandbyInstance_InvalidRequest(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	source := instances.Instance{
+		StoredMetadata: instances.StoredMetadata{
+			Id:             "standby-src",
+			Name:           "standby-src",
+			Image:          "docker.io/library/alpine:latest",
+			CreatedAt:      time.Now(),
+			HypervisorType: hypervisor.TypeCloudHypervisor,
+		},
+		State: instances.StateStopped,
+	}
+
+	mockMgr := &captureStandbyManager{
+		Manager: svc.InstanceManager,
+		err:     fmt.Errorf("%w: invalid snapshot compression level", instances.ErrInvalidRequest),
+	}
+	svc.InstanceManager = mockMgr
+
+	resp, err := svc.StandbyInstance(
+		mw.WithResolvedInstance(ctx(), source.Id, source),
+		oapi.StandbyInstanceRequestObject{
+			Id: source.Id,
+			Body: &oapi.StandbyInstanceRequest{
+				Compression: &oapi.SnapshotCompressionConfig{
+					Enabled: true,
+				},
+			},
+		},
+	)
+	require.NoError(t, err)
+
+	badReq, ok := resp.(oapi.StandbyInstance400JSONResponse)
+	require.True(t, ok, "expected 400 response")
+	assert.Equal(t, "invalid_request", badReq.Code)
+	assert.Contains(t, badReq.Message, "invalid snapshot compression level")
 }
 
 func TestForkInstance_FromRunningFlagForwarded(t *testing.T) {

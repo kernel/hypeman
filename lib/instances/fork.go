@@ -56,7 +56,7 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 
 		log.InfoContext(ctx, "fork from running requested; transitioning source to standby",
 			"source_instance_id", id, "hypervisor", source.HypervisorType)
-		if _, err := m.standbyInstance(ctx, id); err != nil {
+		if _, err := m.standbyInstance(ctx, id, StandbyInstanceRequest{}, true); err != nil {
 			return nil, "", fmt.Errorf("standby source instance: %w", err)
 		}
 
@@ -244,6 +244,12 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 	})
 	defer cu.Clean()
 
+	if source.State == StateStandby {
+		if err := m.ensureSnapshotMemoryReady(ctx, m.paths.InstanceSnapshotLatest(id), m.snapshotJobKeyForInstance(id), stored.HypervisorType); err != nil {
+			return nil, fmt.Errorf("prepare standby snapshot for fork: %w", err)
+		}
+	}
+
 	if err := forkvm.CopyGuestDirectory(srcDir, dstDir); err != nil {
 		if errors.Is(err, forkvm.ErrSparseCopyUnsupported) {
 			return nil, fmt.Errorf("fork requires sparse-capable filesystem (SEEK_DATA/SEEK_HOLE unsupported): %w", err)
@@ -421,7 +427,7 @@ func (m *manager) applyForkTargetState(ctx context.Context, forkID string, targe
 			if _, err := m.startInstance(ctx, forkID, StartInstanceRequest{}); err != nil {
 				return nil, fmt.Errorf("start forked instance for standby transition: %w", err)
 			}
-			return returnWithReadiness(m.standbyInstance(ctx, forkID))
+			return returnWithReadiness(m.standbyInstance(ctx, forkID, StandbyInstanceRequest{}, false))
 		}
 	case StateStandby:
 		switch target {
@@ -436,7 +442,7 @@ func (m *manager) applyForkTargetState(ctx context.Context, forkID string, targe
 	case StateRunning:
 		switch target {
 		case StateStandby:
-			return returnWithReadiness(m.standbyInstance(ctx, forkID))
+			return returnWithReadiness(m.standbyInstance(ctx, forkID, StandbyInstanceRequest{}, false))
 		case StateStopped:
 			return returnWithReadiness(m.stopInstance(ctx, forkID))
 		}

@@ -70,6 +70,10 @@ type snapshotRequest struct {
 	DestinationPath string `json:"destination_path"`
 }
 
+type balloonResponse struct {
+	TargetGuestMemoryBytes int64 `json:"target_guest_memory_bytes"`
+}
+
 func (c *Client) Capabilities() hypervisor.Capabilities {
 	return capabilities()
 }
@@ -78,6 +82,7 @@ func capabilities() hypervisor.Capabilities {
 	return hypervisor.Capabilities{
 		SupportsSnapshot:            runtime.GOARCH == "arm64",
 		SupportsHotplugMemory:       false,
+		SupportsBalloonControl:      true,
 		SupportsPause:               true,
 		SupportsVsock:               true,
 		SupportsGPUPassthrough:      false,
@@ -197,4 +202,25 @@ func (c *Client) ResizeMemory(ctx context.Context, bytes int64) error {
 
 func (c *Client) ResizeMemoryAndWait(ctx context.Context, bytes int64, timeout time.Duration) error {
 	return hypervisor.ErrNotSupported
+}
+
+func (c *Client) SetTargetGuestMemoryBytes(ctx context.Context, targetBytes int64) error {
+	reqBody, err := json.Marshal(balloonResponse{TargetGuestMemoryBytes: targetBytes})
+	if err != nil {
+		return fmt.Errorf("marshal balloon target: %w", err)
+	}
+	return c.doPut(ctx, "/api/v1/vm.balloon", bytes.NewReader(reqBody))
+}
+
+func (c *Client) GetTargetGuestMemoryBytes(ctx context.Context) (int64, error) {
+	body, err := c.doGet(ctx, "/api/v1/vm.balloon")
+	if err != nil {
+		return 0, fmt.Errorf("get balloon target: %w", err)
+	}
+
+	var resp balloonResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return 0, fmt.Errorf("decode balloon target: %w", err)
+	}
+	return resp.TargetGuestMemoryBytes, nil
 }

@@ -4,9 +4,13 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
+	"sync"
 
 	"github.com/kernel/hypeman/lib/paths"
 )
+
+var initrdEnsureLocks sync.Map
 
 // Manager handles system files (kernel, initrd)
 type Manager interface {
@@ -34,6 +38,19 @@ func NewManager(p *paths.Paths) Manager {
 	}
 }
 
+func initrdEnsureLockKey(initrdDir string) string {
+	if resolved, err := filepath.EvalSymlinks(initrdDir); err == nil {
+		return resolved
+	}
+	return initrdDir
+}
+
+func getInitrdEnsureLock(initrdDir string) *sync.Mutex {
+	key := initrdEnsureLockKey(initrdDir)
+	lock, _ := initrdEnsureLocks.LoadOrStore(key, &sync.Mutex{})
+	return lock.(*sync.Mutex)
+}
+
 // EnsureSystemFiles ensures default kernel and initrd exist, downloading/building if needed
 func (m *manager) EnsureSystemFiles(ctx context.Context) error {
 	kernelVer := m.GetDefaultKernelVersion()
@@ -44,6 +61,10 @@ func (m *manager) EnsureSystemFiles(ctx context.Context) error {
 	}
 
 	// Ensure initrd exists (builds if missing or stale)
+	initrdLock := getInitrdEnsureLock(m.paths.SystemInitrdDir(GetArch()))
+	initrdLock.Lock()
+	defer initrdLock.Unlock()
+
 	if _, err := m.ensureInitrd(ctx); err != nil {
 		return fmt.Errorf("ensure initrd: %w", err)
 	}

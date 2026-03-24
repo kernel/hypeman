@@ -43,7 +43,7 @@ func newTestService(t *testing.T) *ApiService {
 	limits := instances.ResourceLimits{
 		MaxOverlaySize: 100 * 1024 * 1024 * 1024, // 100GB
 	}
-	instanceMgr := instances.NewManager(p, imageMgr, systemMgr, networkMgr, deviceMgr, volumeMgr, limits, "", nil, nil)
+	instanceMgr := instances.NewManager(p, imageMgr, systemMgr, networkMgr, deviceMgr, volumeMgr, limits, "", instances.SnapshotPolicy{}, nil, nil)
 
 	// Initialize network manager (creates bridge for network-enabled tests)
 	if err := networkMgr.Initialize(ctx(), nil); err != nil {
@@ -110,6 +110,13 @@ func cleanupOrphanedProcesses(t *testing.T, dataDir string) {
 
 func ctx() context.Context {
 	return context.Background()
+}
+
+func integrationTestTimeout(timeout time.Duration) time.Duration {
+	if os.Getenv("CI") == "true" && timeout < 45*time.Second {
+		return 45 * time.Second
+	}
+	return timeout
 }
 
 // ctxWithInstance creates a context with a resolved instance (simulates ResolveResource middleware)

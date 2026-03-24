@@ -121,6 +121,20 @@ const (
 	InstanceStateUnknown      InstanceState = "Unknown"
 )
 
+// Defines values for MemoryReclaimActionHypervisor.
+const (
+	MemoryReclaimActionHypervisorCloudHypervisor MemoryReclaimActionHypervisor = "cloud-hypervisor"
+	MemoryReclaimActionHypervisorFirecracker     MemoryReclaimActionHypervisor = "firecracker"
+	MemoryReclaimActionHypervisorQemu            MemoryReclaimActionHypervisor = "qemu"
+	MemoryReclaimActionHypervisorVz              MemoryReclaimActionHypervisor = "vz"
+)
+
+// Defines values for MemoryReclaimResponseHostPressureState.
+const (
+	Healthy  MemoryReclaimResponseHostPressureState = "healthy"
+	Pressure MemoryReclaimResponseHostPressureState = "pressure"
+)
+
 // Defines values for RestoreSnapshotRequestTargetHypervisor.
 const (
 	RestoreSnapshotRequestTargetHypervisorCloudHypervisor RestoreSnapshotRequestTargetHypervisor = "cloud-hypervisor"
@@ -129,12 +143,26 @@ const (
 	RestoreSnapshotRequestTargetHypervisorVz              RestoreSnapshotRequestTargetHypervisor = "vz"
 )
 
+// Defines values for SnapshotCompressionState.
+const (
+	SnapshotCompressionStateCompressed  SnapshotCompressionState = "compressed"
+	SnapshotCompressionStateCompressing SnapshotCompressionState = "compressing"
+	SnapshotCompressionStateError       SnapshotCompressionState = "error"
+	SnapshotCompressionStateNone        SnapshotCompressionState = "none"
+)
+
 // Defines values for SnapshotSourceHypervisor.
 const (
-	CloudHypervisor SnapshotSourceHypervisor = "cloud-hypervisor"
-	Firecracker     SnapshotSourceHypervisor = "firecracker"
-	Qemu            SnapshotSourceHypervisor = "qemu"
-	Vz              SnapshotSourceHypervisor = "vz"
+	SnapshotSourceHypervisorCloudHypervisor SnapshotSourceHypervisor = "cloud-hypervisor"
+	SnapshotSourceHypervisorFirecracker     SnapshotSourceHypervisor = "firecracker"
+	SnapshotSourceHypervisorQemu            SnapshotSourceHypervisor = "qemu"
+	SnapshotSourceHypervisorVz              SnapshotSourceHypervisor = "vz"
+)
+
+// Defines values for SnapshotCompressionConfigAlgorithm.
+const (
+	Lz4  SnapshotCompressionConfigAlgorithm = "lz4"
+	Zstd SnapshotCompressionConfigAlgorithm = "zstd"
 )
 
 // Defines values for SnapshotKind.
@@ -372,7 +400,8 @@ type CreateInstanceRequest struct {
 	// When true, DKMS (Dynamic Kernel Module Support) will not work,
 	// preventing compilation of out-of-tree kernel modules (e.g., NVIDIA vGPU drivers).
 	// Recommended for workloads that don't need kernel module compilation.
-	SkipKernelHeaders *bool `json:"skip_kernel_headers,omitempty"`
+	SkipKernelHeaders *bool           `json:"skip_kernel_headers,omitempty"`
+	SnapshotPolicy    *SnapshotPolicy `json:"snapshot_policy,omitempty"`
 
 	// Tags User-defined key-value tags.
 	Tags *Tags `json:"tags,omitempty"`
@@ -448,6 +477,8 @@ type CreateInstanceRequestNetworkEgressEnforcementMode string
 
 // CreateSnapshotRequest defines model for CreateSnapshotRequest.
 type CreateSnapshotRequest struct {
+	Compression *SnapshotCompressionConfig `json:"compression,omitempty"`
+
 	// Kind Snapshot capture kind
 	Kind SnapshotKind `json:"kind"`
 
@@ -794,7 +825,8 @@ type Instance struct {
 	OverlaySize *string `json:"overlay_size,omitempty"`
 
 	// Size Base memory size (human-readable)
-	Size *string `json:"size,omitempty"`
+	Size           *string         `json:"size,omitempty"`
+	SnapshotPolicy *SnapshotPolicy `json:"snapshot_policy,omitempty"`
 
 	// StartedAt Start timestamp (RFC3339)
 	StartedAt *time.Time `json:"started_at"`
@@ -881,6 +913,59 @@ type InstanceStats struct {
 	// NetworkTxBytes Total network bytes transmitted by the VM (from TAP interface)
 	NetworkTxBytes int64 `json:"network_tx_bytes"`
 }
+
+// MemoryReclaimAction defines model for MemoryReclaimAction.
+type MemoryReclaimAction struct {
+	AppliedReclaimBytes int64 `json:"applied_reclaim_bytes"`
+	AssignedMemoryBytes int64 `json:"assigned_memory_bytes"`
+
+	// Error Error message when status is error or unsupported.
+	Error                          *string                       `json:"error,omitempty"`
+	Hypervisor                     MemoryReclaimActionHypervisor `json:"hypervisor"`
+	InstanceId                     string                        `json:"instance_id"`
+	InstanceName                   string                        `json:"instance_name"`
+	PlannedTargetGuestMemoryBytes  int64                         `json:"planned_target_guest_memory_bytes"`
+	PreviousTargetGuestMemoryBytes int64                         `json:"previous_target_guest_memory_bytes"`
+	ProtectedFloorBytes            int64                         `json:"protected_floor_bytes"`
+
+	// Status Result of this VM's reclaim step.
+	Status                 string `json:"status"`
+	TargetGuestMemoryBytes int64  `json:"target_guest_memory_bytes"`
+}
+
+// MemoryReclaimActionHypervisor defines model for MemoryReclaimAction.Hypervisor.
+type MemoryReclaimActionHypervisor string
+
+// MemoryReclaimRequest defines model for MemoryReclaimRequest.
+type MemoryReclaimRequest struct {
+	// DryRun Calculate a reclaim plan without applying balloon changes or creating a hold.
+	DryRun *bool `json:"dry_run,omitempty"`
+
+	// HoldFor How long to keep the reclaim hold active (Go duration string). Defaults to 5m when omitted.
+	HoldFor *string `json:"hold_for,omitempty"`
+
+	// Reason Optional operator-provided reason attached to logs and traces.
+	Reason *string `json:"reason,omitempty"`
+
+	// ReclaimBytes Total bytes of guest memory to reclaim across eligible VMs.
+	ReclaimBytes int64 `json:"reclaim_bytes"`
+}
+
+// MemoryReclaimResponse defines model for MemoryReclaimResponse.
+type MemoryReclaimResponse struct {
+	Actions             []MemoryReclaimAction `json:"actions"`
+	AppliedReclaimBytes int64                 `json:"applied_reclaim_bytes"`
+
+	// HoldUntil When the current manual reclaim hold expires.
+	HoldUntil             *time.Time                             `json:"hold_until,omitempty"`
+	HostAvailableBytes    int64                                  `json:"host_available_bytes"`
+	HostPressureState     MemoryReclaimResponseHostPressureState `json:"host_pressure_state"`
+	PlannedReclaimBytes   int64                                  `json:"planned_reclaim_bytes"`
+	RequestedReclaimBytes int64                                  `json:"requested_reclaim_bytes"`
+}
+
+// MemoryReclaimResponseHostPressureState defines model for MemoryReclaimResponse.HostPressureState.
+type MemoryReclaimResponseHostPressureState string
 
 // PassthroughDevice Physical GPU available for passthrough
 type PassthroughDevice struct {
@@ -1014,6 +1099,16 @@ type SetSnapshotScheduleRequest struct {
 
 // Snapshot defines model for Snapshot.
 type Snapshot struct {
+	// CompressedSizeBytes Compressed memory payload size in bytes
+	CompressedSizeBytes *int64                     `json:"compressed_size_bytes"`
+	Compression         *SnapshotCompressionConfig `json:"compression,omitempty"`
+
+	// CompressionError Compression error message when compression_state is error
+	CompressionError *string `json:"compression_error"`
+
+	// CompressionState Compression status of the snapshot payload memory file
+	CompressionState *SnapshotCompressionState `json:"compression_state,omitempty"`
+
 	// CreatedAt Snapshot creation timestamp
 	CreatedAt time.Time `json:"created_at"`
 
@@ -1040,13 +1135,39 @@ type Snapshot struct {
 
 	// Tags User-defined key-value tags.
 	Tags *Tags `json:"tags,omitempty"`
+
+	// UncompressedSizeBytes Uncompressed memory payload size in bytes
+	UncompressedSizeBytes *int64 `json:"uncompressed_size_bytes"`
 }
+
+// SnapshotCompressionState Compression status of the snapshot payload memory file
+type SnapshotCompressionState string
 
 // SnapshotSourceHypervisor Source instance hypervisor at snapshot creation time
 type SnapshotSourceHypervisor string
 
+// SnapshotCompressionConfig defines model for SnapshotCompressionConfig.
+type SnapshotCompressionConfig struct {
+	// Algorithm Compression algorithm (defaults to zstd when enabled). Ignored when enabled is false.
+	Algorithm *SnapshotCompressionConfigAlgorithm `json:"algorithm,omitempty"`
+
+	// Enabled Enable snapshot memory compression
+	Enabled bool `json:"enabled"`
+
+	// Level Compression level. Allowed ranges are zstd=1-19 and lz4=0-9. When omitted, zstd defaults to 1 and lz4 defaults to 0. Ignored when enabled is false.
+	Level *int `json:"level,omitempty"`
+}
+
+// SnapshotCompressionConfigAlgorithm Compression algorithm (defaults to zstd when enabled). Ignored when enabled is false.
+type SnapshotCompressionConfigAlgorithm string
+
 // SnapshotKind Snapshot capture kind
 type SnapshotKind string
+
+// SnapshotPolicy defines model for SnapshotPolicy.
+type SnapshotPolicy struct {
+	Compression *SnapshotCompressionConfig `json:"compression,omitempty"`
+}
 
 // SnapshotSchedule defines model for SnapshotSchedule.
 type SnapshotSchedule struct {
@@ -1096,8 +1217,21 @@ type SnapshotScheduleRetention struct {
 // SnapshotTargetState Target state when restoring or forking from a snapshot
 type SnapshotTargetState string
 
+// StandbyInstanceRequest defines model for StandbyInstanceRequest.
+type StandbyInstanceRequest struct {
+	Compression *SnapshotCompressionConfig `json:"compression,omitempty"`
+}
+
 // Tags User-defined key-value tags.
 type Tags map[string]string
+
+// UpdateInstanceRequest defines model for UpdateInstanceRequest.
+type UpdateInstanceRequest struct {
+	// Env Environment variables to update (merged with existing).
+	// Only keys referenced by the instance's existing credential `source.env` bindings
+	// are accepted. Use this to rotate real credential values without restarting the VM.
+	Env *map[string]string `json:"env,omitempty"`
+}
 
 // Volume defines model for Volume.
 type Volume struct {
@@ -1324,6 +1458,9 @@ type CreateIngressJSONRequestBody = CreateIngressRequest
 // CreateInstanceJSONRequestBody defines body for CreateInstance for application/json ContentType.
 type CreateInstanceJSONRequestBody = CreateInstanceRequest
 
+// UpdateInstanceJSONRequestBody defines body for UpdateInstance for application/json ContentType.
+type UpdateInstanceJSONRequestBody = UpdateInstanceRequest
+
 // ForkInstanceJSONRequestBody defines body for ForkInstance for application/json ContentType.
 type ForkInstanceJSONRequestBody = ForkInstanceRequest
 
@@ -1336,11 +1473,17 @@ type CreateInstanceSnapshotJSONRequestBody = CreateSnapshotRequest
 // RestoreInstanceSnapshotJSONRequestBody defines body for RestoreInstanceSnapshot for application/json ContentType.
 type RestoreInstanceSnapshotJSONRequestBody = RestoreSnapshotRequest
 
+// StandbyInstanceJSONRequestBody defines body for StandbyInstance for application/json ContentType.
+type StandbyInstanceJSONRequestBody = StandbyInstanceRequest
+
 // StartInstanceJSONRequestBody defines body for StartInstance for application/json ContentType.
 type StartInstanceJSONRequestBody StartInstanceJSONBody
 
 // AttachVolumeJSONRequestBody defines body for AttachVolume for application/json ContentType.
 type AttachVolumeJSONRequestBody = AttachVolumeRequest
+
+// ReclaimMemoryJSONRequestBody defines body for ReclaimMemory for application/json ContentType.
+type ReclaimMemoryJSONRequestBody = MemoryReclaimRequest
 
 // ForkSnapshotJSONRequestBody defines body for ForkSnapshot for application/json ContentType.
 type ForkSnapshotJSONRequestBody = ForkSnapshotRequest
@@ -1498,6 +1641,11 @@ type ClientInterface interface {
 	// GetInstance request
 	GetInstance(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// UpdateInstanceWithBody request with any body
+	UpdateInstanceWithBody(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	UpdateInstance(ctx context.Context, id string, body UpdateInstanceJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// ForkInstanceWithBody request with any body
 	ForkInstanceWithBody(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -1530,8 +1678,10 @@ type ClientInterface interface {
 
 	RestoreInstanceSnapshot(ctx context.Context, id string, snapshotId string, body RestoreInstanceSnapshotJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// StandbyInstance request
-	StandbyInstance(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error)
+	// StandbyInstanceWithBody request with any body
+	StandbyInstanceWithBody(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	StandbyInstance(ctx context.Context, id string, body StandbyInstanceJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// StartInstanceWithBody request with any body
 	StartInstanceWithBody(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -1557,6 +1707,11 @@ type ClientInterface interface {
 
 	// GetResources request
 	GetResources(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ReclaimMemoryWithBody request with any body
+	ReclaimMemoryWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	ReclaimMemory(ctx context.Context, body ReclaimMemoryJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ListSnapshots request
 	ListSnapshots(ctx context.Context, params *ListSnapshotsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -1914,6 +2069,30 @@ func (c *Client) GetInstance(ctx context.Context, id string, reqEditors ...Reque
 	return c.Client.Do(req)
 }
 
+func (c *Client) UpdateInstanceWithBody(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUpdateInstanceRequestWithBody(c.Server, id, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) UpdateInstance(ctx context.Context, id string, body UpdateInstanceJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUpdateInstanceRequest(c.Server, id, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 func (c *Client) ForkInstanceWithBody(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewForkInstanceRequestWithBody(c.Server, id, contentType, body)
 	if err != nil {
@@ -2058,8 +2237,20 @@ func (c *Client) RestoreInstanceSnapshot(ctx context.Context, id string, snapsho
 	return c.Client.Do(req)
 }
 
-func (c *Client) StandbyInstance(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewStandbyInstanceRequest(c.Server, id)
+func (c *Client) StandbyInstanceWithBody(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewStandbyInstanceRequestWithBody(c.Server, id, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) StandbyInstance(ctx context.Context, id string, body StandbyInstanceJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewStandbyInstanceRequest(c.Server, id, body)
 	if err != nil {
 		return nil, err
 	}
@@ -2168,6 +2359,30 @@ func (c *Client) AttachVolume(ctx context.Context, id string, volumeId string, b
 
 func (c *Client) GetResources(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetResourcesRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ReclaimMemoryWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewReclaimMemoryRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ReclaimMemory(ctx context.Context, body ReclaimMemoryJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewReclaimMemoryRequest(c.Server, body)
 	if err != nil {
 		return nil, err
 	}
@@ -3210,6 +3425,53 @@ func NewGetInstanceRequest(server string, id string) (*http.Request, error) {
 	return req, nil
 }
 
+// NewUpdateInstanceRequest calls the generic UpdateInstance builder with application/json body
+func NewUpdateInstanceRequest(server string, id string, body UpdateInstanceJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewUpdateInstanceRequestWithBody(server, id, "application/json", bodyReader)
+}
+
+// NewUpdateInstanceRequestWithBody generates requests for UpdateInstance with any type of body
+func NewUpdateInstanceRequestWithBody(server string, id string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "id", runtime.ParamLocationPath, id)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/instances/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("PATCH", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
 // NewForkInstanceRequest calls the generic ForkInstance builder with application/json body
 func NewForkInstanceRequest(server string, id string, body ForkInstanceJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
@@ -3595,8 +3857,19 @@ func NewRestoreInstanceSnapshotRequestWithBody(server string, id string, snapsho
 	return req, nil
 }
 
-// NewStandbyInstanceRequest generates requests for StandbyInstance
-func NewStandbyInstanceRequest(server string, id string) (*http.Request, error) {
+// NewStandbyInstanceRequest calls the generic StandbyInstance builder with application/json body
+func NewStandbyInstanceRequest(server string, id string, body StandbyInstanceJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewStandbyInstanceRequestWithBody(server, id, "application/json", bodyReader)
+}
+
+// NewStandbyInstanceRequestWithBody generates requests for StandbyInstance with any type of body
+func NewStandbyInstanceRequestWithBody(server string, id string, contentType string, body io.Reader) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
@@ -3621,10 +3894,12 @@ func NewStandbyInstanceRequest(server string, id string) (*http.Request, error) 
 		return nil, err
 	}
 
-	req, err := http.NewRequest("POST", queryURL.String(), nil)
+	req, err := http.NewRequest("POST", queryURL.String(), body)
 	if err != nil {
 		return nil, err
 	}
+
+	req.Header.Add("Content-Type", contentType)
 
 	return req, nil
 }
@@ -3930,6 +4205,46 @@ func NewGetResourcesRequest(server string) (*http.Request, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	return req, nil
+}
+
+// NewReclaimMemoryRequest calls the generic ReclaimMemory builder with application/json body
+func NewReclaimMemoryRequest(server string, body ReclaimMemoryJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewReclaimMemoryRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewReclaimMemoryRequestWithBody generates requests for ReclaimMemory with any type of body
+func NewReclaimMemoryRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/resources/memory/reclaim")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
 
 	return req, nil
 }
@@ -4514,6 +4829,11 @@ type ClientWithResponsesInterface interface {
 	// GetInstanceWithResponse request
 	GetInstanceWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*GetInstanceResponse, error)
 
+	// UpdateInstanceWithBodyWithResponse request with any body
+	UpdateInstanceWithBodyWithResponse(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpdateInstanceResponse, error)
+
+	UpdateInstanceWithResponse(ctx context.Context, id string, body UpdateInstanceJSONRequestBody, reqEditors ...RequestEditorFn) (*UpdateInstanceResponse, error)
+
 	// ForkInstanceWithBodyWithResponse request with any body
 	ForkInstanceWithBodyWithResponse(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ForkInstanceResponse, error)
 
@@ -4546,8 +4866,10 @@ type ClientWithResponsesInterface interface {
 
 	RestoreInstanceSnapshotWithResponse(ctx context.Context, id string, snapshotId string, body RestoreInstanceSnapshotJSONRequestBody, reqEditors ...RequestEditorFn) (*RestoreInstanceSnapshotResponse, error)
 
-	// StandbyInstanceWithResponse request
-	StandbyInstanceWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*StandbyInstanceResponse, error)
+	// StandbyInstanceWithBodyWithResponse request with any body
+	StandbyInstanceWithBodyWithResponse(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*StandbyInstanceResponse, error)
+
+	StandbyInstanceWithResponse(ctx context.Context, id string, body StandbyInstanceJSONRequestBody, reqEditors ...RequestEditorFn) (*StandbyInstanceResponse, error)
 
 	// StartInstanceWithBodyWithResponse request with any body
 	StartInstanceWithBodyWithResponse(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*StartInstanceResponse, error)
@@ -4573,6 +4895,11 @@ type ClientWithResponsesInterface interface {
 
 	// GetResourcesWithResponse request
 	GetResourcesWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetResourcesResponse, error)
+
+	// ReclaimMemoryWithBodyWithResponse request with any body
+	ReclaimMemoryWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ReclaimMemoryResponse, error)
+
+	ReclaimMemoryWithResponse(ctx context.Context, body ReclaimMemoryJSONRequestBody, reqEditors ...RequestEditorFn) (*ReclaimMemoryResponse, error)
 
 	// ListSnapshotsWithResponse request
 	ListSnapshotsWithResponse(ctx context.Context, params *ListSnapshotsParams, reqEditors ...RequestEditorFn) (*ListSnapshotsResponse, error)
@@ -5164,6 +5491,32 @@ func (r GetInstanceResponse) StatusCode() int {
 	return 0
 }
 
+type UpdateInstanceResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *Instance
+	JSON400      *Error
+	JSON404      *Error
+	JSON409      *Error
+	JSON500      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r UpdateInstanceResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r UpdateInstanceResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
 type ForkInstanceResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -5369,6 +5722,7 @@ type StandbyInstanceResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON200      *Instance
+	JSON400      *Error
 	JSON404      *Error
 	JSON409      *Error
 	JSON500      *Error
@@ -5555,6 +5909,31 @@ func (r GetResourcesResponse) Status() string {
 
 // StatusCode returns HTTPResponse.StatusCode
 func (r GetResourcesResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type ReclaimMemoryResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *MemoryReclaimResponse
+	JSON400      *Error
+	JSON401      *Error
+	JSON500      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r ReclaimMemoryResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ReclaimMemoryResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
@@ -6021,6 +6400,23 @@ func (c *ClientWithResponses) GetInstanceWithResponse(ctx context.Context, id st
 	return ParseGetInstanceResponse(rsp)
 }
 
+// UpdateInstanceWithBodyWithResponse request with arbitrary body returning *UpdateInstanceResponse
+func (c *ClientWithResponses) UpdateInstanceWithBodyWithResponse(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpdateInstanceResponse, error) {
+	rsp, err := c.UpdateInstanceWithBody(ctx, id, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUpdateInstanceResponse(rsp)
+}
+
+func (c *ClientWithResponses) UpdateInstanceWithResponse(ctx context.Context, id string, body UpdateInstanceJSONRequestBody, reqEditors ...RequestEditorFn) (*UpdateInstanceResponse, error) {
+	rsp, err := c.UpdateInstance(ctx, id, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUpdateInstanceResponse(rsp)
+}
+
 // ForkInstanceWithBodyWithResponse request with arbitrary body returning *ForkInstanceResponse
 func (c *ClientWithResponses) ForkInstanceWithBodyWithResponse(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ForkInstanceResponse, error) {
 	rsp, err := c.ForkInstanceWithBody(ctx, id, contentType, body, reqEditors...)
@@ -6125,9 +6521,17 @@ func (c *ClientWithResponses) RestoreInstanceSnapshotWithResponse(ctx context.Co
 	return ParseRestoreInstanceSnapshotResponse(rsp)
 }
 
-// StandbyInstanceWithResponse request returning *StandbyInstanceResponse
-func (c *ClientWithResponses) StandbyInstanceWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*StandbyInstanceResponse, error) {
-	rsp, err := c.StandbyInstance(ctx, id, reqEditors...)
+// StandbyInstanceWithBodyWithResponse request with arbitrary body returning *StandbyInstanceResponse
+func (c *ClientWithResponses) StandbyInstanceWithBodyWithResponse(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*StandbyInstanceResponse, error) {
+	rsp, err := c.StandbyInstanceWithBody(ctx, id, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseStandbyInstanceResponse(rsp)
+}
+
+func (c *ClientWithResponses) StandbyInstanceWithResponse(ctx context.Context, id string, body StandbyInstanceJSONRequestBody, reqEditors ...RequestEditorFn) (*StandbyInstanceResponse, error) {
+	rsp, err := c.StandbyInstance(ctx, id, body, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
@@ -6211,6 +6615,23 @@ func (c *ClientWithResponses) GetResourcesWithResponse(ctx context.Context, reqE
 		return nil, err
 	}
 	return ParseGetResourcesResponse(rsp)
+}
+
+// ReclaimMemoryWithBodyWithResponse request with arbitrary body returning *ReclaimMemoryResponse
+func (c *ClientWithResponses) ReclaimMemoryWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ReclaimMemoryResponse, error) {
+	rsp, err := c.ReclaimMemoryWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseReclaimMemoryResponse(rsp)
+}
+
+func (c *ClientWithResponses) ReclaimMemoryWithResponse(ctx context.Context, body ReclaimMemoryJSONRequestBody, reqEditors ...RequestEditorFn) (*ReclaimMemoryResponse, error) {
+	rsp, err := c.ReclaimMemory(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseReclaimMemoryResponse(rsp)
 }
 
 // ListSnapshotsWithResponse request returning *ListSnapshotsResponse
@@ -7272,6 +7693,60 @@ func ParseGetInstanceResponse(rsp *http.Response) (*GetInstanceResponse, error) 
 	return response, nil
 }
 
+// ParseUpdateInstanceResponse parses an HTTP response from a UpdateInstanceWithResponse call
+func ParseUpdateInstanceResponse(rsp *http.Response) (*UpdateInstanceResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &UpdateInstanceResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest Instance
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseForkInstanceResponse parses an HTTP response from a ForkInstanceWithResponse call
 func ParseForkInstanceResponse(rsp *http.Response) (*ForkInstanceResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -7676,6 +8151,13 @@ func ParseStandbyInstanceResponse(rsp *http.Response) (*StandbyInstanceResponse,
 		}
 		response.JSON200 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
 		var dest Error
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -7990,6 +8472,53 @@ func ParseGetResourcesResponse(rsp *http.Response) (*GetResourcesResponse, error
 			return nil, err
 		}
 		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseReclaimMemoryResponse parses an HTTP response from a ReclaimMemoryWithResponse call
+func ParseReclaimMemoryResponse(rsp *http.Response) (*ReclaimMemoryResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ReclaimMemoryResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest MemoryReclaimResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest Error
@@ -8469,6 +8998,9 @@ type ServerInterface interface {
 	// Get instance details
 	// (GET /instances/{id})
 	GetInstance(w http.ResponseWriter, r *http.Request, id string)
+	// Update instance properties
+	// (PATCH /instances/{id})
+	UpdateInstance(w http.ResponseWriter, r *http.Request, id string)
 	// Fork an instance from stopped, standby, or running (with from_running=true)
 	// (POST /instances/{id}/fork)
 	ForkInstance(w http.ResponseWriter, r *http.Request, id string)
@@ -8517,6 +9049,9 @@ type ServerInterface interface {
 	// Get host resource capacity and allocations
 	// (GET /resources)
 	GetResources(w http.ResponseWriter, r *http.Request)
+	// Trigger proactive guest memory reclaim
+	// (POST /resources/memory/reclaim)
+	ReclaimMemory(w http.ResponseWriter, r *http.Request)
 	// List snapshots
 	// (GET /snapshots)
 	ListSnapshots(w http.ResponseWriter, r *http.Request, params ListSnapshotsParams)
@@ -8688,6 +9223,12 @@ func (_ Unimplemented) GetInstance(w http.ResponseWriter, r *http.Request, id st
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
+// Update instance properties
+// (PATCH /instances/{id})
+func (_ Unimplemented) UpdateInstance(w http.ResponseWriter, r *http.Request, id string) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
 // Fork an instance from stopped, standby, or running (with from_running=true)
 // (POST /instances/{id}/fork)
 func (_ Unimplemented) ForkInstance(w http.ResponseWriter, r *http.Request, id string) {
@@ -8781,6 +9322,12 @@ func (_ Unimplemented) AttachVolume(w http.ResponseWriter, r *http.Request, id s
 // Get host resource capacity and allocations
 // (GET /resources)
 func (_ Unimplemented) GetResources(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Trigger proactive guest memory reclaim
+// (POST /resources/memory/reclaim)
+func (_ Unimplemented) ReclaimMemory(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -9506,6 +10053,37 @@ func (siw *ServerInterfaceWrapper) GetInstance(w http.ResponseWriter, r *http.Re
 	handler.ServeHTTP(w, r)
 }
 
+// UpdateInstance operation middleware
+func (siw *ServerInterfaceWrapper) UpdateInstance(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", chi.URLParam(r, "id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateInstance(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ForkInstance operation middleware
 func (siw *ServerInterfaceWrapper) ForkInstance(w http.ResponseWriter, r *http.Request) {
 
@@ -10071,6 +10649,26 @@ func (siw *ServerInterfaceWrapper) GetResources(w http.ResponseWriter, r *http.R
 	handler.ServeHTTP(w, r)
 }
 
+// ReclaimMemory operation middleware
+func (siw *ServerInterfaceWrapper) ReclaimMemory(w http.ResponseWriter, r *http.Request) {
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ReclaimMemory(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ListSnapshots operation middleware
 func (siw *ServerInterfaceWrapper) ListSnapshots(w http.ResponseWriter, r *http.Request) {
 
@@ -10590,6 +11188,9 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 		r.Get(options.BaseURL+"/instances/{id}", wrapper.GetInstance)
 	})
 	r.Group(func(r chi.Router) {
+		r.Patch(options.BaseURL+"/instances/{id}", wrapper.UpdateInstance)
+	})
+	r.Group(func(r chi.Router) {
 		r.Post(options.BaseURL+"/instances/{id}/fork", wrapper.ForkInstance)
 	})
 	r.Group(func(r chi.Router) {
@@ -10636,6 +11237,9 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	})
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/resources", wrapper.GetResources)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/resources/memory/reclaim", wrapper.ReclaimMemory)
 	})
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/snapshots", wrapper.ListSnapshots)
@@ -11585,6 +12189,60 @@ func (response GetInstance500JSONResponse) VisitGetInstanceResponse(w http.Respo
 	return json.NewEncoder(w).Encode(response)
 }
 
+type UpdateInstanceRequestObject struct {
+	Id   string `json:"id"`
+	Body *UpdateInstanceJSONRequestBody
+}
+
+type UpdateInstanceResponseObject interface {
+	VisitUpdateInstanceResponse(w http.ResponseWriter) error
+}
+
+type UpdateInstance200JSONResponse Instance
+
+func (response UpdateInstance200JSONResponse) VisitUpdateInstanceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateInstance400JSONResponse Error
+
+func (response UpdateInstance400JSONResponse) VisitUpdateInstanceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateInstance404JSONResponse Error
+
+func (response UpdateInstance404JSONResponse) VisitUpdateInstanceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateInstance409JSONResponse Error
+
+func (response UpdateInstance409JSONResponse) VisitUpdateInstanceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateInstance500JSONResponse Error
+
+func (response UpdateInstance500JSONResponse) VisitUpdateInstanceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
 type ForkInstanceRequestObject struct {
 	Id   string `json:"id"`
 	Body *ForkInstanceJSONRequestBody
@@ -11980,7 +12638,8 @@ func (response RestoreInstanceSnapshot501JSONResponse) VisitRestoreInstanceSnaps
 }
 
 type StandbyInstanceRequestObject struct {
-	Id string `json:"id"`
+	Id   string `json:"id"`
+	Body *StandbyInstanceJSONRequestBody
 }
 
 type StandbyInstanceResponseObject interface {
@@ -11992,6 +12651,15 @@ type StandbyInstance200JSONResponse Instance
 func (response StandbyInstance200JSONResponse) VisitStandbyInstanceResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type StandbyInstance400JSONResponse Error
+
+func (response StandbyInstance400JSONResponse) VisitStandbyInstanceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
 
 	return json.NewEncoder(w).Encode(response)
 }
@@ -12293,6 +12961,50 @@ func (response GetResources200JSONResponse) VisitGetResourcesResponse(w http.Res
 type GetResources500JSONResponse Error
 
 func (response GetResources500JSONResponse) VisitGetResourcesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ReclaimMemoryRequestObject struct {
+	Body *ReclaimMemoryJSONRequestBody
+}
+
+type ReclaimMemoryResponseObject interface {
+	VisitReclaimMemoryResponse(w http.ResponseWriter) error
+}
+
+type ReclaimMemory200JSONResponse MemoryReclaimResponse
+
+func (response ReclaimMemory200JSONResponse) VisitReclaimMemoryResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ReclaimMemory400JSONResponse Error
+
+func (response ReclaimMemory400JSONResponse) VisitReclaimMemoryResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ReclaimMemory401JSONResponse Error
+
+func (response ReclaimMemory401JSONResponse) VisitReclaimMemoryResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ReclaimMemory500JSONResponse Error
+
+func (response ReclaimMemory500JSONResponse) VisitReclaimMemoryResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(500)
 
@@ -12748,6 +13460,9 @@ type StrictServerInterface interface {
 	// Get instance details
 	// (GET /instances/{id})
 	GetInstance(ctx context.Context, request GetInstanceRequestObject) (GetInstanceResponseObject, error)
+	// Update instance properties
+	// (PATCH /instances/{id})
+	UpdateInstance(ctx context.Context, request UpdateInstanceRequestObject) (UpdateInstanceResponseObject, error)
 	// Fork an instance from stopped, standby, or running (with from_running=true)
 	// (POST /instances/{id}/fork)
 	ForkInstance(ctx context.Context, request ForkInstanceRequestObject) (ForkInstanceResponseObject, error)
@@ -12796,6 +13511,9 @@ type StrictServerInterface interface {
 	// Get host resource capacity and allocations
 	// (GET /resources)
 	GetResources(ctx context.Context, request GetResourcesRequestObject) (GetResourcesResponseObject, error)
+	// Trigger proactive guest memory reclaim
+	// (POST /resources/memory/reclaim)
+	ReclaimMemory(ctx context.Context, request ReclaimMemoryRequestObject) (ReclaimMemoryResponseObject, error)
 	// List snapshots
 	// (GET /snapshots)
 	ListSnapshots(ctx context.Context, request ListSnapshotsRequestObject) (ListSnapshotsResponseObject, error)
@@ -13474,6 +14192,39 @@ func (sh *strictHandler) GetInstance(w http.ResponseWriter, r *http.Request, id 
 	}
 }
 
+// UpdateInstance operation middleware
+func (sh *strictHandler) UpdateInstance(w http.ResponseWriter, r *http.Request, id string) {
+	var request UpdateInstanceRequestObject
+
+	request.Id = id
+
+	var body UpdateInstanceJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateInstance(ctx, request.(UpdateInstanceRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateInstance")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateInstanceResponseObject); ok {
+		if err := validResponse.VisitUpdateInstanceResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // ForkInstance operation middleware
 func (sh *strictHandler) ForkInstance(w http.ResponseWriter, r *http.Request, id string) {
 	var request ForkInstanceRequestObject
@@ -13718,6 +14469,13 @@ func (sh *strictHandler) StandbyInstance(w http.ResponseWriter, r *http.Request,
 
 	request.Id = id
 
+	var body StandbyInstanceJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
 		return sh.ssi.StandbyInstance(ctx, request.(StandbyInstanceRequestObject))
 	}
@@ -13928,6 +14686,37 @@ func (sh *strictHandler) GetResources(w http.ResponseWriter, r *http.Request) {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(GetResourcesResponseObject); ok {
 		if err := validResponse.VisitGetResourcesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ReclaimMemory operation middleware
+func (sh *strictHandler) ReclaimMemory(w http.ResponseWriter, r *http.Request) {
+	var request ReclaimMemoryRequestObject
+
+	var body ReclaimMemoryJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ReclaimMemory(ctx, request.(ReclaimMemoryRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ReclaimMemory")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ReclaimMemoryResponseObject); ok {
+		if err := validResponse.VisitReclaimMemoryResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -14186,228 +14975,250 @@ func (sh *strictHandler) GetVolume(w http.ResponseWriter, r *http.Request, id st
 // Base64 encoded, gzipped, json marshaled Swagger object
 var swaggerSpec = []string{
 
-	"H4sIAAAAAAAC/+x97XLbOpLoq6B0Z2vkGUmWP+I42jq114mTHO+JE984yd6do1wZIiEJYxLgAUDZSip/",
-	"5wHmEedJbqEB8EugRDm2E28yNXUikyDQaDQa3Y3++NwKeJxwRpiSrcHnlgxmJMbw80gpHMw+8CiNyVvy",
-	"R0qk0o8TwRMiFCXQKOYpU6MEq5n+KyQyEDRRlLPWoHWG1QxdzYggaA69IDnjaRSiMUHwHQlbnRa5xnES",
-	"kdagtR0ztR1ihVudllok+pFUgrJp60unJQgOOYsWZpgJTiPVGkxwJEmnMuyp7hphifQnXfgm62/MeUQw",
-	"a32BHv9IqSBha/B7cRofs8Z8/HcSKD340RzTCI8jckzmNCDLaAhSIQhTo1DQORHLqHhm3kcLNOYpC5Fp",
-	"h9osjSJEJ4hxRrZKyGBzGlKNCd1ED90aKJESD2ZCgGlEQ88KPDtB5jU6OUbtGbkuD7L7eHzYqu+S4Zgs",
-	"d/prGmPW1cjVYLn+oW2x71f7vp4pj+N0NBU8TZZ7PnlzevoewUvE0nhMRLHHw92sP8oUmRKhO0wCOsJh",
-	"KIiU/vm7l0XY+v1+f4B3B/1+r++Dck5YyEUtSs1rP0p3+iFZ0WUjlNr+l1D6+sPJ8ckResZFwgWGb5dG",
-	"qhB2ET3FeRXJprwqPvp/mtIoXKb6sX5MxIgyqTCrocET+1Kji0+QmhFkv0MfTlF7wgUKyTidTimbbjWh",
-	"d82wIqJIOMJqeTgAFdk2lDOkaEykwnHS6rQmXMT6o1aIFenqN40GFASvGU63aDTY8lZLzUqOYlnXu2uC",
-	"KEMxjSIqScBZKItjUKYO9usnU9gwRAju4VDP9WMUEynxlKC2ZpuadzMkFVapRFSiCaYRCRutkY8QzGT+",
-	"zseIhoQpOqHl/W3IqYvHwc7unpd3xHhKRiGd2pOo3P0xPNckpvtRCFr7J6I32qLZPGBIQSbL470A1g2D",
-	"CDIhgmga/8rhEsHnhOndosf7E4zb+l/b+RG9bc/nbUDmWd78S6f1R0pSMkq4pAbCJc5l32gyAlQj+MIP",
-	"M7xatdYFipIKi9X7A1rcwk408DXCzblp+qXTUni69pN3uk2VdwJrtEOWuEAti3w+J8wjJAWcKfuijJ1X",
-	"fIoiygiyLexaaJ6oB/gl4sASbwkPGfqXN7+G+wbMyzyo6U2/67QIS2ONzIhPi9icESzUmJSQWXOE2Y5y",
-	"6GrRf1baPpWzCksyWs1BzihjJES6pd3YpiVKJUiqS9OHXXRJ1WhOhPTuOQDrN6qQbVHbVcSDywmNyGiG",
-	"5cxAjMMQ9iuOzkoz8UhrJfEXJ5oJug5BipBIcXT+69HuowNkB/DgUPJUBAaC5ZkUvtbdm7ZIYTHGUeSl",
-	"jXpy2/yMXqYQPwWcZxuj7uzJKNARpuF0LbuauvtOK0nlzPwC3q2hgrNPswFNXpH+/dEz6WfAJIyWUKsz",
-	"+WXAN4lZbDSNuMbpAqWM/pGWBOweOtG6gkL6oKAhCTsIwwvNsnGqeHdKGBGaT6GJ4DFIWwUhGLVJb9rr",
-	"oKGWC7taCu7i3W6/3+0PW2UxNtrvTpNUowIrRYQG8P/9jrufjrp/63effMx/jnrdj3/9k48AmkrmTiq0",
-	"82y7vd9BDtiiuF4FdJ0of2PuXwTfx3HMUp9oPrHpSj87WRYczFxDHlwS0aN8O6JjgcVim00pux5EWBGp",
-	"yjNf3fZWcQHzWIEENtVo2hANFaUHyLgd8SsiAs2BI6IJT3Y0E6ZKdhDWejMwL6RPyX9HAWZ6LxjhggtE",
-	"WIiuqJohDO3K2IoXXZzQLjWgtjqtGF+/ImyqZq3Bwd4SnWsib9sf3Y9/cY+2/sNL6iKNiIfI3/JUUTZF",
-	"8Nqc6jMqUQ4DVSReuyIOu2kEYl5M2Yn5bCeDBAuBF1+/wm4iq1baKHO1Sx3EHsn/zZwIQUN3qj47PUbt",
-	"iF4SS+5IpAwN035/L4AG8JPYJwGPY8xC82yrh97EVOnTLM0PaWMN6hWX+/cWCWYc5Iwo4npCGaprhJgc",
-	"h4EgoJ/gaOUxvArFXmQ9y/pdPrR/5VJ1Y8zwlIA2aRuiseCXRAOKEh7RgBKJLslCCykLNNWddudUUr19",
-	"CJujOTZGg96QvZtxSUwT90orIgGhc4JiHlyiJMIBmXFQxOc4SonsoKuZlhg0MxYER/YxEiTGlA3ZTAMp",
-	"A56QUOsQphlMDV0QNr9AMU5gl2JBYIuiGCsiKI7oJxIibj6JSUj1ATVkBOgaJVhv2SDgQp++em0JDmYF",
-	"LPxZogsjb1xA9xeUaaq8MPuqN2TFlf/cevP+3dM3718fj96cPX99dDL67fl/68fmo9bg988tY9/MBI2n",
-	"BAsi0J8+w3y/GOk0JKI1aB2lasYF/WSMLV86LY0DqekLJ7THE8Iw7QU8bnVafyn++fHLRydP6aEIm+tt",
-	"4AHsi1eWMUehh6McO2OeRNZABKIdBlMtcJiXZ++39eGaYCnVTPB0OitvDHuyb7QlQiovR5SPxokPJiov",
-	"0cn2G6TlDhRRvUEzOWOn3z99ui2HLf3HI/fHVg8dm10L4GsWwoUVf+RMk48WwoFknp29RziKeGBNIBOt",
-	"K03oNBUk7FUsb9C7jz8TpsQi4dSng1WYU950mUd1u/nbDVjR9piybamXoRtshnegmxtrAs/ZnArOYq2N",
-	"zbGg+piV5b3y+s3x89Hz1x9aA83HwzSwRsWzN2/ftQatvX6/3/IRqKagNTzw5dn7Z7BSZtuoJEqnI0k/",
-	"eSSBo2x+KCYxF0YDtt+g9qwsKJh9i2Bxhq29l08Nce28BLpyixJSCa1dL6bjMsXsvnzqo5bZIiFiTqXP",
-	"TPZr9s6tfOFYN+y+TNuSiDkRGdECFfcK6kcQ8TTsFobstCZUkEBgTXatTusPEms5fP5Jk04Ou+c7v/Wq",
-	"kfy5RrDEUUIZWSFZficS3hUXlxHHYXfnlgU8RpTue3mKr82L8vpamiAZSbQ6S9YIFl7RUM1GIb9iGmQP",
-	"X7VvUNY4Y67XeiY4+tc//vnhNFeTdl6OE8tpd3YffSWnrfBW3bXXBJJNJE3803if+Cfx4fRf//inm8m3",
-	"nYQRRG4k1Nn1f256AJataT0sXVMaa2YZLf81I2pGROH0dsSiHxl9GD5HjvYKUymZR4t3mkuMms+JiPCi",
-	"wHgtTK2dPnC/ClSCKtir9jvNRi+R/ngNG9a9uUP+ZVVH3+37Ga0HKA9MTzWvsOdCE0gyQHZ2T+3P3WWQ",
-	"aiC6pMkIpOYRnmYm21W3zeeXNLGiOHxhljGKDCMIUxDex5yr3pD914wwBGsHC0yuSQA8Tyqs0NHZiURX",
-	"NIrAwANMZflo0YJ9zlZMc6n0f0XKOmicKi2tc0WQ1ZtgkBRggcZjglKG3XV2RXa2E6zSlUXLJRGMRCMj",
-	"G8uGmDEfIftRLXJgqhMsFRGG26dJGV/Hv52eo/bxguGYBug30+spD9OIoPM00fxgq4y9zpAlgsy1CsGm",
-	"YGykdlw+QTxVXT7pKkGIAzGGzjITmb1rnb88e29v6+VWb8jeEo1YwkISAszuxJFIzbBCIWd/1juWhOVu",
-	"i+NXkO7fy5uo8p3WPEjS8orsVlfjNdyn67nPqVApjjSrLEmD3ut147jhkfqNX0hR+7BsKyNOrMr3ok3t",
-	"HaZn8OJYlon9Zgsj6DQ2WxQ08SUDhlMTPzcDdk3/J8wBstJsk2uKXzHWuemkiiLbd8fN7AZYOslwUsYV",
-	"vh30HMmCZl1rFg+JVJQZctJtkRXoJGpfaGXc0rFWvy866OIvpQd66zrNQIsHV8hgA9gB04+K/VdtCmu1",
-	"/eY6XWVxsLz5ehzJWj8jNN9BSmAm9dGoRaSE9NCvwIORInGiGRGbIiqRNLyThIjxq39H3Mgk7tMh06BJ",
-	"46Vh0ZHZfCSdMsqmW1pK1+cKDkNjGJqkKhW63ZzKHJtl0nHGl+oE3hnoiGGncSr1gRpEaUjQhTPQXJTF",
-	"umXzzbJGZ+05SwqKQQkoJqCrqe04VXp4PeEYq2Cm8cRTZdy27NRlGYCykWjddaaFJbvousH6n2fsooxU",
-	"ay6oMH49OXvFAla9gnmxzopn5Qy/hfGSLGDJnTURL9kTi4ZEv7lPEMmjObGnZtEUOcbBpTlKjOeEtUIa",
-	"e6I1IertX9miXuPauqXQ+GqM/rKkv0xKYMG1k80pxgrvxny7yLiQnpwZr6P1WkkA+aA5DBBIUxcdo+oQ",
-	"MCAgpoklQiEVJFBL3VM2HTLw4LiwT3q2twu9ybWI4duEPl3FK8oVlBXzTWlpUWFlndQG3eip8ZgqRcJO",
-	"WTa4JCSR6yelpWNrd/YYxwW5EtQxMmvvCRtKV4RNuAhIbGX8r9P7nhc682phm3Wx7FBh8FuA2dITwkkS",
-	"URIa7x2zHmAllXadwERa9dgNK0qXucAvD3mBo+gCtW2jLSSInot0a8U4y4n93bMzRwLZpfOH046mSM0F",
-	"LmZKJSP9HznSu/ii2pn91u1w3Z0+kyQ67IN6tL+/Z1fV2swMwJVuy+Yxr1NC/dKcM5zIGVe191qXlIXr",
-	"CMV18ptuW2sUywQaaZvftV0sEaSbJlOBwTH1Nq1iN75tBGzWc941Puc+58IMq0EqFY8LLoaoXXGMoGUX",
-	"ijKy5jzqhlhhsCA2NHMacJfddeOF6croUHUGkNF07PG2oZ80t0RTOsXjhSqb7Xf6Pk3ta69+HSy+Zalz",
-	"ezeaHwlHiq92/KUT5No28fODc2Ck+Gg+oZ6es+Mo9xqhEgUVH3urj+ouuklArRYPskkwM36ZBgkg7H04",
-	"LV6Z9YasC8fmAB1nA2TdZl1ikAlxaC4s2lwUgKDg7IXGiy2E0YfTHnqXQftnibSiMScuDmCGJRoTwlAK",
-	"Fl84xbrmDC0CkEo47FT1c2uyMCEDW3AzyO27Hvp1kZAYW/OP3goxVjQAB6MxrcwHjhGzUPYqFrOi8amR",
-	"sWiVu/RbMqVSiYqzNGq/ffFsb2/vSdVsuPuo29/p7jx6t9Mf9PX//9bcr/r2oyJ8fR2VeYt12Spyn2fv",
-	"T453rY2yPI76tI+fHF5fY/XkgF7JJ5/isZj+fQ/fS9yEn5Ud575mqJ1KIrqOTWqq8nmYFRy5ajzIbuwY",
-	"dkd+Xrnb6qq2BhPvdMu7CAjxuRpbR9fNQzaqDHOts3Jhcssa+CIBfTHfJQXJy/oEBtTr/XhM5eVTQfBl",
-	"yK+Y59yO8ZTIkTnP/G4EqTS+LeTaWiUE52oizXVl2Vq5s/94/3DvYP+w3/fEQSwTPA/oKNAnUCMA3jw7",
-	"QRFeEIHgG9SGe6YQjSM+LhP6o72Dw8f9Jzu7TeEwNyvN8JApTO4r1LYY+auLqXNvSkDt7j4+2Nvb6x8c",
-	"7O43gsraeRsB5WzCJZHk8d7j/Z3D3f1GWPAJ4s9dXErVdz70eQxovcfc8XVlQgI6oQGCyBakP0DtGI4w",
-	"kl0SlffkGIcja/Twnx0K00iudFQwg9mWxkAWp5GiSUTMO1iQRjZkmPkx9ORzAqGMETHKwnY26MlG86y9",
-	"mHdzyZqgUlRWCXWnVIIUkgtPlEThwOzQtXwOVjMH7GMdHdg5NKSGV1p16kZkTqIiEZijSwMbc0FQRidm",
-	"0UqzomyOIxqOKEtSL0nUovJFKkAWNZ0iPOapMrd7sGDFQcBXGHSPiWbXzfTTF1xcrvW61CfxSKSM6W7W",
-	"WnOOwAA+sSYWOMUxsl87x/6C0Jfdwpm7SvteorfmC2PZyR8nqUKUKa61UxaOFx0YyVqAGBJEKg6c1Br6",
-	"bDdNpUu/3AJGTud1YcbLeec9uZx0J+aW/nY1bDElaiQVVmslFk0p76D9OTRv7MStP1xrAGmAd0au7gPp",
-	"4OXe1WTblQwnd4PxVT5gma0hbwSnsKAh6SHYXeCM4qLqKjvtXPEkIWFm/+kN2bnZKtkjaW4+9IcGD2pG",
-	"qEBc0CktD1w2jN2lM9kmpOio6cbkWPxwWUKFl+A1Ub/p8UQRYTDoAoaLUT92EVqdlsV9q9OynKiMGvfQ",
-	"g5Hcw3EJxJdn7zd1CUsEn9DIM11wQbBvrWbmnKVe7ffPuzv/xzg+anoDEY0y47YQ85D0KjH50L7ZyfPy",
-	"7P1ZHUxZQgRUhG5pTpmjiYdzZP4IDiP2MsjeJloNxpG/PliyQXLZ+4lPlp0IHJNxOpkQMYo9xrUX+j0y",
-	"DYxHEWXo9GlZntVyc1Ot+ay0OKA2T3Bg49mbYd9jkKtMo1PA5kf/cr0l5hiui4LTSyVsGxsI10OvsxQU",
-	"6OXZe4ly5yCPpa68vLVu6mezhaQBjkyPJqiVsqKBDYizsYR8ln9oTZEeOTn2yoZuI6D2fJqksA3P33ZP",
-	"3nzYjkMy75RgAoeeGY+IhnurwC3mLhYu96kvMYl5naXDEIZsuoEKuMp2cGMkFfarBzuKKxyNZMR9Thbv",
-	"9EsEL1H7wwsTq6Qh6KCktJT6eQELJfo+8O4YzZHqhj2HAasm09IG9+qO5cwtxrxSmF5pUN9W+ZXgyCSs",
-	"KdNzHlbtFp5flheaX67dvbYT37gnzh+7QczUs9NjIzAEnClMGREoJgrb9DgF1xQQh1qdVlefUSEmMXi4",
-	"Tf59tVdKjQm+GARVa8R9tpTt4k4MuDVR2m+N60CIYszohEhlo7RLI8sZ3n10MDC5JEIy2X900Ov1Ng0N",
-	"eZ7HgjRaim3jOV+IEunJ2detwx1EgDSZy+fW2dG7X1uD1nYqxXbEAxxtyzFlg8Lf2Z/5C/hh/hxT5o0c",
-	"aZR+hE6W0o6UrzT1mWWeD/RMmHXl0rTEQYFfe8VUo8+ARwKEq3mjdBWeav3EUNzXhuPeOGFHnjVKFRJ1",
-	"FB05GyTtoJ9WW0KdYARt7JgpUzTK85ks20BvlJFGrgzaXwrYTwjLwvSjyPwKOJvrXeGL2S8xcPfuq+4P",
-	"rHfKKKQeSv4vq+0Z5wYIZlq/31rbOEnWk61fUMz4X9NcJTai2HMSfXOuf5M7tvLob6b/+cf/lWeP/77z",
-	"x6sPH/57/vI/j1/T//4Qnb35qsCl1cHk3zQi/NaCwOFiqRQJ3pSUTrEKPALVjEtVg2H7Bilu/Cx76Bko",
-	"foMh66JXVBGBowEatiquvcMWapNrHCjzFeIM6a5sgMGW/vjMmH/0x5+dbvml2kdoIwmEXZAsgEim45DH",
-	"mLKtIRsy2xdyE5Fwp69/hSjAiUoF0aunZdhogcYCB3kEQT54B33GSfJla8hAwyXXSugZJFioLPuFGwGI",
-	"wkJlfAZscxK6eGyjIQ9Zdi5l4djGRtPLjCBgm696SvqR4lVfuChHwBz2fYHr4K2lFzKiUhFwqM4oW5NR",
-	"5kaGDvslVnHYP+yvFfAzGlpBfrATlnNTOqJssJcMAcPQhnGDZ1kDW7rmTWaPoF/fvTvTaND/niPXUY6L",
-	"bImNkmd896SxEapIFrz2tlr+iBC9ug0nZIxk8FnUIFjnuXHrfPfqHCkiYudo3w40Oic00POD638qZapJ",
-	"kWJ09Oz0+VavQXJNwG0G/4p1fJfNsBqUYY1mdbbAjOI1fjvo5Bjcau0OzQU4cKt5wQWKDIPJ9/UAvZek",
-	"7KMKS2Vu9c1KRovc8mZOgGFry/WYVDnFAL3N5EacgZI5SObE4LrM9yV0ay9ejM/PUu8Vf1rwZrJ6kWVt",
-	"4OGDVebcrU/celawevt7MA573vpjF2yam+3tojFUD+YnjXzt71xa2dtUR900L0I5dLEQ9pqlRmie0+Au",
-	"cgMs62vXVI1qL+GRfm2v3J1W8uEUzbBkf1bwsqKb7Ow9bpSkUo/a9Pq6eHHNJwakbFe5OMjs2tVEhF7S",
-	"KDLeDJJOGY7QE9Q+P3n528mrV1uoi968Oa0uxaovfOvTIEWCI+2XZ+8hSgXLkbsBqnd6xLnjMLmmUsnl",
-	"MNFGF6mrUzL8Wkqb4I273brFXAru9nlpGveRJeFbuvV9fxkaVuZU+NrECFbYvaO8CLXM1ZdToMxnzePb",
-	"zXBwJ+CUYnZ8/KEoEzif6xunFOi0qMff9EhqFkhCdHKWZxbMjVKu+8qcnuz2dg4Oezv9fm+n38REF+Ng",
-	"xdinR8+aD97fNYaIAR4PgnBAJl9hIrSEbYQ3HF3hhURDJ14PW0aeLwjyhW1rRfBG16/LmRtulqihKlCs",
-	"S8WwSeqFZjkVVqQHPi8nBm4soz3621flECZNT2brumC/Gm1ivCYo4GkUajlorHeeUatIaLU/SVSecxk2",
-	"63t2yfgVK0/d2DD1/v0jJWKBPpyelizegkxsStkGEweXh5p14MlGy7C7RlReC80N0xvcR0qDKtcsnFa3",
-	"nsCgaHJzLpSGQhuY3nLp0XvtTZlZGk0nK+ZUMZqEZD5KU59QpF+5wIn370+OS8SB8cHOYf/wSfdwvHPQ",
-	"3Q/7O128s3fQ3X2E+5O94PFeTVL35m4vN/dkKe/m+kAlQDwYIE0cWjjQ+y1zRRmnCmVuanojP9PSJSqI",
-	"sSYsB2wCJ4wqyHxI2VR3Ayq6lXJNXKRJzkgZVRCID1lcKNNTBluI7sQ6Hw3QS2gLr3AM4UIOCK3blM0A",
-	"OFwYM6hmDG7oBP5aDfL5LFVa7IJv5CxVSP8F09ZosNrG6i4Mjxmg1xy+Ec5HlPGq2mKag+/VcvOqitO2",
-	"XkHOexQGswxzgF5kTDJjs5attiWxPw3vto7N4LS9VXKdsyve0tSSr1zBK6zTMhhtdVoOUeA9tuxHZuHy",
-	"hkgUSdF3P0BwBCw099NJFY1sbgGYCZWKBkbpw7C4dTvZpsEi4cic4HW3fcb5w57y2UeOUXw4RW2IRvwr",
-	"sjqh/msruxks7sr93Sf7Tw4e7z45aBRzkAO4nsE/A9ekZeDWcvsgSUeuXkbN1J+dvYezT5+rMo2Nkm/n",
-	"XnDxTAQPtLBJGcoLcOSDP+k9KYZahDwdRwWjkY3LAn/+JtVSaq63/qDRnE4m7I9PweXu3wWNd64P5O7Y",
-	"q5tlA/kF2ZOioXNJ6yPjrkld6PeGB4ISsjZg5C2RMAN0ThQC+ukiHMAhnXkUWZJzYSUW417C2t/b2zt8",
-	"/Gi3EV1Z6AobZwTq5zKUpxaCwhaDlqj99vwcbRcIzvTp3CwhLQOzApx/nyGbxbhf8sDUqs+ej0pq5KWc",
-	"amzf87gW5R+sEGQnZZEOjlGZgLS0y73Y3tvrP95/dPio2Ta2CtdIXK/mMC4VhkGPzR5SXPk2GMffHZ0h",
-	"3buY4KCsYOzs7u0/Onh8uBFUaiOoIPONyVixAWCHjw8e7e/t7jSLfPIZwG1MX2nDlnmXZ9N5iMKzGh5U",
-	"LLPeTt1p4RM8l70xVzqA5h6lVffBTfyF85hvKqFXWnBVRW0tlxVl3ELc8lYTM4efRepx6qpwaQm0qSvv",
-	"as/dM6xmJ2zCPQl9NtA3rT+Us3wnWg6SUHMkJIyS0PGuTPG0ohV4WEWSoDAlFnNGVBLYIhybWx5I3MOc",
-	"TEbZtOxbvjRgEy3QwLA6wh/GtQ2bGKyk3y/nnUgBV8bELBHOPXQa2cupHPkVleWOBZmmERao6q6+AmS5",
-	"iCPKLpv0LhfxmEc0QPqDqjVhwqOIX430K/kLzGWr0ez0B6P8grliHTDAWfcCsyCVcfMp/KJnuVVxboKT",
-	"f9t8vw1lFpvY/7y3Ti+07mQ8ut8zel0g9HII7P5uv87vrabTksfbcjTAprzdkqxvxztH/aMsU63ndtPc",
-	"H1WU4rIcXJqvb7ZwQbnKy29ZEkBtZ1J0IcZlvBZCfRsdxM3uSKvGcwfNtiRBefT9w0ePDxrGWn+VqL2i",
-	"EN1XCNbzeIVAXbNSp02ktsNHh0+e7O0/erK7kXzk7llq1qfurqW4PpWE1BWZ7VEf/rcRUOamxQ9SzW1L",
-	"GaBScukbA/RlxdbNY2xqtO5VRWDzlXRqflkAbybirpCWjkoiV6F+QptMJiRQdE5GBm/dHJiKb1YjGAKc",
-	"4ICqhUcDxFcmT2fWpBIr0qD3CrAelNq+bbif5lwyHefuAG03OPqL0ewqtHDYOGWDTMd1WuSb6qhGh7S5",
-	"2SoWigYGgjwbbPVO/ipDJrrCsnSpoH8HkGgvr49RvX0yLZoX8nO0ntXyy+/VffFO/rp9xeWvLGdB6ygJ",
-	"yVWMrzpC67eglgga5/H1nMi+0kDrfToq/MEegDf7ajQuJlNZma2mlHklP3U3H7dZZY/l78wJtvl4BQeC",
-	"TT6s5pUAerQwWJTnfXdKJFFDTYqL9WkA7yA63Ji0bxQfbq3h9xIibh/fSVj40nKcE+XanmuNPo1WZANk",
-	"ioi5SeVdUVvcJYJrgtoveV5N2XDiDoopo3Eao514q1IeZn/ml9Vs/EbD20stBY4SQSb0egW1mAbmuC47",
-	"H0mLgbCcMVKidoyv0f5jFMywkBXYGZ3OFFS+LyRH2Pf43n1d3TuitOjMWdOVz1fTfbhsEbPLWezdt2XP",
-	"C55yzf1CM5rwluwu3XUfdPt73f7Bu529waODwc7OXQSxZCtaZ+5//Gnn6nG0iyf70eHi8R87s8fT3XjP",
-	"6xl0BylKK4U2KhlL7RwSIqpZY6rZliSJKCNdmV2RrXdWWBGeZgy3CV6AIrBCa99EVXTFb1dw9vPyJIsM",
-	"HqscOdWiB/fhw2ihX6nvVsE/OV4N9o3unKqA+AmsCgrQUzNgIKhy51az0YLtHXaPF5E1k/KRTMlno0TE",
-	"qzjYb3bj1nEqGzpgIcwzmLjN5O6gS1STv15CVJUZb8hB7VceDtrzs9An7/o7G8cBbkbJva+4JP0q8aGZ",
-	"yBBhqeqcx15hqbIzHsoMQsMO5MxllYp1Nk+Z9W6A2yrw/h8gWZEaXYI2mfNmJ1l20JQrlPs1rGXGAL5I",
-	"mZceyvDn5YYg3qSWIHbXEEQzmNxk/VTiMHFyjExxw/xSLwKg0yAgUk5SqJ7Ua3rwrrdb36WACLflWkpc",
-	"LyDWSYTrHV/Jdf16vybXqjCkJtj6pd7pr1/qO5EqO600CdfzMNOoGQfbKDZozT2vR8Yto71ykhQms+ok",
-	"WUaEVw6FDNAoiAhmaeJKCWiaWqYk6SkggK9H3qiFYxIRRXydIFPbw14lUplz0fUsdefg0K+G4etRAD6W",
-	"S4D8RkiixYmYS1trI8Zs4QWsmpYLtfuulIRE0H3XhAZbbJWBewx1nbT22Br0m9mPfTrw6gxnFSuBcWIr",
-	"JpTLYoZuN73ZOytP1UWYFRTL3UcHZU3yqPs3ozmiUW+w/ctf/3f341/+5E+1WrLtSyK6IZmASfOSLLqm",
-	"9ouW7Hrl9CSmorJU2CYoVQTHoGoEl8SoNjG+LsL7qJ/R8eI1jpemALbgmLLs77UT+uuf6i2phQU33sB1",
-	"ufNjzdA8hyqVCvGJy42ECo1Rm8SJWrj8H87pYWsz7+SjrMOaEui3GlnZf3IbeSDer0z88ANWbig6jzuA",
-	"1rqNL61/bbS1/9b0uBrEZTiszUZdDjqqyK5SdesvVWPNbEfgG7B8AarfGb8Dm+lgmlZTPm3HTG3bvCoe",
-	"kQKHUCRmpadJvsucJ3UXPlrvQLHyuC/MrABJ/dqculOtWrinHkFnGjVXMyJIYSHggzw5xIYos14A61MH",
-	"GM9plBDRraYrNxn1BAW3gkwhcSjIPEWW3VFWBz+d4utsBDD/YLlkqoJ5FOrQv3wKWTLfurTVdOK6ADCq",
-	"lYKfrqeiJgWzlhejSFXL8zbtvRvP8qoV3K9ub1WIMx+jRJrL9KjZHAlSQdVCC5b2zBxDub2j1JAh8CeY",
-	"BDzOB4f0GV++gIY98VyavtTqCw3Q0dmJLbbH4CxHH05RRCckWARaPofsB0sRB3Dh8ebZiZXNsiKseniq",
-	"ACGu7MnR2QlUURDSjNvv7fagpj3Ub0xoa9Da6+1ATQmNBpjiNmTbgp/WH0rvQzj1TkJ7Oj81TfRXAsdE",
-	"QUnc3z1+RYoIk71LgvKJpwXBJsFUWMkmicDbyWhkVH8LAV+OwQ/MKdExCG+sWkq1sHe/JHljl/WjJgeZ",
-	"cCbNgu72+ya1OlP2OMB5dv3tv0ujReTjNpIyAD2e6Kclkc9JOhblXzqt/f7ORvCsTYjvG/Y9w7ZqIwEw",
-	"H22IhBsNesKMQwoynvU2RXxxnwEJFXfY7x/1esk0jrFYOHTluEq4rBPRiEQYUnKb1HF/5+MesoYzyNcg",
-	"ZzyNQigInZiiQ5qNYqSw6E0/ISyCGZ2TIbOnhylugAXks4mRPjXMxWJ5a5ihzeobtkOkesrDRQW7WXfb",
-	"uruuM5fkCK7GhUsygvi4UV1eyNxQQhmD/PKS2CD6LEHaEkc3BUFkwL2VUAjDTOX1JUwlkEuysLYYb4eN",
-	"Alk0w4NlIVB4KsuPtLvld6GDcH+/9+lx9g5Z9JYPOcazCqqZJOC8OrAY4yjypsWcRnyMI1sw5ZJ4BKeX",
-	"0MIipZgZwR25jIfERLknCzXjzPxOxylTqfk9FvxKEqEPZpvtxuLa1Ys0pAuVq2gMGWdMLj095rYBcfvz",
-	"JVl86Q3ZURi7PIm2jjqOJLeVZLKKos4NwNCuPx9DzaXFM1tZzlRxKCa+N2DyVCWp6iEzEaJsih5oDnUR",
-	"5IyEQ6Y4+ixMGazFl+3P+YhfQKImONR0UmhiprT9mYZf6qCWI6xnP4KmHp2EAAKGLX26DFv691RgLVGn",
-	"coYwWEHhYXFJ22ZjcwHSylYVwwFmKOFJaov1an4CBXJKfUC6MxxFSMFWct9qGQhWsmY+1hvSl7vbukIa",
-	"37XKNoIs3oXN1N8/9O8nSQJBfGr3f56/eY3gqNJrYJrlKTgAR6ZudFa7Xo/eG7LnOJjZgq4QnTls0XDY",
-	"ymTecAtgTaX11eh2QfD6RYP2ixmmQ8Nfej3dlZHpBuj3z6aXgd5LSTxS/JKwYetLBxVeTKmapePs3Uc/",
-	"Qus8ys5LjAC1De/fcskqoQJrfgyacwOzEHHLa6MFwijnQEXtfkwZFiszbXpQbzGoFUw8lUVkfB6CiWfY",
-	"GgydkWfY6gxbhM3hmbUEDVtf/BiwmWHrQwFNslHbLCeig35/a72rt8WvR4QuNdTb78uS9LV7a4KHFbqW",
-	"BQ8zORfHrFfQpI014tY9SD5PcVY8+6eIt0bEs/p0QXiD74vngCHfiBjbcUUC0wp45CSwldqJIQsI5AeN",
-	"wwVmGIWDOgkuJ96i+lFVMpfViv26XRYAiJGjv/17oD8YNy+9BOM+ua9xcWSKhLpCJA+LHGGxHCF2/Brx",
-	"S6K+B4rr3xcrdRXiviH9PhT6eUms3JcjrcLNtsnc3YL4w8+UIDiWthfTWOuq5wBT95wwhZ7D057912k8",
-	"kMvjIuLTiwEyKIz4FEWUEWmdZrM7DH0oWlzCRyaXdvadTUcfzDCbEona5vz81z/+CUBRNv3XP/6ppWnz",
-	"C7b7tgnIhFQVFzOChRoTrC4G6DdCki6O6Jy4yUAwOZkTsUB7fWkL/+tXnuT2csiG7C1RqWAyC8XU8wKc",
-	"mA5trTU9H8pSIpEEFEL14ImNETRmT48K7/ayQeW97ujOks5lZ1CYgD4VHQ1A0Ac1+Tqs/tXyW8/MnEv2",
-	"s6oFd8mmv56/KHKtDPV2DYAbMhhAsW/fwQs7adQ+P3++1UOgYxiqgDhQkJjzbqzw3PvJk9bzJMNRygwF",
-	"sGx4U6GuUa3999i2aWYAtj3+SBbgukJN9SZgY/IggoQOXz91hSbmYD/enGnYZ589dnWd6w20N59vcQgX",
-	"tdFIEb69dXa0t4xzW+A8R9m3UIFR2/lxuhzjpSrq34ro7+XUKBTfz44OxE1m83tTy55xNolooFDXwQJp",
-	"zGKSqWplAnko7OCthRphN69qxpXi+bZdCiCuPemyWOL8yLv706My6CbHSJ4VJqe1nyfJOtI5pjLg+tsC",
-	"tXQDnNgM60Z8yfZpkYrWGaSMW2h25KwUlyx7Pjl2G/L+TFN26JRVz4Z7YIrHFYb4DRlhJWt0IY/SQ6Lm",
-	"99kq2nmtslx9X6TZvz8p6L6tWD4yf0hmrLCCNs0FZ1kt0TrystVG73Ch7QieiZ8T4Xa1AdRkIM6nZT5F",
-	"wYwEl2ZCcCG9Wvc9MU2aqb6mvx9J8zVlXjeQWCzKf4ooDZTdHFerFNwTm0r77vRbGGEj9fb27nktgXmQ",
-	"DM4mY2exNlmqsVywYOuHuuq9l9PMIPtBHmZnaRS5G485ESovdls8A7Y/g1vSetne7baVx8H7t6+6hAUc",
-	"/NAyHyq/EOVqUN6uhG8WzEzlJ5k00QlNQB9151mdhPMV62/cBVFW0Ojfdl/Ykkb/tvvCFDX6t70jU9Zo",
-	"686IpX9frPm+Je4HTHxa4KZlpAFrMpUi10moWauGQqpr/0PJqbbq8CaSaobXn8JqE2G1iK6V8mpWAPoO",
-	"JVZbK/fbXMlkxObDNrxy/ok/mKR6v1Y+S5EuZRyV5WsPmxOci7w+LWUoleQBOlDSjOKKx0ZDc3W+IVce",
-	"H450T447tvSwKRicBYjck/HawXHvwq0d9/4t10fxmE5Tnspi7AlUmibSBitFpMyAH5rYnR/PtYL3d0yl",
-	"/fs8Ou5drv5J93ck8VcX1DBvcwO1TuZ3rZrK/LY91HQ25cJM7NpbV4bMplHZqnEqdIX6mpJxqabksrOj",
-	"Dy6fLoLea0UlVxcQaBCDIfsPrX/8rgiOP/7igmTSfn/3AJ4TNv/4i4uTYaeOVAhTghKJsCDo6PUxXPtN",
-	"IXodstXmIXlVOEwOWiA9V1f+f5yClN98NteQHBX+1JAaaUgFdK3WkLIyd3epIplBvpmO5OjNh3CbWuOn",
-	"lnQfWpJMJxMaUMJUXqJhyUnMVnh5gLFlzN4PFZw7SgdtYy0prz25WgDNc87eu2NPNvj9K0cuve3D9JHn",
-	"JiomdOpIfhjW6yPfGz3075c5378e8pBJzAj8VdQtM6Ltia0Q4RcQXnBx2ZTyPEmwb50Ab186Kc7wO5RN",
-	"NHikUIb6G4oocHgb33pNNGXJ5R425FJm82/p0lnOFt02QZGUTfNC5FTNeGqyqozsQ5OVTe8KW+4PRJ7A",
-	"9vqt2Yse/R4E0NdcIRonEYkJZG3rGmqC6u9pknCRFYilslAHYDP2p7dN0cHWJLeRLkm3rZYAxjq3YG2w",
-	"2y8vl5drRny6Pqg2G9xFkHqiaofsvTRJXi6MKHyBMiaLFEeSRCRQ6GpGgxlE2Opn0L8JwMVJcpGl1Nhy",
-	"1eyLmUVg8LYkguIIynDzyBSUv5jH8cVgOQPch9NT+MgE15pcbxcD5LK+ZQeE1K2KEbNZ9u/XNg64rSlJ",
-	"8CgyK3qhT6HC/LZsLG2e8mTIfHG1jFzZDukEXRRCbC9qYmwdQ33Fp/JbyUud+kRVZi6KIwGIM7RJWNiq",
-	"M+zQyB9du9P3ZkZuGOlrwLjjQN8lYF7xaZYkq0TKOEmakq8FE6h4HscraBi1C5VEpAp5qv4qVUiEgI8t",
-	"ddcRN2rjwPyh8KUmVJtiO6vFAuTnNV+arDVeVGmmWsgnbf6ax3Gr07LwFLLdbCB/r4mYrna4bGbTK1MI",
-	"i/4paW8S8Fxm9oWI58rJYQuL1Yvctl7aD6/vWUR9a5vCN7CP5VBQ5kQVWFue56N/UJGTppReVRYzyfN9",
-	"e8TNsisLZXSamcuWCvB8B0rrOitaVk0lK/Vy3+a0ZQgeslOtXJoNlP5jG9nZvntCur0lWZpqEwr5SZub",
-	"G+QaEaaWv2ur6kBRIAllLKHSDOSJDGacywLZj8kMzykXNqOrrXORUSaYLIz2aG/jLzSpXthyJhdWPB9Y",
-	"WxPCxVd54dSufgz6tP8L9yr/4kVB2844fseJ1JBVSiKMxoKSCUpwKomWltKYIJOx3CYGJTiYucptPgXw",
-	"/PvexLdvwlxR0rWRJfMbcxJbKepb2zTzOnH3bNd82OqPvfbkwhX8asDkVoh8sl4xKvsRnOeVmf4Hbmkz",
-	"12rN7Hu+l8hQvGoXfx8XEqXSjD8vJZTdkmFqhqvUF/5hbxoyhoJSVrpssBbJm143ZHmFMzRvxPO2P7uf",
-	"JzewEH0nnLCzokiof4B80t8Dy7VYvRHP/UamMWtJKdiEviELtkB9O/GJiwKX+y7YsNlwGTcu8py8vvBP",
-	"ZlxlxvZy/KbM2Nkbl65/C+yZsm4S4Tq+bE2TtQzYqsM/vIk+N0//4Eb6gAthogUg/uAhZasoGIYKtw1t",
-	"ML90sg3Tca6KH05Pt+o2jVArt4z4PnwYbyY5VIr4x55SQG/mRAgaurpEz06PbRUjKqEIOnoTUygWdElI",
-	"AlnIKU8lgrCPXrHEbF3h26yGLGFKLBJOfQWaK1DkTe8GmC83qstyz3zK5uv54W8SwST78JgU8A59etsJ",
-	"rFaqlKms7PXMcp5KlJliSlr4wGOe6t6XSuCiCY2IXEhFYuOmNUkj2ESQ0c0m/LffmXCFDqJKIr0fOuDe",
-	"nRARUykpZ3LIxmSipZKECD021BinESl4nHht2QpnXPPMsL7vw5sJquKCAw9WdVgrF8TFSeIK4vo8ZrIa",
-	"vjcG6QW4JyG5iMc8ogGKKLuUqB3RSyODo7lEkf6xtdK/aQTf3XY5g5vvLI3pEzbh3ozPhmYzYv4RONxJ",
-	"ha25G6UHx9ZekuJmcfwHFtrP1uRaviYIjqDuexZZhVJFI/rJsDrdCZWKBqZMJs5wBxX+zHi9ITslSug2",
-	"WBAU8CgigXK2hu1E8GB7mPb7e0FCIQR2jwBwwPDqX8cw4rOz99DOVCHsDJn+Azp+d3SGqMbpBFuVuQAo",
-	"I+qKi0t0sv1mjcfnOaDpf7A+Zia4alv4F/znbdbmYTO1e0jWbFGerFKAePLDGwysBPfTWvAwrQUQt5jN",
-	"pj0VOAChWM5SFfIr5rcMmKL4cvuz+XGyLvpV4WBmKvJ/N9KuAWftMG6CD2JT2jmFxGSk/yb2eoOwh+ps",
-	"qBHnpgBCTMmNy3sKHKkfkbpv/7KuiMfv8KbOYtRVe/hu9tZ9n3wWBpfUoYiPh7LNDaW5mUCV8qL1Kctg",
-	"sVY3c36YMy7zxBcowAkOqFp0EI5cAX1bETOzIXWzI3csCL7UJ21vyN5muTOs76TWrjpOtUIhlZemB6s9",
-	"9dCbOREyHWfAIWBMRs8D5Nsa+gGOAlN8nkwmJFB0TkxVeFmjfWWg3GUlhnwQz0K7lxZ1D03l8NMErF5O",
-	"FlbrKHnK1WbsOs9aNcvYlfVa8IYpeIqsDHMbuYYjOIk2Mdl5Br+ktZGQ9tVm3mu/6Y8ajl32kvIDYV99",
-	"5Sx/lETI5wXnlKZ5vnIKf2gptwqQl7ZqycFrfTBTY4+uu/Swahy19M2ClR5yjBIuuW3VBSN9f4TQv1/v",
-	"4vtO+vOwaasUY1RK+lPjaro++c93QYF3k/XnG3vX3yDrz3fl7wlZW76d3/135elpPRYzT8+feX3u0sHT",
-	"JPeBHCZ1Dp6G61nL80pF6YNt00xNsj3+SBK8NVZuIL87tP/M0ttAZSggy53CFXYDvF9agidxohbOGsUn",
-	"4HeTp5GW9BN47/kC5zKj893Fq93AHnt75OHotNYa+zO7770ZfPMSKCfHDz+lb3HPlQ6WbX3qdLEIZnRe",
-	"itdatYMtihJBuglPwM4aGoRZfLizTGHRm35CtvvekL2bEfcXoi5BGglRSAUJVLRAlCkOHMGM8WeJBNea",
-	"ALznYuEz3xZ37gvB4yM7mzXnod1T1hiWu/nFi26IFe7OHbdZYUL7iiurU3xN4zQGhocoQy+foja5VsLk",
-	"60ITrfkgOslQSq4DQkIJNLlVBHinX2PZpJ/IaDpuAuWKzGtvbGY7FKRS8dit/ckxauNU8e6UML0WWtSf",
-	"gCSbCD6noSmLkCN1ziOD1Z0ahG5qd9VChfUHz5ULA9w3kWGaHEjTTzQpswXj9tgatMaUYQBubY6z8p4y",
-	"Hrh6PEzBDy7fO45yWj+PMKv5tZ2yoylRKzkOiYpzFGmJfuvnMfeQj7miJ4M700qnXbPE9c2cGxr6HNxF",
-	"uq3M8eV+zdYfvp/7eCof5FW8NZ3PM4W0zmz+fZFg//7Oh/s2l394wP5bL4lTvgumcuhA9+gjmFc8wBEK",
-	"yZxEPIm1WGnatjqtVEStQWumVDLY3o50uxmXanDYP+y3vnz88v8DAAD//5Y5644LPgEA",
+	"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",
+	"AA==",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file

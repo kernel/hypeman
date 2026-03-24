@@ -84,6 +84,22 @@ This keeps pull and push views aligned because both are sourced from the same OT
 | `hypeman_vmm_api_duration_seconds` | histogram | operation, status | CH API latency |
 | `hypeman_vmm_api_errors_total` | counter | operation | CH API errors |
 
+### Guest Memory
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `hypeman_guestmemory_reconcile_total` | counter | trigger, status | Active ballooning reconcile cycles |
+| `hypeman_guestmemory_reconcile_duration_seconds` | histogram | trigger, status | Reconcile latency |
+| `hypeman_guestmemory_reclaim_actions_total` | counter | trigger, status, hypervisor | Per-VM reclaim action outcomes |
+| `hypeman_guestmemory_pressure_transitions_total` | counter | from, to | Host pressure state transitions |
+| `hypeman_guestmemory_sampler_errors_total` | counter | sampler | Host pressure sampling errors |
+| `hypeman_guestmemory_reclaim_bytes` | histogram | trigger, kind | Reclaim byte targets and outcomes |
+| `hypeman_guestmemory_host_available_bytes` | gauge | | Last observed host available memory |
+| `hypeman_guestmemory_target_reclaim_bytes` | gauge | source | Current reclaim target (auto, manual, effective) |
+| `hypeman_guestmemory_applied_reclaim_bytes` | gauge | | Current applied reclaim across eligible VMs |
+| `hypeman_guestmemory_manual_hold_active` | gauge | | Whether a manual reclaim hold is active |
+| `hypeman_guestmemory_eligible_vms_total` | gauge | | Eligible VM count seen by the controller |
+| `hypeman_guestmemory_pressure_state` | gauge | | Current host pressure state (0 healthy, 1 pressure) |
+
 ### Exec
 | Metric | Type | Labels | Description |
 |--------|------|--------|-------------|

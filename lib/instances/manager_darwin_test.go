@@ -57,7 +57,7 @@ func setupVZTestManager(t *testing.T) (*manager, string) {
 		MaxVcpusPerInstance:  0,
 		MaxMemoryPerInstance: 0,
 	}
-	mgr := NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, "", nil, nil).(*manager)
+	mgr := NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, "", SnapshotPolicy{}, nil, nil).(*manager)
 
 	resourceMgr := resources.NewManager(cfg, p)
 	resourceMgr.SetInstanceLister(mgr)
@@ -470,7 +470,7 @@ func TestVZStandbyAndRestore(t *testing.T) {
 
 	// Standby instance
 	t.Log("Putting instance in standby...")
-	inst, err = mgr.StandbyInstance(ctx, inst.Id)
+	inst, err = mgr.StandbyInstance(ctx, inst.Id, StandbyInstanceRequest{})
 	require.NoError(t, err)
 	assert.Equal(t, StateStandby, inst.State)
 	assert.True(t, inst.HasSnapshot)

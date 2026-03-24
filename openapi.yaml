@@ -203,6 +203,21 @@ components:
             $ref: "#/components/schemas/CreateInstanceRequestCredentialInject"
           minItems: 1
 
+    UpdateInstanceRequest:
+      type: object
+      properties:
+        env:
+          type: object
+          minProperties: 1
+          additionalProperties:
+            type: string
+          description: |
+            Environment variables to update (merged with existing).
+            Only keys referenced by the instance's existing credential `source.env` bindings
+            are accepted. Use this to rotate real credential values without restarting the VM.
+          example:
+            OUTBOUND_OPENAI_KEY: new-rotated-key-456
+
     CreateInstanceRequest:
       type: object
       required: [name, image]
@@ -305,6 +320,9 @@ components:
           enum: [cloud-hypervisor, firecracker, qemu, vz]
           description: Hypervisor to use for this instance. Defaults to server configuration.
           example: cloud-hypervisor
+        snapshot_policy:
+          description: Snapshot compression policy for this instance. Controls compression settings applied when creating snapshots or entering standby.
+          $ref: "#/components/schemas/SnapshotPolicy"
         skip_kernel_headers:
           type: boolean
           description: |
@@ -418,6 +436,56 @@ components:
           format: int64
           description: Total payload size in bytes
           example: 104857600
+        compression_state:
+          type: string
+          enum: [none, compressing, compressed, error]
+          description: Compression status of the snapshot payload memory file
+          example: compressed
+        compression_error:
+          type: string
+          description: Compression error message when compression_state is error
+          nullable: true
+          example: "write compressed stream: no space left on device"
+        compression:
+          $ref: "#/components/schemas/SnapshotCompressionConfig"
+        compressed_size_bytes:
+          type: integer
+          format: int64
+          nullable: true
+          description: Compressed memory payload size in bytes
+          example: 73400320
+        uncompressed_size_bytes:
+          type: integer
+          format: int64
+          nullable: true
+          description: Uncompressed memory payload size in bytes
+          example: 4294967296
+
+    SnapshotCompressionConfig:
+      type: object
+      required: [enabled]
+      properties:
+        enabled:
+          type: boolean
+          description: Enable snapshot memory compression
+          example: true
+        algorithm:
+          type: string
+          enum: [zstd, lz4]
+          description: Compression algorithm (defaults to zstd when enabled). Ignored when enabled is false.
+          example: zstd
+        level:
+          type: integer
+          minimum: 0
+          maximum: 19
+          description: Compression level. Allowed ranges are zstd=1-19 and lz4=0-9. When omitted, zstd defaults to 1 and lz4 defaults to 0. Ignored when enabled is false.
+          example: 1
+
+    SnapshotPolicy:
+      type: object
+      properties:
+        compression:
+          $ref: "#/components/schemas/SnapshotCompressionConfig"
 
     CreateSnapshotRequest:
       type: object
@@ -433,6 +501,15 @@ components:
           example: pre-upgrade
         tags:
           $ref: "#/components/schemas/Tags"
+        compression:
+          description: Compression settings to use for this snapshot. Overrides instance and server defaults.
+          $ref: "#/components/schemas/SnapshotCompressionConfig"
+
+    StandbyInstanceRequest:
+      type: object
+      properties:
+        compression:
+          $ref: "#/components/schemas/SnapshotCompressionConfig"
 
     RestoreSnapshotRequest:
       type: object
@@ -687,6 +764,8 @@ components:
           enum: [cloud-hypervisor, firecracker, qemu, vz]
           description: Hypervisor running this instance
           example: cloud-hypervisor
+        snapshot_policy:
+          $ref: "#/components/schemas/SnapshotPolicy"
     
     PathInfo:
       type: object
@@ -1483,6 +1562,111 @@ components:
           items:
             $ref: "#/components/schemas/ResourceAllocation"
 
+    MemoryReclaimRequest:
+      type: object
+      required: [reclaim_bytes]
+      properties:
+        reclaim_bytes:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Total bytes of guest memory to reclaim across eligible VMs.
+          example: 536870912
+        hold_for:
+          type: string
+          description: How long to keep the reclaim hold active (Go duration string). Defaults to 5m when omitted.
+          example: 5m
+        dry_run:
+          type: boolean
+          description: Calculate a reclaim plan without applying balloon changes or creating a hold.
+          default: false
+        reason:
+          type: string
+          maxLength: 256
+          description: Optional operator-provided reason attached to logs and traces.
+          example: prepare for another vm start
+
+    MemoryReclaimAction:
+      type: object
+      required:
+        - instance_id
+        - instance_name
+        - hypervisor
+        - assigned_memory_bytes
+        - protected_floor_bytes
+        - previous_target_guest_memory_bytes
+        - planned_target_guest_memory_bytes
+        - target_guest_memory_bytes
+        - applied_reclaim_bytes
+        - status
+      properties:
+        instance_id:
+          type: string
+        instance_name:
+          type: string
+        hypervisor:
+          type: string
+          enum: [cloud-hypervisor, firecracker, qemu, vz]
+        assigned_memory_bytes:
+          type: integer
+          format: int64
+        protected_floor_bytes:
+          type: integer
+          format: int64
+        previous_target_guest_memory_bytes:
+          type: integer
+          format: int64
+        planned_target_guest_memory_bytes:
+          type: integer
+          format: int64
+        target_guest_memory_bytes:
+          type: integer
+          format: int64
+        applied_reclaim_bytes:
+          type: integer
+          format: int64
+        status:
+          type: string
+          description: Result of this VM's reclaim step.
+          example: applied
+        error:
+          type: string
+          description: Error message when status is error or unsupported.
+
+    MemoryReclaimResponse:
+      type: object
+      required:
+        - requested_reclaim_bytes
+        - planned_reclaim_bytes
+        - applied_reclaim_bytes
+        - host_available_bytes
+        - host_pressure_state
+        - actions
+      properties:
+        requested_reclaim_bytes:
+          type: integer
+          format: int64
+        planned_reclaim_bytes:
+          type: integer
+          format: int64
+        applied_reclaim_bytes:
+          type: integer
+          format: int64
+        hold_until:
+          type: string
+          format: date-time
+          description: When the current manual reclaim hold expires.
+        host_available_bytes:
+          type: integer
+          format: int64
+        host_pressure_state:
+          type: string
+          enum: [healthy, pressure]
+        actions:
+          type: array
+          items:
+            $ref: "#/components/schemas/MemoryReclaimAction"
+
 paths:
   /health:
     get:
@@ -1513,6 +1697,48 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Resources"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /resources/memory/reclaim:
+    post:
+      summary: Trigger proactive guest memory reclaim
+      description: |
+        Requests runtime balloon inflation across reclaim-eligible guests. The same
+        planner used by host-pressure reclaim is applied, including protected floors
+        and per-VM step limits.
+      operationId: reclaimMemory
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MemoryReclaimRequest"
+      responses:
+        200:
+          description: Reclaim plan and applied results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemoryReclaimResponse"
+        400:
+          description: Invalid reclaim request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        401:
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         500:
           description: Internal server error
           content:
@@ -1806,7 +2032,60 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
-  
+    patch:
+      summary: Update instance properties
+      description: |
+        Update mutable properties of a running instance. Currently supports updating
+        only the environment variables referenced by existing credential policies,
+        enabling secret/key rotation without instance restart.
+      operationId: updateInstance
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Instance ID or name
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateInstanceRequest"
+      responses:
+        200:
+          description: Instance updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Instance"
+        400:
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        404:
+          description: Instance not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Invalid state (instance must be running or initializing)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /instances/{id}/standby:
     post:
       summary: Put instance in standby (pause, snapshot, delete VMM)
@@ -1820,6 +2099,12 @@ paths:
           schema:
             type: string
           description: Instance ID or name
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StandbyInstanceRequest"
       responses:
         200:
           description: Instance in standby
@@ -1827,6 +2112,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Instance"
+        400:
+          description: Invalid request payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         404:
           description: Instance not found
           content:

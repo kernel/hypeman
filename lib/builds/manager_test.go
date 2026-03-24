@@ -108,7 +108,7 @@ func (m *mockInstanceManager) ForkSnapshot(ctx context.Context, snapshotID strin
 	return nil, instances.ErrNotFound
 }
 
-func (m *mockInstanceManager) StandbyInstance(ctx context.Context, id string) (*instances.Instance, error) {
+func (m *mockInstanceManager) StandbyInstance(ctx context.Context, id string, req instances.StandbyInstanceRequest) (*instances.Instance, error) {
 	return nil, nil
 }
 
@@ -132,6 +132,10 @@ func (m *mockInstanceManager) StopInstance(ctx context.Context, id string) (*ins
 }
 
 func (m *mockInstanceManager) StartInstance(ctx context.Context, id string, req instances.StartInstanceRequest) (*instances.Instance, error) {
+	return nil, nil
+}
+
+func (m *mockInstanceManager) UpdateInstance(ctx context.Context, id string, req instances.UpdateInstanceRequest) (*instances.Instance, error) {
 	return nil, nil
 }
 

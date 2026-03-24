@@ -2,6 +2,7 @@ package images
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -165,6 +166,28 @@ func TestListImages(t *testing.T) {
 	require.NotEmpty(t, images[0].Digest)
 }
 
+func TestListImages_IncludesDigestOnlyImages(t *testing.T) {
+	dataDir := t.TempDir()
+	p := paths.New(dataDir)
+	mgr, err := NewManager(p, 1, nil)
+	require.NoError(t, err)
+
+	const digestRef = "docker.io/library/alpine@sha256:029a752048e32e843bd6defe3841186fb8d19a28dae8ec287f433bb9d6d1ad85"
+	seedReadyDigestOnlyImageMetadata(t, p, digestRef, map[string]string{
+		"qa":      "pr43-qa-20260323134902",
+		"surface": "image",
+	})
+
+	images, err := mgr.ListImages(context.Background())
+	require.NoError(t, err)
+	require.Len(t, images, 1)
+	require.Equal(t, digestRef, images[0].Name)
+	require.Equal(t, map[string]string{
+		"qa":      "pr43-qa-20260323134902",
+		"surface": "image",
+	}, map[string]string(images[0].Tags))
+}
+
 func TestGetImage(t *testing.T) {
 	dataDir := t.TempDir()
 	mgr, err := NewManager(paths.New(dataDir), 1, nil)
@@ -233,6 +256,27 @@ func TestDeleteImage(t *testing.T) {
 	digestDir := digestPath(paths.New(dataDir), ref.Repository(), digestHex)
 	_, err = os.Stat(digestDir)
 	require.True(t, os.IsNotExist(err), "digest directory should be deleted when orphaned")
+}
+
+func TestDeleteImageByDigest(t *testing.T) {
+	dataDir := t.TempDir()
+	p := paths.New(dataDir)
+	mgr, err := NewManager(p, 1, nil)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	const digestRef = "docker.io/library/alpine@sha256:029a752048e32e843bd6defe3841186fb8d19a28dae8ec287f433bb9d6d1ad85"
+	seedReadyDigestOnlyImageMetadata(t, p, digestRef, map[string]string{
+		"qa": "pr43-delete-20260323134902",
+	})
+
+	err = mgr.DeleteImage(ctx, digestRef)
+	require.NoError(t, err)
+
+	ref, err := ParseNormalizedRef(digestRef)
+	require.NoError(t, err)
+	_, err = os.Stat(digestDir(p, ref.Repository(), ref.DigestHex()))
+	require.True(t, os.IsNotExist(err), "digest directory should be deleted when deleting by digest")
 }
 
 func TestDeleteImageNotFound(t *testing.T) {
@@ -400,6 +444,38 @@ func countFiles(dir string) (int, error) {
 		return 0, err
 	}
 	return len(entries), nil
+}
+
+func seedReadyDigestOnlyImageMetadata(t *testing.T, p *paths.Paths, imageRef string, imageTags map[string]string) {
+	t.Helper()
+
+	ref, err := ParseNormalizedRef(imageRef)
+	require.NoError(t, err)
+	require.True(t, ref.IsDigest(), "test helper expects a digest reference")
+
+	digestDirPath := p.ImageDigestDir(ref.Repository(), ref.DigestHex())
+	require.NoError(t, os.MkdirAll(digestDirPath, 0o755))
+	require.NoError(t, os.WriteFile(p.ImageDigestPath(ref.Repository(), ref.DigestHex()), []byte("rootfs"), 0o644))
+
+	meta := struct {
+		Name      string            `json:"name"`
+		Digest    string            `json:"digest"`
+		Status    string            `json:"status"`
+		SizeBytes int64             `json:"size_bytes"`
+		Tags      map[string]string `json:"tags,omitempty"`
+		CreatedAt time.Time         `json:"created_at"`
+	}{
+		Name:      imageRef,
+		Digest:    ref.Digest(),
+		Status:    StatusReady,
+		SizeBytes: int64(len("rootfs")),
+		Tags:      imageTags,
+		CreatedAt: time.Now().UTC(),
+	}
+
+	data, err := json.Marshal(meta)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(p.ImageMetadata(ref.Repository(), ref.DigestHex()), data, 0o644))
 }
 
 // TestImportLocalImageFromOCICache is an integration test that simulates the full

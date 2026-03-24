@@ -4,6 +4,7 @@ import (
 	"github.com/kernel/hypeman/cmd/api/config"
 	"github.com/kernel/hypeman/lib/builds"
 	"github.com/kernel/hypeman/lib/devices"
+	"github.com/kernel/hypeman/lib/guestmemory"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/ingress"
 	"github.com/kernel/hypeman/lib/instances"
@@ -16,16 +17,17 @@ import (
 
 // ApiService implements the oapi.StrictServerInterface
 type ApiService struct {
-	Config           *config.Config
-	ImageManager     images.Manager
-	InstanceManager  instances.Manager
-	VolumeManager    volumes.Manager
-	NetworkManager   network.Manager
-	DeviceManager    devices.Manager
-	IngressManager   ingress.Manager
-	BuildManager     builds.Manager
-	ResourceManager  *resources.Manager
-	VMMetricsManager *vm_metrics.Manager
+	Config                *config.Config
+	ImageManager          images.Manager
+	InstanceManager       instances.Manager
+	VolumeManager         volumes.Manager
+	NetworkManager        network.Manager
+	DeviceManager         devices.Manager
+	IngressManager        ingress.Manager
+	BuildManager          builds.Manager
+	ResourceManager       *resources.Manager
+	GuestMemoryController guestmemory.Controller
+	VMMetricsManager      *vm_metrics.Manager
 }
 
 var _ oapi.StrictServerInterface = (*ApiService)(nil)
@@ -41,18 +43,20 @@ func New(
 	ingressManager ingress.Manager,
 	buildManager builds.Manager,
 	resourceManager *resources.Manager,
+	guestMemoryController guestmemory.Controller,
 	vmMetricsManager *vm_metrics.Manager,
 ) *ApiService {
 	return &ApiService{
-		Config:           config,
-		ImageManager:     imageManager,
-		InstanceManager:  instanceManager,
-		VolumeManager:    volumeManager,
-		NetworkManager:   networkManager,
-		DeviceManager:    deviceManager,
-		IngressManager:   ingressManager,
-		BuildManager:     buildManager,
-		ResourceManager:  resourceManager,
-		VMMetricsManager: vmMetricsManager,
+		Config:                config,
+		ImageManager:          imageManager,
+		InstanceManager:       instanceManager,
+		VolumeManager:         volumeManager,
+		NetworkManager:        networkManager,
+		DeviceManager:         deviceManager,
+		IngressManager:        ingressManager,
+		BuildManager:          buildManager,
+		ResourceManager:       resourceManager,
+		GuestMemoryController: guestMemoryController,
+		VMMetricsManager:      vmMetricsManager,
 	}
 }

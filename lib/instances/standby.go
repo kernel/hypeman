@@ -2,6 +2,7 @@ package instances
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/network"
+	snapshotstore "github.com/kernel/hypeman/lib/snapshot"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -20,6 +22,8 @@ func (m *manager) standbyInstance(
 	ctx context.Context,
 
 	id string,
+	req StandbyInstanceRequest,
+	skipCompression bool,
 ) (*Instance, error) {
 	start := time.Now()
 	log := logger.FromContext(ctx)
@@ -53,6 +57,20 @@ func (m *manager) standbyInstance(
 	if inst.GPUMdevUUID != "" || inst.GPUProfile != "" {
 		log.ErrorContext(ctx, "standby not supported for vGPU instances", "instance_id", id, "gpu_profile", inst.GPUProfile)
 		return nil, fmt.Errorf("%w: standby is not supported for instances with vGPU attached (driver limitation)", ErrInvalidState)
+	}
+
+	// Resolve/validate compression policy early so invalid request/config
+	// fails before any state transition side effects.
+	var compressionPolicy *snapshotstore.SnapshotCompressionConfig
+	if !skipCompression {
+		policy, err := m.resolveStandbyCompressionPolicy(stored, req.Compression)
+		if err != nil {
+			if !errors.Is(err, ErrInvalidRequest) {
+				err = fmt.Errorf("%w: %v", ErrInvalidRequest, err)
+			}
+			return nil, err
+		}
+		compressionPolicy = policy
 	}
 
 	// 3. Get network allocation BEFORE killing VMM (while we can still query it)
@@ -163,6 +181,18 @@ func (m *manager) standbyInstance(
 
 	// Return instance with derived state (should be Standby now)
 	finalInst := m.toInstance(ctx, meta)
+
+	if compressionPolicy != nil {
+		m.startCompressionJob(ctx, compressionTarget{
+			Key:            m.snapshotJobKeyForInstance(stored.Id),
+			OwnerID:        stored.Id,
+			SnapshotDir:    snapshotDir,
+			HypervisorType: stored.HypervisorType,
+			Source:         snapshotCompressionSourceStandby,
+			Policy:         *compressionPolicy,
+		})
+	}
+
 	log.InfoContext(ctx, "instance put in standby successfully", "instance_id", id, "state", finalInst.State)
 	return &finalInst, nil
 }

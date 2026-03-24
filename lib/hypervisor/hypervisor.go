@@ -188,6 +188,16 @@ type Hypervisor interface {
 	// Check Capabilities().SupportsHotplugMemory before calling.
 	ResizeMemoryAndWait(ctx context.Context, bytes int64, timeout time.Duration) error
 
+	// SetTargetGuestMemoryBytes adjusts the runtime balloon target so the guest
+	// sees the requested amount of RAM.
+	// Check Capabilities().SupportsBalloonControl before calling.
+	SetTargetGuestMemoryBytes(ctx context.Context, bytes int64) error
+
+	// GetTargetGuestMemoryBytes returns the current guest-visible RAM target after
+	// runtime ballooning is applied.
+	// Check Capabilities().SupportsBalloonControl before calling.
+	GetTargetGuestMemoryBytes(ctx context.Context) (int64, error)
+
 	// Capabilities returns what features this hypervisor supports.
 	Capabilities() Capabilities
 }
@@ -200,6 +210,9 @@ type Capabilities struct {
 
 	// SupportsHotplugMemory indicates if ResizeMemory is available
 	SupportsHotplugMemory bool
+
+	// SupportsBalloonControl indicates if runtime balloon target changes are available.
+	SupportsBalloonControl bool
 
 	// SupportsPause indicates if Pause/Resume are available
 	SupportsPause bool

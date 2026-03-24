@@ -49,7 +49,7 @@ func setupTestManagerForFirecrackerWithNetworkConfig(t *testing.T, networkCfg co
 		MaxVcpusPerInstance:  0,
 		MaxMemoryPerInstance: 0,
 	}
-	mgr := NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, hypervisor.TypeFirecracker, nil, nil).(*manager)
+	mgr := NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, hypervisor.TypeFirecracker, SnapshotPolicy{}, nil, nil).(*manager)
 
 	resourceMgr := resources.NewManager(cfg, p)
 	resourceMgr.SetInstanceLister(mgr)
@@ -212,7 +212,7 @@ func TestFirecrackerStandbyAndRestore(t *testing.T) {
 	writeGuestFile(firstFilePath, firstFileContents)
 
 	firstStandbyStart := time.Now()
-	inst, err = mgr.StandbyInstance(ctx, inst.Id)
+	inst, err = mgr.StandbyInstance(ctx, inst.Id, StandbyInstanceRequest{})
 	require.NoError(t, err)
 	firstStandbyDuration := time.Since(firstStandbyStart)
 	t.Logf("first standby (full snapshot expected) took %v", firstStandbyDuration)
@@ -231,7 +231,7 @@ func TestFirecrackerStandbyAndRestore(t *testing.T) {
 	require.NoError(t, err, "restored instances should keep the retained snapshot base for the next diff snapshot")
 
 	secondStandbyStart := time.Now()
-	inst, err = mgr.StandbyInstance(ctx, inst.Id)
+	inst, err = mgr.StandbyInstance(ctx, inst.Id, StandbyInstanceRequest{})
 	require.NoError(t, err)
 	secondStandbyDuration := time.Since(secondStandbyStart)
 	t.Logf("second standby (diff snapshot expected) took %v", secondStandbyDuration)
@@ -281,7 +281,7 @@ func TestFirecrackerStopClearsStaleSnapshot(t *testing.T) {
 	require.Equal(t, StateRunning, inst.State)
 
 	// Establish a realistic standby/restore lifecycle first.
-	inst, err = mgr.StandbyInstance(ctx, inst.Id)
+	inst, err = mgr.StandbyInstance(ctx, inst.Id, StandbyInstanceRequest{})
 	require.NoError(t, err)
 	require.Equal(t, StateStandby, inst.State)
 	require.True(t, inst.HasSnapshot)
@@ -397,7 +397,7 @@ func TestFirecrackerNetworkLifecycle(t *testing.T) {
 	require.Equal(t, 0, exitCode)
 	require.Contains(t, output, "Connection successful")
 
-	inst, err = mgr.StandbyInstance(ctx, inst.Id)
+	inst, err = mgr.StandbyInstance(ctx, inst.Id, StandbyInstanceRequest{})
 	require.NoError(t, err)
 	assert.Equal(t, StateStandby, inst.State)
 	assert.True(t, inst.HasSnapshot)

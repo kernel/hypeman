@@ -69,6 +69,7 @@ func TestGuestMemoryPolicyVZ(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, instMeta.HypervisorPID)
 	assertLowIdleVZHostMemoryFootprint(t, *instMeta.HypervisorPID, 192*1024)
+	assertActiveBallooningLifecycle(t, ctx, inst)
 }
 
 func forceEnableGuestMemoryPolicyForVZTest(mgr *manager) {

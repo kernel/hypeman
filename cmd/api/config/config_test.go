@@ -3,7 +3,11 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/c2h5oh/datasize"
+	"github.com/kernel/hypeman/lib/guestmemory"
 )
 
 func TestDefaultConfigIncludesMetricsSettings(t *testing.T) {
@@ -81,5 +85,96 @@ func TestValidateRejectsInvalidVMLabelBudget(t *testing.T) {
 	err := cfg.Validate()
 	if err == nil {
 		t.Fatalf("expected validation error for invalid vm label budget")
+	}
+}
+
+func TestValidateRejectsEmptyActiveBallooningDurations(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Hypervisor.Memory.ActiveBallooning.PollInterval = "   "
+
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "poll_interval must not be empty") {
+		t.Fatalf("expected poll_interval empty validation error, got %v", err)
+	}
+
+	cfg = defaultConfig()
+	cfg.Hypervisor.Memory.ActiveBallooning.PerVmCooldown = ""
+
+	err = cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "per_vm_cooldown must not be empty") {
+		t.Fatalf("expected per_vm_cooldown empty validation error, got %v", err)
+	}
+}
+
+func TestDefaultConfigActiveBallooningMatchesGoDefaults(t *testing.T) {
+	cfg := defaultConfig()
+	want := guestmemory.DefaultActiveBallooningConfig()
+
+	parse := func(value string) int64 {
+		t.Helper()
+
+		var size datasize.ByteSize
+		if err := size.UnmarshalText([]byte(value)); err != nil {
+			t.Fatalf("parse default byte size %q: %v", value, err)
+		}
+		return int64(size)
+	}
+
+	if got := parse(cfg.Hypervisor.Memory.ActiveBallooning.ProtectedFloorMinBytes); got != want.ProtectedFloorMinBytes {
+		t.Fatalf("protected floor default mismatch: got %d want %d", got, want.ProtectedFloorMinBytes)
+	}
+	if got := parse(cfg.Hypervisor.Memory.ActiveBallooning.MinAdjustmentBytes); got != want.MinAdjustmentBytes {
+		t.Fatalf("min adjustment default mismatch: got %d want %d", got, want.MinAdjustmentBytes)
+	}
+	if got := parse(cfg.Hypervisor.Memory.ActiveBallooning.PerVmMaxStepBytes); got != want.PerVMMaxStepBytes {
+		t.Fatalf("per-vm max step default mismatch: got %d want %d", got, want.PerVMMaxStepBytes)
+	}
+}
+
+func TestValidateAllowsLZ4CompressionDefaultWithImplicitLevel(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Snapshot.CompressionDefault.Enabled = true
+	cfg.Snapshot.CompressionDefault.Algorithm = "LZ4"
+	cfg.Snapshot.CompressionDefault.Level = nil
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected lz4 compression default to validate, got %v", err)
+	}
+	if cfg.Snapshot.CompressionDefault.Algorithm != "lz4" {
+		t.Fatalf("expected algorithm to normalize to lowercase, got %q", cfg.Snapshot.CompressionDefault.Algorithm)
+	}
+}
+
+func TestValidateAllowsExplicitLZ4CompressionLevelRange(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Snapshot.CompressionDefault.Enabled = true
+	cfg.Snapshot.CompressionDefault.Algorithm = "lz4"
+	cfg.Snapshot.CompressionDefault.Level = intPtr(9)
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected lz4 level to validate, got %v", err)
+	}
+}
+
+func TestValidateRejectsInvalidLZ4CompressionLevel(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Snapshot.CompressionDefault.Enabled = true
+	cfg.Snapshot.CompressionDefault.Algorithm = "lz4"
+	cfg.Snapshot.CompressionDefault.Level = intPtr(10)
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatalf("expected validation error for invalid lz4 level")
+	}
+}
+
+func TestValidateAllowsDisabledSnapshotCompressionDefaultWithoutValidAlgorithm(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Snapshot.CompressionDefault.Enabled = false
+	cfg.Snapshot.CompressionDefault.Algorithm = "definitely-not-real"
+	cfg.Snapshot.CompressionDefault.Level = intPtr(999)
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected disabled snapshot compression default to ignore algorithm/level, got %v", err)
 	}
 }

@@ -136,6 +136,9 @@ type StoredMetadata struct {
 	SkipKernelHeaders bool // Skip kernel headers installation (disables DKMS)
 	SkipGuestAgent    bool // Skip guest-agent installation (disables exec/stat API)
 
+	// Snapshot policy defaults for this instance.
+	SnapshotPolicy *SnapshotPolicy
+
 	// Shutdown configuration
 	StopTimeout int // Grace period in seconds for graceful stop (0 = use default 5s)
 
@@ -216,12 +219,20 @@ type CreateInstanceRequest struct {
 	Cmd                      []string                    // Override image cmd (nil = use image default)
 	SkipKernelHeaders        bool                        // Skip kernel headers installation (disables DKMS)
 	SkipGuestAgent           bool                        // Skip guest-agent installation (disables exec/stat API)
+	SnapshotPolicy           *SnapshotPolicy             // Optional snapshot policy defaults for this instance
 }
 
 // StartInstanceRequest is the domain request for starting a stopped instance
 type StartInstanceRequest struct {
 	Entrypoint []string // Override entrypoint (nil = keep previous/image default)
 	Cmd        []string // Override cmd (nil = keep previous/image default)
+}
+
+// UpdateInstanceRequest is the domain request for updating a running instance.
+// Currently supports updating env vars referenced by credential policies
+// to enable secret/key rotation without instance restart.
+type UpdateInstanceRequest struct {
+	Env map[string]string // Updated environment variables (merged with existing)
 }
 
 // ForkInstanceRequest is the domain request for forking an instance.
@@ -249,9 +260,15 @@ type ListSnapshotsFilter = snapshot.ListSnapshotsFilter
 
 // CreateSnapshotRequest is the domain request for creating a snapshot.
 type CreateSnapshotRequest struct {
-	Kind SnapshotKind // Required: Standby or Stopped
-	Name string       // Optional: unique per source instance
-	Tags tags.Tags    // Optional user-defined key-value tags
+	Kind        SnapshotKind                        // Required: Standby or Stopped
+	Name        string                              // Optional: unique per source instance
+	Tags        tags.Tags                           // Optional user-defined key-value tags
+	Compression *snapshot.SnapshotCompressionConfig // Optional compression override
+}
+
+// StandbyInstanceRequest is the domain request for putting an instance into standby.
+type StandbyInstanceRequest struct {
+	Compression *snapshot.SnapshotCompressionConfig // Optional compression override
 }
 
 // RestoreSnapshotRequest is the domain request for restoring a snapshot in-place.
@@ -265,6 +282,11 @@ type ForkSnapshotRequest struct {
 	Name             string          // Required: name for the new instance
 	TargetState      State           // Optional
 	TargetHypervisor hypervisor.Type // Optional, allowed only for Stopped snapshots
+}
+
+// SnapshotPolicy defines default snapshot behavior for an instance.
+type SnapshotPolicy struct {
+	Compression *snapshot.SnapshotCompressionConfig
 }
 
 // AttachVolumeRequest is the domain request for attaching a volume (used for API compatibility)
