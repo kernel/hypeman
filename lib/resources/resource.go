@@ -32,6 +32,8 @@ const (
 	SourceConfigured SourceType = "configured" // Explicitly configured by operator
 )
 
+var gpuStatusProvider = GetGPUStatus
+
 // Resource represents a discoverable and allocatable host resource.
 type Resource interface {
 	// Type returns the resource type identifier.
@@ -140,8 +142,9 @@ type Manager struct {
 	cfg   *config.Config
 	paths *paths.Paths
 
-	mu        sync.RWMutex
-	resources map[ResourceType]Resource
+	mu         sync.RWMutex
+	resources  map[ResourceType]Resource
+	monitoring *monitoringState
 
 	// Dependencies for allocation calculations
 	instanceLister InstanceLister
@@ -152,9 +155,10 @@ type Manager struct {
 // NewManager creates a new resource manager.
 func NewManager(cfg *config.Config, p *paths.Paths) *Manager {
 	return &Manager{
-		cfg:       cfg,
-		paths:     p,
-		resources: make(map[ResourceType]Resource),
+		cfg:        cfg,
+		paths:      p,
+		resources:  make(map[ResourceType]Resource),
+		monitoring: &monitoringState{},
 	}
 }
 
@@ -362,7 +366,7 @@ func (m *Manager) GetFullStatus(ctx context.Context) (*FullResourceStatus, error
 	}
 
 	// Get GPU status
-	gpuStatus := GetGPUStatus()
+	gpuStatus := gpuStatusProvider()
 
 	return &FullResourceStatus{
 		CPU:         *cpuStatus,

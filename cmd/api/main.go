@@ -139,6 +139,14 @@ func run() error {
 
 	logger := app.Logger
 
+	resourceRefreshInterval, err := time.ParseDuration(app.Config.Metrics.ResourceRefreshInterval)
+	if err != nil {
+		return fmt.Errorf("invalid metrics resource refresh interval %q: %w", app.Config.Metrics.ResourceRefreshInterval, err)
+	}
+	if err := app.ResourceManager.StartMonitoring(ctx, otelProvider.Meter, resourceRefreshInterval); err != nil {
+		return fmt.Errorf("start resource monitoring: %w", err)
+	}
+
 	// Log OTel status
 	if cfg.Otel.Enabled {
 		logger.Info("OpenTelemetry push enabled", "endpoint", cfg.Otel.Endpoint, "service", cfg.Otel.ServiceName, "metric_export_interval", cfg.Otel.MetricExportInterval)
