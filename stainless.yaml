@@ -72,6 +72,9 @@ resources:
   instances:
     models:
       snapshot_policy: "#/components/schemas/SnapshotPolicy"
+      snapshot_schedule: "#/components/schemas/SnapshotSchedule"
+      snapshot_schedule_retention: "#/components/schemas/SnapshotScheduleRetention"
+      set_snapshot_schedule_request: "#/components/schemas/SetSnapshotScheduleRequest"
       volume_mount: "#/components/schemas/VolumeMount"
       port_mapping: "#/components/schemas/PortMapping"
       instance: "#/components/schemas/Instance"
@@ -102,6 +105,11 @@ resources:
         methods:
           create: post /instances/{id}/snapshots
           restore: post /instances/{id}/snapshots/{snapshotId}/restore
+      snapshot_schedule:
+        methods:
+          get: get /instances/{id}/snapshot-schedule
+          update: put /instances/{id}/snapshot-schedule
+          delete: delete /instances/{id}/snapshot-schedule
 
   snapshots:
     models:
