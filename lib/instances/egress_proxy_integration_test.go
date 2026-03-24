@@ -107,7 +107,7 @@ func TestEgressProxyRewritesHTTPSHeaders(t *testing.T) {
 		}
 	})
 
-	_, err = waitForInstanceState(ctx, manager, inst.Id, StateRunning, 5*time.Second)
+	_, err = waitForInstanceState(ctx, manager, inst.Id, StateRunning, integrationTestTimeout(5*time.Second))
 	if err != nil {
 		logs, logErr := collectLogs(ctx, manager, inst.Id, 200)
 		if logErr != nil {

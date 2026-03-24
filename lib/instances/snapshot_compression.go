@@ -19,6 +19,8 @@ import (
 	snapshotstore "github.com/kernel/hypeman/lib/snapshot"
 	"github.com/klauspost/compress/zstd"
 	"github.com/pierrec/lz4/v4"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const (
@@ -311,6 +313,7 @@ func (m *manager) startCompressionJob(ctx context.Context, target compressionTar
 		done:   make(chan struct{}),
 		target: target,
 	}
+	parentSpanContext := trace.SpanContextFromContext(ctx)
 	m.compressionJobs[target.Key] = job
 	m.compressionMu.Unlock()
 
@@ -319,11 +322,28 @@ func (m *manager) startCompressionJob(ctx context.Context, target compressionTar
 		result := snapshotCompressionResultSuccess
 		var uncompressedSize int64
 		var compressedSize int64
+		var spanErr error
 		metricsCtx := context.Background()
+		spanOptions := []trace.SpanStartOption{
+			trace.WithNewRoot(),
+			trace.WithAttributes(
+				attribute.String("operation", "snapshot_compression"),
+				attribute.String("owner_id", target.OwnerID),
+				attribute.String("snapshot_id", target.SnapshotID),
+				attribute.String("hypervisor", string(target.HypervisorType)),
+				attribute.String("source", string(target.Source)),
+				attribute.String("algorithm", string(target.Policy.Algorithm)),
+			),
+		}
+		if parentSpanContext.IsValid() {
+			spanOptions = append(spanOptions, trace.WithLinks(trace.Link{SpanContext: parentSpanContext}))
+		}
+		metricsCtx, span := m.tracerOrDefault().Start(metricsCtx, "instances.snapshot_compression", spanOptions...)
 		log := logger.FromContext(ctx)
 
 		defer func() {
 			m.recordSnapshotCompressionJob(metricsCtx, target, result, start, uncompressedSize, compressedSize)
+			finishInstancesSpan(span, spanErr)
 			m.compressionMu.Lock()
 			delete(m.compressionJobs, target.Key)
 			m.compressionMu.Unlock()
@@ -351,6 +371,7 @@ func (m *manager) startCompressionJob(ctx context.Context, target compressionTar
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				result = snapshotCompressionResultCanceled
+				spanErr = err
 				if target.SnapshotID != "" {
 					if err := m.updateSnapshotCompressionMetadata(target.SnapshotID, snapshotstore.SnapshotCompressionStateNone, "", nil, nil, nil); err != nil {
 						log.ErrorContext(jobCtx, "failed to update snapshot compression metadata", "snapshot_id", target.SnapshotID, "snapshot_dir", target.SnapshotDir, "state", snapshotstore.SnapshotCompressionStateNone, "error", err)
@@ -359,6 +380,7 @@ func (m *manager) startCompressionJob(ctx context.Context, target compressionTar
 				return
 			}
 			result = snapshotCompressionResultFailed
+			spanErr = err
 			if target.SnapshotID != "" {
 				if metadataErr := m.updateSnapshotCompressionMetadata(target.SnapshotID, snapshotstore.SnapshotCompressionStateError, err.Error(), &target.Policy, nil, nil); metadataErr != nil {
 					log.ErrorContext(jobCtx, "failed to update snapshot compression metadata", "snapshot_id", target.SnapshotID, "snapshot_dir", target.SnapshotDir, "state", snapshotstore.SnapshotCompressionStateError, "error", metadataErr)

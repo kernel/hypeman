@@ -14,6 +14,10 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Client implements hypervisor.Hypervisor via HTTP to the vz-shim process.
@@ -98,8 +102,19 @@ func (c *Client) doPut(ctx context.Context, path string, body io.Reader) error {
 }
 
 func (c *Client) doPutWithClient(ctx context.Context, client *http.Client, path string, body io.Reader) error {
+	attrs := hypervisor.TraceAttributesFromContext(ctx)
+	attrs = append(attrs,
+		attribute.String("operation", http.MethodPut+" "+path),
+		attribute.String("http.method", http.MethodPut),
+		attribute.String("http.route", path),
+	)
+	ctx, span := otel.Tracer("hypeman/hypervisor/vz").Start(ctx, "hypervisor.http PUT "+path, trace.WithAttributes(attrs...))
+	defer span.End()
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, "http://vz-shim"+path, body)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return err
 	}
 	if body != nil {
@@ -107,28 +122,58 @@ func (c *Client) doPutWithClient(ctx context.Context, client *http.Client, path 
 	}
 	resp, err := client.Do(req)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return err
 	}
 	defer resp.Body.Close()
+	span.SetAttributes(attribute.Int("http.status_code", resp.StatusCode))
 	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
+		span.SetStatus(codes.Error, resp.Status)
 		return fmt.Errorf("%s failed with status %d: %s", path, resp.StatusCode, string(bodyBytes))
 	}
+	span.SetStatus(codes.Ok, "")
 	return nil
 }
 
 // doGet sends a GET request to the shim and returns the response body.
 func (c *Client) doGet(ctx context.Context, path string) ([]byte, error) {
+	attrs := hypervisor.TraceAttributesFromContext(ctx)
+	attrs = append(attrs,
+		attribute.String("operation", http.MethodGet+" "+path),
+		attribute.String("http.method", http.MethodGet),
+		attribute.String("http.route", path),
+	)
+	ctx, span := otel.Tracer("hypeman/hypervisor/vz").Start(ctx, "hypervisor.http GET "+path, trace.WithAttributes(attrs...))
+	defer span.End()
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://vz-shim"+path, nil)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return nil, err
 	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return nil, err
 	}
 	defer resp.Body.Close()
-	return io.ReadAll(resp.Body)
+	span.SetAttributes(attribute.Int("http.status_code", resp.StatusCode))
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return nil, err
+	}
+	if resp.StatusCode >= http.StatusBadRequest {
+		span.SetStatus(codes.Error, resp.Status)
+	} else {
+		span.SetStatus(codes.Ok, "")
+	}
+	return body, nil
 }
 
 func (c *Client) DeleteVM(ctx context.Context) error {

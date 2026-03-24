@@ -288,5 +288,9 @@ func NewClient(hvType Type, socketPath string) (Hypervisor, error) {
 	if !ok {
 		return nil, fmt.Errorf("no client factory registered for hypervisor type: %s", hvType)
 	}
-	return factory(socketPath)
+	client, err := factory(socketPath)
+	if err != nil {
+		return nil, err
+	}
+	return WrapHypervisor(hvType, client), nil
 }

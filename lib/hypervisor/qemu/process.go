@@ -18,6 +18,10 @@ import (
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/paths"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"gvisor.dev/gvisor/pkg/cleanup"
 )
 
@@ -128,15 +132,25 @@ func buildQMPArgs(socketPath string) []string {
 // The cleanup function must be called on error; call cleanup.Release() on success.
 func (s *Starter) startQEMUProcess(ctx context.Context, p *paths.Paths, version string, socketPath string, args []string) (int, *QEMU, *cleanup.Cleanup, error) {
 	log := logger.FromContext(ctx)
+	processAttrs := hypervisor.TraceAttributesFromContext(ctx)
+	processAttrs = append(processAttrs,
+		attribute.String("operation", "start_process"),
+		attribute.String("hypervisor", string(hypervisor.TypeQEMU)),
+	)
+	processCtx, processSpan := otel.Tracer("hypeman/hypervisor/qemu").Start(ctx, "hypervisor.start_process", trace.WithAttributes(processAttrs...))
+	defer processSpan.End()
 
 	// Get binary path
 	binaryPath, err := s.GetBinaryPath(p, version)
 	if err != nil {
+		processSpan.RecordError(err)
+		processSpan.SetStatus(codes.Error, err.Error())
 		return 0, nil, nil, fmt.Errorf("get binary: %w", err)
 	}
 
 	// Check if socket is already in use
 	if isSocketInUse(socketPath) {
+		processSpan.SetStatus(codes.Error, "socket already in use")
 		return 0, nil, nil, fmt.Errorf("socket already in use, QEMU may be running at %s", socketPath)
 	}
 
@@ -155,6 +169,8 @@ func (s *Starter) startQEMUProcess(ctx context.Context, p *paths.Paths, version 
 	instanceDir := filepath.Dir(socketPath)
 	logsDir := filepath.Join(instanceDir, "logs")
 	if err := os.MkdirAll(logsDir, 0755); err != nil {
+		processSpan.RecordError(err)
+		processSpan.SetStatus(codes.Error, err.Error())
 		return 0, nil, nil, fmt.Errorf("create logs directory: %w", err)
 	}
 
@@ -164,6 +180,8 @@ func (s *Starter) startQEMUProcess(ctx context.Context, p *paths.Paths, version 
 		0644,
 	)
 	if err != nil {
+		processSpan.RecordError(err)
+		processSpan.SetStatus(codes.Error, err.Error())
 		return 0, nil, nil, fmt.Errorf("create vmm log: %w", err)
 	}
 	defer vmmLogFile.Close()
@@ -173,11 +191,13 @@ func (s *Starter) startQEMUProcess(ctx context.Context, p *paths.Paths, version 
 
 	processStartTime := time.Now()
 	if err := cmd.Start(); err != nil {
+		processSpan.RecordError(err)
+		processSpan.SetStatus(codes.Error, err.Error())
 		return 0, nil, nil, fmt.Errorf("start qemu: %w", err)
 	}
 
 	pid := cmd.Process.Pid
-	log.DebugContext(ctx, "QEMU process started", "pid", pid, "duration_ms", time.Since(processStartTime).Milliseconds())
+	log.DebugContext(processCtx, "QEMU process started", "pid", pid, "duration_ms", time.Since(processStartTime).Milliseconds())
 
 	// Setup cleanup to kill the process if subsequent steps fail
 	cu := cleanup.Make(func() {
@@ -187,10 +207,12 @@ func (s *Starter) startQEMUProcess(ctx context.Context, p *paths.Paths, version 
 	// Wait for socket to be ready
 	socketWaitStart := time.Now()
 	if err := waitForSocket(socketPath, socketWaitTimeout); err != nil {
+		processSpan.RecordError(err)
+		processSpan.SetStatus(codes.Error, err.Error())
 		cu.Clean()
 		return 0, nil, nil, appendVMMLog(err, logsDir)
 	}
-	log.DebugContext(ctx, "QMP socket ready", "duration_ms", time.Since(socketWaitStart).Milliseconds())
+	log.DebugContext(processCtx, "QMP socket ready", "duration_ms", time.Since(socketWaitStart).Milliseconds())
 
 	// Create QMP client. The socket file may exist before QEMU can actually
 	// accept monitor connections, so retry briefly on transient dial failures.
@@ -202,12 +224,15 @@ func (s *Starter) startQEMUProcess(ctx context.Context, p *paths.Paths, version 
 			break
 		}
 		if time.Now().After(clientDeadline) {
+			processSpan.RecordError(err)
+			processSpan.SetStatus(codes.Error, err.Error())
 			cu.Clean()
 			return 0, nil, nil, appendVMMLog(fmt.Errorf("create client: %w", err), logsDir)
 		}
 		time.Sleep(socketPollInterval)
 	}
 
+	processSpan.SetStatus(codes.Ok, "")
 	return pid, hv, &cu, nil
 }
 

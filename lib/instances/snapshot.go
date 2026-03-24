@@ -14,6 +14,7 @@ import (
 	snapshotstore "github.com/kernel/hypeman/lib/snapshot"
 	"github.com/kernel/hypeman/lib/tags"
 	"github.com/nrednav/cuid2"
+	"go.opentelemetry.io/otel/attribute"
 	"gvisor.dev/gvisor/pkg/cleanup"
 )
 
@@ -43,9 +44,15 @@ func (m *manager) getSnapshot(ctx context.Context, snapshotID string) (*Snapshot
 	return snapshot, nil
 }
 
-func (m *manager) createSnapshot(ctx context.Context, id string, req CreateSnapshotRequest) (*Snapshot, error) {
+func (m *manager) createSnapshot(ctx context.Context, id string, req CreateSnapshotRequest) (_ *Snapshot, retErr error) {
 	log := logger.FromContext(ctx)
 	log.InfoContext(ctx, "creating snapshot", "instance_id", id, "kind", req.Kind, "name", req.Name)
+	ctx, span := m.startLifecycleSpan(ctx, "instances.create_snapshot",
+		attribute.String("instance_id", id),
+		attribute.String("operation", "create_snapshot"),
+		attribute.String("snapshot_kind", string(req.Kind)),
+	)
+	defer func() { finishInstancesSpan(span, retErr) }()
 
 	if err := validateCreateSnapshotRequest(req); err != nil {
 		return nil, err
@@ -229,8 +236,14 @@ func (m *manager) deleteSnapshot(ctx context.Context, snapshotID string) error {
 	return nil
 }
 
-func (m *manager) restoreSnapshot(ctx context.Context, id string, snapshotID string, req RestoreSnapshotRequest) (*Instance, error) {
+func (m *manager) restoreSnapshot(ctx context.Context, id string, snapshotID string, req RestoreSnapshotRequest) (_ *Instance, retErr error) {
 	log := logger.FromContext(ctx)
+	ctx, span := m.startLifecycleSpan(ctx, "instances.restore_snapshot",
+		attribute.String("instance_id", id),
+		attribute.String("operation", "restore_snapshot"),
+		attribute.String("snapshot_id", snapshotID),
+	)
+	defer func() { finishInstancesSpan(span, retErr) }()
 	rec, err := m.loadSnapshotRecord(snapshotID)
 	if err != nil {
 		return nil, err

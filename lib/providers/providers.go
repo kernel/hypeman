@@ -125,7 +125,7 @@ func ProvideInstanceManager(p *paths.Paths, cfg *config.Config, imageManager ima
 	}
 
 	meter := otel.GetMeterProvider().Meter("hypeman")
-	tracer := otel.GetTracerProvider().Tracer("hypeman")
+	tracer := otel.GetTracerProvider().Tracer("hypeman/instances")
 	defaultHypervisor := hypervisor.Type(cfg.Hypervisor.Default)
 	snapshotDefaults := snapshotDefaultsFromConfig(cfg)
 	memoryPolicy := guestmemory.Policy{

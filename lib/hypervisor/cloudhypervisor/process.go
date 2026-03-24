@@ -62,7 +62,9 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 	}
 
 	// 1. Start the Cloud Hypervisor process
-	pid, err := vmm.StartProcess(ctx, p, chVersion, socketPath)
+	processCtx, processSpan := hypervisor.StartProcessSpan(ctx, hypervisor.TypeCloudHypervisor)
+	pid, err := vmm.StartProcess(processCtx, p, chVersion, socketPath)
+	hypervisor.FinishTraceSpan(processSpan, err)
 	if err != nil {
 		return 0, nil, fmt.Errorf("start process: %w", err)
 	}
@@ -117,7 +119,9 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 
 	// 1. Start the Cloud Hypervisor process
 	processStartTime := time.Now()
-	pid, err := vmm.StartProcess(ctx, p, chVersion, socketPath)
+	processCtx, processSpan := hypervisor.StartProcessSpan(ctx, hypervisor.TypeCloudHypervisor)
+	pid, err := vmm.StartProcess(processCtx, p, chVersion, socketPath)
+	hypervisor.FinishTraceSpan(processSpan, err)
 	if err != nil {
 		return 0, nil, fmt.Errorf("start process: %w", err)
 	}

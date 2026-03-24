@@ -15,6 +15,10 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type apiError struct {
@@ -273,10 +277,21 @@ func guestTargetBytesToMiB(bytes int64) int64 {
 }
 
 func (f *Firecracker) do(ctx context.Context, method, path string, reqBody any, expectedStatus ...int) ([]byte, error) {
+	attrs := hypervisor.TraceAttributesFromContext(ctx)
+	attrs = append(attrs,
+		attribute.String("operation", method+" "+path),
+		attribute.String("http.method", method),
+		attribute.String("http.route", path),
+	)
+	ctx, span := otel.Tracer("hypeman/hypervisor/firecracker").Start(ctx, "hypervisor.http "+method+" "+path, trace.WithAttributes(attrs...))
+	defer span.End()
+
 	var bodyReader io.Reader
 	if reqBody != nil {
 		data, err := json.Marshal(reqBody)
 		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
 			return nil, fmt.Errorf("marshal request body: %w", err)
 		}
 		bodyReader = bytes.NewReader(data)
@@ -284,6 +299,8 @@ func (f *Firecracker) do(ctx context.Context, method, path string, reqBody any, 
 
 	req, err := http.NewRequestWithContext(ctx, method, "http://localhost"+path, bodyReader)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
@@ -293,17 +310,23 @@ func (f *Firecracker) do(ctx context.Context, method, path string, reqBody any, 
 
 	resp, err := f.client.Do(req)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return nil, fmt.Errorf("request %s %s: %w", method, path, err)
 	}
 	defer resp.Body.Close()
+	span.SetAttributes(attribute.Int("http.status_code", resp.StatusCode))
 
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return nil, fmt.Errorf("read response body: %w", err)
 	}
 
 	for _, status := range expectedStatus {
 		if resp.StatusCode == status {
+			span.SetStatus(codes.Ok, "")
 			return data, nil
 		}
 	}
@@ -311,9 +334,11 @@ func (f *Firecracker) do(ctx context.Context, method, path string, reqBody any, 
 	if len(data) > 0 {
 		var apiErr apiError
 		if err := json.Unmarshal(data, &apiErr); err == nil && apiErr.FaultMessage != "" {
+			span.SetStatus(codes.Error, apiErr.FaultMessage)
 			return nil, fmt.Errorf("status %d: %s", resp.StatusCode, apiErr.FaultMessage)
 		}
 	}
+	span.SetStatus(codes.Error, resp.Status)
 	return nil, fmt.Errorf("status %d: %s", resp.StatusCode, string(data))
 }
 

@@ -2,6 +2,7 @@ package instances
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,13 +14,15 @@ import (
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/network"
-	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 // DefaultStopTimeout is the default grace period for graceful shutdown (seconds).
 const DefaultStopTimeout = 5
 const shutdownRPCDeadline = 1500 * time.Millisecond
 const shutdownFailureFallbackWait = 500 * time.Millisecond
+
+var errGracefulShutdownFailed = errors.New("graceful guest shutdown did not complete")
 
 // resolveStopTimeout returns the configured stop timeout in seconds,
 // falling back to the package default when unset/invalid.
@@ -139,17 +142,16 @@ func (m *manager) forceKillHypervisorProcess(ctx context.Context, inst *Instance
 func (m *manager) stopInstance(
 	ctx context.Context,
 	id string,
-) (*Instance, error) {
+) (_ *Instance, retErr error) {
 	start := time.Now()
 	log := logger.FromContext(ctx)
 	log.InfoContext(ctx, "stopping instance", "instance_id", id)
 
-	// Start tracing span if tracer is available
-	if m.metrics != nil && m.metrics.tracer != nil {
-		var span trace.Span
-		ctx, span = m.metrics.tracer.Start(ctx, "StopInstance")
-		defer span.End()
-	}
+	ctx, span := m.startLifecycleSpan(ctx, "instances.stop",
+		attribute.String("instance_id", id),
+		attribute.String("operation", "stop"),
+	)
+	defer func() { finishInstancesSpan(span, retErr) }()
 
 	// 1. Load instance
 	meta, err := m.loadMetadata(id)
@@ -160,6 +162,7 @@ func (m *manager) stopInstance(
 
 	inst := m.toInstance(ctx, meta)
 	stored := &meta.StoredMetadata
+	ctx = enrichInstancesTrace(ctx, attribute.String("hypervisor", string(stored.HypervisorType)))
 	log.DebugContext(ctx, "loaded instance", "instance_id", id, "state", inst.State)
 
 	// 2. Validate state transition (must be active to stop)
@@ -181,21 +184,46 @@ func (m *manager) stopInstance(
 	// 4. Graceful shutdown: send signal to guest init via Shutdown RPC,
 	// then wait for VM to power off cleanly. Fall back to hypervisor shutdown on timeout.
 	stopTimeout := resolveStopTimeout(stored)
-	gracefulShutdown := m.tryGracefulGuestShutdown(ctx, &inst, stopTimeout)
+	gracefulCtx, gracefulSpanEnd := m.startLifecycleStep(ctx, "graceful_guest_shutdown",
+		attribute.String("instance_id", id),
+		attribute.String("hypervisor", string(stored.HypervisorType)),
+		attribute.String("operation", "graceful_guest_shutdown"),
+	)
+	gracefulShutdown := m.tryGracefulGuestShutdown(gracefulCtx, &inst, stopTimeout)
+	if gracefulShutdown {
+		gracefulSpanEnd(nil)
+	} else {
+		gracefulSpanEnd(errGracefulShutdownFailed)
+	}
 
 	// 5. Fallback hypervisor shutdown if guest graceful shutdown didn't work
 	if !gracefulShutdown {
 		log.DebugContext(ctx, "shutting down hypervisor (fallback)", "instance_id", id)
-		if err := m.shutdownHypervisor(ctx, &inst); err != nil {
+		shutdownCtx, shutdownSpanEnd := m.startLifecycleStep(ctx, "shutdown_hypervisor",
+			attribute.String("instance_id", id),
+			attribute.String("hypervisor", string(stored.HypervisorType)),
+			attribute.String("operation", "shutdown_hypervisor"),
+		)
+		if err := m.shutdownHypervisor(shutdownCtx, &inst); err != nil {
+			shutdownSpanEnd(err)
 			// Continue to final SIGKILL fallback if graceful shutdown API fails.
 			log.WarnContext(ctx, "failed to shutdown hypervisor", "instance_id", id, "error", err)
+		} else {
+			shutdownSpanEnd(nil)
 		}
 
 		// Final fallback: force-kill the process if it's still alive.
-		if err := m.forceKillHypervisorProcess(ctx, &inst); err != nil {
+		killCtx, killSpanEnd := m.startLifecycleStep(ctx, "force_kill_hypervisor",
+			attribute.String("instance_id", id),
+			attribute.String("hypervisor", string(stored.HypervisorType)),
+			attribute.String("operation", "force_kill_hypervisor"),
+		)
+		if err := m.forceKillHypervisorProcess(killCtx, &inst); err != nil {
+			killSpanEnd(err)
 			log.ErrorContext(ctx, "failed to force-kill hypervisor process", "instance_id", id, "error", err)
 			return nil, err
 		}
+		killSpanEnd(nil)
 	}
 
 	// 6. Release network allocation (delete TAP device)
@@ -204,9 +232,17 @@ func (m *manager) stopInstance(
 	}
 	if inst.NetworkEnabled && networkAlloc != nil {
 		log.DebugContext(ctx, "releasing network", "instance_id", id, "network", "default")
-		if err := m.networkManager.ReleaseAllocation(ctx, networkAlloc); err != nil {
+		releaseNetworkCtx, releaseNetworkSpanEnd := m.startLifecycleStep(ctx, "release_network",
+			attribute.String("instance_id", id),
+			attribute.String("hypervisor", string(stored.HypervisorType)),
+			attribute.String("operation", "release_network"),
+		)
+		if err := m.networkManager.ReleaseAllocation(releaseNetworkCtx, networkAlloc); err != nil {
+			releaseNetworkSpanEnd(err)
 			// Log error but continue
 			log.WarnContext(ctx, "failed to release network, continuing", "instance_id", id, "error", err)
+		} else {
+			releaseNetworkSpanEnd(nil)
 		}
 	}
 

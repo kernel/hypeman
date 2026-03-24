@@ -62,7 +62,9 @@ func (s *Starter) GetVersion(p *paths.Paths) (string, error) {
 }
 
 func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, socketPath string, config hypervisor.VMConfig) (int, hypervisor.Hypervisor, error) {
-	pid, err := s.startProcess(ctx, p, version, socketPath)
+	processCtx, processSpan := hypervisor.StartProcessSpan(ctx, hypervisor.TypeFirecracker)
+	pid, err := s.startProcess(processCtx, p, version, socketPath)
+	hypervisor.FinishTraceSpan(processSpan, err)
 	if err != nil {
 		return 0, nil, fmt.Errorf("start firecracker process: %w", err)
 	}
@@ -92,7 +94,9 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 }
 
 func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string, socketPath string, snapshotPath string) (int, hypervisor.Hypervisor, error) {
-	pid, err := s.startProcess(ctx, p, version, socketPath)
+	processCtx, processSpan := hypervisor.StartProcessSpan(ctx, hypervisor.TypeFirecracker)
+	pid, err := s.startProcess(processCtx, p, version, socketPath)
+	hypervisor.FinishTraceSpan(processSpan, err)
 	if err != nil {
 		return 0, nil, fmt.Errorf("start firecracker process: %w", err)
 	}

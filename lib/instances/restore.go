@@ -14,7 +14,7 @@ import (
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/network"
-	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 // RestoreInstance restores an instance from standby
@@ -23,17 +23,16 @@ func (m *manager) restoreInstance(
 	ctx context.Context,
 
 	id string,
-) (*Instance, error) {
+) (_ *Instance, retErr error) {
 	start := time.Now()
 	log := logger.FromContext(ctx)
 	log.InfoContext(ctx, "restoring instance from standby", "instance_id", id)
 
-	// Start tracing span if tracer is available
-	if m.metrics != nil && m.metrics.tracer != nil {
-		var span trace.Span
-		ctx, span = m.metrics.tracer.Start(ctx, "RestoreInstance")
-		defer span.End()
-	}
+	ctx, span := m.startLifecycleSpan(ctx, "instances.restore",
+		attribute.String("instance_id", id),
+		attribute.String("operation", "restore"),
+	)
+	defer func() { finishInstancesSpan(span, retErr) }()
 
 	// 1. Load instance
 	meta, err := m.loadMetadata(id)
@@ -44,6 +43,7 @@ func (m *manager) restoreInstance(
 
 	inst := m.toInstance(ctx, meta)
 	stored := &meta.StoredMetadata
+	ctx = enrichInstancesTrace(ctx, attribute.String("hypervisor", string(stored.HypervisorType)))
 	log.DebugContext(ctx, "loaded instance", "instance_id", id, "state", inst.State, "has_snapshot", inst.HasSnapshot)
 
 	// 2. Validate state
@@ -69,14 +69,13 @@ func (m *manager) restoreInstance(
 
 	// 3. Get snapshot directory
 	snapshotDir := m.paths.InstanceSnapshotLatest(id)
-	var prepareSnapshotSpan trace.Span
-	if m.metrics != nil && m.metrics.tracer != nil {
-		ctx, prepareSnapshotSpan = m.metrics.tracer.Start(ctx, "PrepareSnapshotMemory")
-	}
-	err = m.ensureSnapshotMemoryReady(ctx, snapshotDir, m.snapshotJobKeyForInstance(id), stored.HypervisorType)
-	if prepareSnapshotSpan != nil {
-		prepareSnapshotSpan.End()
-	}
+	prepareSnapshotCtx, prepareSnapshotSpanEnd := m.startLifecycleStep(ctx, "prepare_snapshot_memory",
+		attribute.String("instance_id", id),
+		attribute.String("hypervisor", string(stored.HypervisorType)),
+		attribute.String("operation", "prepare_snapshot_memory"),
+	)
+	err = m.ensureSnapshotMemoryReady(prepareSnapshotCtx, snapshotDir, m.snapshotJobKeyForInstance(id), stored.HypervisorType)
+	prepareSnapshotSpanEnd(err)
 	if err != nil {
 		return nil, fmt.Errorf("prepare standby snapshot memory: %w", err)
 	}
@@ -109,17 +108,19 @@ func (m *manager) restoreInstance(
 
 	// 4. Recreate or allocate network if network enabled
 	if stored.NetworkEnabled {
-		var networkSpan trace.Span
-		if m.metrics != nil && m.metrics.tracer != nil {
-			ctx, networkSpan = m.metrics.tracer.Start(ctx, "RestoreNetwork")
-		}
+		networkCtx, networkSpanEnd := m.startLifecycleStep(ctx, "restore_network",
+			attribute.String("instance_id", id),
+			attribute.String("hypervisor", string(stored.HypervisorType)),
+			attribute.String("operation", "restore_network"),
+			attribute.Bool("network_enabled", true),
+		)
 		// If IP/MAC is empty (forked standby flow), allocate a fresh identity and
 		// patch the copied snapshot config before restore.
 		if stored.IP == "" || stored.MAC == "" {
 			log.InfoContext(ctx, "allocating fresh network identity for standby restore",
 				"instance_id", id, "network", "default",
 				"download_bps", stored.NetworkBandwidthDownload, "upload_bps", stored.NetworkBandwidthUpload)
-			netConfig, err := m.networkManager.CreateAllocation(ctx, network.AllocateRequest{
+			netConfig, err := m.networkManager.CreateAllocation(networkCtx, network.AllocateRequest{
 				InstanceID:    id,
 				InstanceName:  stored.Name,
 				DownloadBps:   stored.NetworkBandwidthDownload,
@@ -127,9 +128,7 @@ func (m *manager) restoreInstance(
 				UploadCeilBps: stored.NetworkBandwidthUpload * int64(m.networkManager.GetUploadBurstMultiplier()),
 			})
 			if err != nil {
-				if networkSpan != nil {
-					networkSpan.End()
-				}
+				networkSpanEnd(err)
 				log.ErrorContext(ctx, "failed to allocate network", "instance_id", id, "error", err)
 				return nil, fmt.Errorf("allocate network: %w", err)
 			}
@@ -147,7 +146,7 @@ func (m *manager) restoreInstance(
 			stored.IP = netConfig.IP
 			stored.MAC = netConfig.MAC
 
-			if _, err := starter.PrepareFork(ctx, hypervisor.ForkPrepareRequest{
+			if _, err := starter.PrepareFork(networkCtx, hypervisor.ForkPrepareRequest{
 				SnapshotConfigPath: m.paths.InstanceSnapshotConfig(id),
 				VsockCID:           stored.VsockCID,
 				VsockSocket:        stored.VsockSocket,
@@ -158,9 +157,7 @@ func (m *manager) restoreInstance(
 					Netmask:   netConfig.Netmask,
 				},
 			}); err != nil {
-				if networkSpan != nil {
-					networkSpan.End()
-				}
+				networkSpanEnd(err)
 				if errors.Is(err, hypervisor.ErrNotSupported) {
 					log.ErrorContext(ctx, "forked standby network rewrite not supported for hypervisor", "instance_id", id, "hypervisor", stored.HypervisorType)
 					releaseNetwork()
@@ -173,17 +170,13 @@ func (m *manager) restoreInstance(
 		} else {
 			log.InfoContext(ctx, "recreating network for restore", "instance_id", id, "network", "default",
 				"download_bps", stored.NetworkBandwidthDownload, "upload_bps", stored.NetworkBandwidthUpload)
-			if err := m.networkManager.RecreateAllocation(ctx, id, stored.NetworkBandwidthDownload, stored.NetworkBandwidthUpload); err != nil {
-				if networkSpan != nil {
-					networkSpan.End()
-				}
+			if err := m.networkManager.RecreateAllocation(networkCtx, id, stored.NetworkBandwidthDownload, stored.NetworkBandwidthUpload); err != nil {
+				networkSpanEnd(err)
 				log.ErrorContext(ctx, "failed to recreate network", "instance_id", id, "error", err)
 				return nil, fmt.Errorf("recreate network: %w", err)
 			}
 		}
-		if networkSpan != nil {
-			networkSpan.End()
-		}
+		networkSpanEnd(nil)
 	}
 
 	// 4b. Register proxy/enforcement once network identity is active.
@@ -224,15 +217,14 @@ func (m *manager) restoreInstance(
 	}
 
 	// 5. Transition: Standby → Paused (start hypervisor + restore)
-	var restoreSpan trace.Span
-	if m.metrics != nil && m.metrics.tracer != nil {
-		ctx, restoreSpan = m.metrics.tracer.Start(ctx, "RestoreFromSnapshot")
-	}
+	restoreCtx, restoreSpanEnd := m.startLifecycleStep(ctx, "restore_from_snapshot",
+		attribute.String("instance_id", id),
+		attribute.String("hypervisor", string(stored.HypervisorType)),
+		attribute.String("operation", "restore_from_snapshot"),
+	)
 	log.InfoContext(ctx, "restoring from snapshot", "instance_id", id, "snapshot_dir", snapshotDir, "hypervisor", stored.HypervisorType)
-	pid, hv, err := m.restoreFromSnapshot(ctx, stored, snapshotDir)
-	if restoreSpan != nil {
-		restoreSpan.End()
-	}
+	pid, hv, err := m.restoreFromSnapshot(restoreCtx, stored, snapshotDir)
+	restoreSpanEnd(err)
 	if err != nil {
 		log.ErrorContext(ctx, "failed to restore from snapshot", "instance_id", id, "error", err)
 		// Cleanup network on failure
@@ -244,35 +236,39 @@ func (m *manager) restoreInstance(
 	stored.HypervisorPID = &pid
 
 	// 6. Transition: Paused → Running (resume)
-	var resumeSpan trace.Span
-	if m.metrics != nil && m.metrics.tracer != nil {
-		ctx, resumeSpan = m.metrics.tracer.Start(ctx, "ResumeVM")
-	}
+	resumeCtx, resumeSpanEnd := m.startLifecycleStep(ctx, "resume_vm",
+		attribute.String("instance_id", id),
+		attribute.String("hypervisor", string(stored.HypervisorType)),
+		attribute.String("operation", "resume_vm"),
+	)
 	log.InfoContext(ctx, "resuming VM", "instance_id", id)
-	if err := hv.Resume(ctx); err != nil {
-		if resumeSpan != nil {
-			resumeSpan.End()
-		}
+	if err := hv.Resume(resumeCtx); err != nil {
+		resumeSpanEnd(err)
 		log.ErrorContext(ctx, "failed to resume VM", "instance_id", id, "error", err)
 		// Cleanup on failure
 		hv.Shutdown(ctx)
 		releaseNetwork()
 		return nil, fmt.Errorf("resume vm failed: %w", err)
 	}
-	if resumeSpan != nil {
-		resumeSpan.End()
-	}
+	resumeSpanEnd(nil)
 
 	// Forked standby restores may allocate a fresh identity while the guest memory snapshot
 	// still has the source VM's old IP configuration. Reconfigure guest networking after
 	// resume so host ingress to the new private IP works reliably.
 	if allocatedNet != nil && !stored.SkipGuestAgent {
-		if err := reconfigureGuestNetwork(ctx, stored, allocatedNet); err != nil {
+		reconfigureCtx, reconfigureSpanEnd := m.startLifecycleStep(ctx, "reconfigure_guest_network",
+			attribute.String("instance_id", id),
+			attribute.String("hypervisor", string(stored.HypervisorType)),
+			attribute.String("operation", "reconfigure_guest_network"),
+		)
+		if err := reconfigureGuestNetwork(reconfigureCtx, stored, allocatedNet); err != nil {
+			reconfigureSpanEnd(err)
 			log.ErrorContext(ctx, "failed to configure guest network after restore", "instance_id", id, "error", err)
 			_ = hv.Shutdown(ctx)
 			releaseNetwork()
 			return nil, fmt.Errorf("configure guest network after restore: %w", err)
 		}
+		reconfigureSpanEnd(nil)
 	}
 
 	// 8. Delete snapshot after successful restore unless the hypervisor is keeping it
