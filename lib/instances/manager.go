@@ -294,9 +294,6 @@ func (m *manager) ForkInstance(ctx context.Context, id string, req ForkInstanceR
 		return nil, err
 	}
 
-	// Source instance may have changed state (e.g. standby→running during fork).
-	m.notifyStateChange(id, forked)
-
 	inst, err := m.applyForkTargetState(ctx, forked.Id, targetState)
 	if err != nil {
 		if cleanupErr := m.cleanupForkInstanceOnError(ctx, forked.Id); cleanupErr != nil {

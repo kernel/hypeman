@@ -48,6 +48,7 @@ func (s *subscribers) Subscribe(instanceID string) (<-chan StateChange, func()) 
 
 // Notify fans out a state change to all subscribers for the given instance.
 // Non-blocking: drops the event if a subscriber's buffer is full.
+// Safe to call concurrently with CloseAll.
 func (s *subscribers) Notify(instanceID string, sc StateChange) {
 	s.mu.Lock()
 	chans := make([]chan StateChange, len(s.subs[instanceID]))
@@ -55,10 +56,17 @@ func (s *subscribers) Notify(instanceID string, sc StateChange) {
 	s.mu.Unlock()
 
 	for _, ch := range chans {
-		select {
-		case ch <- sc:
-		default:
-		}
+		trySend(ch, sc)
+	}
+}
+
+// trySend attempts a non-blocking send on ch, recovering from a panic if the
+// channel was closed by a concurrent CloseAll.
+func trySend(ch chan StateChange, sc StateChange) {
+	defer func() { recover() }()
+	select {
+	case ch <- sc:
+	default:
 	}
 }
 
