@@ -211,3 +211,104 @@
 - One environmental contributor on `deft-kernel-dev`:
   - `lz4` and `zstd` are not installed, so snapshot compression tests fall back to the Go implementation, which likely inflates compression-scenario timings.
 - I did not make a test-quality code change in this pass because I did not find a low-risk redundancy or speed improvement that was clearly justified after the no-cache runs came back clean.
+
+## 2026-03-25 - `hypeman` flake round on `~/hm4943`
+
+### Reported flake signatures
+- `TestVolumeMultiAttachReadOnly`
+  - `exec-agent not ready for instance ... within 15s (last state: Initializing)`
+- `TestVolumeFromArchive`
+  - `exec-agent not ready for instance ... within 15s (last state: Initializing)`
+
+### Additional flakes reproduced during Deft full-suite verification
+- `TestQEMUForkFromRunningNetwork`
+  - source/fork instance did not reach `Running` within 20s on a busy Deft host
+  - cleanup also risked a nil-pointer panic because the cleanup closure captured `source.Id` after `source` could be reassigned on failure
+- `TestCreateInstance_AutoPullImage`
+  - `start cloud-hypervisor: ... text file busy`
+
+### Root causes
+- Volume-backed integration tests still used a 15s exec-agent readiness budget even though guest-agent/vsock readiness can lag while the instance remains in `Initializing` under full-suite host contention.
+- `waitForExecAgent` previously refused to probe until the manager reported `Running`, even though exec could already be reachable while boot-marker hydration was still catching up.
+- QEMU running-fork tests had a too-tight 20s host-side `Running` budget for full-suite contention.
+- Cloud Hypervisor startup could race a freshly extracted binary and hit transient `ETXTBSY`.
+
+### Fixes
+- `lib/instances/exec_test.go`
+  - allowed `waitForExecAgent` to probe while instance state is either `Initializing` or `Running`
+- `lib/instances/volumes_test.go`
+  - widened exec-agent waits from 15s to 30s for:
+    - writer in `TestVolumeMultiAttachReadOnly`
+    - both readers in `TestVolumeMultiAttachReadOnly`
+    - archive-backed instance in `TestVolumeFromArchive`
+- `lib/instances/qemu_test.go`
+  - captured `sourceID` before `t.Cleanup(...)`
+  - widened three `waitForInstanceState(..., StateRunning, ...)` calls from 20s to 45s in `TestQEMUForkFromRunningNetwork`
+- `lib/vmm/client.go`
+  - added bounded retry-on-`ETXTBSY` / `"text file busy"` when starting Cloud Hypervisor
+
+### Validation on `deft-kernel-dev`
+- Targeted volume stress:
+  - `go test -count=20 -v -tags containers_image_openpgp -run '^(TestVolumeMultiAttachReadOnly|TestVolumeFromArchive)$' -timeout=60m ./lib/instances`
+  - result: pass, package time `169.911s`
+- Targeted QEMU fork verification:
+  - `go test -count=4 -v -tags containers_image_openpgp -run '^TestQEMUForkFromRunningNetwork$' -timeout=45m ./lib/instances`
+  - result: pass, package time `57.699s`
+- Targeted API verification for CH startup retry:
+  - `go test -count=10 -v -tags containers_image_openpgp -run '^TestCreateInstance_AutoPullImage$' -timeout=45m ./cmd/api/api`
+  - result: pass, package time `34.761s`
+- Fresh-cache full-suite verification (`go mod download`, `make oapi-generate`, `make build`, `go run ./cmd/test-prewarm`, `go test -count=1 -tags containers_image_openpgp -timeout=20m ./...`)
+  - Run 1: `215s` (pass)
+  - Run 2: `212s` (pass)
+
+### Verification note
+- One intermediate Deft rerun failed before tests because the remote scratch workspace had stray untracked files at repo-root `lib/` (`client.go`, `exec_test.go`, `qemu_test.go`) that created a mixed-package directory.
+- After removing those remote-only artifacts, the same fresh-cache full-suite gate passed twice.
+
+## 2026-03-25 - Follow-up flake: CH compression standby/restore exec reset
+
+### Flake signature
+- `TestCloudHypervisorStandbyRestoreCompressionScenarios`
+  - failure while writing a guest marker before standby:
+    - `receive response (stdout=0, stderr=0): rpc error: code = DeadlineExceeded desc = stream terminated by RST_STREAM with error code: CANCEL`
+
+### Root cause
+- Standby/restore keeps the same guest-agent vsock identity for Cloud Hypervisor (`ch:<vsock-socket-path>`), and guest gRPC connections are pooled by that key.
+- `standbyInstance` did not evict the pooled guest-agent connection when the VM transitioned to `Standby`, so post-restore execs could briefly reuse a connection tied to the dead pre-standby VM.
+- That stale-connection reuse is consistent with the observed one-shot gRPC stream reset in `writeGuestMarker`.
+
+### Fix
+- `lib/instances/standby.go`
+  - after shutting down the hypervisor and cleaning stale vsock sockets, explicitly remove the pooled guest-agent connection with `guest.CloseConn(dialer.Key())`
+  - this forces restore-time execs to establish a fresh gRPC connection against the resumed VM
+
+### Validation on `deft-kernel-dev`
+- Targeted stress:
+  - `go test -count=20 -v -tags containers_image_openpgp -run '^TestCloudHypervisorStandbyRestoreCompressionScenarios$' -timeout=90m ./lib/instances`
+  - result: pass, package time `740.546s`
+- I also started a fresh-cache full-suite Deft verification run after this fix, but it was intentionally interrupted before completion when switching to commit/push.
+
+## 2026-03-25 - Follow-up CI flakes after `771018f`
+
+### Flake signatures
+- `cmd/api/api/TestCreateInstance_AutoPullImage`
+  - auto-pull failed while fetching Docker Hub auth token:
+    - `resolve manifest: fetch manifest: Get "https://auth.docker.io/token?...": context deadline exceeded`
+- `lib/builds/TestGetBuild_Found`
+  - expected `queued`, got `building`
+
+### Root causes
+- `TestCreateInstance_AutoPullImage` still used the raw Docker Hub ref instead of the API test registry mirror helper, so it depended on live Docker Hub auth latency even though CI had prewarm + local registry configured.
+- `TestGetBuild_Found` asserted the build must still be `queued`, but the queue worker can legitimately transition it to `building` before the test reads it back.
+
+### Fixes
+- `cmd/api/api/instances_test.go`
+  - switched the auto-pull image ref to `apiTestImageRef(t, "docker.io/library/alpine:latest")`
+- `lib/builds/manager_test.go`
+  - relaxed the status assertion to accept either `queued` or `building`
+
+### Validation on `deft-kernel-dev`
+- `go test -count=10 -v -tags containers_image_openpgp -run '^TestCreateInstance_AutoPullImage$' -timeout=45m ./cmd/api/api`
+  - pass, package time `28.484s`
+- `go test -count=50 -run '^TestGetBuild_Found$' ./lib/builds`
+  - pass

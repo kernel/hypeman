@@ -928,8 +928,12 @@ func TestQEMUForkFromRunningNetwork(t *testing.T) {
 		Hypervisor:     hypervisor.TypeQEMU,
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = manager.DeleteInstance(context.Background(), source.Id) })
-	source, err = waitForInstanceState(ctx, manager, source.Id, StateRunning, 20*time.Second)
+	sourceID := source.Id
+	t.Cleanup(func() { _ = manager.DeleteInstance(context.Background(), sourceID) })
+	// QEMU is the slowest Linux hypervisor under full-suite load on Deft. Give
+	// the host-side Running transition more headroom so we don't fail while the
+	// VM is still legitimately completing boot marker hydration.
+	source, err = waitForInstanceState(ctx, manager, sourceID, StateRunning, 45*time.Second)
 	require.NoError(t, err)
 	require.NoError(t, waitForQEMUReady(ctx, source.SocketPath, 10*time.Second))
 
@@ -954,7 +958,7 @@ func TestQEMUForkFromRunningNetwork(t *testing.T) {
 	sourceAfterFork, err := manager.GetInstance(ctx, source.Id)
 	require.NoError(t, err)
 	if sourceAfterFork.State != StateRunning {
-		sourceAfterFork, err = waitForInstanceState(ctx, manager, source.Id, StateRunning, 20*time.Second)
+		sourceAfterFork, err = waitForInstanceState(ctx, manager, source.Id, StateRunning, 45*time.Second)
 		require.NoError(t, err)
 	}
 	require.Equal(t, StateRunning, sourceAfterFork.State)
@@ -964,7 +968,7 @@ func TestQEMUForkFromRunningNetwork(t *testing.T) {
 	forked, err = manager.RestoreInstance(ctx, forkedID)
 	require.NoError(t, err)
 	require.Contains(t, []State{StateInitializing, StateRunning}, forked.State)
-	forked, err = waitForInstanceState(ctx, manager, forkedID, StateRunning, 20*time.Second)
+	forked, err = waitForInstanceState(ctx, manager, forkedID, StateRunning, 45*time.Second)
 	require.NoError(t, err)
 	require.Equal(t, StateRunning, forked.State)
 	require.NoError(t, waitForQEMUReady(ctx, forked.SocketPath, 10*time.Second))

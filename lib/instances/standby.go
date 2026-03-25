@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/kernel/hypeman/lib/guest"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/network"
@@ -171,6 +172,11 @@ func (m *manager) standbyInstance(
 		for _, match := range matches {
 			_ = os.Remove(match)
 		}
+	}
+	// Standby/restore keeps the same vsock identity, so any pooled guest-agent
+	// gRPC connection now points at a dead VM and must be recreated on restore.
+	if dialer, err := hypervisor.NewVsockDialer(inst.HypervisorType, inst.VsockSocket, inst.VsockCID); err == nil {
+		guest.CloseConn(dialer.Key())
 	}
 
 	// 9. Release network allocation (delete TAP device)
