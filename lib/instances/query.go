@@ -497,6 +497,9 @@ func (m *manager) persistBootMarkers(ctx context.Context, id string) {
 	if err := m.saveMetadata(meta); err != nil {
 		log.WarnContext(ctx, "failed to persist boot markers", "instance_id", id, "error", err)
 	} else {
+		if deriveRunningState(&meta.StoredMetadata) == StateRunning {
+			m.recordTimeToRunning(ctx, &meta.StoredMetadata)
+		}
 		log.DebugContext(ctx, "persisted boot markers from serial log", "instance_id", id)
 	}
 }

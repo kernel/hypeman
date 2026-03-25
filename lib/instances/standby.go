@@ -212,7 +212,7 @@ func (m *manager) standbyInstance(
 
 	// Record metrics
 	if m.metrics != nil {
-		m.recordDuration(ctx, m.metrics.standbyDuration, start, "success", stored.HypervisorType)
+		m.recordDurationWithCompression(ctx, m.metrics.standbyDuration, start, "success", stored.HypervisorType, compressionPolicy)
 		m.recordStateTransition(ctx, string(StateRunning), string(StateStandby), stored.HypervisorType)
 	}
 

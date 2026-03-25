@@ -61,8 +61,9 @@ This keeps pull and push views aligned because both are sourced from the same OT
 |--------|------|--------|-------------|
 | `hypeman_instances_total` | gauge | state | Instances by state |
 | `hypeman_instances_create_duration_seconds` | histogram | status | Create time |
-| `hypeman_instances_restore_duration_seconds` | histogram | status | Restore time |
-| `hypeman_instances_standby_duration_seconds` | histogram | status | Standby time |
+| `hypeman_instances_time_to_running_seconds` | histogram | hypervisor | Time from boot start until an instance reaches Running |
+| `hypeman_instances_restore_duration_seconds` | histogram | status, hypervisor, algorithm, level | Restore time |
+| `hypeman_instances_standby_duration_seconds` | histogram | status, hypervisor, algorithm, level | Standby time |
 | `hypeman_instances_state_transitions_total` | counter | from, to | State transitions |
 
 ### Network
