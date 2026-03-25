@@ -58,7 +58,13 @@ func WaitForState(ctx context.Context, mgr Manager, inst *Instance, targetState 
 			}, nil
 
 		case <-timer.C:
-			if got, err := mgr.GetInstance(ctx, id); err == nil {
+			got, err := mgr.GetInstance(ctx, id)
+			if err != nil {
+				if errors.Is(err, ErrNotFound) {
+					return nil, ErrNotFound
+				}
+				// Transient error — return with last known state.
+			} else {
 				latest = got
 			}
 			return &WaitForStateResult{
