@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	hypotel "github.com/kernel/hypeman/lib/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 )
@@ -48,6 +49,7 @@ func NewMetrics(meter metric.Meter) (*Metrics, error) {
 		"hypeman_exec_duration_seconds",
 		metric.WithDescription("Exec command duration"),
 		metric.WithUnit("s"),
+		metric.WithExplicitBucketBoundaries(hypotel.CommonDurationHistogramBuckets()...),
 	)
 	if err != nil {
 		return nil, err
@@ -83,6 +85,7 @@ func NewMetrics(meter metric.Meter) (*Metrics, error) {
 		"hypeman_cp_duration_seconds",
 		metric.WithDescription("Copy operation duration"),
 		metric.WithUnit("s"),
+		metric.WithExplicitBucketBoundaries(hypotel.CommonDurationHistogramBuckets()...),
 	)
 	if err != nil {
 		return nil, err

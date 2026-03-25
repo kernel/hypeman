@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	hypotel "github.com/kernel/hypeman/lib/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 )
@@ -34,6 +35,7 @@ func NewMetrics(meter metric.Meter) (*Metrics, error) {
 		"hypeman_vmm_api_duration_seconds",
 		metric.WithDescription("Cloud Hypervisor API call duration"),
 		metric.WithUnit("s"),
+		metric.WithExplicitBucketBoundaries(hypotel.CommonDurationHistogramBuckets()...),
 	)
 	if err != nil {
 		return nil, err

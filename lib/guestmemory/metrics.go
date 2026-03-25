@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
+	hypotel "github.com/kernel/hypeman/lib/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 )
@@ -53,6 +54,7 @@ func NewMetrics(meter metric.Meter) (*Metrics, error) {
 		"hypeman_guestmemory_reconcile_duration_seconds",
 		metric.WithDescription("Guest memory reconcile duration"),
 		metric.WithUnit("s"),
+		metric.WithExplicitBucketBoundaries(hypotel.CommonDurationHistogramBuckets()...),
 	)
 	if err != nil {
 		return nil, err
