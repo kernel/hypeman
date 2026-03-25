@@ -70,26 +70,9 @@ func TestWaitForInstanceState_TerminalStateEarlyReturn(t *testing.T) {
 	t.Parallel()
 	svc := newTestService(t)
 
-	// Inject Stopped via middleware context, but instance doesn't exist in manager.
-	// The initial check (Stopped != Running) won't match, so it enters the poll loop.
-	// Poll will get ErrNotFound, which returns 404 — that's the correct behavior
-	// when the instance is in a terminal state that the poll can't observe.
-	//
-	// For a proper terminal-state test, we need a real instance. Use the fake context
-	// to verify the initial-state shortcut path instead: if the resolved instance is
-	// already Stopped and we wait for Stopped, it should return immediately.
-	// We already test that in AlreadyInTargetState.
-	//
-	// To properly test terminal early return in the poll loop, inject a real stopped instance.
-	// But we can't pull images here. So let's test the logic differently:
-	// The initial resolved state is Initializing (not target Running), but by the time
-	// the poll fires, instance is not found → 404. This is fine.
-
-	// Alternatively: test terminal detection by having the initial state be non-terminal,
-	// then on first poll the manager returns not-found. That's tested in InstanceDeletedDuringWait.
-
-	// For this test, verify that if the resolved state IS already stopped and target != stopped,
-	// the handler returns immediately without entering the poll loop.
+	// Resolved state is Stopped but target is Running. The wait function detects
+	// Stopped as terminal on the first poll (or returns 404 if the fake instance
+	// isn't found in the manager). Either way it should return quickly.
 	start := time.Now()
 	resp, err := svc.WaitForInstanceState(
 		fakeInstanceCtx("test-terminal", instances.StateStopped),
@@ -103,21 +86,15 @@ func TestWaitForInstanceState_TerminalStateEarlyReturn(t *testing.T) {
 	)
 	elapsed := time.Since(start)
 	require.NoError(t, err)
-
-	// The initial check doesn't match (Stopped != Running), so it enters the poll loop.
-	// The poll will get ErrNotFound (no real instance). This returns 404.
-	// But this is the expected behavior: real callers always have valid instances.
-	// Just verify it doesn't hang for 30s.
 	assert.Less(t, elapsed, 3*time.Second, "should not block for full timeout")
 
-	// Accept either 200 (terminal early return) or 404 (instance not found in manager)
 	switch resp.(type) {
 	case oapi.WaitForInstanceState200JSONResponse:
 		result := resp.(oapi.WaitForInstanceState200JSONResponse)
 		assert.Equal(t, oapi.InstanceStateStopped, result.State)
 		assert.False(t, result.TimedOut)
 	case oapi.WaitForInstanceState404JSONResponse:
-		// Also valid — instance doesn't exist in manager, just in context
+		// Instance doesn't exist in manager — expected with fake context
 	default:
 		t.Fatalf("unexpected response type: %T", resp)
 	}

@@ -130,6 +130,10 @@ Any State → Stopped
 - If an instance is deleted, its schedule is retained so retention can continue cleaning existing scheduled snapshots.
 - Once the deleted instance has no scheduled snapshots left, the scheduler removes that schedule automatically.
 
+## WaitForState (wait.go)
+
+Blocking poll that waits for an instance to reach a target state. Returns early on terminal (`Stopped`) or error (`Unknown`) states, context cancellation, or timeout. Used by the `GET /instances/{id}/wait` API endpoint.
+
 ## Reference Handling
 
 Instances use OCI image references directly:
