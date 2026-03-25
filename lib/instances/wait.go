@@ -139,7 +139,7 @@ func WaitForState(ctx context.Context, mgr Manager, inst *Instance, targetState 
 }
 
 // isTerminalForWait returns true if the current state won't progress toward
-// the target without explicit user action (e.g. Stopped, Standby, Shutdown, Unknown).
+// the target without explicit user action (e.g. Stopped, Standby, Shutdown, Paused, Unknown).
 func isTerminalForWait(current, target State) bool {
 	if current == StateUnknown {
 		return true
@@ -151,6 +151,9 @@ func isTerminalForWait(current, target State) bool {
 		return true
 	}
 	if current == StateShutdown && target != StateShutdown {
+		return true
+	}
+	if current == StatePaused && target != StatePaused {
 		return true
 	}
 	return false
