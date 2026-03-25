@@ -42,7 +42,7 @@ func (s *stubManager) CreateInstance(context.Context, CreateInstanceRequest) (*I
 func (s *stubManager) CreateSnapshot(context.Context, string, CreateSnapshotRequest) (*Snapshot, error) {
 	return nil, nil
 }
-func (s *stubManager) DeleteInstance(context.Context, string) error  { return nil }
+func (s *stubManager) DeleteInstance(context.Context, string) error { return nil }
 func (s *stubManager) DeleteSnapshot(context.Context, string) error { return nil }
 func (s *stubManager) ForkInstance(context.Context, string, ForkInstanceRequest) (*Instance, error) {
 	return nil, nil
