@@ -50,8 +50,8 @@ func TestCreateInstance_AutoPullImage(t *testing.T) {
 
 	// NOTE: intentionally NOT calling createAndWaitForImage here.
 	// The auto-pull logic in CreateInstance should handle pulling the image.
-	// The auto-pull has a 5s timeout — alpine:latest is small enough to
-	// complete within that window.
+	// Use the test registry mirror when configured so this covers auto-pull
+	// orchestration without depending on live Docker Hub auth latency.
 
 	// Ensure system files (kernel and initramfs) are available
 	t.Log("Ensuring system files (kernel and initramfs)...")
@@ -64,7 +64,7 @@ func TestCreateInstance_AutoPullImage(t *testing.T) {
 	createReq := oapi.CreateInstanceRequestObject{
 		Body: &oapi.CreateInstanceRequest{
 			Name:  "test-auto-pull",
-			Image: "docker.io/library/alpine:latest",
+			Image: apiTestImageRef(t, "docker.io/library/alpine:latest"),
 			Network: &struct {
 				BandwidthDownload *string                                  `json:"bandwidth_download,omitempty"`
 				BandwidthUpload   *string                                  `json:"bandwidth_upload,omitempty"`

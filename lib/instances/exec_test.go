@@ -34,7 +34,9 @@ func waitForExecAgent(ctx context.Context, mgr *manager, instanceID string, time
 		}
 
 		lastState = inst.State
-		if inst.State != StateRunning {
+		// Boot-marker hydration can lag behind a healthy guest-agent, leaving the
+		// instance in Initializing even though exec is already available.
+		if inst.State != StateRunning && inst.State != StateInitializing {
 			time.Sleep(500 * time.Millisecond)
 			continue
 		}

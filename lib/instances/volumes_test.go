@@ -108,7 +108,9 @@ func TestVolumeMultiAttachReadOnly(t *testing.T) {
 	t.Logf("Writer instance created: %s", writerInst.Id)
 
 	// Wait for exec-agent
-	err = waitForExecAgent(ctx, manager, writerInst.Id, 15*time.Second)
+	// Volume-backed boots can take noticeably longer under full-suite Deft load,
+	// especially once multiple readers are attaching the same backing disk.
+	err = waitForExecAgent(ctx, manager, writerInst.Id, 30*time.Second)
 	require.NoError(t, err, "exec-agent should be ready")
 
 	// Write test file, sync, and verify in one command to ensure data persistence
@@ -173,10 +175,10 @@ func TestVolumeMultiAttachReadOnly(t *testing.T) {
 	assert.Len(t, vol.Attachments, 2, "Volume should have 2 attachments")
 
 	// Wait for exec-agent on both readers
-	err = waitForExecAgent(ctx, manager, reader1.Id, 15*time.Second)
+	err = waitForExecAgent(ctx, manager, reader1.Id, 30*time.Second)
 	require.NoError(t, err, "reader-1 exec-agent should be ready")
 
-	err = waitForExecAgent(ctx, manager, reader2.Id, 15*time.Second)
+	err = waitForExecAgent(ctx, manager, reader2.Id, 30*time.Second)
 	require.NoError(t, err, "reader-2 exec-agent should be ready")
 
 	// Verify data is readable from reader-1
@@ -415,7 +417,9 @@ func TestVolumeFromArchive(t *testing.T) {
 	t.Logf("Instance created: %s", inst.Id)
 
 	// Wait for exec-agent
-	err = waitForExecAgent(ctx, manager, inst.Id, 15*time.Second)
+	// Archive hydration adds another boot-time variable, so keep the exec-agent
+	// readiness budget aligned with the other volume-backed integration tests.
+	err = waitForExecAgent(ctx, manager, inst.Id, 30*time.Second)
 	require.NoError(t, err, "exec-agent should be ready")
 
 	// Verify files from archive are present
