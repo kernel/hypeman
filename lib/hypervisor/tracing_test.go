@@ -2,6 +2,7 @@ package hypervisor
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 )
 
 type fakeHypervisor struct{}
+type fakeHypervisorGetVMInfoError struct{}
 
 func (fakeHypervisor) DeleteVM(context.Context) error { return nil }
 func (fakeHypervisor) Shutdown(context.Context) error { return nil }
@@ -33,7 +35,28 @@ func (fakeHypervisor) SetTargetGuestMemoryBytes(context.Context, int64) error { 
 func (fakeHypervisor) GetTargetGuestMemoryBytes(context.Context) (int64, error) {
 	return 0, nil
 }
-func (fakeHypervisor) Capabilities() Capabilities { return Capabilities{} }
+func (fakeHypervisor) Capabilities() Capabilities                   { return Capabilities{} }
+func (fakeHypervisorGetVMInfoError) DeleteVM(context.Context) error { return nil }
+func (fakeHypervisorGetVMInfoError) Shutdown(context.Context) error { return nil }
+func (fakeHypervisorGetVMInfoError) GetVMInfo(context.Context) (*VMInfo, error) {
+	return nil, errors.New("vm info failed")
+}
+func (fakeHypervisorGetVMInfoError) Pause(context.Context) error            { return nil }
+func (fakeHypervisorGetVMInfoError) Resume(context.Context) error           { return nil }
+func (fakeHypervisorGetVMInfoError) Snapshot(context.Context, string) error { return nil }
+func (fakeHypervisorGetVMInfoError) ResizeMemory(context.Context, int64) error {
+	return nil
+}
+func (fakeHypervisorGetVMInfoError) ResizeMemoryAndWait(context.Context, int64, time.Duration) error {
+	return nil
+}
+func (fakeHypervisorGetVMInfoError) SetTargetGuestMemoryBytes(context.Context, int64) error {
+	return nil
+}
+func (fakeHypervisorGetVMInfoError) GetTargetGuestMemoryBytes(context.Context) (int64, error) {
+	return 0, nil
+}
+func (fakeHypervisorGetVMInfoError) Capabilities() Capabilities { return Capabilities{} }
 
 type fakeStarter struct {
 	returned Hypervisor
@@ -98,6 +121,37 @@ func TestWrapVMStarterWrapsReturnedHypervisor(t *testing.T) {
 	attrs := attrsToMap(resumeSpan.Attributes())
 	assert.Equal(t, "inst_456", attrs["instance_id"])
 	assert.Equal(t, string(TypeCloudHypervisor), attrs["hypervisor"])
+}
+
+func TestWrapHypervisorSkipsGetVMInfoTraceByDefault(t *testing.T) {
+	recorder, _ := newTestTracerProvider(t)
+
+	hv := WrapHypervisor(TypeQEMU, fakeHypervisor{})
+	_, err := hv.GetVMInfo(context.Background())
+	require.NoError(t, err)
+
+	for _, span := range recorder.Ended() {
+		if span.Name() == "hypervisor.get_vm_info" {
+			t.Fatalf("expected get vm info to be skipped by default")
+		}
+	}
+}
+
+func TestWrapHypervisorCreatesDetachedErrorSpanForGetVMInfoFailures(t *testing.T) {
+	recorder, _ := newTestTracerProvider(t)
+
+	ctx := WithTraceAttributes(context.Background(), attribute.String("instance_id", "inst_999"))
+	hv := WrapHypervisor(TypeQEMU, fakeHypervisorGetVMInfoError{})
+	_, err := hv.GetVMInfo(ctx)
+	require.Error(t, err)
+
+	span := findSpanByName(t, recorder.Ended(), "hypervisor.get_vm_info")
+	require.False(t, span.Parent().IsValid())
+
+	attrs := attrsToMap(span.Attributes())
+	assert.Equal(t, "inst_999", attrs["instance_id"])
+	assert.Equal(t, string(TypeQEMU), attrs["hypervisor"])
+	assert.Equal(t, "error_only", attrs["sampled_from"])
 }
 
 func newTestTracerProvider(t *testing.T) (*tracetest.SpanRecorder, *sdktrace.TracerProvider) {

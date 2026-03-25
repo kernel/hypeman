@@ -28,6 +28,9 @@ func TestDefaultConfigIncludesMetricsSettings(t *testing.T) {
 	if cfg.Otel.MetricExportInterval != "60s" {
 		t.Fatalf("expected default otel.metric_export_interval to be 60s, got %q", cfg.Otel.MetricExportInterval)
 	}
+	if cfg.Otel.SuccessfulGetSampleRatio != 0.1 {
+		t.Fatalf("expected default otel.successful_get_sample_ratio to be 0.1, got %v", cfg.Otel.SuccessfulGetSampleRatio)
+	}
 }
 
 func TestLoadEnvOverridesMetricsAndOtelInterval(t *testing.T) {
@@ -36,6 +39,7 @@ func TestLoadEnvOverridesMetricsAndOtelInterval(t *testing.T) {
 	t.Setenv("METRICS__VM_LABEL_BUDGET", "350")
 	t.Setenv("METRICS__RESOURCE_REFRESH_INTERVAL", "30s")
 	t.Setenv("OTEL__METRIC_EXPORT_INTERVAL", "15s")
+	t.Setenv("OTEL__SUCCESSFUL_GET_SAMPLE_RATIO", "0.25")
 
 	tmp := t.TempDir()
 	cfgPath := filepath.Join(tmp, "config.yaml")
@@ -63,6 +67,9 @@ func TestLoadEnvOverridesMetricsAndOtelInterval(t *testing.T) {
 	if cfg.Otel.MetricExportInterval != "15s" {
 		t.Fatalf("expected otel.metric_export_interval override, got %q", cfg.Otel.MetricExportInterval)
 	}
+	if cfg.Otel.SuccessfulGetSampleRatio != 0.25 {
+		t.Fatalf("expected otel.successful_get_sample_ratio override, got %v", cfg.Otel.SuccessfulGetSampleRatio)
+	}
 }
 
 func TestValidateRejectsInvalidMetricsPort(t *testing.T) {
@@ -82,6 +89,16 @@ func TestValidateRejectsInvalidMetricExportInterval(t *testing.T) {
 	err := cfg.Validate()
 	if err == nil {
 		t.Fatalf("expected validation error for invalid metric export interval")
+	}
+}
+
+func TestValidateRejectsInvalidSuccessfulGetSampleRatio(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Otel.SuccessfulGetSampleRatio = 1.1
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatalf("expected validation error for invalid successful get sample ratio")
 	}
 }
 

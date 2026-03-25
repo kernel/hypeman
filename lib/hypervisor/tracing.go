@@ -2,6 +2,7 @@ package hypervisor
 
 import (
 	"context"
+	"net/http"
 	"time"
 
 	"github.com/kernel/hypeman/lib/paths"
@@ -50,6 +51,18 @@ func TraceAttributesFromContext(ctx context.Context) []attribute.KeyValue {
 	out := make([]attribute.KeyValue, len(existing))
 	copy(out, existing)
 	return out
+}
+
+func ShouldTraceHypervisorHTTPSpan(method, path string) bool {
+	if method != http.MethodGet {
+		return true
+	}
+	switch path {
+	case "/", "/api/v1/vm.info":
+		return false
+	default:
+		return true
+	}
 }
 
 func WrapHypervisor(hvType Type, hv Hypervisor) Hypervisor {
@@ -115,6 +128,21 @@ func FinishTraceSpan(span trace.Span, err error) {
 	finishTraceSpan(span, err)
 }
 
+func StartDetachedTraceSpan(ctx context.Context, tracer trace.Tracer, name string, attrs ...attribute.KeyValue) (context.Context, trace.Span) {
+	allAttrs := TraceAttributesFromContext(ctx)
+	if len(attrs) > 0 {
+		allAttrs = append(allAttrs, attrs...)
+	}
+
+	spanOpts := []trace.SpanStartOption{
+		trace.WithNewRoot(),
+	}
+	if len(allAttrs) > 0 {
+		spanOpts = append(spanOpts, trace.WithAttributes(allAttrs...))
+	}
+	return tracer.Start(context.Background(), name, spanOpts...)
+}
+
 func startTraceSpan(ctx context.Context, tracer trace.Tracer, name string, attrs ...attribute.KeyValue) (context.Context, trace.Span) {
 	allAttrs := TraceAttributesFromContext(ctx)
 	if len(attrs) > 0 {
@@ -164,9 +192,17 @@ func (h *tracingHypervisor) Shutdown(ctx context.Context) (err error) {
 }
 
 func (h *tracingHypervisor) GetVMInfo(ctx context.Context) (_ *VMInfo, err error) {
-	ctx, span := startTraceSpan(ctx, h.tracer, "hypervisor.get_vm_info", h.spanAttrs(attribute.String("operation", "get_vm_info"))...)
-	defer func() { finishTraceSpan(span, err) }()
-	return h.next.GetVMInfo(ctx)
+	info, err := h.next.GetVMInfo(ctx)
+	if err != nil {
+		_, span := StartDetachedTraceSpan(ctx, h.tracer, "hypervisor.get_vm_info",
+			h.spanAttrs(
+				attribute.String("operation", "get_vm_info"),
+				attribute.String("sampled_from", "error_only"),
+			)...,
+		)
+		finishTraceSpan(span, err)
+	}
+	return info, err
 }
 
 func (h *tracingHypervisor) Pause(ctx context.Context) (err error) {
