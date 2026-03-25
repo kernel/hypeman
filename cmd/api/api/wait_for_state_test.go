@@ -186,7 +186,7 @@ func TestWaitForInstanceState_InstanceDeletedDuringWait(t *testing.T) {
 			Id: "test-deleted",
 			Params: oapi.WaitForInstanceStateParams{
 				State:   oapi.InstanceStateRunning,
-				Timeout: lo.ToPtr("5s"),
+				Timeout: lo.ToPtr("30s"),
 			},
 		},
 	)
@@ -196,7 +196,7 @@ func TestWaitForInstanceState_InstanceDeletedDuringWait(t *testing.T) {
 	result, ok := resp.(oapi.WaitForInstanceState404JSONResponse)
 	require.True(t, ok, "expected 404 response, got %T", resp)
 	assert.Equal(t, "not_found", result.Code)
-	assert.Less(t, elapsed, 3*time.Second, "should detect deletion within first poll")
+	assert.Less(t, elapsed, 10*time.Second, "should detect deletion within first poll")
 }
 
 func TestWaitForInstanceState_ContextCancellation(t *testing.T) {

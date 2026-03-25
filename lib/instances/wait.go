@@ -3,13 +3,16 @@ package instances
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"time"
+
+	"github.com/kernel/hypeman/lib/logger"
 )
 
 const (
 	WaitForStateDefaultTimeout = 60 * time.Second
 	WaitForStateMaxTimeout     = 5 * time.Minute
-	WaitForStatePollInterval   = 1 * time.Second
+	WaitForStatePollInterval   = 5 * time.Second
 )
 
 // WaitForStateResult is the outcome of a WaitForState call.
@@ -19,10 +22,10 @@ type WaitForStateResult struct {
 	TimedOut   bool
 }
 
-// WaitForState polls until the instance reaches targetState, a terminal/error
-// state is detected, the timeout expires, or the context is cancelled.
-// The caller must supply the current instance snapshot so the function can
-// short-circuit when the instance is already in the target state.
+// WaitForState subscribes to state change events for the instance and waits
+// until it reaches targetState, a terminal/error state is detected, the timeout
+// expires, or the context is cancelled. A polling fallback (every 5s) guards
+// against missed subscription events.
 func WaitForState(ctx context.Context, mgr Manager, inst *Instance, targetState State, timeout time.Duration) (*WaitForStateResult, error) {
 	// Already in target state — return immediately.
 	if inst.State == targetState {
@@ -40,11 +43,15 @@ func WaitForState(ctx context.Context, mgr Manager, inst *Instance, targetState 
 		}, nil
 	}
 
+	ch, unsub := mgr.Subscribe(inst.Id)
+	defer unsub()
+
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	ticker := time.NewTicker(WaitForStatePollInterval)
 	defer ticker.Stop()
 
+	log := logger.FromContext(ctx)
 	id := inst.Id
 	latest := inst
 
@@ -63,7 +70,6 @@ func WaitForState(ctx context.Context, mgr Manager, inst *Instance, targetState 
 				if errors.Is(err, ErrNotFound) {
 					return nil, ErrNotFound
 				}
-				// Transient error — return with last known state.
 			} else {
 				latest = got
 			}
@@ -73,15 +79,14 @@ func WaitForState(ctx context.Context, mgr Manager, inst *Instance, targetState 
 				TimedOut:   latest.State != targetState,
 			}, nil
 
-		case <-ticker.C:
-			got, err := mgr.GetInstance(ctx, id)
-			if err != nil {
-				if errors.Is(err, ErrNotFound) {
-					return nil, ErrNotFound
-				}
-				continue // transient error — retry on next tick
+		case sc, ok := <-ch:
+			if !ok {
+				// Channel closed — instance was deleted.
+				return nil, ErrNotFound
 			}
-			latest = got
+			latest = &Instance{}
+			latest.State = sc.State
+			latest.StateError = sc.StateError
 
 			if latest.State == targetState {
 				return &WaitForStateResult{
@@ -89,8 +94,41 @@ func WaitForState(ctx context.Context, mgr Manager, inst *Instance, targetState 
 					StateError: latest.StateError,
 				}, nil
 			}
+			if isTerminalForWait(latest.State, targetState) {
+				return &WaitForStateResult{
+					State:      latest.State,
+					StateError: latest.StateError,
+				}, nil
+			}
+
+		case <-ticker.C:
+			got, err := mgr.GetInstance(ctx, id)
+			if err != nil {
+				if errors.Is(err, ErrNotFound) {
+					return nil, ErrNotFound
+				}
+				continue
+			}
+			latest = got
+
+			if latest.State == targetState {
+				log.WarnContext(ctx, "waitForState: state change detected via polling fallback, subscription may have missed event",
+					slog.String("instance_id", id),
+					slog.String("target_state", string(targetState)),
+					slog.String("current_state", string(latest.State)),
+				)
+				return &WaitForStateResult{
+					State:      latest.State,
+					StateError: latest.StateError,
+				}, nil
+			}
 
 			if isTerminalForWait(latest.State, targetState) {
+				log.WarnContext(ctx, "waitForState: terminal state detected via polling fallback, subscription may have missed event",
+					slog.String("instance_id", id),
+					slog.String("target_state", string(targetState)),
+					slog.String("current_state", string(latest.State)),
+				)
 				return &WaitForStateResult{
 					State:      latest.State,
 					StateError: latest.StateError,

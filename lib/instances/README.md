@@ -130,9 +130,9 @@ Any State → Stopped
 - If an instance is deleted, its schedule is retained so retention can continue cleaning existing scheduled snapshots.
 - Once the deleted instance has no scheduled snapshots left, the scheduler removes that schedule automatically.
 
-## WaitForState (wait.go)
+## WaitForState (wait.go, subscribe.go)
 
-Blocking poll that waits for an instance to reach a target state. Returns early on terminal (`Stopped`) or error (`Unknown`) states, context cancellation, or timeout. Used by the `GET /instances/{id}/wait` API endpoint.
+Waits for an instance to reach a target state using channel-based subscriptions with a polling fallback. State-changing manager methods (create, start, stop, standby, restore, fork, delete) broadcast via `notifyStateChange`, which fans out to subscriber channels. `WaitForState` uses a 3-way select: subscription events, 5s polling fallback (logs a warning if it detects the state change, indicating a missed subscription event), and context cancellation/timeout. Returns early on terminal (`Stopped`, `Standby`) or error (`Unknown`) states. Used by `GET /instances/{id}/wait`.
 
 ## Reference Handling
 
