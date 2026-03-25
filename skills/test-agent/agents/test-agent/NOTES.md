@@ -211,3 +211,56 @@
 - One environmental contributor on `deft-kernel-dev`:
   - `lz4` and `zstd` are not installed, so snapshot compression tests fall back to the Go implementation, which likely inflates compression-scenario timings.
 - I did not make a test-quality code change in this pass because I did not find a low-risk redundancy or speed improvement that was clearly justified after the no-cache runs came back clean.
+
+## 2026-03-25 - `hypeman` flake round on `~/hm4943`
+
+### Reported flake signatures
+- `TestVolumeMultiAttachReadOnly`
+  - `exec-agent not ready for instance ... within 15s (last state: Initializing)`
+- `TestVolumeFromArchive`
+  - `exec-agent not ready for instance ... within 15s (last state: Initializing)`
+
+### Additional flakes reproduced during Deft full-suite verification
+- `TestQEMUForkFromRunningNetwork`
+  - source/fork instance did not reach `Running` within 20s on a busy Deft host
+  - cleanup also risked a nil-pointer panic because the cleanup closure captured `source.Id` after `source` could be reassigned on failure
+- `TestCreateInstance_AutoPullImage`
+  - `start cloud-hypervisor: ... text file busy`
+
+### Root causes
+- Volume-backed integration tests still used a 15s exec-agent readiness budget even though guest-agent/vsock readiness can lag while the instance remains in `Initializing` under full-suite host contention.
+- `waitForExecAgent` previously refused to probe until the manager reported `Running`, even though exec could already be reachable while boot-marker hydration was still catching up.
+- QEMU running-fork tests had a too-tight 20s host-side `Running` budget for full-suite contention.
+- Cloud Hypervisor startup could race a freshly extracted binary and hit transient `ETXTBSY`.
+
+### Fixes
+- `lib/instances/exec_test.go`
+  - allowed `waitForExecAgent` to probe while instance state is either `Initializing` or `Running`
+- `lib/instances/volumes_test.go`
+  - widened exec-agent waits from 15s to 30s for:
+    - writer in `TestVolumeMultiAttachReadOnly`
+    - both readers in `TestVolumeMultiAttachReadOnly`
+    - archive-backed instance in `TestVolumeFromArchive`
+- `lib/instances/qemu_test.go`
+  - captured `sourceID` before `t.Cleanup(...)`
+  - widened three `waitForInstanceState(..., StateRunning, ...)` calls from 20s to 45s in `TestQEMUForkFromRunningNetwork`
+- `lib/vmm/client.go`
+  - added bounded retry-on-`ETXTBSY` / `"text file busy"` when starting Cloud Hypervisor
+
+### Validation on `deft-kernel-dev`
+- Targeted volume stress:
+  - `go test -count=20 -v -tags containers_image_openpgp -run '^(TestVolumeMultiAttachReadOnly|TestVolumeFromArchive)$' -timeout=60m ./lib/instances`
+  - result: pass, package time `169.911s`
+- Targeted QEMU fork verification:
+  - `go test -count=4 -v -tags containers_image_openpgp -run '^TestQEMUForkFromRunningNetwork$' -timeout=45m ./lib/instances`
+  - result: pass, package time `57.699s`
+- Targeted API verification for CH startup retry:
+  - `go test -count=10 -v -tags containers_image_openpgp -run '^TestCreateInstance_AutoPullImage$' -timeout=45m ./cmd/api/api`
+  - result: pass, package time `34.761s`
+- Fresh-cache full-suite verification (`go mod download`, `make oapi-generate`, `make build`, `go run ./cmd/test-prewarm`, `go test -count=1 -tags containers_image_openpgp -timeout=20m ./...`)
+  - Run 1: `215s` (pass)
+  - Run 2: `212s` (pass)
+
+### Verification note
+- One intermediate Deft rerun failed before tests because the remote scratch workspace had stray untracked files at repo-root `lib/` (`client.go`, `exec_test.go`, `qemu_test.go`) that created a mixed-package directory.
+- After removing those remote-only artifacts, the same fresh-cache full-suite gate passed twice.

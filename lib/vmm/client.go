@@ -2,12 +2,14 @@ package vmm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -21,6 +23,11 @@ import (
 )
 
 const cloudHypervisorSocketReadyTimeout = 10 * time.Second
+
+const (
+	cloudHypervisorStartRetryDelay    = 100 * time.Millisecond
+	cloudHypervisorStartRetryAttempts = 20
+)
 
 // VMM wraps the generated Cloud Hypervisor client (API v0.3.0)
 type VMM struct {
@@ -136,14 +143,6 @@ func StartProcessWithArgs(ctx context.Context, p *paths.Paths, version CHVersion
 	args := []string{"--api-socket", socketPath}
 	args = append(args, extraArgs...)
 
-	// Use Command (not CommandContext) so process survives parent context cancellation
-	cmd := exec.Command(binaryPath, args...)
-
-	// Daemonize: detach from parent process group
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Setpgid: true, // Create new process group
-	}
-
 	// Redirect stdout/stderr to combined VMM log file (process won't block on I/O)
 	instanceDir := filepath.Dir(socketPath)
 	logsDir := filepath.Join(instanceDir, "logs")
@@ -165,11 +164,24 @@ func StartProcessWithArgs(ctx context.Context, p *paths.Paths, version CHVersion
 	defer vmmLogFile.Close()
 
 	// Both stdout and stderr go to the same file
-	cmd.Stdout = vmmLogFile
-	cmd.Stderr = vmmLogFile
+	var cmd *exec.Cmd
+	for attempt := 1; attempt <= cloudHypervisorStartRetryAttempts; attempt++ {
+		// Use Command (not CommandContext) so process survives parent context cancellation.
+		cmd = exec.Command(binaryPath, args...)
+		cmd.SysProcAttr = &syscall.SysProcAttr{
+			Setpgid: true, // Create new process group
+		}
+		cmd.Stdout = vmmLogFile
+		cmd.Stderr = vmmLogFile
 
-	if err := cmd.Start(); err != nil {
-		return 0, fmt.Errorf("start cloud-hypervisor: %w", err)
+		err := cmd.Start()
+		if err == nil {
+			break
+		}
+		if !isTextFileBusyError(err) || attempt == cloudHypervisorStartRetryAttempts {
+			return 0, fmt.Errorf("start cloud-hypervisor: %w", err)
+		}
+		time.Sleep(cloudHypervisorStartRetryDelay)
 	}
 
 	pid := cmd.Process.Pid
@@ -189,6 +201,10 @@ func StartProcessWithArgs(ctx context.Context, p *paths.Paths, version CHVersion
 	}
 
 	return pid, nil
+}
+
+func isTextFileBusyError(err error) bool {
+	return errors.Is(err, syscall.ETXTBSY) || strings.Contains(strings.ToLower(err.Error()), "text file busy")
 }
 
 // isSocketInUse checks if a Unix socket is actively being used
