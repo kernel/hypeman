@@ -287,3 +287,28 @@
   - `go test -count=20 -v -tags containers_image_openpgp -run '^TestCloudHypervisorStandbyRestoreCompressionScenarios$' -timeout=90m ./lib/instances`
   - result: pass, package time `740.546s`
 - I also started a fresh-cache full-suite Deft verification run after this fix, but it was intentionally interrupted before completion when switching to commit/push.
+
+## 2026-03-25 - Follow-up CI flakes after `771018f`
+
+### Flake signatures
+- `cmd/api/api/TestCreateInstance_AutoPullImage`
+  - auto-pull failed while fetching Docker Hub auth token:
+    - `resolve manifest: fetch manifest: Get "https://auth.docker.io/token?...": context deadline exceeded`
+- `lib/builds/TestGetBuild_Found`
+  - expected `queued`, got `building`
+
+### Root causes
+- `TestCreateInstance_AutoPullImage` still used the raw Docker Hub ref instead of the API test registry mirror helper, so it depended on live Docker Hub auth latency even though CI had prewarm + local registry configured.
+- `TestGetBuild_Found` asserted the build must still be `queued`, but the queue worker can legitimately transition it to `building` before the test reads it back.
+
+### Fixes
+- `cmd/api/api/instances_test.go`
+  - switched the auto-pull image ref to `apiTestImageRef(t, "docker.io/library/alpine:latest")`
+- `lib/builds/manager_test.go`
+  - relaxed the status assertion to accept either `queued` or `building`
+
+### Validation on `deft-kernel-dev`
+- `go test -count=10 -v -tags containers_image_openpgp -run '^TestCreateInstance_AutoPullImage$' -timeout=45m ./cmd/api/api`
+  - pass, package time `28.484s`
+- `go test -count=50 -run '^TestGetBuild_Found$' ./lib/builds`
+  - pass
