@@ -1,6 +1,8 @@
 package instances
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -111,6 +113,115 @@ func TestSnapshotCompressionMetrics_RecordAndObserve(t *testing.T) {
 	assert.Equal(t, int64(1), active.DataPoints[0].Value)
 	assert.Equal(t, "lz4", metricLabel(t, active.DataPoints[0].Attributes, "algorithm"))
 	assert.Equal(t, "standby", metricLabel(t, active.DataPoints[0].Attributes, "source"))
+}
+
+func TestInstanceOldestInStateMetric_ObserveOldestAgePerState(t *testing.T) {
+	t.Parallel()
+
+	reader := otelmetric.NewManualReader()
+	provider := otelmetric.NewMeterProvider(otelmetric.WithReader(reader))
+
+	now := time.Date(2026, time.March, 25, 12, 0, 0, 0, time.UTC)
+	m := &manager{
+		paths: paths.New(t.TempDir()),
+		now:   func() time.Time { return now },
+	}
+
+	stoppedOldID := "stopped-old"
+	require.NoError(t, m.ensureDirectories(stoppedOldID))
+	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
+		Id:             stoppedOldID,
+		Name:           stoppedOldID,
+		CreatedAt:      now.Add(-2 * time.Hour),
+		DataDir:        m.paths.InstanceDir(stoppedOldID),
+		SocketPath:     m.paths.InstanceSocket(stoppedOldID, "cloud-hypervisor.sock"),
+		HypervisorType: hypervisor.TypeCloudHypervisor,
+	}}))
+
+	stoppedNewID := "stopped-new"
+	require.NoError(t, m.ensureDirectories(stoppedNewID))
+	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
+		Id:             stoppedNewID,
+		Name:           stoppedNewID,
+		CreatedAt:      now.Add(-30 * time.Minute),
+		DataDir:        m.paths.InstanceDir(stoppedNewID),
+		SocketPath:     m.paths.InstanceSocket(stoppedNewID, "cloud-hypervisor.sock"),
+		HypervisorType: hypervisor.TypeCloudHypervisor,
+	}}))
+
+	standbyOldID := "standby-old"
+	require.NoError(t, m.ensureDirectories(standbyOldID))
+	require.NoError(t, os.MkdirAll(m.paths.InstanceSnapshotLatest(standbyOldID), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(m.paths.InstanceSnapshotLatest(standbyOldID), "config.json"), []byte("{}"), 0644))
+	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
+		Id:             standbyOldID,
+		Name:           standbyOldID,
+		CreatedAt:      now.Add(-90 * time.Minute),
+		DataDir:        m.paths.InstanceDir(standbyOldID),
+		SocketPath:     m.paths.InstanceSocket(standbyOldID, "qemu.sock"),
+		HypervisorType: hypervisor.TypeQEMU,
+	}}))
+
+	standbyNewID := "standby-new"
+	require.NoError(t, m.ensureDirectories(standbyNewID))
+	require.NoError(t, os.MkdirAll(m.paths.InstanceSnapshotLatest(standbyNewID), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(m.paths.InstanceSnapshotLatest(standbyNewID), "config.json"), []byte("{}"), 0644))
+	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
+		Id:             standbyNewID,
+		Name:           standbyNewID,
+		CreatedAt:      now.Add(-45 * time.Minute),
+		DataDir:        m.paths.InstanceDir(standbyNewID),
+		SocketPath:     m.paths.InstanceSocket(standbyNewID, "qemu.sock"),
+		HypervisorType: hypervisor.TypeQEMU,
+	}}))
+
+	metrics, err := newInstanceMetrics(provider.Meter("test"), nil, m)
+	require.NoError(t, err)
+	m.metrics = metrics
+
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(t.Context(), &rm))
+
+	assertMetricNames(t, rm, []string{
+		"hypeman_instances_total",
+		"hypeman_instances_oldest_in_state_seconds",
+	})
+
+	countsMetric := findMetric(t, rm, "hypeman_instances_total")
+	counts, ok := countsMetric.Data.(metricdata.Gauge[int64])
+	require.True(t, ok)
+	require.Len(t, counts.DataPoints, 2)
+
+	for _, point := range counts.DataPoints {
+		state := metricLabel(t, point.Attributes, "state")
+		hypervisorType := metricLabel(t, point.Attributes, "hypervisor")
+		switch {
+		case state == string(StateStopped) && hypervisorType == string(hypervisor.TypeCloudHypervisor):
+			assert.Equal(t, int64(2), point.Value)
+		case state == string(StateStandby) && hypervisorType == string(hypervisor.TypeQEMU):
+			assert.Equal(t, int64(2), point.Value)
+		default:
+			t.Fatalf("unexpected count datapoint state=%s hypervisor=%s", state, hypervisorType)
+		}
+	}
+
+	oldestMetric := findMetric(t, rm, "hypeman_instances_oldest_in_state_seconds")
+	oldest, ok := oldestMetric.Data.(metricdata.Gauge[float64])
+	require.True(t, ok)
+	require.Len(t, oldest.DataPoints, 2)
+
+	for _, point := range oldest.DataPoints {
+		state := metricLabel(t, point.Attributes, "state")
+		hypervisorType := metricLabel(t, point.Attributes, "hypervisor")
+		switch {
+		case state == string(StateStopped) && hypervisorType == string(hypervisor.TypeCloudHypervisor):
+			assert.InDelta(t, (2 * time.Hour).Seconds(), point.Value, 0.001)
+		case state == string(StateStandby) && hypervisorType == string(hypervisor.TypeQEMU):
+			assert.InDelta(t, (90 * time.Minute).Seconds(), point.Value, 0.001)
+		default:
+			t.Fatalf("unexpected oldest-age datapoint state=%s hypervisor=%s", state, hypervisorType)
+		}
+	}
 }
 
 func assertMetricNames(t *testing.T, rm metricdata.ResourceMetrics, expected []string) {
