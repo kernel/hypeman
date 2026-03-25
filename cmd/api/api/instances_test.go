@@ -64,7 +64,7 @@ func TestCreateInstance_AutoPullImage(t *testing.T) {
 	createReq := oapi.CreateInstanceRequestObject{
 		Body: &oapi.CreateInstanceRequest{
 			Name:  "test-auto-pull",
-				Image: apiTestImageRef(t, "docker.io/library/alpine:latest"),
+			Image: apiTestImageRef(t, "docker.io/library/alpine:latest"),
 			Network: &struct {
 				BandwidthDownload *string                                  `json:"bandwidth_download,omitempty"`
 				BandwidthUpload   *string                                  `json:"bandwidth_upload,omitempty"`
