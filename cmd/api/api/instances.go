@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/c2h5oh/datasize"
 	"github.com/kernel/hypeman/lib/guest"
@@ -410,6 +411,149 @@ func vmStatsToOAPI(s *vm_metrics.VMStats) oapi.InstanceStats {
 		MemoryUtilizationRatio: s.MemoryUtilizationRatio(),
 	}
 	return stats
+}
+
+const (
+	waitForStateDefaultTimeout = 60 * time.Second
+	waitForStateMaxTimeout     = 5 * time.Minute
+	waitForStatePollInterval   = 1 * time.Second
+)
+
+// validWaitTargetStates is the set of states callers may wait for.
+var validWaitTargetStates = map[oapi.InstanceState]bool{
+	oapi.InstanceStateCreated:      true,
+	oapi.InstanceStateInitializing: true,
+	oapi.InstanceStateRunning:      true,
+	oapi.InstanceStatePaused:       true,
+	oapi.InstanceStateShutdown:     true,
+	oapi.InstanceStateStopped:      true,
+	oapi.InstanceStateStandby:      true,
+}
+
+// WaitForInstanceState blocks until an instance reaches the target state,
+// the timeout expires, or a terminal/error state is detected.
+// The id parameter can be an instance ID, name, or ID prefix.
+// Note: Resolution is handled by ResolveResource middleware.
+func (s *ApiService) WaitForInstanceState(ctx context.Context, request oapi.WaitForInstanceStateRequestObject) (oapi.WaitForInstanceStateResponseObject, error) {
+	inst := mw.GetResolvedInstance[instances.Instance](ctx)
+	if inst == nil {
+		return oapi.WaitForInstanceState500JSONResponse{
+			Code:    "internal_error",
+			Message: "resource not resolved",
+		}, nil
+	}
+	log := logger.FromContext(ctx)
+
+	targetState := request.Params.State
+	if !validWaitTargetStates[targetState] {
+		return oapi.WaitForInstanceState400JSONResponse{
+			Code:    "invalid_state",
+			Message: fmt.Sprintf("invalid target state: %s", targetState),
+		}, nil
+	}
+
+	timeout := waitForStateDefaultTimeout
+	if request.Params.Timeout != nil && *request.Params.Timeout != "" {
+		parsed, err := time.ParseDuration(*request.Params.Timeout)
+		if err != nil {
+			return oapi.WaitForInstanceState400JSONResponse{
+				Code:    "invalid_timeout",
+				Message: fmt.Sprintf("invalid timeout format: %v", err),
+			}, nil
+		}
+		if parsed <= 0 {
+			return oapi.WaitForInstanceState400JSONResponse{
+				Code:    "invalid_timeout",
+				Message: "timeout must be positive",
+			}, nil
+		}
+		if parsed > waitForStateMaxTimeout {
+			parsed = waitForStateMaxTimeout
+		}
+		timeout = parsed
+	}
+
+	// Check if already in the target state
+	if oapi.InstanceState(inst.State) == targetState {
+		return oapi.WaitForInstanceState200JSONResponse{
+			State:      oapi.InstanceState(inst.State),
+			StateError: inst.StateError,
+			TimedOut:   false,
+		}, nil
+	}
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	ticker := time.NewTicker(waitForStatePollInterval)
+	defer ticker.Stop()
+
+	instanceID := inst.Id
+
+	for {
+		select {
+		case <-ctx.Done():
+			// Client disconnected
+			return oapi.WaitForInstanceState200JSONResponse{
+				State:    oapi.InstanceState(inst.State),
+				TimedOut: true,
+			}, nil
+		case <-timer.C:
+			// Timeout expired — fetch latest state for the response
+			latest, err := s.InstanceManager.GetInstance(ctx, instanceID)
+			if err != nil {
+				log.ErrorContext(ctx, "failed to get instance during wait timeout", "error", err)
+				return oapi.WaitForInstanceState200JSONResponse{
+					State:    oapi.InstanceState(inst.State),
+					TimedOut: true,
+				}, nil
+			}
+			return oapi.WaitForInstanceState200JSONResponse{
+				State:      oapi.InstanceState(latest.State),
+				StateError: latest.StateError,
+				TimedOut:   true,
+			}, nil
+		case <-ticker.C:
+			latest, err := s.InstanceManager.GetInstance(ctx, instanceID)
+			if err != nil {
+				if errors.Is(err, instances.ErrNotFound) {
+					return oapi.WaitForInstanceState404JSONResponse{
+						Code:    "not_found",
+						Message: "instance was deleted while waiting",
+					}, nil
+				}
+				log.ErrorContext(ctx, "failed to get instance during wait poll", "error", err)
+				continue
+			}
+			inst = latest
+
+			// Target state reached
+			if oapi.InstanceState(latest.State) == targetState {
+				return oapi.WaitForInstanceState200JSONResponse{
+					State:      oapi.InstanceState(latest.State),
+					StateError: latest.StateError,
+					TimedOut:   false,
+				}, nil
+			}
+
+			// Terminal state — instance won't change further
+			if latest.State == instances.StateStopped && targetState != oapi.InstanceStateStopped {
+				return oapi.WaitForInstanceState200JSONResponse{
+					State:      oapi.InstanceState(latest.State),
+					StateError: latest.StateError,
+					TimedOut:   false,
+				}, nil
+			}
+
+			// Unknown state — something is wrong, return immediately
+			if latest.State == instances.StateUnknown {
+				return oapi.WaitForInstanceState200JSONResponse{
+					State:      oapi.InstanceState(latest.State),
+					StateError: latest.StateError,
+					TimedOut:   false,
+				}, nil
+			}
+		}
+	}
 }
 
 // DeleteInstance stops and deletes an instance
