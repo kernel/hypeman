@@ -29,7 +29,7 @@ func (s *successfulGETSampler) ShouldSample(params sdktrace.SamplingParameters) 
 }
 
 func (s *successfulGETSampler) Description() string {
-	return fmt.Sprintf("ParentBased{successful_get_ratio=%.4f}", s.ratio)
+	return fmt.Sprintf("successfulGETSampler{ratio=%.4f}", s.ratio)
 }
 
 func httpMethodFromAttrs(attrs []attribute.KeyValue) string {
