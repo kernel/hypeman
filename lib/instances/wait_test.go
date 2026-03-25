@@ -156,3 +156,28 @@ func TestWaitForState_TerminalViaSubscription(t *testing.T) {
 	assert.Equal(t, StateStopped, result.State)
 	assert.False(t, result.TimedOut)
 }
+
+func TestWaitForState_ShutdownIsTerminal(t *testing.T) {
+	t.Parallel()
+	subs := newSubscribers()
+	mgr := &stubManager{subs: subs}
+
+	inst := &Instance{}
+	inst.Id = "test-shutdown"
+	inst.State = StateInitializing
+
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		subs.Notify("test-shutdown", StateChange{State: StateShutdown})
+	}()
+
+	start := time.Now()
+	result, err := WaitForState(context.Background(), mgr, inst, StateRunning, 30*time.Second)
+	elapsed := time.Since(start)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, StateShutdown, result.State)
+	assert.False(t, result.TimedOut)
+	assert.Less(t, elapsed, 2*time.Second, "shutdown should be detected as terminal immediately")
+}

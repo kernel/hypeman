@@ -132,7 +132,7 @@ Any State → Stopped
 
 ## WaitForState (wait.go, subscribe.go)
 
-Waits for an instance to reach a target state using channel-based subscriptions with a polling fallback. State-changing manager methods (create, start, stop, standby, restore, fork, delete) broadcast via `notifyStateChange`, which fans out to subscriber channels. `WaitForState` uses a 3-way select: subscription events, 5s polling fallback (logs a warning if it detects the state change, indicating a missed subscription event), and context cancellation/timeout. Returns early on terminal (`Stopped`, `Standby`) or error (`Unknown`) states. Used by `GET /instances/{id}/wait`.
+Waits for an instance to reach a target state using channel-based subscriptions with a polling fallback. State-changing manager methods (start, stop, standby, restore, fork, delete) broadcast via `notifyStateChange`, which fans out to subscriber channels. `WaitForState` uses a 3-way select: subscription events, 5s polling fallback (logs at debug level if it detects the state change), and context cancellation/timeout. Returns early on terminal (`Stopped`, `Standby`, `Shutdown`) or error (`Unknown`) states. Used by `GET /instances/{id}/wait`.
 
 ## Reference Handling
 
