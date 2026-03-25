@@ -112,10 +112,9 @@ func WaitForState(ctx context.Context, mgr Manager, inst *Instance, targetState 
 			latest = got
 
 			if latest.State == targetState {
-				log.WarnContext(ctx, "waitForState: state change detected via polling fallback, subscription may have missed event",
+				log.DebugContext(ctx, "waitForState: state change detected via polling fallback",
 					slog.String("instance_id", id),
 					slog.String("target_state", string(targetState)),
-					slog.String("current_state", string(latest.State)),
 				)
 				return &WaitForStateResult{
 					State:      latest.State,
@@ -124,7 +123,7 @@ func WaitForState(ctx context.Context, mgr Manager, inst *Instance, targetState 
 			}
 
 			if isTerminalForWait(latest.State, targetState) {
-				log.WarnContext(ctx, "waitForState: terminal state detected via polling fallback, subscription may have missed event",
+				log.DebugContext(ctx, "waitForState: terminal state detected via polling fallback",
 					slog.String("instance_id", id),
 					slog.String("target_state", string(targetState)),
 					slog.String("current_state", string(latest.State)),
