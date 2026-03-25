@@ -264,3 +264,26 @@
 ### Verification note
 - One intermediate Deft rerun failed before tests because the remote scratch workspace had stray untracked files at repo-root `lib/` (`client.go`, `exec_test.go`, `qemu_test.go`) that created a mixed-package directory.
 - After removing those remote-only artifacts, the same fresh-cache full-suite gate passed twice.
+
+## 2026-03-25 - Follow-up flake: CH compression standby/restore exec reset
+
+### Flake signature
+- `TestCloudHypervisorStandbyRestoreCompressionScenarios`
+  - failure while writing a guest marker before standby:
+    - `receive response (stdout=0, stderr=0): rpc error: code = DeadlineExceeded desc = stream terminated by RST_STREAM with error code: CANCEL`
+
+### Root cause
+- Standby/restore keeps the same guest-agent vsock identity for Cloud Hypervisor (`ch:<vsock-socket-path>`), and guest gRPC connections are pooled by that key.
+- `standbyInstance` did not evict the pooled guest-agent connection when the VM transitioned to `Standby`, so post-restore execs could briefly reuse a connection tied to the dead pre-standby VM.
+- That stale-connection reuse is consistent with the observed one-shot gRPC stream reset in `writeGuestMarker`.
+
+### Fix
+- `lib/instances/standby.go`
+  - after shutting down the hypervisor and cleaning stale vsock sockets, explicitly remove the pooled guest-agent connection with `guest.CloseConn(dialer.Key())`
+  - this forces restore-time execs to establish a fresh gRPC connection against the resumed VM
+
+### Validation on `deft-kernel-dev`
+- Targeted stress:
+  - `go test -count=20 -v -tags containers_image_openpgp -run '^TestCloudHypervisorStandbyRestoreCompressionScenarios$' -timeout=90m ./lib/instances`
+  - result: pass, package time `740.546s`
+- I also started a fresh-cache full-suite Deft verification run after this fix, but it was intentionally interrupted before completion when switching to commit/push.
