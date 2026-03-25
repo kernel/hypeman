@@ -27,6 +27,10 @@ type WaitForStateResult struct {
 // expires, or the context is cancelled. A polling fallback (every 5s) guards
 // against missed subscription events.
 func WaitForState(ctx context.Context, mgr Manager, inst *Instance, targetState State, timeout time.Duration) (*WaitForStateResult, error) {
+	// Subscribe first to avoid missing events between initial check and loop.
+	ch, unsub := mgr.Subscribe(inst.Id)
+	defer unsub()
+
 	// Already in target state — return immediately.
 	if inst.State == targetState {
 		return &WaitForStateResult{
@@ -42,9 +46,6 @@ func WaitForState(ctx context.Context, mgr Manager, inst *Instance, targetState 
 			StateError: inst.StateError,
 		}, nil
 	}
-
-	ch, unsub := mgr.Subscribe(inst.Id)
-	defer unsub()
 
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()

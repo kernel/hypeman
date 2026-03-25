@@ -243,11 +243,7 @@ func (m *manager) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 	// 1. ULID generation is unique
 	// 2. Filesystem mkdir is atomic per instance directory
 	// 3. Concurrent creates of different instances don't conflict
-	inst, err := m.createInstance(ctx, req)
-	if err == nil {
-		m.notifyStateChange(inst.Id, inst)
-	}
-	return inst, err
+	return m.createInstance(ctx, req)
 }
 
 // DeleteInstance stops and deletes an instance
@@ -309,16 +305,11 @@ func (m *manager) ForkInstance(ctx context.Context, id string, req ForkInstanceR
 			return nil, fmt.Errorf("wait for fork guest agent readiness: %w", err)
 		}
 	}
-	m.notifyStateChange(inst.Id, inst)
 	return inst, nil
 }
 
 func (m *manager) ForkSnapshot(ctx context.Context, snapshotID string, req ForkSnapshotRequest) (*Instance, error) {
-	inst, err := m.forkSnapshot(ctx, snapshotID, req)
-	if err == nil {
-		m.notifyStateChange(inst.Id, inst)
-	}
-	return inst, err
+	return m.forkSnapshot(ctx, snapshotID, req)
 }
 
 // StandbyInstance puts an instance in standby (pause, snapshot, delete VMM)
