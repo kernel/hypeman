@@ -2,6 +2,7 @@ package instances
 
 import (
 	"context"
+	"strconv"
 	"time"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
@@ -66,6 +67,7 @@ type Metrics struct {
 	standbyDuration                      metric.Float64Histogram
 	stopDuration                         metric.Float64Histogram
 	startDuration                        metric.Float64Histogram
+	timeToRunning                        metric.Float64Histogram
 	stateTransitions                     metric.Int64Counter
 	snapshotCompressionJobsTotal         metric.Int64Counter
 	snapshotCompressionDuration          metric.Float64Histogram
@@ -119,6 +121,15 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 	startDuration, err := meter.Float64Histogram(
 		"hypeman_instances_start_duration_seconds",
 		metric.WithDescription("Time to start an instance"),
+		metric.WithUnit("s"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	timeToRunning, err := meter.Float64Histogram(
+		"hypeman_instances_time_to_running_seconds",
+		metric.WithDescription("Time from boot start until an instance reaches Running"),
 		metric.WithUnit("s"),
 	)
 	if err != nil {
@@ -318,6 +329,7 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 		standbyDuration:                      standbyDuration,
 		stopDuration:                         stopDuration,
 		startDuration:                        startDuration,
+		timeToRunning:                        timeToRunning,
 		stateTransitions:                     stateTransitions,
 		snapshotCompressionJobsTotal:         snapshotCompressionJobsTotal,
 		snapshotCompressionDuration:          snapshotCompressionDuration,
@@ -353,6 +365,77 @@ func (m *manager) recordDuration(ctx context.Context, histogram metric.Float64Hi
 		attrs = append(attrs, attribute.String("hypervisor", string(hvType)))
 	}
 	histogram.Record(ctx, duration, metric.WithAttributes(attrs...))
+}
+
+func compressionMetricAttributes(cfg *snapshotstore.SnapshotCompressionConfig) []attribute.KeyValue {
+	algorithm := "none"
+	level := "none"
+	if cfg != nil && cfg.Enabled {
+		if cfg.Algorithm != "" {
+			algorithm = string(cfg.Algorithm)
+		} else {
+			algorithm = "unknown"
+		}
+		if cfg.Level != nil {
+			level = strconv.Itoa(*cfg.Level)
+		} else {
+			level = "unknown"
+		}
+	}
+	return []attribute.KeyValue{
+		attribute.String("algorithm", algorithm),
+		attribute.String("level", level),
+	}
+}
+
+func (m *manager) recordDurationWithCompression(ctx context.Context, histogram metric.Float64Histogram, start time.Time, status string, hvType hypervisor.Type, compression *snapshotstore.SnapshotCompressionConfig) {
+	if m.metrics == nil {
+		return
+	}
+	duration := time.Since(start).Seconds()
+	attrs := []attribute.KeyValue{
+		attribute.String("status", status),
+	}
+	if hvType != "" {
+		attrs = append(attrs, attribute.String("hypervisor", string(hvType)))
+	}
+	attrs = append(attrs, compressionMetricAttributes(compression)...)
+	histogram.Record(ctx, duration, metric.WithAttributes(attrs...))
+}
+
+func timeToRunningReadyAt(stored *StoredMetadata) *time.Time {
+	if stored == nil || stored.ProgramStartedAt == nil {
+		return nil
+	}
+	if stored.SkipGuestAgent || stored.GuestAgentReadyAt == nil {
+		return stored.ProgramStartedAt
+	}
+	if stored.GuestAgentReadyAt.After(*stored.ProgramStartedAt) {
+		return stored.GuestAgentReadyAt
+	}
+	return stored.ProgramStartedAt
+}
+
+func (m *manager) recordTimeToRunning(ctx context.Context, stored *StoredMetadata) {
+	if m.metrics == nil || stored == nil || stored.StartedAt == nil {
+		return
+	}
+
+	readyAt := timeToRunningReadyAt(stored)
+	if readyAt == nil {
+		return
+	}
+
+	duration := readyAt.UTC().Sub(stored.StartedAt.UTC()).Seconds()
+	if duration < 0 {
+		duration = 0
+	}
+
+	attrs := []attribute.KeyValue{}
+	if stored.HypervisorType != "" {
+		attrs = append(attrs, attribute.String("hypervisor", string(stored.HypervisorType)))
+	}
+	m.metrics.timeToRunning.Record(ctx, duration, metric.WithAttributes(attrs...))
 }
 
 // recordStateTransition records a state transition with hypervisor label.
