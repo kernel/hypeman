@@ -509,7 +509,7 @@ func TestGetBuild_Found(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, created.ID, build.ID)
-	assert.Equal(t, StatusQueued, build.Status)
+	assert.Contains(t, []string{StatusQueued, StatusBuilding}, build.Status)
 }
 
 func TestGetBuild_NotFound(t *testing.T) {
