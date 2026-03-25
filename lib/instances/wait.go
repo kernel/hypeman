@@ -64,7 +64,7 @@ func WaitForState(ctx context.Context, mgr Manager, inst *Instance, targetState 
 			return &WaitForStateResult{
 				State:      latest.State,
 				StateError: latest.StateError,
-				TimedOut:   true,
+				TimedOut:   latest.State != targetState,
 			}, nil
 
 		case <-ticker.C:
