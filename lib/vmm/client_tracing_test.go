@@ -72,3 +72,71 @@ func TestMetricsRoundTripperCreatesTraceSpan(t *testing.T) {
 	assert.Equal(t, "PUT /api/v1/vm.resume", attrs["operation"])
 	assert.Equal(t, "204", attrs["http.status_code"])
 }
+
+func TestMetricsRoundTripperSkipsVMInfoTraceByDefault(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	previous := otel.GetTracerProvider()
+	otel.SetTracerProvider(provider)
+	t.Cleanup(func() {
+		otel.SetTracerProvider(previous)
+		_ = provider.Shutdown(context.Background())
+	})
+
+	rt := &metricsRoundTripper{
+		base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Status:     "200 OK",
+				Body:       io.NopCloser(strings.NewReader(`{}`)),
+			}, nil
+		}),
+		tracer: otel.Tracer("hypeman/vmm"),
+	}
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://localhost/api/v1/vm.info", nil)
+	require.NoError(t, err)
+
+	_, err = rt.RoundTrip(req)
+	require.NoError(t, err)
+
+	for _, span := range recorder.Ended() {
+		if span.Name() == "hypervisor.http GET /api/v1/vm.info" {
+			t.Fatalf("expected vm.info trace span to be suppressed by default")
+		}
+	}
+}
+
+func TestMetricsRoundTripperSkipsVMInfoTraceOnErrors(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	previous := otel.GetTracerProvider()
+	otel.SetTracerProvider(provider)
+	t.Cleanup(func() {
+		otel.SetTracerProvider(previous)
+		_ = provider.Shutdown(context.Background())
+	})
+
+	rt := &metricsRoundTripper{
+		base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusInternalServerError,
+				Status:     "500 Internal Server Error",
+				Body:       io.NopCloser(strings.NewReader("boom")),
+			}, nil
+		}),
+		tracer: otel.Tracer("hypeman/vmm"),
+	}
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://localhost/api/v1/vm.info", nil)
+	require.NoError(t, err)
+
+	_, err = rt.RoundTrip(req)
+	require.NoError(t, err)
+
+	for _, span := range recorder.Ended() {
+		if span.Name() == "hypervisor.http GET /api/v1/vm.info" {
+			t.Fatalf("expected vm.info trace span to stay suppressed even on errors")
+		}
+	}
+}

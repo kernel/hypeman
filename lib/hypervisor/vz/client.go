@@ -145,33 +145,52 @@ func (c *Client) doGet(ctx context.Context, path string) ([]byte, error) {
 		attribute.String("http.method", http.MethodGet),
 		attribute.String("http.route", path),
 	)
-	ctx, span := otel.Tracer("hypeman/hypervisor/vz").Start(ctx, "hypervisor.http GET "+path, trace.WithAttributes(attrs...))
-	defer span.End()
+	tracer := otel.Tracer("hypeman/hypervisor/vz")
+	spanName := "hypervisor.http GET " + path
+	shouldTrace := hypervisor.ShouldTraceHypervisorHTTPSpan(http.MethodGet, path)
+
+	var span trace.Span
+	if shouldTrace {
+		var spanCtx context.Context
+		spanCtx, span = tracer.Start(ctx, spanName, trace.WithAttributes(attrs...))
+		ctx = spanCtx
+		defer span.End()
+	}
+
+	recordError := func(err error) {
+		if shouldTrace {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+		}
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://vz-shim"+path, nil)
 	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
+		recordError(err)
 		return nil, err
 	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
+		recordError(err)
 		return nil, err
 	}
 	defer resp.Body.Close()
-	span.SetAttributes(attribute.Int("http.status_code", resp.StatusCode))
+	if shouldTrace {
+		span.SetAttributes(attribute.Int("http.status_code", resp.StatusCode))
+	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
+		recordError(err)
 		return nil, err
 	}
 	if resp.StatusCode >= http.StatusBadRequest {
-		span.SetStatus(codes.Error, resp.Status)
+		if shouldTrace {
+			span.SetStatus(codes.Error, resp.Status)
+		}
 	} else {
-		span.SetStatus(codes.Ok, "")
+		if shouldTrace {
+			span.SetStatus(codes.Ok, "")
+		}
 	}
 	return body, nil
 }

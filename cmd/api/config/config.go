@@ -106,12 +106,13 @@ type MetricsConfig struct {
 
 // OtelConfig holds OpenTelemetry settings.
 type OtelConfig struct {
-	Enabled              bool   `koanf:"enabled"`
-	Endpoint             string `koanf:"endpoint"`
-	ServiceName          string `koanf:"service_name"`
-	ServiceInstanceID    string `koanf:"service_instance_id"`
-	Insecure             bool   `koanf:"insecure"`
-	MetricExportInterval string `koanf:"metric_export_interval"`
+	Enabled                  bool    `koanf:"enabled"`
+	Endpoint                 string  `koanf:"endpoint"`
+	ServiceName              string  `koanf:"service_name"`
+	ServiceInstanceID        string  `koanf:"service_instance_id"`
+	Insecure                 bool    `koanf:"insecure"`
+	MetricExportInterval     string  `koanf:"metric_export_interval"`
+	SuccessfulGetSampleRatio float64 `koanf:"successful_get_sample_ratio"`
 }
 
 // LoggingConfig holds log rotation and level settings.
@@ -302,12 +303,13 @@ func defaultConfig() *Config {
 		},
 
 		Otel: OtelConfig{
-			Enabled:              false,
-			Endpoint:             "127.0.0.1:4317",
-			ServiceName:          "hypeman",
-			ServiceInstanceID:    getHostname(),
-			Insecure:             true,
-			MetricExportInterval: "60s",
+			Enabled:                  false,
+			Endpoint:                 "127.0.0.1:4317",
+			ServiceName:              "hypeman",
+			ServiceInstanceID:        getHostname(),
+			Insecure:                 true,
+			MetricExportInterval:     "60s",
+			SuccessfulGetSampleRatio: 0.1,
 		},
 
 		Logging: LoggingConfig{
@@ -478,6 +480,9 @@ func (c *Config) Validate() error {
 		if _, err := time.ParseDuration(c.Otel.MetricExportInterval); err != nil {
 			return fmt.Errorf("otel.metric_export_interval must be a valid duration, got %q: %w", c.Otel.MetricExportInterval, err)
 		}
+	}
+	if c.Otel.SuccessfulGetSampleRatio < 0 || c.Otel.SuccessfulGetSampleRatio > 1 {
+		return fmt.Errorf("otel.successful_get_sample_ratio must be between 0 and 1, got %v", c.Otel.SuccessfulGetSampleRatio)
 	}
 	if c.Oversubscription.CPU <= 0 {
 		return fmt.Errorf("oversubscription.cpu must be positive, got %v", c.Oversubscription.CPU)
