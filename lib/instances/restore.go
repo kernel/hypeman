@@ -14,6 +14,7 @@ import (
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/network"
+	snapshotstore "github.com/kernel/hypeman/lib/snapshot"
 	"go.opentelemetry.io/otel/attribute"
 )
 
@@ -69,6 +70,7 @@ func (m *manager) restoreInstance(
 
 	// 3. Get snapshot directory
 	snapshotDir := m.paths.InstanceSnapshotLatest(id)
+	restoreCompression := m.restoreCompressionConfigForMetrics(stored, snapshotDir)
 	prepareSnapshotCtx, prepareSnapshotSpanEnd := m.startLifecycleStep(ctx, "prepare_snapshot_memory",
 		attribute.String("instance_id", id),
 		attribute.String("hypervisor", string(stored.HypervisorType)),
@@ -296,11 +298,34 @@ func (m *manager) restoreInstance(
 	finalInst := m.toInstanceWithoutHydration(ctx, meta)
 	// Record metrics
 	if m.metrics != nil {
-		m.recordDuration(ctx, m.metrics.restoreDuration, start, "success", stored.HypervisorType)
+		m.recordDurationWithCompression(ctx, m.metrics.restoreDuration, start, "success", stored.HypervisorType, restoreCompression)
 		m.recordStateTransition(ctx, string(StateStandby), string(finalInst.State), stored.HypervisorType)
 	}
 	log.InfoContext(ctx, "instance restored successfully", "instance_id", id, "state", finalInst.State)
 	return &finalInst, nil
+}
+
+func (m *manager) restoreCompressionConfigForMetrics(stored *StoredMetadata, snapshotDir string) *snapshotstore.SnapshotCompressionConfig {
+	_, algorithm, ok := findCompressedSnapshotMemoryFile(snapshotDir)
+	if !ok {
+		return nil
+	}
+
+	cfg := snapshotstore.SnapshotCompressionConfig{
+		Enabled:   true,
+		Algorithm: algorithm,
+	}
+	if stored == nil {
+		return &cfg
+	}
+
+	policy, err := m.resolveSnapshotCompressionPolicy(stored, nil)
+	if err != nil || !policy.Enabled {
+		return &cfg
+	}
+
+	resolved := compressionMetadataForExistingArtifact(policy, algorithm)
+	return &resolved
 }
 
 // restoreFromSnapshot starts the hypervisor and restores from snapshot

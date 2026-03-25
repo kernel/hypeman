@@ -224,6 +224,120 @@ func TestInstanceOldestInStateMetric_ObserveOldestAgePerState(t *testing.T) {
 	}
 }
 
+func TestInstanceTimeToRunningMetric_RecordWhenBootMarkersPersisted(t *testing.T) {
+	t.Parallel()
+
+	reader := otelmetric.NewManualReader()
+	provider := otelmetric.NewMeterProvider(otelmetric.WithReader(reader))
+
+	tmpDir := t.TempDir()
+	m := &manager{
+		paths: paths.New(tmpDir),
+	}
+
+	metrics, err := newInstanceMetrics(provider.Meter("test"), nil, m)
+	require.NoError(t, err)
+	m.metrics = metrics
+
+	id := "time-to-running-instance"
+	require.NoError(t, m.ensureDirectories(id))
+
+	bootStart := time.Date(2026, time.March, 25, 12, 0, 0, 0, time.UTC)
+	programStartedAt := bootStart.Add(2 * time.Second)
+	guestAgentReadyAt := bootStart.Add(3500 * time.Millisecond)
+
+	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
+		Id:             id,
+		Name:           id,
+		DataDir:        m.paths.InstanceDir(id),
+		SocketPath:     m.paths.InstanceSocket(id, "cloud-hypervisor.sock"),
+		StartedAt:      &bootStart,
+		HypervisorType: hypervisor.TypeCloudHypervisor,
+	}}))
+
+	logPath := m.paths.InstanceAppLog(id)
+	require.NoError(t, os.MkdirAll(filepath.Dir(logPath), 0o755))
+	require.NoError(t, os.WriteFile(logPath, []byte(
+		"HYPEMAN-PROGRAM-START ts="+programStartedAt.Format(time.RFC3339Nano)+" mode=exec\n"+
+			"HYPEMAN-AGENT-READY ts="+guestAgentReadyAt.Format(time.RFC3339Nano)+"\n",
+	), 0o644))
+	require.NoError(t, os.Chtimes(logPath, bootStart.Add(time.Second), bootStart.Add(time.Second)))
+
+	m.persistBootMarkers(t.Context(), id)
+
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(t.Context(), &rm))
+
+	assertMetricNames(t, rm, []string{
+		"hypeman_instances_time_to_running_seconds",
+	})
+
+	timeToRunningMetric := findMetric(t, rm, "hypeman_instances_time_to_running_seconds")
+	timeToRunning, ok := timeToRunningMetric.Data.(metricdata.Histogram[float64])
+	require.True(t, ok)
+	require.Len(t, timeToRunning.DataPoints, 1)
+	assert.Equal(t, uint64(1), timeToRunning.DataPoints[0].Count)
+	assert.InDelta(t, 3.5, timeToRunning.DataPoints[0].Sum, 0.001)
+	assert.Equal(t, "cloud-hypervisor", metricLabel(t, timeToRunning.DataPoints[0].Attributes, "hypervisor"))
+}
+
+func TestLifecycleDurationMetrics_RecordCompressionLabels(t *testing.T) {
+	t.Parallel()
+
+	reader := otelmetric.NewManualReader()
+	provider := otelmetric.NewMeterProvider(otelmetric.WithReader(reader))
+
+	m := &manager{
+		paths: paths.New(t.TempDir()),
+	}
+	metrics, err := newInstanceMetrics(provider.Meter("test"), nil, m)
+	require.NoError(t, err)
+	m.metrics = metrics
+
+	level := 3
+	m.recordDurationWithCompression(
+		t.Context(),
+		m.metrics.restoreDuration,
+		time.Now().Add(-150*time.Millisecond),
+		"success",
+		hypervisor.TypeCloudHypervisor,
+		&snapshotstore.SnapshotCompressionConfig{
+			Enabled:   true,
+			Algorithm: snapshotstore.SnapshotCompressionAlgorithmZstd,
+			Level:     &level,
+		},
+	)
+	m.recordDurationWithCompression(
+		t.Context(),
+		m.metrics.standbyDuration,
+		time.Now().Add(-100*time.Millisecond),
+		"success",
+		hypervisor.TypeQEMU,
+		nil,
+	)
+
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(t.Context(), &rm))
+
+	restoreMetric := findMetric(t, rm, "hypeman_instances_restore_duration_seconds")
+	restore, ok := restoreMetric.Data.(metricdata.Histogram[float64])
+	require.True(t, ok)
+	require.Len(t, restore.DataPoints, 1)
+	assert.Equal(t, "success", metricLabel(t, restore.DataPoints[0].Attributes, "status"))
+	assert.Equal(t, "cloud-hypervisor", metricLabel(t, restore.DataPoints[0].Attributes, "hypervisor"))
+	assert.Equal(t, "zstd", metricLabel(t, restore.DataPoints[0].Attributes, "algorithm"))
+	assert.Equal(t, "3", metricLabel(t, restore.DataPoints[0].Attributes, "level"))
+
+	standbyMetric := findMetric(t, rm, "hypeman_instances_standby_duration_seconds")
+	standby, ok := standbyMetric.Data.(metricdata.Histogram[float64])
+	require.True(t, ok)
+	require.Len(t, standby.DataPoints, 1)
+	assert.Equal(t, "success", metricLabel(t, standby.DataPoints[0].Attributes, "status"))
+	assert.Equal(t, "qemu", metricLabel(t, standby.DataPoints[0].Attributes, "hypervisor"))
+	assert.Equal(t, "none", metricLabel(t, standby.DataPoints[0].Attributes, "algorithm"))
+	assert.Equal(t, "none", metricLabel(t, standby.DataPoints[0].Attributes, "level"))
+}
+
 func assertMetricNames(t *testing.T, rm metricdata.ResourceMetrics, expected []string) {
 	t.Helper()
 
