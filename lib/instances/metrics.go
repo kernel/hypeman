@@ -209,6 +209,15 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 		return nil, err
 	}
 
+	oldestInStateSeconds, err := meter.Float64ObservableGauge(
+		"hypeman_instances_oldest_in_state_seconds",
+		metric.WithDescription("Age in seconds since creation of the oldest instance currently in each state"),
+		metric.WithUnit("s"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
 	snapshotCompressionActiveTotal, err := meter.Int64ObservableGauge(
 		"hypeman_snapshot_compression_active_total",
 		metric.WithDescription("Total number of in-flight snapshot compression jobs"),
@@ -229,23 +238,37 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 				hypervisor string
 			}
 			counts := make(map[stateHypervisor]int64)
+			oldestAgeSeconds := make(map[stateHypervisor]float64)
+			now := m.nowUTC()
 			for _, inst := range instances {
 				key := stateHypervisor{
 					state:      string(inst.State),
 					hypervisor: string(inst.HypervisorType),
 				}
 				counts[key]++
+				if inst.CreatedAt.IsZero() {
+					continue
+				}
+				ageSeconds := now.Sub(inst.CreatedAt.UTC()).Seconds()
+				if ageSeconds < 0 {
+					ageSeconds = 0
+				}
+				if ageSeconds > oldestAgeSeconds[key] {
+					oldestAgeSeconds[key] = ageSeconds
+				}
 			}
 			for key, count := range counts {
-				o.ObserveInt64(instancesTotal, count,
-					metric.WithAttributes(
-						attribute.String("state", key.state),
-						attribute.String("hypervisor", key.hypervisor),
-					))
+				attrs := []attribute.KeyValue{
+					attribute.String("state", key.state),
+					attribute.String("hypervisor", key.hypervisor),
+				}
+				o.ObserveInt64(instancesTotal, count, metric.WithAttributes(attrs...))
+				o.ObserveFloat64(oldestInStateSeconds, oldestAgeSeconds[key], metric.WithAttributes(attrs...))
 			}
 			return nil
 		},
 		instancesTotal,
+		oldestInStateSeconds,
 	)
 	if err != nil {
 		return nil, err
