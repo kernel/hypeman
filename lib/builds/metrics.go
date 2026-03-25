@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	hypotel "github.com/kernel/hypeman/lib/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 )
@@ -22,6 +23,7 @@ func NewMetrics(meter metric.Meter) (*Metrics, error) {
 		"hypeman_build_duration_seconds",
 		metric.WithDescription("Duration of builds in seconds"),
 		metric.WithUnit("s"),
+		metric.WithExplicitBucketBoundaries(hypotel.BuildDurationHistogramBuckets()...),
 	)
 	if err != nil {
 		return nil, err

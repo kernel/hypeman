@@ -6,6 +6,7 @@ import (
 	"syscall"
 	"time"
 
+	hypotel "github.com/kernel/hypeman/lib/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 )
@@ -21,6 +22,7 @@ func newVolumeMetrics(meter metric.Meter, m *manager) (*Metrics, error) {
 		"hypeman_volumes_create_duration_seconds",
 		metric.WithDescription("Time to create a volume"),
 		metric.WithUnit("s"),
+		metric.WithExplicitBucketBoundaries(hypotel.CommonDurationHistogramBuckets()...),
 	)
 	if err != nil {
 		return nil, err

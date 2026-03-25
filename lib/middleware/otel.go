@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/kernel/hypeman/lib/logger"
+	hypotel "github.com/kernel/hypeman/lib/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 )
@@ -36,6 +37,7 @@ func NewHTTPMetrics(meter metric.Meter) (*HTTPMetrics, error) {
 		"hypeman_http_request_duration_seconds",
 		metric.WithDescription("HTTP request duration in seconds"),
 		metric.WithUnit("s"),
+		metric.WithExplicitBucketBoundaries(hypotel.CommonDurationHistogramBuckets()...),
 	)
 	if err != nil {
 		return nil, err

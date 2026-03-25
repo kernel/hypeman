@@ -7,6 +7,7 @@ import (
 
 	"github.com/kernel/hypeman/lib/hypervisor"
 	mw "github.com/kernel/hypeman/lib/middleware"
+	hypotel "github.com/kernel/hypeman/lib/otel"
 	snapshotstore "github.com/kernel/hypeman/lib/snapshot"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -86,6 +87,7 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 		"hypeman_instances_create_duration_seconds",
 		metric.WithDescription("Time to create an instance"),
 		metric.WithUnit("s"),
+		metric.WithExplicitBucketBoundaries(hypotel.CommonDurationHistogramBuckets()...),
 	)
 	if err != nil {
 		return nil, err
@@ -95,6 +97,7 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 		"hypeman_instances_restore_duration_seconds",
 		metric.WithDescription("Time to restore an instance from standby"),
 		metric.WithUnit("s"),
+		metric.WithExplicitBucketBoundaries(hypotel.CommonDurationHistogramBuckets()...),
 	)
 	if err != nil {
 		return nil, err
@@ -104,6 +107,7 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 		"hypeman_instances_standby_duration_seconds",
 		metric.WithDescription("Time to put an instance in standby"),
 		metric.WithUnit("s"),
+		metric.WithExplicitBucketBoundaries(hypotel.CommonDurationHistogramBuckets()...),
 	)
 	if err != nil {
 		return nil, err
@@ -113,6 +117,7 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 		"hypeman_instances_stop_duration_seconds",
 		metric.WithDescription("Time to stop an instance"),
 		metric.WithUnit("s"),
+		metric.WithExplicitBucketBoundaries(hypotel.CommonDurationHistogramBuckets()...),
 	)
 	if err != nil {
 		return nil, err
@@ -122,6 +127,7 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 		"hypeman_instances_start_duration_seconds",
 		metric.WithDescription("Time to start an instance"),
 		metric.WithUnit("s"),
+		metric.WithExplicitBucketBoundaries(hypotel.CommonDurationHistogramBuckets()...),
 	)
 	if err != nil {
 		return nil, err
@@ -131,6 +137,7 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 		"hypeman_instances_time_to_running_seconds",
 		metric.WithDescription("Time from boot start until an instance reaches Running"),
 		metric.WithUnit("s"),
+		metric.WithExplicitBucketBoundaries(hypotel.CommonDurationHistogramBuckets()...),
 	)
 	if err != nil {
 		return nil, err
@@ -156,6 +163,7 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 		"hypeman_snapshot_compression_duration_seconds",
 		metric.WithDescription("Time to asynchronously compress snapshot memory"),
 		metric.WithUnit("s"),
+		metric.WithExplicitBucketBoundaries(hypotel.CommonDurationHistogramBuckets()...),
 	)
 	if err != nil {
 		return nil, err
@@ -198,6 +206,7 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 		"hypeman_snapshot_restore_memory_prepare_duration_seconds",
 		metric.WithDescription("Time to prepare snapshot memory before restore"),
 		metric.WithUnit("s"),
+		metric.WithExplicitBucketBoundaries(hypotel.CommonDurationHistogramBuckets()...),
 	)
 	if err != nil {
 		return nil, err

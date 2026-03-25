@@ -3,13 +3,9 @@ package egressproxy
 import (
 	"context"
 
+	hypotel "github.com/kernel/hypeman/lib/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
-)
-
-var (
-	controlPlaneDurationBuckets = []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 5}
-	upstreamDurationBuckets     = []float64{0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60}
 )
 
 type metrics struct {
@@ -51,7 +47,7 @@ func newMetrics(meter metric.Meter, svc *Service) (*metrics, error) {
 		"hypeman_egress_proxy_control_plane_duration_seconds",
 		metric.WithDescription("Duration of egress proxy control plane operations"),
 		metric.WithUnit("s"),
-		metric.WithExplicitBucketBoundaries(controlPlaneDurationBuckets...),
+		metric.WithExplicitBucketBoundaries(hypotel.CommonDurationHistogramBuckets()...),
 	)
 	if err != nil {
 		return nil, err
@@ -69,7 +65,7 @@ func newMetrics(meter metric.Meter, svc *Service) (*metrics, error) {
 		"hypeman_egress_proxy_upstream_duration_seconds",
 		metric.WithDescription("Duration of egress proxy upstream requests"),
 		metric.WithUnit("s"),
-		metric.WithExplicitBucketBoundaries(upstreamDurationBuckets...),
+		metric.WithExplicitBucketBoundaries(hypotel.CommonDurationHistogramBuckets()...),
 	)
 	if err != nil {
 		return nil, err
