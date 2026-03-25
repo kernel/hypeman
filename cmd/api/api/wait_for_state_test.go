@@ -70,10 +70,7 @@ func TestWaitForInstanceState_TerminalStateEarlyReturn(t *testing.T) {
 	t.Parallel()
 	svc := newTestService(t)
 
-	// Resolved state is Stopped but target is Running. The wait function detects
-	// Stopped as terminal on the first poll (or returns 404 if the fake instance
-	// isn't found in the manager). Either way it should return quickly.
-	start := time.Now()
+	// Stopped is terminal — waiting for Running should return immediately.
 	resp, err := svc.WaitForInstanceState(
 		fakeInstanceCtx("test-terminal", instances.StateStopped),
 		oapi.WaitForInstanceStateRequestObject{
@@ -84,20 +81,35 @@ func TestWaitForInstanceState_TerminalStateEarlyReturn(t *testing.T) {
 			},
 		},
 	)
-	elapsed := time.Since(start)
 	require.NoError(t, err)
-	assert.Less(t, elapsed, 3*time.Second, "should not block for full timeout")
 
-	switch resp.(type) {
-	case oapi.WaitForInstanceState200JSONResponse:
-		result := resp.(oapi.WaitForInstanceState200JSONResponse)
-		assert.Equal(t, oapi.InstanceStateStopped, result.State)
-		assert.False(t, result.TimedOut)
-	case oapi.WaitForInstanceState404JSONResponse:
-		// Instance doesn't exist in manager — expected with fake context
-	default:
-		t.Fatalf("unexpected response type: %T", resp)
-	}
+	result, ok := resp.(oapi.WaitForInstanceState200JSONResponse)
+	require.True(t, ok, "expected 200 response, got %T", resp)
+	assert.Equal(t, oapi.InstanceStateStopped, result.State)
+	assert.False(t, result.TimedOut)
+}
+
+func TestWaitForInstanceState_StandbyTerminalEarlyReturn(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	// Standby is terminal — waiting for Running should return immediately.
+	resp, err := svc.WaitForInstanceState(
+		fakeInstanceCtx("test-standby-terminal", instances.StateStandby),
+		oapi.WaitForInstanceStateRequestObject{
+			Id: "test-standby-terminal",
+			Params: oapi.WaitForInstanceStateParams{
+				State:   oapi.InstanceStateRunning,
+				Timeout: lo.ToPtr("30s"),
+			},
+		},
+	)
+	require.NoError(t, err)
+
+	result, ok := resp.(oapi.WaitForInstanceState200JSONResponse)
+	require.True(t, ok, "expected 200 response, got %T", resp)
+	assert.Equal(t, oapi.InstanceStateStandby, result.State)
+	assert.False(t, result.TimedOut)
 }
 
 func TestWaitForInstanceState_InvalidTimeout(t *testing.T) {

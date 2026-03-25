@@ -32,6 +32,14 @@ func WaitForState(ctx context.Context, mgr Manager, inst *Instance, targetState 
 		}, nil
 	}
 
+	// Terminal or error state — won't reach target without explicit action.
+	if isTerminalForWait(inst.State, targetState) {
+		return &WaitForStateResult{
+			State:      inst.State,
+			StateError: inst.StateError,
+		}, nil
+	}
+
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	ticker := time.NewTicker(WaitForStatePollInterval)
@@ -44,8 +52,9 @@ func WaitForState(ctx context.Context, mgr Manager, inst *Instance, targetState 
 		select {
 		case <-ctx.Done():
 			return &WaitForStateResult{
-				State:    latest.State,
-				TimedOut: true,
+				State:      latest.State,
+				StateError: latest.StateError,
+				TimedOut:   true,
 			}, nil
 
 		case <-timer.C:
@@ -75,16 +84,7 @@ func WaitForState(ctx context.Context, mgr Manager, inst *Instance, targetState 
 				}, nil
 			}
 
-			// Terminal state — won't change further.
-			if latest.State == StateStopped && targetState != StateStopped {
-				return &WaitForStateResult{
-					State:      latest.State,
-					StateError: latest.StateError,
-				}, nil
-			}
-
-			// Unknown state — something is wrong.
-			if latest.State == StateUnknown {
+			if isTerminalForWait(latest.State, targetState) {
 				return &WaitForStateResult{
 					State:      latest.State,
 					StateError: latest.StateError,
@@ -92,4 +92,19 @@ func WaitForState(ctx context.Context, mgr Manager, inst *Instance, targetState 
 			}
 		}
 	}
+}
+
+// isTerminalForWait returns true if the current state won't progress toward
+// the target without explicit user action (e.g. Stopped, Standby, Unknown).
+func isTerminalForWait(current, target State) bool {
+	if current == StateUnknown {
+		return true
+	}
+	if current == StateStopped && target != StateStopped {
+		return true
+	}
+	if current == StateStandby && target != StateStandby {
+		return true
+	}
+	return false
 }
