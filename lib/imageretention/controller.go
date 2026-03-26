@@ -17,6 +17,7 @@ import (
 	"github.com/kernel/hypeman/lib/instances"
 	"github.com/kernel/hypeman/lib/paths"
 	snapshotstore "github.com/kernel/hypeman/lib/snapshot"
+	"go.opentelemetry.io/otel/metric"
 )
 
 const sweepInterval = time.Minute
@@ -47,22 +48,31 @@ type Controller struct {
 	imageManager images.Manager
 	unusedFor    time.Duration
 	logger       *slog.Logger
+	metrics      *Metrics
 	now          func() time.Time
 	mu           sync.Mutex
 }
 
 // NewController creates a new image retention controller.
-func NewController(p *paths.Paths, imageManager images.Manager, unusedFor time.Duration, logger *slog.Logger) *Controller {
+func NewController(p *paths.Paths, imageManager images.Manager, unusedFor time.Duration, logger *slog.Logger, meter metric.Meter) (*Controller, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Controller{
+	controller := &Controller{
 		paths:        p,
 		imageManager: imageManager,
 		unusedFor:    unusedFor,
 		logger:       logger.With("component", "image_retention"),
 		now:          time.Now,
 	}
+	if meter != nil {
+		metrics, err := newMetrics(meter, controller)
+		if err != nil {
+			return nil, fmt.Errorf("create image retention metrics: %w", err)
+		}
+		controller.metrics = metrics
+	}
+	return controller, nil
 }
 
 // Run executes one sweep immediately, then continues sweeping every minute until ctx is cancelled.
@@ -92,12 +102,20 @@ func (c *Controller) Sweep(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	start := time.Now()
 	stats, err := c.sweep(ctx)
+	status := "success"
+	if err != nil {
+		status = "error"
+	}
+	if c.metrics != nil {
+		c.metrics.RecordSweep(ctx, status, time.Since(start), stats.staleReferences)
+	}
 	if err != nil {
 		return err
 	}
 
-	c.logger.InfoContext(ctx, "image auto-delete sweep completed",
+	c.logger.DebugContext(ctx, "image auto-delete sweep completed",
 		"ready_images", stats.readyImages,
 		"protected_images", stats.protectedImages,
 		"marked_unused", stats.markedUnused,
@@ -247,6 +265,9 @@ func (c *Controller) sweep(ctx context.Context) (sweepStats, error) {
 
 		if err := c.imageManager.DeleteImage(ctx, ref.digestRef()); err != nil {
 			if errors.Is(err, images.ErrNotFound) {
+				if c.metrics != nil {
+					c.metrics.RecordDelete(ctx, "not_found")
+				}
 				removed, removeErr := c.deleteStateIfExists(ref)
 				if removeErr != nil {
 					return stats, removeErr
@@ -256,7 +277,13 @@ func (c *Controller) sweep(ctx context.Context) (sweepStats, error) {
 				}
 				continue
 			}
+			if c.metrics != nil {
+				c.metrics.RecordDelete(ctx, "error")
+			}
 			return stats, fmt.Errorf("delete image %s: %w", ref.digestRef(), err)
+		}
+		if c.metrics != nil {
+			c.metrics.RecordDelete(ctx, "success")
 		}
 
 		c.logger.InfoContext(ctx, "deleted unused cached image", "image", ref.digestRef(), "unused_since", state.UnusedSince, "unused_for", c.unusedFor)

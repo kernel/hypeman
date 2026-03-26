@@ -29,6 +29,7 @@ import (
 	"github.com/kernel/hypeman/lib/imageretention"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/instances"
+	loglib "github.com/kernel/hypeman/lib/logger"
 	mw "github.com/kernel/hypeman/lib/middleware"
 	"github.com/kernel/hypeman/lib/oapi"
 	"github.com/kernel/hypeman/lib/otel"
@@ -38,6 +39,7 @@ import (
 	"github.com/kernel/hypeman/lib/vmm"
 	nethttpmiddleware "github.com/oapi-codegen/nethttp-middleware"
 	"github.com/riandyrn/otelchi"
+	"go.opentelemetry.io/otel/metric"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -66,7 +68,7 @@ type imageRetentionRunner interface {
 	Run(ctx context.Context) error
 }
 
-func configureImageRetentionController(cfg *config.Config, imageManager images.Manager, instanceManager instances.Manager, logger *slog.Logger) (imageRetentionRunner, error) {
+func configureImageRetentionController(cfg *config.Config, imageManager images.Manager, instanceManager instances.Manager, logger *slog.Logger, meter metric.Meter) (imageRetentionRunner, error) {
 	if cfg == nil || !cfg.Images.AutoDelete.Enabled {
 		return nil, nil
 	}
@@ -76,7 +78,10 @@ func configureImageRetentionController(cfg *config.Config, imageManager images.M
 		return nil, fmt.Errorf("invalid images.auto_delete.unused_for %q: %w", cfg.Images.AutoDelete.UnusedFor, err)
 	}
 
-	controller := imageretention.NewController(paths.New(cfg.DataDir), imageManager, unusedFor, logger)
+	controller, err := imageretention.NewController(paths.New(cfg.DataDir), imageManager, unusedFor, logger, meter)
+	if err != nil {
+		return nil, err
+	}
 	if setter, ok := instanceManager.(instances.ImageUsageRecorderSetter); ok {
 		setter.SetImageUsageRecorder(controller)
 	}
@@ -463,7 +468,13 @@ func run() error {
 	// Error group for coordinated shutdown
 	grp, gctx := errgroup.WithContext(ctx)
 
-	retentionController, err := configureImageRetentionController(app.Config, app.ImageManager, app.InstanceManager, logger)
+	retentionController, err := configureImageRetentionController(
+		app.Config,
+		app.ImageManager,
+		app.InstanceManager,
+		logger,
+		otelProvider.MeterFor(loglib.SubsystemImages),
+	)
 	if err != nil {
 		return err
 	}

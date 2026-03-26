@@ -1,8 +1,10 @@
 package imageretention
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
@@ -13,6 +15,9 @@ import (
 	"github.com/kernel/hypeman/lib/paths"
 	snapshotstore "github.com/kernel/hypeman/lib/snapshot"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/attribute"
+	otelmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
 
 func TestSweepMarksUnreferencedImageUnused(t *testing.T) {
@@ -27,6 +32,36 @@ func TestSweepMarksUnreferencedImageUnused(t *testing.T) {
 
 	state := readState(t, p, "docker.io/library/alpine", digest)
 	require.Equal(t, now, state.UnusedSince)
+}
+
+func TestSweepRecordsMetrics(t *testing.T) {
+	controller, p, reader := newMetricTestController(t, 24*time.Hour)
+	const trackedDigest = "sha256:0101010101010101010101010101010101010101010101010101010101010101"
+	const deletedDigest = "sha256:0202020202020202020202020202020202020202020202020202020202020202"
+
+	seedReadyImage(t, p, "docker.io/library/alpine:latest", trackedDigest)
+	seedReadyImage(t, p, "docker.io/library/busybox:latest", deletedDigest)
+	writeStateAt(t, p, "docker.io/library/busybox", deletedDigest, time.Date(2026, 3, 20, 0, 0, 0, 0, time.UTC))
+	writeInstanceMetadata(t, p, "inst-1", instances.StoredMetadata{
+		Id:    "inst-1",
+		Name:  "instance-1",
+		Image: "docker.io/library/debian@sha256:0303030303030303030303030303030303030303030303030303030303030303",
+	})
+
+	controller.now = func() time.Time {
+		return time.Date(2026, 3, 26, 0, 0, 0, 0, time.UTC)
+	}
+
+	require.NoError(t, controller.Sweep(context.Background()))
+
+	rm := collectRetentionMetrics(t, reader)
+
+	require.Equal(t, int64(1), int64SumValue(t, rm, "hypeman_image_retention_sweeps_total", map[string]string{"status": "success"}))
+	require.Equal(t, uint64(1), float64HistogramCount(t, rm, "hypeman_image_retention_sweep_duration_seconds", map[string]string{"status": "success"}))
+	require.Equal(t, int64(1), int64SumValue(t, rm, "hypeman_image_retention_deletes_total", map[string]string{"status": "success"}))
+	require.Equal(t, int64(1), int64SumValue(t, rm, "hypeman_image_retention_stale_references_total", nil))
+	require.Equal(t, int64(1), int64GaugeValue(t, rm, "hypeman_image_retention_pending_images", map[string]string{"state": "tracked"}))
+	require.Equal(t, int64(0), int64GaugeValue(t, rm, "hypeman_image_retention_pending_images", map[string]string{"state": "expired"}))
 }
 
 func TestSweepReferencedInstancePreventsUnusedState(t *testing.T) {
@@ -190,6 +225,22 @@ func TestRunPerformsImmediateSweep(t *testing.T) {
 	require.Equal(t, now, state.UnusedSince)
 }
 
+func TestSweepSuccessLogIsDebugOnly(t *testing.T) {
+	dataDir := t.TempDir()
+	p := paths.New(dataDir)
+	manager, err := images.NewManager(p, 1, nil)
+	require.NoError(t, err)
+
+	var out bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&out, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	controller, err := NewController(p, manager, 24*time.Hour, logger, nil)
+	require.NoError(t, err)
+	seedReadyImage(t, p, "docker.io/library/alpine:latest", "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
+
+	require.NoError(t, controller.Sweep(context.Background()))
+	require.NotContains(t, out.String(), "image auto-delete sweep completed")
+}
+
 func newTestController(t *testing.T, unusedFor time.Duration) (*Controller, *paths.Paths, images.Manager) {
 	t.Helper()
 
@@ -198,7 +249,24 @@ func newTestController(t *testing.T, unusedFor time.Duration) (*Controller, *pat
 	manager, err := images.NewManager(p, 1, nil)
 	require.NoError(t, err)
 
-	return NewController(p, manager, unusedFor, nil), p, manager
+	controller, err := NewController(p, manager, unusedFor, nil, nil)
+	require.NoError(t, err)
+	return controller, p, manager
+}
+
+func newMetricTestController(t *testing.T, unusedFor time.Duration) (*Controller, *paths.Paths, *otelmetric.ManualReader) {
+	t.Helper()
+
+	dataDir := t.TempDir()
+	p := paths.New(dataDir)
+	manager, err := images.NewManager(p, 1, nil)
+	require.NoError(t, err)
+
+	reader := otelmetric.NewManualReader()
+	provider := otelmetric.NewMeterProvider(otelmetric.WithReader(reader))
+	controller, err := NewController(p, manager, unusedFor, nil, provider.Meter("test"))
+	require.NoError(t, err)
+	return controller, p, reader
 }
 
 func seedReadyImage(t *testing.T, p *paths.Paths, imageName, digest string, extraTags ...string) {
@@ -283,6 +351,91 @@ func readState(t *testing.T, p *paths.Paths, repository, digest string) imageSta
 	var state imageState
 	require.NoError(t, json.Unmarshal(content, &state))
 	return state
+}
+
+func collectRetentionMetrics(t *testing.T, reader *otelmetric.ManualReader) metricdata.ResourceMetrics {
+	t.Helper()
+
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(context.Background(), &rm))
+	return rm
+}
+
+func int64GaugeValue(t *testing.T, rm metricdata.ResourceMetrics, name string, wantAttrs map[string]string) int64 {
+	t.Helper()
+
+	metric := findRetentionMetric(t, rm, name)
+	gauge, ok := metric.Data.(metricdata.Gauge[int64])
+	require.True(t, ok, "expected int64 gauge metric data for %s", name)
+	for _, point := range gauge.DataPoints {
+		if retentionMetricAttrsMatch(point.Attributes, wantAttrs) {
+			return point.Value
+		}
+	}
+	t.Fatalf("metric %s with attrs %v not found", name, wantAttrs)
+	return 0
+}
+
+func int64SumValue(t *testing.T, rm metricdata.ResourceMetrics, name string, wantAttrs map[string]string) int64 {
+	t.Helper()
+
+	metric := findRetentionMetric(t, rm, name)
+	sum, ok := metric.Data.(metricdata.Sum[int64])
+	require.True(t, ok, "expected int64 sum metric data for %s", name)
+	for _, point := range sum.DataPoints {
+		if retentionMetricAttrsMatch(point.Attributes, wantAttrs) {
+			return point.Value
+		}
+	}
+	t.Fatalf("metric %s with attrs %v not found", name, wantAttrs)
+	return 0
+}
+
+func float64HistogramCount(t *testing.T, rm metricdata.ResourceMetrics, name string, wantAttrs map[string]string) uint64 {
+	t.Helper()
+
+	metric := findRetentionMetric(t, rm, name)
+	histogram, ok := metric.Data.(metricdata.Histogram[float64])
+	require.True(t, ok, "expected float64 histogram metric data for %s", name)
+	for _, point := range histogram.DataPoints {
+		if retentionMetricAttrsMatch(point.Attributes, wantAttrs) {
+			return point.Count
+		}
+	}
+	t.Fatalf("metric %s with attrs %v not found", name, wantAttrs)
+	return 0
+}
+
+func findRetentionMetric(t *testing.T, rm metricdata.ResourceMetrics, name string) metricdata.Metrics {
+	t.Helper()
+
+	for _, scope := range rm.ScopeMetrics {
+		for _, metric := range scope.Metrics {
+			if metric.Name == name {
+				return metric
+			}
+		}
+	}
+
+	t.Fatalf("metric %s not found", name)
+	return metricdata.Metrics{}
+}
+
+func retentionMetricAttrsMatch(set attribute.Set, want map[string]string) bool {
+	if len(want) == 0 {
+		return true
+	}
+
+	attrs := make(map[string]string, len(set.ToSlice()))
+	for _, kv := range set.ToSlice() {
+		attrs[string(kv.Key)] = kv.Value.AsString()
+	}
+	for key, value := range want {
+		if attrs[key] != value {
+			return false
+		}
+	}
+	return true
 }
 
 func stringsTrimDigest(digest string) string {

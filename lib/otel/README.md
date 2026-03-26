@@ -55,6 +55,11 @@ This keeps pull and push views aligned because both are sourced from the same OT
 | `hypeman_images_build_duration_seconds` | histogram | status | Image build time |
 | `hypeman_images_total` | gauge | status | Cached images count |
 | `hypeman_images_pulls_total` | counter | status | Registry pulls |
+| `hypeman_image_retention_pending_images` | gauge | state | Images currently tracked by retention state |
+| `hypeman_image_retention_stale_references_total` | counter | | Stale image references skipped during retention sweeps |
+| `hypeman_image_retention_sweeps_total` | counter | status | Retention sweep runs |
+| `hypeman_image_retention_sweep_duration_seconds` | histogram | status | Retention sweep latency |
+| `hypeman_image_retention_deletes_total` | counter | status | Retention delete attempts |
 
 ### Instances
 | Metric | Type | Labels | Description |
