@@ -31,6 +31,12 @@ func TestDefaultConfigIncludesMetricsSettings(t *testing.T) {
 	if cfg.Otel.SuccessfulGetSampleRatio != 0.1 {
 		t.Fatalf("expected default otel.successful_get_sample_ratio to be 0.1, got %v", cfg.Otel.SuccessfulGetSampleRatio)
 	}
+	if cfg.Images.AutoDelete.Enabled {
+		t.Fatalf("expected default images.auto_delete.enabled to be false")
+	}
+	if cfg.Images.AutoDelete.UnusedFor != "720h" {
+		t.Fatalf("expected default images.auto_delete.unused_for to be 720h, got %q", cfg.Images.AutoDelete.UnusedFor)
+	}
 }
 
 func TestLoadEnvOverridesMetricsAndOtelInterval(t *testing.T) {
@@ -135,6 +141,36 @@ func TestValidateRejectsInvalidResourceRefreshInterval(t *testing.T) {
 	err = cfg.Validate()
 	if err == nil {
 		t.Fatalf("expected validation error for non-positive resource refresh interval")
+	}
+}
+
+func TestLoadUsesDefaultImageAutoDeleteRetentionWindow(t *testing.T) {
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("images:\n  auto_delete:\n    enabled: true\n"), 0600); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	if !cfg.Images.AutoDelete.Enabled {
+		t.Fatalf("expected images.auto_delete.enabled override to be true")
+	}
+	if cfg.Images.AutoDelete.UnusedFor != "720h" {
+		t.Fatalf("expected default images.auto_delete.unused_for to remain 720h, got %q", cfg.Images.AutoDelete.UnusedFor)
+	}
+}
+
+func TestValidateRejectsInvalidImageAutoDeleteUnusedFor(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Images.AutoDelete.UnusedFor = "not-a-duration"
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatalf("expected validation error for invalid images.auto_delete.unused_for")
 	}
 }
 

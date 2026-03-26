@@ -123,6 +123,17 @@ type LoggingConfig struct {
 	RotateInterval string `koanf:"rotate_interval"`
 }
 
+// ImagesAutoDeleteConfig holds server-wide image retention settings.
+type ImagesAutoDeleteConfig struct {
+	Enabled   bool   `koanf:"enabled"`
+	UnusedFor string `koanf:"unused_for"`
+}
+
+// ImagesConfig holds image-management settings.
+type ImagesConfig struct {
+	AutoDelete ImagesAutoDeleteConfig `koanf:"auto_delete"`
+}
+
 // BuildConfig holds source-to-image build system settings.
 type BuildConfig struct {
 	MaxConcurrentSourceBuilds int    `koanf:"max_concurrent_source_builds"`
@@ -226,6 +237,7 @@ type Config struct {
 	Metrics          MetricsConfig          `koanf:"metrics"`
 	Otel             OtelConfig             `koanf:"otel"`
 	Logging          LoggingConfig          `koanf:"logging"`
+	Images           ImagesConfig           `koanf:"images"`
 	Build            BuildConfig            `koanf:"build"`
 	Registry         RegistryConfig         `koanf:"registry"`
 	Limits           LimitsConfig           `koanf:"limits"`
@@ -317,6 +329,13 @@ func defaultConfig() *Config {
 			MaxSize:        "50MB",
 			MaxFiles:       1,
 			RotateInterval: "5m",
+		},
+
+		Images: ImagesConfig{
+			AutoDelete: ImagesAutoDeleteConfig{
+				Enabled:   false,
+				UnusedFor: "720h",
+			},
 		},
 
 		Build: BuildConfig{
@@ -510,6 +529,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Build.Timeout <= 0 {
 		return fmt.Errorf("build.timeout must be positive, got %d", c.Build.Timeout)
+	}
+	if err := validateDuration("images.auto_delete.unused_for", c.Images.AutoDelete.UnusedFor); err != nil {
+		return err
 	}
 	algorithm := strings.ToLower(c.Snapshot.CompressionDefault.Algorithm)
 	c.Snapshot.CompressionDefault.Algorithm = algorithm

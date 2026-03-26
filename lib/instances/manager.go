@@ -12,6 +12,7 @@ import (
 	"github.com/kernel/hypeman/lib/guestmemory"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
+	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/network"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/kernel/hypeman/lib/resources"
@@ -58,6 +59,16 @@ type Manager interface {
 	GetVsockDialer(ctx context.Context, instanceID string) (hypervisor.VsockDialer, error)
 }
 
+// ImageUsageRecorder records newly used images before instance metadata is persisted.
+type ImageUsageRecorder interface {
+	MarkUsed(ctx context.Context, imageName, digest string) error
+}
+
+// ImageUsageRecorderSetter configures an optional image usage recorder on the manager.
+type ImageUsageRecorderSetter interface {
+	SetImageUsageRecorder(recorder ImageUsageRecorder)
+}
+
 // ResourceLimits contains configurable resource limits for instances
 type ResourceLimits struct {
 	MaxOverlaySize       int64 // Maximum overlay disk size in bytes per instance
@@ -99,6 +110,7 @@ type manager struct {
 	compressionJobs           map[string]*compressionJob
 	nativeCodecMu             sync.Mutex
 	nativeCodecPaths          map[string]string
+	imageUsageRecorder        ImageUsageRecorder
 
 	// Hypervisor support
 	vmStarters        map[hypervisor.Type]hypervisor.VMStarter
@@ -171,6 +183,11 @@ func (m *manager) SetResourceValidator(v ResourceValidator) {
 	m.resourceValidator = v
 }
 
+// SetImageUsageRecorder configures an optional recorder for pre-persistence image usage.
+func (m *manager) SetImageUsageRecorder(recorder ImageUsageRecorder) {
+	m.imageUsageRecorder = recorder
+}
+
 // getHypervisor creates a hypervisor client for the given socket and type.
 // Used for connecting to already-running VMs (e.g., for state queries).
 func (m *manager) getHypervisor(socketPath string, hvType hypervisor.Type) (hypervisor.Hypervisor, error) {
@@ -215,6 +232,16 @@ func (m *manager) maybePersistBootMarkers(ctx context.Context, id string) {
 	lock.Lock()
 	defer lock.Unlock()
 	m.persistBootMarkers(ctx, id)
+}
+
+func (m *manager) recordImageUsage(ctx context.Context, imageInfo *images.Image) {
+	if m.imageUsageRecorder == nil || imageInfo == nil {
+		return
+	}
+	if err := m.imageUsageRecorder.MarkUsed(ctx, imageInfo.Name, imageInfo.Digest); err != nil {
+		logger := logger.FromContext(ctx)
+		logger.WarnContext(ctx, "failed to record image usage", "image", imageInfo.Name, "digest", imageInfo.Digest, "error", err)
+	}
 }
 
 // CreateInstance creates and starts a new instance

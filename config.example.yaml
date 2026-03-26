@@ -61,6 +61,15 @@ data_dir: /var/lib/hypeman
 #   level: info                   # debug, info, warn, error
 
 # =============================================================================
+# Images
+# =============================================================================
+# images:
+#   auto_delete:
+#     enabled: false              # server-wide automatic deletion of cached converted images
+#     unused_for: 720h            # delete only after no instances or snapshots reference the image for this long
+#                                 # only affects data_dir/images, not the shared OCI cache
+
+# =============================================================================
 # Caddy / Ingress Configuration
 # =============================================================================
 # caddy:

@@ -26,10 +26,13 @@ import (
 	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/guest"
 	"github.com/kernel/hypeman/lib/hypervisor/qemu"
+	"github.com/kernel/hypeman/lib/imageretention"
+	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/instances"
 	mw "github.com/kernel/hypeman/lib/middleware"
 	"github.com/kernel/hypeman/lib/oapi"
 	"github.com/kernel/hypeman/lib/otel"
+	"github.com/kernel/hypeman/lib/paths"
 	"github.com/kernel/hypeman/lib/registry"
 	"github.com/kernel/hypeman/lib/scopes"
 	"github.com/kernel/hypeman/lib/vmm"
@@ -57,6 +60,37 @@ func newMetricsServer(addr string, handler http.Handler) *http.Server {
 		Addr:    addr,
 		Handler: mux,
 	}
+}
+
+type imageRetentionRunner interface {
+	Run(ctx context.Context) error
+}
+
+func configureImageRetentionController(cfg *config.Config, imageManager images.Manager, instanceManager instances.Manager, logger *slog.Logger) (imageRetentionRunner, error) {
+	if cfg == nil || !cfg.Images.AutoDelete.Enabled {
+		return nil, nil
+	}
+
+	unusedFor, err := time.ParseDuration(cfg.Images.AutoDelete.UnusedFor)
+	if err != nil {
+		return nil, fmt.Errorf("invalid images.auto_delete.unused_for %q: %w", cfg.Images.AutoDelete.UnusedFor, err)
+	}
+
+	controller := imageretention.NewController(paths.New(cfg.DataDir), imageManager, unusedFor, logger)
+	if setter, ok := instanceManager.(instances.ImageUsageRecorderSetter); ok {
+		setter.SetImageUsageRecorder(controller)
+	}
+	return controller, nil
+}
+
+func startImageRetentionController(grp *errgroup.Group, ctx context.Context, controller imageRetentionRunner) bool {
+	if grp == nil || controller == nil {
+		return false
+	}
+	grp.Go(func() error {
+		return controller.Run(ctx)
+	})
+	return true
 }
 
 func run() error {
@@ -428,6 +462,14 @@ func run() error {
 
 	// Error group for coordinated shutdown
 	grp, gctx := errgroup.WithContext(ctx)
+
+	retentionController, err := configureImageRetentionController(app.Config, app.ImageManager, app.InstanceManager, logger)
+	if err != nil {
+		return err
+	}
+	if startImageRetentionController(grp, gctx, retentionController) {
+		logger.Info("image auto-delete enabled", "unused_for", app.Config.Images.AutoDelete.UnusedFor)
+	}
 
 	// Start build manager background services (vsock handler for builder VMs)
 	if err := app.BuildManager.Start(gctx); err != nil {

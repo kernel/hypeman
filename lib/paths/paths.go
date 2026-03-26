@@ -53,6 +53,21 @@ func (p *Paths) SystemOCICache() string {
 	return filepath.Join(p.dataDir, "system", "oci-cache")
 }
 
+// SystemImageRetentionDir returns the path to persisted image retention state.
+func (p *Paths) SystemImageRetentionDir() string {
+	return filepath.Join(p.dataDir, "system", "image-retention")
+}
+
+// ImageRetentionRepositoryDir returns the directory for image retention state for one repository.
+func (p *Paths) ImageRetentionRepositoryDir(repository string) string {
+	return filepath.Join(p.SystemImageRetentionDir(), repository)
+}
+
+// ImageRetentionState returns the state file path for one retained image digest.
+func (p *Paths) ImageRetentionState(repository, digestHex string) string {
+	return filepath.Join(p.ImageRetentionRepositoryDir(repository), digestHex+".json")
+}
+
 // OCICacheBlobDir returns the path to the OCI cache blobs directory.
 func (p *Paths) OCICacheBlobDir() string {
 	return filepath.Join(p.SystemOCICache(), "blobs", "sha256")
