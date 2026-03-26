@@ -1,7 +1,10 @@
 package resources
 
 import (
+	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -131,6 +134,8 @@ func TestStartMonitoringPublishesCapacityMetrics(t *testing.T) {
 	require.Equal(t, status.DiskDetail.OCICache, int64GaugeValue(t, rm, "hypeman_resources_disk_breakdown_bytes", map[string]string{"component": "oci_cache"}))
 	require.Equal(t, status.DiskDetail.Volumes, int64GaugeValue(t, rm, "hypeman_resources_disk_breakdown_bytes", map[string]string{"component": "volumes"}))
 	require.Equal(t, status.DiskDetail.Overlays, int64GaugeValue(t, rm, "hypeman_resources_disk_breakdown_bytes", map[string]string{"component": "overlays"}))
+	require.Equal(t, int64(0), int64GaugeValue(t, rm, "hypeman_disk_utilization_bytes", map[string]string{"component": "images"}))
+	require.Equal(t, int64(0), int64GaugeValue(t, rm, "hypeman_disk_utilization_bytes", map[string]string{"component": "snapshot_other"}))
 
 	currentImageStorage := status.DiskDetail.Images + status.DiskDetail.OCICache
 	require.Equal(t, currentImageStorage, int64GaugeValue(t, rm, "hypeman_resources_image_storage_bytes", map[string]string{"kind": "current"}))
@@ -204,6 +209,54 @@ func TestStartMonitoringPublishesGPUMetrics(t *testing.T) {
 	require.Equal(t, int64(8), int64GaugeValue(t, rm, "hypeman_resources_gpu_slots", map[string]string{"kind": "total"}))
 	require.Equal(t, int64(5), int64GaugeValue(t, rm, "hypeman_resources_gpu_profile_slots", map[string]string{"profile": "L40S-1Q", "kind": "available"}))
 	require.Equal(t, int64(2), int64GaugeValue(t, rm, "hypeman_resources_gpu_profile_slots", map[string]string{"profile": "L40S-2Q", "kind": "available"}))
+}
+
+func TestStartMonitoringPublishesDiskUtilizationFromCachedSnapshot(t *testing.T) {
+	mgr, _, _ := monitoringTestManager(t)
+
+	volumePath := mgr.paths.VolumeData("vol-1")
+	require.NoError(t, createSparseTestFile(volumePath, 64*1024*1024, []sparseWrite{
+		{offset: 0, data: bytes.Repeat([]byte("v"), 4096)},
+	}))
+	rootfsOverlayPath := mgr.paths.InstanceOverlay("vm-1")
+	require.NoError(t, createSparseTestFile(rootfsOverlayPath, 64*1024*1024, []sparseWrite{
+		{offset: 0, data: bytes.Repeat([]byte("o"), 4096)},
+	}))
+	snapshotDir := mgr.paths.InstanceSnapshotLatest("vm-1")
+	require.NoError(t, createSparseTestFile(filepath.Join(snapshotDir, "memory-ranges.zst"), 32*1024*1024, []sparseWrite{
+		{offset: 0, data: bytes.Repeat([]byte("s"), 4096)},
+	}))
+	require.NoError(t, os.WriteFile(filepath.Join(snapshotDir, "config.json"), []byte(`{}`), 0644))
+
+	reader := otelmetric.NewManualReader()
+	provider := otelmetric.NewMeterProvider(otelmetric.WithReader(reader))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	require.NoError(t, mgr.StartMonitoring(ctx, provider.Meter("test"), time.Hour))
+
+	initialRM := collectMonitoringMetrics(t, reader)
+	initialVolumeBytes := int64GaugeValue(t, initialRM, "hypeman_disk_utilization_bytes", map[string]string{"component": "volumes"})
+	initialCompressedSnapshotBytes := int64GaugeValue(t, initialRM, "hypeman_disk_utilization_bytes", map[string]string{"component": "snapshot_compressed"})
+	require.Equal(t, allocatedBytesForPath(volumePath), initialVolumeBytes)
+	require.Equal(t, int64(100*1024*1024*1024), int64GaugeValue(t, initialRM, "hypeman_resources_disk_breakdown_bytes", map[string]string{"component": "volumes"}))
+	require.Greater(t, initialCompressedSnapshotBytes, int64(0))
+
+	f, err := os.OpenFile(volumePath, os.O_WRONLY, 0)
+	require.NoError(t, err)
+	_, err = f.WriteAt(bytes.Repeat([]byte("m"), 4096), 8*1024*1024)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	cachedRM := collectMonitoringMetrics(t, reader)
+	require.Equal(t, initialVolumeBytes, int64GaugeValue(t, cachedRM, "hypeman_disk_utilization_bytes", map[string]string{"component": "volumes"}))
+
+	require.NoError(t, mgr.refreshMonitoringSnapshot(context.Background()))
+
+	refreshedRM := collectMonitoringMetrics(t, reader)
+	refreshedVolumeBytes := int64GaugeValue(t, refreshedRM, "hypeman_disk_utilization_bytes", map[string]string{"component": "volumes"})
+	require.Greater(t, refreshedVolumeBytes, initialVolumeBytes)
 }
 
 func collectMonitoringMetrics(t *testing.T, reader *otelmetric.ManualReader) metricdata.ResourceMetrics {

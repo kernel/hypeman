@@ -24,6 +24,7 @@ type monitoringSnapshot struct {
 	status              FullResourceStatus
 	imageStorageCurrent int64
 	imageStorageMax     int64
+	diskUtilization     diskUtilizationBreakdown
 }
 
 func (m *Manager) StartMonitoring(ctx context.Context, meter metric.Meter, refreshInterval time.Duration) error {
@@ -106,6 +107,12 @@ func (m *Manager) refreshMonitoringSnapshot(ctx context.Context) error {
 	}
 	snapshot.imageStorageMax = m.MaxImageStorageBytes()
 
+	diskUtilization, err := collectDiskUtilization(m.paths)
+	if err != nil {
+		return err
+	}
+	snapshot.diskUtilization = diskUtilization
+
 	m.monitoring.mu.Lock()
 	m.monitoring.snapshot = snapshot
 	m.monitoring.hasSnapshot = true
@@ -167,6 +174,15 @@ func newMonitoringMetrics(meter metric.Meter, mgr *Manager) error {
 		return err
 	}
 
+	diskUtilization, err := meter.Int64ObservableGauge(
+		"hypeman_disk_utilization_bytes",
+		metric.WithDescription("Actual disk bytes allocated on the filesystem by component"),
+		metric.WithUnit("By"),
+	)
+	if err != nil {
+		return err
+	}
+
 	imageStorage, err := meter.Int64ObservableGauge(
 		"hypeman_resources_image_storage_bytes",
 		metric.WithDescription("Current and maximum image storage bytes"),
@@ -220,6 +236,10 @@ func newMonitoringMetrics(meter metric.Meter, mgr *Manager) error {
 			o.ObserveInt64(diskBreakdown, snapshot.status.DiskDetail.Overlays, metric.WithAttributes(attribute.String("component", "overlays")))
 			o.ObserveInt64(imageStorage, snapshot.imageStorageCurrent, metric.WithAttributes(attribute.String("kind", "current")))
 		}
+
+		for component, value := range snapshot.diskUtilization.components() {
+			o.ObserveInt64(diskUtilization, value, metric.WithAttributes(attribute.String("component", component)))
+		}
 		o.ObserveInt64(imageStorage, snapshot.imageStorageMax, metric.WithAttributes(attribute.String("kind", "max")))
 
 		if snapshot.status.GPU != nil {
@@ -236,7 +256,7 @@ func newMonitoringMetrics(meter metric.Meter, mgr *Manager) error {
 		}
 
 		return nil
-	}, capacity, effectiveLimit, allocated, oversubRatio, diskBreakdown, imageStorage, gpuSlots, gpuProfileSlots); err != nil {
+	}, capacity, effectiveLimit, allocated, oversubRatio, diskBreakdown, diskUtilization, imageStorage, gpuSlots, gpuProfileSlots); err != nil {
 		return err
 	}
 
