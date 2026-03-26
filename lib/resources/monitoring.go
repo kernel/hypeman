@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kernel/hypeman/lib/diskutilization"
 	"github.com/kernel/hypeman/lib/logger"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -24,7 +25,7 @@ type monitoringSnapshot struct {
 	status              FullResourceStatus
 	imageStorageCurrent int64
 	imageStorageMax     int64
-	diskUtilization     diskUtilizationBreakdown
+	diskUtilization     diskutilization.Breakdown
 }
 
 func (m *Manager) StartMonitoring(ctx context.Context, meter metric.Meter, refreshInterval time.Duration) error {
@@ -107,7 +108,7 @@ func (m *Manager) refreshMonitoringSnapshot(ctx context.Context) error {
 	}
 	snapshot.imageStorageMax = m.MaxImageStorageBytes()
 
-	diskUtilization, err := collectDiskUtilization(m.paths)
+	diskUtilization, err := diskutilization.Collect(m.paths)
 	if err != nil {
 		return err
 	}
@@ -237,7 +238,7 @@ func newMonitoringMetrics(meter metric.Meter, mgr *Manager) error {
 			o.ObserveInt64(imageStorage, snapshot.imageStorageCurrent, metric.WithAttributes(attribute.String("kind", "current")))
 		}
 
-		for component, value := range snapshot.diskUtilization.components() {
+		for component, value := range snapshot.diskUtilization.Components() {
 			o.ObserveInt64(diskUtilization, value, metric.WithAttributes(attribute.String("component", component)))
 		}
 		o.ObserveInt64(imageStorage, snapshot.imageStorageMax, metric.WithAttributes(attribute.String("kind", "max")))
