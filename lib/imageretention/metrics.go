@@ -63,12 +63,11 @@ func newMetrics(meter metric.Meter, c *Controller) (*Metrics, error) {
 
 	_, err = meter.RegisterCallback(
 		func(ctx context.Context, o metric.Observer) error {
-			states, err := c.listStates()
+			states, now, err := c.listStatesSnapshot()
 			if err != nil {
 				return nil
 			}
 
-			now := c.now().UTC()
 			var tracked int64
 			var expired int64
 			for _, state := range states {

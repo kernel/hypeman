@@ -34,11 +34,7 @@ type digestRef struct {
 	DigestHex  string
 }
 
-func (r digestRef) key() string {
-	return r.Repository + "@" + r.Digest
-}
-
-func (r digestRef) digestRef() string {
+func (r digestRef) String() string {
 	return r.Repository + "@" + r.Digest
 }
 
@@ -173,13 +169,13 @@ func (c *Controller) sweep(ctx context.Context) (sweepStats, error) {
 			c.logger.WarnContext(ctx, "skipping image with invalid retention metadata", "image", img.Name, "digest", img.Digest, "error", err)
 			continue
 		}
-		allLocal[ref.key()] = struct{}{}
+		allLocal[ref.String()] = struct{}{}
 		if img.Status == images.StatusReady {
-			ready[ref.key()] = ref
+			ready[ref.String()] = ref
 			stats.readyImages++
 			continue
 		}
-		nonReady[ref.key()] = ref
+		nonReady[ref.String()] = ref
 	}
 
 	states, err := c.listStates()
@@ -263,7 +259,7 @@ func (c *Controller) sweep(ctx context.Context) (sweepStats, error) {
 			continue
 		}
 
-		if err := c.imageManager.DeleteImage(ctx, ref.digestRef()); err != nil {
+		if err := c.imageManager.DeleteImage(ctx, ref.String()); err != nil {
 			if errors.Is(err, images.ErrNotFound) {
 				if c.metrics != nil {
 					c.metrics.RecordDelete(ctx, "not_found")
@@ -280,13 +276,13 @@ func (c *Controller) sweep(ctx context.Context) (sweepStats, error) {
 			if c.metrics != nil {
 				c.metrics.RecordDelete(ctx, "error")
 			}
-			return stats, fmt.Errorf("delete image %s: %w", ref.digestRef(), err)
+			return stats, fmt.Errorf("delete image %s: %w", ref.String(), err)
 		}
 		if c.metrics != nil {
 			c.metrics.RecordDelete(ctx, "success")
 		}
 
-		c.logger.InfoContext(ctx, "deleted unused cached image", "image", ref.digestRef(), "unused_since", state.UnusedSince, "unused_for", c.unusedFor)
+		c.logger.InfoContext(ctx, "deleted unused cached image", "image", ref.String(), "unused_since", state.UnusedSince, "unused_for", c.unusedFor)
 		removed, err := c.deleteStateIfExists(ref)
 		if err != nil {
 			return stats, err
@@ -320,7 +316,7 @@ func (c *Controller) collectProtectedDigests(ctx context.Context) (map[string]di
 			c.logger.WarnContext(ctx, "skipping unresolvable retained image", "image", imageName, "digest", img.Digest, "error", err)
 			continue
 		}
-		protected[ref.key()] = ref
+		protected[ref.String()] = ref
 	}
 	return protected, staleRefs, nil
 }
@@ -440,6 +436,9 @@ func (c *Controller) listStates() (map[string]imageState, error) {
 
 		content, err := os.ReadFile(path)
 		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
 			return fmt.Errorf("read image retention state %s: %w", path, err)
 		}
 
@@ -448,8 +447,7 @@ func (c *Controller) listStates() (map[string]imageState, error) {
 			return fmt.Errorf("unmarshal image retention state %s: %w", path, err)
 		}
 
-		key := state.Repository + "@" + state.Digest
-		states[key] = state
+		states[state.Repository+"@"+state.Digest] = state
 		return nil
 	})
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -457,6 +455,17 @@ func (c *Controller) listStates() (map[string]imageState, error) {
 	}
 
 	return states, nil
+}
+
+func (c *Controller) listStatesSnapshot() (map[string]imageState, time.Time, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	states, err := c.listStates()
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	return states, c.now().UTC(), nil
 }
 
 func (c *Controller) writeState(state imageState) error {
