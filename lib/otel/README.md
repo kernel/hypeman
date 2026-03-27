@@ -72,6 +72,19 @@ This keeps pull and push views aligned because both are sourced from the same OT
 | `hypeman_network_allocations_total` | gauge | | Active IP allocations |
 | `hypeman_network_tap_operations_total` | counter | operation | TAP create/delete ops |
 
+### Resources
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `hypeman_resources_capacity` | gauge | resource | Raw host capacity by resource type |
+| `hypeman_resources_effective_limit` | gauge | resource | Effective allocatable limit after oversubscription |
+| `hypeman_resources_allocated` | gauge | resource | Current allocation by resource type |
+| `hypeman_resources_oversub_ratio` | gauge | resource | Oversubscription ratio by resource type |
+| `hypeman_resources_disk_breakdown_bytes` | gauge | component | Allocation/provisioned disk breakdown by component |
+| `hypeman_disk_utilization_bytes` | gauge | component | Actual filesystem bytes allocated by disk component |
+| `hypeman_resources_image_storage_bytes` | gauge | kind | Current and maximum image storage bytes |
+| `hypeman_resources_gpu_slots` | gauge | kind | Total and used GPU slots |
+| `hypeman_resources_gpu_profile_slots` | gauge | profile, kind | Available GPU slots by profile |
+
 ### Volumes
 | Metric | Type | Description |
 |--------|------|-------------|

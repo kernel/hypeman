@@ -1,13 +1,18 @@
 package resources
 
 import (
+	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/kernel/hypeman/cmd/api/config"
 	"github.com/kernel/hypeman/lib/devices"
+	"github.com/kernel/hypeman/lib/diskutilization"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/attribute"
@@ -36,6 +41,11 @@ type monitoringImageLister struct {
 	mu            sync.RWMutex
 	totalBytes    int64
 	ociCacheBytes int64
+}
+
+type monitoringSparseWrite struct {
+	offset int64
+	data   []byte
 }
 
 func (m *monitoringImageLister) TotalImageBytes(ctx context.Context) (int64, error) {
@@ -131,6 +141,8 @@ func TestStartMonitoringPublishesCapacityMetrics(t *testing.T) {
 	require.Equal(t, status.DiskDetail.OCICache, int64GaugeValue(t, rm, "hypeman_resources_disk_breakdown_bytes", map[string]string{"component": "oci_cache"}))
 	require.Equal(t, status.DiskDetail.Volumes, int64GaugeValue(t, rm, "hypeman_resources_disk_breakdown_bytes", map[string]string{"component": "volumes"}))
 	require.Equal(t, status.DiskDetail.Overlays, int64GaugeValue(t, rm, "hypeman_resources_disk_breakdown_bytes", map[string]string{"component": "overlays"}))
+	require.Equal(t, int64(0), int64GaugeValue(t, rm, "hypeman_disk_utilization_bytes", map[string]string{"component": "images"}))
+	require.Equal(t, int64(0), int64GaugeValue(t, rm, "hypeman_disk_utilization_bytes", map[string]string{"component": "snapshot_other"}))
 
 	currentImageStorage := status.DiskDetail.Images + status.DiskDetail.OCICache
 	require.Equal(t, currentImageStorage, int64GaugeValue(t, rm, "hypeman_resources_image_storage_bytes", map[string]string{"kind": "current"}))
@@ -204,6 +216,92 @@ func TestStartMonitoringPublishesGPUMetrics(t *testing.T) {
 	require.Equal(t, int64(8), int64GaugeValue(t, rm, "hypeman_resources_gpu_slots", map[string]string{"kind": "total"}))
 	require.Equal(t, int64(5), int64GaugeValue(t, rm, "hypeman_resources_gpu_profile_slots", map[string]string{"profile": "L40S-1Q", "kind": "available"}))
 	require.Equal(t, int64(2), int64GaugeValue(t, rm, "hypeman_resources_gpu_profile_slots", map[string]string{"profile": "L40S-2Q", "kind": "available"}))
+}
+
+func TestStartMonitoringPublishesDiskUtilizationFromCachedSnapshot(t *testing.T) {
+	mgr, _, _ := monitoringTestManager(t)
+
+	volumePath := mgr.paths.VolumeData("vol-1")
+	require.NoError(t, createMonitoringSparseTestFile(volumePath, 64*1024*1024, []monitoringSparseWrite{
+		{offset: 0, data: bytes.Repeat([]byte("v"), 4096)},
+	}))
+	rootfsOverlayPath := mgr.paths.InstanceOverlay("vm-1")
+	require.NoError(t, createMonitoringSparseTestFile(rootfsOverlayPath, 64*1024*1024, []monitoringSparseWrite{
+		{offset: 0, data: bytes.Repeat([]byte("o"), 4096)},
+	}))
+	snapshotDir := mgr.paths.InstanceSnapshotLatest("vm-1")
+	require.NoError(t, createMonitoringSparseTestFile(filepath.Join(snapshotDir, "memory-ranges.zst"), 32*1024*1024, []monitoringSparseWrite{
+		{offset: 0, data: bytes.Repeat([]byte("s"), 4096)},
+	}))
+	require.NoError(t, os.WriteFile(filepath.Join(snapshotDir, "config.json"), []byte(`{}`), 0644))
+
+	reader := otelmetric.NewManualReader()
+	provider := otelmetric.NewMeterProvider(otelmetric.WithReader(reader))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	require.NoError(t, mgr.StartMonitoring(ctx, provider.Meter("test"), time.Hour))
+
+	initialRM := collectMonitoringMetrics(t, reader)
+	initialVolumeBytes := int64GaugeValue(t, initialRM, "hypeman_disk_utilization_bytes", map[string]string{"component": "volumes"})
+	initialCompressedSnapshotBytes := int64GaugeValue(t, initialRM, "hypeman_disk_utilization_bytes", map[string]string{"component": diskutilization.ComponentSnapshotCompressed})
+	require.Equal(t, allocatedBytesForMonitoringPath(volumePath), initialVolumeBytes)
+	require.Equal(t, int64(100*1024*1024*1024), int64GaugeValue(t, initialRM, "hypeman_resources_disk_breakdown_bytes", map[string]string{"component": "volumes"}))
+	require.Greater(t, initialCompressedSnapshotBytes, int64(0))
+
+	f, err := os.OpenFile(volumePath, os.O_WRONLY, 0)
+	require.NoError(t, err)
+	_, err = f.WriteAt(bytes.Repeat([]byte("m"), 4096), 8*1024*1024)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	cachedRM := collectMonitoringMetrics(t, reader)
+	require.Equal(t, initialVolumeBytes, int64GaugeValue(t, cachedRM, "hypeman_disk_utilization_bytes", map[string]string{"component": "volumes"}))
+
+	require.NoError(t, mgr.refreshMonitoringSnapshot(context.Background()))
+
+	refreshedRM := collectMonitoringMetrics(t, reader)
+	refreshedVolumeBytes := int64GaugeValue(t, refreshedRM, "hypeman_disk_utilization_bytes", map[string]string{"component": "volumes"})
+	require.Greater(t, refreshedVolumeBytes, initialVolumeBytes)
+}
+
+func createMonitoringSparseTestFile(path string, size int64, writes []monitoringSparseWrite) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	if err := f.Truncate(size); err != nil {
+		return err
+	}
+
+	for _, write := range writes {
+		if _, err := f.WriteAt(write.data, write.offset); err != nil {
+			return err
+		}
+	}
+
+	return f.Sync()
+}
+
+func allocatedBytesForMonitoringPath(path string) int64 {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return 0
+	}
+
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0
+	}
+
+	return stat.Blocks * 512
 }
 
 func collectMonitoringMetrics(t *testing.T, reader *otelmetric.ManualReader) metricdata.ResourceMetrics {
