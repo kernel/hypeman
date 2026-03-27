@@ -807,6 +807,21 @@ components:
           nullable: true
           example: "permission denied"
     
+    WaitForStateResponse:
+      type: object
+      required: [state, timed_out]
+      properties:
+        state:
+          $ref: "#/components/schemas/InstanceState"
+          description: Current instance state when the wait completed
+        state_error:
+          type: string
+          description: Error message when derived state is Unknown
+          nullable: true
+        timed_out:
+          type: boolean
+          description: Whether the timeout expired before the target state was reached
+
     InstanceStats:
       type: object
       required: [instance_id, instance_name, cpu_seconds, memory_rss_bytes, memory_vms_bytes, network_rx_bytes, network_tx_bytes, allocated_vcpus, allocated_memory_bytes]
@@ -2851,6 +2866,65 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
   
+  /instances/{id}/wait:
+    get:
+      summary: Wait for instance to reach a target state
+      description: |
+        Blocks until the instance reaches the specified target state, the timeout expires,
+        or the instance enters a terminal/error state. Useful for avoiding client-side polling
+        when waiting for state transitions (e.g. waiting for an instance to become Running).
+      operationId: waitForInstanceState
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Instance ID or name
+        - name: state
+          in: query
+          required: true
+          schema:
+            $ref: "#/components/schemas/InstanceState"
+          description: Target state to wait for
+        - name: timeout
+          in: query
+          required: false
+          schema:
+            type: string
+            default: "60s"
+          description: |
+            Maximum duration to wait (Go duration format, e.g. "30s", "2m").
+            Capped at 5 minutes. Defaults to 60 seconds.
+          example: "30s"
+      responses:
+        200:
+          description: Wait completed (target state reached, timed out, or terminal state detected)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WaitForStateResponse"
+        400:
+          description: Invalid parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        404:
+          description: Instance not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /instances/{id}/stats:
     get:
       summary: Get instance resource utilization stats

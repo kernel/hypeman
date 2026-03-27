@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/c2h5oh/datasize"
 	"github.com/kernel/hypeman/lib/guest"
@@ -410,6 +411,79 @@ func vmStatsToOAPI(s *vm_metrics.VMStats) oapi.InstanceStats {
 		MemoryUtilizationRatio: s.MemoryUtilizationRatio(),
 	}
 	return stats
+}
+
+// validWaitTargetStates is the set of states callers may wait for.
+var validWaitTargetStates = map[oapi.InstanceState]bool{
+	oapi.InstanceStateCreated:      true,
+	oapi.InstanceStateInitializing: true,
+	oapi.InstanceStateRunning:      true,
+	oapi.InstanceStatePaused:       true,
+	oapi.InstanceStateShutdown:     true,
+	oapi.InstanceStateStopped:      true,
+	oapi.InstanceStateStandby:      true,
+}
+
+// WaitForInstanceState blocks until an instance reaches the target state,
+// the timeout expires, or a terminal/error state is detected.
+// Note: Resolution is handled by ResolveResource middleware.
+func (s *ApiService) WaitForInstanceState(ctx context.Context, request oapi.WaitForInstanceStateRequestObject) (oapi.WaitForInstanceStateResponseObject, error) {
+	inst := mw.GetResolvedInstance[instances.Instance](ctx)
+	if inst == nil {
+		return oapi.WaitForInstanceState500JSONResponse{
+			Code:    "internal_error",
+			Message: "resource not resolved",
+		}, nil
+	}
+
+	targetState := request.Params.State
+	if !validWaitTargetStates[targetState] {
+		return oapi.WaitForInstanceState400JSONResponse{
+			Code:    "invalid_state",
+			Message: fmt.Sprintf("invalid target state: %s", targetState),
+		}, nil
+	}
+
+	timeout := instances.WaitForStateDefaultTimeout
+	if request.Params.Timeout != nil && *request.Params.Timeout != "" {
+		parsed, err := time.ParseDuration(*request.Params.Timeout)
+		if err != nil {
+			return oapi.WaitForInstanceState400JSONResponse{
+				Code:    "invalid_timeout",
+				Message: fmt.Sprintf("invalid timeout format: %v", err),
+			}, nil
+		}
+		if parsed <= 0 {
+			return oapi.WaitForInstanceState400JSONResponse{
+				Code:    "invalid_timeout",
+				Message: "timeout must be positive",
+			}, nil
+		}
+		if parsed > instances.WaitForStateMaxTimeout {
+			parsed = instances.WaitForStateMaxTimeout
+		}
+		timeout = parsed
+	}
+
+	result, err := instances.WaitForState(ctx, s.InstanceManager, inst, instances.State(targetState), timeout)
+	if err != nil {
+		if errors.Is(err, instances.ErrNotFound) {
+			return oapi.WaitForInstanceState404JSONResponse{
+				Code:    "not_found",
+				Message: "instance was deleted while waiting",
+			}, nil
+		}
+		return oapi.WaitForInstanceState500JSONResponse{
+			Code:    "internal_error",
+			Message: "failed waiting for instance state",
+		}, nil
+	}
+
+	return oapi.WaitForInstanceState200JSONResponse{
+		State:      oapi.InstanceState(result.State),
+		StateError: result.StateError,
+		TimedOut:   result.TimedOut,
+	}, nil
 }
 
 // DeleteInstance stops and deletes an instance

@@ -171,6 +171,11 @@ func (m *mockInstanceManager) GetVsockDialer(ctx context.Context, instanceID str
 	return nil, nil
 }
 
+func (m *mockInstanceManager) Subscribe(instanceID string) (<-chan instances.StateChange, func()) {
+	ch := make(chan instances.StateChange, 1)
+	return ch, func() { close(ch) }
+}
+
 // mockVolumeManager implements volumes.Manager for testing
 type mockVolumeManager struct {
 	volumes               map[string]*volumes.Volume
