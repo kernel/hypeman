@@ -1491,3 +1491,62 @@ func (r *testInstanceResolver) ResolveInstance(ctx context.Context, nameOrID str
 	// For tests, just return nameOrID as both name and id
 	return nameOrID, nameOrID, nil
 }
+
+func TestWaitForState_Integration(t *testing.T) {
+	t.Parallel()
+	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
+		t.Skip("/dev/kvm not available, skipping on this platform")
+	}
+
+	mgr, tmpDir := setupTestManager(t)
+	ctx := context.Background()
+
+	imageManager, err := images.NewManager(paths.New(tmpDir), 1, nil)
+	require.NoError(t, err)
+
+	t.Log("Pulling nginx:alpine image...")
+	nginxImage, err := imageManager.CreateImage(ctx, images.CreateImageRequest{
+		Name: integrationTestImageRef(t, "docker.io/library/nginx:alpine"),
+	})
+	require.NoError(t, err)
+
+	imageName := nginxImage.Name
+	for i := 0; i < 60; i++ {
+		img, err := imageManager.GetImage(ctx, imageName)
+		if err == nil && img.Status == images.StatusReady {
+			break
+		}
+		if err == nil && img.Status == images.StatusFailed {
+			t.Fatalf("Image build failed: %s", *img.Error)
+		}
+		time.Sleep(1 * time.Second)
+	}
+
+	systemManager := system.NewManager(paths.New(tmpDir))
+	err = systemManager.EnsureSystemFiles(ctx)
+	require.NoError(t, err)
+
+	inst, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
+		Name:           "test-waitforstate",
+		Image:          integrationTestImageRef(t, "docker.io/library/nginx:alpine"),
+		Size:           2 * 1024 * 1024 * 1024,
+		HotplugSize:    512 * 1024 * 1024,
+		OverlaySize:    10 * 1024 * 1024 * 1024,
+		Vcpus:          1,
+		NetworkEnabled: false,
+		Env:            map[string]string{},
+	})
+	require.NoError(t, err)
+	assert.Contains(t, []State{StateInitializing, StateRunning}, inst.State)
+
+	// Use WaitForState (subscription + polling fallback) instead of the
+	// old polling-only waitForInstanceState helper.
+	timeout := integrationTestTimeout(30 * time.Second)
+	result, err := WaitForState(ctx, mgr, inst, StateRunning, timeout)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, StateRunning, result.State)
+	assert.False(t, result.TimedOut, "should reach Running before timeout")
+
+	t.Logf("Instance %s reached Running state", inst.Id)
+}

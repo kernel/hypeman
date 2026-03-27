@@ -56,6 +56,9 @@ type Manager interface {
 	SetResourceValidator(v ResourceValidator)
 	// GetVsockDialer returns a VsockDialer for the specified instance.
 	GetVsockDialer(ctx context.Context, instanceID string) (hypervisor.VsockDialer, error)
+	// Subscribe returns a channel that receives state change events for the
+	// given instance, plus an unsubscribe function the caller must defer.
+	Subscribe(instanceID string) (<-chan StateChange, func())
 }
 
 // ResourceLimits contains configurable resource limits for instances
@@ -99,6 +102,9 @@ type manager struct {
 	compressionJobs           map[string]*compressionJob
 	nativeCodecMu             sync.Mutex
 	nativeCodecPaths          map[string]string
+
+	// State change subscriptions for waitForState
+	stateSubscribers *subscribers
 
 	// Hypervisor support
 	vmStarters        map[hypervisor.Type]hypervisor.VMStarter
@@ -151,6 +157,7 @@ func NewManager(p *paths.Paths, imageManager images.Manager, systemManager syste
 		snapshotDefaults:  snapshotDefaults,
 		compressionJobs:   make(map[string]*compressionJob),
 		nativeCodecPaths:  make(map[string]string),
+		stateSubscribers:  newSubscribers(),
 	}
 	m.deleteSnapshotFn = m.deleteSnapshot
 
@@ -169,6 +176,18 @@ func NewManager(p *paths.Paths, imageManager images.Manager, systemManager syste
 // This is called after initialization to avoid circular dependencies.
 func (m *manager) SetResourceValidator(v ResourceValidator) {
 	m.resourceValidator = v
+}
+
+func (m *manager) Subscribe(instanceID string) (<-chan StateChange, func()) {
+	return m.stateSubscribers.Subscribe(instanceID)
+}
+
+// notifyStateChange broadcasts a state change to all subscribers for the instance.
+func (m *manager) notifyStateChange(instanceID string, inst *Instance) {
+	m.stateSubscribers.Notify(instanceID, StateChange{
+		State:      inst.State,
+		StateError: inst.StateError,
+	})
 }
 
 // getHypervisor creates a hypervisor client for the given socket and type.
@@ -235,6 +254,7 @@ func (m *manager) DeleteInstance(ctx context.Context, id string) error {
 
 	err := m.deleteInstance(ctx, id)
 	if err == nil {
+		m.stateSubscribers.CloseAll(id)
 		// Clean up the lock after successful deletion
 		m.instanceLocks.Delete(id)
 	}
@@ -297,7 +317,11 @@ func (m *manager) StandbyInstance(ctx context.Context, id string, req StandbyIns
 	lock := m.getInstanceLock(id)
 	lock.Lock()
 	defer lock.Unlock()
-	return m.standbyInstance(ctx, id, req, false)
+	inst, err := m.standbyInstance(ctx, id, req, false)
+	if err == nil {
+		m.notifyStateChange(id, inst)
+	}
+	return inst, err
 }
 
 // RestoreInstance restores an instance from standby
@@ -305,14 +329,22 @@ func (m *manager) RestoreInstance(ctx context.Context, id string) (*Instance, er
 	lock := m.getInstanceLock(id)
 	lock.Lock()
 	defer lock.Unlock()
-	return m.restoreInstance(ctx, id)
+	inst, err := m.restoreInstance(ctx, id)
+	if err == nil {
+		m.notifyStateChange(id, inst)
+	}
+	return inst, err
 }
 
 func (m *manager) RestoreSnapshot(ctx context.Context, id string, snapshotID string, req RestoreSnapshotRequest) (*Instance, error) {
 	lock := m.getInstanceLock(id)
 	lock.Lock()
 	defer lock.Unlock()
-	return m.restoreSnapshot(ctx, id, snapshotID, req)
+	inst, err := m.restoreSnapshot(ctx, id, snapshotID, req)
+	if err == nil {
+		m.notifyStateChange(id, inst)
+	}
+	return inst, err
 }
 
 // StopInstance gracefully stops a running instance
@@ -320,7 +352,11 @@ func (m *manager) StopInstance(ctx context.Context, id string) (*Instance, error
 	lock := m.getInstanceLock(id)
 	lock.Lock()
 	defer lock.Unlock()
-	return m.stopInstance(ctx, id)
+	inst, err := m.stopInstance(ctx, id)
+	if err == nil {
+		m.notifyStateChange(id, inst)
+	}
+	return inst, err
 }
 
 // StartInstance starts a stopped instance with optional command overrides
@@ -328,7 +364,11 @@ func (m *manager) StartInstance(ctx context.Context, id string, req StartInstanc
 	lock := m.getInstanceLock(id)
 	lock.Lock()
 	defer lock.Unlock()
-	return m.startInstance(ctx, id, req)
+	inst, err := m.startInstance(ctx, id, req)
+	if err == nil {
+		m.notifyStateChange(id, inst)
+	}
+	return inst, err
 }
 
 // UpdateInstance updates mutable properties of a running instance
