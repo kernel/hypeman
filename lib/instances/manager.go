@@ -239,8 +239,8 @@ func (m *manager) recordImageUsage(ctx context.Context, imageInfo *images.Image)
 		return
 	}
 	if err := m.imageUsageRecorder.MarkUsed(ctx, imageInfo.Name, imageInfo.Digest); err != nil {
-		logger := logger.FromContext(ctx)
-		logger.WarnContext(ctx, "failed to record image usage", "image", imageInfo.Name, "digest", imageInfo.Digest, "error", err)
+		log := logger.FromContext(ctx)
+		log.WarnContext(ctx, "failed to record image usage", "image", imageInfo.Name, "digest", imageInfo.Digest, "error", err)
 	}
 }
 
