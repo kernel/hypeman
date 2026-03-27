@@ -78,7 +78,7 @@ func configureImageRetentionController(cfg *config.Config, imageManager images.M
 		return nil, fmt.Errorf("invalid images.auto_delete.unused_for %q: %w", cfg.Images.AutoDelete.UnusedFor, err)
 	}
 
-	controller, err := imageretention.NewController(paths.New(cfg.DataDir), imageManager, unusedFor, logger, meter)
+	controller, err := imageretention.NewController(paths.New(cfg.DataDir), imageManager, unusedFor, cfg.Images.AutoDelete.Allowed, logger, meter)
 	if err != nil {
 		return nil, err
 	}

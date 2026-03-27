@@ -21,7 +21,7 @@ import (
 )
 
 func TestSweepMarksUnreferencedImageUnused(t *testing.T) {
-	controller, p, _ := newTestController(t, 30*24*time.Hour)
+	controller, p, _ := newTestController(t, 30*24*time.Hour, []string{"*"})
 	const digest = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
 	seedReadyImage(t, p, "docker.io/library/alpine:latest", digest)
 
@@ -35,7 +35,7 @@ func TestSweepMarksUnreferencedImageUnused(t *testing.T) {
 }
 
 func TestSweepRecordsMetrics(t *testing.T) {
-	controller, p, reader := newMetricTestController(t, 24*time.Hour)
+	controller, p, reader := newMetricTestController(t, 24*time.Hour, []string{"*"})
 	const trackedDigest = "sha256:0101010101010101010101010101010101010101010101010101010101010101"
 	const deletedDigest = "sha256:0202020202020202020202020202020202020202020202020202020202020202"
 
@@ -65,7 +65,7 @@ func TestSweepRecordsMetrics(t *testing.T) {
 }
 
 func TestSweepReferencedInstancePreventsUnusedState(t *testing.T) {
-	controller, p, _ := newTestController(t, 30*24*time.Hour)
+	controller, p, _ := newTestController(t, 30*24*time.Hour, []string{"*"})
 	const digest = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
 	imageName := "docker.io/library/alpine:latest"
 	seedReadyImage(t, p, imageName, digest)
@@ -83,7 +83,7 @@ func TestSweepReferencedInstancePreventsUnusedState(t *testing.T) {
 }
 
 func TestSweepSnapshotReferencePreventsDeletion(t *testing.T) {
-	controller, p, _ := newTestController(t, 24*time.Hour)
+	controller, p, _ := newTestController(t, 24*time.Hour, []string{"*"})
 	const digest = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
 	imageName := "docker.io/library/alpine:latest"
 	seedReadyImage(t, p, imageName, digest)
@@ -103,7 +103,7 @@ func TestSweepSnapshotReferencePreventsDeletion(t *testing.T) {
 }
 
 func TestSweepDeletesExpiredImageDigestAndAllTags(t *testing.T) {
-	controller, p, _ := newTestController(t, 24*time.Hour)
+	controller, p, _ := newTestController(t, 24*time.Hour, []string{"*"})
 	const digest = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
 	seedReadyImage(t, p, "docker.io/library/alpine:latest", digest, "stable")
 	writeStateAt(t, p, "docker.io/library/alpine", digest, time.Date(2026, 3, 20, 0, 0, 0, 0, time.UTC))
@@ -123,7 +123,7 @@ func TestSweepDeletesExpiredImageDigestAndAllTags(t *testing.T) {
 }
 
 func TestSweepProtectedImageClearsPriorState(t *testing.T) {
-	controller, p, _ := newTestController(t, 24*time.Hour)
+	controller, p, _ := newTestController(t, 24*time.Hour, []string{"*"})
 	const digest = "sha256:5555555555555555555555555555555555555555555555555555555555555555"
 	imageName := "docker.io/library/alpine:latest"
 	seedReadyImage(t, p, imageName, digest)
@@ -141,7 +141,7 @@ func TestSweepProtectedImageClearsPriorState(t *testing.T) {
 }
 
 func TestSweepPrunesStateForManuallyDeletedImage(t *testing.T) {
-	controller, p, _ := newTestController(t, 24*time.Hour)
+	controller, p, _ := newTestController(t, 24*time.Hour, []string{"*"})
 	const digest = "sha256:6666666666666666666666666666666666666666666666666666666666666666"
 	seedReadyImage(t, p, "docker.io/library/alpine:latest", digest)
 	writeStateAt(t, p, "docker.io/library/alpine", digest, time.Date(2026, 3, 20, 0, 0, 0, 0, time.UTC))
@@ -154,7 +154,7 @@ func TestSweepPrunesStateForManuallyDeletedImage(t *testing.T) {
 }
 
 func TestSweepIgnoresNonReadyImages(t *testing.T) {
-	controller, p, _ := newTestController(t, 24*time.Hour)
+	controller, p, _ := newTestController(t, 24*time.Hour, []string{"*"})
 	const digest = "sha256:7777777777777777777777777777777777777777777777777777777777777777"
 	seedImage(t, p, "docker.io/library/alpine:latest", digest, images.StatusPending)
 
@@ -165,7 +165,7 @@ func TestSweepIgnoresNonReadyImages(t *testing.T) {
 }
 
 func TestSweepStaleReferencesDoNotBlockOtherCleanup(t *testing.T) {
-	controller, p, _ := newTestController(t, 24*time.Hour)
+	controller, p, _ := newTestController(t, 24*time.Hour, []string{"*"})
 	const staleDigest = "sha256:8888888888888888888888888888888888888888888888888888888888888888"
 	const liveDigest = "sha256:9999999999999999999999999999999999999999999999999999999999999999"
 	seedReadyImage(t, p, "docker.io/library/alpine:latest", liveDigest)
@@ -187,7 +187,7 @@ func TestSweepStaleReferencesDoNotBlockOtherCleanup(t *testing.T) {
 }
 
 func TestMarkUsedClearsState(t *testing.T) {
-	controller, p, _ := newTestController(t, 24*time.Hour)
+	controller, p, _ := newTestController(t, 24*time.Hour, []string{"*"})
 	const digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	seedReadyImage(t, p, "docker.io/library/alpine:latest", digest)
 	writeStateAt(t, p, "docker.io/library/alpine", digest, time.Date(2026, 3, 20, 0, 0, 0, 0, time.UTC))
@@ -199,7 +199,7 @@ func TestMarkUsedClearsState(t *testing.T) {
 }
 
 func TestRunPerformsImmediateSweep(t *testing.T) {
-	controller, p, _ := newTestController(t, 24*time.Hour)
+	controller, p, _ := newTestController(t, 24*time.Hour, []string{"*"})
 	const digest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	seedReadyImage(t, p, "docker.io/library/alpine:latest", digest)
 	now := time.Date(2026, 3, 26, 12, 0, 0, 0, time.UTC)
@@ -233,7 +233,7 @@ func TestSweepSuccessLogIsDebugOnly(t *testing.T) {
 
 	var out bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&out, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	controller, err := NewController(p, manager, 24*time.Hour, logger, nil)
+	controller, err := NewController(p, manager, 24*time.Hour, []string{"*"}, logger, nil)
 	require.NoError(t, err)
 	seedReadyImage(t, p, "docker.io/library/alpine:latest", "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
 
@@ -241,7 +241,63 @@ func TestSweepSuccessLogIsDebugOnly(t *testing.T) {
 	require.NotContains(t, out.String(), "image auto-delete sweep completed")
 }
 
-func newTestController(t *testing.T, unusedFor time.Duration) (*Controller, *paths.Paths, images.Manager) {
+func TestSweepSkipsDisallowedRepositories(t *testing.T) {
+	controller, p, _ := newTestController(t, 24*time.Hour, []string{"ghcr.io/kernel/*"})
+	const digest = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+	seedReadyImage(t, p, "docker.io/library/alpine:latest", digest)
+	writeStateAt(t, p, "docker.io/library/alpine", digest, time.Date(2026, 3, 20, 0, 0, 0, 0, time.UTC))
+
+	controller.now = func() time.Time {
+		return time.Date(2026, 3, 26, 0, 0, 0, 0, time.UTC)
+	}
+
+	require.NoError(t, controller.Sweep(context.Background()))
+
+	_, err := os.Stat(p.ImageDigestDir("docker.io/library/alpine", stringsTrimDigest(digest)))
+	require.NoError(t, err)
+	_, err = os.Stat(p.ImageRetentionState("docker.io/library/alpine", stringsTrimDigest(digest)))
+	require.True(t, os.IsNotExist(err))
+}
+
+func TestSweepAllowsGlobalWildcard(t *testing.T) {
+	controller, p, _ := newTestController(t, 24*time.Hour, []string{"*"})
+	const digest = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+	seedReadyImage(t, p, "docker.io/library/alpine:latest", digest)
+	writeStateAt(t, p, "docker.io/library/alpine", digest, time.Date(2026, 3, 20, 0, 0, 0, 0, time.UTC))
+
+	controller.now = func() time.Time {
+		return time.Date(2026, 3, 26, 0, 0, 0, 0, time.UTC)
+	}
+
+	require.NoError(t, controller.Sweep(context.Background()))
+
+	_, err := os.Stat(p.ImageDigestDir("docker.io/library/alpine", stringsTrimDigest(digest)))
+	require.True(t, os.IsNotExist(err))
+}
+
+func TestAllowPatternMatches(t *testing.T) {
+	tests := []struct {
+		name       string
+		pattern    string
+		repository string
+		want       bool
+	}{
+		{name: "exact", pattern: "docker.io/library/alpine", repository: "docker.io/library/alpine", want: true},
+		{name: "global wildcard", pattern: "*", repository: "docker.io/library/alpine", want: true},
+		{name: "suffix wildcard", pattern: "docker.io/library/*", repository: "docker.io/library/alpine", want: true},
+		{name: "embedded wildcard", pattern: "ghcr.io/kernel/hypeman-*", repository: "ghcr.io/kernel/hypeman-test", want: true},
+		{name: "question mark", pattern: "ghcr.io/kernel/hypeman-?", repository: "ghcr.io/kernel/hypeman-a", want: true},
+		{name: "no match", pattern: "ghcr.io/kernel/*", repository: "docker.io/library/alpine", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, allowPatternMatches(tt.pattern, tt.repository))
+		})
+	}
+}
+
+func newTestController(t *testing.T, unusedFor time.Duration, allowed []string) (*Controller, *paths.Paths, images.Manager) {
 	t.Helper()
 
 	dataDir := t.TempDir()
@@ -249,12 +305,12 @@ func newTestController(t *testing.T, unusedFor time.Duration) (*Controller, *pat
 	manager, err := images.NewManager(p, 1, nil)
 	require.NoError(t, err)
 
-	controller, err := NewController(p, manager, unusedFor, nil, nil)
+	controller, err := NewController(p, manager, unusedFor, allowed, nil, nil)
 	require.NoError(t, err)
 	return controller, p, manager
 }
 
-func newMetricTestController(t *testing.T, unusedFor time.Duration) (*Controller, *paths.Paths, *otelmetric.ManualReader) {
+func newMetricTestController(t *testing.T, unusedFor time.Duration, allowed []string) (*Controller, *paths.Paths, *otelmetric.ManualReader) {
 	t.Helper()
 
 	dataDir := t.TempDir()
@@ -264,7 +320,7 @@ func newMetricTestController(t *testing.T, unusedFor time.Duration) (*Controller
 
 	reader := otelmetric.NewManualReader()
 	provider := otelmetric.NewMeterProvider(otelmetric.WithReader(reader))
-	controller, err := NewController(p, manager, unusedFor, nil, provider.Meter("test"))
+	controller, err := NewController(p, manager, unusedFor, allowed, nil, provider.Meter("test"))
 	require.NoError(t, err)
 	return controller, p, reader
 }

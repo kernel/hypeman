@@ -125,8 +125,9 @@ type LoggingConfig struct {
 
 // ImagesAutoDeleteConfig holds server-wide image retention settings.
 type ImagesAutoDeleteConfig struct {
-	Enabled   bool   `koanf:"enabled"`
-	UnusedFor string `koanf:"unused_for"`
+	Enabled   bool     `koanf:"enabled"`
+	UnusedFor string   `koanf:"unused_for"`
+	Allowed   []string `koanf:"allowed"`
 }
 
 // ImagesConfig holds image-management settings.
@@ -335,6 +336,7 @@ func defaultConfig() *Config {
 			AutoDelete: ImagesAutoDeleteConfig{
 				Enabled:   false,
 				UnusedFor: "720h",
+				Allowed:   []string{},
 			},
 		},
 
@@ -532,6 +534,9 @@ func (c *Config) Validate() error {
 	}
 	if err := validateDuration("images.auto_delete.unused_for", c.Images.AutoDelete.UnusedFor); err != nil {
 		return err
+	}
+	for i, pattern := range c.Images.AutoDelete.Allowed {
+		c.Images.AutoDelete.Allowed[i] = strings.TrimSpace(pattern)
 	}
 	algorithm := strings.ToLower(c.Snapshot.CompressionDefault.Algorithm)
 	c.Snapshot.CompressionDefault.Algorithm = algorithm

@@ -37,6 +37,9 @@ func TestDefaultConfigIncludesMetricsSettings(t *testing.T) {
 	if cfg.Images.AutoDelete.UnusedFor != "720h" {
 		t.Fatalf("expected default images.auto_delete.unused_for to be 720h, got %q", cfg.Images.AutoDelete.UnusedFor)
 	}
+	if len(cfg.Images.AutoDelete.Allowed) != 0 {
+		t.Fatalf("expected default images.auto_delete.allowed to be empty, got %v", cfg.Images.AutoDelete.Allowed)
+	}
 }
 
 func TestLoadEnvOverridesMetricsAndOtelInterval(t *testing.T) {
@@ -162,6 +165,9 @@ func TestLoadUsesDefaultImageAutoDeleteRetentionWindow(t *testing.T) {
 	if cfg.Images.AutoDelete.UnusedFor != "720h" {
 		t.Fatalf("expected default images.auto_delete.unused_for to remain 720h, got %q", cfg.Images.AutoDelete.UnusedFor)
 	}
+	if len(cfg.Images.AutoDelete.Allowed) != 0 {
+		t.Fatalf("expected default images.auto_delete.allowed to remain empty, got %v", cfg.Images.AutoDelete.Allowed)
+	}
 }
 
 func TestValidateRejectsInvalidImageAutoDeleteUnusedFor(t *testing.T) {
@@ -171,6 +177,24 @@ func TestValidateRejectsInvalidImageAutoDeleteUnusedFor(t *testing.T) {
 	err := cfg.Validate()
 	if err == nil {
 		t.Fatalf("expected validation error for invalid images.auto_delete.unused_for")
+	}
+}
+
+func TestValidateTrimsImageAutoDeleteAllowedPatterns(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Images.AutoDelete.Allowed = []string{"  docker.io/library/*  ", "   ", "ghcr.io/kernel/*"}
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected image auto delete allow list to validate, got %v", err)
+	}
+	if cfg.Images.AutoDelete.Allowed[0] != "docker.io/library/*" {
+		t.Fatalf("expected first allow pattern to be trimmed, got %q", cfg.Images.AutoDelete.Allowed[0])
+	}
+	if cfg.Images.AutoDelete.Allowed[1] != "" {
+		t.Fatalf("expected whitespace-only allow pattern to trim to empty string, got %q", cfg.Images.AutoDelete.Allowed[1])
+	}
+	if cfg.Images.AutoDelete.Allowed[2] != "ghcr.io/kernel/*" {
+		t.Fatalf("expected third allow pattern to be trimmed, got %q", cfg.Images.AutoDelete.Allowed[2])
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -43,6 +44,7 @@ type Controller struct {
 	paths        *paths.Paths
 	imageManager images.Manager
 	unusedFor    time.Duration
+	allowed      []string
 	logger       *slog.Logger
 	metrics      *Metrics
 	now          func() time.Time
@@ -50,7 +52,7 @@ type Controller struct {
 }
 
 // NewController creates a new image retention controller.
-func NewController(p *paths.Paths, imageManager images.Manager, unusedFor time.Duration, logger *slog.Logger, meter metric.Meter) (*Controller, error) {
+func NewController(p *paths.Paths, imageManager images.Manager, unusedFor time.Duration, allowed []string, logger *slog.Logger, meter metric.Meter) (*Controller, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -58,6 +60,7 @@ func NewController(p *paths.Paths, imageManager images.Manager, unusedFor time.D
 		paths:        p,
 		imageManager: imageManager,
 		unusedFor:    unusedFor,
+		allowed:      normalizeAllowedPatterns(allowed),
 		logger:       logger.With("component", "image_retention"),
 		now:          time.Now,
 	}
@@ -230,6 +233,16 @@ func (c *Controller) sweep(ctx context.Context) (sweepStats, error) {
 	now := c.now().UTC()
 	for key, ref := range ready {
 		if _, ok := protected[key]; ok {
+			continue
+		}
+		if !c.isAllowed(ref.Repository) {
+			removed, err := c.deleteStateIfExists(ref)
+			if err != nil {
+				return stats, err
+			}
+			if removed {
+				stats.clearedStates++
+			}
 			continue
 		}
 
@@ -417,6 +430,42 @@ func normalizeDigest(digest string) string {
 		return digest
 	}
 	return "sha256:" + digest
+}
+
+func normalizeAllowedPatterns(patterns []string) []string {
+	normalized := make([]string, 0, len(patterns))
+	for _, pattern := range patterns {
+		pattern = strings.TrimSpace(pattern)
+		if pattern == "" {
+			continue
+		}
+		normalized = append(normalized, pattern)
+	}
+	return normalized
+}
+
+func (c *Controller) isAllowed(repository string) bool {
+	for _, pattern := range c.allowed {
+		if allowPatternMatches(pattern, repository) {
+			return true
+		}
+	}
+	return false
+}
+
+func allowPatternMatches(pattern, repository string) bool {
+	pattern = strings.TrimSpace(pattern)
+	if pattern == "" {
+		return false
+	}
+	if pattern == "*" {
+		return true
+	}
+
+	matcher := "^" + regexp.QuoteMeta(pattern) + "$"
+	matcher = strings.ReplaceAll(matcher, `\*`, ".*")
+	matcher = strings.ReplaceAll(matcher, `\?`, ".")
+	return regexp.MustCompile(matcher).MatchString(repository)
 }
 
 func (c *Controller) listStates() (map[string]imageState, error) {
