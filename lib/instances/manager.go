@@ -12,6 +12,7 @@ import (
 	"github.com/kernel/hypeman/lib/guestmemory"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
+	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/network"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/kernel/hypeman/lib/resources"
@@ -61,6 +62,16 @@ type Manager interface {
 	Subscribe(instanceID string) (<-chan StateChange, func())
 }
 
+// ImageUsageRecorder records newly used images before instance metadata is persisted.
+type ImageUsageRecorder interface {
+	MarkUsed(ctx context.Context, imageName, digest string) error
+}
+
+// ImageUsageRecorderSetter configures an optional image usage recorder on the manager.
+type ImageUsageRecorderSetter interface {
+	SetImageUsageRecorder(recorder ImageUsageRecorder)
+}
+
 // ResourceLimits contains configurable resource limits for instances
 type ResourceLimits struct {
 	MaxOverlaySize       int64 // Maximum overlay disk size in bytes per instance
@@ -102,6 +113,7 @@ type manager struct {
 	compressionJobs           map[string]*compressionJob
 	nativeCodecMu             sync.Mutex
 	nativeCodecPaths          map[string]string
+	imageUsageRecorder        ImageUsageRecorder
 
 	// State change subscriptions for waitForState
 	stateSubscribers *subscribers
@@ -178,6 +190,11 @@ func (m *manager) SetResourceValidator(v ResourceValidator) {
 	m.resourceValidator = v
 }
 
+// SetImageUsageRecorder configures an optional recorder for pre-persistence image usage.
+func (m *manager) SetImageUsageRecorder(recorder ImageUsageRecorder) {
+	m.imageUsageRecorder = recorder
+}
+
 func (m *manager) Subscribe(instanceID string) (<-chan StateChange, func()) {
 	return m.stateSubscribers.Subscribe(instanceID)
 }
@@ -234,6 +251,16 @@ func (m *manager) maybePersistBootMarkers(ctx context.Context, id string) {
 	lock.Lock()
 	defer lock.Unlock()
 	m.persistBootMarkers(ctx, id)
+}
+
+func (m *manager) recordImageUsage(ctx context.Context, imageInfo *images.Image) {
+	if m.imageUsageRecorder == nil || imageInfo == nil {
+		return
+	}
+	if err := m.imageUsageRecorder.MarkUsed(ctx, imageInfo.Name, imageInfo.Digest); err != nil {
+		log := logger.FromContext(ctx)
+		log.WarnContext(ctx, "failed to record image usage", "image", imageInfo.Name, "digest", imageInfo.Digest, "error", err)
+	}
 }
 
 // CreateInstance creates and starts a new instance
