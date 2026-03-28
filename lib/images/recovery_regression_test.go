@@ -32,7 +32,7 @@ func TestUnpackLayersCapturedFixtureReturnsErrorInsteadOfPanicking(t *testing.T)
 	})
 
 	require.Error(t, unpackErr)
-	assert.Contains(t, unpackErr.Error(), "panic in unpack rootfs")
+	assert.Contains(t, unpackErr.Error(), "config rootfs.diff_ids has 0 entries but manifest has 1 layers")
 }
 
 func TestRecoverInterruptedBuildsCapturedFixtureMarksBuildFailed(t *testing.T) {
@@ -64,7 +64,7 @@ func TestRecoverInterruptedBuildsCapturedFixtureMarksBuildFailed(t *testing.T) {
 	require.NotNil(t, meta.Error)
 	assert.Equal(t, recoveryFixtureDigest, meta.Digest)
 	assert.Equal(t, StatusFailed, meta.Status)
-	assert.Contains(t, *meta.Error, "panic in unpack rootfs")
+	assert.Contains(t, *meta.Error, "config rootfs.diff_ids has 0 entries but manifest has 1 layers")
 }
 
 func copyRecoveryFixture(t *testing.T) string {
