@@ -444,7 +444,7 @@ func TestForkCloudHypervisorFromRunningNetwork(t *testing.T) {
 	require.NoError(t, err)
 	sourceID := source.Id
 	t.Cleanup(func() { _ = manager.DeleteInstance(context.Background(), sourceID) })
-	source, err = waitForInstanceState(ctx, manager, source.Id, StateRunning, 20*time.Second)
+	source, err = waitForInstanceState(ctx, manager, source.Id, StateRunning, integrationTestTimeout(20*time.Second))
 	require.NoError(t, err)
 	require.NoError(t, waitForVMReady(ctx, source.SocketPath, 5*time.Second))
 
@@ -465,7 +465,7 @@ func TestForkCloudHypervisorFromRunningNetwork(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Contains(t, []State{StateInitializing, StateRunning}, forked.State)
-	forked, err = waitForInstanceState(ctx, manager, forked.Id, StateRunning, 20*time.Second)
+	forked, err = waitForInstanceState(ctx, manager, forked.Id, StateRunning, integrationTestTimeout(20*time.Second))
 	require.NoError(t, err)
 	require.Equal(t, StateRunning, forked.State)
 	forkedID := forked.Id
@@ -475,7 +475,7 @@ func TestForkCloudHypervisorFromRunningNetwork(t *testing.T) {
 	sourceAfterFork, err := manager.GetInstance(ctx, source.Id)
 	require.NoError(t, err)
 	if sourceAfterFork.State != StateRunning {
-		sourceAfterFork, err = waitForInstanceState(ctx, manager, source.Id, StateRunning, 20*time.Second)
+		sourceAfterFork, err = waitForInstanceState(ctx, manager, source.Id, StateRunning, integrationTestTimeout(20*time.Second))
 		require.NoError(t, err)
 	}
 	require.Equal(t, StateRunning, sourceAfterFork.State)

@@ -118,7 +118,7 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 	t.Log("Exec agent is ready")
 
 	// Standby requires running state; create may still return Initializing.
-	inst, err = waitForInstanceState(ctx, manager, inst.Id, StateRunning, 20*time.Second)
+	inst, err = waitForInstanceState(ctx, manager, inst.Id, StateRunning, integrationTestTimeout(20*time.Second))
 	require.NoError(t, err)
 
 	// Test initial internet connectivity via exec
@@ -160,7 +160,7 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 	inst, err = manager.RestoreInstance(ctx, inst.Id)
 	require.NoError(t, err)
 	assert.Contains(t, []State{StateInitializing, StateRunning}, inst.State)
-	inst, err = waitForInstanceState(ctx, manager, inst.Id, StateRunning, 20*time.Second)
+	inst, err = waitForInstanceState(ctx, manager, inst.Id, StateRunning, integrationTestTimeout(20*time.Second))
 	require.NoError(t, err)
 	assert.Equal(t, StateRunning, inst.State)
 	t.Log("Instance restored and running")
