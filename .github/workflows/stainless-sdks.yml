@@ -61,5 +61,6 @@ jobs:
           org: ${{ env.STAINLESS_ORG }}
           project: ${{ env.STAINLESS_PROJECT }}
           oas_path: ${{ env.OAS_PATH }}
+          config_path: ${{ env.CONFIG_PATH }}
           make_comment: true
           github_token: ${{ secrets.GITHUB_TOKEN }}
