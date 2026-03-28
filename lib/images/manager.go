@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -237,6 +238,13 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef) {
 	buildStart := time.Now()
 	buildDir := m.paths.SystemBuild(ref.String())
 	tempDir := filepath.Join(buildDir, "rootfs")
+
+	defer func() {
+		if r := recover(); r != nil {
+			m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("panic while building image %s: %v\n%s", ref.String(), r, debug.Stack()))
+			m.recordBuildMetrics(ctx, buildStart, "failed")
+		}
+	}()
 
 	if err := os.MkdirAll(buildDir, 0755); err != nil {
 		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("create build dir: %w", err))

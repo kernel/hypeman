@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"runtime/debug"
 	"strings"
 
 	"github.com/google/go-containerregistry/pkg/authn"
@@ -351,7 +352,19 @@ func (c *ociClient) unpackLayers(ctx context.Context, layoutTag, targetDir strin
 		},
 	}
 
-	err = layer.UnpackRootfs(context.Background(), casEngine, targetDir, ociManifest, unpackOpts)
+	var panicErr error
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				panicErr = fmt.Errorf("panic in unpack rootfs for %s: %v\n%s", layoutTag, r, debug.Stack())
+			}
+		}()
+
+		err = layer.UnpackRootfs(ctx, casEngine, targetDir, ociManifest, unpackOpts)
+	}()
+	if panicErr != nil {
+		return panicErr
+	}
 	if err != nil {
 		return fmt.Errorf("unpack rootfs: %w", err)
 	}
