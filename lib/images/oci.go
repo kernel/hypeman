@@ -317,6 +317,14 @@ func (c *ociClient) unpackLayers(ctx context.Context, layoutTag, targetDir strin
 		return fmt.Errorf("get manifest: %w", err)
 	}
 
+	configFile, err := img.ConfigFile()
+	if err != nil {
+		return fmt.Errorf("get config file: %w", err)
+	}
+	if err := validateConfigFileForUnpack(layoutTag, gcrManifest, configFile); err != nil {
+		return err
+	}
+
 	// Convert go-containerregistry manifest to OCI v1.Manifest for umoci
 	ociManifest := convertToOCIManifest(gcrManifest)
 
@@ -351,11 +359,37 @@ func (c *ociClient) unpackLayers(ctx context.Context, layoutTag, targetDir strin
 		},
 	}
 
-	err = layer.UnpackRootfs(context.Background(), casEngine, targetDir, ociManifest, unpackOpts)
+	err = layer.UnpackRootfs(ctx, casEngine, targetDir, ociManifest, unpackOpts)
 	if err != nil {
 		return fmt.Errorf("unpack rootfs: %w", err)
 	}
 
+	return nil
+}
+
+// validateConfigFileForUnpack rejects malformed image configs before calling
+// umoci. In particular, we verify that the config blob resolves to a real OCI
+// image config, that it declares a layered rootfs, and that rootfs.diff_ids has
+// one entry per manifest layer so umoci won't index past the end of the slice.
+func validateConfigFileForUnpack(layoutTag string, manifest *gcr.Manifest, configFile *gcr.ConfigFile) error {
+	if convertToOCIMediaType(string(manifest.Config.MediaType)) != v1.MediaTypeImageConfig {
+		return fmt.Errorf(
+			"unpack rootfs: config blob is not correct mediatype %s: %s",
+			v1.MediaTypeImageConfig,
+			manifest.Config.MediaType,
+		)
+	}
+	if configFile.RootFS.Type != "layers" {
+		return fmt.Errorf("unpack rootfs: config: unsupported rootfs.type: %s", configFile.RootFS.Type)
+	}
+	if len(configFile.RootFS.DiffIDs) != len(manifest.Layers) {
+		return fmt.Errorf(
+			"unpack rootfs: config rootfs.diff_ids has %d entries but manifest has %d layers for %s",
+			len(configFile.RootFS.DiffIDs),
+			len(manifest.Layers),
+			layoutTag,
+		)
+	}
 	return nil
 }
 

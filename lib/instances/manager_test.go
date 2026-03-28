@@ -337,7 +337,7 @@ func TestBasicEndToEnd(t *testing.T) {
 	// Wait for VM to be fully running
 	err = waitForVMReady(ctx, inst.SocketPath, 5*time.Second)
 	require.NoError(t, err, "VM should reach running state")
-	inst, err = waitForInstanceState(ctx, manager, inst.Id, StateRunning, 20*time.Second)
+	inst, err = waitForInstanceState(ctx, manager, inst.Id, StateRunning, integrationTestTimeout(20*time.Second))
 	require.NoError(t, err, "instance should reach Running state")
 
 	// Get instance
@@ -784,7 +784,7 @@ func TestBasicEndToEnd(t *testing.T) {
 	restartedInst, err := manager.StartInstance(ctx, inst.Id, StartInstanceRequest{})
 	require.NoError(t, err, "StartInstance should succeed")
 	assert.Contains(t, []State{StateInitializing, StateRunning}, restartedInst.State, "Instance should be active after restart")
-	restartedInst, err = waitForInstanceState(ctx, manager, restartedInst.Id, StateRunning, 20*time.Second)
+	restartedInst, err = waitForInstanceState(ctx, manager, restartedInst.Id, StateRunning, integrationTestTimeout(20*time.Second))
 	require.NoError(t, err, "instance should reach Running after restart")
 
 	// Verify exit info was cleared
@@ -1346,7 +1346,7 @@ func TestStandbyAndRestore(t *testing.T) {
 	inst, err := manager.CreateInstance(ctx, req)
 	require.NoError(t, err)
 	assert.Contains(t, []State{StateInitializing, StateRunning}, inst.State)
-	inst, err = waitForInstanceState(ctx, manager, inst.Id, StateRunning, 20*time.Second)
+	inst, err = waitForInstanceState(ctx, manager, inst.Id, StateRunning, integrationTestTimeout(20*time.Second))
 	require.NoError(t, err)
 	t.Logf("Instance created: %s", inst.Id)
 
@@ -1390,7 +1390,7 @@ func TestStandbyAndRestore(t *testing.T) {
 	inst, err = manager.RestoreInstance(ctx, inst.Id)
 	require.NoError(t, err)
 	assert.Contains(t, []State{StateInitializing, StateRunning}, inst.State)
-	inst, err = waitForInstanceState(ctx, manager, inst.Id, StateRunning, 20*time.Second)
+	inst, err = waitForInstanceState(ctx, manager, inst.Id, StateRunning, integrationTestTimeout(20*time.Second))
 	require.NoError(t, err)
 	t.Log("Instance restored and running")
 
