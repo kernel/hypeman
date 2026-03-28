@@ -6,12 +6,10 @@ on:
       - opened
       - synchronize
       - reopened
-  push:
-    branches:
-      - main
+      - closed
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 env:
@@ -22,7 +20,7 @@ env:
 
 jobs:
   preview:
-    if: github.event_name == 'pull_request'
+    if: github.event.action != 'closed'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -44,18 +42,19 @@ jobs:
           make_comment: true
           github_token: ${{ secrets.GITHUB_TOKEN }}
 
-  sync_main:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+  merge:
+    if: github.event.action == 'closed' && github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      pull-requests: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 2
 
-      - name: Sync canonical Stainless config
+      - name: Run merge build
         uses: stainless-api/upload-openapi-spec-action/merge@v1
         with:
           stainless_api_key: ${{ secrets.STAINLESS_API_KEY }}
@@ -63,4 +62,5 @@ jobs:
           project: ${{ env.STAINLESS_PROJECT }}
           oas_path: ${{ env.OAS_PATH }}
           config_path: ${{ env.CONFIG_PATH }}
-          make_comment: false
+          make_comment: true
+          github_token: ${{ secrets.GITHUB_TOKEN }}
