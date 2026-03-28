@@ -29,7 +29,8 @@ targets:
     package_name: "@onkernel/hypeman"
     production_repo: kernel/hypeman-ts
     publish:
-      npm: true
+      npm:
+        auth_method: oidc
 
 # `environments` are a map of the name of the environment (e.g. "sandbox",
 # "production") to the corresponding url to use.
