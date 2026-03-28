@@ -27,7 +27,7 @@ targets:
   typescript:
     edition: typescript.2025-10-10
     package_name: "@onkernel/hypeman"
-    production_repo: onkernel/hypeman-ts
+    production_repo: kernel/hypeman-ts
     publish:
       npm: true
 
