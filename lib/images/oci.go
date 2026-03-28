@@ -367,6 +367,10 @@ func (c *ociClient) unpackLayers(ctx context.Context, layoutTag, targetDir strin
 	return nil
 }
 
+// validateConfigFileForUnpack rejects malformed image configs before calling
+// umoci. In particular, we verify that the config blob resolves to a real OCI
+// image config, that it declares a layered rootfs, and that rootfs.diff_ids has
+// one entry per manifest layer so umoci won't index past the end of the slice.
 func validateConfigFileForUnpack(layoutTag string, manifest *gcr.Manifest, configFile *gcr.ConfigFile) error {
 	if convertToOCIMediaType(string(manifest.Config.MediaType)) != v1.MediaTypeImageConfig {
 		return fmt.Errorf(
