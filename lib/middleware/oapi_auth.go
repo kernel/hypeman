@@ -19,6 +19,10 @@ import (
 // errRepoNotAllowed is returned when a valid token doesn't have access to the requested repository.
 var errRepoNotAllowed = errors.New("repository not allowed by token")
 
+// errInvalidTokenType is returned when a token is valid JWT but carries claims
+// reserved for registry-scoped builder tokens.
+var errInvalidTokenType = errors.New("invalid token type")
+
 type contextKey string
 
 const userIDKey contextKey = "user_id"
@@ -77,55 +81,17 @@ func OapiAuthenticationFunc(jwtSecret string) openapi3filter.AuthenticationFunc 
 			return fmt.Errorf("invalid authorization header format")
 		}
 
-		// Parse and validate JWT
-		claims := jwt.MapClaims{}
-		parsedToken, err := jwt.ParseWithClaims(token, claims, func(token *jwt.Token) (interface{}, error) {
-			// Validate signing method
-			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-			}
-			return []byte(jwtSecret), nil
-		})
-
+		claims, err := validateUserToken(token, jwtSecret)
 		if err != nil {
-			log.DebugContext(ctx, "failed to parse JWT", "error", err)
+			log.DebugContext(ctx, "user token validation failed", "error", err)
+			if errors.Is(err, errInvalidTokenType) {
+				return errInvalidTokenType
+			}
 			return fmt.Errorf("invalid token")
 		}
 
-		if !parsedToken.Valid {
-			log.DebugContext(ctx, "invalid JWT token")
-			return fmt.Errorf("invalid token")
-		}
-
-		// Reject registry tokens - they should not be used for API authentication.
-		// Registry tokens have specific claims (repos, scope, build_id) that user tokens don't have.
-		if _, hasRepos := claims["repos"]; hasRepos {
-			log.DebugContext(ctx, "rejected registry token used for API auth")
-			return fmt.Errorf("invalid token type")
-		}
-		if _, hasScope := claims["scope"]; hasScope {
-			log.DebugContext(ctx, "rejected registry token used for API auth")
-			return fmt.Errorf("invalid token type")
-		}
-		if _, hasBuildID := claims["build_id"]; hasBuildID {
-			log.DebugContext(ctx, "rejected registry token used for API auth")
-			return fmt.Errorf("invalid token type")
-		}
-
-		// Extract user ID from claims and add to context
-		var userID string
-		if sub, ok := claims["sub"].(string); ok {
-			userID = sub
-		}
-
-		// Update the context with user ID
-		newCtx := context.WithValue(ctx, userIDKey, userID)
-
-		// Extract scoped permissions from the "permissions" claim.
-		// Tokens without this claim get full access (backward compatibility).
-		newCtx = extractPermissions(newCtx, claims)
-
-		// Update the request with the new context
+		// Update the request with the authenticated user context.
+		newCtx := contextWithUserClaims(ctx, claims)
 		*input.RequestValidationInput.Request = *input.RequestValidationInput.Request.WithContext(newCtx)
 
 		return nil
@@ -339,6 +305,55 @@ func validateRegistryToken(tokenString, jwtSecret, requestPath, method string) (
 	return claims, nil
 }
 
+// validateUserToken validates a regular user JWT and rejects builder/registry tokens.
+func validateUserToken(tokenString, jwtSecret string) (jwt.MapClaims, error) {
+	claims := jwt.MapClaims{}
+	parsedToken, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+		return []byte(jwtSecret), nil
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("parse token: %w", err)
+	}
+
+	if !parsedToken.Valid {
+		return nil, fmt.Errorf("invalid token")
+	}
+
+	// Reject registry tokens - they should not be used for API authentication.
+	// Registry tokens have specific claims that user tokens don't have.
+	if _, hasRepos := claims["repos"]; hasRepos {
+		return nil, errInvalidTokenType
+	}
+	if _, hasScope := claims["scope"]; hasScope {
+		return nil, errInvalidTokenType
+	}
+	if _, hasBuildID := claims["build_id"]; hasBuildID {
+		return nil, errInvalidTokenType
+	}
+	// Also reject tokens with "builder-" prefix in subject as an extra safeguard.
+	if sub, ok := claims["sub"].(string); ok && strings.HasPrefix(sub, "builder-") {
+		return nil, errInvalidTokenType
+	}
+
+	return claims, nil
+}
+
+func contextWithUserClaims(ctx context.Context, claims jwt.MapClaims) context.Context {
+	var userID string
+	if sub, ok := claims["sub"].(string); ok {
+		userID = sub
+	}
+
+	ctx = context.WithValue(ctx, userIDKey, userID)
+
+	// Tokens without a permissions claim keep full access for backward compatibility.
+	return extractPermissions(ctx, claims)
+}
+
 // JwtAuth creates a chi middleware that validates JWT bearer tokens
 func JwtAuth(jwtSecret string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
@@ -397,6 +412,18 @@ func JwtAuth(jwtSecret string) func(http.Handler) http.Handler {
 							fmt.Fprintf(w, `{"errors":[{"code":"UNAVAILABLE","message":"image not mirrored"}]}`)
 							return
 						}
+
+						// Fall back to regular user JWTs for direct registry access.
+						userClaims, err := validateUserToken(token, jwtSecret)
+						if err == nil {
+							log.DebugContext(r.Context(), "user token validated for registry request",
+								"auth_type", authType,
+								"subject", userClaims["sub"])
+							ctx := contextWithUserClaims(r.Context(), userClaims)
+							next.ServeHTTP(w, r.WithContext(ctx))
+							return
+						}
+						log.DebugContext(r.Context(), "user token validation failed for registry request", "error", err)
 					} else {
 						log.DebugContext(r.Context(), "failed to extract token", "error", err)
 					}
@@ -429,68 +456,19 @@ func JwtAuth(jwtSecret string) func(http.Handler) http.Handler {
 				return
 			}
 
-			// Parse and validate as regular user JWT
-			claims := jwt.MapClaims{}
-			parsedToken, err := jwt.ParseWithClaims(token, claims, func(token *jwt.Token) (interface{}, error) {
-				// Validate signing method
-				if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-					return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-				}
-				return []byte(jwtSecret), nil
-			})
-
+			claims, err := validateUserToken(token, jwtSecret)
 			if err != nil {
-				log.DebugContext(r.Context(), "failed to parse JWT", "error", err)
+				log.DebugContext(r.Context(), "user token validation failed", "error", err)
+				if errors.Is(err, errInvalidTokenType) {
+					OapiErrorHandler(w, errInvalidTokenType.Error(), http.StatusUnauthorized)
+					return
+				}
 				OapiErrorHandler(w, "invalid token", http.StatusUnauthorized)
 				return
 			}
-
-			if !parsedToken.Valid {
-				log.DebugContext(r.Context(), "invalid JWT token")
-				OapiErrorHandler(w, "invalid token", http.StatusUnauthorized)
-				return
-			}
-
-			// Reject registry tokens - they should not be used for API authentication.
-			// Registry tokens have specific claims that user tokens don't have.
-			// This provides defense-in-depth even though BuildKit isolates build containers.
-			if _, hasRepos := claims["repos"]; hasRepos {
-				log.DebugContext(r.Context(), "rejected registry token used for API auth")
-				OapiErrorHandler(w, "invalid token type", http.StatusUnauthorized)
-				return
-			}
-			if _, hasScope := claims["scope"]; hasScope {
-				log.DebugContext(r.Context(), "rejected registry token used for API auth")
-				OapiErrorHandler(w, "invalid token type", http.StatusUnauthorized)
-				return
-			}
-			if _, hasBuildID := claims["build_id"]; hasBuildID {
-				log.DebugContext(r.Context(), "rejected registry token used for API auth")
-				OapiErrorHandler(w, "invalid token type", http.StatusUnauthorized)
-				return
-			}
-			// Also reject tokens with "builder-" prefix in subject as an extra safeguard
-			if sub, ok := claims["sub"].(string); ok && strings.HasPrefix(sub, "builder-") {
-				log.DebugContext(r.Context(), "rejected builder token used for API auth", "sub", sub)
-				OapiErrorHandler(w, "invalid token type", http.StatusUnauthorized)
-				return
-			}
-
-			// Extract user ID from claims and add to context
-			var userID string
-			if sub, ok := claims["sub"].(string); ok {
-				userID = sub
-			}
-
-			// Update the context with user ID
-			newCtx := context.WithValue(r.Context(), userIDKey, userID)
-
-			// Extract scoped permissions from the "permissions" claim.
-			// Tokens without this claim get full access (backward compatibility).
-			newCtx = extractPermissions(newCtx, claims)
 
 			// Call next handler with updated context
-			next.ServeHTTP(w, r.WithContext(newCtx))
+			next.ServeHTTP(w, r.WithContext(contextWithUserClaims(r.Context(), claims)))
 		})
 	}
 }
