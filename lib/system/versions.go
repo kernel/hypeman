@@ -15,6 +15,9 @@ const (
 	// Kernel_202603091 is the current kernel version with iptables filter/xt match support for nested Hypeman networking
 	Kernel_202603091 KernelVersion = "ch-6.12.8-kernel-1.5-202603091"
 
+	// Kernel_202603271 is the previous 1.6 kernel release with initial Docker bridge support
+	Kernel_202603271 KernelVersion = "ch-6.12.8-kernel-1.6-202603271"
+
 	// Kernel_202603301 is the current kernel version with expanded nftables/raw support for Docker bridge networking
 	Kernel_202603301 KernelVersion = "ch-6.12.8-kernel-1.6-202603301"
 )
