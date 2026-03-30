@@ -14,14 +14,19 @@ const (
 
 	// Kernel_202603091 is the current kernel version with iptables filter/xt match support for nested Hypeman networking
 	Kernel_202603091 KernelVersion = "ch-6.12.8-kernel-1.5-202603091"
+
+	// Kernel_202603301 is the current kernel version with expanded nftables/raw support for Docker bridge networking
+	Kernel_202603301 KernelVersion = "ch-6.12.8-kernel-1.6-202603301"
 )
 
 var (
 	// DefaultKernelVersion is the kernel version used for new instances
-	DefaultKernelVersion = Kernel_202603091
+	DefaultKernelVersion = Kernel_202603301
 
 	// SupportedKernelVersions lists all supported kernel versions
 	SupportedKernelVersions = []KernelVersion{
+		Kernel_202603301,
+		Kernel_202603271,
 		Kernel_202603091,
 		Kernel_202602101,
 		Kernel_202601152,
@@ -30,6 +35,14 @@ var (
 
 // KernelDownloadURLs maps kernel versions and architectures to download URLs
 var KernelDownloadURLs = map[KernelVersion]map[string]string{
+	Kernel_202603301: {
+		"x86_64":  "https://github.com/kernel/linux/releases/download/ch-6.12.8-kernel-1.6-202603301/vmlinux-x86_64",
+		"aarch64": "https://github.com/kernel/linux/releases/download/ch-6.12.8-kernel-1.6-202603301/Image-arm64",
+	},
+	Kernel_202603271: {
+		"x86_64":  "https://github.com/kernel/linux/releases/download/ch-6.12.8-kernel-1.6-202603271/vmlinux-x86_64",
+		"aarch64": "https://github.com/kernel/linux/releases/download/ch-6.12.8-kernel-1.6-202603271/Image-arm64",
+	},
 	Kernel_202603091: {
 		"x86_64":  "https://github.com/kernel/linux/releases/download/ch-6.12.8-kernel-1.5-202603091/vmlinux-x86_64",
 		"aarch64": "https://github.com/kernel/linux/releases/download/ch-6.12.8-kernel-1.5-202603091/Image-arm64",
@@ -47,6 +60,14 @@ var KernelDownloadURLs = map[KernelVersion]map[string]string{
 // KernelHeaderURLs maps kernel versions and architectures to kernel header tarball URLs
 // These tarballs contain kernel headers needed for DKMS to build out-of-tree modules (e.g., NVIDIA vGPU drivers)
 var KernelHeaderURLs = map[KernelVersion]map[string]string{
+	Kernel_202603301: {
+		"x86_64":  "https://github.com/kernel/linux/releases/download/ch-6.12.8-kernel-1.6-202603301/kernel-headers-x86_64.tar.gz",
+		"aarch64": "https://github.com/kernel/linux/releases/download/ch-6.12.8-kernel-1.6-202603301/kernel-headers-aarch64.tar.gz",
+	},
+	Kernel_202603271: {
+		"x86_64":  "https://github.com/kernel/linux/releases/download/ch-6.12.8-kernel-1.6-202603271/kernel-headers-x86_64.tar.gz",
+		"aarch64": "https://github.com/kernel/linux/releases/download/ch-6.12.8-kernel-1.6-202603271/kernel-headers-aarch64.tar.gz",
+	},
 	Kernel_202603091: {
 		"x86_64":  "https://github.com/kernel/linux/releases/download/ch-6.12.8-kernel-1.5-202603091/kernel-headers-x86_64.tar.gz",
 		"aarch64": "https://github.com/kernel/linux/releases/download/ch-6.12.8-kernel-1.5-202603091/kernel-headers-aarch64.tar.gz",
