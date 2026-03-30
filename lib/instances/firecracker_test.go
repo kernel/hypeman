@@ -156,7 +156,7 @@ func TestFirecrackerStandbyAndRestore(t *testing.T) {
 		}
 	})
 
-	inst, err = waitForInstanceState(ctx, mgr, inst.Id, StateRunning, 20*time.Second)
+	inst, err = waitForInstanceState(ctx, mgr, inst.Id, StateRunning, integrationTestTimeout(20*time.Second))
 	require.NoError(t, err)
 	require.NoError(t, waitForExecAgent(ctx, mgr, inst.Id, 30*time.Second))
 
@@ -194,7 +194,7 @@ func TestFirecrackerStandbyAndRestore(t *testing.T) {
 		inst, err = mgr.RestoreInstance(ctx, inst.Id)
 		require.NoError(t, err)
 		assert.Contains(t, []State{StateInitializing, StateRunning}, inst.State)
-		inst, err = waitForInstanceState(ctx, mgr, inst.Id, StateRunning, 20*time.Second)
+		inst, err = waitForInstanceState(ctx, mgr, inst.Id, StateRunning, integrationTestTimeout(20*time.Second))
 		require.NoError(t, err)
 		require.Equal(t, StateRunning, inst.State)
 		runningDuration := time.Since(start)
@@ -276,7 +276,7 @@ func TestFirecrackerStopClearsStaleSnapshot(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Contains(t, []State{StateInitializing, StateRunning}, inst.State)
-	inst, err = waitForInstanceState(ctx, mgr, inst.Id, StateRunning, 20*time.Second)
+	inst, err = waitForInstanceState(ctx, mgr, inst.Id, StateRunning, integrationTestTimeout(20*time.Second))
 	require.NoError(t, err)
 	require.Equal(t, StateRunning, inst.State)
 
@@ -289,7 +289,7 @@ func TestFirecrackerStopClearsStaleSnapshot(t *testing.T) {
 	inst, err = mgr.RestoreInstance(ctx, inst.Id)
 	require.NoError(t, err)
 	require.Contains(t, []State{StateInitializing, StateRunning}, inst.State)
-	inst, err = waitForInstanceState(ctx, mgr, inst.Id, StateRunning, 20*time.Second)
+	inst, err = waitForInstanceState(ctx, mgr, inst.Id, StateRunning, integrationTestTimeout(20*time.Second))
 	require.NoError(t, err)
 	require.Equal(t, StateRunning, inst.State)
 
@@ -320,7 +320,7 @@ func TestFirecrackerStopClearsStaleSnapshot(t *testing.T) {
 	inst, err = mgr.StartInstance(ctx, inst.Id, StartInstanceRequest{})
 	require.NoError(t, err)
 	assert.Contains(t, []State{StateInitializing, StateRunning}, inst.State)
-	inst, err = waitForInstanceState(ctx, mgr, inst.Id, StateRunning, 20*time.Second)
+	inst, err = waitForInstanceState(ctx, mgr, inst.Id, StateRunning, integrationTestTimeout(20*time.Second))
 	require.NoError(t, err)
 	assert.Equal(t, StateRunning, inst.State)
 
@@ -357,7 +357,7 @@ func TestFirecrackerNetworkLifecycle(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NotNil(t, inst)
-	inst, err = waitForInstanceState(ctx, mgr, inst.Id, StateRunning, 20*time.Second)
+	inst, err = waitForInstanceState(ctx, mgr, inst.Id, StateRunning, integrationTestTimeout(20*time.Second))
 	require.NoError(t, err)
 
 	alloc, err := mgr.networkManager.GetAllocation(ctx, inst.Id)
@@ -414,7 +414,7 @@ func TestFirecrackerNetworkLifecycle(t *testing.T) {
 	inst, err = mgr.RestoreInstance(ctx, inst.Id)
 	require.NoError(t, err)
 	assert.Contains(t, []State{StateInitializing, StateRunning}, inst.State)
-	inst, err = waitForInstanceState(ctx, mgr, inst.Id, StateRunning, 20*time.Second)
+	inst, err = waitForInstanceState(ctx, mgr, inst.Id, StateRunning, integrationTestTimeout(20*time.Second))
 	require.NoError(t, err)
 	assert.Equal(t, StateRunning, inst.State)
 
@@ -481,7 +481,7 @@ func TestFirecrackerForkFromRunningNetwork(t *testing.T) {
 		Hypervisor:     hypervisor.TypeFirecracker,
 	})
 	require.NoError(t, err)
-	source, err = waitForInstanceState(ctx, mgr, source.Id, StateRunning, 20*time.Second)
+	source, err = waitForInstanceState(ctx, mgr, source.Id, StateRunning, integrationTestTimeout(20*time.Second))
 	require.NoError(t, err)
 	sourceID := source.Id
 	t.Cleanup(func() { _ = mgr.DeleteInstance(context.Background(), sourceID) })
@@ -499,7 +499,7 @@ func TestFirecrackerForkFromRunningNetwork(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Contains(t, []State{StateInitializing, StateRunning}, forked.State)
-	forked, err = waitForInstanceState(ctx, mgr, forked.Id, StateRunning, 20*time.Second)
+	forked, err = waitForInstanceState(ctx, mgr, forked.Id, StateRunning, integrationTestTimeout(20*time.Second))
 	require.NoError(t, err)
 	require.Equal(t, StateRunning, forked.State)
 	forkID := forked.Id
@@ -515,7 +515,7 @@ func TestFirecrackerForkFromRunningNetwork(t *testing.T) {
 	sourceAfterFork, err := mgr.GetInstance(ctx, sourceID)
 	require.NoError(t, err)
 	if sourceAfterFork.State != StateRunning {
-		sourceAfterFork, err = waitForInstanceState(ctx, mgr, sourceID, StateRunning, 20*time.Second)
+		sourceAfterFork, err = waitForInstanceState(ctx, mgr, sourceID, StateRunning, integrationTestTimeout(20*time.Second))
 		require.NoError(t, err)
 	}
 	require.Equal(t, StateRunning, sourceAfterFork.State)

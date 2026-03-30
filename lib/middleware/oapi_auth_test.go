@@ -236,6 +236,48 @@ func TestJwtAuth_TokenEndpointBypass(t *testing.T) {
 	})
 }
 
+func TestJwtAuth_RegistryPathAcceptsUserTokens(t *testing.T) {
+	nextHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-User-ID", GetUserIDFromContext(r.Context()))
+		if scopes.HasFullAccess(r.Context()) {
+			w.Header().Set("X-Access", "full")
+		} else {
+			w.Header().Set("X-Access", "scoped")
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+
+	handler := JwtAuth(testJWTSecret)(nextHandler)
+
+	t.Run("regular user token is accepted for registry write path", func(t *testing.T) {
+		token := generateUserToken(t, "user-registry-write")
+
+		req := httptest.NewRequest(http.MethodPut, "/v2/test-image/manifests/latest", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+
+		assert.Equal(t, http.StatusOK, rr.Code)
+		assert.Equal(t, "user-registry-write", rr.Header().Get("X-User-ID"))
+		assert.Equal(t, "full", rr.Header().Get("X-Access"))
+	})
+
+	t.Run("scoped user token is accepted for registry read path", func(t *testing.T) {
+		token := generateScopedToken(t, "user-registry-read", []string{"image:read"})
+
+		req := httptest.NewRequest(http.MethodGet, "/v2/test-image/manifests/latest", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+
+		assert.Equal(t, http.StatusOK, rr.Code)
+		assert.Equal(t, "user-registry-read", rr.Header().Get("X-User-ID"))
+		assert.Equal(t, "scoped", rr.Header().Get("X-Access"))
+	})
+}
+
 func TestJwtAuth_RegistryUnauthorizedResponse(t *testing.T) {
 	nextHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)

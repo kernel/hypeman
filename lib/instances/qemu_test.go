@@ -325,7 +325,7 @@ func TestQEMUBasicEndToEnd(t *testing.T) {
 	// Wait for VM to be fully running
 	err = waitForQEMUReady(ctx, inst.SocketPath, 10*time.Second)
 	require.NoError(t, err, "QEMU VM should reach running state")
-	inst, err = waitForInstanceState(ctx, manager, inst.Id, StateRunning, 20*time.Second)
+	inst, err = waitForInstanceState(ctx, manager, inst.Id, StateRunning, integrationTestTimeout(20*time.Second))
 	require.NoError(t, err, "instance should reach Running state")
 
 	// Get instance
@@ -830,7 +830,7 @@ func TestQEMUStandbyAndRestore(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, inst)
 	assert.Contains(t, []State{StateInitializing, StateRunning}, inst.State)
-	inst, err = waitForInstanceState(ctx, manager, inst.Id, StateRunning, 20*time.Second)
+	inst, err = waitForInstanceState(ctx, manager, inst.Id, StateRunning, integrationTestTimeout(20*time.Second))
 	require.NoError(t, err)
 	assert.Equal(t, hypervisor.TypeQEMU, inst.HypervisorType)
 	t.Logf("Instance created: %s (hypervisor: %s)", inst.Id, inst.HypervisorType)
@@ -866,7 +866,7 @@ func TestQEMUStandbyAndRestore(t *testing.T) {
 	inst, err = manager.RestoreInstance(ctx, inst.Id)
 	require.NoError(t, err)
 	assert.Contains(t, []State{StateInitializing, StateRunning}, inst.State)
-	inst, err = waitForInstanceState(ctx, manager, inst.Id, StateRunning, 20*time.Second)
+	inst, err = waitForInstanceState(ctx, manager, inst.Id, StateRunning, integrationTestTimeout(20*time.Second))
 	require.NoError(t, err)
 	t.Log("Instance restored and running")
 
