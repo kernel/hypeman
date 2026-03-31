@@ -6,6 +6,7 @@ import (
 	"fmt"
 	mathrand "math/rand"
 	"net"
+	"os"
 	"strings"
 	"time"
 
@@ -58,10 +59,16 @@ func (m *manager) CreateAllocation(ctx context.Context, req AllocateRequest) (*N
 	tap := GenerateTAPName(req.InstanceID)
 
 	// 5. Create TAP device with bidirectional rate limiting
-	if err := m.createTAPDevice(tap, network.Bridge, network.Isolated, req.DownloadBps, req.UploadBps, req.UploadCeilBps); err != nil {
+	classID, err := m.createTAPDevice(ctx, tap, network.Bridge, network.Isolated, req.DownloadBps, req.UploadBps, req.UploadCeilBps)
+	if err != nil {
 		return nil, fmt.Errorf("create TAP device: %w", err)
 	}
 	m.recordTAPOperation(ctx, "create")
+
+	// Persist assigned tc class ID so removal uses the correct ID after collisions.
+	if classID != "" {
+		m.saveClassID(req.InstanceID, classID)
+	}
 
 	log.InfoContext(ctx, "allocated network",
 		"instance_id", req.InstanceID,
@@ -114,10 +121,16 @@ func (m *manager) RecreateAllocation(ctx context.Context, instanceID string, dow
 
 	// 3. Recreate TAP device with same name and rate limits from instance metadata
 	uploadCeilBps := uploadBps * int64(m.GetUploadBurstMultiplier())
-	if err := m.createTAPDevice(alloc.TAPDevice, network.Bridge, network.Isolated, downloadBps, uploadBps, uploadCeilBps); err != nil {
+	classID, err := m.createTAPDevice(ctx, alloc.TAPDevice, network.Bridge, network.Isolated, downloadBps, uploadBps, uploadCeilBps)
+	if err != nil {
 		return fmt.Errorf("create TAP device: %w", err)
 	}
 	m.recordTAPOperation(ctx, "create")
+
+	// Persist assigned tc class ID so removal uses the correct ID after collisions.
+	if classID != "" {
+		m.saveClassID(instanceID, classID)
+	}
 
 	log.InfoContext(ctx, "recreated network for restore",
 		"instance_id", instanceID,
@@ -144,8 +157,8 @@ func (m *manager) ReleaseAllocation(ctx context.Context, alloc *Allocation) erro
 		return nil
 	}
 
-	// 1. Delete TAP device (best effort)
-	if err := m.deleteTAPDevice(alloc.TAPDevice); err != nil {
+	// 1. Delete TAP device (best effort), using stored class ID for correct HTB cleanup
+	if err := m.deleteTAPDevice(alloc.TAPDevice, alloc.ClassID); err != nil {
 		log.WarnContext(ctx, "failed to delete TAP device", "tap", alloc.TAPDevice, "error", err)
 	} else {
 		m.recordTAPOperation(ctx, "delete")
@@ -293,6 +306,23 @@ func generateMAC() (string, error) {
 	// Format as MAC address
 	return fmt.Sprintf("%02x:%02x:%02x:%02x:%02x:%02x",
 		buf[0], buf[1], buf[2], buf[3], buf[4], buf[5]), nil
+}
+
+// saveClassID persists the tc class ID for an instance so it survives restarts.
+func (m *manager) saveClassID(instanceID, classID string) {
+	path := m.paths.InstanceDir(instanceID)
+	_ = os.WriteFile(path+"/classid", []byte(classID), 0644)
+}
+
+// loadClassID loads the persisted tc class ID for an instance.
+// Returns empty string if not found (backwards compat for old allocations).
+func (m *manager) loadClassID(instanceID string) string {
+	path := m.paths.InstanceDir(instanceID)
+	data, err := os.ReadFile(path + "/classid")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
 }
 
 // TAPPrefix is the prefix used for hypeman TAP devices

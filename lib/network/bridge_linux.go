@@ -521,12 +521,13 @@ func (m *manager) lastHypemanForwardRulePosition() int {
 // createTAPDevice creates TAP device and attaches to bridge.
 // downloadBps: rate limit for download (external→VM), applied as TBF on TAP egress
 // uploadBps/uploadCeilBps: rate limit for upload (VM→external), applied as HTB class on bridge
-func (m *manager) createTAPDevice(tapName, bridgeName string, isolated bool, downloadBps, uploadBps, uploadCeilBps int64) error {
+// Returns the tc class ID actually assigned (empty if no upload rate limiting).
+func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName string, isolated bool, downloadBps, uploadBps, uploadCeilBps int64) (string, error) {
 	// 1. Check if TAP already exists
 	if _, err := netlink.LinkByName(tapName); err == nil {
 		// TAP already exists, delete it first
-		if err := m.deleteTAPDevice(tapName); err != nil {
-			return fmt.Errorf("delete existing TAP: %w", err)
+		if err := m.deleteTAPDevice(tapName, ""); err != nil {
+			return "", fmt.Errorf("delete existing TAP: %w", err)
 		}
 	}
 
@@ -545,27 +546,27 @@ func (m *manager) createTAPDevice(tapName, bridgeName string, isolated bool, dow
 	}
 
 	if err := netlink.LinkAdd(tap); err != nil {
-		return fmt.Errorf("create TAP device: %w", err)
+		return "", fmt.Errorf("create TAP device: %w", err)
 	}
 
 	// 3. Set TAP up
 	tapLink, err := netlink.LinkByName(tapName)
 	if err != nil {
-		return fmt.Errorf("get TAP link: %w", err)
+		return "", fmt.Errorf("get TAP link: %w", err)
 	}
 
 	if err := netlink.LinkSetUp(tapLink); err != nil {
-		return fmt.Errorf("set TAP up: %w", err)
+		return "", fmt.Errorf("set TAP up: %w", err)
 	}
 
 	// 4. Attach TAP to bridge
 	bridge, err := netlink.LinkByName(bridgeName)
 	if err != nil {
-		return fmt.Errorf("get bridge: %w", err)
+		return "", fmt.Errorf("get bridge: %w", err)
 	}
 
 	if err := netlink.LinkSetMaster(tapLink, bridge); err != nil {
-		return fmt.Errorf("attach TAP to bridge: %w", err)
+		return "", fmt.Errorf("attach TAP to bridge: %w", err)
 	}
 
 	// 5. Enable port isolation so isolated TAPs can't directly talk to each other (requires kernel support and capabilities)
@@ -579,25 +580,28 @@ func (m *manager) createTAPDevice(tapName, bridgeName string, isolated bool, dow
 		}
 		output, err := cmd.CombinedOutput()
 		if err != nil {
-			return fmt.Errorf("set isolation mode: %w (output: %s)", err, string(output))
+			return "", fmt.Errorf("set isolation mode: %w (output: %s)", err, string(output))
 		}
 	}
 
 	// 6. Apply download rate limiting (TBF on TAP egress)
 	if downloadBps > 0 {
 		if err := m.applyDownloadRateLimit(tapName, downloadBps); err != nil {
-			return fmt.Errorf("apply download rate limit: %w", err)
+			return "", fmt.Errorf("apply download rate limit: %w", err)
 		}
 	}
 
 	// 7. Apply upload rate limiting (HTB class on bridge)
+	var classID string
 	if uploadBps > 0 {
-		if err := m.addVMClass(bridgeName, tapName, uploadBps, uploadCeilBps); err != nil {
-			return fmt.Errorf("apply upload rate limit: %w", err)
+		var err error
+		classID, err = m.addVMClass(ctx, bridgeName, tapName, uploadBps, uploadCeilBps)
+		if err != nil {
+			return "", fmt.Errorf("apply upload rate limit: %w", err)
 		}
 	}
 
-	return nil
+	return classID, nil
 }
 
 // applyDownloadRateLimit applies download (external→VM) rate limiting using TBF on TAP egress.
@@ -689,15 +693,11 @@ func (m *manager) setupBridgeHTB(ctx context.Context, bridgeName string, capacit
 
 // addVMClass adds an HTB class for a VM on the bridge for upload rate limiting.
 // Called during TAP device creation. rateBps is guaranteed, ceilBps is burst ceiling.
-func (m *manager) addVMClass(bridgeName, tapName string, rateBps, ceilBps int64) error {
+// Returns the class ID actually used (may differ from deriveClassID if a collision occurred).
+func (m *manager) addVMClass(ctx context.Context, bridgeName, tapName string, rateBps, ceilBps int64) (string, error) {
 	if rateBps <= 0 {
-		return nil // No rate limiting configured
+		return "", nil // No rate limiting configured
 	}
-
-	// Use first 4 hex chars of TAP name suffix as class ID (e.g., "hype-a1b2c3d4" → "a1b2")
-	// This ensures unique, stable class IDs per VM
-	classID := deriveClassID(tapName)
-	fullClassID := fmt.Sprintf("1:%s", classID)
 
 	rateStr := formatTcRate(rateBps)
 	if ceilBps <= 0 {
@@ -705,49 +705,80 @@ func (m *manager) addVMClass(bridgeName, tapName string, rateBps, ceilBps int64)
 	}
 	ceilStr := formatTcRate(ceilBps)
 
-	// 1. Add HTB class for this VM
-	cmd := exec.Command("tc", "class", "add", "dev", bridgeName, "parent", htbRootClassID,
-		"classid", fullClassID, "htb", "rate", rateStr, "ceil", ceilStr, "prio", "1")
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
-	}
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("tc class add vm: %w (output: %s)", err, string(output))
+	// Start with derived class ID, probe linearly on collision.
+	classIDVal := deriveClassIDVal(tapName)
+
+	const maxAttempts = 5
+	var lastErr error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		classID := fmt.Sprintf("%04x", classIDVal)
+		fullClassID := fmt.Sprintf("1:%s", classID)
+
+		// Try tc class add (NOT replace) so we detect collisions.
+		cmd := exec.Command("tc", "class", "add", "dev", bridgeName, "parent", htbRootClassID,
+			"classid", fullClassID, "htb", "rate", rateStr, "ceil", ceilStr, "prio", "1")
+		cmd.SysProcAttr = &syscall.SysProcAttr{
+			AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+		}
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			// Check for "File exists" collision (exit status 2).
+			var exitErr *exec.ExitError
+			if errors.As(err, &exitErr) && exitErr.ExitCode() == 2 && strings.Contains(string(output), "File exists") {
+				if attempt == 0 {
+					m.recordTCClassCollision(ctx, "initial")
+				} else {
+					m.recordTCClassCollision(ctx, "retry")
+				}
+				// Increment class ID, wrapping within valid 16-bit range.
+				// Skip 0 (invalid) and 1 (root class 1:1).
+				classIDVal++
+				if classIDVal == 0 || classIDVal == 1 {
+					classIDVal = 2
+				}
+				lastErr = fmt.Errorf("tc class add: %w (output: %s)", err, string(output))
+				continue
+			}
+			// Non-collision error: return immediately.
+			return "", fmt.Errorf("tc class add vm: %w (output: %s)", err, string(output))
+		}
+
+		// Success — add fq_codel and filter.
+		qdiscCmd := exec.Command("tc", "qdisc", "add", "dev", bridgeName, "parent", fullClassID, "fq_codel")
+		qdiscCmd.SysProcAttr = &syscall.SysProcAttr{
+			AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+		}
+		qdiscCmd.Run() // Best effort
+
+		tapLink, linkErr := netlink.LinkByName(tapName)
+		if linkErr != nil {
+			return "", fmt.Errorf("get TAP link for filter: %w", linkErr)
+		}
+		tapIndex := tapLink.Attrs().Index
+
+		filterCmd := exec.Command("tc", "filter", "add", "dev", bridgeName, "parent", htbRootHandle,
+			"protocol", "all", "prio", "1", "basic",
+			"match", fmt.Sprintf("meta(rt_iif eq %d)", tapIndex),
+			"flowid", fullClassID)
+		filterCmd.SysProcAttr = &syscall.SysProcAttr{
+			AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+		}
+		if output, filterErr := filterCmd.CombinedOutput(); filterErr != nil {
+			return "", fmt.Errorf("tc filter add: %w (output: %s)", filterErr, string(output))
+		}
+
+		return classID, nil
 	}
 
-	// 2. Add fq_codel to this class for better latency under load
-	cmd = exec.Command("tc", "qdisc", "add", "dev", bridgeName, "parent", fullClassID, "fq_codel")
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
-	}
-	// Ignore errors - fq_codel may not be available
-	cmd.Run()
-
-	// 3. Add filter to classify traffic from this TAP to this class
-	// Use basic match on incoming interface (rt_iif)
-	tapLink, err := netlink.LinkByName(tapName)
-	if err != nil {
-		return fmt.Errorf("get TAP link for filter: %w", err)
-	}
-	tapIndex := tapLink.Attrs().Index
-
-	cmd = exec.Command("tc", "filter", "add", "dev", bridgeName, "parent", htbRootHandle,
-		"protocol", "all", "prio", "1", "basic",
-		"match", fmt.Sprintf("meta(rt_iif eq %d)", tapIndex),
-		"flowid", fullClassID)
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
-	}
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("tc filter add: %w (output: %s)", err, string(output))
-	}
-
-	return nil
+	return "", fmt.Errorf("tc class add failed after %d attempts: %w", maxAttempts, lastErr)
 }
 
 // removeVMClass removes the HTB class for a VM from the bridge.
-func (m *manager) removeVMClass(bridgeName, tapName string) error {
-	classID := deriveClassID(tapName)
+// If classID is non-empty, it is used directly; otherwise falls back to deriveClassID.
+func (m *manager) removeVMClass(bridgeName, tapName, classID string) error {
+	if classID == "" {
+		classID = deriveClassID(tapName)
+	}
 	fullClassID := fmt.Sprintf("1:%s", classID)
 
 	// Delete filter first (by matching flowid)
@@ -797,18 +828,22 @@ func (m *manager) removeVMClass(bridgeName, tapName string) error {
 	return nil
 }
 
-// deriveClassID derives a unique HTB class ID from a TAP name.
-// Uses first 4 hex characters after the prefix (e.g., "hype-a1b2c3d4" → "a1b2").
-func deriveClassID(tapName string) string {
-	// Hash the TAP name to get a valid hex class ID.
-	// tc class IDs must be hexadecimal (0-9, a-f), but CUID2 instance IDs
-	// use base-36 (0-9, a-z) which includes invalid chars like t, w, v, etc.
-	// Using FNV-1a for speed. Limited to 16 bits since tc class IDs max at 0xFFFF.
+// deriveClassIDVal derives the numeric HTB class ID from a TAP name.
+// Uses FNV-1a hash truncated to 16 bits. Returns a value in 0x0002-0xFFFF range,
+// avoiding 0 (invalid) and 1 (reserved for root class 1:1).
+func deriveClassIDVal(tapName string) uint16 {
 	h := fnv.New32a()
 	h.Write([]byte(tapName))
-	hash := h.Sum32()
-	// Use only 16 bits (tc class ID max is 0xFFFF)
-	return fmt.Sprintf("%04x", hash&0xFFFF)
+	val := uint16(h.Sum32() & 0xFFFF)
+	if val <= 1 {
+		val = 2 // 0 is invalid, 1 is root class (1:1)
+	}
+	return val
+}
+
+// deriveClassID derives a unique HTB class ID string from a TAP name.
+func deriveClassID(tapName string) string {
+	return fmt.Sprintf("%04x", deriveClassIDVal(tapName))
 }
 
 // formatTcRate formats bytes per second as a tc rate string.
@@ -829,9 +864,10 @@ func formatTcRate(bytesPerSec int64) string {
 }
 
 // deleteTAPDevice removes TAP device and its associated HTB class on the bridge.
-func (m *manager) deleteTAPDevice(tapName string) error {
+// If classID is non-empty, it is used for removeVMClass; otherwise falls back to deriveClassID.
+func (m *manager) deleteTAPDevice(tapName, classID string) error {
 	// Remove HTB class from bridge before deleting TAP
-	m.removeVMClass(m.config.Network.BridgeName, tapName)
+	m.removeVMClass(m.config.Network.BridgeName, tapName, classID)
 
 	link, err := netlink.LinkByName(tapName)
 	if err != nil {
@@ -925,8 +961,8 @@ func (m *manager) CleanupOrphanedTAPs(ctx context.Context, runningInstanceIDs []
 			continue
 		}
 
-		// Orphaned TAP - delete it
-		if err := m.deleteTAPDevice(name); err != nil {
+		// Orphaned TAP - delete it (no stored classID available, falls back to deriveClassID)
+		if err := m.deleteTAPDevice(name, ""); err != nil {
 			log.WarnContext(ctx, "failed to delete orphaned TAP", "tap", name, "error", err)
 			continue
 		}
@@ -953,16 +989,29 @@ func (m *manager) CleanupOrphanedClasses(ctx context.Context) int {
 		return 0
 	}
 
-	// Build set of class IDs that belong to existing TAP devices
+	// Build set of class IDs that belong to existing TAP devices.
+	// Include both derived class IDs and stored class IDs from allocations
+	// (which may differ if a collision was resolved by probing).
 	validClassIDs := make(map[string]bool)
 	links, err := netlink.LinkList()
 	if err == nil {
 		for _, link := range links {
 			name := link.Attrs().Name
 			if strings.HasPrefix(name, TAPPrefix) {
-				classID := deriveClassID(name)
-				validClassIDs[classID] = true
+				validClassIDs[deriveClassID(name)] = true
 			}
+		}
+	}
+	// Also include stored class IDs from allocations (handles probed IDs).
+	// If ListAllocations fails, bail out to avoid deleting valid probed classes.
+	allocs, allocErr := m.ListAllocations(ctx)
+	if allocErr != nil {
+		log.WarnContext(ctx, "skipping orphaned class cleanup: failed to list allocations", "error", allocErr)
+		return 0
+	}
+	for _, alloc := range allocs {
+		if alloc.ClassID != "" {
+			validClassIDs[alloc.ClassID] = true
 		}
 	}
 

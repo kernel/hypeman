@@ -83,6 +83,7 @@ func (m *manager) deriveAllocation(ctx context.Context, instanceID string) (*All
 			Netmask:      netmask,
 			DNS:          m.config.Network.DNSServer,
 			State:        state,
+			ClassID:      m.loadClassID(instanceID),
 		}, nil
 	}
 
