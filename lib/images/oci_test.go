@@ -23,6 +23,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const testImageKernelVersion = "ch-6.12.8-kernel-1.6-202603301"
+
 // BuildKit cache config mediatype - this is what BuildKit uses when exporting
 // cache with image-manifest=true
 const buildKitCacheConfigMediaType = "application/vnd.buildkit.cacheconfig.v0"
@@ -264,6 +266,10 @@ func createTestDockerImage(t *testing.T) v1.Image {
 	img, err = mutate.Config(img, v1.Config{
 		Entrypoint: []string{"/usr/local/bin/guest-agent"},
 		Env:        []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
+		Labels: map[string]string{
+			"io.kernel.kernel-version": testImageKernelVersion,
+			"io.kernel.kernel-release": "6.12.8+",
+		},
 		WorkingDir: "/app",
 	})
 	require.NoError(t, err)
@@ -324,6 +330,8 @@ func TestDockerSaveTarballToOCILayoutRoundtrip(t *testing.T) {
 	assert.Equal(t, []string{"/usr/local/bin/guest-agent"}, meta.Entrypoint)
 	assert.Equal(t, "/app", meta.WorkingDir)
 	assert.Contains(t, meta.Env, "PATH")
+	assert.Equal(t, testImageKernelVersion, meta.Labels["io.kernel.kernel-version"])
+	assert.Equal(t, "6.12.8+", meta.Labels["io.kernel.kernel-release"])
 
 	// Step 7: Verify unpackLayers produces correct rootfs
 	// umoci's UnpackRootfs extracts directly into the target directory
@@ -393,6 +401,7 @@ func TestDockerSaveToOCILayoutCacheHit(t *testing.T) {
 	assert.Equal(t, []string{"/usr/local/bin/guest-agent"}, result.Metadata.Entrypoint)
 	assert.Equal(t, "/app", result.Metadata.WorkingDir)
 	assert.Equal(t, digestStr, result.Digest)
+	assert.Equal(t, testImageKernelVersion, result.Metadata.Labels["io.kernel.kernel-version"])
 
 	// Verify rootfs was unpacked (umoci extracts directly into exportDir)
 	agentPath := filepath.Join(exportDir, "usr", "local", "bin", "guest-agent")

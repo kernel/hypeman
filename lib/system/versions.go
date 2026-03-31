@@ -6,6 +6,12 @@ import "runtime"
 type KernelVersion string
 
 const (
+	// ImageKernelVersionLabel lets images request a specific guest kernel artifact.
+	ImageKernelVersionLabel = "io.kernel.kernel-version"
+
+	// ImageKernelReleaseLabel records the uname -r release the image was built against.
+	ImageKernelReleaseLabel = "io.kernel.kernel-release"
+
 	// Kernel_202601152 is the previous kernel version with vGPU support
 	Kernel_202601152 KernelVersion = "ch-6.12.8-kernel-1.3-202601152"
 
@@ -83,4 +89,15 @@ func GetArch() string {
 		return "aarch64"
 	}
 	return arch
+}
+
+// ParseKernelVersion returns a supported kernel version by exact artifact name.
+func ParseKernelVersion(version string) (KernelVersion, bool) {
+	for _, supported := range SupportedKernelVersions {
+		if string(supported) == version {
+			return supported, true
+		}
+	}
+
+	return "", false
 }
