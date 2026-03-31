@@ -9,9 +9,6 @@ const (
 	// ImageKernelVersionLabel lets images request a specific guest kernel artifact.
 	ImageKernelVersionLabel = "io.kernel.kernel-version"
 
-	// ImageKernelReleaseLabel records the uname -r release the image was built against.
-	ImageKernelReleaseLabel = "io.kernel.kernel-release"
-
 	// Kernel_202601152 is the previous kernel version with vGPU support
 	Kernel_202601152 KernelVersion = "ch-6.12.8-kernel-1.3-202601152"
 
