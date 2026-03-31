@@ -66,8 +66,13 @@ func (m *manager) CreateAllocation(ctx context.Context, req AllocateRequest) (*N
 	m.recordTAPOperation(ctx, "create")
 
 	// Persist assigned tc class ID so removal uses the correct ID after collisions.
+	// Clear any stale file when no rate limiting was applied.
 	if classID != "" {
-		m.saveClassID(req.InstanceID, classID)
+		if err := m.saveClassID(req.InstanceID, classID); err != nil {
+			return nil, fmt.Errorf("save class ID: %w", err)
+		}
+	} else {
+		m.clearClassID(req.InstanceID)
 	}
 
 	log.InfoContext(ctx, "allocated network",
@@ -128,8 +133,13 @@ func (m *manager) RecreateAllocation(ctx context.Context, instanceID string, dow
 	m.recordTAPOperation(ctx, "create")
 
 	// Persist assigned tc class ID so removal uses the correct ID after collisions.
+	// Clear any stale file when no rate limiting was applied.
 	if classID != "" {
-		m.saveClassID(instanceID, classID)
+		if err := m.saveClassID(instanceID, classID); err != nil {
+			return fmt.Errorf("save class ID: %w", err)
+		}
+	} else {
+		m.clearClassID(instanceID)
 	}
 
 	log.InfoContext(ctx, "recreated network for restore",
@@ -309,9 +319,13 @@ func generateMAC() (string, error) {
 }
 
 // saveClassID persists the tc class ID for an instance so it survives restarts.
-func (m *manager) saveClassID(instanceID, classID string) {
-	path := m.paths.InstanceDir(instanceID)
-	_ = os.WriteFile(path+"/classid", []byte(classID), 0644)
+func (m *manager) saveClassID(instanceID, classID string) error {
+	return os.WriteFile(m.paths.InstanceDir(instanceID)+"/classid", []byte(classID), 0644)
+}
+
+// clearClassID removes any persisted tc class ID for an instance.
+func (m *manager) clearClassID(instanceID string) {
+	_ = os.Remove(m.paths.InstanceDir(instanceID) + "/classid")
 }
 
 // loadClassID loads the persisted tc class ID for an instance.
