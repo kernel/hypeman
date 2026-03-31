@@ -705,8 +705,11 @@ func (m *manager) addVMClass(bridgeName, tapName string, rateBps, ceilBps int64)
 	}
 	ceilStr := formatTcRate(ceilBps)
 
-	// 1. Add HTB class for this VM
-	cmd := exec.Command("tc", "class", "add", "dev", bridgeName, "parent", htbRootClassID,
+	// 1. Add or update HTB class for this VM
+	// Use "replace" instead of "add" for idempotency — if the class already exists
+	// (e.g., orphaned from a previous failed cleanup, or a 16-bit hash collision on
+	// restore), "replace" updates it in place instead of failing with EEXIST.
+	cmd := exec.Command("tc", "class", "replace", "dev", bridgeName, "parent", htbRootClassID,
 		"classid", fullClassID, "htb", "rate", rateStr, "ceil", ceilStr, "prio", "1")
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
