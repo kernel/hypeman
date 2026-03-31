@@ -9,7 +9,8 @@ import (
 
 // Metrics holds the metrics instruments for network operations.
 type Metrics struct {
-	tapOperations metric.Int64Counter
+	tapOperations     metric.Int64Counter
+	tcClassCollisions metric.Int64Counter
 }
 
 // newNetworkMetrics creates and registers all network metrics.
@@ -46,8 +47,17 @@ func newNetworkMetrics(meter metric.Meter, m *manager) (*Metrics, error) {
 		return nil, err
 	}
 
+	tcClassCollisions, err := meter.Int64Counter(
+		"hypeman_network_tc_class_collisions_total",
+		metric.WithDescription("Total number of tc class ID collisions during addVMClass"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Metrics{
-		tapOperations: tapOperations,
+		tapOperations:     tapOperations,
+		tcClassCollisions: tcClassCollisions,
 	}, nil
 }
 
@@ -58,4 +68,14 @@ func (m *manager) recordTAPOperation(ctx context.Context, operation string) {
 	}
 	m.metrics.tapOperations.Add(ctx, 1,
 		metric.WithAttributes(attribute.String("operation", operation)))
+}
+
+// recordTCClassCollision records a tc class ID collision.
+// attempt is "initial" for the first hash collision or "retry" for subsequent probe collisions.
+func (m *manager) recordTCClassCollision(ctx context.Context, attempt string) {
+	if m.metrics == nil {
+		return
+	}
+	m.metrics.tcClassCollisions.Add(ctx, 1,
+		metric.WithAttributes(attribute.String("attempt", attempt)))
 }

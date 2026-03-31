@@ -36,6 +36,7 @@ type Allocation struct {
 	Netmask      string // Netmask in dotted decimal notation
 	DNS          string // DNS server for guest configuration
 	State        string // "running", "standby" (derived from CH or snapshot)
+	ClassID      string // HTB class ID actually assigned (may differ from deriveClassID if collision occurred)
 }
 
 // NetworkConfig is the configuration returned after allocation
