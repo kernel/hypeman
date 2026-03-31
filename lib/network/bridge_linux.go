@@ -1003,7 +1003,12 @@ func (m *manager) CleanupOrphanedClasses(ctx context.Context) int {
 		}
 	}
 	// Also include stored class IDs from allocations (handles probed IDs).
-	allocs, _ := m.ListAllocations(ctx)
+	// If ListAllocations fails, bail out to avoid deleting valid probed classes.
+	allocs, allocErr := m.ListAllocations(ctx)
+	if allocErr != nil {
+		log.WarnContext(ctx, "skipping orphaned class cleanup: failed to list allocations", "error", allocErr)
+		return 0
+	}
 	for _, alloc := range allocs {
 		if alloc.ClassID != "" {
 			validClassIDs[alloc.ClassID] = true
