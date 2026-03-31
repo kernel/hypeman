@@ -730,10 +730,11 @@ func (m *manager) addVMClass(ctx context.Context, bridgeName, tapName string, ra
 				} else {
 					m.recordTCClassCollision(ctx, "retry")
 				}
-				// Increment class ID, wrapping within valid 16-bit range (0x0001-0xFFFF).
+				// Increment class ID, wrapping within valid 16-bit range.
+				// Skip 0 (invalid) and 1 (root class 1:1).
 				classIDVal++
-				if classIDVal > 0xFFFF {
-					classIDVal = 0x0001
+				if classIDVal == 0 || classIDVal == 1 {
+					classIDVal = 2
 				}
 				lastErr = fmt.Errorf("tc class add: %w (output: %s)", err, string(output))
 				continue
@@ -828,13 +829,14 @@ func (m *manager) removeVMClass(bridgeName, tapName, classID string) error {
 }
 
 // deriveClassIDVal derives the numeric HTB class ID from a TAP name.
-// Uses FNV-1a hash truncated to 16 bits. Returns a value in 0x0001-0xFFFF range.
+// Uses FNV-1a hash truncated to 16 bits. Returns a value in 0x0002-0xFFFF range,
+// avoiding 0 (invalid) and 1 (reserved for root class 1:1).
 func deriveClassIDVal(tapName string) uint16 {
 	h := fnv.New32a()
 	h.Write([]byte(tapName))
 	val := uint16(h.Sum32() & 0xFFFF)
-	if val == 0 {
-		val = 1 // tc class ID 0 is invalid
+	if val <= 1 {
+		val = 2 // 0 is invalid, 1 is root class (1:1)
 	}
 	return val
 }
