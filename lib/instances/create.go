@@ -135,6 +135,19 @@ func (m *manager) createInstance(
 	}
 	m.recordImageUsage(ctx, imageInfo)
 
+	defaultKernel := m.systemManager.GetDefaultKernelVersion()
+	kernelVer, err := resolveCreateKernelVersion(imageInfo, defaultKernel)
+	if err != nil {
+		log.ErrorContext(ctx, "invalid image kernel label", "image", req.Image, "error", err)
+		return nil, err
+	}
+	if kernelVer != defaultKernel {
+		log.InfoContext(ctx, "using image-declared kernel version",
+			"image", req.Image,
+			"kernel", kernelVer,
+			"label", system.ImageKernelVersionLabel)
+	}
+
 	// 3. Generate instance ID (CUID2 for secure, collision-resistant IDs)
 	id := cuid2.Generate()
 	ctx = enrichInstancesTrace(ctx, attribute.String("instance_id", id))
@@ -204,10 +217,7 @@ func (m *manager) createInstance(
 		networkName = "default"
 	}
 
-	// 8. Get default kernel version
-	kernelVer := m.systemManager.GetDefaultKernelVersion()
-
-	// 9. Get process manager for hypervisor type (needed for socket name)
+	// 8. Get process manager for hypervisor type (needed for socket name)
 	hvType := req.Hypervisor
 	if hvType == "" {
 		hvType = m.defaultHypervisor
@@ -828,6 +838,25 @@ func (m *manager) buildHypervisorConfig(ctx context.Context, inst *Instance, ima
 		InitrdPath:    initrdPath,
 		KernelArgs:    m.kernelArgs(inst.HypervisorType),
 	}, nil
+}
+
+func resolveCreateKernelVersion(imageInfo *images.Image, defaultKernel system.KernelVersion) (system.KernelVersion, error) {
+	if imageInfo == nil || len(imageInfo.Labels) == 0 {
+		return defaultKernel, nil
+	}
+
+	requested := strings.TrimSpace(imageInfo.Labels[system.ImageKernelVersionLabel])
+	if requested == "" {
+		return defaultKernel, nil
+	}
+
+	kernelVer, ok := system.ParseKernelVersion(requested)
+	if !ok {
+		return "", fmt.Errorf("%w: image %s requests unsupported kernel version %q via label %s",
+			ErrInvalidRequest, imageInfo.Name, requested, system.ImageKernelVersionLabel)
+	}
+
+	return kernelVer, nil
 }
 
 // kernelArgs returns the kernel command line arguments for the given hypervisor type.

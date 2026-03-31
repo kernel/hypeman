@@ -14,7 +14,7 @@ var initrdEnsureLocks sync.Map
 
 // Manager handles system files (kernel, initrd)
 type Manager interface {
-	// EnsureSystemFiles ensures default kernel and initrd exist
+	// EnsureSystemFiles ensures all supported kernels and the current initrd exist.
 	EnsureSystemFiles(ctx context.Context) error
 
 	// GetKernelPath returns path to kernel file
@@ -51,13 +51,13 @@ func getInitrdEnsureLock(initrdDir string) *sync.Mutex {
 	return lock.(*sync.Mutex)
 }
 
-// EnsureSystemFiles ensures default kernel and initrd exist, downloading/building if needed
+// EnsureSystemFiles ensures all supported kernels and the current initrd exist,
+// downloading/building them if needed.
 func (m *manager) EnsureSystemFiles(ctx context.Context) error {
-	kernelVer := m.GetDefaultKernelVersion()
-
-	// Ensure kernel exists
-	if _, err := m.ensureKernel(kernelVer); err != nil {
-		return fmt.Errorf("ensure kernel %s: %w", kernelVer, err)
+	for _, kernelVer := range SupportedKernelVersions {
+		if _, err := m.ensureKernel(kernelVer); err != nil {
+			return fmt.Errorf("ensure kernel %s: %w", kernelVer, err)
+		}
 	}
 
 	// Ensure initrd exists (builds if missing or stale)

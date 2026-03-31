@@ -17,6 +17,7 @@ type Image struct {
 	Entrypoint    []string
 	Cmd           []string
 	Env           map[string]string
+	Labels        map[string]string
 	Tags          tags.Tags
 	WorkingDir    string
 	CreatedAt     time.Time
