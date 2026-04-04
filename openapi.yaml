@@ -321,7 +321,7 @@ components:
           description: Hypervisor to use for this instance. Defaults to server configuration.
           example: cloud-hypervisor
         snapshot_policy:
-          description: Snapshot compression policy for this instance. Controls compression settings applied when creating snapshots or entering standby.
+          description: Snapshot policy for this instance. Controls compression settings applied when creating snapshots or entering standby, plus any default standby-only compression delay.
           $ref: "#/components/schemas/SnapshotPolicy"
         skip_kernel_headers:
           type: boolean
@@ -486,6 +486,10 @@ components:
       properties:
         compression:
           $ref: "#/components/schemas/SnapshotCompressionConfig"
+        standby_compression_delay:
+          type: string
+          description: Delay before standby snapshot compression begins, expressed as a Go duration like "30s" or "5m". Applies only to standby compression and defaults to immediate start when omitted.
+          example: "2m"
 
     CreateSnapshotRequest:
       type: object
@@ -509,7 +513,12 @@ components:
       type: object
       properties:
         compression:
+          description: Compression settings for standby snapshot memory. Overrides instance defaults.
           $ref: "#/components/schemas/SnapshotCompressionConfig"
+        compression_delay:
+          type: string
+          description: Delay before standby snapshot compression begins, expressed as a Go duration like "30s" or "5m". Overrides the instance default for this standby operation only.
+          example: "45s"
 
     RestoreSnapshotRequest:
       type: object

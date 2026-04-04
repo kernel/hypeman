@@ -42,6 +42,7 @@ Snapshot memory compression is optional and is **off by default**.
 ### When compression runs
 
 - A standby operation can request compression explicitly.
+- A standby operation can also set a standby-only `compression_delay` so raw memory remains on disk for a grace period before background compression starts.
 - A snapshot create request can request compression explicitly.
 - If the request does not specify compression, Hypeman falls back to:
   - the instance's `snapshot_policy`
@@ -56,6 +57,8 @@ Compression runs **asynchronously after the snapshot is already durable on disk*
 
 - This keeps the standby path fast.
 - Standby can return successfully while compression is still running in the background.
+- For standby only, Hypeman can wait for a configured grace period before starting that background compression.
+- During that delay window, the raw memory snapshot remains in place so resume can skip decompression entirely.
 - That means a later restore can arrive before compression has finished.
 - While compression is running, the snapshot remains valid and reports `compression_state=compressing`.
 - Once finished, the snapshot reports `compression_state=compressed` and exposes compressed/uncompressed size metadata.

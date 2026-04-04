@@ -35,8 +35,16 @@ const (
 type compressionJob struct {
 	cancel context.CancelFunc
 	done   chan struct{}
+	state  compressionJobState
 	target compressionTarget
 }
+
+type compressionJobState string
+
+const (
+	compressionJobStatePendingDelay compressionJobState = "pending_delay"
+	compressionJobStateRunning      compressionJobState = "running"
+)
 
 type compressionTarget struct {
 	Key            string
@@ -46,6 +54,29 @@ type compressionTarget struct {
 	HypervisorType hypervisor.Type
 	Source         snapshotCompressionSource
 	Policy         snapshotstore.SnapshotCompressionConfig
+	Delay          time.Duration
+}
+
+type canceledCompressionJob struct {
+	Target compressionTarget
+	State  compressionJobState
+}
+
+type compressionTimer interface {
+	Chan() <-chan time.Time
+	Stop() bool
+}
+
+type realCompressionTimer struct {
+	timer *time.Timer
+}
+
+func (t *realCompressionTimer) Chan() <-chan time.Time {
+	return t.timer.C
+}
+
+func (t *realCompressionTimer) Stop() bool {
+	return t.timer.Stop()
 }
 
 type nativeCodecRuntime struct {
@@ -80,13 +111,32 @@ func cloneCompressionConfig(cfg *snapshotstore.SnapshotCompressionConfig) *snaps
 	return &cloned
 }
 
+func cloneDurationPtr(v *time.Duration) *time.Duration {
+	if v == nil {
+		return nil
+	}
+	cloned := *v
+	return &cloned
+}
+
 func cloneSnapshotPolicy(policy *SnapshotPolicy) *SnapshotPolicy {
 	if policy == nil {
 		return nil
 	}
 	return &SnapshotPolicy{
-		Compression: cloneCompressionConfig(policy.Compression),
+		Compression:             cloneCompressionConfig(policy.Compression),
+		StandbyCompressionDelay: cloneDurationPtr(policy.StandbyCompressionDelay),
 	}
+}
+
+func normalizeStandbyCompressionDelay(delay *time.Duration) (*time.Duration, error) {
+	if delay == nil {
+		return nil, nil
+	}
+	if *delay < 0 {
+		return nil, fmt.Errorf("%w: standby compression delay cannot be negative", ErrInvalidRequest)
+	}
+	return cloneDurationPtr(delay), nil
 }
 
 func normalizeCompressionConfig(cfg *snapshotstore.SnapshotCompressionConfig) (snapshotstore.SnapshotCompressionConfig, error) {
@@ -145,6 +195,28 @@ func (m *manager) resolveSnapshotCompressionPolicy(stored *StoredMetadata, overr
 
 func (m *manager) resolveStandbyCompressionPolicy(stored *StoredMetadata, override *snapshotstore.SnapshotCompressionConfig) (*snapshotstore.SnapshotCompressionConfig, error) {
 	return m.resolveConfiguredCompressionPolicy(stored, override)
+}
+
+func (m *manager) resolveStandbyCompressionDelay(stored *StoredMetadata, override *time.Duration) (time.Duration, error) {
+	candidates := []*time.Duration{override}
+	if stored != nil && stored.SnapshotPolicy != nil {
+		candidates = append(candidates, stored.SnapshotPolicy.StandbyCompressionDelay)
+	}
+
+	for _, candidate := range candidates {
+		if candidate == nil {
+			continue
+		}
+		normalized, err := normalizeStandbyCompressionDelay(candidate)
+		if err != nil {
+			return 0, err
+		}
+		if normalized != nil {
+			return *normalized, nil
+		}
+	}
+
+	return 0, nil
 }
 
 func (m *manager) resolveConfiguredCompressionPolicy(stored *StoredMetadata, override *snapshotstore.SnapshotCompressionConfig) (*snapshotstore.SnapshotCompressionConfig, error) {
@@ -256,6 +328,26 @@ func invalidateNativeCodecPath(runtime nativeCodecRuntime, algorithm snapshotsto
 	}
 }
 
+func (m *manager) newCompressionTimer(delay time.Duration) compressionTimer {
+	if m != nil && m.compressionTimerFactory != nil {
+		return m.compressionTimerFactory(delay)
+	}
+	return &realCompressionTimer{timer: time.NewTimer(delay)}
+}
+
+func stopCompressionTimer(timer compressionTimer) {
+	if timer == nil {
+		return
+	}
+	if timer.Stop() {
+		return
+	}
+	select {
+	case <-timer.Chan():
+	default:
+	}
+}
+
 func recordNativeCodecFallback(ctx context.Context, runtime nativeCodecRuntime, algorithm snapshotstore.SnapshotCompressionAlgorithm, operation snapshotCodecOperation, reason snapshotCodecFallbackReason, nativeBinary string, err error) {
 	logger.FromContext(ctx).WarnContext(
 		ctx,
@@ -302,6 +394,11 @@ func (m *manager) startCompressionJob(ctx context.Context, target compressionTar
 		return
 	}
 
+	initialState := compressionJobStateRunning
+	if target.Delay > 0 {
+		initialState = compressionJobStatePendingDelay
+	}
+
 	m.compressionMu.Lock()
 	if _, exists := m.compressionJobs[target.Key]; exists {
 		m.compressionMu.Unlock()
@@ -311,6 +408,7 @@ func (m *manager) startCompressionJob(ctx context.Context, target compressionTar
 	job := &compressionJob{
 		cancel: cancel,
 		done:   make(chan struct{}),
+		state:  initialState,
 		target: target,
 	}
 	parentSpanContext := trace.SpanContextFromContext(ctx)
@@ -318,12 +416,97 @@ func (m *manager) startCompressionJob(ctx context.Context, target compressionTar
 	m.compressionMu.Unlock()
 
 	go func() {
-		start := time.Now()
 		result := snapshotCompressionResultSuccess
 		var uncompressedSize int64
 		var compressedSize int64
 		var spanErr error
+		log := logger.FromContext(ctx)
 		metricsCtx := context.Background()
+		var compressionStart *time.Time
+
+		defer func() {
+			m.recordSnapshotCompressionJob(metricsCtx, target, result, compressionStart, uncompressedSize, compressedSize)
+			m.compressionMu.Lock()
+			delete(m.compressionJobs, target.Key)
+			m.compressionMu.Unlock()
+			close(job.done)
+		}()
+
+		if target.Delay > 0 {
+			waitStart := time.Now()
+			waitSpanOptions := []trace.SpanStartOption{
+				trace.WithNewRoot(),
+				trace.WithAttributes(
+					attribute.String("operation", "snapshot_compression_wait"),
+					attribute.String("owner_id", target.OwnerID),
+					attribute.String("snapshot_id", target.SnapshotID),
+					attribute.String("hypervisor", string(target.HypervisorType)),
+					attribute.String("source", string(target.Source)),
+					attribute.String("algorithm", string(target.Policy.Algorithm)),
+					attribute.Float64("compression_delay_seconds", target.Delay.Seconds()),
+				),
+			}
+			if parentSpanContext.IsValid() {
+				waitSpanOptions = append(waitSpanOptions, trace.WithLinks(trace.Link{SpanContext: parentSpanContext}))
+			}
+			waitCtx, waitSpan := m.tracerOrDefault().Start(context.Background(), "instances.snapshot_compression_wait", waitSpanOptions...)
+			timer := m.newCompressionTimer(target.Delay)
+			log.InfoContext(ctx, "snapshot compression queued with standby delay",
+				"owner_id", target.OwnerID,
+				"snapshot_id", target.SnapshotID,
+				"source", string(target.Source),
+				"algorithm", string(target.Policy.Algorithm),
+				"compression_delay", target.Delay.String(),
+			)
+
+			select {
+			case <-timer.Chan():
+				m.recordSnapshotCompressionWait(metricsCtx, target, snapshotCompressionWaitOutcomeStarted, waitStart)
+				waitSpan.SetAttributes(
+					attribute.String("wait_outcome", string(snapshotCompressionWaitOutcomeStarted)),
+					attribute.Float64("wait_duration_seconds", time.Since(waitStart).Seconds()),
+				)
+				waitSpan.End()
+			case <-jobCtx.Done():
+				stopCompressionTimer(timer)
+				result = snapshotCompressionResultSkipped
+				m.recordSnapshotCompressionWait(metricsCtx, target, snapshotCompressionWaitOutcomeSkipped, waitStart)
+				waitSpan.SetAttributes(
+					attribute.String("wait_outcome", string(snapshotCompressionWaitOutcomeSkipped)),
+					attribute.Float64("wait_duration_seconds", time.Since(waitStart).Seconds()),
+				)
+				waitSpan.End()
+				if target.SnapshotID != "" {
+					if err := m.updateSnapshotCompressionMetadata(target.SnapshotID, snapshotstore.SnapshotCompressionStateNone, "", nil, nil, nil); err != nil {
+						log.ErrorContext(jobCtx, "failed to update snapshot compression metadata", "snapshot_id", target.SnapshotID, "snapshot_dir", target.SnapshotDir, "state", snapshotstore.SnapshotCompressionStateNone, "error", err)
+					}
+				}
+				log.InfoContext(waitCtx, "snapshot compression skipped before start",
+					"owner_id", target.OwnerID,
+					"snapshot_id", target.SnapshotID,
+					"source", string(target.Source),
+					"algorithm", string(target.Policy.Algorithm),
+					"compression_delay", target.Delay.String(),
+				)
+				return
+			}
+
+			m.compressionMu.Lock()
+			if currentJob, ok := m.compressionJobs[target.Key]; ok && currentJob == job {
+				currentJob.state = compressionJobStateRunning
+			}
+			m.compressionMu.Unlock()
+			log.InfoContext(waitCtx, "standby compression delay elapsed; starting compression",
+				"owner_id", target.OwnerID,
+				"snapshot_id", target.SnapshotID,
+				"source", string(target.Source),
+				"algorithm", string(target.Policy.Algorithm),
+				"compression_delay", target.Delay.String(),
+			)
+		}
+
+		startedAt := time.Now()
+		compressionStart = &startedAt
 		spanOptions := []trace.SpanStartOption{
 			trace.WithNewRoot(),
 			trace.WithAttributes(
@@ -338,17 +521,9 @@ func (m *manager) startCompressionJob(ctx context.Context, target compressionTar
 		if parentSpanContext.IsValid() {
 			spanOptions = append(spanOptions, trace.WithLinks(trace.Link{SpanContext: parentSpanContext}))
 		}
-		metricsCtx, span := m.tracerOrDefault().Start(metricsCtx, "instances.snapshot_compression", spanOptions...)
-		log := logger.FromContext(ctx)
-
-		defer func() {
-			m.recordSnapshotCompressionJob(metricsCtx, target, result, start, uncompressedSize, compressedSize)
-			finishInstancesSpan(span, spanErr)
-			m.compressionMu.Lock()
-			delete(m.compressionJobs, target.Key)
-			m.compressionMu.Unlock()
-			close(job.done)
-		}()
+		compressionCtx, span := m.tracerOrDefault().Start(context.Background(), "instances.snapshot_compression", spanOptions...)
+		metricsCtx = compressionCtx
+		defer func() { finishInstancesSpan(span, spanErr) }()
 
 		rawPath, ok := findRawSnapshotMemoryFile(target.SnapshotDir)
 		if !ok {
@@ -414,7 +589,7 @@ func (m *manager) waitCompressionJobContext(ctx context.Context, key string) err
 	}
 }
 
-func (m *manager) cancelAndWaitCompressionJob(ctx context.Context, key string) (*compressionTarget, error) {
+func (m *manager) cancelAndWaitCompressionJob(ctx context.Context, key string) (*canceledCompressionJob, error) {
 	if key == "" {
 		return nil, nil
 	}
@@ -432,8 +607,10 @@ func (m *manager) cancelAndWaitCompressionJob(ctx context.Context, key string) (
 
 	select {
 	case <-job.done:
-		target := job.target
-		return &target, nil
+		return &canceledCompressionJob{
+			Target: job.target,
+			State:  job.state,
+		}, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
@@ -447,8 +624,8 @@ func (m *manager) ensureSnapshotMemoryReady(ctx context.Context, snapshotDir, jo
 		if err != nil {
 			return err
 		}
-		if target != nil {
-			m.recordSnapshotCompressionPreemption(ctx, snapshotCompressionPreemptionRestoreInstance, *target)
+		if target != nil && target.State == compressionJobStateRunning {
+			m.recordSnapshotCompressionPreemption(ctx, snapshotCompressionPreemptionRestoreInstance, target.Target)
 		}
 	}
 

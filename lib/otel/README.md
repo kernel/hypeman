@@ -70,6 +70,17 @@ This keeps pull and push views aligned because both are sourced from the same OT
 | `hypeman_instances_restore_duration_seconds` | histogram | status, hypervisor, algorithm, level | Restore time |
 | `hypeman_instances_standby_duration_seconds` | histogram | status, hypervisor, algorithm, level | Standby time |
 | `hypeman_instances_state_transitions_total` | counter | from, to | State transitions |
+| `hypeman_snapshot_compression_jobs_total` | counter | hypervisor, algorithm, source, result | Snapshot compression job outcomes (`success`, `skipped`, `canceled`, `failed`) |
+| `hypeman_snapshot_compression_duration_seconds` | histogram | hypervisor, algorithm, source, result | Active compression execution time only |
+| `hypeman_snapshot_compression_wait_duration_seconds` | histogram | hypervisor, algorithm, source, outcome | Standby compression delay wait time before start or skip |
+| `hypeman_snapshot_compression_active_total` | gauge | hypervisor, algorithm, source | Currently running compression jobs |
+| `hypeman_snapshot_compression_pending_total` | gauge | hypervisor, algorithm, source | Delayed standby compression jobs waiting to start |
+| `hypeman_snapshot_compression_saved_bytes` | histogram | hypervisor, algorithm, source | Bytes saved by compression |
+| `hypeman_snapshot_compression_ratio` | histogram | hypervisor, algorithm, source | Compressed-to-raw size ratio |
+| `hypeman_snapshot_codec_fallbacks_total` | counter | algorithm, operation, reason | Native codec fallback count |
+| `hypeman_snapshot_restore_memory_prepare_total` | counter | restore_source, result, hypervisor | Restore memory preparation outcomes |
+| `hypeman_snapshot_restore_memory_prepare_duration_seconds` | histogram | restore_source, result, hypervisor | Restore memory preparation time |
+| `hypeman_snapshot_compression_preemptions_total` | counter | hypervisor, algorithm, source, operation | Foreground operations that interrupted active compression |
 
 ### Network
 | Metric | Type | Labels | Description |

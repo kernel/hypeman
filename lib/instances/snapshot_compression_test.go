@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -183,6 +185,45 @@ func TestResolveStandbyCompressionPolicyInvalidConfiguredDefaultIsInvalidRequest
 	assert.True(t, errors.Is(err, ErrInvalidRequest))
 }
 
+func TestResolveStandbyCompressionDelayPrecedence(t *testing.T) {
+	t.Parallel()
+
+	instanceDelay := 2 * time.Minute
+	overrideDelay := 15 * time.Second
+	m := &manager{}
+
+	delay, err := m.resolveStandbyCompressionDelay(&StoredMetadata{
+		SnapshotPolicy: &SnapshotPolicy{
+			StandbyCompressionDelay: &instanceDelay,
+		},
+	}, &overrideDelay)
+	require.NoError(t, err)
+	assert.Equal(t, overrideDelay, delay)
+
+	delay, err = m.resolveStandbyCompressionDelay(&StoredMetadata{
+		SnapshotPolicy: &SnapshotPolicy{
+			StandbyCompressionDelay: &instanceDelay,
+		},
+	}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, instanceDelay, delay)
+
+	delay, err = m.resolveStandbyCompressionDelay(&StoredMetadata{}, nil)
+	require.NoError(t, err)
+	assert.Zero(t, delay)
+}
+
+func TestResolveStandbyCompressionDelayRejectsNegativeDuration(t *testing.T) {
+	t.Parallel()
+
+	m := &manager{}
+	negative := -1 * time.Second
+
+	_, err := m.resolveStandbyCompressionDelay(&StoredMetadata{}, &negative)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrInvalidRequest))
+}
+
 func TestCompressionMetadataForExistingArtifactUsesActualAlgorithm(t *testing.T) {
 	t.Parallel()
 
@@ -220,6 +261,23 @@ func TestValidateCreateRequestSnapshotPolicy(t *testing.T) {
 			},
 		},
 	}
+	err := validateCreateRequest(req)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrInvalidRequest))
+}
+
+func TestValidateCreateRequestRejectsNegativeStandbyCompressionDelay(t *testing.T) {
+	t.Parallel()
+
+	negative := -1 * time.Second
+	req := &CreateInstanceRequest{
+		Name:  "compression-delay-test",
+		Image: "docker.io/library/alpine:latest",
+		SnapshotPolicy: &SnapshotPolicy{
+			StandbyCompressionDelay: &negative,
+		},
+	}
+
 	err := validateCreateRequest(req)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrInvalidRequest))
@@ -320,6 +378,7 @@ func installCancelableCompressionJob(mgr *manager, target compressionTarget) *co
 	mgr.compressionJobs[target.Key] = &compressionJob{
 		cancel: cancel,
 		done:   done,
+		state:  compressionJobStateRunning,
 		target: target,
 	}
 	mgr.compressionMu.Unlock()
@@ -344,4 +403,92 @@ func assertCompressionJobCanceled(t *testing.T, mgr *manager, target *compressio
 		_, ok := mgr.compressionJobs[target.Key]
 		return !ok
 	}, time.Second, 10*time.Millisecond)
+}
+
+func TestStartCompressionJobDelayedCancellationRecordsSkipped(t *testing.T) {
+	t.Parallel()
+
+	mgr, _ := setupTestManager(t)
+	delay := 45 * time.Second
+	timer := newFakeCompressionTimer()
+	mgr.compressionTimerFactory = func(got time.Duration) compressionTimer {
+		require.Equal(t, delay, got)
+		return timer
+	}
+
+	snapshotDir := t.TempDir()
+	rawPath := filepath.Join(snapshotDir, "memory")
+	require.NoError(t, os.WriteFile(rawPath, []byte("delayed standby snapshot"), 0o644))
+
+	target := compressionTarget{
+		Key:         "instance:delayed",
+		OwnerID:     "delayed",
+		SnapshotDir: snapshotDir,
+		Source:      snapshotCompressionSourceStandby,
+		Policy: snapshotstore.SnapshotCompressionConfig{
+			Enabled:   true,
+			Algorithm: snapshotstore.SnapshotCompressionAlgorithmZstd,
+			Level:     intPtr(1),
+		},
+		Delay: delay,
+	}
+
+	mgr.startCompressionJob(context.Background(), target)
+
+	require.Eventually(t, func() bool {
+		mgr.compressionMu.Lock()
+		defer mgr.compressionMu.Unlock()
+		job, ok := mgr.compressionJobs[target.Key]
+		return ok && job.state == compressionJobStatePendingDelay
+	}, time.Second, 10*time.Millisecond)
+
+	canceled, err := mgr.cancelAndWaitCompressionJob(context.Background(), target.Key)
+	require.NoError(t, err)
+	require.NotNil(t, canceled)
+	assert.Equal(t, compressionJobStatePendingDelay, canceled.State)
+
+	_, err = os.Stat(rawPath)
+	require.NoError(t, err, "raw snapshot should remain available when delay is skipped")
+	_, err = os.Stat(rawPath + ".zst")
+	require.Error(t, err)
+	assert.True(t, os.IsNotExist(err))
+}
+
+type fakeCompressionTimer struct {
+	ch      chan time.Time
+	mu      sync.Mutex
+	stopped bool
+	fired   bool
+}
+
+func newFakeCompressionTimer() *fakeCompressionTimer {
+	return &fakeCompressionTimer{ch: make(chan time.Time, 1)}
+}
+
+func (t *fakeCompressionTimer) Chan() <-chan time.Time {
+	return t.ch
+}
+
+func (t *fakeCompressionTimer) Stop() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.stopped || t.fired {
+		return false
+	}
+	t.stopped = true
+	return true
+}
+
+func (t *fakeCompressionTimer) Fire() bool {
+	t.mu.Lock()
+	if t.stopped || t.fired {
+		t.mu.Unlock()
+		return false
+	}
+	t.fired = true
+	ch := t.ch
+	t.mu.Unlock()
+
+	ch <- time.Now()
+	return true
 }

@@ -485,6 +485,9 @@ func cloneStoredMetadataForFork(src StoredMetadata) StoredMetadata {
 	if src.Credentials != nil {
 		dst.Credentials = cloneCredentialPolicies(src.Credentials)
 	}
+	if src.SnapshotPolicy != nil {
+		dst.SnapshotPolicy = cloneSnapshotPolicy(src.SnapshotPolicy)
+	}
 	if src.Tags != nil {
 		dst.Tags = make(map[string]string, len(src.Tags))
 		for k, v := range src.Tags {

@@ -268,7 +268,8 @@ type CreateSnapshotRequest struct {
 
 // StandbyInstanceRequest is the domain request for putting an instance into standby.
 type StandbyInstanceRequest struct {
-	Compression *snapshot.SnapshotCompressionConfig // Optional compression override
+	Compression      *snapshot.SnapshotCompressionConfig // Optional compression override
+	CompressionDelay *time.Duration                      // Optional standby-only compression delay override
 }
 
 // RestoreSnapshotRequest is the domain request for restoring a snapshot in-place.
@@ -286,7 +287,8 @@ type ForkSnapshotRequest struct {
 
 // SnapshotPolicy defines default snapshot behavior for an instance.
 type SnapshotPolicy struct {
-	Compression *snapshot.SnapshotCompressionConfig
+	Compression             *snapshot.SnapshotCompressionConfig
+	StandbyCompressionDelay *time.Duration
 }
 
 // AttachVolumeRequest is the domain request for attaching a volume (used for API compatibility)

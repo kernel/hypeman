@@ -534,6 +534,16 @@ func (s *ApiService) StandbyInstance(ctx context.Context, request oapi.StandbyIn
 		}
 		standbyReq.Compression = compression
 	}
+	if request.Body != nil && request.Body.CompressionDelay != nil {
+		compressionDelay, err := parseOptionalDuration(*request.Body.CompressionDelay, "compression_delay")
+		if err != nil {
+			return oapi.StandbyInstance400JSONResponse{
+				Code:    "invalid_compression_delay",
+				Message: err.Error(),
+			}, nil
+		}
+		standbyReq.CompressionDelay = compressionDelay
+	}
 
 	result, err := s.InstanceManager.StandbyInstance(ctx, inst.Id, standbyReq)
 	if err != nil {
@@ -1135,6 +1145,13 @@ func toInstanceSnapshotPolicy(policy oapi.SnapshotPolicy) (*instances.SnapshotPo
 		}
 		out.Compression = compression
 	}
+	if policy.StandbyCompressionDelay != nil {
+		delay, err := parseOptionalDuration(*policy.StandbyCompressionDelay, "standby_compression_delay")
+		if err != nil {
+			return nil, err
+		}
+		out.StandbyCompressionDelay = delay
+	}
 	return out, nil
 }
 
@@ -1159,5 +1176,20 @@ func toOAPISnapshotPolicy(policy instances.SnapshotPolicy) oapi.SnapshotPolicy {
 		compression := toOAPISnapshotCompressionConfig(*policy.Compression)
 		out.Compression = &compression
 	}
+	if policy.StandbyCompressionDelay != nil {
+		delay := policy.StandbyCompressionDelay.String()
+		out.StandbyCompressionDelay = &delay
+	}
 	return out
+}
+
+func parseOptionalDuration(value string, field string) (*time.Duration, error) {
+	duration, err := time.ParseDuration(value)
+	if err != nil {
+		return nil, fmt.Errorf("%s must be a valid duration: %w", field, err)
+	}
+	if duration < 0 {
+		return nil, fmt.Errorf("%s cannot be negative", field)
+	}
+	return &duration, nil
 }
