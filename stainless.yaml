@@ -72,6 +72,7 @@ resources:
 
   instances:
     models:
+      auto_standby_policy: "#/components/schemas/AutoStandbyPolicy"
       snapshot_policy: "#/components/schemas/SnapshotPolicy"
       snapshot_schedule: "#/components/schemas/SnapshotSchedule"
       snapshot_schedule_retention: "#/components/schemas/SnapshotScheduleRetention"
