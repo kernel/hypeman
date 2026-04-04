@@ -73,6 +73,7 @@ resources:
   instances:
     models:
       snapshot_policy: "#/components/schemas/SnapshotPolicy"
+      standby_instance_request: "#/components/schemas/StandbyInstanceRequest"
       snapshot_schedule: "#/components/schemas/SnapshotSchedule"
       snapshot_schedule_retention: "#/components/schemas/SnapshotScheduleRetention"
       set_snapshot_schedule_request: "#/components/schemas/SetSnapshotScheduleRequest"
