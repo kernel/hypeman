@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/c2h5oh/datasize"
+	"github.com/kernel/hypeman/lib/autostandby"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/instances"
 	mw "github.com/kernel/hypeman/lib/middleware"
@@ -276,6 +277,7 @@ func (m *captureUpdateManager) UpdateInstance(ctx context.Context, id string, re
 			Name:           "updated-instance",
 			Image:          "docker.io/library/alpine:latest",
 			Env:            req.Env,
+			AutoStandby:    req.AutoStandby,
 			CreatedAt:      now,
 			HypervisorType: hypervisor.TypeCloudHypervisor,
 		},
@@ -297,6 +299,7 @@ func (m *captureCreateManager) CreateInstance(ctx context.Context, req instances
 			HotplugSize:    req.HotplugSize,
 			OverlaySize:    req.OverlaySize,
 			Vcpus:          req.Vcpus,
+			AutoStandby:    req.AutoStandby,
 			CreatedAt:      now,
 			HypervisorType: hypervisor.TypeCloudHypervisor,
 		},
@@ -477,6 +480,49 @@ func TestCreateInstance_MapsNetworkEgressEnforcementMode(t *testing.T) {
 	assert.Equal(t, instances.EgressEnforcementModeHTTPHTTPSOnly, mockMgr.lastReq.NetworkEgress.EnforcementMode)
 }
 
+func TestCreateInstance_MapsAutoStandbyPolicy(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	origMgr := svc.InstanceManager
+	mockMgr := &captureCreateManager{Manager: origMgr}
+	svc.InstanceManager = mockMgr
+
+	enabled := true
+	idleTimeout := "5m"
+	ignoreSourceCidrs := []string{"10.0.0.0/8", "192.168.0.0/16"}
+	ignoreDestinationPorts := []int{22, 9000}
+
+	resp, err := svc.CreateInstance(ctx(), oapi.CreateInstanceRequestObject{
+		Body: &oapi.CreateInstanceRequest{
+			Name:  "test-auto-standby",
+			Image: "docker.io/library/alpine:latest",
+			AutoStandby: &oapi.AutoStandbyPolicy{
+				Enabled:                &enabled,
+				IdleTimeout:            &idleTimeout,
+				IgnoreSourceCidrs:      &ignoreSourceCidrs,
+				IgnoreDestinationPorts: &ignoreDestinationPorts,
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	created, ok := resp.(oapi.CreateInstance201JSONResponse)
+	require.True(t, ok, "expected 201 response")
+	require.NotNil(t, mockMgr.lastReq)
+	require.NotNil(t, mockMgr.lastReq.AutoStandby)
+	assert.True(t, mockMgr.lastReq.AutoStandby.Enabled)
+	assert.Equal(t, "5m", mockMgr.lastReq.AutoStandby.IdleTimeout)
+	assert.Equal(t, []string{"10.0.0.0/8", "192.168.0.0/16"}, mockMgr.lastReq.AutoStandby.IgnoreSourceCIDRs)
+	assert.Equal(t, []uint16{22, 9000}, mockMgr.lastReq.AutoStandby.IgnoreDestinationPorts)
+
+	instance := oapi.Instance(created)
+	require.NotNil(t, instance.AutoStandby)
+	require.NotNil(t, instance.AutoStandby.Enabled)
+	assert.True(t, *instance.AutoStandby.Enabled)
+	assert.Equal(t, idleTimeout, *instance.AutoStandby.IdleTimeout)
+}
+
 func TestUpdateInstance_MapsEnvPatch(t *testing.T) {
 	t.Parallel()
 	svc := newTestService(t)
@@ -522,6 +568,72 @@ func TestUpdateInstance_MapsEnvPatch(t *testing.T) {
 	require.NotNil(t, mockMgr.lastReq)
 	assert.Equal(t, resolved.Id, mockMgr.lastID)
 	assert.Equal(t, "rotated-key-456", mockMgr.lastReq.Env["OUTBOUND_OPENAI_KEY"])
+}
+
+func TestUpdateInstance_MapsAutoStandbyPatch(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	origMgr := svc.InstanceManager
+	now := time.Now()
+	mockMgr := &captureUpdateManager{
+		Manager: origMgr,
+		result: &instances.Instance{
+			StoredMetadata: instances.StoredMetadata{
+				Id:             "inst-update-auto-standby",
+				Name:           "inst-update-auto-standby",
+				Image:          "docker.io/library/alpine:latest",
+				CreatedAt:      now,
+				HypervisorType: hypervisor.TypeCloudHypervisor,
+				AutoStandby: &autostandby.Policy{
+					Enabled:     true,
+					IdleTimeout: "10m0s",
+				},
+			},
+			State: instances.StateStopped,
+		},
+	}
+	svc.InstanceManager = mockMgr
+
+	enabled := true
+	idleTimeout := "10m"
+	ignoreDestinationPorts := []int{22}
+	resolved := &instances.Instance{
+		StoredMetadata: instances.StoredMetadata{
+			Id:             "inst-update-auto-standby",
+			Name:           "inst-update-auto-standby",
+			Image:          "docker.io/library/alpine:latest",
+			CreatedAt:      now,
+			HypervisorType: hypervisor.TypeCloudHypervisor,
+		},
+		State: instances.StateStopped,
+	}
+
+	resp, err := svc.UpdateInstance(mw.WithResolvedInstance(ctx(), resolved.Id, resolved), oapi.UpdateInstanceRequestObject{
+		Id: resolved.Id,
+		Body: &oapi.UpdateInstanceRequest{
+			AutoStandby: &oapi.AutoStandbyPolicy{
+				Enabled:                &enabled,
+				IdleTimeout:            &idleTimeout,
+				IgnoreDestinationPorts: &ignoreDestinationPorts,
+			},
+		},
+	})
+	require.NoError(t, err)
+	updated, ok := resp.(oapi.UpdateInstance200JSONResponse)
+	require.True(t, ok, "expected 200 response")
+
+	require.NotNil(t, mockMgr.lastReq)
+	require.NotNil(t, mockMgr.lastReq.AutoStandby)
+	assert.Equal(t, resolved.Id, mockMgr.lastID)
+	assert.True(t, mockMgr.lastReq.AutoStandby.Enabled)
+	assert.Equal(t, "10m", mockMgr.lastReq.AutoStandby.IdleTimeout)
+	assert.Equal(t, []uint16{22}, mockMgr.lastReq.AutoStandby.IgnoreDestinationPorts)
+
+	instance := oapi.Instance(updated)
+	require.NotNil(t, instance.AutoStandby)
+	require.NotNil(t, instance.AutoStandby.Enabled)
+	assert.True(t, *instance.AutoStandby.Enabled)
 }
 
 func TestUpdateInstance_RequiresBody(t *testing.T) {

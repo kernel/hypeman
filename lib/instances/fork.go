@@ -482,6 +482,9 @@ func cloneStoredMetadataForFork(src StoredMetadata) StoredMetadata {
 	if src.NetworkEgress != nil {
 		dst.NetworkEgress = cloneNetworkEgressPolicy(src.NetworkEgress)
 	}
+	if src.AutoStandby != nil {
+		dst.AutoStandby = cloneAutoStandbyPolicy(src.AutoStandby)
+	}
 	if src.Credentials != nil {
 		dst.Credentials = cloneCredentialPolicies(src.Credentials)
 	}

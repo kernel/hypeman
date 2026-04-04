@@ -495,6 +495,9 @@ func run() error {
 		logger.Info("starting guest memory controller")
 		return app.GuestMemoryController.Start(gctx)
 	})
+	if startAutoStandbyController(grp, gctx, logger, app.InstanceManager) {
+		logger.Info("auto-standby controller enabled")
+	}
 
 	// Run the server
 	grp.Go(func() error {

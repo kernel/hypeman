@@ -203,6 +203,38 @@ components:
             $ref: "#/components/schemas/CreateInstanceRequestCredentialInject"
           minItems: 1
 
+    AutoStandbyPolicy:
+      type: object
+      description: |
+        Linux-only automatic standby policy based on active inbound TCP connections
+        observed from the host conntrack table.
+      properties:
+        enabled:
+          type: boolean
+          description: Whether automatic standby is enabled for this instance.
+          default: false
+          example: true
+        idle_timeout:
+          type: string
+          description: |
+            How long the instance must have zero qualifying inbound TCP connections
+            before Hypeman places it into standby.
+          example: "5m"
+        ignore_source_cidrs:
+          type: array
+          description: Optional client CIDRs that should not keep the instance awake.
+          items:
+            type: string
+          example: ["10.0.0.0/8", "192.168.0.0/16"]
+        ignore_destination_ports:
+          type: array
+          description: Optional destination TCP ports that should not keep the instance awake.
+          items:
+            type: integer
+            minimum: 1
+            maximum: 65535
+          example: [22, 9000]
+
     UpdateInstanceRequest:
       type: object
       properties:
@@ -217,6 +249,8 @@ components:
             are accepted. Use this to rotate real credential values without restarting the VM.
           example:
             OUTBOUND_OPENAI_KEY: new-rotated-key-456
+        auto_standby:
+          $ref: "#/components/schemas/AutoStandbyPolicy"
 
     CreateInstanceRequest:
       type: object
@@ -323,6 +357,8 @@ components:
         snapshot_policy:
           description: Snapshot compression policy for this instance. Controls compression settings applied when creating snapshots or entering standby.
           $ref: "#/components/schemas/SnapshotPolicy"
+        auto_standby:
+          $ref: "#/components/schemas/AutoStandbyPolicy"
         skip_kernel_headers:
           type: boolean
           description: |
@@ -766,6 +802,8 @@ components:
           example: cloud-hypervisor
         snapshot_policy:
           $ref: "#/components/schemas/SnapshotPolicy"
+        auto_standby:
+          $ref: "#/components/schemas/AutoStandbyPolicy"
     
     PathInfo:
       type: object

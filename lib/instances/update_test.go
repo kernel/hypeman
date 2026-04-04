@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/kernel/hypeman/lib/autostandby"
 	"github.com/kernel/hypeman/lib/egressproxy"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -22,11 +23,11 @@ func TestValidateUpdateInstanceRequest(t *testing.T) {
 		},
 	}
 
-	t.Run("requires at least one env key", func(t *testing.T) {
+	t.Run("requires at least one update field", func(t *testing.T) {
 		err := validateUpdateInstanceRequest(baseMeta, UpdateInstanceRequest{})
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrInvalidRequest)
-		assert.Contains(t, err.Error(), "at least one credential source env var")
+		assert.Contains(t, err.Error(), "env and/or auto_standby")
 	})
 
 	t.Run("rejects instances without credential backed envs", func(t *testing.T) {
@@ -51,6 +52,16 @@ func TestValidateUpdateInstanceRequest(t *testing.T) {
 	t.Run("allows credential source env keys", func(t *testing.T) {
 		err := validateUpdateInstanceRequest(baseMeta, UpdateInstanceRequest{
 			Env: map[string]string{"OUTBOUND_OPENAI_KEY": "rotated"},
+		})
+		require.NoError(t, err)
+	})
+
+	t.Run("allows auto standby without env changes", func(t *testing.T) {
+		err := validateUpdateInstanceRequest(baseMeta, UpdateInstanceRequest{
+			AutoStandby: &autostandby.Policy{
+				Enabled:     true,
+				IdleTimeout: "5m",
+			},
 		})
 		require.NoError(t, err)
 	})
