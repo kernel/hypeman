@@ -300,6 +300,7 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef) {
 	meta.Entrypoint = result.Metadata.Entrypoint
 	meta.Cmd = result.Metadata.Cmd
 	meta.Env = result.Metadata.Env
+	meta.Labels = result.Metadata.Labels
 	meta.WorkingDir = result.Metadata.WorkingDir
 
 	if err := writeMetadata(m.paths, ref.Repository(), ref.DigestHex(), meta); err != nil {

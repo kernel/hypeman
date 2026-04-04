@@ -277,6 +277,7 @@ func (c *ociClient) extractOCIMetadata(layoutTag string) (*containerMetadata, er
 		Entrypoint: configFile.Config.Entrypoint,
 		Cmd:        configFile.Config.Cmd,
 		Env:        make(map[string]string),
+		Labels:     make(map[string]string),
 		WorkingDir: configFile.Config.WorkingDir,
 	}
 
@@ -290,6 +291,10 @@ func (c *ociClient) extractOCIMetadata(layoutTag string) (*containerMetadata, er
 				break
 			}
 		}
+	}
+
+	for key, value := range configFile.Config.Labels {
+		meta.Labels[key] = value
 	}
 
 	return meta, nil
@@ -456,5 +461,6 @@ type containerMetadata struct {
 	Entrypoint []string
 	Cmd        []string
 	Env        map[string]string
+	Labels     map[string]string
 	WorkingDir string
 }
