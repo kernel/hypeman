@@ -153,12 +153,13 @@ type RegistryConfig struct {
 
 // LimitsConfig holds per-instance and aggregate resource limits.
 type LimitsConfig struct {
-	MaxVcpusPerInstance   int     `koanf:"max_vcpus_per_instance"`
-	MaxMemoryPerInstance  string  `koanf:"max_memory_per_instance"`
-	MaxTotalVolumeStorage string  `koanf:"max_total_volume_storage"`
-	MaxConcurrentBuilds   int     `koanf:"max_concurrent_builds"`
-	MaxOverlaySize        string  `koanf:"max_overlay_size"`
-	MaxImageStorage       float64 `koanf:"max_image_storage"`
+	MaxVcpusPerInstance   int                       `koanf:"max_vcpus_per_instance"`
+	MaxMemoryPerInstance  string                    `koanf:"max_memory_per_instance"`
+	MaxTotalVolumeStorage string                    `koanf:"max_total_volume_storage"`
+	MaxConcurrentBuilds   int                       `koanf:"max_concurrent_builds"`
+	MaxOverlaySize        string                    `koanf:"max_overlay_size"`
+	MaxImageStorage       float64                   `koanf:"max_image_storage"`
+	NamePatterns          []NamePatternLimitsConfig `koanf:"name_patterns"`
 }
 
 // OversubscriptionConfig holds oversubscription ratios (1.0 = no oversubscription).
@@ -361,6 +362,7 @@ func defaultConfig() *Config {
 			MaxConcurrentBuilds:   1,
 			MaxOverlaySize:        "100GB",
 			MaxImageStorage:       0.2,
+			NamePatterns:          nil,
 		},
 
 		Oversubscription: OversubscriptionConfig{
@@ -532,6 +534,24 @@ func (c *Config) Validate() error {
 	if c.Build.Timeout <= 0 {
 		return fmt.Errorf("build.timeout must be positive, got %d", c.Build.Timeout)
 	}
+	if c.Limits.MaxVcpusPerInstance < 0 {
+		return fmt.Errorf("limits.max_vcpus_per_instance must be >= 0, got %d", c.Limits.MaxVcpusPerInstance)
+	}
+	if err := validateOptionalByteSize("limits.max_memory_per_instance", c.Limits.MaxMemoryPerInstance); err != nil {
+		return err
+	}
+	if err := validateByteSize("limits.max_overlay_size", c.Limits.MaxOverlaySize); err != nil {
+		return err
+	}
+	if c.Limits.MaxConcurrentBuilds <= 0 {
+		return fmt.Errorf("limits.max_concurrent_builds must be positive, got %d", c.Limits.MaxConcurrentBuilds)
+	}
+	if c.Limits.MaxImageStorage < 0 {
+		return fmt.Errorf("limits.max_image_storage must be >= 0, got %v", c.Limits.MaxImageStorage)
+	}
+	if err := validateNamePatternLimits(c.Limits.NamePatterns); err != nil {
+		return err
+	}
 	if err := validateDuration("images.auto_delete.unused_for", c.Images.AutoDelete.UnusedFor); err != nil {
 		return err
 	}
@@ -604,6 +624,14 @@ func validateByteSize(field string, value string) error {
 		return fmt.Errorf("%s must be a valid byte size, got %q: %w", field, value, err)
 	}
 	return nil
+}
+
+func validateOptionalByteSize(field string, value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	return validateByteSize(field, value)
 }
 
 func validateDuration(field string, value string) error {

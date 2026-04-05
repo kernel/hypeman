@@ -164,22 +164,14 @@ func (m *manager) createInstance(
 	if overlaySize == 0 {
 		overlaySize = 10 * 1024 * 1024 * 1024 // 10GB default
 	}
-	// Validate overlay size against max
-	if overlaySize > m.limits.MaxOverlaySize {
-		return nil, fmt.Errorf("overlay size %d exceeds maximum allowed size %d", overlaySize, m.limits.MaxOverlaySize)
-	}
 	vcpus := req.Vcpus
 	if vcpus == 0 {
 		vcpus = 2
 	}
 
-	// Validate per-instance resource limits
-	if m.limits.MaxVcpusPerInstance > 0 && vcpus > m.limits.MaxVcpusPerInstance {
-		return nil, fmt.Errorf("vcpus %d exceeds maximum allowed %d per instance", vcpus, m.limits.MaxVcpusPerInstance)
-	}
 	totalMemory := size + hotplugSize
-	if m.limits.MaxMemoryPerInstance > 0 && totalMemory > m.limits.MaxMemoryPerInstance {
-		return nil, fmt.Errorf("total memory %d (size + hotplug_size) exceeds maximum allowed %d per instance", totalMemory, m.limits.MaxMemoryPerInstance)
+	if err := validateResourceLimitsForName(req.Name, m.limits, overlaySize, vcpus, totalMemory); err != nil {
+		return nil, err
 	}
 
 	diskBytes := requestedDiskReservationBytes(overlaySize, req.Volumes)

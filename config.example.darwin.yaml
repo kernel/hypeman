@@ -115,6 +115,12 @@ limits:
   max_vcpus_per_instance: 4
   max_memory_per_instance: 8GB
   # max_total_volume_storage: ""  # 0 or empty = unlimited
+  # name_patterns:
+  #   - pattern: '^build-'
+  #     max_vcpus_per_instance: 8
+  #   - pattern: '^tiny-'
+  #     max_memory_per_instance: 2GB
+  #     max_overlay_size: 5GB
 
 # =============================================================================
 # OpenTelemetry (optional, same as Linux)
