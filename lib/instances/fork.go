@@ -300,6 +300,9 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 	if err := validateResourceLimitsForName(req.Name, m.limits, forkMeta.OverlaySize, forkMeta.Vcpus, forkMeta.Size+forkMeta.HotplugSize); err != nil {
 		return nil, err
 	}
+	if err := m.validateProvisionedResourceLimitsForName(ctx, req.Name, forkMeta.OverlaySize, forkMeta.Vcpus, forkMeta.Size+forkMeta.HotplugSize, forkMeta.NetworkBandwidthDownload, forkMeta.NetworkBandwidthUpload, forkMeta.DiskIOBps, forkMeta.Volumes); err != nil {
+		return nil, err
+	}
 
 	if source.State == StateStandby {
 		snapshotConfigPath := m.paths.InstanceSnapshotConfig(forkID)

@@ -5,33 +5,79 @@ import (
 	"regexp"
 )
 
+type NamedResourceLimitConfig struct {
+	MaxVcpusPerInstance      *int
+	MaxMemoryPerInstance     *int64
+	MaxOverlaySize           *int64
+	MaxTotalVcpus            *int
+	MaxTotalMemory           *int64
+	MaxTotalDisk             *int64
+	MaxTotalNetworkBandwidth *int64
+	MaxTotalDiskIO           *int64
+}
+
 // NamedResourceLimit applies per-instance limits to names matching Pattern.
 // The first matching pattern wins, and omitted fields fall back to global limits.
 type NamedResourceLimit struct {
-	Pattern              string
-	re                   *regexp.Regexp
-	MaxVcpusPerInstance  *int
-	MaxMemoryPerInstance *int64
-	MaxOverlaySize       *int64
+	Pattern                  string
+	re                       *regexp.Regexp
+	MaxVcpusPerInstance      *int
+	MaxMemoryPerInstance     *int64
+	MaxOverlaySize           *int64
+	MaxTotalVcpus            *int
+	MaxTotalMemory           *int64
+	MaxTotalDisk             *int64
+	MaxTotalNetworkBandwidth *int64
+	MaxTotalDiskIO           *int64
 }
 
-func NewNamedResourceLimit(pattern string, maxVcpus *int, maxMemory *int64, maxOverlay *int64) (NamedResourceLimit, error) {
+func NewNamedResourceLimit(pattern string, cfg NamedResourceLimitConfig) (NamedResourceLimit, error) {
 	re, err := regexp.Compile(pattern)
 	if err != nil {
 		return NamedResourceLimit{}, fmt.Errorf("compile name limit regex %q: %w", pattern, err)
 	}
 
 	return NamedResourceLimit{
-		Pattern:              pattern,
-		re:                   re,
-		MaxVcpusPerInstance:  maxVcpus,
-		MaxMemoryPerInstance: maxMemory,
-		MaxOverlaySize:       maxOverlay,
+		Pattern:                  pattern,
+		re:                       re,
+		MaxVcpusPerInstance:      cfg.MaxVcpusPerInstance,
+		MaxMemoryPerInstance:     cfg.MaxMemoryPerInstance,
+		MaxOverlaySize:           cfg.MaxOverlaySize,
+		MaxTotalVcpus:            cfg.MaxTotalVcpus,
+		MaxTotalMemory:           cfg.MaxTotalMemory,
+		MaxTotalDisk:             cfg.MaxTotalDisk,
+		MaxTotalNetworkBandwidth: cfg.MaxTotalNetworkBandwidth,
+		MaxTotalDiskIO:           cfg.MaxTotalDiskIO,
 	}, nil
 }
 
 func (l NamedResourceLimit) matches(name string) bool {
 	return l.re != nil && l.re.MatchString(name)
+}
+
+func (l NamedResourceLimit) hasAggregateProvisionedLimits() bool {
+	return l.MaxTotalVcpus != nil ||
+		l.MaxTotalMemory != nil ||
+		l.MaxTotalDisk != nil ||
+		l.MaxTotalNetworkBandwidth != nil ||
+		l.MaxTotalDiskIO != nil
+}
+
+func (l ResourceLimits) matchingPatternIndex(name string) int {
+	for i := range l.NamePatterns {
+		if l.NamePatterns[i].matches(name) {
+			return i
+		}
+	}
+	return -1
+}
+
+func (l ResourceLimits) matchingPattern(name string) *NamedResourceLimit {
+	index := l.matchingPatternIndex(name)
+	if index < 0 {
+		return nil
+	}
+	return &l.NamePatterns[index]
 }
 
 func (l ResourceLimits) ForName(name string) ResourceLimits {
@@ -41,10 +87,7 @@ func (l ResourceLimits) ForName(name string) ResourceLimits {
 		MaxMemoryPerInstance: l.MaxMemoryPerInstance,
 	}
 
-	for _, pattern := range l.NamePatterns {
-		if !pattern.matches(name) {
-			continue
-		}
+	if pattern := l.matchingPattern(name); pattern != nil {
 		if pattern.MaxOverlaySize != nil {
 			resolved.MaxOverlaySize = *pattern.MaxOverlaySize
 		}
@@ -54,7 +97,6 @@ func (l ResourceLimits) ForName(name string) ResourceLimits {
 		if pattern.MaxMemoryPerInstance != nil {
 			resolved.MaxMemoryPerInstance = *pattern.MaxMemoryPerInstance
 		}
-		break
 	}
 
 	return resolved

@@ -122,7 +122,7 @@ Common settings:
 | `metrics.resource_refresh_interval` | Refresh interval for cached resource capacity metrics | `120s` |
 | `limits.max_concurrent_builds` | Max concurrent image builds | `1` |
 | `limits.max_overlay_size` | Max overlay filesystem size | `100GB` |
-| `limits.name_patterns` | Ordered regex overrides for per-instance CPU/memory/overlay limits | _(empty)_ |
+| `limits.name_patterns` | Ordered regex overrides for per-instance limits plus per-pattern provisioned CPU/memory/disk/network/disk I/O caps | _(empty)_ |
 | `acme.email` | Email for ACME certificate registration | _(empty)_ |
 | `acme.dns_provider` | DNS provider for ACME challenges | _(empty)_ |
 | `acme.cloudflare_api_token` | Cloudflare API token | _(empty)_ |

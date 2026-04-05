@@ -298,8 +298,11 @@ limits:
     - pattern: '^prod-'
       max_vcpus_per_instance: 8
       max_memory_per_instance: 64GB
+      max_total_vcpus: 32
+      max_total_memory: 256GB
     - pattern: '^tiny-'
       max_overlay_size: 5GB
+      max_total_network_bandwidth: 1Gbps
 `
 	if err := os.WriteFile(cfgPath, []byte(configYAML), 0600); err != nil {
 		t.Fatalf("write temp config: %v", err)
@@ -322,8 +325,17 @@ limits:
 	if cfg.Limits.NamePatterns[0].MaxMemoryPerInstance == nil || *cfg.Limits.NamePatterns[0].MaxMemoryPerInstance != "64GB" {
 		t.Fatalf("expected first max_memory_per_instance to load, got %#v", cfg.Limits.NamePatterns[0].MaxMemoryPerInstance)
 	}
+	if cfg.Limits.NamePatterns[0].MaxTotalVcpus == nil || *cfg.Limits.NamePatterns[0].MaxTotalVcpus != 32 {
+		t.Fatalf("expected first max_total_vcpus to load, got %#v", cfg.Limits.NamePatterns[0].MaxTotalVcpus)
+	}
+	if cfg.Limits.NamePatterns[0].MaxTotalMemory == nil || *cfg.Limits.NamePatterns[0].MaxTotalMemory != "256GB" {
+		t.Fatalf("expected first max_total_memory to load, got %#v", cfg.Limits.NamePatterns[0].MaxTotalMemory)
+	}
 	if cfg.Limits.NamePatterns[1].MaxOverlaySize == nil || *cfg.Limits.NamePatterns[1].MaxOverlaySize != "5GB" {
 		t.Fatalf("expected second max_overlay_size to load, got %#v", cfg.Limits.NamePatterns[1].MaxOverlaySize)
+	}
+	if cfg.Limits.NamePatterns[1].MaxTotalNetworkBandwidth == nil || *cfg.Limits.NamePatterns[1].MaxTotalNetworkBandwidth != "1Gbps" {
+		t.Fatalf("expected second max_total_network_bandwidth to load, got %#v", cfg.Limits.NamePatterns[1].MaxTotalNetworkBandwidth)
 	}
 }
 
@@ -366,6 +378,21 @@ func TestValidateAllowsUnlimitedNamePatternLimitSize(t *testing.T) {
 
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("expected zero-valued size overrides to validate, got %v", err)
+	}
+}
+
+func TestValidateRejectsInvalidNamePatternAggregateBandwidth(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Limits.NamePatterns = []NamePatternLimitsConfig{
+		{
+			Pattern:                  "^prod-",
+			MaxTotalNetworkBandwidth: strPtr("definitely-not-bandwidth"),
+		},
+	}
+
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "limits.name_patterns[0].max_total_network_bandwidth") {
+		t.Fatalf("expected invalid aggregate bandwidth validation error, got %v", err)
 	}
 }
 

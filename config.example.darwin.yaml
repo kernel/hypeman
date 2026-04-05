@@ -118,9 +118,12 @@ limits:
   # name_patterns:
   #   - pattern: '^build-'
   #     max_vcpus_per_instance: 8
+  #     max_total_vcpus: 64
+  #     max_total_memory: 128GB
   #   - pattern: '^tiny-'
   #     max_memory_per_instance: 2GB
   #     max_overlay_size: 5GB
+  #     max_total_disk: 200GB
 
 # =============================================================================
 # OpenTelemetry (optional, same as Linux)

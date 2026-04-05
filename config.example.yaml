@@ -150,5 +150,10 @@ data_dir: /var/lib/hypeman
 #     - pattern: '^prod-'
 #       max_vcpus_per_instance: 32
 #       max_memory_per_instance: 64GB
+#       max_total_vcpus: 256
+#       max_total_memory: 1TB
+#       max_total_network_bandwidth: 40Gbps
 #     - pattern: '^sandbox-'
 #       max_overlay_size: 20GB
+#       max_total_disk: 2TB
+#       max_total_disk_io: 4GB/s
