@@ -7,10 +7,10 @@ import (
 	"path/filepath"
 )
 
-// totalReadyImageBytesFast sums ready image sizes directly from metadata.json files.
+// totalReadyImageBytesFromMetadata sums ready image sizes directly from metadata.json files.
 // This is conservative for admission control and disk accounting: if metadata says an
 // image is ready, we count its recorded size without re-validating the rootfs path.
-func totalReadyImageBytesFast(imagesDir string) (int64, error) {
+func totalReadyImageBytesFromMetadata(imagesDir string) (int64, error) {
 	var total int64
 
 	err := filepath.Walk(imagesDir, func(path string, info os.FileInfo, err error) error {
@@ -42,10 +42,10 @@ func totalReadyImageBytesFast(imagesDir string) (int64, error) {
 	return total, nil
 }
 
-// totalOCICacheBlobBytesFast sums blob sizes directly from the OCI cache blob store.
+// totalOCICacheBlobBytesFromFilesystem sums blob sizes directly from the OCI cache blob store.
 // This counts the actual bytes on disk, including any blob files that are currently
 // present but no longer referenced by the OCI layout index.
-func totalOCICacheBlobBytesFast(blobDir string) (int64, error) {
+func totalOCICacheBlobBytesFromFilesystem(blobDir string) (int64, error) {
 	var total int64
 
 	err := filepath.Walk(blobDir, func(path string, info os.FileInfo, err error) error {
@@ -107,11 +107,11 @@ func (m *manager) refreshDiskUsageTotals() {
 }
 
 func (m *manager) computeDiskUsageTotals() (int64, int64, error) {
-	readyImageBytes, err := totalReadyImageBytesFast(m.paths.ImagesDir())
+	readyImageBytes, err := totalReadyImageBytesFromMetadata(m.paths.ImagesDir())
 	if err != nil {
 		return 0, 0, err
 	}
-	ociCacheBytes, err := totalOCICacheBlobBytesFast(m.paths.OCICacheBlobDir())
+	ociCacheBytes, err := totalOCICacheBlobBytesFromFilesystem(m.paths.OCICacheBlobDir())
 	if err != nil {
 		return 0, 0, err
 	}
