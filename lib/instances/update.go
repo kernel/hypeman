@@ -43,11 +43,13 @@ func (m *manager) updateInstance(ctx context.Context, id string, req UpdateInsta
 	if len(req.Env) > 0 && inst.State != StateRunning && inst.State != StateInitializing {
 		return nil, fmt.Errorf("%w: instance must be running or initializing to update env (current state: %s)", ErrInvalidState, inst.State)
 	}
+	nextMeta := meta
 	if req.AutoStandby != nil {
-		meta.AutoStandby = cloneAutoStandbyPolicy(req.AutoStandby)
+		nextMeta = cloneMetadata(meta)
+		nextMeta.AutoStandby = cloneAutoStandbyPolicy(req.AutoStandby)
 	}
 	if len(req.Env) == 0 {
-		if err := m.saveMetadata(meta); err != nil {
+		if err := m.saveMetadata(nextMeta); err != nil {
 			return nil, fmt.Errorf("save metadata: %w", err)
 		}
 
@@ -60,8 +62,8 @@ func (m *manager) updateInstance(ctx context.Context, id string, req UpdateInsta
 		return updated, nil
 	}
 
-	prevEnv := cloneEnvMap(meta.Env)
-	nextEnv := cloneEnvMap(meta.Env)
+	prevEnv := cloneEnvMap(nextMeta.Env)
+	nextEnv := cloneEnvMap(nextMeta.Env)
 	if nextEnv == nil {
 		nextEnv = make(map[string]string)
 	}
@@ -69,7 +71,7 @@ func (m *manager) updateInstance(ctx context.Context, id string, req UpdateInsta
 		nextEnv[k] = v
 	}
 
-	if err := validateCredentialEnvBindings(meta.Credentials, nextEnv); err != nil {
+	if err := validateCredentialEnvBindings(nextMeta.Credentials, nextEnv); err != nil {
 		return nil, err
 	}
 
@@ -79,7 +81,7 @@ func (m *manager) updateInstance(ctx context.Context, id string, req UpdateInsta
 		return nil, fmt.Errorf("egress proxy service unavailable")
 	}
 
-	if err := applyUpdatedInstanceEnv(ctx, log, id, meta, prevEnv, nextEnv, m.saveMetadata, svc); err != nil {
+	if err := applyUpdatedInstanceEnv(ctx, log, id, nextMeta, prevEnv, nextEnv, m.saveMetadata, svc); err != nil {
 		return nil, err
 	}
 

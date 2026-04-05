@@ -636,6 +636,48 @@ func TestUpdateInstance_MapsAutoStandbyPatch(t *testing.T) {
 	assert.True(t, *instance.AutoStandby.Enabled)
 }
 
+func TestUpdateInstance_RejectsZeroAutoStandbyIgnoreDestinationPort(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	origMgr := svc.InstanceManager
+	now := time.Now()
+	mockMgr := &captureUpdateManager{Manager: origMgr}
+	svc.InstanceManager = mockMgr
+
+	resolved := &instances.Instance{
+		StoredMetadata: instances.StoredMetadata{
+			Id:             "inst-update-auto-standby",
+			Name:           "inst-update-auto-standby",
+			Image:          "docker.io/library/alpine:latest",
+			CreatedAt:      now,
+			HypervisorType: hypervisor.TypeCloudHypervisor,
+		},
+		State: instances.StateStopped,
+	}
+	enabled := true
+	idleTimeout := "10m"
+	ignoreDestinationPorts := []int{0}
+
+	resp, err := svc.UpdateInstance(mw.WithResolvedInstance(ctx(), resolved.Id, resolved), oapi.UpdateInstanceRequestObject{
+		Id: resolved.Id,
+		Body: &oapi.UpdateInstanceRequest{
+			AutoStandby: &oapi.AutoStandbyPolicy{
+				Enabled:                &enabled,
+				IdleTimeout:            &idleTimeout,
+				IgnoreDestinationPorts: &ignoreDestinationPorts,
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	badReq, ok := resp.(oapi.UpdateInstance400JSONResponse)
+	require.True(t, ok, "expected 400 response")
+	assert.Equal(t, "invalid_auto_standby", badReq.Code)
+	assert.Contains(t, badReq.Message, "between 1 and 65535")
+	assert.Nil(t, mockMgr.lastReq)
+}
+
 func TestUpdateInstance_RequiresBody(t *testing.T) {
 	t.Parallel()
 	svc := newTestService(t)

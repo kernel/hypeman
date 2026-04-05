@@ -26,7 +26,7 @@ func toDomainAutoStandbyPolicy(policy *oapi.AutoStandbyPolicy) (*autostandby.Pol
 	if policy.IgnoreDestinationPorts != nil {
 		out.IgnoreDestinationPorts = make([]uint16, 0, len(*policy.IgnoreDestinationPorts))
 		for _, port := range *policy.IgnoreDestinationPorts {
-			if port < 0 || port > 65535 {
+			if port < 1 || port > 65535 {
 				return nil, fmt.Errorf("auto_standby.ignore_destination_ports must be between 1 and 65535")
 			}
 			out.IgnoreDestinationPorts = append(out.IgnoreDestinationPorts, uint16(port))

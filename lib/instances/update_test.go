@@ -181,3 +181,61 @@ func TestApplyUpdatedInstanceEnvReturnsRollbackFailure(t *testing.T) {
 	assert.Equal(t, prevEnv, meta.Env)
 	require.Len(t, svc.calls, 2)
 }
+
+func TestApplyUpdatedInstanceEnvSavesAutoStandbyAlongsideEnvWithoutMutatingOriginal(t *testing.T) {
+	t.Parallel()
+
+	original := &metadata{
+		StoredMetadata: StoredMetadata{
+			Id:            "inst-autostandby-copy",
+			NetworkEgress: &NetworkEgressPolicy{Enabled: true},
+			Credentials: map[string]CredentialPolicy{
+				"OUTBOUND_OPENAI_KEY": {
+					Source: CredentialSource{Env: "OUTBOUND_OPENAI_KEY"},
+					Inject: []CredentialInjectRule{{
+						As: CredentialInjectAs{
+							Header: "Authorization",
+							Format: "Bearer ${value}",
+						},
+					}},
+				},
+			},
+			Env: map[string]string{"OUTBOUND_OPENAI_KEY": "old"},
+			AutoStandby: &autostandby.Policy{
+				Enabled:     false,
+				IdleTimeout: "5m0s",
+			},
+		},
+	}
+	updated := cloneMetadata(original)
+	updated.AutoStandby = &autostandby.Policy{
+		Enabled:                true,
+		IdleTimeout:            "10m0s",
+		IgnoreSourceCIDRs:      []string{"10.0.0.0/8"},
+		IgnoreDestinationPorts: []uint16{22},
+	}
+
+	prevEnv := cloneEnvMap(updated.Env)
+	nextEnv := map[string]string{"OUTBOUND_OPENAI_KEY": "new"}
+	svc := &fakeUpdateInstanceRulesService{}
+
+	var saved *metadata
+	err := applyUpdatedInstanceEnv(context.Background(), nil, updated.Id, updated, prevEnv, nextEnv, func(meta *metadata) error {
+		saved = cloneMetadata(meta)
+		return nil
+	}, svc)
+	require.NoError(t, err)
+
+	require.NotNil(t, saved)
+	require.NotNil(t, saved.AutoStandby)
+	assert.True(t, saved.AutoStandby.Enabled)
+	assert.Equal(t, "10m0s", saved.AutoStandby.IdleTimeout)
+	assert.Equal(t, []string{"10.0.0.0/8"}, saved.AutoStandby.IgnoreSourceCIDRs)
+	assert.Equal(t, []uint16{22}, saved.AutoStandby.IgnoreDestinationPorts)
+	assert.Equal(t, nextEnv, saved.Env)
+
+	require.NotNil(t, original.AutoStandby)
+	assert.False(t, original.AutoStandby.Enabled)
+	assert.Equal(t, "5m0s", original.AutoStandby.IdleTimeout)
+	assert.Equal(t, map[string]string{"OUTBOUND_OPENAI_KEY": "old"}, original.Env)
+}
