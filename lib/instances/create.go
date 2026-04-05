@@ -183,10 +183,7 @@ func (m *manager) createInstance(
 	}
 
 	totalMemory := size + hotplugSize
-	if err := validateResourceLimitsForName(req.Name, m.limits, overlaySize, vcpus, totalMemory); err != nil {
-		return nil, err
-	}
-	if err := m.validateProvisionedResourceLimitsForName(ctx, req.Name, overlaySize, vcpus, totalMemory, req.NetworkBandwidthDownload, req.NetworkBandwidthUpload, req.DiskIOBps, req.Volumes); err != nil {
+	if err := m.validateNamedResourceLimits(ctx, req.Name, overlaySize, vcpus, totalMemory, req.NetworkBandwidthDownload, req.NetworkBandwidthUpload, req.DiskIOBps, req.Volumes); err != nil {
 		return nil, err
 	}
 

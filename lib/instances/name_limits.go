@@ -63,21 +63,13 @@ func (l NamedResourceLimit) hasAggregateProvisionedLimits() bool {
 		l.MaxTotalDiskIO != nil
 }
 
-func (l ResourceLimits) matchingPatternIndex(name string) int {
+func (l ResourceLimits) matchingPattern(name string) (int, *NamedResourceLimit) {
 	for i := range l.NamePatterns {
 		if l.NamePatterns[i].matches(name) {
-			return i
+			return i, &l.NamePatterns[i]
 		}
 	}
-	return -1
-}
-
-func (l ResourceLimits) matchingPattern(name string) *NamedResourceLimit {
-	index := l.matchingPatternIndex(name)
-	if index < 0 {
-		return nil
-	}
-	return &l.NamePatterns[index]
+	return -1, nil
 }
 
 func (l ResourceLimits) ForName(name string) ResourceLimits {
@@ -87,7 +79,7 @@ func (l ResourceLimits) ForName(name string) ResourceLimits {
 		MaxMemoryPerInstance: l.MaxMemoryPerInstance,
 	}
 
-	if pattern := l.matchingPattern(name); pattern != nil {
+	if _, pattern := l.matchingPattern(name); pattern != nil {
 		if pattern.MaxOverlaySize != nil {
 			resolved.MaxOverlaySize = *pattern.MaxOverlaySize
 		}

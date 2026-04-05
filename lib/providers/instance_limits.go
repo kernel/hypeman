@@ -23,52 +23,7 @@ func parseInstanceLimits(cfg *config.Config) (instances.ResourceLimits, error) {
 
 	namePatterns := make([]instances.NamedResourceLimit, 0, len(cfg.Limits.NamePatterns))
 	for i, patternCfg := range cfg.Limits.NamePatterns {
-		var maxVcpus *int
-		if patternCfg.MaxVcpusPerInstance != nil {
-			value := *patternCfg.MaxVcpusPerInstance
-			maxVcpus = &value
-		}
-		var maxTotalVcpus *int
-		if patternCfg.MaxTotalVcpus != nil {
-			value := *patternCfg.MaxTotalVcpus
-			maxTotalVcpus = &value
-		}
-
-		maxMemory, err := parseOptionalByteSizePtr(fmt.Sprintf("limits.name_patterns[%d].max_memory_per_instance", i), patternCfg.MaxMemoryPerInstance)
-		if err != nil {
-			return instances.ResourceLimits{}, err
-		}
-		maxOverlay, err := parseOptionalByteSizePtr(fmt.Sprintf("limits.name_patterns[%d].max_overlay_size", i), patternCfg.MaxOverlaySize)
-		if err != nil {
-			return instances.ResourceLimits{}, err
-		}
-		maxTotalMemory, err := parseOptionalByteSizePtr(fmt.Sprintf("limits.name_patterns[%d].max_total_memory", i), patternCfg.MaxTotalMemory)
-		if err != nil {
-			return instances.ResourceLimits{}, err
-		}
-		maxTotalDisk, err := parseOptionalByteSizePtr(fmt.Sprintf("limits.name_patterns[%d].max_total_disk", i), patternCfg.MaxTotalDisk)
-		if err != nil {
-			return instances.ResourceLimits{}, err
-		}
-		maxTotalNetwork, err := parseOptionalBandwidthPtr(fmt.Sprintf("limits.name_patterns[%d].max_total_network_bandwidth", i), patternCfg.MaxTotalNetworkBandwidth)
-		if err != nil {
-			return instances.ResourceLimits{}, err
-		}
-		maxTotalDiskIO, err := parseOptionalBandwidthPtr(fmt.Sprintf("limits.name_patterns[%d].max_total_disk_io", i), patternCfg.MaxTotalDiskIO)
-		if err != nil {
-			return instances.ResourceLimits{}, err
-		}
-
-		pattern, err := instances.NewNamedResourceLimit(patternCfg.Pattern, instances.NamedResourceLimitConfig{
-			MaxVcpusPerInstance:      maxVcpus,
-			MaxMemoryPerInstance:     maxMemory,
-			MaxOverlaySize:           maxOverlay,
-			MaxTotalVcpus:            maxTotalVcpus,
-			MaxTotalMemory:           maxTotalMemory,
-			MaxTotalDisk:             maxTotalDisk,
-			MaxTotalNetworkBandwidth: maxTotalNetwork,
-			MaxTotalDiskIO:           maxTotalDiskIO,
-		})
+		pattern, err := parseNamedResourceLimit(i, patternCfg)
 		if err != nil {
 			return instances.ResourceLimits{}, fmt.Errorf("parse limits.name_patterns[%d]: %w", i, err)
 		}
@@ -81,6 +36,57 @@ func parseInstanceLimits(cfg *config.Config) (instances.ResourceLimits, error) {
 		MaxMemoryPerInstance: maxMemoryPerInstance,
 		NamePatterns:         namePatterns,
 	}, nil
+}
+
+func parseNamedResourceLimit(i int, cfg config.NamePatternLimitsConfig) (instances.NamedResourceLimit, error) {
+	parsed := instances.NamedResourceLimitConfig{
+		MaxVcpusPerInstance: parseOptionalIntPtr(cfg.MaxVcpusPerInstance),
+		MaxTotalVcpus:       parseOptionalIntPtr(cfg.MaxTotalVcpus),
+	}
+
+	byteFields := []struct {
+		field string
+		src   *string
+		dst   **int64
+	}{
+		{field: "max_memory_per_instance", src: cfg.MaxMemoryPerInstance, dst: &parsed.MaxMemoryPerInstance},
+		{field: "max_overlay_size", src: cfg.MaxOverlaySize, dst: &parsed.MaxOverlaySize},
+		{field: "max_total_memory", src: cfg.MaxTotalMemory, dst: &parsed.MaxTotalMemory},
+		{field: "max_total_disk", src: cfg.MaxTotalDisk, dst: &parsed.MaxTotalDisk},
+	}
+	for _, field := range byteFields {
+		value, err := parseOptionalByteSizePtr(fmt.Sprintf("limits.name_patterns[%d].%s", i, field.field), field.src)
+		if err != nil {
+			return instances.NamedResourceLimit{}, err
+		}
+		*field.dst = value
+	}
+
+	bandwidthFields := []struct {
+		field string
+		src   *string
+		dst   **int64
+	}{
+		{field: "max_total_network_bandwidth", src: cfg.MaxTotalNetworkBandwidth, dst: &parsed.MaxTotalNetworkBandwidth},
+		{field: "max_total_disk_io", src: cfg.MaxTotalDiskIO, dst: &parsed.MaxTotalDiskIO},
+	}
+	for _, field := range bandwidthFields {
+		value, err := parseOptionalBandwidthPtr(fmt.Sprintf("limits.name_patterns[%d].%s", i, field.field), field.src)
+		if err != nil {
+			return instances.NamedResourceLimit{}, err
+		}
+		*field.dst = value
+	}
+
+	return instances.NewNamedResourceLimit(cfg.Pattern, parsed)
+}
+
+func parseOptionalIntPtr(value *int) *int {
+	if value == nil {
+		return nil
+	}
+	parsed := *value
+	return &parsed
 }
 
 func parseOptionalByteSizePtr(field string, value *string) (*int64, error) {

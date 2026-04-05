@@ -297,10 +297,7 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 		forkMeta.IP = ""
 		forkMeta.MAC = ""
 	}
-	if err := validateResourceLimitsForName(req.Name, m.limits, forkMeta.OverlaySize, forkMeta.Vcpus, forkMeta.Size+forkMeta.HotplugSize); err != nil {
-		return nil, err
-	}
-	if err := m.validateProvisionedResourceLimitsForName(ctx, req.Name, forkMeta.OverlaySize, forkMeta.Vcpus, forkMeta.Size+forkMeta.HotplugSize, forkMeta.NetworkBandwidthDownload, forkMeta.NetworkBandwidthUpload, forkMeta.DiskIOBps, forkMeta.Volumes); err != nil {
+	if err := m.validateNamedResourceLimits(ctx, req.Name, forkMeta.OverlaySize, forkMeta.Vcpus, forkMeta.Size+forkMeta.HotplugSize, forkMeta.NetworkBandwidthDownload, forkMeta.NetworkBandwidthUpload, forkMeta.DiskIOBps, forkMeta.Volumes); err != nil {
 		return nil, err
 	}
 

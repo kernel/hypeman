@@ -40,18 +40,18 @@ func (r *provisionedResources) add(other provisionedResources) {
 }
 
 func validateProvisionedResourceLimitsForName(name string, limits ResourceLimits, existing []resources.InstanceAllocation, requested provisionedResources) error {
-	patternIndex := limits.matchingPatternIndex(name)
-	if patternIndex < 0 {
+	patternIndex, pattern := limits.matchingPattern(name)
+	if pattern == nil {
 		return nil
 	}
-	pattern := limits.NamePatterns[patternIndex]
 	if !pattern.hasAggregateProvisionedLimits() {
 		return nil
 	}
 
 	var current provisionedResources
 	for _, alloc := range existing {
-		if limits.matchingPatternIndex(alloc.Name) != patternIndex {
+		matchedIndex, _ := limits.matchingPattern(alloc.Name)
+		if matchedIndex != patternIndex {
 			continue
 		}
 		current.add(provisionedResourcesFromAllocation(alloc))
@@ -109,12 +109,10 @@ func (m *manager) requestedProvisionedResources(ctx context.Context, overlaySize
 	}, nil
 }
 
-func (m *manager) validateProvisionedResourceLimitsForName(ctx context.Context, name string, overlaySize int64, vcpus int, totalMemory int64, networkDownloadBps int64, networkUploadBps int64, diskIOBps int64, volumes []VolumeAttachment) error {
-	pattern := m.limits.matchingPattern(name)
-	if pattern == nil || !pattern.hasAggregateProvisionedLimits() {
-		return nil
+func (m *manager) validateNamedResourceLimits(ctx context.Context, name string, overlaySize int64, vcpus int, totalMemory int64, networkDownloadBps int64, networkUploadBps int64, diskIOBps int64, volumes []VolumeAttachment) error {
+	if err := validateResourceLimitsForName(name, m.limits, overlaySize, vcpus, totalMemory); err != nil {
+		return err
 	}
-
 	requested, err := m.requestedProvisionedResources(ctx, overlaySize, vcpus, totalMemory, networkDownloadBps, networkUploadBps, diskIOBps, volumes)
 	if err != nil {
 		return err
