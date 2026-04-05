@@ -79,6 +79,8 @@ func (m *manager) saveMetadata(meta *metadata) error {
 		return fmt.Errorf("write metadata: %w", err)
 	}
 
+	m.syncAdmissionAllocation(meta)
+
 	return nil
 }
 
@@ -110,6 +112,8 @@ func (m *manager) deleteInstanceData(id string) error {
 	if err := os.RemoveAll(instDir); err != nil {
 		return fmt.Errorf("remove instance directory: %w", err)
 	}
+
+	m.deleteAdmissionAllocation(id)
 
 	return nil
 }

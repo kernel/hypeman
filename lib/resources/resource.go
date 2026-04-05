@@ -164,6 +164,14 @@ type pendingAllocation struct {
 	GPUSlots    int
 }
 
+type admissionUsage struct {
+	CPU         int64
+	MemoryBytes int64
+	DiskBytes   int64
+	NetworkBps  int64
+	DiskIOBps   int64
+}
+
 // Manager coordinates resource discovery and allocation tracking.
 type Manager struct {
 	cfg   *config.Config
@@ -179,7 +187,8 @@ type Manager struct {
 	volumeLister   VolumeLister
 
 	// Pending allocations are used only for admission decisions.
-	pending map[string]pendingAllocation
+	pending       map[string]pendingAllocation
+	pendingTotals pendingAllocation
 }
 
 // NewManager creates a new resource manager.
@@ -253,6 +262,27 @@ func (m *Manager) Initialize(ctx context.Context) error {
 	// Discover disk I/O (reuses existing DiskIOCapacity method)
 	diskIO := NewDiskIOResource(m.DiskIOCapacity(), m.instanceLister)
 	m.resources[ResourceDiskIO] = diskIO
+
+	// Warm fast allocation-related caches at startup so the first reservation or
+	// resource status read doesn't pay the one-time scan cost on the hot path.
+	if m.instanceLister != nil {
+		if _, err := m.instanceLister.ListInstanceAllocations(ctx); err != nil {
+			return fmt.Errorf("warm instance allocations: %w", err)
+		}
+	}
+	if m.imageLister != nil {
+		if _, err := m.imageLister.TotalImageBytes(ctx); err != nil {
+			return fmt.Errorf("warm image disk usage totals: %w", err)
+		}
+		if _, err := m.imageLister.TotalOCICacheBytes(ctx); err != nil {
+			return fmt.Errorf("warm OCI cache usage totals: %w", err)
+		}
+	}
+	if m.volumeLister != nil {
+		if _, err := m.volumeLister.TotalVolumeBytes(ctx); err != nil {
+			return fmt.Errorf("warm volume usage totals: %w", err)
+		}
+	}
 
 	return nil
 }
@@ -416,7 +446,29 @@ func (m *Manager) CanAllocate(ctx context.Context, rt ResourceType, amount int64
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	status, err := m.getAdmissionStatusLocked(ctx, rt, "")
+	usage, err := m.collectAdmissionUsageLocked(ctx)
+	if err != nil {
+		return false, err
+	}
+	pending := m.pendingTotalsExcludingLocked("")
+
+	var visibleAllocated int64
+	switch rt {
+	case ResourceCPU:
+		visibleAllocated = usage.CPU
+	case ResourceMemory:
+		visibleAllocated = usage.MemoryBytes
+	case ResourceDisk:
+		visibleAllocated = usage.DiskBytes
+	case ResourceNetwork:
+		visibleAllocated = usage.NetworkBps
+	case ResourceDiskIO:
+		visibleAllocated = usage.DiskIOBps
+	default:
+		return false, fmt.Errorf("unsupported admission resource type: %s", rt)
+	}
+
+	status, err := m.admissionStatusLocked(rt, visibleAllocated, pending)
 	if err != nil {
 		return false, err
 	}
@@ -445,82 +497,139 @@ func newPendingAllocation(vcpus int, memoryBytes int64, networkDownloadBps int64
 	return req
 }
 
-func (m *Manager) pendingAmountLocked(rt ResourceType, excludeID string) int64 {
-	var total int64
-	for id, pending := range m.pending {
-		if id == excludeID {
-			continue
-		}
-		switch rt {
-		case ResourceCPU:
-			total += pending.CPU
-		case ResourceMemory:
-			total += pending.MemoryBytes
-		case ResourceDisk:
-			total += pending.DiskBytes
-		case ResourceNetwork:
-			total += pending.NetworkBps
-		case ResourceDiskIO:
-			total += pending.DiskIOBps
-		}
+func (m *Manager) addPendingTotalsLocked(req pendingAllocation) {
+	m.pendingTotals.CPU += req.CPU
+	m.pendingTotals.MemoryBytes += req.MemoryBytes
+	m.pendingTotals.DiskBytes += req.DiskBytes
+	m.pendingTotals.NetworkBps += req.NetworkBps
+	m.pendingTotals.DiskIOBps += req.DiskIOBps
+	m.pendingTotals.GPUSlots += req.GPUSlots
+}
+
+func (m *Manager) subtractPendingTotalsLocked(req pendingAllocation) {
+	m.pendingTotals.CPU -= req.CPU
+	m.pendingTotals.MemoryBytes -= req.MemoryBytes
+	m.pendingTotals.DiskBytes -= req.DiskBytes
+	m.pendingTotals.NetworkBps -= req.NetworkBps
+	m.pendingTotals.DiskIOBps -= req.DiskIOBps
+	m.pendingTotals.GPUSlots -= req.GPUSlots
+}
+
+func (m *Manager) pendingTotalsExcludingLocked(excludeID string) pendingAllocation {
+	total := m.pendingTotals
+	if excludeID == "" {
+		return total
+	}
+	if existing, ok := m.pending[excludeID]; ok {
+		total.CPU -= existing.CPU
+		total.MemoryBytes -= existing.MemoryBytes
+		total.DiskBytes -= existing.DiskBytes
+		total.NetworkBps -= existing.NetworkBps
+		total.DiskIOBps -= existing.DiskIOBps
+		total.GPUSlots -= existing.GPUSlots
 	}
 	return total
 }
 
-func (m *Manager) pendingGPUSlotsLocked(excludeID string) int {
-	var total int
-	for id, pending := range m.pending {
-		if id == excludeID {
-			continue
+func (m *Manager) collectAdmissionUsageLocked(ctx context.Context) (admissionUsage, error) {
+	var usage admissionUsage
+
+	if m.instanceLister != nil {
+		instances, err := m.instanceLister.ListInstanceAllocations(ctx)
+		if err != nil {
+			return admissionUsage{}, fmt.Errorf("list instance allocations: %w", err)
 		}
-		total += pending.GPUSlots
+		for _, inst := range instances {
+			if !isActiveState(inst.State) {
+				continue
+			}
+			usage.CPU += int64(inst.Vcpus)
+			usage.MemoryBytes += inst.MemoryBytes
+			usage.DiskBytes += inst.OverlayBytes + inst.VolumeOverlayBytes
+			usage.DiskIOBps += inst.DiskIOBps
+
+			allocNet := inst.NetworkDownloadBps
+			if inst.NetworkUploadBps > allocNet {
+				allocNet = inst.NetworkUploadBps
+			}
+			usage.NetworkBps += allocNet
+		}
 	}
-	return total
+
+	if m.imageLister != nil {
+		imageBytes, err := m.imageLister.TotalImageBytes(ctx)
+		if err != nil {
+			return admissionUsage{}, fmt.Errorf("total image bytes: %w", err)
+		}
+		ociCacheBytes, err := m.imageLister.TotalOCICacheBytes(ctx)
+		if err != nil {
+			return admissionUsage{}, fmt.Errorf("total OCI cache bytes: %w", err)
+		}
+		usage.DiskBytes += imageBytes + ociCacheBytes
+	}
+
+	if m.volumeLister != nil {
+		volumeBytes, err := m.volumeLister.TotalVolumeBytes(ctx)
+		if err != nil {
+			return admissionUsage{}, fmt.Errorf("total volume bytes: %w", err)
+		}
+		usage.DiskBytes += volumeBytes
+	}
+
+	return usage, nil
 }
 
-func (m *Manager) getAdmissionStatusLocked(ctx context.Context, rt ResourceType, excludeID string) (*ResourceStatus, error) {
+func (m *Manager) admissionStatusLocked(rt ResourceType, visibleAllocated int64, pending pendingAllocation) (*ResourceStatus, error) {
 	res, ok := m.resources[rt]
 	if !ok {
 		return nil, fmt.Errorf("unknown resource type: %s", rt)
 	}
 
-	capacity := res.Capacity()
-	ratio := m.GetOversubRatio(rt)
-	effectiveLimit := int64(float64(capacity) * ratio)
-
-	allocated, err := res.Allocated(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("get allocated %s: %w", rt, err)
-	}
-	allocated += m.pendingAmountLocked(rt, excludeID)
-
-	available := effectiveLimit - allocated
-	if available < 0 {
-		available = 0
-	}
-
 	status := &ResourceStatus{
-		Type:           rt,
-		Capacity:       capacity,
-		EffectiveLimit: effectiveLimit,
-		Allocated:      allocated,
-		Available:      available,
-		OversubRatio:   ratio,
+		Type:         rt,
+		Capacity:     res.Capacity(),
+		OversubRatio: m.GetOversubRatio(rt),
 	}
-	if rt == ResourceNetwork {
+	status.EffectiveLimit = int64(float64(status.Capacity) * status.OversubRatio)
+
+	switch rt {
+	case ResourceCPU:
+		status.Allocated = visibleAllocated + pending.CPU
+	case ResourceMemory:
+		status.Allocated = visibleAllocated + pending.MemoryBytes
+	case ResourceDisk:
+		status.Allocated = visibleAllocated + pending.DiskBytes
+	case ResourceNetwork:
+		status.Allocated = visibleAllocated + pending.NetworkBps
 		if m.cfg.Capacity.Network != "" {
 			status.Source = SourceConfigured
 		} else {
 			status.Source = SourceDetected
 		}
+	case ResourceDiskIO:
+		status.Allocated = visibleAllocated + pending.DiskIOBps
+	default:
+		return nil, fmt.Errorf("unsupported admission resource type: %s", rt)
 	}
+
+	status.Available = status.EffectiveLimit - status.Allocated
+	if status.Available < 0 {
+		status.Available = 0
+	}
+
 	return status, nil
 }
 
 func (m *Manager) validateAllocationLocked(ctx context.Context, excludeID string, req pendingAllocation) error {
+	usage, err := m.collectAdmissionUsageLocked(ctx)
+	if err != nil {
+		return err
+	}
+	pending := m.pendingTotalsExcludingLocked(excludeID)
+
 	// Check CPU
 	if req.CPU > 0 {
-		status, err := m.getAdmissionStatusLocked(ctx, ResourceCPU, excludeID)
+		status, err := m.admissionStatusLocked(ResourceCPU, usage.CPU, pending)
 		if err != nil {
 			return fmt.Errorf("check CPU capacity: %w", err)
 		}
@@ -532,7 +641,7 @@ func (m *Manager) validateAllocationLocked(ctx context.Context, excludeID string
 
 	// Check Memory
 	if req.MemoryBytes > 0 {
-		status, err := m.getAdmissionStatusLocked(ctx, ResourceMemory, excludeID)
+		status, err := m.admissionStatusLocked(ResourceMemory, usage.MemoryBytes, pending)
 		if err != nil {
 			return fmt.Errorf("check memory capacity: %w", err)
 		}
@@ -544,7 +653,7 @@ func (m *Manager) validateAllocationLocked(ctx context.Context, excludeID string
 
 	// Check Disk
 	if req.DiskBytes > 0 {
-		status, err := m.getAdmissionStatusLocked(ctx, ResourceDisk, excludeID)
+		status, err := m.admissionStatusLocked(ResourceDisk, usage.DiskBytes, pending)
 		if err != nil {
 			return fmt.Errorf("check disk capacity: %w", err)
 		}
@@ -556,7 +665,7 @@ func (m *Manager) validateAllocationLocked(ctx context.Context, excludeID string
 
 	// Check Network (use max of download/upload since they share physical link)
 	if req.NetworkBps > 0 {
-		status, err := m.getAdmissionStatusLocked(ctx, ResourceNetwork, excludeID)
+		status, err := m.admissionStatusLocked(ResourceNetwork, usage.NetworkBps, pending)
 		if err != nil {
 			return fmt.Errorf("check network capacity: %w", err)
 		}
@@ -568,7 +677,7 @@ func (m *Manager) validateAllocationLocked(ctx context.Context, excludeID string
 
 	// Check Disk I/O
 	if req.DiskIOBps > 0 {
-		status, err := m.getAdmissionStatusLocked(ctx, ResourceDiskIO, excludeID)
+		status, err := m.admissionStatusLocked(ResourceDiskIO, usage.DiskIOBps, pending)
 		if err != nil {
 			return fmt.Errorf("check disk I/O capacity: %w", err)
 		}
@@ -586,7 +695,7 @@ func (m *Manager) validateAllocationLocked(ctx context.Context, excludeID string
 		if gpuStatus == nil {
 			return fmt.Errorf("insufficient GPU: no GPU available on this host")
 		}
-		availableSlots := gpuStatus.TotalSlots - gpuStatus.UsedSlots - m.pendingGPUSlotsLocked(excludeID)
+		availableSlots := gpuStatus.TotalSlots - gpuStatus.UsedSlots - pending.GPUSlots
 		if availableSlots < req.GPUSlots {
 			if availableSlots <= 0 {
 				return fmt.Errorf("insufficient GPU: all %d %s slots are in use",
@@ -620,7 +729,11 @@ func (m *Manager) ReserveAllocation(ctx context.Context, instanceID string, vcpu
 	if err := m.validateAllocationLocked(ctx, instanceID, req); err != nil {
 		return err
 	}
+	if existing, ok := m.pending[instanceID]; ok {
+		m.subtractPendingTotalsLocked(existing)
+	}
 	m.pending[instanceID] = req
+	m.addPendingTotalsLocked(req)
 	return nil
 }
 
@@ -632,7 +745,10 @@ func (m *Manager) FinishAllocation(instanceID string) {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	delete(m.pending, instanceID)
+	if existing, ok := m.pending[instanceID]; ok {
+		m.subtractPendingTotalsLocked(existing)
+		delete(m.pending, instanceID)
+	}
 }
 
 // CPUCapacity returns the raw CPU capacity (number of vCPUs).

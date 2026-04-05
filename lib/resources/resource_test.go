@@ -532,3 +532,37 @@ func TestReserveAllocation_TracksPendingCapacity(t *testing.T) {
 	err = mgr.ReserveAllocation(context.Background(), "pending-b", 0, 0, 0, 0, 0, 50*1024*1024*1024, false)
 	require.NoError(t, err)
 }
+
+func TestReserveAllocation_ReplacesExistingReservation(t *testing.T) {
+	cfg := &config.Config{
+		DataDir: t.TempDir(),
+		Capacity: config.CapacityConfig{
+			Disk: "100GB",
+		},
+		Oversubscription: config.OversubscriptionConfig{
+			CPU: 1.0, Memory: 1.0, Disk: 1.0, Network: 1.0, DiskIO: 1.0,
+		},
+	}
+	p := paths.New(cfg.DataDir)
+
+	mgr := NewManager(cfg, p)
+	mgr.SetInstanceLister(&mockInstanceLister{})
+	mgr.SetImageLister(&mockImageLister{})
+	mgr.SetVolumeLister(&mockVolumeLister{})
+
+	err := mgr.Initialize(context.Background())
+	require.NoError(t, err)
+
+	err = mgr.ReserveAllocation(context.Background(), "pending-a", 0, 0, 0, 0, 0, 60*1024*1024*1024, false)
+	require.NoError(t, err)
+
+	err = mgr.ReserveAllocation(context.Background(), "pending-a", 0, 0, 0, 0, 0, 40*1024*1024*1024, false)
+	require.NoError(t, err)
+
+	err = mgr.ReserveAllocation(context.Background(), "pending-b", 0, 0, 0, 0, 0, 61*1024*1024*1024, false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "insufficient disk")
+
+	err = mgr.ReserveAllocation(context.Background(), "pending-b", 0, 0, 0, 0, 0, 60*1024*1024*1024, false)
+	require.NoError(t, err)
+}

@@ -196,6 +196,7 @@ func (m *manager) startInstance(
 		return nil, err
 	}
 	startVMSpanEnd(nil)
+	m.setAdmissionAllocationActive(stored, true)
 	if reservedResources {
 		m.resourceValidator.FinishAllocation(id)
 		reservedResources = false

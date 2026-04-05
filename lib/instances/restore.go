@@ -261,6 +261,7 @@ func (m *manager) restoreInstance(
 		return nil, fmt.Errorf("resume vm failed: %w", err)
 	}
 	resumeSpanEnd(nil)
+	m.setAdmissionAllocationActive(stored, true)
 	if reservedResources {
 		m.resourceValidator.FinishAllocation(id)
 		reservedResources = false
