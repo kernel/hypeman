@@ -450,6 +450,9 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 		forkMeta.IP = ""
 		forkMeta.MAC = ""
 	}
+	if err := validateResourceLimitsForName(req.Name, m.limits, forkMeta.OverlaySize, forkMeta.Vcpus, forkMeta.Size+forkMeta.HotplugSize); err != nil {
+		return nil, err
+	}
 
 	if rec.Snapshot.Kind == SnapshotKindStandby {
 		netCfg := (*hypervisor.ForkNetworkConfig)(nil)

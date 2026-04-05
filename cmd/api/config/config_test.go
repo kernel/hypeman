@@ -288,3 +288,87 @@ func TestValidateAllowsDisabledSnapshotCompressionDefaultWithoutValidAlgorithm(t
 		t.Fatalf("expected disabled snapshot compression default to ignore algorithm/level, got %v", err)
 	}
 }
+
+func TestLoadParsesNamePatternLimits(t *testing.T) {
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "config.yaml")
+	configYAML := `
+limits:
+  name_patterns:
+    - pattern: '^prod-'
+      max_vcpus_per_instance: 8
+      max_memory_per_instance: 64GB
+    - pattern: '^tiny-'
+      max_overlay_size: 5GB
+`
+	if err := os.WriteFile(cfgPath, []byte(configYAML), 0600); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	if len(cfg.Limits.NamePatterns) != 2 {
+		t.Fatalf("expected 2 name pattern limit entries, got %d", len(cfg.Limits.NamePatterns))
+	}
+	if cfg.Limits.NamePatterns[0].Pattern != "^prod-" {
+		t.Fatalf("expected first pattern to load, got %q", cfg.Limits.NamePatterns[0].Pattern)
+	}
+	if cfg.Limits.NamePatterns[0].MaxVcpusPerInstance == nil || *cfg.Limits.NamePatterns[0].MaxVcpusPerInstance != 8 {
+		t.Fatalf("expected first max_vcpus_per_instance to load, got %#v", cfg.Limits.NamePatterns[0].MaxVcpusPerInstance)
+	}
+	if cfg.Limits.NamePatterns[0].MaxMemoryPerInstance == nil || *cfg.Limits.NamePatterns[0].MaxMemoryPerInstance != "64GB" {
+		t.Fatalf("expected first max_memory_per_instance to load, got %#v", cfg.Limits.NamePatterns[0].MaxMemoryPerInstance)
+	}
+	if cfg.Limits.NamePatterns[1].MaxOverlaySize == nil || *cfg.Limits.NamePatterns[1].MaxOverlaySize != "5GB" {
+		t.Fatalf("expected second max_overlay_size to load, got %#v", cfg.Limits.NamePatterns[1].MaxOverlaySize)
+	}
+}
+
+func TestValidateRejectsInvalidNamePatternLimitRegex(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Limits.NamePatterns = []NamePatternLimitsConfig{
+		{Pattern: "["},
+	}
+
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "limits.name_patterns[0].pattern") {
+		t.Fatalf("expected invalid regex validation error, got %v", err)
+	}
+}
+
+func TestValidateRejectsInvalidNamePatternLimitSize(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Limits.NamePatterns = []NamePatternLimitsConfig{
+		{
+			Pattern:              "^prod-",
+			MaxMemoryPerInstance: strPtr("definitely-not-a-size"),
+		},
+	}
+
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "limits.name_patterns[0].max_memory_per_instance") {
+		t.Fatalf("expected invalid size validation error, got %v", err)
+	}
+}
+
+func TestValidateAllowsUnlimitedNamePatternLimitSize(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Limits.NamePatterns = []NamePatternLimitsConfig{
+		{
+			Pattern:              "^prod-",
+			MaxMemoryPerInstance: strPtr("0"),
+			MaxOverlaySize:       strPtr("0"),
+		},
+	}
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected zero-valued size overrides to validate, got %v", err)
+	}
+}
+
+func strPtr(v string) *string {
+	return &v
+}

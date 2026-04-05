@@ -297,6 +297,9 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 		forkMeta.IP = ""
 		forkMeta.MAC = ""
 	}
+	if err := validateResourceLimitsForName(req.Name, m.limits, forkMeta.OverlaySize, forkMeta.Vcpus, forkMeta.Size+forkMeta.HotplugSize); err != nil {
+		return nil, err
+	}
 
 	if source.State == StateStandby {
 		snapshotConfigPath := m.paths.InstanceSnapshotConfig(forkID)

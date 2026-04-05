@@ -146,3 +146,9 @@ data_dir: /var/lib/hypeman
 #   max_total_volume_storage: ""  # 0 or empty = unlimited
 #   max_concurrent_builds: 1
 #   max_overlay_size: 100GB
+#   name_patterns:
+#     - pattern: '^prod-'
+#       max_vcpus_per_instance: 32
+#       max_memory_per_instance: 64GB
+#     - pattern: '^sandbox-'
+#       max_overlay_size: 20GB

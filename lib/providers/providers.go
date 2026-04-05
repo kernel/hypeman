@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/c2h5oh/datasize"
 	"github.com/kernel/hypeman/cmd/api/config"
 	"github.com/kernel/hypeman/lib/builds"
 	"github.com/kernel/hypeman/lib/devices"
@@ -100,30 +99,13 @@ func ProvideDeviceManager(p *paths.Paths) devices.Manager {
 func ProvideInstanceManager(p *paths.Paths, cfg *config.Config, imageManager images.Manager, systemManager system.Manager, networkManager network.Manager, deviceManager devices.Manager, volumeManager volumes.Manager) (instances.Manager, error) {
 	firecracker.SetCustomBinaryPath(cfg.Hypervisor.FirecrackerBinaryPath)
 
-	// Parse max overlay size from config
-	var maxOverlaySize datasize.ByteSize
-	if err := maxOverlaySize.UnmarshalText([]byte(cfg.Limits.MaxOverlaySize)); err != nil {
-		return nil, fmt.Errorf("failed to parse MAX_OVERLAY_SIZE '%s': %w (expected format like '100GB', '50G', '10GiB')", cfg.Limits.MaxOverlaySize, err)
-	}
-
-	// Parse max memory per instance (empty or "0" means unlimited)
-	var maxMemoryPerInstance int64
-	if cfg.Limits.MaxMemoryPerInstance != "" && cfg.Limits.MaxMemoryPerInstance != "0" {
-		var memSize datasize.ByteSize
-		if err := memSize.UnmarshalText([]byte(cfg.Limits.MaxMemoryPerInstance)); err != nil {
-			return nil, fmt.Errorf("failed to parse MAX_MEMORY_PER_INSTANCE '%s': %w", cfg.Limits.MaxMemoryPerInstance, err)
-		}
-		maxMemoryPerInstance = int64(memSize)
+	limits, err := parseInstanceLimits(cfg)
+	if err != nil {
+		return nil, err
 	}
 
 	// Note: Aggregate CPU/memory limits are now handled via oversubscription ratios
 	// in the ResourceManager, wired up via SetResourceValidator after initialization.
-	limits := instances.ResourceLimits{
-		MaxOverlaySize:       int64(maxOverlaySize),
-		MaxVcpusPerInstance:  cfg.Limits.MaxVcpusPerInstance,
-		MaxMemoryPerInstance: maxMemoryPerInstance,
-	}
-
 	meter := otel.GetMeterProvider().Meter("hypeman")
 	tracer := otel.GetTracerProvider().Tracer("hypeman/instances")
 	defaultHypervisor := hypervisor.Type(cfg.Hypervisor.Default)
