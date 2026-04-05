@@ -84,7 +84,12 @@ type ResourceValidator interface {
 	// ValidateAllocation checks if the requested resources are available.
 	// Returns nil if allocation is allowed, or a detailed error describing
 	// which resource is insufficient and the current capacity/usage.
-	ValidateAllocation(ctx context.Context, vcpus int, memoryBytes int64, networkDownloadBps int64, networkUploadBps int64, diskIOBps int64, needsGPU bool) error
+	ValidateAllocation(ctx context.Context, vcpus int, memoryBytes int64, networkDownloadBps int64, networkUploadBps int64, diskIOBps int64, diskBytes int64, needsGPU bool) error
+	// ReserveAllocation tentatively reserves resources for an in-flight operation.
+	// Call FinishAllocation once the operation fails or becomes visible to resource accounting.
+	ReserveAllocation(ctx context.Context, instanceID string, vcpus int, memoryBytes int64, networkDownloadBps int64, networkUploadBps int64, diskIOBps int64, diskBytes int64, needsGPU bool) error
+	// FinishAllocation removes any pending reservation for the given instance ID.
+	FinishAllocation(instanceID string)
 }
 
 type manager struct {

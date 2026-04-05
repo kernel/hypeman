@@ -182,13 +182,22 @@ func (m *manager) createInstance(
 		return nil, fmt.Errorf("total memory %d (size + hotplug_size) exceeds maximum allowed %d per instance", totalMemory, m.limits.MaxMemoryPerInstance)
 	}
 
-	// Validate aggregate resource limits via ResourceValidator (if configured)
+	diskBytes := requestedDiskReservationBytes(overlaySize, req.Volumes)
+	reservedResources := false
+
+	// Reserve aggregate resources for this create while it is in flight.
 	if m.resourceValidator != nil {
 		needsGPU := req.GPU != nil && req.GPU.Profile != ""
-		if err := m.resourceValidator.ValidateAllocation(ctx, vcpus, totalMemory, req.NetworkBandwidthDownload, req.NetworkBandwidthUpload, req.DiskIOBps, needsGPU); err != nil {
-			log.ErrorContext(ctx, "resource validation failed", "error", err)
+		if err := m.resourceValidator.ReserveAllocation(ctx, id, vcpus, totalMemory, req.NetworkBandwidthDownload, req.NetworkBandwidthUpload, req.DiskIOBps, diskBytes, needsGPU); err != nil {
+			log.ErrorContext(ctx, "resource reservation failed", "error", err)
 			return nil, fmt.Errorf("%w: %v", ErrInsufficientResources, err)
 		}
+		reservedResources = true
+		defer func() {
+			if reservedResources {
+				m.resourceValidator.FinishAllocation(id)
+			}
+		}()
 	}
 
 	if req.Env == nil {
@@ -492,6 +501,10 @@ func (m *manager) createInstance(
 		return nil, err
 	}
 	startVMSpanEnd(nil)
+	if reservedResources {
+		m.resourceValidator.FinishAllocation(id)
+		reservedResources = false
+	}
 
 	// 20. Persist runtime metadata updates after VM boot.
 	meta = &metadata{StoredMetadata: *stored}
