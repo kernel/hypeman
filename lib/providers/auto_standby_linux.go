@@ -1,6 +1,6 @@
 //go:build linux
 
-package main
+package providers
 
 import (
 	"context"
@@ -9,7 +9,6 @@ import (
 
 	"github.com/kernel/hypeman/lib/autostandby"
 	"github.com/kernel/hypeman/lib/instances"
-	"golang.org/x/sync/errgroup"
 )
 
 type autoStandbyInstanceStore struct {
@@ -42,19 +41,16 @@ func (s autoStandbyInstanceStore) StandbyInstance(ctx context.Context, id string
 	return err
 }
 
-func startAutoStandbyController(grp *errgroup.Group, ctx context.Context, logger *slog.Logger, manager instances.Manager) bool {
-	if grp == nil || ctx == nil || logger == nil || manager == nil {
-		return false
+// ProvideAutoStandbyController provides the Linux auto-standby controller.
+func ProvideAutoStandbyController(instanceManager instances.Manager, log *slog.Logger) *autostandby.Controller {
+	if instanceManager == nil || log == nil {
+		return nil
 	}
 
-	controller := autostandby.NewController(
-		autoStandbyInstanceStore{manager: manager},
+	return autostandby.NewController(
+		autoStandbyInstanceStore{manager: instanceManager},
 		autostandby.NewConntrackSource(),
-		logger.With("controller", "auto_standby"),
+		log.With("controller", "auto_standby"),
 		5*time.Second,
 	)
-	grp.Go(func() error {
-		return controller.Run(ctx)
-	})
-	return true
 }
