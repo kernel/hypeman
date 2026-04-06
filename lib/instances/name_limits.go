@@ -97,7 +97,7 @@ func (l ResourceLimits) ForName(name string) ResourceLimits {
 func validateResourceLimitsForName(name string, limits ResourceLimits, overlaySize int64, vcpus int, totalMemory int64) error {
 	effective := limits.ForName(name)
 
-	if effective.MaxOverlaySize > 0 && overlaySize > effective.MaxOverlaySize {
+	if overlaySize > effective.MaxOverlaySize {
 		return fmt.Errorf("overlay size %d exceeds maximum allowed size %d", overlaySize, effective.MaxOverlaySize)
 	}
 	if effective.MaxVcpusPerInstance > 0 && vcpus > effective.MaxVcpusPerInstance {

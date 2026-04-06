@@ -74,7 +74,7 @@ type ImageUsageRecorderSetter interface {
 
 // ResourceLimits contains configurable resource limits for instances
 type ResourceLimits struct {
-	MaxOverlaySize       int64 // Maximum overlay disk size in bytes per instance (0 = unlimited)
+	MaxOverlaySize       int64 // Maximum overlay disk size in bytes per instance
 	MaxVcpusPerInstance  int   // Maximum vCPUs per instance (0 = unlimited)
 	MaxMemoryPerInstance int64 // Maximum memory in bytes per instance (0 = unlimited)
 	NamePatterns         []NamedResourceLimit

@@ -64,7 +64,7 @@ func TestResourceLimitsForName_FallsBackWhenFieldOmitted(t *testing.T) {
 	assert.Equal(t, int64(32*1024*1024*1024), resolved.MaxMemoryPerInstance)
 }
 
-func TestValidateResourceLimitsForName_ZeroOverrideMeansUnlimited(t *testing.T) {
+func TestValidateResourceLimitsForName_ZeroCpuAndMemoryOverrideMeansUnlimited(t *testing.T) {
 	t.Parallel()
 
 	zeroInt := 0
@@ -72,7 +72,6 @@ func TestValidateResourceLimitsForName_ZeroOverrideMeansUnlimited(t *testing.T) 
 	override, err := NewNamedResourceLimit("^burst-.*", NamedResourceLimitConfig{
 		MaxVcpusPerInstance:  &zeroInt,
 		MaxMemoryPerInstance: &zeroBytes,
-		MaxOverlaySize:       &zeroBytes,
 	})
 	require.NoError(t, err)
 
@@ -85,6 +84,27 @@ func TestValidateResourceLimitsForName_ZeroOverrideMeansUnlimited(t *testing.T) 
 
 	err = validateResourceLimitsForName("burst-worker", limits, 50*1024*1024*1024, 32, 128*1024*1024*1024)
 	require.NoError(t, err)
+}
+
+func TestValidateResourceLimitsForName_ZeroOverlayOverrideRejectsPositiveOverlay(t *testing.T) {
+	t.Parallel()
+
+	zeroBytes := int64(0)
+	override, err := NewNamedResourceLimit("^burst-.*", NamedResourceLimitConfig{
+		MaxOverlaySize: &zeroBytes,
+	})
+	require.NoError(t, err)
+
+	limits := ResourceLimits{
+		MaxOverlaySize:       5 * 1024 * 1024 * 1024,
+		MaxVcpusPerInstance:  2,
+		MaxMemoryPerInstance: 4 * 1024 * 1024 * 1024,
+		NamePatterns:         []NamedResourceLimit{override},
+	}
+
+	err = validateResourceLimitsForName("burst-worker", limits, 1, 2, 4*1024*1024*1024)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "overlay size 1 exceeds maximum allowed size 0")
 }
 
 func TestValidateResourceLimitsForName_RejectsWhenResolvedLimitExceeded(t *testing.T) {
@@ -106,6 +126,27 @@ func TestValidateResourceLimitsForName_RejectsWhenResolvedLimitExceeded(t *testi
 	err = validateResourceLimitsForName("db-primary", limits, 10*1024*1024*1024, 8, 16*1024*1024*1024)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "vcpus 8 exceeds maximum allowed 4 per instance")
+}
+
+func TestValidateResourceLimitsForName_GlobalOverlayLimitAppliesWhenNoPatternMatches(t *testing.T) {
+	t.Parallel()
+
+	four := 4
+	override, err := NewNamedResourceLimit("^db-.*", NamedResourceLimitConfig{
+		MaxVcpusPerInstance: &four,
+	})
+	require.NoError(t, err)
+
+	limits := ResourceLimits{
+		MaxOverlaySize:       10 * 1024 * 1024 * 1024,
+		MaxVcpusPerInstance:  16,
+		MaxMemoryPerInstance: 64 * 1024 * 1024 * 1024,
+		NamePatterns:         []NamedResourceLimit{override},
+	}
+
+	err = validateResourceLimitsForName("cache-primary", limits, 20*1024*1024*1024, 8, 16*1024*1024*1024)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "overlay size 21474836480 exceeds maximum allowed size 10737418240")
 }
 
 func TestValidateProvisionedResourceLimitsForName_RejectsProjectedTotal(t *testing.T) {
