@@ -81,6 +81,7 @@ func (m *manager) restoreInstance(
 	if err != nil {
 		return nil, fmt.Errorf("prepare standby snapshot memory: %w", err)
 	}
+	stored.PendingStandbyCompression = nil
 	starter, err := m.getVMStarter(stored.HypervisorType)
 	if err != nil {
 		return nil, fmt.Errorf("get vm starter: %w", err)

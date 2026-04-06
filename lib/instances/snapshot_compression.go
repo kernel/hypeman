@@ -129,6 +129,16 @@ func cloneSnapshotPolicy(policy *SnapshotPolicy) *SnapshotPolicy {
 	}
 }
 
+func clonePendingStandbyCompression(plan *PendingStandbyCompression) *PendingStandbyCompression {
+	if plan == nil {
+		return nil
+	}
+	return &PendingStandbyCompression{
+		Policy:    *cloneCompressionConfig(&plan.Policy),
+		NotBefore: plan.NotBefore,
+	}
+}
+
 func normalizeStandbyCompressionDelay(delay *time.Duration) (*time.Duration, error) {
 	if delay == nil {
 		return nil, nil
@@ -248,6 +258,115 @@ func (m *manager) snapshotJobKeyForInstance(instanceID string) string {
 
 func (m *manager) snapshotJobKeyForSnapshot(snapshotID string) string {
 	return "snapshot:" + snapshotID
+}
+
+func instanceIDFromCompressionJobKey(key string) (string, bool) {
+	const prefix = "instance:"
+	if !strings.HasPrefix(key, prefix) {
+		return "", false
+	}
+	instanceID := strings.TrimPrefix(key, prefix)
+	if instanceID == "" {
+		return "", false
+	}
+	return instanceID, true
+}
+
+func (m *manager) clearPendingStandbyCompression(ctx context.Context, instanceID string) error {
+	if instanceID == "" {
+		return nil
+	}
+
+	meta, err := m.loadMetadata(instanceID)
+	if err != nil {
+		return err
+	}
+	if meta.StoredMetadata.PendingStandbyCompression == nil {
+		return nil
+	}
+
+	meta.StoredMetadata.PendingStandbyCompression = nil
+	if err := m.saveMetadata(meta); err != nil {
+		return fmt.Errorf("save metadata: %w", err)
+	}
+
+	logger.FromContext(ctx).DebugContext(ctx, "cleared pending standby compression plan", "instance_id", instanceID)
+	return nil
+}
+
+func (m *manager) recoverPendingStandbyCompressionJobs(ctx context.Context) error {
+	metaFiles, err := m.listMetadataFiles()
+	if err != nil {
+		return fmt.Errorf("list metadata files: %w", err)
+	}
+
+	log := logger.FromContext(ctx)
+	for _, metaPath := range metaFiles {
+		instanceID := filepath.Base(filepath.Dir(metaPath))
+		meta, err := m.loadMetadata(instanceID)
+		if err != nil {
+			log.WarnContext(ctx, "failed to load instance metadata during standby compression recovery", "instance_id", instanceID, "metadata_path", metaPath, "error", err)
+			continue
+		}
+
+		plan := clonePendingStandbyCompression(meta.StoredMetadata.PendingStandbyCompression)
+		if plan == nil {
+			continue
+		}
+		if !plan.Policy.Enabled {
+			log.WarnContext(ctx, "clearing invalid pending standby compression plan with disabled policy", "instance_id", instanceID)
+			if err := m.clearPendingStandbyCompression(ctx, instanceID); err != nil && !errors.Is(err, ErrNotFound) {
+				log.WarnContext(ctx, "failed to clear invalid pending standby compression plan", "instance_id", instanceID, "error", err)
+			}
+			continue
+		}
+
+		state := m.deriveStateWithoutHydration(ctx, &meta.StoredMetadata)
+		if state.State != StateStandby {
+			log.InfoContext(ctx, "clearing stale pending standby compression plan for non-standby instance", "instance_id", instanceID, "state", state.State)
+			if err := m.clearPendingStandbyCompression(ctx, instanceID); err != nil && !errors.Is(err, ErrNotFound) {
+				log.WarnContext(ctx, "failed to clear stale pending standby compression plan", "instance_id", instanceID, "error", err)
+			}
+			continue
+		}
+
+		snapshotDir := m.paths.InstanceSnapshotLatest(instanceID)
+		if _, ok := findRawSnapshotMemoryFile(snapshotDir); ok {
+			delay := time.Duration(0)
+			now := m.nowUTC()
+			if plan.NotBefore.After(now) {
+				delay = plan.NotBefore.Sub(now)
+			}
+			log.InfoContext(ctx, "recovering pending standby snapshot compression",
+				"instance_id", instanceID,
+				"operation", "recover_snapshot_compression",
+				"source", string(snapshotCompressionSourceStandby),
+				"algorithm", string(plan.Policy.Algorithm),
+				"compression_delay", delay.String(),
+			)
+			m.startCompressionJob(ctx, compressionTarget{
+				Key:            m.snapshotJobKeyForInstance(instanceID),
+				OwnerID:        instanceID,
+				SnapshotDir:    snapshotDir,
+				HypervisorType: meta.StoredMetadata.HypervisorType,
+				Source:         snapshotCompressionSourceStandby,
+				Policy:         plan.Policy,
+				Delay:          delay,
+			})
+			continue
+		}
+
+		if _, _, ok := findCompressedSnapshotMemoryFile(snapshotDir); ok {
+			log.InfoContext(ctx, "clearing pending standby compression plan after finding compressed snapshot artifact", "instance_id", instanceID)
+		} else {
+			log.InfoContext(ctx, "clearing pending standby compression plan after standby snapshot disappeared", "instance_id", instanceID)
+		}
+		if err := m.clearPendingStandbyCompression(ctx, instanceID); err != nil && !errors.Is(err, ErrNotFound) {
+			log.WarnContext(ctx, "failed to clear completed pending standby compression plan", "instance_id", instanceID, "error", err)
+		}
+	}
+
+	return nil
 }
 
 func nativeCodecBinaryName(algorithm snapshotstore.SnapshotCompressionAlgorithm) string {
@@ -426,6 +545,11 @@ func (m *manager) startCompressionJob(ctx context.Context, target compressionTar
 
 		defer func() {
 			m.recordSnapshotCompressionJob(metricsCtx, target, result, compressionStart, uncompressedSize, compressedSize)
+			if target.Source == snapshotCompressionSourceStandby && target.SnapshotID == "" {
+				if err := m.clearPendingStandbyCompression(context.Background(), target.OwnerID); err != nil && !errors.Is(err, ErrNotFound) {
+					log.WarnContext(context.Background(), "failed to clear pending standby compression plan after job completion", "instance_id", target.OwnerID, "error", err)
+				}
+			}
 			m.compressionMu.Lock()
 			delete(m.compressionJobs, target.Key)
 			m.compressionMu.Unlock()
@@ -618,6 +742,7 @@ func (m *manager) cancelAndWaitCompressionJob(ctx context.Context, key string) (
 
 func (m *manager) ensureSnapshotMemoryReady(ctx context.Context, snapshotDir, jobKey string, hvType hypervisor.Type) error {
 	start := time.Now()
+	log := logger.FromContext(ctx)
 
 	if jobKey != "" {
 		target, err := m.cancelAndWaitCompressionJob(ctx, jobKey)
@@ -626,6 +751,11 @@ func (m *manager) ensureSnapshotMemoryReady(ctx context.Context, snapshotDir, jo
 		}
 		if target != nil && target.State == compressionJobStateRunning {
 			m.recordSnapshotCompressionPreemption(ctx, snapshotCompressionPreemptionRestoreInstance, target.Target)
+		}
+		if instanceID, ok := instanceIDFromCompressionJobKey(jobKey); ok {
+			if err := m.clearPendingStandbyCompression(ctx, instanceID); err != nil && !errors.Is(err, ErrNotFound) {
+				log.WarnContext(ctx, "failed to clear pending standby compression plan while preparing snapshot memory", "instance_id", instanceID, "error", err)
+			}
 		}
 	}
 

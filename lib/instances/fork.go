@@ -472,6 +472,7 @@ func (m *manager) cleanupForkInstanceOnError(ctx context.Context, forkID string)
 
 func cloneStoredMetadataForFork(src StoredMetadata) StoredMetadata {
 	dst := src
+	dst.PendingStandbyCompression = nil
 
 	if src.Env != nil {
 		dst.Env = make(map[string]string, len(src.Env))

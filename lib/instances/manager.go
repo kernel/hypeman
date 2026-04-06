@@ -181,6 +181,9 @@ func NewManager(p *paths.Paths, imageManager images.Manager, systemManager syste
 			m.metrics = metrics
 		}
 	}
+	if err := m.recoverPendingStandbyCompressionJobs(context.Background()); err != nil {
+		logger.FromContext(context.Background()).WarnContext(context.Background(), "failed to recover pending standby compression jobs", "error", err)
+	}
 
 	return m
 }

@@ -139,6 +139,10 @@ type StoredMetadata struct {
 	// Snapshot policy defaults for this instance.
 	SnapshotPolicy *SnapshotPolicy
 
+	// Pending standby compression plan for the latest standby snapshot.
+	// Persisted so server restarts can recover delayed or interrupted jobs.
+	PendingStandbyCompression *PendingStandbyCompression
+
 	// Shutdown configuration
 	StopTimeout int // Grace period in seconds for graceful stop (0 = use default 5s)
 
@@ -289,6 +293,13 @@ type ForkSnapshotRequest struct {
 type SnapshotPolicy struct {
 	Compression             *snapshot.SnapshotCompressionConfig
 	StandbyCompressionDelay *time.Duration
+}
+
+// PendingStandbyCompression stores the effective standby compression plan that
+// should be recovered after a server restart.
+type PendingStandbyCompression struct {
+	Policy    snapshot.SnapshotCompressionConfig
+	NotBefore time.Time
 }
 
 // AttachVolumeRequest is the domain request for attaching a volume (used for API compatibility)

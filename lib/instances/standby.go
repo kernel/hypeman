@@ -214,6 +214,13 @@ func (m *manager) standbyInstance(
 	now := time.Now()
 	stored.StoppedAt = &now
 	stored.HypervisorPID = nil
+	stored.PendingStandbyCompression = nil
+	if compressionPolicy != nil {
+		stored.PendingStandbyCompression = &PendingStandbyCompression{
+			Policy:    *cloneCompressionConfig(compressionPolicy),
+			NotBefore: m.nowUTC().Add(compressionDelay),
+		}
+	}
 
 	meta = &metadata{StoredMetadata: *stored}
 	if err := m.saveMetadata(meta); err != nil {

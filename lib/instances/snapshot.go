@@ -110,6 +110,9 @@ func (m *manager) createSnapshot(ctx context.Context, id string, req CreateSnaps
 			if target != nil && target.State == compressionJobStateRunning {
 				m.recordSnapshotCompressionPreemption(ctx, snapshotCompressionPreemptionCreateSnapshot, target.Target)
 			}
+			if err := m.clearPendingStandbyCompression(ctx, id); err != nil && !errors.Is(err, ErrNotFound) {
+				return nil, fmt.Errorf("clear source standby compression plan: %w", err)
+			}
 			if err := m.ensureSnapshotMemoryReady(ctx, m.paths.InstanceSnapshotLatest(id), "", stored.HypervisorType); err != nil {
 				return nil, fmt.Errorf("prepare source snapshot memory for copy: %w", err)
 			}
