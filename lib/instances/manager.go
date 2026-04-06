@@ -57,9 +57,8 @@ type Manager interface {
 	SetResourceValidator(v ResourceValidator)
 	// GetVsockDialer returns a VsockDialer for the specified instance.
 	GetVsockDialer(ctx context.Context, instanceID string) (hypervisor.VsockDialer, error)
-	// Subscribe returns a channel that receives state change events for the
-	// given instance, plus an unsubscribe function the caller must defer.
-	Subscribe(instanceID string) (<-chan StateChange, func())
+	// SubscribeLifecycleEvents returns the shared internal lifecycle event stream.
+	SubscribeLifecycleEvents(consumer LifecycleEventConsumer) (<-chan LifecycleEvent, func())
 }
 
 // ImageUsageRecorder records newly used images before instance metadata is persisted.
@@ -115,8 +114,8 @@ type manager struct {
 	nativeCodecPaths          map[string]string
 	imageUsageRecorder        ImageUsageRecorder
 
-	// State change subscriptions for waitForState
-	stateSubscribers *subscribers
+	// Shared lifecycle event subscriptions for internal consumers.
+	lifecycleEvents *lifecycleSubscribers
 
 	// Hypervisor support
 	vmStarters        map[hypervisor.Type]hypervisor.VMStarter
@@ -169,7 +168,7 @@ func NewManager(p *paths.Paths, imageManager images.Manager, systemManager syste
 		snapshotDefaults:  snapshotDefaults,
 		compressionJobs:   make(map[string]*compressionJob),
 		nativeCodecPaths:  make(map[string]string),
-		stateSubscribers:  newSubscribers(),
+		lifecycleEvents:   newLifecycleSubscribers(),
 	}
 	m.deleteSnapshotFn = m.deleteSnapshot
 
@@ -179,6 +178,9 @@ func NewManager(p *paths.Paths, imageManager images.Manager, systemManager syste
 		if err == nil {
 			m.metrics = metrics
 		}
+	}
+	m.lifecycleEvents.onDrop = func(ctx context.Context, consumer LifecycleEventConsumer) {
+		m.recordLifecycleEventDropped(ctx, consumer, lifecycleEventDropReasonBufferFull)
 	}
 
 	return m
@@ -195,15 +197,25 @@ func (m *manager) SetImageUsageRecorder(recorder ImageUsageRecorder) {
 	m.imageUsageRecorder = recorder
 }
 
-func (m *manager) Subscribe(instanceID string) (<-chan StateChange, func()) {
-	return m.stateSubscribers.Subscribe(instanceID)
+func (m *manager) SubscribeLifecycleEvents(consumer LifecycleEventConsumer) (<-chan LifecycleEvent, func()) {
+	return m.lifecycleEvents.Subscribe(consumer)
 }
 
-// notifyStateChange broadcasts a state change to all subscribers for the instance.
-func (m *manager) notifyStateChange(instanceID string, inst *Instance) {
-	m.stateSubscribers.Notify(instanceID, StateChange{
-		State:      inst.State,
-		StateError: inst.StateError,
+func (m *manager) notifyLifecycleEvent(ctx context.Context, action LifecycleEventAction, inst *Instance) {
+	if inst == nil {
+		return
+	}
+	m.lifecycleEvents.Notify(ctx, LifecycleEvent{
+		Action:     action,
+		InstanceID: inst.Id,
+		Instance:   inst,
+	})
+}
+
+func (m *manager) notifyLifecycleDelete(ctx context.Context, instanceID string) {
+	m.lifecycleEvents.Notify(ctx, LifecycleEvent{
+		Action:     LifecycleEventDelete,
+		InstanceID: instanceID,
 	})
 }
 
@@ -270,7 +282,11 @@ func (m *manager) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 	// 1. ULID generation is unique
 	// 2. Filesystem mkdir is atomic per instance directory
 	// 3. Concurrent creates of different instances don't conflict
-	return m.createInstance(ctx, req)
+	inst, err := m.createInstance(ctx, req)
+	if err == nil {
+		m.notifyLifecycleEvent(ctx, LifecycleEventCreate, inst)
+	}
+	return inst, err
 }
 
 // DeleteInstance stops and deletes an instance
@@ -281,7 +297,7 @@ func (m *manager) DeleteInstance(ctx context.Context, id string) error {
 
 	err := m.deleteInstance(ctx, id)
 	if err == nil {
-		m.stateSubscribers.CloseAll(id)
+		m.notifyLifecycleDelete(ctx, id)
 		// Clean up the lock after successful deletion
 		m.instanceLocks.Delete(id)
 	}
@@ -332,11 +348,16 @@ func (m *manager) ForkInstance(ctx context.Context, id string, req ForkInstanceR
 			return nil, fmt.Errorf("wait for fork guest agent readiness: %w", err)
 		}
 	}
+	m.notifyLifecycleEvent(ctx, LifecycleEventFork, inst)
 	return inst, nil
 }
 
 func (m *manager) ForkSnapshot(ctx context.Context, snapshotID string, req ForkSnapshotRequest) (*Instance, error) {
-	return m.forkSnapshot(ctx, snapshotID, req)
+	inst, err := m.forkSnapshot(ctx, snapshotID, req)
+	if err == nil {
+		m.notifyLifecycleEvent(ctx, LifecycleEventFork, inst)
+	}
+	return inst, err
 }
 
 // StandbyInstance puts an instance in standby (pause, snapshot, delete VMM)
@@ -346,7 +367,7 @@ func (m *manager) StandbyInstance(ctx context.Context, id string, req StandbyIns
 	defer lock.Unlock()
 	inst, err := m.standbyInstance(ctx, id, req, false)
 	if err == nil {
-		m.notifyStateChange(id, inst)
+		m.notifyLifecycleEvent(ctx, LifecycleEventStandby, inst)
 	}
 	return inst, err
 }
@@ -358,7 +379,7 @@ func (m *manager) RestoreInstance(ctx context.Context, id string) (*Instance, er
 	defer lock.Unlock()
 	inst, err := m.restoreInstance(ctx, id)
 	if err == nil {
-		m.notifyStateChange(id, inst)
+		m.notifyLifecycleEvent(ctx, LifecycleEventRestore, inst)
 	}
 	return inst, err
 }
@@ -369,7 +390,7 @@ func (m *manager) RestoreSnapshot(ctx context.Context, id string, snapshotID str
 	defer lock.Unlock()
 	inst, err := m.restoreSnapshot(ctx, id, snapshotID, req)
 	if err == nil {
-		m.notifyStateChange(id, inst)
+		m.notifyLifecycleEvent(ctx, LifecycleEventRestore, inst)
 	}
 	return inst, err
 }
@@ -381,7 +402,7 @@ func (m *manager) StopInstance(ctx context.Context, id string) (*Instance, error
 	defer lock.Unlock()
 	inst, err := m.stopInstance(ctx, id)
 	if err == nil {
-		m.notifyStateChange(id, inst)
+		m.notifyLifecycleEvent(ctx, LifecycleEventStop, inst)
 	}
 	return inst, err
 }
@@ -393,7 +414,7 @@ func (m *manager) StartInstance(ctx context.Context, id string, req StartInstanc
 	defer lock.Unlock()
 	inst, err := m.startInstance(ctx, id, req)
 	if err == nil {
-		m.notifyStateChange(id, inst)
+		m.notifyLifecycleEvent(ctx, LifecycleEventStart, inst)
 	}
 	return inst, err
 }
@@ -403,7 +424,11 @@ func (m *manager) UpdateInstance(ctx context.Context, id string, req UpdateInsta
 	lock := m.getInstanceLock(id)
 	lock.Lock()
 	defer lock.Unlock()
-	return m.updateInstance(ctx, id, req)
+	inst, err := m.updateInstance(ctx, id, req)
+	if err == nil {
+		m.notifyLifecycleEvent(ctx, LifecycleEventUpdate, inst)
+	}
+	return inst, err
 }
 
 // ListInstances returns instances, optionally filtered by the given criteria.
