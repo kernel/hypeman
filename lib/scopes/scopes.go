@@ -243,6 +243,7 @@ var RouteScopes = map[string]Scope{
 	"POST /instances/{id}/start":                          InstanceWrite,
 	"GET /instances/{id}/stat":                            InstanceRead,
 	"GET /instances/{id}/stats":                           InstanceRead,
+	"GET /instances/{id}/auto-standby/status":             InstanceRead,
 	"GET /instances/{id}/wait":                            InstanceRead,
 	"POST /instances/{id}/stop":                           InstanceWrite,
 	"PATCH /instances/{id}":                               InstanceWrite,
