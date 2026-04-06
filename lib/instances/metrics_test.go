@@ -148,7 +148,7 @@ func TestLifecycleEventMetrics_ObserveSubscribersQueueDepthAndDrops(t *testing.T
 	}
 	<-waitCh
 
-	for i := 0; i < lifecycleEventBufferSize; i++ {
+	for i := 0; i < m.lifecycleEvents.bufferSize; i++ {
 		m.lifecycleEvents.Notify(t.Context(), LifecycleEvent{
 			Action:     LifecycleEventUpdate,
 			InstanceID: "inst-1",
@@ -187,9 +187,9 @@ func TestLifecycleEventMetrics_ObserveSubscribersQueueDepthAndDrops(t *testing.T
 	for _, point := range queueDepth.DataPoints {
 		switch metricLabel(t, point.Attributes, "consumer") {
 		case string(LifecycleEventConsumerWaitForState):
-			assert.Equal(t, int64(lifecycleEventBufferSize), point.Value)
+			assert.Equal(t, int64(m.lifecycleEvents.bufferSize), point.Value)
 		case string(LifecycleEventConsumerAutoStandby):
-			assert.Equal(t, int64(lifecycleEventBufferSize), point.Value)
+			assert.Equal(t, int64(m.lifecycleEvents.bufferSize), point.Value)
 		default:
 			t.Fatalf("unexpected consumer label: %s", metricLabel(t, point.Attributes, "consumer"))
 		}
@@ -213,7 +213,7 @@ func TestLifecycleEventMetrics_ObserveSubscribersQueueDepthAndDrops(t *testing.T
 	}
 	assert.Greater(t, waitDrops, int64(0))
 	assert.Greater(t, autoDrops, int64(0))
-	assert.Equal(t, lifecycleEventBufferSize, len(autoCh))
+	assert.Equal(t, m.lifecycleEvents.bufferSize, len(autoCh))
 }
 
 func TestInstanceOldestInStateMetric_ObserveOldestAgePerState(t *testing.T) {

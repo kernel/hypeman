@@ -5,7 +5,7 @@ import (
 	"sync"
 )
 
-const lifecycleEventBufferSize = 32
+const defaultLifecycleEventBufferSize = 256
 
 // LifecycleEventConsumer identifies the internal consumer of lifecycle events.
 // Keep this set bounded for observability label safety.
@@ -54,17 +54,29 @@ type lifecycleConsumerStats struct {
 }
 
 type lifecycleSubscribers struct {
-	mu     sync.Mutex
-	subs   []lifecycleSubscriber
-	onDrop func(context.Context, LifecycleEventConsumer)
+	mu         sync.Mutex
+	subs       []lifecycleSubscriber
+	onDrop     func(context.Context, LifecycleEventConsumer)
+	bufferSize int
 }
 
 func newLifecycleSubscribers() *lifecycleSubscribers {
-	return &lifecycleSubscribers{}
+	return &lifecycleSubscribers{
+		bufferSize: defaultLifecycleEventBufferSize,
+	}
+}
+
+func newLifecycleSubscribersWithBufferSize(bufferSize int) *lifecycleSubscribers {
+	if bufferSize <= 0 {
+		bufferSize = defaultLifecycleEventBufferSize
+	}
+	return &lifecycleSubscribers{
+		bufferSize: bufferSize,
+	}
 }
 
 func (s *lifecycleSubscribers) Subscribe(consumer LifecycleEventConsumer) (<-chan LifecycleEvent, func()) {
-	ch := make(chan LifecycleEvent, lifecycleEventBufferSize)
+	ch := make(chan LifecycleEvent, s.bufferSize)
 
 	s.mu.Lock()
 	s.subs = append(s.subs, lifecycleSubscriber{

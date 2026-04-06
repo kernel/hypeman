@@ -102,7 +102,7 @@ func TestLifecycleSubscribers_DropCallbackOnBackpressure(t *testing.T) {
 	_, unsub := s.Subscribe(LifecycleEventConsumerWaitForState)
 	defer unsub()
 
-	for i := 0; i < lifecycleEventBufferSize; i++ {
+	for i := 0; i < s.bufferSize; i++ {
 		s.Notify(context.Background(), LifecycleEvent{
 			Action:     LifecycleEventUpdate,
 			InstanceID: "inst-1",

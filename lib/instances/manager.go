@@ -78,6 +78,19 @@ type ResourceLimits struct {
 	MaxMemoryPerInstance int64 // Maximum memory in bytes per instance (0 = unlimited)
 }
 
+// ManagerConfig holds non-resource manager behavior settings.
+type ManagerConfig struct {
+	LifecycleEventBufferSize int
+}
+
+// Normalize applies defaults to manager config values.
+func (c ManagerConfig) Normalize() ManagerConfig {
+	if c.LifecycleEventBufferSize <= 0 {
+		c.LifecycleEventBufferSize = defaultLifecycleEventBufferSize
+	}
+	return c
+}
+
 // ResourceValidator validates if resources can be allocated
 type ResourceValidator interface {
 	// ValidateAllocation checks if the requested resources are available.
@@ -130,6 +143,11 @@ var platformStarters = make(map[hypervisor.Type]hypervisor.VMStarter)
 // If meter is nil, metrics are disabled.
 // defaultHypervisor specifies which hypervisor to use when not specified in requests.
 func NewManager(p *paths.Paths, imageManager images.Manager, systemManager system.Manager, networkManager network.Manager, deviceManager devices.Manager, volumeManager volumes.Manager, limits ResourceLimits, defaultHypervisor hypervisor.Type, snapshotDefaults SnapshotPolicy, meter metric.Meter, tracer trace.Tracer, memoryPolicy ...guestmemory.Policy) Manager {
+	return NewManagerWithConfig(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, defaultHypervisor, snapshotDefaults, ManagerConfig{}, meter, tracer, memoryPolicy...)
+}
+
+// NewManagerWithConfig creates a new instances manager with additional manager settings.
+func NewManagerWithConfig(p *paths.Paths, imageManager images.Manager, systemManager system.Manager, networkManager network.Manager, deviceManager devices.Manager, volumeManager volumes.Manager, limits ResourceLimits, defaultHypervisor hypervisor.Type, snapshotDefaults SnapshotPolicy, managerConfig ManagerConfig, meter metric.Meter, tracer trace.Tracer, memoryPolicy ...guestmemory.Policy) Manager {
 	// Validate and default the hypervisor type
 	if defaultHypervisor == "" {
 		defaultHypervisor = hypervisor.TypeCloudHypervisor
@@ -140,6 +158,7 @@ func NewManager(p *paths.Paths, imageManager images.Manager, systemManager syste
 		policy = memoryPolicy[0]
 	}
 	policy = policy.Normalize()
+	managerConfig = managerConfig.Normalize()
 
 	// Initialize VM starters from platform-specific init functions
 	vmStarters := make(map[hypervisor.Type]hypervisor.VMStarter, len(platformStarters))
@@ -168,7 +187,7 @@ func NewManager(p *paths.Paths, imageManager images.Manager, systemManager syste
 		snapshotDefaults:  snapshotDefaults,
 		compressionJobs:   make(map[string]*compressionJob),
 		nativeCodecPaths:  make(map[string]string),
-		lifecycleEvents:   newLifecycleSubscribers(),
+		lifecycleEvents:   newLifecycleSubscribersWithBufferSize(managerConfig.LifecycleEventBufferSize),
 	}
 	m.deleteSnapshotFn = m.deleteSnapshot
 
