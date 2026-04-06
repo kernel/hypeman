@@ -511,6 +511,10 @@ func (m *manager) createInstance(
 		return nil, err
 	}
 	startVMSpanEnd(nil)
+	// Mark the instance visible before releasing its pending reservation so we
+	// never create an undercount window. The tiny overlap is intentionally
+	// over-conservative: concurrent admissions may briefly see both visible and
+	// pending usage for this instance, but they will not oversubscribe the host.
 	m.setAdmissionAllocationActive(stored, true)
 	if reservedResources {
 		m.resourceValidator.FinishAllocation(id)

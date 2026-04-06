@@ -47,6 +47,9 @@ func (m *manager) ensureAdmissionAllocations() error {
 		if err != nil {
 			continue
 		}
+		// Cold-start cache hydration uses socket existence as the ground-truth
+		// signal for "currently active" because persisted metadata can outlive a
+		// crashed or already-stopped hypervisor process.
 		allocations[id] = m.allocationFromStoredMetadata(&meta.StoredMetadata, admissionSocketActive(&meta.StoredMetadata))
 	}
 
@@ -71,6 +74,9 @@ func (m *manager) syncAdmissionAllocation(meta *metadata) {
 		m.admissionAllocations = make(map[string]resources.InstanceAllocation)
 	}
 
+	// Incremental cache updates trust metadata because lifecycle paths update
+	// visibility explicitly once boot/restore has succeeded, avoiding repeated
+	// filesystem/socket probes on the hot path.
 	m.admissionAllocations[meta.Id] = m.allocationFromStoredMetadata(&meta.StoredMetadata, admissionMetadataActive(&meta.StoredMetadata))
 }
 

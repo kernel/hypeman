@@ -443,8 +443,8 @@ func (m *Manager) GetFullStatus(ctx context.Context) (*FullResourceStatus, error
 
 // CanAllocate checks if the requested amount can be allocated for a resource type.
 func (m *Manager) CanAllocate(ctx context.Context, rt ResourceType, amount int64) (bool, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 
 	usage, err := m.collectAdmissionUsageLocked(ctx)
 	if err != nil {
@@ -713,8 +713,8 @@ func (m *Manager) validateAllocationLocked(ctx context.Context, excludeID string
 // Returns nil if allocation is allowed, or a detailed error describing
 // which resource is insufficient and the current capacity/usage.
 func (m *Manager) ValidateAllocation(ctx context.Context, vcpus int, memoryBytes int64, networkDownloadBps int64, networkUploadBps int64, diskIOBps int64, diskBytes int64, needsGPU bool) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 
 	req := newPendingAllocation(vcpus, memoryBytes, networkDownloadBps, networkUploadBps, diskIOBps, diskBytes, needsGPU)
 	return m.validateAllocationLocked(ctx, "", req)
