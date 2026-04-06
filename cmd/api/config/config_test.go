@@ -40,6 +40,9 @@ func TestDefaultConfigIncludesMetricsSettings(t *testing.T) {
 	if len(cfg.Images.AutoDelete.Allowed) != 0 {
 		t.Fatalf("expected default images.auto_delete.allowed to be empty, got %v", cfg.Images.AutoDelete.Allowed)
 	}
+	if cfg.Instances.LifecycleEventBufferSize != 256 {
+		t.Fatalf("expected default instances.lifecycle_event_buffer_size to be 256, got %d", cfg.Instances.LifecycleEventBufferSize)
+	}
 }
 
 func TestLoadEnvOverridesMetricsAndOtelInterval(t *testing.T) {
@@ -49,6 +52,7 @@ func TestLoadEnvOverridesMetricsAndOtelInterval(t *testing.T) {
 	t.Setenv("METRICS__RESOURCE_REFRESH_INTERVAL", "30s")
 	t.Setenv("OTEL__METRIC_EXPORT_INTERVAL", "15s")
 	t.Setenv("OTEL__SUCCESSFUL_GET_SAMPLE_RATIO", "0.25")
+	t.Setenv("INSTANCES__LIFECYCLE_EVENT_BUFFER_SIZE", "512")
 
 	tmp := t.TempDir()
 	cfgPath := filepath.Join(tmp, "config.yaml")
@@ -78,6 +82,9 @@ func TestLoadEnvOverridesMetricsAndOtelInterval(t *testing.T) {
 	}
 	if cfg.Otel.SuccessfulGetSampleRatio != 0.25 {
 		t.Fatalf("expected otel.successful_get_sample_ratio override, got %v", cfg.Otel.SuccessfulGetSampleRatio)
+	}
+	if cfg.Instances.LifecycleEventBufferSize != 512 {
+		t.Fatalf("expected instances.lifecycle_event_buffer_size override, got %d", cfg.Instances.LifecycleEventBufferSize)
 	}
 }
 
@@ -144,6 +151,33 @@ func TestValidateRejectsInvalidResourceRefreshInterval(t *testing.T) {
 	err = cfg.Validate()
 	if err == nil {
 		t.Fatalf("expected validation error for non-positive resource refresh interval")
+	}
+}
+
+func TestLoadUsesConfiguredLifecycleEventBufferSize(t *testing.T) {
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("instances:\n  lifecycle_event_buffer_size: 384\n"), 0600); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	if cfg.Instances.LifecycleEventBufferSize != 384 {
+		t.Fatalf("expected instances.lifecycle_event_buffer_size from config file, got %d", cfg.Instances.LifecycleEventBufferSize)
+	}
+}
+
+func TestValidateRejectsInvalidLifecycleEventBufferSize(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Instances.LifecycleEventBufferSize = 0
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatalf("expected validation error for invalid lifecycle event buffer size")
 	}
 }
 
