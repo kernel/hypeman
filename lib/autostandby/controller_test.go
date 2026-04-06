@@ -152,6 +152,44 @@ func TestStartupResyncResumesPersistedIdleCountdown(t *testing.T) {
 	assert.Equal(t, idleSince.Add(10*time.Minute), *status.NextStandbyAt)
 }
 
+func TestPeriodicSnapshotSyncRefreshesTrackedState(t *testing.T) {
+	t.Parallel()
+
+	store := newFakeInstanceStore([]Instance{{
+		ID:             "inst-periodic",
+		Name:           "inst-periodic",
+		State:          StateRunning,
+		NetworkEnabled: true,
+		IP:             "192.168.100.21",
+		AutoStandby:    &Policy{Enabled: true, IdleTimeout: "10m"},
+	}})
+	source := &fakeConnectionSource{}
+	now := time.Date(2026, 4, 6, 11, 0, 0, 0, time.UTC)
+	controller := NewController(store, source, ControllerOptions{
+		Now: func() time.Time { return now },
+	})
+
+	require.NoError(t, controller.startupResync(context.Background()))
+
+	status := controller.Describe(store.instances[0])
+	require.Equal(t, StatusIdleCountdown, status.Status)
+
+	source.connections = []Connection{{
+		OriginalSourceIP:        mustAddr("1.2.3.4"),
+		OriginalSourcePort:      51235,
+		OriginalDestinationIP:   mustAddr("192.168.100.21"),
+		OriginalDestinationPort: 8080,
+		TCPState:                TCPStateEstablished,
+	}}
+	now = now.Add(time.Minute)
+
+	require.NoError(t, controller.periodicSnapshotSync(context.Background()))
+
+	status = controller.Describe(store.instances[0])
+	require.Equal(t, StatusActive, status.Status)
+	require.Equal(t, 1, status.ActiveInboundCount)
+}
+
 func TestConnectionEventsClearIdleAndStartCountdown(t *testing.T) {
 	t.Parallel()
 

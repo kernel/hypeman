@@ -25,6 +25,7 @@ Hypeman seeds its controller from a conntrack snapshot on startup, then keeps st
 - new inbound TCP flows are tracked from conntrack `NEW` events
 - TCP teardown is treated as inactivity once conntrack reports a terminal state or the flow disappears
 - connections that were already open when Hypeman started are reconciled against fresh conntrack snapshots until they drain, so restart-seeded traffic can still age out correctly
+- Hypeman also performs a full snapshot sync every 5 minutes by default as a low-frequency consistency check; the controller interval is configurable
 
 When the active inbound TCP connection count reaches zero, Hypeman starts an idle timer for that instance.
 

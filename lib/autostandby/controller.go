@@ -19,6 +19,7 @@ const (
 	trackingModeConntrackEventsV4TCP = "conntrack_events_v4_tcp"
 	defaultReconnectDelay            = 2 * time.Second
 	defaultReconcileDelay            = 2 * time.Second
+	defaultSnapshotSyncInterval      = 5 * time.Minute
 )
 
 // InstanceEventAction identifies an instance lifecycle change relevant to auto-standby.
@@ -80,12 +81,13 @@ type ConnectionSource interface {
 
 // ControllerOptions configures logging, timing, and observability.
 type ControllerOptions struct {
-	Log            *slog.Logger
-	Meter          metric.Meter
-	Tracer         trace.Tracer
-	Now            func() time.Time
-	ReconnectDelay time.Duration
-	ReconcileDelay time.Duration
+	Log                  *slog.Logger
+	Meter                metric.Meter
+	Tracer               trace.Tracer
+	Now                  func() time.Time
+	ReconnectDelay       time.Duration
+	ReconcileDelay       time.Duration
+	SnapshotSyncInterval time.Duration
 }
 
 type controllerState struct {
@@ -110,11 +112,12 @@ type Controller struct {
 	tracer  trace.Tracer
 	metrics *Metrics
 
-	reconnectDelay time.Duration
-	reconcileDelay time.Duration
-	timerFired     chan string
-	reconcileFired chan string
-	streamReady    chan ConnectionStream
+	reconnectDelay       time.Duration
+	reconcileDelay       time.Duration
+	snapshotSyncInterval time.Duration
+	timerFired           chan string
+	reconcileFired       chan string
+	streamReady          chan ConnectionStream
 
 	mu                sync.RWMutex
 	states            map[string]*controllerState
@@ -140,19 +143,24 @@ func NewController(store InstanceStore, source ConnectionSource, opts Controller
 	if reconcileDelay <= 0 {
 		reconcileDelay = defaultReconcileDelay
 	}
+	snapshotSyncInterval := opts.SnapshotSyncInterval
+	if snapshotSyncInterval <= 0 {
+		snapshotSyncInterval = defaultSnapshotSyncInterval
+	}
 
 	c := &Controller{
-		store:          store,
-		source:         source,
-		log:            log,
-		now:            now,
-		tracer:         opts.Tracer,
-		reconnectDelay: reconnectDelay,
-		reconcileDelay: reconcileDelay,
-		timerFired:     make(chan string, 128),
-		reconcileFired: make(chan string, 128),
-		streamReady:    make(chan ConnectionStream, 4),
-		states:         make(map[string]*controllerState),
+		store:                store,
+		source:               source,
+		log:                  log,
+		now:                  now,
+		tracer:               opts.Tracer,
+		reconnectDelay:       reconnectDelay,
+		reconcileDelay:       reconcileDelay,
+		snapshotSyncInterval: snapshotSyncInterval,
+		timerFired:           make(chan string, 128),
+		reconcileFired:       make(chan string, 128),
+		streamReady:          make(chan ConnectionStream, 4),
+		states:               make(map[string]*controllerState),
 	}
 	c.metrics = newMetrics(opts.Meter, opts.Tracer, c)
 	return c
@@ -161,7 +169,7 @@ func NewController(store InstanceStore, source ConnectionSource, opts Controller
 // Run starts the controller and blocks until ctx is cancelled.
 func (c *Controller) Run(ctx context.Context) error {
 	log := c.log.With("tracking_mode", trackingModeConntrackEventsV4TCP)
-	log.Info("auto-standby controller started")
+	log.Info("auto-standby controller started", "snapshot_sync_interval", c.snapshotSyncInterval)
 
 	var stream ConnectionStream
 	if c.source != nil {
@@ -190,6 +198,8 @@ func (c *Controller) Run(ctx context.Context) error {
 	if stream != nil {
 		defer stream.Close()
 	}
+	snapshotTicker := time.NewTicker(c.snapshotSyncInterval)
+	defer snapshotTicker.Stop()
 
 	for {
 		var streamEvents <-chan ConnectionEvent
@@ -245,6 +255,11 @@ func (c *Controller) Run(ctx context.Context) error {
 			c.handleStandbyTimer(ctx, id)
 		case id := <-c.reconcileFired:
 			c.handleActiveReconcile(ctx, id)
+		case <-snapshotTicker.C:
+			if err := c.periodicSnapshotSync(ctx); err != nil {
+				c.recordControllerError("snapshot_sync")
+				log.Warn("auto-standby periodic snapshot sync failed", "error", err)
+			}
 		}
 	}
 }
@@ -381,6 +396,26 @@ func (c *Controller) startupResync(ctx context.Context) error {
 	}
 
 	c.recordStartupResync(start, "success")
+	return nil
+}
+
+func (c *Controller) periodicSnapshotSync(ctx context.Context) error {
+	instances, err := c.store.ListInstances(ctx)
+	if err != nil {
+		return err
+	}
+	conns, err := c.source.ListConnections(ctx)
+	if err != nil {
+		return err
+	}
+
+	now := c.now().UTC()
+	c.log.Debug("auto-standby periodic snapshot sync completed", "instance_count", len(instances), "current_connection_count", len(conns))
+	for _, inst := range instances {
+		if err := c.seedInstanceState(ctx, inst, conns, now); err != nil {
+			c.log.Warn("auto-standby periodic snapshot sync failed for instance", "instance_id", inst.ID, "instance_name", inst.Name, "error", err)
+		}
+	}
 	return nil
 }
 
