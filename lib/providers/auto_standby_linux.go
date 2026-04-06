@@ -110,4 +110,3 @@ func ProvideAutoStandbyController(instanceManager instances.Manager, log *slog.L
 		},
 	)
 }
-

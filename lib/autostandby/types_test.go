@@ -12,4 +12,3 @@ func TestTCPStateConstantsMatchExpectedKernelValues(t *testing.T) {
 	assert.Equal(t, TCPState(10), TCPStateIgnore)
 	assert.Equal(t, TCPState(11), TCPStateRetrans)
 }
-

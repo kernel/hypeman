@@ -5,14 +5,14 @@ import "time"
 type Status string
 
 const (
-	StatusUnsupported    Status = "unsupported"
-	StatusDisabled       Status = "disabled"
-	StatusIneligible     Status = "ineligible"
-	StatusActive         Status = "active"
-	StatusIdleCountdown  Status = "idle_countdown"
-	StatusReadyForStandby Status = "ready_for_standby"
+	StatusUnsupported      Status = "unsupported"
+	StatusDisabled         Status = "disabled"
+	StatusIneligible       Status = "ineligible"
+	StatusActive           Status = "active"
+	StatusIdleCountdown    Status = "idle_countdown"
+	StatusReadyForStandby  Status = "ready_for_standby"
 	StatusStandbyRequested Status = "standby_requested"
-	StatusError          Status = "error"
+	StatusError            Status = "error"
 )
 
 type Reason string
@@ -47,4 +47,3 @@ type StatusSnapshot struct {
 	CountdownRemaining    *time.Duration
 	TrackingMode          string
 }
-

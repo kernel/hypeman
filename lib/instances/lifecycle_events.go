@@ -71,4 +71,3 @@ func trySendLifecycleEvent(ch chan LifecycleEvent, event LifecycleEvent) {
 	default:
 	}
 }
-

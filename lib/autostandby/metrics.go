@@ -11,13 +11,13 @@ import (
 )
 
 type Metrics struct {
-	conntrackEventsTotal        metric.Int64Counter
-	startupResyncDuration       metric.Float64Histogram
-	standbyAttemptsTotal        metric.Int64Counter
-	controllerErrorsTotal       metric.Int64Counter
-	trackedInstancesGauge       metric.Int64ObservableGauge
-	activeConnectionsGauge      metric.Int64ObservableGauge
-	tracer                      trace.Tracer
+	conntrackEventsTotal   metric.Int64Counter
+	startupResyncDuration  metric.Float64Histogram
+	standbyAttemptsTotal   metric.Int64Counter
+	controllerErrorsTotal  metric.Int64Counter
+	trackedInstancesGauge  metric.Int64ObservableGauge
+	activeConnectionsGauge metric.Int64ObservableGauge
+	tracer                 trace.Tracer
 }
 
 func newMetrics(meter metric.Meter, tracer trace.Tracer, controller *Controller) *Metrics {
@@ -161,4 +161,3 @@ func (c *Controller) metricSnapshot() (active, countdown, ready, ineligible, tot
 	}
 	return
 }
-

@@ -77,4 +77,3 @@ func toOAPIAutoStandbyStatus(status autostandby.StatusSnapshot) oapi.AutoStandby
 	}
 	return out
 }
-
