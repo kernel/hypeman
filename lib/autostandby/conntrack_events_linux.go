@@ -134,7 +134,7 @@ func connectionEventFromNetlinkMessage(msg syscall.NetlinkMessage) (ConnectionEv
 		return ConnectionEvent{}, false, nil
 	case unix.NLMSG_ERROR:
 		if len(msg.Data) >= 4 {
-			errno := -int32(binary.LittleEndian.Uint32(msg.Data[:4]))
+			errno := -int32(nl.NativeEndian().Uint32(msg.Data[:4]))
 			if errno != 0 {
 				return ConnectionEvent{}, false, unix.Errno(errno)
 			}

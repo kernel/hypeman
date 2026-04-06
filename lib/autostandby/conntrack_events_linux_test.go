@@ -3,11 +3,14 @@
 package autostandby
 
 import (
+	"encoding/binary"
 	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/vishvananda/netlink/nl"
+	"golang.org/x/sys/unix"
 )
 
 func TestConnectionEventFromNetlinkMessageParsesIPv4TCPEvent(t *testing.T) {
@@ -44,4 +47,23 @@ func TestConnectionEventFromNetlinkMessageParsesIPv4TCPEvent(t *testing.T) {
 	assert.Equal(t, mustAddr("192.168.77.73"), event.Connection.OriginalDestinationIP)
 	assert.Equal(t, uint16(3333), event.Connection.OriginalDestinationPort)
 	assert.Equal(t, TCPStateClose, event.Connection.TCPState)
+}
+
+func TestConnectionEventFromNetlinkMessageParsesNativeEndianNLMSGError(t *testing.T) {
+	t.Parallel()
+
+	data := make([]byte, 4)
+	nl.NativeEndian().PutUint32(data, uint32(int32(-unix.EPERM)))
+
+	_, ok, err := connectionEventFromNetlinkMessage(syscall.NetlinkMessage{
+		Header: syscall.NlMsghdr{Type: unix.NLMSG_ERROR},
+		Data:   data,
+	})
+	require.ErrorIs(t, err, unix.EPERM)
+	require.False(t, ok)
+
+	// Sanity-check the fixture is using native byte order rather than an accidental little-endian match.
+	if nl.NativeEndian() != binary.LittleEndian {
+		require.NotEqual(t, binary.LittleEndian.Uint32(data), nl.NativeEndian().Uint32(data))
+	}
 }

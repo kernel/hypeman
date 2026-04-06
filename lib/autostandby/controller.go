@@ -314,25 +314,42 @@ func (c *Controller) Describe(inst Instance) StatusSnapshot {
 
 	snapshot.Eligible = true
 
+	var (
+		activeInboundCount int
+		idleSince          *time.Time
+		lastInboundAt      *time.Time
+		nextStandbyAt      *time.Time
+		standbyRequested   bool
+		hasState           bool
+	)
+
 	c.mu.RLock()
 	state := c.states[inst.ID]
 	observerConnected := c.observerConnected
 	lastObserverErr := c.lastObserverErr
+	if state != nil {
+		hasState = true
+		activeInboundCount = len(state.activeInbound)
+		idleSince = cloneTimePtr(state.idleSince)
+		lastInboundAt = cloneTimePtr(state.lastInboundAt)
+		nextStandbyAt = cloneTimePtr(state.nextStandbyAt)
+		standbyRequested = state.standbyRequested
+	}
 	c.mu.RUnlock()
 
-	if state != nil {
-		snapshot.ActiveInboundCount = len(state.activeInbound)
-		snapshot.IdleSince = cloneTimePtr(state.idleSince)
-		snapshot.LastInboundActivityAt = cloneTimePtr(state.lastInboundAt)
-		snapshot.NextStandbyAt = cloneTimePtr(state.nextStandbyAt)
-		if state.nextStandbyAt != nil {
-			remaining := state.nextStandbyAt.Sub(c.now().UTC())
+	if hasState {
+		snapshot.ActiveInboundCount = activeInboundCount
+		snapshot.IdleSince = idleSince
+		snapshot.LastInboundActivityAt = lastInboundAt
+		snapshot.NextStandbyAt = nextStandbyAt
+		if nextStandbyAt != nil {
+			remaining := nextStandbyAt.Sub(c.now().UTC())
 			if remaining < 0 {
 				remaining = 0
 			}
 			snapshot.CountdownRemaining = &remaining
 		}
-		if state.standbyRequested {
+		if standbyRequested {
 			snapshot.Status = StatusStandbyRequested
 			snapshot.Reason = ReasonReadyForStandby
 			return snapshot
@@ -344,13 +361,13 @@ func (c *Controller) Describe(inst Instance) StatusSnapshot {
 		snapshot.Reason = ReasonObserverError
 		return snapshot
 	}
-	if state != nil && len(state.activeInbound) > 0 {
+	if hasState && activeInboundCount > 0 {
 		snapshot.Status = StatusActive
 		snapshot.Reason = ReasonActiveInbound
 		return snapshot
 	}
-	if state != nil && state.nextStandbyAt != nil {
-		if state.nextStandbyAt.After(c.now().UTC()) {
+	if hasState && nextStandbyAt != nil {
+		if nextStandbyAt.After(c.now().UTC()) {
 			snapshot.Status = StatusIdleCountdown
 			snapshot.Reason = ReasonIdleTimeoutNotElapsed
 			return snapshot
