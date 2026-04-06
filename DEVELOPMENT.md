@@ -289,49 +289,6 @@ build:
   docker_socket: ~/.colima/default/docker.sock
 ```
 
-### Local OpenTelemetry (optional)
-
-To collect traces and metrics locally, run the Grafana LGTM stack (Loki, Grafana, Tempo, Mimir):
-
-```bash
-# Start Grafana LGTM (UI at http://localhost:3000, login: admin/admin)
-# Note, if you are developing on a shared server, you can use the same LGTM stack as your peer(s)
-# You will be able to sort your metrics, traces, and logs using the ENV configuration (see below)
-BIND=127.0.0.1
-# YOLO=1  # Uncomment to expose ports externally
-if [ -n "$YOLO" ]; then BIND=0.0.0.0; fi
-
-docker run -d --name lgtm \
-  -p $BIND:3000:3000 \
-  -p $BIND:4317:4317 \
-  -p $BIND:4318:4318 \
-  -p $BIND:9090:9090 \
-  -p $BIND:4040:4040 \
-  grafana/otel-lgtm:latest
-
-# If developing on a remote server, forward the port to your local machine (or YOLO):
-# ssh -L 3001:localhost:3000 your-server  (then open http://localhost:3001)
-
-# Enable OTel in config.yaml (set env to your name to filter your telemetry)
-# Add to your config.yaml:
-#   otel:
-#     enabled: true
-#   env: yourname
-
-# Restart dev server
-make dev
-```
-
-Open http://localhost:3000 to view traces (Tempo), metrics (Mimir), and logs (Loki) in Grafana.
-
-**Import the Hypeman dashboard:**
-
-1. Go to Dashboards → New → Import
-2. Upload `dashboards/hypeman.json` or paste its contents
-3. Select the Prometheus datasource and click Import
-
-Use the Environment/Instance dropdowns to filter by `deployment.environment` or `service.instance.id`.
-
 ## Testing
 
 Network tests require elevated permissions to create bridges and TAP devices.
