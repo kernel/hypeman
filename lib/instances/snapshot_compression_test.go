@@ -455,8 +455,6 @@ func TestStartCompressionJobDelayedCancellationRecordsSkipped(t *testing.T) {
 }
 
 func TestRecoverPendingStandbyCompressionJobsRequeuesDelayedJob(t *testing.T) {
-	t.Parallel()
-
 	mgr, _ := setupTestManager(t)
 	now := time.Date(2026, time.April, 6, 12, 0, 0, 0, time.UTC)
 	mgr.now = func() time.Time { return now }
@@ -521,8 +519,6 @@ func TestRecoverPendingStandbyCompressionJobsRequeuesDelayedJob(t *testing.T) {
 }
 
 func TestRecoverPendingStandbyCompressionJobsStartsImmediateCompression(t *testing.T) {
-	t.Parallel()
-
 	mgr, _ := setupTestManager(t)
 	now := time.Date(2026, time.April, 6, 12, 5, 0, 0, time.UTC)
 	mgr.now = func() time.Time { return now }
@@ -569,8 +565,6 @@ func TestRecoverPendingStandbyCompressionJobsStartsImmediateCompression(t *testi
 }
 
 func TestRecoverPendingStandbyCompressionJobsClearsStalePlans(t *testing.T) {
-	t.Parallel()
-
 	tests := []struct {
 		name    string
 		prepare func(t *testing.T, mgr *manager, instanceID string, now time.Time)
@@ -628,8 +622,6 @@ func TestRecoverPendingStandbyCompressionJobsClearsStalePlans(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
 			mgr, _ := setupTestManager(t)
 			now := time.Date(2026, time.April, 6, 12, 10, 0, 0, time.UTC)
 			mgr.now = func() time.Time { return now }
