@@ -117,6 +117,7 @@ type manager struct {
 
 	// State change subscriptions for waitForState
 	stateSubscribers *subscribers
+	lifecycleEvents  *lifecycleSubscribers
 
 	// Hypervisor support
 	vmStarters        map[hypervisor.Type]hypervisor.VMStarter
@@ -170,6 +171,7 @@ func NewManager(p *paths.Paths, imageManager images.Manager, systemManager syste
 		compressionJobs:   make(map[string]*compressionJob),
 		nativeCodecPaths:  make(map[string]string),
 		stateSubscribers:  newSubscribers(),
+		lifecycleEvents:   newLifecycleSubscribers(),
 	}
 	m.deleteSnapshotFn = m.deleteSnapshot
 
@@ -199,11 +201,34 @@ func (m *manager) Subscribe(instanceID string) (<-chan StateChange, func()) {
 	return m.stateSubscribers.Subscribe(instanceID)
 }
 
+// SubscribeLifecycleEvents returns a channel of global instance lifecycle events.
+func (m *manager) SubscribeLifecycleEvents() (<-chan LifecycleEvent, func()) {
+	return m.lifecycleEvents.Subscribe()
+}
+
 // notifyStateChange broadcasts a state change to all subscribers for the instance.
 func (m *manager) notifyStateChange(instanceID string, inst *Instance) {
 	m.stateSubscribers.Notify(instanceID, StateChange{
 		State:      inst.State,
 		StateError: inst.StateError,
+	})
+}
+
+func (m *manager) notifyLifecycleEvent(action LifecycleEventAction, inst *Instance) {
+	if inst == nil {
+		return
+	}
+	m.lifecycleEvents.Notify(LifecycleEvent{
+		Action:     action,
+		InstanceID: inst.Id,
+		Instance:   inst,
+	})
+}
+
+func (m *manager) notifyLifecycleDelete(instanceID string) {
+	m.lifecycleEvents.Notify(LifecycleEvent{
+		Action:     LifecycleEventDelete,
+		InstanceID: instanceID,
 	})
 }
 
@@ -270,7 +295,11 @@ func (m *manager) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 	// 1. ULID generation is unique
 	// 2. Filesystem mkdir is atomic per instance directory
 	// 3. Concurrent creates of different instances don't conflict
-	return m.createInstance(ctx, req)
+	inst, err := m.createInstance(ctx, req)
+	if err == nil {
+		m.notifyLifecycleEvent(LifecycleEventCreate, inst)
+	}
+	return inst, err
 }
 
 // DeleteInstance stops and deletes an instance
@@ -281,6 +310,7 @@ func (m *manager) DeleteInstance(ctx context.Context, id string) error {
 
 	err := m.deleteInstance(ctx, id)
 	if err == nil {
+		m.notifyLifecycleDelete(id)
 		m.stateSubscribers.CloseAll(id)
 		// Clean up the lock after successful deletion
 		m.instanceLocks.Delete(id)
@@ -332,11 +362,16 @@ func (m *manager) ForkInstance(ctx context.Context, id string, req ForkInstanceR
 			return nil, fmt.Errorf("wait for fork guest agent readiness: %w", err)
 		}
 	}
+	m.notifyLifecycleEvent(LifecycleEventFork, inst)
 	return inst, nil
 }
 
 func (m *manager) ForkSnapshot(ctx context.Context, snapshotID string, req ForkSnapshotRequest) (*Instance, error) {
-	return m.forkSnapshot(ctx, snapshotID, req)
+	inst, err := m.forkSnapshot(ctx, snapshotID, req)
+	if err == nil {
+		m.notifyLifecycleEvent(LifecycleEventFork, inst)
+	}
+	return inst, err
 }
 
 // StandbyInstance puts an instance in standby (pause, snapshot, delete VMM)
@@ -347,6 +382,7 @@ func (m *manager) StandbyInstance(ctx context.Context, id string, req StandbyIns
 	inst, err := m.standbyInstance(ctx, id, req, false)
 	if err == nil {
 		m.notifyStateChange(id, inst)
+		m.notifyLifecycleEvent(LifecycleEventStandby, inst)
 	}
 	return inst, err
 }
@@ -359,6 +395,7 @@ func (m *manager) RestoreInstance(ctx context.Context, id string) (*Instance, er
 	inst, err := m.restoreInstance(ctx, id)
 	if err == nil {
 		m.notifyStateChange(id, inst)
+		m.notifyLifecycleEvent(LifecycleEventRestore, inst)
 	}
 	return inst, err
 }
@@ -370,6 +407,7 @@ func (m *manager) RestoreSnapshot(ctx context.Context, id string, snapshotID str
 	inst, err := m.restoreSnapshot(ctx, id, snapshotID, req)
 	if err == nil {
 		m.notifyStateChange(id, inst)
+		m.notifyLifecycleEvent(LifecycleEventRestore, inst)
 	}
 	return inst, err
 }
@@ -382,6 +420,7 @@ func (m *manager) StopInstance(ctx context.Context, id string) (*Instance, error
 	inst, err := m.stopInstance(ctx, id)
 	if err == nil {
 		m.notifyStateChange(id, inst)
+		m.notifyLifecycleEvent(LifecycleEventStop, inst)
 	}
 	return inst, err
 }
@@ -394,6 +433,7 @@ func (m *manager) StartInstance(ctx context.Context, id string, req StartInstanc
 	inst, err := m.startInstance(ctx, id, req)
 	if err == nil {
 		m.notifyStateChange(id, inst)
+		m.notifyLifecycleEvent(LifecycleEventStart, inst)
 	}
 	return inst, err
 }
@@ -403,7 +443,11 @@ func (m *manager) UpdateInstance(ctx context.Context, id string, req UpdateInsta
 	lock := m.getInstanceLock(id)
 	lock.Lock()
 	defer lock.Unlock()
-	return m.updateInstance(ctx, id, req)
+	inst, err := m.updateInstance(ctx, id, req)
+	if err == nil {
+		m.notifyLifecycleEvent(LifecycleEventUpdate, inst)
+	}
+	return inst, err
 }
 
 // ListInstances returns instances, optionally filtered by the given criteria.

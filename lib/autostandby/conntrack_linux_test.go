@@ -19,6 +19,7 @@ func TestConnectionFromFlowNormalizesTCPConntrackEntry(t *testing.T) {
 		Forward: netlink.IPTuple{
 			Protocol: unix.IPPROTO_TCP,
 			SrcIP:    net.ParseIP("1.2.3.4").To4(),
+			SrcPort:  12345,
 			DstIP:    net.ParseIP("192.168.100.10").To4(),
 			DstPort:  8080,
 		},
@@ -27,6 +28,7 @@ func TestConnectionFromFlowNormalizesTCPConntrackEntry(t *testing.T) {
 	require.True(t, ok)
 
 	assert.Equal(t, mustAddr("1.2.3.4"), conn.OriginalSourceIP)
+	assert.Equal(t, uint16(12345), conn.OriginalSourcePort)
 	assert.Equal(t, mustAddr("192.168.100.10"), conn.OriginalDestinationIP)
 	assert.Equal(t, uint16(8080), conn.OriginalDestinationPort)
 	assert.Equal(t, TCPStateEstablished, conn.TCPState)

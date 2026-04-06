@@ -8,6 +8,7 @@ func deepCopyMetadata(src *metadata) *metadata {
 	}
 
 	return &metadata{
-		StoredMetadata: cloneStoredMetadataForFork(src.StoredMetadata),
+		StoredMetadata:    cloneStoredMetadata(src.StoredMetadata),
+		AutoStandbyRuntime: cloneAutoStandbyRuntime(src.AutoStandbyRuntime),
 	}
 }

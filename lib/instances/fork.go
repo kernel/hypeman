@@ -269,7 +269,7 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 	}
 
 	now := time.Now()
-	forkMeta := cloneStoredMetadataForFork(meta.StoredMetadata)
+	forkMeta := cloneStoredMetadata(meta.StoredMetadata)
 	forkMeta.Id = forkID
 	forkMeta.Name = req.Name
 	forkMeta.CreatedAt = now
@@ -470,7 +470,7 @@ func (m *manager) cleanupForkInstanceOnError(ctx context.Context, forkID string)
 	return err
 }
 
-func cloneStoredMetadataForFork(src StoredMetadata) StoredMetadata {
+func cloneStoredMetadata(src StoredMetadata) StoredMetadata {
 	dst := src
 
 	if src.Env != nil {

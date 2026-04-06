@@ -2,6 +2,7 @@ package api
 
 import (
 	"github.com/kernel/hypeman/cmd/api/config"
+	"github.com/kernel/hypeman/lib/autostandby"
 	"github.com/kernel/hypeman/lib/builds"
 	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/guestmemory"
@@ -27,6 +28,7 @@ type ApiService struct {
 	BuildManager          builds.Manager
 	ResourceManager       *resources.Manager
 	GuestMemoryController guestmemory.Controller
+	AutoStandbyController *autostandby.Controller
 	VMMetricsManager      *vm_metrics.Manager
 }
 
@@ -44,6 +46,7 @@ func New(
 	buildManager builds.Manager,
 	resourceManager *resources.Manager,
 	guestMemoryController guestmemory.Controller,
+	autoStandbyController *autostandby.Controller,
 	vmMetricsManager *vm_metrics.Manager,
 ) *ApiService {
 	return &ApiService{
@@ -57,6 +60,7 @@ func New(
 		BuildManager:          buildManager,
 		ResourceManager:       resourceManager,
 		GuestMemoryController: guestMemoryController,
+		AutoStandbyController: autoStandbyController,
 		VMMetricsManager:      vmMetricsManager,
 	}
 }

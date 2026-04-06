@@ -79,7 +79,7 @@ func initializeApp() (*application, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	apiService := api.New(config, manager, instancesManager, volumesManager, networkManager, devicesManager, ingressManager, buildsManager, resourcesManager, controller, vm_metricsManager)
+	apiService := api.New(config, manager, instancesManager, volumesManager, networkManager, devicesManager, ingressManager, buildsManager, resourcesManager, controller, autostandbyController, vm_metricsManager)
 	mainApplication := &application{
 		Ctx:                   context,
 		Logger:                logger,

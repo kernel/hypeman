@@ -26,14 +26,22 @@ type Instance struct {
 	IP             string
 	HasVGPU        bool
 	AutoStandby    *Policy
+	Runtime        *Runtime
 }
 
 // Connection is the normalized network view used by activity classification.
 type Connection struct {
 	OriginalSourceIP        netip.Addr
+	OriginalSourcePort      uint16
 	OriginalDestinationIP   netip.Addr
 	OriginalDestinationPort uint16
 	TCPState                TCPState
+}
+
+// Runtime stores persisted and in-memory idle-tracking timestamps.
+type Runtime struct {
+	IdleSince             *time.Time `json:"idle_since,omitempty"`
+	LastInboundActivityAt *time.Time `json:"last_inbound_activity_at,omitempty"`
 }
 
 // TCPState is the conntrack TCP state for a flow.
@@ -50,7 +58,8 @@ const (
 	TCPStateTimeWait    TCPState = 7
 	TCPStateClose       TCPState = 8
 	TCPStateListen      TCPState = 9
-	TCPStateIgnore      TCPState = 11
+	TCPStateIgnore      TCPState = 10
+	TCPStateRetrans     TCPState = 11
 )
 
 // Active reports whether the TCP state should keep a VM awake.

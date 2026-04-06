@@ -64,6 +64,7 @@ func connectionFromFlow(flow *netlink.ConntrackFlow) (Connection, bool) {
 
 	return Connection{
 		OriginalSourceIP:        srcIP,
+		OriginalSourcePort:      flow.Forward.SrcPort,
 		OriginalDestinationIP:   dstIP,
 		OriginalDestinationPort: flow.Forward.DstPort,
 		TCPState:                TCPState(tcpInfo.State),

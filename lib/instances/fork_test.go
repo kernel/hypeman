@@ -304,7 +304,7 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 		},
 	}
 
-	cloned := cloneStoredMetadataForFork(src)
+	cloned := cloneStoredMetadata(src)
 	require.Equal(t, src, cloned)
 
 	cloned.Env["A"] = "2"

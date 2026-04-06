@@ -57,6 +57,38 @@ func (s integrationAutoStandbyStore) StandbyInstance(ctx context.Context, id str
 	return err
 }
 
+func (s integrationAutoStandbyStore) SetRuntime(ctx context.Context, id string, runtime *autostandby.Runtime) error {
+	return s.manager.SetAutoStandbyRuntime(ctx, id, runtime)
+}
+
+func (s integrationAutoStandbyStore) SubscribeInstanceEvents() (<-chan autostandby.InstanceEvent, func(), error) {
+	src, unsub := s.manager.SubscribeLifecycleEvents()
+	dst := make(chan autostandby.InstanceEvent, 16)
+	go func() {
+		defer close(dst)
+		for event := range src {
+			var inst *autostandby.Instance
+			if event.Instance != nil {
+				inst = &autostandby.Instance{
+					ID:             event.Instance.Id,
+					Name:           event.Instance.Name,
+					State:          string(event.Instance.State),
+					NetworkEnabled: event.Instance.NetworkEnabled,
+					IP:             event.Instance.IP,
+					HasVGPU:        event.Instance.GPUProfile != "" || event.Instance.GPUMdevUUID != "",
+					AutoStandby:    event.Instance.AutoStandby,
+				}
+			}
+			dst <- autostandby.InstanceEvent{
+				Action:     autostandby.InstanceEventAction(event.Action),
+				InstanceID: event.InstanceID,
+				Instance:   inst,
+			}
+		}
+	}()
+	return dst, unsub, nil
+}
+
 func TestAutoStandbyCloudHypervisorActiveInboundTCP(t *testing.T) {
 	requireAutoStandbyE2EManualRun(t)
 	requireKVMAccess(t)
@@ -92,13 +124,14 @@ func TestAutoStandbyCloudHypervisorActiveInboundTCP(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
+	instanceID := inst.Id
 
 	t.Cleanup(func() {
-		logInstanceArtifactsOnFailure(t, mgr, inst.Id)
-		_ = mgr.DeleteInstance(context.Background(), inst.Id)
+		logInstanceArtifactsOnFailure(t, mgr, instanceID)
+		_ = mgr.DeleteInstance(context.Background(), instanceID)
 	})
 
-	inst, err = waitForInstanceState(ctx, mgr, inst.Id, StateRunning, 30*time.Second)
+	inst, err = waitForInstanceState(ctx, mgr, instanceID, StateRunning, 30*time.Second)
 	require.NoError(t, err)
 	require.NoError(t, waitForVMReady(ctx, inst.SocketPath, 10*time.Second))
 	require.NoError(t, waitForExecAgent(ctx, mgr, inst.Id, 30*time.Second))
@@ -106,7 +139,11 @@ func TestAutoStandbyCloudHypervisorActiveInboundTCP(t *testing.T) {
 
 	conn, err := dialGuestPortWithRetry(inst.IP, 80, 15*time.Second)
 	require.NoError(t, err)
-	defer conn.Close()
+	defer func() {
+		if conn != nil {
+			_ = conn.Close()
+		}
+	}()
 
 	require.Eventually(t, func() bool {
 		conns, err := connSource.ListConnections(ctx)
@@ -138,8 +175,10 @@ func TestAutoStandbyCloudHypervisorActiveInboundTCP(t *testing.T) {
 	controller := autostandby.NewController(
 		integrationAutoStandbyStore{manager: mgr},
 		connSource,
-		slog.Default(),
-		250*time.Millisecond,
+		autostandby.ControllerOptions{
+			Log:            slog.Default(),
+			ReconnectDelay: 250 * time.Millisecond,
+		},
 	)
 	go func() {
 		controllerDone <- controller.Run(controllerCtx)
@@ -158,14 +197,14 @@ func TestAutoStandbyCloudHypervisorActiveInboundTCP(t *testing.T) {
 
 	time.Sleep(5 * time.Second)
 
-	current, err := mgr.GetInstance(ctx, inst.Id)
+	current, err := mgr.GetInstance(ctx, instanceID)
 	require.NoError(t, err)
 	require.Equal(t, StateRunning, current.State, "instance should remain running while inbound TCP connection is open")
 
 	require.NoError(t, conn.Close())
 	conn = nil
 
-	inst, err = waitForInstanceState(ctx, mgr, inst.Id, StateStandby, 45*time.Second)
+	inst, err = waitForInstanceState(ctx, mgr, instanceID, StateStandby, 45*time.Second)
 	require.NoError(t, err)
 	require.Equal(t, StateStandby, inst.State)
 }
