@@ -94,6 +94,17 @@ func (m *manager) setAdmissionAllocationActive(stored *StoredMetadata, active bo
 	m.admissionAllocations[stored.Id] = m.allocationFromStoredMetadata(stored, active)
 }
 
+func (m *manager) rollbackAdmissionAllocationActive(stored *StoredMetadata) {
+	if stored == nil {
+		return
+	}
+	// Failed post-boot/restore steps should not leave the cached visible
+	// allocation marked active. Clear the in-memory PID first so any later sync
+	// from this metadata view also treats the instance as inactive.
+	stored.HypervisorPID = nil
+	m.setAdmissionAllocationActive(stored, false)
+}
+
 func (m *manager) deleteAdmissionAllocation(id string) {
 	m.admissionAllocationsMu.Lock()
 	defer m.admissionAllocationsMu.Unlock()
