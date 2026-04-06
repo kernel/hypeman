@@ -43,9 +43,8 @@ func (m *manager) updateInstance(ctx context.Context, id string, req UpdateInsta
 	if len(req.Env) > 0 && inst.State != StateRunning && inst.State != StateInitializing {
 		return nil, fmt.Errorf("%w: instance must be running or initializing to update env (current state: %s)", ErrInvalidState, inst.State)
 	}
-	nextMeta := meta
+	nextMeta := deepCopyMetadata(meta)
 	if req.AutoStandby != nil {
-		nextMeta = cloneMetadata(meta)
 		nextMeta.AutoStandby = cloneAutoStandbyPolicy(req.AutoStandby)
 	}
 	if len(req.Env) == 0 {

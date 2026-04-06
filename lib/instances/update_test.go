@@ -207,7 +207,7 @@ func TestApplyUpdatedInstanceEnvSavesAutoStandbyAlongsideEnvWithoutMutatingOrigi
 			},
 		},
 	}
-	updated := cloneMetadata(original)
+	updated := deepCopyMetadata(original)
 	updated.AutoStandby = &autostandby.Policy{
 		Enabled:                true,
 		IdleTimeout:            "10m0s",
@@ -221,7 +221,7 @@ func TestApplyUpdatedInstanceEnvSavesAutoStandbyAlongsideEnvWithoutMutatingOrigi
 
 	var saved *metadata
 	err := applyUpdatedInstanceEnv(context.Background(), nil, updated.Id, updated, prevEnv, nextEnv, func(meta *metadata) error {
-		saved = cloneMetadata(meta)
+		saved = deepCopyMetadata(meta)
 		return nil
 	}, svc)
 	require.NoError(t, err)

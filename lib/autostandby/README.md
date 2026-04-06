@@ -40,6 +40,7 @@ This is intended for probes, internal callers, or ports that should not keep a V
 
 - Linux only
 - TCP only
+- IPv4 conntrack only
 - Wake-on-traffic is not part of this feature
 
 Wake-on-traffic would require a separate host-owned listener or forwarding layer that can accept a connection while the VM is asleep, trigger restore, and then hand traffic through once the VM is running.
