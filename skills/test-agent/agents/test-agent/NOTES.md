@@ -218,6 +218,47 @@
 - `TestVolumeMultiAttachReadOnly`
   - `exec-agent not ready for instance ... within 15s (last state: Initializing)`
 - `TestVolumeFromArchive`
+
+## 2026-04-06 - PR #184 standby compression delay branch (`codex/standby-compression-delay`)
+
+### CI red signature
+- Linux `test` job on PR [#184](https://github.com/kernel/hypeman/pull/184) failed while the other checks passed.
+- Observed failures from the GitHub Actions log:
+  - `TestQEMUStandbyRestoreCompressionScenarios`
+  - `TestQEMUStandbyAndRestore`
+  - `TestBasicEndToEnd`
+  - `TestForkCloudHypervisorFromRunningNetwork`
+- Failure shapes were integration stalls, not deterministic assertion failures:
+  - `instance ... did not reach Running within 20s (last state: Initializing)`
+  - `rpc error: code = DeadlineExceeded desc = stream terminated by RST_STREAM with error code: CANCEL`
+
+### Investigation
+- Initial stopgap of removing `t.Parallel()` from the new restart-recovery tests was rejected; that was the wrong direction and was not kept.
+- Reproduced the branch on `deft-kernel-dev` using the CI-like Linux/root flow with correct prewarm env:
+  - `go mod download`
+  - `make oapi-generate`
+  - `make build`
+  - `go run ./cmd/test-prewarm`
+  - `sudo env ... go test -count=1 -tags containers_image_openpgp -timeout=20m ./...`
+- Tight loop on the exact CI-failing tests did not reproduce a flake once the command shape matched CI and prewarm settings were correct.
+
+### Root cause and fix
+- The new standby compression recovery tests were unit-style tests but used `setupTestManager`, which pulls in much heavier integration-style manager setup than needed.
+- That extra setup was unnecessary for these tests and added avoidable load to an already heavy `lib/instances` package.
+- Fix:
+  - Added a lightweight `newSnapshotCompressionTestManager` helper in `lib/instances/snapshot_compression_test.go`
+  - Moved the new delayed-job and restart-recovery tests to that lightweight fixture
+  - Restored `t.Parallel()` on the new recovery tests and subtests
+- This keeps coverage and parallelism intact while removing needless setup cost.
+
+### Validation
+- Targeted stress loop after the fixture change:
+  - `go test -count=20 -run '^(TestRecoverPendingStandbyCompressionJobs|TestStartCompressionJobDelayedCancellationRecordsSkipped)$' ./lib/instances`
+  - Result: pass
+- Deft full fresh-cache CI-like runs after the fix:
+  - Run 1: pass (`lib/instances` 193.279s)
+  - Run 2: pass (`lib/instances` 261.633s)
+  - Run 3: pass (`lib/instances` 173.573s)
   - `exec-agent not ready for instance ... within 15s (last state: Initializing)`
 
 ### Additional flakes reproduced during Deft full-suite verification

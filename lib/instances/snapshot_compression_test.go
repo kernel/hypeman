@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/paths"
 	snapshotstore "github.com/kernel/hypeman/lib/snapshot"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -405,10 +406,22 @@ func assertCompressionJobCanceled(t *testing.T, mgr *manager, target *compressio
 	}, time.Second, 10*time.Millisecond)
 }
 
+func newSnapshotCompressionTestManager(t *testing.T) *manager {
+	t.Helper()
+
+	p := paths.New(t.TempDir())
+	return &manager{
+		paths:            p,
+		now:              time.Now,
+		compressionJobs:  make(map[string]*compressionJob),
+		stateSubscribers: newSubscribers(),
+	}
+}
+
 func TestStartCompressionJobDelayedCancellationRecordsSkipped(t *testing.T) {
 	t.Parallel()
 
-	mgr, _ := setupTestManager(t)
+	mgr := newSnapshotCompressionTestManager(t)
 	delay := 45 * time.Second
 	timer := newFakeCompressionTimer()
 	mgr.compressionTimerFactory = func(got time.Duration) compressionTimer {
@@ -455,7 +468,9 @@ func TestStartCompressionJobDelayedCancellationRecordsSkipped(t *testing.T) {
 }
 
 func TestRecoverPendingStandbyCompressionJobsRequeuesDelayedJob(t *testing.T) {
-	mgr, _ := setupTestManager(t)
+	t.Parallel()
+
+	mgr := newSnapshotCompressionTestManager(t)
 	now := time.Date(2026, time.April, 6, 12, 0, 0, 0, time.UTC)
 	mgr.now = func() time.Time { return now }
 
@@ -519,7 +534,9 @@ func TestRecoverPendingStandbyCompressionJobsRequeuesDelayedJob(t *testing.T) {
 }
 
 func TestRecoverPendingStandbyCompressionJobsStartsImmediateCompression(t *testing.T) {
-	mgr, _ := setupTestManager(t)
+	t.Parallel()
+
+	mgr := newSnapshotCompressionTestManager(t)
 	now := time.Date(2026, time.April, 6, 12, 5, 0, 0, time.UTC)
 	mgr.now = func() time.Time { return now }
 
@@ -565,6 +582,8 @@ func TestRecoverPendingStandbyCompressionJobsStartsImmediateCompression(t *testi
 }
 
 func TestRecoverPendingStandbyCompressionJobsClearsStalePlans(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name    string
 		prepare func(t *testing.T, mgr *manager, instanceID string, now time.Time)
@@ -622,7 +641,9 @@ func TestRecoverPendingStandbyCompressionJobsClearsStalePlans(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mgr, _ := setupTestManager(t)
+			t.Parallel()
+
+			mgr := newSnapshotCompressionTestManager(t)
 			now := time.Date(2026, time.April, 6, 12, 10, 0, 0, time.UTC)
 			mgr.now = func() time.Time { return now }
 			instanceID := "recover-stale-" + tt.name
