@@ -62,7 +62,7 @@ func (s integrationAutoStandbyStore) SetRuntime(ctx context.Context, id string, 
 }
 
 func (s integrationAutoStandbyStore) SubscribeInstanceEvents() (<-chan autostandby.InstanceEvent, func(), error) {
-	src, unsub := s.manager.SubscribeLifecycleEvents()
+	src, unsub := s.manager.SubscribeLifecycleEvents(LifecycleEventConsumerAutoStandby)
 	dst := make(chan autostandby.InstanceEvent, 16)
 	go func() {
 		defer close(dst)

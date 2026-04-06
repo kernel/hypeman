@@ -14,7 +14,7 @@ import (
 type autoStandbyRuntimeManager interface {
 	GetAutoStandbyRuntime(ctx context.Context, id string) (*autostandby.Runtime, error)
 	SetAutoStandbyRuntime(ctx context.Context, id string, runtime *autostandby.Runtime) error
-	SubscribeLifecycleEvents() (<-chan instances.LifecycleEvent, func())
+	SubscribeLifecycleEvents(consumer instances.LifecycleEventConsumer) (<-chan instances.LifecycleEvent, func())
 }
 
 type autoStandbyInstanceStore struct {
@@ -59,7 +59,7 @@ func (s autoStandbyInstanceStore) SetRuntime(ctx context.Context, id string, run
 }
 
 func (s autoStandbyInstanceStore) SubscribeInstanceEvents() (<-chan autostandby.InstanceEvent, func(), error) {
-	src, unsub := s.runtimeManager.SubscribeLifecycleEvents()
+	src, unsub := s.runtimeManager.SubscribeLifecycleEvents(instances.LifecycleEventConsumerAutoStandby)
 	dst := make(chan autostandby.InstanceEvent, 32)
 	go func() {
 		defer close(dst)
