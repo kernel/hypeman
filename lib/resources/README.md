@@ -1,12 +1,13 @@
 # Resource Management
 
-Host resource discovery, capacity tracking, and oversubscription-aware allocation management for CPU, memory, disk, and network.
+Host resource discovery, capacity tracking, oversubscription-aware allocation management, and burst-proof admission control for CPU, memory, disk, network, and disk I/O.
 
 ## Features
 
 - **Resource Discovery**: Automatically detects host capacity from `/proc/cpuinfo`, `/proc/meminfo`, filesystem stats, and network interface speed
 - **Oversubscription**: Configurable ratios per resource type (e.g., 2x CPU oversubscription)
 - **Allocation Tracking**: Tracks resource usage across all running instances
+- **Burst-Proof Admission**: In-flight create/start/restore operations reserve capacity before they become visible to normal allocation tracking
 - **Bidirectional Network Rate Limiting**: Separate download/upload limits with fair sharing
 - **API Endpoint**: `GET /resources` returns capacity, allocations, and per-instance breakdown
 
@@ -39,6 +40,7 @@ Host resource discovery, capacity tracking, and oversubscription-aware allocatio
 ### Disk
 - Discovered via `statfs()` on DataDir, or configured via `DISK_LIMIT`
 - Allocated = images (rootfs) + OCI cache + volumes + overlays (rootfs + volume)
+- Admission uses the same logical/provisioned disk model as `GET /resources` and `hypeman resources`
 - Image pulls blocked when <5GB available or image storage exceeds `MAX_IMAGE_STORAGE`
 
 ### Network
@@ -96,6 +98,33 @@ available = effective_limit - allocated
 ```
 
 For example, with 64 CPUs and `OVERSUB_CPU=2.0`, up to 128 vCPUs can be allocated across instances.
+
+## Admission Reservations
+
+Resource accounting uses two views of allocation:
+
+- **Visible allocation**: what `GetStatus`, `/resources`, metrics, `hypeman resources`, and admission checks use from the current instance/image/volume state
+- **Pending allocation**: temporary in-memory reservations for in-flight `create`, `start`, and `restore` operations
+
+When Hypeman checks admission, it computes:
+
+```text
+admission_allocated = visible_allocated + pending_allocated
+admission_available = effective_limit - admission_allocated
+```
+
+This prevents burst oversubscription: if one lifecycle operation reserves capacity first, the next one sees that reservation immediately even before the first VM is fully visible in normal allocation tracking.
+
+Important behavior:
+
+- Pending reservations affect **admission only**
+- `GetStatus`, `/resources`, and metrics continue to show **visible allocation only**
+- The resource-manager lock only covers reservation bookkeeping and validation
+- VM boot, restore, guest-agent waits, and other slow lifecycle steps happen **outside** that lock
+
+### Hot-Path Note
+
+Visible allocation is optimized around one conservative cached instance-allocation view plus cached image, OCI cache, and volume totals. Those caches are warmed at startup and then updated when lifecycle or storage state changes. Admission validation reads that visible usage once per reservation and combines it with O(1) pending totals. This keeps both `hypeman resources` and the admission hot path fast without live hypervisor queries or repeated full filesystem scans on each request.
 
 ## API Response
 

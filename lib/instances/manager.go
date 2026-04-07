@@ -96,7 +96,12 @@ type ResourceValidator interface {
 	// ValidateAllocation checks if the requested resources are available.
 	// Returns nil if allocation is allowed, or a detailed error describing
 	// which resource is insufficient and the current capacity/usage.
-	ValidateAllocation(ctx context.Context, vcpus int, memoryBytes int64, networkDownloadBps int64, networkUploadBps int64, diskIOBps int64, needsGPU bool) error
+	ValidateAllocation(ctx context.Context, vcpus int, memoryBytes int64, networkDownloadBps int64, networkUploadBps int64, diskIOBps int64, diskBytes int64, needsGPU bool) error
+	// ReserveAllocation tentatively reserves resources for an in-flight operation.
+	// Call FinishAllocation once the operation fails or becomes visible to resource accounting.
+	ReserveAllocation(ctx context.Context, instanceID string, vcpus int, memoryBytes int64, networkDownloadBps int64, networkUploadBps int64, diskIOBps int64, diskBytes int64, needsGPU bool) error
+	// FinishAllocation removes any pending reservation for the given instance ID.
+	FinishAllocation(instanceID string)
 }
 
 type manager struct {
@@ -129,6 +134,12 @@ type manager struct {
 
 	// Shared lifecycle event subscriptions for internal consumers.
 	lifecycleEvents *lifecycleSubscribers
+
+	// Cached conservative allocation view for fast admission control.
+	admissionAllocationsMu     sync.RWMutex
+	admissionAllocations       map[string]resources.InstanceAllocation
+	admissionAllocationsLoaded bool
+	admissionReconcileOnce     sync.Once
 
 	// Hypervisor support
 	vmStarters        map[hypervisor.Type]hypervisor.VMStarter
@@ -586,50 +597,6 @@ func (m *manager) AttachVolume(ctx context.Context, id string, volumeId string, 
 // DetachVolume detaches a volume from an instance (not yet implemented)
 func (m *manager) DetachVolume(ctx context.Context, id string, volumeId string) (*Instance, error) {
 	return nil, fmt.Errorf("detach volume not yet implemented")
-}
-
-// ListInstanceAllocations returns resource allocations for all instances.
-// Used by the resource manager for capacity tracking.
-func (m *manager) ListInstanceAllocations(ctx context.Context) ([]resources.InstanceAllocation, error) {
-	instances, err := m.listInstances(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	allocations := make([]resources.InstanceAllocation, 0, len(instances))
-	for _, inst := range instances {
-		// Calculate volume bytes and volume overlay bytes separately
-		var volumeBytes int64
-		var volumeOverlayBytes int64
-		for _, vol := range inst.Volumes {
-			// Get actual volume size from volume manager
-			if m.volumeManager != nil {
-				if volume, err := m.volumeManager.GetVolume(ctx, vol.VolumeID); err == nil {
-					volumeBytes += int64(volume.SizeGb) * 1024 * 1024 * 1024
-				}
-			}
-			// Track overlay size separately for overlay volumes
-			if vol.Overlay {
-				volumeOverlayBytes += vol.OverlaySize
-			}
-		}
-
-		allocations = append(allocations, resources.InstanceAllocation{
-			ID:                 inst.Id,
-			Name:               inst.Name,
-			Vcpus:              inst.Vcpus,
-			MemoryBytes:        inst.Size + inst.HotplugSize,
-			OverlayBytes:       inst.OverlaySize,
-			VolumeOverlayBytes: volumeOverlayBytes,
-			NetworkDownloadBps: inst.NetworkBandwidthDownload,
-			NetworkUploadBps:   inst.NetworkBandwidthUpload,
-			DiskIOBps:          inst.DiskIOBps,
-			State:              string(inst.State),
-			VolumeBytes:        volumeBytes,
-		})
-	}
-
-	return allocations, nil
 }
 
 // ListRunningInstancesInfo returns info needed for utilization metrics collection.

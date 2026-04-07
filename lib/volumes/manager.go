@@ -44,6 +44,9 @@ type manager struct {
 	paths                 *paths.Paths
 	maxTotalVolumeStorage int64    // Maximum total volume storage in bytes (0 = unlimited)
 	volumeLocks           sync.Map // map[string]*sync.RWMutex - per-volume locks
+	totalsMu              sync.RWMutex
+	totalVolumeBytes      int64
+	totalVolumeBytesReady bool
 	metrics               *Metrics
 }
 
@@ -108,6 +111,49 @@ func (m *manager) calculateTotalVolumeStorage(ctx context.Context) (int64, error
 	return totalBytes, nil
 }
 
+func (m *manager) getTotalVolumeBytes(ctx context.Context) (int64, error) {
+	m.totalsMu.RLock()
+	if m.totalVolumeBytesReady {
+		total := m.totalVolumeBytes
+		m.totalsMu.RUnlock()
+		return total, nil
+	}
+	m.totalsMu.RUnlock()
+
+	total, err := m.calculateTotalVolumeStorage(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	m.totalsMu.Lock()
+	if !m.totalVolumeBytesReady {
+		m.totalVolumeBytes = total
+		m.totalVolumeBytesReady = true
+	}
+	total = m.totalVolumeBytes
+	m.totalsMu.Unlock()
+
+	return total, nil
+}
+
+func (m *manager) addVolumeBytes(sizeBytes int64) {
+	m.totalsMu.Lock()
+	defer m.totalsMu.Unlock()
+	if !m.totalVolumeBytesReady {
+		return
+	}
+	m.totalVolumeBytes += sizeBytes
+}
+
+func (m *manager) subtractVolumeBytes(sizeBytes int64) {
+	m.totalsMu.Lock()
+	defer m.totalsMu.Unlock()
+	if !m.totalVolumeBytesReady {
+		return
+	}
+	m.totalVolumeBytes -= sizeBytes
+}
+
 // CreateVolume creates a new volume
 func (m *manager) CreateVolume(ctx context.Context, req CreateVolumeRequest) (*Volume, error) {
 	start := time.Now()
@@ -128,7 +174,7 @@ func (m *manager) CreateVolume(ctx context.Context, req CreateVolumeRequest) (*V
 
 	// Check total volume storage limit
 	if m.maxTotalVolumeStorage > 0 {
-		currentStorage, err := m.calculateTotalVolumeStorage(ctx)
+		currentStorage, err := m.getTotalVolumeBytes(ctx)
 		if err != nil {
 			// Log but don't fail - continue with creation
 			// (better to allow creation than block due to listing error)
@@ -169,6 +215,8 @@ func (m *manager) CreateVolume(ctx context.Context, req CreateVolumeRequest) (*V
 		return nil, err
 	}
 
+	m.addVolumeBytes(int64(req.SizeGb) * 1024 * 1024 * 1024)
+
 	m.recordCreateDuration(ctx, start, "success")
 	return m.metadataToVolume(meta), nil
 }
@@ -196,7 +244,7 @@ func (m *manager) CreateVolumeFromArchive(ctx context.Context, req CreateVolumeF
 
 	// Check total volume storage limit
 	if m.maxTotalVolumeStorage > 0 {
-		currentStorage, err := m.calculateTotalVolumeStorage(ctx)
+		currentStorage, err := m.getTotalVolumeBytes(ctx)
 		if err != nil {
 			// Log but don't fail - continue with creation
 		} else {
@@ -253,6 +301,8 @@ func (m *manager) CreateVolumeFromArchive(ctx context.Context, req CreateVolumeF
 		deleteVolumeData(m.paths, id)
 		return nil, err
 	}
+
+	m.addVolumeBytes(int64(actualSizeGb) * 1024 * 1024 * 1024)
 
 	m.recordCreateDuration(ctx, start, "success")
 	return m.metadataToVolume(meta), nil
@@ -318,6 +368,8 @@ func (m *manager) DeleteVolume(ctx context.Context, id string) error {
 	if err := deleteVolumeData(m.paths, id); err != nil {
 		return err
 	}
+
+	m.subtractVolumeBytes(int64(meta.SizeGb) * 1024 * 1024 * 1024)
 
 	// Clean up lock
 	m.volumeLocks.Delete(id)
@@ -408,7 +460,7 @@ func (m *manager) GetVolumePath(id string) string {
 
 // TotalVolumeBytes returns the total size of all volumes.
 func (m *manager) TotalVolumeBytes(ctx context.Context) (int64, error) {
-	return m.calculateTotalVolumeStorage(ctx)
+	return m.getTotalVolumeBytes(ctx)
 }
 
 // metadataToVolume converts stored metadata to a Volume struct

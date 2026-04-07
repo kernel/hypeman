@@ -25,6 +25,9 @@ func TestDefaultConfigIncludesMetricsSettings(t *testing.T) {
 	if cfg.Metrics.ResourceRefreshInterval != "120s" {
 		t.Fatalf("expected default metrics.resource_refresh_interval to be 120s, got %q", cfg.Metrics.ResourceRefreshInterval)
 	}
+	if cfg.Metrics.AllocationReconcileInterval != "120s" {
+		t.Fatalf("expected default metrics.allocation_reconcile_interval to be 120s, got %q", cfg.Metrics.AllocationReconcileInterval)
+	}
 	if cfg.Otel.MetricExportInterval != "60s" {
 		t.Fatalf("expected default otel.metric_export_interval to be 60s, got %q", cfg.Otel.MetricExportInterval)
 	}
@@ -50,6 +53,7 @@ func TestLoadEnvOverridesMetricsAndOtelInterval(t *testing.T) {
 	t.Setenv("METRICS__PORT", "9999")
 	t.Setenv("METRICS__VM_LABEL_BUDGET", "350")
 	t.Setenv("METRICS__RESOURCE_REFRESH_INTERVAL", "30s")
+	t.Setenv("METRICS__ALLOCATION_RECONCILE_INTERVAL", "45s")
 	t.Setenv("OTEL__METRIC_EXPORT_INTERVAL", "15s")
 	t.Setenv("OTEL__SUCCESSFUL_GET_SAMPLE_RATIO", "0.25")
 	t.Setenv("INSTANCES__LIFECYCLE_EVENT_BUFFER_SIZE", "512")
@@ -76,6 +80,9 @@ func TestLoadEnvOverridesMetricsAndOtelInterval(t *testing.T) {
 	}
 	if cfg.Metrics.ResourceRefreshInterval != "30s" {
 		t.Fatalf("expected metrics.resource_refresh_interval override, got %q", cfg.Metrics.ResourceRefreshInterval)
+	}
+	if cfg.Metrics.AllocationReconcileInterval != "45s" {
+		t.Fatalf("expected metrics.allocation_reconcile_interval override, got %q", cfg.Metrics.AllocationReconcileInterval)
 	}
 	if cfg.Otel.MetricExportInterval != "15s" {
 		t.Fatalf("expected otel.metric_export_interval override, got %q", cfg.Otel.MetricExportInterval)
@@ -151,6 +158,32 @@ func TestValidateRejectsInvalidResourceRefreshInterval(t *testing.T) {
 	err = cfg.Validate()
 	if err == nil {
 		t.Fatalf("expected validation error for non-positive resource refresh interval")
+	}
+}
+
+func TestValidateRejectsInvalidAllocationReconcileInterval(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Metrics.AllocationReconcileInterval = ""
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatalf("expected validation error for empty allocation reconcile interval")
+	}
+
+	cfg = defaultConfig()
+	cfg.Metrics.AllocationReconcileInterval = "not-a-duration"
+
+	err = cfg.Validate()
+	if err == nil {
+		t.Fatalf("expected validation error for invalid allocation reconcile interval")
+	}
+
+	cfg = defaultConfig()
+	cfg.Metrics.AllocationReconcileInterval = "0s"
+
+	err = cfg.Validate()
+	if err == nil {
+		t.Fatalf("expected validation error for non-positive allocation reconcile interval")
 	}
 }
 

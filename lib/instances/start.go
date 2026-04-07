@@ -61,13 +61,21 @@ func (m *manager) startInstance(
 	}
 
 	// 2b. Validate aggregate resource limits before allocating resources (if configured)
+	reservedResources := false
 	if m.resourceValidator != nil {
 		needsGPU := stored.GPUProfile != ""
 		totalMemory := stored.Size + stored.HotplugSize
-		if err := m.resourceValidator.ValidateAllocation(ctx, stored.Vcpus, totalMemory, stored.NetworkBandwidthDownload, stored.NetworkBandwidthUpload, stored.DiskIOBps, needsGPU); err != nil {
-			log.ErrorContext(ctx, "resource validation failed for start", "instance_id", id, "error", err)
+		diskBytes := storedDiskReservationBytes(stored)
+		if err := m.resourceValidator.ReserveAllocation(ctx, id, stored.Vcpus, totalMemory, stored.NetworkBandwidthDownload, stored.NetworkBandwidthUpload, stored.DiskIOBps, diskBytes, needsGPU); err != nil {
+			log.ErrorContext(ctx, "resource reservation failed for start", "instance_id", id, "error", err)
 			return nil, fmt.Errorf("%w: %v", ErrInsufficientResources, err)
 		}
+		reservedResources = true
+		defer func() {
+			if reservedResources {
+				m.resourceValidator.FinishAllocation(id)
+			}
+		}()
 	}
 
 	// 3. Get image info (needed for buildHypervisorConfig)
@@ -188,6 +196,15 @@ func (m *manager) startInstance(
 		return nil, err
 	}
 	startVMSpanEnd(nil)
+	// Mark the instance visible before releasing its pending reservation so we
+	// never create an undercount window. The tiny overlap is intentionally
+	// over-conservative: concurrent admissions may briefly see both visible and
+	// pending usage for this instance, but they will not oversubscribe the host.
+	m.setAdmissionAllocationActive(stored, true)
+	if reservedResources {
+		m.resourceValidator.FinishAllocation(id)
+		reservedResources = false
+	}
 
 	// Success - release cleanup stack (prevent cleanup)
 	cu.Release()
