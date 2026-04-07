@@ -455,6 +455,86 @@ func TestRunDegradesWhenStartupResyncFails(t *testing.T) {
 	require.Equal(t, ReasonObserverError, status.Reason)
 }
 
+func TestHandleStandbyTimerCallsStandbyAndClearsState(t *testing.T) {
+	t.Parallel()
+
+	idleSince := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
+	store := newFakeInstanceStore([]Instance{{
+		ID:             "inst-standby",
+		Name:           "inst-standby",
+		State:          StateRunning,
+		NetworkEnabled: true,
+		IP:             "192.168.100.61",
+		AutoStandby:    &Policy{Enabled: true, IdleTimeout: "1m"},
+		Runtime: &Runtime{
+			IdleSince: &idleSince,
+		},
+	}})
+	controller := NewController(store, &fakeConnectionSource{}, ControllerOptions{
+		Now: func() time.Time { return idleSince.Add(time.Minute) },
+	})
+
+	require.NoError(t, controller.startupResync(context.Background()))
+
+	controller.handleStandbyTimer(context.Background(), "inst-standby")
+
+	require.Equal(t, []string{"inst-standby"}, store.standbyIDs)
+	require.Nil(t, store.persistedRuntime["inst-standby"])
+
+	controller.mu.RLock()
+	state := controller.states["inst-standby"]
+	require.NotNil(t, state)
+	assert.Nil(t, state.compiledPolicy)
+	assert.Nil(t, state.activeInbound)
+	assert.Nil(t, state.idleSince)
+	assert.Nil(t, state.lastInboundAt)
+	assert.Nil(t, state.nextStandbyAt)
+	assert.False(t, state.standbyRequested)
+	controller.mu.RUnlock()
+}
+
+func TestHandleStandbyTimerFailureRearmsIdleCountdown(t *testing.T) {
+	t.Parallel()
+
+	idleSince := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
+	now := idleSince.Add(time.Minute)
+	store := newFakeInstanceStore([]Instance{{
+		ID:             "inst-standby-fail",
+		Name:           "inst-standby-fail",
+		State:          StateRunning,
+		NetworkEnabled: true,
+		IP:             "192.168.100.62",
+		AutoStandby:    &Policy{Enabled: true, IdleTimeout: "1m"},
+		Runtime: &Runtime{
+			IdleSince: &idleSince,
+		},
+	}})
+	store.standbyErr = errors.New("standby failed")
+	controller := NewController(store, &fakeConnectionSource{}, ControllerOptions{
+		Now: func() time.Time { return now },
+	})
+
+	require.NoError(t, controller.startupResync(context.Background()))
+
+	controller.handleStandbyTimer(context.Background(), "inst-standby-fail")
+
+	require.Equal(t, []string{"inst-standby-fail"}, store.standbyIDs)
+	require.NotNil(t, store.persistedRuntime["inst-standby-fail"])
+	require.NotNil(t, store.persistedRuntime["inst-standby-fail"].IdleSince)
+	assert.Equal(t, now, *store.persistedRuntime["inst-standby-fail"].IdleSince)
+
+	controller.mu.RLock()
+	state := controller.states["inst-standby-fail"]
+	require.NotNil(t, state)
+	assert.NotNil(t, state.compiledPolicy)
+	assert.False(t, state.standbyRequested)
+	assert.NotNil(t, state.idleSince)
+	assert.Equal(t, now, *state.idleSince)
+	require.NotNil(t, state.nextStandbyAt)
+	assert.Equal(t, now.Add(time.Minute), *state.nextStandbyAt)
+	controller.mu.RUnlock()
+}
+
 func mustAddr(raw string) netip.Addr {
 	return netip.MustParseAddr(raw)
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/kernel/hypeman/lib/autostandby"
 	"github.com/kernel/hypeman/lib/egressproxy"
@@ -238,4 +239,52 @@ func TestApplyUpdatedInstanceEnvSavesAutoStandbyAlongsideEnvWithoutMutatingOrigi
 	assert.False(t, original.AutoStandby.Enabled)
 	assert.Equal(t, "5m0s", original.AutoStandby.IdleTimeout)
 	assert.Equal(t, map[string]string{"OUTBOUND_OPENAI_KEY": "old"}, original.Env)
+}
+
+func TestManagerUpdateInstanceAutoStandbyOnlyPublishesLifecycleUpdate(t *testing.T) {
+	t.Parallel()
+
+	manager, _ := setupTestManager(t)
+	id := "inst-auto-standby-update"
+	require.NoError(t, manager.ensureDirectories(id))
+	meta := &metadata{
+		StoredMetadata: StoredMetadata{
+			Id:         id,
+			Name:       id,
+			CreatedAt:  time.Now(),
+			DataDir:    manager.paths.InstanceDir(id),
+			SocketPath: manager.paths.InstanceSocket(id, "cloud-hypervisor.sock"),
+			AutoStandby: &autostandby.Policy{
+				Enabled:     false,
+				IdleTimeout: "5m0s",
+			},
+		},
+	}
+	require.NoError(t, manager.saveMetadata(meta))
+
+	events, unsubscribe := manager.SubscribeLifecycleEvents(LifecycleEventConsumerAutoStandby)
+	defer unsubscribe()
+
+	updated, err := manager.UpdateInstance(context.Background(), id, UpdateInstanceRequest{
+		AutoStandby: &autostandby.Policy{
+			Enabled:     true,
+			IdleTimeout: "10m",
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	require.NotNil(t, updated.AutoStandby)
+	assert.True(t, updated.AutoStandby.Enabled)
+
+	select {
+	case event := <-events:
+		assert.Equal(t, LifecycleEventUpdate, event.Action)
+		assert.Equal(t, id, event.InstanceID)
+		require.NotNil(t, event.Instance)
+		require.NotNil(t, event.Instance.AutoStandby)
+		assert.True(t, event.Instance.AutoStandby.Enabled)
+		assert.Equal(t, "10m0s", event.Instance.AutoStandby.IdleTimeout)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for lifecycle update event")
+	}
 }
