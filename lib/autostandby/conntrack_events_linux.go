@@ -19,6 +19,7 @@ import (
 type conntrackStream struct {
 	fd        int
 	closeOnce sync.Once
+	done      chan struct{}
 	events    chan ConnectionEvent
 	errs      chan error
 }
@@ -52,6 +53,7 @@ func (s *ConntrackSource) OpenStream(ctx context.Context) (ConnectionStream, err
 
 	stream := &conntrackStream{
 		fd:     fd,
+		done:   make(chan struct{}),
 		events: make(chan ConnectionEvent, 256),
 		errs:   make(chan error, 16),
 	}
@@ -66,6 +68,7 @@ func (s *conntrackStream) Errors() <-chan error { return s.errs }
 func (s *conntrackStream) Close() error {
 	var err error
 	s.closeOnce.Do(func() {
+		close(s.done)
 		err = unix.Close(s.fd)
 	})
 	return err
@@ -76,8 +79,11 @@ func (s *conntrackStream) run(ctx context.Context) {
 	defer close(s.errs)
 
 	go func() {
-		<-ctx.Done()
-		_ = s.Close()
+		select {
+		case <-ctx.Done():
+			_ = s.Close()
+		case <-s.done:
+		}
 	}()
 
 	buf := make([]byte, 1<<20)

@@ -13,6 +13,28 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+func TestConntrackStreamCloseSignalsDone(t *testing.T) {
+	t.Parallel()
+
+	fd, err := unix.Socket(unix.AF_UNIX, unix.SOCK_DGRAM, 0)
+	require.NoError(t, err)
+
+	stream := &conntrackStream{
+		fd:     fd,
+		done:   make(chan struct{}),
+		events: make(chan ConnectionEvent),
+		errs:   make(chan error),
+	}
+
+	require.NoError(t, stream.Close())
+
+	select {
+	case <-stream.done:
+	default:
+		t.Fatal("expected Close to signal stream shutdown")
+	}
+}
+
 func TestConnectionEventFromNetlinkMessageParsesIPv4TCPEvent(t *testing.T) {
 	t.Parallel()
 

@@ -17,6 +17,7 @@ type fakeInstanceStore struct {
 	persistedRuntime map[string]*Runtime
 	events           chan InstanceEvent
 	standbyErr       error
+	listErr          error
 }
 
 func newFakeInstanceStore(instances []Instance) *fakeInstanceStore {
@@ -28,6 +29,9 @@ func newFakeInstanceStore(instances []Instance) *fakeInstanceStore {
 }
 
 func (f *fakeInstanceStore) ListInstances(context.Context) ([]Instance, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
 	out := make([]Instance, 0, len(f.instances))
 	for _, inst := range f.instances {
 		out = append(out, cloneInstance(inst))
@@ -56,13 +60,21 @@ func (f *fakeInstanceStore) SubscribeInstanceEvents() (<-chan InstanceEvent, fun
 
 type fakeConnectionSource struct {
 	connections []Connection
+	listErr     error
+	openErr     error
 }
 
 func (f *fakeConnectionSource) ListConnections(context.Context) ([]Connection, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
 	return append([]Connection(nil), f.connections...), nil
 }
 
 func (f *fakeConnectionSource) OpenStream(context.Context) (ConnectionStream, error) {
+	if f.openErr != nil {
+		return nil, f.openErr
+	}
 	return &fakeConnectionStream{
 		events: make(chan ConnectionEvent),
 		errs:   make(chan error),
@@ -399,6 +411,44 @@ func TestStatusReportsObserverError(t *testing.T) {
 	}})
 	controller := NewController(store, &fakeConnectionSource{}, ControllerOptions{})
 	controller.setObserverError(errors.New("boom"))
+
+	status := controller.Describe(store.instances[0])
+	require.Equal(t, StatusError, status.Status)
+	require.Equal(t, ReasonObserverError, status.Reason)
+}
+
+func TestRunDegradesWhenStartupResyncFails(t *testing.T) {
+	t.Parallel()
+
+	store := newFakeInstanceStore([]Instance{{
+		ID:             "inst-err",
+		Name:           "inst-err",
+		State:          StateRunning,
+		NetworkEnabled: true,
+		IP:             "192.168.100.60",
+		AutoStandby:    &Policy{Enabled: true, IdleTimeout: "1m"},
+	}})
+	source := &fakeConnectionSource{
+		listErr: errors.New("conntrack permission denied"),
+	}
+	controller := NewController(store, source, ControllerOptions{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- controller.Run(ctx)
+	}()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err, "controller should wait for cancellation instead of exiting on startup resync failure")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	cancel()
+	require.NoError(t, <-done)
 
 	status := controller.Describe(store.instances[0])
 	require.Equal(t, StatusError, status.Status)

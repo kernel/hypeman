@@ -186,7 +186,8 @@ func (c *Controller) Run(ctx context.Context) error {
 	}
 
 	if err := c.startupResync(ctx); err != nil {
-		return err
+		c.recordControllerError("startup_resync")
+		c.log.Warn("auto-standby startup resync failed", "error", err)
 	}
 
 	instanceEvents, unsubscribe, err := c.store.SubscribeInstanceEvents()
@@ -399,6 +400,8 @@ func (c *Controller) startupResync(ctx context.Context) error {
 	}
 	conns, err := c.source.ListConnections(ctx)
 	if err != nil {
+		c.setObserverError(err)
+		c.recordObserverError("startup_resync")
 		c.recordStartupResync(start, "error")
 		recordSpanError(span, err)
 		return err
