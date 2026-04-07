@@ -53,7 +53,8 @@ func TestConnectionEventFromNetlinkMessageParsesNativeEndianNLMSGError(t *testin
 	t.Parallel()
 
 	data := make([]byte, 4)
-	nl.NativeEndian().PutUint32(data, uint32(int32(-unix.EPERM)))
+	errno := int32(-int(unix.EPERM))
+	nl.NativeEndian().PutUint32(data, uint32(errno))
 
 	_, ok, err := connectionEventFromNetlinkMessage(syscall.NetlinkMessage{
 		Header: syscall.NlMsghdr{Type: unix.NLMSG_ERROR},
