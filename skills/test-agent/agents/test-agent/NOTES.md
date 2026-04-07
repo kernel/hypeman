@@ -259,6 +259,41 @@
   - Run 1: pass (`lib/instances` 193.279s)
   - Run 2: pass (`lib/instances` 261.633s)
   - Run 3: pass (`lib/instances` 173.573s)
+
+## 2026-04-07 - PR #184 follow-up CI round on `codex/standby-compression-delay`
+
+### Initial CI red signature
+- Linux `test` job failed on `TestDockerForwardChainRestored`.
+- Failure:
+  - `ensureDockerForwardJump should have restored the DOCKER-FORWARD jump`
+  - raw `iptables -C FORWARD -j DOCKER-FORWARD` exited non-zero in the test after re-initialization.
+
+### Root cause and fix
+- The Docker-forward recovery path and the test both used plain `iptables` invocations with no wait for the xtables lock.
+- Under parallel CI activity, a transient lock holder can cause checks/deletes/inserts to fail immediately and make the test observe a missing rule even though the recovery logic is otherwise correct.
+- Fix:
+  - Added a small `newIPTablesCommand` helper in `lib/network/bridge_linux.go` that uses `iptables -w 5 ...` with the existing `CAP_NET_ADMIN` setup.
+  - Switched the bridge NAT/FORWARD rule management and `ensureDockerForwardJump` commands to that helper.
+  - Updated `TestDockerForwardChainRestored` in `lib/instances/network_test.go` to use `iptables -w 5` for its direct host-global mutations/checks.
+
+### Secondary flake surfaced during Deft reruns
+- A subsequent Deft full-suite rerun exposed a post-restore guest exec race in `TestCloudHypervisorStandbyRestoreCompressionScenarios`:
+  - `receive response (stdout=0, stderr=0): rpc error: code = DeadlineExceeded desc = stream terminated by RST_STREAM with error code: CANCEL`
+- The compression integration harness was only waiting for the exec agent socket and then issuing marker reads/writes immediately after restore.
+- Fix:
+  - Added a no-op post-restore guest exec readiness probe in `waitForRunningAndExecReady`.
+  - Added a small retry wrapper for the compression integration test’s guest marker read/write commands so transient post-restore transport resets do not fail the scenario immediately.
+
+### Validation
+- Deft targeted loop:
+  - `go test -count=20 -run '^TestDockerForwardChainRestored$' -v ./lib/instances`
+  - Result: pass
+- Deft targeted loop:
+  - `go test -count=10 -run '^TestCloudHypervisorStandbyRestoreCompressionScenarios$' -tags containers_image_openpgp -timeout=30m ./lib/instances`
+  - Result: pass
+- Local sanity:
+  - `go test ./lib/instances -count=1`
+  - Result: pass (`117.538s`)
   - `exec-agent not ready for instance ... within 15s (last state: Initializing)`
 
 ### Additional flakes reproduced during Deft full-suite verification

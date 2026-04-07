@@ -258,28 +258,62 @@ func waitForRunningAndExecReady(t *testing.T, ctx context.Context, mgr *manager,
 		require.NoError(t, waitHypervisorUp(ctx, inst))
 	}
 	require.NoError(t, waitForExecAgent(ctx, mgr, instanceID, 30*time.Second))
+	waitForGuestExecReady(t, ctx, inst)
 	return inst
+}
+
+func waitForGuestExecReady(t *testing.T, ctx context.Context, inst *Instance) {
+	t.Helper()
+
+	require.Eventually(t, func() bool {
+		execCtx, cancel := context.WithTimeout(ctx, integrationTestTimeout(5*time.Second))
+		defer cancel()
+
+		output, exitCode, err := execCommand(execCtx, inst, "true")
+		return err == nil && exitCode == 0 && output == ""
+	}, integrationTestTimeout(15*time.Second), 500*time.Millisecond, "guest exec should succeed after restore")
 }
 
 func writeGuestMarker(t *testing.T, ctx context.Context, inst *Instance, path string, value string) {
 	t.Helper()
-	execCtx, cancel := context.WithTimeout(ctx, integrationTestTimeout(compressionGuestExecTimeout))
-	defer cancel()
-
-	output, exitCode, err := execCommand(execCtx, inst, "sh", "-c", fmt.Sprintf("printf %q > %s && sync", value, path))
+	output, exitCode, err := execCommandWithRetry(ctx, inst, compressionGuestExecTimeout, "sh", "-c", fmt.Sprintf("printf %q > %s && sync", value, path))
 	require.NoError(t, err)
 	require.Equal(t, 0, exitCode, output)
 }
 
 func assertGuestMarker(t *testing.T, ctx context.Context, inst *Instance, path string, expected string) {
 	t.Helper()
-	execCtx, cancel := context.WithTimeout(ctx, integrationTestTimeout(compressionGuestExecTimeout))
-	defer cancel()
-
-	output, exitCode, err := execCommand(execCtx, inst, "cat", path)
+	output, exitCode, err := execCommandWithRetry(ctx, inst, compressionGuestExecTimeout, "cat", path)
 	require.NoError(t, err)
 	require.Equal(t, 0, exitCode, output)
 	assert.Equal(t, expected, output)
+}
+
+func execCommandWithRetry(ctx context.Context, inst *Instance, timeout time.Duration, command ...string) (string, int, error) {
+	deadline := time.Now().Add(integrationTestTimeout(timeout))
+	var lastOutput string
+	var lastExitCode int
+	var lastErr error
+
+	for {
+		execCtx, cancel := context.WithTimeout(ctx, integrationTestTimeout(5*time.Second))
+		output, exitCode, err := execCommand(execCtx, inst, command...)
+		cancel()
+
+		if err == nil {
+			return output, exitCode, nil
+		}
+
+		lastOutput = output
+		lastExitCode = exitCode
+		lastErr = err
+
+		if time.Now().After(deadline) {
+			return lastOutput, lastExitCode, lastErr
+		}
+
+		time.Sleep(500 * time.Millisecond)
+	}
 }
 
 func waitForCompressionJobStart(t *testing.T, mgr *manager, key string, timeout time.Duration) {
