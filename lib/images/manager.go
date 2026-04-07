@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/kernel/hypeman/lib/tags"
 	"go.opentelemetry.io/otel/metric"
@@ -55,6 +54,10 @@ type manager struct {
 	ociClient        *ociClient
 	queue            *BuildQueue
 	createMu         sync.Mutex
+	diskUsageMu      sync.RWMutex
+	diskUsageLoaded  bool
+	readyImageBytes  int64
+	ociCacheBytes    int64
 	metrics          *Metrics
 	readySubscribers map[string][]chan StatusEvent // keyed by digestHex
 	subscriberMu     sync.RWMutex
@@ -319,6 +322,8 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef) {
 		}
 	}
 
+	m.refreshDiskUsageTotals()
+
 	m.recordBuildMetrics(ctx, buildStart, "success")
 }
 
@@ -438,7 +443,11 @@ func (m *manager) DeleteImage(ctx context.Context, name string) error {
 		if err := deleteTagsForDigest(m.paths, repository, digestHex); err != nil {
 			return err
 		}
-		return deleteDigest(m.paths, repository, digestHex)
+		if err := deleteDigest(m.paths, repository, digestHex); err != nil {
+			return err
+		}
+		m.refreshDiskUsageTotals()
+		return nil
 	}
 
 	tag := ref.Tag()
@@ -467,6 +476,7 @@ func (m *manager) DeleteImage(ctx context.Context, name string) error {
 			fmt.Fprintf(os.Stderr, "Warning: failed to delete orphaned digest %s: %v\n", digestHex, err)
 			return nil
 		}
+		m.refreshDiskUsageTotals()
 	}
 
 	return nil
@@ -474,75 +484,20 @@ func (m *manager) DeleteImage(ctx context.Context, name string) error {
 
 // TotalImageBytes returns the total size of all ready images on disk.
 func (m *manager) TotalImageBytes(ctx context.Context) (int64, error) {
-	images, err := m.ListImages(ctx)
+	readyImageBytes, _, err := m.getDiskUsageTotals()
 	if err != nil {
 		return 0, err
 	}
-
-	var total int64
-	for _, img := range images {
-		if img.Status == StatusReady && img.SizeBytes != nil {
-			total += *img.SizeBytes
-		}
-	}
-	return total, nil
+	return readyImageBytes, nil
 }
 
 // TotalOCICacheBytes returns the total size of the OCI layer cache.
-// Uses OCI layout metadata instead of walking the filesystem for efficiency.
 func (m *manager) TotalOCICacheBytes(ctx context.Context) (int64, error) {
-	path, err := layout.FromPath(m.paths.SystemOCICache())
+	_, ociCacheBytes, err := m.getDiskUsageTotals()
 	if err != nil {
-		return 0, nil // No cache yet
+		return 0, err
 	}
-
-	index, err := path.ImageIndex()
-	if err != nil {
-		return 0, nil // Empty or invalid cache
-	}
-
-	manifest, err := index.IndexManifest()
-	if err != nil {
-		return 0, nil
-	}
-
-	// Collect unique blob digests and sizes (layers are shared/deduplicated)
-	blobSizes := make(map[string]int64)
-
-	for _, desc := range manifest.Manifests {
-		// Count the manifest blob itself
-		blobSizes[desc.Digest.String()] = desc.Size
-
-		// Get image to access layers and config
-		img, err := path.Image(desc.Digest)
-		if err != nil {
-			continue
-		}
-
-		// Count config blob
-		if configDigest, err := img.ConfigName(); err == nil {
-			if configFile, err := img.RawConfigFile(); err == nil {
-				blobSizes[configDigest.String()] = int64(len(configFile))
-			}
-		}
-
-		// Count layer blobs
-		if layers, err := img.Layers(); err == nil {
-			for _, layer := range layers {
-				if digest, err := layer.Digest(); err == nil {
-					if size, err := layer.Size(); err == nil {
-						blobSizes[digest.String()] = size
-					}
-				}
-			}
-		}
-	}
-
-	var total int64
-	for _, size := range blobSizes {
-		total += size
-	}
-	return total, nil
+	return ociCacheBytes, nil
 }
 
 // WaitForReady blocks until the image reaches a terminal state (ready or failed)

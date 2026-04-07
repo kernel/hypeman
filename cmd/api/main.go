@@ -183,8 +183,17 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("invalid metrics resource refresh interval %q: %w", app.Config.Metrics.ResourceRefreshInterval, err)
 	}
+	allocationReconcileInterval, err := time.ParseDuration(app.Config.Metrics.AllocationReconcileInterval)
+	if err != nil {
+		return fmt.Errorf("invalid metrics allocation reconcile interval %q: %w", app.Config.Metrics.AllocationReconcileInterval, err)
+	}
 	if err := app.ResourceManager.StartMonitoring(ctx, otelProvider.Meter, resourceRefreshInterval); err != nil {
 		return fmt.Errorf("start resource monitoring: %w", err)
+	}
+	if reconciler, ok := app.InstanceManager.(interface {
+		StartAdmissionAllocationReconciler(context.Context, time.Duration)
+	}); ok {
+		reconciler.StartAdmissionAllocationReconciler(ctx, allocationReconcileInterval)
 	}
 
 	// Log OTel status
