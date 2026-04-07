@@ -22,13 +22,13 @@ type WaitForStateResult struct {
 	TimedOut   bool
 }
 
-// WaitForState subscribes to state change events for the instance and waits
-// until it reaches targetState, a terminal/error state is detected, the timeout
+// WaitForState subscribes to lifecycle events for the instance and waits until
+// it reaches targetState, a terminal/error state is detected, the timeout
 // expires, or the context is cancelled. A polling fallback (every 5s) guards
-// against missed subscription events.
+// against missed or dropped events.
 func WaitForState(ctx context.Context, mgr Manager, inst *Instance, targetState State, timeout time.Duration) (*WaitForStateResult, error) {
 	// Subscribe first to avoid missing events between initial check and loop.
-	ch, unsub := mgr.Subscribe(inst.Id)
+	ch, unsub := mgr.SubscribeLifecycleEvents(LifecycleEventConsumerWaitForState)
 	defer unsub()
 
 	// Already in target state — return immediately.
@@ -80,14 +80,20 @@ func WaitForState(ctx context.Context, mgr Manager, inst *Instance, targetState 
 				TimedOut:   latest.State != targetState,
 			}, nil
 
-		case sc, ok := <-ch:
+		case event, ok := <-ch:
 			if !ok {
-				// Channel closed — instance was deleted.
 				return nil, ErrNotFound
 			}
-			latest = &Instance{}
-			latest.State = sc.State
-			latest.StateError = sc.StateError
+			if event.InstanceID != id {
+				continue
+			}
+			if event.Action == LifecycleEventDelete {
+				return nil, ErrNotFound
+			}
+			if event.Instance == nil {
+				continue
+			}
+			latest = event.Instance
 
 			if latest.State == targetState {
 				return &WaitForStateResult{

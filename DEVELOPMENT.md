@@ -292,10 +292,10 @@ build:
 
 ### Local OpenTelemetry (optional)
 
-To collect traces and metrics locally, run the Grafana LGTM stack (Loki, Grafana, Tempo, Mimir):
+To collect traces and metrics locally, run the LGTM stack (Loki, Tempo, Mimir):
 
 ```bash
-# Start Grafana LGTM (UI at http://localhost:3000, login: admin/admin)
+# Start LGTM (UI at http://localhost:3000, login: admin/admin)
 # Note, if you are developing on a shared server, you can use the same LGTM stack as your peer(s)
 # You will be able to sort your metrics, traces, and logs using the ENV configuration (see below)
 BIND=127.0.0.1
@@ -323,15 +323,7 @@ docker run -d --name lgtm \
 make dev
 ```
 
-Open http://localhost:3000 to view traces (Tempo), metrics (Mimir), and logs (Loki) in Grafana.
-
-**Import the Hypeman dashboard:**
-
-1. Go to Dashboards → New → Import
-2. Upload `dashboards/hypeman.json` or paste its contents
-3. Select the Prometheus datasource and click Import
-
-Use the Environment/Instance dropdowns to filter by `deployment.environment` or `service.instance.id`.
+Open http://localhost:3000 to view traces (Tempo), metrics (Mimir), and logs (Loki).
 
 ## Testing
 

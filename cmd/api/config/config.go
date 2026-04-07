@@ -98,10 +98,11 @@ type APIConfig struct {
 
 // MetricsConfig holds metrics endpoint settings.
 type MetricsConfig struct {
-	ListenAddress           string `koanf:"listen_address"`
-	Port                    int    `koanf:"port"`
-	VMLabelBudget           int    `koanf:"vm_label_budget"`
-	ResourceRefreshInterval string `koanf:"resource_refresh_interval"`
+	ListenAddress               string `koanf:"listen_address"`
+	Port                        int    `koanf:"port"`
+	VMLabelBudget               int    `koanf:"vm_label_budget"`
+	ResourceRefreshInterval     string `koanf:"resource_refresh_interval"`
+	AllocationReconcileInterval string `koanf:"allocation_reconcile_interval"`
 }
 
 // OtelConfig holds OpenTelemetry settings.
@@ -142,6 +143,11 @@ type BuildConfig struct {
 	Timeout                   int    `koanf:"timeout"`
 	SecretsDir                string `koanf:"secrets_dir"`
 	DockerSocket              string `koanf:"docker_socket"`
+}
+
+// InstancesConfig holds instance-manager internal settings.
+type InstancesConfig struct {
+	LifecycleEventBufferSize int `koanf:"lifecycle_event_buffer_size"`
 }
 
 // RegistryConfig holds OCI registry settings.
@@ -241,6 +247,7 @@ type Config struct {
 	Logging          LoggingConfig          `koanf:"logging"`
 	Images           ImagesConfig           `koanf:"images"`
 	Build            BuildConfig            `koanf:"build"`
+	Instances        InstancesConfig        `koanf:"instances"`
 	Registry         RegistryConfig         `koanf:"registry"`
 	Limits           LimitsConfig           `koanf:"limits"`
 	Oversubscription OversubscriptionConfig `koanf:"oversubscription"`
@@ -310,10 +317,11 @@ func defaultConfig() *Config {
 		},
 
 		Metrics: MetricsConfig{
-			ListenAddress:           "127.0.0.1",
-			Port:                    9464,
-			VMLabelBudget:           200,
-			ResourceRefreshInterval: "120s",
+			ListenAddress:               "127.0.0.1",
+			Port:                        9464,
+			VMLabelBudget:               200,
+			ResourceRefreshInterval:     "120s",
+			AllocationReconcileInterval: "120s",
 		},
 
 		Otel: OtelConfig{
@@ -347,6 +355,10 @@ func defaultConfig() *Config {
 			Timeout:                   600,
 			SecretsDir:                "",
 			DockerSocket:              "/var/run/docker.sock",
+		},
+
+		Instances: InstancesConfig{
+			LifecycleEventBufferSize: 256,
 		},
 
 		Registry: RegistryConfig{
@@ -499,6 +511,16 @@ func (c *Config) Validate() error {
 	if interval <= 0 {
 		return fmt.Errorf("metrics.resource_refresh_interval must be positive, got %q", c.Metrics.ResourceRefreshInterval)
 	}
+	if strings.TrimSpace(c.Metrics.AllocationReconcileInterval) == "" {
+		return fmt.Errorf("metrics.allocation_reconcile_interval must not be empty")
+	}
+	reconcileInterval, err := time.ParseDuration(c.Metrics.AllocationReconcileInterval)
+	if err != nil {
+		return fmt.Errorf("metrics.allocation_reconcile_interval must be a valid duration, got %q: %w", c.Metrics.AllocationReconcileInterval, err)
+	}
+	if reconcileInterval <= 0 {
+		return fmt.Errorf("metrics.allocation_reconcile_interval must be positive, got %q", c.Metrics.AllocationReconcileInterval)
+	}
 	if c.Otel.MetricExportInterval != "" {
 		if _, err := time.ParseDuration(c.Otel.MetricExportInterval); err != nil {
 			return fmt.Errorf("otel.metric_export_interval must be a valid duration, got %q: %w", c.Otel.MetricExportInterval, err)
@@ -551,6 +573,9 @@ func (c *Config) Validate() error {
 	}
 	if err := validateNamePatternLimits(c.Limits.NamePatterns); err != nil {
 		return err
+	}
+	if c.Instances.LifecycleEventBufferSize <= 0 {
+		return fmt.Errorf("instances.lifecycle_event_buffer_size must be positive, got %d", c.Instances.LifecycleEventBufferSize)
 	}
 	if err := validateDuration("images.auto_delete.unused_for", c.Images.AutoDelete.UnusedFor); err != nil {
 		return err

@@ -13,12 +13,12 @@ import (
 
 // stubManager is a minimal Manager implementation for unit-testing WaitForState.
 type stubManager struct {
-	subs        *subscribers
+	subs        *lifecycleSubscribers
 	getInstance func(ctx context.Context, id string) (*Instance, error)
 }
 
-func (s *stubManager) Subscribe(instanceID string) (<-chan StateChange, func()) {
-	return s.subs.Subscribe(instanceID)
+func (s *stubManager) SubscribeLifecycleEvents(consumer LifecycleEventConsumer) (<-chan LifecycleEvent, func()) {
+	return s.subs.Subscribe(consumer)
 }
 
 func (s *stubManager) GetInstance(ctx context.Context, id string) (*Instance, error) {
@@ -28,7 +28,7 @@ func (s *stubManager) GetInstance(ctx context.Context, id string) (*Instance, er
 	return nil, ErrNotFound
 }
 
-// Unused interface methods — only GetInstance and Subscribe are needed.
+// Unused interface methods — only GetInstance and SubscribeLifecycleEvents are needed.
 func (s *stubManager) ListInstances(context.Context, *ListInstancesFilter) ([]Instance, error) {
 	return nil, nil
 }
@@ -87,7 +87,7 @@ func (s *stubManager) GetVsockDialer(context.Context, string) (hypervisor.VsockD
 
 func TestWaitForState_SubscriptionDelivers(t *testing.T) {
 	t.Parallel()
-	subs := newSubscribers()
+	subs := newLifecycleSubscribers()
 	mgr := &stubManager{subs: subs}
 
 	inst := &Instance{}
@@ -97,7 +97,11 @@ func TestWaitForState_SubscriptionDelivers(t *testing.T) {
 	// Simulate a state change via subscription after 100ms.
 	go func() {
 		time.Sleep(100 * time.Millisecond)
-		subs.Notify("test-sub", StateChange{State: StateRunning})
+		subs.Notify(context.Background(), LifecycleEvent{
+			Action:     LifecycleEventStart,
+			InstanceID: "test-sub",
+			Instance:   &Instance{State: StateRunning},
+		})
 	}()
 
 	start := time.Now()
@@ -113,7 +117,7 @@ func TestWaitForState_SubscriptionDelivers(t *testing.T) {
 
 func TestWaitForState_ChannelClosedOnDelete(t *testing.T) {
 	t.Parallel()
-	subs := newSubscribers()
+	subs := newLifecycleSubscribers()
 	mgr := &stubManager{subs: subs}
 
 	inst := &Instance{}
@@ -123,7 +127,10 @@ func TestWaitForState_ChannelClosedOnDelete(t *testing.T) {
 	// Simulate instance deletion (close all subscriber channels).
 	go func() {
 		time.Sleep(100 * time.Millisecond)
-		subs.CloseAll("test-close")
+		subs.Notify(context.Background(), LifecycleEvent{
+			Action:     LifecycleEventDelete,
+			InstanceID: "test-close",
+		})
 	}()
 
 	start := time.Now()
@@ -137,7 +144,7 @@ func TestWaitForState_ChannelClosedOnDelete(t *testing.T) {
 
 func TestWaitForState_TerminalViaSubscription(t *testing.T) {
 	t.Parallel()
-	subs := newSubscribers()
+	subs := newLifecycleSubscribers()
 	mgr := &stubManager{subs: subs}
 
 	inst := &Instance{}
@@ -146,7 +153,11 @@ func TestWaitForState_TerminalViaSubscription(t *testing.T) {
 
 	go func() {
 		time.Sleep(100 * time.Millisecond)
-		subs.Notify("test-terminal-sub", StateChange{State: StateStopped})
+		subs.Notify(context.Background(), LifecycleEvent{
+			Action:     LifecycleEventStop,
+			InstanceID: "test-terminal-sub",
+			Instance:   &Instance{State: StateStopped},
+		})
 	}()
 
 	result, err := WaitForState(context.Background(), mgr, inst, StateRunning, 30*time.Second)
@@ -159,7 +170,7 @@ func TestWaitForState_TerminalViaSubscription(t *testing.T) {
 
 func TestWaitForState_ShutdownIsTerminal(t *testing.T) {
 	t.Parallel()
-	subs := newSubscribers()
+	subs := newLifecycleSubscribers()
 	mgr := &stubManager{subs: subs}
 
 	inst := &Instance{}
@@ -168,7 +179,11 @@ func TestWaitForState_ShutdownIsTerminal(t *testing.T) {
 
 	go func() {
 		time.Sleep(100 * time.Millisecond)
-		subs.Notify("test-shutdown", StateChange{State: StateShutdown})
+		subs.Notify(context.Background(), LifecycleEvent{
+			Action:     LifecycleEventStop,
+			InstanceID: "test-shutdown",
+			Instance:   &Instance{State: StateShutdown},
+		})
 	}()
 
 	start := time.Now()
@@ -184,7 +199,7 @@ func TestWaitForState_ShutdownIsTerminal(t *testing.T) {
 
 func TestWaitForState_PausedIsTerminal(t *testing.T) {
 	t.Parallel()
-	subs := newSubscribers()
+	subs := newLifecycleSubscribers()
 	mgr := &stubManager{subs: subs}
 
 	inst := &Instance{}
@@ -193,7 +208,11 @@ func TestWaitForState_PausedIsTerminal(t *testing.T) {
 
 	go func() {
 		time.Sleep(100 * time.Millisecond)
-		subs.Notify("test-paused", StateChange{State: StatePaused})
+		subs.Notify(context.Background(), LifecycleEvent{
+			Action:     LifecycleEventStandby,
+			InstanceID: "test-paused",
+			Instance:   &Instance{State: StatePaused},
+		})
 	}()
 
 	start := time.Now()
@@ -205,4 +224,70 @@ func TestWaitForState_PausedIsTerminal(t *testing.T) {
 	assert.Equal(t, StatePaused, result.State)
 	assert.False(t, result.TimedOut)
 	assert.Less(t, elapsed, 2*time.Second, "paused should be detected as terminal immediately")
+}
+
+func TestWaitForState_IgnoresEventsForOtherInstances(t *testing.T) {
+	t.Parallel()
+	subs := newLifecycleSubscribers()
+	mgr := &stubManager{subs: subs}
+
+	inst := &Instance{}
+	inst.Id = "target-instance"
+	inst.State = StateInitializing
+
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		subs.Notify(context.Background(), LifecycleEvent{
+			Action:     LifecycleEventStart,
+			InstanceID: "other-instance",
+			Instance:   &Instance{State: StateRunning},
+		})
+		time.Sleep(50 * time.Millisecond)
+		subs.Notify(context.Background(), LifecycleEvent{
+			Action:     LifecycleEventStart,
+			InstanceID: "target-instance",
+			Instance:   &Instance{State: StateRunning},
+		})
+	}()
+
+	result, err := WaitForState(context.Background(), mgr, inst, StateRunning, 30*time.Second)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, StateRunning, result.State)
+}
+
+func TestWaitForState_IgnoresNilInstancePayloadAndUsesPollingFallback(t *testing.T) {
+	t.Parallel()
+	subs := newLifecycleSubscribers()
+	mgr := &stubManager{
+		subs: subs,
+		getInstance: func(ctx context.Context, id string) (*Instance, error) {
+			return &Instance{
+				StoredMetadata: StoredMetadata{Id: id},
+				State:          StateRunning,
+			}, nil
+		},
+	}
+
+	inst := &Instance{}
+	inst.Id = "test-nil-event"
+	inst.State = StateInitializing
+
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		subs.Notify(context.Background(), LifecycleEvent{
+			Action:     LifecycleEventStart,
+			InstanceID: "test-nil-event",
+		})
+	}()
+
+	start := time.Now()
+	result, err := WaitForState(context.Background(), mgr, inst, StateRunning, 6*time.Second)
+	elapsed := time.Since(start)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, StateRunning, result.State)
+	assert.GreaterOrEqual(t, elapsed, WaitForStatePollInterval)
 }

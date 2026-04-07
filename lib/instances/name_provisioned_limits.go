@@ -16,6 +16,11 @@ type provisionedResources struct {
 	DiskIOBps   int64
 }
 
+type namedLimitReservation struct {
+	Name      string
+	Resources provisionedResources
+}
+
 func provisionedResourcesFromAllocation(alloc resources.InstanceAllocation) provisionedResources {
 	networkBps := alloc.NetworkDownloadBps
 	if alloc.NetworkUploadBps > networkBps {
@@ -39,7 +44,7 @@ func (r *provisionedResources) add(other provisionedResources) {
 	r.DiskIOBps += other.DiskIOBps
 }
 
-func validateProvisionedResourceLimitsForName(name string, limits ResourceLimits, existing []resources.InstanceAllocation, requested provisionedResources) error {
+func validateProvisionedResourceLimitsForName(name string, limits ResourceLimits, existing []resources.InstanceAllocation, pending map[string]namedLimitReservation, excludeID string, requested provisionedResources) error {
 	patternIndex, pattern := limits.matchingPattern(name)
 	if pattern == nil {
 		return nil
@@ -55,6 +60,16 @@ func validateProvisionedResourceLimitsForName(name string, limits ResourceLimits
 			continue
 		}
 		current.add(provisionedResourcesFromAllocation(alloc))
+	}
+	for id, reservation := range pending {
+		if id == excludeID {
+			continue
+		}
+		matchedIndex, _ := limits.matchingPattern(reservation.Name)
+		if matchedIndex != patternIndex {
+			continue
+		}
+		current.add(reservation.Resources)
 	}
 
 	projected := current
@@ -109,19 +124,43 @@ func (m *manager) requestedProvisionedResources(ctx context.Context, overlaySize
 	}, nil
 }
 
-func (m *manager) validateNamedResourceLimits(ctx context.Context, name string, overlaySize int64, vcpus int, totalMemory int64, networkDownloadBps int64, networkUploadBps int64, diskIOBps int64, volumes []VolumeAttachment) error {
+func (m *manager) reserveNamedResourceLimits(ctx context.Context, instanceID string, name string, overlaySize int64, vcpus int, totalMemory int64, networkDownloadBps int64, networkUploadBps int64, diskIOBps int64, volumes []VolumeAttachment) error {
 	if err := validateResourceLimitsForName(name, m.limits, overlaySize, vcpus, totalMemory); err != nil {
 		return err
 	}
+	if _, pattern := m.limits.matchingPattern(name); pattern == nil || !pattern.hasAggregateProvisionedLimits() {
+		return nil
+	}
+
 	requested, err := m.requestedProvisionedResources(ctx, overlaySize, vcpus, totalMemory, networkDownloadBps, networkUploadBps, diskIOBps, volumes)
 	if err != nil {
 		return err
 	}
+
+	m.namedLimitReservationsMu.Lock()
+	defer m.namedLimitReservationsMu.Unlock()
 
 	existing, err := m.ListInstanceAllocations(ctx)
 	if err != nil {
 		return fmt.Errorf("list existing instance allocations: %w", err)
 	}
 
-	return validateProvisionedResourceLimitsForName(name, m.limits, existing, requested)
+	if err := validateProvisionedResourceLimitsForName(name, m.limits, existing, m.namedLimitReservations, instanceID, requested); err != nil {
+		return err
+	}
+
+	m.namedLimitReservations[instanceID] = namedLimitReservation{
+		Name:      name,
+		Resources: requested,
+	}
+	return nil
+}
+
+func (m *manager) finishNamedResourceLimitsReservation(instanceID string) {
+	if instanceID == "" {
+		return
+	}
+	m.namedLimitReservationsMu.Lock()
+	defer m.namedLimitReservationsMu.Unlock()
+	delete(m.namedLimitReservations, instanceID)
 }

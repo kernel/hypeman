@@ -450,9 +450,15 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 		forkMeta.IP = ""
 		forkMeta.MAC = ""
 	}
-	if err := m.validateNamedResourceLimits(ctx, req.Name, forkMeta.OverlaySize, forkMeta.Vcpus, forkMeta.Size+forkMeta.HotplugSize, forkMeta.NetworkBandwidthDownload, forkMeta.NetworkBandwidthUpload, forkMeta.DiskIOBps, forkMeta.Volumes); err != nil {
+	if err := m.reserveNamedResourceLimits(ctx, forkID, req.Name, forkMeta.OverlaySize, forkMeta.Vcpus, forkMeta.Size+forkMeta.HotplugSize, forkMeta.NetworkBandwidthDownload, forkMeta.NetworkBandwidthUpload, forkMeta.DiskIOBps, forkMeta.Volumes); err != nil {
 		return nil, err
 	}
+	reservedNamedLimits := true
+	defer func() {
+		if reservedNamedLimits {
+			m.finishNamedResourceLimitsReservation(forkID)
+		}
+	}()
 
 	if rec.Snapshot.Kind == SnapshotKindStandby {
 		netCfg := (*hypervisor.ForkNetworkConfig)(nil)
@@ -477,6 +483,10 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 
 	if err := m.saveMetadata(&metadata{StoredMetadata: forkMeta}); err != nil {
 		return nil, fmt.Errorf("save fork metadata: %w", err)
+	}
+	if reservedNamedLimits {
+		m.finishNamedResourceLimitsReservation(forkID)
+		reservedNamedLimits = false
 	}
 
 	cu.Release()

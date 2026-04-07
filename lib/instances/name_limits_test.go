@@ -182,7 +182,7 @@ func TestValidateProvisionedResourceLimitsForName_RejectsProjectedTotal(t *testi
 		},
 	}
 
-	err = validateProvisionedResourceLimitsForName("team-a-worker-1", limits, existing, provisionedResources{
+	err = validateProvisionedResourceLimitsForName("team-a-worker-1", limits, existing, nil, "", provisionedResources{
 		Vcpus:       4,
 		MemoryBytes: 40 * 1024 * 1024 * 1024,
 		DiskBytes:   300 * 1024 * 1024 * 1024,
@@ -212,7 +212,31 @@ func TestValidateProvisionedResourceLimitsForName_UsesFirstMatchingPattern(t *te
 		{Name: "prod-api-1", Vcpus: 3},
 	}
 
-	err = validateProvisionedResourceLimitsForName("prod-api-2", limits, existing, provisionedResources{Vcpus: 2})
+	err = validateProvisionedResourceLimitsForName("prod-api-2", limits, existing, nil, "", provisionedResources{Vcpus: 2})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `pattern "^prod-"`)
+}
+
+func TestValidateProvisionedResourceLimitsForName_IncludesPendingReservations(t *testing.T) {
+	t.Parallel()
+
+	four := 4
+	pattern, err := NewNamedResourceLimit("^team-a-", NamedResourceLimitConfig{
+		MaxTotalVcpus: &four,
+	})
+	require.NoError(t, err)
+
+	limits := ResourceLimits{NamePatterns: []NamedResourceLimit{pattern}}
+	pending := map[string]namedLimitReservation{
+		"pending-1": {
+			Name: "team-a-api-1",
+			Resources: provisionedResources{
+				Vcpus: 3,
+			},
+		},
+	}
+
+	err = validateProvisionedResourceLimitsForName("team-a-worker-1", limits, nil, pending, "", provisionedResources{Vcpus: 2})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "total provisioned cpu 5")
 }

@@ -457,3 +457,112 @@ func TestDiskBreakdown_IncludesOCICacheAndVolumeOverlays(t *testing.T) {
 	// Overlays should be (10+5) + (8+2) = 25GB
 	assert.Equal(t, int64(25*1024*1024*1024), status.DiskDetail.Overlays)
 }
+
+func TestValidateAllocation_Disk(t *testing.T) {
+	cfg := &config.Config{
+		DataDir: t.TempDir(),
+		Capacity: config.CapacityConfig{
+			Disk: "100GB",
+		},
+		Oversubscription: config.OversubscriptionConfig{
+			CPU: 1.0, Memory: 1.0, Disk: 1.0, Network: 1.0, DiskIO: 1.0,
+		},
+	}
+	p := paths.New(cfg.DataDir)
+
+	mgr := NewManager(cfg, p)
+	mgr.SetInstanceLister(&mockInstanceLister{
+		allocations: []InstanceAllocation{
+			{
+				ID:                 "vm-1",
+				OverlayBytes:       20 * 1024 * 1024 * 1024,
+				VolumeOverlayBytes: 5 * 1024 * 1024 * 1024,
+				State:              "Running",
+			},
+		},
+	})
+	mgr.SetImageLister(&mockImageLister{totalBytes: 10 * 1024 * 1024 * 1024})
+	mgr.SetVolumeLister(&mockVolumeLister{totalBytes: 35 * 1024 * 1024 * 1024})
+
+	err := mgr.Initialize(context.Background())
+	require.NoError(t, err)
+
+	err = mgr.ValidateAllocation(context.Background(), 0, 0, 0, 0, 0, 30*1024*1024*1024, false)
+	require.NoError(t, err)
+
+	err = mgr.ValidateAllocation(context.Background(), 0, 0, 0, 0, 0, 31*1024*1024*1024, false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "insufficient disk")
+}
+
+func TestReserveAllocation_TracksPendingCapacity(t *testing.T) {
+	cfg := &config.Config{
+		DataDir: t.TempDir(),
+		Capacity: config.CapacityConfig{
+			Disk: "100GB",
+		},
+		Oversubscription: config.OversubscriptionConfig{
+			CPU: 1.0, Memory: 1.0, Disk: 1.0, Network: 1.0, DiskIO: 1.0,
+		},
+	}
+	p := paths.New(cfg.DataDir)
+
+	mgr := NewManager(cfg, p)
+	mgr.SetInstanceLister(&mockInstanceLister{})
+	mgr.SetImageLister(&mockImageLister{})
+	mgr.SetVolumeLister(&mockVolumeLister{})
+
+	err := mgr.Initialize(context.Background())
+	require.NoError(t, err)
+
+	err = mgr.ReserveAllocation(context.Background(), "pending-a", 0, 0, 0, 0, 0, 60*1024*1024*1024, false)
+	require.NoError(t, err)
+
+	err = mgr.ReserveAllocation(context.Background(), "pending-b", 0, 0, 0, 0, 0, 50*1024*1024*1024, false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "insufficient disk")
+
+	visibleStatus, err := mgr.GetStatus(context.Background(), ResourceDisk)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), visibleStatus.Allocated)
+
+	mgr.FinishAllocation("pending-a")
+	mgr.FinishAllocation("pending-a")
+
+	err = mgr.ReserveAllocation(context.Background(), "pending-b", 0, 0, 0, 0, 0, 50*1024*1024*1024, false)
+	require.NoError(t, err)
+}
+
+func TestReserveAllocation_ReplacesExistingReservation(t *testing.T) {
+	cfg := &config.Config{
+		DataDir: t.TempDir(),
+		Capacity: config.CapacityConfig{
+			Disk: "100GB",
+		},
+		Oversubscription: config.OversubscriptionConfig{
+			CPU: 1.0, Memory: 1.0, Disk: 1.0, Network: 1.0, DiskIO: 1.0,
+		},
+	}
+	p := paths.New(cfg.DataDir)
+
+	mgr := NewManager(cfg, p)
+	mgr.SetInstanceLister(&mockInstanceLister{})
+	mgr.SetImageLister(&mockImageLister{})
+	mgr.SetVolumeLister(&mockVolumeLister{})
+
+	err := mgr.Initialize(context.Background())
+	require.NoError(t, err)
+
+	err = mgr.ReserveAllocation(context.Background(), "pending-a", 0, 0, 0, 0, 0, 60*1024*1024*1024, false)
+	require.NoError(t, err)
+
+	err = mgr.ReserveAllocation(context.Background(), "pending-a", 0, 0, 0, 0, 0, 40*1024*1024*1024, false)
+	require.NoError(t, err)
+
+	err = mgr.ReserveAllocation(context.Background(), "pending-b", 0, 0, 0, 0, 0, 61*1024*1024*1024, false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "insufficient disk")
+
+	err = mgr.ReserveAllocation(context.Background(), "pending-b", 0, 0, 0, 0, 0, 60*1024*1024*1024, false)
+	require.NoError(t, err)
+}

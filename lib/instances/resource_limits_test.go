@@ -209,6 +209,35 @@ func TestResourceLimits_ZeroMeansUnlimited(t *testing.T) {
 	assert.Equal(t, int64(0), mgr.limits.MaxMemoryPerInstance)
 }
 
+func TestReserveNamedResourceLimits_TracksPendingReservations(t *testing.T) {
+	t.Parallel()
+
+	four := 4
+	pattern, err := NewNamedResourceLimit("^team-a-", NamedResourceLimitConfig{
+		MaxTotalVcpus: &four,
+	})
+	require.NoError(t, err)
+
+	mgr := createTestManager(t, ResourceLimits{
+		MaxOverlaySize:       100 * 1024 * 1024 * 1024,
+		MaxVcpusPerInstance:  0,
+		MaxMemoryPerInstance: 0,
+		NamePatterns:         []NamedResourceLimit{pattern},
+	})
+
+	err = mgr.reserveNamedResourceLimits(context.Background(), "pending-1", "team-a-api-1", 10*1024*1024*1024, 3, 4*1024*1024*1024, 0, 0, 0, nil)
+	require.NoError(t, err)
+
+	err = mgr.reserveNamedResourceLimits(context.Background(), "pending-2", "team-a-worker-1", 10*1024*1024*1024, 2, 4*1024*1024*1024, 0, 0, 0, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "total provisioned cpu 5")
+
+	mgr.finishNamedResourceLimitsReservation("pending-1")
+
+	err = mgr.reserveNamedResourceLimits(context.Background(), "pending-2", "team-a-worker-1", 10*1024*1024*1024, 2, 4*1024*1024*1024, 0, 0, 0, nil)
+	require.NoError(t, err)
+}
+
 // Note: Aggregate resource limits are now handled by ResourceValidator in lib/resources.
 // Tests for aggregate limits should be in lib/resources/resource_test.go.
 
