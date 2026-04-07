@@ -9,6 +9,7 @@ import (
 	"github.com/google/wire"
 	"github.com/kernel/hypeman/cmd/api/api"
 	"github.com/kernel/hypeman/cmd/api/config"
+	"github.com/kernel/hypeman/lib/autostandby"
 	"github.com/kernel/hypeman/lib/builds"
 	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/guestmemory"
@@ -39,6 +40,7 @@ type application struct {
 	BuildManager          builds.Manager
 	ResourceManager       *resources.Manager
 	GuestMemoryController guestmemory.Controller
+	AutoStandbyController *autostandby.Controller
 	VMMetricsManager      *vm_metrics.Manager
 	Registry              *registry.Registry
 	ApiService            *api.ApiService
@@ -61,6 +63,7 @@ func initializeApp() (*application, func(), error) {
 		providers.ProvideBuildManager,
 		providers.ProvideResourceManager,
 		providers.ProvideGuestMemoryController,
+		providers.ProvideAutoStandbyController,
 		providers.ProvideVMMetricsManager,
 		providers.ProvideRegistry,
 		api.New,

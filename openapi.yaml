@@ -203,6 +203,103 @@ components:
             $ref: "#/components/schemas/CreateInstanceRequestCredentialInject"
           minItems: 1
 
+    AutoStandbyPolicy:
+      type: object
+      description: |
+        Linux-only automatic standby policy based on active inbound TCP connections
+        observed from the host conntrack table.
+      properties:
+        enabled:
+          type: boolean
+          description: Whether automatic standby is enabled for this instance.
+          default: false
+          example: true
+        idle_timeout:
+          type: string
+          description: |
+            How long the instance must have zero qualifying inbound TCP connections
+            before Hypeman places it into standby.
+          example: "5m"
+        ignore_source_cidrs:
+          type: array
+          description: Optional client CIDRs that should not keep the instance awake.
+          items:
+            type: string
+          example: ["10.0.0.0/8", "192.168.0.0/16"]
+        ignore_destination_ports:
+          type: array
+          description: Optional destination TCP ports that should not keep the instance awake.
+          items:
+            type: integer
+            minimum: 1
+            maximum: 65535
+          example: [22, 9000]
+
+    AutoStandbyStatus:
+      type: object
+      required: [supported, configured, enabled, eligible, status, reason, active_inbound_connections, tracking_mode]
+      properties:
+        supported:
+          type: boolean
+          description: Whether the current host platform supports auto-standby diagnostics.
+          example: true
+        configured:
+          type: boolean
+          description: Whether the instance has any auto-standby policy configured.
+          example: true
+        enabled:
+          type: boolean
+          description: Whether the configured auto-standby policy is enabled.
+          example: true
+        eligible:
+          type: boolean
+          description: Whether the instance is currently eligible to enter standby.
+          example: true
+        status:
+          type: string
+          enum: [unsupported, disabled, ineligible, active, idle_countdown, ready_for_standby, standby_requested, error]
+          example: idle_countdown
+        reason:
+          type: string
+          enum: [unsupported_platform, policy_missing, policy_disabled, instance_not_running, network_disabled, missing_ip, has_vgpu, active_inbound_connections, idle_timeout_not_elapsed, observer_error, ready_for_standby]
+          example: idle_timeout_not_elapsed
+        active_inbound_connections:
+          type: integer
+          description: Number of currently tracked qualifying inbound TCP connections.
+          example: 0
+        idle_timeout:
+          type: string
+          nullable: true
+          description: Configured idle timeout from the auto-standby policy.
+          example: "5m0s"
+        idle_since:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the controller most recently observed the instance become idle.
+          example: "2026-04-06T17:04:05Z"
+        last_inbound_activity_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Timestamp of the most recent qualifying inbound TCP activity the controller observed.
+          example: "2026-04-06T17:01:05Z"
+        next_standby_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the controller expects to attempt standby next, if a countdown is active.
+          example: "2026-04-06T17:09:05Z"
+        countdown_remaining:
+          type: string
+          nullable: true
+          description: Remaining time before the controller attempts standby, when applicable.
+          example: "4m0s"
+        tracking_mode:
+          type: string
+          description: Diagnostic identifier for the runtime tracking mode in use.
+          example: conntrack_events_v4_tcp
+
     UpdateInstanceRequest:
       type: object
       properties:
@@ -217,6 +314,8 @@ components:
             are accepted. Use this to rotate real credential values without restarting the VM.
           example:
             OUTBOUND_OPENAI_KEY: new-rotated-key-456
+        auto_standby:
+          $ref: "#/components/schemas/AutoStandbyPolicy"
 
     CreateInstanceRequest:
       type: object
@@ -323,6 +422,8 @@ components:
         snapshot_policy:
           description: Snapshot compression policy for this instance. Controls compression settings applied when creating snapshots or entering standby.
           $ref: "#/components/schemas/SnapshotPolicy"
+        auto_standby:
+          $ref: "#/components/schemas/AutoStandbyPolicy"
         skip_kernel_headers:
           type: boolean
           description: |
@@ -766,6 +867,8 @@ components:
           example: cloud-hypervisor
         snapshot_policy:
           $ref: "#/components/schemas/SnapshotPolicy"
+        auto_standby:
+          $ref: "#/components/schemas/AutoStandbyPolicy"
     
     PathInfo:
       type: object
@@ -2912,6 +3015,39 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        404:
+          description: Instance not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /instances/{id}/auto-standby/status:
+    get:
+      summary: Get auto-standby diagnostic status
+      operationId: getAutoStandbyStatus
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Instance ID or name
+      responses:
+        200:
+          description: Current auto-standby diagnostic status for the instance
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AutoStandbyStatus"
         404:
           description: Instance not found
           content:

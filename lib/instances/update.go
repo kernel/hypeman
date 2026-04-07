@@ -14,10 +14,9 @@ type updateInstanceRulesService interface {
 	UpdateInstanceRules(ctx context.Context, instanceID string, rules []egressproxy.HeaderInjectRuleConfig) error
 }
 
-// updateInstance updates mutable properties of a running instance.
-// Currently supports updating env vars referenced by credential policies,
-// which causes the egress proxy header inject rules to be recomputed
-// with the new secret values — enabling key rotation without restart.
+// updateInstance updates mutable instance properties.
+// Env updates recompute egress proxy header inject rules with the new secret
+// values. Auto-standby updates only change persisted metadata.
 func (m *manager) updateInstance(ctx context.Context, id string, req UpdateInstanceRequest) (*Instance, error) {
 	log := logger.FromContext(ctx)
 
@@ -32,17 +31,38 @@ func (m *manager) updateInstance(ctx context.Context, id string, req UpdateInsta
 	if err != nil {
 		return nil, fmt.Errorf("get instance: %w", err)
 	}
-
-	if inst.State != StateRunning && inst.State != StateInitializing {
-		return nil, fmt.Errorf("%w: instance must be running or initializing to update (current state: %s)", ErrInvalidState, inst.State)
+	normalizedAutoStandby, err := normalizeAutoStandbyPolicy(req.AutoStandby)
+	if err != nil {
+		return nil, err
 	}
+	req.AutoStandby = normalizedAutoStandby
 
 	if err := validateUpdateInstanceRequest(meta, req); err != nil {
 		return nil, err
 	}
+	if len(req.Env) > 0 && inst.State != StateRunning && inst.State != StateInitializing {
+		return nil, fmt.Errorf("%w: instance must be running or initializing to update env (current state: %s)", ErrInvalidState, inst.State)
+	}
+	nextMeta := deepCopyMetadata(meta)
+	if req.AutoStandby != nil {
+		nextMeta.AutoStandby = cloneAutoStandbyPolicy(req.AutoStandby)
+	}
+	if len(req.Env) == 0 {
+		if err := m.saveMetadata(nextMeta); err != nil {
+			return nil, fmt.Errorf("save metadata: %w", err)
+		}
 
-	prevEnv := cloneEnvMap(meta.Env)
-	nextEnv := cloneEnvMap(meta.Env)
+		log.InfoContext(ctx, "instance updated", "instance_id", id)
+
+		updated, err := m.getInstance(ctx, id)
+		if err != nil {
+			return nil, fmt.Errorf("get updated instance: %w", err)
+		}
+		return updated, nil
+	}
+
+	prevEnv := cloneEnvMap(nextMeta.Env)
+	nextEnv := cloneEnvMap(nextMeta.Env)
 	if nextEnv == nil {
 		nextEnv = make(map[string]string)
 	}
@@ -50,7 +70,7 @@ func (m *manager) updateInstance(ctx context.Context, id string, req UpdateInsta
 		nextEnv[k] = v
 	}
 
-	if err := validateCredentialEnvBindings(meta.Credentials, nextEnv); err != nil {
+	if err := validateCredentialEnvBindings(nextMeta.Credentials, nextEnv); err != nil {
 		return nil, err
 	}
 
@@ -60,7 +80,7 @@ func (m *manager) updateInstance(ctx context.Context, id string, req UpdateInsta
 		return nil, fmt.Errorf("egress proxy service unavailable")
 	}
 
-	if err := applyUpdatedInstanceEnv(ctx, log, id, meta, prevEnv, nextEnv, m.saveMetadata, svc); err != nil {
+	if err := applyUpdatedInstanceEnv(ctx, log, id, nextMeta, prevEnv, nextEnv, m.saveMetadata, svc); err != nil {
 		return nil, err
 	}
 
@@ -74,8 +94,11 @@ func (m *manager) updateInstance(ctx context.Context, id string, req UpdateInsta
 }
 
 func validateUpdateInstanceRequest(meta *metadata, req UpdateInstanceRequest) error {
+	if len(req.Env) == 0 && req.AutoStandby == nil {
+		return fmt.Errorf("%w: request must include env and/or auto_standby", ErrInvalidRequest)
+	}
 	if len(req.Env) == 0 {
-		return fmt.Errorf("%w: env must include at least one credential source env var", ErrInvalidRequest)
+		return nil
 	}
 	if meta == nil || len(meta.Credentials) == 0 || meta.NetworkEgress == nil || !meta.NetworkEgress.Enabled {
 		return fmt.Errorf("%w: instance has no credential-backed env vars to update", ErrInvalidRequest)

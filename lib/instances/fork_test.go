@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kernel/hypeman/lib/autostandby"
 	"github.com/kernel/hypeman/lib/guest"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
@@ -283,6 +284,7 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 	stoppedAt := time.Now().Add(-1 * time.Minute)
 	pid := 1234
 	exitCode := 17
+	compressionLevel := 5
 
 	src := StoredMetadata{
 		Env:           map[string]string{"A": "1"},
@@ -295,9 +297,22 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 		StoppedAt:     &stoppedAt,
 		HypervisorPID: &pid,
 		ExitCode:      &exitCode,
+		AutoStandby: &autostandby.Policy{
+			Enabled:                true,
+			IdleTimeout:            "5m",
+			IgnoreSourceCIDRs:      []string{"10.0.0.0/8"},
+			IgnoreDestinationPorts: []uint16{22},
+		},
+		SnapshotPolicy: &SnapshotPolicy{
+			Compression: &snapshotstore.SnapshotCompressionConfig{
+				Enabled:   true,
+				Algorithm: snapshotstore.SnapshotCompressionAlgorithmZstd,
+				Level:     &compressionLevel,
+			},
+		},
 	}
 
-	cloned := cloneStoredMetadataForFork(src)
+	cloned := cloneStoredMetadata(src)
 	require.Equal(t, src, cloned)
 
 	cloned.Env["A"] = "2"
@@ -308,6 +323,9 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 	cloned.Cmd[0] = "printf"
 	*cloned.HypervisorPID = 4321
 	*cloned.ExitCode = 42
+	cloned.AutoStandby.IgnoreSourceCIDRs[0] = "192.168.0.0/16"
+	cloned.AutoStandby.IgnoreDestinationPorts[0] = 443
+	*cloned.SnapshotPolicy.Compression.Level = 9
 	now := time.Now()
 	*cloned.StartedAt = now
 	*cloned.StoppedAt = now
@@ -320,6 +338,9 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 	require.Equal(t, "echo", src.Cmd[0])
 	require.Equal(t, 1234, *src.HypervisorPID)
 	require.Equal(t, 17, *src.ExitCode)
+	require.Equal(t, "10.0.0.0/8", src.AutoStandby.IgnoreSourceCIDRs[0])
+	require.Equal(t, uint16(22), src.AutoStandby.IgnoreDestinationPorts[0])
+	require.Equal(t, 5, *src.SnapshotPolicy.Compression.Level)
 	require.Equal(t, startedAt, *src.StartedAt)
 	require.Equal(t, stoppedAt, *src.StoppedAt)
 }

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/kernel/hypeman/lib/autostandby"
 	"github.com/kernel/hypeman/lib/images"
 )
 
@@ -27,6 +28,7 @@ import (
 // metadata wraps StoredMetadata for JSON serialization
 type metadata struct {
 	StoredMetadata
+	AutoStandbyRuntime *autostandby.Runtime `json:"auto_standby_runtime,omitempty"`
 }
 
 // ensureDirectories creates the instance directory structure

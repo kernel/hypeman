@@ -3,6 +3,7 @@ package instances
 import (
 	"time"
 
+	"github.com/kernel/hypeman/lib/autostandby"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/snapshot"
 	"github.com/kernel/hypeman/lib/tags"
@@ -139,6 +140,9 @@ type StoredMetadata struct {
 	// Snapshot policy defaults for this instance.
 	SnapshotPolicy *SnapshotPolicy
 
+	// Automatic standby policy driven by host-observed inbound TCP activity.
+	AutoStandby *autostandby.Policy
+
 	// Shutdown configuration
 	StopTimeout int // Grace period in seconds for graceful stop (0 = use default 5s)
 
@@ -220,6 +224,7 @@ type CreateInstanceRequest struct {
 	SkipKernelHeaders        bool                        // Skip kernel headers installation (disables DKMS)
 	SkipGuestAgent           bool                        // Skip guest-agent installation (disables exec/stat API)
 	SnapshotPolicy           *SnapshotPolicy             // Optional snapshot policy defaults for this instance
+	AutoStandby              *autostandby.Policy         // Optional automatic standby policy
 }
 
 // StartInstanceRequest is the domain request for starting a stopped instance
@@ -228,11 +233,10 @@ type StartInstanceRequest struct {
 	Cmd        []string // Override cmd (nil = keep previous/image default)
 }
 
-// UpdateInstanceRequest is the domain request for updating a running instance.
-// Currently supports updating env vars referenced by credential policies
-// to enable secret/key rotation without instance restart.
+// UpdateInstanceRequest is the domain request for updating mutable instance properties.
 type UpdateInstanceRequest struct {
-	Env map[string]string // Updated environment variables (merged with existing)
+	Env         map[string]string   // Updated environment variables (merged with existing)
+	AutoStandby *autostandby.Policy // Replaces the persisted auto-standby policy when non-nil
 }
 
 // ForkInstanceRequest is the domain request for forking an instance.
