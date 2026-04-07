@@ -190,6 +190,47 @@ func TestPeriodicSnapshotSyncRefreshesTrackedState(t *testing.T) {
 	require.Equal(t, 1, status.ActiveInboundCount)
 }
 
+func TestInstanceEventClearsPersistedRuntimeWhenInstanceBecomesIneligible(t *testing.T) {
+	t.Parallel()
+
+	idleSince := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
+	lastInbound := idleSince.Add(-time.Minute)
+	store := newFakeInstanceStore([]Instance{{
+		ID:             "inst-ineligible",
+		Name:           "inst-ineligible",
+		State:          StateRunning,
+		NetworkEnabled: true,
+		IP:             "192.168.100.22",
+		AutoStandby:    &Policy{Enabled: true, IdleTimeout: "10m"},
+		Runtime: &Runtime{
+			IdleSince:             &idleSince,
+			LastInboundActivityAt: &lastInbound,
+		},
+	}})
+	controller := NewController(store, &fakeConnectionSource{}, ControllerOptions{
+		Now: func() time.Time { return idleSince.Add(30 * time.Second) },
+	})
+
+	require.NoError(t, controller.startupResync(context.Background()))
+
+	require.NoError(t, controller.handleInstanceEvent(context.Background(), InstanceEvent{
+		Action:     InstanceEventUpdate,
+		InstanceID: "inst-ineligible",
+		Instance: &Instance{
+			ID:             "inst-ineligible",
+			Name:           "inst-ineligible",
+			State:          StateRunning,
+			NetworkEnabled: false,
+			IP:             "192.168.100.22",
+			AutoStandby:    &Policy{Enabled: true, IdleTimeout: "10m"},
+		},
+	}))
+
+	runtime, ok := store.persistedRuntime["inst-ineligible"]
+	require.True(t, ok)
+	require.Nil(t, runtime)
+}
+
 func TestConnectionEventsClearIdleAndStartCountdown(t *testing.T) {
 	t.Parallel()
 

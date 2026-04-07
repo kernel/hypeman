@@ -470,8 +470,9 @@ func (c *Controller) refreshInstanceLocked(ctx context.Context, inst Instance, c
 	state.standbyRequested = false
 
 	if !eligible(inst) {
+		hadRuntime := inst.Runtime != nil || state.idleSince != nil || state.lastInboundAt != nil
 		c.clearStateLocked(state)
-		if inst.Runtime != nil || state.idleSince != nil || state.lastInboundAt != nil {
+		if hadRuntime {
 			return c.persistRuntime(ctx, inst.ID, nil)
 		}
 		return nil
