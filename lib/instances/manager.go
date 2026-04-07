@@ -139,6 +139,7 @@ type manager struct {
 	admissionAllocationsMu     sync.RWMutex
 	admissionAllocations       map[string]resources.InstanceAllocation
 	admissionAllocationsLoaded bool
+	admissionReconcileOnce     sync.Once
 
 	// Hypervisor support
 	vmStarters        map[hypervisor.Type]hypervisor.VMStarter

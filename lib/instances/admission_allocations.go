@@ -4,7 +4,9 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"time"
 
+	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/resources"
 )
 
@@ -64,6 +66,8 @@ func (m *manager) ensureAdmissionAllocations() error {
 }
 
 func (m *manager) syncAdmissionAllocation(meta *metadata) {
+	allocation := m.allocationFromStoredMetadata(&meta.StoredMetadata, admissionMetadataActive(&meta.StoredMetadata))
+
 	m.admissionAllocationsMu.Lock()
 	defer m.admissionAllocationsMu.Unlock()
 
@@ -77,10 +81,12 @@ func (m *manager) syncAdmissionAllocation(meta *metadata) {
 	// Incremental cache updates trust metadata because lifecycle paths update
 	// visibility explicitly once boot/restore has succeeded, avoiding repeated
 	// filesystem/socket probes on the hot path.
-	m.admissionAllocations[meta.Id] = m.allocationFromStoredMetadata(&meta.StoredMetadata, admissionMetadataActive(&meta.StoredMetadata))
+	m.admissionAllocations[meta.Id] = allocation
 }
 
 func (m *manager) setAdmissionAllocationActive(stored *StoredMetadata, active bool) {
+	allocation := m.allocationFromStoredMetadata(stored, active)
+
 	m.admissionAllocationsMu.Lock()
 	defer m.admissionAllocationsMu.Unlock()
 
@@ -91,7 +97,7 @@ func (m *manager) setAdmissionAllocationActive(stored *StoredMetadata, active bo
 		m.admissionAllocations = make(map[string]resources.InstanceAllocation)
 	}
 
-	m.admissionAllocations[stored.Id] = m.allocationFromStoredMetadata(stored, active)
+	m.admissionAllocations[stored.Id] = allocation
 }
 
 func (m *manager) rollbackAdmissionAllocationActive(stored *StoredMetadata) {
@@ -159,4 +165,80 @@ func admissionSocketActive(stored *StoredMetadata) bool {
 	}
 	_, err := os.Stat(stored.SocketPath)
 	return err == nil
+}
+
+func (m *manager) StartAdmissionAllocationReconciler(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	m.admissionReconcileOnce.Do(func() {
+		go func() {
+			ticker := time.NewTicker(interval)
+			defer ticker.Stop()
+
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					m.reconcileAdmissionAllocations(ctx)
+				}
+			}
+		}()
+	})
+}
+
+func (m *manager) reconcileAdmissionAllocations(ctx context.Context) {
+	if err := m.ensureAdmissionAllocations(); err != nil {
+		logger.FromContext(ctx).WarnContext(ctx, "failed to ensure admission allocations before reconcile", "error", err)
+		return
+	}
+
+	activeIDs := m.activeAdmissionAllocationIDs()
+	for _, id := range activeIDs {
+		meta, err := m.loadMetadata(id)
+		if err != nil {
+			m.deleteAdmissionAllocation(id)
+			continue
+		}
+
+		active := admissionSocketActive(&meta.StoredMetadata)
+		allocation := m.allocationFromStoredMetadata(&meta.StoredMetadata, active)
+
+		m.admissionAllocationsMu.Lock()
+		if m.admissionAllocationsLoaded && m.admissionAllocations != nil {
+			m.admissionAllocations[id] = allocation
+		}
+		m.admissionAllocationsMu.Unlock()
+	}
+}
+
+func (m *manager) activeAdmissionAllocationIDs() []string {
+	m.admissionAllocationsMu.RLock()
+	defer m.admissionAllocationsMu.RUnlock()
+
+	if !m.admissionAllocationsLoaded || m.admissionAllocations == nil {
+		return nil
+	}
+
+	ids := make([]string, 0, len(m.admissionAllocations))
+	for id, allocation := range m.admissionAllocations {
+		if isActiveAdmissionAllocationState(allocation.State) {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+func isActiveAdmissionAllocationState(state string) bool {
+	switch state {
+	case string(StateRunning), string(StatePaused), string(StateCreated), string(StateInitializing):
+		return true
+	default:
+		return false
+	}
 }
