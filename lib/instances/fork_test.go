@@ -284,6 +284,7 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 	stoppedAt := time.Now().Add(-1 * time.Minute)
 	pid := 1234
 	exitCode := 17
+	compressionLevel := 5
 
 	src := StoredMetadata{
 		Env:           map[string]string{"A": "1"},
@@ -302,6 +303,13 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 			IgnoreSourceCIDRs:      []string{"10.0.0.0/8"},
 			IgnoreDestinationPorts: []uint16{22},
 		},
+		SnapshotPolicy: &SnapshotPolicy{
+			Compression: &snapshotstore.SnapshotCompressionConfig{
+				Enabled:   true,
+				Algorithm: snapshotstore.SnapshotCompressionAlgorithmZstd,
+				Level:     &compressionLevel,
+			},
+		},
 	}
 
 	cloned := cloneStoredMetadata(src)
@@ -317,6 +325,7 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 	*cloned.ExitCode = 42
 	cloned.AutoStandby.IgnoreSourceCIDRs[0] = "192.168.0.0/16"
 	cloned.AutoStandby.IgnoreDestinationPorts[0] = 443
+	*cloned.SnapshotPolicy.Compression.Level = 9
 	now := time.Now()
 	*cloned.StartedAt = now
 	*cloned.StoppedAt = now
@@ -331,6 +340,7 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 	require.Equal(t, 17, *src.ExitCode)
 	require.Equal(t, "10.0.0.0/8", src.AutoStandby.IgnoreSourceCIDRs[0])
 	require.Equal(t, uint16(22), src.AutoStandby.IgnoreDestinationPorts[0])
+	require.Equal(t, 5, *src.SnapshotPolicy.Compression.Level)
 	require.Equal(t, startedAt, *src.StartedAt)
 	require.Equal(t, stoppedAt, *src.StoppedAt)
 }

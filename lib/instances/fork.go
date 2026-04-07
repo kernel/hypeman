@@ -485,6 +485,9 @@ func cloneStoredMetadata(src StoredMetadata) StoredMetadata {
 	if src.AutoStandby != nil {
 		dst.AutoStandby = cloneAutoStandbyPolicy(src.AutoStandby)
 	}
+	if src.SnapshotPolicy != nil {
+		dst.SnapshotPolicy = cloneSnapshotPolicy(src.SnapshotPolicy)
+	}
 	if src.Credentials != nil {
 		dst.Credentials = cloneCredentialPolicies(src.Credentials)
 	}
