@@ -57,9 +57,8 @@ type Manager interface {
 	SetResourceValidator(v ResourceValidator)
 	// GetVsockDialer returns a VsockDialer for the specified instance.
 	GetVsockDialer(ctx context.Context, instanceID string) (hypervisor.VsockDialer, error)
-	// Subscribe returns a channel that receives state change events for the
-	// given instance, plus an unsubscribe function the caller must defer.
-	Subscribe(instanceID string) (<-chan StateChange, func())
+	// SubscribeLifecycleEvents returns the shared internal lifecycle event stream.
+	SubscribeLifecycleEvents(consumer LifecycleEventConsumer) (<-chan LifecycleEvent, func())
 }
 
 // ImageUsageRecorder records newly used images before instance metadata is persisted.
@@ -79,12 +78,30 @@ type ResourceLimits struct {
 	MaxMemoryPerInstance int64 // Maximum memory in bytes per instance (0 = unlimited)
 }
 
+// ManagerConfig holds non-resource manager behavior settings.
+type ManagerConfig struct {
+	LifecycleEventBufferSize int
+}
+
+// Normalize applies defaults to manager config values.
+func (c ManagerConfig) Normalize() ManagerConfig {
+	if c.LifecycleEventBufferSize <= 0 {
+		c.LifecycleEventBufferSize = defaultLifecycleEventBufferSize
+	}
+	return c
+}
+
 // ResourceValidator validates if resources can be allocated
 type ResourceValidator interface {
 	// ValidateAllocation checks if the requested resources are available.
 	// Returns nil if allocation is allowed, or a detailed error describing
 	// which resource is insufficient and the current capacity/usage.
-	ValidateAllocation(ctx context.Context, vcpus int, memoryBytes int64, networkDownloadBps int64, networkUploadBps int64, diskIOBps int64, needsGPU bool) error
+	ValidateAllocation(ctx context.Context, vcpus int, memoryBytes int64, networkDownloadBps int64, networkUploadBps int64, diskIOBps int64, diskBytes int64, needsGPU bool) error
+	// ReserveAllocation tentatively reserves resources for an in-flight operation.
+	// Call FinishAllocation once the operation fails or becomes visible to resource accounting.
+	ReserveAllocation(ctx context.Context, instanceID string, vcpus int, memoryBytes int64, networkDownloadBps int64, networkUploadBps int64, diskIOBps int64, diskBytes int64, needsGPU bool) error
+	// FinishAllocation removes any pending reservation for the given instance ID.
+	FinishAllocation(instanceID string)
 }
 
 type manager struct {
@@ -116,8 +133,14 @@ type manager struct {
 	nativeCodecPaths          map[string]string
 	imageUsageRecorder        ImageUsageRecorder
 
-	// State change subscriptions for waitForState
-	stateSubscribers *subscribers
+	// Shared lifecycle event subscriptions for internal consumers.
+	lifecycleEvents *lifecycleSubscribers
+
+	// Cached conservative allocation view for fast admission control.
+	admissionAllocationsMu     sync.RWMutex
+	admissionAllocations       map[string]resources.InstanceAllocation
+	admissionAllocationsLoaded bool
+	admissionReconcileOnce     sync.Once
 
 	// Hypervisor support
 	vmStarters        map[hypervisor.Type]hypervisor.VMStarter
@@ -132,6 +155,11 @@ var platformStarters = make(map[hypervisor.Type]hypervisor.VMStarter)
 // If meter is nil, metrics are disabled.
 // defaultHypervisor specifies which hypervisor to use when not specified in requests.
 func NewManager(p *paths.Paths, imageManager images.Manager, systemManager system.Manager, networkManager network.Manager, deviceManager devices.Manager, volumeManager volumes.Manager, limits ResourceLimits, defaultHypervisor hypervisor.Type, snapshotDefaults SnapshotPolicy, meter metric.Meter, tracer trace.Tracer, memoryPolicy ...guestmemory.Policy) Manager {
+	return NewManagerWithConfig(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, defaultHypervisor, snapshotDefaults, ManagerConfig{}, meter, tracer, memoryPolicy...)
+}
+
+// NewManagerWithConfig creates a new instances manager with additional manager settings.
+func NewManagerWithConfig(p *paths.Paths, imageManager images.Manager, systemManager system.Manager, networkManager network.Manager, deviceManager devices.Manager, volumeManager volumes.Manager, limits ResourceLimits, defaultHypervisor hypervisor.Type, snapshotDefaults SnapshotPolicy, managerConfig ManagerConfig, meter metric.Meter, tracer trace.Tracer, memoryPolicy ...guestmemory.Policy) Manager {
 	// Validate and default the hypervisor type
 	if defaultHypervisor == "" {
 		defaultHypervisor = hypervisor.TypeCloudHypervisor
@@ -142,6 +170,7 @@ func NewManager(p *paths.Paths, imageManager images.Manager, systemManager syste
 		policy = memoryPolicy[0]
 	}
 	policy = policy.Normalize()
+	managerConfig = managerConfig.Normalize()
 
 	// Initialize VM starters from platform-specific init functions
 	vmStarters := make(map[hypervisor.Type]hypervisor.VMStarter, len(platformStarters))
@@ -170,7 +199,7 @@ func NewManager(p *paths.Paths, imageManager images.Manager, systemManager syste
 		snapshotDefaults:  snapshotDefaults,
 		compressionJobs:   make(map[string]*compressionJob),
 		nativeCodecPaths:  make(map[string]string),
-		stateSubscribers:  newSubscribers(),
+		lifecycleEvents:   newLifecycleSubscribersWithBufferSize(managerConfig.LifecycleEventBufferSize),
 	}
 	m.deleteSnapshotFn = m.deleteSnapshot
 
@@ -180,6 +209,9 @@ func NewManager(p *paths.Paths, imageManager images.Manager, systemManager syste
 		if err == nil {
 			m.metrics = metrics
 		}
+	}
+	m.lifecycleEvents.onDrop = func(ctx context.Context, consumer LifecycleEventConsumer) {
+		m.recordLifecycleEventDropped(ctx, consumer, lifecycleEventDropReasonBufferFull)
 	}
 	if err := m.recoverPendingStandbyCompressionJobs(context.Background()); err != nil {
 		logger.FromContext(context.Background()).WarnContext(context.Background(), "failed to recover pending standby compression jobs", "error", err)
@@ -199,15 +231,25 @@ func (m *manager) SetImageUsageRecorder(recorder ImageUsageRecorder) {
 	m.imageUsageRecorder = recorder
 }
 
-func (m *manager) Subscribe(instanceID string) (<-chan StateChange, func()) {
-	return m.stateSubscribers.Subscribe(instanceID)
+func (m *manager) SubscribeLifecycleEvents(consumer LifecycleEventConsumer) (<-chan LifecycleEvent, func()) {
+	return m.lifecycleEvents.Subscribe(consumer)
 }
 
-// notifyStateChange broadcasts a state change to all subscribers for the instance.
-func (m *manager) notifyStateChange(instanceID string, inst *Instance) {
-	m.stateSubscribers.Notify(instanceID, StateChange{
-		State:      inst.State,
-		StateError: inst.StateError,
+func (m *manager) notifyLifecycleEvent(ctx context.Context, action LifecycleEventAction, inst *Instance) {
+	if inst == nil {
+		return
+	}
+	m.lifecycleEvents.Notify(ctx, LifecycleEvent{
+		Action:     action,
+		InstanceID: inst.Id,
+		Instance:   inst,
+	})
+}
+
+func (m *manager) notifyLifecycleDelete(ctx context.Context, instanceID string) {
+	m.lifecycleEvents.Notify(ctx, LifecycleEvent{
+		Action:     LifecycleEventDelete,
+		InstanceID: instanceID,
 	})
 }
 
@@ -274,7 +316,11 @@ func (m *manager) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 	// 1. ULID generation is unique
 	// 2. Filesystem mkdir is atomic per instance directory
 	// 3. Concurrent creates of different instances don't conflict
-	return m.createInstance(ctx, req)
+	inst, err := m.createInstance(ctx, req)
+	if err == nil {
+		m.notifyLifecycleEvent(ctx, LifecycleEventCreate, inst)
+	}
+	return inst, err
 }
 
 // DeleteInstance stops and deletes an instance
@@ -285,7 +331,7 @@ func (m *manager) DeleteInstance(ctx context.Context, id string) error {
 
 	err := m.deleteInstance(ctx, id)
 	if err == nil {
-		m.stateSubscribers.CloseAll(id)
+		m.notifyLifecycleDelete(ctx, id)
 		// Clean up the lock after successful deletion
 		m.instanceLocks.Delete(id)
 	}
@@ -336,11 +382,16 @@ func (m *manager) ForkInstance(ctx context.Context, id string, req ForkInstanceR
 			return nil, fmt.Errorf("wait for fork guest agent readiness: %w", err)
 		}
 	}
+	m.notifyLifecycleEvent(ctx, LifecycleEventFork, inst)
 	return inst, nil
 }
 
 func (m *manager) ForkSnapshot(ctx context.Context, snapshotID string, req ForkSnapshotRequest) (*Instance, error) {
-	return m.forkSnapshot(ctx, snapshotID, req)
+	inst, err := m.forkSnapshot(ctx, snapshotID, req)
+	if err == nil {
+		m.notifyLifecycleEvent(ctx, LifecycleEventFork, inst)
+	}
+	return inst, err
 }
 
 // StandbyInstance puts an instance in standby (pause, snapshot, delete VMM)
@@ -350,7 +401,7 @@ func (m *manager) StandbyInstance(ctx context.Context, id string, req StandbyIns
 	defer lock.Unlock()
 	inst, err := m.standbyInstance(ctx, id, req, false)
 	if err == nil {
-		m.notifyStateChange(id, inst)
+		m.notifyLifecycleEvent(ctx, LifecycleEventStandby, inst)
 	}
 	return inst, err
 }
@@ -362,7 +413,7 @@ func (m *manager) RestoreInstance(ctx context.Context, id string) (*Instance, er
 	defer lock.Unlock()
 	inst, err := m.restoreInstance(ctx, id)
 	if err == nil {
-		m.notifyStateChange(id, inst)
+		m.notifyLifecycleEvent(ctx, LifecycleEventRestore, inst)
 	}
 	return inst, err
 }
@@ -373,7 +424,7 @@ func (m *manager) RestoreSnapshot(ctx context.Context, id string, snapshotID str
 	defer lock.Unlock()
 	inst, err := m.restoreSnapshot(ctx, id, snapshotID, req)
 	if err == nil {
-		m.notifyStateChange(id, inst)
+		m.notifyLifecycleEvent(ctx, LifecycleEventRestore, inst)
 	}
 	return inst, err
 }
@@ -385,7 +436,7 @@ func (m *manager) StopInstance(ctx context.Context, id string) (*Instance, error
 	defer lock.Unlock()
 	inst, err := m.stopInstance(ctx, id)
 	if err == nil {
-		m.notifyStateChange(id, inst)
+		m.notifyLifecycleEvent(ctx, LifecycleEventStop, inst)
 	}
 	return inst, err
 }
@@ -397,7 +448,7 @@ func (m *manager) StartInstance(ctx context.Context, id string, req StartInstanc
 	defer lock.Unlock()
 	inst, err := m.startInstance(ctx, id, req)
 	if err == nil {
-		m.notifyStateChange(id, inst)
+		m.notifyLifecycleEvent(ctx, LifecycleEventStart, inst)
 	}
 	return inst, err
 }
@@ -407,7 +458,11 @@ func (m *manager) UpdateInstance(ctx context.Context, id string, req UpdateInsta
 	lock := m.getInstanceLock(id)
 	lock.Lock()
 	defer lock.Unlock()
-	return m.updateInstance(ctx, id, req)
+	inst, err := m.updateInstance(ctx, id, req)
+	if err == nil {
+		m.notifyLifecycleEvent(ctx, LifecycleEventUpdate, inst)
+	}
+	return inst, err
 }
 
 // ListInstances returns instances, optionally filtered by the given criteria.
@@ -546,50 +601,6 @@ func (m *manager) AttachVolume(ctx context.Context, id string, volumeId string, 
 // DetachVolume detaches a volume from an instance (not yet implemented)
 func (m *manager) DetachVolume(ctx context.Context, id string, volumeId string) (*Instance, error) {
 	return nil, fmt.Errorf("detach volume not yet implemented")
-}
-
-// ListInstanceAllocations returns resource allocations for all instances.
-// Used by the resource manager for capacity tracking.
-func (m *manager) ListInstanceAllocations(ctx context.Context) ([]resources.InstanceAllocation, error) {
-	instances, err := m.listInstances(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	allocations := make([]resources.InstanceAllocation, 0, len(instances))
-	for _, inst := range instances {
-		// Calculate volume bytes and volume overlay bytes separately
-		var volumeBytes int64
-		var volumeOverlayBytes int64
-		for _, vol := range inst.Volumes {
-			// Get actual volume size from volume manager
-			if m.volumeManager != nil {
-				if volume, err := m.volumeManager.GetVolume(ctx, vol.VolumeID); err == nil {
-					volumeBytes += int64(volume.SizeGb) * 1024 * 1024 * 1024
-				}
-			}
-			// Track overlay size separately for overlay volumes
-			if vol.Overlay {
-				volumeOverlayBytes += vol.OverlaySize
-			}
-		}
-
-		allocations = append(allocations, resources.InstanceAllocation{
-			ID:                 inst.Id,
-			Name:               inst.Name,
-			Vcpus:              inst.Vcpus,
-			MemoryBytes:        inst.Size + inst.HotplugSize,
-			OverlayBytes:       inst.OverlaySize,
-			VolumeOverlayBytes: volumeOverlayBytes,
-			NetworkDownloadBps: inst.NetworkBandwidthDownload,
-			NetworkUploadBps:   inst.NetworkBandwidthUpload,
-			DiskIOBps:          inst.DiskIOBps,
-			State:              string(inst.State),
-			VolumeBytes:        volumeBytes,
-		})
-	}
-
-	return allocations, nil
 }
 
 // ListRunningInstancesInfo returns info needed for utilization metrics collection.

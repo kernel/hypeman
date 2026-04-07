@@ -411,10 +411,10 @@ func newSnapshotCompressionTestManager(t *testing.T) *manager {
 
 	p := paths.New(t.TempDir())
 	return &manager{
-		paths:            p,
-		now:              time.Now,
-		compressionJobs:  make(map[string]*compressionJob),
-		stateSubscribers: newSubscribers(),
+		paths:           p,
+		now:             time.Now,
+		compressionJobs: make(map[string]*compressionJob),
+		lifecycleEvents: newLifecycleSubscribers(),
 	}
 }
 

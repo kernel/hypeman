@@ -171,8 +171,8 @@ func (m *mockInstanceManager) GetVsockDialer(ctx context.Context, instanceID str
 	return nil, nil
 }
 
-func (m *mockInstanceManager) Subscribe(instanceID string) (<-chan instances.StateChange, func()) {
-	ch := make(chan instances.StateChange, 1)
+func (m *mockInstanceManager) SubscribeLifecycleEvents(consumer instances.LifecycleEventConsumer) (<-chan instances.LifecycleEvent, func()) {
+	ch := make(chan instances.LifecycleEvent, 1)
 	return ch, func() { close(ch) }
 }
 

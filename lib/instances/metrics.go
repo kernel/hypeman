@@ -69,6 +69,10 @@ const (
 	snapshotCodecFallbackReasonNotExecutable snapshotCodecFallbackReason = "not_executable"
 )
 
+type lifecycleEventDropReason string
+
+const lifecycleEventDropReasonBufferFull lifecycleEventDropReason = "buffer_full"
+
 // Metrics holds the metrics instruments for instance operations.
 type Metrics struct {
 	createDuration                       metric.Float64Histogram
@@ -87,6 +91,7 @@ type Metrics struct {
 	snapshotRestoreMemoryPrepareTotal    metric.Int64Counter
 	snapshotRestoreMemoryPrepareDuration metric.Float64Histogram
 	snapshotCompressionPreemptionsTotal  metric.Int64Counter
+	lifecycleEventsDroppedTotal          metric.Int64Counter
 	tracer                               trace.Tracer
 }
 
@@ -239,6 +244,14 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 		return nil, err
 	}
 
+	lifecycleEventsDroppedTotal, err := meter.Int64Counter(
+		"hypeman_instances_lifecycle_events_dropped_total",
+		metric.WithDescription("Total number of lifecycle events dropped because subscriber buffers were full"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
 	// Register observable gauge for instance counts by state
 	instancesTotal, err := meter.Int64ObservableGauge(
 		"hypeman_instances_total",
@@ -268,6 +281,22 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 	snapshotCompressionPendingTotal, err := meter.Int64ObservableGauge(
 		"hypeman_snapshot_compression_pending_total",
 		metric.WithDescription("Total number of delayed snapshot compression jobs waiting to start"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	lifecycleSubscribersTotal, err := meter.Int64ObservableGauge(
+		"hypeman_instances_lifecycle_subscribers_total",
+		metric.WithDescription("Current number of lifecycle event subscribers by consumer"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	lifecycleSubscriberQueueDepth, err := meter.Int64ObservableGauge(
+		"hypeman_instances_lifecycle_subscriber_queue_depth",
+		metric.WithDescription("Maximum buffered lifecycle events across subscribers for each consumer"),
 	)
 	if err != nil {
 		return nil, err
@@ -376,6 +405,27 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 		return nil, err
 	}
 
+	_, err = meter.RegisterCallback(
+		func(ctx context.Context, o metric.Observer) error {
+			stats := make(map[LifecycleEventConsumer]lifecycleConsumerStats, len(allLifecycleEventConsumers))
+			if m.lifecycleEvents != nil {
+				stats = m.lifecycleEvents.Stats()
+			}
+			for _, consumer := range allLifecycleEventConsumers {
+				stat := stats[consumer]
+				attrs := metric.WithAttributes(attribute.String("consumer", string(consumer)))
+				o.ObserveInt64(lifecycleSubscribersTotal, stat.Subscribers, attrs)
+				o.ObserveInt64(lifecycleSubscriberQueueDepth, stat.MaxQueueDepth, attrs)
+			}
+			return nil
+		},
+		lifecycleSubscribersTotal,
+		lifecycleSubscriberQueueDepth,
+	)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Metrics{
 		createDuration:                       createDuration,
 		restoreDuration:                      restoreDuration,
@@ -393,6 +443,7 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 		snapshotRestoreMemoryPrepareTotal:    snapshotRestoreMemoryPrepareTotal,
 		snapshotRestoreMemoryPrepareDuration: snapshotRestoreMemoryPrepareDuration,
 		snapshotCompressionPreemptionsTotal:  snapshotCompressionPreemptionsTotal,
+		lifecycleEventsDroppedTotal:          lifecycleEventsDroppedTotal,
 		tracer:                               tracer,
 	}, nil
 }
@@ -588,6 +639,17 @@ func (m *manager) recordSnapshotCodecFallback(ctx context.Context, algorithm sna
 	m.metrics.snapshotCodecFallbacksTotal.Add(ctx, 1, metric.WithAttributes(
 		attribute.String("algorithm", string(algorithm)),
 		attribute.String("operation", string(operation)),
+		attribute.String("reason", string(reason)),
+	))
+}
+
+func (m *manager) recordLifecycleEventDropped(ctx context.Context, consumer LifecycleEventConsumer, reason lifecycleEventDropReason) {
+	if m.metrics == nil {
+		return
+	}
+
+	m.metrics.lifecycleEventsDroppedTotal.Add(ctx, 1, metric.WithAttributes(
+		attribute.String("consumer", string(consumer)),
 		attribute.String("reason", string(reason)),
 	))
 }

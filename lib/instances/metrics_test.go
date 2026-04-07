@@ -1,6 +1,7 @@
 package instances
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -157,6 +158,106 @@ func TestSnapshotCompressionMetrics_RecordAndObserve(t *testing.T) {
 	require.True(t, ok)
 	require.Len(t, waitDurations.DataPoints, 1)
 	assert.Equal(t, "skipped", metricLabel(t, waitDurations.DataPoints[0].Attributes, "outcome"))
+}
+
+func TestLifecycleEventMetrics_ObserveSubscribersQueueDepthAndDrops(t *testing.T) {
+	t.Parallel()
+
+	reader := otelmetric.NewManualReader()
+	provider := otelmetric.NewMeterProvider(otelmetric.WithReader(reader))
+
+	m := &manager{
+		paths:           paths.New(t.TempDir()),
+		lifecycleEvents: newLifecycleSubscribers(),
+	}
+
+	metrics, err := newInstanceMetrics(provider.Meter("test"), nil, m)
+	require.NoError(t, err)
+	m.metrics = metrics
+	m.lifecycleEvents.onDrop = func(ctx context.Context, consumer LifecycleEventConsumer) {
+		m.recordLifecycleEventDropped(ctx, consumer, lifecycleEventDropReasonBufferFull)
+	}
+
+	waitCh, waitUnsub := m.SubscribeLifecycleEvents(LifecycleEventConsumerWaitForState)
+	defer waitUnsub()
+	autoCh, autoUnsub := m.SubscribeLifecycleEvents(LifecycleEventConsumerAutoStandby)
+	defer autoUnsub()
+
+	for i := 0; i < 3; i++ {
+		m.lifecycleEvents.Notify(t.Context(), LifecycleEvent{
+			Action:     LifecycleEventUpdate,
+			InstanceID: "inst-1",
+			Instance:   &Instance{State: StateRunning},
+		})
+	}
+	<-waitCh
+
+	for i := 0; i < m.lifecycleEvents.bufferSize; i++ {
+		m.lifecycleEvents.Notify(t.Context(), LifecycleEvent{
+			Action:     LifecycleEventUpdate,
+			InstanceID: "inst-1",
+			Instance:   &Instance{State: StateRunning},
+		})
+	}
+
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(t.Context(), &rm))
+
+	assertMetricNames(t, rm, []string{
+		"hypeman_instances_lifecycle_subscribers_total",
+		"hypeman_instances_lifecycle_subscriber_queue_depth",
+		"hypeman_instances_lifecycle_events_dropped_total",
+	})
+
+	subscribersMetric := findMetric(t, rm, "hypeman_instances_lifecycle_subscribers_total")
+	subscribers, ok := subscribersMetric.Data.(metricdata.Gauge[int64])
+	require.True(t, ok)
+	require.Len(t, subscribers.DataPoints, len(allLifecycleEventConsumers))
+	for _, point := range subscribers.DataPoints {
+		switch metricLabel(t, point.Attributes, "consumer") {
+		case string(LifecycleEventConsumerWaitForState):
+			assert.Equal(t, int64(1), point.Value)
+		case string(LifecycleEventConsumerAutoStandby):
+			assert.Equal(t, int64(1), point.Value)
+		default:
+			t.Fatalf("unexpected consumer label: %s", metricLabel(t, point.Attributes, "consumer"))
+		}
+	}
+
+	queueDepthMetric := findMetric(t, rm, "hypeman_instances_lifecycle_subscriber_queue_depth")
+	queueDepth, ok := queueDepthMetric.Data.(metricdata.Gauge[int64])
+	require.True(t, ok)
+	require.Len(t, queueDepth.DataPoints, len(allLifecycleEventConsumers))
+	for _, point := range queueDepth.DataPoints {
+		switch metricLabel(t, point.Attributes, "consumer") {
+		case string(LifecycleEventConsumerWaitForState):
+			assert.Equal(t, int64(m.lifecycleEvents.bufferSize), point.Value)
+		case string(LifecycleEventConsumerAutoStandby):
+			assert.Equal(t, int64(m.lifecycleEvents.bufferSize), point.Value)
+		default:
+			t.Fatalf("unexpected consumer label: %s", metricLabel(t, point.Attributes, "consumer"))
+		}
+	}
+
+	droppedMetric := findMetric(t, rm, "hypeman_instances_lifecycle_events_dropped_total")
+	dropped, ok := droppedMetric.Data.(metricdata.Sum[int64])
+	require.True(t, ok)
+	require.NotEmpty(t, dropped.DataPoints)
+
+	var waitDrops int64
+	var autoDrops int64
+	for _, point := range dropped.DataPoints {
+		assert.Equal(t, string(lifecycleEventDropReasonBufferFull), metricLabel(t, point.Attributes, "reason"))
+		switch metricLabel(t, point.Attributes, "consumer") {
+		case string(LifecycleEventConsumerWaitForState):
+			waitDrops += point.Value
+		case string(LifecycleEventConsumerAutoStandby):
+			autoDrops += point.Value
+		}
+	}
+	assert.Greater(t, waitDrops, int64(0))
+	assert.Greater(t, autoDrops, int64(0))
+	assert.Equal(t, m.lifecycleEvents.bufferSize, len(autoCh))
 }
 
 func TestInstanceOldestInStateMetric_ObserveOldestAgePerState(t *testing.T) {

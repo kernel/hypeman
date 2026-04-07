@@ -134,7 +134,10 @@ func ProvideInstanceManager(p *paths.Paths, cfg *config.Config, imageManager ima
 		ReclaimEnabled:     cfg.Hypervisor.Memory.ReclaimEnabled,
 		VZBalloonRequired:  cfg.Hypervisor.Memory.VZBalloonRequired,
 	}
-	return instances.NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, defaultHypervisor, snapshotDefaults, meter, tracer, memoryPolicy), nil
+	managerConfig := instances.ManagerConfig{
+		LifecycleEventBufferSize: cfg.Instances.LifecycleEventBufferSize,
+	}
+	return instances.NewManagerWithConfig(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, defaultHypervisor, snapshotDefaults, managerConfig, meter, tracer, memoryPolicy), nil
 }
 
 func snapshotDefaultsFromConfig(cfg *config.Config) instances.SnapshotPolicy {

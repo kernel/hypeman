@@ -59,13 +59,21 @@ func (m *manager) restoreInstance(
 	}
 
 	// 2b. Validate aggregate resource limits before allocating resources (if configured)
+	reservedResources := false
 	if m.resourceValidator != nil {
 		needsGPU := stored.GPUProfile != ""
 		totalMemory := stored.Size + stored.HotplugSize
-		if err := m.resourceValidator.ValidateAllocation(ctx, stored.Vcpus, totalMemory, stored.NetworkBandwidthDownload, stored.NetworkBandwidthUpload, stored.DiskIOBps, needsGPU); err != nil {
-			log.ErrorContext(ctx, "resource validation failed for restore", "instance_id", id, "error", err)
+		diskBytes := storedDiskReservationBytes(stored)
+		if err := m.resourceValidator.ReserveAllocation(ctx, id, stored.Vcpus, totalMemory, stored.NetworkBandwidthDownload, stored.NetworkBandwidthUpload, stored.DiskIOBps, diskBytes, needsGPU); err != nil {
+			log.ErrorContext(ctx, "resource reservation failed for restore", "instance_id", id, "error", err)
 			return nil, fmt.Errorf("%w: %v", ErrInsufficientResources, err)
 		}
+		reservedResources = true
+		defer func() {
+			if reservedResources {
+				m.resourceValidator.FinishAllocation(id)
+			}
+		}()
 	}
 
 	// 3. Get snapshot directory
@@ -254,6 +262,15 @@ func (m *manager) restoreInstance(
 		return nil, fmt.Errorf("resume vm failed: %w", err)
 	}
 	resumeSpanEnd(nil)
+	// Mark the instance visible before releasing its pending reservation so we
+	// never create an undercount window. The tiny overlap is intentionally
+	// over-conservative: concurrent admissions may briefly see both visible and
+	// pending usage for this instance, but they will not oversubscribe the host.
+	m.setAdmissionAllocationActive(stored, true)
+	if reservedResources {
+		m.resourceValidator.FinishAllocation(id)
+		reservedResources = false
+	}
 
 	// Forked standby restores may allocate a fresh identity while the guest memory snapshot
 	// still has the source VM's old IP configuration. Reconfigure guest networking after
@@ -268,6 +285,7 @@ func (m *manager) restoreInstance(
 			reconfigureSpanEnd(err)
 			log.ErrorContext(ctx, "failed to configure guest network after restore", "instance_id", id, "error", err)
 			_ = hv.Shutdown(ctx)
+			m.rollbackAdmissionAllocationActive(stored)
 			releaseNetwork()
 			return nil, fmt.Errorf("configure guest network after restore: %w", err)
 		}
