@@ -64,10 +64,17 @@ func (s autoStandbyInstanceStore) SubscribeInstanceEvents() (<-chan autostandby.
 	go func() {
 		defer close(dst)
 		for event := range src {
+			inst := toAutoStandbyInstance(event.Instance)
+			if inst != nil {
+				runtime, err := s.runtimeManager.GetAutoStandbyRuntime(context.Background(), inst.ID)
+				if err == nil {
+					inst.Runtime = runtime
+				}
+			}
 			dst <- autostandby.InstanceEvent{
 				Action:     autostandby.InstanceEventAction(event.Action),
 				InstanceID: event.InstanceID,
-				Instance:   toAutoStandbyInstance(event.Instance),
+				Instance:   inst,
 			}
 		}
 	}()
