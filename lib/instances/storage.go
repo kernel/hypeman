@@ -2,12 +2,21 @@ package instances
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
+	"time"
 
 	"github.com/kernel/hypeman/lib/autostandby"
 	"github.com/kernel/hypeman/lib/images"
+)
+
+const (
+	deleteInstanceDataMaxRetries     = 5
+	deleteInstanceDataInitialBackoff = 10 * time.Millisecond
+	deleteInstanceDataMaxBackoff     = 100 * time.Millisecond
 )
 
 // Filesystem structure:
@@ -111,13 +120,33 @@ func (m *manager) createVolumeOverlayDisk(instanceID, volumeID string, sizeBytes
 func (m *manager) deleteInstanceData(id string) error {
 	instDir := m.paths.InstanceDir(id)
 
-	if err := os.RemoveAll(instDir); err != nil {
+	if err := removeAllWithRetry(instDir, os.RemoveAll, time.Sleep); err != nil {
 		return fmt.Errorf("remove instance directory: %w", err)
 	}
 
 	m.deleteAdmissionAllocation(id)
 
 	return nil
+}
+
+func removeAllWithRetry(path string, removeAll func(string) error, sleep func(time.Duration)) error {
+	backoff := deleteInstanceDataInitialBackoff
+
+	for attempt := 0; ; attempt++ {
+		err := removeAll(path)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, syscall.ENOTEMPTY) || attempt >= deleteInstanceDataMaxRetries {
+			return err
+		}
+
+		sleep(backoff)
+		backoff *= 2
+		if backoff > deleteInstanceDataMaxBackoff {
+			backoff = deleteInstanceDataMaxBackoff
+		}
+	}
 }
 
 // listMetadataFiles returns paths to all instance metadata files
