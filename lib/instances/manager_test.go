@@ -1289,6 +1289,58 @@ func TestStorageOperations(t *testing.T) {
 	assert.ErrorIs(t, err, ErrNotFound)
 }
 
+func TestRemoveAllWithRetryRetriesDirectoryNotEmpty(t *testing.T) {
+	t.Parallel()
+
+	path := "/tmp/test-instance"
+	attempts := 0
+	var slept []time.Duration
+
+	err := removeAllWithRetry(path, func(got string) error {
+		attempts++
+		require.Equal(t, path, got)
+		if attempts <= 3 {
+			return &os.PathError{Op: "unlinkat", Path: got, Err: syscall.ENOTEMPTY}
+		}
+		return nil
+	}, func(d time.Duration) {
+		slept = append(slept, d)
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 4, attempts)
+	assert.Equal(t, []time.Duration{
+		10 * time.Millisecond,
+		20 * time.Millisecond,
+		40 * time.Millisecond,
+	}, slept)
+}
+
+func TestRemoveAllWithRetryStopsAfterMaxRetries(t *testing.T) {
+	t.Parallel()
+
+	attempts := 0
+	var slept []time.Duration
+
+	err := removeAllWithRetry("/tmp/test-instance", func(string) error {
+		attempts++
+		return &os.PathError{Op: "unlinkat", Path: "/tmp/test-instance", Err: syscall.ENOTEMPTY}
+	}, func(d time.Duration) {
+		slept = append(slept, d)
+	})
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, syscall.ENOTEMPTY)
+	assert.Equal(t, deleteInstanceDataMaxRetries+1, attempts)
+	assert.Equal(t, []time.Duration{
+		10 * time.Millisecond,
+		20 * time.Millisecond,
+		40 * time.Millisecond,
+		80 * time.Millisecond,
+		100 * time.Millisecond,
+	}, slept)
+}
+
 func TestStandbyAndRestore(t *testing.T) {
 	t.Parallel()
 	// Require KVM access (don't skip, fail informatively)
