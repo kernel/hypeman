@@ -214,6 +214,21 @@ func TestResolveStandbyCompressionDelayPrecedence(t *testing.T) {
 	assert.Zero(t, delay)
 }
 
+func TestResolveStandbyCompressionDelayIgnoresServerDefaults(t *testing.T) {
+	t.Parallel()
+
+	serverDelay := 3 * time.Minute
+	m := &manager{
+		snapshotDefaults: SnapshotPolicy{
+			StandbyCompressionDelay: &serverDelay,
+		},
+	}
+
+	delay, err := m.resolveStandbyCompressionDelay(&StoredMetadata{}, nil)
+	require.NoError(t, err)
+	assert.Zero(t, delay)
+}
+
 func TestResolveStandbyCompressionDelayRejectsNegativeDuration(t *testing.T) {
 	t.Parallel()
 

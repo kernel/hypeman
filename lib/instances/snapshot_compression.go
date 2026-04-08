@@ -208,6 +208,9 @@ func (m *manager) resolveStandbyCompressionPolicy(stored *StoredMetadata, overri
 }
 
 func (m *manager) resolveStandbyCompressionDelay(stored *StoredMetadata, override *time.Duration) (time.Duration, error) {
+	// Standby delay is intentionally scoped to the standby request and the
+	// per-instance snapshot policy. This change does not introduce a
+	// server-global standby delay default.
 	candidates := []*time.Duration{override}
 	if stored != nil && stored.SnapshotPolicy != nil {
 		candidates = append(candidates, stored.SnapshotPolicy.StandbyCompressionDelay)
