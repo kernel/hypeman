@@ -59,6 +59,7 @@ Compression runs **asynchronously after the snapshot is already durable on disk*
 - Standby can return successfully while compression is still running in the background.
 - For standby only, Hypeman can wait for a configured grace period before starting that background compression.
 - During that delay window, the raw memory snapshot remains in place so resume can skip decompression entirely.
+- If Hypeman restarts during that delay window, it rebuilds the pending standby compression job from instance metadata and either resumes waiting for the remaining delay or starts compression immediately once the `not_before` time has passed.
 - That means a later restore can arrive before compression has finished.
 - While compression is running, the snapshot remains valid and reports `compression_state=compressing`.
 - Once finished, the snapshot reports `compression_state=compressed` and exposes compressed/uncompressed size metadata.
