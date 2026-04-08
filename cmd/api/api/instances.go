@@ -278,6 +278,13 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 	if request.Body.Cmd != nil {
 		cmd = *request.Body.Cmd
 	}
+	autoStandby, err := toDomainAutoStandbyPolicy(request.Body.AutoStandby)
+	if err != nil {
+		return oapi.CreateInstance400JSONResponse{
+			Code:    "invalid_auto_standby",
+			Message: err.Error(),
+		}, nil
+	}
 
 	domainReq := instances.CreateInstanceRequest{
 		Name:                     request.Body.Name,
@@ -302,6 +309,7 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		Cmd:                      cmd,
 		SkipKernelHeaders:        request.Body.SkipKernelHeaders != nil && *request.Body.SkipKernelHeaders,
 		SkipGuestAgent:           request.Body.SkipGuestAgent != nil && *request.Body.SkipGuestAgent,
+		AutoStandby:              autoStandby,
 	}
 	if request.Body.SnapshotPolicy != nil {
 		snapshotPolicy, err := toInstanceSnapshotPolicy(*request.Body.SnapshotPolicy)
@@ -934,9 +942,17 @@ func (s *ApiService) UpdateInstance(ctx context.Context, request oapi.UpdateInst
 	if request.Body.Env != nil {
 		env = *request.Body.Env
 	}
+	autoStandby, err := toDomainAutoStandbyPolicy(request.Body.AutoStandby)
+	if err != nil {
+		return oapi.UpdateInstance400JSONResponse{
+			Code:    "invalid_auto_standby",
+			Message: err.Error(),
+		}, nil
+	}
 
 	result, err := s.InstanceManager.UpdateInstance(ctx, inst.Id, instances.UpdateInstanceRequest{
-		Env: env,
+		Env:         env,
+		AutoStandby: autoStandby,
 	})
 	if err != nil {
 		switch {
@@ -1067,6 +1083,7 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 		oapiPolicy := toOAPISnapshotPolicy(*inst.SnapshotPolicy)
 		oapiInst.SnapshotPolicy = &oapiPolicy
 	}
+	oapiInst.AutoStandby = toOAPIAutoStandbyPolicy(inst.AutoStandby)
 
 	// Convert volume attachments
 	if len(inst.Volumes) > 0 {

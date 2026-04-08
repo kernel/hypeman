@@ -10,6 +10,7 @@ import (
 	"context"
 	"github.com/kernel/hypeman/cmd/api/api"
 	"github.com/kernel/hypeman/cmd/api/config"
+	"github.com/kernel/hypeman/lib/autostandby"
 	"github.com/kernel/hypeman/lib/builds"
 	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/guestmemory"
@@ -69,6 +70,7 @@ func initializeApp() (*application, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	autostandbyController := providers.ProvideAutoStandbyController(instancesManager, logger)
 	vm_metricsManager, err := providers.ProvideVMMetricsManager(instancesManager, config, logger)
 	if err != nil {
 		return nil, nil, err
@@ -77,7 +79,7 @@ func initializeApp() (*application, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	apiService := api.New(config, manager, instancesManager, volumesManager, networkManager, devicesManager, ingressManager, buildsManager, resourcesManager, controller, vm_metricsManager)
+	apiService := api.New(config, manager, instancesManager, volumesManager, networkManager, devicesManager, ingressManager, buildsManager, resourcesManager, controller, autostandbyController, vm_metricsManager)
 	mainApplication := &application{
 		Ctx:                   context,
 		Logger:                logger,
@@ -92,6 +94,7 @@ func initializeApp() (*application, func(), error) {
 		BuildManager:          buildsManager,
 		ResourceManager:       resourcesManager,
 		GuestMemoryController: controller,
+		AutoStandbyController: autostandbyController,
 		VMMetricsManager:      vm_metricsManager,
 		Registry:              registry,
 		ApiService:            apiService,
@@ -117,6 +120,7 @@ type application struct {
 	BuildManager          builds.Manager
 	ResourceManager       *resources.Manager
 	GuestMemoryController guestmemory.Controller
+	AutoStandbyController *autostandby.Controller
 	VMMetricsManager      *vm_metrics.Manager
 	Registry              *registry.Registry
 	ApiService            *api.ApiService

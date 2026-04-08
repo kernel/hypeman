@@ -35,6 +35,7 @@ const compressionGuestExecTimeout = 20 * time.Second
 
 func TestCloudHypervisorStandbyRestoreCompressionScenarios(t *testing.T) {
 	t.Parallel()
+	requireStandbyRestoreCompressionManualRun(t)
 
 	runStandbyRestoreCompressionScenarios(t, compressionIntegrationHarness{
 		name:       "cloud-hypervisor",
