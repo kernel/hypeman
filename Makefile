@@ -271,13 +271,13 @@ test-linux: ensure-ch-binaries ensure-firecracker-binaries ensure-caddy-binaries
 	if [ -n "$(VERBOSE)" ]; then VERBOSE_FLAG="-v"; fi; \
 	if [ -n "$(TEST)" ]; then \
 		echo "Running specific test: $(TEST)"; \
-		sudo env "PATH=$$TEST_PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" \
+		sudo env "PATH=$$TEST_PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" "CI=$${CI:-}" \
 			"HYPEMAN_TEST_PREWARM_DIR=$${HYPEMAN_TEST_PREWARM_DIR:-}" \
 			"HYPEMAN_TEST_PREWARM_STRICT=$${HYPEMAN_TEST_PREWARM_STRICT:-}" \
 			"HYPEMAN_TEST_REGISTRY=$${HYPEMAN_TEST_REGISTRY:-}" \
 			go test -tags containers_image_openpgp -run=$(TEST) $$VERBOSE_FLAG -timeout=$(TEST_TIMEOUT) ./...; \
 	else \
-		sudo env "PATH=$$TEST_PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" \
+		sudo env "PATH=$$TEST_PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" "CI=$${CI:-}" \
 			"HYPEMAN_TEST_PREWARM_DIR=$${HYPEMAN_TEST_PREWARM_DIR:-}" \
 			"HYPEMAN_TEST_PREWARM_STRICT=$${HYPEMAN_TEST_PREWARM_STRICT:-}" \
 			"HYPEMAN_TEST_REGISTRY=$${HYPEMAN_TEST_REGISTRY:-}" \
@@ -309,7 +309,7 @@ test-guestmemory-linux: ensure-ch-binaries ensure-firecracker-binaries ensure-ca
 	echo "Running manual guest memory integration tests (CloudHypervisor, QEMU, Firecracker)"; \
 	for TEST_NAME in TestGuestMemoryPolicyCloudHypervisor TestGuestMemoryPolicyQEMU TestGuestMemoryPolicyFirecracker; do \
 		echo "Running $$TEST_NAME"; \
-		sudo env "PATH=$$TEST_PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" "HYPEMAN_RUN_GUESTMEMORY_TESTS=1" \
+		sudo env "PATH=$$TEST_PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" "CI=$${CI:-}" "HYPEMAN_RUN_GUESTMEMORY_TESTS=1" \
 			go test -count=1 -tags containers_image_openpgp -run="^$$TEST_NAME$$" -timeout="$$GUESTMEM_TIMEOUT" ./lib/instances || exit $$?; \
 	done
 
