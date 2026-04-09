@@ -1,0 +1,5 @@
+{
+  "non_production_paths": [],
+  "skip_packages": [],
+  "ecosystems": ["go"]
+}
