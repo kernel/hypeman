@@ -299,6 +299,11 @@ func (p *Paths) VolumeMetadata(id string) string {
 	return filepath.Join(p.VolumeDir(id), "metadata.json")
 }
 
+// VolumeNFSMount returns the directory where a volume's data.raw is loop-mounted for NFS export.
+func (p *Paths) VolumeNFSMount(id string) string {
+	return filepath.Join(p.VolumeDir(id), "nfs_mount")
+}
+
 // Caddy path methods
 
 // CaddyDir returns the caddy data directory.

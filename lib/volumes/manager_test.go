@@ -108,14 +108,14 @@ func TestMultiAttach_RejectSecondAttachWhenRW(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Second attachment (either RO or RW) should fail
+	// Second attachment as RO should fail when existing is RW
 	err = manager.AttachVolume(ctx, vol.Id, AttachVolumeRequest{
 		InstanceID: "instance-2",
 		MountPath:  "/data",
-		Readonly:   true, // Even RO should fail when existing is RW
+		Readonly:   true, // RO should fail when existing is RW
 	})
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "exclusive read-write attachment")
+	assert.Contains(t, err.Error(), "existing read-write attachment")
 }
 
 func TestMultiAttach_AllowMultipleRO(t *testing.T) {
@@ -388,6 +388,183 @@ func TestMultiAttach_ConcurrentRWConflict(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, vol.Attachments, 1, "Should have exactly one attachment")
 	assert.False(t, vol.Attachments[0].Readonly, "Attachment should be read-write")
+}
+
+func TestRWX_RejectWithoutNFSHost(t *testing.T) {
+	mgr, _, cleanup := setupTestManager(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	vol, err := mgr.CreateVolume(ctx, CreateVolumeRequest{
+		Name:   "rwx-vol",
+		SizeGb: 1,
+	})
+	require.NoError(t, err)
+
+	// First rw attachment succeeds (block device, no NFS needed)
+	err = mgr.AttachVolume(ctx, vol.Id, AttachVolumeRequest{
+		InstanceID: "instance-1",
+		MountPath:  "/data",
+		Readonly:   false,
+	})
+	require.NoError(t, err)
+
+	// Second rw attachment should fail because NFS host is not configured
+	err = mgr.AttachVolume(ctx, vol.Id, AttachVolumeRequest{
+		InstanceID: "instance-2",
+		MountPath:  "/data",
+		Readonly:   false,
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "NFS host not configured")
+}
+
+func TestRWX_NFSInfoNilWhenNotServed(t *testing.T) {
+	mgr, _, cleanup := setupTestManager(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	vol, err := mgr.CreateVolume(ctx, CreateVolumeRequest{
+		Name:   "no-nfs-vol",
+		SizeGb: 1,
+	})
+	require.NoError(t, err)
+
+	// Single rw attachment — no NFS
+	err = mgr.AttachVolume(ctx, vol.Id, AttachVolumeRequest{
+		InstanceID: "instance-1",
+		MountPath:  "/data",
+		Readonly:   false,
+	})
+	require.NoError(t, err)
+
+	nfsInfo, err := mgr.GetVolumeNFSInfo(ctx, vol.Id)
+	require.NoError(t, err)
+	assert.Nil(t, nfsInfo, "NFS info should be nil for single rw attachment")
+}
+
+func TestRWX_NFSMetadataPersistence(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "volume-nfs-persist-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+
+	p := paths.New(tmpDir)
+	require.NoError(t, os.MkdirAll(p.VolumeDir("vol-nfs-1"), 0755))
+
+	// Save metadata with NFS info
+	meta := &storedMetadata{
+		Id:     "vol-nfs-1",
+		Name:   "nfs-vol",
+		SizeGb: 5,
+		NFS: &storedNFSInfo{
+			Host:       "10.100.0.1",
+			ExportPath: "/data/volumes/vol-nfs-1/nfs_mount",
+		},
+		Attachments: []storedAttachment{
+			{InstanceID: "inst-1", MountPath: "/data", Readonly: false, NFS: false},
+			{InstanceID: "inst-2", MountPath: "/data", Readonly: false, NFS: true},
+		},
+	}
+	require.NoError(t, saveMetadata(p, meta))
+
+	// Reload and verify
+	loaded, err := loadMetadata(p, "vol-nfs-1")
+	require.NoError(t, err)
+	require.NotNil(t, loaded.NFS)
+	assert.Equal(t, "10.100.0.1", loaded.NFS.Host)
+	assert.Equal(t, "/data/volumes/vol-nfs-1/nfs_mount", loaded.NFS.ExportPath)
+	require.Len(t, loaded.Attachments, 2)
+	assert.False(t, loaded.Attachments[0].NFS)
+	assert.True(t, loaded.Attachments[1].NFS)
+
+	// Verify domain conversion
+	vol := (&manager{}).metadataToVolume(loaded)
+	require.NotNil(t, vol.NFS)
+	assert.Equal(t, "10.100.0.1", vol.NFS.Host)
+	assert.True(t, vol.Attachments[1].NFS)
+}
+
+func TestRWX_DetachClearsNFSWhenNoConsumers(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "volume-nfs-detach-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+
+	p := paths.New(tmpDir)
+	require.NoError(t, os.MkdirAll(p.VolumeDir("vol-detach-1"), 0755))
+
+	// Set up metadata with NFS and two attachments (one NFS, one not)
+	meta := &storedMetadata{
+		Id:     "vol-detach-1",
+		Name:   "detach-vol",
+		SizeGb: 5,
+		NFS: &storedNFSInfo{
+			Host:       "10.100.0.1",
+			ExportPath: "/data/volumes/vol-detach-1/nfs_mount",
+		},
+		Attachments: []storedAttachment{
+			{InstanceID: "inst-1", MountPath: "/data", Readonly: false, NFS: false},
+			{InstanceID: "inst-2", MountPath: "/data", Readonly: false, NFS: true},
+		},
+	}
+	require.NoError(t, saveMetadata(p, meta))
+
+	mgr := &manager{
+		paths: p,
+		nfs:   newNFSManager(p),
+	}
+	ctx := context.Background()
+
+	// Detach the NFS consumer
+	err = mgr.DetachVolume(ctx, "vol-detach-1", "inst-2")
+	require.NoError(t, err)
+
+	// Verify NFS info is cleared (no NFS consumers remain)
+	loaded, err := loadMetadata(p, "vol-detach-1")
+	require.NoError(t, err)
+	assert.Nil(t, loaded.NFS, "NFS info should be cleared when no NFS consumers remain")
+	require.Len(t, loaded.Attachments, 1)
+}
+
+func TestRWX_DetachKeepsNFSWithRemainingConsumers(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "volume-nfs-keep-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+
+	p := paths.New(tmpDir)
+	require.NoError(t, os.MkdirAll(p.VolumeDir("vol-keep-1"), 0755))
+
+	// Set up metadata with NFS and three attachments (two NFS)
+	meta := &storedMetadata{
+		Id:     "vol-keep-1",
+		Name:   "keep-vol",
+		SizeGb: 5,
+		NFS: &storedNFSInfo{
+			Host:       "10.100.0.1",
+			ExportPath: "/data/volumes/vol-keep-1/nfs_mount",
+		},
+		Attachments: []storedAttachment{
+			{InstanceID: "inst-1", MountPath: "/data", Readonly: false, NFS: false},
+			{InstanceID: "inst-2", MountPath: "/data", Readonly: false, NFS: true},
+			{InstanceID: "inst-3", MountPath: "/data", Readonly: false, NFS: true},
+		},
+	}
+	require.NoError(t, saveMetadata(p, meta))
+
+	mgr := &manager{
+		paths: p,
+		nfs:   newNFSManager(p),
+	}
+	ctx := context.Background()
+
+	// Detach one NFS consumer
+	err = mgr.DetachVolume(ctx, "vol-keep-1", "inst-2")
+	require.NoError(t, err)
+
+	// Verify NFS info is still present (inst-3 still uses NFS)
+	loaded, err := loadMetadata(p, "vol-keep-1")
+	require.NoError(t, err)
+	assert.NotNil(t, loaded.NFS, "NFS info should be kept when NFS consumers remain")
+	require.Len(t, loaded.Attachments, 2)
 }
 
 func TestCreateVolume_MetadataRoundTrip(t *testing.T) {

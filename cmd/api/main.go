@@ -29,6 +29,7 @@ import (
 	"github.com/kernel/hypeman/lib/imageretention"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/instances"
+	"github.com/kernel/hypeman/lib/network"
 	loglib "github.com/kernel/hypeman/lib/logger"
 	mw "github.com/kernel/hypeman/lib/middleware"
 	"github.com/kernel/hypeman/lib/oapi"
@@ -37,6 +38,7 @@ import (
 	"github.com/kernel/hypeman/lib/registry"
 	"github.com/kernel/hypeman/lib/scopes"
 	"github.com/kernel/hypeman/lib/vmm"
+	"github.com/kernel/hypeman/lib/volumes"
 	nethttpmiddleware "github.com/oapi-codegen/nethttp-middleware"
 	"github.com/riandyrn/otelchi"
 	"go.opentelemetry.io/otel/metric"
@@ -263,6 +265,19 @@ func run() error {
 	if err := app.NetworkManager.Initialize(app.Ctx, preserveTAPs); err != nil {
 		logger.Error("failed to initialize network manager", "error", err)
 		return fmt.Errorf("initialize network manager: %w", err)
+	}
+
+	// Configure NFS host IP for ReadWriteMany volume support.
+	// The gateway IP is the host's address on the VM bridge — VMs can reach NFS at this address.
+	if nfsSetter, ok := app.VolumeManager.(volumes.NFSHostSetter); ok {
+		gateway := app.Config.Network.SubnetGateway
+		if gateway == "" {
+			gateway, _ = network.DeriveGateway(app.Config.Network.SubnetCIDR)
+		}
+		if gateway != "" {
+			nfsSetter.SetNFSHost(gateway)
+			logger.Info("NFS host configured for ReadWriteMany volumes", "host", gateway)
+		}
 	}
 
 	// Set up HTB qdisc on bridge for network fair sharing

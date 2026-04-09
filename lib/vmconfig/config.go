@@ -38,8 +38,10 @@ type Config struct {
 type VolumeMount struct {
 	Device        string `json:"device"`
 	Path          string `json:"path"`
-	Mode          string `json:"mode"` // "ro", "rw", or "overlay"
+	Mode          string `json:"mode"` // "ro", "rw", "overlay", or "nfs"
 	OverlayDevice string `json:"overlay_device,omitempty"`
+	NFSHost       string `json:"nfs_host,omitempty"`   // Host IP for NFS mount (mode=nfs)
+	NFSExport     string `json:"nfs_export,omitempty"` // Export path on host (mode=nfs)
 }
 
 // EgressProxyConfig configures guest-side trust and proxy endpoint wiring.

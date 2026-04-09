@@ -99,8 +99,23 @@ func (m *manager) buildGuestConfig(ctx context.Context, inst *Instance, imageInf
 
 	// Volume mounts
 	// Volumes are attached as /dev/vdd, /dev/vde, etc. (after vda=rootfs, vdb=overlay, vdc=config)
+	// NFS-served volumes do not consume a device slot — they mount via network.
 	deviceIdx := 0
 	for _, vol := range inst.Volumes {
+		// Check if this volume is NFS-served (ReadWriteMany)
+		nfsInfo, _ := m.volumeManager.GetVolumeNFSInfo(ctx, vol.VolumeID)
+		if nfsInfo != nil && !vol.Readonly {
+			// NFS mount — no block device needed
+			mount := vmconfig.VolumeMount{
+				Path:      vol.MountPath,
+				Mode:      "nfs",
+				NFSHost:   nfsInfo.Host,
+				NFSExport: nfsInfo.ExportPath,
+			}
+			cfg.VolumeMounts = append(cfg.VolumeMounts, mount)
+			continue
+		}
+
 		device := fmt.Sprintf("/dev/vd%c", 'd'+deviceIdx)
 		mount := vmconfig.VolumeMount{
 			Device: device,

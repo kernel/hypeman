@@ -267,6 +267,10 @@ func (m *mockVolumeManager) TotalVolumeBytes(ctx context.Context) (int64, error)
 	return 0, nil
 }
 
+func (m *mockVolumeManager) GetVolumeNFSInfo(ctx context.Context, id string) (*volumes.NFSInfo, error) {
+	return nil, nil
+}
+
 // mockSecretProvider implements SecretProvider for testing
 type mockSecretProvider struct{}
 

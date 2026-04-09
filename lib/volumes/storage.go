@@ -21,6 +21,13 @@ type storedAttachment struct {
 	InstanceID string `json:"instance_id"`
 	MountPath  string `json:"mount_path"`
 	Readonly   bool   `json:"readonly"`
+	NFS        bool   `json:"nfs,omitempty"` // True if this attachment uses NFS
+}
+
+// storedNFSInfo represents persisted NFS serving state
+type storedNFSInfo struct {
+	Host       string `json:"host"`        // Host IP for NFS mount
+	ExportPath string `json:"export_path"` // Export path on the host
 }
 
 // storedMetadata represents volume metadata that is persisted to disk
@@ -31,6 +38,7 @@ type storedMetadata struct {
 	Tags        tags.Tags          `json:"tags,omitempty"`
 	CreatedAt   string             `json:"created_at"` // RFC3339 format
 	Attachments []storedAttachment `json:"attachments,omitempty"`
+	NFS         *storedNFSInfo     `json:"nfs,omitempty"` // Non-nil when volume is NFS-served
 }
 
 // ensureVolumeDir creates the volume directory

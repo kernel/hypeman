@@ -25,15 +25,21 @@ type Manager interface {
 	DeleteVolume(ctx context.Context, id string) error
 
 	// Attachment operations (called by instance manager)
-	// Multi-attach rules:
+	// Multi-attach rules (dynamic based on current state):
 	// - If no attachments: allow any mode (rw or ro)
-	// - If existing attachment is rw: reject all new attachments
 	// - If existing attachments are ro: only allow new ro attachments
+	// - Multiple rw attachments (ReadWriteMany): internally backed by NFS,
+	//   transparent to the caller. NFS is set up automatically when a second
+	//   rw attachment is requested.
 	AttachVolume(ctx context.Context, id string, req AttachVolumeRequest) error
 	DetachVolume(ctx context.Context, volumeID string, instanceID string) error
 
 	// GetVolumePath returns the path to the volume data file
 	GetVolumePath(id string) string
+
+	// GetVolumeNFSInfo returns NFS serving details if the volume is NFS-served, nil otherwise.
+	// Used by the instance manager to decide whether to pass a block device or NFS mount info.
+	GetVolumeNFSInfo(ctx context.Context, id string) (*NFSInfo, error)
 
 	// TotalVolumeBytes returns the total size of all volumes.
 	// Used by the resource manager for disk capacity tracking.
@@ -48,16 +54,20 @@ type manager struct {
 	totalVolumeBytes      int64
 	totalVolumeBytesReady bool
 	metrics               *Metrics
+	nfs                   *nfsManager
+	nfsHost               string // Host IP for NFS mounts (VM bridge gateway)
 }
 
 // NewManager creates a new volumes manager.
 // maxTotalVolumeStorage is the maximum total volume storage in bytes (0 = unlimited).
+// nfsHost is the host IP that VMs use to reach the NFS server (typically the bridge gateway).
 // If meter is nil, metrics are disabled.
 func NewManager(p *paths.Paths, maxTotalVolumeStorage int64, meter metric.Meter) Manager {
 	m := &manager{
 		paths:                 p,
 		maxTotalVolumeStorage: maxTotalVolumeStorage,
 		volumeLocks:           sync.Map{},
+		nfs:                   newNFSManager(p),
 	}
 
 	// Initialize metrics if meter is provided
@@ -69,6 +79,17 @@ func NewManager(p *paths.Paths, maxTotalVolumeStorage int64, meter metric.Meter)
 	}
 
 	return m
+}
+
+// NFSHostSetter allows setting the NFS host IP after initialization.
+type NFSHostSetter interface {
+	SetNFSHost(host string)
+}
+
+// SetNFSHost sets the host IP used for NFS mounts. Called after network initialization
+// when the bridge gateway IP is known.
+func (m *manager) SetNFSHost(host string) {
+	m.nfsHost = host
 }
 
 // getVolumeLock returns or creates a lock for a specific volume
@@ -377,11 +398,14 @@ func (m *manager) DeleteVolume(ctx context.Context, id string) error {
 	return nil
 }
 
-// AttachVolume marks a volume as attached to an instance
+// AttachVolume marks a volume as attached to an instance.
 // Multi-attach rules (dynamic based on current state):
-// - If no attachments: allow any mode (rw or ro)
-// - If existing attachment is rw: reject all new attachments
-// - If existing attachments are ro: only allow new ro attachments
+//   - If no attachments: allow any mode (rw or ro) via block device
+//   - If existing attachments are all ro: only allow new ro attachments
+//   - If existing attachment is rw (block device) and new is rw: enable NFS
+//     for ReadWriteMany. The volume is loop-mounted on the host and exported
+//     via NFS. The new attachment (and any subsequent ones) use NFS.
+//   - If volume is already NFS-served: additional rw attachments use NFS
 func (m *manager) AttachVolume(ctx context.Context, id string, req AttachVolumeRequest) error {
 	lock := m.getVolumeLock(id)
 	lock.Lock()
@@ -399,18 +423,53 @@ func (m *manager) AttachVolume(ctx context.Context, id string, req AttachVolumeR
 		}
 	}
 
-	// Apply multi-attach rules
+	useNFS := false
+
 	if len(meta.Attachments) > 0 {
-		// Check if any existing attachment is read-write
+		hasRW := false
+		allRO := true
 		for _, att := range meta.Attachments {
 			if !att.Readonly {
-				return fmt.Errorf("volume has exclusive read-write attachment to instance %s", att.InstanceID)
+				hasRW = true
+				allRO = false
 			}
 		}
-		// Existing attachments are all read-only, new attachment must also be read-only
-		if !req.Readonly {
+
+		if allRO && !req.Readonly {
+			// Existing attachments are all ro, new is rw → conflict
 			return fmt.Errorf("cannot attach read-write: volume has existing read-only attachments")
 		}
+
+		if hasRW && req.Readonly {
+			// Existing has rw, new is ro → conflict (rw is exclusive or NFS-only)
+			return fmt.Errorf("cannot attach read-only: volume has existing read-write attachment")
+		}
+
+		if hasRW && !req.Readonly {
+			// ReadWriteMany scenario: both existing and new want rw.
+			// Transparently enable NFS serving.
+			if m.nfsHost == "" {
+				return fmt.Errorf("cannot attach read-write to multiple instances: NFS host not configured (networking required)")
+			}
+
+			// Start NFS serving if not already active
+			if meta.NFS == nil {
+				exportPath, err := m.nfs.startServing(id)
+				if err != nil {
+					return fmt.Errorf("start nfs serving for ReadWriteMany: %w", err)
+				}
+				meta.NFS = &storedNFSInfo{
+					Host:       m.nfsHost,
+					ExportPath: exportPath,
+				}
+			}
+			useNFS = true
+		}
+	}
+
+	// If volume is already NFS-served, new rw attachments use NFS
+	if meta.NFS != nil && !req.Readonly {
+		useNFS = true
 	}
 
 	// Add new attachment
@@ -418,12 +477,14 @@ func (m *manager) AttachVolume(ctx context.Context, id string, req AttachVolumeR
 		InstanceID: req.InstanceID,
 		MountPath:  req.MountPath,
 		Readonly:   req.Readonly,
+		NFS:        useNFS,
 	})
 
 	return saveMetadata(m.paths, meta)
 }
 
-// DetachVolume removes the attachment for a specific instance
+// DetachVolume removes the attachment for a specific instance.
+// When the last NFS-using attachment is removed, NFS serving is stopped.
 func (m *manager) DetachVolume(ctx context.Context, volumeID string, instanceID string) error {
 	lock := m.getVolumeLock(volumeID)
 	lock.Lock()
@@ -450,12 +511,52 @@ func (m *manager) DetachVolume(ctx context.Context, volumeID string, instanceID 
 	}
 
 	meta.Attachments = newAttachments
+
+	// Check if NFS serving should be stopped.
+	// Stop when there are no remaining NFS-based rw attachments.
+	if meta.NFS != nil {
+		hasNFSAttachments := false
+		for _, att := range meta.Attachments {
+			if att.NFS {
+				hasNFSAttachments = true
+				break
+			}
+		}
+		if !hasNFSAttachments {
+			// No more NFS consumers — tear down NFS serving
+			if err := m.nfs.stopServing(volumeID); err != nil {
+				// Log but don't fail the detach
+				fmt.Fprintf(os.Stderr, "warning: failed to stop NFS serving for volume %s: %v\n", volumeID, err)
+			}
+			meta.NFS = nil
+		}
+	}
+
 	return saveMetadata(m.paths, meta)
 }
 
 // GetVolumePath returns the path to the volume data file
 func (m *manager) GetVolumePath(id string) string {
 	return m.paths.VolumeData(id)
+}
+
+// GetVolumeNFSInfo returns NFS serving details if the volume is NFS-served, nil otherwise.
+func (m *manager) GetVolumeNFSInfo(ctx context.Context, id string) (*NFSInfo, error) {
+	lock := m.getVolumeLock(id)
+	lock.RLock()
+	defer lock.RUnlock()
+
+	meta, err := loadMetadata(m.paths, id)
+	if err != nil {
+		return nil, err
+	}
+	if meta.NFS == nil {
+		return nil, nil
+	}
+	return &NFSInfo{
+		Host:       meta.NFS.Host,
+		ExportPath: meta.NFS.ExportPath,
+	}, nil
 }
 
 // TotalVolumeBytes returns the total size of all volumes.
@@ -474,10 +575,11 @@ func (m *manager) metadataToVolume(meta *storedMetadata) *Volume {
 			InstanceID: att.InstanceID,
 			MountPath:  att.MountPath,
 			Readonly:   att.Readonly,
+			NFS:        att.NFS,
 		}
 	}
 
-	return &Volume{
+	vol := &Volume{
 		Id:          meta.Id,
 		Name:        meta.Name,
 		SizeGb:      meta.SizeGb,
@@ -485,4 +587,13 @@ func (m *manager) metadataToVolume(meta *storedMetadata) *Volume {
 		CreatedAt:   createdAt,
 		Attachments: attachments,
 	}
+
+	if meta.NFS != nil {
+		vol.NFS = &NFSInfo{
+			Host:       meta.NFS.Host,
+			ExportPath: meta.NFS.ExportPath,
+		}
+	}
+
+	return vol
 }

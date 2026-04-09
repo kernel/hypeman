@@ -10,7 +10,7 @@ import (
 )
 
 // mountVolumes mounts attached volumes according to the configuration.
-// Supports three modes: ro (read-only), rw (read-write), and overlay.
+// Supports four modes: ro (read-only), rw (read-write), overlay, and nfs.
 func mountVolumes(log *Logger, cfg *vmconfig.Config) error {
 	log.Info("hypeman-init:volumes", "mounting volumes")
 
@@ -31,6 +31,10 @@ func mountVolumes(log *Logger, cfg *vmconfig.Config) error {
 		case "ro":
 			if err := mountVolumeReadOnly(log, vol, mountPath); err != nil {
 				log.Error("hypeman-init:volumes", fmt.Sprintf("mount ro %s failed", vol.Path), err)
+			}
+		case "nfs":
+			if err := mountVolumeNFS(log, vol, mountPath); err != nil {
+				log.Error("hypeman-init:volumes", fmt.Sprintf("mount nfs %s failed", vol.Path), err)
 			}
 		default: // "rw"
 			if err := mountVolumeReadWrite(log, vol, mountPath); err != nil {
@@ -108,5 +112,19 @@ func mountVolumeReadWrite(log *Logger, vol vmconfig.VolumeMount, mountPath strin
 	}
 
 	log.Info("hypeman-init:volumes", fmt.Sprintf("mounted %s at %s (rw)", vol.Device, vol.Path))
+	return nil
+}
+
+// mountVolumeNFS mounts a volume via NFS from the host.
+// Used for ReadWriteMany volumes where multiple VMs need concurrent rw access.
+func mountVolumeNFS(log *Logger, vol vmconfig.VolumeMount, mountPath string) error {
+	nfsSource := fmt.Sprintf("%s:%s", vol.NFSHost, vol.NFSExport)
+	// Use NFSv4 with tcp, hard mount for data safety, relatively short timeo for responsiveness
+	cmd := exec.Command("/bin/mount", "-t", "nfs", "-o", "vers=4,tcp,hard,timeo=100,retrans=3", nfsSource, mountPath)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("mount nfs %s: %s: %s", nfsSource, err, output)
+	}
+
+	log.Info("hypeman-init:volumes", fmt.Sprintf("mounted %s at %s (nfs)", nfsSource, vol.Path))
 	return nil
 }

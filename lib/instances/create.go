@@ -765,8 +765,15 @@ func (m *manager) buildHypervisorConfig(ctx context.Context, inst *Instance, ima
 		{Path: m.paths.InstanceConfigDisk(inst.Id), Readonly: true, IOBps: ioBps, IOBurstBps: burstBps},
 	}
 
-	// Add attached volumes as additional disks
+	// Add attached volumes as additional disks.
+	// NFS-served volumes are mounted via the network and do NOT get a block device.
 	for _, volAttach := range inst.Volumes {
+		// Skip NFS-served volumes — they're mounted via NFS in the guest, not as block devices
+		nfsInfo, _ := m.volumeManager.GetVolumeNFSInfo(ctx, volAttach.VolumeID)
+		if nfsInfo != nil && !volAttach.Readonly {
+			continue
+		}
+
 		volumePath := m.volumeManager.GetVolumePath(volAttach.VolumeID)
 		if volAttach.Overlay {
 			// Base volume is always read-only when overlay is enabled

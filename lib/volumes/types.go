@@ -11,6 +11,13 @@ type Attachment struct {
 	InstanceID string
 	MountPath  string
 	Readonly   bool
+	NFS        bool // True if this attachment uses NFS (internal, not exposed in API)
+}
+
+// NFSInfo contains NFS serving details for a volume (host-internal).
+type NFSInfo struct {
+	Host       string // Host IP/address for NFS mount (gateway IP on VM bridge)
+	ExportPath string // Exported filesystem path on the host
 }
 
 // Volume represents a persistent block storage volume
@@ -21,6 +28,7 @@ type Volume struct {
 	Tags        tags.Tags
 	CreatedAt   time.Time
 	Attachments []Attachment // List of current attachments (empty if not attached)
+	NFS         *NFSInfo     // Non-nil when the volume is being served via NFS (internal)
 }
 
 // CreateVolumeRequest is the domain request for creating a volume
