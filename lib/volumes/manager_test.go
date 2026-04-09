@@ -179,7 +179,7 @@ func TestMultiAttach_RejectRWWhenExistingRO(t *testing.T) {
 		Readonly:   false,
 	})
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "cannot attach read-write")
+	assert.Contains(t, err.Error(), "cannot attach ReadWriteOnce")
 }
 
 func TestMultiAttach_RejectDuplicateInstance(t *testing.T) {
@@ -401,19 +401,11 @@ func TestRWX_RejectWithoutNFSHost(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// First rw attachment succeeds (block device, no NFS needed)
+	// ReadWriteMany should fail because NFS host is not configured
 	err = mgr.AttachVolume(ctx, vol.Id, AttachVolumeRequest{
 		InstanceID: "instance-1",
 		MountPath:  "/data",
-		Readonly:   false,
-	})
-	require.NoError(t, err)
-
-	// Second rw attachment should fail because NFS host is not configured
-	err = mgr.AttachVolume(ctx, vol.Id, AttachVolumeRequest{
-		InstanceID: "instance-2",
-		MountPath:  "/data",
-		Readonly:   false,
+		AccessMode: AccessReadWriteMany,
 	})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "NFS host not configured")
@@ -565,6 +557,275 @@ func TestRWX_DetachKeepsNFSWithRemainingConsumers(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, loaded.NFS, "NFS info should be kept when NFS consumers remain")
 	require.Len(t, loaded.Attachments, 2)
+}
+
+// --- AccessMode tests ---
+
+func TestAccessMode_ReadWriteOnceExclusive(t *testing.T) {
+	mgr, _, cleanup := setupTestManager(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	vol, err := mgr.CreateVolume(ctx, CreateVolumeRequest{Name: "am-vol", SizeGb: 1})
+	require.NoError(t, err)
+
+	// First RWO succeeds
+	err = mgr.AttachVolume(ctx, vol.Id, AttachVolumeRequest{
+		InstanceID: "inst-1",
+		MountPath:  "/data",
+		AccessMode: AccessReadWriteOnce,
+	})
+	require.NoError(t, err)
+
+	// Second RWO is rejected
+	err = mgr.AttachVolume(ctx, vol.Id, AttachVolumeRequest{
+		InstanceID: "inst-2",
+		MountPath:  "/data",
+		AccessMode: AccessReadWriteOnce,
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot attach ReadWriteOnce")
+}
+
+func TestAccessMode_ReadOnlyManyAllowsMultiple(t *testing.T) {
+	mgr, _, cleanup := setupTestManager(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	vol, err := mgr.CreateVolume(ctx, CreateVolumeRequest{Name: "rom-vol", SizeGb: 1})
+	require.NoError(t, err)
+
+	for i := 0; i < 3; i++ {
+		err = mgr.AttachVolume(ctx, vol.Id, AttachVolumeRequest{
+			InstanceID: fmt.Sprintf("inst-%d", i),
+			MountPath:  "/data",
+			AccessMode: AccessReadOnlyMany,
+		})
+		require.NoError(t, err)
+	}
+
+	vol, err = mgr.GetVolume(ctx, vol.Id)
+	require.NoError(t, err)
+	assert.Len(t, vol.Attachments, 3)
+	for _, att := range vol.Attachments {
+		assert.True(t, att.Readonly)
+		assert.False(t, att.NFS)
+	}
+}
+
+func TestAccessMode_ReadWriteManyUsesNFS(t *testing.T) {
+	// Test via metadata (NFS loop mount requires real disk, so we test the stored state)
+	tmpDir, err := os.MkdirTemp("", "volume-rwx-am-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+
+	p := paths.New(tmpDir)
+	require.NoError(t, os.MkdirAll(p.VolumeDir("vol-rwx-1"), 0755))
+
+	// Simulate two RWX attachments with NFS already set up
+	meta := &storedMetadata{
+		Id:     "vol-rwx-1",
+		Name:   "rwx-vol",
+		SizeGb: 5,
+		NFS: &storedNFSInfo{
+			Host:       "10.100.0.1",
+			ExportPath: "/data/volumes/vol-rwx-1/nfs_mount",
+		},
+		Attachments: []storedAttachment{
+			{InstanceID: "inst-1", MountPath: "/data", Readonly: false, NFS: true, AccessMode: "ReadWriteMany"},
+			{InstanceID: "inst-2", MountPath: "/data", Readonly: false, NFS: true, AccessMode: "ReadWriteMany"},
+		},
+	}
+	require.NoError(t, saveMetadata(p, meta))
+
+	// Verify round-trip
+	loaded, err := loadMetadata(p, "vol-rwx-1")
+	require.NoError(t, err)
+	assert.Len(t, loaded.Attachments, 2)
+	for _, att := range loaded.Attachments {
+		assert.True(t, att.NFS)
+		assert.False(t, att.Readonly)
+		assert.Equal(t, "ReadWriteMany", att.AccessMode)
+	}
+	assert.NotNil(t, loaded.NFS)
+
+	vol := (&manager{}).metadataToVolume(loaded)
+	assert.Len(t, vol.Attachments, 2)
+	for _, att := range vol.Attachments {
+		assert.True(t, att.NFS)
+	}
+	assert.NotNil(t, vol.NFS)
+}
+
+func TestAccessMode_RWXRejectsWithRWOExisting(t *testing.T) {
+	mgr, _, cleanup := setupTestManager(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	vol, err := mgr.CreateVolume(ctx, CreateVolumeRequest{Name: "conflict-vol", SizeGb: 1})
+	require.NoError(t, err)
+
+	// Attach as RWO (legacy readonly=false)
+	err = mgr.AttachVolume(ctx, vol.Id, AttachVolumeRequest{
+		InstanceID: "inst-1",
+		MountPath:  "/data",
+		Readonly:   false,
+	})
+	require.NoError(t, err)
+
+	// RWX should be rejected — there's an existing RWO attachment
+	err = mgr.AttachVolume(ctx, vol.Id, AttachVolumeRequest{
+		InstanceID: "inst-2",
+		MountPath:  "/data",
+		AccessMode: AccessReadWriteMany,
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "existing ReadWriteOnce attachment")
+}
+
+func TestAccessMode_RWORejectsWithRWXExisting(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "volume-rwo-rwx-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+
+	p := paths.New(tmpDir)
+	require.NoError(t, os.MkdirAll(p.VolumeDir("vol-rwo-rwx-1"), 0755))
+
+	// Pre-set metadata with an existing RWX attachment
+	meta := &storedMetadata{
+		Id:     "vol-rwo-rwx-1",
+		Name:   "rwo-rwx-vol",
+		SizeGb: 5,
+		NFS: &storedNFSInfo{
+			Host:       "10.100.0.1",
+			ExportPath: "/data/volumes/vol-rwo-rwx-1/nfs_mount",
+		},
+		Attachments: []storedAttachment{
+			{InstanceID: "inst-1", MountPath: "/data", Readonly: false, NFS: true, AccessMode: "ReadWriteMany"},
+		},
+	}
+	require.NoError(t, saveMetadata(p, meta))
+
+	mgr := &manager{
+		paths:   p,
+		nfs:     newNFSManager(p),
+		nfsHost: "10.100.0.1",
+	}
+	ctx := context.Background()
+
+	// RWO should be rejected — there's an existing RWX attachment
+	err = mgr.AttachVolume(ctx, "vol-rwo-rwx-1", AttachVolumeRequest{
+		InstanceID: "inst-2",
+		MountPath:  "/data",
+		AccessMode: AccessReadWriteOnce,
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "existing ReadWriteMany attachments")
+}
+
+func TestAccessMode_LegacyReadonlyDoesNotTriggerNFS(t *testing.T) {
+	mgr, _, cleanup := setupTestManager(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	vol, err := mgr.CreateVolume(ctx, CreateVolumeRequest{Name: "legacy-vol", SizeGb: 1})
+	require.NoError(t, err)
+
+	// Legacy readonly=false → ReadWriteOnce (no NFS)
+	err = mgr.AttachVolume(ctx, vol.Id, AttachVolumeRequest{
+		InstanceID: "inst-1",
+		MountPath:  "/data",
+		Readonly:   false,
+	})
+	require.NoError(t, err)
+
+	vol, err = mgr.GetVolume(ctx, vol.Id)
+	require.NoError(t, err)
+	assert.False(t, vol.Attachments[0].NFS)
+	assert.Nil(t, vol.NFS)
+}
+
+func TestAccessMode_AccessModeWinsOverReadonly(t *testing.T) {
+	mgr, _, cleanup := setupTestManager(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	vol, err := mgr.CreateVolume(ctx, CreateVolumeRequest{Name: "precedence-vol", SizeGb: 1})
+	require.NoError(t, err)
+
+	// readonly=true but access_mode=ReadWriteOnce → access_mode wins (rw)
+	err = mgr.AttachVolume(ctx, vol.Id, AttachVolumeRequest{
+		InstanceID: "inst-1",
+		MountPath:  "/data",
+		Readonly:   true,
+		AccessMode: AccessReadWriteOnce,
+	})
+	require.NoError(t, err)
+
+	vol, err = mgr.GetVolume(ctx, vol.Id)
+	require.NoError(t, err)
+	assert.False(t, vol.Attachments[0].Readonly, "access_mode=ReadWriteOnce should override readonly=true")
+}
+
+func TestAccessMode_ROManyRejectsWithRWXExisting(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "volume-rom-rwx-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+
+	p := paths.New(tmpDir)
+	require.NoError(t, os.MkdirAll(p.VolumeDir("vol-rom-rwx-1"), 0755))
+
+	// Pre-set metadata with an existing RWX attachment
+	meta := &storedMetadata{
+		Id:     "vol-rom-rwx-1",
+		Name:   "rom-rwx-vol",
+		SizeGb: 5,
+		NFS: &storedNFSInfo{
+			Host:       "10.100.0.1",
+			ExportPath: "/data/volumes/vol-rom-rwx-1/nfs_mount",
+		},
+		Attachments: []storedAttachment{
+			{InstanceID: "inst-1", MountPath: "/data", Readonly: false, NFS: true, AccessMode: "ReadWriteMany"},
+		},
+	}
+	require.NoError(t, saveMetadata(p, meta))
+
+	mgr := &manager{
+		paths:   p,
+		nfs:     newNFSManager(p),
+		nfsHost: "10.100.0.1",
+	}
+	ctx := context.Background()
+
+	// ReadOnlyMany should be rejected when RWX exists
+	err = mgr.AttachVolume(ctx, "vol-rom-rwx-1", AttachVolumeRequest{
+		InstanceID: "inst-2",
+		MountPath:  "/data",
+		AccessMode: AccessReadOnlyMany,
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "existing ReadWriteMany attachments")
+}
+
+func TestAccessMode_ResolveAccessMode(t *testing.T) {
+	tests := []struct {
+		name     string
+		req      AttachVolumeRequest
+		expected AccessMode
+	}{
+		{"default (neither set)", AttachVolumeRequest{}, AccessReadWriteOnce},
+		{"readonly=true", AttachVolumeRequest{Readonly: true}, AccessReadOnlyMany},
+		{"readonly=false", AttachVolumeRequest{Readonly: false}, AccessReadWriteOnce},
+		{"explicit RWO", AttachVolumeRequest{AccessMode: AccessReadWriteOnce}, AccessReadWriteOnce},
+		{"explicit ROM", AttachVolumeRequest{AccessMode: AccessReadOnlyMany}, AccessReadOnlyMany},
+		{"explicit RWX", AttachVolumeRequest{AccessMode: AccessReadWriteMany}, AccessReadWriteMany},
+		{"access_mode wins over readonly", AttachVolumeRequest{Readonly: true, AccessMode: AccessReadWriteOnce}, AccessReadWriteOnce},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, tt.req.ResolveAccessMode())
+		})
+	}
 }
 
 func TestCreateVolume_MetadataRoundTrip(t *testing.T) {

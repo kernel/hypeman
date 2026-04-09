@@ -21,7 +21,8 @@ type storedAttachment struct {
 	InstanceID string `json:"instance_id"`
 	MountPath  string `json:"mount_path"`
 	Readonly   bool   `json:"readonly"`
-	NFS        bool   `json:"nfs,omitempty"` // True if this attachment uses NFS
+	NFS        bool   `json:"nfs,omitempty"`         // True if this attachment uses NFS
+	AccessMode string `json:"access_mode,omitempty"` // "ReadWriteOnce", "ReadOnlyMany", "ReadWriteMany"
 }
 
 // storedNFSInfo represents persisted NFS serving state

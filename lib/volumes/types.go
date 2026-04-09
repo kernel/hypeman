@@ -6,6 +6,18 @@ import (
 	"github.com/kernel/hypeman/lib/tags"
 )
 
+// AccessMode defines how a volume attachment can be accessed.
+type AccessMode string
+
+const (
+	// AccessReadWriteOnce is exclusive read-write: only one instance at a time.
+	AccessReadWriteOnce AccessMode = "ReadWriteOnce"
+	// AccessReadOnlyMany allows read-only access from multiple instances.
+	AccessReadOnlyMany AccessMode = "ReadOnlyMany"
+	// AccessReadWriteMany allows shared read-write access via NFS.
+	AccessReadWriteMany AccessMode = "ReadWriteMany"
+)
+
 // Attachment represents a volume attached to an instance
 type Attachment struct {
 	InstanceID string
@@ -44,6 +56,21 @@ type AttachVolumeRequest struct {
 	InstanceID string
 	MountPath  string
 	Readonly   bool
+	AccessMode AccessMode // If set, takes precedence over Readonly
+}
+
+// ResolveAccessMode returns the effective access mode, applying field precedence rules.
+// If AccessMode is set, it wins. Otherwise, Readonly maps to legacy behavior:
+//   - readonly=true  → ReadOnlyMany
+//   - readonly=false → ReadWriteOnce
+func (r *AttachVolumeRequest) ResolveAccessMode() AccessMode {
+	if r.AccessMode != "" {
+		return r.AccessMode
+	}
+	if r.Readonly {
+		return AccessReadOnlyMany
+	}
+	return AccessReadWriteOnce
 }
 
 // CreateVolumeFromArchiveRequest is the domain request for creating a volume

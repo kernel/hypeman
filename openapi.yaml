@@ -1122,6 +1122,15 @@ components:
           description: Creation timestamp (RFC3339)
           example: "2025-01-15T09:00:00Z"
     
+    AccessMode:
+      type: string
+      enum: [ReadWriteOnce, ReadOnlyMany, ReadWriteMany]
+      description: |
+        Volume access mode for attachment.
+        - ReadWriteOnce: exclusive read-write (only one instance at a time)
+        - ReadOnlyMany: read-only, multiple instances can share
+        - ReadWriteMany: shared read-write via NFS, multiple instances simultaneously
+
     AttachVolumeRequest:
       type: object
       required: [mount_path]
@@ -1132,8 +1141,10 @@ components:
           example: /mnt/data
         readonly:
           type: boolean
-          description: Mount as read-only
+          description: "Deprecated: use access_mode instead. Mount as read-only."
           default: false
+        access_mode:
+          $ref: "#/components/schemas/AccessMode"
 
     Health:
       type: object

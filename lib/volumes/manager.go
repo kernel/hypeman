@@ -25,12 +25,11 @@ type Manager interface {
 	DeleteVolume(ctx context.Context, id string) error
 
 	// Attachment operations (called by instance manager)
-	// Multi-attach rules (dynamic based on current state):
-	// - If no attachments: allow any mode (rw or ro)
-	// - If existing attachments are ro: only allow new ro attachments
-	// - Multiple rw attachments (ReadWriteMany): internally backed by NFS,
-	//   transparent to the caller. NFS is set up automatically when a second
-	//   rw attachment is requested.
+	// Access mode rules:
+	// - ReadWriteOnce: exclusive rw via block device (reject if already attached rw)
+	// - ReadOnlyMany: read-only via block device (multiple ro attaches allowed)
+	// - ReadWriteMany: shared rw via NFS (requires network, NFS set up automatically)
+	// Legacy: if access_mode is unset, readonly field maps to ReadOnlyMany/ReadWriteOnce.
 	AttachVolume(ctx context.Context, id string, req AttachVolumeRequest) error
 	DetachVolume(ctx context.Context, volumeID string, instanceID string) error
 
@@ -399,13 +398,13 @@ func (m *manager) DeleteVolume(ctx context.Context, id string) error {
 }
 
 // AttachVolume marks a volume as attached to an instance.
-// Multi-attach rules (dynamic based on current state):
-//   - If no attachments: allow any mode (rw or ro) via block device
-//   - If existing attachments are all ro: only allow new ro attachments
-//   - If existing attachment is rw (block device) and new is rw: enable NFS
-//     for ReadWriteMany. The volume is loop-mounted on the host and exported
-//     via NFS. The new attachment (and any subsequent ones) use NFS.
-//   - If volume is already NFS-served: additional rw attachments use NFS
+// Access mode rules:
+//   - ReadWriteOnce: exclusive rw via block device. Rejects if already attached rw.
+//   - ReadOnlyMany: read-only via block device. Multiple ro attaches allowed.
+//   - ReadWriteMany: shared rw via NFS. Requires NFS host (network enabled).
+//
+// Legacy readonly field: readonly=true → ReadOnlyMany, readonly=false → ReadWriteOnce.
+// Neither legacy path triggers NFS. Only explicit ReadWriteMany uses NFS.
 func (m *manager) AttachVolume(ctx context.Context, id string, req AttachVolumeRequest) error {
 	lock := m.getVolumeLock(id)
 	lock.Lock()
@@ -423,61 +422,88 @@ func (m *manager) AttachVolume(ctx context.Context, id string, req AttachVolumeR
 		}
 	}
 
+	mode := req.ResolveAccessMode()
+
+	// Log warning if both fields are set (access_mode wins)
+	if req.AccessMode != "" && req.Readonly {
+		fmt.Fprintf(os.Stderr, "warning: both access_mode and readonly set on attach for volume %s; access_mode takes precedence\n", id)
+	}
+
+	// Classify existing attachments
+	hasRW := false    // any non-readonly block device attachment
+	hasRO := false    // any readonly attachment
+	hasRWX := false   // any ReadWriteMany (NFS) attachment
+	for _, att := range meta.Attachments {
+		if att.NFS {
+			hasRWX = true
+		} else if att.Readonly {
+			hasRO = true
+		} else {
+			hasRW = true
+		}
+	}
+
 	useNFS := false
+	readonly := false
 
-	if len(meta.Attachments) > 0 {
-		hasRW := false
-		allRO := true
-		for _, att := range meta.Attachments {
-			if !att.Readonly {
-				hasRW = true
-				allRO = false
+	switch mode {
+	case AccessReadWriteOnce:
+		// Exclusive rw via block device. Reject conflicts.
+		if hasRW {
+			return fmt.Errorf("cannot attach ReadWriteOnce: volume has existing read-write attachment")
+		}
+		if hasRO {
+			return fmt.Errorf("cannot attach ReadWriteOnce: volume has existing read-only attachments")
+		}
+		if hasRWX {
+			return fmt.Errorf("cannot attach ReadWriteOnce: volume has existing ReadWriteMany attachments")
+		}
+
+	case AccessReadOnlyMany:
+		// Read-only via block device. Reject if rw or rwx exists.
+		if hasRW {
+			return fmt.Errorf("cannot attach ReadOnlyMany: volume has existing read-write attachment")
+		}
+		if hasRWX {
+			return fmt.Errorf("cannot attach ReadOnlyMany: volume has existing ReadWriteMany attachments")
+		}
+		readonly = true
+
+	case AccessReadWriteMany:
+		// Shared rw via NFS. Reject if non-NFS rw or ro exists.
+		if hasRW {
+			return fmt.Errorf("cannot attach ReadWriteMany: volume has existing ReadWriteOnce attachment")
+		}
+		if hasRO {
+			return fmt.Errorf("cannot attach ReadWriteMany: volume has existing ReadOnlyMany attachments")
+		}
+		if m.nfsHost == "" {
+			return fmt.Errorf("cannot attach ReadWriteMany: NFS host not configured (networking required)")
+		}
+
+		// Start NFS serving if not already active
+		if meta.NFS == nil {
+			exportPath, err := m.nfs.startServing(id)
+			if err != nil {
+				return fmt.Errorf("start nfs serving for ReadWriteMany: %w", err)
+			}
+			meta.NFS = &storedNFSInfo{
+				Host:       m.nfsHost,
+				ExportPath: exportPath,
 			}
 		}
-
-		if allRO && !req.Readonly {
-			// Existing attachments are all ro, new is rw → conflict
-			return fmt.Errorf("cannot attach read-write: volume has existing read-only attachments")
-		}
-
-		if hasRW && req.Readonly {
-			// Existing has rw, new is ro → conflict (rw is exclusive or NFS-only)
-			return fmt.Errorf("cannot attach read-only: volume has existing read-write attachment")
-		}
-
-		if hasRW && !req.Readonly {
-			// ReadWriteMany scenario: both existing and new want rw.
-			// Transparently enable NFS serving.
-			if m.nfsHost == "" {
-				return fmt.Errorf("cannot attach read-write to multiple instances: NFS host not configured (networking required)")
-			}
-
-			// Start NFS serving if not already active
-			if meta.NFS == nil {
-				exportPath, err := m.nfs.startServing(id)
-				if err != nil {
-					return fmt.Errorf("start nfs serving for ReadWriteMany: %w", err)
-				}
-				meta.NFS = &storedNFSInfo{
-					Host:       m.nfsHost,
-					ExportPath: exportPath,
-				}
-			}
-			useNFS = true
-		}
-	}
-
-	// If volume is already NFS-served, new rw attachments use NFS
-	if meta.NFS != nil && !req.Readonly {
 		useNFS = true
+
+	default:
+		return fmt.Errorf("unsupported access mode: %s", mode)
 	}
 
-	// Add new attachment
 	meta.Attachments = append(meta.Attachments, storedAttachment{
 		InstanceID: req.InstanceID,
 		MountPath:  req.MountPath,
-		Readonly:   req.Readonly,
+		Readonly:   readonly,
 		NFS:        useNFS,
+		AccessMode: string(mode),
 	})
 
 	return saveMetadata(m.paths, meta)
