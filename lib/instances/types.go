@@ -30,13 +30,22 @@ const (
 	EgressEnforcementModeHTTPHTTPSOnly EgressEnforcementMode = "http_https_only"
 )
 
+// VolumeNFSConfig holds NFS connection details for an NFS-backed volume attachment.
+type VolumeNFSConfig struct {
+	Server     string // NFS server hostname or IP
+	ExportPath string // NFS export path
+	Version    string // NFS protocol version (e.g., "4.1")
+	Options    string // Additional mount options
+}
+
 // VolumeAttachment represents a volume attached to an instance
 type VolumeAttachment struct {
-	VolumeID    string // Volume ID
-	MountPath   string // Mount path in guest
-	Readonly    bool   // Whether mounted read-only
-	Overlay     bool   // If true, create per-instance overlay for writes (requires Readonly=true)
-	OverlaySize int64  // Size of overlay disk in bytes (max diff from base)
+	VolumeID    string           // Volume ID
+	MountPath   string           // Mount path in guest
+	Readonly    bool             // Whether mounted read-only
+	Overlay     bool             // If true, create per-instance overlay for writes (requires Readonly=true)
+	OverlaySize int64            // Size of overlay disk in bytes (max diff from base)
+	NFS         *VolumeNFSConfig // NFS config (set for ReadWriteMany volumes, nil for block volumes)
 }
 
 // NetworkEgressPolicy configures host-mediated outbound networking behavior.

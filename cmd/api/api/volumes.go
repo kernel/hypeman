@@ -46,11 +46,31 @@ func (s *ApiService) CreateVolume(ctx context.Context, request oapi.CreateVolume
 		}, nil
 	}
 
+	var accessMode volumes.AccessMode
+	if request.Body.AccessMode != nil {
+		accessMode = volumes.AccessMode(*request.Body.AccessMode)
+	}
+	var nfsConfig *volumes.NFSConfig
+	if request.Body.Nfs != nil {
+		nfsConfig = &volumes.NFSConfig{
+			Server:     request.Body.Nfs.Server,
+			ExportPath: request.Body.Nfs.ExportPath,
+		}
+		if request.Body.Nfs.Version != nil {
+			nfsConfig.Version = *request.Body.Nfs.Version
+		}
+		if request.Body.Nfs.Options != nil {
+			nfsConfig.Options = *request.Body.Nfs.Options
+		}
+	}
+
 	domainReq := volumes.CreateVolumeRequest{
-		Name:   request.Body.Name,
-		SizeGb: request.Body.SizeGb,
-		Id:     request.Body.Id,
-		Tags:   toMapTags(request.Body.Tags),
+		Name:       request.Body.Name,
+		SizeGb:     request.Body.SizeGb,
+		AccessMode: accessMode,
+		NFS:        nfsConfig,
+		Id:         request.Body.Id,
+		Tags:       toMapTags(request.Body.Tags),
 	}
 
 	vol, err := s.VolumeManager.CreateVolume(ctx, domainReq)
@@ -61,7 +81,7 @@ func (s *ApiService) CreateVolume(ctx context.Context, request oapi.CreateVolume
 				Message: "volume with this ID already exists",
 			}, nil
 		}
-		if errors.Is(err, tags.ErrInvalidTags) {
+		if errors.Is(err, tags.ErrInvalidTags) || errors.Is(err, volumes.ErrInvalidRequest) {
 			return oapi.CreateVolume400JSONResponse{
 				Code:    "invalid_request",
 				Message: err.Error(),
@@ -182,12 +202,28 @@ func (s *ApiService) DeleteVolume(ctx context.Context, request oapi.DeleteVolume
 }
 
 func volumeToOAPI(vol volumes.Volume) oapi.Volume {
+	accessMode := oapi.VolumeAccessMode(vol.AccessMode)
 	oapiVol := oapi.Volume{
-		Id:        vol.Id,
-		Name:      vol.Name,
-		SizeGb:    vol.SizeGb,
-		Tags:      toOAPITags(vol.Tags),
-		CreatedAt: vol.CreatedAt,
+		Id:         vol.Id,
+		Name:       vol.Name,
+		SizeGb:     vol.SizeGb,
+		AccessMode: &accessMode,
+		Tags:       toOAPITags(vol.Tags),
+		CreatedAt:  vol.CreatedAt,
+	}
+
+	if vol.NFS != nil {
+		nfs := &oapi.NFSConfig{
+			Server:     vol.NFS.Server,
+			ExportPath: vol.NFS.ExportPath,
+		}
+		if vol.NFS.Version != "" {
+			nfs.Version = &vol.NFS.Version
+		}
+		if vol.NFS.Options != "" {
+			nfs.Options = &vol.NFS.Options
+		}
+		oapiVol.Nfs = nfs
 	}
 
 	// Convert attachments

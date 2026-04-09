@@ -25,18 +25,23 @@ type Manager interface {
 	DeleteVolume(ctx context.Context, id string) error
 
 	// Attachment operations (called by instance manager)
-	// Multi-attach rules:
-	// - If no attachments: allow any mode (rw or ro)
-	// - If existing attachment is rw: reject all new attachments
-	// - If existing attachments are ro: only allow new ro attachments
+	// Multi-attach rules depend on access mode:
+	// - ReadWriteOnce (default): single rw attachment; multiple ro allowed
+	// - ReadOnlyMany: multiple ro attachments only
+	// - ReadWriteMany (NFS): multiple rw or ro attachments allowed
 	AttachVolume(ctx context.Context, id string, req AttachVolumeRequest) error
 	DetachVolume(ctx context.Context, volumeID string, instanceID string) error
 
-	// GetVolumePath returns the path to the volume data file
+	// GetVolumePath returns the path to the volume data file.
+	// Returns empty string for NFS-backed volumes (no local data file).
 	GetVolumePath(id string) string
+
+	// IsNFSVolume returns true if the volume uses NFS backing.
+	IsNFSVolume(ctx context.Context, id string) bool
 
 	// TotalVolumeBytes returns the total size of all volumes.
 	// Used by the resource manager for disk capacity tracking.
+	// NFS volumes are excluded from the total (they don't consume local disk).
 	TotalVolumeBytes(ctx context.Context) (int64, error)
 }
 
@@ -97,7 +102,8 @@ func (m *manager) ListVolumes(ctx context.Context) ([]Volume, error) {
 	return volumes, nil
 }
 
-// calculateTotalVolumeStorage calculates total storage used by all volumes
+// calculateTotalVolumeStorage calculates total storage used by all volumes.
+// NFS volumes are excluded (they don't consume local disk).
 func (m *manager) calculateTotalVolumeStorage(ctx context.Context) (int64, error) {
 	volumes, err := m.ListVolumes(ctx)
 	if err != nil {
@@ -106,6 +112,9 @@ func (m *manager) calculateTotalVolumeStorage(ctx context.Context) (int64, error
 
 	var totalBytes int64
 	for _, vol := range volumes {
+		if vol.AccessMode == AccessModeReadWriteMany {
+			continue // NFS volumes don't use local disk
+		}
 		totalBytes += int64(vol.SizeGb) * 1024 * 1024 * 1024
 	}
 	return totalBytes, nil
@@ -161,6 +170,30 @@ func (m *manager) CreateVolume(ctx context.Context, req CreateVolumeRequest) (*V
 		return nil, err
 	}
 
+	// Default access mode
+	accessMode := req.AccessMode
+	if accessMode == "" {
+		accessMode = AccessModeReadWriteOnce
+	}
+	if !ValidAccessMode(accessMode) {
+		return nil, fmt.Errorf("%w: invalid access_mode %q", ErrInvalidRequest, accessMode)
+	}
+
+	// Validate NFS configuration
+	if accessMode == AccessModeReadWriteMany {
+		if req.NFS == nil {
+			return nil, fmt.Errorf("%w: nfs configuration is required for ReadWriteMany volumes", ErrInvalidRequest)
+		}
+		if req.NFS.Server == "" {
+			return nil, fmt.Errorf("%w: nfs.server is required", ErrInvalidRequest)
+		}
+		if req.NFS.ExportPath == "" {
+			return nil, fmt.Errorf("%w: nfs.export_path is required", ErrInvalidRequest)
+		}
+	} else if req.NFS != nil {
+		return nil, fmt.Errorf("%w: nfs configuration is only valid for ReadWriteMany volumes", ErrInvalidRequest)
+	}
+
 	// Generate or use provided ID
 	id := cuid2.Generate()
 	if req.Id != nil && *req.Id != "" {
@@ -172,8 +205,10 @@ func (m *manager) CreateVolume(ctx context.Context, req CreateVolumeRequest) (*V
 		return nil, ErrAlreadyExists
 	}
 
-	// Check total volume storage limit
-	if m.maxTotalVolumeStorage > 0 {
+	isNFS := accessMode == AccessModeReadWriteMany
+
+	// Check total volume storage limit (NFS volumes don't consume local disk)
+	if !isNFS && m.maxTotalVolumeStorage > 0 {
 		currentStorage, err := m.getTotalVolumeBytes(ctx)
 		if err != nil {
 			// Log but don't fail - continue with creation
@@ -191,31 +226,46 @@ func (m *manager) CreateVolume(ctx context.Context, req CreateVolumeRequest) (*V
 		return nil, err
 	}
 
-	// Create and format the disk
-	if err := createVolumeDisk(m.paths, id, req.SizeGb); err != nil {
-		// Cleanup on error
-		deleteVolumeData(m.paths, id)
-		return nil, err
+	// Create and format the disk (skip for NFS volumes — no local data file)
+	if !isNFS {
+		if err := createVolumeDisk(m.paths, id, req.SizeGb); err != nil {
+			deleteVolumeData(m.paths, id)
+			return nil, err
+		}
 	}
 
 	// Create metadata
 	now := time.Now()
 	meta := &storedMetadata{
-		Id:        id,
-		Name:      req.Name,
-		SizeGb:    req.SizeGb,
-		Tags:      tags.Clone(req.Tags),
-		CreatedAt: now.Format(time.RFC3339),
+		Id:         id,
+		Name:       req.Name,
+		SizeGb:     req.SizeGb,
+		AccessMode: accessMode,
+		Tags:       tags.Clone(req.Tags),
+		CreatedAt:  now.Format(time.RFC3339),
+	}
+	if isNFS {
+		nfsVersion := req.NFS.Version
+		if nfsVersion == "" {
+			nfsVersion = "4.1"
+		}
+		meta.NFS = &storedNFSConfig{
+			Server:     req.NFS.Server,
+			ExportPath: req.NFS.ExportPath,
+			Version:    nfsVersion,
+			Options:    req.NFS.Options,
+		}
 	}
 
 	// Save metadata
 	if err := saveMetadata(m.paths, meta); err != nil {
-		// Cleanup on error
 		deleteVolumeData(m.paths, id)
 		return nil, err
 	}
 
-	m.addVolumeBytes(int64(req.SizeGb) * 1024 * 1024 * 1024)
+	if !isNFS {
+		m.addVolumeBytes(int64(req.SizeGb) * 1024 * 1024 * 1024)
+	}
 
 	m.recordCreateDuration(ctx, start, "success")
 	return m.metadataToVolume(meta), nil
@@ -369,7 +419,10 @@ func (m *manager) DeleteVolume(ctx context.Context, id string) error {
 		return err
 	}
 
-	m.subtractVolumeBytes(int64(meta.SizeGb) * 1024 * 1024 * 1024)
+	// Only adjust local disk tracking for non-NFS volumes
+	if meta.AccessMode != AccessModeReadWriteMany {
+		m.subtractVolumeBytes(int64(meta.SizeGb) * 1024 * 1024 * 1024)
+	}
 
 	// Clean up lock
 	m.volumeLocks.Delete(id)
@@ -377,11 +430,11 @@ func (m *manager) DeleteVolume(ctx context.Context, id string) error {
 	return nil
 }
 
-// AttachVolume marks a volume as attached to an instance
-// Multi-attach rules (dynamic based on current state):
-// - If no attachments: allow any mode (rw or ro)
-// - If existing attachment is rw: reject all new attachments
-// - If existing attachments are ro: only allow new ro attachments
+// AttachVolume marks a volume as attached to an instance.
+// Multi-attach rules depend on the volume's access mode:
+//   - ReadWriteOnce: single rw or multiple ro (existing behavior)
+//   - ReadOnlyMany: multiple ro only; rw rejected
+//   - ReadWriteMany (NFS): any number of rw or ro attachments
 func (m *manager) AttachVolume(ctx context.Context, id string, req AttachVolumeRequest) error {
 	lock := m.getVolumeLock(id)
 	lock.Lock()
@@ -399,17 +452,30 @@ func (m *manager) AttachVolume(ctx context.Context, id string, req AttachVolumeR
 		}
 	}
 
-	// Apply multi-attach rules
-	if len(meta.Attachments) > 0 {
-		// Check if any existing attachment is read-write
-		for _, att := range meta.Attachments {
-			if !att.Readonly {
-				return fmt.Errorf("volume has exclusive read-write attachment to instance %s", att.InstanceID)
-			}
-		}
-		// Existing attachments are all read-only, new attachment must also be read-only
+	accessMode := meta.AccessMode
+	if accessMode == "" {
+		accessMode = AccessModeReadWriteOnce
+	}
+
+	switch accessMode {
+	case AccessModeReadWriteMany:
+		// NFS volumes allow any number of rw/ro attachments — no restrictions.
+
+	case AccessModeReadOnlyMany:
 		if !req.Readonly {
-			return fmt.Errorf("cannot attach read-write: volume has existing read-only attachments")
+			return fmt.Errorf("cannot attach read-write: volume access mode is ReadOnlyMany")
+		}
+
+	default: // ReadWriteOnce
+		if len(meta.Attachments) > 0 {
+			for _, att := range meta.Attachments {
+				if !att.Readonly {
+					return fmt.Errorf("volume has exclusive read-write attachment to instance %s", att.InstanceID)
+				}
+			}
+			if !req.Readonly {
+				return fmt.Errorf("cannot attach read-write: volume has existing read-only attachments")
+			}
 		}
 	}
 
@@ -453,12 +519,26 @@ func (m *manager) DetachVolume(ctx context.Context, volumeID string, instanceID 
 	return saveMetadata(m.paths, meta)
 }
 
-// GetVolumePath returns the path to the volume data file
+// GetVolumePath returns the path to the volume data file.
+// Returns empty string for NFS-backed volumes (no local data file).
 func (m *manager) GetVolumePath(id string) string {
 	return m.paths.VolumeData(id)
 }
 
+// IsNFSVolume returns true if the volume uses NFS backing.
+func (m *manager) IsNFSVolume(ctx context.Context, id string) bool {
+	lock := m.getVolumeLock(id)
+	lock.RLock()
+	defer lock.RUnlock()
+	meta, err := loadMetadata(m.paths, id)
+	if err != nil {
+		return false
+	}
+	return meta.AccessMode == AccessModeReadWriteMany && meta.NFS != nil
+}
+
 // TotalVolumeBytes returns the total size of all volumes.
+// NFS volumes are excluded (they don't consume local disk).
 func (m *manager) TotalVolumeBytes(ctx context.Context) (int64, error) {
 	return m.getTotalVolumeBytes(ctx)
 }
@@ -477,12 +557,29 @@ func (m *manager) metadataToVolume(meta *storedMetadata) *Volume {
 		}
 	}
 
-	return &Volume{
+	accessMode := meta.AccessMode
+	if accessMode == "" {
+		accessMode = AccessModeReadWriteOnce
+	}
+
+	vol := &Volume{
 		Id:          meta.Id,
 		Name:        meta.Name,
 		SizeGb:      meta.SizeGb,
+		AccessMode:  accessMode,
 		Tags:        tags.Clone(meta.Tags),
 		CreatedAt:   createdAt,
 		Attachments: attachments,
 	}
+
+	if meta.NFS != nil {
+		vol.NFS = &NFSConfig{
+			Server:     meta.NFS.Server,
+			ExportPath: meta.NFS.ExportPath,
+			Version:    meta.NFS.Version,
+			Options:    meta.NFS.Options,
+		}
+	}
+
+	return vol
 }

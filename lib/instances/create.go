@@ -420,12 +420,29 @@ func (m *manager) createInstance(
 	// 15. Validate and attach volumes
 	if len(req.Volumes) > 0 {
 		log.DebugContext(ctx, "validating volumes", "instance_id", id, "count", len(req.Volumes))
-		for _, volAttach := range req.Volumes {
-			// Check volume exists
-			_, err := m.volumeManager.GetVolume(ctx, volAttach.VolumeID)
+		resolvedVolumes := make([]VolumeAttachment, len(req.Volumes))
+		for i, volAttach := range req.Volumes {
+			// Check volume exists and get its details
+			vol, err := m.volumeManager.GetVolume(ctx, volAttach.VolumeID)
 			if err != nil {
 				log.ErrorContext(ctx, "volume not found", "instance_id", id, "volume_id", volAttach.VolumeID, "error", err)
 				return nil, fmt.Errorf("volume %s: %w", volAttach.VolumeID, err)
+			}
+
+			resolvedVolumes[i] = volAttach
+
+			// Populate NFS config from the volume for RWX volumes
+			if vol.NFS != nil {
+				resolvedVolumes[i].NFS = &VolumeNFSConfig{
+					Server:     vol.NFS.Server,
+					ExportPath: vol.NFS.ExportPath,
+					Version:    vol.NFS.Version,
+					Options:    vol.NFS.Options,
+				}
+				// NFS volumes require networking for NFS client access
+				if !req.NetworkEnabled {
+					return nil, fmt.Errorf("volume %s: NFS volumes require network.enabled=true", volAttach.VolumeID)
+				}
 			}
 
 			// Mark volume as attached (AttachVolume handles multi-attach validation)
@@ -444,7 +461,7 @@ func (m *manager) createInstance(
 				m.volumeManager.DetachVolume(ctx, volumeID, id)
 			})
 
-			// Create overlay disk for volumes with overlay enabled
+			// Create overlay disk for volumes with overlay enabled (not for NFS)
 			if volAttach.Overlay {
 				log.DebugContext(ctx, "creating volume overlay disk", "instance_id", id, "volume_id", volAttach.VolumeID, "size", volAttach.OverlaySize)
 				if err := m.createVolumeOverlayDisk(id, volAttach.VolumeID, volAttach.OverlaySize); err != nil {
@@ -453,8 +470,12 @@ func (m *manager) createInstance(
 				}
 			}
 		}
-		// Store volume attachments in metadata
-		stored.Volumes = req.Volumes
+		// Re-validate with NFS info populated
+		if err := validateVolumeAttachments(resolvedVolumes); err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrInvalidRequest, err)
+		}
+		// Store resolved volume attachments in metadata
+		stored.Volumes = resolvedVolumes
 	}
 
 	// 16. Create config disk (needs Instance for buildVMConfig)
@@ -614,10 +635,13 @@ func validateCreateRequest(req *CreateInstanceRequest) error {
 }
 
 // validateVolumeAttachments validates volume attachment requests
-func validateVolumeAttachments(volumes []VolumeAttachment) error {
-	// Count total devices needed (each overlay volume needs 2 devices: base + overlay)
+func validateVolumeAttachments(vols []VolumeAttachment) error {
+	// Count total block devices needed (NFS volumes don't consume a device)
 	totalDevices := 0
-	for _, vol := range volumes {
+	for _, vol := range vols {
+		if vol.NFS != nil {
+			continue // NFS volumes don't use block devices
+		}
 		totalDevices++
 		if vol.Overlay {
 			totalDevices++ // Overlay needs an additional device
@@ -628,7 +652,7 @@ func validateVolumeAttachments(volumes []VolumeAttachment) error {
 	}
 
 	seenPaths := make(map[string]bool)
-	for _, vol := range volumes {
+	for _, vol := range vols {
 		// Validate mount path is absolute
 		if !filepath.IsAbs(vol.MountPath) {
 			return fmt.Errorf("volume %s: mount path %q must be absolute", vol.VolumeID, vol.MountPath)
@@ -647,6 +671,11 @@ func validateVolumeAttachments(volumes []VolumeAttachment) error {
 			return fmt.Errorf("duplicate mount path %q", cleanPath)
 		}
 		seenPaths[cleanPath] = true
+
+		// NFS volumes cannot use overlay mode
+		if vol.NFS != nil && vol.Overlay {
+			return fmt.Errorf("volume %s: overlay mode is not supported for NFS volumes", vol.VolumeID)
+		}
 
 		// Validate overlay mode requirements
 		if vol.Overlay {
@@ -765,8 +794,11 @@ func (m *manager) buildHypervisorConfig(ctx context.Context, inst *Instance, ima
 		{Path: m.paths.InstanceConfigDisk(inst.Id), Readonly: true, IOBps: ioBps, IOBurstBps: burstBps},
 	}
 
-	// Add attached volumes as additional disks
+	// Add attached volumes as additional disks (skip NFS volumes — they're network-mounted)
 	for _, volAttach := range inst.Volumes {
+		if volAttach.NFS != nil {
+			continue // NFS volumes don't have a local block device
+		}
 		volumePath := m.volumeManager.GetVolumePath(volAttach.VolumeID)
 		if volAttach.Overlay {
 			// Base volume is always read-only when overlay is enabled

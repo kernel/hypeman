@@ -38,8 +38,14 @@ type Config struct {
 type VolumeMount struct {
 	Device        string `json:"device"`
 	Path          string `json:"path"`
-	Mode          string `json:"mode"` // "ro", "rw", or "overlay"
+	Mode          string `json:"mode"` // "ro", "rw", "overlay", or "nfs"
 	OverlayDevice string `json:"overlay_device,omitempty"`
+
+	// NFS-specific fields (only used when Mode is "nfs")
+	NFSServer     string `json:"nfs_server,omitempty"`
+	NFSExportPath string `json:"nfs_export_path,omitempty"`
+	NFSVersion    string `json:"nfs_version,omitempty"`
+	NFSOptions    string `json:"nfs_options,omitempty"`
 }
 
 // EgressProxyConfig configures guest-side trust and proxy endpoint wiring.

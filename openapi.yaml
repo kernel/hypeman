@@ -1057,6 +1057,28 @@ components:
           description: Creation timestamp (RFC3339)
           example: "2025-01-15T10:00:00Z"
     
+    NFSConfig:
+      type: object
+      required: [server, export_path]
+      description: NFS server connection details for ReadWriteMany volumes.
+      properties:
+        server:
+          type: string
+          description: NFS server hostname or IP address
+          example: "nfs.internal.example.com"
+        export_path:
+          type: string
+          description: NFS export path
+          example: "/exports/shared-data"
+        version:
+          type: string
+          description: NFS protocol version (defaults to "4.1")
+          example: "4.1"
+        options:
+          type: string
+          description: Additional NFS mount options
+          example: "hard,timeo=600"
+
     CreateVolumeRequest:
       type: object
       required: [name, size_gb]
@@ -1073,6 +1095,17 @@ components:
           type: integer
           description: Size in gigabytes
           example: 10
+        access_mode:
+          type: string
+          description: |
+            Volume access mode. Determines multi-attach behavior:
+            - ReadWriteOnce (default): single read-write or multiple read-only attachments
+            - ReadOnlyMany: multiple read-only attachments only
+            - ReadWriteMany: multiple read-write attachments (requires NFS config)
+          enum: [ReadWriteOnce, ReadOnlyMany, ReadWriteMany]
+          default: ReadWriteOnce
+        nfs:
+          $ref: "#/components/schemas/NFSConfig"
         tags:
           $ref: "#/components/schemas/Tags"
     
@@ -1109,6 +1142,12 @@ components:
           type: integer
           description: Size in gigabytes
           example: 10
+        access_mode:
+          type: string
+          description: Volume access mode
+          enum: [ReadWriteOnce, ReadOnlyMany, ReadWriteMany]
+        nfs:
+          $ref: "#/components/schemas/NFSConfig"
         tags:
           $ref: "#/components/schemas/Tags"
         attachments:

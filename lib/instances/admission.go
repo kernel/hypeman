@@ -3,7 +3,7 @@ package instances
 func volumeOverlayReservationBytes(volumes []VolumeAttachment) int64 {
 	var total int64
 	for _, vol := range volumes {
-		if vol.Overlay {
+		if vol.Overlay && vol.NFS == nil {
 			total += vol.OverlaySize
 		}
 	}

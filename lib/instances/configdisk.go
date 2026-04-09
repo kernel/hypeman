@@ -98,9 +98,28 @@ func (m *manager) buildGuestConfig(ctx context.Context, inst *Instance, imageInf
 	}
 
 	// Volume mounts
-	// Volumes are attached as /dev/vdd, /dev/vde, etc. (after vda=rootfs, vdb=overlay, vdc=config)
+	// Block volumes are attached as /dev/vdd, /dev/vde, etc. (after vda=rootfs, vdb=overlay, vdc=config)
+	// NFS volumes don't consume a block device — they're mounted via the network.
 	deviceIdx := 0
 	for _, vol := range inst.Volumes {
+		if vol.NFS != nil {
+			// NFS-backed volume (ReadWriteMany) — no block device, guest mounts via NFS
+			mount := vmconfig.VolumeMount{
+				Path:          vol.MountPath,
+				Mode:          "nfs",
+				NFSServer:     vol.NFS.Server,
+				NFSExportPath: vol.NFS.ExportPath,
+				NFSVersion:    vol.NFS.Version,
+				NFSOptions:    vol.NFS.Options,
+			}
+			if vol.Readonly {
+				mount.Mode = "nfs_ro"
+			}
+			cfg.VolumeMounts = append(cfg.VolumeMounts, mount)
+			continue
+		}
+
+		// Block-backed volume
 		device := fmt.Sprintf("/dev/vd%c", 'd'+deviceIdx)
 		mount := vmconfig.VolumeMount{
 			Device: device,

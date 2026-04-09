@@ -23,11 +23,21 @@ type storedAttachment struct {
 	Readonly   bool   `json:"readonly"`
 }
 
+// storedNFSConfig represents NFS configuration in stored metadata
+type storedNFSConfig struct {
+	Server     string `json:"server"`
+	ExportPath string `json:"export_path"`
+	Version    string `json:"version,omitempty"`
+	Options    string `json:"options,omitempty"`
+}
+
 // storedMetadata represents volume metadata that is persisted to disk
 type storedMetadata struct {
 	Id          string             `json:"id"`
 	Name        string             `json:"name"`
 	SizeGb      int                `json:"size_gb"`
+	AccessMode  AccessMode         `json:"access_mode,omitempty"` // Empty treated as ReadWriteOnce
+	NFS         *storedNFSConfig   `json:"nfs,omitempty"`
 	Tags        tags.Tags          `json:"tags,omitempty"`
 	CreatedAt   string             `json:"created_at"` // RFC3339 format
 	Attachments []storedAttachment `json:"attachments,omitempty"`
