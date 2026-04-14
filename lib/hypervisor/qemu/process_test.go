@@ -2,9 +2,12 @@ package qemu
 
 import (
 	"errors"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"testing"
+	"time"
 
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/stretchr/testify/assert"
@@ -175,4 +178,41 @@ func TestShouldRetrySameConfig(t *testing.T) {
 			assert.Equal(t, tt.want, shouldRetrySameConfig(tt.err))
 		})
 	}
+}
+
+func TestStartManagedProcessCleanupRemovesSocketAndReapsExitedProcess(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "qemu.sock")
+	require.NoError(t, os.WriteFile(socketPath, []byte("stale"), 0600))
+
+	cmd := exec.Command("sh", "-c", "exit 0")
+	proc, err := startManagedProcess(cmd, socketPath)
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		_, exited := proc.checkExited()
+		return exited
+	}, time.Second, 10*time.Millisecond)
+
+	proc.cleanup()
+
+	require.NoFileExists(t, socketPath)
+	require.NotNil(t, cmd.ProcessState)
+	assert.True(t, cmd.ProcessState.Exited())
+}
+
+func TestWaitForSocketOrExitReturnsEarlyWhenProcessDies(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "qemu.sock")
+
+	cmd := exec.Command("sh", "-c", "exit 7")
+	proc, err := startManagedProcess(cmd, socketPath)
+	require.NoError(t, err)
+
+	start := time.Now()
+	err = waitForSocketOrExit(socketPath, time.Second, proc)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "qemu exited early")
+	assert.Less(t, time.Since(start), 500*time.Millisecond)
+	require.NoFileExists(t, socketPath)
+	require.NotNil(t, cmd.ProcessState)
+	assert.True(t, cmd.ProcessState.Exited())
 }
