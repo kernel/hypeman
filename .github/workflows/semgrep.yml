@@ -1,0 +1,17 @@
+name: Semgrep
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  scan:
+    uses: kernel/security-workflows/.github/workflows/semgrep.yml@main
+    with:
+      extra-configs: '--config p/golang --config p/trailofbits'
+      codebase-description: 'Hypervisor runtime managing VMs for customer browser sessions'
+    secrets: inherit
