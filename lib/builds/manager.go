@@ -1127,7 +1127,11 @@ func (m *manager) StreamBuildEvents(ctx context.Context, id string, follow bool)
 			if !follow || isComplete {
 				return
 			}
-			// Wait for log file to appear, or for build to complete
+			// Wait for log file to appear, or for build to complete.
+			// Send heartbeats while waiting so SSE connections survive
+			// infrastructure idle timeouts (e.g. load balancer 60s timeout).
+			waitHeartbeat := time.NewTicker(15 * time.Second)
+			defer waitHeartbeat.Stop()
 			for {
 				select {
 				case <-ctx.Done():
@@ -1138,11 +1142,16 @@ func (m *manager) StreamBuildEvents(ctx context.Context, id string, follow bool)
 					case <-ctx.Done():
 						return
 					}
-					// Check if build completed
 					if event.Status == StatusReady || event.Status == StatusFailed || event.Status == StatusCancelled {
 						return
 					}
-					// Non-terminal status event - keep waiting for log file
+					continue
+				case <-waitHeartbeat.C:
+					select {
+					case out <- BuildEvent{Type: EventTypeHeartbeat, Timestamp: time.Now()}:
+					case <-ctx.Done():
+						return
+					}
 					continue
 				case <-time.After(500 * time.Millisecond):
 					if _, err := os.Stat(logPath); err == nil {
@@ -1152,6 +1161,7 @@ func (m *manager) StreamBuildEvents(ctx context.Context, id string, follow bool)
 				}
 				break
 			}
+			waitHeartbeat.Stop()
 		}
 
 		// Build tail command args
