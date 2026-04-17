@@ -8,6 +8,7 @@ import (
 
 	"github.com/kernel/hypeman/lib/autostandby"
 	"github.com/kernel/hypeman/lib/egressproxy"
+	snapshotstore "github.com/kernel/hypeman/lib/snapshot"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -239,6 +240,41 @@ func TestApplyUpdatedInstanceEnvSavesAutoStandbyAlongsideEnvWithoutMutatingOrigi
 	assert.False(t, original.AutoStandby.Enabled)
 	assert.Equal(t, "5m0s", original.AutoStandby.IdleTimeout)
 	assert.Equal(t, map[string]string{"OUTBOUND_OPENAI_KEY": "old"}, original.Env)
+}
+
+func TestDeepCopyMetadataPreservesPendingStandbyCompression(t *testing.T) {
+	t.Parallel()
+
+	level := 5
+	notBefore := time.Now().Add(3 * time.Minute)
+	original := &metadata{
+		StoredMetadata: StoredMetadata{
+			Id: "inst-pending-copy",
+			PendingStandbyCompression: &PendingStandbyCompression{
+				Policy: snapshotstore.SnapshotCompressionConfig{
+					Enabled:   true,
+					Algorithm: snapshotstore.SnapshotCompressionAlgorithmLz4,
+					Level:     &level,
+				},
+				NotBefore: notBefore,
+			},
+		},
+	}
+
+	cloned := deepCopyMetadata(original)
+	require.NotNil(t, cloned)
+	require.NotNil(t, cloned.PendingStandbyCompression)
+	require.NotSame(t, original.PendingStandbyCompression, cloned.PendingStandbyCompression)
+	require.NotNil(t, cloned.PendingStandbyCompression.Policy.Level)
+	assert.Equal(t, level, *cloned.PendingStandbyCompression.Policy.Level)
+	assert.Equal(t, notBefore, cloned.PendingStandbyCompression.NotBefore)
+
+	*cloned.PendingStandbyCompression.Policy.Level = 1
+	cloned.PendingStandbyCompression.NotBefore = time.Now()
+
+	require.NotNil(t, original.PendingStandbyCompression.Policy.Level)
+	assert.Equal(t, 5, *original.PendingStandbyCompression.Policy.Level)
+	assert.Equal(t, notBefore, original.PendingStandbyCompression.NotBefore)
 }
 
 func TestManagerUpdateInstanceAutoStandbyOnlyPublishesLifecycleUpdate(t *testing.T) {

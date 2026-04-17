@@ -269,7 +269,7 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 	}
 
 	now := time.Now()
-	forkMeta := cloneStoredMetadata(meta.StoredMetadata)
+	forkMeta := cloneStoredMetadataWithoutPendingStandbyCompression(meta.StoredMetadata)
 	forkMeta.Id = forkID
 	forkMeta.Name = req.Name
 	forkMeta.CreatedAt = now
@@ -472,7 +472,7 @@ func (m *manager) cleanupForkInstanceOnError(ctx context.Context, forkID string)
 
 func cloneStoredMetadata(src StoredMetadata) StoredMetadata {
 	dst := src
-	dst.PendingStandbyCompression = nil
+	dst.PendingStandbyCompression = clonePendingStandbyCompression(src.PendingStandbyCompression)
 
 	if src.Env != nil {
 		dst.Env = make(map[string]string, len(src.Env))
@@ -535,5 +535,11 @@ func cloneStoredMetadata(src StoredMetadata) StoredMetadata {
 		dst.ExitCode = &exitCode
 	}
 
+	return dst
+}
+
+func cloneStoredMetadataWithoutPendingStandbyCompression(src StoredMetadata) StoredMetadata {
+	dst := cloneStoredMetadata(src)
+	dst.PendingStandbyCompression = nil
 	return dst
 }
