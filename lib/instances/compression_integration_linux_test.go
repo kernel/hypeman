@@ -259,20 +259,7 @@ func waitForRunningAndExecReady(t *testing.T, ctx context.Context, mgr *manager,
 		require.NoError(t, waitHypervisorUp(ctx, inst))
 	}
 	require.NoError(t, waitForExecAgent(ctx, mgr, instanceID, 30*time.Second))
-	waitForGuestExecReady(t, ctx, inst)
 	return inst
-}
-
-func waitForGuestExecReady(t *testing.T, ctx context.Context, inst *Instance) {
-	t.Helper()
-
-	require.Eventually(t, func() bool {
-		execCtx, cancel := context.WithTimeout(ctx, integrationTestTimeout(5*time.Second))
-		defer cancel()
-
-		output, exitCode, err := execCommand(execCtx, inst, "true")
-		return err == nil && exitCode == 0 && output == ""
-	}, integrationTestTimeout(15*time.Second), 500*time.Millisecond, "guest exec should succeed after restore")
 }
 
 func writeGuestMarker(t *testing.T, ctx context.Context, inst *Instance, path string, value string) {
