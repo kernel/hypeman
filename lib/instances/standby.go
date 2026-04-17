@@ -63,6 +63,7 @@ func (m *manager) standbyInstance(
 	// Resolve/validate compression policy early so invalid request/config
 	// fails before any state transition side effects.
 	var compressionPolicy *snapshotstore.SnapshotCompressionConfig
+	var compressionDelay time.Duration
 	if !skipCompression {
 		policy, err := m.resolveStandbyCompressionPolicy(stored, req.Compression)
 		if err != nil {
@@ -72,6 +73,16 @@ func (m *manager) standbyInstance(
 			return nil, err
 		}
 		compressionPolicy = policy
+		if compressionPolicy != nil {
+			delay, err := m.resolveStandbyCompressionDelay(stored, req.CompressionDelay)
+			if err != nil {
+				if !errors.Is(err, ErrInvalidRequest) {
+					err = fmt.Errorf("%w: %v", ErrInvalidRequest, err)
+				}
+				return nil, err
+			}
+			compressionDelay = delay
+		}
 	}
 
 	// 3. Get network allocation BEFORE killing VMM (while we can still query it)
@@ -203,6 +214,13 @@ func (m *manager) standbyInstance(
 	now := time.Now()
 	stored.StoppedAt = &now
 	stored.HypervisorPID = nil
+	stored.PendingStandbyCompression = nil
+	if compressionPolicy != nil {
+		stored.PendingStandbyCompression = &PendingStandbyCompression{
+			Policy:    *cloneCompressionConfig(compressionPolicy),
+			NotBefore: m.nowUTC().Add(compressionDelay),
+		}
+	}
 
 	meta = &metadata{StoredMetadata: *stored}
 	if err := m.saveMetadata(meta); err != nil {
@@ -220,10 +238,18 @@ func (m *manager) standbyInstance(
 	finalInst := m.toInstance(ctx, meta)
 
 	if compressionPolicy != nil {
+		log.InfoContext(ctx, "enqueueing standby snapshot compression",
+			"instance_id", id,
+			"operation", "enqueue_snapshot_compression",
+			"source", string(snapshotCompressionSourceStandby),
+			"algorithm", string(compressionPolicy.Algorithm),
+			"compression_delay", compressionDelay.String(),
+		)
 		compressionCtx, compressionSpanEnd := m.startLifecycleStep(ctx, "enqueue_snapshot_compression",
 			attribute.String("instance_id", id),
 			attribute.String("hypervisor", string(stored.HypervisorType)),
 			attribute.String("operation", "enqueue_snapshot_compression"),
+			attribute.Float64("compression_delay_seconds", compressionDelay.Seconds()),
 		)
 		m.startCompressionJob(compressionCtx, compressionTarget{
 			Key:            m.snapshotJobKeyForInstance(stored.Id),
@@ -232,6 +258,7 @@ func (m *manager) standbyInstance(
 			HypervisorType: stored.HypervisorType,
 			Source:         snapshotCompressionSourceStandby,
 			Policy:         *compressionPolicy,
+			Delay:          compressionDelay,
 		})
 		compressionSpanEnd(nil)
 	}

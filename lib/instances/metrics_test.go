@@ -27,7 +27,8 @@ func TestSnapshotCompressionMetrics_RecordAndObserve(t *testing.T) {
 		paths: paths.New(t.TempDir()),
 		compressionJobs: map[string]*compressionJob{
 			"job-1": {
-				done: make(chan struct{}),
+				done:  make(chan struct{}),
+				state: compressionJobStateRunning,
 				target: compressionTarget{
 					Key:            "job-1",
 					HypervisorType: hypervisor.TypeCloudHypervisor,
@@ -35,6 +36,19 @@ func TestSnapshotCompressionMetrics_RecordAndObserve(t *testing.T) {
 					Policy: snapshotstore.SnapshotCompressionConfig{
 						Enabled:   true,
 						Algorithm: snapshotstore.SnapshotCompressionAlgorithmLz4,
+					},
+				},
+			},
+			"job-2": {
+				done:  make(chan struct{}),
+				state: compressionJobStatePendingDelay,
+				target: compressionTarget{
+					Key:            "job-2",
+					HypervisorType: hypervisor.TypeQEMU,
+					Source:         snapshotCompressionSourceStandby,
+					Policy: snapshotstore.SnapshotCompressionConfig{
+						Enabled:   true,
+						Algorithm: snapshotstore.SnapshotCompressionAlgorithmZstd,
 					},
 				},
 			},
@@ -46,7 +60,10 @@ func TestSnapshotCompressionMetrics_RecordAndObserve(t *testing.T) {
 	m.metrics = metrics
 
 	target := m.compressionJobs["job-1"].target
-	m.recordSnapshotCompressionJob(t.Context(), target, snapshotCompressionResultSuccess, time.Now().Add(-2*time.Second), 1024, 256)
+	startedAt := time.Now().Add(-2 * time.Second)
+	m.recordSnapshotCompressionJob(t.Context(), target, snapshotCompressionResultSuccess, &startedAt, 1024, 256)
+	m.recordSnapshotCompressionJob(t.Context(), m.compressionJobs["job-2"].target, snapshotCompressionResultSkipped, nil, 0, 0)
+	m.recordSnapshotCompressionWait(t.Context(), m.compressionJobs["job-2"].target, snapshotCompressionWaitOutcomeSkipped, time.Now().Add(-1500*time.Millisecond))
 	m.recordSnapshotCodecFallback(t.Context(), snapshotstore.SnapshotCompressionAlgorithmLz4, snapshotCodecOperationCompress, snapshotCodecFallbackReasonMissingBinary)
 	m.recordSnapshotRestoreMemoryPrepare(t.Context(), hypervisor.TypeCloudHypervisor, snapshotMemoryPreparePathRaw, snapshotCompressionResultSuccess, time.Now().Add(-250*time.Millisecond))
 	m.recordSnapshotCompressionPreemption(t.Context(), snapshotCompressionPreemptionRestoreInstance, target)
@@ -57,6 +74,7 @@ func TestSnapshotCompressionMetrics_RecordAndObserve(t *testing.T) {
 	assertMetricNames(t, rm, []string{
 		"hypeman_snapshot_compression_jobs_total",
 		"hypeman_snapshot_compression_duration_seconds",
+		"hypeman_snapshot_compression_wait_duration_seconds",
 		"hypeman_snapshot_compression_saved_bytes",
 		"hypeman_snapshot_compression_ratio",
 		"hypeman_snapshot_codec_fallbacks_total",
@@ -64,17 +82,29 @@ func TestSnapshotCompressionMetrics_RecordAndObserve(t *testing.T) {
 		"hypeman_snapshot_restore_memory_prepare_duration_seconds",
 		"hypeman_snapshot_compression_preemptions_total",
 		"hypeman_snapshot_compression_active_total",
+		"hypeman_snapshot_compression_pending_total",
 	})
 
 	jobsMetric := findMetric(t, rm, "hypeman_snapshot_compression_jobs_total")
 	jobs, ok := jobsMetric.Data.(metricdata.Sum[int64])
 	require.True(t, ok)
-	require.Len(t, jobs.DataPoints, 1)
-	assert.Equal(t, int64(1), jobs.DataPoints[0].Value)
-	assert.Equal(t, "cloud-hypervisor", metricLabel(t, jobs.DataPoints[0].Attributes, "hypervisor"))
-	assert.Equal(t, "lz4", metricLabel(t, jobs.DataPoints[0].Attributes, "algorithm"))
-	assert.Equal(t, "standby", metricLabel(t, jobs.DataPoints[0].Attributes, "source"))
-	assert.Equal(t, "success", metricLabel(t, jobs.DataPoints[0].Attributes, "result"))
+	require.Len(t, jobs.DataPoints, 2)
+	for _, point := range jobs.DataPoints {
+		switch metricLabel(t, point.Attributes, "result") {
+		case "success":
+			assert.Equal(t, int64(1), point.Value)
+			assert.Equal(t, "cloud-hypervisor", metricLabel(t, point.Attributes, "hypervisor"))
+			assert.Equal(t, "lz4", metricLabel(t, point.Attributes, "algorithm"))
+			assert.Equal(t, "standby", metricLabel(t, point.Attributes, "source"))
+		case "skipped":
+			assert.Equal(t, int64(1), point.Value)
+			assert.Equal(t, "qemu", metricLabel(t, point.Attributes, "hypervisor"))
+			assert.Equal(t, "zstd", metricLabel(t, point.Attributes, "algorithm"))
+			assert.Equal(t, "standby", metricLabel(t, point.Attributes, "source"))
+		default:
+			t.Fatalf("unexpected compression job result datapoint: %s", metricLabel(t, point.Attributes, "result"))
+		}
+	}
 
 	savedBytesMetric := findMetric(t, rm, "hypeman_snapshot_compression_saved_bytes")
 	savedBytes, ok := savedBytesMetric.Data.(metricdata.Histogram[int64])
@@ -114,6 +144,20 @@ func TestSnapshotCompressionMetrics_RecordAndObserve(t *testing.T) {
 	assert.Equal(t, int64(1), active.DataPoints[0].Value)
 	assert.Equal(t, "lz4", metricLabel(t, active.DataPoints[0].Attributes, "algorithm"))
 	assert.Equal(t, "standby", metricLabel(t, active.DataPoints[0].Attributes, "source"))
+
+	pendingMetric := findMetric(t, rm, "hypeman_snapshot_compression_pending_total")
+	pending, ok := pendingMetric.Data.(metricdata.Gauge[int64])
+	require.True(t, ok)
+	require.Len(t, pending.DataPoints, 1)
+	assert.Equal(t, int64(1), pending.DataPoints[0].Value)
+	assert.Equal(t, "zstd", metricLabel(t, pending.DataPoints[0].Attributes, "algorithm"))
+	assert.Equal(t, "standby", metricLabel(t, pending.DataPoints[0].Attributes, "source"))
+
+	waitMetric := findMetric(t, rm, "hypeman_snapshot_compression_wait_duration_seconds")
+	waitDurations, ok := waitMetric.Data.(metricdata.Histogram[float64])
+	require.True(t, ok)
+	require.Len(t, waitDurations.DataPoints, 1)
+	assert.Equal(t, "skipped", metricLabel(t, waitDurations.DataPoints[0].Attributes, "outcome"))
 }
 
 func TestLifecycleEventMetrics_ObserveSubscribersQueueDepthAndDrops(t *testing.T) {
@@ -439,6 +483,71 @@ func TestLifecycleDurationMetrics_RecordCompressionLabels(t *testing.T) {
 	assert.Equal(t, "none", metricLabel(t, standby.DataPoints[0].Attributes, "level"))
 }
 
+func TestEnsureSnapshotMemoryReadySkipsPendingCompressionWithoutPreemptionMetric(t *testing.T) {
+	t.Parallel()
+
+	reader := otelmetric.NewManualReader()
+	provider := otelmetric.NewMeterProvider(otelmetric.WithReader(reader))
+
+	mgr, _ := setupTestManager(t)
+	metrics, err := newInstanceMetrics(provider.Meter("test"), nil, mgr)
+	require.NoError(t, err)
+	mgr.metrics = metrics
+
+	delay := 30 * time.Second
+	timer := newFakeCompressionTimer()
+	mgr.compressionTimerFactory = func(got time.Duration) compressionTimer {
+		require.Equal(t, delay, got)
+		return timer
+	}
+
+	snapshotDir := t.TempDir()
+	rawPath := filepath.Join(snapshotDir, "memory")
+	require.NoError(t, os.WriteFile(rawPath, []byte("pending raw snapshot"), 0o644))
+
+	target := compressionTarget{
+		Key:            "instance:pending",
+		OwnerID:        "pending",
+		SnapshotDir:    snapshotDir,
+		HypervisorType: hypervisor.TypeCloudHypervisor,
+		Source:         snapshotCompressionSourceStandby,
+		Policy: snapshotstore.SnapshotCompressionConfig{
+			Enabled:   true,
+			Algorithm: snapshotstore.SnapshotCompressionAlgorithmZstd,
+			Level:     intPtr(1),
+		},
+		Delay: delay,
+	}
+
+	mgr.startCompressionJob(t.Context(), target)
+
+	require.Eventually(t, func() bool {
+		mgr.compressionMu.Lock()
+		defer mgr.compressionMu.Unlock()
+		job, ok := mgr.compressionJobs[target.Key]
+		return ok && job.state == compressionJobStatePendingDelay
+	}, time.Second, 10*time.Millisecond)
+
+	require.NoError(t, mgr.ensureSnapshotMemoryReady(t.Context(), snapshotDir, target.Key, hypervisor.TypeCloudHypervisor))
+
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(t.Context(), &rm))
+
+	jobsMetric := findMetric(t, rm, "hypeman_snapshot_compression_jobs_total")
+	jobs, ok := jobsMetric.Data.(metricdata.Sum[int64])
+	require.True(t, ok)
+	require.Len(t, jobs.DataPoints, 1)
+	assert.Equal(t, "skipped", metricLabel(t, jobs.DataPoints[0].Attributes, "result"))
+
+	waitMetric := findMetric(t, rm, "hypeman_snapshot_compression_wait_duration_seconds")
+	waitDurations, ok := waitMetric.Data.(metricdata.Histogram[float64])
+	require.True(t, ok)
+	require.Len(t, waitDurations.DataPoints, 1)
+	assert.Equal(t, "skipped", metricLabel(t, waitDurations.DataPoints[0].Attributes, "outcome"))
+
+	assert.False(t, metricExists(rm, "hypeman_snapshot_compression_preemptions_total"), "pending-delay cancellation should not record a preemption")
+}
+
 func assertMetricNames(t *testing.T, rm metricdata.ResourceMetrics, expected []string) {
 	t.Helper()
 
@@ -452,6 +561,17 @@ func assertMetricNames(t *testing.T, rm metricdata.ResourceMetrics, expected []s
 	for _, name := range expected {
 		assert.True(t, metricNames[name], "expected metric %s to be registered", name)
 	}
+}
+
+func metricExists(rm metricdata.ResourceMetrics, name string) bool {
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name == name {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func findMetric(t *testing.T, rm metricdata.ResourceMetrics, name string) metricdata.Metrics {

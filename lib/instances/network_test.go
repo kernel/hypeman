@@ -245,42 +245,42 @@ func TestDockerForwardChainRestored(t *testing.T) {
 	require.NoError(t, manager.networkManager.Initialize(ctx, nil))
 
 	// Check if DOCKER-FORWARD chain exists (Docker must be running on host).
-	checkChain := exec.Command("iptables", "-L", "DOCKER-FORWARD", "-n")
+	checkChain := exec.Command("iptables", "-w", "5", "-L", "DOCKER-FORWARD", "-n")
 	if checkChain.Run() != nil {
 		t.Skip("DOCKER-FORWARD chain not present (Docker not running), skipping")
 	}
 
 	// Verify jump currently exists.
-	checkJump := exec.Command("iptables", "-C", "FORWARD", "-j", "DOCKER-FORWARD")
+	checkJump := exec.Command("iptables", "-w", "5", "-C", "FORWARD", "-j", "DOCKER-FORWARD")
 	require.NoError(t, checkJump.Run(), "DOCKER-FORWARD jump should exist before test")
 
 	// Safety net: restore the jump if the test fails or aborts after we delete it,
 	// so we don't leave the host's Docker networking broken.
 	t.Cleanup(func() {
-		check := exec.Command("iptables", "-C", "FORWARD", "-j", "DOCKER-FORWARD")
+		check := exec.Command("iptables", "-w", "5", "-C", "FORWARD", "-j", "DOCKER-FORWARD")
 		if check.Run() != nil {
-			restore := exec.Command("iptables", "-A", "FORWARD", "-j", "DOCKER-FORWARD")
+			restore := exec.Command("iptables", "-w", "5", "-A", "FORWARD", "-j", "DOCKER-FORWARD")
 			_ = restore.Run()
 		}
 	})
 
 	// Simulate the hypervisor flush: remove every jump.
 	for {
-		delJump := exec.Command("iptables", "-D", "FORWARD", "-j", "DOCKER-FORWARD")
+		delJump := exec.Command("iptables", "-w", "5", "-D", "FORWARD", "-j", "DOCKER-FORWARD")
 		if err := delJump.Run(); err != nil {
 			break
 		}
 	}
 
 	// Confirm it's gone.
-	checkGone := exec.Command("iptables", "-C", "FORWARD", "-j", "DOCKER-FORWARD")
+	checkGone := exec.Command("iptables", "-w", "5", "-C", "FORWARD", "-j", "DOCKER-FORWARD")
 	require.Error(t, checkGone.Run(), "DOCKER-FORWARD jump should be gone after delete")
 
 	// Re-initialize network — this should restore the jump.
 	require.NoError(t, manager.networkManager.Initialize(ctx, nil))
 
 	// Verify jump is restored.
-	checkRestored := exec.Command("iptables", "-C", "FORWARD", "-j", "DOCKER-FORWARD")
+	checkRestored := exec.Command("iptables", "-w", "5", "-C", "FORWARD", "-j", "DOCKER-FORWARD")
 	require.NoError(t, checkRestored.Run(), "ensureDockerForwardJump should have restored the DOCKER-FORWARD jump")
 }
 

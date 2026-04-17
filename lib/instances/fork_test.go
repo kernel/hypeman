@@ -282,9 +282,11 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 	t.Parallel()
 	startedAt := time.Now().Add(-2 * time.Minute)
 	stoppedAt := time.Now().Add(-1 * time.Minute)
+	notBefore := time.Now().Add(5 * time.Minute)
 	pid := 1234
 	exitCode := 17
 	compressionLevel := 5
+	pendingLevel := 3
 
 	src := StoredMetadata{
 		Env:           map[string]string{"A": "1"},
@@ -310,6 +312,14 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 				Level:     &compressionLevel,
 			},
 		},
+		PendingStandbyCompression: &PendingStandbyCompression{
+			Policy: snapshotstore.SnapshotCompressionConfig{
+				Enabled:   true,
+				Algorithm: snapshotstore.SnapshotCompressionAlgorithmZstd,
+				Level:     &pendingLevel,
+			},
+			NotBefore: notBefore,
+		},
 	}
 
 	cloned := cloneStoredMetadata(src)
@@ -327,6 +337,8 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 	cloned.AutoStandby.IgnoreDestinationPorts[0] = 443
 	*cloned.SnapshotPolicy.Compression.Level = 9
 	now := time.Now()
+	*cloned.PendingStandbyCompression.Policy.Level = 1
+	cloned.PendingStandbyCompression.NotBefore = now
 	*cloned.StartedAt = now
 	*cloned.StoppedAt = now
 
@@ -341,8 +353,32 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 	require.Equal(t, "10.0.0.0/8", src.AutoStandby.IgnoreSourceCIDRs[0])
 	require.Equal(t, uint16(22), src.AutoStandby.IgnoreDestinationPorts[0])
 	require.Equal(t, 5, *src.SnapshotPolicy.Compression.Level)
+	require.NotNil(t, src.PendingStandbyCompression)
+	require.NotNil(t, src.PendingStandbyCompression.Policy.Level)
+	require.Equal(t, 3, *src.PendingStandbyCompression.Policy.Level)
+	require.Equal(t, notBefore, src.PendingStandbyCompression.NotBefore)
 	require.Equal(t, startedAt, *src.StartedAt)
 	require.Equal(t, stoppedAt, *src.StoppedAt)
+}
+
+func TestCloneStoredMetadataWithoutPendingStandbyCompression_ClearsPendingPlan(t *testing.T) {
+	t.Parallel()
+
+	level := 4
+	src := StoredMetadata{
+		PendingStandbyCompression: &PendingStandbyCompression{
+			Policy: snapshotstore.SnapshotCompressionConfig{
+				Enabled:   true,
+				Algorithm: snapshotstore.SnapshotCompressionAlgorithmZstd,
+				Level:     &level,
+			},
+			NotBefore: time.Now().Add(2 * time.Minute),
+		},
+	}
+
+	cloned := cloneStoredMetadataWithoutPendingStandbyCompression(src)
+	assert.Nil(t, cloned.PendingStandbyCompression)
+	require.NotNil(t, src.PendingStandbyCompression)
 }
 
 func TestRotateSourceVsockForRestore_CloudHypervisorDoesNotPersistCIDRewrite(t *testing.T) {

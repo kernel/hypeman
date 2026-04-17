@@ -599,6 +599,11 @@ func validateCreateRequest(req *CreateInstanceRequest) error {
 			return err
 		}
 	}
+	if req.SnapshotPolicy != nil && req.SnapshotPolicy.StandbyCompressionDelay != nil {
+		if _, err := normalizeStandbyCompressionDelay(req.SnapshotPolicy.StandbyCompressionDelay); err != nil {
+			return err
+		}
+	}
 	normalizedAutoStandby, err := normalizeAutoStandbyPolicy(req.AutoStandby)
 	if err != nil {
 		return err

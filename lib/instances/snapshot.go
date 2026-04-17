@@ -107,8 +107,11 @@ func (m *manager) createSnapshot(ctx context.Context, id string, req CreateSnaps
 			if err != nil {
 				return nil, fmt.Errorf("wait for source instance compression to stop: %w", err)
 			}
-			if target != nil {
-				m.recordSnapshotCompressionPreemption(ctx, snapshotCompressionPreemptionCreateSnapshot, *target)
+			if target != nil && target.State == compressionJobStateRunning {
+				m.recordSnapshotCompressionPreemption(ctx, snapshotCompressionPreemptionCreateSnapshot, target.Target)
+			}
+			if err := m.clearPendingStandbyCompression(ctx, id); err != nil && !errors.Is(err, ErrNotFound) {
+				return nil, fmt.Errorf("clear source standby compression plan: %w", err)
 			}
 			if err := m.ensureSnapshotMemoryReady(ctx, m.paths.InstanceSnapshotLatest(id), "", stored.HypervisorType); err != nil {
 				return nil, fmt.Errorf("prepare source snapshot memory for copy: %w", err)
@@ -147,7 +150,7 @@ func (m *manager) createSnapshot(ctx context.Context, id string, req CreateSnaps
 				SourceHypervisor: stored.HypervisorType,
 				CreatedAt:        time.Now(),
 			},
-			StoredMetadata: cloneStoredMetadata(meta.StoredMetadata),
+			StoredMetadata: cloneStoredMetadataWithoutPendingStandbyCompression(meta.StoredMetadata),
 		}
 		sizeBytes, err := snapshotstore.DirectoryFileSize(snapshotGuestDir)
 		if err != nil {
@@ -199,7 +202,7 @@ func (m *manager) createSnapshot(ctx context.Context, id string, req CreateSnaps
 				SourceHypervisor: stored.HypervisorType,
 				CreatedAt:        time.Now(),
 			},
-			StoredMetadata: cloneStoredMetadata(meta.StoredMetadata),
+			StoredMetadata: cloneStoredMetadataWithoutPendingStandbyCompression(meta.StoredMetadata),
 		}
 		sizeBytes, err := snapshotstore.DirectoryFileSize(snapshotGuestDir)
 		if err != nil {
@@ -224,8 +227,8 @@ func (m *manager) deleteSnapshot(ctx context.Context, snapshotID string) error {
 	if err != nil {
 		return fmt.Errorf("wait for snapshot compression to stop: %w", err)
 	}
-	if target != nil {
-		m.recordSnapshotCompressionPreemption(ctx, snapshotCompressionPreemptionDeleteSnapshot, *target)
+	if target != nil && target.State == compressionJobStateRunning {
+		m.recordSnapshotCompressionPreemption(ctx, snapshotCompressionPreemptionDeleteSnapshot, target.Target)
 	}
 	if err := m.snapshotStore().Delete(snapshotID); err != nil {
 		if errors.Is(err, snapshotstore.ErrNotFound) {
@@ -274,22 +277,22 @@ func (m *manager) restoreSnapshot(ctx context.Context, id string, snapshotID str
 	if err != nil {
 		return nil, fmt.Errorf("wait for snapshot compression to stop: %w", err)
 	}
-	if target != nil {
-		m.recordSnapshotCompressionPreemption(ctx, snapshotCompressionPreemptionRestoreSnapshot, *target)
+	if target != nil && target.State == compressionJobStateRunning {
+		m.recordSnapshotCompressionPreemption(ctx, snapshotCompressionPreemptionRestoreSnapshot, target.Target)
 	}
 	target, err = m.cancelAndWaitCompressionJob(ctx, m.snapshotJobKeyForInstance(id))
 	if err != nil {
 		return nil, fmt.Errorf("wait for source instance compression to stop: %w", err)
 	}
-	if target != nil {
-		m.recordSnapshotCompressionPreemption(ctx, snapshotCompressionPreemptionRestoreSnapshot, *target)
+	if target != nil && target.State == compressionJobStateRunning {
+		m.recordSnapshotCompressionPreemption(ctx, snapshotCompressionPreemptionRestoreSnapshot, target.Target)
 	}
 
 	if err := m.replaceInstanceWithSnapshotPayload(snapshotID, id); err != nil {
 		return nil, err
 	}
 
-	restored := cloneStoredMetadata(rec.StoredMetadata)
+	restored := cloneStoredMetadataWithoutPendingStandbyCompression(rec.StoredMetadata)
 	restored.Id = sourceMeta.Id
 	restored.Name = sourceMeta.Name
 	restored.DataDir = m.paths.InstanceDir(id)
@@ -403,8 +406,8 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 	if err != nil {
 		return nil, fmt.Errorf("wait for snapshot compression to stop: %w", err)
 	}
-	if target != nil {
-		m.recordSnapshotCompressionPreemption(ctx, snapshotCompressionPreemptionForkSnapshot, *target)
+	if target != nil && target.State == compressionJobStateRunning {
+		m.recordSnapshotCompressionPreemption(ctx, snapshotCompressionPreemptionForkSnapshot, target.Target)
 	}
 	if err := m.ensureSnapshotMemoryReady(ctx, m.paths.SnapshotGuestDir(snapshotID), "", rec.StoredMetadata.HypervisorType); err != nil {
 		return nil, fmt.Errorf("prepare snapshot memory for fork: %w", err)
@@ -427,7 +430,7 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 	}
 
 	now := time.Now()
-	forkMeta := cloneStoredMetadata(rec.StoredMetadata)
+	forkMeta := cloneStoredMetadataWithoutPendingStandbyCompression(rec.StoredMetadata)
 	forkMeta.Id = forkID
 	forkMeta.Name = req.Name
 	forkMeta.CreatedAt = now

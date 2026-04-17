@@ -25,8 +25,16 @@ type snapshotCompressionResult string
 
 const (
 	snapshotCompressionResultSuccess  snapshotCompressionResult = "success"
+	snapshotCompressionResultSkipped  snapshotCompressionResult = "skipped"
 	snapshotCompressionResultCanceled snapshotCompressionResult = "canceled"
 	snapshotCompressionResultFailed   snapshotCompressionResult = "failed"
+)
+
+type snapshotCompressionWaitOutcome string
+
+const (
+	snapshotCompressionWaitOutcomeStarted snapshotCompressionWaitOutcome = "started"
+	snapshotCompressionWaitOutcomeSkipped snapshotCompressionWaitOutcome = "skipped"
 )
 
 type snapshotMemoryPreparePath string
@@ -76,6 +84,7 @@ type Metrics struct {
 	stateTransitions                     metric.Int64Counter
 	snapshotCompressionJobsTotal         metric.Int64Counter
 	snapshotCompressionDuration          metric.Float64Histogram
+	snapshotCompressionWaitDuration      metric.Float64Histogram
 	snapshotCompressionSavedBytes        metric.Int64Histogram
 	snapshotCompressionRatio             metric.Float64Histogram
 	snapshotCodecFallbacksTotal          metric.Int64Counter
@@ -174,6 +183,16 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 		return nil, err
 	}
 
+	snapshotCompressionWaitDuration, err := meter.Float64Histogram(
+		"hypeman_snapshot_compression_wait_duration_seconds",
+		metric.WithDescription("Time a delayed snapshot compression job waits before compression starts or is skipped"),
+		metric.WithUnit("s"),
+		metric.WithExplicitBucketBoundaries(hypotel.CommonDurationHistogramBuckets()...),
+	)
+	if err != nil {
+		return nil, err
+	}
+
 	snapshotCompressionSavedBytes, err := meter.Int64Histogram(
 		"hypeman_snapshot_compression_saved_bytes",
 		metric.WithDescription("Bytes saved by compressing snapshot memory"),
@@ -253,7 +272,15 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 
 	snapshotCompressionActiveTotal, err := meter.Int64ObservableGauge(
 		"hypeman_snapshot_compression_active_total",
-		metric.WithDescription("Total number of in-flight snapshot compression jobs"),
+		metric.WithDescription("Total number of actively running snapshot compression jobs"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	snapshotCompressionPendingTotal, err := meter.Int64ObservableGauge(
+		"hypeman_snapshot_compression_pending_total",
+		metric.WithDescription("Total number of delayed snapshot compression jobs waiting to start"),
 	)
 	if err != nil {
 		return nil, err
@@ -331,7 +358,8 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 				source     string
 			}
 
-			counts := make(map[compressionKey]int64)
+			activeCounts := make(map[compressionKey]int64)
+			pendingCounts := make(map[compressionKey]int64)
 			m.compressionMu.Lock()
 			for _, job := range m.compressionJobs {
 				key := compressionKey{
@@ -339,11 +367,16 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 					algorithm:  string(job.target.Policy.Algorithm),
 					source:     string(job.target.Source),
 				}
-				counts[key]++
+				switch job.state {
+				case compressionJobStatePendingDelay:
+					pendingCounts[key]++
+				case compressionJobStateRunning:
+					activeCounts[key]++
+				}
 			}
 			m.compressionMu.Unlock()
 
-			for key, count := range counts {
+			for key, count := range activeCounts {
 				attrs := []attribute.KeyValue{
 					attribute.String("algorithm", key.algorithm),
 					attribute.String("source", key.source),
@@ -353,9 +386,20 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 				}
 				o.ObserveInt64(snapshotCompressionActiveTotal, count, metric.WithAttributes(attrs...))
 			}
+			for key, count := range pendingCounts {
+				attrs := []attribute.KeyValue{
+					attribute.String("algorithm", key.algorithm),
+					attribute.String("source", key.source),
+				}
+				if key.hypervisor != "" {
+					attrs = append(attrs, attribute.String("hypervisor", key.hypervisor))
+				}
+				o.ObserveInt64(snapshotCompressionPendingTotal, count, metric.WithAttributes(attrs...))
+			}
 			return nil
 		},
 		snapshotCompressionActiveTotal,
+		snapshotCompressionPendingTotal,
 	)
 	if err != nil {
 		return nil, err
@@ -392,6 +436,7 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 		stateTransitions:                     stateTransitions,
 		snapshotCompressionJobsTotal:         snapshotCompressionJobsTotal,
 		snapshotCompressionDuration:          snapshotCompressionDuration,
+		snapshotCompressionWaitDuration:      snapshotCompressionWaitDuration,
 		snapshotCompressionSavedBytes:        snapshotCompressionSavedBytes,
 		snapshotCompressionRatio:             snapshotCompressionRatio,
 		snapshotCodecFallbacksTotal:          snapshotCodecFallbacksTotal,
@@ -524,7 +569,7 @@ func snapshotCompressionAttributes(hvType hypervisor.Type, algorithm snapshotsto
 	return attrs
 }
 
-func (m *manager) recordSnapshotCompressionJob(ctx context.Context, target compressionTarget, result snapshotCompressionResult, start time.Time, uncompressedSize, compressedSize int64) {
+func (m *manager) recordSnapshotCompressionJob(ctx context.Context, target compressionTarget, result snapshotCompressionResult, compressionStart *time.Time, uncompressedSize, compressedSize int64) {
 	if m.metrics == nil {
 		return
 	}
@@ -534,7 +579,9 @@ func (m *manager) recordSnapshotCompressionJob(ctx context.Context, target compr
 	attrsWithResult = append(attrsWithResult, attribute.String("result", string(result)))
 
 	m.metrics.snapshotCompressionJobsTotal.Add(ctx, 1, metric.WithAttributes(attrsWithResult...))
-	m.metrics.snapshotCompressionDuration.Record(ctx, time.Since(start).Seconds(), metric.WithAttributes(attrsWithResult...))
+	if compressionStart != nil {
+		m.metrics.snapshotCompressionDuration.Record(ctx, time.Since(*compressionStart).Seconds(), metric.WithAttributes(attrsWithResult...))
+	}
 
 	if result != snapshotCompressionResultSuccess || uncompressedSize <= 0 || compressedSize < 0 {
 		return
@@ -546,6 +593,16 @@ func (m *manager) recordSnapshotCompressionJob(ctx context.Context, target compr
 	}
 	m.metrics.snapshotCompressionSavedBytes.Record(ctx, savedBytes, metric.WithAttributes(attrs...))
 	m.metrics.snapshotCompressionRatio.Record(ctx, float64(compressedSize)/float64(uncompressedSize), metric.WithAttributes(attrs...))
+}
+
+func (m *manager) recordSnapshotCompressionWait(ctx context.Context, target compressionTarget, outcome snapshotCompressionWaitOutcome, start time.Time) {
+	if m.metrics == nil {
+		return
+	}
+
+	attrs := snapshotCompressionAttributes(target.HypervisorType, target.Policy.Algorithm, target.Source)
+	attrs = append(attrs, attribute.String("outcome", string(outcome)))
+	m.metrics.snapshotCompressionWaitDuration.Record(ctx, time.Since(start).Seconds(), metric.WithAttributes(attrs...))
 }
 
 func (m *manager) recordSnapshotRestoreMemoryPrepare(ctx context.Context, hvType hypervisor.Type, path snapshotMemoryPreparePath, result snapshotCompressionResult, start time.Time) {

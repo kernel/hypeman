@@ -480,10 +480,85 @@ func TestCreateInstance_MapsNetworkEgressEnforcementMode(t *testing.T) {
 	assert.Equal(t, instances.EgressEnforcementModeHTTPHTTPSOnly, mockMgr.lastReq.NetworkEgress.EnforcementMode)
 }
 
+func TestCreateInstance_MapsStandbyCompressionDelayInSnapshotPolicy(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	origMgr := svc.InstanceManager
+	mockMgr := &captureCreateManager{Manager: origMgr}
+	svc.InstanceManager = mockMgr
+
+	delay := "2m30s"
+	resp, err := svc.CreateInstance(ctx(), oapi.CreateInstanceRequestObject{
+		Body: &oapi.CreateInstanceRequest{
+			Name:  "test-standby-compression-delay",
+			Image: "docker.io/library/alpine:latest",
+			SnapshotPolicy: &oapi.SnapshotPolicy{
+				StandbyCompressionDelay: &delay,
+			},
+		},
+	})
+	require.NoError(t, err)
+	_, ok := resp.(oapi.CreateInstance201JSONResponse)
+	require.True(t, ok, "expected 201 response")
+
+	require.NotNil(t, mockMgr.lastReq)
+	require.NotNil(t, mockMgr.lastReq.SnapshotPolicy)
+	require.NotNil(t, mockMgr.lastReq.SnapshotPolicy.StandbyCompressionDelay)
+	assert.Equal(t, 150*time.Second, *mockMgr.lastReq.SnapshotPolicy.StandbyCompressionDelay)
+}
+
+func TestCreateInstance_InvalidStandbyCompressionDelayInSnapshotPolicy(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	delay := "not-a-duration"
+
+	resp, err := svc.CreateInstance(ctx(), oapi.CreateInstanceRequestObject{
+		Body: &oapi.CreateInstanceRequest{
+			Name:  "test-invalid-standby-delay",
+			Image: "docker.io/library/alpine:latest",
+			SnapshotPolicy: &oapi.SnapshotPolicy{
+				StandbyCompressionDelay: &delay,
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	badReq, ok := resp.(oapi.CreateInstance400JSONResponse)
+	require.True(t, ok, "expected 400 response")
+	assert.Equal(t, "invalid_snapshot_policy", badReq.Code)
+	assert.Contains(t, badReq.Message, "standby_compression_delay")
+}
+
+func TestInstanceToOAPI_EmitsStandbyCompressionDelayInSnapshotPolicy(t *testing.T) {
+	t.Parallel()
+
+	delay := 90 * time.Second
+	inst := instances.Instance{
+		StoredMetadata: instances.StoredMetadata{
+			Id:             "inst-standby-delay",
+			Name:           "inst-standby-delay",
+			Image:          "docker.io/library/alpine:latest",
+			CreatedAt:      time.Now(),
+			HypervisorType: hypervisor.TypeCloudHypervisor,
+			SnapshotPolicy: &instances.SnapshotPolicy{
+				StandbyCompressionDelay: &delay,
+			},
+		},
+		State: instances.StateStandby,
+	}
+
+	oapiInst := instanceToOAPI(inst)
+	require.NotNil(t, oapiInst.SnapshotPolicy)
+	require.NotNil(t, oapiInst.SnapshotPolicy.StandbyCompressionDelay)
+	assert.Equal(t, "1m30s", *oapiInst.SnapshotPolicy.StandbyCompressionDelay)
+}
+
 func TestCreateInstance_MapsAutoStandbyPolicy(t *testing.T) {
 	t.Parallel()
-	svc := newTestService(t)
 
+	svc := newTestService(t)
 	origMgr := svc.InstanceManager
 	mockMgr := &captureCreateManager{Manager: origMgr}
 	svc.InstanceManager = mockMgr
@@ -905,6 +980,81 @@ func TestStandbyInstance_InvalidRequest(t *testing.T) {
 	require.True(t, ok, "expected 400 response")
 	assert.Equal(t, "invalid_request", badReq.Code)
 	assert.Contains(t, badReq.Message, "invalid snapshot compression level")
+}
+
+func TestStandbyInstance_MapsCompressionDelay(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	now := time.Now()
+	source := instances.Instance{
+		StoredMetadata: instances.StoredMetadata{
+			Id:             "standby-delay-src",
+			Name:           "standby-delay-src",
+			Image:          "docker.io/library/alpine:latest",
+			CreatedAt:      now,
+			HypervisorType: hypervisor.TypeCloudHypervisor,
+		},
+		State: instances.StateRunning,
+	}
+
+	mockMgr := &captureStandbyManager{
+		Manager: svc.InstanceManager,
+		result:  &source,
+	}
+	svc.InstanceManager = mockMgr
+
+	delay := "45s"
+	resp, err := svc.StandbyInstance(
+		mw.WithResolvedInstance(ctx(), source.Id, source),
+		oapi.StandbyInstanceRequestObject{
+			Id: source.Id,
+			Body: &oapi.StandbyInstanceRequest{
+				CompressionDelay: &delay,
+			},
+		},
+	)
+	require.NoError(t, err)
+	_, ok := resp.(oapi.StandbyInstance200JSONResponse)
+	require.True(t, ok, "expected 200 response")
+
+	require.NotNil(t, mockMgr.lastReq)
+	require.NotNil(t, mockMgr.lastReq.CompressionDelay)
+	assert.Equal(t, 45*time.Second, *mockMgr.lastReq.CompressionDelay)
+}
+
+func TestStandbyInstance_InvalidCompressionDelay(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	now := time.Now()
+	source := instances.Instance{
+		StoredMetadata: instances.StoredMetadata{
+			Id:             "standby-invalid-delay-src",
+			Name:           "standby-invalid-delay-src",
+			Image:          "docker.io/library/alpine:latest",
+			CreatedAt:      now,
+			HypervisorType: hypervisor.TypeCloudHypervisor,
+		},
+		State: instances.StateRunning,
+	}
+
+	delay := "-5s"
+	resp, err := svc.StandbyInstance(
+		mw.WithResolvedInstance(ctx(), source.Id, source),
+		oapi.StandbyInstanceRequestObject{
+			Id: source.Id,
+			Body: &oapi.StandbyInstanceRequest{
+				CompressionDelay: &delay,
+			},
+		},
+	)
+	require.NoError(t, err)
+
+	badReq, ok := resp.(oapi.StandbyInstance400JSONResponse)
+	require.True(t, ok, "expected 400 response")
+	assert.Equal(t, "invalid_compression_delay", badReq.Code)
+	assert.Contains(t, badReq.Message, "compression_delay")
 }
 
 func TestForkInstance_FromRunningFlagForwarded(t *testing.T) {

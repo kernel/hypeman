@@ -128,6 +128,7 @@ type manager struct {
 	snapshotDefaults          SnapshotPolicy
 	compressionMu             sync.Mutex
 	compressionJobs           map[string]*compressionJob
+	compressionTimerFactory   func(time.Duration) compressionTimer
 	nativeCodecMu             sync.Mutex
 	nativeCodecPaths          map[string]string
 	imageUsageRecorder        ImageUsageRecorder
@@ -211,6 +212,9 @@ func NewManagerWithConfig(p *paths.Paths, imageManager images.Manager, systemMan
 	}
 	m.lifecycleEvents.onDrop = func(ctx context.Context, consumer LifecycleEventConsumer) {
 		m.recordLifecycleEventDropped(ctx, consumer, lifecycleEventDropReasonBufferFull)
+	}
+	if err := m.recoverPendingStandbyCompressionJobs(context.Background()); err != nil {
+		logger.FromContext(context.Background()).WarnContext(context.Background(), "failed to recover pending standby compression jobs", "error", err)
 	}
 
 	return m

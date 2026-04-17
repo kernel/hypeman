@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/paths"
 	snapshotstore "github.com/kernel/hypeman/lib/snapshot"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -183,6 +186,60 @@ func TestResolveStandbyCompressionPolicyInvalidConfiguredDefaultIsInvalidRequest
 	assert.True(t, errors.Is(err, ErrInvalidRequest))
 }
 
+func TestResolveStandbyCompressionDelayPrecedence(t *testing.T) {
+	t.Parallel()
+
+	instanceDelay := 2 * time.Minute
+	overrideDelay := 15 * time.Second
+	m := &manager{}
+
+	delay, err := m.resolveStandbyCompressionDelay(&StoredMetadata{
+		SnapshotPolicy: &SnapshotPolicy{
+			StandbyCompressionDelay: &instanceDelay,
+		},
+	}, &overrideDelay)
+	require.NoError(t, err)
+	assert.Equal(t, overrideDelay, delay)
+
+	delay, err = m.resolveStandbyCompressionDelay(&StoredMetadata{
+		SnapshotPolicy: &SnapshotPolicy{
+			StandbyCompressionDelay: &instanceDelay,
+		},
+	}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, instanceDelay, delay)
+
+	delay, err = m.resolveStandbyCompressionDelay(&StoredMetadata{}, nil)
+	require.NoError(t, err)
+	assert.Zero(t, delay)
+}
+
+func TestResolveStandbyCompressionDelayIgnoresServerDefaults(t *testing.T) {
+	t.Parallel()
+
+	serverDelay := 3 * time.Minute
+	m := &manager{
+		snapshotDefaults: SnapshotPolicy{
+			StandbyCompressionDelay: &serverDelay,
+		},
+	}
+
+	delay, err := m.resolveStandbyCompressionDelay(&StoredMetadata{}, nil)
+	require.NoError(t, err)
+	assert.Zero(t, delay)
+}
+
+func TestResolveStandbyCompressionDelayRejectsNegativeDuration(t *testing.T) {
+	t.Parallel()
+
+	m := &manager{}
+	negative := -1 * time.Second
+
+	_, err := m.resolveStandbyCompressionDelay(&StoredMetadata{}, &negative)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrInvalidRequest))
+}
+
 func TestCompressionMetadataForExistingArtifactUsesActualAlgorithm(t *testing.T) {
 	t.Parallel()
 
@@ -220,6 +277,23 @@ func TestValidateCreateRequestSnapshotPolicy(t *testing.T) {
 			},
 		},
 	}
+	err := validateCreateRequest(req)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrInvalidRequest))
+}
+
+func TestValidateCreateRequestRejectsNegativeStandbyCompressionDelay(t *testing.T) {
+	t.Parallel()
+
+	negative := -1 * time.Second
+	req := &CreateInstanceRequest{
+		Name:  "compression-delay-test",
+		Image: "docker.io/library/alpine:latest",
+		SnapshotPolicy: &SnapshotPolicy{
+			StandbyCompressionDelay: &negative,
+		},
+	}
+
 	err := validateCreateRequest(req)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrInvalidRequest))
@@ -320,6 +394,7 @@ func installCancelableCompressionJob(mgr *manager, target compressionTarget) *co
 	mgr.compressionJobs[target.Key] = &compressionJob{
 		cancel: cancel,
 		done:   done,
+		state:  compressionJobStateRunning,
 		target: target,
 	}
 	mgr.compressionMu.Unlock()
@@ -344,4 +419,301 @@ func assertCompressionJobCanceled(t *testing.T, mgr *manager, target *compressio
 		_, ok := mgr.compressionJobs[target.Key]
 		return !ok
 	}, time.Second, 10*time.Millisecond)
+}
+
+func newSnapshotCompressionTestManager(t *testing.T) *manager {
+	t.Helper()
+
+	p := paths.New(t.TempDir())
+	return &manager{
+		paths:           p,
+		now:             time.Now,
+		compressionJobs: make(map[string]*compressionJob),
+		lifecycleEvents: newLifecycleSubscribers(),
+	}
+}
+
+func TestStartCompressionJobDelayedCancellationRecordsSkipped(t *testing.T) {
+	t.Parallel()
+
+	mgr := newSnapshotCompressionTestManager(t)
+	delay := 45 * time.Second
+	timer := newFakeCompressionTimer()
+	mgr.compressionTimerFactory = func(got time.Duration) compressionTimer {
+		require.Equal(t, delay, got)
+		return timer
+	}
+
+	snapshotDir := t.TempDir()
+	rawPath := filepath.Join(snapshotDir, "memory")
+	require.NoError(t, os.WriteFile(rawPath, []byte("delayed standby snapshot"), 0o644))
+
+	target := compressionTarget{
+		Key:         "instance:delayed",
+		OwnerID:     "delayed",
+		SnapshotDir: snapshotDir,
+		Source:      snapshotCompressionSourceStandby,
+		Policy: snapshotstore.SnapshotCompressionConfig{
+			Enabled:   true,
+			Algorithm: snapshotstore.SnapshotCompressionAlgorithmZstd,
+			Level:     intPtr(1),
+		},
+		Delay: delay,
+	}
+
+	mgr.startCompressionJob(context.Background(), target)
+
+	require.Eventually(t, func() bool {
+		mgr.compressionMu.Lock()
+		defer mgr.compressionMu.Unlock()
+		job, ok := mgr.compressionJobs[target.Key]
+		return ok && job.state == compressionJobStatePendingDelay
+	}, time.Second, 10*time.Millisecond)
+
+	canceled, err := mgr.cancelAndWaitCompressionJob(context.Background(), target.Key)
+	require.NoError(t, err)
+	require.NotNil(t, canceled)
+	assert.Equal(t, compressionJobStatePendingDelay, canceled.State)
+
+	_, err = os.Stat(rawPath)
+	require.NoError(t, err, "raw snapshot should remain available when delay is skipped")
+	_, err = os.Stat(rawPath + ".zst")
+	require.Error(t, err)
+	assert.True(t, os.IsNotExist(err))
+}
+
+func TestRecoverPendingStandbyCompressionJobsRequeuesDelayedJob(t *testing.T) {
+	t.Parallel()
+
+	mgr := newSnapshotCompressionTestManager(t)
+	now := time.Date(2026, time.April, 6, 12, 0, 0, 0, time.UTC)
+	mgr.now = func() time.Time { return now }
+
+	const instanceID = "recover-delayed"
+	delay := 30 * time.Second
+	snapshotDir := mgr.paths.InstanceSnapshotLatest(instanceID)
+	rawPath := filepath.Join(snapshotDir, "memory")
+
+	require.NoError(t, mgr.ensureDirectories(instanceID))
+	require.NoError(t, os.MkdirAll(snapshotDir, 0o755))
+	require.NoError(t, os.WriteFile(rawPath, []byte("pending standby snapshot"), 0o644))
+	require.NoError(t, mgr.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
+		Id:             instanceID,
+		Name:           instanceID,
+		DataDir:        mgr.paths.InstanceDir(instanceID),
+		HypervisorType: hypervisor.TypeCloudHypervisor,
+		CreatedAt:      now,
+		StoppedAt:      &now,
+		PendingStandbyCompression: &PendingStandbyCompression{
+			Policy: snapshotstore.SnapshotCompressionConfig{
+				Enabled:   true,
+				Algorithm: snapshotstore.SnapshotCompressionAlgorithmZstd,
+				Level:     intPtr(1),
+			},
+			NotBefore: now.Add(delay),
+		},
+	}}))
+
+	timer := newFakeCompressionTimer()
+	delayCh := make(chan time.Duration, 1)
+	mgr.compressionTimerFactory = func(got time.Duration) compressionTimer {
+		delayCh <- got
+		return timer
+	}
+
+	require.NoError(t, mgr.recoverPendingStandbyCompressionJobs(context.Background()))
+
+	require.Eventually(t, func() bool {
+		mgr.compressionMu.Lock()
+		defer mgr.compressionMu.Unlock()
+		job, ok := mgr.compressionJobs[mgr.snapshotJobKeyForInstance(instanceID)]
+		return ok && job.state == compressionJobStatePendingDelay
+	}, time.Second, 10*time.Millisecond)
+	select {
+	case gotDelay := <-delayCh:
+		assert.Equal(t, delay, gotDelay)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for recovered compression delay")
+	}
+
+	canceled, err := mgr.cancelAndWaitCompressionJob(context.Background(), mgr.snapshotJobKeyForInstance(instanceID))
+	require.NoError(t, err)
+	require.NotNil(t, canceled)
+	assert.Equal(t, compressionJobStatePendingDelay, canceled.State)
+
+	meta, err := mgr.loadMetadata(instanceID)
+	require.NoError(t, err)
+	assert.Nil(t, meta.StoredMetadata.PendingStandbyCompression)
+	_, err = os.Stat(rawPath)
+	require.NoError(t, err)
+}
+
+func TestRecoverPendingStandbyCompressionJobsStartsImmediateCompression(t *testing.T) {
+	t.Parallel()
+
+	mgr := newSnapshotCompressionTestManager(t)
+	now := time.Date(2026, time.April, 6, 12, 5, 0, 0, time.UTC)
+	mgr.now = func() time.Time { return now }
+
+	const instanceID = "recover-immediate"
+	snapshotDir := mgr.paths.InstanceSnapshotLatest(instanceID)
+	rawPath := filepath.Join(snapshotDir, "memory")
+
+	require.NoError(t, mgr.ensureDirectories(instanceID))
+	require.NoError(t, os.MkdirAll(snapshotDir, 0o755))
+	require.NoError(t, os.WriteFile(rawPath, []byte("standby snapshot that should compress now"), 0o644))
+	require.NoError(t, mgr.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
+		Id:             instanceID,
+		Name:           instanceID,
+		DataDir:        mgr.paths.InstanceDir(instanceID),
+		HypervisorType: hypervisor.TypeCloudHypervisor,
+		CreatedAt:      now,
+		StoppedAt:      &now,
+		PendingStandbyCompression: &PendingStandbyCompression{
+			Policy: snapshotstore.SnapshotCompressionConfig{
+				Enabled:   true,
+				Algorithm: snapshotstore.SnapshotCompressionAlgorithmZstd,
+				Level:     intPtr(1),
+			},
+			NotBefore: now.Add(-time.Second),
+		},
+	}}))
+	mgr.compressionTimerFactory = func(time.Duration) compressionTimer {
+		t.Fatal("unexpected delay timer for immediate recovery")
+		return newFakeCompressionTimer()
+	}
+
+	require.NoError(t, mgr.recoverPendingStandbyCompressionJobs(context.Background()))
+
+	require.Eventually(t, func() bool {
+		meta, err := mgr.loadMetadata(instanceID)
+		if err != nil {
+			return false
+		}
+		_, rawExistsErr := os.Stat(rawPath)
+		_, _, compressed := findCompressedSnapshotMemoryFile(snapshotDir)
+		return meta.StoredMetadata.PendingStandbyCompression == nil && os.IsNotExist(rawExistsErr) && compressed
+	}, 5*time.Second, 20*time.Millisecond)
+}
+
+func TestRecoverPendingStandbyCompressionJobsClearsStalePlans(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		prepare func(t *testing.T, mgr *manager, instanceID string, now time.Time)
+	}{
+		{
+			name: "stopped_instance_without_snapshot",
+			prepare: func(t *testing.T, mgr *manager, instanceID string, now time.Time) {
+				t.Helper()
+				require.NoError(t, mgr.ensureDirectories(instanceID))
+				require.NoError(t, mgr.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
+					Id:             instanceID,
+					Name:           instanceID,
+					DataDir:        mgr.paths.InstanceDir(instanceID),
+					HypervisorType: hypervisor.TypeCloudHypervisor,
+					CreatedAt:      now,
+					StoppedAt:      &now,
+					PendingStandbyCompression: &PendingStandbyCompression{
+						Policy: snapshotstore.SnapshotCompressionConfig{
+							Enabled:   true,
+							Algorithm: snapshotstore.SnapshotCompressionAlgorithmZstd,
+							Level:     intPtr(1),
+						},
+						NotBefore: now.Add(time.Minute),
+					},
+				}}))
+			},
+		},
+		{
+			name: "already_compressed_snapshot",
+			prepare: func(t *testing.T, mgr *manager, instanceID string, now time.Time) {
+				t.Helper()
+				snapshotDir := mgr.paths.InstanceSnapshotLatest(instanceID)
+				require.NoError(t, mgr.ensureDirectories(instanceID))
+				require.NoError(t, os.MkdirAll(snapshotDir, 0o755))
+				require.NoError(t, os.WriteFile(filepath.Join(snapshotDir, "memory.zst"), []byte("compressed"), 0o644))
+				require.NoError(t, mgr.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
+					Id:             instanceID,
+					Name:           instanceID,
+					DataDir:        mgr.paths.InstanceDir(instanceID),
+					HypervisorType: hypervisor.TypeCloudHypervisor,
+					CreatedAt:      now,
+					StoppedAt:      &now,
+					PendingStandbyCompression: &PendingStandbyCompression{
+						Policy: snapshotstore.SnapshotCompressionConfig{
+							Enabled:   true,
+							Algorithm: snapshotstore.SnapshotCompressionAlgorithmZstd,
+							Level:     intPtr(1),
+						},
+						NotBefore: now.Add(time.Minute),
+					},
+				}}))
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			mgr := newSnapshotCompressionTestManager(t)
+			now := time.Date(2026, time.April, 6, 12, 10, 0, 0, time.UTC)
+			mgr.now = func() time.Time { return now }
+			instanceID := "recover-stale-" + tt.name
+
+			tt.prepare(t, mgr, instanceID, now)
+
+			require.NoError(t, mgr.recoverPendingStandbyCompressionJobs(context.Background()))
+
+			meta, err := mgr.loadMetadata(instanceID)
+			require.NoError(t, err)
+			assert.Nil(t, meta.StoredMetadata.PendingStandbyCompression)
+
+			mgr.compressionMu.Lock()
+			_, ok := mgr.compressionJobs[mgr.snapshotJobKeyForInstance(instanceID)]
+			mgr.compressionMu.Unlock()
+			assert.False(t, ok)
+		})
+	}
+}
+
+type fakeCompressionTimer struct {
+	ch      chan time.Time
+	mu      sync.Mutex
+	stopped bool
+	fired   bool
+}
+
+func newFakeCompressionTimer() *fakeCompressionTimer {
+	return &fakeCompressionTimer{ch: make(chan time.Time, 1)}
+}
+
+func (t *fakeCompressionTimer) Chan() <-chan time.Time {
+	return t.ch
+}
+
+func (t *fakeCompressionTimer) Stop() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.stopped || t.fired {
+		return false
+	}
+	t.stopped = true
+	return true
+}
+
+func (t *fakeCompressionTimer) Fire() bool {
+	t.mu.Lock()
+	if t.stopped || t.fired {
+		t.mu.Unlock()
+		return false
+	}
+	t.fired = true
+	ch := t.ch
+	t.mu.Unlock()
+
+	ch <- time.Now()
+	return true
 }

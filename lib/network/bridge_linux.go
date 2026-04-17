@@ -20,6 +20,18 @@ import (
 )
 
 const netlinkDumpRetryCount = 3
+const iptablesWaitSeconds = "5"
+
+func newIPTablesCommand(args ...string) *exec.Cmd {
+	fullArgs := make([]string, 0, len(args)+2)
+	fullArgs = append(fullArgs, "-w", iptablesWaitSeconds)
+	fullArgs = append(fullArgs, args...)
+	cmd := exec.Command("iptables", fullArgs...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+	}
+	return cmd
+}
 
 func listBridgeAddrsWithRetry(link netlink.Link) ([]netlink.Addr, error) {
 	var err error
@@ -288,13 +300,10 @@ func (m *manager) setupIPTablesRules(ctx context.Context, subnet, bridgeName str
 // ensureNATRule ensures the MASQUERADE rule exists with correct uplink
 func (m *manager) ensureNATRule(subnet, uplink, comment string) (string, error) {
 	// Check if rule exists with correct subnet and uplink
-	checkCmd := exec.Command("iptables", "-t", "nat", "-C", "POSTROUTING",
+	checkCmd := newIPTablesCommand("-t", "nat", "-C", "POSTROUTING",
 		"-s", subnet, "-o", uplink,
 		"-m", "comment", "--comment", comment,
 		"-j", "MASQUERADE")
-	checkCmd.SysProcAttr = &syscall.SysProcAttr{
-		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
-	}
 	if checkCmd.Run() == nil {
 		return "existing", nil
 	}
@@ -303,13 +312,10 @@ func (m *manager) ensureNATRule(subnet, uplink, comment string) (string, error) 
 	m.deleteNATRuleByComment(comment)
 
 	// Add rule with comment
-	addCmd := exec.Command("iptables", "-t", "nat", "-A", "POSTROUTING",
+	addCmd := newIPTablesCommand("-t", "nat", "-A", "POSTROUTING",
 		"-s", subnet, "-o", uplink,
 		"-m", "comment", "--comment", comment,
 		"-j", "MASQUERADE")
-	addCmd.SysProcAttr = &syscall.SysProcAttr{
-		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
-	}
 	if err := addCmd.Run(); err != nil {
 		return "", fmt.Errorf("add masquerade rule: %w", err)
 	}
@@ -327,10 +333,7 @@ func (m *manager) ruleComment(base string) string {
 // deleteNATRuleByComment deletes any NAT POSTROUTING rule containing our comment
 func (m *manager) deleteNATRuleByComment(comment string) {
 	// List NAT POSTROUTING rules
-	cmd := exec.Command("iptables", "-t", "nat", "-L", "POSTROUTING", "--line-numbers", "-n")
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
-	}
+	cmd := newIPTablesCommand("-t", "nat", "-L", "POSTROUTING", "--line-numbers", "-n")
 	output, err := cmd.Output()
 	if err != nil {
 		return
@@ -350,10 +353,7 @@ func (m *manager) deleteNATRuleByComment(comment string) {
 
 	// Delete in reverse order
 	for i := len(ruleNums) - 1; i >= 0; i-- {
-		delCmd := exec.Command("iptables", "-t", "nat", "-D", "POSTROUTING", ruleNums[i])
-		delCmd.SysProcAttr = &syscall.SysProcAttr{
-			AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
-		}
+		delCmd := newIPTablesCommand("-t", "nat", "-D", "POSTROUTING", ruleNums[i])
 		delCmd.Run() // ignore error
 	}
 }
@@ -369,14 +369,11 @@ func (m *manager) ensureForwardRule(inIface, outIface, ctstate, comment string, 
 	m.deleteForwardRuleByComment(comment)
 
 	// Insert at specified position with comment
-	addCmd := exec.Command("iptables", "-I", "FORWARD", fmt.Sprintf("%d", position),
+	addCmd := newIPTablesCommand("-I", "FORWARD", fmt.Sprintf("%d", position),
 		"-i", inIface, "-o", outIface,
 		"-m", "conntrack", "--ctstate", ctstate,
 		"-m", "comment", "--comment", comment,
 		"-j", "ACCEPT")
-	addCmd.SysProcAttr = &syscall.SysProcAttr{
-		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
-	}
 	if err := addCmd.Run(); err != nil {
 		return "", fmt.Errorf("insert forward rule: %w", err)
 	}
@@ -386,10 +383,7 @@ func (m *manager) ensureForwardRule(inIface, outIface, ctstate, comment string, 
 // isForwardRuleCorrect checks if our rule exists at the expected position with correct interfaces
 func (m *manager) isForwardRuleCorrect(inIface, outIface, comment string, position int) bool {
 	// List FORWARD chain with line numbers
-	cmd := exec.Command("iptables", "-L", "FORWARD", "--line-numbers", "-n", "-v")
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
-	}
+	cmd := newIPTablesCommand("-L", "FORWARD", "--line-numbers", "-n", "-v")
 	output, err := cmd.Output()
 	if err != nil {
 		return false
@@ -417,10 +411,7 @@ func (m *manager) isForwardRuleCorrect(inIface, outIface, comment string, positi
 // deleteForwardRuleByComment deletes any FORWARD rule containing our comment
 func (m *manager) deleteForwardRuleByComment(comment string) {
 	// List FORWARD rules
-	cmd := exec.Command("iptables", "-L", "FORWARD", "--line-numbers", "-n")
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
-	}
+	cmd := newIPTablesCommand("-L", "FORWARD", "--line-numbers", "-n")
 	output, err := cmd.Output()
 	if err != nil {
 		return
@@ -440,10 +431,7 @@ func (m *manager) deleteForwardRuleByComment(comment string) {
 
 	// Delete in reverse order
 	for i := len(ruleNums) - 1; i >= 0; i-- {
-		delCmd := exec.Command("iptables", "-D", "FORWARD", ruleNums[i])
-		delCmd.SysProcAttr = &syscall.SysProcAttr{
-			AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
-		}
+		delCmd := newIPTablesCommand("-D", "FORWARD", ruleNums[i])
 		delCmd.Run() // ignore error
 	}
 }
@@ -460,19 +448,13 @@ func (m *manager) ensureDockerForwardJump(ctx context.Context) {
 	log := logger.FromContext(ctx)
 
 	// Check if DOCKER-FORWARD chain exists (Docker is installed and configured)
-	checkChain := exec.Command("iptables", "-L", "DOCKER-FORWARD", "-n")
-	checkChain.SysProcAttr = &syscall.SysProcAttr{
-		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
-	}
+	checkChain := newIPTablesCommand("-L", "DOCKER-FORWARD", "-n")
 	if checkChain.Run() != nil {
 		return // Chain doesn't exist — Docker not installed or not configured
 	}
 
 	// Check if jump already exists in FORWARD
-	checkJump := exec.Command("iptables", "-C", "FORWARD", "-j", "DOCKER-FORWARD")
-	checkJump.SysProcAttr = &syscall.SysProcAttr{
-		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
-	}
+	checkJump := newIPTablesCommand("-C", "FORWARD", "-j", "DOCKER-FORWARD")
 	if checkJump.Run() == nil {
 		return // Jump already present
 	}
@@ -481,10 +463,7 @@ func (m *manager) ensureDockerForwardJump(ctx context.Context) {
 	// Insert right after hypeman's last rule so the jump is evaluated before any
 	// explicit DROP/REJECT rules that an external firewall tool may have added.
 	insertPos := m.lastHypemanForwardRulePosition() + 1
-	addJump := exec.Command("iptables", "-I", "FORWARD", fmt.Sprintf("%d", insertPos), "-j", "DOCKER-FORWARD")
-	addJump.SysProcAttr = &syscall.SysProcAttr{
-		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
-	}
+	addJump := newIPTablesCommand("-I", "FORWARD", fmt.Sprintf("%d", insertPos), "-j", "DOCKER-FORWARD")
 	if err := addJump.Run(); err != nil {
 		log.WarnContext(ctx, "failed to restore Docker FORWARD chain jump", "error", err)
 		return
@@ -496,10 +475,7 @@ func (m *manager) ensureDockerForwardJump(ctx context.Context) {
 // lastHypemanForwardRulePosition returns the line number of the last hypeman-managed
 // rule in the FORWARD chain, or 0 if none are found.
 func (m *manager) lastHypemanForwardRulePosition() int {
-	cmd := exec.Command("iptables", "-L", "FORWARD", "--line-numbers", "-n", "-v")
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
-	}
+	cmd := newIPTablesCommand("-L", "FORWARD", "--line-numbers", "-n", "-v")
 	output, err := cmd.Output()
 	if err != nil {
 		return 0
