@@ -33,8 +33,8 @@ Concretely, the collector reads filesystem metadata and uses the allocated block
 
 Snapshots are classified by the memory artifact present in `snapshot-latest`:
 
-- `snapshot_compressed` for compressed memory files such as `memory-ranges.zst` or `memory-ranges.lz4`
-- `snapshot_uncompressed` for raw `memory-ranges`
+- `snapshot_compressed` for compressed memory files such as `memory-ranges.zst`, `memory-ranges.lz4`, `memory.zst`, or `memory.lz4`
+- `snapshot_uncompressed` for raw `memory-ranges` or `memory`
 - `snapshot_other` when a snapshot directory exists but does not match a recognized memory artifact shape
 
 The full `snapshot-latest` directory is counted once under its classified snapshot component so the metric includes related config and state files, not just the memory artifact itself.
