@@ -136,9 +136,15 @@ func classifySnapshotDir(snapshotDir string) (component string, exists bool, err
 	switch {
 	case pathExists(filepath.Join(snapshotDir, "memory-ranges.zst")):
 		return ComponentSnapshotCompressed, true, nil
+	case pathExists(filepath.Join(snapshotDir, "memory.zst")):
+		return ComponentSnapshotCompressed, true, nil
 	case pathExists(filepath.Join(snapshotDir, "memory-ranges.lz4")):
 		return ComponentSnapshotCompressed, true, nil
+	case pathExists(filepath.Join(snapshotDir, "memory.lz4")):
+		return ComponentSnapshotCompressed, true, nil
 	case pathExists(filepath.Join(snapshotDir, "memory-ranges")):
+		return ComponentSnapshotUncompressed, true, nil
+	case pathExists(filepath.Join(snapshotDir, "memory")):
 		return ComponentSnapshotUncompressed, true, nil
 	default:
 		return ComponentSnapshotOther, true, nil

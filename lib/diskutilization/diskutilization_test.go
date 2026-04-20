@@ -55,7 +55,19 @@ func TestCollect_UsesAllocatedBytesAndClassifiesSnapshots(t *testing.T) {
 	}))
 	require.NoError(t, os.WriteFile(filepath.Join(compressedSnapshotDir, "config.json"), []byte(`{}`), 0644))
 
-	otherSnapshotDir := p.InstanceSnapshotLatest("inst-3")
+	firecrackerUncompressedSnapshotDir := p.InstanceSnapshotLatest("inst-3")
+	require.NoError(t, createSparseTestFile(filepath.Join(firecrackerUncompressedSnapshotDir, "memory"), 48*1024*1024, []sparseWrite{
+		{offset: 0, data: bytes.Repeat([]byte("f"), 4096)},
+	}))
+	require.NoError(t, os.WriteFile(filepath.Join(firecrackerUncompressedSnapshotDir, "config.json"), []byte(`{}`), 0644))
+
+	firecrackerCompressedSnapshotDir := p.InstanceSnapshotLatest("inst-4")
+	require.NoError(t, createSparseTestFile(filepath.Join(firecrackerCompressedSnapshotDir, "memory.zst"), 24*1024*1024, []sparseWrite{
+		{offset: 0, data: bytes.Repeat([]byte("z"), 4096)},
+	}))
+	require.NoError(t, os.WriteFile(filepath.Join(firecrackerCompressedSnapshotDir, "config.json"), []byte(`{}`), 0644))
+
+	otherSnapshotDir := p.InstanceSnapshotLatest("inst-5")
 	require.NoError(t, os.MkdirAll(otherSnapshotDir, 0755))
 	require.NoError(t, os.WriteFile(filepath.Join(otherSnapshotDir, "config.json"), []byte(`{}`), 0644))
 
@@ -72,13 +84,17 @@ func TestCollect_UsesAllocatedBytesAndClassifiesSnapshots(t *testing.T) {
 
 	uncompressedTotal, err := sumTreeAllocatedBytes(uncompressedSnapshotDir)
 	require.NoError(t, err)
+	firecrackerUncompressedTotal, err := sumTreeAllocatedBytes(firecrackerUncompressedSnapshotDir)
+	require.NoError(t, err)
 	compressedTotal, err := sumTreeAllocatedBytes(compressedSnapshotDir)
+	require.NoError(t, err)
+	firecrackerCompressedTotal, err := sumTreeAllocatedBytes(firecrackerCompressedSnapshotDir)
 	require.NoError(t, err)
 	otherTotal, err := sumTreeAllocatedBytes(otherSnapshotDir)
 	require.NoError(t, err)
 
-	require.Equal(t, uncompressedTotal, utilization.SnapshotUncompressed)
-	require.Equal(t, compressedTotal, utilization.SnapshotCompressed)
+	require.Equal(t, uncompressedTotal+firecrackerUncompressedTotal, utilization.SnapshotUncompressed)
+	require.Equal(t, compressedTotal+firecrackerCompressedTotal, utilization.SnapshotCompressed)
 	require.Equal(t, otherTotal, utilization.SnapshotOther)
 }
 

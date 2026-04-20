@@ -230,7 +230,7 @@ func TestStartMonitoringPublishesDiskUtilizationFromCachedSnapshot(t *testing.T)
 		{offset: 0, data: bytes.Repeat([]byte("o"), 4096)},
 	}))
 	snapshotDir := mgr.paths.InstanceSnapshotLatest("vm-1")
-	require.NoError(t, createMonitoringSparseTestFile(filepath.Join(snapshotDir, "memory-ranges.zst"), 32*1024*1024, []monitoringSparseWrite{
+	require.NoError(t, createMonitoringSparseTestFile(filepath.Join(snapshotDir, "memory.zst"), 32*1024*1024, []monitoringSparseWrite{
 		{offset: 0, data: bytes.Repeat([]byte("s"), 4096)},
 	}))
 	require.NoError(t, os.WriteFile(filepath.Join(snapshotDir, "config.json"), []byte(`{}`), 0644))
