@@ -16,7 +16,7 @@ When auto-delete is enabled:
 
 - The server runs a retention sweep on startup and then every minute.
 - Only converted cached images under `data_dir/images` are eligible for deletion.
-- Shared OCI cache data under `data_dir/system/oci-cache` is not modified.
+- Shared OCI cache data under `data_dir/system/oci-cache` is not modified by this feature; see `lib/ocicachegc` for a separate mark-and-sweep collector that reclaims orphaned blobs from that directory.
 - An image repository must also match at least one `allowed` pattern before any retention state is recorded or deletion is attempted.
 
 An image is considered in use if any persisted instance metadata or snapshot record still references it. As long as at least one such reference exists, the image is protected from deletion.

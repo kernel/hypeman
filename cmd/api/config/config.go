@@ -131,9 +131,17 @@ type ImagesAutoDeleteConfig struct {
 	Allowed   []string `koanf:"allowed"`
 }
 
+// OCICacheGCConfig holds settings for the OCI blob cache garbage collector.
+type OCICacheGCConfig struct {
+	Enabled    bool   `koanf:"enabled"`
+	Interval   string `koanf:"interval"`
+	MinBlobAge string `koanf:"min_blob_age"`
+}
+
 // ImagesConfig holds image-management settings.
 type ImagesConfig struct {
 	AutoDelete ImagesAutoDeleteConfig `koanf:"auto_delete"`
+	OCICacheGC OCICacheGCConfig       `koanf:"oci_cache_gc"`
 }
 
 // BuildConfig holds source-to-image build system settings.
@@ -345,6 +353,11 @@ func defaultConfig() *Config {
 				Enabled:   false,
 				UnusedFor: "720h",
 				Allowed:   []string{},
+			},
+			OCICacheGC: OCICacheGCConfig{
+				Enabled:    false,
+				Interval:   "1h",
+				MinBlobAge: "1h",
 			},
 		},
 
@@ -562,6 +575,12 @@ func (c *Config) Validate() error {
 	}
 	for i, pattern := range c.Images.AutoDelete.Allowed {
 		c.Images.AutoDelete.Allowed[i] = strings.TrimSpace(pattern)
+	}
+	if err := validateDuration("images.oci_cache_gc.interval", c.Images.OCICacheGC.Interval); err != nil {
+		return err
+	}
+	if err := validateDuration("images.oci_cache_gc.min_blob_age", c.Images.OCICacheGC.MinBlobAge); err != nil {
+		return err
 	}
 	algorithm := strings.ToLower(c.Snapshot.CompressionDefault.Algorithm)
 	c.Snapshot.CompressionDefault.Algorithm = algorithm

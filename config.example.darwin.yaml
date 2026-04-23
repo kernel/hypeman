@@ -78,6 +78,11 @@ logging:
 #       - docker.io/library/*     # match normalized repository names
 #       - ghcr.io/kernel/*        # use ["*"] to allow deletion for every repository
 #                                 # only affects data_dir/images, not the shared OCI cache
+#   oci_cache_gc:
+#     enabled: false              # mark-and-sweep GC for data_dir/system/oci-cache
+#     interval: 1h                # how often to run a sweep
+#     min_blob_age: 1h            # grace period; blobs written more recently are kept
+#                                 # to avoid racing with concurrent pulls
 
 # =============================================================================
 # Caddy / Ingress Configuration
