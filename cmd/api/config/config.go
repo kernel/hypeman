@@ -576,11 +576,19 @@ func (c *Config) Validate() error {
 	for i, pattern := range c.Images.AutoDelete.Allowed {
 		c.Images.AutoDelete.Allowed[i] = strings.TrimSpace(pattern)
 	}
-	if err := validateDuration("images.oci_cache_gc.interval", c.Images.OCICacheGC.Interval); err != nil {
-		return err
+	ociCacheGCInterval, err := time.ParseDuration(c.Images.OCICacheGC.Interval)
+	if err != nil {
+		return fmt.Errorf("images.oci_cache_gc.interval must be a valid duration, got %q: %w", c.Images.OCICacheGC.Interval, err)
 	}
-	if err := validateDuration("images.oci_cache_gc.min_blob_age", c.Images.OCICacheGC.MinBlobAge); err != nil {
-		return err
+	if ociCacheGCInterval <= 0 {
+		return fmt.Errorf("images.oci_cache_gc.interval must be positive, got %q", c.Images.OCICacheGC.Interval)
+	}
+	ociCacheGCMinBlobAge, err := time.ParseDuration(c.Images.OCICacheGC.MinBlobAge)
+	if err != nil {
+		return fmt.Errorf("images.oci_cache_gc.min_blob_age must be a valid duration, got %q: %w", c.Images.OCICacheGC.MinBlobAge, err)
+	}
+	if ociCacheGCMinBlobAge < 0 {
+		return fmt.Errorf("images.oci_cache_gc.min_blob_age cannot be negative, got %q", c.Images.OCICacheGC.MinBlobAge)
 	}
 	algorithm := strings.ToLower(c.Snapshot.CompressionDefault.Algorithm)
 	c.Snapshot.CompressionDefault.Algorithm = algorithm

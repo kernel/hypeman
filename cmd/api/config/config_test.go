@@ -43,6 +43,15 @@ func TestDefaultConfigIncludesMetricsSettings(t *testing.T) {
 	if len(cfg.Images.AutoDelete.Allowed) != 0 {
 		t.Fatalf("expected default images.auto_delete.allowed to be empty, got %v", cfg.Images.AutoDelete.Allowed)
 	}
+	if cfg.Images.OCICacheGC.Enabled {
+		t.Fatalf("expected default images.oci_cache_gc.enabled to be false")
+	}
+	if cfg.Images.OCICacheGC.Interval != "1h" {
+		t.Fatalf("expected default images.oci_cache_gc.interval to be 1h, got %q", cfg.Images.OCICacheGC.Interval)
+	}
+	if cfg.Images.OCICacheGC.MinBlobAge != "1h" {
+		t.Fatalf("expected default images.oci_cache_gc.min_blob_age to be 1h, got %q", cfg.Images.OCICacheGC.MinBlobAge)
+	}
 	if cfg.Instances.LifecycleEventBufferSize != 256 {
 		t.Fatalf("expected default instances.lifecycle_event_buffer_size to be 256, got %d", cfg.Instances.LifecycleEventBufferSize)
 	}
@@ -244,6 +253,57 @@ func TestValidateRejectsInvalidImageAutoDeleteUnusedFor(t *testing.T) {
 	err := cfg.Validate()
 	if err == nil {
 		t.Fatalf("expected validation error for invalid images.auto_delete.unused_for")
+	}
+}
+
+func TestLoadUsesDefaultOCICacheGCSettingsWhenEnabledOnly(t *testing.T) {
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("images:\n  oci_cache_gc:\n    enabled: true\n"), 0600); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	if !cfg.Images.OCICacheGC.Enabled {
+		t.Fatalf("expected images.oci_cache_gc.enabled override to be true")
+	}
+	if cfg.Images.OCICacheGC.Interval != "1h" {
+		t.Fatalf("expected default images.oci_cache_gc.interval to remain 1h, got %q", cfg.Images.OCICacheGC.Interval)
+	}
+	if cfg.Images.OCICacheGC.MinBlobAge != "1h" {
+		t.Fatalf("expected default images.oci_cache_gc.min_blob_age to remain 1h, got %q", cfg.Images.OCICacheGC.MinBlobAge)
+	}
+}
+
+func TestValidateRejectsInvalidOCICacheGCInterval(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Images.OCICacheGC.Interval = "not-a-duration"
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatalf("expected validation error for invalid images.oci_cache_gc.interval")
+	}
+
+	cfg = defaultConfig()
+	cfg.Images.OCICacheGC.Interval = "0s"
+
+	err = cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "must be positive") {
+		t.Fatalf("expected positive validation error for zero images.oci_cache_gc.interval, got %v", err)
+	}
+}
+
+func TestValidateRejectsNegativeOCICacheGCMinBlobAge(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Images.OCICacheGC.MinBlobAge = "-1s"
+
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "cannot be negative") {
+		t.Fatalf("expected non-negative validation error for images.oci_cache_gc.min_blob_age, got %v", err)
 	}
 }
 
