@@ -112,7 +112,7 @@ type StoredMetadata struct {
 
 	// Hypervisor configuration
 	HypervisorType    hypervisor.Type // Hypervisor type (e.g., "cloud-hypervisor")
-	HypervisorVersion string          // Hypervisor version (e.g., "v49.0")
+	HypervisorVersion string          // Hypervisor version (e.g., "v50.1")
 	HypervisorPID     *int            // Hypervisor process ID (may be stale after host restart)
 
 	// Paths

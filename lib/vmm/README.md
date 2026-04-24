@@ -38,7 +38,7 @@ dataDir := "/var/lib/hypeman"
 socketPath := "/tmp/vmm.sock"
 
 // Start Cloud Hypervisor VMM (extracts binary if needed)
-err := vmm.StartProcess(ctx, dataDir, vmm.V48_0, socketPath)
+err := vmm.StartProcess(ctx, dataDir, vmm.V50_1, socketPath)
 if err != nil {
     log.Fatal(err)
 }
@@ -60,9 +60,9 @@ resp, err := client.GetVmmPingWithResponse(ctx)
 ### Check Binary Version
 
 ```go
-binaryPath, _ := vmm.GetBinaryPath(dataDir, vmm.V48_0)
+binaryPath, _ := vmm.GetBinaryPath(dataDir, vmm.V50_1)
 version, err := vmm.ParseVersion(binaryPath)
-fmt.Println(version) // "v48.0"
+fmt.Println(version) // "v50.1"
 ```
 
 ## Architecture
@@ -75,10 +75,7 @@ lib/vmm/
 ├── version.go          # Version parsing utilities
 ├── binaries/           # Embedded Cloud Hypervisor binaries
 │   └── cloud-hypervisor/
-│       ├── v48.0/
-│       │   ├── x86_64/cloud-hypervisor    (4.5MB)
-│       │   └── aarch64/cloud-hypervisor   (3.3MB)
-│       └── v49.0/
+│       └── v50.1/
 │           ├── x86_64/cloud-hypervisor    (4.5MB)
 │           └── aarch64/cloud-hypervisor   (3.3MB)
 |       # There will be additional versions in the future...
@@ -87,8 +84,7 @@ lib/vmm/
 
 ## Supported Versions
 
-- Cloud Hypervisor v48.0 (API v0.3.0)
-- Cloud Hypervisor v49.0 (API v0.3.0)
+- Cloud Hypervisor v50.1 (API v0.3.0)
 
 There may be additional versions in the future. Cloud hypervisor versions may update frequently, while the API updates less frequently.
 
