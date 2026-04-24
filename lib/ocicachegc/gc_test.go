@@ -317,6 +317,79 @@ func TestCollectFollowsManifestIndex(t *testing.T) {
 	assert.True(t, os.IsNotExist(err))
 }
 
+func TestCollectRecursesIntoSubject(t *testing.T) {
+	dataDir := t.TempDir()
+	p := paths.New(dataDir)
+	blobsDir := p.OCICacheBlobDir()
+	require.NoError(t, os.MkdirAll(blobsDir, 0o755))
+
+	writeBlob := func(content []byte) string {
+		sum := sha256.Sum256(content)
+		hexDigest := hex.EncodeToString(sum[:])
+		require.NoError(t, os.WriteFile(filepath.Join(blobsDir, hexDigest), content, 0o644))
+		return "sha256:" + hexDigest
+	}
+
+	// Subject image: config + layer + manifest.
+	subjectConfig := []byte(`{"subject-config":true}`)
+	subjectLayer := []byte("subject-layer")
+	subjectConfigDigest := writeBlob(subjectConfig)
+	subjectLayerDigest := writeBlob(subjectLayer)
+
+	subjectManifest := map[string]any{
+		"schemaVersion": 2,
+		"mediaType":     "application/vnd.oci.image.manifest.v1+json",
+		"config":        map[string]any{"mediaType": "application/vnd.oci.image.config.v1+json", "digest": subjectConfigDigest, "size": len(subjectConfig)},
+		"layers":        []map[string]any{{"mediaType": "application/vnd.oci.image.layer.v1.tar+gzip", "digest": subjectLayerDigest, "size": len(subjectLayer)}},
+	}
+	subjectBytes, err := json.Marshal(subjectManifest)
+	require.NoError(t, err)
+	subjectDigest := writeBlob(subjectBytes)
+
+	// Referrer manifest: has its own config + layer, points at subject.
+	referrerConfig := []byte(`{"referrer-config":true}`)
+	referrerLayer := []byte("referrer-layer")
+	referrerConfigDigest := writeBlob(referrerConfig)
+	referrerLayerDigest := writeBlob(referrerLayer)
+
+	referrerManifest := map[string]any{
+		"schemaVersion": 2,
+		"mediaType":     "application/vnd.oci.image.manifest.v1+json",
+		"config":        map[string]any{"mediaType": "application/vnd.oci.image.config.v1+json", "digest": referrerConfigDigest, "size": len(referrerConfig)},
+		"layers":        []map[string]any{{"mediaType": "application/vnd.oci.image.layer.v1.tar+gzip", "digest": referrerLayerDigest, "size": len(referrerLayer)}},
+		"subject":       map[string]any{"mediaType": "application/vnd.oci.image.manifest.v1+json", "digest": subjectDigest, "size": len(subjectBytes)},
+	}
+	referrerBytes, err := json.Marshal(referrerManifest)
+	require.NoError(t, err)
+	referrerDigest := writeBlob(referrerBytes)
+
+	// Cache index.json references only the referrer; the subject should
+	// stay live via the subject link.
+	index := map[string]any{
+		"schemaVersion": 2,
+		"mediaType":     "application/vnd.oci.image.index.v1+json",
+		"manifests":     []map[string]any{{"mediaType": "application/vnd.oci.image.manifest.v1+json", "digest": referrerDigest, "size": len(referrerBytes)}},
+	}
+	indexBytes, err := json.Marshal(index)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(p.OCICacheIndex(), indexBytes, 0o644))
+
+	c := newCollectorForTest(t, dataDir, time.Minute, time.Now())
+	stats, err := c.Collect(context.Background())
+	require.NoError(t, err)
+
+	// Live: referrer manifest + referrer config + referrer layer
+	//     + subject manifest + subject config + subject layer = 6.
+	assert.Equal(t, 6, stats.LiveBlobs)
+	assert.Equal(t, 0, stats.DeletedBlobs, "subject's config and layers must not be swept")
+
+	// Double-check subject's transitive blobs still exist.
+	for _, d := range []string{subjectConfigDigest, subjectLayerDigest, subjectDigest} {
+		_, err := os.Stat(filepath.Join(blobsDir, d[7:]))
+		assert.NoError(t, err, "subject-reachable blob %s should remain", d)
+	}
+}
+
 func TestNewCollectorValidatesArgs(t *testing.T) {
 	dataDir := t.TempDir()
 	p := paths.New(dataDir)

@@ -296,8 +296,8 @@ func walkDescriptor(p *paths.Paths, desc descriptor, live, visited map[string]st
 		}
 	}
 	if doc.Subject != nil {
-		if h, ok := digestHex(doc.Subject.Digest); ok {
-			live[h] = struct{}{}
+		if err := walkDescriptor(p, *doc.Subject, live, visited); err != nil {
+			return err
 		}
 	}
 	for _, m := range doc.Manifests {
