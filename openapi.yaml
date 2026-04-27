@@ -1152,7 +1152,45 @@ components:
           type: string
           enum: [ok]
           example: ok
-    
+
+    DiagnosticCheck:
+      type: object
+      required: [name, ok, duration_ms]
+      properties:
+        name:
+          type: string
+          description: Identifier of the check (e.g., "dns", "egress_tcp", "disk").
+          example: dns
+        ok:
+          type: boolean
+          description: Whether the check passed.
+        duration_ms:
+          type: integer
+          format: int64
+          description: How long the check took, in milliseconds.
+        error:
+          type: string
+          description: Error message when ok is false.
+        detail:
+          type: string
+          description: Optional context about the result (e.g., resolved IP, free bytes).
+
+    Diagnostics:
+      type: object
+      required: [ok, checked_at, checks]
+      properties:
+        ok:
+          type: boolean
+          description: True iff every individual check passed.
+        checked_at:
+          type: string
+          format: date-time
+          description: Time the diagnostics were collected.
+        checks:
+          type: array
+          items:
+            $ref: "#/components/schemas/DiagnosticCheck"
+
     IngressMatch:
       type: object
       required: [hostname]
@@ -1806,7 +1844,32 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Health"
-  
+
+  /diagnostics:
+    get:
+      summary: Active host diagnostics
+      description: |
+        Runs synchronous probes against host-local subsystems and returns the
+        result of each check. Intended to be polled from the control plane to
+        observe host-health signals (DNS, outbound network, disk) that pushed
+        OTEL metrics cannot surface when the host is partially unreachable.
+      operationId: getDiagnostics
+      security:
+        - bearerAuth: []
+      responses:
+        200:
+          description: Diagnostics result. Always 200 if the request was served; inspect `ok` and per-check fields for status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Diagnostics"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /resources:
     get:
       summary: Get host resource capacity and allocations
