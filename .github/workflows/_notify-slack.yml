@@ -1,0 +1,21 @@
+name: Notify Slack on deploy failure
+
+on:
+  workflow_call:
+    secrets:
+      SLACK_DEPLOY_WEBHOOK_URL:
+        required: true
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post to Slack
+        uses: slackapi/slack-github-action@v2
+        with:
+          webhook: ${{ secrets.SLACK_DEPLOY_WEBHOOK_URL }}
+          webhook-type: incoming-webhook
+          payload: |
+            {
+              "text": ":x: *${{ github.workflow }}* failed on `${{ github.repository }}@${{ github.ref_name }}` — <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|view run>"
+            }

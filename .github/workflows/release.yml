@@ -34,3 +34,9 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  notify-on-failure:
+    needs: [release]
+    if: ${{ failure() }}
+    uses: ./.github/workflows/_notify-slack.yml
+    secrets: inherit
