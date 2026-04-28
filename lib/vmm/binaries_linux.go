@@ -13,17 +13,17 @@ import (
 	"github.com/kernel/hypeman/lib/paths"
 )
 
-//go:embed binaries/cloud-hypervisor/v50.1/x86_64/cloud-hypervisor
-//go:embed binaries/cloud-hypervisor/v50.1/aarch64/cloud-hypervisor
+//go:embed binaries/cloud-hypervisor/v51.1/x86_64/cloud-hypervisor
+//go:embed binaries/cloud-hypervisor/v51.1/aarch64/cloud-hypervisor
 var binaryFS embed.FS
 
 type CHVersion string
 
 const (
-	V50_1 CHVersion = "v50.1"
+	V51_1 CHVersion = "v51.1"
 )
 
-var SupportedVersions = []CHVersion{V50_1}
+var SupportedVersions = []CHVersion{V51_1}
 
 // ExtractBinary extracts the embedded Cloud Hypervisor binary to the data directory
 func ExtractBinary(p *paths.Paths, version CHVersion) (string, error) {

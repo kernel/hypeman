@@ -12,7 +12,7 @@ import (
 type CHVersion string
 
 const (
-	V50_1 CHVersion = "v50.1"
+	V51_1 CHVersion = "v51.1"
 )
 
 // SupportedVersions lists supported Cloud Hypervisor versions.

@@ -37,8 +37,8 @@ Manages versioned kernel and initrd files for Cloud Hypervisor VMs.
 
 **Snapshots require exact matches:**
 ```
-Standby:  kernel ch-6.12.8-kernel-1.2-20251213, CH v50.1
-Restore:  kernel ch-6.12.8-kernel-1.2-20251213, CH v50.1 (MUST match)
+Standby:  kernel ch-6.12.8-kernel-1.2-20251213, CH v51.1
+Restore:  kernel ch-6.12.8-kernel-1.2-20251213, CH v51.1 (MUST match)
 ```
 
 **Maintenance upgrades (shutdown → boot):**

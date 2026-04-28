@@ -37,12 +37,12 @@ install-tools: $(OAPI_CODEGEN) $(AIR) $(WIRE) $(XCADDY)
 # Download Cloud Hypervisor binaries
 download-ch-binaries:
 	@echo "Downloading Cloud Hypervisor binaries..."
-	@mkdir -p lib/vmm/binaries/cloud-hypervisor/v50.1/{x86_64,aarch64}
-	@echo "Downloading v50.1..."
-	@curl -L -o lib/vmm/binaries/cloud-hypervisor/v50.1/x86_64/cloud-hypervisor \
-		https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/v50.1/cloud-hypervisor-static
-	@curl -L -o lib/vmm/binaries/cloud-hypervisor/v50.1/aarch64/cloud-hypervisor \
-		https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/v50.1/cloud-hypervisor-static-aarch64
+	@mkdir -p lib/vmm/binaries/cloud-hypervisor/v51.1/{x86_64,aarch64}
+	@echo "Downloading v51.1..."
+	@curl -L -o lib/vmm/binaries/cloud-hypervisor/v51.1/x86_64/cloud-hypervisor \
+		https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/v51.1/cloud-hypervisor-static
+	@curl -L -o lib/vmm/binaries/cloud-hypervisor/v51.1/aarch64/cloud-hypervisor \
+		https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/v51.1/cloud-hypervisor-static-aarch64
 	@chmod +x lib/vmm/binaries/cloud-hypervisor/v*/*/cloud-hypervisor
 	@echo "Binaries downloaded successfully"
 
@@ -110,7 +110,7 @@ download-ch-spec:
 	@echo "Downloading Cloud Hypervisor API spec..."
 	@mkdir -p specs/cloud-hypervisor/api-v0.3.0
 	@curl -L -o specs/cloud-hypervisor/api-v0.3.0/cloud-hypervisor.yaml \
-		https://raw.githubusercontent.com/cloud-hypervisor/cloud-hypervisor/refs/tags/v50.1/vmm/src/api/openapi/cloud-hypervisor.yaml
+		https://raw.githubusercontent.com/cloud-hypervisor/cloud-hypervisor/refs/tags/v51.1/vmm/src/api/openapi/cloud-hypervisor.yaml
 	@echo "API spec downloaded"
 
 # Generate Go code from OpenAPI spec
@@ -162,7 +162,7 @@ ensure-ch-binaries:
 	else \
 		echo "Unsupported architecture: $$ARCH"; exit 1; \
 	fi; \
-	if [ ! -f lib/vmm/binaries/cloud-hypervisor/v50.1/$$CH_ARCH/cloud-hypervisor ]; then \
+	if [ ! -f lib/vmm/binaries/cloud-hypervisor/v51.1/$$CH_ARCH/cloud-hypervisor ]; then \
 		echo "Cloud Hypervisor binaries not found, downloading..."; \
 		$(MAKE) download-ch-binaries; \
 	fi

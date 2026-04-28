@@ -16,8 +16,8 @@ import (
 func TestExtractBinary(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	// Test extraction for v50.1
-	binaryPath, err := ExtractBinary(paths.New(tmpDir), V50_1)
+	// Test extraction for v51.1
+	binaryPath, err := ExtractBinary(paths.New(tmpDir), V51_1)
 	require.NoError(t, err)
 
 	// Verify file exists
@@ -30,13 +30,13 @@ func TestExtractBinary(t *testing.T) {
 	assert.Equal(t, os.FileMode(0755), info.Mode().Perm())
 
 	// Test idempotency - second extraction should succeed and return same path
-	binaryPath2, err := ExtractBinary(paths.New(tmpDir), V50_1)
+	binaryPath2, err := ExtractBinary(paths.New(tmpDir), V51_1)
 	require.NoError(t, err)
 	assert.Equal(t, binaryPath, binaryPath2)
 }
 
 func TestIsVersionSupported(t *testing.T) {
-	assert.True(t, IsVersionSupported(V50_1))
+	assert.True(t, IsVersionSupported(V51_1))
 	assert.False(t, IsVersionSupported("v1.0"))
 }
 
@@ -44,13 +44,13 @@ func TestParseVersion(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Extract binary
-	binaryPath, err := ExtractBinary(paths.New(tmpDir), V50_1)
+	binaryPath, err := ExtractBinary(paths.New(tmpDir), V51_1)
 	require.NoError(t, err)
 
 	// Parse version
 	version, err := ParseVersion(binaryPath)
 	require.NoError(t, err)
-	assert.Equal(t, V50_1, version)
+	assert.Equal(t, V51_1, version)
 }
 
 func TestStartProcessAndShutdown(t *testing.T) {
@@ -59,7 +59,7 @@ func TestStartProcessAndShutdown(t *testing.T) {
 	ctx := context.Background()
 
 	// Start VMM process
-	pid, err := StartProcess(ctx, paths.New(tmpDir), V50_1, socketPath)
+	pid, err := StartProcess(ctx, paths.New(tmpDir), V51_1, socketPath)
 	require.NoError(t, err)
 	assert.Greater(t, pid, 0, "PID should be positive")
 
@@ -94,12 +94,12 @@ func TestStartProcessSocketInUse(t *testing.T) {
 	ctx := context.Background()
 
 	// Start first VMM
-	pid, err := StartProcess(ctx, paths.New(tmpDir), V50_1, socketPath)
+	pid, err := StartProcess(ctx, paths.New(tmpDir), V51_1, socketPath)
 	require.NoError(t, err)
 	assert.Greater(t, pid, 0)
 
 	// Try to start second VMM on same socket - should fail
-	_, err = StartProcess(ctx, paths.New(tmpDir), V50_1, socketPath)
+	_, err = StartProcess(ctx, paths.New(tmpDir), V51_1, socketPath)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "socket already in use")
 
@@ -117,7 +117,7 @@ func TestMultipleVersions(t *testing.T) {
 		name    string
 		version CHVersion
 	}{
-		{"v50.1", V50_1},
+		{"v51.1", V51_1},
 	}
 
 	for _, tt := range tests {
@@ -157,7 +157,7 @@ func TestStartProcessCreatesLogFiles(t *testing.T) {
 	ctx := context.Background()
 
 	// Start VMM process with verbose logging to ensure output is written
-	pid, err := StartProcessWithArgs(ctx, paths.New(tmpDir), V50_1, socketPath, []string{"-v"})
+	pid, err := StartProcessWithArgs(ctx, paths.New(tmpDir), V51_1, socketPath, []string{"-v"})
 	require.NoError(t, err)
 	assert.Greater(t, pid, 0)
 

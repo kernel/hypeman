@@ -944,13 +944,12 @@ components:
         backing_files:
           type: boolean
           default: false
+        sparse:
+          type: boolean
+          default: true
         image_type:
           type: string
-          enum:
-            - FixedVhd
-            - Qcow2
-            - Raw
-            - Vhdx
+          enum: [FixedVhd, Qcow2, Raw, Vhdx, Unknown]
 
 
     NetConfig:
@@ -1217,6 +1216,8 @@ components:
           items:
             type: integer
             format: int32
+        device_id:
+          type: string
 
     VmResize:
       type: object

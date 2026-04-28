@@ -20,8 +20,8 @@ func ParseVersion(binaryPath string) (CHVersion, error) {
 	versionStr := strings.TrimSpace(string(output))
 
 	// Try to match known versions
-	if strings.Contains(versionStr, "v50.1") {
-		return V50_1, nil
+	if strings.Contains(versionStr, "v51.1") {
+		return V51_1, nil
 	}
 
 	return "", fmt.Errorf("unsupported version: %s", versionStr)

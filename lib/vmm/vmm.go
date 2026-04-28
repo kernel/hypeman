@@ -38,6 +38,7 @@ const (
 	FixedVhd DiskConfigImageType = "FixedVhd"
 	Qcow2    DiskConfigImageType = "Qcow2"
 	Raw      DiskConfigImageType = "Raw"
+	Unknown  DiskConfigImageType = "Unknown"
 	Vhdx     DiskConfigImageType = "Vhdx"
 )
 
@@ -146,6 +147,7 @@ type DiskConfig struct {
 	RateLimiterConfig *RateLimiterConfig `json:"rate_limiter_config,omitempty"`
 	Readonly          *bool              `json:"readonly,omitempty"`
 	Serial            *string            `json:"serial,omitempty"`
+	Sparse            *bool              `json:"sparse,omitempty"`
 	VhostSocket       *string            `json:"vhost_socket,omitempty"`
 	VhostUser         *bool              `json:"vhost_user,omitempty"`
 }
@@ -230,6 +232,7 @@ type NetConfig struct {
 // NumaConfig defines model for NumaConfig.
 type NumaConfig struct {
 	Cpus        *[]int32        `json:"cpus,omitempty"`
+	DeviceId    *string         `json:"device_id,omitempty"`
 	Distances   *[]NumaDistance `json:"distances,omitempty"`
 	GuestNumaId int32           `json:"guest_numa_id"`
 	MemoryZones *[]string       `json:"memory_zones,omitempty"`
