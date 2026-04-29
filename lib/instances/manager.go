@@ -299,6 +299,15 @@ func (m *manager) maybePersistBootMarkers(ctx context.Context, id string) {
 	m.persistBootMarkers(ctx, id)
 }
 
+func (m *manager) finalizeResolvedInstance(ctx context.Context, inst *Instance) {
+	if inst.State == StateStopped && inst.ExitCode != nil {
+		m.maybePersistExitInfo(ctx, inst.Id)
+	}
+	if (inst.State == StateRunning || inst.State == StateInitializing) && inst.BootMarkersHydrated {
+		m.maybePersistBootMarkers(ctx, inst.Id)
+	}
+}
+
 func (m *manager) recordImageUsage(ctx context.Context, imageInfo *images.Image) {
 	if m.imageUsageRecorder == nil || imageInfo == nil {
 		return
@@ -499,66 +508,36 @@ func (m *manager) ListInstances(ctx context.Context, filter *ListInstancesFilter
 // Lookup order: exact ID match -> exact name match -> ID prefix match.
 // Returns ErrAmbiguousName if prefix matches multiple instances.
 func (m *manager) GetInstance(ctx context.Context, idOrName string) (*Instance, error) {
+	return m.getInstanceWithMinIDPrefix(ctx, idOrName, 1)
+}
+
+func (m *manager) getInstanceWithMinIDPrefix(ctx context.Context, idOrName string, minPrefixLength int) (*Instance, error) {
 	// 1. Try exact ID match first (most common case)
 	lock := m.getInstanceLock(idOrName)
 	lock.RLock()
 	inst, err := m.getInstance(ctx, idOrName)
 	lock.RUnlock()
 	if err == nil {
-		// If VM is stopped with unpersisted exit info, persist under write lock.
-		// This handles the "app exited on its own" case where stopInstance wasn't called.
-		if inst.State == StateStopped && inst.ExitCode != nil {
-			m.maybePersistExitInfo(ctx, inst.Id)
-		}
-		if (inst.State == StateRunning || inst.State == StateInitializing) && inst.BootMarkersHydrated {
-			m.maybePersistBootMarkers(ctx, inst.Id)
-		}
+		m.finalizeResolvedInstance(ctx, inst)
 		return inst, nil
 	}
 
-	// 2. List all instances for name and prefix matching
-	instances, err := m.ListInstances(ctx, nil)
+	// 2. Resolve exact name or ID prefix from metadata only, then hydrate the
+	// single matched instance.
+	meta, err := m.findInstanceMetadataByNameOrIDPrefix(idOrName, minPrefixLength)
 	if err != nil {
 		return nil, err
 	}
 
-	// 3. Try exact name match
-	var nameMatches []Instance
-	for _, inst := range instances {
-		if inst.Name == idOrName {
-			nameMatches = append(nameMatches, inst)
-		}
+	resolvedLock := m.getInstanceLock(meta.Id)
+	resolvedLock.RLock()
+	inst, err = m.getInstance(ctx, meta.Id)
+	resolvedLock.RUnlock()
+	if err != nil {
+		return nil, err
 	}
-	if len(nameMatches) == 1 {
-		inst := &nameMatches[0]
-		if inst.State == StateStopped && inst.ExitCode != nil {
-			m.maybePersistExitInfo(ctx, inst.Id)
-		}
-		return inst, nil
-	}
-	if len(nameMatches) > 1 {
-		return nil, ErrAmbiguousName
-	}
-
-	// 4. Try ID prefix match
-	var prefixMatches []Instance
-	for _, inst := range instances {
-		if len(idOrName) > 0 && len(inst.Id) >= len(idOrName) && inst.Id[:len(idOrName)] == idOrName {
-			prefixMatches = append(prefixMatches, inst)
-		}
-	}
-	if len(prefixMatches) == 1 {
-		inst := &prefixMatches[0]
-		if inst.State == StateStopped && inst.ExitCode != nil {
-			m.maybePersistExitInfo(ctx, inst.Id)
-		}
-		return inst, nil
-	}
-	if len(prefixMatches) > 1 {
-		return nil, ErrAmbiguousName
-	}
-
-	return nil, ErrNotFound
+	m.finalizeResolvedInstance(ctx, inst)
+	return inst, nil
 }
 
 // StreamInstanceLogs streams instance logs from the specified source

@@ -5,11 +5,17 @@ import (
 	"fmt"
 )
 
+const dnsMinIDPrefixLength = 8
+
 // IngressResolver provides instance resolution for the ingress package.
 // It implements ingress.InstanceResolver interface without importing the ingress package
 // to avoid import cycles.
 type IngressResolver struct {
 	manager Manager
+}
+
+type minPrefixInstanceManager interface {
+	getInstanceWithMinIDPrefix(ctx context.Context, idOrName string, minPrefixLength int) (*Instance, error)
 }
 
 // NewIngressResolver creates a new IngressResolver that wraps an instance manager.
@@ -24,6 +30,27 @@ func (r *IngressResolver) ResolveInstanceIP(ctx context.Context, nameOrID string
 		return "", fmt.Errorf("instance not found: %s", nameOrID)
 	}
 
+	return resolvedInstanceIP(inst, nameOrID)
+}
+
+// ResolveInstanceIPForDNS resolves an instance IP for DNS lookups.
+// DNS keeps exact ID/name behavior, but requires longer ID prefixes to avoid
+// accidental broad matches from short DNS labels.
+func (r *IngressResolver) ResolveInstanceIPForDNS(ctx context.Context, nameOrID string) (string, error) {
+	manager, ok := r.manager.(minPrefixInstanceManager)
+	if !ok {
+		return r.ResolveInstanceIP(ctx, nameOrID)
+	}
+
+	inst, err := manager.getInstanceWithMinIDPrefix(ctx, nameOrID, dnsMinIDPrefixLength)
+	if err != nil {
+		return "", fmt.Errorf("instance not found: %s", nameOrID)
+	}
+
+	return resolvedInstanceIP(inst, nameOrID)
+}
+
+func resolvedInstanceIP(inst *Instance, nameOrID string) (string, error) {
 	// Check if instance has network enabled
 	if !inst.NetworkEnabled {
 		return "", fmt.Errorf("instance %s has no network configured", nameOrID)

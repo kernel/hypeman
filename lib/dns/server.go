@@ -41,6 +41,10 @@ type InstanceResolver interface {
 	ResolveInstanceIP(ctx context.Context, nameOrID string) (string, error)
 }
 
+type dnsInstanceResolver interface {
+	ResolveInstanceIPForDNS(ctx context.Context, nameOrID string) (string, error)
+}
+
 // Server provides DNS-based instance resolution for Caddy.
 // It listens on a local port and responds to A record queries
 // for instances in the form "<instance>.hypeman.internal".
@@ -180,7 +184,13 @@ func (s *Server) handleAQuery(m *dns.Msg, q dns.Question) {
 	ctx, cancel := context.WithTimeout(context.Background(), resolverTimeout)
 	defer cancel()
 
-	ip, err := s.resolver.ResolveInstanceIP(ctx, instanceName)
+	var ip string
+	var err error
+	if resolver, ok := s.resolver.(dnsInstanceResolver); ok {
+		ip, err = resolver.ResolveInstanceIPForDNS(ctx, instanceName)
+	} else {
+		ip, err = s.resolver.ResolveInstanceIP(ctx, instanceName)
+	}
 	if err != nil {
 		s.log.Debug("DNS resolution failed", "instance", instanceName, "error", err)
 		// Return NXDOMAIN by not adding any answer records
