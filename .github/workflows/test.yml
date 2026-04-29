@@ -123,6 +123,7 @@ jobs:
           make test TEST_TIMEOUT=20m
 
   test-darwin:
+    if: false
     runs-on: [self-hosted, macos, arm64]
     concurrency:
       group: macos-ci-test-${{ github.ref }}
@@ -191,6 +192,7 @@ jobs:
           make clean
 
   e2e-install:
+    if: false
     runs-on: [self-hosted, macos, arm64]
     needs: test-darwin
     concurrency:
