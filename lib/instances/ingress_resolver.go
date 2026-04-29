@@ -25,21 +25,9 @@ func NewIngressResolver(manager Manager) *IngressResolver {
 
 // ResolveInstanceIP resolves an instance name, ID, or ID prefix to its IP address.
 func (r *IngressResolver) ResolveInstanceIP(ctx context.Context, nameOrID string) (string, error) {
-	inst, err := r.manager.GetInstance(ctx, nameOrID)
-	if err != nil {
-		return "", fmt.Errorf("instance not found: %s", nameOrID)
-	}
-
-	return resolvedInstanceIP(inst, nameOrID)
-}
-
-// ResolveInstanceIPForDNS resolves an instance IP for DNS lookups.
-// DNS keeps exact ID/name behavior, but requires longer ID prefixes to avoid
-// accidental broad matches from short DNS labels.
-func (r *IngressResolver) ResolveInstanceIPForDNS(ctx context.Context, nameOrID string) (string, error) {
 	manager, ok := r.manager.(minPrefixInstanceManager)
 	if !ok {
-		return r.ResolveInstanceIP(ctx, nameOrID)
+		return "", fmt.Errorf("instance resolver does not support DNS-safe lookup")
 	}
 
 	inst, err := manager.getInstanceWithMinIDPrefix(ctx, nameOrID, dnsMinIDPrefixLength)
@@ -47,10 +35,6 @@ func (r *IngressResolver) ResolveInstanceIPForDNS(ctx context.Context, nameOrID 
 		return "", fmt.Errorf("instance not found: %s", nameOrID)
 	}
 
-	return resolvedInstanceIP(inst, nameOrID)
-}
-
-func resolvedInstanceIP(inst *Instance, nameOrID string) (string, error) {
 	// Check if instance has network enabled
 	if !inst.NetworkEnabled {
 		return "", fmt.Errorf("instance %s has no network configured", nameOrID)

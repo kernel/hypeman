@@ -37,12 +37,8 @@ const (
 // InstanceResolver provides instance IP resolution.
 // This interface is implemented by the instances package.
 type InstanceResolver interface {
-	// ResolveInstanceIP resolves an instance name or ID to its IP address.
+	// ResolveInstanceIP resolves an instance name or ID to its IP address for DNS.
 	ResolveInstanceIP(ctx context.Context, nameOrID string) (string, error)
-}
-
-type dnsInstanceResolver interface {
-	ResolveInstanceIPForDNS(ctx context.Context, nameOrID string) (string, error)
 }
 
 // Server provides DNS-based instance resolution for Caddy.
@@ -184,13 +180,7 @@ func (s *Server) handleAQuery(m *dns.Msg, q dns.Question) {
 	ctx, cancel := context.WithTimeout(context.Background(), resolverTimeout)
 	defer cancel()
 
-	var ip string
-	var err error
-	if resolver, ok := s.resolver.(dnsInstanceResolver); ok {
-		ip, err = resolver.ResolveInstanceIPForDNS(ctx, instanceName)
-	} else {
-		ip, err = s.resolver.ResolveInstanceIP(ctx, instanceName)
-	}
+	ip, err := s.resolver.ResolveInstanceIP(ctx, instanceName)
 	if err != nil {
 		s.log.Debug("DNS resolution failed", "instance", instanceName, "error", err)
 		// Return NXDOMAIN by not adding any answer records
