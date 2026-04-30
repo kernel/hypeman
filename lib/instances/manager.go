@@ -399,6 +399,15 @@ func (m *manager) StandbyInstance(ctx context.Context, id string, req StandbyIns
 	lock := m.getInstanceLock(id)
 	lock.Lock()
 	defer lock.Unlock()
+	if !standbyRequestHasOptions(req) {
+		current, err := m.currentInstanceWithoutHydration(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if current.State == StateStandby {
+			return current, nil
+		}
+	}
 	inst, err := m.standbyInstance(ctx, id, req, false)
 	if err == nil {
 		m.notifyLifecycleEvent(ctx, LifecycleEventStandby, inst)
@@ -411,6 +420,13 @@ func (m *manager) RestoreInstance(ctx context.Context, id string) (*Instance, er
 	lock := m.getInstanceLock(id)
 	lock.Lock()
 	defer lock.Unlock()
+	current, err := m.currentInstanceWithoutHydration(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if current.State == StateRunning || current.State == StateInitializing {
+		return current, nil
+	}
 	inst, err := m.restoreInstance(ctx, id)
 	if err == nil {
 		m.notifyLifecycleEvent(ctx, LifecycleEventRestore, inst)
@@ -434,6 +450,13 @@ func (m *manager) StopInstance(ctx context.Context, id string) (*Instance, error
 	lock := m.getInstanceLock(id)
 	lock.Lock()
 	defer lock.Unlock()
+	current, err := m.currentInstanceWithoutHydration(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if current.State == StateStopped {
+		return current, nil
+	}
 	inst, err := m.stopInstance(ctx, id)
 	if err == nil {
 		m.notifyLifecycleEvent(ctx, LifecycleEventStop, inst)
@@ -446,11 +469,37 @@ func (m *manager) StartInstance(ctx context.Context, id string, req StartInstanc
 	lock := m.getInstanceLock(id)
 	lock.Lock()
 	defer lock.Unlock()
+	if !startRequestHasOverrides(req) {
+		current, err := m.currentInstanceWithoutHydration(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if current.State == StateRunning || current.State == StateInitializing {
+			return current, nil
+		}
+	}
 	inst, err := m.startInstance(ctx, id, req)
 	if err == nil {
 		m.notifyLifecycleEvent(ctx, LifecycleEventStart, inst)
 	}
 	return inst, err
+}
+
+func (m *manager) currentInstanceWithoutHydration(ctx context.Context, id string) (*Instance, error) {
+	meta, err := m.loadMetadata(id)
+	if err != nil {
+		return nil, err
+	}
+	inst := m.toInstanceWithoutHydration(ctx, meta)
+	return &inst, nil
+}
+
+func startRequestHasOverrides(req StartInstanceRequest) bool {
+	return len(req.Entrypoint) > 0 || len(req.Cmd) > 0
+}
+
+func standbyRequestHasOptions(req StandbyInstanceRequest) bool {
+	return req.Compression != nil || req.CompressionDelay != nil
 }
 
 // UpdateInstance updates mutable properties of a running instance
