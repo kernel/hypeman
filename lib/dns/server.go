@@ -37,7 +37,7 @@ const (
 // InstanceResolver provides instance IP resolution.
 // This interface is implemented by the instances package.
 type InstanceResolver interface {
-	// ResolveInstanceIP resolves an instance name or ID to its IP address.
+	// ResolveInstanceIP resolves an instance name or ID to its IP address for DNS.
 	ResolveInstanceIP(ctx context.Context, nameOrID string) (string, error)
 }
 

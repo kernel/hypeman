@@ -649,6 +649,87 @@ func (m *manager) listInstances(ctx context.Context) ([]Instance, error) {
 	return result, nil
 }
 
+func (m *manager) findInstanceMetadataByExactName(name string) (*metadata, error) {
+	files, err := m.listMetadataFiles()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, file := range files {
+		id := filepath.Base(filepath.Dir(file))
+		meta, err := m.loadMetadata(id)
+		if err != nil {
+			continue
+		}
+		if meta.Name == name {
+			return meta, nil
+		}
+	}
+	return nil, ErrNotFound
+}
+
+func (m *manager) findInstanceMetadataByNameOrIDPrefix(idOrName string, minPrefixLength int) (*metadata, error) {
+	files, err := m.listMetadataFiles()
+	if err != nil {
+		return nil, err
+	}
+	if minPrefixLength < 1 {
+		minPrefixLength = 1
+	}
+
+	var nameMatch *metadata
+	var prefixMatch *metadata
+	nameMatches := 0
+	prefixMatches := 0
+
+	for _, file := range files {
+		id := filepath.Base(filepath.Dir(file))
+		meta, err := m.loadMetadata(id)
+		if err != nil {
+			continue
+		}
+
+		if meta.Name == idOrName {
+			nameMatches++
+			if nameMatches == 1 {
+				nameMatch = meta
+			}
+		}
+
+		if len(idOrName) >= minPrefixLength && strings.HasPrefix(meta.Id, idOrName) {
+			prefixMatches++
+			if prefixMatches == 1 {
+				prefixMatch = meta
+			}
+		}
+	}
+
+	if nameMatches == 1 {
+		return nameMatch, nil
+	}
+	if nameMatches > 1 {
+		return nil, ErrAmbiguousName
+	}
+	if prefixMatches == 1 {
+		return prefixMatch, nil
+	}
+	if prefixMatches > 1 {
+		return nil, ErrAmbiguousName
+	}
+	return nil, ErrNotFound
+}
+
+func (m *manager) instanceNameExists(name string) (bool, error) {
+	_, err := m.findInstanceMetadataByExactName(name)
+	if err == nil {
+		return true, nil
+	}
+	if err == ErrNotFound {
+		return false, nil
+	}
+	return false, err
+}
+
 // getInstance returns a single instance by ID
 func (m *manager) getInstance(ctx context.Context, id string) (*Instance, error) {
 	log := logger.FromContext(ctx)
