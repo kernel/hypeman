@@ -58,6 +58,10 @@ func setupTestManagerForFirecrackerWithNetworkConfig(t *testing.T, networkCfg co
 	require.NoError(t, resourceMgr.Initialize(context.Background()))
 	mgr.SetResourceValidator(resourceMgr)
 
+	t.Cleanup(func() {
+		cleanupOrphanedProcesses(t, mgr)
+	})
+
 	return mgr, tmpDir
 }
 
