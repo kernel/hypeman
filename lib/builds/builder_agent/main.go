@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -862,15 +863,22 @@ func runBuild(ctx context.Context, config *BuildConfig, logWriter io.Writer) (st
 	// markers, but mknod(char 0:0) fails on an overlayfs mount because the kernel
 	// treats it as an overlayfs whiteout rather than a regular device node.
 	// Using tmpfs avoids this nested-overlayfs conflict.
+	//
+	// tmpfs size scales with available VM memory. A fixed 3GB cap rules out any
+	// build whose base image plus a single layer of writes exceeds it (e.g.
+	// GPU-driver bases like onkernel/chromium-headful-vgpu, which extract to
+	// >3GB on their own). We size tmpfs at 75% of total VM memory, leaving
+	// headroom for buildctl/buildkitd themselves and the kernel.
 	buildkitRoot := "/var/lib/buildkit"
 	if err := os.MkdirAll(buildkitRoot, 0755); err != nil {
 		return "", "", fmt.Errorf("create buildkit root dir: %w", err)
 	}
-	mountCmd := exec.Command("mount", "-t", "tmpfs", "-o", "size=3G", "tmpfs", buildkitRoot)
+	tmpfsSize := buildkitTmpfsSize()
+	mountCmd := exec.Command("mount", "-t", "tmpfs", "-o", "size="+tmpfsSize, "tmpfs", buildkitRoot)
 	if output, err := mountCmd.CombinedOutput(); err != nil {
 		return "", "", fmt.Errorf("mount tmpfs at %s (required for native overlayfs snapshotter): %v: %s", buildkitRoot, err, output)
 	}
-	log.Printf("Mounted tmpfs at %s for BuildKit snapshotter", buildkitRoot)
+	log.Printf("Mounted tmpfs at %s for BuildKit snapshotter (size=%s)", buildkitRoot, tmpfsSize)
 
 	log.Printf("Running: buildctl-daemonless.sh %s", strings.Join(args, " "))
 
@@ -998,4 +1006,39 @@ func getBuildkitVersion() string {
 	cmd := exec.Command("buildctl", "--version")
 	out, _ := cmd.Output()
 	return strings.TrimSpace(string(out))
+}
+
+// buildkitTmpfsSize returns the size to pass to mount -o size= for the
+// /var/lib/buildkit tmpfs. We size at 75% of the builder VM's MemTotal so
+// callers who request more memory get more BuildKit snapshot space (the
+// only knob they have to enlarge the build envelope). Falls back to 3G if
+// /proc/meminfo can't be read or yields a nonsensical value.
+func buildkitTmpfsSize() string {
+	const fallback = "3G"
+	data, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return fallback
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if !strings.HasPrefix(line, "MemTotal:") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			return fallback
+		}
+		kb, err := strconv.ParseInt(fields[1], 10, 64)
+		if err != nil || kb <= 0 {
+			return fallback
+		}
+		// 75% of total memory, in MiB. tmpfs size accepts the M suffix.
+		mib := (kb * 75 / 100) / 1024
+		if mib < 1024 {
+			// Don't go below the historical 3G default — small builder VMs
+			// might still want the conservative budget.
+			return fallback
+		}
+		return fmt.Sprintf("%dM", mib)
+	}
+	return fallback
 }
