@@ -18,6 +18,7 @@ import (
 	"github.com/kernel/hypeman/lib/resources"
 	"github.com/kernel/hypeman/lib/system"
 	"github.com/kernel/hypeman/lib/volumes"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -293,6 +294,10 @@ func (m *manager) maybePersistExitInfo(ctx context.Context, id string) {
 
 // maybePersistBootMarkers persists boot markers to metadata under lock.
 func (m *manager) maybePersistBootMarkers(ctx context.Context, id string) {
+	ctx, span := m.tracerOrDefault().Start(ctx, "instances.persist_boot_markers",
+		traceWithInstanceID(id),
+	)
+	defer span.End()
 	lock := m.getInstanceLock(id)
 	lock.Lock()
 	defer lock.Unlock()
@@ -526,6 +531,8 @@ func (m *manager) UpdateInstance(ctx context.Context, id string, req UpdateInsta
 // ListInstances returns instances, optionally filtered by the given criteria.
 // Pass nil to return all instances.
 func (m *manager) ListInstances(ctx context.Context, filter *ListInstancesFilter) ([]Instance, error) {
+	ctx, span := m.tracerOrDefault().Start(ctx, "instances.list")
+	defer span.End()
 	// No lock - eventual consistency is acceptable for list operations.
 	// State is derived dynamically, so list is always reasonably current.
 	all, err := m.listInstances(ctx)
@@ -542,13 +549,19 @@ func (m *manager) ListInstances(ctx context.Context, filter *ListInstancesFilter
 		}
 		result = filtered
 	}
+	span.SetAttributes(attribute.Int("instances", len(result)))
 
+	persistCtx, persistSpan := m.tracerOrDefault().Start(ctx, "instances.list.persist_boot_markers")
+	persisted := 0
 	for i := range result {
 		inst := result[i]
 		if (inst.State == StateRunning || inst.State == StateInitializing) && inst.BootMarkersHydrated {
-			m.maybePersistBootMarkers(ctx, inst.Id)
+			m.maybePersistBootMarkers(persistCtx, inst.Id)
+			persisted++
 		}
 	}
+	persistSpan.SetAttributes(attribute.Int("persisted", persisted))
+	persistSpan.End()
 
 	return result, nil
 }

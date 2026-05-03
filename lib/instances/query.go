@@ -16,6 +16,7 @@ import (
 
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 // exitSentinelPrefix is the machine-parseable prefix written by init to serial console.
@@ -46,6 +47,10 @@ func (m *manager) deriveStateWithoutHydration(ctx context.Context, stored *Store
 }
 
 func (m *manager) deriveStateWithOptions(ctx context.Context, stored *StoredMetadata, hydrateBootMarkers bool) stateResult {
+	ctx, span := m.tracerOrDefault().Start(ctx, "instances.derive_state",
+		traceWithInstanceID(stored.Id),
+	)
+	defer span.End()
 	log := logger.FromContext(ctx)
 
 	// 1. Check if socket exists
@@ -89,7 +94,7 @@ func (m *manager) deriveStateWithOptions(ctx context.Context, stored *StoredMeta
 	case hypervisor.StateRunning:
 		hydrated := false
 		if hydrateBootMarkers {
-			hydrated = m.hydrateBootMarkersFromLogs(stored)
+			hydrated = m.hydrateBootMarkersFromLogs(ctx, stored)
 		}
 		return stateResult{
 			State:               deriveRunningState(stored),
@@ -125,7 +130,7 @@ func deriveRunningState(stored *StoredMetadata) State {
 
 // hydrateBootMarkersFromLogs fills missing boot markers from serial logs.
 // Returns true when at least one missing marker was found and populated.
-func (m *manager) hydrateBootMarkersFromLogs(stored *StoredMetadata) bool {
+func (m *manager) hydrateBootMarkersFromLogs(ctx context.Context, stored *StoredMetadata) bool {
 	needProgram := stored.ProgramStartedAt == nil
 	needAgent := !stored.SkipGuestAgent && stored.GuestAgentReadyAt == nil
 	if !needProgram && !needAgent {
@@ -136,7 +141,12 @@ func (m *manager) hydrateBootMarkersFromLogs(stored *StoredMetadata) bool {
 		return false
 	}
 
-	programStartedAt, guestAgentReadyAt := m.parseBootMarkers(stored.Id, needProgram, needAgent, stored.StartedAt)
+	ctx, span := m.tracerOrDefault().Start(ctx, "instances.hydrate_boot_markers",
+		traceWithInstanceID(stored.Id),
+	)
+	defer span.End()
+
+	programStartedAt, guestAgentReadyAt := m.parseBootMarkers(ctx, stored.Id, needProgram, needAgent, stored.StartedAt)
 	hydrated := false
 	if needProgram && programStartedAt != nil {
 		stored.ProgramStartedAt = programStartedAt
@@ -157,8 +167,14 @@ func (m *manager) hydrateBootMarkersFromLogs(stored *StoredMetadata) bool {
 // parseBootMarkers scans app logs (including rotated files) and returns the
 // newest observed program-start and guest-agent-ready marker timestamps.
 // When startedAt is provided, files last modified before this boot start are ignored.
-func (m *manager) parseBootMarkers(id string, needProgram bool, needAgent bool, startedAt *time.Time) (*time.Time, *time.Time) {
+func (m *manager) parseBootMarkers(ctx context.Context, id string, needProgram bool, needAgent bool, startedAt *time.Time) (*time.Time, *time.Time) {
+	_, span := m.tracerOrDefault().Start(ctx, "instances.parse_boot_markers",
+		traceWithInstanceID(id),
+	)
+	defer span.End()
+
 	logPaths := m.appLogPathsForMarkerScan(id)
+	span.SetAttributes(attribute.Int("log_paths", len(logPaths)))
 
 	var programStartedAt *time.Time
 	var guestAgentReadyAt *time.Time
@@ -480,7 +496,7 @@ func (m *manager) persistBootMarkers(ctx context.Context, id string) {
 		return
 	}
 
-	programStartedAt, guestAgentReadyAt := m.parseBootMarkers(id, needProgram, needAgent, meta.StartedAt)
+	programStartedAt, guestAgentReadyAt := m.parseBootMarkers(ctx, id, needProgram, needAgent, meta.StartedAt)
 	updated := false
 	if needProgram && programStartedAt != nil {
 		meta.ProgramStartedAt = programStartedAt
@@ -619,6 +635,8 @@ func parseSentinelTimestamp(line, sentinelPrefix string) (time.Time, bool) {
 
 // listInstances returns all instances
 func (m *manager) listInstances(ctx context.Context) ([]Instance, error) {
+	ctx, span := m.tracerOrDefault().Start(ctx, "instances.list_metadata")
+	defer span.End()
 	log := logger.FromContext(ctx)
 	log.DebugContext(ctx, "listing all instances")
 
@@ -627,6 +645,7 @@ func (m *manager) listInstances(ctx context.Context) ([]Instance, error) {
 		log.ErrorContext(ctx, "failed to list metadata files", "error", err)
 		return nil, err
 	}
+	span.SetAttributes(attribute.Int("metadata_files", len(files)))
 
 	result := make([]Instance, 0, len(files))
 	for _, file := range files {
@@ -634,18 +653,24 @@ func (m *manager) listInstances(ctx context.Context) ([]Instance, error) {
 		// Path format: {dataDir}/guests/{id}/metadata.json
 		id := filepath.Base(filepath.Dir(file))
 
+		hydrateCtx, hydrateSpan := m.tracerOrDefault().Start(ctx, "instances.list_metadata.hydrate_one",
+			traceWithInstanceID(id),
+		)
 		meta, err := m.loadMetadata(id)
 		if err != nil {
 			// Skip instances with invalid metadata
-			log.WarnContext(ctx, "skipping instance with invalid metadata", "instance_id", id, "error", err)
+			log.WarnContext(hydrateCtx, "skipping instance with invalid metadata", "instance_id", id, "error", err)
+			hydrateSpan.End()
 			continue
 		}
 
-		inst := m.toInstance(ctx, meta)
+		inst := m.toInstance(hydrateCtx, meta)
 		result = append(result, inst)
+		hydrateSpan.End()
 	}
 
 	log.DebugContext(ctx, "listed instances", "count", len(result))
+	span.SetAttributes(attribute.Int("instances", len(result)))
 	return result, nil
 }
 
