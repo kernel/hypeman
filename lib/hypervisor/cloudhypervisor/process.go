@@ -69,17 +69,26 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 		return 0, nil, fmt.Errorf("unsupported cloud-hypervisor version: %s", version)
 	}
 
+	// 0. Start the serial reader before CH so the unix socket is bound by
+	// the time CH boots and tries to connect.
+	sr, err := startSerialReader(ctx, serialSocketPath(config.SerialLogPath), config.SerialLogPath)
+	if err != nil {
+		return 0, nil, fmt.Errorf("start serial reader: %w", err)
+	}
+
 	// 1. Start the Cloud Hypervisor process
 	processCtx, processSpan := hypervisor.StartProcessSpan(ctx, hypervisor.TypeCloudHypervisor)
 	pid, err := vmm.StartProcess(processCtx, p, chVersion, socketPath)
 	hypervisor.FinishTraceSpan(processSpan, err)
 	if err != nil {
+		sr.Close()
 		return 0, nil, fmt.Errorf("start process: %w", err)
 	}
 
 	// Setup cleanup to kill the process if subsequent steps fail
 	cu := cleanup.Make(func() {
 		syscall.Kill(pid, syscall.SIGKILL)
+		sr.Close()
 	})
 	defer cu.Clean()
 
@@ -129,12 +138,21 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 		return 0, nil, fmt.Errorf("unsupported cloud-hypervisor version: %s", version)
 	}
 
+	// 0. Start the serial reader before CH. The serial log path lives at
+	// a fixed offset from the CH API socket within the instance directory.
+	logPath := filepath.Join(filepath.Dir(socketPath), "logs", "app.log")
+	sr, err := startSerialReader(ctx, serialSocketPath(logPath), logPath)
+	if err != nil {
+		return 0, nil, fmt.Errorf("start serial reader: %w", err)
+	}
+
 	// 1. Start the Cloud Hypervisor process
 	processStartTime := time.Now()
 	processCtx, processSpan := hypervisor.StartProcessSpan(ctx, hypervisor.TypeCloudHypervisor)
 	pid, err := vmm.StartProcess(processCtx, p, chVersion, socketPath)
 	hypervisor.FinishTraceSpan(processSpan, err)
 	if err != nil {
+		sr.Close()
 		return 0, nil, fmt.Errorf("start process: %w", err)
 	}
 	log.DebugContext(ctx, "CH process started", "pid", pid, "duration_ms", time.Since(processStartTime).Milliseconds())
@@ -142,6 +160,7 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 	// Setup cleanup to kill the process if subsequent steps fail
 	cu := cleanup.Make(func() {
 		syscall.Kill(pid, syscall.SIGKILL)
+		sr.Close()
 	})
 	defer cu.Clean()
 

@@ -88,7 +88,12 @@ func updateSerialConfig(config map[string]any, logPath string) {
 	if !ok || serial == nil {
 		return
 	}
-	serial["file"] = logPath
+	// Forks always use the socket-based serial reader (see config.go), so
+	// rewrite to the new shape regardless of the source snapshot's mode.
+	// This also migrates legacy File-mode snapshots to Socket on fork.
+	delete(serial, "file")
+	serial["mode"] = "Socket"
+	serial["socket"] = serialSocketPath(logPath)
 }
 
 func updateNetworkConfig(config map[string]any, netCfg *hypervisor.ForkNetworkConfig) {

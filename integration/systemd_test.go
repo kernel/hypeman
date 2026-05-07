@@ -3,8 +3,10 @@ package integration
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -160,6 +162,66 @@ func TestSystemdMode(t *testing.T) {
 		require.NoError(t, err, "exec should work")
 		assert.Equal(t, 0, exitCode, "journalctl should succeed")
 		t.Logf("Agent logs (last 5 lines):\n%s", output)
+	})
+
+	// Regression: serial log must survive copytruncate without leaving a
+	// sparse NUL hole. Pre-fix, Cloud Hypervisor held a non-O_APPEND fd on
+	// app.log, so post-truncate writes landed at the stale offset and the
+	// file became multi-GB sparse with NUL bytes from byte 0. After the
+	// fix, hypeman owns the writer fd with O_APPEND.
+	t.Run("SerialLogSurvivesCopytruncate", func(t *testing.T) {
+		if inst.HypervisorType != hypervisor.TypeCloudHypervisor {
+			t.Skipf("regression test is CH-specific; instance uses %s", inst.HypervisorType)
+		}
+		appLog := p.InstanceAppLog(inst.Id)
+
+		require.Eventually(t, func() bool {
+			st, err := os.Stat(appLog)
+			return err == nil && st.Size() > 1024
+		}, 30*time.Second, 200*time.Millisecond, "expected serial output to accumulate before rotation")
+
+		src, err := os.Open(appLog)
+		require.NoError(t, err)
+		dst, err := os.Create(appLog + ".1")
+		require.NoError(t, err)
+		_, err = io.Copy(dst, src)
+		_ = src.Close()
+		_ = dst.Close()
+		require.NoError(t, err)
+		require.NoError(t, os.Truncate(appLog, 0))
+
+		// Drive more serial output post-truncate.
+		_, _, err = execInInstance(ctx, inst, "sh", "-c", "for i in 1 2 3; do echo post-rotate-marker-$i > /dev/kmsg; done")
+		require.NoError(t, err)
+
+		require.Eventually(t, func() bool {
+			st, err := os.Stat(appLog)
+			return err == nil && st.Size() > 0
+		}, 10*time.Second, 200*time.Millisecond)
+
+		st, err := os.Stat(appLog)
+		require.NoError(t, err)
+		sys := st.Sys().(*syscall.Stat_t)
+		allocated := int64(sys.Blocks) * 512
+		apparent := st.Size()
+		// Allow one block of slack since stat blocks granularity is 512B.
+		assert.LessOrEqualf(t, apparent, allocated+4096,
+			"post-rotation app.log is sparse: apparent=%d allocated=%d (sparse_bytes=%d)",
+			apparent, allocated, apparent-allocated)
+
+		head := make([]byte, 64)
+		f, err := os.Open(appLog)
+		require.NoError(t, err)
+		n, _ := f.Read(head)
+		_ = f.Close()
+		nulCount := 0
+		for _, b := range head[:n] {
+			if b == 0 {
+				nulCount++
+			}
+		}
+		assert.Lessf(t, nulCount, n/2,
+			"post-rotation app.log starts with too many NULs (%d/%d) — likely a sparse hole", nulCount, n)
 	})
 
 	t.Log("All systemd mode tests passed!")

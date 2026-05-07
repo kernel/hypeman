@@ -17,7 +17,7 @@ func TestRewriteSnapshotConfigForFork(t *testing.T) {
 
 	orig := map[string]any{
 		"disks":  []any{map[string]any{"path": "/src/guests/a/overlay.raw"}},
-		"serial": map[string]any{"file": "/src/guests/a/logs/app.log"},
+		"serial": map[string]any{"mode": "Socket", "socket": "/src/guests/a/logs/serial.sock"},
 		"vsock":  map[string]any{"cid": float64(100), "socket": "/src/guests/a/vsock.sock"},
 		"metadata": map[string]any{
 			"note": "keep-/src/guests/a-as-substring",
@@ -59,7 +59,10 @@ func TestRewriteSnapshotConfigForFork(t *testing.T) {
 	assert.Equal(t, "/dst/guests/b/overlay.raw", disk0["path"])
 
 	serial := updated["serial"].(map[string]any)
-	assert.Equal(t, "/dst/guests/b/logs/app.log", serial["file"])
+	assert.Equal(t, "Socket", serial["mode"])
+	assert.Equal(t, "/dst/guests/b/logs/serial.sock", serial["socket"])
+	_, hasFile := serial["file"]
+	assert.False(t, hasFile, "fork rewrite should drop legacy serial.file")
 
 	vsock := updated["vsock"].(map[string]any)
 	assert.Equal(t, float64(100), vsock["cid"])
