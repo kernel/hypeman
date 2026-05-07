@@ -146,6 +146,14 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 		return 0, nil, fmt.Errorf("start serial reader: %w", err)
 	}
 
+	// Migrate legacy serial.mode=File snapshots to Socket so CH binds the
+	// reader's socket on restore. New snapshots are already Socket; the
+	// rewrite is idempotent.
+	if err := rewriteSerialConfigForRestore(filepath.Join(snapshotPath, "config.json"), logPath); err != nil {
+		sr.Close()
+		return 0, nil, fmt.Errorf("rewrite snapshot serial config: %w", err)
+	}
+
 	// 1. Start the Cloud Hypervisor process
 	processStartTime := time.Now()
 	processCtx, processSpan := hypervisor.StartProcessSpan(ctx, hypervisor.TypeCloudHypervisor)

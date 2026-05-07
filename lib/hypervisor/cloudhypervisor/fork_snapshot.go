@@ -96,6 +96,31 @@ func updateSerialConfig(config map[string]any, logPath string) {
 	serial["socket"] = serialSocketPath(logPath)
 }
 
+// rewriteSerialConfigForRestore migrates the on-disk snapshot config so
+// CH binds the socket-mode reader on restore. Pre-fix snapshots embed
+// serial.mode=File, which keeps the original copytruncate sparse-hole
+// bug alive after restore. New snapshots are already mode=Socket, so
+// this is a cheap no-op for them.
+func rewriteSerialConfigForRestore(configPath, logPath string) error {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("read snapshot config: %w", err)
+	}
+	var config map[string]any
+	if err := json.Unmarshal(data, &config); err != nil {
+		return fmt.Errorf("unmarshal snapshot config: %w", err)
+	}
+	updateSerialConfig(config, logPath)
+	updated, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal snapshot config: %w", err)
+	}
+	if err := os.WriteFile(configPath, updated, 0644); err != nil {
+		return fmt.Errorf("write snapshot config: %w", err)
+	}
+	return nil
+}
+
 func updateNetworkConfig(config map[string]any, netCfg *hypervisor.ForkNetworkConfig) {
 	nets, ok := config["net"].([]any)
 	if !ok {
