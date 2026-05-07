@@ -131,9 +131,17 @@ type ImagesAutoDeleteConfig struct {
 	Allowed   []string `koanf:"allowed"`
 }
 
+// OCICacheGCConfig holds settings for the OCI blob cache garbage collector.
+type OCICacheGCConfig struct {
+	Enabled    bool   `koanf:"enabled"`
+	Interval   string `koanf:"interval"`
+	MinBlobAge string `koanf:"min_blob_age"`
+}
+
 // ImagesConfig holds image-management settings.
 type ImagesConfig struct {
 	AutoDelete ImagesAutoDeleteConfig `koanf:"auto_delete"`
+	OCICacheGC OCICacheGCConfig       `koanf:"oci_cache_gc"`
 }
 
 // BuildConfig holds source-to-image build system settings.
@@ -345,6 +353,11 @@ func defaultConfig() *Config {
 				Enabled:   false,
 				UnusedFor: "720h",
 				Allowed:   []string{},
+			},
+			OCICacheGC: OCICacheGCConfig{
+				Enabled:    false,
+				Interval:   "1h",
+				MinBlobAge: "1h",
 			},
 		},
 
@@ -562,6 +575,20 @@ func (c *Config) Validate() error {
 	}
 	for i, pattern := range c.Images.AutoDelete.Allowed {
 		c.Images.AutoDelete.Allowed[i] = strings.TrimSpace(pattern)
+	}
+	ociCacheGCInterval, err := time.ParseDuration(c.Images.OCICacheGC.Interval)
+	if err != nil {
+		return fmt.Errorf("images.oci_cache_gc.interval must be a valid duration, got %q: %w", c.Images.OCICacheGC.Interval, err)
+	}
+	if ociCacheGCInterval <= 0 {
+		return fmt.Errorf("images.oci_cache_gc.interval must be positive, got %q", c.Images.OCICacheGC.Interval)
+	}
+	ociCacheGCMinBlobAge, err := time.ParseDuration(c.Images.OCICacheGC.MinBlobAge)
+	if err != nil {
+		return fmt.Errorf("images.oci_cache_gc.min_blob_age must be a valid duration, got %q: %w", c.Images.OCICacheGC.MinBlobAge, err)
+	}
+	if ociCacheGCMinBlobAge < 0 {
+		return fmt.Errorf("images.oci_cache_gc.min_blob_age cannot be negative, got %q", c.Images.OCICacheGC.MinBlobAge)
 	}
 	algorithm := strings.ToLower(c.Snapshot.CompressionDefault.Algorithm)
 	c.Snapshot.CompressionDefault.Algorithm = algorithm

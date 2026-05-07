@@ -32,6 +32,7 @@ import (
 	loglib "github.com/kernel/hypeman/lib/logger"
 	mw "github.com/kernel/hypeman/lib/middleware"
 	"github.com/kernel/hypeman/lib/oapi"
+	"github.com/kernel/hypeman/lib/ocicachegc"
 	"github.com/kernel/hypeman/lib/otel"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/kernel/hypeman/lib/registry"
@@ -40,6 +41,7 @@ import (
 	nethttpmiddleware "github.com/oapi-codegen/nethttp-middleware"
 	"github.com/riandyrn/otelchi"
 	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -94,6 +96,37 @@ func startImageRetentionController(grp *errgroup.Group, ctx context.Context, con
 	}
 	grp.Go(func() error {
 		return controller.Run(ctx)
+	})
+	return true
+}
+
+type ociCacheGCRunner interface {
+	Run(ctx context.Context) error
+}
+
+func configureOCICacheGC(cfg *config.Config, roots ocicachegc.RootsProvider, logger *slog.Logger, meter metric.Meter, tracer trace.Tracer) (ociCacheGCRunner, error) {
+	if cfg == nil || !cfg.Images.OCICacheGC.Enabled {
+		return nil, nil
+	}
+
+	interval, err := time.ParseDuration(cfg.Images.OCICacheGC.Interval)
+	if err != nil {
+		return nil, fmt.Errorf("invalid images.oci_cache_gc.interval %q: %w", cfg.Images.OCICacheGC.Interval, err)
+	}
+	minBlobAge, err := time.ParseDuration(cfg.Images.OCICacheGC.MinBlobAge)
+	if err != nil {
+		return nil, fmt.Errorf("invalid images.oci_cache_gc.min_blob_age %q: %w", cfg.Images.OCICacheGC.MinBlobAge, err)
+	}
+
+	return ocicachegc.NewCollector(paths.New(cfg.DataDir), interval, minBlobAge, roots, logger, meter, tracer)
+}
+
+func startOCICacheGC(grp *errgroup.Group, ctx context.Context, runner ociCacheGCRunner) bool {
+	if grp == nil || runner == nil {
+		return false
+	}
+	grp.Go(func() error {
+		return runner.Run(ctx)
 	})
 	return true
 }
@@ -489,6 +522,23 @@ func run() error {
 	}
 	if startImageRetentionController(grp, gctx, retentionController) {
 		logger.Info("image auto-delete enabled", "unused_for", app.Config.Images.AutoDelete.UnusedFor)
+	}
+
+	ociGC, err := configureOCICacheGC(
+		app.Config,
+		app.Registry,
+		logger,
+		otelProvider.MeterFor(loglib.SubsystemImages),
+		otelProvider.TracerFor(loglib.SubsystemImages),
+	)
+	if err != nil {
+		return err
+	}
+	if startOCICacheGC(grp, gctx, ociGC) {
+		logger.Info("oci cache gc enabled",
+			"interval", app.Config.Images.OCICacheGC.Interval,
+			"min_blob_age", app.Config.Images.OCICacheGC.MinBlobAge,
+		)
 	}
 
 	// Start build manager background services (vsock handler for builder VMs)
