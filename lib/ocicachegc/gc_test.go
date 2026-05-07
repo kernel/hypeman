@@ -390,6 +390,55 @@ func TestCollectRecursesIntoSubject(t *testing.T) {
 	}
 }
 
+func TestCollectFollowsIndexSubject(t *testing.T) {
+	dataDir := t.TempDir()
+	p := paths.New(dataDir)
+	blobsDir := p.OCICacheBlobDir()
+	require.NoError(t, os.MkdirAll(blobsDir, 0o755))
+
+	writeBlob := func(content []byte) string {
+		sum := sha256.Sum256(content)
+		hexDigest := hex.EncodeToString(sum[:])
+		require.NoError(t, os.WriteFile(filepath.Join(blobsDir, hexDigest), content, 0o644))
+		return "sha256:" + hexDigest
+	}
+
+	// Subject manifest: config + layer.
+	subjectConfig := []byte(`{"index-subject":true}`)
+	subjectLayer := []byte("index-subject-layer")
+	subjectConfigDigest := writeBlob(subjectConfig)
+	subjectLayerDigest := writeBlob(subjectLayer)
+
+	subjectManifest := map[string]any{
+		"schemaVersion": 2,
+		"mediaType":     "application/vnd.oci.image.manifest.v1+json",
+		"config":        map[string]any{"mediaType": "application/vnd.oci.image.config.v1+json", "digest": subjectConfigDigest, "size": len(subjectConfig)},
+		"layers":        []map[string]any{{"mediaType": "application/vnd.oci.image.layer.v1.tar+gzip", "digest": subjectLayerDigest, "size": len(subjectLayer)}},
+	}
+	subjectBytes, err := json.Marshal(subjectManifest)
+	require.NoError(t, err)
+	subjectDigest := writeBlob(subjectBytes)
+
+	// index.json with no manifests[] entries but a top-level subject.
+	index := map[string]any{
+		"schemaVersion": 2,
+		"mediaType":     "application/vnd.oci.image.index.v1+json",
+		"manifests":     []any{},
+		"subject":       map[string]any{"mediaType": "application/vnd.oci.image.manifest.v1+json", "digest": subjectDigest, "size": len(subjectBytes)},
+	}
+	indexBytes, err := json.Marshal(index)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(p.OCICacheIndex(), indexBytes, 0o644))
+
+	c := newCollectorForTest(t, dataDir, time.Minute, time.Now())
+	stats, err := c.Collect(context.Background())
+	require.NoError(t, err)
+
+	// subject manifest + its config + layer = 3 live blobs.
+	assert.Equal(t, 3, stats.LiveBlobs)
+	assert.Equal(t, 0, stats.DeletedBlobs)
+}
+
 // stubRoots is a RootsProvider that returns a fixed list of digests.
 type stubRoots struct{ digests []string }
 

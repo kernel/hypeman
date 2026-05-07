@@ -270,6 +270,13 @@ func liveBlobs(p *paths.Paths, extraRoots []string) (map[string]struct{}, error)
 				return nil, err
 			}
 		}
+		// OCI v1.1 allows index.json itself to carry a subject descriptor;
+		// recurse into it so anything reachable that way stays marked.
+		if index.Subject != nil {
+			if err := walkDescriptor(p, *index.Subject, live, visited); err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	for _, digest := range extraRoots {
