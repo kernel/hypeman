@@ -43,7 +43,7 @@ func loadTestConfig(t *testing.T) *config.Config {
 func TestConfigureOCICacheGCSkipsDisabledConfig(t *testing.T) {
 	cfg := loadTestConfig(t)
 
-	runner, err := configureOCICacheGC(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	runner, err := configureOCICacheGC(cfg, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
 	if err != nil {
 		t.Fatalf("configure disabled oci cache gc: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestConfigureOCICacheGCBuildsCollectorWhenEnabled(t *testing.T) {
 	cfg.Images.OCICacheGC.Interval = "2m"
 	cfg.Images.OCICacheGC.MinBlobAge = "30s"
 
-	runner, err := configureOCICacheGC(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	runner, err := configureOCICacheGC(cfg, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
 	if err != nil {
 		t.Fatalf("configure enabled oci cache gc: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestConfigureOCICacheGCRejectsInvalidInterval(t *testing.T) {
 	cfg.Images.OCICacheGC.Enabled = true
 	cfg.Images.OCICacheGC.Interval = "0s"
 
-	if _, err := configureOCICacheGC(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), nil); err == nil {
+	if _, err := configureOCICacheGC(cfg, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), nil); err == nil {
 		t.Fatalf("expected invalid oci cache gc interval to fail")
 	}
 }

@@ -31,6 +31,14 @@ import (
 	"go.opentelemetry.io/otel/metric"
 )
 
+// RootsProvider returns extra manifest digests (in "sha256:<hex>" form)
+// that should be treated as live alongside everything reachable from
+// index.json. Used for blobs the registry tracks in memory but does not
+// root in the OCI layout (e.g. BuildKit cache exports under cache/*).
+type RootsProvider interface {
+	LiveCacheManifestDigests() []string
+}
+
 // Collector garbage-collects the shared OCI cache.
 type Collector struct {
 	paths      *paths.Paths
@@ -38,6 +46,7 @@ type Collector struct {
 	minBlobAge time.Duration
 	logger     *slog.Logger
 	metrics    *Metrics
+	roots      RootsProvider
 	now        func() time.Time
 	mu         sync.Mutex
 }
@@ -53,8 +62,10 @@ type Stats struct {
 
 // NewCollector creates a collector. minBlobAge is the minimum age a blob
 // must have before it becomes eligible for deletion; it protects blobs
-// that are currently being written by a concurrent pull or push.
-func NewCollector(p *paths.Paths, interval, minBlobAge time.Duration, logger *slog.Logger, meter metric.Meter) (*Collector, error) {
+// that are currently being written by a concurrent pull or push. roots
+// may be nil; when non-nil it is consulted on every sweep for additional
+// manifest digests to mark live.
+func NewCollector(p *paths.Paths, interval, minBlobAge time.Duration, roots RootsProvider, logger *slog.Logger, meter metric.Meter) (*Collector, error) {
 	if p == nil {
 		return nil, errors.New("paths is required")
 	}
@@ -72,6 +83,7 @@ func NewCollector(p *paths.Paths, interval, minBlobAge time.Duration, logger *sl
 		interval:   interval,
 		minBlobAge: minBlobAge,
 		logger:     logger.With("component", "oci_cache_gc"),
+		roots:      roots,
 		now:        time.Now,
 	}
 	if meter != nil {
@@ -145,7 +157,11 @@ func (c *Collector) collect(ctx context.Context) (Stats, error) {
 		return stats, fmt.Errorf("stat blob dir: %w", err)
 	}
 
-	live, err := liveBlobs(c.paths)
+	var extraRoots []string
+	if c.roots != nil {
+		extraRoots = c.roots.LiveCacheManifestDigests()
+	}
+	live, err := liveBlobs(c.paths, extraRoots)
 	if err != nil {
 		return stats, fmt.Errorf("compute live set: %w", err)
 	}
@@ -229,28 +245,35 @@ type manifestDoc struct {
 }
 
 // liveBlobs returns the set of blob hex digests reachable from the OCI
-// cache index.json. Keys are bare hex (no "sha256:" prefix), matching
-// the filenames under blobs/sha256/.
-func liveBlobs(p *paths.Paths) (map[string]struct{}, error) {
+// cache index.json plus any extraRoots provided. Keys are bare hex
+// (no "sha256:" prefix), matching the filenames under blobs/sha256/.
+// extraRoots entries are accepted in either "sha256:<hex>" or bare hex
+// form and silently skipped if malformed.
+func liveBlobs(p *paths.Paths, extraRoots []string) (map[string]struct{}, error) {
 	live := make(map[string]struct{})
+	visited := make(map[string]struct{})
 
 	indexPath := p.OCICacheIndex()
 	data, err := os.ReadFile(indexPath)
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return live, nil
-		}
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		// Cache hasn't been initialised yet; only extraRoots are live.
+	case err != nil:
 		return nil, fmt.Errorf("read index.json: %w", err)
+	default:
+		var index manifestDoc
+		if err := json.Unmarshal(data, &index); err != nil {
+			return nil, fmt.Errorf("parse index.json: %w", err)
+		}
+		for _, m := range index.Manifests {
+			if err := walkDescriptor(p, m, live, visited); err != nil {
+				return nil, err
+			}
+		}
 	}
 
-	var index manifestDoc
-	if err := json.Unmarshal(data, &index); err != nil {
-		return nil, fmt.Errorf("parse index.json: %w", err)
-	}
-
-	visited := make(map[string]struct{})
-	for _, m := range index.Manifests {
-		if err := walkDescriptor(p, m, live, visited); err != nil {
+	for _, digest := range extraRoots {
+		if err := walkDescriptor(p, descriptor{Digest: normaliseDigest(digest)}, live, visited); err != nil {
 			return nil, err
 		}
 	}
@@ -306,6 +329,16 @@ func walkDescriptor(p *paths.Paths, desc descriptor, live, visited map[string]st
 		}
 	}
 	return nil
+}
+
+// normaliseDigest accepts either "sha256:<hex>" or a bare 64-char hex
+// string and returns the "sha256:<hex>" form expected by walkDescriptor.
+// Anything else is returned unchanged so digestHex can reject it.
+func normaliseDigest(d string) string {
+	if len(d) == 64 && blobNamePattern.MatchString(d) {
+		return "sha256:" + d
+	}
+	return d
 }
 
 // digestHex extracts the hex portion of a "sha256:<hex>" digest. It

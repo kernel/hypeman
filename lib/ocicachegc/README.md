@@ -26,8 +26,11 @@ When enabled, the server runs one pass immediately and then every
 
 1. **Mark.** Read `index.json` and walk every referenced descriptor. For
    each manifest or manifest-index blob we descend into its `config`,
-   `layers`, `manifests`, and `subject` references. The set of visited
-   digests is the live set.
+   `layers`, `manifests`, and `subject` references. Any extra digests
+   returned by the configured `RootsProvider` are walked the same way;
+   this is how BuildKit cache exports under `cache/*` (which the
+   registry tracks in memory but does not root in `index.json`) stay
+   marked. The set of visited digests is the live set.
 2. **Sweep.** List `blobs/sha256/`. Delete every file whose name is a
    valid 64-char hex digest, is absent from the live set, and whose
    `mtime` is older than `min_blob_age`.

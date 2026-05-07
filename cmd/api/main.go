@@ -103,7 +103,7 @@ type ociCacheGCRunner interface {
 	Run(ctx context.Context) error
 }
 
-func configureOCICacheGC(cfg *config.Config, logger *slog.Logger, meter metric.Meter) (ociCacheGCRunner, error) {
+func configureOCICacheGC(cfg *config.Config, roots ocicachegc.RootsProvider, logger *slog.Logger, meter metric.Meter) (ociCacheGCRunner, error) {
 	if cfg == nil || !cfg.Images.OCICacheGC.Enabled {
 		return nil, nil
 	}
@@ -117,7 +117,7 @@ func configureOCICacheGC(cfg *config.Config, logger *slog.Logger, meter metric.M
 		return nil, fmt.Errorf("invalid images.oci_cache_gc.min_blob_age %q: %w", cfg.Images.OCICacheGC.MinBlobAge, err)
 	}
 
-	return ocicachegc.NewCollector(paths.New(cfg.DataDir), interval, minBlobAge, logger, meter)
+	return ocicachegc.NewCollector(paths.New(cfg.DataDir), interval, minBlobAge, roots, logger, meter)
 }
 
 func startOCICacheGC(grp *errgroup.Group, ctx context.Context, runner ociCacheGCRunner) bool {
@@ -525,6 +525,7 @@ func run() error {
 
 	ociGC, err := configureOCICacheGC(
 		app.Config,
+		app.Registry,
 		logger,
 		otelProvider.MeterFor(loglib.SubsystemImages),
 	)

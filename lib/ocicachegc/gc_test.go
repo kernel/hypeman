@@ -135,7 +135,7 @@ func (b *layoutBuilder) writeIndex() {
 
 func newCollectorForTest(t *testing.T, dataDir string, minBlobAge time.Duration, now time.Time) *Collector {
 	t.Helper()
-	c, err := NewCollector(paths.New(dataDir), time.Hour, minBlobAge, nil, nil)
+	c, err := NewCollector(paths.New(dataDir), time.Hour, minBlobAge, nil, nil, nil)
 	require.NoError(t, err)
 	c.now = func() time.Time { return now }
 	return c
@@ -390,19 +390,97 @@ func TestCollectRecursesIntoSubject(t *testing.T) {
 	}
 }
 
+// stubRoots is a RootsProvider that returns a fixed list of digests.
+type stubRoots struct{ digests []string }
+
+func (s stubRoots) LiveCacheManifestDigests() []string { return s.digests }
+
+func TestCollectKeepsBlobsReachableFromExtraRoots(t *testing.T) {
+	dataDir := t.TempDir()
+	p := paths.New(dataDir)
+	blobsDir := p.OCICacheBlobDir()
+	require.NoError(t, os.MkdirAll(blobsDir, 0o755))
+
+	writeBlob := func(content []byte) string {
+		sum := sha256.Sum256(content)
+		hexDigest := hex.EncodeToString(sum[:])
+		require.NoError(t, os.WriteFile(filepath.Join(blobsDir, hexDigest), content, 0o644))
+		return "sha256:" + hexDigest
+	}
+
+	// Write a registry-only cache manifest (e.g. a BuildKit cache export):
+	// it has a config + layer, but no entry in index.json.
+	cacheConfig := []byte(`{"cache-config":true}`)
+	cacheLayer := []byte("cache-layer-bytes")
+	cacheConfigDigest := writeBlob(cacheConfig)
+	cacheLayerDigest := writeBlob(cacheLayer)
+
+	cacheManifest := map[string]any{
+		"schemaVersion": 2,
+		"mediaType":     "application/vnd.oci.image.manifest.v1+json",
+		"config":        map[string]any{"mediaType": "application/vnd.oci.image.config.v1+json", "digest": cacheConfigDigest, "size": len(cacheConfig)},
+		"layers":        []map[string]any{{"mediaType": "application/vnd.buildkit.cacheconfig.v0", "digest": cacheLayerDigest, "size": len(cacheLayer)}},
+	}
+	cacheBytes, err := json.Marshal(cacheManifest)
+	require.NoError(t, err)
+	cacheDigest := writeBlob(cacheBytes)
+
+	// Empty index.json: nothing rooted there at all.
+	emptyIndex := map[string]any{"schemaVersion": 2, "mediaType": "application/vnd.oci.image.index.v1+json", "manifests": []any{}}
+	indexBytes, err := json.Marshal(emptyIndex)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(p.OCICacheIndex(), indexBytes, 0o644))
+
+	// Force every blob's mtime past the grace period.
+	past := time.Now().Add(-2 * time.Hour)
+	for _, d := range []string{cacheConfigDigest, cacheLayerDigest, cacheDigest} {
+		require.NoError(t, os.Chtimes(filepath.Join(blobsDir, d[7:]), past, past))
+	}
+
+	// Without roots, every blob is unreachable and should be swept.
+	cWithout, err := NewCollector(p, time.Hour, time.Minute, nil, nil, nil)
+	require.NoError(t, err)
+	cWithout.now = func() time.Time { return time.Now() }
+	statsWithout, err := cWithout.Collect(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 3, statsWithout.DeletedBlobs)
+
+	// Recreate the blobs and re-run with the registry as a RootsProvider.
+	writeBlob(cacheConfig)
+	writeBlob(cacheLayer)
+	writeBlob(cacheBytes)
+	for _, d := range []string{cacheConfigDigest, cacheLayerDigest, cacheDigest} {
+		require.NoError(t, os.Chtimes(filepath.Join(blobsDir, d[7:]), past, past))
+	}
+
+	roots := stubRoots{digests: []string{cacheDigest}}
+	cWith, err := NewCollector(p, time.Hour, time.Minute, roots, nil, nil)
+	require.NoError(t, err)
+	cWith.now = func() time.Time { return time.Now() }
+	statsWith, err := cWith.Collect(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 3, statsWith.LiveBlobs, "manifest + config + layer all marked live via root")
+	assert.Equal(t, 0, statsWith.DeletedBlobs, "nothing should be deleted when registry holds the manifest")
+
+	for _, d := range []string{cacheConfigDigest, cacheLayerDigest, cacheDigest} {
+		_, err := os.Stat(filepath.Join(blobsDir, d[7:]))
+		assert.NoError(t, err, "blob %s must remain", d)
+	}
+}
+
 func TestNewCollectorValidatesArgs(t *testing.T) {
 	dataDir := t.TempDir()
 	p := paths.New(dataDir)
 
-	_, err := NewCollector(nil, time.Hour, time.Minute, nil, nil)
+	_, err := NewCollector(nil, time.Hour, time.Minute, nil, nil, nil)
 	assert.Error(t, err)
 
-	_, err = NewCollector(p, 0, time.Minute, nil, nil)
+	_, err = NewCollector(p, 0, time.Minute, nil, nil, nil)
 	assert.Error(t, err)
 
-	_, err = NewCollector(p, time.Hour, -time.Minute, nil, nil)
+	_, err = NewCollector(p, time.Hour, -time.Minute, nil, nil, nil)
 	assert.Error(t, err)
 
-	_, err = NewCollector(p, time.Hour, time.Minute, nil, nil)
+	_, err = NewCollector(p, time.Hour, time.Minute, nil, nil, nil)
 	assert.NoError(t, err)
 }
