@@ -5,33 +5,43 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
 	"syscall"
+	"time"
 
 	"github.com/kernel/hypeman/lib/logger"
 )
 
-// serialReader owns the listener for the per-instance unix socket that
-// Cloud Hypervisor connects to for serial output, and copies bytes from
-// the connection into the serial log file with O_APPEND. Owning the
-// writer fd lets copytruncate log rotation work safely: O_APPEND
+// serialReader connects to the per-instance unix socket that Cloud
+// Hypervisor binds for serial output (mode=Socket), and copies bytes
+// from that connection into the serial log file with O_APPEND. Owning
+// the writer fd lets copytruncate log rotation work safely: O_APPEND
 // atomically seeks to EOF on every write, so writes after a truncate
 // land at byte 0 instead of the writer's stale offset.
+//
+// CH is the server here — it calls UnixListener::bind(socket) during
+// VM creation. Hypeman is the client and dials with retry, since the
+// reader is started before CH has had a chance to bind.
 type serialReader struct {
-	ln         net.Listener
 	socketPath string
 	logPath    string
-	done       chan struct{}
+	logFile    *os.File
+
+	cancel context.CancelFunc
+	done   chan struct{}
+
+	mu   sync.Mutex
+	conn net.Conn
 }
 
-// startSerialReader binds the unix socket at socketPath, removing any
-// stale predecessor, and starts a goroutine that accepts CH's connection
-// and pipes serial output into logPath. The listener is closed after the
-// first accept (CH only ever opens one connection per VM). Callers must
-// call Close on failure paths to release the listener if CH never
-// connects.
+// startSerialReader removes any stale socket left over from a prior
+// run, opens the log file with O_APPEND, and spawns a goroutine that
+// dials the socket once CH binds it and pipes serial output into the
+// log. Callers must call Close on failure paths and on shutdown.
 func startSerialReader(ctx context.Context, socketPath, logPath string) (*serialReader, error) {
 	if socketPath == "" || logPath == "" {
 		return nil, errors.New("serial: socket and log path are required")
@@ -41,62 +51,97 @@ func startSerialReader(ctx context.Context, socketPath, logPath string) (*serial
 		return nil, fmt.Errorf("serial: create log dir: %w", err)
 	}
 
+	// CH refuses to start if the socket path already exists (it calls
+	// bind() on it). Wipe any leftover from a prior run.
 	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
 		return nil, fmt.Errorf("serial: remove stale socket: %w", err)
 	}
 
-	ln, err := net.Listen("unix", socketPath)
+	f, err := os.OpenFile(logPath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0644)
 	if err != nil {
-		return nil, fmt.Errorf("serial: listen %s: %w", socketPath, err)
+		return nil, fmt.Errorf("serial: open log: %w", err)
 	}
 
+	runCtx, cancel := context.WithCancel(context.Background())
 	sr := &serialReader{
-		ln:         ln,
 		socketPath: socketPath,
 		logPath:    logPath,
+		logFile:    f,
+		cancel:     cancel,
 		done:       make(chan struct{}),
 	}
-	go sr.run(ctx)
+	go sr.run(runCtx, logger.FromContext(ctx))
 	return sr, nil
 }
 
-func (s *serialReader) run(ctx context.Context) {
+func (s *serialReader) run(ctx context.Context, log *slog.Logger) {
 	defer close(s.done)
-	defer os.Remove(s.socketPath)
+	defer s.logFile.Close()
 
-	conn, err := s.ln.Accept()
-	// CH only opens one connection per VM, so close the listener now.
-	_ = s.ln.Close()
+	conn, err := dialUnixWithRetry(ctx, s.socketPath, 60*time.Second)
 	if err != nil {
-		// Closed before CH connected (e.g. boot failed) — nothing to do.
+		// Caller closed us before CH bound the socket, or CH never
+		// did. Either way, nothing more to do.
 		return
 	}
-	defer conn.Close()
+	s.mu.Lock()
+	s.conn = conn
+	s.mu.Unlock()
 
-	f, err := os.OpenFile(s.logPath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0644)
-	if err != nil {
-		logger.FromContext(ctx).ErrorContext(ctx, "serial: open log",
-			"path", s.logPath, "err", err)
-		return
-	}
-	defer f.Close()
-
-	if _, err := io.Copy(f, conn); err != nil &&
+	if _, err := io.Copy(s.logFile, conn); err != nil &&
 		!errors.Is(err, io.EOF) &&
 		!errors.Is(err, net.ErrClosed) &&
 		!errors.Is(err, syscall.EPIPE) {
-		logger.FromContext(ctx).WarnContext(ctx, "serial: copy ended with error",
+		log.WarnContext(ctx, "serial: copy ended with error",
 			"path", s.logPath, "err", err)
+	}
+	_ = conn.Close()
+}
+
+// dialUnixWithRetry polls for the CH listener to come up. The socket
+// path is created by CH inside vm.create, which happens after the
+// reader is started, so we must wait. Returns the first successful
+// connection or the last dial error after timeout.
+func dialUnixWithRetry(ctx context.Context, path string, timeout time.Duration) (net.Conn, error) {
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for {
+		if err := ctx.Err(); err != nil {
+			if lastErr != nil {
+				return nil, lastErr
+			}
+			return nil, err
+		}
+		conn, err := net.Dial("unix", path)
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("serial: dial %s: %w", path, lastErr)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(50 * time.Millisecond):
+		}
 	}
 }
 
-// Close releases the listener if it is still open. Safe to call multiple
-// times. Once CH has connected and closed the socket the goroutine exits
-// on its own; Close is a best-effort signal for the failure path where
-// CH never boots.
+// Close stops the reader. Safe to call multiple times.
 func (s *serialReader) Close() {
 	if s == nil {
 		return
 	}
-	_ = s.ln.Close()
+	s.cancel()
+	s.mu.Lock()
+	if s.conn != nil {
+		_ = s.conn.Close()
+	}
+	s.mu.Unlock()
+	select {
+	case <-s.done:
+	case <-time.After(2 * time.Second):
+	}
+	_ = os.Remove(s.socketPath)
 }

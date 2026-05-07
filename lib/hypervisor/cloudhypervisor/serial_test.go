@@ -14,16 +14,34 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// shortTempDir returns a temp dir with a short prefix so unix socket
+// paths stay under the platform sun_path limit (108 bytes on Linux,
+// 104 on macOS). t.TempDir() under /var/folders on macOS overflows.
+func shortTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "ch")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
 func TestSerialReader_CopiesBytesToLog(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := shortTempDir(t)
 	logPath := filepath.Join(tmp, "logs", "app.log")
 	sockPath := serialSocketPath(logPath)
 
+	// Reader starts first (mirrors production order: hypeman starts the
+	// reader, then CH binds the socket during vm.create). The reader
+	// dials with retry until the listener comes up.
 	sr, err := startSerialReader(context.Background(), sockPath, logPath)
 	require.NoError(t, err)
 	t.Cleanup(sr.Close)
 
-	conn, err := net.Dial("unix", sockPath)
+	ln, err := net.Listen("unix", sockPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+
+	conn, err := ln.Accept()
 	require.NoError(t, err)
 
 	payload := []byte("hello from cloud hypervisor\n")
@@ -47,7 +65,7 @@ func TestSerialReader_CopiesBytesToLog(t *testing.T) {
 // byte 0 to the writer's stale offset. Hypeman now owns the writer fd
 // with O_APPEND, so post-truncate writes correctly resume at byte 0.
 func TestSerialReader_NoSparseHoleAfterCopytruncate(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := shortTempDir(t)
 	logPath := filepath.Join(tmp, "logs", "app.log")
 	sockPath := serialSocketPath(logPath)
 
@@ -55,7 +73,11 @@ func TestSerialReader_NoSparseHoleAfterCopytruncate(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(sr.Close)
 
-	conn, err := net.Dial("unix", sockPath)
+	ln, err := net.Listen("unix", sockPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+
+	conn, err := ln.Accept()
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
 
