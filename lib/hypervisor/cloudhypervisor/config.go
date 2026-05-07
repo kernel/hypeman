@@ -8,8 +8,10 @@ import (
 )
 
 // serialSocketPath returns the unix socket path that Cloud Hypervisor
-// connects to for serial output. The socket lives next to the serial log
-// file in the instance directory.
+// binds for serial output. The socket lives at the instance directory
+// level, next to ch.sock and vsock.sock — not under logs/ — so the
+// total path stays under the 108-byte sun_path limit on Linux (104 on
+// macOS) when long test temp prefixes are involved.
 //
 // We route serial through a hypeman-owned socket reader (see serial.go)
 // rather than letting CH open the file directly, because CH's File-mode
@@ -20,7 +22,7 @@ func serialSocketPath(logPath string) string {
 	if logPath == "" {
 		return ""
 	}
-	return filepath.Join(filepath.Dir(logPath), "serial.sock")
+	return filepath.Join(filepath.Dir(filepath.Dir(logPath)), "serial.sock")
 }
 
 // ToVMConfig converts hypervisor.VMConfig to Cloud Hypervisor's vmm.VmConfig.
