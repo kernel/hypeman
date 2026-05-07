@@ -28,7 +28,11 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/paths"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // RootsProvider returns extra manifest digests (in "sha256:<hex>" form)
@@ -46,6 +50,7 @@ type Collector struct {
 	minBlobAge time.Duration
 	logger     *slog.Logger
 	metrics    *Metrics
+	tracer     trace.Tracer
 	roots      RootsProvider
 	now        func() time.Time
 	mu         sync.Mutex
@@ -65,7 +70,7 @@ type Stats struct {
 // that are currently being written by a concurrent pull or push. roots
 // may be nil; when non-nil it is consulted on every sweep for additional
 // manifest digests to mark live.
-func NewCollector(p *paths.Paths, interval, minBlobAge time.Duration, roots RootsProvider, logger *slog.Logger, meter metric.Meter) (*Collector, error) {
+func NewCollector(p *paths.Paths, interval, minBlobAge time.Duration, roots RootsProvider, logger *slog.Logger, meter metric.Meter, tracer trace.Tracer) (*Collector, error) {
 	if p == nil {
 		return nil, errors.New("paths is required")
 	}
@@ -78,11 +83,15 @@ func NewCollector(p *paths.Paths, interval, minBlobAge time.Duration, roots Root
 	if logger == nil {
 		logger = slog.Default()
 	}
+	if tracer == nil {
+		tracer = otel.Tracer("hypeman/oci_cache_gc")
+	}
 	c := &Collector{
 		paths:      p,
 		interval:   interval,
 		minBlobAge: minBlobAge,
 		logger:     logger.With("component", "oci_cache_gc"),
+		tracer:     tracer,
 		roots:      roots,
 		now:        time.Now,
 	}
@@ -125,6 +134,9 @@ func (c *Collector) Collect(ctx context.Context) (Stats, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	ctx, span := c.tracer.Start(ctx, "oci_cache_gc.sweep")
+	defer span.End()
+
 	start := c.now()
 	stats, err := c.collect(ctx)
 	status := "success"
@@ -134,10 +146,24 @@ func (c *Collector) Collect(ctx context.Context) (Stats, error) {
 	if c.metrics != nil {
 		c.metrics.RecordSweep(ctx, status, c.now().Sub(start), stats)
 	}
+	span.SetAttributes(
+		attribute.Int("live_blobs", stats.LiveBlobs),
+		attribute.Int("scanned_blobs", stats.ScannedBlobs),
+		attribute.Int("deleted_blobs", stats.DeletedBlobs),
+		attribute.Int64("deleted_bytes", stats.DeletedBytes),
+		attribute.Int("skipped_recent", stats.SkippedRecent),
+	)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return stats, err
 	}
-	c.logger.DebugContext(ctx, "oci cache gc sweep completed",
+	span.SetStatus(codes.Ok, "")
+	logFn := c.logger.DebugContext
+	if stats.DeletedBlobs > 0 {
+		logFn = c.logger.InfoContext
+	}
+	logFn(ctx, "oci cache gc sweep completed",
 		"live_blobs", stats.LiveBlobs,
 		"scanned_blobs", stats.ScannedBlobs,
 		"deleted_blobs", stats.DeletedBlobs,
@@ -161,11 +187,20 @@ func (c *Collector) collect(ctx context.Context) (Stats, error) {
 	if c.roots != nil {
 		extraRoots = c.roots.LiveCacheManifestDigests()
 	}
+	_, markSpan := c.tracer.Start(ctx, "oci_cache_gc.mark")
 	live, err := liveBlobs(c.paths, extraRoots)
 	if err != nil {
+		markSpan.RecordError(err)
+		markSpan.SetStatus(codes.Error, err.Error())
+		markSpan.End()
 		return stats, fmt.Errorf("compute live set: %w", err)
 	}
 	stats.LiveBlobs = len(live)
+	markSpan.SetAttributes(
+		attribute.Int("live_blobs", stats.LiveBlobs),
+		attribute.Int("extra_roots", len(extraRoots)),
+	)
+	markSpan.End()
 
 	cutoff := c.now().Add(-c.minBlobAge)
 
@@ -173,6 +208,18 @@ func (c *Collector) collect(ctx context.Context) (Stats, error) {
 	if err != nil {
 		return stats, fmt.Errorf("read blob dir: %w", err)
 	}
+
+	ctx, sweepSpan := c.tracer.Start(ctx, "oci_cache_gc.sweep_blobs",
+		trace.WithAttributes(attribute.Int("blob_dir_entries", len(entries))),
+	)
+	defer func() {
+		sweepSpan.SetAttributes(
+			attribute.Int("scanned_blobs", stats.ScannedBlobs),
+			attribute.Int("deleted_blobs", stats.DeletedBlobs),
+			attribute.Int("skipped_recent", stats.SkippedRecent),
+		)
+		sweepSpan.End()
+	}()
 
 	for _, entry := range entries {
 		if err := ctx.Err(); err != nil {
@@ -210,7 +257,7 @@ func (c *Collector) collect(ctx context.Context) (Stats, error) {
 		}
 		stats.DeletedBlobs++
 		stats.DeletedBytes += size
-		c.logger.InfoContext(ctx, "deleted unreferenced oci blob", "digest", name, "size", size)
+		c.logger.DebugContext(ctx, "deleted unreferenced oci blob", "digest", name, "size", size)
 	}
 
 	return stats, nil

@@ -41,6 +41,7 @@ import (
 	nethttpmiddleware "github.com/oapi-codegen/nethttp-middleware"
 	"github.com/riandyrn/otelchi"
 	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -103,7 +104,7 @@ type ociCacheGCRunner interface {
 	Run(ctx context.Context) error
 }
 
-func configureOCICacheGC(cfg *config.Config, roots ocicachegc.RootsProvider, logger *slog.Logger, meter metric.Meter) (ociCacheGCRunner, error) {
+func configureOCICacheGC(cfg *config.Config, roots ocicachegc.RootsProvider, logger *slog.Logger, meter metric.Meter, tracer trace.Tracer) (ociCacheGCRunner, error) {
 	if cfg == nil || !cfg.Images.OCICacheGC.Enabled {
 		return nil, nil
 	}
@@ -117,7 +118,7 @@ func configureOCICacheGC(cfg *config.Config, roots ocicachegc.RootsProvider, log
 		return nil, fmt.Errorf("invalid images.oci_cache_gc.min_blob_age %q: %w", cfg.Images.OCICacheGC.MinBlobAge, err)
 	}
 
-	return ocicachegc.NewCollector(paths.New(cfg.DataDir), interval, minBlobAge, roots, logger, meter)
+	return ocicachegc.NewCollector(paths.New(cfg.DataDir), interval, minBlobAge, roots, logger, meter, tracer)
 }
 
 func startOCICacheGC(grp *errgroup.Group, ctx context.Context, runner ociCacheGCRunner) bool {
@@ -528,6 +529,7 @@ func run() error {
 		app.Registry,
 		logger,
 		otelProvider.MeterFor(loglib.SubsystemImages),
+		otelProvider.TracerFor(loglib.SubsystemImages),
 	)
 	if err != nil {
 		return err

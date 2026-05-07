@@ -135,7 +135,7 @@ func (b *layoutBuilder) writeIndex() {
 
 func newCollectorForTest(t *testing.T, dataDir string, minBlobAge time.Duration, now time.Time) *Collector {
 	t.Helper()
-	c, err := NewCollector(paths.New(dataDir), time.Hour, minBlobAge, nil, nil, nil)
+	c, err := NewCollector(paths.New(dataDir), time.Hour, minBlobAge, nil, nil, nil, nil)
 	require.NoError(t, err)
 	c.now = func() time.Time { return now }
 	return c
@@ -487,7 +487,7 @@ func TestCollectKeepsBlobsReachableFromExtraRoots(t *testing.T) {
 	}
 
 	// Without roots, every blob is unreachable and should be swept.
-	cWithout, err := NewCollector(p, time.Hour, time.Minute, nil, nil, nil)
+	cWithout, err := NewCollector(p, time.Hour, time.Minute, nil, nil, nil, nil)
 	require.NoError(t, err)
 	cWithout.now = func() time.Time { return time.Now() }
 	statsWithout, err := cWithout.Collect(context.Background())
@@ -503,7 +503,7 @@ func TestCollectKeepsBlobsReachableFromExtraRoots(t *testing.T) {
 	}
 
 	roots := stubRoots{digests: []string{cacheDigest}}
-	cWith, err := NewCollector(p, time.Hour, time.Minute, roots, nil, nil)
+	cWith, err := NewCollector(p, time.Hour, time.Minute, roots, nil, nil, nil)
 	require.NoError(t, err)
 	cWith.now = func() time.Time { return time.Now() }
 	statsWith, err := cWith.Collect(context.Background())
@@ -521,15 +521,15 @@ func TestNewCollectorValidatesArgs(t *testing.T) {
 	dataDir := t.TempDir()
 	p := paths.New(dataDir)
 
-	_, err := NewCollector(nil, time.Hour, time.Minute, nil, nil, nil)
+	_, err := NewCollector(nil, time.Hour, time.Minute, nil, nil, nil, nil)
 	assert.Error(t, err)
 
-	_, err = NewCollector(p, 0, time.Minute, nil, nil, nil)
+	_, err = NewCollector(p, 0, time.Minute, nil, nil, nil, nil)
 	assert.Error(t, err)
 
-	_, err = NewCollector(p, time.Hour, -time.Minute, nil, nil, nil)
+	_, err = NewCollector(p, time.Hour, -time.Minute, nil, nil, nil, nil)
 	assert.Error(t, err)
 
-	_, err = NewCollector(p, time.Hour, time.Minute, nil, nil, nil)
+	_, err = NewCollector(p, time.Hour, time.Minute, nil, nil, nil, nil)
 	assert.NoError(t, err)
 }

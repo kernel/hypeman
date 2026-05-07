@@ -15,6 +15,7 @@ type Metrics struct {
 	sweepDuration metric.Float64Histogram
 	deletedBlobs  metric.Int64Counter
 	deletedBytes  metric.Int64Counter
+	liveBlobs     metric.Int64Histogram
 }
 
 func newMetrics(meter metric.Meter) (*Metrics, error) {
@@ -53,11 +54,20 @@ func newMetrics(meter metric.Meter) (*Metrics, error) {
 		return nil, err
 	}
 
+	liveBlobs, err := meter.Int64Histogram(
+		"hypeman_oci_cache_gc_live_blobs",
+		metric.WithDescription("Number of live blobs observed in the OCI cache per sweep"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Metrics{
 		sweepsTotal:   sweepsTotal,
 		sweepDuration: sweepDuration,
 		deletedBlobs:  deletedBlobs,
 		deletedBytes:  deletedBytes,
+		liveBlobs:     liveBlobs,
 	}, nil
 }
 
@@ -69,6 +79,9 @@ func (m *Metrics) RecordSweep(ctx context.Context, status string, duration time.
 	attrs := metric.WithAttributes(attribute.String("status", status))
 	m.sweepsTotal.Add(ctx, 1, attrs)
 	m.sweepDuration.Record(ctx, duration.Seconds(), attrs)
+	if status == "success" {
+		m.liveBlobs.Record(ctx, int64(stats.LiveBlobs))
+	}
 	if stats.DeletedBlobs > 0 {
 		m.deletedBlobs.Add(ctx, int64(stats.DeletedBlobs))
 		m.deletedBytes.Add(ctx, stats.DeletedBytes)
