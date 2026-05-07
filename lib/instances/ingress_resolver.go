@@ -5,11 +5,17 @@ import (
 	"fmt"
 )
 
+const dnsMinIDPrefixLength = 8
+
 // IngressResolver provides instance resolution for the ingress package.
 // It implements ingress.InstanceResolver interface without importing the ingress package
 // to avoid import cycles.
 type IngressResolver struct {
 	manager Manager
+}
+
+type minPrefixInstanceManager interface {
+	getInstanceWithMinIDPrefix(ctx context.Context, idOrName string, minPrefixLength int) (*Instance, error)
 }
 
 // NewIngressResolver creates a new IngressResolver that wraps an instance manager.
@@ -19,7 +25,12 @@ func NewIngressResolver(manager Manager) *IngressResolver {
 
 // ResolveInstanceIP resolves an instance name, ID, or ID prefix to its IP address.
 func (r *IngressResolver) ResolveInstanceIP(ctx context.Context, nameOrID string) (string, error) {
-	inst, err := r.manager.GetInstance(ctx, nameOrID)
+	manager, ok := r.manager.(minPrefixInstanceManager)
+	if !ok {
+		return "", fmt.Errorf("instance resolver does not support DNS-safe lookup")
+	}
+
+	inst, err := manager.getInstanceWithMinIDPrefix(ctx, nameOrID, dnsMinIDPrefixLength)
 	if err != nil {
 		return "", fmt.Errorf("instance not found: %s", nameOrID)
 	}

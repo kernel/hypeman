@@ -42,6 +42,10 @@ func startInstancesSpan(ctx context.Context, tracer trace.Tracer, name string, a
 	return tracer.Start(ctx, name, trace.WithAttributes(attrs...))
 }
 
+func traceWithInstanceID(id string) trace.SpanStartOption {
+	return trace.WithAttributes(attribute.String("instance_id", id))
+}
+
 func propagatedTraceAttributes(attrs ...attribute.KeyValue) []attribute.KeyValue {
 	out := make([]attribute.KeyValue, 0, len(attrs))
 	for _, attr := range attrs {

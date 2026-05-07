@@ -18,6 +18,7 @@ import (
 	"github.com/kernel/hypeman/lib/resources"
 	"github.com/kernel/hypeman/lib/system"
 	"github.com/kernel/hypeman/lib/volumes"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -293,10 +294,23 @@ func (m *manager) maybePersistExitInfo(ctx context.Context, id string) {
 
 // maybePersistBootMarkers persists boot markers to metadata under lock.
 func (m *manager) maybePersistBootMarkers(ctx context.Context, id string) {
+	ctx, span := m.tracerOrDefault().Start(ctx, "instances.persist_boot_markers",
+		traceWithInstanceID(id),
+	)
+	defer span.End()
 	lock := m.getInstanceLock(id)
 	lock.Lock()
 	defer lock.Unlock()
 	m.persistBootMarkers(ctx, id)
+}
+
+func (m *manager) finalizeResolvedInstance(ctx context.Context, inst *Instance) {
+	if inst.State == StateStopped && inst.ExitCode != nil {
+		m.maybePersistExitInfo(ctx, inst.Id)
+	}
+	if (inst.State == StateRunning || inst.State == StateInitializing) && inst.BootMarkersHydrated {
+		m.maybePersistBootMarkers(ctx, inst.Id)
+	}
 }
 
 func (m *manager) recordImageUsage(ctx context.Context, imageInfo *images.Image) {
@@ -399,6 +413,15 @@ func (m *manager) StandbyInstance(ctx context.Context, id string, req StandbyIns
 	lock := m.getInstanceLock(id)
 	lock.Lock()
 	defer lock.Unlock()
+	if !standbyRequestHasOptions(req) {
+		current, err := m.currentInstanceWithoutHydration(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if current.State == StateStandby {
+			return current, nil
+		}
+	}
 	inst, err := m.standbyInstance(ctx, id, req, false)
 	if err == nil {
 		m.notifyLifecycleEvent(ctx, LifecycleEventStandby, inst)
@@ -411,6 +434,13 @@ func (m *manager) RestoreInstance(ctx context.Context, id string) (*Instance, er
 	lock := m.getInstanceLock(id)
 	lock.Lock()
 	defer lock.Unlock()
+	current, err := m.currentInstanceWithoutHydration(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if current.State == StateRunning || current.State == StateInitializing {
+		return current, nil
+	}
 	inst, err := m.restoreInstance(ctx, id)
 	if err == nil {
 		m.notifyLifecycleEvent(ctx, LifecycleEventRestore, inst)
@@ -434,6 +464,13 @@ func (m *manager) StopInstance(ctx context.Context, id string) (*Instance, error
 	lock := m.getInstanceLock(id)
 	lock.Lock()
 	defer lock.Unlock()
+	current, err := m.currentInstanceWithoutHydration(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if current.State == StateStopped {
+		return current, nil
+	}
 	inst, err := m.stopInstance(ctx, id)
 	if err == nil {
 		m.notifyLifecycleEvent(ctx, LifecycleEventStop, inst)
@@ -446,11 +483,37 @@ func (m *manager) StartInstance(ctx context.Context, id string, req StartInstanc
 	lock := m.getInstanceLock(id)
 	lock.Lock()
 	defer lock.Unlock()
+	if !startRequestHasOverrides(req) {
+		current, err := m.currentInstanceWithoutHydration(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if current.State == StateRunning || current.State == StateInitializing {
+			return current, nil
+		}
+	}
 	inst, err := m.startInstance(ctx, id, req)
 	if err == nil {
 		m.notifyLifecycleEvent(ctx, LifecycleEventStart, inst)
 	}
 	return inst, err
+}
+
+func (m *manager) currentInstanceWithoutHydration(ctx context.Context, id string) (*Instance, error) {
+	meta, err := m.loadMetadata(id)
+	if err != nil {
+		return nil, err
+	}
+	inst := m.toInstanceWithoutHydration(ctx, meta)
+	return &inst, nil
+}
+
+func startRequestHasOverrides(req StartInstanceRequest) bool {
+	return len(req.Entrypoint) > 0 || len(req.Cmd) > 0
+}
+
+func standbyRequestHasOptions(req StandbyInstanceRequest) bool {
+	return req.Compression != nil || req.CompressionDelay != nil
 }
 
 // UpdateInstance updates mutable properties of a running instance
@@ -468,6 +531,8 @@ func (m *manager) UpdateInstance(ctx context.Context, id string, req UpdateInsta
 // ListInstances returns instances, optionally filtered by the given criteria.
 // Pass nil to return all instances.
 func (m *manager) ListInstances(ctx context.Context, filter *ListInstancesFilter) ([]Instance, error) {
+	ctx, span := m.tracerOrDefault().Start(ctx, "instances.list")
+	defer span.End()
 	// No lock - eventual consistency is acceptable for list operations.
 	// State is derived dynamically, so list is always reasonably current.
 	all, err := m.listInstances(ctx)
@@ -484,13 +549,19 @@ func (m *manager) ListInstances(ctx context.Context, filter *ListInstancesFilter
 		}
 		result = filtered
 	}
+	span.SetAttributes(attribute.Int("instances", len(result)))
 
+	persistCtx, persistSpan := m.tracerOrDefault().Start(ctx, "instances.list.persist_boot_markers")
+	persisted := 0
 	for i := range result {
 		inst := result[i]
 		if (inst.State == StateRunning || inst.State == StateInitializing) && inst.BootMarkersHydrated {
-			m.maybePersistBootMarkers(ctx, inst.Id)
+			m.maybePersistBootMarkers(persistCtx, inst.Id)
+			persisted++
 		}
 	}
+	persistSpan.SetAttributes(attribute.Int("persisted", persisted))
+	persistSpan.End()
 
 	return result, nil
 }
@@ -499,66 +570,36 @@ func (m *manager) ListInstances(ctx context.Context, filter *ListInstancesFilter
 // Lookup order: exact ID match -> exact name match -> ID prefix match.
 // Returns ErrAmbiguousName if prefix matches multiple instances.
 func (m *manager) GetInstance(ctx context.Context, idOrName string) (*Instance, error) {
+	return m.getInstanceWithMinIDPrefix(ctx, idOrName, 1)
+}
+
+func (m *manager) getInstanceWithMinIDPrefix(ctx context.Context, idOrName string, minPrefixLength int) (*Instance, error) {
 	// 1. Try exact ID match first (most common case)
 	lock := m.getInstanceLock(idOrName)
 	lock.RLock()
 	inst, err := m.getInstance(ctx, idOrName)
 	lock.RUnlock()
 	if err == nil {
-		// If VM is stopped with unpersisted exit info, persist under write lock.
-		// This handles the "app exited on its own" case where stopInstance wasn't called.
-		if inst.State == StateStopped && inst.ExitCode != nil {
-			m.maybePersistExitInfo(ctx, inst.Id)
-		}
-		if (inst.State == StateRunning || inst.State == StateInitializing) && inst.BootMarkersHydrated {
-			m.maybePersistBootMarkers(ctx, inst.Id)
-		}
+		m.finalizeResolvedInstance(ctx, inst)
 		return inst, nil
 	}
 
-	// 2. List all instances for name and prefix matching
-	instances, err := m.ListInstances(ctx, nil)
+	// 2. Resolve exact name or ID prefix from metadata only, then hydrate the
+	// single matched instance.
+	meta, err := m.findInstanceMetadataByNameOrIDPrefix(idOrName, minPrefixLength)
 	if err != nil {
 		return nil, err
 	}
 
-	// 3. Try exact name match
-	var nameMatches []Instance
-	for _, inst := range instances {
-		if inst.Name == idOrName {
-			nameMatches = append(nameMatches, inst)
-		}
+	resolvedLock := m.getInstanceLock(meta.Id)
+	resolvedLock.RLock()
+	inst, err = m.getInstance(ctx, meta.Id)
+	resolvedLock.RUnlock()
+	if err != nil {
+		return nil, err
 	}
-	if len(nameMatches) == 1 {
-		inst := &nameMatches[0]
-		if inst.State == StateStopped && inst.ExitCode != nil {
-			m.maybePersistExitInfo(ctx, inst.Id)
-		}
-		return inst, nil
-	}
-	if len(nameMatches) > 1 {
-		return nil, ErrAmbiguousName
-	}
-
-	// 4. Try ID prefix match
-	var prefixMatches []Instance
-	for _, inst := range instances {
-		if len(idOrName) > 0 && len(inst.Id) >= len(idOrName) && inst.Id[:len(idOrName)] == idOrName {
-			prefixMatches = append(prefixMatches, inst)
-		}
-	}
-	if len(prefixMatches) == 1 {
-		inst := &prefixMatches[0]
-		if inst.State == StateStopped && inst.ExitCode != nil {
-			m.maybePersistExitInfo(ctx, inst.Id)
-		}
-		return inst, nil
-	}
-	if len(prefixMatches) > 1 {
-		return nil, ErrAmbiguousName
-	}
-
-	return nil, ErrNotFound
+	m.finalizeResolvedInstance(ctx, inst)
+	return inst, nil
 }
 
 // StreamInstanceLogs streams instance logs from the specified source

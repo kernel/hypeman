@@ -61,23 +61,27 @@ var errRouteCommandUnavailable = errors.New("ip route command unavailable")
 func newParallelTestNetworkConfig(t *testing.T) config.NetworkConfig {
 	t.Helper()
 
-	if existing, ok := testNetworkByName.Load(t.Name()); ok {
+	testName := t.Name()
+	if existing, ok := testNetworkByName.Load(testName); ok {
 		return existing.(*testNetworkLease).cfg
 	}
 
 	seq := testNetworkSeq.Add(1)
-	lease, err := allocateTestNetworkLease(t.Name(), seq)
+	lease, err := allocateTestNetworkLease(testName, seq)
 	if err != nil {
 		t.Fatalf("allocate test network config: %v", err)
 	}
 
-	actual, loaded := testNetworkByName.LoadOrStore(t.Name(), lease)
+	actual, loaded := testNetworkByName.LoadOrStore(testName, lease)
 	if loaded {
 		lease.release()
 		return actual.(*testNetworkLease).cfg
 	}
 
-	t.Cleanup(lease.release)
+	t.Cleanup(func() {
+		lease.release()
+		testNetworkByName.Delete(testName)
+	})
 	return lease.cfg
 }
 

@@ -1,5 +1,40 @@
 # Test Agent Notes
 
+## 2026-04-30 - Deft firewall flakes in PR #203 CI
+
+### Reported flake signatures
+- CI job `73797479810` on runner `deft-6` failed with VM-to-host TCP timeouts:
+  - `TestEgressProxyRewritesHTTPSHeaders`: curl exit 28 connecting from guest through the egress proxy to a host listener.
+  - `TestFirecrackerNetworkLifecycle`: curl exit 28 probing a local server bound to the test bridge gateway.
+
+### Root cause
+- `kernel/infra` commit `ac9d62b` applied the `nftables_firewall` role to `deft-kernel-dev`.
+- Deft's `inet kernel_firewall input` chain had policy `drop` and allowed only loopback, established traffic, ICMP, Tailscale SSH, and Tailscale mosh.
+- Hypeman CI creates ephemeral test bridges named `hm*` and guest VMs must initiate TCP connections to host gateway services on random ports. Those packets hit the host input chain and were dropped by nftables before the test listeners saw them.
+- Confirmed during a failed Firecracker run:
+  - Host listener was bound and reachable locally on the bridge gateway.
+  - Guest had a default route via the bridge gateway and a reachable ARP neighbor for it.
+  - Guest TCP connect to the gateway timed out.
+- PR #203 did not touch networking, so this was server configuration, not that PR.
+
+### Fixes
+- Infra fix in `kernel/infra`:
+  - Added `nftables_trusted_input_interfaces` to the firewall role.
+  - Set `deft-kernel-dev` to trust `hm*` input interfaces so Hypeman CI test VMs can reach host-local gateway services.
+- Hypeman test hygiene fix:
+  - `newParallelTestNetworkConfig` now deletes its `testNetworkByName` entry during cleanup so `go test -count=N` does not reuse a released network lease.
+  - Firecracker test manager setup now registers `cleanupOrphanedProcesses` with `t.Cleanup`, so failed lifecycle tests do not leave VMM helper processes around.
+
+### Validation
+- Pre-fix root run on `deft-kernel-dev` reproduced `TestFirecrackerNetworkLifecycle` curl exit 28 immediately.
+- With temporary infra-equivalent nft rule `iifname "hm*" accept`:
+  - `sudo env ... go test -count=3 -v -tags containers_image_openpgp -run '^(TestFirecrackerNetworkLifecycle|TestEgressProxyRewritesHTTPSHeaders)$' -timeout=45m ./lib/instances`
+  - Result after Hypeman test hygiene patch: pass, package runtime 63.526s.
+- Infra validation:
+  - `uv run ansible-playbook --syntax-check playbooks/manage-servers.yml --limit deft-kernel-dev --tags firewall`
+  - `uv run ansible-playbook playbooks/manage-servers.yml --limit deft-kernel-dev --tags firewall --check --diff`
+  - Check-mode diff rendered the expected `iifname "hm*" accept` rule and completed successfully.
+
 ## 2026-03-07 - Linux CI flake in `lib/instances`
 
 ### Flake signature

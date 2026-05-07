@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"hash/crc32"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -366,25 +365,6 @@ func validateForkVolumeSafety(volumes []VolumeAttachment) error {
 		}
 	}
 	return nil
-}
-
-func (m *manager) instanceNameExists(name string) (bool, error) {
-	metaFiles, err := m.listMetadataFiles()
-	if err != nil {
-		return false, err
-	}
-
-	for _, metaFile := range metaFiles {
-		id := filepath.Base(filepath.Dir(metaFile))
-		meta, err := m.loadMetadata(id)
-		if err != nil {
-			continue
-		}
-		if meta.Name == name {
-			return true, nil
-		}
-	}
-	return false, nil
 }
 
 func resolveForkTargetState(requested State, sourceState State) (State, error) {
