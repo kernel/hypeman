@@ -186,7 +186,7 @@ func TestHydrateBootMarkersFromLogs_RescanThrottle(t *testing.T) {
 	}
 
 	// First call finds nothing and schedules a deferred rescan.
-	hydrated := m.hydrateBootMarkersFromLogs(meta)
+	hydrated := m.hydrateBootMarkersFromLogs(t.Context(), meta)
 	require.False(t, hydrated)
 	require.Nil(t, meta.ProgramStartedAt)
 	require.Nil(t, meta.GuestAgentReadyAt)
@@ -200,14 +200,14 @@ func TestHydrateBootMarkersFromLogs_RescanThrottle(t *testing.T) {
 	require.NoError(t, err)
 
 	// Immediate second call should be throttled and skip scanning.
-	hydrated = m.hydrateBootMarkersFromLogs(meta)
+	hydrated = m.hydrateBootMarkersFromLogs(t.Context(), meta)
 	require.False(t, hydrated)
 	require.Nil(t, meta.ProgramStartedAt)
 	require.Nil(t, meta.GuestAgentReadyAt)
 
 	// Once the rescan interval has elapsed, markers are hydrated.
 	now = now.Add(bootMarkerRescanInterval + time.Millisecond)
-	hydrated = m.hydrateBootMarkersFromLogs(meta)
+	hydrated = m.hydrateBootMarkersFromLogs(t.Context(), meta)
 	require.True(t, hydrated)
 	require.NotNil(t, meta.ProgramStartedAt)
 	require.NotNil(t, meta.GuestAgentReadyAt)
@@ -244,7 +244,7 @@ func TestParseBootMarkers_IgnoresStaleMarkersBeforeBootStart(t *testing.T) {
 	require.NoError(t, os.WriteFile(logPath, []byte(freshData), 0o644))
 	require.NoError(t, os.Chtimes(logPath, bootStart.Add(time.Second), bootStart.Add(time.Second)))
 
-	programStartedAt, guestAgentReadyAt := m.parseBootMarkers(id, true, true, &bootStart)
+	programStartedAt, guestAgentReadyAt := m.parseBootMarkers(t.Context(), id, true, true, &bootStart)
 	require.NotNil(t, programStartedAt)
 	require.NotNil(t, guestAgentReadyAt)
 	assert.Equal(t, freshProgram.Format(time.RFC3339Nano), programStartedAt.UTC().Format(time.RFC3339Nano))
@@ -281,7 +281,7 @@ func TestParseBootMarkers_ReturnsLatestMarkerFromNewestLog(t *testing.T) {
 			"HYPEMAN-PROGRAM-START ts="+newProgramLatest.Format(time.RFC3339Nano)+" mode=exec\n",
 	), 0o644))
 
-	programStartedAt, guestAgentReadyAt := m.parseBootMarkers(id, true, true, nil)
+	programStartedAt, guestAgentReadyAt := m.parseBootMarkers(t.Context(), id, true, true, nil)
 	require.NotNil(t, programStartedAt)
 	require.NotNil(t, guestAgentReadyAt)
 	assert.Equal(t, newProgramLatest.Format(time.RFC3339Nano), programStartedAt.UTC().Format(time.RFC3339Nano))
