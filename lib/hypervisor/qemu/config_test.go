@@ -144,8 +144,10 @@ func TestBuildArgs_SerialLog(t *testing.T) {
 
 	args := BuildArgs(cfg)
 
+	assert.Contains(t, args, "-chardev")
+	assert.Contains(t, args, "file,id=serial0,path=/var/log/app.log,append=on")
 	assert.Contains(t, args, "-serial")
-	assert.Contains(t, args, "file:/var/log/app.log")
+	assert.Contains(t, args, "chardev:serial0")
 }
 
 func TestBuildArgs_NoSerialLog(t *testing.T) {
