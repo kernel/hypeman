@@ -89,7 +89,16 @@ func (s *serialReader) run(ctx context.Context, log *slog.Logger) {
 		// did. Either way, nothing more to do.
 		return
 	}
+	// Re-check ctx under the lock before publishing the conn. If Close
+	// fired between dial returning and us taking the lock, it would have
+	// observed s.conn == nil and given up — without this check we'd
+	// publish the conn afterward and io.Copy would block forever.
 	s.mu.Lock()
+	if ctx.Err() != nil {
+		s.mu.Unlock()
+		_ = conn.Close()
+		return
+	}
 	s.conn = conn
 	s.mu.Unlock()
 
@@ -109,6 +118,7 @@ func (s *serialReader) run(ctx context.Context, log *slog.Logger) {
 // connection or the last dial error after timeout.
 func dialUnixWithRetry(ctx context.Context, path string, timeout time.Duration) (net.Conn, error) {
 	deadline := time.Now().Add(timeout)
+	var dialer net.Dialer
 	var lastErr error
 	for {
 		if err := ctx.Err(); err != nil {
@@ -117,7 +127,7 @@ func dialUnixWithRetry(ctx context.Context, path string, timeout time.Duration) 
 			}
 			return nil, err
 		}
-		conn, err := net.Dial("unix", path)
+		conn, err := dialer.DialContext(ctx, "unix", path)
 		if err == nil {
 			return conn, nil
 		}
