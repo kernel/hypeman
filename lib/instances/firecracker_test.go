@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -554,13 +555,15 @@ func TestFirecrackerSnapshotFeature(t *testing.T) {
 
 // TestFirecrackerForkFromTemplate exercises the full template-driven fork
 // path under the state-machine design: a firecracker source goes Running →
-// Standby, the first fork implicitly promotes it to Template, and the fork:
+// Standby → Template (explicit promote), then a fork:
 //
 //	(a) reaches Running,
-//	(b) has its mem-file as a symlink into the template's snapshot dir,
-//	(c) bumps the template's ForkCount to 1,
+//	(b) has its mem-file hardlinked to the source's snapshot mem-file
+//	    (the fan-out optimisation),
+//	(c) is counted as a live fork of the template,
 //	(d) registers with the per-template uffd page server,
-//	(e) on delete, decrements the ForkCount and detaches from uffd.
+//	(e) on delete, the fork count drops back to 0 and the fork detaches
+//	    from uffd.
 func TestFirecrackerForkFromTemplate(t *testing.T) {
 	t.Parallel()
 	requireFirecrackerIntegrationPrereqs(t)
@@ -600,7 +603,11 @@ func TestFirecrackerForkFromTemplate(t *testing.T) {
 	require.Equal(t, StateStandby, source.State)
 	require.True(t, source.HasSnapshot)
 
-	// Forking from the standby source implicitly promotes it to Template.
+	// Promote to Template explicitly — only Template sources get fan-out.
+	source, err = mgr.PromoteToTemplate(ctx, sourceID)
+	require.NoError(t, err)
+	require.Equal(t, StateTemplate, source.State)
+
 	forked, err := mgr.ForkInstance(ctx, sourceID, ForkInstanceRequest{
 		Name:        "fc-tpl-fork",
 		TargetState: StateRunning,
@@ -617,21 +624,33 @@ func TestFirecrackerForkFromTemplate(t *testing.T) {
 		}
 	})
 
-	// (b) The fork's mem-file must be a symlink into the source's snapshot.
-	forkMemPath := filepath.Join(p.InstanceSnapshotLatest(forkID), templateSharedMemFileName)
-	info, err := os.Lstat(forkMemPath)
-	require.NoError(t, err, "fork mem-file should exist at snapshot-latest/memory")
-	assert.Equal(t, os.ModeSymlink, info.Mode()&os.ModeSymlink, "fork mem-file should be a symlink, not a copy")
-	target, err := os.Readlink(forkMemPath)
+	// (b) The fork's mem-file must share the source's inode (hardlink), not
+	// be a copy. We can't compare paths because the link is by inode; we
+	// compare st_ino + st_dev between the two instances' mem-files.
+	//
+	// Firecracker retains the post-restore snapshot dir as snapshot-base
+	// (see restoreRetainedSnapshotBase), so after the Standby -> Running
+	// transition the hardlink lives under snapshot-base/, not snapshot-latest/.
+	// Hardlinks survive the rename because they bind to the inode.
+	forkMemPath := filepath.Join(p.InstanceSnapshotBase(forkID), templateSharedMemFileName)
+	srcMemPath := filepath.Join(p.InstanceSnapshotLatest(sourceID), templateSharedMemFileName)
+	forkInfo, err := os.Stat(forkMemPath)
+	require.NoError(t, err, "fork mem-file should exist at snapshot-base/memory after restore")
+	assert.True(t, forkInfo.Mode().IsRegular(), "fork mem-file should be a regular file (hardlink), not a symlink")
+	srcInfo, err := os.Stat(srcMemPath)
 	require.NoError(t, err)
-	expectedTarget := filepath.Join(p.InstanceSnapshotLatest(sourceID), templateSharedMemFileName)
-	assert.Equal(t, expectedTarget, target, "fork mem-file symlink should point at the template's mem-file")
+	forkSys := forkInfo.Sys().(*syscall.Stat_t)
+	srcSys := srcInfo.Sys().(*syscall.Stat_t)
+	assert.Equal(t, srcSys.Ino, forkSys.Ino, "fork mem-file should share the source's inode (hardlink, not copy)")
+	assert.Equal(t, srcSys.Dev, forkSys.Dev, "fork mem-file should be on the same filesystem as source")
 
-	// (c) The source instance is now a Template with ForkCount=1.
+	// (c) The source instance is a Template with exactly one live fork.
 	sourceMeta, err := mgr.loadMetadata(sourceID)
 	require.NoError(t, err)
-	assert.True(t, sourceMeta.StoredMetadata.IsTemplate, "source should be promoted to Template on first fork")
-	assert.Equal(t, 1, sourceMeta.StoredMetadata.ForkCount, "template fork refcount should be 1 after one fork")
+	assert.True(t, sourceMeta.StoredMetadata.IsTemplate, "source should be a Template")
+	forks, err := mgr.countTemplateForks(sourceID)
+	require.NoError(t, err)
+	assert.Equal(t, 1, forks, "template fork count should be 1 after one fork")
 
 	// (d) The per-template uffd page server should be tracking this fork.
 	require.NotNil(t, mgr.uffd)
@@ -641,8 +660,8 @@ func TestFirecrackerForkFromTemplate(t *testing.T) {
 	require.NoError(t, mgr.DeleteInstance(ctx, forkID))
 	deletedFork = true
 
-	sourceMetaAfter, err := mgr.loadMetadata(sourceID)
+	forksAfter, err := mgr.countTemplateForks(sourceID)
 	require.NoError(t, err)
-	assert.Equal(t, 0, sourceMetaAfter.StoredMetadata.ForkCount, "template fork refcount should drop back to 0")
+	assert.Equal(t, 0, forksAfter, "template fork count should drop back to 0")
 	assert.False(t, mgr.uffd.hasFork(sourceID, forkID), "uffd tracker should no longer track the deleted fork")
 }
