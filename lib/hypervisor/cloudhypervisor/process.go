@@ -121,7 +121,10 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 		return 0, nil, fmt.Errorf("boot vm failed with status %d: %s", bootResp.StatusCode(), string(bootResp.Body))
 	}
 
-	// Success - release cleanup to prevent killing the process
+	// Success - release cleanup to prevent killing the process. Hand
+	// ownership of the serial reader to the client so Shutdown can
+	// stop it.
+	hv.serial = sr
 	cu.Release()
 	return pid, hv, nil
 }
@@ -194,7 +197,10 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 	}
 	log.DebugContext(ctx, "CH restore API complete", "duration_ms", time.Since(restoreAPIStart).Milliseconds())
 
-	// Success - release cleanup to prevent killing the process
+	// Success - release cleanup to prevent killing the process. Hand
+	// ownership of the serial reader to the client so Shutdown can
+	// stop it.
+	hv.serial = sr
 	cu.Release()
 	log.DebugContext(ctx, "CH restore complete", "pid", pid, "total_duration_ms", time.Since(startTime).Milliseconds())
 	return pid, hv, nil

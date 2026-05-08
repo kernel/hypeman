@@ -15,6 +15,11 @@ import (
 type CloudHypervisor struct {
 	client     *vmm.VMM
 	socketPath string
+	// serial is set on the Starter path (StartVM/RestoreVM) so Shutdown
+	// can stop the reader explicitly. When the client is constructed via
+	// the reconnect factory (New), there is no reader to own — the
+	// goroutine from the original process exited with that process.
+	serial *serialReader
 }
 
 var balloonTargetCache hypervisor.BalloonTargetCache
@@ -73,10 +78,13 @@ func (c *CloudHypervisor) DeleteVM(ctx context.Context) error {
 // Shutdown stops the VMM process gracefully.
 func (c *CloudHypervisor) Shutdown(ctx context.Context) error {
 	resp, err := c.client.ShutdownVMMWithResponse(ctx)
+	// Stop the serial reader regardless of API outcome — once Shutdown
+	// has been requested the VM is going away and the reader has no
+	// further work.
+	c.serial.Close()
 	if err != nil {
 		return fmt.Errorf("shutdown vmm: %w", err)
 	}
-	// ShutdownVMM may return various codes, 204 is success
 	if resp.StatusCode() != 204 {
 		return fmt.Errorf("shutdown vmm failed with status %d", resp.StatusCode())
 	}

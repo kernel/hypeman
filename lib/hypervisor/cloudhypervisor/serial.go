@@ -77,6 +77,11 @@ func startSerialReader(ctx context.Context, socketPath, logPath string) (*serial
 func (s *serialReader) run(ctx context.Context, log *slog.Logger) {
 	defer close(s.done)
 	defer s.logFile.Close()
+	// Drop the socket file when the goroutine exits so it doesn't persist
+	// on disk after the VM is gone, regardless of whether Close was
+	// called explicitly. CH normally unlinks the path itself on Drop,
+	// but this is belt-and-suspenders for the leak-on-success case.
+	defer func() { _ = os.Remove(s.socketPath) }()
 
 	conn, err := dialUnixWithRetry(ctx, s.socketPath, 60*time.Second)
 	if err != nil {
