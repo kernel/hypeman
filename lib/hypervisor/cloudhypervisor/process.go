@@ -2,6 +2,7 @@ package cloudhypervisor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -91,6 +92,12 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 
 	// 3. Configure the VM via HTTP API
 	vmConfig := ToVMConfig(config)
+	serialSocketPath, serialLogPath := serialLogPathsFromVMConfig(vmConfig)
+	if serialSocketPath != "" {
+		if err := removeStaleSerialSocket(serialSocketPath); err != nil {
+			return 0, nil, err
+		}
+	}
 	resp, err := hv.client.CreateVMWithResponse(ctx, vmConfig)
 	if err != nil {
 		logStartVMFailureDiagnostics(ctx, log, socketPath, pid, "create_vm", err, 0, "")
@@ -100,14 +107,23 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 		logStartVMFailureDiagnostics(ctx, log, socketPath, pid, "create_vm", nil, resp.StatusCode(), string(resp.Body))
 		return 0, nil, fmt.Errorf("create vm failed with status %d: %s", resp.StatusCode(), string(resp.Body))
 	}
+	if serialSocketPath != "" {
+		serialLog, err := startSerialSocketLogger(ctx, serialSocketPath, serialLogPath)
+		if err != nil {
+			return 0, nil, fmt.Errorf("start serial logger: %w", err)
+		}
+		hv.serialLog = serialLog
+	}
 
 	// 4. Boot the VM via HTTP API
 	bootResp, err := hv.client.BootVMWithResponse(ctx)
 	if err != nil {
+		hv.serialLog.Close()
 		logStartVMFailureDiagnostics(ctx, log, socketPath, pid, "boot_vm", err, 0, "")
 		return 0, nil, fmt.Errorf("boot vm: %w", err)
 	}
 	if bootResp.StatusCode() != 204 {
+		hv.serialLog.Close()
 		logStartVMFailureDiagnostics(ctx, log, socketPath, pid, "boot_vm", nil, bootResp.StatusCode(), string(bootResp.Body))
 		return 0, nil, fmt.Errorf("boot vm failed with status %d: %s", bootResp.StatusCode(), string(bootResp.Body))
 	}
@@ -151,6 +167,13 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 		return 0, nil, fmt.Errorf("create client: %w", err)
 	}
 
+	serialSocketPath, serialLogPath := serialLogPathsFromSnapshot(snapshotPath)
+	if serialSocketPath != "" {
+		if err := removeStaleSerialSocket(serialSocketPath); err != nil {
+			return 0, nil, err
+		}
+	}
+
 	// 3. Restore from snapshot via HTTP API
 	restoreAPIStart := time.Now()
 	sourceURL := "file://" + snapshotPath
@@ -166,6 +189,13 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 		return 0, nil, fmt.Errorf("restore failed with status %d: %s", resp.StatusCode(), string(resp.Body))
 	}
 	log.DebugContext(ctx, "CH restore API complete", "duration_ms", time.Since(restoreAPIStart).Milliseconds())
+	if serialSocketPath != "" {
+		serialLog, err := startSerialSocketLogger(ctx, serialSocketPath, serialLogPath)
+		if err != nil {
+			return 0, nil, fmt.Errorf("start serial logger: %w", err)
+		}
+		hv.serialLog = serialLog
+	}
 
 	// Success - release cleanup to prevent killing the process
 	cu.Release()
@@ -175,6 +205,42 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 
 func ptr[T any](v T) *T {
 	return &v
+}
+
+func serialLogPathsFromVMConfig(config vmm.VmConfig) (socketPath, logPath string) {
+	if config.Serial == nil || config.Serial.Socket == nil || config.Serial.Mode != vmm.ConsoleConfigModeSocket {
+		return "", ""
+	}
+	return *config.Serial.Socket, appLogPathForSerialSocket(*config.Serial.Socket)
+}
+
+func serialLogPathsFromSnapshot(snapshotPath string) (socketPath, logPath string) {
+	data, err := os.ReadFile(filepath.Join(snapshotPath, "config.json"))
+	if err != nil {
+		return "", ""
+	}
+
+	var config map[string]any
+	if err := json.Unmarshal(data, &config); err != nil {
+		return "", ""
+	}
+
+	serial, ok := config["serial"].(map[string]any)
+	if !ok || serial == nil || serial["mode"] != string(vmm.ConsoleConfigModeSocket) {
+		return "", ""
+	}
+	socketPath, _ = serial["socket"].(string)
+	if socketPath == "" {
+		return "", ""
+	}
+	return socketPath, appLogPathForSerialSocket(socketPath)
+}
+
+func removeStaleSerialSocket(socketPath string) error {
+	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove stale serial socket: %w", err)
+	}
+	return nil
 }
 
 func logStartVMFailureDiagnostics(ctx context.Context, log *slog.Logger, socketPath string, pid int, operation string, requestErr error, statusCode int, responseBody string) {

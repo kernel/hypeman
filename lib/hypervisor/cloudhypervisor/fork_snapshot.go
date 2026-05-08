@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/vmm"
 )
 
 // rewriteSnapshotConfigForFork rewrites Cloud Hypervisor snapshot config.json for a forked instance.
@@ -88,7 +89,9 @@ func updateSerialConfig(config map[string]any, logPath string) {
 	if !ok || serial == nil {
 		return
 	}
-	serial["file"] = logPath
+	delete(serial, "file")
+	serial["mode"] = string(vmm.ConsoleConfigModeSocket)
+	serial["socket"] = serialSocketPathForLog(logPath)
 }
 
 func updateNetworkConfig(config map[string]any, netCfg *hypervisor.ForkNetworkConfig) {

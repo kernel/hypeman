@@ -15,6 +15,7 @@ import (
 type CloudHypervisor struct {
 	client     *vmm.VMM
 	socketPath string
+	serialLog  *serialSocketLogger
 }
 
 var balloonTargetCache hypervisor.BalloonTargetCache
@@ -72,6 +73,8 @@ func (c *CloudHypervisor) DeleteVM(ctx context.Context) error {
 
 // Shutdown stops the VMM process gracefully.
 func (c *CloudHypervisor) Shutdown(ctx context.Context) error {
+	defer c.serialLog.Close()
+
 	resp, err := c.client.ShutdownVMMWithResponse(ctx)
 	if err != nil {
 		return fmt.Errorf("shutdown vmm: %w", err)

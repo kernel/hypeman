@@ -1,9 +1,13 @@
 package cloudhypervisor
 
 import (
+	"path/filepath"
+
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/vmm"
 )
+
+const cloudHypervisorSerialSocketName = "serial.sock"
 
 // ToVMConfig converts hypervisor.VMConfig to Cloud Hypervisor's vmm.VmConfig.
 func ToVMConfig(cfg hypervisor.VMConfig) vmm.VmConfig {
@@ -66,10 +70,16 @@ func ToVMConfig(cfg hypervisor.VMConfig) vmm.VmConfig {
 		disks = append(disks, disk)
 	}
 
-	// Serial console configuration
+	// Serial console configuration. Cloud Hypervisor opens File mode without
+	// O_APPEND, so use Socket mode and let hypeman own the append-mode log fd.
 	serial := vmm.ConsoleConfig{
-		Mode: vmm.ConsoleConfigMode("File"),
-		File: ptr(cfg.SerialLogPath),
+		Mode: vmm.ConsoleConfigModeNull,
+	}
+	if cfg.SerialLogPath != "" {
+		serial = vmm.ConsoleConfig{
+			Mode:   vmm.ConsoleConfigModeSocket,
+			Socket: ptr(serialSocketPathForLog(cfg.SerialLogPath)),
+		}
 	}
 
 	// Console off (we use serial)
@@ -138,4 +148,16 @@ func ToVMConfig(cfg hypervisor.VMConfig) vmm.VmConfig {
 		Devices: devices,
 		Balloon: balloon,
 	}
+}
+
+func serialSocketPathForLog(logPath string) string {
+	dir := filepath.Dir(logPath)
+	if filepath.Base(dir) == "logs" {
+		dir = filepath.Dir(dir)
+	}
+	return filepath.Join(dir, cloudHypervisorSerialSocketName)
+}
+
+func appLogPathForSerialSocket(socketPath string) string {
+	return filepath.Join(filepath.Dir(socketPath), "logs", "app.log")
 }
