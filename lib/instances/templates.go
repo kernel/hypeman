@@ -316,3 +316,68 @@ func (m *manager) dropTemplateForkRefcount(ctx context.Context, templateID strin
 			"template_id", templateID, "error", err)
 	}
 }
+
+// reconcileTemplateState heals drift between the templates registry and
+// the instances directory. It rewrites ForkCount on every template using
+// the actual ForkOfTemplate population on disk, and removes registry
+// entries whose source instance no longer exists. Safe to call at boot
+// and on a periodic GC tick. Bestow the work on a background goroutine
+// when the cost matters; this method is synchronous and modest.
+func (m *manager) reconcileTemplateState(ctx context.Context) error {
+	if m.templateRegistry == nil {
+		return nil
+	}
+	log := logger.FromContext(ctx)
+
+	metaFiles, err := m.listMetadataFiles()
+	if err != nil {
+		return fmt.Errorf("list instance metadata for template GC: %w", err)
+	}
+
+	observedForks := make(map[string]int)
+	templateSourceInstances := make(map[string]struct{})
+	for _, path := range metaFiles {
+		meta, err := loadMetadataFromFile(path)
+		if err != nil {
+			log.WarnContext(ctx, "skip metadata during template GC", "path", path, "error", err)
+			continue
+		}
+		stored := meta.StoredMetadata
+		if stored.ForkOfTemplate != "" {
+			observedForks[stored.ForkOfTemplate]++
+		}
+		if stored.IsTemplate {
+			templateSourceInstances[stored.Id] = struct{}{}
+		}
+	}
+
+	if err := m.templateRegistry.Reconcile(ctx, observedForks); err != nil {
+		return fmt.Errorf("reconcile template fork counts: %w", err)
+	}
+
+	all, err := m.templateRegistry.List(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("list templates for orphan sweep: %w", err)
+	}
+	for _, tpl := range all {
+		if _, ok := templateSourceInstances[tpl.SourceInstanceID]; ok {
+			continue
+		}
+		if tpl.ForkCount > 0 {
+			// Source gone but forks still reference the template; leave
+			// the registry entry so future fork GC can find it. The
+			// underlying mem-file is still alive on disk because forks
+			// hold open file descriptors via the symlink.
+			log.WarnContext(ctx, "template has live forks but no source instance",
+				"template_id", tpl.ID, "fork_count", tpl.ForkCount)
+			continue
+		}
+		log.InfoContext(ctx, "deleting orphaned template registry entry",
+			"template_id", tpl.ID, "source_instance_id", tpl.SourceInstanceID)
+		if err := m.templateRegistry.Delete(ctx, tpl.ID); err != nil {
+			log.WarnContext(ctx, "failed to delete orphaned template",
+				"template_id", tpl.ID, "error", err)
+		}
+	}
+	return nil
+}

@@ -226,7 +226,19 @@ func NewManagerWithConfig(p *paths.Paths, imageManager images.Manager, systemMan
 		logger.FromContext(context.Background()).WarnContext(context.Background(), "failed to recover pending standby compression jobs", "error", err)
 	}
 
+	// Heal any drift between the templates registry and on-disk
+	// instances after a crash or out-of-band fork delete.
+	if err := m.reconcileTemplateState(context.Background()); err != nil {
+		logger.FromContext(context.Background()).WarnContext(context.Background(), "failed to reconcile template state at boot", "error", err)
+	}
+
 	return m
+}
+
+// ReconcileTemplateState heals registry/instances drift on demand. Useful
+// for tests and for periodic GC tickers driven by the host process.
+func (m *manager) ReconcileTemplateState(ctx context.Context) error {
+	return m.reconcileTemplateState(ctx)
 }
 
 // SetResourceValidator sets the resource validator for aggregate limit checking.

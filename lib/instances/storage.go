@@ -77,6 +77,21 @@ func (m *manager) loadMetadata(id string) (*metadata, error) {
 	return &meta, nil
 }
 
+// loadMetadataFromFile reads a metadata file by path. Used by sweepers
+// that already have the path from listMetadataFiles and don't want to
+// reverse-derive an instance id.
+func loadMetadataFromFile(path string) (*metadata, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read metadata: %w", err)
+	}
+	var meta metadata
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return nil, fmt.Errorf("unmarshal metadata: %w", err)
+	}
+	return &meta, nil
+}
+
 // saveMetadata saves instance metadata to disk
 func (m *manager) saveMetadata(meta *metadata) error {
 	metaPath := m.paths.InstanceMetadata(meta.Id)

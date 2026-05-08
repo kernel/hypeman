@@ -45,6 +45,13 @@ type Registry interface {
 	// template (floor 0). Used when a fork is deleted. Touching
 	// templates that were already deleted is a no-op.
 	DecrementForkCount(ctx context.Context, id string) (*Template, error)
+
+	// Reconcile walks the registry and rewrites ForkCount on every
+	// template using observedForks: the count of live forks per
+	// template id. Templates not present in observedForks fall to
+	// zero. Used to heal drift after a crash, an out-of-band fork
+	// delete, or any other path that bypassed Increment/Decrement.
+	Reconcile(ctx context.Context, observedForks map[string]int) error
 }
 
 // ListFilter narrows the templates returned by Registry.List.
@@ -229,6 +236,34 @@ func (r *FileRegistry) IncrementForkCount(ctx context.Context, id string) (*Temp
 		return nil, err
 	}
 	return t, nil
+}
+
+// Reconcile rewrites ForkCount on every persisted template using
+// observedForks as the authority. Templates not present in observedForks
+// are treated as having zero live forks. Errors on individual templates
+// are returned as a wrapped multi-error so the caller can decide whether
+// to treat partial reconciliation as fatal; reconciliation is best-effort
+// and never deletes templates by itself.
+func (r *FileRegistry) Reconcile(ctx context.Context, observedForks map[string]int) error {
+	_ = ctx
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	all, err := r.listLocked()
+	if err != nil {
+		return err
+	}
+	var firstErr error
+	for _, t := range all {
+		want := observedForks[t.ID]
+		if t.ForkCount == want {
+			continue
+		}
+		t.ForkCount = want
+		if err := r.writeLocked(t); err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("reconcile template %s: %w", t.ID, err)
+		}
+	}
+	return firstErr
 }
 
 func (r *FileRegistry) DecrementForkCount(ctx context.Context, id string) (*Template, error) {

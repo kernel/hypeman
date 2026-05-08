@@ -123,3 +123,32 @@ func TestFileRegistry_SaveValidates(t *testing.T) {
 	err := r.Save(context.Background(), &Template{Name: "x"})
 	assert.True(t, errors.Is(err, ErrInvalid))
 }
+
+func TestFileRegistry_Reconcile(t *testing.T) {
+	r := newTestRegistry(t)
+	a := sampleTemplate("a", "alpha")
+	a.ForkCount = 5
+	b := sampleTemplate("b", "beta")
+	b.ForkCount = 0
+	c := sampleTemplate("c", "gamma")
+	c.ForkCount = 7
+	require.NoError(t, r.Save(context.Background(), a))
+	require.NoError(t, r.Save(context.Background(), b))
+	require.NoError(t, r.Save(context.Background(), c))
+
+	require.NoError(t, r.Reconcile(context.Background(), map[string]int{
+		"a": 2,
+		"b": 3,
+		// c omitted -> should fall to 0
+	}))
+
+	got, err := r.Get(context.Background(), "a")
+	require.NoError(t, err)
+	assert.Equal(t, 2, got.ForkCount)
+	got, err = r.Get(context.Background(), "b")
+	require.NoError(t, err)
+	assert.Equal(t, 3, got.ForkCount)
+	got, err = r.Get(context.Background(), "c")
+	require.NoError(t, err)
+	assert.Equal(t, 0, got.ForkCount)
+}
