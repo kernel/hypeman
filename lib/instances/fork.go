@@ -37,6 +37,14 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 		return nil, "", err
 	}
 
+	if req.ShareMemory {
+		shared, err := m.ensureShareMemoryTemplate(ctx, id)
+		if err != nil {
+			return nil, "", err
+		}
+		req.TemplateID = shared.ID
+		id = ""
+	}
 	resolvedID, tpl, err := m.resolveForkFromTemplateRequest(ctx, id, req)
 	if err != nil {
 		return nil, "", err
@@ -405,6 +413,14 @@ func validateForkRequest(req ForkInstanceRequest) error {
 	}
 	if req.TargetState != "" && req.TargetState != StateStopped && req.TargetState != StateStandby && req.TargetState != StateRunning {
 		return fmt.Errorf("%w: invalid fork target state %q (must be one of %s, %s, %s)", ErrInvalidRequest, req.TargetState, StateStopped, StateStandby, StateRunning)
+	}
+	if req.ShareMemory {
+		if req.TemplateID != "" {
+			return fmt.Errorf("%w: share_memory cannot be combined with template_id", ErrInvalidRequest)
+		}
+		if req.FromRunning {
+			return fmt.Errorf("%w: share_memory requires the source to already be in Standby; from_running=true would re-restore the source after locking", ErrInvalidRequest)
+		}
 	}
 	return nil
 }

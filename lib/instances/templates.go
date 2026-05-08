@@ -165,13 +165,16 @@ func (m *manager) touchTemplateUsage(ctx context.Context, templateID string) {
 
 // templateGuard returns an error when the instance is a template parent.
 // Templates must not be Started or Restored — the snapshot is shared with
-// live forks and resuming it would corrupt them. PR 3 hardens this further
-// when forks rely on the template's mem-file directly.
+// live forks and resuming it would corrupt them.
+//
+// Returns ErrInvalidState (409) so callers see this as a transient
+// state-conflict (resolves once forks are deleted), not as a hypervisor
+// capability gap (501).
 func (m *manager) templateGuard(stored *StoredMetadata, op string) error {
 	if stored == nil || !stored.IsTemplate {
 		return nil
 	}
-	return fmt.Errorf("%w: cannot %s template instance %s (template_id=%s); fork from it instead", ErrNotSupported, op, stored.Id, stored.TemplateID)
+	return fmt.Errorf("%w: cannot %s instance %s while it is mem-locked by live forks; delete the forks (or wait for them to exit) first", ErrInvalidState, op, stored.Id)
 }
 
 // validateForkResolvedFromTemplate confirms a fork-from-template request
@@ -323,4 +326,68 @@ func (m *manager) dropTemplateForkRefcount(ctx context.Context, templateID strin
 		log.WarnContext(ctx, "failed to decrement template fork refcount",
 			"template_id", templateID, "error", err)
 	}
+}
+
+// ensureShareMemoryTemplate resolves (or creates) the template entry that
+// backs ShareMemory=true forks against the given source instance. If the
+// source is already a template parent, the existing entry is returned.
+// Otherwise the source is auto-promoted with a deterministic, internal
+// name derived from its instance ID — the public API never exposes the
+// templates resource, so the name is purely a registry detail.
+//
+// The source must be in Standby; this is checked here so callers see a
+// clear error before the fork machinery starts allocating fork state.
+func (m *manager) ensureShareMemoryTemplate(ctx context.Context, instanceID string) (*templates.Template, error) {
+	if instanceID == "" {
+		return nil, fmt.Errorf("%w: share_memory requires a source instance id", ErrInvalidRequest)
+	}
+	if m.templateRegistry == nil {
+		return nil, fmt.Errorf("%w: template registry not configured", ErrNotSupported)
+	}
+	meta, err := m.loadMetadata(instanceID)
+	if err != nil {
+		return nil, err
+	}
+	stored := &meta.StoredMetadata
+	if stored.IsTemplate && stored.TemplateID != "" {
+		tpl, err := m.templateRegistry.Get(ctx, stored.TemplateID)
+		if err != nil {
+			return nil, fmt.Errorf("load existing share-memory template: %w", err)
+		}
+		return tpl, nil
+	}
+	inst := m.toInstance(ctx, meta)
+	if inst.State != StateStandby {
+		return nil, fmt.Errorf("%w: share_memory requires the source to be in Standby (got %s)", ErrInvalidState, inst.State)
+	}
+	return m.promoteToTemplate(ctx, instanceID, PromoteToTemplateRequest{
+		Name: shareMemoryTemplateName(instanceID),
+	})
+}
+
+// shareMemoryTemplateName computes the registry name used for auto-promoted
+// share-memory templates. Encoded as a function so tests can assert that
+// repeated ShareMemory forks against the same source resolve the same
+// registry entry.
+func shareMemoryTemplateName(instanceID string) string {
+	return "share-mem-" + instanceID
+}
+
+// hydrateForkLockState fills in ForkCount/MemLocked on inst by looking up
+// the instance's template entry. Non-fatal: any registry lookup error
+// leaves the fields at their zero value so callers see "not locked" rather
+// than a hard failure.
+func hydrateForkLockState(ctx context.Context, registry templates.Registry, inst *Instance) {
+	if inst == nil || registry == nil {
+		return
+	}
+	if !inst.IsTemplate || inst.TemplateID == "" {
+		return
+	}
+	tpl, err := registry.Get(ctx, inst.TemplateID)
+	if err != nil || tpl == nil {
+		return
+	}
+	inst.ForkCount = tpl.ForkCount
+	inst.MemLocked = tpl.ForkCount > 0
 }

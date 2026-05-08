@@ -478,6 +478,17 @@ components:
             Optional final state for the forked instance.
             Default is the source instance state at fork time.
             For example, forking from Running defaults the fork result to Running.
+        share_memory:
+          type: boolean
+          description: |
+            Share the source instance's snapshot mem-file with the fork instead of copying it.
+            Requires the source to be in Standby state. While at least one fork created with
+            share_memory=true is alive, the source is mem-locked: start/restore/delete on the
+            source return 409 until all such forks are deleted (see Instance.fork_count and
+            Instance.mem_locked). Forks created with share_memory=false are unaffected and may
+            be created against the same locked source.
+          default: false
+          example: false
 
     ForkTargetState:
       type: string
@@ -878,7 +889,19 @@ components:
           $ref: "#/components/schemas/SnapshotPolicy"
         auto_standby:
           $ref: "#/components/schemas/AutoStandbyPolicy"
-    
+        fork_count:
+          type: integer
+          description: |
+            Number of live forks that share this instance's snapshot mem-file via share_memory=true.
+            Zero for instances that have never been used as a fan-out parent. Read-only.
+          example: 0
+        mem_locked:
+          type: boolean
+          description: |
+            True iff fork_count > 0 — i.e. at least one share_memory fork is alive against this
+            instance. While true, start/restore/delete on this instance return 409. Read-only.
+          example: false
+
     PathInfo:
       type: object
       required: [exists]

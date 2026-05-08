@@ -356,6 +356,7 @@ func (m *manager) toInstanceWithStateDerivation(ctx context.Context, meta *metad
 		BootMarkersHydrated: result.BootMarkersHydrated,
 	}
 	refreshHypervisorPID(&inst.StoredMetadata, result.State)
+	hydrateForkLockState(ctx, m.templateRegistry, &inst)
 
 	// If VM is stopped and exit info isn't persisted yet, populate in-memory
 	// from the serial console log. This is read-only -- no metadata writes.

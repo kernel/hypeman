@@ -638,6 +638,7 @@ func (s *ApiService) ForkInstance(ctx context.Context, request oapi.ForkInstance
 		Name:        request.Body.Name,
 		FromRunning: request.Body.FromRunning != nil && *request.Body.FromRunning,
 		TargetState: targetState,
+		ShareMemory: request.Body.ShareMemory != nil && *request.Body.ShareMemory,
 	})
 	if err != nil {
 		switch {
@@ -1062,6 +1063,8 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 		ExitCode:    inst.ExitCode,
 		HasSnapshot: lo.ToPtr(inst.HasSnapshot),
 		Hypervisor:  &hvType,
+		ForkCount:   lo.ToPtr(inst.ForkCount),
+		MemLocked:   lo.ToPtr(inst.MemLocked),
 	}
 
 	if b, err := json.Marshal(networkPayload); err == nil {

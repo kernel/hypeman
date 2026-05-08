@@ -173,6 +173,15 @@ type Instance struct {
 	StateError          *string // Error message if state couldn't be determined (non-nil when State=Unknown)
 	HasSnapshot         bool    // Derived from filesystem check
 	BootMarkersHydrated bool    // True when missing boot markers were hydrated from logs in this read
+
+	// ForkCount is the number of live forks created against this instance
+	// with ShareMemory=true. Derived from the templates registry when the
+	// instance is a fan-out parent; zero otherwise.
+	ForkCount int
+	// MemLocked is true iff ForkCount > 0. While true, start/restore/delete
+	// of this instance fails with ErrInvalidState because the snapshot
+	// mem-file is being served to live forks.
+	MemLocked bool
 }
 
 // GetHypervisorType returns the hypervisor type as a string.
@@ -264,6 +273,16 @@ type ForkInstanceRequest struct {
 	// template's mem-file instead of being copied per-fork, so many forks
 	// fan out from the same warm guest memory.
 	TemplateID string
+
+	// ShareMemory opts the fork into mem-file sharing with the source
+	// instance: instead of copying the snapshot mem-file, the fork's
+	// hypervisor reads pages from the source's mem-file (via uffd or
+	// hardlink, depending on hypervisor). Requires the source to be in
+	// Standby. The first such fork against a source auto-promotes that
+	// source so subsequent ShareMemory forks reuse the same registry entry;
+	// while any are alive, the source is mem-locked (start/restore/delete
+	// return ErrInvalidState).
+	ShareMemory bool
 }
 
 // SnapshotKind determines how snapshot data is captured and restored.
