@@ -46,6 +46,9 @@ func TestCopyGuestDirectory_PreservesSparseFiles(t *testing.T) {
 }
 
 func TestCopyGuestDirectory_FailsWhenSparseSeekingUnsupported(t *testing.T) {
+	SetReflinkDisabled(true)
+	t.Cleanup(func() { SetReflinkDisabled(false) })
+
 	src := filepath.Join(t.TempDir(), "src")
 	dst := filepath.Join(t.TempDir(), "dst")
 	require.NoError(t, os.MkdirAll(src, 0755))
