@@ -153,6 +153,15 @@ type StoredMetadata struct {
 	// Exit information (populated from serial console sentinel when VM stops)
 	ExitCode    *int   // App exit code, nil if VM hasn't exited
 	ExitMessage string // Human-readable description of exit (e.g., "command not found", "killed by signal 9 (SIGKILL) - OOM")
+
+	// Template-related fields. These are zero-valued for ordinary instances;
+	// the templates package owns the lifecycle and refcount. Forks and
+	// templates persist these fields so the manager can refuse to Start a
+	// template directly and so a deleted fork can decrement its template's
+	// refcount.
+	IsTemplate     bool   // true once an instance has been promoted to a template parent
+	TemplateID     string // when set, this instance is the canonical source for the named template
+	ForkOfTemplate string // when set, this instance was forked from the named template
 }
 
 // Instance represents a virtual machine instance with derived runtime state

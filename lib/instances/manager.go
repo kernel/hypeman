@@ -17,6 +17,7 @@ import (
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/kernel/hypeman/lib/resources"
 	"github.com/kernel/hypeman/lib/system"
+	"github.com/kernel/hypeman/lib/templates"
 	"github.com/kernel/hypeman/lib/volumes"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -147,6 +148,12 @@ type manager struct {
 	vmStarters        map[hypervisor.Type]hypervisor.VMStarter
 	defaultHypervisor hypervisor.Type // Default hypervisor type when not specified in request
 	guestMemoryPolicy guestmemory.Policy
+
+	// Template registry. Owned by the manager because template lifecycle
+	// is coupled to instance lifecycle (promotion + refcount on
+	// fork/delete). Constructed lazily so existing managers without
+	// template support keep working unchanged.
+	templateRegistry templates.Registry
 }
 
 // platformStarters is populated by platform-specific init functions.
@@ -201,6 +208,7 @@ func NewManagerWithConfig(p *paths.Paths, imageManager images.Manager, systemMan
 		compressionJobs:   make(map[string]*compressionJob),
 		nativeCodecPaths:  make(map[string]string),
 		lifecycleEvents:   newLifecycleSubscribersWithBufferSize(managerConfig.LifecycleEventBufferSize),
+		templateRegistry:  templates.NewFileRegistry(p.TemplatesDir()),
 	}
 	m.deleteSnapshotFn = m.deleteSnapshot
 

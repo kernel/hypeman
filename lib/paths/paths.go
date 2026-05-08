@@ -260,6 +260,25 @@ func (p *Paths) SnapshotGuestDir(snapshotID string) string {
 	return filepath.Join(p.SnapshotDir(snapshotID), "guest")
 }
 
+// Template path methods
+
+// TemplatesDir returns the root directory for VM templates.
+// A template is a tagged Standby instance promoted to a "fork-only" parent
+// whose snapshot can be reused for many forked instances.
+func (p *Paths) TemplatesDir() string {
+	return filepath.Join(p.dataDir, "templates")
+}
+
+// TemplateDir returns the directory for a specific template's metadata.
+func (p *Paths) TemplateDir(id string) string {
+	return filepath.Join(p.TemplatesDir(), id)
+}
+
+// TemplateMetadata returns the path to a template's metadata.json file.
+func (p *Paths) TemplateMetadata(id string) string {
+	return filepath.Join(p.TemplateDir(id), "template.json")
+}
+
 // Device path methods
 
 // DevicesDir returns the root devices directory.
