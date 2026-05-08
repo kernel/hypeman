@@ -100,9 +100,16 @@ func BuildArgs(cfg hypervisor.VMConfig) []string {
 		args = append(args, "-device", deviceArg)
 	}
 
-	// Serial console output to file
+	// Serial console output to file. Use a chardev with append=on so QEMU
+	// opens the file with O_APPEND. Without it, QEMU writes at its internal
+	// fd offset; if the file is externally truncated (e.g. log rotation via
+	// copytruncate) subsequent writes leave a sparse hole of NUL bytes from
+	// byte 0 to the stale offset, which downstream log readers will pick up.
 	if cfg.SerialLogPath != "" {
-		args = append(args, "-serial", fmt.Sprintf("file:%s", cfg.SerialLogPath))
+		args = append(args,
+			"-chardev", fmt.Sprintf("file,id=serial0,path=%s,append=on", cfg.SerialLogPath),
+			"-serial", "chardev:serial0",
+		)
 	} else {
 		args = append(args, "-serial", "stdio")
 	}
