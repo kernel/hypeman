@@ -279,12 +279,25 @@ func (p *Paths) TemplateMetadata(id string) string {
 	return filepath.Join(p.TemplateDir(id), "template.json")
 }
 
-// TemplateUffdDir returns the directory under a template that holds the
-// per-fork userfaultfd page-server sockets. Sockets live here (rather than
-// inside each fork's data dir) because Unix domain socket paths are tightly
-// length-limited; the template id keeps the prefix short and stable.
+// TemplateUffdDir returns the directory that holds a template's per-fork
+// userfaultfd page-server sockets. Sockets cannot live under the data dir
+// because Unix domain socket paths are limited to 108 bytes (sun_path); a
+// deep DataDir + the cuid2 template+fork ids easily blow that. Anchoring
+// at a short, fixed runtime root keeps the absolute path well under the
+// limit (~30 chars for typical ids) regardless of where the data dir lives.
+//
+// Sockets are ephemeral — losing them on reboot is fine; firecracker
+// reconnects on restore.
 func (p *Paths) TemplateUffdDir(id string) string {
-	return filepath.Join(p.TemplateDir(id), "uffd")
+	return filepath.Join(uffdRuntimeRoot(), id)
+}
+
+// uffdRuntimeRoot returns the short root used to hold uffd sockets. It is
+// not configurable on purpose: the only requirement is that it stay short
+// and writable, and /tmp meets both. Tests get isolation from the cuid
+// segment in TemplateUffdDir.
+func uffdRuntimeRoot() string {
+	return filepath.Join("/tmp", "h-uffd")
 }
 
 // Device path methods

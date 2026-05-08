@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 
@@ -31,8 +32,9 @@ type uffdTracker struct {
 }
 
 type uffdEntry struct {
-	server *uffd.Server
-	forks  map[string]struct{}
+	server    *uffd.Server
+	socketDir string
+	forks     map[string]struct{}
 }
 
 func newUffdTracker() *uffdTracker {
@@ -61,7 +63,7 @@ func (t *uffdTracker) acquireUffdForFork(ctx context.Context, tpl *templates.Tem
 			t.mu.Unlock()
 			return "", fmt.Errorf("uffd: start server for template %s: %w", tpl.ID, err)
 		}
-		entry = &uffdEntry{server: srv, forks: map[string]struct{}{}}
+		entry = &uffdEntry{server: srv, socketDir: socketDir, forks: map[string]struct{}{}}
 		t.entries[tpl.ID] = entry
 	}
 	t.mu.Unlock()
@@ -97,6 +99,7 @@ func (t *uffdTracker) releaseUffdForFork(templateID, forkID string) error {
 	}
 	delete(entry.forks, forkID)
 	srv := entry.server
+	socketDir := entry.socketDir
 	empty := len(entry.forks) == 0
 	if empty {
 		delete(t.entries, templateID)
@@ -110,6 +113,9 @@ func (t *uffdTracker) releaseUffdForFork(templateID, forkID string) error {
 	if empty {
 		if err := srv.Close(); err != nil && firstErr == nil {
 			firstErr = err
+		}
+		if socketDir != "" {
+			_ = os.RemoveAll(socketDir)
 		}
 	}
 	return firstErr
@@ -126,8 +132,12 @@ func (t *uffdTracker) maybeCloseEmpty(templateID string) {
 	}
 	delete(t.entries, templateID)
 	srv := entry.server
+	socketDir := entry.socketDir
 	t.mu.Unlock()
 	_ = srv.Close()
+	if socketDir != "" {
+		_ = os.RemoveAll(socketDir)
+	}
 }
 
 // closeAll tears down every server. Called by the manager during
@@ -145,6 +155,9 @@ func (t *uffdTracker) closeAll() error {
 		}
 		if err := entry.server.Close(); err != nil && firstErr == nil {
 			firstErr = err
+		}
+		if entry.socketDir != "" {
+			_ = os.RemoveAll(entry.socketDir)
 		}
 	}
 	return firstErr
