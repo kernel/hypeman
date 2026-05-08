@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/kernel/hypeman/lib/forkvm"
@@ -414,15 +415,26 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 	if target != nil && target.State == compressionJobStateRunning {
 		m.recordSnapshotCompressionPreemption(ctx, snapshotCompressionPreemptionForkSnapshot, target.Target)
 	}
-	if err := m.ensureSnapshotMemoryReady(ctx, m.paths.SnapshotGuestDir(snapshotID), "", rec.StoredMetadata.HypervisorType); err != nil {
+	srcDir := m.paths.SnapshotGuestDir(snapshotID)
+	if err := m.ensureSnapshotMemoryReady(ctx, srcDir, "", rec.StoredMetadata.HypervisorType); err != nil {
 		return nil, fmt.Errorf("prepare snapshot memory for fork: %w", err)
 	}
 
-	if err := forkvm.CopyGuestDirectory(m.paths.SnapshotGuestDir(snapshotID), dstDir); err != nil {
+	copyOpts := forkvm.CopyOptions{}
+	srcMemPath, srcMemRel, hasSharedMem := snapshotMemHardlinkSource(srcDir)
+	if hasSharedMem {
+		copyOpts.SkipRelPaths = []string{srcMemRel}
+	}
+	if err := forkvm.CopyGuestDirectoryWithOptions(srcDir, dstDir, copyOpts); err != nil {
 		if errors.Is(err, forkvm.ErrSparseCopyUnsupported) {
 			return nil, fmt.Errorf("fork from snapshot requires sparse-capable filesystem (SEEK_DATA/SEEK_HOLE unsupported): %w", err)
 		}
 		return nil, fmt.Errorf("clone snapshot payload: %w", err)
+	}
+	if hasSharedMem {
+		if err := installForkSnapshotMemHardlink(srcMemPath, dstDir, srcMemRel); err != nil {
+			return nil, fmt.Errorf("hardlink snapshot mem-file into fork: %w", err)
+		}
 	}
 
 	starter, err := m.getVMStarter(targetHypervisor)
@@ -644,4 +656,39 @@ func (m *manager) listSnapshotRecords() ([]snapshotRecord, error) {
 		})
 	}
 	return records, nil
+}
+
+// snapshotMemHardlinkSource resolves the raw mem-file under a snapshot guest
+// dir. Returns its absolute path and forward-slash-relative path for use as a
+// CopyOptions skip key. Returns ok=false if no raw mem-file is present (e.g.
+// only-compressed snapshot whose decompression failed, or a snapshot kind that
+// doesn't carry guest memory). Callers fall back to the regular copy walk.
+func snapshotMemHardlinkSource(srcDir string) (absPath, relSlash string, ok bool) {
+	abs, found := findRawSnapshotMemoryFile(srcDir)
+	if !found {
+		return "", "", false
+	}
+	rel, err := filepath.Rel(srcDir, abs)
+	if err != nil {
+		return "", "", false
+	}
+	return abs, filepath.ToSlash(rel), true
+}
+
+// installForkSnapshotMemHardlink hardlinks the source snapshot mem-file into
+// the fork's data dir at the matching relative path. Snapshot mem-files are
+// immutable and the hypervisor mmaps them MAP_PRIVATE on restore, so all
+// forks of a snapshot can safely share the same inode — fork writes never
+// reach the underlying file. Hardlinks are FS-local and survive snapshot
+// deletion via inode refcount, so a deleted snapshot never strands a fork.
+func installForkSnapshotMemHardlink(srcMemPath, dstDir, relSlash string) error {
+	dstMem := filepath.Join(dstDir, filepath.FromSlash(relSlash))
+	if err := os.MkdirAll(filepath.Dir(dstMem), 0o755); err != nil {
+		return fmt.Errorf("ensure fork mem-file parent dir: %w", err)
+	}
+	_ = os.Remove(dstMem)
+	if err := os.Link(srcMemPath, dstMem); err != nil {
+		return fmt.Errorf("link snapshot mem-file: %w", err)
+	}
+	return nil
 }

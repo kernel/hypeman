@@ -280,6 +280,62 @@ func TestForkSnapshotFromCompressedSourceCopiesRawMemory(t *testing.T) {
 	assert.False(t, ok, "forked snapshot payload should not retain compressed memory artifacts from the source snapshot")
 }
 
+func TestForkSnapshotHardlinksRawMemoryFile(t *testing.T) {
+	t.Parallel()
+
+	mgr, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	hvType := mgr.defaultHypervisor
+	sourceID := "snapshot-fork-hardlink-src"
+	createStandbySnapshotSourceFixture(t, mgr, sourceID, "snapshot-fork-hardlink-src", hvType)
+
+	snap, err := mgr.CreateSnapshot(ctx, sourceID, CreateSnapshotRequest{
+		Kind: SnapshotKindStandby,
+		Name: "standby-for-fork-hardlink",
+	})
+	require.NoError(t, err)
+
+	// Plant the raw mem-file at the top of the snapshot guest dir so it
+	// survives applyForkTargetState's snapshot-latest wipe and we can stat
+	// the fork's hardlinked copy after the call returns. Production layout
+	// nests it under snapshots/snapshot-latest/memory; the helpers under
+	// test treat both paths identically via findRawSnapshotMemoryFile.
+	memContents := []byte("guest memory bytes for hardlink test")
+	snapshotDir := mgr.paths.SnapshotGuestDir(snap.Id)
+	snapshotMem := filepath.Join(snapshotDir, "memory-ranges")
+	require.NoError(t, os.WriteFile(snapshotMem, memContents, 0o644))
+	snapshotConfigPath := filepath.Join(snapshotDir, "snapshots", "snapshot-latest", "config.json")
+	require.NoError(t, os.MkdirAll(filepath.Dir(snapshotConfigPath), 0o755))
+	require.NoError(t, os.WriteFile(snapshotConfigPath, []byte(`{}`), 0o644))
+
+	srcInfo, err := os.Stat(snapshotMem)
+	require.NoError(t, err)
+
+	forked, err := mgr.ForkSnapshot(ctx, snap.Id, ForkSnapshotRequest{
+		Name:        "snapshot-fork-hardlink",
+		TargetState: StateStopped,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = mgr.DeleteInstance(context.Background(), forked.Id) })
+
+	forkMem := filepath.Join(mgr.paths.InstanceDir(forked.Id), "memory-ranges")
+	forkInfo, err := os.Stat(forkMem)
+	require.NoError(t, err, "fork should have a hardlinked memory file alongside its instance dir")
+	assert.True(t, os.SameFile(srcInfo, forkInfo), "fork mem-file should share an inode with the snapshot mem-file (hardlink)")
+
+	got, err := os.ReadFile(forkMem)
+	require.NoError(t, err)
+	assert.Equal(t, memContents, got, "fork mem-file should expose the same bytes as the snapshot mem-file")
+
+	// Hardlinks survive deletion of the source path: removing the snapshot
+	// drops one reference but leaves the inode alive for the fork.
+	require.NoError(t, mgr.DeleteSnapshot(ctx, snap.Id))
+	stillThere, err := os.ReadFile(forkMem)
+	require.NoError(t, err, "fork mem-file should remain readable after snapshot deletion")
+	assert.Equal(t, memContents, stillThere)
+}
+
 func createStoppedSnapshotSourceFixture(t *testing.T, mgr *manager, id, name string, hvType hypervisor.Type) {
 	t.Helper()
 	require.NoError(t, mgr.ensureDirectories(id))
