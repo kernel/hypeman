@@ -68,6 +68,12 @@ type Config struct {
 	// PageSize is the target page size for UFFDIO_COPY. Must be a
 	// multiple of os.Getpagesize. Zero means use the host page size.
 	PageSize int
+
+	// RecordHotPages turns on per-fault recording. Every successfully
+	// served page is appended to the server's hot-page list. Callers
+	// typically enable this during a template's first warmup fork,
+	// then HotPages().Save() the result before promoting the template.
+	RecordHotPages bool
 }
 
 // Server owns the template mem-file and dispatches userfaultfd events
@@ -82,11 +88,19 @@ type Server struct {
 	listens  map[string]*forkListen // forkID -> per-fork bookkeeping
 	closed   bool
 	pageSize int
+
+	hotPages HotPageList // recorded faults; only used when cfg.RecordHotPages
 }
 
 type forkListen struct {
 	socketPath string
 	closer     func() error
+
+	// prefetch is set by the platform-specific listener once the uffd
+	// fd has been received and registered. Calling it issues UFFDIO_COPY
+	// for every entry in the supplied list against the fork's uffd.
+	// Nil means the fork hasn't connected yet.
+	prefetch func(*HotPageList) error
 }
 
 // NewServer opens the template mem-file and prepares the server. It
@@ -146,6 +160,50 @@ func (s *Server) MemSize() int64 { return s.memSize }
 
 // PageSize returns the configured page size in bytes.
 func (s *Server) PageSize() int { return s.pageSize }
+
+// HotPages returns the server's hot-page recorder. The returned value
+// is the live list — Add/Snapshot/Save are all valid. Recording only
+// happens when Config.RecordHotPages is set; callers may still inspect
+// the (empty) list otherwise.
+func (s *Server) HotPages() *HotPageList { return &s.hotPages }
+
+// Prefetch issues UFFDIO_COPY for every entry in list against the fork
+// identified by forkID. Used to warm up known-hot pages before the
+// guest unpauses, eliminating fault round-trips for anything we've
+// pre-recorded. Returns an error if the fork is unknown or hasn't
+// connected yet, or if the underlying ioctl fails (other than the
+// benign EEXIST/EAGAIN race noted in copyPageForFault).
+func (s *Server) Prefetch(forkID string, list *HotPageList) error {
+	if list == nil || list.Len() == 0 {
+		return nil
+	}
+	s.mu.Lock()
+	listen, ok := s.listens[forkID]
+	prefetch := func(*HotPageList) error { return nil }
+	if ok && listen.prefetch != nil {
+		prefetch = listen.prefetch
+	}
+	s.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("uffd: fork %q is not registered", forkID)
+	}
+	if listen.prefetch == nil {
+		return fmt.Errorf("uffd: fork %q has not yet connected", forkID)
+	}
+	return prefetch(list)
+}
+
+// installPrefetcher is called by the platform-specific listener once
+// the uffd is ready. It is a no-op if the fork has been unregistered.
+func (s *Server) installPrefetcher(forkID string, fn func(*HotPageList) error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	listen, ok := s.listens[forkID]
+	if !ok {
+		return
+	}
+	listen.prefetch = fn
+}
 
 // Close stops the server, closes all per-fork listeners, and releases
 // the template mem-file fd. After Close returns, the server cannot be
