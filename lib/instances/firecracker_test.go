@@ -618,10 +618,15 @@ func TestFirecrackerForkFromTemplate(t *testing.T) {
 	// (b) The fork's mem-file must share the source's inode (hardlink), not
 	// be a copy. We can't compare paths because the link is by inode; we
 	// compare st_ino + st_dev between the two instances' mem-files.
-	forkMemPath := filepath.Join(p.InstanceSnapshotLatest(forkID), templateSharedMemFileName)
+	//
+	// Firecracker retains the post-restore snapshot dir as snapshot-base
+	// (see restoreRetainedSnapshotBase), so after the Standby -> Running
+	// transition the hardlink lives under snapshot-base/, not snapshot-latest/.
+	// Hardlinks survive the rename because they bind to the inode.
+	forkMemPath := filepath.Join(p.InstanceSnapshotBase(forkID), templateSharedMemFileName)
 	srcMemPath := filepath.Join(p.InstanceSnapshotLatest(sourceID), templateSharedMemFileName)
 	forkInfo, err := os.Stat(forkMemPath)
-	require.NoError(t, err, "fork mem-file should exist at snapshot-latest/memory")
+	require.NoError(t, err, "fork mem-file should exist at snapshot-base/memory after restore")
 	assert.True(t, forkInfo.Mode().IsRegular(), "fork mem-file should be a regular file (hardlink), not a symlink")
 	srcInfo, err := os.Stat(srcMemPath)
 	require.NoError(t, err)
