@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -547,8 +548,8 @@ func TestFirecrackerSnapshotFeature(t *testing.T) {
 
 // TestFirecrackerForkFromTemplate exercises the full template-driven fork
 // path: standby a firecracker source, promote it to a template, fork off it,
-// and assert the fork (a) reaches Running, (b) has its mem-file as a symlink
-// into the template's snapshot dir (the fan-out optimisation), (c) bumped
+// and assert the fork (a) reaches Running, (b) has its mem-file hardlinked
+// to the template's snapshot mem-file (the fan-out optimisation), (c) bumped
 // the template's fork refcount, (d) registered with the per-template uffd
 // page server, and (e) on delete, drops the refcount and detaches from uffd.
 func TestFirecrackerForkFromTemplate(t *testing.T) {
@@ -614,15 +615,20 @@ func TestFirecrackerForkFromTemplate(t *testing.T) {
 		}
 	})
 
-	// (b) The fork's mem-file must be a symlink into the template snapshot.
+	// (b) The fork's mem-file must share the source's inode (hardlink), not
+	// be a copy. We can't compare paths because the link is by inode; we
+	// compare st_ino + st_dev between the two instances' mem-files.
 	forkMemPath := filepath.Join(p.InstanceSnapshotLatest(forkID), templateSharedMemFileName)
-	info, err := os.Lstat(forkMemPath)
+	srcMemPath := filepath.Join(p.InstanceSnapshotLatest(sourceID), templateSharedMemFileName)
+	forkInfo, err := os.Stat(forkMemPath)
 	require.NoError(t, err, "fork mem-file should exist at snapshot-latest/memory")
-	assert.Equal(t, os.ModeSymlink, info.Mode()&os.ModeSymlink, "fork mem-file should be a symlink, not a copy")
-	target, err := os.Readlink(forkMemPath)
+	assert.True(t, forkInfo.Mode().IsRegular(), "fork mem-file should be a regular file (hardlink), not a symlink")
+	srcInfo, err := os.Stat(srcMemPath)
 	require.NoError(t, err)
-	expectedTarget := filepath.Join(p.InstanceSnapshotLatest(sourceID), templateSharedMemFileName)
-	assert.Equal(t, expectedTarget, target, "fork mem-file symlink should point at the template's mem-file")
+	forkSys := forkInfo.Sys().(*syscall.Stat_t)
+	srcSys := srcInfo.Sys().(*syscall.Stat_t)
+	assert.Equal(t, srcSys.Ino, forkSys.Ino, "fork mem-file should share the source's inode (hardlink, not copy)")
+	assert.Equal(t, srcSys.Dev, forkSys.Dev, "fork mem-file should be on the same filesystem as source")
 
 	// (c) Refcount on the template must be bumped to 1.
 	tplAfterFork, err := mgr.getTemplate(ctx, tpl.ID)

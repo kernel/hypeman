@@ -252,14 +252,22 @@ func (m *manager) resolveForkFromTemplateRequest(ctx context.Context, instanceID
 }
 
 // installForkSharedMemFile arranges the fork's snapshot directory so the
-// guest mem-file is a symlink into the template's snapshot directory
+// guest mem-file is a hardlink to the template's snapshot mem-file
 // instead of a per-fork copy. firecracker mmaps the mem-file MAP_PRIVATE
-// during restore, so all forks COW from the same backing file.
+// during restore, so all forks COW from the same backing inode.
 //
 // Layout: dst is the fork's data dir. The snapshot dir is at
 // <dst>/snapshots/snapshot-latest, and the mem-file lives at
-// <snapshot dir>/memory. The symlink target is the template's source
-// instance's standby snapshot mem-file.
+// <snapshot dir>/memory. The hardlink shares the inode with the
+// template's source instance's standby snapshot mem-file.
+//
+// We use a hardlink rather than a symlink because RestoreVM temporarily
+// aliases the source data dir to the fork data dir while firecracker
+// loads the snapshot (see withSnapshotSourceDirAlias). A symlink whose
+// target traverses the source dir would resolve back into the fork dir
+// during that window and trip ELOOP; a hardlink resolves by inode so
+// the alias has no effect on it. Hardlinks require both paths on the
+// same filesystem, which holds for our standard data-dir layout.
 func (m *manager) installForkSharedMemFile(forkDataDir string, tpl *templates.Template) error {
 	if tpl == nil {
 		return nil
@@ -276,8 +284,8 @@ func (m *manager) installForkSharedMemFile(forkDataDir string, tpl *templates.Te
 	// Tolerate a leftover entry (e.g. from a partial copy that wasn't fully
 	// skipped on a different filesystem layout).
 	_ = os.Remove(dstMem)
-	if err := os.Symlink(srcMem, dstMem); err != nil {
-		return fmt.Errorf("symlink shared mem-file: %w", err)
+	if err := os.Link(srcMem, dstMem); err != nil {
+		return fmt.Errorf("hardlink shared mem-file: %w", err)
 	}
 	return nil
 }

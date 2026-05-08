@@ -260,9 +260,9 @@ type ForkInstanceRequest struct {
 
 	// TemplateID resolves the source instance from the template registry by
 	// id-or-name. When set, the source instance id passed to ForkInstance is
-	// ignored (must be empty). The fork's mem-file is shared with the
-	// template's mem-file via symlink instead of being copied per-fork, so
-	// many forks fan out from the same warm guest memory.
+	// ignored (must be empty). The fork's mem-file is hardlinked to the
+	// template's mem-file instead of being copied per-fork, so many forks
+	// fan out from the same warm guest memory.
 	TemplateID string
 }
 
