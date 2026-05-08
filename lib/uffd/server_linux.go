@@ -145,6 +145,10 @@ func (s *Server) startListener(ctx context.Context, forkID string, socketPath st
 			}
 		}
 
+		s.installPrefetcher(forkID, func(list *HotPageList) error {
+			return s.prefetchInto(fd, regions, list)
+		})
+
 		s.servePageFaults(hctx, fd, regions, forkID)
 	}()
 
@@ -272,12 +276,13 @@ func (s *Server) copyPageForFault(fd int, regions []MemoryRegion, addr uint64, p
 	pageSize := uint64(s.pageSize)
 	pageStart := addr &^ (pageSize - 1)
 
-	for _, r := range regions {
+	for idx, r := range regions {
 		base := uint64(r.BaseHostAddr)
 		if pageStart < base || pageStart >= base+r.Size {
 			continue
 		}
-		offset := int64(r.MemFileOffset + (pageStart - base))
+		regionOff := pageStart - base
+		offset := int64(r.MemFileOffset + regionOff)
 		if _, err := s.memFile.ReadAt(page, offset); err != nil && !errors.Is(err, io.EOF) {
 			return fmt.Errorf("uffd: read template at %d: %w", offset, err)
 		}
@@ -294,9 +299,54 @@ func (s *Server) copyPageForFault(fd int, regions []MemoryRegion, addr uint64, p
 			}
 			return fmt.Errorf("uffd: UFFDIO_COPY: %w", err)
 		}
+		if s.cfg.RecordHotPages {
+			s.hotPages.Add(HotPage{Region: uint32(idx), PageOffset: regionOff})
+		}
 		return nil
 	}
 	return fmt.Errorf("uffd: fault addr 0x%x outside any registered region", addr)
+}
+
+// prefetchInto walks list and issues a UFFDIO_COPY for each entry
+// against the supplied fork's userfaultfd. It tolerates EEXIST/EAGAIN
+// the same way the fault handler does so a racing first-touch fault
+// from a vCPU does not abort the whole prefetch.
+func (s *Server) prefetchInto(fd int, regions []MemoryRegion, list *HotPageList) error {
+	if list == nil {
+		return nil
+	}
+	pages := list.Snapshot()
+	if len(pages) == 0 {
+		return nil
+	}
+	page := make([]byte, s.pageSize)
+	pageSize := uint64(s.pageSize)
+	for _, hp := range pages {
+		if int(hp.Region) >= len(regions) {
+			return fmt.Errorf("uffd: prefetch entry refers to region %d (only %d registered)", hp.Region, len(regions))
+		}
+		r := regions[hp.Region]
+		if hp.PageOffset+pageSize > r.Size {
+			return fmt.Errorf("uffd: prefetch offset %d outside region %d size %d", hp.PageOffset, hp.Region, r.Size)
+		}
+		dst := uint64(r.BaseHostAddr) + hp.PageOffset
+		src := int64(r.MemFileOffset + hp.PageOffset)
+		if _, err := s.memFile.ReadAt(page, src); err != nil && !errors.Is(err, io.EOF) {
+			return fmt.Errorf("uffd: prefetch read template at %d: %w", src, err)
+		}
+		copyArg := uffdioCopyArg{
+			Dst: dst,
+			Src: uint64(uintptr(unsafe.Pointer(&page[0]))),
+			Len: pageSize,
+		}
+		if err := ioctl(fd, uffdioCopyIoctl, unsafe.Pointer(&copyArg)); err != nil {
+			if errors.Is(err, syscall.EEXIST) || errors.Is(err, syscall.EAGAIN) {
+				continue
+			}
+			return fmt.Errorf("uffd: prefetch UFFDIO_COPY: %w", err)
+		}
+	}
+	return nil
 }
 
 func ioctl(fd int, req uintptr, arg unsafe.Pointer) error {
