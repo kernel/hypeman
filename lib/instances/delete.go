@@ -146,6 +146,12 @@ func (m *manager) deleteInstance(
 		return fmt.Errorf("delete instance data: %w", err)
 	}
 
+	if stored.ForkOfTemplate != "" && m.uffd != nil {
+		if err := m.uffd.releaseUffdForFork(stored.ForkOfTemplate, id); err != nil {
+			log.WarnContext(ctx, "failed to release uffd page server for fork", "instance_id", id, "template_id", stored.ForkOfTemplate, "error", err)
+		}
+	}
+
 	log.InfoContext(ctx, "instance deleted successfully", "instance_id", id)
 	return nil
 }

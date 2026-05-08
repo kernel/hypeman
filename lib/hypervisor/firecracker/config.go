@@ -75,10 +75,19 @@ type snapshotCreateParams struct {
 
 type snapshotLoadParams struct {
 	MemFilePath         string            `json:"mem_file_path,omitempty"`
+	MemBackend          *memBackend       `json:"mem_backend,omitempty"`
 	SnapshotPath        string            `json:"snapshot_path"`
 	EnableDiffSnapshots bool              `json:"enable_diff_snapshots,omitempty"`
 	ResumeVM            bool              `json:"resume_vm,omitempty"`
 	NetworkOverrides    []networkOverride `json:"network_overrides,omitempty"`
+}
+
+// memBackend selects how firecracker materializes guest memory during
+// restore. backend_type "Uffd" hands page-fault handling off to a
+// userfaultfd page server reachable at backend_path (Unix domain socket).
+type memBackend struct {
+	BackendType string `json:"backend_type"`
+	BackendPath string `json:"backend_path"`
 }
 
 type networkOverride struct {
@@ -103,6 +112,11 @@ type instanceInfo struct {
 type restoreMetadata struct {
 	NetworkOverrides      []networkOverride `json:"network_overrides,omitempty"`
 	SnapshotSourceDataDir string            `json:"snapshot_source_data_dir,omitempty"`
+	// UffdSocketPath, when non-empty, makes loadSnapshot send a Uffd
+	// mem_backend pointing at the page server instead of letting
+	// firecracker mmap the mem-file directly. PrepareFork records it
+	// per fork so RestoreVM can pick it up after a hypeman restart.
+	UffdSocketPath string `json:"uffd_socket_path,omitempty"`
 }
 
 func toBootSource(cfg hypervisor.VMConfig) bootSource {
@@ -212,14 +226,25 @@ func toSnapshotCreateParams(snapshotDir string) snapshotCreateParams {
 	}
 }
 
-func toSnapshotLoadParams(snapshotDir string, networkOverrides []networkOverride) snapshotLoadParams {
-	return snapshotLoadParams{
-		MemFilePath:         snapshotMemoryPath(snapshotDir),
+func toSnapshotLoadParams(snapshotDir string, networkOverrides []networkOverride, uffdSocketPath string) snapshotLoadParams {
+	params := snapshotLoadParams{
 		SnapshotPath:        snapshotStatePath(snapshotDir),
 		EnableDiffSnapshots: true,
 		ResumeVM:            false,
 		NetworkOverrides:    networkOverrides,
 	}
+	if uffdSocketPath != "" {
+		// Firecracker rejects load requests that set both mem_file_path
+		// and a uffd backend. The page server takes the file path through
+		// its own configuration, so we drop it from the request.
+		params.MemBackend = &memBackend{
+			BackendType: "Uffd",
+			BackendPath: uffdSocketPath,
+		}
+	} else {
+		params.MemFilePath = snapshotMemoryPath(snapshotDir)
+	}
+	return params
 }
 
 func snapshotStatePath(snapshotDir string) string {

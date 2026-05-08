@@ -345,6 +345,19 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 		if forkMeta.NetworkEnabled {
 			netCfg = &hypervisor.ForkNetworkConfig{TAPDevice: network.GenerateTAPName(forkID)}
 		}
+		uffdSourceID := ""
+		if shareMemFile {
+			uffdSourceID = stored.Id
+		}
+		uffdSocketPath, err := m.acquireForkUffdIfApplicable(ctx, uffdSourceID, forkID, stored.HypervisorType)
+		if err != nil {
+			return nil, fmt.Errorf("attach uffd page server: %w", err)
+		}
+		if uffdSocketPath != "" {
+			cu.Add(func() {
+				_ = m.uffd.releaseUffdForFork(uffdSourceID, forkID)
+			})
+		}
 		if _, err := starter.PrepareFork(ctx, hypervisor.ForkPrepareRequest{
 			SnapshotConfigPath: snapshotConfigPath,
 			SourceDataDir:      stored.DataDir,
@@ -353,6 +366,7 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 			VsockSocket:        forkMeta.VsockSocket,
 			SerialLogPath:      m.paths.InstanceAppLog(forkID),
 			Network:            netCfg,
+			UffdSocketPath:     uffdSocketPath,
 		}); err != nil {
 			if errors.Is(err, hypervisor.ErrNotSupported) {
 				return nil, fmt.Errorf("%w: fork is not supported for hypervisor %s", ErrNotSupported, stored.HypervisorType)

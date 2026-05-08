@@ -551,3 +551,98 @@ func TestFirecrackerSnapshotFeature(t *testing.T) {
 		forkName:   "fc-snapshot-fork",
 	})
 }
+
+// TestFirecrackerForkFromTemplate exercises the full template-driven fork
+// path under the state-machine design: a firecracker source goes Running →
+// Standby, the first fork implicitly promotes it to Template, and the fork:
+//
+//	(a) reaches Running,
+//	(b) has its mem-file as a symlink into the template's snapshot dir,
+//	(c) bumps the template's ForkCount to 1,
+//	(d) registers with the per-template uffd page server,
+//	(e) on delete, decrements the ForkCount and detaches from uffd.
+func TestFirecrackerForkFromTemplate(t *testing.T) {
+	t.Parallel()
+	requireFirecrackerIntegrationPrereqs(t)
+
+	mgr, tmpDir := setupTestManagerForFirecracker(t)
+	ctx := context.Background()
+	p := paths.New(tmpDir)
+
+	imageManager, err := images.NewManager(p, 1, nil)
+	require.NoError(t, err)
+	createNginxImageAndWait(t, ctx, imageManager)
+
+	systemManager := system.NewManager(p)
+	require.NoError(t, systemManager.EnsureSystemFiles(ctx))
+	require.NoError(t, mgr.networkManager.Initialize(ctx, nil))
+
+	source, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
+		Name:           "fc-tpl-src",
+		Image:          integrationTestImageRef(t, "docker.io/library/nginx:alpine"),
+		Size:           1024 * 1024 * 1024,
+		HotplugSize:    256 * 1024 * 1024,
+		OverlaySize:    5 * 1024 * 1024 * 1024,
+		Vcpus:          1,
+		NetworkEnabled: true,
+		Hypervisor:     hypervisor.TypeFirecracker,
+	})
+	require.NoError(t, err)
+	source, err = waitForInstanceState(ctx, mgr, source.Id, StateRunning, integrationTestTimeout(20*time.Second))
+	require.NoError(t, err)
+	sourceID := source.Id
+	t.Cleanup(func() { _ = mgr.DeleteInstance(context.Background(), sourceID) })
+
+	// Standby is the precondition for fan-out: it produces the snapshot the
+	// fork will descend from.
+	source, err = mgr.StandbyInstance(ctx, sourceID, StandbyInstanceRequest{})
+	require.NoError(t, err)
+	require.Equal(t, StateStandby, source.State)
+	require.True(t, source.HasSnapshot)
+
+	// Forking from the standby source implicitly promotes it to Template.
+	forked, err := mgr.ForkInstance(ctx, sourceID, ForkInstanceRequest{
+		Name:        "fc-tpl-fork",
+		TargetState: StateRunning,
+	})
+	require.NoError(t, err)
+	forked, err = waitForInstanceState(ctx, mgr, forked.Id, StateRunning, integrationTestTimeout(30*time.Second))
+	require.NoError(t, err)
+	require.Equal(t, StateRunning, forked.State)
+	forkID := forked.Id
+	deletedFork := false
+	t.Cleanup(func() {
+		if !deletedFork {
+			_ = mgr.DeleteInstance(context.Background(), forkID)
+		}
+	})
+
+	// (b) The fork's mem-file must be a symlink into the source's snapshot.
+	forkMemPath := filepath.Join(p.InstanceSnapshotLatest(forkID), templateSharedMemFileName)
+	info, err := os.Lstat(forkMemPath)
+	require.NoError(t, err, "fork mem-file should exist at snapshot-latest/memory")
+	assert.Equal(t, os.ModeSymlink, info.Mode()&os.ModeSymlink, "fork mem-file should be a symlink, not a copy")
+	target, err := os.Readlink(forkMemPath)
+	require.NoError(t, err)
+	expectedTarget := filepath.Join(p.InstanceSnapshotLatest(sourceID), templateSharedMemFileName)
+	assert.Equal(t, expectedTarget, target, "fork mem-file symlink should point at the template's mem-file")
+
+	// (c) The source instance is now a Template with ForkCount=1.
+	sourceMeta, err := mgr.loadMetadata(sourceID)
+	require.NoError(t, err)
+	assert.True(t, sourceMeta.StoredMetadata.IsTemplate, "source should be promoted to Template on first fork")
+	assert.Equal(t, 1, sourceMeta.StoredMetadata.ForkCount, "template fork refcount should be 1 after one fork")
+
+	// (d) The per-template uffd page server should be tracking this fork.
+	require.NotNil(t, mgr.uffd)
+	assert.True(t, mgr.uffd.hasFork(sourceID, forkID), "uffd tracker should report fork as registered against its template")
+
+	// Deleting the fork drops the refcount and detaches from uffd.
+	require.NoError(t, mgr.DeleteInstance(ctx, forkID))
+	deletedFork = true
+
+	sourceMetaAfter, err := mgr.loadMetadata(sourceID)
+	require.NoError(t, err)
+	assert.Equal(t, 0, sourceMetaAfter.StoredMetadata.ForkCount, "template fork refcount should drop back to 0")
+	assert.False(t, mgr.uffd.hasFork(sourceID, forkID), "uffd tracker should no longer track the deleted fork")
+}

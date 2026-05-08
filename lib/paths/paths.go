@@ -260,6 +260,17 @@ func (p *Paths) SnapshotGuestDir(snapshotID string) string {
 	return filepath.Join(p.SnapshotDir(snapshotID), "guest")
 }
 
+// TemplateUffdDir returns the directory that holds the per-fork
+// userfaultfd page-server sockets for a template instance. Sockets live
+// in a dedicated subdirectory of the template's instance dir, keyed by
+// the source (template) instance id rather than each fork's id, because
+// Unix domain socket paths are tightly length-limited and one server
+// fans out to many forks.
+func (p *Paths) TemplateUffdDir(templateInstanceID string) string {
+	return filepath.Join(p.InstanceDir(templateInstanceID), "uffd")
+}
+
+
 // Device path methods
 
 // DevicesDir returns the root devices directory.

@@ -53,6 +53,10 @@ func (s *Starter) PrepareFork(ctx context.Context, req hypervisor.ForkPrepareReq
 			changed = true
 		}
 	}
+	if meta.UffdSocketPath != req.UffdSocketPath {
+		meta.UffdSocketPath = req.UffdSocketPath
+		changed = true
+	}
 
 	if changed {
 		if err := saveRestoreMetadataState(instanceDir, meta); err != nil {

@@ -119,7 +119,7 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 		snapshotSourceAliasMu.Lock()
 		defer snapshotSourceAliasMu.Unlock()
 		return withSnapshotSourceDirAlias(meta, filepath.Dir(socketPath), func() error {
-			return hv.loadSnapshot(ctx, snapshotPath, meta.NetworkOverrides)
+			return hv.loadSnapshot(ctx, snapshotPath, meta.NetworkOverrides, meta.UffdSocketPath)
 		})
 	}()
 	if err != nil {
