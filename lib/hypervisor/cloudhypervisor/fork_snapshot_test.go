@@ -17,7 +17,7 @@ func TestRewriteSnapshotConfigForFork(t *testing.T) {
 
 	orig := map[string]any{
 		"disks":  []any{map[string]any{"path": "/src/guests/a/overlay.raw"}},
-		"serial": map[string]any{"file": "/src/guests/a/logs/app.log"},
+		"serial": map[string]any{"mode": "Socket", "socket": "/src/guests/a/serial.sock"},
 		"vsock":  map[string]any{"cid": float64(100), "socket": "/src/guests/a/vsock.sock"},
 		"metadata": map[string]any{
 			"note": "keep-/src/guests/a-as-substring",
@@ -59,7 +59,10 @@ func TestRewriteSnapshotConfigForFork(t *testing.T) {
 	assert.Equal(t, "/dst/guests/b/overlay.raw", disk0["path"])
 
 	serial := updated["serial"].(map[string]any)
-	assert.Equal(t, "/dst/guests/b/logs/app.log", serial["file"])
+	assert.Equal(t, "Socket", serial["mode"])
+	assert.Equal(t, "/dst/guests/b/serial.sock", serial["socket"])
+	_, hasFile := serial["file"]
+	assert.False(t, hasFile, "fork rewrite should drop legacy serial.file")
 
 	vsock := updated["vsock"].(map[string]any)
 	assert.Equal(t, float64(100), vsock["cid"])
@@ -73,4 +76,63 @@ func TestRewriteSnapshotConfigForFork(t *testing.T) {
 
 	metadata := updated["metadata"].(map[string]any)
 	assert.Equal(t, "keep-/src/guests/a-as-substring", metadata["note"])
+}
+
+func TestRewriteSerialConfigForRestore(t *testing.T) {
+	t.Run("FileToSocket", func(t *testing.T) {
+		path := writeSnapshotConfig(t, map[string]any{
+			"serial": map[string]any{"mode": "File", "file": "/old/logs/app.log"},
+		})
+		require.NoError(t, rewriteSerialConfigForRestore(path, "/inst/logs/app.log"))
+
+		serial := readSerialConfig(t, path)
+		assert.Equal(t, "Socket", serial["mode"])
+		assert.Equal(t, "/inst/serial.sock", serial["socket"])
+		_, hasFile := serial["file"]
+		assert.False(t, hasFile, "legacy file field must be removed")
+	})
+
+	t.Run("AlreadySocketIsIdempotent", func(t *testing.T) {
+		path := writeSnapshotConfig(t, map[string]any{
+			"serial": map[string]any{"mode": "Socket", "socket": "/inst/serial.sock"},
+		})
+		require.NoError(t, rewriteSerialConfigForRestore(path, "/inst/logs/app.log"))
+
+		serial := readSerialConfig(t, path)
+		assert.Equal(t, "Socket", serial["mode"])
+		assert.Equal(t, "/inst/serial.sock", serial["socket"])
+	})
+
+	t.Run("NoSerialBlockIsNoOp", func(t *testing.T) {
+		path := writeSnapshotConfig(t, map[string]any{
+			"disks": []any{map[string]any{"path": "/x"}},
+		})
+		require.NoError(t, rewriteSerialConfigForRestore(path, "/inst/logs/app.log"))
+
+		var cfg map[string]any
+		data, err := os.ReadFile(path)
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(data, &cfg))
+		_, hasSerial := cfg["serial"]
+		assert.False(t, hasSerial, "should not synthesize a serial block")
+	})
+}
+
+func writeSnapshotConfig(t *testing.T, cfg map[string]any) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	data, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, data, 0644))
+	return path
+}
+
+func readSerialConfig(t *testing.T, path string) map[string]any {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	var cfg map[string]any
+	require.NoError(t, json.Unmarshal(data, &cfg))
+	return cfg["serial"].(map[string]any)
 }
