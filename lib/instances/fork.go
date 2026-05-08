@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kernel/hypeman/lib/forkidentity"
 	"github.com/kernel/hypeman/lib/forkvm"
 	"github.com/kernel/hypeman/lib/guest"
 	"github.com/kernel/hypeman/lib/hypervisor"
@@ -319,6 +320,10 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 		}
 	}
 
+	if err := writeForkIdentity(forkMeta.DataDir, forkID); err != nil {
+		return nil, fmt.Errorf("write fork identity: %w", err)
+	}
+
 	newMeta := &metadata{StoredMetadata: forkMeta}
 	if err := m.saveMetadata(newMeta); err != nil {
 		return nil, fmt.Errorf("save fork metadata: %w", err)
@@ -332,6 +337,19 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 		"fork_name", forked.Name,
 		"state", forked.State)
 	return &forked, nil
+}
+
+// writeForkIdentity drops a per-fork identity record into the fork's
+// data directory. The guest agent reads this on boot to reseed
+// /dev/urandom, refresh machine-id, and apply a small clock-forward
+// jitter so concurrent forks don't share crypto state. Failure is
+// fatal because identity reuse is a security regression.
+func writeForkIdentity(dataDir, forkID string) error {
+	id, err := forkidentity.Build(forkID)
+	if err != nil {
+		return err
+	}
+	return forkidentity.Write(dataDir, id)
 }
 
 func (m *manager) validateForkSupport(ctx context.Context, hvType hypervisor.Type) error {
