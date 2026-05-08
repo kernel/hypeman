@@ -15,6 +15,7 @@ import (
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/network"
+	"github.com/kernel/hypeman/lib/templates"
 	"github.com/nrednav/cuid2"
 	"go.opentelemetry.io/otel/attribute"
 	"gvisor.dev/gvisor/pkg/cleanup"
@@ -36,11 +37,22 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 		return nil, "", err
 	}
 
+	resolvedID, tpl, err := m.resolveForkFromTemplateRequest(ctx, id, req)
+	if err != nil {
+		return nil, "", err
+	}
+	id = resolvedID
+
 	meta, err := m.loadMetadata(id)
 	if err != nil {
 		return nil, "", err
 	}
 	source := m.toInstance(ctx, meta)
+	if tpl != nil {
+		if err := validateForkResolvedFromTemplate(tpl, source.HypervisorType); err != nil {
+			return nil, "", err
+		}
+	}
 	targetState, err := resolveForkTargetState(req.TargetState, source.State)
 	if err != nil {
 		return nil, "", err
@@ -65,7 +77,7 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 			return nil, "", fmt.Errorf("standby source instance: %w", err)
 		}
 
-		forked, forkErr := m.forkInstanceFromStoppedOrStandby(ctx, id, req, true)
+		forked, forkErr := m.forkInstanceFromStoppedOrStandby(ctx, id, req, true, tpl)
 		if forkErr == nil {
 			if err := m.rotateSourceVsockForRestore(ctx, id, forked.Id); err != nil {
 				forkErr = fmt.Errorf("prepare source snapshot for restore: %w", err)
@@ -104,7 +116,7 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 		}
 		return forked, targetState, nil
 	case StateStopped, StateStandby:
-		forked, err := m.forkInstanceFromStoppedOrStandby(ctx, id, req, false)
+		forked, err := m.forkInstanceFromStoppedOrStandby(ctx, id, req, false, tpl)
 		if err != nil {
 			return nil, "", err
 		}
@@ -192,7 +204,7 @@ func generateForkSourceVsockCID(sourceID, forkID string, current int64) int64 {
 	return cid
 }
 
-func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id string, req ForkInstanceRequest, supportValidated bool) (*Instance, error) {
+func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id string, req ForkInstanceRequest, supportValidated bool, tpl *templates.Template) (*Instance, error) {
 	log := logger.FromContext(ctx)
 
 	meta, err := m.loadMetadata(id)
@@ -202,6 +214,9 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 
 	source := m.toInstance(ctx, meta)
 	stored := &meta.StoredMetadata
+	if tpl != nil && !stored.IsTemplate {
+		return nil, fmt.Errorf("%w: template %s source instance %s is not flagged as a template parent", ErrInvalidState, tpl.ID, id)
+	}
 
 	switch source.State {
 	case StateStopped, StateStandby:
@@ -255,11 +270,20 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 		}
 	}
 
-	if err := forkvm.CopyGuestDirectory(srcDir, dstDir); err != nil {
+	copyOpts := forkvm.CopyOptions{}
+	if tpl != nil {
+		copyOpts.SkipRelPaths = []string{templateSharedMemFileRelPath}
+	}
+	if err := forkvm.CopyGuestDirectoryWithOptions(srcDir, dstDir, copyOpts); err != nil {
 		if errors.Is(err, forkvm.ErrSparseCopyUnsupported) {
 			return nil, fmt.Errorf("fork requires sparse-capable filesystem (SEEK_DATA/SEEK_HOLE unsupported): %w", err)
 		}
 		return nil, fmt.Errorf("clone guest directory: %w", err)
+	}
+	if tpl != nil {
+		if err := m.installForkSharedMemFile(dstDir, tpl); err != nil {
+			return nil, fmt.Errorf("install shared mem-file: %w", err)
+		}
 	}
 
 	starter, err := m.getVMStarter(stored.HypervisorType)
@@ -280,6 +304,15 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 	forkMeta.VsockSocket = m.paths.InstanceSocket(forkID, hypervisor.VsockSocketNameForType(forkMeta.HypervisorType))
 	forkMeta.ExitCode = nil
 	forkMeta.ExitMessage = ""
+	// Forks of a template carry the template id but never inherit the
+	// IsTemplate flag — they are working copies.
+	forkMeta.IsTemplate = false
+	forkMeta.TemplateID = ""
+	if tpl != nil {
+		forkMeta.ForkOfTemplate = tpl.ID
+	} else {
+		forkMeta.ForkOfTemplate = stored.ForkOfTemplate
+	}
 
 	// Keep the original CID for snapshot-based forks.
 	// Rewriting CID in restored memory snapshots is not reliable across
@@ -322,6 +355,14 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 	newMeta := &metadata{StoredMetadata: forkMeta}
 	if err := m.saveMetadata(newMeta); err != nil {
 		return nil, fmt.Errorf("save fork metadata: %w", err)
+	}
+
+	if tpl != nil {
+		// Bumped before cu.Release so a refcount failure leaves no orphan
+		// fork directory (deferred cu.Clean removes the data dir + metadata).
+		if err := m.bumpTemplateForkRefcount(ctx, tpl); err != nil {
+			return nil, fmt.Errorf("record template fork refcount: %w", err)
+		}
 	}
 
 	cu.Release()

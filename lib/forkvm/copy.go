@@ -11,10 +11,28 @@ import (
 
 var ErrSparseCopyUnsupported = errors.New("sparse copy unsupported")
 
+// CopyOptions tunes CopyGuestDirectory behavior. The zero value reproduces
+// the original full-copy semantics; callers can opt into skipping specific
+// paths when the consumer arranges its own substitute (e.g. a symlink to a
+// template-shared mem-file).
+type CopyOptions struct {
+	// SkipRelPaths lists relative paths under srcDir that should not be
+	// materialized in dstDir. Comparison is exact and uses forward-slash
+	// separators on all platforms.
+	SkipRelPaths []string
+}
+
 // CopyGuestDirectory recursively copies a guest directory to a new destination.
 // Regular files are copied using sparse extent copy only (SEEK_DATA/SEEK_HOLE).
 // Runtime sockets and logs are skipped because they are host-runtime artifacts.
 func CopyGuestDirectory(srcDir, dstDir string) error {
+	return CopyGuestDirectoryWithOptions(srcDir, dstDir, CopyOptions{})
+}
+
+// CopyGuestDirectoryWithOptions is the option-taking variant of
+// CopyGuestDirectory. Use this when forking with template-shared assets, so
+// the caller can install a symlink in place of a heavy copied file.
+func CopyGuestDirectoryWithOptions(srcDir, dstDir string, opts CopyOptions) error {
 	srcInfo, err := os.Stat(srcDir)
 	if err != nil {
 		return fmt.Errorf("stat source directory: %w", err)
@@ -27,6 +45,11 @@ func CopyGuestDirectory(srcDir, dstDir string) error {
 		return fmt.Errorf("create destination directory: %w", err)
 	}
 
+	skipSet := make(map[string]struct{}, len(opts.SkipRelPaths))
+	for _, p := range opts.SkipRelPaths {
+		skipSet[filepath.ToSlash(p)] = struct{}{}
+	}
+
 	return filepath.WalkDir(srcDir, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -37,6 +60,12 @@ func CopyGuestDirectory(srcDir, dstDir string) error {
 			return fmt.Errorf("compute relative path: %w", err)
 		}
 		if relPath == "." {
+			return nil
+		}
+		if _, skip := skipSet[filepath.ToSlash(relPath)]; skip {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		if d.IsDir() && shouldSkipDirectory(relPath) {

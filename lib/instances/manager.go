@@ -381,7 +381,13 @@ func (m *manager) DeleteSnapshot(ctx context.Context, snapshotID string) error {
 
 // ForkInstance creates a forked copy of an instance.
 func (m *manager) ForkInstance(ctx context.Context, id string, req ForkInstanceRequest) (*Instance, error) {
-	lock := m.getInstanceLock(id)
+	// Resolve TemplateID outside the lock so we hold the source instance
+	// lock — not an empty string lock — when forking from a template.
+	resolvedID, _, err := m.resolveForkFromTemplateRequest(ctx, id, req)
+	if err != nil {
+		return nil, err
+	}
+	lock := m.getInstanceLock(resolvedID)
 	lock.Lock()
 	forked, targetState, err := m.forkInstance(ctx, id, req)
 	lock.Unlock()

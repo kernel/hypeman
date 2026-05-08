@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
@@ -218,4 +220,99 @@ func (m *manager) nowOrDefault() time.Time {
 		return time.Now()
 	}
 	return m.now()
+}
+
+// resolveForkFromTemplateRequest expands a ForkInstanceRequest with a
+// non-empty TemplateID into (sourceInstanceID, *Template). Returns
+// (instanceID, nil, nil) when TemplateID is empty so callers fall through
+// to the ordinary fork path. Returns an error when the caller passed both
+// instanceID and TemplateID, when the registry is unconfigured, or when
+// the template cannot be resolved.
+func (m *manager) resolveForkFromTemplateRequest(ctx context.Context, instanceID string, req ForkInstanceRequest) (string, *templates.Template, error) {
+	if req.TemplateID == "" {
+		return instanceID, nil, nil
+	}
+	if instanceID != "" {
+		return "", nil, fmt.Errorf("%w: pass either an instance id or a template id, not both", ErrInvalidRequest)
+	}
+	if m.templateRegistry == nil {
+		return "", nil, fmt.Errorf("%w: template registry not configured", ErrNotSupported)
+	}
+	tpl, err := m.templateForFork(ctx, req.TemplateID)
+	if err != nil {
+		return "", nil, fmt.Errorf("resolve template %q: %w", req.TemplateID, err)
+	}
+	if tpl == nil {
+		return "", nil, fmt.Errorf("%w: template %q not found", ErrNotFound, req.TemplateID)
+	}
+	if tpl.SourceInstanceID == "" {
+		return "", nil, fmt.Errorf("%w: template %s has no source instance", ErrInvalidState, tpl.ID)
+	}
+	return tpl.SourceInstanceID, tpl, nil
+}
+
+// installForkSharedMemFile arranges the fork's snapshot directory so the
+// guest mem-file is a symlink into the template's snapshot directory
+// instead of a per-fork copy. firecracker mmaps the mem-file MAP_PRIVATE
+// during restore, so all forks COW from the same backing file.
+//
+// Layout: dst is the fork's data dir. The snapshot dir is at
+// <dst>/snapshots/snapshot-latest, and the mem-file lives at
+// <snapshot dir>/memory. The symlink target is the template's source
+// instance's standby snapshot mem-file.
+func (m *manager) installForkSharedMemFile(forkDataDir string, tpl *templates.Template) error {
+	if tpl == nil {
+		return nil
+	}
+	srcMem := filepath.Join(m.paths.InstanceSnapshotLatest(tpl.SourceInstanceID), templateSharedMemFileName)
+	if _, err := os.Stat(srcMem); err != nil {
+		return fmt.Errorf("stat template mem-file: %w", err)
+	}
+	dstSnapshotDir := filepath.Join(forkDataDir, "snapshots", "snapshot-latest")
+	if err := os.MkdirAll(dstSnapshotDir, 0o755); err != nil {
+		return fmt.Errorf("ensure fork snapshot dir: %w", err)
+	}
+	dstMem := filepath.Join(dstSnapshotDir, templateSharedMemFileName)
+	// Tolerate a leftover entry (e.g. from a partial copy that wasn't fully
+	// skipped on a different filesystem layout).
+	_ = os.Remove(dstMem)
+	if err := os.Symlink(srcMem, dstMem); err != nil {
+		return fmt.Errorf("symlink shared mem-file: %w", err)
+	}
+	return nil
+}
+
+// templateSharedMemFileRelPath is the relative path under the source data
+// dir that points at the snapshotted guest mem-file. Encoded here so the
+// fork copy step can skip it without importing firecracker internals.
+const (
+	templateSharedMemFileName    = "memory"
+	templateSharedMemFileRelPath = "snapshots/snapshot-latest/memory"
+)
+
+// bumpTemplateForkRefcount records that a fork now depends on a template.
+// Best-effort touch of LastUsedAt happens alongside.
+func (m *manager) bumpTemplateForkRefcount(ctx context.Context, tpl *templates.Template) error {
+	if tpl == nil || m.templateRegistry == nil {
+		return nil
+	}
+	if _, err := m.templateRegistry.IncrementForkCount(ctx, tpl.ID); err != nil {
+		return fmt.Errorf("increment template fork count: %w", err)
+	}
+	m.touchTemplateUsage(ctx, tpl.ID)
+	return nil
+}
+
+// dropTemplateForkRefcount mirrors bumpTemplateForkRefcount and is called
+// when a fork instance is deleted. Missing templates are tolerated so
+// orphaned forks don't block delete.
+func (m *manager) dropTemplateForkRefcount(ctx context.Context, templateID string) {
+	if templateID == "" || m.templateRegistry == nil {
+		return
+	}
+	if _, err := m.templateRegistry.DecrementForkCount(ctx, templateID); err != nil {
+		log := logger.FromContext(ctx)
+		log.WarnContext(ctx, "failed to decrement template fork refcount",
+			"template_id", templateID, "error", err)
+	}
 }

@@ -57,6 +57,10 @@ func (m *manager) restoreInstance(
 		log.ErrorContext(ctx, "no snapshot available", "instance_id", id)
 		return nil, fmt.Errorf("no snapshot available for instance %s", id)
 	}
+	if err := m.templateGuard(stored, "restore"); err != nil {
+		log.ErrorContext(ctx, "refusing to restore template instance", "instance_id", id, "template_id", stored.TemplateID)
+		return nil, err
+	}
 
 	// 2b. Validate aggregate resource limits before allocating resources (if configured)
 	reservedResources := false

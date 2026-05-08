@@ -35,6 +35,18 @@ func (m *manager) deleteInstance(
 	stored := &meta.StoredMetadata
 	log.DebugContext(ctx, "loaded instance", "instance_id", id, "state", inst.State)
 
+	// If this instance was promoted to a template parent, refuse to delete
+	// it while live forks reference it. Removing the registry entry now
+	// (instead of after the data wipe) gives us a single transactional
+	// "in-use" check via templates.ErrInUse.
+	if stored.IsTemplate && stored.TemplateID != "" && m.templateRegistry != nil {
+		if err := m.templateRegistry.Delete(ctx, stored.TemplateID); err != nil {
+			return fmt.Errorf("delete template registry entry for instance %s: %w", id, err)
+		}
+		stored.IsTemplate = false
+		stored.TemplateID = ""
+	}
+
 	target, err := m.cancelAndWaitCompressionJob(ctx, m.snapshotJobKeyForInstance(id))
 	if err != nil {
 		return fmt.Errorf("wait for instance compression to stop: %w", err)
@@ -134,6 +146,12 @@ func (m *manager) deleteInstance(
 	if err := m.deleteInstanceData(id); err != nil {
 		log.ErrorContext(ctx, "failed to delete instance data", "instance_id", id, "error", err)
 		return fmt.Errorf("delete instance data: %w", err)
+	}
+
+	// 9. If this instance was a fork of a template, drop the template's
+	// fork refcount so the template can eventually be deleted.
+	if stored.ForkOfTemplate != "" {
+		m.dropTemplateForkRefcount(ctx, stored.ForkOfTemplate)
 	}
 
 	log.InfoContext(ctx, "instance deleted successfully", "instance_id", id)

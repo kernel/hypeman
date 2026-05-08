@@ -47,6 +47,10 @@ func (m *manager) startInstance(
 		log.ErrorContext(ctx, "invalid state for start", "instance_id", id, "state", inst.State)
 		return nil, fmt.Errorf("%w: cannot start from state %s, must be Stopped", ErrInvalidState, inst.State)
 	}
+	if err := m.templateGuard(stored, "start"); err != nil {
+		log.ErrorContext(ctx, "refusing to start template instance", "instance_id", id, "template_id", stored.TemplateID)
+		return nil, err
+	}
 
 	// 2a. Clear stale exit info from previous run and apply command overrides
 	stored.ExitCode = nil

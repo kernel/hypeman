@@ -257,6 +257,13 @@ type ForkInstanceRequest struct {
 	Name        string // Required: name for the new forked instance
 	FromRunning bool   // Optional: allow forking from Running by auto standby/fork/restore
 	TargetState State  // Optional: desired final state of forked instance (Stopped, Standby, Running). Empty means inherit source state.
+
+	// TemplateID resolves the source instance from the template registry by
+	// id-or-name. When set, the source instance id passed to ForkInstance is
+	// ignored (must be empty). The fork's mem-file is shared with the
+	// template's mem-file via symlink instead of being copied per-fork, so
+	// many forks fan out from the same warm guest memory.
+	TemplateID string
 }
 
 // SnapshotKind determines how snapshot data is captured and restored.
