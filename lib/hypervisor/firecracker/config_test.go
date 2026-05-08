@@ -82,12 +82,19 @@ func TestSnapshotParamPaths(t *testing.T) {
 
 	load := toSnapshotLoadParams("/tmp/snapshot-latest", []networkOverride{
 		{IfaceID: "eth0", HostDevName: "hype-abc123"},
-	})
+	}, "")
 	assert.Equal(t, "/tmp/snapshot-latest/state", load.SnapshotPath)
 	assert.Equal(t, "/tmp/snapshot-latest/memory", load.MemFilePath)
+	assert.Nil(t, load.MemBackend)
 	assert.True(t, load.EnableDiffSnapshots)
 	assert.False(t, load.ResumeVM)
 	require.Len(t, load.NetworkOverrides, 1)
+
+	loadUffd := toSnapshotLoadParams("/tmp/snapshot-latest", nil, "/run/uffd/abc.sock")
+	assert.Equal(t, "", loadUffd.MemFilePath, "mem_file_path must be empty when a uffd backend is set")
+	require.NotNil(t, loadUffd.MemBackend)
+	assert.Equal(t, "Uffd", loadUffd.MemBackend.BackendType)
+	assert.Equal(t, "/run/uffd/abc.sock", loadUffd.MemBackend.BackendPath)
 }
 
 func TestToBalloonConfig(t *testing.T) {

@@ -146,6 +146,12 @@ type ForkPrepareRequest struct {
 
 	SerialLogPath string
 	Network       *ForkNetworkConfig
+
+	// UffdSocketPath is set when the fork should restore from a userfaultfd
+	// page-server socket instead of mmap'ing its mem-file directly. The
+	// hypervisor records this so RestoreVM can attach a uffd memory backend
+	// in the snapshot/load request. Empty means use the default mmap path.
+	UffdSocketPath string
 }
 
 // ForkPrepareResult describes which optional fork rewrites were actually applied.

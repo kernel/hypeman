@@ -279,6 +279,14 @@ func (p *Paths) TemplateMetadata(id string) string {
 	return filepath.Join(p.TemplateDir(id), "template.json")
 }
 
+// TemplateUffdDir returns the directory under a template that holds the
+// per-fork userfaultfd page-server sockets. Sockets live here (rather than
+// inside each fork's data dir) because Unix domain socket paths are tightly
+// length-limited; the template id keeps the prefix short and stable.
+func (p *Paths) TemplateUffdDir(id string) string {
+	return filepath.Join(p.TemplateDir(id), "uffd")
+}
+
 // Device path methods
 
 // DevicesDir returns the root devices directory.

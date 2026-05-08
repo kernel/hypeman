@@ -154,6 +154,11 @@ type manager struct {
 	// fork/delete). Constructed lazily so existing managers without
 	// template support keep working unchanged.
 	templateRegistry templates.Registry
+
+	// uffd is the per-template userfaultfd page-server tracker. nil on
+	// non-Linux hosts; on Linux it is started lazily for forks that
+	// resolve to a template and torn down once no forks remain.
+	uffd *uffdTracker
 }
 
 // platformStarters is populated by platform-specific init functions.
@@ -209,6 +214,7 @@ func NewManagerWithConfig(p *paths.Paths, imageManager images.Manager, systemMan
 		nativeCodecPaths:  make(map[string]string),
 		lifecycleEvents:   newLifecycleSubscribersWithBufferSize(managerConfig.LifecycleEventBufferSize),
 		templateRegistry:  templates.NewFileRegistry(p.TemplatesDir()),
+		uffd:              newUffdTracker(),
 	}
 	m.deleteSnapshotFn = m.deleteSnapshot
 

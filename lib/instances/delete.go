@@ -149,9 +149,15 @@ func (m *manager) deleteInstance(
 	}
 
 	// 9. If this instance was a fork of a template, drop the template's
-	// fork refcount so the template can eventually be deleted.
+	// fork refcount so the template can eventually be deleted, and
+	// detach it from the uffd page server if one is running.
 	if stored.ForkOfTemplate != "" {
 		m.dropTemplateForkRefcount(ctx, stored.ForkOfTemplate)
+		if m.uffd != nil {
+			if err := m.uffd.releaseUffdForFork(stored.ForkOfTemplate, id); err != nil {
+				log.WarnContext(ctx, "failed to release uffd page server for fork", "instance_id", id, "template_id", stored.ForkOfTemplate, "error", err)
+			}
+		}
 	}
 
 	log.InfoContext(ctx, "instance deleted successfully", "instance_id", id)
