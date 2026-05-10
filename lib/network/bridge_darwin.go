@@ -4,6 +4,7 @@ package network
 
 import (
 	"context"
+	"time"
 
 	"github.com/kernel/hypeman/lib/logger"
 )
@@ -58,7 +59,7 @@ func (m *manager) queryNetworkState(bridgeName string) (*Network, error) {
 }
 
 // CleanupOrphanedTAPs is a no-op on macOS as we don't create TAP devices.
-func (m *manager) CleanupOrphanedTAPs(ctx context.Context, runningInstanceIDs []string) int {
+func (m *manager) CleanupOrphanedTAPs(ctx context.Context, preserveInstanceIDs []string, minAge time.Duration) int {
 	return 0
 }
 
