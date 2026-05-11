@@ -50,7 +50,7 @@ func (m *manager) restoreInstance(
 	// 2. Validate state
 	if inst.State != StateStandby {
 		log.ErrorContext(ctx, "invalid state for restore", "instance_id", id, "state", inst.State)
-		return nil, fmt.Errorf("%w: cannot restore from state %s", ErrInvalidState, inst.State)
+		return nil, fmt.Errorf("%w: cannot restore from state %s, must be %s", ErrInvalidState, inst.State, StateStandby)
 	}
 
 	if !inst.HasSnapshot {
