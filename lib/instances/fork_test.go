@@ -18,6 +18,7 @@ import (
 	"github.com/kernel/hypeman/lib/guest"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
+	"github.com/kernel/hypeman/lib/instances/phasetracking"
 	"github.com/kernel/hypeman/lib/paths"
 	snapshotstore "github.com/kernel/hypeman/lib/snapshot"
 	"github.com/stretchr/testify/assert"
@@ -548,6 +549,14 @@ func TestForkCloudHypervisorFromRunningNetwork(t *testing.T) {
 	assert.NotEqual(t, sourceAfterFork.MAC, forked.MAC)
 	assertGuestHasOnlyExpectedIPv4(t, forked, forked.IP, 30*time.Second)
 	assertHostCanReachNginx(t, forked.IP, 80, 60*time.Second)
+
+	// Fork must start with a fresh phase ledger and not inherit the source's
+	// accumulated running time. The source has completed at least one running
+	// stint by now (running -> internal-standby -> running); the fork is still
+	// in its first running stint and so has no completed running ms logged.
+	assert.Equal(t, phasetracking.PhaseRunning, forked.Phases.Current)
+	assert.Zero(t, forked.Phases.Cumulative[phasetracking.PhaseRunning], "fork should not inherit source's running ledger")
+	assert.Greater(t, sourceAfterFork.Phases.Cumulative[phasetracking.PhaseRunning], int64(0), "source's pre-fork running stint should be cumulated")
 }
 
 func assertHostCanReachNginx(t *testing.T, ip string, port int, timeout time.Duration) {
