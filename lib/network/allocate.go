@@ -152,6 +152,19 @@ func (m *manager) RecreateAllocation(ctx context.Context, instanceID string, dow
 	return nil
 }
 
+// ReleaseByInstanceID is a best-effort fallback for cases where the full Allocation
+// can't be derived (e.g. metadata read failure during stop, or rollback after a
+// CreateAllocation that succeeded but where downstream metadata writes failed).
+// It deletes the TAP device using the deterministic name from the instance ID and
+// the persisted class ID if available.
+func (m *manager) ReleaseByInstanceID(ctx context.Context, instanceID string) error {
+	return m.ReleaseAllocation(ctx, &Allocation{
+		InstanceID: instanceID,
+		TAPDevice:  GenerateTAPName(instanceID),
+		ClassID:    m.loadClassID(instanceID),
+	})
+}
+
 // ReleaseAllocation cleans up network allocation (shutdown/delete)
 // Takes the allocation directly since it should be retrieved before the VMM is killed.
 // If alloc is nil, this is a no-op (network not allocated or already released).
