@@ -51,7 +51,7 @@ func (m *manager) standbyInstance(
 	// 2. Validate state transition (must be Running to start standby flow)
 	if inst.State != StateRunning {
 		log.ErrorContext(ctx, "invalid state for standby", "instance_id", id, "state", inst.State)
-		return nil, fmt.Errorf("%w: cannot standby from state %s", ErrInvalidState, inst.State)
+		return nil, NewInvalidStateError("standby", inst.State)
 	}
 
 	// 2b. Block standby for vGPU instances (driver limitation - NVIDIA vGPU doesn't support snapshots)

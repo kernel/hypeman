@@ -49,7 +49,7 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 	switch source.State {
 	case StateRunning:
 		if !req.FromRunning {
-			return nil, "", fmt.Errorf("%w: cannot fork from state %s (set from_running=true to allow standby+restore flow)", ErrInvalidState, source.State)
+			return nil, "", fmt.Errorf("%w (set from_running=true to allow standby+restore flow)", NewInvalidStateError("fork", source.State))
 		}
 
 		if err := m.validateForkSupport(ctx, source.HypervisorType); err != nil {
@@ -110,7 +110,7 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 		}
 		return forked, targetState, nil
 	default:
-		return nil, "", fmt.Errorf("%w: cannot fork from state %s (must be Stopped or Standby, or Running with from_running=true)", ErrInvalidState, source.State)
+		return nil, "", NewInvalidStateError("fork", source.State)
 	}
 }
 
@@ -207,7 +207,7 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 	case StateStopped, StateStandby:
 		// allowed
 	default:
-		return nil, fmt.Errorf("%w: cannot fork from state %s (must be Stopped or Standby)", ErrInvalidState, source.State)
+		return nil, NewInvalidStateError("fork", source.State)
 	}
 
 	if !supportValidated {

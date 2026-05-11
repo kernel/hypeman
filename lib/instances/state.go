@@ -1,6 +1,44 @@
 package instances
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
+
+// userActionsByState lists the user-facing API actions a caller can invoke
+// when the instance is in the given state. Used to build self-describing
+// ErrInvalidState messages.
+var userActionsByState = map[State][]string{
+	StateInitializing: {"stop", "update"},
+	StateRunning:      {"stop", "standby", "snapshot", "fork (with from_running=true)", "update"},
+	StateStandby:      {"restore", "fork", "snapshot", "restore_snapshot"},
+	StateStopped:      {"start", "fork", "snapshot", "restore_snapshot"},
+}
+
+// UserActions returns the user-facing API actions a caller can invoke from
+// the current state. Returns nil for states with no caller-invocable actions
+// (transient states like Created/Paused/Shutdown, or StateUnknown).
+func (s State) UserActions() []string {
+	actions := userActionsByState[s]
+	if len(actions) == 0 {
+		return nil
+	}
+	out := make([]string, len(actions))
+	copy(out, actions)
+	return out
+}
+
+// NewInvalidStateError builds an ErrInvalidState that names the attempted
+// action, the current state, and the actions valid from the current state.
+// Use this for caller-facing state-rejection errors so the response tells
+// the caller what they can do next.
+func NewInvalidStateError(action string, current State) error {
+	actions := current.UserActions()
+	if len(actions) == 0 {
+		return fmt.Errorf("%w: cannot %s from state %s (no actions valid from this state)", ErrInvalidState, action, current)
+	}
+	return fmt.Errorf("%w: cannot %s from state %s, valid actions from %s: %s", ErrInvalidState, action, current, current, strings.Join(actions, ", "))
+}
 
 // ValidTransitions defines allowed single-hop state transitions
 // Based on Cloud Hypervisor's actual state machine plus our additions

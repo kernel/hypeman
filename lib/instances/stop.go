@@ -168,7 +168,7 @@ func (m *manager) stopInstance(
 	// 2. Validate state transition (must be active to stop)
 	if inst.State != StateRunning && inst.State != StateInitializing {
 		log.ErrorContext(ctx, "invalid state for stop", "instance_id", id, "state", inst.State)
-		return nil, fmt.Errorf("%w: cannot stop from state %s, must be Running or Initializing", ErrInvalidState, inst.State)
+		return nil, NewInvalidStateError("stop", inst.State)
 	}
 
 	// 3. Get network allocation BEFORE killing VMM (while we can still query it)

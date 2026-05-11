@@ -740,7 +740,7 @@ components:
           type: string
           nullable: true
           description: Last schedule run error, if any.
-          example: "invalid state transition: stopped snapshot requires source in Stopped, got Running"
+          example: "invalid state transition: cannot snapshot from state Paused (no actions valid from this state)"
         created_at:
           type: string
           format: date-time

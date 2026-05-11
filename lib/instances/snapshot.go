@@ -117,7 +117,7 @@ func (m *manager) createSnapshot(ctx context.Context, id string, req CreateSnaps
 				return nil, fmt.Errorf("prepare source snapshot memory for copy: %w", err)
 			}
 		default:
-			return nil, fmt.Errorf("%w: standby snapshot requires source in %s or %s, got %s", ErrInvalidState, StateRunning, StateStandby, inst.State)
+			return nil, NewInvalidStateError("snapshot", inst.State)
 		}
 
 		copyErr := m.copySnapshotPayload(id, snapshotGuestDir)
@@ -186,7 +186,7 @@ func (m *manager) createSnapshot(ctx context.Context, id string, req CreateSnaps
 
 	case SnapshotKindStopped:
 		if inst.State != StateStopped {
-			return nil, fmt.Errorf("%w: stopped snapshot requires source in %s, got %s", ErrInvalidState, StateStopped, inst.State)
+			return nil, NewInvalidStateError("snapshot", inst.State)
 		}
 		if err := m.copySnapshotPayload(id, snapshotGuestDir); err != nil {
 			return nil, err
@@ -261,7 +261,7 @@ func (m *manager) restoreSnapshot(ctx context.Context, id string, snapshotID str
 	}
 	sourceInst := m.toInstance(ctx, sourceMeta)
 	if sourceInst.State == StateRunning {
-		return nil, fmt.Errorf("%w: cannot restore snapshot while source is %s", ErrInvalidState, sourceInst.State)
+		return nil, NewInvalidStateError("restore_snapshot", sourceInst.State)
 	}
 
 	targetState, err := resolveSnapshotTargetState(rec.Snapshot.Kind, req.TargetState)

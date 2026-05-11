@@ -45,7 +45,7 @@ func (m *manager) startInstance(
 	// 2. Validate state (must be Stopped to start)
 	if inst.State != StateStopped {
 		log.ErrorContext(ctx, "invalid state for start", "instance_id", id, "state", inst.State)
-		return nil, fmt.Errorf("%w: cannot start from state %s, must be Stopped", ErrInvalidState, inst.State)
+		return nil, NewInvalidStateError("start", inst.State)
 	}
 
 	// 2a. Clear stale exit info from previous run and apply command overrides

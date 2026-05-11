@@ -409,6 +409,6 @@ func scheduledSnapshotKindForState(state State) (SnapshotKind, error) {
 	case StateRunning, StateStandby:
 		return SnapshotKindStandby, nil
 	default:
-		return "", fmt.Errorf("%w: scheduled snapshot requires source in %s, %s, or %s, got %s", ErrInvalidState, StateRunning, StateStandby, StateStopped, state)
+		return "", NewInvalidStateError("snapshot", state)
 	}
 }
