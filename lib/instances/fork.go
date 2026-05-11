@@ -268,7 +268,7 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 		return nil, fmt.Errorf("get vm starter: %w", err)
 	}
 
-	now := time.Now()
+	now := time.Now().UTC()
 	forkMeta := cloneStoredMetadataWithoutPendingStandbyCompression(meta.StoredMetadata)
 	forkMeta.Id = forkID
 	forkMeta.Name = req.Name
@@ -526,6 +526,7 @@ func cloneStoredMetadata(src StoredMetadata) StoredMetadata {
 		exitCode := *src.ExitCode
 		dst.ExitCode = &exitCode
 	}
+	dst.Phases = src.Phases.Clone()
 
 	return dst
 }

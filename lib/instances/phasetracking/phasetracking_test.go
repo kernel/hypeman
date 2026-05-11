@@ -151,6 +151,55 @@ func TestJSONRoundTrip_ZeroValueOmitted(t *testing.T) {
 	}
 }
 
+// Regression: cloneStoredMetadata used to shallow-copy the embedded Tracker,
+// which aliased the Cumulative map between source and destination. A
+// subsequent Record on either side mutated both. Clone must produce a
+// fully independent tracker.
+func TestClone_IsDeepCopy(t *testing.T) {
+	t0 := time.Date(2026, 5, 11, 0, 0, 0, 0, time.UTC)
+	src := Tracker{
+		Current: PhaseRunning,
+		Since:   t0,
+		Cumulative: map[Phase]int64{
+			PhaseRunning: 1_000,
+			PhaseStandby: 2_000,
+		},
+	}
+
+	dst := src.Clone()
+
+	// Mutating the clone must not affect the source.
+	dst.Record(PhaseStandby, t0.Add(5*time.Second))
+	if got, want := src.Cumulative[PhaseRunning], int64(1_000); got != want {
+		t.Errorf("source running mutated by clone.Record: got %d, want %d", got, want)
+	}
+	if src.Current != PhaseRunning {
+		t.Errorf("source Current mutated by clone.Record: got %q, want %q", src.Current, PhaseRunning)
+	}
+
+	// And vice-versa: mutating the source must not affect the clone.
+	src.Record(PhaseStopped, t0.Add(10*time.Second))
+	if dst.Current != PhaseStandby {
+		t.Errorf("clone Current mutated by src.Record: got %q, want %q", dst.Current, PhaseStandby)
+	}
+	if got := dst.Cumulative[PhaseStopped]; got != 0 {
+		t.Errorf("clone cumulative leaked from src.Record: got %d, want 0", got)
+	}
+}
+
+func TestClone_ZeroValueSafe(t *testing.T) {
+	var src Tracker
+	dst := src.Clone()
+	if dst.Current != "" || !dst.Since.IsZero() || dst.Cumulative != nil {
+		t.Errorf("clone of zero value is not zero: %+v", dst)
+	}
+	// Recording on the clone must not panic and must not touch source.
+	dst.Record(PhaseRunning, time.Now())
+	if src.Current != "" || src.Cumulative != nil {
+		t.Errorf("zero source mutated by clone.Record: %+v", src)
+	}
+}
+
 // Regression: a session that spends 60s running then 300s in standby then
 // 30s running again must report 90s running and 300s standby for billing.
 func TestRecord_BillingScenario(t *testing.T) {

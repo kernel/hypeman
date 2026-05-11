@@ -89,3 +89,16 @@ func (t *Tracker) Reset() {
 	t.Since = time.Time{}
 	t.Cumulative = nil
 }
+
+// Clone returns a deep copy of the tracker. The returned tracker shares no
+// state with the receiver, so independent Record/Reset calls do not interfere.
+func (t Tracker) Clone() Tracker {
+	dst := t
+	if t.Cumulative != nil {
+		dst.Cumulative = make(map[Phase]int64, len(t.Cumulative))
+		for k, v := range t.Cumulative {
+			dst.Cumulative[k] = v
+		}
+	}
+	return dst
+}
