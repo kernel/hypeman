@@ -261,6 +261,15 @@ func advancePhaseIfRunning(stored *StoredMetadata) {
 	if phase != phasetracking.PhaseRunning {
 		return
 	}
+	// Clamp transitionAt forward to Phases.Since. After a restore-from-
+	// early-standby the markers we just parsed can carry timestamps from
+	// the pre-standby boot session, which predate Phases.Since (set at
+	// restore time). Letting Since move backwards would over-count Running
+	// on the next transition by the entire standby interval — billing-
+	// critical, since the field feeds duration accounting.
+	if transitionAt.Before(stored.Phases.Since) {
+		transitionAt = stored.Phases.Since
+	}
 	stored.Phases.Record(phasetracking.PhaseRunning, transitionAt)
 }
 

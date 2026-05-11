@@ -300,6 +300,29 @@ func TestAdvancePhaseIfRunning(t *testing.T) {
 		advancePhaseIfRunning(&stored)
 		assert.Equal(t, phasetracking.PhaseStandby, stored.Phases.Current)
 	})
+
+	t.Run("marker time before Since is clamped forward", func(t *testing.T) {
+		// Restore-from-early-standby: the instance was standbyed mid-boot
+		// before markers ever hydrated. Phases.Since is set at restore time.
+		// When the markers eventually parse, they may carry pre-standby
+		// timestamps (older than restore). Letting Since walk backwards would
+		// over-count Running on the next transition by the full standby
+		// interval — billing-critical.
+		restoreTime := bootStart.Add(1 * time.Hour)
+		stored := StoredMetadata{
+			ProgramStartedAt:  &program, // 500ms after bootStart — predates restore
+			GuestAgentReadyAt: &agent,   // 3s after bootStart — also predates restore
+		}
+		stored.Phases.Record(phasetracking.PhaseInitializing, restoreTime)
+
+		advancePhaseIfRunning(&stored)
+
+		assert.Equal(t, phasetracking.PhaseRunning, stored.Phases.Current)
+		assert.True(t, stored.Phases.Since.Equal(restoreTime),
+			"Since must not move backwards; got %v, want %v", stored.Phases.Since, restoreTime)
+		// No Initializing duration is credited — elapsed at the clamp is zero.
+		assert.Zero(t, stored.Phases.Cumulative[phasetracking.PhaseInitializing])
+	})
 }
 
 func TestHydrateBootMarkersFromLogs_AdvancesPhaseOnRunningTransition(t *testing.T) {
