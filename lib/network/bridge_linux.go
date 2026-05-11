@@ -681,72 +681,47 @@ func (m *manager) addVMClass(ctx context.Context, bridgeName, tapName string, ra
 	}
 	ceilStr := formatTcRate(ceilBps)
 
-	// Start with derived class ID, probe linearly on collision.
-	classIDVal := deriveClassIDVal(tapName)
+	classID := fmt.Sprintf("%04x", deriveClassIDVal(tapName))
+	fullClassID := fmt.Sprintf("1:%s", classID)
 
-	const maxAttempts = 5
-	var lastErr error
-	for attempt := 0; attempt < maxAttempts; attempt++ {
-		classID := fmt.Sprintf("%04x", classIDVal)
-		fullClassID := fmt.Sprintf("1:%s", classID)
-
-		// Try tc class add (NOT replace) so we detect collisions.
-		cmd := exec.Command("tc", "class", "add", "dev", bridgeName, "parent", htbRootClassID,
-			"classid", fullClassID, "htb", "rate", rateStr, "ceil", ceilStr, "prio", "1")
-		cmd.SysProcAttr = &syscall.SysProcAttr{
-			AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
-		}
-		output, err := cmd.CombinedOutput()
-		if err != nil {
-			// Check for "File exists" collision (exit status 2).
-			var exitErr *exec.ExitError
-			if errors.As(err, &exitErr) && exitErr.ExitCode() == 2 && strings.Contains(string(output), "File exists") {
-				if attempt == 0 {
-					m.recordTCClassCollision(ctx, "initial")
-				} else {
-					m.recordTCClassCollision(ctx, "retry")
-				}
-				// Increment class ID, wrapping within valid 16-bit range.
-				// Skip 0 (invalid) and 1 (root class 1:1).
-				classIDVal++
-				if classIDVal == 0 || classIDVal == 1 {
-					classIDVal = 2
-				}
-				lastErr = fmt.Errorf("tc class add: %w (output: %s)", err, string(output))
-				continue
-			}
-			// Non-collision error: return immediately.
-			return "", fmt.Errorf("tc class add vm: %w (output: %s)", err, string(output))
-		}
-
-		// Success — add fq_codel and filter.
-		qdiscCmd := exec.Command("tc", "qdisc", "add", "dev", bridgeName, "parent", fullClassID, "fq_codel")
-		qdiscCmd.SysProcAttr = &syscall.SysProcAttr{
-			AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
-		}
-		qdiscCmd.Run() // Best effort
-
-		tapLink, linkErr := netlink.LinkByName(tapName)
-		if linkErr != nil {
-			return "", fmt.Errorf("get TAP link for filter: %w", linkErr)
-		}
-		tapIndex := tapLink.Attrs().Index
-
-		filterCmd := exec.Command("tc", "filter", "add", "dev", bridgeName, "parent", htbRootHandle,
-			"protocol", "all", "prio", "1", "basic",
-			"match", fmt.Sprintf("meta(rt_iif eq %d)", tapIndex),
-			"flowid", fullClassID)
-		filterCmd.SysProcAttr = &syscall.SysProcAttr{
-			AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
-		}
-		if output, filterErr := filterCmd.CombinedOutput(); filterErr != nil {
-			return "", fmt.Errorf("tc filter add: %w (output: %s)", filterErr, string(output))
-		}
-
-		return classID, nil
+	// Use `tc class replace` for idempotency. `tc class add` fails with EEXIST
+	// when an orphaned class persists from a previous failed cleanup (or, more
+	// rarely, on a 16-bit hash collision in deriveClassIDVal). `replace`
+	// creates the class if missing and updates it in place if it already
+	// exists, which is the correct behavior either way.
+	cmd := exec.Command("tc", "class", "replace", "dev", bridgeName, "parent", htbRootClassID,
+		"classid", fullClassID, "htb", "rate", rateStr, "ceil", ceilStr, "prio", "1")
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+	}
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("tc class replace vm: %w (output: %s)", err, string(output))
 	}
 
-	return "", fmt.Errorf("tc class add failed after %d attempts: %w", maxAttempts, lastErr)
+	qdiscCmd := exec.Command("tc", "qdisc", "add", "dev", bridgeName, "parent", fullClassID, "fq_codel")
+	qdiscCmd.SysProcAttr = &syscall.SysProcAttr{
+		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+	}
+	qdiscCmd.Run() // Best effort
+
+	tapLink, linkErr := netlink.LinkByName(tapName)
+	if linkErr != nil {
+		return "", fmt.Errorf("get TAP link for filter: %w", linkErr)
+	}
+	tapIndex := tapLink.Attrs().Index
+
+	filterCmd := exec.Command("tc", "filter", "add", "dev", bridgeName, "parent", htbRootHandle,
+		"protocol", "all", "prio", "1", "basic",
+		"match", fmt.Sprintf("meta(rt_iif eq %d)", tapIndex),
+		"flowid", fullClassID)
+	filterCmd.SysProcAttr = &syscall.SysProcAttr{
+		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+	}
+	if output, filterErr := filterCmd.CombinedOutput(); filterErr != nil {
+		return "", fmt.Errorf("tc filter add: %w (output: %s)", filterErr, string(output))
+	}
+
+	return classID, nil
 }
 
 // removeVMClass removes the HTB class for a VM from the bridge.
