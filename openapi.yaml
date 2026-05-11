@@ -878,7 +878,31 @@ components:
           $ref: "#/components/schemas/SnapshotPolicy"
         auto_standby:
           $ref: "#/components/schemas/AutoStandbyPolicy"
-    
+        phase_durations_ms:
+          type: object
+          description: |
+            Cumulative milliseconds the instance has spent in each lifecycle
+            phase, including time accrued in the current phase up to the
+            response time. Keys mirror instance states lowercased
+            (running, standby, paused, stopped, created, initializing,
+            shutdown). Consumers (e.g. billing) sum the phases they consider
+            billable.
+          additionalProperties:
+            type: integer
+            format: int64
+          example:
+            running: 60000
+            standby: 300000
+        current_phase:
+          type: string
+          description: The lifecycle phase the instance is currently in.
+          example: running
+        current_phase_since:
+          type: string
+          format: date-time
+          description: When the instance entered current_phase.
+          example: "2026-05-11T14:00:00Z"
+
     PathInfo:
       type: object
       required: [exists]

@@ -13,6 +13,7 @@ import (
 	"github.com/kernel/hypeman/lib/forkvm"
 	"github.com/kernel/hypeman/lib/guest"
 	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/instances/phasetracking"
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/network"
 	"github.com/nrednav/cuid2"
@@ -280,6 +281,17 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 	forkMeta.VsockSocket = m.paths.InstanceSocket(forkID, hypervisor.VsockSocketNameForType(forkMeta.HypervisorType))
 	forkMeta.ExitCode = nil
 	forkMeta.ExitMessage = ""
+	// Forks are new instances; phase accounting must not inherit the source's
+	// cumulative durations. The first transition into the fork's runtime
+	// phase (Standby for snapshot forks, Stopped for stopped forks) will be
+	// recorded by the appropriate operation when the fork is acted on.
+	forkMeta.Phases.Reset()
+	switch source.State {
+	case StateStandby:
+		forkMeta.Phases.Record(phasetracking.PhaseStandby, now)
+	case StateStopped:
+		forkMeta.Phases.Record(phasetracking.PhaseStopped, now)
+	}
 
 	// Keep the original CID for snapshot-based forks.
 	// Rewriting CID in restored memory snapshots is not reliable across

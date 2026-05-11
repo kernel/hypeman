@@ -11,6 +11,7 @@ import (
 	"github.com/kernel/hypeman/lib/autostandby"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/instances"
+	"github.com/kernel/hypeman/lib/instances/phasetracking"
 	mw "github.com/kernel/hypeman/lib/middleware"
 	"github.com/kernel/hypeman/lib/oapi"
 	"github.com/kernel/hypeman/lib/paths"
@@ -529,6 +530,64 @@ func TestCreateInstance_InvalidStandbyCompressionDelayInSnapshotPolicy(t *testin
 	require.True(t, ok, "expected 400 response")
 	assert.Equal(t, "invalid_snapshot_policy", badReq.Code)
 	assert.Contains(t, badReq.Message, "standby_compression_delay")
+}
+
+func TestInstanceToOAPI_EmitsPhaseAccounting(t *testing.T) {
+	t.Parallel()
+
+	t0 := time.Now().Add(-10 * time.Minute)
+	tr := phasetracking.Tracker{}
+	tr.Record(phasetracking.PhaseRunning, t0)
+	tr.Record(phasetracking.PhaseStandby, t0.Add(60*time.Second))
+	tr.Record(phasetracking.PhaseRunning, t0.Add(60*time.Second+5*time.Minute))
+
+	inst := instances.Instance{
+		StoredMetadata: instances.StoredMetadata{
+			Id:             "inst-phases",
+			Name:           "inst-phases",
+			Image:          "docker.io/library/alpine:latest",
+			CreatedAt:      t0,
+			HypervisorType: hypervisor.TypeCloudHypervisor,
+			Phases:         tr,
+		},
+		State: instances.StateRunning,
+	}
+
+	oapiInst := instanceToOAPI(inst)
+
+	require.NotNil(t, oapiInst.CurrentPhase)
+	assert.Equal(t, "running", *oapiInst.CurrentPhase)
+	require.NotNil(t, oapiInst.CurrentPhaseSince)
+	require.NotNil(t, oapiInst.PhaseDurationsMs)
+
+	durations := *oapiInst.PhaseDurationsMs
+	// Standby stint was a completed 300s window — no live accrual since.
+	assert.Equal(t, int64(300_000), durations["standby"])
+	// Running = 60s completed + live time since latest Record. The
+	// recorded-at instant is in the past, so this must be >= 60s.
+	assert.GreaterOrEqual(t, durations["running"], int64(60_000),
+		"running should include the completed 60s stint")
+}
+
+func TestInstanceToOAPI_OmitsPhaseFieldsWhenUnset(t *testing.T) {
+	t.Parallel()
+
+	inst := instances.Instance{
+		StoredMetadata: instances.StoredMetadata{
+			Id:             "inst-no-phases",
+			Name:           "inst-no-phases",
+			Image:          "docker.io/library/alpine:latest",
+			CreatedAt:      time.Now(),
+			HypervisorType: hypervisor.TypeCloudHypervisor,
+		},
+		State: instances.StateStopped,
+	}
+
+	oapiInst := instanceToOAPI(inst)
+
+	assert.Nil(t, oapiInst.CurrentPhase)
+	assert.Nil(t, oapiInst.CurrentPhaseSince)
+	assert.Nil(t, oapiInst.PhaseDurationsMs)
 }
 
 func TestInstanceToOAPI_EmitsStandbyCompressionDelayInSnapshotPolicy(t *testing.T) {

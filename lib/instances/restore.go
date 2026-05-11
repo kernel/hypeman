@@ -12,6 +12,7 @@ import (
 
 	"github.com/kernel/hypeman/lib/guest"
 	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/instances/phasetracking"
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/network"
 	snapshotstore "github.com/kernel/hypeman/lib/snapshot"
@@ -307,6 +308,7 @@ func (m *manager) restoreInstance(
 	// 9. Persist runtime metadata updates without resetting StartedAt.
 	// Restore resumes an existing boot; preserving StartedAt keeps marker
 	// hydration scoped to the original boot timeline.
+	stored.Phases.Record(phasetracking.PhaseRunning, time.Now().UTC())
 	meta = &metadata{StoredMetadata: *stored}
 	if err := m.saveMetadata(meta); err != nil {
 		// VM is running but metadata failed

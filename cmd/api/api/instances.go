@@ -1116,6 +1116,22 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 		oapiInst.Gpu = gpu
 	}
 
+	// Expose phase accounting (cumulative time in each lifecycle phase). The
+	// snapshot rolls in time accrued in the current phase since the last
+	// transition, so consumers don't need a separate "live since" calculation.
+	if inst.Phases.Current != "" {
+		current := string(inst.Phases.Current)
+		oapiInst.CurrentPhase = &current
+		since := inst.Phases.Since
+		oapiInst.CurrentPhaseSince = &since
+		snapshot := inst.Phases.Snapshot(time.Now())
+		out := make(map[string]int64, len(snapshot))
+		for k, v := range snapshot {
+			out[string(k)] = v
+		}
+		oapiInst.PhaseDurationsMs = &out
+	}
+
 	return oapiInst
 }
 

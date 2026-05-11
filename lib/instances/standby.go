@@ -11,6 +11,7 @@ import (
 
 	"github.com/kernel/hypeman/lib/guest"
 	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/instances/phasetracking"
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/network"
 	snapshotstore "github.com/kernel/hypeman/lib/snapshot"
@@ -221,6 +222,7 @@ func (m *manager) standbyInstance(
 			NotBefore: m.nowUTC().Add(compressionDelay),
 		}
 	}
+	stored.Phases.Record(phasetracking.PhaseStandby, now)
 
 	meta = &metadata{StoredMetadata: *stored}
 	if err := m.saveMetadata(meta); err != nil {

@@ -13,6 +13,7 @@ import (
 	"github.com/kernel/hypeman/lib/guestmemory"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
+	"github.com/kernel/hypeman/lib/instances/phasetracking"
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/network"
 	"github.com/kernel/hypeman/lib/system"
@@ -490,6 +491,7 @@ func (m *manager) createInstance(
 	}
 	bootStart := time.Now().UTC()
 	stored.StartedAt = &bootStart
+	stored.Phases.Record(phasetracking.PhaseCreated, bootStart)
 
 	// 18. Save metadata
 	log.DebugContext(ctx, "saving instance metadata", "instance_id", id)
@@ -523,6 +525,7 @@ func (m *manager) createInstance(
 	}
 
 	// 20. Persist runtime metadata updates after VM boot.
+	stored.Phases.Record(phasetracking.PhaseRunning, time.Now().UTC())
 	meta = &metadata{StoredMetadata: *stored}
 	if err := m.saveMetadata(meta); err != nil {
 		// VM is running but metadata failed - log but don't fail
