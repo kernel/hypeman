@@ -282,7 +282,7 @@ func (m *manager) stopInstance(
 	}
 
 	// 10. Update metadata (clear PID, mdev UUID, set StoppedAt)
-	now := time.Now()
+	now := time.Now().UTC()
 	stored.StoppedAt = &now
 	stored.HypervisorPID = nil
 	stored.GPUMdevUUID = "" // Clear mdev UUID since we destroyed it

@@ -212,7 +212,7 @@ func (m *manager) standbyInstance(
 	}
 
 	// 10. Update timestamp and clear PID (hypervisor no longer running)
-	now := time.Now()
+	now := time.Now().UTC()
 	stored.StoppedAt = &now
 	stored.HypervisorPID = nil
 	stored.PendingStandbyCompression = nil
