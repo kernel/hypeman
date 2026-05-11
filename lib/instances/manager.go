@@ -116,6 +116,7 @@ type manager struct {
 	resourceValidator         ResourceValidator // Optional validator for aggregate resource limits
 	instanceLocks             sync.Map          // map[string]*sync.RWMutex - per-instance locks
 	bootMarkerScans           sync.Map          // map[string]time.Time next allowed boot-marker rescan
+	hypervisorStateCache      sync.Map          // map[string]hypervisorStateCacheEntry - last observed hypervisor state per instance
 	hostTopology              *HostTopology     // Cached host CPU topology
 	metrics                   *Metrics
 	meter                     metric.Meter
@@ -243,6 +244,7 @@ func (m *manager) notifyLifecycleEvent(ctx context.Context, action LifecycleEven
 	if inst == nil {
 		return
 	}
+	m.updateCachedHypervisorStateFromInstance(inst)
 	m.lifecycleEvents.Notify(ctx, LifecycleEvent{
 		Action:     action,
 		InstanceID: inst.Id,
@@ -251,6 +253,7 @@ func (m *manager) notifyLifecycleEvent(ctx context.Context, action LifecycleEven
 }
 
 func (m *manager) notifyLifecycleDelete(ctx context.Context, instanceID string) {
+	m.invalidateCachedHypervisorState(instanceID)
 	m.lifecycleEvents.Notify(ctx, LifecycleEvent{
 		Action:     LifecycleEventDelete,
 		InstanceID: instanceID,
