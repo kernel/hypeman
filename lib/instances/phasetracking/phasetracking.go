@@ -39,9 +39,9 @@ const (
 // any phase yet. The first Record call sets Current and Since without
 // accruing time (there is no prior phase to accrue from).
 type Tracker struct {
-	Current    Phase            `json:"current,omitempty"`
-	Since      time.Time        `json:"since,omitempty"`
-	Cumulative map[Phase]int64  `json:"cumulative,omitempty"`
+	Current    Phase           `json:"current,omitempty"`
+	Since      time.Time       `json:"since,omitempty"`
+	Cumulative map[Phase]int64 `json:"cumulative,omitempty"`
 }
 
 // Record transitions into newPhase as of `now`, first accruing time-in-current
