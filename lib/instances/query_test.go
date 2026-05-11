@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/instances/phasetracking"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/stretchr/testify/assert"
@@ -479,4 +480,96 @@ func TestAppLogPathsForMarkerScan_IgnoresArchivedLogs(t *testing.T) {
 
 	paths := m.appLogPathsForMarkerScan(id)
 	require.Equal(t, []string{logPath + ".2", logPath + ".1", logPath}, paths)
+}
+
+func TestHypervisorStateCache_TTL(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	m := &manager{}
+	m.now = func() time.Time { return now }
+
+	_, ok := m.loadCachedHypervisorState("missing")
+	require.False(t, ok)
+
+	m.storeCachedHypervisorState("vm-1", hypervisor.StateRunning)
+	got, ok := m.loadCachedHypervisorState("vm-1")
+	require.True(t, ok)
+	require.Equal(t, hypervisor.StateRunning, got)
+
+	// Advance just under TTL — still a hit.
+	now = now.Add(hypervisorStateCacheTTL - time.Millisecond)
+	got, ok = m.loadCachedHypervisorState("vm-1")
+	require.True(t, ok)
+	require.Equal(t, hypervisor.StateRunning, got)
+
+	// Past TTL — treated as miss so derive_state will re-query.
+	now = now.Add(2 * time.Millisecond)
+	_, ok = m.loadCachedHypervisorState("vm-1")
+	require.False(t, ok)
+}
+
+func TestHypervisorStateCache_InvalidationAndUpdate(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	m := &manager{}
+	m.now = func() time.Time { return now }
+
+	m.storeCachedHypervisorState("vm-1", hypervisor.StateRunning)
+	m.invalidateCachedHypervisorState("vm-1")
+	_, ok := m.loadCachedHypervisorState("vm-1")
+	require.False(t, ok)
+
+	// Lifecycle event with a live-socket state populates the cache.
+	m.updateCachedHypervisorStateFromInstance(&Instance{
+		StoredMetadata: StoredMetadata{Id: "vm-1"},
+		State:          StateInitializing,
+	})
+	got, ok := m.loadCachedHypervisorState("vm-1")
+	require.True(t, ok)
+	require.Equal(t, hypervisor.StateRunning, got)
+
+	m.updateCachedHypervisorStateFromInstance(&Instance{
+		StoredMetadata: StoredMetadata{Id: "vm-1"},
+		State:          StatePaused,
+	})
+	got, ok = m.loadCachedHypervisorState("vm-1")
+	require.True(t, ok)
+	require.Equal(t, hypervisor.StatePaused, got)
+
+	// Standby has no live socket, so the cache must be cleared so the next
+	// derive_state correctly short-circuits to Standby/Stopped via the
+	// socket check rather than reusing a stale Running entry.
+	m.updateCachedHypervisorStateFromInstance(&Instance{
+		StoredMetadata: StoredMetadata{Id: "vm-1"},
+		State:          StateStandby,
+	})
+	_, ok = m.loadCachedHypervisorState("vm-1")
+	require.False(t, ok)
+}
+
+func TestNotifyLifecycleEvent_UpdatesAndDropsHypervisorStateCache(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	m := &manager{
+		lifecycleEvents: newLifecycleSubscribers(),
+	}
+	m.now = func() time.Time { return now }
+
+	inst := &Instance{
+		StoredMetadata: StoredMetadata{Id: "vm-2"},
+		State:          StateRunning,
+	}
+	m.notifyLifecycleEvent(t.Context(), LifecycleEventStart, inst)
+	got, ok := m.loadCachedHypervisorState("vm-2")
+	require.True(t, ok)
+	require.Equal(t, hypervisor.StateRunning, got)
+
+	// Delete must drop the cache so a future re-create with the same id does
+	// not race with a stale entry from before deletion.
+	m.notifyLifecycleDelete(t.Context(), "vm-2")
+	_, ok = m.loadCachedHypervisorState("vm-2")
+	require.False(t, ok)
 }

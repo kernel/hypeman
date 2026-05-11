@@ -412,9 +412,15 @@ func (m *manager) createInstance(
 		cu.Add(func() {
 			// Network cleanup: TAP devices are removed when ReleaseAllocation is called.
 			// In case of unexpected scenarios (like power loss), TAP devices persist until host reboot.
-			if netAlloc, err := m.networkManager.GetAllocation(ctx, id); err == nil {
+			// CreateAllocation just succeeded so the TAP exists on the host. If
+			// GetAllocation can't derive a full allocation here, fall back to ID-based
+			// release rather than silently leaking the TAP.
+			netAlloc, err := m.networkManager.GetAllocation(ctx, id)
+			if err == nil && netAlloc != nil {
 				m.networkManager.ReleaseAllocation(ctx, netAlloc)
+				return
 			}
+			m.networkManager.ReleaseByInstanceID(ctx, id)
 		})
 	}
 

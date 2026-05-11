@@ -21,6 +21,10 @@ type Manager interface {
 	CreateAllocation(ctx context.Context, req AllocateRequest) (*NetworkConfig, error)
 	RecreateAllocation(ctx context.Context, instanceID string, downloadBps, uploadBps int64) error
 	ReleaseAllocation(ctx context.Context, alloc *Allocation) error
+	// ReleaseByInstanceID is a best-effort cleanup fallback when the full Allocation
+	// can't be derived (e.g. metadata read failed). Deletes the TAP device using the
+	// deterministic name from the instance ID.
+	ReleaseByInstanceID(ctx context.Context, instanceID string) error
 
 	// SetupHTB initializes HTB qdisc on the bridge for upload fair sharing.
 	// Should be called during network initialization with the total network capacity.
@@ -30,6 +34,11 @@ type Manager interface {
 	GetAllocation(ctx context.Context, instanceID string) (*Allocation, error)
 	ListAllocations(ctx context.Context) ([]Allocation, error)
 	NameExists(ctx context.Context, name string, excludeInstanceID string) (bool, error)
+
+	// CleanupOrphanedTAPs removes TAP devices not associated with any preserved
+	// instance. Pass minAge>0 to skip TAPs younger than that, which avoids racing
+	// against in-flight CreateAllocation calls whose metadata hasn't been persisted.
+	CleanupOrphanedTAPs(ctx context.Context, preserveInstanceIDs []string, minAge time.Duration) int
 
 	// GetUploadBurstMultiplier returns the configured multiplier for upload burst ceiling.
 	GetUploadBurstMultiplier() int
@@ -96,8 +105,10 @@ func (m *manager) Initialize(ctx context.Context, runningInstanceIDs []string) e
 		return fmt.Errorf("setup default network: %w", err)
 	}
 
-	// Cleanup orphaned TAP devices from previous runs (crashes, power loss, etc.)
-	if deleted := m.CleanupOrphanedTAPs(ctx, runningInstanceIDs); deleted > 0 {
+	// Cleanup orphaned TAP devices from previous runs (crashes, power loss, etc.).
+	// Startup runs before any concurrent CreateAllocation can be in flight, so no
+	// age filter is needed here. The periodic reaper passes a non-zero minAge.
+	if deleted := m.CleanupOrphanedTAPs(ctx, runningInstanceIDs, 0); deleted > 0 {
 		log.InfoContext(ctx, "cleaned up orphaned TAP devices", "count", deleted)
 	}
 
