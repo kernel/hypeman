@@ -1,7 +1,19 @@
 // Package phasetracking accumulates cumulative time-in-phase for instance
-// lifecycle phases (running, standby, paused, etc.). The tracker is embedded
-// in instance metadata and updated at every state transition. Consumers use
-// the resulting durations for billing, observability, and analytics.
+// lifecycle phases. The tracker is embedded in instance metadata and updated
+// at every externally-observable state transition so consumers can use the
+// resulting durations for billing, observability, and analytics.
+//
+// Phases mirror the externally-observable values of instances.State (lowercased
+// so they remain stable in the API surface even if the internal enum is
+// renamed). The Initializing→Running transition is detected lazily when guest
+// boot markers are persisted, so the tracker reflects the same view of guest
+// readiness that the public State machine reports — not the bare moment the
+// VMM process came up.
+//
+// Transient internal substates that no external observer can see — for example
+// the Paused/Shutdown steps inside a single Standby or Stop orchestration — are
+// intentionally not recorded; they would be sub-millisecond blips inside a
+// non-yielding function call that adds noise without truth.
 //
 // Only the transition orchestration sites in lib/instances should call Record.
 // The tracker intentionally does not subscribe to the lifecycle event bus —

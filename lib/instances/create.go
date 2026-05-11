@@ -524,8 +524,11 @@ func (m *manager) createInstance(
 		reservedResources = false
 	}
 
-	// 20. Persist runtime metadata updates after VM boot.
-	stored.Phases.Record(phasetracking.PhaseRunning, time.Now().UTC())
+	// 20. Persist runtime metadata updates after VM boot. The VMM is up but
+	// guest boot markers have not yet been written, so we are in Initializing;
+	// persistBootMarkers will advance us to Running once the markers appear
+	// in the serial log.
+	stored.Phases.Record(phasetracking.PhaseInitializing, time.Now().UTC())
 	meta = &metadata{StoredMetadata: *stored}
 	if err := m.saveMetadata(meta); err != nil {
 		// VM is running but metadata failed - log but don't fail

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kernel/hypeman/lib/instances/phasetracking"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -167,6 +168,172 @@ func TestDeriveRunningState(t *testing.T) {
 			assert.Equal(t, tt.want, deriveRunningState(&tt.stored))
 		})
 	}
+}
+
+func TestRunningPhaseFromMarkers(t *testing.T) {
+	t.Parallel()
+
+	program := time.Date(2026, 5, 11, 12, 0, 0, 0, time.UTC)
+	agent := program.Add(2 * time.Second)
+	agentBeforeProgram := program.Add(-1 * time.Second)
+
+	tests := []struct {
+		name         string
+		stored       StoredMetadata
+		wantPhase    phasetracking.Phase
+		wantTransAt  time.Time
+		wantHasTrans bool
+	}{
+		{
+			name:      "no markers → initializing",
+			stored:    StoredMetadata{},
+			wantPhase: phasetracking.PhaseInitializing,
+		},
+		{
+			name: "skip-agent + program only → running at program time",
+			stored: StoredMetadata{
+				ProgramStartedAt: &program,
+				SkipGuestAgent:   true,
+			},
+			wantPhase:    phasetracking.PhaseRunning,
+			wantTransAt:  program,
+			wantHasTrans: true,
+		},
+		{
+			name: "program without agent → still initializing",
+			stored: StoredMetadata{
+				ProgramStartedAt: &program,
+			},
+			wantPhase: phasetracking.PhaseInitializing,
+		},
+		{
+			name: "both markers, agent later → running at agent time",
+			stored: StoredMetadata{
+				ProgramStartedAt:  &program,
+				GuestAgentReadyAt: &agent,
+			},
+			wantPhase:    phasetracking.PhaseRunning,
+			wantTransAt:  agent,
+			wantHasTrans: true,
+		},
+		{
+			name: "both markers, program later → running at program time",
+			stored: StoredMetadata{
+				ProgramStartedAt:  &program,
+				GuestAgentReadyAt: &agentBeforeProgram,
+			},
+			wantPhase:    phasetracking.PhaseRunning,
+			wantTransAt:  program,
+			wantHasTrans: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotPhase, gotAt := runningPhaseFromMarkers(&tt.stored)
+			assert.Equal(t, tt.wantPhase, gotPhase)
+			if tt.wantHasTrans {
+				assert.True(t, gotAt.Equal(tt.wantTransAt), "transition time = %v, want %v", gotAt, tt.wantTransAt)
+			} else {
+				assert.True(t, gotAt.IsZero(), "expected zero transition time, got %v", gotAt)
+			}
+		})
+	}
+}
+
+func TestAdvancePhaseIfRunning(t *testing.T) {
+	t.Parallel()
+
+	bootStart := time.Date(2026, 5, 11, 12, 0, 0, 0, time.UTC)
+	program := bootStart.Add(500 * time.Millisecond)
+	agent := bootStart.Add(3 * time.Second)
+
+	t.Run("initializing with no markers stays initializing", func(t *testing.T) {
+		stored := StoredMetadata{}
+		stored.Phases.Record(phasetracking.PhaseInitializing, bootStart)
+
+		advancePhaseIfRunning(&stored)
+		assert.Equal(t, phasetracking.PhaseInitializing, stored.Phases.Current)
+	})
+
+	t.Run("initializing with complete markers advances using marker time", func(t *testing.T) {
+		stored := StoredMetadata{
+			ProgramStartedAt:  &program,
+			GuestAgentReadyAt: &agent,
+		}
+		stored.Phases.Record(phasetracking.PhaseInitializing, bootStart)
+
+		advancePhaseIfRunning(&stored)
+
+		assert.Equal(t, phasetracking.PhaseRunning, stored.Phases.Current)
+		assert.True(t, stored.Phases.Since.Equal(agent), "Since should be marker time, got %v", stored.Phases.Since)
+		// Initializing duration should reflect bootStart→agent, not now.
+		wantMs := agent.Sub(bootStart).Milliseconds()
+		assert.Equal(t, wantMs, stored.Phases.Cumulative[phasetracking.PhaseInitializing])
+	})
+
+	t.Run("idempotent: already running stays running", func(t *testing.T) {
+		stored := StoredMetadata{
+			ProgramStartedAt:  &program,
+			GuestAgentReadyAt: &agent,
+		}
+		stored.Phases.Record(phasetracking.PhaseRunning, agent)
+		runningSince := stored.Phases.Since
+
+		advancePhaseIfRunning(&stored)
+
+		assert.Equal(t, phasetracking.PhaseRunning, stored.Phases.Current)
+		assert.True(t, stored.Phases.Since.Equal(runningSince), "Since should not move on idempotent call")
+	})
+
+	t.Run("non-initializing current phase is left alone", func(t *testing.T) {
+		// A Standby instance whose markers still indicate Running must not be
+		// flipped back to Running — phase transitions are driven by lifecycle
+		// orchestration, not by stale markers.
+		stored := StoredMetadata{
+			ProgramStartedAt:  &program,
+			GuestAgentReadyAt: &agent,
+		}
+		stored.Phases.Record(phasetracking.PhaseStandby, bootStart.Add(10*time.Second))
+
+		advancePhaseIfRunning(&stored)
+		assert.Equal(t, phasetracking.PhaseStandby, stored.Phases.Current)
+	})
+}
+
+func TestHydrateBootMarkersFromLogs_AdvancesPhaseOnRunningTransition(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	m := &manager{
+		paths: paths.New(tmpDir),
+	}
+
+	bootStart := time.Date(2026, 5, 11, 12, 0, 0, 0, time.UTC)
+	m.now = func() time.Time { return bootStart.Add(5 * time.Second) }
+
+	meta := &StoredMetadata{
+		Id:             "phase-advance-test",
+		SkipGuestAgent: false,
+		StartedAt:      &bootStart,
+	}
+	meta.Phases.Record(phasetracking.PhaseInitializing, bootStart)
+
+	logPath := m.paths.InstanceAppLog(meta.Id)
+	require.NoError(t, os.MkdirAll(filepath.Dir(logPath), 0o755))
+	require.NoError(t, os.WriteFile(logPath, []byte(
+		"HYPEMAN-AGENT-READY ts=2026-05-11T12:00:02Z\n"+
+			"HYPEMAN-PROGRAM-START ts=2026-05-11T12:00:01Z mode=exec\n",
+	), 0o644))
+
+	hydrated := m.hydrateBootMarkersFromLogs(t.Context(), meta)
+	require.True(t, hydrated)
+	require.NotNil(t, meta.ProgramStartedAt)
+	require.NotNil(t, meta.GuestAgentReadyAt)
+
+	assert.Equal(t, phasetracking.PhaseRunning, meta.Phases.Current, "phase should advance to running")
+	// Initializing duration = bootStart → max(program, agent) = 2s.
+	assert.Equal(t, int64(2_000), meta.Phases.Cumulative[phasetracking.PhaseInitializing])
 }
 
 func TestHydrateBootMarkersFromLogs_RescanThrottle(t *testing.T) {
