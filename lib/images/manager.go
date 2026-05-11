@@ -119,8 +119,8 @@ func (m *manager) CreateImage(ctx context.Context, req CreateImageRequest) (*Ima
 	}
 
 	// Resolve to get digest (validates existence)
-	// Add a 2-second timeout to ensure fast failure on rate limits or errors
-	resolveCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	// Add a 5-second timeout to ensure fast failure on rate limits or errors
+	resolveCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
 	ref, err := normalized.Resolve(resolveCtx, m.ociClient)
