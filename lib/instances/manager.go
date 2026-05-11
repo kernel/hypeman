@@ -143,6 +143,9 @@ type manager struct {
 	admissionAllocationsLoaded bool
 	admissionReconcileOnce     sync.Once
 
+	// Periodic TAP garbage collection reconciler.
+	tapGCOnce sync.Once
+
 	// Hypervisor support
 	vmStarters        map[hypervisor.Type]hypervisor.VMStarter
 	defaultHypervisor hypervisor.Type // Default hypervisor type when not specified in request

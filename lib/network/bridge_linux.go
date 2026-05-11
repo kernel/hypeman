@@ -895,23 +895,27 @@ func (m *manager) queryNetworkState(bridgeName string) (*Network, error) {
 }
 
 // CleanupOrphanedTAPs removes TAP devices that aren't used by any running instance.
-// runningInstanceIDs is a list of instance IDs that currently have a running VMM.
-// Pass nil or an empty list to skip cleanup entirely (used when we couldn't
+// preserveInstanceIDs is the authoritative set of instance IDs whose TAPs must be
+// kept. Pass nil or an empty list to skip cleanup entirely (used when we couldn't
 // determine an authoritative list of running instances for this host).
+// minAge>0 skips TAPs whose sysfs ctime is younger than minAge. This avoids racing
+// against in-flight CreateAllocation calls whose instance metadata hasn't been
+// persisted yet. Pass 0 to disable the age filter (e.g. for the startup pass which
+// runs before any concurrent creates can be in flight).
 // Returns the number of TAPs deleted.
-func (m *manager) CleanupOrphanedTAPs(ctx context.Context, runningInstanceIDs []string) int {
+func (m *manager) CleanupOrphanedTAPs(ctx context.Context, preserveInstanceIDs []string, minAge time.Duration) int {
 	log := logger.FromContext(ctx)
 
 	// Skip cleanup when we don't have an authoritative running set.
 	// This avoids deleting TAPs created by other concurrent hypeman processes/tests.
-	if len(runningInstanceIDs) == 0 {
+	if len(preserveInstanceIDs) == 0 {
 		log.DebugContext(ctx, "skipping TAP cleanup (empty instance list)")
 		return 0
 	}
 
 	// Build set of expected TAP names for running instances
 	expectedTAPs := make(map[string]bool)
-	for _, id := range runningInstanceIDs {
+	for _, id := range preserveInstanceIDs {
 		tapName := GenerateTAPName(id)
 		expectedTAPs[tapName] = true
 	}
@@ -924,6 +928,7 @@ func (m *manager) CleanupOrphanedTAPs(ctx context.Context, runningInstanceIDs []
 	}
 
 	deleted := 0
+	now := time.Now()
 	for _, link := range links {
 		name := link.Attrs().Name
 
@@ -937,16 +942,50 @@ func (m *manager) CleanupOrphanedTAPs(ctx context.Context, runningInstanceIDs []
 			continue
 		}
 
+		// Age filter: avoid clobbering TAPs from in-flight CreateAllocation calls
+		// whose instance metadata hasn't been persisted yet. sysfs ctime resets on
+		// host reboot, which is fine because the startup pass runs without an age
+		// filter at a time when no concurrent creates exist.
+		if minAge > 0 {
+			age, err := tapDeviceAge(name, now)
+			if err != nil {
+				log.WarnContext(ctx, "failed to stat TAP for age check, skipping", "tap", name, "error", err)
+				continue
+			}
+			if age < minAge {
+				log.DebugContext(ctx, "TAP younger than minAge, skipping", "tap", name, "age", age, "min_age", minAge)
+				continue
+			}
+		}
+
 		// Orphaned TAP - delete it (no stored classID available, falls back to deriveClassID)
 		if err := m.deleteTAPDevice(name, ""); err != nil {
 			log.WarnContext(ctx, "failed to delete orphaned TAP", "tap", name, "error", err)
 			continue
 		}
 		log.InfoContext(ctx, "deleted orphaned TAP device", "tap", name)
+		m.recordTAPOperation(ctx, "cleanup_orphan")
 		deleted++
 	}
 
 	return deleted
+}
+
+// tapDeviceAge returns how long the given netdev has existed in the current
+// kernel, derived from the ctime of /sys/class/net/<name>. The clock resets on
+// host reboot, but the startup CleanupOrphanedTAPs pass runs once at boot with
+// no age filter, so the reset is safe.
+func tapDeviceAge(name string, now time.Time) (time.Duration, error) {
+	info, err := os.Stat("/sys/class/net/" + name)
+	if err != nil {
+		return 0, err
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, fmt.Errorf("unexpected stat type for %s", name)
+	}
+	ctime := time.Unix(stat.Ctim.Sec, stat.Ctim.Nsec)
+	return now.Sub(ctime), nil
 }
 
 // CleanupOrphanedClasses removes HTB classes on the bridge that don't have matching TAP devices.
