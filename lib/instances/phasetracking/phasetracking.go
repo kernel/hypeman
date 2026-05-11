@@ -32,8 +32,6 @@ const (
 	PhaseCreated      Phase = "created"
 	PhaseInitializing Phase = "initializing"
 	PhaseRunning      Phase = "running"
-	PhasePaused       Phase = "paused"
-	PhaseShutdown     Phase = "shutdown"
 	PhaseStandby      Phase = "standby"
 )
 
