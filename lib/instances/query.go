@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/instances/phasetracking"
 	"github.com/kernel/hypeman/lib/logger"
 	"go.opentelemetry.io/otel/attribute"
 )
@@ -219,6 +220,59 @@ func deriveRunningState(stored *StoredMetadata) State {
 	return StateRunning
 }
 
+// runningPhaseFromMarkers returns PhaseRunning with the wall-clock timestamp at
+// which the guest crossed the Initializing→Running boundary, derived from the
+// boot markers. If the markers do not yet indicate a Running guest, it returns
+// PhaseInitializing and the zero time. The returned transition time is the
+// later of ProgramStartedAt / GuestAgentReadyAt (or ProgramStartedAt alone
+// when the guest agent is skipped), which is the moment the guest actually
+// became Running per deriveRunningState's rule.
+func runningPhaseFromMarkers(stored *StoredMetadata) (phasetracking.Phase, time.Time) {
+	if stored.ProgramStartedAt == nil {
+		return phasetracking.PhaseInitializing, time.Time{}
+	}
+	if stored.SkipGuestAgent {
+		return phasetracking.PhaseRunning, *stored.ProgramStartedAt
+	}
+	if stored.GuestAgentReadyAt == nil {
+		return phasetracking.PhaseInitializing, time.Time{}
+	}
+	transition := *stored.ProgramStartedAt
+	if stored.GuestAgentReadyAt.After(transition) {
+		transition = *stored.GuestAgentReadyAt
+	}
+	return phasetracking.PhaseRunning, transition
+}
+
+// advancePhaseIfRunning promotes stored.Phases from Initializing to Running
+// when the boot markers indicate the guest has crossed that boundary. The
+// transition timestamp is the marker time, not now, so the Initializing
+// duration reflects actual guest boot time rather than the wall clock when
+// hydration happened to observe the markers.
+//
+// Called from both the in-memory hydrate path (so the Instance returned to
+// callers reflects the new phase immediately) and the persist path (so the
+// updated phase is written to disk). Idempotent.
+func advancePhaseIfRunning(stored *StoredMetadata) {
+	if stored.Phases.Current != phasetracking.PhaseInitializing {
+		return
+	}
+	phase, transitionAt := runningPhaseFromMarkers(stored)
+	if phase != phasetracking.PhaseRunning {
+		return
+	}
+	// Clamp transitionAt forward to Phases.Since. After a restore-from-
+	// early-standby the markers we just parsed can carry timestamps from
+	// the pre-standby boot session, which predate Phases.Since (set at
+	// restore time). Letting Since move backwards would over-count Running
+	// on the next transition by the entire standby interval — billing-
+	// critical, since the field feeds duration accounting.
+	if transitionAt.Before(stored.Phases.Since) {
+		transitionAt = stored.Phases.Since
+	}
+	stored.Phases.Record(phasetracking.PhaseRunning, transitionAt)
+}
+
 // hydrateBootMarkersFromLogs fills missing boot markers from serial logs.
 // Returns true when at least one missing marker was found and populated.
 func (m *manager) hydrateBootMarkersFromLogs(ctx context.Context, stored *StoredMetadata) bool {
@@ -248,6 +302,7 @@ func (m *manager) hydrateBootMarkersFromLogs(ctx context.Context, stored *Stored
 		hydrated = true
 	}
 	if hydrated {
+		advancePhaseIfRunning(stored)
 		m.clearBootMarkerRescan(stored.Id)
 	} else {
 		m.deferBootMarkerRescan(stored.Id)
@@ -600,6 +655,8 @@ func (m *manager) persistBootMarkers(ctx context.Context, id string) {
 	if !updated {
 		return
 	}
+
+	advancePhaseIfRunning(&meta.StoredMetadata)
 
 	if err := m.saveMetadata(meta); err != nil {
 		log.WarnContext(ctx, "failed to persist boot markers", "instance_id", id, "error", err)

@@ -5,6 +5,7 @@ import (
 
 	"github.com/kernel/hypeman/lib/autostandby"
 	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/instances/phasetracking"
 	"github.com/kernel/hypeman/lib/snapshot"
 	"github.com/kernel/hypeman/lib/tags"
 )
@@ -153,6 +154,12 @@ type StoredMetadata struct {
 	// Exit information (populated from serial console sentinel when VM stops)
 	ExitCode    *int   // App exit code, nil if VM hasn't exited
 	ExitMessage string // Human-readable description of exit (e.g., "command not found", "killed by signal 9 (SIGKILL) - OOM")
+
+	// Cumulative time spent in each lifecycle phase. Updated at every state
+	// transition by transition orchestration sites (create/start/stop/standby/
+	// restore/fork). Consumers use Snapshot() to read live values that include
+	// time accrued in the current phase. See lib/instances/phasetracking.
+	Phases phasetracking.Tracker `json:"phases,omitempty"`
 }
 
 // Instance represents a virtual machine instance with derived runtime state

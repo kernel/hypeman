@@ -17,6 +17,7 @@ import (
 	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
+	"github.com/kernel/hypeman/lib/instances/phasetracking"
 	"github.com/kernel/hypeman/lib/network"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/kernel/hypeman/lib/resources"
@@ -163,6 +164,7 @@ func TestFirecrackerStandbyAndRestore(t *testing.T) {
 	inst, err = waitForInstanceState(ctx, mgr, inst.Id, StateRunning, integrationTestTimeout(20*time.Second))
 	require.NoError(t, err)
 	require.NoError(t, waitForExecAgent(ctx, mgr, inst.Id, 30*time.Second))
+	assert.Equal(t, phasetracking.PhaseRunning, inst.Phases.Current, "fresh instance should be in running phase")
 
 	firstFilePath := "/tmp/firecracker-standby-first.txt"
 	secondFilePath := "/tmp/firecracker-standby-second.txt"
@@ -222,10 +224,14 @@ func TestFirecrackerStandbyAndRestore(t *testing.T) {
 	t.Logf("first standby (full snapshot expected) took %v", firstStandbyDuration)
 	assert.Equal(t, StateStandby, inst.State)
 	assert.True(t, inst.HasSnapshot)
+	assert.Equal(t, phasetracking.PhaseStandby, inst.Phases.Current, "standby transition should set current phase")
+	assert.Greater(t, inst.Phases.Cumulative[phasetracking.PhaseRunning], int64(0), "first running stint should be accrued after standby")
 
 	firstRestoreRunningDuration, _ := restoreAndMeasure("first")
 	assert.False(t, inst.HasSnapshot, "running instances should not expose retained snapshot bases as standby snapshots")
 	assertRetainedBaseState()
+	assert.Equal(t, phasetracking.PhaseRunning, inst.Phases.Current, "restored instance should be in running phase")
+	assert.Greater(t, inst.Phases.Cumulative[phasetracking.PhaseStandby], int64(0), "first standby stint should be accrued after restore")
 	t.Logf("first full-cycle timings: standby=%v restore-to-running=%v", firstStandbyDuration, firstRestoreRunningDuration)
 
 	assertGuestFileContents(firstFilePath, firstFileContents)
@@ -245,6 +251,7 @@ func TestFirecrackerStandbyAndRestore(t *testing.T) {
 	secondRestoreRunningDuration, _ := restoreAndMeasure("second")
 	assert.False(t, inst.HasSnapshot, "running instances should not expose retained snapshot bases as standby snapshots")
 	assertRetainedBaseState()
+	assert.Equal(t, phasetracking.PhaseRunning, inst.Phases.Current, "second restore should land back in running")
 	t.Logf("second diff-cycle timings: standby=%v restore-to-running=%v", secondStandbyDuration, secondRestoreRunningDuration)
 
 	assertGuestFileContents(secondFilePath, secondFileContents)

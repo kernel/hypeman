@@ -22,6 +22,7 @@ import (
 	"github.com/kernel/hypeman/lib/hypervisor/qemu"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/ingress"
+	"github.com/kernel/hypeman/lib/instances/phasetracking"
 	"github.com/kernel/hypeman/lib/network"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/kernel/hypeman/lib/resources"
@@ -838,6 +839,7 @@ func TestQEMUStandbyAndRestore(t *testing.T) {
 	// Wait for VM to be fully running before standby
 	err = waitForQEMUReady(ctx, inst.SocketPath, 10*time.Second)
 	require.NoError(t, err, "QEMU VM should reach running state")
+	assert.Equal(t, phasetracking.PhaseRunning, inst.Phases.Current, "fresh instance should be in running phase")
 
 	// Standby instance
 	t.Log("Standing by instance...")
@@ -845,6 +847,8 @@ func TestQEMUStandbyAndRestore(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, StateStandby, inst.State)
 	assert.True(t, inst.HasSnapshot)
+	assert.Equal(t, phasetracking.PhaseStandby, inst.Phases.Current, "standby transition should set current phase")
+	assert.Greater(t, inst.Phases.Cumulative[phasetracking.PhaseRunning], int64(0), "running stint should be accrued after standby")
 	t.Log("Instance in standby")
 
 	// Verify snapshot exists
@@ -873,6 +877,8 @@ func TestQEMUStandbyAndRestore(t *testing.T) {
 	// Wait for VM to be running again
 	err = waitForQEMUReady(ctx, inst.SocketPath, 10*time.Second)
 	require.NoError(t, err, "QEMU VM should reach running state after restore")
+	assert.Equal(t, phasetracking.PhaseRunning, inst.Phases.Current, "restored instance should be in running phase")
+	assert.Greater(t, inst.Phases.Cumulative[phasetracking.PhaseStandby], int64(0), "standby stint should be accrued after restore")
 
 	// Cleanup
 	t.Log("Cleaning up...")
