@@ -36,6 +36,7 @@ func TestExtractBinary(t *testing.T) {
 }
 
 func TestIsVersionSupported(t *testing.T) {
+	assert.True(t, IsVersionSupported(V49_0))
 	assert.True(t, IsVersionSupported(V51_1))
 	assert.False(t, IsVersionSupported("v1.0"))
 }
@@ -117,6 +118,7 @@ func TestMultipleVersions(t *testing.T) {
 		name    string
 		version CHVersion
 	}{
+		{"v49.0", V49_0},
 		{"v51.1", V51_1},
 	}
 

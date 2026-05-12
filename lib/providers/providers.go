@@ -15,6 +15,7 @@ import (
 	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/guestmemory"
 	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/hypervisor/cloudhypervisor"
 	"github.com/kernel/hypeman/lib/hypervisor/firecracker"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/ingress"
@@ -99,6 +100,7 @@ func ProvideDeviceManager(p *paths.Paths) devices.Manager {
 // ProvideInstanceManager provides the instance manager
 func ProvideInstanceManager(p *paths.Paths, cfg *config.Config, imageManager images.Manager, systemManager system.Manager, networkManager network.Manager, deviceManager devices.Manager, volumeManager volumes.Manager) (instances.Manager, error) {
 	firecracker.SetCustomBinaryPath(cfg.Hypervisor.FirecrackerBinaryPath)
+	cloudhypervisor.SetDefaultVersion(cfg.Hypervisor.CloudHypervisorVersion)
 
 	// Parse max overlay size from config
 	var maxOverlaySize datasize.ByteSize

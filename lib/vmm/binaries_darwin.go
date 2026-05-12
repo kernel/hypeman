@@ -12,6 +12,7 @@ import (
 type CHVersion string
 
 const (
+	V49_0 CHVersion = "v49.0"
 	V51_1 CHVersion = "v51.1"
 )
 
