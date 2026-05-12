@@ -44,6 +44,25 @@ func TestCopyGuestDirectory(t *testing.T) {
 	assert.Equal(t, "metadata.json", linkTarget)
 }
 
+func TestCopyGuestDirectory_SkipRelPaths(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "src")
+	dst := filepath.Join(t.TempDir(), "dst")
+
+	require.NoError(t, os.MkdirAll(filepath.Join(src, "snapshots", "snapshot-latest"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(src, "snapshots", "snapshot-latest", "config.json"), []byte(`{}`), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(src, "snapshots", "snapshot-latest", "memory"), []byte("the heavy mem-file"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(src, "snapshots", "snapshot-latest", "state"), []byte("device state"), 0644))
+
+	err := CopyGuestDirectoryWithOptions(src, dst, CopyOptions{
+		SkipRelPaths: []string{"snapshots/snapshot-latest/memory"},
+	})
+	require.NoError(t, err)
+
+	assert.NoFileExists(t, filepath.Join(dst, "snapshots", "snapshot-latest", "memory"))
+	assert.FileExists(t, filepath.Join(dst, "snapshots", "snapshot-latest", "config.json"))
+	assert.FileExists(t, filepath.Join(dst, "snapshots", "snapshot-latest", "state"))
+}
+
 func TestCopyGuestDirectory_DoesNotSkipTmpSuffixedDirectories(t *testing.T) {
 	src := filepath.Join(t.TempDir(), "src")
 	dst := filepath.Join(t.TempDir(), "dst")

@@ -255,17 +255,37 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 
 	fromSnapshot := source.State == StateStandby || source.State == StateTemplate
 
+	// shareMemFile gates mem-file fan-out from the source's standby snapshot.
+	// Firecracker only: it mmaps the snapshot mem-file MAP_PRIVATE on restore,
+	// so all forks safely COW from the same backing file. Cloud-hypervisor and
+	// other hypervisors take a copy-mode path and don't benefit. Restricted to
+	// Template sources because they are explicitly promoted as fork-only and
+	// can never be restored — sharing the mem-file with a non-Template source
+	// would let a later RestoreInstance mutate the file out from under live
+	// forks.
+	shareMemFile := source.State == StateTemplate && stored.HypervisorType == hypervisor.TypeFirecracker
+
 	if fromSnapshot {
 		if err := m.ensureSnapshotMemoryReady(ctx, m.paths.InstanceSnapshotLatest(id), m.snapshotJobKeyForInstance(id), stored.HypervisorType); err != nil {
 			return nil, fmt.Errorf("prepare standby snapshot for fork: %w", err)
 		}
 	}
 
-	if err := forkvm.CopyGuestDirectory(srcDir, dstDir); err != nil {
+	copyOpts := forkvm.CopyOptions{}
+	if shareMemFile {
+		copyOpts.SkipRelPaths = []string{templateSharedMemFileRelPath}
+	}
+	if err := forkvm.CopyGuestDirectoryWithOptions(srcDir, dstDir, copyOpts); err != nil {
 		if errors.Is(err, forkvm.ErrSparseCopyUnsupported) {
 			return nil, fmt.Errorf("fork requires sparse-capable filesystem (SEEK_DATA/SEEK_HOLE unsupported): %w", err)
 		}
 		return nil, fmt.Errorf("clone guest directory: %w", err)
+	}
+
+	if shareMemFile {
+		if err := m.installForkSharedMemFile(dstDir, id); err != nil {
+			return nil, fmt.Errorf("install shared mem-file: %w", err)
+		}
 	}
 
 	starter, err := m.getVMStarter(stored.HypervisorType)
