@@ -7,9 +7,11 @@ import (
 	"strings"
 )
 
-var versionRegex = regexp.MustCompile(`v(\d+)\.(\d+)\.(\d+)`)
+// versionRegex extracts a vN.N or vN.N.N version tag from --version output.
+var versionRegex = regexp.MustCompile(`v\d+\.\d+(?:\.\d+)?`)
 
 // ParseVersion extracts version from cloud-hypervisor --version output
+// and matches it against SupportedVersions.
 func ParseVersion(binaryPath string) (CHVersion, error) {
 	cmd := exec.Command(binaryPath, "--version")
 	output, err := cmd.Output()
@@ -19,12 +21,13 @@ func ParseVersion(binaryPath string) (CHVersion, error) {
 
 	versionStr := strings.TrimSpace(string(output))
 
-	// Try to match known versions
-	if strings.Contains(versionStr, "v51.1") {
-		return V51_1, nil
-	}
-	if strings.Contains(versionStr, "v49.0") {
-		return V49_0, nil
+	match := versionRegex.FindString(versionStr)
+	if match != "" {
+		for _, v := range SupportedVersions {
+			if match == string(v) {
+				return v, nil
+			}
+		}
 	}
 
 	return "", fmt.Errorf("unsupported version: %s", versionStr)

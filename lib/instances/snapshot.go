@@ -307,12 +307,14 @@ func (m *manager) restoreSnapshot(ctx context.Context, id string, snapshotID str
 	if err != nil {
 		return nil, fmt.Errorf("get vm starter: %w", err)
 	}
-	hvVersion, err := starter.GetVersion(m.paths)
-	if err != nil {
-		log.WarnContext(ctx, "failed to get hypervisor version", "hypervisor", targetHypervisor, "error", err)
-		hvVersion = "unknown"
+	if targetHypervisor != rec.StoredMetadata.HypervisorType {
+		hvVersion, err := starter.GetVersion(m.paths)
+		if err != nil {
+			log.WarnContext(ctx, "failed to get hypervisor version", "hypervisor", targetHypervisor, "error", err)
+			hvVersion = "unknown"
+		}
+		restored.HypervisorVersion = hvVersion
 	}
-	restored.HypervisorVersion = hvVersion
 	restored.SocketPath = m.paths.InstanceSocket(id, starter.SocketName())
 	restored.VsockSocket = m.paths.InstanceSocket(id, hypervisor.VsockSocketNameForType(targetHypervisor))
 	if rec.Snapshot.Kind == SnapshotKindStopped {
@@ -424,10 +426,6 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 	if err != nil {
 		return nil, fmt.Errorf("get vm starter: %w", err)
 	}
-	hvVersion, err := starter.GetVersion(m.paths)
-	if err != nil {
-		hvVersion = "unknown"
-	}
 
 	now := time.Now()
 	forkMeta := cloneStoredMetadataWithoutPendingStandbyCompression(rec.StoredMetadata)
@@ -439,7 +437,13 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 	forkMeta.HypervisorPID = nil
 	forkMeta.DataDir = dstDir
 	forkMeta.HypervisorType = targetHypervisor
-	forkMeta.HypervisorVersion = hvVersion
+	if targetHypervisor != rec.StoredMetadata.HypervisorType {
+		hvVersion, err := starter.GetVersion(m.paths)
+		if err != nil {
+			hvVersion = "unknown"
+		}
+		forkMeta.HypervisorVersion = hvVersion
+	}
 	forkMeta.SocketPath = m.paths.InstanceSocket(forkID, starter.SocketName())
 	forkMeta.VsockSocket = m.paths.InstanceSocket(forkID, hypervisor.VsockSocketNameForType(targetHypervisor))
 	forkMeta.ExitCode = nil
