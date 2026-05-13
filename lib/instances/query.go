@@ -826,7 +826,9 @@ func (m *manager) listInstances(ctx context.Context) ([]Instance, error) {
 }
 
 // countTemplateForks returns the number of instances with ForkOfTemplate==templateID.
-// Skips metadata files that fail to load (logged elsewhere on read).
+// Bubbles metadata load errors: this count guards DeleteInstance and
+// DemoteTemplate, and silently skipping an unreadable file would risk
+// undercounting forks and freeing a template whose pages are still mapped.
 func (m *manager) countTemplateForks(templateID string) (int, error) {
 	files, err := m.listMetadataFiles()
 	if err != nil {
@@ -837,7 +839,7 @@ func (m *manager) countTemplateForks(templateID string) (int, error) {
 		id := filepath.Base(filepath.Dir(file))
 		meta, err := m.loadMetadata(id)
 		if err != nil {
-			continue
+			return 0, fmt.Errorf("load metadata for %s while counting forks of %s: %w", id, templateID, err)
 		}
 		if meta.ForkOfTemplate == templateID {
 			count++
