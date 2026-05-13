@@ -7,13 +7,37 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 )
 
-var ErrSparseCopyUnsupported = errors.New("sparse copy unsupported")
+var (
+	ErrSparseCopyUnsupported = errors.New("sparse copy unsupported")
+	ErrReflinkUnsupported    = errors.New("reflink unsupported")
+)
+
+// reflinkDisabled, when nonzero, forces CopyGuestDirectory to skip the FICLONE
+// fast path entirely. Tests set this; production code leaves it untouched.
+var reflinkDisabled atomic.Bool
+
+// SetReflinkDisabled toggles the FICLONE fast path. Intended for tests that
+// need to exercise the sparse-copy fallback explicitly.
+func SetReflinkDisabled(disabled bool) {
+	reflinkDisabled.Store(disabled)
+}
+
+// reflinkUnsupportedSticky tracks whether reflink has already been observed to
+// fail with an "unsupported" signal for this destination filesystem. Once set,
+// we skip subsequent FICLONE attempts within the same CopyGuestDirectory call
+// to avoid re-paying the rejection on every file.
+type copyState struct {
+	reflinkDead bool
+}
 
 // CopyGuestDirectory recursively copies a guest directory to a new destination.
-// Regular files are copied using sparse extent copy only (SEEK_DATA/SEEK_HOLE).
-// Runtime sockets and logs are skipped because they are host-runtime artifacts.
+// Regular files are cloned via reflink (FICLONE) when the underlying filesystem
+// supports it; otherwise we fall back to a sparse extent copy
+// (SEEK_DATA/SEEK_HOLE). Runtime sockets and logs are skipped because they are
+// host-runtime artifacts.
 func CopyGuestDirectory(srcDir, dstDir string) error {
 	srcInfo, err := os.Stat(srcDir)
 	if err != nil {
@@ -25,6 +49,11 @@ func CopyGuestDirectory(srcDir, dstDir string) error {
 
 	if err := os.MkdirAll(dstDir, srcInfo.Mode().Perm()); err != nil {
 		return fmt.Errorf("create destination directory: %w", err)
+	}
+
+	state := &copyState{}
+	if reflinkDisabled.Load() {
+		state.reflinkDead = true
 	}
 
 	return filepath.WalkDir(srcDir, func(path string, d fs.DirEntry, walkErr error) error {
@@ -61,7 +90,7 @@ func CopyGuestDirectory(srcDir, dstDir string) error {
 			return nil
 
 		case mode.IsRegular():
-			if err := copyRegularFileSparse(path, dstPath, mode.Perm()); err != nil {
+			if err := copyRegularFile(state, path, dstPath, mode.Perm()); err != nil {
 				return fmt.Errorf("copy file %s: %w", path, err)
 			}
 			return nil
@@ -84,6 +113,26 @@ func CopyGuestDirectory(srcDir, dstDir string) error {
 			return fmt.Errorf("unsupported file type %s (%s)", path, mode.String())
 		}
 	})
+}
+
+// copyRegularFile clones path to dstPath, preferring FICLONE reflink and
+// falling back to sparse extent copy. The state object lets us short-circuit
+// future reflink attempts once we observe an "unsupported" signal from the
+// destination filesystem in the current copy.
+func copyRegularFile(state *copyState, srcPath, dstPath string, perms fs.FileMode) error {
+	if state == nil || !state.reflinkDead {
+		err := copyRegularFileReflink(srcPath, dstPath, perms)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, ErrReflinkUnsupported) {
+			return err
+		}
+		if state != nil {
+			state.reflinkDead = true
+		}
+	}
+	return copyRegularFileSparse(srcPath, dstPath, perms)
 }
 
 func shouldSkipDirectory(relPath string) bool {

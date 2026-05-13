@@ -106,4 +106,6 @@ func runStandbySnapshotScenario(t *testing.T, mgr *manager, tmpDir string, cfg s
 	currentFork, err := mgr.GetInstance(ctx, forkID)
 	requireNoErr(err)
 	require.Equal(t, StateStandby, currentFork.State)
+
+	assertCopyReflinked(t, p.SnapshotGuestDir(snapshot.Id), p.InstanceDir(forkID))
 }
