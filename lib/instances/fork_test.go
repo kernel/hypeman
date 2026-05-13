@@ -266,7 +266,7 @@ func TestForkInstanceFromStandbyCancelsCompressionJobAndCopiesRawMemory(t *testi
 	forked, err := manager.forkInstanceFromStoppedOrStandby(ctx, sourceID, ForkInstanceRequest{
 		Name:        "fork-standby-compressed-copy",
 		TargetState: StateStopped,
-	}, true)
+	}, true, false)
 	require.NoError(t, err)
 	require.NotNil(t, forked)
 

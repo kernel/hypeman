@@ -447,11 +447,37 @@ func (m *manager) RestoreInstance(ctx context.Context, id string) (*Instance, er
 	if current.State == StateRunning || current.State == StateInitializing {
 		return current, nil
 	}
+	if current.State == StateTemplate {
+		if err := m.demoteTemplate(ctx, id); err != nil {
+			return nil, err
+		}
+	}
 	inst, err := m.restoreInstance(ctx, id)
 	if err == nil {
 		m.notifyLifecycleEvent(ctx, LifecycleEventRestore, inst)
 	}
 	return inst, err
+}
+
+// demoteTemplate un-promotes a Template back to Standby so it can be restored.
+// Requires ForkCount==0. Must be called with the instance lock held.
+func (m *manager) demoteTemplate(ctx context.Context, id string) error {
+	meta, err := m.loadMetadata(id)
+	if err != nil {
+		return err
+	}
+	if meta.ForkCount > 0 {
+		return fmt.Errorf("%w: cannot un-promote template %s with %d live fork(s); delete forks first", ErrInvalidState, id, meta.ForkCount)
+	}
+	if err := StateTemplate.CanTransitionTo(StateStandby); err != nil {
+		return err
+	}
+	meta.IsTemplate = false
+	meta.HotPagesPath = ""
+	if err := m.saveMetadata(meta); err != nil {
+		return fmt.Errorf("save metadata after template un-promote: %w", err)
+	}
+	return nil
 }
 
 func (m *manager) RestoreSnapshot(ctx context.Context, id string, snapshotID string, req RestoreSnapshotRequest) (*Instance, error) {

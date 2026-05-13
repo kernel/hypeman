@@ -72,9 +72,12 @@ func (m *manager) deriveStateWithOptions(ctx context.Context, stored *StoredMeta
 
 	// 1. Check if socket exists
 	if _, err := os.Stat(stored.SocketPath); err != nil {
-		// No socket - check for snapshot to distinguish Stopped vs Standby
+		// No socket - check for snapshot to distinguish Stopped vs Standby/Template
 		m.invalidateCachedHypervisorState(stored.Id)
 		if m.hasSnapshot(stored.DataDir) {
+			if stored.IsTemplate {
+				return stateResult{State: StateTemplate}
+			}
 			return stateResult{State: StateStandby}
 		}
 		return stateResult{State: StateStopped}

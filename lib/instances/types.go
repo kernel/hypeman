@@ -21,6 +21,7 @@ const (
 	StatePaused       State = "Paused"       // VM paused (CH native)
 	StateShutdown     State = "Shutdown"     // VM shutdown, VMM exists (CH native)
 	StateStandby      State = "Standby"      // No VMM, snapshot exists
+	StateTemplate     State = "Template"     // Standby snapshot promoted to fork-only parent; cannot wake while ForkCount>0
 	StateUnknown      State = "Unknown"      // Failed to determine state (VMM query failed)
 )
 
@@ -144,6 +145,25 @@ type StoredMetadata struct {
 	// Pending standby compression plan for the latest standby snapshot.
 	// Persisted so server restarts can recover delayed or interrupted jobs.
 	PendingStandbyCompression *PendingStandbyCompression
+
+	// IsTemplate marks a Standby instance promoted to a fork-only parent.
+	// When true, derived state is Template instead of Standby and the
+	// instance cannot wake until un-promoted (ForkCount must be 0).
+	IsTemplate bool
+
+	// ForkCount tracks live forks descending from this template. Maintained by
+	// ForkInstance/DeleteInstance; un-promote and delete of the template
+	// require ForkCount==0.
+	ForkCount int
+
+	// ForkOfTemplate is the ID of the template this instance was forked from.
+	// Empty when the instance is not a template-backed fork.
+	ForkOfTemplate string
+
+	// HotPagesPath points to a precomputed hot-pages file used by the UFFD page
+	// server prefetch path. Reserved for the prefetch feature; cleared when the
+	// instance is un-promoted out of Template state.
+	HotPagesPath string
 
 	// Automatic standby policy driven by host-observed inbound TCP activity.
 	AutoStandby *autostandby.Policy

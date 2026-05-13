@@ -45,7 +45,7 @@ components:
     
     InstanceState:
       type: string
-      enum: [Created, Initializing, Running, Paused, Shutdown, Stopped, Standby, Unknown]
+      enum: [Created, Initializing, Running, Paused, Shutdown, Stopped, Standby, Template, Unknown]
       description: |
         Instance state:
         - Created: VMM created but not started (Cloud Hypervisor native)
@@ -55,6 +55,7 @@ components:
         - Shutdown: VM shut down but VMM exists (Cloud Hypervisor native)
         - Stopped: No VMM running, no snapshot exists
         - Standby: No VMM running, snapshot exists (can be restored)
+        - Template: Standby snapshot promoted to a fork-only parent; cannot wake while forks exist
         - Unknown: Failed to determine state (see state_error for details)
     
     VolumeMount:

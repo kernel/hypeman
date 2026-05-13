@@ -34,8 +34,13 @@ var ValidTransitions = map[State][]State{
 		StateCreated, // start VMM process
 	},
 	StateStandby: {
-		StatePaused,  // start VMM + restore (atomic operation)
-		StateStopped, // delete snapshot + cleanup (terminal)
+		StatePaused,   // start VMM + restore (atomic operation)
+		StateStopped,  // delete snapshot + cleanup (terminal)
+		StateTemplate, // promote to fork-only parent (gated by fork intent)
+	},
+	StateTemplate: {
+		StateStandby, // un-promote (allowed only when ForkCount==0)
+		StateStopped, // delete (allowed only when ForkCount==0)
 	},
 	// StateUnknown means we failed to determine state - no transitions allowed.
 	// Operations on instances in Unknown state should fail with an error
@@ -75,7 +80,7 @@ func (s State) RequiresVMM() bool {
 	switch s {
 	case StateCreated, StateInitializing, StateRunning, StatePaused, StateShutdown:
 		return true
-	case StateStopped, StateStandby, StateUnknown:
+	case StateStopped, StateStandby, StateTemplate, StateUnknown:
 		return false
 	default:
 		return false

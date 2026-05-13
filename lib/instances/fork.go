@@ -66,7 +66,9 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 			return nil, "", fmt.Errorf("standby source instance: %w", err)
 		}
 
-		forked, forkErr := m.forkInstanceFromStoppedOrStandby(ctx, id, req, true)
+		// Running fork is a one-shot clone that restores the source afterward;
+		// promoting to Template would block the restore (templates can't wake).
+		forked, forkErr := m.forkInstanceFromStoppedOrStandby(ctx, id, req, true, true)
 		if forkErr == nil {
 			if err := m.rotateSourceVsockForRestore(ctx, id, forked.Id); err != nil {
 				forkErr = fmt.Errorf("prepare source snapshot for restore: %w", err)
@@ -104,14 +106,14 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 			return nil, "", forkErr
 		}
 		return forked, targetState, nil
-	case StateStopped, StateStandby:
-		forked, err := m.forkInstanceFromStoppedOrStandby(ctx, id, req, false)
+	case StateStopped, StateStandby, StateTemplate:
+		forked, err := m.forkInstanceFromStoppedOrStandby(ctx, id, req, false, false)
 		if err != nil {
 			return nil, "", err
 		}
 		return forked, targetState, nil
 	default:
-		return nil, "", fmt.Errorf("%w: cannot fork from state %s (must be Stopped or Standby, or Running with from_running=true)", ErrInvalidState, source.State)
+		return nil, "", fmt.Errorf("%w: cannot fork from state %s (must be Stopped, Standby, or Template, or Running with from_running=true)", ErrInvalidState, source.State)
 	}
 }
 
@@ -193,7 +195,7 @@ func generateForkSourceVsockCID(sourceID, forkID string, current int64) int64 {
 	return cid
 }
 
-func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id string, req ForkInstanceRequest, supportValidated bool) (*Instance, error) {
+func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id string, req ForkInstanceRequest, supportValidated, skipTemplatePromotion bool) (*Instance, error) {
 	log := logger.FromContext(ctx)
 
 	meta, err := m.loadMetadata(id)
@@ -205,10 +207,10 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 	stored := &meta.StoredMetadata
 
 	switch source.State {
-	case StateStopped, StateStandby:
+	case StateStopped, StateStandby, StateTemplate:
 		// allowed
 	default:
-		return nil, fmt.Errorf("%w: cannot fork from state %s (must be Stopped or Standby)", ErrInvalidState, source.State)
+		return nil, fmt.Errorf("%w: cannot fork from state %s (must be Stopped, Standby, or Template)", ErrInvalidState, source.State)
 	}
 
 	if !supportValidated {
@@ -250,7 +252,9 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 	})
 	defer cu.Clean()
 
-	if source.State == StateStandby {
+	fromSnapshot := source.State == StateStandby || source.State == StateTemplate
+
+	if fromSnapshot {
 		if err := m.ensureSnapshotMemoryReady(ctx, m.paths.InstanceSnapshotLatest(id), m.snapshotJobKeyForInstance(id), stored.HypervisorType); err != nil {
 			return nil, fmt.Errorf("prepare standby snapshot for fork: %w", err)
 		}
@@ -286,17 +290,23 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 	// phase (Standby for snapshot forks, Stopped for stopped forks) will be
 	// recorded by the appropriate operation when the fork is acted on.
 	forkMeta.Phases.Reset()
-	switch source.State {
-	case StateStandby:
+	if fromSnapshot {
 		forkMeta.Phases.Record(phasetracking.PhaseStandby, now)
-	case StateStopped:
+	} else {
 		forkMeta.Phases.Record(phasetracking.PhaseStopped, now)
 	}
+
+	// Template-only fields don't carry forward to the fork; the fork is a fresh
+	// instance regardless of whether the parent is a template.
+	forkMeta.IsTemplate = false
+	forkMeta.ForkCount = 0
+	forkMeta.HotPagesPath = ""
+	forkMeta.ForkOfTemplate = ""
 
 	// Keep the original CID for snapshot-based forks.
 	// Rewriting CID in restored memory snapshots is not reliable across
 	// hypervisors.
-	if source.State == StateStandby {
+	if fromSnapshot {
 		forkMeta.VsockCID = stored.VsockCID
 	} else {
 		forkMeta.VsockCID = generateVsockCID(forkID)
@@ -309,7 +319,7 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 		forkMeta.MAC = ""
 	}
 
-	if source.State == StateStandby {
+	if fromSnapshot {
 		snapshotConfigPath := m.paths.InstanceSnapshotConfig(forkID)
 		netCfg := (*hypervisor.ForkNetworkConfig)(nil)
 		if forkMeta.NetworkEnabled {
@@ -329,6 +339,25 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 			}
 			return nil, fmt.Errorf("prepare fork snapshot state: %w", err)
 		}
+	}
+
+	// Promote source to Template (or bump existing template ForkCount) so the
+	// snapshot we just cloned can't be woken or deleted while this fork lives.
+	// Skipped for the running-fork flow, where the source is restored afterward.
+	if fromSnapshot && !skipTemplatePromotion {
+		priorIsTemplate := stored.IsTemplate
+		priorForkCount := stored.ForkCount
+		stored.IsTemplate = true
+		stored.ForkCount = priorForkCount + 1
+		if err := m.saveMetadata(meta); err != nil {
+			return nil, fmt.Errorf("promote source to template: %w", err)
+		}
+		cu.Add(func() {
+			stored.IsTemplate = priorIsTemplate
+			stored.ForkCount = priorForkCount
+			_ = m.saveMetadata(meta)
+		})
+		forkMeta.ForkOfTemplate = stored.Id
 	}
 
 	newMeta := &metadata{StoredMetadata: forkMeta}
@@ -384,6 +413,10 @@ func resolveForkTargetState(requested State, sourceState State) (State, error) {
 		switch sourceState {
 		case StateRunning, StateStandby, StateStopped:
 			return sourceState, nil
+		case StateTemplate:
+			// Forks of a template are plain Standby instances; the fork itself
+			// is never a template.
+			return StateStandby, nil
 		default:
 			return "", fmt.Errorf("%w: cannot derive fork target state from source state %s", ErrInvalidState, sourceState)
 		}
