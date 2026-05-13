@@ -229,6 +229,7 @@ type CreateInstanceRequest struct {
 	Devices                  []string                    // Device IDs or names to attach (GPU passthrough)
 	Volumes                  []VolumeAttachment          // Volumes to attach at creation time
 	Hypervisor               hypervisor.Type             // Optional: hypervisor type (defaults to config)
+	HypervisorVersion        string                      // Optional: hypervisor version (defaults to configured default)
 	GPU                      *GPUConfig                  // Optional: vGPU configuration
 	Entrypoint               []string                    // Override image entrypoint (nil = use image default)
 	Cmd                      []string                    // Override image cmd (nil = use image default)

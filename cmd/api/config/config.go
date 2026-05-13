@@ -193,9 +193,9 @@ type CapacityConfig struct {
 
 // HypervisorConfig holds hypervisor settings.
 type HypervisorConfig struct {
-	Default                string                 `koanf:"default"`
-	CloudHypervisorVersion string                 `koanf:"cloud_hypervisor_version"`
-	FirecrackerBinaryPath  string                 `koanf:"firecracker_binary_path"`
+	Default                       string                 `koanf:"default"`
+	CloudHypervisorDefaultVersion string                 `koanf:"cloud_hypervisor_default_version"`
+	FirecrackerBinaryPath         string                 `koanf:"firecracker_binary_path"`
 	Memory                 HypervisorMemoryConfig `koanf:"memory"`
 }
 
@@ -404,9 +404,9 @@ func defaultConfig() *Config {
 		},
 
 		Hypervisor: HypervisorConfig{
-			Default:                "cloud-hypervisor",
-			CloudHypervisorVersion: "v49.0",
-			FirecrackerBinaryPath:  "",
+			Default:                       "cloud-hypervisor",
+			CloudHypervisorDefaultVersion: "",
+			FirecrackerBinaryPath:         "",
 			Memory: HypervisorMemoryConfig{
 				Enabled:            false,
 				KernelPageInitMode: "hardened",

@@ -112,6 +112,10 @@ build-caddy: $(XCADDY)
 	@echo "Caddy binary built successfully"
 
 # Download Cloud Hypervisor API spec
+# All embedded CH versions currently share the same API spec (v0.3.0).
+# Multiple API versions will only be needed once there are breaking changes
+# introduced. Use version-specific Capabilities when new features are
+# introduced that aren't supported on previous versions.
 download-ch-spec:
 	@echo "Downloading Cloud Hypervisor API spec..."
 	@mkdir -p specs/cloud-hypervisor/api-v0.3.0

@@ -244,11 +244,15 @@ func (m *manager) createInstance(
 		return nil, fmt.Errorf("get vm starter for %s: %w", hvType, err)
 	}
 
-	// Get hypervisor version
-	hvVersion, err := starter.GetVersion(m.paths)
-	if err != nil {
-		log.WarnContext(ctx, "failed to get hypervisor version", "hypervisor", hvType, "error", err)
-		hvVersion = "unknown"
+	// Get hypervisor version: prefer explicit request, then configured default
+	hvVersion := req.HypervisorVersion
+	if hvVersion == "" {
+		var verErr error
+		hvVersion, verErr = starter.GetVersion(m.paths)
+		if verErr != nil {
+			log.WarnContext(ctx, "failed to get hypervisor version", "hypervisor", hvType, "error", verErr)
+			hvVersion = "unknown"
+		}
 	}
 
 	// 10. Validate, resolve, and auto-bind devices (GPU passthrough)

@@ -26,6 +26,8 @@ const (
 	V51_1 CHVersion = "v51.1"
 )
 
+const DefaultVersion = V49_0
+
 var SupportedVersions = []CHVersion{V49_0, V51_1}
 
 // ExtractBinary extracts the embedded Cloud Hypervisor binary to the data directory

@@ -100,7 +100,9 @@ func ProvideDeviceManager(p *paths.Paths) devices.Manager {
 // ProvideInstanceManager provides the instance manager
 func ProvideInstanceManager(p *paths.Paths, cfg *config.Config, imageManager images.Manager, systemManager system.Manager, networkManager network.Manager, deviceManager devices.Manager, volumeManager volumes.Manager) (instances.Manager, error) {
 	firecracker.SetCustomBinaryPath(cfg.Hypervisor.FirecrackerBinaryPath)
-	cloudhypervisor.SetDefaultVersion(cfg.Hypervisor.CloudHypervisorVersion)
+	if err := cloudhypervisor.SetDefaultVersion(cfg.Hypervisor.CloudHypervisorDefaultVersion); err != nil {
+		return nil, fmt.Errorf("invalid cloud-hypervisor default version: %w", err)
+	}
 
 	// Parse max overlay size from config
 	var maxOverlaySize datasize.ByteSize

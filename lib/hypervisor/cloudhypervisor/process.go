@@ -21,26 +21,37 @@ import (
 )
 
 var (
-	defaultVersionMu sync.RWMutex
-	defaultVersion   = vmm.V49_0
+	defaultVersionMu       sync.RWMutex
+	defaultVersionOverride *vmm.CHVersion
 )
 
-// SetDefaultVersion sets the default Cloud Hypervisor version for new instances.
-// Only updates if the provided version is in SupportedVersions.
-func SetDefaultVersion(v string) {
+// SetDefaultVersion overrides the default Cloud Hypervisor version for new
+// instances. An empty string clears the override (vmm.DefaultVersion is used).
+// Returns an error if the version is non-empty and not in SupportedVersions.
+func SetDefaultVersion(v string) error {
 	defaultVersionMu.Lock()
 	defer defaultVersionMu.Unlock()
-	chv := vmm.CHVersion(v)
-	if vmm.IsVersionSupported(chv) {
-		defaultVersion = chv
+	if v == "" {
+		defaultVersionOverride = nil
+		return nil
 	}
+	chv := vmm.CHVersion(v)
+	if !vmm.IsVersionSupported(chv) {
+		return fmt.Errorf("unsupported cloud-hypervisor version: %q (supported: %v)", v, vmm.SupportedVersions)
+	}
+	defaultVersionOverride = &chv
+	return nil
 }
 
-// GetDefaultVersion returns the current default Cloud Hypervisor version.
+// GetDefaultVersion returns the configured default, falling back to
+// vmm.DefaultVersion if no override is set.
 func GetDefaultVersion() vmm.CHVersion {
 	defaultVersionMu.RLock()
 	defer defaultVersionMu.RUnlock()
-	return defaultVersion
+	if defaultVersionOverride != nil {
+		return *defaultVersionOverride
+	}
+	return vmm.DefaultVersion
 }
 
 func init() {

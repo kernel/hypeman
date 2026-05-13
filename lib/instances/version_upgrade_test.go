@@ -58,22 +58,23 @@ func TestCloudHypervisorVersionUpgradeRestore(t *testing.T) {
 	systemManager := system.NewManager(p)
 	require.NoError(t, systemManager.EnsureSystemFiles(ctx))
 
-	// Phase 1: Set default to v49.0 and create an instance
-	cloudhypervisor.SetDefaultVersion(string(vmm.V49_0))
+	// Reset default version override after this test
 	t.Cleanup(func() {
-		cloudhypervisor.SetDefaultVersion(string(vmm.V49_0))
+		_ = cloudhypervisor.SetDefaultVersion("")
 	})
 
+	// Phase 1: Create instance with explicit v49.0 version
 	t.Log("Creating instance with CH v49.0...")
 	inst, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
-		Name:           "version-upgrade-test",
-		Image:          integrationTestImageRef(t, "docker.io/library/alpine:latest"),
-		Size:           1024 * 1024 * 1024,
-		OverlaySize:    10 * 1024 * 1024 * 1024,
-		Vcpus:          1,
-		NetworkEnabled: false,
-		Hypervisor:     hypervisor.TypeCloudHypervisor,
-		Cmd:            []string{"sleep", "infinity"},
+		Name:              "version-upgrade-test",
+		Image:             integrationTestImageRef(t, "docker.io/library/alpine:latest"),
+		Size:              1024 * 1024 * 1024,
+		OverlaySize:       10 * 1024 * 1024 * 1024,
+		Vcpus:             1,
+		NetworkEnabled:    false,
+		Hypervisor:        hypervisor.TypeCloudHypervisor,
+		HypervisorVersion: string(vmm.V49_0),
+		Cmd:               []string{"sleep", "infinity"},
 	})
 	require.NoError(t, err)
 	assert.Equal(t, string(vmm.V49_0), inst.HypervisorVersion)
@@ -96,7 +97,7 @@ func TestCloudHypervisorVersionUpgradeRestore(t *testing.T) {
 
 	// Phase 3: Change default version to v51.1 (simulates a deploy with new config)
 	t.Log("Switching default CH version to v51.1...")
-	cloudhypervisor.SetDefaultVersion(string(vmm.V51_1))
+	require.NoError(t, cloudhypervisor.SetDefaultVersion(string(vmm.V51_1)))
 
 	// Phase 4: Restore -- must use the stored v49.0, not the new default
 	t.Log("Restoring instance (should use stored v49.0)...")
@@ -110,7 +111,7 @@ func TestCloudHypervisorVersionUpgradeRestore(t *testing.T) {
 	t.Logf("Instance restored with version: %s", inst.HypervisorVersion)
 
 	// Phase 5: Verify a NEW instance picks up the v51.1 default
-	t.Log("Creating second instance (should use v51.1)...")
+	t.Log("Creating second instance (should use v51.1 via default)...")
 	inst2, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "version-upgrade-new",
 		Image:          integrationTestImageRef(t, "docker.io/library/alpine:latest"),
