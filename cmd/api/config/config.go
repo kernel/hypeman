@@ -196,7 +196,7 @@ type HypervisorConfig struct {
 	Default                       string                 `koanf:"default"`
 	CloudHypervisorDefaultVersion string                 `koanf:"cloud_hypervisor_default_version"`
 	FirecrackerBinaryPath         string                 `koanf:"firecracker_binary_path"`
-	Memory                 HypervisorMemoryConfig `koanf:"memory"`
+	Memory                        HypervisorMemoryConfig `koanf:"memory"`
 }
 
 // HypervisorMemoryConfig holds guest memory management settings.
