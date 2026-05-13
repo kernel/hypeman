@@ -136,37 +136,132 @@ func TestCountTemplateForks(t *testing.T) {
 	assert.Equal(t, 0, got)
 }
 
-func TestRestoreInstanceTemplateWithForksRefused(t *testing.T) {
+func TestRestoreInstanceTemplateRefused(t *testing.T) {
 	t.Parallel()
 	mgr, _ := newStorageOnlyManager(t)
 	ctx := context.Background()
 
+	// RestoreInstance no longer auto-demotes templates. Callers must call
+	// DemoteTemplate first. Templates without forks are rejected too.
+	writeTemplateMetadata(t, mgr, "tmpl-idle", 0)
 	writeTemplateMetadata(t, mgr, "tmpl-busy", 1)
 
-	_, err := mgr.RestoreInstance(ctx, "tmpl-busy")
+	_, err := mgr.RestoreInstance(ctx, "tmpl-idle")
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrInvalidState), "expected ErrInvalidState, got %v", err)
+
+	_, err = mgr.RestoreInstance(ctx, "tmpl-busy")
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrInvalidState), "expected ErrInvalidState, got %v", err)
 }
 
-func TestRestoreInstanceTemplateDemotes(t *testing.T) {
+func TestDemoteTemplateClearsTemplateFields(t *testing.T) {
 	t.Parallel()
 	mgr, _ := newStorageOnlyManager(t)
 	ctx := context.Background()
 
 	writeTemplateMetadata(t, mgr, "tmpl-idle", 0)
 
-	// Restore will fail downstream because there's no real snapshot to restore,
-	// but the demotion step should clear IsTemplate and HotPagesPath before that.
-	require.NoError(t, mgr.demoteTemplate(ctx, "tmpl-idle"))
+	inst, err := mgr.DemoteTemplate(ctx, "tmpl-idle")
+	require.NoError(t, err)
+	assert.Equal(t, StateStandby, inst.State)
+	assert.False(t, inst.IsTemplate)
 
 	loaded, err := mgr.loadMetadata("tmpl-idle")
 	require.NoError(t, err)
 	assert.False(t, loaded.IsTemplate)
 	assert.Empty(t, loaded.HotPagesPath)
+}
 
-	inst, err := mgr.GetInstance(ctx, "tmpl-idle")
+func TestDemoteTemplateRefusedWithLiveForks(t *testing.T) {
+	t.Parallel()
+	mgr, _ := newStorageOnlyManager(t)
+	ctx := context.Background()
+
+	writeTemplateMetadata(t, mgr, "tmpl-busy", 2)
+
+	_, err := mgr.DemoteTemplate(ctx, "tmpl-busy")
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrInvalidState), "expected ErrInvalidState, got %v", err)
+
+	loaded, err := mgr.loadMetadata("tmpl-busy")
+	require.NoError(t, err)
+	assert.True(t, loaded.IsTemplate, "template flag should remain set after refused demote")
+}
+
+func TestDemoteTemplateIdempotentOnStandby(t *testing.T) {
+	t.Parallel()
+	mgr, _ := newStorageOnlyManager(t)
+	ctx := context.Background()
+
+	// Write a Standby (non-template) metadata; demote should no-op.
+	writeForkMetadata(t, mgr, "standby-only", "")
+	// writeForkMetadata sets ForkOfTemplate; clear it so this is a plain Standby.
+	meta, err := mgr.loadMetadata("standby-only")
+	require.NoError(t, err)
+	meta.ForkOfTemplate = ""
+	require.NoError(t, mgr.saveMetadata(meta))
+
+	// Mark as having a snapshot so deriveState returns Standby (not Stopped).
+	snapshotDir := filepath.Join(mgr.paths.InstanceDir("standby-only"), "snapshots", "snapshot-latest")
+	require.NoError(t, os.MkdirAll(snapshotDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(snapshotDir, "config.json"), []byte("{}"), 0644))
+
+	inst, err := mgr.DemoteTemplate(ctx, "standby-only")
 	require.NoError(t, err)
 	assert.Equal(t, StateStandby, inst.State)
+}
+
+func TestPromoteToTemplateFromStandby(t *testing.T) {
+	t.Parallel()
+	mgr, _ := newStorageOnlyManager(t)
+	ctx := context.Background()
+
+	// Start as a Standby-with-snapshot (no IsTemplate flag yet).
+	writeTemplateMetadata(t, mgr, "soon-tmpl", 0)
+	meta, err := mgr.loadMetadata("soon-tmpl")
+	require.NoError(t, err)
+	meta.IsTemplate = false
+	require.NoError(t, mgr.saveMetadata(meta))
+
+	inst, err := mgr.PromoteToTemplate(ctx, "soon-tmpl")
+	require.NoError(t, err)
+	assert.Equal(t, StateTemplate, inst.State)
+	assert.True(t, inst.IsTemplate)
+
+	loaded, err := mgr.loadMetadata("soon-tmpl")
+	require.NoError(t, err)
+	assert.True(t, loaded.IsTemplate)
+}
+
+func TestPromoteToTemplateIdempotentOnTemplate(t *testing.T) {
+	t.Parallel()
+	mgr, _ := newStorageOnlyManager(t)
+	ctx := context.Background()
+
+	writeTemplateMetadata(t, mgr, "already-tmpl", 0)
+
+	inst, err := mgr.PromoteToTemplate(ctx, "already-tmpl")
+	require.NoError(t, err)
+	assert.Equal(t, StateTemplate, inst.State)
+	assert.True(t, inst.IsTemplate)
+}
+
+func TestPromoteToTemplateRejectsNonStandby(t *testing.T) {
+	t.Parallel()
+	mgr, _ := newStorageOnlyManager(t)
+	ctx := context.Background()
+
+	// A bare instance with no snapshot directory derives to StateStopped.
+	writeForkMetadata(t, mgr, "stopped-inst", "")
+	meta, err := mgr.loadMetadata("stopped-inst")
+	require.NoError(t, err)
+	meta.ForkOfTemplate = ""
+	require.NoError(t, mgr.saveMetadata(meta))
+
+	_, err = mgr.PromoteToTemplate(ctx, "stopped-inst")
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrInvalidState), "expected ErrInvalidState, got %v", err)
 }
 
 func TestDeleteInstanceTemplateWithForksRefused(t *testing.T) {

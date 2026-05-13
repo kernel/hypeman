@@ -1803,6 +1803,9 @@ type ClientInterface interface {
 	// GetAutoStandbyStatus request
 	GetAutoStandbyStatus(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// DemoteInstanceTemplate request
+	DemoteInstanceTemplate(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// ForkInstanceWithBody request with any body
 	ForkInstanceWithBody(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -1810,6 +1813,9 @@ type ClientInterface interface {
 
 	// GetInstanceLogs request
 	GetInstanceLogs(ctx context.Context, id string, params *GetInstanceLogsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// PromoteInstanceToTemplate request
+	PromoteInstanceToTemplate(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// RestoreInstance request
 	RestoreInstance(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -2265,6 +2271,18 @@ func (c *Client) GetAutoStandbyStatus(ctx context.Context, id string, reqEditors
 	return c.Client.Do(req)
 }
 
+func (c *Client) DemoteInstanceTemplate(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewDemoteInstanceTemplateRequest(c.Server, id)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 func (c *Client) ForkInstanceWithBody(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewForkInstanceRequestWithBody(c.Server, id, contentType, body)
 	if err != nil {
@@ -2291,6 +2309,18 @@ func (c *Client) ForkInstance(ctx context.Context, id string, body ForkInstanceJ
 
 func (c *Client) GetInstanceLogs(ctx context.Context, id string, params *GetInstanceLogsParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetInstanceLogsRequest(c.Server, id, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PromoteInstanceToTemplate(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPromoteInstanceToTemplateRequest(c.Server, id)
 	if err != nil {
 		return nil, err
 	}
@@ -3690,6 +3720,40 @@ func NewGetAutoStandbyStatusRequest(server string, id string) (*http.Request, er
 	return req, nil
 }
 
+// NewDemoteInstanceTemplateRequest generates requests for DemoteInstanceTemplate
+func NewDemoteInstanceTemplateRequest(server string, id string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "id", runtime.ParamLocationPath, id)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/instances/%s/demote-template", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewForkInstanceRequest calls the generic ForkInstance builder with application/json body
 func NewForkInstanceRequest(server string, id string, body ForkInstanceJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
@@ -3818,6 +3882,40 @@ func NewGetInstanceLogsRequest(server string, id string, params *GetInstanceLogs
 	}
 
 	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewPromoteInstanceToTemplateRequest generates requests for PromoteInstanceToTemplate
+func NewPromoteInstanceToTemplateRequest(server string, id string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "id", runtime.ParamLocationPath, id)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/instances/%s/promote-template", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -5123,6 +5221,9 @@ type ClientWithResponsesInterface interface {
 	// GetAutoStandbyStatusWithResponse request
 	GetAutoStandbyStatusWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*GetAutoStandbyStatusResponse, error)
 
+	// DemoteInstanceTemplateWithResponse request
+	DemoteInstanceTemplateWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*DemoteInstanceTemplateResponse, error)
+
 	// ForkInstanceWithBodyWithResponse request with any body
 	ForkInstanceWithBodyWithResponse(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ForkInstanceResponse, error)
 
@@ -5130,6 +5231,9 @@ type ClientWithResponsesInterface interface {
 
 	// GetInstanceLogsWithResponse request
 	GetInstanceLogsWithResponse(ctx context.Context, id string, params *GetInstanceLogsParams, reqEditors ...RequestEditorFn) (*GetInstanceLogsResponse, error)
+
+	// PromoteInstanceToTemplateWithResponse request
+	PromoteInstanceToTemplateWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*PromoteInstanceToTemplateResponse, error)
 
 	// RestoreInstanceWithResponse request
 	RestoreInstanceWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*RestoreInstanceResponse, error)
@@ -5833,6 +5937,31 @@ func (r GetAutoStandbyStatusResponse) StatusCode() int {
 	return 0
 }
 
+type DemoteInstanceTemplateResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *Instance
+	JSON404      *Error
+	JSON409      *Error
+	JSON500      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r DemoteInstanceTemplateResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r DemoteInstanceTemplateResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
 type ForkInstanceResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -5877,6 +6006,31 @@ func (r GetInstanceLogsResponse) Status() string {
 
 // StatusCode returns HTTPResponse.StatusCode
 func (r GetInstanceLogsResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type PromoteInstanceToTemplateResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *Instance
+	JSON404      *Error
+	JSON409      *Error
+	JSON500      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r PromoteInstanceToTemplateResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r PromoteInstanceToTemplateResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
@@ -6767,6 +6921,15 @@ func (c *ClientWithResponses) GetAutoStandbyStatusWithResponse(ctx context.Conte
 	return ParseGetAutoStandbyStatusResponse(rsp)
 }
 
+// DemoteInstanceTemplateWithResponse request returning *DemoteInstanceTemplateResponse
+func (c *ClientWithResponses) DemoteInstanceTemplateWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*DemoteInstanceTemplateResponse, error) {
+	rsp, err := c.DemoteInstanceTemplate(ctx, id, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseDemoteInstanceTemplateResponse(rsp)
+}
+
 // ForkInstanceWithBodyWithResponse request with arbitrary body returning *ForkInstanceResponse
 func (c *ClientWithResponses) ForkInstanceWithBodyWithResponse(ctx context.Context, id string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ForkInstanceResponse, error) {
 	rsp, err := c.ForkInstanceWithBody(ctx, id, contentType, body, reqEditors...)
@@ -6791,6 +6954,15 @@ func (c *ClientWithResponses) GetInstanceLogsWithResponse(ctx context.Context, i
 		return nil, err
 	}
 	return ParseGetInstanceLogsResponse(rsp)
+}
+
+// PromoteInstanceToTemplateWithResponse request returning *PromoteInstanceToTemplateResponse
+func (c *ClientWithResponses) PromoteInstanceToTemplateWithResponse(ctx context.Context, id string, reqEditors ...RequestEditorFn) (*PromoteInstanceToTemplateResponse, error) {
+	rsp, err := c.PromoteInstanceToTemplate(ctx, id, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePromoteInstanceToTemplateResponse(rsp)
 }
 
 // RestoreInstanceWithResponse request returning *RestoreInstanceResponse
@@ -8146,6 +8318,53 @@ func ParseGetAutoStandbyStatusResponse(rsp *http.Response) (*GetAutoStandbyStatu
 	return response, nil
 }
 
+// ParseDemoteInstanceTemplateResponse parses an HTTP response from a DemoteInstanceTemplateWithResponse call
+func ParseDemoteInstanceTemplateResponse(rsp *http.Response) (*DemoteInstanceTemplateResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &DemoteInstanceTemplateResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest Instance
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseForkInstanceResponse parses an HTTP response from a ForkInstanceWithResponse call
 func ParseForkInstanceResponse(rsp *http.Response) (*ForkInstanceResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -8227,6 +8446,53 @@ func ParseGetInstanceLogsResponse(rsp *http.Response) (*GetInstanceLogsResponse,
 			return nil, err
 		}
 		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParsePromoteInstanceToTemplateResponse parses an HTTP response from a PromoteInstanceToTemplateWithResponse call
+func ParsePromoteInstanceToTemplateResponse(rsp *http.Response) (*PromoteInstanceToTemplateResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &PromoteInstanceToTemplateResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest Instance
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest Error
@@ -9450,12 +9716,18 @@ type ServerInterface interface {
 	// Get auto-standby diagnostic status
 	// (GET /instances/{id}/auto-standby/status)
 	GetAutoStandbyStatus(w http.ResponseWriter, r *http.Request, id string)
+	// Demote a template back to standby so it can be restored or deleted
+	// (POST /instances/{id}/demote-template)
+	DemoteInstanceTemplate(w http.ResponseWriter, r *http.Request, id string)
 	// Fork an instance from stopped, standby, or running (with from_running=true)
 	// (POST /instances/{id}/fork)
 	ForkInstance(w http.ResponseWriter, r *http.Request, id string)
 	// Stream instance logs (SSE)
 	// (GET /instances/{id}/logs)
 	GetInstanceLogs(w http.ResponseWriter, r *http.Request, id string, params GetInstanceLogsParams)
+	// Promote a standby instance into a fork-only template
+	// (POST /instances/{id}/promote-template)
+	PromoteInstanceToTemplate(w http.ResponseWriter, r *http.Request, id string)
 	// Restore instance from standby
 	// (POST /instances/{id}/restore)
 	RestoreInstance(w http.ResponseWriter, r *http.Request, id string)
@@ -9687,6 +9959,12 @@ func (_ Unimplemented) GetAutoStandbyStatus(w http.ResponseWriter, r *http.Reque
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
+// Demote a template back to standby so it can be restored or deleted
+// (POST /instances/{id}/demote-template)
+func (_ Unimplemented) DemoteInstanceTemplate(w http.ResponseWriter, r *http.Request, id string) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
 // Fork an instance from stopped, standby, or running (with from_running=true)
 // (POST /instances/{id}/fork)
 func (_ Unimplemented) ForkInstance(w http.ResponseWriter, r *http.Request, id string) {
@@ -9696,6 +9974,12 @@ func (_ Unimplemented) ForkInstance(w http.ResponseWriter, r *http.Request, id s
 // Stream instance logs (SSE)
 // (GET /instances/{id}/logs)
 func (_ Unimplemented) GetInstanceLogs(w http.ResponseWriter, r *http.Request, id string, params GetInstanceLogsParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Promote a standby instance into a fork-only template
+// (POST /instances/{id}/promote-template)
+func (_ Unimplemented) PromoteInstanceToTemplate(w http.ResponseWriter, r *http.Request, id string) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -10579,6 +10863,37 @@ func (siw *ServerInterfaceWrapper) GetAutoStandbyStatus(w http.ResponseWriter, r
 	handler.ServeHTTP(w, r)
 }
 
+// DemoteInstanceTemplate operation middleware
+func (siw *ServerInterfaceWrapper) DemoteInstanceTemplate(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", chi.URLParam(r, "id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DemoteInstanceTemplate(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ForkInstance operation middleware
 func (siw *ServerInterfaceWrapper) ForkInstance(w http.ResponseWriter, r *http.Request) {
 
@@ -10659,6 +10974,37 @@ func (siw *ServerInterfaceWrapper) GetInstanceLogs(w http.ResponseWriter, r *htt
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetInstanceLogs(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// PromoteInstanceToTemplate operation middleware
+func (siw *ServerInterfaceWrapper) PromoteInstanceToTemplate(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", chi.URLParam(r, "id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.PromoteInstanceToTemplate(w, r, id)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -11746,10 +12092,16 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 		r.Get(options.BaseURL+"/instances/{id}/auto-standby/status", wrapper.GetAutoStandbyStatus)
 	})
 	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/instances/{id}/demote-template", wrapper.DemoteInstanceTemplate)
+	})
+	r.Group(func(r chi.Router) {
 		r.Post(options.BaseURL+"/instances/{id}/fork", wrapper.ForkInstance)
 	})
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/instances/{id}/logs", wrapper.GetInstanceLogs)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/instances/{id}/promote-template", wrapper.PromoteInstanceToTemplate)
 	})
 	r.Group(func(r chi.Router) {
 		r.Post(options.BaseURL+"/instances/{id}/restore", wrapper.RestoreInstance)
@@ -12836,6 +13188,50 @@ func (response GetAutoStandbyStatus500JSONResponse) VisitGetAutoStandbyStatusRes
 	return json.NewEncoder(w).Encode(response)
 }
 
+type DemoteInstanceTemplateRequestObject struct {
+	Id string `json:"id"`
+}
+
+type DemoteInstanceTemplateResponseObject interface {
+	VisitDemoteInstanceTemplateResponse(w http.ResponseWriter) error
+}
+
+type DemoteInstanceTemplate200JSONResponse Instance
+
+func (response DemoteInstanceTemplate200JSONResponse) VisitDemoteInstanceTemplateResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DemoteInstanceTemplate404JSONResponse Error
+
+func (response DemoteInstanceTemplate404JSONResponse) VisitDemoteInstanceTemplateResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DemoteInstanceTemplate409JSONResponse Error
+
+func (response DemoteInstanceTemplate409JSONResponse) VisitDemoteInstanceTemplateResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DemoteInstanceTemplate500JSONResponse Error
+
+func (response DemoteInstanceTemplate500JSONResponse) VisitDemoteInstanceTemplateResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
 type ForkInstanceRequestObject struct {
 	Id   string `json:"id"`
 	Body *ForkInstanceJSONRequestBody
@@ -12939,6 +13335,50 @@ func (response GetInstanceLogs404JSONResponse) VisitGetInstanceLogsResponse(w ht
 type GetInstanceLogs500JSONResponse Error
 
 func (response GetInstanceLogs500JSONResponse) VisitGetInstanceLogsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type PromoteInstanceToTemplateRequestObject struct {
+	Id string `json:"id"`
+}
+
+type PromoteInstanceToTemplateResponseObject interface {
+	VisitPromoteInstanceToTemplateResponse(w http.ResponseWriter) error
+}
+
+type PromoteInstanceToTemplate200JSONResponse Instance
+
+func (response PromoteInstanceToTemplate200JSONResponse) VisitPromoteInstanceToTemplateResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type PromoteInstanceToTemplate404JSONResponse Error
+
+func (response PromoteInstanceToTemplate404JSONResponse) VisitPromoteInstanceToTemplateResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type PromoteInstanceToTemplate409JSONResponse Error
+
+func (response PromoteInstanceToTemplate409JSONResponse) VisitPromoteInstanceToTemplateResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type PromoteInstanceToTemplate500JSONResponse Error
+
+func (response PromoteInstanceToTemplate500JSONResponse) VisitPromoteInstanceToTemplateResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(500)
 
@@ -14104,12 +14544,18 @@ type StrictServerInterface interface {
 	// Get auto-standby diagnostic status
 	// (GET /instances/{id}/auto-standby/status)
 	GetAutoStandbyStatus(ctx context.Context, request GetAutoStandbyStatusRequestObject) (GetAutoStandbyStatusResponseObject, error)
+	// Demote a template back to standby so it can be restored or deleted
+	// (POST /instances/{id}/demote-template)
+	DemoteInstanceTemplate(ctx context.Context, request DemoteInstanceTemplateRequestObject) (DemoteInstanceTemplateResponseObject, error)
 	// Fork an instance from stopped, standby, or running (with from_running=true)
 	// (POST /instances/{id}/fork)
 	ForkInstance(ctx context.Context, request ForkInstanceRequestObject) (ForkInstanceResponseObject, error)
 	// Stream instance logs (SSE)
 	// (GET /instances/{id}/logs)
 	GetInstanceLogs(ctx context.Context, request GetInstanceLogsRequestObject) (GetInstanceLogsResponseObject, error)
+	// Promote a standby instance into a fork-only template
+	// (POST /instances/{id}/promote-template)
+	PromoteInstanceToTemplate(ctx context.Context, request PromoteInstanceToTemplateRequestObject) (PromoteInstanceToTemplateResponseObject, error)
 	// Restore instance from standby
 	// (POST /instances/{id}/restore)
 	RestoreInstance(ctx context.Context, request RestoreInstanceRequestObject) (RestoreInstanceResponseObject, error)
@@ -14895,6 +15341,32 @@ func (sh *strictHandler) GetAutoStandbyStatus(w http.ResponseWriter, r *http.Req
 	}
 }
 
+// DemoteInstanceTemplate operation middleware
+func (sh *strictHandler) DemoteInstanceTemplate(w http.ResponseWriter, r *http.Request, id string) {
+	var request DemoteInstanceTemplateRequestObject
+
+	request.Id = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DemoteInstanceTemplate(ctx, request.(DemoteInstanceTemplateRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DemoteInstanceTemplate")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DemoteInstanceTemplateResponseObject); ok {
+		if err := validResponse.VisitDemoteInstanceTemplateResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // ForkInstance operation middleware
 func (sh *strictHandler) ForkInstance(w http.ResponseWriter, r *http.Request, id string) {
 	var request ForkInstanceRequestObject
@@ -14948,6 +15420,32 @@ func (sh *strictHandler) GetInstanceLogs(w http.ResponseWriter, r *http.Request,
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(GetInstanceLogsResponseObject); ok {
 		if err := validResponse.VisitGetInstanceLogsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// PromoteInstanceToTemplate operation middleware
+func (sh *strictHandler) PromoteInstanceToTemplate(w http.ResponseWriter, r *http.Request, id string) {
+	var request PromoteInstanceToTemplateRequestObject
+
+	request.Id = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.PromoteInstanceToTemplate(ctx, request.(PromoteInstanceToTemplateRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "PromoteInstanceToTemplate")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(PromoteInstanceToTemplateResponseObject); ok {
+		if err := validResponse.VisitPromoteInstanceToTemplateResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -15894,56 +16392,59 @@ var swaggerSpec = []string{
 	"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",
-	"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",
+	"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",
+	"gu7dTX4BAA==",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file

@@ -66,9 +66,10 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 			return nil, "", fmt.Errorf("standby source instance: %w", err)
 		}
 
-		// Running fork is a one-shot clone that restores the source afterward;
-		// promoting to Template would block the restore (templates can't wake).
-		forked, forkErr := m.forkInstanceFromStoppedOrStandby(ctx, id, req, true, true)
+		// Running fork is a one-shot clone that restores the source afterward.
+		// Promotion is now an explicit caller step, so the running flow simply
+		// doesn't promote — there's no skip flag to thread anymore.
+		forked, forkErr := m.forkInstanceFromStoppedOrStandby(ctx, id, req, true)
 		if forkErr == nil {
 			if err := m.rotateSourceVsockForRestore(ctx, id, forked.Id); err != nil {
 				forkErr = fmt.Errorf("prepare source snapshot for restore: %w", err)
@@ -107,7 +108,7 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 		}
 		return forked, targetState, nil
 	case StateStopped, StateStandby, StateTemplate:
-		forked, err := m.forkInstanceFromStoppedOrStandby(ctx, id, req, false, false)
+		forked, err := m.forkInstanceFromStoppedOrStandby(ctx, id, req, false)
 		if err != nil {
 			return nil, "", err
 		}
@@ -195,7 +196,7 @@ func generateForkSourceVsockCID(sourceID, forkID string, current int64) int64 {
 	return cid
 }
 
-func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id string, req ForkInstanceRequest, supportValidated, skipTemplatePromotion bool) (*Instance, error) {
+func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id string, req ForkInstanceRequest, supportValidated bool) (*Instance, error) {
 	log := logger.FromContext(ctx)
 
 	meta, err := m.loadMetadata(id)
@@ -340,22 +341,13 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 		}
 	}
 
-	// Promote source to Template so the snapshot we just cloned can't be woken
-	// or deleted while this fork lives. Skipped for the running-fork flow,
-	// where the source is restored afterward. Live forks are counted at read
-	// time by scanning ForkOfTemplate across all instances.
-	if fromSnapshot && !skipTemplatePromotion {
+	// If the source is already a Template, record the parent linkage so it
+	// can be counted as a live fork. Live forks are counted at read time by
+	// scanning ForkOfTemplate across all instances. Plain Standby forks
+	// don't get this linkage — promotion is an explicit lifecycle step the
+	// caller must perform via PromoteToTemplate.
+	if fromSnapshot && stored.IsTemplate {
 		forkMeta.ForkOfTemplate = stored.Id
-		if !stored.IsTemplate {
-			stored.IsTemplate = true
-			if err := m.saveMetadata(meta); err != nil {
-				return nil, fmt.Errorf("promote source to template: %w", err)
-			}
-			cu.Add(func() {
-				stored.IsTemplate = false
-				_ = m.saveMetadata(meta)
-			})
-		}
 	}
 
 	newMeta := &metadata{StoredMetadata: forkMeta}
