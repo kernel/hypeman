@@ -12,6 +12,7 @@ import (
 	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/guest"
 	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/instances/phasetracking"
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/network"
 	"go.opentelemetry.io/otel/attribute"
@@ -173,11 +174,12 @@ func (m *manager) stopInstance(
 
 	// 3. Get network allocation BEFORE killing VMM (while we can still query it)
 	var networkAlloc *network.Allocation
+	var networkAllocErr error
 	if inst.NetworkEnabled {
 		log.DebugContext(ctx, "getting network allocation", "instance_id", id)
-		networkAlloc, err = m.networkManager.GetAllocation(ctx, id)
-		if err != nil {
-			log.WarnContext(ctx, "failed to get network allocation, will still attempt cleanup", "instance_id", id, "error", err)
+		networkAlloc, networkAllocErr = m.networkManager.GetAllocation(ctx, id)
+		if networkAllocErr != nil {
+			log.WarnContext(ctx, "failed to get network allocation, will fall back to ID-based TAP cleanup", "instance_id", id, "error", networkAllocErr)
 		}
 	}
 
@@ -244,6 +246,21 @@ func (m *manager) stopInstance(
 		} else {
 			releaseNetworkSpanEnd(nil)
 		}
+	} else if inst.NetworkEnabled && networkAllocErr != nil {
+		// GetAllocation failed earlier, so we don't have a full Allocation. Fall back
+		// to deleting the TAP by deterministic name to avoid leaking it on the host.
+		log.DebugContext(ctx, "releasing network by instance id (fallback)", "instance_id", id)
+		releaseNetworkCtx, releaseNetworkSpanEnd := m.startLifecycleStep(ctx, "release_network_fallback",
+			attribute.String("instance_id", id),
+			attribute.String("hypervisor", string(stored.HypervisorType)),
+			attribute.String("operation", "release_network_fallback"),
+		)
+		if err := m.networkManager.ReleaseByInstanceID(releaseNetworkCtx, id); err != nil {
+			releaseNetworkSpanEnd(err)
+			log.WarnContext(ctx, "failed to release network by id, continuing", "instance_id", id, "error", err)
+		} else {
+			releaseNetworkSpanEnd(nil)
+		}
 	}
 
 	// 7. Destroy vGPU mdev device if present (frees vGPU slot for other VMs)
@@ -281,13 +298,14 @@ func (m *manager) stopInstance(
 	}
 
 	// 10. Update metadata (clear PID, mdev UUID, set StoppedAt)
-	now := time.Now()
+	now := time.Now().UTC()
 	stored.StoppedAt = &now
 	stored.HypervisorPID = nil
 	stored.GPUMdevUUID = "" // Clear mdev UUID since we destroyed it
 	// Boot markers are per-boot-run and must not carry across stop/restore/start.
 	stored.ProgramStartedAt = nil
 	stored.GuestAgentReadyAt = nil
+	stored.Phases.Record(phasetracking.PhaseStopped, now)
 
 	meta = &metadata{StoredMetadata: *stored}
 	if err := m.saveMetadata(meta); err != nil {

@@ -1,9 +1,29 @@
 package cloudhypervisor
 
 import (
+	"path/filepath"
+
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/vmm"
 )
+
+// serialSocketPath returns the unix socket path that Cloud Hypervisor
+// binds for serial output. The socket lives at the instance directory
+// level, next to ch.sock and vsock.sock — not under logs/ — so the
+// total path stays under the 108-byte sun_path limit on Linux (104 on
+// macOS) when long test temp prefixes are involved.
+//
+// We route serial through a hypeman-owned socket reader (see serial.go)
+// rather than letting CH open the file directly, because CH's File-mode
+// serial opens without O_APPEND. Combined with copytruncate-style log
+// rotation that leaves CH's fd offset stale, the next write lands past
+// EOF and creates a sparse hole of NUL bytes from byte 0 onward.
+func serialSocketPath(logPath string) string {
+	if logPath == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(filepath.Dir(logPath)), "serial.sock")
+}
 
 // ToVMConfig converts hypervisor.VMConfig to Cloud Hypervisor's vmm.VmConfig.
 func ToVMConfig(cfg hypervisor.VMConfig) vmm.VmConfig {
@@ -66,10 +86,12 @@ func ToVMConfig(cfg hypervisor.VMConfig) vmm.VmConfig {
 		disks = append(disks, disk)
 	}
 
-	// Serial console configuration
+	// Serial console configuration. We route serial through a unix socket
+	// that hypeman listens on (see startSerialReader) instead of letting
+	// CH write to the file directly — see serialSocketPath for rationale.
 	serial := vmm.ConsoleConfig{
-		Mode: vmm.ConsoleConfigMode("File"),
-		File: ptr(cfg.SerialLogPath),
+		Mode:   vmm.ConsoleConfigModeSocket,
+		Socket: ptr(serialSocketPath(cfg.SerialLogPath)),
 	}
 
 	// Console off (we use serial)

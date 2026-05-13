@@ -7,6 +7,7 @@ import (
 
 	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/egressproxy"
+	"github.com/kernel/hypeman/lib/instances/phasetracking"
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/network"
 	"go.opentelemetry.io/otel/attribute"
@@ -209,7 +210,9 @@ func (m *manager) startInstance(
 	// Success - release cleanup stack (prevent cleanup)
 	cu.Release()
 
-	// 7. Update metadata (set PID, StartedAt)
+	// 7. Update metadata (set PID, StartedAt). Boot markers were cleared at
+	// the top of this function, so we are in Initializing until they hydrate.
+	stored.Phases.Record(phasetracking.PhaseInitializing, time.Now().UTC())
 	meta = &metadata{StoredMetadata: *stored}
 	if err := m.saveMetadata(meta); err != nil {
 		// VM is running but metadata failed - log but don't fail

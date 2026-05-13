@@ -593,6 +593,11 @@ func (s *ApiService) RestoreInstance(ctx context.Context, request oapi.RestoreIn
 	result, err := s.InstanceManager.RestoreInstance(ctx, inst.Id)
 	if err != nil {
 		switch {
+		case errors.Is(err, instances.ErrNotFound):
+			return oapi.RestoreInstance404JSONResponse{
+				Code:    "not_found",
+				Message: "instance not found",
+			}, nil
 		case errors.Is(err, instances.ErrInvalidState):
 			return oapi.RestoreInstance409JSONResponse{
 				Code:    "invalid_state",
@@ -1114,6 +1119,22 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 			gpu.MdevUuid = lo.ToPtr(inst.GPUMdevUUID)
 		}
 		oapiInst.Gpu = gpu
+	}
+
+	// Expose phase accounting (cumulative time in each lifecycle phase). The
+	// snapshot rolls in time accrued in the current phase since the last
+	// transition, so consumers don't need a separate "live since" calculation.
+	if inst.Phases.Current != "" {
+		current := string(inst.Phases.Current)
+		oapiInst.CurrentPhase = &current
+		since := inst.Phases.Since
+		oapiInst.CurrentPhaseSince = &since
+		snapshot := inst.Phases.Snapshot(time.Now())
+		out := make(map[string]int64, len(snapshot))
+		for k, v := range snapshot {
+			out[string(k)] = v
+		}
+		oapiInst.PhaseDurationsMs = &out
 	}
 
 	return oapiInst

@@ -228,6 +228,11 @@ func run() error {
 	}); ok {
 		reconciler.StartAdmissionAllocationReconciler(ctx, allocationReconcileInterval)
 	}
+	if reconciler, ok := app.InstanceManager.(interface {
+		StartTAPGCReconciler(context.Context)
+	}); ok {
+		reconciler.StartTAPGCReconciler(ctx)
+	}
 
 	// Log OTel status
 	if cfg.Otel.Enabled {

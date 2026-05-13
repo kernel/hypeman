@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/instances/phasetracking"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -169,6 +171,195 @@ func TestDeriveRunningState(t *testing.T) {
 	}
 }
 
+func TestRunningPhaseFromMarkers(t *testing.T) {
+	t.Parallel()
+
+	program := time.Date(2026, 5, 11, 12, 0, 0, 0, time.UTC)
+	agent := program.Add(2 * time.Second)
+	agentBeforeProgram := program.Add(-1 * time.Second)
+
+	tests := []struct {
+		name         string
+		stored       StoredMetadata
+		wantPhase    phasetracking.Phase
+		wantTransAt  time.Time
+		wantHasTrans bool
+	}{
+		{
+			name:      "no markers → initializing",
+			stored:    StoredMetadata{},
+			wantPhase: phasetracking.PhaseInitializing,
+		},
+		{
+			name: "skip-agent + program only → running at program time",
+			stored: StoredMetadata{
+				ProgramStartedAt: &program,
+				SkipGuestAgent:   true,
+			},
+			wantPhase:    phasetracking.PhaseRunning,
+			wantTransAt:  program,
+			wantHasTrans: true,
+		},
+		{
+			name: "program without agent → still initializing",
+			stored: StoredMetadata{
+				ProgramStartedAt: &program,
+			},
+			wantPhase: phasetracking.PhaseInitializing,
+		},
+		{
+			name: "both markers, agent later → running at agent time",
+			stored: StoredMetadata{
+				ProgramStartedAt:  &program,
+				GuestAgentReadyAt: &agent,
+			},
+			wantPhase:    phasetracking.PhaseRunning,
+			wantTransAt:  agent,
+			wantHasTrans: true,
+		},
+		{
+			name: "both markers, program later → running at program time",
+			stored: StoredMetadata{
+				ProgramStartedAt:  &program,
+				GuestAgentReadyAt: &agentBeforeProgram,
+			},
+			wantPhase:    phasetracking.PhaseRunning,
+			wantTransAt:  program,
+			wantHasTrans: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotPhase, gotAt := runningPhaseFromMarkers(&tt.stored)
+			assert.Equal(t, tt.wantPhase, gotPhase)
+			if tt.wantHasTrans {
+				assert.True(t, gotAt.Equal(tt.wantTransAt), "transition time = %v, want %v", gotAt, tt.wantTransAt)
+			} else {
+				assert.True(t, gotAt.IsZero(), "expected zero transition time, got %v", gotAt)
+			}
+		})
+	}
+}
+
+func TestAdvancePhaseIfRunning(t *testing.T) {
+	t.Parallel()
+
+	bootStart := time.Date(2026, 5, 11, 12, 0, 0, 0, time.UTC)
+	program := bootStart.Add(500 * time.Millisecond)
+	agent := bootStart.Add(3 * time.Second)
+
+	t.Run("initializing with no markers stays initializing", func(t *testing.T) {
+		stored := StoredMetadata{}
+		stored.Phases.Record(phasetracking.PhaseInitializing, bootStart)
+
+		advancePhaseIfRunning(&stored)
+		assert.Equal(t, phasetracking.PhaseInitializing, stored.Phases.Current)
+	})
+
+	t.Run("initializing with complete markers advances using marker time", func(t *testing.T) {
+		stored := StoredMetadata{
+			ProgramStartedAt:  &program,
+			GuestAgentReadyAt: &agent,
+		}
+		stored.Phases.Record(phasetracking.PhaseInitializing, bootStart)
+
+		advancePhaseIfRunning(&stored)
+
+		assert.Equal(t, phasetracking.PhaseRunning, stored.Phases.Current)
+		assert.True(t, stored.Phases.Since.Equal(agent), "Since should be marker time, got %v", stored.Phases.Since)
+		// Initializing duration should reflect bootStart→agent, not now.
+		wantMs := agent.Sub(bootStart).Milliseconds()
+		assert.Equal(t, wantMs, stored.Phases.Cumulative[phasetracking.PhaseInitializing])
+	})
+
+	t.Run("idempotent: already running stays running", func(t *testing.T) {
+		stored := StoredMetadata{
+			ProgramStartedAt:  &program,
+			GuestAgentReadyAt: &agent,
+		}
+		stored.Phases.Record(phasetracking.PhaseRunning, agent)
+		runningSince := stored.Phases.Since
+
+		advancePhaseIfRunning(&stored)
+
+		assert.Equal(t, phasetracking.PhaseRunning, stored.Phases.Current)
+		assert.True(t, stored.Phases.Since.Equal(runningSince), "Since should not move on idempotent call")
+	})
+
+	t.Run("non-initializing current phase is left alone", func(t *testing.T) {
+		// A Standby instance whose markers still indicate Running must not be
+		// flipped back to Running — phase transitions are driven by lifecycle
+		// orchestration, not by stale markers.
+		stored := StoredMetadata{
+			ProgramStartedAt:  &program,
+			GuestAgentReadyAt: &agent,
+		}
+		stored.Phases.Record(phasetracking.PhaseStandby, bootStart.Add(10*time.Second))
+
+		advancePhaseIfRunning(&stored)
+		assert.Equal(t, phasetracking.PhaseStandby, stored.Phases.Current)
+	})
+
+	t.Run("marker time before Since is clamped forward", func(t *testing.T) {
+		// Restore-from-early-standby: the instance was standbyed mid-boot
+		// before markers ever hydrated. Phases.Since is set at restore time.
+		// When the markers eventually parse, they may carry pre-standby
+		// timestamps (older than restore). Letting Since walk backwards would
+		// over-count Running on the next transition by the full standby
+		// interval — billing-critical.
+		restoreTime := bootStart.Add(1 * time.Hour)
+		stored := StoredMetadata{
+			ProgramStartedAt:  &program, // 500ms after bootStart — predates restore
+			GuestAgentReadyAt: &agent,   // 3s after bootStart — also predates restore
+		}
+		stored.Phases.Record(phasetracking.PhaseInitializing, restoreTime)
+
+		advancePhaseIfRunning(&stored)
+
+		assert.Equal(t, phasetracking.PhaseRunning, stored.Phases.Current)
+		assert.True(t, stored.Phases.Since.Equal(restoreTime),
+			"Since must not move backwards; got %v, want %v", stored.Phases.Since, restoreTime)
+		// No Initializing duration is credited — elapsed at the clamp is zero.
+		assert.Zero(t, stored.Phases.Cumulative[phasetracking.PhaseInitializing])
+	})
+}
+
+func TestHydrateBootMarkersFromLogs_AdvancesPhaseOnRunningTransition(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	m := &manager{
+		paths: paths.New(tmpDir),
+	}
+
+	bootStart := time.Date(2026, 5, 11, 12, 0, 0, 0, time.UTC)
+	m.now = func() time.Time { return bootStart.Add(5 * time.Second) }
+
+	meta := &StoredMetadata{
+		Id:             "phase-advance-test",
+		SkipGuestAgent: false,
+		StartedAt:      &bootStart,
+	}
+	meta.Phases.Record(phasetracking.PhaseInitializing, bootStart)
+
+	logPath := m.paths.InstanceAppLog(meta.Id)
+	require.NoError(t, os.MkdirAll(filepath.Dir(logPath), 0o755))
+	require.NoError(t, os.WriteFile(logPath, []byte(
+		"HYPEMAN-AGENT-READY ts=2026-05-11T12:00:02Z\n"+
+			"HYPEMAN-PROGRAM-START ts=2026-05-11T12:00:01Z mode=exec\n",
+	), 0o644))
+
+	hydrated := m.hydrateBootMarkersFromLogs(t.Context(), meta)
+	require.True(t, hydrated)
+	require.NotNil(t, meta.ProgramStartedAt)
+	require.NotNil(t, meta.GuestAgentReadyAt)
+
+	assert.Equal(t, phasetracking.PhaseRunning, meta.Phases.Current, "phase should advance to running")
+	// Initializing duration = bootStart → max(program, agent) = 2s.
+	assert.Equal(t, int64(2_000), meta.Phases.Cumulative[phasetracking.PhaseInitializing])
+}
+
 func TestHydrateBootMarkersFromLogs_RescanThrottle(t *testing.T) {
 	t.Parallel()
 
@@ -312,4 +503,96 @@ func TestAppLogPathsForMarkerScan_IgnoresArchivedLogs(t *testing.T) {
 
 	paths := m.appLogPathsForMarkerScan(id)
 	require.Equal(t, []string{logPath + ".2", logPath + ".1", logPath}, paths)
+}
+
+func TestHypervisorStateCache_TTL(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	m := &manager{}
+	m.now = func() time.Time { return now }
+
+	_, ok := m.loadCachedHypervisorState("missing")
+	require.False(t, ok)
+
+	m.storeCachedHypervisorState("vm-1", hypervisor.StateRunning)
+	got, ok := m.loadCachedHypervisorState("vm-1")
+	require.True(t, ok)
+	require.Equal(t, hypervisor.StateRunning, got)
+
+	// Advance just under TTL — still a hit.
+	now = now.Add(hypervisorStateCacheTTL - time.Millisecond)
+	got, ok = m.loadCachedHypervisorState("vm-1")
+	require.True(t, ok)
+	require.Equal(t, hypervisor.StateRunning, got)
+
+	// Past TTL — treated as miss so derive_state will re-query.
+	now = now.Add(2 * time.Millisecond)
+	_, ok = m.loadCachedHypervisorState("vm-1")
+	require.False(t, ok)
+}
+
+func TestHypervisorStateCache_InvalidationAndUpdate(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	m := &manager{}
+	m.now = func() time.Time { return now }
+
+	m.storeCachedHypervisorState("vm-1", hypervisor.StateRunning)
+	m.invalidateCachedHypervisorState("vm-1")
+	_, ok := m.loadCachedHypervisorState("vm-1")
+	require.False(t, ok)
+
+	// Lifecycle event with a live-socket state populates the cache.
+	m.updateCachedHypervisorStateFromInstance(&Instance{
+		StoredMetadata: StoredMetadata{Id: "vm-1"},
+		State:          StateInitializing,
+	})
+	got, ok := m.loadCachedHypervisorState("vm-1")
+	require.True(t, ok)
+	require.Equal(t, hypervisor.StateRunning, got)
+
+	m.updateCachedHypervisorStateFromInstance(&Instance{
+		StoredMetadata: StoredMetadata{Id: "vm-1"},
+		State:          StatePaused,
+	})
+	got, ok = m.loadCachedHypervisorState("vm-1")
+	require.True(t, ok)
+	require.Equal(t, hypervisor.StatePaused, got)
+
+	// Standby has no live socket, so the cache must be cleared so the next
+	// derive_state correctly short-circuits to Standby/Stopped via the
+	// socket check rather than reusing a stale Running entry.
+	m.updateCachedHypervisorStateFromInstance(&Instance{
+		StoredMetadata: StoredMetadata{Id: "vm-1"},
+		State:          StateStandby,
+	})
+	_, ok = m.loadCachedHypervisorState("vm-1")
+	require.False(t, ok)
+}
+
+func TestNotifyLifecycleEvent_UpdatesAndDropsHypervisorStateCache(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	m := &manager{
+		lifecycleEvents: newLifecycleSubscribers(),
+	}
+	m.now = func() time.Time { return now }
+
+	inst := &Instance{
+		StoredMetadata: StoredMetadata{Id: "vm-2"},
+		State:          StateRunning,
+	}
+	m.notifyLifecycleEvent(t.Context(), LifecycleEventStart, inst)
+	got, ok := m.loadCachedHypervisorState("vm-2")
+	require.True(t, ok)
+	require.Equal(t, hypervisor.StateRunning, got)
+
+	// Delete must drop the cache so a future re-create with the same id does
+	// not race with a stale entry from before deletion.
+	m.notifyLifecycleDelete(t.Context(), "vm-2")
+	_, ok = m.loadCachedHypervisorState("vm-2")
+	require.False(t, ok)
 }
