@@ -512,7 +512,7 @@ func (m *manager) createInstance(
 	}
 
 	// 19. Start VMM and boot VM
-	log.InfoContext(ctx, "starting VMM and booting VM", "instance_id", id)
+	log.InfoContext(ctx, "starting VMM and booting VM", "instance_id", id, "hypervisor", hvType, "version", hvVersion)
 	startVMCtx, startVMSpanEnd := m.startLifecycleStep(ctx, "start_vm",
 		attribute.String("instance_id", id),
 		attribute.String("hypervisor", string(stored.HypervisorType)),
@@ -556,7 +556,7 @@ func (m *manager) createInstance(
 		m.recordDuration(ctx, m.metrics.createDuration, start, "success", hvType)
 		m.recordStateTransition(ctx, string(StateStopped), string(finalInst.State), hvType)
 	}
-	log.InfoContext(ctx, "instance created successfully", "instance_id", id, "name", req.Name, "state", finalInst.State, "hypervisor", hvType)
+	log.InfoContext(ctx, "instance created successfully", "instance_id", id, "name", req.Name, "state", finalInst.State, "hypervisor", hvType, "version", hvVersion)
 	return &finalInst, nil
 }
 
