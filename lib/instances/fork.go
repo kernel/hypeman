@@ -299,7 +299,6 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 	// Template-only fields don't carry forward to the fork; the fork is a fresh
 	// instance regardless of whether the parent is a template.
 	forkMeta.IsTemplate = false
-	forkMeta.ForkCount = 0
 	forkMeta.HotPagesPath = ""
 	forkMeta.ForkOfTemplate = ""
 
@@ -341,23 +340,22 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 		}
 	}
 
-	// Promote source to Template (or bump existing template ForkCount) so the
-	// snapshot we just cloned can't be woken or deleted while this fork lives.
-	// Skipped for the running-fork flow, where the source is restored afterward.
+	// Promote source to Template so the snapshot we just cloned can't be woken
+	// or deleted while this fork lives. Skipped for the running-fork flow,
+	// where the source is restored afterward. Live forks are counted at read
+	// time by scanning ForkOfTemplate across all instances.
 	if fromSnapshot && !skipTemplatePromotion {
-		priorIsTemplate := stored.IsTemplate
-		priorForkCount := stored.ForkCount
-		stored.IsTemplate = true
-		stored.ForkCount = priorForkCount + 1
-		if err := m.saveMetadata(meta); err != nil {
-			return nil, fmt.Errorf("promote source to template: %w", err)
-		}
-		cu.Add(func() {
-			stored.IsTemplate = priorIsTemplate
-			stored.ForkCount = priorForkCount
-			_ = m.saveMetadata(meta)
-		})
 		forkMeta.ForkOfTemplate = stored.Id
+		if !stored.IsTemplate {
+			stored.IsTemplate = true
+			if err := m.saveMetadata(meta); err != nil {
+				return nil, fmt.Errorf("promote source to template: %w", err)
+			}
+			cu.Add(func() {
+				stored.IsTemplate = false
+				_ = m.saveMetadata(meta)
+			})
+		}
 	}
 
 	newMeta := &metadata{StoredMetadata: forkMeta}

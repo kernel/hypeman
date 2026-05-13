@@ -35,10 +35,15 @@ func (m *manager) deleteInstance(
 	stored := &meta.StoredMetadata
 	log.DebugContext(ctx, "loaded instance", "instance_id", id, "state", inst.State)
 
-	if inst.State == StateTemplate && stored.ForkCount > 0 {
-		return fmt.Errorf("%w: cannot delete template %s with %d live fork(s); delete forks first", ErrInvalidState, id, stored.ForkCount)
+	if inst.State == StateTemplate {
+		forks, err := m.countTemplateForks(id)
+		if err != nil {
+			return fmt.Errorf("count forks of template %s: %w", id, err)
+		}
+		if forks > 0 {
+			return fmt.Errorf("%w: cannot delete template %s with %d live fork(s); delete forks first", ErrInvalidState, id, forks)
+		}
 	}
-	parentTemplateID := stored.ForkOfTemplate
 
 	target, err := m.cancelAndWaitCompressionJob(ctx, m.snapshotJobKeyForInstance(id))
 	if err != nil {
@@ -141,39 +146,8 @@ func (m *manager) deleteInstance(
 		return fmt.Errorf("delete instance data: %w", err)
 	}
 
-	if parentTemplateID != "" {
-		m.decrementTemplateForkCount(ctx, parentTemplateID)
-	}
-
 	log.InfoContext(ctx, "instance deleted successfully", "instance_id", id)
 	return nil
-}
-
-// decrementTemplateForkCount drops the parent template's ForkCount by one under
-// the parent's lock. Logs but does not return errors: the fork is already gone,
-// so the worst case is refcount drift that a future reconciliation pass fixes.
-func (m *manager) decrementTemplateForkCount(ctx context.Context, parentID string) {
-	log := logger.FromContext(ctx)
-	lock := m.getInstanceLock(parentID)
-	lock.Lock()
-	defer lock.Unlock()
-
-	parent, err := m.loadMetadata(parentID)
-	if err != nil {
-		log.WarnContext(ctx, "failed to load parent template for refcount decrement",
-			"parent_template_id", parentID, "error", err)
-		return
-	}
-	if parent.ForkCount <= 0 {
-		log.WarnContext(ctx, "parent template fork count is non-positive at decrement; leaving as-is",
-			"parent_template_id", parentID, "fork_count", parent.ForkCount)
-		return
-	}
-	parent.ForkCount--
-	if err := m.saveMetadata(parent); err != nil {
-		log.WarnContext(ctx, "failed to save parent template after refcount decrement",
-			"parent_template_id", parentID, "error", err)
-	}
 }
 
 // killHypervisor force kills the hypervisor process without graceful shutdown

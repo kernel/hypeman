@@ -21,7 +21,7 @@ const (
 	StatePaused       State = "Paused"       // VM paused (CH native)
 	StateShutdown     State = "Shutdown"     // VM shutdown, VMM exists (CH native)
 	StateStandby      State = "Standby"      // No VMM, snapshot exists
-	StateTemplate     State = "Template"     // Standby snapshot promoted to fork-only parent; cannot wake while ForkCount>0
+	StateTemplate     State = "Template"     // Standby snapshot promoted to fork-only parent; cannot wake while any forks exist
 	StateUnknown      State = "Unknown"      // Failed to determine state (VMM query failed)
 )
 
@@ -148,16 +148,12 @@ type StoredMetadata struct {
 
 	// IsTemplate marks a Standby instance promoted to a fork-only parent.
 	// When true, derived state is Template instead of Standby and the
-	// instance cannot wake until un-promoted (ForkCount must be 0).
+	// instance cannot wake until un-promoted.
 	IsTemplate bool
 
-	// ForkCount tracks live forks descending from this template. Maintained by
-	// ForkInstance/DeleteInstance; un-promote and delete of the template
-	// require ForkCount==0.
-	ForkCount int
-
 	// ForkOfTemplate is the ID of the template this instance was forked from.
-	// Empty when the instance is not a template-backed fork.
+	// Empty when the instance is not a template-backed fork. Live forks of a
+	// template are counted at read time by scanning this field.
 	ForkOfTemplate string
 
 	// HotPagesPath points to a precomputed hot-pages file used by the UFFD page

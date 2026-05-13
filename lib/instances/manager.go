@@ -460,14 +460,18 @@ func (m *manager) RestoreInstance(ctx context.Context, id string) (*Instance, er
 }
 
 // demoteTemplate un-promotes a Template back to Standby so it can be restored.
-// Requires ForkCount==0. Must be called with the instance lock held.
+// Requires no live forks. Must be called with the instance lock held.
 func (m *manager) demoteTemplate(ctx context.Context, id string) error {
 	meta, err := m.loadMetadata(id)
 	if err != nil {
 		return err
 	}
-	if meta.ForkCount > 0 {
-		return fmt.Errorf("%w: cannot un-promote template %s with %d live fork(s); delete forks first", ErrInvalidState, id, meta.ForkCount)
+	forks, err := m.countTemplateForks(id)
+	if err != nil {
+		return fmt.Errorf("count forks of template %s: %w", id, err)
+	}
+	if forks > 0 {
+		return fmt.Errorf("%w: cannot un-promote template %s with %d live fork(s); delete forks first", ErrInvalidState, id, forks)
 	}
 	if err := StateTemplate.CanTransitionTo(StateStandby); err != nil {
 		return err

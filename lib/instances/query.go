@@ -825,6 +825,27 @@ func (m *manager) listInstances(ctx context.Context) ([]Instance, error) {
 	return result, nil
 }
 
+// countTemplateForks returns the number of instances with ForkOfTemplate==templateID.
+// Skips metadata files that fail to load (logged elsewhere on read).
+func (m *manager) countTemplateForks(templateID string) (int, error) {
+	files, err := m.listMetadataFiles()
+	if err != nil {
+		return 0, err
+	}
+	count := 0
+	for _, file := range files {
+		id := filepath.Base(filepath.Dir(file))
+		meta, err := m.loadMetadata(id)
+		if err != nil {
+			continue
+		}
+		if meta.ForkOfTemplate == templateID {
+			count++
+		}
+	}
+	return count, nil
+}
+
 func (m *manager) findInstanceMetadataByExactName(name string) (*metadata, error) {
 	files, err := m.listMetadataFiles()
 	if err != nil {

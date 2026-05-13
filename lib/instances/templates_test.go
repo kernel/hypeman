@@ -3,6 +3,7 @@ package instances
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -49,7 +50,8 @@ func newStorageOnlyManager(t *testing.T) (*manager, string) {
 }
 
 // writeTemplateMetadata writes a metadata.json marked as a template with a
-// fake snapshot directory so deriveState returns StateTemplate.
+// fake snapshot directory so deriveState returns StateTemplate, plus the
+// requested number of fork metadata files pointing at it.
 func writeTemplateMetadata(t *testing.T, mgr *manager, id string, forkCount int) {
 	t.Helper()
 	require.NoError(t, mgr.ensureDirectories(id))
@@ -59,18 +61,43 @@ func writeTemplateMetadata(t *testing.T, mgr *manager, id string, forkCount int)
 
 	meta := &metadata{
 		StoredMetadata: StoredMetadata{
-			Id:             id,
-			Name:           id,
-			Image:          "test:latest",
-			Vcpus:          1,
-			Size:           1024 * 1024 * 1024,
-			CreatedAt:      time.Now(),
-			HypervisorType: hypervisor.TypeCloudHypervisor,
-			SocketPath:     filepath.Join(mgr.paths.InstanceDir(id), "ch.sock"),
-			DataDir:        mgr.paths.InstanceDir(id),
+			Id:                id,
+			Name:              id,
+			Image:             "test:latest",
+			Vcpus:             1,
+			Size:              1024 * 1024 * 1024,
+			CreatedAt:         time.Now(),
+			HypervisorType:    hypervisor.TypeCloudHypervisor,
+			SocketPath:        filepath.Join(mgr.paths.InstanceDir(id), "ch.sock"),
+			DataDir:           mgr.paths.InstanceDir(id),
 			HypervisorVersion: string(vmm.V49_0),
-			IsTemplate:     true,
-			ForkCount:      forkCount,
+			IsTemplate:        true,
+		},
+	}
+	require.NoError(t, mgr.saveMetadata(meta))
+
+	for i := 0; i < forkCount; i++ {
+		writeForkMetadata(t, mgr, fmt.Sprintf("%s-fork-%d", id, i), id)
+	}
+}
+
+// writeForkMetadata writes a Stopped fork metadata file pointing at templateID.
+func writeForkMetadata(t *testing.T, mgr *manager, id, templateID string) {
+	t.Helper()
+	require.NoError(t, mgr.ensureDirectories(id))
+	meta := &metadata{
+		StoredMetadata: StoredMetadata{
+			Id:                id,
+			Name:              id,
+			Image:             "test:latest",
+			Vcpus:             1,
+			Size:              1024 * 1024 * 1024,
+			CreatedAt:         time.Now(),
+			HypervisorType:    hypervisor.TypeCloudHypervisor,
+			SocketPath:        filepath.Join(mgr.paths.InstanceDir(id), "ch.sock"),
+			DataDir:           mgr.paths.InstanceDir(id),
+			HypervisorVersion: string(vmm.V49_0),
+			ForkOfTemplate:    templateID,
 		},
 	}
 	require.NoError(t, mgr.saveMetadata(meta))
@@ -86,8 +113,27 @@ func TestDeriveStateTemplate(t *testing.T) {
 	inst, err := mgr.GetInstance(ctx, "tmpl-1")
 	require.NoError(t, err)
 	assert.Equal(t, StateTemplate, inst.State)
-	assert.Equal(t, 2, inst.ForkCount)
 	assert.True(t, inst.IsTemplate)
+}
+
+func TestCountTemplateForks(t *testing.T) {
+	t.Parallel()
+	mgr, _ := newStorageOnlyManager(t)
+
+	writeTemplateMetadata(t, mgr, "tmpl-a", 3)
+	writeTemplateMetadata(t, mgr, "tmpl-b", 1)
+
+	got, err := mgr.countTemplateForks("tmpl-a")
+	require.NoError(t, err)
+	assert.Equal(t, 3, got)
+
+	got, err = mgr.countTemplateForks("tmpl-b")
+	require.NoError(t, err)
+	assert.Equal(t, 1, got)
+
+	got, err = mgr.countTemplateForks("tmpl-missing")
+	require.NoError(t, err)
+	assert.Equal(t, 0, got)
 }
 
 func TestRestoreInstanceTemplateWithForksRefused(t *testing.T) {
@@ -111,7 +157,7 @@ func TestRestoreInstanceTemplateDemotes(t *testing.T) {
 
 	// Restore will fail downstream because there's no real snapshot to restore,
 	// but the demotion step should clear IsTemplate and HotPagesPath before that.
-	mgr.demoteTemplate(ctx, "tmpl-idle")
+	require.NoError(t, mgr.demoteTemplate(ctx, "tmpl-idle"))
 
 	loaded, err := mgr.loadMetadata("tmpl-idle")
 	require.NoError(t, err)
@@ -134,43 +180,25 @@ func TestDeleteInstanceTemplateWithForksRefused(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrInvalidState), "expected ErrInvalidState, got %v", err)
 
-	// Template still exists with refcount intact.
 	loaded, err := mgr.loadMetadata("tmpl-with-forks")
 	require.NoError(t, err)
-	assert.Equal(t, 3, loaded.ForkCount)
+	assert.True(t, loaded.IsTemplate)
 }
 
-func TestDeleteForkDecrementsParentTemplateForkCount(t *testing.T) {
+func TestDeleteForkLeavesTemplateIntact(t *testing.T) {
 	t.Parallel()
 	mgr, _ := newStorageOnlyManager(t)
 	ctx := context.Background()
 
 	writeTemplateMetadata(t, mgr, "tmpl-parent", 2)
 
-	// Write a fork that references the template.
-	forkID := "fork-1"
-	require.NoError(t, mgr.ensureDirectories(forkID))
-	forkMeta := &metadata{
-		StoredMetadata: StoredMetadata{
-			Id:             forkID,
-			Name:           forkID,
-			Image:          "test:latest",
-			Vcpus:          1,
-			Size:           1024 * 1024 * 1024,
-			CreatedAt:      time.Now(),
-			HypervisorType: hypervisor.TypeCloudHypervisor,
-			SocketPath:     filepath.Join(mgr.paths.InstanceDir(forkID), "ch.sock"),
-			DataDir:        mgr.paths.InstanceDir(forkID),
-			HypervisorVersion: string(vmm.V49_0),
-			ForkOfTemplate: "tmpl-parent",
-		},
-	}
-	require.NoError(t, mgr.saveMetadata(forkMeta))
-
-	require.NoError(t, mgr.DeleteInstance(ctx, forkID))
+	require.NoError(t, mgr.DeleteInstance(ctx, "tmpl-parent-fork-0"))
 
 	parent, err := mgr.loadMetadata("tmpl-parent")
 	require.NoError(t, err)
-	assert.Equal(t, 1, parent.ForkCount)
 	assert.True(t, parent.IsTemplate)
+
+	got, err := mgr.countTemplateForks("tmpl-parent")
+	require.NoError(t, err)
+	assert.Equal(t, 1, got)
 }

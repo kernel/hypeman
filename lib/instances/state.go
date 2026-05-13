@@ -39,8 +39,8 @@ var ValidTransitions = map[State][]State{
 		StateTemplate, // promote to fork-only parent (gated by fork intent)
 	},
 	StateTemplate: {
-		StateStandby, // un-promote (allowed only when ForkCount==0)
-		StateStopped, // delete (allowed only when ForkCount==0)
+		StateStandby, // un-promote (allowed only when no live forks)
+		StateStopped, // delete (allowed only when no live forks)
 	},
 	// StateUnknown means we failed to determine state - no transitions allowed.
 	// Operations on instances in Unknown state should fail with an error
