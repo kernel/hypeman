@@ -246,7 +246,11 @@ func (m *manager) createInstance(
 
 	// Get hypervisor version: prefer explicit request, then configured default
 	hvVersion := req.HypervisorVersion
-	if hvVersion == "" {
+	if hvVersion != "" {
+		if _, err := starter.GetBinaryPath(m.paths, hvVersion); err != nil {
+			return nil, fmt.Errorf("invalid hypervisor version %q: %w", hvVersion, err)
+		}
+	} else {
 		var verErr error
 		hvVersion, verErr = starter.GetVersion(m.paths)
 		if verErr != nil {

@@ -3,15 +3,12 @@ package vmm
 import (
 	"fmt"
 	"os/exec"
-	"regexp"
 	"strings"
 )
 
-// versionRegex extracts a vN.N or vN.N.N version tag from --version output.
-var versionRegex = regexp.MustCompile(`v\d+\.\d+(?:\.\d+)?`)
-
 // ParseVersion extracts version from cloud-hypervisor --version output
-// and matches it against SupportedVersions.
+// and matches it against SupportedVersions. Checks longer version strings
+// first so "v49.0.1" doesn't falsely match "v49.0".
 func ParseVersion(binaryPath string) (CHVersion, error) {
 	cmd := exec.Command(binaryPath, "--version")
 	output, err := cmd.Output()
@@ -21,16 +18,28 @@ func ParseVersion(binaryPath string) (CHVersion, error) {
 
 	versionStr := strings.TrimSpace(string(output))
 
-	match := versionRegex.FindString(versionStr)
-	if match != "" {
-		for _, v := range SupportedVersions {
-			if match == string(v) {
-				return v, nil
-			}
+	// Match against supported versions, longest first to avoid
+	// "v49.0" matching inside "v49.0.1".
+	for _, v := range sortedByLengthDesc(SupportedVersions) {
+		if strings.Contains(versionStr, string(v)) {
+			return v, nil
 		}
 	}
 
 	return "", fmt.Errorf("unsupported version: %s", versionStr)
+}
+
+func sortedByLengthDesc(versions []CHVersion) []CHVersion {
+	sorted := make([]CHVersion, len(versions))
+	copy(sorted, versions)
+	for i := 0; i < len(sorted); i++ {
+		for j := i + 1; j < len(sorted); j++ {
+			if len(sorted[j]) > len(sorted[i]) {
+				sorted[i], sorted[j] = sorted[j], sorted[i]
+			}
+		}
+	}
+	return sorted
 }
 
 // IsVersionSupported checks if a version is supported by this library
