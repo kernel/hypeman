@@ -38,7 +38,7 @@ dataDir := "/var/lib/hypeman"
 socketPath := "/tmp/vmm.sock"
 
 // Start Cloud Hypervisor VMM (extracts binary if needed)
-err := vmm.StartProcess(ctx, dataDir, vmm.V48_0, socketPath)
+err := vmm.StartProcess(ctx, dataDir, vmm.V51_1, socketPath)
 if err != nil {
     log.Fatal(err)
 }
@@ -60,9 +60,9 @@ resp, err := client.GetVmmPingWithResponse(ctx)
 ### Check Binary Version
 
 ```go
-binaryPath, _ := vmm.GetBinaryPath(dataDir, vmm.V48_0)
+binaryPath, _ := vmm.GetBinaryPath(dataDir, vmm.V51_1)
 version, err := vmm.ParseVersion(binaryPath)
-fmt.Println(version) // "v48.0"
+fmt.Println(version) // "v51.1"
 ```
 
 ## Architecture
@@ -75,22 +75,29 @@ lib/vmm/
 ├── version.go          # Version parsing utilities
 ├── binaries/           # Embedded Cloud Hypervisor binaries
 │   └── cloud-hypervisor/
-│       ├── v48.0/
-│       │   ├── x86_64/cloud-hypervisor    (4.5MB)
-│       │   └── aarch64/cloud-hypervisor   (3.3MB)
-│       └── v49.0/
-│           ├── x86_64/cloud-hypervisor    (4.5MB)
-│           └── aarch64/cloud-hypervisor   (3.3MB)
-|       # There will be additional versions in the future...
+│       ├── v49.0/
+│       │   ├── x86_64/cloud-hypervisor
+│       │   └── aarch64/cloud-hypervisor
+│       └── v51.1/
+│           ├── x86_64/cloud-hypervisor
+│           └── aarch64/cloud-hypervisor
 └── client_test.go      # Tests with real Cloud Hypervisor
 ```
 
 ## Supported Versions
 
-- Cloud Hypervisor v48.0 (API v0.3.0)
 - Cloud Hypervisor v49.0 (API v0.3.0)
+- Cloud Hypervisor v51.1 (API v0.3.0)
 
-There may be additional versions in the future. Cloud hypervisor versions may update frequently, while the API updates less frequently.
+Cloud Hypervisor versions may update frequently while the API updates less frequently. All embedded versions currently share the same API spec.
+
+## Multi-Version Support
+
+Multiple CH versions are embedded to support zero-downtime upgrades. Snapshot restore requires the exact CH binary version that created the snapshot, so both old and new binaries must be available during the migration window.
+
+`DefaultVersion` in `binaries.go` controls which version is used for new instances. Operators can override it via the `hypervisor.cloud_hypervisor_default_version` config field. Existing instances always restore using the version stored in their metadata.
+
+When only the default version is changing (no binary removal), the upgrade is safe with no drain required. Remove an old version only after all standby instances on that version have expired.
 
 ## Regenerating Client
 

@@ -244,11 +244,19 @@ func (m *manager) createInstance(
 		return nil, fmt.Errorf("get vm starter for %s: %w", hvType, err)
 	}
 
-	// Get hypervisor version
-	hvVersion, err := starter.GetVersion(m.paths)
-	if err != nil {
-		log.WarnContext(ctx, "failed to get hypervisor version", "hypervisor", hvType, "error", err)
-		hvVersion = "unknown"
+	// Get hypervisor version: prefer explicit request, then configured default
+	hvVersion := req.HypervisorVersion
+	if hvVersion != "" {
+		if _, err := starter.GetBinaryPath(m.paths, hvVersion); err != nil {
+			return nil, fmt.Errorf("invalid hypervisor version %q: %w", hvVersion, err)
+		}
+	} else {
+		var verErr error
+		hvVersion, verErr = starter.GetVersion(m.paths)
+		if verErr != nil {
+			log.WarnContext(ctx, "failed to get hypervisor version", "hypervisor", hvType, "error", verErr)
+			hvVersion = "unknown"
+		}
 	}
 
 	// 10. Validate, resolve, and auto-bind devices (GPU passthrough)
@@ -508,7 +516,7 @@ func (m *manager) createInstance(
 	}
 
 	// 19. Start VMM and boot VM
-	log.InfoContext(ctx, "starting VMM and booting VM", "instance_id", id)
+	log.InfoContext(ctx, "starting VMM and booting VM", "instance_id", id, "hypervisor", hvType, "version", hvVersion)
 	startVMCtx, startVMSpanEnd := m.startLifecycleStep(ctx, "start_vm",
 		attribute.String("instance_id", id),
 		attribute.String("hypervisor", string(stored.HypervisorType)),
@@ -552,7 +560,7 @@ func (m *manager) createInstance(
 		m.recordDuration(ctx, m.metrics.createDuration, start, "success", hvType)
 		m.recordStateTransition(ctx, string(StateStopped), string(finalInst.State), hvType)
 	}
-	log.InfoContext(ctx, "instance created successfully", "instance_id", id, "name", req.Name, "state", finalInst.State, "hypervisor", hvType)
+	log.InfoContext(ctx, "instance created successfully", "instance_id", id, "name", req.Name, "state", finalInst.State, "hypervisor", hvType, "version", hvVersion)
 	return &finalInst, nil
 }
 
