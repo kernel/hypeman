@@ -33,6 +33,15 @@ const (
 	DebugConsoleConfigModeTty  DebugConsoleConfigMode = "Tty"
 )
 
+// Defines values for DiskConfigImageType.
+const (
+	FixedVhd DiskConfigImageType = "FixedVhd"
+	Qcow2    DiskConfigImageType = "Qcow2"
+	Raw      DiskConfigImageType = "Raw"
+	Unknown  DiskConfigImageType = "Unknown"
+	Vhdx     DiskConfigImageType = "Vhdx"
+)
+
 // Defines values for VmInfoState.
 const (
 	Created  VmInfoState = "Created"
@@ -89,6 +98,7 @@ type CpusConfig struct {
 	KvmHyperv   *bool          `json:"kvm_hyperv,omitempty"`
 	MaxPhysBits *int           `json:"max_phys_bits,omitempty"`
 	MaxVcpus    int            `json:"max_vcpus"`
+	Nested      *bool          `json:"nested,omitempty"`
 	Topology    *CpuTopology   `json:"topology,omitempty"`
 }
 
@@ -121,8 +131,10 @@ type DeviceNode struct {
 
 // DiskConfig defines model for DiskConfig.
 type DiskConfig struct {
+	BackingFiles   *bool                `json:"backing_files,omitempty"`
 	Direct         *bool                `json:"direct,omitempty"`
 	Id             *string              `json:"id,omitempty"`
+	ImageType      *DiskConfigImageType `json:"image_type,omitempty"`
 	Iommu          *bool                `json:"iommu,omitempty"`
 	NumQueues      *int                 `json:"num_queues,omitempty"`
 	Path           *string              `json:"path,omitempty"`
@@ -135,9 +147,13 @@ type DiskConfig struct {
 	RateLimiterConfig *RateLimiterConfig `json:"rate_limiter_config,omitempty"`
 	Readonly          *bool              `json:"readonly,omitempty"`
 	Serial            *string            `json:"serial,omitempty"`
+	Sparse            *bool              `json:"sparse,omitempty"`
 	VhostSocket       *string            `json:"vhost_socket,omitempty"`
 	VhostUser         *bool              `json:"vhost_user,omitempty"`
 }
+
+// DiskConfigImageType defines model for DiskConfig.ImageType.
+type DiskConfigImageType string
 
 // FsConfig defines model for FsConfig.
 type FsConfig struct {
@@ -196,11 +212,14 @@ type NetConfig struct {
 	Mac *string `json:"mac,omitempty"`
 
 	// Mask Must be a valid IPv4 netmask if ip is an IPv4 address or a valid IPv6 netmask if ip is an IPv6 address.
-	Mask       *string `json:"mask,omitempty"`
-	Mtu        *int    `json:"mtu,omitempty"`
-	NumQueues  *int    `json:"num_queues,omitempty"`
-	PciSegment *int16  `json:"pci_segment,omitempty"`
-	QueueSize  *int    `json:"queue_size,omitempty"`
+	Mask        *string `json:"mask,omitempty"`
+	Mtu         *int    `json:"mtu,omitempty"`
+	NumQueues   *int    `json:"num_queues,omitempty"`
+	OffloadCsum *bool   `json:"offload_csum,omitempty"`
+	OffloadTso  *bool   `json:"offload_tso,omitempty"`
+	OffloadUfo  *bool   `json:"offload_ufo,omitempty"`
+	PciSegment  *int16  `json:"pci_segment,omitempty"`
+	QueueSize   *int    `json:"queue_size,omitempty"`
 
 	// RateLimiterConfig Defines an IO rate limiter with independent bytes/s and ops/s limits. Limits are defined by configuring each of the _bandwidth_ and _ops_ token buckets.
 	RateLimiterConfig *RateLimiterConfig `json:"rate_limiter_config,omitempty"`
@@ -213,6 +232,7 @@ type NetConfig struct {
 // NumaConfig defines model for NumaConfig.
 type NumaConfig struct {
 	Cpus        *[]int32        `json:"cpus,omitempty"`
+	DeviceId    *string         `json:"device_id,omitempty"`
 	Distances   *[]NumaDistance `json:"distances,omitempty"`
 	GuestNumaId int32           `json:"guest_numa_id"`
 	MemoryZones *[]string       `json:"memory_zones,omitempty"`
@@ -413,6 +433,15 @@ type VmResize struct {
 	DesiredVcpus *int   `json:"desired_vcpus,omitempty"`
 }
 
+// VmResizeDisk defines model for VmResizeDisk.
+type VmResizeDisk struct {
+	// DesiredSize desired disk size in bytes
+	DesiredSize *int64 `json:"desired_size,omitempty"`
+
+	// Id disk identifier
+	Id *string `json:"id,omitempty"`
+}
+
 // VmResizeZone defines model for VmResizeZone.
 type VmResizeZone struct {
 	// DesiredRam desired memory zone size in bytes
@@ -483,6 +512,9 @@ type PutVmRemoveDeviceJSONRequestBody = VmRemoveDevice
 
 // PutVmResizeJSONRequestBody defines body for PutVmResize for application/json ContentType.
 type PutVmResizeJSONRequestBody = VmResize
+
+// PutVmResizeDiskJSONRequestBody defines body for PutVmResizeDisk for application/json ContentType.
+type PutVmResizeDiskJSONRequestBody = VmResizeDisk
 
 // PutVmResizeZoneJSONRequestBody defines body for PutVmResizeZone for application/json ContentType.
 type PutVmResizeZoneJSONRequestBody = VmResizeZone
@@ -654,6 +686,11 @@ type ClientInterface interface {
 	PutVmResizeWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	PutVmResize(ctx context.Context, body PutVmResizeJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// PutVmResizeDiskWithBody request with any body
+	PutVmResizeDiskWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	PutVmResizeDisk(ctx context.Context, body PutVmResizeDiskJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// PutVmResizeZoneWithBody request with any body
 	PutVmResizeZoneWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -1077,6 +1114,30 @@ func (c *Client) PutVmResizeWithBody(ctx context.Context, contentType string, bo
 
 func (c *Client) PutVmResize(ctx context.Context, body PutVmResizeJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewPutVmResizeRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PutVmResizeDiskWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPutVmResizeDiskRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PutVmResizeDisk(ctx context.Context, body PutVmResizeDiskJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPutVmResizeDiskRequest(c.Server, body)
 	if err != nil {
 		return nil, err
 	}
@@ -1952,6 +2013,46 @@ func NewPutVmResizeRequestWithBody(server string, contentType string, body io.Re
 	return req, nil
 }
 
+// NewPutVmResizeDiskRequest calls the generic PutVmResizeDisk builder with application/json body
+func NewPutVmResizeDiskRequest(server string, body PutVmResizeDiskJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewPutVmResizeDiskRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewPutVmResizeDiskRequestWithBody generates requests for PutVmResizeDisk with any type of body
+func NewPutVmResizeDiskRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/vm.resize-disk")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("PUT", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
 // NewPutVmResizeZoneRequest calls the generic PutVmResizeZone builder with application/json body
 func NewPutVmResizeZoneRequest(server string, body PutVmResizeZoneJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
@@ -2375,6 +2476,11 @@ type ClientWithResponsesInterface interface {
 	PutVmResizeWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PutVmResizeResponse, error)
 
 	PutVmResizeWithResponse(ctx context.Context, body PutVmResizeJSONRequestBody, reqEditors ...RequestEditorFn) (*PutVmResizeResponse, error)
+
+	// PutVmResizeDiskWithBodyWithResponse request with any body
+	PutVmResizeDiskWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PutVmResizeDiskResponse, error)
+
+	PutVmResizeDiskWithResponse(ctx context.Context, body PutVmResizeDiskJSONRequestBody, reqEditors ...RequestEditorFn) (*PutVmResizeDiskResponse, error)
 
 	// PutVmResizeZoneWithBodyWithResponse request with any body
 	PutVmResizeZoneWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PutVmResizeZoneResponse, error)
@@ -2836,6 +2942,27 @@ func (r PutVmResizeResponse) Status() string {
 
 // StatusCode returns HTTPResponse.StatusCode
 func (r PutVmResizeResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type PutVmResizeDiskResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+}
+
+// Status returns HTTPResponse.Status
+func (r PutVmResizeDiskResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r PutVmResizeDiskResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
@@ -3314,6 +3441,23 @@ func (c *ClientWithResponses) PutVmResizeWithResponse(ctx context.Context, body 
 		return nil, err
 	}
 	return ParsePutVmResizeResponse(rsp)
+}
+
+// PutVmResizeDiskWithBodyWithResponse request with arbitrary body returning *PutVmResizeDiskResponse
+func (c *ClientWithResponses) PutVmResizeDiskWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PutVmResizeDiskResponse, error) {
+	rsp, err := c.PutVmResizeDiskWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePutVmResizeDiskResponse(rsp)
+}
+
+func (c *ClientWithResponses) PutVmResizeDiskWithResponse(ctx context.Context, body PutVmResizeDiskJSONRequestBody, reqEditors ...RequestEditorFn) (*PutVmResizeDiskResponse, error) {
+	rsp, err := c.PutVmResizeDisk(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePutVmResizeDiskResponse(rsp)
 }
 
 // PutVmResizeZoneWithBodyWithResponse request with arbitrary body returning *PutVmResizeZoneResponse
@@ -3842,6 +3986,22 @@ func ParsePutVmResizeResponse(rsp *http.Response) (*PutVmResizeResponse, error) 
 	}
 
 	response := &PutVmResizeResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	return response, nil
+}
+
+// ParsePutVmResizeDiskResponse parses an HTTP response from a PutVmResizeDiskWithResponse call
+func ParsePutVmResizeDiskResponse(rsp *http.Response) (*PutVmResizeDiskResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &PutVmResizeDiskResponse{
 		Body:         bodyBytes,
 		HTTPResponse: rsp,
 	}

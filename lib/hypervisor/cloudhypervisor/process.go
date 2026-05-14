@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -18,6 +19,40 @@ import (
 	"github.com/kernel/hypeman/lib/vmm"
 	"gvisor.dev/gvisor/pkg/cleanup"
 )
+
+var (
+	defaultVersionMu       sync.RWMutex
+	defaultVersionOverride *vmm.CHVersion
+)
+
+// SetDefaultVersion overrides the default Cloud Hypervisor version for new
+// instances. An empty string clears the override (vmm.DefaultVersion is used).
+// Returns an error if the version is non-empty and not in SupportedVersions.
+func SetDefaultVersion(v string) error {
+	defaultVersionMu.Lock()
+	defer defaultVersionMu.Unlock()
+	if v == "" {
+		defaultVersionOverride = nil
+		return nil
+	}
+	chv := vmm.CHVersion(v)
+	if !vmm.IsVersionSupported(chv) {
+		return fmt.Errorf("unsupported cloud-hypervisor version: %q (supported: %v)", v, vmm.SupportedVersions)
+	}
+	defaultVersionOverride = &chv
+	return nil
+}
+
+// GetDefaultVersion returns the configured default, falling back to
+// vmm.DefaultVersion if no override is set.
+func GetDefaultVersion() vmm.CHVersion {
+	defaultVersionMu.RLock()
+	defer defaultVersionMu.RUnlock()
+	if defaultVersionOverride != nil {
+		return *defaultVersionOverride
+	}
+	return vmm.DefaultVersion
+}
 
 func init() {
 	hypervisor.RegisterSocketName(hypervisor.TypeCloudHypervisor, "ch.sock")
@@ -52,10 +87,11 @@ func (s *Starter) GetBinaryPath(p *paths.Paths, version string) (string, error) 
 	return vmm.GetBinaryPath(p, chVersion)
 }
 
-// GetVersion returns the latest supported Cloud Hypervisor version.
-// Cloud Hypervisor binaries are embedded, so we return the latest known version.
+// GetVersion returns the configured default Cloud Hypervisor version.
+// This controls which version is used for new instances; existing instances
+// use the version stored in their metadata.
 func (s *Starter) GetVersion(p *paths.Paths) (string, error) {
-	return string(vmm.V49_0), nil
+	return string(GetDefaultVersion()), nil
 }
 
 // StartVM launches Cloud Hypervisor, configures the VM, and boots it.

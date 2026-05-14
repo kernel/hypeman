@@ -1254,7 +1254,7 @@ func TestStorageOperations(t *testing.T) {
 		Env:               map[string]string{"TEST": "value"},
 		CreatedAt:         time.Now(),
 		HypervisorType:    hypervisor.TypeCloudHypervisor,
-		HypervisorVersion: string(vmm.V49_0),
+		HypervisorVersion: string(vmm.V51_1),
 		SocketPath:        "/tmp/test.sock",
 		DataDir:           paths.New(tmpDir).InstanceDir("test-123"),
 	}

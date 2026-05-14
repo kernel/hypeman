@@ -63,7 +63,8 @@ func ToVMConfig(cfg hypervisor.VMConfig) vmm.VmConfig {
 	disks := make([]vmm.DiskConfig, 0, len(cfg.Disks))
 	for _, d := range cfg.Disks {
 		disk := vmm.DiskConfig{
-			Path: ptr(d.Path),
+			Path:      ptr(d.Path),
+			ImageType: ptr(vmm.Raw),
 		}
 		if d.Readonly {
 			disk.Readonly = ptr(true)

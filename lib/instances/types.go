@@ -113,7 +113,7 @@ type StoredMetadata struct {
 
 	// Hypervisor configuration
 	HypervisorType    hypervisor.Type // Hypervisor type (e.g., "cloud-hypervisor")
-	HypervisorVersion string          // Hypervisor version (e.g., "v49.0")
+	HypervisorVersion string          // Hypervisor version (e.g., "v51.1")
 	HypervisorPID     *int            // Hypervisor process ID (may be stale after host restart)
 
 	// Paths
@@ -245,6 +245,7 @@ type CreateInstanceRequest struct {
 	Devices                  []string                    // Device IDs or names to attach (GPU passthrough)
 	Volumes                  []VolumeAttachment          // Volumes to attach at creation time
 	Hypervisor               hypervisor.Type             // Optional: hypervisor type (defaults to config)
+	HypervisorVersion        string                      // Optional: hypervisor version (defaults to configured default)
 	GPU                      *GPUConfig                  // Optional: vGPU configuration
 	Entrypoint               []string                    // Override image entrypoint (nil = use image default)
 	Cmd                      []string                    // Override image cmd (nil = use image default)

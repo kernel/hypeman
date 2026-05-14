@@ -233,6 +233,10 @@ type Capabilities struct {
 	// SupportsSnapshotBaseReuse indicates snapshots can safely reuse a retained
 	// on-disk base across restore/standby cycles.
 	SupportsSnapshotBaseReuse bool
+
+	// SupportsDiskResize indicates if live disk resizing (/vm.resize-disk) is available.
+	// Cloud Hypervisor v50.0+ only.
+	SupportsDiskResize bool
 }
 
 // VsockDialer provides vsock connectivity to a guest VM.

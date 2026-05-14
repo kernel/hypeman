@@ -49,7 +49,14 @@ func (c *CloudHypervisor) Capabilities() hypervisor.Capabilities {
 }
 
 func capabilities() hypervisor.Capabilities {
-	return hypervisor.Capabilities{
+	return CapabilitiesForVersion(vmm.DefaultVersion)
+}
+
+// CapabilitiesForVersion returns capabilities for a specific CH version.
+// Use version-specific capabilities when new features are introduced that
+// aren't supported on previous versions.
+func CapabilitiesForVersion(v vmm.CHVersion) hypervisor.Capabilities {
+	caps := hypervisor.Capabilities{
 		SupportsSnapshot:            true,
 		SupportsHotplugMemory:       true,
 		SupportsBalloonControl:      true,
@@ -60,6 +67,11 @@ func capabilities() hypervisor.Capabilities {
 		SupportsGracefulVMMShutdown: true,
 		SupportsSnapshotBaseReuse:   false,
 	}
+	switch v {
+	case vmm.V51_1:
+		caps.SupportsDiskResize = true
+	}
+	return caps
 }
 
 // DeleteVM removes the VM configuration from Cloud Hypervisor.
