@@ -155,6 +155,55 @@ func TestRestoreInstanceTemplateRefused(t *testing.T) {
 	assert.True(t, errors.Is(err, ErrInvalidState), "expected ErrInvalidState, got %v", err)
 }
 
+func TestRestoreSnapshotTemplateRefused(t *testing.T) {
+	t.Parallel()
+	mgr, _ := newStorageOnlyManager(t)
+	ctx := context.Background()
+
+	// RestoreSnapshot must refuse onto Template state regardless of fork count.
+	// Restoring would rewrite the template payload (breaking forks that share
+	// it) and silently clear IsTemplate. Callers must DemoteTemplate first.
+	writeTemplateMetadata(t, mgr, "tmpl-idle", 0)
+	writeTemplateMetadata(t, mgr, "tmpl-busy", 1)
+
+	saveTemplateSnapshotRecord(t, mgr, "snap-idle", "tmpl-idle")
+	saveTemplateSnapshotRecord(t, mgr, "snap-busy", "tmpl-busy")
+
+	_, err := mgr.RestoreSnapshot(ctx, "tmpl-idle", "snap-idle", RestoreSnapshotRequest{})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrInvalidState), "expected ErrInvalidState, got %v", err)
+
+	_, err = mgr.RestoreSnapshot(ctx, "tmpl-busy", "snap-busy", RestoreSnapshotRequest{})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrInvalidState), "expected ErrInvalidState, got %v", err)
+
+	// Template flag must remain set after a refused restore.
+	loaded, err := mgr.loadMetadata("tmpl-busy")
+	require.NoError(t, err)
+	assert.True(t, loaded.IsTemplate)
+}
+
+// saveTemplateSnapshotRecord writes a snapshot record on disk pointing at the
+// given template instance, sufficient for restoreSnapshot to load it.
+func saveTemplateSnapshotRecord(t *testing.T, mgr *manager, snapshotID, sourceID string) {
+	t.Helper()
+	meta, err := mgr.loadMetadata(sourceID)
+	require.NoError(t, err)
+	require.NoError(t, mgr.saveSnapshotRecord(&snapshotRecord{
+		Snapshot: Snapshot{
+			Id:               snapshotID,
+			Name:             snapshotID,
+			Kind:             SnapshotKindStandby,
+			SourceInstanceID: sourceID,
+			SourceName:       meta.Name,
+			SourceHypervisor: meta.HypervisorType,
+			CreatedAt:        time.Now(),
+			SizeBytes:        1,
+		},
+		StoredMetadata: meta.StoredMetadata,
+	}))
+}
+
 func TestDemoteTemplateClearsTemplateFields(t *testing.T) {
 	t.Parallel()
 	mgr, _ := newStorageOnlyManager(t)
