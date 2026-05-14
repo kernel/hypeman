@@ -54,6 +54,10 @@ func (s *stubManager) StandbyInstance(context.Context, string, StandbyInstanceRe
 	return nil, nil
 }
 func (s *stubManager) RestoreInstance(context.Context, string) (*Instance, error) { return nil, nil }
+func (s *stubManager) PromoteToTemplate(context.Context, string) (*Instance, error) {
+	return nil, nil
+}
+func (s *stubManager) DemoteTemplate(context.Context, string) (*Instance, error) { return nil, nil }
 func (s *stubManager) RestoreSnapshot(context.Context, string, string, RestoreSnapshotRequest) (*Instance, error) {
 	return nil, nil
 }

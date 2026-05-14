@@ -39,6 +39,12 @@ type Manager interface {
 	ForkSnapshot(ctx context.Context, snapshotID string, req ForkSnapshotRequest) (*Instance, error)
 	StandbyInstance(ctx context.Context, id string, req StandbyInstanceRequest) (*Instance, error)
 	RestoreInstance(ctx context.Context, id string) (*Instance, error)
+	// PromoteToTemplate marks a Standby instance as a fork-only Template.
+	// Requires state == Standby. Idempotent if already a Template.
+	PromoteToTemplate(ctx context.Context, id string) (*Instance, error)
+	// DemoteTemplate flips a Template back to Standby so it can be woken or
+	// deleted. Requires no live forks (instances with ForkOfTemplate == id).
+	DemoteTemplate(ctx context.Context, id string) (*Instance, error)
 	RestoreSnapshot(ctx context.Context, id string, snapshotID string, req RestoreSnapshotRequest) (*Instance, error)
 	StopInstance(ctx context.Context, id string) (*Instance, error)
 	StartInstance(ctx context.Context, id string, req StartInstanceRequest) (*Instance, error)
@@ -435,7 +441,9 @@ func (m *manager) StandbyInstance(ctx context.Context, id string, req StandbyIns
 	return inst, err
 }
 
-// RestoreInstance restores an instance from standby
+// RestoreInstance restores an instance from standby. Templates must be
+// demoted via DemoteTemplate first; this method does not auto-demote so
+// that the lifecycle remains explicit.
 func (m *manager) RestoreInstance(ctx context.Context, id string) (*Instance, error) {
 	lock := m.getInstanceLock(id)
 	lock.Lock()
@@ -452,6 +460,69 @@ func (m *manager) RestoreInstance(ctx context.Context, id string) (*Instance, er
 		m.notifyLifecycleEvent(ctx, LifecycleEventRestore, inst)
 	}
 	return inst, err
+}
+
+// PromoteToTemplate marks a Standby instance as a fork-only Template.
+// Standby is the only legal source state. Idempotent: re-promoting a
+// Template returns it as-is.
+func (m *manager) PromoteToTemplate(ctx context.Context, id string) (*Instance, error) {
+	lock := m.getInstanceLock(id)
+	lock.Lock()
+	defer lock.Unlock()
+	meta, err := m.loadMetadata(id)
+	if err != nil {
+		return nil, err
+	}
+	inst := m.toInstance(ctx, meta)
+	if inst.State == StateTemplate {
+		return &inst, nil
+	}
+	if inst.State != StateStandby {
+		return nil, fmt.Errorf("%w: cannot promote instance in state %s to template (must be Standby)", ErrInvalidState, inst.State)
+	}
+	meta.IsTemplate = true
+	if err := m.saveMetadata(meta); err != nil {
+		return nil, fmt.Errorf("save metadata after template promote: %w", err)
+	}
+	promoted := m.toInstance(ctx, meta)
+	return &promoted, nil
+}
+
+// DemoteTemplate flips a Template back to Standby so it can be woken or
+// deleted. Refuses while any live forks still reference this id via
+// ForkOfTemplate.
+func (m *manager) DemoteTemplate(ctx context.Context, id string) (*Instance, error) {
+	lock := m.getInstanceLock(id)
+	lock.Lock()
+	defer lock.Unlock()
+	meta, err := m.loadMetadata(id)
+	if err != nil {
+		return nil, err
+	}
+	inst := m.toInstance(ctx, meta)
+	if inst.State == StateStandby {
+		return &inst, nil
+	}
+	if inst.State != StateTemplate {
+		return nil, fmt.Errorf("%w: cannot demote instance in state %s (must be Template)", ErrInvalidState, inst.State)
+	}
+	forks, err := m.countTemplateForks(id)
+	if err != nil {
+		return nil, fmt.Errorf("count forks of template %s: %w", id, err)
+	}
+	if forks > 0 {
+		return nil, fmt.Errorf("%w: cannot demote template %s with %d live fork(s); delete forks first", ErrInvalidState, id, forks)
+	}
+	if err := StateTemplate.CanTransitionTo(StateStandby); err != nil {
+		return nil, err
+	}
+	meta.IsTemplate = false
+	meta.HotPagesPath = ""
+	if err := m.saveMetadata(meta); err != nil {
+		return nil, fmt.Errorf("save metadata after template demote: %w", err)
+	}
+	demoted := m.toInstance(ctx, meta)
+	return &demoted, nil
 }
 
 func (m *manager) RestoreSnapshot(ctx context.Context, id string, snapshotID string, req RestoreSnapshotRequest) (*Instance, error) {

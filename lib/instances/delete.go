@@ -35,6 +35,16 @@ func (m *manager) deleteInstance(
 	stored := &meta.StoredMetadata
 	log.DebugContext(ctx, "loaded instance", "instance_id", id, "state", inst.State)
 
+	if inst.State == StateTemplate {
+		forks, err := m.countTemplateForks(id)
+		if err != nil {
+			return fmt.Errorf("count forks of template %s: %w", id, err)
+		}
+		if forks > 0 {
+			return fmt.Errorf("%w: cannot delete template %s with %d live fork(s); delete forks first", ErrInvalidState, id, forks)
+		}
+	}
+
 	target, err := m.cancelAndWaitCompressionJob(ctx, m.snapshotJobKeyForInstance(id))
 	if err != nil {
 		return fmt.Errorf("wait for instance compression to stop: %w", err)

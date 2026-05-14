@@ -116,6 +116,14 @@ func (m *mockInstanceManager) RestoreInstance(ctx context.Context, id string) (*
 	return nil, nil
 }
 
+func (m *mockInstanceManager) PromoteToTemplate(ctx context.Context, id string) (*instances.Instance, error) {
+	return nil, nil
+}
+
+func (m *mockInstanceManager) DemoteTemplate(ctx context.Context, id string) (*instances.Instance, error) {
+	return nil, nil
+}
+
 func (m *mockInstanceManager) RestoreSnapshot(ctx context.Context, id string, snapshotID string, req instances.RestoreSnapshotRequest) (*instances.Instance, error) {
 	return nil, instances.ErrNotSupported
 }
