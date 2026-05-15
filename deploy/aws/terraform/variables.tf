@@ -7,7 +7,7 @@ variable "region" {
 variable "stack_name" {
   type        = string
   description = "CloudFormation stack name."
-  default     = "hypeman-single-node"
+  default     = "hypeman"
 }
 
 variable "vpc_id" {

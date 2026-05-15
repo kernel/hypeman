@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: Single-node Hypeman host on EC2 with nested virtualization enabled.
+Description: Hypeman host on EC2 with nested virtualization enabled.
 
 Metadata:
   AWS::CloudFormation::Interface:
@@ -124,7 +124,7 @@ Resources:
   HypemanSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Hypeman single-node access
+      GroupDescription: Hypeman access
       VpcId: !Ref VpcId
       SecurityGroupIngress:
         - IpProtocol: tcp
@@ -355,7 +355,7 @@ Resources:
                       "ResourceType": "instance",
                       "Tags": [
                           {"Key": "Name", "Value": props["Name"]},
-                          {"Key": "hypeman:deployment", "Value": "aws-single-node"},
+                          {"Key": "hypeman:deployment", "Value": "aws"},
                           {"Key": "cloudformation:stack-name", "Value": event["StackId"].split("/")[1]},
                       ],
                   }],
@@ -467,7 +467,7 @@ Resources:
         systemctl is-active --quiet hypeman
         token="$(hypeman-create-token validation 1h)"
         curl -fsS -H "Authorization: Bearer $token" http://127.0.0.1:8080/health >/dev/null
-        echo "hypeman aws single-node validation passed"
+        echo "hypeman aws validation passed"
         SCRIPT
         chmod 755 /opt/hypeman/deploy/validate.sh
 

@@ -1,24 +1,33 @@
 # Deploy Hypeman
 
-This directory contains supported deployment assets for running Hypeman outside local development.
+This directory contains maintained deployment assets for running Hypeman outside local development.
 
-## Quickstart: AWS CloudFormation
+## AWS Quickstart
 
-The first-class AWS quickstart is the single-node CloudFormation deployment. It launches one EC2 host with nested virtualization enabled, exposes the Hypeman API only to the CIDR you choose, and prints the commands needed to connect and create a JWT.
-
-Open the hosted CloudFormation template in `us-east-1`:
+The fastest path is the hosted CloudFormation template. It creates one EC2 host with nested virtualization enabled, installs Hypeman, exposes the Hypeman API only to the CIDR you choose, and returns the commands needed to connect through AWS Systems Manager.
 
 [![Launch Stack](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/create/review?templateURL=https%3A%2F%2Fkernel-hypeman-cloudformation-prod.s3.us-east-1.amazonaws.com%2Fv1%2Fhypeman%2Ftemplate.yaml&stackName=hypeman)
 
-Choose a VPC and subnet, set `AllowedApiCidr` to your current IP range or trusted VPN CIDR, then create the stack.
+Use `us-east-1` for the published template. Choose a VPC and subnet, set `AllowedApiCidr` to your current IP range or trusted VPN CIDR, keep SSH disabled unless you need it, then create the stack.
 
-After the stack reaches `CREATE_COMPLETE`, use the `SsmSessionCommand` output to open a Session Manager shell and generate a remote API token:
+Useful stack outputs:
+
+| Output | Purpose |
+| --- | --- |
+| `HypemanEndpoint` | Base URL for remote Hypeman API access |
+| `SsmSessionCommand` | Session Manager command for host access |
+| `CreateTokenCommand` | Command that generates a JWT on the host |
+| `InstanceId` | EC2 instance running Hypeman |
+
+## Use Hypeman
+
+After the stack reaches `CREATE_COMPLETE`, run the `SsmSessionCommand` output and generate a token:
 
 ```sh
 sudo hypeman-create-token remote-user 8760h
 ```
 
-On your local machine, install the Hypeman CLI and point it at the stack's `HypemanEndpoint` output:
+On your local machine, install the CLI and point it at the `HypemanEndpoint` output:
 
 ```sh
 curl -fsSL https://get.hypeman.sh/cli | bash
@@ -32,7 +41,7 @@ EOF
 hypeman ps
 ```
 
-Then push and run a real sandbox image through the remote API:
+Build, push, and run a sandbox image:
 
 ```sh
 mkdir -p /tmp/hypeman-claude-code
@@ -61,44 +70,71 @@ hypeman stop claude-code-sandbox
 hypeman rm claude-code-sandbox
 ```
 
-See the [AWS single-node guide](aws/single-node) for CloudFormation parameters, Terraform usage, troubleshooting, and teardown.
+## Terraform
 
-## Supported deployments
+Use Terraform if you want the same CloudFormation template managed from your existing infrastructure workflow:
 
-| Platform | Deployment | Best for | Path |
-| --- | --- | --- | --- |
-| AWS | Single node | Trying Hypeman quickly, small internal deployments, development hosts | [aws/single-node](aws/single-node) |
+```sh
+cd deploy/aws/terraform
+terraform init
+terraform apply \
+  -var="region=us-east-1" \
+  -var="vpc_id=vpc-..." \
+  -var="subnet_id=subnet-..." \
+  -var="allowed_api_cidr=$(curl -fsSL https://checkip.amazonaws.com)/32" \
+  -var="instance_type=c8i.2xlarge"
+```
 
-## Choosing a deployment path
+Inspect outputs with:
 
-Use the AWS single-node deployment if you want the fastest path to a working Hypeman host in your own AWS account.
+```sh
+terraform output
+```
 
-The single-node deployment provides two launch surfaces:
+Delete the deployment with:
 
-| Method | Best for |
+```sh
+terraform destroy
+```
+
+## CloudFormation Source
+
+The source template lives at `deploy/aws/cloudformation/template.yaml`. The `Deploy Assets` GitHub workflow validates it on pull requests and publishes it from `main` to:
+
+```text
+https://kernel-hypeman-cloudformation-prod.s3.us-east-1.amazonaws.com/v1/hypeman/template.yaml
+```
+
+To delete a console-launched stack:
+
+```sh
+aws cloudformation delete-stack \
+  --region us-east-1 \
+  --stack-name hypeman
+```
+
+## Packer
+
+The Packer starter at `deploy/aws/ami/packer/hypeman.pkr.hcl` builds a Hypeman AMI if you want to pre-bake the host setup:
+
+```sh
+packer init deploy/aws/ami/packer/hypeman.pkr.hcl
+packer build \
+  -var="region=us-east-1" \
+  -var="source_ami=ami-..." \
+  deploy/aws/ami/packer/hypeman.pkr.hcl
+```
+
+## Defaults
+
+| Setting | Default |
 | --- | --- |
-| CloudFormation | Click-through setup in the AWS console |
-| Terraform | Teams that manage AWS infrastructure with Terraform |
+| Region | `us-east-1` |
+| Instance type | `c8i.2xlarge` |
+| Hypeman API port | `8080` |
+| Admin access | AWS Systems Manager Session Manager |
+| SSH | Disabled unless explicitly enabled |
+| Root volume | 100 GiB encrypted EBS |
+| Hypeman version | Latest release with a matching artifact |
 
-All methods create the same basic shape: one EC2 instance with nested virtualization enabled, an instance role, security group rules, encrypted storage, logging, and startup automation for Hypeman.
-
-## Security model
-
-The deployment defaults are intentionally conservative:
-
-- Administration uses AWS Systems Manager Session Manager by default.
-- SSH is optional.
-- Inbound access is restricted by CIDR parameters.
-- EBS volumes are encrypted.
-- The Hypeman version is controlled by parameter.
-- Stack deletion removes created resources unless data retention is explicitly enabled.
-
-Review the cloud-specific README before launching anything in a production AWS account.
-
-## Cost
-
-Cloud resources created from these templates bill to your cloud account. The largest cost is the EC2 instance. Stop or delete the deployment when you are done testing.
-
-## Support level
-
-Files under this directory are intended to be maintained deployment paths, not throwaway examples. Changes should preserve upgrade, teardown, and security behavior unless the README explicitly calls out a breaking change.
+The deployment expects an Intel C8i, M8i, or R8i instance type with EC2 nested virtualization support. Stop or delete the stack when you are done testing.

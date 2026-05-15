@@ -53,17 +53,17 @@ jobs:
 
       - name: Validate CloudFormation
         run: |
-          cfn-lint deploy/aws/single-node/cloudformation/template.yaml
-          go test ./deploy/aws/single-node/cloudformation
+          cfn-lint deploy/aws/cloudformation/template.yaml
+          go test ./deploy/aws/cloudformation
 
       - name: Validate scripts
-        run: bash -n deploy/aws/single-node/scripts/validate.sh
+        run: bash -n deploy/aws/scripts/validate.sh
 
       - name: Validate Terraform
         run: |
-          terraform -chdir=deploy/aws/single-node/terraform init -backend=false
-          terraform -chdir=deploy/aws/single-node/terraform fmt -check
-          terraform -chdir=deploy/aws/single-node/terraform validate
+          terraform -chdir=deploy/aws/terraform init -backend=false
+          terraform -chdir=deploy/aws/terraform fmt -check
+          terraform -chdir=deploy/aws/terraform validate
 
       - name: Validate Packer
         run: |
@@ -83,7 +83,7 @@ jobs:
       AWS_REGION: us-east-1
       CLOUDFORMATION_TEMPLATE_BUCKET: kernel-hypeman-cloudformation-prod
       CLOUDFORMATION_TEMPLATE_KEY: v1/hypeman/template.yaml
-      CLOUDFORMATION_TEMPLATE_SOURCE: deploy/aws/single-node/cloudformation/template.yaml
+      CLOUDFORMATION_TEMPLATE_SOURCE: deploy/aws/cloudformation/template.yaml
     steps:
       - uses: actions/checkout@v4
 
