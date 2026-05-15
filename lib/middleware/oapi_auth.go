@@ -475,7 +475,6 @@ func JwtAuth(jwtSecret string) func(http.Handler) http.Handler {
 
 func requestWithoutAuthorization(r *http.Request, ctx context.Context) *http.Request {
 	req := r.Clone(ctx)
-	req.Header = r.Header.Clone()
 	req.Header.Del("Authorization")
 	return req
 }
