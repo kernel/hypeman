@@ -4,11 +4,11 @@ This directory contains maintained deployment assets for running Hypeman outside
 
 ## AWS Quickstart
 
-The fastest path is the hosted CloudFormation template. It creates one EC2 host with nested virtualization enabled, installs Hypeman, exposes the Hypeman API only to the CIDR you choose, and returns the commands needed to connect through AWS Systems Manager.
+The fastest path is the hosted CloudFormation template. It creates one EC2 instance with nested virtualization enabled, installs Hypeman during instance bootstrap, exposes the Hypeman API only to the CIDR you choose, and provisions an encrypted XFS data volume mounted at `/var/lib/hypeman`.
 
 [![Launch Stack](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/create/review?templateURL=https%3A%2F%2Fkernel-hypeman-cloudformation-prod.s3.us-east-1.amazonaws.com%2Fv1%2Fhypeman%2Ftemplate.yaml&stackName=hypeman)
 
-Use `us-east-1` for the published template. Choose a VPC and subnet, set `AllowedApiCidr` to your current IP range or trusted VPN CIDR, keep SSH disabled unless you need it, then create the stack.
+Use `us-east-1` for the published template. Choose a VPC and subnet, set `AllowedApiCidr` to your current public IP `/32` or trusted VPN CIDR, keep SSH disabled unless you need it, then create the stack.
 
 Useful stack outputs:
 
@@ -16,8 +16,16 @@ Useful stack outputs:
 | --- | --- |
 | `HypemanEndpoint` | Base URL for remote Hypeman API access |
 | `SsmSessionCommand` | Session Manager command for host access |
-| `CreateTokenCommand` | Command that generates a JWT on the host |
+| `CreateTokenCommand` | Command that generates a JWT on the instance |
 | `InstanceId` | EC2 instance running Hypeman |
+
+To delete the deployment, delete the CloudFormation stack. The EC2 instance and attached stack-managed volumes are deleted with it.
+
+```sh
+aws cloudformation delete-stack \
+  --region us-east-1 \
+  --stack-name hypeman
+```
 
 ## Use Hypeman
 
@@ -70,59 +78,12 @@ hypeman stop claude-code-sandbox
 hypeman rm claude-code-sandbox
 ```
 
-## Terraform
-
-Use Terraform if you want the same CloudFormation template managed from your existing infrastructure workflow:
-
-```sh
-cd deploy/aws/terraform
-terraform init
-terraform apply \
-  -var="region=us-east-1" \
-  -var="vpc_id=vpc-..." \
-  -var="subnet_id=subnet-..." \
-  -var="allowed_api_cidr=$(curl -fsSL https://checkip.amazonaws.com)/32" \
-  -var="instance_type=c8i.2xlarge"
-```
-
-Inspect outputs with:
-
-```sh
-terraform output
-```
-
-Delete the deployment with:
-
-```sh
-terraform destroy
-```
-
 ## CloudFormation Source
 
 The source template lives at `deploy/aws/cloudformation/template.yaml`. The `Deploy Assets` GitHub workflow validates it on pull requests and publishes it from `main` to:
 
 ```text
 https://kernel-hypeman-cloudformation-prod.s3.us-east-1.amazonaws.com/v1/hypeman/template.yaml
-```
-
-To delete a console-launched stack:
-
-```sh
-aws cloudformation delete-stack \
-  --region us-east-1 \
-  --stack-name hypeman
-```
-
-## Packer
-
-The Packer starter at `deploy/aws/ami/packer/hypeman.pkr.hcl` builds a Hypeman AMI if you want to pre-bake the host setup:
-
-```sh
-packer init deploy/aws/ami/packer/hypeman.pkr.hcl
-packer build \
-  -var="region=us-east-1" \
-  -var="source_ami=ami-..." \
-  deploy/aws/ami/packer/hypeman.pkr.hcl
 ```
 
 ## Defaults
@@ -134,7 +95,8 @@ packer build \
 | Hypeman API port | `8080` |
 | Admin access | AWS Systems Manager Session Manager |
 | SSH | Disabled unless explicitly enabled |
-| Root volume | 100 GiB encrypted EBS |
+| Root volume | 30 GiB encrypted EBS |
+| Hypeman data volume | 100 GiB encrypted EBS, formatted XFS at `/var/lib/hypeman` |
 | Hypeman version | Latest release with a matching artifact |
 
-The deployment expects an Intel C8i, M8i, or R8i instance type with EC2 nested virtualization support. Stop or delete the stack when you are done testing.
+The deployment expects an Intel C8i, M8i, or R8i instance type with EC2 nested virtualization support.

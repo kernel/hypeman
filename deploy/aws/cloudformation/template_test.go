@@ -18,7 +18,8 @@ func TestQuickstartParameters(t *testing.T) {
 	assertDefault(t, parameters, "ApiPort", "8080")
 	assertDefault(t, parameters, "EnableSSH", "false")
 	assertDefault(t, parameters, "AllowedSshCidr", "127.0.0.1/32")
-	assertDefault(t, parameters, "RootVolumeSize", "100")
+	assertDefault(t, parameters, "RootVolumeSize", "30")
+	assertDefault(t, parameters, "DataVolumeSize", "100")
 	assertDefault(t, parameters, "HypemanVersion", "latest")
 	assertDefault(t, parameters, "HypemanCliVersion", "latest")
 
@@ -76,15 +77,43 @@ func TestCloudFormationLaunchContract(t *testing.T) {
 	}
 	assertRef(t, requireField(t, sshRule, "CidrIp"), "AllowedSshCidr")
 
-	launchFunction := requireMapping(t, requireField(t, resources, "LaunchFunction"))
-	code := requireMapping(t, requireField(t, requireMapping(t, requireField(t, launchFunction, "Properties")), "Code"))
+	launchTemplate := requireMapping(t, requireField(t, resources, "NestedVirtualizationLaunchTemplate"))
+	if got := scalar(t, requireField(t, launchTemplate, "Type")); got != "Custom::NestedVirtualizationLaunchTemplate" {
+		t.Fatalf("NestedVirtualizationLaunchTemplate type = %q, want Custom::NestedVirtualizationLaunchTemplate", got)
+	}
+
+	launchTemplateFunction := requireMapping(t, requireField(t, resources, "NestedVirtualizationLaunchTemplateFunction"))
+	code := requireMapping(t, requireField(t, requireMapping(t, requireField(t, launchTemplateFunction, "Properties")), "Code"))
 	zipFile := scalar(t, requireField(t, code, "ZipFile"))
-	assertContains(t, zipFile, `"Action": "RunInstances"`)
-	assertContains(t, zipFile, `"CpuOptions.NestedVirtualization": "enabled"`)
+	assertContains(t, zipFile, `"Action": "CreateLaunchTemplate"`)
+	assertContains(t, zipFile, `"LaunchTemplateData.CpuOptions.NestedVirtualization": "enabled"`)
 
 	host := requireMapping(t, requireField(t, resources, "HypemanHost"))
-	userData := scalar(t, requireField(t, requireMapping(t, requireField(t, host, "Properties")), "UserData"))
+	if got := scalar(t, requireField(t, host, "Type")); got != "AWS::EC2::Instance" {
+		t.Fatalf("HypemanHost type = %q, want AWS::EC2::Instance", got)
+	}
+	hostProperties := requireMapping(t, requireField(t, host, "Properties"))
+	hostLaunchTemplate := requireMapping(t, requireField(t, hostProperties, "LaunchTemplate"))
+	assertGetAtt(t, requireField(t, hostLaunchTemplate, "LaunchTemplateId"), "NestedVirtualizationLaunchTemplate.LaunchTemplateId")
+	assertGetAtt(t, requireField(t, hostLaunchTemplate, "Version"), "NestedVirtualizationLaunchTemplate.VersionNumber")
+
+	blockDeviceMappings := requireSequence(t, requireField(t, hostProperties, "BlockDeviceMappings"))
+	if len(blockDeviceMappings.Content) != 2 {
+		t.Fatalf("expected root and Hypeman data block device mappings, got %d", len(blockDeviceMappings.Content))
+	}
+	dataDevice := requireMapping(t, blockDeviceMappings.Content[1])
+	if got := scalar(t, requireField(t, dataDevice, "DeviceName")); got != "/dev/sdf" {
+		t.Fatalf("data device name = %q, want /dev/sdf", got)
+	}
+	dataEBS := requireMapping(t, requireField(t, dataDevice, "Ebs"))
+	assertRef(t, requireField(t, dataEBS, "VolumeSize"), "DataVolumeSize")
+
+	userData := nodeText(requireField(t, hostProperties, "UserData"))
 	assertContains(t, userData, "curl -fsSL https://raw.githubusercontent.com/kernel/hypeman/main/scripts/install.sh | bash")
+	assertContains(t, userData, "xfsprogs")
+	assertContains(t, userData, "mkfs.xfs -f")
+	assertContains(t, userData, "/var/lib/hypeman")
+	assertContains(t, userData, `findmnt -n -o FSTYPE /var/lib/hypeman`)
 	assertContains(t, userData, "/usr/local/bin/hypeman-create-token")
 	assertContains(t, userData, "/opt/hypeman/deploy/validate.sh")
 	assertContains(t, userData, "CONFIG_PATH=/etc/hypeman/config.yaml /opt/hypeman/bin/hypeman-token")
@@ -149,6 +178,14 @@ func assertRef(t *testing.T, node *yaml.Node, want string) {
 	}
 }
 
+func assertGetAtt(t *testing.T, node *yaml.Node, want string) {
+	t.Helper()
+
+	if node.Kind != yaml.ScalarNode || node.Tag != "!GetAtt" || node.Value != want {
+		t.Fatalf("expected !GetAtt %s, got kind=%v tag=%q value=%q", want, node.Kind, node.Tag, node.Value)
+	}
+}
+
 func assertContains(t *testing.T, got, want string) {
 	t.Helper()
 
@@ -196,4 +233,15 @@ func scalar(t *testing.T, node *yaml.Node) string {
 		t.Fatalf("expected scalar node, got kind=%v tag=%q", node.Kind, node.Tag)
 	}
 	return node.Value
+}
+
+func nodeText(node *yaml.Node) string {
+	if node.Kind == yaml.ScalarNode {
+		return node.Value
+	}
+	var parts []string
+	for _, child := range node.Content {
+		parts = append(parts, nodeText(child))
+	}
+	return strings.Join(parts, "\n")
 }

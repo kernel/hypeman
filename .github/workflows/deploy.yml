@@ -19,9 +19,6 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-latest
-    env:
-      PACKER_VERSION: "1.15.3"
-      TERRAFORM_VERSION: "1.15.3"
     steps:
       - uses: actions/checkout@v4
 
@@ -35,22 +32,6 @@ jobs:
           set -euo pipefail
           python3 -m pip install --user cfn-lint
 
-          arch="$(uname -m)"
-          case "$arch" in
-            x86_64|amd64) hc_arch=amd64 ;;
-            aarch64|arm64) hc_arch=arm64 ;;
-            *) echo "unsupported arch: $arch" >&2; exit 1 ;;
-          esac
-
-          tmp_dir="$(mktemp -d)"
-          trap 'rm -rf "$tmp_dir"' EXIT
-          curl -fsSL -o "$tmp_dir/terraform.zip" "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_${hc_arch}.zip"
-          curl -fsSL -o "$tmp_dir/packer.zip" "https://releases.hashicorp.com/packer/${PACKER_VERSION}/packer_${PACKER_VERSION}_linux_${hc_arch}.zip"
-          unzip -q "$tmp_dir/terraform.zip" -d "$tmp_dir/terraform"
-          unzip -q "$tmp_dir/packer.zip" -d "$tmp_dir/packer"
-          sudo install -m 0755 "$tmp_dir/terraform/terraform" /usr/local/bin/terraform
-          sudo install -m 0755 "$tmp_dir/packer/packer" /usr/local/bin/packer
-
       - name: Validate CloudFormation
         run: |
           cfn-lint deploy/aws/cloudformation/template.yaml
@@ -58,18 +39,6 @@ jobs:
 
       - name: Validate scripts
         run: bash -n deploy/aws/scripts/validate.sh
-
-      - name: Validate Terraform
-        run: |
-          terraform -chdir=deploy/aws/terraform init -backend=false
-          terraform -chdir=deploy/aws/terraform fmt -check
-          terraform -chdir=deploy/aws/terraform validate
-
-      - name: Validate Packer
-        run: |
-          packer init deploy/aws/ami/packer/hypeman.pkr.hcl
-          packer fmt -check deploy/aws/ami/packer/hypeman.pkr.hcl
-          packer validate deploy/aws/ami/packer/hypeman.pkr.hcl
 
   publish-cloudformation:
     runs-on: ubuntu-latest

@@ -28,12 +28,6 @@ lib/hypervisor/vz/vz-shim/vz-shim
 lib/ingress/binaries/**
 dist/**
 
-# Terraform
-**/.terraform/
-*.tfstate
-*.tfstate.*
-crash.log
-
 # UTM VM - downloaded ISO files
 scripts/utm/images/
 
