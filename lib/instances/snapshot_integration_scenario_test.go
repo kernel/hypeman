@@ -2,6 +2,7 @@ package instances
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
@@ -108,4 +109,23 @@ func runStandbySnapshotScenario(t *testing.T, mgr *manager, tmpDir string, cfg s
 	require.Equal(t, StateStandby, currentFork.State)
 
 	assertCopyReflinked(t, p.SnapshotGuestDir(snapshot.Id), p.InstanceDir(forkID))
+	assertSnapshotForkMemoryHardlinked(t, p.SnapshotGuestDir(snapshot.Id), p.InstanceDir(forkID))
+}
+
+func assertSnapshotForkMemoryHardlinked(t *testing.T, srcDir, forkDir string) {
+	t.Helper()
+
+	srcMem, ok := findRawSnapshotMemoryFile(srcDir)
+	if !ok {
+		t.Logf("raw snapshot memory file not recognized under %s; hardlink assertion skipped", srcDir)
+		return
+	}
+	forkMem, ok := findRawSnapshotMemoryFile(forkDir)
+	require.True(t, ok, "fork should contain the raw snapshot memory file")
+
+	srcInfo, err := os.Stat(srcMem)
+	require.NoError(t, err)
+	forkInfo, err := os.Stat(forkMem)
+	require.NoError(t, err)
+	require.True(t, os.SameFile(srcInfo, forkInfo), "fork snapshot memory file should hardlink the source snapshot memory file")
 }
