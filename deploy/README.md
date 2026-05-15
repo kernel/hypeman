@@ -6,13 +6,11 @@ This directory contains supported deployment assets for running Hypeman outside 
 
 The first-class AWS quickstart is the single-node CloudFormation deployment. It launches one EC2 host with nested virtualization enabled, exposes the Hypeman API only to the CIDR you choose, and prints the commands needed to connect and create a JWT.
 
-Open AWS CloudShell in `us-east-1`, then run:
+Open the hosted CloudFormation template in `us-east-1`:
 
-```sh
-export HYPEMAN_ALLOWED_API_CIDR="$(curl -fsSL https://checkip.amazonaws.com)/32"
+[Launch Hypeman on AWS](https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/create/review?templateURL=https%3A%2F%2Fkernel-hypeman-cloudformation-prod.s3.us-east-1.amazonaws.com%2Fv1%2Fhypeman%2Ftemplate.yaml&stackName=hypeman)
 
-curl -fsSL https://raw.githubusercontent.com/kernel/hypeman/main/deploy/aws/single-node/scripts/launch-cloudshell.sh | bash
-```
+Choose a VPC and subnet, set `AllowedApiCidr` to your current IP range or trusted VPN CIDR, then create the stack.
 
 After the stack reaches `CREATE_COMPLETE`, use the `SsmSessionCommand` output to open a Session Manager shell and generate a remote API token:
 
@@ -75,12 +73,11 @@ See the [AWS single-node guide](aws/single-node) for CloudFormation parameters, 
 
 Use the AWS single-node deployment if you want the fastest path to a working Hypeman host in your own AWS account.
 
-The single-node deployment provides three launch surfaces:
+The single-node deployment provides two launch surfaces:
 
 | Method | Best for |
 | --- | --- |
 | CloudFormation | Click-through setup in the AWS console |
-| CloudShell script | Scripted setup without installing local tools |
 | Terraform | Teams that manage AWS infrastructure with Terraform |
 
 All methods create the same basic shape: one EC2 instance with nested virtualization enabled, an instance role, security group rules, encrypted storage, logging, and startup automation for Hypeman.

@@ -26,15 +26,9 @@ For the initial deployment path, use an Intel C8i, M8i, or R8i instance type. Th
 
 Use CloudFormation when you want a guided AWS console flow.
 
-Start with the single-node deployment:
+Start with the hosted quickstart template:
 
-[Single-node CloudFormation deployment](single-node#cloudformation)
-
-### CloudShell
-
-Use CloudShell when you want a copy-paste command from the AWS console without installing local tools.
-
-[Single-node CloudShell deployment](single-node#cloudshell)
+[Launch Hypeman on AWS](https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/create/review?templateURL=https%3A%2F%2Fkernel-hypeman-cloudformation-prod.s3.us-east-1.amazonaws.com%2Fv1%2Fhypeman%2Ftemplate.yaml&stackName=hypeman)
 
 ### Terraform
 

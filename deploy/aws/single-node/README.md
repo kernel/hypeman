@@ -32,15 +32,11 @@ Depending on the launch method, this deployment creates or configures:
 
 ## CloudFormation
 
-Use this path for the AWS quickstart. The CloudShell launcher fetches the CloudFormation template from this repository, deploys it, and prints the stack outputs you need for remote CLI access.
+Use this path for the AWS quickstart. The launch link opens the hosted CloudFormation template published from the `main` branch.
 
-```sh
-export HYPEMAN_ALLOWED_API_CIDR="$(curl -fsSL https://checkip.amazonaws.com)/32"
+[Launch Hypeman on AWS](https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/create/review?templateURL=https%3A%2F%2Fkernel-hypeman-cloudformation-prod.s3.us-east-1.amazonaws.com%2Fv1%2Fhypeman%2Ftemplate.yaml&stackName=hypeman)
 
-curl -fsSL https://raw.githubusercontent.com/kernel/hypeman/main/deploy/aws/single-node/scripts/launch-cloudshell.sh | bash
-```
-
-If you launch directly from the CloudFormation console instead, review these parameters:
+Review these parameters before creating the stack:
 
 1. Choose a VPC and subnet.
 2. Choose an instance type. Start with `c8i.2xlarge` unless you know you need more memory or CPU.
@@ -65,35 +61,8 @@ To delete the deployment:
 ```sh
 aws cloudformation delete-stack \
   --region us-east-1 \
-  --stack-name hypeman-single-node
+  --stack-name hypeman
 ```
-
-## CloudShell
-
-Use this path if you want a repeatable command from the AWS console.
-
-Open AWS CloudShell in the target region, then run:
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/kernel/hypeman/main/deploy/aws/single-node/scripts/launch-cloudshell.sh | bash
-```
-
-Optional environment variables:
-
-```sh
-export HYPEMAN_AWS_REGION=us-east-1
-export HYPEMAN_INSTANCE_TYPE=c8i.2xlarge
-export HYPEMAN_STACK_NAME=hypeman-single-node
-export HYPEMAN_ALLOWED_API_CIDR="$(curl -fsSL https://checkip.amazonaws.com)/32"
-```
-
-Then run the launcher:
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/kernel/hypeman/main/deploy/aws/single-node/scripts/launch-cloudshell.sh | bash
-```
-
-The script prints the CloudFormation stack status and final connection commands.
 
 ## Terraform
 
