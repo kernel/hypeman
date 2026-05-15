@@ -45,7 +45,7 @@ components:
     
     InstanceState:
       type: string
-      enum: [Created, Initializing, Running, Paused, Shutdown, Stopped, Standby, Template, Unknown]
+      enum: [Created, Initializing, Running, Paused, Shutdown, Stopped, Standby, Unknown]
       description: |
         Instance state:
         - Created: VMM created but not started (Cloud Hypervisor native)
@@ -55,7 +55,6 @@ components:
         - Shutdown: VM shut down but VMM exists (Cloud Hypervisor native)
         - Stopped: No VMM running, no snapshot exists
         - Standby: No VMM running, snapshot exists (can be restored)
-        - Template: Standby snapshot promoted to a fork-only parent; cannot wake while forks exist
         - Unknown: Failed to determine state (see state_error for details)
     
     VolumeMount:
@@ -2317,84 +2316,6 @@ paths:
                 $ref: "#/components/schemas/Error"
         409:
           description: Conflict - instance not in standby or no snapshot
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        500:
-          description: Internal server error
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-
-  /instances/{id}/promote-template:
-    post:
-      summary: Promote a standby instance into a fork-only template
-      operationId: promoteInstanceToTemplate
-      security:
-        - bearerAuth: []
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-          description: Instance ID or name
-      responses:
-        200:
-          description: Instance promoted to template
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Instance"
-        404:
-          description: Instance not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        409:
-          description: Conflict - instance not in standby
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        500:
-          description: Internal server error
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-
-  /instances/{id}/demote-template:
-    post:
-      summary: Demote a template back to standby so it can be restored or deleted
-      operationId: demoteInstanceTemplate
-      security:
-        - bearerAuth: []
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-          description: Instance ID or name
-      responses:
-        200:
-          description: Template demoted to standby
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Instance"
-        404:
-          description: Instance not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        409:
-          description: Conflict - not a template or has live forks
           content:
             application/json:
               schema:

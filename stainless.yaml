@@ -93,8 +93,6 @@ resources:
       delete: delete /instances/{id}
       standby: post /instances/{id}/standby
       restore: post /instances/{id}/restore
-      promote_template: post /instances/{id}/promote-template
-      demote_template: post /instances/{id}/demote-template
       fork: post /instances/{id}/fork
       start: post /instances/{id}/start
       stop: post /instances/{id}/stop
