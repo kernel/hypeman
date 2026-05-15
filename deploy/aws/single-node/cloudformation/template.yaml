@@ -1,0 +1,505 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Single-node Hypeman host on EC2 with nested virtualization enabled.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Network
+        Parameters:
+          - VpcId
+          - SubnetId
+          - AllowedApiCidr
+          - ApiPort
+      - Label:
+          default: Instance
+        Parameters:
+          - InstanceType
+          - RootVolumeSize
+          - AmiSsmParameter
+      - Label:
+          default: Access
+        Parameters:
+          - EnableSSH
+          - AllowedSshCidr
+          - KeyName
+      - Label:
+          default: Hypeman
+        Parameters:
+          - HypemanVersion
+          - HypemanCliVersion
+          - HypemanBranch
+    ParameterLabels:
+      VpcId:
+        default: VPC
+      SubnetId:
+        default: Subnet
+      InstanceType:
+        default: EC2 instance type
+      AllowedApiCidr:
+        default: Hypeman API access CIDR
+      ApiPort:
+        default: Hypeman API port
+      EnableSSH:
+        default: Enable SSH
+      AllowedSshCidr:
+        default: SSH access CIDR
+      KeyName:
+        default: EC2 key pair
+      RootVolumeSize:
+        default: Root volume size
+      HypemanVersion:
+        default: Hypeman release
+      HypemanBranch:
+        default: Hypeman source branch
+      HypemanCliVersion:
+        default: Hypeman CLI release
+      AmiSsmParameter:
+        default: Ubuntu AMI SSM parameter
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: Existing VPC for the Hypeman host.
+  SubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: Existing subnet for the Hypeman host. The subnet needs outbound internet or VPC endpoint access for package downloads, AWS APIs, and image pulls.
+  InstanceType:
+    Type: String
+    Default: c8i.2xlarge
+    AllowedPattern: "^(c8i|m8i|r8i)\\.(large|xlarge|2xlarge|4xlarge|8xlarge|12xlarge|16xlarge|24xlarge|32xlarge|48xlarge|96xlarge)$"
+    Description: Intel C8i, M8i, or R8i instance type that supports EC2 nested virtualization. The default c8i.2xlarge has enough memory for the quickstart workload.
+  AllowedApiCidr:
+    Type: String
+    Default: 127.0.0.1/32
+    Description: Client CIDR allowed to reach the Hypeman API port. Use your current public IP /32 or a trusted VPN CIDR; avoid 0.0.0.0/0.
+    AllowedPattern: "^([0-9]{1,3}\\.){3}[0-9]{1,3}/([0-9]|[1-2][0-9]|3[0-2])$"
+  ApiPort:
+    Type: Number
+    Default: 8080
+    MinValue: 1
+    MaxValue: 65535
+    Description: Hypeman API port exposed to AllowedApiCidr.
+  EnableSSH:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: Open SSH from AllowedSshCidr and pass KeyName to the instance. Session Manager is available by default, so SSH is usually unnecessary.
+  AllowedSshCidr:
+    Type: String
+    Default: 127.0.0.1/32
+    Description: CIDR allowed to reach SSH when EnableSSH is true.
+    AllowedPattern: "^([0-9]{1,3}\\.){3}[0-9]{1,3}/([0-9]|[1-2][0-9]|3[0-2])$"
+  KeyName:
+    Type: String
+    Default: ""
+    Description: Optional EC2 key pair name. Only used when EnableSSH is true.
+  RootVolumeSize:
+    Type: Number
+    Default: 100
+    MinValue: 50
+    MaxValue: 16384
+    Description: Root EBS volume size in GiB. Increase this for larger image pushes or longer-lived sandboxes.
+  HypemanVersion:
+    Type: String
+    Default: latest
+    Description: Hypeman API release tag, or latest. Ignored when HypemanBranch is set.
+  HypemanBranch:
+    Type: String
+    Default: ""
+    Description: Optional Hypeman git branch to build from source for development testing. Leave empty for release installs.
+  HypemanCliVersion:
+    Type: String
+    Default: latest
+    Description: Hypeman CLI release tag, or latest.
+  AmiSsmParameter:
+    Type: String
+    Default: /aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id
+    Description: SSM public parameter containing the Ubuntu AMI ID.
+
+Conditions:
+  UseSSH: !Equals [!Ref EnableSSH, "true"]
+
+Resources:
+  HypemanSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Hypeman single-node access
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !Ref ApiPort
+          ToPort: !Ref ApiPort
+          CidrIp: !Ref AllowedApiCidr
+          Description: Hypeman API
+        - !If
+          - UseSSH
+          - IpProtocol: tcp
+            FromPort: 22
+            ToPort: 22
+            CidrIp: !Ref AllowedSshCidr
+            Description: SSH
+          - !Ref AWS::NoValue
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: Outbound access for package, image, and AWS API downloads
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-hypeman
+
+  HypemanInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: hypeman-describe-self
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeInstances
+                  - ec2:DescribeInstanceStatus
+                Resource: "*"
+
+  HypemanInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref HypemanInstanceRole
+
+  LaunchFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: hypeman-launch
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:RunInstances
+                  - ec2:TerminateInstances
+                  - ec2:DescribeInstances
+                  - ec2:CreateTags
+                Resource: "*"
+              - Effect: Allow
+                Action: ssm:GetParameter
+                Resource: "*"
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt HypemanInstanceRole.Arn
+
+  LaunchFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.12
+      Handler: index.handler
+      Timeout: 900
+      Role: !GetAtt LaunchFunctionRole.Arn
+      Code:
+        ZipFile: |
+          import base64
+          import json
+          import os
+          import traceback
+          import urllib.parse
+          import urllib.request
+          import xml.etree.ElementTree as ET
+          from urllib.error import HTTPError
+
+          import boto3
+          from botocore.auth import SigV4Auth
+          from botocore.awsrequest import AWSRequest
+          from botocore.session import Session
+
+          ec2 = boto3.client("ec2")
+          ssm = boto3.client("ssm")
+
+          def send(event, context, status, data, physical_id=None, reason=None):
+              body = {
+                  "Status": status,
+                  "Reason": reason or ("See CloudWatch Logs: " + context.log_stream_name),
+                  "PhysicalResourceId": physical_id or context.log_stream_name,
+                  "StackId": event["StackId"],
+                  "RequestId": event["RequestId"],
+                  "LogicalResourceId": event["LogicalResourceId"],
+                  "NoEcho": False,
+                  "Data": data,
+              }
+              encoded = json.dumps(body).encode("utf-8")
+              req = urllib.request.Request(
+                  event["ResponseURL"],
+                  data=encoded,
+                  headers={"content-type": "", "content-length": str(len(encoded))},
+                  method="PUT",
+              )
+              urllib.request.urlopen(req, timeout=10).read()
+
+          def ami_id(props):
+              value = props.get("AmiId")
+              if value:
+                  return value
+              return ssm.get_parameter(Name=props["AmiSsmParameter"])["Parameter"]["Value"]
+
+          def instance_data(instance_id):
+              res = ec2.describe_instances(InstanceIds=[instance_id])
+              inst = res["Reservations"][0]["Instances"][0]
+              return {
+                  "InstanceId": instance_id,
+                  "PublicIp": inst.get("PublicIpAddress", ""),
+                  "PrivateIp": inst.get("PrivateIpAddress", ""),
+              }
+
+          def terminate(instance_id):
+              if instance_id and instance_id.startswith("i-"):
+                  ec2.terminate_instances(InstanceIds=[instance_id])
+
+          def ec2_query(params):
+              region = os.environ["AWS_REGION"]
+              endpoint = f"https://ec2.{region}.amazonaws.com/"
+              body = urllib.parse.urlencode(params).encode("utf-8")
+              req = AWSRequest(
+                  method="POST",
+                  url=endpoint,
+                  data=body,
+                  headers={"Content-Type": "application/x-www-form-urlencoded; charset=utf-8"},
+              )
+              credentials = Session().get_credentials().get_frozen_credentials()
+              SigV4Auth(credentials, "ec2", region).add_auth(req)
+              prepared = req.prepare()
+              http_req = urllib.request.Request(
+                  endpoint,
+                  data=body,
+                  headers=dict(prepared.headers),
+                  method="POST",
+              )
+              try:
+                  with urllib.request.urlopen(http_req, timeout=60) as res:
+                      return res.read()
+              except HTTPError as err:
+                  detail = err.read().decode("utf-8", errors="replace")
+                  raise RuntimeError(f"EC2 query failed with HTTP {err.code}: {detail}") from err
+
+          def run_instances(params):
+              payload = {
+                  "Action": "RunInstances",
+                  "Version": "2016-11-15",
+                  "ImageId": params["ImageId"],
+                  "InstanceType": params["InstanceType"],
+                  "MinCount": "1",
+                  "MaxCount": "1",
+                  "SubnetId": params["SubnetId"],
+                  "SecurityGroupId.1": params["SecurityGroupIds"][0],
+                  "IamInstanceProfile.Name": params["IamInstanceProfile"]["Name"],
+                  "UserData": base64.b64encode(params["UserData"].encode("utf-8")).decode("utf-8"),
+                  "BlockDeviceMapping.1.DeviceName": params["BlockDeviceMappings"][0]["DeviceName"],
+                  "BlockDeviceMapping.1.Ebs.VolumeSize": str(params["BlockDeviceMappings"][0]["Ebs"]["VolumeSize"]),
+                  "BlockDeviceMapping.1.Ebs.VolumeType": params["BlockDeviceMappings"][0]["Ebs"]["VolumeType"],
+                  "BlockDeviceMapping.1.Ebs.Encrypted": "true",
+                  "BlockDeviceMapping.1.Ebs.DeleteOnTermination": "true",
+                  "CpuOptions.NestedVirtualization": "enabled",
+                  "TagSpecification.1.ResourceType": "instance",
+              }
+              for idx, tag in enumerate(params["TagSpecifications"][0]["Tags"], start=1):
+                  payload[f"TagSpecification.1.Tag.{idx}.Key"] = tag["Key"]
+                  payload[f"TagSpecification.1.Tag.{idx}.Value"] = tag["Value"]
+              if params.get("KeyName"):
+                  payload["KeyName"] = params["KeyName"]
+              xml = ec2_query(payload)
+              root = ET.fromstring(xml)
+              instance = root.find(".//{*}instancesSet/{*}item/{*}instanceId")
+              if instance is None or not instance.text:
+                  raise RuntimeError("RunInstances response did not include instanceId")
+              return instance.text
+
+          def launch(event):
+              props = event["ResourceProperties"]
+              params = {
+                  "ImageId": ami_id(props),
+                  "InstanceType": props["InstanceType"],
+                  "MinCount": 1,
+                  "MaxCount": 1,
+                  "SubnetId": props["SubnetId"],
+                  "SecurityGroupIds": [props["SecurityGroupId"]],
+                  "IamInstanceProfile": {"Name": props["InstanceProfileName"]},
+                  "UserData": props["UserData"],
+                  "BlockDeviceMappings": [{
+                      "DeviceName": "/dev/sda1",
+                      "Ebs": {
+                          "VolumeSize": int(props["RootVolumeSize"]),
+                          "VolumeType": "gp3",
+                          "Encrypted": True,
+                          "DeleteOnTermination": True,
+                      },
+                  }],
+                  "TagSpecifications": [{
+                      "ResourceType": "instance",
+                      "Tags": [
+                          {"Key": "Name", "Value": props["Name"]},
+                          {"Key": "hypeman:deployment", "Value": "aws-single-node"},
+                          {"Key": "cloudformation:stack-name", "Value": event["StackId"].split("/")[1]},
+                      ],
+                  }],
+              }
+              key_name = props.get("KeyName")
+              if key_name:
+                  params["KeyName"] = key_name
+              instance_id = run_instances(params)
+              ec2.get_waiter("instance_running").wait(InstanceIds=[instance_id])
+              return instance_data(instance_id)
+
+          def handler(event, context):
+              try:
+                  request_type = event["RequestType"]
+                  physical_id = event.get("PhysicalResourceId")
+                  if request_type == "Delete":
+                      terminate(physical_id)
+                      send(event, context, "SUCCESS", {}, physical_id=physical_id)
+                      return
+                  if request_type == "Update":
+                      terminate(physical_id)
+                  data = launch(event)
+                  send(event, context, "SUCCESS", data, physical_id=data["InstanceId"])
+              except Exception as exc:
+                  traceback.print_exc()
+                  send(event, context, "FAILED", {}, physical_id=event.get("PhysicalResourceId"), reason=str(exc))
+
+  HypemanHost:
+    Type: Custom::HypemanHost
+    Properties:
+      ServiceToken: !GetAtt LaunchFunction.Arn
+      Name: !Sub ${AWS::StackName}-hypeman
+      AmiSsmParameter: !Ref AmiSsmParameter
+      InstanceType: !Ref InstanceType
+      SubnetId: !Ref SubnetId
+      SecurityGroupId: !Ref HypemanSecurityGroup
+      InstanceProfileName: !Ref HypemanInstanceProfile
+      KeyName: !If [UseSSH, !Ref KeyName, ""]
+      RootVolumeSize: !Ref RootVolumeSize
+      UserData: !Sub |
+        #!/usr/bin/env bash
+        set -euxo pipefail
+        exec > >(tee /var/log/hypeman-bootstrap.log | logger -t hypeman-bootstrap -s 2>/dev/console) 2>&1
+
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get update
+        apt-get install -y ca-certificates curl docker.io e2fsprogs erofs-utils iproute2 iptables jq openssl qemu-system-x86 qemu-utils tar
+        if [ -n "${HypemanBranch}" ]; then
+          apt-get install -y build-essential git make
+          curl -fsSL https://go.dev/dl/go1.25.4.linux-amd64.tar.gz | tar -C /usr/local -xzf -
+          export PATH="/usr/local/go/bin:$PATH"
+          export HOME=/root
+          export GOPATH=/root/go
+          export GOMODCACHE=/root/go/pkg/mod
+          export GOCACHE=/root/.cache/go-build
+          install -d -m 755 "$GOPATH" "$GOMODCACHE" "$GOCACHE"
+        fi
+        systemctl enable --now docker
+
+        if ! systemctl is-active --quiet snap.amazon-ssm-agent.amazon-ssm-agent && ! systemctl is-active --quiet amazon-ssm-agent; then
+          snap install amazon-ssm-agent --classic || true
+          systemctl enable --now snap.amazon-ssm-agent.amazon-ssm-agent || systemctl enable --now amazon-ssm-agent || true
+        fi
+
+        if [ -n "${HypemanBranch}" ]; then
+          export BRANCH="${HypemanBranch}"
+          unset VERSION
+        elif [ "${HypemanVersion}" = "latest" ]; then
+          unset VERSION
+        else
+          export VERSION="${HypemanVersion}"
+        fi
+        if [ "${HypemanCliVersion}" = "latest" ]; then
+          unset CLI_VERSION
+        else
+          export CLI_VERSION="${HypemanCliVersion}"
+        fi
+        curl -fsSL https://raw.githubusercontent.com/kernel/hypeman/main/scripts/install.sh | bash
+
+        install -d -m 755 /opt/hypeman/deploy
+        cat >/usr/local/bin/hypeman-create-token <<'SCRIPT'
+        #!/usr/bin/env bash
+        set -euo pipefail
+        user_id="remote-user"
+        duration="8760h"
+        if [ "$#" -ge 1 ]; then
+          user_id="$1"
+        fi
+        if [ "$#" -ge 2 ]; then
+          duration="$2"
+        fi
+        CONFIG_PATH=/etc/hypeman/config.yaml /opt/hypeman/bin/hypeman-token -user-id "$user_id" -duration "$duration"
+        SCRIPT
+        chmod 755 /usr/local/bin/hypeman-create-token
+
+        install -d -m 700 /root/.config/hypeman
+        local_token="$(hypeman-create-token local-cli 8760h)"
+        cat >/root/.config/hypeman/cli.yaml <<EOF
+        base_url: http://localhost:${ApiPort}
+        api_key: "$local_token"
+        EOF
+        chmod 600 /root/.config/hypeman/cli.yaml
+
+        cat >/opt/hypeman/deploy/validate.sh <<'SCRIPT'
+        #!/usr/bin/env bash
+        set -euo pipefail
+        test -e /dev/kvm
+        grep -Eq '(^flags|^Features).* (vmx|svm)( |$)' /proc/cpuinfo
+        systemctl is-active --quiet hypeman
+        token="$(hypeman-create-token validation 1h)"
+        curl -fsS -H "Authorization: Bearer $token" http://127.0.0.1:8080/health >/dev/null
+        echo "hypeman aws single-node validation passed"
+        SCRIPT
+        chmod 755 /opt/hypeman/deploy/validate.sh
+
+        for _ in $(seq 1 60); do
+          if /opt/hypeman/deploy/validate.sh; then
+            exit 0
+          fi
+          sleep 5
+        done
+        /opt/hypeman/deploy/validate.sh
+
+Outputs:
+  InstanceId:
+    Description: EC2 instance running Hypeman.
+    Value: !GetAtt HypemanHost.InstanceId
+  PublicIp:
+    Description: Public IP address, if the subnet assigns one.
+    Value: !GetAtt HypemanHost.PublicIp
+  PrivateIp:
+    Description: Private IP address.
+    Value: !GetAtt HypemanHost.PrivateIp
+  HypemanEndpoint:
+    Description: Hypeman API endpoint.
+    Value: !Sub
+      - http://${Host}:${Port}
+      - Host: !GetAtt HypemanHost.PublicIp
+        Port: !Ref ApiPort
+  SsmSessionCommand:
+    Description: Command to start a Session Manager shell.
+    Value: !Sub
+      - aws ssm start-session --region ${AWS::Region} --target ${InstanceId}
+      - InstanceId: !GetAtt HypemanHost.InstanceId
+  CreateTokenCommand:
+    Description: Command to generate a JWT on the instance.
+    Value: sudo hypeman-create-token remote-user 8760h
