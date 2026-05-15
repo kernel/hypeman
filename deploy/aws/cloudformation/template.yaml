@@ -186,6 +186,9 @@ Resources:
       Roles:
         - !Ref HypemanInstanceRole
 
+  # CloudFormation's typed EC2 resources do not expose CpuOptions.NestedVirtualization yet.
+  # This helper creates only the launch template that carries that EC2 API option;
+  # the Hypeman EC2 instance itself remains a normal stack-managed resource.
   NestedVirtualizationLaunchTemplateRole:
     Type: AWS::IAM::Role
     Properties:
