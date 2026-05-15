@@ -43,6 +43,7 @@ func TestStoppedSnapshotLifecycleAndForkAfterSourceDeletion(t *testing.T) {
 	got, err := mgr.GetSnapshot(ctx, snap.Id)
 	require.NoError(t, err)
 	require.Equal(t, snap.Id, got.Id)
+	require.Equal(t, 0, got.RefCount)
 
 	forked, err := mgr.ForkSnapshot(ctx, snap.Id, ForkSnapshotRequest{
 		Name:             "snapshot-stopped-fork",
@@ -56,6 +57,15 @@ func TestStoppedSnapshotLifecycleAndForkAfterSourceDeletion(t *testing.T) {
 	forkMeta, err := mgr.loadMetadata(forked.Id)
 	require.NoError(t, err)
 	require.Equal(t, snap.Id, forkMeta.ForkOfSnapshot)
+
+	got, err = mgr.GetSnapshot(ctx, snap.Id)
+	require.NoError(t, err)
+	require.Equal(t, 1, got.RefCount)
+
+	snapshots, err := mgr.ListSnapshots(ctx, &ListSnapshotsFilter{SourceInstanceID: &sourceID})
+	require.NoError(t, err)
+	require.Len(t, snapshots, 1)
+	require.Equal(t, 1, snapshots[0].RefCount)
 
 	err = mgr.DeleteSnapshot(ctx, snap.Id)
 	require.Error(t, err)

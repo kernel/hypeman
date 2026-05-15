@@ -33,6 +33,7 @@ type Snapshot struct {
 	Compression           *SnapshotCompressionConfig `json:"compression,omitempty"`
 	CompressedSizeBytes   *int64                     `json:"compressed_size_bytes,omitempty"`
 	UncompressedSizeBytes *int64                     `json:"uncompressed_size_bytes,omitempty"`
+	RefCount              int                        `json:"-"`
 }
 
 // SnapshotCompressionAlgorithm defines supported compression algorithms.

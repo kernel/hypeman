@@ -32,6 +32,13 @@ func (m *manager) listSnapshots(ctx context.Context, filter *ListSnapshotsFilter
 	if err != nil {
 		return nil, fmt.Errorf("list snapshots: %w", err)
 	}
+	counts, err := m.snapshotForkCounts()
+	if err != nil {
+		return nil, err
+	}
+	for i := range snapshots {
+		snapshots[i].RefCount = counts[snapshots[i].Id]
+	}
 	return snapshots, nil
 }
 
@@ -44,6 +51,11 @@ func (m *manager) getSnapshot(ctx context.Context, snapshotID string) (*Snapshot
 		}
 		return nil, err
 	}
+	refCount, err := m.countSnapshotForks(snapshotID)
+	if err != nil {
+		return nil, err
+	}
+	snapshot.RefCount = refCount
 	return snapshot, nil
 }
 
@@ -679,26 +691,34 @@ func (m *manager) listSnapshotRecords() ([]snapshotRecord, error) {
 }
 
 func (m *manager) countSnapshotForks(snapshotID string) (int, error) {
-	metaFiles, err := m.listMetadataFiles()
+	counts, err := m.snapshotForkCounts()
 	if err != nil {
 		return 0, err
 	}
+	return counts[snapshotID], nil
+}
 
-	count := 0
+func (m *manager) snapshotForkCounts() (map[string]int, error) {
+	metaFiles, err := m.listMetadataFiles()
+	if err != nil {
+		return nil, err
+	}
+
+	counts := make(map[string]int)
 	for _, metaPath := range metaFiles {
 		content, err := os.ReadFile(metaPath)
 		if err != nil {
-			return 0, fmt.Errorf("read instance metadata %s: %w", metaPath, err)
+			return nil, fmt.Errorf("read instance metadata %s: %w", metaPath, err)
 		}
 		var meta metadata
 		if err := json.Unmarshal(content, &meta); err != nil {
-			return 0, fmt.Errorf("unmarshal instance metadata %s: %w", metaPath, err)
+			return nil, fmt.Errorf("unmarshal instance metadata %s: %w", metaPath, err)
 		}
-		if meta.ForkOfSnapshot == snapshotID {
-			count++
+		if meta.ForkOfSnapshot != "" {
+			counts[meta.ForkOfSnapshot]++
 		}
 	}
-	return count, nil
+	return counts, nil
 }
 
 func snapshotMemHardlinkSource(srcDir string) (absPath, relSlash string, ok bool) {

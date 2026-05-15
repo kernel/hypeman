@@ -336,6 +336,7 @@ func snapshotToOAPI(snapshot instances.Snapshot) oapi.Snapshot {
 		SourceHypervisor:   sourceHypervisor,
 		CreatedAt:          snapshot.CreatedAt,
 		SizeBytes:          snapshot.SizeBytes,
+		RefCount:           snapshot.RefCount,
 		Name:               lo.ToPtr(snapshot.Name),
 	}
 	if snapshot.CompressionState != "" {

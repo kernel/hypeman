@@ -711,7 +711,7 @@ components:
 
     Snapshot:
       type: object
-      required: [id, kind, source_instance_id, source_instance_name, source_hypervisor, created_at, size_bytes]
+      required: [id, kind, source_instance_id, source_instance_name, source_hypervisor, created_at, size_bytes, ref_count]
       properties:
         id:
           type: string
@@ -749,6 +749,10 @@ components:
           format: int64
           description: Total payload size in bytes
           example: 104857600
+        ref_count:
+          type: integer
+          description: Number of instances directly forked from this snapshot
+          example: 3
         compression_state:
           type: string
           enum: [none, compressing, compressed, error]
