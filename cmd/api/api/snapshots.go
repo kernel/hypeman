@@ -161,6 +161,8 @@ func (s *ApiService) DeleteSnapshot(ctx context.Context, request oapi.DeleteSnap
 		switch {
 		case errors.Is(err, instances.ErrSnapshotNotFound):
 			return oapi.DeleteSnapshot404JSONResponse{Code: "not_found", Message: "snapshot not found"}, nil
+		case errors.Is(err, instances.ErrInvalidState):
+			return oapi.DeleteSnapshot409JSONResponse{Code: "conflict", Message: err.Error()}, nil
 		default:
 			log.ErrorContext(ctx, "failed to delete snapshot", "error", err)
 			return oapi.DeleteSnapshot500JSONResponse{Code: "internal_error", Message: "failed to delete snapshot"}, nil

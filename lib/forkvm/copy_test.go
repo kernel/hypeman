@@ -57,3 +57,19 @@ func TestCopyGuestDirectory_DoesNotSkipTmpSuffixedDirectories(t *testing.T) {
 	assert.DirExists(t, filepath.Join(dst, "snapshots", "snapshot-latest", "memory-ranges.lz4.tmp"))
 	assert.FileExists(t, filepath.Join(dst, "snapshots", "snapshot-latest", "memory-ranges.lz4.tmp", "nested.txt"))
 }
+
+func TestCopyGuestDirectoryWithOptions_SkipsRelativePaths(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "src")
+	dst := filepath.Join(t.TempDir(), "dst")
+
+	require.NoError(t, os.MkdirAll(filepath.Join(src, "snapshots", "snapshot-latest"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(src, "overlay.raw"), []byte("overlay"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(src, "snapshots", "snapshot-latest", "memory"), []byte("memory"), 0644))
+
+	require.NoError(t, CopyGuestDirectoryWithOptions(src, dst, CopyOptions{
+		SkipRelPaths: []string{"snapshots/snapshot-latest/memory"},
+	}))
+
+	assert.FileExists(t, filepath.Join(dst, "overlay.raw"))
+	assert.NoFileExists(t, filepath.Join(dst, "snapshots", "snapshot-latest", "memory"))
+}

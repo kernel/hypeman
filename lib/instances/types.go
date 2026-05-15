@@ -147,6 +147,9 @@ type StoredMetadata struct {
 	// Persisted so server restarts can recover delayed or interrupted jobs.
 	PendingStandbyCompression *PendingStandbyCompression
 
+	// Snapshot this instance was forked from, if any.
+	ForkOfSnapshot string
+
 	// Automatic standby policy driven by host-observed inbound TCP activity.
 	AutoStandby *autostandby.Policy
 

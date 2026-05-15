@@ -2,9 +2,11 @@ package instances
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/kernel/hypeman/lib/forkvm"
@@ -140,6 +142,8 @@ func (m *manager) createSnapshot(ctx context.Context, id string, req CreateSnaps
 			return nil, copyErr
 		}
 
+		snapshotMeta := cloneStoredMetadataWithoutPendingStandbyCompression(meta.StoredMetadata)
+		snapshotMeta.ForkOfSnapshot = ""
 		rec := &snapshotRecord{
 			Snapshot: Snapshot{
 				Id:               snapshotID,
@@ -151,7 +155,7 @@ func (m *manager) createSnapshot(ctx context.Context, id string, req CreateSnaps
 				SourceHypervisor: stored.HypervisorType,
 				CreatedAt:        time.Now(),
 			},
-			StoredMetadata: cloneStoredMetadataWithoutPendingStandbyCompression(meta.StoredMetadata),
+			StoredMetadata: snapshotMeta,
 		}
 		sizeBytes, err := snapshotstore.DirectoryFileSize(snapshotGuestDir)
 		if err != nil {
@@ -192,6 +196,8 @@ func (m *manager) createSnapshot(ctx context.Context, id string, req CreateSnaps
 		if err := m.copySnapshotPayload(id, snapshotGuestDir); err != nil {
 			return nil, err
 		}
+		snapshotMeta := cloneStoredMetadataWithoutPendingStandbyCompression(meta.StoredMetadata)
+		snapshotMeta.ForkOfSnapshot = ""
 		rec := &snapshotRecord{
 			Snapshot: Snapshot{
 				Id:               snapshotID,
@@ -203,7 +209,7 @@ func (m *manager) createSnapshot(ctx context.Context, id string, req CreateSnaps
 				SourceHypervisor: stored.HypervisorType,
 				CreatedAt:        time.Now(),
 			},
-			StoredMetadata: cloneStoredMetadataWithoutPendingStandbyCompression(meta.StoredMetadata),
+			StoredMetadata: snapshotMeta,
 		}
 		sizeBytes, err := snapshotstore.DirectoryFileSize(snapshotGuestDir)
 		if err != nil {
@@ -224,6 +230,20 @@ func (m *manager) createSnapshot(ctx context.Context, id string, req CreateSnaps
 }
 
 func (m *manager) deleteSnapshot(ctx context.Context, snapshotID string) error {
+	if _, err := m.snapshotStore().Get(snapshotID); err != nil {
+		if errors.Is(err, snapshotstore.ErrNotFound) {
+			return ErrSnapshotNotFound
+		}
+		return err
+	}
+	forks, err := m.countSnapshotForks(snapshotID)
+	if err != nil {
+		return err
+	}
+	if forks > 0 {
+		return fmt.Errorf("%w: cannot delete snapshot %s with %d fork(s)", ErrInvalidState, snapshotID, forks)
+	}
+
 	target, err := m.cancelAndWaitCompressionJob(ctx, m.snapshotJobKeyForSnapshot(snapshotID))
 	if err != nil {
 		return fmt.Errorf("wait for snapshot compression to stop: %w", err)
@@ -303,6 +323,7 @@ func (m *manager) restoreSnapshot(ctx context.Context, id string, snapshotID str
 	restored.ExitCode = nil
 	restored.ExitMessage = ""
 	restored.HypervisorType = targetHypervisor
+	restored.ForkOfSnapshot = ""
 
 	starter, err := m.getVMStarter(targetHypervisor)
 	if err != nil {
@@ -416,11 +437,22 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 		return nil, fmt.Errorf("prepare snapshot memory for fork: %w", err)
 	}
 
-	if err := forkvm.CopyGuestDirectory(m.paths.SnapshotGuestDir(snapshotID), dstDir); err != nil {
+	srcDir := m.paths.SnapshotGuestDir(snapshotID)
+	copyOpts := forkvm.CopyOptions{}
+	srcMemPath, srcMemRel, hasSharedMem := snapshotMemHardlinkSource(srcDir)
+	if hasSharedMem {
+		copyOpts.SkipRelPaths = []string{srcMemRel}
+	}
+	if err := forkvm.CopyGuestDirectoryWithOptions(srcDir, dstDir, copyOpts); err != nil {
 		if errors.Is(err, forkvm.ErrSparseCopyUnsupported) {
 			return nil, fmt.Errorf("fork from snapshot requires sparse-capable filesystem (SEEK_DATA/SEEK_HOLE unsupported): %w", err)
 		}
 		return nil, fmt.Errorf("clone snapshot payload: %w", err)
+	}
+	if hasSharedMem {
+		if err := installForkSnapshotMemHardlink(srcMemPath, dstDir, srcMemRel); err != nil {
+			return nil, fmt.Errorf("hardlink snapshot mem-file into fork: %w", err)
+		}
 	}
 
 	starter, err := m.getVMStarter(targetHypervisor)
@@ -450,6 +482,7 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 	forkMeta.ExitCode = nil
 	forkMeta.ExitMessage = ""
 	forkMeta.RestartStatus = restartpolicy.Status{}
+	forkMeta.ForkOfSnapshot = snapshotID
 	if rec.Snapshot.Kind == SnapshotKindStandby {
 		forkMeta.VsockCID = rec.StoredMetadata.VsockCID
 	} else {
@@ -643,4 +676,51 @@ func (m *manager) listSnapshotRecords() ([]snapshotRecord, error) {
 		})
 	}
 	return records, nil
+}
+
+func (m *manager) countSnapshotForks(snapshotID string) (int, error) {
+	metaFiles, err := m.listMetadataFiles()
+	if err != nil {
+		return 0, err
+	}
+
+	count := 0
+	for _, metaPath := range metaFiles {
+		content, err := os.ReadFile(metaPath)
+		if err != nil {
+			return 0, fmt.Errorf("read instance metadata %s: %w", metaPath, err)
+		}
+		var meta metadata
+		if err := json.Unmarshal(content, &meta); err != nil {
+			return 0, fmt.Errorf("unmarshal instance metadata %s: %w", metaPath, err)
+		}
+		if meta.ForkOfSnapshot == snapshotID {
+			count++
+		}
+	}
+	return count, nil
+}
+
+func snapshotMemHardlinkSource(srcDir string) (absPath, relSlash string, ok bool) {
+	abs, found := findRawSnapshotMemoryFile(srcDir)
+	if !found {
+		return "", "", false
+	}
+	rel, err := filepath.Rel(srcDir, abs)
+	if err != nil {
+		return "", "", false
+	}
+	return abs, filepath.ToSlash(rel), true
+}
+
+func installForkSnapshotMemHardlink(srcMemPath, dstDir, relSlash string) error {
+	dstMem := filepath.Join(dstDir, filepath.FromSlash(relSlash))
+	if err := os.MkdirAll(filepath.Dir(dstMem), 0755); err != nil {
+		return fmt.Errorf("ensure fork mem-file parent dir: %w", err)
+	}
+	_ = os.Remove(dstMem)
+	if err := os.Link(srcMemPath, dstMem); err != nil {
+		return fmt.Errorf("link snapshot mem-file: %w", err)
+	}
+	return nil
 }

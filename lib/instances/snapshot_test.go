@@ -52,8 +52,16 @@ func TestStoppedSnapshotLifecycleAndForkAfterSourceDeletion(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, StateStopped, forked.State)
 	require.Equal(t, hvType, forked.HypervisorType)
-	t.Cleanup(func() { _ = mgr.DeleteInstance(context.Background(), forked.Id) })
 
+	forkMeta, err := mgr.loadMetadata(forked.Id)
+	require.NoError(t, err)
+	require.Equal(t, snap.Id, forkMeta.ForkOfSnapshot)
+
+	err = mgr.DeleteSnapshot(ctx, snap.Id)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidState)
+
+	require.NoError(t, mgr.DeleteInstance(ctx, forked.Id))
 	require.NoError(t, mgr.DeleteSnapshot(ctx, snap.Id))
 	_, err = mgr.GetSnapshot(ctx, snap.Id)
 	require.Error(t, err)
@@ -278,6 +286,79 @@ func TestForkSnapshotFromCompressedSourceCopiesRawMemory(t *testing.T) {
 	assert.True(t, ok, "forked snapshot payload should contain raw memory after preparing a compressed snapshot source")
 	_, _, ok = findCompressedSnapshotMemoryFile(forkSnapshotDir)
 	assert.False(t, ok, "forked snapshot payload should not retain compressed memory artifacts from the source snapshot")
+}
+
+func TestDeleteSnapshotFailsWhenForkMetadataUnreadable(t *testing.T) {
+	t.Parallel()
+
+	mgr, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	hvType := mgr.defaultHypervisor
+	sourceID := "snapshot-delete-refcount-src"
+	createStoppedSnapshotSourceFixture(t, mgr, sourceID, "snapshot-delete-refcount-src", hvType)
+
+	snap, err := mgr.CreateSnapshot(ctx, sourceID, CreateSnapshotRequest{
+		Kind: SnapshotKindStopped,
+		Name: "delete-refcount",
+	})
+	require.NoError(t, err)
+
+	badID := "snapshot-delete-bad-metadata"
+	require.NoError(t, mgr.ensureDirectories(badID))
+	require.NoError(t, os.WriteFile(mgr.paths.InstanceMetadata(badID), []byte("{"), 0644))
+
+	err = mgr.DeleteSnapshot(ctx, snap.Id)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unmarshal instance metadata")
+}
+
+func TestForkSnapshotHardlinksRawMemoryFile(t *testing.T) {
+	t.Parallel()
+
+	mgr, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	hvType := mgr.defaultHypervisor
+	sourceID := "snapshot-fork-hardlink-src"
+	createStandbySnapshotSourceFixture(t, mgr, sourceID, "snapshot-fork-hardlink-src", hvType)
+
+	snap, err := mgr.CreateSnapshot(ctx, sourceID, CreateSnapshotRequest{
+		Kind: SnapshotKindStandby,
+		Name: "standby-for-fork-hardlink",
+	})
+	require.NoError(t, err)
+
+	memContents := []byte("guest memory bytes for hardlink test")
+	snapshotDir := mgr.paths.SnapshotGuestDir(snap.Id)
+	snapshotConfigPath := filepath.Join(snapshotDir, "snapshots", "snapshot-latest", "config.json")
+	require.NoError(t, os.MkdirAll(filepath.Dir(snapshotConfigPath), 0755))
+	require.NoError(t, os.WriteFile(snapshotConfigPath, []byte(`{}`), 0644))
+	snapshotMem := filepath.Join(snapshotDir, "snapshots", "snapshot-latest", "memory")
+	require.NoError(t, os.WriteFile(snapshotMem, memContents, 0644))
+
+	srcInfo, err := os.Stat(snapshotMem)
+	require.NoError(t, err)
+
+	forked, err := mgr.ForkSnapshot(ctx, snap.Id, ForkSnapshotRequest{
+		Name:        "snapshot-fork-hardlink",
+		TargetState: StateStandby,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = mgr.DeleteInstance(context.Background(), forked.Id) })
+
+	forkMem := filepath.Join(mgr.paths.InstanceSnapshotLatest(forked.Id), "memory")
+	forkInfo, err := os.Stat(forkMem)
+	require.NoError(t, err)
+	assert.True(t, os.SameFile(srcInfo, forkInfo), "fork mem-file should share an inode with the snapshot mem-file")
+
+	got, err := os.ReadFile(forkMem)
+	require.NoError(t, err)
+	assert.Equal(t, memContents, got)
+
+	err = mgr.DeleteSnapshot(ctx, snap.Id)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidState)
 }
 
 func createStoppedSnapshotSourceFixture(t *testing.T, mgr *manager, id, name string, hvType hypervisor.Type) {
