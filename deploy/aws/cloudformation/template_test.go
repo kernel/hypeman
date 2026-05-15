@@ -88,6 +88,7 @@ func TestCloudFormationLaunchContract(t *testing.T) {
 	assertContains(t, userData, "/usr/local/bin/hypeman-create-token")
 	assertContains(t, userData, "/opt/hypeman/deploy/validate.sh")
 	assertContains(t, userData, "CONFIG_PATH=/etc/hypeman/config.yaml /opt/hypeman/bin/hypeman-token")
+	assertContains(t, userData, "http://127.0.0.1:${ApiPort}/health")
 	assertContains(t, userData, "GOMODCACHE=/root/go/pkg/mod")
 }
 
