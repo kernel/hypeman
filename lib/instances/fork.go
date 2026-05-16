@@ -16,6 +16,7 @@ import (
 	"github.com/kernel/hypeman/lib/instances/phasetracking"
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/network"
+	restartpolicy "github.com/kernel/hypeman/lib/restart-policy"
 	"github.com/nrednav/cuid2"
 	"go.opentelemetry.io/otel/attribute"
 	"gvisor.dev/gvisor/pkg/cleanup"
@@ -281,6 +282,7 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 	forkMeta.VsockSocket = m.paths.InstanceSocket(forkID, hypervisor.VsockSocketNameForType(forkMeta.HypervisorType))
 	forkMeta.ExitCode = nil
 	forkMeta.ExitMessage = ""
+	forkMeta.RestartStatus = restartpolicy.Status{}
 	// Forks are new instances; phase accounting must not inherit the source's
 	// cumulative durations. The first transition into the fork's runtime
 	// phase (Standby for snapshot forks, Stopped for stopped forks) will be
@@ -480,6 +482,9 @@ func cloneStoredMetadata(src StoredMetadata) StoredMetadata {
 	}
 	if src.HealthCheck != nil {
 		dst.HealthCheck = cloneHealthCheckPolicy(src.HealthCheck)
+	}
+	if src.RestartPolicy != nil {
+		dst.RestartPolicy = cloneRestartPolicy(src.RestartPolicy)
 	}
 	if src.SnapshotPolicy != nil {
 		dst.SnapshotPolicy = cloneSnapshotPolicy(src.SnapshotPolicy)

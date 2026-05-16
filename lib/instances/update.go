@@ -41,6 +41,13 @@ func (m *manager) updateInstance(ctx context.Context, id string, req UpdateInsta
 		return nil, err
 	}
 	req.HealthCheck = normalizedHealthCheck
+	if req.RestartPolicySet {
+		normalizedRestartPolicy, err := normalizeRestartPolicy(req.RestartPolicy)
+		if err != nil {
+			return nil, err
+		}
+		req.RestartPolicy = normalizedRestartPolicy
+	}
 
 	if err := validateUpdateInstanceRequest(meta, req); err != nil {
 		return nil, err
@@ -55,6 +62,10 @@ func (m *manager) updateInstance(ctx context.Context, id string, req UpdateInsta
 	if req.HealthCheck != nil {
 		nextMeta.HealthCheck = cloneHealthCheckPolicy(req.HealthCheck)
 		nextMeta.HealthCheckRuntime = nil
+	}
+	if req.RestartPolicySet {
+		nextMeta.RestartPolicy = cloneRestartPolicy(req.RestartPolicy)
+		nextMeta.RestartStatus = restartStatusAfterPolicyUpdate(nextMeta.RestartStatus)
 	}
 	if len(req.Env) == 0 {
 		if err := m.saveMetadata(nextMeta); err != nil {
@@ -103,8 +114,8 @@ func (m *manager) updateInstance(ctx context.Context, id string, req UpdateInsta
 }
 
 func validateUpdateInstanceRequest(meta *metadata, req UpdateInstanceRequest) error {
-	if len(req.Env) == 0 && req.AutoStandby == nil && req.HealthCheck == nil {
-		return fmt.Errorf("%w: request must include env, auto_standby, and/or health_check", ErrInvalidRequest)
+	if len(req.Env) == 0 && req.AutoStandby == nil && req.HealthCheck == nil && !req.RestartPolicySet {
+		return fmt.Errorf("%w: request must include env, auto_standby, health_check, and/or restart_policy", ErrInvalidRequest)
 	}
 	if req.HealthCheck != nil {
 		if meta == nil {

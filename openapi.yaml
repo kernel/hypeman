@@ -375,6 +375,64 @@ components:
           description: Truncated error from the most recent failed check.
           example: "connection refused"
 
+    RestartPolicy:
+      type: object
+      description: Whole-instance restart supervision policy.
+      properties:
+        policy:
+          type: string
+          enum: [never, always, on_failure]
+          default: never
+          description: |
+            Restart behavior when the guest program exits:
+            - never: do not automatically restart
+            - always: restart after any guest exit
+            - on_failure: restart only for nonzero, signaled, OOM, or unknown exits
+          example: on_failure
+        backoff:
+          type: string
+          description: Delay before each restart attempt, expressed as a Go duration like "5s" or "1m".
+          default: "5s"
+          example: "5s"
+        max_attempts:
+          type: integer
+          minimum: 0
+          default: 0
+          description: Consecutive automatic restart attempts before blocking retries. 0 means unlimited.
+          example: 10
+        stable_after:
+          type: string
+          description: Running this long resets the consecutive restart attempt count.
+          default: "10m"
+          example: "10m"
+
+    RestartStatus:
+      type: object
+      description: Runtime status for restart policy decisions.
+      properties:
+        attempts:
+          type: integer
+          description: Consecutive automatic restart attempts in the current failure window.
+          example: 3
+        last_attempt_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Last time Hypeman attempted an automatic restart.
+          example: "2025-01-15T12:30:00Z"
+        next_attempt_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Next scheduled automatic restart attempt after backoff.
+          example: "2025-01-15T12:30:05Z"
+        blocked_reason:
+          type: string
+          enum: [manual_stop, max_attempts_exceeded]
+          nullable: true
+          description: Reason automatic restarts are currently blocked.
+          example: max_attempts_exceeded
+
     AutoStandbyStatus:
       type: object
       required: [supported, configured, enabled, eligible, status, reason, active_inbound_connections, tracking_mode]
@@ -458,6 +516,8 @@ components:
           $ref: "#/components/schemas/AutoStandbyPolicy"
         health_check:
           $ref: "#/components/schemas/HealthCheck"
+        restart_policy:
+          $ref: "#/components/schemas/RestartPolicy"
 
     CreateInstanceRequest:
       type: object
@@ -568,6 +628,8 @@ components:
           $ref: "#/components/schemas/AutoStandbyPolicy"
         health_check:
           $ref: "#/components/schemas/HealthCheck"
+        restart_policy:
+          $ref: "#/components/schemas/RestartPolicy"
         skip_kernel_headers:
           type: boolean
           description: |
@@ -1026,6 +1088,10 @@ components:
           $ref: "#/components/schemas/HealthCheck"
         health_status:
           $ref: "#/components/schemas/InstanceHealthStatus"
+        restart_policy:
+          $ref: "#/components/schemas/RestartPolicy"
+        restart_status:
+          $ref: "#/components/schemas/RestartStatus"
         phase_durations_ms:
           type: object
           description: |

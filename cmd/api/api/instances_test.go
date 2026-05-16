@@ -16,6 +16,7 @@ import (
 	mw "github.com/kernel/hypeman/lib/middleware"
 	"github.com/kernel/hypeman/lib/oapi"
 	"github.com/kernel/hypeman/lib/paths"
+	restartpolicy "github.com/kernel/hypeman/lib/restart-policy"
 	"github.com/kernel/hypeman/lib/system"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -281,6 +282,7 @@ func (m *captureUpdateManager) UpdateInstance(ctx context.Context, id string, re
 			Env:            req.Env,
 			AutoStandby:    req.AutoStandby,
 			HealthCheck:    req.HealthCheck,
+			RestartPolicy:  req.RestartPolicy,
 			CreatedAt:      now,
 			HypervisorType: hypervisor.TypeCloudHypervisor,
 		},
@@ -304,6 +306,7 @@ func (m *captureCreateManager) CreateInstance(ctx context.Context, req instances
 			Vcpus:          req.Vcpus,
 			AutoStandby:    req.AutoStandby,
 			HealthCheck:    req.HealthCheck,
+			RestartPolicy:  req.RestartPolicy,
 			CreatedAt:      now,
 			HypervisorType: hypervisor.TypeCloudHypervisor,
 		},
@@ -705,6 +708,48 @@ func TestCreateInstance_MapsHealthCheckPolicy(t *testing.T) {
 	assert.Equal(t, oapi.InstanceHealthStatusStatusStarting, instance.HealthStatus.Status)
 }
 
+func TestCreateInstance_MapsRestartPolicy(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	origMgr := svc.InstanceManager
+	mockMgr := &captureCreateManager{Manager: origMgr}
+	svc.InstanceManager = mockMgr
+
+	policy := oapi.OnFailure
+	backoff := "7s"
+	stableAfter := "2m"
+	maxAttempts := 4
+
+	resp, err := svc.CreateInstance(ctx(), oapi.CreateInstanceRequestObject{
+		Body: &oapi.CreateInstanceRequest{
+			Name:  "test-restart-policy",
+			Image: "docker.io/library/alpine:latest",
+			RestartPolicy: &oapi.RestartPolicy{
+				Policy:      &policy,
+				Backoff:     &backoff,
+				StableAfter: &stableAfter,
+				MaxAttempts: &maxAttempts,
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	created, ok := resp.(oapi.CreateInstance201JSONResponse)
+	require.True(t, ok, "expected 201 response")
+	require.NotNil(t, mockMgr.lastReq)
+	require.NotNil(t, mockMgr.lastReq.RestartPolicy)
+	assert.Equal(t, restartpolicy.PolicyOnFailure, mockMgr.lastReq.RestartPolicy.Policy)
+	assert.Equal(t, "7s", mockMgr.lastReq.RestartPolicy.Backoff)
+	assert.Equal(t, "2m", mockMgr.lastReq.RestartPolicy.StableAfter)
+	assert.Equal(t, 4, mockMgr.lastReq.RestartPolicy.MaxAttempts)
+
+	instance := oapi.Instance(created)
+	require.NotNil(t, instance.RestartPolicy)
+	require.NotNil(t, instance.RestartPolicy.Policy)
+	assert.Equal(t, oapi.OnFailure, *instance.RestartPolicy.Policy)
+}
+
 func TestUpdateInstance_MapsEnvPatch(t *testing.T) {
 	t.Parallel()
 	svc := newTestService(t)
@@ -881,6 +926,108 @@ func TestUpdateInstance_MapsHealthCheckPatch(t *testing.T) {
 	assert.Equal(t, oapi.HealthCheckTypeTcp, *instance.HealthCheck.Type)
 	require.NotNil(t, instance.HealthStatus)
 	assert.Equal(t, oapi.InstanceHealthStatusStatusUnknown, instance.HealthStatus.Status)
+}
+
+func TestUpdateInstance_MapsRestartPolicyPatch(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	origMgr := svc.InstanceManager
+	now := time.Now()
+	mockMgr := &captureUpdateManager{
+		Manager: origMgr,
+		result: &instances.Instance{
+			StoredMetadata: instances.StoredMetadata{
+				Id:             "inst-update-restart-policy",
+				Name:           "inst-update-restart-policy",
+				Image:          "docker.io/library/alpine:latest",
+				CreatedAt:      now,
+				HypervisorType: hypervisor.TypeCloudHypervisor,
+				RestartPolicy: &restartpolicy.Policy{
+					Policy:      restartpolicy.PolicyAlways,
+					Backoff:     "5s",
+					StableAfter: "10m0s",
+				},
+				RestartStatus: restartpolicy.Status{
+					BlockedReason: restartpolicy.BlockedReasonManualStop,
+				},
+			},
+			State: instances.StateStopped,
+		},
+	}
+	svc.InstanceManager = mockMgr
+
+	policy := oapi.Always
+	resolved := &instances.Instance{
+		StoredMetadata: instances.StoredMetadata{
+			Id:             "inst-update-restart-policy",
+			Name:           "inst-update-restart-policy",
+			Image:          "docker.io/library/alpine:latest",
+			CreatedAt:      now,
+			HypervisorType: hypervisor.TypeCloudHypervisor,
+		},
+		State: instances.StateStopped,
+	}
+
+	resp, err := svc.UpdateInstance(mw.WithResolvedInstance(ctx(), resolved.Id, resolved), oapi.UpdateInstanceRequestObject{
+		Id: resolved.Id,
+		Body: &oapi.UpdateInstanceRequest{
+			RestartPolicy: &oapi.RestartPolicy{Policy: &policy},
+		},
+	})
+	require.NoError(t, err)
+	updated, ok := resp.(oapi.UpdateInstance200JSONResponse)
+	require.True(t, ok, "expected 200 response")
+
+	require.NotNil(t, mockMgr.lastReq)
+	assert.True(t, mockMgr.lastReq.RestartPolicySet)
+	require.NotNil(t, mockMgr.lastReq.RestartPolicy)
+	assert.Equal(t, restartpolicy.PolicyAlways, mockMgr.lastReq.RestartPolicy.Policy)
+
+	instance := oapi.Instance(updated)
+	require.NotNil(t, instance.RestartPolicy)
+	require.NotNil(t, instance.RestartStatus)
+	require.NotNil(t, instance.RestartStatus.BlockedReason)
+	assert.Equal(t, oapi.ManualStop, *instance.RestartStatus.BlockedReason)
+}
+
+func TestUpdateInstance_RejectsInvalidRestartPolicy(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	origMgr := svc.InstanceManager
+	mockMgr := &captureUpdateManager{Manager: origMgr}
+	svc.InstanceManager = mockMgr
+
+	now := time.Now()
+	resolved := &instances.Instance{
+		StoredMetadata: instances.StoredMetadata{
+			Id:             "inst-update-restart-policy",
+			Name:           "inst-update-restart-policy",
+			Image:          "docker.io/library/alpine:latest",
+			CreatedAt:      now,
+			HypervisorType: hypervisor.TypeCloudHypervisor,
+		},
+		State: instances.StateStopped,
+	}
+	policy := oapi.OnFailure
+	backoff := "0s"
+
+	resp, err := svc.UpdateInstance(mw.WithResolvedInstance(ctx(), resolved.Id, resolved), oapi.UpdateInstanceRequestObject{
+		Id: resolved.Id,
+		Body: &oapi.UpdateInstanceRequest{
+			RestartPolicy: &oapi.RestartPolicy{
+				Policy:  &policy,
+				Backoff: &backoff,
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	badReq, ok := resp.(oapi.UpdateInstance400JSONResponse)
+	require.True(t, ok, "expected 400 response")
+	assert.Equal(t, "invalid_restart_policy", badReq.Code)
+	assert.Nil(t, mockMgr.lastReq)
 }
 
 func TestUpdateInstance_RejectsZeroAutoStandbyIgnoreDestinationPort(t *testing.T) {

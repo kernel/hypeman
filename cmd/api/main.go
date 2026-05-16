@@ -571,6 +571,14 @@ func run() error {
 			return app.HealthCheckController.Run(gctx)
 		})
 	}
+	if restartController, ok := app.InstanceManager.(interface {
+		StartRestartPolicyController(context.Context) error
+	}); ok {
+		grp.Go(func() error {
+			logger.Info("starting restart policy controller")
+			return restartController.StartRestartPolicyController(gctx)
+		})
+	}
 
 	// Run the server
 	grp.Go(func() error {

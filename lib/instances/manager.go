@@ -475,7 +475,17 @@ func (m *manager) StopInstance(ctx context.Context, id string) (*Instance, error
 		return nil, err
 	}
 	if current.State == StateStopped {
-		return current, nil
+		if err := m.markRestartManualStopLocked(ctx, id); err != nil {
+			return nil, err
+		}
+		updated, err := m.currentInstanceWithoutHydration(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		return updated, nil
+	}
+	if err := m.markRestartManualStopLocked(ctx, id); err != nil {
+		return nil, err
 	}
 	inst, err := m.stopInstance(ctx, id)
 	if err == nil {
@@ -497,6 +507,9 @@ func (m *manager) StartInstance(ctx context.Context, id string, req StartInstanc
 		if current.State == StateRunning || current.State == StateInitializing {
 			return current, nil
 		}
+	}
+	if err := m.clearRestartStatusLocked(ctx, id); err != nil {
+		return nil, err
 	}
 	inst, err := m.startInstance(ctx, id, req)
 	if err == nil {
