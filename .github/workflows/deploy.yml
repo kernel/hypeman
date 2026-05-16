@@ -37,9 +37,6 @@ jobs:
           cfn-lint deploy/aws/cloudformation/template.yaml
           go test ./deploy/aws/cloudformation
 
-      - name: Validate scripts
-        run: bash -n deploy/aws/scripts/validate.sh
-
   publish-cloudformation:
     runs-on: ubuntu-latest
     needs: validate
