@@ -14,6 +14,7 @@ import (
 	"github.com/kernel/hypeman/lib/builds"
 	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/guestmemory"
+	"github.com/kernel/hypeman/lib/healthcheck"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/ingress"
 	"github.com/kernel/hypeman/lib/instances"
@@ -71,6 +72,7 @@ func initializeApp() (*application, func(), error) {
 		return nil, nil, err
 	}
 	autostandbyController := providers.ProvideAutoStandbyController(instancesManager, logger)
+	healthcheckController := providers.ProvideHealthCheckController(instancesManager, logger)
 	vm_metricsManager, err := providers.ProvideVMMetricsManager(instancesManager, config, logger)
 	if err != nil {
 		return nil, nil, err
@@ -95,6 +97,7 @@ func initializeApp() (*application, func(), error) {
 		ResourceManager:       resourcesManager,
 		GuestMemoryController: controller,
 		AutoStandbyController: autostandbyController,
+		HealthCheckController: healthcheckController,
 		VMMetricsManager:      vm_metricsManager,
 		Registry:              registry,
 		ApiService:            apiService,
@@ -121,6 +124,7 @@ type application struct {
 	ResourceManager       *resources.Manager
 	GuestMemoryController guestmemory.Controller
 	AutoStandbyController *autostandby.Controller
+	HealthCheckController *healthcheck.Controller
 	VMMetricsManager      *vm_metrics.Manager
 	Registry              *registry.Registry
 	ApiService            *api.ApiService

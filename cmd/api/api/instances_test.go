@@ -9,6 +9,7 @@ import (
 
 	"github.com/c2h5oh/datasize"
 	"github.com/kernel/hypeman/lib/autostandby"
+	"github.com/kernel/hypeman/lib/healthcheck"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/instances"
 	"github.com/kernel/hypeman/lib/instances/phasetracking"
@@ -279,6 +280,7 @@ func (m *captureUpdateManager) UpdateInstance(ctx context.Context, id string, re
 			Image:          "docker.io/library/alpine:latest",
 			Env:            req.Env,
 			AutoStandby:    req.AutoStandby,
+			HealthCheck:    req.HealthCheck,
 			CreatedAt:      now,
 			HypervisorType: hypervisor.TypeCloudHypervisor,
 		},
@@ -301,6 +303,7 @@ func (m *captureCreateManager) CreateInstance(ctx context.Context, req instances
 			OverlaySize:    req.OverlaySize,
 			Vcpus:          req.Vcpus,
 			AutoStandby:    req.AutoStandby,
+			HealthCheck:    req.HealthCheck,
 			CreatedAt:      now,
 			HypervisorType: hypervisor.TypeCloudHypervisor,
 		},
@@ -657,6 +660,51 @@ func TestCreateInstance_MapsAutoStandbyPolicy(t *testing.T) {
 	assert.Equal(t, idleTimeout, *instance.AutoStandby.IdleTimeout)
 }
 
+func TestCreateInstance_MapsHealthCheckPolicy(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	origMgr := svc.InstanceManager
+	mockMgr := &captureCreateManager{Manager: origMgr}
+	svc.InstanceManager = mockMgr
+
+	typ := oapi.HealthCheckTypeExec
+	interval := "5s"
+	timeout := "1s"
+
+	resp, err := svc.CreateInstance(ctx(), oapi.CreateInstanceRequestObject{
+		Body: &oapi.CreateInstanceRequest{
+			Name:  "test-health-check",
+			Image: "docker.io/library/alpine:latest",
+			HealthCheck: &oapi.HealthCheck{
+				Type:     &typ,
+				Interval: &interval,
+				Timeout:  &timeout,
+				Exec: &oapi.HealthCheckExec{
+					Command: []string{"true"},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	created, ok := resp.(oapi.CreateInstance201JSONResponse)
+	require.True(t, ok, "expected 201 response")
+	require.NotNil(t, mockMgr.lastReq)
+	require.NotNil(t, mockMgr.lastReq.HealthCheck)
+	assert.Equal(t, healthcheck.TypeExec, mockMgr.lastReq.HealthCheck.Type)
+	assert.Equal(t, []string{"true"}, mockMgr.lastReq.HealthCheck.Exec.Command)
+	assert.Equal(t, "5s", mockMgr.lastReq.HealthCheck.Interval)
+	assert.Equal(t, "1s", mockMgr.lastReq.HealthCheck.Timeout)
+
+	instance := oapi.Instance(created)
+	require.NotNil(t, instance.HealthCheck)
+	require.NotNil(t, instance.HealthCheck.Type)
+	assert.Equal(t, oapi.HealthCheckTypeExec, *instance.HealthCheck.Type)
+	require.NotNil(t, instance.HealthStatus)
+	assert.Equal(t, oapi.InstanceHealthStatusStatusStarting, instance.HealthStatus.Status)
+}
+
 func TestUpdateInstance_MapsEnvPatch(t *testing.T) {
 	t.Parallel()
 	svc := newTestService(t)
@@ -768,6 +816,71 @@ func TestUpdateInstance_MapsAutoStandbyPatch(t *testing.T) {
 	require.NotNil(t, instance.AutoStandby)
 	require.NotNil(t, instance.AutoStandby.Enabled)
 	assert.True(t, *instance.AutoStandby.Enabled)
+}
+
+func TestUpdateInstance_MapsHealthCheckPatch(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	origMgr := svc.InstanceManager
+	now := time.Now()
+	mockMgr := &captureUpdateManager{
+		Manager: origMgr,
+		result: &instances.Instance{
+			StoredMetadata: instances.StoredMetadata{
+				Id:             "inst-update-health-check",
+				Name:           "inst-update-health-check",
+				Image:          "docker.io/library/alpine:latest",
+				CreatedAt:      now,
+				HypervisorType: hypervisor.TypeCloudHypervisor,
+				HealthCheck: &healthcheck.Policy{
+					Type: healthcheck.TypeTCP,
+					TCP:  &healthcheck.TCPCheck{Port: 8080},
+				},
+			},
+			State: instances.StateStopped,
+		},
+	}
+	svc.InstanceManager = mockMgr
+
+	typ := oapi.HealthCheckTypeTcp
+	resolved := &instances.Instance{
+		StoredMetadata: instances.StoredMetadata{
+			Id:             "inst-update-health-check",
+			Name:           "inst-update-health-check",
+			Image:          "docker.io/library/alpine:latest",
+			CreatedAt:      now,
+			HypervisorType: hypervisor.TypeCloudHypervisor,
+			NetworkEnabled: true,
+		},
+		State: instances.StateStopped,
+	}
+
+	resp, err := svc.UpdateInstance(mw.WithResolvedInstance(ctx(), resolved.Id, resolved), oapi.UpdateInstanceRequestObject{
+		Id: resolved.Id,
+		Body: &oapi.UpdateInstanceRequest{
+			HealthCheck: &oapi.HealthCheck{
+				Type: &typ,
+				Tcp:  &oapi.HealthCheckTCP{Port: 8080},
+			},
+		},
+	})
+	require.NoError(t, err)
+	updated, ok := resp.(oapi.UpdateInstance200JSONResponse)
+	require.True(t, ok, "expected 200 response")
+
+	require.NotNil(t, mockMgr.lastReq)
+	require.NotNil(t, mockMgr.lastReq.HealthCheck)
+	assert.Equal(t, resolved.Id, mockMgr.lastID)
+	assert.Equal(t, healthcheck.TypeTCP, mockMgr.lastReq.HealthCheck.Type)
+	assert.Equal(t, uint16(8080), mockMgr.lastReq.HealthCheck.TCP.Port)
+
+	instance := oapi.Instance(updated)
+	require.NotNil(t, instance.HealthCheck)
+	require.NotNil(t, instance.HealthCheck.Type)
+	assert.Equal(t, oapi.HealthCheckTypeTcp, *instance.HealthCheck.Type)
+	require.NotNil(t, instance.HealthStatus)
+	assert.Equal(t, oapi.InstanceHealthStatusStatusUnknown, instance.HealthStatus.Status)
 }
 
 func TestUpdateInstance_RejectsZeroAutoStandbyIgnoreDestinationPort(t *testing.T) {

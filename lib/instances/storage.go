@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/autostandby"
+	"github.com/kernel/hypeman/lib/healthcheck"
 	"github.com/kernel/hypeman/lib/images"
 )
 
@@ -38,6 +39,7 @@ const (
 type metadata struct {
 	StoredMetadata
 	AutoStandbyRuntime *autostandby.Runtime `json:"auto_standby_runtime,omitempty"`
+	HealthCheckRuntime *healthcheck.Runtime `json:"health_check_runtime,omitempty"`
 }
 
 // ensureDirectories creates the instance directory structure

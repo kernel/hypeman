@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/kernel/hypeman/lib/healthcheck"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/instances/phasetracking"
 	"github.com/kernel/hypeman/lib/logger"
@@ -503,6 +504,7 @@ func (m *manager) toInstanceWithStateDerivation(ctx context.Context, meta *metad
 		StateError:          result.Error,
 		HasSnapshot:         m.hasSnapshot(meta.StoredMetadata.DataDir),
 		BootMarkersHydrated: result.BootMarkersHydrated,
+		HealthCheckRuntime:  healthcheck.CloneRuntime(meta.HealthCheckRuntime),
 	}
 	refreshHypervisorPID(&inst.StoredMetadata, result.State)
 

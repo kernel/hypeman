@@ -14,11 +14,13 @@ type LifecycleEventConsumer string
 const (
 	LifecycleEventConsumerWaitForState LifecycleEventConsumer = "wait_for_state"
 	LifecycleEventConsumerAutoStandby  LifecycleEventConsumer = "auto_standby"
+	LifecycleEventConsumerHealthCheck  LifecycleEventConsumer = "health_check"
 )
 
 var allLifecycleEventConsumers = []LifecycleEventConsumer{
 	LifecycleEventConsumerWaitForState,
 	LifecycleEventConsumerAutoStandby,
+	LifecycleEventConsumerHealthCheck,
 }
 
 // LifecycleEventAction identifies which instance lifecycle action occurred.
