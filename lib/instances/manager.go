@@ -151,7 +151,8 @@ type manager struct {
 	admissionReconcileOnce     sync.Once
 
 	// Periodic TAP garbage collection reconciler.
-	tapGCOnce sync.Once
+	tapGCOnce           sync.Once
+	runtimeOrphanGCOnce sync.Once
 
 	// Hypervisor support
 	vmStarters        map[hypervisor.Type]hypervisor.VMStarter

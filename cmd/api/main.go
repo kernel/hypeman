@@ -233,6 +233,11 @@ func run() error {
 	}); ok {
 		reconciler.StartTAPGCReconciler(ctx)
 	}
+	if reconciler, ok := app.InstanceManager.(interface {
+		StartRuntimeOrphanReconciler(context.Context)
+	}); ok {
+		reconciler.StartRuntimeOrphanReconciler(ctx)
+	}
 
 	// Log OTel status
 	if cfg.Otel.Enabled {
