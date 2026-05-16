@@ -159,42 +159,29 @@ func (c *Controller) reconcileInstance(ctx context.Context, inst Instance) error
 	if status.BlockedReason != "" {
 		return nil
 	}
-	if !ShouldRestart(policy, inst.ExitCode) {
+	if !ShouldRestartInstance(policy, inst.ExitCode, status) {
 		return nil
-	}
-	if status.NextAttemptAt != nil && now.Before(status.NextAttemptAt.UTC()) {
-		return nil
-	}
-	if status.LastAttemptAt != nil {
-		nextAttemptAt := status.LastAttemptAt.UTC().Add(Backoff(policy))
-		if now.Before(nextAttemptAt) {
-			status.NextAttemptAt = &nextAttemptAt
-			return c.store.SetRestartStatus(ctx, inst.ID, status)
-		}
-	}
-	if policy.MaxAttempts > 0 && status.Attempts >= policy.MaxAttempts {
-		status.NextAttemptAt = nil
-		status.BlockedReason = BlockedReasonMaxAttemptsExceeded
-		return c.store.SetRestartStatus(ctx, inst.ID, status)
 	}
 
-	status.Attempts++
-	status.LastAttemptAt = &now
-	status.NextAttemptAt = nil
-	if err := c.store.SetRestartStatus(ctx, inst.ID, status); err != nil {
+	nextStatus, shouldAttempt := PrepareAttempt(policy, status, now)
+	if !shouldAttempt {
+		if !EqualStatus(status, nextStatus) {
+			return c.store.SetRestartStatus(ctx, inst.ID, nextStatus)
+		}
+		return nil
+	}
+
+	reason := nextStatus.LastReason
+	nextStatus.LastReason = ""
+	if err := c.store.SetRestartStatus(ctx, inst.ID, nextStatus); err != nil {
 		return err
 	}
 
-	c.log.Info("restart policy starting instance", "instance_id", inst.ID, "attempt", status.Attempts)
+	c.log.Info("restart policy starting instance", "instance_id", inst.ID, "attempt", nextStatus.Attempts)
 	if err := c.store.RestartInstance(ctx, inst.ID); err != nil {
-		if policy.MaxAttempts > 0 && status.Attempts >= policy.MaxAttempts {
-			status.BlockedReason = BlockedReasonMaxAttemptsExceeded
-			status.NextAttemptAt = nil
-		} else {
-			nextAttemptAt := now.Add(Backoff(policy))
-			status.NextAttemptAt = &nextAttemptAt
-		}
-		if statusErr := c.store.SetRestartStatus(ctx, inst.ID, status); statusErr != nil {
+		nextStatus = AfterFailedAttempt(policy, nextStatus, now)
+		nextStatus.LastReason = reason
+		if statusErr := c.store.SetRestartStatus(ctx, inst.ID, nextStatus); statusErr != nil {
 			c.log.Warn("failed to persist restart status after restart failure", "instance_id", inst.ID, "error", statusErr)
 		}
 		return err

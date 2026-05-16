@@ -432,6 +432,12 @@ components:
           nullable: true
           description: Reason automatic restarts are currently blocked.
           example: max_attempts_exceeded
+        last_reason:
+          type: string
+          enum: [health_check_failed]
+          nullable: true
+          description: Most recent non-exit failure signal that entered restart policy.
+          example: health_check_failed
 
     AutoStandbyStatus:
       type: object

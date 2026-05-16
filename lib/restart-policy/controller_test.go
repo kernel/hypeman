@@ -114,3 +114,23 @@ func TestReconcileSkipsCleanOnFailureExit(t *testing.T) {
 	assert.Empty(t, store.started)
 	assert.Nil(t, store.statuses)
 }
+
+func TestReconcileRestartsStoppedHealthFailure(t *testing.T) {
+	exitCode := 0
+	store := &fakeStore{
+		instances: []Instance{{
+			ID:            "inst-1",
+			State:         StateStopped,
+			ExitCode:      &exitCode,
+			RestartPolicy: &Policy{Policy: PolicyOnFailure},
+			RestartStatus: Status{LastReason: RestartReasonHealthCheckFailed},
+		}},
+	}
+	controller := NewController(store, ControllerOptions{})
+
+	require.NoError(t, controller.Reconcile(context.Background()))
+
+	assert.Equal(t, []string{"inst-1"}, store.started)
+	assert.Equal(t, 1, store.statuses["inst-1"].Attempts)
+	assert.Empty(t, store.statuses["inst-1"].LastReason)
+}

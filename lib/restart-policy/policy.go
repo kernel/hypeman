@@ -26,6 +26,12 @@ const (
 	BlockedReasonMaxAttemptsExceeded BlockedReason = "max_attempts_exceeded"
 )
 
+type RestartReason string
+
+const (
+	RestartReasonHealthCheckFailed RestartReason = "health_check_failed"
+)
+
 type Policy struct {
 	Policy      PolicyMode `json:"policy"`
 	Backoff     string     `json:"backoff,omitempty"`
@@ -38,6 +44,7 @@ type Status struct {
 	LastAttemptAt *time.Time    `json:"last_attempt_at,omitempty"`
 	NextAttemptAt *time.Time    `json:"next_attempt_at,omitempty"`
 	BlockedReason BlockedReason `json:"blocked_reason,omitempty"`
+	LastReason    RestartReason `json:"last_reason,omitempty"`
 }
 
 func NormalizePolicy(policy *Policy) (*Policy, error) {
@@ -112,11 +119,85 @@ func ShouldRestart(policy *Policy, exitCode *int) bool {
 	}
 }
 
+func ShouldRestartHealthCheck(policy *Policy) bool {
+	if policy == nil {
+		return false
+	}
+	switch policy.Policy {
+	case PolicyAlways, PolicyOnFailure:
+		return true
+	default:
+		return false
+	}
+}
+
+func ShouldRestartInstance(policy *Policy, exitCode *int, status Status) bool {
+	if status.LastReason == RestartReasonHealthCheckFailed {
+		return ShouldRestartHealthCheck(policy)
+	}
+	return ShouldRestart(policy, exitCode)
+}
+
+func PrepareAttempt(policy *Policy, status Status, now time.Time) (Status, bool) {
+	now = now.UTC()
+	if status.BlockedReason != "" {
+		return status, false
+	}
+	if status.NextAttemptAt != nil && now.Before(status.NextAttemptAt.UTC()) {
+		return status, false
+	}
+	if status.LastAttemptAt != nil {
+		nextAttemptAt := status.LastAttemptAt.UTC().Add(Backoff(policy))
+		if now.Before(nextAttemptAt) {
+			status.NextAttemptAt = &nextAttemptAt
+			return status, false
+		}
+	}
+	if policy.MaxAttempts > 0 && status.Attempts >= policy.MaxAttempts {
+		status.NextAttemptAt = nil
+		status.BlockedReason = BlockedReasonMaxAttemptsExceeded
+		return status, false
+	}
+
+	status.Attempts++
+	status.LastAttemptAt = &now
+	status.NextAttemptAt = nil
+	return status, true
+}
+
+func AfterFailedAttempt(policy *Policy, status Status, now time.Time) Status {
+	now = now.UTC()
+	if policy.MaxAttempts > 0 && status.Attempts >= policy.MaxAttempts {
+		status.BlockedReason = BlockedReasonMaxAttemptsExceeded
+		status.NextAttemptAt = nil
+		return status
+	}
+	nextAttemptAt := now.Add(Backoff(policy))
+	status.NextAttemptAt = &nextAttemptAt
+	return status
+}
+
+func EqualStatus(a, b Status) bool {
+	return a.Attempts == b.Attempts &&
+		equalTime(a.LastAttemptAt, b.LastAttemptAt) &&
+		equalTime(a.NextAttemptAt, b.NextAttemptAt) &&
+		a.BlockedReason == b.BlockedReason &&
+		a.LastReason == b.LastReason
+}
+
 func (s Status) IsZero() bool {
 	return s.Attempts == 0 &&
 		s.LastAttemptAt == nil &&
 		s.NextAttemptAt == nil &&
-		s.BlockedReason == ""
+		s.BlockedReason == "" &&
+		s.LastReason == ""
+}
+
+func equalTime(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.UTC().Equal(b.UTC())
 }
 
 func normalizeDuration(raw string, fallback time.Duration, field string) (time.Duration, error) {

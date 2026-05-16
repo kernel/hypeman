@@ -3,6 +3,7 @@ package instances
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/kernel/hypeman/lib/logger"
 	restartpolicy "github.com/kernel/hypeman/lib/restart-policy"
@@ -76,6 +77,69 @@ func (m *manager) RestartInstance(ctx context.Context, id string) (*Instance, er
 	return inst, err
 }
 
+func (m *manager) HandleHealthCheckUnhealthy(ctx context.Context, id string) error {
+	lock := m.getInstanceLock(id)
+	lock.Lock()
+	defer lock.Unlock()
+
+	current, err := m.currentInstanceWithoutHydration(ctx, id)
+	if err != nil {
+		return err
+	}
+	if current.State != StateRunning {
+		return nil
+	}
+
+	policy, err := restartpolicy.NormalizePolicy(current.RestartPolicy)
+	if err != nil {
+		return err
+	}
+	if !restartpolicy.ShouldRestartHealthCheck(policy) {
+		return nil
+	}
+	if current.RestartStatus.BlockedReason != "" {
+		return nil
+	}
+
+	now := time.Now().UTC()
+	status := current.RestartStatus
+	status.LastReason = restartpolicy.RestartReasonHealthCheckFailed
+	nextStatus, shouldAttempt := restartpolicy.PrepareAttempt(policy, status, now)
+	if !shouldAttempt {
+		if !restartpolicy.EqualStatus(current.RestartStatus, nextStatus) {
+			return m.updateRestartStatusLocked(id, nextStatus)
+		}
+		return nil
+	}
+
+	reason := nextStatus.LastReason
+	nextStatus.LastReason = ""
+	if err := m.updateRestartStatusLocked(id, nextStatus); err != nil {
+		return err
+	}
+
+	stopped, err := m.stopInstance(ctx, id)
+	if err != nil {
+		_ = m.updateRestartStatusLocked(id, restartStatusAfterFailedHealthAttempt(policy, nextStatus, reason, now))
+		return err
+	}
+	m.notifyLifecycleEvent(ctx, LifecycleEventStop, stopped)
+
+	started, err := m.startInstance(ctx, id, StartInstanceRequest{})
+	if err != nil {
+		_ = m.updateRestartStatusLocked(id, restartStatusAfterFailedHealthAttempt(policy, nextStatus, reason, now))
+		return err
+	}
+	m.notifyLifecycleEvent(ctx, LifecycleEventStart, started)
+	return nil
+}
+
+func restartStatusAfterFailedHealthAttempt(policy *restartpolicy.Policy, status restartpolicy.Status, reason restartpolicy.RestartReason, now time.Time) restartpolicy.Status {
+	status = restartpolicy.AfterFailedAttempt(policy, status, now)
+	status.LastReason = reason
+	return status
+}
+
 func (m *manager) StartRestartPolicyController(ctx context.Context) error {
 	controller := restartpolicy.NewController(
 		restartPolicyStore{manager: m},
@@ -146,4 +210,7 @@ var _ interface {
 } = (*manager)(nil)
 var _ interface {
 	RestartInstance(context.Context, string) (*Instance, error)
+} = (*manager)(nil)
+var _ interface {
+	HandleHealthCheckUnhealthy(context.Context, string) error
 } = (*manager)(nil)

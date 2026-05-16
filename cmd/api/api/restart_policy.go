@@ -71,5 +71,9 @@ func toOAPIRestartStatus(status restartpolicy.Status) *oapi.RestartStatus {
 		nextAttemptAt := status.NextAttemptAt.UTC()
 		out.NextAttemptAt = &nextAttemptAt
 	}
+	if status.LastReason != "" {
+		reason := oapi.RestartStatusLastReason(status.LastReason)
+		out.LastReason = &reason
+	}
 	return out
 }
