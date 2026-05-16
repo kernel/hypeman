@@ -1,0 +1,18 @@
+[
+  {
+    "ParameterKey": "VpcId",
+    "ParameterValue": "vpc-xxxxxxxx"
+  },
+  {
+    "ParameterKey": "SubnetId",
+    "ParameterValue": "subnet-xxxxxxxx"
+  },
+  {
+    "ParameterKey": "AllowedApiCidr",
+    "ParameterValue": "203.0.113.10/32"
+  },
+  {
+    "ParameterKey": "InstanceType",
+    "ParameterValue": "c8i.2xlarge"
+  }
+]
