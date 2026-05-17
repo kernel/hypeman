@@ -22,6 +22,10 @@ type healthCheckControllerStore interface {
 	SubscribeLifecycleEvents(consumer LifecycleEventConsumer) (<-chan LifecycleEvent, func())
 }
 
+type healthCheckControllerInstanceGetter interface {
+	GetInstance(ctx context.Context, id string) (*Instance, error)
+}
+
 type healthCheckControllerOptions struct {
 	Log             *slog.Logger
 	Now             func() time.Time
@@ -235,6 +239,8 @@ func (c *HealthCheckController) runCheck(ctx context.Context, id string, generat
 	previous := healthcheck.CloneRuntime(inst.Runtime)
 	c.mu.Unlock()
 
+	inst = c.refreshProbeInstance(ctx, id, inst, policy)
+
 	_, timeout, _, err := healthcheck.DurationConfig(policy)
 	if err != nil {
 		c.log.Warn("invalid health check duration", "instance_id", id, "error", err)
@@ -278,6 +284,25 @@ func (c *HealthCheckController) runCheck(ctx context.Context, id string, generat
 	state.instance.Runtime = runtime
 	c.scheduleLocked(id, state, interval)
 	c.mu.Unlock()
+}
+
+func (c *HealthCheckController) refreshProbeInstance(ctx context.Context, id string, inst healthcheck.Instance, policy *healthcheck.Policy) healthcheck.Instance {
+	if policy == nil || policy.Type != healthcheck.TypeExec || inst.GuestAgentReady {
+		return inst
+	}
+
+	getter, ok := c.store.(healthCheckControllerInstanceGetter)
+	if !ok {
+		return inst
+	}
+	current, err := getter.GetInstance(ctx, id)
+	if err != nil || current == nil {
+		return inst
+	}
+
+	refreshed := toHealthCheckInstance(current)
+	refreshed.Runtime = inst.Runtime
+	return refreshed
 }
 
 func (c *HealthCheckController) lockPersistence(id string) func() {

@@ -38,6 +38,25 @@ func (r healthCheckControllerTestRunner) Check(context.Context, healthcheck.Inst
 	return r.result
 }
 
+type captureHealthCheckControllerTestRunner struct {
+	instances chan healthcheck.Instance
+	result    healthcheck.ProbeResult
+}
+
+func (r captureHealthCheckControllerTestRunner) Check(_ context.Context, inst healthcheck.Instance, _ *healthcheck.Policy) healthcheck.ProbeResult {
+	r.instances <- inst
+	return r.result
+}
+
+type getInstanceHealthCheckControllerTestStore struct {
+	*healthCheckControllerTestStore
+	instance Instance
+}
+
+func (s *getInstanceHealthCheckControllerTestStore) GetInstance(context.Context, string) (*Instance, error) {
+	return &s.instance, nil
+}
+
 type blockingHealthCheckControllerTestStore struct {
 	*healthCheckControllerTestStore
 	blockID string
@@ -327,6 +346,57 @@ func TestHealthCheckControllerSkipsStaleProbeAfterRuntimeReset(t *testing.T) {
 	case runtime := <-store.runtimes:
 		t.Fatalf("stale probe persisted runtime after reset: %#v", runtime)
 	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestHealthCheckControllerRefreshesExecProbeReadiness(t *testing.T) {
+	policy, err := healthcheck.NormalizePolicy(&healthcheck.Policy{
+		Type:     healthcheck.TypeExec,
+		Interval: "1h",
+		Exec:     &healthcheck.ExecCheck{Command: []string{"true"}},
+	})
+	require.NoError(t, err)
+
+	startedAt := time.Date(2026, 5, 16, 1, 0, 0, 0, time.UTC)
+	agentReadyAt := startedAt.Add(time.Second)
+	store := &getInstanceHealthCheckControllerTestStore{
+		healthCheckControllerTestStore: &healthCheckControllerTestStore{
+			runtimes: make(chan *healthcheck.Runtime, 1),
+		},
+		instance: Instance{
+			StoredMetadata: StoredMetadata{
+				Id:                "inst-1",
+				StartedAt:         &startedAt,
+				GuestAgentReadyAt: &agentReadyAt,
+				HealthCheck:       policy,
+			},
+			State: StateRunning,
+		},
+	}
+	runner := captureHealthCheckControllerTestRunner{
+		instances: make(chan healthcheck.Instance, 1),
+		result:    healthcheck.ProbeResult{Success: true},
+	}
+	controller := newHealthCheckController(store, healthCheckControllerOptions{
+		Now:    func() time.Time { return startedAt },
+		Runner: runner,
+	})
+
+	controller.syncInstance(context.Background(), &Instance{
+		StoredMetadata: StoredMetadata{
+			Id:          "inst-1",
+			StartedAt:   &startedAt,
+			HealthCheck: policy,
+		},
+		State: StateRunning,
+	}, false, false)
+	controller.runCheck(context.Background(), "inst-1", 1)
+
+	select {
+	case inst := <-runner.instances:
+		assert.True(t, inst.GuestAgentReady)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for exec probe")
 	}
 }
 

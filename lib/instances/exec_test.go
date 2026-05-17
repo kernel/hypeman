@@ -149,10 +149,11 @@ func TestExecConcurrent(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, inst.HealthCheck)
 	t.Logf("Instance created: %s", inst.Id)
+	instID := inst.Id
 
 	t.Cleanup(func() {
 		t.Log("Cleaning up...")
-		manager.DeleteInstance(ctx, inst.Id)
+		manager.DeleteInstance(ctx, instID)
 	})
 
 	// This test exercises concurrent exec behavior, not boot-speed budgets.
@@ -165,7 +166,7 @@ func TestExecConcurrent(t *testing.T) {
 	require.NoError(t, err, "initial exec should work")
 	require.Equal(t, 0, code, "initial exec should succeed")
 
-	inst, healthStatus, err := waitForInstanceHealthStatus(ctx, manager, inst.Id, healthcheck.StatusHealthy, 20*time.Second)
+	inst, healthStatus, err := waitForInstanceHealthStatus(ctx, manager, instID, healthcheck.StatusHealthy, 20*time.Second)
 	require.NoError(t, err, "exec health check should report healthy")
 	require.GreaterOrEqual(t, healthStatus.ConsecutiveSuccesses, 1)
 	require.NotNil(t, healthStatus.LastCheckedAt)
