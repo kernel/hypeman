@@ -3,6 +3,8 @@ package instances
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
@@ -10,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/guest"
+	"github.com/kernel/hypeman/lib/healthcheck"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/stretchr/testify/assert"
@@ -26,6 +29,7 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 
 	manager, _ := setupTestManager(t)
 	ctx := context.Background()
+	startHealthCheckControllerForTest(t, ctx, manager)
 
 	// Pull nginx:alpine image (long-running workload)
 	t.Log("Pulling nginx:alpine image...")
@@ -71,10 +75,26 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 		OverlaySize:    5 * 1024 * 1024 * 1024,
 		Vcpus:          1,
 		NetworkEnabled: true,
+		HealthCheck: &healthcheck.Policy{
+			Type:             healthcheck.TypeHTTP,
+			Interval:         "1s",
+			Timeout:          "1s",
+			StartPeriod:      "30s",
+			FailureThreshold: 3,
+			SuccessThreshold: 1,
+			HTTP: &healthcheck.HTTPCheck{
+				Port:           80,
+				Path:           "/",
+				ExpectedStatus: 200,
+			},
+		},
 	})
 	require.NoError(t, err)
 	require.NotNil(t, inst)
 	require.Contains(t, []State{StateInitializing, StateRunning}, inst.State)
+	require.NotNil(t, inst.HealthCheck)
+	initialHealth := healthcheck.Snapshot(inst.HealthCheck, string(inst.State), inst.HealthCheckRuntime)
+	assert.Equal(t, healthcheck.StatusStarting, initialHealth.Status)
 	t.Logf("Instance created: %s", inst.Id)
 
 	// Wait for VM to be fully ready
@@ -120,6 +140,15 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 	// Standby requires running state; create may still return Initializing.
 	inst, err = waitForInstanceState(ctx, manager, inst.Id, StateRunning, integrationTestTimeout(20*time.Second))
 	require.NoError(t, err)
+
+	t.Log("Waiting for health check to report healthy...")
+	inst, healthStatus, err := waitForInstanceHealthStatus(ctx, manager, inst.Id, healthcheck.StatusHealthy, 20*time.Second)
+	require.NoError(t, err)
+	assert.Equal(t, StateRunning, inst.State)
+	assert.GreaterOrEqual(t, healthStatus.ConsecutiveSuccesses, 1)
+	assert.NotNil(t, healthStatus.LastCheckedAt)
+	assert.NotNil(t, healthStatus.LastSuccessAt)
+	t.Log("Health check reported healthy")
 
 	// Test initial internet connectivity via exec
 	t.Log("Testing initial internet connectivity via exec...")
@@ -230,6 +259,54 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 	t.Log("Network allocation released after delete")
 
 	t.Log("Network integration test complete!")
+}
+
+func startHealthCheckControllerForTest(t *testing.T, ctx context.Context, manager Manager) {
+	t.Helper()
+
+	controller := NewHealthCheckController(manager, slog.Default())
+	require.NotNil(t, controller)
+
+	controllerCtx, cancel := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() {
+		done <- controller.Run(controllerCtx)
+	}()
+
+	t.Cleanup(func() {
+		cancel()
+		require.NoError(t, <-done)
+	})
+}
+
+func waitForInstanceHealthStatus(ctx context.Context, manager Manager, instanceID string, expected healthcheck.Status, timeout time.Duration) (*Instance, healthcheck.StatusSnapshot, error) {
+	timeout = integrationTestTimeout(timeout)
+	deadline := time.Now().Add(timeout)
+	var last healthcheck.StatusSnapshot
+	lastState := StateUnknown
+	lastErr := error(nil)
+
+	for time.Now().Before(deadline) {
+		inst, err := manager.GetInstance(ctx, instanceID)
+		if err != nil {
+			lastErr = err
+			time.Sleep(200 * time.Millisecond)
+			continue
+		}
+
+		lastState = inst.State
+		last = healthcheck.Snapshot(inst.HealthCheck, string(inst.State), inst.HealthCheckRuntime)
+		if last.Status == expected {
+			return inst, last, nil
+		}
+
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	if lastErr != nil {
+		return nil, last, fmt.Errorf("instance %s health did not reach %s within %v (last error: %w)", instanceID, expected, timeout, lastErr)
+	}
+	return nil, last, fmt.Errorf("instance %s health did not reach %s within %v (last state: %s, last health: %s)", instanceID, expected, timeout, lastState, last.Status)
 }
 
 // TestDockerForwardChainRestored validates recovery from an external FORWARD-chain flush.
