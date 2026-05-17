@@ -13,11 +13,23 @@ func Snapshot(policy *Policy, state string, runtime *Runtime) StatusSnapshot {
 	if !Enabled(policy) {
 		return StatusSnapshot{Status: StatusDisabled}
 	}
+	if state == StateInitializing {
+		snapshot := snapshotRuntime(runtime)
+		snapshot.Status = StatusStarting
+		return snapshot
+	}
 	if state != StateRunning {
 		return StatusSnapshot{Status: StatusUnknown}
 	}
 	if runtime == nil || runtime.Status == "" {
 		return StatusSnapshot{Status: StatusStarting}
+	}
+	return snapshotRuntime(runtime)
+}
+
+func snapshotRuntime(runtime *Runtime) StatusSnapshot {
+	if runtime == nil {
+		return StatusSnapshot{}
 	}
 	return StatusSnapshot{
 		Status:               runtime.Status,

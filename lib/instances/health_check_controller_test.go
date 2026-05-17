@@ -89,6 +89,58 @@ func TestHealthCheckControllerPersistsHealthyStatus(t *testing.T) {
 	require.NoError(t, <-done)
 }
 
+func TestHealthCheckControllerChecksInitializingInstance(t *testing.T) {
+	policy, err := healthcheck.NormalizePolicy(&healthcheck.Policy{
+		Type:     healthcheck.TypeExec,
+		Interval: "1h",
+		Exec:     &healthcheck.ExecCheck{Command: []string{"true"}},
+	})
+	require.NoError(t, err)
+
+	now := time.Date(2026, 5, 16, 1, 0, 0, 0, time.UTC)
+	store := &healthCheckControllerTestStore{
+		instances: []Instance{{
+			StoredMetadata: StoredMetadata{
+				Id:          "inst-1",
+				StartedAt:   &now,
+				HealthCheck: policy,
+			},
+			State: StateInitializing,
+		}},
+		events:   make(chan LifecycleEvent),
+		runtimes: make(chan *healthcheck.Runtime, 4),
+	}
+	controller := newHealthCheckController(store, healthCheckControllerOptions{
+		Now:    func() time.Time { return now },
+		Runner: healthCheckControllerTestRunner{result: healthcheck.ProbeResult{Success: true}},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- controller.Run(ctx)
+	}()
+
+	var healthy *healthcheck.Runtime
+	deadline := time.After(time.Second)
+	for healthy == nil {
+		select {
+		case runtime := <-store.runtimes:
+			if runtime.Status == healthcheck.StatusHealthy {
+				healthy = runtime
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for initializing instance check")
+		}
+	}
+
+	assert.Equal(t, 1, healthy.ConsecutiveSuccesses)
+
+	cancel()
+	require.NoError(t, <-done)
+}
+
 func TestHealthCheckControllerResetsRuntimeOnStartEvent(t *testing.T) {
 	policy, err := healthcheck.NormalizePolicy(&healthcheck.Policy{
 		Type:     healthcheck.TypeExec,

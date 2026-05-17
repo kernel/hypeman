@@ -135,7 +135,7 @@ func (c *HealthCheckController) syncInstance(inst *Instance, immediate bool, res
 		c.removeInstance(inst.Id)
 		return
 	}
-	if !healthcheck.Enabled(policy) || inst.State != StateRunning {
+	if !healthcheck.Enabled(policy) || !healthCheckControllerEligibleState(inst.State) {
 		c.removeInstance(inst.Id)
 		return
 	}
@@ -170,6 +170,10 @@ func (c *HealthCheckController) syncInstance(inst *Instance, immediate bool, res
 	state.policy = policy
 	c.scheduleLocked(inst.Id, state, delay)
 	c.mu.Unlock()
+}
+
+func healthCheckControllerEligibleState(state State) bool {
+	return state == StateInitializing || state == StateRunning
 }
 
 func (c *HealthCheckController) removeInstance(id string) {

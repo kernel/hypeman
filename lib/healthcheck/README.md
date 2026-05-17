@@ -2,7 +2,7 @@
 
 Health checks track whether a running workload is healthy without changing the instance lifecycle state.
 
-An instance can be `Running` and `unhealthy` at the same time. `Initializing` still means Hypeman is bringing up the guest and waiting for the existing boot readiness signals. Health checks begin only after the instance reaches `Running`.
+An instance can be `Running` and `unhealthy` at the same time. `Initializing` still means Hypeman is bringing up the guest and waiting for the existing boot readiness signals. Health checks can run during `Initializing`, but the public status remains `starting` until the instance reaches `Running`.
 
 ## Check Types
 
@@ -44,9 +44,9 @@ Instance responses include `health_check` and `health_status`.
 
 `disabled` means no check is configured.
 
-`unknown` means a check is configured but the instance is not currently running.
+`unknown` means a check is configured but the instance is not currently active.
 
-`starting` means the instance is running and Hypeman has not yet observed enough successful or failed checks to declare the workload healthy or unhealthy.
+`starting` means the instance is initializing, or Hypeman has not yet observed enough successful or failed checks to declare the workload healthy or unhealthy.
 
 `healthy` means the configured check has reached its success threshold.
 

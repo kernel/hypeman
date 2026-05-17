@@ -63,3 +63,19 @@ func TestApplyProbeResultMarksHealthyOnSuccess(t *testing.T) {
 	assert.Zero(t, runtime.ConsecutiveFailures)
 	assert.Empty(t, runtime.LastError)
 }
+
+func TestSnapshotMasksInitializingRuntimeAsStarting(t *testing.T) {
+	checkedAt := time.Date(2026, 5, 16, 1, 0, 0, 0, time.UTC)
+
+	snapshot := Snapshot(&Policy{Type: TypeTCP}, StateInitializing, &Runtime{
+		Status:               StatusHealthy,
+		ConsecutiveSuccesses: 3,
+		LastCheckedAt:        &checkedAt,
+		LastSuccessAt:        &checkedAt,
+	})
+
+	assert.Equal(t, StatusStarting, snapshot.Status)
+	assert.Equal(t, 3, snapshot.ConsecutiveSuccesses)
+	require.NotNil(t, snapshot.LastCheckedAt)
+	assert.Equal(t, checkedAt, *snapshot.LastCheckedAt)
+}

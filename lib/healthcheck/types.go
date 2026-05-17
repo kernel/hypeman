@@ -2,7 +2,10 @@ package healthcheck
 
 import "time"
 
-const StateRunning = "Running"
+const (
+	StateInitializing = "Initializing"
+	StateRunning      = "Running"
+)
 
 type Type string
 
