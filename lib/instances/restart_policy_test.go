@@ -69,6 +69,19 @@ func TestShouldResetRestartAttempts(t *testing.T) {
 	assert.True(t, reset)
 }
 
+func TestPrepareRestartAttemptPreservesLastReason(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	nextStatus, reason, shouldAttempt := prepareRestartAttempt(
+		&restartpolicy.Policy{Policy: restartpolicy.PolicyAlways},
+		restartpolicy.Status{LastReason: restartpolicy.RestartReasonHealthCheckFailed},
+		now,
+	)
+
+	require.True(t, shouldAttempt)
+	assert.Equal(t, restartpolicy.RestartReasonHealthCheckFailed, reason)
+	assert.Equal(t, restartpolicy.RestartReasonHealthCheckFailed, nextStatus.LastReason)
+}
+
 func TestMarkRestartManualStopLockedSkipsInstancesWithoutPolicy(t *testing.T) {
 	manager, _ := setupTestManager(t)
 	id := "restart-no-policy"

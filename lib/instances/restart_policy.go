@@ -319,7 +319,6 @@ func prepareRestartAttempt(policy *restartpolicy.Policy, status restartpolicy.St
 		return nextStatus, "", false
 	}
 	reason := nextStatus.LastReason
-	nextStatus.LastReason = ""
 	return nextStatus, reason, true
 }
 
