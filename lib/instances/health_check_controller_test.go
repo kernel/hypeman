@@ -37,6 +37,18 @@ func (r healthCheckControllerTestRunner) Check(context.Context, healthcheck.Inst
 	return r.result
 }
 
+type blockingHealthCheckControllerTestRunner struct {
+	started chan struct{}
+	unblock chan struct{}
+	result  healthcheck.ProbeResult
+}
+
+func (r blockingHealthCheckControllerTestRunner) Check(context.Context, healthcheck.Instance, *healthcheck.Policy) healthcheck.ProbeResult {
+	close(r.started)
+	<-r.unblock
+	return r.result
+}
+
 func TestHealthCheckControllerPersistsHealthyStatus(t *testing.T) {
 	policy, err := healthcheck.NormalizePolicy(&healthcheck.Policy{
 		Type:     healthcheck.TypeExec,
@@ -75,6 +87,9 @@ func TestHealthCheckControllerPersistsHealthyStatus(t *testing.T) {
 	for healthy == nil {
 		select {
 		case runtime := <-store.runtimes:
+			if runtime == nil {
+				continue
+			}
 			if runtime.Status == healthcheck.StatusHealthy {
 				healthy = runtime
 			}
@@ -127,6 +142,9 @@ func TestHealthCheckControllerChecksInitializingInstance(t *testing.T) {
 	for healthy == nil {
 		select {
 		case runtime := <-store.runtimes:
+			if runtime == nil {
+				continue
+			}
 			if runtime.Status == healthcheck.StatusHealthy {
 				healthy = runtime
 			}
@@ -191,6 +209,9 @@ func TestHealthCheckControllerResetsRuntimeOnStartEvent(t *testing.T) {
 	for healthy == nil {
 		select {
 		case runtime := <-store.runtimes:
+			if runtime == nil {
+				continue
+			}
 			if runtime.Status == healthcheck.StatusHealthy {
 				healthy = runtime
 			}
@@ -233,5 +254,57 @@ func TestHealthCheckControllerRetriesWhenTimerQueueIsFull(t *testing.T) {
 		assert.Equal(t, uint64(1), event.generation)
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for retried timer event")
+	}
+}
+
+func TestHealthCheckControllerSkipsStaleProbeAfterRuntimeReset(t *testing.T) {
+	policy, err := healthcheck.NormalizePolicy(&healthcheck.Policy{
+		Type:     healthcheck.TypeExec,
+		Interval: "1h",
+		Exec:     &healthcheck.ExecCheck{Command: []string{"true"}},
+	})
+	require.NoError(t, err)
+
+	startedAt := time.Date(2026, 5, 16, 1, 0, 0, 0, time.UTC)
+	previousCheckedAt := startedAt.Add(-time.Minute)
+	store := &healthCheckControllerTestStore{
+		runtimes: make(chan *healthcheck.Runtime, 2),
+	}
+	runner := blockingHealthCheckControllerTestRunner{
+		started: make(chan struct{}),
+		unblock: make(chan struct{}),
+		result:  healthcheck.ProbeResult{Success: true},
+	}
+	controller := newHealthCheckController(store, healthCheckControllerOptions{
+		Now:    func() time.Time { return startedAt },
+		Runner: runner,
+	})
+
+	inst := &Instance{
+		StoredMetadata: StoredMetadata{
+			Id:          "inst-1",
+			StartedAt:   &startedAt,
+			HealthCheck: policy,
+		},
+		State: StateRunning,
+		HealthCheckRuntime: &healthcheck.Runtime{
+			Status:        healthcheck.StatusHealthy,
+			LastCheckedAt: &previousCheckedAt,
+		},
+	}
+
+	controller.syncInstance(context.Background(), inst, false, false)
+	go controller.runCheck(context.Background(), "inst-1", 1)
+	<-runner.started
+
+	controller.syncInstance(context.Background(), inst, true, true)
+	require.Nil(t, <-store.runtimes)
+
+	close(runner.unblock)
+
+	select {
+	case runtime := <-store.runtimes:
+		t.Fatalf("stale probe persisted runtime after reset: %#v", runtime)
+	case <-time.After(50 * time.Millisecond):
 	}
 }

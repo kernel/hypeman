@@ -117,9 +117,9 @@ func (c *HealthCheckController) Run(ctx context.Context) error {
 			if !ok {
 				return nil
 			}
-			c.handleInstanceEvent(event)
+			c.handleInstanceEvent(ctx, event)
 		case event := <-c.timerFired:
-			c.runCheck(ctx, event.instanceID, event.generation)
+			go c.runCheck(ctx, event.instanceID, event.generation)
 		}
 	}
 }
@@ -130,21 +130,21 @@ func (c *HealthCheckController) startupResync(ctx context.Context) error {
 		return err
 	}
 	for _, inst := range insts {
-		c.syncInstance(&inst, false, false)
+		c.syncInstance(ctx, &inst, false, false)
 	}
 	return nil
 }
 
-func (c *HealthCheckController) handleInstanceEvent(event LifecycleEvent) {
+func (c *HealthCheckController) handleInstanceEvent(ctx context.Context, event LifecycleEvent) {
 	if event.Action == LifecycleEventDelete || event.Instance == nil {
 		c.removeInstance(event.InstanceID)
 		return
 	}
 	resetRuntime := event.Action == LifecycleEventStart || event.Action == LifecycleEventRestore
-	c.syncInstance(event.Instance, true, resetRuntime)
+	c.syncInstance(ctx, event.Instance, true, resetRuntime)
 }
 
-func (c *HealthCheckController) syncInstance(inst *Instance, immediate bool, resetRuntime bool) {
+func (c *HealthCheckController) syncInstance(ctx context.Context, inst *Instance, immediate bool, resetRuntime bool) {
 	policy, err := healthcheck.NormalizePolicy(inst.HealthCheck)
 	if err != nil {
 		c.log.Warn("invalid health check policy", "instance_id", inst.Id, "error", err)
@@ -166,6 +166,9 @@ func (c *HealthCheckController) syncInstance(inst *Instance, immediate bool, res
 	runtime := healthcheck.CloneRuntime(inst.HealthCheckRuntime)
 	if resetRuntime {
 		runtime = nil
+		if err := c.store.SetHealthCheckRuntime(ctx, inst.Id, nil); err != nil {
+			c.log.Warn("failed to reset health check status", "instance_id", inst.Id, "error", err)
+		}
 	}
 
 	delay := interval
@@ -226,10 +229,6 @@ func (c *HealthCheckController) runCheck(ctx context.Context, id string, generat
 	cancel()
 
 	runtime := healthcheck.ApplyProbeResult(policy, inst, previous, c.now(), result)
-	if err := c.store.SetHealthCheckRuntime(ctx, id, runtime); err != nil {
-		c.log.Warn("failed to persist health check status", "instance_id", id, "error", err)
-	}
-
 	interval, _, _, err := healthcheck.DurationConfig(policy)
 	if err != nil {
 		c.log.Warn("invalid health check interval", "instance_id", id, "error", err)
@@ -239,10 +238,15 @@ func (c *HealthCheckController) runCheck(ctx context.Context, id string, generat
 
 	c.mu.Lock()
 	state = c.states[id]
-	if state != nil {
-		state.instance.Runtime = runtime
-		c.scheduleLocked(id, state, interval)
+	if state == nil || state.generation != generation {
+		c.mu.Unlock()
+		return
 	}
+	if err := c.store.SetHealthCheckRuntime(ctx, id, runtime); err != nil {
+		c.log.Warn("failed to persist health check status", "instance_id", id, "error", err)
+	}
+	state.instance.Runtime = runtime
+	c.scheduleLocked(id, state, interval)
 	c.mu.Unlock()
 }
 
