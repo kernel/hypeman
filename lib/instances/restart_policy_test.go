@@ -103,6 +103,44 @@ func TestMarkRestartManualStopLockedSkipsInstancesWithoutPolicy(t *testing.T) {
 	assert.True(t, loaded.RestartStatus.IsZero())
 }
 
+func TestStartInstanceClearsRestartStatusWhenAlreadyRunning(t *testing.T) {
+	manager, _ := setupTestManager(t)
+	id := "restart-running-clear"
+	require.NoError(t, manager.ensureDirectories(id))
+
+	now := time.Now().UTC()
+	socketPath := manager.paths.InstanceSocket(id, "cloud-hypervisor.sock")
+	require.NoError(t, os.WriteFile(socketPath, nil, 0o600))
+	manager.storeCachedHypervisorState(id, hypervisor.StateRunning)
+	require.NoError(t, manager.saveMetadata(&metadata{
+		StoredMetadata: StoredMetadata{
+			Id:                id,
+			Name:              id,
+			CreatedAt:         now,
+			StartedAt:         &now,
+			ProgramStartedAt:  &now,
+			GuestAgentReadyAt: &now,
+			DataDir:           manager.paths.InstanceDir(id),
+			SocketPath:        socketPath,
+			HypervisorType:    hypervisor.TypeCloudHypervisor,
+			RestartStatus: restartpolicy.Status{
+				Attempts:      2,
+				BlockedReason: restartpolicy.BlockedReasonMaxAttemptsExceeded,
+				LastReason:    restartpolicy.RestartReasonHealthCheckFailed,
+			},
+		},
+	}))
+
+	inst, err := manager.StartInstance(context.Background(), id, StartInstanceRequest{})
+	require.NoError(t, err)
+	require.Equal(t, StateRunning, inst.State)
+	assert.True(t, inst.RestartStatus.IsZero())
+
+	loaded, err := manager.loadMetadata(id)
+	require.NoError(t, err)
+	assert.True(t, loaded.RestartStatus.IsZero())
+}
+
 func TestStartInstanceForRestartPolicyPreservesConcurrentManualStop(t *testing.T) {
 	manager, _ := setupTestManager(t)
 	id := "restart-manual-race"

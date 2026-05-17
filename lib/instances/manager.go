@@ -499,6 +499,9 @@ func (m *manager) StartInstance(ctx context.Context, id string, req StartInstanc
 	lock := m.getInstanceLock(id)
 	lock.Lock()
 	defer lock.Unlock()
+	if err := m.clearRestartStatusLocked(ctx, id); err != nil {
+		return nil, err
+	}
 	if !startRequestHasOverrides(req) {
 		current, err := m.currentInstanceWithoutHydration(ctx, id)
 		if err != nil {
@@ -507,9 +510,6 @@ func (m *manager) StartInstance(ctx context.Context, id string, req StartInstanc
 		if current.State == StateRunning || current.State == StateInitializing {
 			return current, nil
 		}
-	}
-	if err := m.clearRestartStatusLocked(ctx, id); err != nil {
-		return nil, err
 	}
 	inst, err := m.startInstance(ctx, id, req)
 	if err == nil {
