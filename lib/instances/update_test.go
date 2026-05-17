@@ -30,7 +30,7 @@ func TestValidateUpdateInstanceRequest(t *testing.T) {
 		err := validateUpdateInstanceRequest(baseMeta, UpdateInstanceRequest{})
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrInvalidRequest)
-		assert.Contains(t, err.Error(), "env, auto_standby, and/or health_check")
+		assert.Contains(t, err.Error(), "env, auto_standby, health_check, and/or restart_policy")
 	})
 
 	t.Run("rejects instances without credential backed envs", func(t *testing.T) {
