@@ -19,6 +19,7 @@ import (
 	"github.com/kernel/hypeman/cmd/api/config"
 	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/guest"
+	"github.com/kernel/hypeman/lib/healthcheck"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/ingress"
@@ -1054,6 +1055,7 @@ func TestEntrypointEnvVars(t *testing.T) {
 
 	mgr, tmpDir := setupTestManager(t) // Automatically registers cleanup
 	ctx := context.Background()
+	startHealthCheckControllerForTest(t, ctx, mgr)
 
 	// Get image manager
 	p := paths.New(tmpDir)
@@ -1110,6 +1112,17 @@ func TestEntrypointEnvVars(t *testing.T) {
 		Env: map[string]string{
 			"REDIS_PASSWORD": testPassword,
 		},
+		HealthCheck: &healthcheck.Policy{
+			Type:             healthcheck.TypeTCP,
+			Interval:         "1s",
+			Timeout:          "1s",
+			StartPeriod:      "30s",
+			FailureThreshold: 3,
+			SuccessThreshold: 1,
+			TCP: &healthcheck.TCPCheck{
+				Port: 6379,
+			},
+		},
 	}
 
 	t.Log("Creating redis instance with REDIS_PASSWORD...")
@@ -1117,6 +1130,7 @@ func TestEntrypointEnvVars(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, inst)
 	assert.Contains(t, []State{StateInitializing, StateRunning}, inst.State)
+	require.NotNil(t, inst.HealthCheck)
 	inst, err = waitForInstanceState(ctx, mgr, inst.Id, StateRunning, 60*time.Second)
 	require.NoError(t, err)
 	t.Logf("Instance created: %s", inst.Id)
@@ -1183,6 +1197,12 @@ func TestEntrypointEnvVars(t *testing.T) {
 		}
 		time.Sleep(300 * time.Millisecond)
 	}
+
+	inst, healthStatus, err := waitForInstanceHealthStatus(ctx, mgr, inst.Id, healthcheck.StatusHealthy, 20*time.Second)
+	require.NoError(t, err, "tcp health check should report healthy")
+	require.GreaterOrEqual(t, healthStatus.ConsecutiveSuccesses, 1)
+	require.NotNil(t, healthStatus.LastCheckedAt)
+	require.NotNil(t, healthStatus.LastSuccessAt)
 
 	// Test 1: PING without auth should fail
 	t.Log("Testing redis PING without auth (should fail)...")

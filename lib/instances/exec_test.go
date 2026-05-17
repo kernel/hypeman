@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/guest"
+	"github.com/kernel/hypeman/lib/healthcheck"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/paths"
@@ -96,6 +97,7 @@ func TestExecConcurrent(t *testing.T) {
 
 	manager, tmpDir := setupTestManager(t)
 	ctx := context.Background()
+	startHealthCheckControllerForTest(t, ctx, manager)
 	p := paths.New(tmpDir)
 
 	// Setup image
@@ -132,8 +134,20 @@ func TestExecConcurrent(t *testing.T) {
 		OverlaySize:    1024 * 1024 * 1024,
 		Vcpus:          2, // More vCPUs for concurrency
 		NetworkEnabled: false,
+		HealthCheck: &healthcheck.Policy{
+			Type:             healthcheck.TypeExec,
+			Interval:         "1s",
+			Timeout:          "1s",
+			StartPeriod:      "30s",
+			FailureThreshold: 3,
+			SuccessThreshold: 1,
+			Exec: &healthcheck.ExecCheck{
+				Command: []string{"true"},
+			},
+		},
 	})
 	require.NoError(t, err)
+	require.NotNil(t, inst.HealthCheck)
 	t.Logf("Instance created: %s", inst.Id)
 
 	t.Cleanup(func() {
@@ -150,6 +164,12 @@ func TestExecConcurrent(t *testing.T) {
 	_, code, err := execCommand(ctx, inst, "echo", "ready")
 	require.NoError(t, err, "initial exec should work")
 	require.Equal(t, 0, code, "initial exec should succeed")
+
+	inst, healthStatus, err := waitForInstanceHealthStatus(ctx, manager, inst.Id, healthcheck.StatusHealthy, 20*time.Second)
+	require.NoError(t, err, "exec health check should report healthy")
+	require.GreaterOrEqual(t, healthStatus.ConsecutiveSuccesses, 1)
+	require.NotNil(t, healthStatus.LastCheckedAt)
+	require.NotNil(t, healthStatus.LastSuccessAt)
 
 	// Run 5 concurrent workers, each doing 25 iterations with its own file
 	// NO RETRIES - this tests that exec works reliably under concurrent load
