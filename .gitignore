@@ -37,3 +37,4 @@ scripts/utm/images/
 
 # Build artifacts
 /api
+.bench/
