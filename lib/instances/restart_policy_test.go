@@ -183,6 +183,50 @@ func TestStartInstanceForRestartPolicyPreservesConcurrentManualStop(t *testing.T
 	assert.Nil(t, loaded.StartedAt)
 }
 
+func TestStartInstanceForRestartPolicySkipsConcurrentStart(t *testing.T) {
+	manager, _ := setupTestManager(t)
+	id := "restart-concurrent-start"
+	require.NoError(t, manager.ensureDirectories(id))
+
+	now := time.Now().UTC()
+	socketPath := manager.paths.InstanceSocket(id, "cloud-hypervisor.sock")
+	require.NoError(t, os.WriteFile(socketPath, nil, 0o600))
+	manager.storeCachedHypervisorState(id, hypervisor.StateRunning)
+	policy := &restartpolicy.Policy{
+		Policy:      restartpolicy.PolicyAlways,
+		Backoff:     "1s",
+		StableAfter: "10m",
+	}
+	require.NoError(t, manager.saveMetadata(&metadata{
+		StoredMetadata: StoredMetadata{
+			Id:                id,
+			Name:              id,
+			CreatedAt:         now,
+			StartedAt:         &now,
+			ProgramStartedAt:  &now,
+			GuestAgentReadyAt: &now,
+			DataDir:           manager.paths.InstanceDir(id),
+			SocketPath:        socketPath,
+			HypervisorType:    hypervisor.TypeCloudHypervisor,
+			RestartPolicy:     policy,
+		},
+	}))
+
+	err := manager.startInstanceForRestartPolicy(
+		context.Background(),
+		id,
+		policy,
+		restartpolicy.Status{},
+		now,
+		slog.Default(),
+	)
+	require.NoError(t, err)
+
+	loaded, err := manager.loadMetadata(id)
+	require.NoError(t, err)
+	assert.True(t, loaded.RestartStatus.IsZero())
+}
+
 func TestReconcileRestartPolicyInstanceIDUsesCurrentState(t *testing.T) {
 	manager, _ := setupTestManager(t)
 	id := "restart-current-state"
