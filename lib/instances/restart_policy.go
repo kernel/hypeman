@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"time"
 
 	"github.com/kernel/hypeman/lib/logger"
@@ -217,13 +218,24 @@ func (m *manager) StartRestartPolicyController(ctx context.Context) error {
 }
 
 func (m *manager) reconcileRestartPolicies(ctx context.Context, log *slog.Logger) error {
-	insts, err := m.ListInstances(ctx, nil)
+	files, err := m.listMetadataFiles()
 	if err != nil {
 		return err
 	}
-	for i := range insts {
-		if err := m.reconcileRestartPolicyInstance(ctx, &insts[i], log); err != nil {
-			log.WarnContext(ctx, "restart policy reconcile failed for instance", "instance_id", insts[i].Id, "error", err)
+
+	for _, file := range files {
+		id := filepath.Base(filepath.Dir(file))
+		meta, err := m.loadMetadata(id)
+		if err != nil {
+			log.WarnContext(ctx, "skipping restart policy reconcile for invalid instance metadata", "instance_id", id, "error", err)
+			continue
+		}
+		if meta.RestartPolicy == nil {
+			continue
+		}
+		inst := m.toInstanceWithoutHydration(ctx, meta)
+		if err := m.reconcileRestartPolicyInstance(ctx, &inst, log); err != nil {
+			log.WarnContext(ctx, "restart policy reconcile failed for instance", "instance_id", inst.Id, "error", err)
 		}
 	}
 	return nil

@@ -24,10 +24,11 @@ func toDomainRestartPolicy(policy *oapi.RestartPolicy) (*restartpolicy.Policy, e
 	if policy.StableAfter != nil {
 		out.StableAfter = *policy.StableAfter
 	}
-	if _, err := restartpolicy.NormalizePolicy(out); err != nil {
+	normalized, err := restartpolicy.NormalizePolicy(out)
+	if err != nil {
 		return nil, err
 	}
-	return out, nil
+	return normalized, nil
 }
 
 func toOAPIRestartPolicy(policy *restartpolicy.Policy) *oapi.RestartPolicy {

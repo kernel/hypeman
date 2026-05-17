@@ -741,7 +741,7 @@ func TestCreateInstance_MapsRestartPolicy(t *testing.T) {
 	require.NotNil(t, mockMgr.lastReq.RestartPolicy)
 	assert.Equal(t, restartpolicy.PolicyOnFailure, mockMgr.lastReq.RestartPolicy.Policy)
 	assert.Equal(t, "7s", mockMgr.lastReq.RestartPolicy.Backoff)
-	assert.Equal(t, "2m", mockMgr.lastReq.RestartPolicy.StableAfter)
+	assert.Equal(t, "2m0s", mockMgr.lastReq.RestartPolicy.StableAfter)
 	assert.Equal(t, 4, mockMgr.lastReq.RestartPolicy.MaxAttempts)
 
 	instance := oapi.Instance(created)
