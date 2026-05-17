@@ -88,11 +88,24 @@ func (m *manager) updateRestartStatusLocked(id string, status restartpolicy.Stat
 	return m.saveMetadata(meta)
 }
 
-func (m *manager) setRestartStatus(ctx context.Context, id string, status restartpolicy.Status) error {
+func (m *manager) setRestartStatus(ctx context.Context, id string, status restartpolicy.Status) (bool, error) {
 	lock := m.getInstanceLock(id)
 	lock.Lock()
 	defer lock.Unlock()
-	return m.updateRestartStatusLocked(id, status)
+
+	meta, err := m.loadMetadata(id)
+	if err != nil {
+		return false, err
+	}
+	if meta.RestartStatus.BlockedReason == restartpolicy.BlockedReasonManualStop &&
+		status.BlockedReason != restartpolicy.BlockedReasonManualStop {
+		return false, nil
+	}
+	if restartpolicy.EqualStatus(meta.RestartStatus, status) {
+		return false, nil
+	}
+	meta.RestartStatus = status
+	return true, m.saveMetadata(meta)
 }
 
 func (m *manager) RestartInstance(ctx context.Context, id string) (*Instance, error) {
@@ -243,7 +256,8 @@ func (m *manager) reconcileRestartPolicyInstance(ctx context.Context, inst *Inst
 	now := time.Now().UTC()
 	if shouldResetRestartAttempts(policy, status, inst, now) {
 		log.InfoContext(ctx, "restart policy stable window reached", "instance_id", inst.Id, "attempts", status.Attempts)
-		return m.setRestartStatus(ctx, inst.Id, restartpolicy.Status{})
+		_, err := m.setRestartStatus(ctx, inst.Id, restartpolicy.Status{})
+		return err
 	}
 	if inst.State != StateStopped || status.BlockedReason != "" {
 		return nil
@@ -263,18 +277,23 @@ func (m *manager) startInstanceForRestartPolicy(ctx context.Context, id string, 
 	nextStatus, reason, shouldAttempt := prepareRestartAttempt(policy, status, now)
 	if !shouldAttempt {
 		if !restartpolicy.EqualStatus(status, nextStatus) {
-			return m.setRestartStatus(ctx, id, nextStatus)
+			_, err := m.setRestartStatus(ctx, id, nextStatus)
+			return err
 		}
 		return nil
 	}
-	if err := m.setRestartStatus(ctx, id, nextStatus); err != nil {
+	wrote, err := m.setRestartStatus(ctx, id, nextStatus)
+	if err != nil {
 		return err
+	}
+	if !wrote {
+		return nil
 	}
 
 	log.InfoContext(ctx, "restart policy starting instance", "instance_id", id, "attempt", nextStatus.Attempts)
 	if _, err := m.RestartInstance(ctx, id); err != nil {
 		nextStatus = restartStatusAfterFailedAttempt(policy, nextStatus, reason, now)
-		if statusErr := m.setRestartStatus(ctx, id, nextStatus); statusErr != nil {
+		if _, statusErr := m.setRestartStatus(ctx, id, nextStatus); statusErr != nil {
 			log.WarnContext(ctx, "failed to persist restart status after restart failure", "instance_id", id, "error", statusErr)
 		}
 		return err

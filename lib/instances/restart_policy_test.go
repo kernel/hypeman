@@ -90,6 +90,48 @@ func TestMarkRestartManualStopLockedSkipsInstancesWithoutPolicy(t *testing.T) {
 	assert.True(t, loaded.RestartStatus.IsZero())
 }
 
+func TestStartInstanceForRestartPolicyPreservesConcurrentManualStop(t *testing.T) {
+	manager, _ := setupTestManager(t)
+	id := "restart-manual-race"
+	require.NoError(t, manager.ensureDirectories(id))
+
+	now := time.Now().UTC()
+	policy := &restartpolicy.Policy{
+		Policy:      restartpolicy.PolicyAlways,
+		Backoff:     "1s",
+		StableAfter: "10m",
+	}
+	require.NoError(t, manager.saveMetadata(&metadata{
+		StoredMetadata: StoredMetadata{
+			Id:            id,
+			Name:          id,
+			CreatedAt:     now,
+			DataDir:       manager.paths.InstanceDir(id),
+			SocketPath:    manager.paths.InstanceSocket(id, "cloud-hypervisor.sock"),
+			RestartPolicy: policy,
+			RestartStatus: restartpolicy.Status{
+				BlockedReason: restartpolicy.BlockedReasonManualStop,
+			},
+		},
+	}))
+
+	err := manager.startInstanceForRestartPolicy(
+		context.Background(),
+		id,
+		policy,
+		restartpolicy.Status{},
+		now,
+		slog.Default(),
+	)
+	require.NoError(t, err)
+
+	loaded, err := manager.loadMetadata(id)
+	require.NoError(t, err)
+	assert.Equal(t, restartpolicy.BlockedReasonManualStop, loaded.RestartStatus.BlockedReason)
+	assert.Zero(t, loaded.RestartStatus.Attempts)
+	assert.Nil(t, loaded.StartedAt)
+}
+
 func TestReconcileRestartPolicyInstanceIDUsesCurrentState(t *testing.T) {
 	manager, _ := setupTestManager(t)
 	id := "restart-current-state"
