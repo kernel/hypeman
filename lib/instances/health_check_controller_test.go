@@ -206,3 +206,32 @@ func TestHealthCheckControllerResetsRuntimeOnStartEvent(t *testing.T) {
 	cancel()
 	require.NoError(t, <-done)
 }
+
+func TestHealthCheckControllerRetriesWhenTimerQueueIsFull(t *testing.T) {
+	controller := newHealthCheckController(&healthCheckControllerTestStore{}, healthCheckControllerOptions{
+		TimerRetryDelay: 10 * time.Millisecond,
+	})
+	defer controller.stopAllTimers()
+
+	controller.mu.Lock()
+	controller.states["inst-1"] = &healthCheckControllerState{generation: 1}
+	controller.mu.Unlock()
+
+	for i := 0; i < cap(controller.timerFired); i++ {
+		controller.timerFired <- healthCheckTimerEvent{instanceID: "filled"}
+	}
+
+	controller.enqueueTimer("inst-1", 1)
+
+	for i := 0; i < cap(controller.timerFired); i++ {
+		<-controller.timerFired
+	}
+
+	select {
+	case event := <-controller.timerFired:
+		assert.Equal(t, "inst-1", event.instanceID)
+		assert.Equal(t, uint64(1), event.generation)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for retried timer event")
+	}
+}

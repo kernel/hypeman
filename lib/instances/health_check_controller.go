@@ -11,7 +11,10 @@ import (
 	"github.com/kernel/hypeman/lib/healthcheck"
 )
 
-const defaultHealthCheckTimerBufferSize = 256
+const (
+	defaultHealthCheckTimerBufferSize = 256
+	defaultHealthCheckTimerRetryDelay = time.Second
+)
 
 type healthCheckControllerStore interface {
 	ListInstances(ctx context.Context, filter *ListInstancesFilter) ([]Instance, error)
@@ -20,15 +23,22 @@ type healthCheckControllerStore interface {
 }
 
 type healthCheckControllerOptions struct {
-	Log    *slog.Logger
-	Now    func() time.Time
-	Runner healthcheck.ProbeRunner
+	Log             *slog.Logger
+	Now             func() time.Time
+	Runner          healthcheck.ProbeRunner
+	TimerRetryDelay time.Duration
 }
 
 type healthCheckControllerState struct {
-	instance healthcheck.Instance
-	policy   *healthcheck.Policy
-	timer    *time.Timer
+	instance   healthcheck.Instance
+	policy     *healthcheck.Policy
+	timer      *time.Timer
+	generation uint64
+}
+
+type healthCheckTimerEvent struct {
+	instanceID string
+	generation uint64
 }
 
 type HealthCheckController struct {
@@ -37,7 +47,8 @@ type HealthCheckController struct {
 	log    *slog.Logger
 	now    func() time.Time
 
-	timerFired chan string
+	timerFired      chan healthCheckTimerEvent
+	timerRetryDelay time.Duration
 
 	mu     sync.Mutex
 	states map[string]*healthCheckControllerState
@@ -71,14 +82,19 @@ func newHealthCheckController(store healthCheckControllerStore, opts healthCheck
 	if runner == nil {
 		runner = healthcheck.DefaultProbeRunner{}
 	}
+	timerRetryDelay := opts.TimerRetryDelay
+	if timerRetryDelay <= 0 {
+		timerRetryDelay = defaultHealthCheckTimerRetryDelay
+	}
 
 	return &HealthCheckController{
-		store:      store,
-		runner:     runner,
-		log:        log,
-		now:        now,
-		timerFired: make(chan string, defaultHealthCheckTimerBufferSize),
-		states:     make(map[string]*healthCheckControllerState),
+		store:           store,
+		runner:          runner,
+		log:             log,
+		now:             now,
+		timerFired:      make(chan healthCheckTimerEvent, defaultHealthCheckTimerBufferSize),
+		timerRetryDelay: timerRetryDelay,
+		states:          make(map[string]*healthCheckControllerState),
 	}
 }
 
@@ -102,8 +118,8 @@ func (c *HealthCheckController) Run(ctx context.Context) error {
 				return nil
 			}
 			c.handleInstanceEvent(event)
-		case id := <-c.timerFired:
-			c.runCheck(ctx, id)
+		case event := <-c.timerFired:
+			c.runCheck(ctx, event.instanceID, event.generation)
 		}
 	}
 }
@@ -186,10 +202,10 @@ func (c *HealthCheckController) removeInstance(id string) {
 	delete(c.states, id)
 }
 
-func (c *HealthCheckController) runCheck(ctx context.Context, id string) {
+func (c *HealthCheckController) runCheck(ctx context.Context, id string, generation uint64) {
 	c.mu.Lock()
 	state := c.states[id]
-	if state == nil {
+	if state == nil || state.generation != generation {
 		c.mu.Unlock()
 		return
 	}
@@ -234,13 +250,31 @@ func (c *HealthCheckController) scheduleLocked(id string, state *healthCheckCont
 	if state.timer != nil {
 		state.timer.Stop()
 	}
-	state.timer = time.AfterFunc(delay, func() {
-		select {
-		case c.timerFired <- id:
-		default:
-			c.log.Warn("dropped health check timer event", "instance_id", id)
+	state.generation++
+	generation := state.generation
+	state.timer = time.AfterFunc(delay, func() { c.enqueueTimer(id, generation) })
+}
+
+func (c *HealthCheckController) enqueueTimer(id string, generation uint64) {
+	c.mu.Lock()
+	state := c.states[id]
+	if state == nil || state.generation != generation {
+		c.mu.Unlock()
+		return
+	}
+	c.mu.Unlock()
+
+	select {
+	case c.timerFired <- healthCheckTimerEvent{instanceID: id, generation: generation}:
+	default:
+		c.log.Warn("health check timer queue full, retrying", "instance_id", id)
+		c.mu.Lock()
+		state = c.states[id]
+		if state != nil && state.generation == generation {
+			state.timer = time.AfterFunc(c.timerRetryDelay, func() { c.enqueueTimer(id, generation) })
 		}
-	})
+		c.mu.Unlock()
+	}
 }
 
 func (c *HealthCheckController) stopAllTimers() {
