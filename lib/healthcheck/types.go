@@ -1,9 +1,6 @@
 package healthcheck
 
-import (
-	"context"
-	"time"
-)
+import "time"
 
 const StateRunning = "Running"
 
@@ -86,29 +83,4 @@ type Instance struct {
 	SkipGuestAgent  bool
 	HealthCheck     *Policy
 	Runtime         *Runtime
-}
-
-type InstanceEventAction string
-
-const (
-	InstanceEventCreate  InstanceEventAction = "create"
-	InstanceEventUpdate  InstanceEventAction = "update"
-	InstanceEventStart   InstanceEventAction = "start"
-	InstanceEventStop    InstanceEventAction = "stop"
-	InstanceEventStandby InstanceEventAction = "standby"
-	InstanceEventRestore InstanceEventAction = "restore"
-	InstanceEventDelete  InstanceEventAction = "delete"
-	InstanceEventFork    InstanceEventAction = "fork"
-)
-
-type InstanceEvent struct {
-	Action     InstanceEventAction
-	InstanceID string
-	Instance   *Instance
-}
-
-type InstanceStore interface {
-	ListInstances(ctx context.Context) ([]Instance, error)
-	SetRuntime(ctx context.Context, id string, runtime *Runtime) error
-	SubscribeInstanceEvents() (<-chan InstanceEvent, func(), error)
 }

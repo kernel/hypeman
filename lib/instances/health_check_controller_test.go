@@ -1,0 +1,156 @@
+package instances
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/kernel/hypeman/lib/healthcheck"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+type healthCheckControllerTestStore struct {
+	instances []Instance
+	events    chan LifecycleEvent
+	runtimes  chan *healthcheck.Runtime
+}
+
+func (s *healthCheckControllerTestStore) ListInstances(context.Context, *ListInstancesFilter) ([]Instance, error) {
+	return append([]Instance(nil), s.instances...), nil
+}
+
+func (s *healthCheckControllerTestStore) SetHealthCheckRuntime(_ context.Context, _ string, runtime *healthcheck.Runtime) error {
+	s.runtimes <- healthcheck.CloneRuntime(runtime)
+	return nil
+}
+
+func (s *healthCheckControllerTestStore) SubscribeLifecycleEvents(LifecycleEventConsumer) (<-chan LifecycleEvent, func()) {
+	return s.events, func() {}
+}
+
+type healthCheckControllerTestRunner struct {
+	result healthcheck.ProbeResult
+}
+
+func (r healthCheckControllerTestRunner) Check(context.Context, healthcheck.Instance, *healthcheck.Policy) healthcheck.ProbeResult {
+	return r.result
+}
+
+func TestHealthCheckControllerPersistsHealthyStatus(t *testing.T) {
+	policy, err := healthcheck.NormalizePolicy(&healthcheck.Policy{
+		Type:     healthcheck.TypeExec,
+		Interval: "1h",
+		Exec:     &healthcheck.ExecCheck{Command: []string{"true"}},
+	})
+	require.NoError(t, err)
+
+	now := time.Date(2026, 5, 16, 1, 0, 0, 0, time.UTC)
+	store := &healthCheckControllerTestStore{
+		instances: []Instance{{
+			StoredMetadata: StoredMetadata{
+				Id:          "inst-1",
+				StartedAt:   &now,
+				HealthCheck: policy,
+			},
+			State: StateRunning,
+		}},
+		events:   make(chan LifecycleEvent),
+		runtimes: make(chan *healthcheck.Runtime, 4),
+	}
+	controller := newHealthCheckController(store, healthCheckControllerOptions{
+		Now:    func() time.Time { return now },
+		Runner: healthCheckControllerTestRunner{result: healthcheck.ProbeResult{Success: true}},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- controller.Run(ctx)
+	}()
+
+	var healthy *healthcheck.Runtime
+	deadline := time.After(time.Second)
+	for healthy == nil {
+		select {
+		case runtime := <-store.runtimes:
+			if runtime.Status == healthcheck.StatusHealthy {
+				healthy = runtime
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for healthy status")
+		}
+	}
+
+	assert.Equal(t, 1, healthy.ConsecutiveSuccesses)
+
+	cancel()
+	require.NoError(t, <-done)
+}
+
+func TestHealthCheckControllerResetsRuntimeOnStartEvent(t *testing.T) {
+	policy, err := healthcheck.NormalizePolicy(&healthcheck.Policy{
+		Type:     healthcheck.TypeExec,
+		Interval: "1h",
+		Exec:     &healthcheck.ExecCheck{Command: []string{"true"}},
+	})
+	require.NoError(t, err)
+
+	previousCheckedAt := time.Date(2026, 5, 16, 0, 0, 0, 0, time.UTC)
+	startedAt := time.Date(2026, 5, 16, 1, 0, 0, 0, time.UTC)
+	store := &healthCheckControllerTestStore{
+		events:   make(chan LifecycleEvent),
+		runtimes: make(chan *healthcheck.Runtime, 4),
+	}
+	controller := newHealthCheckController(store, healthCheckControllerOptions{
+		Now:    func() time.Time { return startedAt },
+		Runner: healthCheckControllerTestRunner{result: healthcheck.ProbeResult{Success: true}},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- controller.Run(ctx)
+	}()
+
+	store.events <- LifecycleEvent{
+		Action:     LifecycleEventStart,
+		InstanceID: "inst-1",
+		Instance: &Instance{
+			StoredMetadata: StoredMetadata{
+				Id:          "inst-1",
+				StartedAt:   &startedAt,
+				HealthCheck: policy,
+			},
+			State: StateRunning,
+			HealthCheckRuntime: &healthcheck.Runtime{
+				Status:               healthcheck.StatusHealthy,
+				StartedAt:            &previousCheckedAt,
+				LastCheckedAt:        &previousCheckedAt,
+				ConsecutiveSuccesses: 9,
+			},
+		},
+	}
+
+	var healthy *healthcheck.Runtime
+	deadline := time.After(time.Second)
+	for healthy == nil {
+		select {
+		case runtime := <-store.runtimes:
+			if runtime.Status == healthcheck.StatusHealthy {
+				healthy = runtime
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for healthy status")
+		}
+	}
+
+	require.NotNil(t, healthy.StartedAt)
+	assert.Equal(t, startedAt, *healthy.StartedAt)
+	assert.Equal(t, 1, healthy.ConsecutiveSuccesses)
+
+	cancel()
+	require.NoError(t, <-done)
+}

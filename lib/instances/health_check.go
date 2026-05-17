@@ -36,15 +36,6 @@ func validateHealthCheckCompatibility(policy *healthcheck.Policy, networkEnabled
 	return nil
 }
 
-// GetHealthCheckRuntime returns persisted health check runtime status.
-func (m *manager) GetHealthCheckRuntime(_ context.Context, id string) (*healthcheck.Runtime, error) {
-	meta, err := m.loadMetadata(id)
-	if err != nil {
-		return nil, err
-	}
-	return healthcheck.CloneRuntime(meta.HealthCheckRuntime), nil
-}
-
 // SetHealthCheckRuntime persists health check runtime status.
 func (m *manager) SetHealthCheckRuntime(_ context.Context, id string, runtime *healthcheck.Runtime) error {
 	lock := m.getInstanceLock(id)
