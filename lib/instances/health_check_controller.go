@@ -49,10 +49,17 @@ type HealthCheckController struct {
 
 	timerFired      chan healthCheckTimerEvent
 	timerRetryDelay time.Duration
-	persistLocks    sync.Map
+
+	persistMu    sync.Mutex
+	persistLocks map[string]*healthCheckPersistLock
 
 	mu     sync.Mutex
 	states map[string]*healthCheckControllerState
+}
+
+type healthCheckPersistLock struct {
+	mu   sync.Mutex
+	refs int
 }
 
 func NewHealthCheckController(manager Manager, log *slog.Logger) *HealthCheckController {
@@ -95,6 +102,7 @@ func newHealthCheckController(store healthCheckControllerStore, opts healthCheck
 		now:             now,
 		timerFired:      make(chan healthCheckTimerEvent, defaultHealthCheckTimerBufferSize),
 		timerRetryDelay: timerRetryDelay,
+		persistLocks:    make(map[string]*healthCheckPersistLock),
 		states:          make(map[string]*healthCheckControllerState),
 	}
 }
@@ -177,9 +185,8 @@ func (c *HealthCheckController) syncInstance(ctx context.Context, inst *Instance
 	target := toHealthCheckInstance(inst)
 	target.Runtime = runtime
 
-	persistLock := c.persistLock(inst.Id)
-	persistLock.Lock()
-	defer persistLock.Unlock()
+	unlockPersistence := c.lockPersistence(inst.Id)
+	defer unlockPersistence()
 
 	c.mu.Lock()
 	state, ok := c.states[inst.Id]
@@ -204,9 +211,8 @@ func healthCheckControllerEligibleState(state State) bool {
 }
 
 func (c *HealthCheckController) removeInstance(id string) {
-	persistLock := c.persistLock(id)
-	persistLock.Lock()
-	defer persistLock.Unlock()
+	unlockPersistence := c.lockPersistence(id)
+	defer unlockPersistence()
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -248,9 +254,8 @@ func (c *HealthCheckController) runCheck(ctx context.Context, id string, generat
 		return
 	}
 
-	persistLock := c.persistLock(id)
-	persistLock.Lock()
-	defer persistLock.Unlock()
+	unlockPersistence := c.lockPersistence(id)
+	defer unlockPersistence()
 
 	c.mu.Lock()
 	state = c.states[id]
@@ -275,9 +280,27 @@ func (c *HealthCheckController) runCheck(ctx context.Context, id string, generat
 	c.mu.Unlock()
 }
 
-func (c *HealthCheckController) persistLock(id string) *sync.Mutex {
-	lock, _ := c.persistLocks.LoadOrStore(id, &sync.Mutex{})
-	return lock.(*sync.Mutex)
+func (c *HealthCheckController) lockPersistence(id string) func() {
+	c.persistMu.Lock()
+	lock := c.persistLocks[id]
+	if lock == nil {
+		lock = &healthCheckPersistLock{}
+		c.persistLocks[id] = lock
+	}
+	lock.refs++
+	c.persistMu.Unlock()
+
+	lock.mu.Lock()
+	return func() {
+		lock.mu.Unlock()
+
+		c.persistMu.Lock()
+		lock.refs--
+		if lock.refs == 0 {
+			delete(c.persistLocks, id)
+		}
+		c.persistMu.Unlock()
+	}
 }
 
 func (c *HealthCheckController) scheduleLocked(id string, state *healthCheckControllerState, delay time.Duration) {

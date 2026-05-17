@@ -388,3 +388,18 @@ func TestHealthCheckControllerDoesNotHoldControllerLockWhilePersisting(t *testin
 
 	close(store.unblock)
 }
+
+func TestHealthCheckControllerReleasesPersistenceLocks(t *testing.T) {
+	controller := newHealthCheckController(&healthCheckControllerTestStore{}, healthCheckControllerOptions{})
+
+	unlock := controller.lockPersistence("inst-1")
+
+	controller.persistMu.Lock()
+	require.Len(t, controller.persistLocks, 1)
+	controller.persistMu.Unlock()
+
+	unlock()
+	controller.persistMu.Lock()
+	require.Empty(t, controller.persistLocks)
+	controller.persistMu.Unlock()
+}

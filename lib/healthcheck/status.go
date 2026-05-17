@@ -117,5 +117,13 @@ func truncateLastError(value string) string {
 	if len(value) <= maxLastErrorLength {
 		return value
 	}
-	return value[:maxLastErrorLength]
+
+	end := 0
+	for i := range value {
+		if i > maxLastErrorLength {
+			break
+		}
+		end = i
+	}
+	return value[:end]
 }

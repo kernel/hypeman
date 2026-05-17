@@ -1,8 +1,10 @@
 package healthcheck
 
 import (
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -62,6 +64,22 @@ func TestApplyProbeResultMarksHealthyOnSuccess(t *testing.T) {
 	assert.Equal(t, 1, runtime.ConsecutiveSuccesses)
 	assert.Zero(t, runtime.ConsecutiveFailures)
 	assert.Empty(t, runtime.LastError)
+}
+
+func TestApplyProbeResultTruncatesLastErrorAtRuneBoundary(t *testing.T) {
+	now := time.Date(2026, 5, 16, 1, 0, 0, 0, time.UTC)
+	policy, err := NormalizePolicy(&Policy{
+		Type: TypeExec,
+		Exec: &ExecCheck{Command: []string{"false"}},
+	})
+	require.NoError(t, err)
+
+	errorMessage := strings.Repeat("a", maxLastErrorLength-1) + "é failed"
+	runtime := ApplyProbeResult(policy, Instance{State: StateRunning}, nil, now, ProbeResult{Error: errorMessage})
+
+	require.LessOrEqual(t, len(runtime.LastError), maxLastErrorLength)
+	assert.True(t, utf8.ValidString(runtime.LastError))
+	assert.Equal(t, strings.Repeat("a", maxLastErrorLength-1), runtime.LastError)
 }
 
 func TestSnapshotMasksInitializingRuntimeAsStarting(t *testing.T) {
