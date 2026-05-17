@@ -2,6 +2,7 @@ package instances
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -40,7 +41,21 @@ func restartStatusAfterPolicyUpdate(status restartpolicy.Status) restartpolicy.S
 }
 
 func (m *manager) markRestartManualStopLocked(ctx context.Context, id string) error {
-	if err := m.updateRestartStatusLocked(id, restartpolicy.Status{BlockedReason: restartpolicy.BlockedReasonManualStop}); err != nil {
+	meta, err := m.loadMetadata(id)
+	if err != nil {
+		logger.FromContext(ctx).WarnContext(ctx, "failed to mark restart policy manual stop", "instance_id", id, "error", err)
+		return err
+	}
+	if meta.RestartPolicy == nil {
+		return nil
+	}
+
+	status := restartpolicy.Status{BlockedReason: restartpolicy.BlockedReasonManualStop}
+	if restartpolicy.EqualStatus(meta.RestartStatus, status) {
+		return nil
+	}
+	meta.RestartStatus = status
+	if err := m.saveMetadata(meta); err != nil {
 		logger.FromContext(ctx).WarnContext(ctx, "failed to mark restart policy manual stop", "instance_id", id, "error", err)
 		return err
 	}
@@ -48,7 +63,16 @@ func (m *manager) markRestartManualStopLocked(ctx context.Context, id string) er
 }
 
 func (m *manager) clearRestartStatusLocked(ctx context.Context, id string) error {
-	if err := m.updateRestartStatusLocked(id, restartpolicy.Status{}); err != nil {
+	meta, err := m.loadMetadata(id)
+	if err != nil {
+		logger.FromContext(ctx).WarnContext(ctx, "failed to clear restart policy status", "instance_id", id, "error", err)
+		return err
+	}
+	if meta.RestartStatus.IsZero() {
+		return nil
+	}
+	meta.RestartStatus = restartpolicy.Status{}
+	if err := m.saveMetadata(meta); err != nil {
 		logger.FromContext(ctx).WarnContext(ctx, "failed to clear restart policy status", "instance_id", id, "error", err)
 		return err
 	}
@@ -162,13 +186,13 @@ func (m *manager) StartRestartPolicyController(ctx context.Context) error {
 			if event.Action == LifecycleEventDelete {
 				continue
 			}
-			if event.Instance == nil {
+			if event.InstanceID == "" {
 				if err := m.reconcileRestartPolicies(ctx, log); err != nil {
 					log.WarnContext(ctx, "restart policy event reconcile failed", "instance_id", event.InstanceID, "error", err)
 				}
 				continue
 			}
-			if err := m.reconcileRestartPolicyInstance(ctx, event.Instance, log); err != nil {
+			if err := m.reconcileRestartPolicyInstanceID(ctx, event.InstanceID, log); err != nil {
 				log.WarnContext(ctx, "restart policy event handling failed", "instance_id", event.InstanceID, "error", err)
 			}
 		case <-ticker.C:
@@ -190,6 +214,17 @@ func (m *manager) reconcileRestartPolicies(ctx context.Context, log *slog.Logger
 		}
 	}
 	return nil
+}
+
+func (m *manager) reconcileRestartPolicyInstanceID(ctx context.Context, id string, log *slog.Logger) error {
+	inst, err := m.currentInstanceWithoutHydration(ctx, id)
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return m.reconcileRestartPolicyInstance(ctx, inst, log)
 }
 
 func (m *manager) reconcileRestartPolicyInstance(ctx context.Context, inst *Instance, log *slog.Logger) error {

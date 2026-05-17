@@ -1,10 +1,14 @@
 package instances
 
 import (
+	"context"
 	"errors"
+	"log/slog"
+	"os"
 	"testing"
 	"time"
 
+	"github.com/kernel/hypeman/lib/hypervisor"
 	restartpolicy "github.com/kernel/hypeman/lib/restart-policy"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -63,4 +67,70 @@ func TestShouldResetRestartAttempts(t *testing.T) {
 	)
 
 	assert.True(t, reset)
+}
+
+func TestMarkRestartManualStopLockedSkipsInstancesWithoutPolicy(t *testing.T) {
+	manager, _ := setupTestManager(t)
+	id := "restart-no-policy"
+	require.NoError(t, manager.ensureDirectories(id))
+	require.NoError(t, manager.saveMetadata(&metadata{
+		StoredMetadata: StoredMetadata{
+			Id:         id,
+			Name:       id,
+			CreatedAt:  time.Now(),
+			DataDir:    manager.paths.InstanceDir(id),
+			SocketPath: manager.paths.InstanceSocket(id, "cloud-hypervisor.sock"),
+		},
+	}))
+
+	require.NoError(t, manager.markRestartManualStopLocked(context.Background(), id))
+
+	loaded, err := manager.loadMetadata(id)
+	require.NoError(t, err)
+	assert.True(t, loaded.RestartStatus.IsZero())
+}
+
+func TestReconcileRestartPolicyInstanceIDUsesCurrentState(t *testing.T) {
+	manager, _ := setupTestManager(t)
+	id := "restart-current-state"
+	require.NoError(t, manager.ensureDirectories(id))
+
+	now := time.Now().UTC()
+	socketPath := manager.paths.InstanceSocket(id, "cloud-hypervisor.sock")
+	require.NoError(t, os.WriteFile(socketPath, nil, 0o600))
+	manager.storeCachedHypervisorState(id, hypervisor.StateRunning)
+
+	status := restartpolicy.Status{
+		Attempts:   1,
+		LastReason: restartpolicy.RestartReasonHealthCheckFailed,
+	}
+	require.NoError(t, manager.saveMetadata(&metadata{
+		StoredMetadata: StoredMetadata{
+			Id:                id,
+			Name:              id,
+			CreatedAt:         now,
+			StartedAt:         &now,
+			ProgramStartedAt:  &now,
+			GuestAgentReadyAt: &now,
+			DataDir:           manager.paths.InstanceDir(id),
+			SocketPath:        socketPath,
+			HypervisorType:    hypervisor.TypeCloudHypervisor,
+			RestartPolicy: &restartpolicy.Policy{
+				Policy:      restartpolicy.PolicyOnFailure,
+				Backoff:     "1s",
+				MaxAttempts: 1,
+				StableAfter: "10m",
+			},
+			RestartStatus: status,
+		},
+	}))
+
+	err := manager.reconcileRestartPolicyInstanceID(context.Background(), id, slog.Default())
+	require.NoError(t, err)
+
+	loaded, err := manager.loadMetadata(id)
+	require.NoError(t, err)
+	assert.Equal(t, status.Attempts, loaded.RestartStatus.Attempts)
+	assert.Equal(t, status.LastReason, loaded.RestartStatus.LastReason)
+	assert.Empty(t, loaded.RestartStatus.BlockedReason)
 }
