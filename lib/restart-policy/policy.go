@@ -101,10 +101,6 @@ func StableAfter(policy *Policy) time.Duration {
 	return d
 }
 
-func Failure(exitCode *int) bool {
-	return exitCode == nil || *exitCode != 0
-}
-
 func ShouldRestart(policy *Policy, exitCode *int) bool {
 	if policy == nil {
 		return false
@@ -113,29 +109,10 @@ func ShouldRestart(policy *Policy, exitCode *int) bool {
 	case PolicyAlways:
 		return true
 	case PolicyOnFailure:
-		return Failure(exitCode)
+		return exitCode == nil || *exitCode != 0
 	default:
 		return false
 	}
-}
-
-func ShouldRestartHealthCheck(policy *Policy) bool {
-	if policy == nil {
-		return false
-	}
-	switch policy.Policy {
-	case PolicyAlways, PolicyOnFailure:
-		return true
-	default:
-		return false
-	}
-}
-
-func ShouldRestartInstance(policy *Policy, exitCode *int, status Status) bool {
-	if status.LastReason == RestartReasonHealthCheckFailed {
-		return ShouldRestartHealthCheck(policy)
-	}
-	return ShouldRestart(policy, exitCode)
 }
 
 func PrepareAttempt(policy *Policy, status Status, now time.Time) (Status, bool) {

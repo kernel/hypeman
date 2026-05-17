@@ -3,6 +3,7 @@ package instances
 import (
 	"errors"
 	"testing"
+	"time"
 
 	restartpolicy "github.com/kernel/hypeman/lib/restart-policy"
 	"github.com/stretchr/testify/assert"
@@ -45,4 +46,21 @@ func TestRestartStatusAfterPolicyUpdateClearsRetryState(t *testing.T) {
 	})
 
 	assert.True(t, status.IsZero())
+}
+
+func TestShouldResetRestartAttempts(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	startedAt := now.Add(-11 * time.Minute)
+
+	reset := shouldResetRestartAttempts(
+		&restartpolicy.Policy{Policy: restartpolicy.PolicyAlways, StableAfter: "10m"},
+		restartpolicy.Status{Attempts: 2},
+		&Instance{
+			State:          StateRunning,
+			StoredMetadata: StoredMetadata{StartedAt: &startedAt},
+		},
+		now,
+	)
+
+	assert.True(t, reset)
 }
