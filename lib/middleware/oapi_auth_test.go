@@ -238,6 +238,7 @@ func TestJwtAuth_TokenEndpointBypass(t *testing.T) {
 
 func TestJwtAuth_RegistryPathAcceptsUserTokens(t *testing.T) {
 	nextHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Empty(t, r.Header.Get("Authorization"))
 		w.Header().Set("X-User-ID", GetUserIDFromContext(r.Context()))
 		if scopes.HasFullAccess(r.Context()) {
 			w.Header().Set("X-Access", "full")

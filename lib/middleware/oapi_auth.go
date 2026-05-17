@@ -394,7 +394,7 @@ func JwtAuth(jwtSecret string) func(http.Handler) http.Handler {
 								"repos", registryClaims.Repositories,
 								"scope", registryClaims.Scope)
 							ctx := context.WithValue(r.Context(), userIDKey, "builder-"+registryClaims.BuildID)
-							next.ServeHTTP(w, r.WithContext(ctx))
+							next.ServeHTTP(w, requestWithoutAuthorization(r, ctx))
 							return
 						}
 						log.DebugContext(r.Context(), "registry token validation failed", "error", err)
@@ -420,7 +420,7 @@ func JwtAuth(jwtSecret string) func(http.Handler) http.Handler {
 								"auth_type", authType,
 								"subject", userClaims["sub"])
 							ctx := contextWithUserClaims(r.Context(), userClaims)
-							next.ServeHTTP(w, r.WithContext(ctx))
+							next.ServeHTTP(w, requestWithoutAuthorization(r, ctx))
 							return
 						}
 						log.DebugContext(r.Context(), "user token validation failed for registry request", "error", err)
@@ -471,6 +471,12 @@ func JwtAuth(jwtSecret string) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r.WithContext(contextWithUserClaims(r.Context(), claims)))
 		})
 	}
+}
+
+func requestWithoutAuthorization(r *http.Request, ctx context.Context) *http.Request {
+	req := r.Clone(ctx)
+	req.Header.Del("Authorization")
+	return req
 }
 
 // extractPermissions reads the "permissions" claim from a JWT MapClaims
