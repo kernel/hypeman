@@ -11,12 +11,17 @@ Metadata:
           - SubnetId
           - AllowedApiCidr
           - ApiPort
+          - EnableHttpIngress
+          - EnableHttpsIngress
+          - AllowedIngressCidr
       - Label:
           default: Instance
         Parameters:
           - InstanceType
           - RootVolumeSize
           - DataVolumeSize
+          - DataVolumeIops
+          - DataVolumeThroughput
           - AmiSsmParameter
       - Label:
           default: Access
@@ -41,6 +46,12 @@ Metadata:
         default: Hypeman API access CIDR
       ApiPort:
         default: Hypeman API port
+      EnableHttpIngress:
+        default: Enable HTTP ingress
+      EnableHttpsIngress:
+        default: Enable HTTPS ingress
+      AllowedIngressCidr:
+        default: Hypeman ingress access CIDR
       EnableSSH:
         default: Enable SSH
       AllowedSshCidr:
@@ -51,6 +62,10 @@ Metadata:
         default: Root volume size
       DataVolumeSize:
         default: Hypeman data volume size
+      DataVolumeIops:
+        default: Hypeman data volume IOPS
+      DataVolumeThroughput:
+        default: Hypeman data volume throughput
       HypemanVersion:
         default: Hypeman release
       HypemanBranch:
@@ -83,6 +98,21 @@ Parameters:
     MinValue: 1
     MaxValue: 65535
     Description: Hypeman API port exposed to AllowedApiCidr.
+  EnableHttpIngress:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: Open port 80 from AllowedIngressCidr for Hypeman HTTP ingress traffic.
+  EnableHttpsIngress:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: Open port 443 from AllowedIngressCidr for Hypeman HTTPS ingress traffic.
+  AllowedIngressCidr:
+    Type: String
+    Default: 127.0.0.1/32
+    Description: Client CIDR allowed to reach Hypeman ingress ports when enabled. Use your current public IP /32 or a trusted VPN CIDR; avoid 0.0.0.0/0.
+    AllowedPattern: "^([0-9]{1,3}\\.){3}[0-9]{1,3}/([0-9]|[1-2][0-9]|3[0-2])$"
   EnableSSH:
     Type: String
     Default: "false"
@@ -109,6 +139,18 @@ Parameters:
     MinValue: 50
     MaxValue: 16384
     Description: Hypeman data EBS volume size in GiB. This volume is formatted as XFS and mounted at /var/lib/hypeman.
+  DataVolumeIops:
+    Type: Number
+    Default: 3000
+    MinValue: 3000
+    MaxValue: 80000
+    Description: Provisioned IOPS for the Hypeman data gp3 EBS volume. High values may require a larger DataVolumeSize.
+  DataVolumeThroughput:
+    Type: Number
+    Default: 125
+    MinValue: 125
+    MaxValue: 2000
+    Description: Provisioned throughput in MiB/s for the Hypeman data gp3 EBS volume. High values may require higher DataVolumeIops.
   HypemanVersion:
     Type: String
     Default: latest
@@ -128,6 +170,8 @@ Parameters:
 
 Conditions:
   UseSSH: !Equals [!Ref EnableSSH, "true"]
+  UseHttpIngress: !Equals [!Ref EnableHttpIngress, "true"]
+  UseHttpsIngress: !Equals [!Ref EnableHttpsIngress, "true"]
 
 Resources:
   HypemanSecurityGroup:
@@ -141,6 +185,22 @@ Resources:
           ToPort: !Ref ApiPort
           CidrIp: !Ref AllowedApiCidr
           Description: Hypeman API
+        - !If
+          - UseHttpIngress
+          - IpProtocol: tcp
+            FromPort: 80
+            ToPort: 80
+            CidrIp: !Ref AllowedIngressCidr
+            Description: Hypeman HTTP ingress
+          - !Ref AWS::NoValue
+        - !If
+          - UseHttpsIngress
+          - IpProtocol: tcp
+            FromPort: 443
+            ToPort: 443
+            CidrIp: !Ref AllowedIngressCidr
+            Description: Hypeman HTTPS ingress
+          - !Ref AWS::NoValue
         - !If
           - UseSSH
           - IpProtocol: tcp
@@ -362,6 +422,8 @@ Resources:
           Ebs:
             VolumeSize: !Ref DataVolumeSize
             VolumeType: gp3
+            Iops: !Ref DataVolumeIops
+            Throughput: !Ref DataVolumeThroughput
             Encrypted: true
             DeleteOnTermination: true
       Tags:
