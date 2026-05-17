@@ -2,6 +2,7 @@ package instances
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -35,6 +36,26 @@ type healthCheckControllerTestRunner struct {
 
 func (r healthCheckControllerTestRunner) Check(context.Context, healthcheck.Instance, *healthcheck.Policy) healthcheck.ProbeResult {
 	return r.result
+}
+
+type blockingHealthCheckControllerTestStore struct {
+	*healthCheckControllerTestStore
+	blockID string
+	entered chan struct{}
+	unblock chan struct{}
+	once    sync.Once
+}
+
+func (s *blockingHealthCheckControllerTestStore) SetHealthCheckRuntime(ctx context.Context, id string, runtime *healthcheck.Runtime) error {
+	if id == s.blockID && runtime != nil {
+		s.once.Do(func() { close(s.entered) })
+		select {
+		case <-s.unblock:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return s.healthCheckControllerTestStore.SetHealthCheckRuntime(ctx, id, runtime)
 }
 
 type blockingHealthCheckControllerTestRunner struct {
@@ -307,4 +328,63 @@ func TestHealthCheckControllerSkipsStaleProbeAfterRuntimeReset(t *testing.T) {
 		t.Fatalf("stale probe persisted runtime after reset: %#v", runtime)
 	case <-time.After(50 * time.Millisecond):
 	}
+}
+
+func TestHealthCheckControllerDoesNotHoldControllerLockWhilePersisting(t *testing.T) {
+	policy, err := healthcheck.NormalizePolicy(&healthcheck.Policy{
+		Type:     healthcheck.TypeExec,
+		Interval: "1h",
+		Exec:     &healthcheck.ExecCheck{Command: []string{"true"}},
+	})
+	require.NoError(t, err)
+
+	startedAt := time.Date(2026, 5, 16, 1, 0, 0, 0, time.UTC)
+	baseStore := &healthCheckControllerTestStore{
+		runtimes: make(chan *healthcheck.Runtime, 4),
+	}
+	store := &blockingHealthCheckControllerTestStore{
+		healthCheckControllerTestStore: baseStore,
+		blockID:                        "inst-1",
+		entered:                        make(chan struct{}),
+		unblock:                        make(chan struct{}),
+	}
+	controller := newHealthCheckController(store, healthCheckControllerOptions{
+		Now:    func() time.Time { return startedAt },
+		Runner: healthCheckControllerTestRunner{result: healthcheck.ProbeResult{Success: true}},
+	})
+
+	inst1 := &Instance{
+		StoredMetadata: StoredMetadata{
+			Id:          "inst-1",
+			StartedAt:   &startedAt,
+			HealthCheck: policy,
+		},
+		State: StateRunning,
+	}
+	inst2 := &Instance{
+		StoredMetadata: StoredMetadata{
+			Id:          "inst-2",
+			StartedAt:   &startedAt,
+			HealthCheck: policy,
+		},
+		State: StateRunning,
+	}
+
+	controller.syncInstance(context.Background(), inst1, false, false)
+	go controller.runCheck(context.Background(), "inst-1", 1)
+	<-store.entered
+
+	done := make(chan struct{})
+	go func() {
+		controller.syncInstance(context.Background(), inst2, true, true)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("syncInstance blocked while another instance persisted health check status")
+	}
+
+	close(store.unblock)
 }

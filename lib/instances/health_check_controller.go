@@ -49,6 +49,7 @@ type HealthCheckController struct {
 
 	timerFired      chan healthCheckTimerEvent
 	timerRetryDelay time.Duration
+	persistLocks    sync.Map
 
 	mu     sync.Mutex
 	states map[string]*healthCheckControllerState
@@ -166,9 +167,6 @@ func (c *HealthCheckController) syncInstance(ctx context.Context, inst *Instance
 	runtime := healthcheck.CloneRuntime(inst.HealthCheckRuntime)
 	if resetRuntime {
 		runtime = nil
-		if err := c.store.SetHealthCheckRuntime(ctx, inst.Id, nil); err != nil {
-			c.log.Warn("failed to reset health check status", "instance_id", inst.Id, "error", err)
-		}
 	}
 
 	delay := interval
@@ -178,6 +176,10 @@ func (c *HealthCheckController) syncInstance(ctx context.Context, inst *Instance
 
 	target := toHealthCheckInstance(inst)
 	target.Runtime = runtime
+
+	persistLock := c.persistLock(inst.Id)
+	persistLock.Lock()
+	defer persistLock.Unlock()
 
 	c.mu.Lock()
 	state, ok := c.states[inst.Id]
@@ -189,6 +191,12 @@ func (c *HealthCheckController) syncInstance(ctx context.Context, inst *Instance
 	state.policy = policy
 	c.scheduleLocked(inst.Id, state, delay)
 	c.mu.Unlock()
+
+	if resetRuntime {
+		if err := c.store.SetHealthCheckRuntime(ctx, inst.Id, nil); err != nil {
+			c.log.Warn("failed to reset health check status", "instance_id", inst.Id, "error", err)
+		}
+	}
 }
 
 func healthCheckControllerEligibleState(state State) bool {
@@ -196,6 +204,10 @@ func healthCheckControllerEligibleState(state State) bool {
 }
 
 func (c *HealthCheckController) removeInstance(id string) {
+	persistLock := c.persistLock(id)
+	persistLock.Lock()
+	defer persistLock.Unlock()
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -236,18 +248,36 @@ func (c *HealthCheckController) runCheck(ctx context.Context, id string, generat
 		return
 	}
 
+	persistLock := c.persistLock(id)
+	persistLock.Lock()
+	defer persistLock.Unlock()
+
 	c.mu.Lock()
 	state = c.states[id]
 	if state == nil || state.generation != generation {
 		c.mu.Unlock()
 		return
 	}
+	c.mu.Unlock()
+
 	if err := c.store.SetHealthCheckRuntime(ctx, id, runtime); err != nil {
 		c.log.Warn("failed to persist health check status", "instance_id", id, "error", err)
+	}
+
+	c.mu.Lock()
+	state = c.states[id]
+	if state == nil || state.generation != generation {
+		c.mu.Unlock()
+		return
 	}
 	state.instance.Runtime = runtime
 	c.scheduleLocked(id, state, interval)
 	c.mu.Unlock()
+}
+
+func (c *HealthCheckController) persistLock(id string) *sync.Mutex {
+	lock, _ := c.persistLocks.LoadOrStore(id, &sync.Mutex{})
+	return lock.(*sync.Mutex)
 }
 
 func (c *HealthCheckController) scheduleLocked(id string, state *healthCheckControllerState, delay time.Duration) {
