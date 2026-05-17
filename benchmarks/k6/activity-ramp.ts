@@ -9,6 +9,7 @@ interface Config {
   baseUrl: string;
   apiKey: string;
   image: string;
+  hypervisor: string;
   runId: string;
   startVUs: number;
   maxVUs: number;
@@ -78,6 +79,7 @@ export default function (data: { runId: string }) {
   const instanceName = instanceNameFor(data.runId);
   const tags: Tags = {
     benchmark: 'activity-ramp',
+    hypervisor: config.hypervisor || 'server-default',
     run_id: data.runId,
     instance: instanceName,
   };
@@ -114,6 +116,7 @@ function loadConfig(): Config {
     baseUrl,
     apiKey: requiredEnv('HYPEMAN_API_KEY', ''),
     image: requiredEnv('HYPEMAN_IMAGE', 'docker.io/library/nginx:alpine'),
+    hypervisor: envString('HYPEMAN_HYPERVISOR', ''),
     runId: envString('HYPEMAN_BENCH_RUN_ID', defaultRunId()),
     startVUs: intEnv('HYPEMAN_BENCH_START_VUS', 1),
     maxVUs: intEnv('HYPEMAN_BENCH_MAX_VUS', 16),
@@ -226,7 +229,17 @@ function ensurePatternIngress() {
 
 function createInstance(name: string, tags: Tags): boolean {
   const started = Date.now();
-  const res = apiPost('/instances', {
+  const body: {
+    name: string;
+    image: string;
+    size: string;
+    overlay_size: string;
+    vcpus: number;
+    network: { enabled: boolean };
+    tags: Tags;
+    skip_kernel_headers: boolean;
+    hypervisor?: string;
+  } = {
     name,
     image: config.image,
     size: config.instanceMemory,
@@ -235,10 +248,16 @@ function createInstance(name: string, tags: Tags): boolean {
     network: { enabled: true },
     tags: {
       benchmark: 'activity-ramp',
+      hypervisor: config.hypervisor || 'server-default',
       run_id: config.runId,
     },
     skip_kernel_headers: true,
-  }, tagStep(tags, 'create'));
+  };
+  if (config.hypervisor) {
+    body.hypervisor = config.hypervisor;
+  }
+
+  const res = apiPost('/instances', body, tagStep(tags, 'create'));
 
   createMs.add(Date.now() - started, tags);
   check(res, {
