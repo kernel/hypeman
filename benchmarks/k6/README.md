@@ -39,5 +39,6 @@ HYPEMAN_INGRESS_TARGET_PORT=80
 ```
 
 Capacity rejections from `POST /instances` are recorded as `hypeman_create_rejected` and `hypeman_create_rejections`. They are not treated as unexpected script errors because they identify the concurrency level where the server starts refusing new activity.
+Rejected creates back off for one second by default so a saturated server does not produce a tight 409 loop. Override that with `HYPEMAN_CREATE_REJECTED_BACKOFF_SECONDS`.
 
 Set `HYPEMAN_HYPERVISOR` to `cloud-hypervisor`, `firecracker`, or `qemu` to run the same activity loop against a specific hypervisor. The value is sent on instance creation and added as a metric tag.

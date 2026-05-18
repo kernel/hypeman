@@ -246,9 +246,10 @@ Resources:
       Roles:
         - !Ref HypemanInstanceRole
 
-  # CloudFormation's typed EC2 resources do not expose CpuOptions.NestedVirtualization yet.
-  # This helper creates only the launch template that carries that EC2 API option;
-  # the Hypeman EC2 instance itself remains a normal stack-managed resource.
+  # CloudFormation's typed EC2 instance block device mapping does not expose gp3
+  # throughput, and EC2 resources do not expose CpuOptions.NestedVirtualization
+  # yet. This helper creates a minimal launch template for those fields; the
+  # Hypeman EC2 instance itself remains a normal stack-managed resource.
   NestedVirtualizationLaunchTemplateRole:
     Type: AWS::IAM::Role
     Properties:
@@ -345,12 +346,24 @@ Resources:
               stack_uuid = event["StackId"].rsplit("/", 1)[-1]
               return f"{event['ResourceProperties']['NamePrefix']}-{stack_uuid}"
 
-          def create_launch_template(name):
+          def create_launch_template(name, props):
               payload = {
                   "Action": "CreateLaunchTemplate",
                   "Version": "2016-11-15",
                   "LaunchTemplateName": name,
                   "LaunchTemplateData.CpuOptions.NestedVirtualization": "enabled",
+                  "LaunchTemplateData.BlockDeviceMapping.1.DeviceName": "/dev/sda1",
+                  "LaunchTemplateData.BlockDeviceMapping.1.Ebs.VolumeSize": props["RootVolumeSize"],
+                  "LaunchTemplateData.BlockDeviceMapping.1.Ebs.VolumeType": "gp3",
+                  "LaunchTemplateData.BlockDeviceMapping.1.Ebs.Encrypted": "true",
+                  "LaunchTemplateData.BlockDeviceMapping.1.Ebs.DeleteOnTermination": "true",
+                  "LaunchTemplateData.BlockDeviceMapping.2.DeviceName": "/dev/sdf",
+                  "LaunchTemplateData.BlockDeviceMapping.2.Ebs.VolumeSize": props["DataVolumeSize"],
+                  "LaunchTemplateData.BlockDeviceMapping.2.Ebs.VolumeType": "gp3",
+                  "LaunchTemplateData.BlockDeviceMapping.2.Ebs.Iops": props["DataVolumeIops"],
+                  "LaunchTemplateData.BlockDeviceMapping.2.Ebs.Throughput": props["DataVolumeThroughput"],
+                  "LaunchTemplateData.BlockDeviceMapping.2.Ebs.Encrypted": "true",
+                  "LaunchTemplateData.BlockDeviceMapping.2.Ebs.DeleteOnTermination": "true",
                   "TagSpecification.1.ResourceType": "launch-template",
                   "TagSpecification.1.Tag.1.Key": "Name",
                   "TagSpecification.1.Tag.1.Value": name,
@@ -386,7 +399,7 @@ Resources:
                       return
                   if request_type == "Update":
                       delete_launch_template(physical_id)
-                  data = create_launch_template(launch_template_name(event))
+                  data = create_launch_template(launch_template_name(event), event["ResourceProperties"])
                   send(event, context, "SUCCESS", data, physical_id=data["LaunchTemplateId"])
               except Exception as exc:
                   traceback.print_exc()
@@ -397,6 +410,10 @@ Resources:
     Properties:
       ServiceToken: !GetAtt NestedVirtualizationLaunchTemplateFunction.Arn
       NamePrefix: hypeman
+      RootVolumeSize: !Ref RootVolumeSize
+      DataVolumeSize: !Ref DataVolumeSize
+      DataVolumeIops: !Ref DataVolumeIops
+      DataVolumeThroughput: !Ref DataVolumeThroughput
 
   HypemanHost:
     Type: AWS::EC2::Instance
@@ -411,21 +428,6 @@ Resources:
         - !Ref HypemanSecurityGroup
       IamInstanceProfile: !Ref HypemanInstanceProfile
       KeyName: !If [UseSSH, !Ref KeyName, !Ref AWS::NoValue]
-      BlockDeviceMappings:
-        - DeviceName: /dev/sda1
-          Ebs:
-            VolumeSize: !Ref RootVolumeSize
-            VolumeType: gp3
-            Encrypted: true
-            DeleteOnTermination: true
-        - DeviceName: /dev/sdf
-          Ebs:
-            VolumeSize: !Ref DataVolumeSize
-            VolumeType: gp3
-            Iops: !Ref DataVolumeIops
-            Throughput: !Ref DataVolumeThroughput
-            Encrypted: true
-            DeleteOnTermination: true
       Tags:
         - Key: Name
           Value: !Sub ${AWS::StackName}-hypeman

@@ -19,6 +19,7 @@ interface Config {
   instanceMemory: string;
   instanceOverlaySize: string;
   instanceVCPUs: number;
+  createRejectedBackoffSeconds: number;
   waitTimeoutSeconds: number;
   probeUrl: string;
   probePath: string;
@@ -126,6 +127,7 @@ function loadConfig(): Config {
     instanceMemory: envString('HYPEMAN_INSTANCE_MEMORY', '512MB'),
     instanceOverlaySize: envString('HYPEMAN_INSTANCE_OVERLAY_SIZE', '2GB'),
     instanceVCPUs: intEnv('HYPEMAN_INSTANCE_VCPUS', 1),
+    createRejectedBackoffSeconds: floatEnv('HYPEMAN_CREATE_REJECTED_BACKOFF_SECONDS', 1),
     waitTimeoutSeconds: durationSeconds(envString('HYPEMAN_WAIT_TIMEOUT', '5m')),
     probeUrl: trimRight(envString('HYPEMAN_PROBE_URL', probeURLFromBaseURL(baseUrl, ingressHostPort)), '/'),
     probePath: envString('HYPEMAN_PROBE_PATH', '/'),
@@ -170,20 +172,19 @@ function ensureHealthy() {
 }
 
 function ensureImageReady(image: string) {
-  const encoded = encodeURIComponent(image);
-  let res = apiGet(`/images/${encoded}`, { kind: 'setup', step: 'image-get' });
-  if (res.status === 404) {
-    res = apiPost('/images', { name: image }, { kind: 'setup', step: 'image-create' });
-    assertStatus(res, [202], 'create image');
-  } else {
-    assertStatus(res, [200], 'get image');
+  let imageBody = findImage(image);
+  if (!imageBody) {
+    const res = apiPost('/images', { name: image }, { kind: 'setup', step: 'image-create' });
+    assertStatus(res, [202, 409], 'create image');
   }
 
   const deadline = Date.now() + config.imageReadyTimeoutSeconds * 1000;
   while (Date.now() < deadline) {
-    const imageRes = apiGet(`/images/${encoded}`, { kind: 'setup', step: 'image-poll' });
-    assertStatus(imageRes, [200], 'poll image');
-    const imageBody = imageRes.json() as { status?: string; error?: string };
+    imageBody = findImage(image);
+    if (!imageBody) {
+      sleep(2);
+      continue;
+    }
 
     if (imageBody.status === 'ready') {
       return;
@@ -195,6 +196,18 @@ function ensureImageReady(image: string) {
   }
 
   fail(`image ${image} did not become ready before ${config.imageReadyTimeoutSeconds}s`);
+}
+
+function findImage(image: string): { status?: string; error?: string } | null {
+  const res = apiGet('/images', { kind: 'setup', step: 'image-list' });
+  assertStatus(res, [200], 'list images');
+  const images = res.json() as Array<{ name?: string; status?: string; error?: string }>;
+  for (const candidate of images) {
+    if (candidate.name === image) {
+      return candidate;
+    }
+  }
+  return null;
 }
 
 function ensurePatternIngress() {
@@ -270,6 +283,7 @@ function createInstance(name: string, tags: Tags): boolean {
   if (res.status === 409) {
     createRejected.add(true, tags);
     createRejections.add(1, tags);
+    sleep(config.createRejectedBackoffSeconds);
     return false;
   }
 
@@ -409,7 +423,9 @@ function tagStep(tags: Tags, step: string): Tags {
 function instanceNameFor(runId: string): string {
   const vu = exec.vu.idInTest;
   const iter = exec.scenario.iterationInTest;
-  return `hm-bench-${runId}-${vu}-${iter}`.slice(0, 63).replace(/-+$/, '');
+  const suffix = `-${vu}-${iter}`;
+  const prefix = `hm-bench-${runId}`.slice(0, 63 - suffix.length).replace(/-+$/, '');
+  return `${prefix}${suffix}`;
 }
 
 function defaultRunId(): string {

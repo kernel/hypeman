@@ -99,6 +99,14 @@ func TestCloudFormationLaunchContract(t *testing.T) {
 	zipFile := scalar(t, requireField(t, code, "ZipFile"))
 	assertContains(t, zipFile, `"Action": "CreateLaunchTemplate"`)
 	assertContains(t, zipFile, `"LaunchTemplateData.CpuOptions.NestedVirtualization": "enabled"`)
+	assertContains(t, zipFile, `"LaunchTemplateData.BlockDeviceMapping.2.Ebs.Iops": props["DataVolumeIops"]`)
+	assertContains(t, zipFile, `"LaunchTemplateData.BlockDeviceMapping.2.Ebs.Throughput": props["DataVolumeThroughput"]`)
+
+	launchTemplateProperties := requireMapping(t, requireField(t, launchTemplate, "Properties"))
+	assertRef(t, requireField(t, launchTemplateProperties, "RootVolumeSize"), "RootVolumeSize")
+	assertRef(t, requireField(t, launchTemplateProperties, "DataVolumeSize"), "DataVolumeSize")
+	assertRef(t, requireField(t, launchTemplateProperties, "DataVolumeIops"), "DataVolumeIops")
+	assertRef(t, requireField(t, launchTemplateProperties, "DataVolumeThroughput"), "DataVolumeThroughput")
 
 	host := requireMapping(t, requireField(t, resources, "HypemanHost"))
 	if got := scalar(t, requireField(t, host, "Type")); got != "AWS::EC2::Instance" {
@@ -108,19 +116,6 @@ func TestCloudFormationLaunchContract(t *testing.T) {
 	hostLaunchTemplate := requireMapping(t, requireField(t, hostProperties, "LaunchTemplate"))
 	assertGetAtt(t, requireField(t, hostLaunchTemplate, "LaunchTemplateId"), "NestedVirtualizationLaunchTemplate.LaunchTemplateId")
 	assertGetAtt(t, requireField(t, hostLaunchTemplate, "Version"), "NestedVirtualizationLaunchTemplate.VersionNumber")
-
-	blockDeviceMappings := requireSequence(t, requireField(t, hostProperties, "BlockDeviceMappings"))
-	if len(blockDeviceMappings.Content) != 2 {
-		t.Fatalf("expected root and Hypeman data block device mappings, got %d", len(blockDeviceMappings.Content))
-	}
-	dataDevice := requireMapping(t, blockDeviceMappings.Content[1])
-	if got := scalar(t, requireField(t, dataDevice, "DeviceName")); got != "/dev/sdf" {
-		t.Fatalf("data device name = %q, want /dev/sdf", got)
-	}
-	dataEBS := requireMapping(t, requireField(t, dataDevice, "Ebs"))
-	assertRef(t, requireField(t, dataEBS, "VolumeSize"), "DataVolumeSize")
-	assertRef(t, requireField(t, dataEBS, "Iops"), "DataVolumeIops")
-	assertRef(t, requireField(t, dataEBS, "Throughput"), "DataVolumeThroughput")
 
 	userData := nodeText(requireField(t, hostProperties, "UserData"))
 	assertContains(t, userData, "curl -fsSL https://raw.githubusercontent.com/kernel/hypeman/main/scripts/install.sh | bash")
