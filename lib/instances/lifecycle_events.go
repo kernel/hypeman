@@ -12,15 +12,17 @@ const defaultLifecycleEventBufferSize = 256
 type LifecycleEventConsumer string
 
 const (
-	LifecycleEventConsumerWaitForState LifecycleEventConsumer = "wait_for_state"
-	LifecycleEventConsumerAutoStandby  LifecycleEventConsumer = "auto_standby"
-	LifecycleEventConsumerHealthCheck  LifecycleEventConsumer = "health_check"
+	LifecycleEventConsumerWaitForState  LifecycleEventConsumer = "wait_for_state"
+	LifecycleEventConsumerAutoStandby   LifecycleEventConsumer = "auto_standby"
+	LifecycleEventConsumerHealthCheck   LifecycleEventConsumer = "health_check"
+	LifecycleEventConsumerRestartPolicy LifecycleEventConsumer = "restart_policy"
 )
 
 var allLifecycleEventConsumers = []LifecycleEventConsumer{
 	LifecycleEventConsumerWaitForState,
 	LifecycleEventConsumerAutoStandby,
 	LifecycleEventConsumerHealthCheck,
+	LifecycleEventConsumerRestartPolicy,
 }
 
 // LifecycleEventAction identifies which instance lifecycle action occurred.

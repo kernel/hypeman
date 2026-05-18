@@ -293,6 +293,13 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 			Message: err.Error(),
 		}, nil
 	}
+	restartPolicy, err := toDomainRestartPolicy(request.Body.RestartPolicy)
+	if err != nil {
+		return oapi.CreateInstance400JSONResponse{
+			Code:    "invalid_restart_policy",
+			Message: err.Error(),
+		}, nil
+	}
 
 	domainReq := instances.CreateInstanceRequest{
 		Name:                     request.Body.Name,
@@ -319,6 +326,7 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		SkipGuestAgent:           request.Body.SkipGuestAgent != nil && *request.Body.SkipGuestAgent,
 		AutoStandby:              autoStandby,
 		HealthCheck:              healthCheck,
+		RestartPolicy:            restartPolicy,
 	}
 	if request.Body.SnapshotPolicy != nil {
 		snapshotPolicy, err := toInstanceSnapshotPolicy(*request.Body.SnapshotPolicy)
@@ -970,11 +978,20 @@ func (s *ApiService) UpdateInstance(ctx context.Context, request oapi.UpdateInst
 			Message: err.Error(),
 		}, nil
 	}
+	restartPolicy, err := toDomainRestartPolicy(request.Body.RestartPolicy)
+	if err != nil {
+		return oapi.UpdateInstance400JSONResponse{
+			Code:    "invalid_restart_policy",
+			Message: err.Error(),
+		}, nil
+	}
 
 	result, err := s.InstanceManager.UpdateInstance(ctx, inst.Id, instances.UpdateInstanceRequest{
-		Env:         env,
-		AutoStandby: autoStandby,
-		HealthCheck: healthCheck,
+		Env:              env,
+		AutoStandby:      autoStandby,
+		HealthCheck:      healthCheck,
+		RestartPolicy:    restartPolicy,
+		RestartPolicySet: request.Body.RestartPolicy != nil,
 	})
 	if err != nil {
 		switch {
@@ -1108,6 +1125,8 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 	oapiInst.AutoStandby = toOAPIAutoStandbyPolicy(inst.AutoStandby)
 	oapiInst.HealthCheck = toOAPIHealthCheck(inst.HealthCheck)
 	oapiInst.HealthStatus = toOAPIHealthStatus(healthcheck.Snapshot(inst.HealthCheck, string(inst.State), inst.HealthCheckRuntime))
+	oapiInst.RestartPolicy = toOAPIRestartPolicy(inst.RestartPolicy)
+	oapiInst.RestartStatus = toOAPIRestartStatus(inst.RestartStatus)
 
 	// Convert volume attachments
 	if len(inst.Volumes) > 0 {

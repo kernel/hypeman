@@ -11,6 +11,7 @@ import (
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/network"
+	restartpolicy "github.com/kernel/hypeman/lib/restart-policy"
 	snapshotstore "github.com/kernel/hypeman/lib/snapshot"
 	"github.com/kernel/hypeman/lib/tags"
 	"github.com/nrednav/cuid2"
@@ -448,6 +449,7 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 	forkMeta.VsockSocket = m.paths.InstanceSocket(forkID, hypervisor.VsockSocketNameForType(targetHypervisor))
 	forkMeta.ExitCode = nil
 	forkMeta.ExitMessage = ""
+	forkMeta.RestartStatus = restartpolicy.Status{}
 	if rec.Snapshot.Kind == SnapshotKindStandby {
 		forkMeta.VsockCID = rec.StoredMetadata.VsockCID
 	} else {

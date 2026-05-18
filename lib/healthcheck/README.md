@@ -75,6 +75,10 @@ Stopping, deleting, standing by, or restoring an instance stops active checks. S
 
 ## Restart Policy
 
-Health checks only report health. They do not restart instances.
+Health checks do not restart instances by themselves.
 
-If Hypeman later adds restart-on-unhealthy behavior, it should consume `health_status=unhealthy` explicitly rather than making health checks mutate lifecycle state.
+When an instance also has `restart_policy.policy=on_failure` or `restart_policy.policy=always`, an `unhealthy` health status becomes a restart-policy failure signal. The restart policy applies its normal backoff, max attempts, manual-stop suppression, and stable-window reset before Hypeman restarts the whole instance.
+
+With `restart_policy.policy=never` or no restart policy, health checks only report status.
+
+Health checks still do not mutate lifecycle state directly. The instance remains `Running` while unhealthy until restart policy chooses to stop and start it.

@@ -15,6 +15,7 @@ import (
 	"github.com/kernel/hypeman/lib/healthcheck"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
+	restartpolicy "github.com/kernel/hypeman/lib/restart-policy"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/vishvananda/netlink"
@@ -30,6 +31,7 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 	manager, _ := setupTestManager(t)
 	ctx := context.Background()
 	startHealthCheckControllerForTest(t, ctx, manager)
+	startRestartPolicyControllerForTest(t, ctx, manager)
 
 	// Pull nginx:alpine image (long-running workload)
 	t.Log("Pulling nginx:alpine image...")
@@ -241,6 +243,44 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 	require.Contains(t, psOutput, "nginx: master process", "nginx master should still be running")
 	t.Log("Nginx process confirmed running - restore was successful!")
 
+	// Flip health checks to a guaranteed failure and verify restart policy stop-starts the same instance.
+	t.Log("Triggering restart policy from failing health check...")
+	require.NotNil(t, inst.StartedAt)
+	startedAtBeforeRestart := *inst.StartedAt
+	inst, err = manager.UpdateInstance(ctx, inst.Id, UpdateInstanceRequest{
+		HealthCheck: &healthcheck.Policy{
+			Type:             healthcheck.TypeHTTP,
+			Interval:         "1s",
+			Timeout:          "1s",
+			StartPeriod:      "1s",
+			FailureThreshold: 1,
+			SuccessThreshold: 1,
+			HTTP: &healthcheck.HTTPCheck{
+				Port:           80,
+				Path:           "/definitely-missing",
+				ExpectedStatus: 200,
+			},
+		},
+		RestartPolicy: &restartpolicy.Policy{
+			Policy:      restartpolicy.PolicyOnFailure,
+			Backoff:     "1s",
+			MaxAttempts: 1,
+			StableAfter: "30s",
+		},
+		RestartPolicySet: true,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, inst.RestartPolicy)
+	assert.Equal(t, restartpolicy.PolicyOnFailure, inst.RestartPolicy.Policy)
+
+	inst, err = waitForRestartPolicyBlocked(ctx, manager, inst.Id, restartpolicy.BlockedReasonMaxAttemptsExceeded, 60*time.Second)
+	require.NoError(t, err)
+	require.Equal(t, StateRunning, inst.State)
+	require.Equal(t, 1, inst.RestartStatus.Attempts)
+	require.NotNil(t, inst.StartedAt)
+	assert.True(t, inst.StartedAt.After(startedAtBeforeRestart), "instance should have been started again")
+	t.Log("Restart policy performed stop-start and blocked after max attempts")
+
 	// Cleanup
 	t.Log("Cleaning up instance...")
 	err = manager.DeleteInstance(ctx, inst.Id)
@@ -259,6 +299,21 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 	t.Log("Network allocation released after delete")
 
 	t.Log("Network integration test complete!")
+}
+
+func startRestartPolicyControllerForTest(t *testing.T, ctx context.Context, manager *manager) {
+	t.Helper()
+
+	controllerCtx, cancel := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() {
+		done <- manager.StartRestartPolicyController(controllerCtx)
+	}()
+
+	t.Cleanup(func() {
+		cancel()
+		require.NoError(t, <-done)
+	})
 }
 
 func startHealthCheckControllerForTest(t *testing.T, ctx context.Context, manager Manager) {
@@ -307,6 +362,36 @@ func waitForInstanceHealthStatus(ctx context.Context, manager Manager, instanceI
 		return nil, last, fmt.Errorf("instance %s health did not reach %s within %v (last error: %w)", instanceID, expected, timeout, lastErr)
 	}
 	return nil, last, fmt.Errorf("instance %s health did not reach %s within %v (last state: %s, last health: %s)", instanceID, expected, timeout, lastState, last.Status)
+}
+
+func waitForRestartPolicyBlocked(ctx context.Context, manager Manager, instanceID string, reason restartpolicy.BlockedReason, timeout time.Duration) (*Instance, error) {
+	timeout = integrationTestTimeout(timeout)
+	deadline := time.Now().Add(timeout)
+	lastState := StateUnknown
+	lastStatus := restartpolicy.Status{}
+	lastErr := error(nil)
+
+	for time.Now().Before(deadline) {
+		inst, err := manager.GetInstance(ctx, instanceID)
+		if err != nil {
+			lastErr = err
+			time.Sleep(200 * time.Millisecond)
+			continue
+		}
+
+		lastState = inst.State
+		lastStatus = inst.RestartStatus
+		if inst.State == StateRunning && inst.RestartStatus.BlockedReason == reason {
+			return inst, nil
+		}
+
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	if lastErr != nil {
+		return nil, fmt.Errorf("instance %s restart policy did not block with %s within %v (last error: %w)", instanceID, reason, timeout, lastErr)
+	}
+	return nil, fmt.Errorf("instance %s restart policy did not block with %s within %v (last state: %s, attempts: %d, blocked_reason: %s)", instanceID, reason, timeout, lastState, lastStatus.Attempts, lastStatus.BlockedReason)
 }
 
 // TestDockerForwardChainRestored validates recovery from an external FORWARD-chain flush.

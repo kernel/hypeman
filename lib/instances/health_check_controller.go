@@ -22,6 +22,10 @@ type healthCheckControllerStore interface {
 	SubscribeLifecycleEvents(consumer LifecycleEventConsumer) (<-chan LifecycleEvent, func())
 }
 
+type healthCheckUnhealthyHandler interface {
+	HandleHealthCheckUnhealthy(ctx context.Context, id string) error
+}
+
 type healthCheckControllerInstanceGetter interface {
 	GetInstance(ctx context.Context, id string) (*Instance, error)
 }
@@ -273,6 +277,13 @@ func (c *HealthCheckController) runCheck(ctx context.Context, id string, generat
 
 	if err := c.store.SetHealthCheckRuntime(ctx, id, runtime); err != nil {
 		c.log.Warn("failed to persist health check status", "instance_id", id, "error", err)
+	}
+	if runtime.Status == healthcheck.StatusUnhealthy {
+		if handler, ok := c.store.(healthCheckUnhealthyHandler); ok {
+			if err := handler.HandleHealthCheckUnhealthy(ctx, id); err != nil {
+				c.log.Warn("failed to handle unhealthy instance", "instance_id", id, "error", err)
+			}
+		}
 	}
 
 	c.mu.Lock()

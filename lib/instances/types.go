@@ -7,6 +7,7 @@ import (
 	"github.com/kernel/hypeman/lib/healthcheck"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/instances/phasetracking"
+	restartpolicy "github.com/kernel/hypeman/lib/restart-policy"
 	"github.com/kernel/hypeman/lib/snapshot"
 	"github.com/kernel/hypeman/lib/tags"
 )
@@ -152,6 +153,10 @@ type StoredMetadata struct {
 	// Workload health check policy. Health is reported separately from lifecycle state.
 	HealthCheck *healthcheck.Policy
 
+	// Whole-instance restart supervision policy and runtime status.
+	RestartPolicy *restartpolicy.Policy
+	RestartStatus restartpolicy.Status
+
 	// Shutdown configuration
 	StopTimeout int // Grace period in seconds for graceful stop (0 = use default 5s)
 
@@ -243,6 +248,7 @@ type CreateInstanceRequest struct {
 	SnapshotPolicy           *SnapshotPolicy             // Optional snapshot policy defaults for this instance
 	AutoStandby              *autostandby.Policy         // Optional automatic standby policy
 	HealthCheck              *healthcheck.Policy         // Optional workload health check policy
+	RestartPolicy            *restartpolicy.Policy       // Optional whole-instance restart policy
 }
 
 // StartInstanceRequest is the domain request for starting a stopped instance
@@ -253,9 +259,11 @@ type StartInstanceRequest struct {
 
 // UpdateInstanceRequest is the domain request for updating mutable instance properties.
 type UpdateInstanceRequest struct {
-	Env         map[string]string   // Updated environment variables (merged with existing)
-	AutoStandby *autostandby.Policy // Replaces the persisted auto-standby policy when non-nil
-	HealthCheck *healthcheck.Policy // Replaces the persisted health check policy when non-nil
+	Env              map[string]string     // Updated environment variables (merged with existing)
+	AutoStandby      *autostandby.Policy   // Replaces the persisted auto-standby policy when non-nil
+	HealthCheck      *healthcheck.Policy   // Replaces the persisted health check policy when non-nil
+	RestartPolicy    *restartpolicy.Policy // Replaces the persisted restart policy when non-nil
+	RestartPolicySet bool                  // True when restart policy was present in the update request
 }
 
 // ForkInstanceRequest is the domain request for forking an instance.
