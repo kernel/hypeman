@@ -15,7 +15,7 @@ The default ramp increases concurrency by one virtual user every two minutes up 
 
 ```sh
 export HYPEMAN_API_KEY=...
-make bench-activity-ramp \
+make -C benchmarks bench-activity-ramp \
   HYPEMAN_BASE_URL=http://127.0.0.1:8080 \
   HYPEMAN_IMAGE=docker.io/library/nginx:alpine \
   HYPEMAN_HYPERVISOR=cloud-hypervisor \
