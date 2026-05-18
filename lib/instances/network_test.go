@@ -263,7 +263,6 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 		},
 		RestartPolicy: &restartpolicy.Policy{
 			Policy:      restartpolicy.PolicyOnFailure,
-			Strategy:    restartpolicy.StrategyStopStart,
 			Backoff:     "1s",
 			MaxAttempts: 1,
 			StableAfter: "30s",
@@ -273,7 +272,6 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, inst.RestartPolicy)
 	assert.Equal(t, restartpolicy.PolicyOnFailure, inst.RestartPolicy.Policy)
-	assert.Equal(t, restartpolicy.StrategyStopStart, inst.RestartPolicy.Strategy)
 
 	inst, err = waitForRestartPolicyBlocked(ctx, manager, inst.Id, restartpolicy.BlockedReasonMaxAttemptsExceeded, 60*time.Second)
 	require.NoError(t, err)
