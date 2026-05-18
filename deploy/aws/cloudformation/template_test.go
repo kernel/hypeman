@@ -16,15 +16,10 @@ func TestQuickstartParameters(t *testing.T) {
 	assertDefault(t, parameters, "InstanceType", "c8i.2xlarge")
 	assertDefault(t, parameters, "AllowedApiCidr", "127.0.0.1/32")
 	assertDefault(t, parameters, "ApiPort", "8080")
-	assertDefault(t, parameters, "EnableHttpIngress", "false")
-	assertDefault(t, parameters, "EnableHttpsIngress", "false")
-	assertDefault(t, parameters, "AllowedIngressCidr", "127.0.0.1/32")
 	assertDefault(t, parameters, "EnableSSH", "false")
 	assertDefault(t, parameters, "AllowedSshCidr", "127.0.0.1/32")
 	assertDefault(t, parameters, "RootVolumeSize", "30")
 	assertDefault(t, parameters, "DataVolumeSize", "100")
-	assertDefault(t, parameters, "DataVolumeIops", "3000")
-	assertDefault(t, parameters, "DataVolumeThroughput", "125")
 	assertDefault(t, parameters, "HypemanVersion", "latest")
 	assertDefault(t, parameters, "HypemanCliVersion", "latest")
 
@@ -35,10 +30,6 @@ func TestQuickstartParameters(t *testing.T) {
 	apiCidr := requireMapping(t, parameters["AllowedApiCidr"])
 	assertContains(t, scalar(t, apiCidr["Description"]), "current public IP /32")
 	assertContains(t, scalar(t, apiCidr["Description"]), "avoid 0.0.0.0/0")
-
-	ingressCidr := requireMapping(t, parameters["AllowedIngressCidr"])
-	assertContains(t, scalar(t, ingressCidr["Description"]), "current public IP /32")
-	assertContains(t, scalar(t, ingressCidr["Description"]), "avoid 0.0.0.0/0")
 
 	metadata := requireMapping(t, requireField(t, root, "Metadata"))
 	cfnInterface := requireMapping(t, requireField(t, metadata, "AWS::CloudFormation::Interface"))
@@ -63,8 +54,8 @@ func TestCloudFormationLaunchContract(t *testing.T) {
 	securityGroup := requireMapping(t, requireField(t, resources, "HypemanSecurityGroup"))
 	sgProperties := requireMapping(t, requireField(t, securityGroup, "Properties"))
 	ingress := requireSequence(t, requireField(t, sgProperties, "SecurityGroupIngress"))
-	if len(ingress.Content) != 4 {
-		t.Fatalf("expected API ingress, HTTP ingress, HTTPS ingress, and SSH ingress, got %d entries", len(ingress.Content))
+	if len(ingress.Content) != 2 {
+		t.Fatalf("expected API ingress and conditional SSH ingress, got %d entries", len(ingress.Content))
 	}
 
 	apiIngress := requireMapping(t, ingress.Content[0])
@@ -72,10 +63,7 @@ func TestCloudFormationLaunchContract(t *testing.T) {
 	assertRef(t, requireField(t, apiIngress, "ToPort"), "ApiPort")
 	assertRef(t, requireField(t, apiIngress, "CidrIp"), "AllowedApiCidr")
 
-	assertConditionalIngress(t, ingress.Content[1], "UseHttpIngress", "80", "AllowedIngressCidr")
-	assertConditionalIngress(t, ingress.Content[2], "UseHttpsIngress", "443", "AllowedIngressCidr")
-
-	sshIngress := ingress.Content[3]
+	sshIngress := ingress.Content[1]
 	if sshIngress.Tag != "!If" {
 		t.Fatalf("expected SSH ingress to be conditional !If, got %s", sshIngress.Tag)
 	}
@@ -99,14 +87,6 @@ func TestCloudFormationLaunchContract(t *testing.T) {
 	zipFile := scalar(t, requireField(t, code, "ZipFile"))
 	assertContains(t, zipFile, `"Action": "CreateLaunchTemplate"`)
 	assertContains(t, zipFile, `"LaunchTemplateData.CpuOptions.NestedVirtualization": "enabled"`)
-	assertContains(t, zipFile, `"LaunchTemplateData.BlockDeviceMapping.2.Ebs.Iops": props["DataVolumeIops"]`)
-	assertContains(t, zipFile, `"LaunchTemplateData.BlockDeviceMapping.2.Ebs.Throughput": props["DataVolumeThroughput"]`)
-
-	launchTemplateProperties := requireMapping(t, requireField(t, launchTemplate, "Properties"))
-	assertRef(t, requireField(t, launchTemplateProperties, "RootVolumeSize"), "RootVolumeSize")
-	assertRef(t, requireField(t, launchTemplateProperties, "DataVolumeSize"), "DataVolumeSize")
-	assertRef(t, requireField(t, launchTemplateProperties, "DataVolumeIops"), "DataVolumeIops")
-	assertRef(t, requireField(t, launchTemplateProperties, "DataVolumeThroughput"), "DataVolumeThroughput")
 
 	host := requireMapping(t, requireField(t, resources, "HypemanHost"))
 	if got := scalar(t, requireField(t, host, "Type")); got != "AWS::EC2::Instance" {
@@ -116,6 +96,17 @@ func TestCloudFormationLaunchContract(t *testing.T) {
 	hostLaunchTemplate := requireMapping(t, requireField(t, hostProperties, "LaunchTemplate"))
 	assertGetAtt(t, requireField(t, hostLaunchTemplate, "LaunchTemplateId"), "NestedVirtualizationLaunchTemplate.LaunchTemplateId")
 	assertGetAtt(t, requireField(t, hostLaunchTemplate, "Version"), "NestedVirtualizationLaunchTemplate.VersionNumber")
+
+	blockDeviceMappings := requireSequence(t, requireField(t, hostProperties, "BlockDeviceMappings"))
+	if len(blockDeviceMappings.Content) != 2 {
+		t.Fatalf("expected root and Hypeman data block device mappings, got %d", len(blockDeviceMappings.Content))
+	}
+	dataDevice := requireMapping(t, blockDeviceMappings.Content[1])
+	if got := scalar(t, requireField(t, dataDevice, "DeviceName")); got != "/dev/sdf" {
+		t.Fatalf("data device name = %q, want /dev/sdf", got)
+	}
+	dataEBS := requireMapping(t, requireField(t, dataDevice, "Ebs"))
+	assertRef(t, requireField(t, dataEBS, "VolumeSize"), "DataVolumeSize")
 
 	userData := nodeText(requireField(t, hostProperties, "UserData"))
 	assertContains(t, userData, "curl -fsSL https://raw.githubusercontent.com/kernel/hypeman/main/scripts/install.sh | bash")
@@ -151,26 +142,6 @@ func TestQuickstartOutputs(t *testing.T) {
 	assertContains(t, scalar(t, requireField(t, requireMapping(t, outputs["HypemanEndpoint"]), "Description")), "Hypeman API")
 	assertContains(t, scalar(t, requireField(t, requireMapping(t, outputs["SsmSessionCommand"]), "Description")), "Session Manager")
 	assertContains(t, scalar(t, requireField(t, requireMapping(t, outputs["CreateTokenCommand"]), "Value")), "hypeman-create-token")
-}
-
-func assertConditionalIngress(t *testing.T, node *yaml.Node, condition, port, cidrRef string) {
-	t.Helper()
-
-	if node.Tag != "!If" {
-		t.Fatalf("expected ingress to be conditional !If, got %s", node.Tag)
-	}
-	parts := requireSequence(t, node)
-	if got := scalar(t, parts.Content[0]); got != condition {
-		t.Fatalf("expected condition %q, got %q", condition, got)
-	}
-	rule := requireMapping(t, parts.Content[1])
-	if got := scalar(t, requireField(t, rule, "FromPort")); got != port {
-		t.Fatalf("expected FromPort %s, got %q", port, got)
-	}
-	if got := scalar(t, requireField(t, rule, "ToPort")); got != port {
-		t.Fatalf("expected ToPort %s, got %q", port, got)
-	}
-	assertRef(t, requireField(t, rule, "CidrIp"), cidrRef)
 }
 
 func loadTemplate(t *testing.T) *yaml.Node {
