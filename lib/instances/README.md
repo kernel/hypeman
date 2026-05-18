@@ -21,7 +21,6 @@ Manages VM instance lifecycle across multiple hypervisors (Cloud Hypervisor, QEM
 - `Paused` - VM paused (CH native)
 - `Shutdown` - VM shutdown, VMM exists (CH native)
 - `Standby` - No VMM, snapshot exists (can restore)
-- `Template` - Standby snapshot promoted to fork-only parent; cannot wake while live forks exist
 
 ### Why Config Disk? (configdisk.go)
 
@@ -54,8 +53,6 @@ Manages VM instance lifecycle across multiple hypervisors (Cloud Hypervisor, QEM
 ```
 
 `metadata.json` also carries controller-owned auto-standby runtime timestamps when that feature is enabled, so idle countdown state can survive Hypeman restarts.
-
-`metadata.json` also stores `IsTemplate`, `ForkOfTemplate`, and `HotPagesPath`. `HotPagesPath` is reserved for the UFFD prefetch path and is cleared on demote.
 
 **Benefits:**
 - Content-addressable IDs (ULID = time-ordered)
@@ -102,16 +99,6 @@ Any State → Stopped
 1. Stop VMM (if running)
 2. Delete all instance data
 ```
-
-**PromoteToTemplate / DemoteTemplate:**
-```
-Standby → Template (promote)
-Template → Standby (demote; refused while live forks exist)
-```
-- Promotion is an explicit caller step; forking a Standby does not auto-promote.
-- A Template cannot be restored or deleted directly. RestoreInstance on a Template returns an error — callers must DemoteTemplate first.
-- Live forks are counted at read time by scanning `ForkOfTemplate` across instances; both Demote and Delete refuse while that count is > 0.
-- Forks of a Template are plain instances (Standby by default). They record `ForkOfTemplate = parent.Id` but do not inherit `IsTemplate` or `HotPagesPath`.
 
 ## Snapshot Optimization (standby.go, restore.go)
 
