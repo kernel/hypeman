@@ -11,6 +11,7 @@ import (
 
 	"github.com/c2h5oh/datasize"
 	"github.com/kernel/hypeman/lib/guest"
+	"github.com/kernel/hypeman/lib/healthcheck"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/instances"
 	"github.com/kernel/hypeman/lib/logger"
@@ -285,6 +286,13 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 			Message: err.Error(),
 		}, nil
 	}
+	healthCheck, err := toDomainHealthCheck(request.Body.HealthCheck)
+	if err != nil {
+		return oapi.CreateInstance400JSONResponse{
+			Code:    "invalid_health_check",
+			Message: err.Error(),
+		}, nil
+	}
 
 	domainReq := instances.CreateInstanceRequest{
 		Name:                     request.Body.Name,
@@ -310,6 +318,7 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		SkipKernelHeaders:        request.Body.SkipKernelHeaders != nil && *request.Body.SkipKernelHeaders,
 		SkipGuestAgent:           request.Body.SkipGuestAgent != nil && *request.Body.SkipGuestAgent,
 		AutoStandby:              autoStandby,
+		HealthCheck:              healthCheck,
 	}
 	if request.Body.SnapshotPolicy != nil {
 		snapshotPolicy, err := toInstanceSnapshotPolicy(*request.Body.SnapshotPolicy)
@@ -954,10 +963,18 @@ func (s *ApiService) UpdateInstance(ctx context.Context, request oapi.UpdateInst
 			Message: err.Error(),
 		}, nil
 	}
+	healthCheck, err := toDomainHealthCheck(request.Body.HealthCheck)
+	if err != nil {
+		return oapi.UpdateInstance400JSONResponse{
+			Code:    "invalid_health_check",
+			Message: err.Error(),
+		}, nil
+	}
 
 	result, err := s.InstanceManager.UpdateInstance(ctx, inst.Id, instances.UpdateInstanceRequest{
 		Env:         env,
 		AutoStandby: autoStandby,
+		HealthCheck: healthCheck,
 	})
 	if err != nil {
 		switch {
@@ -1089,6 +1106,8 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 		oapiInst.SnapshotPolicy = &oapiPolicy
 	}
 	oapiInst.AutoStandby = toOAPIAutoStandbyPolicy(inst.AutoStandby)
+	oapiInst.HealthCheck = toOAPIHealthCheck(inst.HealthCheck)
+	oapiInst.HealthStatus = toOAPIHealthStatus(healthcheck.Snapshot(inst.HealthCheck, string(inst.State), inst.HealthCheckRuntime))
 
 	// Convert volume attachments
 	if len(inst.Volumes) > 0 {

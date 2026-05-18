@@ -374,6 +374,7 @@ func (m *manager) createInstance(
 		SkipGuestAgent:           req.SkipGuestAgent,
 		SnapshotPolicy:           cloneSnapshotPolicy(req.SnapshotPolicy),
 		AutoStandby:              cloneAutoStandbyPolicy(req.AutoStandby),
+		HealthCheck:              cloneHealthCheckPolicy(req.HealthCheck),
 	}
 
 	// 12. Ensure directories
@@ -629,6 +630,14 @@ func validateCreateRequest(req *CreateInstanceRequest) error {
 		return err
 	}
 	req.AutoStandby = normalizedAutoStandby
+	normalizedHealthCheck, err := normalizeHealthCheckPolicy(req.HealthCheck)
+	if err != nil {
+		return err
+	}
+	req.HealthCheck = normalizedHealthCheck
+	if err := validateHealthCheckCompatibility(req.HealthCheck, req.NetworkEnabled, req.SkipGuestAgent); err != nil {
+		return err
+	}
 
 	// Validate volume attachments
 	if err := validateVolumeAttachments(req.Volumes); err != nil {

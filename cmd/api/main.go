@@ -565,6 +565,12 @@ func run() error {
 			return app.AutoStandbyController.Run(gctx)
 		})
 	}
+	if app.HealthCheckController != nil {
+		grp.Go(func() error {
+			logger.Info("starting health check controller")
+			return app.HealthCheckController.Run(gctx)
+		})
+	}
 
 	// Run the server
 	grp.Go(func() error {

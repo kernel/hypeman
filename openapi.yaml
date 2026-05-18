@@ -235,6 +235,146 @@ components:
             maximum: 65535
           example: [22, 9000]
 
+    HealthCheckHTTP:
+      type: object
+      required: [port]
+      properties:
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+          description: Port to probe on the instance network address.
+          example: 8080
+        path:
+          type: string
+          description: HTTP path to request.
+          default: "/"
+          example: "/healthz"
+        scheme:
+          type: string
+          enum: [http, https]
+          default: http
+          description: HTTP scheme to use for the probe.
+          example: http
+        expected_status:
+          type: integer
+          minimum: 100
+          maximum: 599
+          default: 200
+          description: Exact status code required for a successful probe.
+          example: 200
+
+    HealthCheckTCP:
+      type: object
+      required: [port]
+      properties:
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+          description: Port to open on the instance network address.
+          example: 5432
+
+    HealthCheckExec:
+      type: object
+      required: [command]
+      properties:
+        command:
+          type: array
+          minItems: 1
+          items:
+            type: string
+          description: Command and arguments to run inside the guest after guest-agent readiness.
+          example: ["curl", "-f", "http://localhost:4318/"]
+        working_dir:
+          type: string
+          description: Optional working directory for the command.
+          example: /app
+
+    HealthCheck:
+      type: object
+      description: Workload health check policy. Health is reported separately from instance lifecycle state.
+      properties:
+        type:
+          type: string
+          enum: [none, http, tcp, exec]
+          default: none
+          description: Probe type. Omit health_check or set type=none to disable health checks.
+        interval:
+          type: string
+          description: Delay between checks as a Go duration.
+          default: "10s"
+          example: "10s"
+        timeout:
+          type: string
+          description: Per-check timeout as a Go duration.
+          default: "2s"
+          example: "2s"
+        start_period:
+          type: string
+          description: Startup grace period before failures can mark the workload unhealthy.
+          default: "30s"
+          example: "30s"
+        failure_threshold:
+          type: integer
+          minimum: 1
+          default: 3
+          description: Consecutive failed checks required to mark the workload unhealthy.
+          example: 3
+        success_threshold:
+          type: integer
+          minimum: 1
+          default: 1
+          description: Consecutive successful checks required to mark the workload healthy.
+          example: 1
+        http:
+          $ref: "#/components/schemas/HealthCheckHTTP"
+        tcp:
+          $ref: "#/components/schemas/HealthCheckTCP"
+        exec:
+          $ref: "#/components/schemas/HealthCheckExec"
+
+    InstanceHealthStatus:
+      type: object
+      required: [status, consecutive_successes, consecutive_failures]
+      properties:
+        status:
+          type: string
+          enum: [disabled, starting, healthy, unhealthy, unknown]
+          description: Current workload health status.
+          example: healthy
+        consecutive_successes:
+          type: integer
+          description: Consecutive successful checks in the current health window.
+          example: 4
+        consecutive_failures:
+          type: integer
+          description: Consecutive failed checks in the current health window.
+          example: 0
+        last_checked_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Most recent check completion time.
+          example: "2026-05-16T01:00:00Z"
+        last_success_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Most recent successful check completion time.
+          example: "2026-05-16T01:00:00Z"
+        last_failure_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Most recent failed check completion time.
+          example: "2026-05-16T00:59:50Z"
+        last_error:
+          type: string
+          nullable: true
+          description: Truncated error from the most recent failed check.
+          example: "connection refused"
+
     AutoStandbyStatus:
       type: object
       required: [supported, configured, enabled, eligible, status, reason, active_inbound_connections, tracking_mode]
@@ -316,6 +456,8 @@ components:
             OUTBOUND_OPENAI_KEY: new-rotated-key-456
         auto_standby:
           $ref: "#/components/schemas/AutoStandbyPolicy"
+        health_check:
+          $ref: "#/components/schemas/HealthCheck"
 
     CreateInstanceRequest:
       type: object
@@ -424,6 +566,8 @@ components:
           $ref: "#/components/schemas/SnapshotPolicy"
         auto_standby:
           $ref: "#/components/schemas/AutoStandbyPolicy"
+        health_check:
+          $ref: "#/components/schemas/HealthCheck"
         skip_kernel_headers:
           type: boolean
           description: |
@@ -878,6 +1022,10 @@ components:
           $ref: "#/components/schemas/SnapshotPolicy"
         auto_standby:
           $ref: "#/components/schemas/AutoStandbyPolicy"
+        health_check:
+          $ref: "#/components/schemas/HealthCheck"
+        health_status:
+          $ref: "#/components/schemas/InstanceHealthStatus"
         phase_durations_ms:
           type: object
           description: |

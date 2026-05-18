@@ -219,6 +219,8 @@ func TestLifecycleEventMetrics_ObserveSubscribersQueueDepthAndDrops(t *testing.T
 			assert.Equal(t, int64(1), point.Value)
 		case string(LifecycleEventConsumerAutoStandby):
 			assert.Equal(t, int64(1), point.Value)
+		case string(LifecycleEventConsumerHealthCheck):
+			assert.Equal(t, int64(0), point.Value)
 		default:
 			t.Fatalf("unexpected consumer label: %s", metricLabel(t, point.Attributes, "consumer"))
 		}
@@ -234,6 +236,8 @@ func TestLifecycleEventMetrics_ObserveSubscribersQueueDepthAndDrops(t *testing.T
 			assert.Equal(t, int64(m.lifecycleEvents.bufferSize), point.Value)
 		case string(LifecycleEventConsumerAutoStandby):
 			assert.Equal(t, int64(m.lifecycleEvents.bufferSize), point.Value)
+		case string(LifecycleEventConsumerHealthCheck):
+			assert.Equal(t, int64(0), point.Value)
 		default:
 			t.Fatalf("unexpected consumer label: %s", metricLabel(t, point.Attributes, "consumer"))
 		}

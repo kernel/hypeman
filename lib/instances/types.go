@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/autostandby"
+	"github.com/kernel/hypeman/lib/healthcheck"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/instances/phasetracking"
 	"github.com/kernel/hypeman/lib/snapshot"
@@ -148,6 +149,9 @@ type StoredMetadata struct {
 	// Automatic standby policy driven by host-observed inbound TCP activity.
 	AutoStandby *autostandby.Policy
 
+	// Workload health check policy. Health is reported separately from lifecycle state.
+	HealthCheck *healthcheck.Policy
+
 	// Shutdown configuration
 	StopTimeout int // Grace period in seconds for graceful stop (0 = use default 5s)
 
@@ -171,6 +175,7 @@ type Instance struct {
 	StateError          *string // Error message if state couldn't be determined (non-nil when State=Unknown)
 	HasSnapshot         bool    // Derived from filesystem check
 	BootMarkersHydrated bool    // True when missing boot markers were hydrated from logs in this read
+	HealthCheckRuntime  *healthcheck.Runtime
 }
 
 // GetHypervisorType returns the hypervisor type as a string.
@@ -237,6 +242,7 @@ type CreateInstanceRequest struct {
 	SkipGuestAgent           bool                        // Skip guest-agent installation (disables exec/stat API)
 	SnapshotPolicy           *SnapshotPolicy             // Optional snapshot policy defaults for this instance
 	AutoStandby              *autostandby.Policy         // Optional automatic standby policy
+	HealthCheck              *healthcheck.Policy         // Optional workload health check policy
 }
 
 // StartInstanceRequest is the domain request for starting a stopped instance
@@ -249,6 +255,7 @@ type StartInstanceRequest struct {
 type UpdateInstanceRequest struct {
 	Env         map[string]string   // Updated environment variables (merged with existing)
 	AutoStandby *autostandby.Policy // Replaces the persisted auto-standby policy when non-nil
+	HealthCheck *healthcheck.Policy // Replaces the persisted health check policy when non-nil
 }
 
 // ForkInstanceRequest is the domain request for forking an instance.

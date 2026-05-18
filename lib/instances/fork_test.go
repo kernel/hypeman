@@ -16,6 +16,7 @@ import (
 
 	"github.com/kernel/hypeman/lib/autostandby"
 	"github.com/kernel/hypeman/lib/guest"
+	"github.com/kernel/hypeman/lib/healthcheck"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/instances/phasetracking"
@@ -306,6 +307,13 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 			IgnoreSourceCIDRs:      []string{"10.0.0.0/8"},
 			IgnoreDestinationPorts: []uint16{22},
 		},
+		HealthCheck: &healthcheck.Policy{
+			Type: healthcheck.TypeHTTP,
+			HTTP: &healthcheck.HTTPCheck{
+				Port: 80,
+				Path: "/",
+			},
+		},
 		SnapshotPolicy: &SnapshotPolicy{
 			Compression: &snapshotstore.SnapshotCompressionConfig{
 				Enabled:   true,
@@ -336,6 +344,7 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 	*cloned.ExitCode = 42
 	cloned.AutoStandby.IgnoreSourceCIDRs[0] = "192.168.0.0/16"
 	cloned.AutoStandby.IgnoreDestinationPorts[0] = 443
+	cloned.HealthCheck.HTTP.Path = "/healthz"
 	*cloned.SnapshotPolicy.Compression.Level = 9
 	now := time.Now()
 	*cloned.PendingStandbyCompression.Policy.Level = 1
@@ -353,6 +362,7 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 	require.Equal(t, 17, *src.ExitCode)
 	require.Equal(t, "10.0.0.0/8", src.AutoStandby.IgnoreSourceCIDRs[0])
 	require.Equal(t, uint16(22), src.AutoStandby.IgnoreDestinationPorts[0])
+	require.Equal(t, "/", src.HealthCheck.HTTP.Path)
 	require.Equal(t, 5, *src.SnapshotPolicy.Compression.Level)
 	require.NotNil(t, src.PendingStandbyCompression)
 	require.NotNil(t, src.PendingStandbyCompression.Policy.Level)

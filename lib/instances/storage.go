@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/autostandby"
+	"github.com/kernel/hypeman/lib/healthcheck"
 	"github.com/kernel/hypeman/lib/images"
 )
 
@@ -38,6 +39,7 @@ const (
 type metadata struct {
 	StoredMetadata
 	AutoStandbyRuntime *autostandby.Runtime `json:"auto_standby_runtime,omitempty"`
+	HealthCheckRuntime *healthcheck.Runtime `json:"health_check_runtime,omitempty"`
 }
 
 // ensureDirectories creates the instance directory structure
@@ -86,8 +88,27 @@ func (m *manager) saveMetadata(meta *metadata) error {
 		return fmt.Errorf("marshal metadata: %w", err)
 	}
 
-	if err := os.WriteFile(metaPath, data, 0644); err != nil {
-		return fmt.Errorf("write metadata: %w", err)
+	tmp, err := os.CreateTemp(filepath.Dir(metaPath), ".metadata-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temporary metadata: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return fmt.Errorf("write temporary metadata: %w", err)
+	}
+	if err := tmp.Chmod(0644); err != nil {
+		tmp.Close()
+		return fmt.Errorf("chmod temporary metadata: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temporary metadata: %w", err)
+	}
+
+	if err := os.Rename(tmpPath, metaPath); err != nil {
+		return fmt.Errorf("rename metadata: %w", err)
 	}
 
 	m.syncAdmissionAllocation(meta)

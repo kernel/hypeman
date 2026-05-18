@@ -71,6 +71,7 @@ func initializeApp() (*application, func(), error) {
 		return nil, nil, err
 	}
 	autostandbyController := providers.ProvideAutoStandbyController(instancesManager, logger)
+	healthcheckController := providers.ProvideHealthCheckController(instancesManager, logger)
 	vm_metricsManager, err := providers.ProvideVMMetricsManager(instancesManager, config, logger)
 	if err != nil {
 		return nil, nil, err
@@ -95,6 +96,7 @@ func initializeApp() (*application, func(), error) {
 		ResourceManager:       resourcesManager,
 		GuestMemoryController: controller,
 		AutoStandbyController: autostandbyController,
+		HealthCheckController: healthcheckController,
 		VMMetricsManager:      vm_metricsManager,
 		Registry:              registry,
 		ApiService:            apiService,
@@ -121,6 +123,7 @@ type application struct {
 	ResourceManager       *resources.Manager
 	GuestMemoryController guestmemory.Controller
 	AutoStandbyController *autostandby.Controller
+	HealthCheckController *instances.HealthCheckController
 	VMMetricsManager      *vm_metrics.Manager
 	Registry              *registry.Registry
 	ApiService            *api.ApiService

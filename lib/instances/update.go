@@ -36,6 +36,11 @@ func (m *manager) updateInstance(ctx context.Context, id string, req UpdateInsta
 		return nil, err
 	}
 	req.AutoStandby = normalizedAutoStandby
+	normalizedHealthCheck, err := normalizeHealthCheckPolicy(req.HealthCheck)
+	if err != nil {
+		return nil, err
+	}
+	req.HealthCheck = normalizedHealthCheck
 
 	if err := validateUpdateInstanceRequest(meta, req); err != nil {
 		return nil, err
@@ -46,6 +51,10 @@ func (m *manager) updateInstance(ctx context.Context, id string, req UpdateInsta
 	nextMeta := deepCopyMetadata(meta)
 	if req.AutoStandby != nil {
 		nextMeta.AutoStandby = cloneAutoStandbyPolicy(req.AutoStandby)
+	}
+	if req.HealthCheck != nil {
+		nextMeta.HealthCheck = cloneHealthCheckPolicy(req.HealthCheck)
+		nextMeta.HealthCheckRuntime = nil
 	}
 	if len(req.Env) == 0 {
 		if err := m.saveMetadata(nextMeta); err != nil {
@@ -94,8 +103,16 @@ func (m *manager) updateInstance(ctx context.Context, id string, req UpdateInsta
 }
 
 func validateUpdateInstanceRequest(meta *metadata, req UpdateInstanceRequest) error {
-	if len(req.Env) == 0 && req.AutoStandby == nil {
-		return fmt.Errorf("%w: request must include env and/or auto_standby", ErrInvalidRequest)
+	if len(req.Env) == 0 && req.AutoStandby == nil && req.HealthCheck == nil {
+		return fmt.Errorf("%w: request must include env, auto_standby, and/or health_check", ErrInvalidRequest)
+	}
+	if req.HealthCheck != nil {
+		if meta == nil {
+			return fmt.Errorf("%w: instance metadata is required", ErrInvalidRequest)
+		}
+		if err := validateHealthCheckCompatibility(req.HealthCheck, meta.NetworkEnabled, meta.SkipGuestAgent); err != nil {
+			return err
+		}
 	}
 	if len(req.Env) == 0 {
 		return nil

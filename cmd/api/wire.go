@@ -41,6 +41,7 @@ type application struct {
 	ResourceManager       *resources.Manager
 	GuestMemoryController guestmemory.Controller
 	AutoStandbyController *autostandby.Controller
+	HealthCheckController *instances.HealthCheckController
 	VMMetricsManager      *vm_metrics.Manager
 	Registry              *registry.Registry
 	ApiService            *api.ApiService
@@ -64,6 +65,7 @@ func initializeApp() (*application, func(), error) {
 		providers.ProvideResourceManager,
 		providers.ProvideGuestMemoryController,
 		providers.ProvideAutoStandbyController,
+		providers.ProvideHealthCheckController,
 		providers.ProvideVMMetricsManager,
 		providers.ProvideRegistry,
 		api.New,
