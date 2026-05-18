@@ -492,7 +492,11 @@ function envString(name: string, fallback: string): string {
 }
 
 function requiredEnv(name: string, fallback: string): string {
-  return envString(name, fallback);
+  const value = envString(name, fallback);
+  if (value === '') {
+    fail(`${name} is required`);
+  }
+  return value;
 }
 
 function intEnv(name: string, fallback: number): number {
