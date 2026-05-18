@@ -1517,17 +1517,12 @@ func TestStateTransitions(t *testing.T) {
 		{"Standby to Paused", StateStandby, StatePaused, false},
 		{"Shutdown to Stopped", StateShutdown, StateStopped, false},
 		{"Standby to Stopped", StateStandby, StateStopped, false},
-		{"Standby to Template", StateStandby, StateTemplate, false},
-		{"Template to Standby", StateTemplate, StateStandby, false},
-		{"Template to Stopped", StateTemplate, StateStopped, false},
 		// Invalid transitions
 		{"Running to Standby", StateRunning, StateStandby, true},
 		{"Stopped to Running", StateStopped, StateRunning, true},
 		{"Stopped to Initializing", StateStopped, StateInitializing, true},
 		{"Standby to Running", StateStandby, StateRunning, true},
 		{"Initializing to Paused", StateInitializing, StatePaused, true},
-		{"Template to Running", StateTemplate, StateRunning, true},
-		{"Template to Paused", StateTemplate, StatePaused, true},
 	}
 
 	for _, tt := range tests {

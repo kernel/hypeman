@@ -73,12 +73,9 @@ func (m *manager) deriveStateWithOptions(ctx context.Context, stored *StoredMeta
 
 	// 1. Check if socket exists
 	if _, err := os.Stat(stored.SocketPath); err != nil {
-		// No socket - check for snapshot to distinguish Stopped vs Standby/Template
+		// No socket - check for snapshot to distinguish Stopped vs Standby
 		m.invalidateCachedHypervisorState(stored.Id)
 		if m.hasSnapshot(stored.DataDir) {
-			if stored.IsTemplate {
-				return stateResult{State: StateTemplate}
-			}
 			return stateResult{State: StateStandby}
 		}
 		return stateResult{State: StateStopped}
@@ -825,29 +822,6 @@ func (m *manager) listInstances(ctx context.Context) ([]Instance, error) {
 	log.DebugContext(ctx, "listed instances", "count", len(result))
 	span.SetAttributes(attribute.Int("instances", len(result)))
 	return result, nil
-}
-
-// countTemplateForks returns the number of instances with ForkOfTemplate==templateID.
-// Bubbles metadata load errors: this count guards DeleteInstance and
-// DemoteTemplate, and silently skipping an unreadable file would risk
-// undercounting forks and freeing a template whose pages are still mapped.
-func (m *manager) countTemplateForks(templateID string) (int, error) {
-	files, err := m.listMetadataFiles()
-	if err != nil {
-		return 0, err
-	}
-	count := 0
-	for _, file := range files {
-		id := filepath.Base(filepath.Dir(file))
-		meta, err := m.loadMetadata(id)
-		if err != nil {
-			return 0, fmt.Errorf("load metadata for %s while counting forks of %s: %w", id, templateID, err)
-		}
-		if meta.ForkOfTemplate == templateID {
-			count++
-		}
-	}
-	return count, nil
 }
 
 func (m *manager) findInstanceMetadataByExactName(name string) (*metadata, error) {

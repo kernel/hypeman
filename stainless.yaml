@@ -74,6 +74,11 @@ resources:
     models:
       auto_standby_policy: "#/components/schemas/AutoStandbyPolicy"
       auto_standby_status: "#/components/schemas/AutoStandbyStatus"
+      health_check: "#/components/schemas/HealthCheck"
+      health_check_http: "#/components/schemas/HealthCheckHTTP"
+      health_check_tcp: "#/components/schemas/HealthCheckTCP"
+      health_check_exec: "#/components/schemas/HealthCheckExec"
+      instance_health_status: "#/components/schemas/InstanceHealthStatus"
       snapshot_policy: "#/components/schemas/SnapshotPolicy"
       standby_instance_request: "#/components/schemas/StandbyInstanceRequest"
       snapshot_schedule: "#/components/schemas/SnapshotSchedule"
@@ -93,8 +98,6 @@ resources:
       delete: delete /instances/{id}
       standby: post /instances/{id}/standby
       restore: post /instances/{id}/restore
-      promote_template: post /instances/{id}/promote-template
-      demote_template: post /instances/{id}/demote-template
       fork: post /instances/{id}/fork
       start: post /instances/{id}/start
       stop: post /instances/{id}/stop
