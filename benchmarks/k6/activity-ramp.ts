@@ -139,7 +139,7 @@ export function teardown(data: { runId: string }) {
 
 function loadConfig(): Config {
   const baseUrl = trimRight(requiredEnv('HYPEMAN_BASE_URL', 'http://127.0.0.1:8080'), '/');
-  const ingressHostPort = intEnv('HYPEMAN_INGRESS_HOST_PORT', 8081);
+  const ingressHostPort = intEnv('HYPEMAN_INGRESS_HOST_PORT', 80);
 
   return {
     baseUrl,
@@ -297,7 +297,7 @@ function createInstance(name: string, tags: Tags): boolean {
     tags: {
       benchmark: 'activity-ramp',
       hypervisor: config.hypervisor || 'server-default',
-      run_id: config.runId,
+      run_id: tags.run_id,
     },
     skip_kernel_headers: true,
   };
