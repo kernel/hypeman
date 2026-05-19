@@ -4,12 +4,16 @@ package instances
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -26,6 +30,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/vishvananda/netlink"
+	"golang.org/x/sys/unix"
 )
 
 func setupTestManagerForFirecrackerWithNetworkConfig(t *testing.T, networkCfg config.NetworkConfig) (*manager, string) {
@@ -550,4 +555,255 @@ func TestFirecrackerSnapshotFeature(t *testing.T) {
 		snapshot:   "fc-snapshot-1",
 		forkName:   "fc-snapshot-fork",
 	})
+}
+
+// TestFirecrackerForkIsolation verifies CoW isolation between a firecracker
+// source's standby snapshot and a fork derived from it. A fork must end up
+// with its own mem-file inode (reflink-cloned, not hardlinked) so that
+// mutating the fork — including taking a diff snapshot of the fork after
+// divergence — never alters the source's snapshot bytes. This guards against
+// the family of hazards where fan-out optimizations inadvertently share an
+// inode with the source and let later writes propagate back through it.
+//
+// Test name is kept short on purpose: t.TempDir() embeds the test name, and
+// firecracker's API socket path under that tempdir must fit within SUN_LEN
+// (108 bytes on Linux).
+func TestFirecrackerForkIsolation(t *testing.T) {
+	t.Parallel()
+	requireFirecrackerIntegrationPrereqs(t)
+
+	mgr, tmpDir := setupTestManagerForFirecrackerNoNetwork(t)
+	ctx := context.Background()
+	p := paths.New(tmpDir)
+
+	imageManager, err := images.NewManager(p, 1, nil)
+	require.NoError(t, err)
+	createNginxImageAndWait(t, ctx, imageManager)
+
+	systemManager := system.NewManager(p)
+	require.NoError(t, systemManager.EnsureSystemFiles(ctx))
+
+	const guestMemBytes = int64(1024 * 1024 * 1024)
+
+	source, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
+		Name:           "fc-fork-isolation-src",
+		Image:          integrationTestImageRef(t, "docker.io/library/nginx:alpine"),
+		Size:           guestMemBytes,
+		OverlaySize:    10 * 1024 * 1024 * 1024,
+		Vcpus:          1,
+		NetworkEnabled: false,
+		Hypervisor:     hypervisor.TypeFirecracker,
+	})
+	require.NoError(t, err)
+	sourceID := source.Id
+	sourceDeleted := false
+	t.Cleanup(func() {
+		if !sourceDeleted {
+			_ = mgr.DeleteInstance(context.Background(), sourceID)
+		}
+	})
+
+	source, err = waitForInstanceState(ctx, mgr, sourceID, StateRunning, integrationTestTimeout(20*time.Second))
+	require.NoError(t, err)
+	require.NoError(t, waitForExecAgent(ctx, mgr, sourceID, 30*time.Second))
+
+	const sourceSentinelPath = "/tmp/source-sentinel.txt"
+	const sourceSentinelContents = "source-only"
+	output, exitCode, err := execCommand(ctx, source, "sh", "-c",
+		fmt.Sprintf("printf %q > %s && sync", sourceSentinelContents, sourceSentinelPath))
+	require.NoError(t, err)
+	require.Equalf(t, 0, exitCode, "write source sentinel: %s", output)
+
+	// Source standby produces a full firecracker snapshot. We hold the source
+	// in Standby for the entire fork lifecycle below so the snapshot mem-file
+	// stays at snapshot-latest/memory and is comparable across phases.
+	source, err = mgr.StandbyInstance(ctx, sourceID, StandbyInstanceRequest{})
+	require.NoError(t, err)
+	require.Equal(t, StateStandby, source.State)
+	require.True(t, source.HasSnapshot)
+
+	sourceMemPath := filepath.Join(p.InstanceSnapshotLatest(sourceID), "memory")
+	sourceBefore, err := fingerprintFile(sourceMemPath)
+	require.NoError(t, err, "fingerprint source mem-file after standby")
+
+	reflinkOK := probeReflinkSupport(t, tmpDir)
+	var statBefore syscall.Statfs_t
+	require.NoError(t, syscall.Statfs(tmpDir, &statBefore))
+	freeBefore := int64(statBefore.Bavail) * statBefore.Bsize
+
+	fork, err := mgr.ForkInstance(ctx, sourceID, ForkInstanceRequest{
+		Name: "fc-fork-isolation-fork",
+	})
+	require.NoError(t, err)
+	forkID := fork.Id
+	forkDeleted := false
+	t.Cleanup(func() {
+		if !forkDeleted {
+			_ = mgr.DeleteInstance(context.Background(), forkID)
+		}
+	})
+	require.Equal(t, StateStandby, fork.State)
+
+	// Fork's mem-file must be a separate inode from the source's. Hardlinking
+	// or symlinking would share the inode and allow later writes to corrupt
+	// the source.
+	forkMemPath := filepath.Join(p.InstanceSnapshotLatest(forkID), "memory")
+	forkAfterCreate, err := fingerprintFile(forkMemPath)
+	require.NoError(t, err, "fingerprint fork mem-file after fork")
+	require.NotEqual(t, sourceBefore.inode, forkAfterCreate.inode,
+		"fork mem-file must not share an inode with the source")
+
+	sourceAfterFork, err := fingerprintFile(sourceMemPath)
+	require.NoError(t, err)
+	require.Equal(t, sourceBefore.inode, sourceAfterFork.inode,
+		"source mem-file inode must not change after fork creation")
+	require.Equal(t, sourceBefore.sha, sourceAfterFork.sha,
+		"source mem-file bytes must not change after fork creation")
+
+	// Restore the fork: it should see the source's pre-fork guest state.
+	fork, err = mgr.RestoreInstance(ctx, forkID)
+	require.NoError(t, err)
+	fork, err = waitForInstanceState(ctx, mgr, forkID, StateRunning, integrationTestTimeout(20*time.Second))
+	require.NoError(t, err)
+	require.NoError(t, waitForExecAgent(ctx, mgr, forkID, 30*time.Second))
+
+	output, exitCode, err = execCommand(ctx, fork, "cat", sourceSentinelPath)
+	require.NoError(t, err)
+	require.Equal(t, 0, exitCode)
+	require.Equal(t, sourceSentinelContents, strings.TrimSpace(output))
+
+	// Diverge the fork: write a fork-only sentinel, then standby the fork.
+	// Firecracker's second standby produces a diff snapshot against the fork's
+	// retained base — this is the operation most likely to corrupt the source
+	// if the fork's mem-file were sharing the source's inode.
+	const forkSentinelPath = "/tmp/fork-sentinel.txt"
+	const forkSentinelContents = "fork-only"
+	output, exitCode, err = execCommand(ctx, fork, "sh", "-c",
+		fmt.Sprintf("printf %q > %s && sync", forkSentinelContents, forkSentinelPath))
+	require.NoError(t, err)
+	require.Equalf(t, 0, exitCode, "write fork sentinel: %s", output)
+
+	fork, err = mgr.StandbyInstance(ctx, forkID, StandbyInstanceRequest{})
+	require.NoError(t, err)
+	require.Equal(t, StateStandby, fork.State)
+
+	// Source mem-file must STILL be byte-identical after the fork's full
+	// lifecycle (restore + write + standby/diff-snapshot).
+	sourceAfterForkStandby, err := fingerprintFile(sourceMemPath)
+	require.NoError(t, err)
+	require.Equal(t, sourceBefore.inode, sourceAfterForkStandby.inode,
+		"source mem-file inode must not change after fork standby")
+	require.Equal(t, sourceBefore.sha, sourceAfterForkStandby.sha,
+		"source mem-file bytes must not change after fork standby")
+
+	// Soft disk-usage assertion: on reflink-capable filesystems, the fork
+	// lifecycle should consume substantially less than a full guest-mem copy
+	// because pages are shared CoW. Gated on FICLONE probe — ext4 etc. fall
+	// back to sparse copy which produces full physical copies, so the bound
+	// would not hold there.
+	var statAfter syscall.Statfs_t
+	require.NoError(t, syscall.Statfs(tmpDir, &statAfter))
+	freeAfter := int64(statAfter.Bavail) * statAfter.Bsize
+	consumed := freeBefore - freeAfter
+	t.Logf("fork lifecycle disk-usage delta: consumed=%d guestMem=%d reflink=%v",
+		consumed, guestMemBytes, reflinkOK)
+	if reflinkOK {
+		assert.Less(t, consumed, guestMemBytes/2,
+			"fork lifecycle should consume substantially less than full guest mem on reflink-capable fs")
+	}
+
+	// Delete the fork — its inode goes away. On a reflink-capable fs, deleting
+	// a CoW clone must not affect the source's blocks. Verify the source
+	// mem-file is still readable and byte-identical after the unlink.
+	require.NoError(t, mgr.DeleteInstance(ctx, forkID))
+	forkDeleted = true
+
+	sourceAfterForkDelete, err := fingerprintFile(sourceMemPath)
+	require.NoError(t, err, "source mem-file should still be readable after fork delete")
+	require.Equal(t, sourceBefore.inode, sourceAfterForkDelete.inode,
+		"source mem-file inode must not change after fork delete")
+	require.Equal(t, sourceBefore.sha, sourceAfterForkDelete.sha,
+		"source mem-file bytes must not change after fork delete")
+
+	// Strongest end-to-end check: the source snapshot must still be restorable
+	// after the fork's full lifecycle. Verify the source's sentinel survived
+	// and the fork-only sentinel did not leak across.
+	source, err = mgr.RestoreInstance(ctx, sourceID)
+	require.NoError(t, err)
+	source, err = waitForInstanceState(ctx, mgr, sourceID, StateRunning, integrationTestTimeout(20*time.Second))
+	require.NoError(t, err)
+	require.NoError(t, waitForExecAgent(ctx, mgr, sourceID, 30*time.Second))
+
+	output, exitCode, err = execCommand(ctx, source, "cat", sourceSentinelPath)
+	require.NoError(t, err)
+	require.Equal(t, 0, exitCode)
+	require.Equal(t, sourceSentinelContents, strings.TrimSpace(output))
+
+	_, exitCode, err = execCommand(ctx, source, "test", "-f", forkSentinelPath)
+	require.NoError(t, err)
+	require.NotEqual(t, 0, exitCode, "source must not see the fork-only sentinel")
+
+	require.NoError(t, mgr.DeleteInstance(ctx, sourceID))
+	sourceDeleted = true
+}
+
+type fileFingerprint struct {
+	inode uint64
+	sha   string
+}
+
+func fingerprintFile(path string) (fileFingerprint, error) {
+	st, err := os.Stat(path)
+	if err != nil {
+		return fileFingerprint{}, fmt.Errorf("stat %s: %w", path, err)
+	}
+	sys, ok := st.Sys().(*syscall.Stat_t)
+	if !ok {
+		return fileFingerprint{}, fmt.Errorf("unexpected stat type for %s", path)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return fileFingerprint{}, fmt.Errorf("open %s: %w", path, err)
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return fileFingerprint{}, fmt.Errorf("read %s: %w", path, err)
+	}
+	return fileFingerprint{inode: sys.Ino, sha: hex.EncodeToString(h.Sum(nil))}, nil
+}
+
+// probeReflinkSupport returns true if FICLONE works on the given directory.
+// Used to gate the soft disk-usage assertion: on ext4 and other non-reflink
+// filesystems the copy falls back to sparse full-copy semantics, so the
+// "fork should consume much less than guest-mem" bound would not hold.
+func probeReflinkSupport(t *testing.T, dir string) bool {
+	t.Helper()
+	srcPath := filepath.Join(dir, ".reflink-probe-src")
+	dstPath := filepath.Join(dir, ".reflink-probe-dst")
+	defer func() {
+		_ = os.Remove(srcPath)
+		_ = os.Remove(dstPath)
+	}()
+	if err := os.WriteFile(srcPath, []byte("reflink-probe"), 0644); err != nil {
+		t.Logf("reflink probe: write src failed: %v", err)
+		return false
+	}
+	src, err := os.Open(srcPath)
+	if err != nil {
+		t.Logf("reflink probe: open src failed: %v", err)
+		return false
+	}
+	defer src.Close()
+	dst, err := os.OpenFile(dstPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
+	if err != nil {
+		t.Logf("reflink probe: open dst failed: %v", err)
+		return false
+	}
+	defer dst.Close()
+	if err := unix.IoctlFileClone(int(dst.Fd()), int(src.Fd())); err != nil {
+		t.Logf("reflink probe: FICLONE failed: %v", err)
+		return false
+	}
+	return true
 }
