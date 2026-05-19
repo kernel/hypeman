@@ -17,6 +17,8 @@ Metadata:
           - InstanceType
           - RootVolumeSize
           - DataVolumeSize
+          - DataVolumeIops
+          - DataVolumeThroughput
           - AmiSsmParameter
       - Label:
           default: Access
@@ -51,6 +53,10 @@ Metadata:
         default: Root volume size
       DataVolumeSize:
         default: Hypeman data volume size
+      DataVolumeIops:
+        default: Hypeman data volume IOPS
+      DataVolumeThroughput:
+        default: Hypeman data volume throughput
       HypemanVersion:
         default: Hypeman release
       HypemanBranch:
@@ -109,6 +115,16 @@ Parameters:
     MinValue: 50
     MaxValue: 16384
     Description: Hypeman data EBS volume size in GiB. This volume is formatted as XFS and mounted at /var/lib/hypeman.
+  DataVolumeIops:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^[0-9]+$"
+    Description: Optional provisioned IOPS for the Hypeman data gp3 EBS volume. Leave empty for the EC2 default.
+  DataVolumeThroughput:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^[0-9]+$"
+    Description: Optional provisioned throughput in MiB/s for the Hypeman data gp3 EBS volume. When set, Hypeman disk I/O capacity is configured to the same value.
   HypemanVersion:
     Type: String
     Default: latest
@@ -285,18 +301,34 @@ Resources:
               stack_uuid = event["StackId"].rsplit("/", 1)[-1]
               return f"{event['ResourceProperties']['NamePrefix']}-{stack_uuid}"
 
-          def create_launch_template(name):
+          def put_if_set(payload, key, value):
+              if value:
+                  payload[key] = value
+
+          def create_launch_template(name, props):
               payload = {
                   "Action": "CreateLaunchTemplate",
                   "Version": "2016-11-15",
                   "LaunchTemplateName": name,
                   "LaunchTemplateData.CpuOptions.NestedVirtualization": "enabled",
+                  "LaunchTemplateData.BlockDeviceMapping.1.DeviceName": "/dev/sda1",
+                  "LaunchTemplateData.BlockDeviceMapping.1.Ebs.VolumeSize": props["RootVolumeSize"],
+                  "LaunchTemplateData.BlockDeviceMapping.1.Ebs.VolumeType": "gp3",
+                  "LaunchTemplateData.BlockDeviceMapping.1.Ebs.Encrypted": "true",
+                  "LaunchTemplateData.BlockDeviceMapping.1.Ebs.DeleteOnTermination": "true",
+                  "LaunchTemplateData.BlockDeviceMapping.2.DeviceName": "/dev/sdf",
+                  "LaunchTemplateData.BlockDeviceMapping.2.Ebs.VolumeSize": props["DataVolumeSize"],
+                  "LaunchTemplateData.BlockDeviceMapping.2.Ebs.VolumeType": "gp3",
+                  "LaunchTemplateData.BlockDeviceMapping.2.Ebs.Encrypted": "true",
+                  "LaunchTemplateData.BlockDeviceMapping.2.Ebs.DeleteOnTermination": "true",
                   "TagSpecification.1.ResourceType": "launch-template",
                   "TagSpecification.1.Tag.1.Key": "Name",
                   "TagSpecification.1.Tag.1.Value": name,
                   "TagSpecification.1.Tag.2.Key": "hypeman:deployment",
                   "TagSpecification.1.Tag.2.Value": "aws",
               }
+              put_if_set(payload, "LaunchTemplateData.BlockDeviceMapping.2.Ebs.Iops", props.get("DataVolumeIops", ""))
+              put_if_set(payload, "LaunchTemplateData.BlockDeviceMapping.2.Ebs.Throughput", props.get("DataVolumeThroughput", ""))
               xml = ec2_query(payload)
               root = ET.fromstring(xml)
               launch_template_id = root.find(".//{*}launchTemplateId")
@@ -326,7 +358,7 @@ Resources:
                       return
                   if request_type == "Update":
                       delete_launch_template(physical_id)
-                  data = create_launch_template(launch_template_name(event))
+                  data = create_launch_template(launch_template_name(event), event["ResourceProperties"])
                   send(event, context, "SUCCESS", data, physical_id=data["LaunchTemplateId"])
               except Exception as exc:
                   traceback.print_exc()
@@ -337,6 +369,10 @@ Resources:
     Properties:
       ServiceToken: !GetAtt NestedVirtualizationLaunchTemplateFunction.Arn
       NamePrefix: hypeman
+      RootVolumeSize: !Ref RootVolumeSize
+      DataVolumeSize: !Ref DataVolumeSize
+      DataVolumeIops: !Ref DataVolumeIops
+      DataVolumeThroughput: !Ref DataVolumeThroughput
 
   HypemanHost:
     Type: AWS::EC2::Instance
@@ -351,19 +387,6 @@ Resources:
         - !Ref HypemanSecurityGroup
       IamInstanceProfile: !Ref HypemanInstanceProfile
       KeyName: !If [UseSSH, !Ref KeyName, !Ref AWS::NoValue]
-      BlockDeviceMappings:
-        - DeviceName: /dev/sda1
-          Ebs:
-            VolumeSize: !Ref RootVolumeSize
-            VolumeType: gp3
-            Encrypted: true
-            DeleteOnTermination: true
-        - DeviceName: /dev/sdf
-          Ebs:
-            VolumeSize: !Ref DataVolumeSize
-            VolumeType: gp3
-            Encrypted: true
-            DeleteOnTermination: true
       Tags:
         - Key: Name
           Value: !Sub ${AWS::StackName}-hypeman
@@ -444,6 +467,16 @@ Resources:
             export CLI_VERSION="${HypemanCliVersion}"
           fi
           curl -fsSL https://raw.githubusercontent.com/kernel/hypeman/main/scripts/install.sh | bash
+
+          if [ -n "${DataVolumeThroughput}" ]; then
+            install -d -m 755 /etc/systemd/system/hypeman.service.d
+            cat >/etc/systemd/system/hypeman.service.d/disk-io-capacity.conf <<EOF
+          [Service]
+          Environment="CAPACITY__DISK_IO=${DataVolumeThroughput}MB/s"
+          EOF
+            systemctl daemon-reload
+            systemctl restart hypeman
+          fi
 
           install -d -m 755 /opt/hypeman/deploy
           cat >/usr/local/bin/hypeman-create-token <<'SCRIPT'
