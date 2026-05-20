@@ -156,9 +156,6 @@ function rampStages(cfg: Config): Array<{ duration: string; target: number }> {
 }
 
 function checkRequiredConfig(cfg: Config) {
-  if (!cfg.apiKey) {
-    fail('HYPEMAN_API_KEY is required');
-  }
   if (cfg.maxVUs < cfg.startVUs) {
     fail('HYPEMAN_BENCH_MAX_VUS must be greater than or equal to HYPEMAN_BENCH_START_VUS');
   }
@@ -328,7 +325,7 @@ function probeInstance(name: string, tags: Tags) {
     });
     probeHTTPMs.add(res.timings.duration, tags);
 
-    if (res.status >= 200 && res.status < 500) {
+    if (res.status >= 200 && res.status < 400) {
       probeReadyMs.add(Date.now() - started, tags);
       probeOk.add(true, tags);
       return;
@@ -462,7 +459,11 @@ function envString(name: string, fallback: string): string {
 }
 
 function requiredEnv(name: string, fallback: string): string {
-  return envString(name, fallback);
+  const value = envString(name, fallback);
+  if (value === '') {
+    fail(`${name} is required`);
+  }
+  return value;
 }
 
 function intEnv(name: string, fallback: number): number {
