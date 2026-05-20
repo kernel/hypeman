@@ -328,7 +328,7 @@ function probeInstance(name: string, tags: Tags) {
     });
     probeHTTPMs.add(res.timings.duration, tags);
 
-    if (res.status >= 200 && res.status < 500) {
+    if (res.status >= 200 && res.status < 400) {
       probeReadyMs.add(Date.now() - started, tags);
       probeOk.add(true, tags);
       return;
