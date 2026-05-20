@@ -144,6 +144,9 @@ function loadConfig(): Config {
 }
 
 function rampStages(cfg: Config): Array<{ duration: string; target: number }> {
+  if (cfg.vuStep < 1) {
+    fail('HYPEMAN_BENCH_VU_STEP must be at least 1');
+  }
   const stages: Array<{ duration: string; target: number }> = [];
   for (let target = cfg.startVUs + cfg.vuStep; target <= cfg.maxVUs; target += cfg.vuStep) {
     stages.push({ duration: cfg.stageDuration, target });
