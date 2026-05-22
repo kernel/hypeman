@@ -68,7 +68,7 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 		}
 
 		forked, forkErr := m.forkInstanceFromStoppedOrStandby(ctx, id, req, true)
-		if forkErr == nil {
+		if forkErr == nil && targetState != StateStopped {
 			if err := m.rotateSourceVsockForRestore(ctx, id, forked.Id); err != nil {
 				forkErr = fmt.Errorf("prepare source snapshot for restore: %w", err)
 				if cleanupErr := m.cleanupForkInstanceOnError(ctx, forked.Id); cleanupErr != nil {
