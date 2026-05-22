@@ -68,7 +68,7 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 		}
 
 		forked, forkErr := m.forkInstanceFromStoppedOrStandby(ctx, id, req, true)
-		if forkErr == nil {
+		if forkErr == nil && targetState != StateStopped {
 			if err := m.rotateSourceVsockForRestore(ctx, id, forked.Id); err != nil {
 				forkErr = fmt.Errorf("prepare source snapshot for restore: %w", err)
 				if cleanupErr := m.cleanupForkInstanceOnError(ctx, forked.Id); cleanupErr != nil {
@@ -436,6 +436,14 @@ func (m *manager) applyForkTargetState(ctx context.Context, forkID string, targe
 		case StateStopped:
 			if err := os.RemoveAll(m.paths.InstanceSnapshotLatest(forkID)); err != nil {
 				return nil, fmt.Errorf("remove fork snapshot: %w", err)
+			}
+			meta, err := m.loadMetadata(forkID)
+			if err != nil {
+				return nil, fmt.Errorf("load stopped fork metadata: %w", err)
+			}
+			meta.StoredMetadata.VsockCID = generateVsockCID(forkID)
+			if err := m.saveMetadata(meta); err != nil {
+				return nil, fmt.Errorf("save stopped fork metadata: %w", err)
 			}
 			return returnWithReadiness(m.getInstance(ctx, forkID))
 		}

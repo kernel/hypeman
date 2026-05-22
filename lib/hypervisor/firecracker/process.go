@@ -125,7 +125,7 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 	if err != nil {
 		return 0, nil, fmt.Errorf("load firecracker snapshot: %w", err)
 	}
-	if meta.SnapshotSourceDataDir != "" {
+	if meta.SnapshotSourceDataDir != "" && !meta.RetainSnapshotSourceDataDirAlias {
 		meta.SnapshotSourceDataDir = ""
 		if err := saveRestoreMetadataState(filepath.Dir(socketPath), meta); err != nil {
 			return 0, nil, fmt.Errorf("clear firecracker snapshot source alias metadata: %w", err)

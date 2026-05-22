@@ -466,6 +466,10 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 	}
 	log.DebugContext(ctx, "VM ready", "duration_ms", time.Since(migrationWaitStart).Milliseconds())
 
+	if err := saveVMConfig(filepath.Dir(socketPath), config); err != nil {
+		return 0, nil, fmt.Errorf("save restored vm config: %w", err)
+	}
+
 	cu.Release()
 	log.DebugContext(ctx, "QEMU restore complete", "pid", pid, "total_duration_ms", time.Since(startTime).Milliseconds())
 	return pid, hv, nil

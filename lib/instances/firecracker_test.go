@@ -25,6 +25,7 @@ import (
 	"github.com/kernel/hypeman/lib/network"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/kernel/hypeman/lib/resources"
+	snapshottest "github.com/kernel/hypeman/lib/snapshot/testsupport"
 	"github.com/kernel/hypeman/lib/system"
 	"github.com/kernel/hypeman/lib/volumes"
 	"github.com/stretchr/testify/assert"
@@ -555,6 +556,95 @@ func TestFirecrackerSnapshotFeature(t *testing.T) {
 		snapshot:   "fc-snapshot-1",
 		forkName:   "fc-snapshot-fork",
 	})
+}
+
+func TestFirecrackerWarmForkChain(t *testing.T) {
+	t.Parallel()
+	requireFirecrackerIntegrationPrereqs(t)
+
+	mgr, tmpDir := setupTestManagerForFirecrackerNoNetwork(t)
+	ctx := context.Background()
+	p := paths.New(tmpDir)
+
+	imageManager, err := images.NewManager(p, 1, nil)
+	require.NoError(t, err)
+	imageName := integrationTestImageRef(t, "docker.io/library/alpine:latest")
+	snapshottest.EnsureImageReady(t, ctx, p, imageManager, imageName)
+
+	systemManager := system.NewManager(p)
+	require.NoError(t, systemManager.EnsureSystemFiles(ctx))
+
+	source, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
+		Name:           "fc-warm-chain-src",
+		Image:          imageName,
+		Size:           1024 * 1024 * 1024,
+		OverlaySize:    1024 * 1024 * 1024,
+		Vcpus:          1,
+		NetworkEnabled: false,
+		Hypervisor:     hypervisor.TypeFirecracker,
+		Cmd:            []string{"sleep", "infinity"},
+	})
+	require.NoError(t, err)
+	sourceID := source.Id
+	sourceDeleted := false
+	t.Cleanup(func() {
+		if !sourceDeleted {
+			_ = mgr.DeleteInstance(context.Background(), sourceID)
+		}
+	})
+
+	source, err = waitForInstanceState(ctx, mgr, sourceID, StateRunning, integrationTestTimeout(20*time.Second))
+	require.NoError(t, err)
+	require.NoError(t, waitForExecAgent(ctx, mgr, sourceID, 30*time.Second))
+
+	snapshot, err := mgr.CreateSnapshot(ctx, sourceID, CreateSnapshotRequest{
+		Kind: SnapshotKindStandby,
+		Name: "fc-warm-chain-snap",
+	})
+	require.NoError(t, err)
+	require.Equal(t, SnapshotKindStandby, snapshot.Kind)
+
+	require.NoError(t, mgr.DeleteInstance(ctx, sourceID))
+	sourceDeleted = true
+
+	warm, err := mgr.ForkSnapshot(ctx, snapshot.Id, ForkSnapshotRequest{
+		Name:        "fc-warm-chain-warm",
+		TargetState: StateRunning,
+	})
+	require.NoError(t, err)
+	warmID := warm.Id
+	warmDeleted := false
+	t.Cleanup(func() {
+		if !warmDeleted {
+			_ = mgr.DeleteInstance(context.Background(), warmID)
+		}
+	})
+	warm, err = waitForInstanceState(ctx, mgr, warmID, StateRunning, integrationTestTimeout(20*time.Second))
+	require.NoError(t, err)
+	require.NoError(t, waitForExecAgent(ctx, mgr, warmID, 30*time.Second))
+
+	child, err := mgr.ForkInstance(ctx, warmID, ForkInstanceRequest{
+		Name:        "fc-warm-chain-child",
+		FromRunning: true,
+		TargetState: StateStopped,
+	})
+	require.NoError(t, err)
+	require.Equal(t, StateStopped, child.State)
+	childID := child.Id
+	t.Cleanup(func() { _ = mgr.DeleteInstance(context.Background(), childID) })
+
+	warm, err = mgr.GetInstance(ctx, warmID)
+	require.NoError(t, err)
+	if warm.State != StateRunning {
+		warm, err = waitForInstanceState(ctx, mgr, warmID, StateRunning, integrationTestTimeout(20*time.Second))
+		require.NoError(t, err)
+	}
+	require.Equal(t, StateRunning, warm.State)
+	require.NoError(t, waitForExecAgent(ctx, mgr, warmID, 30*time.Second))
+
+	require.NoError(t, mgr.DeleteInstance(ctx, warmID))
+	warmDeleted = true
+	require.NoError(t, mgr.DeleteSnapshot(ctx, snapshot.Id))
 }
 
 // TestFirecrackerForkIsolation verifies CoW isolation between a firecracker

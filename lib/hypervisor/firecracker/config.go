@@ -101,8 +101,9 @@ type instanceInfo struct {
 }
 
 type restoreMetadata struct {
-	NetworkOverrides      []networkOverride `json:"network_overrides,omitempty"`
-	SnapshotSourceDataDir string            `json:"snapshot_source_data_dir,omitempty"`
+	NetworkOverrides                 []networkOverride `json:"network_overrides,omitempty"`
+	SnapshotSourceDataDir            string            `json:"snapshot_source_data_dir,omitempty"`
+	RetainSnapshotSourceDataDirAlias bool              `json:"retain_snapshot_source_data_dir_alias,omitempty"`
 }
 
 func toBootSource(cfg hypervisor.VMConfig) bootSource {

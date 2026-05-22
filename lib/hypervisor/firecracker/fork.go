@@ -2,6 +2,8 @@ package firecracker
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
@@ -48,9 +50,26 @@ func (s *Starter) PrepareFork(ctx context.Context, req hypervisor.ForkPrepareReq
 		}
 	}
 	if req.SourceDataDir != "" && req.TargetDataDir != "" && req.SourceDataDir != req.TargetDataDir {
-		if meta.SnapshotSourceDataDir != req.SourceDataDir {
-			meta.SnapshotSourceDataDir = req.SourceDataDir
-			changed = true
+		if meta.RetainSnapshotSourceDataDirAlias && meta.SnapshotSourceDataDir != "" {
+			// Keep the upstream source path for snapshot-derived forks. The retained
+			// Firecracker base can still reference that path after later diff snapshots.
+		} else {
+			retainAlias := false
+			if _, err := os.Stat(req.SourceDataDir); err != nil {
+				if os.IsNotExist(err) {
+					retainAlias = true
+				} else {
+					return hypervisor.ForkPrepareResult{}, fmt.Errorf("stat snapshot source data dir %q: %w", req.SourceDataDir, err)
+				}
+			}
+			if meta.SnapshotSourceDataDir != req.SourceDataDir {
+				meta.SnapshotSourceDataDir = req.SourceDataDir
+				changed = true
+			}
+			if meta.RetainSnapshotSourceDataDirAlias != retainAlias {
+				meta.RetainSnapshotSourceDataDirAlias = retainAlias
+				changed = true
+			}
 		}
 	}
 
