@@ -998,3 +998,14 @@ func TestQEMUSnapshotFeature(t *testing.T) {
 		forkName:   "qemu-snapshot-fork",
 	})
 }
+
+func TestQEMUWarmForkChain(t *testing.T) {
+	t.Parallel()
+	requireQEMUUsable(t)
+
+	mgr, tmpDir := setupTestManagerForQEMU(t)
+	runWarmForkChain(t, mgr, tmpDir, warmForkChainConfig{
+		hypervisor: hypervisor.TypeQEMU,
+		namePrefix: "qemu",
+	})
+}

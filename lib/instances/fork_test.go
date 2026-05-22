@@ -22,6 +22,7 @@ import (
 	"github.com/kernel/hypeman/lib/instances/phasetracking"
 	"github.com/kernel/hypeman/lib/paths"
 	snapshotstore "github.com/kernel/hypeman/lib/snapshot"
+	snapshottest "github.com/kernel/hypeman/lib/snapshot/testsupport"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -567,6 +568,117 @@ func TestForkCloudHypervisorFromRunningNetwork(t *testing.T) {
 	assert.Equal(t, phasetracking.PhaseRunning, forked.Phases.Current)
 	assert.Zero(t, forked.Phases.Cumulative[phasetracking.PhaseRunning], "fork should not inherit source's running ledger")
 	assert.Greater(t, sourceAfterFork.Phases.Cumulative[phasetracking.PhaseRunning], int64(0), "source's pre-fork running stint should be cumulated")
+}
+
+func TestCloudHypervisorWarmForkChain(t *testing.T) {
+	t.Parallel()
+	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
+		t.Skip("/dev/kvm not available, skipping on this platform")
+	}
+
+	manager, tmpDir := setupTestManager(t)
+	runWarmForkChain(t, manager, tmpDir, warmForkChainConfig{
+		hypervisor: hypervisor.TypeCloudHypervisor,
+		namePrefix: "ch",
+	})
+}
+
+type warmForkChainConfig struct {
+	hypervisor hypervisor.Type
+	namePrefix string
+}
+
+func runWarmForkChain(t *testing.T, mgr *manager, tmpDir string, cfg warmForkChainConfig) {
+	t.Helper()
+
+	ctx := context.Background()
+	p := paths.New(tmpDir)
+
+	imageManager, err := images.NewManager(p, 1, nil)
+	require.NoError(t, err)
+	imageName := integrationTestImageRef(t, "docker.io/library/alpine:latest")
+	snapshottest.EnsureImageReady(t, ctx, p, imageManager, imageName)
+
+	require.NoError(t, mgr.systemManager.EnsureSystemFiles(ctx))
+
+	source, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
+		Name:           cfg.namePrefix + "-warm-chain-src",
+		Image:          imageName,
+		Size:           1024 * 1024 * 1024,
+		OverlaySize:    1024 * 1024 * 1024,
+		Vcpus:          1,
+		NetworkEnabled: false,
+		Hypervisor:     cfg.hypervisor,
+		Cmd:            []string{"sleep", "infinity"},
+	})
+	require.NoError(t, err)
+	sourceID := source.Id
+	sourceDeleted := false
+	t.Cleanup(func() {
+		if !sourceDeleted {
+			_ = mgr.DeleteInstance(context.Background(), sourceID)
+		}
+	})
+
+	source, err = waitForInstanceState(ctx, mgr, sourceID, StateRunning, integrationTestTimeout(45*time.Second))
+	require.NoError(t, err)
+	require.NoError(t, waitForExecAgent(ctx, mgr, sourceID, 45*time.Second))
+
+	snapshot, err := mgr.CreateSnapshot(ctx, sourceID, CreateSnapshotRequest{
+		Kind: SnapshotKindStandby,
+		Name: cfg.namePrefix + "-warm-chain-snap",
+	})
+	require.NoError(t, err)
+	require.Equal(t, SnapshotKindStandby, snapshot.Kind)
+	snapshotDeleted := false
+	t.Cleanup(func() {
+		if !snapshotDeleted {
+			_ = mgr.DeleteSnapshot(context.Background(), snapshot.Id)
+		}
+	})
+
+	require.NoError(t, mgr.DeleteInstance(ctx, sourceID))
+	sourceDeleted = true
+
+	warm, err := mgr.ForkSnapshot(ctx, snapshot.Id, ForkSnapshotRequest{
+		Name:        cfg.namePrefix + "-warm-chain-warm",
+		TargetState: StateRunning,
+	})
+	require.NoError(t, err)
+	warmID := warm.Id
+	warmDeleted := false
+	t.Cleanup(func() {
+		if !warmDeleted {
+			_ = mgr.DeleteInstance(context.Background(), warmID)
+		}
+	})
+	warm, err = waitForInstanceState(ctx, mgr, warmID, StateRunning, integrationTestTimeout(45*time.Second))
+	require.NoError(t, err)
+	require.NoError(t, waitForExecAgent(ctx, mgr, warmID, 45*time.Second))
+
+	child, err := mgr.ForkInstance(ctx, warmID, ForkInstanceRequest{
+		Name:        cfg.namePrefix + "-warm-chain-child",
+		FromRunning: true,
+		TargetState: StateStopped,
+	})
+	require.NoError(t, err)
+	require.Equal(t, StateStopped, child.State)
+	childID := child.Id
+	t.Cleanup(func() { _ = mgr.DeleteInstance(context.Background(), childID) })
+
+	warm, err = mgr.GetInstance(ctx, warmID)
+	require.NoError(t, err)
+	if warm.State != StateRunning {
+		warm, err = waitForInstanceState(ctx, mgr, warmID, StateRunning, integrationTestTimeout(45*time.Second))
+		require.NoError(t, err)
+	}
+	require.Equal(t, StateRunning, warm.State)
+	require.NoError(t, waitForExecAgent(ctx, mgr, warmID, 45*time.Second))
+
+	require.NoError(t, mgr.DeleteInstance(ctx, warmID))
+	warmDeleted = true
+	require.NoError(t, mgr.DeleteSnapshot(ctx, snapshot.Id))
+	snapshotDeleted = true
 }
 
 func assertHostCanReachNginx(t *testing.T, ip string, port int, timeout time.Duration) {
