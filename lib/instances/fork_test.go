@@ -281,6 +281,44 @@ func TestForkInstanceFromStandbyCancelsCompressionJobAndCopiesRawMemory(t *testi
 	assert.False(t, ok, "forked standby guest directory should not retain compressed memory artifacts from the source instance")
 }
 
+func TestApplyForkTargetStateStoppedRefreshesSnapshotForkCID(t *testing.T) {
+	t.Parallel()
+
+	manager, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	forkID := "fork-target-stopped"
+	require.NoError(t, manager.ensureDirectories(forkID))
+	snapshotDir := manager.paths.InstanceSnapshotLatest(forkID)
+	require.NoError(t, os.MkdirAll(snapshotDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(snapshotDir, "memory"), []byte("snapshot"), 0644))
+
+	const sourceCID = int64(100)
+	require.NotEqual(t, sourceCID, generateVsockCID(forkID))
+	meta := &metadata{StoredMetadata: StoredMetadata{
+		Id:             forkID,
+		Name:           forkID,
+		CreatedAt:      time.Now(),
+		HypervisorType: hypervisor.TypeFirecracker,
+		SocketPath:     manager.paths.InstanceSocket(forkID, "firecracker.sock"),
+		DataDir:        manager.paths.InstanceDir(forkID),
+		VsockCID:       sourceCID,
+		VsockSocket:    manager.paths.InstanceVsockSocket(forkID),
+	}}
+	meta.StoredMetadata.Phases.Record(phasetracking.PhaseStandby, time.Now())
+	require.NoError(t, manager.saveMetadata(meta))
+
+	inst, err := manager.applyForkTargetState(ctx, forkID, StateStopped)
+	require.NoError(t, err)
+	require.Equal(t, StateStopped, inst.State)
+	require.Equal(t, generateVsockCID(forkID), inst.VsockCID)
+	require.NoDirExists(t, snapshotDir)
+
+	updated, err := manager.loadMetadata(forkID)
+	require.NoError(t, err)
+	assert.Equal(t, generateVsockCID(forkID), updated.StoredMetadata.VsockCID)
+}
+
 func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 	t.Parallel()
 	startedAt := time.Now().Add(-2 * time.Minute)
