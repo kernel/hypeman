@@ -14,6 +14,8 @@ import (
 	snapshotstore "github.com/kernel/hypeman/lib/snapshot"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	otelmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
 
 func TestNormalizeCompressionConfig(t *testing.T) {
@@ -431,6 +433,101 @@ func newSnapshotCompressionTestManager(t *testing.T) *manager {
 		compressionJobs: make(map[string]*compressionJob),
 		lifecycleEvents: newLifecycleSubscribers(),
 	}
+}
+
+func TestStartCompressionJobSkipsFirecrackerStandbySharedMemory(t *testing.T) {
+	mgr := newSnapshotCompressionTestManager(t)
+	reader := otelmetric.NewManualReader()
+	provider := otelmetric.NewMeterProvider(otelmetric.WithReader(reader))
+	metrics, err := newInstanceMetrics(provider.Meter("test"), nil, mgr)
+	require.NoError(t, err)
+	mgr.metrics = metrics
+
+	snapshotDir := t.TempDir()
+	rawPath := filepath.Join(snapshotDir, "memory")
+	require.NoError(t, os.WriteFile(rawPath, []byte("shared firecracker standby memory"), 0o644))
+
+	mgr.sharingInspector = func(path string) (snapshotMemorySharing, error) {
+		assert.Equal(t, rawPath, path)
+		return snapshotMemorySharing{SharedBytes: 1024, PrivateBytes: 512}, nil
+	}
+
+	target := compressionTarget{
+		Key:            "instance:shared-firecracker",
+		OwnerID:        "shared-firecracker",
+		SnapshotDir:    snapshotDir,
+		HypervisorType: hypervisor.TypeFirecracker,
+		Source:         snapshotCompressionSourceStandby,
+		Policy: snapshotstore.SnapshotCompressionConfig{
+			Enabled:   true,
+			Algorithm: snapshotstore.SnapshotCompressionAlgorithmZstd,
+			Level:     intPtr(1),
+		},
+	}
+
+	mgr.startCompressionJob(context.Background(), target)
+
+	require.Eventually(t, func() bool {
+		mgr.compressionMu.Lock()
+		defer mgr.compressionMu.Unlock()
+		_, ok := mgr.compressionJobs[target.Key]
+		return !ok
+	}, time.Second, 10*time.Millisecond)
+
+	_, err = os.Stat(rawPath)
+	require.NoError(t, err, "shared raw memory should remain uncompressed")
+	_, err = os.Stat(rawPath + ".zst")
+	require.Error(t, err)
+	assert.True(t, os.IsNotExist(err))
+
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(t.Context(), &rm))
+	jobsMetric := findMetric(t, rm, "hypeman_snapshot_compression_jobs_total")
+	jobs, ok := jobsMetric.Data.(metricdata.Sum[int64])
+	require.True(t, ok)
+	require.Len(t, jobs.DataPoints, 1)
+	assert.Equal(t, "skipped", metricLabel(t, jobs.DataPoints[0].Attributes, "result"))
+	assert.Equal(t, "shared_extents", metricLabel(t, jobs.DataPoints[0].Attributes, "reason"))
+}
+
+func TestStartCompressionJobDoesNotSkipNonFirecrackerSharedMemory(t *testing.T) {
+	mgr := newSnapshotCompressionTestManager(t)
+
+	snapshotDir := t.TempDir()
+	rawPath := filepath.Join(snapshotDir, "memory")
+	require.NoError(t, os.WriteFile(rawPath, []byte("cloud hypervisor memory"), 0o644))
+
+	mgr.sharingInspector = func(string) (snapshotMemorySharing, error) {
+		return snapshotMemorySharing{SharedBytes: 1024}, nil
+	}
+
+	target := compressionTarget{
+		Key:            "instance:shared-cloud-hypervisor",
+		OwnerID:        "shared-cloud-hypervisor",
+		SnapshotDir:    snapshotDir,
+		HypervisorType: hypervisor.TypeCloudHypervisor,
+		Source:         snapshotCompressionSourceStandby,
+		Policy: snapshotstore.SnapshotCompressionConfig{
+			Enabled:   true,
+			Algorithm: snapshotstore.SnapshotCompressionAlgorithmZstd,
+			Level:     intPtr(1),
+		},
+	}
+
+	mgr.startCompressionJob(context.Background(), target)
+
+	require.Eventually(t, func() bool {
+		mgr.compressionMu.Lock()
+		defer mgr.compressionMu.Unlock()
+		_, ok := mgr.compressionJobs[target.Key]
+		return !ok
+	}, time.Second, 10*time.Millisecond)
+
+	_, err := os.Stat(rawPath)
+	require.Error(t, err)
+	assert.True(t, os.IsNotExist(err))
+	_, _, compressed := findCompressedSnapshotMemoryFile(snapshotDir)
+	assert.True(t, compressed)
 }
 
 func TestStartCompressionJobDelayedCancellationRecordsSkipped(t *testing.T) {

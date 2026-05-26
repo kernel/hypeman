@@ -131,6 +131,7 @@ type manager struct {
 	compressionMu             sync.Mutex
 	compressionJobs           map[string]*compressionJob
 	compressionTimerFactory   func(time.Duration) compressionTimer
+	sharingInspector          func(string) (snapshotMemorySharing, error)
 	nativeCodecMu             sync.Mutex
 	nativeCodecPaths          map[string]string
 	imageUsageRecorder        ImageUsageRecorder

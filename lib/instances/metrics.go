@@ -30,6 +30,13 @@ const (
 	snapshotCompressionResultFailed   snapshotCompressionResult = "failed"
 )
 
+type snapshotCompressionSkipReason string
+
+const (
+	snapshotCompressionSkipReasonNone          snapshotCompressionSkipReason = "none"
+	snapshotCompressionSkipReasonSharedExtents snapshotCompressionSkipReason = "shared_extents"
+)
+
 type snapshotCompressionWaitOutcome string
 
 const (
@@ -569,7 +576,7 @@ func snapshotCompressionAttributes(hvType hypervisor.Type, algorithm snapshotsto
 	return attrs
 }
 
-func (m *manager) recordSnapshotCompressionJob(ctx context.Context, target compressionTarget, result snapshotCompressionResult, compressionStart *time.Time, uncompressedSize, compressedSize int64) {
+func (m *manager) recordSnapshotCompressionJob(ctx context.Context, target compressionTarget, result snapshotCompressionResult, skipReason snapshotCompressionSkipReason, compressionStart *time.Time, uncompressedSize, compressedSize int64) {
 	if m.metrics == nil {
 		return
 	}
@@ -577,6 +584,7 @@ func (m *manager) recordSnapshotCompressionJob(ctx context.Context, target compr
 	attrs := snapshotCompressionAttributes(target.HypervisorType, target.Policy.Algorithm, target.Source)
 	attrsWithResult := append([]attribute.KeyValue{}, attrs...)
 	attrsWithResult = append(attrsWithResult, attribute.String("result", string(result)))
+	attrsWithResult = append(attrsWithResult, attribute.String("reason", string(skipReason)))
 
 	m.metrics.snapshotCompressionJobsTotal.Add(ctx, 1, metric.WithAttributes(attrsWithResult...))
 	if compressionStart != nil {

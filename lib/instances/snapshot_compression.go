@@ -85,6 +85,12 @@ type nativeCodecRuntime struct {
 	commandContext func(ctx context.Context, name string, arg ...string) *exec.Cmd
 }
 
+type snapshotMemorySharing struct {
+	SharedBytes  int64
+	PrivateBytes int64
+	Unknown      bool
+}
+
 func (r nativeCodecRuntime) lookPathFunc() func(string) (string, error) {
 	if r.lookPath != nil {
 		return r.lookPath
@@ -511,6 +517,35 @@ func runWithNativeFallback(ctx context.Context, runtime nativeCodecRuntime, algo
 	return nil
 }
 
+func (m *manager) inspectSnapshotMemorySharing(rawPath string) (snapshotMemorySharing, error) {
+	if m != nil && m.sharingInspector != nil {
+		return m.sharingInspector(rawPath)
+	}
+	return inspectSnapshotMemorySharing(rawPath)
+}
+
+func (m *manager) shouldSkipSnapshotCompressionForSharedMemory(ctx context.Context, target compressionTarget, rawPath string) (snapshotMemorySharing, bool) {
+	if target.HypervisorType != hypervisor.TypeFirecracker || target.Source != snapshotCompressionSourceStandby {
+		return snapshotMemorySharing{}, false
+	}
+
+	sharing, err := m.inspectSnapshotMemorySharing(rawPath)
+	if err != nil {
+		logger.FromContext(ctx).WarnContext(ctx, "failed to inspect snapshot memory sharing; continuing compression",
+			"owner_id", target.OwnerID,
+			"snapshot_id", target.SnapshotID,
+			"snapshot_dir", target.SnapshotDir,
+			"raw_path", rawPath,
+			"error", err,
+		)
+		return snapshotMemorySharing{}, false
+	}
+	if sharing.Unknown || sharing.SharedBytes <= 0 {
+		return sharing, false
+	}
+	return sharing, true
+}
+
 func (m *manager) startCompressionJob(ctx context.Context, target compressionTarget) {
 	if target.Key == "" || !target.Policy.Enabled {
 		return
@@ -539,6 +574,7 @@ func (m *manager) startCompressionJob(ctx context.Context, target compressionTar
 
 	go func() {
 		result := snapshotCompressionResultSuccess
+		skipReason := snapshotCompressionSkipReasonNone
 		var uncompressedSize int64
 		var compressedSize int64
 		var spanErr error
@@ -547,7 +583,7 @@ func (m *manager) startCompressionJob(ctx context.Context, target compressionTar
 		var compressionStart *time.Time
 
 		defer func() {
-			m.recordSnapshotCompressionJob(metricsCtx, target, result, compressionStart, uncompressedSize, compressedSize)
+			m.recordSnapshotCompressionJob(metricsCtx, target, result, skipReason, compressionStart, uncompressedSize, compressedSize)
 			if target.Source == snapshotCompressionSourceStandby && target.SnapshotID == "" {
 				if err := m.clearPendingStandbyCompression(context.Background(), target.OwnerID); err != nil && !errors.Is(err, ErrNotFound) {
 					log.WarnContext(context.Background(), "failed to clear pending standby compression plan after job completion", "instance_id", target.OwnerID, "error", err)
@@ -665,6 +701,20 @@ func (m *manager) startCompressionJob(ctx context.Context, target compressionTar
 					log.ErrorContext(jobCtx, "failed to update snapshot compression metadata", "snapshot_id", target.SnapshotID, "snapshot_dir", target.SnapshotDir, "state", snapshotstore.SnapshotCompressionStateCompressed, "error", err)
 				}
 			}
+			return
+		}
+		if sharing, skip := m.shouldSkipSnapshotCompressionForSharedMemory(compressionCtx, target, rawPath); skip {
+			result = snapshotCompressionResultSkipped
+			skipReason = snapshotCompressionSkipReasonSharedExtents
+			log.InfoContext(compressionCtx, "skipping standby snapshot compression because memory file has shared extents",
+				"owner_id", target.OwnerID,
+				"snapshot_id", target.SnapshotID,
+				"snapshot_dir", target.SnapshotDir,
+				"raw_path", rawPath,
+				"hypervisor", string(target.HypervisorType),
+				"shared_bytes", sharing.SharedBytes,
+				"private_bytes", sharing.PrivateBytes,
+			)
 			return
 		}
 

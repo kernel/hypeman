@@ -61,8 +61,8 @@ func TestSnapshotCompressionMetrics_RecordAndObserve(t *testing.T) {
 
 	target := m.compressionJobs["job-1"].target
 	startedAt := time.Now().Add(-2 * time.Second)
-	m.recordSnapshotCompressionJob(t.Context(), target, snapshotCompressionResultSuccess, &startedAt, 1024, 256)
-	m.recordSnapshotCompressionJob(t.Context(), m.compressionJobs["job-2"].target, snapshotCompressionResultSkipped, nil, 0, 0)
+	m.recordSnapshotCompressionJob(t.Context(), target, snapshotCompressionResultSuccess, snapshotCompressionSkipReasonNone, &startedAt, 1024, 256)
+	m.recordSnapshotCompressionJob(t.Context(), m.compressionJobs["job-2"].target, snapshotCompressionResultSkipped, snapshotCompressionSkipReasonSharedExtents, nil, 0, 0)
 	m.recordSnapshotCompressionWait(t.Context(), m.compressionJobs["job-2"].target, snapshotCompressionWaitOutcomeSkipped, time.Now().Add(-1500*time.Millisecond))
 	m.recordSnapshotCodecFallback(t.Context(), snapshotstore.SnapshotCompressionAlgorithmLz4, snapshotCodecOperationCompress, snapshotCodecFallbackReasonMissingBinary)
 	m.recordSnapshotRestoreMemoryPrepare(t.Context(), hypervisor.TypeCloudHypervisor, snapshotMemoryPreparePathRaw, snapshotCompressionResultSuccess, time.Now().Add(-250*time.Millisecond))
@@ -96,11 +96,13 @@ func TestSnapshotCompressionMetrics_RecordAndObserve(t *testing.T) {
 			assert.Equal(t, "cloud-hypervisor", metricLabel(t, point.Attributes, "hypervisor"))
 			assert.Equal(t, "lz4", metricLabel(t, point.Attributes, "algorithm"))
 			assert.Equal(t, "standby", metricLabel(t, point.Attributes, "source"))
+			assert.Equal(t, "none", metricLabel(t, point.Attributes, "reason"))
 		case "skipped":
 			assert.Equal(t, int64(1), point.Value)
 			assert.Equal(t, "qemu", metricLabel(t, point.Attributes, "hypervisor"))
 			assert.Equal(t, "zstd", metricLabel(t, point.Attributes, "algorithm"))
 			assert.Equal(t, "standby", metricLabel(t, point.Attributes, "source"))
+			assert.Equal(t, "shared_extents", metricLabel(t, point.Attributes, "reason"))
 		default:
 			t.Fatalf("unexpected compression job result datapoint: %s", metricLabel(t, point.Attributes, "result"))
 		}
@@ -546,6 +548,7 @@ func TestEnsureSnapshotMemoryReadySkipsPendingCompressionWithoutPreemptionMetric
 	require.True(t, ok)
 	require.Len(t, jobs.DataPoints, 1)
 	assert.Equal(t, "skipped", metricLabel(t, jobs.DataPoints[0].Attributes, "result"))
+	assert.Equal(t, "none", metricLabel(t, jobs.DataPoints[0].Attributes, "reason"))
 
 	waitMetric := findMetric(t, rm, "hypeman_snapshot_compression_wait_duration_seconds")
 	waitDurations, ok := waitMetric.Data.(metricdata.Histogram[float64])

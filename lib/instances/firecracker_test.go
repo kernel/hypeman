@@ -565,6 +565,7 @@ func TestFirecrackerWarmForkChain(t *testing.T) {
 	mgr, tmpDir := setupTestManagerForFirecrackerNoNetwork(t)
 	ctx := context.Background()
 	p := paths.New(tmpDir)
+	reflinkOK := probeReflinkSupport(t, tmpDir)
 
 	imageManager, err := images.NewManager(p, 1, nil)
 	require.NoError(t, err)
@@ -622,6 +623,11 @@ func TestFirecrackerWarmForkChain(t *testing.T) {
 	warm, err = waitForInstanceState(ctx, mgr, warmID, StateRunning, integrationTestTimeout(20*time.Second))
 	require.NoError(t, err)
 	require.NoError(t, waitForExecAgent(ctx, mgr, warmID, 30*time.Second))
+	if reflinkOK {
+		requireSnapshotMemorySharedExtents(t, mgr, p.InstanceSnapshotBase(warmID), "warm retained base from snapshot")
+	} else {
+		t.Log("reflink unavailable; skipping shared extent assertion for warm fork")
+	}
 
 	child, err := mgr.ForkInstance(ctx, warmID, ForkInstanceRequest{
 		Name:        "fc-warm-chain-child",
@@ -641,10 +647,26 @@ func TestFirecrackerWarmForkChain(t *testing.T) {
 	}
 	require.Equal(t, StateRunning, warm.State)
 	require.NoError(t, waitForExecAgent(ctx, mgr, warmID, 30*time.Second))
+	if reflinkOK {
+		requireSnapshotMemorySharedExtents(t, mgr, p.InstanceSnapshotBase(warmID), "warm retained base after child fork")
+	}
 
 	require.NoError(t, mgr.DeleteInstance(ctx, warmID))
 	warmDeleted = true
 	require.NoError(t, mgr.DeleteSnapshot(ctx, snapshot.Id))
+}
+
+func requireSnapshotMemorySharedExtents(t *testing.T, mgr *manager, snapshotDir, label string) {
+	t.Helper()
+
+	rawPath, ok := findRawSnapshotMemoryFile(snapshotDir)
+	require.True(t, ok, "%s should have a raw snapshot memory file", label)
+
+	sharing, err := mgr.inspectSnapshotMemorySharing(rawPath)
+	require.NoError(t, err, "%s shared extent inspection failed", label)
+	require.False(t, sharing.Unknown, "%s shared extent inspection returned unknown", label)
+	require.Greater(t, sharing.SharedBytes, int64(0), "%s should have shared extents", label)
+	t.Logf("%s memory sharing: shared=%d private=%d path=%s", label, sharing.SharedBytes, sharing.PrivateBytes, rawPath)
 }
 
 // TestFirecrackerForkIsolation verifies CoW isolation between a firecracker
