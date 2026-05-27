@@ -113,11 +113,13 @@ func CloseConn(dialerKey string) {
 	if !ok {
 		return
 	}
-	if err := conn.Close(); err != nil {
-		slog.Debug("failed to close gRPC connection", "key", dialerKey, "error", err)
-		return
-	}
-	slog.Debug("closed and removed gRPC connection from pool", "key", dialerKey)
+	go func() {
+		if err := conn.Close(); err != nil {
+			slog.Debug("failed to close gRPC connection", "key", dialerKey, "error", err)
+			return
+		}
+		slog.Debug("closed and removed gRPC connection from pool", "key", dialerKey)
+	}()
 }
 
 // ExitStatus represents command exit information
