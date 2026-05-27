@@ -437,9 +437,8 @@ func guestNetworkReconfigureCommand(alloc *network.Allocation) (string, error) {
 			"ip addr add %s/%d dev eth0 && "+
 			"ip link set dev eth0 up && "+
 			"ip route replace default via %s dev eth0 && "+
-			"test \"$(cat /sys/class/net/eth0/address)\" = \"%s\" && "+
 			"(ip neigh flush dev eth0 || true)",
-		mac, ip, prefix, gateway, mac,
+		mac, ip, prefix, gateway,
 	), nil
 }
 

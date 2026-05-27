@@ -46,7 +46,8 @@ func TestGuestNetworkReconfigureCommand_AppliesAllocatedMAC(t *testing.T) {
 	assert.Contains(t, cmd, "ip link set dev eth0 address 02:00:00:85:17:c8")
 	assert.Contains(t, cmd, "ip addr add 10.102.146.62/16 dev eth0")
 	assert.Contains(t, cmd, "ip route replace default via 10.102.0.1 dev eth0")
-	assert.Contains(t, cmd, "test \"$(cat /sys/class/net/eth0/address)\" = \"02:00:00:85:17:c8\"")
+	assert.Contains(t, cmd, "(ip neigh flush dev eth0 || true)")
+	assert.NotContains(t, cmd, "cat /sys/class/net/eth0/address")
 }
 
 func TestGuestNetworkReconfigureCommand_RequiresAllocatedMAC(t *testing.T) {
