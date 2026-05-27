@@ -28,6 +28,44 @@ func TestGenerateMAC(t *testing.T) {
 	}
 }
 
+func TestAllocateUniqueMACFromSetRetriesCollisions(t *testing.T) {
+	used := map[string]bool{
+		"02:00:00:00:00:01": true,
+	}
+	candidates := []string{
+		"02:00:00:00:00:01",
+		"02:00:00:00:00:02",
+	}
+	calls := 0
+
+	mac, err := allocateUniqueMACFromSet(used, func() (string, error) {
+		candidate := candidates[calls]
+		calls++
+		return candidate, nil
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "02:00:00:00:00:02", mac)
+	assert.Equal(t, 2, calls)
+}
+
+func TestAllocateUniqueMACFromSetFallsBackToSequentialScan(t *testing.T) {
+	used := map[string]bool{
+		"02:00:00:00:00:00": true,
+		"02:00:00:00:00:01": true,
+	}
+	calls := 0
+
+	mac, err := allocateUniqueMACFromSet(used, func() (string, error) {
+		calls++
+		return "02:00:00:00:00:01", nil
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "02:00:00:00:00:02", mac)
+	assert.Equal(t, macAllocationRandomAttempts, calls)
+}
+
 func TestGenerateTAPName(t *testing.T) {
 	tests := []struct {
 		name       string
