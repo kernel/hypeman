@@ -454,6 +454,8 @@ func TestVZStandbyAndRestore(t *testing.T) {
 	// Wait for guest agent to be ready
 	err = waitForExecAgent(ctx, mgr, inst.Id, 30*time.Second)
 	require.NoError(t, err, "guest agent should be ready")
+	inst, err = waitForInstanceState(ctx, mgr, inst.Id, StateRunning, 30*time.Second)
+	require.NoError(t, err, "instance should be running before standby")
 	t.Log("Guest agent ready")
 
 	// Exec before standby

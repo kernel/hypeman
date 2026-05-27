@@ -58,10 +58,9 @@ func waitForExecAgent(ctx context.Context, mgr *manager, instanceID string, time
 
 		var stdout, stderr bytes.Buffer
 		exit, err := guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{
-			Command:      []string{"true"},
-			Stdout:       &stdout,
-			Stderr:       &stderr,
-			WaitForAgent: 1 * time.Second,
+			Command: []string{"true"},
+			Stdout:  &stdout,
+			Stderr:  &stderr,
 		})
 		if err == nil && exit.Code == 0 {
 			return nil
