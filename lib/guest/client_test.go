@@ -177,7 +177,10 @@ func (d *trackingDialer) DialVsock(ctx context.Context, port int) (net.Conn, err
 		Conn:   client,
 		closed: make(chan struct{}),
 	}
-	d.conns <- tracked
+	select {
+	case d.conns <- tracked:
+	default:
+	}
 	go serveFakeGuest(server)
 	return tracked, nil
 }
