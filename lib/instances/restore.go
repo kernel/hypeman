@@ -379,7 +379,7 @@ func (m *manager) restoreFromSnapshot(
 }
 
 func reconfigureGuestNetwork(ctx context.Context, stored *StoredMetadata, alloc *network.Allocation) error {
-	prefix, err := netmaskToPrefix(alloc.Netmask)
+	cmd, err := guestNetworkReconfigureCommand(alloc)
 	if err != nil {
 		return err
 	}
@@ -388,11 +388,6 @@ func reconfigureGuestNetwork(ctx context.Context, stored *StoredMetadata, alloc 
 	if err != nil {
 		return fmt.Errorf("create vsock dialer: %w", err)
 	}
-
-	cmd := fmt.Sprintf(
-		"ip -4 addr flush dev eth0 scope global && ip addr add %s/%d dev eth0 && ip link set dev eth0 up && ip route replace default via %s dev eth0",
-		alloc.IP, prefix, alloc.Gateway,
-	)
 
 	var stdout, stderr bytes.Buffer
 	exit, err := guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{
@@ -409,6 +404,43 @@ func reconfigureGuestNetwork(ctx context.Context, stored *StoredMetadata, alloc 
 	}
 
 	return nil
+}
+
+func guestNetworkReconfigureCommand(alloc *network.Allocation) (string, error) {
+	if alloc == nil {
+		return "", fmt.Errorf("missing network allocation")
+	}
+	ip := strings.TrimSpace(alloc.IP)
+	if ip == "" {
+		return "", fmt.Errorf("missing network allocation IP")
+	}
+	mac := strings.ToLower(strings.TrimSpace(alloc.MAC))
+	if mac == "" {
+		return "", fmt.Errorf("missing network allocation MAC")
+	}
+	if _, err := net.ParseMAC(mac); err != nil {
+		return "", fmt.Errorf("invalid network allocation MAC %q: %w", alloc.MAC, err)
+	}
+	gateway := strings.TrimSpace(alloc.Gateway)
+	if gateway == "" {
+		return "", fmt.Errorf("missing network allocation gateway")
+	}
+	prefix, err := netmaskToPrefix(alloc.Netmask)
+	if err != nil {
+		return "", err
+	}
+
+	return fmt.Sprintf(
+		"ip link set dev eth0 down && "+
+			"ip link set dev eth0 address %s && "+
+			"ip -4 addr flush dev eth0 scope global && "+
+			"ip addr add %s/%d dev eth0 && "+
+			"ip link set dev eth0 up && "+
+			"ip route replace default via %s dev eth0 && "+
+			"test \"$(cat /sys/class/net/eth0/address)\" = \"%s\" && "+
+			"(ip neigh flush dev eth0 || true)",
+		mac, ip, prefix, gateway, mac,
+	), nil
 }
 
 func networkConfigFromAllocation(alloc *network.Allocation) *network.NetworkConfig {
