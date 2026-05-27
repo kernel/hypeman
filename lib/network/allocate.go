@@ -49,10 +49,10 @@ func (m *manager) CreateAllocation(ctx context.Context, req AllocateRequest) (*N
 		return nil, fmt.Errorf("allocate IP: %w", err)
 	}
 
-	// 3. Generate MAC (02:00:00:... format - locally administered)
-	mac, err := generateMAC()
+	// 3. Generate unused MAC (02:00:00:... format - locally administered)
+	mac, err := m.allocateUniqueMAC(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("generate MAC: %w", err)
+		return nil, fmt.Errorf("allocate MAC: %w", err)
 	}
 
 	// 4. Generate TAP name (tap-{first8chars-of-id})
@@ -312,6 +312,51 @@ func incrementIP(ip net.IP, n int) net.IP {
 	return result
 }
 
+const (
+	macAllocationRandomAttempts = 5
+	macSuffixSpace              = 1 << 24
+)
+
+// allocateUniqueMAC picks an unused locally administered MAC address.
+func (m *manager) allocateUniqueMAC(ctx context.Context) (string, error) {
+	allocations, err := m.ListAllocations(ctx)
+	if err != nil {
+		return "", fmt.Errorf("list allocations: %w", err)
+	}
+
+	usedMACs := make(map[string]bool)
+	for _, alloc := range allocations {
+		mac := strings.ToLower(strings.TrimSpace(alloc.MAC))
+		if mac != "" {
+			usedMACs[mac] = true
+		}
+	}
+
+	return allocateUniqueMACFromSet(usedMACs, generateMAC)
+}
+
+func allocateUniqueMACFromSet(usedMACs map[string]bool, generate func() (string, error)) (string, error) {
+	for attempt := 0; attempt < macAllocationRandomAttempts; attempt++ {
+		mac, err := generate()
+		if err != nil {
+			return "", err
+		}
+		mac = strings.ToLower(strings.TrimSpace(mac))
+		if !usedMACs[mac] {
+			return mac, nil
+		}
+	}
+
+	for suffix := 0; suffix < macSuffixSpace; suffix++ {
+		mac := formatMACSuffix(suffix)
+		if !usedMACs[mac] {
+			return mac, nil
+		}
+	}
+
+	return "", fmt.Errorf("no available MAC addresses after %d random attempts and full scan", macAllocationRandomAttempts)
+}
+
 // generateMAC generates a random MAC address with local administration bit set
 func generateMAC() (string, error) {
 	// Generate 6 random bytes
@@ -329,6 +374,11 @@ func generateMAC() (string, error) {
 	// Format as MAC address
 	return fmt.Sprintf("%02x:%02x:%02x:%02x:%02x:%02x",
 		buf[0], buf[1], buf[2], buf[3], buf[4], buf[5]), nil
+}
+
+func formatMACSuffix(suffix int) string {
+	return fmt.Sprintf("02:00:00:%02x:%02x:%02x",
+		byte(suffix>>16), byte(suffix>>8), byte(suffix))
 }
 
 // saveClassID persists the tc class ID for an instance so it survives restarts.
