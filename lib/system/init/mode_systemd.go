@@ -94,8 +94,8 @@ ExecStart=/opt/hypeman/guest-agent
 EnvironmentFile=-/etc/hypeman/env
 Restart=always
 RestartSec=3
-StandardOutput=journal+console
-StandardError=journal+console
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
@@ -182,8 +182,8 @@ ExecStart=/opt/hypeman/hypeman-init --headers-worker-guest
 Nice=10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7
-StandardOutput=journal+console
-StandardError=journal+console
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target

@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/kernel/hypeman/lib/guest"
 	"github.com/kernel/hypeman/lib/healthcheck"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/instances/phasetracking"
@@ -23,10 +24,12 @@ import (
 
 // exitSentinelPrefix is the machine-parseable prefix written by init to serial console.
 const (
-	exitSentinelPrefix         = "HYPEMAN-EXIT "
-	programStartSentinelPrefix = "HYPEMAN-PROGRAM-START "
-	agentReadySentinelPrefix   = "HYPEMAN-AGENT-READY "
-	bootMarkerRescanInterval   = 1 * time.Second
+	exitSentinelPrefix          = "HYPEMAN-EXIT "
+	programStartSentinelPrefix  = "HYPEMAN-PROGRAM-START "
+	agentReadySentinelPrefix    = "HYPEMAN-AGENT-READY "
+	bootMarkerRescanInterval    = 1 * time.Second
+	guestAgentReadyProbeWait    = 250 * time.Millisecond
+	guestAgentReadyProbeTimeout = 1 * time.Second
 	// hypervisorStateCacheTTL bounds how long a cached hypervisor state may be
 	// reused before a fresh GetVMInfo call is required. Short enough to detect
 	// guest-driven shutdowns promptly, long enough that bursty list calls
@@ -275,6 +278,8 @@ func advancePhaseIfRunning(stored *StoredMetadata) {
 }
 
 // hydrateBootMarkersFromLogs fills missing boot markers from serial logs.
+// Guest-agent readiness also falls back to a direct vsock probe so systemd
+// services do not need to forward stdout/stderr to the serial console.
 // Returns true when at least one missing marker was found and populated.
 func (m *manager) hydrateBootMarkersFromLogs(ctx context.Context, stored *StoredMetadata) bool {
 	needProgram := stored.ProgramStartedAt == nil
@@ -300,6 +305,9 @@ func (m *manager) hydrateBootMarkersFromLogs(ctx context.Context, stored *Stored
 	}
 	if needAgent && guestAgentReadyAt != nil {
 		stored.GuestAgentReadyAt = guestAgentReadyAt
+		hydrated = true
+	}
+	if needAgent && stored.GuestAgentReadyAt == nil && stored.ProgramStartedAt != nil && m.hydrateGuestAgentReadyFromProbe(ctx, stored) {
 		hydrated = true
 	}
 	if hydrated {
@@ -399,6 +407,42 @@ func (m *manager) nowUTC() time.Time {
 		return m.now().UTC()
 	}
 	return time.Now().UTC()
+}
+
+func (m *manager) hydrateGuestAgentReadyFromProbe(ctx context.Context, stored *StoredMetadata) bool {
+	if stored == nil || stored.SkipGuestAgent || stored.GuestAgentReadyAt != nil {
+		return false
+	}
+	probe := m.guestAgentReadyProbe
+	if probe == nil {
+		probe = probeGuestAgentReady
+	}
+	if !probe(ctx, stored) {
+		return false
+	}
+	readyAt := m.nowUTC()
+	stored.GuestAgentReadyAt = &readyAt
+	return true
+}
+
+func probeGuestAgentReady(ctx context.Context, stored *StoredMetadata) bool {
+	if stored == nil || stored.SkipGuestAgent {
+		return false
+	}
+	dialer, err := hypervisor.NewVsockDialer(stored.HypervisorType, stored.VsockSocket, stored.VsockCID)
+	if err != nil {
+		return false
+	}
+
+	probeCtx, cancel := context.WithTimeout(ctx, guestAgentReadyProbeTimeout)
+	defer cancel()
+
+	exit, err := guest.ExecIntoInstance(probeCtx, dialer, guest.ExecOptions{
+		Command:      []string{"/bin/true"},
+		Timeout:      int32(guestAgentReadyProbeTimeout / time.Second),
+		WaitForAgent: guestAgentReadyProbeWait,
+	})
+	return err == nil && exit != nil && exit.Code == 0
 }
 
 // appLogPathsForMarkerScan returns app log paths in chronological order
@@ -652,6 +696,9 @@ func (m *manager) persistBootMarkers(ctx context.Context, id string) {
 	}
 	if needAgent && guestAgentReadyAt != nil {
 		meta.GuestAgentReadyAt = guestAgentReadyAt
+		updated = true
+	}
+	if needAgent && meta.GuestAgentReadyAt == nil && meta.ProgramStartedAt != nil && m.hydrateGuestAgentReadyFromProbe(ctx, &meta.StoredMetadata) {
 		updated = true
 	}
 	if !updated {

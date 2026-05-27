@@ -134,6 +134,7 @@ type manager struct {
 	nativeCodecMu             sync.Mutex
 	nativeCodecPaths          map[string]string
 	imageUsageRecorder        ImageUsageRecorder
+	guestAgentReadyProbe      func(context.Context, *StoredMetadata) bool
 
 	// Shared lifecycle event subscriptions for internal consumers.
 	lifecycleEvents *lifecycleSubscribers
@@ -184,27 +185,28 @@ func NewManagerWithConfig(p *paths.Paths, imageManager images.Manager, systemMan
 	}
 
 	m := &manager{
-		paths:             p,
-		imageManager:      imageManager,
-		systemManager:     systemManager,
-		networkManager:    networkManager,
-		deviceManager:     deviceManager,
-		volumeManager:     volumeManager,
-		limits:            limits,
-		instanceLocks:     sync.Map{},
-		bootMarkerScans:   sync.Map{},
-		hostTopology:      detectHostTopology(), // Detect and cache host topology
-		vmStarters:        vmStarters,
-		defaultHypervisor: defaultHypervisor,
-		now:               time.Now,
-		writeFile:         os.WriteFile,
-		meter:             meter,
-		tracer:            tracer,
-		guestMemoryPolicy: policy,
-		snapshotDefaults:  snapshotDefaults,
-		compressionJobs:   make(map[string]*compressionJob),
-		nativeCodecPaths:  make(map[string]string),
-		lifecycleEvents:   newLifecycleSubscribersWithBufferSize(managerConfig.LifecycleEventBufferSize),
+		paths:                p,
+		imageManager:         imageManager,
+		systemManager:        systemManager,
+		networkManager:       networkManager,
+		deviceManager:        deviceManager,
+		volumeManager:        volumeManager,
+		limits:               limits,
+		instanceLocks:        sync.Map{},
+		bootMarkerScans:      sync.Map{},
+		hostTopology:         detectHostTopology(), // Detect and cache host topology
+		vmStarters:           vmStarters,
+		defaultHypervisor:    defaultHypervisor,
+		now:                  time.Now,
+		writeFile:            os.WriteFile,
+		meter:                meter,
+		tracer:               tracer,
+		guestMemoryPolicy:    policy,
+		snapshotDefaults:     snapshotDefaults,
+		compressionJobs:      make(map[string]*compressionJob),
+		nativeCodecPaths:     make(map[string]string),
+		lifecycleEvents:      newLifecycleSubscribersWithBufferSize(managerConfig.LifecycleEventBufferSize),
+		guestAgentReadyProbe: probeGuestAgentReady,
 	}
 	m.deleteSnapshotFn = m.deleteSnapshot
 
