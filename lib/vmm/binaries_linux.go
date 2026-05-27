@@ -26,7 +26,7 @@ const (
 	V51_1 CHVersion = "v51.1"
 )
 
-const DefaultVersion = V49_0
+const DefaultVersion = V51_1
 
 var SupportedVersions = []CHVersion{V49_0, V51_1}
 
