@@ -17,6 +17,7 @@ const (
 	ComponentVolumeOverlays       = "volume_overlays"
 	ComponentSnapshotUncompressed = "snapshot_uncompressed"
 	ComponentSnapshotCompressed   = "snapshot_compressed"
+	ComponentSnapshotShared       = "snapshot_shared"
 	ComponentSnapshotOther        = "snapshot_other"
 )
 
@@ -28,6 +29,7 @@ type Breakdown struct {
 	VolumeOverlays       int64
 	SnapshotUncompressed int64
 	SnapshotCompressed   int64
+	SnapshotShared       int64
 	SnapshotOther        int64
 }
 
@@ -40,6 +42,7 @@ func (b Breakdown) Components() map[string]int64 {
 		ComponentVolumeOverlays:       b.VolumeOverlays,
 		ComponentSnapshotUncompressed: b.SnapshotUncompressed,
 		ComponentSnapshotCompressed:   b.SnapshotCompressed,
+		ComponentSnapshotShared:       b.SnapshotShared,
 		ComponentSnapshotOther:        b.SnapshotOther,
 	}
 }
@@ -77,6 +80,7 @@ func Collect(p *paths.Paths) (Breakdown, error) {
 		return Breakdown{}, err
 	}
 
+	sharedSnapshotExtents := newSharedExtentTracker()
 	for _, guest := range guestEntries {
 		if !guest.IsDir() {
 			continue
@@ -103,10 +107,11 @@ func Collect(p *paths.Paths) (Breakdown, error) {
 			continue
 		}
 
-		snapshotBytes, err := sumTreeAllocatedBytes(snapshotDir)
+		snapshotBytes, sharedSnapshotBytes, err := sumSnapshotTreeAllocatedBytes(snapshotDir, sharedSnapshotExtents)
 		if err != nil {
 			return Breakdown{}, err
 		}
+		breakdown.SnapshotShared += sharedSnapshotBytes
 
 		switch classification {
 		case ComponentSnapshotCompressed:
@@ -213,6 +218,30 @@ func sumTreeAllocatedBytes(root string) (int64, error) {
 		return 0, err
 	}
 	return total, nil
+}
+
+func sumSnapshotTreeAllocatedBytes(root string, sharedExtents *sharedExtentTracker) (int64, int64, error) {
+	var privateTotal int64
+	var sharedTotal int64
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		privateBytes, sharedBytes := snapshotAllocatedBytesForPath(path, sharedExtents)
+		privateTotal += privateBytes
+		sharedTotal += sharedBytes
+		return nil
+	})
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, 0, nil
+		}
+		return 0, 0, err
+	}
+	return privateTotal, sharedTotal, nil
 }
 
 func allocatedBytesForPath(path string) int64 {
