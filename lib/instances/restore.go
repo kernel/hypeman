@@ -431,12 +431,19 @@ func guestNetworkReconfigureCommand(alloc *network.Allocation) (string, error) {
 	}
 
 	return fmt.Sprintf(
+		// Bring eth0 down so Linux permits changing the interface MAC.
 		"ip link set dev eth0 down && "+
+			// Replace the snapshotted MAC with the MAC allocated for this fork.
 			"ip link set dev eth0 address %s && "+
+			// Remove the snapshotted IPv4 address from the source/starter guest.
 			"ip -4 addr flush dev eth0 scope global && "+
+			// Add the IPv4 address allocated for this fork.
 			"ip addr add %s/%d dev eth0 && "+
+			// Bring the interface back up after applying the new identity.
 			"ip link set dev eth0 up && "+
+			// Ensure outbound traffic uses the fork's allocated gateway.
 			"ip route replace default via %s dev eth0 && "+
+			// Drop snapshotted ARP/neighbor entries so peers are rediscovered.
 			"(ip neigh flush dev eth0 || true)",
 		mac, ip, prefix, gateway,
 	), nil
