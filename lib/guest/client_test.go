@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -108,6 +109,40 @@ func TestExecIntoInstanceRetriesWithFreshConnections(t *testing.T) {
 	}
 }
 
+func TestCloseConnClosesPooledConnection(t *testing.T) {
+	dialer := &trackingDialer{
+		key:   "close-conn-test",
+		conns: make(chan *closeTrackingConn, 1),
+	}
+
+	conn, err := GetOrCreateConn(context.Background(), dialer)
+	if err != nil {
+		t.Fatalf("GetOrCreateConn failed: %v", err)
+	}
+	conn.Connect()
+
+	tracked := waitForTrackedConn(t, dialer.conns)
+	CloseConn(dialer.Key())
+
+	select {
+	case <-tracked.closed:
+	case <-time.After(time.Second):
+		t.Fatal("CloseConn did not close the underlying connection")
+	}
+}
+
+func waitForTrackedConn(t *testing.T, conns <-chan *closeTrackingConn) *closeTrackingConn {
+	t.Helper()
+
+	select {
+	case conn := <-conns:
+		return conn
+	case <-time.After(time.Second):
+		t.Fatal("gRPC connection was not dialed")
+		return nil
+	}
+}
+
 type delayedDialer struct {
 	key      string
 	readyAt  time.Time
@@ -128,6 +163,39 @@ func (d *delayedDialer) DialVsock(ctx context.Context, port int) (net.Conn, erro
 }
 
 var _ hypervisor.VsockDialer = (*delayedDialer)(nil)
+
+type trackingDialer struct {
+	key   string
+	conns chan *closeTrackingConn
+}
+
+func (d *trackingDialer) Key() string { return d.key }
+
+func (d *trackingDialer) DialVsock(ctx context.Context, port int) (net.Conn, error) {
+	client, server := net.Pipe()
+	tracked := &closeTrackingConn{
+		Conn:   client,
+		closed: make(chan struct{}),
+	}
+	d.conns <- tracked
+	go serveFakeGuest(server)
+	return tracked, nil
+}
+
+var _ hypervisor.VsockDialer = (*trackingDialer)(nil)
+
+type closeTrackingConn struct {
+	net.Conn
+	closed chan struct{}
+	once   sync.Once
+}
+
+func (c *closeTrackingConn) Close() error {
+	c.once.Do(func() {
+		close(c.closed)
+	})
+	return c.Conn.Close()
+}
 
 type fakeGuestServer struct {
 	UnimplementedGuestServiceServer

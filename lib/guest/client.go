@@ -101,17 +101,23 @@ func GetOrCreateConn(ctx context.Context, dialer hypervisor.VsockDialer) (*grpc.
 	return conn, nil
 }
 
-// CloseConn removes a connection from the pool by key (call when VM is deleted).
-// We only remove from pool, not explicitly close - the connection will fail
-// naturally when the VM dies, and grpc will clean up.
+// CloseConn removes and closes a connection from the pool by key.
 func CloseConn(dialerKey string) {
 	connPool.Lock()
-	defer connPool.Unlock()
-
-	if _, ok := connPool.conns[dialerKey]; ok {
+	conn, ok := connPool.conns[dialerKey]
+	if ok {
 		delete(connPool.conns, dialerKey)
-		slog.Debug("removed gRPC connection from pool", "key", dialerKey)
 	}
+	connPool.Unlock()
+
+	if !ok {
+		return
+	}
+	if err := conn.Close(); err != nil {
+		slog.Debug("failed to close gRPC connection", "key", dialerKey, "error", err)
+		return
+	}
+	slog.Debug("closed and removed gRPC connection from pool", "key", dialerKey)
 }
 
 // ExitStatus represents command exit information
