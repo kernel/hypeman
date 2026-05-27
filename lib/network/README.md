@@ -194,7 +194,7 @@ sudo setcap 'cap_net_admin,cap_net_bind_service=+eip' /path/to/hypeman
 1. Get default network details
 2. Check name uniqueness globally
 3. Allocate next available IP (starting from .2, after gateway at .1)
-4. Generate MAC (02:00:00:... format - locally administered)
+4. Generate unused MAC (02:00:00:... format - locally administered)
 5. Generate TAP name (tap-{first8chars-of-instance-id})
 6. Create TAP device and attach to bridge
 
