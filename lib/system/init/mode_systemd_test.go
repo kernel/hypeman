@@ -189,4 +189,7 @@ func TestInjectAgentServiceOmitsNetworkTargetDependency(t *testing.T) {
 	data, err := os.ReadFile(servicePath)
 	assert.NoError(t, err)
 	assert.NotContains(t, string(data), "network.target")
+	assert.Contains(t, string(data), "StandardOutput=journal\n")
+	assert.Contains(t, string(data), "StandardError=journal\n")
+	assert.NotContains(t, string(data), "journal+console")
 }

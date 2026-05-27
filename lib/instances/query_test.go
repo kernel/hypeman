@@ -1,6 +1,7 @@
 package instances
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -402,6 +403,39 @@ func TestHydrateBootMarkersFromLogs_RescanThrottle(t *testing.T) {
 	require.True(t, hydrated)
 	require.NotNil(t, meta.ProgramStartedAt)
 	require.NotNil(t, meta.GuestAgentReadyAt)
+}
+
+func TestHydrateBootMarkersUsesGuestAgentProbeWhenReadyMarkerMissing(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	readyAt := time.Date(2026, 3, 8, 12, 0, 2, 0, time.UTC)
+	probeCalls := 0
+	m := &manager{
+		paths: paths.New(tmpDir),
+		now:   func() time.Time { return readyAt },
+		guestAgentReadyProbe: func(context.Context, *StoredMetadata) bool {
+			probeCalls++
+			return true
+		},
+	}
+
+	meta := &StoredMetadata{
+		Id:             "systemd-instance",
+		SkipGuestAgent: false,
+	}
+	logPath := m.paths.InstanceAppLog(meta.Id)
+	require.NoError(t, os.MkdirAll(filepath.Dir(logPath), 0o755))
+	require.NoError(t, os.WriteFile(logPath, []byte(
+		"HYPEMAN-PROGRAM-START ts=2026-03-08T12:00:01Z mode=systemd\n",
+	), 0o644))
+
+	hydrated := m.hydrateBootMarkersFromLogs(context.Background(), meta)
+	require.True(t, hydrated)
+	require.NotNil(t, meta.ProgramStartedAt)
+	require.NotNil(t, meta.GuestAgentReadyAt)
+	assert.Equal(t, readyAt.Format(time.RFC3339Nano), meta.GuestAgentReadyAt.UTC().Format(time.RFC3339Nano))
+	assert.Equal(t, 1, probeCalls)
 }
 
 func TestParseBootMarkers_IgnoresStaleMarkersBeforeBootStart(t *testing.T) {
