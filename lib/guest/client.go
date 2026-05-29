@@ -154,7 +154,11 @@ func ExecIntoInstance(ctx context.Context, dialer hypervisor.VsockDialer, opts E
 	// their own exec.session span; the detailed retry spans are only useful when
 	// we are waiting for the guest-agent to become reachable.
 	if opts.WaitForAgent == 0 {
-		return execIntoInstanceOnce(ctx, dialer, opts)
+		exit, err := execIntoInstanceOnce(ctx, dialer, opts)
+		if err != nil && isRetryableConnectionError(err) {
+			CloseConn(dialer.Key())
+		}
+		return exit, err
 	}
 
 	ctx, span := startGuestExecSpan(ctx, opts)
