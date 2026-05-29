@@ -146,6 +146,99 @@ type ExecOptions struct {
 	ResizeChan   <-chan *WindowSize // Optional: channel to receive resize events (pointer to avoid copying mutex)
 }
 
+type ReconfigureNetworkOptions struct {
+	InterfaceName string
+	MAC           string
+	IPv4          string
+	Prefix        uint32
+	Gateway       string
+	WaitForAgent  time.Duration
+}
+
+func ReconfigureNetworkInInstance(ctx context.Context, dialer hypervisor.VsockDialer, opts ReconfigureNetworkOptions) error {
+	if opts.WaitForAgent == 0 {
+		return reconfigureNetworkOnce(ctx, dialer, opts)
+	}
+
+	ctx, span := guestTracer().Start(ctx, "guest.reconfigure_network", trace.WithAttributes(
+		attribute.Bool("wait_for_agent", true),
+		attribute.Int64("wait_for_agent_ms", opts.WaitForAgent.Milliseconds()),
+	))
+	defer span.End()
+
+	deadline := time.Now().Add(opts.WaitForAgent)
+	start := time.Now()
+	attempts := 0
+	retryableAttempts := 0
+	firstRetryableErrorType := ""
+	lastRetryableErrorType := ""
+	lastRetryInterval := time.Duration(0)
+
+	for {
+		attempts++
+		err := reconfigureNetworkOnce(ctx, dialer, opts)
+		if err == nil {
+			recordGuestExecWait(span, start, attempts, retryableAttempts, firstRetryableErrorType, lastRetryableErrorType, lastRetryInterval)
+			span.SetStatus(otelcodes.Ok, "")
+			return nil
+		}
+		if !isRetryableConnectionError(err) {
+			recordGuestExecWait(span, start, attempts, retryableAttempts, firstRetryableErrorType, lastRetryableErrorType, lastRetryInterval)
+			span.RecordError(err)
+			span.SetStatus(otelcodes.Error, err.Error())
+			return err
+		}
+
+		retryableAttempts++
+		errType := retryableConnectionErrorType(err)
+		if firstRetryableErrorType == "" {
+			firstRetryableErrorType = errType
+		}
+		lastRetryableErrorType = errType
+		CloseConn(dialer.Key())
+
+		if time.Now().After(deadline) {
+			recordGuestExecWait(span, start, attempts, retryableAttempts, firstRetryableErrorType, lastRetryableErrorType, lastRetryInterval)
+			span.RecordError(err)
+			span.SetStatus(otelcodes.Error, err.Error())
+			return err
+		}
+
+		retryInterval := guestExecRetryInterval(time.Since(start))
+		lastRetryInterval = retryInterval
+		select {
+		case <-ctx.Done():
+			recordGuestExecWait(span, start, attempts, retryableAttempts, firstRetryableErrorType, lastRetryableErrorType, lastRetryInterval)
+			span.RecordError(ctx.Err())
+			span.SetStatus(otelcodes.Error, ctx.Err().Error())
+			return ctx.Err()
+		case <-time.After(retryInterval):
+		}
+	}
+}
+
+func reconfigureNetworkOnce(ctx context.Context, dialer hypervisor.VsockDialer, opts ReconfigureNetworkOptions) error {
+	grpcConn, err := GetOrCreateConn(ctx, dialer)
+	if err != nil {
+		return fmt.Errorf("get grpc connection: %w", err)
+	}
+	client := NewGuestServiceClient(grpcConn)
+
+	_, span := guestTracer().Start(ctx, "guest.reconfigure_network.rpc")
+	_, err = client.ReconfigureNetwork(ctx, &ReconfigureNetworkRequest{
+		InterfaceName: opts.InterfaceName,
+		Mac:           opts.MAC,
+		Ipv4:          opts.IPv4,
+		Prefix:        opts.Prefix,
+		Gateway:       opts.Gateway,
+	})
+	finishGuestExecStepSpan(span, err)
+	if err != nil {
+		return fmt.Errorf("reconfigure network rpc: %w", err)
+	}
+	return nil
+}
+
 // ExecIntoInstance executes command in instance via vsock using gRPC.
 // The dialer is a hypervisor-specific VsockDialer that knows how to connect to the guest.
 // If WaitForAgent is set, it will retry on connection errors until the timeout.
