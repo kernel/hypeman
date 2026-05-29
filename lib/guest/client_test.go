@@ -5,12 +5,16 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"google.golang.org/grpc"
 )
 
@@ -88,6 +92,7 @@ func TestExecIntoInstanceRetriesWithFreshConnections(t *testing.T) {
 		key:     "retry-fresh-connection-test",
 		readyAt: time.Now().Add(100 * time.Millisecond),
 	}
+	t.Cleanup(func() { CloseConn(dialer.Key()) })
 
 	start := time.Now()
 	exit, err := ExecIntoInstance(context.Background(), dialer, ExecOptions{
@@ -106,6 +111,88 @@ func TestExecIntoInstanceRetriesWithFreshConnections(t *testing.T) {
 	}
 	if elapsed > 500*time.Millisecond {
 		t.Fatalf("ExecIntoInstance took %s, want under 500ms", elapsed)
+	}
+}
+
+func TestExecIntoInstanceTracesDetailedWaitForAgentPath(t *testing.T) {
+	recorder, cleanup := newGuestTraceRecorder(t)
+	defer cleanup()
+
+	dialer := &delayedDialer{
+		key:     "trace-wait-for-agent-test",
+		readyAt: time.Now(),
+	}
+	t.Cleanup(func() { CloseConn(dialer.Key()) })
+
+	exit, err := ExecIntoInstance(context.Background(), dialer, ExecOptions{
+		Command:      []string{"true"},
+		WaitForAgent: time.Second,
+	})
+	if err != nil {
+		t.Fatalf("ExecIntoInstance failed: %v", err)
+	}
+	if exit.Code != 0 {
+		t.Fatalf("exit code = %d, want 0", exit.Code)
+	}
+
+	for _, name := range []string{
+		"guest.exec",
+		"guest.exec.get_conn",
+		"guest.exec.open_stream",
+		"guest.exec.send_start",
+		"guest.exec.recv_until_exit",
+	} {
+		if findEndedSpan(recorder, name) == nil {
+			t.Fatalf("missing span %q", name)
+		}
+	}
+
+	parent := findEndedSpan(recorder, "guest.exec")
+	parentAttrs := spanAttributes(parent)
+	if parentAttrs["attempts"] != "1" {
+		t.Fatalf("attempts = %s, want 1", parentAttrs["attempts"])
+	}
+	if parentAttrs["retryable_attempts"] != "0" {
+		t.Fatalf("retryable_attempts = %s, want 0", parentAttrs["retryable_attempts"])
+	}
+
+	recv := findEndedSpan(recorder, "guest.exec.recv_until_exit")
+	recvAttrs := spanAttributes(recv)
+	if recvAttrs["exit_code"] != "0" {
+		t.Fatalf("recv exit_code = %s, want 0", recvAttrs["exit_code"])
+	}
+	if recvAttrs["stdout_bytes"] != "0" {
+		t.Fatalf("stdout_bytes = %s, want 0", recvAttrs["stdout_bytes"])
+	}
+	if recvAttrs["stderr_bytes"] != "0" {
+		t.Fatalf("stderr_bytes = %s, want 0", recvAttrs["stderr_bytes"])
+	}
+}
+
+func TestExecIntoInstanceSkipsDetailedTraceWhenNotWaiting(t *testing.T) {
+	recorder, cleanup := newGuestTraceRecorder(t)
+	defer cleanup()
+
+	dialer := &delayedDialer{
+		key:     "trace-no-wait-test",
+		readyAt: time.Now(),
+	}
+	t.Cleanup(func() { CloseConn(dialer.Key()) })
+
+	exit, err := ExecIntoInstance(context.Background(), dialer, ExecOptions{
+		Command: []string{"true"},
+	})
+	if err != nil {
+		t.Fatalf("ExecIntoInstance failed: %v", err)
+	}
+	if exit.Code != 0 {
+		t.Fatalf("exit code = %d, want 0", exit.Code)
+	}
+
+	for _, span := range recorder.Ended() {
+		if strings.HasPrefix(span.Name(), "guest.exec") {
+			t.Fatalf("unexpected detailed guest exec span %q", span.Name())
+		}
 	}
 }
 
@@ -141,6 +228,36 @@ func waitForTrackedConn(t *testing.T, conns <-chan *closeTrackingConn) *closeTra
 		t.Fatal("gRPC connection was not dialed")
 		return nil
 	}
+}
+
+func newGuestTraceRecorder(t *testing.T) (*tracetest.SpanRecorder, func()) {
+	t.Helper()
+
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	previous := otel.GetTracerProvider()
+	otel.SetTracerProvider(provider)
+	return recorder, func() {
+		otel.SetTracerProvider(previous)
+		_ = provider.Shutdown(context.Background())
+	}
+}
+
+func findEndedSpan(recorder *tracetest.SpanRecorder, name string) sdktrace.ReadOnlySpan {
+	for _, span := range recorder.Ended() {
+		if span.Name() == name {
+			return span
+		}
+	}
+	return nil
+}
+
+func spanAttributes(span sdktrace.ReadOnlySpan) map[string]string {
+	attrs := make(map[string]string, len(span.Attributes()))
+	for _, attr := range span.Attributes() {
+		attrs[string(attr.Key)] = attr.Value.Emit()
+	}
+	return attrs
 }
 
 type delayedDialer struct {

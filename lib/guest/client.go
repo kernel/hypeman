@@ -239,7 +239,7 @@ func recordGuestExecWait(span trace.Span, start time.Time, attempts, retryableAt
 }
 
 func startGuestExecSpan(ctx context.Context, opts ExecOptions) (context.Context, trace.Span) {
-	return otel.Tracer("hypeman/guest").Start(ctx, "guest.exec", trace.WithAttributes(
+	return guestTracer().Start(ctx, "guest.exec", trace.WithAttributes(
 		attribute.String("command_name", execCommandName(opts.Command)),
 		attribute.Bool("tty", opts.TTY),
 		attribute.Bool("wait_for_agent", opts.WaitForAgent > 0),
@@ -249,6 +249,30 @@ func startGuestExecSpan(ctx context.Context, opts ExecOptions) (context.Context,
 		attribute.Int64("retry_slow_interval_ms", guestExecSlowRetryInterval.Milliseconds()),
 		attribute.Int64("retry_fast_window_ms", guestExecFastRetryWindow.Milliseconds()),
 	))
+}
+
+func guestTracer() trace.Tracer {
+	return otel.Tracer("hypeman/guest")
+}
+
+func startGuestExecStep(ctx context.Context, opts ExecOptions, name string, attrs ...attribute.KeyValue) (trace.Span, func(error)) {
+	if opts.WaitForAgent == 0 {
+		return nil, func(error) {}
+	}
+	_, span := guestTracer().Start(ctx, name, trace.WithAttributes(attrs...))
+	return span, func(err error) {
+		finishGuestExecStepSpan(span, err)
+	}
+}
+
+func finishGuestExecStepSpan(span trace.Span, err error) {
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(otelcodes.Error, err.Error())
+	} else {
+		span.SetStatus(otelcodes.Ok, "")
+	}
+	span.End()
 }
 
 func finishGuestExecSpan(span trace.Span, exit *ExitStatus, err error) {
@@ -307,7 +331,9 @@ func execIntoInstanceOnce(ctx context.Context, dialer hypervisor.VsockDialer, op
 	var bytesSent int64
 
 	// Get or create a reusable gRPC connection for this vsock dialer
+	_, finishGetConn := startGuestExecStep(ctx, opts, "guest.exec.get_conn")
 	grpcConn, err := GetOrCreateConn(ctx, dialer)
+	finishGetConn(err)
 	if err != nil {
 		return nil, fmt.Errorf("get grpc connection: %w", err)
 	}
@@ -315,7 +341,9 @@ func execIntoInstanceOnce(ctx context.Context, dialer hypervisor.VsockDialer, op
 
 	// Create guest client
 	client := NewGuestServiceClient(grpcConn)
+	_, finishOpenStream := startGuestExecStep(ctx, opts, "guest.exec.open_stream")
 	stream, err := client.Exec(ctx)
+	finishOpenStream(err)
 	if err != nil {
 		return nil, fmt.Errorf("start exec stream: %w", err)
 	}
@@ -323,6 +351,7 @@ func execIntoInstanceOnce(ctx context.Context, dialer hypervisor.VsockDialer, op
 	defer stream.CloseSend()
 
 	// Send start request with initial window size
+	_, finishSendStart := startGuestExecStep(ctx, opts, "guest.exec.send_start")
 	if err := stream.Send(&ExecRequest{
 		Request: &ExecRequest_Start{
 			Start: &ExecStart{
@@ -336,8 +365,10 @@ func execIntoInstanceOnce(ctx context.Context, dialer hypervisor.VsockDialer, op
 			},
 		},
 	}); err != nil {
+		finishSendStart(err)
 		return nil, fmt.Errorf("send start request: %w", err)
 	}
+	finishSendStart(nil)
 
 	// Mutex to protect concurrent stream.Send/CloseSend calls (gRPC streams are not thread-safe)
 	var streamMu sync.Mutex
@@ -383,13 +414,32 @@ func execIntoInstanceOnce(ctx context.Context, dialer hypervisor.VsockDialer, op
 
 	// Receive responses
 	var totalStdout, totalStderr int
+	recvSpan, finishRecv := startGuestExecStep(ctx, opts, "guest.exec.recv_until_exit")
+	finishReceive := func(err error, exitCode *int) {
+		if recvSpan != nil {
+			attrs := []attribute.KeyValue{
+				attribute.Int("stdout_bytes", totalStdout),
+				attribute.Int("stderr_bytes", totalStderr),
+				attribute.Int64("bytes_sent", atomic.LoadInt64(&bytesSent)),
+			}
+			if exitCode != nil {
+				attrs = append(attrs, attribute.Int("exit_code", *exitCode))
+			}
+			recvSpan.SetAttributes(attrs...)
+		}
+		finishRecv(err)
+	}
 	for {
 		resp, err := stream.Recv()
 		if err == io.EOF {
-			return nil, fmt.Errorf("stream closed without exit code (stdout=%d, stderr=%d)", totalStdout, totalStderr)
+			err := fmt.Errorf("stream closed without exit code (stdout=%d, stderr=%d)", totalStdout, totalStderr)
+			finishReceive(err, nil)
+			return nil, err
 		}
 		if err != nil {
-			return nil, fmt.Errorf("receive response (stdout=%d, stderr=%d): %w", totalStdout, totalStderr, err)
+			err := fmt.Errorf("receive response (stdout=%d, stderr=%d): %w", totalStdout, totalStderr, err)
+			finishReceive(err, nil)
+			return nil, err
 		}
 
 		switch r := resp.Response.(type) {
@@ -410,6 +460,7 @@ func execIntoInstanceOnce(ctx context.Context, dialer hypervisor.VsockDialer, op
 				bytesReceived := int64(totalStdout + totalStderr)
 				GuestMetrics.RecordExecSession(ctx, start, exitCode, atomic.LoadInt64(&bytesSent), bytesReceived)
 			}
+			finishReceive(nil, &exitCode)
 			return &ExitStatus{Code: exitCode}, nil
 		}
 	}
