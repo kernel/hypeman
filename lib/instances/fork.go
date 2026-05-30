@@ -403,6 +403,9 @@ func (m *manager) applyForkTargetState(ctx context.Context, forkID string, targe
 			return nil, err
 		}
 		if inst != nil && (inst.State == StateRunning || inst.State == StateInitializing) {
+			if guestInitiatedResumeNetworkMailbox(&inst.StoredMetadata) {
+				return inst, nil
+			}
 			if err := ensureGuestAgentReadyForForkPhase(ctx, &inst.StoredMetadata, "before returning running fork instance"); err != nil {
 				return nil, fmt.Errorf("wait for forked guest agent readiness: %w", err)
 			}

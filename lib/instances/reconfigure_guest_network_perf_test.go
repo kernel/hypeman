@@ -5,6 +5,7 @@ package instances
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -24,6 +25,20 @@ import (
 )
 
 const reconfigureGuestNetworkPerfEnv = "HYPEMAN_RUN_RECONFIGURE_GUEST_NETWORK_PERF"
+const guestInitiatedResumeNetworkPerfEnv = "HYPEMAN_RECONFIGURE_GUEST_NETWORK_GUEST_INITIATED"
+const guestInitiatedResumeNetworkPollPerfEnv = "HYPEMAN_RECONFIGURE_GUEST_NETWORK_GUEST_POLL_MS"
+const guestInitiatedResumeNetworkTriggerPerfEnv = "HYPEMAN_RECONFIGURE_GUEST_NETWORK_GUEST_TRIGGER"
+const guestInitiatedResumeNetworkPrearmPerfEnv = "HYPEMAN_RECONFIGURE_GUEST_NETWORK_GUEST_PREARM"
+const guestInitiatedResumeNetworkStartArmedPerfEnv = "HYPEMAN_RECONFIGURE_GUEST_NETWORK_GUEST_START_ARMED"
+const guestInitiatedResumeNetworkArmedPollPerfEnv = "HYPEMAN_RECONFIGURE_GUEST_NETWORK_GUEST_ARMED_POLL_MS"
+const guestInitiatedResumeNetworkPrearmSettlePerfEnv = "HYPEMAN_RECONFIGURE_GUEST_NETWORK_GUEST_PREARM_SETTLE_MS"
+const guestInitiatedResumeNetworkMailboxPerfEnv = "HYPEMAN_RECONFIGURE_GUEST_NETWORK_GUEST_MAILBOX"
+const reconfigureGuestNetworkPerfVCPUsEnv = "HYPEMAN_RECONFIGURE_GUEST_NETWORK_PERF_VCPUS"
+
+type resumeNetworkAck struct {
+	received time.Time
+	text     string
+}
 
 func TestReconfigureGuestNetworkPerf(t *testing.T) {
 	if os.Getenv(reconfigureGuestNetworkPerfEnv) != "1" {
@@ -57,15 +72,51 @@ func TestReconfigureGuestNetworkPerf(t *testing.T) {
 	require.NoError(t, systemManager.EnsureSystemFiles(ctx))
 	require.NoError(t, mgr.networkManager.Initialize(ctx, nil))
 
+	var ackCh <-chan resumeNetworkAck
+	expectMailboxAck := false
+	env := map[string]string(nil)
+	if os.Getenv(guestInitiatedResumeNetworkPerfEnv) == "1" {
+		env = map[string]string{guestResumeNetworkPortEnv: "2224"}
+		ackPort, ch := startResumeNetworkAckListener(t)
+		env[guestResumeNetworkAckPortEnv] = strconv.Itoa(ackPort)
+		ackCh = ch
+		if os.Getenv(guestInitiatedResumeNetworkMailboxPerfEnv) == "1" {
+			env["HYPEMAN_RESUME_NETWORK_MAILBOX"] = "1"
+			env["HYPEMAN_RESUME_NETWORK_MAILBOX_TOKEN"] = fmt.Sprintf("perf-%d", time.Now().UnixNano())
+			expectMailboxAck = true
+		}
+		if trigger := strings.TrimSpace(os.Getenv(guestInitiatedResumeNetworkTriggerPerfEnv)); trigger != "" {
+			env["HYPEMAN_RESUME_NETWORK_TRIGGER"] = trigger
+		}
+		if os.Getenv(guestInitiatedResumeNetworkPrearmPerfEnv) == "1" {
+			env["HYPEMAN_RESUME_NETWORK_PREARM"] = "1"
+			env["HYPEMAN_RESUME_NETWORK_SLOW_POLL_INTERVAL_MS"] = "1000"
+			env["HYPEMAN_RESUME_NETWORK_ARMED_POLL_INTERVAL_MS"] = "1"
+			if armedPollMS := strings.TrimSpace(os.Getenv(guestInitiatedResumeNetworkArmedPollPerfEnv)); armedPollMS != "" {
+				env["HYPEMAN_RESUME_NETWORK_ARMED_POLL_INTERVAL_MS"] = armedPollMS
+			}
+			if os.Getenv(guestInitiatedResumeNetworkStartArmedPerfEnv) == "1" {
+				env["HYPEMAN_RESUME_NETWORK_START_ARMED"] = "1"
+			}
+			if settleMS := strings.TrimSpace(os.Getenv(guestInitiatedResumeNetworkPrearmSettlePerfEnv)); settleMS != "" {
+				env["HYPEMAN_RESUME_NETWORK_PREARM_SETTLE_MS"] = settleMS
+			}
+		}
+		if pollMS := strings.TrimSpace(os.Getenv(guestInitiatedResumeNetworkPollPerfEnv)); pollMS != "" {
+			env["HYPEMAN_RESUME_NETWORK_POLL_INTERVAL_MS"] = pollMS
+		}
+	}
+
 	source, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "fc-reconfigure-perf-src",
 		Image:          imageName,
 		Size:           1024 * 1024 * 1024,
 		OverlaySize:    1024 * 1024 * 1024,
-		Vcpus:          1,
+		Vcpus:          perfVCPUsFromEnv(t, 1),
 		NetworkEnabled: true,
 		Hypervisor:     hypervisor.TypeFirecracker,
 		Cmd:            []string{"sleep", "infinity"},
+		Env:            env,
 	})
 	require.NoError(t, err)
 	sourceID := source.Id
@@ -74,6 +125,21 @@ func TestReconfigureGuestNetworkPerf(t *testing.T) {
 	source, err = waitForInstanceState(ctx, mgr, sourceID, StateRunning, integrationTestTimeout(45*time.Second))
 	require.NoError(t, err)
 	require.NoError(t, waitForExecAgent(ctx, mgr, sourceID, 45*time.Second))
+
+	var sourceResumeNetworkServer *guestResumeNetworkServer
+	if os.Getenv(guestInitiatedResumeNetworkPerfEnv) == "1" &&
+		os.Getenv(guestInitiatedResumeNetworkPollPerfEnv) == "" &&
+		os.Getenv(guestInitiatedResumeNetworkPrearmPerfEnv) != "1" &&
+		strings.TrimSpace(os.Getenv(guestInitiatedResumeNetworkTriggerPerfEnv)) == "" {
+		port := guestInitiatedResumeNetworkPort(&source.StoredMetadata)
+		require.NotZero(t, port)
+		sourceResumeNetworkServer, err = startGuestResumeNetworkServer(ctx, source.VsockSocket, port, nil)
+		require.NoError(t, err)
+		t.Cleanup(sourceResumeNetworkServer.Close)
+		armCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		require.NoError(t, sourceResumeNetworkServer.WaitArmed(armCtx))
+		cancel()
+	}
 
 	snapshot, err := mgr.CreateSnapshot(ctx, sourceID, CreateSnapshotRequest{
 		Kind: SnapshotKindStandby,
@@ -92,17 +158,115 @@ func TestReconfigureGuestNetworkPerf(t *testing.T) {
 		forkElapsed := time.Since(start)
 		require.NoError(t, err)
 		require.Equal(t, StateRunning, fork.State)
+		var mailboxAck *resumeNetworkAck
+		var appliedAck *resumeNetworkAck
+		if ackCh != nil {
+			if expectMailboxAck {
+				mailboxAck = waitForResumeNetworkAck(t, ackCh, fork, "mailbox", 2*time.Second)
+			}
+			appliedAck = waitForResumeNetworkAck(t, ackCh, fork, "applied", 2*time.Second)
+		}
 		require.NoError(t, waitForExecAgent(ctx, mgr, fork.Id, 45*time.Second))
+		requireGuestNetworkIdentity(t, fork)
 
 		spans := append([]sdktrace.ReadOnlySpan(nil), recorder.Ended()[before:]...)
 		t.Log(formatReconfigurePerfLine(i, forkElapsed, spans))
+		if mailboxAck != nil {
+			t.Log(formatResumeNetworkAckLine(i, start, *mailboxAck, spans))
+		}
+		if appliedAck != nil {
+			t.Log(formatResumeNetworkAckLine(i, start, *appliedAck, spans))
+		}
 		_ = mgr.DeleteInstance(ctx, fork.Id)
 	}
+}
+
+func requireGuestNetworkIdentity(t *testing.T, inst *Instance) {
+	t.Helper()
+
+	output, exitCode, err := execInInstance(context.Background(), inst, "sh", "-c", "printf 'mac='; cat /sys/class/net/eth0/address; printf 'cidrs='; ip -4 -o addr show dev eth0 scope global | awk '{print $4}'")
+	require.NoError(t, err)
+	require.Equal(t, 0, exitCode, "guest network identity command output: %s", output)
+	require.Contains(t, strings.ToLower(output), "mac="+strings.ToLower(inst.MAC))
+	require.Contains(t, output, inst.IP+"/")
+}
+
+func startResumeNetworkAckListener(t *testing.T) (int, <-chan resumeNetworkAck) {
+	t.Helper()
+
+	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+
+	ch := make(chan resumeNetworkAck, 128)
+	go func() {
+		buf := make([]byte, 1024)
+		for {
+			n, _, err := conn.ReadFromUDP(buf)
+			if err != nil {
+				return
+			}
+			ch <- resumeNetworkAck{
+				received: time.Now(),
+				text:     strings.TrimSpace(string(buf[:n])),
+			}
+		}
+	}()
+	return conn.LocalAddr().(*net.UDPAddr).Port, ch
+}
+
+func waitForResumeNetworkAck(t *testing.T, ch <-chan resumeNetworkAck, inst *Instance, stage string, timeout time.Duration) *resumeNetworkAck {
+	t.Helper()
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	wantStage := "stage=" + stage
+	wantMAC := "mac=" + strings.ToLower(inst.MAC)
+	wantIP := "ip=" + inst.IP
+	for {
+		select {
+		case ack := <-ch:
+			text := strings.ToLower(ack.text)
+			if strings.Contains(text, wantStage) && strings.Contains(text, wantMAC) && strings.Contains(text, wantIP) {
+				return &ack
+			}
+		case <-timer.C:
+			require.Failf(t, "timed out waiting for guest resume network ack", "stage=%s instance=%s mac=%s ip=%s", stage, inst.Id, inst.MAC, inst.IP)
+			return nil
+		}
+	}
+}
+
+func formatResumeNetworkAckLine(iter int, forkStart time.Time, ack resumeNetworkAck, spans []sdktrace.ReadOnlySpan) string {
+	resume := lastSpanNamed(spans, "resume_vm")
+	afterResumeMS := int64(-1)
+	if resume != nil {
+		afterResumeMS = ack.received.Sub(resume.EndTime()).Milliseconds()
+	}
+	return fmt.Sprintf(
+		"PERF_ACK iter=%d guest_network_ack_after_fork_start_ms=%d guest_network_ack_after_resume_ms=%d ack=%q",
+		iter,
+		ack.received.Sub(forkStart).Milliseconds(),
+		afterResumeMS,
+		ack.text,
+	)
 }
 
 func perfIterationsFromEnv(t *testing.T, fallback int) int {
 	t.Helper()
 	raw := strings.TrimSpace(os.Getenv("HYPEMAN_RECONFIGURE_GUEST_NETWORK_PERF_ITERS"))
+	if raw == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(raw)
+	require.NoError(t, err)
+	require.Positive(t, n)
+	return n
+}
+
+func perfVCPUsFromEnv(t *testing.T, fallback int) int {
+	t.Helper()
+	raw := strings.TrimSpace(os.Getenv(reconfigureGuestNetworkPerfVCPUsEnv))
 	if raw == "" {
 		return fallback
 	}
@@ -121,6 +285,7 @@ func formatReconfigurePerfLine(iter int, forkElapsed time.Duration, spans []sdkt
 	desc := descendantSpans(spans, reconfigure)
 	exec := lastSpanNamed(desc, "guest.exec")
 	networkRPC := lastSpanNamed(desc, "guest.reconfigure_network")
+	resumeNetworkWait := lastSpanNamed(desc, "guest.resume_network.wait")
 	getConn := lastSpanNamed(desc, "guest.exec.get_conn")
 	openStream := lastSpanNamed(desc, "guest.exec.open_stream")
 	sendStart := lastSpanNamed(desc, "guest.exec.send_start")
@@ -131,12 +296,13 @@ func formatReconfigurePerfLine(iter int, forkElapsed time.Duration, spans []sdkt
 	vsockReadOK := lastSpanNamed(desc, "hypervisor.vsock.read_ok")
 
 	return fmt.Sprintf(
-		"PERF iter=%d fork_total_ms=%d reconfigure_guest_network_ms=%d guest_exec_ms=%d guest_network_rpc_ms=%d get_conn_ms=%d open_stream_ms=%d send_start_ms=%d recv_until_exit_ms=%d vsock_dial_ms=%d vsock_unix_dial_ms=%d vsock_write_connect_ms=%d vsock_read_ok_ms=%d attempts=%d retryable_attempts=%d network_rpc_attempts=%d network_rpc_retryable_attempts=%d first_retryable_error=%s last_retryable_error=%s wait_elapsed_ms=%d open_stream_attempts=%s recv_attempts=%s unary_attempts=%s vsock_dial_attempts=%s vsock_unix_dial_attempts=%s vsock_write_connect_attempts=%s vsock_read_ok_attempts=%s",
+		"PERF iter=%d fork_total_ms=%d reconfigure_guest_network_ms=%d guest_exec_ms=%d guest_network_rpc_ms=%d guest_resume_network_wait_ms=%d get_conn_ms=%d open_stream_ms=%d send_start_ms=%d recv_until_exit_ms=%d vsock_dial_ms=%d vsock_unix_dial_ms=%d vsock_write_connect_ms=%d vsock_read_ok_ms=%d attempts=%d retryable_attempts=%d network_rpc_attempts=%d network_rpc_retryable_attempts=%d first_retryable_error=%s last_retryable_error=%s wait_elapsed_ms=%d open_stream_attempts=%s recv_attempts=%s unary_attempts=%s guest_resume_network_wait_attempts=%s vsock_dial_attempts=%s vsock_unix_dial_attempts=%s vsock_write_connect_attempts=%s vsock_read_ok_attempts=%s",
 		iter,
 		forkElapsed.Milliseconds(),
 		spanDurationMS(reconfigure),
 		spanDurationMS(exec),
 		spanDurationMS(networkRPC),
+		spanDurationMS(resumeNetworkWait),
 		spanDurationMS(getConn),
 		spanDurationMS(openStream),
 		spanDurationMS(sendStart),
@@ -155,6 +321,7 @@ func formatReconfigurePerfLine(iter int, forkElapsed time.Duration, spans []sdkt
 		spanDurationsByName(desc, "guest.exec.open_stream"),
 		spanDurationsByName(desc, "guest.exec.recv_until_exit"),
 		spanDurationsByName(desc, "guest.reconfigure_network.rpc"),
+		spanDurationsByName(desc, "guest.resume_network.wait"),
 		spanDurationsByName(desc, "hypervisor.vsock.dial"),
 		spanDurationsByName(desc, "hypervisor.vsock.unix_dial"),
 		spanDurationsByName(desc, "hypervisor.vsock.write_connect"),

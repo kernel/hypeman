@@ -110,6 +110,31 @@ func (m *manager) standbyInstance(
 		return nil, fmt.Errorf("hypervisor %s does not support standby (snapshots)", stored.HypervisorType)
 	}
 
+	if guestInitiatedResumeNetworkPrearm(stored) && !guestInitiatedResumeNetworkStartArmed(stored) && !stored.SkipGuestAgent {
+		armCtx, armSpanEnd := m.startLifecycleStep(ctx, "guest.resume_network.arm",
+			attribute.String("instance_id", id),
+			attribute.String("hypervisor", string(stored.HypervisorType)),
+			attribute.String("operation", "guest_resume_network_arm"),
+		)
+		if err := m.armGuestInitiatedResumeNetwork(armCtx, stored); err != nil {
+			armSpanEnd(err)
+			return nil, fmt.Errorf("arm guest-initiated resume network: %w", err)
+		}
+		if settle := guestInitiatedResumeNetworkPrearmSettle(stored); settle > 0 {
+			timer := time.NewTimer(settle)
+			select {
+			case <-timer.C:
+			case <-armCtx.Done():
+				if !timer.Stop() {
+					<-timer.C
+				}
+				armSpanEnd(armCtx.Err())
+				return nil, armCtx.Err()
+			}
+		}
+		armSpanEnd(nil)
+	}
+
 	// 6. Transition: Running → Paused
 	log.DebugContext(ctx, "pausing VM", "instance_id", id)
 	pauseCtx, pauseSpanEnd := m.startLifecycleStep(ctx, "pause_vm",

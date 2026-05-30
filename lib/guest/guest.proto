@@ -23,6 +23,9 @@ service GuestService {
 
   // ReconfigureNetwork updates the guest network identity without spawning shell commands
   rpc ReconfigureNetwork(ReconfigureNetworkRequest) returns (ReconfigureNetworkResponse);
+
+  // ArmResumeNetwork puts the guest-initiated resume network watcher into its fast reconnect loop
+  rpc ArmResumeNetwork(ArmResumeNetworkRequest) returns (ArmResumeNetworkResponse);
 }
 
 // ExecRequest represents messages from client to server
@@ -169,3 +172,11 @@ message ReconfigureNetworkRequest {
 
 // ReconfigureNetworkResponse acknowledges the network reconfiguration request
 message ReconfigureNetworkResponse {}
+
+// ArmResumeNetworkRequest arms the guest-side fast reconnect loop before snapshot
+message ArmResumeNetworkRequest {
+  uint32 poll_interval_ms = 1;  // Fast reconnect interval while armed; 0 uses the guest default
+}
+
+// ArmResumeNetworkResponse acknowledges that the fast reconnect loop is armed
+message ArmResumeNetworkResponse {}

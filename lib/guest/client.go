@@ -159,6 +159,92 @@ type ReconfigureNetworkOptions struct {
 	WaitForAgent  time.Duration
 }
 
+type ArmResumeNetworkOptions struct {
+	PollIntervalMS uint32
+	WaitForAgent   time.Duration
+}
+
+func ArmResumeNetworkInInstance(ctx context.Context, dialer hypervisor.VsockDialer, opts ArmResumeNetworkOptions) error {
+	if opts.WaitForAgent == 0 {
+		return armResumeNetworkOnce(ctx, dialer, opts)
+	}
+
+	ctx, span := guestTracer().Start(ctx, "guest.arm_resume_network", trace.WithAttributes(
+		attribute.Bool("wait_for_agent", true),
+		attribute.Int64("wait_for_agent_ms", opts.WaitForAgent.Milliseconds()),
+		attribute.Int("poll_interval_ms", int(opts.PollIntervalMS)),
+	))
+	defer span.End()
+
+	deadline := time.Now().Add(opts.WaitForAgent)
+	start := time.Now()
+	attempts := 0
+	retryableAttempts := 0
+	firstRetryableErrorType := ""
+	lastRetryableErrorType := ""
+	lastRetryInterval := time.Duration(0)
+
+	for {
+		attempts++
+		err := armResumeNetworkOnce(ctx, dialer, opts)
+		if err == nil {
+			recordGuestExecWait(span, start, attempts, retryableAttempts, firstRetryableErrorType, lastRetryableErrorType, lastRetryInterval)
+			span.SetStatus(otelcodes.Ok, "")
+			return nil
+		}
+		if !isRetryableConnectionError(err) {
+			recordGuestExecWait(span, start, attempts, retryableAttempts, firstRetryableErrorType, lastRetryableErrorType, lastRetryInterval)
+			span.RecordError(err)
+			span.SetStatus(otelcodes.Error, err.Error())
+			return err
+		}
+
+		retryableAttempts++
+		errType := retryableConnectionErrorType(err)
+		if firstRetryableErrorType == "" {
+			firstRetryableErrorType = errType
+		}
+		lastRetryableErrorType = errType
+		CloseConn(dialer.Key())
+
+		if time.Now().After(deadline) {
+			recordGuestExecWait(span, start, attempts, retryableAttempts, firstRetryableErrorType, lastRetryableErrorType, lastRetryInterval)
+			span.RecordError(err)
+			span.SetStatus(otelcodes.Error, err.Error())
+			return err
+		}
+
+		retryInterval := guestExecRetryInterval(time.Since(start))
+		lastRetryInterval = retryInterval
+		select {
+		case <-ctx.Done():
+			recordGuestExecWait(span, start, attempts, retryableAttempts, firstRetryableErrorType, lastRetryableErrorType, lastRetryInterval)
+			span.RecordError(ctx.Err())
+			span.SetStatus(otelcodes.Error, ctx.Err().Error())
+			return ctx.Err()
+		case <-time.After(retryInterval):
+		}
+	}
+}
+
+func armResumeNetworkOnce(ctx context.Context, dialer hypervisor.VsockDialer, opts ArmResumeNetworkOptions) error {
+	grpcConn, err := GetOrCreateConn(ctx, dialer)
+	if err != nil {
+		return fmt.Errorf("get grpc connection: %w", err)
+	}
+	client := NewGuestServiceClient(grpcConn)
+
+	_, span := guestTracer().Start(ctx, "guest.arm_resume_network.rpc")
+	_, err = client.ArmResumeNetwork(ctx, &ArmResumeNetworkRequest{
+		PollIntervalMs: opts.PollIntervalMS,
+	})
+	finishGuestExecStepSpan(span, err)
+	if err != nil {
+		return fmt.Errorf("arm resume network rpc: %w", err)
+	}
+	return nil
+}
+
 func ReconfigureNetworkInInstance(ctx context.Context, dialer hypervisor.VsockDialer, opts ReconfigureNetworkOptions) error {
 	if opts.WaitForAgent == 0 {
 		return reconfigureNetworkOnce(ctx, dialer, opts)

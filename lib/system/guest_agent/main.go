@@ -22,6 +22,7 @@ const (
 // guestServer implements the gRPC GuestService
 type guestServer struct {
 	pb.UnimplementedGuestServiceServer
+	resumeNetwork *resumeNetworkController
 }
 
 func main() {
@@ -53,8 +54,10 @@ func main() {
 	}
 
 	// Create gRPC server
+	guestSvc := &guestServer{}
+	startResumeNetworkWatcher(guestSvc)
 	grpcServer := grpc.NewServer()
-	pb.RegisterGuestServiceServer(grpcServer, &guestServer{})
+	pb.RegisterGuestServiceServer(grpcServer, guestSvc)
 
 	// Serve gRPC over vsock
 	if err := grpcServer.Serve(l); err != nil {

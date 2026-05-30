@@ -229,6 +229,51 @@ func (m *manager) restoreInstance(
 		proxyRegistered = true
 	}
 
+	resumeNetworkVsockSocket := guestInitiatedResumeNetworkSocket(stored)
+	var resumeNetworkServer *guestResumeNetworkServer
+	var cancelResumeNetworkServer context.CancelFunc
+	resumeNetworkMailboxPatched := false
+	if stored.NetworkEnabled && !stored.SkipGuestAgent {
+		var resumeNetworkCfg *guestNetworkConfig
+		if allocatedNet != nil {
+			resumeNetworkCfg, err = guestNetworkReconfigureConfig(allocatedNet)
+		} else if guestInitiatedResumeNetworkPrearm(stored) {
+			if alloc, allocErr := m.networkManager.GetAllocation(ctx, id); allocErr != nil {
+				log.WarnContext(ctx, "failed to get network allocation for guest-initiated resume network disarm", "instance_id", id, "error", allocErr)
+			} else {
+				resumeNetworkCfg, err = guestNetworkReconfigureConfig(alloc)
+			}
+		}
+		if err != nil {
+			log.WarnContext(ctx, "failed to build guest-initiated resume network payload", "instance_id", id, "error", err)
+			err = nil
+		}
+		if resumeNetworkCfg != nil && guestInitiatedResumeNetworkMailbox(stored) {
+			payload := newGuestResumeNetworkPayload(stored, resumeNetworkCfg)
+			err = patchGuestResumeNetworkMailbox(snapshotDir, guestInitiatedResumeNetworkMailboxToken(stored), &payload)
+			if err != nil {
+				log.WarnContext(ctx, "failed to patch guest resume network mailbox; falling back to guest-initiated server", "instance_id", id, "error", err)
+				err = nil
+			} else {
+				resumeNetworkMailboxPatched = true
+			}
+		}
+		if resumeNetworkCfg != nil && !resumeNetworkMailboxPatched {
+			resumeNetworkServer, cancelResumeNetworkServer, err = m.startGuestInitiatedResumeNetwork(ctx, stored, resumeNetworkVsockSocket, resumeNetworkCfg)
+			if err != nil {
+				log.WarnContext(ctx, "failed to start guest-initiated resume network server; falling back to host-initiated reconfigure", "instance_id", id, "error", err)
+				resumeNetworkServer = nil
+				cancelResumeNetworkServer = nil
+			}
+		}
+	}
+	if cancelResumeNetworkServer != nil {
+		defer cancelResumeNetworkServer()
+	}
+	if resumeNetworkServer != nil {
+		defer resumeNetworkServer.Close()
+	}
+
 	// 5. Transition: Standby → Paused (start hypervisor + restore)
 	restoreCtx, restoreSpanEnd := m.startLifecycleStep(ctx, "restore_from_snapshot",
 		attribute.String("instance_id", id),
@@ -283,7 +328,19 @@ func (m *manager) restoreInstance(
 			attribute.String("hypervisor", string(stored.HypervisorType)),
 			attribute.String("operation", "reconfigure_guest_network"),
 		)
-		if err := reconfigureGuestNetwork(reconfigureCtx, stored, allocatedNet); err != nil {
+		var err error
+		if resumeNetworkMailboxPatched {
+			err = nil
+		} else if resumeNetworkServer != nil {
+			err = m.waitForGuestInitiatedResumeNetwork(reconfigureCtx, resumeNetworkServer, stored)
+			if err != nil {
+				log.WarnContext(ctx, "guest-initiated resume network failed; falling back to host-initiated reconfigure", "instance_id", id, "error", err)
+				err = reconfigureGuestNetwork(reconfigureCtx, stored, allocatedNet)
+			}
+		} else {
+			err = reconfigureGuestNetwork(reconfigureCtx, stored, allocatedNet)
+		}
+		if err != nil {
 			reconfigureSpanEnd(err)
 			log.ErrorContext(ctx, "failed to configure guest network after restore", "instance_id", id, "error", err)
 			_ = hv.Shutdown(ctx)
@@ -292,6 +349,13 @@ func (m *manager) restoreInstance(
 			return nil, fmt.Errorf("configure guest network after restore: %w", err)
 		}
 		reconfigureSpanEnd(nil)
+	}
+	if allocatedNet == nil && resumeNetworkMailboxPatched && guestInitiatedResumeNetworkPrearm(stored) {
+		log.InfoContext(ctx, "guest resume network mailbox patched for source restore", "instance_id", id)
+	} else if allocatedNet == nil && resumeNetworkServer != nil && guestInitiatedResumeNetworkPrearm(stored) {
+		if err := m.waitForGuestInitiatedResumeNetwork(ctx, resumeNetworkServer, stored); err != nil {
+			log.WarnContext(ctx, "guest-initiated resume network source disarm failed", "instance_id", id, "error", err)
+		}
 	}
 
 	// 8. Delete snapshot after successful restore unless the hypervisor is keeping it
