@@ -630,6 +630,7 @@ func runWarmForkChain(t *testing.T, mgr *manager, tmpDir string, cfg warmForkCha
 	t.Helper()
 
 	ctx := context.Background()
+	readyTimeout := 90 * time.Second
 	p := paths.New(tmpDir)
 
 	imageManager, err := images.NewManager(p, 1, nil)
@@ -658,9 +659,9 @@ func runWarmForkChain(t *testing.T, mgr *manager, tmpDir string, cfg warmForkCha
 		}
 	})
 
-	source, err = waitForInstanceState(ctx, mgr, sourceID, StateRunning, integrationTestTimeout(45*time.Second))
+	source, err = waitForInstanceState(ctx, mgr, sourceID, StateRunning, readyTimeout)
 	require.NoError(t, err)
-	require.NoError(t, waitForExecAgent(ctx, mgr, sourceID, 45*time.Second))
+	require.NoError(t, waitForExecAgent(ctx, mgr, sourceID, readyTimeout))
 
 	snapshot, err := mgr.CreateSnapshot(ctx, sourceID, CreateSnapshotRequest{
 		Kind: SnapshotKindStandby,
@@ -690,9 +691,9 @@ func runWarmForkChain(t *testing.T, mgr *manager, tmpDir string, cfg warmForkCha
 			_ = mgr.DeleteInstance(context.Background(), warmID)
 		}
 	})
-	warm, err = waitForInstanceState(ctx, mgr, warmID, StateRunning, integrationTestTimeout(45*time.Second))
+	warm, err = waitForInstanceState(ctx, mgr, warmID, StateRunning, readyTimeout)
 	require.NoError(t, err)
-	require.NoError(t, waitForExecAgent(ctx, mgr, warmID, 45*time.Second))
+	require.NoError(t, waitForExecAgent(ctx, mgr, warmID, readyTimeout))
 
 	child, err := mgr.ForkInstance(ctx, warmID, ForkInstanceRequest{
 		Name:        cfg.namePrefix + "-warm-chain-child",
@@ -707,11 +708,11 @@ func runWarmForkChain(t *testing.T, mgr *manager, tmpDir string, cfg warmForkCha
 	warm, err = mgr.GetInstance(ctx, warmID)
 	require.NoError(t, err)
 	if warm.State != StateRunning {
-		warm, err = waitForInstanceState(ctx, mgr, warmID, StateRunning, integrationTestTimeout(45*time.Second))
+		warm, err = waitForInstanceState(ctx, mgr, warmID, StateRunning, readyTimeout)
 		require.NoError(t, err)
 	}
 	require.Equal(t, StateRunning, warm.State)
-	require.NoError(t, waitForExecAgent(ctx, mgr, warmID, 45*time.Second))
+	require.NoError(t, waitForExecAgent(ctx, mgr, warmID, readyTimeout))
 
 	require.NoError(t, mgr.DeleteInstance(ctx, warmID))
 	warmDeleted = true

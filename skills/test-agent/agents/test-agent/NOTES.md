@@ -437,3 +437,40 @@
 - targeted loops passed for guest exec readiness, build result handling, restart policy, and Firecracker fork isolation.
 - a full Linux suite passed after the flake fixes.
 - follow-up validation passed for the Cloud Hypervisor and QEMU basic end-to-end tests.
+
+## 2026-05-30 - PR #247 follow-up: Cloud Hypervisor warm fork chain
+
+### Flake signatures
+- Linux PR CI run `26692307520`, job `78670792084`, failed `TestCloudHypervisorWarmForkChain` because the source restored after a running fork was `Running`, but exec-agent readiness hit a closed vsock connection for 45s.
+- A targeted Deft reproduction then exposed the adjacent budget issue: the initial Cloud Hypervisor source sometimes remained `Initializing` beyond the test's 45s state wait on a loaded host.
+
+### Fixes
+- `lib/instances/fork.go`
+  - running-source forks now wait for the restored source guest agent before returning when the restored source is network-disabled.
+  - fork readiness checks no longer skip network-disabled instances; vsock exec readiness is independent of guest networking.
+- `lib/instances/fork_test.go`
+  - widened only the Cloud Hypervisor warm-fork-chain readiness budget from 45s to 90s.
+
+### Validation
+- `go test -count=5 -v -tags containers_image_openpgp -run "^TestCloudHypervisorWarmForkChain$" -timeout=60m ./lib/instances`
+  - pass on `deft-kernel-dev`, package time `106.967s`
+- `go test -count=3 -v -tags containers_image_openpgp -run "^(TestCloudHypervisorWarmForkChain|TestQEMUForkFromRunningNetwork)$" -timeout=60m ./lib/instances`
+  - pass on `deft-kernel-dev`, package time `63.545s`
+
+## 2026-05-30 - PR #247 follow-up: preserved CH binary cache
+
+### Flake signature
+- Test workflow attempt 3 for run `26692911195`, job `78673017218`, passed `lib/instances` but failed `lib/vmm/TestMultipleVersions`:
+  - `start cloud-hypervisor: fork/exec .../system/binaries/v49.0/x86_64/cloud-hypervisor: exec format error`
+- CI preserves `lib/vmm/binaries/` across runs, so a wrong-architecture or corrupt ignored cache file can be embedded if `ensure-ch-binaries` only checks file existence.
+
+### Fix
+- `Makefile`
+  - `ensure-ch-binaries` now verifies the current host's Cloud Hypervisor binaries with `file`.
+  - If the required binary is missing or has the wrong architecture, it refreshes the CH binary cache via the existing download target.
+
+### Validation
+- `make ensure-ch-binaries`
+  - pass on `deft-kernel-dev`, confirmed v49.0 and v51.1 x86_64 binaries report as x86-64 ELF.
+- `go test -count=10 -v -run "^TestMultipleVersions$" -timeout=10m ./lib/vmm`
+  - pass on `deft-kernel-dev`, package time `0.741s`
