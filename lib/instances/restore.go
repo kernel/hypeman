@@ -20,12 +20,20 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+type restoreInstanceOptions struct {
+	WaitForGuestNetwork *bool
+}
+
+func (o restoreInstanceOptions) waitForGuestNetwork() bool {
+	return o.WaitForGuestNetwork == nil || *o.WaitForGuestNetwork
+}
+
 // RestoreInstance restores an instance from standby
 // Multi-hop orchestration: Standby → Paused → Running
 func (m *manager) restoreInstance(
 	ctx context.Context,
-
 	id string,
+	opts restoreInstanceOptions,
 ) (_ *Instance, retErr error) {
 	start := time.Now()
 	log := logger.FromContext(ctx)
@@ -46,6 +54,7 @@ func (m *manager) restoreInstance(
 
 	inst := m.toInstance(ctx, meta)
 	stored := &meta.StoredMetadata
+	waitForGuestNetwork := opts.waitForGuestNetwork()
 	ctx = enrichInstancesTrace(ctx, attribute.String("hypervisor", string(stored.HypervisorType)))
 	log.DebugContext(ctx, "loaded instance", "instance_id", id, "state", inst.State, "has_snapshot", inst.HasSnapshot)
 
@@ -231,7 +240,9 @@ func (m *manager) restoreInstance(
 
 	resumeNetworkVsockSocket := guestInitiatedResumeNetworkSocket(stored)
 	var resumeNetworkServer *guestResumeNetworkServer
+	var resumeNetworkAckWaiter *guestResumeNetworkUDPWaiter
 	var cancelResumeNetworkServer context.CancelFunc
+	var resumeNetworkAckCfg *guestNetworkConfig
 	resumeNetworkMailboxPatched := false
 	if stored.NetworkEnabled && !stored.SkipGuestAgent {
 		var resumeNetworkCfg *guestNetworkConfig
@@ -250,10 +261,26 @@ func (m *manager) restoreInstance(
 		}
 		if resumeNetworkCfg != nil && guestInitiatedResumeNetworkMailbox(stored) {
 			payload := newGuestResumeNetworkPayload(stored, resumeNetworkCfg)
+			if allocatedNet != nil && waitForGuestNetwork {
+				resumeNetworkAckWaiter, err = startGuestResumeNetworkUDPWaiter()
+				if err != nil {
+					log.ErrorContext(ctx, "failed to start guest resume network UDP ack waiter", "instance_id", id, "error", err)
+					releaseNetwork()
+					return nil, fmt.Errorf("start guest resume network UDP ack waiter: %w", err)
+				} else {
+					resumeNetworkAckCfg = resumeNetworkCfg
+					payload.AckPort = resumeNetworkAckWaiter.Port()
+				}
+			}
 			err = patchGuestResumeNetworkMailbox(snapshotDir, guestInitiatedResumeNetworkMailboxToken(stored), &payload)
 			if err != nil {
 				log.WarnContext(ctx, "failed to patch guest resume network mailbox; falling back to guest-initiated server", "instance_id", id, "error", err)
 				err = nil
+				if resumeNetworkAckWaiter != nil {
+					resumeNetworkAckWaiter.Close()
+					resumeNetworkAckWaiter = nil
+					resumeNetworkAckCfg = nil
+				}
 			} else {
 				resumeNetworkMailboxPatched = true
 			}
@@ -272,6 +299,9 @@ func (m *manager) restoreInstance(
 	}
 	if resumeNetworkServer != nil {
 		defer resumeNetworkServer.Close()
+	}
+	if resumeNetworkAckWaiter != nil {
+		defer resumeNetworkAckWaiter.Close()
 	}
 
 	// 5. Transition: Standby → Paused (start hypervisor + restore)
@@ -330,7 +360,7 @@ func (m *manager) restoreInstance(
 		)
 		var err error
 		if resumeNetworkMailboxPatched {
-			err = nil
+			err = m.waitForGuestResumeNetworkUDPAck(reconfigureCtx, resumeNetworkAckWaiter, stored, resumeNetworkAckCfg)
 		} else if resumeNetworkServer != nil {
 			err = m.waitForGuestInitiatedResumeNetwork(reconfigureCtx, resumeNetworkServer, stored)
 			if err != nil {

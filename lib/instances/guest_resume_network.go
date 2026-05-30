@@ -57,6 +57,16 @@ type guestResumeNetworkResult struct {
 	err     error
 }
 
+type guestResumeNetworkUDPAck struct {
+	received time.Time
+	text     string
+}
+
+type guestResumeNetworkUDPWaiter struct {
+	conn *stdnet.UDPConn
+	ch   chan guestResumeNetworkUDPAck
+}
+
 type guestResumeNetworkServer struct {
 	path    string
 	payload *guestResumeNetworkPayload
@@ -319,6 +329,69 @@ func newGuestResumeNetworkPayload(stored *StoredMetadata, allocConfig *guestNetw
 	}
 }
 
+func startGuestResumeNetworkUDPWaiter() (*guestResumeNetworkUDPWaiter, error) {
+	conn, err := stdnet.ListenUDP("udp4", &stdnet.UDPAddr{IP: stdnet.IPv4zero, Port: 0})
+	if err != nil {
+		return nil, fmt.Errorf("listen for guest resume network UDP ack: %w", err)
+	}
+
+	w := &guestResumeNetworkUDPWaiter{
+		conn: conn,
+		ch:   make(chan guestResumeNetworkUDPAck, 128),
+	}
+	go w.readLoop()
+	return w, nil
+}
+
+func (w *guestResumeNetworkUDPWaiter) Port() uint32 {
+	if w == nil || w.conn == nil {
+		return 0
+	}
+	return uint32(w.conn.LocalAddr().(*stdnet.UDPAddr).Port)
+}
+
+func (w *guestResumeNetworkUDPWaiter) Close() {
+	if w == nil || w.conn == nil {
+		return
+	}
+	_ = w.conn.Close()
+}
+
+func (w *guestResumeNetworkUDPWaiter) readLoop() {
+	buf := make([]byte, 1024)
+	for {
+		n, _, err := w.conn.ReadFromUDP(buf)
+		if err != nil {
+			return
+		}
+		w.ch <- guestResumeNetworkUDPAck{
+			received: time.Now(),
+			text:     strings.TrimSpace(string(buf[:n])),
+		}
+	}
+}
+
+func (w *guestResumeNetworkUDPWaiter) WaitApplied(ctx context.Context, mac, ip string) (time.Duration, string, error) {
+	if w == nil {
+		return 0, "", fmt.Errorf("guest resume network UDP waiter is nil")
+	}
+
+	start := time.Now()
+	wantMAC := "mac=" + strings.ToLower(mac)
+	wantIP := "ip=" + ip
+	for {
+		select {
+		case ack := <-w.ch:
+			text := strings.ToLower(ack.text)
+			if strings.Contains(text, "stage=applied") && strings.Contains(text, wantMAC) && strings.Contains(text, wantIP) {
+				return ack.received.Sub(start), ack.text, nil
+			}
+		case <-ctx.Done():
+			return 0, "", ctx.Err()
+		}
+	}
+}
+
 func patchGuestResumeNetworkMailbox(snapshotDir, token string, payload *guestResumeNetworkPayload) error {
 	if token == "" {
 		return fmt.Errorf("resume network mailbox token is empty")
@@ -456,5 +529,28 @@ func (m *manager) waitForGuestInitiatedResumeNetwork(ctx context.Context, server
 		return err
 	}
 	log.InfoContext(ctx, "guest-initiated resume network applied", "instance_id", stored.Id, "elapsed", elapsed, "ack", ack)
+	return nil
+}
+
+func (m *manager) waitForGuestResumeNetworkUDPAck(ctx context.Context, waiter *guestResumeNetworkUDPWaiter, stored *StoredMetadata, cfg *guestNetworkConfig) error {
+	if waiter == nil || cfg == nil {
+		return nil
+	}
+
+	log := logger.FromContext(ctx)
+	waitCtx, waitSpanEnd := m.startLifecycleStep(ctx, "guest.resume_network.udp_ack_wait",
+		attribute.String("instance_id", stored.Id),
+		attribute.String("hypervisor", string(stored.HypervisorType)),
+		attribute.String("operation", "guest_resume_network_udp_ack_wait"),
+	)
+	waitCtx, cancel := context.WithTimeout(waitCtx, 2*time.Second)
+	defer cancel()
+
+	elapsed, ack, err := waiter.WaitApplied(waitCtx, cfg.mac, cfg.ip)
+	waitSpanEnd(err)
+	if err != nil {
+		return err
+	}
+	log.InfoContext(ctx, "guest resume network UDP ack received", "instance_id", stored.Id, "elapsed", elapsed, "ack", ack)
 	return nil
 }

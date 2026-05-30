@@ -169,7 +169,7 @@ func ArmResumeNetworkInInstance(ctx context.Context, dialer hypervisor.VsockDial
 		return armResumeNetworkOnce(ctx, dialer, opts)
 	}
 
-	ctx, span := guestTracer().Start(ctx, "guest.arm_resume_network", trace.WithAttributes(
+	ctx, span := otel.Tracer("hypeman/guest").Start(ctx, "guest.arm_resume_network", trace.WithAttributes(
 		attribute.Bool("wait_for_agent", true),
 		attribute.Int64("wait_for_agent_ms", opts.WaitForAgent.Milliseconds()),
 		attribute.Int("poll_interval_ms", int(opts.PollIntervalMS)),
@@ -234,11 +234,11 @@ func armResumeNetworkOnce(ctx context.Context, dialer hypervisor.VsockDialer, op
 	}
 	client := NewGuestServiceClient(grpcConn)
 
-	_, span := guestTracer().Start(ctx, "guest.arm_resume_network.rpc")
+	_, span := otel.Tracer("hypeman/guest").Start(ctx, "guest.arm_resume_network.rpc")
 	_, err = client.ArmResumeNetwork(ctx, &ArmResumeNetworkRequest{
 		PollIntervalMs: opts.PollIntervalMS,
 	})
-	finishGuestExecStepSpan(span, err)
+	finishGuestNetworkStepSpan(span, err)
 	if err != nil {
 		return fmt.Errorf("arm resume network rpc: %w", err)
 	}

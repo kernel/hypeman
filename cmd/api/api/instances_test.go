@@ -1165,13 +1165,15 @@ func TestForkInstance_Success(t *testing.T) {
 		result:  forked,
 	}
 	svc.InstanceManager = mockMgr
+	waitForNetwork := false
 
 	resp, err := svc.ForkInstance(
 		mw.WithResolvedInstance(ctx(), source.Id, source),
 		oapi.ForkInstanceRequestObject{
 			Id: source.Id,
 			Body: &oapi.ForkInstanceRequest{
-				Name: "forked-instance",
+				Name:           "forked-instance",
+				WaitForNetwork: &waitForNetwork,
 			},
 		},
 	)
@@ -1185,6 +1187,8 @@ func TestForkInstance_Success(t *testing.T) {
 	assert.Equal(t, "forked-instance", mockMgr.lastReq.Name)
 	assert.False(t, mockMgr.lastReq.FromRunning)
 	assert.Equal(t, instances.State(""), mockMgr.lastReq.TargetState)
+	require.NotNil(t, mockMgr.lastReq.WaitForNetwork)
+	assert.False(t, *mockMgr.lastReq.WaitForNetwork)
 }
 
 func TestForkInstance_NotSupported(t *testing.T) {

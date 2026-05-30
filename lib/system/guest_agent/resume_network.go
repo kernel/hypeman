@@ -58,12 +58,18 @@ type resumeNetworkPayload struct {
 
 type resumeNetworkArmRequest struct {
 	interval time.Duration
-	ready    chan struct{}
+	ready    chan error
+}
+
+type vmGenIDResumeWaiter struct {
+	file   *os.File
+	reader *bufio.Reader
 }
 
 type resumeNetworkController struct {
 	s            *guestServer
 	port         uint32
+	trigger      string
 	startArmed   bool
 	mailbox      []byte
 	slowInterval time.Duration
@@ -115,6 +121,7 @@ func newResumeNetworkController(s *guestServer, port uint32) *resumeNetworkContr
 	return &resumeNetworkController{
 		s:            s,
 		port:         port,
+		trigger:      resumeNetworkTrigger(),
 		startArmed:   strings.TrimSpace(os.Getenv(resumeNetworkStartArmedEnv)) == "1",
 		mailbox:      mailbox,
 		slowInterval: resumeNetworkIntervalFromEnv(resumeNetworkSlowPollIntervalEnv, defaultResumeNetworkSlowPollInterval),
@@ -205,7 +212,7 @@ func resumeNetworkPollLoop(s *guestServer, port uint32, interval time.Duration) 
 }
 
 func (c *resumeNetworkController) run() {
-	log.Printf("[guest-agent] resume network prearm loop host port %d slow=%s fast=%s start_armed=%t", c.port, c.slowInterval, c.fastInterval, c.startArmed)
+	log.Printf("[guest-agent] resume network prearm loop host port %d trigger=%s slow=%s fast=%s start_armed=%t", c.port, c.trigger, c.slowInterval, c.fastInterval, c.startArmed)
 	armed := c.startArmed
 	fastInterval := c.fastInterval
 
@@ -214,19 +221,45 @@ func (c *resumeNetworkController) run() {
 			fastInterval = req.interval
 		}
 		armed = true
-		close(req.ready)
 	}
 
 	for {
+		var armReady chan error
 		if !armed {
 			select {
 			case req := <-c.arm:
 				applyArm(req)
+				armReady = req.ready
 			}
 		}
 
 		if c.mailbox != nil {
+			var vmgenIDWaiter *vmGenIDResumeWaiter
+			if c.trigger == resumeNetworkTriggerVMGenID {
+				var err error
+				vmgenIDWaiter, err = newVMGenIDResumeWaiter()
+				if armReady != nil {
+					armReady <- err
+				}
+				if err != nil {
+					log.Printf("[guest-agent] resume network VMGenID prepare failed: %v", err)
+					armed = false
+					continue
+				}
+			} else if armReady != nil {
+				armReady <- nil
+			}
+
 			start := time.Now()
+			if c.trigger == resumeNetworkTriggerVMGenID {
+				if err := vmgenIDWaiter.Wait(); err != nil {
+					log.Printf("[guest-agent] resume network VMGenID wait failed: %v", err)
+					vmgenIDWaiter.Close()
+					armed = false
+					continue
+				}
+				vmgenIDWaiter.Close()
+			}
 			if err := c.waitAndApplyMailbox(); err != nil {
 				log.Printf("[guest-agent] resume network mailbox apply failed: %v", err)
 				armed = false
@@ -237,6 +270,9 @@ func (c *resumeNetworkController) run() {
 			continue
 		}
 
+		if armReady != nil {
+			armReady <- nil
+		}
 		interval := fastInterval
 		start := time.Now()
 		err := fetchAndApplyResumeNetwork(c.s, c.port, resumeNetworkDialTimeout(interval))
@@ -258,6 +294,7 @@ func (c *resumeNetworkController) run() {
 				<-timer.C
 			}
 			applyArm(req)
+			req.ready <- nil
 		case <-timer.C:
 		}
 	}
@@ -319,7 +356,7 @@ func resumeNetworkDialTimeout(interval time.Duration) time.Duration {
 func (c *resumeNetworkController) Arm(ctx context.Context, interval time.Duration) error {
 	req := resumeNetworkArmRequest{
 		interval: interval,
-		ready:    make(chan struct{}),
+		ready:    make(chan error, 1),
 	}
 	select {
 	case c.arm <- req:
@@ -327,8 +364,8 @@ func (c *resumeNetworkController) Arm(ctx context.Context, interval time.Duratio
 		return ctx.Err()
 	}
 	select {
-	case <-req.ready:
-		return nil
+	case err := <-req.ready:
+		return err
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -368,19 +405,40 @@ func resumeNetworkVMGenIDLoop(s *guestServer, port uint32) {
 }
 
 func waitForVMGenIDResumeSignal() error {
+	waiter, err := newVMGenIDResumeWaiter()
+	if err != nil {
+		return err
+	}
+	defer waiter.Close()
+	return waiter.Wait()
+}
+
+func newVMGenIDResumeWaiter() (*vmGenIDResumeWaiter, error) {
 	f, err := os.Open("/dev/kmsg")
 	if err != nil {
-		return fmt.Errorf("open /dev/kmsg: %w", err)
+		return nil, fmt.Errorf("open /dev/kmsg: %w", err)
 	}
-	defer f.Close()
 
 	if _, err := f.Seek(0, io.SeekEnd); err != nil {
 		log.Printf("[guest-agent] warning: failed to seek /dev/kmsg to end: %v", err)
 	}
 
-	reader := bufio.NewReader(f)
+	return &vmGenIDResumeWaiter{
+		file:   f,
+		reader: bufio.NewReader(f),
+	}, nil
+}
+
+func (w *vmGenIDResumeWaiter) Close() {
+	if w == nil || w.file == nil {
+		return
+	}
+	_ = w.file.Close()
+}
+
+func (w *vmGenIDResumeWaiter) Wait() error {
 	for {
-		line, err := reader.ReadString('\n')
+		line, err := w.reader.ReadString('\n')
 		if err != nil {
 			return fmt.Errorf("read /dev/kmsg: %w", err)
 		}

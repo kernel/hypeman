@@ -33,6 +33,7 @@ const guestInitiatedResumeNetworkStartArmedPerfEnv = "HYPEMAN_RECONFIGURE_GUEST_
 const guestInitiatedResumeNetworkArmedPollPerfEnv = "HYPEMAN_RECONFIGURE_GUEST_NETWORK_GUEST_ARMED_POLL_MS"
 const guestInitiatedResumeNetworkPrearmSettlePerfEnv = "HYPEMAN_RECONFIGURE_GUEST_NETWORK_GUEST_PREARM_SETTLE_MS"
 const guestInitiatedResumeNetworkMailboxPerfEnv = "HYPEMAN_RECONFIGURE_GUEST_NETWORK_GUEST_MAILBOX"
+const guestInitiatedResumeNetworkWaitAckPerfEnv = "HYPEMAN_RECONFIGURE_GUEST_NETWORK_GUEST_WAIT_ACK"
 const reconfigureGuestNetworkPerfVCPUsEnv = "HYPEMAN_RECONFIGURE_GUEST_NETWORK_PERF_VCPUS"
 
 type resumeNetworkAck struct {
@@ -74,12 +75,15 @@ func TestReconfigureGuestNetworkPerf(t *testing.T) {
 
 	var ackCh <-chan resumeNetworkAck
 	expectMailboxAck := false
+	waitAckInRestore := os.Getenv(guestInitiatedResumeNetworkWaitAckPerfEnv) == "1"
 	env := map[string]string(nil)
 	if os.Getenv(guestInitiatedResumeNetworkPerfEnv) == "1" {
 		env = map[string]string{guestResumeNetworkPortEnv: "2224"}
-		ackPort, ch := startResumeNetworkAckListener(t)
-		env[guestResumeNetworkAckPortEnv] = strconv.Itoa(ackPort)
-		ackCh = ch
+		if !waitAckInRestore {
+			ackPort, ch := startResumeNetworkAckListener(t)
+			env[guestResumeNetworkAckPortEnv] = strconv.Itoa(ackPort)
+			ackCh = ch
+		}
 		if os.Getenv(guestInitiatedResumeNetworkMailboxPerfEnv) == "1" {
 			env["HYPEMAN_RESUME_NETWORK_MAILBOX"] = "1"
 			env["HYPEMAN_RESUME_NETWORK_MAILBOX_TOKEN"] = fmt.Sprintf("perf-%d", time.Now().UnixNano())
@@ -150,10 +154,12 @@ func TestReconfigureGuestNetworkPerf(t *testing.T) {
 
 	for i := 1; i <= iterations; i++ {
 		before := len(recorder.Ended())
+		waitForNetwork := waitAckInRestore
 		start := time.Now()
 		fork, err := mgr.ForkSnapshot(ctx, snapshot.Id, ForkSnapshotRequest{
-			Name:        fmt.Sprintf("fc-reconfigure-perf-fork-%02d", i),
-			TargetState: StateRunning,
+			Name:           fmt.Sprintf("fc-reconfigure-perf-fork-%02d", i),
+			TargetState:    StateRunning,
+			WaitForNetwork: &waitForNetwork,
 		})
 		forkElapsed := time.Since(start)
 		require.NoError(t, err)
@@ -286,6 +292,7 @@ func formatReconfigurePerfLine(iter int, forkElapsed time.Duration, spans []sdkt
 	exec := lastSpanNamed(desc, "guest.exec")
 	networkRPC := lastSpanNamed(desc, "guest.reconfigure_network")
 	resumeNetworkWait := lastSpanNamed(desc, "guest.resume_network.wait")
+	resumeNetworkUDPAckWait := lastSpanNamed(desc, "guest.resume_network.udp_ack_wait")
 	getConn := lastSpanNamed(desc, "guest.exec.get_conn")
 	openStream := lastSpanNamed(desc, "guest.exec.open_stream")
 	sendStart := lastSpanNamed(desc, "guest.exec.send_start")
@@ -296,13 +303,14 @@ func formatReconfigurePerfLine(iter int, forkElapsed time.Duration, spans []sdkt
 	vsockReadOK := lastSpanNamed(desc, "hypervisor.vsock.read_ok")
 
 	return fmt.Sprintf(
-		"PERF iter=%d fork_total_ms=%d reconfigure_guest_network_ms=%d guest_exec_ms=%d guest_network_rpc_ms=%d guest_resume_network_wait_ms=%d get_conn_ms=%d open_stream_ms=%d send_start_ms=%d recv_until_exit_ms=%d vsock_dial_ms=%d vsock_unix_dial_ms=%d vsock_write_connect_ms=%d vsock_read_ok_ms=%d attempts=%d retryable_attempts=%d network_rpc_attempts=%d network_rpc_retryable_attempts=%d first_retryable_error=%s last_retryable_error=%s wait_elapsed_ms=%d open_stream_attempts=%s recv_attempts=%s unary_attempts=%s guest_resume_network_wait_attempts=%s vsock_dial_attempts=%s vsock_unix_dial_attempts=%s vsock_write_connect_attempts=%s vsock_read_ok_attempts=%s",
+		"PERF iter=%d fork_total_ms=%d reconfigure_guest_network_ms=%d guest_exec_ms=%d guest_network_rpc_ms=%d guest_resume_network_wait_ms=%d guest_resume_network_udp_ack_wait_ms=%d get_conn_ms=%d open_stream_ms=%d send_start_ms=%d recv_until_exit_ms=%d vsock_dial_ms=%d vsock_unix_dial_ms=%d vsock_write_connect_ms=%d vsock_read_ok_ms=%d attempts=%d retryable_attempts=%d network_rpc_attempts=%d network_rpc_retryable_attempts=%d first_retryable_error=%s last_retryable_error=%s wait_elapsed_ms=%d open_stream_attempts=%s recv_attempts=%s unary_attempts=%s guest_resume_network_wait_attempts=%s guest_resume_network_udp_ack_wait_attempts=%s vsock_dial_attempts=%s vsock_unix_dial_attempts=%s vsock_write_connect_attempts=%s vsock_read_ok_attempts=%s",
 		iter,
 		forkElapsed.Milliseconds(),
 		spanDurationMS(reconfigure),
 		spanDurationMS(exec),
 		spanDurationMS(networkRPC),
 		spanDurationMS(resumeNetworkWait),
+		spanDurationMS(resumeNetworkUDPAckWait),
 		spanDurationMS(getConn),
 		spanDurationMS(openStream),
 		spanDurationMS(sendStart),
@@ -322,6 +330,7 @@ func formatReconfigurePerfLine(iter int, forkElapsed time.Duration, spans []sdkt
 		spanDurationsByName(desc, "guest.exec.recv_until_exit"),
 		spanDurationsByName(desc, "guest.reconfigure_network.rpc"),
 		spanDurationsByName(desc, "guest.resume_network.wait"),
+		spanDurationsByName(desc, "guest.resume_network.udp_ack_wait"),
 		spanDurationsByName(desc, "hypervisor.vsock.dial"),
 		spanDurationsByName(desc, "hypervisor.vsock.unix_dial"),
 		spanDurationsByName(desc, "hypervisor.vsock.write_connect"),
