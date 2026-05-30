@@ -424,92 +424,16 @@
 - `go test -count=50 -run '^TestGetBuild_Found$' ./lib/builds`
   - pass
 
-## 2026-05-29 - Main branch Linux flake sweep from `34e1032`
-
-### Starting point
-- Local workspace was detached on `aa65a64` and behind `origin/main` by two commits.
-- Fetched `origin/main` and switched to detached `origin/main` at `34e1032` (`Count shared snapshot extents separately (#244)`), then branched for fixes.
-- Recent main CI failures on `kernel/hypeman` showed Linux flake signatures around guest/vsock readiness:
-  - latest main Test run `26531491771`: `TestVolumeFromArchive` failed waiting for exec-agent, last state `Stopped`, EOF
-  - prior main failures included `TestQEMUBasicEndToEnd`, `TestCpDirectoryToInstance`, `TestInstanceLifecycle_StopStart`, `TestExecInstanceNonTTY`, and `TestVolumeMultiAttachReadOnly`
-
-### Deft host notes
-- `deft-kernel-dev` had plenty of disk/RAM (`/mnt/data` around 3.4T free, memory around 765Gi available), but high CPU load during investigation.
-- The standard shared prewarm dir `~/.cache/hypeman-ci/linux-amd64` failed due a permission issue under the cache tree, so this run used workspace-local prewarm:
-  - `HYPEMAN_TEST_PREWARM_DIR=$PWD/.hypeman-prewarm/linux-amd64`
-  - `HYPEMAN_TEST_REGISTRY=127.0.0.1:5001`
-  - `HYPEMAN_TEST_PREWARM_STRICT=1`
-- With permission, cleaned only stale Hypeman temp hypervisor artifacts matching `/tmp/Test*` or `/tmp/hmcmp-*`. No Docker/global cleanup was done.
+## 2026-05-29 - Linux flake sweep
 
 ### Fixes
-- `lib/guest/client.go`
-  - no-wait exec now evicts the pooled guest gRPC connection on retryable connection errors, matching the existing `WaitForAgent` retry path
-  - prevents outer test/helper retry loops from repeatedly reusing a poisoned connection after transient vsock EOF/timeouts
-- `lib/guest/client_test.go`
-  - added `TestExecIntoInstanceNoWaitClosesRetryableConnection`
-- `lib/builds/manager.go`
-  - `waitForResult` treats a nil vsock dialer with nil error as unavailable instead of panicking
-- `lib/builds/manager_test.go`
-  - mock `GetVsockDialer` now returns an explicit error unless configured
-- `lib/instances/restart_policy.go`
-  - stable-window reset uses the later of `StartedAt` and `RestartStatus.LastAttemptAt`
-  - prevents controller reconciliation from clearing attempts while a health-check restart attempt is still in flight
-- `lib/instances/restart_policy_test.go`
-  - added coverage for old `StartedAt` plus recent `LastAttemptAt`
-- `lib/instances/firecracker_test.go`
-  - `TestFirecrackerForkIsolation` now measures disk delta using per-workspace `diskutilization.Collect` instead of global `statfs` free-space changes, avoiding unrelated shared-host disk activity
+- evicted pooled guest gRPC connections after retryable no-wait exec failures, matching the existing wait-and-retry path.
+- hardened build result vsock dialing against nil dialers.
+- delayed restart-policy stable-window resets until the later of instance start time and the latest restart attempt.
+- made Firecracker fork disk-usage assertions measure workspace usage instead of host-wide free-space changes.
+- treated nginx startup log waits as diagnostics in basic end-to-end tests, leaving ingress HTTP probes as the behavior check.
 
-### Targeted validation on `deft-kernel-dev`
-- Reproduced `TestVolumeFromArchive` before the guest connection-pool fix:
-  - `go test -count=5 -v -tags containers_image_openpgp -run '^TestVolumeFromArchive$' -timeout=20m ./lib/instances`
-  - failed 1/5 with vsock EOF from exec-agent readiness
-- After guest connection-pool fix:
-  - `go test ./lib/guest`
-  - pass
-  - `go test -count=10 -v -tags containers_image_openpgp -run '^TestVolumeFromArchive$' -timeout=30m ./lib/instances`
-  - pass, package time `242.742s`
-- After build nil-dialer fix:
-  - `go test ./lib/guest ./lib/builds`
-  - pass, `lib/builds` package time `86.525s`
-- API/image failures from an intermediate full run were not durable:
-  - `go test -count=3 -v -tags containers_image_openpgp -run '^(TestCpToAndFromInstance|TestExecWithDebianMinimal|TestRegistryLayerCaching)$' -timeout=20m ./cmd/api/api`
-  - pass, package time `128.899s`
-- Restart policy network flake:
-  - pre-fix `go test -count=5 -v -tags containers_image_openpgp -run '^TestCreateInstanceWithNetwork$' -timeout=20m ./lib/instances` exposed `restart policy stable window reached` while restart attempt was still stopping/starting
-  - post-fix `go test -count=1 -v -tags containers_image_openpgp -run '^TestShouldResetRestartAttempts|^TestCreateInstanceWithNetwork$' -timeout=20m ./lib/instances`
-  - pass, package time `79.157s`
-- Firecracker fork isolation:
-  - pre-fix full suite failed with `consumed=5864284160 guestMem=1073741824 reflink=true`
-  - post-fix `go test -count=3 -v -tags containers_image_openpgp -run '^TestFirecrackerForkIsolation$' -timeout=20m ./lib/instances`
-  - pass, package time `60.894s`, per-workspace deltas around 137-150MiB
-
-### Full-suite validation on `deft-kernel-dev`
-- Intermediate full run after the first three fixes:
-  - `go test -count=1 -tags containers_image_openpgp -timeout=20m ./...`
-  - failed only `lib/instances/TestFirecrackerForkIsolation` due global `statfs` free-space measurement on shared host
-  - log: `full-suite-20260529-173833.log`, duration `256s`
-- Full run after Firecracker disk measurement fix:
-  - `go test -count=1 -tags containers_image_openpgp -timeout=20m ./...`
-  - Run 1: `258s` (pass)
-  - log: `full-suite-20260529-174512.log`
-
-## 2026-05-30 - PR #247 Linux CI follow-up
-
-### CI failure
-- Draft PR #247 failed the Linux `test` job on run `26663998916`, job `78593114552`, runner `deft-8`, commit `f17ed89`.
-- The same signature appeared on the previous pre-amend run `26663971132` on `deft-14`.
-- Failure was in `lib/instances/TestBasicEndToEnd`:
-  - `manager_test.go:373: Nginx should have started worker processes within 20 seconds`
-  - The test then successfully routed through Caddy and got an nginx response (`Got response from nginx through Caddy: 615 bytes`).
-- Deft did not show disk or RAM exhaustion in the CI evidence. The useful signal was a log-readiness race: the nginx process was serving, but the test made the startup log line a hard assertion before the ingress probe.
-
-### Fixes
-- `lib/instances/manager_test.go`
-  - changed the nginx startup log wait in `TestBasicEndToEnd` from a hard assertion into diagnostic logging
-  - kept the external ingress HTTP request as the authoritative readiness/behavior check
-- `lib/instances/qemu_test.go`
-  - made the same change in `TestQEMUBasicEndToEnd`, which had the same brittle log assertion pattern
-
-### Targeted validation on `deft-kernel-dev`
-- `go test -count=3 -v -tags containers_image_openpgp -run "^(TestBasicEndToEnd|TestQEMUBasicEndToEnd)$" -timeout=30m ./lib/instances`
-  - pass, package time `27.583s`
+### Validation
+- targeted loops passed for guest exec readiness, build result handling, restart policy, and Firecracker fork isolation.
+- a full Linux suite passed after the flake fixes.
+- follow-up validation passed for the Cloud Hypervisor and QEMU basic end-to-end tests.
