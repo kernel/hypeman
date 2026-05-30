@@ -657,9 +657,10 @@ func (s *ApiService) ForkInstance(ctx context.Context, request oapi.ForkInstance
 	}
 
 	result, err := s.InstanceManager.ForkInstance(ctx, inst.Id, instances.ForkInstanceRequest{
-		Name:        request.Body.Name,
-		FromRunning: request.Body.FromRunning != nil && *request.Body.FromRunning,
-		TargetState: targetState,
+		Name:           request.Body.Name,
+		FromRunning:    request.Body.FromRunning != nil && *request.Body.FromRunning,
+		TargetState:    targetState,
+		WaitForNetwork: request.Body.WaitForNetwork,
 	})
 	if err != nil {
 		switch {

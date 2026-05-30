@@ -16,14 +16,24 @@ import (
 	"github.com/kernel/hypeman/lib/network"
 	snapshotstore "github.com/kernel/hypeman/lib/snapshot"
 	"go.opentelemetry.io/otel/attribute"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
-// RestoreInstance restores an instance from standby
-// Multi-hop orchestration: Standby → Paused → Running
+type restoreInstanceOptions struct {
+	WaitForGuestNetwork *bool
+}
+
+func (o restoreInstanceOptions) waitForGuestNetwork() bool {
+	return o.WaitForGuestNetwork == nil || *o.WaitForGuestNetwork
+}
+
+// RestoreInstance restores an instance from standby.
+// Multi-hop orchestration: Standby → Paused → Running.
 func (m *manager) restoreInstance(
 	ctx context.Context,
-
 	id string,
+	opts restoreInstanceOptions,
 ) (_ *Instance, retErr error) {
 	start := time.Now()
 	log := logger.FromContext(ctx)
@@ -44,6 +54,7 @@ func (m *manager) restoreInstance(
 
 	inst := m.toInstance(ctx, meta)
 	stored := &meta.StoredMetadata
+	waitForGuestNetwork := opts.waitForGuestNetwork()
 	ctx = enrichInstancesTrace(ctx, attribute.String("hypervisor", string(stored.HypervisorType)))
 	log.DebugContext(ctx, "loaded instance", "instance_id", id, "state", inst.State, "has_snapshot", inst.HasSnapshot)
 
@@ -227,6 +238,42 @@ func (m *manager) restoreInstance(
 		proxyRegistered = true
 	}
 
+	var resumeNetworkAckWaiter *guestResumeNetworkUDPWaiter
+	var resumeNetworkAckCfg *guestNetworkConfig
+	resumeNetworkMailboxPatched := false
+	if allocatedNet != nil && !stored.SkipGuestAgent && guestInitiatedResumeNetworkMailbox(stored) {
+		resumeNetworkCfg, cfgErr := guestNetworkReconfigureConfig(allocatedNet)
+		if cfgErr != nil {
+			log.WarnContext(ctx, "failed to build guest resume network mailbox payload; falling back to host-initiated reconfigure", "instance_id", id, "error", cfgErr)
+		} else {
+			payload := newGuestResumeNetworkPayload(resumeNetworkCfg)
+			if waitForGuestNetwork {
+				var waitErr error
+				resumeNetworkAckWaiter, waitErr = startGuestResumeNetworkUDPWaiter()
+				if waitErr != nil {
+					log.ErrorContext(ctx, "failed to start guest resume network UDP ack waiter", "instance_id", id, "error", waitErr)
+					releaseNetwork()
+					return nil, fmt.Errorf("start guest resume network UDP ack waiter: %w", waitErr)
+				}
+				resumeNetworkAckCfg = resumeNetworkCfg
+				payload.AckPort = resumeNetworkAckWaiter.Port()
+			}
+			if patchErr := patchGuestResumeNetworkMailbox(snapshotDir, guestInitiatedResumeNetworkMailboxToken(stored), &payload); patchErr != nil {
+				if resumeNetworkAckWaiter != nil {
+					resumeNetworkAckWaiter.Close()
+					resumeNetworkAckWaiter = nil
+					resumeNetworkAckCfg = nil
+				}
+				log.WarnContext(ctx, "failed to patch guest resume network mailbox; falling back to host-initiated reconfigure", "instance_id", id, "error", patchErr)
+			} else {
+				resumeNetworkMailboxPatched = true
+			}
+		}
+	}
+	if resumeNetworkAckWaiter != nil {
+		defer resumeNetworkAckWaiter.Close()
+	}
+
 	// 5. Transition: Standby → Paused (start hypervisor + restore)
 	restoreCtx, restoreSpanEnd := m.startLifecycleStep(ctx, "restore_from_snapshot",
 		attribute.String("instance_id", id),
@@ -281,15 +328,22 @@ func (m *manager) restoreInstance(
 			attribute.String("hypervisor", string(stored.HypervisorType)),
 			attribute.String("operation", "reconfigure_guest_network"),
 		)
-		if err := reconfigureGuestNetwork(reconfigureCtx, stored, allocatedNet); err != nil {
-			reconfigureSpanEnd(err)
-			log.ErrorContext(ctx, "failed to configure guest network after restore", "instance_id", id, "error", err)
+		var reconfigureErr error
+		if resumeNetworkMailboxPatched && waitForGuestNetwork {
+			reconfigureErr = m.waitForGuestResumeNetworkUDPAck(reconfigureCtx, resumeNetworkAckWaiter, stored, resumeNetworkAckCfg)
+		} else if resumeNetworkMailboxPatched {
+			log.InfoContext(ctx, "guest resume network mailbox patched", "instance_id", id)
+		} else {
+			reconfigureErr = reconfigureGuestNetwork(reconfigureCtx, stored, allocatedNet)
+		}
+		reconfigureSpanEnd(reconfigureErr)
+		if reconfigureErr != nil {
+			log.ErrorContext(ctx, "failed to configure guest network after restore", "instance_id", id, "error", reconfigureErr)
 			_ = hv.Shutdown(ctx)
 			m.rollbackAdmissionAllocationActive(stored)
 			releaseNetwork()
-			return nil, fmt.Errorf("configure guest network after restore: %w", err)
+			return nil, fmt.Errorf("configure guest network after restore: %w", reconfigureErr)
 		}
-		reconfigureSpanEnd(nil)
 	}
 
 	// 8. Delete snapshot after successful restore unless the hypervisor is keeping it
@@ -379,7 +433,7 @@ func (m *manager) restoreFromSnapshot(
 }
 
 func reconfigureGuestNetwork(ctx context.Context, stored *StoredMetadata, alloc *network.Allocation) error {
-	cmd, err := guestNetworkReconfigureCommand(alloc)
+	cfg, err := guestNetworkReconfigureConfig(alloc)
 	if err != nil {
 		return err
 	}
@@ -387,6 +441,30 @@ func reconfigureGuestNetwork(ctx context.Context, stored *StoredMetadata, alloc 
 	dialer, err := hypervisor.NewVsockDialer(stored.HypervisorType, stored.VsockSocket, stored.VsockCID)
 	if err != nil {
 		return fmt.Errorf("create vsock dialer: %w", err)
+	}
+
+	err = guest.ReconfigureNetworkInInstance(ctx, dialer, guest.ReconfigureNetworkOptions{
+		InterfaceName: "eth0",
+		MAC:           cfg.mac,
+		IPv4:          cfg.ip,
+		Prefix:        uint32(cfg.prefix),
+		Gateway:       cfg.gateway,
+		WaitForAgent:  120 * time.Second,
+	})
+	if err != nil {
+		if status.Code(err) == codes.Unimplemented {
+			return reconfigureGuestNetworkWithExec(ctx, dialer, alloc)
+		}
+		return fmt.Errorf("reconfigure guest network: %w", err)
+	}
+
+	return nil
+}
+
+func reconfigureGuestNetworkWithExec(ctx context.Context, dialer hypervisor.VsockDialer, alloc *network.Allocation) error {
+	cmd, err := guestNetworkReconfigureCommand(alloc)
+	if err != nil {
+		return err
 	}
 
 	var stdout, stderr bytes.Buffer
@@ -402,30 +480,44 @@ func reconfigureGuestNetwork(ctx context.Context, stored *StoredMetadata, alloc 
 	if exit.Code != 0 {
 		return fmt.Errorf("network reconfiguration command failed (exit=%d, stdout=%q, stderr=%q)", exit.Code, strings.TrimSpace(stdout.String()), strings.TrimSpace(stderr.String()))
 	}
-
 	return nil
 }
 
-func guestNetworkReconfigureCommand(alloc *network.Allocation) (string, error) {
+type guestNetworkConfig struct {
+	ip      string
+	mac     string
+	gateway string
+	prefix  int
+}
+
+func guestNetworkReconfigureConfig(alloc *network.Allocation) (*guestNetworkConfig, error) {
 	if alloc == nil {
-		return "", fmt.Errorf("missing network allocation")
+		return nil, fmt.Errorf("missing network allocation")
 	}
 	ip := strings.TrimSpace(alloc.IP)
 	if ip == "" {
-		return "", fmt.Errorf("missing network allocation IP")
+		return nil, fmt.Errorf("missing network allocation IP")
 	}
 	mac := strings.ToLower(strings.TrimSpace(alloc.MAC))
 	if mac == "" {
-		return "", fmt.Errorf("missing network allocation MAC")
+		return nil, fmt.Errorf("missing network allocation MAC")
 	}
 	if _, err := net.ParseMAC(mac); err != nil {
-		return "", fmt.Errorf("invalid network allocation MAC %q: %w", alloc.MAC, err)
+		return nil, fmt.Errorf("invalid network allocation MAC %q: %w", alloc.MAC, err)
 	}
 	gateway := strings.TrimSpace(alloc.Gateway)
 	if gateway == "" {
-		return "", fmt.Errorf("missing network allocation gateway")
+		return nil, fmt.Errorf("missing network allocation gateway")
 	}
 	prefix, err := netmaskToPrefix(alloc.Netmask)
+	if err != nil {
+		return nil, err
+	}
+	return &guestNetworkConfig{ip: ip, mac: mac, gateway: gateway, prefix: prefix}, nil
+}
+
+func guestNetworkReconfigureCommand(alloc *network.Allocation) (string, error) {
+	cfg, err := guestNetworkReconfigureConfig(alloc)
 	if err != nil {
 		return "", err
 	}
@@ -445,7 +537,7 @@ func guestNetworkReconfigureCommand(alloc *network.Allocation) (string, error) {
 			"ip route replace default via %s dev eth0 && "+
 			// Drop snapshotted ARP/neighbor entries so peers are rediscovered.
 			"(ip neigh flush dev eth0 || true)",
-		mac, ip, prefix, gateway,
+		cfg.mac, cfg.ip, cfg.prefix, cfg.gateway,
 	), nil
 }
 
