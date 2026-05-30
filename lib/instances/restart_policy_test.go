@@ -69,6 +69,48 @@ func TestShouldResetRestartAttempts(t *testing.T) {
 	assert.True(t, reset)
 }
 
+func TestShouldResetRestartAttemptsUsesLatestAttemptWhenStartedAtIsOlder(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	startedAt := now.Add(-1 * time.Hour)
+	lastAttemptAt := now.Add(-5 * time.Second)
+
+	reset := shouldResetRestartAttempts(
+		&restartpolicy.Policy{Policy: restartpolicy.PolicyOnFailure, StableAfter: "30s"},
+		restartpolicy.Status{
+			Attempts:      1,
+			LastAttemptAt: &lastAttemptAt,
+		},
+		&Instance{
+			State:          StateInitializing,
+			StoredMetadata: StoredMetadata{StartedAt: &startedAt},
+		},
+		now,
+	)
+
+	assert.False(t, reset)
+}
+
+func TestShouldResetRestartAttemptsAfterLatestAttemptIsStable(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	startedAt := now.Add(-1 * time.Hour)
+	lastAttemptAt := now.Add(-31 * time.Second)
+
+	reset := shouldResetRestartAttempts(
+		&restartpolicy.Policy{Policy: restartpolicy.PolicyOnFailure, StableAfter: "30s"},
+		restartpolicy.Status{
+			Attempts:      1,
+			LastAttemptAt: &lastAttemptAt,
+		},
+		&Instance{
+			State:          StateRunning,
+			StoredMetadata: StoredMetadata{StartedAt: &startedAt},
+		},
+		now,
+	)
+
+	assert.True(t, reset)
+}
+
 func TestPrepareRestartAttemptPreservesLastReason(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	nextStatus, reason, shouldAttempt := prepareRestartAttempt(

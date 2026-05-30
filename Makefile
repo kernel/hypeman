@@ -161,20 +161,38 @@ generate-grpc: install-proto-tools
 # Generate all code
 generate-all: oapi-generate generate-vmm-client generate-wire generate-grpc
 
-# Check if CH binaries exist, download if missing
+# Check if CH binaries exist for this host and match the expected architecture.
 .PHONY: ensure-ch-binaries
 ensure-ch-binaries:
 	@ARCH=$$(uname -m); \
 	if [ "$$ARCH" = "x86_64" ]; then \
 		CH_ARCH=x86_64; \
+		CH_FILE_PATTERN='x86-64'; \
 	elif [ "$$ARCH" = "aarch64" ] || [ "$$ARCH" = "arm64" ]; then \
 		CH_ARCH=aarch64; \
+		CH_FILE_PATTERN='aarch64|ARM aarch64'; \
 	else \
 		echo "Unsupported architecture: $$ARCH"; exit 1; \
 	fi; \
-	if [ ! -f lib/vmm/binaries/cloud-hypervisor/v49.0/$$CH_ARCH/cloud-hypervisor ] || \
-	   [ ! -f lib/vmm/binaries/cloud-hypervisor/v51.1/$$CH_ARCH/cloud-hypervisor ]; then \
-		echo "Cloud Hypervisor binaries not found, downloading..."; \
+	NEEDS_DOWNLOAD=0; \
+	for CH_VERSION in v49.0 v51.1; do \
+		CH_BIN=lib/vmm/binaries/cloud-hypervisor/$$CH_VERSION/$$CH_ARCH/cloud-hypervisor; \
+		if [ ! -f "$$CH_BIN" ]; then \
+			echo "Cloud Hypervisor binary not found: $$CH_BIN"; \
+			NEEDS_DOWNLOAD=1; \
+			break; \
+		fi; \
+		CH_FILE_DESC=$$(file -b "$$CH_BIN" 2>/dev/null || true); \
+		if ! printf '%s\n' "$$CH_FILE_DESC" | grep -Eiq "$$CH_FILE_PATTERN"; then \
+			echo "Cloud Hypervisor binary has unexpected architecture: $$CH_BIN"; \
+			echo "file output: $$CH_FILE_DESC"; \
+			NEEDS_DOWNLOAD=1; \
+			break; \
+		fi; \
+	done; \
+	if [ "$$NEEDS_DOWNLOAD" = "1" ]; then \
+		echo "Refreshing Cloud Hypervisor binaries..."; \
+		rm -rf lib/vmm/binaries/cloud-hypervisor; \
 		$(MAKE) download-ch-binaries; \
 	fi
 
