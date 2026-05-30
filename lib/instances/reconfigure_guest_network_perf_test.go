@@ -125,9 +125,13 @@ func formatReconfigurePerfLine(iter int, forkElapsed time.Duration, spans []sdkt
 	openStream := lastSpanNamed(desc, "guest.exec.open_stream")
 	sendStart := lastSpanNamed(desc, "guest.exec.send_start")
 	recvUntilExit := lastSpanNamed(desc, "guest.exec.recv_until_exit")
+	vsockDial := lastSpanNamed(desc, "hypervisor.vsock.dial")
+	vsockUnixDial := lastSpanNamed(desc, "hypervisor.vsock.unix_dial")
+	vsockWriteConnect := lastSpanNamed(desc, "hypervisor.vsock.write_connect")
+	vsockReadOK := lastSpanNamed(desc, "hypervisor.vsock.read_ok")
 
 	return fmt.Sprintf(
-		"PERF iter=%d fork_total_ms=%d reconfigure_guest_network_ms=%d guest_exec_ms=%d guest_network_rpc_ms=%d get_conn_ms=%d open_stream_ms=%d send_start_ms=%d recv_until_exit_ms=%d attempts=%d retryable_attempts=%d network_rpc_attempts=%d network_rpc_retryable_attempts=%d first_retryable_error=%s last_retryable_error=%s wait_elapsed_ms=%d open_stream_attempts=%s recv_attempts=%s unary_attempts=%s",
+		"PERF iter=%d fork_total_ms=%d reconfigure_guest_network_ms=%d guest_exec_ms=%d guest_network_rpc_ms=%d get_conn_ms=%d open_stream_ms=%d send_start_ms=%d recv_until_exit_ms=%d vsock_dial_ms=%d vsock_unix_dial_ms=%d vsock_write_connect_ms=%d vsock_read_ok_ms=%d attempts=%d retryable_attempts=%d network_rpc_attempts=%d network_rpc_retryable_attempts=%d first_retryable_error=%s last_retryable_error=%s wait_elapsed_ms=%d open_stream_attempts=%s recv_attempts=%s unary_attempts=%s vsock_dial_attempts=%s vsock_unix_dial_attempts=%s vsock_write_connect_attempts=%s vsock_read_ok_attempts=%s",
 		iter,
 		forkElapsed.Milliseconds(),
 		spanDurationMS(reconfigure),
@@ -137,6 +141,10 @@ func formatReconfigurePerfLine(iter int, forkElapsed time.Duration, spans []sdkt
 		spanDurationMS(openStream),
 		spanDurationMS(sendStart),
 		spanDurationMS(recvUntilExit),
+		spanDurationMS(vsockDial),
+		spanDurationMS(vsockUnixDial),
+		spanDurationMS(vsockWriteConnect),
+		spanDurationMS(vsockReadOK),
 		spanAttrInt(exec, "attempts"),
 		spanAttrInt(exec, "retryable_attempts"),
 		spanAttrInt(networkRPC, "attempts"),
@@ -147,6 +155,10 @@ func formatReconfigurePerfLine(iter int, forkElapsed time.Duration, spans []sdkt
 		spanDurationsByName(desc, "guest.exec.open_stream"),
 		spanDurationsByName(desc, "guest.exec.recv_until_exit"),
 		spanDurationsByName(desc, "guest.reconfigure_network.rpc"),
+		spanDurationsByName(desc, "hypervisor.vsock.dial"),
+		spanDurationsByName(desc, "hypervisor.vsock.unix_dial"),
+		spanDurationsByName(desc, "hypervisor.vsock.write_connect"),
+		spanDurationsByName(desc, "hypervisor.vsock.read_ok"),
 	)
 }
 

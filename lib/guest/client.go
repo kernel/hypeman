@@ -82,8 +82,12 @@ func GetOrCreateConn(ctx context.Context, dialer hypervisor.VsockDialer) (*grpc.
 	}
 
 	// Create new connection using the VsockDialer
+	traceCtx := ctx
 	conn, err := grpc.Dial("passthrough:///vsock",
 		grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
+			if span := trace.SpanFromContext(traceCtx); span.SpanContext().IsValid() {
+				ctx = trace.ContextWithSpan(ctx, span)
+			}
 			netConn, err := dialer.DialVsock(ctx, vsockGuestPort)
 			if err != nil {
 				return nil, &AgentVSockDialError{Err: err}
@@ -160,7 +164,7 @@ func ReconfigureNetworkInInstance(ctx context.Context, dialer hypervisor.VsockDi
 		return reconfigureNetworkOnce(ctx, dialer, opts)
 	}
 
-	ctx, span := guestTracer().Start(ctx, "guest.reconfigure_network", trace.WithAttributes(
+	ctx, span := otel.Tracer("hypeman/guest").Start(ctx, "guest.reconfigure_network", trace.WithAttributes(
 		attribute.Bool("wait_for_agent", true),
 		attribute.Int64("wait_for_agent_ms", opts.WaitForAgent.Milliseconds()),
 	))
@@ -224,7 +228,7 @@ func reconfigureNetworkOnce(ctx context.Context, dialer hypervisor.VsockDialer, 
 	}
 	client := NewGuestServiceClient(grpcConn)
 
-	_, span := guestTracer().Start(ctx, "guest.reconfigure_network.rpc")
+	_, span := otel.Tracer("hypeman/guest").Start(ctx, "guest.reconfigure_network.rpc")
 	_, err = client.ReconfigureNetwork(ctx, &ReconfigureNetworkRequest{
 		InterfaceName: opts.InterfaceName,
 		Mac:           opts.MAC,
@@ -232,11 +236,21 @@ func reconfigureNetworkOnce(ctx context.Context, dialer hypervisor.VsockDialer, 
 		Prefix:        opts.Prefix,
 		Gateway:       opts.Gateway,
 	})
-	finishGuestExecStepSpan(span, err)
+	finishGuestNetworkStepSpan(span, err)
 	if err != nil {
 		return fmt.Errorf("reconfigure network rpc: %w", err)
 	}
 	return nil
+}
+
+func finishGuestNetworkStepSpan(span trace.Span, err error) {
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(otelcodes.Error, err.Error())
+	} else {
+		span.SetStatus(otelcodes.Ok, "")
+	}
+	span.End()
 }
 
 // ExecIntoInstance executes command in instance via vsock using gRPC.
