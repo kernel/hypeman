@@ -30,11 +30,13 @@ func (m *manager) CreateAllocation(ctx context.Context, req AllocateRequest) (*N
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// 1. Check name uniqueness (exclude current instance to allow restarts)
-	exists, err := m.NameExists(ctx, req.InstanceName, req.InstanceID)
+	allocations, err := m.ListAllocations(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("check name exists: %w", err)
+		return nil, fmt.Errorf("list allocations: %w", err)
 	}
+
+	// 1. Check name uniqueness (exclude current instance to allow restarts)
+	exists := nameExistsInAllocations(allocations, req.InstanceName, req.InstanceID)
 	if exists {
 		return nil, fmt.Errorf("%w: instance name '%s' already exists, can't assign into same network: %s",
 			ErrNameExists, req.InstanceName, network.Name)
@@ -44,13 +46,13 @@ func (m *manager) CreateAllocation(ctx context.Context, req AllocateRequest) (*N
 	// Random selection reduces predictability and helps distribute IPs across the subnet.
 	// This is especially useful for large /16 networks and reduces conflicts when
 	// moving standby VMs across hosts.
-	ip, err := m.allocateNextIP(ctx, network.Subnet)
+	ip, err := allocateNextIPFromAllocations(network.Subnet, allocations)
 	if err != nil {
 		return nil, fmt.Errorf("allocate IP: %w", err)
 	}
 
 	// 3. Generate unused MAC (02:00:00:... format - locally administered)
-	mac, err := m.allocateUniqueMAC(ctx)
+	mac, err := allocateUniqueMACFromAllocations(allocations, generateMAC)
 	if err != nil {
 		return nil, fmt.Errorf("allocate MAC: %w", err)
 	}
@@ -225,16 +227,18 @@ func (m *manager) getOrInitDefaultNetwork(ctx context.Context) (*Network, error)
 // allocateNextIP picks a random available IP in the subnet
 // Retries up to 5 times if conflicts occur
 func (m *manager) allocateNextIP(ctx context.Context, subnet string) (string, error) {
+	allocations, err := m.ListAllocations(ctx)
+	if err != nil {
+		return "", fmt.Errorf("list allocations: %w", err)
+	}
+	return allocateNextIPFromAllocations(subnet, allocations)
+}
+
+func allocateNextIPFromAllocations(subnet string, allocations []Allocation) (string, error) {
 	// Parse subnet
 	_, ipNet, err := net.ParseCIDR(subnet)
 	if err != nil {
 		return "", fmt.Errorf("parse subnet: %w", err)
-	}
-
-	// Get all currently allocated IPs
-	allocations, err := m.ListAllocations(ctx)
-	if err != nil {
-		return "", fmt.Errorf("list allocations: %w", err)
 	}
 
 	// Build set of used IPs
@@ -324,6 +328,10 @@ func (m *manager) allocateUniqueMAC(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("list allocations: %w", err)
 	}
 
+	return allocateUniqueMACFromAllocations(allocations, generateMAC)
+}
+
+func allocateUniqueMACFromAllocations(allocations []Allocation, generate func() (string, error)) (string, error) {
 	usedMACs := make(map[string]bool)
 	for _, alloc := range allocations {
 		mac := strings.ToLower(strings.TrimSpace(alloc.MAC))
@@ -332,7 +340,19 @@ func (m *manager) allocateUniqueMAC(ctx context.Context) (string, error) {
 		}
 	}
 
-	return allocateUniqueMACFromSet(usedMACs, generateMAC)
+	return allocateUniqueMACFromSet(usedMACs, generate)
+}
+
+func nameExistsInAllocations(allocations []Allocation, name string, excludeInstanceID string) bool {
+	for _, alloc := range allocations {
+		if excludeInstanceID != "" && alloc.InstanceID == excludeInstanceID {
+			continue
+		}
+		if alloc.InstanceName == name {
+			return true
+		}
+	}
+	return false
 }
 
 func allocateUniqueMACFromSet(usedMACs map[string]bool, generate func() (string, error)) (string, error) {
