@@ -690,6 +690,13 @@ components:
             Optional final state for the forked instance.
             Default is the source instance state at fork time.
             For example, forking from Running defaults the fork result to Running.
+        wait_for_network:
+          type: boolean
+          description: |
+            When the fork result is Running, wait for guest networking to be applied before returning.
+            Defaults to true. Set false to return after the VM is resumed while guest networking finishes asynchronously.
+          default: true
+          example: true
 
     ForkTargetState:
       type: string
@@ -875,6 +882,13 @@ components:
             Optional hypervisor override. Allowed only when forking from a Stopped snapshot.
             Standby snapshots must fork with their original hypervisor.
           example: cloud-hypervisor
+        wait_for_network:
+          type: boolean
+          description: |
+            When the fork result is Running, wait for guest networking to be applied before returning.
+            Defaults to true. Set false to return after the VM is resumed while guest networking finishes asynchronously.
+          default: true
+          example: true
 
     SnapshotScheduleRetention:
       type: object

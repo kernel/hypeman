@@ -175,7 +175,10 @@ func (s *ApiService) ForkSnapshot(ctx context.Context, request oapi.ForkSnapshot
 		return oapi.ForkSnapshot400JSONResponse{Code: "invalid_request", Message: "request body is required"}, nil
 	}
 
-	domainReq := instances.ForkSnapshotRequest{Name: request.Body.Name}
+	domainReq := instances.ForkSnapshotRequest{
+		Name:           request.Body.Name,
+		WaitForNetwork: request.Body.WaitForNetwork,
+	}
 	if request.Body.TargetState != nil {
 		domainReq.TargetState = instances.State(*request.Body.TargetState)
 	}
