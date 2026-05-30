@@ -131,13 +131,19 @@ func (m *manager) restoreInstance(
 			log.InfoContext(ctx, "allocating fresh network identity for standby restore",
 				"instance_id", id, "network", "default",
 				"download_bps", stored.NetworkBandwidthDownload, "upload_bps", stored.NetworkBandwidthUpload)
-			netConfig, err := m.networkManager.CreateAllocation(networkCtx, network.AllocateRequest{
+			allocateCtx, allocateSpanEnd := m.startLifecycleStep(networkCtx, "restore_network.create_allocation",
+				attribute.String("instance_id", id),
+				attribute.String("hypervisor", string(stored.HypervisorType)),
+				attribute.String("operation", "restore_network_create_allocation"),
+			)
+			netConfig, err := m.networkManager.CreateAllocation(allocateCtx, network.AllocateRequest{
 				InstanceID:    id,
 				InstanceName:  stored.Name,
 				DownloadBps:   stored.NetworkBandwidthDownload,
 				UploadBps:     stored.NetworkBandwidthUpload,
 				UploadCeilBps: stored.NetworkBandwidthUpload * int64(m.networkManager.GetUploadBurstMultiplier()),
 			})
+			allocateSpanEnd(err)
 			if err != nil {
 				networkSpanEnd(err)
 				log.ErrorContext(ctx, "failed to allocate network", "instance_id", id, "error", err)
@@ -157,7 +163,12 @@ func (m *manager) restoreInstance(
 			stored.IP = netConfig.IP
 			stored.MAC = netConfig.MAC
 
-			if _, err := starter.PrepareFork(networkCtx, hypervisor.ForkPrepareRequest{
+			prepareForkCtx, prepareForkSpanEnd := m.startLifecycleStep(networkCtx, "restore_network.prepare_fork_network",
+				attribute.String("instance_id", id),
+				attribute.String("hypervisor", string(stored.HypervisorType)),
+				attribute.String("operation", "restore_network_prepare_fork_network"),
+			)
+			_, err = starter.PrepareFork(prepareForkCtx, hypervisor.ForkPrepareRequest{
 				SnapshotConfigPath: m.paths.InstanceSnapshotConfig(id),
 				VsockCID:           stored.VsockCID,
 				VsockSocket:        stored.VsockSocket,
@@ -167,7 +178,9 @@ func (m *manager) restoreInstance(
 					MAC:       netConfig.MAC,
 					Netmask:   netConfig.Netmask,
 				},
-			}); err != nil {
+			})
+			prepareForkSpanEnd(err)
+			if err != nil {
 				networkSpanEnd(err)
 				if errors.Is(err, hypervisor.ErrNotSupported) {
 					log.ErrorContext(ctx, "forked standby network rewrite not supported for hypervisor", "instance_id", id, "hypervisor", stored.HypervisorType)
@@ -181,7 +194,14 @@ func (m *manager) restoreInstance(
 		} else {
 			log.InfoContext(ctx, "recreating network for restore", "instance_id", id, "network", "default",
 				"download_bps", stored.NetworkBandwidthDownload, "upload_bps", stored.NetworkBandwidthUpload)
-			if err := m.networkManager.RecreateAllocation(networkCtx, id, stored.NetworkBandwidthDownload, stored.NetworkBandwidthUpload); err != nil {
+			recreateCtx, recreateSpanEnd := m.startLifecycleStep(networkCtx, "restore_network.recreate_allocation",
+				attribute.String("instance_id", id),
+				attribute.String("hypervisor", string(stored.HypervisorType)),
+				attribute.String("operation", "restore_network_recreate_allocation"),
+			)
+			err := m.networkManager.RecreateAllocation(recreateCtx, id, stored.NetworkBandwidthDownload, stored.NetworkBandwidthUpload)
+			recreateSpanEnd(err)
+			if err != nil {
 				networkSpanEnd(err)
 				log.ErrorContext(ctx, "failed to recreate network", "instance_id", id, "error", err)
 				return nil, fmt.Errorf("recreate network: %w", err)
