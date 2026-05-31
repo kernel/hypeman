@@ -179,12 +179,12 @@ func (m *manager) waitForGuestResumeNetworkUDPAck(ctx context.Context, waiter *g
 	}
 
 	log := logger.FromContext(ctx)
-	waitCtx, waitSpanEnd := m.startLifecycleStep(ctx, "guest.resume_network.cold_memory_faults_to_ack_wait",
+	waitCtx, waitSpanEnd := m.startLifecycleStep(ctx, "guest.resume_network.fault_guest_memory_from_disk",
 		attribute.String("instance_id", stored.Id),
 		attribute.String("hypervisor", string(stored.HypervisorType)),
-		attribute.String("operation", "guest_resume_network_cold_memory_faults_to_ack_wait"),
+		attribute.String("operation", "guest_resume_network_fault_guest_memory_from_disk"),
 		attribute.String("wait_for", "guest_network_applied_ack"),
-		attribute.String("observed_dominant_wait", "cold_snapshot_memory_page_cache_faults"),
+		attribute.String("observed_dominant_wait", "fault_guest_memory_from_disk"),
 	)
 	waitCtx, cancel := context.WithTimeout(waitCtx, 2*time.Second)
 	defer cancel()

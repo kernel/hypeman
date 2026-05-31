@@ -350,11 +350,11 @@ func (m *manager) restoreInstance(
 			attribute.String("hypervisor", string(stored.HypervisorType)),
 		}
 		if resumeNetworkMailboxPatched && waitForGuestNetwork {
-			guestNetworkStep = "wait_for_guest_resume_memory_faults_and_network_ack"
-			guestNetworkOperation = "wait_for_guest_resume_memory_faults_and_network_ack"
+			guestNetworkStep = "fault_guest_memory_from_disk"
+			guestNetworkOperation = "fault_guest_memory_from_disk"
 			guestNetworkAttrs = append(guestNetworkAttrs,
 				attribute.String("wait_for", "guest_network_applied_ack"),
-				attribute.String("observed_dominant_wait", "cold_snapshot_memory_page_cache_faults"),
+				attribute.String("observed_dominant_wait", "fault_guest_memory_from_disk"),
 			)
 		} else if resumeNetworkMailboxPatched {
 			guestNetworkStep = "guest_network_mailbox_handoff"

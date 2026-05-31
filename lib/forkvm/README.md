@@ -36,7 +36,7 @@ The post-resume wait is usually not netlink time. On cold restores, sampled
 Firecracker traces show the resumed vCPU faulting guest memory back in from the
 snapshot backing file before the guest-agent can observe VMGenID, read the
 mailbox, and send the network ack. In host traces this wait is labeled as
-`wait_for_guest_resume_memory_faults_and_network_ack`.
+`fault_guest_memory_from_disk`.
 
 ## Fork data copy behavior
 
