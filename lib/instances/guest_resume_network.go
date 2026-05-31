@@ -44,6 +44,13 @@ type guestResumeNetworkUDPAck struct {
 	text     string
 }
 
+type guestResumeNetworkUDPWaitResult struct {
+	appliedElapsed time.Duration
+	appliedAck     string
+	stageElapsed   map[string]time.Duration
+	stageAck       map[string]string
+}
+
 type guestResumeNetworkUDPWaiter struct {
 	conn *stdnet.UDPConn
 	ch   chan guestResumeNetworkUDPAck
@@ -117,25 +124,53 @@ func (w *guestResumeNetworkUDPWaiter) readLoop() {
 	}
 }
 
-func (w *guestResumeNetworkUDPWaiter) WaitApplied(ctx context.Context, mac, ip string) (time.Duration, string, error) {
+func (w *guestResumeNetworkUDPWaiter) WaitApplied(ctx context.Context, mac, ip string) (guestResumeNetworkUDPWaitResult, error) {
 	if w == nil {
-		return 0, "", fmt.Errorf("guest resume network UDP waiter is nil")
+		return guestResumeNetworkUDPWaitResult{}, fmt.Errorf("guest resume network UDP waiter is nil")
 	}
 
 	start := time.Now()
 	wantMAC := "mac=" + strings.ToLower(mac)
 	wantIP := "ip=" + ip
+	result := guestResumeNetworkUDPWaitResult{
+		stageElapsed: make(map[string]time.Duration),
+		stageAck:     make(map[string]string),
+	}
 	for {
 		select {
 		case ack := <-w.ch:
 			text := strings.ToLower(ack.text)
-			if strings.Contains(text, "stage=applied") && strings.Contains(text, wantMAC) && strings.Contains(text, wantIP) {
-				return ack.received.Sub(start), ack.text, nil
+			if !strings.Contains(text, wantMAC) || !strings.Contains(text, wantIP) {
+				continue
+			}
+			if stage, ok := guestResumeNetworkAckStage(text); ok {
+				if _, exists := result.stageElapsed[stage]; !exists {
+					result.stageElapsed[stage] = ack.received.Sub(start)
+					result.stageAck[stage] = ack.text
+					if deepTrace := restoreDeepTraceFromContext(ctx); deepTrace != nil {
+						deepTrace.Mark("guest_"+stage+"_received", ack.text)
+						deepTrace.Sample("guest_" + stage + "_received")
+					}
+				}
+			}
+			if strings.Contains(text, "stage=applied") {
+				result.appliedElapsed = ack.received.Sub(start)
+				result.appliedAck = ack.text
+				return result, nil
 			}
 		case <-ctx.Done():
-			return 0, "", ctx.Err()
+			return guestResumeNetworkUDPWaitResult{}, ctx.Err()
 		}
 	}
+}
+
+func guestResumeNetworkAckStage(text string) (string, bool) {
+	for _, field := range strings.Fields(text) {
+		if stage, ok := strings.CutPrefix(field, "stage="); ok && stage != "" {
+			return stage, true
+		}
+	}
+	return "", false
 }
 
 func (m *manager) waitForGuestResumeNetworkUDPAck(ctx context.Context, waiter *guestResumeNetworkUDPWaiter, stored *StoredMetadata, cfg *guestNetworkConfig) error {
@@ -152,12 +187,12 @@ func (m *manager) waitForGuestResumeNetworkUDPAck(ctx context.Context, waiter *g
 	waitCtx, cancel := context.WithTimeout(waitCtx, 2*time.Second)
 	defer cancel()
 
-	elapsed, ack, err := waiter.WaitApplied(waitCtx, cfg.mac, cfg.ip)
+	result, err := waiter.WaitApplied(waitCtx, cfg.mac, cfg.ip)
 	waitSpanEnd(err)
 	if err != nil {
 		return err
 	}
-	log.InfoContext(ctx, "guest resume network UDP ack received", "instance_id", stored.Id, "elapsed", elapsed, "ack", ack)
+	log.InfoContext(ctx, "guest resume network UDP ack received", "instance_id", stored.Id, "elapsed", result.appliedElapsed, "ack", result.appliedAck, "stages", result.stageElapsed)
 	return nil
 }
 

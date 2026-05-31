@@ -293,6 +293,14 @@ func (m *manager) restoreInstance(
 	// Store the PID for later cleanup
 	stored.HypervisorPID = &pid
 
+	deepTrace, traceErr := newRestoreDeepTrace(ctx, stored, pid, snapshotDir)
+	if traceErr != nil {
+		log.WarnContext(ctx, "failed to start restore deep trace", "instance_id", id, "pid", pid, "error", traceErr)
+	} else if deepTrace != nil {
+		defer func() { deepTrace.Close("restore_done", retErr) }()
+		ctx = withRestoreDeepTrace(ctx, deepTrace)
+	}
+
 	// 6. Transition: Paused → Running (resume)
 	resumeCtx, resumeSpanEnd := m.startLifecycleStep(ctx, "resume_vm",
 		attribute.String("instance_id", id),
@@ -300,13 +308,25 @@ func (m *manager) restoreInstance(
 		attribute.String("operation", "resume_vm"),
 	)
 	log.InfoContext(ctx, "resuming VM", "instance_id", id)
+	if deepTrace != nil {
+		deepTrace.Mark("resume_call_start", "")
+		deepTrace.Sample("resume_call_start")
+	}
 	if err := hv.Resume(resumeCtx); err != nil {
+		if deepTrace != nil {
+			deepTrace.Mark("resume_error", err.Error())
+			deepTrace.Sample("resume_error")
+		}
 		resumeSpanEnd(err)
 		log.ErrorContext(ctx, "failed to resume VM", "instance_id", id, "error", err)
 		// Cleanup on failure
 		hv.Shutdown(ctx)
 		releaseNetwork()
 		return nil, fmt.Errorf("resume vm failed: %w", err)
+	}
+	if deepTrace != nil {
+		deepTrace.Mark("resume_returned", "")
+		deepTrace.Sample("resume_returned")
 	}
 	resumeSpanEnd(nil)
 	// Mark the instance visible before releasing its pending reservation so we
@@ -330,11 +350,23 @@ func (m *manager) restoreInstance(
 		)
 		var reconfigureErr error
 		if resumeNetworkMailboxPatched && waitForGuestNetwork {
+			if deepTrace != nil {
+				deepTrace.Mark("wait_guest_network_start", "")
+				deepTrace.Sample("wait_guest_network_start")
+			}
 			reconfigureErr = m.waitForGuestResumeNetworkUDPAck(reconfigureCtx, resumeNetworkAckWaiter, stored, resumeNetworkAckCfg)
 		} else if resumeNetworkMailboxPatched {
 			log.InfoContext(ctx, "guest resume network mailbox patched", "instance_id", id)
 		} else {
 			reconfigureErr = reconfigureGuestNetwork(reconfigureCtx, stored, allocatedNet)
+		}
+		if deepTrace != nil {
+			stage := "reconfigure_guest_network_done"
+			if reconfigureErr != nil {
+				stage = "reconfigure_guest_network_error"
+			}
+			deepTrace.Mark(stage, "")
+			deepTrace.Sample(stage)
 		}
 		reconfigureSpanEnd(reconfigureErr)
 		if reconfigureErr != nil {

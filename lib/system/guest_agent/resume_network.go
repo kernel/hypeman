@@ -24,6 +24,7 @@ import (
 
 const resumeNetworkMailboxEnv = "HYPEMAN_RESUME_NETWORK_MAILBOX"
 const resumeNetworkMailboxTokenEnv = "HYPEMAN_RESUME_NETWORK_MAILBOX_TOKEN"
+const resumeNetworkDebugStagesEnv = "HYPEMAN_RESUME_NETWORK_DEBUG_STAGES"
 const vmgenIDKmsgSignal = "crng reseeded due to virtual machine fork"
 const resumeNetworkMailboxSize = 4096
 const resumeNetworkMailboxSeqOffset = 64
@@ -108,6 +109,7 @@ func resumeNetworkMailboxLoop(s *guestServer, mailbox []byte) {
 }
 
 func waitAndApplyResumeNetworkMailbox(s *guestServer, buf []byte) error {
+	signalSeen := time.Now()
 	for {
 		seq := atomicLoadUint32(buf[resumeNetworkMailboxSeqOffset:])
 		if seq == 0 {
@@ -125,6 +127,13 @@ func waitAndApplyResumeNetworkMailbox(s *guestServer, buf []byte) error {
 			return fmt.Errorf("decode mailbox payload: %w", err)
 		}
 
+		debugStages := strings.TrimSpace(os.Getenv(resumeNetworkDebugStagesEnv)) == "1"
+		if debugStages {
+			elapsed := time.Since(signalSeen).Microseconds()
+			sendResumeNetworkAck(payload, "signal_seen", fmt.Sprintf("guest_signal_to_mailbox_us=%d", elapsed))
+			sendResumeNetworkAck(payload, "mailbox_seen", fmt.Sprintf("guest_signal_to_mailbox_us=%d", elapsed))
+			sendResumeNetworkAck(payload, "netlink_start", fmt.Sprintf("guest_signal_to_netlink_start_us=%d", time.Since(signalSeen).Microseconds()))
+		}
 		_, err := s.ReconfigureNetwork(context.Background(), &pb.ReconfigureNetworkRequest{
 			InterfaceName: payload.InterfaceName,
 			Mac:           payload.MAC,
@@ -133,15 +142,21 @@ func waitAndApplyResumeNetworkMailbox(s *guestServer, buf []byte) error {
 			Gateway:       payload.Gateway,
 		})
 		if err != nil {
+			if debugStages {
+				sendResumeNetworkAck(payload, "netlink_error", fmt.Sprintf("guest_signal_to_netlink_error_us=%d", time.Since(signalSeen).Microseconds()))
+			}
 			return err
 		}
-		sendResumeNetworkAck(payload, "applied")
+		if debugStages {
+			sendResumeNetworkAck(payload, "netlink_done", fmt.Sprintf("guest_signal_to_netlink_done_us=%d", time.Since(signalSeen).Microseconds()))
+		}
+		sendResumeNetworkAck(payload, "applied", fmt.Sprintf("guest_signal_to_applied_us=%d", time.Since(signalSeen).Microseconds()))
 		atomicStoreUint32(buf[resumeNetworkMailboxSeqOffset:], 0)
 		return nil
 	}
 }
 
-func sendResumeNetworkAck(payload resumeNetworkPayload, stage string) {
+func sendResumeNetworkAck(payload resumeNetworkPayload, stage string, fields ...string) {
 	if payload.AckPort == 0 || payload.Gateway == "" {
 		return
 	}
@@ -154,7 +169,11 @@ func sendResumeNetworkAck(payload resumeNetworkPayload, stage string) {
 	}
 	defer conn.Close()
 
-	_, _ = fmt.Fprintf(conn, "stage=%s mac=%s ip=%s\n", stage, payload.MAC, payload.IPv4)
+	extra := ""
+	if len(fields) > 0 {
+		extra = " " + strings.Join(fields, " ")
+	}
+	_, _ = fmt.Fprintf(conn, "stage=%s mac=%s ip=%s%s\n", stage, payload.MAC, payload.IPv4, extra)
 }
 
 func atomicLoadUint32(buf []byte) uint32 {
