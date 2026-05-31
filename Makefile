@@ -53,7 +53,7 @@ download-ch-binaries:
 	@echo "Binaries downloaded successfully"
 
 # Firecracker version to embed
-FIRECRACKER_VERSION := v1.14.2
+FIRECRACKER_VERSION := v1.15.1
 
 # Download Firecracker binaries
 download-firecracker-binaries:

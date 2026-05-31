@@ -23,14 +23,18 @@ const (
 
 	// Kernel_202605291 is the current kernel version with VMGenID support for snapshot resume detection
 	Kernel_202605291 KernelVersion = "ch-6.12.8-kernel-3.0-202605291"
+
+	// Kernel_202605301 is the current kernel version with VMClock generation counter notifications
+	Kernel_202605301 KernelVersion = "ch-6.16.9-kernel-0.1-202605301"
 )
 
 var (
 	// DefaultKernelVersion is the kernel version used for new instances
-	DefaultKernelVersion = Kernel_202605291
+	DefaultKernelVersion = Kernel_202605301
 
 	// SupportedKernelVersions lists all supported kernel versions
 	SupportedKernelVersions = []KernelVersion{
+		Kernel_202605301,
 		Kernel_202605291,
 		Kernel_202603301,
 		Kernel_202603091,
@@ -41,6 +45,10 @@ var (
 
 // KernelDownloadURLs maps kernel versions and architectures to download URLs
 var KernelDownloadURLs = map[KernelVersion]map[string]string{
+	Kernel_202605301: {
+		"x86_64":  "https://github.com/kernel/linux/releases/download/ch-6.16.9-kernel-0.1-202605301/vmlinux-x86_64",
+		"aarch64": "https://github.com/kernel/linux/releases/download/ch-6.16.9-kernel-0.1-202605301/Image-arm64",
+	},
 	Kernel_202605291: {
 		"x86_64":  "https://github.com/kernel/linux/releases/download/ch-6.12.8-kernel-3.0-202605291/vmlinux-x86_64",
 		"aarch64": "https://github.com/kernel/linux/releases/download/ch-6.12.8-kernel-3.0-202605291/Image-arm64",
@@ -66,6 +74,10 @@ var KernelDownloadURLs = map[KernelVersion]map[string]string{
 // KernelHeaderURLs maps kernel versions and architectures to kernel header tarball URLs
 // These tarballs contain kernel headers needed for DKMS to build out-of-tree modules (e.g., NVIDIA vGPU drivers)
 var KernelHeaderURLs = map[KernelVersion]map[string]string{
+	Kernel_202605301: {
+		"x86_64":  "https://github.com/kernel/linux/releases/download/ch-6.16.9-kernel-0.1-202605301/kernel-headers-x86_64.tar.gz",
+		"aarch64": "https://github.com/kernel/linux/releases/download/ch-6.16.9-kernel-0.1-202605301/kernel-headers-aarch64.tar.gz",
+	},
 	Kernel_202605291: {
 		"x86_64":  "https://github.com/kernel/linux/releases/download/ch-6.12.8-kernel-3.0-202605291/kernel-headers-x86_64.tar.gz",
 		"aarch64": "https://github.com/kernel/linux/releases/download/ch-6.12.8-kernel-3.0-202605291/kernel-headers-aarch64.tar.gz",

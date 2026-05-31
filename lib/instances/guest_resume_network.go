@@ -6,9 +6,11 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"io"
 	stdnet "net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -16,11 +18,13 @@ import (
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sys/unix"
 )
 
 const guestResumeNetworkMailboxEnv = "HYPEMAN_RESUME_NETWORK_MAILBOX"
 const guestResumeNetworkMailboxTokenEnv = "HYPEMAN_RESUME_NETWORK_MAILBOX_TOKEN"
+const guestResumeNetworkPrefetchBytesEnv = "HYPEMAN_RESUME_NETWORK_PREFETCH_BYTES"
 const firecrackerSnapshotMemoryFile = "memory"
 
 const guestResumeNetworkMailboxSeqOffset = 64
@@ -42,6 +46,12 @@ type guestResumeNetworkPayload struct {
 type guestResumeNetworkUDPAck struct {
 	received time.Time
 	text     string
+}
+
+type guestResumeNetworkUDPWaitResult struct {
+	appliedElapsed time.Duration
+	appliedAck     string
+	stageElapsed   map[string]time.Duration
 }
 
 type guestResumeNetworkUDPWaiter struct {
@@ -117,25 +127,47 @@ func (w *guestResumeNetworkUDPWaiter) readLoop() {
 	}
 }
 
-func (w *guestResumeNetworkUDPWaiter) WaitApplied(ctx context.Context, mac, ip string) (time.Duration, string, error) {
+func (w *guestResumeNetworkUDPWaiter) WaitApplied(ctx context.Context, mac, ip string) (guestResumeNetworkUDPWaitResult, error) {
 	if w == nil {
-		return 0, "", fmt.Errorf("guest resume network UDP waiter is nil")
+		return guestResumeNetworkUDPWaitResult{}, fmt.Errorf("guest resume network UDP waiter is nil")
 	}
 
 	start := time.Now()
 	wantMAC := "mac=" + strings.ToLower(mac)
 	wantIP := "ip=" + ip
+	result := guestResumeNetworkUDPWaitResult{
+		stageElapsed: make(map[string]time.Duration),
+	}
 	for {
 		select {
 		case ack := <-w.ch:
 			text := strings.ToLower(ack.text)
-			if strings.Contains(text, "stage=applied") && strings.Contains(text, wantMAC) && strings.Contains(text, wantIP) {
-				return ack.received.Sub(start), ack.text, nil
+			if !strings.Contains(text, wantMAC) || !strings.Contains(text, wantIP) {
+				continue
+			}
+			if stage, ok := guestResumeNetworkAckStage(text); ok {
+				if _, exists := result.stageElapsed[stage]; !exists {
+					result.stageElapsed[stage] = ack.received.Sub(start)
+				}
+			}
+			if strings.Contains(text, "stage=applied") {
+				result.appliedElapsed = ack.received.Sub(start)
+				result.appliedAck = ack.text
+				return result, nil
 			}
 		case <-ctx.Done():
-			return 0, "", ctx.Err()
+			return guestResumeNetworkUDPWaitResult{}, ctx.Err()
 		}
 	}
+}
+
+func guestResumeNetworkAckStage(text string) (string, bool) {
+	for _, field := range strings.Fields(text) {
+		if stage, ok := strings.CutPrefix(field, "stage="); ok && stage != "" {
+			return stage, true
+		}
+	}
+	return "", false
 }
 
 func (m *manager) waitForGuestResumeNetworkUDPAck(ctx context.Context, waiter *guestResumeNetworkUDPWaiter, stored *StoredMetadata, cfg *guestNetworkConfig) error {
@@ -152,12 +184,16 @@ func (m *manager) waitForGuestResumeNetworkUDPAck(ctx context.Context, waiter *g
 	waitCtx, cancel := context.WithTimeout(waitCtx, 2*time.Second)
 	defer cancel()
 
-	elapsed, ack, err := waiter.WaitApplied(waitCtx, cfg.mac, cfg.ip)
+	result, err := waiter.WaitApplied(waitCtx, cfg.mac, cfg.ip)
+	span := trace.SpanFromContext(waitCtx)
+	for stage, elapsed := range result.stageElapsed {
+		span.SetAttributes(attribute.Int64("guest_resume_network_ack_"+stage+"_ms", elapsed.Milliseconds()))
+	}
 	waitSpanEnd(err)
 	if err != nil {
 		return err
 	}
-	log.InfoContext(ctx, "guest resume network UDP ack received", "instance_id", stored.Id, "elapsed", elapsed, "ack", ack)
+	log.InfoContext(ctx, "guest resume network UDP ack received", "instance_id", stored.Id, "elapsed", result.appliedElapsed, "ack", result.appliedAck, "stages", result.stageElapsed)
 	return nil
 }
 
@@ -217,6 +253,53 @@ func patchGuestResumeNetworkMailbox(snapshotDir, token string, payload *guestRes
 	binary.LittleEndian.PutUint32(u32[:], 1)
 	if _, err := file.WriteAt(u32[:], idx+int64(guestResumeNetworkMailboxSeqOffset)); err != nil {
 		return fmt.Errorf("write resume network mailbox sequence: %w", err)
+	}
+	if n := guestResumeNetworkPrefetchBytes(); n > 0 {
+		if err := prefetchSnapshotMemoryWindow(file, info.Size(), idx, n); err != nil {
+			return fmt.Errorf("prefetch resume network mailbox memory window: %w", err)
+		}
+	}
+	return nil
+}
+
+func guestResumeNetworkPrefetchBytes() int64 {
+	raw := strings.TrimSpace(os.Getenv(guestResumeNetworkPrefetchBytesEnv))
+	if raw == "" {
+		return 0
+	}
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return n
+}
+
+func prefetchSnapshotMemoryWindow(file *os.File, size int64, center int64, windowBytes int64) error {
+	if windowBytes <= 0 || size <= 0 {
+		return nil
+	}
+	start := center - windowBytes/2
+	if start < 0 {
+		start = 0
+	}
+	if start > size {
+		start = size
+	}
+	end := start + windowBytes
+	if end > size {
+		end = size
+	}
+
+	buf := make([]byte, 1024*1024)
+	for off := start; off < end; {
+		n := int64(len(buf))
+		if remaining := end - off; remaining < n {
+			n = remaining
+		}
+		if _, err := file.ReadAt(buf[:n], off); err != nil && err != io.EOF {
+			return err
+		}
+		off += n
 	}
 	return nil
 }

@@ -18,11 +18,13 @@ type Version string
 
 const (
 	V1_14_2 Version = "v1.14.2"
+	V1_15_1 Version = "v1.15.1"
 )
 
-const defaultVersion = V1_14_2
+const defaultVersion = V1_15_1
 
 var supportedVersions = []Version{
+	V1_15_1,
 	V1_14_2,
 }
 
