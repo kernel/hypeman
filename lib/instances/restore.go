@@ -343,11 +343,25 @@ func (m *manager) restoreInstance(
 	// still has the source VM's old IP configuration. Reconfigure guest networking after
 	// resume so host ingress to the new private IP works reliably.
 	if allocatedNet != nil && !stored.SkipGuestAgent {
-		reconfigureCtx, reconfigureSpanEnd := m.startLifecycleStep(ctx, "reconfigure_guest_network",
+		guestNetworkStep := "reconfigure_guest_network"
+		guestNetworkOperation := "reconfigure_guest_network"
+		guestNetworkAttrs := []attribute.KeyValue{
 			attribute.String("instance_id", id),
 			attribute.String("hypervisor", string(stored.HypervisorType)),
-			attribute.String("operation", "reconfigure_guest_network"),
-		)
+		}
+		if resumeNetworkMailboxPatched && waitForGuestNetwork {
+			guestNetworkStep = "wait_for_guest_resume_memory_faults_and_network_ack"
+			guestNetworkOperation = "wait_for_guest_resume_memory_faults_and_network_ack"
+			guestNetworkAttrs = append(guestNetworkAttrs,
+				attribute.String("wait_for", "guest_network_applied_ack"),
+				attribute.String("observed_dominant_wait", "cold_snapshot_memory_page_cache_faults"),
+			)
+		} else if resumeNetworkMailboxPatched {
+			guestNetworkStep = "guest_network_mailbox_handoff"
+			guestNetworkOperation = "guest_network_mailbox_handoff"
+		}
+		guestNetworkAttrs = append(guestNetworkAttrs, attribute.String("operation", guestNetworkOperation))
+		reconfigureCtx, reconfigureSpanEnd := m.startLifecycleStep(ctx, guestNetworkStep, guestNetworkAttrs...)
 		var reconfigureErr error
 		if resumeNetworkMailboxPatched && waitForGuestNetwork {
 			if deepTrace != nil {

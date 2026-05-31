@@ -172,13 +172,13 @@ func newestRestoreDeepTraceDir(t *testing.T, traceDir string, before map[string]
 
 func formatRestoreDeepTracePerfLine(iter int, forkElapsed time.Duration, spans []sdktrace.ReadOnlySpan, tracePath string) string {
 	return fmt.Sprintf(
-		"DEEP_TRACE iter=%d fork_total_ms=%d restore_from_snapshot_ms=%d resume_vm_ms=%d reconfigure_guest_network_ms=%d guest_resume_network_udp_ack_wait_ms=%d trace_dir=%s",
+		"DEEP_TRACE iter=%d fork_total_ms=%d restore_from_snapshot_ms=%d resume_vm_ms=%d wait_for_guest_resume_memory_faults_and_network_ack_ms=%d guest_resume_cold_memory_faults_to_ack_wait_ms=%d trace_dir=%s",
 		iter,
 		forkElapsed.Milliseconds(),
 		restoreDeepTraceSpanDurationMS(restoreDeepTraceLastSpanNamed(spans, "restore_from_snapshot")),
 		restoreDeepTraceSpanDurationMS(restoreDeepTraceLastSpanNamed(spans, "resume_vm")),
-		restoreDeepTraceSpanDurationMS(restoreDeepTraceLastSpanNamed(spans, "reconfigure_guest_network")),
-		restoreDeepTraceSpanDurationMS(restoreDeepTraceLastSpanNamed(spans, "guest.resume_network.udp_ack_wait")),
+		restoreDeepTraceSpanDurationMS(restoreDeepTraceLastSpanNamed(spans, "wait_for_guest_resume_memory_faults_and_network_ack")),
+		restoreDeepTraceSpanDurationMS(restoreDeepTraceLastSpanNamed(spans, "guest.resume_network.cold_memory_faults_to_ack_wait")),
 		tracePath,
 	)
 }
