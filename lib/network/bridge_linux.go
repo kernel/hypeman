@@ -495,11 +495,8 @@ func (m *manager) lastHypemanForwardRulePosition() int {
 	return lastPos
 }
 
-// createTAPDevice creates TAP device and attaches to bridge.
-// downloadBps: rate limit for download (external→VM), applied as TBF on TAP egress
-// uploadBps/uploadCeilBps: rate limit for upload (VM→external), applied as HTB class on bridge
-// Returns the tc class ID actually assigned (empty if no upload rate limiting).
-func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName string, isolated bool, downloadBps, uploadBps, uploadCeilBps int64) (string, error) {
+// createTAPDevice creates TAP device and attaches it to the bridge.
+func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName string, isolated bool) error {
 	// 1. Check if TAP already exists
 	_, linkLookupEnd := startNetworkStep(ctx, "network.create_tap.link_lookup_existing",
 		attribute.String("operation", "link_lookup_existing"),
@@ -516,7 +513,7 @@ func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName strin
 		err := m.deleteTAPDevice(tapName, "")
 		deleteEnd(err)
 		if err != nil {
-			return "", fmt.Errorf("delete existing TAP: %w", err)
+			return fmt.Errorf("delete existing TAP: %w", err)
 		}
 	}
 
@@ -541,7 +538,7 @@ func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName strin
 	err = netlink.LinkAdd(tap)
 	linkAddEnd(err)
 	if err != nil {
-		return "", fmt.Errorf("create TAP device: %w", err)
+		return fmt.Errorf("create TAP device: %w", err)
 	}
 
 	// 3. Set TAP up
@@ -552,7 +549,7 @@ func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName strin
 	tapLink, err := netlink.LinkByName(tapName)
 	linkByNameEnd(err)
 	if err != nil {
-		return "", fmt.Errorf("get TAP link: %w", err)
+		return fmt.Errorf("get TAP link: %w", err)
 	}
 
 	_, setUpEnd := startNetworkStep(ctx, "network.create_tap.link_set_up",
@@ -562,7 +559,7 @@ func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName strin
 	err = netlink.LinkSetUp(tapLink)
 	setUpEnd(err)
 	if err != nil {
-		return "", fmt.Errorf("set TAP up: %w", err)
+		return fmt.Errorf("set TAP up: %w", err)
 	}
 
 	// 4. Attach TAP to bridge
@@ -573,7 +570,7 @@ func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName strin
 	bridge, err := netlink.LinkByName(bridgeName)
 	bridgeLookupEnd(err)
 	if err != nil {
-		return "", fmt.Errorf("get bridge: %w", err)
+		return fmt.Errorf("get bridge: %w", err)
 	}
 
 	_, setMasterEnd := startNetworkStep(ctx, "network.create_tap.link_set_master",
@@ -584,7 +581,7 @@ func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName strin
 	err = netlink.LinkSetMaster(tapLink, bridge)
 	setMasterEnd(err)
 	if err != nil {
-		return "", fmt.Errorf("attach TAP to bridge: %w", err)
+		return fmt.Errorf("attach TAP to bridge: %w", err)
 	}
 
 	// 5. Enable port isolation so isolated TAPs can't directly talk to each other (requires kernel support and capabilities)
@@ -603,40 +600,11 @@ func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName strin
 		output, err := cmd.CombinedOutput()
 		isolationEnd(err)
 		if err != nil {
-			return "", fmt.Errorf("set isolation mode: %w (output: %s)", err, string(output))
+			return fmt.Errorf("set isolation mode: %w (output: %s)", err, string(output))
 		}
 	}
 
-	// 6. Apply download rate limiting (TBF on TAP egress)
-	if downloadBps > 0 {
-		_, downloadEnd := startNetworkStep(ctx, "network.create_tap.download_rate_limit",
-			attribute.String("operation", "download_rate_limit"),
-			attribute.String("tap", tapName),
-		)
-		err := m.applyDownloadRateLimit(ctx, tapName, downloadBps)
-		downloadEnd(err)
-		if err != nil {
-			return "", fmt.Errorf("apply download rate limit: %w", err)
-		}
-	}
-
-	// 7. Apply upload rate limiting (HTB class on bridge)
-	var classID string
-	if uploadBps > 0 {
-		var err error
-		uploadCtx, uploadEnd := startNetworkStep(ctx, "network.create_tap.upload_rate_limit",
-			attribute.String("operation", "upload_rate_limit"),
-			attribute.String("tap", tapName),
-			attribute.String("bridge", bridgeName),
-		)
-		classID, err = m.addVMClass(uploadCtx, bridgeName, tapName, uploadBps, uploadCeilBps)
-		uploadEnd(err)
-		if err != nil {
-			return "", fmt.Errorf("apply upload rate limit: %w", err)
-		}
-	}
-
-	return classID, nil
+	return nil
 }
 
 // applyDownloadRateLimit applies download (external→VM) rate limiting using TBF on TAP egress.
@@ -660,7 +628,7 @@ func (m *manager) applyDownloadRateLimit(ctx context.Context, tapName string, ra
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
 	}
-	_, tcEnd := startNetworkStep(ctx, "network.create_tap.download_rate_limit.tc_qdisc_tbf",
+	_, tcEnd := startNetworkStep(ctx, "network.rate_limit.download.tc_qdisc_tbf",
 		attribute.String("operation", "tc_qdisc_tbf"),
 		attribute.String("tap", tapName),
 	)
@@ -760,7 +728,7 @@ func (m *manager) addVMClass(ctx context.Context, bridgeName, tapName string, ra
 		cmd.SysProcAttr = &syscall.SysProcAttr{
 			AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
 		}
-		_, classAddEnd := startNetworkStep(ctx, "network.create_tap.upload_rate_limit.tc_class_add",
+		_, classAddEnd := startNetworkStep(ctx, "network.rate_limit.upload.tc_class_add",
 			attribute.String("operation", "tc_class_add"),
 			attribute.String("tap", tapName),
 			attribute.String("bridge", bridgeName),
@@ -796,7 +764,7 @@ func (m *manager) addVMClass(ctx context.Context, bridgeName, tapName string, ra
 		qdiscCmd.SysProcAttr = &syscall.SysProcAttr{
 			AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
 		}
-		_, fqCodelEnd := startNetworkStep(ctx, "network.create_tap.upload_rate_limit.tc_qdisc_fq_codel",
+		_, fqCodelEnd := startNetworkStep(ctx, "network.rate_limit.upload.tc_qdisc_fq_codel",
 			attribute.String("operation", "tc_qdisc_fq_codel"),
 			attribute.String("tap", tapName),
 			attribute.String("bridge", bridgeName),
@@ -805,7 +773,7 @@ func (m *manager) addVMClass(ctx context.Context, bridgeName, tapName string, ra
 		fqCodelErr := qdiscCmd.Run() // Best effort
 		fqCodelEnd(fqCodelErr)
 
-		_, filterLinkEnd := startNetworkStep(ctx, "network.create_tap.upload_rate_limit.link_lookup_filter",
+		_, filterLinkEnd := startNetworkStep(ctx, "network.rate_limit.upload.link_lookup_filter",
 			attribute.String("operation", "link_lookup_filter"),
 			attribute.String("tap", tapName),
 		)
@@ -823,7 +791,7 @@ func (m *manager) addVMClass(ctx context.Context, bridgeName, tapName string, ra
 		filterCmd.SysProcAttr = &syscall.SysProcAttr{
 			AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
 		}
-		_, filterEnd := startNetworkStep(ctx, "network.create_tap.upload_rate_limit.tc_filter_add",
+		_, filterEnd := startNetworkStep(ctx, "network.rate_limit.upload.tc_filter_add",
 			attribute.String("operation", "tc_filter_add"),
 			attribute.String("tap", tapName),
 			attribute.String("bridge", bridgeName),
@@ -912,23 +880,6 @@ func deriveClassIDVal(tapName string) uint16 {
 // deriveClassID derives a unique HTB class ID string from a TAP name.
 func deriveClassID(tapName string) string {
 	return fmt.Sprintf("%04x", deriveClassIDVal(tapName))
-}
-
-// formatTcRate formats bytes per second as a tc rate string.
-// It uses the largest unit that exactly represents the value to avoid
-// truncation from integer division (e.g., 2.5 Gbps becomes "2500mbit" not "2gbit").
-func formatTcRate(bytesPerSec int64) string {
-	bitsPerSec := bytesPerSec * 8
-	switch {
-	case bitsPerSec >= 1000000000 && bitsPerSec%1000000000 == 0:
-		return fmt.Sprintf("%dgbit", bitsPerSec/1000000000)
-	case bitsPerSec >= 1000000 && bitsPerSec%1000000 == 0:
-		return fmt.Sprintf("%dmbit", bitsPerSec/1000000)
-	case bitsPerSec >= 1000 && bitsPerSec%1000 == 0:
-		return fmt.Sprintf("%dkbit", bitsPerSec/1000)
-	default:
-		return fmt.Sprintf("%dbit", bitsPerSec)
-	}
 }
 
 // deleteTAPDevice removes TAP device and its associated HTB class on the bridge.
