@@ -3,7 +3,6 @@ package instances
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -206,17 +205,8 @@ func patchForkMailbox(snapshotDir, name, token string, payload []byte) error {
 		return fmt.Errorf("mailbox %q marker is too close to end of memory file", name)
 	}
 
-	if _, err := file.WriteAt(payload, idx+int64(mailboxpkg.ForkMailboxPayloadOffset)); err != nil {
-		return fmt.Errorf("write mailbox %q payload: %w", name, err)
-	}
-	var u32 [4]byte
-	binary.LittleEndian.PutUint32(u32[:], uint32(len(payload)))
-	if _, err := file.WriteAt(u32[:], idx+int64(mailboxpkg.ForkMailboxLengthOffset)); err != nil {
-		return fmt.Errorf("write mailbox %q payload length: %w", name, err)
-	}
-	binary.LittleEndian.PutUint32(u32[:], 1)
-	if _, err := file.WriteAt(u32[:], idx+int64(mailboxpkg.ForkMailboxSeqOffset)); err != nil {
-		return fmt.Errorf("write mailbox %q sequence: %w", name, err)
+	if err := mailboxpkg.WriteForkMailboxPayloadAt(file, idx, payload); err != nil {
+		return fmt.Errorf("write mailbox %q frame: %w", name, err)
 	}
 	return nil
 }

@@ -9,6 +9,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type sliceWriterAt []byte
+
+func (w sliceWriterAt) WriteAt(p []byte, off int64) (int, error) {
+	copy(w[off:], p)
+	return len(p), nil
+}
+
 func TestMarker(t *testing.T) {
 	t.Parallel()
 
@@ -58,4 +65,17 @@ func TestForkMailboxMarker(t *testing.T) {
 
 	_, err = ForkMailboxMarker("kernel.identity.v1", "")
 	require.Error(t, err)
+}
+
+func TestWriteForkMailboxPayloadAt(t *testing.T) {
+	t.Parallel()
+
+	buf := make([]byte, ForkMailboxSize)
+	payload := []byte(`{"instance_name":"forked"}`)
+	require.NoError(t, WriteForkMailboxPayloadAt(sliceWriterAt(buf), 512, payload))
+
+	assert.Equal(t, uint32(1), binary.LittleEndian.Uint32(buf[512+ForkMailboxSeqOffset:]))
+	payloadLen := binary.LittleEndian.Uint32(buf[512+ForkMailboxLengthOffset:])
+	assert.Equal(t, uint32(len(payload)), payloadLen)
+	assert.Equal(t, string(payload), string(buf[512+ForkMailboxPayloadOffset:512+ForkMailboxPayloadOffset+int(payloadLen)]))
 }

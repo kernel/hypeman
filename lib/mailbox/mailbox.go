@@ -1,8 +1,10 @@
 package mailbox
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"io"
 	"regexp"
 )
 
@@ -73,6 +75,25 @@ func ForkMailboxMarker(name, token string) ([]byte, error) {
 		return nil, fmt.Errorf("fork mailbox marker is too long")
 	}
 	return marker, nil
+}
+
+func WriteForkMailboxPayloadAt(w io.WriterAt, offset int64, payload []byte) error {
+	if len(payload) > ForkMailboxPayloadSize {
+		return fmt.Errorf("fork mailbox payload too large: %d bytes", len(payload))
+	}
+	if _, err := w.WriteAt(payload, offset+int64(ForkMailboxPayloadOffset)); err != nil {
+		return fmt.Errorf("write fork mailbox payload: %w", err)
+	}
+	var u32 [4]byte
+	binary.LittleEndian.PutUint32(u32[:], uint32(len(payload)))
+	if _, err := w.WriteAt(u32[:], offset+int64(ForkMailboxLengthOffset)); err != nil {
+		return fmt.Errorf("write fork mailbox payload length: %w", err)
+	}
+	binary.LittleEndian.PutUint32(u32[:], 1)
+	if _, err := w.WriteAt(u32[:], offset+int64(ForkMailboxSeqOffset)); err != nil {
+		return fmt.Errorf("write fork mailbox sequence: %w", err)
+	}
+	return nil
 }
 
 func MarshalPayload(payload *Payload) ([]byte, error) {
