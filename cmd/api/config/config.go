@@ -193,10 +193,12 @@ type CapacityConfig struct {
 
 // HypervisorConfig holds hypervisor settings.
 type HypervisorConfig struct {
-	Default                       string                 `koanf:"default"`
-	CloudHypervisorDefaultVersion string                 `koanf:"cloud_hypervisor_default_version"`
-	FirecrackerBinaryPath         string                 `koanf:"firecracker_binary_path"`
-	Memory                        HypervisorMemoryConfig `koanf:"memory"`
+	Default                          string                 `koanf:"default"`
+	CloudHypervisorDefaultVersion    string                 `koanf:"cloud_hypervisor_default_version"`
+	FirecrackerBinaryPath            string                 `koanf:"firecracker_binary_path"`
+	FirecrackerSnapshotMemoryBackend string                 `koanf:"firecracker_snapshot_memory_backend"`
+	FirecrackerUFFDCacheMaxBytes     string                 `koanf:"firecracker_uffd_cache_max_bytes"`
+	Memory                           HypervisorMemoryConfig `koanf:"memory"`
 }
 
 // HypervisorMemoryConfig holds guest memory management settings.
@@ -404,9 +406,11 @@ func defaultConfig() *Config {
 		},
 
 		Hypervisor: HypervisorConfig{
-			Default:                       "cloud-hypervisor",
-			CloudHypervisorDefaultVersion: "",
-			FirecrackerBinaryPath:         "",
+			Default:                          "cloud-hypervisor",
+			CloudHypervisorDefaultVersion:    "",
+			FirecrackerBinaryPath:            "",
+			FirecrackerSnapshotMemoryBackend: "file",
+			FirecrackerUFFDCacheMaxBytes:     "4294967296",
 			Memory: HypervisorMemoryConfig{
 				Enabled:            false,
 				KernelPageInitMode: "hardened",
@@ -617,6 +621,19 @@ func (c *Config) Validate() error {
 	}
 	if c.Hypervisor.Memory.KernelPageInitMode != "performance" && c.Hypervisor.Memory.KernelPageInitMode != "hardened" {
 		return fmt.Errorf("hypervisor.memory.kernel_page_init_mode must be one of {performance,hardened}, got %q", c.Hypervisor.Memory.KernelPageInitMode)
+	}
+	backend := strings.ToLower(strings.TrimSpace(c.Hypervisor.FirecrackerSnapshotMemoryBackend))
+	if backend == "" {
+		backend = "file"
+	}
+	switch backend {
+	case "file", "uffd":
+		c.Hypervisor.FirecrackerSnapshotMemoryBackend = backend
+	default:
+		return fmt.Errorf("hypervisor.firecracker_snapshot_memory_backend must be one of {file,uffd}, got %q", c.Hypervisor.FirecrackerSnapshotMemoryBackend)
+	}
+	if err := validateByteSize("hypervisor.firecracker_uffd_cache_max_bytes", c.Hypervisor.FirecrackerUFFDCacheMaxBytes); err != nil {
+		return err
 	}
 	if err := validateDuration("hypervisor.memory.active_ballooning.poll_interval", c.Hypervisor.Memory.ActiveBallooning.PollInterval); err != nil {
 		return err

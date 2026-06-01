@@ -1,0 +1,150 @@
+package instances
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/hypervisor/firecracker"
+	"github.com/kernel/hypeman/lib/logger"
+	"github.com/kernel/hypeman/lib/uffdpager"
+)
+
+func (m *manager) useFirecrackerUFFD(stored *StoredMetadata) bool {
+	return stored != nil &&
+		stored.HypervisorType == hypervisor.TypeFirecracker &&
+		m.firecrackerSnapshotMemoryBackend == uffdpager.BackendUFFD
+}
+
+func (m *manager) configureFirecrackerSnapshotRestore(stored *StoredMetadata, snapshotDir string, overlays []uffdpager.OverlayPage) error {
+	if stored == nil || stored.HypervisorType != hypervisor.TypeFirecracker {
+		return nil
+	}
+	if !m.useFirecrackerUFFD(stored) {
+		stored.FirecrackerUFFDSessionID = ""
+		stored.FirecrackerUFFDPagerVersion = ""
+		return firecracker.ConfigureSnapshotMemoryBackend(stored.DataDir, firecracker.SnapshotMemoryBackendConfig{
+			Backend: uffdpager.BackendFile,
+		})
+	}
+	if m.firecrackerUFFDPager == nil {
+		return fmt.Errorf("firecracker uffd snapshot restore is enabled but the pager is not configured")
+	}
+
+	cacheKey := strings.TrimSpace(stored.FirecrackerSnapshotCacheKey)
+	if cacheKey == "" {
+		var err error
+		cacheKey, err = firecrackerSnapshotCacheKey(stored, snapshotDir)
+		if err != nil {
+			return err
+		}
+		stored.FirecrackerSnapshotCacheKey = cacheKey
+	}
+	stored.FirecrackerUFFDSessionID = stored.Id
+	stored.FirecrackerUFFDPagerVersion = m.firecrackerUFFDPager.VersionKey()
+	return firecracker.ConfigureSnapshotMemoryBackend(stored.DataDir, firecracker.SnapshotMemoryBackendConfig{
+		Backend:  uffdpager.BackendUFFD,
+		CacheKey: cacheKey,
+		Overlays: overlays,
+	})
+}
+
+func (m *manager) refreshFirecrackerSnapshotCacheKey(stored *StoredMetadata, snapshotDir string) error {
+	if stored == nil || stored.HypervisorType != hypervisor.TypeFirecracker {
+		return nil
+	}
+	key, err := firecrackerSnapshotCacheKey(stored, snapshotDir)
+	if err != nil {
+		return err
+	}
+	stored.FirecrackerSnapshotCacheKey = key
+	return nil
+}
+
+func (m *manager) closeFirecrackerUFFDSession(ctx context.Context, stored *StoredMetadata) {
+	if stored == nil || stored.HypervisorType != hypervisor.TypeFirecracker || stored.FirecrackerUFFDSessionID == "" {
+		return
+	}
+	log := logger.FromContext(ctx)
+	if m.firecrackerUFFDPager == nil {
+		log.WarnContext(ctx, "cannot close firecracker uffd session; pager is not configured",
+			"instance_id", stored.Id,
+			"session_id", stored.FirecrackerUFFDSessionID,
+			"pager_version", stored.FirecrackerUFFDPagerVersion)
+		stored.FirecrackerUFFDSessionID = ""
+		stored.FirecrackerUFFDPagerVersion = ""
+		return
+	}
+	version := stored.FirecrackerUFFDPagerVersion
+	if version == "" {
+		version = m.firecrackerUFFDPager.VersionKey()
+	}
+	closeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	if err := m.firecrackerUFFDPager.CloseSessionVersion(closeCtx, version, stored.FirecrackerUFFDSessionID); err != nil {
+		log.WarnContext(ctx, "failed to close firecracker uffd session",
+			"instance_id", stored.Id,
+			"session_id", stored.FirecrackerUFFDSessionID,
+			"pager_version", version,
+			"error", err)
+	}
+	stored.FirecrackerUFFDSessionID = ""
+	stored.FirecrackerUFFDPagerVersion = ""
+}
+
+func (m *manager) checkFirecrackerUFFDSessionHealth(ctx context.Context, stored *StoredMetadata) error {
+	if stored == nil || stored.HypervisorType != hypervisor.TypeFirecracker || stored.FirecrackerUFFDSessionID == "" {
+		return nil
+	}
+	if m.firecrackerUFFDPager == nil {
+		return fmt.Errorf("firecracker uffd session %s has no configured pager", stored.FirecrackerUFFDSessionID)
+	}
+	version := stored.FirecrackerUFFDPagerVersion
+	if version == "" {
+		version = m.firecrackerUFFDPager.VersionKey()
+	}
+	healthCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+	defer cancel()
+	if _, err := m.firecrackerUFFDPager.HealthVersion(healthCtx, version); err != nil {
+		return fmt.Errorf("firecracker uffd pager %s for session %s is unhealthy: %w", version, stored.FirecrackerUFFDSessionID, err)
+	}
+	return nil
+}
+
+func firecrackerSnapshotCacheKey(stored *StoredMetadata, snapshotDir string) (string, error) {
+	memoryInfo, err := os.Stat(filepath.Join(snapshotDir, firecrackerSnapshotMemoryFile))
+	if err != nil {
+		return "", fmt.Errorf("stat firecracker snapshot memory for uffd cache key: %w", err)
+	}
+	stateInfo, err := os.Stat(filepath.Join(snapshotDir, "state"))
+	if err != nil {
+		return "", fmt.Errorf("stat firecracker snapshot state for uffd cache key: %w", err)
+	}
+	sum := sha256.Sum256([]byte(fmt.Sprintf(
+		"%s:%s:%d:%d:%d:%d",
+		stored.Id,
+		fileStatFingerprint(memoryInfo),
+		memoryInfo.Size(),
+		memoryInfo.ModTime().UnixNano(),
+		stateInfo.Size(),
+		stateInfo.ModTime().UnixNano(),
+	)))
+	return hex.EncodeToString(sum[:])[:24], nil
+}
+
+func fileStatFingerprint(info os.FileInfo) string {
+	if info == nil {
+		return ""
+	}
+	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+		return fmt.Sprintf("%s:%d:%d:%d", info.Name(), info.Mode(), stat.Dev, stat.Ino)
+	}
+	return fmt.Sprintf("%s:%d", info.Name(), info.Mode())
+}

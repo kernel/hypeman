@@ -138,10 +138,16 @@ func ProvideInstanceManager(p *paths.Paths, cfg *config.Config, imageManager ima
 		ReclaimEnabled:     cfg.Hypervisor.Memory.ReclaimEnabled,
 		VZBalloonRequired:  cfg.Hypervisor.Memory.VZBalloonRequired,
 	}
-	managerConfig := instances.ManagerConfig{
-		LifecycleEventBufferSize: cfg.Instances.LifecycleEventBufferSize,
+	var firecrackerUFFDCacheMaxBytes datasize.ByteSize
+	if err := firecrackerUFFDCacheMaxBytes.UnmarshalText([]byte(cfg.Hypervisor.FirecrackerUFFDCacheMaxBytes)); err != nil {
+		return nil, fmt.Errorf("failed to parse hypervisor.firecracker_uffd_cache_max_bytes %q: %w", cfg.Hypervisor.FirecrackerUFFDCacheMaxBytes, err)
 	}
-	return instances.NewManagerWithConfig(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, defaultHypervisor, snapshotDefaults, managerConfig, meter, tracer, memoryPolicy), nil
+	managerConfig := instances.ManagerConfig{
+		LifecycleEventBufferSize:         cfg.Instances.LifecycleEventBufferSize,
+		FirecrackerSnapshotMemoryBackend: cfg.Hypervisor.FirecrackerSnapshotMemoryBackend,
+		FirecrackerUFFDCacheMaxBytes:     int64(firecrackerUFFDCacheMaxBytes),
+	}
+	return instances.NewManagerWithConfigE(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, defaultHypervisor, snapshotDefaults, managerConfig, meter, tracer, memoryPolicy)
 }
 
 func snapshotDefaultsFromConfig(cfg *config.Config) instances.SnapshotPolicy {

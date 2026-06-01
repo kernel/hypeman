@@ -83,6 +83,14 @@ func (m *manager) deriveStateWithOptions(ctx context.Context, stored *StoredMeta
 		}
 		return stateResult{State: StateStopped}
 	}
+	if err := m.checkFirecrackerUFFDSessionHealth(ctx, stored); err != nil {
+		errMsg := err.Error()
+		log.WarnContext(ctx, "firecracker uffd session is unhealthy",
+			"instance_id", stored.Id,
+			"error", err,
+		)
+		return stateResult{State: StateUnknown, Error: &errMsg}
+	}
 
 	// 2. Socket exists - resolve hypervisor state, preferring the in-memory
 	// cache (populated by lifecycle events and prior queries) and falling

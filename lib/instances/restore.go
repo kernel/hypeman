@@ -248,6 +248,11 @@ func (m *manager) restoreInstance(
 		proxyRegistered = true
 	}
 
+	if err := m.configureFirecrackerSnapshotRestore(stored, snapshotDir, nil); err != nil {
+		releaseNetwork()
+		return nil, fmt.Errorf("configure firecracker snapshot memory backend: %w", err)
+	}
+
 	// 5. Transition: Standby → Paused (start hypervisor + restore)
 	restoreCtx, restoreSpanEnd := m.startLifecycleStep(ctx, "restore_from_snapshot",
 		attribute.String("instance_id", id),
@@ -259,6 +264,7 @@ func (m *manager) restoreInstance(
 	restoreSpanEnd(err)
 	if err != nil {
 		log.ErrorContext(ctx, "failed to restore from snapshot", "instance_id", id, "error", err)
+		m.closeFirecrackerUFFDSession(ctx, stored)
 		// Cleanup network on failure
 		releaseNetwork()
 		return nil, err
@@ -279,6 +285,7 @@ func (m *manager) restoreInstance(
 		log.ErrorContext(ctx, "failed to resume VM", "instance_id", id, "error", err)
 		// Cleanup on failure
 		hv.Shutdown(ctx)
+		m.closeFirecrackerUFFDSession(ctx, stored)
 		releaseNetwork()
 		return nil, fmt.Errorf("resume vm failed: %w", err)
 	}
