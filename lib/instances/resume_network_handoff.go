@@ -6,6 +6,7 @@ import (
 
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/network"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 type resumeNetworkHandoff struct {
@@ -41,7 +42,14 @@ func (m *manager) prepareResumeNetworkHandoff(ctx context.Context, stored *Store
 
 	payload := newGuestResumeNetworkPayload(resumeNetworkCfg)
 	payload.AckPort = waiter.Port()
-	if err := patchGuestResumeNetworkMailbox(snapshotDir, guestInitiatedResumeNetworkMailboxToken(stored), &payload); err != nil {
+	_, patchSpanEnd := m.startLifecycleStep(ctx, "guest.resume_network.mailbox_patch",
+		attribute.String("instance_id", stored.Id),
+		attribute.String("hypervisor", string(stored.HypervisorType)),
+		attribute.String("operation", "guest_resume_network_mailbox_patch"),
+	)
+	err = patchGuestResumeNetworkMailbox(snapshotDir, guestInitiatedResumeNetworkMailboxToken(stored), &payload)
+	patchSpanEnd(err)
+	if err != nil {
 		waiter.Close()
 		log.WarnContext(ctx, "failed to patch guest resume network mailbox; falling back to host-initiated reconfigure", "instance_id", stored.Id, "error", err)
 		return h, nil
