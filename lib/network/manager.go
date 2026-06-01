@@ -49,18 +49,27 @@ type Manager interface {
 
 // manager implements the Manager interface
 type manager struct {
-	paths   *paths.Paths
-	config  *config.Config
-	mu      sync.Mutex // Protects network allocation operations (IP allocation)
-	metrics *Metrics
+	paths              *paths.Paths
+	config             *config.Config
+	mu                 sync.Mutex // Protects network identity reservation.
+	networkMu          sync.RWMutex
+	defaultNetwork     *Network
+	pendingAllocations map[string]pendingAllocation
+	tcMu               sync.Mutex // Serializes shared bridge tc mutations.
+	metrics            *Metrics
+}
+
+type pendingAllocation struct {
+	allocation Allocation
 }
 
 // NewManager creates a new network manager.
 // If meter is nil, metrics are disabled.
 func NewManager(p *paths.Paths, cfg *config.Config, meter metric.Meter) Manager {
 	m := &manager{
-		paths:  p,
-		config: cfg,
+		paths:              p,
+		config:             cfg,
+		pendingAllocations: make(map[string]pendingAllocation),
 	}
 
 	// Initialize metrics if meter is provided
@@ -104,6 +113,15 @@ func (m *manager) Initialize(ctx context.Context, runningInstanceIDs []string) e
 	if err := m.createBridge(ctx, m.config.Network.BridgeName, gateway, m.config.Network.SubnetCIDR); err != nil {
 		return fmt.Errorf("setup default network: %w", err)
 	}
+	m.setDefaultNetwork(&Network{
+		Name:    "default",
+		Subnet:  m.config.Network.SubnetCIDR,
+		Gateway: gateway,
+		Bridge:  m.config.Network.BridgeName,
+		// Per-TAP port isolation is the default network policy used by createTAPDevice.
+		Isolated: true,
+		Default:  true,
+	})
 
 	// Cleanup orphaned TAP devices from previous runs (crashes, power loss, etc.).
 	// Startup runs before any concurrent CreateAllocation can be in flight, so no
@@ -119,6 +137,26 @@ func (m *manager) Initialize(ctx context.Context, runningInstanceIDs []string) e
 
 	log.InfoContext(ctx, "network manager initialized")
 	return nil
+}
+
+func cloneNetwork(network *Network) *Network {
+	if network == nil {
+		return nil
+	}
+	cloned := *network
+	return &cloned
+}
+
+func (m *manager) cachedDefaultNetwork() *Network {
+	m.networkMu.RLock()
+	defer m.networkMu.RUnlock()
+	return cloneNetwork(m.defaultNetwork)
+}
+
+func (m *manager) setDefaultNetwork(network *Network) {
+	m.networkMu.Lock()
+	defer m.networkMu.Unlock()
+	m.defaultNetwork = cloneNetwork(network)
 }
 
 // getDefaultNetwork gets the default network details from kernel state
