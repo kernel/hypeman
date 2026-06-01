@@ -103,7 +103,12 @@ func (m *manager) RecreateAllocation(ctx context.Context, instanceID string, dow
 	log := logger.FromContext(ctx)
 
 	// 1. Derive allocation from snapshot
-	alloc, err := m.deriveAllocation(ctx, instanceID)
+	deriveCtx, deriveSpanEnd := startNetworkStep(ctx, "network.derive_allocation",
+		attribute.String("operation", "derive_allocation"),
+		attribute.String("instance_id", instanceID),
+	)
+	alloc, err := m.deriveAllocation(deriveCtx, instanceID)
+	deriveSpanEnd(err)
 	if err != nil {
 		return fmt.Errorf("derive allocation: %w", err)
 	}
@@ -113,14 +118,29 @@ func (m *manager) RecreateAllocation(ctx context.Context, instanceID string, dow
 	}
 
 	// 2. Get default network details (same self-healing behavior as CreateAllocation).
-	network, err := m.getOrInitDefaultNetwork(ctx)
+	networkCtx, networkSpanEnd := startNetworkStep(ctx, "network.get_default_network",
+		attribute.String("operation", "get_default_network"),
+		attribute.String("instance_id", instanceID),
+	)
+	network, err := m.getOrInitDefaultNetwork(networkCtx)
+	networkSpanEnd(err)
 	if err != nil {
 		return err
 	}
 
 	// 3. Recreate TAP device with same name and rate limits from instance metadata
 	uploadCeilBps := uploadBps * int64(m.GetUploadBurstMultiplier())
-	if err := m.createTAPDevice(ctx, alloc.TAPDevice, network.Bridge, network.Isolated); err != nil {
+	tapCtx, tapSpanEnd := startNetworkStep(ctx, "network.create_tap",
+		attribute.String("operation", "create_tap"),
+		attribute.String("instance_id", instanceID),
+		attribute.String("tap", alloc.TAPDevice),
+		attribute.Bool("isolated", network.Isolated),
+		attribute.Bool("download_rate_limit", downloadBps > 0),
+		attribute.Bool("upload_rate_limit", uploadBps > 0),
+	)
+	err = m.createTAPDevice(tapCtx, alloc.TAPDevice, network.Bridge, network.Isolated)
+	tapSpanEnd(err)
+	if err != nil {
 		_ = m.deleteTAPDevice(alloc.TAPDevice, alloc.ClassID)
 		return fmt.Errorf("create TAP device: %w", err)
 	}
