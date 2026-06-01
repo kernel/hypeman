@@ -29,6 +29,7 @@ const resumeNetworkMailboxSize = 4096
 const resumeNetworkMailboxSeqOffset = 64
 const resumeNetworkMailboxLengthOffset = 68
 const resumeNetworkMailboxPayloadOffset = 72
+const resumeNetworkMailboxPayloadTimeout = 5 * time.Second
 
 var resumeNetworkMailboxMagic = []byte("HYPEMAN_RESUME_NETWORK_MAILBOX_V1\x00")
 
@@ -108,9 +109,17 @@ func resumeNetworkMailboxLoop(s *guestServer, mailbox []byte) {
 }
 
 func waitAndApplyResumeNetworkMailbox(s *guestServer, buf []byte) error {
+	return waitAndApplyResumeNetworkMailboxWithTimeout(s, buf, resumeNetworkMailboxPayloadTimeout)
+}
+
+func waitAndApplyResumeNetworkMailboxWithTimeout(s *guestServer, buf []byte, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
 	for {
 		seq := atomicLoadUint32(buf[resumeNetworkMailboxSeqOffset:])
 		if seq == 0 {
+			if time.Now().After(deadline) {
+				return fmt.Errorf("resume network mailbox payload was not patched within %s", timeout)
+			}
 			time.Sleep(100 * time.Microsecond)
 			continue
 		}
