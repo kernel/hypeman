@@ -40,3 +40,15 @@ func TestForkMailboxPayloadWithAckPort(t *testing.T) {
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"instance_name":"forked","ack_port":12345}`, string(payload))
 }
+
+func TestValidateForkMailboxesRejectsPaddedName(t *testing.T) {
+	t.Parallel()
+
+	err := validateForkMailboxes([]ForkMailboxPayload{{
+		Name:    " kernel.identity.v1 ",
+		Token:   "template-token",
+		Payload: []byte(`{"instance_name":"forked"}`),
+	}})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidRequest)
+}

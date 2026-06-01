@@ -32,7 +32,7 @@ func validateForkMailboxes(mailboxes []ForkMailboxPayload) error {
 	}
 	seen := make(map[string]struct{}, len(mailboxes))
 	for _, mailbox := range mailboxes {
-		name := strings.TrimSpace(mailbox.Name)
+		name := mailbox.Name
 		if !mailboxpkg.ValidForkMailboxName(name) {
 			return fmt.Errorf("%w: invalid mailbox name %q", ErrInvalidRequest, mailbox.Name)
 		}
