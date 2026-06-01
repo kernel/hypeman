@@ -510,7 +510,7 @@ func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName strin
 			attribute.String("operation", "delete_existing"),
 			attribute.String("tap", tapName),
 		)
-		err := m.deleteTAPDevice(tapName, "")
+		err := m.deleteTAPDeviceSerialized(tapName, "")
 		deleteEnd(err)
 		if err != nil {
 			return fmt.Errorf("delete existing TAP: %w", err)
@@ -886,6 +886,11 @@ func (m *manager) deleteTAPDevice(tapName, classID string) error {
 	return nil
 }
 
+func (m *manager) tapDeviceExists(tapName string) bool {
+	_, err := netlink.LinkByName(tapName)
+	return err == nil
+}
+
 // queryNetworkState queries kernel for bridge state
 func (m *manager) queryNetworkState(bridgeName string) (*Network, error) {
 	link, err := netlink.LinkByName(bridgeName)
@@ -987,7 +992,7 @@ func (m *manager) CleanupOrphanedTAPs(ctx context.Context, preserveInstanceIDs [
 		}
 
 		// Orphaned TAP - delete it (no stored classID available, falls back to deriveClassID)
-		if err := m.deleteTAPDevice(name, ""); err != nil {
+		if err := m.deleteTAPDeviceSerialized(name, ""); err != nil {
 			log.WarnContext(ctx, "failed to delete orphaned TAP", "tap", name, "error", err)
 			continue
 		}

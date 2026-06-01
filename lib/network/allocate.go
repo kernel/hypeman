@@ -63,7 +63,7 @@ func (m *manager) CreateAllocation(ctx context.Context, req AllocateRequest) (*N
 	tapSpanEnd(err)
 	if err != nil {
 		m.forgetPendingAllocation(req.InstanceID)
-		_ = m.deleteTAPDevice(netConfig.TAPDevice, "")
+		_ = m.deleteTAPDeviceSerialized(netConfig.TAPDevice, "")
 		return nil, fmt.Errorf("create TAP device: %w", err)
 	}
 	m.recordTAPOperation(ctx, "create")
@@ -141,7 +141,7 @@ func (m *manager) RecreateAllocation(ctx context.Context, instanceID string, dow
 	err = m.createTAPDevice(tapCtx, alloc.TAPDevice, network.Bridge, network.Isolated)
 	tapSpanEnd(err)
 	if err != nil {
-		_ = m.deleteTAPDevice(alloc.TAPDevice, alloc.ClassID)
+		_ = m.deleteTAPDeviceSerialized(alloc.TAPDevice, alloc.ClassID)
 		return fmt.Errorf("create TAP device: %w", err)
 	}
 	m.recordTAPOperation(ctx, "create")
@@ -264,6 +264,13 @@ func (m *manager) applyRateLimitAsync(ctx context.Context, req rateLimitRequest)
 	waitSpanEnd(nil)
 	defer m.tcMu.Unlock()
 
+	if !m.tapDeviceExists(req.tapName) {
+		log.DebugContext(ctx, "skipping async network rate limits for released TAP",
+			"instance_id", req.instanceID,
+			"tap", req.tapName)
+		return
+	}
+
 	applyCtx, applySpanEnd := startNetworkStep(waitCtx, "network.rate_limit.apply",
 		attribute.String("operation", "apply_rate_limit"),
 		attribute.String("instance_id", req.instanceID),
@@ -375,11 +382,9 @@ func (m *manager) ReleaseAllocation(ctx context.Context, alloc *Allocation) erro
 	m.forgetPendingAllocation(alloc.InstanceID)
 
 	// 1. Delete TAP device (best effort), using stored class ID for correct HTB cleanup.
-	// Serialize with async tc setup so a queued rate-limit job cannot race with
+	// Serialize with async tc setup so queued rate-limit work cannot race with
 	// class removal and leave stale bridge state behind.
-	m.tcMu.Lock()
-	defer m.tcMu.Unlock()
-	if err := m.deleteTAPDevice(alloc.TAPDevice, alloc.ClassID); err != nil {
+	if err := m.deleteTAPDeviceSerialized(alloc.TAPDevice, alloc.ClassID); err != nil {
 		log.WarnContext(ctx, "failed to delete TAP device", "tap", alloc.TAPDevice, "error", err)
 	} else {
 		m.recordTAPOperation(ctx, "delete")
@@ -391,6 +396,12 @@ func (m *manager) ReleaseAllocation(ctx context.Context, alloc *Allocation) erro
 		"ip", alloc.IP)
 
 	return nil
+}
+
+func (m *manager) deleteTAPDeviceSerialized(tapName, classID string) error {
+	m.tcMu.Lock()
+	defer m.tcMu.Unlock()
+	return m.deleteTAPDevice(tapName, classID)
 }
 
 // getOrInitDefaultNetwork resolves the default network and self-heals by running

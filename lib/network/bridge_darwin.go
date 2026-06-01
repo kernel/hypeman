@@ -54,6 +54,10 @@ func (m *manager) deleteTAPDevice(tapName, classID string) error {
 	return nil
 }
 
+func (m *manager) tapDeviceExists(tapName string) bool {
+	return true
+}
+
 // queryNetworkState returns a stub network state for macOS.
 // On macOS, we use NAT which doesn't have a physical bridge.
 func (m *manager) queryNetworkState(bridgeName string) (*Network, error) {

@@ -61,10 +61,7 @@ type manager struct {
 
 type pendingAllocation struct {
 	allocation Allocation
-	expiresAt  time.Time
 }
-
-const pendingAllocationTTL = 10 * time.Minute
 
 // NewManager creates a new network manager.
 // If meter is nil, metrics are disabled.

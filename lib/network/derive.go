@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"time"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
@@ -106,9 +105,11 @@ func (m *manager) GetAllocation(ctx context.Context, instanceID string) (*Alloca
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.prunePendingAllocationsLocked(time.Now())
 	if pending, ok := m.pendingAllocations[instanceID]; ok {
 		alloc := pending.allocation
+		if alloc.ClassID == "" {
+			alloc.ClassID = m.loadClassID(instanceID)
+		}
 		return &alloc, nil
 	}
 	return alloc, err
@@ -172,16 +173,20 @@ func (m *manager) listAllocationsWithPendingLocked(ctx context.Context) ([]Alloc
 		return nil, err
 	}
 
-	m.prunePendingAllocationsLocked(time.Now())
 	seen := make(map[string]struct{}, len(allocations))
 	for _, alloc := range allocations {
 		seen[alloc.InstanceID] = struct{}{}
+		delete(m.pendingAllocations, alloc.InstanceID)
 	}
 	for id, pending := range m.pendingAllocations {
 		if _, ok := seen[id]; ok {
 			continue
 		}
-		allocations = append(allocations, pending.allocation)
+		alloc := pending.allocation
+		if alloc.ClassID == "" {
+			alloc.ClassID = m.loadClassID(id)
+		}
+		allocations = append(allocations, alloc)
 	}
 	return allocations, nil
 }
@@ -192,7 +197,6 @@ func (m *manager) rememberPendingAllocationLocked(alloc Allocation) {
 	}
 	m.pendingAllocations[alloc.InstanceID] = pendingAllocation{
 		allocation: alloc,
-		expiresAt:  time.Now().Add(pendingAllocationTTL),
 	}
 }
 
@@ -200,14 +204,6 @@ func (m *manager) forgetPendingAllocation(instanceID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.pendingAllocations, instanceID)
-}
-
-func (m *manager) prunePendingAllocationsLocked(now time.Time) {
-	for id, pending := range m.pendingAllocations {
-		if now.After(pending.expiresAt) {
-			delete(m.pendingAllocations, id)
-		}
-	}
 }
 
 func nameExistsInAllocations(allocations []Allocation, name, excludeInstanceID string) bool {

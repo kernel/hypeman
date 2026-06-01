@@ -3,6 +3,7 @@ package network
 import (
 	"context"
 	"net"
+	"os"
 	"testing"
 
 	"github.com/kernel/hypeman/cmd/api/config"
@@ -96,6 +97,34 @@ func TestPendingAllocationVisibleToNameExistsAndGetAllocation(t *testing.T) {
 	require.NotNil(t, alloc)
 	assert.Equal(t, "10.100.0.42", alloc.IP)
 	assert.Equal(t, "pending", alloc.State)
+}
+
+func TestPendingAllocationLoadsPersistedClassID(t *testing.T) {
+	m := &manager{
+		paths:              paths.New(t.TempDir()),
+		config:             &config.Config{},
+		pendingAllocations: make(map[string]pendingAllocation),
+	}
+
+	const instanceID = "inst-pending"
+	require.NoError(t, os.MkdirAll(m.paths.InstanceDir(instanceID), 0755))
+	require.NoError(t, m.saveClassID(instanceID, "00ab"))
+
+	m.mu.Lock()
+	m.rememberPendingAllocationLocked(Allocation{
+		InstanceID:   instanceID,
+		InstanceName: "pending-name",
+		IP:           "10.100.0.42",
+		MAC:          "02:00:00:00:00:42",
+		TAPDevice:    "hype-pending",
+		State:        "pending",
+	})
+	m.mu.Unlock()
+
+	alloc, err := m.GetAllocation(context.Background(), instanceID)
+	require.NoError(t, err)
+	require.NotNil(t, alloc)
+	assert.Equal(t, "00ab", alloc.ClassID)
 }
 
 func TestDefaultNetworkCacheReturnsCopy(t *testing.T) {
