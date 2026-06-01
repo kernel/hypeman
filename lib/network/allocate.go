@@ -62,8 +62,13 @@ func (m *manager) CreateAllocation(ctx context.Context, req AllocateRequest) (*N
 	err = m.createTAPDevice(tapCtx, netConfig.TAPDevice, network.Bridge, network.Isolated)
 	tapSpanEnd(err)
 	if err != nil {
-		m.forgetPendingAllocation(req.InstanceID)
-		_ = m.deleteTAPDeviceSerialized(netConfig.TAPDevice, "")
+		cleanupErr := m.deleteTAPDeviceSerialized(netConfig.TAPDevice, "")
+		if cleanupErr != nil {
+			log.WarnContext(ctx, "failed to clean up TAP after create failure", "tap", netConfig.TAPDevice, "error", cleanupErr)
+		}
+		if cleanupErr == nil || !m.tapDeviceExists(netConfig.TAPDevice) {
+			m.forgetPendingAllocation(req.InstanceID)
+		}
 		return nil, fmt.Errorf("create TAP device: %w", err)
 	}
 	m.recordTAPOperation(ctx, "create")
