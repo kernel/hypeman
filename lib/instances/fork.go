@@ -93,13 +93,21 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 		}
 
 		log.InfoContext(ctx, "restoring source instance after running fork", "source_instance_id", id)
-		_, restoreErr := m.restoreInstance(ctx, id)
+		restoredSource, restoreErr := m.restoreInstance(ctx, id)
 
 		if restoreErr != nil {
 			if forkErr != nil {
 				return nil, "", fmt.Errorf("fork failed: %v; additionally failed to restore source instance: %w", forkErr, restoreErr)
 			}
 			return nil, "", fmt.Errorf("restore source instance after fork: %w", restoreErr)
+		}
+		if restoredSource != nil && !restoredSource.NetworkEnabled && (restoredSource.State == StateRunning || restoredSource.State == StateInitializing) {
+			if err := ensureGuestAgentReadyForForkPhase(ctx, &restoredSource.StoredMetadata, "after restoring running fork source"); err != nil {
+				if forkErr != nil {
+					return nil, "", fmt.Errorf("fork failed: %v; additionally restored source guest agent was not ready: %w", forkErr, err)
+				}
+				return nil, "", fmt.Errorf("wait for restored source guest agent readiness: %w", err)
+			}
 		}
 		if forkErr != nil {
 			return nil, "", forkErr
@@ -121,7 +129,7 @@ func ensureGuestAgentReadyForRunningFork(ctx context.Context, source *StoredMeta
 }
 
 func ensureGuestAgentReadyForForkPhase(ctx context.Context, inst *StoredMetadata, phase string) error {
-	if inst == nil || !inst.NetworkEnabled || inst.SkipGuestAgent {
+	if inst == nil || inst.SkipGuestAgent {
 		return nil
 	}
 

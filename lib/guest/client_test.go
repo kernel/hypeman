@@ -196,6 +196,26 @@ func TestExecIntoInstanceSkipsDetailedTraceWhenNotWaiting(t *testing.T) {
 	}
 }
 
+func TestExecIntoInstanceNoWaitClosesRetryableConnection(t *testing.T) {
+	dialer := &alwaysFailDialer{key: "no-wait-close-retryable-test"}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	_, err := ExecIntoInstance(ctx, dialer, ExecOptions{
+		Command: []string{"true"},
+	})
+	if err == nil {
+		t.Fatal("ExecIntoInstance succeeded unexpectedly")
+	}
+
+	connPool.RLock()
+	_, ok := connPool.conns[dialer.Key()]
+	connPool.RUnlock()
+	if ok {
+		t.Fatal("retryable no-wait exec error left connection in pool")
+	}
+}
+
 func TestCloseConnClosesPooledConnection(t *testing.T) {
 	dialer := &trackingDialer{
 		key:   "close-conn-test",
@@ -280,6 +300,18 @@ func (d *delayedDialer) DialVsock(ctx context.Context, port int) (net.Conn, erro
 }
 
 var _ hypervisor.VsockDialer = (*delayedDialer)(nil)
+
+type alwaysFailDialer struct {
+	key string
+}
+
+func (d *alwaysFailDialer) Key() string { return d.key }
+
+func (d *alwaysFailDialer) DialVsock(ctx context.Context, port int) (net.Conn, error) {
+	return nil, errors.New("not ready")
+}
+
+var _ hypervisor.VsockDialer = (*alwaysFailDialer)(nil)
 
 type trackingDialer struct {
 	key   string

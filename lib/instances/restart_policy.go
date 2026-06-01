@@ -348,5 +348,9 @@ func shouldResetRestartAttempts(policy *restartpolicy.Policy, status restartpoli
 	if inst.State != StateRunning && inst.State != StateInitializing {
 		return false
 	}
-	return !now.Before(inst.StartedAt.UTC().Add(restartpolicy.StableAfter(policy)))
+	stableSince := inst.StartedAt.UTC()
+	if status.LastAttemptAt != nil && status.LastAttemptAt.UTC().After(stableSince) {
+		stableSince = status.LastAttemptAt.UTC()
+	}
+	return !now.Before(stableSince.Add(restartpolicy.StableAfter(policy)))
 }

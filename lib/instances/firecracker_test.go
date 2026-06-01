@@ -19,6 +19,7 @@ import (
 
 	"github.com/kernel/hypeman/cmd/api/config"
 	"github.com/kernel/hypeman/lib/devices"
+	"github.com/kernel/hypeman/lib/diskutilization"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/instances/phasetracking"
@@ -717,9 +718,9 @@ func TestFirecrackerForkIsolation(t *testing.T) {
 	require.NoError(t, err, "fingerprint source mem-file after standby")
 
 	reflinkOK := probeReflinkSupport(t, tmpDir)
-	var statBefore syscall.Statfs_t
-	require.NoError(t, syscall.Statfs(tmpDir, &statBefore))
-	freeBefore := int64(statBefore.Bavail) * statBefore.Bsize
+	usageBefore, err := diskutilization.Collect(p)
+	require.NoError(t, err)
+	usedBefore := diskUtilizationTotal(usageBefore)
 
 	fork, err := mgr.ForkInstance(ctx, sourceID, ForkInstanceRequest{
 		Name: "fc-fork-isolation-fork",
@@ -791,10 +792,9 @@ func TestFirecrackerForkIsolation(t *testing.T) {
 	// because pages are shared CoW. Gated on FICLONE probe — ext4 etc. fall
 	// back to sparse copy which produces full physical copies, so the bound
 	// would not hold there.
-	var statAfter syscall.Statfs_t
-	require.NoError(t, syscall.Statfs(tmpDir, &statAfter))
-	freeAfter := int64(statAfter.Bavail) * statAfter.Bsize
-	consumed := freeBefore - freeAfter
+	usageAfter, err := diskutilization.Collect(p)
+	require.NoError(t, err)
+	consumed := diskUtilizationTotal(usageAfter) - usedBefore
 	t.Logf("fork lifecycle disk-usage delta: consumed=%d guestMem=%d reflink=%v",
 		consumed, guestMemBytes, reflinkOK)
 	if reflinkOK {
@@ -835,6 +835,18 @@ func TestFirecrackerForkIsolation(t *testing.T) {
 
 	require.NoError(t, mgr.DeleteInstance(ctx, sourceID))
 	sourceDeleted = true
+}
+
+func diskUtilizationTotal(b diskutilization.Breakdown) int64 {
+	return b.Images +
+		b.OCICache +
+		b.Volumes +
+		b.RootfsOverlays +
+		b.VolumeOverlays +
+		b.SnapshotUncompressed +
+		b.SnapshotCompressed +
+		b.SnapshotShared +
+		b.SnapshotOther
 }
 
 type fileFingerprint struct {
