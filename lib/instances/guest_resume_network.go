@@ -26,6 +26,7 @@ const firecrackerSnapshotMemoryFile = "memory"
 const guestResumeNetworkMailboxSeqOffset = 64
 const guestResumeNetworkMailboxLengthOffset = 68
 const guestResumeNetworkMailboxPayloadOffset = 72
+const guestResumeNetworkUDPAckTimeout = 5 * time.Second
 
 var guestResumeNetworkMailboxMagic = []byte("HYPEMAN_RESUME_NETWORK_MAILBOX_V1\x00")
 var guestResumeNetworkMailboxOffsets sync.Map
@@ -149,7 +150,7 @@ func (m *manager) waitForGuestResumeNetworkUDPAck(ctx context.Context, waiter *g
 		attribute.String("hypervisor", string(stored.HypervisorType)),
 		attribute.String("operation", "guest_resume_network_udp_ack_wait"),
 	)
-	waitCtx, cancel := context.WithTimeout(waitCtx, 2*time.Second)
+	waitCtx, cancel := context.WithTimeout(waitCtx, guestResumeNetworkUDPAckTimeout)
 	defer cancel()
 
 	elapsed, ack, err := waiter.WaitApplied(waitCtx, cfg.mac, cfg.ip)
