@@ -117,6 +117,11 @@ type StoredMetadata struct {
 	HypervisorVersion string          // Hypervisor version (e.g., "v51.1")
 	HypervisorPID     *int            // Hypervisor process ID (may be stale after host restart)
 
+	// Firecracker UFFD snapshot restore metadata.
+	FirecrackerSnapshotCacheKey string
+	FirecrackerUFFDSessionID    string
+	FirecrackerUFFDPagerVersion string
+
 	// Paths
 	SocketPath string // Path to API socket
 	DataDir    string // Instance data directory

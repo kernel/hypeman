@@ -37,6 +37,7 @@ import (
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/kernel/hypeman/lib/registry"
 	"github.com/kernel/hypeman/lib/scopes"
+	"github.com/kernel/hypeman/lib/uffdpager"
 	"github.com/kernel/hypeman/lib/vmm"
 	nethttpmiddleware "github.com/oapi-codegen/nethttp-middleware"
 	"github.com/riandyrn/otelchi"
@@ -132,6 +133,10 @@ func startOCICacheGC(grp *errgroup.Group, ctx context.Context, runner ociCacheGC
 }
 
 func run() error {
+	if len(os.Args) > 1 && os.Args[1] == "--internal-uffd-pager" {
+		return uffdpager.Main(os.Args[2:])
+	}
+
 	// Load config early for OTel initialization
 	// Config path can be specified via CONFIG_PATH env var or defaults to platform-specific locations
 	configPath := os.Getenv("CONFIG_PATH")

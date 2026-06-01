@@ -81,6 +81,7 @@ func (m *manager) deleteInstance(
 			log.WarnContext(ctx, "failed to kill hypervisor, continuing with cleanup", "instance_id", id, "error", err)
 		}
 	}
+	m.closeFirecrackerUFFDSession(ctx, stored)
 
 	// 6. Release network allocation
 	if inst.NetworkEnabled {

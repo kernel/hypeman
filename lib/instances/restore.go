@@ -15,6 +15,7 @@ import (
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/network"
 	snapshotstore "github.com/kernel/hypeman/lib/snapshot"
+	"github.com/kernel/hypeman/lib/uffdpager"
 	"go.opentelemetry.io/otel/attribute"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -241,6 +242,7 @@ func (m *manager) restoreInstance(
 	var resumeNetworkAckWaiter *guestResumeNetworkUDPWaiter
 	var resumeNetworkAckCfg *guestNetworkConfig
 	resumeNetworkMailboxPatched := false
+	var uffdOverlays []uffdpager.OverlayPage
 	if allocatedNet != nil && !stored.SkipGuestAgent && guestInitiatedResumeNetworkMailbox(stored) {
 		resumeNetworkCfg, cfgErr := guestNetworkReconfigureConfig(allocatedNet)
 		if cfgErr != nil {
@@ -258,7 +260,17 @@ func (m *manager) restoreInstance(
 				resumeNetworkAckCfg = resumeNetworkCfg
 				payload.AckPort = resumeNetworkAckWaiter.Port()
 			}
-			if patchErr := patchGuestResumeNetworkMailbox(snapshotDir, guestInitiatedResumeNetworkMailboxToken(stored), &payload); patchErr != nil {
+			var patchErr error
+			if m.useFirecrackerUFFD(stored) {
+				var overlay uffdpager.OverlayPage
+				overlay, patchErr = buildGuestResumeNetworkMailboxOverlay(snapshotDir, guestInitiatedResumeNetworkMailboxToken(stored), &payload)
+				if patchErr == nil {
+					uffdOverlays = append(uffdOverlays, overlay)
+				}
+			} else {
+				patchErr = patchGuestResumeNetworkMailbox(snapshotDir, guestInitiatedResumeNetworkMailboxToken(stored), &payload)
+			}
+			if patchErr != nil {
 				if resumeNetworkAckWaiter != nil {
 					resumeNetworkAckWaiter.Close()
 					resumeNetworkAckWaiter = nil
@@ -274,6 +286,11 @@ func (m *manager) restoreInstance(
 		defer resumeNetworkAckWaiter.Close()
 	}
 
+	if err := m.configureFirecrackerSnapshotRestore(stored, snapshotDir, uffdOverlays); err != nil {
+		releaseNetwork()
+		return nil, fmt.Errorf("configure firecracker snapshot memory backend: %w", err)
+	}
+
 	// 5. Transition: Standby → Paused (start hypervisor + restore)
 	restoreCtx, restoreSpanEnd := m.startLifecycleStep(ctx, "restore_from_snapshot",
 		attribute.String("instance_id", id),
@@ -285,6 +302,7 @@ func (m *manager) restoreInstance(
 	restoreSpanEnd(err)
 	if err != nil {
 		log.ErrorContext(ctx, "failed to restore from snapshot", "instance_id", id, "error", err)
+		m.closeFirecrackerUFFDSession(ctx, stored)
 		// Cleanup network on failure
 		releaseNetwork()
 		return nil, err
@@ -327,6 +345,7 @@ func (m *manager) restoreInstance(
 		log.ErrorContext(ctx, "failed to resume VM", "instance_id", id, "error", err)
 		// Cleanup on failure
 		hv.Shutdown(ctx)
+		m.closeFirecrackerUFFDSession(ctx, stored)
 		releaseNetwork()
 		return nil, fmt.Errorf("resume vm failed: %w", err)
 	}
@@ -392,6 +411,7 @@ func (m *manager) restoreInstance(
 		if reconfigureErr != nil {
 			log.ErrorContext(ctx, "failed to configure guest network after restore", "instance_id", id, "error", reconfigureErr)
 			_ = hv.Shutdown(ctx)
+			m.closeFirecrackerUFFDSession(ctx, stored)
 			m.rollbackAdmissionAllocationActive(stored)
 			releaseNetwork()
 			return nil, fmt.Errorf("configure guest network after restore: %w", reconfigureErr)

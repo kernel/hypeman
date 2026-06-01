@@ -114,6 +114,47 @@ func TestPatchGuestResumeNetworkMailbox(t *testing.T) {
 	assert.Equal(t, *payload, decoded)
 }
 
+func TestBuildGuestResumeNetworkMailboxOverlayDoesNotMutateMemory(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	token := "overlay-token"
+	mem := make([]byte, 8192)
+	copy(mem[512:], guestResumeNetworkMailboxMagic)
+	copy(mem[512+len(guestResumeNetworkMailboxMagic):], token)
+	require.NoError(t, os.WriteFile(dir+"/"+firecrackerSnapshotMemoryFile, mem, 0644))
+
+	payload := &guestResumeNetworkPayload{
+		InterfaceName: "eth0",
+		MAC:           "02:00:00:85:17:c8",
+		IPv4:          "10.102.146.62",
+		Prefix:        16,
+		Gateway:       "10.102.0.1",
+		AckPort:       43210,
+	}
+	overlay, err := buildGuestResumeNetworkMailboxOverlay(dir, token, payload)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), overlay.GuestMemoryOffset)
+
+	unchanged, err := os.ReadFile(dir + "/" + firecrackerSnapshotMemoryFile)
+	require.NoError(t, err)
+	assert.Equal(t, mem, unchanged)
+
+	page, err := os.ReadFile(overlay.Path)
+	require.NoError(t, err)
+	require.Len(t, page, 4096)
+
+	offset := 512
+	require.Equal(t, uint32(1), binary.LittleEndian.Uint32(page[offset+guestResumeNetworkMailboxSeqOffset:]))
+	payloadLen := binary.LittleEndian.Uint32(page[offset+guestResumeNetworkMailboxLengthOffset:])
+	require.NotZero(t, payloadLen)
+
+	var decoded guestResumeNetworkPayload
+	err = json.Unmarshal(page[offset+guestResumeNetworkMailboxPayloadOffset:offset+guestResumeNetworkMailboxPayloadOffset+int(payloadLen)], &decoded)
+	require.NoError(t, err)
+	assert.Equal(t, *payload, decoded)
+}
+
 func TestRequiresRestoreConfigDiskRefresh(t *testing.T) {
 	t.Parallel()
 

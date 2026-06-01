@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/kernel/hypeman/lib/resources"
 	"github.com/kernel/hypeman/lib/system"
+	"github.com/kernel/hypeman/lib/uffdpager"
 	"github.com/kernel/hypeman/lib/volumes"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -81,13 +83,22 @@ type ResourceLimits struct {
 
 // ManagerConfig holds non-resource manager behavior settings.
 type ManagerConfig struct {
-	LifecycleEventBufferSize int
+	LifecycleEventBufferSize         int
+	FirecrackerSnapshotMemoryBackend string
+	FirecrackerUFFDCacheMaxBytes     int64
 }
 
 // Normalize applies defaults to manager config values.
 func (c ManagerConfig) Normalize() ManagerConfig {
 	if c.LifecycleEventBufferSize <= 0 {
 		c.LifecycleEventBufferSize = defaultLifecycleEventBufferSize
+	}
+	c.FirecrackerSnapshotMemoryBackend = strings.ToLower(strings.TrimSpace(c.FirecrackerSnapshotMemoryBackend))
+	if c.FirecrackerSnapshotMemoryBackend == "" {
+		c.FirecrackerSnapshotMemoryBackend = uffdpager.BackendFile
+	}
+	if c.FirecrackerUFFDCacheMaxBytes <= 0 {
+		c.FirecrackerUFFDCacheMaxBytes = 4 << 30
 	}
 	return c
 }
@@ -149,9 +160,11 @@ type manager struct {
 	tapGCOnce sync.Once
 
 	// Hypervisor support
-	vmStarters        map[hypervisor.Type]hypervisor.VMStarter
-	defaultHypervisor hypervisor.Type // Default hypervisor type when not specified in request
-	guestMemoryPolicy guestmemory.Policy
+	vmStarters                       map[hypervisor.Type]hypervisor.VMStarter
+	defaultHypervisor                hypervisor.Type // Default hypervisor type when not specified in request
+	guestMemoryPolicy                guestmemory.Policy
+	firecrackerSnapshotMemoryBackend string
+	firecrackerUFFDPager             *uffdpager.Supervisor
 }
 
 // platformStarters is populated by platform-specific init functions.
@@ -166,6 +179,16 @@ func NewManager(p *paths.Paths, imageManager images.Manager, systemManager syste
 
 // NewManagerWithConfig creates a new instances manager with additional manager settings.
 func NewManagerWithConfig(p *paths.Paths, imageManager images.Manager, systemManager system.Manager, networkManager network.Manager, deviceManager devices.Manager, volumeManager volumes.Manager, limits ResourceLimits, defaultHypervisor hypervisor.Type, snapshotDefaults SnapshotPolicy, managerConfig ManagerConfig, meter metric.Meter, tracer trace.Tracer, memoryPolicy ...guestmemory.Policy) Manager {
+	m, err := NewManagerWithConfigE(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, defaultHypervisor, snapshotDefaults, managerConfig, meter, tracer, memoryPolicy...)
+	if err != nil {
+		panic(err)
+	}
+	return m
+}
+
+// NewManagerWithConfigE creates a new instances manager and returns startup
+// errors for optional host services such as the Firecracker UFFD pager.
+func NewManagerWithConfigE(p *paths.Paths, imageManager images.Manager, systemManager system.Manager, networkManager network.Manager, deviceManager devices.Manager, volumeManager volumes.Manager, limits ResourceLimits, defaultHypervisor hypervisor.Type, snapshotDefaults SnapshotPolicy, managerConfig ManagerConfig, meter metric.Meter, tracer trace.Tracer, memoryPolicy ...guestmemory.Policy) (Manager, error) {
 	// Validate and default the hypervisor type
 	if defaultHypervisor == "" {
 		defaultHypervisor = hypervisor.TypeCloudHypervisor
@@ -179,34 +202,44 @@ func NewManagerWithConfig(p *paths.Paths, imageManager images.Manager, systemMan
 	managerConfig = managerConfig.Normalize()
 
 	// Initialize VM starters from platform-specific init functions
-	vmStarters := make(map[hypervisor.Type]hypervisor.VMStarter, len(platformStarters))
+	rawStarters := make(map[hypervisor.Type]hypervisor.VMStarter, len(platformStarters))
 	for hvType, starter := range platformStarters {
+		rawStarters[hvType] = starter
+	}
+	firecrackerUFFDPager, err := configurePlatformStarters(context.Background(), p, rawStarters, managerConfig)
+	if err != nil {
+		return nil, err
+	}
+	vmStarters := make(map[hypervisor.Type]hypervisor.VMStarter, len(rawStarters))
+	for hvType, starter := range rawStarters {
 		vmStarters[hvType] = hypervisor.WrapVMStarter(hvType, starter)
 	}
 
 	m := &manager{
-		paths:                p,
-		imageManager:         imageManager,
-		systemManager:        systemManager,
-		networkManager:       networkManager,
-		deviceManager:        deviceManager,
-		volumeManager:        volumeManager,
-		limits:               limits,
-		instanceLocks:        sync.Map{},
-		bootMarkerScans:      sync.Map{},
-		hostTopology:         detectHostTopology(), // Detect and cache host topology
-		vmStarters:           vmStarters,
-		defaultHypervisor:    defaultHypervisor,
-		now:                  time.Now,
-		writeFile:            os.WriteFile,
-		meter:                meter,
-		tracer:               tracer,
-		guestMemoryPolicy:    policy,
-		snapshotDefaults:     snapshotDefaults,
-		compressionJobs:      make(map[string]*compressionJob),
-		nativeCodecPaths:     make(map[string]string),
-		lifecycleEvents:      newLifecycleSubscribersWithBufferSize(managerConfig.LifecycleEventBufferSize),
-		guestAgentReadyProbe: probeGuestAgentReady,
+		paths:                            p,
+		imageManager:                     imageManager,
+		systemManager:                    systemManager,
+		networkManager:                   networkManager,
+		deviceManager:                    deviceManager,
+		volumeManager:                    volumeManager,
+		limits:                           limits,
+		instanceLocks:                    sync.Map{},
+		bootMarkerScans:                  sync.Map{},
+		hostTopology:                     detectHostTopology(), // Detect and cache host topology
+		vmStarters:                       vmStarters,
+		defaultHypervisor:                defaultHypervisor,
+		now:                              time.Now,
+		writeFile:                        os.WriteFile,
+		meter:                            meter,
+		tracer:                           tracer,
+		guestMemoryPolicy:                policy,
+		firecrackerSnapshotMemoryBackend: managerConfig.FirecrackerSnapshotMemoryBackend,
+		firecrackerUFFDPager:             firecrackerUFFDPager,
+		snapshotDefaults:                 snapshotDefaults,
+		compressionJobs:                  make(map[string]*compressionJob),
+		nativeCodecPaths:                 make(map[string]string),
+		lifecycleEvents:                  newLifecycleSubscribersWithBufferSize(managerConfig.LifecycleEventBufferSize),
+		guestAgentReadyProbe:             probeGuestAgentReady,
 	}
 	m.deleteSnapshotFn = m.deleteSnapshot
 
@@ -224,7 +257,7 @@ func NewManagerWithConfig(p *paths.Paths, imageManager images.Manager, systemMan
 		logger.FromContext(context.Background()).WarnContext(context.Background(), "failed to recover pending standby compression jobs", "error", err)
 	}
 
-	return m
+	return m, nil
 }
 
 // SetResourceValidator sets the resource validator for aggregate limit checking.

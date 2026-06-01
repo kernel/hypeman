@@ -228,8 +228,8 @@ func (f *Firecracker) instanceStart(ctx context.Context) error {
 	return f.postAction(ctx, "InstanceStart")
 }
 
-func (f *Firecracker) loadSnapshot(ctx context.Context, snapshotDir string, networkOverrides []networkOverride, resumeVM bool) error {
-	params := toSnapshotLoadParams(snapshotDir, networkOverrides, resumeVM)
+func (f *Firecracker) loadSnapshot(ctx context.Context, snapshotDir string, networkOverrides []networkOverride, resumeVM bool, backend snapshotMemBackend) error {
+	params := toSnapshotLoadParams(snapshotDir, networkOverrides, resumeVM, backend)
 	if _, err := f.do(ctx, http.MethodPut, "/snapshot/load", params, http.StatusNoContent); err != nil {
 		return err
 	}

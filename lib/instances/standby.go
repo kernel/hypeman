@@ -190,6 +190,7 @@ func (m *manager) standbyInstance(
 	if dialer, err := hypervisor.NewVsockDialer(inst.HypervisorType, inst.VsockSocket, inst.VsockCID); err == nil {
 		guest.CloseConn(dialer.Key())
 	}
+	m.closeFirecrackerUFFDSession(ctx, stored)
 
 	// 9. Release network allocation (delete TAP device)
 	// TAP devices with explicit Owner/Group fields do NOT auto-delete when VMM exits
@@ -216,6 +217,9 @@ func (m *manager) standbyInstance(
 	stored.StoppedAt = &now
 	stored.HypervisorPID = nil
 	stored.PendingStandbyCompression = nil
+	if err := m.refreshFirecrackerSnapshotCacheKey(stored, snapshotDir); err != nil {
+		log.WarnContext(ctx, "failed to refresh firecracker snapshot cache key", "instance_id", id, "error", err)
+	}
 	if compressionPolicy != nil {
 		stored.PendingStandbyCompression = &PendingStandbyCompression{
 			Policy:    *cloneCompressionConfig(compressionPolicy),

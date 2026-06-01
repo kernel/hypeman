@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	stdnet "net"
 	"os"
 	"path/filepath"
@@ -15,6 +17,7 @@ import (
 
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
+	"github.com/kernel/hypeman/lib/uffdpager"
 	"go.opentelemetry.io/otel/attribute"
 	"golang.org/x/sys/unix"
 )
@@ -199,49 +202,11 @@ func (m *manager) waitForGuestResumeNetworkUDPAck(ctx context.Context, waiter *g
 }
 
 func patchGuestResumeNetworkMailbox(snapshotDir, token string, payload *guestResumeNetworkPayload) error {
-	if token == "" {
-		return fmt.Errorf("resume network mailbox token is empty")
-	}
-	if len(token) > guestResumeNetworkMailboxSeqOffset-len(guestResumeNetworkMailboxMagic) {
-		return fmt.Errorf("resume network mailbox token is too long")
-	}
-	if payload == nil {
-		return fmt.Errorf("resume network mailbox payload is nil")
-	}
-
-	payloadBytes, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("marshal resume network mailbox payload: %w", err)
-	}
-	if len(payloadBytes) > 4096-guestResumeNetworkMailboxPayloadOffset {
-		return fmt.Errorf("resume network mailbox payload too large: %d bytes", len(payloadBytes))
-	}
-
-	file, err := os.OpenFile(filepath.Join(snapshotDir, firecrackerSnapshotMemoryFile), os.O_RDWR, 0)
-	if err != nil {
-		return fmt.Errorf("open snapshot memory for resume network mailbox: %w", err)
-	}
-	defer file.Close()
-
-	info, err := file.Stat()
-	if err != nil {
-		return fmt.Errorf("stat snapshot memory for resume network mailbox: %w", err)
-	}
-	if info.Size() <= 0 {
-		return fmt.Errorf("resume network mailbox memory file is empty")
-	}
-
-	marker := make([]byte, 0, len(guestResumeNetworkMailboxMagic)+len(token))
-	marker = append(marker, guestResumeNetworkMailboxMagic...)
-	marker = append(marker, []byte(token)...)
-
-	idx, err := findGuestResumeNetworkMailbox(file, info.Size(), marker, token)
+	payloadBytes, idx, file, err := prepareGuestResumeNetworkMailbox(snapshotDir, token, payload, os.O_RDWR)
 	if err != nil {
 		return err
 	}
-	if idx+int64(guestResumeNetworkMailboxPayloadOffset)+int64(len(payloadBytes)) > info.Size() {
-		return fmt.Errorf("resume network mailbox marker is too close to end of memory file")
-	}
+	defer file.Close()
 
 	if _, err := file.WriteAt(payloadBytes, idx+int64(guestResumeNetworkMailboxPayloadOffset)); err != nil {
 		return fmt.Errorf("write resume network mailbox payload: %w", err)
@@ -256,6 +221,95 @@ func patchGuestResumeNetworkMailbox(snapshotDir, token string, payload *guestRes
 		return fmt.Errorf("write resume network mailbox sequence: %w", err)
 	}
 	return nil
+}
+
+func buildGuestResumeNetworkMailboxOverlay(snapshotDir, token string, payload *guestResumeNetworkPayload) (uffdpager.OverlayPage, error) {
+	payloadBytes, idx, file, err := prepareGuestResumeNetworkMailbox(snapshotDir, token, payload, os.O_RDONLY)
+	if err != nil {
+		return uffdpager.OverlayPage{}, err
+	}
+	defer file.Close()
+
+	const pageSize = 4096
+	pageOffset := (idx / pageSize) * pageSize
+	pageRelative := idx - pageOffset
+	if pageRelative+int64(guestResumeNetworkMailboxPayloadOffset)+int64(len(payloadBytes)) > pageSize {
+		return uffdpager.OverlayPage{}, fmt.Errorf("resume network mailbox crosses a page boundary")
+	}
+
+	page := make([]byte, pageSize)
+	n, err := file.ReadAt(page, pageOffset)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return uffdpager.OverlayPage{}, fmt.Errorf("read resume network mailbox overlay source page: %w", err)
+	}
+	if n == 0 && err != nil {
+		return uffdpager.OverlayPage{}, fmt.Errorf("read resume network mailbox overlay source page: %w", err)
+	}
+
+	base := int(pageRelative)
+	copy(page[base+guestResumeNetworkMailboxPayloadOffset:], payloadBytes)
+	binary.LittleEndian.PutUint32(page[base+guestResumeNetworkMailboxLengthOffset:], uint32(len(payloadBytes)))
+	binary.LittleEndian.PutUint32(page[base+guestResumeNetworkMailboxSeqOffset:], 1)
+
+	overlayDir := filepath.Join(snapshotDir, "uffd-overlays")
+	if err := os.MkdirAll(overlayDir, 0755); err != nil {
+		return uffdpager.OverlayPage{}, fmt.Errorf("create uffd overlay directory: %w", err)
+	}
+	overlayPath := filepath.Join(overlayDir, fmt.Sprintf("resume-network-mailbox-%d.page", pageOffset))
+	if err := os.WriteFile(overlayPath, page, 0644); err != nil {
+		return uffdpager.OverlayPage{}, fmt.Errorf("write resume network mailbox overlay page: %w", err)
+	}
+	return uffdpager.OverlayPage{GuestMemoryOffset: pageOffset, Path: overlayPath}, nil
+}
+
+func prepareGuestResumeNetworkMailbox(snapshotDir, token string, payload *guestResumeNetworkPayload, flag int) ([]byte, int64, *os.File, error) {
+	if token == "" {
+		return nil, 0, nil, fmt.Errorf("resume network mailbox token is empty")
+	}
+	if len(token) > guestResumeNetworkMailboxSeqOffset-len(guestResumeNetworkMailboxMagic) {
+		return nil, 0, nil, fmt.Errorf("resume network mailbox token is too long")
+	}
+	if payload == nil {
+		return nil, 0, nil, fmt.Errorf("resume network mailbox payload is nil")
+	}
+
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return nil, 0, nil, fmt.Errorf("marshal resume network mailbox payload: %w", err)
+	}
+	if len(payloadBytes) > 4096-guestResumeNetworkMailboxPayloadOffset {
+		return nil, 0, nil, fmt.Errorf("resume network mailbox payload too large: %d bytes", len(payloadBytes))
+	}
+
+	file, err := os.OpenFile(filepath.Join(snapshotDir, firecrackerSnapshotMemoryFile), flag, 0)
+	if err != nil {
+		return nil, 0, nil, fmt.Errorf("open snapshot memory for resume network mailbox: %w", err)
+	}
+
+	info, err := file.Stat()
+	if err != nil {
+		file.Close()
+		return nil, 0, nil, fmt.Errorf("stat snapshot memory for resume network mailbox: %w", err)
+	}
+	if info.Size() <= 0 {
+		file.Close()
+		return nil, 0, nil, fmt.Errorf("resume network mailbox memory file is empty")
+	}
+
+	marker := make([]byte, 0, len(guestResumeNetworkMailboxMagic)+len(token))
+	marker = append(marker, guestResumeNetworkMailboxMagic...)
+	marker = append(marker, []byte(token)...)
+
+	idx, err := findGuestResumeNetworkMailbox(file, info.Size(), marker, token)
+	if err != nil {
+		file.Close()
+		return nil, 0, nil, err
+	}
+	if idx+int64(guestResumeNetworkMailboxPayloadOffset)+int64(len(payloadBytes)) > info.Size() {
+		file.Close()
+		return nil, 0, nil, fmt.Errorf("resume network mailbox marker is too close to end of memory file")
+	}
+	return payloadBytes, idx, file, nil
 }
 
 func findGuestResumeNetworkMailbox(file *os.File, size int64, marker []byte, token string) (int64, error) {
