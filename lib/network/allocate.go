@@ -384,7 +384,7 @@ func (m *manager) ReleaseAllocation(ctx context.Context, alloc *Allocation) erro
 	// 1. Delete TAP device (best effort), using stored class ID for correct HTB cleanup.
 	// Serialize with async tc setup so queued rate-limit work cannot race with
 	// class removal and leave stale bridge state behind.
-	if err := m.deleteTAPDeviceSerialized(alloc.TAPDevice, alloc.ClassID); err != nil {
+	if err := m.deleteTAPDeviceForInstanceSerialized(alloc.InstanceID, alloc.TAPDevice, alloc.ClassID); err != nil {
 		log.WarnContext(ctx, "failed to delete TAP device", "tap", alloc.TAPDevice, "error", err)
 	} else {
 		m.recordTAPOperation(ctx, "delete")
@@ -402,6 +402,22 @@ func (m *manager) deleteTAPDeviceSerialized(tapName, classID string) error {
 	m.tcMu.Lock()
 	defer m.tcMu.Unlock()
 	return m.deleteTAPDevice(tapName, classID)
+}
+
+func (m *manager) deleteTAPDeviceForInstanceSerialized(instanceID, tapName, classID string) error {
+	m.tcMu.Lock()
+	defer m.tcMu.Unlock()
+	return m.deleteTAPDevice(tapName, m.classIDForDelete(instanceID, classID))
+}
+
+func (m *manager) classIDForDelete(instanceID, fallback string) string {
+	if instanceID == "" {
+		return fallback
+	}
+	if classID := m.loadClassID(instanceID); classID != "" {
+		return classID
+	}
+	return fallback
 }
 
 // getOrInitDefaultNetwork resolves the default network and self-heals by running

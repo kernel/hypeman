@@ -127,6 +127,21 @@ func TestPendingAllocationLoadsPersistedClassID(t *testing.T) {
 	assert.Equal(t, "00ab", alloc.ClassID)
 }
 
+func TestClassIDForDeletePrefersPersistedClassID(t *testing.T) {
+	m := &manager{
+		paths:  paths.New(t.TempDir()),
+		config: &config.Config{},
+	}
+
+	const instanceID = "inst-delete"
+	require.NoError(t, os.MkdirAll(m.paths.InstanceDir(instanceID), 0755))
+	require.NoError(t, m.saveClassID(instanceID, "00ab"))
+
+	assert.Equal(t, "00ab", m.classIDForDelete(instanceID, "0010"))
+	assert.Equal(t, "0010", m.classIDForDelete("missing", "0010"))
+	assert.Equal(t, "0010", m.classIDForDelete("", "0010"))
+}
+
 func TestDefaultNetworkCacheReturnsCopy(t *testing.T) {
 	m := &manager{}
 	m.setDefaultNetwork(&Network{
