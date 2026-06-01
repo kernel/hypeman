@@ -18,7 +18,7 @@ import (
 	"unsafe"
 
 	pb "github.com/kernel/hypeman/lib/guest"
-	"github.com/kernel/hypeman/lib/resumenetwork"
+	"github.com/kernel/hypeman/lib/mailbox"
 	"golang.org/x/sys/unix"
 )
 
@@ -31,7 +31,7 @@ type vmGenIDResumeWaiter struct {
 }
 
 func startResumeNetworkWatcher(s *guestServer) {
-	if strings.TrimSpace(os.Getenv(resumenetwork.MailboxEnv)) != "1" {
+	if strings.TrimSpace(os.Getenv(mailbox.MailboxEnv)) != "1" {
 		return
 	}
 
@@ -44,15 +44,15 @@ func startResumeNetworkWatcher(s *guestServer) {
 }
 
 func newResumeNetworkMailbox() []byte {
-	token := strings.TrimSpace(os.Getenv(resumenetwork.MailboxTokenEnv))
-	if !resumenetwork.ValidToken(token) {
-		log.Printf("[guest-agent] resume network mailbox disabled: invalid %s", resumenetwork.MailboxTokenEnv)
+	token := strings.TrimSpace(os.Getenv(mailbox.MailboxTokenEnv))
+	if !mailbox.ValidToken(token) {
+		log.Printf("[guest-agent] resume network mailbox disabled: invalid %s", mailbox.MailboxTokenEnv)
 		return nil
 	}
 
-	buf := make([]byte, resumenetwork.MailboxSize)
-	copy(buf, resumenetwork.MailboxMagic)
-	copy(buf[len(resumenetwork.MailboxMagic):resumenetwork.MailboxSeqOffset], token)
+	buf := make([]byte, mailbox.MailboxSize)
+	copy(buf, mailbox.MailboxMagic)
+	copy(buf[len(mailbox.MailboxMagic):mailbox.MailboxSeqOffset], token)
 	if err := unix.Mlock(buf); err != nil {
 		log.Printf("[guest-agent] resume network mailbox mlock failed: %v", err)
 	}
@@ -94,7 +94,7 @@ func waitAndApplyResumeNetworkMailbox(s *guestServer, buf []byte) error {
 func waitAndApplyResumeNetworkMailboxWithTimeout(s *guestServer, buf []byte, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for {
-		seq := atomicLoadUint32(buf[resumenetwork.MailboxSeqOffset:])
+		seq := atomicLoadUint32(buf[mailbox.MailboxSeqOffset:])
 		if seq == 0 {
 			if time.Now().After(deadline) {
 				return fmt.Errorf("resume network mailbox payload was not patched within %s", timeout)
@@ -103,8 +103,8 @@ func waitAndApplyResumeNetworkMailboxWithTimeout(s *guestServer, buf []byte, tim
 			continue
 		}
 
-		payloadLen := binary.LittleEndian.Uint32(buf[resumenetwork.MailboxLengthOffset:])
-		payload, err := resumenetwork.DecodePayloadFrame(buf, payloadLen)
+		payloadLen := binary.LittleEndian.Uint32(buf[mailbox.MailboxLengthOffset:])
+		payload, err := mailbox.DecodePayloadFrame(buf, payloadLen)
 		if err != nil {
 			return err
 		}
@@ -120,12 +120,12 @@ func waitAndApplyResumeNetworkMailboxWithTimeout(s *guestServer, buf []byte, tim
 			return err
 		}
 		sendResumeNetworkAck(payload, "applied")
-		atomicStoreUint32(buf[resumenetwork.MailboxSeqOffset:], 0)
+		atomicStoreUint32(buf[mailbox.MailboxSeqOffset:], 0)
 		return nil
 	}
 }
 
-func sendResumeNetworkAck(payload resumenetwork.Payload, stage string) {
+func sendResumeNetworkAck(payload mailbox.Payload, stage string) {
 	if payload.AckPort == 0 || payload.Gateway == "" {
 		return
 	}

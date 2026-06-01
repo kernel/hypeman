@@ -14,7 +14,7 @@ import (
 
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
-	"github.com/kernel/hypeman/lib/resumenetwork"
+	"github.com/kernel/hypeman/lib/mailbox"
 	"github.com/nrednav/cuid2"
 	"go.opentelemetry.io/otel/attribute"
 	"golang.org/x/sys/unix"
@@ -40,15 +40,15 @@ func guestInitiatedResumeNetworkMailbox(stored *StoredMetadata) bool {
 	token := guestInitiatedResumeNetworkMailboxToken(stored)
 	return stored != nil &&
 		stored.HypervisorType == hypervisor.TypeFirecracker &&
-		strings.TrimSpace(stored.Env[resumenetwork.MailboxEnv]) == "1" &&
-		resumenetwork.ValidToken(token)
+		strings.TrimSpace(stored.Env[mailbox.MailboxEnv]) == "1" &&
+		mailbox.ValidToken(token)
 }
 
 func guestInitiatedResumeNetworkMailboxToken(stored *StoredMetadata) string {
 	if stored == nil {
 		return ""
 	}
-	return strings.TrimSpace(stored.Env[resumenetwork.MailboxTokenEnv])
+	return strings.TrimSpace(stored.Env[mailbox.MailboxTokenEnv])
 }
 
 func ensureGuestInitiatedResumeNetworkMailbox(stored *StoredMetadata) {
@@ -61,14 +61,14 @@ func ensureGuestInitiatedResumeNetworkMailbox(stored *StoredMetadata) {
 	if stored.Env == nil {
 		stored.Env = make(map[string]string)
 	}
-	stored.Env[resumenetwork.MailboxEnv] = "1"
-	if token := guestInitiatedResumeNetworkMailboxToken(stored); !resumenetwork.ValidToken(token) {
-		stored.Env[resumenetwork.MailboxTokenEnv] = cuid2.Generate()
+	stored.Env[mailbox.MailboxEnv] = "1"
+	if token := guestInitiatedResumeNetworkMailboxToken(stored); !mailbox.ValidToken(token) {
+		stored.Env[mailbox.MailboxTokenEnv] = cuid2.Generate()
 	}
 }
 
-func newGuestResumeNetworkPayload(cfg *guestNetworkConfig) resumenetwork.Payload {
-	return resumenetwork.Payload{
+func newGuestResumeNetworkPayload(cfg *guestNetworkConfig) mailbox.Payload {
+	return mailbox.Payload{
 		InterfaceName: "eth0",
 		MAC:           cfg.mac,
 		IPv4:          cfg.ip,
@@ -163,8 +163,8 @@ func (m *manager) waitForGuestResumeNetworkUDPAck(ctx context.Context, waiter *g
 	return nil
 }
 
-func patchGuestResumeNetworkMailbox(snapshotDir, token string, payload *resumenetwork.Payload) error {
-	payloadBytes, err := resumenetwork.MarshalPayload(payload)
+func patchGuestResumeNetworkMailbox(snapshotDir, token string, payload *mailbox.Payload) error {
+	payloadBytes, err := mailbox.MarshalPayload(payload)
 	if err != nil {
 		return err
 	}
@@ -183,7 +183,7 @@ func patchGuestResumeNetworkMailbox(snapshotDir, token string, payload *resumene
 		return fmt.Errorf("resume network mailbox memory file is empty")
 	}
 
-	marker, err := resumenetwork.Marker(token)
+	marker, err := mailbox.Marker(token)
 	if err != nil {
 		return err
 	}
@@ -191,20 +191,20 @@ func patchGuestResumeNetworkMailbox(snapshotDir, token string, payload *resumene
 	if err != nil {
 		return err
 	}
-	if idx+int64(resumenetwork.MailboxPayloadOffset)+int64(len(payloadBytes)) > info.Size() {
+	if idx+int64(mailbox.MailboxPayloadOffset)+int64(len(payloadBytes)) > info.Size() {
 		return fmt.Errorf("resume network mailbox marker is too close to end of memory file")
 	}
 
-	if _, err := file.WriteAt(payloadBytes, idx+int64(resumenetwork.MailboxPayloadOffset)); err != nil {
+	if _, err := file.WriteAt(payloadBytes, idx+int64(mailbox.MailboxPayloadOffset)); err != nil {
 		return fmt.Errorf("write resume network mailbox payload: %w", err)
 	}
 	var u32 [4]byte
 	binary.LittleEndian.PutUint32(u32[:], uint32(len(payloadBytes)))
-	if _, err := file.WriteAt(u32[:], idx+int64(resumenetwork.MailboxLengthOffset)); err != nil {
+	if _, err := file.WriteAt(u32[:], idx+int64(mailbox.MailboxLengthOffset)); err != nil {
 		return fmt.Errorf("write resume network mailbox payload length: %w", err)
 	}
 	binary.LittleEndian.PutUint32(u32[:], 1)
-	if _, err := file.WriteAt(u32[:], idx+int64(resumenetwork.MailboxSeqOffset)); err != nil {
+	if _, err := file.WriteAt(u32[:], idx+int64(mailbox.MailboxSeqOffset)); err != nil {
 		return fmt.Errorf("write resume network mailbox sequence: %w", err)
 	}
 	return nil

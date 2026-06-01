@@ -1,4 +1,4 @@
-package resumenetwork
+package mailbox
 
 import (
 	"encoding/binary"
