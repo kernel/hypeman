@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/logger"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 // CreateAllocation allocates IP/MAC/TAP for instance on the default network
@@ -19,7 +20,12 @@ func (m *manager) CreateAllocation(ctx context.Context, req AllocateRequest) (*N
 
 	// Resolve bridge/default network before taking allocation lock so
 	// self-heal retries don't block other allocation/release operations.
-	network, err := m.getOrInitDefaultNetwork(ctx)
+	networkCtx, networkSpanEnd := startNetworkStep(ctx, "network.get_default_network",
+		attribute.String("operation", "get_default_network"),
+		attribute.String("instance_id", req.InstanceID),
+	)
+	network, err := m.getOrInitDefaultNetwork(networkCtx)
+	networkSpanEnd(err)
 	if err != nil {
 		return nil, err
 	}
@@ -27,19 +33,40 @@ func (m *manager) CreateAllocation(ctx context.Context, req AllocateRequest) (*N
 	// Acquire lock to prevent concurrent allocations from:
 	// 1. Picking the same IP address
 	// 2. Creating duplicate instance names
+	waitCtx, waitSpanEnd := startNetworkStep(ctx, "network.create_allocation.wait_for_mutex",
+		attribute.String("operation", "wait_for_mutex"),
+		attribute.String("instance_id", req.InstanceID),
+	)
 	m.mu.Lock()
+	waitSpanEnd(nil)
 	defer m.mu.Unlock()
 
-	allocations, err := m.ListAllocations(ctx)
+	lockedCtx, lockedSpanEnd := startNetworkStep(waitCtx, "network.create_allocation.locked",
+		attribute.String("operation", "create_allocation_locked"),
+		attribute.String("instance_id", req.InstanceID),
+	)
+	var lockedErr error
+	defer func() {
+		lockedSpanEnd(lockedErr)
+	}()
+
+	listCtx, listSpanEnd := startNetworkStep(lockedCtx, "network.list_allocations",
+		attribute.String("operation", "list_allocations"),
+		attribute.String("caller", "create_allocation"),
+	)
+	allocations, err := m.ListAllocations(listCtx)
+	listSpanEnd(err)
 	if err != nil {
+		lockedErr = err
 		return nil, fmt.Errorf("list allocations: %w", err)
 	}
 
 	// 1. Check name uniqueness (exclude current instance to allow restarts)
 	exists := nameExistsInAllocations(allocations, req.InstanceName, req.InstanceID)
 	if exists {
-		return nil, fmt.Errorf("%w: instance name '%s' already exists, can't assign into same network: %s",
+		lockedErr = fmt.Errorf("%w: instance name '%s' already exists, can't assign into same network: %s",
 			ErrNameExists, req.InstanceName, network.Name)
+		return nil, lockedErr
 	}
 
 	// 2. Allocate random available IP
@@ -48,12 +75,14 @@ func (m *manager) CreateAllocation(ctx context.Context, req AllocateRequest) (*N
 	// moving standby VMs across hosts.
 	ip, err := allocateNextIPFromAllocations(network.Subnet, allocations)
 	if err != nil {
+		lockedErr = err
 		return nil, fmt.Errorf("allocate IP: %w", err)
 	}
 
 	// 3. Generate unused MAC (02:00:00:... format - locally administered)
 	mac, err := allocateUniqueMACFromAllocations(allocations, generateMAC)
 	if err != nil {
+		lockedErr = err
 		return nil, fmt.Errorf("allocate MAC: %w", err)
 	}
 
@@ -61,21 +90,39 @@ func (m *manager) CreateAllocation(ctx context.Context, req AllocateRequest) (*N
 	tap := GenerateTAPName(req.InstanceID)
 
 	// 5. Create TAP device with bidirectional rate limiting
-	classID, err := m.createTAPDevice(ctx, tap, network.Bridge, network.Isolated, req.DownloadBps, req.UploadBps, req.UploadCeilBps)
+	tapCtx, tapSpanEnd := startNetworkStep(lockedCtx, "network.create_tap",
+		attribute.String("operation", "create_tap"),
+		attribute.String("instance_id", req.InstanceID),
+		attribute.String("tap", tap),
+		attribute.Bool("isolated", network.Isolated),
+		attribute.Bool("download_rate_limit", req.DownloadBps > 0),
+		attribute.Bool("upload_rate_limit", req.UploadBps > 0),
+	)
+	classID, err := m.createTAPDevice(tapCtx, tap, network.Bridge, network.Isolated, req.DownloadBps, req.UploadBps, req.UploadCeilBps)
+	tapSpanEnd(err)
 	if err != nil {
+		lockedErr = err
 		return nil, fmt.Errorf("create TAP device: %w", err)
 	}
 	m.recordTAPOperation(ctx, "create")
 
 	// Persist assigned tc class ID so removal uses the correct ID after collisions.
 	// Clear any stale file when no rate limiting was applied.
+	_, saveClassSpanEnd := startNetworkStep(lockedCtx, "network.save_class_id",
+		attribute.String("operation", "save_class_id"),
+		attribute.String("instance_id", req.InstanceID),
+		attribute.Bool("has_class_id", classID != ""),
+	)
 	if classID != "" {
 		if err := m.saveClassID(req.InstanceID, classID); err != nil {
+			saveClassSpanEnd(err)
+			lockedErr = err
 			return nil, fmt.Errorf("save class ID: %w", err)
 		}
 	} else {
 		m.clearClassID(req.InstanceID)
 	}
+	saveClassSpanEnd(nil)
 
 	log.InfoContext(ctx, "allocated network",
 		"instance_id", req.InstanceID,
@@ -227,11 +274,30 @@ func (m *manager) getOrInitDefaultNetwork(ctx context.Context) (*Network, error)
 // allocateNextIP picks a random available IP in the subnet
 // Retries up to 5 times if conflicts occur
 func (m *manager) allocateNextIP(ctx context.Context, subnet string) (string, error) {
-	allocations, err := m.ListAllocations(ctx)
+	chooseCtx, chooseSpanEnd := startNetworkStep(ctx, "network.allocate_ip",
+		attribute.String("operation", "allocate_ip"),
+	)
+	var chooseErr error
+	defer func() {
+		chooseSpanEnd(chooseErr)
+	}()
+
+	listCtx, listSpanEnd := startNetworkStep(chooseCtx, "network.list_allocations",
+		attribute.String("operation", "list_allocations"),
+		attribute.String("caller", "allocate_ip"),
+	)
+	allocations, err := m.ListAllocations(listCtx)
+	listSpanEnd(err)
 	if err != nil {
+		chooseErr = err
 		return "", fmt.Errorf("list allocations: %w", err)
 	}
-	return allocateNextIPFromAllocations(subnet, allocations)
+
+	ip, err := allocateNextIPFromAllocations(subnet, allocations)
+	if err != nil {
+		chooseErr = err
+	}
+	return ip, err
 }
 
 func allocateNextIPFromAllocations(subnet string, allocations []Allocation) (string, error) {
@@ -323,12 +389,30 @@ const (
 
 // allocateUniqueMAC picks an unused locally administered MAC address.
 func (m *manager) allocateUniqueMAC(ctx context.Context) (string, error) {
-	allocations, err := m.ListAllocations(ctx)
+	chooseCtx, chooseSpanEnd := startNetworkStep(ctx, "network.allocate_mac",
+		attribute.String("operation", "allocate_mac"),
+	)
+	var chooseErr error
+	defer func() {
+		chooseSpanEnd(chooseErr)
+	}()
+
+	listCtx, listSpanEnd := startNetworkStep(chooseCtx, "network.list_allocations",
+		attribute.String("operation", "list_allocations"),
+		attribute.String("caller", "allocate_mac"),
+	)
+	allocations, err := m.ListAllocations(listCtx)
+	listSpanEnd(err)
 	if err != nil {
+		chooseErr = err
 		return "", fmt.Errorf("list allocations: %w", err)
 	}
 
-	return allocateUniqueMACFromAllocations(allocations, generateMAC)
+	mac, err := allocateUniqueMACFromAllocations(allocations, generateMAC)
+	if err != nil {
+		chooseErr = err
+	}
+	return mac, err
 }
 
 func allocateUniqueMACFromAllocations(allocations []Allocation, generate func() (string, error)) (string, error) {
