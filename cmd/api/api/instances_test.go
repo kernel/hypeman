@@ -1165,7 +1165,6 @@ func TestForkInstance_Success(t *testing.T) {
 		result:  forked,
 	}
 	svc.InstanceManager = mockMgr
-	waitForNetwork := false
 	waitForAck := true
 	ackTimeoutMS := 1500
 
@@ -1174,8 +1173,7 @@ func TestForkInstance_Success(t *testing.T) {
 		oapi.ForkInstanceRequestObject{
 			Id: source.Id,
 			Body: &oapi.ForkInstanceRequest{
-				Name:           "forked-instance",
-				WaitForNetwork: &waitForNetwork,
+				Name: "forked-instance",
 				Mailboxes: &[]oapi.ForkMailboxPayload{{
 					Name:         "kernel.identity.v1",
 					Token:        "template-token",
@@ -1196,8 +1194,6 @@ func TestForkInstance_Success(t *testing.T) {
 	assert.Equal(t, "forked-instance", mockMgr.lastReq.Name)
 	assert.False(t, mockMgr.lastReq.FromRunning)
 	assert.Equal(t, instances.State(""), mockMgr.lastReq.TargetState)
-	require.NotNil(t, mockMgr.lastReq.WaitForNetwork)
-	assert.False(t, *mockMgr.lastReq.WaitForNetwork)
 	require.Len(t, mockMgr.lastReq.Mailboxes, 1)
 	assert.Equal(t, "kernel.identity.v1", mockMgr.lastReq.Mailboxes[0].Name)
 	assert.Equal(t, "template-token", mockMgr.lastReq.Mailboxes[0].Token)

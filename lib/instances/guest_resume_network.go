@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"encoding/json"
 	"fmt"
 	stdnet "net"
 	"os"
@@ -15,29 +14,17 @@ import (
 
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
+	"github.com/kernel/hypeman/lib/mailbox"
+	"github.com/nrednav/cuid2"
 	"go.opentelemetry.io/otel/attribute"
 	"golang.org/x/sys/unix"
 )
 
-const guestResumeNetworkMailboxEnv = "HYPEMAN_RESUME_NETWORK_MAILBOX"
-const guestResumeNetworkMailboxTokenEnv = "HYPEMAN_RESUME_NETWORK_MAILBOX_TOKEN"
 const firecrackerSnapshotMemoryFile = "memory"
 
-const guestResumeNetworkMailboxSeqOffset = 64
-const guestResumeNetworkMailboxLengthOffset = 68
-const guestResumeNetworkMailboxPayloadOffset = 72
+const guestResumeNetworkUDPAckTimeout = 5 * time.Second
 
-var guestResumeNetworkMailboxMagic = []byte("HYPEMAN_RESUME_NETWORK_MAILBOX_V1\x00")
 var guestResumeNetworkMailboxOffsets sync.Map
-
-type guestResumeNetworkPayload struct {
-	InterfaceName string `json:"interface_name"`
-	MAC           string `json:"mac"`
-	IPv4          string `json:"ipv4"`
-	Prefix        uint32 `json:"prefix"`
-	Gateway       string `json:"gateway"`
-	AckPort       uint32 `json:"ack_port,omitempty"`
-}
 
 type guestResumeNetworkUDPAck struct {
 	received time.Time
@@ -53,20 +40,35 @@ func guestInitiatedResumeNetworkMailbox(stored *StoredMetadata) bool {
 	token := guestInitiatedResumeNetworkMailboxToken(stored)
 	return stored != nil &&
 		stored.HypervisorType == hypervisor.TypeFirecracker &&
-		strings.TrimSpace(stored.Env[guestResumeNetworkMailboxEnv]) == "1" &&
-		token != "" &&
-		len(token) <= guestResumeNetworkMailboxSeqOffset-len(guestResumeNetworkMailboxMagic)
+		strings.TrimSpace(stored.Env[mailbox.MailboxEnv]) == "1" &&
+		mailbox.ValidToken(token)
 }
 
 func guestInitiatedResumeNetworkMailboxToken(stored *StoredMetadata) string {
 	if stored == nil {
 		return ""
 	}
-	return strings.TrimSpace(stored.Env[guestResumeNetworkMailboxTokenEnv])
+	return strings.TrimSpace(stored.Env[mailbox.MailboxTokenEnv])
 }
 
-func newGuestResumeNetworkPayload(cfg *guestNetworkConfig) guestResumeNetworkPayload {
-	return guestResumeNetworkPayload{
+func ensureGuestInitiatedResumeNetworkMailbox(stored *StoredMetadata) {
+	if stored == nil ||
+		stored.HypervisorType != hypervisor.TypeFirecracker ||
+		!stored.NetworkEnabled ||
+		stored.SkipGuestAgent {
+		return
+	}
+	if stored.Env == nil {
+		stored.Env = make(map[string]string)
+	}
+	stored.Env[mailbox.MailboxEnv] = "1"
+	if token := guestInitiatedResumeNetworkMailboxToken(stored); !mailbox.ValidToken(token) {
+		stored.Env[mailbox.MailboxTokenEnv] = cuid2.Generate()
+	}
+}
+
+func newGuestResumeNetworkPayload(cfg *guestNetworkConfig) mailbox.Payload {
+	return mailbox.Payload{
 		InterfaceName: "eth0",
 		MAC:           cfg.mac,
 		IPv4:          cfg.ip,
@@ -169,7 +171,7 @@ func (m *manager) waitForGuestResumeNetworkUDPAck(ctx context.Context, waiter *g
 		attribute.String("hypervisor", string(stored.HypervisorType)),
 		attribute.String("operation", "guest_resume_network_udp_ack_wait"),
 	)
-	waitCtx, cancel := context.WithTimeout(waitCtx, 2*time.Second)
+	waitCtx, cancel := context.WithTimeout(waitCtx, guestResumeNetworkUDPAckTimeout)
 	defer cancel()
 
 	elapsed, ack, err := waiter.WaitApplied(waitCtx, cfg.mac, cfg.ip)
@@ -181,23 +183,10 @@ func (m *manager) waitForGuestResumeNetworkUDPAck(ctx context.Context, waiter *g
 	return nil
 }
 
-func patchGuestResumeNetworkMailbox(snapshotDir, token string, payload *guestResumeNetworkPayload) error {
-	if token == "" {
-		return fmt.Errorf("resume network mailbox token is empty")
-	}
-	if len(token) > guestResumeNetworkMailboxSeqOffset-len(guestResumeNetworkMailboxMagic) {
-		return fmt.Errorf("resume network mailbox token is too long")
-	}
-	if payload == nil {
-		return fmt.Errorf("resume network mailbox payload is nil")
-	}
-
-	payloadBytes, err := json.Marshal(payload)
+func patchGuestResumeNetworkMailbox(snapshotDir, token string, payload *mailbox.Payload) error {
+	payloadBytes, err := mailbox.MarshalPayload(payload)
 	if err != nil {
-		return fmt.Errorf("marshal resume network mailbox payload: %w", err)
-	}
-	if len(payloadBytes) > 4096-guestResumeNetworkMailboxPayloadOffset {
-		return fmt.Errorf("resume network mailbox payload too large: %d bytes", len(payloadBytes))
+		return err
 	}
 
 	file, err := os.OpenFile(filepath.Join(snapshotDir, firecrackerSnapshotMemoryFile), os.O_RDWR, 0)
@@ -214,28 +203,28 @@ func patchGuestResumeNetworkMailbox(snapshotDir, token string, payload *guestRes
 		return fmt.Errorf("resume network mailbox memory file is empty")
 	}
 
-	marker := make([]byte, 0, len(guestResumeNetworkMailboxMagic)+len(token))
-	marker = append(marker, guestResumeNetworkMailboxMagic...)
-	marker = append(marker, []byte(token)...)
-
+	marker, err := mailbox.Marker(token)
+	if err != nil {
+		return err
+	}
 	idx, err := findGuestResumeNetworkMailbox(file, info.Size(), marker, token)
 	if err != nil {
 		return err
 	}
-	if idx+int64(guestResumeNetworkMailboxPayloadOffset)+int64(len(payloadBytes)) > info.Size() {
+	if idx+int64(mailbox.MailboxPayloadOffset)+int64(len(payloadBytes)) > info.Size() {
 		return fmt.Errorf("resume network mailbox marker is too close to end of memory file")
 	}
 
-	if _, err := file.WriteAt(payloadBytes, idx+int64(guestResumeNetworkMailboxPayloadOffset)); err != nil {
+	if _, err := file.WriteAt(payloadBytes, idx+int64(mailbox.MailboxPayloadOffset)); err != nil {
 		return fmt.Errorf("write resume network mailbox payload: %w", err)
 	}
 	var u32 [4]byte
 	binary.LittleEndian.PutUint32(u32[:], uint32(len(payloadBytes)))
-	if _, err := file.WriteAt(u32[:], idx+int64(guestResumeNetworkMailboxLengthOffset)); err != nil {
+	if _, err := file.WriteAt(u32[:], idx+int64(mailbox.MailboxLengthOffset)); err != nil {
 		return fmt.Errorf("write resume network mailbox payload length: %w", err)
 	}
 	binary.LittleEndian.PutUint32(u32[:], 1)
-	if _, err := file.WriteAt(u32[:], idx+int64(guestResumeNetworkMailboxSeqOffset)); err != nil {
+	if _, err := file.WriteAt(u32[:], idx+int64(mailbox.MailboxSeqOffset)); err != nil {
 		return fmt.Errorf("write resume network mailbox sequence: %w", err)
 	}
 	return nil

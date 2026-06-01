@@ -474,6 +474,8 @@ func (m *manager) createInstance(
 		stored.Volumes = req.Volumes
 	}
 
+	ensureGuestInitiatedResumeNetworkMailbox(stored)
+
 	// 16. Create config disk (needs Instance for buildVMConfig)
 	inst := &Instance{StoredMetadata: *stored}
 	var proxyGuestConfig *egressproxy.GuestConfig

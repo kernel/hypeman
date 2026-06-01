@@ -176,8 +176,7 @@ func (s *ApiService) ForkSnapshot(ctx context.Context, request oapi.ForkSnapshot
 	}
 
 	domainReq := instances.ForkSnapshotRequest{
-		Name:           request.Body.Name,
-		WaitForNetwork: request.Body.WaitForNetwork,
+		Name: request.Body.Name,
 	}
 	mailboxes, err := toDomainForkMailboxes(request.Body.Mailboxes)
 	if err != nil {

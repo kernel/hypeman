@@ -52,7 +52,7 @@ func TestSnapshotScheduleToOAPIPreservesZeroMaxCount(t *testing.T) {
 	assert.Equal(t, "24h0m0s", *out.Retention.MaxAge)
 }
 
-func TestForkSnapshotMapsWaitForNetwork(t *testing.T) {
+func TestForkSnapshotSuccess(t *testing.T) {
 	t.Parallel()
 	svc := newTestService(t)
 
@@ -71,15 +71,13 @@ func TestForkSnapshotMapsWaitForNetwork(t *testing.T) {
 		result:  forked,
 	}
 	svc.InstanceManager = mockMgr
-	waitForNetwork := false
 	waitForAck := true
 	ackTimeoutMS := 2500
 
 	resp, err := svc.ForkSnapshot(ctx(), oapi.ForkSnapshotRequestObject{
 		SnapshotId: "snap-123",
 		Body: &oapi.ForkSnapshotRequest{
-			Name:           "forked-instance",
-			WaitForNetwork: &waitForNetwork,
+			Name: "forked-instance",
 			Mailboxes: &[]oapi.ForkMailboxPayload{{
 				Name:         "kernel.identity.v1",
 				Token:        "template-token",
@@ -97,8 +95,6 @@ func TestForkSnapshotMapsWaitForNetwork(t *testing.T) {
 	assert.Equal(t, "snap-123", mockMgr.lastID)
 	require.NotNil(t, mockMgr.lastReq)
 	assert.Equal(t, "forked-instance", mockMgr.lastReq.Name)
-	require.NotNil(t, mockMgr.lastReq.WaitForNetwork)
-	assert.False(t, *mockMgr.lastReq.WaitForNetwork)
 	require.Len(t, mockMgr.lastReq.Mailboxes, 1)
 	assert.Equal(t, "kernel.identity.v1", mockMgr.lastReq.Mailboxes[0].Name)
 	assert.Equal(t, "template-token", mockMgr.lastReq.Mailboxes[0].Token)

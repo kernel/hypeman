@@ -192,17 +192,23 @@ sudo setcap 'cap_net_admin,cap_net_bind_service=+eip' /path/to/hypeman
 
 ### CreateAllocation
 1. Get default network details
-2. Check name uniqueness globally
-3. Allocate next available IP (starting from .2, after gateway at .1)
-4. Generate unused MAC (02:00:00:... format - locally administered)
-5. Generate TAP name (tap-{first8chars-of-instance-id})
-6. Create TAP device and attach to bridge
+2. Reserve name/IP/MAC/TAP identity under the allocation mutex
+3. Create the TAP device and attach it to the bridge
+4. Return once the VM can attach to the TAP
+5. Apply tc rate limits asynchronously when rate limits are configured
 
 ### RecreateAllocation (for restore from standby)
 1. Derive allocation from snapshot config.json
 2. Recreate TAP device with same name
 3. Attach to bridge with isolation mode
-4. Reapply rate limits from instance metadata
+4. Return once the VM can attach to the TAP
+5. Reapply rate limits from instance metadata asynchronously
+
+The fork/restore hot path only waits for the network identity reservation and
+TAP creation because those are required before the VMM can start. tc shaping is
+serialized in the background so concurrent forks do not queue behind bridge tc
+updates. The async tc spans are emitted as detached traces, so request/restore
+root spans show only the blocking network work.
 
 ### ReleaseAllocation (for shutdown/delete)
 1. Derive current allocation
@@ -289,20 +295,23 @@ Note: In case of unexpected scenarios like power loss, straggler TAP devices may
 
 ## Concurrency & Locking
 
-The network manager uses a single mutex to protect allocation operations:
+The network manager keeps the allocation mutex short and only uses it for
+identity reservation.
 
 ### Locked Operations
-- **CreateAllocation**: Prevents concurrent IP allocation
+- **CreateAllocation identity reservation**: Prevents duplicate names, IPs, MACs, and TAP names
+- **tc updates**: Serialized separately because upload shaping mutates shared bridge state
 
 ### Unlocked Operations  
-- **RecreateAllocation**: Safe without lock - protected by instance-level locking, doesn't allocate IPs
-- **ReleaseAllocation**: Safe without lock - only deletes TAP device
+- **TAP creation**: Runs outside the allocation mutex so concurrent forks can create TAPs in parallel
+- **RecreateAllocation**: Safe without allocation lock - protected by instance-level locking, doesn't allocate IPs
+- **ReleaseAllocation**: Safe without allocation lock - deletes TAP device and serializes with tc updates
 - **Read operations** (GetAllocation, ListAllocations, NameExists): No lock needed - eventual consistency is acceptable
 
 ### Why This Works
-- Write operations are serialized to prevent race conditions
-- Read operations can run concurrently for better performance
-- Internal calls (e.g., CreateAllocation → ListAllocations) work because reads don't lock
+- Pending reservations are visible to reads until metadata is persisted
+- TAP creation does not choose identity, so it can run outside the allocation mutex
+- tc work is not required for the VMM attach point and can complete after the fork response
 - Instance manager already provides per-instance locking for state transitions
 
 ## Security

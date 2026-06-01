@@ -8,28 +8,17 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/kernel/hypeman/lib/logger"
+	mailboxpkg "github.com/kernel/hypeman/lib/mailbox"
 	"go.opentelemetry.io/otel/attribute"
 	"golang.org/x/sys/unix"
 )
 
-const (
-	forkMailboxSeqOffset     = 256
-	forkMailboxLengthOffset  = 260
-	forkMailboxPayloadOffset = 264
-	forkMailboxPayloadSize   = 4096 - forkMailboxPayloadOffset
-)
-
-var (
-	forkMailboxMagic        = []byte("HYPEMAN_FORK_MAILBOX_V1\x00")
-	forkMailboxNamePattern  = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,64}$`)
-	forkMailboxOffsetByMark sync.Map
-)
+var forkMailboxOffsetByMark sync.Map
 
 type patchedForkMailbox struct {
 	name    string
@@ -44,7 +33,7 @@ func validateForkMailboxes(mailboxes []ForkMailboxPayload) error {
 	seen := make(map[string]struct{}, len(mailboxes))
 	for _, mailbox := range mailboxes {
 		name := strings.TrimSpace(mailbox.Name)
-		if !forkMailboxNamePattern.MatchString(name) {
+		if !mailboxpkg.ValidForkMailboxName(name) {
 			return fmt.Errorf("%w: invalid mailbox name %q", ErrInvalidRequest, mailbox.Name)
 		}
 		if _, ok := seen[name]; ok {
@@ -55,16 +44,16 @@ func validateForkMailboxes(mailboxes []ForkMailboxPayload) error {
 		if strings.TrimSpace(mailbox.Token) == "" {
 			return fmt.Errorf("%w: mailbox %q token is required", ErrInvalidRequest, name)
 		}
-		if len(mailbox.Token) > 128 {
+		if !mailboxpkg.ValidForkMailboxToken(mailbox.Token) {
 			return fmt.Errorf("%w: mailbox %q token is too long", ErrInvalidRequest, name)
 		}
-		if len(forkMailboxMarker(name, mailbox.Token)) > forkMailboxSeqOffset {
+		if _, err := mailboxpkg.ForkMailboxMarker(name, mailbox.Token); err != nil {
 			return fmt.Errorf("%w: mailbox %q marker is too long", ErrInvalidRequest, name)
 		}
 		if len(mailbox.Payload) == 0 {
 			return fmt.Errorf("%w: mailbox %q payload is required", ErrInvalidRequest, name)
 		}
-		if len(mailbox.Payload) > forkMailboxPayloadSize {
+		if len(mailbox.Payload) > mailboxpkg.ForkMailboxPayloadSize {
 			return fmt.Errorf("%w: mailbox %q payload is too large", ErrInvalidRequest, name)
 		}
 		var payload map[string]any
@@ -173,26 +162,26 @@ func forkMailboxPayloadWithAckPort(payload json.RawMessage, port uint32) (json.R
 	if err != nil {
 		return nil, fmt.Errorf("marshal mailbox payload with ack port: %w", err)
 	}
-	if len(out) > forkMailboxPayloadSize {
+	if len(out) > mailboxpkg.ForkMailboxPayloadSize {
 		return nil, fmt.Errorf("%w: mailbox payload is too large after ack_port injection", ErrInvalidRequest)
 	}
 	return out, nil
 }
 
 func patchForkMailbox(snapshotDir, name, token string, payload []byte) error {
-	if !forkMailboxNamePattern.MatchString(name) {
+	if !mailboxpkg.ValidForkMailboxName(name) {
 		return fmt.Errorf("invalid mailbox name %q", name)
 	}
-	if token == "" {
+	if !mailboxpkg.ValidForkMailboxToken(token) {
 		return fmt.Errorf("mailbox %q token is empty", name)
 	}
-	if len(payload) > forkMailboxPayloadSize {
+	if len(payload) > mailboxpkg.ForkMailboxPayloadSize {
 		return fmt.Errorf("mailbox %q payload too large: %d bytes", name, len(payload))
 	}
 
-	marker := forkMailboxMarker(name, token)
-	if len(marker) > forkMailboxSeqOffset {
-		return fmt.Errorf("mailbox %q marker is too long", name)
+	marker, err := mailboxpkg.ForkMailboxMarker(name, token)
+	if err != nil {
+		return fmt.Errorf("build mailbox %q marker: %w", name, err)
 	}
 
 	file, err := os.OpenFile(filepath.Join(snapshotDir, firecrackerSnapshotMemoryFile), os.O_RDWR, 0)
@@ -213,32 +202,23 @@ func patchForkMailbox(snapshotDir, name, token string, payload []byte) error {
 	if err != nil {
 		return fmt.Errorf("find mailbox %q marker: %w", name, err)
 	}
-	if idx+int64(forkMailboxPayloadOffset)+int64(len(payload)) > info.Size() {
+	if idx+int64(mailboxpkg.ForkMailboxPayloadOffset)+int64(len(payload)) > info.Size() {
 		return fmt.Errorf("mailbox %q marker is too close to end of memory file", name)
 	}
 
-	if _, err := file.WriteAt(payload, idx+int64(forkMailboxPayloadOffset)); err != nil {
+	if _, err := file.WriteAt(payload, idx+int64(mailboxpkg.ForkMailboxPayloadOffset)); err != nil {
 		return fmt.Errorf("write mailbox %q payload: %w", name, err)
 	}
 	var u32 [4]byte
 	binary.LittleEndian.PutUint32(u32[:], uint32(len(payload)))
-	if _, err := file.WriteAt(u32[:], idx+int64(forkMailboxLengthOffset)); err != nil {
+	if _, err := file.WriteAt(u32[:], idx+int64(mailboxpkg.ForkMailboxLengthOffset)); err != nil {
 		return fmt.Errorf("write mailbox %q payload length: %w", name, err)
 	}
 	binary.LittleEndian.PutUint32(u32[:], 1)
-	if _, err := file.WriteAt(u32[:], idx+int64(forkMailboxSeqOffset)); err != nil {
+	if _, err := file.WriteAt(u32[:], idx+int64(mailboxpkg.ForkMailboxSeqOffset)); err != nil {
 		return fmt.Errorf("write mailbox %q sequence: %w", name, err)
 	}
 	return nil
-}
-
-func forkMailboxMarker(name, token string) []byte {
-	marker := make([]byte, 0, len(forkMailboxMagic)+len(name)+1+len(token))
-	marker = append(marker, forkMailboxMagic...)
-	marker = append(marker, []byte(name)...)
-	marker = append(marker, 0)
-	marker = append(marker, []byte(token)...)
-	return marker
 }
 
 func findForkMailbox(file *os.File, size int64, marker []byte) (int64, error) {
