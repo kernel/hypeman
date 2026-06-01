@@ -526,10 +526,7 @@ func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName strin
 	}
 
 	// 3. Set TAP up
-	tapLink, err := netlink.LinkByName(tapName)
-	if err != nil {
-		return "", fmt.Errorf("get TAP link: %w", err)
-	}
+	tapLink := tap
 
 	if err := netlink.LinkSetUp(tapLink); err != nil {
 		return "", fmt.Errorf("set TAP up: %w", err)
@@ -547,16 +544,8 @@ func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName strin
 
 	// 5. Enable port isolation so isolated TAPs can't directly talk to each other (requires kernel support and capabilities)
 	if isolated {
-		// Use shell command for bridge_slave isolated flag
-		// netlink library doesn't expose this flag yet
-		cmd := exec.Command("ip", "link", "set", tapName, "type", "bridge_slave", "isolated", "on")
-		// Enable ambient capabilities so child process inherits CAP_NET_ADMIN
-		cmd.SysProcAttr = &syscall.SysProcAttr{
-			AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
-		}
-		output, err := cmd.CombinedOutput()
-		if err != nil {
-			return "", fmt.Errorf("set isolation mode: %w (output: %s)", err, string(output))
+		if err := netlink.LinkSetIsolated(tapLink, true); err != nil {
+			return "", fmt.Errorf("set isolation mode: %w", err)
 		}
 	}
 
