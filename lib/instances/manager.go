@@ -391,6 +391,7 @@ func (m *manager) ForkInstance(ctx context.Context, id string, req ForkInstanceR
 
 	inst, err := m.applyForkTargetState(ctx, forked.Id, targetState, restoreInstanceOptions{
 		WaitForGuestNetwork: req.WaitForNetwork,
+		Mailboxes:           req.Mailboxes,
 	})
 	if err != nil {
 		if cleanupErr := m.cleanupForkInstanceOnError(ctx, forked.Id); cleanupErr != nil {

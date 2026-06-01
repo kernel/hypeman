@@ -387,6 +387,14 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 	if err != nil {
 		return nil, err
 	}
+	if len(req.Mailboxes) > 0 {
+		if rec.Snapshot.Kind != SnapshotKindStandby {
+			return nil, fmt.Errorf("%w: mailboxes require a standby snapshot fork", ErrInvalidRequest)
+		}
+		if targetState != StateRunning {
+			return nil, fmt.Errorf("%w: mailboxes require target_state %s", ErrInvalidRequest, StateRunning)
+		}
+	}
 	targetHypervisor, err := m.resolveSnapshotTargetHypervisor(rec, req.TargetHypervisor)
 	if err != nil {
 		return nil, err
@@ -488,6 +496,7 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 	cu.Release()
 	inst, err := m.applyForkTargetState(ctx, forkID, targetState, restoreInstanceOptions{
 		WaitForGuestNetwork: req.WaitForNetwork,
+		Mailboxes:           req.Mailboxes,
 	})
 	if err != nil {
 		if cleanupErr := m.cleanupForkInstanceOnError(ctx, forkID); cleanupErr != nil {
@@ -570,6 +579,9 @@ func validateForkSnapshotRequest(req ForkSnapshotRequest) error {
 	}
 	if req.TargetState != "" && req.TargetState != StateStopped && req.TargetState != StateStandby && req.TargetState != StateRunning {
 		return fmt.Errorf("%w: invalid target_state %q", ErrInvalidRequest, req.TargetState)
+	}
+	if err := validateForkMailboxes(req.Mailboxes); err != nil {
+		return err
 	}
 	return nil
 }

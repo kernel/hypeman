@@ -179,6 +179,11 @@ func (s *ApiService) ForkSnapshot(ctx context.Context, request oapi.ForkSnapshot
 		Name:           request.Body.Name,
 		WaitForNetwork: request.Body.WaitForNetwork,
 	}
+	mailboxes, err := toDomainForkMailboxes(request.Body.Mailboxes)
+	if err != nil {
+		return oapi.ForkSnapshot400JSONResponse{Code: "invalid_request", Message: err.Error()}, nil
+	}
+	domainReq.Mailboxes = mailboxes
 	if request.Body.TargetState != nil {
 		domainReq.TargetState = instances.State(*request.Body.TargetState)
 	}

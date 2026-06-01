@@ -47,6 +47,14 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 	if err != nil {
 		return nil, "", err
 	}
+	if len(req.Mailboxes) > 0 {
+		if source.State == StateStopped {
+			return nil, "", fmt.Errorf("%w: mailboxes require a standby snapshot fork", ErrInvalidRequest)
+		}
+		if targetState != StateRunning {
+			return nil, "", fmt.Errorf("%w: mailboxes require target_state %s", ErrInvalidRequest, StateRunning)
+		}
+	}
 
 	switch source.State {
 	case StateRunning:
@@ -83,6 +91,7 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 		if forkErr == nil && targetState == StateRunning {
 			restoredFork, err := m.applyForkTargetState(ctx, forked.Id, StateRunning, restoreInstanceOptions{
 				WaitForGuestNetwork: req.WaitForNetwork,
+				Mailboxes:           req.Mailboxes,
 			})
 			if err != nil {
 				forkErr = fmt.Errorf("restore forked instance before source restore: %w", err)
@@ -378,6 +387,9 @@ func validateForkRequest(req ForkInstanceRequest) error {
 	}
 	if req.TargetState != "" && req.TargetState != StateStopped && req.TargetState != StateStandby && req.TargetState != StateRunning {
 		return fmt.Errorf("%w: invalid fork target state %q (must be one of %s, %s, %s)", ErrInvalidRequest, req.TargetState, StateStopped, StateStandby, StateRunning)
+	}
+	if err := validateForkMailboxes(req.Mailboxes); err != nil {
+		return err
 	}
 	return nil
 }

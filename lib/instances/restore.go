@@ -22,6 +22,7 @@ import (
 
 type restoreInstanceOptions struct {
 	WaitForGuestNetwork *bool
+	Mailboxes           []ForkMailboxPayload
 }
 
 func (o restoreInstanceOptions) waitForGuestNetwork() bool {
@@ -274,6 +275,13 @@ func (m *manager) restoreInstance(
 		defer resumeNetworkAckWaiter.Close()
 	}
 
+	patchedMailboxes, err := m.patchForkMailboxes(ctx, snapshotDir, opts.Mailboxes)
+	if err != nil {
+		releaseNetwork()
+		return nil, fmt.Errorf("patch fork mailboxes: %w", err)
+	}
+	defer closePatchedForkMailboxes(patchedMailboxes)
+
 	// 5. Transition: Standby → Paused (start hypervisor + restore)
 	restoreCtx, restoreSpanEnd := m.startLifecycleStep(ctx, "restore_from_snapshot",
 		attribute.String("instance_id", id),
@@ -344,6 +352,14 @@ func (m *manager) restoreInstance(
 			releaseNetwork()
 			return nil, fmt.Errorf("configure guest network after restore: %w", reconfigureErr)
 		}
+	}
+
+	if err := m.waitForForkMailboxAcks(ctx, stored, patchedMailboxes); err != nil {
+		log.ErrorContext(ctx, "failed waiting for fork mailbox acknowledgements", "instance_id", id, "error", err)
+		_ = hv.Shutdown(ctx)
+		m.rollbackAdmissionAllocationActive(stored)
+		releaseNetwork()
+		return nil, fmt.Errorf("wait for fork mailbox acknowledgements: %w", err)
 	}
 
 	// 8. Delete snapshot after successful restore unless the hypervisor is keeping it

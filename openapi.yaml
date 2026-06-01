@@ -697,6 +697,48 @@ components:
             Defaults to true. Set false to return after the VM is resumed while guest networking finishes asynchronously.
           default: true
           example: true
+        mailboxes:
+          type: array
+          description: |
+            Optional JSON mailbox payloads to patch into a standby snapshot before resuming the fork.
+            Each mailbox must correspond to a guest-side mailbox marker that was present when the
+            source snapshot was captured. Mailboxes are only supported for forks that restore from a
+            standby snapshot into Running state.
+          items:
+            $ref: "#/components/schemas/ForkMailboxPayload"
+
+    ForkMailboxPayload:
+      type: object
+      required: [name, token, payload]
+      properties:
+        name:
+          type: string
+          description: Guest mailbox name.
+          pattern: ^[A-Za-z0-9._:-]+$
+          minLength: 1
+          maxLength: 64
+          example: kernel.identity.v1
+        token:
+          type: string
+          description: Per-template mailbox token used to identify the guest memory marker.
+          minLength: 1
+          maxLength: 128
+        payload:
+          type: object
+          description: JSON object patched into the mailbox before the fork resumes.
+          additionalProperties: true
+        wait_for_ack:
+          type: boolean
+          description: |
+            If true, Hypeman injects ack_port into the payload and waits after resume for a UDP
+            acknowledgement containing the mailbox name and stage=applied.
+          default: false
+        ack_timeout_ms:
+          type: integer
+          description: Timeout for wait_for_ack. Defaults to 2000ms.
+          minimum: 1
+          maximum: 30000
+          default: 2000
 
     ForkTargetState:
       type: string
@@ -889,6 +931,15 @@ components:
             Defaults to true. Set false to return after the VM is resumed while guest networking finishes asynchronously.
           default: true
           example: true
+        mailboxes:
+          type: array
+          description: |
+            Optional JSON mailbox payloads to patch into a standby snapshot before resuming the fork.
+            Each mailbox must correspond to a guest-side mailbox marker that was present when the
+            source snapshot was captured. Mailboxes are only supported for forks that restore from a
+            standby snapshot into Running state.
+          items:
+            $ref: "#/components/schemas/ForkMailboxPayload"
 
     SnapshotScheduleRetention:
       type: object

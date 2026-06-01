@@ -138,6 +138,26 @@ func (w *guestResumeNetworkUDPWaiter) WaitApplied(ctx context.Context, mac, ip s
 	}
 }
 
+func (w *guestResumeNetworkUDPWaiter) WaitMailboxApplied(ctx context.Context, name string) (time.Duration, string, error) {
+	if w == nil {
+		return 0, "", fmt.Errorf("guest fork mailbox UDP waiter is nil")
+	}
+
+	start := time.Now()
+	wantMailbox := "mailbox=" + strings.ToLower(name)
+	for {
+		select {
+		case ack := <-w.ch:
+			text := strings.ToLower(ack.text)
+			if strings.Contains(text, "stage=applied") && strings.Contains(text, wantMailbox) {
+				return ack.received.Sub(start), ack.text, nil
+			}
+		case <-ctx.Done():
+			return 0, "", ctx.Err()
+		}
+	}
+}
+
 func (m *manager) waitForGuestResumeNetworkUDPAck(ctx context.Context, waiter *guestResumeNetworkUDPWaiter, stored *StoredMetadata, cfg *guestNetworkConfig) error {
 	if waiter == nil || cfg == nil {
 		return nil

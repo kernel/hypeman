@@ -655,12 +655,20 @@ func (s *ApiService) ForkInstance(ctx context.Context, request oapi.ForkInstance
 	if request.Body.TargetState != nil {
 		targetState = instances.State(*request.Body.TargetState)
 	}
+	mailboxes, err := toDomainForkMailboxes(request.Body.Mailboxes)
+	if err != nil {
+		return oapi.ForkInstance400JSONResponse{
+			Code:    "invalid_request",
+			Message: err.Error(),
+		}, nil
+	}
 
 	result, err := s.InstanceManager.ForkInstance(ctx, inst.Id, instances.ForkInstanceRequest{
 		Name:           request.Body.Name,
 		FromRunning:    request.Body.FromRunning != nil && *request.Body.FromRunning,
 		TargetState:    targetState,
 		WaitForNetwork: request.Body.WaitForNetwork,
+		Mailboxes:      mailboxes,
 	})
 	if err != nil {
 		switch {

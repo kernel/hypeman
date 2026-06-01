@@ -1,6 +1,7 @@
 package instances
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/kernel/hypeman/lib/autostandby"
@@ -272,6 +273,17 @@ type ForkInstanceRequest struct {
 	FromRunning    bool   // Optional: allow forking from Running by auto standby/fork/restore
 	TargetState    State  // Optional: desired final state of forked instance (Stopped, Standby, Running). Empty means inherit source state.
 	WaitForNetwork *bool  // Optional: wait for guest networking before returning a Running fork. Nil defaults to true.
+	Mailboxes      []ForkMailboxPayload
+}
+
+// ForkMailboxPayload is a caller-provided JSON payload patched into guest memory
+// before a forked standby snapshot is resumed.
+type ForkMailboxPayload struct {
+	Name       string
+	Token      string
+	Payload    json.RawMessage
+	WaitForAck bool
+	AckTimeout time.Duration
 }
 
 // SnapshotKind determines how snapshot data is captured and restored.
@@ -316,6 +328,7 @@ type ForkSnapshotRequest struct {
 	TargetState      State           // Optional
 	TargetHypervisor hypervisor.Type // Optional, allowed only for Stopped snapshots
 	WaitForNetwork   *bool           // Optional: wait for guest networking before returning a Running fork. Nil defaults to true.
+	Mailboxes        []ForkMailboxPayload
 }
 
 // SnapshotPolicy defines default snapshot behavior for an instance.
