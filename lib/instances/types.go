@@ -268,10 +268,9 @@ type UpdateInstanceRequest struct {
 
 // ForkInstanceRequest is the domain request for forking an instance.
 type ForkInstanceRequest struct {
-	Name           string // Required: name for the new forked instance
-	FromRunning    bool   // Optional: allow forking from Running by auto standby/fork/restore
-	TargetState    State  // Optional: desired final state of forked instance (Stopped, Standby, Running). Empty means inherit source state.
-	WaitForNetwork *bool  // Optional: wait for guest networking before returning a Running fork. Nil defaults to true.
+	Name        string // Required: name for the new forked instance
+	FromRunning bool   // Optional: allow forking from Running by auto standby/fork/restore
+	TargetState State  // Optional: desired final state of forked instance (Stopped, Standby, Running). Empty means inherit source state.
 }
 
 // SnapshotKind determines how snapshot data is captured and restored.
@@ -315,7 +314,6 @@ type ForkSnapshotRequest struct {
 	Name             string          // Required: name for the new instance
 	TargetState      State           // Optional
 	TargetHypervisor hypervisor.Type // Optional, allowed only for Stopped snapshots
-	WaitForNetwork   *bool           // Optional: wait for guest networking before returning a Running fork. Nil defaults to true.
 }
 
 // SnapshotPolicy defines default snapshot behavior for an instance.

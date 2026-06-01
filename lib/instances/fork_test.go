@@ -308,7 +308,7 @@ func TestApplyForkTargetStateStoppedRefreshesSnapshotForkCID(t *testing.T) {
 	meta.StoredMetadata.Phases.Record(phasetracking.PhaseStandby, time.Now())
 	require.NoError(t, manager.saveMetadata(meta))
 
-	inst, err := manager.applyForkTargetState(ctx, forkID, StateStopped, restoreInstanceOptions{})
+	inst, err := manager.applyForkTargetState(ctx, forkID, StateStopped)
 	require.NoError(t, err)
 	require.Equal(t, StateStopped, inst.State)
 	require.Equal(t, generateVsockCID(forkID), inst.VsockCID)

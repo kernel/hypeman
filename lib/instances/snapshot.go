@@ -127,7 +127,7 @@ func (m *manager) createSnapshot(ctx context.Context, id string, req CreateSnaps
 		}
 
 		if restoreSource {
-			_, restoreErr := m.restoreInstance(ctx, id, restoreInstanceOptions{})
+			_, restoreErr := m.restoreInstance(ctx, id)
 			if restoreErr != nil {
 				if copyErr != nil {
 					return nil, fmt.Errorf("snapshot copy failed: %v; additionally failed to restore source: %w", copyErr, restoreErr)
@@ -337,7 +337,7 @@ func (m *manager) restoreSnapshot(ctx context.Context, id string, snapshotID str
 			}
 			return m.getInstance(ctx, id)
 		case StateRunning:
-			inst, err := m.restoreInstance(ctx, id, restoreInstanceOptions{})
+			inst, err := m.restoreInstance(ctx, id)
 			if err != nil {
 				return nil, err
 			}
@@ -486,9 +486,7 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 	}
 
 	cu.Release()
-	inst, err := m.applyForkTargetState(ctx, forkID, targetState, restoreInstanceOptions{
-		WaitForGuestNetwork: req.WaitForNetwork,
-	})
+	inst, err := m.applyForkTargetState(ctx, forkID, targetState)
 	if err != nil {
 		if cleanupErr := m.cleanupForkInstanceOnError(ctx, forkID); cleanupErr != nil {
 			return nil, fmt.Errorf("apply snapshot fork target state: %w; additionally failed to cleanup forked instance %s: %v", err, forkID, cleanupErr)

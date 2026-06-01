@@ -389,9 +389,7 @@ func (m *manager) ForkInstance(ctx context.Context, id string, req ForkInstanceR
 		return nil, err
 	}
 
-	inst, err := m.applyForkTargetState(ctx, forked.Id, targetState, restoreInstanceOptions{
-		WaitForGuestNetwork: req.WaitForNetwork,
-	})
+	inst, err := m.applyForkTargetState(ctx, forked.Id, targetState)
 	if err != nil {
 		if cleanupErr := m.cleanupForkInstanceOnError(ctx, forked.Id); cleanupErr != nil {
 			return nil, fmt.Errorf("apply fork target state: %w; additionally failed to cleanup forked instance %s: %v", err, forked.Id, cleanupErr)
@@ -451,7 +449,7 @@ func (m *manager) RestoreInstance(ctx context.Context, id string) (*Instance, er
 	if current.State == StateRunning || current.State == StateInitializing {
 		return current, nil
 	}
-	inst, err := m.restoreInstance(ctx, id, restoreInstanceOptions{})
+	inst, err := m.restoreInstance(ctx, id)
 	if err == nil {
 		m.notifyLifecycleEvent(ctx, LifecycleEventRestore, inst)
 	}

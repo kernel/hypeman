@@ -52,7 +52,7 @@ func TestSnapshotScheduleToOAPIPreservesZeroMaxCount(t *testing.T) {
 	assert.Equal(t, "24h0m0s", *out.Retention.MaxAge)
 }
 
-func TestForkSnapshotMapsWaitForNetwork(t *testing.T) {
+func TestForkSnapshotSuccess(t *testing.T) {
 	t.Parallel()
 	svc := newTestService(t)
 
@@ -71,13 +71,11 @@ func TestForkSnapshotMapsWaitForNetwork(t *testing.T) {
 		result:  forked,
 	}
 	svc.InstanceManager = mockMgr
-	waitForNetwork := false
 
 	resp, err := svc.ForkSnapshot(ctx(), oapi.ForkSnapshotRequestObject{
 		SnapshotId: "snap-123",
 		Body: &oapi.ForkSnapshotRequest{
-			Name:           "forked-instance",
-			WaitForNetwork: &waitForNetwork,
+			Name: "forked-instance",
 		},
 	})
 	require.NoError(t, err)
@@ -88,6 +86,4 @@ func TestForkSnapshotMapsWaitForNetwork(t *testing.T) {
 	assert.Equal(t, "snap-123", mockMgr.lastID)
 	require.NotNil(t, mockMgr.lastReq)
 	assert.Equal(t, "forked-instance", mockMgr.lastReq.Name)
-	require.NotNil(t, mockMgr.lastReq.WaitForNetwork)
-	assert.False(t, *mockMgr.lastReq.WaitForNetwork)
 }

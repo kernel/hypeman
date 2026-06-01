@@ -176,8 +176,7 @@ func (s *ApiService) ForkSnapshot(ctx context.Context, request oapi.ForkSnapshot
 	}
 
 	domainReq := instances.ForkSnapshotRequest{
-		Name:           request.Body.Name,
-		WaitForNetwork: request.Body.WaitForNetwork,
+		Name: request.Body.Name,
 	}
 	if request.Body.TargetState != nil {
 		domainReq.TargetState = instances.State(*request.Body.TargetState)

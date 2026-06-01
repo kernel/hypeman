@@ -81,9 +81,7 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 		// the source data directory. Restore the fork while source remains standby and
 		// under lock, then restore the source.
 		if forkErr == nil && targetState == StateRunning {
-			restoredFork, err := m.applyForkTargetState(ctx, forked.Id, StateRunning, restoreInstanceOptions{
-				WaitForGuestNetwork: req.WaitForNetwork,
-			})
+			restoredFork, err := m.applyForkTargetState(ctx, forked.Id, StateRunning)
 			if err != nil {
 				forkErr = fmt.Errorf("restore forked instance before source restore: %w", err)
 				if cleanupErr := m.cleanupForkInstanceOnError(ctx, forked.Id); cleanupErr != nil {
@@ -95,7 +93,7 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 		}
 
 		log.InfoContext(ctx, "restoring source instance after running fork", "source_instance_id", id)
-		restoredSource, restoreErr := m.restoreInstance(ctx, id, restoreInstanceOptions{})
+		restoredSource, restoreErr := m.restoreInstance(ctx, id)
 
 		if restoreErr != nil {
 			if forkErr != nil {
@@ -403,7 +401,7 @@ func resolveForkTargetState(requested State, sourceState State) (State, error) {
 	return requested, nil
 }
 
-func (m *manager) applyForkTargetState(ctx context.Context, forkID string, target State, restoreOpts restoreInstanceOptions) (*Instance, error) {
+func (m *manager) applyForkTargetState(ctx context.Context, forkID string, target State) (*Instance, error) {
 	lock := m.getInstanceLock(forkID)
 	lock.Lock()
 	defer lock.Unlock()
@@ -445,7 +443,7 @@ func (m *manager) applyForkTargetState(ctx context.Context, forkID string, targe
 	case StateStandby:
 		switch target {
 		case StateRunning:
-			return returnWithReadiness(m.restoreInstance(ctx, forkID, restoreOpts))
+			return returnWithReadiness(m.restoreInstance(ctx, forkID))
 		case StateStopped:
 			if err := os.RemoveAll(m.paths.InstanceSnapshotLatest(forkID)); err != nil {
 				return nil, fmt.Errorf("remove fork snapshot: %w", err)
