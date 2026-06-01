@@ -351,6 +351,10 @@ func (m *manager) restoreInstance(
 		var reconfigureErr error
 		if resumeNetworkMailboxPatched && waitForGuestNetwork {
 			reconfigureErr = m.waitForGuestResumeNetworkUDPAck(reconfigureCtx, resumeNetworkAckWaiter, stored, resumeNetworkAckCfg)
+			if reconfigureErr != nil {
+				log.ErrorContext(ctx, "guest resume network UDP ack wait failed; falling back to host-initiated reconfigure", "instance_id", id, "error", reconfigureErr)
+				reconfigureErr = reconfigureGuestNetwork(reconfigureCtx, stored, allocatedNet)
+			}
 		} else if resumeNetworkMailboxPatched {
 			log.InfoContext(ctx, "guest resume network mailbox patched", "instance_id", id)
 		} else {
