@@ -399,6 +399,11 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 	if err != nil {
 		return nil, err
 	}
+	if len(req.Mailboxes) > 0 {
+		if err := validateForkMailboxHypervisor(targetHypervisor); err != nil {
+			return nil, err
+		}
+	}
 
 	forkID := cuid2.Generate()
 	if _, err := m.loadMetadata(forkID); err == nil {

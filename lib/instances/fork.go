@@ -54,6 +54,9 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 		if targetState != StateRunning {
 			return nil, "", fmt.Errorf("%w: mailboxes require target_state %s", ErrInvalidRequest, StateRunning)
 		}
+		if err := validateForkMailboxHypervisor(source.HypervisorType); err != nil {
+			return nil, "", err
+		}
 	}
 
 	switch source.State {

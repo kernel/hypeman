@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/mailbox"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -51,4 +52,14 @@ func TestValidateForkMailboxesRejectsPaddedName(t *testing.T) {
 	}})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrInvalidRequest)
+}
+
+func TestValidateForkMailboxHypervisor(t *testing.T) {
+	t.Parallel()
+
+	require.NoError(t, validateForkMailboxHypervisor(hypervisor.TypeFirecracker))
+
+	err := validateForkMailboxHypervisor(hypervisor.TypeCloudHypervisor)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrNotSupported)
 }

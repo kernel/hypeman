@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
 	mailboxpkg "github.com/kernel/hypeman/lib/mailbox"
 	"go.opentelemetry.io/otel/attribute"
@@ -97,6 +98,13 @@ func validateForkMailboxes(mailboxes []ForkMailboxPayload) error {
 		if mailbox.AckTimeout > 30*time.Second {
 			return fmt.Errorf("%w: mailbox %q ack_timeout_ms must be 30000 or less", ErrInvalidRequest, name)
 		}
+	}
+	return nil
+}
+
+func validateForkMailboxHypervisor(hvType hypervisor.Type) error {
+	if hvType != hypervisor.TypeFirecracker {
+		return fmt.Errorf("%w: mailboxes are only supported for %s standby forks", ErrNotSupported, hypervisor.TypeFirecracker)
 	}
 	return nil
 }
