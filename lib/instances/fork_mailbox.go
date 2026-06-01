@@ -1,7 +1,6 @@
 package instances
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -15,7 +14,6 @@ import (
 	"github.com/kernel/hypeman/lib/logger"
 	mailboxpkg "github.com/kernel/hypeman/lib/mailbox"
 	"go.opentelemetry.io/otel/attribute"
-	"golang.org/x/sys/unix"
 )
 
 var forkMailboxOffsetByMark sync.Map
@@ -24,6 +22,12 @@ type patchedForkMailbox struct {
 	name    string
 	waiter  *guestResumeNetworkUDPWaiter
 	timeout time.Duration
+}
+
+type forkMailboxPatch struct {
+	name    string
+	token   string
+	payload []byte
 }
 
 type forkMailboxHandoff struct {
@@ -115,6 +119,7 @@ func (m *manager) patchForkMailboxes(ctx context.Context, stored *StoredMetadata
 	}
 
 	patched := make([]patchedForkMailbox, 0, len(mailboxes))
+	patches := make([]forkMailboxPatch, 0, len(mailboxes))
 	for _, mailbox := range mailboxes {
 		payload := mailbox.Payload
 		var waiter *guestResumeNetworkUDPWaiter
@@ -133,25 +138,20 @@ func (m *manager) patchForkMailboxes(ctx context.Context, stored *StoredMetadata
 			}
 		}
 
-		_, patchSpanEnd := m.startLifecycleStep(ctx, "guest.fork_mailbox.patch",
-			attribute.String("instance_id", stored.Id),
-			attribute.String("mailbox", mailbox.Name),
-			attribute.String("operation", "guest_fork_mailbox_patch"),
-		)
-		err := patchForkMailbox(snapshotDir, mailbox.Name, mailbox.Token, payload)
-		patchSpanEnd(err)
-		if err != nil {
-			if waiter != nil {
-				waiter.Close()
-			}
-			closePatchedForkMailboxes(patched)
-			return nil, err
-		}
+		patches = append(patches, forkMailboxPatch{
+			name:    mailbox.Name,
+			token:   mailbox.Token,
+			payload: payload,
+		})
 		patched = append(patched, patchedForkMailbox{
 			name:    mailbox.Name,
 			waiter:  waiter,
 			timeout: forkMailboxAckTimeout(mailbox.AckTimeout),
 		})
+	}
+	if err := m.patchForkMailboxPayloads(ctx, stored, snapshotDir, patches); err != nil {
+		closePatchedForkMailboxes(patched)
+		return nil, err
 	}
 	return patched, nil
 }
@@ -214,71 +214,69 @@ func forkMailboxPayloadWithAckPort(payload json.RawMessage, port uint32) (json.R
 	return out, nil
 }
 
-func patchForkMailbox(snapshotDir, name, token string, payload []byte) error {
-	if !mailboxpkg.ValidForkMailboxName(name) {
-		return fmt.Errorf("invalid mailbox name %q", name)
-	}
-	if !mailboxpkg.ValidForkMailboxToken(token) {
-		return fmt.Errorf("mailbox %q token is empty", name)
-	}
-	if len(payload) > mailboxpkg.ForkMailboxPayloadSize {
-		return fmt.Errorf("mailbox %q payload too large: %d bytes", name, len(payload))
-	}
-
-	marker, err := mailboxpkg.ForkMailboxMarker(name, token)
-	if err != nil {
-		return fmt.Errorf("build mailbox %q marker: %w", name, err)
-	}
-
+func (m *manager) patchForkMailboxPayloads(ctx context.Context, stored *StoredMetadata, snapshotDir string, patches []forkMailboxPatch) error {
 	file, err := os.OpenFile(filepath.Join(snapshotDir, firecrackerSnapshotMemoryFile), os.O_RDWR, 0)
 	if err != nil {
-		return fmt.Errorf("open snapshot memory for mailbox %q: %w", name, err)
+		return fmt.Errorf("open snapshot memory for fork mailboxes: %w", err)
 	}
 	defer file.Close()
 
 	info, err := file.Stat()
 	if err != nil {
-		return fmt.Errorf("stat snapshot memory for mailbox %q: %w", name, err)
+		return fmt.Errorf("stat snapshot memory for fork mailboxes: %w", err)
 	}
 	if info.Size() <= 0 {
-		return fmt.Errorf("mailbox %q memory file is empty", name)
+		return fmt.Errorf("fork mailbox memory file is empty")
 	}
 
-	idx, err := findForkMailbox(file, info.Size(), marker)
-	if err != nil {
-		return fmt.Errorf("find mailbox %q marker: %w", name, err)
+	type preparedForkMailboxPatch struct {
+		patch  forkMailboxPatch
+		offset int64
+		finish func(error)
 	}
-	if idx+int64(mailboxpkg.ForkMailboxPayloadOffset)+int64(len(payload)) > info.Size() {
-		return fmt.Errorf("mailbox %q marker is too close to end of memory file", name)
-	}
-
-	if err := mailboxpkg.WriteForkMailboxPayloadAt(file, idx, payload); err != nil {
-		return fmt.Errorf("write mailbox %q frame: %w", name, err)
-	}
-	return nil
-}
-
-func findForkMailbox(file *os.File, size int64, marker []byte) (int64, error) {
-	cacheKey := string(marker)
-	if cached, ok := forkMailboxOffsetByMark.Load(cacheKey); ok {
-		if offset, ok := cached.(int64); ok && offset >= 0 && offset+int64(len(marker)) <= size {
-			buf := make([]byte, len(marker))
-			if _, err := file.ReadAt(buf, offset); err == nil && bytes.Equal(buf, marker) {
-				return offset, nil
-			}
+	prepared := make([]preparedForkMailboxPatch, 0, len(patches))
+	finishPrepared := func(err error) {
+		for _, item := range prepared {
+			item.finish(err)
 		}
 	}
 
-	data, err := unix.Mmap(int(file.Fd()), 0, int(size), unix.PROT_READ, unix.MAP_SHARED)
-	if err != nil {
-		return 0, fmt.Errorf("mmap snapshot memory: %w", err)
+	for _, patch := range patches {
+		_, patchSpanEnd := m.startLifecycleStep(ctx, "guest.fork_mailbox.patch",
+			attribute.String("instance_id", stored.Id),
+			attribute.String("mailbox", patch.name),
+			attribute.String("operation", "guest_fork_mailbox_patch"),
+		)
+		marker, err := mailboxpkg.ForkMailboxMarker(patch.name, patch.token)
+		if err == nil {
+			var offset int64
+			offset, err = mailboxpkg.FindMarker(file, info.Size(), marker, &forkMailboxOffsetByMark)
+			if err == nil {
+				err = mailboxpkg.EnsurePayloadFits(mailboxpkg.ForkLayout, info.Size(), offset, len(patch.payload))
+			}
+			if err == nil {
+				prepared = append(prepared, preparedForkMailboxPatch{
+					patch:  patch,
+					offset: offset,
+					finish: patchSpanEnd,
+				})
+				continue
+			}
+		}
+		patchSpanEnd(err)
+		finishPrepared(err)
+		return fmt.Errorf("preflight mailbox %q: %w", patch.name, err)
 	}
-	defer unix.Munmap(data)
 
-	idx := bytes.Index(data, marker)
-	if idx < 0 {
-		return 0, fmt.Errorf("marker not found")
+	for i, item := range prepared {
+		err := mailboxpkg.WritePayloadAt(file, mailboxpkg.ForkLayout, item.offset, item.patch.payload)
+		item.finish(err)
+		if err != nil {
+			for _, pending := range prepared[i+1:] {
+				pending.finish(err)
+			}
+			return fmt.Errorf("write mailbox %q frame: %w", item.patch.name, err)
+		}
 	}
-	forkMailboxOffsetByMark.Store(cacheKey, int64(idx))
-	return int64(idx), nil
+	return nil
 }

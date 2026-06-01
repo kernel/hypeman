@@ -1,9 +1,7 @@
 package instances
 
 import (
-	"bytes"
 	"context"
-	"encoding/binary"
 	"fmt"
 	stdnet "net"
 	"os"
@@ -17,7 +15,6 @@ import (
 	"github.com/kernel/hypeman/lib/mailbox"
 	"github.com/nrednav/cuid2"
 	"go.opentelemetry.io/otel/attribute"
-	"golang.org/x/sys/unix"
 )
 
 const firecrackerSnapshotMemoryFile = "memory"
@@ -211,45 +208,19 @@ func patchGuestResumeNetworkMailbox(snapshotDir, token string, payload *mailbox.
 	if err != nil {
 		return err
 	}
-	if idx+int64(mailbox.MailboxPayloadOffset)+int64(len(payloadBytes)) > info.Size() {
-		return fmt.Errorf("resume network mailbox marker is too close to end of memory file")
+	if err := mailbox.EnsurePayloadFits(mailbox.ResumeNetworkLayout, info.Size(), idx, len(payloadBytes)); err != nil {
+		return fmt.Errorf("resume network mailbox payload does not fit: %w", err)
 	}
-
-	if _, err := file.WriteAt(payloadBytes, idx+int64(mailbox.MailboxPayloadOffset)); err != nil {
-		return fmt.Errorf("write resume network mailbox payload: %w", err)
-	}
-	var u32 [4]byte
-	binary.LittleEndian.PutUint32(u32[:], uint32(len(payloadBytes)))
-	if _, err := file.WriteAt(u32[:], idx+int64(mailbox.MailboxLengthOffset)); err != nil {
-		return fmt.Errorf("write resume network mailbox payload length: %w", err)
-	}
-	binary.LittleEndian.PutUint32(u32[:], 1)
-	if _, err := file.WriteAt(u32[:], idx+int64(mailbox.MailboxSeqOffset)); err != nil {
-		return fmt.Errorf("write resume network mailbox sequence: %w", err)
+	if err := mailbox.WritePayloadAt(file, mailbox.ResumeNetworkLayout, idx, payloadBytes); err != nil {
+		return fmt.Errorf("write resume network mailbox frame: %w", err)
 	}
 	return nil
 }
 
 func findGuestResumeNetworkMailbox(file *os.File, size int64, marker []byte, token string) (int64, error) {
-	if cached, ok := guestResumeNetworkMailboxOffsets.Load(token); ok {
-		if offset, ok := cached.(int64); ok && offset >= 0 && offset+int64(len(marker)) <= size {
-			buf := make([]byte, len(marker))
-			if _, err := file.ReadAt(buf, offset); err == nil && bytes.Equal(buf, marker) {
-				return offset, nil
-			}
-		}
-	}
-
-	data, err := unix.Mmap(int(file.Fd()), 0, int(size), unix.PROT_READ, unix.MAP_SHARED)
+	idx, err := mailbox.FindMarker(file, size, marker, &guestResumeNetworkMailboxOffsets)
 	if err != nil {
-		return 0, fmt.Errorf("mmap snapshot memory for resume network mailbox: %w", err)
+		return 0, fmt.Errorf("find resume network mailbox marker for token %q: %w", token, err)
 	}
-	defer unix.Munmap(data)
-
-	idx := bytes.Index(data, marker)
-	if idx < 0 {
-		return 0, fmt.Errorf("resume network mailbox marker not found")
-	}
-	guestResumeNetworkMailboxOffsets.Store(token, int64(idx))
-	return int64(idx), nil
+	return idx, nil
 }

@@ -1,11 +1,16 @@
 package mailbox
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"regexp"
+	"sync"
+
+	"golang.org/x/sys/unix"
 )
 
 const MailboxEnv = "HYPEMAN_RESUME_NETWORK_MAILBOX"
@@ -27,6 +32,31 @@ const ForkMailboxPayloadSize = ForkMailboxSize - ForkMailboxPayloadOffset
 const ForkMailboxTokenMaxLen = 128
 
 var ForkMailboxNamePattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,64}$`)
+
+type Layout struct {
+	Size          int
+	SeqOffset     int
+	LengthOffset  int
+	PayloadOffset int
+}
+
+var ResumeNetworkLayout = Layout{
+	Size:          MailboxSize,
+	SeqOffset:     MailboxSeqOffset,
+	LengthOffset:  MailboxLengthOffset,
+	PayloadOffset: MailboxPayloadOffset,
+}
+
+var ForkLayout = Layout{
+	Size:          ForkMailboxSize,
+	SeqOffset:     ForkMailboxSeqOffset,
+	LengthOffset:  ForkMailboxLengthOffset,
+	PayloadOffset: ForkMailboxPayloadOffset,
+}
+
+func (l Layout) PayloadSize() int {
+	return l.Size - l.PayloadOffset
+}
 
 type Payload struct {
 	InterfaceName string `json:"interface_name"`
@@ -78,20 +108,63 @@ func ForkMailboxMarker(name, token string) ([]byte, error) {
 }
 
 func WriteForkMailboxPayloadAt(w io.WriterAt, offset int64, payload []byte) error {
-	if len(payload) > ForkMailboxPayloadSize {
-		return fmt.Errorf("fork mailbox payload too large: %d bytes", len(payload))
+	return WritePayloadAt(w, ForkLayout, offset, payload)
+}
+
+func FindMarker(file *os.File, size int64, marker []byte, cache *sync.Map) (int64, error) {
+	cacheKey := string(marker)
+	if cache != nil {
+		if cached, ok := cache.Load(cacheKey); ok {
+			if offset, ok := cached.(int64); ok && offset >= 0 && offset+int64(len(marker)) <= size {
+				buf := make([]byte, len(marker))
+				if _, err := file.ReadAt(buf, offset); err == nil && bytes.Equal(buf, marker) {
+					return offset, nil
+				}
+			}
+		}
 	}
-	if _, err := w.WriteAt(payload, offset+int64(ForkMailboxPayloadOffset)); err != nil {
-		return fmt.Errorf("write fork mailbox payload: %w", err)
+
+	data, err := unix.Mmap(int(file.Fd()), 0, int(size), unix.PROT_READ, unix.MAP_SHARED)
+	if err != nil {
+		return 0, fmt.Errorf("mmap snapshot memory: %w", err)
+	}
+	defer unix.Munmap(data)
+
+	idx := bytes.Index(data, marker)
+	if idx < 0 {
+		return 0, fmt.Errorf("marker not found")
+	}
+	if cache != nil {
+		cache.Store(cacheKey, int64(idx))
+	}
+	return int64(idx), nil
+}
+
+func EnsurePayloadFits(layout Layout, memorySize int64, offset int64, payloadLen int) error {
+	if payloadLen > layout.PayloadSize() {
+		return fmt.Errorf("mailbox payload too large: %d bytes", payloadLen)
+	}
+	if offset+int64(layout.PayloadOffset)+int64(payloadLen) > memorySize {
+		return fmt.Errorf("mailbox marker is too close to end of memory file")
+	}
+	return nil
+}
+
+func WritePayloadAt(w io.WriterAt, layout Layout, offset int64, payload []byte) error {
+	if len(payload) > layout.PayloadSize() {
+		return fmt.Errorf("mailbox payload too large: %d bytes", len(payload))
+	}
+	if _, err := w.WriteAt(payload, offset+int64(layout.PayloadOffset)); err != nil {
+		return fmt.Errorf("write mailbox payload: %w", err)
 	}
 	var u32 [4]byte
 	binary.LittleEndian.PutUint32(u32[:], uint32(len(payload)))
-	if _, err := w.WriteAt(u32[:], offset+int64(ForkMailboxLengthOffset)); err != nil {
-		return fmt.Errorf("write fork mailbox payload length: %w", err)
+	if _, err := w.WriteAt(u32[:], offset+int64(layout.LengthOffset)); err != nil {
+		return fmt.Errorf("write mailbox payload length: %w", err)
 	}
 	binary.LittleEndian.PutUint32(u32[:], 1)
-	if _, err := w.WriteAt(u32[:], offset+int64(ForkMailboxSeqOffset)); err != nil {
-		return fmt.Errorf("write fork mailbox sequence: %w", err)
+	if _, err := w.WriteAt(u32[:], offset+int64(layout.SeqOffset)); err != nil {
+		return fmt.Errorf("write mailbox sequence: %w", err)
 	}
 	return nil
 }
