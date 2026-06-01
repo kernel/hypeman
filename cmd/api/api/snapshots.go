@@ -196,6 +196,8 @@ func (s *ApiService) ForkSnapshot(ctx context.Context, request oapi.ForkSnapshot
 			return oapi.ForkSnapshot400JSONResponse{Code: "invalid_request", Message: err.Error()}, nil
 		case errors.Is(err, instances.ErrInvalidState), errors.Is(err, instances.ErrAlreadyExists), errors.Is(err, network.ErrNameExists):
 			return oapi.ForkSnapshot409JSONResponse{Code: "conflict", Message: err.Error()}, nil
+		case errors.Is(err, instances.ErrInsufficientResources):
+			return oapi.ForkSnapshot409JSONResponse{Code: "insufficient_resources", Message: err.Error()}, nil
 		case errors.Is(err, instances.ErrNotSupported):
 			return oapi.ForkSnapshot501JSONResponse{Code: "not_supported", Message: err.Error()}, nil
 		default:

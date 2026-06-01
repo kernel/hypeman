@@ -253,17 +253,25 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 	})
 	defer cu.Clean()
 
-	if source.State == StateStandby {
-		if err := m.ensureSnapshotMemoryReady(ctx, m.paths.InstanceSnapshotLatest(id), m.snapshotJobKeyForInstance(id), stored.HypervisorType); err != nil {
-			return nil, fmt.Errorf("prepare standby snapshot for fork: %w", err)
-		}
-	}
+	if err := func() error {
+		unlockAliasReaders := hypervisor.LockSnapshotSourceAliasReaders()
+		defer unlockAliasReaders()
 
-	if err := forkvm.CopyGuestDirectory(srcDir, dstDir); err != nil {
-		if errors.Is(err, forkvm.ErrSparseCopyUnsupported) {
-			return nil, fmt.Errorf("fork requires sparse-capable filesystem (SEEK_DATA/SEEK_HOLE unsupported): %w", err)
+		if source.State == StateStandby {
+			if err := m.ensureSnapshotMemoryReady(ctx, m.paths.InstanceSnapshotLatest(id), m.snapshotJobKeyForInstance(id), stored.HypervisorType); err != nil {
+				return fmt.Errorf("prepare standby snapshot for fork: %w", err)
+			}
 		}
-		return nil, fmt.Errorf("clone guest directory: %w", err)
+
+		if err := forkvm.CopyGuestDirectory(srcDir, dstDir); err != nil {
+			if errors.Is(err, forkvm.ErrSparseCopyUnsupported) {
+				return fmt.Errorf("fork requires sparse-capable filesystem (SEEK_DATA/SEEK_HOLE unsupported): %w", err)
+			}
+			return fmt.Errorf("clone guest directory: %w", err)
+		}
+		return nil
+	}(); err != nil {
+		return nil, err
 	}
 
 	starter, err := m.getVMStarter(stored.HypervisorType)
@@ -324,15 +332,21 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 		if forkMeta.NetworkEnabled {
 			netCfg = &hypervisor.ForkNetworkConfig{TAPDevice: network.GenerateTAPName(forkID)}
 		}
-		if _, err := starter.PrepareFork(ctx, hypervisor.ForkPrepareRequest{
-			SnapshotConfigPath: snapshotConfigPath,
-			SourceDataDir:      stored.DataDir,
-			TargetDataDir:      forkMeta.DataDir,
-			VsockCID:           forkMeta.VsockCID,
-			VsockSocket:        forkMeta.VsockSocket,
-			SerialLogPath:      m.paths.InstanceAppLog(forkID),
-			Network:            netCfg,
-		}); err != nil {
+		err := func() error {
+			unlockAliasReaders := hypervisor.LockSnapshotSourceAliasReaders()
+			defer unlockAliasReaders()
+			_, err := starter.PrepareFork(ctx, hypervisor.ForkPrepareRequest{
+				SnapshotConfigPath: snapshotConfigPath,
+				SourceDataDir:      stored.DataDir,
+				TargetDataDir:      forkMeta.DataDir,
+				VsockCID:           forkMeta.VsockCID,
+				VsockSocket:        forkMeta.VsockSocket,
+				SerialLogPath:      m.paths.InstanceAppLog(forkID),
+				Network:            netCfg,
+			})
+			return err
+		}()
+		if err != nil {
 			if errors.Is(err, hypervisor.ErrNotSupported) {
 				return nil, fmt.Errorf("%w: fork is not supported for hypervisor %s", ErrNotSupported, stored.HypervisorType)
 			}

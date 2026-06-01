@@ -620,6 +620,11 @@ func (s *ApiService) RestoreInstance(ctx context.Context, request oapi.RestoreIn
 				Code:    "invalid_state",
 				Message: err.Error(),
 			}, nil
+		case errors.Is(err, instances.ErrInsufficientResources):
+			return oapi.RestoreInstance409JSONResponse{
+				Code:    "insufficient_resources",
+				Message: err.Error(),
+			}, nil
 		default:
 			log.ErrorContext(ctx, "failed to restore instance", "error", err)
 			return oapi.RestoreInstance500JSONResponse{
@@ -682,6 +687,11 @@ func (s *ApiService) ForkInstance(ctx context.Context, request oapi.ForkInstance
 		case errors.Is(err, instances.ErrAlreadyExists), errors.Is(err, network.ErrNameExists):
 			return oapi.ForkInstance409JSONResponse{
 				Code:    "name_conflict",
+				Message: err.Error(),
+			}, nil
+		case errors.Is(err, instances.ErrInsufficientResources):
+			return oapi.ForkInstance409JSONResponse{
+				Code:    "insufficient_resources",
 				Message: err.Error(),
 			}, nil
 		case errors.Is(err, instances.ErrNotSupported):
