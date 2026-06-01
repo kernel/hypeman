@@ -9,6 +9,7 @@ import (
 
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 // instanceMetadata is the minimal metadata we need to derive allocations
@@ -123,8 +124,22 @@ func (m *manager) ListAllocations(ctx context.Context) ([]Allocation, error) {
 // excludeInstanceID allows excluding a specific instance from the check (used when
 // starting an existing instance to avoid it conflicting with itself).
 func (m *manager) NameExists(ctx context.Context, name string, excludeInstanceID string) (bool, error) {
-	allocations, err := m.ListAllocations(ctx)
+	checkCtx, checkSpanEnd := startNetworkStep(ctx, "network.name_exists",
+		attribute.String("operation", "name_exists"),
+	)
+	var checkErr error
+	defer func() {
+		checkSpanEnd(checkErr)
+	}()
+
+	listCtx, listSpanEnd := startNetworkStep(checkCtx, "network.list_allocations",
+		attribute.String("operation", "list_allocations"),
+		attribute.String("caller", "name_exists"),
+	)
+	allocations, err := m.ListAllocations(listCtx)
+	listSpanEnd(err)
 	if err != nil {
+		checkErr = err
 		return false, err
 	}
 
