@@ -14,6 +14,23 @@ to work across implementations.
 For networked forks, the fork gets a fresh host/guest identity (IP, MAC, TAP)
 instead of reusing the source identity.
 
+## Resume network handoff
+
+Networked standby/running forks need a new host-side allocation, but the guest
+memory snapshot still contains the source VM's old interface state. On restore,
+Hypeman prepares the fork's TAP/IP/MAC before the VM resumes, then hands the new
+guest network config to the guest through a small mailbox embedded in snapshot
+memory. After resume, VMGenID tells the guest-agent that this is a restored VM;
+the guest-agent reads the mailbox and applies the new MAC, address, route, and
+neighbor state with netlink.
+
+For API calls that return a running fork, Hypeman waits for a guest UDP
+"applied" ack before returning, so the fast path still avoids making
+host-initiated guest RPC/vsock contact as the first post-resume dependency. If
+the mailbox path is unavailable, cannot start its ack listener, or does not ack
+in time, restore falls back to the older host-initiated guest network
+reconfigure path.
+
 ## Fork data copy behavior
 
 - Guest directory copy is **sparse-only** for regular files.

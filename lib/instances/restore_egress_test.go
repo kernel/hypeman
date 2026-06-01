@@ -1,8 +1,13 @@
 package instances
 
 import (
+	"encoding/binary"
+	"encoding/json"
+	"os"
 	"testing"
 
+	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/mailbox"
 	"github.com/kernel/hypeman/lib/network"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -30,7 +35,25 @@ func TestNetworkConfigFromAllocation_PreservesDNS(t *testing.T) {
 	assert.Equal(t, alloc.TAPDevice, cfg.TAPDevice)
 }
 
-func TestGuestNetworkReconfigureCommand_AppliesAllocatedMAC(t *testing.T) {
+func TestGuestNetworkReconfigureConfig_AppliesAllocatedMAC(t *testing.T) {
+	t.Parallel()
+
+	alloc := &network.Allocation{
+		IP:      "10.102.146.62",
+		MAC:     "02:00:00:85:17:c8",
+		Gateway: "10.102.0.1",
+		Netmask: "255.255.0.0",
+	}
+
+	cfg, err := guestNetworkReconfigureConfig(alloc)
+	require.NoError(t, err)
+	assert.Equal(t, "10.102.146.62", cfg.ip)
+	assert.Equal(t, "02:00:00:85:17:c8", cfg.mac)
+	assert.Equal(t, "10.102.0.1", cfg.gateway)
+	assert.Equal(t, 16, cfg.prefix)
+}
+
+func TestGuestNetworkReconfigureCommand_FallbackPreservesShellBehavior(t *testing.T) {
 	t.Parallel()
 
 	alloc := &network.Allocation{
@@ -42,24 +65,102 @@ func TestGuestNetworkReconfigureCommand_AppliesAllocatedMAC(t *testing.T) {
 
 	cmd, err := guestNetworkReconfigureCommand(alloc)
 	require.NoError(t, err)
-	assert.Contains(t, cmd, "ip link set dev eth0 down")
 	assert.Contains(t, cmd, "ip link set dev eth0 address 02:00:00:85:17:c8")
 	assert.Contains(t, cmd, "ip addr add 10.102.146.62/16 dev eth0")
-	assert.Contains(t, cmd, "ip route replace default via 10.102.0.1 dev eth0")
 	assert.Contains(t, cmd, "(ip neigh flush dev eth0 || true)")
-	assert.NotContains(t, cmd, "cat /sys/class/net/eth0/address")
 }
 
-func TestGuestNetworkReconfigureCommand_RequiresAllocatedMAC(t *testing.T) {
+func TestGuestNetworkReconfigureConfig_RequiresAllocatedMAC(t *testing.T) {
 	t.Parallel()
 
-	_, err := guestNetworkReconfigureCommand(&network.Allocation{
+	_, err := guestNetworkReconfigureConfig(&network.Allocation{
 		IP:      "10.102.146.62",
 		Gateway: "10.102.0.1",
 		Netmask: "255.255.0.0",
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "missing network allocation MAC")
+}
+
+func TestPatchGuestResumeNetworkMailbox(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	token := "test-token"
+	mem := make([]byte, 4096)
+	copy(mem[512:], mailbox.MailboxMagic)
+	copy(mem[512+len(mailbox.MailboxMagic):], token)
+	require.NoError(t, os.WriteFile(dir+"/"+firecrackerSnapshotMemoryFile, mem, 0644))
+
+	payload := &mailbox.Payload{
+		InterfaceName: "eth0",
+		MAC:           "02:00:00:85:17:c8",
+		IPv4:          "10.102.146.62",
+		Prefix:        16,
+		Gateway:       "10.102.0.1",
+		AckPort:       43210,
+	}
+	require.NoError(t, patchGuestResumeNetworkMailbox(dir, token, payload))
+
+	patched, err := os.ReadFile(dir + "/" + firecrackerSnapshotMemoryFile)
+	require.NoError(t, err)
+
+	offset := 512
+	require.Equal(t, uint32(1), binary.LittleEndian.Uint32(patched[offset+mailbox.MailboxSeqOffset:]))
+	payloadLen := binary.LittleEndian.Uint32(patched[offset+mailbox.MailboxLengthOffset:])
+	require.NotZero(t, payloadLen)
+
+	var decoded mailbox.Payload
+	err = json.Unmarshal(patched[offset+mailbox.MailboxPayloadOffset:offset+mailbox.MailboxPayloadOffset+int(payloadLen)], &decoded)
+	require.NoError(t, err)
+	assert.Equal(t, *payload, decoded)
+}
+
+func TestEnsureGuestInitiatedResumeNetworkMailbox(t *testing.T) {
+	t.Parallel()
+
+	stored := &StoredMetadata{
+		HypervisorType: hypervisor.TypeFirecracker,
+		NetworkEnabled: true,
+	}
+	ensureGuestInitiatedResumeNetworkMailbox(stored)
+
+	require.Equal(t, "1", stored.Env[mailbox.MailboxEnv])
+	token := stored.Env[mailbox.MailboxTokenEnv]
+	require.NotEmpty(t, token)
+	require.LessOrEqual(t, len(token), mailbox.MailboxTokenMaxLen)
+	assert.True(t, guestInitiatedResumeNetworkMailbox(stored))
+}
+
+func TestEnsureGuestInitiatedResumeNetworkMailboxPreservesToken(t *testing.T) {
+	t.Parallel()
+
+	stored := &StoredMetadata{
+		HypervisorType: hypervisor.TypeFirecracker,
+		NetworkEnabled: true,
+		Env: map[string]string{
+			mailbox.MailboxTokenEnv: "existing-token",
+		},
+	}
+	ensureGuestInitiatedResumeNetworkMailbox(stored)
+
+	assert.Equal(t, "1", stored.Env[mailbox.MailboxEnv])
+	assert.Equal(t, "existing-token", stored.Env[mailbox.MailboxTokenEnv])
+}
+
+func TestEnsureGuestInitiatedResumeNetworkMailboxRequiresEligibleGuest(t *testing.T) {
+	t.Parallel()
+
+	cases := []StoredMetadata{
+		{HypervisorType: hypervisor.TypeCloudHypervisor, NetworkEnabled: true},
+		{HypervisorType: hypervisor.TypeFirecracker, NetworkEnabled: false},
+		{HypervisorType: hypervisor.TypeFirecracker, NetworkEnabled: true, SkipGuestAgent: true},
+	}
+	for _, tc := range cases {
+		stored := tc
+		ensureGuestInitiatedResumeNetworkMailbox(&stored)
+		assert.False(t, guestInitiatedResumeNetworkMailbox(&stored))
+	}
 }
 
 func TestRequiresRestoreConfigDiskRefresh(t *testing.T) {
