@@ -1,9 +1,12 @@
 package network
 
 import (
+	"context"
 	"net"
 	"testing"
 
+	"github.com/kernel/hypeman/cmd/api/config"
+	"github.com/kernel/hypeman/lib/paths"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -64,6 +67,51 @@ func TestAllocateUniqueMACFromSetFallsBackToSequentialScan(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "02:00:00:00:00:02", mac)
 	assert.Equal(t, macAllocationRandomAttempts, calls)
+}
+
+func TestPendingAllocationVisibleToNameExistsAndGetAllocation(t *testing.T) {
+	m := &manager{
+		paths:              paths.New(t.TempDir()),
+		config:             &config.Config{},
+		pendingAllocations: make(map[string]pendingAllocation),
+	}
+
+	m.mu.Lock()
+	m.rememberPendingAllocationLocked(Allocation{
+		InstanceID:   "inst-pending",
+		InstanceName: "pending-name",
+		IP:           "10.100.0.42",
+		MAC:          "02:00:00:00:00:42",
+		TAPDevice:    "hype-pending",
+		State:        "pending",
+	})
+	m.mu.Unlock()
+
+	exists, err := m.NameExists(context.Background(), "pending-name", "")
+	require.NoError(t, err)
+	assert.True(t, exists)
+
+	alloc, err := m.GetAllocation(context.Background(), "inst-pending")
+	require.NoError(t, err)
+	require.NotNil(t, alloc)
+	assert.Equal(t, "10.100.0.42", alloc.IP)
+	assert.Equal(t, "pending", alloc.State)
+}
+
+func TestDefaultNetworkCacheReturnsCopy(t *testing.T) {
+	m := &manager{}
+	m.setDefaultNetwork(&Network{
+		Name:    "default",
+		Bridge:  "hm0",
+		Subnet:  "10.244.0.0/16",
+		Gateway: "10.244.0.1",
+	})
+
+	cached := m.cachedDefaultNetwork()
+	require.NotNil(t, cached)
+	cached.Bridge = "mutated"
+
+	assert.Equal(t, "hm0", m.cachedDefaultNetwork().Bridge)
 }
 
 func TestGenerateTAPName(t *testing.T) {

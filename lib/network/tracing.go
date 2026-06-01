@@ -11,6 +11,16 @@ import (
 )
 
 func startNetworkStep(ctx context.Context, name string, attrs ...attribute.KeyValue) (context.Context, func(error)) {
+	return startNetworkStepWithOptions(ctx, name, nil, attrs...)
+}
+
+func startDetachedNetworkStep(ctx context.Context, name string, attrs ...attribute.KeyValue) (context.Context, func(error)) {
+	return startNetworkStepWithOptions(context.WithoutCancel(ctx), name, []trace.SpanStartOption{
+		trace.WithNewRoot(),
+	}, attrs...)
+}
+
+func startNetworkStepWithOptions(ctx context.Context, name string, options []trace.SpanStartOption, attrs ...attribute.KeyValue) (context.Context, func(error)) {
 	inherited := hypervisor.TraceAttributesFromContext(ctx)
 	if len(inherited) > 0 {
 		merged := make([]attribute.KeyValue, 0, len(inherited)+len(attrs))
@@ -19,7 +29,7 @@ func startNetworkStep(ctx context.Context, name string, attrs ...attribute.KeyVa
 		attrs = merged
 	}
 
-	opts := []trace.SpanStartOption(nil)
+	opts := append([]trace.SpanStartOption(nil), options...)
 	if len(attrs) > 0 {
 		opts = append(opts, trace.WithAttributes(attrs...))
 	}

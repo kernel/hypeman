@@ -3,9 +3,11 @@ package network
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
+	"time"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
@@ -94,7 +96,22 @@ func (m *manager) deriveAllocation(ctx context.Context, instanceID string) (*All
 
 // GetAllocation gets the allocation for a specific instance
 func (m *manager) GetAllocation(ctx context.Context, instanceID string) (*Allocation, error) {
-	return m.deriveAllocation(ctx, instanceID)
+	alloc, err := m.deriveAllocation(ctx, instanceID)
+	if err == nil && alloc != nil {
+		return alloc, nil
+	}
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.prunePendingAllocationsLocked(time.Now())
+	if pending, ok := m.pendingAllocations[instanceID]; ok {
+		alloc := pending.allocation
+		return &alloc, nil
+	}
+	return alloc, err
 }
 
 // ListAllocations scans all guest directories and derives allocations
@@ -124,6 +141,9 @@ func (m *manager) ListAllocations(ctx context.Context) ([]Allocation, error) {
 // excludeInstanceID allows excluding a specific instance from the check (used when
 // starting an existing instance to avoid it conflicting with itself).
 func (m *manager) NameExists(ctx context.Context, name string, excludeInstanceID string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	checkCtx, checkSpanEnd := startNetworkStep(ctx, "network.name_exists",
 		attribute.String("operation", "name_exists"),
 	)
@@ -136,23 +156,70 @@ func (m *manager) NameExists(ctx context.Context, name string, excludeInstanceID
 		attribute.String("operation", "list_allocations"),
 		attribute.String("caller", "name_exists"),
 	)
-	allocations, err := m.ListAllocations(listCtx)
+	allocations, err := m.listAllocationsWithPendingLocked(listCtx)
 	listSpanEnd(err)
 	if err != nil {
 		checkErr = err
 		return false, err
 	}
 
+	return nameExistsInAllocations(allocations, name, excludeInstanceID), nil
+}
+
+func (m *manager) listAllocationsWithPendingLocked(ctx context.Context) ([]Allocation, error) {
+	allocations, err := m.ListAllocations(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	m.prunePendingAllocationsLocked(time.Now())
+	seen := make(map[string]struct{}, len(allocations))
 	for _, alloc := range allocations {
-		// Skip the excluded instance (e.g., when restarting an instance)
+		seen[alloc.InstanceID] = struct{}{}
+	}
+	for id, pending := range m.pendingAllocations {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		allocations = append(allocations, pending.allocation)
+	}
+	return allocations, nil
+}
+
+func (m *manager) rememberPendingAllocationLocked(alloc Allocation) {
+	if m.pendingAllocations == nil {
+		m.pendingAllocations = make(map[string]pendingAllocation)
+	}
+	m.pendingAllocations[alloc.InstanceID] = pendingAllocation{
+		allocation: alloc,
+		expiresAt:  time.Now().Add(pendingAllocationTTL),
+	}
+}
+
+func (m *manager) forgetPendingAllocation(instanceID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.pendingAllocations, instanceID)
+}
+
+func (m *manager) prunePendingAllocationsLocked(now time.Time) {
+	for id, pending := range m.pendingAllocations {
+		if now.After(pending.expiresAt) {
+			delete(m.pendingAllocations, id)
+		}
+	}
+}
+
+func nameExistsInAllocations(allocations []Allocation, name, excludeInstanceID string) bool {
+	for _, alloc := range allocations {
 		if excludeInstanceID != "" && alloc.InstanceID == excludeInstanceID {
 			continue
 		}
 		if alloc.InstanceName == name {
-			return true, nil
+			return true
 		}
 	}
-	return false, nil
+	return false
 }
 
 // loadInstanceMetadata loads minimal instance metadata
