@@ -17,6 +17,13 @@ running VMs; it only changes future Firecracker snapshot restores. If a restore
 uses UFFD, the VM is pinned to the pager session created for that restore until
 the instance stops, is deleted, or otherwise closes the session.
 
+The pager version is declared in `lib/uffdpager/VERSION`. Installed Linux hosts
+run versioned systemd units named `hypeman-uffd@<version>.service`. Hypeman
+connects to the pager version from `VERSION`, so regular Hypeman releases do not
+start a new pager unless the UFFD pager version changes. Older pager versions
+are drained: they reject new sessions but continue serving existing sessions
+until those sessions close.
+
 Some restore-time memory writes, such as the resume-network mailbox payload,
 must not mutate the backing snapshot memory file. Those writes are represented
 as overlay pages on the pager session. When the guest faults that page, the

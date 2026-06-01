@@ -5,8 +5,6 @@ package uffdpager
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -26,7 +24,10 @@ const (
 	controlSocketFile = "control.sock"
 	pagerPIDFile      = "pager.pid"
 	pagerLogFile      = "pager.log"
+	pagerEnvFile      = "pager.env"
 	sessionsDir       = "sessions"
+
+	systemdUnitTemplate = "hypeman-uffd@.service"
 )
 
 type Supervisor struct {
@@ -45,9 +46,9 @@ func NewSupervisor(ctx context.Context, dataDir string, cacheMaxBytes int64) (*S
 	if err != nil {
 		return nil, fmt.Errorf("resolve executable path: %w", err)
 	}
-	versionKey, err := executableVersionKey(exe)
-	if err != nil {
-		return nil, err
+	versionKey := Version()
+	if versionKey == "" {
+		return nil, fmt.Errorf("uffd pager version is empty")
 	}
 	s := &Supervisor{
 		dataDir:       dataDir,
@@ -126,7 +127,19 @@ func (s *Supervisor) ensureRunning(ctx context.Context) error {
 	if s.isHealthy(ctx, s.versionKey) {
 		return nil
 	}
+	if s.systemdTemplateInstalled(ctx) {
+		if err := s.ensureRunningSystemd(ctx); err != nil {
+			return err
+		}
+		return s.waitHealthy(ctx)
+	}
+	if err := s.ensureRunningEmbedded(ctx); err != nil {
+		return err
+	}
+	return s.waitHealthy(ctx)
+}
 
+func (s *Supervisor) ensureRunningEmbedded(ctx context.Context) error {
 	dir := pagerVersionDir(s.dataDir, s.versionKey)
 	if err := os.MkdirAll(filepath.Join(dir, sessionsDir), 0755); err != nil {
 		return fmt.Errorf("create uffd pager directory: %w", err)
@@ -155,6 +168,27 @@ func (s *Supervisor) ensureRunning(ctx context.Context) error {
 	_ = os.WriteFile(filepath.Join(dir, pagerPIDFile), []byte(strconv.Itoa(cmd.Process.Pid)+"\n"), 0644)
 	_ = cmd.Process.Release()
 
+	return nil
+}
+
+func (s *Supervisor) ensureRunningSystemd(ctx context.Context) error {
+	dir := pagerVersionDir(s.dataDir, s.versionKey)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("create uffd pager directory: %w", err)
+	}
+	env := fmt.Sprintf("HYPEMAN_UFFD_CACHE_MAX_BYTES=%d\n", s.cacheMaxBytes)
+	if err := os.WriteFile(filepath.Join(dir, pagerEnvFile), []byte(env), 0644); err != nil {
+		return fmt.Errorf("write uffd pager systemd environment: %w", err)
+	}
+	unit := systemdUnitName(s.versionKey)
+	cmd := exec.CommandContext(ctx, "systemctl", "start", unit)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("start uffd pager systemd unit %s: %w: %s", unit, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func (s *Supervisor) waitHealthy(ctx context.Context) error {
 	deadline := time.Now().Add(5 * time.Second)
 	var lastErr error
 	for time.Now().Before(deadline) {
@@ -171,6 +205,14 @@ func (s *Supervisor) ensureRunning(ctx context.Context) error {
 		return fmt.Errorf("wait for uffd pager health: %w", lastErr)
 	}
 	return fmt.Errorf("uffd pager did not become healthy at %s", s.controlSocket)
+}
+
+func (s *Supervisor) systemdTemplateInstalled(ctx context.Context) bool {
+	if _, err := exec.LookPath("systemctl"); err != nil {
+		return false
+	}
+	cmd := exec.CommandContext(ctx, "systemctl", "cat", systemdUnitTemplate)
+	return cmd.Run() == nil
 }
 
 func (s *Supervisor) isHealthy(ctx context.Context, versionKey string) bool {
@@ -247,15 +289,6 @@ func (s *Supervisor) clientForVersion(versionKey string) *http.Client {
 	return client
 }
 
-func executableVersionKey(path string) (string, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", fmt.Errorf("hash executable %q: %w", path, err)
-	}
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:])[:12], nil
-}
-
 func pagerVersionDir(dataDir, versionKey string) string {
 	return filepath.Join(dataDir, "uffd", versionKey)
 }
@@ -267,4 +300,8 @@ func pagerControlSocket(dataDir, versionKey string) string {
 func urlPathEscape(value string) string {
 	replacer := strings.NewReplacer("%", "%25", "/", "%2F", "?", "%3F", "#", "%23")
 	return replacer.Replace(value)
+}
+
+func systemdUnitName(versionKey string) string {
+	return "hypeman-uffd@" + versionKey + ".service"
 }

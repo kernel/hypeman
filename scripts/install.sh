@@ -588,6 +588,29 @@ ReadWritePaths=${DATA_DIR}
 WantedBy=multi-user.target
 EOF
 
+    $SUDO tee "${SYSTEMD_DIR}/${SERVICE_NAME}-uffd@.service" > /dev/null << EOF
+[Unit]
+Description=Hypeman UFFD Pager (%i)
+Documentation=https://github.com/kernel/hypeman
+After=network.target
+
+[Service]
+Type=simple
+Environment="HOME=${DATA_DIR}"
+Environment="HYPEMAN_UFFD_CACHE_MAX_BYTES=4294967296"
+EnvironmentFile=-${DATA_DIR}/uffd/%i/pager.env
+ExecStart=${INSTALL_DIR}/${BINARY_NAME} --internal-uffd-pager --data-dir ${DATA_DIR} --version-key %i --cache-max-bytes \${HYPEMAN_UFFD_CACHE_MAX_BYTES}
+Restart=on-failure
+RestartSec=5
+KillMode=process
+
+# Security hardening
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=${DATA_DIR}
+EOF
+
     info "Reloading systemd..."
     $SUDO systemctl daemon-reload
 
