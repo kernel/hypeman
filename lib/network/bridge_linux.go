@@ -16,6 +16,7 @@ import (
 
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/vishvananda/netlink"
+	"go.opentelemetry.io/otel/attribute"
 	"golang.org/x/sys/unix"
 )
 
@@ -494,16 +495,25 @@ func (m *manager) lastHypemanForwardRulePosition() int {
 	return lastPos
 }
 
-// createTAPDevice creates TAP device and attaches to bridge.
-// downloadBps: rate limit for download (external→VM), applied as TBF on TAP egress
-// uploadBps/uploadCeilBps: rate limit for upload (VM→external), applied as HTB class on bridge
-// Returns the tc class ID actually assigned (empty if no upload rate limiting).
-func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName string, isolated bool, downloadBps, uploadBps, uploadCeilBps int64) (string, error) {
+// createTAPDevice creates TAP device and attaches it to the bridge.
+func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName string, isolated bool) error {
 	// 1. Check if TAP already exists
-	if _, err := netlink.LinkByName(tapName); err == nil {
+	_, linkLookupEnd := startNetworkStep(ctx, "network.create_tap.link_lookup_existing",
+		attribute.String("operation", "link_lookup_existing"),
+		attribute.String("tap", tapName),
+	)
+	_, err := netlink.LinkByName(tapName)
+	linkLookupEnd(nil)
+	if err == nil {
 		// TAP already exists, delete it first
-		if err := m.deleteTAPDevice(tapName, ""); err != nil {
-			return "", fmt.Errorf("delete existing TAP: %w", err)
+		_, deleteEnd := startNetworkStep(ctx, "network.create_tap.delete_existing",
+			attribute.String("operation", "delete_existing"),
+			attribute.String("tap", tapName),
+		)
+		err := m.deleteTAPDeviceSerialized(tapName, "")
+		deleteEnd(err)
+		if err != nil {
+			return fmt.Errorf("delete existing TAP: %w", err)
 		}
 	}
 
@@ -521,67 +531,69 @@ func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName strin
 		Group: uint32(gid),
 	}
 
-	if err := netlink.LinkAdd(tap); err != nil {
-		return "", fmt.Errorf("create TAP device: %w", err)
+	_, linkAddEnd := startNetworkStep(ctx, "network.create_tap.link_add",
+		attribute.String("operation", "link_add"),
+		attribute.String("tap", tapName),
+	)
+	err = netlink.LinkAdd(tap)
+	linkAddEnd(err)
+	if err != nil {
+		return fmt.Errorf("create TAP device: %w", err)
 	}
 
 	// 3. Set TAP up
-	tapLink, err := netlink.LinkByName(tapName)
-	if err != nil {
-		return "", fmt.Errorf("get TAP link: %w", err)
-	}
+	tapLink := tap
 
-	if err := netlink.LinkSetUp(tapLink); err != nil {
-		return "", fmt.Errorf("set TAP up: %w", err)
+	_, setUpEnd := startNetworkStep(ctx, "network.create_tap.link_set_up",
+		attribute.String("operation", "link_set_up"),
+		attribute.String("tap", tapName),
+	)
+	err = netlink.LinkSetUp(tapLink)
+	setUpEnd(err)
+	if err != nil {
+		return fmt.Errorf("set TAP up: %w", err)
 	}
 
 	// 4. Attach TAP to bridge
+	_, bridgeLookupEnd := startNetworkStep(ctx, "network.create_tap.link_lookup_bridge",
+		attribute.String("operation", "link_lookup_bridge"),
+		attribute.String("bridge", bridgeName),
+	)
 	bridge, err := netlink.LinkByName(bridgeName)
+	bridgeLookupEnd(err)
 	if err != nil {
-		return "", fmt.Errorf("get bridge: %w", err)
+		return fmt.Errorf("get bridge: %w", err)
 	}
 
-	if err := netlink.LinkSetMaster(tapLink, bridge); err != nil {
-		return "", fmt.Errorf("attach TAP to bridge: %w", err)
+	_, setMasterEnd := startNetworkStep(ctx, "network.create_tap.link_set_master",
+		attribute.String("operation", "link_set_master"),
+		attribute.String("tap", tapName),
+		attribute.String("bridge", bridgeName),
+	)
+	err = netlink.LinkSetMaster(tapLink, bridge)
+	setMasterEnd(err)
+	if err != nil {
+		return fmt.Errorf("attach TAP to bridge: %w", err)
 	}
 
 	// 5. Enable port isolation so isolated TAPs can't directly talk to each other (requires kernel support and capabilities)
 	if isolated {
-		// Use shell command for bridge_slave isolated flag
-		// netlink library doesn't expose this flag yet
-		cmd := exec.Command("ip", "link", "set", tapName, "type", "bridge_slave", "isolated", "on")
-		// Enable ambient capabilities so child process inherits CAP_NET_ADMIN
-		cmd.SysProcAttr = &syscall.SysProcAttr{
-			AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
-		}
-		output, err := cmd.CombinedOutput()
+		_, isolationEnd := startNetworkStep(ctx, "network.create_tap.set_isolation",
+			attribute.String("operation", "set_isolation"),
+			attribute.String("tap", tapName),
+		)
+		err = netlink.LinkSetIsolated(tapLink, true)
+		isolationEnd(err)
 		if err != nil {
-			return "", fmt.Errorf("set isolation mode: %w (output: %s)", err, string(output))
+			return fmt.Errorf("set isolation mode: %w", err)
 		}
 	}
 
-	// 6. Apply download rate limiting (TBF on TAP egress)
-	if downloadBps > 0 {
-		if err := m.applyDownloadRateLimit(tapName, downloadBps); err != nil {
-			return "", fmt.Errorf("apply download rate limit: %w", err)
-		}
-	}
-
-	// 7. Apply upload rate limiting (HTB class on bridge)
-	var classID string
-	if uploadBps > 0 {
-		var err error
-		classID, err = m.addVMClass(ctx, bridgeName, tapName, uploadBps, uploadCeilBps)
-		if err != nil {
-			return "", fmt.Errorf("apply upload rate limit: %w", err)
-		}
-	}
-
-	return classID, nil
+	return nil
 }
 
 // applyDownloadRateLimit applies download (external→VM) rate limiting using TBF on TAP egress.
-func (m *manager) applyDownloadRateLimit(tapName string, rateLimitBps int64) error {
+func (m *manager) applyDownloadRateLimit(ctx context.Context, tapName string, rateLimitBps int64) error {
 	rateStr := formatTcRate(rateLimitBps)
 
 	// Use Token Bucket Filter (tbf) for download shaping
@@ -601,7 +613,12 @@ func (m *manager) applyDownloadRateLimit(tapName string, rateLimitBps int64) err
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
 	}
+	_, tcEnd := startNetworkStep(ctx, "network.rate_limit.download.tc_qdisc_tbf",
+		attribute.String("operation", "tc_qdisc_tbf"),
+		attribute.String("tap", tapName),
+	)
 	output, err := cmd.CombinedOutput()
+	tcEnd(err)
 	if err != nil {
 		return fmt.Errorf("tc qdisc add tbf: %w (output: %s)", err, string(output))
 	}
@@ -696,7 +713,15 @@ func (m *manager) addVMClass(ctx context.Context, bridgeName, tapName string, ra
 		cmd.SysProcAttr = &syscall.SysProcAttr{
 			AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
 		}
+		_, classAddEnd := startNetworkStep(ctx, "network.rate_limit.upload.tc_class_add",
+			attribute.String("operation", "tc_class_add"),
+			attribute.String("tap", tapName),
+			attribute.String("bridge", bridgeName),
+			attribute.String("class_id", fullClassID),
+			attribute.Int("attempt", attempt+1),
+		)
 		output, err := cmd.CombinedOutput()
+		classAddEnd(err)
 		if err != nil {
 			// Check for "File exists" collision (exit status 2).
 			var exitErr *exec.ExitError
@@ -724,9 +749,21 @@ func (m *manager) addVMClass(ctx context.Context, bridgeName, tapName string, ra
 		qdiscCmd.SysProcAttr = &syscall.SysProcAttr{
 			AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
 		}
-		qdiscCmd.Run() // Best effort
+		_, fqCodelEnd := startNetworkStep(ctx, "network.rate_limit.upload.tc_qdisc_fq_codel",
+			attribute.String("operation", "tc_qdisc_fq_codel"),
+			attribute.String("tap", tapName),
+			attribute.String("bridge", bridgeName),
+			attribute.String("class_id", fullClassID),
+		)
+		fqCodelErr := qdiscCmd.Run() // Best effort
+		fqCodelEnd(fqCodelErr)
 
+		_, filterLinkEnd := startNetworkStep(ctx, "network.rate_limit.upload.link_lookup_filter",
+			attribute.String("operation", "link_lookup_filter"),
+			attribute.String("tap", tapName),
+		)
 		tapLink, linkErr := netlink.LinkByName(tapName)
+		filterLinkEnd(linkErr)
 		if linkErr != nil {
 			return "", fmt.Errorf("get TAP link for filter: %w", linkErr)
 		}
@@ -739,7 +776,15 @@ func (m *manager) addVMClass(ctx context.Context, bridgeName, tapName string, ra
 		filterCmd.SysProcAttr = &syscall.SysProcAttr{
 			AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
 		}
-		if output, filterErr := filterCmd.CombinedOutput(); filterErr != nil {
+		_, filterEnd := startNetworkStep(ctx, "network.rate_limit.upload.tc_filter_add",
+			attribute.String("operation", "tc_filter_add"),
+			attribute.String("tap", tapName),
+			attribute.String("bridge", bridgeName),
+			attribute.String("class_id", fullClassID),
+		)
+		output, filterErr := filterCmd.CombinedOutput()
+		filterEnd(filterErr)
+		if filterErr != nil {
 			return "", fmt.Errorf("tc filter add: %w (output: %s)", filterErr, string(output))
 		}
 
@@ -822,23 +867,6 @@ func deriveClassID(tapName string) string {
 	return fmt.Sprintf("%04x", deriveClassIDVal(tapName))
 }
 
-// formatTcRate formats bytes per second as a tc rate string.
-// It uses the largest unit that exactly represents the value to avoid
-// truncation from integer division (e.g., 2.5 Gbps becomes "2500mbit" not "2gbit").
-func formatTcRate(bytesPerSec int64) string {
-	bitsPerSec := bytesPerSec * 8
-	switch {
-	case bitsPerSec >= 1000000000 && bitsPerSec%1000000000 == 0:
-		return fmt.Sprintf("%dgbit", bitsPerSec/1000000000)
-	case bitsPerSec >= 1000000 && bitsPerSec%1000000 == 0:
-		return fmt.Sprintf("%dmbit", bitsPerSec/1000000)
-	case bitsPerSec >= 1000 && bitsPerSec%1000 == 0:
-		return fmt.Sprintf("%dkbit", bitsPerSec/1000)
-	default:
-		return fmt.Sprintf("%dbit", bitsPerSec)
-	}
-}
-
 // deleteTAPDevice removes TAP device and its associated HTB class on the bridge.
 // If classID is non-empty, it is used for removeVMClass; otherwise falls back to deriveClassID.
 func (m *manager) deleteTAPDevice(tapName, classID string) error {
@@ -856,6 +884,11 @@ func (m *manager) deleteTAPDevice(tapName, classID string) error {
 	}
 
 	return nil
+}
+
+func (m *manager) tapDeviceExists(tapName string) bool {
+	_, err := netlink.LinkByName(tapName)
+	return err == nil
 }
 
 // queryNetworkState queries kernel for bridge state
@@ -959,7 +992,7 @@ func (m *manager) CleanupOrphanedTAPs(ctx context.Context, preserveInstanceIDs [
 		}
 
 		// Orphaned TAP - delete it (no stored classID available, falls back to deriveClassID)
-		if err := m.deleteTAPDevice(name, ""); err != nil {
+		if err := m.deleteTAPDeviceSerialized(name, ""); err != nil {
 			log.WarnContext(ctx, "failed to delete orphaned TAP", "tap", name, "error", err)
 			continue
 		}

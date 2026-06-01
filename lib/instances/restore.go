@@ -20,20 +20,11 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-type restoreInstanceOptions struct {
-	WaitForGuestNetwork *bool
-}
-
-func (o restoreInstanceOptions) waitForGuestNetwork() bool {
-	return o.WaitForGuestNetwork == nil || *o.WaitForGuestNetwork
-}
-
 // RestoreInstance restores an instance from standby.
 // Multi-hop orchestration: Standby → Paused → Running.
 func (m *manager) restoreInstance(
 	ctx context.Context,
 	id string,
-	opts restoreInstanceOptions,
 ) (_ *Instance, retErr error) {
 	start := time.Now()
 	log := logger.FromContext(ctx)
@@ -54,7 +45,6 @@ func (m *manager) restoreInstance(
 
 	inst := m.toInstance(ctx, meta)
 	stored := &meta.StoredMetadata
-	waitForGuestNetwork := opts.waitForGuestNetwork()
 	ctx = enrichInstancesTrace(ctx, attribute.String("hypervisor", string(stored.HypervisorType)))
 	log.DebugContext(ctx, "loaded instance", "instance_id", id, "state", inst.State, "has_snapshot", inst.HasSnapshot)
 
@@ -142,13 +132,19 @@ func (m *manager) restoreInstance(
 			log.InfoContext(ctx, "allocating fresh network identity for standby restore",
 				"instance_id", id, "network", "default",
 				"download_bps", stored.NetworkBandwidthDownload, "upload_bps", stored.NetworkBandwidthUpload)
-			netConfig, err := m.networkManager.CreateAllocation(networkCtx, network.AllocateRequest{
+			allocateCtx, allocateSpanEnd := m.startLifecycleStep(networkCtx, "restore_network.create_allocation",
+				attribute.String("instance_id", id),
+				attribute.String("hypervisor", string(stored.HypervisorType)),
+				attribute.String("operation", "restore_network_create_allocation"),
+			)
+			netConfig, err := m.networkManager.CreateAllocation(allocateCtx, network.AllocateRequest{
 				InstanceID:    id,
 				InstanceName:  stored.Name,
 				DownloadBps:   stored.NetworkBandwidthDownload,
 				UploadBps:     stored.NetworkBandwidthUpload,
 				UploadCeilBps: stored.NetworkBandwidthUpload * int64(m.networkManager.GetUploadBurstMultiplier()),
 			})
+			allocateSpanEnd(err)
 			if err != nil {
 				networkSpanEnd(err)
 				log.ErrorContext(ctx, "failed to allocate network", "instance_id", id, "error", err)
@@ -168,7 +164,12 @@ func (m *manager) restoreInstance(
 			stored.IP = netConfig.IP
 			stored.MAC = netConfig.MAC
 
-			if _, err := starter.PrepareFork(networkCtx, hypervisor.ForkPrepareRequest{
+			prepareForkCtx, prepareForkSpanEnd := m.startLifecycleStep(networkCtx, "restore_network.prepare_fork_network",
+				attribute.String("instance_id", id),
+				attribute.String("hypervisor", string(stored.HypervisorType)),
+				attribute.String("operation", "restore_network_prepare_fork_network"),
+			)
+			_, err = starter.PrepareFork(prepareForkCtx, hypervisor.ForkPrepareRequest{
 				SnapshotConfigPath: m.paths.InstanceSnapshotConfig(id),
 				VsockCID:           stored.VsockCID,
 				VsockSocket:        stored.VsockSocket,
@@ -178,7 +179,9 @@ func (m *manager) restoreInstance(
 					MAC:       netConfig.MAC,
 					Netmask:   netConfig.Netmask,
 				},
-			}); err != nil {
+			})
+			prepareForkSpanEnd(err)
+			if err != nil {
 				networkSpanEnd(err)
 				if errors.Is(err, hypervisor.ErrNotSupported) {
 					log.ErrorContext(ctx, "forked standby network rewrite not supported for hypervisor", "instance_id", id, "hypervisor", stored.HypervisorType)
@@ -192,7 +195,14 @@ func (m *manager) restoreInstance(
 		} else {
 			log.InfoContext(ctx, "recreating network for restore", "instance_id", id, "network", "default",
 				"download_bps", stored.NetworkBandwidthDownload, "upload_bps", stored.NetworkBandwidthUpload)
-			if err := m.networkManager.RecreateAllocation(networkCtx, id, stored.NetworkBandwidthDownload, stored.NetworkBandwidthUpload); err != nil {
+			recreateCtx, recreateSpanEnd := m.startLifecycleStep(networkCtx, "restore_network.recreate_allocation",
+				attribute.String("instance_id", id),
+				attribute.String("hypervisor", string(stored.HypervisorType)),
+				attribute.String("operation", "restore_network_recreate_allocation"),
+			)
+			err := m.networkManager.RecreateAllocation(recreateCtx, id, stored.NetworkBandwidthDownload, stored.NetworkBandwidthUpload)
+			recreateSpanEnd(err)
+			if err != nil {
 				networkSpanEnd(err)
 				log.ErrorContext(ctx, "failed to recreate network", "instance_id", id, "error", err)
 				return nil, fmt.Errorf("recreate network: %w", err)
@@ -238,41 +248,13 @@ func (m *manager) restoreInstance(
 		proxyRegistered = true
 	}
 
-	var resumeNetworkAckWaiter *guestResumeNetworkUDPWaiter
-	var resumeNetworkAckCfg *guestNetworkConfig
-	resumeNetworkMailboxPatched := false
-	if allocatedNet != nil && !stored.SkipGuestAgent && guestInitiatedResumeNetworkMailbox(stored) {
-		resumeNetworkCfg, cfgErr := guestNetworkReconfigureConfig(allocatedNet)
-		if cfgErr != nil {
-			log.WarnContext(ctx, "failed to build guest resume network mailbox payload; falling back to host-initiated reconfigure", "instance_id", id, "error", cfgErr)
-		} else {
-			payload := newGuestResumeNetworkPayload(resumeNetworkCfg)
-			if waitForGuestNetwork {
-				var waitErr error
-				resumeNetworkAckWaiter, waitErr = startGuestResumeNetworkUDPWaiter()
-				if waitErr != nil {
-					log.ErrorContext(ctx, "failed to start guest resume network UDP ack waiter", "instance_id", id, "error", waitErr)
-					releaseNetwork()
-					return nil, fmt.Errorf("start guest resume network UDP ack waiter: %w", waitErr)
-				}
-				resumeNetworkAckCfg = resumeNetworkCfg
-				payload.AckPort = resumeNetworkAckWaiter.Port()
-			}
-			if patchErr := patchGuestResumeNetworkMailbox(snapshotDir, guestInitiatedResumeNetworkMailboxToken(stored), &payload); patchErr != nil {
-				if resumeNetworkAckWaiter != nil {
-					resumeNetworkAckWaiter.Close()
-					resumeNetworkAckWaiter = nil
-					resumeNetworkAckCfg = nil
-				}
-				log.WarnContext(ctx, "failed to patch guest resume network mailbox; falling back to host-initiated reconfigure", "instance_id", id, "error", patchErr)
-			} else {
-				resumeNetworkMailboxPatched = true
-			}
-		}
+	resumeNetworkHandoff, err := m.prepareResumeNetworkHandoff(ctx, stored, allocatedNet, snapshotDir)
+	if err != nil {
+		log.ErrorContext(ctx, "failed to prepare guest resume network handoff", "instance_id", id, "error", err)
+		releaseNetwork()
+		return nil, fmt.Errorf("prepare guest resume network handoff: %w", err)
 	}
-	if resumeNetworkAckWaiter != nil {
-		defer resumeNetworkAckWaiter.Close()
-	}
+	defer resumeNetworkHandoff.Close()
 
 	// 5. Transition: Standby → Paused (start hypervisor + restore)
 	restoreCtx, restoreSpanEnd := m.startLifecycleStep(ctx, "restore_from_snapshot",
@@ -330,14 +312,7 @@ func (m *manager) restoreInstance(
 			attribute.String("hypervisor", string(stored.HypervisorType)),
 			attribute.String("operation", "reconfigure_guest_network"),
 		)
-		var reconfigureErr error
-		if resumeNetworkMailboxPatched && waitForGuestNetwork {
-			reconfigureErr = m.waitForGuestResumeNetworkUDPAck(reconfigureCtx, resumeNetworkAckWaiter, stored, resumeNetworkAckCfg)
-		} else if resumeNetworkMailboxPatched {
-			log.InfoContext(ctx, "guest resume network mailbox patched", "instance_id", id)
-		} else {
-			reconfigureErr = reconfigureGuestNetwork(reconfigureCtx, stored, allocatedNet)
-		}
+		reconfigureErr := resumeNetworkHandoff.AfterResume(reconfigureCtx)
 		reconfigureSpanEnd(reconfigureErr)
 		if reconfigureErr != nil {
 			log.ErrorContext(ctx, "failed to configure guest network after restore", "instance_id", id, "error", reconfigureErr)

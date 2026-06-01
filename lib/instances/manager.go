@@ -389,21 +389,14 @@ func (m *manager) ForkInstance(ctx context.Context, id string, req ForkInstanceR
 		return nil, err
 	}
 
-	inst, err := m.applyForkTargetState(ctx, forked.Id, targetState, restoreInstanceOptions{
-		WaitForGuestNetwork: req.WaitForNetwork,
-	})
-	if err != nil {
-		if cleanupErr := m.cleanupForkInstanceOnError(ctx, forked.Id); cleanupErr != nil {
-			return nil, fmt.Errorf("apply fork target state: %w; additionally failed to cleanup forked instance %s: %v", err, forked.Id, cleanupErr)
-		}
-		return nil, fmt.Errorf("apply fork target state: %w", err)
-	}
-	if inst.State == StateRunning && !guestInitiatedResumeNetworkMailbox(&inst.StoredMetadata) {
-		if err := ensureGuestAgentReadyForForkPhase(ctx, &inst.StoredMetadata, "before returning running fork instance"); err != nil {
+	inst := forked
+	if !forkTargetStateAlreadyApplied(inst, targetState) {
+		inst, err = m.applyForkTargetState(ctx, forked.Id, targetState)
+		if err != nil {
 			if cleanupErr := m.cleanupForkInstanceOnError(ctx, forked.Id); cleanupErr != nil {
-				return nil, fmt.Errorf("wait for fork guest agent readiness: %w; additionally failed to cleanup forked instance %s: %v", err, forked.Id, cleanupErr)
+				return nil, fmt.Errorf("apply fork target state: %w; additionally failed to cleanup forked instance %s: %v", err, forked.Id, cleanupErr)
 			}
-			return nil, fmt.Errorf("wait for fork guest agent readiness: %w", err)
+			return nil, fmt.Errorf("apply fork target state: %w", err)
 		}
 	}
 	m.notifyLifecycleEvent(ctx, LifecycleEventFork, inst)
@@ -451,7 +444,7 @@ func (m *manager) RestoreInstance(ctx context.Context, id string) (*Instance, er
 	if current.State == StateRunning || current.State == StateInitializing {
 		return current, nil
 	}
-	inst, err := m.restoreInstance(ctx, id, restoreInstanceOptions{})
+	inst, err := m.restoreInstance(ctx, id)
 	if err == nil {
 		m.notifyLifecycleEvent(ctx, LifecycleEventRestore, inst)
 	}

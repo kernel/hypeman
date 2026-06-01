@@ -308,7 +308,7 @@ func TestApplyForkTargetStateStoppedRefreshesSnapshotForkCID(t *testing.T) {
 	meta.StoredMetadata.Phases.Record(phasetracking.PhaseStandby, time.Now())
 	require.NoError(t, manager.saveMetadata(meta))
 
-	inst, err := manager.applyForkTargetState(ctx, forkID, StateStopped, restoreInstanceOptions{})
+	inst, err := manager.applyForkTargetState(ctx, forkID, StateStopped)
 	require.NoError(t, err)
 	require.Equal(t, StateStopped, inst.State)
 	require.Equal(t, generateVsockCID(forkID), inst.VsockCID)
@@ -317,6 +317,24 @@ func TestApplyForkTargetStateStoppedRefreshesSnapshotForkCID(t *testing.T) {
 	updated, err := manager.loadMetadata(forkID)
 	require.NoError(t, err)
 	assert.Equal(t, generateVsockCID(forkID), updated.StoredMetadata.VsockCID)
+}
+
+func TestForkReturnReadinessDoesNotUseMailboxEligibility(t *testing.T) {
+	t.Parallel()
+
+	stored := StoredMetadata{
+		HypervisorType: hypervisor.TypeFirecracker,
+		NetworkEnabled: true,
+	}
+	ensureGuestInitiatedResumeNetworkMailbox(&stored)
+	require.True(t, guestInitiatedResumeNetworkMailbox(&stored))
+
+	inst := &Instance{
+		StoredMetadata: stored,
+		State:          StateInitializing,
+	}
+	assert.True(t, forkReturnNeedsGuestAgentReady(inst, false))
+	assert.False(t, forkReturnNeedsGuestAgentReady(inst, true))
 }
 
 func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
