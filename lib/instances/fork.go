@@ -430,17 +430,20 @@ func (m *manager) applyForkTargetState(ctx context.Context, forkID string, targe
 	case StateStopped:
 		switch target {
 		case StateRunning:
-			return returnWithReadiness(m.startInstance(ctx, forkID, StartInstanceRequest{}), false)
+			inst, err := m.startInstance(ctx, forkID, StartInstanceRequest{})
+			return returnWithReadiness(inst, err, false)
 		case StateStandby:
 			if _, err := m.startInstance(ctx, forkID, StartInstanceRequest{}); err != nil {
 				return nil, fmt.Errorf("start forked instance for standby transition: %w", err)
 			}
-			return returnWithReadiness(m.standbyInstance(ctx, forkID, StandbyInstanceRequest{}, false), false)
+			inst, err := m.standbyInstance(ctx, forkID, StandbyInstanceRequest{}, false)
+			return returnWithReadiness(inst, err, false)
 		}
 	case StateStandby:
 		switch target {
 		case StateRunning:
-			return returnWithReadiness(m.restoreInstance(ctx, forkID), current.NetworkEnabled && !current.SkipGuestAgent)
+			inst, err := m.restoreInstance(ctx, forkID)
+			return returnWithReadiness(inst, err, current.NetworkEnabled && !current.SkipGuestAgent)
 		case StateStopped:
 			if err := os.RemoveAll(m.paths.InstanceSnapshotLatest(forkID)); err != nil {
 				return nil, fmt.Errorf("remove fork snapshot: %w", err)
@@ -453,14 +456,17 @@ func (m *manager) applyForkTargetState(ctx context.Context, forkID string, targe
 			if err := m.saveMetadata(meta); err != nil {
 				return nil, fmt.Errorf("save stopped fork metadata: %w", err)
 			}
-			return returnWithReadiness(m.getInstance(ctx, forkID), false)
+			inst, err := m.getInstance(ctx, forkID)
+			return returnWithReadiness(inst, err, false)
 		}
 	case StateRunning:
 		switch target {
 		case StateStandby:
-			return returnWithReadiness(m.standbyInstance(ctx, forkID, StandbyInstanceRequest{}, false), false)
+			inst, err := m.standbyInstance(ctx, forkID, StandbyInstanceRequest{}, false)
+			return returnWithReadiness(inst, err, false)
 		case StateStopped:
-			return returnWithReadiness(m.stopInstance(ctx, forkID), false)
+			inst, err := m.stopInstance(ctx, forkID)
+			return returnWithReadiness(inst, err, false)
 		}
 	}
 
