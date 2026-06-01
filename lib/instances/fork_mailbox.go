@@ -25,6 +25,38 @@ type patchedForkMailbox struct {
 	timeout time.Duration
 }
 
+type forkMailboxHandoff struct {
+	manager *manager
+	stored  *StoredMetadata
+	patched []patchedForkMailbox
+}
+
+func (m *manager) prepareForkMailboxHandoff(ctx context.Context, stored *StoredMetadata, snapshotDir string, mailboxes []ForkMailboxPayload) (*forkMailboxHandoff, error) {
+	patched, err := m.patchForkMailboxes(ctx, stored, snapshotDir, mailboxes)
+	if err != nil {
+		return nil, err
+	}
+	return &forkMailboxHandoff{
+		manager: m,
+		stored:  stored,
+		patched: patched,
+	}, nil
+}
+
+func (h *forkMailboxHandoff) AfterResume(ctx context.Context) error {
+	if h == nil {
+		return nil
+	}
+	return h.manager.waitForForkMailboxAcks(ctx, h.stored, h.patched)
+}
+
+func (h *forkMailboxHandoff) Close() {
+	if h == nil {
+		return
+	}
+	closePatchedForkMailboxes(h.patched)
+}
+
 func validateForkMailboxes(mailboxes []ForkMailboxPayload) error {
 	if len(mailboxes) > 16 {
 		return fmt.Errorf("%w: at most 16 mailboxes can be patched for a fork", ErrInvalidRequest)
@@ -69,7 +101,7 @@ func validateForkMailboxes(mailboxes []ForkMailboxPayload) error {
 	return nil
 }
 
-func (m *manager) patchForkMailboxes(ctx context.Context, snapshotDir string, mailboxes []ForkMailboxPayload) ([]patchedForkMailbox, error) {
+func (m *manager) patchForkMailboxes(ctx context.Context, stored *StoredMetadata, snapshotDir string, mailboxes []ForkMailboxPayload) ([]patchedForkMailbox, error) {
 	if len(mailboxes) == 0 {
 		return nil, nil
 	}
@@ -93,7 +125,14 @@ func (m *manager) patchForkMailboxes(ctx context.Context, snapshotDir string, ma
 			}
 		}
 
-		if err := patchForkMailbox(snapshotDir, mailbox.Name, mailbox.Token, payload); err != nil {
+		_, patchSpanEnd := m.startLifecycleStep(ctx, "guest.fork_mailbox.patch",
+			attribute.String("instance_id", stored.Id),
+			attribute.String("mailbox", mailbox.Name),
+			attribute.String("operation", "guest_fork_mailbox_patch"),
+		)
+		err := patchForkMailbox(snapshotDir, mailbox.Name, mailbox.Token, payload)
+		patchSpanEnd(err)
+		if err != nil {
 			if waiter != nil {
 				waiter.Close()
 			}

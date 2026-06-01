@@ -268,12 +268,12 @@ func (m *manager) restoreInstanceWithOptions(
 	}
 	defer resumeNetworkHandoff.Close()
 
-	patchedMailboxes, err := m.patchForkMailboxes(ctx, snapshotDir, opts.Mailboxes)
+	forkMailboxHandoff, err := m.prepareForkMailboxHandoff(ctx, stored, snapshotDir, opts.Mailboxes)
 	if err != nil {
 		releaseNetwork()
-		return nil, fmt.Errorf("patch fork mailboxes: %w", err)
+		return nil, fmt.Errorf("prepare fork mailbox handoff: %w", err)
 	}
-	defer closePatchedForkMailboxes(patchedMailboxes)
+	defer forkMailboxHandoff.Close()
 
 	// 5. Transition: Standby → Paused (start hypervisor + restore)
 	restoreCtx, restoreSpanEnd := m.startLifecycleStep(ctx, "restore_from_snapshot",
@@ -340,7 +340,7 @@ func (m *manager) restoreInstanceWithOptions(
 		}
 	}
 
-	if err := m.waitForForkMailboxAcks(ctx, stored, patchedMailboxes); err != nil {
+	if err := forkMailboxHandoff.AfterResume(ctx); err != nil {
 		log.ErrorContext(ctx, "failed waiting for fork mailbox acknowledgements", "instance_id", id, "error", err)
 		_ = hv.Shutdown(ctx)
 		m.rollbackAdmissionAllocationActive(stored)
