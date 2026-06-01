@@ -67,6 +67,17 @@ type server struct {
 	backingBytesRead atomic.Int64
 	copies           atomic.Int64
 	copyErrors       atomic.Int64
+
+	activeFaults        atomic.Int64
+	maxConcurrentFaults atomic.Int64
+	faultNanos          atomic.Int64
+	faultMaxNanos       atomic.Int64
+	readPageNanos       atomic.Int64
+	readPageMaxNanos    atomic.Int64
+	backingReadNanos    atomic.Int64
+	backingReadMaxNanos atomic.Int64
+	copyNanos           atomic.Int64
+	copyMaxNanos        atomic.Int64
 }
 
 type session struct {
@@ -159,20 +170,36 @@ func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) handleStats(w http.ResponseWriter, r *http.Request) {
 	cacheBytes, cacheMax, cacheItems, hits, misses := s.cache.SnapshotStats()
+	cacheShards, cacheLookupNanos, cacheLookupMaxNanos, cacheAddNanos, cacheAddMaxNanos := s.cache.SnapshotTimingStats()
 	s.writeJSON(w, http.StatusOK, Stats{
-		Version:          s.versionKey,
-		Draining:         s.isDraining(),
-		ActiveSessions:   s.activeSessions(),
-		CacheBytes:       cacheBytes,
-		CacheMax:         cacheMax,
-		CacheItems:       cacheItems,
-		CacheHits:        hits,
-		CacheMisses:      misses,
-		Faults:           s.faults.Load(),
-		OverlayFaults:    s.overlayFaults.Load(),
-		BackingBytesRead: s.backingBytesRead.Load(),
-		Copies:           s.copies.Load(),
-		CopyErrors:       s.copyErrors.Load(),
+		Version:             s.versionKey,
+		Draining:            s.isDraining(),
+		ActiveSessions:      s.activeSessions(),
+		CacheBytes:          cacheBytes,
+		CacheMax:            cacheMax,
+		CacheItems:          cacheItems,
+		CacheHits:           hits,
+		CacheMisses:         misses,
+		CacheShards:         cacheShards,
+		CacheLookupNanos:    cacheLookupNanos,
+		CacheLookupMaxNanos: cacheLookupMaxNanos,
+		CacheAddNanos:       cacheAddNanos,
+		CacheAddMaxNanos:    cacheAddMaxNanos,
+		Faults:              s.faults.Load(),
+		OverlayFaults:       s.overlayFaults.Load(),
+		BackingBytesRead:    s.backingBytesRead.Load(),
+		Copies:              s.copies.Load(),
+		CopyErrors:          s.copyErrors.Load(),
+		ActiveFaults:        s.activeFaults.Load(),
+		MaxConcurrentFaults: s.maxConcurrentFaults.Load(),
+		FaultNanos:          s.faultNanos.Load(),
+		FaultMaxNanos:       s.faultMaxNanos.Load(),
+		ReadPageNanos:       s.readPageNanos.Load(),
+		ReadPageMaxNanos:    s.readPageMaxNanos.Load(),
+		BackingReadNanos:    s.backingReadNanos.Load(),
+		BackingReadMaxNanos: s.backingReadMaxNanos.Load(),
+		CopyNanos:           s.copyNanos.Load(),
+		CopyMaxNanos:        s.copyMaxNanos.Load(),
 	})
 }
 
@@ -457,6 +484,16 @@ func readUFFDEvent(fd int, buf []byte) (uffdEvent, bool, error) {
 }
 
 func (s *session) servePageFault(mappings []guestRegionUffdMapping, faultAddr int64) error {
+	start := time.Now()
+	active := s.server.activeFaults.Add(1)
+	atomicMaxInt64(&s.server.maxConcurrentFaults, active)
+	defer func() {
+		s.server.activeFaults.Add(-1)
+		nanos := time.Since(start).Nanoseconds()
+		s.server.faultNanos.Add(nanos)
+		atomicMaxInt64(&s.server.faultMaxNanos, nanos)
+	}()
+
 	mapping, pageAddr, pageOffset, pageSize, ok := findMapping(mappings, faultAddr)
 	if !ok {
 		return fmt.Errorf("fault address %#x outside guest mappings", faultAddr)
@@ -471,26 +508,44 @@ func (s *session) servePageFault(mappings []guestRegionUffdMapping, faultAddr in
 	if overlay {
 		s.server.overlayFaults.Add(1)
 	}
+	copyStart := time.Now()
 	if err := uffdCopy(s.uffdFD, uint64(pageAddr), page); err != nil {
+		nanos := time.Since(copyStart).Nanoseconds()
+		s.server.copyNanos.Add(nanos)
+		atomicMaxInt64(&s.server.copyMaxNanos, nanos)
 		return err
 	}
+	nanos := time.Since(copyStart).Nanoseconds()
+	s.server.copyNanos.Add(nanos)
+	atomicMaxInt64(&s.server.copyMaxNanos, nanos)
 	s.server.copies.Add(1)
 	return nil
 }
 
 func (s *session) readPage(offset int64, size int) ([]byte, bool, error) {
+	start := time.Now()
+	defer func() {
+		nanos := time.Since(start).Nanoseconds()
+		s.server.readPageNanos.Add(nanos)
+		atomicMaxInt64(&s.server.readPageMaxNanos, nanos)
+	}()
+
 	if page, ok := s.overlays[offset]; ok {
 		if len(page) != size {
 			return nil, true, fmt.Errorf("overlay page at offset %d has size %d, expected %d", offset, len(page), size)
 		}
-		return append([]byte(nil), page...), true, nil
+		return page, true, nil
 	}
-	if page, ok := s.server.cache.Get(s.cacheKey, offset, size); ok {
+	if page, ok := s.server.cache.Borrow(s.cacheKey, offset, size); ok {
 		return page, false, nil
 	}
 
 	page := make([]byte, size)
+	readStart := time.Now()
 	n, err := s.backingFile.ReadAt(page, offset)
+	readNanos := time.Since(readStart).Nanoseconds()
+	s.server.backingReadNanos.Add(readNanos)
+	atomicMaxInt64(&s.server.backingReadMaxNanos, readNanos)
 	if err != nil && !errors.Is(err, io.EOF) {
 		return nil, false, fmt.Errorf("read backing page at %d: %w", offset, err)
 	}
@@ -623,6 +678,15 @@ func uffdCopy(fd int, dst uint64, page []byte) error {
 		return nil
 	}
 	return errno
+}
+
+func atomicMaxInt64(target *atomic.Int64, candidate int64) {
+	for {
+		current := target.Load()
+		if candidate <= current || target.CompareAndSwap(current, candidate) {
+			return
+		}
+	}
 }
 
 func sanitizeSessionID(id string) string {

@@ -44,3 +44,24 @@ func TestPageCacheEvictsLRUWhenBounded(t *testing.T) {
 		t.Fatalf("expected recently used page to remain")
 	}
 }
+
+func TestPageCacheDistributesAlignedPagesAcrossShards(t *testing.T) {
+	cache := NewPageCache(4 << 30)
+	page := bytes.Repeat([]byte{1}, 4096)
+
+	for i := range 4096 {
+		cache.Add("snapshot-a", int64(i*4096), page)
+	}
+
+	usedShards := 0
+	for _, shard := range cache.shards {
+		shard.mu.Lock()
+		if len(shard.items) > 0 {
+			usedShards++
+		}
+		shard.mu.Unlock()
+	}
+	if usedShards < len(cache.shards)/2 {
+		t.Fatalf("expected aligned pages to spread across shards, used %d of %d", usedShards, len(cache.shards))
+	}
+}
