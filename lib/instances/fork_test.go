@@ -137,6 +137,116 @@ func TestCleanupForkInstanceOnError(t *testing.T) {
 	assert.ErrorIs(t, err, ErrNotFound)
 }
 
+func TestGetInstanceWaitsDuringSnapshotSourceAlias(t *testing.T) {
+	manager, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	sourceID := "fork-alias-source"
+	aliasID := "fork-alias-child"
+	now := time.Now()
+	for _, meta := range []*metadata{
+		{StoredMetadata: StoredMetadata{
+			Id:                sourceID,
+			Name:              sourceID,
+			Image:             integrationTestImageRef(t, "docker.io/library/alpine:latest"),
+			CreatedAt:         now,
+			StoppedAt:         &now,
+			HypervisorType:    hypervisor.TypeFirecracker,
+			HypervisorVersion: "test",
+			SocketPath:        paths.New(manager.paths.DataDir()).InstanceSocket(sourceID, "fc.sock"),
+			DataDir:           paths.New(manager.paths.DataDir()).InstanceDir(sourceID),
+			VsockCID:          42,
+			VsockSocket:       paths.New(manager.paths.DataDir()).InstanceVsockSocket(sourceID),
+		}},
+		{StoredMetadata: StoredMetadata{
+			Id:                aliasID,
+			Name:              aliasID,
+			Image:             integrationTestImageRef(t, "docker.io/library/alpine:latest"),
+			CreatedAt:         now,
+			HypervisorType:    hypervisor.TypeFirecracker,
+			HypervisorVersion: "test",
+			SocketPath:        paths.New(manager.paths.DataDir()).InstanceSocket(aliasID, "fc.sock"),
+			DataDir:           paths.New(manager.paths.DataDir()).InstanceDir(aliasID),
+			VsockCID:          43,
+			VsockSocket:       paths.New(manager.paths.DataDir()).InstanceVsockSocket(aliasID),
+		}},
+	} {
+		require.NoError(t, manager.ensureDirectories(meta.Id))
+		require.NoError(t, manager.saveMetadata(meta))
+	}
+
+	sourceDir := manager.paths.InstanceDir(sourceID)
+	childDir := manager.paths.InstanceDir(aliasID)
+	backupDir := sourceDir + ".bak"
+
+	unlockAlias := hypervisor.LockSnapshotSourceAliasMutation()
+	aliasLocked := true
+	defer func() {
+		if aliasLocked {
+			unlockAlias()
+		}
+	}()
+	require.NoError(t, os.Rename(sourceDir, backupDir))
+	require.NoError(t, os.Symlink(childDir, sourceDir))
+
+	type getResult struct {
+		inst *Instance
+		err  error
+	}
+	done := make(chan getResult, 1)
+	go func() {
+		inst, err := manager.GetInstance(ctx, sourceID)
+		done <- getResult{inst: inst, err: err}
+	}()
+
+	select {
+	case got := <-done:
+		t.Fatalf("GetInstance returned during source alias mutation: inst=%v err=%v", got.inst, got.err)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	require.NoError(t, os.Remove(sourceDir))
+	require.NoError(t, os.Rename(backupDir, sourceDir))
+	unlockAlias()
+	aliasLocked = false
+
+	got := <-done
+	require.NoError(t, got.err)
+	require.NotNil(t, got.inst)
+	assert.Equal(t, sourceID, got.inst.Id)
+}
+
+func TestForkInstanceStoppedSourceUsesReadLock(t *testing.T) {
+	manager, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	sourceID := "fork-stopped-read-lock-source"
+	createStoppedSnapshotSourceFixture(t, manager, sourceID, sourceID, hypervisor.TypeQEMU)
+
+	sourceLock := manager.getInstanceLock(sourceID)
+	sourceLock.RLock()
+	defer sourceLock.RUnlock()
+
+	type forkResult struct {
+		inst *Instance
+		err  error
+	}
+	done := make(chan forkResult, 1)
+	go func() {
+		inst, err := manager.ForkInstance(ctx, sourceID, ForkInstanceRequest{Name: "fork-stopped-read-lock-copy"})
+		done <- forkResult{inst: inst, err: err}
+	}()
+
+	select {
+	case got := <-done:
+		require.NoError(t, got.err)
+		require.NotNil(t, got.inst)
+		assert.Equal(t, StateStopped, got.inst.State)
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("ForkInstance blocked behind a source read lock")
+	}
+}
+
 func TestForkInstance_CleansUpOnTargetTransitionError(t *testing.T) {
 	t.Parallel()
 	manager, _ := setupTestManager(t)

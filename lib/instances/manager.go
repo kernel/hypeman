@@ -415,9 +415,35 @@ func (m *manager) DeleteSnapshot(ctx context.Context, snapshotID string) error {
 // ForkInstance creates a forked copy of an instance.
 func (m *manager) ForkInstance(ctx context.Context, id string, req ForkInstanceRequest) (*Instance, error) {
 	lock := m.getInstanceLock(id)
-	lock.Lock()
-	forked, targetState, err := m.forkInstance(ctx, id, req)
-	lock.Unlock()
+	useReadLock := false
+	lock.RLock()
+	if meta, err := m.loadMetadata(id); err == nil {
+		source := m.toInstance(ctx, meta)
+		useReadLock = source.State == StateStopped || source.State == StateStandby
+	}
+	lock.RUnlock()
+
+	var forked *Instance
+	var targetState State
+	var err error
+	if useReadLock {
+		lock.RLock()
+		if meta, loadErr := m.loadMetadata(id); loadErr == nil {
+			source := m.toInstance(ctx, meta)
+			useReadLock = source.State == StateStopped || source.State == StateStandby
+		} else {
+			useReadLock = false
+		}
+		if useReadLock {
+			forked, targetState, err = m.forkInstance(ctx, id, req)
+		}
+		lock.RUnlock()
+	}
+	if !useReadLock {
+		lock.Lock()
+		forked, targetState, err = m.forkInstance(ctx, id, req)
+		lock.Unlock()
+	}
 	if err != nil {
 		return nil, err
 	}

@@ -412,15 +412,23 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 	if target != nil && target.State == compressionJobStateRunning {
 		m.recordSnapshotCompressionPreemption(ctx, snapshotCompressionPreemptionForkSnapshot, target.Target)
 	}
-	if err := m.ensureSnapshotMemoryReady(ctx, m.paths.SnapshotGuestDir(snapshotID), "", rec.StoredMetadata.HypervisorType); err != nil {
-		return nil, fmt.Errorf("prepare snapshot memory for fork: %w", err)
-	}
+	if err := func() error {
+		unlockAliasReaders := hypervisor.LockSnapshotSourceAliasReaders()
+		defer unlockAliasReaders()
 
-	if err := forkvm.CopyGuestDirectory(m.paths.SnapshotGuestDir(snapshotID), dstDir); err != nil {
-		if errors.Is(err, forkvm.ErrSparseCopyUnsupported) {
-			return nil, fmt.Errorf("fork from snapshot requires sparse-capable filesystem (SEEK_DATA/SEEK_HOLE unsupported): %w", err)
+		if err := m.ensureSnapshotMemoryReady(ctx, m.paths.SnapshotGuestDir(snapshotID), "", rec.StoredMetadata.HypervisorType); err != nil {
+			return fmt.Errorf("prepare snapshot memory for fork: %w", err)
 		}
-		return nil, fmt.Errorf("clone snapshot payload: %w", err)
+
+		if err := forkvm.CopyGuestDirectory(m.paths.SnapshotGuestDir(snapshotID), dstDir); err != nil {
+			if errors.Is(err, forkvm.ErrSparseCopyUnsupported) {
+				return fmt.Errorf("fork from snapshot requires sparse-capable filesystem (SEEK_DATA/SEEK_HOLE unsupported): %w", err)
+			}
+			return fmt.Errorf("clone snapshot payload: %w", err)
+		}
+		return nil
+	}(); err != nil {
+		return nil, err
 	}
 
 	starter, err := m.getVMStarter(targetHypervisor)
@@ -470,15 +478,21 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 		if forkMeta.NetworkEnabled {
 			netCfg = &hypervisor.ForkNetworkConfig{TAPDevice: network.GenerateTAPName(forkID)}
 		}
-		if _, err := starter.PrepareFork(ctx, hypervisor.ForkPrepareRequest{
-			SnapshotConfigPath: m.paths.InstanceSnapshotConfig(forkID),
-			SourceDataDir:      rec.StoredMetadata.DataDir,
-			TargetDataDir:      forkMeta.DataDir,
-			VsockCID:           forkMeta.VsockCID,
-			VsockSocket:        forkMeta.VsockSocket,
-			SerialLogPath:      m.paths.InstanceAppLog(forkID),
-			Network:            netCfg,
-		}); err != nil {
+		err := func() error {
+			unlockAliasReaders := hypervisor.LockSnapshotSourceAliasReaders()
+			defer unlockAliasReaders()
+			_, err := starter.PrepareFork(ctx, hypervisor.ForkPrepareRequest{
+				SnapshotConfigPath: m.paths.InstanceSnapshotConfig(forkID),
+				SourceDataDir:      rec.StoredMetadata.DataDir,
+				TargetDataDir:      forkMeta.DataDir,
+				VsockCID:           forkMeta.VsockCID,
+				VsockSocket:        forkMeta.VsockSocket,
+				SerialLogPath:      m.paths.InstanceAppLog(forkID),
+				Network:            netCfg,
+			})
+			return err
+		}()
+		if err != nil {
 			if errors.Is(err, hypervisor.ErrNotSupported) {
 				return nil, fmt.Errorf("%w: snapshot fork is not supported for hypervisor %s", ErrNotSupported, targetHypervisor)
 			}
@@ -502,7 +516,12 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 }
 
 func (m *manager) copySnapshotPayload(sourceInstanceID, snapshotGuestDir string) error {
-	if err := forkvm.CopyGuestDirectory(m.paths.InstanceDir(sourceInstanceID), snapshotGuestDir); err != nil {
+	err := func() error {
+		unlockAliasReaders := hypervisor.LockSnapshotSourceAliasReaders()
+		defer unlockAliasReaders()
+		return forkvm.CopyGuestDirectory(m.paths.InstanceDir(sourceInstanceID), snapshotGuestDir)
+	}()
+	if err != nil {
 		if errors.Is(err, forkvm.ErrSparseCopyUnsupported) {
 			return fmt.Errorf("snapshot requires sparse-capable filesystem (SEEK_DATA/SEEK_HOLE unsupported): %w", err)
 		}

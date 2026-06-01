@@ -11,6 +11,7 @@ import (
 
 	"github.com/kernel/hypeman/lib/autostandby"
 	"github.com/kernel/hypeman/lib/healthcheck"
+	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
 )
 
@@ -61,6 +62,9 @@ func (m *manager) ensureDirectories(id string) error {
 
 // loadMetadata loads instance metadata from disk
 func (m *manager) loadMetadata(id string) (*metadata, error) {
+	unlockAliasReaders := hypervisor.LockSnapshotSourceAliasReaders()
+	defer unlockAliasReaders()
+
 	metaPath := m.paths.InstanceMetadata(id)
 
 	data, err := os.ReadFile(metaPath)
@@ -81,6 +85,9 @@ func (m *manager) loadMetadata(id string) (*metadata, error) {
 
 // saveMetadata saves instance metadata to disk
 func (m *manager) saveMetadata(meta *metadata) error {
+	unlockAliasReaders := hypervisor.LockSnapshotSourceAliasReaders()
+	defer unlockAliasReaders()
+
 	metaPath := m.paths.InstanceMetadata(meta.Id)
 
 	data, err := json.MarshalIndent(meta, "", "  ")
