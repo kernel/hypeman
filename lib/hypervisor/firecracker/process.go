@@ -18,9 +18,11 @@ import (
 )
 
 const (
-	socketWaitTimeout = 10 * time.Second
-	socketPollEvery   = 50 * time.Millisecond
-	socketDialTimeout = 100 * time.Millisecond
+	socketWaitTimeout          = 10 * time.Second
+	socketReadyRetryEvery      = 1 * time.Millisecond
+	socketDialTimeout          = 100 * time.Millisecond
+	restoreResumeOnLoadEnv     = "HYPEMAN_FIRECRACKER_RESTORE_RESUME_ON_LOAD"
+	restoreDeepTraceEnvForLoad = "HYPEMAN_RESTORE_DEEP_TRACE"
 )
 
 func init() {
@@ -115,16 +117,18 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 	if err != nil {
 		return 0, nil, fmt.Errorf("load firecracker restore metadata: %w", err)
 	}
+	resumeOnLoad := shouldResumeOnSnapshotLoad()
 	err = func() error {
 		snapshotSourceAliasMu.Lock()
 		defer snapshotSourceAliasMu.Unlock()
 		return withSnapshotSourceDirAlias(meta, filepath.Dir(socketPath), func() error {
-			return hv.loadSnapshot(ctx, snapshotPath, meta.NetworkOverrides)
+			return hv.loadSnapshot(ctx, snapshotPath, meta.NetworkOverrides, resumeOnLoad)
 		})
 	}()
 	if err != nil {
 		return 0, nil, fmt.Errorf("load firecracker snapshot: %w", err)
 	}
+	hv.restoredResumed = resumeOnLoad
 	if meta.SnapshotSourceDataDir != "" && !meta.RetainSnapshotSourceDataDirAlias {
 		meta.SnapshotSourceDataDir = ""
 		if err := saveRestoreMetadataState(filepath.Dir(socketPath), meta); err != nil {
@@ -244,23 +248,47 @@ func (s *Starter) startProcess(_ context.Context, p *paths.Paths, version string
 }
 
 func isSocketInUse(socketPath string) bool {
-	conn, err := net.DialTimeout("unix", socketPath, socketDialTimeout)
-	if err != nil {
+	return tryDialUnixSocket(socketPath) == nil
+}
+
+func shouldResumeOnSnapshotLoad() bool {
+	if envBoolDisabled(os.Getenv(restoreResumeOnLoadEnv)) {
 		return false
 	}
-	_ = conn.Close()
+	// Deep restore tracing is anchored after RestoreVM returns with a PID. Keep
+	// the explicit host Resume call in that mode so the trace still captures the
+	// first resumed guest execution window.
+	if strings.TrimSpace(os.Getenv(restoreDeepTraceEnvForLoad)) == "1" {
+		return false
+	}
 	return true
 }
 
-func waitForSocket(path string, timeout time.Duration) error {
+func envBoolDisabled(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "0", "false", "no", "off":
+		return true
+	default:
+		return false
+	}
+}
+
+func tryDialUnixSocket(path string) error {
+	conn, err := net.DialTimeout("unix", path, socketDialTimeout)
+	if err != nil {
+		return err
+	}
+	_ = conn.Close()
+	return nil
+}
+
+func waitForSocketByPolling(path string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		conn, err := net.DialTimeout("unix", path, socketDialTimeout)
-		if err == nil {
-			_ = conn.Close()
+		if err := tryDialUnixSocket(path); err == nil {
 			return nil
 		}
-		time.Sleep(socketPollEvery)
+		time.Sleep(socketReadyRetryEvery)
 	}
 	return fmt.Errorf("timeout waiting for socket")
 }

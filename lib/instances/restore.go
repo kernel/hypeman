@@ -309,10 +309,16 @@ func (m *manager) restoreInstance(
 	)
 	log.InfoContext(ctx, "resuming VM", "instance_id", id)
 	if deepTrace != nil {
-		deepTrace.Mark("resume_call_start", "")
-		deepTrace.Sample("resume_call_start")
+		stage := "resume_call_start"
+		if hypervisor.RestoredResumed(hv) {
+			stage = "resume_already_done"
+		}
+		deepTrace.Mark(stage, "")
+		deepTrace.Sample(stage)
 	}
-	if err := hv.Resume(resumeCtx); err != nil {
+	if hypervisor.RestoredResumed(hv) {
+		log.InfoContext(ctx, "VM was resumed during snapshot load", "instance_id", id)
+	} else if err := hv.Resume(resumeCtx); err != nil {
 		if deepTrace != nil {
 			deepTrace.Mark("resume_error", err.Error())
 			deepTrace.Sample("resume_error")

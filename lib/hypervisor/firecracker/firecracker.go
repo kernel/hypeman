@@ -27,8 +27,9 @@ type apiError struct {
 
 // Firecracker implements hypervisor.Hypervisor for the Firecracker VMM.
 type Firecracker struct {
-	socketPath string
-	client     *http.Client
+	socketPath      string
+	client          *http.Client
+	restoredResumed bool
 }
 
 func New(socketPath string) (*Firecracker, error) {
@@ -49,6 +50,10 @@ func New(socketPath string) (*Firecracker, error) {
 }
 
 var _ hypervisor.Hypervisor = (*Firecracker)(nil)
+
+func (f *Firecracker) RestoredResumed() bool {
+	return f != nil && f.restoredResumed
+}
 
 func (f *Firecracker) Capabilities() hypervisor.Capabilities {
 	return capabilities()
@@ -223,8 +228,8 @@ func (f *Firecracker) instanceStart(ctx context.Context) error {
 	return f.postAction(ctx, "InstanceStart")
 }
 
-func (f *Firecracker) loadSnapshot(ctx context.Context, snapshotDir string, networkOverrides []networkOverride) error {
-	params := toSnapshotLoadParams(snapshotDir, networkOverrides)
+func (f *Firecracker) loadSnapshot(ctx context.Context, snapshotDir string, networkOverrides []networkOverride, resumeVM bool) error {
+	params := toSnapshotLoadParams(snapshotDir, networkOverrides, resumeVM)
 	if _, err := f.do(ctx, http.MethodPut, "/snapshot/load", params, http.StatusNoContent); err != nil {
 		return err
 	}

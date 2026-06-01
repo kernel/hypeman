@@ -18,6 +18,9 @@ import (
 
 type fakeHypervisor struct{}
 type fakeHypervisorGetVMInfoError struct{}
+type fakeRestoredResumedHypervisor struct {
+	fakeHypervisor
+}
 
 func (fakeHypervisor) DeleteVM(context.Context) error { return nil }
 func (fakeHypervisor) Shutdown(context.Context) error { return nil }
@@ -36,6 +39,7 @@ func (fakeHypervisor) GetTargetGuestMemoryBytes(context.Context) (int64, error) 
 	return 0, nil
 }
 func (fakeHypervisor) Capabilities() Capabilities                   { return Capabilities{} }
+func (fakeRestoredResumedHypervisor) RestoredResumed() bool         { return true }
 func (fakeHypervisorGetVMInfoError) DeleteVM(context.Context) error { return nil }
 func (fakeHypervisorGetVMInfoError) Shutdown(context.Context) error { return nil }
 func (fakeHypervisorGetVMInfoError) GetVMInfo(context.Context) (*VMInfo, error) {
@@ -121,6 +125,11 @@ func TestWrapVMStarterWrapsReturnedHypervisor(t *testing.T) {
 	attrs := attrsToMap(resumeSpan.Attributes())
 	assert.Equal(t, "inst_456", attrs["instance_id"])
 	assert.Equal(t, string(TypeCloudHypervisor), attrs["hypervisor"])
+}
+
+func TestWrapHypervisorPreservesRestoredResumed(t *testing.T) {
+	hv := WrapHypervisor(TypeFirecracker, fakeRestoredResumedHypervisor{})
+	require.True(t, RestoredResumed(hv))
 }
 
 func TestWrapHypervisorSkipsGetVMInfoTraceByDefault(t *testing.T) {

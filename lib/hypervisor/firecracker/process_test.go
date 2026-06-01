@@ -2,9 +2,11 @@ package firecracker
 
 import (
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -77,4 +79,44 @@ func TestWithSnapshotSourceDirAlias_RejectsNestedPaths(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "must not be nested")
+}
+
+func TestShouldResumeOnSnapshotLoad(t *testing.T) {
+	t.Setenv(restoreResumeOnLoadEnv, "")
+	t.Setenv(restoreDeepTraceEnvForLoad, "")
+	assert.True(t, shouldResumeOnSnapshotLoad())
+
+	t.Setenv(restoreResumeOnLoadEnv, "0")
+	assert.False(t, shouldResumeOnSnapshotLoad())
+
+	t.Setenv(restoreResumeOnLoadEnv, "")
+	t.Setenv(restoreDeepTraceEnvForLoad, "1")
+	assert.False(t, shouldResumeOnSnapshotLoad())
+}
+
+func TestWaitForSocketReturnsWhenSocketAppears(t *testing.T) {
+	tmp, err := os.MkdirTemp("/tmp", "fcwait-")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(tmp) })
+	socketPath := filepath.Join(tmp, "fc.sock")
+	done := make(chan struct{})
+	errCh := make(chan error, 1)
+	go func() {
+		defer close(done)
+		time.Sleep(10 * time.Millisecond)
+		listener, err := net.Listen("unix", socketPath)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		errCh <- nil
+		defer listener.Close()
+		<-time.After(50 * time.Millisecond)
+	}()
+
+	start := time.Now()
+	require.NoError(t, waitForSocket(socketPath, time.Second))
+	assert.Less(t, time.Since(start), 250*time.Millisecond)
+	require.NoError(t, <-errCh)
+	<-done
 }

@@ -114,7 +114,8 @@ type VMStarter interface {
 	// Each hypervisor implements its own restore flow:
 	// - Cloud Hypervisor: starts process, calls Restore API
 	// - QEMU: would start with -incoming or -loadvm flags (not yet implemented)
-	// Returns the process ID and a Hypervisor client. The VM is in paused state after restore.
+	// Returns the process ID and a Hypervisor client. The VM is usually paused
+	// after restore, unless the returned client reports RestoredResumed.
 	RestoreVM(ctx context.Context, p *paths.Paths, version string, socketPath string, snapshotPath string) (pid int, hv Hypervisor, err error)
 
 	// PrepareFork allows hypervisors to prepare forked instance state.
@@ -200,6 +201,16 @@ type Hypervisor interface {
 
 	// Capabilities returns what features this hypervisor supports.
 	Capabilities() Capabilities
+}
+
+type restoredResumedHypervisor interface {
+	RestoredResumed() bool
+}
+
+// RestoredResumed reports whether RestoreVM already resumed guest execution.
+func RestoredResumed(hv Hypervisor) bool {
+	resumed, ok := hv.(restoredResumedHypervisor)
+	return ok && resumed.RestoredResumed()
 }
 
 // Capabilities indicates which optional features a hypervisor supports.
