@@ -6,6 +6,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/network"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -112,6 +113,53 @@ func TestPatchGuestResumeNetworkMailbox(t *testing.T) {
 	err = json.Unmarshal(patched[offset+guestResumeNetworkMailboxPayloadOffset:offset+guestResumeNetworkMailboxPayloadOffset+int(payloadLen)], &decoded)
 	require.NoError(t, err)
 	assert.Equal(t, *payload, decoded)
+}
+
+func TestEnsureGuestInitiatedResumeNetworkMailbox(t *testing.T) {
+	t.Parallel()
+
+	stored := &StoredMetadata{
+		HypervisorType: hypervisor.TypeFirecracker,
+		NetworkEnabled: true,
+	}
+	ensureGuestInitiatedResumeNetworkMailbox(stored)
+
+	require.Equal(t, "1", stored.Env[guestResumeNetworkMailboxEnv])
+	token := stored.Env[guestResumeNetworkMailboxTokenEnv]
+	require.NotEmpty(t, token)
+	require.LessOrEqual(t, len(token), guestResumeNetworkMailboxTokenMaxLen)
+	assert.True(t, guestInitiatedResumeNetworkMailbox(stored))
+}
+
+func TestEnsureGuestInitiatedResumeNetworkMailboxPreservesToken(t *testing.T) {
+	t.Parallel()
+
+	stored := &StoredMetadata{
+		HypervisorType: hypervisor.TypeFirecracker,
+		NetworkEnabled: true,
+		Env: map[string]string{
+			guestResumeNetworkMailboxTokenEnv: "existing-token",
+		},
+	}
+	ensureGuestInitiatedResumeNetworkMailbox(stored)
+
+	assert.Equal(t, "1", stored.Env[guestResumeNetworkMailboxEnv])
+	assert.Equal(t, "existing-token", stored.Env[guestResumeNetworkMailboxTokenEnv])
+}
+
+func TestEnsureGuestInitiatedResumeNetworkMailboxRequiresEligibleGuest(t *testing.T) {
+	t.Parallel()
+
+	cases := []StoredMetadata{
+		{HypervisorType: hypervisor.TypeCloudHypervisor, NetworkEnabled: true},
+		{HypervisorType: hypervisor.TypeFirecracker, NetworkEnabled: false},
+		{HypervisorType: hypervisor.TypeFirecracker, NetworkEnabled: true, SkipGuestAgent: true},
+	}
+	for _, tc := range cases {
+		stored := tc
+		ensureGuestInitiatedResumeNetworkMailbox(&stored)
+		assert.False(t, guestInitiatedResumeNetworkMailbox(&stored))
+	}
 }
 
 func TestRequiresRestoreConfigDiskRefresh(t *testing.T) {

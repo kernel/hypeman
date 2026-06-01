@@ -15,6 +15,7 @@ import (
 
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
+	"github.com/nrednav/cuid2"
 	"go.opentelemetry.io/otel/attribute"
 	"golang.org/x/sys/unix"
 )
@@ -26,6 +27,7 @@ const firecrackerSnapshotMemoryFile = "memory"
 const guestResumeNetworkMailboxSeqOffset = 64
 const guestResumeNetworkMailboxLengthOffset = 68
 const guestResumeNetworkMailboxPayloadOffset = 72
+const guestResumeNetworkMailboxTokenMaxLen = guestResumeNetworkMailboxSeqOffset - len("HYPEMAN_RESUME_NETWORK_MAILBOX_V1\x00")
 const guestResumeNetworkUDPAckTimeout = 5 * time.Second
 
 var guestResumeNetworkMailboxMagic = []byte("HYPEMAN_RESUME_NETWORK_MAILBOX_V1\x00")
@@ -56,7 +58,7 @@ func guestInitiatedResumeNetworkMailbox(stored *StoredMetadata) bool {
 		stored.HypervisorType == hypervisor.TypeFirecracker &&
 		strings.TrimSpace(stored.Env[guestResumeNetworkMailboxEnv]) == "1" &&
 		token != "" &&
-		len(token) <= guestResumeNetworkMailboxSeqOffset-len(guestResumeNetworkMailboxMagic)
+		len(token) <= guestResumeNetworkMailboxTokenMaxLen
 }
 
 func guestInitiatedResumeNetworkMailboxToken(stored *StoredMetadata) string {
@@ -64,6 +66,22 @@ func guestInitiatedResumeNetworkMailboxToken(stored *StoredMetadata) string {
 		return ""
 	}
 	return strings.TrimSpace(stored.Env[guestResumeNetworkMailboxTokenEnv])
+}
+
+func ensureGuestInitiatedResumeNetworkMailbox(stored *StoredMetadata) {
+	if stored == nil ||
+		stored.HypervisorType != hypervisor.TypeFirecracker ||
+		!stored.NetworkEnabled ||
+		stored.SkipGuestAgent {
+		return
+	}
+	if stored.Env == nil {
+		stored.Env = make(map[string]string)
+	}
+	stored.Env[guestResumeNetworkMailboxEnv] = "1"
+	if token := guestInitiatedResumeNetworkMailboxToken(stored); token == "" || len(token) > guestResumeNetworkMailboxTokenMaxLen {
+		stored.Env[guestResumeNetworkMailboxTokenEnv] = cuid2.Generate()
+	}
 }
 
 func newGuestResumeNetworkPayload(cfg *guestNetworkConfig) guestResumeNetworkPayload {
