@@ -161,7 +161,11 @@ type ReconfigureNetworkOptions struct {
 
 func ReconfigureNetworkInInstance(ctx context.Context, dialer hypervisor.VsockDialer, opts ReconfigureNetworkOptions) error {
 	if opts.WaitForAgent == 0 {
-		return reconfigureNetworkOnce(ctx, dialer, opts)
+		err := reconfigureNetworkOnce(ctx, dialer, opts)
+		if err != nil && isRetryableConnectionError(err) {
+			CloseConn(dialer.Key())
+		}
+		return err
 	}
 
 	ctx, span := otel.Tracer("hypeman/guest").Start(ctx, "guest.reconfigure_network", trace.WithAttributes(
