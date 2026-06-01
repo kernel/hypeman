@@ -184,7 +184,7 @@ func allocateTestNetworkLease(testName string, seq uint32) (*testNetworkLease, e
 
 func withTestSubnetLock(fn func() error) error {
 	lockPath := filepath.Join(testNetworkTempDir(), "hypeman-test-network.lock")
-	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	lockFile, err := openTestSubnetLockFile(lockPath)
 	if err != nil {
 		return fmt.Errorf("open subnet lock file: %w", err)
 	}
@@ -196,6 +196,27 @@ func withTestSubnetLock(fn func() error) error {
 	defer syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
 
 	return fn()
+}
+
+func openTestSubnetLockFile(lockPath string) (*os.File, error) {
+	lockFile, err := os.OpenFile(lockPath, os.O_RDWR, 0)
+	if err == nil {
+		_ = lockFile.Chmod(0o666)
+		return lockFile, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+
+	lockFile, err = os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o666)
+	if errors.Is(err, os.ErrExist) {
+		return os.OpenFile(lockPath, os.O_RDWR, 0)
+	}
+	if err != nil {
+		return nil, err
+	}
+	_ = lockFile.Chmod(0o666)
+	return lockFile, nil
 }
 
 func testSubnetLeaseFilePath() string {
