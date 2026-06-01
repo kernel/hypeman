@@ -248,39 +248,13 @@ func (m *manager) restoreInstance(
 		proxyRegistered = true
 	}
 
-	var resumeNetworkAckWaiter *guestResumeNetworkUDPWaiter
-	var resumeNetworkAckCfg *guestNetworkConfig
-	resumeNetworkMailboxPatched := false
-	if allocatedNet != nil && !stored.SkipGuestAgent && guestInitiatedResumeNetworkMailbox(stored) {
-		resumeNetworkCfg, cfgErr := guestNetworkReconfigureConfig(allocatedNet)
-		if cfgErr != nil {
-			log.WarnContext(ctx, "failed to build guest resume network mailbox payload; falling back to host-initiated reconfigure", "instance_id", id, "error", cfgErr)
-		} else {
-			payload := newGuestResumeNetworkPayload(resumeNetworkCfg)
-			var waitErr error
-			resumeNetworkAckWaiter, waitErr = startGuestResumeNetworkUDPWaiter()
-			if waitErr != nil {
-				log.ErrorContext(ctx, "failed to start guest resume network UDP ack waiter", "instance_id", id, "error", waitErr)
-				releaseNetwork()
-				return nil, fmt.Errorf("start guest resume network UDP ack waiter: %w", waitErr)
-			}
-			resumeNetworkAckCfg = resumeNetworkCfg
-			payload.AckPort = resumeNetworkAckWaiter.Port()
-			if patchErr := patchGuestResumeNetworkMailbox(snapshotDir, guestInitiatedResumeNetworkMailboxToken(stored), &payload); patchErr != nil {
-				if resumeNetworkAckWaiter != nil {
-					resumeNetworkAckWaiter.Close()
-					resumeNetworkAckWaiter = nil
-					resumeNetworkAckCfg = nil
-				}
-				log.WarnContext(ctx, "failed to patch guest resume network mailbox; falling back to host-initiated reconfigure", "instance_id", id, "error", patchErr)
-			} else {
-				resumeNetworkMailboxPatched = true
-			}
-		}
+	resumeNetworkHandoff, err := m.prepareResumeNetworkHandoff(ctx, stored, allocatedNet, snapshotDir)
+	if err != nil {
+		log.ErrorContext(ctx, "failed to prepare guest resume network handoff", "instance_id", id, "error", err)
+		releaseNetwork()
+		return nil, fmt.Errorf("prepare guest resume network handoff: %w", err)
 	}
-	if resumeNetworkAckWaiter != nil {
-		defer resumeNetworkAckWaiter.Close()
-	}
+	defer resumeNetworkHandoff.Close()
 
 	// 5. Transition: Standby → Paused (start hypervisor + restore)
 	restoreCtx, restoreSpanEnd := m.startLifecycleStep(ctx, "restore_from_snapshot",
@@ -336,16 +310,7 @@ func (m *manager) restoreInstance(
 			attribute.String("hypervisor", string(stored.HypervisorType)),
 			attribute.String("operation", "reconfigure_guest_network"),
 		)
-		var reconfigureErr error
-		if resumeNetworkMailboxPatched {
-			reconfigureErr = m.waitForGuestResumeNetworkUDPAck(reconfigureCtx, resumeNetworkAckWaiter, stored, resumeNetworkAckCfg)
-			if reconfigureErr != nil {
-				log.ErrorContext(ctx, "guest resume network UDP ack wait failed; falling back to host-initiated reconfigure", "instance_id", id, "error", reconfigureErr)
-				reconfigureErr = reconfigureGuestNetwork(reconfigureCtx, stored, allocatedNet)
-			}
-		} else {
-			reconfigureErr = reconfigureGuestNetwork(reconfigureCtx, stored, allocatedNet)
-		}
+		reconfigureErr := resumeNetworkHandoff.AfterResume(reconfigureCtx)
 		reconfigureSpanEnd(reconfigureErr)
 		if reconfigureErr != nil {
 			log.ErrorContext(ctx, "failed to configure guest network after restore", "instance_id", id, "error", reconfigureErr)
