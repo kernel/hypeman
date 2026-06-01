@@ -6,11 +6,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kernel/hypeman/lib/resumenetwork"
 	"github.com/stretchr/testify/require"
 )
 
 func TestWaitAndApplyResumeNetworkMailboxTimesOutWhenPayloadMissing(t *testing.T) {
-	buf := make([]byte, resumeNetworkMailboxSize)
+	buf := make([]byte, resumenetwork.MailboxSize)
 
 	err := waitAndApplyResumeNetworkMailboxWithTimeout(&guestServer{}, buf, 5*time.Millisecond)
 

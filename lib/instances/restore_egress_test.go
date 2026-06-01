@@ -8,6 +8,7 @@ import (
 
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/network"
+	"github.com/kernel/hypeman/lib/resumenetwork"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -87,11 +88,11 @@ func TestPatchGuestResumeNetworkMailbox(t *testing.T) {
 	dir := t.TempDir()
 	token := "test-token"
 	mem := make([]byte, 4096)
-	copy(mem[512:], guestResumeNetworkMailboxMagic)
-	copy(mem[512+len(guestResumeNetworkMailboxMagic):], token)
+	copy(mem[512:], resumenetwork.MailboxMagic)
+	copy(mem[512+len(resumenetwork.MailboxMagic):], token)
 	require.NoError(t, os.WriteFile(dir+"/"+firecrackerSnapshotMemoryFile, mem, 0644))
 
-	payload := &guestResumeNetworkPayload{
+	payload := &resumenetwork.Payload{
 		InterfaceName: "eth0",
 		MAC:           "02:00:00:85:17:c8",
 		IPv4:          "10.102.146.62",
@@ -105,12 +106,12 @@ func TestPatchGuestResumeNetworkMailbox(t *testing.T) {
 	require.NoError(t, err)
 
 	offset := 512
-	require.Equal(t, uint32(1), binary.LittleEndian.Uint32(patched[offset+guestResumeNetworkMailboxSeqOffset:]))
-	payloadLen := binary.LittleEndian.Uint32(patched[offset+guestResumeNetworkMailboxLengthOffset:])
+	require.Equal(t, uint32(1), binary.LittleEndian.Uint32(patched[offset+resumenetwork.MailboxSeqOffset:]))
+	payloadLen := binary.LittleEndian.Uint32(patched[offset+resumenetwork.MailboxLengthOffset:])
 	require.NotZero(t, payloadLen)
 
-	var decoded guestResumeNetworkPayload
-	err = json.Unmarshal(patched[offset+guestResumeNetworkMailboxPayloadOffset:offset+guestResumeNetworkMailboxPayloadOffset+int(payloadLen)], &decoded)
+	var decoded resumenetwork.Payload
+	err = json.Unmarshal(patched[offset+resumenetwork.MailboxPayloadOffset:offset+resumenetwork.MailboxPayloadOffset+int(payloadLen)], &decoded)
 	require.NoError(t, err)
 	assert.Equal(t, *payload, decoded)
 }
@@ -124,10 +125,10 @@ func TestEnsureGuestInitiatedResumeNetworkMailbox(t *testing.T) {
 	}
 	ensureGuestInitiatedResumeNetworkMailbox(stored)
 
-	require.Equal(t, "1", stored.Env[guestResumeNetworkMailboxEnv])
-	token := stored.Env[guestResumeNetworkMailboxTokenEnv]
+	require.Equal(t, "1", stored.Env[resumenetwork.MailboxEnv])
+	token := stored.Env[resumenetwork.MailboxTokenEnv]
 	require.NotEmpty(t, token)
-	require.LessOrEqual(t, len(token), guestResumeNetworkMailboxTokenMaxLen)
+	require.LessOrEqual(t, len(token), resumenetwork.MailboxTokenMaxLen)
 	assert.True(t, guestInitiatedResumeNetworkMailbox(stored))
 }
 
@@ -138,13 +139,13 @@ func TestEnsureGuestInitiatedResumeNetworkMailboxPreservesToken(t *testing.T) {
 		HypervisorType: hypervisor.TypeFirecracker,
 		NetworkEnabled: true,
 		Env: map[string]string{
-			guestResumeNetworkMailboxTokenEnv: "existing-token",
+			resumenetwork.MailboxTokenEnv: "existing-token",
 		},
 	}
 	ensureGuestInitiatedResumeNetworkMailbox(stored)
 
-	assert.Equal(t, "1", stored.Env[guestResumeNetworkMailboxEnv])
-	assert.Equal(t, "existing-token", stored.Env[guestResumeNetworkMailboxTokenEnv])
+	assert.Equal(t, "1", stored.Env[resumenetwork.MailboxEnv])
+	assert.Equal(t, "existing-token", stored.Env[resumenetwork.MailboxTokenEnv])
 }
 
 func TestEnsureGuestInitiatedResumeNetworkMailboxRequiresEligibleGuest(t *testing.T) {

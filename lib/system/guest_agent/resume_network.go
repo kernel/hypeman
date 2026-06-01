@@ -6,7 +6,6 @@ import (
 	"bufio"
 	"context"
 	"encoding/binary"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -19,28 +18,12 @@ import (
 	"unsafe"
 
 	pb "github.com/kernel/hypeman/lib/guest"
+	"github.com/kernel/hypeman/lib/resumenetwork"
 	"golang.org/x/sys/unix"
 )
 
-const resumeNetworkMailboxEnv = "HYPEMAN_RESUME_NETWORK_MAILBOX"
-const resumeNetworkMailboxTokenEnv = "HYPEMAN_RESUME_NETWORK_MAILBOX_TOKEN"
 const vmgenIDKmsgSignal = "crng reseeded due to virtual machine fork"
-const resumeNetworkMailboxSize = 4096
-const resumeNetworkMailboxSeqOffset = 64
-const resumeNetworkMailboxLengthOffset = 68
-const resumeNetworkMailboxPayloadOffset = 72
 const resumeNetworkMailboxPayloadTimeout = 5 * time.Second
-
-var resumeNetworkMailboxMagic = []byte("HYPEMAN_RESUME_NETWORK_MAILBOX_V1\x00")
-
-type resumeNetworkPayload struct {
-	InterfaceName string `json:"interface_name"`
-	MAC           string `json:"mac"`
-	IPv4          string `json:"ipv4"`
-	Prefix        uint32 `json:"prefix"`
-	Gateway       string `json:"gateway"`
-	AckPort       uint32 `json:"ack_port,omitempty"`
-}
 
 type vmGenIDResumeWaiter struct {
 	file   *os.File
@@ -48,7 +31,7 @@ type vmGenIDResumeWaiter struct {
 }
 
 func startResumeNetworkWatcher(s *guestServer) {
-	if strings.TrimSpace(os.Getenv(resumeNetworkMailboxEnv)) != "1" {
+	if strings.TrimSpace(os.Getenv(resumenetwork.MailboxEnv)) != "1" {
 		return
 	}
 
@@ -61,19 +44,15 @@ func startResumeNetworkWatcher(s *guestServer) {
 }
 
 func newResumeNetworkMailbox() []byte {
-	token := strings.TrimSpace(os.Getenv(resumeNetworkMailboxTokenEnv))
-	if token == "" {
-		log.Printf("[guest-agent] resume network mailbox disabled: missing %s", resumeNetworkMailboxTokenEnv)
-		return nil
-	}
-	if len(token) > resumeNetworkMailboxSeqOffset-len(resumeNetworkMailboxMagic) {
-		log.Printf("[guest-agent] resume network mailbox disabled: %s is too long", resumeNetworkMailboxTokenEnv)
+	token := strings.TrimSpace(os.Getenv(resumenetwork.MailboxTokenEnv))
+	if !resumenetwork.ValidToken(token) {
+		log.Printf("[guest-agent] resume network mailbox disabled: invalid %s", resumenetwork.MailboxTokenEnv)
 		return nil
 	}
 
-	buf := make([]byte, resumeNetworkMailboxSize)
-	copy(buf, resumeNetworkMailboxMagic)
-	copy(buf[len(resumeNetworkMailboxMagic):resumeNetworkMailboxSeqOffset], token)
+	buf := make([]byte, resumenetwork.MailboxSize)
+	copy(buf, resumenetwork.MailboxMagic)
+	copy(buf[len(resumenetwork.MailboxMagic):resumenetwork.MailboxSeqOffset], token)
 	if err := unix.Mlock(buf); err != nil {
 		log.Printf("[guest-agent] resume network mailbox mlock failed: %v", err)
 	}
@@ -115,7 +94,7 @@ func waitAndApplyResumeNetworkMailbox(s *guestServer, buf []byte) error {
 func waitAndApplyResumeNetworkMailboxWithTimeout(s *guestServer, buf []byte, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for {
-		seq := atomicLoadUint32(buf[resumeNetworkMailboxSeqOffset:])
+		seq := atomicLoadUint32(buf[resumenetwork.MailboxSeqOffset:])
 		if seq == 0 {
 			if time.Now().After(deadline) {
 				return fmt.Errorf("resume network mailbox payload was not patched within %s", timeout)
@@ -124,17 +103,13 @@ func waitAndApplyResumeNetworkMailboxWithTimeout(s *guestServer, buf []byte, tim
 			continue
 		}
 
-		payloadLen := binary.LittleEndian.Uint32(buf[resumeNetworkMailboxLengthOffset:])
-		if payloadLen == 0 || int(payloadLen) > len(buf)-resumeNetworkMailboxPayloadOffset {
-			return fmt.Errorf("invalid mailbox payload length %d", payloadLen)
+		payloadLen := binary.LittleEndian.Uint32(buf[resumenetwork.MailboxLengthOffset:])
+		payload, err := resumenetwork.DecodePayloadFrame(buf, payloadLen)
+		if err != nil {
+			return err
 		}
 
-		var payload resumeNetworkPayload
-		if err := json.Unmarshal(buf[resumeNetworkMailboxPayloadOffset:resumeNetworkMailboxPayloadOffset+int(payloadLen)], &payload); err != nil {
-			return fmt.Errorf("decode mailbox payload: %w", err)
-		}
-
-		_, err := s.ReconfigureNetwork(context.Background(), &pb.ReconfigureNetworkRequest{
+		_, err = s.ReconfigureNetwork(context.Background(), &pb.ReconfigureNetworkRequest{
 			InterfaceName: payload.InterfaceName,
 			Mac:           payload.MAC,
 			Ipv4:          payload.IPv4,
@@ -145,12 +120,12 @@ func waitAndApplyResumeNetworkMailboxWithTimeout(s *guestServer, buf []byte, tim
 			return err
 		}
 		sendResumeNetworkAck(payload, "applied")
-		atomicStoreUint32(buf[resumeNetworkMailboxSeqOffset:], 0)
+		atomicStoreUint32(buf[resumenetwork.MailboxSeqOffset:], 0)
 		return nil
 	}
 }
 
-func sendResumeNetworkAck(payload resumeNetworkPayload, stage string) {
+func sendResumeNetworkAck(payload resumenetwork.Payload, stage string) {
 	if payload.AckPort == 0 || payload.Gateway == "" {
 		return
 	}
