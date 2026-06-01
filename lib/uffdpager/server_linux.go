@@ -31,6 +31,7 @@ const (
 	uffdEventRemove    = 0x15
 	uffdEventUnmap     = 0x16
 	uffdioCopy         = 0xc028aa03
+	uffdMsgSize        = 32
 )
 
 type guestRegionUffdMapping struct {
@@ -373,7 +374,7 @@ func (s *session) handleFaults(mappings []guestRegionUffdMapping) {
 	fd := s.uffdFD
 	_ = unix.SetNonblock(fd, true)
 	pollFDs := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
-	buf := make([]byte, 64)
+	buf := make([]byte, uffdMsgSize)
 	var deferred []uffdEvent
 	for {
 		if len(deferred) == 0 {
