@@ -16,6 +16,7 @@ import (
 
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/vishvananda/netlink"
+	"go.opentelemetry.io/otel/attribute"
 	"golang.org/x/sys/unix"
 )
 
@@ -500,9 +501,21 @@ func (m *manager) lastHypemanForwardRulePosition() int {
 // Returns the tc class ID actually assigned (empty if no upload rate limiting).
 func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName string, isolated bool, downloadBps, uploadBps, uploadCeilBps int64) (string, error) {
 	// 1. Check if TAP already exists
-	if _, err := netlink.LinkByName(tapName); err == nil {
+	_, linkCheckSpanEnd := startNetworkStep(ctx, "network.create_tap.link_lookup_existing",
+		attribute.String("operation", "link_lookup_existing"),
+		attribute.String("tap", tapName),
+	)
+	_, err := netlink.LinkByName(tapName)
+	linkCheckSpanEnd(nil)
+	if err == nil {
 		// TAP already exists, delete it first
-		if err := m.deleteTAPDevice(tapName, ""); err != nil {
+		_, deleteSpanEnd := startNetworkStep(ctx, "network.create_tap.delete_existing",
+			attribute.String("operation", "delete_existing_tap"),
+			attribute.String("tap", tapName),
+		)
+		err := m.deleteTAPDevice(tapName, "")
+		deleteSpanEnd(err)
+		if err != nil {
 			return "", fmt.Errorf("delete existing TAP: %w", err)
 		}
 	}
@@ -521,37 +534,73 @@ func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName strin
 		Group: uint32(gid),
 	}
 
-	if err := netlink.LinkAdd(tap); err != nil {
+	_, linkAddSpanEnd := startNetworkStep(ctx, "network.create_tap.link_add",
+		attribute.String("operation", "link_add"),
+		attribute.String("tap", tapName),
+	)
+	err = netlink.LinkAdd(tap)
+	linkAddSpanEnd(err)
+	if err != nil {
 		return "", fmt.Errorf("create TAP device: %w", err)
 	}
 
 	// 3. Set TAP up
 	tapLink := tap
 
-	if err := netlink.LinkSetUp(tapLink); err != nil {
+	_, setUpSpanEnd := startNetworkStep(ctx, "network.create_tap.link_set_up",
+		attribute.String("operation", "link_set_up"),
+		attribute.String("tap", tapName),
+	)
+	err = netlink.LinkSetUp(tapLink)
+	setUpSpanEnd(err)
+	if err != nil {
 		return "", fmt.Errorf("set TAP up: %w", err)
 	}
 
 	// 4. Attach TAP to bridge
+	_, bridgeLookupSpanEnd := startNetworkStep(ctx, "network.create_tap.link_lookup_bridge",
+		attribute.String("operation", "link_lookup_bridge"),
+		attribute.String("bridge", bridgeName),
+	)
 	bridge, err := netlink.LinkByName(bridgeName)
+	bridgeLookupSpanEnd(err)
 	if err != nil {
 		return "", fmt.Errorf("get bridge: %w", err)
 	}
 
-	if err := netlink.LinkSetMaster(tapLink, bridge); err != nil {
+	_, setMasterSpanEnd := startNetworkStep(ctx, "network.create_tap.link_set_master",
+		attribute.String("operation", "link_set_master"),
+		attribute.String("tap", tapName),
+		attribute.String("bridge", bridgeName),
+	)
+	err = netlink.LinkSetMaster(tapLink, bridge)
+	setMasterSpanEnd(err)
+	if err != nil {
 		return "", fmt.Errorf("attach TAP to bridge: %w", err)
 	}
 
 	// 5. Enable port isolation so isolated TAPs can't directly talk to each other (requires kernel support and capabilities)
 	if isolated {
-		if err := netlink.LinkSetIsolated(tapLink, true); err != nil {
+		_, isolationSpanEnd := startNetworkStep(ctx, "network.create_tap.set_isolation",
+			attribute.String("operation", "set_isolation"),
+			attribute.String("tap", tapName),
+		)
+		err = netlink.LinkSetIsolated(tapLink, true)
+		isolationSpanEnd(err)
+		if err != nil {
 			return "", fmt.Errorf("set isolation mode: %w", err)
 		}
 	}
 
 	// 6. Apply download rate limiting (TBF on TAP egress)
 	if downloadBps > 0 {
-		if err := m.applyDownloadRateLimit(tapName, downloadBps); err != nil {
+		_, downloadSpanEnd := startNetworkStep(ctx, "network.create_tap.download_rate_limit",
+			attribute.String("operation", "download_rate_limit"),
+			attribute.String("tap", tapName),
+		)
+		err := m.applyDownloadRateLimit(tapName, downloadBps)
+		downloadSpanEnd(err)
+		if err != nil {
 			return "", fmt.Errorf("apply download rate limit: %w", err)
 		}
 	}
@@ -559,8 +608,13 @@ func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName strin
 	// 7. Apply upload rate limiting (HTB class on bridge)
 	var classID string
 	if uploadBps > 0 {
-		var err error
-		classID, err = m.addVMClass(ctx, bridgeName, tapName, uploadBps, uploadCeilBps)
+		uploadCtx, uploadSpanEnd := startNetworkStep(ctx, "network.create_tap.upload_rate_limit",
+			attribute.String("operation", "upload_rate_limit"),
+			attribute.String("tap", tapName),
+			attribute.String("bridge", bridgeName),
+		)
+		classID, err = m.addVMClass(uploadCtx, bridgeName, tapName, uploadBps, uploadCeilBps)
+		uploadSpanEnd(err)
 		if err != nil {
 			return "", fmt.Errorf("apply upload rate limit: %w", err)
 		}

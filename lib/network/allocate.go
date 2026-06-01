@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/logger"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 // CreateAllocation allocates IP/MAC/TAP for instance on the default network
@@ -19,7 +20,12 @@ func (m *manager) CreateAllocation(ctx context.Context, req AllocateRequest) (*N
 
 	// Resolve bridge/default network before taking allocation lock so
 	// self-heal retries don't block other allocation/release operations.
-	network, err := m.getOrInitDefaultNetwork(ctx)
+	networkCtx, networkSpanEnd := startNetworkStep(ctx, "network.get_default_network",
+		attribute.String("operation", "get_default_network"),
+		attribute.String("instance_id", req.InstanceID),
+	)
+	network, err := m.getOrInitDefaultNetwork(networkCtx)
+	networkSpanEnd(err)
 	if err != nil {
 		return nil, err
 	}
@@ -30,13 +36,23 @@ func (m *manager) CreateAllocation(ctx context.Context, req AllocateRequest) (*N
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	allocations, err := m.ListAllocations(ctx)
+	listCtx, listSpanEnd := startNetworkStep(ctx, "network.list_allocations",
+		attribute.String("operation", "list_allocations"),
+		attribute.String("instance_id", req.InstanceID),
+	)
+	allocations, err := m.ListAllocations(listCtx)
+	listSpanEnd(err)
 	if err != nil {
 		return nil, fmt.Errorf("list allocations: %w", err)
 	}
 
 	// 1. Check name uniqueness (exclude current instance to allow restarts)
+	_, nameSpanEnd := startNetworkStep(ctx, "network.name_exists",
+		attribute.String("operation", "name_exists"),
+		attribute.String("instance_id", req.InstanceID),
+	)
 	exists := nameExistsInAllocations(allocations, req.InstanceName, req.InstanceID)
+	nameSpanEnd(nil)
 	if exists {
 		return nil, fmt.Errorf("%w: instance name '%s' already exists, can't assign into same network: %s",
 			ErrNameExists, req.InstanceName, network.Name)
@@ -46,13 +62,23 @@ func (m *manager) CreateAllocation(ctx context.Context, req AllocateRequest) (*N
 	// Random selection reduces predictability and helps distribute IPs across the subnet.
 	// This is especially useful for large /16 networks and reduces conflicts when
 	// moving standby VMs across hosts.
+	_, ipSpanEnd := startNetworkStep(ctx, "network.allocate_ip",
+		attribute.String("operation", "allocate_ip"),
+		attribute.String("instance_id", req.InstanceID),
+	)
 	ip, err := allocateNextIPFromAllocations(network.Subnet, allocations)
+	ipSpanEnd(err)
 	if err != nil {
 		return nil, fmt.Errorf("allocate IP: %w", err)
 	}
 
 	// 3. Generate unused MAC (02:00:00:... format - locally administered)
+	_, macSpanEnd := startNetworkStep(ctx, "network.allocate_mac",
+		attribute.String("operation", "allocate_mac"),
+		attribute.String("instance_id", req.InstanceID),
+	)
 	mac, err := allocateUniqueMACFromAllocations(allocations, generateMAC)
+	macSpanEnd(err)
 	if err != nil {
 		return nil, fmt.Errorf("allocate MAC: %w", err)
 	}
@@ -61,7 +87,16 @@ func (m *manager) CreateAllocation(ctx context.Context, req AllocateRequest) (*N
 	tap := GenerateTAPName(req.InstanceID)
 
 	// 5. Create TAP device with bidirectional rate limiting
-	classID, err := m.createTAPDevice(ctx, tap, network.Bridge, network.Isolated, req.DownloadBps, req.UploadBps, req.UploadCeilBps)
+	tapCtx, tapSpanEnd := startNetworkStep(ctx, "network.create_tap",
+		attribute.String("operation", "create_tap"),
+		attribute.String("instance_id", req.InstanceID),
+		attribute.String("tap", tap),
+		attribute.Bool("isolated", network.Isolated),
+		attribute.Bool("download_rate_limit", req.DownloadBps > 0),
+		attribute.Bool("upload_rate_limit", req.UploadBps > 0),
+	)
+	classID, err := m.createTAPDevice(tapCtx, tap, network.Bridge, network.Isolated, req.DownloadBps, req.UploadBps, req.UploadCeilBps)
+	tapSpanEnd(err)
 	if err != nil {
 		return nil, fmt.Errorf("create TAP device: %w", err)
 	}
@@ -69,13 +104,20 @@ func (m *manager) CreateAllocation(ctx context.Context, req AllocateRequest) (*N
 
 	// Persist assigned tc class ID so removal uses the correct ID after collisions.
 	// Clear any stale file when no rate limiting was applied.
+	_, saveClassSpanEnd := startNetworkStep(ctx, "network.save_class_id",
+		attribute.String("operation", "save_class_id"),
+		attribute.String("instance_id", req.InstanceID),
+		attribute.Bool("has_class_id", classID != ""),
+	)
 	if classID != "" {
 		if err := m.saveClassID(req.InstanceID, classID); err != nil {
+			saveClassSpanEnd(err)
 			return nil, fmt.Errorf("save class ID: %w", err)
 		}
 	} else {
 		m.clearClassID(req.InstanceID)
 	}
+	saveClassSpanEnd(nil)
 
 	log.InfoContext(ctx, "allocated network",
 		"instance_id", req.InstanceID,
@@ -111,7 +153,12 @@ func (m *manager) RecreateAllocation(ctx context.Context, instanceID string, dow
 	log := logger.FromContext(ctx)
 
 	// 1. Derive allocation from snapshot
-	alloc, err := m.deriveAllocation(ctx, instanceID)
+	deriveCtx, deriveSpanEnd := startNetworkStep(ctx, "network.derive_allocation",
+		attribute.String("operation", "derive_allocation"),
+		attribute.String("instance_id", instanceID),
+	)
+	alloc, err := m.deriveAllocation(deriveCtx, instanceID)
+	deriveSpanEnd(err)
 	if err != nil {
 		return fmt.Errorf("derive allocation: %w", err)
 	}
@@ -121,14 +168,28 @@ func (m *manager) RecreateAllocation(ctx context.Context, instanceID string, dow
 	}
 
 	// 2. Get default network details (same self-healing behavior as CreateAllocation).
-	network, err := m.getOrInitDefaultNetwork(ctx)
+	networkCtx, networkSpanEnd := startNetworkStep(ctx, "network.get_default_network",
+		attribute.String("operation", "get_default_network"),
+		attribute.String("instance_id", instanceID),
+	)
+	network, err := m.getOrInitDefaultNetwork(networkCtx)
+	networkSpanEnd(err)
 	if err != nil {
 		return err
 	}
 
 	// 3. Recreate TAP device with same name and rate limits from instance metadata
 	uploadCeilBps := uploadBps * int64(m.GetUploadBurstMultiplier())
-	classID, err := m.createTAPDevice(ctx, alloc.TAPDevice, network.Bridge, network.Isolated, downloadBps, uploadBps, uploadCeilBps)
+	tapCtx, tapSpanEnd := startNetworkStep(ctx, "network.create_tap",
+		attribute.String("operation", "create_tap"),
+		attribute.String("instance_id", instanceID),
+		attribute.String("tap", alloc.TAPDevice),
+		attribute.Bool("isolated", network.Isolated),
+		attribute.Bool("download_rate_limit", downloadBps > 0),
+		attribute.Bool("upload_rate_limit", uploadBps > 0),
+	)
+	classID, err := m.createTAPDevice(tapCtx, alloc.TAPDevice, network.Bridge, network.Isolated, downloadBps, uploadBps, uploadCeilBps)
+	tapSpanEnd(err)
 	if err != nil {
 		return fmt.Errorf("create TAP device: %w", err)
 	}
@@ -136,13 +197,20 @@ func (m *manager) RecreateAllocation(ctx context.Context, instanceID string, dow
 
 	// Persist assigned tc class ID so removal uses the correct ID after collisions.
 	// Clear any stale file when no rate limiting was applied.
+	_, saveClassSpanEnd := startNetworkStep(ctx, "network.save_class_id",
+		attribute.String("operation", "save_class_id"),
+		attribute.String("instance_id", instanceID),
+		attribute.Bool("has_class_id", classID != ""),
+	)
 	if classID != "" {
 		if err := m.saveClassID(instanceID, classID); err != nil {
+			saveClassSpanEnd(err)
 			return fmt.Errorf("save class ID: %w", err)
 		}
 	} else {
 		m.clearClassID(instanceID)
 	}
+	saveClassSpanEnd(nil)
 
 	log.InfoContext(ctx, "recreated network for restore",
 		"instance_id", instanceID,
