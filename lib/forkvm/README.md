@@ -24,13 +24,12 @@ memory. After resume, VMGenID tells the guest-agent that this is a restored VM;
 the guest-agent reads the mailbox and applies the new MAC, address, route, and
 neighbor state with netlink.
 
-For API calls that return a running fork, `wait_for_network` defaults to true.
-In that mode Hypeman waits for a guest UDP "applied" ack before returning, so
-the fast path still avoids making host-initiated guest RPC/vsock contact as the
-first post-resume dependency. If `wait_for_network=false`, the API returns after
-resume once the mailbox has been patched and the guest finishes the network
-handoff asynchronously. If the mailbox path is unavailable, restore falls back
-to the older host-initiated guest network reconfigure path.
+For API calls that return a running fork, Hypeman waits for a guest UDP
+"applied" ack before returning, so the fast path still avoids making
+host-initiated guest RPC/vsock contact as the first post-resume dependency. If
+the mailbox path is unavailable, cannot start its ack listener, or does not ack
+in time, restore falls back to the older host-initiated guest network
+reconfigure path.
 
 ## Fork data copy behavior
 
