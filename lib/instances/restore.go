@@ -300,7 +300,9 @@ func (m *manager) restoreInstance(
 		attribute.String("operation", "resume_vm"),
 	)
 	log.InfoContext(ctx, "resuming VM", "instance_id", id)
-	if err := hv.Resume(resumeCtx); err != nil {
+	if hypervisor.RestoredResumed(hv) {
+		log.InfoContext(ctx, "VM was resumed during snapshot load", "instance_id", id)
+	} else if err := hv.Resume(resumeCtx); err != nil {
 		resumeSpanEnd(err)
 		log.ErrorContext(ctx, "failed to resume VM", "instance_id", id, "error", err)
 		// Cleanup on failure

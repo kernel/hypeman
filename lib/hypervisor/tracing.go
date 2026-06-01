@@ -172,6 +172,10 @@ func (h *tracingHypervisor) Capabilities() Capabilities {
 	return h.next.Capabilities()
 }
 
+func (h *tracingHypervisor) RestoredResumed() bool {
+	return RestoredResumed(h.next)
+}
+
 func (h *tracingHypervisor) spanAttrs(attrs ...attribute.KeyValue) []attribute.KeyValue {
 	out := make([]attribute.KeyValue, 0, len(h.attrs)+len(attrs))
 	out = append(out, h.attrs...)

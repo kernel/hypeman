@@ -213,12 +213,12 @@ func toSnapshotCreateParams(snapshotDir string) snapshotCreateParams {
 	}
 }
 
-func toSnapshotLoadParams(snapshotDir string, networkOverrides []networkOverride) snapshotLoadParams {
+func toSnapshotLoadParams(snapshotDir string, networkOverrides []networkOverride, resumeVM bool) snapshotLoadParams {
 	return snapshotLoadParams{
 		MemFilePath:         snapshotMemoryPath(snapshotDir),
 		SnapshotPath:        snapshotStatePath(snapshotDir),
 		EnableDiffSnapshots: true,
-		ResumeVM:            false,
+		ResumeVM:            resumeVM,
 		NetworkOverrides:    networkOverrides,
 	}
 }
