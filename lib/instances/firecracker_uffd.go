@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
-	"github.com/kernel/hypeman/lib/hypervisor/firecracker"
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/uffdpager"
 )
@@ -23,19 +22,18 @@ func (m *manager) useFirecrackerUFFD(stored *StoredMetadata) bool {
 		m.firecrackerSnapshotMemoryBackend == uffdpager.BackendUFFD
 }
 
-func (m *manager) configureFirecrackerSnapshotRestore(stored *StoredMetadata, snapshotDir string, overlays []uffdpager.OverlayPage) error {
+func (m *manager) firecrackerSnapshotRestoreOptions(stored *StoredMetadata, snapshotDir string, overlays []uffdpager.OverlayPage) (hypervisor.RestoreOptions, error) {
+	opts := hypervisor.RestoreOptions{SnapshotMemoryBackend: hypervisor.SnapshotMemoryBackendFile}
 	if stored == nil || stored.HypervisorType != hypervisor.TypeFirecracker {
-		return nil
+		return opts, nil
 	}
 	if !m.useFirecrackerUFFD(stored) {
 		stored.FirecrackerUFFDSessionID = ""
 		stored.FirecrackerUFFDPagerVersion = ""
-		return firecracker.ConfigureSnapshotMemoryBackend(stored.DataDir, firecracker.SnapshotMemoryBackendConfig{
-			Backend: uffdpager.BackendFile,
-		})
+		return opts, nil
 	}
 	if m.firecrackerUFFDPager == nil {
-		return fmt.Errorf("firecracker uffd snapshot restore is enabled but the pager is not configured")
+		return opts, fmt.Errorf("firecracker uffd snapshot restore is enabled but the pager is not configured")
 	}
 
 	cacheKey := strings.TrimSpace(stored.FirecrackerSnapshotCacheKey)
@@ -43,17 +41,17 @@ func (m *manager) configureFirecrackerSnapshotRestore(stored *StoredMetadata, sn
 		var err error
 		cacheKey, err = firecrackerSnapshotCacheKey(stored, snapshotDir)
 		if err != nil {
-			return err
+			return opts, err
 		}
 		stored.FirecrackerSnapshotCacheKey = cacheKey
 	}
 	stored.FirecrackerUFFDSessionID = stored.Id
 	stored.FirecrackerUFFDPagerVersion = m.firecrackerUFFDPager.VersionKey()
-	return firecracker.ConfigureSnapshotMemoryBackend(stored.DataDir, firecracker.SnapshotMemoryBackendConfig{
-		Backend:  uffdpager.BackendUFFD,
-		CacheKey: cacheKey,
-		Overlays: overlays,
-	})
+	opts.SnapshotMemoryBackend = hypervisor.SnapshotMemoryBackendUFFD
+	opts.SnapshotMemoryCacheKey = cacheKey
+	opts.SnapshotMemorySessionID = stored.FirecrackerUFFDSessionID
+	opts.SnapshotMemoryOverlays = toHypervisorSnapshotMemoryOverlays(overlays)
+	return opts, nil
 }
 
 func (m *manager) refreshFirecrackerSnapshotCacheKey(stored *StoredMetadata, snapshotDir string) error {
@@ -137,6 +135,20 @@ func firecrackerSnapshotCacheKey(stored *StoredMetadata, snapshotDir string) (st
 		stateInfo.ModTime().UnixNano(),
 	)))
 	return hex.EncodeToString(sum[:])[:24], nil
+}
+
+func toHypervisorSnapshotMemoryOverlays(overlays []uffdpager.OverlayPage) []hypervisor.SnapshotMemoryOverlay {
+	if len(overlays) == 0 {
+		return nil
+	}
+	result := make([]hypervisor.SnapshotMemoryOverlay, 0, len(overlays))
+	for _, overlay := range overlays {
+		result = append(result, hypervisor.SnapshotMemoryOverlay{
+			GuestMemoryOffset: overlay.GuestMemoryOffset,
+			Path:              overlay.Path,
+		})
+	}
+	return result
 }
 
 func fileStatFingerprint(info os.FileInfo) string {

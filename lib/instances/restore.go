@@ -248,9 +248,10 @@ func (m *manager) restoreInstance(
 		proxyRegistered = true
 	}
 
-	if err := m.configureFirecrackerSnapshotRestore(stored, snapshotDir, nil); err != nil {
+	restoreOptions, err := m.firecrackerSnapshotRestoreOptions(stored, snapshotDir, nil)
+	if err != nil {
 		releaseNetwork()
-		return nil, fmt.Errorf("configure firecracker snapshot memory backend: %w", err)
+		return nil, fmt.Errorf("configure snapshot memory backend: %w", err)
 	}
 
 	// 5. Transition: Standby → Paused (start hypervisor + restore)
@@ -260,7 +261,7 @@ func (m *manager) restoreInstance(
 		attribute.String("operation", "restore_from_snapshot"),
 	)
 	log.InfoContext(ctx, "restoring from snapshot", "instance_id", id, "snapshot_dir", snapshotDir, "hypervisor", stored.HypervisorType)
-	pid, hv, err := m.restoreFromSnapshot(restoreCtx, stored, snapshotDir)
+	pid, hv, err := m.restoreFromSnapshot(restoreCtx, stored, snapshotDir, restoreOptions)
 	restoreSpanEnd(err)
 	if err != nil {
 		log.ErrorContext(ctx, "failed to restore from snapshot", "instance_id", id, "error", err)
@@ -385,6 +386,7 @@ func (m *manager) restoreFromSnapshot(
 	ctx context.Context,
 	stored *StoredMetadata,
 	snapshotDir string,
+	opts hypervisor.RestoreOptions,
 ) (int, hypervisor.Hypervisor, error) {
 	log := logger.FromContext(ctx)
 
@@ -396,7 +398,7 @@ func (m *manager) restoreFromSnapshot(
 
 	// Restore VM from snapshot (handles process start + restore)
 	log.DebugContext(ctx, "restoring VM from snapshot", "instance_id", stored.Id, "hypervisor", stored.HypervisorType, "version", stored.HypervisorVersion, "snapshot_dir", snapshotDir)
-	pid, hv, err := starter.RestoreVM(ctx, m.paths, stored.HypervisorVersion, stored.SocketPath, snapshotDir)
+	pid, hv, err := starter.RestoreVM(ctx, m.paths, stored.HypervisorVersion, stored.SocketPath, snapshotDir, opts)
 	if err != nil {
 		return 0, nil, fmt.Errorf("restore vm: %w", err)
 	}

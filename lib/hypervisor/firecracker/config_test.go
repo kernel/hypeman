@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
-	"github.com/kernel/hypeman/lib/uffdpager"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -100,35 +99,6 @@ func TestSnapshotLoadParamsSupportsUFFDBackend(t *testing.T) {
 	require.NotNil(t, load.MemBackend)
 	assert.Equal(t, "Uffd", load.MemBackend.BackendType)
 	assert.Equal(t, "/tmp/pager.sock", load.MemBackend.BackendPath)
-}
-
-func TestConfigureSnapshotMemoryBackendPersistsUFFDAndClearsForFile(t *testing.T) {
-	dir := t.TempDir()
-	require.NoError(t, saveRestoreMetadata(dir, []networkInterface{{IfaceID: "eth0", HostDevName: "tap0"}}))
-
-	require.NoError(t, ConfigureSnapshotMemoryBackend(dir, SnapshotMemoryBackendConfig{
-		Backend:  uffdpager.BackendUFFD,
-		CacheKey: "cache-key",
-		Overlays: []uffdpager.OverlayPage{{
-			GuestMemoryOffset: 4096,
-			Path:              "/tmp/overlay.page",
-		}},
-	}))
-	meta, err := loadRestoreMetadata(dir)
-	require.NoError(t, err)
-	assert.Equal(t, uffdpager.BackendUFFD, meta.SnapshotMemoryBackend)
-	assert.Equal(t, "cache-key", meta.UFFDCacheKey)
-	require.Len(t, meta.UFFDOverlays, 1)
-	assert.Equal(t, int64(4096), meta.UFFDOverlays[0].GuestMemoryOffset)
-	require.Len(t, meta.NetworkOverrides, 1)
-
-	require.NoError(t, ConfigureSnapshotMemoryBackend(dir, SnapshotMemoryBackendConfig{Backend: uffdpager.BackendFile}))
-	meta, err = loadRestoreMetadata(dir)
-	require.NoError(t, err)
-	assert.Equal(t, uffdpager.BackendFile, meta.SnapshotMemoryBackend)
-	assert.Empty(t, meta.UFFDCacheKey)
-	assert.Empty(t, meta.UFFDOverlays)
-	require.Len(t, meta.NetworkOverrides, 1)
 }
 
 func TestToBalloonConfig(t *testing.T) {

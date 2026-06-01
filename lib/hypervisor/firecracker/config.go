@@ -5,10 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
-	"github.com/kernel/hypeman/lib/uffdpager"
 )
 
 const (
@@ -107,18 +105,9 @@ type instanceInfo struct {
 }
 
 type restoreMetadata struct {
-	NetworkOverrides                 []networkOverride       `json:"network_overrides,omitempty"`
-	SnapshotSourceDataDir            string                  `json:"snapshot_source_data_dir,omitempty"`
-	RetainSnapshotSourceDataDirAlias bool                    `json:"retain_snapshot_source_data_dir_alias,omitempty"`
-	SnapshotMemoryBackend            string                  `json:"snapshot_memory_backend,omitempty"`
-	UFFDCacheKey                     string                  `json:"uffd_cache_key,omitempty"`
-	UFFDOverlays                     []uffdpager.OverlayPage `json:"uffd_overlays,omitempty"`
-}
-
-type SnapshotMemoryBackendConfig struct {
-	Backend  string
-	CacheKey string
-	Overlays []uffdpager.OverlayPage
+	NetworkOverrides                 []networkOverride `json:"network_overrides,omitempty"`
+	SnapshotSourceDataDir            string            `json:"snapshot_source_data_dir,omitempty"`
+	RetainSnapshotSourceDataDirAlias bool              `json:"retain_snapshot_source_data_dir_alias,omitempty"`
 }
 
 func toBootSource(cfg hypervisor.VMConfig) bootSource {
@@ -254,8 +243,7 @@ func snapshotMemoryPath(snapshotDir string) string {
 
 func saveRestoreMetadata(instanceDir string, networkConfigs []networkInterface) error {
 	meta := restoreMetadata{
-		NetworkOverrides:      make([]networkOverride, 0, len(networkConfigs)),
-		SnapshotMemoryBackend: uffdpager.BackendFile,
+		NetworkOverrides: make([]networkOverride, 0, len(networkConfigs)),
 	}
 	for _, netCfg := range networkConfigs {
 		meta.NetworkOverrides = append(meta.NetworkOverrides, networkOverride{
@@ -265,33 +253,6 @@ func saveRestoreMetadata(instanceDir string, networkConfigs []networkInterface) 
 	}
 
 	return saveRestoreMetadataState(instanceDir, &meta)
-}
-
-func ConfigureSnapshotMemoryBackend(instanceDir string, cfg SnapshotMemoryBackendConfig) error {
-	meta, err := loadRestoreMetadata(instanceDir)
-	if err != nil {
-		return err
-	}
-	backend := strings.ToLower(strings.TrimSpace(cfg.Backend))
-	if backend == "" {
-		backend = uffdpager.BackendFile
-	}
-	switch backend {
-	case uffdpager.BackendFile:
-		meta.SnapshotMemoryBackend = uffdpager.BackendFile
-		meta.UFFDCacheKey = ""
-		meta.UFFDOverlays = nil
-	case uffdpager.BackendUFFD:
-		if strings.TrimSpace(cfg.CacheKey) == "" {
-			return fmt.Errorf("uffd cache key is required")
-		}
-		meta.SnapshotMemoryBackend = uffdpager.BackendUFFD
-		meta.UFFDCacheKey = strings.TrimSpace(cfg.CacheKey)
-		meta.UFFDOverlays = append([]uffdpager.OverlayPage(nil), cfg.Overlays...)
-	default:
-		return fmt.Errorf("unsupported snapshot memory backend %q", cfg.Backend)
-	}
-	return saveRestoreMetadataState(instanceDir, meta)
 }
 
 func saveRestoreMetadataState(instanceDir string, meta *restoreMetadata) error {

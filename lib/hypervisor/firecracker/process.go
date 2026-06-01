@@ -113,7 +113,7 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 	return pid, hv, nil
 }
 
-func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string, socketPath string, snapshotPath string) (int, hypervisor.Hypervisor, error) {
+func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string, socketPath string, snapshotPath string, opts hypervisor.RestoreOptions) (int, hypervisor.Hypervisor, error) {
 	processCtx, processSpan := hypervisor.StartProcessSpan(ctx, hypervisor.TypeFirecracker)
 	pid, err := s.startProcess(processCtx, p, version, socketPath)
 	hypervisor.FinishTraceSpan(processSpan, err)
@@ -137,17 +137,20 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 	}
 	backend := fileSnapshotMemBackend(snapshotPath)
 	createdUFFDSession := ""
-	if strings.EqualFold(strings.TrimSpace(meta.SnapshotMemoryBackend), uffdpager.BackendUFFD) {
+	if opts.SnapshotMemoryBackend == hypervisor.SnapshotMemoryBackendUFFD {
 		if s.uffd == nil {
 			return 0, nil, fmt.Errorf("uffd snapshot restore requested but no uffd pager is configured")
 		}
-		sessionID := filepath.Base(filepath.Dir(socketPath))
+		sessionID := strings.TrimSpace(opts.SnapshotMemorySessionID)
+		if sessionID == "" {
+			sessionID = filepath.Base(filepath.Dir(socketPath))
+		}
 		resp, err := s.uffd.CreateSession(ctx, uffdpager.CreateSessionRequest{
 			SessionID:         sessionID,
 			InstanceID:        sessionID,
 			BackingMemoryPath: snapshotMemoryPath(snapshotPath),
-			CacheKey:          meta.UFFDCacheKey,
-			Overlays:          meta.UFFDOverlays,
+			CacheKey:          opts.SnapshotMemoryCacheKey,
+			Overlays:          toUFFDOverlays(opts.SnapshotMemoryOverlays),
 		})
 		if err != nil {
 			return 0, nil, fmt.Errorf("create uffd pager session: %w", err)
@@ -177,6 +180,20 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 
 	cu.Release()
 	return pid, hv, nil
+}
+
+func toUFFDOverlays(overlays []hypervisor.SnapshotMemoryOverlay) []uffdpager.OverlayPage {
+	if len(overlays) == 0 {
+		return nil
+	}
+	result := make([]uffdpager.OverlayPage, 0, len(overlays))
+	for _, overlay := range overlays {
+		result = append(result, uffdpager.OverlayPage{
+			GuestMemoryOffset: overlay.GuestMemoryOffset,
+			Path:              overlay.Path,
+		})
+	}
+	return result
 }
 
 func withSnapshotSourceDirAlias(meta *restoreMetadata, targetDataDir string, run func() error) error {
