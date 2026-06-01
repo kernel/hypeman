@@ -2,7 +2,6 @@ package instances
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/network"
@@ -37,7 +36,8 @@ func (m *manager) prepareResumeNetworkHandoff(ctx context.Context, stored *Store
 
 	waiter, err := startGuestResumeNetworkUDPWaiter()
 	if err != nil {
-		return nil, fmt.Errorf("start guest resume network UDP ack waiter: %w", err)
+		log.WarnContext(ctx, "failed to start guest resume network UDP ack waiter; falling back to host-initiated reconfigure", "instance_id", stored.Id, "error", err)
+		return h, nil
 	}
 
 	payload := newGuestResumeNetworkPayload(resumeNetworkCfg)
