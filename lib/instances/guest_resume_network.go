@@ -143,18 +143,29 @@ func (w *guestResumeNetworkUDPWaiter) WaitMailboxApplied(ctx context.Context, na
 	}
 
 	start := time.Now()
-	wantMailbox := "mailbox=" + strings.ToLower(name)
 	for {
 		select {
 		case ack := <-w.ch:
-			text := strings.ToLower(ack.text)
-			if strings.Contains(text, "stage=applied") && strings.Contains(text, wantMailbox) {
+			fields := parseUDPAckFields(ack.text)
+			if strings.EqualFold(fields["stage"], "applied") && fields["mailbox"] == name {
 				return ack.received.Sub(start), ack.text, nil
 			}
 		case <-ctx.Done():
 			return 0, "", ctx.Err()
 		}
 	}
+}
+
+func parseUDPAckFields(text string) map[string]string {
+	fields := make(map[string]string)
+	for _, part := range strings.Fields(text) {
+		key, value, ok := strings.Cut(part, "=")
+		if !ok || key == "" {
+			continue
+		}
+		fields[strings.ToLower(key)] = value
+	}
+	return fields
 }
 
 func (m *manager) waitForGuestResumeNetworkUDPAck(ctx context.Context, waiter *guestResumeNetworkUDPWaiter, stored *StoredMetadata, cfg *guestNetworkConfig) error {

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/mailbox"
@@ -81,6 +82,41 @@ func TestForkMailboxPayloadWithAckPort(t *testing.T) {
 	payload, err := forkMailboxPayloadWithAckPort([]byte(`{"instance_name":"forked"}`), 12345)
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"instance_name":"forked","ack_port":12345}`, string(payload))
+}
+
+func TestWaitMailboxAppliedRequiresExactFields(t *testing.T) {
+	t.Parallel()
+
+	waiter := &guestResumeNetworkUDPWaiter{ch: make(chan guestResumeNetworkUDPAck, 2)}
+	now := time.Now()
+	waiter.ch <- guestResumeNetworkUDPAck{
+		received: now,
+		text:     "stage=applied mailbox=kernel.identity.v10",
+	}
+	waiter.ch <- guestResumeNetworkUDPAck{
+		received: now.Add(time.Millisecond),
+		text:     "mailbox=kernel.identity.v1 stage=applied",
+	}
+
+	_, ack, err := waiter.WaitMailboxApplied(context.Background(), "kernel.identity.v1")
+	require.NoError(t, err)
+	assert.Equal(t, "mailbox=kernel.identity.v1 stage=applied", ack)
+}
+
+func TestWaitMailboxAppliedIgnoresMalformedAck(t *testing.T) {
+	t.Parallel()
+
+	waiter := &guestResumeNetworkUDPWaiter{ch: make(chan guestResumeNetworkUDPAck, 1)}
+	waiter.ch <- guestResumeNetworkUDPAck{
+		received: time.Now(),
+		text:     "stage=applied mailbox=kernel.identity.v1-extra freeform",
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	_, _, err := waiter.WaitMailboxApplied(ctx, "kernel.identity.v1")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
 func TestValidateForkMailboxesRejectsPaddedName(t *testing.T) {
