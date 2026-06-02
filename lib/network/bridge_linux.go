@@ -571,20 +571,9 @@ func (m *manager) createTAPDeviceOnce(ctx context.Context, tapName, bridgeName s
 		return fmt.Errorf("create TAP device: %w", err)
 	}
 
-	// 3. Set TAP up
 	tapLink := tap
 
-	_, setUpEnd := startNetworkStep(ctx, "network.create_tap.link_set_up",
-		attribute.String("operation", "link_set_up"),
-		attribute.String("tap", tapName),
-	)
-	err = netlink.LinkSetUp(tapLink)
-	setUpEnd(err)
-	if err != nil {
-		return fmt.Errorf("set TAP up: %w", err)
-	}
-
-	// 4. Attach TAP to bridge
+	// 3. Attach TAP to bridge
 	_, bridgeLookupEnd := startNetworkStep(ctx, "network.create_tap.link_lookup_bridge",
 		attribute.String("operation", "link_lookup_bridge"),
 		attribute.String("bridge", bridgeName),
@@ -606,17 +595,17 @@ func (m *manager) createTAPDeviceOnce(ctx context.Context, tapName, bridgeName s
 		return fmt.Errorf("attach TAP to bridge: %w", err)
 	}
 
-	_, setUpAfterMasterEnd := startNetworkStep(ctx, "network.create_tap.link_set_up_after_master",
-		attribute.String("operation", "link_set_up_after_master"),
+	_, setUpEnd := startNetworkStep(ctx, "network.create_tap.link_set_up",
+		attribute.String("operation", "link_set_up"),
 		attribute.String("tap", tapName),
 	)
 	err = netlink.LinkSetUp(tapLink)
-	setUpAfterMasterEnd(err)
+	setUpEnd(err)
 	if err != nil {
-		return fmt.Errorf("set TAP up after bridge attach: %w", err)
+		return fmt.Errorf("set TAP up: %w", err)
 	}
 
-	// 5. Enable port isolation so isolated TAPs can't directly talk to each other (requires kernel support and capabilities)
+	// 4. Enable port isolation so isolated TAPs can't directly talk to each other (requires kernel support and capabilities)
 	if isolated {
 		_, isolationEnd := startNetworkStep(ctx, "network.create_tap.set_isolation",
 			attribute.String("operation", "set_isolation"),
