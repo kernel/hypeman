@@ -29,12 +29,12 @@ func copyGuestDirectoryWithAliasReadLock(srcDir, dstDir string) error {
 }
 
 func (m *manager) copyForkSourceGuestDirectory(ctx context.Context, sourceState State, sourceID string, stored *StoredMetadata, srcDir, dstDir string) error {
-	return withSnapshotSourceAliasReadLock(func() error {
-		if sourceState == StateStandby {
-			if err := m.ensureSnapshotMemoryReady(ctx, m.paths.InstanceSnapshotLatest(sourceID), m.snapshotJobKeyForInstance(sourceID), stored.HypervisorType); err != nil {
-				return fmt.Errorf("prepare standby snapshot for fork: %w", err)
-			}
+	if sourceState == StateStandby {
+		if err := m.ensureSnapshotMemoryReady(ctx, m.paths.InstanceSnapshotLatest(sourceID), m.snapshotJobKeyForInstance(sourceID), stored.HypervisorType); err != nil {
+			return fmt.Errorf("prepare standby snapshot for fork: %w", err)
 		}
+	}
+	return withSnapshotSourceAliasReadLock(func() error {
 		if err := forkvm.CopyGuestDirectory(srcDir, dstDir); err != nil {
 			if errors.Is(err, forkvm.ErrSparseCopyUnsupported) {
 				return fmt.Errorf("fork requires sparse-capable filesystem (SEEK_DATA/SEEK_HOLE unsupported): %w", err)
@@ -46,10 +46,10 @@ func (m *manager) copyForkSourceGuestDirectory(ctx context.Context, sourceState 
 }
 
 func (m *manager) copySnapshotGuestDirectoryForFork(ctx context.Context, snapshotID string, hvType hypervisor.Type, dstDir string) error {
+	if err := m.ensureSnapshotMemoryReady(ctx, m.paths.SnapshotGuestDir(snapshotID), "", hvType); err != nil {
+		return fmt.Errorf("prepare snapshot memory for fork: %w", err)
+	}
 	return withSnapshotSourceAliasReadLock(func() error {
-		if err := m.ensureSnapshotMemoryReady(ctx, m.paths.SnapshotGuestDir(snapshotID), "", hvType); err != nil {
-			return fmt.Errorf("prepare snapshot memory for fork: %w", err)
-		}
 		if err := forkvm.CopyGuestDirectory(m.paths.SnapshotGuestDir(snapshotID), dstDir); err != nil {
 			if errors.Is(err, forkvm.ErrSparseCopyUnsupported) {
 				return fmt.Errorf("fork from snapshot requires sparse-capable filesystem (SEEK_DATA/SEEK_HOLE unsupported): %w", err)
