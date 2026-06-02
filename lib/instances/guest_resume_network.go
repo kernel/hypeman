@@ -117,29 +117,23 @@ func (w *guestResumeNetworkUDPWaiter) readLoop() {
 }
 
 func (w *guestResumeNetworkUDPWaiter) WaitApplied(ctx context.Context, mac, ip string) (time.Duration, string, error) {
-	if w == nil {
-		return 0, "", fmt.Errorf("guest resume network UDP waiter is nil")
-	}
-
-	start := time.Now()
-	wantMAC := "mac=" + strings.ToLower(mac)
-	wantIP := "ip=" + ip
-	for {
-		select {
-		case ack := <-w.ch:
-			text := strings.ToLower(ack.text)
-			if strings.Contains(text, "stage=applied") && strings.Contains(text, wantMAC) && strings.Contains(text, wantIP) {
-				return ack.received.Sub(start), ack.text, nil
-			}
-		case <-ctx.Done():
-			return 0, "", ctx.Err()
-		}
-	}
+	wantMAC := strings.ToLower(mac)
+	return w.wait(ctx, func(fields map[string]string) bool {
+		return strings.EqualFold(fields["stage"], "applied") &&
+			strings.EqualFold(fields["mac"], wantMAC) &&
+			fields["ip"] == ip
+	})
 }
 
 func (w *guestResumeNetworkUDPWaiter) WaitMailboxApplied(ctx context.Context, name string) (time.Duration, string, error) {
+	return w.wait(ctx, func(fields map[string]string) bool {
+		return strings.EqualFold(fields["stage"], "applied") && fields["mailbox"] == name
+	})
+}
+
+func (w *guestResumeNetworkUDPWaiter) wait(ctx context.Context, match func(map[string]string) bool) (time.Duration, string, error) {
 	if w == nil {
-		return 0, "", fmt.Errorf("guest fork mailbox UDP waiter is nil")
+		return 0, "", fmt.Errorf("guest resume network UDP waiter is nil")
 	}
 
 	start := time.Now()
@@ -147,7 +141,7 @@ func (w *guestResumeNetworkUDPWaiter) WaitMailboxApplied(ctx context.Context, na
 		select {
 		case ack := <-w.ch:
 			fields := parseUDPAckFields(ack.text)
-			if strings.EqualFold(fields["stage"], "applied") && fields["mailbox"] == name {
+			if match(fields) {
 				return ack.received.Sub(start), ack.text, nil
 			}
 		case <-ctx.Done():

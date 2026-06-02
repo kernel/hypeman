@@ -119,6 +119,25 @@ func TestWaitMailboxAppliedIgnoresMalformedAck(t *testing.T) {
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
+func TestWaitAppliedRequiresExactFields(t *testing.T) {
+	t.Parallel()
+
+	waiter := &guestResumeNetworkUDPWaiter{ch: make(chan guestResumeNetworkUDPAck, 2)}
+	now := time.Now()
+	waiter.ch <- guestResumeNetworkUDPAck{
+		received: now,
+		text:     "stage=applied mac=02:00:00:85:17:c8:ff ip=10.102.146.62",
+	}
+	waiter.ch <- guestResumeNetworkUDPAck{
+		received: now.Add(time.Millisecond),
+		text:     "ip=10.102.146.62 stage=applied mac=02:00:00:85:17:C8",
+	}
+
+	_, ack, err := waiter.WaitApplied(context.Background(), "02:00:00:85:17:c8", "10.102.146.62")
+	require.NoError(t, err)
+	assert.Equal(t, "ip=10.102.146.62 stage=applied mac=02:00:00:85:17:C8", ack)
+}
+
 func TestValidateForkMailboxesRejectsPaddedName(t *testing.T) {
 	t.Parallel()
 
