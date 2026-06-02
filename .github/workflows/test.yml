@@ -36,7 +36,7 @@ jobs:
             local sleep_seconds=30
             local n=1
             while [ "$n" -le "$attempts" ]; do
-              if timeout 120s sudo apt-get update; then
+              if sudo apt-get update; then
                 return 0
               fi
               if [ "$n" -eq "$attempts" ]; then
@@ -53,7 +53,7 @@ jobs:
              ! command -v qemu-system-x86_64 &> /dev/null || \
              ! qemu-system-x86_64 --version >/dev/null 2>&1; then
             apt_update_with_retry
-            timeout 300s sudo apt-get install -y erofs-utils e2fsprogs iptables qemu-system-x86 qemu-utils
+            sudo apt-get install -y erofs-utils e2fsprogs iptables qemu-system-x86 qemu-utils
           fi
           go mod download
 
@@ -68,13 +68,6 @@ jobs:
             fi
             sudo env "PATH=$TEST_PATH" bash -lc "command -v '$bin'"
           done
-
-      - name: Create run-scoped temp directory
-        run: |
-          TEST_NETWORK_TMPDIR="/tmp/hm-net-${{ github.run_id }}-${{ github.run_attempt }}"
-          sudo rm -rf "$TEST_NETWORK_TMPDIR"
-          mkdir -p "$TEST_NETWORK_TMPDIR"
-          sudo chown -R "$(id -u):$(id -g)" "$TEST_NETWORK_TMPDIR"
 
       # Avoids rate limits when running the tests
       # Tests includes pulling, then converting to disk images
@@ -113,7 +106,6 @@ jobs:
      
       - name: Run tests
         env:
-          HYPEMAN_TEST_NETWORK_TMPDIR: /tmp/hm-net-${{ github.run_id }}-${{ github.run_attempt }}
           GO_TEST_TIMEOUT: 600s
           # Docker auth for tests running as root (sudo)
           DOCKER_CONFIG: /home/debianuser/.docker
@@ -129,10 +121,6 @@ jobs:
         run: |
           export HYPEMAN_TEST_PREWARM_DIR="$HOME/.cache/hypeman-ci/linux-amd64"
           make test TEST_TIMEOUT=20m
-
-      - name: Cleanup
-        if: always()
-        run: sudo rm -rf "/tmp/hm-net-${{ github.run_id }}-${{ github.run_attempt }}"
 
   test-darwin:
     runs-on: [self-hosted, macos, arm64]

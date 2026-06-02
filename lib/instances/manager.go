@@ -389,14 +389,19 @@ func (m *manager) ForkInstance(ctx context.Context, id string, req ForkInstanceR
 		return nil, err
 	}
 
-	inst := forked
-	if !forkTargetStateAlreadyApplied(inst, targetState) {
-		inst, err = m.applyForkTargetState(ctx, forked.Id, targetState)
-		if err != nil {
+	inst, err := m.applyForkTargetState(ctx, forked.Id, targetState)
+	if err != nil {
+		if cleanupErr := m.cleanupForkInstanceOnError(ctx, forked.Id); cleanupErr != nil {
+			return nil, fmt.Errorf("apply fork target state: %w; additionally failed to cleanup forked instance %s: %v", err, forked.Id, cleanupErr)
+		}
+		return nil, fmt.Errorf("apply fork target state: %w", err)
+	}
+	if inst.State == StateRunning {
+		if err := ensureGuestAgentReadyForForkPhase(ctx, &inst.StoredMetadata, "before returning running fork instance"); err != nil {
 			if cleanupErr := m.cleanupForkInstanceOnError(ctx, forked.Id); cleanupErr != nil {
-				return nil, fmt.Errorf("apply fork target state: %w; additionally failed to cleanup forked instance %s: %v", err, forked.Id, cleanupErr)
+				return nil, fmt.Errorf("wait for fork guest agent readiness: %w; additionally failed to cleanup forked instance %s: %v", err, forked.Id, cleanupErr)
 			}
-			return nil, fmt.Errorf("apply fork target state: %w", err)
+			return nil, fmt.Errorf("wait for fork guest agent readiness: %w", err)
 		}
 	}
 	m.notifyLifecycleEvent(ctx, LifecycleEventFork, inst)

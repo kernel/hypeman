@@ -183,7 +183,7 @@ func allocateTestNetworkLease(testName string, seq uint32) (*testNetworkLease, e
 }
 
 func withTestSubnetLock(fn func() error) error {
-	lockPath := filepath.Join(testNetworkTempDir(), "hypeman-test-network.lock")
+	lockPath := filepath.Join(os.TempDir(), "hypeman-test-network.lock")
 	lockFile, err := openTestSubnetLockFile(lockPath)
 	if err != nil {
 		return fmt.Errorf("open subnet lock file: %w", err)
@@ -220,14 +220,7 @@ func openTestSubnetLockFile(lockPath string) (*os.File, error) {
 }
 
 func testSubnetLeaseFilePath() string {
-	return filepath.Join(testNetworkTempDir(), "hypeman-test-network-leases.json")
-}
-
-func testNetworkTempDir() string {
-	if dir := os.Getenv("HYPEMAN_TEST_NETWORK_TMPDIR"); dir != "" {
-		return dir
-	}
-	return os.TempDir()
+	return filepath.Join(os.TempDir(), "hypeman-test-network-leases.json")
 }
 
 func loadSubnetLeases() (map[string]subnetLease, error) {

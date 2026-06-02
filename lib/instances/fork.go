@@ -406,11 +406,11 @@ func (m *manager) applyForkTargetState(ctx context.Context, forkID string, targe
 	lock.Lock()
 	defer lock.Unlock()
 
-	returnWithReadiness := func(inst *Instance, err error, guestReady bool) (*Instance, error) {
+	returnWithReadiness := func(inst *Instance, err error) (*Instance, error) {
 		if err != nil {
 			return nil, err
 		}
-		if forkReturnNeedsGuestAgentReady(inst, guestReady) {
+		if inst != nil && (inst.State == StateRunning || inst.State == StateInitializing) {
 			if err := ensureGuestAgentReadyForForkPhase(ctx, &inst.StoredMetadata, "before returning running fork instance"); err != nil {
 				return nil, fmt.Errorf("wait for forked guest agent readiness: %w", err)
 			}
@@ -423,27 +423,24 @@ func (m *manager) applyForkTargetState(ctx context.Context, forkID string, targe
 		return nil, err
 	}
 	if current.State == target || (target == StateRunning && current.State == StateInitializing) {
-		return returnWithReadiness(current, nil, false)
+		return returnWithReadiness(current, nil)
 	}
 
 	switch current.State {
 	case StateStopped:
 		switch target {
 		case StateRunning:
-			inst, err := m.startInstance(ctx, forkID, StartInstanceRequest{})
-			return returnWithReadiness(inst, err, false)
+			return returnWithReadiness(m.startInstance(ctx, forkID, StartInstanceRequest{}))
 		case StateStandby:
 			if _, err := m.startInstance(ctx, forkID, StartInstanceRequest{}); err != nil {
 				return nil, fmt.Errorf("start forked instance for standby transition: %w", err)
 			}
-			inst, err := m.standbyInstance(ctx, forkID, StandbyInstanceRequest{}, false)
-			return returnWithReadiness(inst, err, false)
+			return returnWithReadiness(m.standbyInstance(ctx, forkID, StandbyInstanceRequest{}, false))
 		}
 	case StateStandby:
 		switch target {
 		case StateRunning:
-			inst, err := m.restoreInstance(ctx, forkID)
-			return returnWithReadiness(inst, err, current.NetworkEnabled && !current.SkipGuestAgent)
+			return returnWithReadiness(m.restoreInstance(ctx, forkID))
 		case StateStopped:
 			if err := os.RemoveAll(m.paths.InstanceSnapshotLatest(forkID)); err != nil {
 				return nil, fmt.Errorf("remove fork snapshot: %w", err)
@@ -456,32 +453,18 @@ func (m *manager) applyForkTargetState(ctx context.Context, forkID string, targe
 			if err := m.saveMetadata(meta); err != nil {
 				return nil, fmt.Errorf("save stopped fork metadata: %w", err)
 			}
-			inst, err := m.getInstance(ctx, forkID)
-			return returnWithReadiness(inst, err, false)
+			return returnWithReadiness(m.getInstance(ctx, forkID))
 		}
 	case StateRunning:
 		switch target {
 		case StateStandby:
-			inst, err := m.standbyInstance(ctx, forkID, StandbyInstanceRequest{}, false)
-			return returnWithReadiness(inst, err, false)
+			return returnWithReadiness(m.standbyInstance(ctx, forkID, StandbyInstanceRequest{}, false))
 		case StateStopped:
-			inst, err := m.stopInstance(ctx, forkID)
-			return returnWithReadiness(inst, err, false)
+			return returnWithReadiness(m.stopInstance(ctx, forkID))
 		}
 	}
 
 	return nil, fmt.Errorf("%w: cannot transition forked instance from %s to %s", ErrInvalidState, current.State, target)
-}
-
-func forkTargetStateAlreadyApplied(inst *Instance, target State) bool {
-	if inst == nil {
-		return false
-	}
-	return inst.State == target || (target == StateRunning && inst.State == StateInitializing)
-}
-
-func forkReturnNeedsGuestAgentReady(inst *Instance, guestReady bool) bool {
-	return inst != nil && (inst.State == StateRunning || inst.State == StateInitializing) && !guestReady
 }
 
 func (m *manager) cleanupForkInstanceOnError(ctx context.Context, forkID string) error {

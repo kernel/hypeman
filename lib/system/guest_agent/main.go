@@ -53,10 +53,8 @@ func main() {
 	}
 
 	// Create gRPC server
-	guestSvc := &guestServer{}
-	startResumeNetworkWatcher(guestSvc)
 	grpcServer := grpc.NewServer()
-	pb.RegisterGuestServiceServer(grpcServer, guestSvc)
+	pb.RegisterGuestServiceServer(grpcServer, &guestServer{})
 
 	// Serve gRPC over vsock
 	if err := grpcServer.Serve(l); err != nil {

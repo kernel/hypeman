@@ -20,9 +20,6 @@ service GuestService {
   
   // Shutdown requests graceful VM shutdown by signaling init (PID 1)
   rpc Shutdown(ShutdownRequest) returns (ShutdownResponse);
-
-  // ReconfigureNetwork updates the guest network identity without spawning shell commands
-  rpc ReconfigureNetwork(ReconfigureNetworkRequest) returns (ReconfigureNetworkResponse);
 }
 
 // ExecRequest represents messages from client to server
@@ -157,15 +154,3 @@ message ShutdownRequest {
 
 // ShutdownResponse acknowledges the shutdown request
 message ShutdownResponse {}
-
-// ReconfigureNetworkRequest updates a guest network interface after snapshot restore
-message ReconfigureNetworkRequest {
-  string interface_name = 1;  // Interface to reconfigure, defaults to eth0
-  string mac = 2;             // New MAC address
-  string ipv4 = 3;            // New IPv4 address without prefix
-  uint32 prefix = 4;          // IPv4 prefix length
-  string gateway = 5;         // Default gateway IPv4 address
-}
-
-// ReconfigureNetworkResponse acknowledges the network reconfiguration request
-message ReconfigureNetworkResponse {}
