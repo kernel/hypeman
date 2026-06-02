@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -413,15 +414,21 @@ func TestFirecrackerNetworkLifecycle(t *testing.T) {
 	}
 	require.NoError(t, err)
 	if exitCode != 0 {
-		if conn, dialErr := net.DialTimeout("tcp", strings.TrimPrefix(probeURL, "http://"), 2*time.Second); dialErr != nil {
+		probeHost := strings.TrimPrefix(probeURL, "http://")
+		if parsed, parseErr := url.Parse(probeURL); parseErr == nil {
+			probeHost = parsed.Host
+		}
+		if conn, dialErr := net.DialTimeout("tcp", probeHost, 2*time.Second); dialErr != nil {
 			t.Logf("host cannot dial gateway probe server: %v", dialErr)
 		} else {
 			_ = conn.Close()
 			t.Logf("host can dial gateway probe server")
 		}
-		diagCmd := fmt.Sprintf("cat /proc/net/route; cat /proc/net/arp; ip addr 2>&1 || true; ip route 2>&1 || true; ping -c1 -W1 %s 2>&1 || true; nc -vz -w2 %s 80 2>&1 || true", alloc.Gateway, alloc.Gateway)
+		_, probePort, _ := net.SplitHostPort(probeHost)
+		diagCmd := fmt.Sprintf("cat /proc/net/route; cat /proc/net/arp; ip addr 2>&1 || true; ip route 2>&1 || true; ping -c1 -W1 %s 2>&1 || true; nc -vz -w2 %s %s 2>&1 || true", alloc.Gateway, alloc.Gateway, probePort)
 		diagOutput, diagExitCode, diagErr := execCommand(ctx, inst, "sh", "-lc", diagCmd)
 		t.Logf("guest network diagnostics exit=%d err=%v:\n%s", diagExitCode, diagErr, diagOutput)
+		t.Logf("host iptables diagnostics:\n%s", hostNetworkDiagnostics(alloc.TAPDevice))
 	}
 	require.Equal(t, 0, exitCode)
 	require.Contains(t, output, "Connection successful")
