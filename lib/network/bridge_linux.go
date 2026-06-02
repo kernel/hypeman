@@ -607,6 +607,18 @@ func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName strin
 		return fmt.Errorf("attach TAP to bridge: %w", err)
 	}
 
+	_, setUpAfterMasterEnd := startNetworkStep(ctx, "network.create_tap.link_set_up_after_master",
+		attribute.String("operation", "link_set_up_after_master"),
+		attribute.String("tap", tapName),
+	)
+	err = retryTransientNetlink(ctx, func() error {
+		return netlink.LinkSetUp(tapLink)
+	})
+	setUpAfterMasterEnd(err)
+	if err != nil {
+		return fmt.Errorf("set TAP up after bridge attach: %w", err)
+	}
+
 	// 5. Enable port isolation so isolated TAPs can't directly talk to each other (requires kernel support and capabilities)
 	if isolated {
 		_, isolationEnd := startNetworkStep(ctx, "network.create_tap.set_isolation",
