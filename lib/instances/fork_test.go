@@ -219,9 +219,12 @@ func TestGetInstanceWaitsDuringSnapshotSourceAlias(t *testing.T) {
 func TestForkInstanceStoppedSourceUsesReadLock(t *testing.T) {
 	manager, _ := setupTestManager(t)
 	ctx := context.Background()
+	hvType := hypervisor.Type("concurrent-fork-test")
+	hypervisor.RegisterCapabilities(hvType, hypervisor.Capabilities{SupportsConcurrentForkPrepare: true})
+	manager.vmStarters[hvType] = concurrentForkPrepareTestStarter{}
 
 	sourceID := "fork-stopped-read-lock-source"
-	createStoppedSnapshotSourceFixture(t, manager, sourceID, sourceID, hypervisor.TypeFirecracker)
+	createStoppedSnapshotSourceFixture(t, manager, sourceID, sourceID, hvType)
 
 	sourceLock := manager.getInstanceLock(sourceID)
 	sourceLock.RLock()
@@ -245,6 +248,28 @@ func TestForkInstanceStoppedSourceUsesReadLock(t *testing.T) {
 	case <-time.After(250 * time.Millisecond):
 		t.Fatal("ForkInstance blocked behind a source read lock")
 	}
+}
+
+type concurrentForkPrepareTestStarter struct{}
+
+func (concurrentForkPrepareTestStarter) SocketName() string { return "concurrent-fork-test.sock" }
+
+func (concurrentForkPrepareTestStarter) GetBinaryPath(*paths.Paths, string) (string, error) {
+	return "", nil
+}
+
+func (concurrentForkPrepareTestStarter) GetVersion(*paths.Paths) (string, error) { return "test", nil }
+
+func (concurrentForkPrepareTestStarter) StartVM(context.Context, *paths.Paths, string, string, hypervisor.VMConfig) (int, hypervisor.Hypervisor, error) {
+	return 0, nil, nil
+}
+
+func (concurrentForkPrepareTestStarter) RestoreVM(context.Context, *paths.Paths, string, string, string) (int, hypervisor.Hypervisor, error) {
+	return 0, nil, nil
+}
+
+func (concurrentForkPrepareTestStarter) PrepareFork(context.Context, hypervisor.ForkPrepareRequest) (hypervisor.ForkPrepareResult, error) {
+	return hypervisor.ForkPrepareResult{}, nil
 }
 
 func TestForkInstanceStoppedSourceRequiresWriteLockWithoutConcurrentPrepare(t *testing.T) {
