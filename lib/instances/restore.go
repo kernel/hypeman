@@ -254,6 +254,26 @@ func (m *manager) restoreInstance(
 		return nil, fmt.Errorf("configure snapshot memory backend: %w", err)
 	}
 
+	restoreSlotCtx, restoreSlotSpanEnd := m.startLifecycleStep(ctx, "firecracker_restore_capacity_wait",
+		attribute.String("instance_id", id),
+		attribute.String("hypervisor", string(stored.HypervisorType)),
+		attribute.String("operation", "firecracker_restore_capacity_wait"),
+	)
+	releaseRestoreSlot, err := m.acquireFirecrackerRestoreSlot(restoreSlotCtx, stored)
+	restoreSlotSpanEnd(err)
+	if err != nil {
+		releaseNetwork()
+		return nil, fmt.Errorf("wait for firecracker restore capacity: %w", err)
+	}
+	restoreSlotHeld := true
+	releaseRestoreSlotOnce := func() {
+		if restoreSlotHeld {
+			restoreSlotHeld = false
+			releaseRestoreSlot()
+		}
+	}
+	defer releaseRestoreSlotOnce()
+
 	// 5. Transition: Standby → Paused (start hypervisor + restore)
 	restoreCtx, restoreSpanEnd := m.startLifecycleStep(ctx, "restore_from_snapshot",
 		attribute.String("instance_id", id),
@@ -321,6 +341,7 @@ func (m *manager) restoreInstance(
 		}
 		reconfigureSpanEnd(nil)
 	}
+	releaseRestoreSlotOnce()
 
 	// 8. Delete snapshot after successful restore unless the hypervisor is keeping it
 	// as the base for the next standby snapshot.
@@ -407,6 +428,18 @@ func (m *manager) restoreFromSnapshot(
 
 	log.DebugContext(ctx, "VM restored from snapshot successfully", "instance_id", stored.Id, "pid", pid)
 	return pid, hv, nil
+}
+
+func (m *manager) acquireFirecrackerRestoreSlot(ctx context.Context, stored *StoredMetadata) (func(), error) {
+	if stored == nil || stored.HypervisorType != hypervisor.TypeFirecracker || m.firecrackerRestoreSlots == nil {
+		return func() {}, nil
+	}
+	select {
+	case m.firecrackerRestoreSlots <- struct{}{}:
+		return func() { <-m.firecrackerRestoreSlots }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 func reconfigureGuestNetwork(ctx context.Context, stored *StoredMetadata, alloc *network.Allocation) error {

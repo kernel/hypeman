@@ -86,6 +86,7 @@ type ManagerConfig struct {
 	LifecycleEventBufferSize         int
 	FirecrackerSnapshotMemoryBackend string
 	FirecrackerUFFDCacheMaxBytes     int64
+	FirecrackerMaxConcurrentRestores int
 }
 
 // Normalize applies defaults to manager config values.
@@ -99,6 +100,9 @@ func (c ManagerConfig) Normalize() ManagerConfig {
 	}
 	if c.FirecrackerUFFDCacheMaxBytes <= 0 {
 		c.FirecrackerUFFDCacheMaxBytes = 4 << 30
+	}
+	if c.FirecrackerMaxConcurrentRestores <= 0 {
+		c.FirecrackerMaxConcurrentRestores = 32
 	}
 	return c
 }
@@ -166,6 +170,7 @@ type manager struct {
 	guestMemoryPolicy                guestmemory.Policy
 	firecrackerSnapshotMemoryBackend string
 	firecrackerUFFDPager             *uffdpager.Supervisor
+	firecrackerRestoreSlots          chan struct{}
 }
 
 // platformStarters is populated by platform-specific init functions.
@@ -236,6 +241,7 @@ func NewManagerWithConfigE(p *paths.Paths, imageManager images.Manager, systemMa
 		guestMemoryPolicy:                policy,
 		firecrackerSnapshotMemoryBackend: managerConfig.FirecrackerSnapshotMemoryBackend,
 		firecrackerUFFDPager:             firecrackerUFFDPager,
+		firecrackerRestoreSlots:          make(chan struct{}, managerConfig.FirecrackerMaxConcurrentRestores),
 		snapshotDefaults:                 snapshotDefaults,
 		compressionJobs:                  make(map[string]*compressionJob),
 		nativeCodecPaths:                 make(map[string]string),

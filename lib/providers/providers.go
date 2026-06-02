@@ -146,6 +146,7 @@ func ProvideInstanceManager(p *paths.Paths, cfg *config.Config, imageManager ima
 		LifecycleEventBufferSize:         cfg.Instances.LifecycleEventBufferSize,
 		FirecrackerSnapshotMemoryBackend: cfg.Hypervisor.FirecrackerSnapshotMemoryBackend,
 		FirecrackerUFFDCacheMaxBytes:     int64(firecrackerUFFDCacheMaxBytes),
+		FirecrackerMaxConcurrentRestores: cfg.Hypervisor.FirecrackerMaxConcurrentRestores,
 	}
 	return instances.NewManagerWithConfigE(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, defaultHypervisor, snapshotDefaults, managerConfig, meter, tracer, memoryPolicy)
 }
