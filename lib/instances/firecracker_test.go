@@ -412,6 +412,17 @@ func TestFirecrackerNetworkLifecycle(t *testing.T) {
 		time.Sleep(500 * time.Millisecond)
 	}
 	require.NoError(t, err)
+	if exitCode != 0 {
+		if conn, dialErr := net.DialTimeout("tcp", strings.TrimPrefix(probeURL, "http://"), 2*time.Second); dialErr != nil {
+			t.Logf("host cannot dial gateway probe server: %v", dialErr)
+		} else {
+			_ = conn.Close()
+			t.Logf("host can dial gateway probe server")
+		}
+		diagCmd := fmt.Sprintf("cat /proc/net/route; cat /proc/net/arp; ip addr 2>&1 || true; ip route 2>&1 || true; ping -c1 -W1 %s 2>&1 || true; nc -vz -w2 %s 80 2>&1 || true", alloc.Gateway, alloc.Gateway)
+		diagOutput, diagExitCode, diagErr := execCommand(ctx, inst, "sh", "-lc", diagCmd)
+		t.Logf("guest network diagnostics exit=%d err=%v:\n%s", diagExitCode, diagErr, diagOutput)
+	}
 	require.Equal(t, 0, exitCode)
 	require.Contains(t, output, "Connection successful")
 
