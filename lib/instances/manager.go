@@ -141,6 +141,7 @@ type manager struct {
 	snapshotDefaults          SnapshotPolicy
 	compressionMu             sync.Mutex
 	compressionJobs           map[string]*compressionJob
+	snapshotPrepareLocks      sync.Map // map[string]*sync.Mutex - per-snapshot memory prepare locks
 	compressionTimerFactory   func(time.Duration) compressionTimer
 	nativeCodecMu             sync.Mutex
 	nativeCodecPaths          map[string]string

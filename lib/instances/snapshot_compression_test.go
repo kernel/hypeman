@@ -433,6 +433,51 @@ func newSnapshotCompressionTestManager(t *testing.T) *manager {
 	}
 }
 
+func TestSnapshotMemoryPrepareLockSerializesSameSnapshotDir(t *testing.T) {
+	t.Parallel()
+
+	mgr := newSnapshotCompressionTestManager(t)
+	snapshotDir := filepath.Join(t.TempDir(), "snapshot")
+	firstEntered := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- mgr.withSnapshotMemoryPrepareLock(snapshotDir, func() error {
+			close(firstEntered)
+			<-releaseFirst
+			return nil
+		})
+	}()
+	<-firstEntered
+
+	secondStarted := make(chan struct{})
+	secondEntered := make(chan struct{})
+	secondDone := make(chan error, 1)
+	go func() {
+		close(secondStarted)
+		secondDone <- mgr.withSnapshotMemoryPrepareLock(filepath.Join(snapshotDir, "."), func() error {
+			close(secondEntered)
+			return nil
+		})
+	}()
+	<-secondStarted
+
+	select {
+	case <-secondEntered:
+		t.Fatal("second prepare entered while first prepare held the same snapshot lock")
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	close(releaseFirst)
+	require.NoError(t, <-firstDone)
+	require.NoError(t, <-secondDone)
+	select {
+	case <-secondEntered:
+	default:
+		t.Fatal("second prepare did not enter after first prepare released the snapshot lock")
+	}
+}
+
 func TestStartCompressionJobDelayedCancellationRecordsSkipped(t *testing.T) {
 	t.Parallel()
 
