@@ -175,6 +175,13 @@ func TestValidateForkMailboxesAckTimeout(t *testing.T) {
 	require.NoError(t, validateForkMailboxes([]ForkMailboxPayload{ignoredWithoutAck}))
 }
 
+func TestForkMailboxAckTimeoutDefault(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, 5*time.Second, forkMailboxAckTimeout(0))
+	assert.Equal(t, 1500*time.Millisecond, forkMailboxAckTimeout(1500*time.Millisecond))
+}
+
 func TestValidateForkMailboxHypervisor(t *testing.T) {
 	t.Parallel()
 

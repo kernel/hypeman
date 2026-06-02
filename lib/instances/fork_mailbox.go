@@ -162,7 +162,7 @@ func forkMailboxAckTimeout(timeout time.Duration) time.Duration {
 	if timeout > 0 {
 		return timeout
 	}
-	return 2 * time.Second
+	return 5 * time.Second
 }
 
 func closePatchedForkMailboxes(patched []patchedForkMailbox) {

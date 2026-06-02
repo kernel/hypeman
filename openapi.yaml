@@ -724,14 +724,15 @@ components:
           type: boolean
           description: |
             If true, Hypeman injects ack_port into the payload and waits after resume for a UDP
-            acknowledgement containing the mailbox name and stage=applied.
+            acknowledgement containing the mailbox name and stage=applied. If the acknowledgement
+            does not arrive before ack_timeout_ms, the fork restore fails.
           default: false
         ack_timeout_ms:
           type: integer
-          description: Timeout for wait_for_ack. Defaults to 2000ms.
-          minimum: 1
+          description: Timeout for wait_for_ack. Omit or set 0 to use the default 5000ms.
+          minimum: 0
           maximum: 30000
-          default: 2000
+          default: 5000
 
     ForkTargetState:
       type: string
