@@ -695,8 +695,9 @@ components:
           description: |
             Optional JSON mailbox payloads to patch into a standby snapshot before resuming the fork.
             Each mailbox must correspond to a guest-side mailbox marker that was present when the
-            source snapshot was captured. Mailboxes are only supported for forks that restore from a
-            standby snapshot into Running state.
+            source snapshot was captured. Guest software writes the marker before standby capture;
+            Hypeman does not create, return, or enumerate mailbox tokens. Mailboxes are only supported
+            for forks that restore from a standby snapshot into Running state.
           items:
             $ref: "#/components/schemas/ForkMailboxPayload"
 
@@ -923,8 +924,9 @@ components:
           description: |
             Optional JSON mailbox payloads to patch into a standby snapshot before resuming the fork.
             Each mailbox must correspond to a guest-side mailbox marker that was present when the
-            source snapshot was captured. Mailboxes are only supported for forks that restore from a
-            standby snapshot into Running state.
+            source snapshot was captured. Guest software writes the marker before standby capture;
+            Hypeman does not create, return, or enumerate mailbox tokens. Mailboxes are only supported
+            for forks that restore from a standby snapshot into Running state.
           items:
             $ref: "#/components/schemas/ForkMailboxPayload"
 
