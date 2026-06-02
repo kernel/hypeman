@@ -597,8 +597,7 @@ After=network.target
 [Service]
 Type=simple
 Environment="HOME=${DATA_DIR}"
-Environment="HYPEMAN_UFFD_CACHE_MAX_BYTES=4294967296"
-EnvironmentFile=-${DATA_DIR}/uffd/%i/pager.env
+EnvironmentFile=${DATA_DIR}/uffd/%i/pager.env
 ExecStart=${INSTALL_DIR}/${BINARY_NAME} --internal-uffd-pager --data-dir ${DATA_DIR} --version-key %i --cache-max-bytes \${HYPEMAN_UFFD_CACHE_MAX_BYTES}
 Restart=on-failure
 RestartSec=5
