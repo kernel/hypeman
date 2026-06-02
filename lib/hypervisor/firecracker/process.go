@@ -150,7 +150,6 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 			InstanceID:        sessionID,
 			BackingMemoryPath: snapshotMemoryPath(snapshotPath),
 			CacheKey:          opts.SnapshotMemoryCacheKey,
-			Overlays:          toUFFDOverlays(opts.SnapshotMemoryOverlays),
 		})
 		if err != nil {
 			return 0, nil, fmt.Errorf("create uffd pager session: %w", err)
@@ -180,20 +179,6 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 
 	cu.Release()
 	return pid, hv, nil
-}
-
-func toUFFDOverlays(overlays []hypervisor.SnapshotMemoryOverlay) []uffdpager.OverlayPage {
-	if len(overlays) == 0 {
-		return nil
-	}
-	result := make([]uffdpager.OverlayPage, 0, len(overlays))
-	for _, overlay := range overlays {
-		result = append(result, uffdpager.OverlayPage{
-			GuestMemoryOffset: overlay.GuestMemoryOffset,
-			Path:              overlay.Path,
-		})
-	}
-	return result
 }
 
 func withSnapshotSourceDirAlias(meta *restoreMetadata, targetDataDir string, run func() error) error {

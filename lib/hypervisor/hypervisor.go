@@ -131,15 +131,9 @@ const (
 	SnapshotMemoryBackendUFFD SnapshotMemoryBackend = "uffd"
 )
 
-type SnapshotMemoryOverlay struct {
-	GuestMemoryOffset int64
-	Path              string
-}
-
 type RestoreOptions struct {
 	SnapshotMemoryBackend   SnapshotMemoryBackend
 	SnapshotMemoryCacheKey  string
-	SnapshotMemoryOverlays  []SnapshotMemoryOverlay
 	SnapshotMemorySessionID string
 }
 

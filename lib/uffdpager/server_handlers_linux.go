@@ -38,7 +38,6 @@ func (s *server) handleStats(w http.ResponseWriter, r *http.Request) {
 		CacheAddNanos:       cacheAddNanos,
 		CacheAddMaxNanos:    cacheAddMaxNanos,
 		Faults:              s.faults.Load(),
-		OverlayFaults:       s.overlayFaults.Load(),
 		BackingBytesRead:    s.backingBytesRead.Load(),
 		Copies:              s.copies.Load(),
 		CopyErrors:          s.copyErrors.Load(),

@@ -26,20 +26,6 @@ func (s *server) createSession(req CreateSessionRequest) (*session, error) {
 		return nil, fmt.Errorf("listen for uffd session %s: %w", id, err)
 	}
 
-	overlays := make(map[int64][]byte, len(req.Overlays))
-	for _, overlay := range req.Overlays {
-		if overlay.GuestMemoryOffset < 0 || strings.TrimSpace(overlay.Path) == "" {
-			listener.Close()
-			return nil, fmt.Errorf("invalid overlay page: offset=%d path=%q", overlay.GuestMemoryOffset, overlay.Path)
-		}
-		data, err := os.ReadFile(overlay.Path)
-		if err != nil {
-			listener.Close()
-			return nil, fmt.Errorf("read overlay page %q: %w", overlay.Path, err)
-		}
-		overlays[overlay.GuestMemoryOffset] = data
-	}
-
 	sess := &session{
 		id:                id,
 		instanceID:        req.InstanceID,
@@ -47,7 +33,6 @@ func (s *server) createSession(req CreateSessionRequest) (*session, error) {
 		cacheKey:          req.CacheKey,
 		socketPath:        socketPath,
 		listener:          listener,
-		overlays:          overlays,
 		server:            s,
 		done:              make(chan struct{}),
 		uffdFD:            -1,

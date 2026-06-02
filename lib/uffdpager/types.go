@@ -7,19 +7,12 @@ const (
 	defaultCacheMaxBytes = int64(4 << 30)
 )
 
-// OverlayPage replaces a single snapshot memory page for one restore session.
-type OverlayPage struct {
-	GuestMemoryOffset int64  `json:"guest_memory_offset"`
-	Path              string `json:"path"`
-}
-
 // CreateSessionRequest describes one Firecracker UFFD restore session.
 type CreateSessionRequest struct {
-	SessionID         string        `json:"session_id,omitempty"`
-	InstanceID        string        `json:"instance_id"`
-	BackingMemoryPath string        `json:"backing_memory_path"`
-	CacheKey          string        `json:"cache_key"`
-	Overlays          []OverlayPage `json:"overlays,omitempty"`
+	SessionID         string `json:"session_id,omitempty"`
+	InstanceID        string `json:"instance_id"`
+	BackingMemoryPath string `json:"backing_memory_path"`
+	CacheKey          string `json:"cache_key"`
 }
 
 // CreateSessionResponse returns the per-session socket Firecracker should use
@@ -53,7 +46,6 @@ type Stats struct {
 	CacheAddMaxNanos    int64 `json:"cache_add_max_nanos"`
 
 	Faults           int64 `json:"faults"`
-	OverlayFaults    int64 `json:"overlay_faults"`
 	BackingBytesRead int64 `json:"backing_bytes_read"`
 	Copies           int64 `json:"copies"`
 	CopyErrors       int64 `json:"copy_errors"`

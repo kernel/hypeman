@@ -248,7 +248,7 @@ func (m *manager) restoreInstance(
 		proxyRegistered = true
 	}
 
-	restoreOptions, err := m.firecrackerSnapshotRestoreOptions(stored, snapshotDir, nil)
+	restoreOptions, err := m.firecrackerSnapshotRestoreOptions(stored, snapshotDir)
 	if err != nil {
 		releaseNetwork()
 		return nil, fmt.Errorf("configure snapshot memory backend: %w", err)

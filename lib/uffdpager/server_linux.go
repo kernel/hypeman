@@ -30,7 +30,6 @@ type server struct {
 	draining bool
 
 	faults           atomic.Int64
-	overlayFaults    atomic.Int64
 	backingBytesRead atomic.Int64
 	copies           atomic.Int64
 	copyErrors       atomic.Int64
@@ -55,7 +54,6 @@ type session struct {
 	socketPath        string
 	listener          *net.UnixListener
 	backingFile       *os.File
-	overlays          map[int64][]byte
 	server            *server
 	done              chan struct{}
 	closeOnce         sync.Once

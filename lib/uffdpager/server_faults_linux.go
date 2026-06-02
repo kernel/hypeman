@@ -151,12 +151,9 @@ func (s *session) servePageFault(mappings []guestRegionUffdMapping, faultAddr in
 	_ = mapping
 
 	s.server.faults.Add(1)
-	page, overlay, err := s.readPage(pageOffset, pageSize)
+	page, err := s.readPage(pageOffset, pageSize)
 	if err != nil {
 		return err
-	}
-	if overlay {
-		s.server.overlayFaults.Add(1)
 	}
 	copyStart := time.Now()
 	if err := uffdCopy(s.uffdFD, uint64(pageAddr), page); err != nil {
@@ -172,7 +169,7 @@ func (s *session) servePageFault(mappings []guestRegionUffdMapping, faultAddr in
 	return nil
 }
 
-func (s *session) readPage(offset int64, size int) ([]byte, bool, error) {
+func (s *session) readPage(offset int64, size int) ([]byte, error) {
 	start := time.Now()
 	defer func() {
 		nanos := time.Since(start).Nanoseconds()
@@ -180,14 +177,8 @@ func (s *session) readPage(offset int64, size int) ([]byte, bool, error) {
 		atomicMaxInt64(&s.server.readPageMaxNanos, nanos)
 	}()
 
-	if page, ok := s.overlays[offset]; ok {
-		if len(page) != size {
-			return nil, true, fmt.Errorf("overlay page at offset %d has size %d, expected %d", offset, len(page), size)
-		}
-		return page, true, nil
-	}
 	if page, ok := s.server.cache.Borrow(s.cacheKey, offset, size); ok {
-		return page, false, nil
+		return page, nil
 	}
 
 	page := make([]byte, size)
@@ -197,13 +188,13 @@ func (s *session) readPage(offset int64, size int) ([]byte, bool, error) {
 	s.server.backingReadNanos.Add(readNanos)
 	atomicMaxInt64(&s.server.backingReadMaxNanos, readNanos)
 	if err != nil && !errors.Is(err, io.EOF) {
-		return nil, false, fmt.Errorf("read backing page at %d: %w", offset, err)
+		return nil, fmt.Errorf("read backing page at %d: %w", offset, err)
 	}
 	if n > 0 {
 		s.server.backingBytesRead.Add(int64(n))
 	}
 	s.server.cache.Add(s.cacheKey, offset, page)
-	return page, false, nil
+	return page, nil
 }
 
 func recvMappingsAndFD(conn *net.UnixConn) ([]guestRegionUffdMapping, int, error) {

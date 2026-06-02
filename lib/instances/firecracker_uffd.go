@@ -22,7 +22,7 @@ func (m *manager) useFirecrackerUFFD(stored *StoredMetadata) bool {
 		m.firecrackerSnapshotMemoryBackend == uffdpager.BackendUFFD
 }
 
-func (m *manager) firecrackerSnapshotRestoreOptions(stored *StoredMetadata, snapshotDir string, overlays []uffdpager.OverlayPage) (hypervisor.RestoreOptions, error) {
+func (m *manager) firecrackerSnapshotRestoreOptions(stored *StoredMetadata, snapshotDir string) (hypervisor.RestoreOptions, error) {
 	opts := hypervisor.RestoreOptions{SnapshotMemoryBackend: hypervisor.SnapshotMemoryBackendFile}
 	if stored == nil || stored.HypervisorType != hypervisor.TypeFirecracker {
 		return opts, nil
@@ -50,7 +50,6 @@ func (m *manager) firecrackerSnapshotRestoreOptions(stored *StoredMetadata, snap
 	opts.SnapshotMemoryBackend = hypervisor.SnapshotMemoryBackendUFFD
 	opts.SnapshotMemoryCacheKey = cacheKey
 	opts.SnapshotMemorySessionID = stored.FirecrackerUFFDSessionID
-	opts.SnapshotMemoryOverlays = toHypervisorSnapshotMemoryOverlays(overlays)
 	return opts, nil
 }
 
@@ -135,20 +134,6 @@ func firecrackerSnapshotCacheKey(stored *StoredMetadata, snapshotDir string) (st
 		stateInfo.ModTime().UnixNano(),
 	)))
 	return hex.EncodeToString(sum[:])[:24], nil
-}
-
-func toHypervisorSnapshotMemoryOverlays(overlays []uffdpager.OverlayPage) []hypervisor.SnapshotMemoryOverlay {
-	if len(overlays) == 0 {
-		return nil
-	}
-	result := make([]hypervisor.SnapshotMemoryOverlay, 0, len(overlays))
-	for _, overlay := range overlays {
-		result = append(result, hypervisor.SnapshotMemoryOverlay{
-			GuestMemoryOffset: overlay.GuestMemoryOffset,
-			Path:              overlay.Path,
-		})
-	}
-	return result
 }
 
 func fileStatFingerprint(info os.FileInfo) string {
