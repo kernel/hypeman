@@ -254,6 +254,7 @@ endif
 
 build-linux: ensure-ch-binaries ensure-firecracker-binaries ensure-caddy-binaries build-embedded | $(BIN_DIR)
 	go build -tags containers_image_openpgp -o $(BIN_DIR)/hypeman ./cmd/api
+	go build -o $(BIN_DIR)/hypeman-uffd-pager ./cmd/uffd-pager
 
 # Build all binaries
 build-all: build

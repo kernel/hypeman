@@ -16,7 +16,7 @@ changed_runtime_files="$(
     lib/instances/firecracker_uffd.go \
     lib/instances/guest_resume_network.go \
     lib/instances/resume_network_handoff.go \
-    cmd/api/main.go |
+    cmd/uffd-pager |
     grep -Ev '(^lib/uffdpager/VERSION$|(^|/)README\.md$|_test\.go$)' || true
 )"
 

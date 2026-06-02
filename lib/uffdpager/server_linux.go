@@ -64,7 +64,7 @@ type session struct {
 }
 
 func Main(args []string) error {
-	fs := flag.NewFlagSet("internal-uffd-pager", flag.ContinueOnError)
+	fs := flag.NewFlagSet("hypeman-uffd-pager", flag.ContinueOnError)
 	dataDir := fs.String("data-dir", "", "hypeman data directory")
 	versionKey := fs.String("version-key", "", "pager version key")
 	cacheMaxBytes := fs.Int64("cache-max-bytes", defaultCacheMaxBytes, "maximum shared page cache bytes")

@@ -22,7 +22,8 @@ run versioned systemd units named `hypeman-uffd@<version>.service`. Hypeman
 connects to the pager version from `VERSION`, so regular Hypeman releases do not
 start a new pager unless the UFFD pager version changes. Older pager versions
 are drained: they reject new sessions but continue serving existing sessions
-until those sessions close.
+until those sessions close. Systemd runs the pager through the dedicated
+`hypeman-uffd-pager` binary rather than an alternate API-server mode.
 
 Some restore-time memory writes, such as the resume-network mailbox payload,
 must not mutate the backing snapshot memory file. Those writes are represented

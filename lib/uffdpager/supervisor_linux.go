@@ -35,7 +35,7 @@ type Supervisor struct {
 	versionKey    string
 	cacheMaxBytes int64
 	controlSocket string
-	executable    string
+	pagerBinary   string
 
 	mu      sync.Mutex
 	clients map[string]*http.Client
@@ -55,7 +55,7 @@ func NewSupervisor(ctx context.Context, dataDir string, cacheMaxBytes int64) (*S
 		versionKey:    versionKey,
 		cacheMaxBytes: normalizeCacheMaxBytes(cacheMaxBytes),
 		controlSocket: pagerControlSocket(dataDir, versionKey),
-		executable:    exe,
+		pagerBinary:   pagerBinaryPath(exe),
 		clients:       make(map[string]*http.Client),
 	}
 	if err := s.ensureRunning(ctx); err != nil {
@@ -133,13 +133,13 @@ func (s *Supervisor) ensureRunning(ctx context.Context) error {
 		}
 		return s.waitHealthy(ctx)
 	}
-	if err := s.ensureRunningEmbedded(ctx); err != nil {
+	if err := s.ensureRunningSubprocess(ctx); err != nil {
 		return err
 	}
 	return s.waitHealthy(ctx)
 }
 
-func (s *Supervisor) ensureRunningEmbedded(ctx context.Context) error {
+func (s *Supervisor) ensureRunningSubprocess(ctx context.Context) error {
 	dir := pagerVersionDir(s.dataDir, s.versionKey)
 	if err := os.MkdirAll(filepath.Join(dir, sessionsDir), 0755); err != nil {
 		return fmt.Errorf("create uffd pager directory: %w", err)
@@ -153,8 +153,7 @@ func (s *Supervisor) ensureRunningEmbedded(ctx context.Context) error {
 	defer logFile.Close()
 
 	cmd := exec.Command(
-		s.executable,
-		"--internal-uffd-pager",
+		s.pagerBinary,
 		"--data-dir", s.dataDir,
 		"--version-key", s.versionKey,
 		"--cache-max-bytes", strconv.FormatInt(s.cacheMaxBytes, 10),
@@ -169,6 +168,13 @@ func (s *Supervisor) ensureRunningEmbedded(ctx context.Context) error {
 	_ = cmd.Process.Release()
 
 	return nil
+}
+
+func pagerBinaryPath(executable string) string {
+	if override := strings.TrimSpace(os.Getenv("HYPEMAN_UFFD_PAGER_BINARY")); override != "" {
+		return override
+	}
+	return filepath.Join(filepath.Dir(executable), "hypeman-uffd-pager")
 }
 
 func (s *Supervisor) ensureRunningSystemd(ctx context.Context) error {
