@@ -67,12 +67,12 @@ func TestForkMailboxMarker(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestWriteForkMailboxPayloadAt(t *testing.T) {
+func TestWriteForkMailboxPayloadFrame(t *testing.T) {
 	t.Parallel()
 
 	buf := make([]byte, ForkMailboxSize)
 	payload := []byte(`{"instance_name":"forked"}`)
-	require.NoError(t, WriteForkMailboxPayloadAt(sliceWriterAt(buf), 512, payload))
+	require.NoError(t, WritePayloadAt(sliceWriterAt(buf), ForkLayout, 512, payload))
 
 	assert.Equal(t, uint32(1), binary.LittleEndian.Uint32(buf[512+ForkMailboxSeqOffset:]))
 	payloadLen := binary.LittleEndian.Uint32(buf[512+ForkMailboxLengthOffset:])

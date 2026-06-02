@@ -107,10 +107,6 @@ func ForkMailboxMarker(name, token string) ([]byte, error) {
 	return marker, nil
 }
 
-func WriteForkMailboxPayloadAt(w io.WriterAt, offset int64, payload []byte) error {
-	return WritePayloadAt(w, ForkLayout, offset, payload)
-}
-
 func FindMarker(file *os.File, size int64, marker []byte, cache *sync.Map) (int64, error) {
 	cacheKey := string(marker)
 	if cache != nil {
