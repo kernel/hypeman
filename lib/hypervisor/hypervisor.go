@@ -247,6 +247,10 @@ type Capabilities struct {
 	// on-disk base across restore/standby cycles.
 	SupportsSnapshotBaseReuse bool
 
+	// SupportsConcurrentForkPrepare indicates stopped/standby forks can prepare
+	// separate target snapshots concurrently from the same source.
+	SupportsConcurrentForkPrepare bool
+
 	// SupportsDiskResize indicates if live disk resizing (/vm.resize-disk) is available.
 	// Cloud Hypervisor v50.0+ only.
 	SupportsDiskResize bool

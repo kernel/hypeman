@@ -318,6 +318,14 @@ func (m *manager) supportsSnapshotBaseReuse(hvType hypervisor.Type) bool {
 	return caps.SupportsSnapshotBaseReuse
 }
 
+func (m *manager) supportsConcurrentForkPrepare(hvType hypervisor.Type) bool {
+	caps, ok := hypervisor.CapabilitiesForType(hvType)
+	if !ok {
+		return false
+	}
+	return caps.SupportsConcurrentForkPrepare
+}
+
 // getInstanceLock returns or creates a lock for a specific instance
 func (m *manager) getInstanceLock(id string) *sync.RWMutex {
 	lock, _ := m.instanceLocks.LoadOrStore(id, &sync.RWMutex{})
@@ -419,7 +427,7 @@ func (m *manager) ForkInstance(ctx context.Context, id string, req ForkInstanceR
 	lock.RLock()
 	if meta, err := m.loadMetadata(id); err == nil {
 		source := m.toInstance(ctx, meta)
-		useReadLock = source.State == StateStopped || source.State == StateStandby
+		useReadLock = m.supportsConcurrentForkPrepare(meta.HypervisorType) && (source.State == StateStopped || source.State == StateStandby)
 	}
 	lock.RUnlock()
 
@@ -430,7 +438,7 @@ func (m *manager) ForkInstance(ctx context.Context, id string, req ForkInstanceR
 		lock.RLock()
 		if meta, loadErr := m.loadMetadata(id); loadErr == nil {
 			source := m.toInstance(ctx, meta)
-			useReadLock = source.State == StateStopped || source.State == StateStandby
+			useReadLock = m.supportsConcurrentForkPrepare(meta.HypervisorType) && (source.State == StateStopped || source.State == StateStandby)
 		} else {
 			useReadLock = false
 		}

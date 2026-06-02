@@ -221,7 +221,7 @@ func TestForkInstanceStoppedSourceUsesReadLock(t *testing.T) {
 	ctx := context.Background()
 
 	sourceID := "fork-stopped-read-lock-source"
-	createStoppedSnapshotSourceFixture(t, manager, sourceID, sourceID, hypervisor.TypeQEMU)
+	createStoppedSnapshotSourceFixture(t, manager, sourceID, sourceID, hypervisor.TypeFirecracker)
 
 	sourceLock := manager.getInstanceLock(sourceID)
 	sourceLock.RLock()
@@ -245,6 +245,40 @@ func TestForkInstanceStoppedSourceUsesReadLock(t *testing.T) {
 	case <-time.After(250 * time.Millisecond):
 		t.Fatal("ForkInstance blocked behind a source read lock")
 	}
+}
+
+func TestForkInstanceStoppedSourceRequiresWriteLockWithoutConcurrentPrepare(t *testing.T) {
+	manager, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	sourceID := "fork-stopped-write-lock-source"
+	createStoppedSnapshotSourceFixture(t, manager, sourceID, sourceID, hypervisor.TypeQEMU)
+
+	sourceLock := manager.getInstanceLock(sourceID)
+	sourceLock.RLock()
+
+	type forkResult struct {
+		inst *Instance
+		err  error
+	}
+	done := make(chan forkResult, 1)
+	go func() {
+		inst, err := manager.ForkInstance(ctx, sourceID, ForkInstanceRequest{Name: "fork-stopped-write-lock-copy"})
+		done <- forkResult{inst: inst, err: err}
+	}()
+
+	select {
+	case got := <-done:
+		sourceLock.RUnlock()
+		t.Fatalf("ForkInstance returned without exclusive source lock: inst=%v err=%v", got.inst, got.err)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	sourceLock.RUnlock()
+	got := <-done
+	require.NoError(t, got.err)
+	require.NotNil(t, got.inst)
+	assert.Equal(t, StateStopped, got.inst.State)
 }
 
 func TestForkInstance_CleansUpOnTargetTransitionError(t *testing.T) {
