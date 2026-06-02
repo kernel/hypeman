@@ -96,11 +96,13 @@ func validateForkMailboxes(mailboxes []ForkMailboxPayload) error {
 		if err := json.Unmarshal(mailbox.Payload, &payload); err != nil || payload == nil {
 			return fmt.Errorf("%w: mailbox %q payload must be a JSON object", ErrInvalidRequest, name)
 		}
-		if mailbox.WaitForAck && mailbox.AckTimeout < 0 {
-			return fmt.Errorf("%w: mailbox %q ack_timeout_ms must be positive", ErrInvalidRequest, name)
-		}
-		if mailbox.AckTimeout > 30*time.Second {
-			return fmt.Errorf("%w: mailbox %q ack_timeout_ms must be 30000 or less", ErrInvalidRequest, name)
+		if mailbox.WaitForAck {
+			if mailbox.AckTimeout < 0 {
+				return fmt.Errorf("%w: mailbox %q ack_timeout_ms must not be negative", ErrInvalidRequest, name)
+			}
+			if mailbox.AckTimeout > 30*time.Second {
+				return fmt.Errorf("%w: mailbox %q ack_timeout_ms must be 30000 or less", ErrInvalidRequest, name)
+			}
 		}
 	}
 	return nil

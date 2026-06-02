@@ -150,6 +150,31 @@ func TestValidateForkMailboxesRejectsPaddedName(t *testing.T) {
 	assert.ErrorIs(t, err, ErrInvalidRequest)
 }
 
+func TestValidateForkMailboxesAckTimeout(t *testing.T) {
+	t.Parallel()
+
+	base := ForkMailboxPayload{
+		Name:    "kernel.identity.v1",
+		Token:   "template-token",
+		Payload: []byte(`{"instance_name":"forked"}`),
+	}
+
+	withDefaultTimeout := base
+	withDefaultTimeout.WaitForAck = true
+	require.NoError(t, validateForkMailboxes([]ForkMailboxPayload{withDefaultTimeout}))
+
+	withNegativeTimeout := base
+	withNegativeTimeout.WaitForAck = true
+	withNegativeTimeout.AckTimeout = -time.Millisecond
+	err := validateForkMailboxes([]ForkMailboxPayload{withNegativeTimeout})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidRequest)
+
+	ignoredWithoutAck := base
+	ignoredWithoutAck.AckTimeout = 31 * time.Second
+	require.NoError(t, validateForkMailboxes([]ForkMailboxPayload{ignoredWithoutAck}))
+}
+
 func TestValidateForkMailboxHypervisor(t *testing.T) {
 	t.Parallel()
 
