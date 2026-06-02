@@ -211,10 +211,11 @@ func (m *manager) createBridge(ctx context.Context, name, gateway, subnet string
 
 // Rule comments for identifying hypeman iptables rules
 const (
-	commentNATBase    = "hypeman-nat"
-	commentFwdOutBase = "hypeman-fwd-out"
-	commentFwdInBase  = "hypeman-fwd-in"
-	commentInputBase  = "hypeman-input"
+	commentNATBase     = "hypeman-nat"
+	commentGatewayBase = "hypeman-gateway"
+	commentFwdOutBase  = "hypeman-fwd-out"
+	commentFwdInBase   = "hypeman-fwd-in"
+	commentInputBase   = "hypeman-input"
 )
 
 // HTB handles for traffic control
@@ -273,6 +274,7 @@ func (m *manager) setupIPTablesRules(ctx context.Context, subnet, bridgeName, ga
 	log.InfoContext(ctx, "uplink interface", "interface", uplink)
 
 	natComment := m.ruleComment(commentNATBase)
+	gatewayComment := m.ruleComment(commentGatewayBase)
 	fwdOutComment := m.ruleComment(commentFwdOutBase)
 	fwdInComment := m.ruleComment(commentFwdInBase)
 	inputComment := m.ruleComment(commentInputBase)
@@ -284,19 +286,23 @@ func (m *manager) setupIPTablesRules(ctx context.Context, subnet, bridgeName, ga
 	}
 	log.InfoContext(ctx, "iptables NAT ready", "subnet", subnet, "uplink", uplink, "status", masqStatus)
 
-	// FORWARD rules must be at top of chain (before Docker's DOCKER-USER/DOCKER-FORWARD)
-	// We insert at position 1 and 2 to ensure they're evaluated first
-	fwdOutStatus, err := m.ensureForwardRule(bridgeName, uplink, "NEW,ESTABLISHED,RELATED", fwdOutComment, 1)
+	gatewayStatus, err := m.ensureGatewayForwardRule(bridgeName, subnet, gateway, gatewayComment, 1)
+	if err != nil {
+		return fmt.Errorf("setup gateway forward: %w", err)
+	}
+
+	// FORWARD rules must be at top of chain (before Docker's DOCKER-USER/DOCKER-FORWARD).
+	fwdOutStatus, err := m.ensureForwardRule(bridgeName, uplink, "NEW,ESTABLISHED,RELATED", fwdOutComment, 2)
 	if err != nil {
 		return fmt.Errorf("setup forward outbound: %w", err)
 	}
 
-	fwdInStatus, err := m.ensureForwardRule(uplink, bridgeName, "ESTABLISHED,RELATED", fwdInComment, 2)
+	fwdInStatus, err := m.ensureForwardRule(uplink, bridgeName, "ESTABLISHED,RELATED", fwdInComment, 3)
 	if err != nil {
 		return fmt.Errorf("setup forward inbound: %w", err)
 	}
 
-	log.InfoContext(ctx, "iptables FORWARD ready", "outbound", fwdOutStatus, "inbound", fwdInStatus)
+	log.InfoContext(ctx, "iptables FORWARD ready", "gateway", gatewayStatus, "outbound", fwdOutStatus, "inbound", fwdInStatus)
 
 	inputStatus, err := m.ensureInputRule(bridgeName, subnet, gateway, inputComment)
 	if err != nil {
@@ -397,6 +403,25 @@ func (m *manager) ensureForwardRule(inIface, outIface, ctstate, comment string, 
 	return "added", nil
 }
 
+func (m *manager) ensureGatewayForwardRule(bridgeName, subnet, gateway, comment string, position int) (string, error) {
+	if m.isForwardGatewayRuleCorrect(bridgeName, comment, position) {
+		return "existing", nil
+	}
+
+	m.deleteForwardRuleByComment(comment)
+
+	addCmd := newIPTablesCommand("-I", "FORWARD", fmt.Sprintf("%d", position),
+		"-i", bridgeName,
+		"-s", subnet,
+		"-d", gateway,
+		"-m", "comment", "--comment", comment,
+		"-j", "ACCEPT")
+	if err := addCmd.Run(); err != nil {
+		return "", fmt.Errorf("insert gateway forward rule: %w", err)
+	}
+	return "added", nil
+}
+
 func (m *manager) ensureInputRule(bridgeName, subnet, gateway, comment string) (string, error) {
 	checkCmd := newIPTablesCommand("-C", "INPUT",
 		"-i", bridgeName,
@@ -420,6 +445,28 @@ func (m *manager) ensureInputRule(bridgeName, subnet, gateway, comment string) (
 		return "", fmt.Errorf("insert input rule: %w", err)
 	}
 	return "added", nil
+}
+
+func (m *manager) isForwardGatewayRuleCorrect(inIface, comment string, position int) bool {
+	cmd := newIPTablesCommand("-L", "FORWARD", "--line-numbers", "-n", "-v")
+	output, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+
+	lines := strings.Split(string(output), "\n")
+	for _, line := range lines {
+		if !strings.Contains(line, comment) {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) >= 7 &&
+			fields[0] == fmt.Sprintf("%d", position) &&
+			fields[6] == inIface {
+			return true
+		}
+	}
+	return false
 }
 
 // isForwardRuleCorrect checks if our rule exists at the expected position with correct interfaces
