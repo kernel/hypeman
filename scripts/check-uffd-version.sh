@@ -8,8 +8,13 @@ if ! git rev-parse --verify "${base_ref}^{commit}" >/dev/null 2>&1; then
   exit 1
 fi
 
+diff_range="${base_ref}...HEAD"
+if ! git merge-base "${base_ref}" HEAD >/dev/null 2>&1; then
+  diff_range="${base_ref}..HEAD"
+fi
+
 changed_runtime_files="$(
-  git diff --name-only "${base_ref}...HEAD" -- \
+  git diff --name-only "${diff_range}" -- \
     lib/uffdpager \
     lib/hypervisor/firecracker/process.go \
     lib/hypervisor/firecracker/config.go \
@@ -24,7 +29,7 @@ if [ -z "${changed_runtime_files}" ]; then
   exit 0
 fi
 
-if git diff --quiet "${base_ref}...HEAD" -- lib/uffdpager/VERSION; then
+if git diff --quiet "${diff_range}" -- lib/uffdpager/VERSION; then
   echo "UFFD pager runtime files changed without updating lib/uffdpager/VERSION:" >&2
   echo "${changed_runtime_files}" >&2
   exit 1
