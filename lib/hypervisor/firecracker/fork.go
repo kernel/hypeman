@@ -2,8 +2,6 @@ package firecracker
 
 import (
 	"context"
-	"fmt"
-	"os"
 	"path/filepath"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
@@ -50,43 +48,11 @@ func (s *Starter) PrepareFork(ctx context.Context, req hypervisor.ForkPrepareReq
 		}
 	}
 	if req.SourceDataDir != "" && req.TargetDataDir != "" && req.SourceDataDir != req.TargetDataDir {
-		statePath := snapshotStatePath(filepath.Dir(req.SnapshotConfigPath))
-		rewritten, err := rewriteSnapshotStatePathsForFork(statePath, snapshotStatePathRewritesForFork(meta, req.SourceDataDir, req.TargetDataDir))
+		updated, err := prepareSnapshotDataDirForFork(req.SnapshotConfigPath, meta, req.SourceDataDir, req.TargetDataDir)
 		if err != nil {
 			return hypervisor.ForkPrepareResult{}, err
 		}
-		if rewritten {
-			if meta.SnapshotSourceDataDir != "" {
-				meta.SnapshotSourceDataDir = ""
-				changed = true
-			}
-			if meta.RetainSnapshotSourceDataDirAlias {
-				meta.RetainSnapshotSourceDataDirAlias = false
-				changed = true
-			}
-		} else {
-			retainAlias := false
-			if _, err := os.Stat(req.SourceDataDir); err != nil {
-				if os.IsNotExist(err) {
-					retainAlias = true
-				} else {
-					return hypervisor.ForkPrepareResult{}, fmt.Errorf("stat snapshot source data dir %q: %w", req.SourceDataDir, err)
-				}
-			}
-			if meta.RetainSnapshotSourceDataDirAlias && meta.SnapshotSourceDataDir != "" {
-				// Keep the upstream source path for snapshot-derived forks. The retained
-				// Firecracker base can still reference that path after later diff snapshots.
-			} else {
-				if meta.SnapshotSourceDataDir != req.SourceDataDir {
-					meta.SnapshotSourceDataDir = req.SourceDataDir
-					changed = true
-				}
-				if meta.RetainSnapshotSourceDataDirAlias != retainAlias {
-					meta.RetainSnapshotSourceDataDirAlias = retainAlias
-					changed = true
-				}
-			}
-		}
+		changed = changed || updated
 	}
 
 	if changed {
@@ -96,35 +62,4 @@ func (s *Starter) PrepareFork(ctx context.Context, req hypervisor.ForkPrepareReq
 	}
 
 	return hypervisor.ForkPrepareResult{}, nil
-}
-
-func snapshotStatePathRewritesForFork(meta *restoreMetadata, sourceDataDir, targetDataDir string) []snapshotStatePathRewrite {
-	var rewrites []snapshotStatePathRewrite
-	add := func(source, target string) {
-		if source == "" || target == "" {
-			return
-		}
-		rewrites = append(rewrites, snapshotStatePathRewrite{Source: source, Target: target})
-	}
-
-	add(sourceDataDir, targetDataDir)
-	if meta != nil {
-		add(meta.SnapshotSourceDataDir, targetDataDir)
-	}
-	if resolvedTarget, err := filepath.EvalSymlinks(targetDataDir); err == nil {
-		add(sourceDataDir, resolvedTarget)
-		if meta != nil {
-			add(meta.SnapshotSourceDataDir, resolvedTarget)
-		}
-		if resolvedSource, err := filepath.EvalSymlinks(sourceDataDir); err == nil {
-			add(resolvedSource, resolvedTarget)
-		}
-		if meta != nil && meta.SnapshotSourceDataDir != "" {
-			if resolvedSource, err := filepath.EvalSymlinks(meta.SnapshotSourceDataDir); err == nil {
-				add(resolvedSource, resolvedTarget)
-			}
-		}
-	}
-
-	return rewrites
 }
