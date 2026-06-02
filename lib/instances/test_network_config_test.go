@@ -432,6 +432,7 @@ func cleanupTestNetworkArtifacts(bridgeName, subnetCIDR string) {
 	deleteIPTablesRulesByComment("nat", "POSTROUTING", "hypeman-nat-"+bridgeSuffix)
 	deleteIPTablesRulesByComment("", "FORWARD", "hypeman-fwd-out-"+bridgeSuffix)
 	deleteIPTablesRulesByComment("", "FORWARD", "hypeman-fwd-in-"+bridgeSuffix)
+	deleteIPTablesRulesByComment("", "INPUT", "hypeman-input-"+bridgeSuffix)
 }
 
 func deleteIPTablesRulesByComment(table, chain, comment string) {

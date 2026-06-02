@@ -24,7 +24,7 @@ func (m *manager) createBridge(ctx context.Context, name, gateway, subnet string
 }
 
 // setupIPTablesRules is a no-op on macOS as we use NAT networking.
-func (m *manager) setupIPTablesRules(ctx context.Context, subnet, bridgeName string) error {
+func (m *manager) setupIPTablesRules(ctx context.Context, subnet, bridgeName, gateway string) error {
 	return nil
 }
 

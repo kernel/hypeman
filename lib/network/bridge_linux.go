@@ -160,7 +160,7 @@ func (m *manager) createBridge(ctx context.Context, name, gateway, subnet string
 		log.InfoContext(ctx, "bridge ready", "bridge", name, "gateway", gateway, "status", "existing")
 
 		// Still need to ensure iptables rules are configured
-		if err := m.setupIPTablesRules(ctx, subnet, name); err != nil {
+		if err := m.setupIPTablesRules(ctx, subnet, name, gateway); err != nil {
 			return fmt.Errorf("setup iptables: %w", err)
 		}
 		return nil
@@ -202,7 +202,7 @@ func (m *manager) createBridge(ctx context.Context, name, gateway, subnet string
 	log.InfoContext(ctx, "bridge ready", "bridge", name, "gateway", gateway, "status", "created")
 
 	// 6. Setup iptables rules
-	if err := m.setupIPTablesRules(ctx, subnet, name); err != nil {
+	if err := m.setupIPTablesRules(ctx, subnet, name, gateway); err != nil {
 		return fmt.Errorf("setup iptables: %w", err)
 	}
 
@@ -214,6 +214,7 @@ const (
 	commentNATBase    = "hypeman-nat"
 	commentFwdOutBase = "hypeman-fwd-out"
 	commentFwdInBase  = "hypeman-fwd-in"
+	commentInputBase  = "hypeman-input"
 )
 
 // HTB handles for traffic control
@@ -251,7 +252,7 @@ func (m *manager) getUplinkInterface() (string, error) {
 }
 
 // setupIPTablesRules sets up NAT and forwarding rules
-func (m *manager) setupIPTablesRules(ctx context.Context, subnet, bridgeName string) error {
+func (m *manager) setupIPTablesRules(ctx context.Context, subnet, bridgeName, gateway string) error {
 	log := logger.FromContext(ctx)
 
 	// Check if IP forwarding is enabled (prerequisite)
@@ -274,6 +275,7 @@ func (m *manager) setupIPTablesRules(ctx context.Context, subnet, bridgeName str
 	natComment := m.ruleComment(commentNATBase)
 	fwdOutComment := m.ruleComment(commentFwdOutBase)
 	fwdInComment := m.ruleComment(commentFwdInBase)
+	inputComment := m.ruleComment(commentInputBase)
 
 	// Add MASQUERADE rule if not exists (position doesn't matter in POSTROUTING)
 	masqStatus, err := m.ensureNATRule(subnet, uplink, natComment)
@@ -295,6 +297,12 @@ func (m *manager) setupIPTablesRules(ctx context.Context, subnet, bridgeName str
 	}
 
 	log.InfoContext(ctx, "iptables FORWARD ready", "outbound", fwdOutStatus, "inbound", fwdInStatus)
+
+	inputStatus, err := m.ensureInputRule(bridgeName, subnet, gateway, inputComment)
+	if err != nil {
+		return fmt.Errorf("setup host gateway input: %w", err)
+	}
+	log.InfoContext(ctx, "iptables INPUT ready", "bridge", bridgeName, "gateway", gateway, "status", inputStatus)
 
 	// Restore Docker's FORWARD chain jumps if they were lost.
 	// On systems where an external tool (e.g., hypervisor firewall management) periodically
@@ -389,6 +397,31 @@ func (m *manager) ensureForwardRule(inIface, outIface, ctstate, comment string, 
 	return "added", nil
 }
 
+func (m *manager) ensureInputRule(bridgeName, subnet, gateway, comment string) (string, error) {
+	checkCmd := newIPTablesCommand("-C", "INPUT",
+		"-i", bridgeName,
+		"-s", subnet,
+		"-d", gateway,
+		"-m", "comment", "--comment", comment,
+		"-j", "ACCEPT")
+	if checkCmd.Run() == nil {
+		return "existing", nil
+	}
+
+	m.deleteInputRuleByComment(comment)
+
+	addCmd := newIPTablesCommand("-I", "INPUT", "1",
+		"-i", bridgeName,
+		"-s", subnet,
+		"-d", gateway,
+		"-m", "comment", "--comment", comment,
+		"-j", "ACCEPT")
+	if err := addCmd.Run(); err != nil {
+		return "", fmt.Errorf("insert input rule: %w", err)
+	}
+	return "added", nil
+}
+
 // isForwardRuleCorrect checks if our rule exists at the expected position with correct interfaces
 func (m *manager) isForwardRuleCorrect(inIface, outIface, comment string, position int) bool {
 	// List FORWARD chain with line numbers
@@ -442,6 +475,30 @@ func (m *manager) deleteForwardRuleByComment(comment string) {
 	for i := len(ruleNums) - 1; i >= 0; i-- {
 		delCmd := newIPTablesCommand("-D", "FORWARD", ruleNums[i])
 		delCmd.Run() // ignore error
+	}
+}
+
+func (m *manager) deleteInputRuleByComment(comment string) {
+	cmd := newIPTablesCommand("-L", "INPUT", "--line-numbers", "-n")
+	output, err := cmd.Output()
+	if err != nil {
+		return
+	}
+
+	var ruleNums []string
+	lines := strings.Split(string(output), "\n")
+	for _, line := range lines {
+		if strings.Contains(line, comment) {
+			fields := strings.Fields(line)
+			if len(fields) > 0 {
+				ruleNums = append(ruleNums, fields[0])
+			}
+		}
+	}
+
+	for i := len(ruleNums) - 1; i >= 0; i-- {
+		delCmd := newIPTablesCommand("-D", "INPUT", ruleNums[i])
+		delCmd.Run()
 	}
 }
 
