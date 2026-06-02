@@ -216,6 +216,7 @@ const (
 	commentFwdOutBase  = "hypeman-fwd-out"
 	commentFwdInBase   = "hypeman-fwd-in"
 	commentInputBase   = "hypeman-input"
+	commentOutputBase  = "hypeman-output"
 )
 
 // HTB handles for traffic control
@@ -278,6 +279,7 @@ func (m *manager) setupIPTablesRules(ctx context.Context, subnet, bridgeName, ga
 	fwdOutComment := m.ruleComment(commentFwdOutBase)
 	fwdInComment := m.ruleComment(commentFwdInBase)
 	inputComment := m.ruleComment(commentInputBase)
+	outputComment := m.ruleComment(commentOutputBase)
 
 	// Add MASQUERADE rule if not exists (position doesn't matter in POSTROUTING)
 	masqStatus, err := m.ensureNATRule(subnet, uplink, natComment)
@@ -308,7 +310,11 @@ func (m *manager) setupIPTablesRules(ctx context.Context, subnet, bridgeName, ga
 	if err != nil {
 		return fmt.Errorf("setup host gateway input: %w", err)
 	}
-	log.InfoContext(ctx, "iptables INPUT ready", "bridge", bridgeName, "gateway", gateway, "status", inputStatus)
+	outputStatus, err := m.ensureOutputRule(bridgeName, subnet, gateway, outputComment)
+	if err != nil {
+		return fmt.Errorf("setup host gateway output: %w", err)
+	}
+	log.InfoContext(ctx, "iptables host gateway ready", "bridge", bridgeName, "gateway", gateway, "input", inputStatus, "output", outputStatus)
 
 	// Restore Docker's FORWARD chain jumps if they were lost.
 	// On systems where an external tool (e.g., hypervisor firewall management) periodically
@@ -447,6 +453,31 @@ func (m *manager) ensureInputRule(bridgeName, subnet, gateway, comment string) (
 	return "added", nil
 }
 
+func (m *manager) ensureOutputRule(bridgeName, subnet, gateway, comment string) (string, error) {
+	checkCmd := newIPTablesCommand("-C", "OUTPUT",
+		"-o", bridgeName,
+		"-s", gateway,
+		"-d", subnet,
+		"-m", "comment", "--comment", comment,
+		"-j", "ACCEPT")
+	if checkCmd.Run() == nil {
+		return "existing", nil
+	}
+
+	m.deleteOutputRuleByComment(comment)
+
+	addCmd := newIPTablesCommand("-I", "OUTPUT", "1",
+		"-o", bridgeName,
+		"-s", gateway,
+		"-d", subnet,
+		"-m", "comment", "--comment", comment,
+		"-j", "ACCEPT")
+	if err := addCmd.Run(); err != nil {
+		return "", fmt.Errorf("insert output rule: %w", err)
+	}
+	return "added", nil
+}
+
 func (m *manager) isForwardGatewayRuleCorrect(inIface, comment string, position int) bool {
 	cmd := newIPTablesCommand("-L", "FORWARD", "--line-numbers", "-n", "-v")
 	output, err := cmd.Output()
@@ -545,6 +576,30 @@ func (m *manager) deleteInputRuleByComment(comment string) {
 
 	for i := len(ruleNums) - 1; i >= 0; i-- {
 		delCmd := newIPTablesCommand("-D", "INPUT", ruleNums[i])
+		delCmd.Run()
+	}
+}
+
+func (m *manager) deleteOutputRuleByComment(comment string) {
+	cmd := newIPTablesCommand("-L", "OUTPUT", "--line-numbers", "-n")
+	output, err := cmd.Output()
+	if err != nil {
+		return
+	}
+
+	var ruleNums []string
+	lines := strings.Split(string(output), "\n")
+	for _, line := range lines {
+		if strings.Contains(line, comment) {
+			fields := strings.Fields(line)
+			if len(fields) > 0 {
+				ruleNums = append(ruleNums, fields[0])
+			}
+		}
+	}
+
+	for i := len(ruleNums) - 1; i >= 0; i-- {
+		delCmd := newIPTablesCommand("-D", "OUTPUT", ruleNums[i])
 		delCmd.Run()
 	}
 }
