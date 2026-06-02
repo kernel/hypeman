@@ -349,7 +349,6 @@ func TestFirecrackerStopClearsStaleSnapshot(t *testing.T) {
 }
 
 func TestFirecrackerNetworkLifecycle(t *testing.T) {
-	t.Parallel()
 	requireFirecrackerIntegrationPrereqs(t)
 
 	mgr, tmpDir := setupTestManagerForFirecracker(t)
