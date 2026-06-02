@@ -24,6 +24,11 @@ type restoreInstanceOptions struct {
 	Mailboxes []ForkMailboxPayload
 }
 
+type restoreHandoff interface {
+	AfterResume(ctx context.Context) error
+	Close()
+}
+
 // RestoreInstance restores an instance from standby.
 // Multi-hop orchestration: Standby → Paused → Running.
 func (m *manager) restoreInstance(
@@ -260,20 +265,23 @@ func (m *manager) restoreInstanceWithOptions(
 		proxyRegistered = true
 	}
 
+	var handoffs []restoreHandoff
+
 	resumeNetworkHandoff, err := m.prepareResumeNetworkHandoff(ctx, stored, allocatedNet, snapshotDir)
 	if err != nil {
 		log.ErrorContext(ctx, "failed to prepare guest resume network handoff", "instance_id", id, "error", err)
 		releaseNetwork()
 		return nil, fmt.Errorf("prepare guest resume network handoff: %w", err)
 	}
-	defer resumeNetworkHandoff.Close()
+	handoffs = append(handoffs, resumeNetworkHandoff)
 
 	forkMailboxHandoff, err := m.prepareForkMailboxHandoff(ctx, stored, snapshotDir, opts.Mailboxes)
 	if err != nil {
 		releaseNetwork()
 		return nil, fmt.Errorf("prepare fork mailbox handoff: %w", err)
 	}
-	defer forkMailboxHandoff.Close()
+	handoffs = append(handoffs, forkMailboxHandoff)
+	defer closeRestoreHandoffs(handoffs)
 
 	// 5. Transition: Standby → Paused (start hypervisor + restore)
 	restoreCtx, restoreSpanEnd := m.startLifecycleStep(ctx, "restore_from_snapshot",
@@ -320,32 +328,11 @@ func (m *manager) restoreInstanceWithOptions(
 		reservedResources = false
 	}
 
-	// Forked standby restores may allocate a fresh identity while the guest memory snapshot
-	// still has the source VM's old IP configuration. Reconfigure guest networking after
-	// resume so host ingress to the new private IP works reliably.
-	if allocatedNet != nil && !stored.SkipGuestAgent {
-		reconfigureCtx, reconfigureSpanEnd := m.startLifecycleStep(ctx, "reconfigure_guest_network",
-			attribute.String("instance_id", id),
-			attribute.String("hypervisor", string(stored.HypervisorType)),
-			attribute.String("operation", "reconfigure_guest_network"),
-		)
-		reconfigureErr := resumeNetworkHandoff.AfterResume(reconfigureCtx)
-		reconfigureSpanEnd(reconfigureErr)
-		if reconfigureErr != nil {
-			log.ErrorContext(ctx, "failed to configure guest network after restore", "instance_id", id, "error", reconfigureErr)
-			_ = hv.Shutdown(ctx)
-			m.rollbackAdmissionAllocationActive(stored)
-			releaseNetwork()
-			return nil, fmt.Errorf("configure guest network after restore: %w", reconfigureErr)
-		}
-	}
-
-	if err := forkMailboxHandoff.AfterResume(ctx); err != nil {
-		log.ErrorContext(ctx, "failed waiting for fork mailbox acknowledgements", "instance_id", id, "error", err)
+	if err := afterRestoreHandoffs(ctx, stored, handoffs); err != nil {
 		_ = hv.Shutdown(ctx)
 		m.rollbackAdmissionAllocationActive(stored)
 		releaseNetwork()
-		return nil, fmt.Errorf("wait for fork mailbox acknowledgements: %w", err)
+		return nil, err
 	}
 
 	// 8. Delete snapshot after successful restore unless the hypervisor is keeping it
@@ -383,6 +370,22 @@ func (m *manager) restoreInstanceWithOptions(
 	}
 	log.InfoContext(ctx, "instance restored successfully", "instance_id", id, "state", finalInst.State)
 	return &finalInst, nil
+}
+
+func closeRestoreHandoffs(handoffs []restoreHandoff) {
+	for _, handoff := range handoffs {
+		handoff.Close()
+	}
+}
+
+func afterRestoreHandoffs(ctx context.Context, stored *StoredMetadata, handoffs []restoreHandoff) error {
+	for _, handoff := range handoffs {
+		if err := handoff.AfterResume(ctx); err != nil {
+			logger.FromContext(ctx).ErrorContext(ctx, "failed after restore handoff", "instance_id", stored.Id, "error", err)
+			return fmt.Errorf("after restore handoff: %w", err)
+		}
+	}
+	return nil
 }
 
 func (m *manager) restoreCompressionConfigForMetrics(stored *StoredMetadata, snapshotDir string) *snapshotstore.SnapshotCompressionConfig {

@@ -71,12 +71,22 @@ func (h *resumeNetworkHandoff) AfterResume(ctx context.Context) error {
 	if h == nil || h.allocatedNet == nil || h.stored.SkipGuestAgent {
 		return nil
 	}
+
+	ctx, spanEnd := h.manager.startLifecycleStep(ctx, "reconfigure_guest_network",
+		attribute.String("instance_id", h.stored.Id),
+		attribute.String("hypervisor", string(h.stored.HypervisorType)),
+		attribute.String("operation", "reconfigure_guest_network"),
+	)
+	var err error
+	defer func() { spanEnd(err) }()
+
 	if h.patched {
-		err := h.manager.waitForGuestResumeNetworkUDPAck(ctx, h.ackWaiter, h.stored, h.ackCfg)
+		err = h.manager.waitForGuestResumeNetworkUDPAck(ctx, h.ackWaiter, h.stored, h.ackCfg)
 		if err == nil {
 			return nil
 		}
 		logger.FromContext(ctx).ErrorContext(ctx, "guest resume network UDP ack wait failed; falling back to host-initiated reconfigure", "instance_id", h.stored.Id, "error", err)
 	}
-	return reconfigureGuestNetwork(ctx, h.stored, h.allocatedNet)
+	err = reconfigureGuestNetwork(ctx, h.stored, h.allocatedNet)
+	return err
 }
