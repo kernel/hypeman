@@ -266,6 +266,9 @@ func (m *manager) restoreInstanceWithOptions(
 	}
 
 	var handoffs []restoreHandoff
+	defer func() {
+		closeRestoreHandoffs(handoffs)
+	}()
 
 	resumeNetworkHandoff, err := m.prepareResumeNetworkHandoff(ctx, stored, allocatedNet, snapshotDir)
 	if err != nil {
@@ -281,7 +284,6 @@ func (m *manager) restoreInstanceWithOptions(
 		return nil, fmt.Errorf("prepare fork mailbox handoff: %w", err)
 	}
 	handoffs = append(handoffs, forkMailboxHandoff)
-	defer closeRestoreHandoffs(handoffs)
 
 	// 5. Transition: Standby → Paused (start hypervisor + restore)
 	restoreCtx, restoreSpanEnd := m.startLifecycleStep(ctx, "restore_from_snapshot",
