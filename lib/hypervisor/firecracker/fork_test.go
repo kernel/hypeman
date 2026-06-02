@@ -148,6 +148,30 @@ func TestPrepareFork_ReturnsSourceStatErrors(t *testing.T) {
 	assert.Contains(t, err.Error(), "stat snapshot source data dir")
 }
 
+func TestPrepareFork_RetainedAliasSkipsSourceStat(t *testing.T) {
+	starter := NewStarter()
+	tmp := t.TempDir()
+	upstreamDir := filepath.Join(tmp, "upstream")
+	targetDir := filepath.Join(tmp, "target")
+	require.NoError(t, os.MkdirAll(targetDir, 0755))
+	require.NoError(t, saveRestoreMetadataState(targetDir, &restoreMetadata{
+		SnapshotSourceDataDir:            upstreamDir,
+		RetainSnapshotSourceDataDirAlias: true,
+	}))
+
+	_, err := starter.PrepareFork(context.Background(), hypervisor.ForkPrepareRequest{
+		SnapshotConfigPath: filepath.Join(targetDir, "snapshots", "snapshot-latest", "config.json"),
+		SourceDataDir:      filepath.Join(tmp, "source") + "\x00",
+		TargetDataDir:      targetDir,
+	})
+	require.NoError(t, err)
+
+	meta, err := loadRestoreMetadata(targetDir)
+	require.NoError(t, err)
+	assert.Equal(t, upstreamDir, meta.SnapshotSourceDataDir)
+	assert.True(t, meta.RetainSnapshotSourceDataDirAlias)
+}
+
 func TestPrepareFork_PreservesRetainedUpstreamAlias(t *testing.T) {
 	starter := NewStarter()
 	tmp := t.TempDir()

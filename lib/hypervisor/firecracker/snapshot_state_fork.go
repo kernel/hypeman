@@ -32,6 +32,12 @@ func clearSnapshotSourceAlias(meta *restoreMetadata) bool {
 }
 
 func recordSnapshotSourceAliasFallback(meta *restoreMetadata, sourceDir string) (bool, error) {
+	if meta.RetainSnapshotSourceDataDirAlias && meta.SnapshotSourceDataDir != "" {
+		// Keep the upstream source path for snapshot-derived forks. The retained
+		// Firecracker base can still reference that path after later diff snapshots.
+		return false, nil
+	}
+
 	retainAlias := false
 	if _, err := os.Stat(sourceDir); err != nil {
 		if os.IsNotExist(err) {
@@ -39,12 +45,6 @@ func recordSnapshotSourceAliasFallback(meta *restoreMetadata, sourceDir string) 
 		} else {
 			return false, fmt.Errorf("stat snapshot source data dir %q: %w", sourceDir, err)
 		}
-	}
-
-	if meta.RetainSnapshotSourceDataDirAlias && meta.SnapshotSourceDataDir != "" {
-		// Keep the upstream source path for snapshot-derived forks. The retained
-		// Firecracker base can still reference that path after later diff snapshots.
-		return false, nil
 	}
 
 	changed := false
