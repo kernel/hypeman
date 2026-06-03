@@ -273,8 +273,10 @@ const (
 
 // HTB handles for traffic control
 const (
-	htbRootHandle  = "1:"  // Root qdisc handle
-	htbRootClassID = "1:1" // Root class for total capacity
+	htbRootHandle       = "1:"    // Root qdisc handle
+	htbRootClassID      = "1:1"   // Root class for total capacity
+	htbDefaultClassID   = "1:fff" // Default class for traffic before per-TAP filters are installed
+	htbDefaultClassName = "fff"
 )
 
 // getUplinkInterface returns the uplink interface for NAT/forwarding.
@@ -875,9 +877,10 @@ func (m *manager) setupBridgeHTB(ctx context.Context, bridgeName string, capacit
 
 	rateStr := formatTcRate(capacityBps)
 
-	// 1. Add root HTB qdisc (no default - all traffic must be classified)
+	// 1. Add root HTB qdisc with a default class so traffic is not dropped
+	// while per-TAP filters are installed asynchronously.
 	cmd := exec.Command("tc", "qdisc", "add", "dev", bridgeName, "root",
-		"handle", htbRootHandle, "htb")
+		"handle", htbRootHandle, "htb", "default", htbDefaultClassName)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
 	}
@@ -893,6 +896,17 @@ func (m *manager) setupBridgeHTB(ctx context.Context, bridgeName string, capacit
 	}
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("tc class add root: %w (output: %s)", err, string(output))
+	}
+
+	// 3. Add a default child class for unclassified bridge traffic. Per-VM
+	// filters still direct shaped traffic into dedicated classes once ready.
+	cmd = exec.Command("tc", "class", "add", "dev", bridgeName, "parent", htbRootClassID,
+		"classid", htbDefaultClassID, "htb", "rate", rateStr, "ceil", rateStr)
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+	}
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("tc class add default: %w (output: %s)", err, string(output))
 	}
 
 	log.InfoContext(ctx, "HTB qdisc ready", "bridge", bridgeName, "capacity", rateStr, "status", "configured")
@@ -1294,8 +1308,8 @@ func (m *manager) CleanupOrphanedClasses(ctx context.Context) int {
 		}
 		fullClassID := fields[2] // "1:xxxx"
 
-		// Skip root class
-		if fullClassID == htbRootClassID {
+		// Skip bridge-owned classes.
+		if fullClassID == htbRootClassID || fullClassID == htbDefaultClassID {
 			continue
 		}
 
