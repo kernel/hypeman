@@ -280,7 +280,7 @@ func (m *manager) setupIPTablesRules(ctx context.Context, subnet, bridgeName, ga
 	}
 	log.InfoContext(ctx, "iptables NAT ready", "subnet", subnet, "uplink", uplink, "status", masqStatus)
 
-	gatewayStatus, err := m.ensureGatewayForwardRule(bridgeName, subnet, gateway, gatewayComment, 1)
+	gatewayStatus, err := m.ensureGatewayForwardRule(subnet, gateway, gatewayComment, 1)
 	if err != nil {
 		return fmt.Errorf("setup gateway forward: %w", err)
 	}
@@ -401,9 +401,8 @@ func (m *manager) ensureForwardRule(inIface, outIface, ctstate, comment string, 
 	return "added", nil
 }
 
-func (m *manager) ensureGatewayForwardRule(bridgeName, subnet, gateway, comment string, position int) (string, error) {
+func (m *manager) ensureGatewayForwardRule(subnet, gateway, comment string, position int) (string, error) {
 	checkCmd := newIPTablesCommand("-C", "FORWARD",
-		"-i", bridgeName,
 		"-s", subnet,
 		"-d", gateway,
 		"-m", "comment", "--comment", comment,
@@ -415,7 +414,6 @@ func (m *manager) ensureGatewayForwardRule(bridgeName, subnet, gateway, comment 
 	m.deleteForwardRuleByComment(comment)
 
 	addCmd := newIPTablesCommand("-I", "FORWARD", fmt.Sprintf("%d", position),
-		"-i", bridgeName,
 		"-s", subnet,
 		"-d", gateway,
 		"-m", "comment", "--comment", comment,
