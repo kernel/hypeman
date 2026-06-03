@@ -21,7 +21,6 @@ import (
 )
 
 const netlinkDumpRetryCount = 3
-const netlinkOpRetryCount = 5
 const iptablesWaitSeconds = "5"
 
 func newIPTablesCommand(args ...string) *exec.Cmd {
@@ -49,34 +48,6 @@ func listBridgeAddrsWithRetry(link netlink.Link) ([]netlink.Addr, error) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	return nil, err
-}
-
-func isTransientNetlinkError(err error) bool {
-	return errors.Is(err, syscall.EAGAIN) ||
-		errors.Is(err, syscall.EBUSY) ||
-		errors.Is(err, syscall.EINTR) ||
-		errors.Is(err, syscall.ENOBUFS)
-}
-
-func retryTransientNetlink(ctx context.Context, fn func() error) error {
-	var err error
-	delay := time.Millisecond
-	for i := 0; i < netlinkOpRetryCount; i++ {
-		err = fn()
-		if err == nil || !isTransientNetlinkError(err) {
-			return err
-		}
-		if i == netlinkOpRetryCount-1 {
-			return err
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(delay):
-		}
-		delay *= 2
-	}
-	return err
 }
 
 // checkSubnetConflicts checks if the configured subnet conflicts with existing routes.
@@ -599,9 +570,7 @@ func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName strin
 		attribute.String("tap", tapName),
 		attribute.String("bridge", bridgeName),
 	)
-	err = retryTransientNetlink(ctx, func() error {
-		return netlink.LinkSetMaster(tapLink, bridge)
-	})
+	err = netlink.LinkSetMaster(tapLink, bridge)
 	setMasterEnd(err)
 	if err != nil {
 		return fmt.Errorf("attach TAP to bridge: %w", err)
