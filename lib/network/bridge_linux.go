@@ -764,8 +764,6 @@ func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName strin
 	if err != nil {
 		return fmt.Errorf("set TAP up: %w", err)
 	}
-	disableLinkOffloads(ctx, tapName)
-
 	// 4. Attach TAP to bridge
 	_, bridgeLookupEnd := startNetworkStep(ctx, "network.create_tap.link_lookup_bridge",
 		attribute.String("operation", "link_lookup_bridge"),
@@ -801,6 +799,7 @@ func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName strin
 		}
 	}
 
+	disableLinkOffloads(ctx, tapName)
 	return nil
 }
 
