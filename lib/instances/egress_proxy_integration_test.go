@@ -143,6 +143,9 @@ func TestEgressProxyRewritesHTTPSHeaders(t *testing.T) {
 		probeTarget.URL,
 	)
 	probeOutput, probeExitCode, err := execCommand(ctx, inst, "sh", "-lc", probeCmd)
+	if err != nil || probeExitCode != 0 {
+		logGatewayDiagnostics(ctx, t, inst, alloc.IP, alloc.Gateway, alloc.TAPDevice, egressproxy.DefaultListenPort)
+	}
 	require.NoError(t, err)
 	require.Equal(t, 0, probeExitCode, "curl output: %s", probeOutput)
 	require.Equal(t, "proxy-ok", strings.TrimSpace(probeOutput))
