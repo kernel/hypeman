@@ -58,6 +58,42 @@ func isTransientNetlinkError(err error) bool {
 		errors.Is(err, syscall.ENOBUFS)
 }
 
+func tapAttachedToBridge(tapName string, bridge netlink.Link) (bool, error) {
+	tap, err := netlink.LinkByName(tapName)
+	if err != nil {
+		return false, err
+	}
+	return tap.Attrs().MasterIndex == bridge.Attrs().Index, nil
+}
+
+func setTAPMasterWithRetry(ctx context.Context, tapName string, tapLink netlink.Link, bridge netlink.Link) error {
+	var err error
+	delay := time.Millisecond
+	for i := 0; i < netlinkOpRetryCount; i++ {
+		err = netlink.LinkSetMaster(tapLink, bridge)
+		if err == nil {
+			return nil
+		}
+		attached, lookupErr := tapAttachedToBridge(tapName, bridge)
+		if lookupErr == nil && attached {
+			return nil
+		}
+		if !isTransientNetlinkError(err) || i == netlinkOpRetryCount-1 {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(delay):
+		}
+		delay *= 2
+		if refreshed, refreshErr := netlink.LinkByName(tapName); refreshErr == nil {
+			tapLink = refreshed
+		}
+	}
+	return err
+}
+
 // checkSubnetConflicts checks if the configured subnet conflicts with existing routes.
 // Returns an error if a conflict is detected, with guidance on how to resolve it.
 func (m *manager) checkSubnetConflicts(ctx context.Context, subnet string) error {
@@ -663,29 +699,6 @@ func (m *manager) lastHypemanForwardRulePosition() int {
 }
 
 func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName string, isolated bool) error {
-	var err error
-	delay := time.Millisecond
-	for i := 0; i < netlinkOpRetryCount; i++ {
-		err = m.createTAPDeviceOnce(ctx, tapName, bridgeName, isolated)
-		if err == nil || !isTransientNetlinkError(err) {
-			return err
-		}
-		_ = m.deleteTAPDeviceSerialized(tapName, "")
-		if i == netlinkOpRetryCount-1 {
-			return err
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(delay):
-		}
-		delay *= 2
-	}
-	return err
-}
-
-// createTAPDeviceOnce creates TAP device and attaches it to the bridge.
-func (m *manager) createTAPDeviceOnce(ctx context.Context, tapName, bridgeName string, isolated bool) error {
 	// 1. Check if TAP already exists
 	_, linkLookupEnd := startNetworkStep(ctx, "network.create_tap.link_lookup_existing",
 		attribute.String("operation", "link_lookup_existing"),
@@ -759,7 +772,7 @@ func (m *manager) createTAPDeviceOnce(ctx context.Context, tapName, bridgeName s
 		attribute.String("tap", tapName),
 		attribute.String("bridge", bridgeName),
 	)
-	err = netlink.LinkSetMaster(tapLink, bridge)
+	err = setTAPMasterWithRetry(ctx, tapName, tapLink, bridge)
 	setMasterEnd(err)
 	if err != nil {
 		return fmt.Errorf("attach TAP to bridge: %w", err)
