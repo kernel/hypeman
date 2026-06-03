@@ -104,6 +104,10 @@ func disableLinkOffloads(ctx context.Context, linkName string) {
 	}
 }
 
+func (m *manager) ApplyTAPDeviceSettings(ctx context.Context, tapName string) {
+	disableLinkOffloads(ctx, tapName)
+}
+
 // checkSubnetConflicts checks if the configured subnet conflicts with existing routes.
 // Returns an error if a conflict is detected, with guidance on how to resolve it.
 func (m *manager) checkSubnetConflicts(ctx context.Context, subnet string) error {

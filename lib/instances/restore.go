@@ -311,6 +311,9 @@ func (m *manager) restoreInstance(
 		return nil, fmt.Errorf("resume vm failed: %w", err)
 	}
 	resumeSpanEnd(nil)
+	if stored.NetworkEnabled {
+		m.networkManager.ApplyTAPDeviceSettings(ctx, network.GenerateTAPName(id))
+	}
 	// Mark the instance visible before releasing its pending reservation so we
 	// never create an undercount window. The tiny overlap is intentionally
 	// over-conservative: concurrent admissions may briefly see both visible and

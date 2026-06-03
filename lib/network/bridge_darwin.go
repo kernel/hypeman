@@ -45,6 +45,9 @@ func (m *manager) applyDownloadRateLimit(ctx context.Context, tapName string, ra
 	return nil
 }
 
+func (m *manager) ApplyTAPDeviceSettings(ctx context.Context, tapName string) {
+}
+
 func (m *manager) addVMClass(ctx context.Context, bridgeName, tapName string, rateBps, ceilBps int64) (string, error) {
 	return "", nil
 }

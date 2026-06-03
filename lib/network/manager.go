@@ -29,6 +29,7 @@ type Manager interface {
 	// SetupHTB initializes HTB qdisc on the bridge for upload fair sharing.
 	// Should be called during network initialization with the total network capacity.
 	SetupHTB(ctx context.Context, capacityBps int64) error
+	ApplyTAPDeviceSettings(ctx context.Context, tapName string)
 
 	// Queries (derive from CH/snapshots)
 	GetAllocation(ctx context.Context, instanceID string) (*Allocation, error)
