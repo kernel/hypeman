@@ -398,7 +398,7 @@ func (m *manager) setupIPTablesRules(ctx context.Context, subnet, bridgeName, ga
 	if err != nil {
 		return fmt.Errorf("setup host gateway input: %w", err)
 	}
-	outputStatus, err := m.ensureOutputRule(bridgeName, subnet, gateway, outputComment)
+	outputStatus, err := m.ensureOutputRule(subnet, gateway, outputComment)
 	if err != nil {
 		return fmt.Errorf("setup host gateway output: %w", err)
 	}
@@ -541,9 +541,8 @@ func (m *manager) ensureInputRule(bridgeName, subnet, gateway, comment string) (
 	return "added", nil
 }
 
-func (m *manager) ensureOutputRule(bridgeName, subnet, gateway, comment string) (string, error) {
+func (m *manager) ensureOutputRule(subnet, gateway, comment string) (string, error) {
 	checkCmd := newIPTablesCommand("-C", "OUTPUT",
-		"-o", bridgeName,
 		"-s", gateway,
 		"-d", subnet,
 		"-m", "comment", "--comment", comment,
@@ -555,7 +554,6 @@ func (m *manager) ensureOutputRule(bridgeName, subnet, gateway, comment string) 
 	m.deleteOutputRuleByComment(comment)
 
 	addCmd := newIPTablesCommand("-I", "OUTPUT", "1",
-		"-o", bridgeName,
 		"-s", gateway,
 		"-d", subnet,
 		"-m", "comment", "--comment", comment,
