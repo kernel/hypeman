@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/logger"
+	"github.com/kernel/hypeman/lib/system/netoffload"
 	"github.com/vishvananda/netlink"
 	"go.opentelemetry.io/otel/attribute"
 	"golang.org/x/sys/unix"
@@ -95,6 +96,12 @@ func (m *manager) setTAPMasterWithRetry(ctx context.Context, tapName string, tap
 		}
 	}
 	return err
+}
+
+func disableTXChecksum(ctx context.Context, iface string) {
+	if err := netoffload.DisableTXChecksum(iface); err != nil {
+		logger.FromContext(ctx).DebugContext(ctx, "could not disable tx checksum offload", "interface", iface, "error", err)
+	}
 }
 
 // checkSubnetConflicts checks if the configured subnet conflicts with existing routes.
@@ -196,6 +203,7 @@ func (m *manager) createBridge(ctx context.Context, name, gateway, subnet string
 		if err := netlink.LinkSetUp(existing); err != nil {
 			return fmt.Errorf("set bridge up: %w", err)
 		}
+		disableTXChecksum(ctx, name)
 		log.InfoContext(ctx, "bridge ready", "bridge", name, "gateway", gateway, "status", "existing")
 
 		// Still need to ensure iptables rules are configured
@@ -220,6 +228,8 @@ func (m *manager) createBridge(ctx context.Context, name, gateway, subnet string
 	if err := netlink.LinkSetUp(bridge); err != nil {
 		return fmt.Errorf("set bridge up: %w", err)
 	}
+	disableTXChecksum(ctx, name)
+
 	// 5. Add gateway IP to bridge
 	gatewayIP := net.ParseIP(gateway)
 	if gatewayIP == nil {
@@ -757,6 +767,8 @@ func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName strin
 	if err != nil {
 		return fmt.Errorf("set TAP up: %w", err)
 	}
+	disableTXChecksum(ctx, tapName)
+
 	// 4. Attach TAP to bridge
 	_, bridgeLookupEnd := startNetworkStep(ctx, "network.create_tap.link_lookup_bridge",
 		attribute.String("operation", "link_lookup_bridge"),
