@@ -54,12 +54,14 @@ func (s *Starter) PrepareFork(ctx context.Context, req hypervisor.ForkPrepareReq
 			// Keep the upstream source path for snapshot-derived forks. The retained
 			// Firecracker base can still reference that path after later diff snapshots.
 		} else {
-			retainAlias := false
-			if _, err := os.Stat(req.SourceDataDir); err != nil {
-				if os.IsNotExist(err) {
-					retainAlias = true
-				} else {
-					return hypervisor.ForkPrepareResult{}, fmt.Errorf("stat snapshot source data dir %q: %w", req.SourceDataDir, err)
+			retainAlias := req.RetainSnapshotSourceDataDirAlias
+			if !retainAlias {
+				if _, err := os.Stat(req.SourceDataDir); err != nil {
+					if os.IsNotExist(err) {
+						retainAlias = true
+					} else {
+						return hypervisor.ForkPrepareResult{}, fmt.Errorf("stat snapshot source data dir %q: %w", req.SourceDataDir, err)
+					}
 				}
 			}
 			if meta.SnapshotSourceDataDir != req.SourceDataDir {

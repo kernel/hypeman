@@ -153,6 +153,9 @@ type ForkPrepareRequest struct {
 
 	SourceDataDir string
 	TargetDataDir string
+	// RetainSnapshotSourceDataDirAlias keeps source-path alias metadata even
+	// when the source data directory currently exists.
+	RetainSnapshotSourceDataDirAlias bool
 
 	VsockCID    int64
 	VsockSocket string

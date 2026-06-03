@@ -65,6 +65,29 @@ func TestPrepareFork_DoesNotRetainExistingSourceAlias(t *testing.T) {
 	assert.False(t, meta.RetainSnapshotSourceDataDirAlias)
 }
 
+func TestPrepareFork_RetainsExistingSourceAliasWhenRequested(t *testing.T) {
+	starter := NewStarter()
+	tmp := t.TempDir()
+	sourceDir := filepath.Join(tmp, "source")
+	targetDir := filepath.Join(tmp, "target")
+	require.NoError(t, os.MkdirAll(sourceDir, 0755))
+	require.NoError(t, os.MkdirAll(targetDir, 0755))
+	require.NoError(t, saveRestoreMetadata(targetDir, nil))
+
+	_, err := starter.PrepareFork(context.Background(), hypervisor.ForkPrepareRequest{
+		SnapshotConfigPath:               filepath.Join(targetDir, "snapshots", "snapshot-latest", "config.json"),
+		SourceDataDir:                    sourceDir,
+		TargetDataDir:                    targetDir,
+		RetainSnapshotSourceDataDirAlias: true,
+	})
+	require.NoError(t, err)
+
+	meta, err := loadRestoreMetadata(targetDir)
+	require.NoError(t, err)
+	assert.Equal(t, sourceDir, meta.SnapshotSourceDataDir)
+	assert.True(t, meta.RetainSnapshotSourceDataDirAlias)
+}
+
 func TestPrepareFork_ReturnsSourceStatErrors(t *testing.T) {
 	starter := NewStarter()
 	tmp := t.TempDir()

@@ -478,13 +478,14 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 			netCfg = &hypervisor.ForkNetworkConfig{TAPDevice: network.GenerateTAPName(forkID)}
 		}
 		if _, err := starter.PrepareFork(ctx, hypervisor.ForkPrepareRequest{
-			SnapshotConfigPath: m.paths.InstanceSnapshotConfig(forkID),
-			SourceDataDir:      rec.StoredMetadata.DataDir,
-			TargetDataDir:      forkMeta.DataDir,
-			VsockCID:           forkMeta.VsockCID,
-			VsockSocket:        forkMeta.VsockSocket,
-			SerialLogPath:      m.paths.InstanceAppLog(forkID),
-			Network:            netCfg,
+			SnapshotConfigPath:               m.paths.InstanceSnapshotConfig(forkID),
+			SourceDataDir:                    rec.StoredMetadata.DataDir,
+			TargetDataDir:                    forkMeta.DataDir,
+			RetainSnapshotSourceDataDirAlias: forkMeta.FirecrackerUseUFFDOnNextRestore,
+			VsockCID:                         forkMeta.VsockCID,
+			VsockSocket:                      forkMeta.VsockSocket,
+			SerialLogPath:                    m.paths.InstanceAppLog(forkID),
+			Network:                          netCfg,
 		}); err != nil {
 			if errors.Is(err, hypervisor.ErrNotSupported) {
 				return nil, fmt.Errorf("%w: snapshot fork is not supported for hypervisor %s", ErrNotSupported, targetHypervisor)

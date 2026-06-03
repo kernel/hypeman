@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/kernel/hypeman/lib/forkvm"
 	"github.com/kernel/hypeman/lib/guest"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/instances/phasetracking"
@@ -128,10 +129,11 @@ func (m *manager) standbyInstance(
 	snapshotDir := m.paths.InstanceSnapshotLatest(id)
 	retainedBaseDir := m.paths.InstanceSnapshotBase(id)
 	reuseSnapshotBase := m.supportsSnapshotBaseReuse(stored.HypervisorType)
-	promotedExistingBase := false
+	preparedRetainedBaseTarget := false
 	if reuseSnapshotBase {
 		var err error
-		promotedExistingBase, err = prepareRetainedSnapshotTarget(snapshotDir, retainedBaseDir)
+		copyRetainedBase := stored.HypervisorType == hypervisor.TypeFirecracker && stored.FirecrackerUFFDSessionID != ""
+		preparedRetainedBaseTarget, err = prepareRetainedSnapshotTarget(snapshotDir, retainedBaseDir, copyRetainedBase)
 		if err != nil {
 			if resumeErr := hv.Resume(ctx); resumeErr != nil {
 				log.ErrorContext(ctx, "failed to resume VM after retained snapshot target preparation error", "instance_id", id, "error", resumeErr)
@@ -153,7 +155,7 @@ func (m *manager) standbyInstance(
 		if resumeErr := hv.Resume(ctx); resumeErr != nil {
 			log.ErrorContext(ctx, "failed to resume VM after snapshot error", "instance_id", id, "error", resumeErr)
 		}
-		if promotedExistingBase {
+		if preparedRetainedBaseTarget {
 			if rollbackErr := discardPromotedRetainedSnapshotTarget(snapshotDir); rollbackErr != nil {
 				log.WarnContext(ctx, "failed to discard promoted snapshot target after snapshot error", "instance_id", id, "error", rollbackErr)
 			}
@@ -300,10 +302,10 @@ func createSnapshot(ctx context.Context, hv hypervisor.Hypervisor, snapshotDir s
 }
 
 // prepareRetainedSnapshotTarget clears any stale snapshot target from a prior failed
-// standby attempt, then moves a retained snapshot base into place when needed.
-// The returned bool reports whether an existing retained base was promoted, so callers
-// know if they should discard the promoted target on snapshot failure.
-func prepareRetainedSnapshotTarget(snapshotDir string, retainedBaseDir string) (bool, error) {
+// standby attempt, then places a retained snapshot base at the snapshot target when
+// needed. The returned bool reports whether a retained base was prepared at the target,
+// so callers know if they should discard the target on snapshot failure.
+func prepareRetainedSnapshotTarget(snapshotDir string, retainedBaseDir string, copyRetainedBase bool) (bool, error) {
 	if _, err := os.Stat(snapshotDir); err == nil {
 		if err := os.RemoveAll(snapshotDir); err != nil {
 			return false, err
@@ -313,6 +315,12 @@ func prepareRetainedSnapshotTarget(snapshotDir string, retainedBaseDir string) (
 	}
 
 	if _, err := os.Stat(retainedBaseDir); err == nil {
+		if copyRetainedBase {
+			if err := forkvm.CopyGuestDirectory(retainedBaseDir, snapshotDir); err != nil {
+				return false, err
+			}
+			return true, nil
+		}
 		if err := os.Rename(retainedBaseDir, snapshotDir); err != nil {
 			return false, err
 		}
