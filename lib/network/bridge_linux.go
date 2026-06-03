@@ -394,7 +394,7 @@ func (m *manager) setupIPTablesRules(ctx context.Context, subnet, bridgeName, ga
 
 	log.InfoContext(ctx, "iptables FORWARD ready", "gateway", gatewayStatus, "outbound", fwdOutStatus, "inbound", fwdInStatus)
 
-	inputStatus, err := m.ensureInputRule(bridgeName, subnet, gateway, inputComment)
+	inputStatus, err := m.ensureInputRule(subnet, gateway, inputComment)
 	if err != nil {
 		return fmt.Errorf("setup host gateway input: %w", err)
 	}
@@ -516,9 +516,8 @@ func (m *manager) ensureGatewayForwardRule(bridgeName, subnet, gateway, comment 
 	return "added", nil
 }
 
-func (m *manager) ensureInputRule(bridgeName, subnet, gateway, comment string) (string, error) {
+func (m *manager) ensureInputRule(subnet, gateway, comment string) (string, error) {
 	checkCmd := newIPTablesCommand("-C", "INPUT",
-		"-i", bridgeName,
 		"-s", subnet,
 		"-d", gateway,
 		"-m", "comment", "--comment", comment,
@@ -530,7 +529,6 @@ func (m *manager) ensureInputRule(bridgeName, subnet, gateway, comment string) (
 	m.deleteInputRuleByComment(comment)
 
 	addCmd := newIPTablesCommand("-I", "INPUT", "1",
-		"-i", bridgeName,
 		"-s", subnet,
 		"-d", gateway,
 		"-m", "comment", "--comment", comment,
