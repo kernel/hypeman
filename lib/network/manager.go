@@ -55,6 +55,7 @@ type manager struct {
 	networkMu          sync.RWMutex
 	defaultNetwork     *Network
 	pendingAllocations map[string]pendingAllocation
+	tapAttachMu        sync.Mutex
 	tcMu               sync.Mutex // Serializes shared bridge tc mutations.
 	metrics            *Metrics
 }

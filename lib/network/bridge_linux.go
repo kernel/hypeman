@@ -58,24 +58,15 @@ func isTransientNetlinkError(err error) bool {
 		errors.Is(err, syscall.ENOBUFS)
 }
 
-func tapAttachedToBridge(tapName string, bridge netlink.Link) (bool, error) {
-	tap, err := netlink.LinkByName(tapName)
-	if err != nil {
-		return false, err
-	}
-	return tap.Attrs().MasterIndex == bridge.Attrs().Index, nil
-}
+func (m *manager) setTAPMasterWithRetry(ctx context.Context, tapName string, tapLink netlink.Link, bridge netlink.Link) error {
+	m.tapAttachMu.Lock()
+	defer m.tapAttachMu.Unlock()
 
-func setTAPMasterWithRetry(ctx context.Context, tapName string, tapLink netlink.Link, bridge netlink.Link) error {
 	var err error
 	delay := time.Millisecond
 	for i := 0; i < netlinkOpRetryCount; i++ {
 		err = netlink.LinkSetMaster(tapLink, bridge)
 		if err == nil {
-			return nil
-		}
-		attached, lookupErr := tapAttachedToBridge(tapName, bridge)
-		if lookupErr == nil && attached {
 			return nil
 		}
 		if !isTransientNetlinkError(err) || i == netlinkOpRetryCount-1 {
@@ -613,7 +604,7 @@ func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName strin
 		attribute.String("tap", tapName),
 		attribute.String("bridge", bridgeName),
 	)
-	err = setTAPMasterWithRetry(ctx, tapName, tapLink, bridge)
+	err = m.setTAPMasterWithRetry(ctx, tapName, tapLink, bridge)
 	setMasterEnd(err)
 	if err != nil {
 		return fmt.Errorf("attach TAP to bridge: %w", err)
