@@ -31,6 +31,8 @@ func logGatewayDiagnostics(ctx context.Context, t *testing.T, inst *Instance, al
 		{"ip", "addr"},
 		{"ip", "route"},
 		{"bridge", "link"},
+		{"ethtool", "-k", tapDevice},
+		{"ethtool", "-k", gatewayBridgeName(t, gateway)},
 		{"ss", "-ltnp"},
 		{"iptables", "-L", "INPUT", "-n", "-v", "--line-numbers"},
 		{"iptables", "-L", "OUTPUT", "-n", "-v", "--line-numbers"},
@@ -44,6 +46,24 @@ func logGatewayDiagnostics(ctx context.Context, t *testing.T, inst *Instance, al
 	}
 
 	t.Logf("gateway diagnostics summary instance=%s ip=%s gateway=%s tap=%s port=%d", instanceID, allocIP, gateway, tapDevice, port)
+}
+
+func gatewayBridgeName(t *testing.T, gateway string) string {
+	t.Helper()
+
+	out, err := exec.Command("ip", "-o", "-4", "addr", "show").Output()
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.Contains(line, "inet "+gateway+"/") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				return fields[1]
+			}
+		}
+	}
+	return ""
 }
 
 func gatewayPortFromURL(rawURL string) (int, error) {
