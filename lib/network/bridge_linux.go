@@ -152,7 +152,7 @@ func (m *manager) createBridge(ctx context.Context, name, gateway, subnet string
 		log.InfoContext(ctx, "bridge ready", "bridge", name, "gateway", gateway, "status", "existing")
 
 		// Still need to ensure iptables rules are configured
-		if err := m.setupIPTablesRules(ctx, subnet, name, gateway); err != nil {
+		if err := m.setupIPTablesRules(ctx, subnet, name); err != nil {
 			return fmt.Errorf("setup iptables: %w", err)
 		}
 		return nil
@@ -194,7 +194,7 @@ func (m *manager) createBridge(ctx context.Context, name, gateway, subnet string
 	log.InfoContext(ctx, "bridge ready", "bridge", name, "gateway", gateway, "status", "created")
 
 	// 6. Setup iptables rules
-	if err := m.setupIPTablesRules(ctx, subnet, name, gateway); err != nil {
+	if err := m.setupIPTablesRules(ctx, subnet, name); err != nil {
 		return fmt.Errorf("setup iptables: %w", err)
 	}
 
@@ -203,12 +203,9 @@ func (m *manager) createBridge(ctx context.Context, name, gateway, subnet string
 
 // Rule comments for identifying hypeman iptables rules
 const (
-	commentNATBase     = "hypeman-nat"
-	commentGatewayBase = "hypeman-gateway"
-	commentFwdOutBase  = "hypeman-fwd-out"
-	commentFwdInBase   = "hypeman-fwd-in"
-	commentInputBase   = "hypeman-input"
-	commentOutputBase  = "hypeman-output"
+	commentNATBase    = "hypeman-nat"
+	commentFwdOutBase = "hypeman-fwd-out"
+	commentFwdInBase  = "hypeman-fwd-in"
 )
 
 // HTB handles for traffic control
@@ -246,7 +243,7 @@ func (m *manager) getUplinkInterface() (string, error) {
 }
 
 // setupIPTablesRules sets up NAT and forwarding rules
-func (m *manager) setupIPTablesRules(ctx context.Context, subnet, bridgeName, gateway string) error {
+func (m *manager) setupIPTablesRules(ctx context.Context, subnet, bridgeName string) error {
 	log := logger.FromContext(ctx)
 
 	// Check if IP forwarding is enabled (prerequisite)
@@ -267,11 +264,8 @@ func (m *manager) setupIPTablesRules(ctx context.Context, subnet, bridgeName, ga
 	log.InfoContext(ctx, "uplink interface", "interface", uplink)
 
 	natComment := m.ruleComment(commentNATBase)
-	gatewayComment := m.ruleComment(commentGatewayBase)
 	fwdOutComment := m.ruleComment(commentFwdOutBase)
 	fwdInComment := m.ruleComment(commentFwdInBase)
-	inputComment := m.ruleComment(commentInputBase)
-	outputComment := m.ruleComment(commentOutputBase)
 
 	// Add MASQUERADE rule if not exists (position doesn't matter in POSTROUTING)
 	masqStatus, err := m.ensureNATRule(subnet, uplink, natComment)
@@ -280,33 +274,19 @@ func (m *manager) setupIPTablesRules(ctx context.Context, subnet, bridgeName, ga
 	}
 	log.InfoContext(ctx, "iptables NAT ready", "subnet", subnet, "uplink", uplink, "status", masqStatus)
 
-	gatewayStatus, err := m.ensureGatewayForwardRule(subnet, gateway, gatewayComment, 1)
-	if err != nil {
-		return fmt.Errorf("setup gateway forward: %w", err)
-	}
-
-	// FORWARD rules must be at top of chain before Docker's chains.
-	fwdOutStatus, err := m.ensureForwardRule(bridgeName, uplink, "NEW,ESTABLISHED,RELATED", fwdOutComment, 2)
+	// FORWARD rules must be at top of chain (before Docker's DOCKER-USER/DOCKER-FORWARD)
+	// We insert at position 1 and 2 to ensure they're evaluated first
+	fwdOutStatus, err := m.ensureForwardRule(bridgeName, uplink, "NEW,ESTABLISHED,RELATED", fwdOutComment, 1)
 	if err != nil {
 		return fmt.Errorf("setup forward outbound: %w", err)
 	}
 
-	fwdInStatus, err := m.ensureForwardRule(uplink, bridgeName, "ESTABLISHED,RELATED", fwdInComment, 3)
+	fwdInStatus, err := m.ensureForwardRule(uplink, bridgeName, "ESTABLISHED,RELATED", fwdInComment, 2)
 	if err != nil {
 		return fmt.Errorf("setup forward inbound: %w", err)
 	}
 
-	log.InfoContext(ctx, "iptables FORWARD ready", "gateway", gatewayStatus, "outbound", fwdOutStatus, "inbound", fwdInStatus)
-
-	inputStatus, err := m.ensureInputRule(subnet, gateway, inputComment)
-	if err != nil {
-		return fmt.Errorf("setup host gateway input: %w", err)
-	}
-	outputStatus, err := m.ensureOutputRule(subnet, gateway, outputComment)
-	if err != nil {
-		return fmt.Errorf("setup host gateway output: %w", err)
-	}
-	log.InfoContext(ctx, "iptables host gateway ready", "bridge", bridgeName, "gateway", gateway, "input", inputStatus, "output", outputStatus)
+	log.InfoContext(ctx, "iptables FORWARD ready", "outbound", fwdOutStatus, "inbound", fwdInStatus)
 
 	// Restore Docker's FORWARD chain jumps if they were lost.
 	// On systems where an external tool (e.g., hypervisor firewall management) periodically
@@ -401,75 +381,6 @@ func (m *manager) ensureForwardRule(inIface, outIface, ctstate, comment string, 
 	return "added", nil
 }
 
-func (m *manager) ensureGatewayForwardRule(subnet, gateway, comment string, position int) (string, error) {
-	checkCmd := newIPTablesCommand("-C", "FORWARD",
-		"-s", subnet,
-		"-d", gateway,
-		"-m", "comment", "--comment", comment,
-		"-j", "ACCEPT")
-	if checkCmd.Run() == nil {
-		return "existing", nil
-	}
-
-	m.deleteForwardRuleByComment(comment)
-
-	addCmd := newIPTablesCommand("-I", "FORWARD", fmt.Sprintf("%d", position),
-		"-s", subnet,
-		"-d", gateway,
-		"-m", "comment", "--comment", comment,
-		"-j", "ACCEPT")
-	if err := addCmd.Run(); err != nil {
-		return "", fmt.Errorf("insert gateway forward rule: %w", err)
-	}
-	return "added", nil
-}
-
-func (m *manager) ensureInputRule(subnet, gateway, comment string) (string, error) {
-	checkCmd := newIPTablesCommand("-C", "INPUT",
-		"-s", subnet,
-		"-d", gateway,
-		"-m", "comment", "--comment", comment,
-		"-j", "ACCEPT")
-	if checkCmd.Run() == nil {
-		return "existing", nil
-	}
-
-	deleteFilterRuleByComment("INPUT", comment)
-
-	addCmd := newIPTablesCommand("-I", "INPUT", "1",
-		"-s", subnet,
-		"-d", gateway,
-		"-m", "comment", "--comment", comment,
-		"-j", "ACCEPT")
-	if err := addCmd.Run(); err != nil {
-		return "", fmt.Errorf("insert input rule: %w", err)
-	}
-	return "added", nil
-}
-
-func (m *manager) ensureOutputRule(subnet, gateway, comment string) (string, error) {
-	checkCmd := newIPTablesCommand("-C", "OUTPUT",
-		"-s", gateway,
-		"-d", subnet,
-		"-m", "comment", "--comment", comment,
-		"-j", "ACCEPT")
-	if checkCmd.Run() == nil {
-		return "existing", nil
-	}
-
-	deleteFilterRuleByComment("OUTPUT", comment)
-
-	addCmd := newIPTablesCommand("-I", "OUTPUT", "1",
-		"-s", gateway,
-		"-d", subnet,
-		"-m", "comment", "--comment", comment,
-		"-j", "ACCEPT")
-	if err := addCmd.Run(); err != nil {
-		return "", fmt.Errorf("insert output rule: %w", err)
-	}
-	return "added", nil
-}
-
 // isForwardRuleCorrect checks if our rule exists at the expected position with correct interfaces
 func (m *manager) isForwardRuleCorrect(inIface, outIface, comment string, position int) bool {
 	// List FORWARD chain with line numbers
@@ -500,11 +411,8 @@ func (m *manager) isForwardRuleCorrect(inIface, outIface, comment string, positi
 
 // deleteForwardRuleByComment deletes any FORWARD rule containing our comment
 func (m *manager) deleteForwardRuleByComment(comment string) {
-	deleteFilterRuleByComment("FORWARD", comment)
-}
-
-func deleteFilterRuleByComment(chain, comment string) {
-	cmd := newIPTablesCommand("-L", chain, "--line-numbers", "-n")
+	// List FORWARD rules
+	cmd := newIPTablesCommand("-L", "FORWARD", "--line-numbers", "-n")
 	output, err := cmd.Output()
 	if err != nil {
 		return
@@ -524,7 +432,7 @@ func deleteFilterRuleByComment(chain, comment string) {
 
 	// Delete in reverse order
 	for i := len(ruleNums) - 1; i >= 0; i-- {
-		delCmd := newIPTablesCommand("-D", chain, ruleNums[i])
+		delCmd := newIPTablesCommand("-D", "FORWARD", ruleNums[i])
 		delCmd.Run() // ignore error
 	}
 }
