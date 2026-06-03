@@ -87,7 +87,7 @@ func (m *manager) setTAPMasterWithRetry(ctx context.Context, tapName string, tap
 
 func disableLinkOffloads(ctx context.Context, linkName string) {
 	log := logger.FromContext(ctx)
-	for _, feature := range []string{"tx", "sg", "tso", "gso", "gro"} {
+	for _, feature := range []string{"tx-checksum-ip-generic", "tx", "sg", "tso", "gso", "gro"} {
 		cmd := exec.CommandContext(ctx, "ethtool", "-K", linkName, feature, "off")
 		cmd.SysProcAttr = &syscall.SysProcAttr{
 			AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
