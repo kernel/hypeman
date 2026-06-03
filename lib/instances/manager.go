@@ -130,9 +130,10 @@ type manager struct {
 	limits                    ResourceLimits
 	resourceValidator         ResourceValidator // Optional validator for aggregate resource limits
 	instanceLocks             sync.Map          // map[string]*sync.RWMutex - per-instance locks
-	bootMarkerScans           sync.Map          // map[string]time.Time next allowed boot-marker rescan
-	hypervisorStateCache      sync.Map          // map[string]hypervisorStateCacheEntry - last observed hypervisor state per instance
-	hostTopology              *HostTopology     // Cached host CPU topology
+	forkMetadataMu            sync.Mutex
+	bootMarkerScans           sync.Map      // map[string]time.Time next allowed boot-marker rescan
+	hypervisorStateCache      sync.Map      // map[string]hypervisorStateCacheEntry - last observed hypervisor state per instance
+	hostTopology              *HostTopology // Cached host CPU topology
 	metrics                   *Metrics
 	meter                     metric.Meter
 	tracer                    trace.Tracer
@@ -431,9 +432,11 @@ func (m *manager) DeleteSnapshot(ctx context.Context, snapshotID string) error {
 func (m *manager) ForkInstance(ctx context.Context, id string, req ForkInstanceRequest) (*Instance, error) {
 	lock := m.getInstanceLock(id)
 	useReadLock := false
+	var sourceState State
 	lock.RLock()
 	if meta, err := m.loadMetadata(id); err == nil {
 		source := m.toInstance(ctx, meta)
+		sourceState = source.State
 		useReadLock = m.supportsConcurrentForkPrepare(meta.HypervisorType) && (source.State == StateStopped || source.State == StateStandby)
 	}
 	lock.RUnlock()
@@ -445,6 +448,7 @@ func (m *manager) ForkInstance(ctx context.Context, id string, req ForkInstanceR
 		lock.RLock()
 		if meta, loadErr := m.loadMetadata(id); loadErr == nil {
 			source := m.toInstance(ctx, meta)
+			sourceState = source.State
 			useReadLock = m.supportsConcurrentForkPrepare(meta.HypervisorType) && (source.State == StateStopped || source.State == StateStandby)
 		} else {
 			useReadLock = false
@@ -465,7 +469,11 @@ func (m *manager) ForkInstance(ctx context.Context, id string, req ForkInstanceR
 
 	inst := forked
 	if !forkTargetStateAlreadyApplied(inst, targetState) {
-		inst, err = m.applyForkTargetState(ctx, forked.Id, targetState)
+		if useReadLock && sourceState == StateStandby && targetState == StateRunning {
+			inst, err = m.applyForkTargetStateWithSourceLock(ctx, lock, forked.Id, targetState)
+		} else {
+			inst, err = m.applyForkTargetState(ctx, forked.Id, targetState)
+		}
 		if err != nil {
 			if cleanupErr := m.cleanupForkInstanceOnError(ctx, forked.Id); cleanupErr != nil {
 				return nil, fmt.Errorf("apply fork target state: %w; additionally failed to cleanup forked instance %s: %v", err, forked.Id, cleanupErr)
@@ -475,6 +483,12 @@ func (m *manager) ForkInstance(ctx context.Context, id string, req ForkInstanceR
 	}
 	m.notifyLifecycleEvent(ctx, LifecycleEventFork, inst)
 	return inst, nil
+}
+
+func (m *manager) applyForkTargetStateWithSourceLock(ctx context.Context, lock *sync.RWMutex, forkID string, target State) (*Instance, error) {
+	lock.Lock()
+	defer lock.Unlock()
+	return m.applyForkTargetState(ctx, forkID, target)
 }
 
 func (m *manager) ForkSnapshot(ctx context.Context, snapshotID string, req ForkSnapshotRequest) (*Instance, error) {

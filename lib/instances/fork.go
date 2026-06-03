@@ -338,8 +338,8 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 	}
 
 	newMeta := &metadata{StoredMetadata: forkMeta}
-	if err := m.saveMetadata(newMeta); err != nil {
-		return nil, fmt.Errorf("save fork metadata: %w", err)
+	if err := m.saveForkMetadata(ctx, newMeta); err != nil {
+		return nil, err
 	}
 
 	cu.Release()
@@ -350,6 +350,33 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 		"fork_name", forked.Name,
 		"state", forked.State)
 	return &forked, nil
+}
+
+func (m *manager) saveForkMetadata(ctx context.Context, meta *metadata) error {
+	m.forkMetadataMu.Lock()
+	defer m.forkMetadataMu.Unlock()
+
+	name := meta.Name
+	existsByMetadata, err := m.instanceNameExists(name)
+	if err != nil {
+		return fmt.Errorf("check instance name availability: %w", err)
+	}
+	if existsByMetadata {
+		return fmt.Errorf("%w: instance name '%s' already exists", ErrAlreadyExists, name)
+	}
+	if meta.NetworkEnabled {
+		exists, err := m.networkManager.NameExists(ctx, name, "")
+		if err != nil {
+			return fmt.Errorf("check instance name availability: %w", err)
+		}
+		if exists {
+			return fmt.Errorf("%w: instance name '%s' already exists in network", ErrAlreadyExists, name)
+		}
+	}
+	if err := m.saveMetadata(meta); err != nil {
+		return fmt.Errorf("save fork metadata: %w", err)
+	}
+	return nil
 }
 
 func (m *manager) validateForkSupport(ctx context.Context, hvType hypervisor.Type) error {

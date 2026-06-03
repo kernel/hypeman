@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -388,6 +390,69 @@ func TestForkInstanceRejectsDuplicateNameForNonNetworkedSource(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrAlreadyExists)
 	assert.Contains(t, err.Error(), "already exists")
+}
+
+func TestSaveForkMetadataSerializesNameAdmission(t *testing.T) {
+	t.Parallel()
+	manager, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	now := time.Now()
+	metas := []*metadata{
+		{StoredMetadata: StoredMetadata{
+			Id:                "fork-concurrent-name-a",
+			Name:              "fork-concurrent-name",
+			Image:             integrationTestImageRef(t, "docker.io/library/alpine:latest"),
+			CreatedAt:         now,
+			HypervisorType:    hypervisor.TypeCloudHypervisor,
+			HypervisorVersion: "test",
+			SocketPath:        paths.New(manager.paths.DataDir()).InstanceSocket("fork-concurrent-name-a", "cloud-hypervisor.sock"),
+			DataDir:           paths.New(manager.paths.DataDir()).InstanceDir("fork-concurrent-name-a"),
+			VsockCID:          42,
+			VsockSocket:       paths.New(manager.paths.DataDir()).InstanceVsockSocket("fork-concurrent-name-a"),
+		}},
+		{StoredMetadata: StoredMetadata{
+			Id:                "fork-concurrent-name-b",
+			Name:              "fork-concurrent-name",
+			Image:             integrationTestImageRef(t, "docker.io/library/alpine:latest"),
+			CreatedAt:         now,
+			HypervisorType:    hypervisor.TypeCloudHypervisor,
+			HypervisorVersion: "test",
+			SocketPath:        paths.New(manager.paths.DataDir()).InstanceSocket("fork-concurrent-name-b", "cloud-hypervisor.sock"),
+			DataDir:           paths.New(manager.paths.DataDir()).InstanceDir("fork-concurrent-name-b"),
+			VsockCID:          43,
+			VsockSocket:       paths.New(manager.paths.DataDir()).InstanceVsockSocket("fork-concurrent-name-b"),
+		}},
+	}
+	for _, meta := range metas {
+		require.NoError(t, manager.ensureDirectories(meta.Id))
+	}
+
+	var wg sync.WaitGroup
+	errs := make([]error, len(metas))
+	for i := range metas {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errs[i] = manager.saveForkMetadata(ctx, metas[i])
+		}(i)
+	}
+	wg.Wait()
+
+	successes := 0
+	duplicates := 0
+	for _, err := range errs {
+		switch {
+		case err == nil:
+			successes++
+		case errors.Is(err, ErrAlreadyExists):
+			duplicates++
+		default:
+			require.NoError(t, err)
+		}
+	}
+	assert.Equal(t, 1, successes)
+	assert.Equal(t, 1, duplicates)
 }
 
 func TestForkInstanceFromStandbyCancelsCompressionJobAndCopiesRawMemory(t *testing.T) {
