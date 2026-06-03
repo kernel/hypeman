@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/logger"
-	"github.com/kernel/hypeman/lib/system/netoffload"
 	"github.com/vishvananda/netlink"
 	"go.opentelemetry.io/otel/attribute"
 	"golang.org/x/sys/unix"
@@ -59,30 +58,15 @@ func isTransientNetlinkError(err error) bool {
 		errors.Is(err, syscall.ENOBUFS)
 }
 
-func tapAttachedToBridge(tapName string, bridge netlink.Link) (bool, error) {
-	tap, err := netlink.LinkByName(tapName)
-	if err != nil {
-		return false, err
-	}
-	return tap.Attrs().MasterIndex == bridge.Attrs().Index, nil
-}
-
-func (m *manager) setTAPMasterWithRetry(ctx context.Context, tapName string, tapLink netlink.Link, bridge netlink.Link) error {
-	m.tapAttachMu.Lock()
-	defer m.tapAttachMu.Unlock()
-
+func retryTransientNetlink(ctx context.Context, fn func() error) error {
 	var err error
 	delay := time.Millisecond
 	for i := 0; i < netlinkOpRetryCount; i++ {
-		err = netlink.LinkSetMaster(tapLink, bridge)
-		if err == nil {
-			return nil
+		err = fn()
+		if err == nil || !isTransientNetlinkError(err) {
+			return err
 		}
-		attached, lookupErr := tapAttachedToBridge(tapName, bridge)
-		if lookupErr == nil && attached {
-			return nil
-		}
-		if !isTransientNetlinkError(err) || i == netlinkOpRetryCount-1 {
+		if i == netlinkOpRetryCount-1 {
 			return err
 		}
 		select {
@@ -91,17 +75,8 @@ func (m *manager) setTAPMasterWithRetry(ctx context.Context, tapName string, tap
 		case <-time.After(delay):
 		}
 		delay *= 2
-		if refreshed, refreshErr := netlink.LinkByName(tapName); refreshErr == nil {
-			tapLink = refreshed
-		}
 	}
 	return err
-}
-
-func disableTXChecksum(ctx context.Context, iface string) {
-	if err := netoffload.DisableTXChecksum(iface); err != nil {
-		logger.FromContext(ctx).DebugContext(ctx, "could not disable tx checksum offload", "interface", iface, "error", err)
-	}
 }
 
 // checkSubnetConflicts checks if the configured subnet conflicts with existing routes.
@@ -203,11 +178,10 @@ func (m *manager) createBridge(ctx context.Context, name, gateway, subnet string
 		if err := netlink.LinkSetUp(existing); err != nil {
 			return fmt.Errorf("set bridge up: %w", err)
 		}
-		disableTXChecksum(ctx, name)
 		log.InfoContext(ctx, "bridge ready", "bridge", name, "gateway", gateway, "status", "existing")
 
 		// Still need to ensure iptables rules are configured
-		if err := m.setupIPTablesRules(ctx, subnet, name, gateway); err != nil {
+		if err := m.setupIPTablesRules(ctx, subnet, name); err != nil {
 			return fmt.Errorf("setup iptables: %w", err)
 		}
 		return nil
@@ -228,7 +202,6 @@ func (m *manager) createBridge(ctx context.Context, name, gateway, subnet string
 	if err := netlink.LinkSetUp(bridge); err != nil {
 		return fmt.Errorf("set bridge up: %w", err)
 	}
-	disableTXChecksum(ctx, name)
 
 	// 5. Add gateway IP to bridge
 	gatewayIP := net.ParseIP(gateway)
@@ -250,7 +223,7 @@ func (m *manager) createBridge(ctx context.Context, name, gateway, subnet string
 	log.InfoContext(ctx, "bridge ready", "bridge", name, "gateway", gateway, "status", "created")
 
 	// 6. Setup iptables rules
-	if err := m.setupIPTablesRules(ctx, subnet, name, gateway); err != nil {
+	if err := m.setupIPTablesRules(ctx, subnet, name); err != nil {
 		return fmt.Errorf("setup iptables: %w", err)
 	}
 
@@ -259,20 +232,15 @@ func (m *manager) createBridge(ctx context.Context, name, gateway, subnet string
 
 // Rule comments for identifying hypeman iptables rules
 const (
-	commentNATBase     = "hypeman-nat"
-	commentGatewayBase = "hypeman-gateway"
-	commentFwdOutBase  = "hypeman-fwd-out"
-	commentFwdInBase   = "hypeman-fwd-in"
-	commentInputBase   = "hypeman-input"
-	commentOutputBase  = "hypeman-output"
+	commentNATBase    = "hypeman-nat"
+	commentFwdOutBase = "hypeman-fwd-out"
+	commentFwdInBase  = "hypeman-fwd-in"
 )
 
 // HTB handles for traffic control
 const (
-	htbRootHandle       = "1:"    // Root qdisc handle
-	htbRootClassID      = "1:1"   // Root class for total capacity
-	htbDefaultClassID   = "1:fff" // Default class for traffic before per-TAP filters are installed
-	htbDefaultClassName = "fff"
+	htbRootHandle  = "1:"  // Root qdisc handle
+	htbRootClassID = "1:1" // Root class for total capacity
 )
 
 // getUplinkInterface returns the uplink interface for NAT/forwarding.
@@ -304,7 +272,7 @@ func (m *manager) getUplinkInterface() (string, error) {
 }
 
 // setupIPTablesRules sets up NAT and forwarding rules
-func (m *manager) setupIPTablesRules(ctx context.Context, subnet, bridgeName, gateway string) error {
+func (m *manager) setupIPTablesRules(ctx context.Context, subnet, bridgeName string) error {
 	log := logger.FromContext(ctx)
 
 	// Check if IP forwarding is enabled (prerequisite)
@@ -325,11 +293,8 @@ func (m *manager) setupIPTablesRules(ctx context.Context, subnet, bridgeName, ga
 	log.InfoContext(ctx, "uplink interface", "interface", uplink)
 
 	natComment := m.ruleComment(commentNATBase)
-	gatewayComment := m.ruleComment(commentGatewayBase)
 	fwdOutComment := m.ruleComment(commentFwdOutBase)
 	fwdInComment := m.ruleComment(commentFwdInBase)
-	inputComment := m.ruleComment(commentInputBase)
-	outputComment := m.ruleComment(commentOutputBase)
 
 	// Add MASQUERADE rule if not exists (position doesn't matter in POSTROUTING)
 	masqStatus, err := m.ensureNATRule(subnet, uplink, natComment)
@@ -338,34 +303,19 @@ func (m *manager) setupIPTablesRules(ctx context.Context, subnet, bridgeName, ga
 	}
 	log.InfoContext(ctx, "iptables NAT ready", "subnet", subnet, "uplink", uplink, "status", masqStatus)
 
-	gatewayStatus, err := m.ensureGatewayForwardRule(bridgeName, subnet, gateway, gatewayComment, 1)
-	if err != nil {
-		return fmt.Errorf("setup gateway forward: %w", err)
-	}
-
-	// FORWARD rules must be at top of chain (before Docker's DOCKER-USER/DOCKER-FORWARD).
+	// FORWARD rules must be at top of chain (before Docker's DOCKER-USER/DOCKER-FORWARD)
 	// We insert at position 1 and 2 to ensure they're evaluated first
-	fwdOutStatus, err := m.ensureForwardRule(bridgeName, uplink, "NEW,ESTABLISHED,RELATED", fwdOutComment, 2)
+	fwdOutStatus, err := m.ensureForwardRule(bridgeName, uplink, "NEW,ESTABLISHED,RELATED", fwdOutComment, 1)
 	if err != nil {
 		return fmt.Errorf("setup forward outbound: %w", err)
 	}
 
-	fwdInStatus, err := m.ensureForwardRule(uplink, bridgeName, "ESTABLISHED,RELATED", fwdInComment, 3)
+	fwdInStatus, err := m.ensureForwardRule(uplink, bridgeName, "ESTABLISHED,RELATED", fwdInComment, 2)
 	if err != nil {
 		return fmt.Errorf("setup forward inbound: %w", err)
 	}
 
-	log.InfoContext(ctx, "iptables FORWARD ready", "gateway", gatewayStatus, "outbound", fwdOutStatus, "inbound", fwdInStatus)
-
-	inputStatus, err := m.ensureInputRule(subnet, gateway, inputComment)
-	if err != nil {
-		return fmt.Errorf("setup host gateway input: %w", err)
-	}
-	outputStatus, err := m.ensureOutputRule(subnet, gateway, outputComment)
-	if err != nil {
-		return fmt.Errorf("setup host gateway output: %w", err)
-	}
-	log.InfoContext(ctx, "iptables host gateway ready", "bridge", bridgeName, "gateway", gateway, "input", inputStatus, "output", outputStatus)
+	log.InfoContext(ctx, "iptables FORWARD ready", "outbound", fwdOutStatus, "inbound", fwdInStatus)
 
 	// Restore Docker's FORWARD chain jumps if they were lost.
 	// On systems where an external tool (e.g., hypervisor firewall management) periodically
@@ -460,71 +410,6 @@ func (m *manager) ensureForwardRule(inIface, outIface, ctstate, comment string, 
 	return "added", nil
 }
 
-func (m *manager) ensureGatewayForwardRule(bridgeName, subnet, gateway, comment string, position int) (string, error) {
-	if m.isForwardGatewayRuleCorrect(bridgeName, comment, position) {
-		return "existing", nil
-	}
-
-	m.deleteForwardRuleByComment(comment)
-
-	addCmd := newIPTablesCommand("-I", "FORWARD", fmt.Sprintf("%d", position),
-		"-i", bridgeName,
-		"-s", subnet,
-		"-d", gateway,
-		"-m", "comment", "--comment", comment,
-		"-j", "ACCEPT")
-	if err := addCmd.Run(); err != nil {
-		return "", fmt.Errorf("insert gateway forward rule: %w", err)
-	}
-	return "added", nil
-}
-
-func (m *manager) ensureInputRule(subnet, gateway, comment string) (string, error) {
-	checkCmd := newIPTablesCommand("-C", "INPUT",
-		"-s", subnet,
-		"-d", gateway,
-		"-m", "comment", "--comment", comment,
-		"-j", "ACCEPT")
-	if checkCmd.Run() == nil {
-		return "existing", nil
-	}
-
-	m.deleteInputRuleByComment(comment)
-
-	addCmd := newIPTablesCommand("-I", "INPUT", "1",
-		"-s", subnet,
-		"-d", gateway,
-		"-m", "comment", "--comment", comment,
-		"-j", "ACCEPT")
-	if err := addCmd.Run(); err != nil {
-		return "", fmt.Errorf("insert input rule: %w", err)
-	}
-	return "added", nil
-}
-
-func (m *manager) ensureOutputRule(subnet, gateway, comment string) (string, error) {
-	checkCmd := newIPTablesCommand("-C", "OUTPUT",
-		"-s", gateway,
-		"-d", subnet,
-		"-m", "comment", "--comment", comment,
-		"-j", "ACCEPT")
-	if checkCmd.Run() == nil {
-		return "existing", nil
-	}
-
-	m.deleteOutputRuleByComment(comment)
-
-	addCmd := newIPTablesCommand("-I", "OUTPUT", "1",
-		"-s", gateway,
-		"-d", subnet,
-		"-m", "comment", "--comment", comment,
-		"-j", "ACCEPT")
-	if err := addCmd.Run(); err != nil {
-		return "", fmt.Errorf("insert output rule: %w", err)
-	}
-	return "added", nil
-}
-
 // isForwardRuleCorrect checks if our rule exists at the expected position with correct interfaces
 func (m *manager) isForwardRuleCorrect(inIface, outIface, comment string, position int) bool {
 	// List FORWARD chain with line numbers
@@ -547,28 +432,6 @@ func (m *manager) isForwardRuleCorrect(inIface, outIface, comment string, positi
 			fields[0] == fmt.Sprintf("%d", position) &&
 			fields[6] == inIface &&
 			fields[7] == outIface {
-			return true
-		}
-	}
-	return false
-}
-
-func (m *manager) isForwardGatewayRuleCorrect(inIface, comment string, position int) bool {
-	cmd := newIPTablesCommand("-L", "FORWARD", "--line-numbers", "-n", "-v")
-	output, err := cmd.Output()
-	if err != nil {
-		return false
-	}
-
-	lines := strings.Split(string(output), "\n")
-	for _, line := range lines {
-		if !strings.Contains(line, comment) {
-			continue
-		}
-		fields := strings.Fields(line)
-		if len(fields) >= 7 &&
-			fields[0] == fmt.Sprintf("%d", position) &&
-			fields[6] == inIface {
 			return true
 		}
 	}
@@ -600,54 +463,6 @@ func (m *manager) deleteForwardRuleByComment(comment string) {
 	for i := len(ruleNums) - 1; i >= 0; i-- {
 		delCmd := newIPTablesCommand("-D", "FORWARD", ruleNums[i])
 		delCmd.Run() // ignore error
-	}
-}
-
-func (m *manager) deleteInputRuleByComment(comment string) {
-	cmd := newIPTablesCommand("-L", "INPUT", "--line-numbers", "-n")
-	output, err := cmd.Output()
-	if err != nil {
-		return
-	}
-
-	var ruleNums []string
-	lines := strings.Split(string(output), "\n")
-	for _, line := range lines {
-		if strings.Contains(line, comment) {
-			fields := strings.Fields(line)
-			if len(fields) > 0 {
-				ruleNums = append(ruleNums, fields[0])
-			}
-		}
-	}
-
-	for i := len(ruleNums) - 1; i >= 0; i-- {
-		delCmd := newIPTablesCommand("-D", "INPUT", ruleNums[i])
-		delCmd.Run()
-	}
-}
-
-func (m *manager) deleteOutputRuleByComment(comment string) {
-	cmd := newIPTablesCommand("-L", "OUTPUT", "--line-numbers", "-n")
-	output, err := cmd.Output()
-	if err != nil {
-		return
-	}
-
-	var ruleNums []string
-	lines := strings.Split(string(output), "\n")
-	for _, line := range lines {
-		if strings.Contains(line, comment) {
-			fields := strings.Fields(line)
-			if len(fields) > 0 {
-				ruleNums = append(ruleNums, fields[0])
-			}
-		}
-	}
-
-	for i := len(ruleNums) - 1; i >= 0; i-- {
-		delCmd := newIPTablesCommand("-D", "OUTPUT", ruleNums[i])
-		delCmd.Run()
 	}
 }
 
@@ -709,6 +524,7 @@ func (m *manager) lastHypemanForwardRulePosition() int {
 	return lastPos
 }
 
+// createTAPDevice creates TAP device and attaches it to the bridge.
 func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName string, isolated bool) error {
 	// 1. Check if TAP already exists
 	_, linkLookupEnd := startNetworkStep(ctx, "network.create_tap.link_lookup_existing",
@@ -740,7 +556,6 @@ func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName strin
 			Name: tapName,
 		},
 		Mode:  netlink.TUNTAP_MODE_TAP,
-		Flags: netlink.TUNTAP_DEFAULTS,
 		Owner: uint32(uid),
 		Group: uint32(gid),
 	}
@@ -767,7 +582,6 @@ func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName strin
 	if err != nil {
 		return fmt.Errorf("set TAP up: %w", err)
 	}
-	disableTXChecksum(ctx, tapName)
 
 	// 4. Attach TAP to bridge
 	_, bridgeLookupEnd := startNetworkStep(ctx, "network.create_tap.link_lookup_bridge",
@@ -785,12 +599,13 @@ func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName strin
 		attribute.String("tap", tapName),
 		attribute.String("bridge", bridgeName),
 	)
-	err = m.setTAPMasterWithRetry(ctx, tapName, tapLink, bridge)
+	err = retryTransientNetlink(ctx, func() error {
+		return netlink.LinkSetMaster(tapLink, bridge)
+	})
 	setMasterEnd(err)
 	if err != nil {
 		return fmt.Errorf("attach TAP to bridge: %w", err)
 	}
-	disableTXChecksum(ctx, tapName)
 
 	// 5. Enable port isolation so isolated TAPs can't directly talk to each other (requires kernel support and capabilities)
 	if isolated {
@@ -806,13 +621,6 @@ func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName strin
 	}
 
 	return nil
-}
-
-func (m *manager) ApplyTAPChecksumSettings(ctx context.Context, tapName string) {
-	if tapName == "" {
-		return
-	}
-	disableTXChecksum(ctx, tapName)
 }
 
 // applyDownloadRateLimit applies download (external→VM) rate limiting using TBF on TAP egress.
@@ -883,10 +691,9 @@ func (m *manager) setupBridgeHTB(ctx context.Context, bridgeName string, capacit
 
 	rateStr := formatTcRate(capacityBps)
 
-	// 1. Add root HTB qdisc with a default class so traffic is not dropped
-	// while per-TAP filters are installed asynchronously.
+	// 1. Add root HTB qdisc (no default - all traffic must be classified)
 	cmd := exec.Command("tc", "qdisc", "add", "dev", bridgeName, "root",
-		"handle", htbRootHandle, "htb", "default", htbDefaultClassName)
+		"handle", htbRootHandle, "htb")
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
 	}
@@ -902,17 +709,6 @@ func (m *manager) setupBridgeHTB(ctx context.Context, bridgeName string, capacit
 	}
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("tc class add root: %w (output: %s)", err, string(output))
-	}
-
-	// 3. Add a default child class for unclassified bridge traffic. Per-VM
-	// filters still direct shaped traffic into dedicated classes once ready.
-	cmd = exec.Command("tc", "class", "add", "dev", bridgeName, "parent", htbRootClassID,
-		"classid", htbDefaultClassID, "htb", "rate", rateStr, "ceil", rateStr)
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
-	}
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("tc class add default: %w (output: %s)", err, string(output))
 	}
 
 	log.InfoContext(ctx, "HTB qdisc ready", "bridge", bridgeName, "capacity", rateStr, "status", "configured")
@@ -1314,8 +1110,8 @@ func (m *manager) CleanupOrphanedClasses(ctx context.Context) int {
 		}
 		fullClassID := fields[2] // "1:xxxx"
 
-		// Skip bridge-owned classes.
-		if fullClassID == htbRootClassID || fullClassID == htbDefaultClassID {
+		// Skip root class
+		if fullClassID == htbRootClassID {
 			continue
 		}
 

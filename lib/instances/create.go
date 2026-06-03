@@ -745,9 +745,6 @@ func (m *manager) startAndBootVM(
 	if err != nil {
 		return fmt.Errorf("start vm: %w", err)
 	}
-	if netConfig != nil {
-		m.networkManager.ApplyTAPChecksumSettings(ctx, netConfig.TAPDevice)
-	}
 	pid = resolveRuntimeHypervisorPID(log, stored.SocketPath, pid)
 
 	// Store the PID for later cleanup

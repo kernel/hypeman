@@ -411,13 +411,6 @@ func TestFirecrackerNetworkLifecycle(t *testing.T) {
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
-	if err != nil || exitCode != 0 {
-		if port, portErr := gatewayPortFromURL(probeURL); portErr == nil {
-			logGatewayDiagnostics(ctx, t, inst, alloc.IP, alloc.Gateway, alloc.TAPDevice, port)
-		} else {
-			t.Logf("failed to parse gateway probe URL %q for diagnostics: %v", probeURL, portErr)
-		}
-	}
 	require.NoError(t, err)
 	require.Equal(t, 0, exitCode)
 	require.Contains(t, output, "Connection successful")

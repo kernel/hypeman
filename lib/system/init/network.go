@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 
-	"github.com/kernel/hypeman/lib/system/netoffload"
 	"github.com/kernel/hypeman/lib/vmconfig"
 )
 
@@ -26,9 +25,6 @@ func configureNetwork(log *Logger, cfg *vmconfig.Config) error {
 	// Bring up eth0
 	if err := runIP("link", "set", "eth0", "up"); err != nil {
 		return fmt.Errorf("bring up eth0: %w", err)
-	}
-	if err := netoffload.DisableTXChecksum("eth0"); err != nil {
-		log.Info("hypeman-init:network", fmt.Sprintf("could not disable eth0 tx checksum offload: %v", err))
 	}
 
 	// Add default route

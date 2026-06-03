@@ -20,7 +20,6 @@ type Manager interface {
 	// Instance allocation operations (called by instance manager)
 	CreateAllocation(ctx context.Context, req AllocateRequest) (*NetworkConfig, error)
 	RecreateAllocation(ctx context.Context, instanceID string, downloadBps, uploadBps int64) error
-	ApplyTAPChecksumSettings(ctx context.Context, tapName string)
 	ReleaseAllocation(ctx context.Context, alloc *Allocation) error
 	// ReleaseByInstanceID is a best-effort cleanup fallback when the full Allocation
 	// can't be derived (e.g. metadata read failed). Deletes the TAP device using the
@@ -56,7 +55,6 @@ type manager struct {
 	networkMu          sync.RWMutex
 	defaultNetwork     *Network
 	pendingAllocations map[string]pendingAllocation
-	tapAttachMu        sync.Mutex
 	tcMu               sync.Mutex // Serializes shared bridge tc mutations.
 	metrics            *Metrics
 }

@@ -424,13 +424,6 @@ func (m *manager) restoreFromSnapshot(
 	if err != nil {
 		return 0, nil, fmt.Errorf("restore vm: %w", err)
 	}
-	if stored.NetworkEnabled {
-		if alloc, allocErr := m.networkManager.GetAllocation(ctx, stored.Id); allocErr == nil && alloc != nil {
-			m.networkManager.ApplyTAPChecksumSettings(ctx, alloc.TAPDevice)
-		} else if allocErr != nil {
-			log.DebugContext(ctx, "failed to apply TAP checksum settings after restore", "instance_id", stored.Id, "error", allocErr)
-		}
-	}
 	pid = resolveRuntimeHypervisorPID(log, stored.SocketPath, pid)
 
 	log.DebugContext(ctx, "VM restored from snapshot successfully", "instance_id", stored.Id, "pid", pid)

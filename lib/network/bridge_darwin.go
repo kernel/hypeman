@@ -24,7 +24,7 @@ func (m *manager) createBridge(ctx context.Context, name, gateway, subnet string
 }
 
 // setupIPTablesRules is a no-op on macOS as we use NAT networking.
-func (m *manager) setupIPTablesRules(ctx context.Context, subnet, bridgeName, gateway string) error {
+func (m *manager) setupIPTablesRules(ctx context.Context, subnet, bridgeName string) error {
 	return nil
 }
 
@@ -40,8 +40,6 @@ func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName strin
 	// On macOS with vz, network devices are created by the VMM itself
 	return nil
 }
-
-func (m *manager) ApplyTAPChecksumSettings(ctx context.Context, tapName string) {}
 
 func (m *manager) applyDownloadRateLimit(ctx context.Context, tapName string, rateLimitBps int64) error {
 	return nil
