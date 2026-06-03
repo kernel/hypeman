@@ -318,6 +318,12 @@ func (m *manager) restoreSnapshot(ctx context.Context, id string, snapshotID str
 	}
 	restored.SocketPath = m.paths.InstanceSocket(id, starter.SocketName())
 	restored.VsockSocket = m.paths.InstanceSocket(id, hypervisor.VsockSocketNameForType(targetHypervisor))
+	restored.FirecrackerUseUFFDOnNextRestore = false
+	restored.FirecrackerUFFDSessionID = ""
+	restored.FirecrackerUFFDPagerVersion = ""
+	if targetState == StateStopped {
+		restored.FirecrackerSnapshotCacheKey = ""
+	}
 	if rec.Snapshot.Kind == SnapshotKindStopped {
 		restored.VsockCID = generateVsockCID(id)
 	}
@@ -452,6 +458,7 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 	forkMeta.RestartStatus = restartpolicy.Status{}
 	forkMeta.FirecrackerUFFDSessionID = ""
 	forkMeta.FirecrackerUFFDPagerVersion = ""
+	forkMeta.FirecrackerUseUFFDOnNextRestore = useFirecrackerUFFDOnNextRestore(targetHypervisor, rec.Snapshot.Kind == SnapshotKindStandby, targetState)
 	if rec.Snapshot.Kind != SnapshotKindStandby {
 		forkMeta.FirecrackerSnapshotCacheKey = ""
 	}

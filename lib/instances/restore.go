@@ -341,6 +341,7 @@ func (m *manager) restoreInstance(
 	// before markers ever hydrated we resume in Initializing.
 	resumePhase, _ := runningPhaseFromMarkers(stored)
 	stored.Phases.Record(resumePhase, time.Now().UTC())
+	stored.FirecrackerUseUFFDOnNextRestore = false
 	meta = &metadata{StoredMetadata: *stored}
 	if err := m.saveMetadata(meta); err != nil {
 		// VM is running but metadata failed

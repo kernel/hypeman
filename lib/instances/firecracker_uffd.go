@@ -22,12 +22,16 @@ func (m *manager) useFirecrackerUFFD(stored *StoredMetadata) bool {
 		m.firecrackerSnapshotMemoryBackend == uffdpager.BackendUFFD
 }
 
+func useFirecrackerUFFDOnNextRestore(hvType hypervisor.Type, sourceIsStandby bool, targetState State) bool {
+	return hvType == hypervisor.TypeFirecracker && sourceIsStandby && targetState != StateStopped
+}
+
 func (m *manager) firecrackerSnapshotRestoreOptions(stored *StoredMetadata, snapshotDir string) (hypervisor.RestoreOptions, error) {
 	opts := hypervisor.RestoreOptions{SnapshotMemoryBackend: hypervisor.SnapshotMemoryBackendFile}
 	if stored == nil || stored.HypervisorType != hypervisor.TypeFirecracker {
 		return opts, nil
 	}
-	if !m.useFirecrackerUFFD(stored) {
+	if !m.useFirecrackerUFFD(stored) || !stored.FirecrackerUseUFFDOnNextRestore {
 		stored.FirecrackerUFFDSessionID = ""
 		stored.FirecrackerUFFDPagerVersion = ""
 		return opts, nil
