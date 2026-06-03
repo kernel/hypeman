@@ -89,6 +89,10 @@ type ManagerConfig struct {
 	FirecrackerMaxConcurrentRestores int
 }
 
+const defaultManagerFirecrackerMaxConcurrentRestores = 4
+
+var firecrackerRestoreSlotPools sync.Map // map[int]chan struct{}
+
 // Normalize applies defaults to manager config values.
 func (c ManagerConfig) Normalize() ManagerConfig {
 	if c.LifecycleEventBufferSize <= 0 {
@@ -102,9 +106,17 @@ func (c ManagerConfig) Normalize() ManagerConfig {
 		c.FirecrackerUFFDCacheMaxBytes = 4 << 30
 	}
 	if c.FirecrackerMaxConcurrentRestores <= 0 {
-		c.FirecrackerMaxConcurrentRestores = 32
+		c.FirecrackerMaxConcurrentRestores = defaultManagerFirecrackerMaxConcurrentRestores
 	}
 	return c
+}
+
+func sharedFirecrackerRestoreSlots(limit int) chan struct{} {
+	if limit <= 0 {
+		limit = defaultManagerFirecrackerMaxConcurrentRestores
+	}
+	slots, _ := firecrackerRestoreSlotPools.LoadOrStore(limit, make(chan struct{}, limit))
+	return slots.(chan struct{})
 }
 
 // ResourceValidator validates if resources can be allocated
@@ -242,7 +254,7 @@ func NewManagerWithConfigE(p *paths.Paths, imageManager images.Manager, systemMa
 		guestMemoryPolicy:                policy,
 		firecrackerSnapshotMemoryBackend: managerConfig.FirecrackerSnapshotMemoryBackend,
 		firecrackerUFFDPager:             firecrackerUFFDPager,
-		firecrackerRestoreSlots:          make(chan struct{}, managerConfig.FirecrackerMaxConcurrentRestores),
+		firecrackerRestoreSlots:          sharedFirecrackerRestoreSlots(managerConfig.FirecrackerMaxConcurrentRestores),
 		snapshotDefaults:                 snapshotDefaults,
 		compressionJobs:                  make(map[string]*compressionJob),
 		nativeCodecPaths:                 make(map[string]string),

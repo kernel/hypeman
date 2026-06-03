@@ -30,3 +30,22 @@ func TestAcquireFirecrackerRestoreSlotLimitsFirecrackerOnly(t *testing.T) {
 		releaseOther()
 	}
 }
+
+func TestFirecrackerRestoreSlotsSharedByLimit(t *testing.T) {
+	stored := &StoredMetadata{HypervisorType: hypervisor.TypeFirecracker}
+	slots := sharedFirecrackerRestoreSlots(1)
+	m1 := &manager{firecrackerRestoreSlots: slots}
+	m2 := &manager{firecrackerRestoreSlots: slots}
+
+	release, err := m1.acquireFirecrackerRestoreSlot(context.Background(), stored)
+	if err != nil {
+		t.Fatalf("first acquire failed: %v", err)
+	}
+	defer release()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	if _, err := m2.acquireFirecrackerRestoreSlot(ctx, stored); err == nil {
+		t.Fatalf("expected second manager to share restore capacity")
+	}
+}
