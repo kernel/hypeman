@@ -97,29 +97,6 @@ func (m *manager) setTAPMasterWithRetry(ctx context.Context, tapName string, tap
 	return err
 }
 
-func disableLinkOffloads(ctx context.Context, linkName string) {
-	log := logger.FromContext(ctx)
-	for _, feature := range []string{"tx-checksum-ip-generic", "tx", "sg", "tso", "gso", "gro"} {
-		cmd := exec.CommandContext(ctx, "ethtool", "-K", linkName, feature, "off")
-		cmd.SysProcAttr = &syscall.SysProcAttr{
-			AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
-		}
-		output, err := cmd.CombinedOutput()
-		if err != nil {
-			log.DebugContext(ctx, "failed to disable link offload",
-				"link", linkName,
-				"offload", feature,
-				"error", err,
-				"output", strings.TrimSpace(string(output)),
-			)
-		}
-	}
-}
-
-func (m *manager) ApplyTAPDeviceSettings(ctx context.Context, tapName string) {
-	disableLinkOffloads(ctx, tapName)
-}
-
 // checkSubnetConflicts checks if the configured subnet conflicts with existing routes.
 // Returns an error if a conflict is detected, with guidance on how to resolve it.
 func (m *manager) checkSubnetConflicts(ctx context.Context, subnet string) error {
@@ -219,7 +196,6 @@ func (m *manager) createBridge(ctx context.Context, name, gateway, subnet string
 		if err := netlink.LinkSetUp(existing); err != nil {
 			return fmt.Errorf("set bridge up: %w", err)
 		}
-		disableLinkOffloads(ctx, name)
 		log.InfoContext(ctx, "bridge ready", "bridge", name, "gateway", gateway, "status", "existing")
 
 		// Still need to ensure iptables rules are configured
@@ -244,8 +220,6 @@ func (m *manager) createBridge(ctx context.Context, name, gateway, subnet string
 	if err := netlink.LinkSetUp(bridge); err != nil {
 		return fmt.Errorf("set bridge up: %w", err)
 	}
-	disableLinkOffloads(ctx, name)
-
 	// 5. Add gateway IP to bridge
 	gatewayIP := net.ParseIP(gateway)
 	if gatewayIP == nil {
@@ -756,7 +730,7 @@ func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName strin
 			Name: tapName,
 		},
 		Mode:  netlink.TUNTAP_MODE_TAP,
-		Flags: netlink.TUNTAP_DEFAULTS | netlink.TUNTAP_VNET_HDR,
+		Flags: netlink.TUNTAP_DEFAULTS,
 		Owner: uint32(uid),
 		Group: uint32(gid),
 	}
@@ -818,7 +792,6 @@ func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName strin
 		}
 	}
 
-	disableLinkOffloads(ctx, tapName)
 	return nil
 }
 

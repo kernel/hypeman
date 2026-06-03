@@ -6,6 +6,7 @@ import (
 	"net"
 
 	pb "github.com/kernel/hypeman/lib/guest"
+	"github.com/kernel/hypeman/lib/system/netoffload"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
 )
@@ -53,6 +54,7 @@ func (s *guestServer) ReconfigureNetwork(_ context.Context, req *pb.ReconfigureN
 	if err := netlink.LinkSetUp(link); err != nil {
 		return nil, fmt.Errorf("set %s up: %w", iface, err)
 	}
+	_ = netoffload.DisableTXChecksum(iface)
 	if err := netlink.RouteReplace(&netlink.Route{
 		LinkIndex: link.Attrs().Index,
 		Gw:        gateway,
