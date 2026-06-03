@@ -155,7 +155,7 @@ func (s *Service) EnsureStarted(ctx context.Context, gatewayIP string) error {
 	}
 
 	s.gatewayIP = gatewayIP
-	listenAddr := net.JoinHostPort("0.0.0.0", strconv.Itoa(s.listenPort))
+	listenAddr := net.JoinHostPort(gatewayIP, strconv.Itoa(s.listenPort))
 	ln, err := net.Listen("tcp", listenAddr)
 	if err != nil {
 		return fmt.Errorf("listen egress proxy on %s: %w", listenAddr, err)
