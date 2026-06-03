@@ -116,7 +116,7 @@ func (m *manager) checkFirecrackerUFFDSessionHealth(ctx context.Context, stored 
 }
 
 func firecrackerSnapshotCacheKey(stored *StoredMetadata, snapshotDir string) (string, error) {
-	memoryInfo, err := os.Stat(filepath.Join(snapshotDir, firecrackerSnapshotMemoryFile))
+	memoryInfo, err := os.Stat(filepath.Join(snapshotDir, "memory"))
 	if err != nil {
 		return "", fmt.Errorf("stat firecracker snapshot memory for uffd cache key: %w", err)
 	}
