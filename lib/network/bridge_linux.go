@@ -13,6 +13,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/vishvananda/netlink"
@@ -23,6 +24,24 @@ import (
 const netlinkDumpRetryCount = 3
 const netlinkOpRetryCount = 5
 const iptablesWaitSeconds = "5"
+
+const (
+	ethtoolSRXCSUM = 0x00000015
+	ethtoolSTXCSUM = 0x00000017
+	ethtoolSTSO    = 0x0000001f
+	ethtoolSGSO    = 0x00000024
+	ethtoolSGRO    = 0x0000002c
+)
+
+type ethtoolValue struct {
+	cmd  uint32
+	data uint32
+}
+
+type ifreqEthtool struct {
+	name [unix.IFNAMSIZ]byte
+	data uintptr
+}
 
 func newIPTablesCommand(args ...string) *exec.Cmd {
 	fullArgs := make([]string, 0, len(args)+2)
@@ -83,6 +102,47 @@ func (m *manager) setTAPMasterWithRetry(ctx context.Context, tapName string, tap
 		}
 	}
 	return err
+}
+
+func disableTAPOffloads(ctx context.Context, tapName string) {
+	log := logger.FromContext(ctx)
+	for _, offload := range []struct {
+		name string
+		cmd  uint32
+	}{
+		{name: "rx-checksum", cmd: ethtoolSRXCSUM},
+		{name: "tx-checksum", cmd: ethtoolSTXCSUM},
+		{name: "tso", cmd: ethtoolSTSO},
+		{name: "gso", cmd: ethtoolSGSO},
+		{name: "gro", cmd: ethtoolSGRO},
+	} {
+		if err := setEthtoolValue(tapName, offload.cmd, 0); err != nil {
+			log.DebugContext(ctx, "failed to disable TAP offload", "tap", tapName, "offload", offload.name, "error", err)
+		}
+	}
+}
+
+func setEthtoolValue(iface string, cmd, value uint32) error {
+	fd, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		return err
+	}
+	defer unix.Close(fd)
+
+	var req ifreqEthtool
+	if len(iface) >= len(req.name) {
+		return fmt.Errorf("interface name %q too long", iface)
+	}
+	copy(req.name[:], iface)
+
+	ethValue := ethtoolValue{cmd: cmd, data: value}
+	req.data = uintptr(unsafe.Pointer(&ethValue))
+
+	_, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), uintptr(unix.SIOCETHTOOL), uintptr(unsafe.Pointer(&req)))
+	if errno != 0 {
+		return errno
+	}
+	return nil
 }
 
 // checkSubnetConflicts checks if the configured subnet conflicts with existing routes.
@@ -747,6 +807,7 @@ func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName strin
 	if err != nil {
 		return fmt.Errorf("set TAP up: %w", err)
 	}
+	disableTAPOffloads(ctx, tapName)
 
 	// 4. Attach TAP to bridge
 	_, bridgeLookupEnd := startNetworkStep(ctx, "network.create_tap.link_lookup_bridge",
