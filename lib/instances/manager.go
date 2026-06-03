@@ -455,6 +455,7 @@ func (m *manager) ForkInstance(ctx context.Context, id string, req ForkInstanceR
 
 	var forked *Instance
 	var targetState State
+	var targetRestoreNeedsSourceLock bool
 	var err error
 	if useReadLock {
 		lock.RLock()
@@ -466,13 +467,13 @@ func (m *manager) ForkInstance(ctx context.Context, id string, req ForkInstanceR
 			useReadLock = false
 		}
 		if useReadLock {
-			forked, targetState, err = m.forkInstance(ctx, id, req)
+			forked, targetState, targetRestoreNeedsSourceLock, err = m.forkInstance(ctx, id, req)
 		}
 		lock.RUnlock()
 	}
 	if !useReadLock {
 		lock.Lock()
-		forked, targetState, err = m.forkInstance(ctx, id, req)
+		forked, targetState, targetRestoreNeedsSourceLock, err = m.forkInstance(ctx, id, req)
 		lock.Unlock()
 	}
 	if err != nil {
@@ -481,7 +482,7 @@ func (m *manager) ForkInstance(ctx context.Context, id string, req ForkInstanceR
 
 	inst := forked
 	if !forkTargetStateAlreadyApplied(inst, targetState) {
-		if useReadLock && sourceState == StateStandby && targetState == StateRunning {
+		if useReadLock && sourceState == StateStandby && targetState == StateRunning && targetRestoreNeedsSourceLock {
 			inst, err = m.applyForkTargetStateWithSourceLock(ctx, lock, forked.Id, targetState)
 		} else {
 			inst, err = m.applyForkTargetState(ctx, forked.Id, targetState)

@@ -463,7 +463,7 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 		if forkMeta.NetworkEnabled {
 			netCfg = &hypervisor.ForkNetworkConfig{TAPDevice: network.GenerateTAPName(forkID)}
 		}
-		err := prepareForkWithAliasReadLock(ctx, starter, hypervisor.ForkPrepareRequest{
+		_, err := prepareForkWithAliasReadLock(ctx, starter, hypervisor.ForkPrepareRequest{
 			SnapshotConfigPath: m.paths.InstanceSnapshotConfig(forkID),
 			SourceDataDir:      rec.StoredMetadata.DataDir,
 			TargetDataDir:      forkMeta.DataDir,

@@ -77,7 +77,7 @@ func TestPrepareFork_RewritesSnapshotStatePathsWithoutAlias(t *testing.T) {
 	require.NoError(t, saveRestoreMetadata(targetDir, []networkInterface{{IfaceID: "eth0", HostDevName: "tap-old"}}))
 	writeSnapshotStateForTest(t, snapshotStatePath(snapshotDir), []byte("drive="+filepath.Join(sourceDir, "overlay.raw")+" vsock="+filepath.Join(sourceDir, "vsock.sock")))
 
-	_, err := starter.PrepareFork(context.Background(), hypervisor.ForkPrepareRequest{
+	result, err := starter.PrepareFork(context.Background(), hypervisor.ForkPrepareRequest{
 		SnapshotConfigPath: filepath.Join(snapshotDir, "config.json"),
 		SourceDataDir:      sourceDir,
 		TargetDataDir:      targetDir,
@@ -86,6 +86,7 @@ func TestPrepareFork_RewritesSnapshotStatePathsWithoutAlias(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
+	assert.False(t, result.RequiresSnapshotSourceAlias)
 
 	meta, err := loadRestoreMetadata(targetDir)
 	require.NoError(t, err)
@@ -113,12 +114,13 @@ func TestPrepareFork_FallsBackToAliasWhenSnapshotStatePathLengthDiffers(t *testi
 	require.NoError(t, saveRestoreMetadata(targetDir, nil))
 	writeSnapshotStateForTest(t, snapshotStatePath(snapshotDir), []byte("drive="+filepath.Join(sourceDir, "overlay.raw")))
 
-	_, err := starter.PrepareFork(context.Background(), hypervisor.ForkPrepareRequest{
+	result, err := starter.PrepareFork(context.Background(), hypervisor.ForkPrepareRequest{
 		SnapshotConfigPath: filepath.Join(snapshotDir, "config.json"),
 		SourceDataDir:      sourceDir,
 		TargetDataDir:      targetDir,
 	})
 	require.NoError(t, err)
+	assert.True(t, result.RequiresSnapshotSourceAlias)
 
 	meta, err := loadRestoreMetadata(targetDir)
 	require.NoError(t, err)

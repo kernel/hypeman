@@ -266,12 +266,62 @@ func (concurrentForkPrepareTestStarter) StartVM(context.Context, *paths.Paths, s
 	return 0, nil, nil
 }
 
-func (concurrentForkPrepareTestStarter) RestoreVM(context.Context, *paths.Paths, string, string, string) (int, hypervisor.Hypervisor, error) {
-	return 0, nil, nil
+func (concurrentForkPrepareTestStarter) RestoreVM(_ context.Context, _ *paths.Paths, _ string, socketPath string, _ string) (int, hypervisor.Hypervisor, error) {
+	if err := os.MkdirAll(filepath.Dir(socketPath), 0755); err != nil {
+		return 0, nil, err
+	}
+	if err := os.WriteFile(socketPath, []byte("socket"), 0644); err != nil {
+		return 0, nil, err
+	}
+	return 1, lifecycleNoopHypervisor{state: hypervisor.StateRunning}, nil
 }
 
 func (concurrentForkPrepareTestStarter) PrepareFork(context.Context, hypervisor.ForkPrepareRequest) (hypervisor.ForkPrepareResult, error) {
 	return hypervisor.ForkPrepareResult{}, nil
+}
+
+func TestForkInstanceStandbyRunningTargetSkipsSourceWriteLockWithoutAlias(t *testing.T) {
+	manager, _ := setupTestManager(t)
+	ctx := context.Background()
+	hvType := hypervisor.Type("concurrent-fork-restore-test")
+	hypervisor.RegisterCapabilities(hvType, hypervisor.Capabilities{SupportsConcurrentForkPrepare: true})
+	hypervisor.RegisterClientFactory(hvType, func(string) (hypervisor.Hypervisor, error) {
+		return lifecycleNoopHypervisor{state: hypervisor.StateRunning}, nil
+	})
+	manager.vmStarters[hvType] = concurrentForkPrepareTestStarter{}
+
+	sourceID := "fork-standby-running-read-lock-source"
+	createStandbySnapshotSourceFixture(t, manager, sourceID, sourceID, hvType)
+	meta, err := manager.loadMetadata(sourceID)
+	require.NoError(t, err)
+	meta.StoredMetadata.SkipGuestAgent = true
+	require.NoError(t, manager.saveMetadata(meta))
+
+	sourceLock := manager.getInstanceLock(sourceID)
+	sourceLock.RLock()
+	defer sourceLock.RUnlock()
+
+	type forkResult struct {
+		inst *Instance
+		err  error
+	}
+	done := make(chan forkResult, 1)
+	go func() {
+		inst, err := manager.ForkInstance(ctx, sourceID, ForkInstanceRequest{
+			Name:        "fork-standby-running-read-lock-copy",
+			TargetState: StateRunning,
+		})
+		done <- forkResult{inst: inst, err: err}
+	}()
+
+	select {
+	case got := <-done:
+		require.NoError(t, got.err)
+		require.NotNil(t, got.inst)
+		assert.Contains(t, []State{StateRunning, StateInitializing}, got.inst.State)
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("ForkInstance blocked behind the source write lock for a no-alias restore")
+	}
 }
 
 func TestForkInstanceStoppedSourceRequiresWriteLockWithoutConcurrentPrepare(t *testing.T) {
@@ -499,7 +549,7 @@ func TestForkInstanceFromStandbyCancelsCompressionJobAndCopiesRawMemory(t *testi
 	}
 	manager.compressionMu.Unlock()
 
-	forked, err := manager.forkInstanceFromStoppedOrStandby(ctx, sourceID, ForkInstanceRequest{
+	forked, _, err := manager.forkInstanceFromStoppedOrStandby(ctx, sourceID, ForkInstanceRequest{
 		Name:        "fork-standby-compressed-copy",
 		TargetState: StateStopped,
 	}, true)

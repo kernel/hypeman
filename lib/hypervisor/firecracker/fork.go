@@ -31,6 +31,7 @@ func (s *Starter) PrepareFork(ctx context.Context, req hypervisor.ForkPrepareReq
 	}
 
 	changed := false
+	result := hypervisor.ForkPrepareResult{}
 	if req.Network != nil && req.Network.TAPDevice != "" {
 		if len(meta.NetworkOverrides) == 0 {
 			meta.NetworkOverrides = []networkOverride{{
@@ -53,6 +54,7 @@ func (s *Starter) PrepareFork(ctx context.Context, req hypervisor.ForkPrepareReq
 			return hypervisor.ForkPrepareResult{}, err
 		}
 		changed = changed || updated
+		result.RequiresSnapshotSourceAlias = needsSnapshotSourceDirAlias(meta, req.TargetDataDir)
 	}
 
 	if changed {
@@ -61,5 +63,5 @@ func (s *Starter) PrepareFork(ctx context.Context, req hypervisor.ForkPrepareReq
 		}
 	}
 
-	return hypervisor.ForkPrepareResult{}, nil
+	return result, nil
 }

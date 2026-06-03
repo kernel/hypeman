@@ -15,11 +15,14 @@ func withSnapshotSourceAliasReadLock(run func() error) error {
 	return run()
 }
 
-func prepareForkWithAliasReadLock(ctx context.Context, starter hypervisor.VMStarter, req hypervisor.ForkPrepareRequest) error {
-	return withSnapshotSourceAliasReadLock(func() error {
-		_, err := starter.PrepareFork(ctx, req)
+func prepareForkWithAliasReadLock(ctx context.Context, starter hypervisor.VMStarter, req hypervisor.ForkPrepareRequest) (hypervisor.ForkPrepareResult, error) {
+	var result hypervisor.ForkPrepareResult
+	err := withSnapshotSourceAliasReadLock(func() error {
+		var err error
+		result, err = starter.PrepareFork(ctx, req)
 		return err
 	})
+	return result, err
 }
 
 func copyGuestDirectoryWithAliasReadLock(srcDir, dstDir string) error {

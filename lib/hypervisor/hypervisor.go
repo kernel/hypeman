@@ -166,6 +166,10 @@ type ForkPrepareResult struct {
 	// VsockCIDUpdated indicates whether snapshot state was updated to use
 	// ForkPrepareRequest.VsockCID.
 	VsockCIDUpdated bool
+
+	// RequiresSnapshotSourceAlias indicates the restored fork still depends on
+	// temporarily aliasing the source data directory during snapshot load.
+	RequiresSnapshotSourceAlias bool
 }
 
 // Hypervisor defines the interface for VM control operations.
