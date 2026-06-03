@@ -10,7 +10,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -114,9 +113,7 @@ func createNginxImageAndWait(t *testing.T, ctx context.Context, imageManager ima
 func startGatewayProbeServer(t *testing.T, gatewayIP string) (string, func()) {
 	t.Helper()
 
-	listener, err := net.Listen("tcp", net.JoinHostPort("0.0.0.0", "0"))
-	require.NoError(t, err)
-	_, port, err := net.SplitHostPort(listener.Addr().String())
+	listener, err := net.Listen("tcp", net.JoinHostPort(gatewayIP, "0"))
 	require.NoError(t, err)
 
 	mux := http.NewServeMux()
@@ -135,7 +132,7 @@ func startGatewayProbeServer(t *testing.T, gatewayIP string) (string, func()) {
 		_ = server.Shutdown(shutdownCtx)
 	}
 
-	return fmt.Sprintf("http://%s/probe", net.JoinHostPort(gatewayIP, port)), cleanup
+	return fmt.Sprintf("http://%s/probe", listener.Addr().String()), cleanup
 }
 
 func TestFirecrackerStandbyAndRestore(t *testing.T) {
@@ -349,6 +346,7 @@ func TestFirecrackerStopClearsStaleSnapshot(t *testing.T) {
 }
 
 func TestFirecrackerNetworkLifecycle(t *testing.T) {
+	t.Parallel()
 	requireFirecrackerIntegrationPrereqs(t)
 
 	mgr, tmpDir := setupTestManagerForFirecracker(t)
@@ -414,23 +412,6 @@ func TestFirecrackerNetworkLifecycle(t *testing.T) {
 		time.Sleep(500 * time.Millisecond)
 	}
 	require.NoError(t, err)
-	if exitCode != 0 {
-		probeHost := strings.TrimPrefix(probeURL, "http://")
-		if parsed, parseErr := url.Parse(probeURL); parseErr == nil {
-			probeHost = parsed.Host
-		}
-		if conn, dialErr := net.DialTimeout("tcp", probeHost, 2*time.Second); dialErr != nil {
-			t.Logf("host cannot dial gateway probe server: %v", dialErr)
-		} else {
-			_ = conn.Close()
-			t.Logf("host can dial gateway probe server")
-		}
-		_, probePort, _ := net.SplitHostPort(probeHost)
-		diagCmd := fmt.Sprintf("cat /proc/net/route; cat /proc/net/arp; ip addr 2>&1 || true; ip route 2>&1 || true; ping -c1 -W1 %s 2>&1 || true; nc -vz -w2 %s %s 2>&1 || true", alloc.Gateway, alloc.Gateway, probePort)
-		diagOutput, diagExitCode, diagErr := execCommand(ctx, inst, "sh", "-lc", diagCmd)
-		t.Logf("guest network diagnostics exit=%d err=%v:\n%s", diagExitCode, diagErr, diagOutput)
-		t.Logf("host iptables diagnostics:\n%s", hostNetworkDiagnostics(alloc.TAPDevice))
-	}
 	require.Equal(t, 0, exitCode)
 	require.Contains(t, output, "Connection successful")
 

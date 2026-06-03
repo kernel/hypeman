@@ -144,18 +144,6 @@ func TestEgressProxyRewritesHTTPSHeaders(t *testing.T) {
 	)
 	probeOutput, probeExitCode, err := execCommand(ctx, inst, "sh", "-lc", probeCmd)
 	require.NoError(t, err)
-	if probeExitCode != 0 {
-		if conn, dialErr := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", alloc.Gateway, egressproxy.DefaultListenPort), 2*time.Second); dialErr != nil {
-			t.Logf("host cannot dial egress proxy on gateway: %v", dialErr)
-		} else {
-			_ = conn.Close()
-			t.Logf("host can dial egress proxy on gateway")
-		}
-		diagCmd := fmt.Sprintf("cat /proc/net/route; cat /proc/net/arp; ip addr 2>&1 || true; ip route 2>&1 || true; ping -c1 -W1 %s 2>&1 || true; nc -vz -w2 %s %d 2>&1 || true", alloc.Gateway, alloc.Gateway, egressproxy.DefaultListenPort)
-		diagOutput, diagExitCode, diagErr := execCommand(ctx, inst, "sh", "-lc", diagCmd)
-		t.Logf("guest network diagnostics exit=%d err=%v:\n%s", diagExitCode, diagErr, diagOutput)
-		t.Logf("host iptables diagnostics:\n%s", hostNetworkDiagnostics(alloc.TAPDevice))
-	}
 	require.Equal(t, 0, probeExitCode, "curl output: %s", probeOutput)
 	require.Equal(t, "proxy-ok", strings.TrimSpace(probeOutput))
 
