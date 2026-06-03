@@ -113,7 +113,9 @@ func createNginxImageAndWait(t *testing.T, ctx context.Context, imageManager ima
 func startGatewayProbeServer(t *testing.T, gatewayIP string) (string, func()) {
 	t.Helper()
 
-	listener, err := net.Listen("tcp", net.JoinHostPort(gatewayIP, "0"))
+	listener, err := net.Listen("tcp", net.JoinHostPort("0.0.0.0", "0"))
+	require.NoError(t, err)
+	_, port, err := net.SplitHostPort(listener.Addr().String())
 	require.NoError(t, err)
 
 	mux := http.NewServeMux()
@@ -132,7 +134,7 @@ func startGatewayProbeServer(t *testing.T, gatewayIP string) (string, func()) {
 		_ = server.Shutdown(shutdownCtx)
 	}
 
-	return fmt.Sprintf("http://%s/probe", listener.Addr().String()), cleanup
+	return fmt.Sprintf("http://%s/probe", net.JoinHostPort(gatewayIP, port)), cleanup
 }
 
 func TestFirecrackerStandbyAndRestore(t *testing.T) {
