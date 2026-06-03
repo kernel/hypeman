@@ -224,6 +224,10 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 			return nil, false, err
 		}
 	}
+	targetState, err := resolveForkTargetState(req.TargetState, source.State)
+	if err != nil {
+		return nil, err
+	}
 	if err := validateForkVolumeSafety(stored.Volumes); err != nil {
 		return nil, false, err
 	}
@@ -283,6 +287,7 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 	forkMeta.RestartStatus = restartpolicy.Status{}
 	forkMeta.FirecrackerUFFDSessionID = ""
 	forkMeta.FirecrackerUFFDPagerVersion = ""
+	forkMeta.FirecrackerUseUFFDOnNextRestore = useFirecrackerUFFDOnNextRestore(forkMeta.HypervisorType, source.State == StateStandby, targetState)
 	if source.State != StateStandby {
 		forkMeta.FirecrackerSnapshotCacheKey = ""
 	}
@@ -490,6 +495,10 @@ func (m *manager) applyForkTargetState(ctx context.Context, forkID string, targe
 				return nil, fmt.Errorf("load stopped fork metadata: %w", err)
 			}
 			meta.StoredMetadata.VsockCID = generateVsockCID(forkID)
+			meta.StoredMetadata.FirecrackerSnapshotCacheKey = ""
+			meta.StoredMetadata.FirecrackerUseUFFDOnNextRestore = false
+			meta.StoredMetadata.FirecrackerUFFDSessionID = ""
+			meta.StoredMetadata.FirecrackerUFFDPagerVersion = ""
 			if err := m.saveMetadata(meta); err != nil {
 				return nil, fmt.Errorf("save stopped fork metadata: %w", err)
 			}
