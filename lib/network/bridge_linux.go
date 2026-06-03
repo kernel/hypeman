@@ -744,6 +744,7 @@ func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName strin
 			Name: tapName,
 		},
 		Mode:  netlink.TUNTAP_MODE_TAP,
+		Flags: netlink.TUNTAP_DEFAULTS | netlink.TUNTAP_VNET_HDR,
 		Owner: uint32(uid),
 		Group: uint32(gid),
 	}
