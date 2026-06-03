@@ -141,7 +141,6 @@ func (m *manager) startInstance(
 			})
 		}
 	}
-	ensureGuestInitiatedResumeNetworkMailbox(stored)
 
 	// 4b. Recreate vGPU mdev if this instance had a GPU profile
 	// Note: GPU availability was already validated in step 2b

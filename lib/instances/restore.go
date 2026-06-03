@@ -248,14 +248,6 @@ func (m *manager) restoreInstance(
 		proxyRegistered = true
 	}
 
-	resumeNetworkHandoff, err := m.prepareResumeNetworkHandoff(ctx, stored, allocatedNet, snapshotDir)
-	if err != nil {
-		log.ErrorContext(ctx, "failed to prepare guest resume network handoff", "instance_id", id, "error", err)
-		releaseNetwork()
-		return nil, fmt.Errorf("prepare guest resume network handoff: %w", err)
-	}
-	defer resumeNetworkHandoff.Close()
-
 	// 5. Transition: Standby → Paused (start hypervisor + restore)
 	restoreCtx, restoreSpanEnd := m.startLifecycleStep(ctx, "restore_from_snapshot",
 		attribute.String("instance_id", id),
@@ -310,15 +302,15 @@ func (m *manager) restoreInstance(
 			attribute.String("hypervisor", string(stored.HypervisorType)),
 			attribute.String("operation", "reconfigure_guest_network"),
 		)
-		reconfigureErr := resumeNetworkHandoff.AfterResume(reconfigureCtx)
-		reconfigureSpanEnd(reconfigureErr)
-		if reconfigureErr != nil {
-			log.ErrorContext(ctx, "failed to configure guest network after restore", "instance_id", id, "error", reconfigureErr)
+		if err := reconfigureGuestNetwork(reconfigureCtx, stored, allocatedNet); err != nil {
+			reconfigureSpanEnd(err)
+			log.ErrorContext(ctx, "failed to configure guest network after restore", "instance_id", id, "error", err)
 			_ = hv.Shutdown(ctx)
 			m.rollbackAdmissionAllocationActive(stored)
 			releaseNetwork()
-			return nil, fmt.Errorf("configure guest network after restore: %w", reconfigureErr)
+			return nil, fmt.Errorf("configure guest network after restore: %w", err)
 		}
+		reconfigureSpanEnd(nil)
 	}
 
 	// 8. Delete snapshot after successful restore unless the hypervisor is keeping it

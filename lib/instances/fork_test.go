@@ -319,24 +319,6 @@ func TestApplyForkTargetStateStoppedRefreshesSnapshotForkCID(t *testing.T) {
 	assert.Equal(t, generateVsockCID(forkID), updated.StoredMetadata.VsockCID)
 }
 
-func TestForkReturnReadinessDoesNotUseMailboxEligibility(t *testing.T) {
-	t.Parallel()
-
-	stored := StoredMetadata{
-		HypervisorType: hypervisor.TypeFirecracker,
-		NetworkEnabled: true,
-	}
-	ensureGuestInitiatedResumeNetworkMailbox(&stored)
-	require.True(t, guestInitiatedResumeNetworkMailbox(&stored))
-
-	inst := &Instance{
-		StoredMetadata: stored,
-		State:          StateInitializing,
-	}
-	assert.True(t, forkReturnNeedsGuestAgentReady(inst, false))
-	assert.False(t, forkReturnNeedsGuestAgentReady(inst, true))
-}
-
 func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 	t.Parallel()
 	startedAt := time.Now().Add(-2 * time.Minute)
