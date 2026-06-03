@@ -790,6 +790,7 @@ func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName strin
 	if err != nil {
 		return fmt.Errorf("attach TAP to bridge: %w", err)
 	}
+	disableTXChecksum(ctx, tapName)
 
 	// 5. Enable port isolation so isolated TAPs can't directly talk to each other (requires kernel support and capabilities)
 	if isolated {
@@ -805,6 +806,13 @@ func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName strin
 	}
 
 	return nil
+}
+
+func (m *manager) ApplyTAPChecksumSettings(ctx context.Context, tapName string) {
+	if tapName == "" {
+		return
+	}
+	disableTXChecksum(ctx, tapName)
 }
 
 // applyDownloadRateLimit applies download (external→VM) rate limiting using TBF on TAP egress.

@@ -41,6 +41,8 @@ func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName strin
 	return nil
 }
 
+func (m *manager) ApplyTAPChecksumSettings(ctx context.Context, tapName string) {}
+
 func (m *manager) applyDownloadRateLimit(ctx context.Context, tapName string, rateLimitBps int64) error {
 	return nil
 }
