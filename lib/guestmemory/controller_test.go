@@ -47,9 +47,11 @@ func (s *stubHypervisor) Shutdown(ctx context.Context) error { return nil }
 func (s *stubHypervisor) GetVMInfo(ctx context.Context) (*hypervisor.VMInfo, error) {
 	return &hypervisor.VMInfo{State: hypervisor.StateRunning}, nil
 }
-func (s *stubHypervisor) Pause(ctx context.Context) error                     { return nil }
-func (s *stubHypervisor) Resume(ctx context.Context) error                    { return nil }
-func (s *stubHypervisor) Snapshot(ctx context.Context, destPath string) error { return nil }
+func (s *stubHypervisor) Pause(ctx context.Context) error  { return nil }
+func (s *stubHypervisor) Resume(ctx context.Context) error { return nil }
+func (s *stubHypervisor) Snapshot(ctx context.Context, destPath string, _ hypervisor.SnapshotOptions) error {
+	return nil
+}
 func (s *stubHypervisor) ResizeMemory(ctx context.Context, bytes int64) error { return nil }
 func (s *stubHypervisor) ResizeMemoryAndWait(ctx context.Context, bytes int64, timeout time.Duration) error {
 	return nil

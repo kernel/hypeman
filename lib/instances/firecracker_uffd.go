@@ -11,7 +11,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/kernel/hypeman/lib/forkvm"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/uffdpager"
@@ -82,28 +81,6 @@ func (m *manager) refreshFirecrackerSnapshotCacheKey(stored *StoredMetadata, sna
 		return err
 	}
 	stored.FirecrackerSnapshotCacheKey = key
-	return nil
-}
-
-func (m *manager) materializeDeferredFirecrackerSnapshotMemory(ctx context.Context, stored *StoredMetadata, snapshotDir string) error {
-	if stored == nil || stored.HypervisorType != hypervisor.TypeFirecracker {
-		return nil
-	}
-	sourcePath := strings.TrimSpace(stored.FirecrackerDeferredSnapshotMemoryPath)
-	if sourcePath == "" {
-		return nil
-	}
-	targetPath := filepath.Join(snapshotDir, "memory")
-	if _, err := os.Stat(targetPath); err == nil {
-		stored.FirecrackerDeferredSnapshotMemoryPath = ""
-		return nil
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("stat deferred firecracker snapshot memory target: %w", err)
-	}
-	if err := forkvm.CopyRegularFile(sourcePath, targetPath); err != nil {
-		return fmt.Errorf("materialize deferred firecracker snapshot memory: %w", err)
-	}
-	stored.FirecrackerDeferredSnapshotMemoryPath = ""
 	return nil
 }
 

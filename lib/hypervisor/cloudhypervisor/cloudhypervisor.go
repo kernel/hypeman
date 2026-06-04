@@ -160,7 +160,7 @@ func (c *CloudHypervisor) Resume(ctx context.Context) error {
 }
 
 // Snapshot creates a VM snapshot.
-func (c *CloudHypervisor) Snapshot(ctx context.Context, destPath string) error {
+func (c *CloudHypervisor) Snapshot(ctx context.Context, destPath string, _ hypervisor.SnapshotOptions) error {
 	snapshotURL := "file://" + destPath
 	snapshotConfig := vmm.VmSnapshotConfig{DestinationUrl: &snapshotURL}
 	resp, err := c.client.PutVmSnapshotWithResponse(ctx, snapshotConfig)

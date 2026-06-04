@@ -139,25 +139,6 @@ func (m *manager) standbyInstance(
 			return nil, fmt.Errorf("prepare retained snapshot target: %w", err)
 		}
 	}
-	materializeCtx, materializeSpanEnd := m.startLifecycleStep(ctx, "materialize_snapshot_memory_base",
-		attribute.String("instance_id", id),
-		attribute.String("hypervisor", string(stored.HypervisorType)),
-		attribute.String("operation", "materialize_snapshot_memory_base"),
-	)
-	if err := m.materializeDeferredFirecrackerSnapshotMemory(materializeCtx, stored, snapshotDir); err != nil {
-		materializeSpanEnd(err)
-		if resumeErr := hv.Resume(ctx); resumeErr != nil {
-			log.ErrorContext(ctx, "failed to resume VM after deferred snapshot memory materialization error", "instance_id", id, "error", resumeErr)
-		}
-		if promotedExistingBase {
-			if rollbackErr := discardPromotedRetainedSnapshotTarget(snapshotDir); rollbackErr != nil {
-				log.WarnContext(ctx, "failed to discard promoted snapshot target after materialization error", "instance_id", id, "error", rollbackErr)
-			}
-		}
-		return nil, fmt.Errorf("materialize deferred snapshot memory base: %w", err)
-	}
-	materializeSpanEnd(nil)
-
 	log.DebugContext(ctx, "creating snapshot", "instance_id", id, "snapshot_dir", snapshotDir)
 	snapshotCtx, snapshotSpanEnd := m.startLifecycleStep(ctx, "create_snapshot",
 		attribute.String("instance_id", id),
@@ -165,7 +146,11 @@ func (m *manager) standbyInstance(
 		attribute.String("operation", "create_snapshot"),
 		attribute.Bool("reuse_snapshot_base", reuseSnapshotBase),
 	)
-	if err := createSnapshot(snapshotCtx, hv, snapshotDir, reuseSnapshotBase); err != nil {
+	snapshotOptions := hypervisor.SnapshotOptions{}
+	if stored.HypervisorType == hypervisor.TypeFirecracker {
+		snapshotOptions.DeferredMemoryBackingPath = stored.FirecrackerDeferredSnapshotMemoryPath
+	}
+	if err := createSnapshot(snapshotCtx, hv, snapshotDir, reuseSnapshotBase, snapshotOptions); err != nil {
 		snapshotSpanEnd(err)
 		// Snapshot failed - try to resume VM
 		log.ErrorContext(ctx, "snapshot failed, attempting to resume VM", "instance_id", id, "error", err)
@@ -295,7 +280,7 @@ func (m *manager) standbyInstance(
 }
 
 // createSnapshot creates a snapshot using the hypervisor interface
-func createSnapshot(ctx context.Context, hv hypervisor.Hypervisor, snapshotDir string, reuseSnapshotBase bool) error {
+func createSnapshot(ctx context.Context, hv hypervisor.Hypervisor, snapshotDir string, reuseSnapshotBase bool, opts hypervisor.SnapshotOptions) error {
 	log := logger.FromContext(ctx)
 
 	// Remove old snapshot if the hypervisor does not support reusing snapshots
@@ -311,7 +296,7 @@ func createSnapshot(ctx context.Context, hv hypervisor.Hypervisor, snapshotDir s
 
 	// Create snapshot via hypervisor API
 	log.DebugContext(ctx, "invoking hypervisor snapshot API", "snapshot_dir", snapshotDir)
-	if err := hv.Snapshot(ctx, snapshotDir); err != nil {
+	if err := hv.Snapshot(ctx, snapshotDir, opts); err != nil {
 		return fmt.Errorf("snapshot: %w", err)
 	}
 

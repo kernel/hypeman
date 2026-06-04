@@ -131,13 +131,18 @@ jobs:
           TLS_ALLOWED_DOMAINS: '*.hypeman-development.com'
           HYPEMAN_TEST_PREWARM_STRICT: "1"
           HYPEMAN_TEST_REGISTRY: 127.0.0.1:5001
+          HYPEMAN_UFFD_PAGER_BINARY: ${{ runner.temp }}/hypeman-uffd-pager-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
+          cp "$PWD/bin/hypeman-uffd-pager" "$HYPEMAN_UFFD_PAGER_BINARY"
+          chmod +x "$HYPEMAN_UFFD_PAGER_BINARY"
           export HYPEMAN_TEST_PREWARM_DIR="$HOME/.cache/hypeman-ci/linux-amd64"
           make test TEST_TIMEOUT=20m
 
       - name: Cleanup
         if: always()
-        run: sudo rm -rf "/tmp/hm-net-${{ github.run_id }}-${{ github.run_attempt }}"
+        run: |
+          sudo rm -rf "/tmp/hm-net-${{ github.run_id }}-${{ github.run_attempt }}"
+          rm -f "${{ runner.temp }}/hypeman-uffd-pager-${{ github.run_id }}-${{ github.run_attempt }}"
 
   test-darwin:
     runs-on: [self-hosted, macos, arm64]

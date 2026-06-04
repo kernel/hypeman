@@ -249,7 +249,7 @@ func (c *Client) Resume(ctx context.Context) error {
 	return c.doPut(ctx, "/api/v1/vm.resume", nil)
 }
 
-func (c *Client) Snapshot(ctx context.Context, destPath string) error {
+func (c *Client) Snapshot(ctx context.Context, destPath string, _ hypervisor.SnapshotOptions) error {
 	req := snapshotRequest{DestinationPath: destPath}
 	body, err := json.Marshal(req)
 	if err != nil {

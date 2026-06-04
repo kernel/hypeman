@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kernel/hypeman/lib/forkvm"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -112,13 +113,33 @@ func (f *Firecracker) Resume(ctx context.Context) error {
 	return nil
 }
 
-func (f *Firecracker) Snapshot(ctx context.Context, destPath string) error {
+func (f *Firecracker) Snapshot(ctx context.Context, destPath string, opts hypervisor.SnapshotOptions) error {
 	if err := os.MkdirAll(destPath, 0755); err != nil {
 		return fmt.Errorf("create snapshot directory: %w", err)
+	}
+	if err := materializeDeferredSnapshotMemory(destPath, opts.DeferredMemoryBackingPath); err != nil {
+		return err
 	}
 	params := toSnapshotCreateParams(destPath)
 	if _, err := f.do(ctx, http.MethodPut, "/snapshot/create", params, http.StatusNoContent); err != nil {
 		return fmt.Errorf("create snapshot: %w", err)
+	}
+	return nil
+}
+
+func materializeDeferredSnapshotMemory(destPath, sourcePath string) error {
+	sourcePath = strings.TrimSpace(sourcePath)
+	if sourcePath == "" {
+		return nil
+	}
+	targetPath := filepath.Join(destPath, "memory")
+	if _, err := os.Stat(targetPath); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("stat deferred snapshot memory target: %w", err)
+	}
+	if err := forkvm.CopyRegularFile(sourcePath, targetPath); err != nil {
+		return fmt.Errorf("materialize deferred snapshot memory: %w", err)
 	}
 	return nil
 }

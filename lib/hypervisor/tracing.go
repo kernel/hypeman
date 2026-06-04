@@ -217,14 +217,14 @@ func (h *tracingHypervisor) Resume(ctx context.Context) (err error) {
 	return h.next.Resume(ctx)
 }
 
-func (h *tracingHypervisor) Snapshot(ctx context.Context, destPath string) (err error) {
+func (h *tracingHypervisor) Snapshot(ctx context.Context, destPath string, opts SnapshotOptions) (err error) {
 	ctx, span := startTraceSpan(ctx, h.tracer, "hypervisor.snapshot",
 		h.spanAttrs(
 			attribute.String("operation", "snapshot"),
 		)...,
 	)
 	defer func() { finishTraceSpan(span, err) }()
-	return h.next.Snapshot(ctx, destPath)
+	return h.next.Snapshot(ctx, destPath, opts)
 }
 
 func (h *tracingHypervisor) ResizeMemory(ctx context.Context, bytes int64) (err error) {

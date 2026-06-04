@@ -1,12 +1,10 @@
 package instances
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
 
-	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -59,24 +57,4 @@ func TestPrepareRetainedSnapshotTargetDiscardsStaleSnapshotDirBeforeRetry(t *tes
 
 	_, err = os.Stat(retainedBaseDir)
 	assert.True(t, os.IsNotExist(err), "cleanup without a retained base should leave the retained base location empty")
-}
-
-func TestMaterializeDeferredFirecrackerSnapshotMemory(t *testing.T) {
-	t.Parallel()
-
-	mgr, _ := setupTestManager(t)
-	sourcePath := filepath.Join(t.TempDir(), "source-memory")
-	snapshotDir := filepath.Join(t.TempDir(), "snapshot-latest")
-	require.NoError(t, os.WriteFile(sourcePath, []byte("memory"), 0644))
-
-	stored := &StoredMetadata{
-		HypervisorType:                        hypervisor.TypeFirecracker,
-		FirecrackerDeferredSnapshotMemoryPath: sourcePath,
-	}
-	require.NoError(t, mgr.materializeDeferredFirecrackerSnapshotMemory(context.Background(), stored, snapshotDir))
-
-	got, err := os.ReadFile(filepath.Join(snapshotDir, "memory"))
-	require.NoError(t, err)
-	assert.Equal(t, []byte("memory"), got)
-	assert.Empty(t, stored.FirecrackerDeferredSnapshotMemoryPath)
 }

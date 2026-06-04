@@ -296,7 +296,7 @@ func (oneShotFirecrackerTestHypervisor) Resume(context.Context) error {
 	return nil
 }
 
-func (oneShotFirecrackerTestHypervisor) Snapshot(context.Context, string) error {
+func (oneShotFirecrackerTestHypervisor) Snapshot(context.Context, string, hypervisor.SnapshotOptions) error {
 	return nil
 }
 
