@@ -221,8 +221,7 @@ func (m *manager) standbyInstance(
 	stored.StoppedAt = &now
 	stored.HypervisorPID = nil
 	stored.PendingStandbyCompression = nil
-	stored.FirecrackerUseUFFDOnNextRestore = false
-	stored.FirecrackerDeferredSnapshotMemoryPath = ""
+	clearFirecrackerUFFDRestoreState(stored)
 	if err := m.refreshFirecrackerSnapshotCacheKey(stored, snapshotDir); err != nil {
 		log.WarnContext(ctx, "failed to refresh firecracker snapshot cache key", "instance_id", id, "error", err)
 	}

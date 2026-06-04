@@ -549,9 +549,7 @@ func (m *manager) applyForkTargetState(ctx context.Context, forkID string, targe
 			}
 			meta.StoredMetadata.VsockCID = generateVsockCID(forkID)
 			meta.StoredMetadata.FirecrackerSnapshotCacheKey = ""
-			meta.StoredMetadata.FirecrackerUseUFFDOnNextRestore = false
-			meta.StoredMetadata.FirecrackerUFFDSessionID = ""
-			meta.StoredMetadata.FirecrackerUFFDPagerVersion = ""
+			clearFirecrackerUFFDRestoreState(&meta.StoredMetadata)
 			if err := m.saveMetadata(meta); err != nil {
 				return nil, fmt.Errorf("save stopped fork metadata: %w", err)
 			}

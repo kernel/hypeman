@@ -33,6 +33,16 @@ func (m *manager) shouldDeferFirecrackerSnapshotMemoryCopy(stored *StoredMetadat
 	return m.useFirecrackerUFFD(stored) && useFirecrackerUFFDOnNextRestore(stored.HypervisorType, sourceIsStandby, targetState)
 }
 
+func clearFirecrackerUFFDRestoreState(stored *StoredMetadata) {
+	if stored == nil {
+		return
+	}
+	stored.FirecrackerUseUFFDOnNextRestore = false
+	stored.FirecrackerUFFDSessionID = ""
+	stored.FirecrackerUFFDPagerVersion = ""
+	stored.FirecrackerDeferredSnapshotMemoryPath = ""
+}
+
 func firecrackerSnapshotMemoryPathInGuestDir(guestDir string) string {
 	return filepath.Join(guestDir, firecrackerSnapshotMemoryRelPath)
 }
@@ -117,8 +127,7 @@ func (m *manager) firecrackerSnapshotRestoreOptions(stored *StoredMetadata, snap
 		return opts, nil
 	}
 	if !m.useFirecrackerUFFD(stored) || !stored.FirecrackerUseUFFDOnNextRestore {
-		stored.FirecrackerUFFDSessionID = ""
-		stored.FirecrackerUFFDPagerVersion = ""
+		clearFirecrackerUFFDRestoreState(stored)
 		return opts, nil
 	}
 	if m.firecrackerUFFDPager == nil {

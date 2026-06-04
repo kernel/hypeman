@@ -318,9 +318,7 @@ func (m *manager) restoreSnapshot(ctx context.Context, id string, snapshotID str
 	}
 	restored.SocketPath = m.paths.InstanceSocket(id, starter.SocketName())
 	restored.VsockSocket = m.paths.InstanceSocket(id, hypervisor.VsockSocketNameForType(targetHypervisor))
-	restored.FirecrackerUseUFFDOnNextRestore = false
-	restored.FirecrackerUFFDSessionID = ""
-	restored.FirecrackerUFFDPagerVersion = ""
+	clearFirecrackerUFFDRestoreState(&restored)
 	if targetState == StateStopped {
 		restored.FirecrackerSnapshotCacheKey = ""
 	}
