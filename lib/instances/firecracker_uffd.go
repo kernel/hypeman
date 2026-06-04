@@ -11,10 +11,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/kernel/hypeman/lib/forkvm"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/uffdpager"
 )
+
+const firecrackerSnapshotMemoryRelPath = "snapshots/snapshot-latest/memory"
 
 func (m *manager) useFirecrackerUFFD(stored *StoredMetadata) bool {
 	return stored != nil &&
@@ -24,6 +27,14 @@ func (m *manager) useFirecrackerUFFD(stored *StoredMetadata) bool {
 
 func useFirecrackerUFFDOnNextRestore(hvType hypervisor.Type, sourceIsStandby bool, targetState State) bool {
 	return hvType == hypervisor.TypeFirecracker && sourceIsStandby && targetState != StateStopped
+}
+
+func (m *manager) shouldDeferFirecrackerSnapshotMemoryCopy(stored *StoredMetadata, sourceIsStandby bool, targetState State) bool {
+	return m.useFirecrackerUFFD(stored) && useFirecrackerUFFDOnNextRestore(stored.HypervisorType, sourceIsStandby, targetState)
+}
+
+func firecrackerSnapshotMemoryPathInGuestDir(guestDir string) string {
+	return filepath.Join(guestDir, firecrackerSnapshotMemoryRelPath)
 }
 
 func (m *manager) firecrackerSnapshotRestoreOptions(stored *StoredMetadata, snapshotDir string) (hypervisor.RestoreOptions, error) {
@@ -40,10 +51,14 @@ func (m *manager) firecrackerSnapshotRestoreOptions(stored *StoredMetadata, snap
 		return opts, fmt.Errorf("firecracker uffd snapshot restore is enabled but the pager is not configured")
 	}
 
+	backingMemoryPath := strings.TrimSpace(stored.FirecrackerDeferredSnapshotMemoryPath)
+	if backingMemoryPath == "" {
+		backingMemoryPath = filepath.Join(snapshotDir, "memory")
+	}
 	cacheKey := strings.TrimSpace(stored.FirecrackerSnapshotCacheKey)
 	if cacheKey == "" {
 		var err error
-		cacheKey, err = firecrackerSnapshotCacheKey(stored, snapshotDir)
+		cacheKey, err = firecrackerSnapshotCacheKeyForPaths(stored, backingMemoryPath, filepath.Join(snapshotDir, "state"))
 		if err != nil {
 			return opts, err
 		}
@@ -52,6 +67,7 @@ func (m *manager) firecrackerSnapshotRestoreOptions(stored *StoredMetadata, snap
 	stored.FirecrackerUFFDSessionID = stored.Id
 	stored.FirecrackerUFFDPagerVersion = m.firecrackerUFFDPager.VersionKey()
 	opts.SnapshotMemoryBackend = hypervisor.SnapshotMemoryBackendUFFD
+	opts.SnapshotMemoryBackingPath = backingMemoryPath
 	opts.SnapshotMemoryCacheKey = cacheKey
 	opts.SnapshotMemorySessionID = stored.FirecrackerUFFDSessionID
 	return opts, nil
@@ -66,6 +82,28 @@ func (m *manager) refreshFirecrackerSnapshotCacheKey(stored *StoredMetadata, sna
 		return err
 	}
 	stored.FirecrackerSnapshotCacheKey = key
+	return nil
+}
+
+func (m *manager) materializeDeferredFirecrackerSnapshotMemory(ctx context.Context, stored *StoredMetadata, snapshotDir string) error {
+	if stored == nil || stored.HypervisorType != hypervisor.TypeFirecracker {
+		return nil
+	}
+	sourcePath := strings.TrimSpace(stored.FirecrackerDeferredSnapshotMemoryPath)
+	if sourcePath == "" {
+		return nil
+	}
+	targetPath := filepath.Join(snapshotDir, "memory")
+	if _, err := os.Stat(targetPath); err == nil {
+		stored.FirecrackerDeferredSnapshotMemoryPath = ""
+		return nil
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("stat deferred firecracker snapshot memory target: %w", err)
+	}
+	if err := forkvm.CopyRegularFile(sourcePath, targetPath); err != nil {
+		return fmt.Errorf("materialize deferred firecracker snapshot memory: %w", err)
+	}
+	stored.FirecrackerDeferredSnapshotMemoryPath = ""
 	return nil
 }
 
@@ -120,11 +158,15 @@ func (m *manager) checkFirecrackerUFFDSessionHealth(ctx context.Context, stored 
 }
 
 func firecrackerSnapshotCacheKey(stored *StoredMetadata, snapshotDir string) (string, error) {
-	memoryInfo, err := os.Stat(filepath.Join(snapshotDir, "memory"))
+	return firecrackerSnapshotCacheKeyForPaths(stored, filepath.Join(snapshotDir, "memory"), filepath.Join(snapshotDir, "state"))
+}
+
+func firecrackerSnapshotCacheKeyForPaths(stored *StoredMetadata, memoryPath string, statePath string) (string, error) {
+	memoryInfo, err := os.Stat(memoryPath)
 	if err != nil {
 		return "", fmt.Errorf("stat firecracker snapshot memory for uffd cache key: %w", err)
 	}
-	stateInfo, err := os.Stat(filepath.Join(snapshotDir, "state"))
+	stateInfo, err := os.Stat(statePath)
 	if err != nil {
 		return "", fmt.Errorf("stat firecracker snapshot state for uffd cache key: %w", err)
 	}

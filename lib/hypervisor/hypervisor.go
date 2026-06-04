@@ -132,9 +132,10 @@ const (
 )
 
 type RestoreOptions struct {
-	SnapshotMemoryBackend   SnapshotMemoryBackend
-	SnapshotMemoryCacheKey  string
-	SnapshotMemorySessionID string
+	SnapshotMemoryBackend     SnapshotMemoryBackend
+	SnapshotMemoryBackingPath string
+	SnapshotMemoryCacheKey    string
+	SnapshotMemorySessionID   string
 }
 
 // ForkNetworkConfig contains network identity fields for fork preparation.

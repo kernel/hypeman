@@ -256,13 +256,17 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 
 	srcDir := m.paths.InstanceDir(id)
 	dstDir := m.paths.InstanceDir(forkID)
+	deferredSnapshotMemoryPath := ""
+	if m.shouldDeferFirecrackerSnapshotMemoryCopy(stored, source.State == StateStandby, targetState) {
+		deferredSnapshotMemoryPath = firecrackerSnapshotMemoryPathInGuestDir(srcDir)
+	}
 
 	cu := cleanup.Make(func() {
 		_ = os.RemoveAll(dstDir)
 	})
 	defer cu.Clean()
 
-	if err := m.copyForkSourceGuestDirectory(ctx, source.State, id, stored, srcDir, dstDir); err != nil {
+	if err := m.copyForkSourceGuestDirectory(ctx, source.State, id, stored, srcDir, dstDir, deferredSnapshotMemoryPath); err != nil {
 		return nil, false, err
 	}
 
@@ -288,8 +292,10 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 	forkMeta.FirecrackerUFFDSessionID = ""
 	forkMeta.FirecrackerUFFDPagerVersion = ""
 	forkMeta.FirecrackerUseUFFDOnNextRestore = useFirecrackerUFFDOnNextRestore(forkMeta.HypervisorType, source.State == StateStandby, targetState)
+	forkMeta.FirecrackerDeferredSnapshotMemoryPath = deferredSnapshotMemoryPath
 	if source.State != StateStandby {
 		forkMeta.FirecrackerSnapshotCacheKey = ""
+		forkMeta.FirecrackerDeferredSnapshotMemoryPath = ""
 	}
 	// Forks are new instances; phase accounting must not inherit the source's
 	// cumulative durations. The first transition into the fork's runtime

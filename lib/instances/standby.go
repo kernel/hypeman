@@ -139,6 +139,25 @@ func (m *manager) standbyInstance(
 			return nil, fmt.Errorf("prepare retained snapshot target: %w", err)
 		}
 	}
+	materializeCtx, materializeSpanEnd := m.startLifecycleStep(ctx, "materialize_snapshot_memory_base",
+		attribute.String("instance_id", id),
+		attribute.String("hypervisor", string(stored.HypervisorType)),
+		attribute.String("operation", "materialize_snapshot_memory_base"),
+	)
+	if err := m.materializeDeferredFirecrackerSnapshotMemory(materializeCtx, stored, snapshotDir); err != nil {
+		materializeSpanEnd(err)
+		if resumeErr := hv.Resume(ctx); resumeErr != nil {
+			log.ErrorContext(ctx, "failed to resume VM after deferred snapshot memory materialization error", "instance_id", id, "error", resumeErr)
+		}
+		if promotedExistingBase {
+			if rollbackErr := discardPromotedRetainedSnapshotTarget(snapshotDir); rollbackErr != nil {
+				log.WarnContext(ctx, "failed to discard promoted snapshot target after materialization error", "instance_id", id, "error", rollbackErr)
+			}
+		}
+		return nil, fmt.Errorf("materialize deferred snapshot memory base: %w", err)
+	}
+	materializeSpanEnd(nil)
+
 	log.DebugContext(ctx, "creating snapshot", "instance_id", id, "snapshot_dir", snapshotDir)
 	snapshotCtx, snapshotSpanEnd := m.startLifecycleStep(ctx, "create_snapshot",
 		attribute.String("instance_id", id),
@@ -218,6 +237,7 @@ func (m *manager) standbyInstance(
 	stored.HypervisorPID = nil
 	stored.PendingStandbyCompression = nil
 	stored.FirecrackerUseUFFDOnNextRestore = false
+	stored.FirecrackerDeferredSnapshotMemoryPath = ""
 	if err := m.refreshFirecrackerSnapshotCacheKey(stored, snapshotDir); err != nil {
 		log.WarnContext(ctx, "failed to refresh firecracker snapshot cache key", "instance_id", id, "error", err)
 	}

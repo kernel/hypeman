@@ -142,10 +142,14 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 		if sessionID == "" {
 			sessionID = filepath.Base(filepath.Dir(socketPath))
 		}
+		backingMemoryPath := strings.TrimSpace(opts.SnapshotMemoryBackingPath)
+		if backingMemoryPath == "" {
+			backingMemoryPath = snapshotMemoryPath(snapshotPath)
+		}
 		resp, err := s.uffd.CreateSession(ctx, uffdpager.CreateSessionRequest{
 			SessionID:         sessionID,
 			InstanceID:        sessionID,
-			BackingMemoryPath: snapshotMemoryPath(snapshotPath),
+			BackingMemoryPath: backingMemoryPath,
 			CacheKey:          opts.SnapshotMemoryCacheKey,
 		})
 		if err != nil {

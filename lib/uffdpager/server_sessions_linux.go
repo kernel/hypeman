@@ -25,6 +25,12 @@ func (s *server) createSession(req CreateSessionRequest) (*session, error) {
 	if err != nil {
 		return nil, fmt.Errorf("listen for uffd session %s: %w", id, err)
 	}
+	backingFile, err := os.Open(req.BackingMemoryPath)
+	if err != nil {
+		_ = listener.Close()
+		_ = os.Remove(socketPath)
+		return nil, fmt.Errorf("open backing memory for uffd session %s: %w", id, err)
+	}
 
 	sess := &session{
 		id:                id,
@@ -35,6 +41,7 @@ func (s *server) createSession(req CreateSessionRequest) (*session, error) {
 		listener:          listener,
 		server:            s,
 		done:              make(chan struct{}),
+		backingFile:       backingFile,
 		uffdFD:            -1,
 	}
 
@@ -109,12 +116,14 @@ func (s *session) run() {
 	}
 	s.conn = conn
 
-	file, err := os.Open(s.backingMemoryPath)
-	if err != nil {
-		log.Printf("uffd session %s open backing memory: %v", s.id, err)
-		return
+	if s.backingFile == nil {
+		file, err := os.Open(s.backingMemoryPath)
+		if err != nil {
+			log.Printf("uffd session %s open backing memory: %v", s.id, err)
+			return
+		}
+		s.backingFile = file
 	}
-	s.backingFile = file
 
 	mappings, uffdFD, err := recvMappingsAndFD(conn)
 	if err != nil {

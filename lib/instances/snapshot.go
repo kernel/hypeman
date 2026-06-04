@@ -419,7 +419,14 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 	if target != nil && target.State == compressionJobStateRunning {
 		m.recordSnapshotCompressionPreemption(ctx, snapshotCompressionPreemptionForkSnapshot, target.Target)
 	}
-	if err := m.copySnapshotGuestDirectoryForFork(ctx, snapshotID, rec.StoredMetadata.HypervisorType, dstDir); err != nil {
+	snapshotGuestDir := m.paths.SnapshotGuestDir(snapshotID)
+	deferredSource := rec.StoredMetadata
+	deferredSource.HypervisorType = targetHypervisor
+	deferredSnapshotMemoryPath := ""
+	if m.shouldDeferFirecrackerSnapshotMemoryCopy(&deferredSource, rec.Snapshot.Kind == SnapshotKindStandby, targetState) {
+		deferredSnapshotMemoryPath = firecrackerSnapshotMemoryPathInGuestDir(snapshotGuestDir)
+	}
+	if err := m.copySnapshotGuestDirectoryForFork(ctx, snapshotID, rec.StoredMetadata.HypervisorType, dstDir, deferredSnapshotMemoryPath); err != nil {
 		return nil, err
 	}
 
@@ -453,8 +460,10 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 	forkMeta.FirecrackerUFFDSessionID = ""
 	forkMeta.FirecrackerUFFDPagerVersion = ""
 	forkMeta.FirecrackerUseUFFDOnNextRestore = useFirecrackerUFFDOnNextRestore(targetHypervisor, rec.Snapshot.Kind == SnapshotKindStandby, targetState)
+	forkMeta.FirecrackerDeferredSnapshotMemoryPath = deferredSnapshotMemoryPath
 	if rec.Snapshot.Kind != SnapshotKindStandby {
 		forkMeta.FirecrackerSnapshotCacheKey = ""
+		forkMeta.FirecrackerDeferredSnapshotMemoryPath = ""
 	}
 	if rec.Snapshot.Kind == SnapshotKindStandby {
 		forkMeta.VsockCID = rec.StoredMetadata.VsockCID

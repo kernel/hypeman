@@ -2,6 +2,8 @@ package instances
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -81,10 +83,13 @@ func TestForkInstanceFromStandbyArmsOneShotUFFDForFirecrackerRestore(t *testing.
 
 	sourceID := "one-shot-uffd-instance-source"
 	createStandbySnapshotSourceFixture(t, mgr, sourceID, sourceID, hypervisor.TypeFirecracker)
+	sourceMemoryPath := firecrackerSnapshotMemoryPathInGuestDir(mgr.paths.InstanceDir(sourceID))
+	require.NoError(t, os.WriteFile(sourceMemoryPath, []byte("source memory"), 0644))
 	sourceMeta, err := mgr.loadMetadata(sourceID)
 	require.NoError(t, err)
 	sourceMeta.StoredMetadata.FirecrackerSnapshotCacheKey = "shared-template-cache"
 	require.NoError(t, mgr.saveMetadata(sourceMeta))
+	mgr.firecrackerSnapshotMemoryBackend = uffdpager.BackendUFFD
 
 	forked, err := mgr.forkInstanceFromStoppedOrStandby(ctx, sourceID, ForkInstanceRequest{
 		Name:        "one-shot-uffd-instance-fork",
@@ -96,8 +101,11 @@ func TestForkInstanceFromStandbyArmsOneShotUFFDForFirecrackerRestore(t *testing.
 	require.NoError(t, err)
 	assert.True(t, meta.StoredMetadata.FirecrackerUseUFFDOnNextRestore)
 	assert.Equal(t, "shared-template-cache", meta.StoredMetadata.FirecrackerSnapshotCacheKey)
+	assert.Equal(t, sourceMemoryPath, meta.StoredMetadata.FirecrackerDeferredSnapshotMemoryPath)
 	assert.Empty(t, meta.StoredMetadata.FirecrackerUFFDSessionID)
 	assert.Empty(t, meta.StoredMetadata.FirecrackerUFFDPagerVersion)
+	assert.NoFileExists(t, firecrackerSnapshotMemoryPathInGuestDir(mgr.paths.InstanceDir(forked.Id)))
+	assert.FileExists(t, filepath.Join(mgr.paths.InstanceSnapshotLatest(forked.Id), "state"))
 }
 
 func TestForkInstanceFromStandbyDoesNotArmOneShotUFFDForStoppedTarget(t *testing.T) {
@@ -109,10 +117,13 @@ func TestForkInstanceFromStandbyDoesNotArmOneShotUFFDForStoppedTarget(t *testing
 
 	sourceID := "one-shot-uffd-instance-stopped-source"
 	createStandbySnapshotSourceFixture(t, mgr, sourceID, sourceID, hypervisor.TypeFirecracker)
+	sourceMemoryPath := firecrackerSnapshotMemoryPathInGuestDir(mgr.paths.InstanceDir(sourceID))
+	require.NoError(t, os.WriteFile(sourceMemoryPath, []byte("source memory"), 0644))
 	sourceMeta, err := mgr.loadMetadata(sourceID)
 	require.NoError(t, err)
 	sourceMeta.StoredMetadata.FirecrackerSnapshotCacheKey = "shared-template-cache"
 	require.NoError(t, mgr.saveMetadata(sourceMeta))
+	mgr.firecrackerSnapshotMemoryBackend = uffdpager.BackendUFFD
 
 	forked, err := mgr.forkInstanceFromStoppedOrStandby(ctx, sourceID, ForkInstanceRequest{
 		Name:        "one-shot-uffd-instance-stopped-fork",
@@ -124,6 +135,8 @@ func TestForkInstanceFromStandbyDoesNotArmOneShotUFFDForStoppedTarget(t *testing
 	require.NoError(t, err)
 	assert.False(t, meta.StoredMetadata.FirecrackerUseUFFDOnNextRestore)
 	assert.Equal(t, "shared-template-cache", meta.StoredMetadata.FirecrackerSnapshotCacheKey)
+	assert.Empty(t, meta.StoredMetadata.FirecrackerDeferredSnapshotMemoryPath)
+	assert.FileExists(t, firecrackerSnapshotMemoryPathInGuestDir(mgr.paths.InstanceDir(forked.Id)))
 }
 
 func TestForkSnapshotFromStandbyArmsOneShotUFFDForFirecrackerRestore(t *testing.T) {
@@ -135,10 +148,12 @@ func TestForkSnapshotFromStandbyArmsOneShotUFFDForFirecrackerRestore(t *testing.
 
 	sourceID := "one-shot-uffd-snapshot-source"
 	createStandbySnapshotSourceFixture(t, mgr, sourceID, sourceID, hypervisor.TypeFirecracker)
+	require.NoError(t, os.WriteFile(firecrackerSnapshotMemoryPathInGuestDir(mgr.paths.InstanceDir(sourceID)), []byte("source memory"), 0644))
 	sourceMeta, err := mgr.loadMetadata(sourceID)
 	require.NoError(t, err)
 	sourceMeta.StoredMetadata.FirecrackerSnapshotCacheKey = "shared-snapshot-cache"
 	require.NoError(t, mgr.saveMetadata(sourceMeta))
+	mgr.firecrackerSnapshotMemoryBackend = uffdpager.BackendUFFD
 
 	snap, err := mgr.CreateSnapshot(ctx, sourceID, CreateSnapshotRequest{
 		Kind: SnapshotKindStandby,
@@ -156,8 +171,11 @@ func TestForkSnapshotFromStandbyArmsOneShotUFFDForFirecrackerRestore(t *testing.
 	require.NoError(t, err)
 	assert.True(t, meta.StoredMetadata.FirecrackerUseUFFDOnNextRestore)
 	assert.Equal(t, "shared-snapshot-cache", meta.StoredMetadata.FirecrackerSnapshotCacheKey)
+	assert.Equal(t, firecrackerSnapshotMemoryPathInGuestDir(mgr.paths.SnapshotGuestDir(snap.Id)), meta.StoredMetadata.FirecrackerDeferredSnapshotMemoryPath)
 	assert.Empty(t, meta.StoredMetadata.FirecrackerUFFDSessionID)
 	assert.Empty(t, meta.StoredMetadata.FirecrackerUFFDPagerVersion)
+	assert.NoFileExists(t, firecrackerSnapshotMemoryPathInGuestDir(mgr.paths.InstanceDir(forked.Id)))
+	assert.FileExists(t, filepath.Join(mgr.paths.InstanceSnapshotLatest(forked.Id), "state"))
 }
 
 func TestForkSnapshotFromStoppedDoesNotArmOneShotUFFD(t *testing.T) {
