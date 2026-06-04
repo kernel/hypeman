@@ -115,6 +115,23 @@ func TestMaterializeDeferredSnapshotMemory(t *testing.T) {
 	assert.Equal(t, []byte("memory"), got)
 }
 
+func TestMaterializeDeferredSnapshotMemoryUsesRetainedSnapshotAlternate(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	sourcePath := filepath.Join(root, "snapshots", "snapshot-base", "memory")
+	alternatePath := filepath.Join(root, "snapshots", "snapshot-latest", "memory")
+	destPath := filepath.Join(t.TempDir(), "snapshot-latest")
+	require.NoError(t, os.MkdirAll(filepath.Dir(alternatePath), 0755))
+	require.NoError(t, os.WriteFile(alternatePath, []byte("memory"), 0644))
+
+	require.NoError(t, materializeDeferredSnapshotMemory(destPath, sourcePath))
+
+	got, err := os.ReadFile(filepath.Join(destPath, "memory"))
+	require.NoError(t, err)
+	assert.Equal(t, []byte("memory"), got)
+}
+
 func TestToBalloonConfig(t *testing.T) {
 	cfg := hypervisor.VMConfig{
 		GuestMemory: hypervisor.GuestMemoryConfig{

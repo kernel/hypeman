@@ -708,107 +708,149 @@ func TestFCUFFDOneShotLifecycle(t *testing.T) {
 		}
 	})
 
-	source, err = waitForInstanceState(ctx, mgr, sourceID, StateRunning, integrationTestTimeout(20*time.Second))
-	require.NoError(t, err)
+	source = requireRunningSleepInstance(t, ctx, mgr, sourceID)
 
-	source, err = mgr.StandbyInstance(ctx, sourceID, StandbyInstanceRequest{})
-	require.NoError(t, err)
-	require.Equal(t, StateStandby, source.State)
-	sourceSnapshotMemoryPath := filepath.Join(p.InstanceSnapshotLatest(sourceID), "memory")
-	require.FileExists(t, sourceSnapshotMemoryPath)
-
-	intermediate, err := mgr.ForkInstance(ctx, sourceID, ForkInstanceRequest{
-		Name:        "fc-uffd-oneshot-mid",
-		TargetState: StateStandby,
+	snapshot, err := mgr.CreateSnapshot(ctx, sourceID, CreateSnapshotRequest{
+		Kind: SnapshotKindStandby,
+		Name: "fc-uffd-oneshot-snap",
 	})
 	require.NoError(t, err)
-	intermediateID := intermediate.Id
-	intermediateDeleted := false
+	require.Equal(t, SnapshotKindStandby, snapshot.Kind)
+	snapshotDeleted := false
 	t.Cleanup(func() {
-		if !intermediateDeleted {
-			_ = mgr.DeleteInstance(context.Background(), intermediateID)
+		if !snapshotDeleted {
+			_ = mgr.DeleteSnapshot(context.Background(), snapshot.Id)
 		}
 	})
-	intermediateSnapshotMemoryPath := filepath.Join(p.InstanceSnapshotLatest(intermediateID), "memory")
-	require.NoFileExists(t, intermediateSnapshotMemoryPath, "standby UFFD fork should defer the memory clone")
-	intermediateMeta, err := mgr.loadMetadata(intermediateID)
-	require.NoError(t, err)
-	require.True(t, intermediateMeta.StoredMetadata.FirecrackerUseUFFDOnNextRestore)
-	require.Equal(t, sourceSnapshotMemoryPath, intermediateMeta.StoredMetadata.FirecrackerDeferredSnapshotMemoryPath)
+	snapshotMemoryPath := firecrackerSnapshotMemoryPathInGuestDir(p.SnapshotGuestDir(snapshot.Id))
+	require.FileExists(t, snapshotMemoryPath)
 
-	chained, err := mgr.ForkInstance(ctx, intermediateID, ForkInstanceRequest{
-		Name:        "fc-uffd-oneshot-chain",
-		TargetState: StateStandby,
-	})
-	require.NoError(t, err)
-	chainedID := chained.Id
-	chainedDeleted := false
-	t.Cleanup(func() {
-		if !chainedDeleted {
-			_ = mgr.DeleteInstance(context.Background(), chainedID)
-		}
-	})
-	chainedMeta, err := mgr.loadMetadata(chainedID)
-	require.NoError(t, err)
-	require.True(t, chainedMeta.StoredMetadata.FirecrackerUseUFFDOnNextRestore)
-	require.Equal(t, sourceSnapshotMemoryPath, chainedMeta.StoredMetadata.FirecrackerDeferredSnapshotMemoryPath)
-	require.NoFileExists(t, filepath.Join(p.InstanceSnapshotLatest(chainedID), "memory"), "chained standby UFFD fork should defer the memory clone")
+	source = requireRunningSleepInstance(t, ctx, mgr, sourceID)
 
-	chained, err = mgr.RestoreInstance(ctx, chainedID)
-	require.NoError(t, err)
-	chained, err = waitForInstanceState(ctx, mgr, chainedID, StateRunning, integrationTestTimeout(20*time.Second))
-	require.NoError(t, err)
-	require.Equal(t, StateRunning, chained.State)
-	chainedMeta, err = mgr.loadMetadata(chainedID)
-	require.NoError(t, err)
-	require.False(t, chainedMeta.StoredMetadata.FirecrackerUseUFFDOnNextRestore)
-	require.Equal(t, sourceSnapshotMemoryPath, chainedMeta.StoredMetadata.FirecrackerDeferredSnapshotMemoryPath)
-	require.NotEmpty(t, chainedMeta.StoredMetadata.FirecrackerUFFDSessionID)
-
-	require.NoError(t, mgr.DeleteInstance(ctx, chainedID))
-	chainedDeleted = true
-
-	fork, err := mgr.ForkInstance(ctx, sourceID, ForkInstanceRequest{
-		Name:        "fc-uffd-oneshot-fork",
+	parent, err := mgr.ForkSnapshot(ctx, snapshot.Id, ForkSnapshotRequest{
+		Name:        "fc-uffd-oneshot-parent",
 		TargetState: StateRunning,
 	})
 	require.NoError(t, err)
-	forkID := fork.Id
-	forkDeleted := false
+	parentID := parent.Id
+	parentDeleted := false
 	t.Cleanup(func() {
-		if !forkDeleted {
-			_ = mgr.DeleteInstance(context.Background(), forkID)
+		if !parentDeleted {
+			_ = mgr.DeleteInstance(context.Background(), parentID)
+		}
+	})
+	parent = requireRunningSleepInstance(t, ctx, mgr, parentID)
+	parentSnapshotMemoryPath := filepath.Join(p.InstanceSnapshotLatest(parentID), "memory")
+	require.NoFileExists(t, parentSnapshotMemoryPath, "UFFD snapshot fanout should defer the memory clone while running")
+	parentMeta, err := mgr.loadMetadata(parentID)
+	require.NoError(t, err)
+	require.False(t, parentMeta.StoredMetadata.FirecrackerUseUFFDOnNextRestore)
+	require.Equal(t, snapshotMemoryPath, parentMeta.StoredMetadata.FirecrackerDeferredSnapshotMemoryPath)
+	require.NotEmpty(t, parentMeta.StoredMetadata.FirecrackerUFFDSessionID)
+
+	parent, err = mgr.StandbyInstance(ctx, parentID, StandbyInstanceRequest{})
+	require.NoError(t, err)
+	require.Equal(t, StateStandby, parent.State)
+	require.FileExists(t, parentSnapshotMemoryPath, "standby should materialize a normal file-backed snapshot from the deferred UFFD backing")
+	parentMeta, err = mgr.loadMetadata(parentID)
+	require.NoError(t, err)
+	require.False(t, parentMeta.StoredMetadata.FirecrackerUseUFFDOnNextRestore)
+	require.Empty(t, parentMeta.StoredMetadata.FirecrackerDeferredSnapshotMemoryPath)
+	require.Empty(t, parentMeta.StoredMetadata.FirecrackerUFFDSessionID)
+
+	parent, err = mgr.RestoreInstance(ctx, parentID)
+	require.NoError(t, err)
+	parent = requireRunningSleepInstance(t, ctx, mgr, parentID)
+	parentMeta, err = mgr.loadMetadata(parentID)
+	require.NoError(t, err)
+	require.False(t, parentMeta.StoredMetadata.FirecrackerUseUFFDOnNextRestore)
+	require.Empty(t, parentMeta.StoredMetadata.FirecrackerDeferredSnapshotMemoryPath)
+	require.Empty(t, parentMeta.StoredMetadata.FirecrackerUFFDSessionID)
+	require.FileExists(t, filepath.Join(p.InstanceSnapshotBase(parentID), "memory"), "file-backed resume should retain the standby snapshot as the next diff base")
+
+	child, err := mgr.ForkInstance(ctx, parentID, ForkInstanceRequest{
+		Name:        "fc-uffd-oneshot-child",
+		FromRunning: true,
+		TargetState: StateRunning,
+	})
+	require.NoError(t, err)
+	childID := child.Id
+	childDeleted := false
+	t.Cleanup(func() {
+		if !childDeleted {
+			_ = mgr.DeleteInstance(context.Background(), childID)
 		}
 	})
 
-	fork, err = waitForInstanceState(ctx, mgr, forkID, StateRunning, integrationTestTimeout(20*time.Second))
-	require.NoError(t, err)
+	parent = requireRunningSleepInstance(t, ctx, mgr, parentID)
+	child = requireRunningSleepInstance(t, ctx, mgr, childID)
 
-	forkSnapshotMemoryPath := filepath.Join(p.InstanceSnapshotLatest(forkID), "memory")
-	require.NoFileExists(t, forkSnapshotMemoryPath, "UFFD fork should defer the memory clone while running")
-	forkMeta, err := mgr.loadMetadata(forkID)
+	childSnapshotMemoryPath := filepath.Join(p.InstanceSnapshotLatest(childID), "memory")
+	require.NoFileExists(t, childSnapshotMemoryPath, "running-source child should defer the memory clone while running")
+	childMeta, err := mgr.loadMetadata(childID)
 	require.NoError(t, err)
-	require.False(t, forkMeta.StoredMetadata.FirecrackerUseUFFDOnNextRestore, "one-shot UFFD flag should clear after first restore")
-	require.NotEmpty(t, forkMeta.StoredMetadata.FirecrackerDeferredSnapshotMemoryPath, "running fork still needs deferred backing path for standby")
-	require.Equal(t, sourceSnapshotMemoryPath, forkMeta.StoredMetadata.FirecrackerDeferredSnapshotMemoryPath)
-	require.NotEmpty(t, forkMeta.StoredMetadata.FirecrackerUFFDSessionID, "running UFFD-restored fork should keep its pager session")
+	require.False(t, childMeta.StoredMetadata.FirecrackerUseUFFDOnNextRestore)
+	require.NotEmpty(t, childMeta.StoredMetadata.FirecrackerDeferredSnapshotMemoryPath)
+	require.FileExists(t, childMeta.StoredMetadata.FirecrackerDeferredSnapshotMemoryPath)
+	require.NotEmpty(t, childMeta.StoredMetadata.FirecrackerUFFDSessionID)
 
-	fork, err = mgr.StandbyInstance(ctx, forkID, StandbyInstanceRequest{})
+	parent, err = mgr.StandbyInstance(ctx, parentID, StandbyInstanceRequest{})
 	require.NoError(t, err)
-	require.Equal(t, StateStandby, fork.State)
-	require.FileExists(t, forkSnapshotMemoryPath, "standby should materialize a normal file-backed snapshot base")
-	forkMeta, err = mgr.loadMetadata(forkID)
+	require.Equal(t, StateStandby, parent.State)
+	parentSnapshotMemoryPath = filepath.Join(p.InstanceSnapshotLatest(parentID), "memory")
+	require.FileExists(t, parentSnapshotMemoryPath)
+	parentMeta, err = mgr.loadMetadata(parentID)
 	require.NoError(t, err)
-	require.False(t, forkMeta.StoredMetadata.FirecrackerUseUFFDOnNextRestore)
-	require.Empty(t, forkMeta.StoredMetadata.FirecrackerDeferredSnapshotMemoryPath)
-	require.Empty(t, forkMeta.StoredMetadata.FirecrackerUFFDSessionID)
+	require.Empty(t, parentMeta.StoredMetadata.FirecrackerDeferredSnapshotMemoryPath)
+	require.Empty(t, parentMeta.StoredMetadata.FirecrackerUFFDSessionID)
 
-	require.NoError(t, mgr.DeleteInstance(ctx, forkID))
-	forkDeleted = true
-	require.NoError(t, mgr.DeleteInstance(ctx, intermediateID))
-	intermediateDeleted = true
+	child, err = mgr.StandbyInstance(ctx, childID, StandbyInstanceRequest{})
+	require.NoError(t, err)
+	require.Equal(t, StateStandby, child.State)
+	require.FileExists(t, childSnapshotMemoryPath, "child standby should materialize from its deferred UFFD backing")
+	childMeta, err = mgr.loadMetadata(childID)
+	require.NoError(t, err)
+	require.False(t, childMeta.StoredMetadata.FirecrackerUseUFFDOnNextRestore)
+	require.Empty(t, childMeta.StoredMetadata.FirecrackerDeferredSnapshotMemoryPath)
+	require.Empty(t, childMeta.StoredMetadata.FirecrackerUFFDSessionID)
+
+	require.NoError(t, mgr.DeleteInstance(ctx, childID))
+	childDeleted = true
+	require.NoError(t, mgr.DeleteInstance(ctx, parentID))
+	parentDeleted = true
 	require.NoError(t, mgr.DeleteInstance(ctx, sourceID))
 	sourceDeleted = true
+	require.NoError(t, mgr.DeleteSnapshot(ctx, snapshot.Id))
+	snapshotDeleted = true
+}
+
+func requireRunningSleepInstance(t *testing.T, ctx context.Context, mgr Manager, instanceID string) *Instance {
+	t.Helper()
+	inst, err := waitForInstanceState(ctx, mgr, instanceID, StateRunning, integrationTestTimeout(20*time.Second))
+	require.NoError(t, err)
+	require.Equal(t, StateRunning, inst.State)
+
+	require.Eventually(t, func() bool {
+		current, err := mgr.GetInstance(ctx, instanceID)
+		if err != nil {
+			t.Logf("get instance %s: %v", instanceID, err)
+			return false
+		}
+		output, exitCode, err := execInInstance(ctx, current, "sh", "-c", "ps | grep '[s]leep' | grep -q infinity")
+		if err != nil {
+			t.Logf("exec sleep check for %s: %v", instanceID, err)
+			return false
+		}
+		if exitCode != 0 {
+			t.Logf("sleep check for %s exited %d: %s", instanceID, exitCode, output)
+			return false
+		}
+		return true
+	}, integrationTestTimeout(30*time.Second), 250*time.Millisecond)
+
+	inst, err = mgr.GetInstance(ctx, instanceID)
+	require.NoError(t, err)
+	return inst
 }
 
 // TestFirecrackerForkIsolation verifies CoW isolation between a firecracker

@@ -138,10 +138,49 @@ func materializeDeferredSnapshotMemory(destPath, sourcePath string) error {
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("stat deferred snapshot memory target: %w", err)
 	}
-	if err := forkvm.CopyRegularFile(sourcePath, targetPath); err != nil {
+	resolvedSourcePath, err := resolveDeferredSnapshotMemorySourcePath(sourcePath)
+	if err != nil {
+		return err
+	}
+	if err := forkvm.CopyRegularFile(resolvedSourcePath, targetPath); err != nil {
 		return fmt.Errorf("materialize deferred snapshot memory: %w", err)
 	}
 	return nil
+}
+
+func resolveDeferredSnapshotMemorySourcePath(sourcePath string) (string, error) {
+	if _, err := os.Stat(sourcePath); err == nil {
+		return sourcePath, nil
+	} else if !os.IsNotExist(err) {
+		return "", fmt.Errorf("stat deferred snapshot memory source: %w", err)
+	}
+
+	alternatePath := alternateRetainedSnapshotMemoryPath(sourcePath)
+	if alternatePath == "" {
+		return sourcePath, nil
+	}
+	if _, err := os.Stat(alternatePath); err == nil {
+		return alternatePath, nil
+	} else if !os.IsNotExist(err) {
+		return "", fmt.Errorf("stat alternate deferred snapshot memory source: %w", err)
+	}
+	return sourcePath, nil
+}
+
+func alternateRetainedSnapshotMemoryPath(sourcePath string) string {
+	if filepath.Base(sourcePath) != "memory" {
+		return ""
+	}
+	snapshotDir := filepath.Dir(sourcePath)
+	snapshotsDir := filepath.Dir(snapshotDir)
+	switch filepath.Base(snapshotDir) {
+	case "snapshot-base":
+		return filepath.Join(snapshotsDir, "snapshot-latest", "memory")
+	case "snapshot-latest":
+		return filepath.Join(snapshotsDir, "snapshot-base", "memory")
+	default:
+		return ""
+	}
 }
 
 func (f *Firecracker) ResizeMemory(ctx context.Context, bytes int64) error {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -99,6 +100,14 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 				return nil, "", false, fmt.Errorf("fork failed: %v; additionally failed to restore source instance: %w", forkErr, restoreErr)
 			}
 			return nil, "", false, fmt.Errorf("restore source instance after fork: %w", restoreErr)
+		}
+		if forkErr == nil && targetState != StateStopped {
+			if err := m.repointForkDeferredSnapshotMemoryToSourceBase(forked.Id, id); err != nil {
+				forkErr = fmt.Errorf("update fork deferred snapshot memory backing: %w", err)
+				if cleanupErr := m.cleanupForkInstanceOnError(ctx, forked.Id); cleanupErr != nil {
+					forkErr = fmt.Errorf("%v; additionally failed to cleanup forked instance %s: %v", forkErr, forked.Id, cleanupErr)
+				}
+			}
 		}
 		if restoredSource != nil && !restoredSource.NetworkEnabled && (restoredSource.State == StateRunning || restoredSource.State == StateInitializing) {
 			if err := ensureGuestAgentReadyForForkPhase(ctx, &restoredSource.StoredMetadata, "after restoring running fork source"); err != nil {
@@ -199,6 +208,29 @@ func generateForkSourceVsockCID(sourceID, forkID string, current int64) int64 {
 		cid = ((cid - 3 + 1) % cidRange) + 3
 	}
 	return cid
+}
+
+func (m *manager) repointForkDeferredSnapshotMemoryToSourceBase(forkID, sourceID string) error {
+	meta, err := m.loadMetadata(forkID)
+	if err != nil {
+		return err
+	}
+	stored := &meta.StoredMetadata
+	if stored.HypervisorType != hypervisor.TypeFirecracker || stored.FirecrackerDeferredSnapshotMemoryPath == "" {
+		return nil
+	}
+
+	sourceLatestMemoryPath := firecrackerSnapshotMemoryPathInGuestDir(m.paths.InstanceDir(sourceID))
+	if stored.FirecrackerDeferredSnapshotMemoryPath != sourceLatestMemoryPath {
+		return nil
+	}
+
+	sourceBaseMemoryPath := filepath.Join(m.paths.InstanceSnapshotBase(sourceID), "memory")
+	if _, err := os.Stat(sourceBaseMemoryPath); err != nil {
+		return fmt.Errorf("stat source retained base memory %q: %w", sourceBaseMemoryPath, err)
+	}
+	stored.FirecrackerDeferredSnapshotMemoryPath = sourceBaseMemoryPath
+	return m.saveMetadata(meta)
 }
 
 func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id string, req ForkInstanceRequest, supportValidated bool) (*Instance, bool, error) {
