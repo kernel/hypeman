@@ -16,7 +16,6 @@ fi
 changed_runtime_files="$(
   git diff --name-only "${diff_range}" -- \
     lib/uffdpager \
-    lib/hypervisor/firecracker/process.go \
     lib/hypervisor/firecracker/config.go \
     lib/instances/firecracker_uffd.go \
     lib/instances/guest_resume_network.go \
@@ -24,6 +23,21 @@ changed_runtime_files="$(
     cmd/uffd-pager |
     grep -Ev '(^lib/uffdpager/VERSION$|(^|/)README\.md$|_test\.go$)' || true
 )"
+
+# process.go contains both UFFD restore wiring and unrelated Firecracker restore
+# orchestration. Only require a pager version bump when changed lines touch the
+# UFFD-facing restore contract.
+process_uffd_changes="$(
+  git diff --name-only -G 'uffd|UFFD|SnapshotMemory' "${diff_range}" -- \
+    lib/hypervisor/firecracker/process.go || true
+)"
+if [ -n "${process_uffd_changes}" ]; then
+  changed_runtime_files="$(
+    printf '%s\n%s\n' "${changed_runtime_files}" "${process_uffd_changes}" |
+      sed '/^$/d' |
+      sort -u
+  )"
+fi
 
 if [ -z "${changed_runtime_files}" ]; then
   exit 0
