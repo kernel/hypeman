@@ -281,9 +281,7 @@ func (m *manager) restoreInstance(
 		attribute.String("operation", "restore_from_snapshot"),
 	)
 	log.InfoContext(ctx, "restoring from snapshot", "instance_id", id, "snapshot_dir", snapshotDir, "hypervisor", stored.HypervisorType)
-	unlockSnapshotSource := m.lockFirecrackerSnapshotSourceForRestore(stored, restoreOptions)
 	pid, hv, err := m.restoreFromSnapshot(restoreCtx, stored, snapshotDir, restoreOptions)
-	unlockSnapshotSource()
 	restoreSpanEnd(err)
 	if err != nil {
 		log.ErrorContext(ctx, "failed to restore from snapshot", "instance_id", id, "error", err)

@@ -48,17 +48,6 @@ func (m *manager) lockFirecrackerSnapshotSource(path string) func() {
 	return mu.Unlock
 }
 
-func (m *manager) lockFirecrackerSnapshotSourceForRestore(stored *StoredMetadata, opts hypervisor.RestoreOptions) func() {
-	if stored == nil || stored.HypervisorType != hypervisor.TypeFirecracker {
-		return func() {}
-	}
-	path := strings.TrimSpace(opts.SnapshotMemoryBackingPath)
-	if path == "" {
-		path = strings.TrimSpace(stored.FirecrackerDeferredSnapshotMemoryPath)
-	}
-	return m.lockFirecrackerSnapshotSource(path)
-}
-
 func firecrackerSnapshotSourceLockKey(path string) string {
 	path = filepath.Clean(strings.TrimSpace(path))
 	if path == "." || path == "" {
