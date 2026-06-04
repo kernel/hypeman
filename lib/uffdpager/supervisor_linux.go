@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -28,6 +29,8 @@ const (
 	systemdUnitTemplate  = "hypeman-uffd@.service"
 	systemdRuntimeEnvDir = "/run/hypeman/uffd"
 )
+
+var invalidSystemdInstancePartChars = regexp.MustCompile(`[^A-Za-z0-9._-]`)
 
 type Supervisor struct {
 	dataDir            string
@@ -290,22 +293,7 @@ func sanitizeSystemdInstancePart(value string) string {
 	if value == "" {
 		return ""
 	}
-	var b strings.Builder
-	for _, r := range value {
-		switch {
-		case r >= 'a' && r <= 'z':
-			b.WriteRune(r)
-		case r >= 'A' && r <= 'Z':
-			b.WriteRune(r)
-		case r >= '0' && r <= '9':
-			b.WriteRune(r)
-		case r == '.', r == '_', r == '-':
-			b.WriteRune(r)
-		default:
-			b.WriteByte('-')
-		}
-	}
-	return strings.Trim(b.String(), "-")
+	return strings.Trim(invalidSystemdInstancePartChars.ReplaceAllString(value, "-"), "-")
 }
 
 func systemdEnvFile(instanceKey string) string {
