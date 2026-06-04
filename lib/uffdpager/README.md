@@ -8,8 +8,9 @@ The pager is local to the host. It is not backed by Redis or another external
 cache because page faults are latency-sensitive and the kernel-facing UFFD
 socket is local. The process keeps one shared in-memory page cache, bounded by
 `hypervisor.firecracker_uffd_cache_max_bytes`. Cache entries are keyed by a
-snapshot cache key plus page offset, so multiple restore sessions from the same
-snapshot can reuse hot pages without starting one pager per snapshot.
+snapshot cache key plus page offset, so restore sessions with the same
+propagated snapshot cache key can reuse hot pages without starting one pager per
+snapshot.
 
 UFFD is opt-in through `hypervisor.firecracker_snapshot_memory_backend=uffd`.
 The default backend remains `file`. Enabling UFFD does not change already
@@ -24,3 +25,23 @@ start a new pager unless the UFFD pager version changes. Older pager versions
 are drained: they reject new sessions but continue serving existing sessions
 until those sessions close. Systemd runs the pager through the dedicated
 `hypeman-uffd-pager` binary rather than an alternate API-server mode.
+
+## Control HTTP API
+
+Hypeman talks to the pager over Unix HTTP at
+`<data_dir>/uffd/<version>/control.sock`:
+
+- `GET /health`
+- `GET /stats`
+- `POST /sessions`
+- `POST /sessions/{id}/close`
+- `POST /drain`
+
+Firecracker does not use this control socket directly. Each restore session gets
+its own Unix socket that receives Firecracker's UFFD file descriptor and memory
+regions.
+
+The instance health check currently verifies that the pager version is healthy;
+it does not prove that a particular UFFD session still exists after an unplanned
+pager restart. If a pager disappears while serving active UFFD VMs, those VMs
+should be treated as unhealthy and recycled.
