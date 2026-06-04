@@ -28,6 +28,7 @@ import (
 	"github.com/kernel/hypeman/lib/resources"
 	snapshottest "github.com/kernel/hypeman/lib/snapshot/testsupport"
 	"github.com/kernel/hypeman/lib/system"
+	"github.com/kernel/hypeman/lib/uffdpager"
 	"github.com/kernel/hypeman/lib/volumes"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -36,6 +37,10 @@ import (
 )
 
 func setupTestManagerForFirecrackerWithNetworkConfig(t *testing.T, networkCfg config.NetworkConfig) (*manager, string) {
+	return setupTestManagerForFirecrackerWithConfig(t, networkCfg, ManagerConfig{})
+}
+
+func setupTestManagerForFirecrackerWithConfig(t *testing.T, networkCfg config.NetworkConfig, managerConfig ManagerConfig) (*manager, string) {
 	tmpDir := t.TempDir()
 	prepareIntegrationTestDataDir(t, tmpDir)
 	cfg := &config.Config{
@@ -57,7 +62,9 @@ func setupTestManagerForFirecrackerWithNetworkConfig(t *testing.T, networkCfg co
 		MaxVcpusPerInstance:  0,
 		MaxMemoryPerInstance: 0,
 	}
-	mgr := NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, hypervisor.TypeFirecracker, SnapshotPolicy{}, nil, nil).(*manager)
+	mgrInterface, err := NewManagerWithConfigE(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, hypervisor.TypeFirecracker, SnapshotPolicy{}, managerConfig, nil, nil)
+	require.NoError(t, err)
+	mgr := mgrInterface.(*manager)
 
 	resourceMgr := resources.NewManager(cfg, p)
 	resourceMgr.SetInstanceLister(mgr)
@@ -86,6 +93,15 @@ func requireFirecrackerIntegrationPrereqs(t *testing.T) {
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Skip("/dev/kvm not available, skipping Firecracker integration test")
 	}
+}
+
+func requireUserfaultfdIntegrationPrereqs(t *testing.T) {
+	t.Helper()
+	file, err := os.OpenFile("/dev/userfaultfd", os.O_RDWR, 0)
+	if err != nil {
+		t.Skipf("/dev/userfaultfd is not accessible, skipping UFFD integration test: %v", err)
+	}
+	_ = file.Close()
 }
 
 func createNginxImageAndWait(t *testing.T, ctx context.Context, imageManager images.Manager) {
@@ -646,6 +662,109 @@ func TestFirecrackerWarmForkChain(t *testing.T) {
 	require.NoError(t, mgr.DeleteInstance(ctx, warmID))
 	warmDeleted = true
 	require.NoError(t, mgr.DeleteSnapshot(ctx, snapshot.Id))
+}
+
+func TestFCUFFDOneShotLifecycle(t *testing.T) {
+	t.Parallel()
+	requireFirecrackerIntegrationPrereqs(t)
+	requireUserfaultfdIntegrationPrereqs(t)
+	if pagerBinary := strings.TrimSpace(os.Getenv("HYPEMAN_UFFD_PAGER_BINARY")); pagerBinary == "" {
+		t.Skip("HYPEMAN_UFFD_PAGER_BINARY must point at hypeman-uffd-pager for UFFD integration tests")
+	} else if st, err := os.Stat(pagerBinary); err != nil || !st.Mode().IsRegular() {
+		t.Skipf("HYPEMAN_UFFD_PAGER_BINARY is not a regular file: %s", pagerBinary)
+	}
+
+	mgr, tmpDir := setupTestManagerForFirecrackerWithConfig(t, legacyParallelTestNetworkConfig(testNetworkSeq.Add(1)), ManagerConfig{
+		FirecrackerSnapshotMemoryBackend: uffdpager.BackendUFFD,
+		FirecrackerUFFDCacheMaxBytes:     512 << 20,
+	})
+	ctx := context.Background()
+	p := paths.New(tmpDir)
+
+	imageManager, err := images.NewManager(p, 1, nil)
+	require.NoError(t, err)
+	imageName := integrationTestImageRef(t, "docker.io/library/alpine:latest")
+	snapshottest.EnsureImageReady(t, ctx, p, imageManager, imageName)
+
+	systemManager := system.NewManager(p)
+	require.NoError(t, systemManager.EnsureSystemFiles(ctx))
+
+	source, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
+		Name:           "fc-uffd-oneshot-src",
+		Image:          imageName,
+		Size:           1024 * 1024 * 1024,
+		OverlaySize:    1024 * 1024 * 1024,
+		Vcpus:          1,
+		NetworkEnabled: false,
+		Hypervisor:     hypervisor.TypeFirecracker,
+		Cmd:            []string{"sleep", "infinity"},
+	})
+	require.NoError(t, err)
+	sourceID := source.Id
+	sourceDeleted := false
+	t.Cleanup(func() {
+		if !sourceDeleted {
+			_ = mgr.DeleteInstance(context.Background(), sourceID)
+		}
+	})
+
+	source, err = waitForInstanceState(ctx, mgr, sourceID, StateRunning, integrationTestTimeout(20*time.Second))
+	require.NoError(t, err)
+
+	source, err = mgr.StandbyInstance(ctx, sourceID, StandbyInstanceRequest{})
+	require.NoError(t, err)
+	require.Equal(t, StateStandby, source.State)
+	require.FileExists(t, filepath.Join(p.InstanceSnapshotLatest(sourceID), "memory"))
+
+	fork, err := mgr.ForkInstance(ctx, sourceID, ForkInstanceRequest{
+		Name:        "fc-uffd-oneshot-fork",
+		TargetState: StateRunning,
+	})
+	require.NoError(t, err)
+	forkID := fork.Id
+	forkDeleted := false
+	t.Cleanup(func() {
+		if !forkDeleted {
+			_ = mgr.DeleteInstance(context.Background(), forkID)
+		}
+	})
+
+	fork, err = waitForInstanceState(ctx, mgr, forkID, StateRunning, integrationTestTimeout(20*time.Second))
+	require.NoError(t, err)
+
+	forkSnapshotMemoryPath := filepath.Join(p.InstanceSnapshotLatest(forkID), "memory")
+	require.NoFileExists(t, forkSnapshotMemoryPath, "UFFD fork should defer the memory clone while running")
+	forkMeta, err := mgr.loadMetadata(forkID)
+	require.NoError(t, err)
+	require.False(t, forkMeta.StoredMetadata.FirecrackerUseUFFDOnNextRestore, "one-shot UFFD flag should clear after first restore")
+	require.NotEmpty(t, forkMeta.StoredMetadata.FirecrackerDeferredSnapshotMemoryPath, "running fork still needs deferred backing path for standby")
+	require.NotEmpty(t, forkMeta.StoredMetadata.FirecrackerUFFDSessionID, "running UFFD-restored fork should keep its pager session")
+
+	fork, err = mgr.StandbyInstance(ctx, forkID, StandbyInstanceRequest{})
+	require.NoError(t, err)
+	require.Equal(t, StateStandby, fork.State)
+	require.FileExists(t, forkSnapshotMemoryPath, "standby should materialize a normal file-backed snapshot base")
+	forkMeta, err = mgr.loadMetadata(forkID)
+	require.NoError(t, err)
+	require.False(t, forkMeta.StoredMetadata.FirecrackerUseUFFDOnNextRestore)
+	require.Empty(t, forkMeta.StoredMetadata.FirecrackerDeferredSnapshotMemoryPath)
+	require.Empty(t, forkMeta.StoredMetadata.FirecrackerUFFDSessionID)
+
+	fork, err = mgr.RestoreInstance(ctx, forkID)
+	require.NoError(t, err)
+	fork, err = waitForInstanceState(ctx, mgr, forkID, StateRunning, integrationTestTimeout(20*time.Second))
+	require.NoError(t, err)
+	require.Equal(t, StateRunning, fork.State)
+	forkMeta, err = mgr.loadMetadata(forkID)
+	require.NoError(t, err)
+	require.False(t, forkMeta.StoredMetadata.FirecrackerUseUFFDOnNextRestore, "direct resume after standby should remain file-backed")
+	require.Empty(t, forkMeta.StoredMetadata.FirecrackerDeferredSnapshotMemoryPath)
+	require.Empty(t, forkMeta.StoredMetadata.FirecrackerUFFDSessionID, "file-backed restore should not create a UFFD session")
+
+	require.NoError(t, mgr.DeleteInstance(ctx, forkID))
+	forkDeleted = true
+	require.NoError(t, mgr.DeleteInstance(ctx, sourceID))
+	sourceDeleted = true
 }
 
 // TestFirecrackerForkIsolation verifies CoW isolation between a firecracker
