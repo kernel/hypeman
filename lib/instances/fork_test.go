@@ -324,6 +324,58 @@ func TestForkInstanceStandbyRunningTargetSkipsSourceWriteLockWithoutAlias(t *tes
 	}
 }
 
+func TestApplyForkTargetStateWithSourceLockRequiresStandbySource(t *testing.T) {
+	t.Parallel()
+
+	manager, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	sourceID := "fork-alias-running-source"
+	forkID := "fork-alias-running-child"
+	now := time.Now()
+	require.NoError(t, manager.ensureDirectories(sourceID))
+	require.NoError(t, manager.ensureDirectories(forkID))
+
+	sourceSocket := manager.paths.InstanceSocket(sourceID, "fc.sock")
+	require.NoError(t, os.MkdirAll(filepath.Dir(sourceSocket), 0755))
+	require.NoError(t, os.WriteFile(sourceSocket, []byte("socket"), 0644))
+	manager.storeCachedHypervisorState(sourceID, hypervisor.StateRunning)
+	require.NoError(t, manager.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
+		Id:                sourceID,
+		Name:              sourceID,
+		Image:             integrationTestImageRef(t, "docker.io/library/alpine:latest"),
+		CreatedAt:         now,
+		HypervisorType:    hypervisor.TypeFirecracker,
+		HypervisorVersion: "test",
+		SocketPath:        sourceSocket,
+		DataDir:           manager.paths.InstanceDir(sourceID),
+		VsockCID:          42,
+		VsockSocket:       manager.paths.InstanceVsockSocket(sourceID),
+	}}))
+
+	forkSnapshotDir := manager.paths.InstanceSnapshotLatest(forkID)
+	require.NoError(t, os.MkdirAll(forkSnapshotDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(forkSnapshotDir, "memory"), []byte("snapshot"), 0644))
+	require.NoError(t, manager.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
+		Id:                forkID,
+		Name:              forkID,
+		Image:             integrationTestImageRef(t, "docker.io/library/alpine:latest"),
+		CreatedAt:         now,
+		HypervisorType:    hypervisor.TypeFirecracker,
+		HypervisorVersion: "test",
+		SocketPath:        manager.paths.InstanceSocket(forkID, "fc.sock"),
+		DataDir:           manager.paths.InstanceDir(forkID),
+		VsockCID:          42,
+		VsockSocket:       manager.paths.InstanceVsockSocket(forkID),
+		SkipGuestAgent:    true,
+	}}))
+
+	_, err := manager.applyForkTargetStateWithSourceLock(ctx, manager.getInstanceLock(sourceID), sourceID, forkID, StateRunning)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidState)
+	assert.Contains(t, err.Error(), "source fork-alias-running-source is now")
+}
+
 func TestForkInstanceStoppedSourceRequiresWriteLockWithoutConcurrentPrepare(t *testing.T) {
 	manager, _ := setupTestManager(t)
 	ctx := context.Background()

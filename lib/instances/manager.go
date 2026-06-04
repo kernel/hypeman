@@ -89,7 +89,7 @@ type ManagerConfig struct {
 	MaxConcurrentRestoresByHypervisor map[hypervisor.Type]int
 }
 
-const defaultManagerFirecrackerMaxConcurrentRestores = 4
+const defaultManagerMaxConcurrentRestores = 4
 
 type restoreSlotPoolKey struct {
 	hypervisorType hypervisor.Type
@@ -112,13 +112,13 @@ func (c ManagerConfig) Normalize() ManagerConfig {
 	}
 	if c.MaxConcurrentRestoresByHypervisor == nil {
 		c.MaxConcurrentRestoresByHypervisor = map[hypervisor.Type]int{
-			hypervisor.TypeFirecracker: defaultManagerFirecrackerMaxConcurrentRestores,
+			hypervisor.TypeFirecracker: defaultManagerMaxConcurrentRestores,
 		}
 	} else {
 		limits := make(map[hypervisor.Type]int, len(c.MaxConcurrentRestoresByHypervisor))
 		for hvType, limit := range c.MaxConcurrentRestoresByHypervisor {
 			if limit <= 0 {
-				limit = defaultManagerFirecrackerMaxConcurrentRestores
+				limit = defaultManagerMaxConcurrentRestores
 			}
 			limits[hvType] = limit
 		}
@@ -129,7 +129,7 @@ func (c ManagerConfig) Normalize() ManagerConfig {
 
 func sharedRestoreSlots(hvType hypervisor.Type, limit int) chan struct{} {
 	if limit <= 0 {
-		limit = defaultManagerFirecrackerMaxConcurrentRestores
+		limit = defaultManagerMaxConcurrentRestores
 	}
 	key := restoreSlotPoolKey{hypervisorType: hvType, limit: limit}
 	slots, _ := restoreSlotPools.LoadOrStore(key, make(chan struct{}, limit))
@@ -520,7 +520,7 @@ func (m *manager) ForkInstance(ctx context.Context, id string, req ForkInstanceR
 		// source write lock if Firecracker snapshot paths could not be rewritten
 		// and restore must temporarily alias the source data dir.
 		if useReadLock && sourceState == StateStandby && targetState == StateRunning && targetRestoreNeedsSourceLock {
-			inst, err = m.applyForkTargetStateWithSourceLock(ctx, lock, forked.Id, targetState)
+			inst, err = m.applyForkTargetStateWithSourceLock(ctx, lock, id, forked.Id, targetState)
 		} else {
 			inst, err = m.applyForkTargetState(ctx, forked.Id, targetState)
 		}
@@ -535,9 +535,17 @@ func (m *manager) ForkInstance(ctx context.Context, id string, req ForkInstanceR
 	return inst, nil
 }
 
-func (m *manager) applyForkTargetStateWithSourceLock(ctx context.Context, lock *sync.RWMutex, forkID string, target State) (*Instance, error) {
+func (m *manager) applyForkTargetStateWithSourceLock(ctx context.Context, lock *sync.RWMutex, sourceID, forkID string, target State) (*Instance, error) {
 	lock.Lock()
 	defer lock.Unlock()
+	sourceMeta, err := m.loadMetadata(sourceID)
+	if err != nil {
+		return nil, fmt.Errorf("reload source metadata before aliased fork restore: %w", err)
+	}
+	source := m.toInstance(ctx, sourceMeta)
+	if source.State != StateStandby {
+		return nil, fmt.Errorf("%w: cannot restore fork %s with snapshot source alias because source %s is now %s", ErrInvalidState, forkID, sourceID, source.State)
+	}
 	return m.applyForkTargetState(ctx, forkID, target)
 }
 

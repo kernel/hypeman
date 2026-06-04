@@ -298,9 +298,10 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 		forkMeta.Phases.Record(phasetracking.PhaseStopped, now)
 	}
 
-	// Keep the original CID for snapshot-based forks.
-	// Rewriting CID in restored memory snapshots is not reliable across
-	// hypervisors.
+	// Keep the original CID for snapshot-based forks. Rewriting CID in restored
+	// memory snapshots is not reliable across hypervisors. Concurrent standby
+	// fork prepare is currently enabled only for Firecracker, whose host vsock
+	// dialer routes through the per-VM UDS path rather than this metadata CID.
 	if source.State == StateStandby {
 		forkMeta.VsockCID = stored.VsockCID
 	} else {
