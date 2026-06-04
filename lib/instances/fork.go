@@ -258,7 +258,7 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 	dstDir := m.paths.InstanceDir(forkID)
 	deferredSnapshotMemoryPath := ""
 	if m.shouldDeferFirecrackerSnapshotMemoryCopy(stored, source.State == StateStandby, targetState) {
-		deferredSnapshotMemoryPath = firecrackerSnapshotMemoryPathInGuestDir(srcDir)
+		deferredSnapshotMemoryPath = firecrackerDeferredSnapshotMemoryPath(stored, srcDir)
 	}
 
 	cu := cleanup.Make(func() {

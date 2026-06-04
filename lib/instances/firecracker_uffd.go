@@ -36,6 +36,15 @@ func firecrackerSnapshotMemoryPathInGuestDir(guestDir string) string {
 	return filepath.Join(guestDir, firecrackerSnapshotMemoryRelPath)
 }
 
+func firecrackerDeferredSnapshotMemoryPath(stored *StoredMetadata, guestDir string) string {
+	if stored != nil {
+		if path := strings.TrimSpace(stored.FirecrackerDeferredSnapshotMemoryPath); path != "" {
+			return path
+		}
+	}
+	return firecrackerSnapshotMemoryPathInGuestDir(guestDir)
+}
+
 func (m *manager) firecrackerSnapshotRestoreOptions(stored *StoredMetadata, snapshotDir string) (hypervisor.RestoreOptions, error) {
 	opts := hypervisor.RestoreOptions{SnapshotMemoryBackend: hypervisor.SnapshotMemoryBackendFile}
 	if stored == nil || stored.HypervisorType != hypervisor.TypeFirecracker {
