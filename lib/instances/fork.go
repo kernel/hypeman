@@ -293,10 +293,16 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 		deferredSnapshotMemoryPath = firecrackerDeferredSnapshotMemoryPath(stored, srcDir)
 	}
 	unlockSnapshotSource := func() {}
+	snapshotSourceLocked := false
 	if deferredSnapshotMemoryPath != "" {
 		unlockSnapshotSource = m.lockFirecrackerSnapshotSource(deferredSnapshotMemoryPath)
-		defer unlockSnapshotSource()
+		snapshotSourceLocked = true
 	}
+	defer func() {
+		if snapshotSourceLocked {
+			unlockSnapshotSource()
+		}
+	}()
 
 	cu := cleanup.Make(func() {
 		_ = os.RemoveAll(dstDir)
@@ -394,6 +400,10 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 				"target_data_dir", forkMeta.DataDir)
 		}
 		restoreNeedsSourceLock = prepareResult.RequiresSnapshotSourceAlias
+	}
+	if snapshotSourceLocked {
+		unlockSnapshotSource()
+		snapshotSourceLocked = false
 	}
 
 	newMeta := &metadata{StoredMetadata: forkMeta}

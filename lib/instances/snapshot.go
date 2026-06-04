@@ -426,10 +426,17 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 	if m.shouldDeferFirecrackerSnapshotMemoryCopy(&deferredSource, rec.Snapshot.Kind == SnapshotKindStandby, targetState) {
 		deferredSnapshotMemoryPath = firecrackerDeferredSnapshotMemoryPath(&rec.StoredMetadata, snapshotGuestDir)
 	}
+	unlockSnapshotSource := func() {}
+	snapshotSourceLocked := false
 	if deferredSnapshotMemoryPath != "" {
-		unlockSnapshotSource := m.lockFirecrackerSnapshotSource(deferredSnapshotMemoryPath)
-		defer unlockSnapshotSource()
+		unlockSnapshotSource = m.lockFirecrackerSnapshotSource(deferredSnapshotMemoryPath)
+		snapshotSourceLocked = true
 	}
+	defer func() {
+		if snapshotSourceLocked {
+			unlockSnapshotSource()
+		}
+	}()
 	if err := m.copySnapshotGuestDirectoryForFork(ctx, snapshotID, rec.StoredMetadata.HypervisorType, dstDir, deferredSnapshotMemoryPath); err != nil {
 		return nil, err
 	}
@@ -507,6 +514,10 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 				"source_data_dir", rec.StoredMetadata.DataDir,
 				"target_data_dir", forkMeta.DataDir)
 		}
+	}
+	if snapshotSourceLocked {
+		unlockSnapshotSource()
+		snapshotSourceLocked = false
 	}
 
 	if err := m.saveMetadata(&metadata{StoredMetadata: forkMeta}); err != nil {
