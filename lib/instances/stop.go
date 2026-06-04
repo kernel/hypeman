@@ -308,6 +308,7 @@ func (m *manager) stopInstance(
 	stored.GuestAgentReadyAt = nil
 	stored.FirecrackerSnapshotCacheKey = ""
 	stored.FirecrackerUseUFFDOnNextRestore = false
+	stored.FirecrackerDeferredSnapshotMemoryPath = ""
 	stored.Phases.Record(phasetracking.PhaseStopped, now)
 
 	meta = &metadata{StoredMetadata: *stored}
