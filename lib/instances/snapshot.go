@@ -367,6 +367,7 @@ func (m *manager) restoreSnapshot(ctx context.Context, id string, snapshotID str
 }
 
 func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkSnapshotRequest) (*Instance, error) {
+	log := logger.FromContext(ctx)
 	if err := validateForkSnapshotRequest(req); err != nil {
 		return nil, err
 	}
@@ -463,7 +464,7 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 		if forkMeta.NetworkEnabled {
 			netCfg = &hypervisor.ForkNetworkConfig{TAPDevice: network.GenerateTAPName(forkID)}
 		}
-		_, err := prepareForkWithAliasReadLock(ctx, starter, hypervisor.ForkPrepareRequest{
+		prepareResult, err := prepareForkWithAliasReadLock(ctx, starter, hypervisor.ForkPrepareRequest{
 			SnapshotConfigPath: m.paths.InstanceSnapshotConfig(forkID),
 			SourceDataDir:      rec.StoredMetadata.DataDir,
 			TargetDataDir:      forkMeta.DataDir,
@@ -477,6 +478,14 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 				return nil, fmt.Errorf("%w: snapshot fork is not supported for hypervisor %s", ErrNotSupported, targetHypervisor)
 			}
 			return nil, fmt.Errorf("prepare snapshot fork state: %w", err)
+		}
+		if prepareResult.RequiresSnapshotSourceAlias {
+			log.WarnContext(ctx, "snapshot fork restore requires snapshot source alias fallback",
+				"hypervisor", targetHypervisor,
+				"snapshot_id", snapshotID,
+				"fork_instance_id", forkID,
+				"source_data_dir", rec.StoredMetadata.DataDir,
+				"target_data_dir", forkMeta.DataDir)
 		}
 	}
 

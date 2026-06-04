@@ -336,6 +336,14 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 			}
 			return nil, false, fmt.Errorf("prepare fork snapshot state: %w", err)
 		}
+		if prepareResult.RequiresSnapshotSourceAlias {
+			log.WarnContext(ctx, "fork restore requires snapshot source alias fallback",
+				"hypervisor", stored.HypervisorType,
+				"source_instance_id", id,
+				"fork_instance_id", forkID,
+				"source_data_dir", stored.DataDir,
+				"target_data_dir", forkMeta.DataDir)
+		}
 		restoreNeedsSourceLock = prepareResult.RequiresSnapshotSourceAlias
 	}
 
@@ -358,6 +366,9 @@ func (m *manager) saveForkMetadata(ctx context.Context, meta *metadata) error {
 	m.forkMetadataMu.Lock()
 	defer m.forkMetadataMu.Unlock()
 
+	// Earlier name checks are advisory so callers can fail before doing fork
+	// work when possible. This is the serialized admission point for fork
+	// metadata, so concurrent forks re-check names immediately before save.
 	name := meta.Name
 	existsByMetadata, err := m.instanceNameExists(name)
 	if err != nil {

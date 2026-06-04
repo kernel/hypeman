@@ -83,15 +83,20 @@ type ResourceLimits struct {
 
 // ManagerConfig holds non-resource manager behavior settings.
 type ManagerConfig struct {
-	LifecycleEventBufferSize         int
-	FirecrackerSnapshotMemoryBackend string
-	FirecrackerUFFDCacheMaxBytes     int64
-	FirecrackerMaxConcurrentRestores int
+	LifecycleEventBufferSize          int
+	FirecrackerSnapshotMemoryBackend  string
+	FirecrackerUFFDCacheMaxBytes      int64
+	MaxConcurrentRestoresByHypervisor map[hypervisor.Type]int
 }
 
 const defaultManagerFirecrackerMaxConcurrentRestores = 4
 
-var firecrackerRestoreSlotPools sync.Map // map[int]chan struct{}
+type restoreSlotPoolKey struct {
+	hypervisorType hypervisor.Type
+	limit          int
+}
+
+var restoreSlotPools sync.Map // map[restoreSlotPoolKey]chan struct{}
 
 // Normalize applies defaults to manager config values.
 func (c ManagerConfig) Normalize() ManagerConfig {
@@ -105,18 +110,41 @@ func (c ManagerConfig) Normalize() ManagerConfig {
 	if c.FirecrackerUFFDCacheMaxBytes <= 0 {
 		c.FirecrackerUFFDCacheMaxBytes = 4 << 30
 	}
-	if c.FirecrackerMaxConcurrentRestores <= 0 {
-		c.FirecrackerMaxConcurrentRestores = defaultManagerFirecrackerMaxConcurrentRestores
+	if c.MaxConcurrentRestoresByHypervisor == nil {
+		c.MaxConcurrentRestoresByHypervisor = map[hypervisor.Type]int{
+			hypervisor.TypeFirecracker: defaultManagerFirecrackerMaxConcurrentRestores,
+		}
+	} else {
+		limits := make(map[hypervisor.Type]int, len(c.MaxConcurrentRestoresByHypervisor))
+		for hvType, limit := range c.MaxConcurrentRestoresByHypervisor {
+			if limit <= 0 {
+				limit = defaultManagerFirecrackerMaxConcurrentRestores
+			}
+			limits[hvType] = limit
+		}
+		c.MaxConcurrentRestoresByHypervisor = limits
 	}
 	return c
 }
 
-func sharedFirecrackerRestoreSlots(limit int) chan struct{} {
+func sharedRestoreSlots(hvType hypervisor.Type, limit int) chan struct{} {
 	if limit <= 0 {
 		limit = defaultManagerFirecrackerMaxConcurrentRestores
 	}
-	slots, _ := firecrackerRestoreSlotPools.LoadOrStore(limit, make(chan struct{}, limit))
+	key := restoreSlotPoolKey{hypervisorType: hvType, limit: limit}
+	slots, _ := restoreSlotPools.LoadOrStore(key, make(chan struct{}, limit))
 	return slots.(chan struct{})
+}
+
+func sharedRestoreSlotsByHypervisor(limits map[hypervisor.Type]int) map[hypervisor.Type]chan struct{} {
+	if len(limits) == 0 {
+		return nil
+	}
+	slots := make(map[hypervisor.Type]chan struct{}, len(limits))
+	for hvType, limit := range limits {
+		slots[hvType] = sharedRestoreSlots(hvType, limit)
+	}
+	return slots
 }
 
 // ResourceValidator validates if resources can be allocated
@@ -183,7 +211,7 @@ type manager struct {
 	guestMemoryPolicy                guestmemory.Policy
 	firecrackerSnapshotMemoryBackend string
 	firecrackerUFFDPager             *uffdpager.Supervisor
-	firecrackerRestoreSlots          chan struct{}
+	restoreSlotsByHypervisor         map[hypervisor.Type]chan struct{}
 }
 
 // platformStarters is populated by platform-specific init functions.
@@ -254,7 +282,7 @@ func NewManagerWithConfigE(p *paths.Paths, imageManager images.Manager, systemMa
 		guestMemoryPolicy:                policy,
 		firecrackerSnapshotMemoryBackend: managerConfig.FirecrackerSnapshotMemoryBackend,
 		firecrackerUFFDPager:             firecrackerUFFDPager,
-		firecrackerRestoreSlots:          sharedFirecrackerRestoreSlots(managerConfig.FirecrackerMaxConcurrentRestores),
+		restoreSlotsByHypervisor:         sharedRestoreSlotsByHypervisor(managerConfig.MaxConcurrentRestoresByHypervisor),
 		snapshotDefaults:                 snapshotDefaults,
 		compressionJobs:                  make(map[string]*compressionJob),
 		nativeCodecPaths:                 make(map[string]string),
@@ -445,6 +473,9 @@ func (m *manager) ForkInstance(ctx context.Context, id string, req ForkInstanceR
 	lock := m.getInstanceLock(id)
 	useReadLock := false
 	var sourceState State
+	// Some hypervisors can safely prepare stopped/standby forks concurrently
+	// from the same source. Probe under a short read lock first; running sources
+	// and unsupported hypervisors fall back to the normal exclusive fork path.
 	lock.RLock()
 	if meta, err := m.loadMetadata(id); err == nil {
 		source := m.toInstance(ctx, meta)
@@ -458,6 +489,9 @@ func (m *manager) ForkInstance(ctx context.Context, id string, req ForkInstanceR
 	var targetRestoreNeedsSourceLock bool
 	var err error
 	if useReadLock {
+		// State may have changed after the first probe. Re-load while holding
+		// the lock used by forkInstance, and only proceed under RLock if the
+		// source is still in a concurrency-safe state.
 		lock.RLock()
 		if meta, loadErr := m.loadMetadata(id); loadErr == nil {
 			source := m.toInstance(ctx, meta)
@@ -482,6 +516,9 @@ func (m *manager) ForkInstance(ctx context.Context, id string, req ForkInstanceR
 
 	inst := forked
 	if !forkTargetStateAlreadyApplied(inst, targetState) {
+		// Standby -> running forks prepared under RLock can still require the
+		// source write lock if Firecracker snapshot paths could not be rewritten
+		// and restore must temporarily alias the source data dir.
 		if useReadLock && sourceState == StateStandby && targetState == StateRunning && targetRestoreNeedsSourceLock {
 			inst, err = m.applyForkTargetStateWithSourceLock(ctx, lock, forked.Id, targetState)
 		} else {
