@@ -709,6 +709,9 @@ func TestFCUFFDOneShotLifecycle(t *testing.T) {
 	})
 
 	source = requireRunningSleepInstance(t, ctx, mgr, sourceID)
+	requireGuestTmpfs(t, ctx, source)
+	writeGuestFile(t, ctx, source, "/root/uffd-lifecycle/source", "source-disk")
+	writeGuestFile(t, ctx, source, "/dev/shm/uffd-lifecycle/source", "source-memory")
 
 	snapshot, err := mgr.CreateSnapshot(ctx, sourceID, CreateSnapshotRequest{
 		Kind: SnapshotKindStandby,
@@ -726,6 +729,8 @@ func TestFCUFFDOneShotLifecycle(t *testing.T) {
 	require.FileExists(t, snapshotMemoryPath)
 
 	source = requireRunningSleepInstance(t, ctx, mgr, sourceID)
+	assertGuestFile(t, ctx, source, "/root/uffd-lifecycle/source", "source-disk")
+	assertGuestFile(t, ctx, source, "/dev/shm/uffd-lifecycle/source", "source-memory")
 
 	parent, err := mgr.ForkSnapshot(ctx, snapshot.Id, ForkSnapshotRequest{
 		Name:        "fc-uffd-oneshot-parent",
@@ -740,6 +745,10 @@ func TestFCUFFDOneShotLifecycle(t *testing.T) {
 		}
 	})
 	parent = requireRunningSleepInstance(t, ctx, mgr, parentID)
+	assertGuestFile(t, ctx, parent, "/root/uffd-lifecycle/source", "source-disk")
+	assertGuestFile(t, ctx, parent, "/dev/shm/uffd-lifecycle/source", "source-memory")
+	writeGuestFile(t, ctx, parent, "/root/uffd-lifecycle/parent-after-uffd", "parent-disk")
+	writeGuestFile(t, ctx, parent, "/dev/shm/uffd-lifecycle/parent-after-uffd", "parent-memory")
 	parentSnapshotMemoryPath := filepath.Join(p.InstanceSnapshotLatest(parentID), "memory")
 	require.NoFileExists(t, parentSnapshotMemoryPath, "UFFD snapshot fanout should defer the memory clone while running")
 	parentMeta, err := mgr.loadMetadata(parentID)
@@ -761,6 +770,10 @@ func TestFCUFFDOneShotLifecycle(t *testing.T) {
 	parent, err = mgr.RestoreInstance(ctx, parentID)
 	require.NoError(t, err)
 	parent = requireRunningSleepInstance(t, ctx, mgr, parentID)
+	assertGuestFile(t, ctx, parent, "/root/uffd-lifecycle/source", "source-disk")
+	assertGuestFile(t, ctx, parent, "/dev/shm/uffd-lifecycle/source", "source-memory")
+	assertGuestFile(t, ctx, parent, "/root/uffd-lifecycle/parent-after-uffd", "parent-disk")
+	assertGuestFile(t, ctx, parent, "/dev/shm/uffd-lifecycle/parent-after-uffd", "parent-memory")
 	parentMeta, err = mgr.loadMetadata(parentID)
 	require.NoError(t, err)
 	require.False(t, parentMeta.StoredMetadata.FirecrackerUseUFFDOnNextRestore)
@@ -784,6 +797,16 @@ func TestFCUFFDOneShotLifecycle(t *testing.T) {
 
 	parent = requireRunningSleepInstance(t, ctx, mgr, parentID)
 	child = requireRunningSleepInstance(t, ctx, mgr, childID)
+	assertGuestFile(t, ctx, parent, "/root/uffd-lifecycle/parent-after-uffd", "parent-disk")
+	assertGuestFile(t, ctx, parent, "/dev/shm/uffd-lifecycle/parent-after-uffd", "parent-memory")
+	assertGuestFile(t, ctx, child, "/root/uffd-lifecycle/source", "source-disk")
+	assertGuestFile(t, ctx, child, "/dev/shm/uffd-lifecycle/source", "source-memory")
+	assertGuestFile(t, ctx, child, "/root/uffd-lifecycle/parent-after-uffd", "parent-disk")
+	assertGuestFile(t, ctx, child, "/dev/shm/uffd-lifecycle/parent-after-uffd", "parent-memory")
+	writeGuestFile(t, ctx, child, "/root/uffd-lifecycle/child-only", "child-disk")
+	writeGuestFile(t, ctx, child, "/dev/shm/uffd-lifecycle/child-only", "child-memory")
+	assertGuestFileAbsent(t, ctx, parent, "/root/uffd-lifecycle/child-only")
+	assertGuestFileAbsent(t, ctx, parent, "/dev/shm/uffd-lifecycle/child-only")
 
 	childSnapshotMemoryPath := filepath.Join(p.InstanceSnapshotLatest(childID), "memory")
 	require.NoFileExists(t, childSnapshotMemoryPath, "running-source child should defer the memory clone while running")
@@ -813,6 +836,20 @@ func TestFCUFFDOneShotLifecycle(t *testing.T) {
 	require.False(t, childMeta.StoredMetadata.FirecrackerUseUFFDOnNextRestore)
 	require.Empty(t, childMeta.StoredMetadata.FirecrackerDeferredSnapshotMemoryPath)
 	require.Empty(t, childMeta.StoredMetadata.FirecrackerUFFDSessionID)
+
+	child, err = mgr.RestoreInstance(ctx, childID)
+	require.NoError(t, err)
+	child = requireRunningSleepInstance(t, ctx, mgr, childID)
+	assertGuestFile(t, ctx, child, "/root/uffd-lifecycle/source", "source-disk")
+	assertGuestFile(t, ctx, child, "/dev/shm/uffd-lifecycle/source", "source-memory")
+	assertGuestFile(t, ctx, child, "/root/uffd-lifecycle/parent-after-uffd", "parent-disk")
+	assertGuestFile(t, ctx, child, "/dev/shm/uffd-lifecycle/parent-after-uffd", "parent-memory")
+	assertGuestFile(t, ctx, child, "/root/uffd-lifecycle/child-only", "child-disk")
+	assertGuestFile(t, ctx, child, "/dev/shm/uffd-lifecycle/child-only", "child-memory")
+
+	child, err = mgr.StandbyInstance(ctx, childID, StandbyInstanceRequest{})
+	require.NoError(t, err)
+	require.Equal(t, StateStandby, child.State)
 
 	require.NoError(t, mgr.DeleteInstance(ctx, childID))
 	childDeleted = true
@@ -851,6 +888,35 @@ func requireRunningSleepInstance(t *testing.T, ctx context.Context, mgr Manager,
 	inst, err = mgr.GetInstance(ctx, instanceID)
 	require.NoError(t, err)
 	return inst
+}
+
+func requireGuestTmpfs(t *testing.T, ctx context.Context, inst *Instance) {
+	t.Helper()
+	output, exitCode, err := execCommand(ctx, inst, "sh", "-c", "mkdir -p /dev/shm && if ! grep -q ' /dev/shm ' /proc/mounts; then mount -t tmpfs -o size=16m tmpfs /dev/shm; fi && grep -q ' /dev/shm ' /proc/mounts")
+	require.NoError(t, err)
+	require.Equal(t, 0, exitCode, output)
+}
+
+func writeGuestFile(t *testing.T, ctx context.Context, inst *Instance, path, contents string) {
+	t.Helper()
+	output, exitCode, err := execCommand(ctx, inst, "sh", "-c", "mkdir -p \"$1\" && printf '%s' \"$2\" > \"$3\" && sync", "sh", filepath.Dir(path), contents, path)
+	require.NoError(t, err)
+	require.Equal(t, 0, exitCode, output)
+}
+
+func assertGuestFile(t *testing.T, ctx context.Context, inst *Instance, path, contents string) {
+	t.Helper()
+	output, exitCode, err := execCommand(ctx, inst, "cat", path)
+	require.NoError(t, err)
+	require.Equal(t, 0, exitCode, output)
+	require.Equal(t, contents, output)
+}
+
+func assertGuestFileAbsent(t *testing.T, ctx context.Context, inst *Instance, path string) {
+	t.Helper()
+	output, exitCode, err := execCommand(ctx, inst, "test", "!", "-e", path)
+	require.NoError(t, err)
+	require.Equal(t, 0, exitCode, output)
 }
 
 // TestFirecrackerForkIsolation verifies CoW isolation between a firecracker
