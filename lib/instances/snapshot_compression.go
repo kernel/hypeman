@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -745,6 +746,12 @@ func (m *manager) cancelAndWaitCompressionJob(ctx context.Context, key string) (
 
 func (m *manager) ensureSnapshotMemoryReady(ctx context.Context, snapshotDir, jobKey string, hvType hypervisor.Type) error {
 	start := time.Now()
+	return m.withSnapshotMemoryPrepareLock(snapshotDir, func() error {
+		return m.ensureSnapshotMemoryReadyWithLock(ctx, snapshotDir, jobKey, hvType, start)
+	})
+}
+
+func (m *manager) ensureSnapshotMemoryReadyWithLock(ctx context.Context, snapshotDir, jobKey string, hvType hypervisor.Type, start time.Time) error {
 	log := logger.FromContext(ctx)
 
 	if jobKey != "" {
@@ -777,6 +784,15 @@ func (m *manager) ensureSnapshotMemoryReady(ctx context.Context, snapshotDir, jo
 	}
 	m.recordSnapshotRestoreMemoryPrepare(ctx, hvType, snapshotMemoryPreparePathDecompress, snapshotCompressionResultSuccess, start)
 	return nil
+}
+
+func (m *manager) withSnapshotMemoryPrepareLock(snapshotDir string, run func() error) error {
+	lockKey := filepath.Clean(snapshotDir)
+	lock, _ := m.snapshotPrepareLocks.LoadOrStore(lockKey, &sync.Mutex{})
+	mu := lock.(*sync.Mutex)
+	mu.Lock()
+	defer mu.Unlock()
+	return run()
 }
 
 func (m *manager) updateSnapshotCompressionMetadata(snapshotID, state, compressionError string, cfg *snapshotstore.SnapshotCompressionConfig, compressedSize, uncompressedSize *int64) error {

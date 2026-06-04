@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -59,8 +58,6 @@ func WithUFFDClient(client UFFDClient) StarterOption {
 }
 
 var _ hypervisor.VMStarter = (*Starter)(nil)
-
-var snapshotSourceAliasMu sync.Mutex
 
 func (s *Starter) SocketName() string {
 	return "fc.sock"
@@ -157,13 +154,19 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 		createdUFFDSession = resp.SessionID
 		backend = snapshotMemBackend{BackendType: "Uffd", BackendPath: resp.UFFDSocketPath}
 	}
-	err = func() error {
-		snapshotSourceAliasMu.Lock()
-		defer snapshotSourceAliasMu.Unlock()
-		return withSnapshotSourceDirAlias(meta, filepath.Dir(socketPath), func() error {
-			return hv.loadSnapshot(ctx, snapshotPath, meta.NetworkOverrides, backend)
-		})
-	}()
+	targetDataDir := filepath.Dir(socketPath)
+	loadSnapshot := func() error {
+		return hv.loadSnapshot(ctx, snapshotPath, meta.NetworkOverrides, backend)
+	}
+	if needsSnapshotSourceDirAlias(meta, targetDataDir) {
+		err = func() error {
+			unlockAlias := hypervisor.LockSnapshotSourceAliasMutation()
+			defer unlockAlias()
+			return withSnapshotSourceDirAlias(meta, targetDataDir, loadSnapshot)
+		}()
+	} else {
+		err = loadSnapshot()
+	}
 	if err != nil {
 		if createdUFFDSession != "" {
 			_ = s.uffd.CloseSession(context.Background(), createdUFFDSession)
@@ -243,6 +246,15 @@ func withSnapshotSourceDirAlias(meta *restoreMetadata, targetDataDir string, run
 		return fmt.Errorf("restore snapshot source data dir: %w", restoreErr)
 	}
 	return nil
+}
+
+func needsSnapshotSourceDirAlias(meta *restoreMetadata, targetDataDir string) bool {
+	if meta == nil || meta.SnapshotSourceDataDir == "" {
+		return false
+	}
+	sourceDataDir := filepath.Clean(meta.SnapshotSourceDataDir)
+	targetDataDir = filepath.Clean(targetDataDir)
+	return sourceDataDir != targetDataDir
 }
 
 func (s *Starter) startProcess(_ context.Context, p *paths.Paths, version string, socketPath string) (int, error) {

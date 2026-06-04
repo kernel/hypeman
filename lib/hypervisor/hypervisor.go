@@ -166,6 +166,10 @@ type ForkPrepareResult struct {
 	// VsockCIDUpdated indicates whether snapshot state was updated to use
 	// ForkPrepareRequest.VsockCID.
 	VsockCIDUpdated bool
+
+	// RequiresSnapshotSourceAlias indicates the restored fork still depends on
+	// temporarily aliasing the source data directory during snapshot load.
+	RequiresSnapshotSourceAlias bool
 }
 
 // Hypervisor defines the interface for VM control operations.
@@ -246,6 +250,10 @@ type Capabilities struct {
 	// SupportsSnapshotBaseReuse indicates snapshots can safely reuse a retained
 	// on-disk base across restore/standby cycles.
 	SupportsSnapshotBaseReuse bool
+
+	// SupportsConcurrentForkPrepare indicates stopped/standby forks can prepare
+	// separate target snapshots concurrently from the same source.
+	SupportsConcurrentForkPrepare bool
 
 	// SupportsDiskResize indicates if live disk resizing (/vm.resize-disk) is available.
 	// Cloud Hypervisor v50.0+ only.

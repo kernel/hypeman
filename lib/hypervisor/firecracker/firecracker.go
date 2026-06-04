@@ -56,15 +56,16 @@ func (f *Firecracker) Capabilities() hypervisor.Capabilities {
 
 func capabilities() hypervisor.Capabilities {
 	return hypervisor.Capabilities{
-		SupportsSnapshot:            true,
-		SupportsHotplugMemory:       false,
-		SupportsBalloonControl:      true,
-		SupportsPause:               true,
-		SupportsVsock:               true,
-		SupportsGPUPassthrough:      false,
-		SupportsDiskIOLimit:         true,
-		SupportsGracefulVMMShutdown: false,
-		SupportsSnapshotBaseReuse:   true,
+		SupportsSnapshot:              true,
+		SupportsHotplugMemory:         false,
+		SupportsBalloonControl:        true,
+		SupportsPause:                 true,
+		SupportsVsock:                 true,
+		SupportsGPUPassthrough:        false,
+		SupportsDiskIOLimit:           true,
+		SupportsGracefulVMMShutdown:   false,
+		SupportsSnapshotBaseReuse:     true,
+		SupportsConcurrentForkPrepare: true,
 	}
 }
 

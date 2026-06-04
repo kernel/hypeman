@@ -1261,6 +1261,43 @@ func TestForkInstance_InvalidRequest(t *testing.T) {
 	assert.Equal(t, "invalid_request", badReq.Code)
 }
 
+func TestForkInstance_InsufficientResources(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	source := instances.Instance{
+		StoredMetadata: instances.StoredMetadata{
+			Id:             "src-instance",
+			Name:           "src-instance",
+			Image:          "docker.io/library/alpine:latest",
+			CreatedAt:      time.Now(),
+			HypervisorType: hypervisor.TypeFirecracker,
+		},
+		State: instances.StateStandby,
+	}
+
+	mockMgr := &captureForkManager{
+		Manager: svc.InstanceManager,
+		err:     fmt.Errorf("apply fork target state: %w: insufficient network bandwidth", instances.ErrInsufficientResources),
+	}
+	svc.InstanceManager = mockMgr
+
+	resp, err := svc.ForkInstance(
+		mw.WithResolvedInstance(ctx(), source.Id, source),
+		oapi.ForkInstanceRequestObject{
+			Id: source.Id,
+			Body: &oapi.ForkInstanceRequest{
+				Name: "forked-instance",
+			},
+		},
+	)
+	require.NoError(t, err)
+
+	conflict, ok := resp.(oapi.ForkInstance409JSONResponse)
+	require.True(t, ok, "expected 409 response")
+	assert.Equal(t, "insufficient_resources", conflict.Code)
+}
+
 func TestStandbyInstance_InvalidRequest(t *testing.T) {
 	t.Parallel()
 	svc := newTestService(t)

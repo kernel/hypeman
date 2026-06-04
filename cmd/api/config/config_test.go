@@ -61,6 +61,9 @@ func TestDefaultConfigIncludesMetricsSettings(t *testing.T) {
 	if cfg.Hypervisor.FirecrackerUFFDCacheMaxBytes != "4294967296" {
 		t.Fatalf("expected default firecracker uffd cache size to be 4294967296, got %q", cfg.Hypervisor.FirecrackerUFFDCacheMaxBytes)
 	}
+	if cfg.Hypervisor.FirecrackerMaxConcurrentRestores != 32 {
+		t.Fatalf("expected default firecracker max concurrent restores to be 32, got %d", cfg.Hypervisor.FirecrackerMaxConcurrentRestores)
+	}
 }
 
 func TestValidateFirecrackerSnapshotMemoryBackend(t *testing.T) {
@@ -83,6 +86,14 @@ func TestValidateFirecrackerSnapshotMemoryBackend(t *testing.T) {
 	cfg.Hypervisor.FirecrackerUFFDCacheMaxBytes = "not-a-size"
 	if err := cfg.Validate(); err == nil {
 		t.Fatalf("expected invalid firecracker uffd cache size validation error")
+	}
+}
+
+func TestValidateFirecrackerMaxConcurrentRestores(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Hypervisor.FirecrackerMaxConcurrentRestores = -1
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected invalid firecracker max concurrent restores validation error")
 	}
 }
 

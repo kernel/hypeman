@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -137,6 +139,277 @@ func TestCleanupForkInstanceOnError(t *testing.T) {
 	assert.ErrorIs(t, err, ErrNotFound)
 }
 
+func TestGetInstanceWaitsDuringSnapshotSourceAlias(t *testing.T) {
+	manager, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	sourceID := "fork-alias-source"
+	aliasID := "fork-alias-child"
+	now := time.Now()
+	for _, meta := range []*metadata{
+		{StoredMetadata: StoredMetadata{
+			Id:                sourceID,
+			Name:              sourceID,
+			Image:             integrationTestImageRef(t, "docker.io/library/alpine:latest"),
+			CreatedAt:         now,
+			StoppedAt:         &now,
+			HypervisorType:    hypervisor.TypeFirecracker,
+			HypervisorVersion: "test",
+			SocketPath:        paths.New(manager.paths.DataDir()).InstanceSocket(sourceID, "fc.sock"),
+			DataDir:           paths.New(manager.paths.DataDir()).InstanceDir(sourceID),
+			VsockCID:          42,
+			VsockSocket:       paths.New(manager.paths.DataDir()).InstanceVsockSocket(sourceID),
+		}},
+		{StoredMetadata: StoredMetadata{
+			Id:                aliasID,
+			Name:              aliasID,
+			Image:             integrationTestImageRef(t, "docker.io/library/alpine:latest"),
+			CreatedAt:         now,
+			HypervisorType:    hypervisor.TypeFirecracker,
+			HypervisorVersion: "test",
+			SocketPath:        paths.New(manager.paths.DataDir()).InstanceSocket(aliasID, "fc.sock"),
+			DataDir:           paths.New(manager.paths.DataDir()).InstanceDir(aliasID),
+			VsockCID:          43,
+			VsockSocket:       paths.New(manager.paths.DataDir()).InstanceVsockSocket(aliasID),
+		}},
+	} {
+		require.NoError(t, manager.ensureDirectories(meta.Id))
+		require.NoError(t, manager.saveMetadata(meta))
+	}
+
+	sourceDir := manager.paths.InstanceDir(sourceID)
+	childDir := manager.paths.InstanceDir(aliasID)
+	backupDir := sourceDir + ".bak"
+
+	unlockAlias := hypervisor.LockSnapshotSourceAliasMutation()
+	aliasLocked := true
+	defer func() {
+		if aliasLocked {
+			unlockAlias()
+		}
+	}()
+	require.NoError(t, os.Rename(sourceDir, backupDir))
+	require.NoError(t, os.Symlink(childDir, sourceDir))
+
+	type getResult struct {
+		inst *Instance
+		err  error
+	}
+	done := make(chan getResult, 1)
+	go func() {
+		inst, err := manager.GetInstance(ctx, sourceID)
+		done <- getResult{inst: inst, err: err}
+	}()
+
+	select {
+	case got := <-done:
+		t.Fatalf("GetInstance returned during source alias mutation: inst=%v err=%v", got.inst, got.err)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	require.NoError(t, os.Remove(sourceDir))
+	require.NoError(t, os.Rename(backupDir, sourceDir))
+	unlockAlias()
+	aliasLocked = false
+
+	got := <-done
+	require.NoError(t, got.err)
+	require.NotNil(t, got.inst)
+	assert.Equal(t, sourceID, got.inst.Id)
+}
+
+func TestForkInstanceStoppedSourceUsesReadLock(t *testing.T) {
+	manager, _ := setupTestManager(t)
+	ctx := context.Background()
+	hvType := hypervisor.Type("concurrent-fork-test")
+	hypervisor.RegisterCapabilities(hvType, hypervisor.Capabilities{SupportsConcurrentForkPrepare: true})
+	manager.vmStarters[hvType] = concurrentForkPrepareTestStarter{}
+
+	sourceID := "fork-stopped-read-lock-source"
+	createStoppedSnapshotSourceFixture(t, manager, sourceID, sourceID, hvType)
+
+	sourceLock := manager.getInstanceLock(sourceID)
+	sourceLock.RLock()
+	defer sourceLock.RUnlock()
+
+	type forkResult struct {
+		inst *Instance
+		err  error
+	}
+	done := make(chan forkResult, 1)
+	go func() {
+		inst, err := manager.ForkInstance(ctx, sourceID, ForkInstanceRequest{Name: "fork-stopped-read-lock-copy"})
+		done <- forkResult{inst: inst, err: err}
+	}()
+
+	select {
+	case got := <-done:
+		require.NoError(t, got.err)
+		require.NotNil(t, got.inst)
+		assert.Equal(t, StateStopped, got.inst.State)
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("ForkInstance blocked behind a source read lock")
+	}
+}
+
+type concurrentForkPrepareTestStarter struct{}
+
+func (concurrentForkPrepareTestStarter) SocketName() string { return "concurrent-fork-test.sock" }
+
+func (concurrentForkPrepareTestStarter) GetBinaryPath(*paths.Paths, string) (string, error) {
+	return "", nil
+}
+
+func (concurrentForkPrepareTestStarter) GetVersion(*paths.Paths) (string, error) { return "test", nil }
+
+func (concurrentForkPrepareTestStarter) StartVM(context.Context, *paths.Paths, string, string, hypervisor.VMConfig) (int, hypervisor.Hypervisor, error) {
+	return 0, nil, nil
+}
+
+func (concurrentForkPrepareTestStarter) RestoreVM(_ context.Context, _ *paths.Paths, _ string, socketPath string, _ string, _ hypervisor.RestoreOptions) (int, hypervisor.Hypervisor, error) {
+	if err := os.MkdirAll(filepath.Dir(socketPath), 0755); err != nil {
+		return 0, nil, err
+	}
+	if err := os.WriteFile(socketPath, []byte("socket"), 0644); err != nil {
+		return 0, nil, err
+	}
+	return 1, lifecycleNoopHypervisor{state: hypervisor.StateRunning}, nil
+}
+
+func (concurrentForkPrepareTestStarter) PrepareFork(context.Context, hypervisor.ForkPrepareRequest) (hypervisor.ForkPrepareResult, error) {
+	return hypervisor.ForkPrepareResult{}, nil
+}
+
+func TestForkInstanceStandbyRunningTargetSkipsSourceWriteLockWithoutAlias(t *testing.T) {
+	manager, _ := setupTestManager(t)
+	ctx := context.Background()
+	hvType := hypervisor.Type("concurrent-fork-restore-test")
+	hypervisor.RegisterCapabilities(hvType, hypervisor.Capabilities{SupportsConcurrentForkPrepare: true})
+	hypervisor.RegisterClientFactory(hvType, func(string) (hypervisor.Hypervisor, error) {
+		return lifecycleNoopHypervisor{state: hypervisor.StateRunning}, nil
+	})
+	manager.vmStarters[hvType] = concurrentForkPrepareTestStarter{}
+
+	sourceID := "fork-standby-running-read-lock-source"
+	createStandbySnapshotSourceFixture(t, manager, sourceID, sourceID, hvType)
+	meta, err := manager.loadMetadata(sourceID)
+	require.NoError(t, err)
+	meta.StoredMetadata.SkipGuestAgent = true
+	require.NoError(t, manager.saveMetadata(meta))
+
+	sourceLock := manager.getInstanceLock(sourceID)
+	sourceLock.RLock()
+	defer sourceLock.RUnlock()
+
+	type forkResult struct {
+		inst *Instance
+		err  error
+	}
+	done := make(chan forkResult, 1)
+	go func() {
+		inst, err := manager.ForkInstance(ctx, sourceID, ForkInstanceRequest{
+			Name:        "fork-standby-running-read-lock-copy",
+			TargetState: StateRunning,
+		})
+		done <- forkResult{inst: inst, err: err}
+	}()
+
+	select {
+	case got := <-done:
+		require.NoError(t, got.err)
+		require.NotNil(t, got.inst)
+		assert.Contains(t, []State{StateRunning, StateInitializing}, got.inst.State)
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("ForkInstance blocked behind the source write lock for a no-alias restore")
+	}
+}
+
+func TestApplyForkTargetStateWithSourceLockRequiresStandbySource(t *testing.T) {
+	t.Parallel()
+
+	manager, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	sourceID := "fork-alias-running-source"
+	forkID := "fork-alias-running-child"
+	now := time.Now()
+	require.NoError(t, manager.ensureDirectories(sourceID))
+	require.NoError(t, manager.ensureDirectories(forkID))
+
+	sourceSocket := manager.paths.InstanceSocket(sourceID, "fc.sock")
+	require.NoError(t, os.MkdirAll(filepath.Dir(sourceSocket), 0755))
+	require.NoError(t, os.WriteFile(sourceSocket, []byte("socket"), 0644))
+	manager.storeCachedHypervisorState(sourceID, hypervisor.StateRunning)
+	require.NoError(t, manager.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
+		Id:                sourceID,
+		Name:              sourceID,
+		Image:             integrationTestImageRef(t, "docker.io/library/alpine:latest"),
+		CreatedAt:         now,
+		HypervisorType:    hypervisor.TypeFirecracker,
+		HypervisorVersion: "test",
+		SocketPath:        sourceSocket,
+		DataDir:           manager.paths.InstanceDir(sourceID),
+		VsockCID:          42,
+		VsockSocket:       manager.paths.InstanceVsockSocket(sourceID),
+	}}))
+
+	forkSnapshotDir := manager.paths.InstanceSnapshotLatest(forkID)
+	require.NoError(t, os.MkdirAll(forkSnapshotDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(forkSnapshotDir, "memory"), []byte("snapshot"), 0644))
+	require.NoError(t, manager.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
+		Id:                forkID,
+		Name:              forkID,
+		Image:             integrationTestImageRef(t, "docker.io/library/alpine:latest"),
+		CreatedAt:         now,
+		HypervisorType:    hypervisor.TypeFirecracker,
+		HypervisorVersion: "test",
+		SocketPath:        manager.paths.InstanceSocket(forkID, "fc.sock"),
+		DataDir:           manager.paths.InstanceDir(forkID),
+		VsockCID:          42,
+		VsockSocket:       manager.paths.InstanceVsockSocket(forkID),
+		SkipGuestAgent:    true,
+	}}))
+
+	_, err := manager.applyForkTargetStateWithSourceLock(ctx, manager.getInstanceLock(sourceID), sourceID, forkID, StateRunning)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidState)
+	assert.Contains(t, err.Error(), "source fork-alias-running-source is now")
+}
+
+func TestForkInstanceStoppedSourceRequiresWriteLockWithoutConcurrentPrepare(t *testing.T) {
+	manager, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	sourceID := "fork-stopped-write-lock-source"
+	createStoppedSnapshotSourceFixture(t, manager, sourceID, sourceID, hypervisor.TypeQEMU)
+
+	sourceLock := manager.getInstanceLock(sourceID)
+	sourceLock.RLock()
+
+	type forkResult struct {
+		inst *Instance
+		err  error
+	}
+	done := make(chan forkResult, 1)
+	go func() {
+		inst, err := manager.ForkInstance(ctx, sourceID, ForkInstanceRequest{Name: "fork-stopped-write-lock-copy"})
+		done <- forkResult{inst: inst, err: err}
+	}()
+
+	select {
+	case got := <-done:
+		sourceLock.RUnlock()
+		t.Fatalf("ForkInstance returned without exclusive source lock: inst=%v err=%v", got.inst, got.err)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	sourceLock.RUnlock()
+	got := <-done
+	require.NoError(t, got.err)
+	require.NotNil(t, got.inst)
+	assert.Equal(t, StateStopped, got.inst.State)
+}
+
 func TestForkInstance_CleansUpOnTargetTransitionError(t *testing.T) {
 	t.Parallel()
 	manager, _ := setupTestManager(t)
@@ -221,6 +494,69 @@ func TestForkInstanceRejectsDuplicateNameForNonNetworkedSource(t *testing.T) {
 	assert.Contains(t, err.Error(), "already exists")
 }
 
+func TestSaveForkMetadataSerializesNameAdmission(t *testing.T) {
+	t.Parallel()
+	manager, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	now := time.Now()
+	metas := []*metadata{
+		{StoredMetadata: StoredMetadata{
+			Id:                "fork-concurrent-name-a",
+			Name:              "fork-concurrent-name",
+			Image:             integrationTestImageRef(t, "docker.io/library/alpine:latest"),
+			CreatedAt:         now,
+			HypervisorType:    hypervisor.TypeCloudHypervisor,
+			HypervisorVersion: "test",
+			SocketPath:        paths.New(manager.paths.DataDir()).InstanceSocket("fork-concurrent-name-a", "cloud-hypervisor.sock"),
+			DataDir:           paths.New(manager.paths.DataDir()).InstanceDir("fork-concurrent-name-a"),
+			VsockCID:          42,
+			VsockSocket:       paths.New(manager.paths.DataDir()).InstanceVsockSocket("fork-concurrent-name-a"),
+		}},
+		{StoredMetadata: StoredMetadata{
+			Id:                "fork-concurrent-name-b",
+			Name:              "fork-concurrent-name",
+			Image:             integrationTestImageRef(t, "docker.io/library/alpine:latest"),
+			CreatedAt:         now,
+			HypervisorType:    hypervisor.TypeCloudHypervisor,
+			HypervisorVersion: "test",
+			SocketPath:        paths.New(manager.paths.DataDir()).InstanceSocket("fork-concurrent-name-b", "cloud-hypervisor.sock"),
+			DataDir:           paths.New(manager.paths.DataDir()).InstanceDir("fork-concurrent-name-b"),
+			VsockCID:          43,
+			VsockSocket:       paths.New(manager.paths.DataDir()).InstanceVsockSocket("fork-concurrent-name-b"),
+		}},
+	}
+	for _, meta := range metas {
+		require.NoError(t, manager.ensureDirectories(meta.Id))
+	}
+
+	var wg sync.WaitGroup
+	errs := make([]error, len(metas))
+	for i := range metas {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errs[i] = manager.saveForkMetadata(ctx, metas[i])
+		}(i)
+	}
+	wg.Wait()
+
+	successes := 0
+	duplicates := 0
+	for _, err := range errs {
+		switch {
+		case err == nil:
+			successes++
+		case errors.Is(err, ErrAlreadyExists):
+			duplicates++
+		default:
+			require.NoError(t, err)
+		}
+	}
+	assert.Equal(t, 1, successes)
+	assert.Equal(t, 1, duplicates)
+}
+
 func TestForkInstanceFromStandbyCancelsCompressionJobAndCopiesRawMemory(t *testing.T) {
 	t.Parallel()
 
@@ -265,7 +601,7 @@ func TestForkInstanceFromStandbyCancelsCompressionJobAndCopiesRawMemory(t *testi
 	}
 	manager.compressionMu.Unlock()
 
-	forked, err := manager.forkInstanceFromStoppedOrStandby(ctx, sourceID, ForkInstanceRequest{
+	forked, _, err := manager.forkInstanceFromStoppedOrStandby(ctx, sourceID, ForkInstanceRequest{
 		Name:        "fork-standby-compressed-copy",
 		TargetState: StateStopped,
 	}, true)

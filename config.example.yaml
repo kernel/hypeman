@@ -26,6 +26,8 @@ data_dir: /var/lib/hypeman
 #   default: cloud-hypervisor
 #   # Optional: use a custom Firecracker binary path instead of the embedded one.
 #   # firecracker_binary_path: /usr/local/bin/firecracker
+#   # Caps concurrent Firecracker snapshot restore/resume work to avoid host overload.
+#   # firecracker_max_concurrent_restores: 32
 #   memory:
 #     enabled: false
 #     # performance: init_on_alloc=0 init_on_free=0 (better density)

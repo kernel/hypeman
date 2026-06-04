@@ -198,6 +198,7 @@ type HypervisorConfig struct {
 	FirecrackerBinaryPath            string                 `koanf:"firecracker_binary_path"`
 	FirecrackerSnapshotMemoryBackend string                 `koanf:"firecracker_snapshot_memory_backend"`
 	FirecrackerUFFDCacheMaxBytes     string                 `koanf:"firecracker_uffd_cache_max_bytes"`
+	FirecrackerMaxConcurrentRestores int                    `koanf:"firecracker_max_concurrent_restores"`
 	Memory                           HypervisorMemoryConfig `koanf:"memory"`
 }
 
@@ -411,6 +412,7 @@ func defaultConfig() *Config {
 			FirecrackerBinaryPath:            "",
 			FirecrackerSnapshotMemoryBackend: "file",
 			FirecrackerUFFDCacheMaxBytes:     "4294967296",
+			FirecrackerMaxConcurrentRestores: 32,
 			Memory: HypervisorMemoryConfig{
 				Enabled:            false,
 				KernelPageInitMode: "hardened",
@@ -572,6 +574,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Build.Timeout <= 0 {
 		return fmt.Errorf("build.timeout must be positive, got %d", c.Build.Timeout)
+	}
+	if c.Hypervisor.FirecrackerMaxConcurrentRestores < 0 {
+		return fmt.Errorf("hypervisor.firecracker_max_concurrent_restores must be >= 0, got %d", c.Hypervisor.FirecrackerMaxConcurrentRestores)
 	}
 	if c.Instances.LifecycleEventBufferSize <= 0 {
 		return fmt.Errorf("instances.lifecycle_event_buffer_size must be positive, got %d", c.Instances.LifecycleEventBufferSize)
