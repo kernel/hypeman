@@ -13,17 +13,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
 const (
 	controlSocketFile = "control.sock"
 	pagerPIDFile      = "pager.pid"
-	pagerLogFile      = "pager.log"
 	pagerEnvFile      = "pager.env"
 	sessionsDir       = "sessions"
 
@@ -35,17 +32,12 @@ type Supervisor struct {
 	versionKey    string
 	cacheMaxBytes int64
 	controlSocket string
-	pagerBinary   string
 
 	mu      sync.Mutex
 	clients map[string]*http.Client
 }
 
 func NewSupervisor(ctx context.Context, dataDir string, cacheMaxBytes int64) (*Supervisor, error) {
-	exe, err := os.Executable()
-	if err != nil {
-		return nil, fmt.Errorf("resolve executable path: %w", err)
-	}
 	versionKey := Version()
 	if versionKey == "" {
 		return nil, fmt.Errorf("uffd pager version is empty")
@@ -55,7 +47,6 @@ func NewSupervisor(ctx context.Context, dataDir string, cacheMaxBytes int64) (*S
 		versionKey:    versionKey,
 		cacheMaxBytes: normalizeCacheMaxBytes(cacheMaxBytes),
 		controlSocket: pagerControlSocket(dataDir, versionKey),
-		pagerBinary:   pagerBinaryPath(exe),
 		clients:       make(map[string]*http.Client),
 	}
 	if err := s.ensureRunning(ctx); err != nil {
@@ -127,54 +118,13 @@ func (s *Supervisor) ensureRunning(ctx context.Context) error {
 	if s.isHealthy(ctx, s.versionKey) {
 		return nil
 	}
-	if s.systemdTemplateInstalled(ctx) {
-		if err := s.ensureRunningSystemd(ctx); err != nil {
-			return err
-		}
-		return s.waitHealthy(ctx)
+	if !s.systemdTemplateInstalled(ctx) {
+		return fmt.Errorf("uffd pager systemd unit template %s is not installed", systemdUnitTemplate)
 	}
-	if err := s.ensureRunningSubprocess(ctx); err != nil {
+	if err := s.ensureRunningSystemd(ctx); err != nil {
 		return err
 	}
 	return s.waitHealthy(ctx)
-}
-
-func (s *Supervisor) ensureRunningSubprocess(ctx context.Context) error {
-	dir := pagerVersionDir(s.dataDir, s.versionKey)
-	if err := os.MkdirAll(filepath.Join(dir, sessionsDir), 0755); err != nil {
-		return fmt.Errorf("create uffd pager directory: %w", err)
-	}
-	_ = os.Remove(s.controlSocket)
-
-	logFile, err := os.OpenFile(filepath.Join(dir, pagerLogFile), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-	if err != nil {
-		return fmt.Errorf("open uffd pager log: %w", err)
-	}
-	defer logFile.Close()
-
-	cmd := exec.Command(
-		s.pagerBinary,
-		"--data-dir", s.dataDir,
-		"--version-key", s.versionKey,
-		"--cache-max-bytes", strconv.FormatInt(s.cacheMaxBytes, 10),
-	)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("start uffd pager: %w", err)
-	}
-	_ = os.WriteFile(filepath.Join(dir, pagerPIDFile), []byte(strconv.Itoa(cmd.Process.Pid)+"\n"), 0644)
-	_ = cmd.Process.Release()
-
-	return nil
-}
-
-func pagerBinaryPath(executable string) string {
-	if override := strings.TrimSpace(os.Getenv("HYPEMAN_UFFD_PAGER_BINARY")); override != "" {
-		return override
-	}
-	return filepath.Join(filepath.Dir(executable), "hypeman-uffd-pager")
 }
 
 func (s *Supervisor) ensureRunningSystemd(ctx context.Context) error {

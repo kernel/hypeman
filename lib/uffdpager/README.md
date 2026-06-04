@@ -24,7 +24,9 @@ connects to the pager version from `VERSION`, so regular Hypeman releases do not
 start a new pager unless the UFFD pager version changes. Older pager versions
 are drained: they reject new sessions but continue serving existing sessions
 until those sessions close. Systemd runs the pager through the dedicated
-`hypeman-uffd-pager` binary rather than an alternate API-server mode.
+`hypeman-uffd-pager` binary rather than an alternate API-server mode. UFFD
+requires that systemd unit template to be installed; Hypeman does not launch an
+unmanaged pager subprocess if the template is missing.
 
 ## Control HTTP API
 

@@ -187,12 +187,13 @@ func (s *session) readPage(offset int64, size int) ([]byte, error) {
 	readNanos := time.Since(readStart).Nanoseconds()
 	s.server.backingReadNanos.Add(readNanos)
 	atomicMaxInt64(&s.server.backingReadMaxNanos, readNanos)
-	if err != nil && !errors.Is(err, io.EOF) {
-		return nil, fmt.Errorf("read backing page at %d: %w", offset, err)
+	if err != nil {
+		return nil, fmt.Errorf("read backing page at %d: read %d/%d bytes: %w", offset, n, size, err)
 	}
-	if n > 0 {
-		s.server.backingBytesRead.Add(int64(n))
+	if n != size {
+		return nil, fmt.Errorf("short backing page read at %d: read %d/%d bytes", offset, n, size)
 	}
+	s.server.backingBytesRead.Add(int64(n))
 	s.server.cache.Add(s.cacheKey, offset, page)
 	return page, nil
 }
