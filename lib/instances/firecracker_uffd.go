@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -36,6 +37,82 @@ func firecrackerSnapshotMemoryPathInGuestDir(guestDir string) string {
 	return filepath.Join(guestDir, firecrackerSnapshotMemoryRelPath)
 }
 
+func (m *manager) lockFirecrackerSnapshotSource(path string) func() {
+	key := firecrackerSnapshotSourceLockKey(path)
+	if key == "" {
+		return func() {}
+	}
+	value, _ := m.snapshotSourceLocks.LoadOrStore(key, &sync.Mutex{})
+	mu := value.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}
+
+func (m *manager) lockFirecrackerSnapshotSourceForRestore(stored *StoredMetadata, opts hypervisor.RestoreOptions) func() {
+	if stored == nil || stored.HypervisorType != hypervisor.TypeFirecracker {
+		return func() {}
+	}
+	path := strings.TrimSpace(opts.SnapshotMemoryBackingPath)
+	if path == "" {
+		path = strings.TrimSpace(stored.FirecrackerDeferredSnapshotMemoryPath)
+	}
+	return m.lockFirecrackerSnapshotSource(path)
+}
+
+func firecrackerSnapshotSourceLockKey(path string) string {
+	path = filepath.Clean(strings.TrimSpace(path))
+	if path == "." || path == "" {
+		return ""
+	}
+	if filepath.Base(path) != "memory" {
+		return path
+	}
+	snapshotDir := filepath.Dir(path)
+	if base := filepath.Base(snapshotDir); base != "snapshot-latest" && base != "snapshot-base" {
+		return path
+	}
+	snapshotsDir := filepath.Dir(snapshotDir)
+	if filepath.Base(snapshotsDir) != "snapshots" {
+		return path
+	}
+	return filepath.Dir(snapshotsDir)
+}
+
+func resolveFirecrackerSnapshotMemoryBackingPath(memoryPath string) (string, error) {
+	if _, err := os.Stat(memoryPath); err == nil {
+		return memoryPath, nil
+	} else if !os.IsNotExist(err) {
+		return "", fmt.Errorf("stat firecracker snapshot memory backing: %w", err)
+	}
+
+	alternatePath := alternateFirecrackerRetainedSnapshotMemoryPath(memoryPath)
+	if alternatePath == "" {
+		return memoryPath, nil
+	}
+	if _, err := os.Stat(alternatePath); err == nil {
+		return alternatePath, nil
+	} else if !os.IsNotExist(err) {
+		return "", fmt.Errorf("stat alternate firecracker snapshot memory backing: %w", err)
+	}
+	return memoryPath, nil
+}
+
+func alternateFirecrackerRetainedSnapshotMemoryPath(memoryPath string) string {
+	if filepath.Base(memoryPath) != "memory" {
+		return ""
+	}
+	snapshotDir := filepath.Dir(memoryPath)
+	snapshotsDir := filepath.Dir(snapshotDir)
+	switch filepath.Base(snapshotDir) {
+	case "snapshot-base":
+		return filepath.Join(snapshotsDir, "snapshot-latest", "memory")
+	case "snapshot-latest":
+		return filepath.Join(snapshotsDir, "snapshot-base", "memory")
+	default:
+		return ""
+	}
+}
+
 func firecrackerDeferredSnapshotMemoryPath(stored *StoredMetadata, guestDir string) string {
 	if stored != nil {
 		if path := strings.TrimSpace(stored.FirecrackerDeferredSnapshotMemoryPath); path != "" {
@@ -62,6 +139,10 @@ func (m *manager) firecrackerSnapshotRestoreOptions(stored *StoredMetadata, snap
 	backingMemoryPath := strings.TrimSpace(stored.FirecrackerDeferredSnapshotMemoryPath)
 	if backingMemoryPath == "" {
 		backingMemoryPath = filepath.Join(snapshotDir, "memory")
+	}
+	backingMemoryPath, err := resolveFirecrackerSnapshotMemoryBackingPath(backingMemoryPath)
+	if err != nil {
+		return opts, err
 	}
 	cacheKey := strings.TrimSpace(stored.FirecrackerSnapshotCacheKey)
 	if cacheKey == "" {

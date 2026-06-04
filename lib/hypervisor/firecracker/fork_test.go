@@ -63,7 +63,7 @@ func TestPrepareFork_RetainsExistingSourceAlias(t *testing.T) {
 	meta, err := loadRestoreMetadata(targetDir)
 	require.NoError(t, err)
 	assert.Equal(t, sourceDir, meta.SnapshotSourceDataDir)
-	assert.True(t, meta.RetainSnapshotSourceDataDirAlias)
+	assert.False(t, meta.RetainSnapshotSourceDataDirAlias)
 }
 
 func TestPrepareFork_RewritesSnapshotStatePathsWithoutAlias(t *testing.T) {

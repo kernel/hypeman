@@ -91,7 +91,7 @@ func TestForkInstanceFromStandbyArmsOneShotUFFDForFirecrackerRestore(t *testing.
 	require.NoError(t, mgr.saveMetadata(sourceMeta))
 	mgr.firecrackerSnapshotMemoryBackend = uffdpager.BackendUFFD
 
-	forked, err := mgr.forkInstanceFromStoppedOrStandby(ctx, sourceID, ForkInstanceRequest{
+	forked, _, err := mgr.forkInstanceFromStoppedOrStandby(ctx, sourceID, ForkInstanceRequest{
 		Name:        "one-shot-uffd-instance-fork",
 		TargetState: StateStandby,
 	}, true)
@@ -125,7 +125,7 @@ func TestForkInstanceFromStandbyDoesNotArmOneShotUFFDForStoppedTarget(t *testing
 	require.NoError(t, mgr.saveMetadata(sourceMeta))
 	mgr.firecrackerSnapshotMemoryBackend = uffdpager.BackendUFFD
 
-	forked, err := mgr.forkInstanceFromStoppedOrStandby(ctx, sourceID, ForkInstanceRequest{
+	forked, _, err := mgr.forkInstanceFromStoppedOrStandby(ctx, sourceID, ForkInstanceRequest{
 		Name:        "one-shot-uffd-instance-stopped-fork",
 		TargetState: StateStopped,
 	}, true)
@@ -233,6 +233,28 @@ func TestRestoreInstanceClearsOneShotUFFDFlagAfterSuccessfulRestore(t *testing.T
 	updated, err := mgr.loadMetadata(id)
 	require.NoError(t, err)
 	assert.False(t, updated.StoredMetadata.FirecrackerUseUFFDOnNextRestore)
+}
+
+func TestResolveFirecrackerSnapshotMemoryBackingPathUsesRetainedBaseAlternate(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	latestMemoryPath := filepath.Join(root, "snapshots", "snapshot-latest", "memory")
+	baseMemoryPath := filepath.Join(root, "snapshots", "snapshot-base", "memory")
+	require.NoError(t, os.MkdirAll(filepath.Dir(baseMemoryPath), 0755))
+	require.NoError(t, os.WriteFile(baseMemoryPath, []byte("base memory"), 0644))
+
+	resolved, err := resolveFirecrackerSnapshotMemoryBackingPath(latestMemoryPath)
+	require.NoError(t, err)
+	assert.Equal(t, baseMemoryPath, resolved)
+}
+
+func TestFirecrackerSnapshotSourceLockKeyUsesGuestDirectory(t *testing.T) {
+	t.Parallel()
+
+	guestDir := filepath.Join(t.TempDir(), "guests", "source")
+	assert.Equal(t, guestDir, firecrackerSnapshotSourceLockKey(filepath.Join(guestDir, "snapshots", "snapshot-latest", "memory")))
+	assert.Equal(t, guestDir, firecrackerSnapshotSourceLockKey(filepath.Join(guestDir, "snapshots", "snapshot-base", "memory")))
 }
 
 func installOneShotFirecrackerStarter(t *testing.T, mgr *manager) {

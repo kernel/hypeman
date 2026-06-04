@@ -81,6 +81,7 @@ func TestCopyGuestDirectory_SkipsSocketRuntimeArtifacts(t *testing.T) {
 	dst := filepath.Join(base, "dst")
 	require.NoError(t, os.MkdirAll(src, 0755))
 	require.NoError(t, os.WriteFile(filepath.Join(src, "metadata.json"), []byte(`{"id":"abc"}`), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(src, "vsock.sock"), []byte("stale regular artifact"), 0644))
 
 	socketPath := filepath.Join(src, fmt.Sprintf("vz-%d.sock", time.Now().UnixNano()))
 	listener, err := net.Listen("unix", socketPath)
@@ -90,6 +91,7 @@ func TestCopyGuestDirectory_SkipsSocketRuntimeArtifacts(t *testing.T) {
 	require.NoError(t, CopyGuestDirectory(src, dst))
 
 	assert.NoFileExists(t, filepath.Join(dst, filepath.Base(socketPath)))
+	assert.NoFileExists(t, filepath.Join(dst, "vsock.sock"))
 	assert.FileExists(t, filepath.Join(dst, "metadata.json"))
 }
 

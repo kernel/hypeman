@@ -426,6 +426,10 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 	if m.shouldDeferFirecrackerSnapshotMemoryCopy(&deferredSource, rec.Snapshot.Kind == SnapshotKindStandby, targetState) {
 		deferredSnapshotMemoryPath = firecrackerDeferredSnapshotMemoryPath(&rec.StoredMetadata, snapshotGuestDir)
 	}
+	if deferredSnapshotMemoryPath != "" {
+		unlockSnapshotSource := m.lockFirecrackerSnapshotSource(deferredSnapshotMemoryPath)
+		defer unlockSnapshotSource()
+	}
 	if err := m.copySnapshotGuestDirectoryForFork(ctx, snapshotID, rec.StoredMetadata.HypervisorType, dstDir, deferredSnapshotMemoryPath); err != nil {
 		return nil, err
 	}

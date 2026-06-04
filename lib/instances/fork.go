@@ -258,7 +258,7 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 	}
 	targetState, err := resolveForkTargetState(req.TargetState, source.State)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if err := validateForkVolumeSafety(stored.Volumes); err != nil {
 		return nil, false, err
@@ -291,6 +291,11 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 	deferredSnapshotMemoryPath := ""
 	if m.shouldDeferFirecrackerSnapshotMemoryCopy(stored, source.State == StateStandby, targetState) {
 		deferredSnapshotMemoryPath = firecrackerDeferredSnapshotMemoryPath(stored, srcDir)
+	}
+	unlockSnapshotSource := func() {}
+	if deferredSnapshotMemoryPath != "" {
+		unlockSnapshotSource = m.lockFirecrackerSnapshotSource(deferredSnapshotMemoryPath)
+		defer unlockSnapshotSource()
 	}
 
 	cu := cleanup.Make(func() {
