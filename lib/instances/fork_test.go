@@ -266,7 +266,7 @@ func (concurrentForkPrepareTestStarter) StartVM(context.Context, *paths.Paths, s
 	return 0, nil, nil
 }
 
-func (concurrentForkPrepareTestStarter) RestoreVM(_ context.Context, _ *paths.Paths, _ string, socketPath string, _ string) (int, hypervisor.Hypervisor, error) {
+func (concurrentForkPrepareTestStarter) RestoreVM(_ context.Context, _ *paths.Paths, _ string, socketPath string, _ string, _ hypervisor.RestoreOptions) (int, hypervisor.Hypervisor, error) {
 	if err := os.MkdirAll(filepath.Dir(socketPath), 0755); err != nil {
 		return 0, nil, err
 	}
