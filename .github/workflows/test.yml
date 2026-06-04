@@ -95,6 +95,29 @@ jobs:
       - name: Build
         run: make build
 
+      - name: Install UFFD pager systemd template
+        run: |
+          sudo mkdir -p /run/hypeman/uffd
+          sudo tee /etc/systemd/system/hypeman-uffd@.service > /dev/null <<'EOF'
+          [Unit]
+          Description=Hypeman UFFD Pager (%i)
+          Documentation=https://github.com/kernel/hypeman
+          After=network.target
+
+          [Service]
+          Type=simple
+          Environment="HYPEMAN_UFFD_BINARY=/opt/hypeman/bin/hypeman-uffd-pager"
+          Environment="HYPEMAN_UFFD_DATA_DIR=/var/lib/hypeman"
+          Environment="HYPEMAN_UFFD_VERSION_KEY=%i"
+          Environment="HYPEMAN_UFFD_CACHE_MAX_BYTES=4294967296"
+          EnvironmentFile=-/run/hypeman/uffd/%i.env
+          ExecStart=/bin/sh -c 'exec "$HYPEMAN_UFFD_BINARY" --data-dir "$HYPEMAN_UFFD_DATA_DIR" --version-key "$HYPEMAN_UFFD_VERSION_KEY" --cache-max-bytes "$HYPEMAN_UFFD_CACHE_MAX_BYTES"'
+          Restart=on-failure
+          RestartSec=5
+          KillMode=process
+          EOF
+          sudo systemctl daemon-reload
+
       - name: Prewarm test cache
         env:
           HYPEMAN_TEST_REGISTRY: 127.0.0.1:5001
@@ -132,6 +155,7 @@ jobs:
           HYPEMAN_TEST_PREWARM_STRICT: "1"
           HYPEMAN_TEST_REGISTRY: 127.0.0.1:5001
           HYPEMAN_UFFD_PAGER_BINARY: ${{ runner.temp }}/hypeman-uffd-pager-${{ github.run_id }}-${{ github.run_attempt }}
+          HYPEMAN_UFFD_SYSTEMD_INSTANCE_PREFIX: ci-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           cp "$PWD/bin/hypeman-uffd-pager" "$HYPEMAN_UFFD_PAGER_BINARY"
           chmod +x "$HYPEMAN_UFFD_PAGER_BINARY"
@@ -141,6 +165,12 @@ jobs:
       - name: Cleanup
         if: always()
         run: |
+          units="$(systemctl list-units --all --full --plain 'hypeman-uffd@ci-${{ github.run_id }}-${{ github.run_attempt }}-*.service' --no-legend | awk '{print $1}' || true)"
+          if [ -n "$units" ]; then
+            echo "$units" | xargs -r sudo systemctl stop
+            echo "$units" | xargs -r sudo systemctl reset-failed
+          fi
+          sudo rm -f /run/hypeman/uffd/ci-${{ github.run_id }}-${{ github.run_attempt }}-*.env
           sudo rm -rf "/tmp/hm-net-${{ github.run_id }}-${{ github.run_attempt }}"
           rm -f "${{ runner.temp }}/hypeman-uffd-pager-${{ github.run_id }}-${{ github.run_attempt }}"
 

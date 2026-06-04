@@ -5,6 +5,8 @@ package uffdpager
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -21,17 +23,18 @@ import (
 const (
 	controlSocketFile = "control.sock"
 	pagerPIDFile      = "pager.pid"
-	pagerEnvFile      = "pager.env"
 	sessionsDir       = "sessions"
 
-	systemdUnitTemplate = "hypeman-uffd@.service"
+	systemdUnitTemplate  = "hypeman-uffd@.service"
+	systemdRuntimeEnvDir = "/run/hypeman/uffd"
 )
 
 type Supervisor struct {
-	dataDir       string
-	versionKey    string
-	cacheMaxBytes int64
-	controlSocket string
+	dataDir            string
+	versionKey         string
+	systemdInstanceKey string
+	cacheMaxBytes      int64
+	controlSocket      string
 
 	mu      sync.Mutex
 	clients map[string]*http.Client
@@ -43,11 +46,12 @@ func NewSupervisor(ctx context.Context, dataDir string, cacheMaxBytes int64) (*S
 		return nil, fmt.Errorf("uffd pager version is empty")
 	}
 	s := &Supervisor{
-		dataDir:       dataDir,
-		versionKey:    versionKey,
-		cacheMaxBytes: normalizeCacheMaxBytes(cacheMaxBytes),
-		controlSocket: pagerControlSocket(dataDir, versionKey),
-		clients:       make(map[string]*http.Client),
+		dataDir:            dataDir,
+		versionKey:         versionKey,
+		systemdInstanceKey: systemdInstanceKey(versionKey, dataDir),
+		cacheMaxBytes:      normalizeCacheMaxBytes(cacheMaxBytes),
+		controlSocket:      pagerControlSocket(dataDir, versionKey),
+		clients:            make(map[string]*http.Client),
 	}
 	if err := s.ensureRunning(ctx); err != nil {
 		return nil, err
@@ -132,11 +136,14 @@ func (s *Supervisor) ensureRunningSystemd(ctx context.Context) error {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("create uffd pager directory: %w", err)
 	}
-	env := fmt.Sprintf("HYPEMAN_UFFD_CACHE_MAX_BYTES=%d\n", s.cacheMaxBytes)
-	if err := os.WriteFile(filepath.Join(dir, pagerEnvFile), []byte(env), 0644); err != nil {
+	if err := os.MkdirAll(systemdRuntimeEnvDir, 0755); err != nil {
+		return fmt.Errorf("create uffd pager systemd environment directory: %w", err)
+	}
+	env := s.systemdEnvironment()
+	if err := os.WriteFile(systemdEnvFile(s.systemdInstanceKey), []byte(env), 0644); err != nil {
 		return fmt.Errorf("write uffd pager systemd environment: %w", err)
 	}
-	unit := systemdUnitName(s.versionKey)
+	unit := systemdUnitName(s.systemdInstanceKey)
 	cmd := exec.CommandContext(ctx, "systemctl", "start", unit)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("start uffd pager systemd unit %s: %w: %s", unit, err, strings.TrimSpace(string(out)))
@@ -169,6 +176,17 @@ func (s *Supervisor) systemdTemplateInstalled(ctx context.Context) bool {
 	}
 	cmd := exec.CommandContext(ctx, "systemctl", "cat", systemdUnitTemplate)
 	return cmd.Run() == nil
+}
+
+func (s *Supervisor) systemdEnvironment() string {
+	var b strings.Builder
+	b.WriteString(systemdEnvLine("HYPEMAN_UFFD_CACHE_MAX_BYTES", fmt.Sprintf("%d", s.cacheMaxBytes)))
+	b.WriteString(systemdEnvLine("HYPEMAN_UFFD_DATA_DIR", s.dataDir))
+	b.WriteString(systemdEnvLine("HYPEMAN_UFFD_VERSION_KEY", s.versionKey))
+	if binary := strings.TrimSpace(os.Getenv("HYPEMAN_UFFD_PAGER_BINARY")); binary != "" {
+		b.WriteString(systemdEnvLine("HYPEMAN_UFFD_BINARY", binary))
+	}
+	return b.String()
 }
 
 func (s *Supervisor) isHealthy(ctx context.Context, versionKey string) bool {
@@ -258,6 +276,48 @@ func urlPathEscape(value string) string {
 	return replacer.Replace(value)
 }
 
-func systemdUnitName(versionKey string) string {
-	return "hypeman-uffd@" + versionKey + ".service"
+func systemdInstanceKey(versionKey, dataDir string) string {
+	prefix := sanitizeSystemdInstancePart(os.Getenv("HYPEMAN_UFFD_SYSTEMD_INSTANCE_PREFIX"))
+	if prefix == "" {
+		return versionKey
+	}
+	sum := sha256.Sum256([]byte(filepath.Clean(dataDir)))
+	return prefix + "-" + versionKey + "-" + hex.EncodeToString(sum[:4])
+}
+
+func sanitizeSystemdInstancePart(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	var b strings.Builder
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= 'A' && r <= 'Z':
+			b.WriteRune(r)
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == '.', r == '_', r == '-':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	return strings.Trim(b.String(), "-")
+}
+
+func systemdEnvFile(instanceKey string) string {
+	return filepath.Join(systemdRuntimeEnvDir, instanceKey+".env")
+}
+
+func systemdEnvLine(key, value string) string {
+	escaped := strings.ReplaceAll(value, `\`, `\\`)
+	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
+	return key + `="` + escaped + `"` + "\n"
+}
+
+func systemdUnitName(instanceKey string) string {
+	return "hypeman-uffd@" + instanceKey + ".service"
 }
