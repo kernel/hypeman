@@ -146,7 +146,11 @@ func (m *manager) standbyInstance(
 		attribute.String("operation", "create_snapshot"),
 		attribute.Bool("reuse_snapshot_base", reuseSnapshotBase),
 	)
-	if err := createSnapshot(snapshotCtx, hv, snapshotDir, reuseSnapshotBase); err != nil {
+	snapshotOptions := hypervisor.SnapshotOptions{}
+	if stored.HypervisorType == hypervisor.TypeFirecracker {
+		snapshotOptions.DeferredMemoryBackingPath = stored.FirecrackerDeferredSnapshotMemoryPath
+	}
+	if err := createSnapshot(snapshotCtx, hv, snapshotDir, reuseSnapshotBase, snapshotOptions); err != nil {
 		snapshotSpanEnd(err)
 		// Snapshot failed - try to resume VM
 		log.ErrorContext(ctx, "snapshot failed, attempting to resume VM", "instance_id", id, "error", err)
@@ -217,6 +221,7 @@ func (m *manager) standbyInstance(
 	stored.StoppedAt = &now
 	stored.HypervisorPID = nil
 	stored.PendingStandbyCompression = nil
+	clearFirecrackerUFFDRestoreState(stored)
 	if err := m.refreshFirecrackerSnapshotCacheKey(stored, snapshotDir); err != nil {
 		log.WarnContext(ctx, "failed to refresh firecracker snapshot cache key", "instance_id", id, "error", err)
 	}
@@ -274,7 +279,7 @@ func (m *manager) standbyInstance(
 }
 
 // createSnapshot creates a snapshot using the hypervisor interface
-func createSnapshot(ctx context.Context, hv hypervisor.Hypervisor, snapshotDir string, reuseSnapshotBase bool) error {
+func createSnapshot(ctx context.Context, hv hypervisor.Hypervisor, snapshotDir string, reuseSnapshotBase bool, opts hypervisor.SnapshotOptions) error {
 	log := logger.FromContext(ctx)
 
 	// Remove old snapshot if the hypervisor does not support reusing snapshots
@@ -290,7 +295,7 @@ func createSnapshot(ctx context.Context, hv hypervisor.Hypervisor, snapshotDir s
 
 	// Create snapshot via hypervisor API
 	log.DebugContext(ctx, "invoking hypervisor snapshot API", "snapshot_dir", snapshotDir)
-	if err := hv.Snapshot(ctx, snapshotDir); err != nil {
+	if err := hv.Snapshot(ctx, snapshotDir, opts); err != nil {
 		return fmt.Errorf("snapshot: %w", err)
 	}
 

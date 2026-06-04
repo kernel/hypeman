@@ -33,7 +33,7 @@ Before using optional features, callers check capabilities:
 
 ```go
 if hv.Capabilities().SupportsSnapshot {
-    hv.Snapshot(ctx, path)
+    hv.Snapshot(ctx, path, hypervisor.SnapshotOptions{})
 }
 ```
 

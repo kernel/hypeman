@@ -318,6 +318,10 @@ func (m *manager) restoreSnapshot(ctx context.Context, id string, snapshotID str
 	}
 	restored.SocketPath = m.paths.InstanceSocket(id, starter.SocketName())
 	restored.VsockSocket = m.paths.InstanceSocket(id, hypervisor.VsockSocketNameForType(targetHypervisor))
+	clearFirecrackerUFFDRestoreState(&restored)
+	if targetState == StateStopped {
+		restored.FirecrackerSnapshotCacheKey = ""
+	}
 	if rec.Snapshot.Kind == SnapshotKindStopped {
 		restored.VsockCID = generateVsockCID(id)
 	}
@@ -413,7 +417,25 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 	if target != nil && target.State == compressionJobStateRunning {
 		m.recordSnapshotCompressionPreemption(ctx, snapshotCompressionPreemptionForkSnapshot, target.Target)
 	}
-	if err := m.copySnapshotGuestDirectoryForFork(ctx, snapshotID, rec.StoredMetadata.HypervisorType, dstDir); err != nil {
+	snapshotGuestDir := m.paths.SnapshotGuestDir(snapshotID)
+	deferredSource := rec.StoredMetadata
+	deferredSource.HypervisorType = targetHypervisor
+	deferredSnapshotMemoryPath := ""
+	if m.shouldDeferFirecrackerSnapshotMemoryCopy(&deferredSource, rec.Snapshot.Kind == SnapshotKindStandby, targetState) {
+		deferredSnapshotMemoryPath = firecrackerDeferredSnapshotMemoryPath(&rec.StoredMetadata, snapshotGuestDir)
+	}
+	unlockSnapshotSource := func() {}
+	snapshotSourceLocked := false
+	if deferredSnapshotMemoryPath != "" {
+		unlockSnapshotSource = m.lockFirecrackerSnapshotSource(deferredSnapshotMemoryPath)
+		snapshotSourceLocked = true
+	}
+	defer func() {
+		if snapshotSourceLocked {
+			unlockSnapshotSource()
+		}
+	}()
+	if err := m.copySnapshotGuestDirectoryForFork(ctx, snapshotID, rec.StoredMetadata.HypervisorType, dstDir, deferredSnapshotMemoryPath); err != nil {
 		return nil, err
 	}
 
@@ -446,8 +468,11 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 	forkMeta.RestartStatus = restartpolicy.Status{}
 	forkMeta.FirecrackerUFFDSessionID = ""
 	forkMeta.FirecrackerUFFDPagerVersion = ""
+	forkMeta.FirecrackerUseUFFDOnNextRestore = useFirecrackerUFFDOnNextRestore(targetHypervisor, rec.Snapshot.Kind == SnapshotKindStandby, targetState)
+	forkMeta.FirecrackerDeferredSnapshotMemoryPath = deferredSnapshotMemoryPath
 	if rec.Snapshot.Kind != SnapshotKindStandby {
 		forkMeta.FirecrackerSnapshotCacheKey = ""
+		forkMeta.FirecrackerDeferredSnapshotMemoryPath = ""
 	}
 	if rec.Snapshot.Kind == SnapshotKindStandby {
 		forkMeta.VsockCID = rec.StoredMetadata.VsockCID
@@ -487,6 +512,10 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 				"source_data_dir", rec.StoredMetadata.DataDir,
 				"target_data_dir", forkMeta.DataDir)
 		}
+	}
+	if snapshotSourceLocked {
+		unlockSnapshotSource()
+		snapshotSourceLocked = false
 	}
 
 	if err := m.saveMetadata(&metadata{StoredMetadata: forkMeta}); err != nil {

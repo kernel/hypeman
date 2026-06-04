@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -16,10 +17,108 @@ import (
 	"github.com/kernel/hypeman/lib/uffdpager"
 )
 
+const firecrackerSnapshotMemoryRelPath = "snapshots/snapshot-latest/memory"
+
 func (m *manager) useFirecrackerUFFD(stored *StoredMetadata) bool {
 	return stored != nil &&
 		stored.HypervisorType == hypervisor.TypeFirecracker &&
 		m.firecrackerSnapshotMemoryBackend == uffdpager.BackendUFFD
+}
+
+func useFirecrackerUFFDOnNextRestore(hvType hypervisor.Type, sourceIsStandby bool, targetState State) bool {
+	return hvType == hypervisor.TypeFirecracker && sourceIsStandby && targetState != StateStopped
+}
+
+func (m *manager) shouldDeferFirecrackerSnapshotMemoryCopy(stored *StoredMetadata, sourceIsStandby bool, targetState State) bool {
+	return m.useFirecrackerUFFD(stored) && useFirecrackerUFFDOnNextRestore(stored.HypervisorType, sourceIsStandby, targetState)
+}
+
+func clearFirecrackerUFFDRestoreState(stored *StoredMetadata) {
+	if stored == nil {
+		return
+	}
+	stored.FirecrackerUseUFFDOnNextRestore = false
+	stored.FirecrackerUFFDSessionID = ""
+	stored.FirecrackerUFFDPagerVersion = ""
+	stored.FirecrackerDeferredSnapshotMemoryPath = ""
+}
+
+func firecrackerSnapshotMemoryPathInGuestDir(guestDir string) string {
+	return filepath.Join(guestDir, firecrackerSnapshotMemoryRelPath)
+}
+
+func (m *manager) lockFirecrackerSnapshotSource(path string) func() {
+	key := firecrackerSnapshotSourceLockKey(path)
+	if key == "" {
+		return func() {}
+	}
+	value, _ := m.snapshotSourceLocks.LoadOrStore(key, &sync.Mutex{})
+	mu := value.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}
+
+func firecrackerSnapshotSourceLockKey(path string) string {
+	path = filepath.Clean(strings.TrimSpace(path))
+	if path == "." || path == "" {
+		return ""
+	}
+	if filepath.Base(path) != "memory" {
+		return path
+	}
+	snapshotDir := filepath.Dir(path)
+	if base := filepath.Base(snapshotDir); base != "snapshot-latest" && base != "snapshot-base" {
+		return path
+	}
+	snapshotsDir := filepath.Dir(snapshotDir)
+	if filepath.Base(snapshotsDir) != "snapshots" {
+		return path
+	}
+	return filepath.Dir(snapshotsDir)
+}
+
+func resolveFirecrackerSnapshotMemoryBackingPath(memoryPath string) (string, error) {
+	if _, err := os.Stat(memoryPath); err == nil {
+		return memoryPath, nil
+	} else if !os.IsNotExist(err) {
+		return "", fmt.Errorf("stat firecracker snapshot memory backing: %w", err)
+	}
+
+	alternatePath := alternateFirecrackerRetainedSnapshotMemoryPath(memoryPath)
+	if alternatePath == "" {
+		return memoryPath, nil
+	}
+	if _, err := os.Stat(alternatePath); err == nil {
+		return alternatePath, nil
+	} else if !os.IsNotExist(err) {
+		return "", fmt.Errorf("stat alternate firecracker snapshot memory backing: %w", err)
+	}
+	return memoryPath, nil
+}
+
+func alternateFirecrackerRetainedSnapshotMemoryPath(memoryPath string) string {
+	if filepath.Base(memoryPath) != "memory" {
+		return ""
+	}
+	snapshotDir := filepath.Dir(memoryPath)
+	snapshotsDir := filepath.Dir(snapshotDir)
+	switch filepath.Base(snapshotDir) {
+	case "snapshot-base":
+		return filepath.Join(snapshotsDir, "snapshot-latest", "memory")
+	case "snapshot-latest":
+		return filepath.Join(snapshotsDir, "snapshot-base", "memory")
+	default:
+		return ""
+	}
+}
+
+func firecrackerDeferredSnapshotMemoryPath(stored *StoredMetadata, guestDir string) string {
+	if stored != nil {
+		if path := strings.TrimSpace(stored.FirecrackerDeferredSnapshotMemoryPath); path != "" {
+			return path
+		}
+	}
+	return firecrackerSnapshotMemoryPathInGuestDir(guestDir)
 }
 
 func (m *manager) firecrackerSnapshotRestoreOptions(stored *StoredMetadata, snapshotDir string) (hypervisor.RestoreOptions, error) {
@@ -27,19 +126,26 @@ func (m *manager) firecrackerSnapshotRestoreOptions(stored *StoredMetadata, snap
 	if stored == nil || stored.HypervisorType != hypervisor.TypeFirecracker {
 		return opts, nil
 	}
-	if !m.useFirecrackerUFFD(stored) {
-		stored.FirecrackerUFFDSessionID = ""
-		stored.FirecrackerUFFDPagerVersion = ""
+	if !m.useFirecrackerUFFD(stored) || !stored.FirecrackerUseUFFDOnNextRestore {
+		clearFirecrackerUFFDRestoreState(stored)
 		return opts, nil
 	}
 	if m.firecrackerUFFDPager == nil {
 		return opts, fmt.Errorf("firecracker uffd snapshot restore is enabled but the pager is not configured")
 	}
 
+	backingMemoryPath := strings.TrimSpace(stored.FirecrackerDeferredSnapshotMemoryPath)
+	if backingMemoryPath == "" {
+		backingMemoryPath = filepath.Join(snapshotDir, "memory")
+	}
+	backingMemoryPath, err := resolveFirecrackerSnapshotMemoryBackingPath(backingMemoryPath)
+	if err != nil {
+		return opts, err
+	}
 	cacheKey := strings.TrimSpace(stored.FirecrackerSnapshotCacheKey)
 	if cacheKey == "" {
 		var err error
-		cacheKey, err = firecrackerSnapshotCacheKey(stored, snapshotDir)
+		cacheKey, err = firecrackerSnapshotCacheKeyForPaths(stored, backingMemoryPath, filepath.Join(snapshotDir, "state"))
 		if err != nil {
 			return opts, err
 		}
@@ -48,6 +154,7 @@ func (m *manager) firecrackerSnapshotRestoreOptions(stored *StoredMetadata, snap
 	stored.FirecrackerUFFDSessionID = stored.Id
 	stored.FirecrackerUFFDPagerVersion = m.firecrackerUFFDPager.VersionKey()
 	opts.SnapshotMemoryBackend = hypervisor.SnapshotMemoryBackendUFFD
+	opts.SnapshotMemoryBackingPath = backingMemoryPath
 	opts.SnapshotMemoryCacheKey = cacheKey
 	opts.SnapshotMemorySessionID = stored.FirecrackerUFFDSessionID
 	return opts, nil
@@ -116,11 +223,15 @@ func (m *manager) checkFirecrackerUFFDSessionHealth(ctx context.Context, stored 
 }
 
 func firecrackerSnapshotCacheKey(stored *StoredMetadata, snapshotDir string) (string, error) {
-	memoryInfo, err := os.Stat(filepath.Join(snapshotDir, "memory"))
+	return firecrackerSnapshotCacheKeyForPaths(stored, filepath.Join(snapshotDir, "memory"), filepath.Join(snapshotDir, "state"))
+}
+
+func firecrackerSnapshotCacheKeyForPaths(stored *StoredMetadata, memoryPath string, statePath string) (string, error) {
+	memoryInfo, err := os.Stat(memoryPath)
 	if err != nil {
 		return "", fmt.Errorf("stat firecracker snapshot memory for uffd cache key: %w", err)
 	}
-	stateInfo, err := os.Stat(filepath.Join(snapshotDir, "state"))
+	stateInfo, err := os.Stat(statePath)
 	if err != nil {
 		return "", fmt.Errorf("stat firecracker snapshot state for uffd cache key: %w", err)
 	}

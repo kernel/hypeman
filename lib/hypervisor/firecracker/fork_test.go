@@ -44,7 +44,7 @@ func TestPrepareFork_SnapshotRewritePersistsRestoreMetadata(t *testing.T) {
 	assert.True(t, meta.RetainSnapshotSourceDataDirAlias)
 }
 
-func TestPrepareFork_DoesNotRetainExistingSourceAlias(t *testing.T) {
+func TestPrepareFork_RetainsExistingSourceAlias(t *testing.T) {
 	starter := NewStarter()
 	tmp := t.TempDir()
 	sourceDir := filepath.Join(tmp, "source")

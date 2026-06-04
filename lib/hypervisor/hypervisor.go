@@ -132,9 +132,14 @@ const (
 )
 
 type RestoreOptions struct {
-	SnapshotMemoryBackend   SnapshotMemoryBackend
-	SnapshotMemoryCacheKey  string
-	SnapshotMemorySessionID string
+	SnapshotMemoryBackend     SnapshotMemoryBackend
+	SnapshotMemoryBackingPath string
+	SnapshotMemoryCacheKey    string
+	SnapshotMemorySessionID   string
+}
+
+type SnapshotOptions struct {
+	DeferredMemoryBackingPath string
 }
 
 // ForkNetworkConfig contains network identity fields for fork preparation.
@@ -194,7 +199,7 @@ type Hypervisor interface {
 
 	// Snapshot creates a VM snapshot at the given path.
 	// Check Capabilities().SupportsSnapshot before calling.
-	Snapshot(ctx context.Context, destPath string) error
+	Snapshot(ctx context.Context, destPath string, opts SnapshotOptions) error
 
 	// ResizeMemory changes the VM's memory allocation.
 	// Check Capabilities().SupportsHotplugMemory before calling.

@@ -59,6 +59,20 @@ instead of reusing the source identity.
 - Network override fields are supplied at snapshot load to bind the fork to its
   own TAP device.
 - Vsock CID remains stable for snapshot-based flows.
+- When the Firecracker snapshot memory backend is configured as UFFD, UFFD is
+  used as a one-shot acceleration for the first restore of a newly forked
+  standby snapshot. The fork initially reuses the source snapshot memory as the
+  pager backing file instead of cloning the large memory file during fanout.
+- That deferred memory clone is paid when the fork later enters standby. Before
+  Firecracker writes the fork's diff snapshot, Hypeman materializes the fork's
+  own `snapshot-latest/memory` file from the original backing memory. After that
+  point the fork has a normal on-disk snapshot base, independent from the source.
+- Subsequent direct restores of that same fork use Firecracker's normal
+  file-backed memory backend. If that standby fork is itself forked again, the
+  new child gets its own one-shot UFFD restore.
+- This keeps UFFD on the high-fanout path where shared snapshot cache is most
+  useful, while preserving the normal Firecracker diff-snapshot lifecycle for
+  per-instance standby/resume cycles.
 
 ## VZ (Virtualization.framework)
 
