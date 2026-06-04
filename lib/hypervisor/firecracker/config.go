@@ -74,11 +74,15 @@ type snapshotCreateParams struct {
 }
 
 type snapshotLoadParams struct {
-	MemFilePath         string            `json:"mem_file_path,omitempty"`
-	SnapshotPath        string            `json:"snapshot_path"`
-	EnableDiffSnapshots bool              `json:"enable_diff_snapshots,omitempty"`
-	ResumeVM            bool              `json:"resume_vm,omitempty"`
-	NetworkOverrides    []networkOverride `json:"network_overrides,omitempty"`
+	MemBackend          *snapshotMemBackend `json:"mem_backend,omitempty"`
+	SnapshotPath        string              `json:"snapshot_path"`
+	EnableDiffSnapshots bool                `json:"enable_diff_snapshots,omitempty"`
+	NetworkOverrides    []networkOverride   `json:"network_overrides,omitempty"`
+}
+
+type snapshotMemBackend struct {
+	BackendType string `json:"backend_type"`
+	BackendPath string `json:"backend_path"`
 }
 
 type networkOverride struct {
@@ -213,13 +217,19 @@ func toSnapshotCreateParams(snapshotDir string) snapshotCreateParams {
 	}
 }
 
-func toSnapshotLoadParams(snapshotDir string, networkOverrides []networkOverride) snapshotLoadParams {
+func toSnapshotLoadParams(snapshotDir string, networkOverrides []networkOverride, backend snapshotMemBackend) snapshotLoadParams {
 	return snapshotLoadParams{
-		MemFilePath:         snapshotMemoryPath(snapshotDir),
+		MemBackend:          &backend,
 		SnapshotPath:        snapshotStatePath(snapshotDir),
 		EnableDiffSnapshots: true,
-		ResumeVM:            false,
 		NetworkOverrides:    networkOverrides,
+	}
+}
+
+func fileSnapshotMemBackend(snapshotDir string) snapshotMemBackend {
+	return snapshotMemBackend{
+		BackendType: "File",
+		BackendPath: snapshotMemoryPath(snapshotDir),
 	}
 }
 

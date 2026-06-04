@@ -167,7 +167,7 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 
 // RestoreVM starts Cloud Hypervisor and restores VM state from a snapshot.
 // The VM is in paused state after restore; caller should call Resume() to continue execution.
-func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string, socketPath string, snapshotPath string) (int, hypervisor.Hypervisor, error) {
+func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string, socketPath string, snapshotPath string, _ hypervisor.RestoreOptions) (int, hypervisor.Hypervisor, error) {
 	log := logger.FromContext(ctx)
 	startTime := time.Now()
 

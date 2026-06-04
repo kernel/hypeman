@@ -70,7 +70,7 @@ func (s fakeStarter) GetVersion(*paths.Paths) (string, error) { return "test", n
 func (s fakeStarter) StartVM(context.Context, *paths.Paths, string, string, VMConfig) (int, Hypervisor, error) {
 	return 42, s.returned, nil
 }
-func (s fakeStarter) RestoreVM(context.Context, *paths.Paths, string, string, string) (int, Hypervisor, error) {
+func (s fakeStarter) RestoreVM(context.Context, *paths.Paths, string, string, string, RestoreOptions) (int, Hypervisor, error) {
 	return 43, s.returned, nil
 }
 func (s fakeStarter) PrepareFork(context.Context, ForkPrepareRequest) (ForkPrepareResult, error) {

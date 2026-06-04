@@ -450,6 +450,11 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 	forkMeta.ExitCode = nil
 	forkMeta.ExitMessage = ""
 	forkMeta.RestartStatus = restartpolicy.Status{}
+	forkMeta.FirecrackerUFFDSessionID = ""
+	forkMeta.FirecrackerUFFDPagerVersion = ""
+	if rec.Snapshot.Kind != SnapshotKindStandby {
+		forkMeta.FirecrackerSnapshotCacheKey = ""
+	}
 	if rec.Snapshot.Kind == SnapshotKindStandby {
 		forkMeta.VsockCID = rec.StoredMetadata.VsockCID
 	} else {

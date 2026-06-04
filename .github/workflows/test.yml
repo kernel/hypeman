@@ -27,6 +27,11 @@ jobs:
           # ~/go/pkg/mod and ~/.cache/go-build stay on disk between runs automatically.
           cache: false
           go-version: '1.25.4'
+
+      - name: Check UFFD pager version
+        run: |
+          git fetch origin main --depth=1
+          bash scripts/check-uffd-version.sh origin/main
       
       - name: Install dependencies
         run: |

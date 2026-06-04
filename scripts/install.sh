@@ -20,6 +20,7 @@ set -e
 
 REPO="kernel/hypeman"
 BINARY_NAME="hypeman-api"
+UFFD_PAGER_BINARY_NAME="hypeman-uffd-pager"
 SERVICE_NAME="hypeman"
 
 # Colors for output (true color)
@@ -254,17 +255,23 @@ if [ -n "$BINARY_DIR" ]; then
         done
         cp "${BINARY_DIR}/config.example.darwin.yaml" "${TMP_DIR}/config.example.darwin.yaml"
     else
-        for f in "${BINARY_NAME}" "hypeman-token" "config.example.yaml"; do
+        for f in "${BINARY_NAME}" "${UFFD_PAGER_BINARY_NAME}" "hypeman-token" "config.example.yaml"; do
             [ -f "${BINARY_DIR}/${f}" ] || error "File ${f} not found in ${BINARY_DIR}"
         done
         cp "${BINARY_DIR}/config.example.yaml" "${TMP_DIR}/config.example.yaml"
     fi
 
     cp "${BINARY_DIR}/${BINARY_NAME}" "${TMP_DIR}/${BINARY_NAME}"
+    if [ "$OS" = "linux" ]; then
+        cp "${BINARY_DIR}/${UFFD_PAGER_BINARY_NAME}" "${TMP_DIR}/${UFFD_PAGER_BINARY_NAME}"
+    fi
     cp "${BINARY_DIR}/hypeman-token" "${TMP_DIR}/hypeman-token"
 
     # Make binaries executable
     chmod +x "${TMP_DIR}/${BINARY_NAME}"
+    if [ "$OS" = "linux" ]; then
+        chmod +x "${TMP_DIR}/${UFFD_PAGER_BINARY_NAME}"
+    fi
     chmod +x "${TMP_DIR}/hypeman-token"
 
     VERSION="custom (from binary)"
@@ -301,6 +308,9 @@ elif [ -n "$BRANCH" ]; then
         cp "config.example.yaml" "${TMP_DIR}/config.example.yaml"
     fi
     cp "bin/hypeman" "${TMP_DIR}/${BINARY_NAME}"
+    if [ "$OS" = "linux" ]; then
+        cp "bin/${UFFD_PAGER_BINARY_NAME}" "${TMP_DIR}/${UFFD_PAGER_BINARY_NAME}"
+    fi
 
     # Build hypeman-token (not included in make build)
     if ! go build -o "${TMP_DIR}/hypeman-token" ./cmd/gen-jwt >> "$BUILD_LOG" 2>&1; then
@@ -387,6 +397,11 @@ fi
 info "Installing ${BINARY_NAME} to ${INSTALL_DIR}..."
 $SUDO mkdir -p "$INSTALL_DIR"
 $SUDO install -m 755 "${TMP_DIR}/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
+
+if [ "$OS" = "linux" ]; then
+    info "Installing ${UFFD_PAGER_BINARY_NAME} to ${INSTALL_DIR}..."
+    $SUDO install -m 755 "${TMP_DIR}/${UFFD_PAGER_BINARY_NAME}" "${INSTALL_DIR}/${UFFD_PAGER_BINARY_NAME}"
+fi
 
 # Install hypeman-token binary
 info "Installing hypeman-token to ${INSTALL_DIR}..."
@@ -588,6 +603,28 @@ ReadWritePaths=${DATA_DIR}
 WantedBy=multi-user.target
 EOF
 
+    $SUDO tee "${SYSTEMD_DIR}/${SERVICE_NAME}-uffd@.service" > /dev/null << EOF
+[Unit]
+Description=Hypeman UFFD Pager (%i)
+Documentation=https://github.com/kernel/hypeman
+After=network.target
+
+[Service]
+Type=simple
+Environment="HOME=${DATA_DIR}"
+EnvironmentFile=${DATA_DIR}/uffd/%i/pager.env
+ExecStart=${INSTALL_DIR}/${UFFD_PAGER_BINARY_NAME} --data-dir ${DATA_DIR} --version-key %i --cache-max-bytes \${HYPEMAN_UFFD_CACHE_MAX_BYTES}
+Restart=on-failure
+RestartSec=5
+KillMode=process
+
+# Security hardening
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=${DATA_DIR}
+EOF
+
     info "Reloading systemd..."
     $SUDO systemctl daemon-reload
 
@@ -776,6 +813,7 @@ if [ "$OS" = "darwin" ]; then
     echo "  Logs:         ${DATA_DIR}/logs/hypeman.log"
 else
     echo "  API Binary:   ${INSTALL_DIR}/${BINARY_NAME}"
+    echo "  UFFD Pager:   ${INSTALL_DIR}/${UFFD_PAGER_BINARY_NAME}"
     echo "  CLI:          /usr/local/bin/hypeman"
     echo "  Token tool:   /usr/local/bin/hypeman-token"
     echo "  Server config: ${CONFIG_FILE}"

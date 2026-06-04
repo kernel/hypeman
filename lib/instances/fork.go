@@ -291,6 +291,11 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 	forkMeta.ExitCode = nil
 	forkMeta.ExitMessage = ""
 	forkMeta.RestartStatus = restartpolicy.Status{}
+	forkMeta.FirecrackerUFFDSessionID = ""
+	forkMeta.FirecrackerUFFDPagerVersion = ""
+	if source.State != StateStandby {
+		forkMeta.FirecrackerSnapshotCacheKey = ""
+	}
 	// Forks are new instances; phase accounting must not inherit the source's
 	// cumulative durations. The first transition into the fork's runtime
 	// phase (Standby for snapshot forks, Stopped for stopped forks) will be

@@ -248,6 +248,12 @@ func (m *manager) restoreInstance(
 		proxyRegistered = true
 	}
 
+	restoreOptions, err := m.firecrackerSnapshotRestoreOptions(stored, snapshotDir)
+	if err != nil {
+		releaseNetwork()
+		return nil, fmt.Errorf("configure snapshot memory backend: %w", err)
+	}
+
 	// 5. Transition: Standby → Paused (start hypervisor + restore)
 	restoreCtx, restoreSpanEnd := m.startLifecycleStep(ctx, "restore_from_snapshot",
 		attribute.String("instance_id", id),
@@ -255,10 +261,11 @@ func (m *manager) restoreInstance(
 		attribute.String("operation", "restore_from_snapshot"),
 	)
 	log.InfoContext(ctx, "restoring from snapshot", "instance_id", id, "snapshot_dir", snapshotDir, "hypervisor", stored.HypervisorType)
-	pid, hv, err := m.restoreFromSnapshot(restoreCtx, stored, snapshotDir)
+	pid, hv, err := m.restoreFromSnapshot(restoreCtx, stored, snapshotDir, restoreOptions)
 	restoreSpanEnd(err)
 	if err != nil {
 		log.ErrorContext(ctx, "failed to restore from snapshot", "instance_id", id, "error", err)
+		m.closeFirecrackerUFFDSession(ctx, stored)
 		// Cleanup network on failure
 		releaseNetwork()
 		return nil, err
@@ -279,6 +286,7 @@ func (m *manager) restoreInstance(
 		log.ErrorContext(ctx, "failed to resume VM", "instance_id", id, "error", err)
 		// Cleanup on failure
 		hv.Shutdown(ctx)
+		m.closeFirecrackerUFFDSession(ctx, stored)
 		releaseNetwork()
 		return nil, fmt.Errorf("resume vm failed: %w", err)
 	}
@@ -306,6 +314,7 @@ func (m *manager) restoreInstance(
 			reconfigureSpanEnd(err)
 			log.ErrorContext(ctx, "failed to configure guest network after restore", "instance_id", id, "error", err)
 			_ = hv.Shutdown(ctx)
+			m.closeFirecrackerUFFDSession(ctx, stored)
 			m.rollbackAdmissionAllocationActive(stored)
 			releaseNetwork()
 			return nil, fmt.Errorf("configure guest network after restore: %w", err)
@@ -378,6 +387,7 @@ func (m *manager) restoreFromSnapshot(
 	ctx context.Context,
 	stored *StoredMetadata,
 	snapshotDir string,
+	opts hypervisor.RestoreOptions,
 ) (int, hypervisor.Hypervisor, error) {
 	log := logger.FromContext(ctx)
 
@@ -389,7 +399,7 @@ func (m *manager) restoreFromSnapshot(
 
 	// Restore VM from snapshot (handles process start + restore)
 	log.DebugContext(ctx, "restoring VM from snapshot", "instance_id", stored.Id, "hypervisor", stored.HypervisorType, "version", stored.HypervisorVersion, "snapshot_dir", snapshotDir)
-	pid, hv, err := starter.RestoreVM(ctx, m.paths, stored.HypervisorVersion, stored.SocketPath, snapshotDir)
+	pid, hv, err := starter.RestoreVM(ctx, m.paths, stored.HypervisorVersion, stored.SocketPath, snapshotDir, opts)
 	if err != nil {
 		return 0, nil, fmt.Errorf("restore vm: %w", err)
 	}

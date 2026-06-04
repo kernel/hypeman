@@ -37,6 +37,19 @@ builds:
     ldflags:
       - -s -w
 
+  - id: hypeman-uffd-pager
+    main: ./cmd/uffd-pager
+    binary: hypeman-uffd-pager
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+
 archives:
   - id: default
     formats:
