@@ -88,6 +88,13 @@ data_dir: /var/lib/hypeman
 #   admin_port: 0                 # 0 = random (for dev); install script sets to 2019 for production
 #   internal_dns_port: 0          # 0 = random (for dev); install script sets to 5353 for production
 #   stop_on_shutdown: false       # Set to true if you want Caddy to stop when hypeman stops
+#   # Override the bind address for specific listen ports. Ports not listed here
+#   # fall back to listen_address (above). Useful to make selected ingresses
+#   # (e.g. CDP/ChromeDriver) reachable only on a non-public interface such as a
+#   # Tailscale IP, while keeping 443/444 public. Unset = every port uses listen_address.
+#   port_listen_addresses:
+#     9222: "100.107.186.40"      # CDP -> tailnet only
+#     9224: "100.107.186.40"      # ChromeDriver -> tailnet only
 
 # =============================================================================
 # TLS / ACME Configuration (for HTTPS ingresses)

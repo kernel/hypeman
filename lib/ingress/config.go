@@ -172,19 +172,37 @@ type CaddyConfigGenerator struct {
 	acme            ACMEConfig
 	apiIngress      APIIngressConfig
 	dnsResolverPort int
+
+	// portListenAddresses overrides the bind address for specific listen ports.
+	// Keyed by listen port; ports not present fall back to listenAddress.
+	// Used to bind selected ingresses (e.g. CDP/ChromeDriver) to a non-public
+	// interface such as a Tailscale IP. Empty/nil means every port uses
+	// listenAddress (default behavior).
+	portListenAddresses map[int]string
 }
 
 // NewCaddyConfigGenerator creates a new Caddy config generator.
-func NewCaddyConfigGenerator(p *paths.Paths, listenAddress string, adminAddress string, adminPort int, acme ACMEConfig, apiIngress APIIngressConfig, dnsResolverPort int) *CaddyConfigGenerator {
+func NewCaddyConfigGenerator(p *paths.Paths, listenAddress string, adminAddress string, adminPort int, acme ACMEConfig, apiIngress APIIngressConfig, dnsResolverPort int, portListenAddresses map[int]string) *CaddyConfigGenerator {
 	return &CaddyConfigGenerator{
-		paths:           p,
-		listenAddress:   listenAddress,
-		adminAddress:    adminAddress,
-		adminPort:       adminPort,
-		acme:            acme,
-		apiIngress:      apiIngress,
-		dnsResolverPort: dnsResolverPort,
+		paths:               p,
+		listenAddress:       listenAddress,
+		adminAddress:        adminAddress,
+		adminPort:           adminPort,
+		acme:                acme,
+		apiIngress:          apiIngress,
+		dnsResolverPort:     dnsResolverPort,
+		portListenAddresses: portListenAddresses,
 	}
+}
+
+// listenAddressForPort returns the bind address Caddy should use for the given
+// listen port. If a per-port override is configured for the port, it is used;
+// otherwise the global listen address is returned.
+func (g *CaddyConfigGenerator) listenAddressForPort(port int) string {
+	if addr, ok := g.portListenAddresses[port]; ok && addr != "" {
+		return addr
+	}
+	return g.listenAddress
 }
 
 // GenerateConfig generates the Caddy JSON configuration.
@@ -400,7 +418,7 @@ func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 			allRoutes := append(routes, catchAllRoute)
 
 			server := map[string]interface{}{
-				"listen": []string{fmt.Sprintf("%s:%d", g.listenAddress, port)},
+				"listen": []string{fmt.Sprintf("%s:%d", g.listenAddressForPort(port), port)},
 				"routes": allRoutes,
 				"logs":   map[string]interface{}{}, // Disable access logs
 			}

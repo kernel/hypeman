@@ -3,6 +3,7 @@ package ingress
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"testing"
 
@@ -27,7 +28,7 @@ func setupTestGenerator(t *testing.T) (*CaddyConfigGenerator, *paths.Paths, func
 	// Empty ACMEConfig means TLS is not configured
 	// Use DNS resolver port for dynamic upstreams
 	dnsResolverPort := 5353
-	generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", 2019, ACMEConfig{}, APIIngressConfig{}, dnsResolverPort)
+	generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", 2019, ACMEConfig{}, APIIngressConfig{}, dnsResolverPort, nil)
 
 	cleanup := func() {
 		os.RemoveAll(tmpDir)
@@ -81,7 +82,7 @@ func TestGenerateConfig_StoragePath(t *testing.T) {
 	require.NoError(t, os.MkdirAll(p.CaddyDir(), 0755))
 	require.NoError(t, os.MkdirAll(p.CaddyDataDir(), 0755))
 
-	generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", 2019, ACMEConfig{}, APIIngressConfig{}, 5353)
+	generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", 2019, ACMEConfig{}, APIIngressConfig{}, 5353, nil)
 
 	ctx := context.Background()
 	data, err := generator.GenerateConfig(ctx, []Ingress{})
@@ -417,7 +418,7 @@ func TestGenerateConfig_WithTLS(t *testing.T) {
 		DNSProvider:        DNSProviderCloudflare,
 		CloudflareAPIToken: "test-token",
 	}
-	generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", 2019, acmeConfig, APIIngressConfig{}, 5353)
+	generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", 2019, acmeConfig, APIIngressConfig{}, 5353, nil)
 
 	ctx := context.Background()
 	ingresses := []Ingress{
@@ -702,7 +703,7 @@ func TestGenerateConfig_MixedTLSAndNonTLS(t *testing.T) {
 		DNSProvider:        DNSProviderCloudflare,
 		CloudflareAPIToken: "test-token",
 	}
-	generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", 2019, acmeConfig, APIIngressConfig{}, 5353)
+	generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", 2019, acmeConfig, APIIngressConfig{}, 5353, nil)
 
 	ctx := context.Background()
 	ingresses := []Ingress{
@@ -841,7 +842,7 @@ func TestGenerateConfig_TLSHostnameDeduplication(t *testing.T) {
 		CloudflareAPIToken: "test-token",
 		AllowedDomains:     "*.example.com",
 	}
-	generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", 2019, acmeConfig, APIIngressConfig{}, 5353)
+	generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", 2019, acmeConfig, APIIngressConfig{}, 5353, nil)
 
 	ctx := context.Background()
 	// Create two ingresses with the same wildcard hostname pattern on different ports
@@ -930,7 +931,7 @@ func TestGenerateConfig_PortIsolation(t *testing.T) {
 		CloudflareAPIToken: "test-token",
 		AllowedDomains:     "*.example.com",
 	}
-	generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", 2019, acmeConfig, APIIngressConfig{}, 5353)
+	generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", 2019, acmeConfig, APIIngressConfig{}, 5353, nil)
 
 	ctx := context.Background()
 	// Create wildcard ingresses on different ports that would conflict
@@ -1061,7 +1062,7 @@ func TestGenerateConfig_DynamicUpstreams(t *testing.T) {
 	require.NoError(t, os.MkdirAll(p.CaddyDataDir(), 0755))
 
 	dnsPort := 5353
-	generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", 2019, ACMEConfig{}, APIIngressConfig{}, dnsPort)
+	generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", 2019, ACMEConfig{}, APIIngressConfig{}, dnsPort, nil)
 
 	ctx := context.Background()
 	ingresses := []Ingress{
@@ -1091,4 +1092,127 @@ func TestGenerateConfig_DynamicUpstreams(t *testing.T) {
 	assert.Contains(t, configStr, "my-api.hypeman.internal")
 	assert.Contains(t, configStr, "resolver")
 	assert.Contains(t, configStr, "127.0.0.1:5353")
+}
+
+// TestGenerateConfig_PortListenAddressOverride verifies that per-port listen
+// address overrides bind designated ports (e.g. CDP/ChromeDriver) to a
+// non-public interface while other ports keep the global listen address.
+func TestGenerateConfig_PortListenAddressOverride(t *testing.T) {
+	// Ingresses spanning four ports: 444 (browser API), 443 (VNC),
+	// 9222 (CDP), 9224 (ChromeDriver). 9222/9224 should be tailnet-only.
+	ingresses := []Ingress{
+		{
+			ID:   "ing-api",
+			Name: "browser-api",
+			Rules: []IngressRule{
+				{Match: IngressMatch{Hostname: "inst.host.kernel.sh", Port: 444}, Target: IngressTarget{Instance: "inst", Port: 10001}},
+			},
+		},
+		{
+			ID:   "ing-vnc",
+			Name: "vnc",
+			Rules: []IngressRule{
+				{Match: IngressMatch{Hostname: "inst.host.kernel.sh", Port: 443}, Target: IngressTarget{Instance: "inst", Port: 6901}},
+			},
+		},
+		{
+			ID:   "ing-cdp",
+			Name: "cdp",
+			Rules: []IngressRule{
+				{Match: IngressMatch{Hostname: "inst.host.kernel.sh", Port: 9222}, Target: IngressTarget{Instance: "inst", Port: 9222}},
+			},
+		},
+		{
+			ID:   "ing-chromedriver",
+			Name: "chromedriver",
+			Rules: []IngressRule{
+				{Match: IngressMatch{Hostname: "inst.host.kernel.sh", Port: 9224}, Target: IngressTarget{Instance: "inst", Port: 9224}},
+			},
+		},
+	}
+
+	const tsIP = "100.107.186.40"
+
+	tests := []struct {
+		name                string
+		globalListenAddress string
+		portListenAddresses map[int]string
+		// wantListen maps listen port -> expected "addr:port" for that server.
+		wantListen map[int]string
+	}{
+		{
+			name:                "no override uses global address for all ports (backward compatible)",
+			globalListenAddress: "0.0.0.0",
+			portListenAddresses: nil,
+			wantListen: map[int]string{
+				444:  "0.0.0.0:444",
+				443:  "0.0.0.0:443",
+				9222: "0.0.0.0:9222",
+				9224: "0.0.0.0:9224",
+			},
+		},
+		{
+			name:                "empty map uses global address for all ports",
+			globalListenAddress: "0.0.0.0",
+			portListenAddresses: map[int]string{},
+			wantListen: map[int]string{
+				444:  "0.0.0.0:444",
+				443:  "0.0.0.0:443",
+				9222: "0.0.0.0:9222",
+				9224: "0.0.0.0:9224",
+			},
+		},
+		{
+			name:                "CDP and ChromeDriver bound to tailscale IP, 443/444 stay public",
+			globalListenAddress: "0.0.0.0",
+			portListenAddresses: map[int]string{9222: tsIP, 9224: tsIP},
+			wantListen: map[int]string{
+				444:  "0.0.0.0:444",
+				443:  "0.0.0.0:443",
+				9222: tsIP + ":9222",
+				9224: tsIP + ":9224",
+			},
+		},
+		{
+			name:                "empty override value falls back to global address",
+			globalListenAddress: "0.0.0.0",
+			portListenAddresses: map[int]string{9222: ""},
+			wantListen: map[int]string{
+				9222: "0.0.0.0:9222",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir, err := os.MkdirTemp("", "ingress-config-portbind-test-*")
+			require.NoError(t, err)
+			defer os.RemoveAll(tmpDir)
+
+			p := paths.New(tmpDir)
+			require.NoError(t, os.MkdirAll(p.CaddyDir(), 0755))
+			require.NoError(t, os.MkdirAll(p.CaddyDataDir(), 0755))
+
+			generator := NewCaddyConfigGenerator(p, tt.globalListenAddress, "127.0.0.1", 2019, ACMEConfig{}, APIIngressConfig{}, 5353, tt.portListenAddresses)
+
+			data, err := generator.GenerateConfig(context.Background(), ingresses)
+			require.NoError(t, err)
+
+			var config map[string]interface{}
+			require.NoError(t, json.Unmarshal(data, &config))
+
+			apps := config["apps"].(map[string]interface{})
+			httpApp := apps["http"].(map[string]interface{})
+			servers := httpApp["servers"].(map[string]interface{})
+
+			for port, wantAddr := range tt.wantListen {
+				serverName := fmt.Sprintf("ingress-%d", port)
+				server, ok := servers[serverName].(map[string]interface{})
+				require.True(t, ok, "expected server %q to exist", serverName)
+				listen := server["listen"].([]interface{})
+				require.Len(t, listen, 1)
+				assert.Equal(t, wantAddr, listen[0].(string), "listen address for port %d", port)
+			}
+		})
+	}
 }

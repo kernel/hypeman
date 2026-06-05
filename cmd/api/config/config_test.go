@@ -455,3 +455,41 @@ func TestValidateAllowsDisabledSnapshotCompressionDefaultWithoutValidAlgorithm(t
 		t.Fatalf("expected disabled snapshot compression default to ignore algorithm/level, got %v", err)
 	}
 }
+
+func TestDefaultConfigHasNoCaddyPortListenAddresses(t *testing.T) {
+	cfg := defaultConfig()
+	if cfg.Caddy.ListenAddress != "0.0.0.0" {
+		t.Fatalf("expected default caddy.listen_address to remain 0.0.0.0, got %q", cfg.Caddy.ListenAddress)
+	}
+	if len(cfg.Caddy.PortListenAddresses) != 0 {
+		t.Fatalf("expected default caddy.port_listen_addresses to be empty, got %v", cfg.Caddy.PortListenAddresses)
+	}
+}
+
+func TestLoadCaddyPortListenAddressesFromYAML(t *testing.T) {
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "config.yaml")
+	yaml := "caddy:\n  port_listen_addresses:\n    9222: \"100.107.186.40\"\n    9224: \"100.107.186.40\"\n"
+	if err := os.WriteFile(cfgPath, []byte(yaml), 0600); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	// Global listen address must remain the default (public).
+	if cfg.Caddy.ListenAddress != "0.0.0.0" {
+		t.Fatalf("expected caddy.listen_address to remain 0.0.0.0, got %q", cfg.Caddy.ListenAddress)
+	}
+	if got := cfg.Caddy.PortListenAddresses[9222]; got != "100.107.186.40" {
+		t.Fatalf("expected caddy.port_listen_addresses[9222] to be 100.107.186.40, got %q", got)
+	}
+	if got := cfg.Caddy.PortListenAddresses[9224]; got != "100.107.186.40" {
+		t.Fatalf("expected caddy.port_listen_addresses[9224] to be 100.107.186.40, got %q", got)
+	}
+	if len(cfg.Caddy.PortListenAddresses) != 2 {
+		t.Fatalf("expected exactly 2 port overrides, got %v", cfg.Caddy.PortListenAddresses)
+	}
+}

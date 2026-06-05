@@ -76,6 +76,20 @@ type CaddyConfig struct {
 	AdminPort       int    `koanf:"admin_port"`
 	InternalDNSPort int    `koanf:"internal_dns_port"`
 	StopOnShutdown  bool   `koanf:"stop_on_shutdown"`
+
+	// PortListenAddresses overrides the listen address for specific listen ports.
+	// Keyed by listen port, value is the bind address (e.g. a Tailscale IP).
+	// Ports not present in the map fall back to ListenAddress (default "0.0.0.0").
+	//
+	// Use case: bind CDP/ChromeDriver ingresses to a non-public (e.g. Tailscale)
+	// interface so they are not reachable on the public NIC, while keeping
+	// 443/444 public. Example (YAML):
+	//
+	//   caddy:
+	//     port_listen_addresses:
+	//       9222: "100.107.186.40"
+	//       9224: "100.107.186.40"
+	PortListenAddresses map[int]string `koanf:"port_listen_addresses"`
 }
 
 // ACMEConfig holds ACME / TLS certificate settings.

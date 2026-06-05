@@ -85,6 +85,13 @@ type Config struct {
 	// When false, Caddy continues running independently.
 	StopOnShutdown bool
 
+	// PortListenAddresses overrides the bind address for specific listen ports.
+	// Keyed by listen port; ports not present fall back to ListenAddress.
+	// Used to bind selected ingresses (e.g. CDP/ChromeDriver) to a non-public
+	// interface such as a Tailscale IP. Nil/empty means every port uses
+	// ListenAddress (default behavior).
+	PortListenAddresses map[int]string
+
 	// ACME configuration for TLS certificates
 	ACME ACMEConfig
 
@@ -140,6 +147,7 @@ func NewManager(p *paths.Paths, config Config, instanceResolver InstanceResolver
 		config.ACME,
 		config.APIIngress,
 		dnsServer.Port(),
+		config.PortListenAddresses,
 	)
 
 	return &manager{
@@ -193,6 +201,7 @@ func (m *manager) Initialize(ctx context.Context) error {
 		m.config.ACME,
 		m.config.APIIngress,
 		m.dnsServer.Port(),
+		m.config.PortListenAddresses,
 	)
 
 	// Load existing ingresses
