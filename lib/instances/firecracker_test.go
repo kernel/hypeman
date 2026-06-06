@@ -861,6 +861,156 @@ func TestFCUFFDOneShotLifecycle(t *testing.T) {
 	snapshotDeleted = true
 }
 
+// TestFCUFFDGraduationLifecycle exercises detaching a running UFFD-backed VM
+// from its pager: the pager populates the remaining pages and unregisters the
+// session, and the VM must keep running on resident memory with its guest state
+// intact. It is a sibling of TestFCUFFDOneShotLifecycle and leaves that test's
+// coverage unchanged.
+func TestFCUFFDGraduationLifecycle(t *testing.T) {
+	t.Parallel()
+	requireFirecrackerIntegrationPrereqs(t)
+	requireUserfaultfdIntegrationPrereqs(t)
+	if pagerBinary := strings.TrimSpace(os.Getenv("HYPEMAN_UFFD_PAGER_BINARY")); pagerBinary == "" {
+		t.Skip("HYPEMAN_UFFD_PAGER_BINARY must point at hypeman-uffd-pager for UFFD integration tests")
+	} else if st, err := os.Stat(pagerBinary); err != nil || !st.Mode().IsRegular() {
+		t.Skipf("HYPEMAN_UFFD_PAGER_BINARY is not a regular file: %s", pagerBinary)
+	}
+
+	mgr, tmpDir := setupTestManagerForFirecrackerWithConfig(t, legacyParallelTestNetworkConfig(testNetworkSeq.Add(1)), ManagerConfig{
+		FirecrackerSnapshotMemoryBackend: uffdpager.BackendUFFD,
+		FirecrackerUFFDCacheMaxBytes:     512 << 20,
+	})
+	ctx := context.Background()
+	p := paths.New(tmpDir)
+
+	imageManager, err := images.NewManager(p, 1, nil)
+	require.NoError(t, err)
+	imageName := integrationTestImageRef(t, "docker.io/library/alpine:latest")
+	snapshottest.EnsureImageReady(t, ctx, p, imageManager, imageName)
+
+	systemManager := system.NewManager(p)
+	require.NoError(t, systemManager.EnsureSystemFiles(ctx))
+
+	source, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
+		Name:           "fc-uffd-grad-src",
+		Image:          imageName,
+		Size:           1024 * 1024 * 1024,
+		OverlaySize:    1024 * 1024 * 1024,
+		Vcpus:          1,
+		NetworkEnabled: false,
+		Hypervisor:     hypervisor.TypeFirecracker,
+		Cmd:            []string{"sleep", "infinity"},
+	})
+	require.NoError(t, err)
+	sourceID := source.Id
+	sourceDeleted := false
+	t.Cleanup(func() {
+		if !sourceDeleted {
+			_ = mgr.DeleteInstance(context.Background(), sourceID)
+		}
+	})
+
+	source = requireRunningSleepInstance(t, ctx, mgr, sourceID)
+	requireGuestTmpfs(t, ctx, source)
+	writeGuestFile(t, ctx, source, "/root/uffd-grad/source", "source-disk")
+	writeGuestFile(t, ctx, source, "/dev/shm/uffd-grad/source", "source-memory")
+
+	// A VM with no pager session (the freshly created, file-backed source) is a
+	// no-op to graduate.
+	require.NoError(t, mgr.GraduateSnapshotMemoryPager(ctx, sourceID))
+
+	snapshot, err := mgr.CreateSnapshot(ctx, sourceID, CreateSnapshotRequest{
+		Kind: SnapshotKindStandby,
+		Name: "fc-uffd-grad-snap",
+	})
+	require.NoError(t, err)
+	snapshotDeleted := false
+	t.Cleanup(func() {
+		if !snapshotDeleted {
+			_ = mgr.DeleteSnapshot(context.Background(), snapshot.Id)
+		}
+	})
+
+	// Forking the standby snapshot to a running VM restores it UFFD-backed and
+	// pins a live pager session.
+	parent, err := mgr.ForkSnapshot(ctx, snapshot.Id, ForkSnapshotRequest{
+		Name:        "fc-uffd-grad-parent",
+		TargetState: StateRunning,
+	})
+	require.NoError(t, err)
+	parentID := parent.Id
+	parentDeleted := false
+	t.Cleanup(func() {
+		if !parentDeleted {
+			_ = mgr.DeleteInstance(context.Background(), parentID)
+		}
+	})
+
+	parent = requireRunningSleepInstance(t, ctx, mgr, parentID)
+	assertGuestFile(t, ctx, parent, "/root/uffd-grad/source", "source-disk")
+	assertGuestFile(t, ctx, parent, "/dev/shm/uffd-grad/source", "source-memory")
+	writeGuestFile(t, ctx, parent, "/root/uffd-grad/parent", "parent-disk")
+	writeGuestFile(t, ctx, parent, "/dev/shm/uffd-grad/parent", "parent-memory")
+
+	parentMeta, err := mgr.loadMetadata(parentID)
+	require.NoError(t, err)
+	require.NotEmpty(t, parentMeta.StoredMetadata.FirecrackerUFFDSessionID, "running UFFD fork should hold a pager session")
+	target := mgr.UFFDGraduationTargetVersion()
+	require.NotEmpty(t, target, "uffd backend should expose a target pager version")
+	require.Equal(t, target, parentMeta.StoredMetadata.FirecrackerUFFDPagerVersion)
+
+	// Graduate: the pager fully populates memory from the backing file and
+	// unregisters the session. The VM keeps running with no pager dependency.
+	require.NoError(t, mgr.GraduateSnapshotMemoryPager(ctx, parentID))
+
+	parentMeta, err = mgr.loadMetadata(parentID)
+	require.NoError(t, err)
+	require.Empty(t, parentMeta.StoredMetadata.FirecrackerUFFDSessionID, "graduation should clear the pager session binding")
+	require.Empty(t, parentMeta.StoredMetadata.FirecrackerUFFDPagerVersion)
+
+	// The VM is still running and all guest memory and disk content survived the
+	// populate + unregister.
+	parent = requireRunningSleepInstance(t, ctx, mgr, parentID)
+	assertGuestFile(t, ctx, parent, "/root/uffd-grad/source", "source-disk")
+	assertGuestFile(t, ctx, parent, "/dev/shm/uffd-grad/source", "source-memory")
+	assertGuestFile(t, ctx, parent, "/root/uffd-grad/parent", "parent-disk")
+	assertGuestFile(t, ctx, parent, "/dev/shm/uffd-grad/parent", "parent-memory")
+
+	// New guest memory and disk writes still work, proving the guest did not hang
+	// on a previously untouched page after userfaultfd was unregistered.
+	writeGuestFile(t, ctx, parent, "/root/uffd-grad/post", "post-disk")
+	writeGuestFile(t, ctx, parent, "/dev/shm/uffd-grad/post", "post-memory")
+	assertGuestFile(t, ctx, parent, "/root/uffd-grad/post", "post-disk")
+	assertGuestFile(t, ctx, parent, "/dev/shm/uffd-grad/post", "post-memory")
+
+	// Graduating again is a no-op now that the session is gone.
+	require.NoError(t, mgr.GraduateSnapshotMemoryPager(ctx, parentID))
+
+	// A graduated VM still standbys and restores via the file backend, and its
+	// memory survives the round trip.
+	parent, err = mgr.StandbyInstance(ctx, parentID, StandbyInstanceRequest{})
+	require.NoError(t, err)
+	require.Equal(t, StateStandby, parent.State)
+
+	parent, err = mgr.RestoreInstance(ctx, parentID)
+	require.NoError(t, err)
+	parent = requireRunningSleepInstance(t, ctx, mgr, parentID)
+	assertGuestFile(t, ctx, parent, "/dev/shm/uffd-grad/source", "source-memory")
+	assertGuestFile(t, ctx, parent, "/dev/shm/uffd-grad/parent", "parent-memory")
+	assertGuestFile(t, ctx, parent, "/dev/shm/uffd-grad/post", "post-memory")
+
+	parentMeta, err = mgr.loadMetadata(parentID)
+	require.NoError(t, err)
+	require.Empty(t, parentMeta.StoredMetadata.FirecrackerUFFDSessionID, "file-backed restore after graduation should not create a pager session")
+
+	require.NoError(t, mgr.DeleteInstance(ctx, parentID))
+	parentDeleted = true
+	require.NoError(t, mgr.DeleteInstance(ctx, sourceID))
+	sourceDeleted = true
+	require.NoError(t, mgr.DeleteSnapshot(ctx, snapshot.Id))
+	snapshotDeleted = true
+}
+
 func requireRunningSleepInstance(t *testing.T, ctx context.Context, mgr Manager, instanceID string) *Instance {
 	t.Helper()
 	inst, err := waitForInstanceState(ctx, mgr, instanceID, StateRunning, integrationTestTimeout(20*time.Second))
