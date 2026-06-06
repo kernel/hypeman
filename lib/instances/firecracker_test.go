@@ -867,7 +867,10 @@ func TestFCUFFDOneShotLifecycle(t *testing.T) {
 // intact. It is a sibling of TestFCUFFDOneShotLifecycle and leaves that test's
 // coverage unchanged.
 func TestFCUFFDGraduationLifecycle(t *testing.T) {
-	t.Parallel()
+	// Intentionally not parallel: graduation forces a full guest-memory populate,
+	// and overlapping that with the sibling UFFD lifecycle test's VMs saturated
+	// the CI runner and timed out guest-agent readiness. Running solo keeps peak
+	// concurrent UFFD VM load the same as before this test existed.
 	requireFirecrackerIntegrationPrereqs(t)
 	requireUserfaultfdIntegrationPrereqs(t)
 	if pagerBinary := strings.TrimSpace(os.Getenv("HYPEMAN_UFFD_PAGER_BINARY")); pagerBinary == "" {
