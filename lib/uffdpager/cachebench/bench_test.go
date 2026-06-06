@@ -106,6 +106,75 @@ func TestHitRates(t *testing.T) {
 	}
 }
 
+// hotTailWorkload models the described production shape: 8 always-hot snapshots
+// reused across the whole timeline, plus 40 customer-specific snapshots that
+// each fan out in a localized wave and then go idle. Scaled by ratio
+// (~8 MiB/snapshot proxy for ~800 MB), so cache sizes here stand in for the
+// 16 GB cap (16 GB / 800 MB ≈ 20 snapshots; 8 MiB × 20 ≈ 160 MiB).
+func hotTailWorkload() (WorkloadConfig, map[string]bool) {
+	var snaps []SnapshotSpec
+	hot := map[string]bool{}
+	for i := 0; i < 8; i++ {
+		k := fmt.Sprintf("hot-%02d", i)
+		snaps = append(snaps, SnapshotSpec{Key: k, ImagePages: 4096, CorePages: 1536, TailPages: 512, Forks: 30, Hot: true})
+		hot[k] = true
+	}
+	for i := 0; i < 40; i++ {
+		k := fmt.Sprintf("cust-%02d", i)
+		snaps = append(snaps, SnapshotSpec{Key: k, ImagePages: 4096, CorePages: 1536, TailPages: 512, Forks: 4})
+	}
+	return WorkloadConfig{Snapshots: snaps, Concurrency: 16, TailZipfS: 1.3, Seed: 11}, hot
+}
+
+func pct(hits, misses int64) float64 {
+	if hits+misses == 0 {
+		return 0
+	}
+	return 100 * float64(hits) / float64(hits+misses)
+}
+
+// TestHotSetRetention reports hit rate split between the always-hot snapshots
+// and the churning customer tail, to see which policy keeps the hot set
+// resident while customers move in and out.
+func TestHotSetRetention(t *testing.T) {
+	cfg, hot := hotTailWorkload()
+	trace := GenerateTrace(cfg)
+	t.Logf("hot+tail: %s", trace)
+	t.Logf("(8 hot snaps reused throughout; 40 customer snaps in waves; hot working set = 8x8=64 MiB)")
+	// 40 MiB ≈ the 4 GB default (~5 snaps) where the 8-snap hot set can't even
+	// fit; 160 MiB ≈ the proposed 16 GB cap (~20 snaps).
+	for _, mb := range []int64{40 << 20, 64 << 20, 96 << 20, 160 << 20} {
+		t.Logf("--- cache=%d MiB (~%d snaps fit) shards=%d ---", mb>>20, mb/(8<<20), benchShards)
+		t.Logf("%-10s %10s %10s %10s", "policy", "hotHit%", "tailHit%", "overall%")
+		for _, f := range Factories() {
+			p := f.New(mb, benchShards)
+			var hotH, hotM, tailH, tailM int64
+			for i, op := range trace.Ops {
+				_, ok := p.Borrow(op.key, op.offset, pageSize)
+				if !ok {
+					p.Add(op.key, op.offset, make([]byte, pageSize))
+				}
+				switch {
+				case hot[op.key] && ok:
+					hotH++
+				case hot[op.key]:
+					hotM++
+				case ok:
+					tailH++
+				default:
+					tailM++
+				}
+				if i%4096 == 0 {
+					p.Drain()
+				}
+			}
+			p.Drain()
+			t.Logf("%-10s %9.2f%% %9.2f%% %9.2f%%", f.Name,
+				pct(hotH, hotM), pct(tailH, tailM), pct(hotH+tailH, hotM+tailM))
+		}
+	}
+}
+
 // percentile expects sorted nanos.
 func percentile(sorted []int64, p float64) int64 {
 	if len(sorted) == 0 {

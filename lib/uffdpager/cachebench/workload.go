@@ -17,6 +17,8 @@ type SnapshotSpec struct {
 	CorePages  int
 	TailPages  int
 	OneShot    bool // faulted by a single fork: models a scan that can pollute
+	Forks      int  // explicit fork count; if any spec sets it, popularity sampling is bypassed
+	Hot        bool // always-popular snapshot: its forks are spread across the whole timeline rather than grouped into a wave
 }
 
 type WorkloadConfig struct {
@@ -105,31 +107,58 @@ func GenerateTrace(cfg WorkloadConfig) *Trace {
 		return forkStream{key: s.Key, offs: offs}
 	}
 
-	// Assemble the list of forks: weighted picks for multi-shot snapshots, plus
-	// one fork for each one-shot snapshot inserted partway through.
-	streams := make([]forkStream, 0, cfg.NumForks)
-	forksByKey := map[string]int{}
-	for f := 0; f < cfg.NumForks; f++ {
-		idx := multi[weightedPick(rng, weights)]
-		s := cfg.Snapshots[idx]
-		streams = append(streams, mkStream(s))
-		forksByKey[s.Key]++
-	}
+	explicit := false
 	for _, s := range cfg.Snapshots {
-		if !s.OneShot {
-			continue
+		if s.Forks > 0 {
+			explicit = true
 		}
-		pos := rng.Intn(len(streams) + 1)
-		streams = append(streams, forkStream{})
-		copy(streams[pos+1:], streams[pos:])
-		streams[pos] = mkStream(s)
-		forksByKey[s.Key]++
 	}
 
-	if cfg.Bursty {
-		// Group each snapshot's forks together so its fan-out happens as one
-		// burst, rather than scattered among other snapshots' forks.
-		sort.SliceStable(streams, func(a, b int) bool { return streams[a].key < streams[b].key })
+	forksByKey := map[string]int{}
+	var streams []forkStream
+
+	if explicit {
+		// Explicit per-snapshot fork counts: hot snapshots are spread evenly
+		// across the timeline (steady reuse), customer snapshots fan out as a
+		// localized wave (used for a while, then idle).
+		var hotStreams, tailStreams []forkStream
+		for _, s := range cfg.Snapshots {
+			for i := 0; i < s.Forks; i++ {
+				st := mkStream(s)
+				if s.Hot {
+					hotStreams = append(hotStreams, st)
+				} else {
+					tailStreams = append(tailStreams, st)
+				}
+				forksByKey[s.Key]++
+			}
+		}
+		streams = spreadHotAcrossTail(hotStreams, tailStreams)
+	} else {
+		// Popularity-sampled forks for multi-shot snapshots, plus one fork per
+		// one-shot snapshot inserted partway through.
+		streams = make([]forkStream, 0, cfg.NumForks)
+		for f := 0; f < cfg.NumForks; f++ {
+			idx := multi[weightedPick(rng, weights)]
+			s := cfg.Snapshots[idx]
+			streams = append(streams, mkStream(s))
+			forksByKey[s.Key]++
+		}
+		for _, s := range cfg.Snapshots {
+			if !s.OneShot {
+				continue
+			}
+			pos := rng.Intn(len(streams) + 1)
+			streams = append(streams, forkStream{})
+			copy(streams[pos+1:], streams[pos:])
+			streams[pos] = mkStream(s)
+			forksByKey[s.Key]++
+		}
+		if cfg.Bursty {
+			// Group each snapshot's forks together so its fan-out happens as one
+			// burst, rather than scattered among other snapshots' forks.
+			sort.SliceStable(streams, func(a, b int) bool { return streams[a].key < streams[b].key })
+		}
 	}
 
 	ops := interleave(streams, cfg.Concurrency)
@@ -192,6 +221,37 @@ func interleave(streams []forkStream, concurrency int) []faultOp {
 		admit()
 	}
 	return ops
+}
+
+// spreadHotAcrossTail groups customer (tail) forks into per-snapshot waves and
+// distributes the always-hot snapshots' forks evenly across the timeline, so
+// the hot set is continuously re-accessed while customer snapshots churn in and
+// out.
+func spreadHotAcrossTail(hot, tail []forkStream) []forkStream {
+	sort.SliceStable(tail, func(a, b int) bool { return tail[a].key < tail[b].key })
+	out := make([]forkStream, 0, len(hot)+len(tail))
+	if len(hot) == 0 {
+		return append(out, tail...)
+	}
+	if len(tail) == 0 {
+		return append(out, hot...)
+	}
+	step := len(tail) / len(hot)
+	if step < 1 {
+		step = 1
+	}
+	hi := 0
+	for ti, s := range tail {
+		out = append(out, s)
+		if (ti+1)%step == 0 && hi < len(hot) {
+			out = append(out, hot[hi])
+			hi++
+		}
+	}
+	for ; hi < len(hot); hi++ {
+		out = append(out, hot[hi])
+	}
+	return out
 }
 
 func weightedPick(rng *rand.Rand, weights []float64) int {
