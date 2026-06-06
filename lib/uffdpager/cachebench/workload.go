@@ -25,6 +25,7 @@ type WorkloadConfig struct {
 	NumForks    int
 	Concurrency int     // forks faulting at once; models simultaneous restores
 	TailZipfS   float64 // offset skew within a snapshot's tail
+	Bursty      bool    // group a snapshot's forks together (sequential fan-out) vs scatter them (concurrent fan-out across snapshots)
 	Seed        int64
 }
 
@@ -123,6 +124,12 @@ func GenerateTrace(cfg WorkloadConfig) *Trace {
 		copy(streams[pos+1:], streams[pos:])
 		streams[pos] = mkStream(s)
 		forksByKey[s.Key]++
+	}
+
+	if cfg.Bursty {
+		// Group each snapshot's forks together so its fan-out happens as one
+		// burst, rather than scattered among other snapshots' forks.
+		sort.SliceStable(streams, func(a, b int) bool { return streams[a].key < streams[b].key })
 	}
 
 	ops := interleave(streams, cfg.Concurrency)

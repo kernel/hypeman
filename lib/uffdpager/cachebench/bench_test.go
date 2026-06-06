@@ -36,6 +36,57 @@ func defaultWorkload() WorkloadConfig {
 // holds the hot cores" so we can see where policy choice stops mattering.
 var cacheSizes = []int64{8 << 20, 16 << 20, 32 << 20, 64 << 20}
 
+// chromeWorkload models the observed production shape: each snapshot's forks
+// share a large working set (~800 MB in prod; scaled here so cache/5 ≈ one
+// snapshot), and there are many distinct snapshots, so the cache is heavily
+// oversubscribed. Scaled by ratio, not absolute size — only cache/working-set,
+// overlap, and forks-per-snapshot ratios affect hit rate.
+func chromeWorkload(bursty bool) WorkloadConfig {
+	const n = 24
+	snaps := make([]SnapshotSpec, n)
+	for i := range snaps {
+		snaps[i] = SnapshotSpec{
+			Key:        fmt.Sprintf("chrome-%02d", i),
+			ImagePages: 4096, // 16 MiB image
+			CorePages:  1536, // ~6 MiB shared core faulted by every fork
+			TailPages:  512,  // ~2 MiB lightly-shared tail
+		}
+	}
+	conc := 24 // many snapshots fanning out at once
+	if bursty {
+		conc = 6 // one snapshot's fan-out mostly completes before the next
+	}
+	return WorkloadConfig{
+		Snapshots:   snaps,
+		PopZipfS:    0.6, // mild popularity skew across snapshots
+		NumForks:    160,
+		Concurrency: conc,
+		TailZipfS:   1.3,
+		Bursty:      bursty,
+		Seed:        7,
+	}
+}
+
+func TestHitRatesChrome(t *testing.T) {
+	sizes := []int64{16 << 20, 40 << 20, 80 << 20, 160 << 20}
+	for _, mode := range []struct {
+		name   string
+		bursty bool
+	}{{"concurrent", false}, {"bursty", true}} {
+		trace := GenerateTrace(chromeWorkload(mode.bursty))
+		t.Logf("=== %s fan-out: %s ===", mode.name, trace)
+		for _, mb := range sizes {
+			t.Logf("--- cache=%d MiB (~%d snapshots fit) shards=%d ---", mb>>20, mb/(8<<20), benchShards)
+			t.Logf("%-10s %8s %12s", "policy", "hit%", "backingRd")
+			for _, f := range Factories() {
+				p := f.New(mb, benchShards)
+				res := Replay(p, trace, 4096)
+				t.Logf("%-10s %7.2f%% %12d", f.Name, res.HitRate()*100, res.BackingReads)
+			}
+		}
+	}
+}
+
 const benchShards = 16
 
 func TestHitRates(t *testing.T) {
