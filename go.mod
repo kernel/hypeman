@@ -8,6 +8,7 @@ require (
 	github.com/c2h5oh/datasize v0.0.0-20231215233829-aa82cc1e6500
 	github.com/creack/pty v1.1.24
 	github.com/cyphar/filepath-securejoin v0.6.1
+	github.com/dgraph-io/ristretto/v2 v2.4.0
 	github.com/digitalocean/go-qemu v0.0.0-20250212194115-ee9b0668d242
 	github.com/distribution/reference v0.6.0
 	github.com/docker/distribution v2.8.3+incompatible
