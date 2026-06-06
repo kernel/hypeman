@@ -28,20 +28,21 @@ func TestPageCacheSharesPagesByCacheKeyAndOffset(t *testing.T) {
 	}
 }
 
-func TestPageCacheEvictsLRUWhenBounded(t *testing.T) {
+func TestPageCacheSecondChanceEvictsUnreferenced(t *testing.T) {
 	cache := NewPageCache(8192)
 	cache.Add("snapshot-a", 0, bytes.Repeat([]byte{1}, 4096))
 	cache.Add("snapshot-a", 4096, bytes.Repeat([]byte{2}, 4096))
+	// Reference page 0 so the CLOCK sweep spares it and evicts the untouched one.
 	if _, ok := cache.Get("snapshot-a", 0, 4096); !ok {
 		t.Fatalf("expected first page before eviction")
 	}
 
 	cache.Add("snapshot-a", 8192, bytes.Repeat([]byte{3}, 4096))
 	if _, ok := cache.Get("snapshot-a", 4096, 4096); ok {
-		t.Fatalf("expected least recently used page to be evicted")
+		t.Fatalf("expected unreferenced page to be evicted")
 	}
 	if _, ok := cache.Get("snapshot-a", 0, 4096); !ok {
-		t.Fatalf("expected recently used page to remain")
+		t.Fatalf("expected referenced page to remain")
 	}
 }
 
