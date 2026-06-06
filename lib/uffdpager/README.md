@@ -37,7 +37,16 @@ Hypeman talks to the pager over Unix HTTP at
 - `GET /stats`
 - `POST /sessions`
 - `POST /sessions/{id}/close`
+- `POST /sessions/{id}/complete`
 - `POST /drain`
+
+`POST /sessions/{id}/complete` populates every outstanding page of a session
+from the backing file and then unregisters userfaultfd, so the restored VM stops
+depending on this pager and keeps running on resident memory. The VM is never
+paused and its network is untouched. Completion reads the whole remaining memory
+image, so it is paced by the caller; the request is bounded by its context
+rather than a fixed timeout. Unregister happens only after a full populate,
+because once a range is unregistered the kernel zero-fills any still-absent page.
 
 Firecracker does not use this control socket directly. Each restore session gets
 its own Unix socket that receives Firecracker's UFFD file descriptor and memory

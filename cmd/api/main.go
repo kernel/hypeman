@@ -35,8 +35,10 @@ import (
 	"github.com/kernel/hypeman/lib/ocicachegc"
 	"github.com/kernel/hypeman/lib/otel"
 	"github.com/kernel/hypeman/lib/paths"
+	"github.com/kernel/hypeman/lib/providers"
 	"github.com/kernel/hypeman/lib/registry"
 	"github.com/kernel/hypeman/lib/scopes"
+	"github.com/kernel/hypeman/lib/uffdgraduate"
 	"github.com/kernel/hypeman/lib/vmm"
 	nethttpmiddleware "github.com/oapi-codegen/nethttp-middleware"
 	"github.com/riandyrn/otelchi"
@@ -129,6 +131,33 @@ func startOCICacheGC(grp *errgroup.Group, ctx context.Context, runner ociCacheGC
 		return runner.Run(ctx)
 	})
 	return true
+}
+
+func configureUFFDGraduationController(cfg *config.Config, instanceManager instances.Manager, logger *slog.Logger) (*uffdgraduate.Controller, error) {
+	g := cfg.Hypervisor.FirecrackerUFFDGraduation
+	if !g.Enabled {
+		return nil, nil
+	}
+	minSessionAge, err := time.ParseDuration(g.MinSessionAge)
+	if err != nil {
+		return nil, fmt.Errorf("invalid hypervisor.firecracker_uffd_graduation.min_session_age %q: %w", g.MinSessionAge, err)
+	}
+	scanInterval, err := time.ParseDuration(g.ScanInterval)
+	if err != nil {
+		return nil, fmt.Errorf("invalid hypervisor.firecracker_uffd_graduation.scan_interval %q: %w", g.ScanInterval, err)
+	}
+	completionTimeout, err := time.ParseDuration(g.CompletionTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("invalid hypervisor.firecracker_uffd_graduation.completion_timeout %q: %w", g.CompletionTimeout, err)
+	}
+	return providers.ProvideUFFDGraduationController(instanceManager, uffdgraduate.Config{
+		Enabled:           true,
+		MinSessionAge:     minSessionAge,
+		MaxConcurrent:     g.MaxConcurrent,
+		MaxActiveSessions: g.MaxActiveSessions,
+		ScanInterval:      scanInterval,
+		CompletionTimeout: completionTimeout,
+	}, logger), nil
 }
 
 func run() error {
@@ -563,6 +592,17 @@ func run() error {
 		grp.Go(func() error {
 			logger.Info("starting auto-standby controller")
 			return app.AutoStandbyController.Run(gctx)
+		})
+	}
+
+	uffdGraduationController, err := configureUFFDGraduationController(app.Config, app.InstanceManager, logger)
+	if err != nil {
+		return err
+	}
+	if uffdGraduationController != nil {
+		grp.Go(func() error {
+			logger.Info("starting uffd graduation controller")
+			return uffdGraduationController.Run(gctx)
 		})
 	}
 	if app.HealthCheckController != nil {
