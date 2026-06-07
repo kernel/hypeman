@@ -11,6 +11,10 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// cloneFileFn indirects clonefile(2) so tests can inject a rejection and
+// exercise the sparse-copy fallback. Production leaves it untouched.
+var cloneFileFn = unix.Clonefile
+
 // copyRegularFileReflink clones srcPath to dstPath via clonefile(2) (APFS
 // copy-on-write). On APFS this is effectively instantaneous and consumes no
 // additional space until the cloned file's pages diverge.
@@ -29,11 +33,12 @@ func copyRegularFileReflink(srcPath, dstPath string, perms fs.FileMode) error {
 		return fmt.Errorf("remove stale clone destination %s: %w", dstPath, err)
 	}
 
-	// CLONE_NOFOLLOW clones the file at srcPath itself, never a symlink target.
 	// CLONE_NOOWNERCOPY drops owner/SUID/SGID/ACL metadata we have no business
 	// propagating into a fork; the explicit Chmod below re-establishes the mode.
+	// CLONE_NOFOLLOW is defensive only: callers route regular files here and
+	// symlinks through os.Symlink, so the source is never a symlink in practice.
 	flags := unix.CLONE_NOFOLLOW | unix.CLONE_NOOWNERCOPY
-	if err := unix.Clonefile(srcPath, dstPath, flags); err != nil {
+	if err := cloneFileFn(srcPath, dstPath, flags); err != nil {
 		if isReflinkUnsupportedError(err) {
 			return fmt.Errorf("%w: clonefile rejected for %s: %v", ErrReflinkUnsupported, srcPath, err)
 		}
@@ -50,14 +55,18 @@ func copyRegularFileReflink(srcPath, dstPath string, perms fs.FileMode) error {
 // isReflinkUnsupportedError returns true when a clonefile failure indicates the
 // clone cannot be served and the caller should fall back to a sparse copy.
 // Real errors (EIO, ENOSPC, EACCES) return false and propagate.
+//
+// Unlike the Linux FICLONE ladder, EINVAL and ENOTDIR are NOT treated as
+// "unsupported" here: on clonefile(2) they signal bad flags or a bad path
+// prefix (programming errors), and the flags are fixed constants. Mapping them
+// to the fallback would silently disable the fast path for every file if a
+// future edit broke the flag set, so we let them propagate instead.
 func isReflinkUnsupportedError(err error) bool {
 	switch {
 	case errors.Is(err, unix.ENOTSUP),
 		errors.Is(err, unix.EOPNOTSUPP),
 		errors.Is(err, unix.EXDEV),
-		errors.Is(err, unix.EEXIST),
-		errors.Is(err, unix.EINVAL),
-		errors.Is(err, unix.ENOTDIR):
+		errors.Is(err, unix.EEXIST):
 		return true
 	}
 	return false
