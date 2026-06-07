@@ -13,14 +13,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestConfigureDirectorySharingDisabled(t *testing.T) {
+func TestRosettaConfigureDirectorySharingDisabled(t *testing.T) {
 	// When Rosetta is not requested the call is a no-op and never touches the
 	// VM configuration, so a nil config is safe.
 	err := configureDirectorySharing(nil, &shimconfig.ShimConfig{EnableRosetta: false})
 	assert.NoError(t, err)
 }
 
-func TestConfigureDirectorySharingEnabled(t *testing.T) {
+func TestRosettaConfigureDirectorySharingEnabled(t *testing.T) {
 	cfg := &shimconfig.ShimConfig{EnableRosetta: true}
 
 	switch vz.LinuxRosettaDirectoryShareAvailability() {
