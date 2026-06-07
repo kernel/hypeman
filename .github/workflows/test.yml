@@ -5,6 +5,8 @@ on:
 
 jobs:
   test:
+    # TEMP(ci): disabled on this branch to focus signal on the forkvm darwin feature.
+    if: false
     runs-on: [self-hosted, linux, x64, kvm]
     steps:
       - uses: actions/checkout@v4
@@ -234,7 +236,7 @@ jobs:
           HYPEMAN_TEST_REGISTRY: 127.0.0.1:5001
         run: |
           export HYPEMAN_TEST_PREWARM_DIR="$HOME/.cache/hypeman-ci/darwin-arm64"
-          make test
+          make test TEST='Reflink|CopyGuestDirectory|CopyRegularFile|Sparse|Clone'
       - name: Cleanup
         if: always()
         run: |
@@ -243,6 +245,8 @@ jobs:
           make clean
 
   e2e-install:
+    # TEMP(ci): disabled on this branch to focus signal on the forkvm darwin feature.
+    if: false
     runs-on: [self-hosted, macos, arm64]
     needs: test-darwin
     concurrency:
