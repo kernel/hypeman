@@ -236,7 +236,7 @@ jobs:
           HYPEMAN_TEST_REGISTRY: 127.0.0.1:5001
         run: |
           export HYPEMAN_TEST_PREWARM_DIR="$HOME/.cache/hypeman-ci/darwin-arm64"
-          make test TEST='Reflink|CopyGuestDirectory|CopyRegularFile|Sparse|Clone'
+          make test TEST="'Reflink|CopyGuestDirectory|CopyRegularFile|Sparse|Clone'"
       - name: Cleanup
         if: always()
         run: |
