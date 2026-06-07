@@ -249,7 +249,9 @@ jobs:
         run: |
           export HYPEMAN_TEST_PREWARM_DIR="$HOME/.cache/hypeman-ci/darwin-arm64"
           # TEMP(ci): narrow to rosetta-x86 — revert before merge.
-          make test TEST='Rosetta|DirectorySharing|ShimConfig|BuildShimConfig|GuestConfig|Binfmt'
+          # Single regex token (no shell metachars for the Makefile's unquoted
+          # -run=$(TEST)); every feature test name contains "Rosetta".
+          make test TEST='Rosetta'
       - name: Cleanup
         if: always()
         run: |
