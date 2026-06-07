@@ -343,15 +343,13 @@ test-darwin: build-embedded sign-vz-shim
 .PHONY: test-vz-shim-signed
 test-vz-shim-signed:
 	@set -e; \
-	VERBOSE_FLAG=""; \
-	if [ -n "$(VERBOSE)" ]; then VERBOSE_FLAG="-test.v"; fi; \
 	RUN_FLAG=""; \
 	if [ -n "$(TEST)" ]; then RUN_FLAG="-test.run=$(TEST)"; fi; \
 	BIN="$$(mktemp -d)/vz-shim.test"; \
 	go test -tags containers_image_openpgp -c -o "$$BIN" ./cmd/vz-shim; \
 	if [ ! -f "$$BIN" ]; then echo "no cmd/vz-shim test binary for this platform; skipping"; exit 0; fi; \
 	codesign --sign - --entitlements $(ENTITLEMENTS_FILE) --force "$$BIN"; \
-	HYPEMAN_VZ_SIGNED=1 "$$BIN" $$RUN_FLAG $$VERBOSE_FLAG -test.timeout=$(TEST_TIMEOUT)
+	HYPEMAN_VZ_SIGNED=1 "$$BIN" $$RUN_FLAG -test.v -test.timeout=$(TEST_TIMEOUT)
 
 # Manual-only guest memory policy integration tests (Linux hypervisors).
 test-guestmemory-linux: ensure-ch-binaries ensure-firecracker-binaries ensure-caddy-binaries build-embedded
