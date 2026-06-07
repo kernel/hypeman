@@ -124,22 +124,17 @@ func TestVZRosettaX86Exec(t *testing.T) {
 
 	require.NoError(t, waitForExecAgent(ctx, mgr, inst.Id, 30*time.Second), "guest agent should be ready")
 
-	// The guest init should have registered the rosetta binfmt_misc handler.
-	out, code, err := vzExecCommand(ctx, inst, "cat", "/proc/sys/fs/binfmt_misc/rosetta")
-	if err != nil || code != 0 || !strings.Contains(out, "enabled") {
-		dumpVZShimLogs(t, tmpDir)
-		dumpVZGuestSerialLogs(t, tmpDir)
-		t.Fatalf("rosetta binfmt handler not registered: code=%d err=%v out=%q", code, err, out)
-	}
-
 	// Write the x86-64 probe into the guest (stdin avoids arg-length limits).
-	_, code, err = vzExecStdin(ctx, inst, base64.StdEncoding.EncodeToString(rosettaProbeAMD64),
+	// binfmt_misc dispatch is global to the kernel, so the handler the guest init
+	// registers need not be visible at /proc/sys/fs/binfmt_misc inside the
+	// chrooted container; the exec below — not a file check — is the real proof.
+	_, code, err := vzExecStdin(ctx, inst, base64.StdEncoding.EncodeToString(rosettaProbeAMD64),
 		"sh", "-c", "base64 -d > /tmp/probe && chmod +x /tmp/probe")
 	require.NoError(t, err)
 	require.Equal(t, 0, code, "writing the probe into the guest should succeed")
 
 	// The payoff: an x86-64 ELF runs only if Rosetta emulation is working.
-	out, code, err = vzExecCommand(ctx, inst, "/tmp/probe")
+	out, code, err := vzExecCommand(ctx, inst, "/tmp/probe")
 	if err != nil || code != 0 || strings.TrimSpace(out) != "ROSETTA_X86_OK" {
 		dumpVZShimLogs(t, tmpDir)
 		dumpVZGuestSerialLogs(t, tmpDir)
