@@ -5,8 +5,6 @@ on:
 
 jobs:
   test:
-    # TEMP(ci): disabled on this branch to focus signal on the forkvm darwin feature.
-    if: false
     runs-on: [self-hosted, linux, x64, kvm]
     steps:
       - uses: actions/checkout@v4
@@ -234,14 +232,9 @@ jobs:
           JWT_SECRET: ci-test-secret
           HYPEMAN_TEST_PREWARM_STRICT: "1"
           HYPEMAN_TEST_REGISTRY: 127.0.0.1:5001
-          # TEMP(ci): VERBOSE surfaces per-test PASS/SKIP so the narrowed run
-          # proves the clone tests actually executed; HYPEMAN_REQUIRE_APFS_CLONE
-          # turns an unexpected non-APFS skip into a hard failure.
-          VERBOSE: "1"
-          HYPEMAN_REQUIRE_APFS_CLONE: "1"
         run: |
           export HYPEMAN_TEST_PREWARM_DIR="$HOME/.cache/hypeman-ci/darwin-arm64"
-          make test TEST="'Reflink|CopyGuestDirectory|CopyRegularFile|Sparse|Clone'"
+          make test
       - name: Cleanup
         if: always()
         run: |
@@ -250,8 +243,6 @@ jobs:
           make clean
 
   e2e-install:
-    # TEMP(ci): disabled on this branch to focus signal on the forkvm darwin feature.
-    if: false
     runs-on: [self-hosted, macos, arm64]
     needs: test-darwin
     concurrency:
