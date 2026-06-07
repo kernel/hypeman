@@ -233,9 +233,10 @@ jobs:
       # TEMP(ci): narrow to rosetta-x86 — revert before merge.
       # Cross-compiles cmd/vz-shim for darwin/arm64 to prove the arm64 Rosetta
       # file compiles. darwin/amd64 is intentionally not built: Code-Hex/vz
-      # v3.7.1 itself does not compile for darwin/amd64 (its generated
-      # virtualmachinestate_string.go references arm64-only state constants), so
-      # the shim is arm64-only regardless of our rosetta_other.go stub.
+      # v3.7.1 does not compile for darwin/amd64 — its cgo file virtualization.go
+      # fails to expose the VirtualMachineState* consts on amd64, breaking the
+      # unconstrained generated virtualmachinestate_string.go — so the shim is
+      # arm64-only regardless of our rosetta_other.go stub.
       - name: Build matrix (vz-shim arm64)
         run: GOOS=darwin GOARCH=arm64 go build -tags containers_image_openpgp ./cmd/vz-shim/...
 
@@ -250,8 +251,11 @@ jobs:
           export HYPEMAN_TEST_PREWARM_DIR="$HOME/.cache/hypeman-ci/darwin-arm64"
           # TEMP(ci): narrow to rosetta-x86 — revert before merge.
           # Single regex token (no shell metachars for the Makefile's unquoted
-          # -run=$(TEST)); every feature test name contains "Rosetta".
-          make test TEST='Rosetta'
+          # -run=$(TEST)); every feature test name contains "Rosetta". VERBOSE=1
+          # surfaces per-subtest PASS/SKIP so the log shows which Rosetta
+          # availability branch ran (the attach+validate path skips when Rosetta
+          # is not installed on the runner).
+          make test TEST='Rosetta' VERBOSE=1
       - name: Cleanup
         if: always()
         run: |
