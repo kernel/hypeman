@@ -7,6 +7,8 @@ import (
 	"context"
 	_ "embed"
 	"encoding/base64"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -17,7 +19,6 @@ import (
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/kernel/hypeman/lib/system"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -46,6 +47,18 @@ func vzExecStdin(ctx context.Context, inst *Instance, s string, command ...strin
 		return stderr.String(), -1, err
 	}
 	return stdout.String(), exit.Code, nil
+}
+
+// dumpVZGuestSerialLogs prints each guest's serial console log (where the guest
+// init's messages land), to diagnose guest-side boot/setup failures.
+func dumpVZGuestSerialLogs(t *testing.T, tmpDir string) {
+	t.Helper()
+	logs, _ := filepath.Glob(filepath.Join(tmpDir, "guests", "*", "logs", "app.log"))
+	for _, f := range logs {
+		if content, err := os.ReadFile(f); err == nil && len(content) > 0 {
+			t.Logf("guest serial log (%s):\n%s", f, string(content))
+		}
+	}
 }
 
 // TestVZRosettaX86Exec is the end-to-end Rosetta test. It boots a vz Linux guest
@@ -103,6 +116,7 @@ func TestVZRosettaX86Exec(t *testing.T) {
 			t.Skipf("host cannot attach Rosetta share: %v", err)
 		}
 		dumpVZShimLogs(t, tmpDir)
+		dumpVZGuestSerialLogs(t, tmpDir)
 		require.NoError(t, err)
 	}
 	require.NotNil(t, inst)
@@ -112,9 +126,11 @@ func TestVZRosettaX86Exec(t *testing.T) {
 
 	// The guest init should have registered the rosetta binfmt_misc handler.
 	out, code, err := vzExecCommand(ctx, inst, "cat", "/proc/sys/fs/binfmt_misc/rosetta")
-	require.NoError(t, err)
-	require.Equalf(t, 0, code, "rosetta binfmt handler should be registered; got: %q", out)
-	assert.Contains(t, out, "enabled")
+	if err != nil || code != 0 || !strings.Contains(out, "enabled") {
+		dumpVZShimLogs(t, tmpDir)
+		dumpVZGuestSerialLogs(t, tmpDir)
+		t.Fatalf("rosetta binfmt handler not registered: code=%d err=%v out=%q", code, err, out)
+	}
 
 	// Write the x86-64 probe into the guest (stdin avoids arg-length limits).
 	_, code, err = vzExecStdin(ctx, inst, base64.StdEncoding.EncodeToString(rosettaProbeAMD64),
@@ -124,7 +140,9 @@ func TestVZRosettaX86Exec(t *testing.T) {
 
 	// The payoff: an x86-64 ELF runs only if Rosetta emulation is working.
 	out, code, err = vzExecCommand(ctx, inst, "/tmp/probe")
-	require.NoError(t, err, "x86-64 binary should execute via Rosetta")
-	require.Equalf(t, 0, code, "x86-64 probe should exit 0; output=%q", out)
-	assert.Equal(t, "ROSETTA_X86_OK", strings.TrimSpace(out))
+	if err != nil || code != 0 || strings.TrimSpace(out) != "ROSETTA_X86_OK" {
+		dumpVZShimLogs(t, tmpDir)
+		dumpVZGuestSerialLogs(t, tmpDir)
+		t.Fatalf("x86-64 probe did not run via Rosetta: code=%d err=%v out=%q", code, err, out)
+	}
 }
