@@ -20,6 +20,11 @@ func TestRosettaConfigureDirectorySharingDisabled(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+// TestRosettaConfigureDirectorySharingEnabled exercises the error paths
+// unconditionally. The attach+validate path requires Rosetta to be installed on
+// the runner; it is covered by TestRosettaConfigureDirectorySharingInstalled,
+// which skips (visibly, under -v) when Rosetta is unavailable rather than
+// silently asserting nothing.
 func TestRosettaConfigureDirectorySharingEnabled(t *testing.T) {
 	cfg := &shimconfig.ShimConfig{EnableRosetta: true}
 
@@ -32,13 +37,23 @@ func TestRosettaConfigureDirectorySharingEnabled(t *testing.T) {
 		err := configureDirectorySharing(nil, cfg)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "not supported")
-	case vz.LinuxRosettaAvailabilityInstalled:
-		vmConfig := newTestVMConfiguration(t)
-		require.NoError(t, configureDirectorySharing(vmConfig, cfg))
-		ok, err := vmConfig.Validate()
-		require.NoError(t, err)
-		assert.True(t, ok)
 	}
+}
+
+// TestRosettaConfigureDirectorySharingInstalled asserts that, when Rosetta is
+// installed, configureDirectorySharing attaches the virtio-fs share and the
+// resulting VM configuration validates. It skips otherwise so the log records
+// whether the attach path actually ran on this runner.
+func TestRosettaConfigureDirectorySharingInstalled(t *testing.T) {
+	if vz.LinuxRosettaDirectoryShareAvailability() != vz.LinuxRosettaAvailabilityInstalled {
+		t.Skip("rosetta not installed on this host; skipping attach+validate coverage")
+	}
+
+	vmConfig := newTestVMConfiguration(t)
+	require.NoError(t, configureDirectorySharing(vmConfig, &shimconfig.ShimConfig{EnableRosetta: true}))
+	ok, err := vmConfig.Validate()
+	require.NoError(t, err)
+	assert.True(t, ok)
 }
 
 // newTestVMConfiguration builds a minimal valid VM configuration for tests that

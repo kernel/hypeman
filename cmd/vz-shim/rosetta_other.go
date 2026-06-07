@@ -9,9 +9,12 @@ import (
 	"github.com/kernel/hypeman/lib/hypervisor/vz/shimconfig"
 )
 
-// configureDirectorySharing rejects Rosetta on Intel macOS, where it does not
-// exist. Without EnableRosetta it is a no-op so the shim still builds for
-// darwin/amd64.
+// configureDirectorySharing is the non-arm64 counterpart of the arm64
+// implementation: Rosetta does not exist on Intel macOS, so it errors when
+// requested and is otherwise a no-op. This mirrors the existing
+// save_restore_unsupported.go stub. In practice the whole package is arm64-only
+// because Code-Hex/vz v3.7.1 does not compile for darwin/amd64, so this file
+// only satisfies the type checker for the !arm64 build tag.
 func configureDirectorySharing(_ *vz.VirtualMachineConfiguration, config *shimconfig.ShimConfig) error {
 	if config.EnableRosetta {
 		return fmt.Errorf("rosetta is only available on Apple silicon")

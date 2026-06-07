@@ -74,7 +74,7 @@ The bindings used below were verified against the module in cache (`github.com/C
 - `(*VirtualMachineConfiguration).SetDirectorySharingDevicesVirtualMachineConfiguration(cs []DirectorySharingDeviceConfiguration)` — `configuration.go:185`.
 - macOS 14+ translation cache (follow-up): `(*LinuxRosettaDirectoryShare).SetOptions(LinuxRosettaCachingOptions)` — `shared_directory_arm64.go:87`; `vz.NewLinuxRosettaUnixSocketCachingOptions(path string)` — `shared_directory_arm64.go:153`; `vz.NewLinuxRosettaAbstractSocketCachingOptions(name string)` — `shared_directory_arm64.go:201`.
 
-The Rosetta bindings live behind the build tag `//go:build darwin && arm64` (`shared_directory_arm64.go:1`). `VirtioFileSystemDeviceConfiguration` itself is in the platform-neutral `shared_directory.go`. Because hypeman builds the shim from a single `vm.go` guarded by `//go:build darwin` (`cmd/vz-shim/vm.go:1`), the arm64-only Rosetta calls must be isolated into an arm64-tagged file with a non-arm64 stub, so the shim still compiles for an amd64 (Intel) macOS target.
+The Rosetta bindings live behind the build tag `//go:build darwin && arm64` (`shared_directory_arm64.go:1`). `VirtioFileSystemDeviceConfiguration` itself is in the platform-neutral `shared_directory.go`. Because hypeman builds the shim from a single `vm.go` guarded by `//go:build darwin` (`cmd/vz-shim/vm.go:1`), the arm64-only Rosetta calls must be isolated into an arm64-tagged file with a non-arm64 stub. Note that `cmd/vz-shim` is arm64-only in practice: Code-Hex/vz v3.7.1 does not compile for `darwin/amd64` (its generated `virtualmachinestate_string.go` references `VirtualMachineState*` consts that the cgo file `virtualization.go` only provides on arm64), and the package already imports vz unconditionally (e.g. `save_restore_unsupported.go`). The `!arm64` stub therefore only satisfies the type checker for that build tag — mirroring the existing save/restore stub — rather than enabling a real Intel-macOS build.
 
 ### 1. Config plumbing
 
@@ -216,87 +216,28 @@ This is the core divergence from Tart. The work is added to the guest `init` bin
 **Placement.** Registration must happen after the overlay rootfs and the bind-mounts of `/proc`/`/sys`/`/dev` into `/overlay/newroot` are in place (`bindMountsToNewRoot`, `lib/system/init/mount.go:145`) and before the workload runs. Concretely, add a phase in `main` between Phase 6 (bind mounts) and Phase 9 (mode-specific execution), so it applies to both exec and systemd modes (both chroot into `/overlay/newroot`: `mode_exec.go:33`, `mode_systemd.go:46`):
 
 ```go
-// Phase 6.5: Register Rosetta x86-64 emulation if enabled.
+// Phase 6.5: Register Rosetta x86-64 emulation if enabled. systemd mode needs
+// a binfmt.d drop-in (see below), so the mode is passed in.
 if cfg.EnableRosetta {
-    if err := setupRosetta(log); err != nil {
+    if err := setupRosetta(log, cfg.InitMode == "systemd"); err != nil {
         log.Error("hypeman-init:rosetta", "failed to set up rosetta", err)
         // Non-fatal: arm64 workloads still run; only amd64 exec is affected.
     }
 }
 ```
 
-**Why the `binfmt_misc` "F" (fix-binary) flag is essential.** The guest will `chroot("/overlay/newroot")` (`mode_exec.go:33`). `binfmt_misc` resolves the registered interpreter path lazily, at `execve` time, relative to the root of the calling process's mount namespace. Without care, the interpreter path registered before chroot would be unreachable after chroot, and the path inside the chroot may not exist. The kernel's `F` flag opens the interpreter file at *registration* time and holds the open file descriptor, so the binary remains usable regardless of the caller's later root or mount-namespace changes. This is exactly the case Apple's Rosetta-in-Linux guidance and the systemd `binfmt.d` Rosetta examples use. So `init` mounts Rosetta at an init-namespace path, registers with `F`, and the pinned fd survives the subsequent chroot — no copy of the interpreter into the overlay is needed.
+**Why the `binfmt_misc` "F" (fix-binary) flag is essential.** The guest will `chroot("/overlay/newroot")` (`mode_exec.go:33`). `binfmt_misc` resolves the registered interpreter path at `execve` time. Without care, the interpreter path registered before chroot would be unreachable after chroot. The kernel's `F` flag opens the interpreter file at *registration* time and holds the open file descriptor, so the binary remains usable regardless of the caller's later root or mount-namespace changes. This is exactly the case Apple's Rosetta-in-Linux guidance and the systemd `binfmt.d` Rosetta examples use.
 
-`lib/system/init/rosetta.go`:
+`init` mounts the Rosetta share **inside the overlay rootfs** at `/opt/hypeman/rosetta` (under `newRoot`) rather than at an init-only path like `/run/rosetta`. Two reasons: the interpreter then has a stable guest-absolute path (`/opt/hypeman/rosetta/rosetta`) that is valid both before and after the chroot, and `/opt` is not shadowed by the `/run` tmpfs systemd remounts during boot. The live registration uses the F flag with the interpreter's current (pre-chroot) path under `newRoot`; the pinned fd then survives the chroot.
 
-```go
-package main
+`lib/system/init/rosetta.go` implements `setupRosetta(log *Logger, systemdMode bool)`:
 
-import (
-    "fmt"
-    "os"
-    "syscall"
-    "time"
+1. mkdir + `mount(RosettaMountTag, <newRoot>/opt/hypeman/rosetta, "virtiofs", "")` (reusing the existing `mount` helper, `lib/system/init/mount.go:189`), then `waitForDevice` (`:72`) on the interpreter.
+2. `ensureBinfmtMounted()` mounts `binfmt_misc` if it is not already present.
+3. register the live rule (`rosettaBinfmtRule(interp)` → `:rosetta:M::<magic>:<mask>:<interp>:OCF`) by writing to `/proc/sys/fs/binfmt_misc/register`. The `OCF` flags request `O` keep `argv[0]`, `C` apply the target's credentials, `F` pin the interpreter fd. A duplicate-name `EEXIST` is treated as success (an image-shipped `:rosetta:` rule is left in place).
+4. in **systemd mode only**, also write `/usr/lib/binfmt.d/rosetta.conf` into the overlay rootfs (referencing the guest-absolute interpreter path) so `systemd-binfmt` re-registers Rosetta after its boot-time flush (see Risks).
 
-    "github.com/kernel/hypeman/lib/hypervisor/vz/shimconfig"
-)
-
-const (
-    rosettaMountPoint = "/run/rosetta"
-    binfmtMountPoint  = "/proc/sys/fs/binfmt_misc"
-    binfmtRegister    = "/proc/sys/fs/binfmt_misc/register"
-
-    // x86-64 ELF magic/mask. Matches systemd's shipped rosetta binfmt rule.
-    // magic: ELF, little-endian, 64-bit, EM_X86_64 (0x3e) in e_machine.
-    rosettaELFMagic = `\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x3e\x00`
-    rosettaELFMask  = `\xff\xff\xff\xff\xff\xfe\xfe\x00\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff`
-)
-
-// setupRosetta mounts the Rosetta virtio-fs share and registers a binfmt_misc
-// handler so x86-64 ELF binaries execute via Rosetta. Uses the "F" flag so the
-// interpreter fd survives the later chroot into /overlay/newroot.
-func setupRosetta(log *Logger) error {
-    if err := os.MkdirAll(rosettaMountPoint, 0o755); err != nil {
-        return fmt.Errorf("mkdir rosetta mount: %w", err)
-    }
-    if err := mountVirtiofs(shimconfig.RosettaMountTag, rosettaMountPoint); err != nil {
-        return fmt.Errorf("mount rosetta share: %w", err)
-    }
-
-    interp := rosettaMountPoint + "/rosetta"
-    if err := waitForDevice(interp, 2*time.Second); err != nil {
-        return fmt.Errorf("rosetta interpreter not present: %w", err)
-    }
-
-    if err := ensureBinfmtMounted(); err != nil {
-        return fmt.Errorf("mount binfmt_misc: %w", err)
-    }
-
-    // name:type(M):offset:magic:mask:interpreter:flags
-    // flags = OCF: O preserve argv[0], C credentials from binary, F open
-    // interpreter at registration and pin the fd (survives chroot).
-    rule := fmt.Sprintf(":rosetta:M::%s:%s:%s:OCF", rosettaELFMagic, rosettaELFMask, interp)
-    if err := os.WriteFile(binfmtRegister, []byte(rule), 0o644); err != nil {
-        return fmt.Errorf("register rosetta binfmt: %w", err)
-    }
-
-    log.Info("hypeman-init:rosetta", "registered rosetta binfmt_misc handler")
-    return nil
-}
-
-func mountVirtiofs(tag, target string) error {
-    return mount(tag, target, "virtiofs", "")
-}
-
-func ensureBinfmtMounted() error {
-    if _, err := os.Stat(binfmtRegister); err == nil {
-        return nil // already mounted by kernel/earlier phase
-    }
-    return syscall.Mount("binfmt_misc", binfmtMountPoint, "binfmt_misc", 0, "")
-}
-```
-
-This reuses the existing `mount` helper (`lib/system/init/mount.go:189`) and `waitForDevice` (`lib/system/init/mount.go:72`), matching the file's conventions. The magic/mask are the standard x86-64 ELF signature used by distro `binfmt.d` Rosetta rules; the `OCF` flags request: `O` keep the original `argv[0]`, `C` apply the target's credentials/securebits, `F` pin the interpreter fd. After this phase, `runExecMode`/`runSystemdMode` chroot as usual and amd64 `execve` transparently dispatches to Rosetta.
+The magic/mask are the standard x86-64 ELF signature used by distro `binfmt.d` Rosetta rules (byte-identical to lima's vz-rosetta rule). After this phase, `runExecMode`/`runSystemdMode` chroot as usual and amd64 `execve` transparently dispatches to Rosetta.
 
 If `setupRosetta` fails, boot continues — an arm64 workload is unaffected; only amd64 execution is lost. This mirrors the non-fatal treatment of network/volume setup in `main` (`lib/system/init/main.go:63`, `:72`).
 
@@ -307,7 +248,7 @@ The guest kernel must provide three options for this to work:
 - `CONFIG_VIRTIO_FS=y` (and its dependency `CONFIG_FUSE_FS`) — to mount the `rosetta` share.
 - `CONFIG_BINFMT_MISC=y` (or `=m`, loaded) — to register the interpreter.
 
-If `CONFIG_VIRTIO_FS` is missing, `mountVirtiofs` fails with `unknown filesystem type 'virtiofs'`; if `binfmt_misc` is unavailable, `ensureBinfmtMounted` fails. Both surface as the non-fatal Rosetta error above. The kernel hypeman ships for `vz` guests must enable these; the testing plan includes a boot-time assertion. (No kernel build target exists in the repo Makefile today; the kernel artifact is provisioned externally, so this is a packaging requirement on that artifact, documented in the milestone list.)
+If `CONFIG_VIRTIO_FS` is missing, the `virtiofs` mount fails with `unknown filesystem type 'virtiofs'`; if `binfmt_misc` is unavailable, `ensureBinfmtMounted` fails. Both surface as the non-fatal Rosetta error above. The kernel hypeman ships for `vz` guests must enable these; the testing plan includes a boot-time assertion. (No kernel build target exists in the repo Makefile today; the kernel artifact is provisioned externally, so this is a packaging requirement on that artifact, documented in the milestone list.)
 
 ## Configuration / API changes
 
@@ -333,9 +274,9 @@ If `CONFIG_VIRTIO_FS` is missing, `mountVirtiofs` fails with `unknown filesystem
 
 - **Unit (host config, no entitlements/hardware):** table tests for `buildShimConfigFromVMConfig` and `buildGuestConfig` asserting `EnableRosetta` propagates from `hypervisor.VMConfig` / `inst` into `ShimConfig` / `vmconfig.Config`. These run on Linux CI (the config packages are not `darwin`-gated except `shimconfig`, which already carries `//go:build darwin`; the propagation test for `ShimConfig` runs on the macOS job).
 - **Unit (guest registration logic):** factor the `binfmt_misc` rule string into a pure function (`rosettaBinfmtRule(interp string) string`) and assert the exact `:rosetta:M::<magic>:<mask>:<interp>:OCF` output, including that the interpreter path is interpolated and the `F` flag is present. No mounts required.
-- **Build-tag matrix:** `GOOS=darwin GOARCH=arm64` and `GOOS=darwin GOARCH=amd64` both compile `cmd/vz-shim` (verifying the arm64 file + non-arm64 stub split). The Code-Hex/vz Rosetta bindings are arm64-only, so the amd64 build must not reference them.
+- **Build-tag matrix:** `GOOS=darwin GOARCH=arm64 go build ./cmd/vz-shim/...` compiles the arm64 Rosetta file. `darwin/amd64` is intentionally not built: Code-Hex/vz v3.7.1 itself does not compile for `darwin/amd64` (the generated `virtualmachinestate_string.go` references arm64-only `VirtualMachineState*` consts), and `cmd/vz-shim` imports vz unconditionally, so the package is arm64-only regardless of the `!arm64` stub. The stub exists for type-checking parity with the existing `save_restore_unsupported.go`, not to produce a working Intel-macOS binary.
 - **Host availability gating (macOS arm64 runner):** with Rosetta uninstalled, assert `configureDirectorySharing` returns the `NotInstalled` error; with it installed, assert the device is attached and `vmConfig.Validate()` (`cmd/vz-shim/vm.go:89`) passes.
-- **End-to-end (macOS arm64 runner, Rosetta installed):** launch an instance with `enable_rosetta=true` from an amd64-only image; assert (a) the guest log shows `registered rosetta binfmt_misc handler`, (b) `/proc/sys/fs/binfmt_misc/rosetta` exists in the guest, (c) running an amd64 `uname -m` / a known amd64 hello binary inside the container via `hypeman exec` succeeds and reports x86_64. Tart's binding tests prepare exactly such an amd64 hello binary as a directory share (`shared_directory_arm64_test.go:129-146`), confirming this is the right shape of test.
+- **End-to-end (macOS arm64 runner, Rosetta installed):** launch an instance with `enable_rosetta=true` from an amd64-only image; assert (a) the guest log shows `registered rosetta binfmt_misc handler` and (b) running an amd64 `uname -m` / a known amd64 hello binary inside the container via `hypeman exec` succeeds and reports x86_64. Verify dispatch by actually executing an amd64 binary rather than stat'ing `/proc/sys/fs/binfmt_misc/rosetta` inside the container: `binfmt_misc` dispatch is kernel-global, but the container's `/proc` is a non-recursive bind mount taken before `binfmt_misc` is mounted in exec mode, so the `rosetta` entry is not necessarily visible from inside the chroot even when registration succeeded. Tart's binding tests prepare exactly such an amd64 hello binary as a directory share (`shared_directory_arm64_test.go:129-146`), confirming this is the right shape of test.
 - **Negative E2E:** with `enable_rosetta=false`, assert an amd64 binary fails with `ENOEXEC` (no handler registered) and an arm64 image still runs — i.e. the feature is fully opt-in and off by default.
 - **Snapshot/restore E2E:** snapshot a Rosetta-enabled VM, restore it, and assert amd64 exec still works post-restore (manifest carries `EnableRosetta`, device parity preserved).
 - **Kernel-config assertion:** boot-time check that `virtiofs` is a known filesystem and `binfmt_misc` is mountable; fail the image-validation test if the shipped `vz` guest kernel lacks `CONFIG_VIRTIO_FS` / `CONFIG_FUSE_FS` / `CONFIG_BINFMT_MISC`.
@@ -343,7 +284,8 @@ If `CONFIG_VIRTIO_FS` is missing, `mountVirtiofs` fails with `unknown filesystem
 ## Risks & alternatives considered
 
 - **Risk: guest kernel lacks virtio-fs or binfmt_misc.** Mitigation: kernel-config assertion in CI plus non-fatal degradation at runtime. Without the kernel options the feature simply reports an error and arm64 workloads continue.
-- **Risk: `binfmt_misc` rule collides with an existing handler.** If the image's userspace (e.g. systemd's `binfmt.d`) already registered an x86-64 rule, a second `:rosetta:` registration with a duplicate name fails. Mitigation: the name `rosetta` is specific; if `WriteFile` fails with `EEXIST`-style errors, treat it as already-registered and continue (refinement during implementation).
+- **Risk: `binfmt_misc` rule collides with an existing handler.** If the image's userspace (e.g. systemd's `binfmt.d`) already registered a `:rosetta:` rule, the live registration write returns `EEXIST`. Mitigation (implemented): `registerBinfmt` treats `EEXIST` as already-registered and continues.
+- **Risk: systemd flushes the live rule.** `systemd-binfmt.service` runs `disable_binfmt()` (writes `-1` to `/proc/sys/fs/binfmt_misc/status`), flushing *all* rules — including our live `:rosetta:` rule — before re-applying only the `binfmt.d` drop-ins. The `F` flag pins the interpreter fd but does not protect the registration from this explicit flush. Mitigation (implemented): in systemd mode `init` also writes `/usr/lib/binfmt.d/rosetta.conf` into the overlay rootfs, so `systemd-binfmt` re-registers the handler. The interpreter is mounted under `/opt/hypeman/rosetta` (inside the overlay rootfs, not `/run`) so its guest-absolute path survives the chroot and is not shadowed by the `/run` tmpfs that systemd remounts during boot; the drop-in references that path.
 - **Risk: restore-compatibility regressions.** Adding any device interacts with `vz`'s machine-state parity requirement (`lib/hypervisor/vz/fork.go:65`). Mitigation: persist and replay `EnableRosetta` from the manifest so a restored VM rebuilds the identical device set; covered by a restore E2E test.
 - **Alternative: userspace emulation (QEMU user-mode / box64) registered via binfmt.** Works on any host (not Apple-Silicon-gated) but is materially slower and adds a binary to ship and maintain inside guests. Rosetta is the right default on Apple Silicon; userspace emulation could be a separate, host-agnostic fallback later but is out of scope here.
 - **Alternative: expose a Tart-style `--rosetta=TAG` with manual guest registration.** Rejected: contradicts hypeman's programmatic, ephemeral-instance model. Automating the guest side is the whole point of the divergence.
@@ -363,6 +305,6 @@ If `CONFIG_VIRTIO_FS` is missing, `mountVirtiofs` fails with `unknown filesystem
 
 - **Cache sharing semantics across forks.** Is a single shared Rosetta cache directory safe for concurrent read/write across many forked VMs, or must each fork get a copy-on-write view? The macOS 14 caching API communicates over a Unix/abstract socket to a translation daemon (`shared_directory_arm64.go:137`, `:184`); how that interacts with hypeman's fork-from-snapshot model needs prototyping before milestone 6.
 - **Auto-install policy.** Should a Rosetta-enabled instance request that hits `NotInstalled` fail hard (current proposal) or trigger a one-time background install at the server level? Failing hard is simpler and predictable; an operator preflight may be the better ergonomics.
-- **Duplicate-registration handling.** For systemd-mode images that ship their own x86-64 `binfmt.d` rule, do we skip registration if a compatible handler already exists, or always register under the `rosetta` name and tolerate `EEXIST`? Needs a concrete policy.
+- **Duplicate-registration handling.** Resolved: the live registration tolerates `EEXIST` (an image-shipped `:rosetta:` rule is left in place), and in systemd mode `init` writes its own `binfmt.d` drop-in so `systemd-binfmt` re-registers Rosetta after the boot-time flush. An image that ships a *different* x86-64 handler under another name is left untouched; the two coexist as distinct `binfmt_misc` entries.
 - **Tag constant vs. configurable.** A fixed `rosetta` tag is proposed for safety. Is there any multi-share scenario (e.g. a future general `--dir` virtio-fs feature, cf. Tart `Sources/tart/Commands/Run.swift:162`) that would require the Rosetta tag to be configurable to avoid collisions?
 - **Guest kernel ownership.** The repo has no in-tree kernel build target; confirming where the `vz` guest kernel `.config` is owned determines whether milestone 3 is a packaging change in this repo or an external artifact bump.
