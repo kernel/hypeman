@@ -161,10 +161,11 @@ jobs:
           chmod +x "$HYPEMAN_UFFD_PAGER_BINARY"
           export HYPEMAN_TEST_PREWARM_DIR="$HOME/.cache/hypeman-ci/linux-amd64"
           # TEMP(ci): narrow to rosetta-x86 — revert before merge.
-          # lib/system/init is excluded from the darwin job, so the guest-side
-          # rosettaBinfmtRule test (Binfmt) and the guest-config propagation
-          # test (GuestConfig) run here on Linux.
-          make test TEST='Binfmt|GuestConfig' TEST_TIMEOUT=20m
+          # All feature tests are named *Rosetta* (single regex token, no shell
+          # metachars for the Makefile's unquoted -run=$(TEST)). lib/system/init
+          # is excluded from the darwin job, so the guest-side rosettaBinfmtRule
+          # test runs here on Linux alongside the guest-config propagation test.
+          make test TEST='Rosetta' TEST_TIMEOUT=20m
 
       - name: Cleanup
         if: always()
@@ -230,12 +231,13 @@ jobs:
           fi
 
       # TEMP(ci): narrow to rosetta-x86 — revert before merge.
-      # Proves the cmd/vz-shim arm64 Rosetta file + non-arm64 stub split builds
-      # for both Apple silicon and Intel macOS targets.
-      - name: Build matrix (vz-shim arm64 + amd64)
-        run: |
-          GOOS=darwin GOARCH=arm64 go build -tags containers_image_openpgp ./cmd/vz-shim/...
-          GOOS=darwin GOARCH=amd64 go build -tags containers_image_openpgp ./cmd/vz-shim/...
+      # Cross-compiles cmd/vz-shim for darwin/arm64 to prove the arm64 Rosetta
+      # file compiles. darwin/amd64 is intentionally not built: Code-Hex/vz
+      # v3.7.1 itself does not compile for darwin/amd64 (its generated
+      # virtualmachinestate_string.go references arm64-only state constants), so
+      # the shim is arm64-only regardless of our rosetta_other.go stub.
+      - name: Build matrix (vz-shim arm64)
+        run: GOOS=darwin GOARCH=arm64 go build -tags containers_image_openpgp ./cmd/vz-shim/...
 
       - name: Run tests
         env:
