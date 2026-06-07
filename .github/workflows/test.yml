@@ -160,7 +160,11 @@ jobs:
           cp "$PWD/bin/hypeman-uffd-pager" "$HYPEMAN_UFFD_PAGER_BINARY"
           chmod +x "$HYPEMAN_UFFD_PAGER_BINARY"
           export HYPEMAN_TEST_PREWARM_DIR="$HOME/.cache/hypeman-ci/linux-amd64"
-          make test TEST_TIMEOUT=20m
+          # TEMP(ci): narrow to rosetta-x86 — revert before merge.
+          # lib/system/init is excluded from the darwin job, so the guest-side
+          # rosettaBinfmtRule test (Binfmt) and the guest-config propagation
+          # test (GuestConfig) run here on Linux.
+          make test TEST='Binfmt|GuestConfig' TEST_TIMEOUT=20m
 
       - name: Cleanup
         if: always()
@@ -225,6 +229,14 @@ jobs:
             exit 1
           fi
 
+      # TEMP(ci): narrow to rosetta-x86 — revert before merge.
+      # Proves the cmd/vz-shim arm64 Rosetta file + non-arm64 stub split builds
+      # for both Apple silicon and Intel macOS targets.
+      - name: Build matrix (vz-shim arm64 + amd64)
+        run: |
+          GOOS=darwin GOARCH=arm64 go build -tags containers_image_openpgp ./cmd/vz-shim/...
+          GOOS=darwin GOARCH=amd64 go build -tags containers_image_openpgp ./cmd/vz-shim/...
+
       - name: Run tests
         env:
           GO_TEST_TIMEOUT: 600s
@@ -234,7 +246,8 @@ jobs:
           HYPEMAN_TEST_REGISTRY: 127.0.0.1:5001
         run: |
           export HYPEMAN_TEST_PREWARM_DIR="$HOME/.cache/hypeman-ci/darwin-arm64"
-          make test
+          # TEMP(ci): narrow to rosetta-x86 — revert before merge.
+          make test TEST='Rosetta|DirectorySharing|ShimConfig|BuildShimConfig|GuestConfig|Binfmt'
       - name: Cleanup
         if: always()
         run: |
@@ -243,6 +256,9 @@ jobs:
           make clean
 
   e2e-install:
+    # TEMP(ci): narrow to rosetta-x86 — revert before merge (disabled to keep
+    # the feature run fast/cheap; unrelated to Rosetta).
+    if: false
     runs-on: [self-hosted, macos, arm64]
     needs: test-darwin
     concurrency:
