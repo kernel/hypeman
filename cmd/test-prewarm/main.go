@@ -42,9 +42,10 @@ var defaultImages = []prewarmImage{
 	{Source: "docker.io/library/nginx:alpine"},
 	{Source: "docker.io/bitnami/redis:latest"},
 	{Source: "docker.io/jrei/systemd-ubuntu:22.04"},
-	// alpine:3.19 mirrored at amd64 for the Rosetta x86 image E2E. The local ref
-	// encodes the platform in its tag (alpine:3.19-linux-amd64) so it is an
-	// unambiguous single-platform manifest the E2E resolves deterministically.
+	// alpine:3.19 mirrored at amd64 for the Rosetta x86 image E2E. It must be the
+	// only mirror of this source:tag (do not also mirror it at the host platform)
+	// so its local ref is an unambiguous single-platform (amd64) manifest the E2E
+	// resolves deterministically.
 	{Source: "docker.io/library/alpine:3.19", Platform: "linux/amd64"},
 }
 
@@ -151,7 +152,7 @@ func main() {
 }
 
 func ensureMirroredImage(ctx context.Context, inspector *images.OCIClient, registry string, img prewarmImage) (manifestImage, error) {
-	localRef, err := toLocalRegistryRef(registry, img.Source, img.Platform)
+	localRef, err := toLocalRegistryRef(registry, img.Source)
 	if err != nil {
 		return manifestImage{}, err
 	}
@@ -180,7 +181,7 @@ func ensureMirroredImage(ctx context.Context, inspector *images.OCIClient, regis
 // mirrored ref is an unambiguous single-platform manifest. lib/instances'
 // integrationTestImageRef mirrors this exact mapping so tests resolve the same
 // ref.
-func toLocalRegistryRef(registry, source, platform string) (string, error) {
+func toLocalRegistryRef(registry, source string) (string, error) {
 	ref, err := images.ParseNormalizedRef(source)
 	if err != nil {
 		return "", fmt.Errorf("parse source ref %q: %w", source, err)
@@ -190,12 +191,12 @@ func toLocalRegistryRef(registry, source, platform string) (string, error) {
 
 	out := registry + "/" + repo
 	if ref.Tag() != "" {
-		return out + ":" + images.LocalPlatformTag(ref.Tag(), platform), nil
+		return out + ":" + ref.Tag(), nil
 	}
 	if ref.Digest() != "" {
 		return out + "@" + ref.Digest(), nil
 	}
-	return out + ":" + images.LocalPlatformTag("latest", platform), nil
+	return out + ":latest", nil
 }
 
 func ensureLocalRegistry(ctx context.Context, registry, dataDir string) error {

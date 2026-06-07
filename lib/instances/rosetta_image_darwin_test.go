@@ -48,10 +48,9 @@ func TestVZRosettaImageX86(t *testing.T) {
 	imageManager, err := images.NewManager(p, 1, nil)
 	require.NoError(t, err)
 
-	// Pull the amd64 variant of alpine:3.19. The prewarm step mirrors this ref
-	// at linux/amd64 under a platform-encoded tag, so the local registry serves a
-	// plain amd64 manifest.
-	ref := integrationTestImageRefPlatform(t, "docker.io/library/alpine:3.19", "linux/amd64")
+	// Pull the amd64 variant of alpine:3.19. The prewarm step mirrors this ref at
+	// linux/amd64 to the local registry, so it serves a plain amd64 manifest.
+	ref := integrationTestImageRef(t, "docker.io/library/alpine:3.19")
 	img, err := imageManager.CreateImage(ctx, images.CreateImageRequest{Name: ref, Platform: "linux/amd64"})
 	require.NoError(t, err)
 	for i := 0; i < 60; i++ {

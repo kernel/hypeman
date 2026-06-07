@@ -171,23 +171,6 @@ func resolveManifestPlatform(meta *containerMetadata, requested string) (Platfor
 	return actual, nil
 }
 
-// LocalPlatformTag derives a registry tag that encodes a non-host platform so a
-// mirrored image is an unambiguous single-platform manifest. An empty platform
-// (host platform) returns the tag unchanged; otherwise the os/arch[/variant] is
-// appended with "/" replaced by "-" (e.g. "3.19" + "linux/amd64" ->
-// "3.19-linux-amd64"). Used by the prewarm tool and the integration tests so
-// both resolve the same local ref.
-func LocalPlatformTag(tag, platform string) string {
-	if strings.TrimSpace(platform) == "" {
-		return tag
-	}
-	p, err := ParsePlatform(platform)
-	if err != nil {
-		return tag
-	}
-	return tag + "-" + strings.ReplaceAll(p.String(), "/", "-")
-}
-
 // ImageNeedsHostEmulation reports whether an image whose stored platform string
 // is platform requires CPU emulation to run on this host (its architecture
 // differs from the host architecture). An empty platform is treated as the host

@@ -5,6 +5,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Code-Hex/vz/v3"
@@ -52,6 +53,9 @@ func TestRosettaConfigureDirectorySharingInstalled(t *testing.T) {
 	vmConfig := newTestVMConfiguration(t)
 	require.NoError(t, configureDirectorySharing(vmConfig, &shimconfig.ShimConfig{EnableRosetta: true}))
 	ok, err := vmConfig.Validate()
+	if err != nil && strings.Contains(err.Error(), "entitlement") {
+		t.Skip("cannot validate a virtualization config in an unsigned test binary; the Rosetta attach path is covered end to end by the lib/instances E2E")
+	}
 	require.NoError(t, err)
 	assert.True(t, ok)
 }

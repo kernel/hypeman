@@ -89,19 +89,6 @@ func TestImageNeedsHostEmulation(t *testing.T) {
 	}
 }
 
-func TestLocalPlatformTag(t *testing.T) {
-	if got := LocalPlatformTag("3.19", ""); got != "3.19" {
-		t.Fatalf("empty platform tag = %q, want 3.19", got)
-	}
-	if got := LocalPlatformTag("3.19", "linux/amd64"); got != "3.19-linux-amd64" {
-		t.Fatalf("platform tag = %q, want 3.19-linux-amd64", got)
-	}
-	// Aliases normalize before encoding.
-	if got := LocalPlatformTag("latest", "x86_64"); got != "latest-linux-amd64" {
-		t.Fatalf("alias platform tag = %q, want latest-linux-amd64", got)
-	}
-}
-
 func TestImageMetadataPlatformRoundTrip(t *testing.T) {
 	// Stored platform survives the round trip to Image.
 	meta := &imageMetadata{Name: "docker.io/library/alpine:3.19", Digest: "sha256:abc", Platform: "linux/amd64", Status: StatusReady}
