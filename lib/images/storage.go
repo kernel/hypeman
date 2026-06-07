@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -14,28 +15,35 @@ import (
 )
 
 type imageMetadata struct {
-	Name       string              `json:"name"`   // Normalized ref (tag or digest)
-	Digest     string              `json:"digest"` // Always present: sha256:...
-	Status     string              `json:"status"`
-	Error      *string             `json:"error,omitempty"`
-	Request    *CreateImageRequest `json:"request,omitempty"`
-	SizeBytes  int64               `json:"size_bytes"`
-	Entrypoint []string            `json:"entrypoint,omitempty"`
-	Cmd        []string            `json:"cmd,omitempty"`
-	Env        map[string]string   `json:"env,omitempty"`
-	Labels     map[string]string   `json:"labels,omitempty"`
-	Tags       tags.Tags           `json:"tags,omitempty"`
-	WorkingDir string              `json:"working_dir,omitempty"`
-	CreatedAt  time.Time           `json:"created_at"`
+	Name         string              `json:"name"`   // Normalized ref (tag or digest)
+	Digest       string              `json:"digest"` // Always present: sha256:...
+	Architecture string              `json:"architecture,omitempty"`
+	Status       string              `json:"status"`
+	Error        *string             `json:"error,omitempty"`
+	Request      *CreateImageRequest `json:"request,omitempty"`
+	SizeBytes    int64               `json:"size_bytes"`
+	Entrypoint   []string            `json:"entrypoint,omitempty"`
+	Cmd          []string            `json:"cmd,omitempty"`
+	Env          map[string]string   `json:"env,omitempty"`
+	Labels       map[string]string   `json:"labels,omitempty"`
+	Tags         tags.Tags           `json:"tags,omitempty"`
+	WorkingDir   string              `json:"working_dir,omitempty"`
+	CreatedAt    time.Time           `json:"created_at"`
 }
 
 func (m *imageMetadata) toImage() *Image {
+	arch := m.Architecture
+	if arch == "" {
+		// Images predating arch tracking were pulled at host arch.
+		arch = runtime.GOARCH
+	}
 	img := &Image{
-		Name:      m.Name,
-		Digest:    m.Digest,
-		Status:    m.Status,
-		Error:     m.Error,
-		CreatedAt: m.CreatedAt,
+		Name:         m.Name,
+		Digest:       m.Digest,
+		Architecture: arch,
+		Status:       m.Status,
+		Error:        m.Error,
+		CreatedAt:    m.CreatedAt,
 	}
 
 	if m.Status == StatusReady && m.SizeBytes > 0 {

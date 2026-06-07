@@ -68,8 +68,17 @@ func newOCIClient(cacheDir string) (*ociClient, error) {
 // Always returns Linux since hypeman VMs are always Linux guests,
 // regardless of the host OS (Linux or macOS).
 func vmPlatform() gcr.Platform {
+	return platformForArch(runtime.GOARCH)
+}
+
+// platformForArch returns a Linux platform for the given architecture.
+// An empty arch defaults to the host architecture (runtime.GOARCH).
+func platformForArch(arch string) gcr.Platform {
+	if arch == "" {
+		arch = runtime.GOARCH
+	}
 	return gcr.Platform{
-		Architecture: runtime.GOARCH,
+		Architecture: arch,
 		OS:           "linux",
 	}
 }

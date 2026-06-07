@@ -10,6 +10,7 @@ import (
 type Image struct {
 	Name          string // Normalized ref (e.g., docker.io/library/alpine:latest)
 	Digest        string // Resolved manifest digest (sha256:...)
+	Architecture  string // Image architecture (e.g., amd64, arm64)
 	Status        string
 	QueuePosition *int
 	Error         *string
@@ -27,4 +28,7 @@ type Image struct {
 type CreateImageRequest struct {
 	Name string
 	Tags tags.Tags
+	// Architecture selects which platform variant of a multi-arch image to pull
+	// (e.g., amd64, arm64). Empty means the host architecture (runtime.GOARCH).
+	Architecture string
 }

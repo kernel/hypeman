@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -133,6 +134,14 @@ func (m *manager) createInstance(
 	if imageInfo.Status != images.StatusReady {
 		log.ErrorContext(ctx, "image not ready", "image", req.Image, "status", imageInfo.Status)
 		return nil, fmt.Errorf("%w: image status is %s", ErrImageNotReady, imageInfo.Status)
+	}
+
+	// A guest whose architecture differs from the host kernel can only boot via
+	// emulation. On Apple silicon that is Rosetta; reject the create up front
+	// rather than launching an unbootable VM.
+	if imageInfo.Architecture != "" && imageInfo.Architecture != runtime.GOARCH && !req.EnableRosetta {
+		log.ErrorContext(ctx, "image architecture requires emulation", "image", req.Image, "image_arch", imageInfo.Architecture, "host_arch", runtime.GOARCH)
+		return nil, fmt.Errorf("%w: image architecture %s requires EnableRosetta on this %s host", ErrInvalidRequest, imageInfo.Architecture, runtime.GOARCH)
 	}
 	m.recordImageUsage(ctx, imageInfo)
 

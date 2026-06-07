@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -123,6 +124,22 @@ func (m *manager) CreateImage(ctx context.Context, req CreateImageRequest) (*Ima
 	resolveCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
+	// When an explicit architecture is requested that differs from the host,
+	// resolve the arch-specific manifest digest and pin the reference to it.
+	// A digest-pinned ref pulls that exact manifest regardless of the platform
+	// passed downstream, so the rest of the pipeline fetches the requested
+	// architecture and keys its cache/metadata on a distinct digest.
+	if req.Architecture != "" && req.Architecture != runtime.GOARCH {
+		digestStr, err := m.ociClient.inspectManifestWithPlatform(resolveCtx, normalized.String(), platformForArch(req.Architecture))
+		if err != nil {
+			return nil, fmt.Errorf("resolve manifest for architecture %s: %w", req.Architecture, err)
+		}
+		normalized, err = ParseNormalizedRef(normalized.Repository() + "@" + digestStr)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %s", ErrInvalidName, err.Error())
+		}
+	}
+
 	ref, err := normalized.Resolve(resolveCtx, m.ociClient)
 	if err != nil {
 		return nil, fmt.Errorf("resolve manifest: %w", err)
@@ -207,13 +224,19 @@ func (m *manager) ImportLocalImage(ctx context.Context, repo, reference, digest 
 }
 
 func (m *manager) createAndQueueImage(ref *ResolvedRef, req CreateImageRequest) (*Image, error) {
+	arch := req.Architecture
+	if arch == "" {
+		arch = runtime.GOARCH
+	}
 	meta := &imageMetadata{
-		Name:   ref.String(),
-		Digest: ref.Digest(),
-		Status: StatusPending,
+		Name:         ref.String(),
+		Digest:       ref.Digest(),
+		Architecture: arch,
+		Status:       StatusPending,
 		Request: &CreateImageRequest{
-			Name: ref.String(),
-			Tags: tags.Clone(req.Tags),
+			Name:         ref.String(),
+			Tags:         tags.Clone(req.Tags),
+			Architecture: req.Architecture,
 		},
 		Tags:      tags.Clone(req.Tags),
 		CreatedAt: time.Now(),
