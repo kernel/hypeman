@@ -54,7 +54,10 @@ func TestRosettaConfigureDirectorySharingInstalled(t *testing.T) {
 	require.NoError(t, configureDirectorySharing(vmConfig, &shimconfig.ShimConfig{EnableRosetta: true}))
 	ok, err := vmConfig.Validate()
 	if err != nil && strings.Contains(err.Error(), "entitlement") {
-		t.Skip("cannot validate a virtualization config in an unsigned test binary; the Rosetta attach path is covered end to end by the lib/instances E2E")
+		if os.Getenv("HYPEMAN_VZ_SIGNED") != "" {
+			t.Fatalf("test binary should be signed with the virtualization entitlement (run via `make test-vz-shim-signed`): %v", err)
+		}
+		t.Skip("unsigned test binary lacks the virtualization entitlement; run via `make test-vz-shim-signed`")
 	}
 	require.NoError(t, err)
 	assert.True(t, ok)

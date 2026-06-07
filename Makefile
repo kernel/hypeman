@@ -319,7 +319,7 @@ test-linux: ensure-ch-binaries ensure-firecracker-binaries ensure-caddy-binaries
 # macOS tests (no sudo needed, adds e2fsprogs to PATH)
 # Uses 'go list' to discover compilable packages, then filters out packages
 # whose test files reference Linux-only symbols (network, devices, system/init).
-DARWIN_EXCLUDE_PKGS := /lib/network|/lib/devices|/lib/system/init
+DARWIN_EXCLUDE_PKGS := /lib/network|/lib/devices|/lib/system/init|/cmd/vz-shim
 test-darwin: build-embedded sign-vz-shim
 	@VERBOSE_FLAG=""; \
 	if [ -n "$(VERBOSE)" ]; then VERBOSE_FLAG="-v"; fi; \
@@ -333,6 +333,25 @@ test-darwin: build-embedded sign-vz-shim
 		PATH="/opt/homebrew/opt/e2fsprogs/sbin:$(PATH)" \
 		go test -tags containers_image_openpgp $$VERBOSE_FLAG -timeout=$(TEST_TIMEOUT) $$PKGS; \
 	fi
+	$(MAKE) test-vz-shim-signed VERBOSE="$(VERBOSE)" TEST="$(TEST)" TEST_TIMEOUT="$(TEST_TIMEOUT)"
+
+# cmd/vz-shim's tests call Virtualization.framework in-process, which requires the
+# com.apple.security.virtualization entitlement. Plain `go test` binaries are
+# unsigned, so compile the test binary, ad-hoc-sign it with the entitlement (as
+# sign-vz-shim does for the shim), then run it. HYPEMAN_VZ_SIGNED=1 tells the
+# tests not to skip for a missing entitlement.
+.PHONY: test-vz-shim-signed
+test-vz-shim-signed:
+	@set -e; \
+	VERBOSE_FLAG=""; \
+	if [ -n "$(VERBOSE)" ]; then VERBOSE_FLAG="-test.v"; fi; \
+	RUN_FLAG=""; \
+	if [ -n "$(TEST)" ]; then RUN_FLAG="-test.run=$(TEST)"; fi; \
+	BIN="$$(mktemp -d)/vz-shim.test"; \
+	go test -tags containers_image_openpgp -c -o "$$BIN" ./cmd/vz-shim; \
+	if [ ! -f "$$BIN" ]; then echo "no cmd/vz-shim test binary for this platform; skipping"; exit 0; fi; \
+	codesign --sign - --entitlements $(ENTITLEMENTS_FILE) --force "$$BIN"; \
+	HYPEMAN_VZ_SIGNED=1 "$$BIN" $$RUN_FLAG $$VERBOSE_FLAG -test.timeout=$(TEST_TIMEOUT)
 
 # Manual-only guest memory policy integration tests (Linux hypervisors).
 test-guestmemory-linux: ensure-ch-binaries ensure-firecracker-binaries ensure-caddy-binaries build-embedded
