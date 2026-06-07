@@ -147,6 +147,10 @@ type StoredMetadata struct {
 	SkipKernelHeaders bool // Skip kernel headers installation (disables DKMS)
 	SkipGuestAgent    bool // Skip guest-agent installation (disables exec/stat API)
 
+	// EnableRosetta attaches an Apple Rosetta virtio-fs share so the guest can
+	// execute x86-64 binaries. vz on Apple silicon only.
+	EnableRosetta bool
+
 	// Snapshot policy defaults for this instance.
 	SnapshotPolicy *SnapshotPolicy
 
@@ -252,6 +256,7 @@ type CreateInstanceRequest struct {
 	Cmd                      []string                    // Override image cmd (nil = use image default)
 	SkipKernelHeaders        bool                        // Skip kernel headers installation (disables DKMS)
 	SkipGuestAgent           bool                        // Skip guest-agent installation (disables exec/stat API)
+	EnableRosetta            bool                        // Attach Apple Rosetta share for x86-64 emulation (vz/Apple silicon only)
 	SnapshotPolicy           *SnapshotPolicy             // Optional snapshot policy defaults for this instance
 	AutoStandby              *autostandby.Policy         // Optional automatic standby policy
 	HealthCheck              *healthcheck.Policy         // Optional workload health check policy

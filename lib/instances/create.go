@@ -372,6 +372,7 @@ func (m *manager) createInstance(
 		Cmd:                      req.Cmd,
 		SkipKernelHeaders:        req.SkipKernelHeaders,
 		SkipGuestAgent:           req.SkipGuestAgent,
+		EnableRosetta:            req.EnableRosetta,
 		SnapshotPolicy:           cloneSnapshotPolicy(req.SnapshotPolicy),
 		AutoStandby:              cloneAutoStandbyPolicy(req.AutoStandby),
 		HealthCheck:              cloneHealthCheckPolicy(req.HealthCheck),
@@ -901,6 +902,7 @@ func (m *manager) buildHypervisorConfig(ctx context.Context, inst *Instance, ima
 		KernelPath:    kernelPath,
 		InitrdPath:    initrdPath,
 		KernelArgs:    m.kernelArgs(inst.HypervisorType),
+		EnableRosetta: inst.EnableRosetta,
 	}, nil
 }
 

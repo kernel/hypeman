@@ -36,6 +36,11 @@ type ShimConfig struct {
 	EnableMemoryBalloon  bool `json:"enable_memory_balloon,omitempty"`
 	RequireMemoryBalloon bool `json:"require_memory_balloon,omitempty"`
 
+	// EnableRosetta attaches a Linux Rosetta virtio-fs share (tag
+	// RosettaMountTag) so the guest can execute x86-64 binaries. Apple silicon
+	// only; the shim errors if the host does not support it.
+	EnableRosetta bool `json:"enable_rosetta,omitempty"`
+
 	// Socket paths (where shim should listen)
 	ControlSocket string `json:"control_socket"`
 	VsockSocket   string `json:"vsock_socket"`
