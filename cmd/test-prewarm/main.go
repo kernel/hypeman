@@ -27,13 +27,24 @@ const (
 	registryName    = "hypeman-ci-registry"
 )
 
-var defaultImages = []string{
-	"docker.io/library/alpine:latest",
-	"docker.io/library/alpine:3.18",
-	"docker.io/library/debian:12-slim",
-	"docker.io/library/nginx:alpine",
-	"docker.io/bitnami/redis:latest",
-	"docker.io/jrei/systemd-ubuntu:22.04",
+// prewarmImage is a source image to mirror into the local registry. Architecture
+// is empty for host-arch images and set explicitly to mirror a specific platform
+// variant (e.g. amd64 for Rosetta emulation tests on an arm64 host).
+type prewarmImage struct {
+	Source       string
+	Architecture string
+}
+
+var defaultImages = []prewarmImage{
+	{Source: "docker.io/library/alpine:latest"},
+	{Source: "docker.io/library/alpine:3.18"},
+	{Source: "docker.io/library/debian:12-slim"},
+	{Source: "docker.io/library/nginx:alpine"},
+	{Source: "docker.io/bitnami/redis:latest"},
+	{Source: "docker.io/jrei/systemd-ubuntu:22.04"},
+	// alpine:3.19 mirrored at amd64 for the Rosetta x86 image E2E. 3.19 is not
+	// otherwise mirrored, so its local ref is a plain amd64 manifest.
+	{Source: "docker.io/library/alpine:3.19", Architecture: "amd64"},
 }
 
 type manifestImage struct {
@@ -95,10 +106,10 @@ func main() {
 		Images:     make([]manifestImage, 0, len(imagesToWarm)),
 	}
 
-	for _, source := range imagesToWarm {
-		entry, err := ensureMirroredImage(ctx, inspectClient, registry, source)
+	for _, img := range imagesToWarm {
+		entry, err := ensureMirroredImage(ctx, inspectClient, registry, img)
 		if err != nil {
-			fatalf("prewarm image %s: %v", source, err)
+			fatalf("prewarm image %s: %v", img.Source, err)
 		}
 		fmt.Printf("prewarm image source=%s local=%s digest=%s cache_hit=%t\n", entry.Source, entry.LocalRef, entry.Digest, entry.CacheHit)
 		manifest.Images = append(manifest.Images, entry)
@@ -138,17 +149,20 @@ func main() {
 	fmt.Printf("prewarm complete manifest=%s\n", manifestPath)
 }
 
-func ensureMirroredImage(ctx context.Context, inspector *images.OCIClient, registry, source string) (manifestImage, error) {
-	localRef, err := toLocalRegistryRef(registry, source)
+func ensureMirroredImage(ctx context.Context, inspector *images.OCIClient, registry string, img prewarmImage) (manifestImage, error) {
+	localRef, err := toLocalRegistryRef(registry, img.Source)
 	if err != nil {
 		return manifestImage{}, err
 	}
 
 	if digest, err := inspector.InspectManifest(ctx, localRef); err == nil {
-		return manifestImage{Source: source, LocalRef: localRef, Digest: digest, CacheHit: true}, nil
+		return manifestImage{Source: img.Source, LocalRef: localRef, Digest: digest, CacheHit: true}, nil
 	}
 
-	res, err := images.MirrorBaseImage(ctx, "http://"+registry, images.MirrorRequest{SourceImage: source}, nil)
+	res, err := images.MirrorBaseImage(ctx, "http://"+registry, images.MirrorRequest{
+		SourceImage:  img.Source,
+		Architecture: img.Architecture,
+	}, nil)
 	if err != nil {
 		return manifestImage{}, err
 	}
@@ -157,7 +171,7 @@ func ensureMirroredImage(ctx context.Context, inspector *images.OCIClient, regis
 	if err != nil {
 		digest = res.Digest
 	}
-	return manifestImage{Source: source, LocalRef: localRef, Digest: digest, CacheHit: false}, nil
+	return manifestImage{Source: img.Source, LocalRef: localRef, Digest: digest, CacheHit: false}, nil
 }
 
 func toLocalRegistryRef(registry, source string) (string, error) {
@@ -305,16 +319,16 @@ func fileHash16(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil))[:16], nil
 }
 
-func parseImageList(raw string) []string {
+func parseImageList(raw string) []prewarmImage {
 	if strings.TrimSpace(raw) == "" {
 		return nil
 	}
 	parts := strings.Split(raw, ",")
-	out := make([]string, 0, len(parts))
+	out := make([]prewarmImage, 0, len(parts))
 	for _, p := range parts {
 		p = strings.TrimSpace(p)
 		if p != "" {
-			out = append(out, p)
+			out = append(out, prewarmImage{Source: p})
 		}
 	}
 	return out
