@@ -7,8 +7,9 @@ import (
 )
 
 var (
-	ErrNotFound    = errors.New("image not found")
-	ErrInvalidName = errors.New("invalid image name")
+	ErrNotFound        = errors.New("image not found")
+	ErrInvalidName     = errors.New("invalid image name")
+	ErrInvalidPlatform = errors.New("invalid platform")
 )
 
 // wrapRegistryError checks if the error is a registry 404 error and wraps it as ErrNotFound.

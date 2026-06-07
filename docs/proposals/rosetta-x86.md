@@ -1,8 +1,14 @@
 # RFC: Rosetta x86-64 emulation for macOS (vz) Linux guests
 
+> **Status: implemented.** Rosetta host+guest emulation and multi-platform
+> image pull have shipped. This document captures the original design plus the
+> two decisions that changed during implementation: emulation is automatic (no
+> user-facing flag — see "What was implemented" below) and the image/instance
+> API exposes a Docker-style `platform` field rather than an architecture knob.
+
 ## Summary
 
-Add an optional Rosetta directory share to hypeman's Apple Silicon `vz` Linux guests so that x86-64 (amd64) binaries execute inside the arm64 microVM via Apple's Rosetta dynamic binary translator. This unlocks x86-only OCI images and tools that today either fail to run under `vz` or fall back to slow userspace emulation. The host wires `VZVirtioFileSystemDeviceConfiguration` + `VZLinuxRosettaDirectoryShare` in the `vz-shim`, and the guest `init` binary automatically registers a `binfmt_misc` handler pointing at the mounted Rosetta interpreter so the feature works transparently rather than requiring manual guest setup.
+Add a Rosetta directory share to hypeman's Apple Silicon `vz` Linux guests so that x86-64 (amd64) binaries execute inside the arm64 microVM via Apple's Rosetta dynamic binary translator. This unlocks x86-only OCI images and tools that today either fail to run under `vz` or fall back to slow userspace emulation. The host wires `VZVirtioFileSystemDeviceConfiguration` + `VZLinuxRosettaDirectoryShare` in the `vz-shim`, and the guest `init` binary automatically registers a `binfmt_misc` handler pointing at the mounted Rosetta interpreter so the feature works transparently rather than requiring manual guest setup. Rosetta is enabled automatically when an instance's image targets a non-host architecture, mirroring Docker Desktop where Rosetta is a host setting rather than a per-container flag.
 
 ## Motivation
 
@@ -252,12 +258,45 @@ If `CONFIG_VIRTIO_FS` is missing, the `virtiofs` mount fails with `unknown files
 
 ## Configuration / API changes
 
-- `hypervisor.VMConfig` (`lib/hypervisor/config.go:5`): add `EnableRosetta bool`.
-- `shimconfig.ShimConfig` (`lib/hypervisor/vz/shimconfig/config.go:16`): add `EnableRosetta bool json:"enable_rosetta,omitempty"` and `const RosettaMountTag = "rosetta"`.
-- `vmconfig.Config` (`lib/vmconfig/config.go:7`): add `EnableRosetta bool json:"enable_rosetta,omitempty"`.
-- Instance API: add an optional `rosetta` boolean on instance creation (e.g. a `--rosetta` CLI flag and an `enable_rosetta` field in the create-instance request body in `openapi.yaml`; the OpenAPI-generated types under `lib/oapi` are regenerated, not hand-edited). Resolve it onto `inst.EnableRosetta`, which feeds both `buildGuestConfig` and `buildShimConfigFromVMConfig`.
-- Behavior: when `enable_rosetta` is set but the host is not Apple Silicon / macOS 13+ / Rosetta-installed, instance creation fails fast with the shim error string. Default is off, so existing instances are unchanged.
-- Snapshot manifests (`shimconfig.SnapshotManifest`, `lib/hypervisor/vz/shimconfig/config.go:67`) automatically carry `EnableRosetta` because they embed the full `ShimConfig`; no manifest schema change is needed. The added field is `omitempty`, so pre-existing manifests deserialize as `EnableRosetta=false`.
+`EnableRosetta` is the internal mechanism the shim and guest act on; it is
+*derived*, not user-supplied (see "What was implemented").
+
+- `hypervisor.VMConfig` (`lib/hypervisor/config.go`): `EnableRosetta bool`.
+- `shimconfig.ShimConfig` (`lib/hypervisor/vz/shimconfig/config.go`): `EnableRosetta bool json:"enable_rosetta,omitempty"` and `const RosettaMountTag = "rosetta"`.
+- `vmconfig.Config` (`lib/vmconfig/config.go`): `EnableRosetta bool json:"enable_rosetta,omitempty"`.
+- Instance: `instances.CreateInstanceRequest` carries `Platform string` (drives image resolution / auto-pull) and the *internal* `StoredMetadata.EnableRosetta`, derived in `createInstance`. There is no `enable_rosetta`/`rosetta` field in the API.
+- Snapshot manifests (`shimconfig.SnapshotManifest`) automatically carry `EnableRosetta` because they embed the full `ShimConfig`; no manifest schema change is needed. The field is `omitempty`, so pre-existing manifests deserialize as `EnableRosetta=false`.
+
+## Multi-platform image pull
+
+Image and instance creation accept a Docker-style `platform` field
+(`os/arch[/variant]`, e.g. `linux/amd64`) modeled on `docker --platform`. It is
+added to `CreateImageRequest`, `CreateInstanceRequest`, and as a read-only field
+on the `Image` response in `openapi.yaml` (regenerated into `lib/oapi`). Today
+only `os` `linux` is supported and `arch` must be `amd64` or `arm64`; other
+values are rejected up front with a clear error.
+
+- `lib/images` defines `Platform{OS, Architecture, Variant}` with `ParsePlatform`/`Normalize`/`String`/`ToGCR`, host-default and `needsEmulation` helpers, and a single host-platform source of truth (`oci.go`'s `vmPlatform` routes through it).
+- When a non-host platform is requested, `CreateImage` resolves the platform-specific manifest digest and pins the ref to it while **preserving the user's tag**, so e.g. `alpine:3.19` stays addressable by tag and dedups by tag.
+- The pulled image **config** is the source of truth for the recorded platform: `buildImage` persists the manifest's real `os/arch[/variant]` (not the requested value) and fails the build if a non-empty request does not match the manifest. A platformless (locally built) image with no request falls back to the host platform.
+- Boot-by-tag auto-pull threads the instance's `Platform` so it fetches the right architecture rather than defaulting to the host.
+
+## What was implemented (deviations from the original design)
+
+Two decisions were taken during implementation, agreed with the user:
+
+- **No user-facing emulation flag.** The original design proposed an
+  `enable_rosetta`/`--rosetta` API toggle. Instead, emulation is *automatic*:
+  `createInstance` compares the resolved image architecture to the host and, when
+  they differ, enables Rosetta on `vz`/Apple-silicon hosts (`deriveEnableRosetta`).
+  On any other host an emulated image is rejected with an emulation-agnostic
+  error (`running amd64 images requires an emulation-capable host; this host is
+  <goos>/<goarch>`). This mirrors Docker Desktop, where Rosetta is a host setting
+  and never a per-container flag. There is no runtime capability probe — if
+  Rosetta is not installed the shim already fails with a clear, actionable error.
+- **`platform`, not `architecture`.** The user-facing surface is Docker's
+  `os/arch[/variant]` platform string rather than a bare architecture, for Docker
+  parity and forward-compatibility with non-Linux guests.
 
 ## Platform constraints & edge cases
 
@@ -276,8 +315,8 @@ If `CONFIG_VIRTIO_FS` is missing, the `virtiofs` mount fails with `unknown files
 - **Unit (guest registration logic):** factor the `binfmt_misc` rule string into a pure function (`rosettaBinfmtRule(interp string) string`) and assert the exact `:rosetta:M::<magic>:<mask>:<interp>:OCF` output, including that the interpreter path is interpolated and the `F` flag is present. No mounts required.
 - **Build-tag matrix:** `GOOS=darwin GOARCH=arm64 go build ./cmd/vz-shim/...` compiles the arm64 Rosetta file. `darwin/amd64` is intentionally not built: Code-Hex/vz v3.7.1 itself does not compile for `darwin/amd64` (the generated `virtualmachinestate_string.go` references arm64-only `VirtualMachineState*` consts), and `cmd/vz-shim` imports vz unconditionally, so the package is arm64-only regardless of the `!arm64` stub. The stub exists for type-checking parity with the existing `save_restore_unsupported.go`, not to produce a working Intel-macOS binary.
 - **Host availability gating (macOS arm64 runner):** with Rosetta uninstalled, assert `configureDirectorySharing` returns the `NotInstalled` error; with it installed, assert the device is attached and `vmConfig.Validate()` (`cmd/vz-shim/vm.go:89`) passes.
-- **End-to-end (macOS arm64 runner, Rosetta installed):** launch an instance with `enable_rosetta=true` from an amd64-only image; assert (a) the guest log shows `registered rosetta binfmt_misc handler` and (b) running an amd64 `uname -m` / a known amd64 hello binary inside the container via `hypeman exec` succeeds and reports x86_64. Verify dispatch by actually executing an amd64 binary rather than stat'ing `/proc/sys/fs/binfmt_misc/rosetta` inside the container: `binfmt_misc` dispatch is kernel-global, but the container's `/proc` is a non-recursive bind mount taken before `binfmt_misc` is mounted in exec mode, so the `rosetta` entry is not necessarily visible from inside the chroot even when registration succeeded. Tart's binding tests prepare exactly such an amd64 hello binary as a directory share (`shared_directory_arm64_test.go:129-146`), confirming this is the right shape of test.
-- **Negative E2E:** with `enable_rosetta=false`, assert an amd64 binary fails with `ENOEXEC` (no handler registered) and an arm64 image still runs — i.e. the feature is fully opt-in and off by default.
+- **Unit (auto-Rosetta derivation, Linux CI):** `deriveEnableRosetta` is a pure function of (image-needs-emulation, hypervisor); a table test asserts host-native images never enable Rosetta, an emulated image auto-enables on `vz`/Apple-silicon and is rejected (`ErrInvalidRequest`) elsewhere, and an emulated image on a non-vz hypervisor is always rejected. Paired with `lib/images` platform unit tests (`ParsePlatform`/`Normalize`/validation, the `imageMetadata`↔`Image` platform round-trip with the empty→host default, and `resolveManifestPlatform` recording the manifest platform).
+- **End-to-end (macOS arm64 runner, Rosetta installed):** `TestVZRosettaImageX86` (`lib/instances/rosetta_image_darwin_test.go`) pulls a real **amd64** alpine image (`Platform: linux/amd64`) and creates the instance with **no** emulation flag; Rosetta auto-enables because the image is amd64 on the arm64 host. It asserts `img.Platform == "linux/amd64"`, then execs a real on-disk amd64 ELF from the image (`/bin/busybox cat /etc/alpine-release`) so a genuine x86-64 binary dispatches through Rosetta — `uname -m` is unreliable under Rosetta, so the assertion is on command output. Shim and guest serial logs are dumped on failure. Where Rosetta is not installed the test skips. The earlier injected-ELF probe test was removed: with auto-only Rosetta an arm64 image never gets Rosetta, so forcing Rosetta on a same-arch image no longer has a user path, and the real-image E2E covers the same ground.
 - **Snapshot/restore E2E:** snapshot a Rosetta-enabled VM, restore it, and assert amd64 exec still works post-restore (manifest carries `EnableRosetta`, device parity preserved).
 - **Kernel-config assertion:** boot-time check that `virtiofs` is a known filesystem and `binfmt_misc` is mountable; fail the image-validation test if the shipped `vz` guest kernel lacks `CONFIG_VIRTIO_FS` / `CONFIG_FUSE_FS` / `CONFIG_BINFMT_MISC`.
 
@@ -297,7 +336,7 @@ If `CONFIG_VIRTIO_FS` is missing, the `virtiofs` mount fails with `unknown files
 1. **Config plumbing + host device (no guest changes).** Add the fields and `configureDirectorySharing`; behind `EnableRosetta`, default off. Verify a Rosetta-enabled VM boots (even before guest registration, the device attaches and validates). Land build-tag matrix tests.
 2. **Guest registration.** Add `lib/system/init/rosetta.go` and the Phase 6.5 hook; land the rule-string unit test and the amd64 hello-binary E2E.
 3. **Guest kernel packaging.** Ensure the shipped `vz` guest kernel enables `CONFIG_VIRTIO_FS` / `CONFIG_FUSE_FS` / `CONFIG_BINFMT_MISC`; add the CI config assertion.
-4. **API + docs.** Surface `enable_rosetta` on the instance API and `--rosetta` on the CLI; regenerate OpenAPI types; document the host prerequisite (`softwareupdate --install-rosetta`) and the Apple-Silicon-only constraint.
+4. **API + docs.** Surface the Docker-style `platform` field on the image/instance API (no user-facing emulation flag); derive Rosetta automatically from the image vs. host architecture; regenerate OpenAPI types; document the host prerequisite (`softwareupdate --install-rosetta`) and the Apple-Silicon-only constraint.
 5. **Operator preflight (optional).** A one-time host check/installer that calls `LinuxRosettaDirectoryShareInstallRosetta()` out of band so per-VM startup never blocks on installation.
 6. **Follow-up: shared translation cache.** On macOS 14+, configure the Rosetta share with `SetOptions(NewLinuxRosettaUnixSocketCachingOptions(path))` or `NewLinuxRosettaAbstractSocketCachingOptions(name)` (`shared_directory_arm64.go:87`, `:153`, `:201`) so first-run translation results are cached. Because hypeman forks VMs from a snapshot (`lib/hypervisor/vz/fork.go`), a cache directory placed under a stable host path (e.g. derived from `paths.DataDir()`, `lib/paths/paths.go:20`) and shared read-mostly across forks could let forked VMs reuse a warm translation cache, reducing first-exec latency for amd64 workloads. This needs careful design around cache invalidation, concurrent fork access, and the macOS 14 floor, and is intentionally deferred.
 

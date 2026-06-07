@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -113,6 +112,13 @@ func (m *manager) CreateImage(ctx context.Context, req CreateImageRequest) (*Ima
 		return nil, err
 	}
 
+	// Validate the requested platform up front so typos fail fast before any
+	// registry round-trip.
+	platform, err := resolveRequestPlatform(req.Platform)
+	if err != nil {
+		return nil, err
+	}
+
 	// Parse and normalize
 	normalized, err := ParseNormalizedRef(req.Name)
 	if err != nil {
@@ -124,25 +130,26 @@ func (m *manager) CreateImage(ctx context.Context, req CreateImageRequest) (*Ima
 	resolveCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	// When an explicit architecture is requested that differs from the host,
-	// resolve the arch-specific manifest digest and pin the reference to it.
-	// A digest-pinned ref pulls that exact manifest regardless of the platform
-	// passed downstream, so the rest of the pipeline fetches the requested
-	// architecture and keys its cache/metadata on a distinct digest.
-	if req.Architecture != "" && req.Architecture != runtime.GOARCH {
-		digestStr, err := m.ociClient.inspectManifestWithPlatform(resolveCtx, normalized.String(), platformForArch(req.Architecture))
+	var ref *ResolvedRef
+	if needsEmulation(platform, hostPlatform()) {
+		// A non-host platform was requested. Resolve the platform-specific
+		// manifest digest and pin the reference to it: a digest-pinned ref pulls
+		// that exact manifest regardless of the platform passed downstream, so
+		// the pipeline fetches the requested architecture and keys its
+		// cache/metadata on a distinct digest. Preserve the user's tag so the
+		// image stays addressable by tag (and dedups by tag) — we keep the
+		// original tagged ref as the stored name and build the ResolvedRef
+		// directly from the digest we just resolved.
+		digestStr, err := m.ociClient.inspectManifestWithPlatform(resolveCtx, normalized.String(), platform.ToGCR())
 		if err != nil {
-			return nil, fmt.Errorf("resolve manifest for architecture %s: %w", req.Architecture, err)
+			return nil, fmt.Errorf("resolve manifest for platform %s: %w", platform, err)
 		}
-		normalized, err = ParseNormalizedRef(normalized.Repository() + "@" + digestStr)
+		ref = NewResolvedRef(normalized, digestStr)
+	} else {
+		ref, err = normalized.Resolve(resolveCtx, m.ociClient)
 		if err != nil {
-			return nil, fmt.Errorf("%w: %s", ErrInvalidName, err.Error())
+			return nil, fmt.Errorf("resolve manifest: %w", err)
 		}
-	}
-
-	ref, err := normalized.Resolve(resolveCtx, m.ociClient)
-	if err != nil {
-		return nil, fmt.Errorf("resolve manifest: %w", err)
 	}
 
 	m.createMu.Lock()
@@ -224,20 +231,27 @@ func (m *manager) ImportLocalImage(ctx context.Context, repo, reference, digest 
 }
 
 func (m *manager) createAndQueueImage(ref *ResolvedRef, req CreateImageRequest) (*Image, error) {
-	arch := req.Architecture
-	if arch == "" {
-		arch = runtime.GOARCH
+	// Build one request value and reuse it for both the persisted metadata and
+	// the queue entry so they never diverge.
+	storedReq := CreateImageRequest{
+		Name:     ref.String(),
+		Tags:     tags.Clone(req.Tags),
+		Platform: req.Platform,
+	}
+	// Record the requested platform optimistically while the build is pending;
+	// buildImage overwrites it with the authoritative manifest platform once the
+	// image config is pulled. resolveRequestPlatform already validated req, so
+	// the error here is unreachable in practice.
+	requestedPlatform, err := resolveRequestPlatform(req.Platform)
+	if err != nil {
+		return nil, err
 	}
 	meta := &imageMetadata{
-		Name:         ref.String(),
-		Digest:       ref.Digest(),
-		Architecture: arch,
-		Status:       StatusPending,
-		Request: &CreateImageRequest{
-			Name:         ref.String(),
-			Tags:         tags.Clone(req.Tags),
-			Architecture: req.Architecture,
-		},
+		Name:      ref.String(),
+		Digest:    ref.Digest(),
+		Platform:  requestedPlatform.String(),
+		Status:    StatusPending,
+		Request:   &storedReq,
 		Tags:      tags.Clone(req.Tags),
 		CreatedAt: time.Now(),
 	}
@@ -248,7 +262,7 @@ func (m *manager) createAndQueueImage(ref *ResolvedRef, req CreateImageRequest) 
 	}
 
 	// Enqueue the build using digest as the queue key for deduplication
-	queuePos := m.queue.Enqueue(ref.Digest(), CreateImageRequest{Name: ref.String(), Tags: tags.Clone(req.Tags)}, func() {
+	queuePos := m.queue.Enqueue(ref.Digest(), storedReq, func() {
 		m.buildImage(context.Background(), ref)
 	})
 
@@ -277,8 +291,13 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef) {
 
 	m.updateStatusByDigest(ref, StatusPulling, nil)
 
-	// Pull the image (digest is always known, uses cache if already pulled)
-	result, err := m.ociClient.pullAndExport(ctx, ref.String(), ref.Digest(), tempDir)
+	// Pull by the digest-pinned reference, not the tag: a digest ref fetches the
+	// exact manifest regardless of the platform passed downstream, so a
+	// non-host-arch image (tag preserved in ref.String()/ref.Tag() for symlinks)
+	// still pulls the architecture its digest identifies. Uses the cache if the
+	// digest is already pulled.
+	pullRef := ref.Repository() + "@" + ref.Digest()
+	result, err := m.ociClient.pullAndExport(ctx, pullRef, ref.Digest(), tempDir)
 	if err != nil {
 		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("pull and export: %w", err))
 		m.recordPullMetrics(ctx, "failed")
@@ -319,9 +338,24 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef) {
 		}
 	}
 
+	// The pulled image config is the source of truth for the platform. Record
+	// it rather than the requested value so the boot guard trusts a real
+	// platform (WithPlatform is a no-op for single-manifest images, so a wrong
+	// request would otherwise be silently recorded).
+	var requestedPlatform string
+	if meta.Request != nil {
+		requestedPlatform = meta.Request.Platform
+	}
+	actualPlatform, err := resolveManifestPlatform(result.Metadata, requestedPlatform)
+	if err != nil {
+		m.updateStatusByDigest(ref, StatusFailed, err)
+		return
+	}
+
 	// Update with final status
 	meta.Status = StatusReady
 	meta.Error = nil
+	meta.Platform = actualPlatform.String()
 	meta.SizeBytes = diskSize
 	meta.Entrypoint = result.Metadata.Entrypoint
 	meta.Cmd = result.Metadata.Cmd

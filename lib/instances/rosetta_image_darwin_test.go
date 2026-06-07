@@ -4,6 +4,8 @@ package instances
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -16,13 +18,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// dumpVZGuestSerialLogs prints each guest's serial console log (where the guest
+// init's messages land), to diagnose guest-side boot/setup failures.
+func dumpVZGuestSerialLogs(t *testing.T, tmpDir string) {
+	t.Helper()
+	logs, _ := filepath.Glob(filepath.Join(tmpDir, "guests", "*", "logs", "app.log"))
+	for _, f := range logs {
+		if content, err := os.ReadFile(f); err == nil && len(content) > 0 {
+			t.Logf("guest serial log (%s):\n%s", f, string(content))
+		}
+	}
+}
+
 // TestVZRosettaImageX86 is the faithful Rosetta test: it pulls a real amd64
-// Docker image and boots it on the arm64 vz host with EnableRosetta, so the
-// entire guest userland is x86-64. The amd64 entrypoint (sleep infinity) only
-// runs if the host attached the Rosetta share and the guest registered the
-// binfmt_misc handler; execing any image binary then proves emulation end to
-// end. Unlike TestVZRosettaX86Exec, nothing is injected — the image itself is
-// amd64.
+// Docker image and boots it on the arm64 vz host. The whole guest userland is
+// x86-64, and Rosetta auto-enables because the image platform (linux/amd64)
+// differs from the arm64 host — there is no user-facing emulation flag. Execing
+// a real on-disk amd64 binary then dispatches through Rosetta, proving emulation
+// end to end.
 func TestVZRosettaImageX86(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("vz tests require macOS")
@@ -36,9 +49,10 @@ func TestVZRosettaImageX86(t *testing.T) {
 	require.NoError(t, err)
 
 	// Pull the amd64 variant of alpine:3.19. The prewarm step mirrors this ref
-	// at amd64, so the local registry serves a plain amd64 manifest.
-	ref := integrationTestImageRef(t, "docker.io/library/alpine:3.19")
-	img, err := imageManager.CreateImage(ctx, images.CreateImageRequest{Name: ref, Architecture: "amd64"})
+	// at linux/amd64 under a platform-encoded tag, so the local registry serves a
+	// plain amd64 manifest.
+	ref := integrationTestImageRefPlatform(t, "docker.io/library/alpine:3.19", "linux/amd64")
+	img, err := imageManager.CreateImage(ctx, images.CreateImageRequest{Name: ref, Platform: "linux/amd64"})
 	require.NoError(t, err)
 	for i := 0; i < 60; i++ {
 		got, err := imageManager.GetImage(ctx, img.Name)
@@ -52,20 +66,22 @@ func TestVZRosettaImageX86(t *testing.T) {
 		time.Sleep(time.Second)
 	}
 	require.Equal(t, images.StatusReady, img.Status, "amd64 image should be ready")
-	require.Equal(t, "amd64", img.Architecture, "pulled image should be amd64")
+	require.Equal(t, "linux/amd64", img.Platform, "pulled image should be linux/amd64")
 
 	systemManager := system.NewManager(p)
 	require.NoError(t, systemManager.EnsureSystemFiles(ctx))
 
+	// No EnableRosetta flag: the manager derives it from the amd64 image on the
+	// arm64 host.
 	inst, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "test-vz-rosetta-image",
 		Image:          ref,
+		Platform:       "linux/amd64",
 		Size:           2 * 1024 * 1024 * 1024,
 		OverlaySize:    10 * 1024 * 1024 * 1024,
 		Vcpus:          2,
 		NetworkEnabled: false,
 		Hypervisor:     hypervisor.TypeVZ,
-		EnableRosetta:  true,
 		Cmd:            []string{"sleep", "infinity"},
 	})
 	if err != nil {
@@ -84,13 +100,14 @@ func TestVZRosettaImageX86(t *testing.T) {
 
 	require.NoError(t, waitForExecAgent(ctx, mgr, inst.Id, 30*time.Second), "guest agent should be ready")
 
-	// The payoff: the whole userland is amd64, so any successful image-binary
-	// exec proves Rosetta. uname -m is unreliable under Rosetta, so assert on a
-	// command's output instead.
-	out, code, err := vzExecCommand(ctx, inst, "echo", "x86-image-ok")
-	if err != nil || code != 0 || strings.TrimSpace(out) != "x86-image-ok" {
+	// The payoff: exec a real amd64 ELF shipped in the image (busybox), so a
+	// genuine x86-64 binary dispatches through Rosetta — not a shell builtin.
+	// uname -m is unreliable under Rosetta, so assert on the command output and a
+	// file the amd64 alpine rootfs is known to contain.
+	out, code, err := vzExecCommand(ctx, inst, "/bin/busybox", "cat", "/etc/alpine-release")
+	if err != nil || code != 0 || !strings.HasPrefix(strings.TrimSpace(out), "3.19") {
 		dumpVZShimLogs(t, tmpDir)
 		dumpVZGuestSerialLogs(t, tmpDir)
-		t.Fatalf("amd64 image did not run via Rosetta: code=%d err=%v out=%q", code, err, out)
+		t.Fatalf("amd64 image binary did not run via Rosetta: code=%d err=%v out=%q", code, err, out)
 	}
 }

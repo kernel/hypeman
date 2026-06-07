@@ -13,6 +13,7 @@ import (
 	"github.com/kernel/hypeman/lib/guest"
 	"github.com/kernel/hypeman/lib/healthcheck"
 	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/instances"
 	"github.com/kernel/hypeman/lib/logger"
 	mw "github.com/kernel/hypeman/lib/middleware"
@@ -305,6 +306,7 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		Name:                     request.Body.Name,
 		Image:                    request.Body.Image,
 		Size:                     size,
+		Platform:                 derefString(request.Body.Platform),
 		HotplugSize:              hotplugSize,
 		OverlaySize:              overlaySize,
 		Vcpus:                    vcpus,
@@ -365,6 +367,11 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		case errors.Is(err, instances.ErrInvalidRequest):
 			return oapi.CreateInstance400JSONResponse{
 				Code:    "invalid_request",
+				Message: err.Error(),
+			}, nil
+		case errors.Is(err, images.ErrInvalidPlatform):
+			return oapi.CreateInstance400JSONResponse{
+				Code:    "invalid_platform",
 				Message: err.Error(),
 			}, nil
 		default:

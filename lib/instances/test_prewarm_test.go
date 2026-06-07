@@ -22,6 +22,15 @@ var registryLogOnce sync.Once
 
 func integrationTestImageRef(t *testing.T, source string) string {
 	t.Helper()
+	return integrationTestImageRefPlatform(t, source, "")
+}
+
+// integrationTestImageRefPlatform maps a source image to its prewarmed
+// local-registry ref. When platform is non-empty it encodes the platform into
+// the tag, matching cmd/test-prewarm's toLocalRegistryRef, so a non-host mirror
+// resolves to the same unambiguous single-platform manifest.
+func integrationTestImageRefPlatform(t *testing.T, source, platform string) string {
+	t.Helper()
 
 	registry := strings.TrimSpace(os.Getenv(testRegistryEnv))
 	if registry == "" {
@@ -47,13 +56,6 @@ func integrationTestImageRef(t *testing.T, source string) string {
 	}
 	repo = strings.TrimPrefix(repo, "docker.io/")
 
-	if ref.Tag() != "" {
-		mapped := registry + "/" + repo + ":" + ref.Tag()
-		registryLogOnce.Do(func() {
-			t.Logf("using test registry mirror source=%s mapped=%s", source, mapped)
-		})
-		return mapped
-	}
 	if ref.Digest() != "" {
 		mapped := registry + "/" + repo + "@" + ref.Digest()
 		registryLogOnce.Do(func() {
@@ -62,7 +64,11 @@ func integrationTestImageRef(t *testing.T, source string) string {
 		return mapped
 	}
 
-	mapped := registry + "/" + repo + ":latest"
+	tag := ref.Tag()
+	if tag == "" {
+		tag = "latest"
+	}
+	mapped := registry + "/" + repo + ":" + images.LocalPlatformTag(tag, platform)
 	registryLogOnce.Do(func() {
 		t.Logf("using test registry mirror source=%s mapped=%s", source, mapped)
 	})

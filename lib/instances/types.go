@@ -148,7 +148,8 @@ type StoredMetadata struct {
 	SkipGuestAgent    bool // Skip guest-agent installation (disables exec/stat API)
 
 	// EnableRosetta attaches an Apple Rosetta virtio-fs share so the guest can
-	// execute x86-64 binaries. vz on Apple silicon only.
+	// execute x86-64 binaries. vz on Apple silicon only. Derived internally when
+	// the image platform differs from the host; not a user-facing field.
 	EnableRosetta bool
 
 	// Snapshot policy defaults for this instance.
@@ -235,6 +236,7 @@ type GPUConfig struct {
 type CreateInstanceRequest struct {
 	Name                     string                      // Required
 	Image                    string                      // Required: OCI reference
+	Platform                 string                      // Optional: target platform as os/arch[/variant]; drives image resolution and auto-pull. Empty means host platform.
 	Size                     int64                       // Base memory in bytes (default: 1GB)
 	HotplugSize              int64                       // Hotplug memory in bytes (default: 0, set explicitly to enable)
 	OverlaySize              int64                       // Overlay disk size in bytes (default: 10GB)
@@ -256,7 +258,6 @@ type CreateInstanceRequest struct {
 	Cmd                      []string                    // Override image cmd (nil = use image default)
 	SkipKernelHeaders        bool                        // Skip kernel headers installation (disables DKMS)
 	SkipGuestAgent           bool                        // Skip guest-agent installation (disables exec/stat API)
-	EnableRosetta            bool                        // Attach Apple Rosetta share for x86-64 emulation (vz/Apple silicon only)
 	SnapshotPolicy           *SnapshotPolicy             // Optional snapshot policy defaults for this instance
 	AutoStandby              *autostandby.Policy         // Optional automatic standby policy
 	HealthCheck              *healthcheck.Policy         // Optional workload health check policy

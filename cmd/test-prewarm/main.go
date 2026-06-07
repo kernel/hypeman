@@ -27,12 +27,12 @@ const (
 	registryName    = "hypeman-ci-registry"
 )
 
-// prewarmImage is a source image to mirror into the local registry. Architecture
-// is empty for host-arch images and set explicitly to mirror a specific platform
-// variant (e.g. amd64 for Rosetta emulation tests on an arm64 host).
+// prewarmImage is a source image to mirror into the local registry. Platform
+// is empty for host-platform images and set explicitly to mirror a specific
+// variant (e.g. linux/amd64 for Rosetta emulation tests on an arm64 host).
 type prewarmImage struct {
-	Source       string
-	Architecture string
+	Source   string
+	Platform string
 }
 
 var defaultImages = []prewarmImage{
@@ -42,9 +42,10 @@ var defaultImages = []prewarmImage{
 	{Source: "docker.io/library/nginx:alpine"},
 	{Source: "docker.io/bitnami/redis:latest"},
 	{Source: "docker.io/jrei/systemd-ubuntu:22.04"},
-	// alpine:3.19 mirrored at amd64 for the Rosetta x86 image E2E. 3.19 is not
-	// otherwise mirrored, so its local ref is a plain amd64 manifest.
-	{Source: "docker.io/library/alpine:3.19", Architecture: "amd64"},
+	// alpine:3.19 mirrored at amd64 for the Rosetta x86 image E2E. The local ref
+	// encodes the platform in its tag (alpine:3.19-linux-amd64) so it is an
+	// unambiguous single-platform manifest the E2E resolves deterministically.
+	{Source: "docker.io/library/alpine:3.19", Platform: "linux/amd64"},
 }
 
 type manifestImage struct {
@@ -150,7 +151,7 @@ func main() {
 }
 
 func ensureMirroredImage(ctx context.Context, inspector *images.OCIClient, registry string, img prewarmImage) (manifestImage, error) {
-	localRef, err := toLocalRegistryRef(registry, img.Source)
+	localRef, err := toLocalRegistryRef(registry, img.Source, img.Platform)
 	if err != nil {
 		return manifestImage{}, err
 	}
@@ -160,8 +161,8 @@ func ensureMirroredImage(ctx context.Context, inspector *images.OCIClient, regis
 	}
 
 	res, err := images.MirrorBaseImage(ctx, "http://"+registry, images.MirrorRequest{
-		SourceImage:  img.Source,
-		Architecture: img.Architecture,
+		SourceImage: img.Source,
+		Platform:    img.Platform,
 	}, nil)
 	if err != nil {
 		return manifestImage{}, err
@@ -174,25 +175,27 @@ func ensureMirroredImage(ctx context.Context, inspector *images.OCIClient, regis
 	return manifestImage{Source: img.Source, LocalRef: localRef, Digest: digest, CacheHit: false}, nil
 }
 
-func toLocalRegistryRef(registry, source string) (string, error) {
+// toLocalRegistryRef maps a source image to its local-registry reference. When a
+// non-host platform is requested the platform is encoded into the tag so the
+// mirrored ref is an unambiguous single-platform manifest. lib/instances'
+// integrationTestImageRef mirrors this exact mapping so tests resolve the same
+// ref.
+func toLocalRegistryRef(registry, source, platform string) (string, error) {
 	ref, err := images.ParseNormalizedRef(source)
 	if err != nil {
 		return "", fmt.Errorf("parse source ref %q: %w", source, err)
 	}
 
 	repo := strings.TrimPrefix(ref.Repository(), "docker.io/")
-	if repo == ref.Repository() {
-		repo = ref.Repository()
-	}
 
 	out := registry + "/" + repo
 	if ref.Tag() != "" {
-		return out + ":" + ref.Tag(), nil
+		return out + ":" + images.LocalPlatformTag(ref.Tag(), platform), nil
 	}
 	if ref.Digest() != "" {
 		return out + "@" + ref.Digest(), nil
 	}
-	return out + ":latest", nil
+	return out + ":" + images.LocalPlatformTag("latest", platform), nil
 }
 
 func ensureLocalRegistry(ctx context.Context, registry, dataDir string) error {

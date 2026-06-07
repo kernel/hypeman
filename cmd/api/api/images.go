@@ -40,6 +40,9 @@ func (s *ApiService) CreateImage(ctx context.Context, request oapi.CreateImageRe
 		Name: request.Body.Name,
 		Tags: toMapTags(request.Body.Tags),
 	}
+	if request.Body.Platform != nil {
+		domainReq.Platform = *request.Body.Platform
+	}
 
 	img, err := s.ImageManager.CreateImage(ctx, domainReq)
 	if err != nil {
@@ -52,6 +55,11 @@ func (s *ApiService) CreateImage(ctx context.Context, request oapi.CreateImageRe
 		case errors.Is(err, images.ErrInvalidName):
 			return oapi.CreateImage400JSONResponse{
 				Code:    "invalid_name",
+				Message: err.Error(),
+			}, nil
+		case errors.Is(err, images.ErrInvalidPlatform):
+			return oapi.CreateImage400JSONResponse{
+				Code:    "invalid_platform",
 				Message: err.Error(),
 			}, nil
 		case errors.Is(err, images.ErrNotFound):
@@ -115,6 +123,10 @@ func imageToOAPI(img images.Image) oapi.Image {
 		Error:         img.Error,
 		SizeBytes:     img.SizeBytes,
 		CreatedAt:     img.CreatedAt,
+	}
+
+	if img.Platform != "" {
+		oapiImg.Platform = &img.Platform
 	}
 
 	if len(img.Entrypoint) > 0 {

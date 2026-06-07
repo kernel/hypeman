@@ -539,6 +539,10 @@ components:
           type: string
           description: OCI image reference
           example: docker.io/library/alpine:latest
+        platform:
+          type: string
+          description: 'Target platform as os/arch[/variant] (e.g. "linux/amd64"), matching Docker --platform. Omit for the host platform. Only os "linux" is supported today; arch must be amd64 or arm64.'
+          example: linux/amd64
         size:
           type: string
           description: Base memory size (human-readable format like "1GB", "512MB", "2G")
@@ -1240,6 +1244,10 @@ components:
           type: string
           description: OCI image reference (e.g., docker.io/library/nginx:latest)
           example: docker.io/library/nginx:latest
+        platform:
+          type: string
+          description: 'Target platform as os/arch[/variant] (e.g. "linux/amd64"), matching Docker --platform. Omit for the host platform. Only os "linux" is supported today; arch must be amd64 or arm64.'
+          example: linux/amd64
         tags:
           $ref: "#/components/schemas/Tags"
     
@@ -1255,6 +1263,11 @@ components:
           type: string
           description: Resolved manifest digest
           example: sha256:abc123def456...
+        platform:
+          type: string
+          readOnly: true
+          description: Resolved image platform as os/arch[/variant] (e.g. "linux/amd64")
+          example: linux/amd64
         status:
           type: string
           enum: [pending, pulling, converting, ready, failed]

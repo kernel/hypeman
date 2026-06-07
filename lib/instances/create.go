@@ -99,9 +99,10 @@ func (m *manager) createInstance(
 	if err != nil {
 		if err == images.ErrNotFound {
 			// Auto-pull: image not found locally, kick off the pull in the
-			// background and wait up to 5 seconds for it to complete.
-			log.InfoContext(ctx, "image not found locally, auto-pulling", "image", req.Image)
-			_, pullErr := m.imageManager.CreateImage(imageCtx, images.CreateImageRequest{Name: req.Image})
+			// background and wait up to 5 seconds for it to complete. Thread the
+			// requested platform so boot-by-tag pulls the right architecture.
+			log.InfoContext(ctx, "image not found locally, auto-pulling", "image", req.Image, "platform", req.Platform)
+			_, pullErr := m.imageManager.CreateImage(imageCtx, images.CreateImageRequest{Name: req.Image, Platform: req.Platform})
 			if pullErr != nil {
 				imageSpanEnd(pullErr)
 				log.ErrorContext(ctx, "failed to auto-pull image", "image", req.Image, "error", pullErr)
@@ -137,11 +138,17 @@ func (m *manager) createInstance(
 	}
 
 	// A guest whose architecture differs from the host kernel can only boot via
-	// emulation. On Apple silicon that is Rosetta; reject the create up front
-	// rather than launching an unbootable VM.
-	if imageInfo.Architecture != "" && imageInfo.Architecture != runtime.GOARCH && !req.EnableRosetta {
-		log.ErrorContext(ctx, "image architecture requires emulation", "image", req.Image, "image_arch", imageInfo.Architecture, "host_arch", runtime.GOARCH)
-		return nil, fmt.Errorf("%w: image architecture %s requires EnableRosetta on this %s host", ErrInvalidRequest, imageInfo.Architecture, runtime.GOARCH)
+	// emulation. On Apple silicon that is Rosetta, enabled automatically; on any
+	// other host we reject the create up front rather than launching an
+	// unbootable VM.
+	resolvedHypervisor := req.Hypervisor
+	if resolvedHypervisor == "" {
+		resolvedHypervisor = m.defaultHypervisor
+	}
+	enableRosetta, err := deriveEnableRosetta(images.ImageNeedsHostEmulation(imageInfo.Platform), resolvedHypervisor)
+	if err != nil {
+		log.ErrorContext(ctx, "image platform requires emulation", "image", req.Image, "image_platform", imageInfo.Platform, "host", hostPlatformString())
+		return nil, err
 	}
 	m.recordImageUsage(ctx, imageInfo)
 
@@ -381,7 +388,7 @@ func (m *manager) createInstance(
 		Cmd:                      req.Cmd,
 		SkipKernelHeaders:        req.SkipKernelHeaders,
 		SkipGuestAgent:           req.SkipGuestAgent,
-		EnableRosetta:            req.EnableRosetta,
+		EnableRosetta:            enableRosetta,
 		SnapshotPolicy:           cloneSnapshotPolicy(req.SnapshotPolicy),
 		AutoStandby:              cloneAutoStandbyPolicy(req.AutoStandby),
 		HealthCheck:              cloneHealthCheckPolicy(req.HealthCheck),
@@ -913,6 +920,38 @@ func (m *manager) buildHypervisorConfig(ctx context.Context, inst *Instance, ima
 		KernelArgs:    m.kernelArgs(inst.HypervisorType),
 		EnableRosetta: inst.EnableRosetta,
 	}, nil
+}
+
+// deriveEnableRosetta decides whether to attach the Rosetta share for an
+// instance. When the image needs emulation, Rosetta is enabled automatically on
+// vz/Apple-silicon hosts (mirroring Docker Desktop, where Rosetta is a host
+// setting rather than a per-container flag). On any other host an emulated
+// image cannot boot, so the create is rejected with an emulation-agnostic
+// error. It is a pure function of the resolved hypervisor and host so it can be
+// unit-tested without booting a VM.
+func deriveEnableRosetta(imageNeedsEmulation bool, hvType hypervisor.Type) (bool, error) {
+	if !imageNeedsEmulation {
+		return false, nil
+	}
+	if hvType == hypervisor.TypeVZ && runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
+		return true, nil
+	}
+	return false, fmt.Errorf("%w: running %s images requires an emulation-capable host; this host is %s/%s",
+		ErrInvalidRequest, emulatedArchName(), runtime.GOOS, runtime.GOARCH)
+}
+
+// emulatedArchName names the architecture an emulation-capable host would run.
+// On arm64 that is amd64 and vice-versa.
+func emulatedArchName() string {
+	if runtime.GOARCH == "arm64" {
+		return "amd64"
+	}
+	return "arm64"
+}
+
+// hostPlatformString renders the host platform for log/error context.
+func hostPlatformString() string {
+	return runtime.GOOS + "/" + runtime.GOARCH
 }
 
 func resolveCreateKernelVersion(imageInfo *images.Image, defaultKernel system.KernelVersion) (system.KernelVersion, error) {

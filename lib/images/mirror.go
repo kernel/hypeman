@@ -14,9 +14,9 @@ import (
 type MirrorRequest struct {
 	// SourceImage is the full image reference to pull from (e.g., "docker.io/onkernel/nodejs22-base:0.1.1")
 	SourceImage string
-	// Architecture selects which platform variant to mirror (e.g., amd64, arm64).
-	// Empty means the host architecture (runtime.GOARCH).
-	Architecture string
+	// Platform selects which platform variant to mirror as os/arch[/variant]
+	// (e.g., linux/amd64). Empty means the host platform.
+	Platform string
 }
 
 // MirrorResult contains the result of a mirror operation
@@ -42,11 +42,16 @@ func MirrorBaseImage(ctx context.Context, registryURL string, req MirrorRequest,
 		return nil, fmt.Errorf("parse source image reference: %w", err)
 	}
 
+	platform, err := resolveRequestPlatform(req.Platform)
+	if err != nil {
+		return nil, err
+	}
+
 	// Pull the image from source
 	img, err := remote.Image(srcRef,
 		remote.WithContext(ctx),
 		remote.WithAuthFromKeychain(authn.DefaultKeychain),
-		remote.WithPlatform(platformForArch(req.Architecture)))
+		remote.WithPlatform(platform.ToGCR()))
 	if err != nil {
 		return nil, fmt.Errorf("pull source image: %w", wrapRegistryError(err))
 	}

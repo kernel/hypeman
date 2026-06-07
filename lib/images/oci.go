@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"runtime"
 	"strings"
 
 	"github.com/google/go-containerregistry/pkg/authn"
@@ -64,23 +63,10 @@ func newOCIClient(cacheDir string) (*ociClient, error) {
 	return &ociClient{cacheDir: cacheDir}, nil
 }
 
-// vmPlatform returns the target platform for VM images.
-// Always returns Linux since hypeman VMs are always Linux guests,
-// regardless of the host OS (Linux or macOS).
+// vmPlatform returns the target platform for VM images: a Linux guest on the
+// host architecture. Hypeman VMs are always Linux regardless of host OS.
 func vmPlatform() gcr.Platform {
-	return platformForArch(runtime.GOARCH)
-}
-
-// platformForArch returns a Linux platform for the given architecture.
-// An empty arch defaults to the host architecture (runtime.GOARCH).
-func platformForArch(arch string) gcr.Platform {
-	if arch == "" {
-		arch = runtime.GOARCH
-	}
-	return gcr.Platform{
-		Architecture: arch,
-		OS:           "linux",
-	}
+	return hostPlatform().ToGCR()
 }
 
 // inspectManifest synchronously inspects a remote image to get its digest
@@ -281,13 +267,18 @@ func (c *ociClient) extractOCIMetadata(layoutTag string) (*containerMetadata, er
 		return nil, fmt.Errorf("get config file: %w", err)
 	}
 
-	// Extract metadata from config
+	// Extract metadata from config. OS/Architecture/Variant come straight from
+	// the pulled image config, so they reflect the manifest actually fetched
+	// rather than what the caller requested.
 	meta := &containerMetadata{
-		Entrypoint: configFile.Config.Entrypoint,
-		Cmd:        configFile.Config.Cmd,
-		Env:        make(map[string]string),
-		Labels:     make(map[string]string),
-		WorkingDir: configFile.Config.WorkingDir,
+		OS:           configFile.OS,
+		Architecture: configFile.Architecture,
+		Variant:      configFile.Variant,
+		Entrypoint:   configFile.Config.Entrypoint,
+		Cmd:          configFile.Config.Cmd,
+		Env:          make(map[string]string),
+		Labels:       make(map[string]string),
+		WorkingDir:   configFile.Config.WorkingDir,
 	}
 
 	// Parse environment variables
@@ -467,9 +458,12 @@ func gcrDigestToOCI(d gcr.Hash) digest.Digest {
 }
 
 type containerMetadata struct {
-	Entrypoint []string
-	Cmd        []string
-	Env        map[string]string
-	Labels     map[string]string
-	WorkingDir string
+	OS           string
+	Architecture string
+	Variant      string
+	Entrypoint   []string
+	Cmd          []string
+	Env          map[string]string
+	Labels       map[string]string
+	WorkingDir   string
 }
