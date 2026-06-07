@@ -234,6 +234,11 @@ jobs:
           JWT_SECRET: ci-test-secret
           HYPEMAN_TEST_PREWARM_STRICT: "1"
           HYPEMAN_TEST_REGISTRY: 127.0.0.1:5001
+          # TEMP(ci): VERBOSE surfaces per-test PASS/SKIP so the narrowed run
+          # proves the clone tests actually executed; HYPEMAN_REQUIRE_APFS_CLONE
+          # turns an unexpected non-APFS skip into a hard failure.
+          VERBOSE: "1"
+          HYPEMAN_REQUIRE_APFS_CLONE: "1"
         run: |
           export HYPEMAN_TEST_PREWARM_DIR="$HOME/.cache/hypeman-ci/darwin-arm64"
           make test TEST="'Reflink|CopyGuestDirectory|CopyRegularFile|Sparse|Clone'"
