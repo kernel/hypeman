@@ -593,6 +593,9 @@ func (m *manager) WaitForReady(ctx context.Context, name string) error {
 	case StatusReady:
 		return nil
 	case StatusFailed:
+		if img.Error != nil {
+			return fmt.Errorf("image conversion failed: %s", *img.Error)
+		}
 		return fmt.Errorf("image conversion failed")
 	}
 
@@ -610,6 +613,9 @@ func (m *manager) WaitForReady(ctx context.Context, name string) error {
 		case StatusReady:
 			return nil
 		case StatusFailed:
+			if img.Error != nil {
+				return fmt.Errorf("image conversion failed: %s", *img.Error)
+			}
 			return fmt.Errorf("image conversion failed")
 		}
 	}
@@ -619,6 +625,9 @@ func (m *manager) WaitForReady(ctx context.Context, name string) error {
 	case event := <-ch:
 		if event.Status == StatusReady {
 			return nil
+		}
+		if event.Err != nil {
+			return fmt.Errorf("image conversion failed: %w", event.Err)
 		}
 		return fmt.Errorf("image conversion failed")
 	case <-ctx.Done():

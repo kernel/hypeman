@@ -103,45 +103,6 @@ func (m *manager) createInstance(
 		return nil, err
 	}
 
-	// A specific platform was requested: ensure we resolved THAT architecture.
-	// GetImage(tag) returns whatever architecture the tag currently points to, so
-	// an image cached at a different arch would be used as-is, silently ignoring
-	// the request (and disabling emulation). Resolve the requested platform by the
-	// digest the build keys its metadata on, rather than by the shared tag.
-	if req.Platform != "" {
-		want, platErr := images.ParsePlatform(req.Platform)
-		if platErr != nil {
-			imageSpanEnd(platErr)
-			return nil, fmt.Errorf("invalid platform %q: %w", req.Platform, platErr)
-		}
-		if imageInfo.Platform != want.String() {
-			created, cerr := m.imageManager.CreateImage(imageCtx, images.CreateImageRequest{Name: req.Image, Platform: req.Platform})
-			if cerr != nil {
-				imageSpanEnd(cerr)
-				log.ErrorContext(ctx, "failed to resolve image for requested platform", "image", req.Image, "platform", req.Platform, "error", cerr)
-				return nil, fmt.Errorf("resolve image %s for platform %s: %w", req.Image, req.Platform, cerr)
-			}
-			parsed, refErr := images.ParseNormalizedRef(req.Image)
-			if refErr != nil {
-				imageSpanEnd(refErr)
-				return nil, fmt.Errorf("parse image ref %q: %w", req.Image, refErr)
-			}
-			pinned := parsed.Repository() + "@" + created.Digest
-			waitCtx, waitCancel := context.WithTimeout(imageCtx, 5*time.Second)
-			defer waitCancel()
-			if waitErr := m.imageManager.WaitForReady(waitCtx, pinned); waitErr != nil {
-				imageSpanEnd(waitErr)
-				log.InfoContext(ctx, "platform image not ready within timeout, pull continues in background", "image", req.Image, "platform", req.Platform, "error", waitErr)
-				return nil, fmt.Errorf("%w: image %s is being pulled, please try again shortly", ErrImageNotReady, req.Image)
-			}
-			imageInfo, err = m.imageManager.GetImage(imageCtx, pinned)
-			if err != nil {
-				imageSpanEnd(err)
-				log.ErrorContext(ctx, "failed to get image for requested platform", "image", req.Image, "platform", req.Platform, "error", err)
-				return nil, fmt.Errorf("get image for platform: %w", err)
-			}
-		}
-	}
 	imageSpanEnd(nil)
 
 	if imageInfo.Status != images.StatusReady {
@@ -608,11 +569,15 @@ func resolveImageForCreate(ctx context.Context, imageManager createImageResolver
 		if err != nil {
 			return nil, fmt.Errorf("resolve image %s for platform %s: %w", imageName, platform, err)
 		}
+		pinned, err := pinnedImageName(imageName, img.Digest)
+		if err != nil {
+			return nil, err
+		}
 		if img.Status != images.StatusReady {
-			if err := waitForImagePull(ctx, imageManager, img.Name, log); err != nil {
+			if err := waitForImagePull(ctx, imageManager, pinned, log); err != nil {
 				return nil, err
 			}
-			img, err = imageManager.GetImage(ctx, img.Name)
+			img, err = imageManager.GetImage(ctx, pinned)
 			if err != nil {
 				return nil, fmt.Errorf("get image after platform resolve: %w", err)
 			}
@@ -656,6 +621,17 @@ func waitForImagePull(ctx context.Context, imageManager createImageResolver, ima
 		return fmt.Errorf("%w: image %s is being pulled, please try again shortly", ErrImageNotReady, imageName)
 	}
 	return nil
+}
+
+func pinnedImageName(imageName, digest string) (string, error) {
+	if strings.TrimSpace(digest) == "" {
+		return "", fmt.Errorf("%w: resolved image %s has no digest", ErrImageNotReady, imageName)
+	}
+	parsed, err := images.ParseNormalizedRef(imageName)
+	if err != nil {
+		return "", fmt.Errorf("parse image ref %q: %w", imageName, err)
+	}
+	return parsed.Repository() + "@" + digest, nil
 }
 
 func validateResolvedImagePlatform(img *images.Image, requestedPlatform string) error {

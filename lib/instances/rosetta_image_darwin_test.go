@@ -53,18 +53,14 @@ func TestVZRosettaImageX86(t *testing.T) {
 	ref := integrationTestImageRef(t, "docker.io/library/alpine:3.19")
 	img, err := imageManager.CreateImage(ctx, images.CreateImageRequest{Name: ref, Platform: "linux/amd64"})
 	require.NoError(t, err)
-	for i := 0; i < 60; i++ {
-		got, err := imageManager.GetImage(ctx, img.Name)
-		if err == nil && got.Status == images.StatusReady {
-			img = got
-			break
-		}
-		if err == nil && got.Status == images.StatusFailed {
-			t.Fatalf("image build failed: %s", *got.Error)
-		}
-		time.Sleep(time.Second)
-	}
-	require.Equal(t, images.StatusReady, img.Status, "amd64 image should be ready")
+	parsedRef, err := images.ParseNormalizedRef(ref)
+	require.NoError(t, err)
+	pinnedImage := parsedRef.Repository() + "@" + img.Digest
+	waitCtx, waitCancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer waitCancel()
+	require.NoError(t, imageManager.WaitForReady(waitCtx, pinnedImage), "amd64 image should be ready")
+	img, err = imageManager.GetImage(ctx, pinnedImage)
+	require.NoError(t, err)
 	require.Equal(t, "linux/amd64", img.Platform, "pulled image should be linux/amd64")
 
 	systemManager := system.NewManager(p)
