@@ -118,13 +118,11 @@ $ GOOS=darwin GOARCH=arm64 go doc golang.org/x/sys/unix Fclonefileat
 func Fclonefileat(srcDirfd int, dstDirfd int, dst string, flags int) (err error)
 ```
 
-These are generated wrappers in the module cache at
-`golang.org/x/sys@v0.38.0/unix/zsyscall_darwin_arm64.go:1093` (`Clonefile`),
-`:1117` (`Clonefileat`), declared via `//sys` directives in
-`unix/syscall_darwin.go:714-727`, and gated by `//go:build darwin && arm64`. They dynamically import `clonefile`/`clonefileat` from `/usr/lib/libSystem.B.dylib`. The flag constants are also present:
-`CLONE_NOFOLLOW = 0x1` and `CLONE_NOOWNERCOPY = 0x2`
-(`unix/zerrors_darwin_arm64.go:238-239`), and the raw `SYS_CLONEFILEAT = 462`
-(`unix/zsysnum_darwin_arm64.go:372`) if we ever wanted it.
+These are generated wrappers in `golang.org/x/sys` v0.38.0 (`unix.Clonefile` and
+`unix.Clonefileat`, gated by `//go:build darwin && arm64`), which dynamically
+import `clonefile`/`clonefileat` from `/usr/lib/libSystem.B.dylib`. The flag
+constants `unix.CLONE_NOFOLLOW` and `unix.CLONE_NOOWNERCOPY`, and the raw
+`unix.SYS_CLONEFILEAT`, are present in the same version if we ever wanted them.
 
 **Conclusion:** the fast path can be built on `unix.Clonefile` (or `unix.Clonefileat`) with the pinned `x/sys` v0.38.0 — no dependency bump, no cgo shim, no raw `SYS_CLONEFILEAT` syscall. The raw-syscall and dependency-bump options are still discussed in "Risks & alternatives" for completeness, but they are not the recommendation.
 
@@ -203,16 +201,13 @@ func copyRegularFileReflink(srcPath, dstPath string, perms fs.FileMode) error {
 }
 
 // isReflinkUnsupportedError returns true when a clonefile failure indicates the
-// clone cannot be served and the caller should fall back to a sparse copy.
-// Real errors (EIO, ENOSPC, EACCES) return false and propagate.
+// clone cannot be served and the caller should fall back to a sparse copy. Only
+// volume/filesystem-capability signals belong here; everything else propagates.
 func isReflinkUnsupportedError(err error) bool {
 	switch {
-	case errors.Is(err, unix.ENOTSUP), // volume is not APFS / clone unsupported
+	case errors.Is(err, unix.ENOTSUP), // non-APFS volume / clone unsupported
 		errors.Is(err, unix.EOPNOTSUPP),
-		errors.Is(err, unix.EXDEV),  // src and dst on different volumes
-		errors.Is(err, unix.EEXIST), // dst already exists (defensive; we remove first)
-		errors.Is(err, unix.EINVAL), // bad flags / unsupported combination
-		errors.Is(err, unix.ENOTDIR):
+		errors.Is(err, unix.EXDEV): // src and dst on different volumes
 		return true
 	}
 	return false
@@ -222,14 +217,12 @@ func isReflinkUnsupportedError(err error) bool {
 Notes on the design decisions, each tied to a concrete difference from the Linux path:
 
 - **Destination must not exist.** This is the central semantic divergence from `copy_reflink_linux.go:28`. The Linux path opens `dst` with `O_CREATE|O_TRUNC` and clones into it; `clonefile(2)` instead creates the destination atomically and fails with `EEXIST` if it is already there. So the darwin impl (a) `os.Remove`s any stale `dst` before the call and (b) does **not** open or pre-create `dst`. The deferred-`os.Remove`-on-error cleanup from the Linux path is unnecessary on the clone itself (a failed `clonefile` creates nothing), but we still remove on a post-clone `chmod` failure.
-- **Mode handling.** We pass `CLONE_NOFOLLOW|CLONE_NOOWNERCOPY` then `os.Chmod(dstPath, perms)`. The `perms` argument is what the caller already computes (`info.Mode().Perm()` in `copy.go:100`/`:109`; `info.Mode().Perm()` in `CopyRegularFile`, `copy.go:151`). `CLONE_NOOWNERCOPY` avoids copying owner/SUID/SGID/extended-attribute ownership we have no business propagating into a fork; the explicit `Chmod` then re-establishes exactly the permission bits the rest of the copy package guarantees. This matches the Linux path's effective behavior (the Linux open passes `perms` as the create mode), so callers see identical destination permissions on both platforms.
-- **Errno mapping mirrors the Linux ladder by intent, not by literal set.** The Linux `isReflinkUnsupportedError` includes ioctl-specific codes (`ENOTTY`, `EISDIR`, `ETXTBSY`) that don't apply to `clonefile`. The darwin set maps the "this volume/fs can't clone" outcomes to `ErrReflinkUnsupported`:
-  - `EXDEV` (`0x12`) — source and destination on different APFS volumes; clone impossible, fall back. This is the key edge case (see "Platform constraints").
-  - `ENOTSUP` (`0x2d`) / `EOPNOTSUPP` (`0x66`) — non-APFS volume or clone unsupported.
-  - `EEXIST` (`0x11`) — destination present; defensive, since we remove first, but mapping it to fallback rather than a hard error keeps a racing re-walk safe.
-  - `EINVAL` / `ENOTDIR` — bad-arg / path-shape failures we'd rather degrade than abort on.
+- **Mode handling.** We pass `CLONE_NOFOLLOW|CLONE_NOOWNERCOPY` then `os.Chmod(dstPath, perms)`. The `perms` argument is what the caller already computes (`info.Mode().Perm()` in `copy.go:100`/`:109`; `info.Mode().Perm()` in `CopyRegularFile`, `copy.go:151`). `CLONE_NOOWNERCOPY` avoids copying owner/SUID/SGID/extended-attribute ownership we have no business propagating into a fork; the explicit `Chmod` then re-establishes exactly the permission bits the rest of the copy package guarantees. This mirrors the Linux path's intent (its `os.OpenFile` passes `perms` as the create mode), with one caveat: the Linux create mode is masked by the process umask while `os.Chmod` is not, so the two platforms can diverge for a mode whose bits the umask would strip. The copy package passes already-resolved `info.Mode().Perm()` values, so in practice the forked guest tree matches the source on both.
+- **Errno mapping mirrors the Linux ladder by intent, not by literal set.** The Linux `isReflinkUnsupportedError` includes ioctl-specific codes (`ENOTTY`, `EISDIR`, `ETXTBSY`) that don't apply to `clonefile`. The darwin set is deliberately narrow — only the "this volume/fs can't clone" outcomes map to `ErrReflinkUnsupported`:
+  - `EXDEV` — source and destination on different APFS volumes; clone impossible, fall back. This is the key edge case (see "Platform constraints").
+  - `ENOTSUP` / `EOPNOTSUPP` — non-APFS volume or clone unsupported.
 
-  Everything else propagates unchanged, importantly `EIO` (`0x5`), `ENOSPC` (`0x1c`), and `EACCES` (`0xd`) — these are real failures the operator needs to see, not silent fallbacks. (Constants confirmed in `unix/zerrors_darwin_arm64.go:1626-1732`.)
+  Everything else propagates so a real failure surfaces instead of silently degrading to a slow copy. In particular, `EEXIST` is owned by the pre-clone `os.Remove` (we clear the destination first), so it should never reach this check; were it mapped to fallback, a per-file `EEXIST` would wrongly flip the whole directory walk to sparse via the `reflinkDead` short-circuit. `EINVAL` / `ENOTDIR` are programming/path errors against fixed-constant flags, not capability signals. And `EIO`, `ENOSPC`, `EACCES` are real failures the operator needs to see.
 
 `copy.go` and the `copyState.reflinkDead` short-circuit need **no change**: `copyRegularFile` (`copy.go:158`) already calls `copyRegularFileReflink`, treats `ErrReflinkUnsupported` as the signal to flip `reflinkDead` and fall back, and propagates any other error. The new darwin impl plugs into that contract unchanged. `SetReflinkDisabled` (`copy.go:24`) continues to force the sparse path for tests on both platforms.
 
@@ -298,8 +291,8 @@ New darwin-only tests (`copy_reflink_darwin_test.go`, `//go:build darwin`):
 
 1. **Clone correctness over a guest-shaped tree.** Build a source dir with a multi-MiB `rootfs.ext4`, a `config.ext4`, a sparse `overlay.raw`, a symlink, and a `.sock`; run `CopyGuestDirectory` with reflink enabled; assert byte-for-byte equality of regular files, that the symlink and skips behave, and that destination perms equal source perms (the `Chmod` contract).
 2. **Stale destination is handled.** Pre-create `dst` as a regular file with different contents, then clone; assert the clone succeeds (the `os.Remove` pre-step fired) and the destination matches the source. This is the explicit guard for the "destination must not exist" divergence.
-3. **CoW block sharing (best-effort, skip if unavailable).** Clone a dense N-MiB file within `t.TempDir()`; if `t.TempDir()` is on APFS, assert that immediately after the clone the combined allocated size has not grown by ~N MiB (blocks are shared), using `unix.Stat` + `Blocks*512` as in `allocatedBytes` (`copy_sparse_unix_test.go:117`). Detect non-APFS by observing `ErrReflinkUnsupported` from a direct `copyRegularFileReflink` call and `t.Skip`. This makes the test meaningful on developer machines without being flaky on CI runners whose temp volume isn't APFS.
-4. **`EXDEV` maps to fallback (unit).** Unit-test `isReflinkUnsupportedError` directly with `unix.EXDEV`, `unix.ENOTSUP`, `unix.EOPNOTSUPP`, `unix.EEXIST`, `unix.EINVAL`, `unix.ENOTDIR` (expect `true`) and `unix.EIO`, `unix.ENOSPC`, `unix.EACCES` (expect `false`). No special filesystem needed.
+3. **CoW block sharing (benchmark, not a unit assertion).** Copy-on-write sharing is inherent to `clonefile(2)`. Rather than assert on a volume free-space delta in the unit suite — flake-prone on a shared runner, where concurrent activity perturbs the measurement — the space and latency win is demonstrated by the fork-speed benchmark: `BenchmarkForkGuestDisk` (`copy_bench_darwin_test.go`) and the end-to-end `TestVZForkSpeed` (`fork_speed_darwin_test.go`, gated behind `HYPEMAN_FORK_BENCH=1`), both comparing the clonefile fast path against the sparse fallback.
+4. **`EXDEV` maps to fallback (unit).** Unit-test `isReflinkUnsupportedError` directly with `unix.EXDEV`, `unix.ENOTSUP`, `unix.EOPNOTSUPP` (expect `true`) and `unix.EEXIST`, `unix.EINVAL`, `unix.ENOTDIR`, `unix.EIO`, `unix.ENOSPC`, `unix.EACCES` (expect `false`). No special filesystem needed.
 
 `go vet`/build verification: build with `GOOS=darwin GOARCH=arm64` and `GOOS=darwin GOARCH=amd64` to confirm the new file and the retagged stub compile under both darwin arches, and build a non-darwin/non-linux target (e.g. `GOOS=freebsd`) to confirm the narrowed stub still satisfies the linker.
 
@@ -309,7 +302,7 @@ New darwin-only tests (`copy_reflink_darwin_test.go`, `//go:build darwin`):
 
 **Risk: CoW-`ENOSPC` at runtime (the Tart tradeoff).** Discussed above. We accept it by default because hypeman's overlay model contains guest writes. *Alternative considered:* port Tart's reclaim step (`Prune.reclaimIfNeeded`, `Prune.swift:107`) — after cloning, check `volumeAvailableCapacity` and pre-allocate the unshared remainder. Rejected as default behavior because it discards the space savings that motivate this RFC and adds a disk-capacity policy hypeman doesn't otherwise have. Left as an opt-in follow-up (see Open questions).
 
-**Alternative: raw `SYS_CLONEFILEAT` syscall.** Viable — `unix.SYS_CLONEFILEAT = 462` and the `CLONE_*` flags are present in v0.38.0 (`zsysnum_darwin_arm64.go:372`, `zerrors_darwin_arm64.go:238-239`), so a `unix.Syscall6(unix.SYS_CLONEFILEAT, AT_FDCWD, srcPtr, AT_FDCWD, dstPtr, flags, 0)` would work without any wrapper. Rejected because the typed `unix.Clonefile` wrapper already exists for darwin in the pinned version (verified via `GOOS=darwin go doc`), so hand-rolling `unsafe.Pointer` string marshaling and trampoline plumbing would be strictly more error-prone for zero benefit. The raw path remains a fallback if a future `x/sys` ever drops the wrapper.
+**Alternative: raw `SYS_CLONEFILEAT` syscall.** Viable — `unix.SYS_CLONEFILEAT` and the `CLONE_*` flags are present in v0.38.0, so a `unix.Syscall6(unix.SYS_CLONEFILEAT, AT_FDCWD, srcPtr, AT_FDCWD, dstPtr, flags, 0)` would work without any wrapper. Rejected because the typed `unix.Clonefile` wrapper already exists for darwin in the pinned version (verified via `GOOS=darwin go doc`), so hand-rolling `unsafe.Pointer` string marshaling and trampoline plumbing would be strictly more error-prone for zero benefit. The raw path remains a fallback if a future `x/sys` ever drops the wrapper.
 
 **Alternative: bump `golang.org/x/sys`.** Unnecessary. The wrappers and constants we need are all in the currently pinned v0.38.0. A bump would be churn with no functional gain for this feature and is explicitly not part of this RFC.
 

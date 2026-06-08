@@ -53,20 +53,21 @@ func copyRegularFileReflink(srcPath, dstPath string, perms fs.FileMode) error {
 }
 
 // isReflinkUnsupportedError returns true when a clonefile failure indicates the
-// clone cannot be served and the caller should fall back to a sparse copy.
-// Real errors (EIO, ENOSPC, EACCES) return false and propagate.
+// clone cannot be served and the caller should fall back to a sparse copy. Only
+// volume/filesystem-capability signals belong here; everything else propagates.
 //
-// Unlike the Linux FICLONE ladder, EINVAL and ENOTDIR are NOT treated as
-// "unsupported" here: on clonefile(2) they signal bad flags or a bad path
-// prefix (programming errors), and the flags are fixed constants. Mapping them
-// to the fallback would silently disable the fast path for every file if a
-// future edit broke the flag set, so we let them propagate instead.
+// EINVAL and ENOTDIR are programming/path errors on clonefile(2) against
+// fixed-constant flags, not capability signals — mapping them to the fallback
+// would silently disable the fast path for every file if a future edit broke the
+// flag set. EEXIST is owned by the os.Remove above (the destination is cleared
+// before the clone); mapping a per-file EEXIST here would wrongly flip the whole
+// directory walk to sparse via the reflinkDead short-circuit. Real errors (EIO,
+// ENOSPC, EACCES) likewise propagate.
 func isReflinkUnsupportedError(err error) bool {
 	switch {
 	case errors.Is(err, unix.ENOTSUP),
 		errors.Is(err, unix.EOPNOTSUPP),
-		errors.Is(err, unix.EXDEV),
-		errors.Is(err, unix.EEXIST):
+		errors.Is(err, unix.EXDEV):
 		return true
 	}
 	return false

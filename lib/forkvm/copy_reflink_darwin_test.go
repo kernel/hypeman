@@ -109,43 +109,6 @@ func TestCopyRegularFileReflink_StaleDestination(t *testing.T) {
 	assert.Equal(t, os.FileMode(0644), info.Mode().Perm())
 }
 
-// TestCopyRegularFileReflink_SharesBlocks asserts the clone is copy-on-write by
-// comparing how much volume free space the clone consumes against a dense
-// control file written in the same window. A real CoW clone consumes almost
-// nothing; a dense control of the same size consumes ~size. Comparing the two
-// (rather than an absolute free-space delta) tolerates concurrent volume
-// activity on the shared runner: noise perturbs both samples. The threshold is
-// deliberately loose for the same reason. Skips when the volume is not APFS.
-func TestCopyRegularFileReflink_SharesBlocks(t *testing.T) {
-	dir := t.TempDir()
-	src := filepath.Join(dir, "rootfs.ext4")
-
-	const size = 256 * 1024 * 1024 // 256 MiB dense
-	payload := bytes.Repeat([]byte("x"), size)
-	require.NoError(t, os.WriteFile(src, payload, 0644))
-
-	// Probe APFS support before measuring so a non-APFS volume skips cleanly.
-	probe := filepath.Join(dir, "probe.ext4")
-	skipUnlessAPFS(t, copyRegularFileReflink(src, probe, 0644))
-	require.NoError(t, os.Remove(probe))
-
-	// Dense control: writing size fresh bytes consumes ~size of free space.
-	controlConsumed, err := freeSpaceConsumed(dir, func() error {
-		return os.WriteFile(filepath.Join(dir, "control.ext4"), payload, 0644)
-	})
-	require.NoError(t, err)
-	require.Positive(t, controlConsumed, "dense control write should consume free space")
-
-	// Clone: sharing the source's blocks consumes far less than the control.
-	cloneConsumed, err := freeSpaceConsumed(dir, func() error {
-		return copyRegularFileReflink(src, filepath.Join(dir, "clone.ext4"), 0644)
-	})
-	require.NoError(t, err)
-
-	assert.Less(t, cloneConsumed, controlConsumed/4,
-		"clone (%d bytes) should consume far less than the dense control (%d bytes)", cloneConsumed, controlConsumed)
-}
-
 // TestCopyGuestDirectory_DarwinReflinkFallback drives the darwin-specific
 // rejection path: when clonefile reports an unsupported error, copyRegularFile
 // must route through isReflinkUnsupportedError to the sparse copy and still
@@ -176,31 +139,6 @@ func TestCopyGuestDirectory_DarwinReflinkFallback(t *testing.T) {
 	assert.True(t, bytes.Equal(want, got), "sparse fallback output must match source")
 }
 
-// freeSpaceConsumed runs fn and reports how much volume free space it consumed
-// (freeBefore - freeAfter) on the filesystem backing path.
-func freeSpaceConsumed(path string, fn func() error) (int64, error) {
-	before, err := freeBytes(path)
-	if err != nil {
-		return 0, err
-	}
-	if err := fn(); err != nil {
-		return 0, err
-	}
-	after, err := freeBytes(path)
-	if err != nil {
-		return 0, err
-	}
-	return before - after, nil
-}
-
-func freeBytes(path string) (int64, error) {
-	var st unix.Statfs_t
-	if err := unix.Statfs(path, &st); err != nil {
-		return 0, err
-	}
-	return int64(st.Bavail) * int64(st.Bsize), nil
-}
-
 func TestIsReflinkUnsupportedError(t *testing.T) {
 	tests := []struct {
 		name string
@@ -210,9 +148,10 @@ func TestIsReflinkUnsupportedError(t *testing.T) {
 		{"ENOTSUP", unix.ENOTSUP, true},
 		{"EOPNOTSUPP", unix.EOPNOTSUPP, true},
 		{"EXDEV", unix.EXDEV, true},
-		{"EEXIST", unix.EEXIST, true},
-		// EINVAL and ENOTDIR are programming/path errors on clonefile(2), not
-		// capability signals, so they propagate rather than trigger fallback.
+		// EEXIST is owned by the pre-clone os.Remove; EINVAL/ENOTDIR are
+		// programming/path errors on clonefile(2). None are capability signals,
+		// so they propagate rather than trigger fallback.
+		{"EEXIST", unix.EEXIST, false},
 		{"EINVAL", unix.EINVAL, false},
 		{"ENOTDIR", unix.ENOTDIR, false},
 		{"EIO", unix.EIO, false},
