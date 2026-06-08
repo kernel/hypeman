@@ -2,6 +2,7 @@ package instances
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -95,40 +96,11 @@ func (m *manager) createInstance(
 	imageCtx, imageSpanEnd := m.startLifecycleStep(ctx, "resolve_image",
 		attribute.String("operation", "resolve_image"),
 	)
-	imageInfo, err := m.imageManager.GetImage(imageCtx, req.Image)
+	imageInfo, err := resolveImageForCreate(imageCtx, m.imageManager, req.Image, req.Platform, log)
 	if err != nil {
-		if err == images.ErrNotFound {
-			// Auto-pull: image not found locally, kick off the pull in the
-			// background and wait up to 5 seconds for it to complete. Thread the
-			// requested platform so boot-by-tag pulls the right architecture.
-			log.InfoContext(ctx, "image not found locally, auto-pulling", "image", req.Image, "platform", req.Platform)
-			_, pullErr := m.imageManager.CreateImage(imageCtx, images.CreateImageRequest{Name: req.Image, Platform: req.Platform})
-			if pullErr != nil {
-				imageSpanEnd(pullErr)
-				log.ErrorContext(ctx, "failed to auto-pull image", "image", req.Image, "error", pullErr)
-				return nil, fmt.Errorf("auto-pull image %s: %w", req.Image, pullErr)
-			}
-			// Wait with a short timeout — if the pull doesn't finish in time
-			// we return an error but let it continue in the background.
-			pullCtx, pullCancel := context.WithTimeout(imageCtx, 5*time.Second)
-			defer pullCancel()
-			if waitErr := m.imageManager.WaitForReady(pullCtx, req.Image); waitErr != nil {
-				imageSpanEnd(waitErr)
-				log.InfoContext(ctx, "image pull not ready within timeout, pull continues in background", "image", req.Image, "error", waitErr)
-				return nil, fmt.Errorf("%w: image %s is being pulled, please try again shortly", ErrImageNotReady, req.Image)
-			}
-			// Re-fetch after successful pull
-			imageInfo, err = m.imageManager.GetImage(imageCtx, req.Image)
-			if err != nil {
-				imageSpanEnd(err)
-				log.ErrorContext(ctx, "failed to get image after auto-pull", "image", req.Image, "error", err)
-				return nil, fmt.Errorf("get image after auto-pull: %w", err)
-			}
-		} else {
-			imageSpanEnd(err)
-			log.ErrorContext(ctx, "failed to get image", "image", req.Image, "error", err)
-			return nil, fmt.Errorf("get image: %w", err)
-		}
+		imageSpanEnd(err)
+		log.ErrorContext(ctx, "failed to resolve image", "image", req.Image, "platform", req.Platform, "error", err)
+		return nil, err
 	}
 
 	// A specific platform was requested: ensure we resolved THAT architecture.
@@ -621,6 +593,87 @@ func (m *manager) createInstance(
 	}
 	log.InfoContext(ctx, "instance created successfully", "instance_id", id, "name", req.Name, "state", finalInst.State, "hypervisor", hvType, "version", hvVersion)
 	return &finalInst, nil
+}
+
+type createImageResolver interface {
+	CreateImage(ctx context.Context, req images.CreateImageRequest) (*images.Image, error)
+	GetImage(ctx context.Context, name string) (*images.Image, error)
+	WaitForReady(ctx context.Context, name string) error
+}
+
+func resolveImageForCreate(ctx context.Context, imageManager createImageResolver, imageName, platform string, log *slog.Logger) (*images.Image, error) {
+	if strings.TrimSpace(platform) != "" {
+		log.InfoContext(ctx, "resolving image for requested platform", "image", imageName, "platform", platform)
+		img, err := imageManager.CreateImage(ctx, images.CreateImageRequest{Name: imageName, Platform: platform})
+		if err != nil {
+			return nil, fmt.Errorf("resolve image %s for platform %s: %w", imageName, platform, err)
+		}
+		if img.Status != images.StatusReady {
+			if err := waitForImagePull(ctx, imageManager, img.Name, log); err != nil {
+				return nil, err
+			}
+			img, err = imageManager.GetImage(ctx, img.Name)
+			if err != nil {
+				return nil, fmt.Errorf("get image after platform resolve: %w", err)
+			}
+		}
+		if err := validateResolvedImagePlatform(img, platform); err != nil {
+			return nil, err
+		}
+		return img, nil
+	}
+
+	img, err := imageManager.GetImage(ctx, imageName)
+	if err == nil {
+		return img, nil
+	}
+	if !errors.Is(err, images.ErrNotFound) {
+		return nil, fmt.Errorf("get image: %w", err)
+	}
+
+	log.InfoContext(ctx, "image not found locally, auto-pulling", "image", imageName)
+	img, err = imageManager.CreateImage(ctx, images.CreateImageRequest{Name: imageName})
+	if err != nil {
+		return nil, fmt.Errorf("auto-pull image %s: %w", imageName, err)
+	}
+	if img.Status != images.StatusReady {
+		if err := waitForImagePull(ctx, imageManager, img.Name, log); err != nil {
+			return nil, err
+		}
+		img, err = imageManager.GetImage(ctx, img.Name)
+		if err != nil {
+			return nil, fmt.Errorf("get image after auto-pull: %w", err)
+		}
+	}
+	return img, nil
+}
+
+func waitForImagePull(ctx context.Context, imageManager createImageResolver, imageName string, log *slog.Logger) error {
+	pullCtx, pullCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer pullCancel()
+	if err := imageManager.WaitForReady(pullCtx, imageName); err != nil {
+		log.InfoContext(ctx, "image pull not ready within timeout, pull continues in background", "image", imageName, "error", err)
+		return fmt.Errorf("%w: image %s is being pulled, please try again shortly", ErrImageNotReady, imageName)
+	}
+	return nil
+}
+
+func validateResolvedImagePlatform(img *images.Image, requestedPlatform string) error {
+	if img == nil {
+		return fmt.Errorf("%w: image did not resolve", ErrImageNotReady)
+	}
+	want, err := images.ParsePlatform(requestedPlatform)
+	if err != nil {
+		return err
+	}
+	got, err := images.ParsePlatform(img.Platform)
+	if err != nil {
+		return fmt.Errorf("%w: resolved image %s has invalid platform %q", images.ErrInvalidPlatform, img.Name, img.Platform)
+	}
+	if want.OS != got.OS || want.Architecture != got.Architecture {
+		return fmt.Errorf("%w: requested %s but resolved image %s is %s", images.ErrInvalidPlatform, want, img.Name, got)
+	}
+	return nil
 }
 
 // validateCreateRequest validates the create instance request.

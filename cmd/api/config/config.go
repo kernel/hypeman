@@ -504,8 +504,31 @@ func Load(configPath string) (*Config, error) {
 	if err := k.Unmarshal("", &cfg); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
+	cfg.expandPathFields()
 
 	return &cfg, nil
+}
+
+func (c *Config) expandPathFields() {
+	c.DataDir = expandHomePath(c.DataDir)
+	c.Build.SecretsDir = expandHomePath(c.Build.SecretsDir)
+	c.Build.DockerSocket = expandHomePath(c.Build.DockerSocket)
+	c.Registry.CACertFile = expandHomePath(c.Registry.CACertFile)
+	c.Hypervisor.FirecrackerBinaryPath = expandHomePath(c.Hypervisor.FirecrackerBinaryPath)
+}
+
+func expandHomePath(path string) string {
+	if path == "" || path == "~" {
+		return path
+	}
+	if !strings.HasPrefix(path, "~/") {
+		return path
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return path
+	}
+	return filepath.Join(home, path[2:])
 }
 
 // Validate checks configuration values for correctness.

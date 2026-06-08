@@ -363,6 +363,7 @@ Hypeman supports native macOS development using Apple's Virtualization.framework
 - **macOS 11.0+** (Big Sur or later)
 - **Apple Silicon** (M1/M2/M3) recommended
 - **macOS 14.0+** (Sonoma) required for snapshot/restore (ARM64 only)
+- **Rosetta** required for running `linux/amd64` images on Apple Silicon: `softwareupdate --install-rosetta --agree-to-license`
 - **Go 1.25.4+**
 - **Caddy** (for ingress): `brew install caddy`
 - **e2fsprogs** (for ext4 disk images): `brew install e2fsprogs`
@@ -372,6 +373,7 @@ Hypeman supports native macOS development using Apple's Virtualization.framework
 ```bash
 # 1. Install dependencies
 brew install caddy e2fsprogs
+softwareupdate --install-rosetta --agree-to-license
 
 # 2. Add e2fsprogs to PATH (it's keg-only)
 export PATH="/opt/homebrew/opt/e2fsprogs/bin:/opt/homebrew/opt/e2fsprogs/sbin:$PATH"
