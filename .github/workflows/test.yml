@@ -211,6 +211,19 @@ jobs:
           export HYPEMAN_TEST_PREWARM_DIR="$HOME/.cache/hypeman-ci/darwin-arm64"
           go run ./cmd/test-prewarm
 
+      # TEMP(ci): one-off end-to-end VM fork-speed measurement (clonefile vs
+      # sparse) for the PR description. Remove after capturing the numbers.
+      - name: TEMP benchmark e2e fork speed
+        env:
+          HYPEMAN_FORK_BENCH: "1"
+          DEFAULT_HYPERVISOR: vz
+          JWT_SECRET: ci-test-secret
+          HYPEMAN_TEST_PREWARM_STRICT: "1"
+          HYPEMAN_TEST_REGISTRY: 127.0.0.1:5001
+        run: |
+          export HYPEMAN_TEST_PREWARM_DIR="$HOME/.cache/hypeman-ci/darwin-arm64"
+          make test-darwin TEST='TestVZForkSpeed' VERBOSE=1 TEST_TIMEOUT=20m 2>&1 | tee /tmp/forkspeed.txt
+
       - name: Check gofmt
         run: |
           set -euo pipefail
