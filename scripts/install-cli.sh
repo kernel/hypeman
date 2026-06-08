@@ -29,6 +29,7 @@ info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 
+# Mirrored from scripts/install.sh; keep in sync (a curl | bash script can't source a shared file).
 # Find the most recent release that has a specific artifact available
 # Usage: find_release_with_artifact <repo> <archive_prefix> <os> <arch> [ext]
 # Returns: version tag (e.g., v0.5.0) or empty string if not found
