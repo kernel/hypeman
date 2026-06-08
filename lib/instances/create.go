@@ -135,6 +135,10 @@ func (m *manager) createInstance(
 			"kernel", kernelVer,
 			"label", system.ImageKernelVersionLabel)
 	}
+	storedImageName, err := storedImageNameForCreate(req.Image, req.Platform, imageInfo)
+	if err != nil {
+		return nil, err
+	}
 
 	// 3. Generate instance ID (CUID2 for secure, collision-resistant IDs)
 	id := cuid2.Generate()
@@ -317,7 +321,7 @@ func (m *manager) createInstance(
 	stored := &StoredMetadata{
 		Id:                       id,
 		Name:                     req.Name,
-		Image:                    req.Image,
+		Image:                    storedImageName,
 		Size:                     size,
 		HotplugSize:              hotplugSize,
 		OverlaySize:              overlaySize,

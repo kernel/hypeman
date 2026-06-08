@@ -171,3 +171,35 @@ func TestResolveImageForCreateWithoutPlatformUsesExistingImage(t *testing.T) {
 		t.Fatalf("expected existing image, got %s", img.Platform)
 	}
 }
+
+func TestStoredImageNameForCreatePinsExplicitPlatform(t *testing.T) {
+	t.Parallel()
+
+	got, err := storedImageNameForCreate(
+		"docker.io/library/alpine:3.19",
+		"linux/amd64",
+		&images.Image{Digest: "sha256:amd64"},
+	)
+	if err != nil {
+		t.Fatalf("stored image name: %v", err)
+	}
+	if got != "docker.io/library/alpine@sha256:amd64" {
+		t.Fatalf("expected pinned digest ref, got %q", got)
+	}
+}
+
+func TestStoredImageNameForCreateKeepsDefaultPlatformTag(t *testing.T) {
+	t.Parallel()
+
+	got, err := storedImageNameForCreate(
+		"docker.io/library/alpine:3.19",
+		"",
+		&images.Image{Digest: "sha256:arm64"},
+	)
+	if err != nil {
+		t.Fatalf("stored image name: %v", err)
+	}
+	if got != "docker.io/library/alpine:3.19" {
+		t.Fatalf("expected original tag ref, got %q", got)
+	}
+}

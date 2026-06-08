@@ -93,6 +93,16 @@ func pinnedImageName(imageName, digest string) (string, error) {
 	return parsed.Repository() + "@" + digest, nil
 }
 
+func storedImageNameForCreate(imageName, platform string, img *images.Image) (string, error) {
+	if strings.TrimSpace(platform) == "" {
+		return imageName, nil
+	}
+	if img == nil {
+		return "", fmt.Errorf("%w: image did not resolve", ErrImageNotReady)
+	}
+	return pinnedImageName(imageName, img.Digest)
+}
+
 func validateResolvedImagePlatform(img *images.Image, requestedPlatform string) error {
 	if img == nil {
 		return fmt.Errorf("%w: image did not resolve", ErrImageNotReady)
