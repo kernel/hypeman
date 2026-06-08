@@ -2,11 +2,9 @@ package instances
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
@@ -90,6 +88,10 @@ func (m *manager) createInstance(
 		log.ErrorContext(ctx, "invalid create request", "error", err)
 		return nil, err
 	}
+	hvType := req.Hypervisor
+	if hvType == "" {
+		hvType = m.defaultHypervisor
+	}
 
 	// 2. Validate image exists and is ready; auto-pull if not found
 	log.DebugContext(ctx, "validating image", "image", req.Image)
@@ -114,11 +116,7 @@ func (m *manager) createInstance(
 	// emulation. On Apple silicon that is Rosetta, enabled automatically; on any
 	// other host we reject the create up front rather than launching an
 	// unbootable VM.
-	resolvedHypervisor := req.Hypervisor
-	if resolvedHypervisor == "" {
-		resolvedHypervisor = m.defaultHypervisor
-	}
-	enableRosetta, err := deriveEnableRosetta(images.ImageNeedsHostEmulation(imageInfo.Platform), resolvedHypervisor)
+	enableRosetta, err := deriveEnableRosetta(images.ImageNeedsHostEmulation(imageInfo.Platform), hvType)
 	if err != nil {
 		log.ErrorContext(ctx, "image platform requires emulation", "image", req.Image, "image_platform", imageInfo.Platform, "host", hostPlatformString())
 		return nil, err
@@ -145,11 +143,7 @@ func (m *manager) createInstance(
 
 	// 4. Generate vsock configuration
 	vsockCID := generateVsockCID(id)
-	hvTypeForVsock := req.Hypervisor
-	if hvTypeForVsock == "" {
-		hvTypeForVsock = m.defaultHypervisor
-	}
-	vsockSocket := m.paths.InstanceSocket(id, hypervisor.VsockSocketNameForType(hvTypeForVsock))
+	vsockSocket := m.paths.InstanceSocket(id, hypervisor.VsockSocketNameForType(hvType))
 	log.DebugContext(ctx, "generated vsock config", "instance_id", id, "cid", vsockCID)
 
 	// 5. Check instance doesn't already exist
@@ -214,12 +208,6 @@ func (m *manager) createInstance(
 	networkName := ""
 	if req.NetworkEnabled {
 		networkName = "default"
-	}
-
-	// 8. Get process manager for hypervisor type (needed for socket name)
-	hvType := req.Hypervisor
-	if hvType == "" {
-		hvType = m.defaultHypervisor
 	}
 
 	// Enrich logger and trace span with hypervisor type
@@ -554,102 +542,6 @@ func (m *manager) createInstance(
 	}
 	log.InfoContext(ctx, "instance created successfully", "instance_id", id, "name", req.Name, "state", finalInst.State, "hypervisor", hvType, "version", hvVersion)
 	return &finalInst, nil
-}
-
-type createImageResolver interface {
-	CreateImage(ctx context.Context, req images.CreateImageRequest) (*images.Image, error)
-	GetImage(ctx context.Context, name string) (*images.Image, error)
-	WaitForReady(ctx context.Context, name string) error
-}
-
-func resolveImageForCreate(ctx context.Context, imageManager createImageResolver, imageName, platform string, log *slog.Logger) (*images.Image, error) {
-	if strings.TrimSpace(platform) != "" {
-		log.InfoContext(ctx, "resolving image for requested platform", "image", imageName, "platform", platform)
-		img, err := imageManager.CreateImage(ctx, images.CreateImageRequest{Name: imageName, Platform: platform})
-		if err != nil {
-			return nil, fmt.Errorf("resolve image %s for platform %s: %w", imageName, platform, err)
-		}
-		pinned, err := pinnedImageName(imageName, img.Digest)
-		if err != nil {
-			return nil, err
-		}
-		if img.Status != images.StatusReady {
-			if err := waitForImagePull(ctx, imageManager, pinned, log); err != nil {
-				return nil, err
-			}
-			img, err = imageManager.GetImage(ctx, pinned)
-			if err != nil {
-				return nil, fmt.Errorf("get image after platform resolve: %w", err)
-			}
-		}
-		if err := validateResolvedImagePlatform(img, platform); err != nil {
-			return nil, err
-		}
-		return img, nil
-	}
-
-	img, err := imageManager.GetImage(ctx, imageName)
-	if err == nil {
-		return img, nil
-	}
-	if !errors.Is(err, images.ErrNotFound) {
-		return nil, fmt.Errorf("get image: %w", err)
-	}
-
-	log.InfoContext(ctx, "image not found locally, auto-pulling", "image", imageName)
-	img, err = imageManager.CreateImage(ctx, images.CreateImageRequest{Name: imageName})
-	if err != nil {
-		return nil, fmt.Errorf("auto-pull image %s: %w", imageName, err)
-	}
-	if img.Status != images.StatusReady {
-		if err := waitForImagePull(ctx, imageManager, img.Name, log); err != nil {
-			return nil, err
-		}
-		img, err = imageManager.GetImage(ctx, img.Name)
-		if err != nil {
-			return nil, fmt.Errorf("get image after auto-pull: %w", err)
-		}
-	}
-	return img, nil
-}
-
-func waitForImagePull(ctx context.Context, imageManager createImageResolver, imageName string, log *slog.Logger) error {
-	pullCtx, pullCancel := context.WithTimeout(ctx, 5*time.Second)
-	defer pullCancel()
-	if err := imageManager.WaitForReady(pullCtx, imageName); err != nil {
-		log.InfoContext(ctx, "image pull not ready within timeout, pull continues in background", "image", imageName, "error", err)
-		return fmt.Errorf("%w: image %s is being pulled, please try again shortly", ErrImageNotReady, imageName)
-	}
-	return nil
-}
-
-func pinnedImageName(imageName, digest string) (string, error) {
-	if strings.TrimSpace(digest) == "" {
-		return "", fmt.Errorf("%w: resolved image %s has no digest", ErrImageNotReady, imageName)
-	}
-	parsed, err := images.ParseNormalizedRef(imageName)
-	if err != nil {
-		return "", fmt.Errorf("parse image ref %q: %w", imageName, err)
-	}
-	return parsed.Repository() + "@" + digest, nil
-}
-
-func validateResolvedImagePlatform(img *images.Image, requestedPlatform string) error {
-	if img == nil {
-		return fmt.Errorf("%w: image did not resolve", ErrImageNotReady)
-	}
-	want, err := images.ParsePlatform(requestedPlatform)
-	if err != nil {
-		return err
-	}
-	got, err := images.ParsePlatform(img.Platform)
-	if err != nil {
-		return fmt.Errorf("%w: resolved image %s has invalid platform %q", images.ErrInvalidPlatform, img.Name, img.Platform)
-	}
-	if want.OS != got.OS || want.Architecture != got.Architecture {
-		return fmt.Errorf("%w: requested %s but resolved image %s is %s", images.ErrInvalidPlatform, want, img.Name, got)
-	}
-	return nil
 }
 
 // validateCreateRequest validates the create instance request.
@@ -989,38 +881,6 @@ func (m *manager) buildHypervisorConfig(ctx context.Context, inst *Instance, ima
 		KernelArgs:    m.kernelArgs(inst.HypervisorType),
 		EnableRosetta: inst.EnableRosetta,
 	}, nil
-}
-
-// deriveEnableRosetta decides whether to attach the Rosetta share for an
-// instance. When the image needs emulation, Rosetta is enabled automatically on
-// vz/Apple-silicon hosts (mirroring Docker Desktop, where Rosetta is a host
-// setting rather than a per-container flag). On any other host an emulated
-// image cannot boot, so the create is rejected with an emulation-agnostic
-// error. It is a pure function of the resolved hypervisor and host so it can be
-// unit-tested without booting a VM.
-func deriveEnableRosetta(imageNeedsEmulation bool, hvType hypervisor.Type) (bool, error) {
-	if !imageNeedsEmulation {
-		return false, nil
-	}
-	if hvType == hypervisor.TypeVZ && runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
-		return true, nil
-	}
-	return false, fmt.Errorf("%w: running %s images requires an emulation-capable host; this host is %s/%s",
-		ErrInvalidRequest, emulatedArchName(), runtime.GOOS, runtime.GOARCH)
-}
-
-// emulatedArchName names the architecture an emulation-capable host would run.
-// On arm64 that is amd64 and vice-versa.
-func emulatedArchName() string {
-	if runtime.GOARCH == "arm64" {
-		return "amd64"
-	}
-	return "arm64"
-}
-
-// hostPlatformString renders the host platform for log/error context.
-func hostPlatformString() string {
-	return runtime.GOOS + "/" + runtime.GOARCH
 }
 
 func resolveCreateKernelVersion(imageInfo *images.Image, defaultKernel system.KernelVersion) (system.KernelVersion, error) {

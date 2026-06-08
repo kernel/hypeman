@@ -130,26 +130,9 @@ func (m *manager) CreateImage(ctx context.Context, req CreateImageRequest) (*Ima
 	resolveCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	var ref *ResolvedRef
-	if needsEmulation(platform, hostPlatform()) {
-		// A non-host platform was requested. Resolve the platform-specific
-		// manifest digest and pin the reference to it: a digest-pinned ref pulls
-		// that exact manifest regardless of the platform passed downstream, so
-		// the pipeline fetches the requested architecture and keys its
-		// cache/metadata on a distinct digest. Preserve the user's tag so the
-		// image stays addressable by tag (and dedups by tag) — we keep the
-		// original tagged ref as the stored name and build the ResolvedRef
-		// directly from the digest we just resolved.
-		digestStr, err := m.ociClient.inspectManifestWithPlatform(resolveCtx, normalized.String(), platform.ToGCR())
-		if err != nil {
-			return nil, fmt.Errorf("resolve manifest for platform %s: %w", platform, err)
-		}
-		ref = NewResolvedRef(normalized, digestStr)
-	} else {
-		ref, err = normalized.Resolve(resolveCtx, m.ociClient)
-		if err != nil {
-			return nil, fmt.Errorf("resolve manifest: %w", err)
-		}
+	ref, err := normalized.ResolveForPlatform(resolveCtx, m.ociClient, platform.ToGCR())
+	if err != nil {
+		return nil, fmt.Errorf("resolve manifest for platform %s: %w", platform, err)
 	}
 
 	m.createMu.Lock()
@@ -165,7 +148,7 @@ func (m *manager) CreateImage(ctx context.Context, req CreateImageRequest) (*Ima
 			// Fall through to re-queue the build
 		} else {
 			// We have this digest already (ready, pending, pulling, or converting)
-			if meta.Status == StatusReady && ref.Tag() != "" {
+			if meta.Status == StatusReady && ref.Tag() != "" && shouldUpdateTagForRequest(req.Platform) {
 				// Update tag symlink to point to current digest
 				// (handles case where tag moved to new digest)
 				createTagSymlink(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex())
@@ -215,7 +198,7 @@ func (m *manager) ImportLocalImage(ctx context.Context, repo, reference, digest 
 			// Fall through to re-queue the build
 		} else {
 			// We have this digest already
-			if meta.Status == StatusReady && ref.Tag() != "" {
+			if meta.Status == StatusReady && ref.Tag() != "" && shouldUpdateTagForMetadata(meta) {
 				createTagSymlink(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex())
 			}
 			img := meta.toImage()
@@ -310,7 +293,7 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef) {
 	if meta, err := readMetadata(m.paths, ref.Repository(), ref.DigestHex()); err == nil {
 		if meta.Status == StatusReady {
 			// Another build completed first, just update the tag symlink
-			if ref.Tag() != "" {
+			if ref.Tag() != "" && shouldUpdateTagForMetadata(meta) {
 				createTagSymlink(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex())
 			}
 			return
@@ -372,7 +355,7 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef) {
 	m.notifyReady(ref.DigestHex(), StatusReady, nil)
 
 	// Only create/update tag symlink on successful completion
-	if ref.Tag() != "" {
+	if ref.Tag() != "" && shouldUpdateTagForMetadata(meta) {
 		if err := createTagSymlink(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex()); err != nil {
 			// Log error but don't fail the build
 			fmt.Fprintf(os.Stderr, "Warning: failed to create tag symlink: %v\n", err)
@@ -382,6 +365,21 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef) {
 	m.refreshDiskUsageTotals()
 
 	m.recordBuildMetrics(ctx, buildStart, "success")
+}
+
+func shouldUpdateTagForMetadata(meta *imageMetadata) bool {
+	if meta == nil || meta.Request == nil {
+		return true
+	}
+	return shouldUpdateTagForRequest(meta.Request.Platform)
+}
+
+func shouldUpdateTagForRequest(requestedPlatform string) bool {
+	platform, err := resolveRequestPlatform(requestedPlatform)
+	if err != nil {
+		return false
+	}
+	return !needsEmulation(platform, hostPlatform())
 }
 
 func (m *manager) updateStatusByDigest(ref *ResolvedRef, status string, err error) {

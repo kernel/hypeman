@@ -96,6 +96,15 @@ func (p Platform) String() string {
 	return s
 }
 
+// Matches reports whether two platforms identify the same guest OS and CPU
+// architecture. Variant is intentionally ignored because Hypeman currently
+// supports amd64 and arm64 only, where variant does not affect boot/emulation.
+func (p Platform) Matches(other Platform) bool {
+	p = p.Normalize()
+	other = other.Normalize()
+	return p.OS == other.OS && p.Architecture == other.Architecture
+}
+
 // ToGCR converts to a go-containerregistry platform for manifest selection.
 func (p Platform) ToGCR() gcr.Platform {
 	return gcr.Platform{
@@ -154,7 +163,7 @@ func resolveManifestPlatform(meta *containerMetadata, requested string) (Platfor
 		if err := actual.validate(); err != nil {
 			return Platform{}, fmt.Errorf("image platform: %w", err)
 		}
-		if want.OS != actual.OS || want.Architecture != actual.Architecture {
+		if !want.Matches(actual) {
 			return Platform{}, fmt.Errorf("%w: requested %s but manifest is %s", ErrInvalidPlatform, want, actual)
 		}
 		return actual, nil

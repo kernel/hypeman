@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/distribution/reference"
+	gcr "github.com/google/go-containerregistry/pkg/v1"
 )
 
 // NormalizedRef is a validated and normalized OCI image reference.
@@ -148,11 +149,21 @@ func (r *ResolvedRef) DigestHex() string {
 // This requires an ociClient interface for manifest inspection.
 type ManifestInspector interface {
 	inspectManifest(ctx context.Context, imageRef string) (string, error)
+	inspectManifestWithPlatform(ctx context.Context, imageRef string, platform gcr.Platform) (string, error)
 }
 
 // Resolve returns a ResolvedRef by inspecting the manifest to get the authoritative digest.
 func (r *NormalizedRef) Resolve(ctx context.Context, inspector ManifestInspector) (*ResolvedRef, error) {
 	digest, err := inspector.inspectManifest(ctx, r.String())
+	if err != nil {
+		return nil, err
+	}
+	return NewResolvedRef(r, digest), nil
+}
+
+// ResolveForPlatform returns a ResolvedRef for the manifest matching platform.
+func (r *NormalizedRef) ResolveForPlatform(ctx context.Context, inspector ManifestInspector, platform gcr.Platform) (*ResolvedRef, error) {
+	digest, err := inspector.inspectManifestWithPlatform(ctx, r.String(), platform)
 	if err != nil {
 		return nil, err
 	}

@@ -137,6 +137,18 @@ func TestCreateImageDuplicate(t *testing.T) {
 	require.Equal(t, img1.Digest, img2.Digest) // Same digest
 }
 
+func TestShouldUpdateTagForRequest(t *testing.T) {
+	require.True(t, shouldUpdateTagForRequest(""))
+	require.True(t, shouldUpdateTagForRequest(hostPlatform().String()))
+
+	other := "linux/amd64"
+	if hostPlatform().Architecture == "amd64" {
+		other = "linux/arm64"
+	}
+	require.False(t, shouldUpdateTagForRequest(other))
+	require.False(t, shouldUpdateTagForRequest("linux/sparc"))
+}
+
 func TestListImages(t *testing.T) {
 	dataDir := t.TempDir()
 	mgr, err := NewManager(paths.New(dataDir), 1, nil)

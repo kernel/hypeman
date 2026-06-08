@@ -58,6 +58,15 @@ func TestPlatformString(t *testing.T) {
 	}
 }
 
+func TestPlatformMatchesIgnoresVariant(t *testing.T) {
+	if !((Platform{OS: "linux", Architecture: "amd64"}).Matches(Platform{OS: "linux", Architecture: "amd64", Variant: "v1"})) {
+		t.Fatal("same os/arch should match regardless of variant")
+	}
+	if (Platform{OS: "linux", Architecture: "amd64"}).Matches(Platform{OS: "linux", Architecture: "arm64"}) {
+		t.Fatal("different architectures should not match")
+	}
+}
+
 func TestNeedsEmulation(t *testing.T) {
 	host := Platform{OS: "linux", Architecture: "arm64"}
 	if !needsEmulation(Platform{OS: "linux", Architecture: "amd64"}, host) {
