@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"io/fs"
+	"os"
 	"strings"
 	"syscall"
 	"testing"
@@ -37,6 +38,7 @@ func TestRosettaAlreadyRegistered(t *testing.T) {
 	// EEXIST means a :rosetta: handler is already registered; treat it as success.
 	assert.True(t, alreadyRegistered(syscall.EEXIST))
 	assert.True(t, alreadyRegistered(fs.ErrExist))
+	assert.True(t, alreadyRegistered(&os.PathError{Op: "write", Path: binfmtRegister, Err: syscall.EEXIST}))
 	// Any other error (or none) is not an "already registered" condition.
 	assert.False(t, alreadyRegistered(nil))
 	assert.False(t, alreadyRegistered(syscall.EACCES))

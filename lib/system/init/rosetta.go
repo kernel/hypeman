@@ -107,7 +107,7 @@ func registerBinfmt(rule string) error {
 // alreadyRegistered reports whether a binfmt_misc register write failed only
 // because a handler of that name already exists (EEXIST).
 func alreadyRegistered(err error) bool {
-	return errors.Is(err, fs.ErrExist)
+	return errors.Is(err, fs.ErrExist) || errors.Is(err, syscall.EEXIST)
 }
 
 // writeBinfmtdConf drops a systemd binfmt.d config that re-registers Rosetta

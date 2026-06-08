@@ -157,7 +157,11 @@ func ensureMirroredImage(ctx context.Context, inspector *images.OCIClient, regis
 		return manifestImage{}, err
 	}
 
-	if digest, err := inspector.InspectManifest(ctx, localRef); err == nil {
+	inspectDigest := func() (string, error) {
+		return inspector.InspectManifestForPlatform(ctx, localRef, img.Platform)
+	}
+
+	if digest, err := inspectDigest(); err == nil {
 		return manifestImage{Source: img.Source, LocalRef: localRef, Digest: digest, CacheHit: true}, nil
 	}
 
@@ -169,18 +173,17 @@ func ensureMirroredImage(ctx context.Context, inspector *images.OCIClient, regis
 		return manifestImage{}, err
 	}
 
-	digest, err := inspector.InspectManifest(ctx, localRef)
+	digest, err := inspectDigest()
 	if err != nil {
 		digest = res.Digest
 	}
 	return manifestImage{Source: img.Source, LocalRef: localRef, Digest: digest, CacheHit: false}, nil
 }
 
-// toLocalRegistryRef maps a source image to its local-registry reference. When a
-// non-host platform is requested the platform is encoded into the tag so the
-// mirrored ref is an unambiguous single-platform manifest. lib/instances'
-// integrationTestImageRef mirrors this exact mapping so tests resolve the same
-// ref.
+// toLocalRegistryRef maps a source image to its local-registry reference.
+// Platform-specific prewarm entries intentionally use the same ref as their
+// source; defaultImages must not include another platform for the same source
+// tag, so that local ref stays an unambiguous single-platform manifest.
 func toLocalRegistryRef(registry, source string) (string, error) {
 	ref, err := images.ParseNormalizedRef(source)
 	if err != nil {

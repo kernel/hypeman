@@ -3,6 +3,7 @@ package images
 import (
 	"context"
 	"fmt"
+	"strings"
 )
 
 // OCIClient is a public wrapper for system manager to use OCI operations
@@ -23,6 +24,19 @@ func NewOCIClient(cacheDir string) (*OCIClient, error) {
 // Always targets Linux platform since hypeman VMs are Linux guests.
 func (c *OCIClient) InspectManifest(ctx context.Context, imageRef string) (string, error) {
 	return c.client.inspectManifest(ctx, imageRef)
+}
+
+// InspectManifestForPlatform inspects a remote image to get the digest for a
+// specific platform variant. Empty platform uses the host platform.
+func (c *OCIClient) InspectManifestForPlatform(ctx context.Context, imageRef, platform string) (string, error) {
+	if strings.TrimSpace(platform) == "" {
+		return c.InspectManifest(ctx, imageRef)
+	}
+	resolvedPlatform, err := ParsePlatform(platform)
+	if err != nil {
+		return "", err
+	}
+	return c.client.inspectManifestWithPlatform(ctx, imageRef, resolvedPlatform.ToGCR())
 }
 
 // InspectManifestForLinux is an alias for InspectManifest (all images target Linux)
