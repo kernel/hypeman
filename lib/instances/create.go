@@ -130,6 +130,46 @@ func (m *manager) createInstance(
 			return nil, fmt.Errorf("get image: %w", err)
 		}
 	}
+
+	// A specific platform was requested: ensure we resolved THAT architecture.
+	// GetImage(tag) returns whatever architecture the tag currently points to, so
+	// an image cached at a different arch would be used as-is, silently ignoring
+	// the request (and disabling emulation). Resolve the requested platform by the
+	// digest the build keys its metadata on, rather than by the shared tag.
+	if req.Platform != "" {
+		want, platErr := images.ParsePlatform(req.Platform)
+		if platErr != nil {
+			imageSpanEnd(platErr)
+			return nil, fmt.Errorf("invalid platform %q: %w", req.Platform, platErr)
+		}
+		if imageInfo.Platform != want.String() {
+			created, cerr := m.imageManager.CreateImage(imageCtx, images.CreateImageRequest{Name: req.Image, Platform: req.Platform})
+			if cerr != nil {
+				imageSpanEnd(cerr)
+				log.ErrorContext(ctx, "failed to resolve image for requested platform", "image", req.Image, "platform", req.Platform, "error", cerr)
+				return nil, fmt.Errorf("resolve image %s for platform %s: %w", req.Image, req.Platform, cerr)
+			}
+			parsed, refErr := images.ParseNormalizedRef(req.Image)
+			if refErr != nil {
+				imageSpanEnd(refErr)
+				return nil, fmt.Errorf("parse image ref %q: %w", req.Image, refErr)
+			}
+			pinned := parsed.Repository() + "@" + created.Digest
+			waitCtx, waitCancel := context.WithTimeout(imageCtx, 5*time.Second)
+			defer waitCancel()
+			if waitErr := m.imageManager.WaitForReady(waitCtx, pinned); waitErr != nil {
+				imageSpanEnd(waitErr)
+				log.InfoContext(ctx, "platform image not ready within timeout, pull continues in background", "image", req.Image, "platform", req.Platform, "error", waitErr)
+				return nil, fmt.Errorf("%w: image %s is being pulled, please try again shortly", ErrImageNotReady, req.Image)
+			}
+			imageInfo, err = m.imageManager.GetImage(imageCtx, pinned)
+			if err != nil {
+				imageSpanEnd(err)
+				log.ErrorContext(ctx, "failed to get image for requested platform", "image", req.Image, "platform", req.Platform, "error", err)
+				return nil, fmt.Errorf("get image for platform: %w", err)
+			}
+		}
+	}
 	imageSpanEnd(nil)
 
 	if imageInfo.Status != images.StatusReady {
