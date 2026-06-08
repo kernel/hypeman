@@ -204,6 +204,12 @@ jobs:
       - name: Build
         run: make build
 
+      # TEMP(ci): one-off fork-speed benchmark (clonefile vs sparse) for the PR
+      # description. Remove after capturing the numbers.
+      - name: TEMP benchmark fork speed
+        run: |
+          go test -tags containers_image_openpgp -run='^$' -bench=BenchmarkForkGuestDisk -benchmem -benchtime=5x ./lib/forkvm/ 2>&1 | tee /tmp/forkbench.txt
+
       - name: Prewarm test cache
         env:
           HYPEMAN_TEST_REGISTRY: 127.0.0.1:5001
