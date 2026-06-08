@@ -145,6 +145,8 @@ func TestLoadEnvOverridesMetricsAndOtelInterval(t *testing.T) {
 }
 
 func TestLoadExpandsHomePathsFromConfigFile(t *testing.T) {
+	clearPathEnvOverrides(t)
+
 	tmp := t.TempDir()
 	cfgPath := filepath.Join(tmp, "config.yaml")
 	if err := os.WriteFile(cfgPath, []byte(`
@@ -183,6 +185,19 @@ hypervisor:
 	assertPath("build.docker_socket", cfg.Build.DockerSocket, filepath.Join(".colima", "default", "docker.sock"))
 	assertPath("registry.ca_cert_file", cfg.Registry.CACertFile, filepath.Join(".config", "hypeman", "ca.pem"))
 	assertPath("hypervisor.firecracker_binary_path", cfg.Hypervisor.FirecrackerBinaryPath, filepath.Join("bin", "firecracker"))
+}
+
+func clearPathEnvOverrides(t *testing.T) {
+	t.Helper()
+	for _, key := range []string{
+		"DATA_DIR",
+		"BUILD__SECRETS_DIR",
+		"BUILD__DOCKER_SOCKET",
+		"REGISTRY__CA_CERT_FILE",
+		"HYPERVISOR__FIRECRACKER_BINARY_PATH",
+	} {
+		t.Setenv(key, "")
+	}
 }
 
 func TestLoadExpandsHomePathsFromEnv(t *testing.T) {
