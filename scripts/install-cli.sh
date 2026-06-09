@@ -97,11 +97,12 @@ fi
 
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 SUDO=""
-if [ -w "$INSTALL_DIR" ]; then
+if [ -w "$INSTALL_DIR" ] || [ -w "$(dirname "$INSTALL_DIR")" ]; then
     :
 elif command -v sudo >/dev/null 2>&1; then
     SUDO="sudo"
 else
+    warn "${INSTALL_DIR} is not writable and sudo is unavailable; installing to ~/.local/bin instead"
     INSTALL_DIR="$HOME/.local/bin"
 fi
 $SUDO mkdir -p "$INSTALL_DIR"
