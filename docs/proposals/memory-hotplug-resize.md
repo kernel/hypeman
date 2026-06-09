@@ -21,11 +21,11 @@ This is explicitly scoped to vz. Cloud Hypervisor and Firecracker already expose
 
 - `cmd/vz-shim/vm.go:38` computes `memoryBytes := computeMemorySize(uint64(config.MemoryBytes))`.
 - `cmd/vz-shim/vm.go:42` passes it to `vz.NewVirtualMachineConfiguration(bootLoader, vcpus, memoryBytes)`. This is the *only* place memory size is set; there is no runtime `SetMemorySize`.
-- `cmd/vz-shim/vm.go:303-319` clamps the requested size into `[VirtualMachineConfigurationMinimumAllowedMemorySize(), VirtualMachineConfigurationMaximumAllowedMemorySize()]`.
+- `cmd/vz-shim/vm.go:307-323` clamps the requested size into `[VirtualMachineConfigurationMinimumAllowedMemorySize(), VirtualMachineConfigurationMaximumAllowedMemorySize()]`.
 
-**The boot size is the instance's `Size`.** `lib/instances/create.go:891` sets `MemoryBytes: inst.Size`, threaded into `ShimConfig.MemoryBytes` at `lib/hypervisor/vz/starter.go:165`. `HotplugBytes`/`HotplugSize` exist in the config (`lib/hypervisor/config.go:9`, `lib/instances/types.go:84`) but vz ignores them.
+**The boot size is the instance's `Size`.** `lib/instances/create.go:878` sets `MemoryBytes: inst.Size`, threaded into `ShimConfig.MemoryBytes` at `lib/hypervisor/vz/starter.go:165`. `HotplugBytes`/`HotplugSize` exist in the config (`lib/hypervisor/config.go:9`, `lib/instances/types.go:97`) but vz ignores them.
 
-**The only runtime memory lever is the balloon, and it only reclaims.** When `EnableMemoryBalloon` is set, the shim attaches a `VZVirtioTraditionalMemoryBalloonDevice` (`cmd/vz-shim/vm.go:75-87`), gated on `EnableMemoryBalloon` / `RequireMemoryBalloon` (`lib/hypervisor/vz/shimconfig/config.go:36-37`), which are populated from the guest-memory policy features (`lib/hypervisor/vz/starter.go:170-171`, `lib/instances/create.go:938-945`, `lib/guestmemory/policy.go:79-92`).
+**The only runtime memory lever is the balloon, and it only reclaims.** When `EnableMemoryBalloon` is set, the shim attaches a `VZVirtioTraditionalMemoryBalloonDevice` (`cmd/vz-shim/vm.go:79-91`), gated on `EnableMemoryBalloon` / `RequireMemoryBalloon` (`lib/hypervisor/vz/shimconfig/config.go:36-37`), which are populated from the guest-memory policy features (`lib/hypervisor/vz/starter.go:170-171`, `lib/instances/create.go:925-932`, `lib/guestmemory/policy.go:79-92`).
 
 The balloon control plane:
 
@@ -59,7 +59,7 @@ What Tart does:
 
 What hypeman should adopt:
 
-- **The minimum-resources floor guard.** Tart's `memorySizeMin` is exactly hypeman's `protected_floor` concept (`active_ballooning.protected_floor_*` → `protectedFloorBytes`, `planner.go:60-63`). hypeman should keep enforcing a hard lower bound on usable guest memory so a guest is never ballooned below a size it can function at, and should likewise clamp the *boot ceiling* into the framework's `[minimumAllowedMemorySize, maximumAllowedMemorySize]` range exactly as `computeMemorySize` already does (`vm.go:303-319`) and as Tart does in `setMemory`.
+- **The minimum-resources floor guard.** Tart's `memorySizeMin` is exactly hypeman's `protected_floor` concept (`active_ballooning.protected_floor_*` → `protectedFloorBytes`, `planner.go:60-63`). hypeman should keep enforcing a hard lower bound on usable guest memory so a guest is never ballooned below a size it can function at, and should likewise clamp the *boot ceiling* into the framework's `[minimumAllowedMemorySize, maximumAllowedMemorySize]` range exactly as `computeMemorySize` already does (`vm.go:307-323`) and as Tart does in `setMemory`.
 - **Treating "the number you give the VZ configuration" as the hard ceiling.** Tart's `configuration.memorySize` is the immovable boot size; hypeman's `NewVirtualMachineConfiguration` argument is the same. This RFC's central move — choose that number deliberately as a *ceiling* rather than a *baseline* — only works because both projects agree this value is fixed for the VM's lifetime.
 
 Where hypeman should diverge:
@@ -91,7 +91,7 @@ The shim boots the machine at `ceiling`, then, before/at the moment the guest st
 - guest demand rises → deflate balloon → guest sees more, up to `ceiling`, no reboot;
 - host under pressure → inflate balloon → guest gives memory back, down to `floor`.
 
-Because vz/Linux memory backing is lazy (pages are host-resident only once touched, which is exactly why `config.example.darwin.yaml` ships `kernel_page_init_mode` and why `assertLowIdleVZHostMemoryFootprint` in `guestmemory_darwin_test.go:143-166` asserts a low idle RSS), booting at a larger ceiling does **not** make the host pay for the ceiling while the guest sits at baseline. The cost of a higher ceiling is address-space/bookkeeping, not resident RAM, as long as the balloon holds the guest down and the guest doesn't touch the ballooned pages. This is the property that makes the technique pay off.
+Because vz/Linux memory backing is lazy (pages are host-resident only once touched, which is exactly why `config.example.darwin.yaml` ships `kernel_page_init_mode` and why `assertLowIdleVZHostMemoryFootprint` in `lib/instances/guestmemory_darwin_test.go:143-166` asserts a low idle RSS), booting at a larger ceiling does **not** make the host pay for the ceiling while the guest sits at baseline. The cost of a higher ceiling is address-space/bookkeeping, not resident RAM, as long as the balloon holds the guest down and the guest doesn't touch the ballooned pages. This is the property that makes the technique pay off.
 
 ### Config-time changes (vz-shim)
 
@@ -128,7 +128,7 @@ bootBytes := uint64(config.MemoryBytes)
 if config.MemoryCeilingBytes > config.MemoryBytes {
 	bootBytes = uint64(config.MemoryCeilingBytes)
 }
-memoryBytes := computeMemorySize(bootBytes) // existing min/max clamp, vm.go:303-319
+memoryBytes := computeMemorySize(bootBytes) // existing min/max clamp, vm.go:307-323
 // ...
 vmConfig, err := vz.NewVirtualMachineConfiguration(bootLoader, vcpus, memoryBytes)
 ```
@@ -138,7 +138,7 @@ A ceiling requires the balloon. Boot-at-ceiling without a balloon would leave th
 ```go
 //go:build darwin
 
-// cmd/vz-shim/vm.go (balloon block, replacing vm.go:75-87)
+// cmd/vz-shim/vm.go (balloon block, replacing vm.go:79-91)
 ceilingActive := config.MemoryCeilingBytes > config.MemoryBytes
 if config.EnableMemoryBalloon || ceilingActive {
 	balloonConfig, err := vz.NewVirtioTraditionalMemoryBalloonDeviceConfiguration()
@@ -235,7 +235,7 @@ func growthTargetBytes(cfg ActiveBallooningConfig, c candidateState, demand gues
 SupportsLiveMemoryCeiling bool
 ```
 
-For vz this is `true` exactly when a ceiling is configured; `SupportsHotplugMemory` stays `false` (we are not hotplugging — we are deflating a pre-sized balloon). No other hypervisor sets it.
+For vz this is `true` exactly when a ceiling is configured; `SupportsHotplugMemory` stays `false` (we are not hotplugging — we are deflating a pre-sized balloon). No other hypervisor sets it. Like the merged `EnableRosetta` flag, this is derived internally from config rather than surfaced as a user-facing request knob — `EnableRosetta` states that contract directly ("Derived internally … not a user-facing field", `lib/instances/types.go:163-166`), and the ceiling-implies-balloon requirement below follows the same derive-from-config approach.
 
 ### Why this reuses the existing machinery rather than adding knobs
 
@@ -262,9 +262,9 @@ Add an optional per-instance memory ceiling. It defaults to the baseline (no cei
 MemoryCeilingBytes int64 // 0 = no ceiling (boot at Size)
 ```
 
-Threaded: `CreateInstanceRequest.MemoryCeilingBytes` → stored on the instance → `hypervisor.VMConfig` (new field) → `buildShimConfigFromVMConfig` (`starter.go:161-188`) → `ShimConfig.MemoryCeilingBytes`. The ceiling is persisted on the instance so it survives standby/restore (the shim config is already round-tripped through the snapshot manifest — `shimconfig.SnapshotManifest`, `server.go:186-205`; the restore path rebuilds `ShimConfig` at `starter.go:148-156`).
+Threaded: `CreateInstanceRequest.MemoryCeilingBytes` → stored on the instance → `hypervisor.VMConfig` (new field) → `buildShimConfigFromVMConfig` (`starter.go:161-188`) → `ShimConfig.MemoryCeilingBytes`. This is the same path the `Platform`/`EnableRosetta` fields already take, so it is proven plumbing rather than new machinery: the user-facing `Platform` rides `CreateInstanceRequest` → instance (`lib/instances/types.go:252`, `:93`), and the *derived* `EnableRosetta` flag is computed during create (`deriveEnableRosetta`, `lib/instances/rosetta.go:17`, called `create.go:119`), carried on `hypervisor.VMConfig` (`lib/hypervisor/config.go:36`), copied by `buildShimConfigFromVMConfig` (`starter.go:172`), and consumed as `ShimConfig.EnableRosetta` (`shimconfig/config.go:42`). `MemoryCeilingBytes` adds one field at each of those same hops. The ceiling is persisted on the instance so it survives standby/restore (the shim config is already round-tripped through the snapshot manifest — `shimconfig.SnapshotManifest`, `server.go:186-205`; the restore path rebuilds `ShimConfig` at `starter.go:148-156`).
 
-Validation, mirroring Tart's `setMemory` floor guard (`VMConfig.swift:178-190`) and the existing `computeMemorySize` clamp (`vm.go:303-319`):
+Validation, mirroring Tart's `setMemory` floor guard (`VMConfig.swift:178-190`) and the existing `computeMemorySize` clamp (`vm.go:307-323`):
 
 - `MemoryCeilingBytes == 0` → no ceiling.
 - `0 < MemoryCeilingBytes ≤ Size` → reject (ceiling below baseline is meaningless).
@@ -304,8 +304,8 @@ The doc comment in `config.example.darwin.yaml:163-164` ("CPU/Memory Hotplug —
 ## Platform constraints & edge cases
 
 - **macOS version.** The traditional memory balloon device is macOS 11+ (`memory_balloon.go:39-44`); the whole vz backend already requires it. No new minimum is introduced by ballooning itself. Snapshots remain macOS 14+ on Apple Silicon (`config.example.darwin.yaml:169-172`), which matters only for ceiling VMs that are also snapshotted (the manifest already carries the shim config, so the ceiling is preserved across restore).
-- **Apple Silicon only.** vz Linux guests under hypeman target arm64 (`guestmemory_darwin_test.go:30-32`; `SupportsSnapshot = runtime.GOARCH == "arm64"`, `client.go:87`). No change.
-- **Ceiling is bounded by host RAM, not by APFS or disk.** `VirtualMachineConfigurationMaximumAllowedMemorySize()` (`configuration.go:312`) returns a value derived from physical host memory; the framework rejects configurations above it at `Validate()` time (`vm.go:89-91`). Memory here is RAM-backed, so there is **no** disk-image or APFS-volume-boundary concern for the memory feature specifically — unlike disk resizing, which Tart explicitly documents as one-directional to avoid data loss (`Set.swift:34-37`). The ceiling math is purely "sum of VM ceilings vs. host RAM," and admission control should reason about the **baseline** for packing (since that's the resident cost at idle) while treating the **ceiling** as the worst case the balloon controller must be able to claw back under pressure.
+- **Apple Silicon only.** vz Linux guests under hypeman target arm64 (`lib/instances/guestmemory_darwin_test.go:30-32`; `SupportsSnapshot = runtime.GOARCH == "arm64"`, `client.go:87`). No change.
+- **Ceiling is bounded by host RAM, not by APFS or disk.** `VirtualMachineConfigurationMaximumAllowedMemorySize()` (`configuration.go:312`) returns a value derived from physical host memory; the framework rejects configurations above it at `Validate()` time (`vm.go:93`). Memory here is RAM-backed, so there is **no** disk-image or APFS-volume-boundary concern for the memory feature specifically — unlike disk resizing, which Tart explicitly documents as one-directional to avoid data loss (`Set.swift:34-37`). The ceiling math is purely "sum of VM ceilings vs. host RAM," and admission control should reason about the **baseline** for packing (since that's the resident cost at idle) while treating the **ceiling** as the worst case the balloon controller must be able to claw back under pressure.
 - **Oversubscription risk.** Booting at the ceiling makes a guest *capable* of touching ceiling-many pages. If many guests simultaneously grow toward their ceilings while the host is healthy, then the host swings into pressure, the controller must reclaim fast enough. This is bounded by `per_vm_max_step_bytes` (reclaim is incremental) and the protected floor (a guest is never squeezed below a usable size). The honest failure mode: if aggregate demand exceeds host RAM faster than the balloon can inflate, the host swaps. Grow-on-demand is therefore off by default and rate-limited; the safe default deployment is "boot at ceiling, hold at baseline, only ever deflate toward ceiling under explicit opt-in."
 - **Balloon refusal / partial inflation.** `SetTargetVirtualMachineMemorySize` is a request; the guest's balloon driver fulfills it asynchronously and may lag or partially comply (e.g. under guest memory pressure with `deflate-on-OOM` semantics). The controller already reads back the *target* (`GetTargetVirtualMachineMemorySize`, `server.go:224`) — note this is the target, not the achieved size, so accounting is target-based, same as today. No new guarantee is claimed about instantaneous compliance.
 - **Lazy backing assumption.** The density win depends on the guest not touching ballooned pages. A guest configured with `kernel_page_init_mode: hardened` (`init_on_alloc=1 init_on_free=1`, `policy.go:64-76`) touches more pages on alloc/free; the `performance` mode preserves lazy host allocation. Ceiling VMs that care about density should run `performance` page-init, exactly the tradeoff the existing knob encodes.
@@ -313,7 +313,7 @@ The doc comment in `config.example.darwin.yaml:163-164` ("CPU/Memory Hotplug —
 
 ## Testing plan
 
-Extend the existing darwin manual integration tests (gated by `requireGuestMemoryManualRun`, darwin, arm64 — `guestmemory_darwin_test.go:25-32`) and the unit tests for the controller/planner.
+Extend the existing darwin manual integration tests (gated by `requireGuestMemoryManualRun`, darwin, arm64 — `lib/instances/guestmemory_darwin_test.go:25-32`) and the unit tests for the controller/planner.
 
 Unit (host-independent, run everywhere):
 
@@ -321,12 +321,12 @@ Unit (host-independent, run everywhere):
 - `controller_test.go`: with `AssignedMemoryBytes` = ceiling and current target = baseline, a healthy host with grow enabled raises the target by at most `per_vm_max_step_bytes` per reconcile and respects `per_vm_cooldown` (the clamps at `controller.go:243-258` already exist; assert they bound the grow path too).
 - `ActiveBallooningConfig.Normalize`: `GrowUtilizationPercent` clamps to `(0,100)` and defaults to 85 when unset/invalid.
 
-Integration (darwin/arm64, manual), extending `guestmemory_darwin_test.go`:
+Integration (darwin/arm64, manual), extending `lib/instances/guestmemory_darwin_test.go`:
 
-- **Boot-at-ceiling.** Create a vz instance with `Size = 1 GiB`, `MemoryCeilingBytes = 4 GiB`. Assert `getVZVMInfo` reports a balloon device (`guestmemory_darwin_test.go:64-66`). Read `/proc/meminfo` `MemTotal` over the exec agent (`vzExecCommand`, used at `guestmemory_darwin_test.go:58-60`) and assert it reflects the *boot* size (~4 GiB) — the guest kernel sees the ceiling.
-- **Balloon-to-baseline.** After startup, assert `GET /api/v1/vm.balloon` target ≈ 1 GiB and that guest `MemAvailable` shrinks accordingly, while host RSS of the shim stays low (reuse `assertLowIdleVZHostMemoryFootprint`, `guestmemory_darwin_test.go:143-166`) — proving the ceiling didn't cost resident host RAM at baseline.
+- **Boot-at-ceiling.** Create a vz instance with `Size = 1 GiB`, `MemoryCeilingBytes = 4 GiB`. Assert `getVZVMInfo` reports a balloon device (`lib/instances/guestmemory_darwin_test.go:64-66`). Read `/proc/meminfo` `MemTotal` over the exec agent (`vzExecCommand`, used at `lib/instances/guestmemory_darwin_test.go:58-60`) and assert it reflects the *boot* size (~4 GiB) — the guest kernel sees the ceiling.
+- **Balloon-to-baseline.** After startup, assert `GET /api/v1/vm.balloon` target ≈ 1 GiB and that guest `MemAvailable` shrinks accordingly, while host RSS of the shim stays low (reuse `assertLowIdleVZHostMemoryFootprint`, `lib/instances/guestmemory_darwin_test.go:143-166`) — proving the ceiling didn't cost resident host RAM at baseline.
 - **Live grow.** `PUT /api/v1/vm.balloon` with target 4 GiB (or drive the controller with `GrowOnDemandEnabled` and a synthetic high-utilization signal); assert the guest's usable memory climbs toward 4 GiB *without a reboot* (no change in `getVZVMInfo` state transitions, instance not recreated).
-- **Live shrink under pressure.** Reuse `assertActiveBallooningLifecycle` (`guestmemory_darwin_test.go:72`) with an injected `PressureSampler` (the controller already supports injection — `NewControllerWithSampler`, `active_ballooning.go:198`) reporting `Stressed: true`; assert the target drops toward the floor and never below `protectedFloor`.
+- **Live shrink under pressure.** Reuse `assertActiveBallooningLifecycle` (`lib/instances/guestmemory_darwin_test.go:72`) with an injected `PressureSampler` (the controller already supports injection — `NewControllerWithSampler`, `active_ballooning.go:198`) reporting `Stressed: true`; assert the target drops toward the floor and never below `protectedFloor`.
 - **Ceiling validation.** Unit-level: `CreateInstanceRequest` with ceiling ≤ size is rejected; ceiling above `VirtualMachineConfigurationMaximumAllowedMemorySize()` is rejected.
 
 ## Risks & alternatives considered
