@@ -666,6 +666,8 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 	pendingLevel := 3
 
 	src := StoredMetadata{
+		Image:         "docker.io/library/alpine:3.19",
+		ResolvedImage: "docker.io/library/alpine@sha256:amd64digest",
 		Platform:      "linux/amd64",
 		Env:           map[string]string{"A": "1"},
 		Tags:          map[string]string{"m": "x"},
@@ -710,6 +712,7 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 	cloned := cloneStoredMetadata(src)
 	require.Equal(t, src, cloned)
 	require.Equal(t, "linux/amd64", cloned.Platform, "resolved platform must survive fork/snapshot-restore")
+	require.Equal(t, "docker.io/library/alpine@sha256:amd64digest", cloned.ResolvedImage, "resolved boot image must survive fork/snapshot-restore")
 
 	cloned.Env["A"] = "2"
 	cloned.Tags["m"] = "y"

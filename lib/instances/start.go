@@ -79,17 +79,19 @@ func (m *manager) startInstance(
 		}()
 	}
 
-	// 3. Get image info (needed for buildHypervisorConfig)
-	log.DebugContext(ctx, "getting image info", "instance_id", id, "image", stored.Image)
+	// 3. Get image info (needed for buildHypervisorConfig). Resolve by the
+	// digest-pinned boot reference so a moved tag can't drift the rootfs/arch.
+	bootImage := bootImageRef(stored)
+	log.DebugContext(ctx, "getting image info", "instance_id", id, "image", bootImage)
 	imageCtx, imageSpanEnd := m.startLifecycleStep(ctx, "resolve_image",
 		attribute.String("instance_id", id),
 		attribute.String("hypervisor", string(stored.HypervisorType)),
 		attribute.String("operation", "resolve_image"),
 	)
-	imageInfo, err := m.imageManager.GetImage(imageCtx, stored.Image)
+	imageInfo, err := m.imageManager.GetImage(imageCtx, bootImage)
 	imageSpanEnd(err)
 	if err != nil {
-		log.ErrorContext(ctx, "failed to get image", "instance_id", id, "image", stored.Image, "error", err)
+		log.ErrorContext(ctx, "failed to get image", "instance_id", id, "image", bootImage, "error", err)
 		return nil, fmt.Errorf("get image: %w", err)
 	}
 

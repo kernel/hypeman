@@ -299,12 +299,9 @@ func TestQEMUBasicEndToEnd(t *testing.T) {
 	// Verify instance fields
 	assert.NotEmpty(t, inst.Id)
 	assert.Equal(t, "test-nginx-qemu", inst.Name)
-	// The stored instance image is digest-pinned at create time (resolveImageForCreate)
-	// so it is the requested repository pinned to the resolved manifest digest.
-	nginxRef := integrationTestImageRef(t, "docker.io/library/nginx:alpine")
-	nginxRepo := nginxRef[:strings.LastIndex(nginxRef, ":")]
-	assert.True(t, strings.HasPrefix(inst.Image, nginxRepo+"@sha256:"),
-		"expected digest-pinned image for %s, got %s", nginxRef, inst.Image)
+	// Image is the caller-supplied reference (display value); the digest-pinned
+	// boot reference is tracked separately in StoredMetadata.ResolvedImage.
+	assert.Equal(t, integrationTestImageRef(t, "docker.io/library/nginx:alpine"), inst.Image)
 	assert.Contains(t, []State{StateInitializing, StateRunning}, inst.State)
 	assert.Equal(t, hypervisor.TypeQEMU, inst.HypervisorType)
 	assert.False(t, inst.HasSnapshot)

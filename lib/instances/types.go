@@ -77,7 +77,15 @@ type StoredMetadata struct {
 	// Identification
 	Id    string // Auto-generated CUID2
 	Name  string
-	Image string // OCI reference
+	Image string // OCI reference as supplied by the caller (tag or digest); the display/API value
+
+	// ResolvedImage is the digest-pinned reference (repo@sha256:...) of the
+	// image actually resolved at create time. It is the source of truth for
+	// locating the rootfs on boot/start/restore, so a mutable tag (last-pull-wins)
+	// can't drift the instance to a different image/arch across restarts. Internal;
+	// not exposed on the API. Empty for instances created before this field existed
+	// (callers fall back to Image via bootImageRef).
+	ResolvedImage string
 
 	// Platform is the resolved image platform as os/arch[/variant] (e.g.
 	// "linux/amd64"), captured from the pulled image's metadata at create time.

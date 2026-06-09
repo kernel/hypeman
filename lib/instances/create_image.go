@@ -113,6 +113,20 @@ func storedImageNameForCreate(imageName string, img *images.Image) (string, erro
 	return pinnedImageName(imageName, img.Digest)
 }
 
+// bootImageRef returns the reference used to locate an instance's rootfs at
+// boot/start/restore. It prefers the digest-pinned ResolvedImage (so a mutable
+// tag can't drift the instance to a different image/arch) and falls back to the
+// caller-facing Image for instances created before ResolvedImage was persisted.
+func bootImageRef(stored *StoredMetadata) string {
+	if stored != nil && strings.TrimSpace(stored.ResolvedImage) != "" {
+		return stored.ResolvedImage
+	}
+	if stored == nil {
+		return ""
+	}
+	return stored.Image
+}
+
 func validateResolvedImagePlatform(img *images.Image, requestedPlatform string) error {
 	if img == nil {
 		return fmt.Errorf("%w: image did not resolve", ErrImageNotReady)

@@ -135,7 +135,10 @@ func (m *manager) createInstance(
 			"kernel", kernelVer,
 			"label", system.ImageKernelVersionLabel)
 	}
-	storedImageName, err := storedImageNameForCreate(req.Image, imageInfo)
+	// resolvedImageRef is the digest-pinned reference used for boot/start/restore
+	// (stable across mutable tags). The caller-facing Image field keeps the
+	// original reference the user supplied for display/addressing.
+	resolvedImageRef, err := storedImageNameForCreate(req.Image, imageInfo)
 	if err != nil {
 		return nil, err
 	}
@@ -321,7 +324,8 @@ func (m *manager) createInstance(
 	stored := &StoredMetadata{
 		Id:                       id,
 		Name:                     req.Name,
-		Image:                    storedImageName,
+		Image:                    req.Image,
+		ResolvedImage:            resolvedImageRef,
 		Platform:                 imageInfo.Platform,
 		Size:                     size,
 		HotplugSize:              hotplugSize,

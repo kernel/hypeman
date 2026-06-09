@@ -69,10 +69,10 @@ func (m *manager) restoreInstance(
 		attribute.String("hypervisor", string(stored.HypervisorType)),
 		attribute.String("operation", "resolve_image"),
 	)
-	_, err = m.imageManager.GetImage(imageCtx, stored.Image)
+	_, err = m.imageManager.GetImage(imageCtx, bootImageRef(stored))
 	imageSpanEnd(err)
 	if err != nil {
-		log.ErrorContext(ctx, "failed to resolve image for restore", "instance_id", id, "image", stored.Image, "error", err)
+		log.ErrorContext(ctx, "failed to resolve image for restore", "instance_id", id, "image", bootImageRef(stored), "error", err)
 		return nil, fmt.Errorf("get image: %w", err)
 	}
 
@@ -250,9 +250,9 @@ func (m *manager) restoreInstance(
 			releaseNetwork()
 			return nil, fmt.Errorf("configure egress proxy: %w", err)
 		}
-		imageInfo, err := m.imageManager.GetImage(ctx, stored.Image)
+		imageInfo, err := m.imageManager.GetImage(ctx, bootImageRef(stored))
 		if err != nil {
-			log.ErrorContext(ctx, "failed to load image for config disk refresh", "instance_id", id, "image", stored.Image, "error", err)
+			log.ErrorContext(ctx, "failed to load image for config disk refresh", "instance_id", id, "image", bootImageRef(stored), "error", err)
 			releaseNetwork()
 			return nil, fmt.Errorf("get image for restore config disk: %w", err)
 		}
