@@ -28,7 +28,11 @@ type Client struct {
 
 	// liveMemoryCeiling is set when this VM was booted at a ceiling above its
 	// baseline (see ShimConfig.MemoryCeilingBytes). It is surfaced through
-	// Capabilities so callers can tell a ceiling VM apart from a fixed one.
+	// Capabilities so callers can tell a ceiling VM apart from a fixed one. Only
+	// the client returned by StartVM/RestoreVM knows the ceiling; the shim does not
+	// expose it over the API, so a client built by NewClient on a bare reconnect
+	// reports false. Read it only off the start/restore client until the shim
+	// surfaces the ceiling (RFC milestone 2).
 	liveMemoryCeiling bool
 }
 

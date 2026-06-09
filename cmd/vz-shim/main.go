@@ -71,7 +71,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "failed to start VM: %v\n", err)
 			os.Exit(1)
 		}
-		slog.Info("VM started", "vcpus", config.VCPUs, "memory_mb", config.MemoryBytes/1024/1024)
+		bootBytes := config.MemoryBytes
+		if config.MemoryCeilingBytes > config.MemoryBytes {
+			bootBytes = config.MemoryCeilingBytes
+		}
+		slog.Info("VM started", "vcpus", config.VCPUs, "boot_memory_mb", bootBytes/1024/1024, "baseline_memory_mb", config.MemoryBytes/1024/1024)
 	}
 
 	// Create the shim server

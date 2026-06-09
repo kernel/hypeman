@@ -35,11 +35,20 @@ func createVM(config *shimconfig.ShimConfig) (*vz.VirtualMachine, *vz.VirtualMac
 	}
 
 	vcpus := computeCPUCount(config.VCPUs)
+	ceilingActive := config.MemoryCeilingBytes > config.MemoryBytes
 	bootBytes := uint64(config.MemoryBytes)
-	if config.MemoryCeilingBytes > config.MemoryBytes {
+	if ceilingActive {
 		bootBytes = uint64(config.MemoryCeilingBytes)
 	}
 	memoryBytes := computeMemorySize(bootBytes)
+	// computeMemorySize clamps an over-large request down to the host maximum. For
+	// an ordinary VM that is the desired fallback, but a ceiling that gets clamped
+	// would boot smaller than requested while the controller still treats the full
+	// ceiling as the balloon's upper bound, letting it drive the target above the
+	// guest's real memory. Reject instead, per the boot-ceiling contract.
+	if ceilingActive && memoryBytes < uint64(config.MemoryCeilingBytes) {
+		return nil, nil, fmt.Errorf("memory ceiling %d exceeds host maximum %d", config.MemoryCeilingBytes, vz.VirtualMachineConfigurationMaximumAllowedMemorySize())
+	}
 
 	slog.Debug("VM config", "vcpus", vcpus, "memory_bytes", memoryBytes, "kernel", config.KernelPath, "initrd", config.InitrdPath)
 
@@ -83,7 +92,6 @@ func createVM(config *shimconfig.ShimConfig) (*vz.VirtualMachine, *vz.VirtualMac
 	// A memory ceiling boots the VM larger than its baseline and relies on the
 	// balloon to hold the guest down, so the balloon is mandatory whenever a
 	// ceiling is active regardless of the EnableMemoryBalloon/RequireMemoryBalloon flags.
-	ceilingActive := config.MemoryCeilingBytes > config.MemoryBytes
 	if config.EnableMemoryBalloon || ceilingActive {
 		balloonConfig, err := vz.NewVirtioTraditionalMemoryBalloonDeviceConfiguration()
 		if err != nil {

@@ -164,7 +164,7 @@ func (m *manager) createInstance(
 		size = 1 * 1024 * 1024 * 1024 // 1GB default
 	}
 	hotplugSize := req.HotplugSize
-	if err := validateMemoryCeiling(req.MemoryCeilingBytes, size); err != nil {
+	if err := validateMemoryCeiling(req.MemoryCeilingBytes, size, hvType); err != nil {
 		return nil, err
 	}
 	overlaySize := req.OverlaySize

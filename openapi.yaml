@@ -1011,7 +1011,7 @@ components:
           example: "2GB"
         memory_ceiling:
           type: string
-          description: Resolved boot memory ceiling (human-readable). Present when the VM was created with a ceiling above its size; usable memory can grow up to this via the balloon. vz only.
+          description: Boot memory ceiling the VM was created with (human-readable). Present when set above size; usable memory can grow up to this via the balloon. vz only.
           example: "4GB"
         overlay_size:
           type: string
