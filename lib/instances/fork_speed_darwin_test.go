@@ -101,6 +101,10 @@ func TestVZForkSpeed(t *testing.T) {
 	_, err = mgr.StopInstance(ctx, source.Id)
 	require.NoError(t, err)
 
+	// Reset the global reflink flag however the test exits — a require failure
+	// mid-loop would otherwise leak the disabled state into other tests.
+	t.Cleanup(func() { forkvm.SetReflinkDisabled(false) })
+
 	for _, mode := range []struct {
 		name     string
 		disabled bool
@@ -119,7 +123,6 @@ func TestVZForkSpeed(t *testing.T) {
 			elapsed := time.Since(start)
 			if ferr != nil {
 				dumpVZShimLogs(t, tmpDir)
-				forkvm.SetReflinkDisabled(false)
 				require.NoError(t, ferr)
 			}
 			total += elapsed
@@ -127,5 +130,4 @@ func TestVZForkSpeed(t *testing.T) {
 		}
 		t.Logf("FORKBENCH mode=%-9s disk=%dMiB iters=%d avg=%v", mode.name, fillMiB, iters, total/iters)
 	}
-	forkvm.SetReflinkDisabled(false)
 }

@@ -52,7 +52,13 @@ func writeDenseFile(path string, sizeBytes int64) error {
 // BenchmarkForkGuestDisk measures the dominant cost of forking a VM on macOS:
 // copying the guest disk. It compares the APFS clonefile(2) fast path against
 // the sparse-copy fallback, which is the pre-clonefile behavior (reflink
-// disabled). Run with, e.g.:
+// disabled).
+//
+// Both sub-benchmarks read the same source file, so by the time the sparse run
+// executes the source is cache-warm: the clonefile-vs-sparse ratio is valid, but
+// read the absolute sparse number as a warm-cache best case, not a cold read.
+//
+// Run with, e.g.:
 //
 //	go test -run='^$' -bench=BenchmarkForkGuestDisk -benchmem -benchtime=5x ./lib/forkvm/
 func BenchmarkForkGuestDisk(b *testing.B) {

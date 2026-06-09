@@ -55,7 +55,7 @@ func TestCopyGuestDirectory_CloneCorrectness(t *testing.T) {
 	socketPath := filepath.Join(src, "vsock.sock")
 	listener, err := net.Listen("unix", socketPath)
 	require.NoError(t, err)
-	defer func() { _ = listener.Close() }()
+	t.Cleanup(func() { _ = listener.Close() })
 
 	// Probe the volume so a non-APFS runner skips (or fails under CI) before we
 	// assert on clone output rather than silently exercising the sparse path.
@@ -107,6 +107,30 @@ func TestCopyRegularFileReflink_StaleDestination(t *testing.T) {
 	info, err := os.Stat(dst)
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0644), info.Mode().Perm())
+}
+
+// TestCopyRegularFileReflink_WriteIsolation verifies the clone is copy-on-write:
+// mutating the clone must not change the source. This is the headline correctness
+// property of the fast path — a fork must never corrupt the instance it forked from.
+func TestCopyRegularFileReflink_WriteIsolation(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "rootfs.ext4")
+	dst := filepath.Join(dir, "fork.ext4")
+
+	orig := bytes.Repeat([]byte("source-data"), 8192)
+	require.NoError(t, os.WriteFile(src, orig, 0644))
+
+	err := copyRegularFileReflink(src, dst, 0644)
+	skipUnlessAPFS(t, err)
+	require.NoError(t, err)
+
+	// Diverge the clone by overwriting it entirely.
+	require.NoError(t, os.WriteFile(dst, bytes.Repeat([]byte("forked-data!"), 8192), 0644))
+
+	// The source must be byte-for-byte unchanged (copy-on-write).
+	got, err := os.ReadFile(src)
+	require.NoError(t, err)
+	assert.True(t, bytes.Equal(orig, got), "writing to the clone must not modify the source")
 }
 
 // TestCopyGuestDirectory_DarwinReflinkFallback drives the darwin-specific

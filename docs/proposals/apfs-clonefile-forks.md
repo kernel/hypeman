@@ -261,7 +261,7 @@ This is optional and called out as an open question rather than a hard requireme
 
 ## Platform constraints & edge cases
 
-- **`clonefile(2)` availability.** `clonefile` has existed since macOS 10.12 (APFS's introduction). Every Apple Silicon machine ships APFS and a macOS version far newer than that, so on the supported target (hypeman's darwin/VZ host is Apple Silicon) the syscall is always present. The `x/sys` wrappers we depend on are gated `//go:build darwin && arm64` (and an identical `darwin && amd64` variant exists), so an Intel-mac build also links them; the implementation is not arm64-specific in any way that matters.
+- **`clonefile(2)` availability.** `clonefile` has existed since macOS 10.12 (APFS's introduction). Every Apple Silicon machine ships APFS and a macOS version far newer than that, so on the supported target (hypeman's darwin/VZ host is Apple Silicon) the syscall is always present. `unix.Clonefile` is generated per-arch in `x/sys` (`zsyscall_darwin_arm64.go` and `zsyscall_darwin_amd64.go`), so it links on both Apple Silicon and Intel macs — verified with `GOOS=darwin GOARCH=amd64 go doc golang.org/x/sys/unix Clonefile`. The implementation is not arm64-specific.
 
 - **Cross-volume `EXDEV` is the central constraint.** `clonefile(2)` only works when source and destination live on the **same APFS volume** (the same logical volume within an APFS container — block sharing cannot cross volume boundaries). hypeman keeps both the source and destination of a fork under a single `dataDir`:
   - source: `SnapshotGuestDir(snapshotID)` = `dataDir/snapshots/<id>/guest` (`lib/paths/paths.go:284`).
