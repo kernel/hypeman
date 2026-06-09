@@ -154,6 +154,10 @@ type ManifestInspector interface {
 }
 
 // Resolve returns a ResolvedRef by inspecting the manifest to get the authoritative digest.
+//
+// TODO(followup) kernel/hypeman#283: Resolve and ResolveForPlatform are
+// near-duplicates (platform-less vs platform-aware manifest inspection);
+// consider unifying them behind one path.
 func (r *NormalizedRef) Resolve(ctx context.Context, inspector ManifestInspector) (*ResolvedRef, error) {
 	digest, err := inspector.inspectManifest(ctx, r.String())
 	if err != nil {

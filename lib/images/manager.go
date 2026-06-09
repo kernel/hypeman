@@ -248,6 +248,8 @@ func (m *manager) createAndQueueImage(ref *ResolvedRef, req CreateImageRequest) 
 	// buildImage overwrites it with the authoritative manifest platform once the
 	// image config is pulled. resolveRequestPlatform already validated req, so
 	// the error here is unreachable in practice.
+	// TODO(followup) kernel/hypeman#283: pass the already-parsed platform from
+	// CreateImage instead of re-resolving here (also removes this dead error path).
 	requestedPlatform, err := resolveRequestPlatform(req.Platform)
 	if err != nil {
 		return nil, err
