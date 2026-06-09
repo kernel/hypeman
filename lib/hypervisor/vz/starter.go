@@ -169,6 +169,7 @@ func buildShimConfigFromVMConfig(config hypervisor.VMConfig, socketPath string) 
 		KernelArgs:           config.KernelArgs,
 		EnableMemoryBalloon:  config.GuestMemory.EnableBalloon,
 		RequireMemoryBalloon: config.GuestMemory.RequireBalloon,
+		EnableRosetta:        config.EnableRosetta,
 		ControlSocket:        socketPath,
 		VsockSocket:          filepath.Join(instanceDir, "vz.vsock"),
 		LogPath:              filepath.Join(instanceDir, "logs", "vz-shim.log"),

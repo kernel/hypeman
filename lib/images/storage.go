@@ -16,6 +16,7 @@ import (
 type imageMetadata struct {
 	Name       string              `json:"name"`   // Normalized ref (tag or digest)
 	Digest     string              `json:"digest"` // Always present: sha256:...
+	Platform   string              `json:"platform,omitempty"`
 	Status     string              `json:"status"`
 	Error      *string             `json:"error,omitempty"`
 	Request    *CreateImageRequest `json:"request,omitempty"`
@@ -30,9 +31,15 @@ type imageMetadata struct {
 }
 
 func (m *imageMetadata) toImage() *Image {
+	platform := m.Platform
+	if platform == "" {
+		// Images predating platform tracking were pulled at the host platform.
+		platform = hostPlatform().String()
+	}
 	img := &Image{
 		Name:      m.Name,
 		Digest:    m.Digest,
+		Platform:  platform,
 		Status:    m.Status,
 		Error:     m.Error,
 		CreatedAt: m.CreatedAt,
@@ -160,8 +167,15 @@ func readMetadata(p *paths.Paths, repository, digestHex string) (*imageMetadata,
 	return &meta, nil
 }
 
-// createTagSymlink creates or updates a tag symlink to point to a digest
-// Only creates the symlink if the digest dir exists and build is ready
+// createTagSymlink creates or updates a tag symlink to point to a digest (only
+// if the digest dir exists and the build is ready).
+//
+// Tag ownership is Docker last-pull-wins: the most recent pull of a tag always
+// owns the symlink, regardless of platform. An earlier gate only repointed for
+// host-native pulls, which silently stranded emulated variants (e.g.
+// `pull --platform linux/amd64 alpine:3.19` could never make `image get` report
+// amd64) and was non-recoverable. Always repointing is symmetric and matches
+// Docker; callers repoint unconditionally on a ready digest.
 func createTagSymlink(p *paths.Paths, repository, tag, digestHex string) error {
 	linkPath := tagSymlinkPath(p, repository, tag)
 	targetPath := digestHex // Relative path (just the digest hex)

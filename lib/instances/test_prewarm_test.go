@@ -47,13 +47,6 @@ func integrationTestImageRef(t *testing.T, source string) string {
 	}
 	repo = strings.TrimPrefix(repo, "docker.io/")
 
-	if ref.Tag() != "" {
-		mapped := registry + "/" + repo + ":" + ref.Tag()
-		registryLogOnce.Do(func() {
-			t.Logf("using test registry mirror source=%s mapped=%s", source, mapped)
-		})
-		return mapped
-	}
 	if ref.Digest() != "" {
 		mapped := registry + "/" + repo + "@" + ref.Digest()
 		registryLogOnce.Do(func() {
@@ -62,7 +55,11 @@ func integrationTestImageRef(t *testing.T, source string) string {
 		return mapped
 	}
 
-	mapped := registry + "/" + repo + ":latest"
+	tag := ref.Tag()
+	if tag == "" {
+		tag = "latest"
+	}
+	mapped := registry + "/" + repo + ":" + tag
 	registryLogOnce.Do(func() {
 		t.Logf("using test registry mirror source=%s mapped=%s", source, mapped)
 	})

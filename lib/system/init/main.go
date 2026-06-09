@@ -101,6 +101,14 @@ func main() {
 		dropToShell()
 	}
 
+	// Phase 6.5: Register Rosetta x86-64 emulation if enabled. Non-fatal:
+	// arm64 workloads still run; only amd64 execution is affected.
+	if cfg.EnableRosetta {
+		if err := setupRosetta(log, cfg.InitMode == "systemd"); err != nil {
+			log.Error("hypeman-init:rosetta", "failed to set up rosetta", err)
+		}
+	}
+
 	// Phase 7: Copy guest-agent to target location (skips if already exists or skip_guest_agent=true)
 	if err := copyGuestAgent(log, cfg.SkipGuestAgent); err != nil {
 		log.Error("hypeman-init:agent", "failed to copy guest-agent", err)

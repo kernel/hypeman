@@ -168,7 +168,7 @@ func convertToExt4(rootfsDir, diskPath string) (int64, error) {
 	// -O ^has_journal: Disable journal (not needed for read-only VM mounts)
 	// -d: Copy directory contents into filesystem
 	// -F: Force creation (file not block device)
-	cmd := exec.Command("mkfs.ext4", "-b", "4096", "-O", "^has_journal", "-d", rootfsDir, "-F", diskPath)
+	cmd := exec.Command(mkfsExt4Binary(), "-b", "4096", "-O", "^has_journal", "-d", rootfsDir, "-F", diskPath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return 0, fmt.Errorf("mkfs.ext4 failed: %w, output: %s", err, output)
@@ -265,11 +265,26 @@ func CreateEmptyExt4Disk(diskPath string, sizeBytes int64) error {
 	}
 
 	// Format as ext4 with 4KB blocks (matches sector alignment)
-	cmd := exec.Command("mkfs.ext4", "-b", "4096", "-F", diskPath)
+	cmd := exec.Command(mkfsExt4Binary(), "-b", "4096", "-F", diskPath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("mkfs.ext4 failed: %w, output: %s", err, output)
 	}
 
 	return nil
+}
+
+func mkfsExt4Binary() string {
+	if path, err := exec.LookPath("mkfs.ext4"); err == nil {
+		return path
+	}
+	for _, path := range []string{
+		"/opt/homebrew/opt/e2fsprogs/sbin/mkfs.ext4",
+		"/usr/local/opt/e2fsprogs/sbin/mkfs.ext4",
+	} {
+		if info, err := os.Stat(path); err == nil && !info.IsDir() && info.Mode()&0111 != 0 {
+			return path
+		}
+	}
+	return "mkfs.ext4"
 }

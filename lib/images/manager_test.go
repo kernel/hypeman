@@ -137,6 +137,38 @@ func TestCreateImageDuplicate(t *testing.T) {
 	require.Equal(t, img1.Digest, img2.Digest) // Same digest
 }
 
+func TestTagFollowsLastPull(t *testing.T) {
+	// Docker last-pull-wins: a tag is always repointed to the most recently
+	// pulled digest regardless of platform. This is the HIGH-2 guarantee -- an
+	// emulated (amd64-on-arm64) pull must be able to move the tag back after a
+	// host-native pull moved it. Drive createTagSymlink directly with two
+	// distinct digests in both orders and assert resolveTag follows the latest.
+	const (
+		repo   = "docker.io/library/alpine"
+		tag    = "3.19"
+		native = "1111111111111111111111111111111111111111111111111111111111111111"
+		emul   = "2222222222222222222222222222222222222222222222222222222222222222"
+	)
+
+	check := func(t *testing.T, first, second string) {
+		p := paths.New(t.TempDir())
+
+		require.NoError(t, createTagSymlink(p, repo, tag, first))
+		got, err := resolveTag(p, repo, tag)
+		require.NoError(t, err)
+		require.Equal(t, first, got)
+
+		// A later pull of the same tag (e.g. the emulated variant) must repoint.
+		require.NoError(t, createTagSymlink(p, repo, tag, second))
+		got, err = resolveTag(p, repo, tag)
+		require.NoError(t, err)
+		require.Equal(t, second, got, "tag must follow the most recent pull")
+	}
+
+	t.Run("native then emulated", func(t *testing.T) { check(t, native, emul) })
+	t.Run("emulated then native", func(t *testing.T) { check(t, emul, native) })
+}
+
 func TestListImages(t *testing.T) {
 	dataDir := t.TempDir()
 	mgr, err := NewManager(paths.New(dataDir), 1, nil)

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/distribution/reference"
+	gcr "github.com/google/go-containerregistry/pkg/v1"
 )
 
 // NormalizedRef is a validated and normalized OCI image reference.
@@ -148,13 +149,41 @@ func (r *ResolvedRef) DigestHex() string {
 // This requires an ociClient interface for manifest inspection.
 type ManifestInspector interface {
 	inspectManifest(ctx context.Context, imageRef string) (string, error)
+	inspectManifestWithPlatform(ctx context.Context, imageRef string, platform gcr.Platform) (string, error)
+	inspectDigestPlatform(ctx context.Context, imageRef string, requested gcr.Platform) (Platform, string, error)
 }
 
 // Resolve returns a ResolvedRef by inspecting the manifest to get the authoritative digest.
+//
+// TODO(followup) kernel/hypeman#283: Resolve and ResolveForPlatform are
+// near-duplicates (platform-less vs platform-aware manifest inspection);
+// consider unifying them behind one path.
 func (r *NormalizedRef) Resolve(ctx context.Context, inspector ManifestInspector) (*ResolvedRef, error) {
 	digest, err := inspector.inspectManifest(ctx, r.String())
 	if err != nil {
 		return nil, err
 	}
 	return NewResolvedRef(r, digest), nil
+}
+
+// ResolveForPlatform returns a ResolvedRef for the manifest matching platform.
+func (r *NormalizedRef) ResolveForPlatform(ctx context.Context, inspector ManifestInspector, platform gcr.Platform) (*ResolvedRef, error) {
+	digest, err := inspector.inspectManifestWithPlatform(ctx, r.String(), platform)
+	if err != nil {
+		return nil, err
+	}
+	return NewResolvedRef(r, digest), nil
+}
+
+// ResolveDigest resolves a digest-pinned reference for the requested platform. It
+// returns the platform the resolved image declares (for --platform validation)
+// and a ResolvedRef carrying the resolved child digest (so an index pin dedups
+// and is addressable by the same child digest as the equivalent tag pull, rather
+// than by the index digest). r must be a digest ref.
+func (r *NormalizedRef) ResolveDigest(ctx context.Context, inspector ManifestInspector, platform gcr.Platform) (Platform, *ResolvedRef, error) {
+	actual, resolvedDigest, err := inspector.inspectDigestPlatform(ctx, r.String(), platform)
+	if err != nil {
+		return Platform{}, nil, err
+	}
+	return actual, NewResolvedRef(r, resolvedDigest), nil
 }

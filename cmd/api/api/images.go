@@ -40,6 +40,9 @@ func (s *ApiService) CreateImage(ctx context.Context, request oapi.CreateImageRe
 		Name: request.Body.Name,
 		Tags: toMapTags(request.Body.Tags),
 	}
+	if request.Body.Platform != nil {
+		domainReq.Platform = *request.Body.Platform
+	}
 
 	img, err := s.ImageManager.CreateImage(ctx, domainReq)
 	if err != nil {
@@ -53,6 +56,21 @@ func (s *ApiService) CreateImage(ctx context.Context, request oapi.CreateImageRe
 			return oapi.CreateImage400JSONResponse{
 				Code:    "invalid_name",
 				Message: err.Error(),
+			}, nil
+		case errors.Is(err, images.ErrInvalidPlatform):
+			return oapi.CreateImage400JSONResponse{
+				Code:    "invalid_platform",
+				Message: err.Error(),
+			}, nil
+		case errors.Is(err, images.ErrPlatformNotAvailable):
+			return oapi.CreateImage404JSONResponse{
+				Code:    "platform_not_available",
+				Message: err.Error(),
+			}, nil
+		case errors.Is(err, images.ErrRateLimited):
+			return oapi.CreateImage429JSONResponse{
+				Code:    "rate_limited",
+				Message: "registry rate limit exceeded; retry later or authenticate to the registry",
 			}, nil
 		case errors.Is(err, images.ErrNotFound):
 			return oapi.CreateImage404JSONResponse{
@@ -115,6 +133,10 @@ func imageToOAPI(img images.Image) oapi.Image {
 		Error:         img.Error,
 		SizeBytes:     img.SizeBytes,
 		CreatedAt:     img.CreatedAt,
+	}
+
+	if img.Platform != "" {
+		oapiImg.Platform = &img.Platform
 	}
 
 	if len(img.Entrypoint) > 0 {
