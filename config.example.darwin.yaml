@@ -50,11 +50,14 @@ hypervisor:
       per_vm_max_step_bytes: 268435456
       per_vm_cooldown: 5s
       # Grow a guest's usable memory above its baseline toward its configured
-      # boot ceiling while the host is healthy. Off by default. Requires the
-      # instance to have been created with a memory ceiling above its size.
+      # boot ceiling while the host is healthy. Requires the instance to have
+      # been created with a memory ceiling above its size. NOTE: automatic grow
+      # is not active yet — it needs a per-guest memory-demand signal that is
+      # not wired up, so enabling this currently has no effect (ceiling VMs are
+      # held at their baseline; grow live via the balloon API instead). Off by default.
       grow_on_demand_enabled: false
-      # Deflate toward the ceiling only when the guest is using at least this
-      # percent of its current allowance. Ignored unless grow_on_demand_enabled.
+      # Utilization threshold for automatic grow once the demand signal lands.
+      # Unused today. Ignored unless grow_on_demand_enabled.
       grow_utilization_percent: 85
 
 # =============================================================================
