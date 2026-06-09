@@ -26,12 +26,15 @@ func resolveImageForCreate(ctx context.Context, imageManager createImageResolver
 	// architecture an instance boots.
 	resolvePlatform := platform
 	if strings.TrimSpace(resolvePlatform) == "" {
-		// A locally cached host-native (or platformless, e.g. locally built) image
-		// can be returned without a registry round-trip. We only accept the cached
-		// entry when it actually matches the host; otherwise we fall through to the
-		// host-pinned resolution below so a non-host tag pointer cannot leak in.
+		// A locally cached image with an explicitly host-native platform can be
+		// returned without a registry round-trip. We require the recorded platform
+		// to be non-empty and host-native: an empty/unknown platform (e.g. a legacy
+		// record written before platform tracking) is NOT assumed to be the host --
+		// it falls through to host-pinned resolution below so a non-host image can't
+		// leak in via the empty==host default in ImageNeedsHostEmulation, and so a
+		// non-host tag pointer cannot leak in either.
 		if img, err := imageManager.GetImage(ctx, imageName); err == nil {
-			if !images.ImageNeedsHostEmulation(img.Platform) {
+			if p := strings.TrimSpace(img.Platform); p != "" && !images.ImageNeedsHostEmulation(p) {
 				return img, nil
 			}
 		} else if !errors.Is(err, images.ErrNotFound) {

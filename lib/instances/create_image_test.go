@@ -175,6 +175,45 @@ func TestResolveImageForCreateWithoutPlatformUsesHostCachedImage(t *testing.T) {
 	}
 }
 
+// A no-platform create must NOT fast-path a cached image whose recorded platform
+// is empty/unknown (a legacy record written before platform tracking): empty is
+// not assumed to be the host, so it re-resolves and pins the host variant rather
+// than risk booting a non-host image without emulation.
+func TestResolveImageForCreateWithoutPlatformLegacyEmptyForcesHostResolve(t *testing.T) {
+	t.Parallel()
+
+	createReqPlatform := ""
+	resolver := createImageResolverFake{
+		getImage: func(context.Context, string) (*images.Image, error) {
+			return &images.Image{
+				Name:     "docker.io/library/alpine:3.19",
+				Platform: "", // legacy record, no platform tracked
+				Status:   images.StatusReady,
+			}, nil
+		},
+		createImage: func(_ context.Context, req images.CreateImageRequest) (*images.Image, error) {
+			createReqPlatform = req.Platform
+			return &images.Image{
+				Name:     req.Name,
+				Digest:   "sha256:host",
+				Platform: images.HostPlatformString(),
+				Status:   images.StatusReady,
+			}, nil
+		},
+	}
+
+	img, err := resolveImageForCreate(context.Background(), resolver, "docker.io/library/alpine:3.19", "", slog.Default())
+	if err != nil {
+		t.Fatalf("resolve image: %v", err)
+	}
+	if createReqPlatform != images.HostPlatformString() {
+		t.Fatalf("legacy empty-platform image should force host resolve, got CreateImage platform %q", createReqPlatform)
+	}
+	if img.Platform != images.HostPlatformString() {
+		t.Fatalf("expected host image, got %s", img.Platform)
+	}
+}
+
 // A no-platform create must NOT trust a tag pointer that resolves to a non-host
 // arch (last-pull-wins can point the tag at an emulated variant). It must
 // re-resolve the host variant explicitly and never silently emulate.
