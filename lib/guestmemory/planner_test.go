@@ -24,6 +24,33 @@ func TestPlanGuestTargetsLargeCeilingSplitDoesNotOverflow(t *testing.T) {
 	}
 }
 
+func TestPlanGuestTargetsCeilingVMReclaimStartsFromBaseline(t *testing.T) {
+	const gib = int64(1024 * 1024 * 1024)
+	const baseline = 1 * gib
+	const ceiling = 4 * gib
+	const floor = baseline / 2
+
+	// Ceiling VMs run at baseline when healthy; pressure reclaim must start from
+	// that baseline, never by "reclaiming" from the ceiling and growing the
+	// balloon target above baseline.
+	candidates := []candidateState{
+		{
+			vm: BalloonVM{
+				ID:                  "vz-ceiling",
+				AssignedMemoryBytes: ceiling,
+				BaselineMemoryBytes: baseline,
+			},
+			protectedFloorBytes: floor,
+			maxReclaimBytes:     baseline - floor,
+		},
+	}
+
+	targets := planGuestTargets(ActiveBallooningConfig{}, candidates, gib)
+	if got := targets["vz-ceiling"]; got != floor {
+		t.Fatalf("ceiling VM reclaim should plan down from baseline to floor %d, got %d", floor, got)
+	}
+}
+
 func TestFloorAnchorBytesUsesBaselineForCeilingVM(t *testing.T) {
 	const gib = int64(1024 * 1024 * 1024)
 	const baseline = 1 * gib

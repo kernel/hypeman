@@ -187,12 +187,13 @@ func (c *controller) reconcile(ctx context.Context, req reconcileRequest) (Manua
 		}
 		currentTotalReclaim += currentReclaim
 
+		reclaimBase := clampInt64(floorAnchorBytes(vm), protectedFloor, vm.AssignedMemoryBytes)
 		candidates = append(candidates, candidateState{
 			vm:                      vm,
 			hv:                      hv,
 			currentTargetGuestBytes: currentTarget,
 			protectedFloorBytes:     protectedFloor,
-			maxReclaimBytes:         maxInt64(0, vm.AssignedMemoryBytes-protectedFloor),
+			maxReclaimBytes:         maxInt64(0, reclaimBase-protectedFloor),
 		})
 	}
 	summary.eligibleVMs = len(candidates)

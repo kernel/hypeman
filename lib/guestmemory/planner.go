@@ -41,7 +41,7 @@ func planGuestTargets(cfg ActiveBallooningConfig, candidates []candidateState, t
 	var totalHeadroom int64
 	for _, candidate := range candidates {
 		totalHeadroom += candidate.maxReclaimBytes
-		targets[candidate.vm.ID] = candidate.vm.AssignedMemoryBytes
+		targets[candidate.vm.ID] = candidate.baselineGuestBytes()
 	}
 	if totalHeadroom <= 0 {
 		return targets
@@ -61,7 +61,7 @@ func planGuestTargets(cfg ActiveBallooningConfig, candidates []candidateState, t
 		if reclaim > candidate.maxReclaimBytes {
 			reclaim = candidate.maxReclaimBytes
 		}
-		targets[candidate.vm.ID] = candidate.vm.AssignedMemoryBytes - reclaim
+		targets[candidate.vm.ID] = candidate.baselineGuestBytes() - reclaim
 		remainder -= reclaim
 	}
 
@@ -69,7 +69,7 @@ func planGuestTargets(cfg ActiveBallooningConfig, candidates []candidateState, t
 		if remainder <= 0 {
 			break
 		}
-		currentReclaim := candidate.vm.AssignedMemoryBytes - targets[candidate.vm.ID]
+		currentReclaim := candidate.baselineGuestBytes() - targets[candidate.vm.ID]
 		headroomLeft := candidate.maxReclaimBytes - currentReclaim
 		if headroomLeft <= 0 {
 			continue
