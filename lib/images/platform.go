@@ -27,28 +27,28 @@ func ParsePlatform(s string) (Platform, error) {
 		return Platform{}, fmt.Errorf("%w: platform is empty", ErrInvalidPlatform)
 	}
 
+	// Accept 1-3 components, all non-empty: a bare arch ("amd64") is shorthand for
+	// linux/<arch>, but "/amd64", "linux/", "linux/amd64/", and "a/b/c/d" are
+	// malformed, not shorthand for a default.
 	parts := strings.Split(s, "/")
+	ok := len(parts) <= 3
+	for _, c := range parts {
+		if strings.TrimSpace(c) == "" {
+			ok = false
+		}
+	}
+	if !ok {
+		return Platform{}, fmt.Errorf("%w %q: expected os/arch[/variant]", ErrInvalidPlatform, s)
+	}
+
 	var p Platform
 	switch len(parts) {
 	case 1:
-		// Bare architecture ("amd64") defaults OS to linux.
 		p = Platform{OS: "linux", Architecture: parts[0]}
 	case 2:
-		// An explicit os/arch must supply both components: "/amd64" and "linux/"
-		// are malformed, not shorthand for the host/default.
-		if strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
-			return Platform{}, fmt.Errorf("%w %q: expected os/arch[/variant]", ErrInvalidPlatform, s)
-		}
 		p = Platform{OS: parts[0], Architecture: parts[1]}
 	case 3:
-		// Every component must be non-empty: "linux/amd64/" is malformed, not a
-		// variant-less shorthand, mirroring the os/arch rejection above.
-		if strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" || strings.TrimSpace(parts[2]) == "" {
-			return Platform{}, fmt.Errorf("%w %q: expected os/arch[/variant]", ErrInvalidPlatform, s)
-		}
 		p = Platform{OS: parts[0], Architecture: parts[1], Variant: parts[2]}
-	default:
-		return Platform{}, fmt.Errorf("%w %q: expected os/arch[/variant]", ErrInvalidPlatform, s)
 	}
 
 	p = p.Normalize()
@@ -153,14 +153,11 @@ func resolveRequestPlatform(s string) (Platform, error) {
 	return ParsePlatform(s)
 }
 
-// resolveManifestPlatform determines the authoritative (normalized) platform to
-// persist for a pulled image, given the platform reported by its config and the
-// platform the caller requested (empty if none). When a platform was requested
-// it verifies the manifest matches it; when the manifest declares a concrete
-// platform it validates that platform; and when the manifest declares no
-// architecture and nothing was requested it falls back to the host platform
-// (locally built/synthetic images often omit the platform). Pure so the build
-// pipeline's platform-recording logic is unit-testable.
+// resolveManifestPlatform returns the authoritative (normalized) platform to
+// persist for a pulled image. The inline branches cover the three cases: an
+// explicit request is matched against the manifest, a concrete manifest platform
+// is validated, and an architecture-less manifest with no request falls back to
+// the host (locally built/synthetic images often omit the platform).
 func resolveManifestPlatform(meta *containerMetadata, requested string) (Platform, error) {
 	actual := Platform{
 		OS:           meta.OS,

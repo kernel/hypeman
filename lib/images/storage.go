@@ -167,8 +167,15 @@ func readMetadata(p *paths.Paths, repository, digestHex string) (*imageMetadata,
 	return &meta, nil
 }
 
-// createTagSymlink creates or updates a tag symlink to point to a digest
-// Only creates the symlink if the digest dir exists and build is ready
+// createTagSymlink creates or updates a tag symlink to point to a digest (only
+// if the digest dir exists and the build is ready).
+//
+// Tag ownership is Docker last-pull-wins: the most recent pull of a tag always
+// owns the symlink, regardless of platform. An earlier gate only repointed for
+// host-native pulls, which silently stranded emulated variants (e.g.
+// `pull --platform linux/amd64 alpine:3.19` could never make `image get` report
+// amd64) and was non-recoverable. Always repointing is symmetric and matches
+// Docker; callers repoint unconditionally on a ready digest.
 func createTagSymlink(p *paths.Paths, repository, tag, digestHex string) error {
 	linkPath := tagSymlinkPath(p, repository, tag)
 	targetPath := digestHex // Relative path (just the digest hex)

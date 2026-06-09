@@ -18,21 +18,15 @@ type createImageResolver interface {
 }
 
 func resolveImageForCreate(ctx context.Context, imageManager createImageResolver, imageName, platform string, log *slog.Logger) (*images.Image, error) {
-	// An empty platform means "the host platform": a no-platform run must boot a
-	// host-native guest, never silently emulate. We deliberately do NOT follow the
-	// tag symlink (which is last-pull-wins and may point at a non-host arch);
-	// instead we resolve the host variant explicitly. Tag last-pull-wins still
-	// governs image addressing (get/list/by-tag) -- this only affects the default
-	// architecture an instance boots.
+	// An empty platform means the host platform: a no-platform run must boot a
+	// host-native guest and never silently emulate, so we resolve the host variant
+	// explicitly rather than follow the (last-pull-wins) tag, which may point at a
+	// non-host arch. Tag last-pull-wins still governs image addressing.
 	resolvePlatform := platform
 	if strings.TrimSpace(resolvePlatform) == "" {
-		// A locally cached image with an explicitly host-native platform can be
-		// returned without a registry round-trip. We require the recorded platform
-		// to be non-empty and host-native: an empty/unknown platform (e.g. a legacy
-		// record written before platform tracking) is NOT assumed to be the host --
-		// it falls through to host-pinned resolution below so a non-host image can't
-		// leak in via the empty==host default in ImageNeedsHostEmulation, and so a
-		// non-host tag pointer cannot leak in either.
+		// Fast-path a cached image only if its recorded platform is non-empty AND
+		// host-native; an empty/unknown platform (e.g. a legacy record) is not
+		// assumed to be the host and falls through to host-pinned resolution.
 		if img, err := imageManager.GetImage(ctx, imageName); err == nil {
 			if p := strings.TrimSpace(img.Platform); p != "" && !images.ImageNeedsHostEmulation(p) {
 				return img, nil
@@ -40,9 +34,7 @@ func resolveImageForCreate(ctx context.Context, imageManager createImageResolver
 		} else if !errors.Is(err, images.ErrNotFound) {
 			return nil, fmt.Errorf("get image: %w", err)
 		}
-		// Materialize the host platform string here (CreateImage would also
-		// default empty->host internally) so validateResolvedImagePlatform below
-		// has a concrete, non-empty target to match the resolved image against.
+		// Materialize host so validateResolvedImagePlatform has a concrete target.
 		resolvePlatform = images.HostPlatformString()
 		log.InfoContext(ctx, "no platform requested, resolving host platform", "image", imageName, "platform", resolvePlatform)
 	} else {

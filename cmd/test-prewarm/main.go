@@ -42,10 +42,8 @@ var defaultImages = []prewarmImage{
 	{Source: "docker.io/library/nginx:alpine"},
 	{Source: "docker.io/bitnami/redis:latest"},
 	{Source: "docker.io/jrei/systemd-ubuntu:22.04"},
-	// alpine:3.19 mirrored at amd64 for the Rosetta x86 image E2E. It must be the
-	// only mirror of this source:tag (do not also mirror it at the host platform)
-	// so its local ref is an unambiguous single-platform (amd64) manifest the E2E
-	// resolves deterministically.
+	// amd64-only mirror for the Rosetta x86 image E2E (single-platform manifest;
+	// see toLocalRegistryRef for why it must be the only mirror of this tag).
 	{Source: "docker.io/library/alpine:3.19", Platform: "linux/amd64"},
 }
 

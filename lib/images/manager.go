@@ -169,13 +169,7 @@ func (m *manager) CreateImage(ctx context.Context, req CreateImageRequest) (*Ima
 			// Fall through to re-queue the build
 		} else {
 			// We have this digest already (ready, pending, pulling, or converting).
-			// Docker last-pull-wins: the most recent pull of a tag owns the tag
-			// symlink regardless of platform. An earlier gate only repointed the tag
-			// for host-native pulls, which silently stranded emulated (e.g.
-			// amd64-on-arm64) variants -- `pull --platform linux/amd64 alpine:3.19`
-			// could never make `image get alpine:3.19` report amd64, and the move
-			// was non-recoverable. Always repointing matches Docker and stays
-			// symmetric/recoverable in both directions.
+			// last-pull-wins: repoint the tag to it (see createTagSymlink).
 			if meta.Status == StatusReady && ref.Tag() != "" {
 				createTagSymlink(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex())
 			}
