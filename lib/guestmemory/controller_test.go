@@ -189,6 +189,41 @@ func TestHealthyHoldsCeilingVMAtBaseline(t *testing.T) {
 	assert.Equal(t, baseline, hv.target, "balloon target must remain at baseline")
 }
 
+func TestHealthyPreservesExternallyGrownCeilingVMWhenGrowOnDemandOff(t *testing.T) {
+	const mib = int64(1024 * 1024)
+	const baseline = 1024 * mib
+	const ceiling = 4096 * mib
+
+	src := &stubSource{
+		vms: []BalloonVM{
+			{ID: "a", Name: "a", HypervisorType: hypervisor.TypeVZ, SocketPath: "a", AssignedMemoryBytes: ceiling, BaselineMemoryBytes: baseline},
+		},
+	}
+	// Simulate a prior live grow via the balloon API.
+	hv := &stubHypervisor{target: ceiling, capabilities: hypervisor.Capabilities{SupportsBalloonControl: true}}
+
+	c := NewController(Policy{Enabled: true, ReclaimEnabled: true}, ActiveBallooningConfig{
+		Enabled:                true,
+		ProtectedFloorPercent:  50,
+		ProtectedFloorMinBytes: 0,
+		MinAdjustmentBytes:     1,
+		PerVMMaxStepBytes:      ceiling,
+		PerVMCooldown:          time.Millisecond,
+		GrowOnDemandEnabled:    false,
+	}, src, slog.New(slog.NewTextHandler(io.Discard, nil))).(*controller)
+	c.sampler = &stubSampler{sample: HostPressureSample{TotalBytes: 64 * 1024 * mib, AvailableBytes: 32 * 1024 * mib, AvailablePercent: 50}}
+	c.reconcileMu.newClient = func(_ hypervisor.Type, _ string) (hypervisor.Hypervisor, error) {
+		return hv, nil
+	}
+
+	resp, err := c.TriggerReclaim(context.Background(), ManualReclaimRequest{ReclaimBytes: 0})
+	require.NoError(t, err)
+	require.Len(t, resp.Actions, 1)
+	assert.Equal(t, "unchanged", resp.Actions[0].Status)
+	assert.Equal(t, ceiling, resp.Actions[0].PlannedTargetGuestMemoryBytes, "healthy reconcile must not undo external balloon API grow")
+	assert.Equal(t, ceiling, hv.target, "balloon target must remain at externally grown value")
+}
+
 func TestStressedCeilingVMAtBaselineDoesNotSqueezeCoTenant(t *testing.T) {
 	const mib = int64(1024 * 1024)
 	const baseline = 1024 * mib
