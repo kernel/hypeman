@@ -235,6 +235,45 @@ func TestStressedCeilingVMAtBaselineDoesNotSqueezeCoTenant(t *testing.T) {
 	assert.Equal(t, baseline, ceilingHV.target, "ceiling VM holds at baseline")
 }
 
+func TestPressureReclaimsCeilingVMTowardFloorNotCeiling(t *testing.T) {
+	const mib = int64(1024 * 1024)
+	const baseline = 1024 * mib
+	const ceiling = 4096 * mib
+
+	// Under genuine host pressure (available below the low watermark, so the
+	// watermark math demands real reclaim), a ceiling VM idling at its baseline
+	// must be reclaimed toward its floor — never inflated toward the ceiling. The
+	// reclaim target is anchored on the baseline, not the boot ceiling.
+	src := &stubSource{
+		vms: []BalloonVM{
+			{ID: "ceiling", Name: "ceiling", HypervisorType: hypervisor.TypeVZ, SocketPath: "ceiling", AssignedMemoryBytes: ceiling, BaselineMemoryBytes: baseline},
+		},
+	}
+	ceilingHV := &stubHypervisor{target: baseline, capabilities: hypervisor.Capabilities{SupportsBalloonControl: true}}
+
+	c := NewController(Policy{Enabled: true, ReclaimEnabled: true}, ActiveBallooningConfig{
+		Enabled:                               true,
+		PressureHighWatermarkAvailablePercent: 10,
+		PressureLowWatermarkAvailablePercent:  15,
+		ProtectedFloorPercent:                 50,
+		ProtectedFloorMinBytes:                0,
+		MinAdjustmentBytes:                    1,
+		PerVMMaxStepBytes:                     ceiling,
+		PerVMCooldown:                         time.Millisecond,
+	}, src, slog.New(slog.NewTextHandler(io.Discard, nil))).(*controller)
+	// Available (256 MiB of 8 GiB ~= 3%) is below the low watermark, so reclaim is
+	// genuinely demanded and automaticTargetBytes returns a positive target.
+	c.sampler = &stubSampler{sample: HostPressureSample{TotalBytes: 8192 * mib, AvailableBytes: 256 * mib, AvailablePercent: 3}}
+	c.reconcileMu.newClient = func(_ hypervisor.Type, _ string) (hypervisor.Hypervisor, error) {
+		return ceilingHV, nil
+	}
+
+	_, err := c.TriggerReclaim(context.Background(), ManualReclaimRequest{ReclaimBytes: 0})
+	require.NoError(t, err)
+	assert.LessOrEqual(t, ceilingHV.target, baseline, "ceiling VM must be reclaimed under pressure, never inflated above its baseline")
+	assert.GreaterOrEqual(t, ceilingHV.target, baseline/2, "ceiling VM must not be reclaimed below its protected floor")
+}
+
 func TestHealthyRecoversReclaimedVMToBaseline(t *testing.T) {
 	const mib = int64(1024 * 1024)
 	const assigned = 2048 * mib

@@ -192,7 +192,12 @@ func (c *controller) reconcile(ctx context.Context, req reconcileRequest) (Manua
 			hv:                      hv,
 			currentTargetGuestBytes: currentTarget,
 			protectedFloorBytes:     protectedFloor,
-			maxReclaimBytes:         maxInt64(0, vm.AssignedMemoryBytes-protectedFloor),
+			// Reclaim headroom is measured from the baseline anchor down to the
+			// floor. A ceiling VM's ballooned headroom above its baseline is not
+			// resident, so it is not reclaimable; counting it would overstate the
+			// fleet's reclaimable memory and (with the ceiling anchor) inflate the
+			// VM under pressure. For ordinary VMs the anchor is the assigned size.
+			maxReclaimBytes: maxInt64(0, floorAnchorBytes(vm)-protectedFloor),
 		})
 	}
 	summary.eligibleVMs = len(candidates)

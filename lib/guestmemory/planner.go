@@ -41,7 +41,7 @@ func planGuestTargets(cfg ActiveBallooningConfig, candidates []candidateState, t
 	var totalHeadroom int64
 	for _, candidate := range candidates {
 		totalHeadroom += candidate.maxReclaimBytes
-		targets[candidate.vm.ID] = candidate.vm.AssignedMemoryBytes
+		targets[candidate.vm.ID] = floorAnchorBytes(candidate.vm)
 	}
 	if totalHeadroom <= 0 {
 		return targets
@@ -61,7 +61,12 @@ func planGuestTargets(cfg ActiveBallooningConfig, candidates []candidateState, t
 		if reclaim > candidate.maxReclaimBytes {
 			reclaim = candidate.maxReclaimBytes
 		}
-		targets[candidate.vm.ID] = candidate.vm.AssignedMemoryBytes - reclaim
+		// Reclaim down from the baseline anchor, not the ceiling: a ceiling VM
+		// idles at its baseline, so subtracting from AssignedMemoryBytes (the
+		// ceiling) would land above the baseline and inflate the guest under
+		// pressure instead of reclaiming it. For ordinary VMs the anchor is the
+		// assigned size, so this is unchanged.
+		targets[candidate.vm.ID] = floorAnchorBytes(candidate.vm) - reclaim
 		remainder -= reclaim
 	}
 
@@ -69,7 +74,7 @@ func planGuestTargets(cfg ActiveBallooningConfig, candidates []candidateState, t
 		if remainder <= 0 {
 			break
 		}
-		currentReclaim := candidate.vm.AssignedMemoryBytes - targets[candidate.vm.ID]
+		currentReclaim := floorAnchorBytes(candidate.vm) - targets[candidate.vm.ID]
 		headroomLeft := candidate.maxReclaimBytes - currentReclaim
 		if headroomLeft <= 0 {
 			continue
