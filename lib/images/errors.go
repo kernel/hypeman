@@ -29,19 +29,21 @@ func wrapRegistryError(err error) error {
 	if err == nil {
 		return nil
 	}
-	errStr := err.Error()
-	lower := strings.ToLower(errStr)
+	// Match case-insensitively: registry codes (TOOMANYREQUESTS, NAME_UNKNOWN, ...)
+	// lowercase cleanly, so a single lowercased haystack covers both the codes and
+	// the human-readable messages.
+	lower := strings.ToLower(err.Error())
 	switch {
-	case strings.Contains(errStr, "TOOMANYREQUESTS") ||
+	case strings.Contains(lower, "toomanyrequests") ||
 		strings.Contains(lower, "too many requests") ||
 		strings.Contains(lower, "rate limit"):
 		return fmt.Errorf("%w: %v", ErrRateLimited, err)
 	case strings.Contains(lower, "no child with platform"):
 		return fmt.Errorf("%w: %v", ErrPlatformNotAvailable, err)
-	case strings.Contains(errStr, "NAME_UNKNOWN") ||
-		strings.Contains(errStr, "MANIFEST_UNKNOWN") ||
-		strings.Contains(errStr, "UNAUTHORIZED") ||
-		strings.Contains(errStr, "404") ||
+	case strings.Contains(lower, "name_unknown") ||
+		strings.Contains(lower, "manifest_unknown") ||
+		strings.Contains(lower, "unauthorized") ||
+		strings.Contains(lower, "404") ||
 		strings.Contains(lower, "not found"):
 		return fmt.Errorf("%w: %v", ErrNotFound, err)
 	default:

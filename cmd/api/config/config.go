@@ -518,9 +518,8 @@ func (c *Config) expandPathFields() {
 }
 
 func expandHomePath(path string) string {
-	if path == "" || path == "~" {
-		return path
-	}
+	// Only "~/"-prefixed paths expand; "", "~", and absolute/relative paths
+	// (none of which start with "~/") are returned unchanged.
 	if !strings.HasPrefix(path, "~/") {
 		return path
 	}

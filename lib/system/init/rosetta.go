@@ -76,8 +76,12 @@ func setupRosetta(log *Logger, systemdMode bool) error {
 	// root, so the live rule must name the interpreter by its current path under
 	// newRoot; the pinned fd then survives the chroot.
 	rule := rosettaBinfmtRule(hostInterp)
-	if err := registerBinfmt(rule); err != nil {
+	existed, err := registerBinfmt(rule)
+	if err != nil {
 		return err
+	}
+	if existed {
+		log.Info("hypeman-init:rosetta", "existing :rosetta: binfmt_misc handler found; leaving it in place")
 	}
 
 	if systemdMode {
@@ -92,16 +96,17 @@ func setupRosetta(log *Logger, systemdMode bool) error {
 
 // registerBinfmt writes a binfmt_misc rule, tolerating an already-registered
 // :rosetta: handler (e.g. a restored boot or an image that ships its own rule):
-// the kernel returns EEXIST for a duplicate name, which is benign.
-func registerBinfmt(rule string) error {
-	err := os.WriteFile(binfmtRegister, []byte(rule), 0o644)
-	if alreadyRegistered(err) {
-		return nil
+// the kernel returns EEXIST for a duplicate name, which is benign. It reports
+// whether such an existing handler was found so the caller can log it.
+func registerBinfmt(rule string) (existed bool, err error) {
+	werr := os.WriteFile(binfmtRegister, []byte(rule), 0o644)
+	if alreadyRegistered(werr) {
+		return true, nil
 	}
-	if err != nil {
-		return fmt.Errorf("register rosetta binfmt: %w", err)
+	if werr != nil {
+		return false, fmt.Errorf("register rosetta binfmt: %w", werr)
 	}
-	return nil
+	return false, nil
 }
 
 // alreadyRegistered reports whether a binfmt_misc register write failed only

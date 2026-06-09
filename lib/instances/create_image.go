@@ -110,11 +110,11 @@ func storedImageNameForCreate(imageName string, img *images.Image) (string, erro
 // tag can't drift the instance to a different image/arch) and falls back to the
 // caller-facing Image for instances created before ResolvedImage was persisted.
 func bootImageRef(stored *StoredMetadata) string {
-	if stored != nil && strings.TrimSpace(stored.ResolvedImage) != "" {
-		return stored.ResolvedImage
-	}
 	if stored == nil {
 		return ""
+	}
+	if strings.TrimSpace(stored.ResolvedImage) != "" {
+		return stored.ResolvedImage
 	}
 	return stored.Image
 }
