@@ -553,6 +553,10 @@ components:
           type: string
           description: Additional memory for hotplug (human-readable format like "3GB", "1G"). Omit to disable hotplug memory.
           example: "2GB"
+        memory_ceiling:
+          type: string
+          description: Boot memory ceiling (human-readable format like "4GB", "8G"). When greater than size, a vz VM boots at the ceiling and is ballooned down to size so usable memory can grow up to the ceiling at runtime without a reboot. Omit for no ceiling. vz only.
+          example: "4GB"
         overlay_size:
           type: string
           description: Writable overlay disk size (human-readable format like "10GB", "50G")
@@ -1005,6 +1009,10 @@ components:
           type: string
           description: Hotplug memory size (human-readable)
           example: "2GB"
+        memory_ceiling:
+          type: string
+          description: Resolved boot memory ceiling (human-readable). Present when the VM was created with a ceiling above its size; usable memory can grow up to this via the balloon. vz only.
+          example: "4GB"
         overlay_size:
           type: string
           description: Writable overlay disk size (human-readable)

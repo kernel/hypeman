@@ -89,6 +89,19 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		hotplugSize = int64(hotplugBytes)
 	}
 
+	// Parse memory_ceiling (optional; omitted/empty means no ceiling)
+	memoryCeiling := int64(0)
+	if request.Body.MemoryCeiling != nil && *request.Body.MemoryCeiling != "" {
+		var ceilingBytes datasize.ByteSize
+		if err := ceilingBytes.UnmarshalText([]byte(*request.Body.MemoryCeiling)); err != nil {
+			return oapi.CreateInstance400JSONResponse{
+				Code:    "invalid_memory_ceiling",
+				Message: fmt.Sprintf("invalid memory_ceiling format: %v", err),
+			}, nil
+		}
+		memoryCeiling = int64(ceilingBytes)
+	}
+
 	// Parse overlay_size (default: 10GB)
 	overlaySize := int64(0)
 	if request.Body.OverlaySize != nil && *request.Body.OverlaySize != "" {
@@ -308,6 +321,7 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		Size:                     size,
 		Platform:                 derefString(request.Body.Platform),
 		HotplugSize:              hotplugSize,
+		MemoryCeilingBytes:       memoryCeiling,
 		OverlaySize:              overlaySize,
 		Vcpus:                    vcpus,
 		DiskIOBps:                diskIOBps,
@@ -1156,6 +1170,10 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 
 	if inst.Platform != "" {
 		oapiInst.Platform = lo.ToPtr(inst.Platform)
+	}
+
+	if inst.MemoryCeilingBytes > 0 {
+		oapiInst.MemoryCeiling = lo.ToPtr(datasize.ByteSize(inst.MemoryCeilingBytes).HR())
 	}
 
 	if inst.ExitMessage != "" {
