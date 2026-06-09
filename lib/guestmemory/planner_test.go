@@ -2,6 +2,67 @@ package guestmemory
 
 import "testing"
 
+func TestPlanGuestTargetsLargeCeilingSplitDoesNotOverflow(t *testing.T) {
+	const gib = int64(1024 * 1024 * 1024)
+	const assigned = 8 * gib
+	const floor = gib / 2
+	const headroom = assigned - floor // 7.5 GiB, exceeds ~2.8 GiB
+
+	// totalReclaim * maxReclaimBytes overflows int64 once the operands exceed ~2.8
+	// GiB. With the naive multiply the wrapped (negative) reclaim corrupts the
+	// proportional split: one VM absorbs everything down to its floor while its
+	// peer gives up nothing. The 128-bit intermediate keeps the split even.
+	candidates := []candidateState{
+		{vm: BalloonVM{ID: "a", AssignedMemoryBytes: assigned}, currentTargetGuestBytes: assigned, protectedFloorBytes: floor, maxReclaimBytes: headroom},
+		{vm: BalloonVM{ID: "b", AssignedMemoryBytes: assigned}, currentTargetGuestBytes: assigned, protectedFloorBytes: floor, maxReclaimBytes: headroom},
+	}
+
+	targets := planGuestTargets(ActiveBallooningConfig{}, candidates, headroom)
+	wantEach := assigned - headroom/2
+	if targets["a"] != wantEach || targets["b"] != wantEach {
+		t.Fatalf("identical VMs should split reclaim evenly to %d each, got a=%d b=%d", wantEach, targets["a"], targets["b"])
+	}
+}
+
+func TestFloorAnchorBytesUsesBaselineForCeilingVM(t *testing.T) {
+	const gib = int64(1024 * 1024 * 1024)
+	const baseline = 1 * gib
+	const ceiling = 4 * gib
+
+	// A ceiling VM anchors its protected floor on the baseline it is held at, not
+	// the ceiling, so it stays reclaimable down toward the baseline under pressure.
+	if got := floorAnchorBytes(BalloonVM{AssignedMemoryBytes: ceiling, BaselineMemoryBytes: baseline}); got != baseline {
+		t.Fatalf("ceiling VM should anchor on baseline %d, got %d", baseline, got)
+	}
+	// An ordinary VM (no smaller baseline) anchors on its assigned size, unchanged.
+	if got := floorAnchorBytes(BalloonVM{AssignedMemoryBytes: ceiling, BaselineMemoryBytes: ceiling}); got != ceiling {
+		t.Fatalf("ordinary VM should anchor on assigned %d, got %d", ceiling, got)
+	}
+
+	cfg := ActiveBallooningConfig{ProtectedFloorPercent: 50}
+	if got := protectedFloorBytes(cfg, floorAnchorBytes(BalloonVM{AssignedMemoryBytes: ceiling, BaselineMemoryBytes: baseline})); got != baseline/2 {
+		t.Fatalf("ceiling VM floor should be half its baseline %d, got %d", baseline/2, got)
+	}
+}
+
+func TestAutomaticTargetBytesStressedHoldsCurrentReclaim(t *testing.T) {
+	const gib = int64(1024 * 1024 * 1024)
+	cfg := ActiveBallooningConfig{PressureLowWatermarkAvailablePercent: 15}
+
+	// Healthy: never reclaim.
+	if got := automaticTargetBytes(HostPressureStateHealthy, cfg, HostPressureSample{TotalBytes: 64 * gib, AvailableBytes: 32 * gib}, 5*gib); got != 0 {
+		t.Fatalf("healthy host should reclaim 0, got %d", got)
+	}
+	// Pressure, above the low watermark, stressed: hold the current reclaim level.
+	if got := automaticTargetBytes(HostPressureStatePressure, cfg, HostPressureSample{TotalBytes: 64 * gib, AvailableBytes: 32 * gib, Stressed: true}, 3*gib); got != 3*gib {
+		t.Fatalf("stressed above watermark should hold current reclaim 3GiB, got %d", got)
+	}
+	// Pressure, above the low watermark, not stressed: nothing to reclaim.
+	if got := automaticTargetBytes(HostPressureStatePressure, cfg, HostPressureSample{TotalBytes: 64 * gib, AvailableBytes: 32 * gib}, 3*gib); got != 0 {
+		t.Fatalf("unstressed above watermark should reclaim 0, got %d", got)
+	}
+}
+
 func TestGrowthTargetBytesDisabled(t *testing.T) {
 	const gib = int64(1024 * 1024 * 1024)
 	cfg := DefaultActiveBallooningConfig() // GrowOnDemandEnabled defaults to false

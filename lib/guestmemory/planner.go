@@ -1,6 +1,10 @@
 package guestmemory
 
-import "github.com/kernel/hypeman/lib/hypervisor"
+import (
+	"math/bits"
+
+	"github.com/kernel/hypeman/lib/hypervisor"
+)
 
 type candidateState struct {
 	vm                      BalloonVM
@@ -50,7 +54,10 @@ func planGuestTargets(cfg ActiveBallooningConfig, candidates []candidateState, t
 
 	remainder := totalReclaim
 	for _, candidate := range candidates {
-		reclaim := (totalReclaim * candidate.maxReclaimBytes) / totalHeadroom
+		// totalReclaim and maxReclaimBytes can both approach totalHeadroom for a
+		// large-ceiling VM, so the product overflows int64 once they exceed ~2.8
+		// GiB; compute it in 128 bits to keep the proportional split correct.
+		reclaim := mulDivInt64(totalReclaim, candidate.maxReclaimBytes, totalHeadroom)
 		if reclaim > candidate.maxReclaimBytes {
 			reclaim = candidate.maxReclaimBytes
 		}
@@ -124,20 +131,12 @@ func automaticTargetBytes(state HostPressureState, cfg ActiveBallooningConfig, s
 	return 0
 }
 
-// growthTargetBytes returns the healthy-host target for a guest. holdTarget is
-// the size to hold when not growing (the guest's baseline). With
-// GrowOnDemandEnabled false it returns holdTarget, so the controller behaves
-// exactly as it does today: ordinary VMs (baseline == assigned) recover to full,
-// ceiling VMs hold at their baseline. When enabled it raises the target toward
-// assigned (the ceiling) once guest utilization is at least
-// GrowUtilizationPercent. The result is bounded to [protectedFloor, assigned];
-// the controller's per-step and cooldown clamps further rate-limit the applied
-// change.
-//
-// utilizationPercent is the guest's usage as a fraction of its current
-// allowance. A measured guest-memory signal is a follow-up (RFC milestone 4);
-// until one is wired in the reconcile loop supplies 0, so auto-grow stays inert
-// even when enabled.
+// growthTargetBytes returns the healthy-host target for a guest, bounded to
+// [protectedFloor, assigned]. With GrowOnDemandEnabled off it holds at holdTarget
+// (the baseline), preserving today's reclaim-only behavior; when on it grows
+// toward assigned (the ceiling) once utilizationPercent reaches
+// GrowUtilizationPercent. The reconcile loop supplies utilizationPercent 0 until a
+// measured guest signal exists (RFC milestone 4), so auto-grow stays inert.
 func growthTargetBytes(cfg ActiveBallooningConfig, holdTarget, assigned, protectedFloor int64, utilizationPercent int) int64 {
 	if !cfg.GrowOnDemandEnabled || utilizationPercent < cfg.GrowUtilizationPercent {
 		return clampInt64(holdTarget, protectedFloor, assigned)
@@ -164,6 +163,16 @@ func clampInt64(v, minV, maxV int64) int64 {
 		return maxV
 	}
 	return v
+}
+
+// mulDivInt64 returns a*b/d computed via a 128-bit intermediate so the product
+// does not overflow int64. a, b, and d must be non-negative, d must be positive,
+// and a*b/d must fit in int64 (callers here guarantee the quotient is bounded by
+// one of the operands).
+func mulDivInt64(a, b, d int64) int64 {
+	hi, lo := bits.Mul64(uint64(a), uint64(b))
+	q, _ := bits.Div64(hi, lo, uint64(d))
+	return int64(q)
 }
 
 func minInt64(a, b int64) int64 {

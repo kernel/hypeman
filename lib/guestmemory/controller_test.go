@@ -189,6 +189,52 @@ func TestHealthyHoldsCeilingVMAtBaseline(t *testing.T) {
 	assert.Equal(t, baseline, hv.target, "balloon target must remain at baseline")
 }
 
+func TestStressedCeilingVMAtBaselineDoesNotSqueezeCoTenant(t *testing.T) {
+	const mib = int64(1024 * 1024)
+	const baseline = 1024 * mib
+	const ceiling = 4096 * mib
+	const coTenant = 2048 * mib
+
+	// A ceiling VM idling at its baseline is reclaiming nothing real (its ballooned
+	// headroom was never resident), so under the Stressed branch — where the host
+	// reports stress but is still above the low watermark — its headroom must not be
+	// counted as reclaim and redistributed onto a co-tenant.
+	src := &stubSource{
+		vms: []BalloonVM{
+			{ID: "ceiling", Name: "ceiling", HypervisorType: hypervisor.TypeVZ, SocketPath: "ceiling", AssignedMemoryBytes: ceiling, BaselineMemoryBytes: baseline},
+			{ID: "ordinary", Name: "ordinary", HypervisorType: hypervisor.TypeCloudHypervisor, SocketPath: "ordinary", AssignedMemoryBytes: coTenant, BaselineMemoryBytes: coTenant},
+		},
+	}
+	ceilingHV := &stubHypervisor{target: baseline, capabilities: hypervisor.Capabilities{SupportsBalloonControl: true}}
+	ordinaryHV := &stubHypervisor{target: coTenant, capabilities: hypervisor.Capabilities{SupportsBalloonControl: true}}
+
+	c := NewController(Policy{Enabled: true, ReclaimEnabled: true}, ActiveBallooningConfig{
+		Enabled:                               true,
+		PressureHighWatermarkAvailablePercent: 10,
+		PressureLowWatermarkAvailablePercent:  15,
+		ProtectedFloorPercent:                 50,
+		ProtectedFloorMinBytes:                0,
+		MinAdjustmentBytes:                    1,
+		PerVMMaxStepBytes:                     ceiling,
+		PerVMCooldown:                         time.Millisecond,
+	}, src, slog.New(slog.NewTextHandler(io.Discard, nil))).(*controller)
+	// Stressed, but available (32/64 GiB) is well above the low watermark, so the
+	// watermark math demands no reclaim and automaticTargetBytes falls to the
+	// Stressed currentTotalReclaim branch.
+	c.sampler = &stubSampler{sample: HostPressureSample{TotalBytes: 64 * 1024 * mib, AvailableBytes: 32 * 1024 * mib, AvailablePercent: 50, Stressed: true}}
+	c.reconcileMu.newClient = func(_ hypervisor.Type, socket string) (hypervisor.Hypervisor, error) {
+		if socket == "ceiling" {
+			return ceilingHV, nil
+		}
+		return ordinaryHV, nil
+	}
+
+	_, err := c.TriggerReclaim(context.Background(), ManualReclaimRequest{ReclaimBytes: 0})
+	require.NoError(t, err)
+	assert.Equal(t, coTenant, ordinaryHV.target, "ordinary co-tenant must not be reclaimed for the ceiling VM's idle headroom")
+	assert.Equal(t, baseline, ceilingHV.target, "ceiling VM holds at baseline")
+}
+
 func TestHealthyRecoversReclaimedVMToBaseline(t *testing.T) {
 	const mib = int64(1024 * 1024)
 	const assigned = 2048 * mib

@@ -175,7 +175,13 @@ func (c *controller) reconcile(ctx context.Context, req reconcileRequest) (Manua
 			protectedFloor = vm.AssignedMemoryBytes
 		}
 
-		currentReclaim := vm.AssignedMemoryBytes - currentTarget
+		// currentTotalReclaim is the memory currently held back from the size the
+		// host expects each guest to use, so it is measured below the baseline
+		// anchor, not the ceiling. A ceiling VM idling at its baseline is reclaiming
+		// nothing real (the ballooned pages were never resident) and must contribute
+		// 0, otherwise its headroom would be counted as reclaim and squeeze its
+		// co-tenants under the Stressed branch.
+		currentReclaim := floorAnchorBytes(vm) - currentTarget
 		if currentReclaim < 0 {
 			currentReclaim = 0
 		}
@@ -216,11 +222,12 @@ func (c *controller) reconcile(ctx context.Context, req reconcileRequest) (Manua
 	summary.manualHoldActive = state.manualHold != nil
 
 	plannedTargets := planGuestTargets(c.config, candidates, totalTarget)
-	// With no reclaim demanded the host is healthy, so each guest holds at its
-	// baseline by default (for ordinary VMs baseline == assigned, recovering any
-	// pressure-driven reclaim exactly as before). Grow-on-demand may raise the
-	// target toward the ceiling; when disabled growthTargetBytes returns the
-	// baseline, leaving today's behavior unchanged.
+	// No reclaim demanded means the host is healthy: hold each guest at its
+	// baseline (baseline == assigned for ordinary VMs, so this recovers prior
+	// reclaim unchanged). growthTargetBytes returns the baseline while grow-on-demand
+	// is off. This per-VM grow has no aggregate host-RAM cap, which is safe only
+	// because utilizationPercent() is 0 today; a real signal (RFC milestone 4) must
+	// route grow through a host-aware planner.
 	if totalTarget == 0 {
 		for _, candidate := range candidates {
 			baseline := candidate.baselineGuestBytes()
