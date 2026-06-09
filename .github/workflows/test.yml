@@ -6,6 +6,9 @@ on:
 jobs:
   test:
     runs-on: [self-hosted, linux, x64, kvm]
+    concurrency:
+      group: linux-kvm-ci-test
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
         with:
@@ -77,9 +80,13 @@ jobs:
       - name: Create run-scoped temp directory
         run: |
           TEST_NETWORK_TMPDIR="/tmp/hm-net-${{ github.run_id }}-${{ github.run_attempt }}"
+          TEST_TMPDIR="/tmp/hypeman-ci-${{ github.run_id }}-${{ github.run_attempt }}"
           sudo rm -rf "$TEST_NETWORK_TMPDIR"
+          sudo rm -rf "$TEST_TMPDIR"
           mkdir -p "$TEST_NETWORK_TMPDIR"
+          mkdir -p "$TEST_TMPDIR"
           sudo chown -R "$(id -u):$(id -g)" "$TEST_NETWORK_TMPDIR"
+          sudo chown -R "$(id -u):$(id -g)" "$TEST_TMPDIR"
 
       # Avoids rate limits when running the tests
       # Tests includes pulling, then converting to disk images
@@ -156,11 +163,12 @@ jobs:
           HYPEMAN_TEST_REGISTRY: 127.0.0.1:5001
           HYPEMAN_UFFD_PAGER_BINARY: ${{ runner.temp }}/hypeman-uffd-pager-${{ github.run_id }}-${{ github.run_attempt }}
           HYPEMAN_UFFD_SYSTEMD_INSTANCE_PREFIX: ci-${{ github.run_id }}-${{ github.run_attempt }}
+          TMPDIR: /tmp/hypeman-ci-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           cp "$PWD/bin/hypeman-uffd-pager" "$HYPEMAN_UFFD_PAGER_BINARY"
           chmod +x "$HYPEMAN_UFFD_PAGER_BINARY"
           export HYPEMAN_TEST_PREWARM_DIR="$HOME/.cache/hypeman-ci/linux-amd64"
-          make test TEST_TIMEOUT=20m
+          make test TEST_TIMEOUT=20m GO_TEST_PARALLELISM=4
 
       - name: Cleanup
         if: always()
@@ -170,8 +178,16 @@ jobs:
             echo "$units" | xargs -r sudo systemctl stop || true
             echo "$units" | xargs -r sudo systemctl reset-failed || true
           fi
+          TEST_TMPDIR="/tmp/hypeman-ci-${{ github.run_id }}-${{ github.run_attempt }}"
+          stale_pids="$(ps -eo pid=,ppid=,cmd= | awk -v tmpdir="$TEST_TMPDIR" '$2 == 1 && index($0, tmpdir) && /(firecracker|cloud-hypervisor|hypeman-uffd-pager)/ {print $1}' || true)"
+          if [ -n "$stale_pids" ]; then
+            echo "$stale_pids" | xargs -r sudo kill || true
+            sleep 3
+            echo "$stale_pids" | xargs -r sudo kill -9 || true
+          fi
           sudo rm -f /run/hypeman/uffd/ci-${{ github.run_id }}-${{ github.run_attempt }}-*.env
           sudo rm -rf "/tmp/hm-net-${{ github.run_id }}-${{ github.run_attempt }}"
+          sudo rm -rf "$TEST_TMPDIR"
           rm -f "${{ runner.temp }}/hypeman-uffd-pager-${{ github.run_id }}-${{ github.run_attempt }}"
 
   test-darwin:

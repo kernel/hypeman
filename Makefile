@@ -4,6 +4,7 @@ SHELL := /bin/bash
 # Directory where local binaries will be installed
 BIN_DIR ?= $(CURDIR)/bin
 GO_TEST_TIMEOUT ?= 300s
+GO_TEST_PARALLELISM ?=
 UFFD_PAGER_BINARY ?= $(BIN_DIR)/hypeman-uffd-pager
 
 $(BIN_DIR):
@@ -295,25 +296,31 @@ endif
 # Linux tests (as root for network capabilities)
 test-linux: ensure-ch-binaries ensure-firecracker-binaries ensure-caddy-binaries build-embedded $(BIN_DIR)/hypeman-uffd-pager
 	@VERBOSE_FLAG=""; \
+	PARALLEL_FLAG=""; \
 	TEST_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$$PATH"; \
 	if [ -n "$(VERBOSE)" ]; then VERBOSE_FLAG="-v"; fi; \
+	if [ -n "$(GO_TEST_PARALLELISM)" ]; then PARALLEL_FLAG="-parallel=$(GO_TEST_PARALLELISM)"; fi; \
 	if [ -n "$(TEST)" ]; then \
 		echo "Running specific test: $(TEST)"; \
 		sudo env "PATH=$$TEST_PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" "CI=$${CI:-}" \
+			"TMPDIR=$${TMPDIR:-/tmp}" \
+			"HYPEMAN_TEST_NETWORK_TMPDIR=$${HYPEMAN_TEST_NETWORK_TMPDIR:-}" \
 			"HYPEMAN_UFFD_PAGER_BINARY=$${HYPEMAN_UFFD_PAGER_BINARY:-$(UFFD_PAGER_BINARY)}" \
 			"HYPEMAN_UFFD_SYSTEMD_INSTANCE_PREFIX=$${HYPEMAN_UFFD_SYSTEMD_INSTANCE_PREFIX:-}" \
 			"HYPEMAN_TEST_PREWARM_DIR=$${HYPEMAN_TEST_PREWARM_DIR:-}" \
 			"HYPEMAN_TEST_PREWARM_STRICT=$${HYPEMAN_TEST_PREWARM_STRICT:-}" \
 			"HYPEMAN_TEST_REGISTRY=$${HYPEMAN_TEST_REGISTRY:-}" \
-			go test -tags containers_image_openpgp -run=$(TEST) $$VERBOSE_FLAG -timeout=$(TEST_TIMEOUT) ./...; \
+			go test -tags containers_image_openpgp -run=$(TEST) $$VERBOSE_FLAG $$PARALLEL_FLAG -timeout=$(TEST_TIMEOUT) ./...; \
 	else \
 		sudo env "PATH=$$TEST_PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" "CI=$${CI:-}" \
+			"TMPDIR=$${TMPDIR:-/tmp}" \
+			"HYPEMAN_TEST_NETWORK_TMPDIR=$${HYPEMAN_TEST_NETWORK_TMPDIR:-}" \
 			"HYPEMAN_UFFD_PAGER_BINARY=$${HYPEMAN_UFFD_PAGER_BINARY:-$(UFFD_PAGER_BINARY)}" \
 			"HYPEMAN_UFFD_SYSTEMD_INSTANCE_PREFIX=$${HYPEMAN_UFFD_SYSTEMD_INSTANCE_PREFIX:-}" \
 			"HYPEMAN_TEST_PREWARM_DIR=$${HYPEMAN_TEST_PREWARM_DIR:-}" \
 			"HYPEMAN_TEST_PREWARM_STRICT=$${HYPEMAN_TEST_PREWARM_STRICT:-}" \
 			"HYPEMAN_TEST_REGISTRY=$${HYPEMAN_TEST_REGISTRY:-}" \
-			go test -tags containers_image_openpgp $$VERBOSE_FLAG -timeout=$(TEST_TIMEOUT) ./...; \
+			go test -tags containers_image_openpgp $$VERBOSE_FLAG $$PARALLEL_FLAG -timeout=$(TEST_TIMEOUT) ./...; \
 	fi
 
 # macOS tests (no sudo needed, adds e2fsprogs to PATH)

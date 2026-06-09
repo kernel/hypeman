@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -186,7 +187,8 @@ func cleanupOrphanedProcesses(t *testing.T, mgr *manager) {
 	// Find all metadata files
 	metaFiles, err := mgr.listMetadataFiles()
 	if err != nil {
-		return // No metadata files, nothing to clean
+		cleanupTestHypervisorProcessesByDataDir(t, mgr.paths.DataDir())
+		return
 	}
 
 	for _, metaFile := range metaFiles {
@@ -212,6 +214,46 @@ func cleanupOrphanedProcesses(t *testing.T, mgr *manager) {
 				WaitForProcessExit(pid, 1*time.Second)
 			}
 		}
+	}
+
+	cleanupTestHypervisorProcessesByDataDir(t, mgr.paths.DataDir())
+}
+
+func cleanupTestHypervisorProcessesByDataDir(t *testing.T, dataDir string) {
+	if dataDir == "" {
+		return
+	}
+
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return
+	}
+
+	for _, entry := range entries {
+		pid, err := strconv.Atoi(entry.Name())
+		if err != nil || pid <= 0 {
+			continue
+		}
+
+		cmdlineBytes, err := os.ReadFile(filepath.Join("/proc", entry.Name(), "cmdline"))
+		if err != nil || !bytes.Contains(cmdlineBytes, []byte(dataDir)) {
+			continue
+		}
+
+		cmdline := strings.ReplaceAll(string(cmdlineBytes), "\x00", " ")
+		if !strings.Contains(cmdline, "cloud-hypervisor") &&
+			!strings.Contains(cmdline, "firecracker") &&
+			!strings.Contains(cmdline, "hypeman-uffd-pager") {
+			continue
+		}
+
+		if err := syscall.Kill(pid, 0); err != nil {
+			continue
+		}
+
+		t.Logf("Cleaning up test hypervisor helper process: PID %d (%s)", pid, cmdline)
+		_ = syscall.Kill(pid, syscall.SIGKILL)
+		WaitForProcessExit(pid, 1*time.Second)
 	}
 }
 

@@ -883,7 +883,7 @@ func requireRunningSleepInstance(t *testing.T, ctx context.Context, mgr Manager,
 			return false
 		}
 		return true
-	}, integrationTestTimeout(30*time.Second), 250*time.Millisecond)
+	}, integrationTestTimeout(90*time.Second), 250*time.Millisecond)
 
 	inst, err = mgr.GetInstance(ctx, instanceID)
 	require.NoError(t, err)

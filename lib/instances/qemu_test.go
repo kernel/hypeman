@@ -69,6 +69,7 @@ func setupTestManagerForQEMU(t *testing.T) (*manager, string) {
 	// Register cleanup to kill any orphaned QEMU processes
 	t.Cleanup(func() {
 		cleanupOrphanedQEMUProcesses(t, mgr)
+		cleanupTestHypervisorProcessesByDataDir(t, mgr.paths.DataDir())
 	})
 
 	return mgr, tmpDir
