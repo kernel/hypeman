@@ -227,18 +227,20 @@ func (c *controller) reconcile(ctx context.Context, req reconcileRequest) (Manua
 	summary.manualHoldActive = state.manualHold != nil
 
 	plannedTargets := planGuestTargets(c.config, candidates, totalTarget)
-	// No reclaim demanded means the host is healthy: hold each guest at its
-	// baseline (baseline == assigned for ordinary VMs, so this recovers prior
-	// reclaim unchanged). growthTargetBytes returns the baseline while grow-on-demand
-	// is off. This per-VM grow has no aggregate host-RAM cap, which is safe only
-	// because utilizationPercent() is 0 today; a real signal (RFC milestone 4) must
-	// route grow through a host-aware planner.
+	// No reclaim demanded means the host is healthy: recover each guest toward its
+	// baseline (baseline == assigned for ordinary VMs, so prior reclaim is undone
+	// unchanged) but never below its current target, so a ceiling VM deliberately
+	// grown above baseline (via the balloon API, or auto-grow once a signal exists)
+	// is held there rather than reverted. growthTargetBytes only raises further when
+	// grow-on-demand is enabled. This per-VM path has no aggregate host-RAM cap,
+	// which is safe only because utilizationPercent() is 0 today; a real signal
+	// (RFC milestone 4) must route grow through a host-aware planner.
 	if totalTarget == 0 {
 		for _, candidate := range candidates {
-			baseline := candidate.baselineGuestBytes()
+			hold := maxInt64(candidate.baselineGuestBytes(), candidate.currentTargetGuestBytes)
 			plannedTargets[candidate.vm.ID] = growthTargetBytes(
 				c.config,
-				baseline,
+				hold,
 				candidate.vm.AssignedMemoryBytes,
 				candidate.protectedFloorBytes,
 				candidate.utilizationPercent(),

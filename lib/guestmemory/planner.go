@@ -137,8 +137,8 @@ func automaticTargetBytes(state HostPressureState, cfg ActiveBallooningConfig, s
 }
 
 // growthTargetBytes returns the healthy-host target for a guest, bounded to
-// [protectedFloor, assigned]. With GrowOnDemandEnabled off it holds at holdTarget
-// (the baseline), preserving today's reclaim-only behavior; when on it grows
+// [protectedFloor, assigned]. With GrowOnDemandEnabled off it holds at holdTarget,
+// preserving today's reclaim-only behavior; when on it grows
 // toward assigned (the ceiling) once utilizationPercent reaches
 // GrowUtilizationPercent. The reconcile loop supplies utilizationPercent 0 until a
 // measured guest signal exists (RFC milestone 4), so auto-grow stays inert.
