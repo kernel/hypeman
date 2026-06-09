@@ -4,10 +4,37 @@ import (
 	"testing"
 
 	"github.com/kernel/hypeman/cmd/api/config"
+	"github.com/kernel/hypeman/lib/instances"
 	snapshotstore "github.com/kernel/hypeman/lib/snapshot"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestBalloonVMForInstance(t *testing.T) {
+	t.Parallel()
+	const gib = int64(1024 * 1024 * 1024)
+
+	// No ceiling: assigned and baseline are both size + hotplug.
+	noCeiling := balloonVMForInstance(instances.Instance{StoredMetadata: instances.StoredMetadata{
+		Id: "a", Size: 2 * gib, HotplugSize: gib,
+	}})
+	assert.Equal(t, 3*gib, noCeiling.AssignedMemoryBytes)
+	assert.Equal(t, 3*gib, noCeiling.BaselineMemoryBytes)
+
+	// Ceiling above size+hotplug: assigned is the ceiling, baseline stays at size+hotplug.
+	withCeiling := balloonVMForInstance(instances.Instance{StoredMetadata: instances.StoredMetadata{
+		Id: "b", Size: gib, MemoryCeilingBytes: 4 * gib,
+	}})
+	assert.Equal(t, 4*gib, withCeiling.AssignedMemoryBytes)
+	assert.Equal(t, gib, withCeiling.BaselineMemoryBytes)
+
+	// A ceiling not above size+hotplug never lowers the assigned clamp.
+	lowCeiling := balloonVMForInstance(instances.Instance{StoredMetadata: instances.StoredMetadata{
+		Id: "c", Size: 2 * gib, MemoryCeilingBytes: gib,
+	}})
+	assert.Equal(t, 2*gib, lowCeiling.AssignedMemoryBytes)
+	assert.Equal(t, 2*gib, lowCeiling.BaselineMemoryBytes)
+}
 
 func TestSnapshotDefaultsFromConfigDisabledReturnsNilCompression(t *testing.T) {
 	t.Parallel()

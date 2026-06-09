@@ -72,6 +72,108 @@ func TestGuestMemoryPolicyVZ(t *testing.T) {
 	assertActiveBallooningLifecycle(t, ctx, inst)
 }
 
+func TestVZMemoryCeiling(t *testing.T) {
+	requireGuestMemoryManualRun(t)
+	if runtime.GOOS != "darwin" {
+		t.Skip("vz tests require macOS")
+	}
+	if runtime.GOARCH != "arm64" {
+		t.Skip("vz tests require Apple Silicon")
+	}
+
+	mgr, tmpDir := setupVZTestManager(t)
+	forceEnableGuestMemoryPolicyForVZTest(mgr)
+	ctx := context.Background()
+
+	createNginxImageAndWaitDarwin(t, ctx, mgr.imageManager)
+	require.NoError(t, mgr.systemManager.EnsureSystemFiles(ctx))
+
+	const baseline = int64(1024 * 1024 * 1024)
+	const ceiling = int64(4 * 1024 * 1024 * 1024)
+
+	inst, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
+		Name:               "guestmem-vz-ceiling",
+		Image:              "docker.io/library/nginx:alpine",
+		Size:               baseline,
+		MemoryCeilingBytes: ceiling,
+		OverlaySize:        5 * 1024 * 1024 * 1024,
+		Vcpus:              1,
+		NetworkEnabled:     false,
+		Hypervisor:         hypervisor.TypeVZ,
+	})
+	if err != nil {
+		dumpVZShimLogs(t, tmpDir)
+		require.NoError(t, err)
+	}
+	defer func() { _ = mgr.DeleteInstance(ctx, inst.Id) }()
+
+	require.NoError(t, waitForExecAgent(ctx, mgr, inst.Id, 30*time.Second))
+
+	// The balloon is mandatory for a ceiling VM.
+	info, err := getVZVMInfo(inst.SocketPath)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, info.MemoryBalloonDevices, 1, "ceiling VM must have a memory balloon device attached")
+
+	// The guest kernel boots at the ceiling, so MemTotal reflects ~4 GiB.
+	memTotalBytes := readGuestMemTotalBytes(t, ctx, inst)
+	assert.Greaterf(t, memTotalBytes, ceiling*85/100,
+		"guest MemTotal %d should reflect the ~4GiB boot ceiling", memTotalBytes)
+
+	// The balloon settles at the baseline, and the larger ceiling does not cost
+	// resident host RAM while the guest sits at baseline.
+	requireRuntimeGuestMemoryTargetEventually(t, ctx, inst, baseline)
+	instMeta, err := mgr.GetInstance(ctx, inst.Id)
+	require.NoError(t, err)
+	require.NotNil(t, instMeta.HypervisorPID)
+	assertLowIdleVZHostMemoryFootprint(t, *instMeta.HypervisorPID, 256*1024)
+
+	// Grow live to the ceiling via the balloon: no reboot, usable memory climbs.
+	baselineAvailable := readGuestMemAvailableBytes(t, ctx, inst)
+	hv, err := hypervisor.NewClient(inst.HypervisorType, inst.SocketPath)
+	require.NoError(t, err)
+	require.NoError(t, hv.SetTargetGuestMemoryBytes(ctx, ceiling))
+	requireRuntimeGuestMemoryTargetEventually(t, ctx, inst, ceiling)
+
+	grownAvailable := int64(0)
+	require.Eventually(t, func() bool {
+		grownAvailable = readGuestMemAvailableBytes(t, ctx, inst)
+		return grownAvailable > baselineAvailable
+	}, 30*time.Second, 1*time.Second,
+		"guest MemAvailable should climb after deflating the balloon to the ceiling (baseline_available=%d)", baselineAvailable)
+
+	info, err = getVZVMInfo(inst.SocketPath)
+	require.NoError(t, err)
+	assert.Equal(t, "Running", info.State, "grow must not restart the VM")
+}
+
+// readGuestMemInfoBytes reads a /proc/meminfo field (reported in kB) and returns bytes.
+func readGuestMemInfoBytes(t *testing.T, ctx context.Context, inst *Instance, field string) int64 {
+	t.Helper()
+	out, exitCode, err := vzExecCommand(ctx, inst, "cat", "/proc/meminfo")
+	require.NoError(t, err)
+	require.Equal(t, 0, exitCode)
+	for _, line := range strings.Split(out, "\n") {
+		if !strings.HasPrefix(line, field+":") {
+			continue
+		}
+		fields := strings.Fields(line)
+		require.GreaterOrEqual(t, len(fields), 2, "unexpected %s line: %q", field, line)
+		kb, err := strconv.ParseInt(fields[1], 10, 64)
+		require.NoError(t, err)
+		return kb * 1024
+	}
+	t.Fatalf("%s not found in /proc/meminfo:\n%s", field, out)
+	return 0
+}
+
+func readGuestMemTotalBytes(t *testing.T, ctx context.Context, inst *Instance) int64 {
+	return readGuestMemInfoBytes(t, ctx, inst, "MemTotal")
+}
+
+func readGuestMemAvailableBytes(t *testing.T, ctx context.Context, inst *Instance) int64 {
+	return readGuestMemInfoBytes(t, ctx, inst, "MemAvailable")
+}
+
 func forceEnableGuestMemoryPolicyForVZTest(mgr *manager) {
 	mgr.guestMemoryPolicy = guestmemory.Policy{
 		Enabled:            true,

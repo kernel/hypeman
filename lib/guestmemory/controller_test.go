@@ -151,6 +151,78 @@ func TestTriggerReclaimReturnsWhenContextIsCanceledWhileWaitingForLock(t *testin
 	c.reconcileMu.mu <- struct{}{}
 }
 
+func TestHealthyHoldsCeilingVMAtBaseline(t *testing.T) {
+	const mib = int64(1024 * 1024)
+	const baseline = 1024 * mib
+	const ceiling = 4096 * mib
+
+	// A ceiling VM: assigned is the ceiling, baseline is the smaller running size,
+	// and the balloon currently sits at the baseline (post boot-to-baseline).
+	src := &stubSource{
+		vms: []BalloonVM{
+			{ID: "a", Name: "a", HypervisorType: hypervisor.TypeVZ, SocketPath: "a", AssignedMemoryBytes: ceiling, BaselineMemoryBytes: baseline},
+		},
+	}
+	hv := &stubHypervisor{target: baseline, capabilities: hypervisor.Capabilities{SupportsBalloonControl: true}}
+
+	c := NewController(Policy{Enabled: true, ReclaimEnabled: true}, ActiveBallooningConfig{
+		Enabled:                true,
+		ProtectedFloorPercent:  50,
+		ProtectedFloorMinBytes: 0,
+		MinAdjustmentBytes:     1,
+		PerVMMaxStepBytes:      ceiling,
+		PerVMCooldown:          time.Millisecond,
+		// Grow-on-demand off: the controller must not grow the guest toward the
+		// ceiling on a healthy host.
+		GrowOnDemandEnabled: false,
+	}, src, slog.New(slog.NewTextHandler(io.Discard, nil))).(*controller)
+	c.sampler = &stubSampler{sample: HostPressureSample{TotalBytes: 64 * 1024 * mib, AvailableBytes: 32 * 1024 * mib, AvailablePercent: 50}}
+	c.reconcileMu.newClient = func(_ hypervisor.Type, _ string) (hypervisor.Hypervisor, error) {
+		return hv, nil
+	}
+
+	resp, err := c.TriggerReclaim(context.Background(), ManualReclaimRequest{ReclaimBytes: 0})
+	require.NoError(t, err)
+	require.Len(t, resp.Actions, 1)
+	assert.Equal(t, "unchanged", resp.Actions[0].Status)
+	assert.Equal(t, baseline, resp.Actions[0].TargetGuestMemoryBytes, "ceiling VM should hold at baseline, not grow to ceiling, when grow-on-demand is off")
+	assert.Equal(t, baseline, hv.target, "balloon target must remain at baseline")
+}
+
+func TestHealthyRecoversReclaimedVMToBaseline(t *testing.T) {
+	const mib = int64(1024 * 1024)
+	const assigned = 2048 * mib
+
+	// An ordinary VM (baseline == assigned) whose balloon was previously inflated
+	// (target below assigned, e.g. after pressure) recovers toward assigned when
+	// the host is healthy — the existing reclaim-recovery behavior, unchanged.
+	src := &stubSource{
+		vms: []BalloonVM{
+			{ID: "a", Name: "a", HypervisorType: hypervisor.TypeCloudHypervisor, SocketPath: "a", AssignedMemoryBytes: assigned, BaselineMemoryBytes: assigned},
+		},
+	}
+	hv := &stubHypervisor{target: 1024 * mib, capabilities: hypervisor.Capabilities{SupportsBalloonControl: true}}
+
+	c := NewController(Policy{Enabled: true, ReclaimEnabled: true}, ActiveBallooningConfig{
+		Enabled:                true,
+		ProtectedFloorPercent:  50,
+		ProtectedFloorMinBytes: 0,
+		MinAdjustmentBytes:     1,
+		PerVMMaxStepBytes:      assigned,
+		PerVMCooldown:          time.Millisecond,
+	}, src, slog.New(slog.NewTextHandler(io.Discard, nil))).(*controller)
+	c.sampler = &stubSampler{sample: HostPressureSample{TotalBytes: 64 * 1024 * mib, AvailableBytes: 32 * 1024 * mib, AvailablePercent: 50}}
+	c.reconcileMu.newClient = func(_ hypervisor.Type, _ string) (hypervisor.Hypervisor, error) {
+		return hv, nil
+	}
+
+	resp, err := c.TriggerReclaim(context.Background(), ManualReclaimRequest{ReclaimBytes: 0})
+	require.NoError(t, err)
+	require.Len(t, resp.Actions, 1)
+	assert.Equal(t, "applied", resp.Actions[0].Status)
+	assert.Equal(t, assigned, hv.target, "healthy host should recover the balloon back to assigned")
+}
+
 func TestTriggerReclaimMinAdjustmentKeepsCurrentTarget(t *testing.T) {
 	const mib = int64(1024 * 1024)
 
