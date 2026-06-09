@@ -62,6 +62,16 @@ func (s *ApiService) CreateImage(ctx context.Context, request oapi.CreateImageRe
 				Code:    "invalid_platform",
 				Message: err.Error(),
 			}, nil
+		case errors.Is(err, images.ErrPlatformNotAvailable):
+			return oapi.CreateImage404JSONResponse{
+				Code:    "platform_not_available",
+				Message: err.Error(),
+			}, nil
+		case errors.Is(err, images.ErrRateLimited):
+			return oapi.CreateImage429JSONResponse{
+				Code:    "rate_limited",
+				Message: "registry rate limit exceeded; retry later or authenticate to the registry",
+			}, nil
 		case errors.Is(err, images.ErrNotFound):
 			return oapi.CreateImage404JSONResponse{
 				Code:    "not_found",

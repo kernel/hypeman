@@ -984,6 +984,11 @@ components:
           type: string
           description: OCI image reference
           example: docker.io/library/alpine:latest
+        platform:
+          type: string
+          readOnly: true
+          description: Resolved image platform as os/arch[/variant] (e.g. "linux/amd64"). amd64 images on an arm64 host run under Rosetta emulation.
+          example: linux/amd64
         state:
           $ref: "#/components/schemas/InstanceState"
         state_error:
@@ -2191,7 +2196,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
         404:
-          description: Image not found
+          description: Image not found or requested platform not available
           content:
             application/json:
               schema:
@@ -2202,13 +2207,19 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        429:
+          description: Registry rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         500:
           description: Internal server error
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
-  
+
   /images/{name}:
     get:
       summary: Get image details
@@ -2344,8 +2355,20 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        404:
+          description: Image not found or requested platform not available
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         409:
           description: Conflict - insufficient resources or name already exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        429:
+          description: Registry rate limit exceeded
           content:
             application/json:
               schema:
@@ -2356,7 +2379,7 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
-  
+
   /instances/{id}:
     get:
       summary: Get instance details
@@ -2542,7 +2565,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Instance"
         404:
-          description: Instance not found
+          description: Instance not found, or the instance's image no longer exists
           content:
             application/json:
               schema:
@@ -2593,7 +2616,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
         404:
-          description: Source instance not found
+          description: Source instance not found, or its image no longer exists
           content:
             application/json:
               schema:
@@ -2825,7 +2848,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
         404:
-          description: Instance or snapshot not found
+          description: Instance or snapshot not found, or the instance's image no longer exists
           content:
             application/json:
               schema:
@@ -3092,7 +3115,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Instance"
         404:
-          description: Instance not found
+          description: Instance not found, or the instance's image no longer exists
           content:
             application/json:
               schema:
