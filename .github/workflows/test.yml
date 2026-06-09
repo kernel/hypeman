@@ -235,6 +235,18 @@ jobs:
         run: |
           export HYPEMAN_TEST_PREWARM_DIR="$HOME/.cache/hypeman-ci/darwin-arm64"
           make test
+      # TEMP(qa): remove before merge. Runs the gated vz memory-ceiling
+      # integration test (normally skipped) on the real macOS runner to prove
+      # boot-at-ceiling, balloon-to-baseline, and live grow actually work.
+      - name: TEMP(qa) Run vz memory ceiling integration test
+        env:
+          DEFAULT_HYPERVISOR: vz
+          JWT_SECRET: ci-test-secret
+          HYPEMAN_RUN_GUESTMEMORY_TESTS: "1"
+        run: |
+          make sign-vz-shim
+          PATH="/opt/homebrew/opt/e2fsprogs/sbin:$PATH" \
+          go test -tags containers_image_openpgp -run '^TestVZMemoryCeiling$' ./lib/instances/... -v -count=1 -timeout 900s
       - name: Cleanup
         if: always()
         run: |
