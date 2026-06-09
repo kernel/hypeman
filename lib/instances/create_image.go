@@ -18,41 +18,47 @@ type createImageResolver interface {
 }
 
 func resolveImageForCreate(ctx context.Context, imageManager createImageResolver, imageName, platform string, log *slog.Logger) (*images.Image, error) {
-	if strings.TrimSpace(platform) != "" {
-		log.InfoContext(ctx, "resolving image for requested platform", "image", imageName, "platform", platform)
-		img, err := imageManager.CreateImage(ctx, images.CreateImageRequest{Name: imageName, Platform: platform})
-		if err != nil {
-			return nil, fmt.Errorf("resolve image %s for platform %s: %w", imageName, platform, err)
+	// An empty platform means "the host platform": a no-platform run must boot a
+	// host-native guest, never silently emulate. We deliberately do NOT follow the
+	// tag symlink (which is last-pull-wins and may point at a non-host arch);
+	// instead we resolve the host variant explicitly. Tag last-pull-wins still
+	// governs image addressing (get/list/by-tag) -- this only affects the default
+	// architecture an instance boots.
+	resolvePlatform := platform
+	if strings.TrimSpace(resolvePlatform) == "" {
+		// A locally cached host-native (or platformless, e.g. locally built) image
+		// can be returned without a registry round-trip. We only accept the cached
+		// entry when it actually matches the host; otherwise we fall through to the
+		// host-pinned resolution below so a non-host tag pointer cannot leak in.
+		if img, err := imageManager.GetImage(ctx, imageName); err == nil {
+			if !images.ImageNeedsHostEmulation(img.Platform) {
+				return img, nil
+			}
+		} else if !errors.Is(err, images.ErrNotFound) {
+			return nil, fmt.Errorf("get image: %w", err)
 		}
-		pinned, err := pinnedImageName(imageName, img.Digest)
-		if err != nil {
-			return nil, err
-		}
-		img, err = awaitReady(ctx, imageManager, img, pinned, log)
-		if err != nil {
-			return nil, err
-		}
-		if err := validateResolvedImagePlatform(img, platform); err != nil {
-			return nil, err
-		}
-		return img, nil
+		// Materialize the host platform string here (CreateImage would also
+		// default empty->host internally) so validateResolvedImagePlatform below
+		// has a concrete, non-empty target to match the resolved image against.
+		resolvePlatform = images.HostPlatformString()
+		log.InfoContext(ctx, "no platform requested, resolving host platform", "image", imageName, "platform", resolvePlatform)
+	} else {
+		log.InfoContext(ctx, "resolving image for requested platform", "image", imageName, "platform", resolvePlatform)
 	}
 
-	img, err := imageManager.GetImage(ctx, imageName)
-	if err == nil {
-		return img, nil
-	}
-	if !errors.Is(err, images.ErrNotFound) {
-		return nil, fmt.Errorf("get image: %w", err)
-	}
-
-	log.InfoContext(ctx, "image not found locally, auto-pulling", "image", imageName)
-	img, err = imageManager.CreateImage(ctx, images.CreateImageRequest{Name: imageName})
+	img, err := imageManager.CreateImage(ctx, images.CreateImageRequest{Name: imageName, Platform: resolvePlatform})
 	if err != nil {
-		return nil, fmt.Errorf("auto-pull image %s: %w", imageName, err)
+		return nil, fmt.Errorf("resolve image %s for platform %s: %w", imageName, resolvePlatform, err)
 	}
-	img, err = awaitReady(ctx, imageManager, img, img.Name, log)
+	pinned, err := pinnedImageName(imageName, img.Digest)
 	if err != nil {
+		return nil, err
+	}
+	img, err = awaitReady(ctx, imageManager, img, pinned, log)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateResolvedImagePlatform(img, resolvePlatform); err != nil {
 		return nil, err
 	}
 	return img, nil
@@ -93,10 +99,11 @@ func pinnedImageName(imageName, digest string) (string, error) {
 	return parsed.Repository() + "@" + digest, nil
 }
 
-func storedImageNameForCreate(imageName, platform string, img *images.Image) (string, error) {
-	if strings.TrimSpace(platform) == "" {
-		return imageName, nil
-	}
+// storedImageNameForCreate pins the instance to the exact digest resolved at
+// create time. Pinning the digest -- not the tag -- keeps the instance booting
+// the same arch across restarts, immune to a later last-pull-wins tag flip; this
+// matters even for a no-platform create, which now resolves the host variant.
+func storedImageNameForCreate(imageName string, img *images.Image) (string, error) {
 	if img == nil {
 		return "", fmt.Errorf("%w: image did not resolve", ErrImageNotReady)
 	}

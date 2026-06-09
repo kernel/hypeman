@@ -34,7 +34,10 @@ func emulatedArchName() string {
 	return "arm64"
 }
 
-// hostPlatformString renders the host platform for log/error context.
-func hostPlatformString() string {
+// hostOSArchString renders the host OS/arch (e.g. "darwin/arm64") for
+// log/error context. This is the host-kernel identity and is distinct from
+// images.HostPlatformString, which reports the guest host platform
+// ("linux/<arch>") used to resolve and match image manifests.
+func hostOSArchString() string {
 	return runtime.GOOS + "/" + runtime.GOARCH
 }

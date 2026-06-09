@@ -666,6 +666,7 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 	pendingLevel := 3
 
 	src := StoredMetadata{
+		Platform:      "linux/amd64",
 		Env:           map[string]string{"A": "1"},
 		Tags:          map[string]string{"m": "x"},
 		Volumes:       []VolumeAttachment{{VolumeID: "vol-1", MountPath: "/data"}},
@@ -708,6 +709,7 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 
 	cloned := cloneStoredMetadata(src)
 	require.Equal(t, src, cloned)
+	require.Equal(t, "linux/amd64", cloned.Platform, "resolved platform must survive fork/snapshot-restore")
 
 	cloned.Env["A"] = "2"
 	cloned.Tags["m"] = "y"

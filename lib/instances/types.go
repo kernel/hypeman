@@ -79,6 +79,11 @@ type StoredMetadata struct {
 	Name  string
 	Image string // OCI reference
 
+	// Platform is the resolved image platform as os/arch[/variant] (e.g.
+	// "linux/amd64"), captured from the pulled image's metadata at create time.
+	// Read-only; echoed on the instance API.
+	Platform string
+
 	// Resources (matching Cloud Hypervisor terminology)
 	Size                     int64 // Base memory in bytes
 	HotplugSize              int64 // Hotplug memory in bytes

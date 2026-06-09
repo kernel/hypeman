@@ -59,6 +59,23 @@ func (m *manager) restoreInstance(
 		return nil, fmt.Errorf("no snapshot available for instance %s", id)
 	}
 
+	// 2a. Validate the instance's image (rootfs) still exists before reserving
+	// resources or invoking the hypervisor shim. A deleted image otherwise fails
+	// deep in storage configuration ("disk image not found"), retrying for ~60s
+	// and surfacing as an opaque 500; resolving it up front (mirroring start)
+	// returns images.ErrNotFound fast so the handler maps it to 404.
+	imageCtx, imageSpanEnd := m.startLifecycleStep(ctx, "resolve_image",
+		attribute.String("instance_id", id),
+		attribute.String("hypervisor", string(stored.HypervisorType)),
+		attribute.String("operation", "resolve_image"),
+	)
+	_, err = m.imageManager.GetImage(imageCtx, stored.Image)
+	imageSpanEnd(err)
+	if err != nil {
+		log.ErrorContext(ctx, "failed to resolve image for restore", "instance_id", id, "image", stored.Image, "error", err)
+		return nil, fmt.Errorf("get image: %w", err)
+	}
+
 	// 2b. Validate aggregate resource limits before allocating resources (if configured)
 	reservedResources := false
 	if m.resourceValidator != nil {

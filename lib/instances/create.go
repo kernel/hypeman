@@ -118,7 +118,7 @@ func (m *manager) createInstance(
 	// unbootable VM.
 	enableRosetta, err := deriveEnableRosetta(images.ImageNeedsHostEmulation(imageInfo.Platform), hvType)
 	if err != nil {
-		log.ErrorContext(ctx, "image platform requires emulation", "image", req.Image, "image_platform", imageInfo.Platform, "host", hostPlatformString())
+		log.ErrorContext(ctx, "image platform requires emulation", "image", req.Image, "image_platform", imageInfo.Platform, "host", hostOSArchString())
 		return nil, err
 	}
 	m.recordImageUsage(ctx, imageInfo)
@@ -135,7 +135,7 @@ func (m *manager) createInstance(
 			"kernel", kernelVer,
 			"label", system.ImageKernelVersionLabel)
 	}
-	storedImageName, err := storedImageNameForCreate(req.Image, req.Platform, imageInfo)
+	storedImageName, err := storedImageNameForCreate(req.Image, imageInfo)
 	if err != nil {
 		return nil, err
 	}
@@ -322,6 +322,7 @@ func (m *manager) createInstance(
 		Id:                       id,
 		Name:                     req.Name,
 		Image:                    storedImageName,
+		Platform:                 imageInfo.Platform,
 		Size:                     size,
 		HotplugSize:              hotplugSize,
 		OverlaySize:              overlaySize,

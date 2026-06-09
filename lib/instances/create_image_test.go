@@ -142,7 +142,10 @@ func TestResolveImageForCreateWithPlatformWaitsOnPinnedDigest(t *testing.T) {
 	}
 }
 
-func TestResolveImageForCreateWithoutPlatformUsesExistingImage(t *testing.T) {
+// A no-platform create that finds a host-native cached image returns it without
+// a registry round-trip (covers locally cached host images and locally-built /
+// platformless images, whose stored platform reports as host-native).
+func TestResolveImageForCreateWithoutPlatformUsesHostCachedImage(t *testing.T) {
 	t.Parallel()
 
 	createCalled := false
@@ -150,7 +153,7 @@ func TestResolveImageForCreateWithoutPlatformUsesExistingImage(t *testing.T) {
 		getImage: func(context.Context, string) (*images.Image, error) {
 			return &images.Image{
 				Name:     "docker.io/library/alpine:3.19",
-				Platform: "linux/arm64",
+				Platform: images.HostPlatformString(),
 				Status:   images.StatusReady,
 			}, nil
 		},
@@ -165,11 +168,97 @@ func TestResolveImageForCreateWithoutPlatformUsesExistingImage(t *testing.T) {
 		t.Fatalf("resolve image: %v", err)
 	}
 	if createCalled {
-		t.Fatal("default platform run should use existing image when present")
+		t.Fatal("default platform run should use host-cached image when present")
 	}
-	if img.Platform != "linux/arm64" {
-		t.Fatalf("expected existing image, got %s", img.Platform)
+	if img.Platform != images.HostPlatformString() {
+		t.Fatalf("expected host image, got %s", img.Platform)
 	}
+}
+
+// A no-platform create must NOT trust a tag pointer that resolves to a non-host
+// arch (last-pull-wins can point the tag at an emulated variant). It must
+// re-resolve the host variant explicitly and never silently emulate.
+func TestResolveImageForCreateWithoutPlatformIgnoresNonHostTagPointer(t *testing.T) {
+	t.Parallel()
+
+	const imageName = "docker.io/library/alpine:3.19"
+	nonHost := nonHostPlatformString()
+
+	createReqPlatform := ""
+	resolver := createImageResolverFake{
+		getImage: func(_ context.Context, name string) (*images.Image, error) {
+			// First call: tag lookup resolves the non-host (last-pull-wins) variant.
+			// Subsequent call is the pinned-digest readiness lookup.
+			if name == imageName {
+				return &images.Image{
+					Name:     imageName,
+					Platform: nonHost,
+					Status:   images.StatusReady,
+				}, nil
+			}
+			return &images.Image{
+				Name:     imageName,
+				Digest:   "sha256:host",
+				Platform: images.HostPlatformString(),
+				Status:   images.StatusReady,
+			}, nil
+		},
+		createImage: func(_ context.Context, req images.CreateImageRequest) (*images.Image, error) {
+			createReqPlatform = req.Platform
+			return &images.Image{
+				Name:     req.Name,
+				Digest:   "sha256:host",
+				Platform: images.HostPlatformString(),
+				Status:   images.StatusReady,
+			}, nil
+		},
+	}
+
+	img, err := resolveImageForCreate(context.Background(), resolver, imageName, "", slog.Default())
+	if err != nil {
+		t.Fatalf("resolve image: %v", err)
+	}
+	if createReqPlatform != images.HostPlatformString() {
+		t.Fatalf("expected host platform resolve, got %q", createReqPlatform)
+	}
+	if img.Platform != images.HostPlatformString() {
+		t.Fatalf("expected host image, got %s", img.Platform)
+	}
+}
+
+// A no-platform create of an image with no host variant must surface a clear
+// platform-not-available error rather than emulating, so the handler maps it to
+// 404 platform_not_available telling the user to pass --platform.
+func TestResolveImageForCreateWithoutPlatformHostVariantAbsent(t *testing.T) {
+	t.Parallel()
+
+	const imageName = "docker.io/library/alpine:3.19"
+	resolver := createImageResolverFake{
+		getImage: func(context.Context, string) (*images.Image, error) {
+			return nil, images.ErrNotFound
+		},
+		createImage: func(_ context.Context, req images.CreateImageRequest) (*images.Image, error) {
+			if req.Platform != images.HostPlatformString() {
+				t.Fatalf("expected host platform resolve, got %q", req.Platform)
+			}
+			return nil, images.ErrPlatformNotAvailable
+		},
+	}
+
+	_, err := resolveImageForCreate(context.Background(), resolver, imageName, "", slog.Default())
+	if !errors.Is(err, images.ErrPlatformNotAvailable) {
+		t.Fatalf("expected platform-not-available error, got %v", err)
+	}
+}
+
+// nonHostPlatformString returns the canonical platform of the architecture the
+// host is NOT, so tests can exercise the "tag points at the other arch" path
+// regardless of which arch they run on.
+func nonHostPlatformString() string {
+	if images.ImageNeedsHostEmulation("linux/amd64") {
+		return "linux/amd64"
+	}
+	return "linux/arm64"
 }
 
 func TestStoredImageNameForCreatePinsExplicitPlatform(t *testing.T) {
@@ -177,7 +266,6 @@ func TestStoredImageNameForCreatePinsExplicitPlatform(t *testing.T) {
 
 	got, err := storedImageNameForCreate(
 		"docker.io/library/alpine:3.19",
-		"linux/amd64",
 		&images.Image{Digest: "sha256:amd64"},
 	)
 	if err != nil {
@@ -188,18 +276,20 @@ func TestStoredImageNameForCreatePinsExplicitPlatform(t *testing.T) {
 	}
 }
 
-func TestStoredImageNameForCreateKeepsDefaultPlatformTag(t *testing.T) {
+// A no-platform create now resolves a concrete (host) variant, so the instance
+// is pinned to that digest too -- keeping it immune to later last-pull-wins tag
+// flips rather than re-following the tag on every restart.
+func TestStoredImageNameForCreateDefaultPlatformPinsDigest(t *testing.T) {
 	t.Parallel()
 
 	got, err := storedImageNameForCreate(
 		"docker.io/library/alpine:3.19",
-		"",
-		&images.Image{Digest: "sha256:arm64"},
+		&images.Image{Digest: "sha256:host"},
 	)
 	if err != nil {
 		t.Fatalf("stored image name: %v", err)
 	}
-	if got != "docker.io/library/alpine:3.19" {
-		t.Fatalf("expected original tag ref, got %q", got)
+	if got != "docker.io/library/alpine@sha256:host" {
+		t.Fatalf("expected pinned digest ref, got %q", got)
 	}
 }
