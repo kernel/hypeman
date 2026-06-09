@@ -77,6 +77,16 @@ func main() {
 	// Create the shim server
 	server := NewShimServer(vm, vmConfig, config)
 
+	// When booted at a ceiling, balloon the guest down to its baseline. A restore
+	// resumes a guest that was already ballooned, so this only applies to cold boot.
+	if config.RestoreMachineStatePath == "" {
+		if err := server.applyInitialBalloonTarget(); err != nil {
+			slog.Error("failed to balloon guest to baseline", "error", err)
+			fmt.Fprintf(os.Stderr, "failed to balloon guest to baseline: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
 	// Start control socket listener (remove stale socket from previous run)
 	os.Remove(config.ControlSocket)
 	controlListener, err := net.Listen("unix", config.ControlSocket)

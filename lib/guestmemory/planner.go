@@ -10,6 +10,24 @@ type candidateState struct {
 	maxReclaimBytes         int64
 }
 
+// baselineGuestBytes is the target the controller holds when the host is
+// healthy: the guest's baseline, clamped into [protectedFloor, assigned]. For
+// ordinary VMs the baseline equals the assigned size.
+func (c candidateState) baselineGuestBytes() int64 {
+	baseline := c.vm.BaselineMemoryBytes
+	if baseline <= 0 || baseline > c.vm.AssignedMemoryBytes {
+		baseline = c.vm.AssignedMemoryBytes
+	}
+	return clampInt64(baseline, c.protectedFloorBytes, c.vm.AssignedMemoryBytes)
+}
+
+// utilizationPercent reports the guest's memory usage as a percentage of its
+// current allowance. No measured guest-memory signal exists yet (RFC milestone
+// 4), so this is 0 and auto-grow stays inert until one is wired in.
+func (c candidateState) utilizationPercent() int {
+	return 0
+}
+
 func planGuestTargets(cfg ActiveBallooningConfig, candidates []candidateState, totalReclaim int64) map[string]int64 {
 	targets := make(map[string]int64, len(candidates))
 	if len(candidates) == 0 {
@@ -57,9 +75,19 @@ func planGuestTargets(cfg ActiveBallooningConfig, candidates []candidateState, t
 	return targets
 }
 
-func protectedFloorBytes(cfg ActiveBallooningConfig, assigned int64) int64 {
-	percentFloor := (assigned * int64(cfg.ProtectedFloorPercent)) / 100
+func protectedFloorBytes(cfg ActiveBallooningConfig, anchor int64) int64 {
+	percentFloor := (anchor * int64(cfg.ProtectedFloorPercent)) / 100
 	return maxInt64(cfg.ProtectedFloorMinBytes, percentFloor)
+}
+
+// floorAnchorBytes is the size the protected floor is computed against: the
+// guest's baseline (normal running size), or the assigned size when no smaller
+// baseline is set (ordinary, non-ceiling VMs).
+func floorAnchorBytes(vm BalloonVM) int64 {
+	if vm.BaselineMemoryBytes > 0 && vm.BaselineMemoryBytes < vm.AssignedMemoryBytes {
+		return vm.BaselineMemoryBytes
+	}
+	return vm.AssignedMemoryBytes
 }
 
 func nextPressureState(current HostPressureState, cfg ActiveBallooningConfig, sample HostPressureSample) HostPressureState {
@@ -94,6 +122,31 @@ func automaticTargetBytes(state HostPressureState, cfg ActiveBallooningConfig, s
 		return currentTotalReclaim
 	}
 	return 0
+}
+
+// growthTargetBytes returns the healthy-host target for a guest. holdTarget is
+// the size to hold when not growing (the guest's baseline). With
+// GrowOnDemandEnabled false it returns holdTarget, so the controller behaves
+// exactly as it does today: ordinary VMs (baseline == assigned) recover to full,
+// ceiling VMs hold at their baseline. When enabled it raises the target toward
+// assigned (the ceiling) once guest utilization is at least
+// GrowUtilizationPercent. The result is bounded to [protectedFloor, assigned];
+// the controller's per-step and cooldown clamps further rate-limit the applied
+// change.
+//
+// utilizationPercent is the guest's usage as a fraction of its current
+// allowance. A measured guest-memory signal is a follow-up (RFC milestone 4);
+// until one is wired in the reconcile loop supplies 0, so auto-grow stays inert
+// even when enabled.
+func growthTargetBytes(cfg ActiveBallooningConfig, holdTarget, assigned, protectedFloor int64, utilizationPercent int) int64 {
+	if !cfg.GrowOnDemandEnabled || utilizationPercent < cfg.GrowUtilizationPercent {
+		return clampInt64(holdTarget, protectedFloor, assigned)
+	}
+	target := assigned
+	if target < holdTarget {
+		target = holdTarget
+	}
+	return clampInt64(target, protectedFloor, assigned)
 }
 
 func absInt64(v int64) int64 {

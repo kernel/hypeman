@@ -163,6 +163,7 @@ func buildShimConfigFromVMConfig(config hypervisor.VMConfig, socketPath string) 
 	cfg := shimconfig.ShimConfig{
 		VCPUs:                config.VCPUs,
 		MemoryBytes:          config.MemoryBytes,
+		MemoryCeilingBytes:   config.MemoryCeilingBytes,
 		SerialLogPath:        config.SerialLogPath,
 		KernelPath:           config.KernelPath,
 		InitrdPath:           config.InitrdPath,
@@ -257,6 +258,8 @@ func (s *Starter) startShim(ctx context.Context, p *paths.Paths, version string,
 		}
 		return 0, nil, fmt.Errorf("connect to vz-shim: %w", err)
 	}
+
+	client.liveMemoryCeiling = shimConfig.MemoryCeilingBytes > shimConfig.MemoryBytes
 
 	return pid, client, nil
 }

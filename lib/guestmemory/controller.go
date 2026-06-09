@@ -166,7 +166,11 @@ func (c *controller) reconcile(ctx context.Context, req reconcileRequest) (Manua
 		}
 
 		currentTarget = clampInt64(currentTarget, 0, vm.AssignedMemoryBytes)
-		protectedFloor := protectedFloorBytes(c.config, vm.AssignedMemoryBytes)
+		// The protected floor guards the guest's normal working size, so it is
+		// anchored on the baseline rather than the ceiling. For ordinary VMs the
+		// baseline equals the assigned size, so this is unchanged; for a ceiling VM
+		// it keeps the floor at/below the baseline the guest is held at.
+		protectedFloor := protectedFloorBytes(c.config, floorAnchorBytes(vm))
 		if protectedFloor > vm.AssignedMemoryBytes {
 			protectedFloor = vm.AssignedMemoryBytes
 		}
@@ -212,6 +216,23 @@ func (c *controller) reconcile(ctx context.Context, req reconcileRequest) (Manua
 	summary.manualHoldActive = state.manualHold != nil
 
 	plannedTargets := planGuestTargets(c.config, candidates, totalTarget)
+	// With no reclaim demanded the host is healthy, so each guest holds at its
+	// baseline by default (for ordinary VMs baseline == assigned, recovering any
+	// pressure-driven reclaim exactly as before). Grow-on-demand may raise the
+	// target toward the ceiling; when disabled growthTargetBytes returns the
+	// baseline, leaving today's behavior unchanged.
+	if totalTarget == 0 {
+		for _, candidate := range candidates {
+			baseline := candidate.baselineGuestBytes()
+			plannedTargets[candidate.vm.ID] = growthTargetBytes(
+				c.config,
+				baseline,
+				candidate.vm.AssignedMemoryBytes,
+				candidate.protectedFloorBytes,
+				candidate.utilizationPercent(),
+			)
+		}
+	}
 
 	resp := ManualReclaimResponse{
 		RequestedReclaimBytes: req.requestedReclaim,

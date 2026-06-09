@@ -265,6 +265,25 @@ func (s *ShimServer) handlePowerButton(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// applyInitialBalloonTarget inflates the balloon to the baseline (MemoryBytes)
+// when the VM was booted at a higher ceiling, so the guest settles at its normal
+// running size after coming up at the ceiling. No-op when no ceiling is active.
+func (s *ShimServer) applyInitialBalloonTarget() error {
+	if s.shimConfig.MemoryCeilingBytes <= s.shimConfig.MemoryBytes {
+		return nil
+	}
+	device, err := s.getTraditionalBalloonDevice()
+	if err != nil {
+		return err
+	}
+	device.SetTargetVirtualMachineMemorySize(uint64(s.shimConfig.MemoryBytes))
+	slog.Info("ballooned guest to baseline",
+		"boot_bytes", s.shimConfig.MemoryCeilingBytes,
+		"baseline_bytes", s.shimConfig.MemoryBytes,
+	)
+	return nil
+}
+
 func (s *ShimServer) getTraditionalBalloonDevice() (*vz.VirtioTraditionalMemoryBalloonDevice, error) {
 	for _, device := range s.vm.MemoryBalloonDevices() {
 		if traditional := vz.AsVirtioTraditionalMemoryBalloonDevice(device); traditional != nil {

@@ -164,6 +164,9 @@ func (m *manager) createInstance(
 		size = 1 * 1024 * 1024 * 1024 // 1GB default
 	}
 	hotplugSize := req.HotplugSize
+	if err := validateMemoryCeiling(req.MemoryCeilingBytes, size); err != nil {
+		return nil, err
+	}
 	overlaySize := req.OverlaySize
 	if overlaySize == 0 {
 		overlaySize = 10 * 1024 * 1024 * 1024 // 10GB default
@@ -184,6 +187,11 @@ func (m *manager) createInstance(
 	totalMemory := size + hotplugSize
 	if m.limits.MaxMemoryPerInstance > 0 && totalMemory > m.limits.MaxMemoryPerInstance {
 		return nil, fmt.Errorf("total memory %d (size + hotplug_size) exceeds maximum allowed %d per instance", totalMemory, m.limits.MaxMemoryPerInstance)
+	}
+	// A boot ceiling is the worst-case memory the guest can reach via the balloon,
+	// so it is bounded by the same per-instance limit.
+	if m.limits.MaxMemoryPerInstance > 0 && req.MemoryCeilingBytes > m.limits.MaxMemoryPerInstance {
+		return nil, fmt.Errorf("memory ceiling %d exceeds maximum allowed %d per instance", req.MemoryCeilingBytes, m.limits.MaxMemoryPerInstance)
 	}
 
 	diskBytes := requestedDiskReservationBytes(overlaySize, req.Volumes)
@@ -329,6 +337,7 @@ func (m *manager) createInstance(
 		Platform:                 imageInfo.Platform,
 		Size:                     size,
 		HotplugSize:              hotplugSize,
+		MemoryCeilingBytes:       req.MemoryCeilingBytes,
 		OverlaySize:              overlaySize,
 		Vcpus:                    vcpus,
 		NetworkBandwidthDownload: req.NetworkBandwidthDownload, // Will be set by caller if using resource manager
@@ -874,21 +883,22 @@ func (m *manager) buildHypervisorConfig(ctx context.Context, inst *Instance, ima
 	}
 
 	return hypervisor.VMConfig{
-		VCPUs:         inst.Vcpus,
-		MemoryBytes:   inst.Size,
-		HotplugBytes:  inst.HotplugSize,
-		Topology:      topology,
-		GuestMemory:   m.guestMemoryConfig(),
-		Disks:         disks,
-		Networks:      networks,
-		SerialLogPath: m.paths.InstanceAppLog(inst.Id),
-		VsockCID:      inst.VsockCID,
-		VsockSocket:   inst.VsockSocket,
-		PCIDevices:    pciDevices,
-		KernelPath:    kernelPath,
-		InitrdPath:    initrdPath,
-		KernelArgs:    m.kernelArgs(inst.HypervisorType),
-		EnableRosetta: inst.EnableRosetta,
+		VCPUs:              inst.Vcpus,
+		MemoryBytes:        inst.Size,
+		HotplugBytes:       inst.HotplugSize,
+		MemoryCeilingBytes: inst.MemoryCeilingBytes,
+		Topology:           topology,
+		GuestMemory:        m.guestMemoryConfig(),
+		Disks:              disks,
+		Networks:           networks,
+		SerialLogPath:      m.paths.InstanceAppLog(inst.Id),
+		VsockCID:           inst.VsockCID,
+		VsockSocket:        inst.VsockSocket,
+		PCIDevices:         pciDevices,
+		KernelPath:         kernelPath,
+		InitrdPath:         initrdPath,
+		KernelArgs:         m.kernelArgs(inst.HypervisorType),
+		EnableRosetta:      inst.EnableRosetta,
 	}, nil
 }
 

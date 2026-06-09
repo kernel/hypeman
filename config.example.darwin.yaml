@@ -49,6 +49,13 @@ hypervisor:
       min_adjustment_bytes: 67108864
       per_vm_max_step_bytes: 268435456
       per_vm_cooldown: 5s
+      # Grow a guest's usable memory above its baseline toward its configured
+      # boot ceiling while the host is healthy. Off by default. Requires the
+      # instance to have been created with a memory ceiling above its size.
+      grow_on_demand_enabled: false
+      # Deflate toward the ceiling only when the guest is using at least this
+      # percent of its current allowance. Ignored unless grow_on_demand_enabled.
+      grow_utilization_percent: 85
 
 # =============================================================================
 # Network Configuration (DIFFERENT ON MACOS)
@@ -161,7 +168,11 @@ limits:
 #    - No tc/HTB equivalent on macOS
 #
 # 3. CPU/Memory Hotplug
-#    - Resize operations not supported
+#    - True memory hotplug (growing boot RAM at runtime) is not supported.
+#    - Usable guest memory is instead made elastic between a baseline and a boot
+#      ceiling via the memory balloon: a VM created with a memory ceiling boots
+#      at the ceiling and is ballooned down to its baseline, then the active
+#      ballooning controller moves the target within [floor, ceiling].
 #
 # 4. Disk I/O Limiting
 #    - capacity.disk_io, oversubscription.disk_io are ignored

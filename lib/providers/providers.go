@@ -210,6 +210,8 @@ func ProvideGuestMemoryController(instanceManager instances.Manager, cfg *config
 		MinAdjustmentBytes:                    minAdjustmentBytes,
 		PerVMMaxStepBytes:                     perVMMaxStepBytes,
 		PerVMCooldown:                         perVMCooldown,
+		GrowOnDemandEnabled:                   cfg.Hypervisor.Memory.ActiveBallooning.GrowOnDemandEnabled,
+		GrowUtilizationPercent:                cfg.Hypervisor.Memory.ActiveBallooning.GrowUtilizationPercent,
 	}
 
 	return guestmemory.NewController(policy, controllerCfg, &guestMemoryInstanceSource{manager: instanceManager}, log.With("component", "guestmemory")), nil
@@ -295,15 +297,30 @@ func (s *guestMemoryInstanceSource) ListBalloonVMs(ctx context.Context) ([]guest
 		if inst.State != instances.StateRunning && inst.State != instances.StateInitializing {
 			continue
 		}
-		vms = append(vms, guestmemory.BalloonVM{
-			ID:                  inst.Id,
-			Name:                inst.Name,
-			HypervisorType:      inst.HypervisorType,
-			SocketPath:          inst.SocketPath,
-			AssignedMemoryBytes: inst.Size + inst.HotplugSize,
-		})
+		vms = append(vms, balloonVMForInstance(inst))
 	}
 	return vms, nil
+}
+
+// balloonVMForInstance maps a stored instance onto the controller's view. The
+// baseline is the guest's normal running size; a vz boot ceiling is the live
+// maximum the balloon can deflate to, so it drives the controller's upper clamp
+// while the baseline is the size held when the host is healthy. HotplugSize is 0
+// on vz, so the max keeps non-vz backends correct if hotplug is ever populated.
+func balloonVMForInstance(inst instances.Instance) guestmemory.BalloonVM {
+	baseline := inst.Size + inst.HotplugSize
+	assigned := baseline
+	if inst.MemoryCeilingBytes > assigned {
+		assigned = inst.MemoryCeilingBytes
+	}
+	return guestmemory.BalloonVM{
+		ID:                  inst.Id,
+		Name:                inst.Name,
+		HypervisorType:      inst.HypervisorType,
+		SocketPath:          inst.SocketPath,
+		AssignedMemoryBytes: assigned,
+		BaselineMemoryBytes: baseline,
+	}
 }
 
 func parseByteSize(value string) (int64, error) {

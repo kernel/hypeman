@@ -93,8 +93,12 @@ type StoredMetadata struct {
 	Platform string
 
 	// Resources (matching Cloud Hypervisor terminology)
-	Size                     int64 // Base memory in bytes
-	HotplugSize              int64 // Hotplug memory in bytes
+	Size        int64 // Base memory in bytes
+	HotplugSize int64 // Hotplug memory in bytes
+	// MemoryCeilingBytes, when greater than Size, boots a vz VM at this size and
+	// balloons it down to Size so usable memory can grow up to the ceiling at
+	// runtime. vz only; 0 means no ceiling. Derived/validated at create time.
+	MemoryCeilingBytes       int64
 	OverlaySize              int64 // Overlay disk size in bytes
 	Vcpus                    int
 	NetworkBandwidthDownload int64 // Download rate limit in bytes/sec (external→VM), 0 = auto
@@ -252,6 +256,7 @@ type CreateInstanceRequest struct {
 	Platform                 string                      // Optional: target platform as os/arch[/variant]; drives image resolution and auto-pull. Empty means host platform.
 	Size                     int64                       // Base memory in bytes (default: 1GB)
 	HotplugSize              int64                       // Hotplug memory in bytes (default: 0, set explicitly to enable)
+	MemoryCeilingBytes       int64                       // Boot ceiling in bytes; >Size boots a vz VM at the ceiling and balloons to Size (default: 0 = no ceiling). vz only.
 	OverlaySize              int64                       // Overlay disk size in bytes (default: 10GB)
 	Vcpus                    int                         // Default 2
 	NetworkBandwidthDownload int64                       // Download rate limit bytes/sec (0 = auto, proportional to CPU)

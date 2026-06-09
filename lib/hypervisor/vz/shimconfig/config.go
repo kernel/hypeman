@@ -18,6 +18,12 @@ type ShimConfig struct {
 	VCPUs       int   `json:"vcpus"`
 	MemoryBytes int64 `json:"memory_bytes"`
 
+	// MemoryCeilingBytes is the boot-time memory size. When greater than
+	// MemoryBytes the VM boots at this size and is ballooned down to MemoryBytes
+	// so usable guest memory can later grow up to the ceiling without a reboot.
+	// Zero (or <= MemoryBytes) means boot at MemoryBytes, preserving today's behavior.
+	MemoryCeilingBytes int64 `json:"memory_ceiling_bytes,omitempty"`
+
 	// Storage
 	Disks []DiskConfig `json:"disks"`
 

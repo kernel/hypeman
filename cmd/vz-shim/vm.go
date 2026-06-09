@@ -35,7 +35,11 @@ func createVM(config *shimconfig.ShimConfig) (*vz.VirtualMachine, *vz.VirtualMac
 	}
 
 	vcpus := computeCPUCount(config.VCPUs)
-	memoryBytes := computeMemorySize(uint64(config.MemoryBytes))
+	bootBytes := uint64(config.MemoryBytes)
+	if config.MemoryCeilingBytes > config.MemoryBytes {
+		bootBytes = uint64(config.MemoryCeilingBytes)
+	}
+	memoryBytes := computeMemorySize(bootBytes)
 
 	slog.Debug("VM config", "vcpus", vcpus, "memory_bytes", memoryBytes, "kernel", config.KernelPath, "initrd", config.InitrdPath)
 
@@ -76,10 +80,14 @@ func createVM(config *shimconfig.ShimConfig) (*vz.VirtualMachine, *vz.VirtualMac
 	}
 	vmConfig.SetSocketDevicesVirtualMachineConfiguration([]vz.SocketDeviceConfiguration{vsockConfig})
 
-	if config.EnableMemoryBalloon {
+	// A memory ceiling boots the VM larger than its baseline and relies on the
+	// balloon to hold the guest down, so the balloon is mandatory whenever a
+	// ceiling is active regardless of the EnableMemoryBalloon/RequireMemoryBalloon flags.
+	ceilingActive := config.MemoryCeilingBytes > config.MemoryBytes
+	if config.EnableMemoryBalloon || ceilingActive {
 		balloonConfig, err := vz.NewVirtioTraditionalMemoryBalloonDeviceConfiguration()
 		if err != nil {
-			if config.RequireMemoryBalloon {
+			if config.RequireMemoryBalloon || ceilingActive {
 				return nil, nil, fmt.Errorf("create memory balloon device: %w", err)
 			}
 			slog.Warn("memory balloon unavailable, continuing without balloon", "error", err)

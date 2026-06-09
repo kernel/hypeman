@@ -25,6 +25,11 @@ type Client struct {
 	socketPath            string
 	httpClient            *http.Client
 	longRunningHTTPClient *http.Client
+
+	// liveMemoryCeiling is set when this VM was booted at a ceiling above its
+	// baseline (see ShimConfig.MemoryCeilingBytes). It is surfaced through
+	// Capabilities so callers can tell a ceiling VM apart from a fixed one.
+	liveMemoryCeiling bool
 }
 
 // NewClient creates a new vz shim client.
@@ -79,7 +84,9 @@ type balloonResponse struct {
 }
 
 func (c *Client) Capabilities() hypervisor.Capabilities {
-	return capabilities()
+	caps := capabilities()
+	caps.SupportsLiveMemoryCeiling = c.liveMemoryCeiling
+	return caps
 }
 
 func capabilities() hypervisor.Capabilities {

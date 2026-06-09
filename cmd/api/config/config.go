@@ -222,6 +222,8 @@ type HypervisorActiveBallooningConfig struct {
 	MinAdjustmentBytes                    string `koanf:"min_adjustment_bytes"`
 	PerVmMaxStepBytes                     string `koanf:"per_vm_max_step_bytes"`
 	PerVmCooldown                         string `koanf:"per_vm_cooldown"`
+	GrowOnDemandEnabled                   bool   `koanf:"grow_on_demand_enabled"`
+	GrowUtilizationPercent                int    `koanf:"grow_utilization_percent"`
 }
 
 // SnapshotCompressionDefaultConfig holds default snapshot compression settings.
@@ -428,6 +430,8 @@ func defaultConfig() *Config {
 					MinAdjustmentBytes:                    "67108864",
 					PerVmMaxStepBytes:                     "268435456",
 					PerVmCooldown:                         "5s",
+					GrowOnDemandEnabled:                   false,
+					GrowUtilizationPercent:                85,
 				},
 			},
 		},

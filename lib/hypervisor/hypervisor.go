@@ -233,6 +233,12 @@ type Capabilities struct {
 	// SupportsHotplugMemory indicates if ResizeMemory is available
 	SupportsHotplugMemory bool
 
+	// SupportsLiveMemoryCeiling indicates the VM was booted at a ceiling above its
+	// baseline and its usable memory can grow above baseline at runtime via the
+	// balloon. Derived per-instance from config (vz only); not a static property
+	// of the hypervisor type, so the type registry always reports false.
+	SupportsLiveMemoryCeiling bool
+
 	// SupportsBalloonControl indicates if runtime balloon target changes are available.
 	SupportsBalloonControl bool
 

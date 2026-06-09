@@ -7,8 +7,12 @@ type VMConfig struct {
 	VCPUs        int
 	MemoryBytes  int64
 	HotplugBytes int64
-	Topology     *CPUTopology
-	GuestMemory  GuestMemoryConfig
+	// MemoryCeilingBytes, when greater than MemoryBytes, boots a vz VM at this
+	// size and balloons it down to MemoryBytes so usable memory can grow up to
+	// the ceiling at runtime. vz only; ignored by hypervisors with real hotplug.
+	MemoryCeilingBytes int64
+	Topology           *CPUTopology
+	GuestMemory        GuestMemoryConfig
 
 	// Storage
 	Disks []DiskConfig

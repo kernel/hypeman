@@ -31,6 +31,14 @@ type ActiveBallooningConfig struct {
 	MinAdjustmentBytes int64
 	PerVMMaxStepBytes  int64
 	PerVMCooldown      time.Duration
+
+	// GrowOnDemandEnabled lets the controller raise a guest's balloon target
+	// toward its ceiling (AssignedMemoryBytes) while the host is healthy. Off by
+	// default; when false the controller only ever reclaims, as it does today.
+	GrowOnDemandEnabled bool
+	// GrowUtilizationPercent is the guest utilization threshold above which a
+	// healthy host grows the target toward the ceiling. Clamped to 1..99.
+	GrowUtilizationPercent int
 }
 
 // DefaultActiveBallooningConfig returns conservative defaults for active reclaim.
@@ -45,6 +53,8 @@ func DefaultActiveBallooningConfig() ActiveBallooningConfig {
 		MinAdjustmentBytes:                    64 * 1024 * 1024,
 		PerVMMaxStepBytes:                     256 * 1024 * 1024,
 		PerVMCooldown:                         5 * time.Second,
+		GrowOnDemandEnabled:                   false,
+		GrowUtilizationPercent:                85,
 	}
 }
 
@@ -83,6 +93,9 @@ func (c ActiveBallooningConfig) Normalize() ActiveBallooningConfig {
 	if c.PerVMCooldown <= 0 {
 		c.PerVMCooldown = d.PerVMCooldown
 	}
+	if c.GrowUtilizationPercent <= 0 || c.GrowUtilizationPercent >= 100 {
+		c.GrowUtilizationPercent = d.GrowUtilizationPercent
+	}
 
 	return c
 }
@@ -94,6 +107,11 @@ type BalloonVM struct {
 	HypervisorType      hypervisor.Type
 	SocketPath          string
 	AssignedMemoryBytes int64
+	// BaselineMemoryBytes is the guest's normal running size and the target the
+	// controller holds when the host is healthy. It equals AssignedMemoryBytes
+	// for ordinary VMs; for a vz boot-ceiling VM it is the smaller baseline the
+	// guest is ballooned down to, while AssignedMemoryBytes is the ceiling.
+	BaselineMemoryBytes int64
 }
 
 // Source lists reclaim-eligible VMs.
