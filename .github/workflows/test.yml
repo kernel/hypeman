@@ -80,7 +80,13 @@ jobs:
       - name: Create run-scoped temp directory
         run: |
           TEST_NETWORK_TMPDIR="/tmp/hm-net-${{ github.run_id }}-${{ github.run_attempt }}"
-          TEST_TMPDIR="/tmp/hypeman-ci-${{ github.run_id }}-${{ github.run_attempt }}"
+          TEST_TMPDIR="/hci${{ github.run_attempt }}"
+          stale_pids="$(ps -eo pid=,ppid=,cmd= | awk -v tmpdir="$TEST_TMPDIR" '$2 == 1 && index($0, tmpdir) && /(firecracker|cloud-hypervisor|hypeman-uffd-pager)/ {print $1}' || true)"
+          if [ -n "$stale_pids" ]; then
+            echo "$stale_pids" | xargs -r sudo kill || true
+            sleep 3
+            echo "$stale_pids" | xargs -r sudo kill -9 || true
+          fi
           sudo rm -rf "$TEST_NETWORK_TMPDIR"
           sudo rm -rf "$TEST_TMPDIR"
           mkdir -p "$TEST_NETWORK_TMPDIR"
@@ -163,7 +169,7 @@ jobs:
           HYPEMAN_TEST_REGISTRY: 127.0.0.1:5001
           HYPEMAN_UFFD_PAGER_BINARY: ${{ runner.temp }}/hypeman-uffd-pager-${{ github.run_id }}-${{ github.run_attempt }}
           HYPEMAN_UFFD_SYSTEMD_INSTANCE_PREFIX: ci-${{ github.run_id }}-${{ github.run_attempt }}
-          TMPDIR: /tmp/hypeman-ci-${{ github.run_id }}-${{ github.run_attempt }}
+          TMPDIR: /hci${{ github.run_attempt }}
         run: |
           cp "$PWD/bin/hypeman-uffd-pager" "$HYPEMAN_UFFD_PAGER_BINARY"
           chmod +x "$HYPEMAN_UFFD_PAGER_BINARY"
@@ -178,7 +184,7 @@ jobs:
             echo "$units" | xargs -r sudo systemctl stop || true
             echo "$units" | xargs -r sudo systemctl reset-failed || true
           fi
-          TEST_TMPDIR="/tmp/hypeman-ci-${{ github.run_id }}-${{ github.run_attempt }}"
+          TEST_TMPDIR="/hci${{ github.run_attempt }}"
           stale_pids="$(ps -eo pid=,ppid=,cmd= | awk -v tmpdir="$TEST_TMPDIR" '$2 == 1 && index($0, tmpdir) && /(firecracker|cloud-hypervisor|hypeman-uffd-pager)/ {print $1}' || true)"
           if [ -n "$stale_pids" ]; then
             echo "$stale_pids" | xargs -r sudo kill || true
