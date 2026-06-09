@@ -31,10 +31,21 @@ func ParsePlatform(s string) (Platform, error) {
 	var p Platform
 	switch len(parts) {
 	case 1:
+		// Bare architecture ("amd64") defaults OS to linux.
 		p = Platform{OS: "linux", Architecture: parts[0]}
 	case 2:
+		// An explicit os/arch must supply both components: "/amd64" and "linux/"
+		// are malformed, not shorthand for the host/default.
+		if strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+			return Platform{}, fmt.Errorf("%w %q: expected os/arch[/variant]", ErrInvalidPlatform, s)
+		}
 		p = Platform{OS: parts[0], Architecture: parts[1]}
 	case 3:
+		// Every component must be non-empty: "linux/amd64/" is malformed, not a
+		// variant-less shorthand, mirroring the os/arch rejection above.
+		if strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" || strings.TrimSpace(parts[2]) == "" {
+			return Platform{}, fmt.Errorf("%w %q: expected os/arch[/variant]", ErrInvalidPlatform, s)
+		}
 		p = Platform{OS: parts[0], Architecture: parts[1], Variant: parts[2]}
 	default:
 		return Platform{}, fmt.Errorf("%w %q: expected os/arch[/variant]", ErrInvalidPlatform, s)
@@ -120,6 +131,13 @@ func hostPlatform() Platform {
 	return Platform{OS: "linux", Architecture: runtime.GOARCH}.Normalize()
 }
 
+// HostPlatformString renders the host platform as a canonical "os/arch" string.
+// Exposed so the instances layer can resolve a no-platform create to the host
+// variant explicitly rather than following a last-pull-wins tag pointer.
+func HostPlatformString() string {
+	return hostPlatform().String()
+}
+
 // needsEmulation reports whether running an image of platform img on a host of
 // platform host requires CPU emulation (the architectures differ).
 func needsEmulation(img, host Platform) bool {
@@ -178,6 +196,27 @@ func resolveManifestPlatform(meta *containerMetadata, requested string) (Platfor
 		return Platform{}, fmt.Errorf("image platform: %w", err)
 	}
 	return actual, nil
+}
+
+// validateDigestPlatform rejects a digest-pinned create whose explicit
+// --platform conflicts with the manifest the digest actually points to. Only a
+// user-supplied platform (requested != "") is authoritative: an empty request
+// defaults to the host and must not reject a digest that simply targets another
+// architecture. The error mirrors resolveManifestPlatform's "requested X but
+// manifest is Y" wording for a consistent 400 across the create paths.
+//
+// requestedPlatform is the already-parsed/normalized form of requested; both are
+// passed because resolveRequestPlatform collapses an empty request to the host
+// platform, so the parsed value alone cannot distinguish "asked for host" from
+// "asked for nothing".
+func validateDigestPlatform(requested string, requestedPlatform, actual Platform) error {
+	if strings.TrimSpace(requested) == "" {
+		return nil
+	}
+	if !requestedPlatform.Matches(actual) {
+		return fmt.Errorf("%w: requested %s but manifest is %s", ErrInvalidPlatform, requestedPlatform, actual)
+	}
+	return nil
 }
 
 // ImageNeedsHostEmulation reports whether an image whose stored platform string

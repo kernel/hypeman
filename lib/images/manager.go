@@ -130,9 +130,30 @@ func (m *manager) CreateImage(ctx context.Context, req CreateImageRequest) (*Ima
 	resolveCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	ref, err := normalized.ResolveForPlatform(resolveCtx, m.ociClient, platform.ToGCR())
-	if err != nil {
-		return nil, fmt.Errorf("resolve manifest for platform %s: %w", platform, err)
+	var ref *ResolvedRef
+	if normalized.IsDigest() {
+		// A digest pin must resolve to its exact manifest (verifying the digest
+		// exists: a bogus digest -> 404 instead of an aliased "ready" entry) and,
+		// when an index is pinned, to the child for the requested platform.
+		// ResolveDigest returns the resolved image's real os/arch (to validate any
+		// explicit --platform) and a ref pinned to the resolved child digest. The
+		// resolve goes through the ManifestInspector seam, symmetric with the tag
+		// path below, so it stays fake-testable.
+		var actual Platform
+		actual, ref, err = normalized.ResolveDigest(resolveCtx, m.ociClient, platform.ToGCR())
+		if err != nil {
+			return nil, fmt.Errorf("resolve digest manifest: %w", err)
+		}
+		if err := validateDigestPlatform(req.Platform, platform, actual); err != nil {
+			return nil, err
+		}
+	} else {
+		// inspectManifestWithPlatform already classifies registry errors via
+		// wrapRegistryError, so just propagate with %w to keep the errors.Is chain.
+		ref, err = normalized.ResolveForPlatform(resolveCtx, m.ociClient, platform.ToGCR())
+		if err != nil {
+			return nil, fmt.Errorf("resolve manifest for platform %s: %w", platform, err)
+		}
 	}
 
 	m.createMu.Lock()
@@ -147,10 +168,15 @@ func (m *manager) CreateImage(ctx context.Context, req CreateImageRequest) (*Ima
 			os.RemoveAll(digestDir)
 			// Fall through to re-queue the build
 		} else {
-			// We have this digest already (ready, pending, pulling, or converting)
-			if meta.Status == StatusReady && ref.Tag() != "" && shouldUpdateTagForRequest(req.Platform) {
-				// Update tag symlink to point to current digest
-				// (handles case where tag moved to new digest)
+			// We have this digest already (ready, pending, pulling, or converting).
+			// Docker last-pull-wins: the most recent pull of a tag owns the tag
+			// symlink regardless of platform. An earlier gate only repointed the tag
+			// for host-native pulls, which silently stranded emulated (e.g.
+			// amd64-on-arm64) variants -- `pull --platform linux/amd64 alpine:3.19`
+			// could never make `image get alpine:3.19` report amd64, and the move
+			// was non-recoverable. Always repointing matches Docker and stays
+			// symmetric/recoverable in both directions.
+			if meta.Status == StatusReady && ref.Tag() != "" {
 				createTagSymlink(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex())
 			}
 			img := meta.toImage()
@@ -183,7 +209,10 @@ func (m *manager) ImportLocalImage(ctx context.Context, repo, reference, digest 
 		return nil, fmt.Errorf("%w: %s", ErrInvalidName, err.Error())
 	}
 
-	// Create a ResolvedRef directly with the provided digest
+	// Create a ResolvedRef directly with the provided digest. Unlike CreateImage's
+	// digest path (which calls ResolveDigest to verify the digest exists in the
+	// registry), the digest here references a blob just pushed to the local OCI
+	// cache, so it is trusted and not remotely re-resolved.
 	ref := NewResolvedRef(normalized, digest)
 
 	m.createMu.Lock()
@@ -197,8 +226,8 @@ func (m *manager) ImportLocalImage(ctx context.Context, repo, reference, digest 
 			os.RemoveAll(digestDir)
 			// Fall through to re-queue the build
 		} else {
-			// We have this digest already
-			if meta.Status == StatusReady && ref.Tag() != "" && shouldUpdateTagForMetadata(meta) {
+			// We have this digest already; last-pull-wins repoints the tag.
+			if meta.Status == StatusReady && ref.Tag() != "" {
 				createTagSymlink(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex())
 			}
 			img := meta.toImage()
@@ -292,8 +321,8 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef) {
 	// Check if this digest already exists and is ready (deduplication)
 	if meta, err := readMetadata(m.paths, ref.Repository(), ref.DigestHex()); err == nil {
 		if meta.Status == StatusReady {
-			// Another build completed first, just update the tag symlink
-			if ref.Tag() != "" && shouldUpdateTagForMetadata(meta) {
+			// Another build completed first; last-pull-wins repoints the tag.
+			if ref.Tag() != "" {
 				createTagSymlink(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex())
 			}
 			return
@@ -354,8 +383,9 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef) {
 	// Notify subscribers that image is ready
 	m.notifyReady(ref.DigestHex(), StatusReady, nil)
 
-	// Only create/update tag symlink on successful completion
-	if ref.Tag() != "" && shouldUpdateTagForMetadata(meta) {
+	// Only create/update tag symlink on successful completion; last-pull-wins
+	// repoints the tag regardless of platform.
+	if ref.Tag() != "" {
 		if err := createTagSymlink(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex()); err != nil {
 			// Log error but don't fail the build
 			fmt.Fprintf(os.Stderr, "Warning: failed to create tag symlink: %v\n", err)
@@ -365,21 +395,6 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef) {
 	m.refreshDiskUsageTotals()
 
 	m.recordBuildMetrics(ctx, buildStart, "success")
-}
-
-func shouldUpdateTagForMetadata(meta *imageMetadata) bool {
-	if meta == nil || meta.Request == nil {
-		return true
-	}
-	return shouldUpdateTagForRequest(meta.Request.Platform)
-}
-
-func shouldUpdateTagForRequest(requestedPlatform string) bool {
-	platform, err := resolveRequestPlatform(requestedPlatform)
-	if err != nil {
-		return false
-	}
-	return !needsEmulation(platform, hostPlatform())
 }
 
 func (m *manager) updateStatusByDigest(ref *ResolvedRef, status string, err error) {

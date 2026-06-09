@@ -89,6 +89,9 @@ func (c *ociClient) inspectManifestWithPlatform(ctx context.Context, imageRef st
 	// For multi-arch images, this resolves the manifest index to the correct platform.
 	// This matches what pullToOCILayout does to ensure cache key consistency.
 	// Note: remote.Image is lazy - it only fetches the manifest, not layer blobs.
+	//
+	// Registry-error classification (rate-limit, not-found, platform-not-available)
+	// is centralized here so callers can `%w` the result without re-wrapping.
 	img, err := remote.Image(ref,
 		remote.WithContext(ctx),
 		remote.WithAuthFromKeychain(authn.DefaultKeychain),
@@ -97,12 +100,77 @@ func (c *ociClient) inspectManifestWithPlatform(ctx context.Context, imageRef st
 		return "", fmt.Errorf("fetch manifest: %w", wrapRegistryError(err))
 	}
 
+	// remote.Image is lazy, so the "no child with platform" error for a multi-arch
+	// index surfaces here rather than from remote.Image above; classify it too.
 	digest, err := img.Digest()
 	if err != nil {
-		return "", fmt.Errorf("get image digest: %w", err)
+		return "", fmt.Errorf("get image digest: %w", wrapRegistryError(err))
 	}
 
 	return digest.String(), nil
+}
+
+// inspectDigestPlatform resolves a digest-pinned reference to a concrete image
+// for the requested platform and returns both the platform that image's config
+// declares and the resolved child digest. It is used to validate a user-supplied
+// --platform against a digest ref and to record the resolved (child) digest.
+//
+// The pinned digest can name either a single-arch image manifest or a multi-arch
+// index (manifest list). These need opposite handling, which is why we fetch the
+// descriptor first and branch on its media type:
+//   - For an image manifest, the digest IS the architecture; WithPlatform must
+//     NOT be passed, since go-containerregistry would re-resolve the parent index
+//     to a host-matching child and the requested platform would never be checked.
+//   - For an index, WithPlatform IS correct: it selects the child for the
+//     requested platform (a missing child surfaces as "no child with platform"
+//     -> ErrPlatformNotAvailable -> 404 via wrapRegistryError).
+//
+// A digest absent from the registry surfaces as a not-found error, classified by
+// wrapRegistryError.
+func (c *ociClient) inspectDigestPlatform(ctx context.Context, imageRef string, requested gcr.Platform) (Platform, string, error) {
+	ref, err := name.ParseReference(imageRef)
+	if err != nil {
+		return Platform{}, "", fmt.Errorf("parse image reference: %w", err)
+	}
+
+	desc, err := remote.Get(ref,
+		remote.WithContext(ctx),
+		remote.WithAuthFromKeychain(authn.DefaultKeychain))
+	if err != nil {
+		return Platform{}, "", fmt.Errorf("fetch manifest: %w", wrapRegistryError(err))
+	}
+
+	var img gcr.Image
+	if desc.MediaType.IsIndex() {
+		// Index: select the child for the requested platform. WithPlatform on the
+		// re-parsed digest ref is correct here because the digest names the index.
+		img, err = remote.Image(ref,
+			remote.WithContext(ctx),
+			remote.WithAuthFromKeychain(authn.DefaultKeychain),
+			remote.WithPlatform(requested))
+	} else {
+		// Single-arch manifest: the digest already pins the exact image.
+		img, err = desc.Image()
+	}
+	if err != nil {
+		return Platform{}, "", fmt.Errorf("resolve image for platform: %w", wrapRegistryError(err))
+	}
+
+	configFile, err := img.ConfigFile()
+	if err != nil {
+		return Platform{}, "", fmt.Errorf("get image config: %w", wrapRegistryError(err))
+	}
+
+	resolvedDigest, err := img.Digest()
+	if err != nil {
+		return Platform{}, "", fmt.Errorf("get image digest: %w", wrapRegistryError(err))
+	}
+
+	return Platform{
+		OS:           configFile.OS,
+		Architecture: configFile.Architecture,
+		Variant:      configFile.Variant,
+	}.Normalize(), resolvedDigest.String(), nil
 }
 
 // pullResult contains the metadata and digest from pulling an image

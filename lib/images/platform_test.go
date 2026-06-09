@@ -23,6 +23,12 @@ func TestParsePlatform(t *testing.T) {
 		{name: "unknown arch rejected", in: "linux/riscv64", wantErr: true},
 		{name: "empty rejected", in: "", wantErr: true},
 		{name: "too many parts", in: "a/b/c/d", wantErr: true},
+		{name: "leading slash empty os rejected", in: "/amd64", wantErr: true},
+		{name: "trailing slash empty arch rejected", in: "linux/", wantErr: true},
+		{name: "empty arch with variant rejected", in: "linux//v7", wantErr: true},
+		{name: "empty os with variant rejected", in: "/amd64/v2", wantErr: true},
+		{name: "trailing slash empty variant rejected", in: "linux/amd64/", wantErr: true},
+		{name: "os/arch/variant valid", in: "linux/amd64/v8", want: Platform{OS: "linux", Architecture: "amd64", Variant: "v8"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -161,6 +167,35 @@ func TestResolveManifestPlatform(t *testing.T) {
 	}
 	if got.String() != "linux/amd64" {
 		t.Fatalf("got %s, want linux/amd64", got)
+	}
+}
+
+func TestValidateDigestPlatform(t *testing.T) {
+	amd64 := Platform{OS: "linux", Architecture: "amd64"}
+	arm64 := Platform{OS: "linux", Architecture: "arm64"}
+	arm64v8 := Platform{OS: "linux", Architecture: "arm64", Variant: "v8"}
+
+	// No explicit request: a digest may target any architecture without conflict.
+	if err := validateDigestPlatform("", amd64, arm64); err != nil {
+		t.Fatalf("empty request should not conflict, got %v", err)
+	}
+
+	// Matching explicit request passes.
+	if err := validateDigestPlatform("linux/amd64", amd64, amd64); err != nil {
+		t.Fatalf("matching request should pass, got %v", err)
+	}
+
+	// Variant is ignored when matching (linux/arm64 vs linux/arm64/v8).
+	if err := validateDigestPlatform("linux/arm64", arm64, arm64v8); err != nil {
+		t.Fatalf("variant mismatch should still match, got %v", err)
+	}
+
+	// Conflicting explicit request -> ErrInvalidPlatform (both directions).
+	if err := validateDigestPlatform("linux/arm64", arm64, amd64); err == nil || !errors.Is(err, ErrInvalidPlatform) {
+		t.Fatalf("expected ErrInvalidPlatform for arm64 request on amd64 digest, got %v", err)
+	}
+	if err := validateDigestPlatform("linux/amd64", amd64, arm64); err == nil || !errors.Is(err, ErrInvalidPlatform) {
+		t.Fatalf("expected ErrInvalidPlatform for amd64 request on arm64 digest, got %v", err)
 	}
 }
 
