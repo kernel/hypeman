@@ -127,8 +127,11 @@ func TestVZMemoryCeiling(t *testing.T) {
 	require.NotNil(t, instMeta.HypervisorPID)
 	assertLowIdleVZHostMemoryFootprint(t, *instMeta.HypervisorPID, 256*1024)
 
-	// Grow live to the ceiling via the balloon: no reboot, usable memory climbs.
-	baselineAvailable := readGuestMemAvailableBytes(t, ctx, inst)
+	// The guest boots seeing the ceiling, so its MemAvailable starts near 4 GiB.
+	// Setting the target to the baseline is only a request; the guest's balloon
+	// driver reclaims pages asynchronously, so wait for the guest to actually give
+	// the memory back before measuring the grow baseline.
+	baselineAvailable := requireGuestMemAvailableBelowEventually(t, ctx, inst, ceiling/2)
 	hv, err := hypervisor.NewClient(inst.HypervisorType, inst.SocketPath)
 	require.NoError(t, err)
 	require.NoError(t, hv.SetTargetGuestMemoryBytes(ctx, ceiling))
@@ -138,12 +141,27 @@ func TestVZMemoryCeiling(t *testing.T) {
 	require.Eventually(t, func() bool {
 		grownAvailable = readGuestMemAvailableBytes(t, ctx, inst)
 		return grownAvailable > baselineAvailable
-	}, 30*time.Second, 1*time.Second,
+	}, 60*time.Second, 1*time.Second,
 		"guest MemAvailable should climb after deflating the balloon to the ceiling (baseline_available=%d)", baselineAvailable)
 
 	info, err = getVZVMInfo(inst.SocketPath)
 	require.NoError(t, err)
 	assert.Equal(t, "Running", info.State, "grow must not restart the VM")
+}
+
+// requireGuestMemAvailableBelowEventually waits for the guest's MemAvailable to
+// drop below limit, confirming the balloon actually inflated inside the guest
+// (the target is a request the guest fulfills lazily), and returns the observed
+// value.
+func requireGuestMemAvailableBelowEventually(t *testing.T, ctx context.Context, inst *Instance, limit int64) int64 {
+	t.Helper()
+	available := int64(0)
+	require.Eventually(t, func() bool {
+		available = readGuestMemAvailableBytes(t, ctx, inst)
+		return available < limit
+	}, 90*time.Second, 1*time.Second,
+		"guest MemAvailable should fall below %d after ballooning to baseline", limit)
+	return available
 }
 
 // readGuestMemInfoBytes reads a /proc/meminfo field (reported in kB) and returns bytes.
