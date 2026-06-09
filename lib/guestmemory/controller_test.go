@@ -184,7 +184,10 @@ func TestHealthyHoldsCeilingVMAtBaseline(t *testing.T) {
 	resp, err := c.TriggerReclaim(context.Background(), ManualReclaimRequest{ReclaimBytes: 0})
 	require.NoError(t, err)
 	require.Len(t, resp.Actions, 1)
+	assert.Equal(t, int64(0), resp.PlannedReclaimBytes, "baseline-held ceiling VM should not report phantom planned reclaim")
+	assert.Equal(t, int64(0), resp.AppliedReclaimBytes, "baseline-held ceiling VM should not report phantom applied reclaim")
 	assert.Equal(t, "unchanged", resp.Actions[0].Status)
+	assert.Equal(t, int64(0), resp.Actions[0].AppliedReclaimBytes, "per-action reclaim should be anchored to baseline")
 	assert.Equal(t, baseline, resp.Actions[0].TargetGuestMemoryBytes, "ceiling VM should hold at baseline, not grow to ceiling, when grow-on-demand is off")
 	assert.Equal(t, baseline, hv.target, "balloon target must remain at baseline")
 }

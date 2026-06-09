@@ -307,7 +307,8 @@ func (c *controller) reconcile(ctx context.Context, req reconcileRequest) (Manua
 			Status:                         "unchanged",
 		}
 
-		resp.PlannedReclaimBytes += candidate.vm.AssignedMemoryBytes - plannedTarget
+		anchorBytes := floorAnchorBytes(candidate.vm)
+		resp.PlannedReclaimBytes += maxInt64(0, anchorBytes-plannedTarget)
 
 		if !req.dryRun && appliedTarget != candidate.currentTargetGuestBytes {
 			if err := candidate.hv.SetTargetGuestMemoryBytes(applyCtx, appliedTarget); err != nil {
@@ -335,7 +336,7 @@ func (c *controller) reconcile(ctx context.Context, req reconcileRequest) (Manua
 			action.TargetGuestMemoryBytes = appliedTarget
 		}
 		if !req.dryRun {
-			action.AppliedReclaimBytes = candidate.vm.AssignedMemoryBytes - action.TargetGuestMemoryBytes
+			action.AppliedReclaimBytes = maxInt64(0, anchorBytes-action.TargetGuestMemoryBytes)
 		}
 		resp.AppliedReclaimBytes += action.AppliedReclaimBytes
 		resp.Actions = append(resp.Actions, action)
