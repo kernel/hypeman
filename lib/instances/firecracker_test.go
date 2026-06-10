@@ -873,7 +873,9 @@ func requireRunningSleepInstance(t *testing.T, ctx context.Context, mgr Manager,
 			t.Logf("get instance %s: %v", instanceID, err)
 			return false
 		}
-		output, exitCode, err := execInInstance(ctx, current, "sh", "-c", "ps | grep '[s]leep' | grep -q infinity")
+		// Bounded retry on transient vsock/gRPC blips that show up right after a
+		// resume under contention; the outer Eventually still gates on the result.
+		output, exitCode, err := execCommandWithRetry(ctx, current, 5*time.Second, "sh", "-c", "ps | grep '[s]leep' | grep -q infinity")
 		if err != nil {
 			t.Logf("exec sleep check for %s: %v", instanceID, err)
 			return false
@@ -906,7 +908,11 @@ func writeGuestFile(t *testing.T, ctx context.Context, inst *Instance, path, con
 
 func assertGuestFile(t *testing.T, ctx context.Context, inst *Instance, path, contents string) {
 	t.Helper()
-	output, exitCode, err := execCommand(ctx, inst, "cat", path)
+	// Use the retrying exec helper: right after a restore/resume under shared-runner
+	// I/O contention the in-guest exec over vsock can momentarily return EOF /
+	// gRPC Unavailable. execCommandWithRetry retries only those transient
+	// connection errors, never a real assertion mismatch.
+	output, exitCode, err := execCommandWithRetry(ctx, inst, compressionGuestExecTimeout, "cat", path)
 	require.NoError(t, err)
 	require.Equal(t, 0, exitCode, output)
 	require.Equal(t, contents, output)
