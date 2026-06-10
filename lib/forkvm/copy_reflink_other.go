@@ -1,4 +1,4 @@
-//go:build !linux
+//go:build !linux && !darwin
 
 package forkvm
 
@@ -7,9 +7,8 @@ import (
 	"io/fs"
 )
 
-// copyRegularFileReflink is unavailable on non-Linux platforms. On macOS APFS
-// supports clonefile(2) and could be wired up here, but we currently only
-// rely on the sparse-copy fallback off-Linux.
+// copyRegularFileReflink is unavailable on platforms without a copy-on-write
+// clone primitive; callers fall back to the sparse copy.
 func copyRegularFileReflink(srcPath, dstPath string, perms fs.FileMode) error {
 	_ = dstPath
 	_ = perms

@@ -36,6 +36,11 @@
 
 ### macOS
 **macOS 11.0+** on Apple Silicon. Uses Apple's Virtualization.framework via the `vz` hypervisor.
+Install Rosetta to run `linux/amd64` images on Apple Silicon:
+
+```bash
+softwareupdate --install-rosetta --agree-to-license
+```
 
 ## Quick Start
 

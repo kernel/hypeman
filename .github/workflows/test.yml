@@ -74,13 +74,6 @@ jobs:
             sudo env "PATH=$TEST_PATH" bash -lc "command -v '$bin'"
           done
 
-      - name: Create run-scoped temp directory
-        run: |
-          TEST_NETWORK_TMPDIR="/tmp/hm-net-${{ github.run_id }}-${{ github.run_attempt }}"
-          sudo rm -rf "$TEST_NETWORK_TMPDIR"
-          mkdir -p "$TEST_NETWORK_TMPDIR"
-          sudo chown -R "$(id -u):$(id -g)" "$TEST_NETWORK_TMPDIR"
-
       # Avoids rate limits when running the tests
       # Tests includes pulling, then converting to disk images
       - name: Login to Docker Hub
@@ -141,7 +134,6 @@ jobs:
      
       - name: Run tests
         env:
-          HYPEMAN_TEST_NETWORK_TMPDIR: /tmp/hm-net-${{ github.run_id }}-${{ github.run_attempt }}
           GO_TEST_TIMEOUT: 600s
           # Docker auth for tests running as root (sudo)
           DOCKER_CONFIG: /home/debianuser/.docker
@@ -171,7 +163,6 @@ jobs:
             echo "$units" | xargs -r sudo systemctl reset-failed || true
           fi
           sudo rm -f /run/hypeman/uffd/ci-${{ github.run_id }}-${{ github.run_attempt }}-*.env
-          sudo rm -rf "/tmp/hm-net-${{ github.run_id }}-${{ github.run_attempt }}"
           rm -f "${{ runner.temp }}/hypeman-uffd-pager-${{ github.run_id }}-${{ github.run_attempt }}"
 
   test-darwin:

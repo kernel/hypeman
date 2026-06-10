@@ -11,6 +11,7 @@ import (
 	"github.com/kernel/hypeman/lib/autostandby"
 	"github.com/kernel/hypeman/lib/healthcheck"
 	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/instances"
 	"github.com/kernel/hypeman/lib/instances/phasetracking"
 	mw "github.com/kernel/hypeman/lib/middleware"
@@ -594,6 +595,222 @@ func TestInstanceToOAPI_OmitsPhaseFieldsWhenUnset(t *testing.T) {
 	assert.Nil(t, oapiInst.CurrentPhase)
 	assert.Nil(t, oapiInst.CurrentPhaseSince)
 	assert.Nil(t, oapiInst.PhaseDurationsMs)
+}
+
+func TestInstanceToOAPI_EchoesResolvedPlatform(t *testing.T) {
+	t.Parallel()
+
+	inst := instances.Instance{
+		StoredMetadata: instances.StoredMetadata{
+			Id:             "inst-platform",
+			Name:           "inst-platform",
+			Image:          "docker.io/library/alpine@sha256:deadbeef",
+			Platform:       "linux/amd64",
+			CreatedAt:      time.Now(),
+			HypervisorType: hypervisor.TypeCloudHypervisor,
+		},
+		State: instances.StateRunning,
+	}
+
+	oapiInst := instanceToOAPI(inst)
+	require.NotNil(t, oapiInst.Platform)
+	assert.Equal(t, "linux/amd64", *oapiInst.Platform)
+}
+
+func TestInstanceToOAPI_OmitsPlatformWhenUnset(t *testing.T) {
+	t.Parallel()
+
+	inst := instances.Instance{
+		StoredMetadata: instances.StoredMetadata{
+			Id:             "inst-no-platform",
+			Name:           "inst-no-platform",
+			Image:          "docker.io/library/alpine:latest",
+			CreatedAt:      time.Now(),
+			HypervisorType: hypervisor.TypeCloudHypervisor,
+		},
+		State: instances.StateStopped,
+	}
+
+	oapiInst := instanceToOAPI(inst)
+	assert.Nil(t, oapiInst.Platform)
+}
+
+// errCreateInstanceManager is a fake whose CreateInstance always fails with a
+// preset error, used to assert the handler maps typed image errors to statuses.
+type errCreateInstanceManager struct {
+	instances.Manager
+	err error
+}
+
+func (m *errCreateInstanceManager) CreateInstance(context.Context, instances.CreateInstanceRequest) (*instances.Instance, error) {
+	return nil, m.err
+}
+
+func TestCreateInstance_ErrorStatusMapping(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		err      error
+		wantType any
+		wantCode string
+	}{
+		{
+			name:     "platform not available -> 404",
+			err:      fmt.Errorf("resolve image: %w", images.ErrPlatformNotAvailable),
+			wantType: oapi.CreateInstance404JSONResponse{},
+			wantCode: "platform_not_available",
+		},
+		{
+			name:     "rate limited -> 429",
+			err:      fmt.Errorf("resolve image: %w", images.ErrRateLimited),
+			wantType: oapi.CreateInstance429JSONResponse{},
+			wantCode: "rate_limited",
+		},
+		{
+			name:     "image not found -> 404",
+			err:      fmt.Errorf("resolve image: %w", images.ErrNotFound),
+			wantType: oapi.CreateInstance404JSONResponse{},
+			wantCode: "not_found",
+		},
+		{
+			name:     "invalid platform -> 400",
+			err:      fmt.Errorf("resolve image: %w", images.ErrInvalidPlatform),
+			wantType: oapi.CreateInstance400JSONResponse{},
+			wantCode: "invalid_platform",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			svc := newTestService(t)
+			svc.InstanceManager = &errCreateInstanceManager{Manager: svc.InstanceManager, err: tc.err}
+
+			resp, err := svc.CreateInstance(ctx(), oapi.CreateInstanceRequestObject{
+				Body: &oapi.CreateInstanceRequest{
+					Name:  "inst-err",
+					Image: "docker.io/library/alpine:3.19",
+				},
+			})
+			require.NoError(t, err)
+			require.IsType(t, tc.wantType, resp)
+			require.Equal(t, tc.wantCode, createInstanceErrorCodeOf(resp))
+		})
+	}
+}
+
+// errActionInstanceManager is a fake whose lifecycle actions always fail with a
+// preset error, used to assert action handlers map a deleted-image
+// images.ErrNotFound (resolved at action time, e.g. start/restore/fork of a
+// stopped instance whose image was removed) to a 404 instead of a blanket 500.
+type errActionInstanceManager struct {
+	instances.Manager
+	err error
+}
+
+func (m *errActionInstanceManager) StartInstance(context.Context, string, instances.StartInstanceRequest) (*instances.Instance, error) {
+	return nil, m.err
+}
+
+func (m *errActionInstanceManager) RestoreInstance(context.Context, string) (*instances.Instance, error) {
+	return nil, m.err
+}
+
+func (m *errActionInstanceManager) ForkInstance(context.Context, string, instances.ForkInstanceRequest) (*instances.Instance, error) {
+	return nil, m.err
+}
+
+func (m *errActionInstanceManager) RestoreSnapshot(context.Context, string, string, instances.RestoreSnapshotRequest) (*instances.Instance, error) {
+	return nil, m.err
+}
+
+func TestInstanceActions_ImageNotFoundMapsTo404(t *testing.T) {
+	t.Parallel()
+
+	// The start path wraps the image lookup with %w, so a deleted image surfaces
+	// as images.ErrNotFound through the manager.
+	err := fmt.Errorf("get image: %w", images.ErrNotFound)
+	resolved := &instances.Instance{
+		StoredMetadata: instances.StoredMetadata{
+			Id:             "inst-img-gone",
+			Name:           "inst-img-gone",
+			Image:          "docker.io/library/alpine:3.19",
+			CreatedAt:      time.Now(),
+			HypervisorType: hypervisor.TypeCloudHypervisor,
+		},
+		State: instances.StateStopped,
+	}
+
+	t.Run("start -> 404", func(t *testing.T) {
+		t.Parallel()
+		svc := newTestService(t)
+		svc.InstanceManager = &errActionInstanceManager{Manager: svc.InstanceManager, err: err}
+		resp, rerr := svc.StartInstance(mw.WithResolvedInstance(ctx(), resolved.Id, resolved), oapi.StartInstanceRequestObject{Id: resolved.Id})
+		require.NoError(t, rerr)
+		r, ok := resp.(oapi.StartInstance404JSONResponse)
+		require.True(t, ok, "expected 404 response, got %T", resp)
+		require.Equal(t, "not_found", r.Code)
+	})
+
+	t.Run("restore -> 404", func(t *testing.T) {
+		t.Parallel()
+		svc := newTestService(t)
+		svc.InstanceManager = &errActionInstanceManager{Manager: svc.InstanceManager, err: err}
+		resp, rerr := svc.RestoreInstance(mw.WithResolvedInstance(ctx(), resolved.Id, resolved), oapi.RestoreInstanceRequestObject{Id: resolved.Id})
+		require.NoError(t, rerr)
+		r, ok := resp.(oapi.RestoreInstance404JSONResponse)
+		require.True(t, ok, "expected 404 response, got %T", resp)
+		require.Equal(t, "not_found", r.Code)
+	})
+
+	t.Run("fork -> 404", func(t *testing.T) {
+		t.Parallel()
+		svc := newTestService(t)
+		svc.InstanceManager = &errActionInstanceManager{Manager: svc.InstanceManager, err: err}
+		forkName := "inst-img-gone-fork"
+		resp, rerr := svc.ForkInstance(mw.WithResolvedInstance(ctx(), resolved.Id, resolved), oapi.ForkInstanceRequestObject{
+			Id:   resolved.Id,
+			Body: &oapi.ForkInstanceRequest{Name: forkName},
+		})
+		require.NoError(t, rerr)
+		r, ok := resp.(oapi.ForkInstance404JSONResponse)
+		require.True(t, ok, "expected 404 response, got %T", resp)
+		require.Equal(t, "not_found", r.Code)
+	})
+
+	t.Run("restore snapshot -> 404", func(t *testing.T) {
+		t.Parallel()
+		svc := newTestService(t)
+		svc.InstanceManager = &errActionInstanceManager{Manager: svc.InstanceManager, err: err}
+		resp, rerr := svc.RestoreInstanceSnapshot(mw.WithResolvedInstance(ctx(), resolved.Id, resolved), oapi.RestoreInstanceSnapshotRequestObject{
+			Id:         resolved.Id,
+			SnapshotId: "snap-1",
+			Body:       &oapi.RestoreInstanceSnapshotJSONRequestBody{},
+		})
+		require.NoError(t, rerr)
+		r, ok := resp.(oapi.RestoreInstanceSnapshot404JSONResponse)
+		require.True(t, ok, "expected 404 response, got %T", resp)
+		require.Equal(t, "not_found", r.Code)
+	})
+}
+
+// createInstanceErrorCodeOf extracts the Code field from a CreateInstance error response.
+func createInstanceErrorCodeOf(resp oapi.CreateInstanceResponseObject) string {
+	switch r := resp.(type) {
+	case oapi.CreateInstance400JSONResponse:
+		return r.Code
+	case oapi.CreateInstance404JSONResponse:
+		return r.Code
+	case oapi.CreateInstance409JSONResponse:
+		return r.Code
+	case oapi.CreateInstance429JSONResponse:
+		return r.Code
+	case oapi.CreateInstance500JSONResponse:
+		return r.Code
+	default:
+		return ""
+	}
 }
 
 func TestInstanceToOAPI_EmitsStandbyCompressionDelayInSnapshotPolicy(t *testing.T) {

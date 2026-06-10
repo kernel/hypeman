@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/instances"
 	"github.com/kernel/hypeman/lib/logger"
 	mw "github.com/kernel/hypeman/lib/middleware"
@@ -88,6 +89,8 @@ func (s *ApiService) RestoreInstanceSnapshot(ctx context.Context, request oapi.R
 		switch {
 		case errors.Is(err, instances.ErrNotFound), errors.Is(err, instances.ErrSnapshotNotFound):
 			return oapi.RestoreInstanceSnapshot404JSONResponse{Code: "not_found", Message: "instance or snapshot not found"}, nil
+		case errors.Is(err, images.ErrNotFound):
+			return oapi.RestoreInstanceSnapshot404JSONResponse{Code: "not_found", Message: "instance image not found"}, nil
 		case errors.Is(err, instances.ErrInvalidRequest):
 			return oapi.RestoreInstanceSnapshot400JSONResponse{Code: "invalid_request", Message: err.Error()}, nil
 		case errors.Is(err, instances.ErrInvalidState):

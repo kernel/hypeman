@@ -62,6 +62,10 @@ func createVM(config *shimconfig.ShimConfig) (*vz.VirtualMachine, *vz.VirtualMac
 		return nil, nil, fmt.Errorf("configure storage: %w", err)
 	}
 
+	if err := configureDirectorySharing(vmConfig, config); err != nil {
+		return nil, nil, fmt.Errorf("configure directory sharing: %w", err)
+	}
+
 	if err := configurePlatform(vmConfig, config); err != nil {
 		return nil, nil, fmt.Errorf("configure platform: %w", err)
 	}

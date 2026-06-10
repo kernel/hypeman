@@ -27,13 +27,24 @@ const (
 	registryName    = "hypeman-ci-registry"
 )
 
-var defaultImages = []string{
-	"docker.io/library/alpine:latest",
-	"docker.io/library/alpine:3.18",
-	"docker.io/library/debian:12-slim",
-	"docker.io/library/nginx:alpine",
-	"docker.io/bitnami/redis:latest",
-	"docker.io/jrei/systemd-ubuntu:22.04",
+// prewarmImage is a source image to mirror into the local registry. Platform
+// is empty for host-platform images and set explicitly to mirror a specific
+// variant (e.g. linux/amd64 for Rosetta emulation tests on an arm64 host).
+type prewarmImage struct {
+	Source   string
+	Platform string
+}
+
+var defaultImages = []prewarmImage{
+	{Source: "docker.io/library/alpine:latest"},
+	{Source: "docker.io/library/alpine:3.18"},
+	{Source: "docker.io/library/debian:12-slim"},
+	{Source: "docker.io/library/nginx:alpine"},
+	{Source: "docker.io/bitnami/redis:latest"},
+	{Source: "docker.io/jrei/systemd-ubuntu:22.04"},
+	// amd64-only mirror for the Rosetta x86 image E2E (single-platform manifest;
+	// see toLocalRegistryRef for why it must be the only mirror of this tag).
+	{Source: "docker.io/library/alpine:3.19", Platform: "linux/amd64"},
 }
 
 type manifestImage struct {
@@ -95,10 +106,10 @@ func main() {
 		Images:     make([]manifestImage, 0, len(imagesToWarm)),
 	}
 
-	for _, source := range imagesToWarm {
-		entry, err := ensureMirroredImage(ctx, inspectClient, registry, source)
+	for _, img := range imagesToWarm {
+		entry, err := ensureMirroredImage(ctx, inspectClient, registry, img)
 		if err != nil {
-			fatalf("prewarm image %s: %v", source, err)
+			fatalf("prewarm image %s: %v", img.Source, err)
 		}
 		fmt.Printf("prewarm image source=%s local=%s digest=%s cache_hit=%t\n", entry.Source, entry.LocalRef, entry.Digest, entry.CacheHit)
 		manifest.Images = append(manifest.Images, entry)
@@ -138,28 +149,39 @@ func main() {
 	fmt.Printf("prewarm complete manifest=%s\n", manifestPath)
 }
 
-func ensureMirroredImage(ctx context.Context, inspector *images.OCIClient, registry, source string) (manifestImage, error) {
-	localRef, err := toLocalRegistryRef(registry, source)
+func ensureMirroredImage(ctx context.Context, inspector *images.OCIClient, registry string, img prewarmImage) (manifestImage, error) {
+	localRef, err := toLocalRegistryRef(registry, img.Source)
 	if err != nil {
 		return manifestImage{}, err
 	}
 
-	if digest, err := inspector.InspectManifest(ctx, localRef); err == nil {
-		return manifestImage{Source: source, LocalRef: localRef, Digest: digest, CacheHit: true}, nil
+	inspectDigest := func() (string, error) {
+		return inspector.InspectManifestForPlatform(ctx, localRef, img.Platform)
 	}
 
-	res, err := images.MirrorBaseImage(ctx, "http://"+registry, images.MirrorRequest{SourceImage: source}, nil)
+	if digest, err := inspectDigest(); err == nil {
+		return manifestImage{Source: img.Source, LocalRef: localRef, Digest: digest, CacheHit: true}, nil
+	}
+
+	res, err := images.MirrorBaseImage(ctx, "http://"+registry, images.MirrorRequest{
+		SourceImage: img.Source,
+		Platform:    img.Platform,
+	}, nil)
 	if err != nil {
 		return manifestImage{}, err
 	}
 
-	digest, err := inspector.InspectManifest(ctx, localRef)
+	digest, err := inspectDigest()
 	if err != nil {
 		digest = res.Digest
 	}
-	return manifestImage{Source: source, LocalRef: localRef, Digest: digest, CacheHit: false}, nil
+	return manifestImage{Source: img.Source, LocalRef: localRef, Digest: digest, CacheHit: false}, nil
 }
 
+// toLocalRegistryRef maps a source image to its local-registry reference.
+// Platform-specific prewarm entries intentionally use the same ref as their
+// source; defaultImages must not include another platform for the same source
+// tag, so that local ref stays an unambiguous single-platform manifest.
 func toLocalRegistryRef(registry, source string) (string, error) {
 	ref, err := images.ParseNormalizedRef(source)
 	if err != nil {
@@ -167,9 +189,6 @@ func toLocalRegistryRef(registry, source string) (string, error) {
 	}
 
 	repo := strings.TrimPrefix(ref.Repository(), "docker.io/")
-	if repo == ref.Repository() {
-		repo = ref.Repository()
-	}
 
 	out := registry + "/" + repo
 	if ref.Tag() != "" {
@@ -305,16 +324,16 @@ func fileHash16(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil))[:16], nil
 }
 
-func parseImageList(raw string) []string {
+func parseImageList(raw string) []prewarmImage {
 	if strings.TrimSpace(raw) == "" {
 		return nil
 	}
 	parts := strings.Split(raw, ",")
-	out := make([]string, 0, len(parts))
+	out := make([]prewarmImage, 0, len(parts))
 	for _, p := range parts {
 		p = strings.TrimSpace(p)
 		if p != "" {
-			out = append(out, p)
+			out = append(out, prewarmImage{Source: p})
 		}
 	}
 	return out

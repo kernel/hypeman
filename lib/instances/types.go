@@ -77,7 +77,20 @@ type StoredMetadata struct {
 	// Identification
 	Id    string // Auto-generated CUID2
 	Name  string
-	Image string // OCI reference
+	Image string // OCI reference as supplied by the caller (tag or digest); the display/API value
+
+	// ResolvedImage is the digest-pinned reference (repo@sha256:...) of the
+	// image actually resolved at create time. It is the source of truth for
+	// locating the rootfs on boot/start/restore, so a mutable tag (last-pull-wins)
+	// can't drift the instance to a different image/arch across restarts. Internal;
+	// not exposed on the API. Empty for instances created before this field existed
+	// (callers fall back to Image via bootImageRef).
+	ResolvedImage string
+
+	// Platform is the resolved image platform as os/arch[/variant] (e.g.
+	// "linux/amd64"), captured from the pulled image's metadata at create time.
+	// Read-only; echoed on the instance API.
+	Platform string
 
 	// Resources (matching Cloud Hypervisor terminology)
 	Size                     int64 // Base memory in bytes
@@ -146,6 +159,11 @@ type StoredMetadata struct {
 	// Boot optimizations
 	SkipKernelHeaders bool // Skip kernel headers installation (disables DKMS)
 	SkipGuestAgent    bool // Skip guest-agent installation (disables exec/stat API)
+
+	// EnableRosetta attaches an Apple Rosetta virtio-fs share so the guest can
+	// execute x86-64 binaries. vz on Apple silicon only. Derived internally when
+	// the image platform differs from the host; not a user-facing field.
+	EnableRosetta bool
 
 	// Snapshot policy defaults for this instance.
 	SnapshotPolicy *SnapshotPolicy
@@ -231,6 +249,7 @@ type GPUConfig struct {
 type CreateInstanceRequest struct {
 	Name                     string                      // Required
 	Image                    string                      // Required: OCI reference
+	Platform                 string                      // Optional: target platform as os/arch[/variant]; drives image resolution and auto-pull. Empty means host platform.
 	Size                     int64                       // Base memory in bytes (default: 1GB)
 	HotplugSize              int64                       // Hotplug memory in bytes (default: 0, set explicitly to enable)
 	OverlaySize              int64                       // Overlay disk size in bytes (default: 10GB)

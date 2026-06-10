@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -13,6 +14,84 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// createImageErrManager is a fake images.Manager whose CreateImage returns a
+// preset error, used to assert the handler maps typed errors to HTTP statuses.
+// The embedded interface satisfies the methods the handler doesn't call.
+type createImageErrManager struct {
+	images.Manager
+	err error
+}
+
+func (m createImageErrManager) CreateImage(context.Context, images.CreateImageRequest) (*images.Image, error) {
+	return nil, m.err
+}
+
+func TestCreateImage_ErrorStatusMapping(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		err      error
+		wantType any
+		wantCode string
+	}{
+		{
+			name:     "platform not available -> 404",
+			err:      fmt.Errorf("resolve: %w", images.ErrPlatformNotAvailable),
+			wantType: oapi.CreateImage404JSONResponse{},
+			wantCode: "platform_not_available",
+		},
+		{
+			name:     "rate limited -> 429",
+			err:      fmt.Errorf("resolve: %w", images.ErrRateLimited),
+			wantType: oapi.CreateImage429JSONResponse{},
+			wantCode: "rate_limited",
+		},
+		{
+			name:     "not found -> 404",
+			err:      fmt.Errorf("resolve: %w", images.ErrNotFound),
+			wantType: oapi.CreateImage404JSONResponse{},
+			wantCode: "not_found",
+		},
+		{
+			name:     "invalid platform -> 400",
+			err:      fmt.Errorf("resolve: %w", images.ErrInvalidPlatform),
+			wantType: oapi.CreateImage400JSONResponse{},
+			wantCode: "invalid_platform",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			svc := &ApiService{ImageManager: createImageErrManager{err: tc.err}}
+
+			resp, err := svc.CreateImage(ctx(), oapi.CreateImageRequestObject{
+				Body: &oapi.CreateImageRequest{Name: "docker.io/library/alpine:3.19"},
+			})
+			require.NoError(t, err)
+			require.IsType(t, tc.wantType, resp)
+			require.Equal(t, tc.wantCode, errorCodeOf(resp))
+		})
+	}
+}
+
+// errorCodeOf extracts the Code field from any CreateImage error response.
+func errorCodeOf(resp oapi.CreateImageResponseObject) string {
+	switch r := resp.(type) {
+	case oapi.CreateImage400JSONResponse:
+		return r.Code
+	case oapi.CreateImage404JSONResponse:
+		return r.Code
+	case oapi.CreateImage429JSONResponse:
+		return r.Code
+	case oapi.CreateImage500JSONResponse:
+		return r.Code
+	default:
+		return ""
+	}
+}
 
 func TestListImages_Empty(t *testing.T) {
 	t.Parallel()
