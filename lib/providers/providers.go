@@ -302,15 +302,18 @@ func (s *guestMemoryInstanceSource) ListBalloonVMs(ctx context.Context) ([]guest
 	return vms, nil
 }
 
-// balloonVMForInstance maps a stored instance onto the controller's view. The
-// baseline is the guest's normal running size; a vz boot ceiling is the live
-// maximum the balloon can deflate to, so it drives the controller's upper clamp
-// while the baseline is the size held when the host is healthy. HotplugSize is 0
-// on vz, so the max keeps non-vz backends correct if hotplug is ever populated.
+// balloonVMForInstance maps a stored instance onto the controller's view: the
+// baseline is the size held when the host is healthy, and the assigned size is
+// the live maximum the balloon can deflate to. A vz boot ceiling mirrors the
+// shim exactly — the shim boots at MemoryCeilingBytes and balloons down to
+// MemoryBytes (== inst.Size), and vz does not use HotplugSize — so a ceiling VM
+// baselines at inst.Size and is capped at the ceiling. Everything else (incl.
+// real-hotplug backends) runs at Size + HotplugSize, where baseline == assigned.
 func balloonVMForInstance(inst instances.Instance) guestmemory.BalloonVM {
 	baseline := inst.Size + inst.HotplugSize
 	assigned := baseline
-	if inst.MemoryCeilingBytes > assigned {
+	if inst.MemoryCeilingBytes > inst.Size {
+		baseline = inst.Size
 		assigned = inst.MemoryCeilingBytes
 	}
 	return guestmemory.BalloonVM{

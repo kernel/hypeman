@@ -187,6 +187,7 @@ func TestHealthyHoldsCeilingVMAtBaseline(t *testing.T) {
 	assert.Equal(t, "unchanged", resp.Actions[0].Status)
 	assert.Equal(t, baseline, resp.Actions[0].TargetGuestMemoryBytes, "ceiling VM should hold at baseline, not grow to ceiling, when grow-on-demand is off")
 	assert.Equal(t, baseline, hv.target, "balloon target must remain at baseline")
+	assert.Equal(t, int64(0), resp.PlannedReclaimBytes, "a ceiling VM held at baseline reclaims nothing; its idle headroom must not be counted as reclaim")
 }
 
 func TestHealthyPreservesGrownCeilingVM(t *testing.T) {

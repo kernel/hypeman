@@ -21,19 +21,27 @@ func TestBalloonVMForInstance(t *testing.T) {
 	assert.Equal(t, 3*gib, noCeiling.AssignedMemoryBytes)
 	assert.Equal(t, 3*gib, noCeiling.BaselineMemoryBytes)
 
-	// Ceiling above size+hotplug: assigned is the ceiling, baseline stays at size+hotplug.
+	// Ceiling above size: assigned is the ceiling, baseline is the shim's Size.
 	withCeiling := balloonVMForInstance(instances.Instance{StoredMetadata: instances.StoredMetadata{
 		Id: "b", Size: gib, MemoryCeilingBytes: 4 * gib,
 	}})
 	assert.Equal(t, 4*gib, withCeiling.AssignedMemoryBytes)
 	assert.Equal(t, gib, withCeiling.BaselineMemoryBytes)
 
-	// A ceiling not above size+hotplug never lowers the assigned clamp.
+	// A ceiling not above size leaves the VM ordinary (baseline == assigned).
 	lowCeiling := balloonVMForInstance(instances.Instance{StoredMetadata: instances.StoredMetadata{
 		Id: "c", Size: 2 * gib, MemoryCeilingBytes: gib,
 	}})
 	assert.Equal(t, 2*gib, lowCeiling.AssignedMemoryBytes)
 	assert.Equal(t, 2*gib, lowCeiling.BaselineMemoryBytes)
+
+	// A vz ceiling VM with a (vz-ignored) hotplug size still baselines at Size:
+	// the shim balloons to MemoryBytes (== Size), not Size + HotplugSize.
+	ceilingWithHotplug := balloonVMForInstance(instances.Instance{StoredMetadata: instances.StoredMetadata{
+		Id: "d", Size: gib, HotplugSize: gib, MemoryCeilingBytes: 4 * gib,
+	}})
+	assert.Equal(t, 4*gib, ceilingWithHotplug.AssignedMemoryBytes)
+	assert.Equal(t, gib, ceilingWithHotplug.BaselineMemoryBytes)
 }
 
 func TestSnapshotDefaultsFromConfigDisabledReturnsNilCompression(t *testing.T) {
