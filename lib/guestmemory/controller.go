@@ -171,8 +171,11 @@ func (c *controller) reconcile(ctx context.Context, req reconcileRequest) (Manua
 		// baseline equals the assigned size, so this is unchanged; for a ceiling VM
 		// it keeps the floor at/below the baseline the guest is held at.
 		protectedFloor := protectedFloorBytes(c.config, floorAnchorBytes(vm))
-		if protectedFloor > vm.AssignedMemoryBytes {
-			protectedFloor = vm.AssignedMemoryBytes
+		// Cap the floor at the baseline, not the ceiling: if the configured floor
+		// minimum exceeds a ceiling VM's (small) baseline, the controller must not
+		// raise the guest up to the floor — it holds at the baseline the shim set.
+		if anchor := floorAnchorBytes(vm); protectedFloor > anchor {
+			protectedFloor = anchor
 		}
 
 		// currentTotalReclaim is the memory currently held back from the size the

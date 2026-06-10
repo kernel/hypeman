@@ -225,6 +225,39 @@ func TestHealthyPreservesGrownCeilingVM(t *testing.T) {
 	assert.Equal(t, grown, hv.target, "a deliberately grown ceiling VM must not be reverted to baseline while healthy")
 }
 
+func TestHealthySmallBaselineCeilingVMHeldAtBaselineNotFloor(t *testing.T) {
+	const mib = int64(1024 * 1024)
+	const baseline = 256 * mib // below protected_floor_min_bytes
+	const ceiling = 2048 * mib
+
+	// A ceiling VM whose baseline is below protected_floor_min_bytes must still be
+	// held at its baseline on a healthy host: the floor is capped at the baseline,
+	// so the controller does not raise the guest up to the floor.
+	src := &stubSource{
+		vms: []BalloonVM{
+			{ID: "a", Name: "a", HypervisorType: hypervisor.TypeVZ, SocketPath: "a", AssignedMemoryBytes: ceiling, BaselineMemoryBytes: baseline},
+		},
+	}
+	hv := &stubHypervisor{target: baseline, capabilities: hypervisor.Capabilities{SupportsBalloonControl: true}}
+
+	c := NewController(Policy{Enabled: true, ReclaimEnabled: true}, ActiveBallooningConfig{
+		Enabled:                true,
+		ProtectedFloorPercent:  50,
+		ProtectedFloorMinBytes: 512 * mib,
+		MinAdjustmentBytes:     1,
+		PerVMMaxStepBytes:      ceiling,
+		PerVMCooldown:          time.Millisecond,
+	}, src, slog.New(slog.NewTextHandler(io.Discard, nil))).(*controller)
+	c.sampler = &stubSampler{sample: HostPressureSample{TotalBytes: 64 * 1024 * mib, AvailableBytes: 32 * 1024 * mib, AvailablePercent: 50}}
+	c.reconcileMu.newClient = func(_ hypervisor.Type, _ string) (hypervisor.Hypervisor, error) {
+		return hv, nil
+	}
+
+	_, err := c.TriggerReclaim(context.Background(), ManualReclaimRequest{ReclaimBytes: 0})
+	require.NoError(t, err)
+	assert.Equal(t, baseline, hv.target, "a ceiling VM with a sub-floor baseline must hold at baseline, not be raised to the protected floor")
+}
+
 func TestStressedCeilingVMAtBaselineDoesNotSqueezeCoTenant(t *testing.T) {
 	const mib = int64(1024 * 1024)
 	const baseline = 1024 * mib
