@@ -263,11 +263,6 @@ $(BIN_DIR)/hypeman-uffd-pager: | $(BIN_DIR)
 # Build all binaries
 build-all: build
 
-# Run without live reload (build once and run)
-run: build
-	sudo setcap cap_net_admin,cap_net_bind_service=+eip $(BIN_DIR)/hypeman
-	$(BIN_DIR)/hypeman
-
 # Run in development mode with hot reload
 # On macOS, redirects to dev-darwin which uses vz instead of cloud-hypervisor
 dev:
@@ -410,10 +405,15 @@ ENTITLEMENTS_FILE ?= vz.entitlements
 
 # Build vz-shim (subprocess that hosts vz VMs)
 # Also copies to embed directory so it gets embedded in the hypeman binary
+# DARWIN_LDFLAGS silences the macOS (Xcode 15+) linker's "ignoring duplicate
+# libraries: '-lobjc'" warning: cgo deps that link Virtualization.framework
+# specify -lobjc more than once, which the new linker flags. Harmless; suppress.
+DARWIN_LDFLAGS := -ldflags=-extldflags=-Wl,-no_warn_duplicate_libraries
+
 .PHONY: build-vz-shim
 build-vz-shim: | $(BIN_DIR)
 	@echo "Building vz-shim for macOS..."
-	go build -o $(BIN_DIR)/vz-shim ./cmd/vz-shim
+	go build $(DARWIN_LDFLAGS) -o $(BIN_DIR)/vz-shim ./cmd/vz-shim
 	mkdir -p lib/hypervisor/vz/vz-shim
 	cp $(BIN_DIR)/vz-shim lib/hypervisor/vz/vz-shim/vz-shim
 	@echo "Build complete: $(BIN_DIR)/vz-shim"
@@ -431,7 +431,7 @@ sign-vz-shim: build-vz-shim
 .PHONY: build-darwin
 build-darwin: build-embedded build-vz-shim | $(BIN_DIR)
 	@echo "Building hypeman for macOS with vz support..."
-	go build -tags containers_image_openpgp -o $(BIN_DIR)/hypeman ./cmd/api
+	go build -tags containers_image_openpgp $(DARWIN_LDFLAGS) -o $(BIN_DIR)/hypeman ./cmd/api
 	@echo "Build complete: $(BIN_DIR)/hypeman"
 
 # Sign the binary with entitlements (required for Virtualization.framework)
