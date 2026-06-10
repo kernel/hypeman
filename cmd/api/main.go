@@ -453,7 +453,19 @@ func run() error {
 			})
 		}
 
-		r.Use(middleware.Timeout(60 * time.Second))
+		// Skip the request timeout for SSE streaming endpoints (instance logs,
+		// build events): middleware.Timeout cancels the request context, which
+		// kills long-lived streams at 60s even while events are flowing.
+		r.Use(func(next http.Handler) http.Handler {
+			timeoutHandler := middleware.Timeout(60 * time.Second)(next)
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if strings.HasSuffix(r.URL.Path, "/logs") || strings.HasSuffix(r.URL.Path, "/events") {
+					next.ServeHTTP(w, r)
+					return
+				}
+				timeoutHandler.ServeHTTP(w, r)
+			})
+		})
 
 		// OpenAPI request validation with authentication
 		validatorOptions := &nethttpmiddleware.Options{
