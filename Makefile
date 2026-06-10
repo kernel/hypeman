@@ -300,6 +300,7 @@ test-linux: ensure-ch-binaries ensure-firecracker-binaries ensure-caddy-binaries
 	if [ -n "$(TEST)" ]; then \
 		echo "Running specific test: $(TEST)"; \
 		sudo env "PATH=$$TEST_PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" "CI=$${CI:-}" \
+			"TMPDIR=$${TMPDIR:-/tmp}" \
 			"HYPEMAN_UFFD_PAGER_BINARY=$${HYPEMAN_UFFD_PAGER_BINARY:-$(UFFD_PAGER_BINARY)}" \
 			"HYPEMAN_UFFD_SYSTEMD_INSTANCE_PREFIX=$${HYPEMAN_UFFD_SYSTEMD_INSTANCE_PREFIX:-}" \
 			"HYPEMAN_TEST_PREWARM_DIR=$${HYPEMAN_TEST_PREWARM_DIR:-}" \
@@ -308,6 +309,7 @@ test-linux: ensure-ch-binaries ensure-firecracker-binaries ensure-caddy-binaries
 			go test -tags containers_image_openpgp -run=$(TEST) $$VERBOSE_FLAG -timeout=$(TEST_TIMEOUT) ./...; \
 	else \
 		sudo env "PATH=$$TEST_PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" "CI=$${CI:-}" \
+			"TMPDIR=$${TMPDIR:-/tmp}" \
 			"HYPEMAN_UFFD_PAGER_BINARY=$${HYPEMAN_UFFD_PAGER_BINARY:-$(UFFD_PAGER_BINARY)}" \
 			"HYPEMAN_UFFD_SYSTEMD_INSTANCE_PREFIX=$${HYPEMAN_UFFD_SYSTEMD_INSTANCE_PREFIX:-}" \
 			"HYPEMAN_TEST_PREWARM_DIR=$${HYPEMAN_TEST_PREWARM_DIR:-}" \
