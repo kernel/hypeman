@@ -89,7 +89,7 @@ func planGuestTargets(cfg ActiveBallooningConfig, candidates []candidateState, t
 
 func protectedFloorBytes(cfg ActiveBallooningConfig, anchor int64) int64 {
 	percentFloor := (anchor * int64(cfg.ProtectedFloorPercent)) / 100
-	return maxInt64(cfg.ProtectedFloorMinBytes, percentFloor)
+	return minInt64(anchor, maxInt64(cfg.ProtectedFloorMinBytes, percentFloor))
 }
 
 // floorAnchorBytes is the size the protected floor is computed against: the

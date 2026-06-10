@@ -45,6 +45,22 @@ func TestFloorAnchorBytesUsesBaselineForCeilingVM(t *testing.T) {
 	}
 }
 
+func TestProtectedFloorBytesCappedAtAnchor(t *testing.T) {
+	const mib = int64(1024 * 1024)
+	const baseline = 256 * mib
+
+	cfg := ActiveBallooningConfig{
+		ProtectedFloorPercent:  50,
+		ProtectedFloorMinBytes: 512 * mib,
+	}
+
+	// The protected floor must never exceed the baseline anchor; otherwise a
+	// small-baseline ceiling VM is forced above baseline on healthy reconciles.
+	if got := protectedFloorBytes(cfg, baseline); got != baseline {
+		t.Fatalf("protected floor should cap at anchor %d, got %d", baseline, got)
+	}
+}
+
 func TestAutomaticTargetBytesStressedHoldsCurrentReclaim(t *testing.T) {
 	const gib = int64(1024 * 1024 * 1024)
 	cfg := ActiveBallooningConfig{PressureLowWatermarkAvailablePercent: 15}
