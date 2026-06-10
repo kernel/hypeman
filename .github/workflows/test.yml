@@ -115,7 +115,12 @@ jobs:
         env:
           HYPEMAN_TEST_REGISTRY: 127.0.0.1:5001
         run: |
-          export HYPEMAN_TEST_PREWARM_DIR="$HOME/.cache/hypeman-ci/linux-amd64"
+          # Prewarm cache must live on the same filesystem as the test TMPDIR
+          # (/ci): the image build symlinks the oci-cache from here into each
+          # per-test cache and builds rootfs there, and those operations are not
+          # cross-filesystem safe. Keeping both on /ci avoids that.
+          export HYPEMAN_TEST_PREWARM_DIR="/ci/prewarm/linux-amd64"
+          mkdir -p "$HYPEMAN_TEST_PREWARM_DIR"
           go run ./cmd/test-prewarm
 
       - name: Check gofmt
@@ -158,7 +163,7 @@ jobs:
         run: |
           cp "$PWD/bin/hypeman-uffd-pager" "$HYPEMAN_UFFD_PAGER_BINARY"
           chmod +x "$HYPEMAN_UFFD_PAGER_BINARY"
-          export HYPEMAN_TEST_PREWARM_DIR="$HOME/.cache/hypeman-ci/linux-amd64"
+          export HYPEMAN_TEST_PREWARM_DIR="/ci/prewarm/linux-amd64"
           make test TEST_TIMEOUT=20m
 
       - name: Cleanup
