@@ -66,7 +66,7 @@ To use the Hypeman CLI from a **different machine** than the server:
 brew install kernel/tap/hypeman
 ```
 
-**Linux:**
+**Install script (Linux & macOS):**
 ```bash
 curl -fsSL https://get.hypeman.sh/cli | bash
 ```
