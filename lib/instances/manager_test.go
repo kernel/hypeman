@@ -312,10 +312,11 @@ func cmdlineReferencesDir(argv []string, dir string) bool {
 			continue
 		}
 		// Tokens may embed the path inside larger strings (e.g. qemu's
-		// "socket,...,path=/tmp/.../qmp.sock"), so a substring check on the
-		// cleaned prefix is the robust match. The prefix is a unique per-test
-		// t.TempDir() root, so substring matching cannot collide across tests.
-		if strings.Contains(tok, dir) {
+		// "socket,...,path=/tmp/.../qmp.sock"), so match dir as a substring — but
+		// only at a path boundary (followed by "/" or at end-of-token). A raw
+		// substring check would let a shorter data dir (e.g. ".../001") match a
+		// sibling test's longer path (".../0010") and SIGKILL its processes.
+		if strings.Contains(tok, dir+"/") || strings.HasSuffix(tok, dir) {
 			return true
 		}
 	}
