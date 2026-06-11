@@ -669,6 +669,13 @@ func TestFirecrackerWarmForkChain(t *testing.T) {
 }
 
 func TestFCUFFDOneShotLifecycle(t *testing.T) {
+	// SKIP: flakes ~21% even in isolation — the restored guest's agent vsock/gRPC
+	// connection intermittently dies in the first seconds after a UFFD one-shot
+	// restore (the guest resets the stream). A controlled cgroup experiment ruled
+	// out disk I/O and CPU as the cause (both only amplify it). Re-enable once the
+	// guest-agent reconnect/readiness fix lands.
+	// Tracked in: https://linear.app/onkernel/issue/KERNEL-1354
+	t.Skip("flaky: guest-agent vsock race after UFFD restore (KERNEL-1354)")
 	t.Parallel()
 	requireFirecrackerIntegrationPrereqs(t)
 	requireUserfaultfdIntegrationPrereqs(t)
