@@ -1482,6 +1482,8 @@ func TestStandbyAndRestore(t *testing.T) {
 		t.Skip("/dev/kvm not available, skipping on this platform")
 	}
 
+	acquireHeavyIO(t)
+
 	manager, tmpDir := setupTestManager(t) // Automatically registers cleanup
 	ctx := context.Background()
 

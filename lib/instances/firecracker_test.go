@@ -154,6 +154,7 @@ func startGatewayProbeServer(t *testing.T, gatewayIP string) (string, func()) {
 func TestFirecrackerStandbyAndRestore(t *testing.T) {
 	t.Parallel()
 	requireFirecrackerIntegrationPrereqs(t)
+	acquireHeavyIO(t)
 
 	mgr, tmpDir := setupTestManagerForFirecrackerNoNetwork(t)
 	ctx := context.Background()
@@ -287,6 +288,7 @@ func TestFirecrackerStandbyAndRestore(t *testing.T) {
 func TestFirecrackerStopClearsStaleSnapshot(t *testing.T) {
 	t.Parallel()
 	requireFirecrackerIntegrationPrereqs(t)
+	acquireHeavyIO(t)
 
 	mgr, tmpDir := setupTestManagerForFirecracker(t)
 	ctx := context.Background()
@@ -491,6 +493,7 @@ func TestFirecrackerNetworkLifecycle(t *testing.T) {
 func TestFirecrackerForkFromRunningNetwork(t *testing.T) {
 	t.Parallel()
 	requireFirecrackerIntegrationPrereqs(t)
+	acquireHeavyIO(t)
 
 	mgr, tmpDir := setupTestManagerForFirecracker(t)
 	ctx := context.Background()
@@ -578,6 +581,7 @@ func TestFirecrackerSnapshotFeature(t *testing.T) {
 func TestFirecrackerWarmForkChain(t *testing.T) {
 	t.Parallel()
 	requireFirecrackerIntegrationPrereqs(t)
+	acquireHeavyIO(t)
 
 	mgr, tmpDir := setupTestManagerForFirecrackerNoNetwork(t)
 	ctx := context.Background()
@@ -673,6 +677,7 @@ func TestFCUFFDOneShotLifecycle(t *testing.T) {
 	} else if st, err := os.Stat(pagerBinary); err != nil || !st.Mode().IsRegular() {
 		t.Skipf("HYPEMAN_UFFD_PAGER_BINARY is not a regular file: %s", pagerBinary)
 	}
+	acquireHeavyIO(t)
 
 	mgr, tmpDir := setupTestManagerForFirecrackerWithConfig(t, legacyParallelTestNetworkConfig(testNetworkSeq.Add(1)), ManagerConfig{
 		FirecrackerSnapshotMemoryBackend: uffdpager.BackendUFFD,
@@ -939,6 +944,7 @@ func assertGuestFileAbsent(t *testing.T, ctx context.Context, inst *Instance, pa
 func TestFirecrackerForkIsolation(t *testing.T) {
 	t.Parallel()
 	requireFirecrackerIntegrationPrereqs(t)
+	acquireHeavyIO(t)
 
 	mgr, tmpDir := setupTestManagerForFirecrackerNoNetwork(t)
 	ctx := context.Background()

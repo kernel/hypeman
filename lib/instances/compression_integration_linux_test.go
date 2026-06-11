@@ -129,6 +129,7 @@ func setupCompressionTestManagerForHypervisor(t *testing.T, hvType hypervisor.Ty
 func runStandbyRestoreCompressionScenarios(t *testing.T, harness compressionIntegrationHarness) {
 	t.Helper()
 	harness.requirePrereqs(t)
+	acquireHeavyIO(t)
 
 	mgr, tmpDir := harness.setup(t)
 	ctx := context.Background()

@@ -23,6 +23,7 @@ type snapshotScenarioConfig struct {
 
 func runStandbySnapshotScenario(t *testing.T, mgr *manager, tmpDir string, cfg snapshotScenarioConfig) {
 	t.Helper()
+	acquireHeavyIO(t)
 
 	ctx := context.Background()
 	p := paths.New(tmpDir)

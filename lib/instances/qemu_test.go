@@ -765,6 +765,7 @@ func TestQEMUEntrypointEnvVars(t *testing.T) {
 func TestQEMUStandbyAndRestore(t *testing.T) {
 	t.Parallel()
 	requireQEMUUsable(t)
+	acquireHeavyIO(t)
 
 	manager, tmpDir := setupTestManagerForQEMU(t)
 	ctx := context.Background()
@@ -886,6 +887,7 @@ func TestQEMUStandbyAndRestore(t *testing.T) {
 func TestQEMUForkFromRunningNetwork(t *testing.T) {
 	t.Parallel()
 	requireQEMUUsable(t)
+	acquireHeavyIO(t)
 
 	manager, tmpDir := setupTestManagerForQEMU(t)
 	ctx := context.Background()
