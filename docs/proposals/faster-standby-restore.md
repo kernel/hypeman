@@ -77,7 +77,7 @@ On `vz`, `machine-state.vzm` is never compressed, so it is always present as wri
 
 ## Platform constraints & edge cases
 
-- **macOS 14+, Apple silicon only.** Save/restore is gated by `macOSAvailable(14)` and darwin/arm64 build tags; `Capabilities().SupportsSnapshot` is `runtime.GOARCH == "arm64"`. `clonefile` has been available since the introduction of APFS.
+- **macOS 14+, Apple silicon only.** Save/restore is restricted to darwin/arm64 by build tags and gated at runtime by `validateSaveRestoreSupport` (`cmd/vz-shim`), which calls the framework's `ValidateSaveRestoreSupport()` (requires macOS 14+); `Capabilities().SupportsSnapshot` is `runtime.GOARCH == "arm64"`. `clonefile` has been available since the introduction of APFS.
 - **APFS volume boundaries / non-APFS.** `clonefile` only clones within a single APFS volume; cross-volume returns `EXDEV` and non-APFS returns `ENOTSUP`, and we fall back to a sparse copy whose cost scales with disk size. No correctness risk, only a performance cliff. The common deployment keeps instance and snapshot dirs on one APFS volume and gets CoW.
 - **Compatibility / device-config stability.** Restore fails if the saved state is incompatible with the current configuration. The disk clone copies the disk exactly, so it does not affect restore compatibility; the constraint that NIC identity must not be rewritten in the serialized config (`lib/hypervisor/vz/fork.go`) is unaffected.
 

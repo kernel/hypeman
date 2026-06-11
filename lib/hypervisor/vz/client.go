@@ -255,7 +255,7 @@ func (c *Client) Resume(ctx context.Context) error {
 	// be "Running" so an immediate vm.info read-back or guest exec doesn't observe
 	// a transient Paused. Poll the shim's raw state until it reports Running,
 	// bounded by a short timeout so a stuck VM still surfaces an error.
-	return c.waitForRawState(ctx, "Running", resumeReadyTimeout, resumeReadyPollInterval)
+	return c.waitForRawState(ctx, "Running")
 }
 
 const (
@@ -264,11 +264,11 @@ const (
 )
 
 // waitForRawState polls vm.info until the shim's raw state string equals want or
-// the timeout elapses. It checks the raw state (not the hypervisor.VMState
+// resumeReadyTimeout elapses. It checks the raw state (not the hypervisor.VMState
 // mapping, which collapses "Resuming" into Running) so the post-condition is the
 // guest actually being in the requested state.
-func (c *Client) waitForRawState(ctx context.Context, want string, timeout, interval time.Duration) error {
-	deadline := time.Now().Add(timeout)
+func (c *Client) waitForRawState(ctx context.Context, want string) error {
+	deadline := time.Now().Add(resumeReadyTimeout)
 	for {
 		state, err := c.rawVMState(ctx)
 		if err == nil && state == want {
@@ -278,12 +278,12 @@ func (c *Client) waitForRawState(ctx context.Context, want string, timeout, inte
 			if err != nil {
 				return fmt.Errorf("wait for vm state %q: %w", want, err)
 			}
-			return fmt.Errorf("vm did not reach state %q within %s (last state %q)", want, timeout, state)
+			return fmt.Errorf("vm did not reach state %q within %s (last state %q)", want, resumeReadyTimeout, state)
 		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(interval):
+		case <-time.After(resumeReadyPollInterval):
 		}
 	}
 }
