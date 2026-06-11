@@ -202,7 +202,7 @@ func (m *manager) rotateSourceVsockForRestore(ctx context.Context, sourceID, for
 
 func generateForkSourceVsockCID(sourceID, forkID string, current int64) int64 {
 	const cidRange = int64(4294967292)
-	seed := crc32.ChecksumIEEE([]byte(sourceID + ":" + forkID))
+	seed := crc32.ChecksumIEEE([]byte(sourceID+":"+forkID)) ^ vsockCIDSalt
 	cid := (int64(seed) % cidRange) + 3
 	if cid == current {
 		cid = ((cid - 3 + 1) % cidRange) + 3
