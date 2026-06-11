@@ -270,7 +270,11 @@ func (s *Starter) startQEMUProcess(ctx context.Context, p *paths.Paths, version 
 		processSpan.RecordError(err)
 		processSpan.SetStatus(codes.Error, err.Error())
 		cu.Clean()
-		return 0, nil, nil, appendVMMLog(err, logsDir)
+		wrapped := appendVMMLog(err, logsDir)
+		// Diagnostic (log-only): if this was a vsock guest-CID collision, capture
+		// the colliding CID and which host process is holding it.
+		logVsockCIDConflict(processCtx, guestCIDFromArgs(args), wrapped.Error())
+		return 0, nil, nil, wrapped
 	}
 	log.DebugContext(processCtx, "QMP socket ready", "duration_ms", time.Since(socketWaitStart).Milliseconds())
 
@@ -284,7 +288,11 @@ func (s *Starter) startQEMUProcess(ctx context.Context, p *paths.Paths, version 
 			processSpan.RecordError(err)
 			processSpan.SetStatus(codes.Error, err.Error())
 			cu.Clean()
-			return 0, nil, nil, appendVMMLog(err, logsDir)
+			wrapped := appendVMMLog(err, logsDir)
+			// Diagnostic (log-only): if this was a vsock guest-CID collision,
+			// capture the colliding CID and which host process is holding it.
+			logVsockCIDConflict(processCtx, guestCIDFromArgs(args), wrapped.Error())
+			return 0, nil, nil, wrapped
 		}
 
 		hv, err = New(socketPath)
