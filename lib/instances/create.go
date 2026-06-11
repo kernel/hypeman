@@ -2,10 +2,7 @@ package instances
 
 import (
 	"context"
-	crand "crypto/rand"
-	"encoding/binary"
 	"fmt"
-	"hash/crc32"
 	"log/slog"
 	"path/filepath"
 	"strings"
@@ -54,31 +51,21 @@ var systemDirectories = []string{
 	"/var",
 }
 
-// vsockCIDSalt randomizes vsock CID derivation per process. vsock Context IDs
-// are a host-global namespace, so concurrent hypeman processes sharing a host
-// (e.g. parallel CI runners) must not derive identical CIDs for their VMs. CIDs
-// are persisted in metadata and never recomputed-and-compared across processes,
-// so per-process variation is safe; within a process the derivation stays
-// deterministic, which the tests rely on.
-var vsockCIDSalt = randomVsockCIDSalt()
-
-func randomVsockCIDSalt() uint32 {
-	var b [4]byte
-	if _, err := crand.Read(b[:]); err != nil {
-		return 0
-	}
-	return binary.LittleEndian.Uint32(b[:])
-}
-
-// generateVsockCID derives a vsock Context ID from the full instance ID.
-// CIDs 0-2 are reserved (hypervisor, loopback, host); returns 3..4294967295.
-// The FULL id is hashed (hashing only a prefix collides for IDs that share a
-// prefix, e.g. created close together) and XORed with a per-process salt so
-// concurrent processes on a shared host don't derive the same CID.
+// generateVsockCID converts first 8 chars of instance ID to a unique CID
+// CIDs 0-2 are reserved (hypervisor, loopback, host)
+// Returns value in range 3 to 4294967295
 func generateVsockCID(instanceID string) int64 {
-	const cidRange = int64(4294967292)
-	seed := crc32.ChecksumIEEE([]byte(instanceID)) ^ vsockCIDSalt
-	return (int64(seed) % cidRange) + 3
+	idPrefix := instanceID
+	if len(idPrefix) > 8 {
+		idPrefix = idPrefix[:8]
+	}
+
+	var sum int64
+	for _, c := range idPrefix {
+		sum = sum*37 + int64(c)
+	}
+
+	return (sum % 4294967292) + 3
 }
 
 // createInstance creates and starts a new instance
