@@ -150,15 +150,13 @@ jobs:
           TLS_TEST_DOMAIN: "test.hypeman-development.com"
           TLS_ALLOWED_DOMAINS: '*.hypeman-development.com'
           HYPEMAN_TEST_PREWARM_STRICT: "1"
+          HYPEMAN_TEST_REFLINK_STRICT: "1"
           HYPEMAN_TEST_REGISTRY: 127.0.0.1:5001
           HYPEMAN_UFFD_PAGER_BINARY: ${{ runner.temp }}/hypeman-uffd-pager-${{ github.run_id }}-${{ github.run_attempt }}
           HYPEMAN_UFFD_SYSTEMD_INSTANCE_PREFIX: ci-${{ github.run_id }}-${{ github.run_attempt }}
-          # Put VM snapshot/fork/restore scratch on the fast unencrypted OS SSD
-          # (/ci, provisioned by the dev_ci_scratch Ansible role on the runner).
-          # /tmp is bind-mounted onto the encrypted RAID5 volume (~158 MB/s, far
-          # less under concurrent load), which starves these I/O-heavy tests and
-          # causes flaky "did not reach Running"/vsock timeouts. Kept short to stay
-          # under the 108-char AF_UNIX sun_path limit for VMM control sockets.
+          # Fast scratch filesystem provisioned on the runner. Must be reflink-capable
+          # (the VM disk fork fast path uses FICLONE) and kept short to stay under the
+          # 108-char AF_UNIX sun_path limit for VMM control sockets.
           TMPDIR: /ci
         run: |
           cp "$PWD/bin/hypeman-uffd-pager" "$HYPEMAN_UFFD_PAGER_BINARY"
