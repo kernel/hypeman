@@ -68,6 +68,24 @@ func fileExtents(path string) ([]fiemapExtent, error) {
 // degraded to a full byte copy and we want to fail loudly. Requires a
 // reflink-capable filesystem under the test's scratch directory (XFS with
 // reflink=1 in CI).
+// assertCopyReflinkedGated runs assertCopyReflinked only when probeDir's
+// filesystem supports reflinks (FICLONE), unless reflink strict mode is enabled
+// (HYPEMAN_TEST_REFLINK_STRICT), in which case it asserts unconditionally so CI
+// catches real reflink regressions. Mirrors the probeReflinkSupport gating used
+// for the soft disk-usage assertion.
+func assertCopyReflinkedGated(t *testing.T, probeDir, srcDir, dstDir string) {
+	t.Helper()
+	if probeReflinkSupport(t, probeDir) {
+		assertCopyReflinked(t, srcDir, dstDir)
+		return
+	}
+	if reflinkStrict() {
+		assertCopyReflinked(t, srcDir, dstDir)
+		return
+	}
+	t.Logf("skipping reflink assertion: filesystem at %s lacks reflink support", probeDir)
+}
+
 func assertCopyReflinked(t *testing.T, srcDir, dstDir string) {
 	t.Helper()
 

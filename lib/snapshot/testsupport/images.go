@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,6 +16,18 @@ import (
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/stretchr/testify/require"
 )
+
+// imageBuildLocks serializes concurrent builds of the SAME image into the
+// shared cache. Multiple parallel tests that request the same image would
+// otherwise race inside cacheMgr.CreateImage, where a transient file can
+// vanish mid-build (e.g. mkfs.erofs "No such file or directory"). Different
+// images may still be built in parallel.
+var imageBuildLocks sync.Map // image ref -> *sync.Mutex
+
+func imageBuildLock(ref string) *sync.Mutex {
+	m, _ := imageBuildLocks.LoadOrStore(ref, &sync.Mutex{})
+	return m.(*sync.Mutex)
+}
 
 // EnsureImageReady pre-warms a shared image cache under /tmp and seeds that
 // image into the test data directory so instance integration tests don't need
@@ -31,6 +44,13 @@ func EnsureImageReady(t *testing.T, ctx context.Context, p *paths.Paths, imageMa
 
 	prewarmCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
+
+	// Serialize the build-and-seed of this specific image so two parallel
+	// tests don't build/seed it concurrently and race in the shared cache.
+	// Distinct images proceed in parallel.
+	buildLock := imageBuildLock(ref.String())
+	buildLock.Lock()
+	defer buildLock.Unlock()
 
 	created, err := cacheMgr.CreateImage(prewarmCtx, images.CreateImageRequest{Name: image})
 	require.NoError(t, err)

@@ -23,6 +23,7 @@ type snapshotScenarioConfig struct {
 
 func runStandbySnapshotScenario(t *testing.T, mgr *manager, tmpDir string, cfg snapshotScenarioConfig) {
 	t.Helper()
+	acquireHeavyIO(t)
 
 	ctx := context.Background()
 	p := paths.New(tmpDir)
@@ -107,5 +108,10 @@ func runStandbySnapshotScenario(t *testing.T, mgr *manager, tmpDir string, cfg s
 	requireNoErr(err)
 	require.Equal(t, StateStandby, currentFork.State)
 
-	assertCopyReflinked(t, p.SnapshotGuestDir(snapshot.Id), p.InstanceDir(forkID))
+	// Gate the reflink assertion on filesystem support: ext4/tmpfs (most
+	// contributor machines, and /tmp) lack reflink and fall back to a full copy,
+	// so the assertion would hard-fail there. In CI strict mode we still assert
+	// unconditionally so the runner catches real reflink regressions. Mirrors the
+	// disk-usage assertion's probeReflinkSupport gating in firecracker_test.go.
+	assertCopyReflinkedGated(t, tmpDir, p.SnapshotGuestDir(snapshot.Id), p.InstanceDir(forkID))
 }

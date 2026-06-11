@@ -115,7 +115,12 @@ jobs:
         env:
           HYPEMAN_TEST_REGISTRY: 127.0.0.1:5001
         run: |
-          export HYPEMAN_TEST_PREWARM_DIR="$HOME/.cache/hypeman-ci/linux-amd64"
+          # Prewarm cache must live on the same filesystem as the test TMPDIR
+          # (/ci): the image build symlinks the oci-cache from here into each
+          # per-test cache and builds rootfs there, and those operations are not
+          # cross-filesystem safe. Keeping both on /ci avoids that.
+          export HYPEMAN_TEST_PREWARM_DIR="/ci/prewarm/linux-amd64"
+          mkdir -p "$HYPEMAN_TEST_PREWARM_DIR"
           go run ./cmd/test-prewarm
 
       - name: Check gofmt
@@ -145,13 +150,18 @@ jobs:
           TLS_TEST_DOMAIN: "test.hypeman-development.com"
           TLS_ALLOWED_DOMAINS: '*.hypeman-development.com'
           HYPEMAN_TEST_PREWARM_STRICT: "1"
+          HYPEMAN_TEST_REFLINK_STRICT: "1"
           HYPEMAN_TEST_REGISTRY: 127.0.0.1:5001
           HYPEMAN_UFFD_PAGER_BINARY: ${{ runner.temp }}/hypeman-uffd-pager-${{ github.run_id }}-${{ github.run_attempt }}
           HYPEMAN_UFFD_SYSTEMD_INSTANCE_PREFIX: ci-${{ github.run_id }}-${{ github.run_attempt }}
+          # Fast scratch filesystem provisioned on the runner. Must be reflink-capable
+          # (the VM disk fork fast path uses FICLONE) and kept short to stay under the
+          # 108-char AF_UNIX sun_path limit for VMM control sockets.
+          TMPDIR: /ci
         run: |
           cp "$PWD/bin/hypeman-uffd-pager" "$HYPEMAN_UFFD_PAGER_BINARY"
           chmod +x "$HYPEMAN_UFFD_PAGER_BINARY"
-          export HYPEMAN_TEST_PREWARM_DIR="$HOME/.cache/hypeman-ci/linux-amd64"
+          export HYPEMAN_TEST_PREWARM_DIR="/ci/prewarm/linux-amd64"
           make test TEST_TIMEOUT=20m
 
       - name: Cleanup

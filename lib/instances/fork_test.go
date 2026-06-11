@@ -850,6 +850,7 @@ func TestForkCloudHypervisorFromRunningNetwork(t *testing.T) {
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Skip("/dev/kvm not available, skipping on this platform")
 	}
+	acquireHeavyIO(t)
 
 	manager, tmpDir := setupTestManager(t)
 	ctx := context.Background()
@@ -969,6 +970,7 @@ type warmForkChainConfig struct {
 
 func runWarmForkChain(t *testing.T, mgr *manager, tmpDir string, cfg warmForkChainConfig) {
 	t.Helper()
+	acquireHeavyIO(t)
 
 	ctx := context.Background()
 	readyTimeout := 90 * time.Second
