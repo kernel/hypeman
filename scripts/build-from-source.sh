@@ -19,7 +19,6 @@ UFFD_PAGER_BINARY_NAME="hypeman-uffd-pager"
 RED='\033[38;2;255;110;110m'
 GREEN='\033[38;2;92;190;83m'
 YELLOW='\033[0;33m'
-PURPLE='\033[38;2;172;134;249m'
 NC='\033[0m' # No Color
 
 info() { echo -e "${GREEN}[INFO]${NC} $1"; }
