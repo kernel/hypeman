@@ -11,6 +11,8 @@ import (
 type Metrics struct {
 	tapOperations     metric.Int64Counter
 	tcClassCollisions metric.Int64Counter
+	tcCleanupFailures metric.Int64Counter
+	tcOrphansSwept    metric.Int64Counter
 }
 
 // newNetworkMetrics creates and registers all network metrics.
@@ -55,9 +57,27 @@ func newNetworkMetrics(meter metric.Meter, m *manager) (*Metrics, error) {
 		return nil, err
 	}
 
+	tcCleanupFailures, err := meter.Int64Counter(
+		"hypeman_network_tc_cleanup_failures_total",
+		metric.WithDescription("Total number of failed tc class/filter cleanup operations"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	tcOrphansSwept, err := meter.Int64Counter(
+		"hypeman_network_tc_orphans_swept_total",
+		metric.WithDescription("Total number of orphaned tc classes/filters removed by reconciliation"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Metrics{
 		tapOperations:     tapOperations,
 		tcClassCollisions: tcClassCollisions,
+		tcCleanupFailures: tcCleanupFailures,
+		tcOrphansSwept:    tcOrphansSwept,
 	}, nil
 }
 
@@ -78,4 +98,24 @@ func (m *manager) recordTCClassCollision(ctx context.Context, attempt string) {
 	}
 	m.metrics.tcClassCollisions.Add(ctx, 1,
 		metric.WithAttributes(attribute.String("attempt", attempt)))
+}
+
+// recordTCCleanupFailure records a failed tc cleanup operation
+// (operation is "filter_list", "filter_parse", "filter_del", or "class_del").
+func (m *manager) recordTCCleanupFailure(ctx context.Context, operation string) {
+	if m.metrics == nil {
+		return
+	}
+	m.metrics.tcCleanupFailures.Add(ctx, 1,
+		metric.WithAttributes(attribute.String("operation", operation)))
+}
+
+// recordTCOrphanSwept records an orphaned tc entity removed by reconciliation
+// (kind is "class" or "filter").
+func (m *manager) recordTCOrphanSwept(ctx context.Context, kind string) {
+	if m.metrics == nil {
+		return
+	}
+	m.metrics.tcOrphansSwept.Add(ctx, 1,
+		metric.WithAttributes(attribute.String("kind", kind)))
 }

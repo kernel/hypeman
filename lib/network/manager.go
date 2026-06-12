@@ -40,6 +40,10 @@ type Manager interface {
 	// against in-flight CreateAllocation calls whose metadata hasn't been persisted.
 	CleanupOrphanedTAPs(ctx context.Context, preserveInstanceIDs []string, minAge time.Duration) int
 
+	// CleanupOrphanedClasses removes HTB classes and filters on the bridge that
+	// are no longer tied to a live TAP device or known allocation.
+	CleanupOrphanedClasses(ctx context.Context) int
+
 	// GetUploadBurstMultiplier returns the configured multiplier for upload burst ceiling.
 	GetUploadBurstMultiplier() int
 

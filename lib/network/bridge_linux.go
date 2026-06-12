@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -510,7 +511,7 @@ func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName strin
 			attribute.String("operation", "delete_existing"),
 			attribute.String("tap", tapName),
 		)
-		err := m.deleteTAPDeviceSerialized(tapName, "")
+		err := m.deleteTAPDeviceSerialized(ctx, tapName, "")
 		deleteEnd(err)
 		if err != nil {
 			return fmt.Errorf("delete existing TAP: %w", err)
@@ -794,41 +795,118 @@ func (m *manager) addVMClass(ctx context.Context, bridgeName, tapName string, ra
 	return "", fmt.Errorf("tc class add failed after %d attempts: %w", maxAttempts, lastErr)
 }
 
-// removeVMClass removes the HTB class for a VM from the bridge.
-// If classID is non-empty, it is used directly; otherwise falls back to deriveClassID.
-func (m *manager) removeVMClass(bridgeName, tapName, classID string) error {
-	if classID == "" {
-		classID = deriveClassID(tapName)
-	}
-	fullClassID := fmt.Sprintf("1:%s", classID)
+// bridgeFilter is one tc filter entry on the bridge root qdisc.
+type bridgeFilter struct {
+	handle string
+	flowID string // full form, e.g. "1:a3f2"
+	rtIif  int    // TAP ifindex from the meta(rt_iif eq N) ematch, -1 if absent
+}
 
-	// Delete filter first (by matching flowid)
-	// List filters and delete matching ones
-	listCmd := exec.Command("tc", "filter", "show", "dev", bridgeName, "parent", htbRootHandle)
-	listCmd.SysProcAttr = &syscall.SysProcAttr{
+// listBridgeFilters returns the tc filters installed on the bridge root qdisc.
+func listBridgeFilters(bridgeName string) ([]bridgeFilter, error) {
+	cmd := exec.Command("tc", "filter", "show", "dev", bridgeName, "parent", htbRootHandle)
+	cmd.SysProcAttr = &syscall.SysProcAttr{
 		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
 	}
-	output, _ := listCmd.Output()
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("tc filter show: %w", err)
+	}
+	return parseBridgeFilters(string(output)), nil
+}
 
-	// Parse filter output to find handle for this flowid
-	lines := strings.Split(string(output), "\n")
-	for _, line := range lines {
-		if strings.Contains(line, fullClassID) && strings.Contains(line, "filter") {
-			// Extract filter handle (e.g., "filter parent 1: protocol all pref 1 basic chain 0 handle 0x1")
+// parseBridgeFilters parses `tc filter show` output. Each filter prints a
+// header line carrying handle/flowid, followed by indented ematch lines
+// carrying the meta(rt_iif eq N) match.
+func parseBridgeFilters(output string) []bridgeFilter {
+	var filters []bridgeFilter
+	for _, line := range strings.Split(output, "\n") {
+		if strings.HasPrefix(line, "filter ") {
+			f := bridgeFilter{rtIif: -1}
 			fields := strings.Fields(line)
-			for i, f := range fields {
-				if f == "handle" && i+1 < len(fields) {
-					handle := fields[i+1]
-					delCmd := exec.Command("tc", "filter", "del", "dev", bridgeName, "parent", htbRootHandle,
-						"protocol", "all", "prio", "1", "handle", handle, "basic")
-					delCmd.SysProcAttr = &syscall.SysProcAttr{
-						AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
-					}
-					delCmd.Run() // Best effort
+			for i, tok := range fields {
+				if i+1 >= len(fields) {
 					break
 				}
+				switch tok {
+				case "handle":
+					f.handle = fields[i+1]
+				case "flowid":
+					f.flowID = fields[i+1]
+				}
+			}
+			filters = append(filters, f)
+			continue
+		}
+		if len(filters) == 0 {
+			continue
+		}
+		if idx := strings.Index(line, "rt_iif eq "); idx >= 0 {
+			rest := line[idx+len("rt_iif eq "):]
+			if end := strings.IndexFunc(rest, func(r rune) bool { return r < '0' || r > '9' }); end >= 0 {
+				rest = rest[:end]
+			}
+			if v, err := strconv.Atoi(rest); err == nil {
+				filters[len(filters)-1].rtIif = v
 			}
 		}
+	}
+	return filters
+}
+
+func (m *manager) deleteBridgeFilter(bridgeName, handle string) error {
+	cmd := exec.Command("tc", "filter", "del", "dev", bridgeName, "parent", htbRootHandle,
+		"protocol", "all", "prio", "1", "handle", handle, "basic")
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+	}
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("tc filter del: %w (output: %s)", err, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+// removeVMClass removes the HTB class and filter for a VM from the bridge.
+// classID is the persisted class ID; when empty, the class is resolved from
+// the bridge filter table via the TAP's ifindex. If neither resolves, nothing
+// is deleted: guessing the hash-derived ID can delete another VM's class after
+// collision probing, so leftovers are swept by CleanupOrphanedClasses instead.
+func (m *manager) removeVMClass(ctx context.Context, bridgeName, tapName, classID string, tapIndex int) {
+	log := logger.FromContext(ctx)
+
+	fullClassID := ""
+	if classID != "" {
+		fullClassID = fmt.Sprintf("1:%s", classID)
+	}
+
+	filters, err := listBridgeFilters(bridgeName)
+	if err != nil {
+		log.WarnContext(ctx, "failed to list bridge filters for cleanup",
+			"bridge", bridgeName, "tap", tapName, "error", err)
+		m.recordTCCleanupFailure(ctx, "filter_list")
+	}
+
+	for _, f := range filters {
+		if f.handle == "" {
+			continue
+		}
+		matchesTap := tapIndex > 0 && f.rtIif == tapIndex
+		matchesClass := fullClassID != "" && f.flowID == fullClassID
+		if !matchesTap && !matchesClass {
+			continue
+		}
+		if fullClassID == "" {
+			fullClassID = f.flowID
+		}
+		if err := m.deleteBridgeFilter(bridgeName, f.handle); err != nil {
+			log.WarnContext(ctx, "failed to delete tc filter",
+				"bridge", bridgeName, "tap", tapName, "handle", f.handle, "error", err)
+			m.recordTCCleanupFailure(ctx, "filter_del")
+		}
+	}
+
+	if fullClassID == "" {
+		return
 	}
 
 	// Delete child qdisc (fq_codel) before deleting the class
@@ -838,15 +916,16 @@ func (m *manager) removeVMClass(bridgeName, tapName, classID string) error {
 	}
 	qdiscCmd.Run() // Best effort - may not exist
 
-	// Delete the class
 	cmd := exec.Command("tc", "class", "del", "dev", bridgeName, "classid", fullClassID)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
 	}
-	// Ignore errors - class may not exist
-	cmd.Run()
-
-	return nil
+	if output, err := cmd.CombinedOutput(); err != nil {
+		log.WarnContext(ctx, "failed to delete tc class",
+			"bridge", bridgeName, "tap", tapName, "class", fullClassID,
+			"error", err, "output", strings.TrimSpace(string(output)))
+		m.recordTCCleanupFailure(ctx, "class_del")
+	}
 }
 
 // deriveClassIDVal derives the numeric HTB class ID from a TAP name.
@@ -868,13 +947,19 @@ func deriveClassID(tapName string) string {
 }
 
 // deleteTAPDevice removes TAP device and its associated HTB class on the bridge.
-// If classID is non-empty, it is used for removeVMClass; otherwise falls back to deriveClassID.
-func (m *manager) deleteTAPDevice(tapName, classID string) error {
-	// Remove HTB class from bridge before deleting TAP
-	m.removeVMClass(m.config.Network.BridgeName, tapName, classID)
+// The class is located via the persisted classID when provided, otherwise via
+// the bridge filter table while the TAP's ifindex still exists.
+func (m *manager) deleteTAPDevice(ctx context.Context, tapName, classID string) error {
+	link, linkErr := netlink.LinkByName(tapName)
+	tapIndex := -1
+	if linkErr == nil {
+		tapIndex = link.Attrs().Index
+	}
 
-	link, err := netlink.LinkByName(tapName)
-	if err != nil {
+	// Remove HTB class from bridge before deleting TAP
+	m.removeVMClass(ctx, m.config.Network.BridgeName, tapName, classID, tapIndex)
+
+	if linkErr != nil {
 		// TAP doesn't exist, nothing to do
 		return nil
 	}
@@ -991,8 +1076,8 @@ func (m *manager) CleanupOrphanedTAPs(ctx context.Context, preserveInstanceIDs [
 			}
 		}
 
-		// Orphaned TAP - delete it (no stored classID available, falls back to deriveClassID)
-		if err := m.deleteTAPDeviceSerialized(name, ""); err != nil {
+		// Orphaned TAP - delete it (class resolved from the bridge filter table by ifindex)
+		if err := m.deleteTAPDeviceSerialized(ctx, name, ""); err != nil {
 			log.WarnContext(ctx, "failed to delete orphaned TAP", "tap", name, "error", err)
 			continue
 		}
@@ -1021,13 +1106,21 @@ func tapDeviceAge(name string, now time.Time) (time.Duration, error) {
 	return now.Sub(ctime), nil
 }
 
-// CleanupOrphanedClasses removes HTB classes on the bridge that don't have matching TAP devices.
-// This handles the case where a TAP was deleted externally (manual deletion, reboot, etc.)
-// but the HTB class persists on the bridge.
-// Returns the number of classes deleted.
+// CleanupOrphanedClasses removes HTB classes and filters on the bridge that
+// are no longer tied to a live TAP device or known allocation. This sweeps
+// state leaked by imprecise cleanup: classes whose ID was collision-probed
+// away from the hash-derived value, filters whose TAP was deleted without
+// them, and classes whose TAP disappeared externally (manual deletion,
+// reboot, etc.). Returns the number of classes and filters deleted.
 func (m *manager) CleanupOrphanedClasses(ctx context.Context) int {
 	log := logger.FromContext(ctx)
 	bridgeName := m.config.Network.BridgeName
+
+	// Serialize with allocation/release tc mutations so a half-applied rate
+	// limit (class added, filter or classid file not yet written) can't be
+	// observed and swept.
+	m.tcMu.Lock()
+	defer m.tcMu.Unlock()
 
 	// List all HTB classes on the bridge
 	cmd := exec.Command("tc", "class", "show", "dev", bridgeName)
@@ -1037,19 +1130,30 @@ func (m *manager) CleanupOrphanedClasses(ctx context.Context) int {
 		return 0
 	}
 
-	// Build set of class IDs that belong to existing TAP devices.
-	// Include both derived class IDs and stored class IDs from allocations
-	// (which may differ if a collision was resolved by probing).
+	filters, err := listBridgeFilters(bridgeName)
+	if err != nil {
+		log.WarnContext(ctx, "skipping orphaned class cleanup: failed to list filters", "error", err)
+		m.recordTCCleanupFailure(ctx, "filter_list")
+		return 0
+	}
+
+	// Live TAP ifindexes anchor filters; derived class IDs of live TAPs stay
+	// valid as a grace for the common non-collision case.
+	liveTapIndexes := make(map[int]bool)
 	validClassIDs := make(map[string]bool)
 	links, err := netlink.LinkList()
-	if err == nil {
-		for _, link := range links {
-			name := link.Attrs().Name
-			if strings.HasPrefix(name, TAPPrefix) {
-				validClassIDs[deriveClassID(name)] = true
-			}
+	if err != nil {
+		log.WarnContext(ctx, "skipping orphaned class cleanup: failed to list links", "error", err)
+		return 0
+	}
+	for _, link := range links {
+		name := link.Attrs().Name
+		if strings.HasPrefix(name, TAPPrefix) {
+			liveTapIndexes[link.Attrs().Index] = true
+			validClassIDs[deriveClassID(name)] = true
 		}
 	}
+
 	// Also include stored class IDs from allocations (handles probed IDs).
 	// If ListAllocations fails, bail out to avoid deleting valid probed classes.
 	allocs, allocErr := m.ListAllocations(ctx)
@@ -1063,9 +1167,54 @@ func (m *manager) CleanupOrphanedClasses(ctx context.Context) int {
 		}
 	}
 
-	// Parse class output and find orphaned classes
-	// Format: "class htb 1:xxxx parent 1:1 ..."
+	// Safety: if filters exist but none carry a parseable rt_iif ematch, the
+	// tc output format doesn't match expectations and every filter would look
+	// dangling. Bail rather than sweep live state.
+	candidates, parsed := 0, 0
+	for _, f := range filters {
+		if f.handle == "" || f.flowID == "" {
+			continue
+		}
+		candidates++
+		if f.rtIif >= 0 {
+			parsed++
+		}
+	}
+	if candidates > 0 && parsed == 0 {
+		log.WarnContext(ctx, "skipping orphaned class cleanup: no rt_iif matches parsed from tc filter output",
+			"bridge", bridgeName, "filters", candidates)
+		m.recordTCCleanupFailure(ctx, "filter_parse")
+		return 0
+	}
+
 	deleted := 0
+
+	// 1. Sweep filters that don't reference a live TAP. Filters that do are
+	// authoritative: their flowid is the class actually in use for that TAP,
+	// regardless of collision probing.
+	for _, f := range filters {
+		if f.handle == "" || f.flowID == "" {
+			continue
+		}
+		if liveTapIndexes[f.rtIif] {
+			if parts := strings.Split(f.flowID, ":"); len(parts) == 2 {
+				validClassIDs[parts[1]] = true
+			}
+			continue
+		}
+		log.WarnContext(ctx, "cleaning up orphaned tc filter", "handle", f.handle, "flowid", f.flowID, "bridge", bridgeName)
+		if err := m.deleteBridgeFilter(bridgeName, f.handle); err != nil {
+			log.WarnContext(ctx, "failed to delete orphaned tc filter", "handle", f.handle, "error", err)
+			m.recordTCCleanupFailure(ctx, "filter_del")
+			continue
+		}
+		m.recordTCOrphanSwept(ctx, "filter")
+		deleted++
+	}
+
+	// 2. Sweep classes not referenced by a live TAP's filter, a live TAP's
+	// derived ID, or a stored allocation class ID.
+	// Format: "class htb 1:xxxx parent 1:1 ..."
 	lines := strings.Split(string(output), "\n")
 	for _, line := range lines {
 		if !strings.Contains(line, "class htb 1:") {
@@ -1091,41 +1240,12 @@ func (m *manager) CleanupOrphanedClasses(ctx context.Context) int {
 		}
 		classID := parts[1]
 
-		// Check if this class belongs to an existing TAP
 		if validClassIDs[classID] {
 			continue
 		}
 
 		// Orphaned class - delete it with warning
 		log.WarnContext(ctx, "cleaning up orphaned HTB class", "class", fullClassID, "bridge", bridgeName)
-
-		// Delete filter first (find and delete by flowid)
-		// Filters are created with 'basic' classifier, format: "handle 0xN flowid 1:xxxx"
-		filterCmd := exec.Command("tc", "filter", "show", "dev", bridgeName)
-		filterCmd.SysProcAttr = &syscall.SysProcAttr{
-			AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
-		}
-		if filterOutput, err := filterCmd.Output(); err == nil {
-			filterLines := strings.Split(string(filterOutput), "\n")
-			for _, fline := range filterLines {
-				if strings.Contains(fline, fullClassID) {
-					// Extract filter handle (format: "handle 0x2 flowid 1:ffd")
-					ffields := strings.Fields(fline)
-					for i, f := range ffields {
-						if f == "handle" && i+1 < len(ffields) {
-							handle := ffields[i+1]
-							// Use 'basic' classifier (not u32) to match how filters were created
-							delCmd := exec.Command("tc", "filter", "del", "dev", bridgeName, "parent", "1:", "handle", handle, "prio", "1", "basic")
-							delCmd.SysProcAttr = &syscall.SysProcAttr{
-								AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
-							}
-							delCmd.Run() // Best effort
-							break
-						}
-					}
-				}
-			}
-		}
 
 		// Delete child qdisc (fq_codel) before deleting the class
 		delQdiscCmd := exec.Command("tc", "qdisc", "del", "dev", bridgeName, "parent", fullClassID)
@@ -1141,8 +1261,10 @@ func (m *manager) CleanupOrphanedClasses(ctx context.Context) int {
 		}
 		if output, err := delClassCmd.CombinedOutput(); err != nil {
 			log.WarnContext(ctx, "failed to delete orphaned class", "class", fullClassID, "error", err, "output", string(output))
+			m.recordTCCleanupFailure(ctx, "class_del")
 			continue
 		}
+		m.recordTCOrphanSwept(ctx, "class")
 		deleted++
 	}
 

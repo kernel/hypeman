@@ -50,7 +50,7 @@ func (m *manager) addVMClass(ctx context.Context, bridgeName, tapName string, ra
 }
 
 // deleteTAPDevice is a no-op on macOS as we use NAT networking.
-func (m *manager) deleteTAPDevice(tapName, classID string) error {
+func (m *manager) deleteTAPDevice(ctx context.Context, tapName, classID string) error {
 	return nil
 }
 
