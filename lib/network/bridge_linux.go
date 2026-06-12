@@ -867,10 +867,11 @@ func (m *manager) deleteBridgeFilter(bridgeName, handle string) error {
 }
 
 // removeVMClass removes the HTB class and filter for a VM from the bridge.
-// classID is the persisted class ID; when empty, the class is resolved from
-// the bridge filter table via the TAP's ifindex. If neither resolves, nothing
-// is deleted: guessing the hash-derived ID can delete another VM's class after
-// collision probing, so leftovers are swept by CleanupOrphanedClasses instead.
+// The class is resolved from the bridge filter table via the TAP's ifindex,
+// falling back to the persisted classID when the TAP has no filter. If neither
+// resolves, nothing is deleted: guessing the hash-derived ID can delete
+// another VM's class after collision probing, so leftovers are swept by
+// CleanupOrphanedClasses instead.
 func (m *manager) removeVMClass(ctx context.Context, bridgeName, tapName, classID string, tapIndex int) {
 	log := logger.FromContext(ctx)
 
@@ -886,17 +887,31 @@ func (m *manager) removeVMClass(ctx context.Context, bridgeName, tapName, classI
 		m.recordTCCleanupFailure(ctx, "filter_list")
 	}
 
+	// The TAP's own filter is the authoritative tap->class link; its flowid
+	// wins over a persisted classID that has gone stale (e.g. saveClassID
+	// failed after a collision-probed add).
+	resolvedClassID := ""
+	classClaimedByOther := false
 	for _, f := range filters {
 		if f.handle == "" {
 			continue
 		}
-		matchesTap := tapIndex > 0 && f.rtIif == tapIndex
-		matchesClass := fullClassID != "" && f.flowID == fullClassID
-		if !matchesTap && !matchesClass {
+		if tapIndex > 0 && f.rtIif == tapIndex {
+			if resolvedClassID == "" && f.flowID != "" {
+				resolvedClassID = f.flowID
+			}
+		} else if fullClassID != "" && f.flowID == fullClassID {
+			// Filter points at our class ID but is anchored elsewhere. If its
+			// anchor is a live interface, the persisted ID is stale and the
+			// class belongs to that VM — leave both alone.
+			if f.rtIif > 0 {
+				if _, err := netlink.LinkByIndex(f.rtIif); err == nil {
+					classClaimedByOther = true
+					continue
+				}
+			}
+		} else {
 			continue
-		}
-		if fullClassID == "" {
-			fullClassID = f.flowID
 		}
 		if err := m.deleteBridgeFilter(bridgeName, f.handle); err != nil {
 			log.WarnContext(ctx, "failed to delete tc filter",
@@ -905,6 +920,16 @@ func (m *manager) removeVMClass(ctx context.Context, bridgeName, tapName, classI
 		}
 	}
 
+	if resolvedClassID != "" {
+		fullClassID = resolvedClassID
+	} else if classClaimedByOther {
+		// The only evidence for the persisted ID says it belongs to another
+		// live VM. Don't delete its class; any leftover of ours is unreferenced
+		// now and gets swept by CleanupOrphanedClasses.
+		log.WarnContext(ctx, "skipping tc class delete: persisted class ID in use by another interface",
+			"bridge", bridgeName, "tap", tapName, "class", fullClassID)
+		return
+	}
 	if fullClassID == "" {
 		return
 	}
