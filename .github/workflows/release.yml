@@ -4,12 +4,19 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to build and upload the macOS artifact for (for example, v0.1.0)'
+        required: true
+        type: string
 
 permissions:
   contents: write
 
 jobs:
   release:
+    if: github.event_name == 'push'
     runs-on: [self-hosted, linux, x64, kvm]
     steps:
       - name: Checkout
@@ -37,34 +44,68 @@ jobs:
 
   # The macOS server links cgo against Virtualization.framework, so it can't be
   # cross-compiled from the Linux release job — it builds on a macOS arm64 runner.
+  # The Linux release job creates a draft release first; this job uploads the
+  # macOS archive and publishes the release only after all artifacts are present.
+  # workflow_dispatch lets maintainers backfill the macOS artifact for an
+  # existing release tag if a prior release was published without it.
   release-darwin:
     needs: release
-    runs-on: macos-14
+    if: ${{ always() && ((github.event_name == 'push' && needs.release.result == 'success') || github.event_name == 'workflow_dispatch') }}
+    runs-on: [self-hosted, macos, arm64]
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
+          cache: false
           go-version: '1.25.4'
+
+      - name: Verify release exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release view "${RELEASE_TAG}" >/dev/null
 
       - name: Build server and token tool
         run: |
-          make build-darwin
+          make sign-darwin
           go build -o bin/hypeman-token ./cmd/gen-jwt
 
       - name: Package and upload darwin_arm64 archive
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          set -euo pipefail
+
+          VERSION="${RELEASE_TAG#v}"
+          ARCHIVE_NAME="hypeman_${VERSION}_darwin_arm64.tar.gz"
           STAGE="$(mktemp -d)"
+          OUT="$(mktemp -d)"
+          EXISTING="$(mktemp -d)"
+
           cp bin/hypeman "${STAGE}/hypeman-api"
           cp bin/hypeman-token "${STAGE}/hypeman-token"
           cp config.example.darwin.yaml "${STAGE}/"
-          ARCHIVE="hypeman_${VERSION}_darwin_arm64.tar.gz"
-          tar -czf "${ARCHIVE}" -C "${STAGE}" .
-          gh release upload "${GITHUB_REF_NAME}" "${ARCHIVE}" --clobber
+
+          tar -czf "${OUT}/${ARCHIVE_NAME}" -C "${STAGE}" .
+
+          gh release download "${RELEASE_TAG}" -p checksums.txt -D "${EXISTING}"
+          grep -v "  ${ARCHIVE_NAME}$" "${EXISTING}/checksums.txt" > "${OUT}/checksums.next.txt" || true
+
+          CHECKSUM="$(shasum -a 256 "${OUT}/${ARCHIVE_NAME}" | awk '{print $1}')"
+          printf '%s  %s\n' "${CHECKSUM}" "${ARCHIVE_NAME}" >> "${OUT}/checksums.next.txt"
+          sort -k2 "${OUT}/checksums.next.txt" > "${OUT}/checksums.txt"
+
+          gh release upload "${RELEASE_TAG}" "${OUT}/${ARCHIVE_NAME}" "${OUT}/checksums.txt" --clobber
+
+      - name: Publish completed release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "${RELEASE_TAG}" --draft=false

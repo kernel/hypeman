@@ -15,6 +15,9 @@
 #   DATA_DIR     - Data directory (default: /var/lib/hypeman on Linux, ~/Library/Application Support/hypeman on macOS)
 #   CONFIG_DIR   - Config directory (default: /etc/hypeman on Linux, ~/.config/hypeman on macOS)
 #
+# On macOS, when no prebuilt server artifact exists for the selected release,
+# the installer falls back to building that release from source.
+#
 
 set -e
 
@@ -65,6 +68,67 @@ find_release_with_artifact() {
     done
 
     return 1
+}
+
+find_latest_release_tag() {
+    local repo="$1"
+
+    curl -fsSL "https://api.github.com/repos/${repo}/releases/latest" 2>/dev/null | grep '"tag_name"' | head -1 | cut -d'"' -f4
+}
+
+require_source_build_tools() {
+    command -v git >/dev/null 2>&1 || error "git is required to build from source but not installed"
+    command -v go >/dev/null 2>&1 || error "go is required to build from source but not installed"
+    command -v make >/dev/null 2>&1 || error "make is required to build from source but not installed"
+}
+
+build_server_from_source() {
+    local source_ref="$1"
+    local build_dir="${TMP_DIR}/hypeman"
+    local build_log="${TMP_DIR}/build.log"
+
+    require_source_build_tools
+
+    info "Building server from source (ref: ${source_ref})..."
+    : > "$build_log"
+
+    if ! git clone --branch "$source_ref" --depth 1 -q "https://github.com/${REPO}.git" "$build_dir" >> "$build_log" 2>&1; then
+        error "Failed to clone repository. Build log:\n$(cat "$build_log")"
+    fi
+
+    info "Building binaries (this may take a few minutes)..."
+    if [ "$OS" = "darwin" ]; then
+        if ! (cd "$build_dir" && make sign-darwin >> "$build_log" 2>&1); then
+            echo ""
+            echo -e "${RED}Build/signing failed. Full build log:${NC}"
+            cat "$build_log"
+            error "Build/signing failed"
+        fi
+        cp "${build_dir}/config.example.darwin.yaml" "${TMP_DIR}/config.example.darwin.yaml"
+    else
+        if ! (cd "$build_dir" && make build >> "$build_log" 2>&1); then
+            echo ""
+            echo -e "${RED}Build failed. Full build log:${NC}"
+            cat "$build_log"
+            error "Build failed"
+        fi
+        cp "${build_dir}/config.example.yaml" "${TMP_DIR}/config.example.yaml"
+    fi
+
+    cp "${build_dir}/bin/hypeman" "${TMP_DIR}/${BINARY_NAME}"
+    if [ "$OS" = "linux" ]; then
+        cp "${build_dir}/bin/${UFFD_PAGER_BINARY_NAME}" "${TMP_DIR}/${UFFD_PAGER_BINARY_NAME}"
+    fi
+
+    if ! (cd "$build_dir" && go build -o "${TMP_DIR}/hypeman-token" ./cmd/gen-jwt >> "$build_log" 2>&1); then
+        echo ""
+        echo -e "${RED}Build failed. Full build log:${NC}"
+        cat "$build_log"
+        error "Failed to build hypeman-token"
+    fi
+
+    VERSION="${source_ref} (source)"
+    info "Build complete"
 }
 
 # =============================================================================
@@ -119,7 +183,6 @@ if [ "$OS" = "darwin" ]; then
         error "Intel Macs not supported"
     fi
     command -v codesign >/dev/null 2>&1 || error "codesign is required but not installed (install Xcode Command Line Tools)"
-    command -v docker >/dev/null 2>&1 || error "Docker CLI is required but not found. Install Docker via Colima or Docker Desktop."
     # Check if we need sudo for INSTALL_DIR
     if [ ! -w "$INSTALL_DIR" ] 2>/dev/null && [ ! -w "$(dirname "$INSTALL_DIR")" ] 2>/dev/null; then
         if command -v sudo >/dev/null 2>&1; then
@@ -164,11 +227,13 @@ if [ "$count" -gt 1 ]; then
     error "BRANCH, VERSION, and BINARY_DIR are mutually exclusive"
 fi
 
+if [ "${VERSION:-}" = "latest" ]; then
+    VERSION=""
+fi
+
 # Additional checks for build-from-source mode
 if [ -n "$BRANCH" ]; then
-    command -v git >/dev/null 2>&1 || error "git is required for BRANCH mode but not installed"
-    command -v go >/dev/null 2>&1 || error "go is required for BRANCH mode but not installed"
-    command -v make >/dev/null 2>&1 || error "make is required for BRANCH mode but not installed"
+    require_source_build_tools
 fi
 
 # Additional checks for BINARY_DIR mode
@@ -276,83 +341,39 @@ if [ -n "$BINARY_DIR" ]; then
 
     VERSION="custom (from binary)"
 elif [ -n "$BRANCH" ]; then
-    # Build from source mode
-    info "Building from source (branch: $BRANCH)..."
-
-    BUILD_DIR="${TMP_DIR}/hypeman"
-    BUILD_LOG="${TMP_DIR}/build.log"
-
-    # Clone repo (quiet)
-    if ! git clone --branch "$BRANCH" --depth 1 -q "https://github.com/${REPO}.git" "$BUILD_DIR" 2>&1 | tee -a "$BUILD_LOG"; then
-        error "Failed to clone repository. Build log:\n$(cat "$BUILD_LOG")"
-    fi
-
-    info "Building binaries (this may take a few minutes)..."
-    cd "$BUILD_DIR"
-
-    if ! make build >> "$BUILD_LOG" 2>&1; then
-        echo ""
-        echo -e "${RED}Build failed. Full build log:${NC}"
-        cat "$BUILD_LOG"
-        error "Build failed"
-    fi
-    if [ "$OS" = "darwin" ]; then
-        if ! make sign-darwin >> "$BUILD_LOG" 2>&1; then
-            echo ""
-            echo -e "${RED}Signing failed. Full build log:${NC}"
-            cat "$BUILD_LOG"
-            error "Signing failed"
-        fi
-        cp "config.example.darwin.yaml" "${TMP_DIR}/config.example.darwin.yaml"
-    else
-        cp "config.example.yaml" "${TMP_DIR}/config.example.yaml"
-    fi
-    cp "bin/hypeman" "${TMP_DIR}/${BINARY_NAME}"
-    if [ "$OS" = "linux" ]; then
-        cp "bin/${UFFD_PAGER_BINARY_NAME}" "${TMP_DIR}/${UFFD_PAGER_BINARY_NAME}"
-    fi
-
-    # Build hypeman-token (not included in make build)
-    if ! go build -o "${TMP_DIR}/hypeman-token" ./cmd/gen-jwt >> "$BUILD_LOG" 2>&1; then
-        echo ""
-        echo -e "${RED}Build failed. Full build log:${NC}"
-        cat "$BUILD_LOG"
-        error "Failed to build hypeman-token"
-    fi
-
-    VERSION="$BRANCH (source)"
-    cd - > /dev/null
-
-    info "Build complete"
+    build_server_from_source "$BRANCH"
 else
     # Download release mode
     if [ -z "$VERSION" ]; then
-        info "Fetching latest version with available artifacts..."
-        VERSION=$(find_release_with_artifact "$REPO" "hypeman" "$OS" "$ARCH")
-        if [ -z "$VERSION" ]; then
-            error "Failed to find a release with artifacts for ${OS}/${ARCH}"
+        if [ "$OS" = "darwin" ]; then
+            info "Fetching latest release..."
+            VERSION=$(find_latest_release_tag "$REPO" || true)
+            [ -n "$VERSION" ] || error "Failed to find the latest release"
+        else
+            info "Fetching latest version with available artifacts..."
+            VERSION=$(find_release_with_artifact "$REPO" "hypeman" "$OS" "$ARCH")
+            [ -n "$VERSION" ] || error "Failed to find a release with artifacts for ${OS}/${ARCH}"
         fi
     fi
-    info "Installing version: $VERSION"
 
-    # Construct download URL
-    VERSION_NUM="${VERSION#v}"
-    ARCHIVE_NAME="hypeman_${VERSION_NUM}_${OS}_${ARCH}.tar.gz"
-    DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${VERSION}/${ARCHIVE_NAME}"
+    if [ ! -f "${TMP_DIR}/${BINARY_NAME}" ]; then
+        info "Installing version: $VERSION"
 
-    info "Downloading ${ARCHIVE_NAME}..."
-    if ! curl -fsSL "$DOWNLOAD_URL" -o "${TMP_DIR}/${ARCHIVE_NAME}"; then
-        error "Failed to download from ${DOWNLOAD_URL}"
-    fi
+        # Construct download URL
+        VERSION_NUM="${VERSION#v}"
+        ARCHIVE_NAME="hypeman_${VERSION_NUM}_${OS}_${ARCH}.tar.gz"
+        DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${VERSION}/${ARCHIVE_NAME}"
 
-    info "Extracting..."
-    tar -xzf "${TMP_DIR}/${ARCHIVE_NAME}" -C "$TMP_DIR"
+        info "Downloading ${ARCHIVE_NAME}..."
+        if curl -fsSL "$DOWNLOAD_URL" -o "${TMP_DIR}/${ARCHIVE_NAME}"; then
+            info "Extracting..."
+            tar -xzf "${TMP_DIR}/${ARCHIVE_NAME}" -C "$TMP_DIR"
 
-    # On macOS, codesign after extraction with virtualization entitlements
-    if [ "$OS" = "darwin" ]; then
-        info "Signing binaries..."
-        ENTITLEMENTS_TMP="${TMP_DIR}/vz.entitlements"
-        cat > "$ENTITLEMENTS_TMP" << 'ENTITLEMENTS'
+            # On macOS, codesign after extraction with virtualization entitlements
+            if [ "$OS" = "darwin" ]; then
+                info "Signing binaries..."
+                ENTITLEMENTS_TMP="${TMP_DIR}/vz.entitlements"
+                cat > "$ENTITLEMENTS_TMP" << 'ENTITLEMENTS'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -366,10 +387,18 @@ else
 </dict>
 </plist>
 ENTITLEMENTS
-        if ! codesign --force --sign - --entitlements "$ENTITLEMENTS_TMP" "${TMP_DIR}/${BINARY_NAME}" 2>/dev/null; then
-            warn "codesign failed — vz hypervisor will not work without virtualization entitlement"
+                if ! codesign --force --sign - --entitlements "$ENTITLEMENTS_TMP" "${TMP_DIR}/${BINARY_NAME}" 2>/dev/null; then
+                    warn "codesign failed — vz hypervisor will not work without virtualization entitlement"
+                fi
+                rm -f "$ENTITLEMENTS_TMP"
+            fi
+        elif [ "$OS" = "darwin" ]; then
+            rm -f "${TMP_DIR}/${ARCHIVE_NAME}"
+            warn "Prebuilt macOS server artifact ${ARCHIVE_NAME} could not be downloaded; building ${VERSION} from source instead"
+            build_server_from_source "$VERSION"
+        else
+            error "Failed to download from ${DOWNLOAD_URL}"
         fi
-        rm -f "$ENTITLEMENTS_TMP"
     fi
 fi
 
@@ -646,7 +675,7 @@ fi
 if [ "$OS" = "darwin" ]; then
     info "Attempting to build builder image..."
     if command -v docker >/dev/null 2>&1; then
-        if [ -n "$BRANCH" ] && [ -d "${TMP_DIR}/hypeman" ]; then
+        if [ -d "${TMP_DIR}/hypeman" ]; then
             BUILD_CONTEXT="${TMP_DIR}/hypeman"
         else
             BUILD_CONTEXT=""

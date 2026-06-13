@@ -81,4 +81,4 @@ release:
     owner: kernel
     name: hypeman
   prerelease: auto
-  draft: false
+  draft: true
