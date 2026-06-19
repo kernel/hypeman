@@ -598,6 +598,13 @@ ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
 ReadWritePaths=${DATA_DIR}
+# UFFD snapshot restore writes /run/hypeman/uffd/<ver>.env (read by the
+# ${SERVICE_NAME}-uffd@ pager via EnvironmentFile). ProtectSystem=strict makes
+# /run read-only, so grant a service-owned writable runtime dir; without it the
+# API crash-loops on "mkdir /run/hypeman: read-only file system" once the UFFD
+# snapshot memory backend is enabled.
+RuntimeDirectory=${SERVICE_NAME}
+RuntimeDirectoryMode=0755
 
 [Install]
 WantedBy=multi-user.target
