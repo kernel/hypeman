@@ -16,9 +16,11 @@ type pageKey struct {
 type cacheEntry struct {
 	key  pageKey
 	data []byte
-	// ref is the CLOCK reference bit: set on access, cleared when the eviction
-	// sweep passes over the entry. Atomic because concurrent Borrows set it
-	// while holding only the shard read lock.
+	// ref is the CLOCK reference bit. Set on insertion (so a freshly cached
+	// page gets one grace sweep before becoming evictable, even when the shard
+	// is fully referenced) and on access, cleared when the eviction sweep
+	// passes over the entry. Atomic because concurrent Borrows set it while
+	// holding only the shard read lock.
 	ref atomic.Bool
 }
 
@@ -125,7 +127,9 @@ func (c *PageCache) Add(cacheKey string, offset int64, data []byte) {
 		return
 	}
 
-	elem := shard.ring.PushFront(&cacheEntry{key: key, data: value})
+	entry := &cacheEntry{key: key, data: value}
+	entry.ref.Store(true)
+	elem := shard.ring.PushFront(entry)
 	shard.items[key] = elem
 	shard.bytes += int64(len(value))
 	shard.evictLocked()
