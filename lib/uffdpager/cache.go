@@ -16,6 +16,12 @@ type pageKey struct {
 type cacheEntry struct {
 	key  pageKey
 	data []byte
+	// ref is the CLOCK reference bit. Set on insertion (so a freshly cached
+	// page gets one grace sweep before becoming evictable, even when the shard
+	// is fully referenced) and on access, cleared when the eviction sweep
+	// passes over the entry. Atomic because concurrent Borrows set it while
+	// holding only the shard read lock.
+	ref atomic.Bool
 }
 
 type PageCache struct {
@@ -27,7 +33,7 @@ type pageCacheShard struct {
 	maxBytes int64
 	bytes    int64
 	items    map[pageKey]*list.Element
-	lru      *list.List
+	ring     *list.List // CLOCK sweep order; evictLocked walks from the back
 
 	hits   atomic.Int64
 	misses atomic.Int64
@@ -50,7 +56,7 @@ func NewPageCache(maxBytes int64) *PageCache {
 		shards[i] = &pageCacheShard{
 			maxBytes: shardMax,
 			items:    make(map[pageKey]*list.Element),
-			lru:      list.New(),
+			ring:     list.New(),
 		}
 	}
 	return &PageCache{
@@ -59,51 +65,38 @@ func NewPageCache(maxBytes int64) *PageCache {
 }
 
 func (c *PageCache) Get(cacheKey string, offset int64, size int) ([]byte, bool) {
-	key := pageKey{cacheKey: cacheKey, offset: offset, size: size}
-	data, ok := c.lookup(key, true)
+	data, ok := c.lookup(pageKey{cacheKey: cacheKey, offset: offset, size: size})
 	if !ok {
 		return nil, false
 	}
 	return append([]byte(nil), data...), true
 }
 
-// Borrow returns the immutable cached page without copying or touching LRU state.
+// Borrow returns the immutable cached page without copying. It marks the page
+// referenced so the next CLOCK eviction sweep spares it.
 func (c *PageCache) Borrow(cacheKey string, offset int64, size int) ([]byte, bool) {
-	return c.lookup(pageKey{cacheKey: cacheKey, offset: offset, size: size}, false)
+	return c.lookup(pageKey{cacheKey: cacheKey, offset: offset, size: size})
 }
 
-func (c *PageCache) lookup(key pageKey, touch bool) ([]byte, bool) {
+// lookup marks a hit's reference bit under the read lock. Unlike LRU it does not
+// reorder the ring, so concurrent faults on hot pages don't serialize behind a
+// write lock.
+func (c *PageCache) lookup(key pageKey) ([]byte, bool) {
 	start := time.Now()
 	shard := c.shardFor(key)
 
-	if !touch {
-		shard.mu.RLock()
-		elem, ok := shard.items[key]
-		if !ok {
-			shard.mu.RUnlock()
-			shard.misses.Add(1)
-			shard.recordLookupDuration(time.Since(start))
-			return nil, false
-		}
-		data := elem.Value.(*cacheEntry).data
-		shard.mu.RUnlock()
-		shard.hits.Add(1)
-		shard.recordLookupDuration(time.Since(start))
-		return data, true
-	}
-
-	shard.mu.Lock()
+	shard.mu.RLock()
 	elem, ok := shard.items[key]
 	if !ok {
-		shard.mu.Unlock()
+		shard.mu.RUnlock()
 		shard.misses.Add(1)
 		shard.recordLookupDuration(time.Since(start))
 		return nil, false
 	}
-	shard.lru.MoveToFront(elem)
 	entry := elem.Value.(*cacheEntry)
+	entry.ref.Store(true)
 	data := entry.data
-	shard.mu.Unlock()
+	shard.mu.RUnlock()
 	shard.hits.Add(1)
 	shard.recordLookupDuration(time.Since(start))
 	return data, true
@@ -129,12 +122,14 @@ func (c *PageCache) Add(cacheKey string, offset int64, data []byte) {
 		shard.bytes -= int64(len(entry.data))
 		entry.data = value
 		shard.bytes += int64(len(entry.data))
-		shard.lru.MoveToFront(elem)
+		entry.ref.Store(true)
 		shard.evictLocked()
 		return
 	}
 
-	elem := shard.lru.PushFront(&cacheEntry{key: key, data: value})
+	entry := &cacheEntry{key: key, data: value}
+	entry.ref.Store(true)
+	elem := shard.ring.PushFront(entry)
 	shard.items[key] = elem
 	shard.bytes += int64(len(value))
 	shard.evictLocked()
@@ -175,13 +170,21 @@ func (c *PageCache) shardFor(key pageKey) *pageCacheShard {
 	return c.shards[int(hashPageKey(key)%uint64(len(c.shards)))]
 }
 
+// evictLocked is the CLOCK sweep: walk from the back, sparing referenced entries
+// once (clearing their bit) and evicting the first unreferenced one, until the
+// shard is back under budget.
 func (c *pageCacheShard) evictLocked() {
-	for c.bytes > c.maxBytes && c.lru.Len() > 0 {
-		elem := c.lru.Back()
+	for c.bytes > c.maxBytes && c.ring.Len() > 0 {
+		elem := c.ring.Back()
 		entry := elem.Value.(*cacheEntry)
+		if entry.ref.Load() {
+			entry.ref.Store(false)
+			c.ring.MoveToFront(elem)
+			continue
+		}
 		delete(c.items, entry.key)
 		c.bytes -= int64(len(entry.data))
-		c.lru.Remove(elem)
+		c.ring.Remove(elem)
 	}
 }
 
