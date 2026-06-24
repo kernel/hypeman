@@ -1183,6 +1183,10 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 		oapiInst.ExitMessage = lo.ToPtr(inst.ExitMessage)
 	}
 
+	if inst.StopTimeout > 0 {
+		oapiInst.StopTimeout = lo.ToPtr(inst.StopTimeout)
+	}
+
 	if len(inst.Env) > 0 {
 		oapiInst.Env = &inst.Env
 	}

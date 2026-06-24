@@ -635,6 +635,44 @@ func TestInstanceToOAPI_OmitsPlatformWhenUnset(t *testing.T) {
 	assert.Nil(t, oapiInst.Platform)
 }
 
+func TestInstanceToOAPI_EchoesStopTimeout(t *testing.T) {
+	t.Parallel()
+
+	inst := instances.Instance{
+		StoredMetadata: instances.StoredMetadata{
+			Id:             "inst-stop-timeout",
+			Name:           "inst-stop-timeout",
+			Image:          "docker.io/library/alpine:latest",
+			CreatedAt:      time.Now(),
+			HypervisorType: hypervisor.TypeCloudHypervisor,
+			StopTimeout:    30,
+		},
+		State: instances.StateRunning,
+	}
+
+	oapiInst := instanceToOAPI(inst)
+	require.NotNil(t, oapiInst.StopTimeout)
+	assert.Equal(t, 30, *oapiInst.StopTimeout)
+}
+
+func TestInstanceToOAPI_OmitsStopTimeoutWhenUnset(t *testing.T) {
+	t.Parallel()
+
+	inst := instances.Instance{
+		StoredMetadata: instances.StoredMetadata{
+			Id:             "inst-no-stop-timeout",
+			Name:           "inst-no-stop-timeout",
+			Image:          "docker.io/library/alpine:latest",
+			CreatedAt:      time.Now(),
+			HypervisorType: hypervisor.TypeCloudHypervisor,
+		},
+		State: instances.StateStopped,
+	}
+
+	oapiInst := instanceToOAPI(inst)
+	assert.Nil(t, oapiInst.StopTimeout)
+}
+
 // errCreateInstanceManager is a fake whose CreateInstance always fails with a
 // preset error, used to assert the handler maps typed image errors to statuses.
 type errCreateInstanceManager struct {

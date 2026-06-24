@@ -1099,6 +1099,10 @@ components:
           type: boolean
           description: Whether a snapshot exists for this instance
           example: false
+        stop_timeout:
+          type: integer
+          description: Configured grace period in seconds for graceful shutdown on stop/delete. Omitted when unset (the server default applies).
+          example: 30
         hypervisor:
           type: string
           enum: [cloud-hypervisor, firecracker, qemu, vz]
