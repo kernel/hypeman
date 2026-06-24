@@ -369,6 +369,11 @@ func (m *manager) shutdownHypervisor(ctx context.Context, inst *Instance) error 
 		shutdownErr = hv.Shutdown(ctx)
 	}
 
+	// Teardown is committed; prevent new control-socket clients while the
+	// hypervisor exits. The deferred remove remains as a fallback for early
+	// returns above.
+	_ = os.Remove(inst.SocketPath)
+
 	// Wait for process to exit
 	if inst.HypervisorPID != nil {
 		pid := *inst.HypervisorPID
