@@ -98,7 +98,7 @@ func TestVZForkSpeed(t *testing.T) {
 	require.Equalf(t, 0, code, "dd to fill overlay should succeed")
 
 	// Stop the source so each fork copies a stable on-disk state without booting.
-	_, err = mgr.StopInstance(ctx, source.Id)
+	_, err = mgr.StopInstance(ctx, source.Id, nil)
 	require.NoError(t, err)
 
 	// Reset the global reflink flag however the test exits — a require failure

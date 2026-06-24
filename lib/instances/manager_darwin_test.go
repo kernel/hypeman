@@ -182,7 +182,7 @@ func TestVZBasicLifecycle(t *testing.T) {
 
 	// Graceful shutdown test
 	t.Log("Stopping instance (graceful shutdown)...")
-	inst, err = mgr.StopInstance(ctx, inst.Id)
+	inst, err = mgr.StopInstance(ctx, inst.Id, nil)
 	require.NoError(t, err)
 	assert.Equal(t, StateStopped, inst.State)
 	t.Log("Instance stopped")
@@ -255,7 +255,7 @@ func TestVZBasicLifecycle(t *testing.T) {
 
 	// Stop again before delete
 	t.Log("Stopping instance before delete...")
-	inst, err = mgr.StopInstance(ctx, inst.Id)
+	inst, err = mgr.StopInstance(ctx, inst.Id, nil)
 	require.NoError(t, err)
 	assert.Equal(t, StateStopped, inst.State)
 
@@ -359,7 +359,7 @@ func TestVZExecAndShutdown(t *testing.T) {
 
 	// Graceful shutdown
 	t.Log("Stopping instance...")
-	inst, err = mgr.StopInstance(ctx, inst.Id)
+	inst, err = mgr.StopInstance(ctx, inst.Id, nil)
 	require.NoError(t, err)
 	assert.Equal(t, StateStopped, inst.State)
 	t.Log("Instance stopped gracefully")

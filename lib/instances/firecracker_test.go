@@ -341,7 +341,7 @@ func TestFirecrackerStopClearsStaleSnapshot(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, beforeStop.HasSnapshot, "test setup should create visible stale snapshot")
 
-	inst, err = mgr.StopInstance(ctx, inst.Id)
+	inst, err = mgr.StopInstance(ctx, inst.Id, nil)
 	require.NoError(t, err)
 	assert.Equal(t, StateStopped, inst.State)
 	assert.False(t, inst.HasSnapshot, "stopped instances should not retain stale snapshots")

@@ -25,9 +25,13 @@ const shutdownFailureFallbackWait = 500 * time.Millisecond
 
 var errGracefulShutdownFailed = errors.New("graceful guest shutdown did not complete")
 
-// resolveStopTimeout returns the configured stop timeout in seconds,
-// falling back to the package default when unset/invalid.
-func resolveStopTimeout(stored *StoredMetadata) int {
+// resolveStopTimeout returns the stop timeout in seconds. A positive override
+// (e.g. from a per-call stop request) wins; otherwise the instance's configured
+// value is used, falling back to the package default when unset/invalid.
+func resolveStopTimeout(stored *StoredMetadata, override *int) int {
+	if override != nil && *override > 0 {
+		return *override
+	}
 	stopTimeout := stored.StopTimeout
 	if stopTimeout <= 0 {
 		stopTimeout = DefaultStopTimeout
@@ -143,6 +147,7 @@ func (m *manager) forceKillHypervisorProcess(ctx context.Context, inst *Instance
 func (m *manager) stopInstance(
 	ctx context.Context,
 	id string,
+	stopTimeoutOverride *int,
 ) (_ *Instance, retErr error) {
 	start := time.Now()
 	log := logger.FromContext(ctx)
@@ -185,7 +190,7 @@ func (m *manager) stopInstance(
 
 	// 4. Graceful shutdown: send signal to guest init via Shutdown RPC,
 	// then wait for VM to power off cleanly. Fall back to hypervisor shutdown on timeout.
-	stopTimeout := resolveStopTimeout(stored)
+	stopTimeout := resolveStopTimeout(stored, stopTimeoutOverride)
 	gracefulCtx, gracefulSpanEnd := m.startLifecycleStep(ctx, "graceful_guest_shutdown",
 		attribute.String("instance_id", id),
 		attribute.String("hypervisor", string(stored.HypervisorType)),

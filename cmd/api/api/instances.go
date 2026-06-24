@@ -302,6 +302,17 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		}, nil
 	}
 
+	stopTimeout := 0
+	if request.Body.StopTimeout != nil {
+		if *request.Body.StopTimeout < 1 {
+			return oapi.CreateInstance400JSONResponse{
+				Code:    "invalid_stop_timeout",
+				Message: "stop_timeout must be at least 1 second",
+			}, nil
+		}
+		stopTimeout = *request.Body.StopTimeout
+	}
+
 	domainReq := instances.CreateInstanceRequest{
 		Name:                     request.Body.Name,
 		Image:                    request.Body.Image,
@@ -326,6 +337,7 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		Cmd:                      cmd,
 		SkipKernelHeaders:        request.Body.SkipKernelHeaders != nil && *request.Body.SkipKernelHeaders,
 		SkipGuestAgent:           request.Body.SkipGuestAgent != nil && *request.Body.SkipGuestAgent,
+		StopTimeout:              stopTimeout,
 		AutoStandby:              autoStandby,
 		HealthCheck:              healthCheck,
 		RestartPolicy:            restartPolicy,
@@ -754,7 +766,18 @@ func (s *ApiService) StopInstance(ctx context.Context, request oapi.StopInstance
 	}
 	log := logger.FromContext(ctx)
 
-	result, err := s.InstanceManager.StopInstance(ctx, inst.Id)
+	var stopTimeout *int
+	if request.Body != nil && request.Body.StopTimeout != nil {
+		if *request.Body.StopTimeout < 1 {
+			return oapi.StopInstance400JSONResponse{
+				Code:    "invalid_stop_timeout",
+				Message: "stop_timeout must be at least 1 second",
+			}, nil
+		}
+		stopTimeout = request.Body.StopTimeout
+	}
+
+	result, err := s.InstanceManager.StopInstance(ctx, inst.Id, stopTimeout)
 	if err != nil {
 		switch {
 		case errors.Is(err, instances.ErrInvalidState):

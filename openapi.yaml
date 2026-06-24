@@ -658,6 +658,14 @@ components:
             The instance will still run, but remote command execution will be unavailable.
           default: false
           example: false
+        stop_timeout:
+          type: integer
+          minimum: 1
+          description: |
+            Grace period in seconds for graceful shutdown when the instance is stopped
+            or deleted, before falling back to a forced hypervisor shutdown. Omit to use
+            the server default (5s).
+          example: 30
         entrypoint:
           type: array
           items:
@@ -3053,6 +3061,22 @@ paths:
           schema:
             type: string
           description: Instance ID or name
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                stop_timeout:
+                  type: integer
+                  minimum: 1
+                  description: |
+                    Grace period in seconds for graceful shutdown for this stop only,
+                    before falling back to a forced hypervisor shutdown. Overrides the
+                    instance's configured stop_timeout. Omit to use the instance's
+                    configured value (or the server default).
+                  example: 30
       responses:
         200:
           description: Instance stopped
@@ -3060,6 +3084,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Instance"
+        400:
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         404:
           description: Instance not found
           content:

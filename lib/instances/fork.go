@@ -562,7 +562,7 @@ func (m *manager) applyForkTargetState(ctx context.Context, forkID string, targe
 			inst, err := m.standbyInstance(ctx, forkID, StandbyInstanceRequest{}, false)
 			return returnWithReadiness(inst, err, false)
 		case StateStopped:
-			inst, err := m.stopInstance(ctx, forkID)
+			inst, err := m.stopInstance(ctx, forkID, nil)
 			return returnWithReadiness(inst, err, false)
 		}
 	}

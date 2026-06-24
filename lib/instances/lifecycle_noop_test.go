@@ -106,7 +106,7 @@ func TestLifecycleNoopTransitionsReturnCurrentInstanceWithoutEvent(t *testing.T)
 			name:  "stop already stopped",
 			state: StateStopped,
 			action: func(ctx context.Context, m *manager, id string) (*Instance, error) {
-				return m.StopInstance(ctx, id)
+				return m.StopInstance(ctx, id, nil)
 			},
 		},
 	}

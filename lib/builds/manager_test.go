@@ -121,7 +121,7 @@ func (m *mockInstanceManager) RestoreSnapshot(ctx context.Context, id string, sn
 	return nil, instances.ErrNotSupported
 }
 
-func (m *mockInstanceManager) StopInstance(ctx context.Context, id string) (*instances.Instance, error) {
+func (m *mockInstanceManager) StopInstance(ctx context.Context, id string, stopTimeout *int) (*instances.Instance, error) {
 	if m.stopFunc != nil {
 		return m.stopFunc(ctx, id)
 	}

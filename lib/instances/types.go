@@ -271,6 +271,7 @@ type CreateInstanceRequest struct {
 	Cmd                      []string                    // Override image cmd (nil = use image default)
 	SkipKernelHeaders        bool                        // Skip kernel headers installation (disables DKMS)
 	SkipGuestAgent           bool                        // Skip guest-agent installation (disables exec/stat API)
+	StopTimeout              int                         // Grace period in seconds for graceful stop (0 = use default 5s)
 	SnapshotPolicy           *SnapshotPolicy             // Optional snapshot policy defaults for this instance
 	AutoStandby              *autostandby.Policy         // Optional automatic standby policy
 	HealthCheck              *healthcheck.Policy         // Optional workload health check policy
