@@ -13,6 +13,7 @@ import (
 	"github.com/kernel/hypeman/lib/guest"
 	"github.com/kernel/hypeman/lib/healthcheck"
 	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/instances"
 	"github.com/kernel/hypeman/lib/logger"
 	mw "github.com/kernel/hypeman/lib/middleware"
@@ -305,6 +306,7 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		Name:                     request.Body.Name,
 		Image:                    request.Body.Image,
 		Size:                     size,
+		Platform:                 derefString(request.Body.Platform),
 		HotplugSize:              hotplugSize,
 		OverlaySize:              overlaySize,
 		Vcpus:                    vcpus,
@@ -365,6 +367,26 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		case errors.Is(err, instances.ErrInvalidRequest):
 			return oapi.CreateInstance400JSONResponse{
 				Code:    "invalid_request",
+				Message: err.Error(),
+			}, nil
+		case errors.Is(err, images.ErrInvalidPlatform):
+			return oapi.CreateInstance400JSONResponse{
+				Code:    "invalid_platform",
+				Message: err.Error(),
+			}, nil
+		case errors.Is(err, images.ErrPlatformNotAvailable):
+			return oapi.CreateInstance404JSONResponse{
+				Code:    "platform_not_available",
+				Message: err.Error(),
+			}, nil
+		case errors.Is(err, images.ErrRateLimited):
+			return oapi.CreateInstance429JSONResponse{
+				Code:    "rate_limited",
+				Message: "registry rate limit exceeded; retry later or authenticate to the registry",
+			}, nil
+		case errors.Is(err, images.ErrNotFound):
+			return oapi.CreateInstance404JSONResponse{
+				Code:    "not_found",
 				Message: err.Error(),
 			}, nil
 		default:
@@ -625,6 +647,11 @@ func (s *ApiService) RestoreInstance(ctx context.Context, request oapi.RestoreIn
 				Code:    "insufficient_resources",
 				Message: err.Error(),
 			}, nil
+		case errors.Is(err, images.ErrNotFound):
+			return oapi.RestoreInstance404JSONResponse{
+				Code:    "not_found",
+				Message: "instance image not found",
+			}, nil
 		default:
 			log.ErrorContext(ctx, "failed to restore instance", "error", err)
 			return oapi.RestoreInstance500JSONResponse{
@@ -697,6 +724,11 @@ func (s *ApiService) ForkInstance(ctx context.Context, request oapi.ForkInstance
 			return oapi.ForkInstance501JSONResponse{
 				Code:    "not_supported",
 				Message: err.Error(),
+			}, nil
+		case errors.Is(err, images.ErrNotFound):
+			return oapi.ForkInstance404JSONResponse{
+				Code:    "not_found",
+				Message: "instance image not found",
 			}, nil
 		default:
 			log.ErrorContext(ctx, "failed to fork instance", "error", err)
@@ -777,6 +809,11 @@ func (s *ApiService) StartInstance(ctx context.Context, request oapi.StartInstan
 			return oapi.StartInstance409JSONResponse{
 				Code:    "insufficient_resources",
 				Message: err.Error(),
+			}, nil
+		case errors.Is(err, images.ErrNotFound):
+			return oapi.StartInstance404JSONResponse{
+				Code:    "not_found",
+				Message: "instance image not found",
 			}, nil
 		default:
 			log.ErrorContext(ctx, "failed to start instance", "error", err)
@@ -1115,6 +1152,10 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 
 	if b, err := json.Marshal(networkPayload); err == nil {
 		_ = json.Unmarshal(b, &oapiInst.Network)
+	}
+
+	if inst.Platform != "" {
+		oapiInst.Platform = lo.ToPtr(inst.Platform)
 	}
 
 	if inst.ExitMessage != "" {

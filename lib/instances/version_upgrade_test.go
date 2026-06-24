@@ -28,6 +28,7 @@ func TestCloudHypervisorVersionUpgradeRestore(t *testing.T) {
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Skip("/dev/kvm not available, skipping on this platform")
 	}
+	acquireHeavyIO(t)
 
 	mgr, tmpDir := setupTestManager(t)
 	ctx := context.Background()

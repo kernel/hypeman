@@ -30,6 +30,10 @@ type VMConfig struct {
 	KernelPath string
 	InitrdPath string
 	KernelArgs string
+
+	// EnableRosetta attaches an Apple Rosetta virtio-fs share (vz on Apple
+	// silicon only) so the guest can execute x86-64 binaries.
+	EnableRosetta bool
 }
 
 // GuestMemoryConfig contains hypervisor-agnostic guest memory feature toggles.

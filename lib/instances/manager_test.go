@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -181,38 +182,162 @@ func collectLogs(ctx context.Context, mgr *manager, instanceID string, n int) (s
 	return strings.Join(lines, "\n"), nil
 }
 
-// cleanupOrphanedProcesses kills any Cloud Hypervisor processes from metadata
+// cleanupOrphanedProcesses kills any hypervisor (and UFFD pager) processes left
+// behind by a test, so a flaky run can never leak a guest onto the runner.
+//
+// It uses two complementary strategies:
+//
+//  1. Kill PIDs recorded in instance metadata. This is best-effort only:
+//     meta.HypervisorPID is deliberately cleared (set to nil) during
+//     standby/fork/restore transitions, so a test that aborts in that window
+//     leaves no recorded PID to reap.
+//
+//  2. Scan the process table for any firecracker / cloud-hypervisor /
+//     qemu-system* / hypeman-uffd-pager process whose command line references a
+//     path under this test's temp data dir, and kill those too. This catches
+//     guests leaked during the PID-nil window. An orphaned UFFD guest whose
+//     pager has gone away spins its vCPU at 100% forever, so reaping it here is
+//     what keeps a flake from permanently burning a core on a shared runner.
+//
+// Matching is scoped strictly to this test's own data dir prefix so it can never
+// touch a sibling parallel test's guests.
 func cleanupOrphanedProcesses(t *testing.T, mgr *manager) {
-	// Find all metadata files
-	metaFiles, err := mgr.listMetadataFiles()
-	if err != nil {
-		return // No metadata files, nothing to clean
-	}
-
-	for _, metaFile := range metaFiles {
-		// Extract instance ID from path
-		id := filepath.Base(filepath.Dir(metaFile))
-
-		// Load metadata
-		meta, err := mgr.loadMetadata(id)
-		if err != nil {
-			continue
-		}
-
-		// If metadata has a PID, try to kill it
-		if meta.HypervisorPID != nil {
+	// Strategy 1: kill PIDs recorded in metadata.
+	if metaFiles, err := mgr.listMetadataFiles(); err == nil {
+		for _, metaFile := range metaFiles {
+			id := filepath.Base(filepath.Dir(metaFile))
+			meta, err := mgr.loadMetadata(id)
+			if err != nil {
+				continue
+			}
+			if meta.HypervisorPID == nil {
+				continue
+			}
 			pid := *meta.HypervisorPID
-
-			// Check if process exists
 			if err := syscall.Kill(pid, 0); err == nil {
 				t.Logf("Cleaning up orphaned hypervisor process: PID %d (instance %s)", pid, id)
 				syscall.Kill(pid, syscall.SIGKILL)
-
-				// Wait for process to exit
 				WaitForProcessExit(pid, 1*time.Second)
 			}
 		}
 	}
+
+	// Strategy 2: scan the process table for guests/pagers under this test's
+	// data dir. The data dir is the t.TempDir() root passed to the manager.
+	dataDir := strings.TrimSpace(mgr.paths.DataDir())
+	if dataDir == "" {
+		return
+	}
+	killOrphanedProcessesUnderDir(t, dataDir)
+}
+
+// killOrphanedProcessesUnderDir reaps any guest or UFFD-pager process whose
+// command line references dataDir. Guests are killed before pagers: an orphaned
+// UFFD guest spins its vCPU if its pager dies first, so the pager must be the
+// last thing standing during teardown.
+func killOrphanedProcessesUnderDir(t *testing.T, dataDir string) {
+	// Normalize to a clean prefix so we only ever match this test's own tree and
+	// never a sibling test whose temp dir merely shares a textual fragment.
+	prefix := filepath.Clean(dataDir)
+
+	type orphan struct {
+		pid  int
+		exe  string
+		args string
+	}
+	var guests, pagers []orphan
+
+	procEntries, err := os.ReadDir("/proc")
+	if err != nil {
+		return // not Linux, or /proc unavailable; nothing portable to do
+	}
+	for _, entry := range procEntries {
+		if !entry.IsDir() {
+			continue
+		}
+		pid, err := strconv.Atoi(entry.Name())
+		if err != nil {
+			continue // not a PID directory
+		}
+
+		raw, err := os.ReadFile(filepath.Join("/proc", entry.Name(), "cmdline"))
+		if err != nil || len(raw) == 0 {
+			continue
+		}
+		// /proc/<pid>/cmdline is NUL-separated argv.
+		argv := strings.Split(strings.TrimRight(string(raw), "\x00"), "\x00")
+		if len(argv) == 0 {
+			continue
+		}
+		exe := filepath.Base(argv[0])
+		joined := strings.Join(argv, " ")
+
+		// Only consider processes that reference this test's data dir, using the
+		// exact cleaned prefix so we never reap another test's guest.
+		if !cmdlineReferencesDir(argv, prefix) {
+			continue
+		}
+
+		switch {
+		case isPagerProcess(exe):
+			pagers = append(pagers, orphan{pid: pid, exe: exe, args: joined})
+		case isGuestProcess(exe):
+			guests = append(guests, orphan{pid: pid, exe: exe, args: joined})
+		}
+	}
+
+	kill := func(o orphan, kind string) {
+		if err := syscall.Kill(o.pid, 0); err != nil {
+			return // already gone
+		}
+		t.Logf("Cleaning up orphaned %s process: PID %d (%s) under %s", kind, o.pid, o.exe, prefix)
+		syscall.Kill(o.pid, syscall.SIGKILL)
+		WaitForProcessExit(o.pid, 2*time.Second)
+	}
+
+	// Guests first, then pagers (LIFO safety: never strand a guest without a pager).
+	for _, g := range guests {
+		kill(g, "guest")
+	}
+	for _, p := range pagers {
+		kill(p, "uffd pager")
+	}
+}
+
+// cmdlineReferencesDir reports whether any argv token is, or lives under, dir.
+func cmdlineReferencesDir(argv []string, dir string) bool {
+	for _, tok := range argv {
+		tok = strings.TrimSpace(tok)
+		if tok == "" {
+			continue
+		}
+		// Tokens may embed the path inside larger strings (e.g. qemu's
+		// "socket,...,path=/tmp/.../qmp.sock"), so match dir as a substring — but
+		// only at a path boundary (followed by "/" or at end-of-token). A raw
+		// substring check would let a shorter data dir (e.g. ".../001") match a
+		// sibling test's longer path (".../0010") and SIGKILL its processes.
+		if strings.Contains(tok, dir+"/") || strings.HasSuffix(tok, dir) {
+			return true
+		}
+	}
+	return false
+}
+
+func isGuestProcess(exe string) bool {
+	switch {
+	case exe == "firecracker":
+		return true
+	case exe == "cloud-hypervisor":
+		return true
+	case strings.HasPrefix(exe, "qemu-system"):
+		return true
+	default:
+		return false
+	}
+}
+
+func isPagerProcess(exe string) bool {
+	return exe == "hypeman-uffd-pager" || strings.Contains(exe, "uffd-pager")
 }
 
 func TestBasicEndToEnd(t *testing.T) {
@@ -312,6 +437,8 @@ func TestBasicEndToEnd(t *testing.T) {
 	// Verify instance fields
 	assert.NotEmpty(t, inst.Id)
 	assert.Equal(t, "test-nginx", inst.Name)
+	// Image is the caller-supplied reference (display value); the digest-pinned
+	// boot reference is tracked separately in StoredMetadata.ResolvedImage.
 	assert.Equal(t, integrationTestImageRef(t, "docker.io/library/nginx:alpine"), inst.Image)
 	assert.Contains(t, []State{StateInitializing, StateRunning}, inst.State)
 	assert.False(t, inst.HasSnapshot)
@@ -1355,6 +1482,8 @@ func TestStandbyAndRestore(t *testing.T) {
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Skip("/dev/kvm not available, skipping on this platform")
 	}
+
+	acquireHeavyIO(t)
 
 	manager, tmpDir := setupTestManager(t) // Automatically registers cleanup
 	ctx := context.Background()

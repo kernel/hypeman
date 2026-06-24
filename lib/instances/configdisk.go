@@ -130,6 +130,9 @@ func (m *manager) buildGuestConfig(ctx context.Context, inst *Instance, imageInf
 	cfg.SkipKernelHeaders = inst.SkipKernelHeaders
 	cfg.SkipGuestAgent = inst.SkipGuestAgent
 
+	// Rosetta x86-64 emulation (host attaches the share; guest registers binfmt).
+	cfg.EnableRosetta = inst.EnableRosetta
+
 	return cfg
 }
 

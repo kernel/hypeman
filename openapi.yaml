@@ -539,6 +539,11 @@ components:
           type: string
           description: OCI image reference
           example: docker.io/library/alpine:latest
+        platform:
+          type: string
+          pattern: '^[a-z0-9]+/[a-z0-9]+(/[a-z0-9.]+)?$'
+          description: 'Target platform as os/arch[/variant] (e.g. "linux/amd64"), matching Docker --platform. Omit for the host platform. Not a fixed enum: the os/arch[/variant] grammar is validated server-side and invalid values return 400 invalid_platform. Only os "linux" with arch amd64 or arm64 is accepted today.'
+          example: linux/amd64
         size:
           type: string
           description: Base memory size (human-readable format like "1GB", "512MB", "2G")
@@ -980,6 +985,11 @@ components:
           type: string
           description: OCI image reference
           example: docker.io/library/alpine:latest
+        platform:
+          type: string
+          readOnly: true
+          description: Resolved image platform as os/arch[/variant] (e.g. "linux/amd64"). amd64 images on an arm64 host run under Rosetta emulation.
+          example: linux/amd64
         state:
           $ref: "#/components/schemas/InstanceState"
         state_error:
@@ -1240,6 +1250,11 @@ components:
           type: string
           description: OCI image reference (e.g., docker.io/library/nginx:latest)
           example: docker.io/library/nginx:latest
+        platform:
+          type: string
+          pattern: '^[a-z0-9]+/[a-z0-9]+(/[a-z0-9.]+)?$'
+          description: 'Target platform as os/arch[/variant] (e.g. "linux/amd64"), matching Docker --platform. Omit for the host platform. Not a fixed enum: the os/arch[/variant] grammar is validated server-side and invalid values return 400 invalid_platform. Only os "linux" with arch amd64 or arm64 is accepted today.'
+          example: linux/amd64
         tags:
           $ref: "#/components/schemas/Tags"
     
@@ -1255,6 +1270,11 @@ components:
           type: string
           description: Resolved manifest digest
           example: sha256:abc123def456...
+        platform:
+          type: string
+          readOnly: true
+          description: Resolved image platform as os/arch[/variant] (e.g. "linux/amd64")
+          example: linux/amd64
         status:
           type: string
           enum: [pending, pulling, converting, ready, failed]
@@ -2178,7 +2198,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
         404:
-          description: Image not found
+          description: Image not found or requested platform not available
           content:
             application/json:
               schema:
@@ -2189,13 +2209,19 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        429:
+          description: Registry rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         500:
           description: Internal server error
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
-  
+
   /images/{name}:
     get:
       summary: Get image details
@@ -2331,8 +2357,20 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        404:
+          description: Image not found or requested platform not available
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         409:
           description: Conflict - insufficient resources or name already exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        429:
+          description: Registry rate limit exceeded
           content:
             application/json:
               schema:
@@ -2343,7 +2381,7 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
-  
+
   /instances/{id}:
     get:
       summary: Get instance details
@@ -2529,7 +2567,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Instance"
         404:
-          description: Instance not found
+          description: Instance not found, or the instance's image no longer exists
           content:
             application/json:
               schema:
@@ -2580,7 +2618,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
         404:
-          description: Source instance not found
+          description: Source instance not found, or its image no longer exists
           content:
             application/json:
               schema:
@@ -2812,7 +2850,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
         404:
-          description: Instance or snapshot not found
+          description: Instance or snapshot not found, or the instance's image no longer exists
           content:
             application/json:
               schema:
@@ -3079,7 +3117,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Instance"
         404:
-          description: Instance not found
+          description: Instance not found, or the instance's image no longer exists
           content:
             application/json:
               schema:

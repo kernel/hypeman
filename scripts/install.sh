@@ -27,7 +27,7 @@ SERVICE_NAME="hypeman"
 RED='\033[38;2;255;110;110m'
 GREEN='\033[38;2;92;190;83m'
 YELLOW='\033[0;33m'
-PURPLE='\033[38;2;172;134;249m'
+KERNEL_GREEN='\033[38;2;129;179;0m'
 NC='\033[0m' # No Color
 
 info() { echo -e "${GREEN}[INFO]${NC} $1"; }
@@ -598,6 +598,13 @@ ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
 ReadWritePaths=${DATA_DIR}
+# UFFD snapshot restore writes /run/hypeman/uffd/<ver>.env (read by the
+# ${SERVICE_NAME}-uffd@ pager via EnvironmentFile). ProtectSystem=strict makes
+# /run read-only, so grant a service-owned writable runtime dir; without it the
+# API crash-loops on "mkdir /run/hypeman: read-only file system" once the UFFD
+# snapshot memory backend is enabled.
+RuntimeDirectory=${SERVICE_NAME}
+RuntimeDirectoryMode=0755
 
 [Install]
 WantedBy=multi-user.target
@@ -793,7 +800,7 @@ fi
 # =============================================================================
 
 echo ""
-echo -e "${PURPLE}"
+echo -e "${KERNEL_GREEN}"
 cat << 'EOF'
  ██╗  ██╗  ██╗   ██╗  ██████╗   ███████╗  ███╗   ███╗   █████╗   ███╗   ██╗
  ██║  ██║  ╚██╗ ██╔╝  ██╔══██╗  ██╔════╝  ████╗ ████║  ██╔══██╗  ████╗  ██║

@@ -15,6 +15,11 @@ const (
 	testPrewarmDirEnv    = "HYPEMAN_TEST_PREWARM_DIR"
 	testPrewarmStrictEnv = "HYPEMAN_TEST_PREWARM_STRICT"
 	testRegistryEnv      = "HYPEMAN_TEST_REGISTRY"
+	// testReflinkStrictEnv forces reflink assertions to run even when the
+	// filesystem appears not to support reflinks. Set in CI (on a known
+	// reflink-capable scratch fs) so the runner still catches real reflink
+	// regressions; left unset on contributor machines whose /tmp is ext4/tmpfs.
+	testReflinkStrictEnv = "HYPEMAN_TEST_REFLINK_STRICT"
 )
 
 var prewarmLogOnce sync.Once
@@ -47,13 +52,6 @@ func integrationTestImageRef(t *testing.T, source string) string {
 	}
 	repo = strings.TrimPrefix(repo, "docker.io/")
 
-	if ref.Tag() != "" {
-		mapped := registry + "/" + repo + ":" + ref.Tag()
-		registryLogOnce.Do(func() {
-			t.Logf("using test registry mirror source=%s mapped=%s", source, mapped)
-		})
-		return mapped
-	}
 	if ref.Digest() != "" {
 		mapped := registry + "/" + repo + "@" + ref.Digest()
 		registryLogOnce.Do(func() {
@@ -62,7 +60,11 @@ func integrationTestImageRef(t *testing.T, source string) string {
 		return mapped
 	}
 
-	mapped := registry + "/" + repo + ":latest"
+	tag := ref.Tag()
+	if tag == "" {
+		tag = "latest"
+	}
+	mapped := registry + "/" + repo + ":" + tag
 	registryLogOnce.Do(func() {
 		t.Logf("using test registry mirror source=%s mapped=%s", source, mapped)
 	})
@@ -135,5 +137,10 @@ func linkSubdir(t *testing.T, srcSystemDir, dstSystemDir, subdir string, require
 
 func isTestPrewarmStrict() bool {
 	v := strings.TrimSpace(os.Getenv(testPrewarmStrictEnv))
+	return v == "1" || strings.EqualFold(v, "true") || strings.EqualFold(v, "yes")
+}
+
+func reflinkStrict() bool {
+	v := strings.TrimSpace(os.Getenv(testReflinkStrictEnv))
 	return v == "1" || strings.EqualFold(v, "true") || strings.EqualFold(v, "yes")
 }
