@@ -20,6 +20,7 @@ import (
 	"github.com/kernel/hypeman/lib/instances/phasetracking"
 	"github.com/kernel/hypeman/lib/logger"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // exitSentinelPrefix is the machine-parseable prefix written by init to serial console.
@@ -879,22 +880,39 @@ func (m *manager) listInstances(ctx context.Context) ([]Instance, error) {
 	return result, nil
 }
 
-func (m *manager) findInstanceMetadataByExactName(name string) (*metadata, error) {
+func (m *manager) findInstanceMetadataByExactName(ctx context.Context, name string) (*metadata, error) {
+	ctx, span := m.tracerOrDefault().Start(ctx, "instances.metadata.find_exact_name",
+		trace.WithAttributes(attribute.String("operation", "find_exact_name")),
+	)
+	defer span.End()
+
 	files, err := m.listMetadataFiles()
 	if err != nil {
+		span.RecordError(err)
 		return nil, err
 	}
+	span.SetAttributes(attribute.Int("metadata_files", len(files)))
 
+	scanned := 0
 	for _, file := range files {
 		id := filepath.Base(filepath.Dir(file))
+		scanned++
 		meta, err := m.loadMetadata(id)
 		if err != nil {
 			continue
 		}
 		if meta.Name == name {
+			span.SetAttributes(
+				attribute.Int("metadata_files_scanned", scanned),
+				attribute.Bool("matched", true),
+			)
 			return meta, nil
 		}
 	}
+	span.SetAttributes(
+		attribute.Int("metadata_files_scanned", scanned),
+		attribute.Bool("matched", false),
+	)
 	return nil, ErrNotFound
 }
 
@@ -949,14 +967,25 @@ func (m *manager) findInstanceMetadataByNameOrIDPrefix(idOrName string, minPrefi
 	return nil, ErrNotFound
 }
 
-func (m *manager) instanceNameExists(name string) (bool, error) {
-	_, err := m.findInstanceMetadataByExactName(name)
+func (m *manager) instanceNameExists(ctx context.Context, name, caller string) (bool, error) {
+	ctx, span := m.tracerOrDefault().Start(ctx, "instances.metadata.name_exists",
+		trace.WithAttributes(
+			attribute.String("operation", "metadata_name_exists"),
+			attribute.String("caller", caller),
+		),
+	)
+	defer span.End()
+
+	_, err := m.findInstanceMetadataByExactName(ctx, name)
 	if err == nil {
+		span.SetAttributes(attribute.Bool("exists", true))
 		return true, nil
 	}
 	if err == ErrNotFound {
+		span.SetAttributes(attribute.Bool("exists", false))
 		return false, nil
 	}
+	span.RecordError(err)
 	return false, err
 }
 
