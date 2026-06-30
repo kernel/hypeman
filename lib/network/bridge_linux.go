@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -510,7 +511,7 @@ func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName strin
 			attribute.String("operation", "delete_existing"),
 			attribute.String("tap", tapName),
 		)
-		err := m.deleteTAPDeviceSerialized(tapName, "")
+		err := m.deleteTAPDeviceSerialized(tapName)
 		deleteEnd(err)
 		if err != nil {
 			return fmt.Errorf("delete existing TAP: %w", err)
@@ -794,57 +795,103 @@ func (m *manager) addVMClass(ctx context.Context, bridgeName, tapName string, ra
 	return "", fmt.Errorf("tc class add failed after %d attempts: %w", maxAttempts, lastErr)
 }
 
-// removeVMClass removes the HTB class for a VM from the bridge.
-// If classID is non-empty, it is used directly; otherwise falls back to deriveClassID.
-func (m *manager) removeVMClass(bridgeName, tapName, classID string) error {
-	if classID == "" {
-		classID = deriveClassID(tapName)
-	}
-	fullClassID := fmt.Sprintf("1:%s", classID)
+type bridgeFilter struct {
+	handle string
+	flowID string
+	rtIif  int
+}
 
-	// Delete filter first (by matching flowid)
-	// List filters and delete matching ones
+func bridgeFiltersForTAP(output string, tapIndex int) []bridgeFilter {
+	var filters []bridgeFilter
+	var current bridgeFilter
+	haveCurrent := false
+
+	flush := func() {
+		if haveCurrent && current.handle != "" && current.flowID != "" && current.rtIif == tapIndex {
+			filters = append(filters, current)
+		}
+	}
+
+	for _, line := range strings.Split(output, "\n") {
+		if strings.HasPrefix(line, "filter ") {
+			flush()
+			current = bridgeFilter{rtIif: -1}
+			haveCurrent = true
+
+			fields := strings.Fields(line)
+			for i, field := range fields {
+				if i+1 >= len(fields) {
+					break
+				}
+				switch field {
+				case "handle":
+					current.handle = fields[i+1]
+				case "flowid":
+					current.flowID = fields[i+1]
+				}
+			}
+			continue
+		}
+
+		if !haveCurrent {
+			continue
+		}
+		if idx := strings.Index(line, "rt_iif eq "); idx >= 0 {
+			rest := line[idx+len("rt_iif eq "):]
+			if end := strings.IndexFunc(rest, func(r rune) bool { return r < '0' || r > '9' }); end >= 0 {
+				rest = rest[:end]
+			}
+			if rtIif, err := strconv.Atoi(rest); err == nil {
+				current.rtIif = rtIif
+			}
+		}
+	}
+	flush()
+
+	return filters
+}
+
+// removeVMClass removes bridge tc state proven to belong to a TAP.
+func (m *manager) removeVMClass(bridgeName string, tapIndex int) error {
+	if tapIndex <= 0 {
+		return nil
+	}
+
 	listCmd := exec.Command("tc", "filter", "show", "dev", bridgeName, "parent", htbRootHandle)
 	listCmd.SysProcAttr = &syscall.SysProcAttr{
 		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
 	}
-	output, _ := listCmd.Output()
+	output, err := listCmd.Output()
+	if err != nil {
+		return nil
+	}
 
-	// Parse filter output to find handle for this flowid
-	lines := strings.Split(string(output), "\n")
-	for _, line := range lines {
-		if strings.Contains(line, fullClassID) && strings.Contains(line, "filter") {
-			// Extract filter handle (e.g., "filter parent 1: protocol all pref 1 basic chain 0 handle 0x1")
-			fields := strings.Fields(line)
-			for i, f := range fields {
-				if f == "handle" && i+1 < len(fields) {
-					handle := fields[i+1]
-					delCmd := exec.Command("tc", "filter", "del", "dev", bridgeName, "parent", htbRootHandle,
-						"protocol", "all", "prio", "1", "handle", handle, "basic")
-					delCmd.SysProcAttr = &syscall.SysProcAttr{
-						AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
-					}
-					delCmd.Run() // Best effort
-					break
-				}
-			}
+	deletedClasses := make(map[string]struct{})
+	for _, filter := range bridgeFiltersForTAP(string(output), tapIndex) {
+		delCmd := exec.Command("tc", "filter", "del", "dev", bridgeName, "parent", htbRootHandle,
+			"protocol", "all", "prio", "1", "handle", filter.handle, "basic")
+		delCmd.SysProcAttr = &syscall.SysProcAttr{
+			AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
 		}
-	}
+		delCmd.Run() // Best effort
 
-	// Delete child qdisc (fq_codel) before deleting the class
-	qdiscCmd := exec.Command("tc", "qdisc", "del", "dev", bridgeName, "parent", fullClassID)
-	qdiscCmd.SysProcAttr = &syscall.SysProcAttr{
-		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
-	}
-	qdiscCmd.Run() // Best effort - may not exist
+		if _, ok := deletedClasses[filter.flowID]; ok {
+			continue
+		}
+		deletedClasses[filter.flowID] = struct{}{}
 
-	// Delete the class
-	cmd := exec.Command("tc", "class", "del", "dev", bridgeName, "classid", fullClassID)
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+		qdiscCmd := exec.Command("tc", "qdisc", "del", "dev", bridgeName, "parent", filter.flowID)
+		qdiscCmd.SysProcAttr = &syscall.SysProcAttr{
+			AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+		}
+		qdiscCmd.Run() // Best effort - may not exist
+
+		cmd := exec.Command("tc", "class", "del", "dev", bridgeName, "classid", filter.flowID)
+		cmd.SysProcAttr = &syscall.SysProcAttr{
+			AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+		}
+		cmd.Run() // Best effort - class may not exist
 	}
-	// Ignore errors - class may not exist
-	cmd.Run()
 
 	return nil
 }
@@ -868,16 +915,15 @@ func deriveClassID(tapName string) string {
 }
 
 // deleteTAPDevice removes TAP device and its associated HTB class on the bridge.
-// If classID is non-empty, it is used for removeVMClass; otherwise falls back to deriveClassID.
-func (m *manager) deleteTAPDevice(tapName, classID string) error {
-	// Remove HTB class from bridge before deleting TAP
-	m.removeVMClass(m.config.Network.BridgeName, tapName, classID)
-
+func (m *manager) deleteTAPDevice(tapName string) error {
 	link, err := netlink.LinkByName(tapName)
 	if err != nil {
 		// TAP doesn't exist, nothing to do
 		return nil
 	}
+
+	// Remove HTB class from bridge before deleting TAP
+	m.removeVMClass(m.config.Network.BridgeName, link.Attrs().Index)
 
 	if err := netlink.LinkDel(link); err != nil {
 		return fmt.Errorf("delete TAP device: %w", err)
@@ -991,8 +1037,8 @@ func (m *manager) CleanupOrphanedTAPs(ctx context.Context, preserveInstanceIDs [
 			}
 		}
 
-		// Orphaned TAP - delete it (no stored classID available, falls back to deriveClassID)
-		if err := m.deleteTAPDeviceSerialized(name, ""); err != nil {
+		// Orphaned TAP - delete it by tc filters anchored to the TAP ifindex.
+		if err := m.deleteTAPDeviceSerialized(name); err != nil {
 			log.WarnContext(ctx, "failed to delete orphaned TAP", "tap", name, "error", err)
 			continue
 		}
