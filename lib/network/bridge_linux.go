@@ -511,7 +511,7 @@ func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName strin
 			attribute.String("operation", "delete_existing"),
 			attribute.String("tap", tapName),
 		)
-		err := m.deleteTAPDeviceSerialized(tapName)
+		err := m.deleteTAPDeviceSerialized(ctx, tapName)
 		deleteEnd(err)
 		if err != nil {
 			return fmt.Errorf("delete existing TAP: %w", err)
@@ -928,6 +928,9 @@ func countBridgeHTBClasses(classes []string) int64 {
 func (m *manager) bridgeHTBClassCount(ctx context.Context) (int64, error) {
 	bridgeName := m.config.Network.BridgeName
 	cmd := exec.CommandContext(ctx, "tc", "class", "show", "dev", bridgeName)
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+	}
 	output, err := cmd.Output()
 	if err != nil {
 		return 0, fmt.Errorf("tc class show: %w", err)
@@ -988,14 +991,14 @@ func planOrphanedBridgeTC(liveTapIndexes map[int]bool, filters []bridgeFilter, c
 }
 
 // removeVMClass removes bridge tc state proven to belong to a TAP.
-func (m *manager) removeVMClass(bridgeName string, tapIndex int) error {
+func (m *manager) removeVMClass(ctx context.Context, bridgeName string, tapIndex int) error {
 	if tapIndex <= 0 {
 		return nil
 	}
 
 	filters, err := listBridgeFilters(bridgeName)
 	if err != nil {
-		logger.FromContext(context.Background()).ErrorContext(context.Background(),
+		logger.FromContext(ctx).ErrorContext(ctx,
 			"failed to list bridge filters for TAP tc cleanup",
 			"bridge", bridgeName,
 			"tap_ifindex", tapIndex,
@@ -1039,7 +1042,7 @@ func deriveClassID(tapName string) string {
 }
 
 // deleteTAPDevice removes TAP device and its associated HTB class on the bridge.
-func (m *manager) deleteTAPDevice(tapName string) error {
+func (m *manager) deleteTAPDevice(ctx context.Context, tapName string) error {
 	link, err := netlink.LinkByName(tapName)
 	if err != nil {
 		// TAP doesn't exist, nothing to do
@@ -1047,7 +1050,7 @@ func (m *manager) deleteTAPDevice(tapName string) error {
 	}
 
 	// Remove HTB class from bridge before deleting TAP
-	m.removeVMClass(m.config.Network.BridgeName, link.Attrs().Index)
+	m.removeVMClass(ctx, m.config.Network.BridgeName, link.Attrs().Index)
 
 	if err := netlink.LinkDel(link); err != nil {
 		return fmt.Errorf("delete TAP device: %w", err)
@@ -1162,7 +1165,7 @@ func (m *manager) CleanupOrphanedTAPs(ctx context.Context, preserveInstanceIDs [
 		}
 
 		// Orphaned TAP - delete it by tc filters anchored to the TAP ifindex.
-		if err := m.deleteTAPDeviceSerialized(name); err != nil {
+		if err := m.deleteTAPDeviceSerialized(ctx, name); err != nil {
 			log.WarnContext(ctx, "failed to delete orphaned TAP", "tap", name, "error", err)
 			continue
 		}
