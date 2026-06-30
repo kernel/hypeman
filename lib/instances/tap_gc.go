@@ -63,10 +63,12 @@ func (m *manager) reconcileTAPs(ctx context.Context) {
 		// CleanupOrphanedTAPs short-circuits on empty preserve set to avoid
 		// clobbering TAPs from concurrent hypeman processes/tests. Mirror that here
 		// rather than calling it with an empty slice.
-		log.DebugContext(ctx, "TAP GC: no preserve candidates, skipping pass")
-		return
-	}
-	if deleted := m.networkManager.CleanupOrphanedTAPs(ctx, preserve, tapGCMinAge); deleted > 0 {
+		log.DebugContext(ctx, "TAP GC: no preserve candidates, skipping TAP pass")
+	} else if deleted := m.networkManager.CleanupOrphanedTAPs(ctx, preserve, tapGCMinAge); deleted > 0 {
 		log.InfoContext(ctx, "TAP GC: cleaned up orphaned TAP devices", "count", deleted)
+	}
+
+	if deleted := m.networkManager.CleanupOrphanedClasses(ctx); deleted > 0 {
+		log.InfoContext(ctx, "TAP GC: cleaned up orphaned tc filters/classes", "count", deleted)
 	}
 }

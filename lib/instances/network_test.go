@@ -65,18 +65,20 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 	t.Log("Initializing network...")
 	err = manager.networkManager.Initialize(ctx, nil)
 	require.NoError(t, err)
+	require.NoError(t, manager.networkManager.SetupHTB(ctx, 100*1024*1024))
 	t.Log("Network initialized")
 
 	// Create instance with nginx:alpine and default network
 	t.Log("Creating instance with default network...")
 	inst, err := manager.CreateInstance(ctx, CreateInstanceRequest{
-		Name:           "test-net-instance",
-		Image:          integrationTestImageRef(t, "docker.io/library/nginx:alpine"),
-		Size:           2 * 1024 * 1024 * 1024, // 2GB (needs extra room for initrd with NVIDIA libs)
-		HotplugSize:    512 * 1024 * 1024,
-		OverlaySize:    5 * 1024 * 1024 * 1024,
-		Vcpus:          1,
-		NetworkEnabled: true,
+		Name:                   "test-net-instance",
+		Image:                  integrationTestImageRef(t, "docker.io/library/nginx:alpine"),
+		Size:                   2 * 1024 * 1024 * 1024, // 2GB (needs extra room for initrd with NVIDIA libs)
+		HotplugSize:            512 * 1024 * 1024,
+		OverlaySize:            5 * 1024 * 1024 * 1024,
+		Vcpus:                  1,
+		NetworkEnabled:         true,
+		NetworkBandwidthUpload: 1024 * 1024,
 		HealthCheck: &healthcheck.Policy{
 			Type:             healthcheck.TypeHTTP,
 			Interval:         "1s",
@@ -126,6 +128,18 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 	require.NoError(t, err)
 	_, isBridge := master.(*netlink.Bridge)
 	assert.True(t, isBridge, "TAP should be attached to a bridge")
+	bridgeName := master.Attrs().Name
+
+	t.Log("Verifying orphaned bridge tc cleanup preserves live TAP state...")
+	liveFlowID := waitForUploadFlowID(t, ctx, manager, inst.Id, bridgeName)
+	require.True(t, bridgeClassExists(t, bridgeName, liveFlowID), "live upload class should exist before cleanup")
+	staleFlowID := createStaleBridgeTCForTest(t, bridgeName)
+	deletedTC := manager.networkManager.CleanupOrphanedClasses(ctx)
+	require.GreaterOrEqual(t, deletedTC, 2, "expected stale filter and class to be deleted")
+	assert.True(t, bridgeFilterExistsForFlowID(t, bridgeName, liveFlowID), "live upload filter should remain")
+	assert.True(t, bridgeClassExists(t, bridgeName, liveFlowID), "live upload class should remain")
+	assert.False(t, bridgeFilterExistsForFlowID(t, bridgeName, staleFlowID), "stale upload filter should be deleted")
+	assert.False(t, bridgeClassExists(t, bridgeName, staleFlowID), "stale upload class should be deleted")
 
 	// Wait for nginx to start
 	t.Log("Waiting for nginx to start...")
@@ -299,6 +313,137 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 	t.Log("Network allocation released after delete")
 
 	t.Log("Network integration test complete!")
+}
+
+func tcForTest(t *testing.T) string {
+	t.Helper()
+	if path, err := exec.LookPath("tc"); err == nil {
+		return path
+	}
+	return "/usr/sbin/tc"
+}
+
+func runTCForTest(t *testing.T, args ...string) string {
+	t.Helper()
+	output, err := exec.Command(tcForTest(t), args...).CombinedOutput()
+	require.NoError(t, err, "tc %s output: %s", strings.Join(args, " "), string(output))
+	return string(output)
+}
+
+func bridgeClassesForTest(t *testing.T, bridgeName string) []string {
+	t.Helper()
+	output := runTCForTest(t, "class", "show", "dev", bridgeName)
+	var classes []string
+	for _, line := range strings.Split(output, "\n") {
+		if !strings.Contains(line, "class htb 1:") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) >= 3 {
+			classes = append(classes, fields[2])
+		}
+	}
+	return classes
+}
+
+func bridgeClassExists(t *testing.T, bridgeName, classID string) bool {
+	t.Helper()
+	for _, class := range bridgeClassesForTest(t, bridgeName) {
+		if class == classID {
+			return true
+		}
+	}
+	return false
+}
+
+func bridgeFilterExistsForFlowID(t *testing.T, bridgeName, flowID string) bool {
+	t.Helper()
+	return len(bridgeFilterHandlesForFlowID(t, bridgeName, flowID)) > 0
+}
+
+func bridgeFilterHandlesForFlowID(t *testing.T, bridgeName, flowID string) []string {
+	t.Helper()
+	output := runTCForTest(t, "filter", "show", "dev", bridgeName, "parent", "1:")
+	var handles []string
+	for _, line := range strings.Split(output, "\n") {
+		if !strings.HasPrefix(line, "filter ") {
+			continue
+		}
+		fields := strings.Fields(line)
+		handle, gotFlowID := "", ""
+		for i, field := range fields {
+			if i+1 >= len(fields) {
+				break
+			}
+			switch field {
+			case "handle":
+				handle = fields[i+1]
+			case "flowid":
+				gotFlowID = fields[i+1]
+			}
+		}
+		if handle != "" && gotFlowID == flowID {
+			handles = append(handles, handle)
+		}
+	}
+	return handles
+}
+
+func waitForUploadFlowID(t *testing.T, ctx context.Context, manager *manager, instanceID, bridgeName string) string {
+	t.Helper()
+	var flowID string
+	require.Eventually(t, func() bool {
+		alloc, err := manager.networkManager.GetAllocation(ctx, instanceID)
+		if err != nil || alloc == nil || alloc.ClassID == "" {
+			return false
+		}
+		flowID = "1:" + alloc.ClassID
+		return bridgeClassExists(t, bridgeName, flowID) && bridgeFilterExistsForFlowID(t, bridgeName, flowID)
+	}, integrationTestTimeout(5*time.Second), 100*time.Millisecond)
+	return flowID
+}
+
+func createStaleBridgeTCForTest(t *testing.T, bridgeName string) string {
+	t.Helper()
+	used := make(map[string]bool)
+	for _, classID := range bridgeClassesForTest(t, bridgeName) {
+		used[classID] = true
+	}
+
+	staleFlowID := ""
+	for id := 0xff00; id <= 0xffff; id++ {
+		candidate := fmt.Sprintf("1:%04x", id)
+		if !used[candidate] {
+			staleFlowID = candidate
+			break
+		}
+	}
+	require.NotEmpty(t, staleFlowID, "expected an unused test class id")
+
+	t.Cleanup(func() {
+		bestEffortDeleteBridgeFiltersForFlowID(t, bridgeName, staleFlowID)
+		_ = exec.Command(tcForTest(t), "qdisc", "del", "dev", bridgeName, "parent", staleFlowID).Run()
+		_ = exec.Command(tcForTest(t), "class", "del", "dev", bridgeName, "classid", staleFlowID).Run()
+	})
+
+	runTCForTest(t, "class", "add", "dev", bridgeName, "parent", "1:1",
+		"classid", staleFlowID, "htb", "rate", "1mbit", "ceil", "1mbit")
+	runTCForTest(t, "qdisc", "add", "dev", bridgeName, "parent", staleFlowID, "fq_codel")
+	runTCForTest(t, "filter", "add", "dev", bridgeName, "parent", "1:",
+		"protocol", "all", "prio", "1", "basic",
+		"match", "meta(rt_iif eq 1)", "flowid", staleFlowID)
+
+	require.True(t, bridgeClassExists(t, bridgeName, staleFlowID), "staged stale class should exist")
+	require.True(t, bridgeFilterExistsForFlowID(t, bridgeName, staleFlowID), "staged stale filter should exist")
+	return staleFlowID
+}
+
+func bestEffortDeleteBridgeFiltersForFlowID(t *testing.T, bridgeName, flowID string) {
+	t.Helper()
+	for _, handle := range bridgeFilterHandlesForFlowID(t, bridgeName, flowID) {
+		_ = exec.Command(tcForTest(t), "filter", "del", "dev", bridgeName, "parent", "1:",
+			"protocol", "all", "prio", "1", "handle", handle, "basic").Run()
+	}
 }
 
 func startRestartPolicyControllerForTest(t *testing.T, ctx context.Context, manager *manager) {
