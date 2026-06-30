@@ -625,7 +625,7 @@ func (m *manager) ensureSnapshotNameAvailable(sourceInstanceID, snapshotName str
 }
 
 func (m *manager) ensureInstanceNameAvailableForSnapshotFork(ctx context.Context, name string, networkEnabled bool) error {
-	existsByMetadata, err := m.instanceNameExists(name)
+	existsByMetadata, err := m.instanceNameExists(ctx, name, "snapshot_create")
 	if err != nil {
 		return fmt.Errorf("check instance name availability: %w", err)
 	}

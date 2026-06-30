@@ -19,6 +19,7 @@ import (
 	restartpolicy "github.com/kernel/hypeman/lib/restart-policy"
 	"github.com/nrednav/cuid2"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"gvisor.dev/gvisor/pkg/cleanup"
 )
 
@@ -264,7 +265,7 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 		return nil, false, err
 	}
 
-	existsByMetadata, err := m.instanceNameExists(req.Name)
+	existsByMetadata, err := m.instanceNameExists(ctx, req.Name, "fork_precheck")
 	if err != nil {
 		return nil, false, fmt.Errorf("check instance name availability: %w", err)
 	}
@@ -422,31 +423,51 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 }
 
 func (m *manager) saveForkMetadata(ctx context.Context, meta *metadata) error {
+	ctx, span := m.tracerOrDefault().Start(ctx, "instances.fork_metadata.save",
+		trace.WithAttributes(attribute.String("operation", "save_fork_metadata")),
+	)
+	var retErr error
+	defer func() { finishInstancesSpan(span, retErr) }()
+
+	lockCtx, lockWaitSpan := m.tracerOrDefault().Start(ctx, "instances.fork_metadata.lock_wait",
+		trace.WithAttributes(attribute.String("operation", "fork_metadata_lock_wait")),
+	)
 	m.forkMetadataMu.Lock()
+	finishInstancesSpan(lockWaitSpan, nil)
+
+	holdCtx, lockHoldSpan := m.tracerOrDefault().Start(lockCtx, "instances.fork_metadata.lock_hold",
+		trace.WithAttributes(attribute.String("operation", "fork_metadata_lock_hold")),
+	)
 	defer m.forkMetadataMu.Unlock()
+	defer func() { finishInstancesSpan(lockHoldSpan, retErr) }()
 
 	// Earlier name checks are advisory so callers can fail before doing fork
 	// work when possible. This is the serialized admission point for fork
 	// metadata, so concurrent forks re-check names immediately before save.
 	name := meta.Name
-	existsByMetadata, err := m.instanceNameExists(name)
+	existsByMetadata, err := m.instanceNameExists(holdCtx, name, "fork_admission")
 	if err != nil {
-		return fmt.Errorf("check instance name availability: %w", err)
+		retErr = fmt.Errorf("check instance name availability: %w", err)
+		return retErr
 	}
 	if existsByMetadata {
-		return fmt.Errorf("%w: instance name '%s' already exists", ErrAlreadyExists, name)
+		retErr = fmt.Errorf("%w: instance name '%s' already exists", ErrAlreadyExists, name)
+		return retErr
 	}
 	if meta.NetworkEnabled {
-		exists, err := m.networkManager.NameExists(ctx, name, "")
+		exists, err := m.networkManager.NameExists(holdCtx, name, "")
 		if err != nil {
-			return fmt.Errorf("check instance name availability: %w", err)
+			retErr = fmt.Errorf("check instance name availability: %w", err)
+			return retErr
 		}
 		if exists {
-			return fmt.Errorf("%w: instance name '%s' already exists in network", ErrAlreadyExists, name)
+			retErr = fmt.Errorf("%w: instance name '%s' already exists in network", ErrAlreadyExists, name)
+			return retErr
 		}
 	}
 	if err := m.saveMetadata(meta); err != nil {
-		return fmt.Errorf("save fork metadata: %w", err)
+		retErr = fmt.Errorf("save fork metadata: %w", err)
+		return retErr
 	}
 	return nil
 }

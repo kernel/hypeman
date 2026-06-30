@@ -1,13 +1,46 @@
 package instances
 
 import (
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestShutdownHypervisorRemovesControlSocket(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("/tmp", "hypeman-standby-socket-")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = os.RemoveAll(tmpDir)
+	})
+	socketPath := filepath.Join(tmpDir, "noop.sock")
+	listener, err := net.Listen("unix", socketPath)
+	require.NoError(t, err)
+	require.NoError(t, listener.Close())
+
+	lifecycleNoopHypervisorStates.Store(socketPath, hypervisor.StateRunning)
+	t.Cleanup(func() {
+		lifecycleNoopHypervisorStates.Delete(socketPath)
+	})
+
+	m := &manager{}
+	inst := &Instance{
+		StoredMetadata: StoredMetadata{
+			Id:             "standby-socket-cleanup",
+			SocketPath:     socketPath,
+			HypervisorType: lifecycleNoopHypervisorType,
+		},
+	}
+
+	require.NoError(t, m.shutdownHypervisor(t.Context(), inst))
+
+	_, err = os.Stat(socketPath)
+	require.True(t, os.IsNotExist(err), "shutdown should remove the hypervisor control socket")
+}
 
 func TestDiscardPromotedRetainedSnapshotTargetAfterSnapshotError(t *testing.T) {
 	t.Parallel()
