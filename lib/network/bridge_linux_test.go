@@ -51,9 +51,8 @@ func TestPlanOrphanedBridgeTC(t *testing.T) {
 	assert.True(t, safe)
 	assert.Equal(t, []bridgeFilter{
 		{handle: "0x2", flowID: "1:b001", rtIif: 57},
-		{handle: "0x3", flowID: "1:000c", rtIif: -1},
 	}, staleFilters)
-	assert.Equal(t, []string{"1:b001", "1:000c", "1:9999"}, staleClasses)
+	assert.Equal(t, []string{"1:b001", "1:9999"}, staleClasses)
 }
 
 func TestPlanOrphanedBridgeTCBailsWhenNoRTIIFParses(t *testing.T) {

@@ -950,15 +950,21 @@ func planOrphanedBridgeTC(liveTapIndexes map[int]bool, filters []bridgeFilter, c
 		return nil, nil, false
 	}
 
-	liveClassIDs := make(map[string]bool)
+	protectedClassIDs := make(map[string]bool)
 	staleFilters := make([]bridgeFilter, 0)
 	for _, filter := range filters {
 		if filter.handle == "" || filter.flowID == "" {
 			continue
 		}
+		if filter.rtIif < 0 {
+			if classID, ok := minorClassID(filter.flowID); ok {
+				protectedClassIDs[classID] = true
+			}
+			continue
+		}
 		if liveTapIndexes[filter.rtIif] {
 			if classID, ok := minorClassID(filter.flowID); ok {
-				liveClassIDs[classID] = true
+				protectedClassIDs[classID] = true
 			}
 			continue
 		}
@@ -974,7 +980,7 @@ func planOrphanedBridgeTC(liveTapIndexes map[int]bool, filters []bridgeFilter, c
 		if !ok {
 			continue
 		}
-		if !liveClassIDs[classID] {
+		if !protectedClassIDs[classID] {
 			staleClasses = append(staleClasses, fullClassID)
 		}
 	}
