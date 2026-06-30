@@ -65,6 +65,7 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 	t.Log("Initializing network...")
 	err = manager.networkManager.Initialize(ctx, nil)
 	require.NoError(t, err)
+	require.NoError(t, manager.networkManager.SetupHTB(ctx, 100*1024*1024))
 	t.Log("Network initialized")
 
 	// Create instance with nginx:alpine and default network
@@ -126,6 +127,18 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 	require.NoError(t, err)
 	_, isBridge := master.(*netlink.Bridge)
 	assert.True(t, isBridge, "TAP should be attached to a bridge")
+	bridgeName := master.Attrs().Name
+
+	t.Log("Verifying orphaned bridge tc cleanup preserves live TAP state...")
+	liveFlowID := createBridgeTCForTest(t, bridgeName, tap.Attrs().Index)
+	require.True(t, bridgeClassExists(t, bridgeName, liveFlowID), "live bridge tc class should exist before cleanup")
+	staleFlowID := createBridgeTCForTest(t, bridgeName, 1)
+	deletedTC := manager.networkManager.CleanupOrphanedClasses(ctx)
+	require.GreaterOrEqual(t, deletedTC, 2, "expected stale filter and class to be deleted")
+	assert.True(t, bridgeFilterExistsForFlowID(t, bridgeName, liveFlowID), "live bridge tc filter should remain")
+	assert.True(t, bridgeClassExists(t, bridgeName, liveFlowID), "live bridge tc class should remain")
+	assert.False(t, bridgeFilterExistsForFlowID(t, bridgeName, staleFlowID), "stale bridge tc filter should be deleted")
+	assert.False(t, bridgeClassExists(t, bridgeName, staleFlowID), "stale bridge tc class should be deleted")
 
 	// Wait for nginx to start
 	t.Log("Waiting for nginx to start...")
@@ -299,6 +312,123 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 	t.Log("Network allocation released after delete")
 
 	t.Log("Network integration test complete!")
+}
+
+func tcForTest(t *testing.T) string {
+	t.Helper()
+	if path, err := exec.LookPath("tc"); err == nil {
+		return path
+	}
+	return "/usr/sbin/tc"
+}
+
+func runTCForTest(t *testing.T, args ...string) string {
+	t.Helper()
+	output, err := exec.Command(tcForTest(t), args...).CombinedOutput()
+	require.NoError(t, err, "tc %s output: %s", strings.Join(args, " "), string(output))
+	return string(output)
+}
+
+func bridgeClassesForTest(t *testing.T, bridgeName string) []string {
+	t.Helper()
+	output := runTCForTest(t, "class", "show", "dev", bridgeName)
+	var classes []string
+	for _, line := range strings.Split(output, "\n") {
+		if !strings.Contains(line, "class htb 1:") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) >= 3 {
+			classes = append(classes, fields[2])
+		}
+	}
+	return classes
+}
+
+func bridgeClassExists(t *testing.T, bridgeName, classID string) bool {
+	t.Helper()
+	for _, class := range bridgeClassesForTest(t, bridgeName) {
+		if class == classID {
+			return true
+		}
+	}
+	return false
+}
+
+func bridgeFilterExistsForFlowID(t *testing.T, bridgeName, flowID string) bool {
+	t.Helper()
+	return len(bridgeFilterHandlesForFlowID(t, bridgeName, flowID)) > 0
+}
+
+func bridgeFilterHandlesForFlowID(t *testing.T, bridgeName, flowID string) []string {
+	t.Helper()
+	output := runTCForTest(t, "filter", "show", "dev", bridgeName, "parent", "1:")
+	var handles []string
+	for _, line := range strings.Split(output, "\n") {
+		if !strings.HasPrefix(line, "filter ") {
+			continue
+		}
+		fields := strings.Fields(line)
+		handle, gotFlowID := "", ""
+		for i, field := range fields {
+			if i+1 >= len(fields) {
+				break
+			}
+			switch field {
+			case "handle":
+				handle = fields[i+1]
+			case "flowid":
+				gotFlowID = fields[i+1]
+			}
+		}
+		if handle != "" && gotFlowID == flowID {
+			handles = append(handles, handle)
+		}
+	}
+	return handles
+}
+
+func createBridgeTCForTest(t *testing.T, bridgeName string, rtIif int) string {
+	t.Helper()
+	used := make(map[string]bool)
+	for _, classID := range bridgeClassesForTest(t, bridgeName) {
+		used[classID] = true
+	}
+
+	flowID := ""
+	for id := 0xff00; id <= 0xffff; id++ {
+		candidate := fmt.Sprintf("1:%04x", id)
+		if !used[candidate] {
+			flowID = candidate
+			break
+		}
+	}
+	require.NotEmpty(t, flowID, "expected an unused test class id")
+
+	t.Cleanup(func() {
+		bestEffortDeleteBridgeFiltersForFlowID(t, bridgeName, flowID)
+		_ = exec.Command(tcForTest(t), "qdisc", "del", "dev", bridgeName, "parent", flowID).Run()
+		_ = exec.Command(tcForTest(t), "class", "del", "dev", bridgeName, "classid", flowID).Run()
+	})
+
+	runTCForTest(t, "class", "add", "dev", bridgeName, "parent", "1:1",
+		"classid", flowID, "htb", "rate", "1mbit", "ceil", "1mbit")
+	runTCForTest(t, "qdisc", "add", "dev", bridgeName, "parent", flowID, "fq_codel")
+	runTCForTest(t, "filter", "add", "dev", bridgeName, "parent", "1:",
+		"protocol", "all", "prio", "1", "basic",
+		"match", fmt.Sprintf("meta(rt_iif eq %d)", rtIif), "flowid", flowID)
+
+	require.True(t, bridgeClassExists(t, bridgeName, flowID), "staged bridge tc class should exist")
+	require.True(t, bridgeFilterExistsForFlowID(t, bridgeName, flowID), "staged bridge tc filter should exist")
+	return flowID
+}
+
+func bestEffortDeleteBridgeFiltersForFlowID(t *testing.T, bridgeName, flowID string) {
+	t.Helper()
+	for _, handle := range bridgeFilterHandlesForFlowID(t, bridgeName, flowID) {
+		_ = exec.Command(tcForTest(t), "filter", "del", "dev", bridgeName, "parent", "1:",
+			"protocol", "all", "prio", "1", "handle", handle, "basic").Run()
+	}
 }
 
 func startRestartPolicyControllerForTest(t *testing.T, ctx context.Context, manager *manager) {

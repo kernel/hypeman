@@ -62,7 +62,7 @@ func (m *manager) CreateAllocation(ctx context.Context, req AllocateRequest) (*N
 	err = m.createTAPDevice(tapCtx, netConfig.TAPDevice, network.Bridge, network.Isolated)
 	tapSpanEnd(err)
 	if err != nil {
-		cleanupErr := m.deleteTAPDeviceSerialized(netConfig.TAPDevice, "")
+		cleanupErr := m.deleteTAPDeviceForInstanceSerialized(ctx, req.InstanceID, netConfig.TAPDevice)
 		if cleanupErr != nil {
 			log.WarnContext(ctx, "failed to clean up TAP after create failure", "tap", netConfig.TAPDevice, "error", cleanupErr)
 		}
@@ -146,7 +146,7 @@ func (m *manager) RecreateAllocation(ctx context.Context, instanceID string, dow
 	err = m.createTAPDevice(tapCtx, alloc.TAPDevice, network.Bridge, network.Isolated)
 	tapSpanEnd(err)
 	if err != nil {
-		_ = m.deleteTAPDeviceSerialized(alloc.TAPDevice, alloc.ClassID)
+		_ = m.deleteTAPDeviceForInstanceSerialized(ctx, instanceID, alloc.TAPDevice)
 		return fmt.Errorf("create TAP device: %w", err)
 	}
 	m.recordTAPOperation(ctx, "create")
@@ -386,10 +386,10 @@ func (m *manager) ReleaseAllocation(ctx context.Context, alloc *Allocation) erro
 	}
 	m.forgetPendingAllocation(alloc.InstanceID)
 
-	// 1. Delete TAP device (best effort), using stored class ID for correct HTB cleanup.
+	// 1. Delete TAP device (best effort), using the TAP's live tc filter for HTB cleanup.
 	// Serialize with async tc setup so queued rate-limit work cannot race with
 	// class removal and leave stale bridge state behind.
-	if err := m.deleteTAPDeviceForInstanceSerialized(alloc.InstanceID, alloc.TAPDevice, alloc.ClassID); err != nil {
+	if err := m.deleteTAPDeviceForInstanceSerialized(ctx, alloc.InstanceID, alloc.TAPDevice); err != nil {
 		log.WarnContext(ctx, "failed to delete TAP device", "tap", alloc.TAPDevice, "error", err)
 	} else {
 		m.recordTAPOperation(ctx, "delete")
@@ -403,26 +403,20 @@ func (m *manager) ReleaseAllocation(ctx context.Context, alloc *Allocation) erro
 	return nil
 }
 
-func (m *manager) deleteTAPDeviceSerialized(tapName, classID string) error {
+func (m *manager) deleteTAPDeviceSerialized(ctx context.Context, tapName string) error {
 	m.tcMu.Lock()
 	defer m.tcMu.Unlock()
-	return m.deleteTAPDevice(tapName, classID)
+	return m.deleteTAPDevice(ctx, tapName)
 }
 
-func (m *manager) deleteTAPDeviceForInstanceSerialized(instanceID, tapName, classID string) error {
+func (m *manager) deleteTAPDeviceForInstanceSerialized(ctx context.Context, instanceID, tapName string) error {
 	m.tcMu.Lock()
 	defer m.tcMu.Unlock()
-	return m.deleteTAPDevice(tapName, m.classIDForDelete(instanceID, classID))
-}
-
-func (m *manager) classIDForDelete(instanceID, fallback string) string {
-	if instanceID == "" {
-		return fallback
+	if err := m.deleteTAPDevice(ctx, tapName); err != nil {
+		return err
 	}
-	if classID := m.loadClassID(instanceID); classID != "" {
-		return classID
-	}
-	return fallback
+	m.clearClassID(instanceID)
+	return nil
 }
 
 // getOrInitDefaultNetwork resolves the default network and self-heals by running

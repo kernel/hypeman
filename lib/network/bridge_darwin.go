@@ -50,7 +50,7 @@ func (m *manager) addVMClass(ctx context.Context, bridgeName, tapName string, ra
 }
 
 // deleteTAPDevice is a no-op on macOS as we use NAT networking.
-func (m *manager) deleteTAPDevice(tapName, classID string) error {
+func (m *manager) deleteTAPDevice(ctx context.Context, tapName string) error {
 	return nil
 }
 
@@ -78,4 +78,8 @@ func (m *manager) CleanupOrphanedTAPs(ctx context.Context, preserveInstanceIDs [
 // CleanupOrphanedClasses is a no-op on macOS as we don't use traffic control.
 func (m *manager) CleanupOrphanedClasses(ctx context.Context) int {
 	return 0
+}
+
+func (m *manager) bridgeHTBClassCount(ctx context.Context) (int64, error) {
+	return 0, nil
 }
