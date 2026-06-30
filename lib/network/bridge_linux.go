@@ -989,6 +989,12 @@ func (m *manager) removeVMClass(bridgeName string, tapIndex int) error {
 
 	filters, err := listBridgeFilters(bridgeName)
 	if err != nil {
+		logger.FromContext(context.Background()).ErrorContext(context.Background(),
+			"failed to list bridge filters for TAP tc cleanup",
+			"bridge", bridgeName,
+			"tap_ifindex", tapIndex,
+			"error", err,
+		)
 		return nil
 	}
 
