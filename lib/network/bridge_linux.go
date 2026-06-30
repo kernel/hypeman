@@ -914,6 +914,27 @@ func parseBridgeClasses(output string) []string {
 	return classes
 }
 
+func countBridgeHTBClasses(classes []string) int64 {
+	var count int64
+	for _, class := range classes {
+		if class == htbRootClassID {
+			continue
+		}
+		count++
+	}
+	return count
+}
+
+func (m *manager) bridgeHTBClassCount(ctx context.Context) (int64, error) {
+	bridgeName := m.config.Network.BridgeName
+	cmd := exec.CommandContext(ctx, "tc", "class", "show", "dev", bridgeName)
+	output, err := cmd.Output()
+	if err != nil {
+		return 0, fmt.Errorf("tc class show: %w", err)
+	}
+	return countBridgeHTBClasses(parseBridgeClasses(string(output))), nil
+}
+
 func planOrphanedBridgeTC(liveTapIndexes map[int]bool, filters []bridgeFilter, classes []string) ([]bridgeFilter, []string, bool) {
 	candidates, parsed := 0, 0
 	for _, filter := range filters {

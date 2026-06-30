@@ -28,6 +28,15 @@ func TestParseBridgeFiltersEmpty(t *testing.T) {
 	assert.Empty(t, parseBridgeFilters(""))
 }
 
+func TestCountBridgeHTBClassesExcludesRoot(t *testing.T) {
+	output := `class htb 1:1 root rate 100Mbit ceil 100Mbit burst 1600b cburst 1600b
+class htb 1:a3f2 parent 1:1 leaf e001: prio 1 rate 1Mbit ceil 1Mbit burst 1600b cburst 1600b
+class htb 1:b001 parent 1:1 leaf e002: prio 1 rate 1Mbit ceil 1Mbit burst 1600b cburst 1600b
+`
+
+	assert.Equal(t, int64(2), countBridgeHTBClasses(parseBridgeClasses(output)))
+}
+
 func TestPlanOrphanedBridgeTC(t *testing.T) {
 	staleFilters, staleClasses, safe := planOrphanedBridgeTC(
 		map[int]bool{42: true},

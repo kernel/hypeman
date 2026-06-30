@@ -79,3 +79,7 @@ func (m *manager) CleanupOrphanedTAPs(ctx context.Context, preserveInstanceIDs [
 func (m *manager) CleanupOrphanedClasses(ctx context.Context) int {
 	return 0
 }
+
+func (m *manager) bridgeHTBClassCount(ctx context.Context) (int64, error) {
+	return 0, nil
+}

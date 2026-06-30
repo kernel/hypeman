@@ -32,16 +32,29 @@ func newNetworkMetrics(meter metric.Meter, m *manager) (*Metrics, error) {
 		return nil, err
 	}
 
+	bridgeHTBClassCount, err := meter.Int64ObservableGauge(
+		"hypeman_network_bridge_htb_class_count",
+		metric.WithDescription("Current number of non-root HTB classes on the network bridge"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
 	_, err = meter.RegisterCallback(
 		func(ctx context.Context, o metric.Observer) error {
 			allocs, err := m.ListAllocations(ctx)
-			if err != nil {
-				return nil
+			if err == nil {
+				o.ObserveInt64(allocationsTotal, int64(len(allocs)))
 			}
-			o.ObserveInt64(allocationsTotal, int64(len(allocs)))
+
+			classCount, err := m.bridgeHTBClassCount(ctx)
+			if err == nil {
+				o.ObserveInt64(bridgeHTBClassCount, classCount)
+			}
 			return nil
 		},
 		allocationsTotal,
+		bridgeHTBClassCount,
 	)
 	if err != nil {
 		return nil, err
