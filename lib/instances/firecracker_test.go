@@ -762,21 +762,24 @@ func TestFCUFFDOneShotLifecycle(t *testing.T) {
 	writeGuestFile(t, ctx, parent, "/root/uffd-lifecycle/parent-after-uffd", "parent-disk")
 	writeGuestFile(t, ctx, parent, "/dev/shm/uffd-lifecycle/parent-after-uffd", "parent-memory")
 	parentSnapshotMemoryPath := filepath.Join(p.InstanceSnapshotLatest(parentID), "memory")
-	require.NoFileExists(t, parentSnapshotMemoryPath, "UFFD snapshot fanout should defer the memory clone while running")
+	parentBaseMemoryPath := filepath.Join(p.InstanceSnapshotBase(parentID), "memory")
+	require.FileExists(t, parentBaseMemoryPath, "UFFD snapshot fanout should clone a fork-local mem-file (retained as diff base after restore)")
+	requireDifferentInode(t, snapshotMemoryPath, parentBaseMemoryPath)
 	parentMeta, err := mgr.loadMetadata(parentID)
 	require.NoError(t, err)
 	require.False(t, parentMeta.StoredMetadata.FirecrackerUseUFFDOnNextRestore)
-	require.Equal(t, snapshotMemoryPath, parentMeta.StoredMetadata.FirecrackerDeferredSnapshotMemoryPath)
 	require.NotEmpty(t, parentMeta.StoredMetadata.FirecrackerUFFDSessionID)
+
+	require.NoError(t, mgr.DeleteSnapshot(ctx, snapshot.Id), "source snapshot must be deletable while a fork is running from it")
+	snapshotDeleted = true
 
 	parent, err = mgr.StandbyInstance(ctx, parentID, StandbyInstanceRequest{})
 	require.NoError(t, err)
 	require.Equal(t, StateStandby, parent.State)
-	require.FileExists(t, parentSnapshotMemoryPath, "standby should materialize a normal file-backed snapshot from the deferred UFFD backing")
+	require.FileExists(t, parentSnapshotMemoryPath, "standby should write a file-backed snapshot onto the fork-local mem-file")
 	parentMeta, err = mgr.loadMetadata(parentID)
 	require.NoError(t, err)
 	require.False(t, parentMeta.StoredMetadata.FirecrackerUseUFFDOnNextRestore)
-	require.Empty(t, parentMeta.StoredMetadata.FirecrackerDeferredSnapshotMemoryPath)
 	require.Empty(t, parentMeta.StoredMetadata.FirecrackerUFFDSessionID)
 
 	parent, err = mgr.RestoreInstance(ctx, parentID)
@@ -789,7 +792,6 @@ func TestFCUFFDOneShotLifecycle(t *testing.T) {
 	parentMeta, err = mgr.loadMetadata(parentID)
 	require.NoError(t, err)
 	require.False(t, parentMeta.StoredMetadata.FirecrackerUseUFFDOnNextRestore)
-	require.Empty(t, parentMeta.StoredMetadata.FirecrackerDeferredSnapshotMemoryPath)
 	require.Empty(t, parentMeta.StoredMetadata.FirecrackerUFFDSessionID)
 	require.FileExists(t, filepath.Join(p.InstanceSnapshotBase(parentID), "memory"), "file-backed resume should retain the standby snapshot as the next diff base")
 
@@ -821,12 +823,12 @@ func TestFCUFFDOneShotLifecycle(t *testing.T) {
 	assertGuestFileAbsent(t, ctx, parent, "/dev/shm/uffd-lifecycle/child-only")
 
 	childSnapshotMemoryPath := filepath.Join(p.InstanceSnapshotLatest(childID), "memory")
-	require.NoFileExists(t, childSnapshotMemoryPath, "running-source child should defer the memory clone while running")
+	childBaseMemoryPath := filepath.Join(p.InstanceSnapshotBase(childID), "memory")
+	require.FileExists(t, childBaseMemoryPath, "running-source child should clone a fork-local mem-file (retained as diff base after restore)")
+	requireDifferentInode(t, filepath.Join(p.InstanceSnapshotBase(parentID), "memory"), childBaseMemoryPath)
 	childMeta, err := mgr.loadMetadata(childID)
 	require.NoError(t, err)
 	require.False(t, childMeta.StoredMetadata.FirecrackerUseUFFDOnNextRestore)
-	require.NotEmpty(t, childMeta.StoredMetadata.FirecrackerDeferredSnapshotMemoryPath)
-	require.FileExists(t, childMeta.StoredMetadata.FirecrackerDeferredSnapshotMemoryPath)
 	require.NotEmpty(t, childMeta.StoredMetadata.FirecrackerUFFDSessionID)
 
 	parent, err = mgr.StandbyInstance(ctx, parentID, StandbyInstanceRequest{})
@@ -836,17 +838,15 @@ func TestFCUFFDOneShotLifecycle(t *testing.T) {
 	require.FileExists(t, parentSnapshotMemoryPath)
 	parentMeta, err = mgr.loadMetadata(parentID)
 	require.NoError(t, err)
-	require.Empty(t, parentMeta.StoredMetadata.FirecrackerDeferredSnapshotMemoryPath)
 	require.Empty(t, parentMeta.StoredMetadata.FirecrackerUFFDSessionID)
 
 	child, err = mgr.StandbyInstance(ctx, childID, StandbyInstanceRequest{})
 	require.NoError(t, err)
 	require.Equal(t, StateStandby, child.State)
-	require.FileExists(t, childSnapshotMemoryPath, "child standby should materialize from its deferred UFFD backing")
+	require.FileExists(t, childSnapshotMemoryPath, "child standby should write a file-backed snapshot onto the fork-local mem-file")
 	childMeta, err = mgr.loadMetadata(childID)
 	require.NoError(t, err)
 	require.False(t, childMeta.StoredMetadata.FirecrackerUseUFFDOnNextRestore)
-	require.Empty(t, childMeta.StoredMetadata.FirecrackerDeferredSnapshotMemoryPath)
 	require.Empty(t, childMeta.StoredMetadata.FirecrackerUFFDSessionID)
 
 	child, err = mgr.RestoreInstance(ctx, childID)
@@ -909,6 +909,15 @@ func requireGuestTmpfs(t *testing.T, ctx context.Context, inst *Instance) {
 	output, exitCode, err := execCommand(ctx, inst, "sh", "-c", "mkdir -p /dev/shm && if ! grep -q ' /dev/shm ' /proc/mounts; then mount -t tmpfs -o size=16m tmpfs /dev/shm; fi && grep -q ' /dev/shm ' /proc/mounts")
 	require.NoError(t, err)
 	require.Equal(t, 0, exitCode, output)
+}
+
+func requireDifferentInode(t *testing.T, pathA, pathB string) {
+	t.Helper()
+	infoA, err := os.Stat(pathA)
+	require.NoError(t, err)
+	infoB, err := os.Stat(pathB)
+	require.NoError(t, err)
+	require.False(t, os.SameFile(infoA, infoB), "%s and %s must not share an inode", pathA, pathB)
 }
 
 func writeGuestFile(t *testing.T, ctx context.Context, inst *Instance, path, contents string) {

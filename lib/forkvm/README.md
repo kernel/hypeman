@@ -59,14 +59,17 @@ instead of reusing the source identity.
 - Network override fields are supplied at snapshot load to bind the fork to its
   own TAP device.
 - Vsock CID remains stable for snapshot-based flows.
+- Fork copies always give the fork its own mem-file (reflink-cloned where the
+  filesystem supports FICLONE, sparse-copied otherwise), so a fork never
+  depends on the source snapshot or source instance after creation. Deleting
+  the source is safe immediately, and the source's later diff snapshots cannot
+  mutate memory a fork reads.
 - When the Firecracker snapshot memory backend is configured as UFFD, UFFD is
   used as a one-shot acceleration for the first restore of a newly forked
-  standby snapshot. The fork initially reuses the source snapshot memory as the
-  pager backing file instead of cloning the large memory file during fanout.
-- That deferred memory clone is paid when the fork later enters standby. Before
-  Firecracker writes the fork's diff snapshot, Hypeman materializes the fork's
-  own `snapshot-latest/memory` file from the original backing memory. After that
-  point the fork has a normal on-disk snapshot base, independent from the source.
+  standby snapshot. The pager serves pages from the fork's own mem-file;
+  because forks inherit the source's snapshot cache key and their mem-files are
+  byte-identical clones, the pager's page cache is shared across all forks of
+  the same snapshot.
 - Subsequent direct restores of that same fork use Firecracker's normal
   file-backed memory backend. If that standby fork is itself forked again, the
   new child gets its own one-shot UFFD restore.

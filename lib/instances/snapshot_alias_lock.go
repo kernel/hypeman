@@ -40,13 +40,12 @@ func copyGuestDirectoryWithAliasReadLock(srcDir, dstDir string) error {
 	})
 }
 
-func (m *manager) copyForkSourceGuestDirectory(ctx context.Context, sourceState State, sourceID string, stored *StoredMetadata, srcDir, dstDir, deferredSnapshotMemoryPath string) error {
+func (m *manager) copyForkSourceGuestDirectory(ctx context.Context, sourceState State, sourceID string, stored *StoredMetadata, srcDir, dstDir string) error {
 	ctx, span := m.tracerOrDefault().Start(ctx, "instances.fork.copy_guest_directory",
 		trace.WithAttributes(
 			attribute.String("operation", "fork_copy_guest_directory"),
 			attribute.String("instance_id", sourceID),
 			attribute.String("source_state", string(sourceState)),
-			attribute.Bool("deferred_snapshot_memory", deferredSnapshotMemoryPath != ""),
 		),
 	)
 	var retErr error
@@ -66,18 +65,12 @@ func (m *manager) copyForkSourceGuestDirectory(ctx context.Context, sourceState 
 		readyDone(nil)
 	}
 
-	copyOptions := forkvm.CopyOptions{}
-	if deferredSnapshotMemoryPath != "" {
-		copyOptions.SkipRelativePaths = map[string]struct{}{firecrackerSnapshotMemoryRelPath: {}}
-	}
-
 	_, cloneDone := m.startLifecycleStep(ctx, "instances.fork.copy_guest_directory.clone",
 		attribute.String("operation", "fork_copy_guest_directory_clone"),
 		attribute.String("instance_id", sourceID),
-		attribute.Bool("deferred_snapshot_memory", deferredSnapshotMemoryPath != ""),
 	)
 	retErr = withSnapshotSourceAliasReadLock(func() error {
-		if err := forkvm.CopyGuestDirectoryWithOptions(srcDir, dstDir, copyOptions); err != nil {
+		if err := forkvm.CopyGuestDirectory(srcDir, dstDir); err != nil {
 			if errors.Is(err, forkvm.ErrSparseCopyUnsupported) {
 				return fmt.Errorf("fork requires sparse-capable filesystem (SEEK_DATA/SEEK_HOLE unsupported): %w", err)
 			}
@@ -89,13 +82,12 @@ func (m *manager) copyForkSourceGuestDirectory(ctx context.Context, sourceState 
 	return retErr
 }
 
-func (m *manager) copySnapshotGuestDirectoryForFork(ctx context.Context, snapshotID string, hvType hypervisor.Type, dstDir, deferredSnapshotMemoryPath string) error {
+func (m *manager) copySnapshotGuestDirectoryForFork(ctx context.Context, snapshotID string, hvType hypervisor.Type, dstDir string) error {
 	ctx, span := m.tracerOrDefault().Start(ctx, "instances.snapshot.copy_guest_directory",
 		trace.WithAttributes(
 			attribute.String("operation", "snapshot_copy_guest_directory"),
 			attribute.String("snapshot_id", snapshotID),
 			attribute.String("hypervisor", string(hvType)),
-			attribute.Bool("deferred_snapshot_memory", deferredSnapshotMemoryPath != ""),
 		),
 	)
 	var retErr error
@@ -113,18 +105,12 @@ func (m *manager) copySnapshotGuestDirectoryForFork(ctx context.Context, snapsho
 	}
 	readyDone(nil)
 
-	copyOptions := forkvm.CopyOptions{}
-	if deferredSnapshotMemoryPath != "" {
-		copyOptions.SkipRelativePaths = map[string]struct{}{firecrackerSnapshotMemoryRelPath: {}}
-	}
-
 	_, cloneDone := m.startLifecycleStep(ctx, "instances.snapshot.copy_guest_directory.clone",
 		attribute.String("operation", "snapshot_copy_guest_directory_clone"),
 		attribute.String("snapshot_id", snapshotID),
-		attribute.Bool("deferred_snapshot_memory", deferredSnapshotMemoryPath != ""),
 	)
 	retErr = withSnapshotSourceAliasReadLock(func() error {
-		if err := forkvm.CopyGuestDirectoryWithOptions(m.paths.SnapshotGuestDir(snapshotID), dstDir, copyOptions); err != nil {
+		if err := forkvm.CopyGuestDirectory(m.paths.SnapshotGuestDir(snapshotID), dstDir); err != nil {
 			if errors.Is(err, forkvm.ErrSparseCopyUnsupported) {
 				return fmt.Errorf("fork from snapshot requires sparse-capable filesystem (SEEK_DATA/SEEK_HOLE unsupported): %w", err)
 			}

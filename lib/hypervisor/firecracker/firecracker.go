@@ -14,7 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kernel/hypeman/lib/forkvm"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -113,74 +112,15 @@ func (f *Firecracker) Resume(ctx context.Context) error {
 	return nil
 }
 
-func (f *Firecracker) Snapshot(ctx context.Context, destPath string, opts hypervisor.SnapshotOptions) error {
+func (f *Firecracker) Snapshot(ctx context.Context, destPath string) error {
 	if err := os.MkdirAll(destPath, 0755); err != nil {
 		return fmt.Errorf("create snapshot directory: %w", err)
-	}
-	if err := materializeDeferredSnapshotMemory(destPath, opts.DeferredMemoryBackingPath); err != nil {
-		return err
 	}
 	params := toSnapshotCreateParams(destPath)
 	if _, err := f.do(ctx, http.MethodPut, "/snapshot/create", params, http.StatusNoContent); err != nil {
 		return fmt.Errorf("create snapshot: %w", err)
 	}
 	return nil
-}
-
-func materializeDeferredSnapshotMemory(destPath, sourcePath string) error {
-	sourcePath = strings.TrimSpace(sourcePath)
-	if sourcePath == "" {
-		return nil
-	}
-	targetPath := filepath.Join(destPath, "memory")
-	if _, err := os.Stat(targetPath); err == nil {
-		return nil
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("stat deferred snapshot memory target: %w", err)
-	}
-	resolvedSourcePath, err := resolveDeferredSnapshotMemorySourcePath(sourcePath)
-	if err != nil {
-		return err
-	}
-	if err := forkvm.CopyRegularFile(resolvedSourcePath, targetPath); err != nil {
-		return fmt.Errorf("materialize deferred snapshot memory: %w", err)
-	}
-	return nil
-}
-
-func resolveDeferredSnapshotMemorySourcePath(sourcePath string) (string, error) {
-	if _, err := os.Stat(sourcePath); err == nil {
-		return sourcePath, nil
-	} else if !os.IsNotExist(err) {
-		return "", fmt.Errorf("stat deferred snapshot memory source: %w", err)
-	}
-
-	alternatePath := alternateRetainedSnapshotMemoryPath(sourcePath)
-	if alternatePath == "" {
-		return sourcePath, nil
-	}
-	if _, err := os.Stat(alternatePath); err == nil {
-		return alternatePath, nil
-	} else if !os.IsNotExist(err) {
-		return "", fmt.Errorf("stat alternate deferred snapshot memory source: %w", err)
-	}
-	return sourcePath, nil
-}
-
-func alternateRetainedSnapshotMemoryPath(sourcePath string) string {
-	if filepath.Base(sourcePath) != "memory" {
-		return ""
-	}
-	snapshotDir := filepath.Dir(sourcePath)
-	snapshotsDir := filepath.Dir(snapshotDir)
-	switch filepath.Base(snapshotDir) {
-	case "snapshot-base":
-		return filepath.Join(snapshotsDir, "snapshot-latest", "memory")
-	case "snapshot-latest":
-		return filepath.Join(snapshotsDir, "snapshot-base", "memory")
-	default:
-		return ""
-	}
 }
 
 func (f *Firecracker) ResizeMemory(ctx context.Context, bytes int64) error {

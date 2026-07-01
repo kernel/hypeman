@@ -24,11 +24,9 @@ func (fakeHypervisor) Shutdown(context.Context) error { return nil }
 func (fakeHypervisor) GetVMInfo(context.Context) (*VMInfo, error) {
 	return &VMInfo{State: StateRunning}, nil
 }
-func (fakeHypervisor) Pause(context.Context) error  { return nil }
-func (fakeHypervisor) Resume(context.Context) error { return nil }
-func (fakeHypervisor) Snapshot(context.Context, string, SnapshotOptions) error {
-	return nil
-}
+func (fakeHypervisor) Pause(context.Context) error               { return nil }
+func (fakeHypervisor) Resume(context.Context) error              { return nil }
+func (fakeHypervisor) Snapshot(context.Context, string) error    { return nil }
 func (fakeHypervisor) ResizeMemory(context.Context, int64) error { return nil }
 func (fakeHypervisor) ResizeMemoryAndWait(context.Context, int64, time.Duration) error {
 	return nil
@@ -43,11 +41,9 @@ func (fakeHypervisorGetVMInfoError) Shutdown(context.Context) error { return nil
 func (fakeHypervisorGetVMInfoError) GetVMInfo(context.Context) (*VMInfo, error) {
 	return nil, errors.New("vm info failed")
 }
-func (fakeHypervisorGetVMInfoError) Pause(context.Context) error  { return nil }
-func (fakeHypervisorGetVMInfoError) Resume(context.Context) error { return nil }
-func (fakeHypervisorGetVMInfoError) Snapshot(context.Context, string, SnapshotOptions) error {
-	return nil
-}
+func (fakeHypervisorGetVMInfoError) Pause(context.Context) error            { return nil }
+func (fakeHypervisorGetVMInfoError) Resume(context.Context) error           { return nil }
+func (fakeHypervisorGetVMInfoError) Snapshot(context.Context, string) error { return nil }
 func (fakeHypervisorGetVMInfoError) ResizeMemory(context.Context, int64) error {
 	return nil
 }

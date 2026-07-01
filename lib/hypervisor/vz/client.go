@@ -301,7 +301,7 @@ func (c *Client) rawVMState(ctx context.Context) (string, error) {
 	return info.State, nil
 }
 
-func (c *Client) Snapshot(ctx context.Context, destPath string, _ hypervisor.SnapshotOptions) error {
+func (c *Client) Snapshot(ctx context.Context, destPath string) error {
 	req := snapshotRequest{DestinationPath: destPath}
 	body, err := json.Marshal(req)
 	if err != nil {
