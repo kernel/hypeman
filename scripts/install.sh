@@ -623,8 +623,9 @@ Environment="HYPEMAN_UFFD_BINARY=${INSTALL_DIR}/${UFFD_PAGER_BINARY_NAME}"
 Environment="HYPEMAN_UFFD_DATA_DIR=${DATA_DIR}"
 Environment="HYPEMAN_UFFD_VERSION_KEY=%i"
 Environment="HYPEMAN_UFFD_CACHE_MAX_BYTES=4294967296"
+Environment="HYPEMAN_UFFD_METRICS_ADDR="
 EnvironmentFile=-/run/hypeman/uffd/%i.env
-ExecStart=/bin/sh -c 'exec "\${HYPEMAN_UFFD_BINARY}" --data-dir "\${HYPEMAN_UFFD_DATA_DIR}" --version-key "\${HYPEMAN_UFFD_VERSION_KEY}" --cache-max-bytes "\${HYPEMAN_UFFD_CACHE_MAX_BYTES}"'
+ExecStart=/bin/sh -c 'exec "\${HYPEMAN_UFFD_BINARY}" --data-dir "\${HYPEMAN_UFFD_DATA_DIR}" --version-key "\${HYPEMAN_UFFD_VERSION_KEY}" --cache-max-bytes "\${HYPEMAN_UFFD_CACHE_MAX_BYTES}" --metrics-addr "\${HYPEMAN_UFFD_METRICS_ADDR}"'
 Restart=on-failure
 RestartSec=5
 KillMode=process
