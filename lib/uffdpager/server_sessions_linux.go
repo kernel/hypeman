@@ -165,9 +165,12 @@ func (s *session) close() {
 		if s.wakeR >= 0 {
 			_ = unix.Close(s.wakeR)
 		}
+		s.wakeMu.Lock()
 		if s.wakeW >= 0 {
 			_ = unix.Close(s.wakeW)
+			s.wakeW = -1
 		}
+		s.wakeMu.Unlock()
 		if s.backingFile != nil {
 			_ = s.backingFile.Close()
 		}

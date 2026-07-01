@@ -154,7 +154,6 @@ func configureUFFDGraduationController(cfg *config.Config, instanceManager insta
 		Enabled:           true,
 		MinSessionAge:     minSessionAge,
 		MaxConcurrent:     g.MaxConcurrent,
-		MaxActiveSessions: g.MaxActiveSessions,
 		ScanInterval:      scanInterval,
 		CompletionTimeout: completionTimeout,
 	}, logger), nil

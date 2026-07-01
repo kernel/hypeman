@@ -2,6 +2,7 @@ package uffdgraduate
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -29,8 +30,10 @@ type fakeStore struct {
 	insts     []Instance
 	target    string
 	graduated []string
+	attempts  int
 	gradCh    chan string
-	err       error
+	listErr   error
+	gradErr   error
 }
 
 func newFakeStore(target string, insts ...Instance) *fakeStore {
@@ -40,13 +43,17 @@ func newFakeStore(target string, insts ...Instance) *fakeStore {
 func (f *fakeStore) ListPagerInstances(context.Context) ([]Instance, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return append([]Instance(nil), f.insts...), f.err
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	return append([]Instance(nil), f.insts...), nil
 }
 
 func (f *fakeStore) GraduateInstance(_ context.Context, id string) error {
 	f.mu.Lock()
-	if f.err != nil {
-		err := f.err
+	f.attempts++
+	if f.gradErr != nil {
+		err := f.gradErr
 		f.mu.Unlock()
 		return err
 	}
@@ -64,6 +71,24 @@ func (f *fakeStore) GraduateInstance(_ context.Context, id string) error {
 }
 
 func (f *fakeStore) TargetVersion() string { return f.target }
+
+func (f *fakeStore) attemptCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.attempts
+}
+
+func (f *fakeStore) graduatedIDs() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.graduated...)
+}
+
+func (f *fakeStore) setGradErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.gradErr = err
+}
 
 func newTestController(store InstanceStore, cfg Config, clock *fakeClock) *Controller {
 	return NewController(store, cfg, ControllerOptions{Now: clock.Now})
@@ -99,39 +124,22 @@ func TestSelectCandidatesTimeBasedWeaning(t *testing.T) {
 	}
 }
 
-func TestSelectCandidatesCapKeepsNewest(t *testing.T) {
+func TestSelectCandidatesSkipsRecentFailure(t *testing.T) {
 	base := time.Unix(1_700_000_000, 0)
 	clock := &fakeClock{t: base}
-	store := newFakeStore("new",
-		Instance{ID: "old1", PagerVersion: "new"},
-		Instance{ID: "old2", PagerVersion: "new"},
-	)
-	c := newTestController(store, Config{Enabled: true, MinSessionAge: 10 * time.Minute, MaxActiveSessions: 1}, clock)
-	c.firstSeen["old1"] = base.Add(-30 * time.Minute)
-	c.firstSeen["old2"] = base.Add(-20 * time.Minute)
+	store := newFakeStore("new", Instance{ID: "vm1", PagerVersion: "new"})
+	c := newTestController(store, Config{Enabled: true, MinSessionAge: 10 * time.Minute}, clock)
 
-	got := ids(c.selectCandidatesLocked(store.insts, "new", clock.Now()))
-	// Over the ceiling by one; only the oldest is graduated, newest stays warm.
-	if len(got) != 1 || got[0] != "old1" {
-		t.Fatalf("candidates = %v, want [old1]", got)
+	c.firstSeen["vm1"] = base.Add(-20 * time.Minute)
+	c.lastFailure["vm1"] = base.Add(-failureBackoff / 2)
+
+	if got := ids(c.selectCandidatesLocked(store.insts, "new", clock.Now())); len(got) != 0 {
+		t.Fatalf("candidates = %v, want none within backoff", got)
 	}
-}
 
-func TestSelectCandidatesOutdatedAlwaysGraduates(t *testing.T) {
-	base := time.Unix(1_700_000_000, 0)
-	clock := &fakeClock{t: base}
-	store := newFakeStore("new",
-		Instance{ID: "outdated", PagerVersion: "old"},
-		Instance{ID: "current", PagerVersion: "new"},
-	)
-	// Ceiling above the live count, so capacity alone would graduate nothing.
-	c := newTestController(store, Config{Enabled: true, MinSessionAge: 10 * time.Minute, MaxActiveSessions: 5}, clock)
-	c.firstSeen["outdated"] = base.Add(-20 * time.Minute)
-	c.firstSeen["current"] = base.Add(-20 * time.Minute)
-
-	got := ids(c.selectCandidatesLocked(store.insts, "new", clock.Now()))
-	if len(got) != 1 || got[0] != "outdated" {
-		t.Fatalf("candidates = %v, want [outdated]", got)
+	clock.advance(failureBackoff)
+	if got := ids(c.selectCandidatesLocked(store.insts, "new", clock.Now())); len(got) != 1 || got[0] != "vm1" {
+		t.Fatalf("candidates = %v, want [vm1] after backoff", got)
 	}
 }
 
@@ -166,5 +174,94 @@ func TestScanRespectsSoak(t *testing.T) {
 	c.mu.Unlock()
 	if tracked {
 		t.Fatal("expected first-seen cleared after successful graduation")
+	}
+}
+
+func TestScanListFailure(t *testing.T) {
+	base := time.Unix(1_700_000_000, 0)
+	clock := &fakeClock{t: base}
+	store := newFakeStore("new", Instance{ID: "vm1", PagerVersion: "new"})
+	store.listErr = errors.New("list boom")
+	c := newTestController(store, Config{Enabled: true, MinSessionAge: 10 * time.Minute}, clock)
+
+	c.scan(context.Background())
+	c.wg.Wait()
+	if n := store.attemptCount(); n != 0 {
+		t.Fatalf("attempts = %d, want 0 when listing fails", n)
+	}
+	c.mu.Lock()
+	tracked := len(c.firstSeen)
+	c.mu.Unlock()
+	if tracked != 0 {
+		t.Fatalf("firstSeen tracked %d instances from a failed list", tracked)
+	}
+}
+
+func TestScanGraduateFailureBacksOff(t *testing.T) {
+	base := time.Unix(1_700_000_000, 0)
+	clock := &fakeClock{t: base}
+	store := newFakeStore("new", Instance{ID: "vm1", PagerVersion: "new"})
+	store.setGradErr(errors.New("populate boom"))
+	c := newTestController(store, Config{Enabled: true, MinSessionAge: 10 * time.Minute, MaxConcurrent: 1}, clock)
+
+	c.scan(context.Background())
+	clock.advance(11 * time.Minute)
+	c.scan(context.Background())
+	c.wg.Wait()
+	if n := store.attemptCount(); n != 1 {
+		t.Fatalf("attempts = %d, want 1", n)
+	}
+
+	// Within the backoff window the instance is left alone.
+	clock.advance(time.Minute)
+	c.scan(context.Background())
+	c.wg.Wait()
+	if n := store.attemptCount(); n != 1 {
+		t.Fatalf("attempts = %d, want still 1 within backoff", n)
+	}
+
+	// After the backoff it is retried, and success clears the failure record.
+	store.setGradErr(nil)
+	clock.advance(failureBackoff)
+	c.scan(context.Background())
+	select {
+	case id := <-store.gradCh:
+		if id != "vm1" {
+			t.Fatalf("graduated %s, want vm1", id)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected retry after backoff")
+	}
+	c.wg.Wait()
+	c.mu.Lock()
+	_, failed := c.lastFailure["vm1"]
+	c.mu.Unlock()
+	if failed {
+		t.Fatal("expected lastFailure cleared after successful graduation")
+	}
+}
+
+func TestScanMaxConcurrent(t *testing.T) {
+	base := time.Unix(1_700_000_000, 0)
+	clock := &fakeClock{t: base}
+	store := newFakeStore("new",
+		Instance{ID: "a", PagerVersion: "new"},
+		Instance{ID: "b", PagerVersion: "new"},
+		Instance{ID: "c", PagerVersion: "new"},
+	)
+	c := newTestController(store, Config{Enabled: true, MinSessionAge: 10 * time.Minute, MaxConcurrent: 2}, clock)
+
+	c.scan(context.Background())
+	clock.advance(11 * time.Minute)
+	c.scan(context.Background())
+	c.wg.Wait()
+	if got := store.graduatedIDs(); len(got) != 2 {
+		t.Fatalf("graduated %v, want exactly 2 in one scan", got)
+	}
+
+	c.scan(context.Background())
+	c.wg.Wait()
+	if got := store.graduatedIDs(); len(got) != 3 {
+		t.Fatalf("graduated %v, want all 3 after the next scan", got)
 	}
 }

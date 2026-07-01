@@ -17,9 +17,14 @@ type ControllerOptions struct {
 	Now   func() time.Time
 }
 
-// Controller periodically detaches eligible running VMs from their snapshot
-// memory pager so the pool of active pager sessions stays bounded and old pager
-// versions can drain to zero and exit.
+// failureBackoff is how long a failed graduation is left alone before it is
+// retried. Every attempt reads the whole memory image, so retrying on each
+// scan would be expensive.
+const failureBackoff = 5 * time.Minute
+
+// Controller periodically detaches running VMs that have soaked past
+// MinSessionAge from their snapshot memory pager, so long-lived VMs stop
+// depending on a pager and old pager versions drain to zero and exit.
 type Controller struct {
 	store InstanceStore
 	cfg   Config
@@ -29,9 +34,10 @@ type Controller struct {
 	metrics *Metrics
 	wg      sync.WaitGroup
 
-	mu        sync.Mutex
-	firstSeen map[string]time.Time
-	inFlight  map[string]struct{}
+	mu          sync.Mutex
+	firstSeen   map[string]time.Time
+	lastFailure map[string]time.Time
+	inFlight    map[string]struct{}
 }
 
 // NewController builds a controller. cfg is normalized here.
@@ -45,12 +51,13 @@ func NewController(store InstanceStore, cfg Config, opts ControllerOptions) *Con
 		now = time.Now
 	}
 	c := &Controller{
-		store:     store,
-		cfg:       cfg.Normalize(),
-		log:       log,
-		now:       now,
-		firstSeen: make(map[string]time.Time),
-		inFlight:  make(map[string]struct{}),
+		store:       store,
+		cfg:         cfg.Normalize(),
+		log:         log,
+		now:         now,
+		firstSeen:   make(map[string]time.Time),
+		lastFailure: make(map[string]time.Time),
+		inFlight:    make(map[string]struct{}),
 	}
 	c.metrics = newMetrics(opts.Meter, c)
 	return c
@@ -65,7 +72,6 @@ func (c *Controller) Run(ctx context.Context) error {
 	c.log.Info("uffd graduation controller started",
 		"min_session_age", c.cfg.MinSessionAge,
 		"max_concurrent", c.cfg.MaxConcurrent,
-		"max_active_sessions", c.cfg.MaxActiveSessions,
 		"scan_interval", c.cfg.ScanInterval,
 	)
 
@@ -107,6 +113,11 @@ func (c *Controller) scan(ctx context.Context) {
 			delete(c.firstSeen, id)
 		}
 	}
+	for id := range c.lastFailure {
+		if _, ok := present[id]; !ok {
+			delete(c.lastFailure, id)
+		}
+	}
 
 	candidates := c.selectCandidatesLocked(insts, target, now)
 	launch := make([]Instance, 0, len(candidates))
@@ -130,6 +141,7 @@ func (c *Controller) scan(ctx context.Context) {
 
 // selectCandidatesLocked returns the soaked instances that should graduate,
 // ordered by priority: outdated pager versions first, then oldest first.
+// Recently failed instances are left alone until their backoff elapses.
 func (c *Controller) selectCandidatesLocked(insts []Instance, target string, now time.Time) []Instance {
 	type candidate struct {
 		inst     Instance
@@ -149,6 +161,9 @@ func (c *Controller) selectCandidatesLocked(insts []Instance, target string, now
 		if _, busy := c.inFlight[inst.ID]; busy {
 			continue
 		}
+		if failed, ok := c.lastFailure[inst.ID]; ok && now.Sub(failed) < failureBackoff {
+			continue
+		}
 		outdated := target != "" && inst.PagerVersion != "" && inst.PagerVersion != target
 		soaked = append(soaked, candidate{inst: inst, outdated: outdated, age: now.Sub(seen)})
 	}
@@ -160,22 +175,9 @@ func (c *Controller) selectCandidatesLocked(insts []Instance, target string, now
 		return soaked[i].age > soaked[j].age
 	})
 
-	overCap := 0
-	if c.cfg.MaxActiveSessions > 0 {
-		overCap = len(insts) - c.cfg.MaxActiveSessions
-	}
-
 	out := make([]Instance, 0, len(soaked))
 	for _, s := range soaked {
-		switch {
-		case c.cfg.MaxActiveSessions == 0:
-			out = append(out, s.inst)
-		case s.outdated:
-			out = append(out, s.inst)
-		case overCap > 0:
-			out = append(out, s.inst)
-			overCap--
-		}
+		out = append(out, s.inst)
 	}
 	return out
 }
@@ -197,7 +199,11 @@ func (c *Controller) graduate(ctx context.Context, inst Instance) {
 	if err := c.store.GraduateInstance(gctx, inst.ID); err != nil {
 		c.recordAttempt("error")
 		c.recordError("graduate")
-		c.log.Warn("uffd graduation failed", "instance_id", inst.ID, "instance_name", inst.Name, "error", err)
+		c.mu.Lock()
+		c.lastFailure[inst.ID] = c.now()
+		c.mu.Unlock()
+		c.log.Warn("uffd graduation failed, backing off",
+			"instance_id", inst.ID, "instance_name", inst.Name, "backoff", failureBackoff, "error", err)
 		return
 	}
 
@@ -206,6 +212,7 @@ func (c *Controller) graduate(ctx context.Context, inst Instance) {
 	// its soak rather than graduating immediately.
 	c.mu.Lock()
 	delete(c.firstSeen, inst.ID)
+	delete(c.lastFailure, inst.ID)
 	c.mu.Unlock()
 	c.log.Info("instance graduated off uffd pager", "instance_id", inst.ID, "instance_name", inst.Name)
 }

@@ -19,9 +19,6 @@ func TestConfigNormalizeDefaults(t *testing.T) {
 	if got.CompletionTimeout != defaultCompletionTimeout {
 		t.Fatalf("CompletionTimeout = %s, want %s", got.CompletionTimeout, defaultCompletionTimeout)
 	}
-	if got.MaxActiveSessions != 0 {
-		t.Fatalf("MaxActiveSessions = %d, want 0", got.MaxActiveSessions)
-	}
 }
 
 func TestConfigNormalizeKeepsExplicit(t *testing.T) {
@@ -29,7 +26,6 @@ func TestConfigNormalizeKeepsExplicit(t *testing.T) {
 		Enabled:           true,
 		MinSessionAge:     2 * time.Minute,
 		MaxConcurrent:     4,
-		MaxActiveSessions: 8,
 		ScanInterval:      30 * time.Second,
 		CompletionTimeout: time.Minute,
 	}

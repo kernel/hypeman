@@ -62,9 +62,11 @@ type session struct {
 
 	// Graduation: the fault loop watches wakeR alongside the uffd fd, so a
 	// /complete request handed to completeReqCh can interrupt an idle poll and
-	// run completion in the same goroutine that owns the uffd.
+	// run completion in the same goroutine that owns the uffd. wakeMu guards
+	// wakeW between wake() on HTTP goroutines and close() tearing it down.
 	mappings      []guestRegionUffdMapping
 	wakeR         int
+	wakeMu        sync.Mutex
 	wakeW         int
 	completeReqCh chan *completeRequest
 }

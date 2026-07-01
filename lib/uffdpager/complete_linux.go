@@ -25,10 +25,14 @@ type uffdioRange struct {
 	len   uint64
 }
 
-// completeRequest is a single /complete attempt handed to the fault loop. The
-// reply channel is buffered so the fault loop never blocks delivering a result
-// even if the HTTP caller has already given up.
+// completeRequest is a single /complete attempt handed to the fault loop. ctx
+// is the HTTP request context: when the caller times out or disconnects the
+// populate aborts and the session keeps serving, so the control plane's session
+// binding stays accurate and the attempt can simply be retried. The reply
+// channel is buffered so the fault loop never blocks delivering a result even
+// if the caller has already given up.
 type completeRequest struct {
+	ctx  context.Context
 	resp chan error
 }
 
@@ -45,7 +49,7 @@ func (s *server) handleComplete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	req := &completeRequest{resp: make(chan error, 1)}
+	req := &completeRequest{ctx: r.Context(), resp: make(chan error, 1)}
 	select {
 	case sess.completeReqCh <- req:
 	case <-sess.done:
@@ -72,8 +76,11 @@ func (s *server) handleComplete(w http.ResponseWriter, r *http.Request) {
 }
 
 // wake writes the wake pipe so the fault loop breaks out of an idle poll and
-// notices a pending completion request.
+// notices a pending completion request. It takes wakeMu so it never writes to
+// a pipe that close() already closed (and whose fd number may be recycled).
 func (s *session) wake() {
+	s.wakeMu.Lock()
+	defer s.wakeMu.Unlock()
 	if s.wakeW >= 0 {
 		var b [1]byte
 		_, _ = unix.Write(s.wakeW, b[:])
@@ -87,7 +94,7 @@ func (s *session) wake() {
 func (s *session) takeCompletion() bool {
 	select {
 	case req := <-s.completeReqCh:
-		err := s.completeAndUnregister()
+		err := s.completeAndUnregister(req.ctx)
 		req.resp <- err
 		return err == nil
 	default:
@@ -98,16 +105,22 @@ func (s *session) takeCompletion() bool {
 // completeAndUnregister populates every page from the backing file and only then
 // unregisters the ranges. Unregister must happen strictly after a full populate:
 // once a range is unregistered the kernel zero-fills any page that was still
-// absent, which would be corruption. If the populate fails the ranges are left
-// registered so the fault loop can keep serving them.
-func (s *session) completeAndUnregister() error {
-	if err := s.populateAll(); err != nil {
+// absent, which would be corruption. If the populate fails or the caller gives
+// up, the ranges are left registered so the fault loop can keep serving them.
+func (s *session) completeAndUnregister(ctx context.Context) error {
+	if err := s.populateAll(ctx); err != nil {
 		return err
+	}
+	// The caller records the detach only after a successful response. If it has
+	// already given up, abort before the point of no return so the session (and
+	// the caller's record of it) stays intact for a retry.
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("completion abandoned before unregister: %w", err)
 	}
 	return s.unregisterAll()
 }
 
-func (s *session) populateAll() error {
+func (s *session) populateAll(ctx context.Context) error {
 	var firstErr error
 	noteErr := func(err error) {
 		if firstErr == nil {
@@ -123,6 +136,9 @@ func (s *session) populateAll() error {
 		}
 		page := make([]byte, pageSize)
 		for off := uint64(0); off+uint64(pageSize) <= mapping.Size; off += uint64(pageSize) {
+			if err := ctx.Err(); err != nil {
+				return fmt.Errorf("populate abandoned: %w", err)
+			}
 			fileOffset := int64(mapping.Offset + off)
 			n, err := s.backingFile.ReadAt(page, fileOffset)
 			if n != pageSize {
@@ -175,6 +191,10 @@ func (s *session) populatePage(dst uint64, page, eventBuf []byte) error {
 	return lastErr
 }
 
+// drainUFFDEvents discards pending events, including pagefaults. That is safe
+// only because it runs during populateAll, which copies every page in every
+// mapping: UFFDIO_COPY wakes the threads waiting on a discarded fault when the
+// sweep reaches their page.
 func drainUFFDEvents(fd int, buf []byte) {
 	for {
 		_, ok, err := readUFFDEvent(fd, buf)

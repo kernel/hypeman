@@ -205,13 +205,12 @@ type HypervisorConfig struct {
 
 // FirecrackerUFFDGraduationConfig controls the background controller that
 // detaches running UFFD-backed VMs from their snapshot memory pager once they
-// have soaked, bounding active pager sessions and letting old pager versions
-// retire. Disabled by default and only active on the uffd backend.
+// have soaked, so long-lived VMs stop depending on a pager and old pager
+// versions retire. Disabled by default and only active on the uffd backend.
 type FirecrackerUFFDGraduationConfig struct {
 	Enabled           bool   `koanf:"enabled"`
 	MinSessionAge     string `koanf:"min_session_age"`
 	MaxConcurrent     int    `koanf:"max_concurrent"`
-	MaxActiveSessions int    `koanf:"max_active_sessions"`
 	ScanInterval      string `koanf:"scan_interval"`
 	CompletionTimeout string `koanf:"completion_timeout"`
 }
@@ -431,7 +430,6 @@ func defaultConfig() *Config {
 				Enabled:           false,
 				MinSessionAge:     "10m",
 				MaxConcurrent:     1,
-				MaxActiveSessions: 0,
 				ScanInterval:      "1m",
 				CompletionTimeout: "10m",
 			},
@@ -755,9 +753,6 @@ func (c *Config) validateFirecrackerUFFDGraduation() error {
 	}
 	if g.MaxConcurrent < 0 {
 		return fmt.Errorf("hypervisor.firecracker_uffd_graduation.max_concurrent must not be negative")
-	}
-	if g.MaxActiveSessions < 0 {
-		return fmt.Errorf("hypervisor.firecracker_uffd_graduation.max_active_sessions must not be negative")
 	}
 	return nil
 }

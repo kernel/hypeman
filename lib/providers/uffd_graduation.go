@@ -61,9 +61,11 @@ func ProvideUFFDGraduationController(instanceManager instances.Manager, cfg uffd
 	}
 	mgr, ok := instanceManager.(uffdGraduationManager)
 	if !ok {
+		log.Warn("uffd graduation is enabled but the instance manager does not support it; controller disabled")
 		return nil
 	}
 	if strings.TrimSpace(mgr.UFFDGraduationTargetVersion()) == "" {
+		log.Warn("uffd graduation is enabled but no uffd pager is configured (snapshot memory backend is not uffd); controller disabled")
 		return nil
 	}
 	return uffdgraduate.NewController(

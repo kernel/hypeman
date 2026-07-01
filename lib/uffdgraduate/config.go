@@ -17,15 +17,8 @@ type Config struct {
 	MinSessionAge time.Duration
 
 	// MaxConcurrent bounds simultaneous graduations. Each one reads the whole
-	// remaining memory image, so this is the IO/RAM blast-radius lever.
+	// memory image, so this is the IO/RAM blast-radius lever.
 	MaxConcurrent int
-
-	// MaxActiveSessions is the hard ceiling on concurrent pager sessions. When
-	// zero, graduation is purely time based: every session past MinSessionAge is
-	// graduated. When positive, only enough oldest sessions are graduated to get
-	// back to the ceiling (sessions on an outdated pager version are always
-	// graduated regardless of the ceiling).
-	MaxActiveSessions int
 
 	// ScanInterval is how often the controller evaluates sessions.
 	ScanInterval time.Duration
@@ -56,9 +49,6 @@ func (c Config) Normalize() Config {
 	if c.CompletionTimeout <= 0 {
 		c.CompletionTimeout = defaultCompletionTimeout
 	}
-	if c.MaxActiveSessions < 0 {
-		c.MaxActiveSessions = 0
-	}
 	return c
 }
 
@@ -72,9 +62,6 @@ func (c Config) Validate() error {
 	}
 	if c.MaxConcurrent < 0 {
 		return fmt.Errorf("uffd graduation max_concurrent must not be negative")
-	}
-	if c.MaxActiveSessions < 0 {
-		return fmt.Errorf("uffd graduation max_active_sessions must not be negative")
 	}
 	if c.ScanInterval < 0 {
 		return fmt.Errorf("uffd graduation scan_interval must not be negative")

@@ -982,6 +982,9 @@ func TestFCUFFDGraduationLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, parentMeta.StoredMetadata.FirecrackerUFFDSessionID, "graduation should clear the pager session binding")
 	require.Empty(t, parentMeta.StoredMetadata.FirecrackerUFFDPagerVersion)
+	require.Empty(t, parentMeta.StoredMetadata.FirecrackerDeferredSnapshotMemoryPath,
+		"graduation should drop the deferred memory path so the next standby is self-contained instead of materializing from the source snapshot")
+	require.False(t, parentMeta.StoredMetadata.FirecrackerUseUFFDOnNextRestore)
 
 	// The VM is still running and all guest memory and disk content survived the
 	// populate + unregister.

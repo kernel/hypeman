@@ -58,7 +58,10 @@ func (m *manager) GraduateSnapshotMemoryPager(ctx context.Context, id string) er
 
 	version := strings.TrimSpace(stored.FirecrackerUFFDPagerVersion)
 	if version == "" {
-		version = m.firecrackerUFFDPager.VersionKey()
+		// The version is stamped alongside the session ID at restore. Guessing a
+		// version here could 404 against the wrong pager and clear the binding
+		// while the real session is still alive on another one.
+		return fmt.Errorf("uffd session %s has no recorded pager version", sessionID)
 	}
 
 	log.InfoContext(ctx, "graduating instance off uffd snapshot memory pager",
@@ -70,10 +73,11 @@ func (m *manager) GraduateSnapshotMemoryPager(ctx context.Context, id string) er
 	}
 
 	// The session is gone whether we completed it or the pager had already lost
-	// it, so clear the binding. Standby and health paths key off the session ID
-	// and must not chase a session that no longer exists.
-	stored.FirecrackerUFFDSessionID = ""
-	stored.FirecrackerUFFDPagerVersion = ""
+	// it, so clear all UFFD restore state, exactly like standby/stop do. This
+	// includes the deferred snapshot memory path: memory is fully resident now,
+	// so the next standby must write a self-contained Full snapshot instead of
+	// materializing from the source snapshot (which may since be deleted).
+	clearFirecrackerUFFDRestoreState(stored)
 	meta = &metadata{StoredMetadata: *stored}
 	if saveErr := m.saveMetadata(meta); saveErr != nil {
 		return fmt.Errorf("save metadata after graduation: %w", saveErr)
