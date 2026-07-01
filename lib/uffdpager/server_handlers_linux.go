@@ -21,9 +21,15 @@ func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleStats(w http.ResponseWriter, r *http.Request) {
+	s.writeJSON(w, http.StatusOK, s.stats())
+}
+
+// stats reads a coherent snapshot of the pager's atomic counters. Consumed by
+// both the JSON /stats handler and the OTel Prometheus /metrics observer.
+func (s *server) stats() Stats {
 	cacheBytes, cacheMax, cacheItems, hits, misses := s.cache.SnapshotStats()
 	cacheShards, cacheLookupNanos, cacheLookupMaxNanos, cacheAddNanos, cacheAddMaxNanos := s.cache.SnapshotTimingStats()
-	s.writeJSON(w, http.StatusOK, Stats{
+	return Stats{
 		Version:             s.versionKey,
 		Draining:            s.isDraining(),
 		ActiveSessions:      s.activeSessions(),
@@ -51,7 +57,7 @@ func (s *server) handleStats(w http.ResponseWriter, r *http.Request) {
 		BackingReadMaxNanos: s.backingReadMaxNanos.Load(),
 		CopyNanos:           s.copyNanos.Load(),
 		CopyMaxNanos:        s.copyMaxNanos.Load(),
-	})
+	}
 }
 
 func (s *server) handleCreateSession(w http.ResponseWriter, r *http.Request) {

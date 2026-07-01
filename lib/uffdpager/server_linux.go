@@ -3,9 +3,11 @@
 package uffdpager
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -13,8 +15,10 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/go-chi/chi/v5"
+	hypotel "github.com/kernel/hypeman/lib/otel"
 )
 
 type server struct {
@@ -66,6 +70,10 @@ func Main(args []string) error {
 	dataDir := fs.String("data-dir", "", "hypeman data directory")
 	versionKey := fs.String("version-key", "", "pager version key")
 	cacheMaxBytes := fs.Int64("cache-max-bytes", defaultCacheMaxBytes, "maximum shared page cache bytes")
+	metricsAddr := fs.String("metrics-addr", "", "TCP address for Prometheus /metrics (empty disables the metrics server)")
+	otelEndpoint := fs.String("otel-endpoint", "", "OTLP endpoint for push export (empty disables push; pull remains available when --metrics-addr is set)")
+	otelInsecure := fs.Bool("otel-insecure", true, "use insecure transport for OTLP push")
+	metricExportInterval := fs.String("otel-metric-export-interval", "", "OTLP metric export interval (Go duration, e.g. 30s)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -77,7 +85,68 @@ func Main(args []string) error {
 	}
 
 	s := newServer(*dataDir, *versionKey, *cacheMaxBytes)
+
+	metricsShutdown, err := s.startMetrics(*metricsAddr, *otelEndpoint, *otelInsecure, *metricExportInterval)
+	if err != nil {
+		return fmt.Errorf("start metrics: %w", err)
+	}
+	defer metricsShutdown()
+
 	return s.run()
+}
+
+func (s *server) startMetrics(metricsAddr, otelEndpoint string, otelInsecure bool, metricExportInterval string) (func(), error) {
+	if strings.TrimSpace(metricsAddr) == "" && strings.TrimSpace(otelEndpoint) == "" {
+		return func() {}, nil
+	}
+
+	ctx := context.Background()
+	provider, otelShutdown, err := hypotel.Init(ctx, hypotel.Config{
+		Enabled:              strings.TrimSpace(otelEndpoint) != "",
+		Endpoint:             otelEndpoint,
+		Insecure:             otelInsecure,
+		ServiceName:          "hypeman-uffd-pager",
+		ServiceInstanceID:    s.versionKey,
+		MetricExportInterval: metricExportInterval,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("initialize telemetry: %w", err)
+	}
+
+	if err := RegisterMetrics(provider.MeterFor("hypeman-uffd-pager"), s.versionKey, s.stats); err != nil {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = otelShutdown(shutdownCtx)
+		return nil, fmt.Errorf("register uffd metrics: %w", err)
+	}
+
+	var metricsSrv *http.Server
+	if strings.TrimSpace(metricsAddr) != "" {
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", provider.MetricsHandler)
+		metricsSrv = &http.Server{Addr: metricsAddr, Handler: mux}
+		go func() {
+			slog.Info("serving uffd pager metrics", "addr", metricsAddr, "path", "/metrics", "version_key", s.versionKey)
+			if err := metricsSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				slog.Error("uffd metrics server error", "error", err)
+			}
+		}()
+	}
+
+	return func() {
+		if metricsSrv != nil {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := metricsSrv.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				slog.Warn("uffd metrics server shutdown error", "error", err)
+			}
+		}
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := otelShutdown(shutdownCtx); err != nil {
+			slog.Warn("uffd otel shutdown error", "error", err)
+		}
+	}, nil
 }
 
 func newServer(dataDir, versionKey string, cacheMaxBytes int64) *server {
