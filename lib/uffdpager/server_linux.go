@@ -70,10 +70,10 @@ func Main(args []string) error {
 	dataDir := fs.String("data-dir", "", "hypeman data directory")
 	versionKey := fs.String("version-key", "", "pager version key")
 	cacheMaxBytes := fs.Int64("cache-max-bytes", defaultCacheMaxBytes, "maximum shared page cache bytes")
-	metricsAddr := fs.String("metrics-addr", "", "TCP address for Prometheus /metrics (empty disables the metrics server)")
-	otelEndpoint := fs.String("otel-endpoint", "", "OTLP endpoint for push export (empty disables push; pull remains available when --metrics-addr is set)")
+	metricsAddr := fs.String("metrics-addr", "", "prometheus /metrics listen address (empty disables)")
+	otelEndpoint := fs.String("otel-endpoint", "", "OTLP push endpoint (empty disables push)")
 	otelInsecure := fs.Bool("otel-insecure", true, "use insecure transport for OTLP push")
-	metricExportInterval := fs.String("otel-metric-export-interval", "", "OTLP metric export interval (Go duration, e.g. 30s)")
+	metricExportInterval := fs.String("otel-metric-export-interval", "", "OTLP metric export interval, e.g. 30s")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}

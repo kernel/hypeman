@@ -10,12 +10,9 @@ import (
 	"go.opentelemetry.io/otel/metric"
 )
 
-// RegisterMetrics installs observable OTel instruments backed by the pager's
-// existing atomic counters. Instruments are read from the snapshot returned by
-// statsFn on each collection cycle, so no new state is introduced.
-//
-// versionKey is attached to every observation so multi-version pager
-// deployments can be distinguished at query time.
+// RegisterMetrics creates observable pager instruments whose callbacks read
+// statsFn on each collection cycle. Returns nil when the meter or statsFn is
+// nil so callers can wire this in unconditionally.
 func RegisterMetrics(meter metric.Meter, versionKey string, statsFn func() Stats) error {
 	if meter == nil || statsFn == nil {
 		return nil
@@ -23,28 +20,28 @@ func RegisterMetrics(meter metric.Meter, versionKey string, statsFn func() Stats
 
 	cacheHits, err := meter.Int64ObservableCounter(
 		"hypeman_uffd_cache_hits_total",
-		metric.WithDescription("Total UFFD page cache hits"),
+		metric.WithDescription("UFFD page cache hits"),
 	)
 	if err != nil {
 		return fmt.Errorf("create cache hits counter: %w", err)
 	}
 	cacheMisses, err := meter.Int64ObservableCounter(
 		"hypeman_uffd_cache_misses_total",
-		metric.WithDescription("Total UFFD page cache misses (page read from backing file)"),
+		metric.WithDescription("UFFD page cache misses"),
 	)
 	if err != nil {
 		return fmt.Errorf("create cache misses counter: %w", err)
 	}
 	faults, err := meter.Int64ObservableCounter(
 		"hypeman_uffd_faults_total",
-		metric.WithDescription("Total UFFD page faults handled"),
+		metric.WithDescription("UFFD page faults handled"),
 	)
 	if err != nil {
 		return fmt.Errorf("create faults counter: %w", err)
 	}
 	backingBytesRead, err := meter.Int64ObservableCounter(
 		"hypeman_uffd_backing_bytes_read_total",
-		metric.WithDescription("Total bytes read from the backing memory file on cache miss"),
+		metric.WithDescription("Bytes read from the backing memory file"),
 		metric.WithUnit("By"),
 	)
 	if err != nil {
@@ -52,21 +49,21 @@ func RegisterMetrics(meter metric.Meter, versionKey string, statsFn func() Stats
 	}
 	copies, err := meter.Int64ObservableCounter(
 		"hypeman_uffd_copies_total",
-		metric.WithDescription("Total UFFDIO_COPY operations issued"),
+		metric.WithDescription("UFFDIO_COPY operations issued"),
 	)
 	if err != nil {
 		return fmt.Errorf("create copies counter: %w", err)
 	}
 	copyErrors, err := meter.Int64ObservableCounter(
 		"hypeman_uffd_copy_errors_total",
-		metric.WithDescription("Total UFFDIO_COPY operations that returned an error"),
+		metric.WithDescription("UFFDIO_COPY operations that returned an error"),
 	)
 	if err != nil {
 		return fmt.Errorf("create copy errors counter: %w", err)
 	}
 	cacheLookupNanos, err := meter.Int64ObservableCounter(
 		"hypeman_uffd_cache_lookup_nanos_total",
-		metric.WithDescription("Total nanoseconds spent in cache lookups (sum across all faults)"),
+		metric.WithDescription("Nanoseconds spent in cache lookups"),
 		metric.WithUnit("ns"),
 	)
 	if err != nil {
@@ -74,7 +71,7 @@ func RegisterMetrics(meter metric.Meter, versionKey string, statsFn func() Stats
 	}
 	cacheAddNanos, err := meter.Int64ObservableCounter(
 		"hypeman_uffd_cache_add_nanos_total",
-		metric.WithDescription("Total nanoseconds spent inserting entries into the cache"),
+		metric.WithDescription("Nanoseconds spent inserting cache entries"),
 		metric.WithUnit("ns"),
 	)
 	if err != nil {
@@ -82,7 +79,7 @@ func RegisterMetrics(meter metric.Meter, versionKey string, statsFn func() Stats
 	}
 	faultNanos, err := meter.Int64ObservableCounter(
 		"hypeman_uffd_fault_nanos_total",
-		metric.WithDescription("Total nanoseconds spent handling faults end-to-end"),
+		metric.WithDescription("Nanoseconds spent handling faults end-to-end"),
 		metric.WithUnit("ns"),
 	)
 	if err != nil {
@@ -90,7 +87,7 @@ func RegisterMetrics(meter metric.Meter, versionKey string, statsFn func() Stats
 	}
 	readPageNanos, err := meter.Int64ObservableCounter(
 		"hypeman_uffd_read_page_nanos_total",
-		metric.WithDescription("Total nanoseconds spent reading pages (cache lookup + backing read)"),
+		metric.WithDescription("Nanoseconds spent reading pages"),
 		metric.WithUnit("ns"),
 	)
 	if err != nil {
@@ -98,7 +95,7 @@ func RegisterMetrics(meter metric.Meter, versionKey string, statsFn func() Stats
 	}
 	backingReadNanos, err := meter.Int64ObservableCounter(
 		"hypeman_uffd_backing_read_nanos_total",
-		metric.WithDescription("Total nanoseconds spent reading pages from the backing file"),
+		metric.WithDescription("Nanoseconds spent reading from the backing file"),
 		metric.WithUnit("ns"),
 	)
 	if err != nil {
@@ -106,7 +103,7 @@ func RegisterMetrics(meter metric.Meter, versionKey string, statsFn func() Stats
 	}
 	copyNanos, err := meter.Int64ObservableCounter(
 		"hypeman_uffd_copy_nanos_total",
-		metric.WithDescription("Total nanoseconds spent in UFFDIO_COPY calls"),
+		metric.WithDescription("Nanoseconds spent in UFFDIO_COPY calls"),
 		metric.WithUnit("ns"),
 	)
 	if err != nil {
@@ -115,7 +112,7 @@ func RegisterMetrics(meter metric.Meter, versionKey string, statsFn func() Stats
 
 	cacheBytes, err := meter.Int64ObservableGauge(
 		"hypeman_uffd_cache_bytes",
-		metric.WithDescription("Current UFFD page cache size in bytes"),
+		metric.WithDescription("Current UFFD page cache size"),
 		metric.WithUnit("By"),
 	)
 	if err != nil {
@@ -123,7 +120,7 @@ func RegisterMetrics(meter metric.Meter, versionKey string, statsFn func() Stats
 	}
 	cacheMaxBytes, err := meter.Int64ObservableGauge(
 		"hypeman_uffd_cache_max_bytes",
-		metric.WithDescription("Configured UFFD page cache capacity in bytes"),
+		metric.WithDescription("Configured UFFD page cache capacity"),
 		metric.WithUnit("By"),
 	)
 	if err != nil {
@@ -131,21 +128,21 @@ func RegisterMetrics(meter metric.Meter, versionKey string, statsFn func() Stats
 	}
 	cacheItems, err := meter.Int64ObservableGauge(
 		"hypeman_uffd_cache_items",
-		metric.WithDescription("Number of pages currently held in the UFFD cache"),
+		metric.WithDescription("Pages currently held in the UFFD cache"),
 	)
 	if err != nil {
 		return fmt.Errorf("create cache items gauge: %w", err)
 	}
 	cacheShards, err := meter.Int64ObservableGauge(
 		"hypeman_uffd_cache_shards",
-		metric.WithDescription("Number of shards in the UFFD page cache"),
+		metric.WithDescription("UFFD page cache shard count"),
 	)
 	if err != nil {
 		return fmt.Errorf("create cache shards gauge: %w", err)
 	}
 	activeSessions, err := meter.Int64ObservableGauge(
 		"hypeman_uffd_active_sessions",
-		metric.WithDescription("Number of active pager sessions"),
+		metric.WithDescription("Active pager sessions"),
 	)
 	if err != nil {
 		return fmt.Errorf("create active sessions gauge: %w", err)
@@ -159,7 +156,7 @@ func RegisterMetrics(meter metric.Meter, versionKey string, statsFn func() Stats
 	}
 	maxConcurrentFaults, err := meter.Int64ObservableGauge(
 		"hypeman_uffd_max_concurrent_faults",
-		metric.WithDescription("High-water mark of concurrent in-flight faults since process start"),
+		metric.WithDescription("High-water mark of concurrent in-flight faults"),
 	)
 	if err != nil {
 		return fmt.Errorf("create max concurrent faults gauge: %w", err)
@@ -173,7 +170,7 @@ func RegisterMetrics(meter metric.Meter, versionKey string, statsFn func() Stats
 	}
 	cacheLookupMaxNanos, err := meter.Int64ObservableGauge(
 		"hypeman_uffd_cache_lookup_max_nanos",
-		metric.WithDescription("High-water mark of cache lookup latency since process start"),
+		metric.WithDescription("Max cache lookup latency"),
 		metric.WithUnit("ns"),
 	)
 	if err != nil {
@@ -181,7 +178,7 @@ func RegisterMetrics(meter metric.Meter, versionKey string, statsFn func() Stats
 	}
 	cacheAddMaxNanos, err := meter.Int64ObservableGauge(
 		"hypeman_uffd_cache_add_max_nanos",
-		metric.WithDescription("High-water mark of cache add latency since process start"),
+		metric.WithDescription("Max cache add latency"),
 		metric.WithUnit("ns"),
 	)
 	if err != nil {
@@ -189,7 +186,7 @@ func RegisterMetrics(meter metric.Meter, versionKey string, statsFn func() Stats
 	}
 	faultMaxNanos, err := meter.Int64ObservableGauge(
 		"hypeman_uffd_fault_max_nanos",
-		metric.WithDescription("High-water mark of end-to-end fault handling latency since process start"),
+		metric.WithDescription("Max fault handling latency"),
 		metric.WithUnit("ns"),
 	)
 	if err != nil {
@@ -197,7 +194,7 @@ func RegisterMetrics(meter metric.Meter, versionKey string, statsFn func() Stats
 	}
 	readPageMaxNanos, err := meter.Int64ObservableGauge(
 		"hypeman_uffd_read_page_max_nanos",
-		metric.WithDescription("High-water mark of page read latency since process start"),
+		metric.WithDescription("Max page read latency"),
 		metric.WithUnit("ns"),
 	)
 	if err != nil {
@@ -205,7 +202,7 @@ func RegisterMetrics(meter metric.Meter, versionKey string, statsFn func() Stats
 	}
 	backingReadMaxNanos, err := meter.Int64ObservableGauge(
 		"hypeman_uffd_backing_read_max_nanos",
-		metric.WithDescription("High-water mark of backing file read latency since process start"),
+		metric.WithDescription("Max backing file read latency"),
 		metric.WithUnit("ns"),
 	)
 	if err != nil {
@@ -213,7 +210,7 @@ func RegisterMetrics(meter metric.Meter, versionKey string, statsFn func() Stats
 	}
 	copyMaxNanos, err := meter.Int64ObservableGauge(
 		"hypeman_uffd_copy_max_nanos",
-		metric.WithDescription("High-water mark of UFFDIO_COPY latency since process start"),
+		metric.WithDescription("Max UFFDIO_COPY latency"),
 		metric.WithUnit("ns"),
 	)
 	if err != nil {

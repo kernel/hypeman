@@ -24,8 +24,6 @@ func (s *server) handleStats(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, s.stats())
 }
 
-// stats reads a coherent snapshot of the pager's atomic counters. Consumed by
-// both the JSON /stats handler and the OTel Prometheus /metrics observer.
 func (s *server) stats() Stats {
 	cacheBytes, cacheMax, cacheItems, hits, misses := s.cache.SnapshotStats()
 	cacheShards, cacheLookupNanos, cacheLookupMaxNanos, cacheAddNanos, cacheAddMaxNanos := s.cache.SnapshotTimingStats()
