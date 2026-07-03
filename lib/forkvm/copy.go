@@ -33,12 +33,22 @@ type copyState struct {
 	reflinkDead bool
 }
 
+// CopyOptions controls which guest-directory files are copied.
+type CopyOptions struct {
+	SkipRelativePaths map[string]struct{}
+}
+
 // CopyGuestDirectory recursively copies a guest directory to a new destination.
 // Regular files are cloned via reflink (FICLONE) when the underlying filesystem
 // supports it; otherwise we fall back to a sparse extent copy
 // (SEEK_DATA/SEEK_HOLE). Runtime sockets and logs are skipped because they are
 // host-runtime artifacts.
 func CopyGuestDirectory(srcDir, dstDir string) error {
+	return CopyGuestDirectoryWithOptions(srcDir, dstDir, CopyOptions{})
+}
+
+// CopyGuestDirectoryWithOptions is CopyGuestDirectory with optional path skips.
+func CopyGuestDirectoryWithOptions(srcDir, dstDir string, opts CopyOptions) error {
 	srcInfo, err := os.Stat(srcDir)
 	if err != nil {
 		return fmt.Errorf("stat source directory: %w", err)
@@ -66,6 +76,9 @@ func CopyGuestDirectory(srcDir, dstDir string) error {
 			return fmt.Errorf("compute relative path: %w", err)
 		}
 		if relPath == "." {
+			return nil
+		}
+		if _, ok := opts.SkipRelativePaths[filepath.Clean(relPath)]; ok {
 			return nil
 		}
 		if d.IsDir() && shouldSkipDirectory(relPath) {

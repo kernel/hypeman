@@ -417,7 +417,8 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 	if target != nil && target.State == compressionJobStateRunning {
 		m.recordSnapshotCompressionPreemption(ctx, snapshotCompressionPreemptionForkSnapshot, target.Target)
 	}
-	if err := m.copySnapshotGuestDirectoryForFork(ctx, snapshotID, rec.StoredMetadata.HypervisorType, dstDir); err != nil {
+	shareMemFile := rec.StoredMetadata.HypervisorType == hypervisor.TypeFirecracker && rec.Snapshot.Kind == SnapshotKindStandby
+	if err := m.copySnapshotGuestDirectoryForFork(ctx, snapshotID, rec.StoredMetadata.HypervisorType, dstDir, shareMemFile); err != nil {
 		return nil, err
 	}
 

@@ -763,8 +763,8 @@ func TestFCUFFDOneShotLifecycle(t *testing.T) {
 	writeGuestFile(t, ctx, parent, "/dev/shm/uffd-lifecycle/parent-after-uffd", "parent-memory")
 	parentSnapshotMemoryPath := filepath.Join(p.InstanceSnapshotLatest(parentID), "memory")
 	parentBaseMemoryPath := filepath.Join(p.InstanceSnapshotBase(parentID), "memory")
-	require.FileExists(t, parentBaseMemoryPath, "UFFD snapshot fanout should clone a fork-local mem-file (retained as diff base after restore)")
-	requireDifferentInode(t, snapshotMemoryPath, parentBaseMemoryPath)
+	require.FileExists(t, parentBaseMemoryPath, "UFFD snapshot fanout should hardlink the mem-file (retained as diff base after restore)")
+	requireSameInode(t, snapshotMemoryPath, parentBaseMemoryPath)
 	parentMeta, err := mgr.loadMetadata(parentID)
 	require.NoError(t, err)
 	require.False(t, parentMeta.StoredMetadata.FirecrackerUseUFFDOnNextRestore)
@@ -776,7 +776,7 @@ func TestFCUFFDOneShotLifecycle(t *testing.T) {
 	parent, err = mgr.StandbyInstance(ctx, parentID, StandbyInstanceRequest{})
 	require.NoError(t, err)
 	require.Equal(t, StateStandby, parent.State)
-	require.FileExists(t, parentSnapshotMemoryPath, "standby should write a file-backed snapshot onto the fork-local mem-file")
+	require.FileExists(t, parentSnapshotMemoryPath, "standby should produce a file-backed snapshot")
 	parentMeta, err = mgr.loadMetadata(parentID)
 	require.NoError(t, err)
 	require.False(t, parentMeta.StoredMetadata.FirecrackerUseUFFDOnNextRestore)
@@ -824,8 +824,8 @@ func TestFCUFFDOneShotLifecycle(t *testing.T) {
 
 	childSnapshotMemoryPath := filepath.Join(p.InstanceSnapshotLatest(childID), "memory")
 	childBaseMemoryPath := filepath.Join(p.InstanceSnapshotBase(childID), "memory")
-	require.FileExists(t, childBaseMemoryPath, "running-source child should clone a fork-local mem-file (retained as diff base after restore)")
-	requireDifferentInode(t, filepath.Join(p.InstanceSnapshotBase(parentID), "memory"), childBaseMemoryPath)
+	require.FileExists(t, childBaseMemoryPath, "running-source child should hardlink the mem-file (retained as diff base after restore)")
+	requireSameInode(t, filepath.Join(p.InstanceSnapshotBase(parentID), "memory"), childBaseMemoryPath)
 	childMeta, err := mgr.loadMetadata(childID)
 	require.NoError(t, err)
 	require.False(t, childMeta.StoredMetadata.FirecrackerUseUFFDOnNextRestore)
@@ -843,7 +843,8 @@ func TestFCUFFDOneShotLifecycle(t *testing.T) {
 	child, err = mgr.StandbyInstance(ctx, childID, StandbyInstanceRequest{})
 	require.NoError(t, err)
 	require.Equal(t, StateStandby, child.State)
-	require.FileExists(t, childSnapshotMemoryPath, "child standby should write a file-backed snapshot onto the fork-local mem-file")
+	require.FileExists(t, childSnapshotMemoryPath, "child standby should produce a file-backed snapshot")
+	requireDifferentInode(t, filepath.Join(p.InstanceSnapshotLatest(parentID), "memory"), childSnapshotMemoryPath)
 	childMeta, err = mgr.loadMetadata(childID)
 	require.NoError(t, err)
 	require.False(t, childMeta.StoredMetadata.FirecrackerUseUFFDOnNextRestore)
@@ -918,6 +919,15 @@ func requireDifferentInode(t *testing.T, pathA, pathB string) {
 	infoB, err := os.Stat(pathB)
 	require.NoError(t, err)
 	require.False(t, os.SameFile(infoA, infoB), "%s and %s must not share an inode", pathA, pathB)
+}
+
+func requireSameInode(t *testing.T, pathA, pathB string) {
+	t.Helper()
+	infoA, err := os.Stat(pathA)
+	require.NoError(t, err)
+	infoB, err := os.Stat(pathB)
+	require.NoError(t, err)
+	require.True(t, os.SameFile(infoA, infoB), "%s and %s must share an inode", pathA, pathB)
 }
 
 func writeGuestFile(t *testing.T, ctx context.Context, inst *Instance, path, contents string) {
@@ -1034,14 +1044,15 @@ func TestFirecrackerForkIsolation(t *testing.T) {
 	})
 	require.Equal(t, StateStandby, fork.State)
 
-	// Fork's mem-file must be a separate inode from the source's. Hardlinking
-	// or symlinking would share the inode and allow later writes to corrupt
-	// the source.
+	// Fork creation hardlinks the mem-file: the fork shares the source's inode
+	// (zero-copy fanout, shared page cache) and the standby path unshares it
+	// before any diff-snapshot write. The byte-identity assertions below are
+	// the real isolation guard.
 	forkMemPath := filepath.Join(p.InstanceSnapshotLatest(forkID), "memory")
 	forkAfterCreate, err := fingerprintFile(forkMemPath)
 	require.NoError(t, err, "fingerprint fork mem-file after fork")
-	require.NotEqual(t, sourceBefore.inode, forkAfterCreate.inode,
-		"fork mem-file must not share an inode with the source")
+	require.Equal(t, sourceBefore.inode, forkAfterCreate.inode,
+		"fork mem-file should hardlink the source's inode at creation")
 
 	sourceAfterFork, err := fingerprintFile(sourceMemPath)
 	require.NoError(t, err)
@@ -1076,6 +1087,12 @@ func TestFirecrackerForkIsolation(t *testing.T) {
 	fork, err = mgr.StandbyInstance(ctx, forkID, StandbyInstanceRequest{})
 	require.NoError(t, err)
 	require.Equal(t, StateStandby, fork.State)
+
+	// The fork's standby must have unshared the hardlink before diff-writing.
+	forkAfterStandby, err := fingerprintFile(forkMemPath)
+	require.NoError(t, err, "fingerprint fork mem-file after fork standby")
+	require.NotEqual(t, sourceBefore.inode, forkAfterStandby.inode,
+		"fork standby must unshare the mem-file before writing its diff snapshot")
 
 	// Source mem-file must STILL be byte-identical after the fork's full
 	// lifecycle (restore + write + standby/diff-snapshot).

@@ -138,6 +138,20 @@ func (m *manager) standbyInstance(
 			}
 			return nil, fmt.Errorf("prepare retained snapshot target: %w", err)
 		}
+		// The diff snapshot below writes dirty pages into the mem-file in
+		// place; if fanout forks still hardlink its inode, replace it with a
+		// private copy first so their memory is never mutated.
+		if err := ensureExclusiveSnapshotMemoryOwnership(ctx, snapshotDir); err != nil {
+			if resumeErr := hv.Resume(ctx); resumeErr != nil {
+				log.ErrorContext(ctx, "failed to resume VM after snapshot memory unshare error", "instance_id", id, "error", resumeErr)
+			}
+			if promotedExistingBase {
+				if rollbackErr := discardPromotedRetainedSnapshotTarget(snapshotDir); rollbackErr != nil {
+					log.WarnContext(ctx, "failed to discard promoted snapshot target after unshare error", "instance_id", id, "error", rollbackErr)
+				}
+			}
+			return nil, fmt.Errorf("unshare snapshot memory: %w", err)
+		}
 	}
 	log.DebugContext(ctx, "creating snapshot", "instance_id", id, "snapshot_dir", snapshotDir)
 	snapshotCtx, snapshotSpanEnd := m.startLifecycleStep(ctx, "create_snapshot",

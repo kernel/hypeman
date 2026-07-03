@@ -44,6 +44,26 @@ func TestCopyGuestDirectory(t *testing.T) {
 	assert.Equal(t, "metadata.json", linkTarget)
 }
 
+func TestCopyGuestDirectoryWithOptionsSkipsRelativePaths(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "src")
+	dst := filepath.Join(t.TempDir(), "dst")
+
+	require.NoError(t, os.MkdirAll(filepath.Join(src, "snapshots", "snapshot-latest"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(src, "snapshots", "snapshot-latest", "memory"), []byte("memory"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(src, "snapshots", "snapshot-latest", "state"), []byte("state"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(src, "overlay.raw"), []byte("overlay"), 0644))
+
+	require.NoError(t, CopyGuestDirectoryWithOptions(src, dst, CopyOptions{
+		SkipRelativePaths: map[string]struct{}{
+			filepath.Join("snapshots", "snapshot-latest", "memory"): {},
+		},
+	}))
+
+	assert.NoFileExists(t, filepath.Join(dst, "snapshots", "snapshot-latest", "memory"))
+	assert.FileExists(t, filepath.Join(dst, "snapshots", "snapshot-latest", "state"))
+	assert.FileExists(t, filepath.Join(dst, "overlay.raw"))
+}
+
 func TestCopyRegularFile(t *testing.T) {
 	src := filepath.Join(t.TempDir(), "src", "memory")
 	dst := filepath.Join(t.TempDir(), "dst", "snapshots", "snapshot-latest", "memory")

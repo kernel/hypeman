@@ -257,13 +257,14 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 
 	srcDir := m.paths.InstanceDir(id)
 	dstDir := m.paths.InstanceDir(forkID)
+	shareMemFile := stored.HypervisorType == hypervisor.TypeFirecracker && source.State == StateStandby
 
 	cu := cleanup.Make(func() {
 		_ = os.RemoveAll(dstDir)
 	})
 	defer cu.Clean()
 
-	if err := m.copyForkSourceGuestDirectory(ctx, source.State, id, stored, srcDir, dstDir); err != nil {
+	if err := m.copyForkSourceGuestDirectory(ctx, source.State, id, stored, srcDir, dstDir, shareMemFile); err != nil {
 		return nil, false, err
 	}
 

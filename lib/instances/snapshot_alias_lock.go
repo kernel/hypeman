@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 
 	"github.com/kernel/hypeman/lib/forkvm"
 	"github.com/kernel/hypeman/lib/hypervisor"
@@ -40,12 +41,13 @@ func copyGuestDirectoryWithAliasReadLock(srcDir, dstDir string) error {
 	})
 }
 
-func (m *manager) copyForkSourceGuestDirectory(ctx context.Context, sourceState State, sourceID string, stored *StoredMetadata, srcDir, dstDir string) error {
+func (m *manager) copyForkSourceGuestDirectory(ctx context.Context, sourceState State, sourceID string, stored *StoredMetadata, srcDir, dstDir string, shareMemFile bool) error {
 	ctx, span := m.tracerOrDefault().Start(ctx, "instances.fork.copy_guest_directory",
 		trace.WithAttributes(
 			attribute.String("operation", "fork_copy_guest_directory"),
 			attribute.String("instance_id", sourceID),
 			attribute.String("source_state", string(sourceState)),
+			attribute.Bool("share_mem_file", shareMemFile),
 		),
 	)
 	var retErr error
@@ -68,9 +70,10 @@ func (m *manager) copyForkSourceGuestDirectory(ctx context.Context, sourceState 
 	_, cloneDone := m.startLifecycleStep(ctx, "instances.fork.copy_guest_directory.clone",
 		attribute.String("operation", "fork_copy_guest_directory_clone"),
 		attribute.String("instance_id", sourceID),
+		attribute.Bool("share_mem_file", shareMemFile),
 	)
 	retErr = withSnapshotSourceAliasReadLock(func() error {
-		if err := forkvm.CopyGuestDirectory(srcDir, dstDir); err != nil {
+		if err := cloneGuestDirectoryForFork(ctx, srcDir, dstDir, shareMemFile); err != nil {
 			if errors.Is(err, forkvm.ErrSparseCopyUnsupported) {
 				return fmt.Errorf("fork requires sparse-capable filesystem (SEEK_DATA/SEEK_HOLE unsupported): %w", err)
 			}
@@ -82,12 +85,13 @@ func (m *manager) copyForkSourceGuestDirectory(ctx context.Context, sourceState 
 	return retErr
 }
 
-func (m *manager) copySnapshotGuestDirectoryForFork(ctx context.Context, snapshotID string, hvType hypervisor.Type, dstDir string) error {
+func (m *manager) copySnapshotGuestDirectoryForFork(ctx context.Context, snapshotID string, hvType hypervisor.Type, dstDir string, shareMemFile bool) error {
 	ctx, span := m.tracerOrDefault().Start(ctx, "instances.snapshot.copy_guest_directory",
 		trace.WithAttributes(
 			attribute.String("operation", "snapshot_copy_guest_directory"),
 			attribute.String("snapshot_id", snapshotID),
 			attribute.String("hypervisor", string(hvType)),
+			attribute.Bool("share_mem_file", shareMemFile),
 		),
 	)
 	var retErr error
@@ -108,9 +112,10 @@ func (m *manager) copySnapshotGuestDirectoryForFork(ctx context.Context, snapsho
 	_, cloneDone := m.startLifecycleStep(ctx, "instances.snapshot.copy_guest_directory.clone",
 		attribute.String("operation", "snapshot_copy_guest_directory_clone"),
 		attribute.String("snapshot_id", snapshotID),
+		attribute.Bool("share_mem_file", shareMemFile),
 	)
 	retErr = withSnapshotSourceAliasReadLock(func() error {
-		if err := forkvm.CopyGuestDirectory(m.paths.SnapshotGuestDir(snapshotID), dstDir); err != nil {
+		if err := cloneGuestDirectoryForFork(ctx, m.paths.SnapshotGuestDir(snapshotID), dstDir, shareMemFile); err != nil {
 			if errors.Is(err, forkvm.ErrSparseCopyUnsupported) {
 				return fmt.Errorf("fork from snapshot requires sparse-capable filesystem (SEEK_DATA/SEEK_HOLE unsupported): %w", err)
 			}
@@ -120,4 +125,28 @@ func (m *manager) copySnapshotGuestDirectoryForFork(ctx context.Context, snapsho
 	})
 	cloneDone(retErr)
 	return retErr
+}
+
+// cloneGuestDirectoryForFork copies a guest directory for a fork. When
+// shareMemFile is set and the source has a raw snapshot mem-file, the mem-file
+// is skipped from the copy walk and hardlinked into place instead.
+func cloneGuestDirectoryForFork(ctx context.Context, srcDir, dstDir string, shareMemFile bool) error {
+	srcMem := firecrackerSnapshotMemoryPathInGuestDir(srcDir)
+	if shareMemFile {
+		if _, err := os.Stat(srcMem); err != nil {
+			shareMemFile = false
+		}
+	}
+
+	copyOptions := forkvm.CopyOptions{}
+	if shareMemFile {
+		copyOptions.SkipRelativePaths = map[string]struct{}{firecrackerSnapshotMemoryRelPath: {}}
+	}
+	if err := forkvm.CopyGuestDirectoryWithOptions(srcDir, dstDir, copyOptions); err != nil {
+		return err
+	}
+	if shareMemFile {
+		return linkForkFirecrackerMemFile(ctx, srcDir, dstDir)
+	}
+	return nil
 }
