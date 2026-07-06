@@ -113,12 +113,20 @@ func (s *server) startMetrics(metricsAddr string) (func(), error) {
 		return nil, fmt.Errorf("register uffd metrics: %w", err)
 	}
 
+	lis, err := net.Listen("tcp", metricsAddr)
+	if err != nil {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = otelShutdown(shutdownCtx)
+		return nil, fmt.Errorf("bind metrics listener on %s: %w", metricsAddr, err)
+	}
+
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", provider.MetricsHandler)
-	metricsSrv := &http.Server{Addr: metricsAddr, Handler: mux}
+	metricsSrv := &http.Server{Handler: mux}
 	go func() {
 		slog.Info("serving uffd pager metrics", "addr", metricsAddr, "path", "/metrics", "version_key", s.versionKey)
-		if err := metricsSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := metricsSrv.Serve(lis); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("uffd metrics server error", "error", err)
 		}
 	}()
