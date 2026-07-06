@@ -115,10 +115,12 @@ func (s *server) startMetrics(metricsAddr string) (func(), error) {
 
 	lis, err := net.Listen("tcp", metricsAddr)
 	if err != nil {
+		slog.Error("failed to bind uffd metrics listener; continuing without metrics",
+			"addr", metricsAddr, "version_key", s.versionKey, "error", err)
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = otelShutdown(shutdownCtx)
-		return nil, fmt.Errorf("bind metrics listener on %s: %w", metricsAddr, err)
+		return func() {}, nil
 	}
 
 	mux := http.NewServeMux()
