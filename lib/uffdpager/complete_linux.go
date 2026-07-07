@@ -63,16 +63,29 @@ func (s *server) handleComplete(w http.ResponseWriter, r *http.Request) {
 
 	select {
 	case err := <-req.resp:
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
+		writeCompleteResult(w, err)
 	case <-sess.done:
-		http.Error(w, "session closed before completion", http.StatusInternalServerError)
+		// A successful completion delivers its result and then tears the session
+		// down, so done and resp can be ready together and select picks randomly.
+		// Prefer a delivered result: reporting failure for a completed detach
+		// would leave the caller's session binding pointing at a gone session.
+		select {
+		case err := <-req.resp:
+			writeCompleteResult(w, err)
+		default:
+			http.Error(w, "session closed before completion", http.StatusInternalServerError)
+		}
 	case <-r.Context().Done():
 		http.Error(w, r.Context().Err().Error(), http.StatusGatewayTimeout)
 	}
+}
+
+func writeCompleteResult(w http.ResponseWriter, err error) {
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // wake writes the wake pipe so the fault loop breaks out of an idle poll and

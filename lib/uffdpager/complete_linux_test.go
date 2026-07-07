@@ -5,10 +5,13 @@ package uffdpager
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
 	"golang.org/x/sys/unix"
 )
 
@@ -50,6 +53,46 @@ func TestWakePipeDrains(t *testing.T) {
 	var b [1]byte
 	if n, _ := unix.Read(r, b[:]); n > 0 {
 		t.Fatalf("expected wake pipe drained, read %d bytes", n)
+	}
+}
+
+// TestHandleCompleteSuccessBeatsTeardown reproduces the race where a
+// successful completion delivers its result and tears the session down before
+// the HTTP handler reads it: resp and done are then both ready and select picks
+// randomly. The handler must prefer the delivered result and return 204 every
+// time — reporting failure for a completed detach would strand the caller's
+// session binding on a session that no longer exists.
+func TestHandleCompleteSuccessBeatsTeardown(t *testing.T) {
+	srv := &server{sessions: make(map[string]*session)}
+	router := chi.NewRouter()
+	router.Post("/sessions/{id}/complete", srv.handleComplete)
+
+	for i := 0; i < 300; i++ {
+		sess := &session{
+			id:            "sess1",
+			done:          make(chan struct{}),
+			uffdFD:        -1,
+			wakeR:         -1,
+			wakeW:         -1,
+			completeReqCh: make(chan *completeRequest, 1),
+		}
+		srv.mu.Lock()
+		srv.sessions["sess1"] = sess
+		srv.mu.Unlock()
+
+		// Fake fault loop: succeed, then tear down immediately, mirroring
+		// takeCompletion returning true and run()'s deferred close.
+		go func() {
+			req := <-sess.completeReqCh
+			req.resp <- nil
+			close(sess.done)
+		}()
+
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/sessions/sess1/complete", nil))
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("iteration %d: status = %d, want 204", i, rec.Code)
+		}
 	}
 }
 
