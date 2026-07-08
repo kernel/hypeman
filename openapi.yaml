@@ -123,11 +123,13 @@ components:
       properties:
         mode:
           type: string
-          enum: [all, http_https_only]
+          enum: [all, http_https_only, all_traffic]
           default: all
           description: |
             `all` (default) rejects direct non-mediated TCP egress from the VM,
-            while `http_https_only` rejects direct egress only on TCP ports 80 and 443.
+            `http_https_only` rejects direct egress only on TCP ports 80 and 443,
+            and `all_traffic` rejects direct TCP and UDP egress (including QUIC and
+            direct DNS; the guest must resolve names through its proxy).
           example: all
 
     CreateInstanceRequestNetworkEgress:
@@ -145,6 +147,17 @@ components:
             host-managed credential rewriting is disabled.
           default: false
           example: true
+        proxy:
+          type: string
+          enum: [mitm, none]
+          default: mitm
+          description: |
+            Host-side proxy behavior for the mediated egress path.
+            `mitm` (default) runs the host MITM proxy, injects `HTTP_PROXY`/`HTTPS_PROXY`
+            into the guest, and installs the proxy CA in the guest trust store.
+            `none` applies host-side egress enforcement only: no proxy process, no guest
+            env injection, and no CA install. Use `none` when the guest is configured to
+            reach an external proxy at the network gateway. Credentials require `mitm`.
         enforcement:
           $ref: "#/components/schemas/CreateInstanceRequestNetworkEgressEnforcement"
 
@@ -524,6 +537,16 @@ components:
           $ref: "#/components/schemas/HealthCheck"
         restart_policy:
           $ref: "#/components/schemas/RestartPolicy"
+        egress:
+          allOf:
+            - $ref: "#/components/schemas/CreateInstanceRequestNetworkEgress"
+          description: |
+            Replaces the instance's egress policy. Only enforcement-only policies
+            (`proxy: none`) can be set via update, and only on instances that were
+            not created with `proxy: mitm` egress — MITM mediation requires guest
+            env and CA configuration that cannot change on a running instance.
+            When the instance is running, host-side enforcement is applied or
+            removed immediately; otherwise the policy takes effect on next start.
 
     CreateInstanceRequest:
       type: object

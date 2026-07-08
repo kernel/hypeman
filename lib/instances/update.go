@@ -48,6 +48,18 @@ func (m *manager) updateInstance(ctx context.Context, id string, req UpdateInsta
 		}
 		req.RestartPolicy = normalizedRestartPolicy
 	}
+	if req.NetworkEgressSet && req.NetworkEgress != nil && req.NetworkEgress.Enabled {
+		mode, err := normalizeEgressEnforcementMode(req.NetworkEgress.EnforcementMode)
+		if err != nil {
+			return nil, err
+		}
+		req.NetworkEgress.EnforcementMode = mode
+		proxyMode, err := normalizeEgressProxyMode(req.NetworkEgress.Proxy)
+		if err != nil {
+			return nil, err
+		}
+		req.NetworkEgress.Proxy = proxyMode
+	}
 
 	if err := validateUpdateInstanceRequest(meta, req); err != nil {
 		return nil, err
@@ -67,8 +79,16 @@ func (m *manager) updateInstance(ctx context.Context, id string, req UpdateInsta
 		nextMeta.RestartPolicy = cloneRestartPolicy(req.RestartPolicy)
 		nextMeta.RestartStatus = restartStatusAfterPolicyUpdate(nextMeta.RestartStatus)
 	}
+	if req.NetworkEgressSet {
+		nextMeta.NetworkEgress = cloneNetworkEgressPolicy(req.NetworkEgress)
+	}
 	if len(req.Env) == 0 {
+		revertEgress, err := m.applyEgressEnforcementUpdate(ctx, id, inst.State, meta.NetworkEgress, nextMeta.NetworkEgress, req.NetworkEgressSet)
+		if err != nil {
+			return nil, err
+		}
 		if err := m.saveMetadata(nextMeta); err != nil {
+			revertEgress()
 			return nil, fmt.Errorf("save metadata: %w", err)
 		}
 
@@ -114,8 +134,24 @@ func (m *manager) updateInstance(ctx context.Context, id string, req UpdateInsta
 }
 
 func validateUpdateInstanceRequest(meta *metadata, req UpdateInstanceRequest) error {
-	if len(req.Env) == 0 && req.AutoStandby == nil && req.HealthCheck == nil && !req.RestartPolicySet {
-		return fmt.Errorf("%w: request must include env, auto_standby, health_check, and/or restart_policy", ErrInvalidRequest)
+	if len(req.Env) == 0 && req.AutoStandby == nil && req.HealthCheck == nil && !req.RestartPolicySet && !req.NetworkEgressSet {
+		return fmt.Errorf("%w: request must include env, auto_standby, health_check, restart_policy, and/or egress", ErrInvalidRequest)
+	}
+	if req.NetworkEgressSet {
+		if meta == nil {
+			return fmt.Errorf("%w: instance metadata is required", ErrInvalidRequest)
+		}
+		if meta.NetworkEgress != nil && meta.NetworkEgress.Enabled && egressProxyMode(meta.NetworkEgress) == EgressProxyModeMITM {
+			return fmt.Errorf("%w: egress policy of instances using proxy=mitm cannot be updated; recreate the instance", ErrInvalidRequest)
+		}
+		if req.NetworkEgress != nil && req.NetworkEgress.Enabled {
+			if !meta.NetworkEnabled {
+				return fmt.Errorf("%w: egress requires network.enabled=true", ErrInvalidRequest)
+			}
+			if req.NetworkEgress.Proxy != EgressProxyModeNone {
+				return fmt.Errorf("%w: only enforcement-only egress (proxy=none) can be set via update", ErrInvalidRequest)
+			}
+		}
 	}
 	if req.HealthCheck != nil {
 		if meta == nil {
@@ -154,6 +190,49 @@ func validateUpdateInstanceRequest(meta *metadata, req UpdateInstanceRequest) er
 	}
 
 	return nil
+}
+
+// applyEgressEnforcementUpdate reconciles host-side egress enforcement with the
+// next policy for a live instance, returning a revert func that restores the
+// previous enforcement state if the metadata save fails. Policies that require
+// the MITM proxy are rejected by validation before this point, so only iptables
+// state changes here — nothing guest-visible.
+func (m *manager) applyEgressEnforcementUpdate(ctx context.Context, id string, state State, prev, next *NetworkEgressPolicy, set bool) (func(), error) {
+	noop := func() {}
+	if !set {
+		return noop, nil
+	}
+	if state != StateRunning && state != StateInitializing {
+		// Stopped/standby instances pick up the persisted policy on next
+		// start/restore via maybeRegisterEgressProxy.
+		return noop, nil
+	}
+
+	alloc, err := m.networkManager.GetAllocation(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("get network allocation for egress update: %w", err)
+	}
+	if alloc == nil {
+		return nil, fmt.Errorf("%w: instance has no active network allocation", ErrInvalidState)
+	}
+
+	apply := func(policy *NetworkEgressPolicy) error {
+		if policy == nil || !policy.Enabled {
+			return egressproxy.RemoveEnforcement(id)
+		}
+		blockAllTCP, blockUDP := egressBlockFlags(policy.EnforcementMode)
+		return egressproxy.ApplyEnforcement(id, alloc.TAPDevice, alloc.Gateway, blockAllTCP, blockUDP)
+	}
+
+	if err := apply(next); err != nil {
+		return nil, fmt.Errorf("apply egress enforcement: %w", err)
+	}
+	revert := func() {
+		if err := apply(prev); err != nil {
+			logger.FromContext(ctx).WarnContext(ctx, "failed to revert egress enforcement after metadata save failure", "instance_id", id, "error", err)
+		}
+	}
+	return revert, nil
 }
 
 func cloneEnvMap(in map[string]string) map[string]string {

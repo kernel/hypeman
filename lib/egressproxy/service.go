@@ -193,7 +193,7 @@ func (s *Service) RegisterInstance(ctx context.Context, gatewayIP string, cfg In
 	log := s.loggerForContext(ctx)
 	result := "error"
 	var opErr error
-	enforcementMode := enforcementModeLabel(cfg.BlockAllTCPEgress)
+	enforcementMode := enforcementModeLabel(cfg.BlockAllTCPEgress, cfg.BlockUDPEgress)
 	ctx, span := s.startControlPlaneSpan(ctx, "EgressProxy.RegisterInstance",
 		attribute.String("operation", "register"),
 		attribute.String("enforcement_mode", enforcementMode),
@@ -212,7 +212,7 @@ func (s *Service) RegisterInstance(ctx context.Context, gatewayIP string, cfg In
 		return GuestConfig{}, err
 	}
 
-	if err := applyEgressEnforcement(cfg.InstanceID, cfg.TAPDevice, gatewayIP, s.listenPort, cfg.BlockAllTCPEgress); err != nil {
+	if err := applyEgressEnforcement(cfg.InstanceID, cfg.TAPDevice, gatewayIP, cfg.BlockAllTCPEgress, cfg.BlockUDPEgress); err != nil {
 		log.WarnContext(ctx, "failed to apply egress proxy enforcement", "instance_id", cfg.InstanceID, "error", err)
 		opErr = err
 		return GuestConfig{}, err
@@ -651,7 +651,10 @@ func (s *Service) finishControlPlaneSpan(span trace.Span, result string, err err
 	span.End()
 }
 
-func enforcementModeLabel(blockAllTCPEgress bool) string {
+func enforcementModeLabel(blockAllTCPEgress, blockUDPEgress bool) string {
+	if blockAllTCPEgress && blockUDPEgress {
+		return "all_traffic"
+	}
 	if blockAllTCPEgress {
 		return "all"
 	}

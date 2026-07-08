@@ -586,6 +586,11 @@ func validateCreateRequest(req *CreateInstanceRequest) error {
 			return err
 		}
 		req.NetworkEgress.EnforcementMode = mode
+		proxyMode, err := normalizeEgressProxyMode(req.NetworkEgress.Proxy)
+		if err != nil {
+			return err
+		}
+		req.NetworkEgress.Proxy = proxyMode
 	}
 	normalizedCredentials, err := normalizeCredentialPolicies(req.Credentials)
 	if err != nil {
@@ -595,6 +600,9 @@ func validateCreateRequest(req *CreateInstanceRequest) error {
 	if len(normalizedCredentials) > 0 {
 		if req.NetworkEgress == nil || !req.NetworkEgress.Enabled {
 			return fmt.Errorf("%w: credentials require network.egress.enabled=true", ErrInvalidRequest)
+		}
+		if req.NetworkEgress.Proxy == EgressProxyModeNone {
+			return fmt.Errorf("%w: credentials require network.egress.proxy=mitm", ErrInvalidRequest)
 		}
 		if err := validateCredentialEnvBindings(normalizedCredentials, req.Env); err != nil {
 			return err
