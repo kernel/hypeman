@@ -31,6 +31,13 @@ func (s *server) createSession(req CreateSessionRequest) (*session, error) {
 		_ = os.Remove(socketPath)
 		return nil, fmt.Errorf("open backing memory for uffd session %s: %w", id, err)
 	}
+	wakeR, wakeW, err := newWakePipe()
+	if err != nil {
+		_ = backingFile.Close()
+		_ = listener.Close()
+		_ = os.Remove(socketPath)
+		return nil, fmt.Errorf("create wake pipe for uffd session %s: %w", id, err)
+	}
 
 	sess := &session{
 		id:                id,
@@ -43,6 +50,9 @@ func (s *server) createSession(req CreateSessionRequest) (*session, error) {
 		done:              make(chan struct{}),
 		backingFile:       backingFile,
 		uffdFD:            -1,
+		wakeR:             wakeR,
+		wakeW:             wakeW,
+		completeReqCh:     make(chan *completeRequest, 1),
 	}
 
 	s.mu.Lock()
@@ -135,11 +145,14 @@ func (s *session) run() {
 	sort.Slice(mappings, func(i, j int) bool {
 		return mappings[i].BaseHostVirtAddr < mappings[j].BaseHostVirtAddr
 	})
+	s.mappings = mappings
 	s.handleFaults(mappings)
 }
 
 func (s *session) close() {
 	s.closeOnce.Do(func() {
+		// Closing s.done releases any /complete waiter still blocked on this
+		// session; the wake pipe fds are closed below.
 		if s.listener != nil {
 			_ = s.listener.Close()
 		}
@@ -149,6 +162,15 @@ func (s *session) close() {
 		if s.uffdFD >= 0 {
 			_ = unix.Close(s.uffdFD)
 		}
+		if s.wakeR >= 0 {
+			_ = unix.Close(s.wakeR)
+		}
+		s.wakeMu.Lock()
+		if s.wakeW >= 0 {
+			_ = unix.Close(s.wakeW)
+			s.wakeW = -1
+		}
+		s.wakeMu.Unlock()
 		if s.backingFile != nil {
 			_ = s.backingFile.Close()
 		}
