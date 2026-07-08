@@ -1159,6 +1159,8 @@ func TestOOMExitPropagation(t *testing.T) {
 	t.Skipf("OOM did not trigger reliably on this host after %d attempts (last observed state: %s)", retries, lastObservedState)
 }
 
+const redisEntrypointEnvImage = "docker.io/bitnamilegacy/redis:7.2.5-debian-12-r0"
+
 // TestEntrypointEnvVars verifies that environment variables are passed to the entrypoint process.
 // This uses bitnami/redis which configures REDIS_PASSWORD from an env var - if auth is required,
 // it proves the entrypoint received and used the env var.
@@ -1180,7 +1182,7 @@ func TestEntrypointEnvVars(t *testing.T) {
 	// Pull bitnami/redis image
 	t.Log("Pulling bitnami/redis image...")
 	redisImage, err := imageManager.CreateImage(ctx, images.CreateImageRequest{
-		Name: integrationTestImageRef(t, "docker.io/bitnami/redis:latest"),
+		Name: integrationTestImageRef(t, redisEntrypointEnvImage),
 	})
 	require.NoError(t, err)
 
@@ -1218,7 +1220,7 @@ func TestEntrypointEnvVars(t *testing.T) {
 	testPassword := "test_secret_password_123"
 	req := CreateInstanceRequest{
 		Name:           "test-redis-env",
-		Image:          integrationTestImageRef(t, "docker.io/bitnami/redis:latest"),
+		Image:          integrationTestImageRef(t, redisEntrypointEnvImage),
 		Size:           2 * 1024 * 1024 * 1024,
 		HotplugSize:    512 * 1024 * 1024,
 		OverlaySize:    10 * 1024 * 1024 * 1024,
