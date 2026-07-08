@@ -7,7 +7,6 @@ import (
 	"time"
 
 	pb "github.com/kernel/hypeman/lib/guest"
-	"golang.org/x/sys/unix"
 )
 
 // SyncClock sets the guest realtime clock. The guest wall clock resumes from
@@ -20,9 +19,8 @@ func (s *guestServer) SyncClock(_ context.Context, req *pb.SyncClockRequest) (*p
 
 	target := time.Unix(0, req.UnixNanos)
 	adjustment := time.Until(target)
-	ts := unix.NsecToTimespec(req.UnixNanos)
-	if err := unix.ClockSettime(unix.CLOCK_REALTIME, &ts); err != nil {
-		return nil, fmt.Errorf("set realtime clock: %w", err)
+	if err := setRealtimeClock(req.UnixNanos); err != nil {
+		return nil, err
 	}
 
 	log.Printf("[guest-agent] realtime clock set to %s (adjusted by %s)",
