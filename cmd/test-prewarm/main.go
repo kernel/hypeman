@@ -40,7 +40,8 @@ var defaultImages = []prewarmImage{
 	{Source: "docker.io/library/alpine:3.18"},
 	{Source: "docker.io/library/debian:12-slim"},
 	{Source: "docker.io/library/nginx:alpine"},
-	{Source: "docker.io/bitnami/redis:latest"},
+	// Keep in sync with redisEntrypointEnvImage in lib/instances tests.
+	{Source: "docker.io/bitnamilegacy/redis:7.2.5-debian-12-r0"},
 	{Source: "docker.io/jrei/systemd-ubuntu:22.04"},
 	// amd64-only mirror for the Rosetta x86 image E2E (single-platform manifest;
 	// see toLocalRegistryRef for why it must be the only mirror of this tag).
