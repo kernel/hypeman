@@ -259,6 +259,11 @@ type Capabilities struct {
 	// SupportsDiskResize indicates if live disk resizing (/vm.resize-disk) is available.
 	// Cloud Hypervisor v50.0+ only.
 	SupportsDiskResize bool
+
+	// UsesDetachableSnapshotMemoryPager indicates restores can be backed by an
+	// external snapshot-memory pager that a running VM can later be detached
+	// from (populate remaining pages, then release the session).
+	UsesDetachableSnapshotMemoryPager bool
 }
 
 // VsockDialer provides vsock connectivity to a guest VM.

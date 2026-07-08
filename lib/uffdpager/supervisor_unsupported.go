@@ -29,6 +29,10 @@ func (s *Supervisor) CloseSessionVersion(context.Context, string, string) error 
 	return nil
 }
 
+func (s *Supervisor) CompleteSessionVersion(context.Context, string, string) error {
+	return fmt.Errorf("uffd pager is only supported on linux")
+}
+
 func (s *Supervisor) Stats(context.Context) (*Stats, error) {
 	return nil, fmt.Errorf("uffd pager is only supported on linux")
 }
