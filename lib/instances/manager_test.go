@@ -1551,6 +1551,13 @@ func TestStandbyAndRestore(t *testing.T) {
 	assert.True(t, inst.HasSnapshot)
 	t.Log("Instance in standby")
 
+	// Let real time advance while the guest is paused. The snapshot froze the
+	// guest wall clock, so without the post-restore SyncClock the guest would
+	// lag by at least this long after restore.
+	standbySkew := 10 * time.Second
+	t.Logf("Sleeping %s in standby to accumulate clock skew...", standbySkew)
+	time.Sleep(standbySkew)
+
 	// Verify snapshot exists
 	p := paths.New(tmpDir)
 	snapshotDir := p.InstanceSnapshotLatest(inst.Id)
@@ -1593,12 +1600,46 @@ func TestStandbyAndRestore(t *testing.T) {
 		}
 	}
 
+	// The restore path syncs the guest realtime clock before returning, so the
+	// guest must not lag by the time spent in standby.
+	guestEpoch := readGuestEpoch(t, ctx, inst)
+	clockLag := time.Now().Unix() - guestEpoch
+	t.Logf("Guest clock lag after restore: %ds", clockLag)
+	assert.LessOrEqual(t, clockLag, int64(5), "guest clock should be resynced after restore, not lag by the standby duration")
+	assert.GreaterOrEqual(t, clockLag, int64(-5), "guest clock should not run ahead of the host")
+
+	// Exercise the exec fallback used for snapshots taken by older agents:
+	// skew the guest clock back an hour, run the fallback, verify it recovers.
+	_, code, err := execInInstance(ctx, inst, "sh", "-c", fmt.Sprintf("date -u -s @%d", time.Now().Add(-time.Hour).Unix()))
+	require.NoError(t, err)
+	require.Equal(t, 0, code, "skewing guest clock via date should succeed")
+
+	dialer, err := hypervisor.NewVsockDialer(inst.HypervisorType, inst.VsockSocket, inst.VsockCID)
+	require.NoError(t, err)
+	require.NoError(t, syncGuestClockWithExec(ctx, dialer))
+
+	guestEpoch = readGuestEpoch(t, ctx, inst)
+	clockLag = time.Now().Unix() - guestEpoch
+	t.Logf("Guest clock lag after exec fallback sync: %ds", clockLag)
+	assert.LessOrEqual(t, clockLag, int64(5), "exec fallback should resync a skewed guest clock")
+	assert.GreaterOrEqual(t, clockLag, int64(-5), "exec fallback should not set the guest clock ahead of the host")
+
 	// Cleanup (no sleep needed - DeleteInstance handles process cleanup)
 	t.Log("Cleaning up...")
 	err = manager.DeleteInstance(ctx, inst.Id)
 	require.NoError(t, err)
 
 	t.Log("Standby/restore test complete!")
+}
+
+func readGuestEpoch(t *testing.T, ctx context.Context, inst *Instance) int64 {
+	t.Helper()
+	out, code, err := execInInstance(ctx, inst, "date", "+%s")
+	require.NoError(t, err)
+	require.Equal(t, 0, code, "date should succeed in guest: %s", out)
+	epoch, err := strconv.ParseInt(strings.TrimSpace(out), 10, 64)
+	require.NoError(t, err, "parse guest epoch from %q", out)
+	return epoch
 }
 
 func TestCloudHypervisorSnapshotFeature(t *testing.T) {
