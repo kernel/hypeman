@@ -606,7 +606,7 @@ func TestQEMUEntrypointEnvVars(t *testing.T) {
 	// Pull bitnami/redis image
 	t.Log("Pulling bitnami/redis image...")
 	redisImage, err := imageManager.CreateImage(ctx, images.CreateImageRequest{
-		Name: integrationTestImageRef(t, "docker.io/bitnami/redis:latest"),
+		Name: integrationTestImageRef(t, redisEntrypointEnvImage),
 	})
 	require.NoError(t, err)
 
@@ -648,7 +648,7 @@ func TestQEMUEntrypointEnvVars(t *testing.T) {
 	testPassword := "test_secret_password_123"
 	req := CreateInstanceRequest{
 		Name:           "test-redis-env",
-		Image:          integrationTestImageRef(t, "docker.io/bitnami/redis:latest"),
+		Image:          integrationTestImageRef(t, redisEntrypointEnvImage),
 		Size:           2 * 1024 * 1024 * 1024,
 		HotplugSize:    512 * 1024 * 1024,
 		OverlaySize:    10 * 1024 * 1024 * 1024,
