@@ -511,6 +511,13 @@ func reconfigureGuestNetwork(ctx context.Context, stored *StoredMetadata, alloc 
 	return nil
 }
 
+// syncClockAgentWait bounds how long a restore blocks on clock sync. The
+// agent was running when the snapshot was taken, so it is reachable almost
+// immediately after resume; clock sync is non-fatal, so an unresponsive agent
+// should cost seconds of restore latency, not the 120s the (fatal, fork-only)
+// network reconfigure path tolerates.
+const syncClockAgentWait = 10 * time.Second
+
 func syncGuestClock(ctx context.Context, stored *StoredMetadata) error {
 	dialer, err := hypervisor.NewVsockDialer(stored.HypervisorType, stored.VsockSocket, stored.VsockCID)
 	if err != nil {
@@ -518,7 +525,7 @@ func syncGuestClock(ctx context.Context, stored *StoredMetadata) error {
 	}
 
 	err = guest.SyncClockInInstance(ctx, dialer, guest.SyncClockOptions{
-		WaitForAgent: 120 * time.Second,
+		WaitForAgent: syncClockAgentWait,
 	})
 	if err != nil {
 		// Instances standbyed before the agent gained SyncClock still run the
@@ -534,11 +541,15 @@ func syncGuestClock(ctx context.Context, stored *StoredMetadata) error {
 
 func syncGuestClockWithExec(ctx context.Context, dialer hypervisor.VsockDialer) error {
 	var stdout, stderr bytes.Buffer
+	// The timestamp is baked into the command before any agent wait, but this
+	// path only runs right after the agent answered the SyncClock RPC with
+	// Unimplemented, so the wait is ~0 and staleness is bounded by
+	// syncClockAgentWait — negligible next to the standby skew being corrected.
 	exit, err := guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{
 		Command:      []string{"sh", "-c", fmt.Sprintf("date -u -s @%d", time.Now().Unix())},
 		Stdout:       &stdout,
 		Stderr:       &stderr,
-		WaitForAgent: 120 * time.Second,
+		WaitForAgent: syncClockAgentWait,
 	})
 	if err != nil {
 		return fmt.Errorf("exec clock sync command: %w", err)
