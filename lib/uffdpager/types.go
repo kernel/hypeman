@@ -1,11 +1,17 @@
 package uffdpager
 
+import "errors"
+
 const (
 	BackendFile = "file"
 	BackendUFFD = "uffd"
 
 	defaultCacheMaxBytes = int64(4 << 30)
 )
+
+// ErrSessionNotFound reports that a pager no longer has the requested session,
+// so a completion request had nothing to act on.
+var ErrSessionNotFound = errors.New("uffd pager session not found")
 
 // CreateSessionRequest describes one Firecracker UFFD restore session.
 type CreateSessionRequest struct {

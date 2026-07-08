@@ -50,7 +50,10 @@ type uffdEvent struct {
 func (s *session) handleFaults(mappings []guestRegionUffdMapping) {
 	fd := s.uffdFD
 	_ = unix.SetNonblock(fd, true)
-	pollFDs := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
+	pollFDs := []unix.PollFd{
+		{Fd: int32(fd), Events: unix.POLLIN},
+		{Fd: int32(s.wakeR), Events: unix.POLLIN},
+	}
 	buf := make([]byte, uffdMsgSize)
 	var deferred []uffdEvent
 	for {
@@ -61,6 +64,14 @@ func (s *session) handleFaults(mappings []guestRegionUffdMapping) {
 					continue
 				}
 				return
+			}
+			if pollFDs[1].Revents&unix.POLLIN != 0 {
+				drainWake(s.wakeR)
+				// Populate and unregister in this goroutine; only exit (and tear
+				// down the session) when completion fully succeeds.
+				if s.takeCompletion() {
+					return
+				}
 			}
 			if n == 0 || pollFDs[0].Revents&unix.POLLIN == 0 {
 				if pollFDs[0].Revents&(unix.POLLHUP|unix.POLLERR|unix.POLLNVAL) != 0 {

@@ -252,18 +252,24 @@ func (s *Supervisor) clientForVersion(versionKey string) *http.Client {
 	if client := s.clients[versionKey]; client != nil {
 		return client
 	}
-	socketPath := pagerControlSocket(s.dataDir, versionKey)
-	client := &http.Client{
+	client := newUnixHTTPClient(pagerControlSocket(s.dataDir, versionKey), 10*time.Second)
+	s.clients[versionKey] = client
+	return client
+}
+
+// newUnixHTTPClient builds an HTTP client bound to a single unix control socket.
+// A timeout of zero leaves the request bounded only by its context, which the
+// completion call relies on because it can run longer than a normal request.
+func newUnixHTTPClient(socketPath string, timeout time.Duration) *http.Client {
+	return &http.Client{
 		Transport: &http.Transport{
 			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 				var d net.Dialer
 				return d.DialContext(ctx, "unix", socketPath)
 			},
 		},
-		Timeout: 10 * time.Second,
+		Timeout: timeout,
 	}
-	s.clients[versionKey] = client
-	return client
 }
 
 func pagerVersionDir(dataDir, versionKey string) string {
