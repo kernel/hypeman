@@ -1545,6 +1545,13 @@ func TestStandbyAndRestore(t *testing.T) {
 	err = waitForVMReady(ctx, inst.SocketPath, 5*time.Second)
 	require.NoError(t, err, "VM should reach running state")
 
+	// Skew the guest clock back an hour so the post-restore check proves the
+	// clock keeper corrected it, rather than passing on a small natural lag.
+	skewOut, skewCode, err := execInInstance(ctx, inst, "date", "-u", "-s",
+		fmt.Sprintf("@%d", time.Now().Add(-time.Hour).Unix()))
+	require.NoError(t, err)
+	require.Equal(t, 0, skewCode, "skewing guest clock should succeed: %s", skewOut)
+
 	// Standby instance
 	t.Log("Standing by instance...")
 	inst, err = manager.StandbyInstance(ctx, inst.Id, StandbyInstanceRequest{})
@@ -1584,6 +1591,23 @@ func TestStandbyAndRestore(t *testing.T) {
 	inst, err = waitForInstanceState(ctx, manager, inst.Id, StateRunning, integrationTestTimeout(20*time.Second))
 	require.NoError(t, err)
 	t.Log("Instance restored and running")
+
+	// The guest-agent clock keeper should step the skewed wall clock back to
+	// host time; without it the guest stays about an hour behind.
+	require.Eventually(t, func() bool {
+		out, code, err := execInInstance(ctx, inst, "date", "+%s")
+		if err != nil || code != 0 {
+			return false
+		}
+		epoch, err := strconv.ParseInt(strings.TrimSpace(out), 10, 64)
+		if err != nil {
+			return false
+		}
+		lag := time.Now().Unix() - epoch
+		t.Logf("guest clock lag: %ds", lag)
+		return lag >= -5 && lag <= 5
+	}, integrationTestTimeout(60*time.Second), 3*time.Second,
+		"guest clock should converge to host time after restore")
 
 	// DEBUG: Check app.log file size after restore
 	if info, err := os.Stat(consoleLogPath); err == nil {
