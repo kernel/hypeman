@@ -1551,6 +1551,10 @@ func TestStandbyAndRestore(t *testing.T) {
 	assert.True(t, inst.HasSnapshot)
 	t.Log("Instance in standby")
 
+	// Let real time advance while the guest is paused so its wall clock,
+	// frozen at snapshot time, lags measurably after restore.
+	time.Sleep(10 * time.Second)
+
 	// Verify snapshot exists
 	p := paths.New(tmpDir)
 	snapshotDir := p.InstanceSnapshotLatest(inst.Id)
@@ -1582,6 +1586,23 @@ func TestStandbyAndRestore(t *testing.T) {
 	inst, err = waitForInstanceState(ctx, manager, inst.Id, StateRunning, integrationTestTimeout(20*time.Second))
 	require.NoError(t, err)
 	t.Log("Instance restored and running")
+
+	// The guest-agent clock keeper should step the wall clock back to host
+	// time; without it the guest stays behind by the standby duration.
+	require.Eventually(t, func() bool {
+		out, code, err := execInInstance(ctx, inst, "date", "+%s")
+		if err != nil || code != 0 {
+			return false
+		}
+		epoch, err := strconv.ParseInt(strings.TrimSpace(out), 10, 64)
+		if err != nil {
+			return false
+		}
+		lag := time.Now().Unix() - epoch
+		t.Logf("guest clock lag: %ds", lag)
+		return lag >= -5 && lag <= 5
+	}, integrationTestTimeout(60*time.Second), 3*time.Second,
+		"guest clock should converge to host time after restore")
 
 	// DEBUG: Check app.log file size after restore
 	if info, err := os.Stat(consoleLogPath); err == nil {
