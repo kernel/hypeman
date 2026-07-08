@@ -360,6 +360,22 @@ func (m *manager) restoreInstance(
 	}
 	releaseRestoreSlotOnce()
 
+	// 7. Sync the guest realtime clock. It resumes from the snapshot's saved
+	// time, so until corrected every in-guest timestamp lags by the time spent
+	// in standby. Non-fatal: a skewed clock degrades timestamps, not the VM.
+	if !stored.SkipGuestAgent {
+		syncCtx, syncSpanEnd := m.startLifecycleStep(ctx, "sync_guest_clock",
+			attribute.String("instance_id", id),
+			attribute.String("hypervisor", string(stored.HypervisorType)),
+			attribute.String("operation", "sync_guest_clock"),
+		)
+		err := syncGuestClock(syncCtx, stored)
+		syncSpanEnd(err)
+		if err != nil {
+			log.WarnContext(ctx, "failed to sync guest clock after restore", "instance_id", id, "error", err)
+		}
+	}
+
 	// 8. Delete snapshot after successful restore unless the hypervisor is keeping it
 	// as the base for the next standby snapshot.
 	if m.supportsSnapshotBaseReuse(stored.HypervisorType) {
@@ -492,6 +508,44 @@ func reconfigureGuestNetwork(ctx context.Context, stored *StoredMetadata, alloc 
 		return fmt.Errorf("reconfigure guest network: %w", err)
 	}
 
+	return nil
+}
+
+func syncGuestClock(ctx context.Context, stored *StoredMetadata) error {
+	dialer, err := hypervisor.NewVsockDialer(stored.HypervisorType, stored.VsockSocket, stored.VsockCID)
+	if err != nil {
+		return fmt.Errorf("create vsock dialer: %w", err)
+	}
+
+	err = guest.SyncClockInInstance(ctx, dialer, guest.SyncClockOptions{
+		WaitForAgent: 120 * time.Second,
+	})
+	if err != nil {
+		// Instances standbyed before the agent gained SyncClock still run the
+		// old binary from their snapshot; set the clock via exec instead.
+		if status.Code(err) == codes.Unimplemented {
+			return syncGuestClockWithExec(ctx, dialer)
+		}
+		return fmt.Errorf("sync guest clock: %w", err)
+	}
+
+	return nil
+}
+
+func syncGuestClockWithExec(ctx context.Context, dialer hypervisor.VsockDialer) error {
+	var stdout, stderr bytes.Buffer
+	exit, err := guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{
+		Command:      []string{"sh", "-c", fmt.Sprintf("date -u -s @%d", time.Now().Unix())},
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+		WaitForAgent: 120 * time.Second,
+	})
+	if err != nil {
+		return fmt.Errorf("exec clock sync command: %w", err)
+	}
+	if exit.Code != 0 {
+		return fmt.Errorf("clock sync command failed (exit=%d, stdout=%q, stderr=%q)", exit.Code, strings.TrimSpace(stdout.String()), strings.TrimSpace(stderr.String()))
+	}
 	return nil
 }
 

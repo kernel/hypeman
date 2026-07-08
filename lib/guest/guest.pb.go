@@ -1380,6 +1380,88 @@ func (*ReconfigureNetworkResponse) Descriptor() ([]byte, []int) {
 	return file_lib_guest_guest_proto_rawDescGZIP(), []int{18}
 }
 
+// SyncClockRequest sets the guest realtime clock to the given wall-clock time
+type SyncClockRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	UnixNanos     int64                  `protobuf:"varint,1,opt,name=unix_nanos,json=unixNanos,proto3" json:"unix_nanos,omitempty"` // Host CLOCK_REALTIME in nanoseconds since the Unix epoch
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SyncClockRequest) Reset() {
+	*x = SyncClockRequest{}
+	mi := &file_lib_guest_guest_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SyncClockRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SyncClockRequest) ProtoMessage() {}
+
+func (x *SyncClockRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_lib_guest_guest_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SyncClockRequest.ProtoReflect.Descriptor instead.
+func (*SyncClockRequest) Descriptor() ([]byte, []int) {
+	return file_lib_guest_guest_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *SyncClockRequest) GetUnixNanos() int64 {
+	if x != nil {
+		return x.UnixNanos
+	}
+	return 0
+}
+
+// SyncClockResponse acknowledges the clock sync request
+type SyncClockResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SyncClockResponse) Reset() {
+	*x = SyncClockResponse{}
+	mi := &file_lib_guest_guest_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SyncClockResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SyncClockResponse) ProtoMessage() {}
+
+func (x *SyncClockResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_lib_guest_guest_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SyncClockResponse.ProtoReflect.Descriptor instead.
+func (*SyncClockResponse) Descriptor() ([]byte, []int) {
+	return file_lib_guest_guest_proto_rawDescGZIP(), []int{20}
+}
+
 var File_lib_guest_guest_proto protoreflect.FileDescriptor
 
 const file_lib_guest_guest_proto_rawDesc = "" +
@@ -1479,14 +1561,19 @@ const file_lib_guest_guest_proto_rawDesc = "" +
 	"\x04ipv4\x18\x03 \x01(\tR\x04ipv4\x12\x16\n" +
 	"\x06prefix\x18\x04 \x01(\rR\x06prefix\x12\x18\n" +
 	"\agateway\x18\x05 \x01(\tR\agateway\"\x1c\n" +
-	"\x1aReconfigureNetworkResponse2\xae\x03\n" +
+	"\x1aReconfigureNetworkResponse\"1\n" +
+	"\x10SyncClockRequest\x12\x1d\n" +
+	"\n" +
+	"unix_nanos\x18\x01 \x01(\x03R\tunixNanos\"\x13\n" +
+	"\x11SyncClockResponse2\xee\x03\n" +
 	"\fGuestService\x123\n" +
 	"\x04Exec\x12\x12.guest.ExecRequest\x1a\x13.guest.ExecResponse(\x010\x01\x12F\n" +
 	"\vCopyToGuest\x12\x19.guest.CopyToGuestRequest\x1a\x1a.guest.CopyToGuestResponse(\x01\x12L\n" +
 	"\rCopyFromGuest\x12\x1b.guest.CopyFromGuestRequest\x1a\x1c.guest.CopyFromGuestResponse0\x01\x12;\n" +
 	"\bStatPath\x12\x16.guest.StatPathRequest\x1a\x17.guest.StatPathResponse\x12;\n" +
 	"\bShutdown\x12\x16.guest.ShutdownRequest\x1a\x17.guest.ShutdownResponse\x12Y\n" +
-	"\x12ReconfigureNetwork\x12 .guest.ReconfigureNetworkRequest\x1a!.guest.ReconfigureNetworkResponseB'Z%github.com/onkernel/hypeman/lib/guestb\x06proto3"
+	"\x12ReconfigureNetwork\x12 .guest.ReconfigureNetworkRequest\x1a!.guest.ReconfigureNetworkResponse\x12>\n" +
+	"\tSyncClock\x12\x17.guest.SyncClockRequest\x1a\x18.guest.SyncClockResponseB'Z%github.com/onkernel/hypeman/lib/guestb\x06proto3"
 
 var (
 	file_lib_guest_guest_proto_rawDescOnce sync.Once
@@ -1500,7 +1587,7 @@ func file_lib_guest_guest_proto_rawDescGZIP() []byte {
 	return file_lib_guest_guest_proto_rawDescData
 }
 
-var file_lib_guest_guest_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
+var file_lib_guest_guest_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
 var file_lib_guest_guest_proto_goTypes = []any{
 	(*ExecRequest)(nil),                // 0: guest.ExecRequest
 	(*ExecStart)(nil),                  // 1: guest.ExecStart
@@ -1521,12 +1608,14 @@ var file_lib_guest_guest_proto_goTypes = []any{
 	(*ShutdownResponse)(nil),           // 16: guest.ShutdownResponse
 	(*ReconfigureNetworkRequest)(nil),  // 17: guest.ReconfigureNetworkRequest
 	(*ReconfigureNetworkResponse)(nil), // 18: guest.ReconfigureNetworkResponse
-	nil,                                // 19: guest.ExecStart.EnvEntry
+	(*SyncClockRequest)(nil),           // 19: guest.SyncClockRequest
+	(*SyncClockResponse)(nil),          // 20: guest.SyncClockResponse
+	nil,                                // 21: guest.ExecStart.EnvEntry
 }
 var file_lib_guest_guest_proto_depIdxs = []int32{
 	1,  // 0: guest.ExecRequest.start:type_name -> guest.ExecStart
 	2,  // 1: guest.ExecRequest.resize:type_name -> guest.WindowSize
-	19, // 2: guest.ExecStart.env:type_name -> guest.ExecStart.EnvEntry
+	21, // 2: guest.ExecStart.env:type_name -> guest.ExecStart.EnvEntry
 	5,  // 3: guest.CopyToGuestRequest.start:type_name -> guest.CopyToGuestStart
 	6,  // 4: guest.CopyToGuestRequest.end:type_name -> guest.CopyToGuestEnd
 	10, // 5: guest.CopyFromGuestResponse.header:type_name -> guest.CopyFromGuestHeader
@@ -1538,14 +1627,16 @@ var file_lib_guest_guest_proto_depIdxs = []int32{
 	13, // 11: guest.GuestService.StatPath:input_type -> guest.StatPathRequest
 	15, // 12: guest.GuestService.Shutdown:input_type -> guest.ShutdownRequest
 	17, // 13: guest.GuestService.ReconfigureNetwork:input_type -> guest.ReconfigureNetworkRequest
-	3,  // 14: guest.GuestService.Exec:output_type -> guest.ExecResponse
-	7,  // 15: guest.GuestService.CopyToGuest:output_type -> guest.CopyToGuestResponse
-	9,  // 16: guest.GuestService.CopyFromGuest:output_type -> guest.CopyFromGuestResponse
-	14, // 17: guest.GuestService.StatPath:output_type -> guest.StatPathResponse
-	16, // 18: guest.GuestService.Shutdown:output_type -> guest.ShutdownResponse
-	18, // 19: guest.GuestService.ReconfigureNetwork:output_type -> guest.ReconfigureNetworkResponse
-	14, // [14:20] is the sub-list for method output_type
-	8,  // [8:14] is the sub-list for method input_type
+	19, // 14: guest.GuestService.SyncClock:input_type -> guest.SyncClockRequest
+	3,  // 15: guest.GuestService.Exec:output_type -> guest.ExecResponse
+	7,  // 16: guest.GuestService.CopyToGuest:output_type -> guest.CopyToGuestResponse
+	9,  // 17: guest.GuestService.CopyFromGuest:output_type -> guest.CopyFromGuestResponse
+	14, // 18: guest.GuestService.StatPath:output_type -> guest.StatPathResponse
+	16, // 19: guest.GuestService.Shutdown:output_type -> guest.ShutdownResponse
+	18, // 20: guest.GuestService.ReconfigureNetwork:output_type -> guest.ReconfigureNetworkResponse
+	20, // 21: guest.GuestService.SyncClock:output_type -> guest.SyncClockResponse
+	15, // [15:22] is the sub-list for method output_type
+	8,  // [8:15] is the sub-list for method input_type
 	8,  // [8:8] is the sub-list for extension type_name
 	8,  // [8:8] is the sub-list for extension extendee
 	0,  // [0:8] is the sub-list for field type_name
@@ -1583,7 +1674,7 @@ func file_lib_guest_guest_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_lib_guest_guest_proto_rawDesc), len(file_lib_guest_guest_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   20,
+			NumMessages:   22,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

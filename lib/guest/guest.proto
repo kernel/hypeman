@@ -23,6 +23,9 @@ service GuestService {
 
   // ReconfigureNetwork updates the guest network identity without spawning shell commands
   rpc ReconfigureNetwork(ReconfigureNetworkRequest) returns (ReconfigureNetworkResponse);
+
+  // SyncClock sets the guest realtime clock, correcting skew after snapshot restore
+  rpc SyncClock(SyncClockRequest) returns (SyncClockResponse);
 }
 
 // ExecRequest represents messages from client to server
@@ -169,3 +172,11 @@ message ReconfigureNetworkRequest {
 
 // ReconfigureNetworkResponse acknowledges the network reconfiguration request
 message ReconfigureNetworkResponse {}
+
+// SyncClockRequest sets the guest realtime clock to the given wall-clock time
+message SyncClockRequest {
+  int64 unix_nanos = 1;  // Host CLOCK_REALTIME in nanoseconds since the Unix epoch
+}
+
+// SyncClockResponse acknowledges the clock sync request
+message SyncClockResponse {}
