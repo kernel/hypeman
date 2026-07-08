@@ -176,7 +176,9 @@ func shouldSkipDirectory(relPath string) bool {
 }
 
 func shouldSkipRegularFile(relPath string) bool {
-	return strings.HasSuffix(relPath, ".lz4.tmp") || strings.HasSuffix(relPath, ".zst.tmp")
+	return strings.HasSuffix(relPath, ".lz4.tmp") ||
+		strings.HasSuffix(relPath, ".zst.tmp") ||
+		strings.HasSuffix(relPath, ".unshare.tmp")
 }
 
 func shouldSkipRuntimeSocket(relPath string) bool {

@@ -281,6 +281,8 @@ func TestEnsureExclusiveSnapshotMemoryOwnershipSkipsPrivateMemory(t *testing.T) 
 	require.NoError(t, os.MkdirAll(snapshotDir, 0755))
 	memPath := filepath.Join(snapshotDir, "memory")
 	require.NoError(t, os.WriteFile(memPath, []byte("private memory"), 0644))
+	stalePath := memPath + ".unshare.tmp"
+	require.NoError(t, os.WriteFile(stalePath, []byte("stale"), 0644))
 	before, err := os.Stat(memPath)
 	require.NoError(t, err)
 
@@ -289,6 +291,7 @@ func TestEnsureExclusiveSnapshotMemoryOwnershipSkipsPrivateMemory(t *testing.T) 
 	after, err := os.Stat(memPath)
 	require.NoError(t, err)
 	assert.True(t, os.SameFile(before, after), "private mem-file must not be rewritten")
+	assert.NoFileExists(t, stalePath, "stale unshare tmp must be swept on standby entry")
 
 	require.NoError(t, ensureExclusiveSnapshotMemoryOwnership(context.Background(), filepath.Join(t.TempDir(), "missing")))
 }

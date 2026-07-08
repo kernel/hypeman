@@ -73,7 +73,7 @@ func (m *manager) copyForkSourceGuestDirectory(ctx context.Context, sourceState 
 		attribute.Bool("share_mem_file", shareMemFile),
 	)
 	retErr = withSnapshotSourceAliasReadLock(func() error {
-		if err := cloneGuestDirectoryForFork(ctx, srcDir, dstDir, shareMemFile); err != nil {
+		if err := m.cloneGuestDirectoryForFork(ctx, srcDir, dstDir, shareMemFile); err != nil {
 			if errors.Is(err, forkvm.ErrSparseCopyUnsupported) {
 				return fmt.Errorf("fork requires sparse-capable filesystem (SEEK_DATA/SEEK_HOLE unsupported): %w", err)
 			}
@@ -115,7 +115,7 @@ func (m *manager) copySnapshotGuestDirectoryForFork(ctx context.Context, snapsho
 		attribute.Bool("share_mem_file", shareMemFile),
 	)
 	retErr = withSnapshotSourceAliasReadLock(func() error {
-		if err := cloneGuestDirectoryForFork(ctx, m.paths.SnapshotGuestDir(snapshotID), dstDir, shareMemFile); err != nil {
+		if err := m.cloneGuestDirectoryForFork(ctx, m.paths.SnapshotGuestDir(snapshotID), dstDir, shareMemFile); err != nil {
 			if errors.Is(err, forkvm.ErrSparseCopyUnsupported) {
 				return fmt.Errorf("fork from snapshot requires sparse-capable filesystem (SEEK_DATA/SEEK_HOLE unsupported): %w", err)
 			}
@@ -130,10 +130,12 @@ func (m *manager) copySnapshotGuestDirectoryForFork(ctx context.Context, snapsho
 // cloneGuestDirectoryForFork copies a guest directory for a fork. When
 // shareMemFile is set and the source has a raw snapshot mem-file, the mem-file
 // is skipped from the copy walk and hardlinked into place instead.
-func cloneGuestDirectoryForFork(ctx context.Context, srcDir, dstDir string, shareMemFile bool) error {
-	srcMem := firecrackerSnapshotMemoryPathInGuestDir(srcDir)
+func (m *manager) cloneGuestDirectoryForFork(ctx context.Context, srcDir, dstDir string, shareMemFile bool) error {
 	if shareMemFile {
-		if _, err := os.Stat(srcMem); err != nil {
+		if _, err := os.Stat(firecrackerSnapshotMemoryPathInGuestDir(srcDir)); err != nil {
+			if !os.IsNotExist(err) {
+				return fmt.Errorf("stat source snapshot memory: %w", err)
+			}
 			shareMemFile = false
 		}
 	}
@@ -146,7 +148,7 @@ func cloneGuestDirectoryForFork(ctx context.Context, srcDir, dstDir string, shar
 		return err
 	}
 	if shareMemFile {
-		return linkForkFirecrackerMemFile(ctx, srcDir, dstDir)
+		return m.linkForkFirecrackerMemFile(ctx, srcDir, dstDir)
 	}
 	return nil
 }
