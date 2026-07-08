@@ -138,6 +138,20 @@ func (m *manager) standbyInstance(
 			}
 			return nil, fmt.Errorf("prepare retained snapshot target: %w", err)
 		}
+		// The diff snapshot below writes dirty pages into the mem-file in
+		// place; if fanout forks still hardlink its inode, replace it with a
+		// private copy first so their memory is never mutated.
+		if err := ensureExclusiveSnapshotMemoryOwnership(ctx, snapshotDir); err != nil {
+			if resumeErr := hv.Resume(ctx); resumeErr != nil {
+				log.ErrorContext(ctx, "failed to resume VM after snapshot memory unshare error", "instance_id", id, "error", resumeErr)
+			}
+			if promotedExistingBase {
+				if rollbackErr := discardPromotedRetainedSnapshotTarget(snapshotDir); rollbackErr != nil {
+					log.WarnContext(ctx, "failed to discard promoted snapshot target after unshare error", "instance_id", id, "error", rollbackErr)
+				}
+			}
+			return nil, fmt.Errorf("unshare snapshot memory: %w", err)
+		}
 	}
 	log.DebugContext(ctx, "creating snapshot", "instance_id", id, "snapshot_dir", snapshotDir)
 	snapshotCtx, snapshotSpanEnd := m.startLifecycleStep(ctx, "create_snapshot",
@@ -146,11 +160,7 @@ func (m *manager) standbyInstance(
 		attribute.String("operation", "create_snapshot"),
 		attribute.Bool("reuse_snapshot_base", reuseSnapshotBase),
 	)
-	snapshotOptions := hypervisor.SnapshotOptions{}
-	if stored.HypervisorType == hypervisor.TypeFirecracker {
-		snapshotOptions.DeferredMemoryBackingPath = stored.FirecrackerDeferredSnapshotMemoryPath
-	}
-	if err := createSnapshot(snapshotCtx, hv, snapshotDir, reuseSnapshotBase, snapshotOptions); err != nil {
+	if err := createSnapshot(snapshotCtx, hv, snapshotDir, reuseSnapshotBase); err != nil {
 		snapshotSpanEnd(err)
 		// Snapshot failed - try to resume VM
 		log.ErrorContext(ctx, "snapshot failed, attempting to resume VM", "instance_id", id, "error", err)
@@ -279,7 +289,7 @@ func (m *manager) standbyInstance(
 }
 
 // createSnapshot creates a snapshot using the hypervisor interface
-func createSnapshot(ctx context.Context, hv hypervisor.Hypervisor, snapshotDir string, reuseSnapshotBase bool, opts hypervisor.SnapshotOptions) error {
+func createSnapshot(ctx context.Context, hv hypervisor.Hypervisor, snapshotDir string, reuseSnapshotBase bool) error {
 	log := logger.FromContext(ctx)
 
 	// Remove old snapshot if the hypervisor does not support reusing snapshots
@@ -295,7 +305,7 @@ func createSnapshot(ctx context.Context, hv hypervisor.Hypervisor, snapshotDir s
 
 	// Create snapshot via hypervisor API
 	log.DebugContext(ctx, "invoking hypervisor snapshot API", "snapshot_dir", snapshotDir)
-	if err := hv.Snapshot(ctx, snapshotDir, opts); err != nil {
+	if err := hv.Snapshot(ctx, snapshotDir); err != nil {
 		return fmt.Errorf("snapshot: %w", err)
 	}
 

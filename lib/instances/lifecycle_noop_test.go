@@ -40,7 +40,7 @@ func (h lifecycleNoopHypervisor) GetVMInfo(context.Context) (*hypervisor.VMInfo,
 }
 func (h lifecycleNoopHypervisor) Pause(context.Context) error  { return nil }
 func (h lifecycleNoopHypervisor) Resume(context.Context) error { return nil }
-func (h lifecycleNoopHypervisor) Snapshot(context.Context, string, hypervisor.SnapshotOptions) error {
+func (h lifecycleNoopHypervisor) Snapshot(context.Context, string) error {
 	return nil
 }
 func (h lifecycleNoopHypervisor) ResizeMemory(context.Context, int64) error {

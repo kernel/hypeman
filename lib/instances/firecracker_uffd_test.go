@@ -101,10 +101,10 @@ func TestForkInstanceFromStandbyArmsOneShotUFFDForFirecrackerRestore(t *testing.
 	require.NoError(t, err)
 	assert.True(t, meta.StoredMetadata.FirecrackerUseUFFDOnNextRestore)
 	assert.Equal(t, "shared-template-cache", meta.StoredMetadata.FirecrackerSnapshotCacheKey)
-	assert.Equal(t, sourceMemoryPath, meta.StoredMetadata.FirecrackerDeferredSnapshotMemoryPath)
 	assert.Empty(t, meta.StoredMetadata.FirecrackerUFFDSessionID)
 	assert.Empty(t, meta.StoredMetadata.FirecrackerUFFDPagerVersion)
-	assert.NoFileExists(t, firecrackerSnapshotMemoryPathInGuestDir(mgr.paths.InstanceDir(forked.Id)))
+	forkMemoryPath := firecrackerSnapshotMemoryPathInGuestDir(mgr.paths.InstanceDir(forked.Id))
+	assertSameInode(t, sourceMemoryPath, forkMemoryPath)
 	assert.FileExists(t, filepath.Join(mgr.paths.InstanceSnapshotLatest(forked.Id), "state"))
 }
 
@@ -135,7 +135,6 @@ func TestForkInstanceFromStandbyDoesNotArmOneShotUFFDForStoppedTarget(t *testing
 	require.NoError(t, err)
 	assert.False(t, meta.StoredMetadata.FirecrackerUseUFFDOnNextRestore)
 	assert.Equal(t, "shared-template-cache", meta.StoredMetadata.FirecrackerSnapshotCacheKey)
-	assert.Empty(t, meta.StoredMetadata.FirecrackerDeferredSnapshotMemoryPath)
 	assert.FileExists(t, firecrackerSnapshotMemoryPathInGuestDir(mgr.paths.InstanceDir(forked.Id)))
 }
 
@@ -171,10 +170,10 @@ func TestForkSnapshotFromStandbyArmsOneShotUFFDForFirecrackerRestore(t *testing.
 	require.NoError(t, err)
 	assert.True(t, meta.StoredMetadata.FirecrackerUseUFFDOnNextRestore)
 	assert.Equal(t, "shared-snapshot-cache", meta.StoredMetadata.FirecrackerSnapshotCacheKey)
-	assert.Equal(t, firecrackerSnapshotMemoryPathInGuestDir(mgr.paths.SnapshotGuestDir(snap.Id)), meta.StoredMetadata.FirecrackerDeferredSnapshotMemoryPath)
 	assert.Empty(t, meta.StoredMetadata.FirecrackerUFFDSessionID)
 	assert.Empty(t, meta.StoredMetadata.FirecrackerUFFDPagerVersion)
-	assert.NoFileExists(t, firecrackerSnapshotMemoryPathInGuestDir(mgr.paths.InstanceDir(forked.Id)))
+	forkMemoryPath := firecrackerSnapshotMemoryPathInGuestDir(mgr.paths.InstanceDir(forked.Id))
+	assertSameInode(t, firecrackerSnapshotMemoryPathInGuestDir(mgr.paths.SnapshotGuestDir(snap.Id)), forkMemoryPath)
 	assert.FileExists(t, filepath.Join(mgr.paths.InstanceSnapshotLatest(forked.Id), "state"))
 }
 
@@ -235,26 +234,66 @@ func TestRestoreInstanceClearsOneShotUFFDFlagAfterSuccessfulRestore(t *testing.T
 	assert.False(t, updated.StoredMetadata.FirecrackerUseUFFDOnNextRestore)
 }
 
-func TestResolveFirecrackerSnapshotMemoryBackingPathUsesRetainedBaseAlternate(t *testing.T) {
+func assertDifferentInode(t *testing.T, pathA, pathB string) {
+	t.Helper()
+	infoA, err := os.Stat(pathA)
+	require.NoError(t, err)
+	infoB, err := os.Stat(pathB)
+	require.NoError(t, err)
+	assert.False(t, os.SameFile(infoA, infoB), "%s and %s must not share an inode", pathA, pathB)
+}
+
+func assertSameInode(t *testing.T, pathA, pathB string) {
+	t.Helper()
+	infoA, err := os.Stat(pathA)
+	require.NoError(t, err)
+	infoB, err := os.Stat(pathB)
+	require.NoError(t, err)
+	assert.True(t, os.SameFile(infoA, infoB), "%s and %s must share an inode", pathA, pathB)
+}
+
+func TestEnsureExclusiveSnapshotMemoryOwnershipUnsharesHardlinkedMemory(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	latestMemoryPath := filepath.Join(root, "snapshots", "snapshot-latest", "memory")
-	baseMemoryPath := filepath.Join(root, "snapshots", "snapshot-base", "memory")
-	require.NoError(t, os.MkdirAll(filepath.Dir(baseMemoryPath), 0755))
-	require.NoError(t, os.WriteFile(baseMemoryPath, []byte("base memory"), 0644))
+	snapshotDir := filepath.Join(root, "snapshots", "snapshot-latest")
+	require.NoError(t, os.MkdirAll(snapshotDir, 0755))
+	memPath := filepath.Join(snapshotDir, "memory")
+	require.NoError(t, os.WriteFile(memPath, []byte("shared memory"), 0644))
+	forkLinkPath := filepath.Join(root, "fork-memory")
+	require.NoError(t, os.Link(memPath, forkLinkPath))
 
-	resolved, err := resolveFirecrackerSnapshotMemoryBackingPath(latestMemoryPath)
+	require.NoError(t, ensureExclusiveSnapshotMemoryOwnership(context.Background(), snapshotDir))
+
+	assertDifferentInode(t, memPath, forkLinkPath)
+	unshared, err := os.ReadFile(memPath)
 	require.NoError(t, err)
-	assert.Equal(t, baseMemoryPath, resolved)
+	assert.Equal(t, []byte("shared memory"), unshared)
+	forkContent, err := os.ReadFile(forkLinkPath)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("shared memory"), forkContent)
 }
 
-func TestFirecrackerSnapshotSourceLockKeyUsesGuestDirectory(t *testing.T) {
+func TestEnsureExclusiveSnapshotMemoryOwnershipSkipsPrivateMemory(t *testing.T) {
 	t.Parallel()
 
-	guestDir := filepath.Join(t.TempDir(), "guests", "source")
-	assert.Equal(t, guestDir, firecrackerSnapshotSourceLockKey(filepath.Join(guestDir, "snapshots", "snapshot-latest", "memory")))
-	assert.Equal(t, guestDir, firecrackerSnapshotSourceLockKey(filepath.Join(guestDir, "snapshots", "snapshot-base", "memory")))
+	snapshotDir := filepath.Join(t.TempDir(), "snapshot-latest")
+	require.NoError(t, os.MkdirAll(snapshotDir, 0755))
+	memPath := filepath.Join(snapshotDir, "memory")
+	require.NoError(t, os.WriteFile(memPath, []byte("private memory"), 0644))
+	stalePath := memPath + ".unshare.tmp"
+	require.NoError(t, os.WriteFile(stalePath, []byte("stale"), 0644))
+	before, err := os.Stat(memPath)
+	require.NoError(t, err)
+
+	require.NoError(t, ensureExclusiveSnapshotMemoryOwnership(context.Background(), snapshotDir))
+
+	after, err := os.Stat(memPath)
+	require.NoError(t, err)
+	assert.True(t, os.SameFile(before, after), "private mem-file must not be rewritten")
+	assert.NoFileExists(t, stalePath, "stale unshare tmp must be swept on standby entry")
+
+	require.NoError(t, ensureExclusiveSnapshotMemoryOwnership(context.Background(), filepath.Join(t.TempDir(), "missing")))
 }
 
 func installOneShotFirecrackerStarter(t *testing.T, mgr *manager) {
@@ -318,7 +357,7 @@ func (oneShotFirecrackerTestHypervisor) Resume(context.Context) error {
 	return nil
 }
 
-func (oneShotFirecrackerTestHypervisor) Snapshot(context.Context, string, hypervisor.SnapshotOptions) error {
+func (oneShotFirecrackerTestHypervisor) Snapshot(context.Context, string) error {
 	return nil
 }
 

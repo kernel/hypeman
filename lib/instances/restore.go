@@ -380,8 +380,8 @@ func (m *manager) restoreInstance(
 	// before markers ever hydrated we resume in Initializing.
 	resumePhase, _ := runningPhaseFromMarkers(stored)
 	stored.Phases.Record(resumePhase, time.Now().UTC())
-	// The one-shot restore has been consumed, but a UFFD-backed VM may still
-	// need its pager session until the next standby materializes snapshot memory.
+	// The one-shot restore has been consumed, but a UFFD-backed VM keeps its
+	// pager session serving faults until the next standby or stop closes it.
 	stored.FirecrackerUseUFFDOnNextRestore = false
 	meta = &metadata{StoredMetadata: *stored}
 	if err := m.saveMetadata(meta); err != nil {

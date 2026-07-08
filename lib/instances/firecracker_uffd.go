@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -29,10 +28,6 @@ func useFirecrackerUFFDOnNextRestore(hvType hypervisor.Type, sourceIsStandby boo
 	return hvType == hypervisor.TypeFirecracker && sourceIsStandby && targetState != StateStopped
 }
 
-func (m *manager) shouldDeferFirecrackerSnapshotMemoryCopy(stored *StoredMetadata, sourceIsStandby bool, targetState State) bool {
-	return m.useFirecrackerUFFD(stored) && useFirecrackerUFFDOnNextRestore(stored.HypervisorType, sourceIsStandby, targetState)
-}
-
 func clearFirecrackerUFFDRestoreState(stored *StoredMetadata) {
 	if stored == nil {
 		return
@@ -40,85 +35,10 @@ func clearFirecrackerUFFDRestoreState(stored *StoredMetadata) {
 	stored.FirecrackerUseUFFDOnNextRestore = false
 	stored.FirecrackerUFFDSessionID = ""
 	stored.FirecrackerUFFDPagerVersion = ""
-	stored.FirecrackerDeferredSnapshotMemoryPath = ""
 }
 
 func firecrackerSnapshotMemoryPathInGuestDir(guestDir string) string {
 	return filepath.Join(guestDir, firecrackerSnapshotMemoryRelPath)
-}
-
-func (m *manager) lockFirecrackerSnapshotSource(path string) func() {
-	key := firecrackerSnapshotSourceLockKey(path)
-	if key == "" {
-		return func() {}
-	}
-	value, _ := m.snapshotSourceLocks.LoadOrStore(key, &sync.Mutex{})
-	mu := value.(*sync.Mutex)
-	mu.Lock()
-	return mu.Unlock
-}
-
-func firecrackerSnapshotSourceLockKey(path string) string {
-	path = filepath.Clean(strings.TrimSpace(path))
-	if path == "." || path == "" {
-		return ""
-	}
-	if filepath.Base(path) != "memory" {
-		return path
-	}
-	snapshotDir := filepath.Dir(path)
-	if base := filepath.Base(snapshotDir); base != "snapshot-latest" && base != "snapshot-base" {
-		return path
-	}
-	snapshotsDir := filepath.Dir(snapshotDir)
-	if filepath.Base(snapshotsDir) != "snapshots" {
-		return path
-	}
-	return filepath.Dir(snapshotsDir)
-}
-
-func resolveFirecrackerSnapshotMemoryBackingPath(memoryPath string) (string, error) {
-	if _, err := os.Stat(memoryPath); err == nil {
-		return memoryPath, nil
-	} else if !os.IsNotExist(err) {
-		return "", fmt.Errorf("stat firecracker snapshot memory backing: %w", err)
-	}
-
-	alternatePath := alternateFirecrackerRetainedSnapshotMemoryPath(memoryPath)
-	if alternatePath == "" {
-		return memoryPath, nil
-	}
-	if _, err := os.Stat(alternatePath); err == nil {
-		return alternatePath, nil
-	} else if !os.IsNotExist(err) {
-		return "", fmt.Errorf("stat alternate firecracker snapshot memory backing: %w", err)
-	}
-	return memoryPath, nil
-}
-
-func alternateFirecrackerRetainedSnapshotMemoryPath(memoryPath string) string {
-	if filepath.Base(memoryPath) != "memory" {
-		return ""
-	}
-	snapshotDir := filepath.Dir(memoryPath)
-	snapshotsDir := filepath.Dir(snapshotDir)
-	switch filepath.Base(snapshotDir) {
-	case "snapshot-base":
-		return filepath.Join(snapshotsDir, "snapshot-latest", "memory")
-	case "snapshot-latest":
-		return filepath.Join(snapshotsDir, "snapshot-base", "memory")
-	default:
-		return ""
-	}
-}
-
-func firecrackerDeferredSnapshotMemoryPath(stored *StoredMetadata, guestDir string) string {
-	if stored != nil {
-		if path := strings.TrimSpace(stored.FirecrackerDeferredSnapshotMemoryPath); path != "" {
-			return path
-		}
-	}
-	return firecrackerSnapshotMemoryPathInGuestDir(guestDir)
 }
 
 func (m *manager) firecrackerSnapshotRestoreOptions(stored *StoredMetadata, snapshotDir string) (hypervisor.RestoreOptions, error) {
@@ -134,14 +54,7 @@ func (m *manager) firecrackerSnapshotRestoreOptions(stored *StoredMetadata, snap
 		return opts, fmt.Errorf("firecracker uffd snapshot restore is enabled but the pager is not configured")
 	}
 
-	backingMemoryPath := strings.TrimSpace(stored.FirecrackerDeferredSnapshotMemoryPath)
-	if backingMemoryPath == "" {
-		backingMemoryPath = filepath.Join(snapshotDir, "memory")
-	}
-	backingMemoryPath, err := resolveFirecrackerSnapshotMemoryBackingPath(backingMemoryPath)
-	if err != nil {
-		return opts, err
-	}
+	backingMemoryPath := filepath.Join(snapshotDir, "memory")
 	cacheKey := strings.TrimSpace(stored.FirecrackerSnapshotCacheKey)
 	if cacheKey == "" {
 		var err error
