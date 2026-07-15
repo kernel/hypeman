@@ -139,6 +139,14 @@ func runExecMode(log *Logger, cfg *vmconfig.Config) {
 	log.Info("hypeman-init:entrypoint", formatProgramStartSentinel("exec"))
 	log.Info("hypeman-init:entrypoint", fmt.Sprintf("container app started (PID %d)", appCmd.Process.Pid))
 
+	// exec.Cmd.Wait owns these direct children; the orphan reaper must not consume their statuses.
+	knownChildren := map[int]struct{}{appCmd.Process.Pid: {}}
+	if agentCmd != nil && agentCmd.Process != nil {
+		knownChildren[agentCmd.Process.Pid] = struct{}{}
+	}
+	stopOrphanReaper := startOrphanReaper(knownChildren)
+	defer stopOrphanReaper()
+
 	// Set up signal forwarding: when init receives a signal (e.g. from guest-agent
 	// Shutdown RPC), forward it to the entrypoint child process so it can gracefully
 	// shut down. This is how Docker/containerd works -- SIGTERM to PID 1 gets
