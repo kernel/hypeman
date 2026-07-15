@@ -23,6 +23,9 @@ import (
 )
 
 func TestEgressProxyRewritesHTTPSHeaders(t *testing.T) {
+	t.Parallel()
+	acquireHeavyIO(t)
+
 	requireKVMAccess(t)
 
 	manager, _ := setupTestManager(t)

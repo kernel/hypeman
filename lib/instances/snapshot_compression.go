@@ -97,7 +97,20 @@ func (r nativeCodecRuntime) commandContextFunc() func(context.Context, string, .
 	if r.commandContext != nil {
 		return r.commandContext
 	}
-	return exec.CommandContext
+	return newNativeCodecCommand
+}
+
+func newNativeCodecCommand(ctx context.Context, name string, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		if err == syscall.ESRCH {
+			return os.ErrProcessDone
+		}
+		return err
+	}
+	return cmd
 }
 
 func cloneCompressionConfig(cfg *snapshotstore.SnapshotCompressionConfig) *snapshotstore.SnapshotCompressionConfig {
