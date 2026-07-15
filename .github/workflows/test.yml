@@ -194,10 +194,16 @@ jobs:
             exit 0
           fi
 
-          colima stop --force || true
+          if colima status >/dev/null 2>&1; then
+            colima stop --force
+          fi
+
           if ! colima start; then
-            colima delete --force
-            colima start
+            colima stop --force || true
+            if ! colima start; then
+              colima delete --force
+              colima start
+            fi
           fi
 
           for attempt in {1..30}; do
