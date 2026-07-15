@@ -195,7 +195,7 @@ jobs:
           fi
 
           if colima status >/dev/null 2>&1; then
-            colima stop --force
+            colima stop --force || true
           fi
 
           if ! colima start; then
