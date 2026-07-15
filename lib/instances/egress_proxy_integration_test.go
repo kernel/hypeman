@@ -106,7 +106,7 @@ func TestEgressProxyRewritesHTTPSHeaders(t *testing.T) {
 	deleted := false
 	t.Cleanup(func() {
 		if !deleted {
-			_ = manager.DeleteInstance(context.Background(), inst.Id)
+			_ = deleteTestInstanceNow(context.Background(), manager, inst.Id)
 		}
 	})
 
@@ -195,7 +195,7 @@ func TestEgressProxyRewritesHTTPSHeaders(t *testing.T) {
 	require.Contains(t, rotatedOutput, "Bearer rotated-key-456")
 	require.NotContains(t, rotatedOutput, "real-openai-key-123")
 
-	require.NoError(t, manager.DeleteInstance(ctx, inst.Id))
+	require.NoError(t, deleteTestInstanceNow(ctx, manager, inst.Id))
 	deleted = true
 }
 

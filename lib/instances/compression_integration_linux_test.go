@@ -157,7 +157,7 @@ func runStandbyRestoreCompressionScenarios(t *testing.T, harness compressionInte
 	deleted := false
 	t.Cleanup(func() {
 		if !deleted {
-			_ = mgr.DeleteInstance(context.Background(), inst.Id)
+			_ = deleteTestInstanceNow(context.Background(), mgr, inst.Id)
 		}
 	})
 
@@ -196,7 +196,7 @@ func runStandbyRestoreCompressionScenarios(t *testing.T, harness compressionInte
 		inst = runCompressionCycle(t, ctx, mgr, p, inst, harness.waitHypervisorUp, tc.name, tc.cfg, true)
 	}
 
-	require.NoError(t, mgr.DeleteInstance(ctx, inst.Id))
+	require.NoError(t, deleteTestInstanceNow(ctx, mgr, inst.Id))
 	deleted = true
 }
 

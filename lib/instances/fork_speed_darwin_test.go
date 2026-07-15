@@ -86,7 +86,7 @@ func TestVZForkSpeed(t *testing.T) {
 		dumpVZShimLogs(t, tmpDir)
 		require.NoError(t, err)
 	}
-	t.Cleanup(func() { _ = mgr.DeleteInstance(context.Background(), source.Id) })
+	t.Cleanup(func() { _ = deleteTestInstanceNow(context.Background(), mgr, source.Id) })
 	require.NoError(t, waitForExecAgent(ctx, mgr, source.Id, 60*time.Second))
 
 	// Fill the overlay with dense (random) data so the fork's disk copy has real

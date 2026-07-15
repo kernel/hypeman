@@ -128,7 +128,7 @@ func TestAutoStandbyCloudHypervisorActiveInboundTCP(t *testing.T) {
 
 	t.Cleanup(func() {
 		logInstanceArtifactsOnFailure(t, mgr, instanceID)
-		_ = mgr.DeleteInstance(context.Background(), instanceID)
+		_ = deleteTestInstanceNow(context.Background(), mgr, instanceID)
 	})
 
 	inst, err = waitForInstanceState(ctx, mgr, instanceID, StateRunning, 30*time.Second)

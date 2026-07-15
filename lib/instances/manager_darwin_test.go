@@ -604,7 +604,7 @@ func TestVZForkFromRunningNetwork(t *testing.T) {
 	require.NotEmpty(t, source.MAC)
 
 	sourceID := source.Id
-	t.Cleanup(func() { _ = mgr.DeleteInstance(context.Background(), sourceID) })
+	t.Cleanup(func() { _ = deleteTestInstanceNow(context.Background(), mgr, sourceID) })
 
 	err = waitForExecAgent(ctx, mgr, sourceID, 30*time.Second)
 	require.NoError(t, err, "source guest agent should be ready")
@@ -633,7 +633,7 @@ func TestVZForkFromRunningNetwork(t *testing.T) {
 	require.Contains(t, []State{StateInitializing, StateRunning}, forked.State)
 	require.NotEqual(t, sourceID, forked.Id)
 	forkID := forked.Id
-	t.Cleanup(func() { _ = mgr.DeleteInstance(context.Background(), forkID) })
+	t.Cleanup(func() { _ = deleteTestInstanceNow(context.Background(), mgr, forkID) })
 	forked, err = waitForInstanceState(ctx, mgr, forkID, StateRunning, 30*time.Second)
 	require.NoError(t, err)
 

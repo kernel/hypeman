@@ -76,7 +76,7 @@ func TestVZRunningSnapshotRoundTrip(t *testing.T) {
 		require.NoError(t, err)
 	}
 	sourceID := source.Id
-	t.Cleanup(func() { _ = mgr.DeleteInstance(context.Background(), sourceID) })
+	t.Cleanup(func() { _ = deleteTestInstanceNow(context.Background(), mgr, sourceID) })
 
 	require.NoError(t, waitForExecAgent(ctx, mgr, sourceID, 60*time.Second), "guest agent should be ready")
 	source, err = waitForInstanceState(ctx, mgr, sourceID, StateRunning, 30*time.Second)
@@ -127,7 +127,7 @@ func TestVZRunningSnapshotRoundTrip(t *testing.T) {
 		require.NoError(t, err)
 	}
 	forkID := forked.Id
-	t.Cleanup(func() { _ = mgr.DeleteInstance(context.Background(), forkID) })
+	t.Cleanup(func() { _ = deleteTestInstanceNow(context.Background(), mgr, forkID) })
 
 	restored, err := mgr.RestoreInstance(ctx, forkID)
 	if err != nil {

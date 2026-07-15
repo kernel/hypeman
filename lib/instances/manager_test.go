@@ -76,6 +76,23 @@ func setupTestManager(t *testing.T) (*manager, string) {
 	return mgr, tmpDir
 }
 
+// deleteTestInstanceNow performs the same resource and metadata cleanup as
+// DeleteInstance, but skips the guest grace period. Cleanup callbacks do not
+// need to preserve guest state: the test has already made its assertions and
+// is discarding the VM.
+func deleteTestInstanceNow(ctx context.Context, mgr *manager, id string) error {
+	lock := mgr.getInstanceLock(id)
+	lock.Lock()
+	defer lock.Unlock()
+
+	err := mgr.deleteInstanceWithOptions(ctx, id, deleteInstanceOptions{skipGracefulShutdown: true})
+	if err == nil {
+		mgr.notifyLifecycleDelete(ctx, id)
+		mgr.instanceLocks.Delete(id)
+	}
+	return err
+}
+
 // waitForVMReady polls VM state via VMM API until it's running or times out
 func waitForVMReady(ctx context.Context, socketPath string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)

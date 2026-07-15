@@ -102,6 +102,9 @@ func (r nativeCodecRuntime) commandContextFunc() func(context.Context, string, .
 
 func newNativeCodecCommand(ctx context.Context, name string, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, name, args...)
+	// Kill the entire process group on cancellation. Killing only the direct
+	// child can leave helpers holding stdout/stderr pipes open, which makes
+	// Cmd.Wait block until those helpers exit on their own.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
 		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)

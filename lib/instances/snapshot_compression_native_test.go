@@ -322,6 +322,7 @@ func TestCompressSnapshotMemoryFileReturnsContextCanceledWhenNativeProcessIsKill
 	ctx, cancel := context.WithCancel(baseCtx)
 	rawPath, _ := writeRawSnapshotMemoryFile(t)
 	binaryPath := writeExecutableScript(t, "zstd", "#!/bin/sh\nsleep 30\n")
+	started := time.Now()
 	time.AfterFunc(20*time.Millisecond, cancel)
 
 	_, _, err := compressSnapshotMemoryFileWithRuntime(ctx, nativeCodecRuntime{
@@ -333,6 +334,7 @@ func TestCompressSnapshotMemoryFileReturnsContextCanceledWhenNativeProcessIsKill
 		Level:     intPtr(1),
 	})
 	require.ErrorIs(t, err, context.Canceled)
+	require.Less(t, time.Since(started), time.Second, "cancellation must terminate native helper descendants promptly")
 	assert.Empty(t, logs.warnRecords())
 
 	var rm metricdata.ResourceMetrics
