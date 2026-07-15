@@ -121,6 +121,7 @@ jobs:
           # cross-filesystem safe. Keeping both on /ci avoids that.
           export HYPEMAN_TEST_PREWARM_DIR="/ci/prewarm/linux-amd64"
           mkdir -p "$HYPEMAN_TEST_PREWARM_DIR"
+          sudo chown -R "$(id -u):$(id -g)" "$HYPEMAN_TEST_PREWARM_DIR"
           go run ./cmd/test-prewarm
 
       - name: Check gofmt
