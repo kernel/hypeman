@@ -104,26 +104,9 @@ func requireUserfaultfdIntegrationPrereqs(t *testing.T) {
 	_ = file.Close()
 }
 
-func createNginxImageAndWait(t *testing.T, ctx context.Context, imageManager images.Manager) {
+func createNginxImageAndWait(t *testing.T, ctx context.Context, p *paths.Paths, imageManager images.Manager) {
 	t.Helper()
-
-	nginxImage, err := imageManager.CreateImage(ctx, images.CreateImageRequest{
-		Name: integrationTestImageRef(t, "docker.io/library/nginx:alpine"),
-	})
-	require.NoError(t, err)
-
-	for i := 0; i < 60; i++ {
-		img, err := imageManager.GetImage(ctx, nginxImage.Name)
-		if err == nil && img.Status == images.StatusReady {
-			return
-		}
-		if err == nil && img.Status == images.StatusFailed {
-			t.Fatalf("image build failed: %s", *img.Error)
-		}
-		time.Sleep(1 * time.Second)
-	}
-
-	t.Fatalf("timed out waiting for image %q to become ready", nginxImage.Name)
+	snapshottest.EnsureImageReady(t, ctx, p, imageManager, integrationTestImageRef(t, "docker.io/library/nginx:alpine"))
 }
 
 func startGatewayProbeServer(t *testing.T, gatewayIP string) (string, func()) {
@@ -162,7 +145,7 @@ func TestFirecrackerStandbyAndRestore(t *testing.T) {
 
 	imageManager, err := images.NewManager(p, 1, nil)
 	require.NoError(t, err)
-	createNginxImageAndWait(t, ctx, imageManager)
+	createNginxImageAndWait(t, ctx, p, imageManager)
 
 	systemManager := system.NewManager(p)
 	require.NoError(t, systemManager.EnsureSystemFiles(ctx))
@@ -296,7 +279,7 @@ func TestFirecrackerStopClearsStaleSnapshot(t *testing.T) {
 
 	imageManager, err := images.NewManager(p, 1, nil)
 	require.NoError(t, err)
-	createNginxImageAndWait(t, ctx, imageManager)
+	createNginxImageAndWait(t, ctx, p, imageManager)
 
 	systemManager := system.NewManager(p)
 	require.NoError(t, systemManager.EnsureSystemFiles(ctx))
@@ -373,7 +356,7 @@ func TestFirecrackerNetworkLifecycle(t *testing.T) {
 
 	imageManager, err := images.NewManager(p, 1, nil)
 	require.NoError(t, err)
-	createNginxImageAndWait(t, ctx, imageManager)
+	createNginxImageAndWait(t, ctx, p, imageManager)
 
 	systemManager := system.NewManager(p)
 	require.NoError(t, systemManager.EnsureSystemFiles(ctx))
@@ -501,7 +484,7 @@ func TestFirecrackerForkFromRunningNetwork(t *testing.T) {
 
 	imageManager, err := images.NewManager(p, 1, nil)
 	require.NoError(t, err)
-	createNginxImageAndWait(t, ctx, imageManager)
+	createNginxImageAndWait(t, ctx, p, imageManager)
 
 	systemManager := system.NewManager(p)
 	require.NoError(t, systemManager.EnsureSystemFiles(ctx))
@@ -1132,7 +1115,7 @@ func TestFirecrackerForkIsolation(t *testing.T) {
 
 	imageManager, err := images.NewManager(p, 1, nil)
 	require.NoError(t, err)
-	createNginxImageAndWait(t, ctx, imageManager)
+	createNginxImageAndWait(t, ctx, p, imageManager)
 
 	systemManager := system.NewManager(p)
 	require.NoError(t, systemManager.EnsureSystemFiles(ctx))

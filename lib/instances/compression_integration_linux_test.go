@@ -137,7 +137,7 @@ func runStandbyRestoreCompressionScenarios(t *testing.T, harness compressionInte
 
 	imageManager, err := images.NewManager(p, 1, nil)
 	require.NoError(t, err)
-	createNginxImageAndWait(t, ctx, imageManager)
+	createNginxImageAndWait(t, ctx, p, imageManager)
 
 	systemManager := system.NewManager(p)
 	require.NoError(t, systemManager.EnsureSystemFiles(ctx))

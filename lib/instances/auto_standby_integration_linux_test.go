@@ -99,7 +99,7 @@ func TestAutoStandbyCloudHypervisorActiveInboundTCP(t *testing.T) {
 	mgr, _ := setupCompressionTestManagerForHypervisor(t, hypervisor.TypeCloudHypervisor)
 	require.NoError(t, mgr.networkManager.Initialize(ctx, nil))
 	require.NoError(t, mgr.systemManager.EnsureSystemFiles(ctx))
-	createNginxImageAndWait(t, ctx, mgr.imageManager)
+	createNginxImageAndWait(t, ctx, mgr.paths, mgr.imageManager)
 
 	connSource := autostandby.NewConntrackSource()
 	if _, err := connSource.ListConnections(ctx); err != nil {
