@@ -106,11 +106,6 @@ func main() {
 		PrewarmDir: prewarmDir,
 		Images:     make([]manifestImage, 0, len(imagesToWarm)),
 	}
-	p := paths.New(prewarmDir)
-	readyImageManager, err := images.NewManager(p, 1, nil)
-	if err != nil {
-		fatalf("create ready image manager: %v", err)
-	}
 
 	for _, img := range imagesToWarm {
 		entry, err := ensureMirroredImage(ctx, inspectClient, registry, img)
@@ -118,24 +113,10 @@ func main() {
 			fatalf("prewarm image %s: %v", img.Source, err)
 		}
 		fmt.Printf("prewarm image source=%s local=%s digest=%s cache_hit=%t\n", entry.Source, entry.LocalRef, entry.Digest, entry.CacheHit)
-		created, err := readyImageManager.CreateImage(ctx, images.CreateImageRequest{Name: entry.LocalRef, Platform: img.Platform})
-		if err != nil {
-			fatalf("build ready image %s: %v", entry.LocalRef, err)
-		}
-		waitName := created.Name
-		if created.Digest != "" {
-			ref, parseErr := images.ParseNormalizedRef(entry.LocalRef)
-			if parseErr != nil {
-				fatalf("parse ready image ref %s: %v", entry.LocalRef, parseErr)
-			}
-			waitName = ref.Repository() + "@" + created.Digest
-		}
-		if err := readyImageManager.WaitForReady(ctx, waitName); err != nil {
-			fatalf("wait for ready image %s: %v", entry.LocalRef, err)
-		}
 		manifest.Images = append(manifest.Images, entry)
 	}
 
+	p := paths.New(prewarmDir)
 	systemMgr := system.NewManager(p)
 	if err := systemMgr.EnsureSystemFiles(ctx); err != nil {
 		fatalf("prewarm system files: %v", err)
