@@ -16,6 +16,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -489,32 +490,22 @@ func runBuildProcess() {
 		}
 	}
 
-	// Ensure Dockerfile exists (either in source or provided via config)
-	dockerfilePath := filepath.Join(config.SourcePath, "Dockerfile")
-	if _, err := os.Stat(dockerfilePath); os.IsNotExist(err) {
-		// Check if Dockerfile was provided in config
-		if config.Dockerfile == "" {
-			setResult(BuildResult{
-				Success:    false,
-				Error:      "Dockerfile required: provide dockerfile parameter or include Dockerfile in source tarball",
-				Logs:       logWriter.String(),
-				DurationMS: time.Since(start).Milliseconds(),
-			})
-			return
-		}
-		// Write provided Dockerfile to source directory
-		if err := os.WriteFile(dockerfilePath, []byte(config.Dockerfile), 0644); err != nil {
-			setResult(BuildResult{
-				Success:    false,
-				Error:      fmt.Sprintf("write dockerfile: %v", err),
-				Logs:       logWriter.String(),
-				DurationMS: time.Since(start).Milliseconds(),
-			})
-			return
-		}
-		log.Println("Using Dockerfile from config")
-	} else {
+	dockerfileDir, cleanupDockerfile, err := prepareDockerfile(config)
+	if err != nil {
+		setResult(BuildResult{
+			Success:    false,
+			Error:      err.Error(),
+			Logs:       logWriter.String(),
+			DurationMS: time.Since(start).Milliseconds(),
+		})
+		return
+	}
+	defer cleanupDockerfile()
+
+	if dockerfileDir == config.SourcePath {
 		log.Println("Using Dockerfile from source")
+	} else {
+		log.Println("Using Dockerfile from config")
 	}
 
 	// Compute provenance
@@ -522,7 +513,7 @@ func runBuildProcess() {
 
 	// Run the build
 	log.Println("=== Starting Build ===")
-	digest, _, err := runBuild(ctx, config, logWriter)
+	digest, _, err := runBuild(ctx, config, dockerfileDir, logWriter)
 
 	duration := time.Since(start).Milliseconds()
 
@@ -748,7 +739,33 @@ func setupBuildkitdConfig(config *BuildConfig) error {
 	return nil
 }
 
-func runBuild(ctx context.Context, config *BuildConfig, logWriter io.Writer) (string, string, error) {
+func prepareDockerfile(config *BuildConfig) (string, func(), error) {
+	dockerfilePath := filepath.Join(config.SourcePath, "Dockerfile")
+	if _, err := os.Stat(dockerfilePath); err == nil {
+		return config.SourcePath, func() {}, nil
+	} else if !os.IsNotExist(err) {
+		return "", nil, fmt.Errorf("stat dockerfile: %w", err)
+	}
+
+	if config.Dockerfile == "" {
+		return "", nil, errors.New("Dockerfile required: provide dockerfile parameter or include Dockerfile in source tarball")
+	}
+
+	dockerfileDir, err := os.MkdirTemp("", "hypeman-dockerfile-")
+	if err != nil {
+		return "", nil, fmt.Errorf("create dockerfile directory: %w", err)
+	}
+	cleanup := func() { _ = os.RemoveAll(dockerfileDir) }
+
+	if err := os.WriteFile(filepath.Join(dockerfileDir, "Dockerfile"), []byte(config.Dockerfile), 0644); err != nil {
+		cleanup()
+		return "", nil, fmt.Errorf("write dockerfile: %w", err)
+	}
+
+	return dockerfileDir, cleanup, nil
+}
+
+func runBuild(ctx context.Context, config *BuildConfig, dockerfileDir string, logWriter io.Writer) (string, string, error) {
 	var buildLogs bytes.Buffer
 
 	// Parse registry host (strip any scheme prefix for backwards compatibility)
@@ -781,7 +798,7 @@ func runBuild(ctx context.Context, config *BuildConfig, logWriter io.Writer) (st
 		"build",
 		"--frontend", "dockerfile.v0",
 		"--local", "context=" + config.SourcePath,
-		"--local", "dockerfile=" + config.SourcePath,
+		"--local", "dockerfile=" + dockerfileDir,
 		"--output", outputOpts,
 		"--metadata-file", "/tmp/build-metadata.json",
 	}
