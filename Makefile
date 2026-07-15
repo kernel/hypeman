@@ -300,6 +300,7 @@ test-linux: ensure-ch-binaries ensure-firecracker-binaries ensure-caddy-binaries
 			"HYPEMAN_UFFD_SYSTEMD_INSTANCE_PREFIX=$${HYPEMAN_UFFD_SYSTEMD_INSTANCE_PREFIX:-}" \
 			"HYPEMAN_TEST_PREWARM_DIR=$${HYPEMAN_TEST_PREWARM_DIR:-}" \
 			"HYPEMAN_TEST_PREWARM_STRICT=$${HYPEMAN_TEST_PREWARM_STRICT:-}" \
+			"HYPEMAN_TEST_HEAVY_IO_PARALLELISM=$${HYPEMAN_TEST_HEAVY_IO_PARALLELISM:-}" \
 			"HYPEMAN_TEST_REGISTRY=$${HYPEMAN_TEST_REGISTRY:-}" \
 			go test -tags containers_image_openpgp -run=$(TEST) $$VERBOSE_FLAG -timeout=$(TEST_TIMEOUT) ./...; \
 	else \
@@ -309,6 +310,7 @@ test-linux: ensure-ch-binaries ensure-firecracker-binaries ensure-caddy-binaries
 			"HYPEMAN_UFFD_SYSTEMD_INSTANCE_PREFIX=$${HYPEMAN_UFFD_SYSTEMD_INSTANCE_PREFIX:-}" \
 			"HYPEMAN_TEST_PREWARM_DIR=$${HYPEMAN_TEST_PREWARM_DIR:-}" \
 			"HYPEMAN_TEST_PREWARM_STRICT=$${HYPEMAN_TEST_PREWARM_STRICT:-}" \
+			"HYPEMAN_TEST_HEAVY_IO_PARALLELISM=$${HYPEMAN_TEST_HEAVY_IO_PARALLELISM:-}" \
 			"HYPEMAN_TEST_REGISTRY=$${HYPEMAN_TEST_REGISTRY:-}" \
 			go test -tags containers_image_openpgp $$VERBOSE_FLAG -timeout=$(TEST_TIMEOUT) ./...; \
 	fi
