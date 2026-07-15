@@ -54,6 +54,7 @@ func runExecMode(log *Logger, cfg *vmconfig.Config) {
 
 	// Start guest-agent in background (skip if guest-agent was not copied)
 	// Pass environment variables so they're available via hypeman exec
+	knownChildren := newKnownChildPIDs()
 	var agentCmd *exec.Cmd
 	if cfg.SkipGuestAgent {
 		log.Info("hypeman-init:setup", "skipping guest-agent (skip_guest_agent=true)")
@@ -88,9 +89,13 @@ func runExecMode(log *Logger, cfg *vmconfig.Config) {
 		_ = readyPipeWriter.Close()
 
 		agentExited := make(chan error, 1)
-		go func() {
-			agentExited <- agentCmd.Wait()
-		}()
+		agentPID := agentCmd.Process.Pid
+		knownChildren.add(agentPID)
+		go func(cmd *exec.Cmd, pid int) {
+			err := cmd.Wait()
+			knownChildren.remove(pid)
+			agentExited <- err
+		}(agentCmd, agentPID)
 
 		// Strict startup gate: do not launch the guest program until agent is ready.
 		if err := waitForGuestAgentReady(readyPipeReader, guestAgentReadyTimeout, agentExited); err != nil {
@@ -140,10 +145,7 @@ func runExecMode(log *Logger, cfg *vmconfig.Config) {
 	log.Info("hypeman-init:entrypoint", fmt.Sprintf("container app started (PID %d)", appCmd.Process.Pid))
 
 	// exec.Cmd.Wait owns these direct children; the orphan reaper must not consume their statuses.
-	knownChildren := map[int]struct{}{appCmd.Process.Pid: {}}
-	if agentCmd != nil && agentCmd.Process != nil {
-		knownChildren[agentCmd.Process.Pid] = struct{}{}
-	}
+	knownChildren.add(appCmd.Process.Pid)
 	stopOrphanReaper := startOrphanReaper(knownChildren)
 	defer stopOrphanReaper()
 
@@ -163,6 +165,7 @@ func runExecMode(log *Logger, cfg *vmconfig.Config) {
 
 	// Wait for app to exit
 	err := appCmd.Wait()
+	knownChildren.remove(appCmd.Process.Pid)
 	signal.Stop(sigCh)
 
 	exitCode := 0

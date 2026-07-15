@@ -33,9 +33,12 @@ func runOrphanReaperHelper(t *testing.T) {
 	appCmd := exec.Command("/bin/sh", "-c", `sleep 0.05 & echo $! > "$1"`, "sh", pidFile)
 	require.NoError(t, appCmd.Start())
 
-	stopReaper := startOrphanReaper(map[int]struct{}{appCmd.Process.Pid: {}})
+	knownChildren := newKnownChildPIDs()
+	knownChildren.add(appCmd.Process.Pid)
+	stopReaper := startOrphanReaper(knownChildren)
 	defer stopReaper()
 	require.NoError(t, appCmd.Wait())
+	knownChildren.remove(appCmd.Process.Pid)
 
 	pidBytes, err := os.ReadFile(pidFile)
 	require.NoError(t, err)

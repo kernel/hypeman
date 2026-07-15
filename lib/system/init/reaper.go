@@ -7,12 +7,52 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"sync"
 	"syscall"
 )
 
 type wait4Func func(int, *syscall.WaitStatus, int, *syscall.Rusage) (int, error)
 
-func startOrphanReaper(knownChildren map[int]struct{}) func() {
+type knownChildPIDs struct {
+	mu      sync.RWMutex
+	pids    map[int]struct{}
+	changed chan struct{}
+}
+
+func newKnownChildPIDs() *knownChildPIDs {
+	return &knownChildPIDs{
+		pids:    make(map[int]struct{}),
+		changed: make(chan struct{}, 1),
+	}
+}
+
+func (k *knownChildPIDs) add(pid int) {
+	k.mu.Lock()
+	k.pids[pid] = struct{}{}
+	k.mu.Unlock()
+}
+
+func (k *knownChildPIDs) remove(pid int) {
+	k.mu.Lock()
+	_, existed := k.pids[pid]
+	delete(k.pids, pid)
+	k.mu.Unlock()
+	if existed {
+		select {
+		case k.changed <- struct{}{}:
+		default:
+		}
+	}
+}
+
+func (k *knownChildPIDs) contains(pid int) bool {
+	k.mu.RLock()
+	_, known := k.pids[pid]
+	k.mu.RUnlock()
+	return known
+}
+
+func startOrphanReaper(knownChildren *knownChildPIDs) func() {
 	sigCh := make(chan os.Signal, 1)
 	stopCh := make(chan struct{})
 	doneCh := make(chan struct{})
@@ -24,6 +64,8 @@ func startOrphanReaper(knownChildren map[int]struct{}) func() {
 		for {
 			select {
 			case <-sigCh:
+				reapAdoptedZombies("/proc", os.Getpid(), knownChildren, syscall.Wait4)
+			case <-knownChildren.changed:
 				reapAdoptedZombies("/proc", os.Getpid(), knownChildren, syscall.Wait4)
 			case <-stopCh:
 				return
@@ -38,14 +80,14 @@ func startOrphanReaper(knownChildren map[int]struct{}) func() {
 	}
 }
 
-func reapAdoptedZombies(procRoot string, parentPID int, knownChildren map[int]struct{}, wait4 wait4Func) {
+func reapAdoptedZombies(procRoot string, parentPID int, knownChildren *knownChildPIDs, wait4 wait4Func) {
 	for _, pid := range adoptedZombiePIDs(procRoot, parentPID, knownChildren) {
 		var status syscall.WaitStatus
 		_, _ = wait4(pid, &status, syscall.WNOHANG, nil)
 	}
 }
 
-func adoptedZombiePIDs(procRoot string, parentPID int, knownChildren map[int]struct{}) []int {
+func adoptedZombiePIDs(procRoot string, parentPID int, knownChildren *knownChildPIDs) []int {
 	entries, err := os.ReadDir(procRoot)
 	if err != nil {
 		return nil
@@ -57,7 +99,7 @@ func adoptedZombiePIDs(procRoot string, parentPID int, knownChildren map[int]str
 		if err != nil {
 			continue
 		}
-		if _, known := knownChildren[pid]; known {
+		if knownChildren.contains(pid) {
 			continue
 		}
 

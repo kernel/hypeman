@@ -35,8 +35,29 @@ func TestAdoptedZombiePIDs(t *testing.T) {
 	require.NoError(t, os.Mkdir(filepath.Join(procRoot, "105"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(procRoot, "105", "stat"), []byte("malformed"), 0o644))
 
-	got := adoptedZombiePIDs(procRoot, 1, map[int]struct{}{102: {}})
+	knownChildren := newKnownChildPIDs()
+	knownChildren.add(102)
+	got := adoptedZombiePIDs(procRoot, 1, knownChildren)
 	assert.Equal(t, []int{101}, got)
+
+	knownChildren.remove(102)
+	got = adoptedZombiePIDs(procRoot, 1, knownChildren)
+	assert.Equal(t, []int{101, 102}, got)
+}
+
+func TestKnownChildRemovalSignalsRescan(t *testing.T) {
+	knownChildren := newKnownChildPIDs()
+	knownChildren.add(102)
+	knownChildren.remove(102)
+
+	assert.False(t, knownChildren.contains(102))
+	signaled := false
+	select {
+	case <-knownChildren.changed:
+		signaled = true
+	default:
+	}
+	assert.True(t, signaled)
 }
 
 func TestReapAdoptedZombies(t *testing.T) {
@@ -52,7 +73,9 @@ func TestReapAdoptedZombies(t *testing.T) {
 		return pid, nil
 	}
 
-	reapAdoptedZombies(procRoot, 1, map[int]struct{}{203: {}}, wait4)
+	knownChildren := newKnownChildPIDs()
+	knownChildren.add(203)
+	reapAdoptedZombies(procRoot, 1, knownChildren, wait4)
 	assert.Equal(t, []int{201, 202}, reaped)
 }
 
