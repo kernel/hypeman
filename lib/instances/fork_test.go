@@ -986,7 +986,7 @@ func runWarmForkChain(t *testing.T, mgr *manager, tmpDir string, cfg warmForkCha
 	source, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           cfg.namePrefix + "-warm-chain-src",
 		Image:          imageName,
-		Size:           1024 * 1024 * 1024,
+		Size:           lifecycleTestMemorySize,
 		OverlaySize:    1024 * 1024 * 1024,
 		Vcpus:          1,
 		NetworkEnabled: false,

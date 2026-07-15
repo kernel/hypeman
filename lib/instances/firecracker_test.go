@@ -153,7 +153,7 @@ func TestFirecrackerStandbyAndRestore(t *testing.T) {
 	inst, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "test-firecracker-standby",
 		Image:          integrationTestImageRef(t, "docker.io/library/nginx:alpine"),
-		Size:           1024 * 1024 * 1024,
+		Size:           lifecycleTestMemorySize,
 		OverlaySize:    10 * 1024 * 1024 * 1024,
 		Vcpus:          1,
 		NetworkEnabled: false,
@@ -287,7 +287,7 @@ func TestFirecrackerStopClearsStaleSnapshot(t *testing.T) {
 	inst, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "fc-stale-snapshot",
 		Image:          integrationTestImageRef(t, "docker.io/library/nginx:alpine"),
-		Size:           1024 * 1024 * 1024,
+		Size:           lifecycleTestMemorySize,
 		OverlaySize:    10 * 1024 * 1024 * 1024,
 		Vcpus:          1,
 		NetworkEnabled: false,
@@ -581,7 +581,7 @@ func TestFirecrackerWarmForkChain(t *testing.T) {
 	source, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "fc-warm-chain-src",
 		Image:          imageName,
-		Size:           1024 * 1024 * 1024,
+		Size:           lifecycleTestMemorySize,
 		OverlaySize:    1024 * 1024 * 1024,
 		Vcpus:          1,
 		NetworkEnabled: false,
@@ -687,7 +687,7 @@ func TestFCUFFDOneShotLifecycle(t *testing.T) {
 	source, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "fc-uffd-oneshot-src",
 		Image:          imageName,
-		Size:           1024 * 1024 * 1024,
+		Size:           lifecycleTestMemorySize,
 		OverlaySize:    1024 * 1024 * 1024,
 		Vcpus:          1,
 		NetworkEnabled: false,
@@ -893,7 +893,7 @@ func TestFCUFFDGraduationLifecycle(t *testing.T) {
 	source, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "fc-uffd-grad-src",
 		Image:          imageName,
-		Size:           1024 * 1024 * 1024,
+		Size:           lifecycleTestMemorySize,
 		OverlaySize:    1024 * 1024 * 1024,
 		Vcpus:          1,
 		NetworkEnabled: false,

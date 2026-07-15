@@ -34,6 +34,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// lifecycleTestMemorySize is enough to boot the shared test guest while
+// avoiding snapshotting memory that lifecycle tests never touch. Dedicated
+// memory and resource-limit tests retain their larger sizes.
+const lifecycleTestMemorySize = 512 * 1024 * 1024
+
 // setupTestManager creates a manager and registers cleanup for any orphaned processes
 func setupTestManager(t *testing.T) (*manager, string) {
 	tmpDir := t.TempDir()
