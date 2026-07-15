@@ -188,6 +188,27 @@ jobs:
         with:
           go-version: '1.25.4'
           cache: false
+      - name: Ensure Docker is running
+        run: |
+          if docker info >/dev/null 2>&1; then
+            exit 0
+          fi
+
+          colima stop --force || true
+          if ! colima start; then
+            colima delete --force
+            colima start
+          fi
+
+          for attempt in {1..30}; do
+            if docker info >/dev/null 2>&1; then
+              exit 0
+            fi
+            echo "waiting for Docker daemon (${attempt}/30)"
+            sleep 2
+          done
+
+          docker info
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
