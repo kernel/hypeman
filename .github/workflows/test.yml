@@ -5,7 +5,12 @@ on:
 
 jobs:
   test:
+    name: test (${{ matrix.partition }})
     runs-on: [self-hosted, linux, x64, kvm]
+    strategy:
+      fail-fast: false
+      matrix:
+        partition: [other, 0, 1, 2, 3]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -163,7 +168,30 @@ jobs:
           cp "$PWD/bin/hypeman-uffd-pager" "$HYPEMAN_UFFD_PAGER_BINARY"
           chmod +x "$HYPEMAN_UFFD_PAGER_BINARY"
           export HYPEMAN_TEST_PREWARM_DIR="/ci/prewarm/linux-amd64"
-          make test TEST_TIMEOUT=20m
+          PARTITION="${{ matrix.partition }}"
+          if [ "$PARTITION" = "other" ]; then
+            PACKAGES="$(go list -tags containers_image_openpgp ./... | grep -v '^github.com/kernel/hypeman/lib/instances$' | tr '\n' ' ')"
+            make test TEST_TIMEOUT=20m TEST_PKGS="$PACKAGES"
+            exit
+          fi
+
+          TEST_NAMES=()
+          while read -r TEST_NAME; do
+            [ -n "$TEST_NAME" ] || continue
+            CHECKSUM="$(printf '%s' "$TEST_NAME" | cksum | awk '{print $1}')"
+            if [ "$((CHECKSUM % 4))" -eq "$PARTITION" ]; then
+              TEST_NAMES+=("$TEST_NAME")
+            fi
+          done < <(go test -tags containers_image_openpgp -list '^Test' ./lib/instances | grep '^Test')
+
+          if [ "${#TEST_NAMES[@]}" -eq 0 ]; then
+            echo "no tests selected for partition $PARTITION"
+            exit 1
+          fi
+          # Make consumes one layer of dollar escaping before passing -run to Go.
+          TEST_REGEX="^($(IFS='|'; echo "${TEST_NAMES[*]}"))\$\$"
+          echo "running ${#TEST_NAMES[@]} lib/instances tests in partition $PARTITION"
+          make test TEST_TIMEOUT=20m TEST_PKGS=./lib/instances TEST="$TEST_REGEX"
 
       - name: Cleanup
         if: always()

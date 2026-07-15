@@ -16,6 +16,7 @@ AIR ?= $(BIN_DIR)/air
 WIRE ?= $(BIN_DIR)/wire
 XCADDY ?= $(BIN_DIR)/xcaddy
 TEST_TIMEOUT ?= $(GO_TEST_TIMEOUT)
+TEST_PKGS ?= ./...
 
 # Install oapi-codegen (pinned to match committed generated code)
 $(OAPI_CODEGEN): | $(BIN_DIR)
@@ -302,7 +303,7 @@ test-linux: ensure-ch-binaries ensure-firecracker-binaries ensure-caddy-binaries
 			"HYPEMAN_TEST_PREWARM_STRICT=$${HYPEMAN_TEST_PREWARM_STRICT:-}" \
 			"HYPEMAN_TEST_HEAVY_IO_PARALLELISM=$${HYPEMAN_TEST_HEAVY_IO_PARALLELISM:-}" \
 			"HYPEMAN_TEST_REGISTRY=$${HYPEMAN_TEST_REGISTRY:-}" \
-			go test -tags containers_image_openpgp -run=$(TEST) $$VERBOSE_FLAG -timeout=$(TEST_TIMEOUT) ./...; \
+			go test -tags containers_image_openpgp -run='$(TEST)' $$VERBOSE_FLAG -timeout=$(TEST_TIMEOUT) $(TEST_PKGS); \
 	else \
 		sudo env "PATH=$$TEST_PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" "CI=$${CI:-}" \
 			"TMPDIR=$${TMPDIR:-/tmp}" \
@@ -312,7 +313,7 @@ test-linux: ensure-ch-binaries ensure-firecracker-binaries ensure-caddy-binaries
 			"HYPEMAN_TEST_PREWARM_STRICT=$${HYPEMAN_TEST_PREWARM_STRICT:-}" \
 			"HYPEMAN_TEST_HEAVY_IO_PARALLELISM=$${HYPEMAN_TEST_HEAVY_IO_PARALLELISM:-}" \
 			"HYPEMAN_TEST_REGISTRY=$${HYPEMAN_TEST_REGISTRY:-}" \
-			go test -tags containers_image_openpgp $$VERBOSE_FLAG -timeout=$(TEST_TIMEOUT) ./...; \
+			go test -tags containers_image_openpgp $$VERBOSE_FLAG -timeout=$(TEST_TIMEOUT) $(TEST_PKGS); \
 	fi
 
 # macOS tests (no sudo needed, adds e2fsprogs to PATH)
