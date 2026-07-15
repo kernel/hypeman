@@ -151,7 +151,7 @@ jobs:
           TLS_ALLOWED_DOMAINS: '*.hypeman-development.com'
           HYPEMAN_TEST_PREWARM_STRICT: "1"
           HYPEMAN_TEST_REFLINK_STRICT: "1"
-          HYPEMAN_TEST_HEAVY_IO_PARALLELISM: "6"
+          HYPEMAN_TEST_HEAVY_IO_PARALLELISM: "8"
           HYPEMAN_TEST_REGISTRY: 127.0.0.1:5001
           HYPEMAN_UFFD_PAGER_BINARY: ${{ runner.temp }}/hypeman-uffd-pager-${{ github.run_id }}-${{ github.run_attempt }}
           HYPEMAN_UFFD_SYSTEMD_INSTANCE_PREFIX: ci-${{ github.run_id }}-${{ github.run_attempt }}
