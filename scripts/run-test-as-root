@@ -1,0 +1,26 @@
+#!/bin/sh
+set -eu
+
+# Let `go test` compile with the invoking user's warm build cache, then elevate
+# only the test binary that needs KVM/network privileges.
+test_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${PATH}"
+
+exec sudo env \
+	"PATH=${test_path}" \
+	"DOCKER_CONFIG=${DOCKER_CONFIG:-${HOME}/.docker}" \
+	"CI=${CI:-}" \
+	"TMPDIR=${TMPDIR:-/tmp}" \
+	"HYPEMAN_UFFD_PAGER_BINARY=${HYPEMAN_UFFD_PAGER_BINARY:-}" \
+	"HYPEMAN_UFFD_SYSTEMD_INSTANCE_PREFIX=${HYPEMAN_UFFD_SYSTEMD_INSTANCE_PREFIX:-}" \
+	"HYPEMAN_TEST_PREWARM_DIR=${HYPEMAN_TEST_PREWARM_DIR:-}" \
+	"HYPEMAN_TEST_PREWARM_STRICT=${HYPEMAN_TEST_PREWARM_STRICT:-}" \
+	"HYPEMAN_TEST_REFLINK_STRICT=${HYPEMAN_TEST_REFLINK_STRICT:-}" \
+	"HYPEMAN_TEST_HEAVY_IO_PARALLELISM=${HYPEMAN_TEST_HEAVY_IO_PARALLELISM:-}" \
+	"HYPEMAN_TEST_REGISTRY=${HYPEMAN_TEST_REGISTRY:-}" \
+	"ACME_EMAIL=${ACME_EMAIL:-}" \
+	"ACME_DNS_PROVIDER=${ACME_DNS_PROVIDER:-}" \
+	"ACME_CA=${ACME_CA:-}" \
+	"CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN:-}" \
+	"TLS_TEST_DOMAIN=${TLS_TEST_DOMAIN:-}" \
+	"TLS_ALLOWED_DOMAINS=${TLS_ALLOWED_DOMAINS:-}" \
+	"$@"
