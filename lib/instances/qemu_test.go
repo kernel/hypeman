@@ -929,7 +929,7 @@ func TestQEMUForkFromRunningNetwork(t *testing.T) {
 	})
 	require.NoError(t, err)
 	sourceID := source.Id
-	t.Cleanup(func() { _ = manager.DeleteInstance(context.Background(), sourceID) })
+	t.Cleanup(func() { _ = deleteTestInstanceNow(context.Background(), manager, sourceID) })
 	// QEMU is the slowest Linux hypervisor under full-suite load on Deft. Give
 	// the host-side Running transition more headroom so we don't fail while the
 	// VM is still legitimately completing boot marker hydration.
@@ -953,7 +953,7 @@ func TestQEMUForkFromRunningNetwork(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, StateStandby, forked.State)
 	forkedID := forked.Id
-	t.Cleanup(func() { _ = manager.DeleteInstance(context.Background(), forkedID) })
+	t.Cleanup(func() { _ = deleteTestInstanceNow(context.Background(), manager, forkedID) })
 
 	sourceAfterFork, err := manager.GetInstance(ctx, source.Id)
 	require.NoError(t, err)

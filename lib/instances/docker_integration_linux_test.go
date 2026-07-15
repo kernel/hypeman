@@ -53,7 +53,7 @@ func TestDockerInVMCloudHypervisorWithAttachedVolume(t *testing.T) {
 					t.Logf("dockerd log (exit=%d):\n%s", code, output)
 				}
 			}
-			_ = manager.DeleteInstance(context.Background(), inst.Id)
+			_ = deleteTestInstanceNow(context.Background(), manager, inst.Id)
 		}
 		_ = volumeManager.DeleteVolume(context.Background(), vol.Id)
 	})

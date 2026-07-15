@@ -62,7 +62,7 @@ func runStandbySnapshotScenario(t *testing.T, mgr *manager, tmpDir string, cfg s
 	sourceDeleted := false
 	t.Cleanup(func() {
 		if !sourceDeleted {
-			_ = mgr.DeleteInstance(context.Background(), sourceID)
+			_ = deleteTestInstanceNow(context.Background(), mgr, sourceID)
 		}
 	})
 
@@ -103,7 +103,7 @@ func runStandbySnapshotScenario(t *testing.T, mgr *manager, tmpDir string, cfg s
 	require.Equal(t, StateStandby, forked.State)
 
 	forkID := forked.Id
-	t.Cleanup(func() { _ = mgr.DeleteInstance(context.Background(), forkID) })
+	t.Cleanup(func() { _ = deleteTestInstanceNow(context.Background(), mgr, forkID) })
 	currentFork, err := mgr.GetInstance(ctx, forkID)
 	requireNoErr(err)
 	require.Equal(t, StateStandby, currentFork.State)

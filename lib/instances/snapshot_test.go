@@ -53,7 +53,7 @@ func TestStoppedSnapshotLifecycleAndForkAfterSourceDeletion(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, StateStopped, forked.State)
 	require.Equal(t, hvType, forked.HypervisorType)
-	t.Cleanup(func() { _ = mgr.DeleteInstance(context.Background(), forked.Id) })
+	t.Cleanup(func() { _ = deleteTestInstanceNow(context.Background(), mgr, forked.Id) })
 
 	require.NoError(t, mgr.DeleteSnapshot(ctx, snap.Id))
 	_, err = mgr.GetSnapshot(ctx, snap.Id)
@@ -325,7 +325,7 @@ func TestForkSnapshotFromCompressedSourceCopiesRawMemory(t *testing.T) {
 		TargetState: StateStopped,
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = mgr.DeleteInstance(context.Background(), forked.Id) })
+	t.Cleanup(func() { _ = deleteTestInstanceNow(context.Background(), mgr, forked.Id) })
 
 	forkSnapshotDir := mgr.paths.InstanceDir(forked.Id)
 	_, ok := findRawSnapshotMemoryFile(forkSnapshotDir)
