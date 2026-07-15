@@ -3,8 +3,27 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
+
+func TestBaseBuildctlArgsSeparatesDockerfileFromContext(t *testing.T) {
+	config := &BuildConfig{SourcePath: "/tmp/source"}
+
+	got := baseBuildctlArgs(config, "/tmp/dockerfile", "type=image,name=example")
+	want := []string{
+		"build",
+		"--frontend", "dockerfile.v0",
+		"--local", "context=/tmp/source",
+		"--local", "dockerfile=/tmp/dockerfile",
+		"--output", "type=image,name=example",
+		"--metadata-file", "/tmp/build-metadata.json",
+	}
+
+	if !slices.Equal(got, want) {
+		t.Fatalf("unexpected buildctl args:\n got: %q\nwant: %q", got, want)
+	}
+}
 
 func TestPrepareDockerfileKeepsConfiguredDockerfileOutsideSource(t *testing.T) {
 	sourceDir := t.TempDir()

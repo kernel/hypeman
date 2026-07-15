@@ -765,6 +765,17 @@ func prepareDockerfile(config *BuildConfig) (string, func(), error) {
 	return dockerfileDir, cleanup, nil
 }
 
+func baseBuildctlArgs(config *BuildConfig, dockerfileDir, outputOpts string) []string {
+	return []string{
+		"build",
+		"--frontend", "dockerfile.v0",
+		"--local", "context=" + config.SourcePath,
+		"--local", "dockerfile=" + dockerfileDir,
+		"--output", outputOpts,
+		"--metadata-file", "/tmp/build-metadata.json",
+	}
+}
+
 func runBuild(ctx context.Context, config *BuildConfig, dockerfileDir string, logWriter io.Writer) (string, string, error) {
 	var buildLogs bytes.Buffer
 
@@ -794,14 +805,7 @@ func runBuild(ctx context.Context, config *BuildConfig, dockerfileDir string, lo
 		log.Printf("Using HTTPS registry (secure mode): %s", registryHost)
 	}
 
-	args := []string{
-		"build",
-		"--frontend", "dockerfile.v0",
-		"--local", "context=" + config.SourcePath,
-		"--local", "dockerfile=" + dockerfileDir,
-		"--output", outputOpts,
-		"--metadata-file", "/tmp/build-metadata.json",
-	}
+	args := baseBuildctlArgs(config, dockerfileDir, outputOpts)
 
 	// Two-tier cache implementation:
 	// 1. Import from global cache (if runtime specified) - always read-only for regular builds
