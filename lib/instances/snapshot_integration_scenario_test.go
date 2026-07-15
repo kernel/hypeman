@@ -49,7 +49,7 @@ func runStandbySnapshotScenario(t *testing.T, mgr *manager, tmpDir string, cfg s
 	source, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           cfg.sourceName,
 		Image:          integrationTestImageRef(t, "docker.io/library/alpine:latest"),
-		Size:           1024 * 1024 * 1024,
+		Size:           lifecycleTestMemorySize,
 		OverlaySize:    10 * 1024 * 1024 * 1024,
 		Vcpus:          1,
 		NetworkEnabled: false,

@@ -145,7 +145,7 @@ func runStandbyRestoreCompressionScenarios(t *testing.T, harness compressionInte
 	inst, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           fmt.Sprintf("compression-%s", harness.name),
 		Image:          integrationTestImageRef(t, "docker.io/library/nginx:alpine"),
-		Size:           1024 * 1024 * 1024,
+		Size:           lifecycleTestMemorySize,
 		HotplugSize:    512 * 1024 * 1024,
 		OverlaySize:    10 * 1024 * 1024 * 1024,
 		Vcpus:          1,
