@@ -60,7 +60,7 @@ func TestEgressProxyRewritesHTTPSHeaders(t *testing.T) {
 	inst, err := manager.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "test-egress-proxy",
 		Image:          imageRef,
-		Size:           2 * 1024 * 1024 * 1024,
+		Size:           lifecycleTestMemorySize,
 		HotplugSize:    512 * 1024 * 1024,
 		OverlaySize:    5 * 1024 * 1024 * 1024,
 		Vcpus:          1,

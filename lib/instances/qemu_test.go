@@ -649,7 +649,7 @@ func TestQEMUEntrypointEnvVars(t *testing.T) {
 	req := CreateInstanceRequest{
 		Name:           "test-redis-env",
 		Image:          integrationTestImageRef(t, redisEntrypointEnvImage),
-		Size:           2 * 1024 * 1024 * 1024,
+		Size:           lifecycleTestMemorySize,
 		HotplugSize:    512 * 1024 * 1024,
 		OverlaySize:    10 * 1024 * 1024 * 1024,
 		Vcpus:          2,
@@ -920,7 +920,7 @@ func TestQEMUForkFromRunningNetwork(t *testing.T) {
 	source, err := manager.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "qemu-fork-running-src",
 		Image:          integrationTestImageRef(t, "docker.io/library/nginx:alpine"),
-		Size:           2 * 1024 * 1024 * 1024,
+		Size:           lifecycleTestMemorySize,
 		HotplugSize:    256 * 1024 * 1024,
 		OverlaySize:    10 * 1024 * 1024 * 1024,
 		Vcpus:          1,

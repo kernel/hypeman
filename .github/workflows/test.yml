@@ -176,6 +176,9 @@ jobs:
             TestFirecrackerStandbyRestoreCompressionScenarios
             TestEgressProxyRewritesHTTPSHeaders
             TestFCUFFDGraduationLifecycle
+            TestForkCloudHypervisorFromRunningNetwork
+            TestFirecrackerForkFromRunningNetwork
+            TestQEMUForkFromRunningNetwork
           )
           for TEST_NAME in "${TEST_NAMES[@]}"; do
             echo "WALL_PROFILE_BEGIN test=$TEST_NAME unix_ns=$(date +%s%N)"

@@ -884,7 +884,7 @@ func TestForkCloudHypervisorFromRunningNetwork(t *testing.T) {
 	source, err := manager.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "fork-running-src",
 		Image:          integrationTestImageRef(t, "docker.io/library/nginx:alpine"),
-		Size:           2 * 1024 * 1024 * 1024,
+		Size:           lifecycleTestMemorySize,
 		HotplugSize:    256 * 1024 * 1024,
 		OverlaySize:    10 * 1024 * 1024 * 1024,
 		Vcpus:          1,
