@@ -38,7 +38,11 @@ func EnsureImageReady(t *testing.T, ctx context.Context, p *paths.Paths, imageMa
 	ref, err := images.ParseNormalizedRef(image)
 	require.NoError(t, err)
 
-	cachePaths := paths.New(filepath.Join(os.TempDir(), "hypeman-snapshot-image-cache"))
+	cacheDir := strings.TrimSpace(os.Getenv("HYPEMAN_TEST_PREWARM_DIR"))
+	if cacheDir == "" {
+		cacheDir = filepath.Join(os.TempDir(), "hypeman-snapshot-image-cache")
+	}
+	cachePaths := paths.New(cacheDir)
 	cacheMgr, err := images.NewManager(cachePaths, 1, nil)
 	require.NoError(t, err)
 
