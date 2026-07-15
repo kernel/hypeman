@@ -162,7 +162,9 @@ jobs:
           cp "$PWD/bin/hypeman-uffd-pager" "$HYPEMAN_UFFD_PAGER_BINARY"
           chmod +x "$HYPEMAN_UFFD_PAGER_BINARY"
           export HYPEMAN_TEST_PREWARM_DIR="/ci/prewarm/linux-amd64"
-          make test TEST_TIMEOUT=20m
+          # Temporary profiling branch: emit per-test elapsed times so the
+          # Linux runner's critical path can be measured from real CI.
+          make test VERBOSE=1 TEST_TIMEOUT=20m
 
       - name: Cleanup
         if: always()
