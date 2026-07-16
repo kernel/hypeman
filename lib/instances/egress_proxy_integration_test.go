@@ -18,7 +18,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/egressproxy"
-	"github.com/kernel/hypeman/lib/images"
+	snapshottest "github.com/kernel/hypeman/lib/snapshot/testsupport"
 	"github.com/stretchr/testify/require"
 )
 
@@ -49,20 +49,7 @@ func TestEgressProxyRewritesHTTPSHeaders(t *testing.T) {
 	require.NoError(t, err)
 
 	imageRef := integrationTestImageRef(t, "docker.io/library/nginx:alpine")
-	t.Logf("Pulling %s image...", imageRef)
-	created, err := manager.imageManager.CreateImage(ctx, images.CreateImageRequest{Name: imageRef})
-	require.NoError(t, err)
-
-	for i := 0; i < 120; i++ {
-		img, err := manager.imageManager.GetImage(ctx, created.Name)
-		if err == nil && img.Status == images.StatusReady {
-			break
-		}
-		time.Sleep(1 * time.Second)
-	}
-	img, err := manager.imageManager.GetImage(ctx, created.Name)
-	require.NoError(t, err)
-	require.Equal(t, images.StatusReady, img.Status)
+	snapshottest.EnsureImageReady(t, ctx, manager.paths, manager.imageManager, imageRef)
 
 	require.NoError(t, manager.systemManager.EnsureSystemFiles(ctx))
 	require.NoError(t, manager.networkManager.Initialize(ctx, nil))
@@ -103,7 +90,7 @@ func TestEgressProxyRewritesHTTPSHeaders(t *testing.T) {
 	deleted := false
 	t.Cleanup(func() {
 		if !deleted {
-			_ = manager.DeleteInstance(context.Background(), inst.Id)
+			_ = deleteTestInstanceNow(context.Background(), manager, inst.Id)
 		}
 	})
 
@@ -192,7 +179,7 @@ func TestEgressProxyRewritesHTTPSHeaders(t *testing.T) {
 	require.Contains(t, rotatedOutput, "Bearer rotated-key-456")
 	require.NotContains(t, rotatedOutput, "real-openai-key-123")
 
-	require.NoError(t, manager.DeleteInstance(ctx, inst.Id))
+	require.NoError(t, deleteTestInstanceNow(ctx, manager, inst.Id))
 	deleted = true
 }
 

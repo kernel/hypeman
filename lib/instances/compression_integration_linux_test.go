@@ -137,7 +137,7 @@ func runStandbyRestoreCompressionScenarios(t *testing.T, harness compressionInte
 
 	imageManager, err := images.NewManager(p, 1, nil)
 	require.NoError(t, err)
-	createNginxImageAndWait(t, ctx, imageManager)
+	createNginxImageAndWait(t, ctx, p, imageManager)
 
 	systemManager := system.NewManager(p)
 	require.NoError(t, systemManager.EnsureSystemFiles(ctx))
@@ -145,7 +145,7 @@ func runStandbyRestoreCompressionScenarios(t *testing.T, harness compressionInte
 	inst, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           fmt.Sprintf("compression-%s", harness.name),
 		Image:          integrationTestImageRef(t, "docker.io/library/nginx:alpine"),
-		Size:           1024 * 1024 * 1024,
+		Size:           lifecycleTestMemorySize,
 		HotplugSize:    512 * 1024 * 1024,
 		OverlaySize:    10 * 1024 * 1024 * 1024,
 		Vcpus:          1,
@@ -157,7 +157,7 @@ func runStandbyRestoreCompressionScenarios(t *testing.T, harness compressionInte
 	deleted := false
 	t.Cleanup(func() {
 		if !deleted {
-			_ = mgr.DeleteInstance(context.Background(), inst.Id)
+			_ = deleteTestInstanceNow(context.Background(), mgr, inst.Id)
 		}
 	})
 
@@ -196,7 +196,7 @@ func runStandbyRestoreCompressionScenarios(t *testing.T, harness compressionInte
 		inst = runCompressionCycle(t, ctx, mgr, p, inst, harness.waitHypervisorUp, tc.name, tc.cfg, true)
 	}
 
-	require.NoError(t, mgr.DeleteInstance(ctx, inst.Id))
+	require.NoError(t, deleteTestInstanceNow(ctx, mgr, inst.Id))
 	deleted = true
 }
 

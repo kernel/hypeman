@@ -104,26 +104,9 @@ func requireUserfaultfdIntegrationPrereqs(t *testing.T) {
 	_ = file.Close()
 }
 
-func createNginxImageAndWait(t *testing.T, ctx context.Context, imageManager images.Manager) {
+func createNginxImageAndWait(t *testing.T, ctx context.Context, p *paths.Paths, imageManager images.Manager) {
 	t.Helper()
-
-	nginxImage, err := imageManager.CreateImage(ctx, images.CreateImageRequest{
-		Name: integrationTestImageRef(t, "docker.io/library/nginx:alpine"),
-	})
-	require.NoError(t, err)
-
-	for i := 0; i < 60; i++ {
-		img, err := imageManager.GetImage(ctx, nginxImage.Name)
-		if err == nil && img.Status == images.StatusReady {
-			return
-		}
-		if err == nil && img.Status == images.StatusFailed {
-			t.Fatalf("image build failed: %s", *img.Error)
-		}
-		time.Sleep(1 * time.Second)
-	}
-
-	t.Fatalf("timed out waiting for image %q to become ready", nginxImage.Name)
+	snapshottest.EnsureImageReady(t, ctx, p, imageManager, integrationTestImageRef(t, "docker.io/library/nginx:alpine"))
 }
 
 func startGatewayProbeServer(t *testing.T, gatewayIP string) (string, func()) {
@@ -162,7 +145,7 @@ func TestFirecrackerStandbyAndRestore(t *testing.T) {
 
 	imageManager, err := images.NewManager(p, 1, nil)
 	require.NoError(t, err)
-	createNginxImageAndWait(t, ctx, imageManager)
+	createNginxImageAndWait(t, ctx, p, imageManager)
 
 	systemManager := system.NewManager(p)
 	require.NoError(t, systemManager.EnsureSystemFiles(ctx))
@@ -170,7 +153,7 @@ func TestFirecrackerStandbyAndRestore(t *testing.T) {
 	inst, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "test-firecracker-standby",
 		Image:          integrationTestImageRef(t, "docker.io/library/nginx:alpine"),
-		Size:           1024 * 1024 * 1024,
+		Size:           lifecycleTestMemorySize,
 		OverlaySize:    10 * 1024 * 1024 * 1024,
 		Vcpus:          1,
 		NetworkEnabled: false,
@@ -181,7 +164,7 @@ func TestFirecrackerStandbyAndRestore(t *testing.T) {
 	deleted := false
 	t.Cleanup(func() {
 		if !deleted {
-			_ = mgr.DeleteInstance(context.Background(), inst.Id)
+			_ = deleteTestInstanceNow(context.Background(), mgr, inst.Id)
 		}
 	})
 
@@ -296,7 +279,7 @@ func TestFirecrackerStopClearsStaleSnapshot(t *testing.T) {
 
 	imageManager, err := images.NewManager(p, 1, nil)
 	require.NoError(t, err)
-	createNginxImageAndWait(t, ctx, imageManager)
+	createNginxImageAndWait(t, ctx, p, imageManager)
 
 	systemManager := system.NewManager(p)
 	require.NoError(t, systemManager.EnsureSystemFiles(ctx))
@@ -304,7 +287,7 @@ func TestFirecrackerStopClearsStaleSnapshot(t *testing.T) {
 	inst, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "fc-stale-snapshot",
 		Image:          integrationTestImageRef(t, "docker.io/library/nginx:alpine"),
-		Size:           1024 * 1024 * 1024,
+		Size:           lifecycleTestMemorySize,
 		OverlaySize:    10 * 1024 * 1024 * 1024,
 		Vcpus:          1,
 		NetworkEnabled: false,
@@ -373,7 +356,7 @@ func TestFirecrackerNetworkLifecycle(t *testing.T) {
 
 	imageManager, err := images.NewManager(p, 1, nil)
 	require.NoError(t, err)
-	createNginxImageAndWait(t, ctx, imageManager)
+	createNginxImageAndWait(t, ctx, p, imageManager)
 
 	systemManager := system.NewManager(p)
 	require.NoError(t, systemManager.EnsureSystemFiles(ctx))
@@ -501,7 +484,7 @@ func TestFirecrackerForkFromRunningNetwork(t *testing.T) {
 
 	imageManager, err := images.NewManager(p, 1, nil)
 	require.NoError(t, err)
-	createNginxImageAndWait(t, ctx, imageManager)
+	createNginxImageAndWait(t, ctx, p, imageManager)
 
 	systemManager := system.NewManager(p)
 	require.NoError(t, systemManager.EnsureSystemFiles(ctx))
@@ -521,7 +504,7 @@ func TestFirecrackerForkFromRunningNetwork(t *testing.T) {
 	source, err = waitForInstanceState(ctx, mgr, source.Id, StateRunning, integrationTestTimeout(20*time.Second))
 	require.NoError(t, err)
 	sourceID := source.Id
-	t.Cleanup(func() { _ = mgr.DeleteInstance(context.Background(), sourceID) })
+	t.Cleanup(func() { _ = deleteTestInstanceNow(context.Background(), mgr, sourceID) })
 	assert.NotEmpty(t, source.IP)
 	assert.NotEmpty(t, source.MAC)
 
@@ -540,7 +523,7 @@ func TestFirecrackerForkFromRunningNetwork(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, StateRunning, forked.State)
 	forkID := forked.Id
-	t.Cleanup(func() { _ = mgr.DeleteInstance(context.Background(), forkID) })
+	t.Cleanup(func() { _ = deleteTestInstanceNow(context.Background(), mgr, forkID) })
 	assert.NotEmpty(t, forked.IP)
 	assert.NotEmpty(t, forked.MAC)
 	assert.Equal(t, mgr.paths.InstanceVsockSocket(forkID), forked.VsockSocket)
@@ -598,7 +581,7 @@ func TestFirecrackerWarmForkChain(t *testing.T) {
 	source, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "fc-warm-chain-src",
 		Image:          imageName,
-		Size:           1024 * 1024 * 1024,
+		Size:           lifecycleTestMemorySize,
 		OverlaySize:    1024 * 1024 * 1024,
 		Vcpus:          1,
 		NetworkEnabled: false,
@@ -610,7 +593,7 @@ func TestFirecrackerWarmForkChain(t *testing.T) {
 	sourceDeleted := false
 	t.Cleanup(func() {
 		if !sourceDeleted {
-			_ = mgr.DeleteInstance(context.Background(), sourceID)
+			_ = deleteTestInstanceNow(context.Background(), mgr, sourceID)
 		}
 	})
 
@@ -625,7 +608,7 @@ func TestFirecrackerWarmForkChain(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, SnapshotKindStandby, snapshot.Kind)
 
-	require.NoError(t, mgr.DeleteInstance(ctx, sourceID))
+	require.NoError(t, deleteTestInstanceNow(ctx, mgr, sourceID))
 	sourceDeleted = true
 
 	warm, err := mgr.ForkSnapshot(ctx, snapshot.Id, ForkSnapshotRequest{
@@ -637,7 +620,7 @@ func TestFirecrackerWarmForkChain(t *testing.T) {
 	warmDeleted := false
 	t.Cleanup(func() {
 		if !warmDeleted {
-			_ = mgr.DeleteInstance(context.Background(), warmID)
+			_ = deleteTestInstanceNow(context.Background(), mgr, warmID)
 		}
 	})
 	warm, err = waitForInstanceState(ctx, mgr, warmID, StateRunning, integrationTestTimeout(20*time.Second))
@@ -652,7 +635,7 @@ func TestFirecrackerWarmForkChain(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, StateStopped, child.State)
 	childID := child.Id
-	t.Cleanup(func() { _ = mgr.DeleteInstance(context.Background(), childID) })
+	t.Cleanup(func() { _ = deleteTestInstanceNow(context.Background(), mgr, childID) })
 
 	warm, err = mgr.GetInstance(ctx, warmID)
 	require.NoError(t, err)
@@ -663,7 +646,7 @@ func TestFirecrackerWarmForkChain(t *testing.T) {
 	require.Equal(t, StateRunning, warm.State)
 	require.NoError(t, waitForExecAgent(ctx, mgr, warmID, 30*time.Second))
 
-	require.NoError(t, mgr.DeleteInstance(ctx, warmID))
+	require.NoError(t, deleteTestInstanceNow(ctx, mgr, warmID))
 	warmDeleted = true
 	require.NoError(t, mgr.DeleteSnapshot(ctx, snapshot.Id))
 }
@@ -704,7 +687,7 @@ func TestFCUFFDOneShotLifecycle(t *testing.T) {
 	source, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "fc-uffd-oneshot-src",
 		Image:          imageName,
-		Size:           1024 * 1024 * 1024,
+		Size:           lifecycleTestMemorySize,
 		OverlaySize:    1024 * 1024 * 1024,
 		Vcpus:          1,
 		NetworkEnabled: false,
@@ -716,7 +699,7 @@ func TestFCUFFDOneShotLifecycle(t *testing.T) {
 	sourceDeleted := false
 	t.Cleanup(func() {
 		if !sourceDeleted {
-			_ = mgr.DeleteInstance(context.Background(), sourceID)
+			_ = deleteTestInstanceNow(context.Background(), mgr, sourceID)
 		}
 	})
 
@@ -753,7 +736,7 @@ func TestFCUFFDOneShotLifecycle(t *testing.T) {
 	parentDeleted := false
 	t.Cleanup(func() {
 		if !parentDeleted {
-			_ = mgr.DeleteInstance(context.Background(), parentID)
+			_ = deleteTestInstanceNow(context.Background(), mgr, parentID)
 		}
 	})
 	parent = requireRunningSleepInstance(t, ctx, mgr, parentID)
@@ -805,7 +788,7 @@ func TestFCUFFDOneShotLifecycle(t *testing.T) {
 	childDeleted := false
 	t.Cleanup(func() {
 		if !childDeleted {
-			_ = mgr.DeleteInstance(context.Background(), childID)
+			_ = deleteTestInstanceNow(context.Background(), mgr, childID)
 		}
 	})
 
@@ -864,11 +847,11 @@ func TestFCUFFDOneShotLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, StateStandby, child.State)
 
-	require.NoError(t, mgr.DeleteInstance(ctx, childID))
+	require.NoError(t, deleteTestInstanceNow(ctx, mgr, childID))
 	childDeleted = true
-	require.NoError(t, mgr.DeleteInstance(ctx, parentID))
+	require.NoError(t, deleteTestInstanceNow(ctx, mgr, parentID))
 	parentDeleted = true
-	require.NoError(t, mgr.DeleteInstance(ctx, sourceID))
+	require.NoError(t, deleteTestInstanceNow(ctx, mgr, sourceID))
 	sourceDeleted = true
 	require.NoError(t, mgr.DeleteSnapshot(ctx, snapshot.Id))
 	snapshotDeleted = true
@@ -910,7 +893,7 @@ func TestFCUFFDGraduationLifecycle(t *testing.T) {
 	source, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "fc-uffd-grad-src",
 		Image:          imageName,
-		Size:           1024 * 1024 * 1024,
+		Size:           lifecycleTestMemorySize,
 		OverlaySize:    1024 * 1024 * 1024,
 		Vcpus:          1,
 		NetworkEnabled: false,
@@ -922,7 +905,7 @@ func TestFCUFFDGraduationLifecycle(t *testing.T) {
 	sourceDeleted := false
 	t.Cleanup(func() {
 		if !sourceDeleted {
-			_ = mgr.DeleteInstance(context.Background(), sourceID)
+			_ = deleteTestInstanceNow(context.Background(), mgr, sourceID)
 		}
 	})
 
@@ -958,7 +941,7 @@ func TestFCUFFDGraduationLifecycle(t *testing.T) {
 	parentDeleted := false
 	t.Cleanup(func() {
 		if !parentDeleted {
-			_ = mgr.DeleteInstance(context.Background(), parentID)
+			_ = deleteTestInstanceNow(context.Background(), mgr, parentID)
 		}
 	})
 
@@ -1020,9 +1003,9 @@ func TestFCUFFDGraduationLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, parentMeta.StoredMetadata.FirecrackerUFFDSessionID, "file-backed restore after graduation should not create a pager session")
 
-	require.NoError(t, mgr.DeleteInstance(ctx, parentID))
+	require.NoError(t, deleteTestInstanceNow(ctx, mgr, parentID))
 	parentDeleted = true
-	require.NoError(t, mgr.DeleteInstance(ctx, sourceID))
+	require.NoError(t, deleteTestInstanceNow(ctx, mgr, sourceID))
 	sourceDeleted = true
 	require.NoError(t, mgr.DeleteSnapshot(ctx, snapshot.Id))
 	snapshotDeleted = true
@@ -1132,7 +1115,7 @@ func TestFirecrackerForkIsolation(t *testing.T) {
 
 	imageManager, err := images.NewManager(p, 1, nil)
 	require.NoError(t, err)
-	createNginxImageAndWait(t, ctx, imageManager)
+	createNginxImageAndWait(t, ctx, p, imageManager)
 
 	systemManager := system.NewManager(p)
 	require.NoError(t, systemManager.EnsureSystemFiles(ctx))
@@ -1153,7 +1136,7 @@ func TestFirecrackerForkIsolation(t *testing.T) {
 	sourceDeleted := false
 	t.Cleanup(func() {
 		if !sourceDeleted {
-			_ = mgr.DeleteInstance(context.Background(), sourceID)
+			_ = deleteTestInstanceNow(context.Background(), mgr, sourceID)
 		}
 	})
 
@@ -1193,7 +1176,7 @@ func TestFirecrackerForkIsolation(t *testing.T) {
 	forkDeleted := false
 	t.Cleanup(func() {
 		if !forkDeleted {
-			_ = mgr.DeleteInstance(context.Background(), forkID)
+			_ = deleteTestInstanceNow(context.Background(), mgr, forkID)
 		}
 	})
 	require.Equal(t, StateStandby, fork.State)

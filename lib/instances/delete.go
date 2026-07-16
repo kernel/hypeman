@@ -17,10 +17,22 @@ import (
 
 const deleteGracefulShutdownTimeout = 2
 
+type deleteInstanceOptions struct {
+	skipGracefulShutdown bool
+}
+
 // deleteInstance stops and deletes an instance
 func (m *manager) deleteInstance(
 	ctx context.Context,
 	id string,
+) error {
+	return m.deleteInstanceWithOptions(ctx, id, deleteInstanceOptions{})
+}
+
+func (m *manager) deleteInstanceWithOptions(
+	ctx context.Context,
+	id string,
+	options deleteInstanceOptions,
 ) (retErr error) {
 	log := logger.FromContext(ctx)
 	log.InfoContext(ctx, "deleting instance", "instance_id", id)
@@ -76,7 +88,7 @@ func (m *manager) deleteInstance(
 
 	// 4. If active, try graceful guest shutdown before force kill.
 	gracefulShutdown := false
-	if inst.State == StateRunning || inst.State == StateInitializing {
+	if !options.skipGracefulShutdown && (inst.State == StateRunning || inst.State == StateInitializing) {
 		stopTimeout := resolveStopTimeout(stored)
 		if stopTimeout > deleteGracefulShutdownTimeout {
 			stopTimeout = deleteGracefulShutdownTimeout

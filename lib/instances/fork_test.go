@@ -892,7 +892,7 @@ func TestForkCloudHypervisorFromRunningNetwork(t *testing.T) {
 	})
 	require.NoError(t, err)
 	sourceID := source.Id
-	t.Cleanup(func() { _ = manager.DeleteInstance(context.Background(), sourceID) })
+	t.Cleanup(func() { _ = deleteTestInstanceNow(context.Background(), manager, sourceID) })
 	source, err = waitForInstanceState(ctx, manager, source.Id, StateRunning, integrationTestTimeout(20*time.Second))
 	require.NoError(t, err)
 	require.NoError(t, waitForVMReady(ctx, source.SocketPath, 5*time.Second))
@@ -918,7 +918,7 @@ func TestForkCloudHypervisorFromRunningNetwork(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, StateRunning, forked.State)
 	forkedID := forked.Id
-	t.Cleanup(func() { _ = manager.DeleteInstance(context.Background(), forkedID) })
+	t.Cleanup(func() { _ = deleteTestInstanceNow(context.Background(), manager, forkedID) })
 
 	// Source should be restored and still reachable by its private IP.
 	sourceAfterFork, err := manager.GetInstance(ctx, source.Id)
@@ -986,7 +986,7 @@ func runWarmForkChain(t *testing.T, mgr *manager, tmpDir string, cfg warmForkCha
 	source, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           cfg.namePrefix + "-warm-chain-src",
 		Image:          imageName,
-		Size:           1024 * 1024 * 1024,
+		Size:           lifecycleTestMemorySize,
 		OverlaySize:    1024 * 1024 * 1024,
 		Vcpus:          1,
 		NetworkEnabled: false,
@@ -998,7 +998,7 @@ func runWarmForkChain(t *testing.T, mgr *manager, tmpDir string, cfg warmForkCha
 	sourceDeleted := false
 	t.Cleanup(func() {
 		if !sourceDeleted {
-			_ = mgr.DeleteInstance(context.Background(), sourceID)
+			_ = deleteTestInstanceNow(context.Background(), mgr, sourceID)
 		}
 	})
 
@@ -1019,7 +1019,7 @@ func runWarmForkChain(t *testing.T, mgr *manager, tmpDir string, cfg warmForkCha
 		}
 	})
 
-	require.NoError(t, mgr.DeleteInstance(ctx, sourceID))
+	require.NoError(t, deleteTestInstanceNow(ctx, mgr, sourceID))
 	sourceDeleted = true
 
 	warm, err := mgr.ForkSnapshot(ctx, snapshot.Id, ForkSnapshotRequest{
@@ -1031,7 +1031,7 @@ func runWarmForkChain(t *testing.T, mgr *manager, tmpDir string, cfg warmForkCha
 	warmDeleted := false
 	t.Cleanup(func() {
 		if !warmDeleted {
-			_ = mgr.DeleteInstance(context.Background(), warmID)
+			_ = deleteTestInstanceNow(context.Background(), mgr, warmID)
 		}
 	})
 	warm, err = waitForInstanceState(ctx, mgr, warmID, StateRunning, readyTimeout)
@@ -1046,7 +1046,7 @@ func runWarmForkChain(t *testing.T, mgr *manager, tmpDir string, cfg warmForkCha
 	require.NoError(t, err)
 	require.Equal(t, StateStopped, child.State)
 	childID := child.Id
-	t.Cleanup(func() { _ = mgr.DeleteInstance(context.Background(), childID) })
+	t.Cleanup(func() { _ = deleteTestInstanceNow(context.Background(), mgr, childID) })
 
 	warm, err = mgr.GetInstance(ctx, warmID)
 	require.NoError(t, err)
@@ -1057,7 +1057,7 @@ func runWarmForkChain(t *testing.T, mgr *manager, tmpDir string, cfg warmForkCha
 	require.Equal(t, StateRunning, warm.State)
 	require.NoError(t, waitForExecAgent(ctx, mgr, warmID, readyTimeout))
 
-	require.NoError(t, mgr.DeleteInstance(ctx, warmID))
+	require.NoError(t, deleteTestInstanceNow(ctx, mgr, warmID))
 	warmDeleted = true
 	require.NoError(t, mgr.DeleteSnapshot(ctx, snapshot.Id))
 	snapshotDeleted = true

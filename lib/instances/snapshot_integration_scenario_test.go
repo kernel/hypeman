@@ -49,7 +49,7 @@ func runStandbySnapshotScenario(t *testing.T, mgr *manager, tmpDir string, cfg s
 	source, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           cfg.sourceName,
 		Image:          integrationTestImageRef(t, "docker.io/library/alpine:latest"),
-		Size:           1024 * 1024 * 1024,
+		Size:           lifecycleTestMemorySize,
 		OverlaySize:    10 * 1024 * 1024 * 1024,
 		Vcpus:          1,
 		NetworkEnabled: false,
@@ -62,7 +62,7 @@ func runStandbySnapshotScenario(t *testing.T, mgr *manager, tmpDir string, cfg s
 	sourceDeleted := false
 	t.Cleanup(func() {
 		if !sourceDeleted {
-			_ = mgr.DeleteInstance(context.Background(), sourceID)
+			_ = deleteTestInstanceNow(context.Background(), mgr, sourceID)
 		}
 	})
 
@@ -103,7 +103,7 @@ func runStandbySnapshotScenario(t *testing.T, mgr *manager, tmpDir string, cfg s
 	require.Equal(t, StateStandby, forked.State)
 
 	forkID := forked.Id
-	t.Cleanup(func() { _ = mgr.DeleteInstance(context.Background(), forkID) })
+	t.Cleanup(func() { _ = deleteTestInstanceNow(context.Background(), mgr, forkID) })
 	currentFork, err := mgr.GetInstance(ctx, forkID)
 	requireNoErr(err)
 	require.Equal(t, StateStandby, currentFork.State)
