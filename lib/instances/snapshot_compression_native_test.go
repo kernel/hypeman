@@ -320,19 +320,32 @@ func TestCompressSnapshotMemoryFileReturnsContextCanceledWhenNativeProcessIsKill
 	mgr, reader := newCodecRuntimeTestManager(t)
 	baseCtx, logs := newCodecRuntimeContext()
 	ctx, cancel := context.WithCancel(baseCtx)
+	defer cancel()
 	rawPath, _ := writeRawSnapshotMemoryFile(t)
-	binaryPath := writeExecutableScript(t, "zstd", "#!/bin/sh\nsleep 30\n")
-	started := time.Now()
-	time.AfterFunc(20*time.Millisecond, cancel)
+	readyPath := filepath.Join(t.TempDir(), "ready")
+	t.Setenv("HYPEMAN_CODEC_TEST_READY", readyPath)
+	binaryPath := writeExecutableScript(t, "zstd", "#!/bin/sh\nsleep 30 &\n: > \"$HYPEMAN_CODEC_TEST_READY\"\nwait\n")
 
-	_, _, err := compressSnapshotMemoryFileWithRuntime(ctx, nativeCodecRuntime{
-		manager:  mgr,
-		lookPath: func(string) (string, error) { return binaryPath, nil },
-	}, rawPath, snapshotstore.SnapshotCompressionConfig{
-		Enabled:   true,
-		Algorithm: snapshotstore.SnapshotCompressionAlgorithmZstd,
-		Level:     intPtr(1),
-	})
+	errCh := make(chan error, 1)
+	go func() {
+		_, _, err := compressSnapshotMemoryFileWithRuntime(ctx, nativeCodecRuntime{
+			manager:  mgr,
+			lookPath: func(string) (string, error) { return binaryPath, nil },
+		}, rawPath, snapshotstore.SnapshotCompressionConfig{
+			Enabled:   true,
+			Algorithm: snapshotstore.SnapshotCompressionAlgorithmZstd,
+			Level:     intPtr(1),
+		})
+		errCh <- err
+	}()
+
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(readyPath)
+		return err == nil
+	}, time.Second, 5*time.Millisecond, "native helper child must start before cancellation")
+	started := time.Now()
+	cancel()
+	err := <-errCh
 	require.ErrorIs(t, err, context.Canceled)
 	require.Less(t, time.Since(started), time.Second, "cancellation must terminate native helper descendants promptly")
 	assert.Empty(t, logs.warnRecords())

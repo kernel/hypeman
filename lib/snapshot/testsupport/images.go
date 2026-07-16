@@ -29,8 +29,8 @@ func imageBuildLock(ref string) *sync.Mutex {
 	return m.(*sync.Mutex)
 }
 
-// EnsureImageReady pre-warms a shared image cache under /tmp and seeds that
-// image into the test data directory so instance integration tests don't need
+// EnsureImageReady seeds an image from the configured shared prewarm cache,
+// falling back to a cache under /tmp, so instance integration tests don't need
 // to repull/reconvert from scratch.
 func EnsureImageReady(t *testing.T, ctx context.Context, p *paths.Paths, imageManager images.Manager, image string) {
 	t.Helper()

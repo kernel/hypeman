@@ -25,7 +25,7 @@ type deleteInstanceOptions struct {
 func (m *manager) deleteInstance(
 	ctx context.Context,
 	id string,
-) (retErr error) {
+) error {
 	return m.deleteInstanceWithOptions(ctx, id, deleteInstanceOptions{})
 }
 
