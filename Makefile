@@ -4,6 +4,7 @@ SHELL := /bin/bash
 # Directory where local binaries will be installed
 BIN_DIR ?= $(CURDIR)/bin
 GO_TEST_TIMEOUT ?= 300s
+UFFD_PAGER_BINARY ?= $(BIN_DIR)/hypeman-uffd-pager
 
 $(BIN_DIR):
 	mkdir -p $(BIN_DIR)
@@ -161,20 +162,38 @@ generate-grpc: install-proto-tools
 # Generate all code
 generate-all: oapi-generate generate-vmm-client generate-wire generate-grpc
 
-# Check if CH binaries exist, download if missing
+# Check if CH binaries exist for this host and match the expected architecture.
 .PHONY: ensure-ch-binaries
 ensure-ch-binaries:
 	@ARCH=$$(uname -m); \
 	if [ "$$ARCH" = "x86_64" ]; then \
 		CH_ARCH=x86_64; \
+		CH_FILE_PATTERN='x86-64'; \
 	elif [ "$$ARCH" = "aarch64" ] || [ "$$ARCH" = "arm64" ]; then \
 		CH_ARCH=aarch64; \
+		CH_FILE_PATTERN='aarch64|ARM aarch64'; \
 	else \
 		echo "Unsupported architecture: $$ARCH"; exit 1; \
 	fi; \
-	if [ ! -f lib/vmm/binaries/cloud-hypervisor/v49.0/$$CH_ARCH/cloud-hypervisor ] || \
-	   [ ! -f lib/vmm/binaries/cloud-hypervisor/v51.1/$$CH_ARCH/cloud-hypervisor ]; then \
-		echo "Cloud Hypervisor binaries not found, downloading..."; \
+	NEEDS_DOWNLOAD=0; \
+	for CH_VERSION in v49.0 v51.1; do \
+		CH_BIN=lib/vmm/binaries/cloud-hypervisor/$$CH_VERSION/$$CH_ARCH/cloud-hypervisor; \
+		if [ ! -f "$$CH_BIN" ]; then \
+			echo "Cloud Hypervisor binary not found: $$CH_BIN"; \
+			NEEDS_DOWNLOAD=1; \
+			break; \
+		fi; \
+		CH_FILE_DESC=$$(file -b "$$CH_BIN" 2>/dev/null || true); \
+		if ! printf '%s\n' "$$CH_FILE_DESC" | grep -Eiq "$$CH_FILE_PATTERN"; then \
+			echo "Cloud Hypervisor binary has unexpected architecture: $$CH_BIN"; \
+			echo "file output: $$CH_FILE_DESC"; \
+			NEEDS_DOWNLOAD=1; \
+			break; \
+		fi; \
+	done; \
+	if [ "$$NEEDS_DOWNLOAD" = "1" ]; then \
+		echo "Refreshing Cloud Hypervisor binaries..."; \
+		rm -rf lib/vmm/binaries/cloud-hypervisor; \
 		$(MAKE) download-ch-binaries; \
 	fi
 
@@ -236,14 +255,13 @@ endif
 
 build-linux: ensure-ch-binaries ensure-firecracker-binaries ensure-caddy-binaries build-embedded | $(BIN_DIR)
 	go build -tags containers_image_openpgp -o $(BIN_DIR)/hypeman ./cmd/api
+	go build -o $(BIN_DIR)/hypeman-uffd-pager ./cmd/uffd-pager
+
+$(BIN_DIR)/hypeman-uffd-pager: | $(BIN_DIR)
+	go build -o $@ ./cmd/uffd-pager
 
 # Build all binaries
 build-all: build
-
-# Run without live reload (build once and run)
-run: build
-	sudo setcap cap_net_admin,cap_net_bind_service=+eip $(BIN_DIR)/hypeman
-	$(BIN_DIR)/hypeman
 
 # Run in development mode with hot reload
 # On macOS, redirects to dev-darwin which uses vz instead of cloud-hypervisor
@@ -270,19 +288,25 @@ else
 endif
 
 # Linux tests (as root for network capabilities)
-test-linux: ensure-ch-binaries ensure-firecracker-binaries ensure-caddy-binaries build-embedded
+test-linux: ensure-ch-binaries ensure-firecracker-binaries ensure-caddy-binaries build-embedded $(BIN_DIR)/hypeman-uffd-pager
 	@VERBOSE_FLAG=""; \
 	TEST_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$$PATH"; \
 	if [ -n "$(VERBOSE)" ]; then VERBOSE_FLAG="-v"; fi; \
 	if [ -n "$(TEST)" ]; then \
 		echo "Running specific test: $(TEST)"; \
 		sudo env "PATH=$$TEST_PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" "CI=$${CI:-}" \
+			"TMPDIR=$${TMPDIR:-/tmp}" \
+			"HYPEMAN_UFFD_PAGER_BINARY=$${HYPEMAN_UFFD_PAGER_BINARY:-$(UFFD_PAGER_BINARY)}" \
+			"HYPEMAN_UFFD_SYSTEMD_INSTANCE_PREFIX=$${HYPEMAN_UFFD_SYSTEMD_INSTANCE_PREFIX:-}" \
 			"HYPEMAN_TEST_PREWARM_DIR=$${HYPEMAN_TEST_PREWARM_DIR:-}" \
 			"HYPEMAN_TEST_PREWARM_STRICT=$${HYPEMAN_TEST_PREWARM_STRICT:-}" \
 			"HYPEMAN_TEST_REGISTRY=$${HYPEMAN_TEST_REGISTRY:-}" \
 			go test -tags containers_image_openpgp -run=$(TEST) $$VERBOSE_FLAG -timeout=$(TEST_TIMEOUT) ./...; \
 	else \
 		sudo env "PATH=$$TEST_PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" "CI=$${CI:-}" \
+			"TMPDIR=$${TMPDIR:-/tmp}" \
+			"HYPEMAN_UFFD_PAGER_BINARY=$${HYPEMAN_UFFD_PAGER_BINARY:-$(UFFD_PAGER_BINARY)}" \
+			"HYPEMAN_UFFD_SYSTEMD_INSTANCE_PREFIX=$${HYPEMAN_UFFD_SYSTEMD_INSTANCE_PREFIX:-}" \
 			"HYPEMAN_TEST_PREWARM_DIR=$${HYPEMAN_TEST_PREWARM_DIR:-}" \
 			"HYPEMAN_TEST_PREWARM_STRICT=$${HYPEMAN_TEST_PREWARM_STRICT:-}" \
 			"HYPEMAN_TEST_REGISTRY=$${HYPEMAN_TEST_REGISTRY:-}" \
@@ -292,7 +316,7 @@ test-linux: ensure-ch-binaries ensure-firecracker-binaries ensure-caddy-binaries
 # macOS tests (no sudo needed, adds e2fsprogs to PATH)
 # Uses 'go list' to discover compilable packages, then filters out packages
 # whose test files reference Linux-only symbols (network, devices, system/init).
-DARWIN_EXCLUDE_PKGS := /lib/network|/lib/devices|/lib/system/init
+DARWIN_EXCLUDE_PKGS := /lib/network|/lib/devices|/lib/system/init|/cmd/vz-shim
 test-darwin: build-embedded sign-vz-shim
 	@VERBOSE_FLAG=""; \
 	if [ -n "$(VERBOSE)" ]; then VERBOSE_FLAG="-v"; fi; \
@@ -306,6 +330,23 @@ test-darwin: build-embedded sign-vz-shim
 		PATH="/opt/homebrew/opt/e2fsprogs/sbin:$(PATH)" \
 		go test -tags containers_image_openpgp $$VERBOSE_FLAG -timeout=$(TEST_TIMEOUT) $$PKGS; \
 	fi
+	$(MAKE) test-vz-shim-signed VERBOSE="$(VERBOSE)" TEST="$(TEST)" TEST_TIMEOUT="$(TEST_TIMEOUT)"
+
+# cmd/vz-shim's tests call Virtualization.framework in-process, which requires the
+# com.apple.security.virtualization entitlement. Plain `go test` binaries are
+# unsigned, so compile the test binary, ad-hoc-sign it with the entitlement (as
+# sign-vz-shim does for the shim), then run it. HYPEMAN_VZ_SIGNED=1 tells the
+# tests not to skip for a missing entitlement.
+.PHONY: test-vz-shim-signed
+test-vz-shim-signed:
+	@set -e; \
+	RUN_FLAG=""; \
+	if [ -n "$(TEST)" ]; then RUN_FLAG="-test.run=$(TEST)"; fi; \
+	BIN="$$(mktemp -d)/vz-shim.test"; \
+	go test -tags containers_image_openpgp -c -o "$$BIN" ./cmd/vz-shim; \
+	if [ ! -f "$$BIN" ]; then echo "no cmd/vz-shim test binary for this platform; skipping"; exit 0; fi; \
+	codesign --sign - --entitlements $(ENTITLEMENTS_FILE) --force "$$BIN"; \
+	HYPEMAN_VZ_SIGNED=1 "$$BIN" $$RUN_FLAG -test.v -test.timeout=$(TEST_TIMEOUT)
 
 # Manual-only guest memory policy integration tests (Linux hypervisors).
 test-guestmemory-linux: ensure-ch-binaries ensure-firecracker-binaries ensure-caddy-binaries build-embedded
@@ -366,10 +407,15 @@ ENTITLEMENTS_FILE ?= vz.entitlements
 
 # Build vz-shim (subprocess that hosts vz VMs)
 # Also copies to embed directory so it gets embedded in the hypeman binary
+# DARWIN_LDFLAGS silences the macOS (Xcode 15+) linker's "ignoring duplicate
+# libraries: '-lobjc'" warning: cgo deps that link Virtualization.framework
+# specify -lobjc more than once, which the new linker flags. Harmless; suppress.
+DARWIN_LDFLAGS := -ldflags=-extldflags=-Wl,-no_warn_duplicate_libraries
+
 .PHONY: build-vz-shim
 build-vz-shim: | $(BIN_DIR)
 	@echo "Building vz-shim for macOS..."
-	go build -o $(BIN_DIR)/vz-shim ./cmd/vz-shim
+	go build $(DARWIN_LDFLAGS) -o $(BIN_DIR)/vz-shim ./cmd/vz-shim
 	mkdir -p lib/hypervisor/vz/vz-shim
 	cp $(BIN_DIR)/vz-shim lib/hypervisor/vz/vz-shim/vz-shim
 	@echo "Build complete: $(BIN_DIR)/vz-shim"
@@ -387,7 +433,7 @@ sign-vz-shim: build-vz-shim
 .PHONY: build-darwin
 build-darwin: build-embedded build-vz-shim | $(BIN_DIR)
 	@echo "Building hypeman for macOS with vz support..."
-	go build -tags containers_image_openpgp -o $(BIN_DIR)/hypeman ./cmd/api
+	go build -tags containers_image_openpgp $(DARWIN_LDFLAGS) -o $(BIN_DIR)/hypeman ./cmd/api
 	@echo "Build complete: $(BIN_DIR)/hypeman"
 
 # Sign the binary with entitlements (required for Virtualization.framework)

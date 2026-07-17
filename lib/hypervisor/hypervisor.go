@@ -115,13 +115,27 @@ type VMStarter interface {
 	// - Cloud Hypervisor: starts process, calls Restore API
 	// - QEMU: would start with -incoming or -loadvm flags (not yet implemented)
 	// Returns the process ID and a Hypervisor client. The VM is in paused state after restore.
-	RestoreVM(ctx context.Context, p *paths.Paths, version string, socketPath string, snapshotPath string) (pid int, hv Hypervisor, err error)
+	RestoreVM(ctx context.Context, p *paths.Paths, version string, socketPath string, snapshotPath string, opts RestoreOptions) (pid int, hv Hypervisor, err error)
 
 	// PrepareFork allows hypervisors to prepare forked instance state.
 	// For snapshot-based forks, implementations can rewrite snapshot config with
 	// fork identity (paths, vsock, network). Hypervisors that don't support fork
 	// should return ErrNotSupported.
 	PrepareFork(ctx context.Context, req ForkPrepareRequest) (ForkPrepareResult, error)
+}
+
+type SnapshotMemoryBackend string
+
+const (
+	SnapshotMemoryBackendFile SnapshotMemoryBackend = "file"
+	SnapshotMemoryBackendUFFD SnapshotMemoryBackend = "uffd"
+)
+
+type RestoreOptions struct {
+	SnapshotMemoryBackend     SnapshotMemoryBackend
+	SnapshotMemoryBackingPath string
+	SnapshotMemoryCacheKey    string
+	SnapshotMemorySessionID   string
 }
 
 // ForkNetworkConfig contains network identity fields for fork preparation.
@@ -153,6 +167,10 @@ type ForkPrepareResult struct {
 	// VsockCIDUpdated indicates whether snapshot state was updated to use
 	// ForkPrepareRequest.VsockCID.
 	VsockCIDUpdated bool
+
+	// RequiresSnapshotSourceAlias indicates the restored fork still depends on
+	// temporarily aliasing the source data directory during snapshot load.
+	RequiresSnapshotSourceAlias bool
 }
 
 // Hypervisor defines the interface for VM control operations.
@@ -234,9 +252,18 @@ type Capabilities struct {
 	// on-disk base across restore/standby cycles.
 	SupportsSnapshotBaseReuse bool
 
+	// SupportsConcurrentForkPrepare indicates stopped/standby forks can prepare
+	// separate target snapshots concurrently from the same source.
+	SupportsConcurrentForkPrepare bool
+
 	// SupportsDiskResize indicates if live disk resizing (/vm.resize-disk) is available.
 	// Cloud Hypervisor v50.0+ only.
 	SupportsDiskResize bool
+
+	// UsesDetachableSnapshotMemoryPager indicates restores can be backed by an
+	// external snapshot-memory pager that a running VM can later be detached
+	// from (populate remaining pages, then release the session).
+	UsesDetachableSnapshotMemoryPager bool
 }
 
 // VsockDialer provides vsock connectivity to a guest VM.

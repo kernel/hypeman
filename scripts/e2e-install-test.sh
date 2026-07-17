@@ -36,7 +36,8 @@ KEEP_DATA=false bash scripts/uninstall.sh 2>/dev/null || true
 # Phase 2: Install from source
 # =============================================================================
 info "Phase 2: Installing from source..."
-BRANCH=$(git rev-parse --abbrev-ref HEAD)
+# Use the ref GitHub provides; on tag pushes rev-parse returns a detached "HEAD"
+BRANCH="${GITHUB_REF_NAME:-$(git rev-parse --abbrev-ref HEAD)}"
 # Build CLI from source too when CLI_BRANCH is set (e.g., for testing unreleased CLI features)
 BRANCH="$BRANCH" CLI_BRANCH="${CLI_BRANCH:-}" bash scripts/install.sh
 
@@ -92,6 +93,7 @@ if [ "$OS" = "darwin" ]; then
     fi
 else
     [ -x /opt/hypeman/bin/hypeman-api ] || fail "hypeman-api binary not found"
+    [ -x /opt/hypeman/bin/hypeman-uffd-pager ] || fail "hypeman-uffd-pager binary not found"
     pass "Binaries installed correctly"
 
     # Check systemd service
@@ -214,6 +216,7 @@ if [ "$OS" = "darwin" ]; then
     fi
 else
     [ ! -f /opt/hypeman/bin/hypeman-api ] || fail "hypeman-api binary still exists after uninstall"
+    [ ! -f /opt/hypeman/bin/hypeman-uffd-pager ] || fail "hypeman-uffd-pager binary still exists after uninstall"
     if systemctl is-active --quiet hypeman 2>/dev/null; then
         fail "systemd service still running after uninstall"
     fi

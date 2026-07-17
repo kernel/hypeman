@@ -8,6 +8,7 @@ import (
 
 	"github.com/kernel/hypeman/lib/autostandby"
 	"github.com/kernel/hypeman/lib/egressproxy"
+	"github.com/kernel/hypeman/lib/healthcheck"
 	snapshotstore "github.com/kernel/hypeman/lib/snapshot"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -29,7 +30,7 @@ func TestValidateUpdateInstanceRequest(t *testing.T) {
 		err := validateUpdateInstanceRequest(baseMeta, UpdateInstanceRequest{})
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrInvalidRequest)
-		assert.Contains(t, err.Error(), "env and/or auto_standby")
+		assert.Contains(t, err.Error(), "env, auto_standby, health_check, and/or restart_policy")
 	})
 
 	t.Run("rejects instances without credential backed envs", func(t *testing.T) {
@@ -66,6 +67,28 @@ func TestValidateUpdateInstanceRequest(t *testing.T) {
 			},
 		})
 		require.NoError(t, err)
+	})
+
+	t.Run("allows exec health check without env changes", func(t *testing.T) {
+		err := validateUpdateInstanceRequest(baseMeta, UpdateInstanceRequest{
+			HealthCheck: &healthcheck.Policy{
+				Type: healthcheck.TypeExec,
+				Exec: &healthcheck.ExecCheck{Command: []string{"true"}},
+			},
+		})
+		require.NoError(t, err)
+	})
+
+	t.Run("rejects network health check without networking", func(t *testing.T) {
+		err := validateUpdateInstanceRequest(&metadata{}, UpdateInstanceRequest{
+			HealthCheck: &healthcheck.Policy{
+				Type: healthcheck.TypeTCP,
+				TCP:  &healthcheck.TCPCheck{Port: 8080},
+			},
+		})
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidRequest)
+		assert.Contains(t, err.Error(), "network.enabled")
 	})
 }
 
@@ -320,6 +343,60 @@ func TestManagerUpdateInstanceAutoStandbyOnlyPublishesLifecycleUpdate(t *testing
 		require.NotNil(t, event.Instance.AutoStandby)
 		assert.True(t, event.Instance.AutoStandby.Enabled)
 		assert.Equal(t, "10m0s", event.Instance.AutoStandby.IdleTimeout)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for lifecycle update event")
+	}
+}
+
+func TestManagerUpdateInstanceHealthCheckOnlyPublishesLifecycleUpdate(t *testing.T) {
+	t.Parallel()
+
+	manager, _ := setupTestManager(t)
+	id := "inst-health-check-update"
+	require.NoError(t, manager.ensureDirectories(id))
+	meta := &metadata{
+		StoredMetadata: StoredMetadata{
+			Id:             id,
+			Name:           id,
+			CreatedAt:      time.Now(),
+			DataDir:        manager.paths.InstanceDir(id),
+			SocketPath:     manager.paths.InstanceSocket(id, "cloud-hypervisor.sock"),
+			NetworkEnabled: true,
+			HealthCheck: &healthcheck.Policy{
+				Type: healthcheck.TypeExec,
+				Exec: &healthcheck.ExecCheck{Command: []string{"true"}},
+			},
+		},
+		HealthCheckRuntime: &healthcheck.Runtime{
+			Status:               healthcheck.StatusHealthy,
+			ConsecutiveSuccesses: 3,
+		},
+	}
+	require.NoError(t, manager.saveMetadata(meta))
+
+	events, unsubscribe := manager.SubscribeLifecycleEvents(LifecycleEventConsumerHealthCheck)
+	defer unsubscribe()
+
+	updated, err := manager.UpdateInstance(context.Background(), id, UpdateInstanceRequest{
+		HealthCheck: &healthcheck.Policy{
+			Type: healthcheck.TypeTCP,
+			TCP:  &healthcheck.TCPCheck{Port: 8080},
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	require.NotNil(t, updated.HealthCheck)
+	assert.Equal(t, healthcheck.TypeTCP, updated.HealthCheck.Type)
+	assert.Nil(t, updated.HealthCheckRuntime)
+
+	select {
+	case event := <-events:
+		assert.Equal(t, LifecycleEventUpdate, event.Action)
+		assert.Equal(t, id, event.InstanceID)
+		require.NotNil(t, event.Instance)
+		require.NotNil(t, event.Instance.HealthCheck)
+		assert.Equal(t, healthcheck.TypeTCP, event.Instance.HealthCheck.Type)
+		assert.Nil(t, event.Instance.HealthCheckRuntime)
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for lifecycle update event")
 	}

@@ -270,7 +270,11 @@ func (s *Starter) startQEMUProcess(ctx context.Context, p *paths.Paths, version 
 		processSpan.RecordError(err)
 		processSpan.SetStatus(codes.Error, err.Error())
 		cu.Clean()
-		return 0, nil, nil, appendVMMLog(err, logsDir)
+		wrapped := appendVMMLog(err, logsDir)
+		// Diagnostic (log-only): if this was a vsock guest-CID collision, capture
+		// the colliding CID and which host process is holding it.
+		logVsockCIDConflict(processCtx, guestCIDFromArgs(args), wrapped.Error())
+		return 0, nil, nil, wrapped
 	}
 	log.DebugContext(processCtx, "QMP socket ready", "duration_ms", time.Since(socketWaitStart).Milliseconds())
 
@@ -284,7 +288,11 @@ func (s *Starter) startQEMUProcess(ctx context.Context, p *paths.Paths, version 
 			processSpan.RecordError(err)
 			processSpan.SetStatus(codes.Error, err.Error())
 			cu.Clean()
-			return 0, nil, nil, appendVMMLog(err, logsDir)
+			wrapped := appendVMMLog(err, logsDir)
+			// Diagnostic (log-only): if this was a vsock guest-CID collision,
+			// capture the colliding CID and which host process is holding it.
+			logVsockCIDConflict(processCtx, guestCIDFromArgs(args), wrapped.Error())
+			return 0, nil, nil, wrapped
 		}
 
 		hv, err = New(socketPath)
@@ -429,7 +437,7 @@ func shouldRetryWithReducedBalloon(err error) bool {
 
 // RestoreVM starts QEMU and restores VM state from a snapshot.
 // The VM is in paused state after restore; caller should call Resume() to continue execution.
-func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string, socketPath string, snapshotPath string) (int, hypervisor.Hypervisor, error) {
+func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string, socketPath string, snapshotPath string, _ hypervisor.RestoreOptions) (int, hypervisor.Hypervisor, error) {
 	log := logger.FromContext(ctx)
 	startTime := time.Now()
 
@@ -465,6 +473,10 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 		return 0, nil, fmt.Errorf("wait for vm ready: %w", err)
 	}
 	log.DebugContext(ctx, "VM ready", "duration_ms", time.Since(migrationWaitStart).Milliseconds())
+
+	if err := saveVMConfig(filepath.Dir(socketPath), config); err != nil {
+		return 0, nil, fmt.Errorf("save restored vm config: %w", err)
+	}
 
 	cu.Release()
 	log.DebugContext(ctx, "QEMU restore complete", "pid", pid, "total_duration_ms", time.Since(startTime).Milliseconds())

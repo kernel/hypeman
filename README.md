@@ -36,6 +36,11 @@
 
 ### macOS
 **macOS 11.0+** on Apple Silicon. Uses Apple's Virtualization.framework via the `vz` hypervisor.
+Install Rosetta to run `linux/amd64` images on Apple Silicon:
+
+```bash
+softwareupdate --install-rosetta --agree-to-license
+```
 
 ## Quick Start
 
@@ -61,7 +66,7 @@ To use the Hypeman CLI from a **different machine** than the server:
 brew install kernel/tap/hypeman
 ```
 
-**Linux:**
+**Install script (Linux & macOS):**
 ```bash
 curl -fsSL https://get.hypeman.sh/cli | bash
 ```

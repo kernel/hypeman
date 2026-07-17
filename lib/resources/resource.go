@@ -787,7 +787,7 @@ func (m *Manager) DiskIOCapacity() int64 {
 
 // DefaultNetworkBandwidth calculates the default network bandwidth for an instance
 // based on its CPU allocation proportional to host CPU capacity.
-// Formula: (instanceVcpus / hostCpuCapacity) * networkCapacity * oversubRatio
+// Formula: (instanceVcpus / hostCpuCapacity) * networkCapacity
 // Returns symmetric download/upload limits.
 func (m *Manager) DefaultNetworkBandwidth(vcpus int) (downloadBps, uploadBps int64) {
 	cpuCapacity := m.CPUCapacity()
@@ -800,11 +800,7 @@ func (m *Manager) DefaultNetworkBandwidth(vcpus int) (downloadBps, uploadBps int
 		return 0, 0
 	}
 
-	ratio := m.GetOversubRatio(ResourceNetwork)
-	effectiveNet := int64(float64(netCapacity) * ratio)
-
-	// Proportional to CPU: (vcpus / cpuCapacity) * effectiveNet
-	bandwidth := (int64(vcpus) * effectiveNet) / cpuCapacity
+	bandwidth := (int64(vcpus) * netCapacity) / cpuCapacity
 
 	// Symmetric limits by default
 	return bandwidth, bandwidth
@@ -812,7 +808,7 @@ func (m *Manager) DefaultNetworkBandwidth(vcpus int) (downloadBps, uploadBps int
 
 // DefaultDiskIOBandwidth calculates the default disk I/O bandwidth for an instance
 // based on its CPU allocation proportional to host CPU capacity.
-// Formula: (instanceVcpus / hostCpuCapacity) * diskIOCapacity * oversubRatio
+// Formula: (instanceVcpus / hostCpuCapacity) * diskIOCapacity
 // Returns sustained rate and burst rate (4x sustained).
 func (m *Manager) DefaultDiskIOBandwidth(vcpus int) (ioBps, burstBps int64) {
 	cpuCapacity := m.CPUCapacity()
@@ -825,14 +821,7 @@ func (m *Manager) DefaultDiskIOBandwidth(vcpus int) (ioBps, burstBps int64) {
 		return 0, 0
 	}
 
-	ratio := m.cfg.Oversubscription.DiskIO
-	if ratio <= 0 {
-		ratio = 2.0 // Default 2x oversubscription for disk I/O
-	}
-	effectiveIO := int64(float64(ioCapacity) * ratio)
-
-	// Proportional to CPU: (vcpus / cpuCapacity) * effectiveIO
-	sustained := (int64(vcpus) * effectiveIO) / cpuCapacity
+	sustained := (int64(vcpus) * ioCapacity) / cpuCapacity
 
 	// Burst is 4x sustained (allows fast cold starts)
 	burst := sustained * 4

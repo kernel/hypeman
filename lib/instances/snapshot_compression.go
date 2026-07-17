@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -96,7 +97,23 @@ func (r nativeCodecRuntime) commandContextFunc() func(context.Context, string, .
 	if r.commandContext != nil {
 		return r.commandContext
 	}
-	return exec.CommandContext
+	return newNativeCodecCommand
+}
+
+func newNativeCodecCommand(ctx context.Context, name string, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, name, args...)
+	// Kill the entire process group on cancellation. Killing only the direct
+	// child can leave helpers holding stdout/stderr pipes open, which makes
+	// Cmd.Wait block until those helpers exit on their own.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		if err == syscall.ESRCH {
+			return os.ErrProcessDone
+		}
+		return err
+	}
+	return cmd
 }
 
 func cloneCompressionConfig(cfg *snapshotstore.SnapshotCompressionConfig) *snapshotstore.SnapshotCompressionConfig {
@@ -745,6 +762,12 @@ func (m *manager) cancelAndWaitCompressionJob(ctx context.Context, key string) (
 
 func (m *manager) ensureSnapshotMemoryReady(ctx context.Context, snapshotDir, jobKey string, hvType hypervisor.Type) error {
 	start := time.Now()
+	return m.withSnapshotMemoryPrepareLock(snapshotDir, func() error {
+		return m.ensureSnapshotMemoryReadyWithLock(ctx, snapshotDir, jobKey, hvType, start)
+	})
+}
+
+func (m *manager) ensureSnapshotMemoryReadyWithLock(ctx context.Context, snapshotDir, jobKey string, hvType hypervisor.Type, start time.Time) error {
 	log := logger.FromContext(ctx)
 
 	if jobKey != "" {
@@ -777,6 +800,15 @@ func (m *manager) ensureSnapshotMemoryReady(ctx context.Context, snapshotDir, jo
 	}
 	m.recordSnapshotRestoreMemoryPrepare(ctx, hvType, snapshotMemoryPreparePathDecompress, snapshotCompressionResultSuccess, start)
 	return nil
+}
+
+func (m *manager) withSnapshotMemoryPrepareLock(snapshotDir string, run func() error) error {
+	lockKey := filepath.Clean(snapshotDir)
+	lock, _ := m.snapshotPrepareLocks.LoadOrStore(lockKey, &sync.Mutex{})
+	mu := lock.(*sync.Mutex)
+	mu.Lock()
+	defer mu.Unlock()
+	return run()
 }
 
 func (m *manager) updateSnapshotCompressionMetadata(snapshotID, state, compressionError string, cfg *snapshotstore.SnapshotCompressionConfig, compressedSize, uncompressedSize *int64) error {

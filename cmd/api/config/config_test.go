@@ -55,6 +55,46 @@ func TestDefaultConfigIncludesMetricsSettings(t *testing.T) {
 	if cfg.Instances.LifecycleEventBufferSize != 256 {
 		t.Fatalf("expected default instances.lifecycle_event_buffer_size to be 256, got %d", cfg.Instances.LifecycleEventBufferSize)
 	}
+	if cfg.Hypervisor.FirecrackerSnapshotMemoryBackend != "file" {
+		t.Fatalf("expected default firecracker snapshot backend to be file, got %q", cfg.Hypervisor.FirecrackerSnapshotMemoryBackend)
+	}
+	if cfg.Hypervisor.FirecrackerUFFDCacheMaxBytes != "4294967296" {
+		t.Fatalf("expected default firecracker uffd cache size to be 4294967296, got %q", cfg.Hypervisor.FirecrackerUFFDCacheMaxBytes)
+	}
+	if cfg.Hypervisor.FirecrackerMaxConcurrentRestores != 32 {
+		t.Fatalf("expected default firecracker max concurrent restores to be 32, got %d", cfg.Hypervisor.FirecrackerMaxConcurrentRestores)
+	}
+}
+
+func TestValidateFirecrackerSnapshotMemoryBackend(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Hypervisor.FirecrackerSnapshotMemoryBackend = "UFFD"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected UFFD backend to validate, got %v", err)
+	}
+	if cfg.Hypervisor.FirecrackerSnapshotMemoryBackend != "uffd" {
+		t.Fatalf("expected backend to normalize to uffd, got %q", cfg.Hypervisor.FirecrackerSnapshotMemoryBackend)
+	}
+
+	cfg = defaultConfig()
+	cfg.Hypervisor.FirecrackerSnapshotMemoryBackend = "bad"
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected invalid firecracker snapshot backend validation error")
+	}
+
+	cfg = defaultConfig()
+	cfg.Hypervisor.FirecrackerUFFDCacheMaxBytes = "not-a-size"
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected invalid firecracker uffd cache size validation error")
+	}
+}
+
+func TestValidateFirecrackerMaxConcurrentRestores(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Hypervisor.FirecrackerMaxConcurrentRestores = -1
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected invalid firecracker max concurrent restores validation error")
+	}
 }
 
 func TestLoadEnvOverridesMetricsAndOtelInterval(t *testing.T) {
@@ -101,6 +141,90 @@ func TestLoadEnvOverridesMetricsAndOtelInterval(t *testing.T) {
 	}
 	if cfg.Instances.LifecycleEventBufferSize != 512 {
 		t.Fatalf("expected instances.lifecycle_event_buffer_size override, got %d", cfg.Instances.LifecycleEventBufferSize)
+	}
+}
+
+func TestLoadExpandsHomePathsFromConfigFile(t *testing.T) {
+	clearPathEnvOverrides(t)
+
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte(`
+data_dir: ~/Library/Application Support/hypeman
+build:
+  secrets_dir: ~/.config/hypeman/secrets
+  docker_socket: ~/.colima/default/docker.sock
+registry:
+  ca_cert_file: ~/.config/hypeman/ca.pem
+hypervisor:
+  firecracker_binary_path: ~/bin/firecracker
+`), 0600); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("get home dir: %v", err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	assertPath := func(name, got, wantSuffix string) {
+		t.Helper()
+		want := filepath.Join(home, wantSuffix)
+		if got != want {
+			t.Fatalf("expected %s to expand to %q, got %q", name, want, got)
+		}
+	}
+
+	assertPath("data_dir", cfg.DataDir, filepath.Join("Library", "Application Support", "hypeman"))
+	assertPath("build.secrets_dir", cfg.Build.SecretsDir, filepath.Join(".config", "hypeman", "secrets"))
+	assertPath("build.docker_socket", cfg.Build.DockerSocket, filepath.Join(".colima", "default", "docker.sock"))
+	assertPath("registry.ca_cert_file", cfg.Registry.CACertFile, filepath.Join(".config", "hypeman", "ca.pem"))
+	assertPath("hypervisor.firecracker_binary_path", cfg.Hypervisor.FirecrackerBinaryPath, filepath.Join("bin", "firecracker"))
+}
+
+func clearPathEnvOverrides(t *testing.T) {
+	t.Helper()
+	for _, key := range []string{
+		"DATA_DIR",
+		"BUILD__SECRETS_DIR",
+		"BUILD__DOCKER_SOCKET",
+		"REGISTRY__CA_CERT_FILE",
+		"HYPERVISOR__FIRECRACKER_BINARY_PATH",
+	} {
+		t.Setenv(key, "")
+	}
+}
+
+func TestLoadExpandsHomePathsFromEnv(t *testing.T) {
+	t.Setenv("DATA_DIR", "~/hypeman-data")
+	t.Setenv("BUILD__DOCKER_SOCKET", "~/.colima/default/docker.sock")
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("get home dir: %v", err)
+	}
+
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("{}\n"), 0600); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	if want := filepath.Join(home, "hypeman-data"); cfg.DataDir != want {
+		t.Fatalf("expected env data_dir to expand to %q, got %q", want, cfg.DataDir)
+	}
+	if want := filepath.Join(home, ".colima", "default", "docker.sock"); cfg.Build.DockerSocket != want {
+		t.Fatalf("expected env build.docker_socket to expand to %q, got %q", want, cfg.Build.DockerSocket)
 	}
 }
 

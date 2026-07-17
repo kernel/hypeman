@@ -299,6 +299,8 @@ func TestQEMUBasicEndToEnd(t *testing.T) {
 	// Verify instance fields
 	assert.NotEmpty(t, inst.Id)
 	assert.Equal(t, "test-nginx-qemu", inst.Name)
+	// Image is the caller-supplied reference (display value); the digest-pinned
+	// boot reference is tracked separately in StoredMetadata.ResolvedImage.
 	assert.Equal(t, integrationTestImageRef(t, "docker.io/library/nginx:alpine"), inst.Image)
 	assert.Contains(t, []State{StateInitializing, StateRunning}, inst.State)
 	assert.Equal(t, hypervisor.TypeQEMU, inst.HypervisorType)
@@ -341,22 +343,12 @@ func TestQEMUBasicEndToEnd(t *testing.T) {
 	assert.Len(t, instances, 1)
 	assert.Equal(t, inst.Id, instances[0].Id)
 
-	// Poll for logs to contain nginx startup message
-	var logs string
-	foundNginxStartup := false
-	for i := 0; i < 200; i++ {
-		logs, err = collectQEMULogs(ctx, manager, inst.Id, 100)
-		require.NoError(t, err)
-
-		if strings.Contains(logs, "start worker processes") {
-			foundNginxStartup = true
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
+	if err := waitForLogMessage(ctx, manager, inst.Id, "start worker processes", integrationTestTimeout(20*time.Second)); err != nil {
+		logs, logErr := collectQEMULogs(ctx, manager, inst.Id, 100)
+		require.NoError(t, logErr)
+		t.Logf("Nginx startup log not observed before ingress probe: %v", err)
+		t.Logf("Instance logs (last 100 lines):\n%s", logs)
 	}
-
-	t.Logf("Instance logs (last 100 lines):\n%s", logs)
-	assert.True(t, foundNginxStartup, "Nginx should have started worker processes within 20 seconds")
 
 	// Test ingress - route external traffic to nginx
 	t.Log("Testing ingress routing to nginx...")
@@ -614,7 +606,7 @@ func TestQEMUEntrypointEnvVars(t *testing.T) {
 	// Pull bitnami/redis image
 	t.Log("Pulling bitnami/redis image...")
 	redisImage, err := imageManager.CreateImage(ctx, images.CreateImageRequest{
-		Name: integrationTestImageRef(t, "docker.io/bitnami/redis:latest"),
+		Name: integrationTestImageRef(t, redisEntrypointEnvImage),
 	})
 	require.NoError(t, err)
 
@@ -656,7 +648,7 @@ func TestQEMUEntrypointEnvVars(t *testing.T) {
 	testPassword := "test_secret_password_123"
 	req := CreateInstanceRequest{
 		Name:           "test-redis-env",
-		Image:          integrationTestImageRef(t, "docker.io/bitnami/redis:latest"),
+		Image:          integrationTestImageRef(t, redisEntrypointEnvImage),
 		Size:           2 * 1024 * 1024 * 1024,
 		HotplugSize:    512 * 1024 * 1024,
 		OverlaySize:    10 * 1024 * 1024 * 1024,
@@ -773,6 +765,7 @@ func TestQEMUEntrypointEnvVars(t *testing.T) {
 func TestQEMUStandbyAndRestore(t *testing.T) {
 	t.Parallel()
 	requireQEMUUsable(t)
+	acquireHeavyIO(t)
 
 	manager, tmpDir := setupTestManagerForQEMU(t)
 	ctx := context.Background()
@@ -894,6 +887,7 @@ func TestQEMUStandbyAndRestore(t *testing.T) {
 func TestQEMUForkFromRunningNetwork(t *testing.T) {
 	t.Parallel()
 	requireQEMUUsable(t)
+	acquireHeavyIO(t)
 
 	manager, tmpDir := setupTestManagerForQEMU(t)
 	ctx := context.Background()
@@ -935,7 +929,7 @@ func TestQEMUForkFromRunningNetwork(t *testing.T) {
 	})
 	require.NoError(t, err)
 	sourceID := source.Id
-	t.Cleanup(func() { _ = manager.DeleteInstance(context.Background(), sourceID) })
+	t.Cleanup(func() { _ = deleteTestInstanceNow(context.Background(), manager, sourceID) })
 	// QEMU is the slowest Linux hypervisor under full-suite load on Deft. Give
 	// the host-side Running transition more headroom so we don't fail while the
 	// VM is still legitimately completing boot marker hydration.
@@ -959,7 +953,7 @@ func TestQEMUForkFromRunningNetwork(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, StateStandby, forked.State)
 	forkedID := forked.Id
-	t.Cleanup(func() { _ = manager.DeleteInstance(context.Background(), forkedID) })
+	t.Cleanup(func() { _ = deleteTestInstanceNow(context.Background(), manager, forkedID) })
 
 	sourceAfterFork, err := manager.GetInstance(ctx, source.Id)
 	require.NoError(t, err)
@@ -996,5 +990,16 @@ func TestQEMUSnapshotFeature(t *testing.T) {
 		sourceName: "qemu-snapshot-src",
 		snapshot:   "qemu-snapshot-1",
 		forkName:   "qemu-snapshot-fork",
+	})
+}
+
+func TestQEMUWarmForkChain(t *testing.T) {
+	t.Parallel()
+	requireQEMUUsable(t)
+
+	mgr, tmpDir := setupTestManagerForQEMU(t)
+	runWarmForkChain(t, mgr, tmpDir, warmForkChainConfig{
+		hypervisor: hypervisor.TypeQEMU,
+		namePrefix: "qemu",
 	})
 }

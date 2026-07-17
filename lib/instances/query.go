@@ -14,18 +14,23 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/kernel/hypeman/lib/guest"
+	"github.com/kernel/hypeman/lib/healthcheck"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/instances/phasetracking"
 	"github.com/kernel/hypeman/lib/logger"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // exitSentinelPrefix is the machine-parseable prefix written by init to serial console.
 const (
-	exitSentinelPrefix         = "HYPEMAN-EXIT "
-	programStartSentinelPrefix = "HYPEMAN-PROGRAM-START "
-	agentReadySentinelPrefix   = "HYPEMAN-AGENT-READY "
-	bootMarkerRescanInterval   = 1 * time.Second
+	exitSentinelPrefix          = "HYPEMAN-EXIT "
+	programStartSentinelPrefix  = "HYPEMAN-PROGRAM-START "
+	agentReadySentinelPrefix    = "HYPEMAN-AGENT-READY "
+	bootMarkerRescanInterval    = 1 * time.Second
+	guestAgentReadyProbeWait    = 250 * time.Millisecond
+	guestAgentReadyProbeTimeout = 1 * time.Second
 	// hypervisorStateCacheTTL bounds how long a cached hypervisor state may be
 	// reused before a fresh GetVMInfo call is required. Short enough to detect
 	// guest-driven shutdowns promptly, long enough that bursty list calls
@@ -72,15 +77,20 @@ func (m *manager) deriveStateWithOptions(ctx context.Context, stored *StoredMeta
 
 	// 1. Check if socket exists
 	if _, err := os.Stat(stored.SocketPath); err != nil {
-		// No socket - check for snapshot to distinguish Stopped vs Standby/Template
+		// No socket - check for snapshot to distinguish Stopped vs Standby
 		m.invalidateCachedHypervisorState(stored.Id)
 		if m.hasSnapshot(stored.DataDir) {
-			if stored.IsTemplate {
-				return stateResult{State: StateTemplate}
-			}
 			return stateResult{State: StateStandby}
 		}
 		return stateResult{State: StateStopped}
+	}
+	if err := m.checkFirecrackerUFFDSessionHealth(ctx, stored); err != nil {
+		errMsg := err.Error()
+		log.WarnContext(ctx, "firecracker uffd session is unhealthy",
+			"instance_id", stored.Id,
+			"error", err,
+		)
+		return stateResult{State: StateUnknown, Error: &errMsg}
 	}
 
 	// 2. Socket exists - resolve hypervisor state, preferring the in-memory
@@ -277,6 +287,8 @@ func advancePhaseIfRunning(stored *StoredMetadata) {
 }
 
 // hydrateBootMarkersFromLogs fills missing boot markers from serial logs.
+// Guest-agent readiness also falls back to a direct vsock probe so systemd
+// services do not need to forward stdout/stderr to the serial console.
 // Returns true when at least one missing marker was found and populated.
 func (m *manager) hydrateBootMarkersFromLogs(ctx context.Context, stored *StoredMetadata) bool {
 	needProgram := stored.ProgramStartedAt == nil
@@ -302,6 +314,9 @@ func (m *manager) hydrateBootMarkersFromLogs(ctx context.Context, stored *Stored
 	}
 	if needAgent && guestAgentReadyAt != nil {
 		stored.GuestAgentReadyAt = guestAgentReadyAt
+		hydrated = true
+	}
+	if needAgent && stored.GuestAgentReadyAt == nil && stored.ProgramStartedAt != nil && m.hydrateGuestAgentReadyFromProbe(ctx, stored) {
 		hydrated = true
 	}
 	if hydrated {
@@ -401,6 +416,42 @@ func (m *manager) nowUTC() time.Time {
 		return m.now().UTC()
 	}
 	return time.Now().UTC()
+}
+
+func (m *manager) hydrateGuestAgentReadyFromProbe(ctx context.Context, stored *StoredMetadata) bool {
+	if stored == nil || stored.SkipGuestAgent || stored.GuestAgentReadyAt != nil {
+		return false
+	}
+	probe := m.guestAgentReadyProbe
+	if probe == nil {
+		probe = probeGuestAgentReady
+	}
+	if !probe(ctx, stored) {
+		return false
+	}
+	readyAt := m.nowUTC()
+	stored.GuestAgentReadyAt = &readyAt
+	return true
+}
+
+func probeGuestAgentReady(ctx context.Context, stored *StoredMetadata) bool {
+	if stored == nil || stored.SkipGuestAgent {
+		return false
+	}
+	dialer, err := hypervisor.NewVsockDialer(stored.HypervisorType, stored.VsockSocket, stored.VsockCID)
+	if err != nil {
+		return false
+	}
+
+	probeCtx, cancel := context.WithTimeout(ctx, guestAgentReadyProbeTimeout)
+	defer cancel()
+
+	exit, err := guest.ExecIntoInstance(probeCtx, dialer, guest.ExecOptions{
+		Command:      []string{"/bin/true"},
+		Timeout:      int32(guestAgentReadyProbeTimeout / time.Second),
+		WaitForAgent: guestAgentReadyProbeWait,
+	})
+	return err == nil && exit != nil && exit.Code == 0
 }
 
 // appLogPathsForMarkerScan returns app log paths in chronological order
@@ -503,6 +554,7 @@ func (m *manager) toInstanceWithStateDerivation(ctx context.Context, meta *metad
 		StateError:          result.Error,
 		HasSnapshot:         m.hasSnapshot(meta.StoredMetadata.DataDir),
 		BootMarkersHydrated: result.BootMarkersHydrated,
+		HealthCheckRuntime:  healthcheck.CloneRuntime(meta.HealthCheckRuntime),
 	}
 	refreshHypervisorPID(&inst.StoredMetadata, result.State)
 
@@ -653,6 +705,9 @@ func (m *manager) persistBootMarkers(ctx context.Context, id string) {
 	}
 	if needAgent && guestAgentReadyAt != nil {
 		meta.GuestAgentReadyAt = guestAgentReadyAt
+		updated = true
+	}
+	if needAgent && meta.GuestAgentReadyAt == nil && meta.ProgramStartedAt != nil && m.hydrateGuestAgentReadyFromProbe(ctx, &meta.StoredMetadata) {
 		updated = true
 	}
 	if !updated {
@@ -825,45 +880,39 @@ func (m *manager) listInstances(ctx context.Context) ([]Instance, error) {
 	return result, nil
 }
 
-// countTemplateForks returns the number of instances with ForkOfTemplate==templateID.
-// Bubbles metadata load errors: this count guards DeleteInstance and
-// DemoteTemplate, and silently skipping an unreadable file would risk
-// undercounting forks and freeing a template whose pages are still mapped.
-func (m *manager) countTemplateForks(templateID string) (int, error) {
-	files, err := m.listMetadataFiles()
-	if err != nil {
-		return 0, err
-	}
-	count := 0
-	for _, file := range files {
-		id := filepath.Base(filepath.Dir(file))
-		meta, err := m.loadMetadata(id)
-		if err != nil {
-			return 0, fmt.Errorf("load metadata for %s while counting forks of %s: %w", id, templateID, err)
-		}
-		if meta.ForkOfTemplate == templateID {
-			count++
-		}
-	}
-	return count, nil
-}
+func (m *manager) findInstanceMetadataByExactName(ctx context.Context, name string) (*metadata, error) {
+	ctx, span := m.tracerOrDefault().Start(ctx, "instances.metadata.find_exact_name",
+		trace.WithAttributes(attribute.String("operation", "find_exact_name")),
+	)
+	defer span.End()
 
-func (m *manager) findInstanceMetadataByExactName(name string) (*metadata, error) {
 	files, err := m.listMetadataFiles()
 	if err != nil {
+		span.RecordError(err)
 		return nil, err
 	}
+	span.SetAttributes(attribute.Int("metadata_files", len(files)))
 
+	scanned := 0
 	for _, file := range files {
 		id := filepath.Base(filepath.Dir(file))
+		scanned++
 		meta, err := m.loadMetadata(id)
 		if err != nil {
 			continue
 		}
 		if meta.Name == name {
+			span.SetAttributes(
+				attribute.Int("metadata_files_scanned", scanned),
+				attribute.Bool("matched", true),
+			)
 			return meta, nil
 		}
 	}
+	span.SetAttributes(
+		attribute.Int("metadata_files_scanned", scanned),
+		attribute.Bool("matched", false),
+	)
 	return nil, ErrNotFound
 }
 
@@ -918,14 +967,25 @@ func (m *manager) findInstanceMetadataByNameOrIDPrefix(idOrName string, minPrefi
 	return nil, ErrNotFound
 }
 
-func (m *manager) instanceNameExists(name string) (bool, error) {
-	_, err := m.findInstanceMetadataByExactName(name)
+func (m *manager) instanceNameExists(ctx context.Context, name, caller string) (bool, error) {
+	ctx, span := m.tracerOrDefault().Start(ctx, "instances.metadata.name_exists",
+		trace.WithAttributes(
+			attribute.String("operation", "metadata_name_exists"),
+			attribute.String("caller", caller),
+		),
+	)
+	defer span.End()
+
+	_, err := m.findInstanceMetadataByExactName(ctx, name)
 	if err == nil {
+		span.SetAttributes(attribute.Bool("exists", true))
 		return true, nil
 	}
 	if err == ErrNotFound {
+		span.SetAttributes(attribute.Bool("exists", false))
 		return false, nil
 	}
+	span.RecordError(err)
 	return false, err
 }
 

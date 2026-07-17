@@ -122,7 +122,7 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 
 // RestoreVM starts a vz-shim process and restores VM state from a snapshot.
 // The VM is in paused state after restore; caller should call Resume().
-func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string, socketPath string, snapshotPath string) (int, hypervisor.Hypervisor, error) {
+func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string, socketPath string, snapshotPath string, _ hypervisor.RestoreOptions) (int, hypervisor.Hypervisor, error) {
 	manifestPath := filepath.Join(snapshotPath, shimconfig.SnapshotManifestFile)
 	manifestData, err := os.ReadFile(manifestPath)
 	if err != nil {
@@ -169,6 +169,7 @@ func buildShimConfigFromVMConfig(config hypervisor.VMConfig, socketPath string) 
 		KernelArgs:           config.KernelArgs,
 		EnableMemoryBalloon:  config.GuestMemory.EnableBalloon,
 		RequireMemoryBalloon: config.GuestMemory.RequireBalloon,
+		EnableRosetta:        config.EnableRosetta,
 		ControlSocket:        socketPath,
 		VsockSocket:          filepath.Join(instanceDir, "vz.vsock"),
 		LogPath:              filepath.Join(instanceDir, "logs", "vz-shim.log"),

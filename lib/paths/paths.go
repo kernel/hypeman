@@ -103,6 +103,31 @@ func (p *Paths) FirecrackerBinary(version, arch string) string {
 	return filepath.Join(p.dataDir, "system", "binaries", "firecracker", version, arch, "firecracker")
 }
 
+// UFFDDir returns the root directory for Firecracker UFFD pager state.
+func (p *Paths) UFFDDir() string {
+	return filepath.Join(p.dataDir, "uffd")
+}
+
+func (p *Paths) UFFDPagerDir(versionKey string) string {
+	return filepath.Join(p.UFFDDir(), versionKey)
+}
+
+func (p *Paths) UFFDControlSocket(versionKey string) string {
+	return filepath.Join(p.UFFDPagerDir(versionKey), "control.sock")
+}
+
+func (p *Paths) UFFDPagerPID(versionKey string) string {
+	return filepath.Join(p.UFFDPagerDir(versionKey), "pager.pid")
+}
+
+func (p *Paths) UFFDPagerLog(versionKey string) string {
+	return filepath.Join(p.UFFDPagerDir(versionKey), "pager.log")
+}
+
+func (p *Paths) UFFDSessionsDir(versionKey string) string {
+	return filepath.Join(p.UFFDPagerDir(versionKey), "sessions")
+}
+
 // Image path methods
 
 // ImageDigestDir returns the directory for a specific image digest.

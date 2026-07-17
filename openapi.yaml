@@ -45,7 +45,7 @@ components:
     
     InstanceState:
       type: string
-      enum: [Created, Initializing, Running, Paused, Shutdown, Stopped, Standby, Template, Unknown]
+      enum: [Created, Initializing, Running, Paused, Shutdown, Stopped, Standby, Unknown]
       description: |
         Instance state:
         - Created: VMM created but not started (Cloud Hypervisor native)
@@ -55,7 +55,6 @@ components:
         - Shutdown: VM shut down but VMM exists (Cloud Hypervisor native)
         - Stopped: No VMM running, no snapshot exists
         - Standby: No VMM running, snapshot exists (can be restored)
-        - Template: Standby snapshot promoted to a fork-only parent; cannot wake while forks exist
         - Unknown: Failed to determine state (see state_error for details)
     
     VolumeMount:
@@ -236,6 +235,210 @@ components:
             maximum: 65535
           example: [22, 9000]
 
+    HealthCheckHTTP:
+      type: object
+      required: [port]
+      properties:
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+          description: Port to probe on the instance network address.
+          example: 8080
+        path:
+          type: string
+          description: HTTP path to request.
+          default: "/"
+          example: "/healthz"
+        scheme:
+          type: string
+          enum: [http, https]
+          default: http
+          description: HTTP scheme to use for the probe.
+          example: http
+        expected_status:
+          type: integer
+          minimum: 100
+          maximum: 599
+          default: 200
+          description: Exact status code required for a successful probe.
+          example: 200
+
+    HealthCheckTCP:
+      type: object
+      required: [port]
+      properties:
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+          description: Port to open on the instance network address.
+          example: 5432
+
+    HealthCheckExec:
+      type: object
+      required: [command]
+      properties:
+        command:
+          type: array
+          minItems: 1
+          items:
+            type: string
+          description: Command and arguments to run inside the guest after guest-agent readiness.
+          example: ["curl", "-f", "http://localhost:4318/"]
+        working_dir:
+          type: string
+          description: Optional working directory for the command.
+          example: /app
+
+    HealthCheck:
+      type: object
+      description: Workload health check policy. Health is reported separately from instance lifecycle state.
+      properties:
+        type:
+          type: string
+          enum: [none, http, tcp, exec]
+          default: none
+          description: Probe type. Omit health_check or set type=none to disable health checks.
+        interval:
+          type: string
+          description: Delay between checks as a Go duration.
+          default: "10s"
+          example: "10s"
+        timeout:
+          type: string
+          description: Per-check timeout as a Go duration.
+          default: "2s"
+          example: "2s"
+        start_period:
+          type: string
+          description: Startup grace period before failures can mark the workload unhealthy.
+          default: "30s"
+          example: "30s"
+        failure_threshold:
+          type: integer
+          minimum: 1
+          default: 3
+          description: Consecutive failed checks required to mark the workload unhealthy.
+          example: 3
+        success_threshold:
+          type: integer
+          minimum: 1
+          default: 1
+          description: Consecutive successful checks required to mark the workload healthy.
+          example: 1
+        http:
+          $ref: "#/components/schemas/HealthCheckHTTP"
+        tcp:
+          $ref: "#/components/schemas/HealthCheckTCP"
+        exec:
+          $ref: "#/components/schemas/HealthCheckExec"
+
+    InstanceHealthStatus:
+      type: object
+      required: [status, consecutive_successes, consecutive_failures]
+      properties:
+        status:
+          type: string
+          enum: [disabled, starting, healthy, unhealthy, unknown]
+          description: Current workload health status.
+          example: healthy
+        consecutive_successes:
+          type: integer
+          description: Consecutive successful checks in the current health window.
+          example: 4
+        consecutive_failures:
+          type: integer
+          description: Consecutive failed checks in the current health window.
+          example: 0
+        last_checked_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Most recent check completion time.
+          example: "2026-05-16T01:00:00Z"
+        last_success_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Most recent successful check completion time.
+          example: "2026-05-16T01:00:00Z"
+        last_failure_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Most recent failed check completion time.
+          example: "2026-05-16T00:59:50Z"
+        last_error:
+          type: string
+          nullable: true
+          description: Truncated error from the most recent failed check.
+          example: "connection refused"
+
+    RestartPolicy:
+      type: object
+      description: Whole-instance restart supervision policy.
+      properties:
+        policy:
+          type: string
+          enum: [never, always, on_failure]
+          default: never
+          description: |
+            Restart behavior when the guest program exits:
+            - never: do not automatically restart
+            - always: restart after any guest exit
+            - on_failure: restart only for nonzero, signaled, OOM, or unknown exits
+          example: on_failure
+        backoff:
+          type: string
+          description: Delay before each restart attempt, expressed as a Go duration like "5s" or "1m".
+          default: "5s"
+          example: "5s"
+        max_attempts:
+          type: integer
+          minimum: 0
+          default: 0
+          description: Consecutive automatic restart attempts before blocking retries. 0 means unlimited.
+          example: 10
+        stable_after:
+          type: string
+          description: Running this long resets the consecutive restart attempt count.
+          default: "10m"
+          example: "10m"
+
+    RestartStatus:
+      type: object
+      description: Runtime status for restart policy decisions.
+      properties:
+        attempts:
+          type: integer
+          description: Consecutive automatic restart attempts in the current failure window.
+          example: 3
+        last_attempt_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Last time Hypeman attempted an automatic restart.
+          example: "2025-01-15T12:30:00Z"
+        next_attempt_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Next scheduled automatic restart attempt after backoff.
+          example: "2025-01-15T12:30:05Z"
+        blocked_reason:
+          type: string
+          enum: [manual_stop, max_attempts_exceeded]
+          nullable: true
+          description: Reason automatic restarts are currently blocked.
+          example: max_attempts_exceeded
+        last_reason:
+          type: string
+          enum: [health_check_failed]
+          nullable: true
+          description: Most recent non-exit failure signal that entered restart policy.
+          example: health_check_failed
+
     AutoStandbyStatus:
       type: object
       required: [supported, configured, enabled, eligible, status, reason, active_inbound_connections, tracking_mode]
@@ -317,6 +520,10 @@ components:
             OUTBOUND_OPENAI_KEY: new-rotated-key-456
         auto_standby:
           $ref: "#/components/schemas/AutoStandbyPolicy"
+        health_check:
+          $ref: "#/components/schemas/HealthCheck"
+        restart_policy:
+          $ref: "#/components/schemas/RestartPolicy"
 
     CreateInstanceRequest:
       type: object
@@ -332,6 +539,11 @@ components:
           type: string
           description: OCI image reference
           example: docker.io/library/alpine:latest
+        platform:
+          type: string
+          pattern: '^[a-z0-9]+/[a-z0-9]+(/[a-z0-9.]+)?$'
+          description: 'Target platform as os/arch[/variant] (e.g. "linux/amd64"), matching Docker --platform. Omit for the host platform. Not a fixed enum: the os/arch[/variant] grammar is validated server-side and invalid values return 400 invalid_platform. Only os "linux" with arch amd64 or arm64 is accepted today.'
+          example: linux/amd64
         size:
           type: string
           description: Base memory size (human-readable format like "1GB", "512MB", "2G")
@@ -425,6 +637,10 @@ components:
           $ref: "#/components/schemas/SnapshotPolicy"
         auto_standby:
           $ref: "#/components/schemas/AutoStandbyPolicy"
+        health_check:
+          $ref: "#/components/schemas/HealthCheck"
+        restart_policy:
+          $ref: "#/components/schemas/RestartPolicy"
         skip_kernel_headers:
           type: boolean
           description: |
@@ -769,6 +985,11 @@ components:
           type: string
           description: OCI image reference
           example: docker.io/library/alpine:latest
+        platform:
+          type: string
+          readOnly: true
+          description: Resolved image platform as os/arch[/variant] (e.g. "linux/amd64"). amd64 images on an arm64 host run under Rosetta emulation.
+          example: linux/amd64
         state:
           $ref: "#/components/schemas/InstanceState"
         state_error:
@@ -879,6 +1100,14 @@ components:
           $ref: "#/components/schemas/SnapshotPolicy"
         auto_standby:
           $ref: "#/components/schemas/AutoStandbyPolicy"
+        health_check:
+          $ref: "#/components/schemas/HealthCheck"
+        health_status:
+          $ref: "#/components/schemas/InstanceHealthStatus"
+        restart_policy:
+          $ref: "#/components/schemas/RestartPolicy"
+        restart_status:
+          $ref: "#/components/schemas/RestartStatus"
         phase_durations_ms:
           type: object
           description: |
@@ -1021,6 +1250,11 @@ components:
           type: string
           description: OCI image reference (e.g., docker.io/library/nginx:latest)
           example: docker.io/library/nginx:latest
+        platform:
+          type: string
+          pattern: '^[a-z0-9]+/[a-z0-9]+(/[a-z0-9.]+)?$'
+          description: 'Target platform as os/arch[/variant] (e.g. "linux/amd64"), matching Docker --platform. Omit for the host platform. Not a fixed enum: the os/arch[/variant] grammar is validated server-side and invalid values return 400 invalid_platform. Only os "linux" with arch amd64 or arm64 is accepted today.'
+          example: linux/amd64
         tags:
           $ref: "#/components/schemas/Tags"
     
@@ -1036,6 +1270,11 @@ components:
           type: string
           description: Resolved manifest digest
           example: sha256:abc123def456...
+        platform:
+          type: string
+          readOnly: true
+          description: Resolved image platform as os/arch[/variant] (e.g. "linux/amd64")
+          example: linux/amd64
         status:
           type: string
           enum: [pending, pulling, converting, ready, failed]
@@ -1959,7 +2198,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
         404:
-          description: Image not found
+          description: Image not found or requested platform not available
           content:
             application/json:
               schema:
@@ -1970,13 +2209,19 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        429:
+          description: Registry rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         500:
           description: Internal server error
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
-  
+
   /images/{name}:
     get:
       summary: Get image details
@@ -2112,8 +2357,20 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        404:
+          description: Image not found or requested platform not available
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         409:
           description: Conflict - insufficient resources or name already exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        429:
+          description: Registry rate limit exceeded
           content:
             application/json:
               schema:
@@ -2124,7 +2381,7 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
-  
+
   /instances/{id}:
     get:
       summary: Get instance details
@@ -2310,91 +2567,13 @@ paths:
               schema:
                 $ref: "#/components/schemas/Instance"
         404:
-          description: Instance not found
+          description: Instance not found, or the instance's image no longer exists
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
         409:
           description: Conflict - instance not in standby or no snapshot
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        500:
-          description: Internal server error
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-
-  /instances/{id}/promote-template:
-    post:
-      summary: Promote a standby instance into a fork-only template
-      operationId: promoteInstanceToTemplate
-      security:
-        - bearerAuth: []
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-          description: Instance ID or name
-      responses:
-        200:
-          description: Instance promoted to template
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Instance"
-        404:
-          description: Instance not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        409:
-          description: Conflict - instance not in standby
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        500:
-          description: Internal server error
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-
-  /instances/{id}/demote-template:
-    post:
-      summary: Demote a template back to standby so it can be restored or deleted
-      operationId: demoteInstanceTemplate
-      security:
-        - bearerAuth: []
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-          description: Instance ID or name
-      responses:
-        200:
-          description: Template demoted to standby
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Instance"
-        404:
-          description: Instance not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        409:
-          description: Conflict - not a template or has live forks
           content:
             application/json:
               schema:
@@ -2439,7 +2618,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
         404:
-          description: Source instance not found
+          description: Source instance not found, or its image no longer exists
           content:
             application/json:
               schema:
@@ -2671,7 +2850,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
         404:
-          description: Instance or snapshot not found
+          description: Instance or snapshot not found, or the instance's image no longer exists
           content:
             application/json:
               schema:
@@ -2938,7 +3117,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Instance"
         404:
-          description: Instance not found
+          description: Instance not found, or the instance's image no longer exists
           content:
             application/json:
               schema:

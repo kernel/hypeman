@@ -16,13 +16,14 @@ import (
 	"github.com/kernel/hypeman/lib/network"
 	snapshotstore "github.com/kernel/hypeman/lib/snapshot"
 	"go.opentelemetry.io/otel/attribute"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
-// RestoreInstance restores an instance from standby
-// Multi-hop orchestration: Standby → Paused → Running
+// RestoreInstance restores an instance from standby.
+// Multi-hop orchestration: Standby → Paused → Running.
 func (m *manager) restoreInstance(
 	ctx context.Context,
-
 	id string,
 ) (_ *Instance, retErr error) {
 	start := time.Now()
@@ -56,6 +57,23 @@ func (m *manager) restoreInstance(
 	if !inst.HasSnapshot {
 		log.ErrorContext(ctx, "no snapshot available", "instance_id", id)
 		return nil, fmt.Errorf("no snapshot available for instance %s", id)
+	}
+
+	// 2a. Validate the instance's image (rootfs) still exists before reserving
+	// resources or invoking the hypervisor shim. A deleted image otherwise fails
+	// deep in storage configuration ("disk image not found"), retrying for ~60s
+	// and surfacing as an opaque 500; resolving it up front (mirroring start)
+	// returns images.ErrNotFound fast so the handler maps it to 404.
+	imageCtx, imageSpanEnd := m.startLifecycleStep(ctx, "resolve_image",
+		attribute.String("instance_id", id),
+		attribute.String("hypervisor", string(stored.HypervisorType)),
+		attribute.String("operation", "resolve_image"),
+	)
+	_, err = m.imageManager.GetImage(imageCtx, bootImageRef(stored))
+	imageSpanEnd(err)
+	if err != nil {
+		log.ErrorContext(ctx, "failed to resolve image for restore", "instance_id", id, "image", bootImageRef(stored), "error", err)
+		return nil, fmt.Errorf("get image: %w", err)
 	}
 
 	// 2b. Validate aggregate resource limits before allocating resources (if configured)
@@ -131,13 +149,19 @@ func (m *manager) restoreInstance(
 			log.InfoContext(ctx, "allocating fresh network identity for standby restore",
 				"instance_id", id, "network", "default",
 				"download_bps", stored.NetworkBandwidthDownload, "upload_bps", stored.NetworkBandwidthUpload)
-			netConfig, err := m.networkManager.CreateAllocation(networkCtx, network.AllocateRequest{
+			allocateCtx, allocateSpanEnd := m.startLifecycleStep(networkCtx, "restore_network.create_allocation",
+				attribute.String("instance_id", id),
+				attribute.String("hypervisor", string(stored.HypervisorType)),
+				attribute.String("operation", "restore_network_create_allocation"),
+			)
+			netConfig, err := m.networkManager.CreateAllocation(allocateCtx, network.AllocateRequest{
 				InstanceID:    id,
 				InstanceName:  stored.Name,
 				DownloadBps:   stored.NetworkBandwidthDownload,
 				UploadBps:     stored.NetworkBandwidthUpload,
 				UploadCeilBps: stored.NetworkBandwidthUpload * int64(m.networkManager.GetUploadBurstMultiplier()),
 			})
+			allocateSpanEnd(err)
 			if err != nil {
 				networkSpanEnd(err)
 				log.ErrorContext(ctx, "failed to allocate network", "instance_id", id, "error", err)
@@ -157,7 +181,12 @@ func (m *manager) restoreInstance(
 			stored.IP = netConfig.IP
 			stored.MAC = netConfig.MAC
 
-			if _, err := starter.PrepareFork(networkCtx, hypervisor.ForkPrepareRequest{
+			prepareForkCtx, prepareForkSpanEnd := m.startLifecycleStep(networkCtx, "restore_network.prepare_fork_network",
+				attribute.String("instance_id", id),
+				attribute.String("hypervisor", string(stored.HypervisorType)),
+				attribute.String("operation", "restore_network_prepare_fork_network"),
+			)
+			_, err = starter.PrepareFork(prepareForkCtx, hypervisor.ForkPrepareRequest{
 				SnapshotConfigPath: m.paths.InstanceSnapshotConfig(id),
 				VsockCID:           stored.VsockCID,
 				VsockSocket:        stored.VsockSocket,
@@ -167,7 +196,9 @@ func (m *manager) restoreInstance(
 					MAC:       netConfig.MAC,
 					Netmask:   netConfig.Netmask,
 				},
-			}); err != nil {
+			})
+			prepareForkSpanEnd(err)
+			if err != nil {
 				networkSpanEnd(err)
 				if errors.Is(err, hypervisor.ErrNotSupported) {
 					log.ErrorContext(ctx, "forked standby network rewrite not supported for hypervisor", "instance_id", id, "hypervisor", stored.HypervisorType)
@@ -181,7 +212,14 @@ func (m *manager) restoreInstance(
 		} else {
 			log.InfoContext(ctx, "recreating network for restore", "instance_id", id, "network", "default",
 				"download_bps", stored.NetworkBandwidthDownload, "upload_bps", stored.NetworkBandwidthUpload)
-			if err := m.networkManager.RecreateAllocation(networkCtx, id, stored.NetworkBandwidthDownload, stored.NetworkBandwidthUpload); err != nil {
+			recreateCtx, recreateSpanEnd := m.startLifecycleStep(networkCtx, "restore_network.recreate_allocation",
+				attribute.String("instance_id", id),
+				attribute.String("hypervisor", string(stored.HypervisorType)),
+				attribute.String("operation", "restore_network_recreate_allocation"),
+			)
+			err := m.networkManager.RecreateAllocation(recreateCtx, id, stored.NetworkBandwidthDownload, stored.NetworkBandwidthUpload)
+			recreateSpanEnd(err)
+			if err != nil {
 				networkSpanEnd(err)
 				log.ErrorContext(ctx, "failed to recreate network", "instance_id", id, "error", err)
 				return nil, fmt.Errorf("recreate network: %w", err)
@@ -212,9 +250,9 @@ func (m *manager) restoreInstance(
 			releaseNetwork()
 			return nil, fmt.Errorf("configure egress proxy: %w", err)
 		}
-		imageInfo, err := m.imageManager.GetImage(ctx, stored.Image)
+		imageInfo, err := m.imageManager.GetImage(ctx, bootImageRef(stored))
 		if err != nil {
-			log.ErrorContext(ctx, "failed to load image for config disk refresh", "instance_id", id, "image", stored.Image, "error", err)
+			log.ErrorContext(ctx, "failed to load image for config disk refresh", "instance_id", id, "image", bootImageRef(stored), "error", err)
 			releaseNetwork()
 			return nil, fmt.Errorf("get image for restore config disk: %w", err)
 		}
@@ -227,6 +265,32 @@ func (m *manager) restoreInstance(
 		proxyRegistered = true
 	}
 
+	restoreOptions, err := m.firecrackerSnapshotRestoreOptions(stored, snapshotDir)
+	if err != nil {
+		releaseNetwork()
+		return nil, fmt.Errorf("configure snapshot memory backend: %w", err)
+	}
+
+	restoreSlotCtx, restoreSlotSpanEnd := m.startLifecycleStep(ctx, "restore_capacity_wait",
+		attribute.String("instance_id", id),
+		attribute.String("hypervisor", string(stored.HypervisorType)),
+		attribute.String("operation", "restore_capacity_wait"),
+	)
+	releaseRestoreSlot, err := m.acquireRestoreSlot(restoreSlotCtx, stored.HypervisorType)
+	restoreSlotSpanEnd(err)
+	if err != nil {
+		releaseNetwork()
+		return nil, fmt.Errorf("wait for restore capacity: %w", err)
+	}
+	restoreSlotHeld := true
+	releaseRestoreSlotOnce := func() {
+		if restoreSlotHeld {
+			restoreSlotHeld = false
+			releaseRestoreSlot()
+		}
+	}
+	defer releaseRestoreSlotOnce()
+
 	// 5. Transition: Standby → Paused (start hypervisor + restore)
 	restoreCtx, restoreSpanEnd := m.startLifecycleStep(ctx, "restore_from_snapshot",
 		attribute.String("instance_id", id),
@@ -234,10 +298,11 @@ func (m *manager) restoreInstance(
 		attribute.String("operation", "restore_from_snapshot"),
 	)
 	log.InfoContext(ctx, "restoring from snapshot", "instance_id", id, "snapshot_dir", snapshotDir, "hypervisor", stored.HypervisorType)
-	pid, hv, err := m.restoreFromSnapshot(restoreCtx, stored, snapshotDir)
+	pid, hv, err := m.restoreFromSnapshot(restoreCtx, stored, snapshotDir, restoreOptions)
 	restoreSpanEnd(err)
 	if err != nil {
 		log.ErrorContext(ctx, "failed to restore from snapshot", "instance_id", id, "error", err)
+		m.closeFirecrackerUFFDSession(ctx, stored)
 		// Cleanup network on failure
 		releaseNetwork()
 		return nil, err
@@ -258,6 +323,7 @@ func (m *manager) restoreInstance(
 		log.ErrorContext(ctx, "failed to resume VM", "instance_id", id, "error", err)
 		// Cleanup on failure
 		hv.Shutdown(ctx)
+		m.closeFirecrackerUFFDSession(ctx, stored)
 		releaseNetwork()
 		return nil, fmt.Errorf("resume vm failed: %w", err)
 	}
@@ -285,12 +351,14 @@ func (m *manager) restoreInstance(
 			reconfigureSpanEnd(err)
 			log.ErrorContext(ctx, "failed to configure guest network after restore", "instance_id", id, "error", err)
 			_ = hv.Shutdown(ctx)
+			m.closeFirecrackerUFFDSession(ctx, stored)
 			m.rollbackAdmissionAllocationActive(stored)
 			releaseNetwork()
 			return nil, fmt.Errorf("configure guest network after restore: %w", err)
 		}
 		reconfigureSpanEnd(nil)
 	}
+	releaseRestoreSlotOnce()
 
 	// 8. Delete snapshot after successful restore unless the hypervisor is keeping it
 	// as the base for the next standby snapshot.
@@ -312,6 +380,9 @@ func (m *manager) restoreInstance(
 	// before markers ever hydrated we resume in Initializing.
 	resumePhase, _ := runningPhaseFromMarkers(stored)
 	stored.Phases.Record(resumePhase, time.Now().UTC())
+	// The one-shot restore has been consumed, but a UFFD-backed VM keeps its
+	// pager session serving faults until the next standby or stop closes it.
+	stored.FirecrackerUseUFFDOnNextRestore = false
 	meta = &metadata{StoredMetadata: *stored}
 	if err := m.saveMetadata(meta); err != nil {
 		// VM is running but metadata failed
@@ -357,6 +428,7 @@ func (m *manager) restoreFromSnapshot(
 	ctx context.Context,
 	stored *StoredMetadata,
 	snapshotDir string,
+	opts hypervisor.RestoreOptions,
 ) (int, hypervisor.Hypervisor, error) {
 	log := logger.FromContext(ctx)
 
@@ -368,7 +440,7 @@ func (m *manager) restoreFromSnapshot(
 
 	// Restore VM from snapshot (handles process start + restore)
 	log.DebugContext(ctx, "restoring VM from snapshot", "instance_id", stored.Id, "hypervisor", stored.HypervisorType, "version", stored.HypervisorVersion, "snapshot_dir", snapshotDir)
-	pid, hv, err := starter.RestoreVM(ctx, m.paths, stored.HypervisorVersion, stored.SocketPath, snapshotDir)
+	pid, hv, err := starter.RestoreVM(ctx, m.paths, stored.HypervisorVersion, stored.SocketPath, snapshotDir, opts)
 	if err != nil {
 		return 0, nil, fmt.Errorf("restore vm: %w", err)
 	}
@@ -378,8 +450,24 @@ func (m *manager) restoreFromSnapshot(
 	return pid, hv, nil
 }
 
+func (m *manager) acquireRestoreSlot(ctx context.Context, hvType hypervisor.Type) (func(), error) {
+	if m.restoreSlotsByHypervisor == nil {
+		return func() {}, nil
+	}
+	slots := m.restoreSlotsByHypervisor[hvType]
+	if slots == nil {
+		return func() {}, nil
+	}
+	select {
+	case slots <- struct{}{}:
+		return func() { <-slots }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
 func reconfigureGuestNetwork(ctx context.Context, stored *StoredMetadata, alloc *network.Allocation) error {
-	prefix, err := netmaskToPrefix(alloc.Netmask)
+	cfg, err := guestNetworkReconfigureConfig(alloc)
 	if err != nil {
 		return err
 	}
@@ -389,10 +477,29 @@ func reconfigureGuestNetwork(ctx context.Context, stored *StoredMetadata, alloc 
 		return fmt.Errorf("create vsock dialer: %w", err)
 	}
 
-	cmd := fmt.Sprintf(
-		"ip -4 addr flush dev eth0 scope global && ip addr add %s/%d dev eth0 && ip link set dev eth0 up && ip route replace default via %s dev eth0",
-		alloc.IP, prefix, alloc.Gateway,
-	)
+	err = guest.ReconfigureNetworkInInstance(ctx, dialer, guest.ReconfigureNetworkOptions{
+		InterfaceName: "eth0",
+		MAC:           cfg.mac,
+		IPv4:          cfg.ip,
+		Prefix:        uint32(cfg.prefix),
+		Gateway:       cfg.gateway,
+		WaitForAgent:  120 * time.Second,
+	})
+	if err != nil {
+		if status.Code(err) == codes.Unimplemented {
+			return reconfigureGuestNetworkWithExec(ctx, dialer, alloc)
+		}
+		return fmt.Errorf("reconfigure guest network: %w", err)
+	}
+
+	return nil
+}
+
+func reconfigureGuestNetworkWithExec(ctx context.Context, dialer hypervisor.VsockDialer, alloc *network.Allocation) error {
+	cmd, err := guestNetworkReconfigureCommand(alloc)
+	if err != nil {
+		return err
+	}
 
 	var stdout, stderr bytes.Buffer
 	exit, err := guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{
@@ -407,8 +514,65 @@ func reconfigureGuestNetwork(ctx context.Context, stored *StoredMetadata, alloc 
 	if exit.Code != 0 {
 		return fmt.Errorf("network reconfiguration command failed (exit=%d, stdout=%q, stderr=%q)", exit.Code, strings.TrimSpace(stdout.String()), strings.TrimSpace(stderr.String()))
 	}
-
 	return nil
+}
+
+type guestNetworkConfig struct {
+	ip      string
+	mac     string
+	gateway string
+	prefix  int
+}
+
+func guestNetworkReconfigureConfig(alloc *network.Allocation) (*guestNetworkConfig, error) {
+	if alloc == nil {
+		return nil, fmt.Errorf("missing network allocation")
+	}
+	ip := strings.TrimSpace(alloc.IP)
+	if ip == "" {
+		return nil, fmt.Errorf("missing network allocation IP")
+	}
+	mac := strings.ToLower(strings.TrimSpace(alloc.MAC))
+	if mac == "" {
+		return nil, fmt.Errorf("missing network allocation MAC")
+	}
+	if _, err := net.ParseMAC(mac); err != nil {
+		return nil, fmt.Errorf("invalid network allocation MAC %q: %w", alloc.MAC, err)
+	}
+	gateway := strings.TrimSpace(alloc.Gateway)
+	if gateway == "" {
+		return nil, fmt.Errorf("missing network allocation gateway")
+	}
+	prefix, err := netmaskToPrefix(alloc.Netmask)
+	if err != nil {
+		return nil, err
+	}
+	return &guestNetworkConfig{ip: ip, mac: mac, gateway: gateway, prefix: prefix}, nil
+}
+
+func guestNetworkReconfigureCommand(alloc *network.Allocation) (string, error) {
+	cfg, err := guestNetworkReconfigureConfig(alloc)
+	if err != nil {
+		return "", err
+	}
+
+	return fmt.Sprintf(
+		// Bring eth0 down so Linux permits changing the interface MAC.
+		"ip link set dev eth0 down && "+
+			// Replace the snapshotted MAC with the MAC allocated for this fork.
+			"ip link set dev eth0 address %s && "+
+			// Remove the snapshotted IPv4 address from the source/starter guest.
+			"ip -4 addr flush dev eth0 scope global && "+
+			// Add the IPv4 address allocated for this fork.
+			"ip addr add %s/%d dev eth0 && "+
+			// Bring the interface back up after applying the new identity.
+			"ip link set dev eth0 up && "+
+			// Ensure outbound traffic uses the fork's allocated gateway.
+			"ip route replace default via %s dev eth0 && "+
+			// Drop snapshotted ARP/neighbor entries so peers are rediscovered.
+			"(ip neigh flush dev eth0 || true)",
+		cfg.mac, cfg.ip, cfg.prefix, cfg.gateway,
+	), nil
 }
 
 func networkConfigFromAllocation(alloc *network.Allocation) *network.NetworkConfig {

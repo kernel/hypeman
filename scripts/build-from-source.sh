@@ -13,12 +13,12 @@ set -euo pipefail
 
 # Default values
 BINARY_NAME="hypeman-api"
+UFFD_PAGER_BINARY_NAME="hypeman-uffd-pager"
 
 # Colors for output (true color)
 RED='\033[38;2;255;110;110m'
 GREEN='\033[38;2;92;190;83m'
 YELLOW='\033[0;33m'
-PURPLE='\033[38;2;172;134;249m'
 NC='\033[0m' # No Color
 
 info() { echo -e "${GREEN}[INFO]${NC} $1"; }
@@ -72,6 +72,11 @@ if ! make build >> "$BUILD_LOG" 2>&1; then
 fi
 cp "bin/hypeman" "${OUTPUT_DIR}/${BINARY_NAME}"
 
+OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+if [ "$OS" = "linux" ]; then
+    cp "bin/${UFFD_PAGER_BINARY_NAME}" "${OUTPUT_DIR}/${UFFD_PAGER_BINARY_NAME}"
+fi
+
 # Build hypeman-token (not included in make build)
 if ! go build -o "${OUTPUT_DIR}/hypeman-token" ./cmd/gen-jwt >> "$BUILD_LOG" 2>&1; then
     echo ""
@@ -81,7 +86,6 @@ if ! go build -o "${OUTPUT_DIR}/hypeman-token" ./cmd/gen-jwt >> "$BUILD_LOG" 2>&
 fi
 
 # Copy config example files for config template
-OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 if [ "$OS" = "darwin" ]; then
     cp "config.example.darwin.yaml" "${OUTPUT_DIR}/config.example.darwin.yaml"
 else

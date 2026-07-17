@@ -30,6 +30,10 @@ type Config struct {
 	SkipKernelHeaders bool `json:"skip_kernel_headers,omitempty"`
 	SkipGuestAgent    bool `json:"skip_guest_agent,omitempty"`
 
+	// EnableRosetta registers a binfmt_misc handler for x86-64 ELF binaries
+	// backed by the Rosetta interpreter mounted from the "rosetta" virtio-fs share.
+	EnableRosetta bool `json:"enable_rosetta,omitempty"`
+
 	// Optional egress MITM proxy configuration.
 	EgressProxy *EgressProxyConfig `json:"egress_proxy,omitempty"`
 }

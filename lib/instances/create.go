@@ -88,51 +88,38 @@ func (m *manager) createInstance(
 		log.ErrorContext(ctx, "invalid create request", "error", err)
 		return nil, err
 	}
+	hvType := req.Hypervisor
+	if hvType == "" {
+		hvType = m.defaultHypervisor
+	}
 
 	// 2. Validate image exists and is ready; auto-pull if not found
 	log.DebugContext(ctx, "validating image", "image", req.Image)
 	imageCtx, imageSpanEnd := m.startLifecycleStep(ctx, "resolve_image",
 		attribute.String("operation", "resolve_image"),
 	)
-	imageInfo, err := m.imageManager.GetImage(imageCtx, req.Image)
+	imageInfo, err := resolveImageForCreate(imageCtx, m.imageManager, req.Image, req.Platform, log)
 	if err != nil {
-		if err == images.ErrNotFound {
-			// Auto-pull: image not found locally, kick off the pull in the
-			// background and wait up to 5 seconds for it to complete.
-			log.InfoContext(ctx, "image not found locally, auto-pulling", "image", req.Image)
-			_, pullErr := m.imageManager.CreateImage(imageCtx, images.CreateImageRequest{Name: req.Image})
-			if pullErr != nil {
-				imageSpanEnd(pullErr)
-				log.ErrorContext(ctx, "failed to auto-pull image", "image", req.Image, "error", pullErr)
-				return nil, fmt.Errorf("auto-pull image %s: %w", req.Image, pullErr)
-			}
-			// Wait with a short timeout — if the pull doesn't finish in time
-			// we return an error but let it continue in the background.
-			pullCtx, pullCancel := context.WithTimeout(imageCtx, 5*time.Second)
-			defer pullCancel()
-			if waitErr := m.imageManager.WaitForReady(pullCtx, req.Image); waitErr != nil {
-				imageSpanEnd(waitErr)
-				log.InfoContext(ctx, "image pull not ready within timeout, pull continues in background", "image", req.Image, "error", waitErr)
-				return nil, fmt.Errorf("%w: image %s is being pulled, please try again shortly", ErrImageNotReady, req.Image)
-			}
-			// Re-fetch after successful pull
-			imageInfo, err = m.imageManager.GetImage(imageCtx, req.Image)
-			if err != nil {
-				imageSpanEnd(err)
-				log.ErrorContext(ctx, "failed to get image after auto-pull", "image", req.Image, "error", err)
-				return nil, fmt.Errorf("get image after auto-pull: %w", err)
-			}
-		} else {
-			imageSpanEnd(err)
-			log.ErrorContext(ctx, "failed to get image", "image", req.Image, "error", err)
-			return nil, fmt.Errorf("get image: %w", err)
-		}
+		imageSpanEnd(err)
+		log.ErrorContext(ctx, "failed to resolve image", "image", req.Image, "platform", req.Platform, "error", err)
+		return nil, err
 	}
+
 	imageSpanEnd(nil)
 
 	if imageInfo.Status != images.StatusReady {
 		log.ErrorContext(ctx, "image not ready", "image", req.Image, "status", imageInfo.Status)
 		return nil, fmt.Errorf("%w: image status is %s", ErrImageNotReady, imageInfo.Status)
+	}
+
+	// A guest whose architecture differs from the host kernel can only boot via
+	// emulation. On Apple silicon that is Rosetta, enabled automatically; on any
+	// other host we reject the create up front rather than launching an
+	// unbootable VM.
+	enableRosetta, err := deriveEnableRosetta(images.ImageNeedsHostEmulation(imageInfo.Platform), hvType)
+	if err != nil {
+		log.ErrorContext(ctx, "image platform requires emulation", "image", req.Image, "image_platform", imageInfo.Platform, "host", hostOSArchString())
+		return nil, err
 	}
 	m.recordImageUsage(ctx, imageInfo)
 
@@ -148,6 +135,13 @@ func (m *manager) createInstance(
 			"kernel", kernelVer,
 			"label", system.ImageKernelVersionLabel)
 	}
+	// resolvedImageRef is the digest-pinned reference used for boot/start/restore
+	// (stable across mutable tags). The caller-facing Image field keeps the
+	// original reference the user supplied for display/addressing.
+	resolvedImageRef, err := storedImageNameForCreate(req.Image, imageInfo)
+	if err != nil {
+		return nil, err
+	}
 
 	// 3. Generate instance ID (CUID2 for secure, collision-resistant IDs)
 	id := cuid2.Generate()
@@ -156,11 +150,7 @@ func (m *manager) createInstance(
 
 	// 4. Generate vsock configuration
 	vsockCID := generateVsockCID(id)
-	hvTypeForVsock := req.Hypervisor
-	if hvTypeForVsock == "" {
-		hvTypeForVsock = m.defaultHypervisor
-	}
-	vsockSocket := m.paths.InstanceSocket(id, hypervisor.VsockSocketNameForType(hvTypeForVsock))
+	vsockSocket := m.paths.InstanceSocket(id, hypervisor.VsockSocketNameForType(hvType))
 	log.DebugContext(ctx, "generated vsock config", "instance_id", id, "cid", vsockCID)
 
 	// 5. Check instance doesn't already exist
@@ -225,12 +215,6 @@ func (m *manager) createInstance(
 	networkName := ""
 	if req.NetworkEnabled {
 		networkName = "default"
-	}
-
-	// 8. Get process manager for hypervisor type (needed for socket name)
-	hvType := req.Hypervisor
-	if hvType == "" {
-		hvType = m.defaultHypervisor
 	}
 
 	// Enrich logger and trace span with hypervisor type
@@ -341,6 +325,8 @@ func (m *manager) createInstance(
 		Id:                       id,
 		Name:                     req.Name,
 		Image:                    req.Image,
+		ResolvedImage:            resolvedImageRef,
+		Platform:                 imageInfo.Platform,
 		Size:                     size,
 		HotplugSize:              hotplugSize,
 		OverlaySize:              overlaySize,
@@ -372,8 +358,11 @@ func (m *manager) createInstance(
 		Cmd:                      req.Cmd,
 		SkipKernelHeaders:        req.SkipKernelHeaders,
 		SkipGuestAgent:           req.SkipGuestAgent,
+		EnableRosetta:            enableRosetta,
 		SnapshotPolicy:           cloneSnapshotPolicy(req.SnapshotPolicy),
 		AutoStandby:              cloneAutoStandbyPolicy(req.AutoStandby),
+		HealthCheck:              cloneHealthCheckPolicy(req.HealthCheck),
+		RestartPolicy:            cloneRestartPolicy(req.RestartPolicy),
 	}
 
 	// 12. Ensure directories
@@ -629,6 +618,19 @@ func validateCreateRequest(req *CreateInstanceRequest) error {
 		return err
 	}
 	req.AutoStandby = normalizedAutoStandby
+	normalizedHealthCheck, err := normalizeHealthCheckPolicy(req.HealthCheck)
+	if err != nil {
+		return err
+	}
+	req.HealthCheck = normalizedHealthCheck
+	if err := validateHealthCheckCompatibility(req.HealthCheck, req.NetworkEnabled, req.SkipGuestAgent); err != nil {
+		return err
+	}
+	normalizedRestartPolicy, err := normalizeRestartPolicy(req.RestartPolicy)
+	if err != nil {
+		return err
+	}
+	req.RestartPolicy = normalizedRestartPolicy
 
 	// Validate volume attachments
 	if err := validateVolumeAttachments(req.Volumes); err != nil {
@@ -886,6 +888,7 @@ func (m *manager) buildHypervisorConfig(ctx context.Context, inst *Instance, ima
 		KernelPath:    kernelPath,
 		InitrdPath:    initrdPath,
 		KernelArgs:    m.kernelArgs(inst.HypervisorType),
+		EnableRosetta: inst.EnableRosetta,
 	}, nil
 }
 

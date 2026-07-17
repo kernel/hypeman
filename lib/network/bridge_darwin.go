@@ -36,14 +36,26 @@ func (m *manager) setupBridgeHTB(ctx context.Context, bridgeName string, capacit
 
 // createTAPDevice is a no-op on macOS as we use NAT networking.
 // Virtualization.framework creates virtual network interfaces internally.
-func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName string, isolated bool, downloadBps, uploadBps, uploadCeilBps int64) (string, error) {
+func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName string, isolated bool) error {
 	// On macOS with vz, network devices are created by the VMM itself
+	return nil
+}
+
+func (m *manager) applyDownloadRateLimit(ctx context.Context, tapName string, rateLimitBps int64) error {
+	return nil
+}
+
+func (m *manager) addVMClass(ctx context.Context, bridgeName, tapName string, rateBps, ceilBps int64) (string, error) {
 	return "", nil
 }
 
 // deleteTAPDevice is a no-op on macOS as we use NAT networking.
-func (m *manager) deleteTAPDevice(tapName, classID string) error {
+func (m *manager) deleteTAPDevice(ctx context.Context, tapName string) error {
 	return nil
+}
+
+func (m *manager) tapDeviceExists(tapName string) bool {
+	return true
 }
 
 // queryNetworkState returns a stub network state for macOS.
@@ -66,4 +78,8 @@ func (m *manager) CleanupOrphanedTAPs(ctx context.Context, preserveInstanceIDs [
 // CleanupOrphanedClasses is a no-op on macOS as we don't use traffic control.
 func (m *manager) CleanupOrphanedClasses(ctx context.Context) int {
 	return 0
+}
+
+func (m *manager) bridgeHTBClassCount(ctx context.Context) (int64, error) {
+	return 0, nil
 }

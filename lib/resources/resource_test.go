@@ -78,7 +78,7 @@ func TestDefaultNetworkBandwidth(t *testing.T) {
 	cfg := &config.Config{
 		DataDir: t.TempDir(),
 		Oversubscription: config.OversubscriptionConfig{
-			CPU: 1.0, Memory: 1.0, Disk: 1.0, Network: 1.0,
+			CPU: 1.0, Memory: 1.0, Disk: 1.0, Network: 4.0,
 		},
 		Capacity: config.CapacityConfig{Network: "10Gbps"}, // 1.25 GB/s = 1,250,000,000 bytes/sec
 	}
@@ -121,6 +121,35 @@ func TestDefaultNetworkBandwidth_ZeroCPU(t *testing.T) {
 	downloadBw, uploadBw := mgr.DefaultNetworkBandwidth(2)
 	assert.Equal(t, int64(0), downloadBw, "Should return 0 when CPU capacity is 0")
 	assert.Equal(t, int64(0), uploadBw, "Should return 0 when CPU capacity is 0")
+}
+
+func TestDefaultDiskIOBandwidthIgnoresAdmissionOversubscription(t *testing.T) {
+	cfg := &config.Config{
+		DataDir: t.TempDir(),
+		Oversubscription: config.OversubscriptionConfig{
+			CPU: 1.0, Memory: 1.0, Disk: 1.0, Network: 1.0, DiskIO: 4.0,
+		},
+		Capacity: config.CapacityConfig{DiskIO: "1GB/s"},
+	}
+	p := paths.New(cfg.DataDir)
+
+	mgr := NewManager(cfg, p)
+	mgr.SetInstanceLister(&mockInstanceLister{})
+	mgr.SetImageLister(&mockImageLister{})
+	mgr.SetVolumeLister(&mockVolumeLister{})
+
+	err := mgr.Initialize(context.Background())
+	require.NoError(t, err)
+
+	cpuCapacity := mgr.CPUCapacity()
+	ioCapacity := mgr.DiskIOCapacity()
+
+	if cpuCapacity > 0 && ioCapacity > 0 {
+		ioBps, burstBps := mgr.DefaultDiskIOBandwidth(2)
+		expected := (int64(2) * ioCapacity) / cpuCapacity
+		assert.Equal(t, expected, ioBps)
+		assert.Equal(t, expected*4, burstBps)
+	}
 }
 
 func TestParseBandwidth(t *testing.T) {

@@ -30,6 +30,38 @@ func TestNetworkConfigFromAllocation_PreservesDNS(t *testing.T) {
 	assert.Equal(t, alloc.TAPDevice, cfg.TAPDevice)
 }
 
+func TestGuestNetworkReconfigureCommand_AppliesAllocatedMAC(t *testing.T) {
+	t.Parallel()
+
+	alloc := &network.Allocation{
+		IP:      "10.102.146.62",
+		MAC:     "02:00:00:85:17:c8",
+		Gateway: "10.102.0.1",
+		Netmask: "255.255.0.0",
+	}
+
+	cmd, err := guestNetworkReconfigureCommand(alloc)
+	require.NoError(t, err)
+	assert.Contains(t, cmd, "ip link set dev eth0 down")
+	assert.Contains(t, cmd, "ip link set dev eth0 address 02:00:00:85:17:c8")
+	assert.Contains(t, cmd, "ip addr add 10.102.146.62/16 dev eth0")
+	assert.Contains(t, cmd, "ip route replace default via 10.102.0.1 dev eth0")
+	assert.Contains(t, cmd, "(ip neigh flush dev eth0 || true)")
+	assert.NotContains(t, cmd, "cat /sys/class/net/eth0/address")
+}
+
+func TestGuestNetworkReconfigureCommand_RequiresAllocatedMAC(t *testing.T) {
+	t.Parallel()
+
+	_, err := guestNetworkReconfigureCommand(&network.Allocation{
+		IP:      "10.102.146.62",
+		Gateway: "10.102.0.1",
+		Netmask: "255.255.0.0",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing network allocation MAC")
+}
+
 func TestRequiresRestoreConfigDiskRefresh(t *testing.T) {
 	t.Parallel()
 

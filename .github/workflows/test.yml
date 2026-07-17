@@ -27,6 +27,11 @@ jobs:
           # ~/go/pkg/mod and ~/.cache/go-build stay on disk between runs automatically.
           cache: false
           go-version: '1.25.4'
+
+      - name: Check UFFD pager version
+        run: |
+          git fetch origin main --depth=1
+          bash scripts/check-uffd-version.sh origin/main
       
       - name: Install dependencies
         run: |
@@ -36,7 +41,7 @@ jobs:
             local sleep_seconds=30
             local n=1
             while [ "$n" -le "$attempts" ]; do
-              if sudo apt-get update; then
+              if timeout 120s sudo apt-get update; then
                 return 0
               fi
               if [ "$n" -eq "$attempts" ]; then
@@ -53,7 +58,7 @@ jobs:
              ! command -v qemu-system-x86_64 &> /dev/null || \
              ! qemu-system-x86_64 --version >/dev/null 2>&1; then
             apt_update_with_retry
-            sudo apt-get install -y erofs-utils e2fsprogs iptables qemu-system-x86 qemu-utils
+            timeout 300s sudo apt-get install -y erofs-utils e2fsprogs iptables qemu-system-x86 qemu-utils
           fi
           go mod download
 
@@ -83,11 +88,40 @@ jobs:
       - name: Build
         run: make build
 
+      - name: Install UFFD pager systemd template
+        run: |
+          sudo mkdir -p /run/hypeman/uffd
+          sudo tee /etc/systemd/system/hypeman-uffd@.service > /dev/null <<'EOF'
+          [Unit]
+          Description=Hypeman UFFD Pager (%i)
+          Documentation=https://github.com/kernel/hypeman
+          After=network.target
+
+          [Service]
+          Type=simple
+          Environment="HYPEMAN_UFFD_BINARY=/opt/hypeman/bin/hypeman-uffd-pager"
+          Environment="HYPEMAN_UFFD_DATA_DIR=/var/lib/hypeman"
+          Environment="HYPEMAN_UFFD_VERSION_KEY=%i"
+          Environment="HYPEMAN_UFFD_CACHE_MAX_BYTES=4294967296"
+          EnvironmentFile=-/run/hypeman/uffd/%i.env
+          ExecStart=/bin/sh -c 'exec "$HYPEMAN_UFFD_BINARY" --data-dir "$HYPEMAN_UFFD_DATA_DIR" --version-key "$HYPEMAN_UFFD_VERSION_KEY" --cache-max-bytes "$HYPEMAN_UFFD_CACHE_MAX_BYTES"'
+          Restart=on-failure
+          RestartSec=5
+          KillMode=process
+          EOF
+          sudo systemctl daemon-reload
+
       - name: Prewarm test cache
         env:
           HYPEMAN_TEST_REGISTRY: 127.0.0.1:5001
         run: |
-          export HYPEMAN_TEST_PREWARM_DIR="$HOME/.cache/hypeman-ci/linux-amd64"
+          # Prewarm cache must live on the same filesystem as the test TMPDIR
+          # (/ci): the image build symlinks the oci-cache from here into each
+          # per-test cache and builds rootfs there, and those operations are not
+          # cross-filesystem safe. Keeping both on /ci avoids that.
+          export HYPEMAN_TEST_PREWARM_DIR="/ci/prewarm/linux-amd64"
+          mkdir -p "$HYPEMAN_TEST_PREWARM_DIR"
+          sudo chown -R "$(id -u):$(id -g)" "$HYPEMAN_TEST_PREWARM_DIR"
           go run ./cmd/test-prewarm
 
       - name: Check gofmt
@@ -117,10 +151,30 @@ jobs:
           TLS_TEST_DOMAIN: "test.hypeman-development.com"
           TLS_ALLOWED_DOMAINS: '*.hypeman-development.com'
           HYPEMAN_TEST_PREWARM_STRICT: "1"
+          HYPEMAN_TEST_REFLINK_STRICT: "1"
           HYPEMAN_TEST_REGISTRY: 127.0.0.1:5001
+          HYPEMAN_UFFD_PAGER_BINARY: ${{ runner.temp }}/hypeman-uffd-pager-${{ github.run_id }}-${{ github.run_attempt }}
+          HYPEMAN_UFFD_SYSTEMD_INSTANCE_PREFIX: ci-${{ github.run_id }}-${{ github.run_attempt }}
+          # Fast scratch filesystem provisioned on the runner. Must be reflink-capable
+          # (the VM disk fork fast path uses FICLONE) and kept short to stay under the
+          # 108-char AF_UNIX sun_path limit for VMM control sockets.
+          TMPDIR: /ci
         run: |
-          export HYPEMAN_TEST_PREWARM_DIR="$HOME/.cache/hypeman-ci/linux-amd64"
+          cp "$PWD/bin/hypeman-uffd-pager" "$HYPEMAN_UFFD_PAGER_BINARY"
+          chmod +x "$HYPEMAN_UFFD_PAGER_BINARY"
+          export HYPEMAN_TEST_PREWARM_DIR="/ci/prewarm/linux-amd64"
           make test TEST_TIMEOUT=20m
+
+      - name: Cleanup
+        if: always()
+        run: |
+          units="$(systemctl list-units --all --full --plain 'hypeman-uffd@ci-${{ github.run_id }}-${{ github.run_attempt }}-*.service' --no-legend | awk '{print $1}' || true)"
+          if [ -n "$units" ]; then
+            echo "$units" | xargs -r sudo systemctl stop || true
+            echo "$units" | xargs -r sudo systemctl reset-failed || true
+          fi
+          sudo rm -f /run/hypeman/uffd/ci-${{ github.run_id }}-${{ github.run_attempt }}-*.env
+          rm -f "${{ runner.temp }}/hypeman-uffd-pager-${{ github.run_id }}-${{ github.run_attempt }}"
 
   test-darwin:
     runs-on: [self-hosted, macos, arm64]
@@ -135,6 +189,33 @@ jobs:
         with:
           go-version: '1.25.4'
           cache: false
+      - name: Ensure Docker is running
+        run: |
+          if docker info >/dev/null 2>&1; then
+            exit 0
+          fi
+
+          if colima status >/dev/null 2>&1; then
+            colima stop --force || true
+          fi
+
+          if ! colima start; then
+            colima stop --force || true
+            if ! colima start; then
+              colima delete --force
+              colima start
+            fi
+          fi
+
+          for attempt in {1..30}; do
+            if docker info >/dev/null 2>&1; then
+              exit 0
+            fi
+            echo "waiting for Docker daemon (${attempt}/30)"
+            sleep 2
+          done
+
+          docker info
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
@@ -206,6 +287,11 @@ jobs:
         run: brew list caddy &>/dev/null || brew install caddy
       - name: Run E2E install test
         run: bash scripts/e2e-install-test.sh
+      - name: Run E2E CLI-only install test
+        run: |
+          CLI_DIR="$(mktemp -d)"
+          INSTALL_DIR="$CLI_DIR" bash scripts/install-cli.sh
+          "$CLI_DIR/hypeman" --version
       - name: Cleanup on failure
         if: failure()
         run: bash scripts/uninstall.sh || true

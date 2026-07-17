@@ -73,7 +73,7 @@ Per-VM disk I/O rate limiting with burst support:
 
 - **Cloud Hypervisor**: Uses native `RateLimiterConfig` with token bucket
 - **QEMU**: Uses drive `throttling.bps-total` options
-- **Default**: Proportional to CPU: `(vcpus / cpu_capacity) * disk_io_capacity * 2.0`
+- **Default**: Proportional to CPU: `(vcpus / cpu_capacity) * disk_io_capacity`
 - **Burst**: 4x sustained rate (allows fast cold starts)
 
 ## Example: Default Limits
@@ -84,9 +84,9 @@ Per-VM disk I/O rate limiting with burst support:
 
 | Resource | Calculation | Default Limit |
 |----------|-------------|---------------|
-| Network (down/up) | 10Gbps × 2.0 × 12.5% | 2.5 Gbps (312 MB/s) |
-| Disk I/O (sustained) | 1GB/s × 2.0 × 12.5% | 250 MB/s |
-| Disk I/O (burst) | 250 MB/s × 4 | 1 GB/s |
+| Network (down/up) | 10Gbps × 12.5% | 1.25 Gbps (156 MB/s) |
+| Disk I/O (sustained) | 1GB/s × 12.5% | 125 MB/s |
+| Disk I/O (burst) | 125 MB/s × 4 | 500 MB/s |
 
 ## Effective Limits
 

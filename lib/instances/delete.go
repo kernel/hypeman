@@ -12,17 +12,36 @@ import (
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/network"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 const deleteGracefulShutdownTimeout = 2
+
+type deleteInstanceOptions struct {
+	skipGracefulShutdown bool
+}
 
 // deleteInstance stops and deletes an instance
 func (m *manager) deleteInstance(
 	ctx context.Context,
 	id string,
 ) error {
+	return m.deleteInstanceWithOptions(ctx, id, deleteInstanceOptions{})
+}
+
+func (m *manager) deleteInstanceWithOptions(
+	ctx context.Context,
+	id string,
+	options deleteInstanceOptions,
+) (retErr error) {
 	log := logger.FromContext(ctx)
 	log.InfoContext(ctx, "deleting instance", "instance_id", id)
+
+	ctx, span := m.startLifecycleSpan(ctx, "instances.delete",
+		attribute.String("instance_id", id),
+		attribute.String("operation", "delete"),
+	)
+	defer func() { finishInstancesSpan(span, retErr) }()
 
 	// 1. Load instance
 	meta, err := m.loadMetadata(id)
@@ -33,19 +52,18 @@ func (m *manager) deleteInstance(
 
 	inst := m.toInstance(ctx, meta)
 	stored := &meta.StoredMetadata
+	ctx = enrichInstancesTrace(ctx,
+		attribute.String("hypervisor", string(stored.HypervisorType)),
+		attribute.String("instance_state", string(inst.State)),
+	)
 	log.DebugContext(ctx, "loaded instance", "instance_id", id, "state", inst.State)
 
-	if inst.State == StateTemplate {
-		forks, err := m.countTemplateForks(id)
-		if err != nil {
-			return fmt.Errorf("count forks of template %s: %w", id, err)
-		}
-		if forks > 0 {
-			return fmt.Errorf("%w: cannot delete template %s with %d live fork(s); delete forks first", ErrInvalidState, id, forks)
-		}
-	}
-
-	target, err := m.cancelAndWaitCompressionJob(ctx, m.snapshotJobKeyForInstance(id))
+	compressionCtx, compressionSpanEnd := m.startLifecycleStep(ctx, "cancel_compression_job",
+		attribute.String("instance_id", id),
+		attribute.String("operation", "cancel_compression_job"),
+	)
+	target, err := m.cancelAndWaitCompressionJob(compressionCtx, m.snapshotJobKeyForInstance(id))
+	compressionSpanEnd(err)
 	if err != nil {
 		return fmt.Errorf("wait for instance compression to stop: %w", err)
 	}
@@ -70,13 +88,21 @@ func (m *manager) deleteInstance(
 
 	// 4. If active, try graceful guest shutdown before force kill.
 	gracefulShutdown := false
-	if inst.State == StateRunning || inst.State == StateInitializing {
+	if !options.skipGracefulShutdown && (inst.State == StateRunning || inst.State == StateInitializing) {
 		stopTimeout := resolveStopTimeout(stored)
 		if stopTimeout > deleteGracefulShutdownTimeout {
 			stopTimeout = deleteGracefulShutdownTimeout
 		}
-		gracefulShutdown = m.tryGracefulGuestShutdown(ctx, &inst, stopTimeout)
-		if !gracefulShutdown {
+		gracefulCtx, gracefulSpanEnd := m.startLifecycleStep(ctx, "graceful_guest_shutdown",
+			attribute.String("instance_id", id),
+			attribute.String("hypervisor", string(stored.HypervisorType)),
+			attribute.String("operation", "graceful_guest_shutdown"),
+		)
+		gracefulShutdown = m.tryGracefulGuestShutdown(gracefulCtx, &inst, stopTimeout)
+		if gracefulShutdown {
+			gracefulSpanEnd(nil)
+		} else {
+			gracefulSpanEnd(errGracefulShutdownFailed)
 			log.DebugContext(ctx, "graceful shutdown before delete did not complete", "instance_id", id)
 		}
 	}
@@ -85,18 +111,33 @@ func (m *manager) deleteInstance(
 	// Also attempt kill for StateUnknown since we can't be sure if hypervisor is running
 	if !gracefulShutdown && (inst.State.RequiresVMM() || inst.State == StateUnknown) {
 		log.DebugContext(ctx, "stopping hypervisor", "instance_id", id, "state", inst.State)
-		if err := m.killHypervisor(ctx, &inst); err != nil {
+		killCtx, killSpanEnd := m.startLifecycleStep(ctx, "force_kill_hypervisor",
+			attribute.String("instance_id", id),
+			attribute.String("hypervisor", string(stored.HypervisorType)),
+			attribute.String("operation", "force_kill_hypervisor"),
+		)
+		err := m.killHypervisor(killCtx, &inst)
+		killSpanEnd(err)
+		if err != nil {
 			// Log error but continue with cleanup
 			// Best effort to clean up even if hypervisor is unresponsive
 			log.WarnContext(ctx, "failed to kill hypervisor, continuing with cleanup", "instance_id", id, "error", err)
 		}
 	}
+	m.closeFirecrackerUFFDSession(ctx, stored)
 
 	// 6. Release network allocation
 	if inst.NetworkEnabled {
 		m.unregisterEgressProxyInstance(ctx, id)
 		log.DebugContext(ctx, "releasing network", "instance_id", id, "network", "default")
-		if err := m.networkManager.ReleaseAllocation(ctx, networkAlloc); err != nil {
+		releaseNetworkCtx, releaseNetworkSpanEnd := m.startLifecycleStep(ctx, "release_network",
+			attribute.String("instance_id", id),
+			attribute.String("hypervisor", string(stored.HypervisorType)),
+			attribute.String("operation", "release_network"),
+		)
+		err := m.networkManager.ReleaseAllocation(releaseNetworkCtx, networkAlloc)
+		releaseNetworkSpanEnd(err)
+		if err != nil {
 			// Log error but continue with cleanup
 			log.WarnContext(ctx, "failed to release network, continuing with cleanup", "instance_id", id, "error", err)
 		}
@@ -141,10 +182,16 @@ func (m *manager) deleteInstance(
 
 	// 8. Delete all instance data
 	log.DebugContext(ctx, "deleting instance data", "instance_id", id)
+	_, dataSpanEnd := m.startLifecycleStep(ctx, "delete_instance_data",
+		attribute.String("instance_id", id),
+		attribute.String("operation", "delete_instance_data"),
+	)
 	if err := m.deleteInstanceData(id); err != nil {
+		dataSpanEnd(err)
 		log.ErrorContext(ctx, "failed to delete instance data", "instance_id", id, "error", err)
 		return fmt.Errorf("delete instance data: %w", err)
 	}
+	dataSpanEnd(nil)
 
 	log.InfoContext(ctx, "instance deleted successfully", "instance_id", id)
 	return nil

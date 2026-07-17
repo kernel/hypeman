@@ -193,10 +193,26 @@ type CapacityConfig struct {
 
 // HypervisorConfig holds hypervisor settings.
 type HypervisorConfig struct {
-	Default                       string                 `koanf:"default"`
-	CloudHypervisorDefaultVersion string                 `koanf:"cloud_hypervisor_default_version"`
-	FirecrackerBinaryPath         string                 `koanf:"firecracker_binary_path"`
-	Memory                        HypervisorMemoryConfig `koanf:"memory"`
+	Default                          string                          `koanf:"default"`
+	CloudHypervisorDefaultVersion    string                          `koanf:"cloud_hypervisor_default_version"`
+	FirecrackerBinaryPath            string                          `koanf:"firecracker_binary_path"`
+	FirecrackerSnapshotMemoryBackend string                          `koanf:"firecracker_snapshot_memory_backend"`
+	FirecrackerUFFDCacheMaxBytes     string                          `koanf:"firecracker_uffd_cache_max_bytes"`
+	FirecrackerMaxConcurrentRestores int                             `koanf:"firecracker_max_concurrent_restores"`
+	FirecrackerUFFDGraduation        FirecrackerUFFDGraduationConfig `koanf:"firecracker_uffd_graduation"`
+	Memory                           HypervisorMemoryConfig          `koanf:"memory"`
+}
+
+// FirecrackerUFFDGraduationConfig controls the background controller that
+// detaches running UFFD-backed VMs from their snapshot memory pager once they
+// have soaked, so long-lived VMs stop depending on a pager and old pager
+// versions retire. Disabled by default and only active on the uffd backend.
+type FirecrackerUFFDGraduationConfig struct {
+	Enabled           bool   `koanf:"enabled"`
+	MinSessionAge     string `koanf:"min_session_age"`
+	MaxConcurrent     int    `koanf:"max_concurrent"`
+	ScanInterval      string `koanf:"scan_interval"`
+	CompletionTimeout string `koanf:"completion_timeout"`
 }
 
 // HypervisorMemoryConfig holds guest memory management settings.
@@ -404,9 +420,19 @@ func defaultConfig() *Config {
 		},
 
 		Hypervisor: HypervisorConfig{
-			Default:                       "cloud-hypervisor",
-			CloudHypervisorDefaultVersion: "",
-			FirecrackerBinaryPath:         "",
+			Default:                          "cloud-hypervisor",
+			CloudHypervisorDefaultVersion:    "",
+			FirecrackerBinaryPath:            "",
+			FirecrackerSnapshotMemoryBackend: "file",
+			FirecrackerUFFDCacheMaxBytes:     "4294967296",
+			FirecrackerMaxConcurrentRestores: 32,
+			FirecrackerUFFDGraduation: FirecrackerUFFDGraduationConfig{
+				Enabled:           false,
+				MinSessionAge:     "10m",
+				MaxConcurrent:     1,
+				ScanInterval:      "1m",
+				CompletionTimeout: "10m",
+			},
 			Memory: HypervisorMemoryConfig{
 				Enabled:            false,
 				KernelPageInitMode: "hardened",
@@ -498,8 +524,30 @@ func Load(configPath string) (*Config, error) {
 	if err := k.Unmarshal("", &cfg); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
+	cfg.expandPathFields()
 
 	return &cfg, nil
+}
+
+func (c *Config) expandPathFields() {
+	c.DataDir = expandHomePath(c.DataDir)
+	c.Build.SecretsDir = expandHomePath(c.Build.SecretsDir)
+	c.Build.DockerSocket = expandHomePath(c.Build.DockerSocket)
+	c.Registry.CACertFile = expandHomePath(c.Registry.CACertFile)
+	c.Hypervisor.FirecrackerBinaryPath = expandHomePath(c.Hypervisor.FirecrackerBinaryPath)
+}
+
+func expandHomePath(path string) string {
+	// Only "~/"-prefixed paths expand; "", "~", and absolute/relative paths
+	// (none of which start with "~/") are returned unchanged.
+	if !strings.HasPrefix(path, "~/") {
+		return path
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return path
+	}
+	return filepath.Join(home, path[2:])
 }
 
 // Validate checks configuration values for correctness.
@@ -569,6 +617,9 @@ func (c *Config) Validate() error {
 	if c.Build.Timeout <= 0 {
 		return fmt.Errorf("build.timeout must be positive, got %d", c.Build.Timeout)
 	}
+	if c.Hypervisor.FirecrackerMaxConcurrentRestores < 0 {
+		return fmt.Errorf("hypervisor.firecracker_max_concurrent_restores must be >= 0, got %d", c.Hypervisor.FirecrackerMaxConcurrentRestores)
+	}
 	if c.Instances.LifecycleEventBufferSize <= 0 {
 		return fmt.Errorf("instances.lifecycle_event_buffer_size must be positive, got %d", c.Instances.LifecycleEventBufferSize)
 	}
@@ -618,6 +669,22 @@ func (c *Config) Validate() error {
 	if c.Hypervisor.Memory.KernelPageInitMode != "performance" && c.Hypervisor.Memory.KernelPageInitMode != "hardened" {
 		return fmt.Errorf("hypervisor.memory.kernel_page_init_mode must be one of {performance,hardened}, got %q", c.Hypervisor.Memory.KernelPageInitMode)
 	}
+	backend := strings.ToLower(strings.TrimSpace(c.Hypervisor.FirecrackerSnapshotMemoryBackend))
+	if backend == "" {
+		backend = "file"
+	}
+	switch backend {
+	case "file", "uffd":
+		c.Hypervisor.FirecrackerSnapshotMemoryBackend = backend
+	default:
+		return fmt.Errorf("hypervisor.firecracker_snapshot_memory_backend must be one of {file,uffd}, got %q", c.Hypervisor.FirecrackerSnapshotMemoryBackend)
+	}
+	if err := validateByteSize("hypervisor.firecracker_uffd_cache_max_bytes", c.Hypervisor.FirecrackerUFFDCacheMaxBytes); err != nil {
+		return err
+	}
+	if err := c.validateFirecrackerUFFDGraduation(); err != nil {
+		return err
+	}
 	if err := validateDuration("hypervisor.memory.active_ballooning.poll_interval", c.Hypervisor.Memory.ActiveBallooning.PollInterval); err != nil {
 		return err
 	}
@@ -666,6 +733,26 @@ func validateDuration(field string, value string) error {
 	}
 	if _, err := time.ParseDuration(value); err != nil {
 		return fmt.Errorf("%s must be a valid duration, got %q: %w", field, value, err)
+	}
+	return nil
+}
+
+func (c *Config) validateFirecrackerUFFDGraduation() error {
+	g := c.Hypervisor.FirecrackerUFFDGraduation
+	if !g.Enabled {
+		return nil
+	}
+	for field, value := range map[string]string{
+		"hypervisor.firecracker_uffd_graduation.min_session_age":    g.MinSessionAge,
+		"hypervisor.firecracker_uffd_graduation.scan_interval":      g.ScanInterval,
+		"hypervisor.firecracker_uffd_graduation.completion_timeout": g.CompletionTimeout,
+	} {
+		if err := validateDuration(field, value); err != nil {
+			return err
+		}
+	}
+	if g.MaxConcurrent < 0 {
+		return fmt.Errorf("hypervisor.firecracker_uffd_graduation.max_concurrent must not be negative")
 	}
 	return nil
 }

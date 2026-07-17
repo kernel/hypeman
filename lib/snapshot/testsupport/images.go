@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,8 +17,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// EnsureImageReady pre-warms a shared image cache under /tmp and seeds that
-// image into the test data directory so instance integration tests don't need
+// imageBuildLocks serializes concurrent builds of the SAME image into the
+// shared cache. Multiple parallel tests that request the same image would
+// otherwise race inside cacheMgr.CreateImage, where a transient file can
+// vanish mid-build (e.g. mkfs.erofs "No such file or directory"). Different
+// images may still be built in parallel.
+var imageBuildLocks sync.Map // image ref -> *sync.Mutex
+
+func imageBuildLock(ref string) *sync.Mutex {
+	m, _ := imageBuildLocks.LoadOrStore(ref, &sync.Mutex{})
+	return m.(*sync.Mutex)
+}
+
+// EnsureImageReady seeds an image from the configured shared prewarm cache,
+// falling back to a cache under /tmp, so instance integration tests don't need
 // to repull/reconvert from scratch.
 func EnsureImageReady(t *testing.T, ctx context.Context, p *paths.Paths, imageManager images.Manager, image string) {
 	t.Helper()
@@ -25,12 +38,23 @@ func EnsureImageReady(t *testing.T, ctx context.Context, p *paths.Paths, imageMa
 	ref, err := images.ParseNormalizedRef(image)
 	require.NoError(t, err)
 
-	cachePaths := paths.New(filepath.Join(os.TempDir(), "hypeman-snapshot-image-cache"))
+	cacheDir := strings.TrimSpace(os.Getenv("HYPEMAN_TEST_PREWARM_DIR"))
+	if cacheDir == "" {
+		cacheDir = filepath.Join(os.TempDir(), "hypeman-snapshot-image-cache")
+	}
+	cachePaths := paths.New(cacheDir)
 	cacheMgr, err := images.NewManager(cachePaths, 1, nil)
 	require.NoError(t, err)
 
 	prewarmCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
+
+	// Serialize the build-and-seed of this specific image so two parallel
+	// tests don't build/seed it concurrently and race in the shared cache.
+	// Distinct images proceed in parallel.
+	buildLock := imageBuildLock(ref.String())
+	buildLock.Lock()
+	defer buildLock.Unlock()
 
 	created, err := cacheMgr.CreateImage(prewarmCtx, images.CreateImageRequest{Name: image})
 	require.NoError(t, err)

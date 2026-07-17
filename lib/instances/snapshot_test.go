@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/images"
 	snapshotstore "github.com/kernel/hypeman/lib/snapshot"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -52,7 +53,7 @@ func TestStoppedSnapshotLifecycleAndForkAfterSourceDeletion(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, StateStopped, forked.State)
 	require.Equal(t, hvType, forked.HypervisorType)
-	t.Cleanup(func() { _ = mgr.DeleteInstance(context.Background(), forked.Id) })
+	t.Cleanup(func() { _ = deleteTestInstanceNow(context.Background(), mgr, forked.Id) })
 
 	require.NoError(t, mgr.DeleteSnapshot(ctx, snap.Id))
 	_, err = mgr.GetSnapshot(ctx, snap.Id)
@@ -164,6 +165,59 @@ func TestRestoreSnapshotCancelsSourceInstanceCompressionJob(t *testing.T) {
 	assert.True(t, instanceCanceled.Load(), "instance compression job should be canceled before restore")
 }
 
+// TestRestoreSnapshotRunningMissingImageReturnsNotFoundFast exercises the
+// second FIX-B repro path: restoring a snapshot to a Running target delegates to
+// restoreInstance, whose image pre-check must surface images.ErrNotFound (mapped
+// to 404 by the handler) instead of hanging in the hypervisor shim when the
+// instance's image was deleted. This drives the real restoreSnapshot ->
+// restoreInstance delegation, not just the handler boundary.
+func TestRestoreSnapshotRunningMissingImageReturnsNotFoundFast(t *testing.T) {
+	t.Parallel()
+
+	mgr, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	hvType := mgr.defaultHypervisor
+	sourceID := "snapshot-restore-missing-image-src"
+	snapshotID := "snapshot-restore-missing-image"
+
+	createStandbySnapshotSourceFixture(t, mgr, sourceID, "snapshot-restore-missing-image-src", hvType)
+
+	snapshotGuestDir := mgr.paths.SnapshotGuestDir(snapshotID)
+	require.NoError(t, os.MkdirAll(mgr.paths.SnapshotDir(snapshotID), 0755))
+	require.NoError(t, mgr.copySnapshotPayload(sourceID, snapshotGuestDir))
+
+	sourceMeta, err := mgr.loadMetadata(sourceID)
+	require.NoError(t, err)
+	require.NoError(t, mgr.saveSnapshotRecord(&snapshotRecord{
+		Snapshot: Snapshot{
+			Id:               snapshotID,
+			Name:             "restore-missing-image",
+			Kind:             SnapshotKindStandby,
+			SourceInstanceID: sourceID,
+			SourceName:       sourceMeta.Name,
+			SourceHypervisor: hvType,
+			CreatedAt:        time.Now(),
+			SizeBytes:        1,
+		},
+		StoredMetadata: sourceMeta.StoredMetadata,
+	}))
+
+	// Simulate the instance's image having been deleted: point the image manager
+	// at a different name so GetImage(sourceMeta.Image) returns ErrNotFound.
+	mgr.imageManager = readyFixtureImageManager{name: "docker.io/library/some-other-image:latest"}
+
+	start := time.Now()
+	_, err = mgr.RestoreSnapshot(ctx, sourceID, snapshotID, RestoreSnapshotRequest{
+		TargetState: StateRunning,
+	})
+	elapsed := time.Since(start)
+
+	require.Error(t, err)
+	require.ErrorIs(t, err, images.ErrNotFound)
+	require.Less(t, elapsed, 30*time.Second, "restore-from-snapshot should fail fast, not hang in the shim")
+}
+
 func TestCreateStandbySnapshotCancelsSourceInstanceCompressionJob(t *testing.T) {
 	t.Parallel()
 
@@ -271,7 +325,7 @@ func TestForkSnapshotFromCompressedSourceCopiesRawMemory(t *testing.T) {
 		TargetState: StateStopped,
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = mgr.DeleteInstance(context.Background(), forked.Id) })
+	t.Cleanup(func() { _ = deleteTestInstanceNow(context.Background(), mgr, forked.Id) })
 
 	forkSnapshotDir := mgr.paths.InstanceDir(forked.Id)
 	_, ok := findRawSnapshotMemoryFile(forkSnapshotDir)
@@ -287,11 +341,18 @@ func createStoppedSnapshotSourceFixture(t *testing.T, mgr *manager, id, name str
 	starter, err := mgr.getVMStarter(hvType)
 	require.NoError(t, err)
 
+	imageRef := integrationTestImageRef(t, "docker.io/library/alpine:latest")
+	// Restore/start resolve the instance's image up front; the real image
+	// manager has nothing seeded for this synthetic fixture, so stand in a fake
+	// that reports the fixture image as a ready host-native image (mirroring a
+	// real instance whose rootfs exists on disk).
+	mgr.imageManager = readyFixtureImageManager{name: imageRef}
+
 	now := time.Now()
 	meta := &metadata{StoredMetadata: StoredMetadata{
 		Id:                id,
 		Name:              name,
-		Image:             integrationTestImageRef(t, "docker.io/library/alpine:latest"),
+		Image:             imageRef,
 		CreatedAt:         now,
 		StoppedAt:         &now,
 		HypervisorType:    hvType,
@@ -305,6 +366,27 @@ func createStoppedSnapshotSourceFixture(t *testing.T, mgr *manager, id, name str
 	require.NoError(t, mgr.saveMetadata(meta))
 	require.NoError(t, os.WriteFile(mgr.paths.InstanceOverlay(id), []byte("overlay"), 0644))
 	require.NoError(t, os.WriteFile(mgr.paths.InstanceConfigDisk(id), []byte("config"), 0644))
+}
+
+// readyFixtureImageManager stands in for the image manager in snapshot/restore
+// fixtures: it reports a single host-native ready image so the lifecycle paths'
+// image pre-checks pass without seeding a real rootfs. All other methods embed
+// the (nil) interface and are unused by these fixtures.
+type readyFixtureImageManager struct {
+	images.Manager
+	name string
+}
+
+func (f readyFixtureImageManager) GetImage(_ context.Context, name string) (*images.Image, error) {
+	if name != f.name {
+		return nil, images.ErrNotFound
+	}
+	return &images.Image{
+		Name:     f.name,
+		Digest:   "sha256:fixture",
+		Platform: images.HostPlatformString(),
+		Status:   images.StatusReady,
+	}, nil
 }
 
 func createStandbySnapshotSourceFixture(t *testing.T, mgr *manager, id, name string, hvType hypervisor.Type) {

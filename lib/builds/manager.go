@@ -785,9 +785,13 @@ func (m *manager) waitForResult(ctx context.Context, buildID string, inst *insta
 
 		dialer, dialerErr := m.instanceManager.GetVsockDialer(ctx, inst.Id)
 		if dialerErr == nil {
-			conn, err = dialer.DialVsock(ctx, BuildAgentVsockPort)
-			if err == nil {
-				break
+			if dialer == nil {
+				err = fmt.Errorf("vsock dialer unavailable for instance %s", inst.Id)
+			} else {
+				conn, err = dialer.DialVsock(ctx, BuildAgentVsockPort)
+				if err == nil {
+					break
+				}
 			}
 		} else {
 			err = dialerErr

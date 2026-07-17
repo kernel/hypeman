@@ -233,8 +233,6 @@ var RouteScopes = map[string]Scope{
 	"GET /instances/{id}":                                 InstanceRead,
 	"POST /instances/{id}/fork":                           InstanceWrite,
 	"GET /instances/{id}/logs":                            InstanceRead,
-	"POST /instances/{id}/promote-template":               InstanceWrite,
-	"POST /instances/{id}/demote-template":                InstanceWrite,
 	"POST /instances/{id}/restore":                        InstanceWrite,
 	"DELETE /instances/{id}/snapshot-schedule":            SnapshotDelete,
 	"GET /instances/{id}/snapshot-schedule":               SnapshotRead,

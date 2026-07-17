@@ -11,6 +11,7 @@ import (
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/network"
+	restartpolicy "github.com/kernel/hypeman/lib/restart-policy"
 	snapshotstore "github.com/kernel/hypeman/lib/snapshot"
 	"github.com/kernel/hypeman/lib/tags"
 	"github.com/nrednav/cuid2"
@@ -263,9 +264,6 @@ func (m *manager) restoreSnapshot(ctx context.Context, id string, snapshotID str
 	if sourceInst.State == StateRunning {
 		return nil, fmt.Errorf("%w: cannot restore snapshot while source is %s", ErrInvalidState, sourceInst.State)
 	}
-	if sourceInst.State == StateTemplate {
-		return nil, fmt.Errorf("%w: cannot restore snapshot onto template %s; call DemoteTemplate first", ErrInvalidState, id)
-	}
 
 	targetState, err := resolveSnapshotTargetState(rec.Snapshot.Kind, req.TargetState)
 	if err != nil {
@@ -320,6 +318,10 @@ func (m *manager) restoreSnapshot(ctx context.Context, id string, snapshotID str
 	}
 	restored.SocketPath = m.paths.InstanceSocket(id, starter.SocketName())
 	restored.VsockSocket = m.paths.InstanceSocket(id, hypervisor.VsockSocketNameForType(targetHypervisor))
+	clearFirecrackerUFFDRestoreState(&restored)
+	if targetState == StateStopped {
+		restored.FirecrackerSnapshotCacheKey = ""
+	}
 	if rec.Snapshot.Kind == SnapshotKindStopped {
 		restored.VsockCID = generateVsockCID(id)
 	}
@@ -369,6 +371,7 @@ func (m *manager) restoreSnapshot(ctx context.Context, id string, snapshotID str
 }
 
 func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkSnapshotRequest) (*Instance, error) {
+	log := logger.FromContext(ctx)
 	if err := validateForkSnapshotRequest(req); err != nil {
 		return nil, err
 	}
@@ -414,15 +417,9 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 	if target != nil && target.State == compressionJobStateRunning {
 		m.recordSnapshotCompressionPreemption(ctx, snapshotCompressionPreemptionForkSnapshot, target.Target)
 	}
-	if err := m.ensureSnapshotMemoryReady(ctx, m.paths.SnapshotGuestDir(snapshotID), "", rec.StoredMetadata.HypervisorType); err != nil {
-		return nil, fmt.Errorf("prepare snapshot memory for fork: %w", err)
-	}
-
-	if err := forkvm.CopyGuestDirectory(m.paths.SnapshotGuestDir(snapshotID), dstDir); err != nil {
-		if errors.Is(err, forkvm.ErrSparseCopyUnsupported) {
-			return nil, fmt.Errorf("fork from snapshot requires sparse-capable filesystem (SEEK_DATA/SEEK_HOLE unsupported): %w", err)
-		}
-		return nil, fmt.Errorf("clone snapshot payload: %w", err)
+	shareMemFile := rec.StoredMetadata.HypervisorType == hypervisor.TypeFirecracker && rec.Snapshot.Kind == SnapshotKindStandby
+	if err := m.copySnapshotGuestDirectoryForFork(ctx, snapshotID, rec.StoredMetadata.HypervisorType, dstDir, shareMemFile); err != nil {
+		return nil, err
 	}
 
 	starter, err := m.getVMStarter(targetHypervisor)
@@ -451,6 +448,13 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 	forkMeta.VsockSocket = m.paths.InstanceSocket(forkID, hypervisor.VsockSocketNameForType(targetHypervisor))
 	forkMeta.ExitCode = nil
 	forkMeta.ExitMessage = ""
+	forkMeta.RestartStatus = restartpolicy.Status{}
+	forkMeta.FirecrackerUFFDSessionID = ""
+	forkMeta.FirecrackerUFFDPagerVersion = ""
+	forkMeta.FirecrackerUseUFFDOnNextRestore = useFirecrackerUFFDOnNextRestore(targetHypervisor, rec.Snapshot.Kind == SnapshotKindStandby, targetState)
+	if rec.Snapshot.Kind != SnapshotKindStandby {
+		forkMeta.FirecrackerSnapshotCacheKey = ""
+	}
 	if rec.Snapshot.Kind == SnapshotKindStandby {
 		forkMeta.VsockCID = rec.StoredMetadata.VsockCID
 	} else {
@@ -466,7 +470,7 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 		if forkMeta.NetworkEnabled {
 			netCfg = &hypervisor.ForkNetworkConfig{TAPDevice: network.GenerateTAPName(forkID)}
 		}
-		if _, err := starter.PrepareFork(ctx, hypervisor.ForkPrepareRequest{
+		prepareResult, err := prepareForkWithAliasReadLock(ctx, starter, hypervisor.ForkPrepareRequest{
 			SnapshotConfigPath: m.paths.InstanceSnapshotConfig(forkID),
 			SourceDataDir:      rec.StoredMetadata.DataDir,
 			TargetDataDir:      forkMeta.DataDir,
@@ -474,11 +478,20 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 			VsockSocket:        forkMeta.VsockSocket,
 			SerialLogPath:      m.paths.InstanceAppLog(forkID),
 			Network:            netCfg,
-		}); err != nil {
+		})
+		if err != nil {
 			if errors.Is(err, hypervisor.ErrNotSupported) {
 				return nil, fmt.Errorf("%w: snapshot fork is not supported for hypervisor %s", ErrNotSupported, targetHypervisor)
 			}
 			return nil, fmt.Errorf("prepare snapshot fork state: %w", err)
+		}
+		if prepareResult.RequiresSnapshotSourceAlias {
+			log.WarnContext(ctx, "snapshot fork restore requires snapshot source alias fallback",
+				"hypervisor", targetHypervisor,
+				"snapshot_id", snapshotID,
+				"fork_instance_id", forkID,
+				"source_data_dir", rec.StoredMetadata.DataDir,
+				"target_data_dir", forkMeta.DataDir)
 		}
 	}
 
@@ -498,7 +511,8 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 }
 
 func (m *manager) copySnapshotPayload(sourceInstanceID, snapshotGuestDir string) error {
-	if err := forkvm.CopyGuestDirectory(m.paths.InstanceDir(sourceInstanceID), snapshotGuestDir); err != nil {
+	err := copyGuestDirectoryWithAliasReadLock(m.paths.InstanceDir(sourceInstanceID), snapshotGuestDir)
+	if err != nil {
 		if errors.Is(err, forkvm.ErrSparseCopyUnsupported) {
 			return fmt.Errorf("snapshot requires sparse-capable filesystem (SEEK_DATA/SEEK_HOLE unsupported): %w", err)
 		}
@@ -588,7 +602,7 @@ func (m *manager) ensureSnapshotNameAvailable(sourceInstanceID, snapshotName str
 }
 
 func (m *manager) ensureInstanceNameAvailableForSnapshotFork(ctx context.Context, name string, networkEnabled bool) error {
-	existsByMetadata, err := m.instanceNameExists(name)
+	existsByMetadata, err := m.instanceNameExists(ctx, name, "snapshot_create")
 	if err != nil {
 		return fmt.Errorf("check instance name availability: %w", err)
 	}

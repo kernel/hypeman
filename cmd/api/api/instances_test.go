@@ -9,12 +9,15 @@ import (
 
 	"github.com/c2h5oh/datasize"
 	"github.com/kernel/hypeman/lib/autostandby"
+	"github.com/kernel/hypeman/lib/healthcheck"
 	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/instances"
 	"github.com/kernel/hypeman/lib/instances/phasetracking"
 	mw "github.com/kernel/hypeman/lib/middleware"
 	"github.com/kernel/hypeman/lib/oapi"
 	"github.com/kernel/hypeman/lib/paths"
+	restartpolicy "github.com/kernel/hypeman/lib/restart-policy"
 	"github.com/kernel/hypeman/lib/system"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -279,6 +282,8 @@ func (m *captureUpdateManager) UpdateInstance(ctx context.Context, id string, re
 			Image:          "docker.io/library/alpine:latest",
 			Env:            req.Env,
 			AutoStandby:    req.AutoStandby,
+			HealthCheck:    req.HealthCheck,
+			RestartPolicy:  req.RestartPolicy,
 			CreatedAt:      now,
 			HypervisorType: hypervisor.TypeCloudHypervisor,
 		},
@@ -301,6 +306,8 @@ func (m *captureCreateManager) CreateInstance(ctx context.Context, req instances
 			OverlaySize:    req.OverlaySize,
 			Vcpus:          req.Vcpus,
 			AutoStandby:    req.AutoStandby,
+			HealthCheck:    req.HealthCheck,
+			RestartPolicy:  req.RestartPolicy,
 			CreatedAt:      now,
 			HypervisorType: hypervisor.TypeCloudHypervisor,
 		},
@@ -590,6 +597,222 @@ func TestInstanceToOAPI_OmitsPhaseFieldsWhenUnset(t *testing.T) {
 	assert.Nil(t, oapiInst.PhaseDurationsMs)
 }
 
+func TestInstanceToOAPI_EchoesResolvedPlatform(t *testing.T) {
+	t.Parallel()
+
+	inst := instances.Instance{
+		StoredMetadata: instances.StoredMetadata{
+			Id:             "inst-platform",
+			Name:           "inst-platform",
+			Image:          "docker.io/library/alpine@sha256:deadbeef",
+			Platform:       "linux/amd64",
+			CreatedAt:      time.Now(),
+			HypervisorType: hypervisor.TypeCloudHypervisor,
+		},
+		State: instances.StateRunning,
+	}
+
+	oapiInst := instanceToOAPI(inst)
+	require.NotNil(t, oapiInst.Platform)
+	assert.Equal(t, "linux/amd64", *oapiInst.Platform)
+}
+
+func TestInstanceToOAPI_OmitsPlatformWhenUnset(t *testing.T) {
+	t.Parallel()
+
+	inst := instances.Instance{
+		StoredMetadata: instances.StoredMetadata{
+			Id:             "inst-no-platform",
+			Name:           "inst-no-platform",
+			Image:          "docker.io/library/alpine:latest",
+			CreatedAt:      time.Now(),
+			HypervisorType: hypervisor.TypeCloudHypervisor,
+		},
+		State: instances.StateStopped,
+	}
+
+	oapiInst := instanceToOAPI(inst)
+	assert.Nil(t, oapiInst.Platform)
+}
+
+// errCreateInstanceManager is a fake whose CreateInstance always fails with a
+// preset error, used to assert the handler maps typed image errors to statuses.
+type errCreateInstanceManager struct {
+	instances.Manager
+	err error
+}
+
+func (m *errCreateInstanceManager) CreateInstance(context.Context, instances.CreateInstanceRequest) (*instances.Instance, error) {
+	return nil, m.err
+}
+
+func TestCreateInstance_ErrorStatusMapping(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		err      error
+		wantType any
+		wantCode string
+	}{
+		{
+			name:     "platform not available -> 404",
+			err:      fmt.Errorf("resolve image: %w", images.ErrPlatformNotAvailable),
+			wantType: oapi.CreateInstance404JSONResponse{},
+			wantCode: "platform_not_available",
+		},
+		{
+			name:     "rate limited -> 429",
+			err:      fmt.Errorf("resolve image: %w", images.ErrRateLimited),
+			wantType: oapi.CreateInstance429JSONResponse{},
+			wantCode: "rate_limited",
+		},
+		{
+			name:     "image not found -> 404",
+			err:      fmt.Errorf("resolve image: %w", images.ErrNotFound),
+			wantType: oapi.CreateInstance404JSONResponse{},
+			wantCode: "not_found",
+		},
+		{
+			name:     "invalid platform -> 400",
+			err:      fmt.Errorf("resolve image: %w", images.ErrInvalidPlatform),
+			wantType: oapi.CreateInstance400JSONResponse{},
+			wantCode: "invalid_platform",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			svc := newTestService(t)
+			svc.InstanceManager = &errCreateInstanceManager{Manager: svc.InstanceManager, err: tc.err}
+
+			resp, err := svc.CreateInstance(ctx(), oapi.CreateInstanceRequestObject{
+				Body: &oapi.CreateInstanceRequest{
+					Name:  "inst-err",
+					Image: "docker.io/library/alpine:3.19",
+				},
+			})
+			require.NoError(t, err)
+			require.IsType(t, tc.wantType, resp)
+			require.Equal(t, tc.wantCode, createInstanceErrorCodeOf(resp))
+		})
+	}
+}
+
+// errActionInstanceManager is a fake whose lifecycle actions always fail with a
+// preset error, used to assert action handlers map a deleted-image
+// images.ErrNotFound (resolved at action time, e.g. start/restore/fork of a
+// stopped instance whose image was removed) to a 404 instead of a blanket 500.
+type errActionInstanceManager struct {
+	instances.Manager
+	err error
+}
+
+func (m *errActionInstanceManager) StartInstance(context.Context, string, instances.StartInstanceRequest) (*instances.Instance, error) {
+	return nil, m.err
+}
+
+func (m *errActionInstanceManager) RestoreInstance(context.Context, string) (*instances.Instance, error) {
+	return nil, m.err
+}
+
+func (m *errActionInstanceManager) ForkInstance(context.Context, string, instances.ForkInstanceRequest) (*instances.Instance, error) {
+	return nil, m.err
+}
+
+func (m *errActionInstanceManager) RestoreSnapshot(context.Context, string, string, instances.RestoreSnapshotRequest) (*instances.Instance, error) {
+	return nil, m.err
+}
+
+func TestInstanceActions_ImageNotFoundMapsTo404(t *testing.T) {
+	t.Parallel()
+
+	// The start path wraps the image lookup with %w, so a deleted image surfaces
+	// as images.ErrNotFound through the manager.
+	err := fmt.Errorf("get image: %w", images.ErrNotFound)
+	resolved := &instances.Instance{
+		StoredMetadata: instances.StoredMetadata{
+			Id:             "inst-img-gone",
+			Name:           "inst-img-gone",
+			Image:          "docker.io/library/alpine:3.19",
+			CreatedAt:      time.Now(),
+			HypervisorType: hypervisor.TypeCloudHypervisor,
+		},
+		State: instances.StateStopped,
+	}
+
+	t.Run("start -> 404", func(t *testing.T) {
+		t.Parallel()
+		svc := newTestService(t)
+		svc.InstanceManager = &errActionInstanceManager{Manager: svc.InstanceManager, err: err}
+		resp, rerr := svc.StartInstance(mw.WithResolvedInstance(ctx(), resolved.Id, resolved), oapi.StartInstanceRequestObject{Id: resolved.Id})
+		require.NoError(t, rerr)
+		r, ok := resp.(oapi.StartInstance404JSONResponse)
+		require.True(t, ok, "expected 404 response, got %T", resp)
+		require.Equal(t, "not_found", r.Code)
+	})
+
+	t.Run("restore -> 404", func(t *testing.T) {
+		t.Parallel()
+		svc := newTestService(t)
+		svc.InstanceManager = &errActionInstanceManager{Manager: svc.InstanceManager, err: err}
+		resp, rerr := svc.RestoreInstance(mw.WithResolvedInstance(ctx(), resolved.Id, resolved), oapi.RestoreInstanceRequestObject{Id: resolved.Id})
+		require.NoError(t, rerr)
+		r, ok := resp.(oapi.RestoreInstance404JSONResponse)
+		require.True(t, ok, "expected 404 response, got %T", resp)
+		require.Equal(t, "not_found", r.Code)
+	})
+
+	t.Run("fork -> 404", func(t *testing.T) {
+		t.Parallel()
+		svc := newTestService(t)
+		svc.InstanceManager = &errActionInstanceManager{Manager: svc.InstanceManager, err: err}
+		forkName := "inst-img-gone-fork"
+		resp, rerr := svc.ForkInstance(mw.WithResolvedInstance(ctx(), resolved.Id, resolved), oapi.ForkInstanceRequestObject{
+			Id:   resolved.Id,
+			Body: &oapi.ForkInstanceRequest{Name: forkName},
+		})
+		require.NoError(t, rerr)
+		r, ok := resp.(oapi.ForkInstance404JSONResponse)
+		require.True(t, ok, "expected 404 response, got %T", resp)
+		require.Equal(t, "not_found", r.Code)
+	})
+
+	t.Run("restore snapshot -> 404", func(t *testing.T) {
+		t.Parallel()
+		svc := newTestService(t)
+		svc.InstanceManager = &errActionInstanceManager{Manager: svc.InstanceManager, err: err}
+		resp, rerr := svc.RestoreInstanceSnapshot(mw.WithResolvedInstance(ctx(), resolved.Id, resolved), oapi.RestoreInstanceSnapshotRequestObject{
+			Id:         resolved.Id,
+			SnapshotId: "snap-1",
+			Body:       &oapi.RestoreInstanceSnapshotJSONRequestBody{},
+		})
+		require.NoError(t, rerr)
+		r, ok := resp.(oapi.RestoreInstanceSnapshot404JSONResponse)
+		require.True(t, ok, "expected 404 response, got %T", resp)
+		require.Equal(t, "not_found", r.Code)
+	})
+}
+
+// createInstanceErrorCodeOf extracts the Code field from a CreateInstance error response.
+func createInstanceErrorCodeOf(resp oapi.CreateInstanceResponseObject) string {
+	switch r := resp.(type) {
+	case oapi.CreateInstance400JSONResponse:
+		return r.Code
+	case oapi.CreateInstance404JSONResponse:
+		return r.Code
+	case oapi.CreateInstance409JSONResponse:
+		return r.Code
+	case oapi.CreateInstance429JSONResponse:
+		return r.Code
+	case oapi.CreateInstance500JSONResponse:
+		return r.Code
+	default:
+		return ""
+	}
+}
+
 func TestInstanceToOAPI_EmitsStandbyCompressionDelayInSnapshotPolicy(t *testing.T) {
 	t.Parallel()
 
@@ -655,6 +878,93 @@ func TestCreateInstance_MapsAutoStandbyPolicy(t *testing.T) {
 	require.NotNil(t, instance.AutoStandby.Enabled)
 	assert.True(t, *instance.AutoStandby.Enabled)
 	assert.Equal(t, idleTimeout, *instance.AutoStandby.IdleTimeout)
+}
+
+func TestCreateInstance_MapsHealthCheckPolicy(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	origMgr := svc.InstanceManager
+	mockMgr := &captureCreateManager{Manager: origMgr}
+	svc.InstanceManager = mockMgr
+
+	typ := oapi.HealthCheckTypeExec
+	interval := "5s"
+	timeout := "1s"
+
+	resp, err := svc.CreateInstance(ctx(), oapi.CreateInstanceRequestObject{
+		Body: &oapi.CreateInstanceRequest{
+			Name:  "test-health-check",
+			Image: "docker.io/library/alpine:latest",
+			HealthCheck: &oapi.HealthCheck{
+				Type:     &typ,
+				Interval: &interval,
+				Timeout:  &timeout,
+				Exec: &oapi.HealthCheckExec{
+					Command: []string{"true"},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	created, ok := resp.(oapi.CreateInstance201JSONResponse)
+	require.True(t, ok, "expected 201 response")
+	require.NotNil(t, mockMgr.lastReq)
+	require.NotNil(t, mockMgr.lastReq.HealthCheck)
+	assert.Equal(t, healthcheck.TypeExec, mockMgr.lastReq.HealthCheck.Type)
+	assert.Equal(t, []string{"true"}, mockMgr.lastReq.HealthCheck.Exec.Command)
+	assert.Equal(t, "5s", mockMgr.lastReq.HealthCheck.Interval)
+	assert.Equal(t, "1s", mockMgr.lastReq.HealthCheck.Timeout)
+
+	instance := oapi.Instance(created)
+	require.NotNil(t, instance.HealthCheck)
+	require.NotNil(t, instance.HealthCheck.Type)
+	assert.Equal(t, oapi.HealthCheckTypeExec, *instance.HealthCheck.Type)
+	require.NotNil(t, instance.HealthStatus)
+	assert.Equal(t, oapi.InstanceHealthStatusStatusStarting, instance.HealthStatus.Status)
+}
+
+func TestCreateInstance_MapsRestartPolicy(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	origMgr := svc.InstanceManager
+	mockMgr := &captureCreateManager{Manager: origMgr}
+	svc.InstanceManager = mockMgr
+
+	policy := oapi.OnFailure
+	backoff := "7s"
+	stableAfter := "2m"
+	maxAttempts := 4
+
+	resp, err := svc.CreateInstance(ctx(), oapi.CreateInstanceRequestObject{
+		Body: &oapi.CreateInstanceRequest{
+			Name:  "test-restart-policy",
+			Image: "docker.io/library/alpine:latest",
+			RestartPolicy: &oapi.RestartPolicy{
+				Policy:      &policy,
+				Backoff:     &backoff,
+				StableAfter: &stableAfter,
+				MaxAttempts: &maxAttempts,
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	created, ok := resp.(oapi.CreateInstance201JSONResponse)
+	require.True(t, ok, "expected 201 response")
+	require.NotNil(t, mockMgr.lastReq)
+	require.NotNil(t, mockMgr.lastReq.RestartPolicy)
+	assert.Equal(t, restartpolicy.PolicyOnFailure, mockMgr.lastReq.RestartPolicy.Policy)
+	assert.Equal(t, "7s", mockMgr.lastReq.RestartPolicy.Backoff)
+	assert.Equal(t, "2m0s", mockMgr.lastReq.RestartPolicy.StableAfter)
+	assert.Equal(t, 4, mockMgr.lastReq.RestartPolicy.MaxAttempts)
+
+	instance := oapi.Instance(created)
+	require.NotNil(t, instance.RestartPolicy)
+	require.NotNil(t, instance.RestartPolicy.Policy)
+	assert.Equal(t, oapi.OnFailure, *instance.RestartPolicy.Policy)
 }
 
 func TestUpdateInstance_MapsEnvPatch(t *testing.T) {
@@ -768,6 +1078,173 @@ func TestUpdateInstance_MapsAutoStandbyPatch(t *testing.T) {
 	require.NotNil(t, instance.AutoStandby)
 	require.NotNil(t, instance.AutoStandby.Enabled)
 	assert.True(t, *instance.AutoStandby.Enabled)
+}
+
+func TestUpdateInstance_MapsHealthCheckPatch(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	origMgr := svc.InstanceManager
+	now := time.Now()
+	mockMgr := &captureUpdateManager{
+		Manager: origMgr,
+		result: &instances.Instance{
+			StoredMetadata: instances.StoredMetadata{
+				Id:             "inst-update-health-check",
+				Name:           "inst-update-health-check",
+				Image:          "docker.io/library/alpine:latest",
+				CreatedAt:      now,
+				HypervisorType: hypervisor.TypeCloudHypervisor,
+				HealthCheck: &healthcheck.Policy{
+					Type: healthcheck.TypeTCP,
+					TCP:  &healthcheck.TCPCheck{Port: 8080},
+				},
+			},
+			State: instances.StateStopped,
+		},
+	}
+	svc.InstanceManager = mockMgr
+
+	typ := oapi.HealthCheckTypeTcp
+	resolved := &instances.Instance{
+		StoredMetadata: instances.StoredMetadata{
+			Id:             "inst-update-health-check",
+			Name:           "inst-update-health-check",
+			Image:          "docker.io/library/alpine:latest",
+			CreatedAt:      now,
+			HypervisorType: hypervisor.TypeCloudHypervisor,
+			NetworkEnabled: true,
+		},
+		State: instances.StateStopped,
+	}
+
+	resp, err := svc.UpdateInstance(mw.WithResolvedInstance(ctx(), resolved.Id, resolved), oapi.UpdateInstanceRequestObject{
+		Id: resolved.Id,
+		Body: &oapi.UpdateInstanceRequest{
+			HealthCheck: &oapi.HealthCheck{
+				Type: &typ,
+				Tcp:  &oapi.HealthCheckTCP{Port: 8080},
+			},
+		},
+	})
+	require.NoError(t, err)
+	updated, ok := resp.(oapi.UpdateInstance200JSONResponse)
+	require.True(t, ok, "expected 200 response")
+
+	require.NotNil(t, mockMgr.lastReq)
+	require.NotNil(t, mockMgr.lastReq.HealthCheck)
+	assert.Equal(t, resolved.Id, mockMgr.lastID)
+	assert.Equal(t, healthcheck.TypeTCP, mockMgr.lastReq.HealthCheck.Type)
+	assert.Equal(t, uint16(8080), mockMgr.lastReq.HealthCheck.TCP.Port)
+
+	instance := oapi.Instance(updated)
+	require.NotNil(t, instance.HealthCheck)
+	require.NotNil(t, instance.HealthCheck.Type)
+	assert.Equal(t, oapi.HealthCheckTypeTcp, *instance.HealthCheck.Type)
+	require.NotNil(t, instance.HealthStatus)
+	assert.Equal(t, oapi.InstanceHealthStatusStatusUnknown, instance.HealthStatus.Status)
+}
+
+func TestUpdateInstance_MapsRestartPolicyPatch(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	origMgr := svc.InstanceManager
+	now := time.Now()
+	mockMgr := &captureUpdateManager{
+		Manager: origMgr,
+		result: &instances.Instance{
+			StoredMetadata: instances.StoredMetadata{
+				Id:             "inst-update-restart-policy",
+				Name:           "inst-update-restart-policy",
+				Image:          "docker.io/library/alpine:latest",
+				CreatedAt:      now,
+				HypervisorType: hypervisor.TypeCloudHypervisor,
+				RestartPolicy: &restartpolicy.Policy{
+					Policy:      restartpolicy.PolicyAlways,
+					Backoff:     "5s",
+					StableAfter: "10m0s",
+				},
+				RestartStatus: restartpolicy.Status{
+					BlockedReason: restartpolicy.BlockedReasonManualStop,
+				},
+			},
+			State: instances.StateStopped,
+		},
+	}
+	svc.InstanceManager = mockMgr
+
+	policy := oapi.Always
+	resolved := &instances.Instance{
+		StoredMetadata: instances.StoredMetadata{
+			Id:             "inst-update-restart-policy",
+			Name:           "inst-update-restart-policy",
+			Image:          "docker.io/library/alpine:latest",
+			CreatedAt:      now,
+			HypervisorType: hypervisor.TypeCloudHypervisor,
+		},
+		State: instances.StateStopped,
+	}
+
+	resp, err := svc.UpdateInstance(mw.WithResolvedInstance(ctx(), resolved.Id, resolved), oapi.UpdateInstanceRequestObject{
+		Id: resolved.Id,
+		Body: &oapi.UpdateInstanceRequest{
+			RestartPolicy: &oapi.RestartPolicy{Policy: &policy},
+		},
+	})
+	require.NoError(t, err)
+	updated, ok := resp.(oapi.UpdateInstance200JSONResponse)
+	require.True(t, ok, "expected 200 response")
+
+	require.NotNil(t, mockMgr.lastReq)
+	assert.True(t, mockMgr.lastReq.RestartPolicySet)
+	require.NotNil(t, mockMgr.lastReq.RestartPolicy)
+	assert.Equal(t, restartpolicy.PolicyAlways, mockMgr.lastReq.RestartPolicy.Policy)
+
+	instance := oapi.Instance(updated)
+	require.NotNil(t, instance.RestartPolicy)
+	require.NotNil(t, instance.RestartStatus)
+	require.NotNil(t, instance.RestartStatus.BlockedReason)
+	assert.Equal(t, oapi.ManualStop, *instance.RestartStatus.BlockedReason)
+}
+
+func TestUpdateInstance_RejectsInvalidRestartPolicy(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	origMgr := svc.InstanceManager
+	mockMgr := &captureUpdateManager{Manager: origMgr}
+	svc.InstanceManager = mockMgr
+
+	now := time.Now()
+	resolved := &instances.Instance{
+		StoredMetadata: instances.StoredMetadata{
+			Id:             "inst-update-restart-policy",
+			Name:           "inst-update-restart-policy",
+			Image:          "docker.io/library/alpine:latest",
+			CreatedAt:      now,
+			HypervisorType: hypervisor.TypeCloudHypervisor,
+		},
+		State: instances.StateStopped,
+	}
+	policy := oapi.OnFailure
+	backoff := "0s"
+
+	resp, err := svc.UpdateInstance(mw.WithResolvedInstance(ctx(), resolved.Id, resolved), oapi.UpdateInstanceRequestObject{
+		Id: resolved.Id,
+		Body: &oapi.UpdateInstanceRequest{
+			RestartPolicy: &oapi.RestartPolicy{
+				Policy:  &policy,
+				Backoff: &backoff,
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	badReq, ok := resp.(oapi.UpdateInstance400JSONResponse)
+	require.True(t, ok, "expected 400 response")
+	assert.Equal(t, "invalid_restart_policy", badReq.Code)
+	assert.Nil(t, mockMgr.lastReq)
 }
 
 func TestUpdateInstance_RejectsZeroAutoStandbyIgnoreDestinationPort(t *testing.T) {
@@ -999,6 +1476,43 @@ func TestForkInstance_InvalidRequest(t *testing.T) {
 	badReq, ok := resp.(oapi.ForkInstance400JSONResponse)
 	require.True(t, ok, "expected 400 response")
 	assert.Equal(t, "invalid_request", badReq.Code)
+}
+
+func TestForkInstance_InsufficientResources(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	source := instances.Instance{
+		StoredMetadata: instances.StoredMetadata{
+			Id:             "src-instance",
+			Name:           "src-instance",
+			Image:          "docker.io/library/alpine:latest",
+			CreatedAt:      time.Now(),
+			HypervisorType: hypervisor.TypeFirecracker,
+		},
+		State: instances.StateStandby,
+	}
+
+	mockMgr := &captureForkManager{
+		Manager: svc.InstanceManager,
+		err:     fmt.Errorf("apply fork target state: %w: insufficient network bandwidth", instances.ErrInsufficientResources),
+	}
+	svc.InstanceManager = mockMgr
+
+	resp, err := svc.ForkInstance(
+		mw.WithResolvedInstance(ctx(), source.Id, source),
+		oapi.ForkInstanceRequestObject{
+			Id: source.Id,
+			Body: &oapi.ForkInstanceRequest{
+				Name: "forked-instance",
+			},
+		},
+	)
+	require.NoError(t, err)
+
+	conflict, ok := resp.(oapi.ForkInstance409JSONResponse)
+	require.True(t, ok, "expected 409 response")
+	assert.Equal(t, "insufficient_resources", conflict.Code)
 }
 
 func TestStandbyInstance_InvalidRequest(t *testing.T) {

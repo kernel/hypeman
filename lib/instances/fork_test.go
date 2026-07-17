@@ -4,23 +4,27 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/kernel/hypeman/lib/autostandby"
 	"github.com/kernel/hypeman/lib/guest"
+	"github.com/kernel/hypeman/lib/healthcheck"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/instances/phasetracking"
 	"github.com/kernel/hypeman/lib/paths"
 	snapshotstore "github.com/kernel/hypeman/lib/snapshot"
+	snapshottest "github.com/kernel/hypeman/lib/snapshot/testsupport"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -135,6 +139,277 @@ func TestCleanupForkInstanceOnError(t *testing.T) {
 	assert.ErrorIs(t, err, ErrNotFound)
 }
 
+func TestGetInstanceWaitsDuringSnapshotSourceAlias(t *testing.T) {
+	manager, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	sourceID := "fork-alias-source"
+	aliasID := "fork-alias-child"
+	now := time.Now()
+	for _, meta := range []*metadata{
+		{StoredMetadata: StoredMetadata{
+			Id:                sourceID,
+			Name:              sourceID,
+			Image:             integrationTestImageRef(t, "docker.io/library/alpine:latest"),
+			CreatedAt:         now,
+			StoppedAt:         &now,
+			HypervisorType:    hypervisor.TypeFirecracker,
+			HypervisorVersion: "test",
+			SocketPath:        paths.New(manager.paths.DataDir()).InstanceSocket(sourceID, "fc.sock"),
+			DataDir:           paths.New(manager.paths.DataDir()).InstanceDir(sourceID),
+			VsockCID:          42,
+			VsockSocket:       paths.New(manager.paths.DataDir()).InstanceVsockSocket(sourceID),
+		}},
+		{StoredMetadata: StoredMetadata{
+			Id:                aliasID,
+			Name:              aliasID,
+			Image:             integrationTestImageRef(t, "docker.io/library/alpine:latest"),
+			CreatedAt:         now,
+			HypervisorType:    hypervisor.TypeFirecracker,
+			HypervisorVersion: "test",
+			SocketPath:        paths.New(manager.paths.DataDir()).InstanceSocket(aliasID, "fc.sock"),
+			DataDir:           paths.New(manager.paths.DataDir()).InstanceDir(aliasID),
+			VsockCID:          43,
+			VsockSocket:       paths.New(manager.paths.DataDir()).InstanceVsockSocket(aliasID),
+		}},
+	} {
+		require.NoError(t, manager.ensureDirectories(meta.Id))
+		require.NoError(t, manager.saveMetadata(meta))
+	}
+
+	sourceDir := manager.paths.InstanceDir(sourceID)
+	childDir := manager.paths.InstanceDir(aliasID)
+	backupDir := sourceDir + ".bak"
+
+	unlockAlias := hypervisor.LockSnapshotSourceAliasMutation()
+	aliasLocked := true
+	defer func() {
+		if aliasLocked {
+			unlockAlias()
+		}
+	}()
+	require.NoError(t, os.Rename(sourceDir, backupDir))
+	require.NoError(t, os.Symlink(childDir, sourceDir))
+
+	type getResult struct {
+		inst *Instance
+		err  error
+	}
+	done := make(chan getResult, 1)
+	go func() {
+		inst, err := manager.GetInstance(ctx, sourceID)
+		done <- getResult{inst: inst, err: err}
+	}()
+
+	select {
+	case got := <-done:
+		t.Fatalf("GetInstance returned during source alias mutation: inst=%v err=%v", got.inst, got.err)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	require.NoError(t, os.Remove(sourceDir))
+	require.NoError(t, os.Rename(backupDir, sourceDir))
+	unlockAlias()
+	aliasLocked = false
+
+	got := <-done
+	require.NoError(t, got.err)
+	require.NotNil(t, got.inst)
+	assert.Equal(t, sourceID, got.inst.Id)
+}
+
+func TestForkInstanceStoppedSourceUsesReadLock(t *testing.T) {
+	manager, _ := setupTestManager(t)
+	ctx := context.Background()
+	hvType := hypervisor.Type("concurrent-fork-test")
+	hypervisor.RegisterCapabilities(hvType, hypervisor.Capabilities{SupportsConcurrentForkPrepare: true})
+	manager.vmStarters[hvType] = concurrentForkPrepareTestStarter{}
+
+	sourceID := "fork-stopped-read-lock-source"
+	createStoppedSnapshotSourceFixture(t, manager, sourceID, sourceID, hvType)
+
+	sourceLock := manager.getInstanceLock(sourceID)
+	sourceLock.RLock()
+	defer sourceLock.RUnlock()
+
+	type forkResult struct {
+		inst *Instance
+		err  error
+	}
+	done := make(chan forkResult, 1)
+	go func() {
+		inst, err := manager.ForkInstance(ctx, sourceID, ForkInstanceRequest{Name: "fork-stopped-read-lock-copy"})
+		done <- forkResult{inst: inst, err: err}
+	}()
+
+	select {
+	case got := <-done:
+		require.NoError(t, got.err)
+		require.NotNil(t, got.inst)
+		assert.Equal(t, StateStopped, got.inst.State)
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("ForkInstance blocked behind a source read lock")
+	}
+}
+
+type concurrentForkPrepareTestStarter struct{}
+
+func (concurrentForkPrepareTestStarter) SocketName() string { return "concurrent-fork-test.sock" }
+
+func (concurrentForkPrepareTestStarter) GetBinaryPath(*paths.Paths, string) (string, error) {
+	return "", nil
+}
+
+func (concurrentForkPrepareTestStarter) GetVersion(*paths.Paths) (string, error) { return "test", nil }
+
+func (concurrentForkPrepareTestStarter) StartVM(context.Context, *paths.Paths, string, string, hypervisor.VMConfig) (int, hypervisor.Hypervisor, error) {
+	return 0, nil, nil
+}
+
+func (concurrentForkPrepareTestStarter) RestoreVM(_ context.Context, _ *paths.Paths, _ string, socketPath string, _ string, _ hypervisor.RestoreOptions) (int, hypervisor.Hypervisor, error) {
+	if err := os.MkdirAll(filepath.Dir(socketPath), 0755); err != nil {
+		return 0, nil, err
+	}
+	if err := os.WriteFile(socketPath, []byte("socket"), 0644); err != nil {
+		return 0, nil, err
+	}
+	return 1, lifecycleNoopHypervisor{state: hypervisor.StateRunning}, nil
+}
+
+func (concurrentForkPrepareTestStarter) PrepareFork(context.Context, hypervisor.ForkPrepareRequest) (hypervisor.ForkPrepareResult, error) {
+	return hypervisor.ForkPrepareResult{}, nil
+}
+
+func TestForkInstanceStandbyRunningTargetSkipsSourceWriteLockWithoutAlias(t *testing.T) {
+	manager, _ := setupTestManager(t)
+	ctx := context.Background()
+	hvType := hypervisor.Type("concurrent-fork-restore-test")
+	hypervisor.RegisterCapabilities(hvType, hypervisor.Capabilities{SupportsConcurrentForkPrepare: true})
+	hypervisor.RegisterClientFactory(hvType, func(string) (hypervisor.Hypervisor, error) {
+		return lifecycleNoopHypervisor{state: hypervisor.StateRunning}, nil
+	})
+	manager.vmStarters[hvType] = concurrentForkPrepareTestStarter{}
+
+	sourceID := "fork-standby-running-read-lock-source"
+	createStandbySnapshotSourceFixture(t, manager, sourceID, sourceID, hvType)
+	meta, err := manager.loadMetadata(sourceID)
+	require.NoError(t, err)
+	meta.StoredMetadata.SkipGuestAgent = true
+	require.NoError(t, manager.saveMetadata(meta))
+
+	sourceLock := manager.getInstanceLock(sourceID)
+	sourceLock.RLock()
+	defer sourceLock.RUnlock()
+
+	type forkResult struct {
+		inst *Instance
+		err  error
+	}
+	done := make(chan forkResult, 1)
+	go func() {
+		inst, err := manager.ForkInstance(ctx, sourceID, ForkInstanceRequest{
+			Name:        "fork-standby-running-read-lock-copy",
+			TargetState: StateRunning,
+		})
+		done <- forkResult{inst: inst, err: err}
+	}()
+
+	select {
+	case got := <-done:
+		require.NoError(t, got.err)
+		require.NotNil(t, got.inst)
+		assert.Contains(t, []State{StateRunning, StateInitializing}, got.inst.State)
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("ForkInstance blocked behind the source write lock for a no-alias restore")
+	}
+}
+
+func TestApplyForkTargetStateWithSourceLockRequiresStandbySource(t *testing.T) {
+	t.Parallel()
+
+	manager, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	sourceID := "fork-alias-running-source"
+	forkID := "fork-alias-running-child"
+	now := time.Now()
+	require.NoError(t, manager.ensureDirectories(sourceID))
+	require.NoError(t, manager.ensureDirectories(forkID))
+
+	sourceSocket := manager.paths.InstanceSocket(sourceID, "fc.sock")
+	require.NoError(t, os.MkdirAll(filepath.Dir(sourceSocket), 0755))
+	require.NoError(t, os.WriteFile(sourceSocket, []byte("socket"), 0644))
+	manager.storeCachedHypervisorState(sourceID, hypervisor.StateRunning)
+	require.NoError(t, manager.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
+		Id:                sourceID,
+		Name:              sourceID,
+		Image:             integrationTestImageRef(t, "docker.io/library/alpine:latest"),
+		CreatedAt:         now,
+		HypervisorType:    hypervisor.TypeFirecracker,
+		HypervisorVersion: "test",
+		SocketPath:        sourceSocket,
+		DataDir:           manager.paths.InstanceDir(sourceID),
+		VsockCID:          42,
+		VsockSocket:       manager.paths.InstanceVsockSocket(sourceID),
+	}}))
+
+	forkSnapshotDir := manager.paths.InstanceSnapshotLatest(forkID)
+	require.NoError(t, os.MkdirAll(forkSnapshotDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(forkSnapshotDir, "memory"), []byte("snapshot"), 0644))
+	require.NoError(t, manager.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
+		Id:                forkID,
+		Name:              forkID,
+		Image:             integrationTestImageRef(t, "docker.io/library/alpine:latest"),
+		CreatedAt:         now,
+		HypervisorType:    hypervisor.TypeFirecracker,
+		HypervisorVersion: "test",
+		SocketPath:        manager.paths.InstanceSocket(forkID, "fc.sock"),
+		DataDir:           manager.paths.InstanceDir(forkID),
+		VsockCID:          42,
+		VsockSocket:       manager.paths.InstanceVsockSocket(forkID),
+		SkipGuestAgent:    true,
+	}}))
+
+	_, err := manager.applyForkTargetStateWithSourceLock(ctx, manager.getInstanceLock(sourceID), sourceID, forkID, StateRunning)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidState)
+	assert.Contains(t, err.Error(), "source fork-alias-running-source is now")
+}
+
+func TestForkInstanceStoppedSourceRequiresWriteLockWithoutConcurrentPrepare(t *testing.T) {
+	manager, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	sourceID := "fork-stopped-write-lock-source"
+	createStoppedSnapshotSourceFixture(t, manager, sourceID, sourceID, hypervisor.TypeQEMU)
+
+	sourceLock := manager.getInstanceLock(sourceID)
+	sourceLock.RLock()
+
+	type forkResult struct {
+		inst *Instance
+		err  error
+	}
+	done := make(chan forkResult, 1)
+	go func() {
+		inst, err := manager.ForkInstance(ctx, sourceID, ForkInstanceRequest{Name: "fork-stopped-write-lock-copy"})
+		done <- forkResult{inst: inst, err: err}
+	}()
+
+	select {
+	case got := <-done:
+		sourceLock.RUnlock()
+		t.Fatalf("ForkInstance returned without exclusive source lock: inst=%v err=%v", got.inst, got.err)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	sourceLock.RUnlock()
+	got := <-done
+	require.NoError(t, got.err)
+	require.NotNil(t, got.inst)
+	assert.Equal(t, StateStopped, got.inst.State)
+}
+
 func TestForkInstance_CleansUpOnTargetTransitionError(t *testing.T) {
 	t.Parallel()
 	manager, _ := setupTestManager(t)
@@ -219,6 +494,69 @@ func TestForkInstanceRejectsDuplicateNameForNonNetworkedSource(t *testing.T) {
 	assert.Contains(t, err.Error(), "already exists")
 }
 
+func TestSaveForkMetadataSerializesNameAdmission(t *testing.T) {
+	t.Parallel()
+	manager, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	now := time.Now()
+	metas := []*metadata{
+		{StoredMetadata: StoredMetadata{
+			Id:                "fork-concurrent-name-a",
+			Name:              "fork-concurrent-name",
+			Image:             integrationTestImageRef(t, "docker.io/library/alpine:latest"),
+			CreatedAt:         now,
+			HypervisorType:    hypervisor.TypeCloudHypervisor,
+			HypervisorVersion: "test",
+			SocketPath:        paths.New(manager.paths.DataDir()).InstanceSocket("fork-concurrent-name-a", "cloud-hypervisor.sock"),
+			DataDir:           paths.New(manager.paths.DataDir()).InstanceDir("fork-concurrent-name-a"),
+			VsockCID:          42,
+			VsockSocket:       paths.New(manager.paths.DataDir()).InstanceVsockSocket("fork-concurrent-name-a"),
+		}},
+		{StoredMetadata: StoredMetadata{
+			Id:                "fork-concurrent-name-b",
+			Name:              "fork-concurrent-name",
+			Image:             integrationTestImageRef(t, "docker.io/library/alpine:latest"),
+			CreatedAt:         now,
+			HypervisorType:    hypervisor.TypeCloudHypervisor,
+			HypervisorVersion: "test",
+			SocketPath:        paths.New(manager.paths.DataDir()).InstanceSocket("fork-concurrent-name-b", "cloud-hypervisor.sock"),
+			DataDir:           paths.New(manager.paths.DataDir()).InstanceDir("fork-concurrent-name-b"),
+			VsockCID:          43,
+			VsockSocket:       paths.New(manager.paths.DataDir()).InstanceVsockSocket("fork-concurrent-name-b"),
+		}},
+	}
+	for _, meta := range metas {
+		require.NoError(t, manager.ensureDirectories(meta.Id))
+	}
+
+	var wg sync.WaitGroup
+	errs := make([]error, len(metas))
+	for i := range metas {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errs[i] = manager.saveForkMetadata(ctx, metas[i])
+		}(i)
+	}
+	wg.Wait()
+
+	successes := 0
+	duplicates := 0
+	for _, err := range errs {
+		switch {
+		case err == nil:
+			successes++
+		case errors.Is(err, ErrAlreadyExists):
+			duplicates++
+		default:
+			require.NoError(t, err)
+		}
+	}
+	assert.Equal(t, 1, successes)
+	assert.Equal(t, 1, duplicates)
+}
+
 func TestForkInstanceFromStandbyCancelsCompressionJobAndCopiesRawMemory(t *testing.T) {
 	t.Parallel()
 
@@ -263,7 +601,7 @@ func TestForkInstanceFromStandbyCancelsCompressionJobAndCopiesRawMemory(t *testi
 	}
 	manager.compressionMu.Unlock()
 
-	forked, err := manager.forkInstanceFromStoppedOrStandby(ctx, sourceID, ForkInstanceRequest{
+	forked, _, err := manager.forkInstanceFromStoppedOrStandby(ctx, sourceID, ForkInstanceRequest{
 		Name:        "fork-standby-compressed-copy",
 		TargetState: StateStopped,
 	}, true)
@@ -279,6 +617,44 @@ func TestForkInstanceFromStandbyCancelsCompressionJobAndCopiesRawMemory(t *testi
 	assert.False(t, ok, "forked standby guest directory should not retain compressed memory artifacts from the source instance")
 }
 
+func TestApplyForkTargetStateStoppedRefreshesSnapshotForkCID(t *testing.T) {
+	t.Parallel()
+
+	manager, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	forkID := "fork-target-stopped"
+	require.NoError(t, manager.ensureDirectories(forkID))
+	snapshotDir := manager.paths.InstanceSnapshotLatest(forkID)
+	require.NoError(t, os.MkdirAll(snapshotDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(snapshotDir, "memory"), []byte("snapshot"), 0644))
+
+	const sourceCID = int64(100)
+	require.NotEqual(t, sourceCID, generateVsockCID(forkID))
+	meta := &metadata{StoredMetadata: StoredMetadata{
+		Id:             forkID,
+		Name:           forkID,
+		CreatedAt:      time.Now(),
+		HypervisorType: hypervisor.TypeFirecracker,
+		SocketPath:     manager.paths.InstanceSocket(forkID, "firecracker.sock"),
+		DataDir:        manager.paths.InstanceDir(forkID),
+		VsockCID:       sourceCID,
+		VsockSocket:    manager.paths.InstanceVsockSocket(forkID),
+	}}
+	meta.StoredMetadata.Phases.Record(phasetracking.PhaseStandby, time.Now())
+	require.NoError(t, manager.saveMetadata(meta))
+
+	inst, err := manager.applyForkTargetState(ctx, forkID, StateStopped)
+	require.NoError(t, err)
+	require.Equal(t, StateStopped, inst.State)
+	require.Equal(t, generateVsockCID(forkID), inst.VsockCID)
+	require.NoDirExists(t, snapshotDir)
+
+	updated, err := manager.loadMetadata(forkID)
+	require.NoError(t, err)
+	assert.Equal(t, generateVsockCID(forkID), updated.StoredMetadata.VsockCID)
+}
+
 func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 	t.Parallel()
 	startedAt := time.Now().Add(-2 * time.Minute)
@@ -290,6 +666,9 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 	pendingLevel := 3
 
 	src := StoredMetadata{
+		Image:         "docker.io/library/alpine:3.19",
+		ResolvedImage: "docker.io/library/alpine@sha256:amd64digest",
+		Platform:      "linux/amd64",
 		Env:           map[string]string{"A": "1"},
 		Tags:          map[string]string{"m": "x"},
 		Volumes:       []VolumeAttachment{{VolumeID: "vol-1", MountPath: "/data"}},
@@ -305,6 +684,13 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 			IdleTimeout:            "5m",
 			IgnoreSourceCIDRs:      []string{"10.0.0.0/8"},
 			IgnoreDestinationPorts: []uint16{22},
+		},
+		HealthCheck: &healthcheck.Policy{
+			Type: healthcheck.TypeHTTP,
+			HTTP: &healthcheck.HTTPCheck{
+				Port: 80,
+				Path: "/",
+			},
 		},
 		SnapshotPolicy: &SnapshotPolicy{
 			Compression: &snapshotstore.SnapshotCompressionConfig{
@@ -325,6 +711,8 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 
 	cloned := cloneStoredMetadata(src)
 	require.Equal(t, src, cloned)
+	require.Equal(t, "linux/amd64", cloned.Platform, "resolved platform must survive fork/snapshot-restore")
+	require.Equal(t, "docker.io/library/alpine@sha256:amd64digest", cloned.ResolvedImage, "resolved boot image must survive fork/snapshot-restore")
 
 	cloned.Env["A"] = "2"
 	cloned.Tags["m"] = "y"
@@ -336,6 +724,7 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 	*cloned.ExitCode = 42
 	cloned.AutoStandby.IgnoreSourceCIDRs[0] = "192.168.0.0/16"
 	cloned.AutoStandby.IgnoreDestinationPorts[0] = 443
+	cloned.HealthCheck.HTTP.Path = "/healthz"
 	*cloned.SnapshotPolicy.Compression.Level = 9
 	now := time.Now()
 	*cloned.PendingStandbyCompression.Policy.Level = 1
@@ -353,6 +742,7 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 	require.Equal(t, 17, *src.ExitCode)
 	require.Equal(t, "10.0.0.0/8", src.AutoStandby.IgnoreSourceCIDRs[0])
 	require.Equal(t, uint16(22), src.AutoStandby.IgnoreDestinationPorts[0])
+	require.Equal(t, "/", src.HealthCheck.HTTP.Path)
 	require.Equal(t, 5, *src.SnapshotPolicy.Compression.Level)
 	require.NotNil(t, src.PendingStandbyCompression)
 	require.NotNil(t, src.PendingStandbyCompression.Policy.Level)
@@ -460,6 +850,7 @@ func TestForkCloudHypervisorFromRunningNetwork(t *testing.T) {
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
 		t.Skip("/dev/kvm not available, skipping on this platform")
 	}
+	acquireHeavyIO(t)
 
 	manager, tmpDir := setupTestManager(t)
 	ctx := context.Background()
@@ -501,7 +892,7 @@ func TestForkCloudHypervisorFromRunningNetwork(t *testing.T) {
 	})
 	require.NoError(t, err)
 	sourceID := source.Id
-	t.Cleanup(func() { _ = manager.DeleteInstance(context.Background(), sourceID) })
+	t.Cleanup(func() { _ = deleteTestInstanceNow(context.Background(), manager, sourceID) })
 	source, err = waitForInstanceState(ctx, manager, source.Id, StateRunning, integrationTestTimeout(20*time.Second))
 	require.NoError(t, err)
 	require.NoError(t, waitForVMReady(ctx, source.SocketPath, 5*time.Second))
@@ -527,7 +918,7 @@ func TestForkCloudHypervisorFromRunningNetwork(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, StateRunning, forked.State)
 	forkedID := forked.Id
-	t.Cleanup(func() { _ = manager.DeleteInstance(context.Background(), forkedID) })
+	t.Cleanup(func() { _ = deleteTestInstanceNow(context.Background(), manager, forkedID) })
 
 	// Source should be restored and still reachable by its private IP.
 	sourceAfterFork, err := manager.GetInstance(ctx, source.Id)
@@ -557,6 +948,119 @@ func TestForkCloudHypervisorFromRunningNetwork(t *testing.T) {
 	assert.Equal(t, phasetracking.PhaseRunning, forked.Phases.Current)
 	assert.Zero(t, forked.Phases.Cumulative[phasetracking.PhaseRunning], "fork should not inherit source's running ledger")
 	assert.Greater(t, sourceAfterFork.Phases.Cumulative[phasetracking.PhaseRunning], int64(0), "source's pre-fork running stint should be cumulated")
+}
+
+func TestCloudHypervisorWarmForkChain(t *testing.T) {
+	t.Parallel()
+	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
+		t.Skip("/dev/kvm not available, skipping on this platform")
+	}
+
+	manager, tmpDir := setupTestManager(t)
+	runWarmForkChain(t, manager, tmpDir, warmForkChainConfig{
+		hypervisor: hypervisor.TypeCloudHypervisor,
+		namePrefix: "ch",
+	})
+}
+
+type warmForkChainConfig struct {
+	hypervisor hypervisor.Type
+	namePrefix string
+}
+
+func runWarmForkChain(t *testing.T, mgr *manager, tmpDir string, cfg warmForkChainConfig) {
+	t.Helper()
+	acquireHeavyIO(t)
+
+	ctx := context.Background()
+	readyTimeout := 90 * time.Second
+	p := paths.New(tmpDir)
+
+	imageManager, err := images.NewManager(p, 1, nil)
+	require.NoError(t, err)
+	imageName := integrationTestImageRef(t, "docker.io/library/alpine:latest")
+	snapshottest.EnsureImageReady(t, ctx, p, imageManager, imageName)
+
+	require.NoError(t, mgr.systemManager.EnsureSystemFiles(ctx))
+
+	source, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
+		Name:           cfg.namePrefix + "-warm-chain-src",
+		Image:          imageName,
+		Size:           lifecycleTestMemorySize,
+		OverlaySize:    1024 * 1024 * 1024,
+		Vcpus:          1,
+		NetworkEnabled: false,
+		Hypervisor:     cfg.hypervisor,
+		Cmd:            []string{"sleep", "infinity"},
+	})
+	require.NoError(t, err)
+	sourceID := source.Id
+	sourceDeleted := false
+	t.Cleanup(func() {
+		if !sourceDeleted {
+			_ = deleteTestInstanceNow(context.Background(), mgr, sourceID)
+		}
+	})
+
+	source, err = waitForInstanceState(ctx, mgr, sourceID, StateRunning, readyTimeout)
+	require.NoError(t, err)
+	require.NoError(t, waitForExecAgent(ctx, mgr, sourceID, readyTimeout))
+
+	snapshot, err := mgr.CreateSnapshot(ctx, sourceID, CreateSnapshotRequest{
+		Kind: SnapshotKindStandby,
+		Name: cfg.namePrefix + "-warm-chain-snap",
+	})
+	require.NoError(t, err)
+	require.Equal(t, SnapshotKindStandby, snapshot.Kind)
+	snapshotDeleted := false
+	t.Cleanup(func() {
+		if !snapshotDeleted {
+			_ = mgr.DeleteSnapshot(context.Background(), snapshot.Id)
+		}
+	})
+
+	require.NoError(t, deleteTestInstanceNow(ctx, mgr, sourceID))
+	sourceDeleted = true
+
+	warm, err := mgr.ForkSnapshot(ctx, snapshot.Id, ForkSnapshotRequest{
+		Name:        cfg.namePrefix + "-warm-chain-warm",
+		TargetState: StateRunning,
+	})
+	require.NoError(t, err)
+	warmID := warm.Id
+	warmDeleted := false
+	t.Cleanup(func() {
+		if !warmDeleted {
+			_ = deleteTestInstanceNow(context.Background(), mgr, warmID)
+		}
+	})
+	warm, err = waitForInstanceState(ctx, mgr, warmID, StateRunning, readyTimeout)
+	require.NoError(t, err)
+	require.NoError(t, waitForExecAgent(ctx, mgr, warmID, readyTimeout))
+
+	child, err := mgr.ForkInstance(ctx, warmID, ForkInstanceRequest{
+		Name:        cfg.namePrefix + "-warm-chain-child",
+		FromRunning: true,
+		TargetState: StateStopped,
+	})
+	require.NoError(t, err)
+	require.Equal(t, StateStopped, child.State)
+	childID := child.Id
+	t.Cleanup(func() { _ = deleteTestInstanceNow(context.Background(), mgr, childID) })
+
+	warm, err = mgr.GetInstance(ctx, warmID)
+	require.NoError(t, err)
+	if warm.State != StateRunning {
+		warm, err = waitForInstanceState(ctx, mgr, warmID, StateRunning, readyTimeout)
+		require.NoError(t, err)
+	}
+	require.Equal(t, StateRunning, warm.State)
+	require.NoError(t, waitForExecAgent(ctx, mgr, warmID, readyTimeout))
+
+	require.NoError(t, deleteTestInstanceNow(ctx, mgr, warmID))
+	warmDeleted = true
+	require.NoError(t, mgr.DeleteSnapshot(ctx, snapshot.Id))
+	snapshotDeleted = true
 }
 
 func assertHostCanReachNginx(t *testing.T, ip string, port int, timeout time.Duration) {

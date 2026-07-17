@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/kernel/hypeman/lib/resources"
 	"github.com/kernel/hypeman/lib/system"
+	"github.com/kernel/hypeman/lib/uffdpager"
 	"github.com/kernel/hypeman/lib/volumes"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -39,12 +41,6 @@ type Manager interface {
 	ForkSnapshot(ctx context.Context, snapshotID string, req ForkSnapshotRequest) (*Instance, error)
 	StandbyInstance(ctx context.Context, id string, req StandbyInstanceRequest) (*Instance, error)
 	RestoreInstance(ctx context.Context, id string) (*Instance, error)
-	// PromoteToTemplate marks a Standby instance as a fork-only Template.
-	// Requires state == Standby. Idempotent if already a Template.
-	PromoteToTemplate(ctx context.Context, id string) (*Instance, error)
-	// DemoteTemplate flips a Template back to Standby so it can be woken or
-	// deleted. Requires no live forks (instances with ForkOfTemplate == id).
-	DemoteTemplate(ctx context.Context, id string) (*Instance, error)
 	RestoreSnapshot(ctx context.Context, id string, snapshotID string, req RestoreSnapshotRequest) (*Instance, error)
 	StopInstance(ctx context.Context, id string) (*Instance, error)
 	StartInstance(ctx context.Context, id string, req StartInstanceRequest) (*Instance, error)
@@ -87,15 +83,68 @@ type ResourceLimits struct {
 
 // ManagerConfig holds non-resource manager behavior settings.
 type ManagerConfig struct {
-	LifecycleEventBufferSize int
+	LifecycleEventBufferSize          int
+	FirecrackerSnapshotMemoryBackend  string
+	FirecrackerUFFDCacheMaxBytes      int64
+	MaxConcurrentRestoresByHypervisor map[hypervisor.Type]int
 }
+
+const defaultManagerMaxConcurrentRestores = 4
+
+type restoreSlotPoolKey struct {
+	hypervisorType hypervisor.Type
+	limit          int
+}
+
+var restoreSlotPools sync.Map // map[restoreSlotPoolKey]chan struct{}
 
 // Normalize applies defaults to manager config values.
 func (c ManagerConfig) Normalize() ManagerConfig {
 	if c.LifecycleEventBufferSize <= 0 {
 		c.LifecycleEventBufferSize = defaultLifecycleEventBufferSize
 	}
+	c.FirecrackerSnapshotMemoryBackend = strings.ToLower(strings.TrimSpace(c.FirecrackerSnapshotMemoryBackend))
+	if c.FirecrackerSnapshotMemoryBackend == "" {
+		c.FirecrackerSnapshotMemoryBackend = uffdpager.BackendFile
+	}
+	if c.FirecrackerUFFDCacheMaxBytes <= 0 {
+		c.FirecrackerUFFDCacheMaxBytes = 4 << 30
+	}
+	if c.MaxConcurrentRestoresByHypervisor == nil {
+		c.MaxConcurrentRestoresByHypervisor = map[hypervisor.Type]int{
+			hypervisor.TypeFirecracker: defaultManagerMaxConcurrentRestores,
+		}
+	} else {
+		limits := make(map[hypervisor.Type]int, len(c.MaxConcurrentRestoresByHypervisor))
+		for hvType, limit := range c.MaxConcurrentRestoresByHypervisor {
+			if limit <= 0 {
+				limit = defaultManagerMaxConcurrentRestores
+			}
+			limits[hvType] = limit
+		}
+		c.MaxConcurrentRestoresByHypervisor = limits
+	}
 	return c
+}
+
+func sharedRestoreSlots(hvType hypervisor.Type, limit int) chan struct{} {
+	if limit <= 0 {
+		limit = defaultManagerMaxConcurrentRestores
+	}
+	key := restoreSlotPoolKey{hypervisorType: hvType, limit: limit}
+	slots, _ := restoreSlotPools.LoadOrStore(key, make(chan struct{}, limit))
+	return slots.(chan struct{})
+}
+
+func sharedRestoreSlotsByHypervisor(limits map[hypervisor.Type]int) map[hypervisor.Type]chan struct{} {
+	if len(limits) == 0 {
+		return nil
+	}
+	slots := make(map[hypervisor.Type]chan struct{}, len(limits))
+	for hvType, limit := range limits {
+		slots[hvType] = sharedRestoreSlots(hvType, limit)
+	}
+	return slots
 }
 
 // ResourceValidator validates if resources can be allocated
@@ -121,9 +170,10 @@ type manager struct {
 	limits                    ResourceLimits
 	resourceValidator         ResourceValidator // Optional validator for aggregate resource limits
 	instanceLocks             sync.Map          // map[string]*sync.RWMutex - per-instance locks
-	bootMarkerScans           sync.Map          // map[string]time.Time next allowed boot-marker rescan
-	hypervisorStateCache      sync.Map          // map[string]hypervisorStateCacheEntry - last observed hypervisor state per instance
-	hostTopology              *HostTopology     // Cached host CPU topology
+	forkMetadataMu            sync.Mutex
+	bootMarkerScans           sync.Map      // map[string]time.Time next allowed boot-marker rescan
+	hypervisorStateCache      sync.Map      // map[string]hypervisorStateCacheEntry - last observed hypervisor state per instance
+	hostTopology              *HostTopology // Cached host CPU topology
 	metrics                   *Metrics
 	meter                     metric.Meter
 	tracer                    trace.Tracer
@@ -136,10 +186,12 @@ type manager struct {
 	snapshotDefaults          SnapshotPolicy
 	compressionMu             sync.Mutex
 	compressionJobs           map[string]*compressionJob
+	snapshotPrepareLocks      sync.Map // map[string]*sync.Mutex - per-snapshot memory prepare locks
 	compressionTimerFactory   func(time.Duration) compressionTimer
 	nativeCodecMu             sync.Mutex
 	nativeCodecPaths          map[string]string
 	imageUsageRecorder        ImageUsageRecorder
+	guestAgentReadyProbe      func(context.Context, *StoredMetadata) bool
 
 	// Shared lifecycle event subscriptions for internal consumers.
 	lifecycleEvents *lifecycleSubscribers
@@ -154,9 +206,12 @@ type manager struct {
 	tapGCOnce sync.Once
 
 	// Hypervisor support
-	vmStarters        map[hypervisor.Type]hypervisor.VMStarter
-	defaultHypervisor hypervisor.Type // Default hypervisor type when not specified in request
-	guestMemoryPolicy guestmemory.Policy
+	vmStarters                       map[hypervisor.Type]hypervisor.VMStarter
+	defaultHypervisor                hypervisor.Type // Default hypervisor type when not specified in request
+	guestMemoryPolicy                guestmemory.Policy
+	firecrackerSnapshotMemoryBackend string
+	firecrackerUFFDPager             *uffdpager.Supervisor
+	restoreSlotsByHypervisor         map[hypervisor.Type]chan struct{}
 }
 
 // platformStarters is populated by platform-specific init functions.
@@ -171,6 +226,16 @@ func NewManager(p *paths.Paths, imageManager images.Manager, systemManager syste
 
 // NewManagerWithConfig creates a new instances manager with additional manager settings.
 func NewManagerWithConfig(p *paths.Paths, imageManager images.Manager, systemManager system.Manager, networkManager network.Manager, deviceManager devices.Manager, volumeManager volumes.Manager, limits ResourceLimits, defaultHypervisor hypervisor.Type, snapshotDefaults SnapshotPolicy, managerConfig ManagerConfig, meter metric.Meter, tracer trace.Tracer, memoryPolicy ...guestmemory.Policy) Manager {
+	m, err := NewManagerWithConfigE(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, defaultHypervisor, snapshotDefaults, managerConfig, meter, tracer, memoryPolicy...)
+	if err != nil {
+		panic(err)
+	}
+	return m
+}
+
+// NewManagerWithConfigE creates a new instances manager and returns startup
+// errors for optional host services such as the Firecracker UFFD pager.
+func NewManagerWithConfigE(p *paths.Paths, imageManager images.Manager, systemManager system.Manager, networkManager network.Manager, deviceManager devices.Manager, volumeManager volumes.Manager, limits ResourceLimits, defaultHypervisor hypervisor.Type, snapshotDefaults SnapshotPolicy, managerConfig ManagerConfig, meter metric.Meter, tracer trace.Tracer, memoryPolicy ...guestmemory.Policy) (Manager, error) {
 	// Validate and default the hypervisor type
 	if defaultHypervisor == "" {
 		defaultHypervisor = hypervisor.TypeCloudHypervisor
@@ -184,33 +249,45 @@ func NewManagerWithConfig(p *paths.Paths, imageManager images.Manager, systemMan
 	managerConfig = managerConfig.Normalize()
 
 	// Initialize VM starters from platform-specific init functions
-	vmStarters := make(map[hypervisor.Type]hypervisor.VMStarter, len(platformStarters))
+	rawStarters := make(map[hypervisor.Type]hypervisor.VMStarter, len(platformStarters))
 	for hvType, starter := range platformStarters {
+		rawStarters[hvType] = starter
+	}
+	firecrackerUFFDPager, err := configurePlatformStarters(context.Background(), p, rawStarters, managerConfig)
+	if err != nil {
+		return nil, err
+	}
+	vmStarters := make(map[hypervisor.Type]hypervisor.VMStarter, len(rawStarters))
+	for hvType, starter := range rawStarters {
 		vmStarters[hvType] = hypervisor.WrapVMStarter(hvType, starter)
 	}
 
 	m := &manager{
-		paths:             p,
-		imageManager:      imageManager,
-		systemManager:     systemManager,
-		networkManager:    networkManager,
-		deviceManager:     deviceManager,
-		volumeManager:     volumeManager,
-		limits:            limits,
-		instanceLocks:     sync.Map{},
-		bootMarkerScans:   sync.Map{},
-		hostTopology:      detectHostTopology(), // Detect and cache host topology
-		vmStarters:        vmStarters,
-		defaultHypervisor: defaultHypervisor,
-		now:               time.Now,
-		writeFile:         os.WriteFile,
-		meter:             meter,
-		tracer:            tracer,
-		guestMemoryPolicy: policy,
-		snapshotDefaults:  snapshotDefaults,
-		compressionJobs:   make(map[string]*compressionJob),
-		nativeCodecPaths:  make(map[string]string),
-		lifecycleEvents:   newLifecycleSubscribersWithBufferSize(managerConfig.LifecycleEventBufferSize),
+		paths:                            p,
+		imageManager:                     imageManager,
+		systemManager:                    systemManager,
+		networkManager:                   networkManager,
+		deviceManager:                    deviceManager,
+		volumeManager:                    volumeManager,
+		limits:                           limits,
+		instanceLocks:                    sync.Map{},
+		bootMarkerScans:                  sync.Map{},
+		hostTopology:                     detectHostTopology(), // Detect and cache host topology
+		vmStarters:                       vmStarters,
+		defaultHypervisor:                defaultHypervisor,
+		now:                              time.Now,
+		writeFile:                        os.WriteFile,
+		meter:                            meter,
+		tracer:                           tracer,
+		guestMemoryPolicy:                policy,
+		firecrackerSnapshotMemoryBackend: managerConfig.FirecrackerSnapshotMemoryBackend,
+		firecrackerUFFDPager:             firecrackerUFFDPager,
+		restoreSlotsByHypervisor:         sharedRestoreSlotsByHypervisor(managerConfig.MaxConcurrentRestoresByHypervisor),
+		snapshotDefaults:                 snapshotDefaults,
+		compressionJobs:                  make(map[string]*compressionJob),
+		nativeCodecPaths:                 make(map[string]string),
+		lifecycleEvents:                  newLifecycleSubscribersWithBufferSize(managerConfig.LifecycleEventBufferSize),
+		guestAgentReadyProbe:             probeGuestAgentReady,
 	}
 	m.deleteSnapshotFn = m.deleteSnapshot
 
@@ -228,7 +305,7 @@ func NewManagerWithConfig(p *paths.Paths, imageManager images.Manager, systemMan
 		logger.FromContext(context.Background()).WarnContext(context.Background(), "failed to recover pending standby compression jobs", "error", err)
 	}
 
-	return m
+	return m, nil
 }
 
 // SetResourceValidator sets the resource validator for aggregate limit checking.
@@ -287,6 +364,14 @@ func (m *manager) supportsSnapshotBaseReuse(hvType hypervisor.Type) bool {
 		return false
 	}
 	return caps.SupportsSnapshotBaseReuse
+}
+
+func (m *manager) supportsConcurrentForkPrepare(hvType hypervisor.Type) bool {
+	caps, ok := hypervisor.CapabilitiesForType(hvType)
+	if !ok {
+		return false
+	}
+	return caps.SupportsConcurrentForkPrepare
 }
 
 // getInstanceLock returns or creates a lock for a specific instance
@@ -386,30 +471,82 @@ func (m *manager) DeleteSnapshot(ctx context.Context, snapshotID string) error {
 // ForkInstance creates a forked copy of an instance.
 func (m *manager) ForkInstance(ctx context.Context, id string, req ForkInstanceRequest) (*Instance, error) {
 	lock := m.getInstanceLock(id)
-	lock.Lock()
-	forked, targetState, err := m.forkInstance(ctx, id, req)
-	lock.Unlock()
+	useReadLock := false
+	var sourceState State
+	// Some hypervisors can safely prepare stopped/standby forks concurrently
+	// from the same source. Probe under a short read lock first; running sources
+	// and unsupported hypervisors fall back to the normal exclusive fork path.
+	lock.RLock()
+	if meta, err := m.loadMetadata(id); err == nil {
+		source := m.toInstance(ctx, meta)
+		sourceState = source.State
+		useReadLock = m.supportsConcurrentForkPrepare(meta.HypervisorType) && (source.State == StateStopped || source.State == StateStandby)
+	}
+	lock.RUnlock()
+
+	var forked *Instance
+	var targetState State
+	var targetRestoreNeedsSourceLock bool
+	var err error
+	if useReadLock {
+		// State may have changed after the first probe. Re-load while holding
+		// the lock used by forkInstance, and only proceed under RLock if the
+		// source is still in a concurrency-safe state.
+		lock.RLock()
+		if meta, loadErr := m.loadMetadata(id); loadErr == nil {
+			source := m.toInstance(ctx, meta)
+			sourceState = source.State
+			useReadLock = m.supportsConcurrentForkPrepare(meta.HypervisorType) && (source.State == StateStopped || source.State == StateStandby)
+		} else {
+			useReadLock = false
+		}
+		if useReadLock {
+			forked, targetState, targetRestoreNeedsSourceLock, err = m.forkInstance(ctx, id, req)
+		}
+		lock.RUnlock()
+	}
+	if !useReadLock {
+		lock.Lock()
+		forked, targetState, targetRestoreNeedsSourceLock, err = m.forkInstance(ctx, id, req)
+		lock.Unlock()
+	}
 	if err != nil {
 		return nil, err
 	}
 
-	inst, err := m.applyForkTargetState(ctx, forked.Id, targetState)
-	if err != nil {
-		if cleanupErr := m.cleanupForkInstanceOnError(ctx, forked.Id); cleanupErr != nil {
-			return nil, fmt.Errorf("apply fork target state: %w; additionally failed to cleanup forked instance %s: %v", err, forked.Id, cleanupErr)
+	inst := forked
+	if !forkTargetStateAlreadyApplied(inst, targetState) {
+		// Standby -> running forks prepared under RLock can still require the
+		// source write lock if Firecracker snapshot paths could not be rewritten
+		// and restore must temporarily alias the source data dir.
+		if useReadLock && sourceState == StateStandby && targetState == StateRunning && targetRestoreNeedsSourceLock {
+			inst, err = m.applyForkTargetStateWithSourceLock(ctx, lock, id, forked.Id, targetState)
+		} else {
+			inst, err = m.applyForkTargetState(ctx, forked.Id, targetState)
 		}
-		return nil, fmt.Errorf("apply fork target state: %w", err)
-	}
-	if inst.State == StateRunning {
-		if err := ensureGuestAgentReadyForForkPhase(ctx, &inst.StoredMetadata, "before returning running fork instance"); err != nil {
+		if err != nil {
 			if cleanupErr := m.cleanupForkInstanceOnError(ctx, forked.Id); cleanupErr != nil {
-				return nil, fmt.Errorf("wait for fork guest agent readiness: %w; additionally failed to cleanup forked instance %s: %v", err, forked.Id, cleanupErr)
+				return nil, fmt.Errorf("apply fork target state: %w; additionally failed to cleanup forked instance %s: %v", err, forked.Id, cleanupErr)
 			}
-			return nil, fmt.Errorf("wait for fork guest agent readiness: %w", err)
+			return nil, fmt.Errorf("apply fork target state: %w", err)
 		}
 	}
 	m.notifyLifecycleEvent(ctx, LifecycleEventFork, inst)
 	return inst, nil
+}
+
+func (m *manager) applyForkTargetStateWithSourceLock(ctx context.Context, lock *sync.RWMutex, sourceID, forkID string, target State) (*Instance, error) {
+	lock.Lock()
+	defer lock.Unlock()
+	sourceMeta, err := m.loadMetadata(sourceID)
+	if err != nil {
+		return nil, fmt.Errorf("reload source metadata before aliased fork restore: %w", err)
+	}
+	source := m.toInstance(ctx, sourceMeta)
+	if source.State != StateStandby {
+		return nil, fmt.Errorf("%w: cannot restore fork %s with snapshot source alias because source %s is now %s", ErrInvalidState, forkID, sourceID, source.State)
+	}
+	return m.applyForkTargetState(ctx, forkID, target)
 }
 
 func (m *manager) ForkSnapshot(ctx context.Context, snapshotID string, req ForkSnapshotRequest) (*Instance, error) {
@@ -441,9 +578,7 @@ func (m *manager) StandbyInstance(ctx context.Context, id string, req StandbyIns
 	return inst, err
 }
 
-// RestoreInstance restores an instance from standby. Templates must be
-// demoted via DemoteTemplate first; this method does not auto-demote so
-// that the lifecycle remains explicit.
+// RestoreInstance restores an instance from standby
 func (m *manager) RestoreInstance(ctx context.Context, id string) (*Instance, error) {
 	lock := m.getInstanceLock(id)
 	lock.Lock()
@@ -460,69 +595,6 @@ func (m *manager) RestoreInstance(ctx context.Context, id string) (*Instance, er
 		m.notifyLifecycleEvent(ctx, LifecycleEventRestore, inst)
 	}
 	return inst, err
-}
-
-// PromoteToTemplate marks a Standby instance as a fork-only Template.
-// Standby is the only legal source state. Idempotent: re-promoting a
-// Template returns it as-is.
-func (m *manager) PromoteToTemplate(ctx context.Context, id string) (*Instance, error) {
-	lock := m.getInstanceLock(id)
-	lock.Lock()
-	defer lock.Unlock()
-	meta, err := m.loadMetadata(id)
-	if err != nil {
-		return nil, err
-	}
-	inst := m.toInstance(ctx, meta)
-	if inst.State == StateTemplate {
-		return &inst, nil
-	}
-	if inst.State != StateStandby {
-		return nil, fmt.Errorf("%w: cannot promote instance in state %s to template (must be Standby)", ErrInvalidState, inst.State)
-	}
-	meta.IsTemplate = true
-	if err := m.saveMetadata(meta); err != nil {
-		return nil, fmt.Errorf("save metadata after template promote: %w", err)
-	}
-	promoted := m.toInstance(ctx, meta)
-	return &promoted, nil
-}
-
-// DemoteTemplate flips a Template back to Standby so it can be woken or
-// deleted. Refuses while any live forks still reference this id via
-// ForkOfTemplate.
-func (m *manager) DemoteTemplate(ctx context.Context, id string) (*Instance, error) {
-	lock := m.getInstanceLock(id)
-	lock.Lock()
-	defer lock.Unlock()
-	meta, err := m.loadMetadata(id)
-	if err != nil {
-		return nil, err
-	}
-	inst := m.toInstance(ctx, meta)
-	if inst.State == StateStandby {
-		return &inst, nil
-	}
-	if inst.State != StateTemplate {
-		return nil, fmt.Errorf("%w: cannot demote instance in state %s (must be Template)", ErrInvalidState, inst.State)
-	}
-	forks, err := m.countTemplateForks(id)
-	if err != nil {
-		return nil, fmt.Errorf("count forks of template %s: %w", id, err)
-	}
-	if forks > 0 {
-		return nil, fmt.Errorf("%w: cannot demote template %s with %d live fork(s); delete forks first", ErrInvalidState, id, forks)
-	}
-	if err := StateTemplate.CanTransitionTo(StateStandby); err != nil {
-		return nil, err
-	}
-	meta.IsTemplate = false
-	meta.HotPagesPath = ""
-	if err := m.saveMetadata(meta); err != nil {
-		return nil, fmt.Errorf("save metadata after template demote: %w", err)
-	}
-	demoted := m.toInstance(ctx, meta)
-	return &demoted, nil
 }
 
 func (m *manager) RestoreSnapshot(ctx context.Context, id string, snapshotID string, req RestoreSnapshotRequest) (*Instance, error) {
@@ -546,7 +618,17 @@ func (m *manager) StopInstance(ctx context.Context, id string) (*Instance, error
 		return nil, err
 	}
 	if current.State == StateStopped {
-		return current, nil
+		if err := m.markRestartManualStopLocked(ctx, id); err != nil {
+			return nil, err
+		}
+		updated, err := m.currentInstanceWithoutHydration(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		return updated, nil
+	}
+	if err := m.markRestartManualStopLocked(ctx, id); err != nil {
+		return nil, err
 	}
 	inst, err := m.stopInstance(ctx, id)
 	if err == nil {
@@ -560,6 +642,9 @@ func (m *manager) StartInstance(ctx context.Context, id string, req StartInstanc
 	lock := m.getInstanceLock(id)
 	lock.Lock()
 	defer lock.Unlock()
+	if err := m.clearRestartStatusLocked(ctx, id); err != nil {
+		return nil, err
+	}
 	if !startRequestHasOverrides(req) {
 		current, err := m.currentInstanceWithoutHydration(ctx, id)
 		if err != nil {

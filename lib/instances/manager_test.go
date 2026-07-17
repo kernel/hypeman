@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -19,6 +20,7 @@ import (
 	"github.com/kernel/hypeman/cmd/api/config"
 	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/guest"
+	"github.com/kernel/hypeman/lib/healthcheck"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/ingress"
@@ -31,6 +33,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// lifecycleTestMemorySize is enough to boot the shared test guest while
+// avoiding snapshotting memory that lifecycle tests never touch. Dedicated
+// memory and resource-limit tests retain their larger sizes.
+const lifecycleTestMemorySize = 512 * 1024 * 1024
 
 // setupTestManager creates a manager and registers cleanup for any orphaned processes
 func setupTestManager(t *testing.T) (*manager, string) {
@@ -72,6 +79,23 @@ func setupTestManager(t *testing.T) (*manager, string) {
 	})
 
 	return mgr, tmpDir
+}
+
+// deleteTestInstanceNow performs the same resource and metadata cleanup as
+// DeleteInstance, but skips the guest grace period. Cleanup callbacks do not
+// need to preserve guest state: the test has already made its assertions and
+// is discarding the VM.
+func deleteTestInstanceNow(ctx context.Context, mgr *manager, id string) error {
+	lock := mgr.getInstanceLock(id)
+	lock.Lock()
+	defer lock.Unlock()
+
+	err := mgr.deleteInstanceWithOptions(ctx, id, deleteInstanceOptions{skipGracefulShutdown: true})
+	if err == nil {
+		mgr.notifyLifecycleDelete(ctx, id)
+		mgr.instanceLocks.Delete(id)
+	}
+	return err
 }
 
 // waitForVMReady polls VM state via VMM API until it's running or times out
@@ -180,38 +204,162 @@ func collectLogs(ctx context.Context, mgr *manager, instanceID string, n int) (s
 	return strings.Join(lines, "\n"), nil
 }
 
-// cleanupOrphanedProcesses kills any Cloud Hypervisor processes from metadata
+// cleanupOrphanedProcesses kills any hypervisor (and UFFD pager) processes left
+// behind by a test, so a flaky run can never leak a guest onto the runner.
+//
+// It uses two complementary strategies:
+//
+//  1. Kill PIDs recorded in instance metadata. This is best-effort only:
+//     meta.HypervisorPID is deliberately cleared (set to nil) during
+//     standby/fork/restore transitions, so a test that aborts in that window
+//     leaves no recorded PID to reap.
+//
+//  2. Scan the process table for any firecracker / cloud-hypervisor /
+//     qemu-system* / hypeman-uffd-pager process whose command line references a
+//     path under this test's temp data dir, and kill those too. This catches
+//     guests leaked during the PID-nil window. An orphaned UFFD guest whose
+//     pager has gone away spins its vCPU at 100% forever, so reaping it here is
+//     what keeps a flake from permanently burning a core on a shared runner.
+//
+// Matching is scoped strictly to this test's own data dir prefix so it can never
+// touch a sibling parallel test's guests.
 func cleanupOrphanedProcesses(t *testing.T, mgr *manager) {
-	// Find all metadata files
-	metaFiles, err := mgr.listMetadataFiles()
-	if err != nil {
-		return // No metadata files, nothing to clean
-	}
-
-	for _, metaFile := range metaFiles {
-		// Extract instance ID from path
-		id := filepath.Base(filepath.Dir(metaFile))
-
-		// Load metadata
-		meta, err := mgr.loadMetadata(id)
-		if err != nil {
-			continue
-		}
-
-		// If metadata has a PID, try to kill it
-		if meta.HypervisorPID != nil {
+	// Strategy 1: kill PIDs recorded in metadata.
+	if metaFiles, err := mgr.listMetadataFiles(); err == nil {
+		for _, metaFile := range metaFiles {
+			id := filepath.Base(filepath.Dir(metaFile))
+			meta, err := mgr.loadMetadata(id)
+			if err != nil {
+				continue
+			}
+			if meta.HypervisorPID == nil {
+				continue
+			}
 			pid := *meta.HypervisorPID
-
-			// Check if process exists
 			if err := syscall.Kill(pid, 0); err == nil {
 				t.Logf("Cleaning up orphaned hypervisor process: PID %d (instance %s)", pid, id)
 				syscall.Kill(pid, syscall.SIGKILL)
-
-				// Wait for process to exit
 				WaitForProcessExit(pid, 1*time.Second)
 			}
 		}
 	}
+
+	// Strategy 2: scan the process table for guests/pagers under this test's
+	// data dir. The data dir is the t.TempDir() root passed to the manager.
+	dataDir := strings.TrimSpace(mgr.paths.DataDir())
+	if dataDir == "" {
+		return
+	}
+	killOrphanedProcessesUnderDir(t, dataDir)
+}
+
+// killOrphanedProcessesUnderDir reaps any guest or UFFD-pager process whose
+// command line references dataDir. Guests are killed before pagers: an orphaned
+// UFFD guest spins its vCPU if its pager dies first, so the pager must be the
+// last thing standing during teardown.
+func killOrphanedProcessesUnderDir(t *testing.T, dataDir string) {
+	// Normalize to a clean prefix so we only ever match this test's own tree and
+	// never a sibling test whose temp dir merely shares a textual fragment.
+	prefix := filepath.Clean(dataDir)
+
+	type orphan struct {
+		pid  int
+		exe  string
+		args string
+	}
+	var guests, pagers []orphan
+
+	procEntries, err := os.ReadDir("/proc")
+	if err != nil {
+		return // not Linux, or /proc unavailable; nothing portable to do
+	}
+	for _, entry := range procEntries {
+		if !entry.IsDir() {
+			continue
+		}
+		pid, err := strconv.Atoi(entry.Name())
+		if err != nil {
+			continue // not a PID directory
+		}
+
+		raw, err := os.ReadFile(filepath.Join("/proc", entry.Name(), "cmdline"))
+		if err != nil || len(raw) == 0 {
+			continue
+		}
+		// /proc/<pid>/cmdline is NUL-separated argv.
+		argv := strings.Split(strings.TrimRight(string(raw), "\x00"), "\x00")
+		if len(argv) == 0 {
+			continue
+		}
+		exe := filepath.Base(argv[0])
+		joined := strings.Join(argv, " ")
+
+		// Only consider processes that reference this test's data dir, using the
+		// exact cleaned prefix so we never reap another test's guest.
+		if !cmdlineReferencesDir(argv, prefix) {
+			continue
+		}
+
+		switch {
+		case isPagerProcess(exe):
+			pagers = append(pagers, orphan{pid: pid, exe: exe, args: joined})
+		case isGuestProcess(exe):
+			guests = append(guests, orphan{pid: pid, exe: exe, args: joined})
+		}
+	}
+
+	kill := func(o orphan, kind string) {
+		if err := syscall.Kill(o.pid, 0); err != nil {
+			return // already gone
+		}
+		t.Logf("Cleaning up orphaned %s process: PID %d (%s) under %s", kind, o.pid, o.exe, prefix)
+		syscall.Kill(o.pid, syscall.SIGKILL)
+		WaitForProcessExit(o.pid, 2*time.Second)
+	}
+
+	// Guests first, then pagers (LIFO safety: never strand a guest without a pager).
+	for _, g := range guests {
+		kill(g, "guest")
+	}
+	for _, p := range pagers {
+		kill(p, "uffd pager")
+	}
+}
+
+// cmdlineReferencesDir reports whether any argv token is, or lives under, dir.
+func cmdlineReferencesDir(argv []string, dir string) bool {
+	for _, tok := range argv {
+		tok = strings.TrimSpace(tok)
+		if tok == "" {
+			continue
+		}
+		// Tokens may embed the path inside larger strings (e.g. qemu's
+		// "socket,...,path=/tmp/.../qmp.sock"), so match dir as a substring — but
+		// only at a path boundary (followed by "/" or at end-of-token). A raw
+		// substring check would let a shorter data dir (e.g. ".../001") match a
+		// sibling test's longer path (".../0010") and SIGKILL its processes.
+		if strings.Contains(tok, dir+"/") || strings.HasSuffix(tok, dir) {
+			return true
+		}
+	}
+	return false
+}
+
+func isGuestProcess(exe string) bool {
+	switch {
+	case exe == "firecracker":
+		return true
+	case exe == "cloud-hypervisor":
+		return true
+	case strings.HasPrefix(exe, "qemu-system"):
+		return true
+	default:
+		return false
+	}
+}
+
+func isPagerProcess(exe string) bool {
+	return exe == "hypeman-uffd-pager" || strings.Contains(exe, "uffd-pager")
 }
 
 func TestBasicEndToEnd(t *testing.T) {
@@ -311,6 +459,8 @@ func TestBasicEndToEnd(t *testing.T) {
 	// Verify instance fields
 	assert.NotEmpty(t, inst.Id)
 	assert.Equal(t, "test-nginx", inst.Name)
+	// Image is the caller-supplied reference (display value); the digest-pinned
+	// boot reference is tracked separately in StoredMetadata.ResolvedImage.
 	assert.Equal(t, integrationTestImageRef(t, "docker.io/library/nginx:alpine"), inst.Image)
 	assert.Contains(t, []State{StateInitializing, StateRunning}, inst.State)
 	assert.False(t, inst.HasSnapshot)
@@ -352,24 +502,12 @@ func TestBasicEndToEnd(t *testing.T) {
 	assert.Len(t, instances, 1)
 	assert.Equal(t, inst.Id, instances[0].Id)
 
-	// Poll for logs to contain nginx startup message
-	var logs string
-	foundNginxStartup := false
-	for i := 0; i < 200; i++ { // Poll for up to 20 seconds (200 * 100ms)
-		logs, err = collectLogs(ctx, manager, inst.Id, 100)
-		require.NoError(t, err)
-
-		if strings.Contains(logs, "start worker processes") {
-			foundNginxStartup = true
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
+	if err := waitForLogMessage(ctx, manager, inst.Id, "start worker processes", integrationTestTimeout(20*time.Second)); err != nil {
+		logs, logErr := collectLogs(ctx, manager, inst.Id, 100)
+		require.NoError(t, logErr)
+		t.Logf("Nginx startup log not observed before ingress probe: %v", err)
+		t.Logf("Instance logs (last 100 lines):\n%s", logs)
 	}
-
-	t.Logf("Instance logs (last 100 lines):\n%s", logs)
-
-	// Verify nginx started successfully
-	assert.True(t, foundNginxStartup, "Nginx should have started worker processes within 20 seconds")
 
 	// Test ingress - route external traffic to nginx through Caddy
 	t.Log("Testing ingress routing to nginx...")
@@ -1043,6 +1181,8 @@ func TestOOMExitPropagation(t *testing.T) {
 	t.Skipf("OOM did not trigger reliably on this host after %d attempts (last observed state: %s)", retries, lastObservedState)
 }
 
+const redisEntrypointEnvImage = "docker.io/bitnamilegacy/redis:7.2.5-debian-12-r0"
+
 // TestEntrypointEnvVars verifies that environment variables are passed to the entrypoint process.
 // This uses bitnami/redis which configures REDIS_PASSWORD from an env var - if auth is required,
 // it proves the entrypoint received and used the env var.
@@ -1054,6 +1194,7 @@ func TestEntrypointEnvVars(t *testing.T) {
 
 	mgr, tmpDir := setupTestManager(t) // Automatically registers cleanup
 	ctx := context.Background()
+	startHealthCheckControllerForTest(t, ctx, mgr)
 
 	// Get image manager
 	p := paths.New(tmpDir)
@@ -1063,7 +1204,7 @@ func TestEntrypointEnvVars(t *testing.T) {
 	// Pull bitnami/redis image
 	t.Log("Pulling bitnami/redis image...")
 	redisImage, err := imageManager.CreateImage(ctx, images.CreateImageRequest{
-		Name: integrationTestImageRef(t, "docker.io/bitnami/redis:latest"),
+		Name: integrationTestImageRef(t, redisEntrypointEnvImage),
 	})
 	require.NoError(t, err)
 
@@ -1101,7 +1242,7 @@ func TestEntrypointEnvVars(t *testing.T) {
 	testPassword := "test_secret_password_123"
 	req := CreateInstanceRequest{
 		Name:           "test-redis-env",
-		Image:          integrationTestImageRef(t, "docker.io/bitnami/redis:latest"),
+		Image:          integrationTestImageRef(t, redisEntrypointEnvImage),
 		Size:           2 * 1024 * 1024 * 1024,
 		HotplugSize:    512 * 1024 * 1024,
 		OverlaySize:    10 * 1024 * 1024 * 1024,
@@ -1110,6 +1251,17 @@ func TestEntrypointEnvVars(t *testing.T) {
 		Env: map[string]string{
 			"REDIS_PASSWORD": testPassword,
 		},
+		HealthCheck: &healthcheck.Policy{
+			Type:             healthcheck.TypeTCP,
+			Interval:         "1s",
+			Timeout:          "1s",
+			StartPeriod:      "30s",
+			FailureThreshold: 3,
+			SuccessThreshold: 1,
+			TCP: &healthcheck.TCPCheck{
+				Port: 6379,
+			},
+		},
 	}
 
 	t.Log("Creating redis instance with REDIS_PASSWORD...")
@@ -1117,6 +1269,7 @@ func TestEntrypointEnvVars(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, inst)
 	assert.Contains(t, []State{StateInitializing, StateRunning}, inst.State)
+	require.NotNil(t, inst.HealthCheck)
 	inst, err = waitForInstanceState(ctx, mgr, inst.Id, StateRunning, 60*time.Second)
 	require.NoError(t, err)
 	t.Logf("Instance created: %s", inst.Id)
@@ -1183,6 +1336,12 @@ func TestEntrypointEnvVars(t *testing.T) {
 		}
 		time.Sleep(300 * time.Millisecond)
 	}
+
+	inst, healthStatus, err := waitForInstanceHealthStatus(ctx, mgr, inst.Id, healthcheck.StatusHealthy, 20*time.Second)
+	require.NoError(t, err, "tcp health check should report healthy")
+	require.GreaterOrEqual(t, healthStatus.ConsecutiveSuccesses, 1)
+	require.NotNil(t, healthStatus.LastCheckedAt)
+	require.NotNil(t, healthStatus.LastSuccessAt)
 
 	// Test 1: PING without auth should fail
 	t.Log("Testing redis PING without auth (should fail)...")
@@ -1348,6 +1507,8 @@ func TestStandbyAndRestore(t *testing.T) {
 		t.Skip("/dev/kvm not available, skipping on this platform")
 	}
 
+	acquireHeavyIO(t)
+
 	manager, tmpDir := setupTestManager(t) // Automatically registers cleanup
 	ctx := context.Background()
 
@@ -1406,6 +1567,13 @@ func TestStandbyAndRestore(t *testing.T) {
 	err = waitForVMReady(ctx, inst.SocketPath, 5*time.Second)
 	require.NoError(t, err, "VM should reach running state")
 
+	// Skew the guest clock back an hour so the post-restore check proves the
+	// clock keeper corrected it, rather than passing on a small natural lag.
+	skewOut, skewCode, err := execInInstance(ctx, inst, "date", "-u", "-s",
+		fmt.Sprintf("@%d", time.Now().Add(-time.Hour).Unix()))
+	require.NoError(t, err)
+	require.Equal(t, 0, skewCode, "skewing guest clock should succeed: %s", skewOut)
+
 	// Standby instance
 	t.Log("Standing by instance...")
 	inst, err = manager.StandbyInstance(ctx, inst.Id, StandbyInstanceRequest{})
@@ -1445,6 +1613,23 @@ func TestStandbyAndRestore(t *testing.T) {
 	inst, err = waitForInstanceState(ctx, manager, inst.Id, StateRunning, integrationTestTimeout(20*time.Second))
 	require.NoError(t, err)
 	t.Log("Instance restored and running")
+
+	// The guest-agent clock keeper should step the skewed wall clock back to
+	// host time; without it the guest stays about an hour behind.
+	require.Eventually(t, func() bool {
+		out, code, err := execInInstance(ctx, inst, "date", "+%s")
+		if err != nil || code != 0 {
+			return false
+		}
+		epoch, err := strconv.ParseInt(strings.TrimSpace(out), 10, 64)
+		if err != nil {
+			return false
+		}
+		lag := time.Now().Unix() - epoch
+		t.Logf("guest clock lag: %ds", lag)
+		return lag >= -5 && lag <= 5
+	}, integrationTestTimeout(60*time.Second), 3*time.Second,
+		"guest clock should converge to host time after restore")
 
 	// DEBUG: Check app.log file size after restore
 	if info, err := os.Stat(consoleLogPath); err == nil {
@@ -1497,17 +1682,12 @@ func TestStateTransitions(t *testing.T) {
 		{"Standby to Paused", StateStandby, StatePaused, false},
 		{"Shutdown to Stopped", StateShutdown, StateStopped, false},
 		{"Standby to Stopped", StateStandby, StateStopped, false},
-		{"Standby to Template", StateStandby, StateTemplate, false},
-		{"Template to Standby", StateTemplate, StateStandby, false},
-		{"Template to Stopped", StateTemplate, StateStopped, false},
 		// Invalid transitions
 		{"Running to Standby", StateRunning, StateStandby, true},
 		{"Stopped to Running", StateStopped, StateRunning, true},
 		{"Stopped to Initializing", StateStopped, StateInitializing, true},
 		{"Standby to Running", StateStandby, StateRunning, true},
 		{"Initializing to Paused", StateInitializing, StatePaused, true},
-		{"Template to Running", StateTemplate, StateRunning, true},
-		{"Template to Paused", StateTemplate, StatePaused, true},
 	}
 
 	for _, tt := range tests {

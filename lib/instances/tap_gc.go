@@ -49,24 +49,30 @@ func (m *manager) reconcileTAPs(ctx context.Context) {
 	// Initializing, and Unknown. "Better to leave a stale TAP than crash a
 	// running VM."
 	insts, err := m.ListInstances(ctx, nil)
+	var preserve []string
 	if err != nil {
-		log.WarnContext(ctx, "TAP GC: failed to list instances, skipping pass", "error", err)
-		return
-	}
-	preserve := make([]string, 0, len(insts))
-	for _, inst := range insts {
-		if inst.State == StateRunning || inst.State == StateInitializing || inst.State == StateUnknown {
-			preserve = append(preserve, inst.Id)
+		log.WarnContext(ctx, "TAP GC: failed to list instances, skipping TAP pass", "error", err)
+	} else {
+		preserve = make([]string, 0, len(insts))
+		for _, inst := range insts {
+			if inst.State == StateRunning || inst.State == StateInitializing || inst.State == StateUnknown {
+				preserve = append(preserve, inst.Id)
+			}
 		}
 	}
-	if len(preserve) == 0 {
-		// CleanupOrphanedTAPs short-circuits on empty preserve set to avoid
-		// clobbering TAPs from concurrent hypeman processes/tests. Mirror that here
-		// rather than calling it with an empty slice.
-		log.DebugContext(ctx, "TAP GC: no preserve candidates, skipping pass")
-		return
+
+	if err == nil {
+		if len(preserve) == 0 {
+			// CleanupOrphanedTAPs short-circuits on empty preserve set to avoid
+			// clobbering TAPs from concurrent hypeman processes/tests. Mirror that here
+			// rather than calling it with an empty slice.
+			log.DebugContext(ctx, "TAP GC: no preserve candidates, skipping TAP pass")
+		} else if deleted := m.networkManager.CleanupOrphanedTAPs(ctx, preserve, tapGCMinAge); deleted > 0 {
+			log.InfoContext(ctx, "TAP GC: cleaned up orphaned TAP devices", "count", deleted)
+		}
 	}
-	if deleted := m.networkManager.CleanupOrphanedTAPs(ctx, preserve, tapGCMinAge); deleted > 0 {
-		log.InfoContext(ctx, "TAP GC: cleaned up orphaned TAP devices", "count", deleted)
+
+	if deleted := m.networkManager.CleanupOrphanedClasses(ctx); deleted > 0 {
+		log.InfoContext(ctx, "TAP GC: cleaned up orphaned tc filters/classes", "count", deleted)
 	}
 }

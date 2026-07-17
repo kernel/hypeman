@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -31,6 +32,34 @@ const (
 	testSubnetThirdOctetMin  = 1
 	testSubnetThirdOctetMax  = 250
 )
+
+// iptablesWaitSeconds matches the production convention in
+// lib/network/bridge_linux.go so the test harness cooperates with the
+// system-wide xtables lock instead of failing immediately under contention.
+const testIPTablesWaitSeconds = "5"
+
+// iptablesDeleteAttempts is the number of times we retry an iptables delete on
+// transient lock contention before giving up.
+const iptablesDeleteAttempts = 3
+
+// newTestIPTablesCommand builds an iptables command with the -w wait flag so it
+// waits for the xtables lock rather than failing immediately.
+func newTestIPTablesCommand(args ...string) *exec.Cmd {
+	fullArgs := make([]string, 0, len(args)+2)
+	fullArgs = append(fullArgs, "-w", testIPTablesWaitSeconds)
+	fullArgs = append(fullArgs, args...)
+	return exec.Command("iptables", fullArgs...)
+}
+
+// logTestNetworkErr surfaces a real cleanup failure to stderr. These helpers run
+// both with and without a *testing.T (e.g. under testNetworkGuardCleanupOnce and
+// in t.Cleanup), so we log instead of swallowing the error silently.
+func logTestNetworkErr(op string, err error) {
+	if err == nil {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "hypeman-test-network: %s: %v\n", op, err)
+}
 
 type testNetworkLease struct {
 	cfg     config.NetworkConfig
@@ -105,6 +134,10 @@ func allocateTestNetworkLease(testName string, seq uint32) (*testNetworkLease, e
 
 		testNetworkGuardCleanupOnce.Do(func() {
 			cleanupStaleLinkDownRoutes(routes)
+			// Sweep iptables rules for test bridges that no longer exist. Once a
+			// bridge is fully deleted its route is gone too, so linkdown cleanup
+			// above can't catch these — they would otherwise leak forever.
+			sweepOrphanedTestIPTablesRules()
 			// Refresh route snapshot after cleanup so subnet selection sees current state.
 			refreshed, refreshErr := listHostRoutes()
 			if refreshErr == nil {
@@ -184,7 +217,7 @@ func allocateTestNetworkLease(testName string, seq uint32) (*testNetworkLease, e
 
 func withTestSubnetLock(fn func() error) error {
 	lockPath := filepath.Join(os.TempDir(), "hypeman-test-network.lock")
-	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	lockFile, err := openTestSubnetLockFile(lockPath)
 	if err != nil {
 		return fmt.Errorf("open subnet lock file: %w", err)
 	}
@@ -196,6 +229,27 @@ func withTestSubnetLock(fn func() error) error {
 	defer syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
 
 	return fn()
+}
+
+func openTestSubnetLockFile(lockPath string) (*os.File, error) {
+	lockFile, err := os.OpenFile(lockPath, os.O_RDWR, 0)
+	if err == nil {
+		_ = lockFile.Chmod(0o666)
+		return lockFile, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+
+	lockFile, err = os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o666)
+	if errors.Is(err, os.ErrExist) {
+		return os.OpenFile(lockPath, os.O_RDWR, 0)
+	}
+	if err != nil {
+		return nil, err
+	}
+	_ = lockFile.Chmod(0o666)
+	return lockFile, nil
 }
 
 func testSubnetLeaseFilePath() string {
@@ -303,6 +357,74 @@ func cleanupStaleLinkDownRoutes(routes []hostRoute) {
 	}
 }
 
+// testRuleCommentPattern matches hypeman test-harness iptables rule comments and
+// captures both the full comment and the referenced bridge name. We deliberately
+// anchor on the "hm" test prefix so we never touch "ha"-prefixed rules from a
+// real (non-test) hypeman process running on the same host.
+var testRuleCommentPattern = regexp.MustCompile(`hypeman-(?:fwd-out|fwd-in|nat)-(hm[0-9a-f]+)`)
+
+// sweepOrphanedTestIPTablesRules removes hypeman test iptables rules whose
+// referenced bridge interface no longer exists. Once a bridge is fully deleted,
+// its route disappears, so cleanupStaleLinkDownRoutes can't reach these rules and
+// they accumulate indefinitely on the shared CI runner, slowing every iptables
+// operation under the xtables lock.
+//
+// This is conservative and safe: a rule whose bridge interface is gone can never
+// affect live traffic, and we never delete a rule whose interface still exists.
+func sweepOrphanedTestIPTablesRules() {
+	sweepOrphanedTestRulesInChain("", "FORWARD")
+	sweepOrphanedTestRulesInChain("nat", "POSTROUTING")
+}
+
+func sweepOrphanedTestRulesInChain(table, chain string) {
+	args := []string{}
+	if table != "" {
+		args = append(args, "-t", table)
+	}
+	args = append(args, "-S", chain)
+	output, err := newTestIPTablesCommand(args...).Output()
+	if err != nil {
+		logTestNetworkErr(fmt.Sprintf("iptables -S %s/%s for orphan sweep", table, chain), err)
+		return
+	}
+
+	// Collect comments whose bridge interface is gone. Cache bridge existence and
+	// dedupe comments so we shell out and delete each orphan only once.
+	exists := make(map[string]bool)
+	seen := make(map[string]struct{})
+	var orphanedComments []string
+	for _, line := range strings.Split(string(output), "\n") {
+		match := testRuleCommentPattern.FindStringSubmatch(line)
+		if match == nil {
+			continue
+		}
+		comment := match[0]
+		bridge := match[1]
+
+		alive, checked := exists[bridge]
+		if !checked {
+			alive = bridgeExists(bridge)
+			exists[bridge] = alive
+		}
+		if alive {
+			// Never delete a rule whose bridge interface still exists.
+			continue
+		}
+
+		if _, ok := seen[comment]; ok {
+			continue
+		}
+		seen[comment] = struct{}{}
+		orphanedComments = append(orphanedComments, comment)
+	}
+
+	// Delete by comment, reusing the existing line-number-based deleter which
+	// handles quoting and renumbering correctly.
+	for _, comment := range orphanedComments {
+		deleteIPTablesRulesByComment(table, chain, comment)
+	}
+}
+
 func pruneStaleLeases(leases map[string]subnetLease, routes []hostRoute) {
 	liveRoutes := make(map[string]struct{}, len(routes))
 	for _, route := range routes {
@@ -401,16 +523,32 @@ func isTestCIDR(cidr string) bool {
 
 func cleanupTestNetworkArtifacts(bridgeName, subnetCIDR string) {
 	if subnetCIDR != "" && bridgeName != "" {
-		_ = exec.Command("ip", "-4", "route", "del", subnetCIDR, "dev", bridgeName).Run()
+		// The route may already be gone (linkdown cleanup, prior pass) — that is
+		// not a real failure, so only surface unexpected errors.
+		out, err := exec.Command("ip", "-4", "route", "del", subnetCIDR, "dev", bridgeName).CombinedOutput()
+		if err != nil && !isNoSuchObjectErr(out) {
+			logTestNetworkErr(fmt.Sprintf("ip route del %s dev %s: %s", subnetCIDR, bridgeName, strings.TrimSpace(string(out))), err)
+		}
 	}
 	if bridgeName != "" {
-		_ = exec.Command("ip", "link", "delete", bridgeName, "type", "bridge").Run()
+		out, err := exec.Command("ip", "link", "delete", bridgeName, "type", "bridge").CombinedOutput()
+		if err != nil && !isNoSuchObjectErr(out) {
+			logTestNetworkErr(fmt.Sprintf("ip link delete %s: %s", bridgeName, strings.TrimSpace(string(out))), err)
+		}
 	}
 
 	bridgeSuffix := strings.ToLower(bridgeName)
 	deleteIPTablesRulesByComment("nat", "POSTROUTING", "hypeman-nat-"+bridgeSuffix)
 	deleteIPTablesRulesByComment("", "FORWARD", "hypeman-fwd-out-"+bridgeSuffix)
 	deleteIPTablesRulesByComment("", "FORWARD", "hypeman-fwd-in-"+bridgeSuffix)
+}
+
+// isNoSuchObjectErr reports whether an `ip` command output indicates the object
+// (route/link) was already gone, which is an expected, benign outcome for
+// idempotent cleanup.
+func isNoSuchObjectErr(combinedOutput []byte) bool {
+	out := strings.ToLower(string(combinedOutput))
+	return strings.Contains(out, "cannot find") || strings.Contains(out, "no such")
 }
 
 func deleteIPTablesRulesByComment(table, chain, comment string) {
@@ -423,9 +561,9 @@ func deleteIPTablesRulesByComment(table, chain, comment string) {
 		args = append(args, "-t", table)
 	}
 	args = append(args, "-L", chain, "--line-numbers", "-n")
-	listCmd := exec.Command("iptables", args...)
-	output, err := listCmd.Output()
+	output, err := newTestIPTablesCommand(args...).Output()
 	if err != nil {
+		logTestNetworkErr(fmt.Sprintf("iptables list %s/%s for comment %q", table, chain, comment), err)
 		return
 	}
 
@@ -451,8 +589,24 @@ func deleteIPTablesRulesByComment(table, chain, comment string) {
 			delArgs = append(delArgs, "-t", table)
 		}
 		delArgs = append(delArgs, "-D", chain, strconv.Itoa(ruleNums[i]))
-		_ = exec.Command("iptables", delArgs...).Run()
+		deleteIPTablesRuleWithRetry(delArgs)
 	}
+}
+
+// deleteIPTablesRuleWithRetry runs an iptables `-D` delete, retrying a few times
+// on transient lock contention (the failure mode under concurrent CI jobs).
+func deleteIPTablesRuleWithRetry(delArgs []string) {
+	var err error
+	for attempt := 0; attempt < iptablesDeleteAttempts; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt) * 100 * time.Millisecond)
+		}
+		err = newTestIPTablesCommand(delArgs...).Run()
+		if err == nil {
+			return
+		}
+	}
+	logTestNetworkErr(fmt.Sprintf("iptables %s", strings.Join(delArgs, " ")), err)
 }
 
 func legacyParallelTestNetworkConfig(seq uint32) config.NetworkConfig {

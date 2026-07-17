@@ -4,8 +4,10 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/autostandby"
+	"github.com/kernel/hypeman/lib/healthcheck"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/instances/phasetracking"
+	restartpolicy "github.com/kernel/hypeman/lib/restart-policy"
 	"github.com/kernel/hypeman/lib/snapshot"
 	"github.com/kernel/hypeman/lib/tags"
 )
@@ -21,7 +23,6 @@ const (
 	StatePaused       State = "Paused"       // VM paused (CH native)
 	StateShutdown     State = "Shutdown"     // VM shutdown, VMM exists (CH native)
 	StateStandby      State = "Standby"      // No VMM, snapshot exists
-	StateTemplate     State = "Template"     // Standby snapshot promoted to fork-only parent; cannot wake while any forks exist
 	StateUnknown      State = "Unknown"      // Failed to determine state (VMM query failed)
 )
 
@@ -76,7 +77,20 @@ type StoredMetadata struct {
 	// Identification
 	Id    string // Auto-generated CUID2
 	Name  string
-	Image string // OCI reference
+	Image string // OCI reference as supplied by the caller (tag or digest); the display/API value
+
+	// ResolvedImage is the digest-pinned reference (repo@sha256:...) of the
+	// image actually resolved at create time. It is the source of truth for
+	// locating the rootfs on boot/start/restore, so a mutable tag (last-pull-wins)
+	// can't drift the instance to a different image/arch across restarts. Internal;
+	// not exposed on the API. Empty for instances created before this field existed
+	// (callers fall back to Image via bootImageRef).
+	ResolvedImage string
+
+	// Platform is the resolved image platform as os/arch[/variant] (e.g.
+	// "linux/amd64"), captured from the pulled image's metadata at create time.
+	// Read-only; echoed on the instance API.
+	Platform string
 
 	// Resources (matching Cloud Hypervisor terminology)
 	Size                     int64 // Base memory in bytes
@@ -116,6 +130,12 @@ type StoredMetadata struct {
 	HypervisorVersion string          // Hypervisor version (e.g., "v51.1")
 	HypervisorPID     *int            // Hypervisor process ID (may be stale after host restart)
 
+	// Firecracker UFFD snapshot restore metadata.
+	FirecrackerSnapshotCacheKey     string
+	FirecrackerUseUFFDOnNextRestore bool
+	FirecrackerUFFDSessionID        string
+	FirecrackerUFFDPagerVersion     string
+
 	// Paths
 	SocketPath string // Path to API socket
 	DataDir    string // Instance data directory
@@ -139,6 +159,11 @@ type StoredMetadata struct {
 	SkipKernelHeaders bool // Skip kernel headers installation (disables DKMS)
 	SkipGuestAgent    bool // Skip guest-agent installation (disables exec/stat API)
 
+	// EnableRosetta attaches an Apple Rosetta virtio-fs share so the guest can
+	// execute x86-64 binaries. vz on Apple silicon only. Derived internally when
+	// the image platform differs from the host; not a user-facing field.
+	EnableRosetta bool
+
 	// Snapshot policy defaults for this instance.
 	SnapshotPolicy *SnapshotPolicy
 
@@ -146,23 +171,15 @@ type StoredMetadata struct {
 	// Persisted so server restarts can recover delayed or interrupted jobs.
 	PendingStandbyCompression *PendingStandbyCompression
 
-	// IsTemplate marks a Standby instance promoted to a fork-only parent.
-	// When true, derived state is Template instead of Standby and the
-	// instance cannot wake until un-promoted.
-	IsTemplate bool
-
-	// ForkOfTemplate is the ID of the template this instance was forked from.
-	// Empty when the instance is not a template-backed fork. Live forks of a
-	// template are counted at read time by scanning this field.
-	ForkOfTemplate string
-
-	// HotPagesPath points to a precomputed hot-pages file used by the UFFD page
-	// server prefetch path. Reserved for the prefetch feature; cleared when the
-	// instance is un-promoted out of Template state.
-	HotPagesPath string
-
 	// Automatic standby policy driven by host-observed inbound TCP activity.
 	AutoStandby *autostandby.Policy
+
+	// Workload health check policy. Health is reported separately from lifecycle state.
+	HealthCheck *healthcheck.Policy
+
+	// Whole-instance restart supervision policy and runtime status.
+	RestartPolicy *restartpolicy.Policy
+	RestartStatus restartpolicy.Status
 
 	// Shutdown configuration
 	StopTimeout int // Grace period in seconds for graceful stop (0 = use default 5s)
@@ -187,6 +204,7 @@ type Instance struct {
 	StateError          *string // Error message if state couldn't be determined (non-nil when State=Unknown)
 	HasSnapshot         bool    // Derived from filesystem check
 	BootMarkersHydrated bool    // True when missing boot markers were hydrated from logs in this read
+	HealthCheckRuntime  *healthcheck.Runtime
 }
 
 // GetHypervisorType returns the hypervisor type as a string.
@@ -230,6 +248,7 @@ type GPUConfig struct {
 type CreateInstanceRequest struct {
 	Name                     string                      // Required
 	Image                    string                      // Required: OCI reference
+	Platform                 string                      // Optional: target platform as os/arch[/variant]; drives image resolution and auto-pull. Empty means host platform.
 	Size                     int64                       // Base memory in bytes (default: 1GB)
 	HotplugSize              int64                       // Hotplug memory in bytes (default: 0, set explicitly to enable)
 	OverlaySize              int64                       // Overlay disk size in bytes (default: 10GB)
@@ -253,6 +272,8 @@ type CreateInstanceRequest struct {
 	SkipGuestAgent           bool                        // Skip guest-agent installation (disables exec/stat API)
 	SnapshotPolicy           *SnapshotPolicy             // Optional snapshot policy defaults for this instance
 	AutoStandby              *autostandby.Policy         // Optional automatic standby policy
+	HealthCheck              *healthcheck.Policy         // Optional workload health check policy
+	RestartPolicy            *restartpolicy.Policy       // Optional whole-instance restart policy
 }
 
 // StartInstanceRequest is the domain request for starting a stopped instance
@@ -263,8 +284,11 @@ type StartInstanceRequest struct {
 
 // UpdateInstanceRequest is the domain request for updating mutable instance properties.
 type UpdateInstanceRequest struct {
-	Env         map[string]string   // Updated environment variables (merged with existing)
-	AutoStandby *autostandby.Policy // Replaces the persisted auto-standby policy when non-nil
+	Env              map[string]string     // Updated environment variables (merged with existing)
+	AutoStandby      *autostandby.Policy   // Replaces the persisted auto-standby policy when non-nil
+	HealthCheck      *healthcheck.Policy   // Replaces the persisted health check policy when non-nil
+	RestartPolicy    *restartpolicy.Policy // Replaces the persisted restart policy when non-nil
+	RestartPolicySet bool                  // True when restart policy was present in the update request
 }
 
 // ForkInstanceRequest is the domain request for forking an instance.

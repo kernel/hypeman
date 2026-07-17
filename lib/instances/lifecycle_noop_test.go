@@ -38,9 +38,11 @@ func (h lifecycleNoopHypervisor) Shutdown(context.Context) error { return nil }
 func (h lifecycleNoopHypervisor) GetVMInfo(context.Context) (*hypervisor.VMInfo, error) {
 	return &hypervisor.VMInfo{State: h.state}, nil
 }
-func (h lifecycleNoopHypervisor) Pause(context.Context) error            { return nil }
-func (h lifecycleNoopHypervisor) Resume(context.Context) error           { return nil }
-func (h lifecycleNoopHypervisor) Snapshot(context.Context, string) error { return nil }
+func (h lifecycleNoopHypervisor) Pause(context.Context) error  { return nil }
+func (h lifecycleNoopHypervisor) Resume(context.Context) error { return nil }
+func (h lifecycleNoopHypervisor) Snapshot(context.Context, string) error {
+	return nil
+}
 func (h lifecycleNoopHypervisor) ResizeMemory(context.Context, int64) error {
 	return nil
 }

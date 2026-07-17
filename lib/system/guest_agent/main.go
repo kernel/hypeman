@@ -52,6 +52,8 @@ func main() {
 		log.Printf("[guest-agent] warning: failed to write readiness file: %v", err)
 	}
 
+	startClockKeeper()
+
 	// Create gRPC server
 	grpcServer := grpc.NewServer()
 	pb.RegisterGuestServiceServer(grpcServer, &guestServer{})

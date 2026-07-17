@@ -92,6 +92,7 @@ type Metrics struct {
 	snapshotRestoreMemoryPrepareDuration metric.Float64Histogram
 	snapshotCompressionPreemptionsTotal  metric.Int64Counter
 	lifecycleEventsDroppedTotal          metric.Int64Counter
+	forkMemFileShareFallbacksTotal       metric.Int64Counter
 	tracer                               trace.Tracer
 }
 
@@ -247,6 +248,14 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 	lifecycleEventsDroppedTotal, err := meter.Int64Counter(
 		"hypeman_instances_lifecycle_events_dropped_total",
 		metric.WithDescription("Total number of lifecycle events dropped because subscriber buffers were full"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	forkMemFileShareFallbacksTotal, err := meter.Int64Counter(
+		"hypeman_fork_memfile_share_fallbacks_total",
+		metric.WithDescription("Total number of fork mem-file hardlink failures that fell back to a full copy"),
 	)
 	if err != nil {
 		return nil, err
@@ -444,6 +453,7 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 		snapshotRestoreMemoryPrepareDuration: snapshotRestoreMemoryPrepareDuration,
 		snapshotCompressionPreemptionsTotal:  snapshotCompressionPreemptionsTotal,
 		lifecycleEventsDroppedTotal:          lifecycleEventsDroppedTotal,
+		forkMemFileShareFallbacksTotal:       forkMemFileShareFallbacksTotal,
 		tracer:                               tracer,
 	}, nil
 }
@@ -640,6 +650,16 @@ func (m *manager) recordSnapshotCodecFallback(ctx context.Context, algorithm sna
 		attribute.String("algorithm", string(algorithm)),
 		attribute.String("operation", string(operation)),
 		attribute.String("reason", string(reason)),
+	))
+}
+
+func (m *manager) recordForkMemFileShareFallback(ctx context.Context, reason string) {
+	if m.metrics == nil {
+		return
+	}
+
+	m.metrics.forkMemFileShareFallbacksTotal.Add(ctx, 1, metric.WithAttributes(
+		attribute.String("reason", reason),
 	))
 }
 

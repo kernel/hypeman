@@ -23,8 +23,8 @@ func TestQuickstartParameters(t *testing.T) {
 	assertDefault(t, parameters, "AllowedSshCidr", "127.0.0.1/32")
 	assertDefault(t, parameters, "RootVolumeSize", "30")
 	assertDefault(t, parameters, "DataVolumeSize", "100")
-	assertDefault(t, parameters, "DataVolumeIops", "3000")
-	assertDefault(t, parameters, "DataVolumeThroughput", "125")
+	assertDefault(t, parameters, "DataVolumeIops", "")
+	assertDefault(t, parameters, "DataVolumeThroughput", "")
 	assertDefault(t, parameters, "HypemanVersion", "latest")
 	assertDefault(t, parameters, "HypemanCliVersion", "latest")
 
@@ -99,8 +99,10 @@ func TestCloudFormationLaunchContract(t *testing.T) {
 	zipFile := scalar(t, requireField(t, code, "ZipFile"))
 	assertContains(t, zipFile, `"Action": "CreateLaunchTemplate"`)
 	assertContains(t, zipFile, `"LaunchTemplateData.CpuOptions.NestedVirtualization": "enabled"`)
-	assertContains(t, zipFile, `"LaunchTemplateData.BlockDeviceMapping.2.Ebs.Iops": props["DataVolumeIops"]`)
-	assertContains(t, zipFile, `"LaunchTemplateData.BlockDeviceMapping.2.Ebs.Throughput": props["DataVolumeThroughput"]`)
+	assertContains(t, zipFile, `"LaunchTemplateData.BlockDeviceMapping.1.Ebs.VolumeSize": props["RootVolumeSize"]`)
+	assertContains(t, zipFile, `"LaunchTemplateData.BlockDeviceMapping.2.Ebs.VolumeSize": props["DataVolumeSize"]`)
+	assertContains(t, zipFile, `"LaunchTemplateData.BlockDeviceMapping.2.Ebs.Iops"`)
+	assertContains(t, zipFile, `"LaunchTemplateData.BlockDeviceMapping.2.Ebs.Throughput"`)
 
 	launchTemplateProperties := requireMapping(t, requireField(t, launchTemplate, "Properties"))
 	assertRef(t, requireField(t, launchTemplateProperties, "RootVolumeSize"), "RootVolumeSize")
@@ -119,6 +121,8 @@ func TestCloudFormationLaunchContract(t *testing.T) {
 
 	userData := nodeText(requireField(t, hostProperties, "UserData"))
 	assertContains(t, userData, "curl -fsSL https://raw.githubusercontent.com/kernel/hypeman/main/scripts/install.sh | bash")
+	assertContains(t, userData, `if [ -n "${DataVolumeThroughput}" ]; then`)
+	assertContains(t, userData, `Environment="CAPACITY__DISK_IO=${DataVolumeThroughput}MB/s"`)
 	assertContains(t, userData, "xfsprogs")
 	assertContains(t, userData, "mkfs.xfs -f")
 	assertContains(t, userData, "/var/lib/hypeman")

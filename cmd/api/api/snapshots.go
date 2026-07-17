@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/instances"
 	"github.com/kernel/hypeman/lib/logger"
 	mw "github.com/kernel/hypeman/lib/middleware"
@@ -88,6 +89,8 @@ func (s *ApiService) RestoreInstanceSnapshot(ctx context.Context, request oapi.R
 		switch {
 		case errors.Is(err, instances.ErrNotFound), errors.Is(err, instances.ErrSnapshotNotFound):
 			return oapi.RestoreInstanceSnapshot404JSONResponse{Code: "not_found", Message: "instance or snapshot not found"}, nil
+		case errors.Is(err, images.ErrNotFound):
+			return oapi.RestoreInstanceSnapshot404JSONResponse{Code: "not_found", Message: "instance image not found"}, nil
 		case errors.Is(err, instances.ErrInvalidRequest):
 			return oapi.RestoreInstanceSnapshot400JSONResponse{Code: "invalid_request", Message: err.Error()}, nil
 		case errors.Is(err, instances.ErrInvalidState):
@@ -193,6 +196,8 @@ func (s *ApiService) ForkSnapshot(ctx context.Context, request oapi.ForkSnapshot
 			return oapi.ForkSnapshot400JSONResponse{Code: "invalid_request", Message: err.Error()}, nil
 		case errors.Is(err, instances.ErrInvalidState), errors.Is(err, instances.ErrAlreadyExists), errors.Is(err, network.ErrNameExists):
 			return oapi.ForkSnapshot409JSONResponse{Code: "conflict", Message: err.Error()}, nil
+		case errors.Is(err, instances.ErrInsufficientResources):
+			return oapi.ForkSnapshot409JSONResponse{Code: "insufficient_resources", Message: err.Error()}, nil
 		case errors.Is(err, instances.ErrNotSupported):
 			return oapi.ForkSnapshot501JSONResponse{Code: "not_supported", Message: err.Error()}, nil
 		default:

@@ -11,7 +11,9 @@ import (
 
 	"github.com/c2h5oh/datasize"
 	"github.com/kernel/hypeman/lib/guest"
+	"github.com/kernel/hypeman/lib/healthcheck"
 	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/instances"
 	"github.com/kernel/hypeman/lib/logger"
 	mw "github.com/kernel/hypeman/lib/middleware"
@@ -285,11 +287,26 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 			Message: err.Error(),
 		}, nil
 	}
+	healthCheck, err := toDomainHealthCheck(request.Body.HealthCheck)
+	if err != nil {
+		return oapi.CreateInstance400JSONResponse{
+			Code:    "invalid_health_check",
+			Message: err.Error(),
+		}, nil
+	}
+	restartPolicy, err := toDomainRestartPolicy(request.Body.RestartPolicy)
+	if err != nil {
+		return oapi.CreateInstance400JSONResponse{
+			Code:    "invalid_restart_policy",
+			Message: err.Error(),
+		}, nil
+	}
 
 	domainReq := instances.CreateInstanceRequest{
 		Name:                     request.Body.Name,
 		Image:                    request.Body.Image,
 		Size:                     size,
+		Platform:                 derefString(request.Body.Platform),
 		HotplugSize:              hotplugSize,
 		OverlaySize:              overlaySize,
 		Vcpus:                    vcpus,
@@ -310,6 +327,8 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		SkipKernelHeaders:        request.Body.SkipKernelHeaders != nil && *request.Body.SkipKernelHeaders,
 		SkipGuestAgent:           request.Body.SkipGuestAgent != nil && *request.Body.SkipGuestAgent,
 		AutoStandby:              autoStandby,
+		HealthCheck:              healthCheck,
+		RestartPolicy:            restartPolicy,
 	}
 	if request.Body.SnapshotPolicy != nil {
 		snapshotPolicy, err := toInstanceSnapshotPolicy(*request.Body.SnapshotPolicy)
@@ -348,6 +367,26 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		case errors.Is(err, instances.ErrInvalidRequest):
 			return oapi.CreateInstance400JSONResponse{
 				Code:    "invalid_request",
+				Message: err.Error(),
+			}, nil
+		case errors.Is(err, images.ErrInvalidPlatform):
+			return oapi.CreateInstance400JSONResponse{
+				Code:    "invalid_platform",
+				Message: err.Error(),
+			}, nil
+		case errors.Is(err, images.ErrPlatformNotAvailable):
+			return oapi.CreateInstance404JSONResponse{
+				Code:    "platform_not_available",
+				Message: err.Error(),
+			}, nil
+		case errors.Is(err, images.ErrRateLimited):
+			return oapi.CreateInstance429JSONResponse{
+				Code:    "rate_limited",
+				Message: "registry rate limit exceeded; retry later or authenticate to the registry",
+			}, nil
+		case errors.Is(err, images.ErrNotFound):
+			return oapi.CreateInstance404JSONResponse{
+				Code:    "not_found",
 				Message: err.Error(),
 			}, nil
 		default:
@@ -603,6 +642,16 @@ func (s *ApiService) RestoreInstance(ctx context.Context, request oapi.RestoreIn
 				Code:    "invalid_state",
 				Message: err.Error(),
 			}, nil
+		case errors.Is(err, instances.ErrInsufficientResources):
+			return oapi.RestoreInstance409JSONResponse{
+				Code:    "insufficient_resources",
+				Message: err.Error(),
+			}, nil
+		case errors.Is(err, images.ErrNotFound):
+			return oapi.RestoreInstance404JSONResponse{
+				Code:    "not_found",
+				Message: "instance image not found",
+			}, nil
 		default:
 			log.ErrorContext(ctx, "failed to restore instance", "error", err)
 			return oapi.RestoreInstance500JSONResponse{
@@ -612,80 +661,6 @@ func (s *ApiService) RestoreInstance(ctx context.Context, request oapi.RestoreIn
 		}
 	}
 	return oapi.RestoreInstance200JSONResponse(instanceToOAPI(*result)), nil
-}
-
-// PromoteInstanceToTemplate promotes a standby instance into a fork-only template.
-// The id parameter can be an instance ID, name, or ID prefix.
-// Note: Resolution is handled by ResolveResource middleware.
-func (s *ApiService) PromoteInstanceToTemplate(ctx context.Context, request oapi.PromoteInstanceToTemplateRequestObject) (oapi.PromoteInstanceToTemplateResponseObject, error) {
-	inst := mw.GetResolvedInstance[instances.Instance](ctx)
-	if inst == nil {
-		return oapi.PromoteInstanceToTemplate500JSONResponse{
-			Code:    "internal_error",
-			Message: "resource not resolved",
-		}, nil
-	}
-	log := logger.FromContext(ctx)
-
-	result, err := s.InstanceManager.PromoteToTemplate(ctx, inst.Id)
-	if err != nil {
-		switch {
-		case errors.Is(err, instances.ErrNotFound):
-			return oapi.PromoteInstanceToTemplate404JSONResponse{
-				Code:    "not_found",
-				Message: "instance not found",
-			}, nil
-		case errors.Is(err, instances.ErrInvalidState):
-			return oapi.PromoteInstanceToTemplate409JSONResponse{
-				Code:    "invalid_state",
-				Message: err.Error(),
-			}, nil
-		default:
-			log.ErrorContext(ctx, "failed to promote instance to template", "error", err)
-			return oapi.PromoteInstanceToTemplate500JSONResponse{
-				Code:    "internal_error",
-				Message: "failed to promote instance to template",
-			}, nil
-		}
-	}
-	return oapi.PromoteInstanceToTemplate200JSONResponse(instanceToOAPI(*result)), nil
-}
-
-// DemoteInstanceTemplate demotes a template back to standby so it can be restored or deleted.
-// The id parameter can be an instance ID, name, or ID prefix.
-// Note: Resolution is handled by ResolveResource middleware.
-func (s *ApiService) DemoteInstanceTemplate(ctx context.Context, request oapi.DemoteInstanceTemplateRequestObject) (oapi.DemoteInstanceTemplateResponseObject, error) {
-	inst := mw.GetResolvedInstance[instances.Instance](ctx)
-	if inst == nil {
-		return oapi.DemoteInstanceTemplate500JSONResponse{
-			Code:    "internal_error",
-			Message: "resource not resolved",
-		}, nil
-	}
-	log := logger.FromContext(ctx)
-
-	result, err := s.InstanceManager.DemoteTemplate(ctx, inst.Id)
-	if err != nil {
-		switch {
-		case errors.Is(err, instances.ErrNotFound):
-			return oapi.DemoteInstanceTemplate404JSONResponse{
-				Code:    "not_found",
-				Message: "instance not found",
-			}, nil
-		case errors.Is(err, instances.ErrInvalidState):
-			return oapi.DemoteInstanceTemplate409JSONResponse{
-				Code:    "invalid_state",
-				Message: err.Error(),
-			}, nil
-		default:
-			log.ErrorContext(ctx, "failed to demote template", "error", err)
-			return oapi.DemoteInstanceTemplate500JSONResponse{
-				Code:    "internal_error",
-				Message: "failed to demote template",
-			}, nil
-		}
-	}
-	return oapi.DemoteInstanceTemplate200JSONResponse(instanceToOAPI(*result)), nil
 }
 
 // ForkInstance forks an instance from stopped or standby into a new instance.
@@ -740,10 +715,20 @@ func (s *ApiService) ForkInstance(ctx context.Context, request oapi.ForkInstance
 				Code:    "name_conflict",
 				Message: err.Error(),
 			}, nil
+		case errors.Is(err, instances.ErrInsufficientResources):
+			return oapi.ForkInstance409JSONResponse{
+				Code:    "insufficient_resources",
+				Message: err.Error(),
+			}, nil
 		case errors.Is(err, instances.ErrNotSupported):
 			return oapi.ForkInstance501JSONResponse{
 				Code:    "not_supported",
 				Message: err.Error(),
+			}, nil
+		case errors.Is(err, images.ErrNotFound):
+			return oapi.ForkInstance404JSONResponse{
+				Code:    "not_found",
+				Message: "instance image not found",
 			}, nil
 		default:
 			log.ErrorContext(ctx, "failed to fork instance", "error", err)
@@ -824,6 +809,11 @@ func (s *ApiService) StartInstance(ctx context.Context, request oapi.StartInstan
 			return oapi.StartInstance409JSONResponse{
 				Code:    "insufficient_resources",
 				Message: err.Error(),
+			}, nil
+		case errors.Is(err, images.ErrNotFound):
+			return oapi.StartInstance404JSONResponse{
+				Code:    "not_found",
+				Message: "instance image not found",
 			}, nil
 		default:
 			log.ErrorContext(ctx, "failed to start instance", "error", err)
@@ -1028,10 +1018,27 @@ func (s *ApiService) UpdateInstance(ctx context.Context, request oapi.UpdateInst
 			Message: err.Error(),
 		}, nil
 	}
+	healthCheck, err := toDomainHealthCheck(request.Body.HealthCheck)
+	if err != nil {
+		return oapi.UpdateInstance400JSONResponse{
+			Code:    "invalid_health_check",
+			Message: err.Error(),
+		}, nil
+	}
+	restartPolicy, err := toDomainRestartPolicy(request.Body.RestartPolicy)
+	if err != nil {
+		return oapi.UpdateInstance400JSONResponse{
+			Code:    "invalid_restart_policy",
+			Message: err.Error(),
+		}, nil
+	}
 
 	result, err := s.InstanceManager.UpdateInstance(ctx, inst.Id, instances.UpdateInstanceRequest{
-		Env:         env,
-		AutoStandby: autoStandby,
+		Env:              env,
+		AutoStandby:      autoStandby,
+		HealthCheck:      healthCheck,
+		RestartPolicy:    restartPolicy,
+		RestartPolicySet: request.Body.RestartPolicy != nil,
 	})
 	if err != nil {
 		switch {
@@ -1147,6 +1154,10 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 		_ = json.Unmarshal(b, &oapiInst.Network)
 	}
 
+	if inst.Platform != "" {
+		oapiInst.Platform = lo.ToPtr(inst.Platform)
+	}
+
 	if inst.ExitMessage != "" {
 		oapiInst.ExitMessage = lo.ToPtr(inst.ExitMessage)
 	}
@@ -1163,6 +1174,10 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 		oapiInst.SnapshotPolicy = &oapiPolicy
 	}
 	oapiInst.AutoStandby = toOAPIAutoStandbyPolicy(inst.AutoStandby)
+	oapiInst.HealthCheck = toOAPIHealthCheck(inst.HealthCheck)
+	oapiInst.HealthStatus = toOAPIHealthStatus(healthcheck.Snapshot(inst.HealthCheck, string(inst.State), inst.HealthCheckRuntime))
+	oapiInst.RestartPolicy = toOAPIRestartPolicy(inst.RestartPolicy)
+	oapiInst.RestartStatus = toOAPIRestartStatus(inst.RestartStatus)
 
 	// Convert volume attachments
 	if len(inst.Volumes) > 0 {

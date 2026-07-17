@@ -246,7 +246,59 @@ func (c *Client) Pause(ctx context.Context) error {
 }
 
 func (c *Client) Resume(ctx context.Context) error {
-	return c.doPut(ctx, "/api/v1/vm.resume", nil)
+	if err := c.doPut(ctx, "/api/v1/vm.resume", nil); err != nil {
+		return err
+	}
+	// vm.resume is fire-and-forget on the shim: it returns as soon as the resume
+	// is requested, before the guest has actually left the Paused/Resuming
+	// transition. Callers (e.g. generic restore) expect Resume's post-condition to
+	// be "Running" so an immediate vm.info read-back or guest exec doesn't observe
+	// a transient Paused. Poll the shim's raw state until it reports Running,
+	// bounded by a short timeout so a stuck VM still surfaces an error.
+	return c.waitForRawState(ctx, "Running")
+}
+
+const (
+	resumeReadyTimeout      = 10 * time.Second
+	resumeReadyPollInterval = 25 * time.Millisecond
+)
+
+// waitForRawState polls vm.info until the shim's raw state string equals want or
+// resumeReadyTimeout elapses. It checks the raw state (not the hypervisor.VMState
+// mapping, which collapses "Resuming" into Running) so the post-condition is the
+// guest actually being in the requested state.
+func (c *Client) waitForRawState(ctx context.Context, want string) error {
+	deadline := time.Now().Add(resumeReadyTimeout)
+	for {
+		state, err := c.rawVMState(ctx)
+		if err == nil && state == want {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			if err != nil {
+				return fmt.Errorf("wait for vm state %q: %w", want, err)
+			}
+			return fmt.Errorf("vm did not reach state %q within %s (last state %q)", want, resumeReadyTimeout, state)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(resumeReadyPollInterval):
+		}
+	}
+}
+
+// rawVMState returns the shim's unmapped state string from vm.info.
+func (c *Client) rawVMState(ctx context.Context) (string, error) {
+	body, err := c.doGet(ctx, "/api/v1/vm.info")
+	if err != nil {
+		return "", fmt.Errorf("get vm info: %w", err)
+	}
+	var info vmInfoResponse
+	if err := json.Unmarshal(body, &info); err != nil {
+		return "", fmt.Errorf("decode vm info: %w", err)
+	}
+	return info.State, nil
 }
 
 func (c *Client) Snapshot(ctx context.Context, destPath string) error {

@@ -17,6 +17,10 @@ import (
 
 	securejoin "github.com/cyphar/filepath-securejoin"
 	"github.com/kernel/hypeman/lib/hypervisor"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	otelcodes "go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -26,6 +30,10 @@ import (
 const (
 	// vsockGuestPort is the port the guest-agent listens on inside the guest
 	vsockGuestPort = 2222
+
+	guestExecFastRetryInterval = 25 * time.Millisecond
+	guestExecSlowRetryInterval = 250 * time.Millisecond
+	guestExecFastRetryWindow   = 2 * time.Second
 )
 
 // AgentVSockDialError indicates the vsock dial to the guest agent failed.
@@ -74,8 +82,12 @@ func GetOrCreateConn(ctx context.Context, dialer hypervisor.VsockDialer) (*grpc.
 	}
 
 	// Create new connection using the VsockDialer
+	traceCtx := ctx
 	conn, err := grpc.Dial("passthrough:///vsock",
 		grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
+			if span := trace.SpanFromContext(traceCtx); span.SpanContext().IsValid() {
+				ctx = trace.ContextWithSpan(ctx, span)
+			}
 			netConn, err := dialer.DialVsock(ctx, vsockGuestPort)
 			if err != nil {
 				return nil, &AgentVSockDialError{Err: err}
@@ -93,17 +105,25 @@ func GetOrCreateConn(ctx context.Context, dialer hypervisor.VsockDialer) (*grpc.
 	return conn, nil
 }
 
-// CloseConn removes a connection from the pool by key (call when VM is deleted).
-// We only remove from pool, not explicitly close - the connection will fail
-// naturally when the VM dies, and grpc will clean up.
+// CloseConn removes and closes a connection from the pool by key.
 func CloseConn(dialerKey string) {
 	connPool.Lock()
-	defer connPool.Unlock()
-
-	if _, ok := connPool.conns[dialerKey]; ok {
+	conn, ok := connPool.conns[dialerKey]
+	if ok {
 		delete(connPool.conns, dialerKey)
-		slog.Debug("removed gRPC connection from pool", "key", dialerKey)
 	}
+	connPool.Unlock()
+
+	if !ok {
+		return
+	}
+	go func() {
+		if err := conn.Close(); err != nil {
+			slog.Debug("failed to close gRPC connection", "key", dialerKey, "error", err)
+			return
+		}
+		slog.Debug("closed and removed gRPC connection from pool", "key", dialerKey)
+	}()
 }
 
 // ExitStatus represents command exit information
@@ -130,43 +150,264 @@ type ExecOptions struct {
 	ResizeChan   <-chan *WindowSize // Optional: channel to receive resize events (pointer to avoid copying mutex)
 }
 
+type ReconfigureNetworkOptions struct {
+	InterfaceName string
+	MAC           string
+	IPv4          string
+	Prefix        uint32
+	Gateway       string
+	WaitForAgent  time.Duration
+}
+
+func ReconfigureNetworkInInstance(ctx context.Context, dialer hypervisor.VsockDialer, opts ReconfigureNetworkOptions) error {
+	if opts.WaitForAgent == 0 {
+		err := reconfigureNetworkOnce(ctx, dialer, opts)
+		if err != nil && isRetryableConnectionError(err) {
+			CloseConn(dialer.Key())
+		}
+		return err
+	}
+
+	ctx, span := otel.Tracer("hypeman/guest").Start(ctx, "guest.reconfigure_network", trace.WithAttributes(
+		attribute.Bool("wait_for_agent", true),
+		attribute.Int64("wait_for_agent_ms", opts.WaitForAgent.Milliseconds()),
+	))
+	defer span.End()
+
+	deadline := time.Now().Add(opts.WaitForAgent)
+	start := time.Now()
+	attempts := 0
+	retryableAttempts := 0
+	firstRetryableErrorType := ""
+	lastRetryableErrorType := ""
+	lastRetryInterval := time.Duration(0)
+
+	for {
+		attempts++
+		err := reconfigureNetworkOnce(ctx, dialer, opts)
+		if err == nil {
+			recordGuestExecWait(span, start, attempts, retryableAttempts, firstRetryableErrorType, lastRetryableErrorType, lastRetryInterval)
+			span.SetStatus(otelcodes.Ok, "")
+			return nil
+		}
+		if !isRetryableConnectionError(err) {
+			recordGuestExecWait(span, start, attempts, retryableAttempts, firstRetryableErrorType, lastRetryableErrorType, lastRetryInterval)
+			span.RecordError(err)
+			span.SetStatus(otelcodes.Error, err.Error())
+			return err
+		}
+
+		retryableAttempts++
+		errType := retryableConnectionErrorType(err)
+		if firstRetryableErrorType == "" {
+			firstRetryableErrorType = errType
+		}
+		lastRetryableErrorType = errType
+		CloseConn(dialer.Key())
+
+		if time.Now().After(deadline) {
+			recordGuestExecWait(span, start, attempts, retryableAttempts, firstRetryableErrorType, lastRetryableErrorType, lastRetryInterval)
+			span.RecordError(err)
+			span.SetStatus(otelcodes.Error, err.Error())
+			return err
+		}
+
+		retryInterval := guestExecRetryInterval(time.Since(start))
+		lastRetryInterval = retryInterval
+		select {
+		case <-ctx.Done():
+			recordGuestExecWait(span, start, attempts, retryableAttempts, firstRetryableErrorType, lastRetryableErrorType, lastRetryInterval)
+			span.RecordError(ctx.Err())
+			span.SetStatus(otelcodes.Error, ctx.Err().Error())
+			return ctx.Err()
+		case <-time.After(retryInterval):
+		}
+	}
+}
+
+func reconfigureNetworkOnce(ctx context.Context, dialer hypervisor.VsockDialer, opts ReconfigureNetworkOptions) error {
+	grpcConn, err := GetOrCreateConn(ctx, dialer)
+	if err != nil {
+		return fmt.Errorf("get grpc connection: %w", err)
+	}
+	client := NewGuestServiceClient(grpcConn)
+
+	_, span := otel.Tracer("hypeman/guest").Start(ctx, "guest.reconfigure_network.rpc")
+	_, err = client.ReconfigureNetwork(ctx, &ReconfigureNetworkRequest{
+		InterfaceName: opts.InterfaceName,
+		Mac:           opts.MAC,
+		Ipv4:          opts.IPv4,
+		Prefix:        opts.Prefix,
+		Gateway:       opts.Gateway,
+	})
+	finishGuestNetworkStepSpan(span, err)
+	if err != nil {
+		return fmt.Errorf("reconfigure network rpc: %w", err)
+	}
+	return nil
+}
+
+func finishGuestNetworkStepSpan(span trace.Span, err error) {
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(otelcodes.Error, err.Error())
+	} else {
+		span.SetStatus(otelcodes.Ok, "")
+	}
+	span.End()
+}
+
 // ExecIntoInstance executes command in instance via vsock using gRPC.
 // The dialer is a hypervisor-specific VsockDialer that knows how to connect to the guest.
 // If WaitForAgent is set, it will retry on connection errors until the timeout.
-func ExecIntoInstance(ctx context.Context, dialer hypervisor.VsockDialer, opts ExecOptions) (*ExitStatus, error) {
-	// If no wait requested, execute immediately
+func ExecIntoInstance(ctx context.Context, dialer hypervisor.VsockDialer, opts ExecOptions) (exit *ExitStatus, err error) {
+	// If no wait requested, execute immediately. API-level exec calls already have
+	// their own exec.session span; the detailed retry spans are only useful when
+	// we are waiting for the guest-agent to become reachable.
 	if opts.WaitForAgent == 0 {
-		return execIntoInstanceOnce(ctx, dialer, opts)
+		exit, err := execIntoInstanceOnce(ctx, dialer, opts)
+		if err != nil && isRetryableConnectionError(err) {
+			CloseConn(dialer.Key())
+		}
+		return exit, err
 	}
 
+	ctx, span := startGuestExecSpan(ctx, opts)
+	defer func() {
+		finishGuestExecSpan(span, exit, err)
+	}()
+
 	deadline := time.Now().Add(opts.WaitForAgent)
+	start := time.Now()
+	attempts := 0
+	retryableAttempts := 0
+	firstRetryableErrorType := ""
+	lastRetryableErrorType := ""
+	lastRetryInterval := time.Duration(0)
 
 	for {
+		attempts++
 		exit, err := execIntoInstanceOnce(ctx, dialer, opts)
 
 		// Success - return immediately
 		if err == nil {
+			recordGuestExecWait(span, start, attempts, retryableAttempts, firstRetryableErrorType, lastRetryableErrorType, lastRetryInterval)
 			return exit, err
 		}
 
 		// Check if this is a retryable connection error
 		if !isRetryableConnectionError(err) {
+			recordGuestExecWait(span, start, attempts, retryableAttempts, firstRetryableErrorType, lastRetryableErrorType, lastRetryInterval)
 			return exit, err
 		}
+		retryableAttempts++
+		errType := retryableConnectionErrorType(err)
+		if firstRetryableErrorType == "" {
+			firstRetryableErrorType = errType
+		}
+		lastRetryableErrorType = errType
+		CloseConn(dialer.Key())
 
 		// Connection error - check if we should retry
 		if time.Now().After(deadline) {
+			recordGuestExecWait(span, start, attempts, retryableAttempts, firstRetryableErrorType, lastRetryableErrorType, lastRetryInterval)
 			return nil, err
 		}
+
+		retryInterval := guestExecRetryInterval(time.Since(start))
+		lastRetryInterval = retryInterval
 
 		// Wait before retrying, but respect context cancellation
 		select {
 		case <-ctx.Done():
+			recordGuestExecWait(span, start, attempts, retryableAttempts, firstRetryableErrorType, lastRetryableErrorType, lastRetryInterval)
 			return nil, ctx.Err()
-		case <-time.After(500 * time.Millisecond):
+		case <-time.After(retryInterval):
 			// Continue to retry
 		}
 	}
+}
+
+func guestExecRetryInterval(elapsed time.Duration) time.Duration {
+	if elapsed < guestExecFastRetryWindow {
+		return guestExecFastRetryInterval
+	}
+	return guestExecSlowRetryInterval
+}
+
+func recordGuestExecWait(span trace.Span, start time.Time, attempts, retryableAttempts int, firstRetryableErrorType, lastRetryableErrorType string, lastRetryInterval time.Duration) {
+	attrs := []attribute.KeyValue{
+		attribute.Int("attempts", attempts),
+		attribute.Int("retryable_attempts", retryableAttempts),
+		attribute.Int64("wait_elapsed_ms", time.Since(start).Milliseconds()),
+	}
+	if firstRetryableErrorType != "" {
+		attrs = append(attrs, attribute.String("first_retryable_error_type", firstRetryableErrorType))
+	}
+	if lastRetryableErrorType != "" {
+		attrs = append(attrs, attribute.String("last_retryable_error_type", lastRetryableErrorType))
+	}
+	if lastRetryInterval > 0 {
+		attrs = append(attrs, attribute.Int64("last_retry_interval_ms", lastRetryInterval.Milliseconds()))
+	}
+	span.SetAttributes(attrs...)
+}
+
+func startGuestExecSpan(ctx context.Context, opts ExecOptions) (context.Context, trace.Span) {
+	return guestTracer().Start(ctx, "guest.exec", trace.WithAttributes(
+		attribute.String("command_name", execCommandName(opts.Command)),
+		attribute.Bool("tty", opts.TTY),
+		attribute.Bool("wait_for_agent", opts.WaitForAgent > 0),
+		attribute.Int64("wait_for_agent_ms", opts.WaitForAgent.Milliseconds()),
+		attribute.Int("timeout_seconds", int(opts.Timeout)),
+		attribute.Int64("retry_fast_interval_ms", guestExecFastRetryInterval.Milliseconds()),
+		attribute.Int64("retry_slow_interval_ms", guestExecSlowRetryInterval.Milliseconds()),
+		attribute.Int64("retry_fast_window_ms", guestExecFastRetryWindow.Milliseconds()),
+	))
+}
+
+func guestTracer() trace.Tracer {
+	return otel.Tracer("hypeman/guest")
+}
+
+func startGuestExecStep(ctx context.Context, opts ExecOptions, name string, attrs ...attribute.KeyValue) (trace.Span, func(error)) {
+	if opts.WaitForAgent == 0 {
+		return nil, func(error) {}
+	}
+	_, span := guestTracer().Start(ctx, name, trace.WithAttributes(attrs...))
+	return span, func(err error) {
+		finishGuestExecStepSpan(span, err)
+	}
+}
+
+func finishGuestExecStepSpan(span trace.Span, err error) {
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(otelcodes.Error, err.Error())
+	} else {
+		span.SetStatus(otelcodes.Ok, "")
+	}
+	span.End()
+}
+
+func finishGuestExecSpan(span trace.Span, exit *ExitStatus, err error) {
+	if exit != nil {
+		span.SetAttributes(attribute.Int("exit_code", exit.Code))
+	}
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(otelcodes.Error, err.Error())
+	} else {
+		span.SetStatus(otelcodes.Ok, "")
+	}
+	span.End()
+}
+
+func execCommandName(command []string) string {
+	if len(command) == 0 || command[0] == "" {
+		return "/bin/sh"
+	}
+	return filepath.Base(command[0])
 }
 
 // isRetryableConnectionError returns true if the error indicates the guest agent
@@ -188,13 +429,26 @@ func isRetryableConnectionError(err error) bool {
 	return false
 }
 
+func retryableConnectionErrorType(err error) string {
+	var dialErr *AgentVSockDialError
+	if errors.As(err, &dialErr) {
+		return "vsock_dial"
+	}
+	if s, ok := status.FromError(err); ok && s.Code() == codes.Unavailable {
+		return "grpc_unavailable"
+	}
+	return fmt.Sprintf("%T", err)
+}
+
 // execIntoInstanceOnce executes command in instance via vsock using gRPC (single attempt).
 func execIntoInstanceOnce(ctx context.Context, dialer hypervisor.VsockDialer, opts ExecOptions) (*ExitStatus, error) {
 	start := time.Now()
 	var bytesSent int64
 
 	// Get or create a reusable gRPC connection for this vsock dialer
+	_, finishGetConn := startGuestExecStep(ctx, opts, "guest.exec.get_conn")
 	grpcConn, err := GetOrCreateConn(ctx, dialer)
+	finishGetConn(err)
 	if err != nil {
 		return nil, fmt.Errorf("get grpc connection: %w", err)
 	}
@@ -202,7 +456,9 @@ func execIntoInstanceOnce(ctx context.Context, dialer hypervisor.VsockDialer, op
 
 	// Create guest client
 	client := NewGuestServiceClient(grpcConn)
+	_, finishOpenStream := startGuestExecStep(ctx, opts, "guest.exec.open_stream")
 	stream, err := client.Exec(ctx)
+	finishOpenStream(err)
 	if err != nil {
 		return nil, fmt.Errorf("start exec stream: %w", err)
 	}
@@ -210,6 +466,7 @@ func execIntoInstanceOnce(ctx context.Context, dialer hypervisor.VsockDialer, op
 	defer stream.CloseSend()
 
 	// Send start request with initial window size
+	_, finishSendStart := startGuestExecStep(ctx, opts, "guest.exec.send_start")
 	if err := stream.Send(&ExecRequest{
 		Request: &ExecRequest_Start{
 			Start: &ExecStart{
@@ -223,8 +480,10 @@ func execIntoInstanceOnce(ctx context.Context, dialer hypervisor.VsockDialer, op
 			},
 		},
 	}); err != nil {
+		finishSendStart(err)
 		return nil, fmt.Errorf("send start request: %w", err)
 	}
+	finishSendStart(nil)
 
 	// Mutex to protect concurrent stream.Send/CloseSend calls (gRPC streams are not thread-safe)
 	var streamMu sync.Mutex
@@ -270,13 +529,32 @@ func execIntoInstanceOnce(ctx context.Context, dialer hypervisor.VsockDialer, op
 
 	// Receive responses
 	var totalStdout, totalStderr int
+	recvSpan, finishRecv := startGuestExecStep(ctx, opts, "guest.exec.recv_until_exit")
+	finishReceive := func(err error, exitCode *int) {
+		if recvSpan != nil {
+			attrs := []attribute.KeyValue{
+				attribute.Int("stdout_bytes", totalStdout),
+				attribute.Int("stderr_bytes", totalStderr),
+				attribute.Int64("bytes_sent", atomic.LoadInt64(&bytesSent)),
+			}
+			if exitCode != nil {
+				attrs = append(attrs, attribute.Int("exit_code", *exitCode))
+			}
+			recvSpan.SetAttributes(attrs...)
+		}
+		finishRecv(err)
+	}
 	for {
 		resp, err := stream.Recv()
 		if err == io.EOF {
-			return nil, fmt.Errorf("stream closed without exit code (stdout=%d, stderr=%d)", totalStdout, totalStderr)
+			err := fmt.Errorf("stream closed without exit code (stdout=%d, stderr=%d)", totalStdout, totalStderr)
+			finishReceive(err, nil)
+			return nil, err
 		}
 		if err != nil {
-			return nil, fmt.Errorf("receive response (stdout=%d, stderr=%d): %w", totalStdout, totalStderr, err)
+			err := fmt.Errorf("receive response (stdout=%d, stderr=%d): %w", totalStdout, totalStderr, err)
+			finishReceive(err, nil)
+			return nil, err
 		}
 
 		switch r := resp.Response.(type) {
@@ -297,6 +575,7 @@ func execIntoInstanceOnce(ctx context.Context, dialer hypervisor.VsockDialer, op
 				bytesReceived := int64(totalStdout + totalStderr)
 				GuestMetrics.RecordExecSession(ctx, start, exitCode, atomic.LoadInt64(&bytesSent), bytesReceived)
 			}
+			finishReceive(nil, &exitCode)
 			return &ExitStatus{Code: exitCode}, nil
 		}
 	}

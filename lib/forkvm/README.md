@@ -59,6 +59,28 @@ instead of reusing the source identity.
 - Network override fields are supplied at snapshot load to bind the fork to its
   own TAP device.
 - Vsock CID remains stable for snapshot-based flows.
+- Standby forks hardlink the source's snapshot mem-file instead of copying it:
+  fanout costs no memory I/O and every fork of a snapshot faults against one
+  inode, so the kernel page cache (and the UFFD pager cache, keyed by the
+  inherited snapshot cache key) is shared across siblings. Deleting the source
+  is still safe immediately — unlink only drops a name; forks keep the inode
+  alive via its link count.
+- Sharing an inode is safe because Firecracker mmaps the mem-file MAP_PRIVATE
+  (guest writes never reach the file) and the only file writer — the in-place
+  diff-snapshot merge on standby — first replaces any mem-file with `nlink > 1`
+  with a private copy (reflink-cloned where the filesystem supports FICLONE,
+  sparse-copied otherwise). A fork therefore becomes fully independent at its
+  first standby, and a source that standbys while forks still share its base
+  unshares the same way instead of mutating memory a fork reads.
+- When the Firecracker snapshot memory backend is configured as UFFD, UFFD is
+  used as a one-shot acceleration for the first restore of a newly forked
+  standby snapshot.
+- Subsequent direct restores of that same fork use Firecracker's normal
+  file-backed memory backend. If that standby fork is itself forked again, the
+  new child gets its own one-shot UFFD restore.
+- This keeps UFFD on the high-fanout path where shared snapshot cache is most
+  useful, while preserving the normal Firecracker diff-snapshot lifecycle for
+  per-instance standby/resume cycles.
 
 ## VZ (Virtualization.framework)
 

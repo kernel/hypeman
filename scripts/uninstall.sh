@@ -19,7 +19,7 @@ SERVICE_USER="hypeman"
 RED='\033[38;2;255;110;110m'
 GREEN='\033[38;2;92;190;83m'
 YELLOW='\033[0;33m'
-PURPLE='\033[38;2;172;134;249m'
+KERNEL_GREEN='\033[38;2;129;179;0m'
 NC='\033[0m' # No Color
 
 info() { echo -e "${GREEN}[INFO]${NC} $1"; }
@@ -94,6 +94,13 @@ if [ "$OS" = "darwin" ]; then
         launchctl unload "$PLIST_PATH" 2>/dev/null || true
     fi
 else
+    $SUDO systemctl list-units "${SERVICE_NAME}-uffd@*.service" --all --no-legend 2>/dev/null | awk '{print $1}' | while read -r unit; do
+        if [ -n "$unit" ]; then
+            info "Stopping ${unit}..."
+            $SUDO systemctl stop "$unit" 2>/dev/null || true
+        fi
+    done
+
     if $SUDO systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
         info "Stopping ${SERVICE_NAME} service..."
         $SUDO systemctl stop "$SERVICE_NAME"
@@ -118,8 +125,12 @@ else
     if [ -f "${SYSTEMD_DIR}/${SERVICE_NAME}.service" ]; then
         info "Removing systemd service..."
         $SUDO rm -f "${SYSTEMD_DIR}/${SERVICE_NAME}.service"
-        $SUDO systemctl daemon-reload
     fi
+    if [ -f "${SYSTEMD_DIR}/${SERVICE_NAME}-uffd@.service" ]; then
+        info "Removing UFFD pager systemd service template..."
+        $SUDO rm -f "${SYSTEMD_DIR}/${SERVICE_NAME}-uffd@.service"
+    fi
+    $SUDO systemctl daemon-reload
 fi
 
 # =============================================================================
@@ -197,7 +208,7 @@ fi
 # =============================================================================
 
 echo ""
-echo -e "${PURPLE}"
+echo -e "${KERNEL_GREEN}"
 cat << 'EOF'
  ██╗  ██╗  ██╗   ██╗  ██████╗   ███████╗  ███╗   ███╗   █████╗   ███╗   ██╗
  ██║  ██║  ╚██╗ ██╔╝  ██╔══██╗  ██╔════╝  ████╗ ████║  ██╔══██╗  ████╗  ██║

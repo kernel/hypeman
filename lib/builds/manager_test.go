@@ -29,6 +29,7 @@ type mockInstanceManager struct {
 	getFunc         func(ctx context.Context, id string) (*instances.Instance, error)
 	deleteFunc      func(ctx context.Context, id string) error
 	stopFunc        func(ctx context.Context, id string) (*instances.Instance, error)
+	vsockDialerFunc func(ctx context.Context, instanceID string) (hypervisor.VsockDialer, error)
 	createCallCount int
 	deleteCallCount int
 }
@@ -116,14 +117,6 @@ func (m *mockInstanceManager) RestoreInstance(ctx context.Context, id string) (*
 	return nil, nil
 }
 
-func (m *mockInstanceManager) PromoteToTemplate(ctx context.Context, id string) (*instances.Instance, error) {
-	return nil, nil
-}
-
-func (m *mockInstanceManager) DemoteTemplate(ctx context.Context, id string) (*instances.Instance, error) {
-	return nil, nil
-}
-
 func (m *mockInstanceManager) RestoreSnapshot(ctx context.Context, id string, snapshotID string, req instances.RestoreSnapshotRequest) (*instances.Instance, error) {
 	return nil, instances.ErrNotSupported
 }
@@ -176,7 +169,10 @@ func (m *mockInstanceManager) SetResourceValidator(v instances.ResourceValidator
 }
 
 func (m *mockInstanceManager) GetVsockDialer(ctx context.Context, instanceID string) (hypervisor.VsockDialer, error) {
-	return nil, nil
+	if m.vsockDialerFunc != nil {
+		return m.vsockDialerFunc(ctx, instanceID)
+	}
+	return nil, fmt.Errorf("vsock dialer unavailable in mock instance manager")
 }
 
 func (m *mockInstanceManager) SubscribeLifecycleEvents(consumer instances.LifecycleEventConsumer) (<-chan instances.LifecycleEvent, func()) {

@@ -3,6 +3,8 @@ package instances
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
@@ -10,8 +12,10 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/guest"
+	"github.com/kernel/hypeman/lib/healthcheck"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
+	restartpolicy "github.com/kernel/hypeman/lib/restart-policy"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/vishvananda/netlink"
@@ -26,6 +30,8 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 
 	manager, _ := setupTestManager(t)
 	ctx := context.Background()
+	startHealthCheckControllerForTest(t, ctx, manager)
+	startRestartPolicyControllerForTest(t, ctx, manager)
 
 	// Pull nginx:alpine image (long-running workload)
 	t.Log("Pulling nginx:alpine image...")
@@ -59,6 +65,7 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 	t.Log("Initializing network...")
 	err = manager.networkManager.Initialize(ctx, nil)
 	require.NoError(t, err)
+	require.NoError(t, manager.networkManager.SetupHTB(ctx, 100*1024*1024))
 	t.Log("Network initialized")
 
 	// Create instance with nginx:alpine and default network
@@ -71,10 +78,26 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 		OverlaySize:    5 * 1024 * 1024 * 1024,
 		Vcpus:          1,
 		NetworkEnabled: true,
+		HealthCheck: &healthcheck.Policy{
+			Type:             healthcheck.TypeHTTP,
+			Interval:         "1s",
+			Timeout:          "1s",
+			StartPeriod:      "30s",
+			FailureThreshold: 3,
+			SuccessThreshold: 1,
+			HTTP: &healthcheck.HTTPCheck{
+				Port:           80,
+				Path:           "/",
+				ExpectedStatus: 200,
+			},
+		},
 	})
 	require.NoError(t, err)
 	require.NotNil(t, inst)
 	require.Contains(t, []State{StateInitializing, StateRunning}, inst.State)
+	require.NotNil(t, inst.HealthCheck)
+	initialHealth := healthcheck.Snapshot(inst.HealthCheck, string(inst.State), inst.HealthCheckRuntime)
+	assert.Equal(t, healthcheck.StatusStarting, initialHealth.Status)
 	t.Logf("Instance created: %s", inst.Id)
 
 	// Wait for VM to be fully ready
@@ -104,6 +127,18 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 	require.NoError(t, err)
 	_, isBridge := master.(*netlink.Bridge)
 	assert.True(t, isBridge, "TAP should be attached to a bridge")
+	bridgeName := master.Attrs().Name
+
+	t.Log("Verifying orphaned bridge tc cleanup preserves live TAP state...")
+	liveFlowID := createBridgeTCForTest(t, bridgeName, tap.Attrs().Index)
+	require.True(t, bridgeClassExists(t, bridgeName, liveFlowID), "live bridge tc class should exist before cleanup")
+	staleFlowID := createBridgeTCForTest(t, bridgeName, 1)
+	deletedTC := manager.networkManager.CleanupOrphanedClasses(ctx)
+	require.GreaterOrEqual(t, deletedTC, 2, "expected stale filter and class to be deleted")
+	assert.True(t, bridgeFilterExistsForFlowID(t, bridgeName, liveFlowID), "live bridge tc filter should remain")
+	assert.True(t, bridgeClassExists(t, bridgeName, liveFlowID), "live bridge tc class should remain")
+	assert.False(t, bridgeFilterExistsForFlowID(t, bridgeName, staleFlowID), "stale bridge tc filter should be deleted")
+	assert.False(t, bridgeClassExists(t, bridgeName, staleFlowID), "stale bridge tc class should be deleted")
 
 	// Wait for nginx to start
 	t.Log("Waiting for nginx to start...")
@@ -120,6 +155,15 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 	// Standby requires running state; create may still return Initializing.
 	inst, err = waitForInstanceState(ctx, manager, inst.Id, StateRunning, integrationTestTimeout(20*time.Second))
 	require.NoError(t, err)
+
+	t.Log("Waiting for health check to report healthy...")
+	inst, healthStatus, err := waitForInstanceHealthStatus(ctx, manager, inst.Id, healthcheck.StatusHealthy, 20*time.Second)
+	require.NoError(t, err)
+	assert.Equal(t, StateRunning, inst.State)
+	assert.GreaterOrEqual(t, healthStatus.ConsecutiveSuccesses, 1)
+	assert.NotNil(t, healthStatus.LastCheckedAt)
+	assert.NotNil(t, healthStatus.LastSuccessAt)
+	t.Log("Health check reported healthy")
 
 	// Test initial internet connectivity via exec
 	t.Log("Testing initial internet connectivity via exec...")
@@ -212,6 +256,44 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 	require.Contains(t, psOutput, "nginx: master process", "nginx master should still be running")
 	t.Log("Nginx process confirmed running - restore was successful!")
 
+	// Flip health checks to a guaranteed failure and verify restart policy stop-starts the same instance.
+	t.Log("Triggering restart policy from failing health check...")
+	require.NotNil(t, inst.StartedAt)
+	startedAtBeforeRestart := *inst.StartedAt
+	inst, err = manager.UpdateInstance(ctx, inst.Id, UpdateInstanceRequest{
+		HealthCheck: &healthcheck.Policy{
+			Type:             healthcheck.TypeHTTP,
+			Interval:         "1s",
+			Timeout:          "1s",
+			StartPeriod:      "1s",
+			FailureThreshold: 1,
+			SuccessThreshold: 1,
+			HTTP: &healthcheck.HTTPCheck{
+				Port:           80,
+				Path:           "/definitely-missing",
+				ExpectedStatus: 200,
+			},
+		},
+		RestartPolicy: &restartpolicy.Policy{
+			Policy:      restartpolicy.PolicyOnFailure,
+			Backoff:     "1s",
+			MaxAttempts: 1,
+			StableAfter: "30s",
+		},
+		RestartPolicySet: true,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, inst.RestartPolicy)
+	assert.Equal(t, restartpolicy.PolicyOnFailure, inst.RestartPolicy.Policy)
+
+	inst, err = waitForRestartPolicyBlocked(ctx, manager, inst.Id, restartpolicy.BlockedReasonMaxAttemptsExceeded, 60*time.Second)
+	require.NoError(t, err)
+	require.Equal(t, StateRunning, inst.State)
+	require.Equal(t, 1, inst.RestartStatus.Attempts)
+	require.NotNil(t, inst.StartedAt)
+	assert.True(t, inst.StartedAt.After(startedAtBeforeRestart), "instance should have been started again")
+	t.Log("Restart policy performed stop-start and blocked after max attempts")
+
 	// Cleanup
 	t.Log("Cleaning up instance...")
 	err = manager.DeleteInstance(ctx, inst.Id)
@@ -230,6 +312,216 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 	t.Log("Network allocation released after delete")
 
 	t.Log("Network integration test complete!")
+}
+
+func tcForTest(t *testing.T) string {
+	t.Helper()
+	if path, err := exec.LookPath("tc"); err == nil {
+		return path
+	}
+	return "/usr/sbin/tc"
+}
+
+func runTCForTest(t *testing.T, args ...string) string {
+	t.Helper()
+	output, err := exec.Command(tcForTest(t), args...).CombinedOutput()
+	require.NoError(t, err, "tc %s output: %s", strings.Join(args, " "), string(output))
+	return string(output)
+}
+
+func bridgeClassesForTest(t *testing.T, bridgeName string) []string {
+	t.Helper()
+	output := runTCForTest(t, "class", "show", "dev", bridgeName)
+	var classes []string
+	for _, line := range strings.Split(output, "\n") {
+		if !strings.Contains(line, "class htb 1:") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) >= 3 {
+			classes = append(classes, fields[2])
+		}
+	}
+	return classes
+}
+
+func bridgeClassExists(t *testing.T, bridgeName, classID string) bool {
+	t.Helper()
+	for _, class := range bridgeClassesForTest(t, bridgeName) {
+		if class == classID {
+			return true
+		}
+	}
+	return false
+}
+
+func bridgeFilterExistsForFlowID(t *testing.T, bridgeName, flowID string) bool {
+	t.Helper()
+	return len(bridgeFilterHandlesForFlowID(t, bridgeName, flowID)) > 0
+}
+
+func bridgeFilterHandlesForFlowID(t *testing.T, bridgeName, flowID string) []string {
+	t.Helper()
+	output := runTCForTest(t, "filter", "show", "dev", bridgeName, "parent", "1:")
+	var handles []string
+	for _, line := range strings.Split(output, "\n") {
+		if !strings.HasPrefix(line, "filter ") {
+			continue
+		}
+		fields := strings.Fields(line)
+		handle, gotFlowID := "", ""
+		for i, field := range fields {
+			if i+1 >= len(fields) {
+				break
+			}
+			switch field {
+			case "handle":
+				handle = fields[i+1]
+			case "flowid":
+				gotFlowID = fields[i+1]
+			}
+		}
+		if handle != "" && gotFlowID == flowID {
+			handles = append(handles, handle)
+		}
+	}
+	return handles
+}
+
+func createBridgeTCForTest(t *testing.T, bridgeName string, rtIif int) string {
+	t.Helper()
+	used := make(map[string]bool)
+	for _, classID := range bridgeClassesForTest(t, bridgeName) {
+		used[classID] = true
+	}
+
+	flowID := ""
+	for id := 0xff00; id <= 0xffff; id++ {
+		candidate := fmt.Sprintf("1:%04x", id)
+		if !used[candidate] {
+			flowID = candidate
+			break
+		}
+	}
+	require.NotEmpty(t, flowID, "expected an unused test class id")
+
+	t.Cleanup(func() {
+		bestEffortDeleteBridgeFiltersForFlowID(t, bridgeName, flowID)
+		_ = exec.Command(tcForTest(t), "qdisc", "del", "dev", bridgeName, "parent", flowID).Run()
+		_ = exec.Command(tcForTest(t), "class", "del", "dev", bridgeName, "classid", flowID).Run()
+	})
+
+	runTCForTest(t, "class", "add", "dev", bridgeName, "parent", "1:1",
+		"classid", flowID, "htb", "rate", "1mbit", "ceil", "1mbit")
+	runTCForTest(t, "qdisc", "add", "dev", bridgeName, "parent", flowID, "fq_codel")
+	runTCForTest(t, "filter", "add", "dev", bridgeName, "parent", "1:",
+		"protocol", "all", "prio", "1", "basic",
+		"match", fmt.Sprintf("meta(rt_iif eq %d)", rtIif), "flowid", flowID)
+
+	require.True(t, bridgeClassExists(t, bridgeName, flowID), "staged bridge tc class should exist")
+	require.True(t, bridgeFilterExistsForFlowID(t, bridgeName, flowID), "staged bridge tc filter should exist")
+	return flowID
+}
+
+func bestEffortDeleteBridgeFiltersForFlowID(t *testing.T, bridgeName, flowID string) {
+	t.Helper()
+	for _, handle := range bridgeFilterHandlesForFlowID(t, bridgeName, flowID) {
+		_ = exec.Command(tcForTest(t), "filter", "del", "dev", bridgeName, "parent", "1:",
+			"protocol", "all", "prio", "1", "handle", handle, "basic").Run()
+	}
+}
+
+func startRestartPolicyControllerForTest(t *testing.T, ctx context.Context, manager *manager) {
+	t.Helper()
+
+	controllerCtx, cancel := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() {
+		done <- manager.StartRestartPolicyController(controllerCtx)
+	}()
+
+	t.Cleanup(func() {
+		cancel()
+		require.NoError(t, <-done)
+	})
+}
+
+func startHealthCheckControllerForTest(t *testing.T, ctx context.Context, manager Manager) {
+	t.Helper()
+
+	controller := NewHealthCheckController(manager, slog.Default())
+	require.NotNil(t, controller)
+
+	controllerCtx, cancel := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() {
+		done <- controller.Run(controllerCtx)
+	}()
+
+	t.Cleanup(func() {
+		cancel()
+		require.NoError(t, <-done)
+	})
+}
+
+func waitForInstanceHealthStatus(ctx context.Context, manager Manager, instanceID string, expected healthcheck.Status, timeout time.Duration) (*Instance, healthcheck.StatusSnapshot, error) {
+	timeout = integrationTestTimeout(timeout)
+	deadline := time.Now().Add(timeout)
+	var last healthcheck.StatusSnapshot
+	lastState := StateUnknown
+	lastErr := error(nil)
+
+	for time.Now().Before(deadline) {
+		inst, err := manager.GetInstance(ctx, instanceID)
+		if err != nil {
+			lastErr = err
+			time.Sleep(200 * time.Millisecond)
+			continue
+		}
+
+		lastState = inst.State
+		last = healthcheck.Snapshot(inst.HealthCheck, string(inst.State), inst.HealthCheckRuntime)
+		if last.Status == expected {
+			return inst, last, nil
+		}
+
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	if lastErr != nil {
+		return nil, last, fmt.Errorf("instance %s health did not reach %s within %v (last error: %w)", instanceID, expected, timeout, lastErr)
+	}
+	return nil, last, fmt.Errorf("instance %s health did not reach %s within %v (last state: %s, last health: %s)", instanceID, expected, timeout, lastState, last.Status)
+}
+
+func waitForRestartPolicyBlocked(ctx context.Context, manager Manager, instanceID string, reason restartpolicy.BlockedReason, timeout time.Duration) (*Instance, error) {
+	timeout = integrationTestTimeout(timeout)
+	deadline := time.Now().Add(timeout)
+	lastState := StateUnknown
+	lastStatus := restartpolicy.Status{}
+	lastErr := error(nil)
+
+	for time.Now().Before(deadline) {
+		inst, err := manager.GetInstance(ctx, instanceID)
+		if err != nil {
+			lastErr = err
+			time.Sleep(200 * time.Millisecond)
+			continue
+		}
+
+		lastState = inst.State
+		lastStatus = inst.RestartStatus
+		if inst.State == StateRunning && inst.RestartStatus.BlockedReason == reason {
+			return inst, nil
+		}
+
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	if lastErr != nil {
+		return nil, fmt.Errorf("instance %s restart policy did not block with %s within %v (last error: %w)", instanceID, reason, timeout, lastErr)
+	}
+	return nil, fmt.Errorf("instance %s restart policy did not block with %s within %v (last state: %s, attempts: %d, blocked_reason: %s)", instanceID, reason, timeout, lastState, lastStatus.Attempts, lastStatus.BlockedReason)
 }
 
 // TestDockerForwardChainRestored validates recovery from an external FORWARD-chain flush.

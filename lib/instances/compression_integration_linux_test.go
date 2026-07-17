@@ -4,8 +4,11 @@ package instances
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -126,6 +129,7 @@ func setupCompressionTestManagerForHypervisor(t *testing.T, hvType hypervisor.Ty
 func runStandbyRestoreCompressionScenarios(t *testing.T, harness compressionIntegrationHarness) {
 	t.Helper()
 	harness.requirePrereqs(t)
+	acquireHeavyIO(t)
 
 	mgr, tmpDir := harness.setup(t)
 	ctx := context.Background()
@@ -133,7 +137,7 @@ func runStandbyRestoreCompressionScenarios(t *testing.T, harness compressionInte
 
 	imageManager, err := images.NewManager(p, 1, nil)
 	require.NoError(t, err)
-	createNginxImageAndWait(t, ctx, imageManager)
+	createNginxImageAndWait(t, ctx, p, imageManager)
 
 	systemManager := system.NewManager(p)
 	require.NoError(t, systemManager.EnsureSystemFiles(ctx))
@@ -141,7 +145,7 @@ func runStandbyRestoreCompressionScenarios(t *testing.T, harness compressionInte
 	inst, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           fmt.Sprintf("compression-%s", harness.name),
 		Image:          integrationTestImageRef(t, "docker.io/library/nginx:alpine"),
-		Size:           1024 * 1024 * 1024,
+		Size:           lifecycleTestMemorySize,
 		HotplugSize:    512 * 1024 * 1024,
 		OverlaySize:    10 * 1024 * 1024 * 1024,
 		Vcpus:          1,
@@ -153,7 +157,7 @@ func runStandbyRestoreCompressionScenarios(t *testing.T, harness compressionInte
 	deleted := false
 	t.Cleanup(func() {
 		if !deleted {
-			_ = mgr.DeleteInstance(context.Background(), inst.Id)
+			_ = deleteTestInstanceNow(context.Background(), mgr, inst.Id)
 		}
 	})
 
@@ -192,7 +196,7 @@ func runStandbyRestoreCompressionScenarios(t *testing.T, harness compressionInte
 		inst = runCompressionCycle(t, ctx, mgr, p, inst, harness.waitHypervisorUp, tc.name, tc.cfg, true)
 	}
 
-	require.NoError(t, mgr.DeleteInstance(ctx, inst.Id))
+	require.NoError(t, deleteTestInstanceNow(ctx, mgr, inst.Id))
 	deleted = true
 }
 
@@ -296,12 +300,46 @@ func execCommandWithRetry(ctx context.Context, inst *Instance, timeout time.Dura
 		lastExitCode = exitCode
 		lastErr = err
 
+		// Only retry transient vsock/gRPC connection blips (e.g. right after a
+		// restore/resume under load); surface real failures immediately.
+		if !isTransientExecError(err) {
+			return lastOutput, lastExitCode, lastErr
+		}
+
 		if time.Now().After(deadline) {
 			return lastOutput, lastExitCode, lastErr
 		}
 
 		time.Sleep(500 * time.Millisecond)
 	}
+}
+
+// isTransientExecError reports whether an in-guest exec error is a momentary
+// vsock/gRPC connection blip worth retrying, as opposed to a genuine failure.
+// These show up intermittently right after a VM resumes under heavy shared-runner
+// I/O contention, before the guest agent's vsock listener is fully back up.
+func isTransientExecError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	for _, marker := range []string{
+		"eof",
+		"unavailable",
+		"client connection is closing",
+		"transport is closing",
+		"connection refused",
+		"connection reset",
+		"broken pipe",
+	} {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func waitForCompressionJobStart(t *testing.T, mgr *manager, key string, timeout time.Duration) {

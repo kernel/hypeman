@@ -10,21 +10,22 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kernel/hypeman/lib/forkvm"
 	"github.com/kernel/hypeman/lib/guest"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/instances/phasetracking"
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/network"
+	restartpolicy "github.com/kernel/hypeman/lib/restart-policy"
 	"github.com/nrednav/cuid2"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"gvisor.dev/gvisor/pkg/cleanup"
 )
 
 // forkInstance creates a new instance by cloning a stopped or standby source
 // instance. It returns the newly created fork and the requested final target
 // state; callers apply remaining target state transitions outside the source lock.
-func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceRequest) (_ *Instance, _ State, retErr error) {
+func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceRequest) (_ *Instance, _ State, _ bool, retErr error) {
 	log := logger.FromContext(ctx)
 	log.InfoContext(ctx, "forking instance", "source_instance_id", id, "fork_name", req.Name)
 	ctx, span := m.startLifecycleSpan(ctx, "instances.fork",
@@ -34,43 +35,40 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 	defer func() { finishInstancesSpan(span, retErr) }()
 
 	if err := validateForkRequest(req); err != nil {
-		return nil, "", err
+		return nil, "", false, err
 	}
 
 	meta, err := m.loadMetadata(id)
 	if err != nil {
-		return nil, "", err
+		return nil, "", false, err
 	}
 	source := m.toInstance(ctx, meta)
 	targetState, err := resolveForkTargetState(req.TargetState, source.State)
 	if err != nil {
-		return nil, "", err
+		return nil, "", false, err
 	}
 
 	switch source.State {
 	case StateRunning:
 		if !req.FromRunning {
-			return nil, "", fmt.Errorf("%w: cannot fork from state %s (set from_running=true to allow standby+restore flow)", ErrInvalidState, source.State)
+			return nil, "", false, fmt.Errorf("%w: cannot fork from state %s (set from_running=true to allow standby+restore flow)", ErrInvalidState, source.State)
 		}
 
 		if err := m.validateForkSupport(ctx, source.HypervisorType); err != nil {
-			return nil, "", err
+			return nil, "", false, err
 		}
 		if err := ensureGuestAgentReadyForRunningFork(ctx, &source.StoredMetadata); err != nil {
-			return nil, "", err
+			return nil, "", false, err
 		}
 
 		log.InfoContext(ctx, "fork from running requested; transitioning source to standby",
 			"source_instance_id", id, "hypervisor", source.HypervisorType)
 		if _, err := m.standbyInstance(ctx, id, StandbyInstanceRequest{}, true); err != nil {
-			return nil, "", fmt.Errorf("standby source instance: %w", err)
+			return nil, "", false, fmt.Errorf("standby source instance: %w", err)
 		}
 
-		// Running fork is a one-shot clone that restores the source afterward.
-		// Promotion is now an explicit caller step, so the running flow simply
-		// doesn't promote — there's no skip flag to thread anymore.
-		forked, forkErr := m.forkInstanceFromStoppedOrStandby(ctx, id, req, true)
-		if forkErr == nil {
+		forked, _, forkErr := m.forkInstanceFromStoppedOrStandby(ctx, id, req, true)
+		if forkErr == nil && targetState != StateStopped {
 			if err := m.rotateSourceVsockForRestore(ctx, id, forked.Id); err != nil {
 				forkErr = fmt.Errorf("prepare source snapshot for restore: %w", err)
 				if cleanupErr := m.cleanupForkInstanceOnError(ctx, forked.Id); cleanupErr != nil {
@@ -95,26 +93,34 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 		}
 
 		log.InfoContext(ctx, "restoring source instance after running fork", "source_instance_id", id)
-		_, restoreErr := m.restoreInstance(ctx, id)
+		restoredSource, restoreErr := m.restoreInstance(ctx, id)
 
 		if restoreErr != nil {
 			if forkErr != nil {
-				return nil, "", fmt.Errorf("fork failed: %v; additionally failed to restore source instance: %w", forkErr, restoreErr)
+				return nil, "", false, fmt.Errorf("fork failed: %v; additionally failed to restore source instance: %w", forkErr, restoreErr)
 			}
-			return nil, "", fmt.Errorf("restore source instance after fork: %w", restoreErr)
+			return nil, "", false, fmt.Errorf("restore source instance after fork: %w", restoreErr)
+		}
+		if restoredSource != nil && !restoredSource.NetworkEnabled && (restoredSource.State == StateRunning || restoredSource.State == StateInitializing) {
+			if err := ensureGuestAgentReadyForForkPhase(ctx, &restoredSource.StoredMetadata, "after restoring running fork source"); err != nil {
+				if forkErr != nil {
+					return nil, "", false, fmt.Errorf("fork failed: %v; additionally restored source guest agent was not ready: %w", forkErr, err)
+				}
+				return nil, "", false, fmt.Errorf("wait for restored source guest agent readiness: %w", err)
+			}
 		}
 		if forkErr != nil {
-			return nil, "", forkErr
+			return nil, "", false, forkErr
 		}
-		return forked, targetState, nil
-	case StateStopped, StateStandby, StateTemplate:
-		forked, err := m.forkInstanceFromStoppedOrStandby(ctx, id, req, false)
+		return forked, targetState, false, nil
+	case StateStopped, StateStandby:
+		forked, restoreNeedsSourceLock, err := m.forkInstanceFromStoppedOrStandby(ctx, id, req, false)
 		if err != nil {
-			return nil, "", err
+			return nil, "", false, err
 		}
-		return forked, targetState, nil
+		return forked, targetState, restoreNeedsSourceLock, nil
 	default:
-		return nil, "", fmt.Errorf("%w: cannot fork from state %s (must be Stopped, Standby, or Template, or Running with from_running=true)", ErrInvalidState, source.State)
+		return nil, "", false, fmt.Errorf("%w: cannot fork from state %s (must be Stopped or Standby, or Running with from_running=true)", ErrInvalidState, source.State)
 	}
 }
 
@@ -123,7 +129,7 @@ func ensureGuestAgentReadyForRunningFork(ctx context.Context, source *StoredMeta
 }
 
 func ensureGuestAgentReadyForForkPhase(ctx context.Context, inst *StoredMetadata, phase string) error {
-	if inst == nil || !inst.NetworkEnabled || inst.SkipGuestAgent {
+	if inst == nil || inst.SkipGuestAgent {
 		return nil
 	}
 
@@ -196,81 +202,75 @@ func generateForkSourceVsockCID(sourceID, forkID string, current int64) int64 {
 	return cid
 }
 
-func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id string, req ForkInstanceRequest, supportValidated bool) (*Instance, error) {
+func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id string, req ForkInstanceRequest, supportValidated bool) (*Instance, bool, error) {
 	log := logger.FromContext(ctx)
 
 	meta, err := m.loadMetadata(id)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	source := m.toInstance(ctx, meta)
 	stored := &meta.StoredMetadata
 
 	switch source.State {
-	case StateStopped, StateStandby, StateTemplate:
+	case StateStopped, StateStandby:
 		// allowed
 	default:
-		return nil, fmt.Errorf("%w: cannot fork from state %s (must be Stopped, Standby, or Template)", ErrInvalidState, source.State)
+		return nil, false, fmt.Errorf("%w: cannot fork from state %s (must be Stopped or Standby)", ErrInvalidState, source.State)
 	}
 
 	if !supportValidated {
 		if err := m.validateForkSupport(ctx, stored.HypervisorType); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 	}
+	targetState, err := resolveForkTargetState(req.TargetState, source.State)
+	if err != nil {
+		return nil, false, err
+	}
 	if err := validateForkVolumeSafety(stored.Volumes); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
-	existsByMetadata, err := m.instanceNameExists(req.Name)
+	existsByMetadata, err := m.instanceNameExists(ctx, req.Name, "fork_precheck")
 	if err != nil {
-		return nil, fmt.Errorf("check instance name availability: %w", err)
+		return nil, false, fmt.Errorf("check instance name availability: %w", err)
 	}
 	if existsByMetadata {
-		return nil, fmt.Errorf("%w: instance name '%s' already exists", ErrAlreadyExists, req.Name)
+		return nil, false, fmt.Errorf("%w: instance name '%s' already exists", ErrAlreadyExists, req.Name)
 	}
 	if stored.NetworkEnabled {
 		exists, err := m.networkManager.NameExists(ctx, req.Name, "")
 		if err != nil {
-			return nil, fmt.Errorf("check instance name availability: %w", err)
+			return nil, false, fmt.Errorf("check instance name availability: %w", err)
 		}
 		if exists {
-			return nil, fmt.Errorf("%w: instance name '%s' already exists in network", ErrAlreadyExists, req.Name)
+			return nil, false, fmt.Errorf("%w: instance name '%s' already exists in network", ErrAlreadyExists, req.Name)
 		}
 	}
 
 	forkID := cuid2.Generate()
 	if _, err := m.loadMetadata(forkID); err == nil {
-		return nil, fmt.Errorf("%w: generated fork id already exists", ErrAlreadyExists)
+		return nil, false, fmt.Errorf("%w: generated fork id already exists", ErrAlreadyExists)
 	}
 
 	srcDir := m.paths.InstanceDir(id)
 	dstDir := m.paths.InstanceDir(forkID)
+	shareMemFile := stored.HypervisorType == hypervisor.TypeFirecracker && source.State == StateStandby
 
 	cu := cleanup.Make(func() {
 		_ = os.RemoveAll(dstDir)
 	})
 	defer cu.Clean()
 
-	fromSnapshot := source.State == StateStandby || source.State == StateTemplate
-
-	if fromSnapshot {
-		if err := m.ensureSnapshotMemoryReady(ctx, m.paths.InstanceSnapshotLatest(id), m.snapshotJobKeyForInstance(id), stored.HypervisorType); err != nil {
-			return nil, fmt.Errorf("prepare standby snapshot for fork: %w", err)
-		}
-	}
-
-	if err := forkvm.CopyGuestDirectory(srcDir, dstDir); err != nil {
-		if errors.Is(err, forkvm.ErrSparseCopyUnsupported) {
-			return nil, fmt.Errorf("fork requires sparse-capable filesystem (SEEK_DATA/SEEK_HOLE unsupported): %w", err)
-		}
-		return nil, fmt.Errorf("clone guest directory: %w", err)
+	if err := m.copyForkSourceGuestDirectory(ctx, source.State, id, stored, srcDir, dstDir, shareMemFile); err != nil {
+		return nil, false, err
 	}
 
 	starter, err := m.getVMStarter(stored.HypervisorType)
 	if err != nil {
-		return nil, fmt.Errorf("get vm starter: %w", err)
+		return nil, false, fmt.Errorf("get vm starter: %w", err)
 	}
 
 	now := time.Now().UTC()
@@ -286,27 +286,30 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 	forkMeta.VsockSocket = m.paths.InstanceSocket(forkID, hypervisor.VsockSocketNameForType(forkMeta.HypervisorType))
 	forkMeta.ExitCode = nil
 	forkMeta.ExitMessage = ""
+	forkMeta.RestartStatus = restartpolicy.Status{}
+	forkMeta.FirecrackerUFFDSessionID = ""
+	forkMeta.FirecrackerUFFDPagerVersion = ""
+	forkMeta.FirecrackerUseUFFDOnNextRestore = useFirecrackerUFFDOnNextRestore(forkMeta.HypervisorType, source.State == StateStandby, targetState)
+	if source.State != StateStandby {
+		forkMeta.FirecrackerSnapshotCacheKey = ""
+	}
 	// Forks are new instances; phase accounting must not inherit the source's
 	// cumulative durations. The first transition into the fork's runtime
 	// phase (Standby for snapshot forks, Stopped for stopped forks) will be
 	// recorded by the appropriate operation when the fork is acted on.
 	forkMeta.Phases.Reset()
-	if fromSnapshot {
+	switch source.State {
+	case StateStandby:
 		forkMeta.Phases.Record(phasetracking.PhaseStandby, now)
-	} else {
+	case StateStopped:
 		forkMeta.Phases.Record(phasetracking.PhaseStopped, now)
 	}
 
-	// Template-only fields don't carry forward to the fork; the fork is a fresh
-	// instance regardless of whether the parent is a template.
-	forkMeta.IsTemplate = false
-	forkMeta.HotPagesPath = ""
-	forkMeta.ForkOfTemplate = ""
-
-	// Keep the original CID for snapshot-based forks.
-	// Rewriting CID in restored memory snapshots is not reliable across
-	// hypervisors.
-	if fromSnapshot {
+	// Keep the original CID for snapshot-based forks. Rewriting CID in restored
+	// memory snapshots is not reliable across hypervisors. Concurrent standby
+	// fork prepare is currently enabled only for Firecracker, whose host vsock
+	// dialer routes through the per-VM UDS path rather than this metadata CID.
+	if source.State == StateStandby {
 		forkMeta.VsockCID = stored.VsockCID
 	} else {
 		forkMeta.VsockCID = generateVsockCID(forkID)
@@ -319,13 +322,14 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 		forkMeta.MAC = ""
 	}
 
-	if fromSnapshot {
+	restoreNeedsSourceLock := false
+	if source.State == StateStandby {
 		snapshotConfigPath := m.paths.InstanceSnapshotConfig(forkID)
 		netCfg := (*hypervisor.ForkNetworkConfig)(nil)
 		if forkMeta.NetworkEnabled {
 			netCfg = &hypervisor.ForkNetworkConfig{TAPDevice: network.GenerateTAPName(forkID)}
 		}
-		if _, err := starter.PrepareFork(ctx, hypervisor.ForkPrepareRequest{
+		prepareResult, err := prepareForkWithAliasReadLock(ctx, starter, hypervisor.ForkPrepareRequest{
 			SnapshotConfigPath: snapshotConfigPath,
 			SourceDataDir:      stored.DataDir,
 			TargetDataDir:      forkMeta.DataDir,
@@ -333,26 +337,27 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 			VsockSocket:        forkMeta.VsockSocket,
 			SerialLogPath:      m.paths.InstanceAppLog(forkID),
 			Network:            netCfg,
-		}); err != nil {
+		})
+		if err != nil {
 			if errors.Is(err, hypervisor.ErrNotSupported) {
-				return nil, fmt.Errorf("%w: fork is not supported for hypervisor %s", ErrNotSupported, stored.HypervisorType)
+				return nil, false, fmt.Errorf("%w: fork is not supported for hypervisor %s", ErrNotSupported, stored.HypervisorType)
 			}
-			return nil, fmt.Errorf("prepare fork snapshot state: %w", err)
+			return nil, false, fmt.Errorf("prepare fork snapshot state: %w", err)
 		}
-	}
-
-	// If the source is already a Template, record the parent linkage so it
-	// can be counted as a live fork. Live forks are counted at read time by
-	// scanning ForkOfTemplate across all instances. Plain Standby forks
-	// don't get this linkage — promotion is an explicit lifecycle step the
-	// caller must perform via PromoteToTemplate.
-	if fromSnapshot && stored.IsTemplate {
-		forkMeta.ForkOfTemplate = stored.Id
+		if prepareResult.RequiresSnapshotSourceAlias {
+			log.WarnContext(ctx, "fork restore requires snapshot source alias fallback",
+				"hypervisor", stored.HypervisorType,
+				"source_instance_id", id,
+				"fork_instance_id", forkID,
+				"source_data_dir", stored.DataDir,
+				"target_data_dir", forkMeta.DataDir)
+		}
+		restoreNeedsSourceLock = prepareResult.RequiresSnapshotSourceAlias
 	}
 
 	newMeta := &metadata{StoredMetadata: forkMeta}
-	if err := m.saveMetadata(newMeta); err != nil {
-		return nil, fmt.Errorf("save fork metadata: %w", err)
+	if err := m.saveForkMetadata(ctx, newMeta); err != nil {
+		return nil, false, err
 	}
 
 	cu.Release()
@@ -362,7 +367,57 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 		"fork_instance_id", forked.Id,
 		"fork_name", forked.Name,
 		"state", forked.State)
-	return &forked, nil
+	return &forked, restoreNeedsSourceLock, nil
+}
+
+func (m *manager) saveForkMetadata(ctx context.Context, meta *metadata) error {
+	ctx, span := m.tracerOrDefault().Start(ctx, "instances.fork_metadata.save",
+		trace.WithAttributes(attribute.String("operation", "save_fork_metadata")),
+	)
+	var retErr error
+	defer func() { finishInstancesSpan(span, retErr) }()
+
+	lockCtx, lockWaitSpan := m.tracerOrDefault().Start(ctx, "instances.fork_metadata.lock_wait",
+		trace.WithAttributes(attribute.String("operation", "fork_metadata_lock_wait")),
+	)
+	m.forkMetadataMu.Lock()
+	finishInstancesSpan(lockWaitSpan, nil)
+
+	holdCtx, lockHoldSpan := m.tracerOrDefault().Start(lockCtx, "instances.fork_metadata.lock_hold",
+		trace.WithAttributes(attribute.String("operation", "fork_metadata_lock_hold")),
+	)
+	defer m.forkMetadataMu.Unlock()
+	defer func() { finishInstancesSpan(lockHoldSpan, retErr) }()
+
+	// Earlier name checks are advisory so callers can fail before doing fork
+	// work when possible. This is the serialized admission point for fork
+	// metadata, so concurrent forks re-check names immediately before save.
+	name := meta.Name
+	existsByMetadata, err := m.instanceNameExists(holdCtx, name, "fork_admission")
+	if err != nil {
+		retErr = fmt.Errorf("check instance name availability: %w", err)
+		return retErr
+	}
+	if existsByMetadata {
+		retErr = fmt.Errorf("%w: instance name '%s' already exists", ErrAlreadyExists, name)
+		return retErr
+	}
+	if meta.NetworkEnabled {
+		exists, err := m.networkManager.NameExists(holdCtx, name, "")
+		if err != nil {
+			retErr = fmt.Errorf("check instance name availability: %w", err)
+			return retErr
+		}
+		if exists {
+			retErr = fmt.Errorf("%w: instance name '%s' already exists in network", ErrAlreadyExists, name)
+			return retErr
+		}
+	}
+	if err := m.saveMetadata(meta); err != nil {
+		retErr = fmt.Errorf("save fork metadata: %w", err)
+		return retErr
+	}
+	return nil
 }
 
 func (m *manager) validateForkSupport(ctx context.Context, hvType hypervisor.Type) error {
@@ -403,10 +458,6 @@ func resolveForkTargetState(requested State, sourceState State) (State, error) {
 		switch sourceState {
 		case StateRunning, StateStandby, StateStopped:
 			return sourceState, nil
-		case StateTemplate:
-			// Forks of a template are plain Standby instances; the fork itself
-			// is never a template.
-			return StateStandby, nil
 		default:
 			return "", fmt.Errorf("%w: cannot derive fork target state from source state %s", ErrInvalidState, sourceState)
 		}
@@ -419,11 +470,11 @@ func (m *manager) applyForkTargetState(ctx context.Context, forkID string, targe
 	lock.Lock()
 	defer lock.Unlock()
 
-	returnWithReadiness := func(inst *Instance, err error) (*Instance, error) {
+	returnWithReadiness := func(inst *Instance, err error, guestReady bool) (*Instance, error) {
 		if err != nil {
 			return nil, err
 		}
-		if inst != nil && (inst.State == StateRunning || inst.State == StateInitializing) {
+		if forkReturnNeedsGuestAgentReady(inst, guestReady) {
 			if err := ensureGuestAgentReadyForForkPhase(ctx, &inst.StoredMetadata, "before returning running fork instance"); err != nil {
 				return nil, fmt.Errorf("wait for forked guest agent readiness: %w", err)
 			}
@@ -436,40 +487,67 @@ func (m *manager) applyForkTargetState(ctx context.Context, forkID string, targe
 		return nil, err
 	}
 	if current.State == target || (target == StateRunning && current.State == StateInitializing) {
-		return returnWithReadiness(current, nil)
+		return returnWithReadiness(current, nil, false)
 	}
 
 	switch current.State {
 	case StateStopped:
 		switch target {
 		case StateRunning:
-			return returnWithReadiness(m.startInstance(ctx, forkID, StartInstanceRequest{}))
+			inst, err := m.startInstance(ctx, forkID, StartInstanceRequest{})
+			return returnWithReadiness(inst, err, false)
 		case StateStandby:
 			if _, err := m.startInstance(ctx, forkID, StartInstanceRequest{}); err != nil {
 				return nil, fmt.Errorf("start forked instance for standby transition: %w", err)
 			}
-			return returnWithReadiness(m.standbyInstance(ctx, forkID, StandbyInstanceRequest{}, false))
+			inst, err := m.standbyInstance(ctx, forkID, StandbyInstanceRequest{}, false)
+			return returnWithReadiness(inst, err, false)
 		}
 	case StateStandby:
 		switch target {
 		case StateRunning:
-			return returnWithReadiness(m.restoreInstance(ctx, forkID))
+			inst, err := m.restoreInstance(ctx, forkID)
+			return returnWithReadiness(inst, err, current.NetworkEnabled && !current.SkipGuestAgent)
 		case StateStopped:
 			if err := os.RemoveAll(m.paths.InstanceSnapshotLatest(forkID)); err != nil {
 				return nil, fmt.Errorf("remove fork snapshot: %w", err)
 			}
-			return returnWithReadiness(m.getInstance(ctx, forkID))
+			meta, err := m.loadMetadata(forkID)
+			if err != nil {
+				return nil, fmt.Errorf("load stopped fork metadata: %w", err)
+			}
+			meta.StoredMetadata.VsockCID = generateVsockCID(forkID)
+			meta.StoredMetadata.FirecrackerSnapshotCacheKey = ""
+			clearFirecrackerUFFDRestoreState(&meta.StoredMetadata)
+			if err := m.saveMetadata(meta); err != nil {
+				return nil, fmt.Errorf("save stopped fork metadata: %w", err)
+			}
+			inst, err := m.getInstance(ctx, forkID)
+			return returnWithReadiness(inst, err, false)
 		}
 	case StateRunning:
 		switch target {
 		case StateStandby:
-			return returnWithReadiness(m.standbyInstance(ctx, forkID, StandbyInstanceRequest{}, false))
+			inst, err := m.standbyInstance(ctx, forkID, StandbyInstanceRequest{}, false)
+			return returnWithReadiness(inst, err, false)
 		case StateStopped:
-			return returnWithReadiness(m.stopInstance(ctx, forkID))
+			inst, err := m.stopInstance(ctx, forkID)
+			return returnWithReadiness(inst, err, false)
 		}
 	}
 
 	return nil, fmt.Errorf("%w: cannot transition forked instance from %s to %s", ErrInvalidState, current.State, target)
+}
+
+func forkTargetStateAlreadyApplied(inst *Instance, target State) bool {
+	if inst == nil {
+		return false
+	}
+	return inst.State == target || (target == StateRunning && inst.State == StateInitializing)
+}
+
+func forkReturnNeedsGuestAgentReady(inst *Instance, guestReady bool) bool {
+	return inst != nil && (inst.State == StateRunning || inst.State == StateInitializing) && !guestReady
 }
 
 func (m *manager) cleanupForkInstanceOnError(ctx context.Context, forkID string) error {
@@ -500,6 +578,12 @@ func cloneStoredMetadata(src StoredMetadata) StoredMetadata {
 	}
 	if src.AutoStandby != nil {
 		dst.AutoStandby = cloneAutoStandbyPolicy(src.AutoStandby)
+	}
+	if src.HealthCheck != nil {
+		dst.HealthCheck = cloneHealthCheckPolicy(src.HealthCheck)
+	}
+	if src.RestartPolicy != nil {
+		dst.RestartPolicy = cloneRestartPolicy(src.RestartPolicy)
 	}
 	if src.SnapshotPolicy != nil {
 		dst.SnapshotPolicy = cloneSnapshotPolicy(src.SnapshotPolicy)
