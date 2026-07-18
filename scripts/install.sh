@@ -365,15 +365,30 @@ else
         DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${VERSION}/${ARCHIVE_NAME}"
 
         info "Downloading ${ARCHIVE_NAME}..."
-        if curl -fsSL "$DOWNLOAD_URL" -o "${TMP_DIR}/${ARCHIVE_NAME}"; then
-            info "Extracting..."
-            tar -xzf "${TMP_DIR}/${ARCHIVE_NAME}" -C "$TMP_DIR"
-
-            # On macOS, codesign after extraction with virtualization entitlements
+        DOWNLOAD_HTTP_STATUS=""
+        if ! DOWNLOAD_HTTP_STATUS=$(curl -fsSL -w '%{http_code}' "$DOWNLOAD_URL" -o "${TMP_DIR}/${ARCHIVE_NAME}"); then
+            rm -f "${TMP_DIR}/${ARCHIVE_NAME}"
+            if [ "$OS" = "darwin" ] && [ "$DOWNLOAD_HTTP_STATUS" = "404" ]; then
+                warn "Prebuilt macOS server artifact ${ARCHIVE_NAME} was not found; building ${VERSION} from source instead"
+                build_server_from_source "$VERSION"
+            else
+                error "Failed to download from ${DOWNLOAD_URL} (HTTP status: ${DOWNLOAD_HTTP_STATUS:-unknown})"
+            fi
+        elif ! tar -xzf "${TMP_DIR}/${ARCHIVE_NAME}" -C "$TMP_DIR" \
+            || [ ! -f "${TMP_DIR}/${BINARY_NAME}" ] \
+            || [ ! -f "${TMP_DIR}/hypeman-token" ]; then
+            rm -f "${TMP_DIR}/${ARCHIVE_NAME}" "${TMP_DIR}/${BINARY_NAME}" "${TMP_DIR}/hypeman-token"
             if [ "$OS" = "darwin" ]; then
-                info "Signing binaries..."
-                ENTITLEMENTS_TMP="${TMP_DIR}/vz.entitlements"
-                cat > "$ENTITLEMENTS_TMP" << 'ENTITLEMENTS'
+                warn "Prebuilt macOS server artifact ${ARCHIVE_NAME} is invalid; building ${VERSION} from source instead"
+                build_server_from_source "$VERSION"
+            else
+                error "Failed to extract valid binaries from ${DOWNLOAD_URL}"
+            fi
+        elif [ "$OS" = "darwin" ]; then
+            # On macOS, codesign after extraction with virtualization entitlements
+            info "Signing binaries..."
+            ENTITLEMENTS_TMP="${TMP_DIR}/vz.entitlements"
+            cat > "$ENTITLEMENTS_TMP" << 'ENTITLEMENTS'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -387,17 +402,10 @@ else
 </dict>
 </plist>
 ENTITLEMENTS
-                if ! codesign --force --sign - --entitlements "$ENTITLEMENTS_TMP" "${TMP_DIR}/${BINARY_NAME}" 2>/dev/null; then
-                    warn "codesign failed — vz hypervisor will not work without virtualization entitlement"
-                fi
-                rm -f "$ENTITLEMENTS_TMP"
+            if ! codesign --force --sign - --entitlements "$ENTITLEMENTS_TMP" "${TMP_DIR}/${BINARY_NAME}" 2>/dev/null; then
+                warn "codesign failed — vz hypervisor will not work without virtualization entitlement"
             fi
-        elif [ "$OS" = "darwin" ]; then
-            rm -f "${TMP_DIR}/${ARCHIVE_NAME}"
-            warn "Prebuilt macOS server artifact ${ARCHIVE_NAME} could not be downloaded; building ${VERSION} from source instead"
-            build_server_from_source "$VERSION"
-        else
-            error "Failed to download from ${DOWNLOAD_URL}"
+            rm -f "$ENTITLEMENTS_TMP"
         fi
     fi
 fi
