@@ -91,6 +91,7 @@ build_server_from_source() {
 
     info "Building server from source (ref: ${source_ref})..."
     : > "$build_log"
+    rm -rf "$build_dir"
 
     if ! git clone --branch "$source_ref" --depth 1 -q "https://github.com/${REPO}.git" "$build_dir" >> "$build_log" 2>&1; then
         error "Failed to clone repository. Build log:\n$(cat "$build_log")"
