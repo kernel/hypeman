@@ -360,6 +360,12 @@ func (m *mockImageManager) WaitForReady(ctx context.Context, name string) error 
 			status = img.Status
 		}
 		m.mu.RUnlock()
+		// Mirror the real manager: a missing image is reported as not found
+		// (the real implementation polls for 30s first; return immediately
+		// to keep tests fast).
+		if !ok {
+			return fmt.Errorf("get image: %w", images.ErrNotFound)
+		}
 		switch status {
 		case images.StatusReady:
 			return nil
