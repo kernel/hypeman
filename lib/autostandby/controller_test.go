@@ -700,3 +700,85 @@ func TestStandbyNotFoundDropsStateWithoutRearming(t *testing.T) {
 	controller.mu.RUnlock()
 	assert.False(t, tracked)
 }
+
+func TestResyncDuringExecutingStandbyDoesNotDoubleDispatch(t *testing.T) {
+	t.Parallel()
+
+	idleSince := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
+	inst := idleTestInstance("inst-racing", "192.168.100.92", idleSince)
+	store := newFakeInstanceStore([]Instance{inst})
+	store.standbyStarted = make(chan string, 2)
+	store.standbyRelease = make(chan struct{})
+	controller := NewController(store, &fakeConnectionSource{}, ControllerOptions{
+		Now: func() time.Time { return idleSince.Add(time.Minute) },
+	})
+
+	require.NoError(t, controller.startupResync(context.Background()))
+
+	controller.handleStandbyTimer(context.Background(), "inst-racing")
+	require.Equal(t, "inst-racing", <-store.standbyStarted)
+
+	// A lifecycle refresh while the standby executes resets standbyRequested
+	// and re-arms an already-elapsed idle timer.
+	refreshed := cloneInstance(inst)
+	require.NoError(t, controller.handleInstanceEvent(context.Background(), InstanceEvent{
+		Action:     InstanceEventUpdate,
+		InstanceID: "inst-racing",
+		Instance:   &refreshed,
+	}))
+	controller.handleStandbyTimer(context.Background(), "inst-racing")
+
+	select {
+	case <-store.standbyStarted:
+		t.Fatal("second standby dispatched while one was executing")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(store.standbyRelease)
+	controller.standbyWG.Wait()
+	assert.Equal(t, []string{"inst-racing"}, store.standbyCalls())
+}
+
+func TestActiveReconcileClearsPendingStandbyRequest(t *testing.T) {
+	t.Parallel()
+
+	idleSince := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
+	store := newFakeInstanceStore([]Instance{
+		idleTestInstance("inst-busy", "192.168.100.93", idleSince),
+		idleTestInstance("inst-pending", "192.168.100.94", idleSince),
+	})
+	store.standbyStarted = make(chan string, 2)
+	store.standbyRelease = make(chan struct{})
+	source := &fakeConnectionSource{}
+	controller := NewController(store, source, ControllerOptions{
+		Now:                   func() time.Time { return idleSince.Add(time.Minute) },
+		MaxConcurrentStandbys: 1,
+	})
+
+	require.NoError(t, controller.startupResync(context.Background()))
+
+	controller.handleStandbyTimer(context.Background(), "inst-busy")
+	require.Equal(t, "inst-busy", <-store.standbyStarted)
+	controller.handleStandbyTimer(context.Background(), "inst-pending")
+
+	// Reconcile discovers an active inbound connection for the queued instance.
+	source.connections = []Connection{{
+		OriginalSourceIP:        mustAddr("1.2.3.4"),
+		OriginalSourcePort:      50003,
+		OriginalDestinationIP:   mustAddr("192.168.100.94"),
+		OriginalDestinationPort: 8080,
+		TCPState:                TCPStateEstablished,
+	}}
+	controller.handleActiveReconcile(context.Background(), "inst-pending")
+
+	controller.mu.RLock()
+	pending := controller.states["inst-pending"]
+	require.NotNil(t, pending)
+	assert.False(t, pending.standbyRequested)
+	assert.Len(t, pending.activeInbound, 1)
+	controller.mu.RUnlock()
+
+	close(store.standbyRelease)
+	controller.standbyWG.Wait()
+	assert.Equal(t, []string{"inst-busy"}, store.standbyCalls())
+}

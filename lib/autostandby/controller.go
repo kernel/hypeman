@@ -110,6 +110,7 @@ type controllerState struct {
 	timer            *time.Timer
 	reconcileTimer   *time.Timer
 	standbyRequested bool
+	standbyExecuting bool
 }
 
 // Controller decides when eligible instances should transition to standby.
@@ -656,7 +657,7 @@ func (c *Controller) handleConnectionEvent(ctx context.Context, event Connection
 func (c *Controller) handleStandbyTimer(ctx context.Context, id string) {
 	c.mu.Lock()
 	state := c.states[id]
-	if state == nil || state.compiledPolicy == nil || len(state.activeInbound) > 0 || state.standbyRequested {
+	if state == nil || state.compiledPolicy == nil || len(state.activeInbound) > 0 || state.standbyRequested || state.standbyExecuting {
 		c.mu.Unlock()
 		return
 	}
@@ -693,15 +694,21 @@ func (c *Controller) executeStandby(ctx context.Context, id string, instanceName
 
 	c.mu.Lock()
 	state := c.states[id]
-	if state == nil || state.compiledPolicy == nil || len(state.activeInbound) > 0 || !state.standbyRequested {
+	if state == nil || state.compiledPolicy == nil || len(state.activeInbound) > 0 || !state.standbyRequested || state.standbyExecuting {
 		c.mu.Unlock()
 		return
 	}
+	// standbyExecuting survives state refreshes (which reset standbyRequested),
+	// so resyncs racing a running standby cannot dispatch a duplicate worker.
+	state.standbyExecuting = true
 	idleTimeout := state.idleTimeout
 	c.standbyInFlight++
 	c.mu.Unlock()
 	defer func() {
 		c.mu.Lock()
+		if state := c.states[id]; state != nil {
+			state.standbyExecuting = false
+		}
 		c.standbyInFlight--
 		c.mu.Unlock()
 	}()
@@ -785,6 +792,7 @@ func (c *Controller) handleActiveReconcile(ctx context.Context, id string) {
 
 	state.activeInbound = activeSet
 	if len(activeSet) > 0 {
+		state.standbyRequested = false
 		c.armReconcileLocked(id, state)
 		return
 	}
