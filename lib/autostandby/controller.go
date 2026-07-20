@@ -494,7 +494,6 @@ func (c *Controller) handleInstanceEvent(ctx context.Context, event InstanceEven
 func (c *Controller) refreshInstanceLocked(ctx context.Context, inst Instance, conns []Connection, now time.Time) error {
 	state := c.ensureStateLocked(inst.ID)
 	state.instance = cloneInstance(inst)
-	state.standbyRequested = false
 
 	if !eligible(inst) {
 		hadRuntime := inst.Runtime != nil || state.idleSince != nil || state.lastInboundAt != nil
@@ -516,6 +515,10 @@ func (c *Controller) refreshInstanceLocked(ctx context.Context, inst Instance, c
 	if err != nil {
 		return err
 	}
+	// Cancel any queued standby attempt only once the refresh is guaranteed to
+	// re-establish a countdown or reconcile below; an erroring refresh above
+	// leaves the queued attempt to proceed on the last known idle state.
+	state.standbyRequested = false
 	state.activeInbound = activeSet
 
 	runtime := cloneRuntime(inst.Runtime)
@@ -547,8 +550,11 @@ func (c *Controller) refreshInstanceLocked(ctx context.Context, inst Instance, c
 			IdleSince:             cloneTimePtr(state.idleSince),
 			LastInboundActivityAt: cloneTimePtr(state.lastInboundAt),
 		}
+		// Persist failures must not strand the instance without a countdown;
+		// the runtime only matters for recovery across controller restarts.
 		if err := c.persistRuntime(ctx, inst.ID, runtime); err != nil {
-			return err
+			c.recordControllerError("persist_runtime")
+			c.log.Warn("auto-standby failed to persist runtime during refresh", "instance_id", inst.ID, "error", err)
 		}
 	}
 	c.armTimerLocked(inst.ID, state, now)
