@@ -70,8 +70,8 @@ func initializeApp() (*application, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	autostandbyController := providers.ProvideAutoStandbyController(instancesManager, logger)
-	healthcheckController := providers.ProvideHealthCheckController(instancesManager, logger)
+	autostandbyController := providers.ProvideAutoStandbyController(instancesManager, config, logger)
+	healthCheckController := providers.ProvideHealthCheckController(instancesManager, logger)
 	vm_metricsManager, err := providers.ProvideVMMetricsManager(instancesManager, config, logger)
 	if err != nil {
 		return nil, nil, err
@@ -96,7 +96,7 @@ func initializeApp() (*application, func(), error) {
 		ResourceManager:       resourcesManager,
 		GuestMemoryController: controller,
 		AutoStandbyController: autostandbyController,
-		HealthCheckController: healthcheckController,
+		HealthCheckController: healthCheckController,
 		VMMetricsManager:      vm_metricsManager,
 		Registry:              registry,
 		ApiService:            apiService,

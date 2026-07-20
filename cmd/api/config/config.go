@@ -158,6 +158,13 @@ type InstancesConfig struct {
 	LifecycleEventBufferSize int `koanf:"lifecycle_event_buffer_size"`
 }
 
+// AutoStandbyConfig holds auto-standby controller settings.
+type AutoStandbyConfig struct {
+	// MaxConcurrent caps how many auto-standby operations (VM pause + memory
+	// snapshot write) run at once per host.
+	MaxConcurrent int `koanf:"max_concurrent"`
+}
+
 // RegistryConfig holds OCI registry settings.
 type RegistryConfig struct {
 	URL        string `koanf:"url"`
@@ -272,6 +279,7 @@ type Config struct {
 	Images           ImagesConfig           `koanf:"images"`
 	Build            BuildConfig            `koanf:"build"`
 	Instances        InstancesConfig        `koanf:"instances"`
+	AutoStandby      AutoStandbyConfig      `koanf:"auto_standby"`
 	Registry         RegistryConfig         `koanf:"registry"`
 	Limits           LimitsConfig           `koanf:"limits"`
 	Oversubscription OversubscriptionConfig `koanf:"oversubscription"`
@@ -388,6 +396,10 @@ func defaultConfig() *Config {
 
 		Instances: InstancesConfig{
 			LifecycleEventBufferSize: 256,
+		},
+
+		AutoStandby: AutoStandbyConfig{
+			MaxConcurrent: 16,
 		},
 
 		Registry: RegistryConfig{
@@ -622,6 +634,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Instances.LifecycleEventBufferSize <= 0 {
 		return fmt.Errorf("instances.lifecycle_event_buffer_size must be positive, got %d", c.Instances.LifecycleEventBufferSize)
+	}
+	if c.AutoStandby.MaxConcurrent <= 0 {
+		return fmt.Errorf("auto_standby.max_concurrent must be positive, got %d", c.AutoStandby.MaxConcurrent)
 	}
 	if err := validateDuration("images.auto_delete.unused_for", c.Images.AutoDelete.UnusedFor); err != nil {
 		return err

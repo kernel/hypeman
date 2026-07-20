@@ -32,6 +32,12 @@ When the active inbound TCP connection count reaches zero, Hypeman starts an idl
 - if a new inbound TCP connection appears before the timer expires, the timer is cleared
 - if the count stays at zero for the full `idle_timeout`, Hypeman places the VM into `Standby`
 
+Standby operations execute on background workers so the controller keeps processing
+conntrack and instance lifecycle events while snapshots are written. Concurrency is
+capped by `auto_standby.max_concurrent` in the server config (default 16); demand
+above the cap queues. Inbound activity observed while an instance's standby is
+queued cancels that attempt.
+
 The idle timestamps are also persisted in instance metadata.
 
 - if Hypeman restarts and a startup conntrack snapshot shows current inbound connections, the instance is treated as active immediately and any old idle countdown is cleared

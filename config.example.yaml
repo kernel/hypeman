@@ -47,6 +47,15 @@ data_dir: /var/lib/hypeman
 #       per_vm_cooldown: 5s
 
 # =============================================================================
+# Auto Standby
+# =============================================================================
+# auto_standby:
+#   # Caps concurrent auto-standby operations (VM pause + memory snapshot write)
+#   # per host. Standby demand above the cap queues; raise or lower to trade
+#   # snapshot IO pressure against standby latency.
+#   max_concurrent: 16
+
+# =============================================================================
 # Network Configuration
 # =============================================================================
 # network:

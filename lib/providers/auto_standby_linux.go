@@ -4,8 +4,11 @@ package providers
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 
+	"github.com/kernel/hypeman/cmd/api/config"
 	"github.com/kernel/hypeman/lib/autostandby"
 	"github.com/kernel/hypeman/lib/instances"
 	"go.opentelemetry.io/otel"
@@ -51,6 +54,9 @@ func (s autoStandbyInstanceStore) ListInstances(ctx context.Context) ([]autostan
 
 func (s autoStandbyInstanceStore) StandbyInstance(ctx context.Context, id string) error {
 	_, err := s.manager.StandbyInstance(ctx, id, instances.StandbyInstanceRequest{})
+	if errors.Is(err, instances.ErrNotFound) {
+		return fmt.Errorf("%w: %v", autostandby.ErrInstanceNotFound, err)
+	}
 	return err
 }
 
@@ -97,7 +103,7 @@ func toAutoStandbyInstance(inst *instances.Instance) *autostandby.Instance {
 }
 
 // ProvideAutoStandbyController provides the Linux auto-standby controller.
-func ProvideAutoStandbyController(instanceManager instances.Manager, log *slog.Logger) *autostandby.Controller {
+func ProvideAutoStandbyController(instanceManager instances.Manager, cfg *config.Config, log *slog.Logger) *autostandby.Controller {
 	if instanceManager == nil || log == nil {
 		return nil
 	}
@@ -111,9 +117,10 @@ func ProvideAutoStandbyController(instanceManager instances.Manager, log *slog.L
 		autoStandbyInstanceStore{manager: instanceManager, runtimeManager: runtimeManager},
 		autostandby.NewConntrackSource(),
 		autostandby.ControllerOptions{
-			Log:    log.With("controller", "auto_standby"),
-			Meter:  otel.GetMeterProvider().Meter("hypeman/autostandby"),
-			Tracer: otel.GetTracerProvider().Tracer("hypeman/autostandby"),
+			Log:                   log.With("controller", "auto_standby"),
+			Meter:                 otel.GetMeterProvider().Meter("hypeman/autostandby"),
+			Tracer:                otel.GetTracerProvider().Tracer("hypeman/autostandby"),
+			MaxConcurrentStandbys: cfg.AutoStandby.MaxConcurrent,
 		},
 	)
 }

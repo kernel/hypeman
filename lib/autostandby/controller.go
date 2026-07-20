@@ -20,7 +20,12 @@ const (
 	defaultReconnectDelay            = 2 * time.Second
 	defaultReconcileDelay            = 2 * time.Second
 	defaultSnapshotSyncInterval      = 5 * time.Minute
+	defaultMaxConcurrentStandbys     = 16
 )
+
+// ErrInstanceNotFound signals that a standby target no longer exists. The
+// controller drops its tracking state instead of re-arming the idle timer.
+var ErrInstanceNotFound = errors.New("instance not found")
 
 // InstanceEventAction identifies an instance lifecycle change relevant to auto-standby.
 type InstanceEventAction string
@@ -88,6 +93,10 @@ type ControllerOptions struct {
 	ReconnectDelay       time.Duration
 	ReconcileDelay       time.Duration
 	SnapshotSyncInterval time.Duration
+	// MaxConcurrentStandbys caps how many standby operations run at once.
+	// Standby writes the VM's memory snapshot to disk, so the cap bounds
+	// concurrent snapshot IO. Defaults to 16 when unset.
+	MaxConcurrentStandbys int
 }
 
 type controllerState struct {
@@ -118,9 +127,12 @@ type Controller struct {
 	timerFired           chan string
 	reconcileFired       chan string
 	streamReady          chan ConnectionStream
+	standbySlots         chan struct{}
+	standbyWG            sync.WaitGroup
 
 	mu                sync.RWMutex
 	states            map[string]*controllerState
+	standbyInFlight   int
 	observerConnected bool
 	lastObserverErr   error
 }
@@ -147,6 +159,10 @@ func NewController(store InstanceStore, source ConnectionSource, opts Controller
 	if snapshotSyncInterval <= 0 {
 		snapshotSyncInterval = defaultSnapshotSyncInterval
 	}
+	maxConcurrentStandbys := opts.MaxConcurrentStandbys
+	if maxConcurrentStandbys <= 0 {
+		maxConcurrentStandbys = defaultMaxConcurrentStandbys
+	}
 
 	c := &Controller{
 		store:                store,
@@ -160,6 +176,7 @@ func NewController(store InstanceStore, source ConnectionSource, opts Controller
 		timerFired:           make(chan string, 128),
 		reconcileFired:       make(chan string, 128),
 		streamReady:          make(chan ConnectionStream, 4),
+		standbySlots:         make(chan struct{}, maxConcurrentStandbys),
 		states:               make(map[string]*controllerState),
 	}
 	c.metrics = newMetrics(opts.Meter, opts.Tracer, c)
@@ -169,7 +186,13 @@ func NewController(store InstanceStore, source ConnectionSource, opts Controller
 // Run starts the controller and blocks until ctx is cancelled.
 func (c *Controller) Run(ctx context.Context) error {
 	log := c.log.With("tracking_mode", trackingModeConntrackEventsV4TCP)
-	log.Info("auto-standby controller started", "snapshot_sync_interval", c.snapshotSyncInterval)
+	log.Info("auto-standby controller started", "snapshot_sync_interval", c.snapshotSyncInterval, "max_concurrent_standbys", cap(c.standbySlots))
+
+	// Standby workers outlive individual loop iterations; cancel them when the
+	// loop exits for any reason (not just ctx) and wait for in-flight work.
+	workerCtx, cancelWorkers := context.WithCancel(ctx)
+	defer c.standbyWG.Wait()
+	defer cancelWorkers()
 
 	var stream ConnectionStream
 	if c.source != nil {
@@ -253,7 +276,7 @@ func (c *Controller) Run(ctx context.Context) error {
 				log.Warn("auto-standby instance event handling failed", "action", event.Action, "instance_id", event.InstanceID, "error", err)
 			}
 		case id := <-c.timerFired:
-			c.handleStandbyTimer(ctx, id)
+			c.handleStandbyTimer(workerCtx, id)
 		case id := <-c.reconcileFired:
 			c.handleActiveReconcile(ctx, id)
 		case <-snapshotTicker.C:
@@ -626,7 +649,39 @@ func (c *Controller) handleConnectionEvent(ctx context.Context, event Connection
 	}
 }
 
+// handleStandbyTimer marks the instance as standby-requested and hands the
+// standby call to a bounded worker so the event loop never blocks on snapshot
+// IO. Inbound activity observed while the work is queued clears
+// standbyRequested and cancels the attempt.
 func (c *Controller) handleStandbyTimer(ctx context.Context, id string) {
+	c.mu.Lock()
+	state := c.states[id]
+	if state == nil || state.compiledPolicy == nil || len(state.activeInbound) > 0 || state.standbyRequested {
+		c.mu.Unlock()
+		return
+	}
+	state.timer = nil
+	state.nextStandbyAt = nil
+	state.standbyRequested = true
+	instanceName := state.instance.Name
+	c.mu.Unlock()
+
+	c.log.Info("auto-standby standby timer fired", "instance_id", id, "instance_name", instanceName)
+
+	c.standbyWG.Add(1)
+	go func() {
+		defer c.standbyWG.Done()
+		select {
+		case c.standbySlots <- struct{}{}:
+		case <-ctx.Done():
+			return
+		}
+		defer func() { <-c.standbySlots }()
+		c.executeStandby(ctx, id, instanceName)
+	}()
+}
+
+func (c *Controller) executeStandby(ctx context.Context, id string, instanceName string) {
 	ctx, span := c.startSpan(ctx, "AutoStandbyStandbyAttempt",
 		attribute.String("instance_id", id),
 	)
@@ -638,27 +693,32 @@ func (c *Controller) handleStandbyTimer(ctx context.Context, id string) {
 
 	c.mu.Lock()
 	state := c.states[id]
-	if state == nil || state.compiledPolicy == nil || len(state.activeInbound) > 0 {
+	if state == nil || state.compiledPolicy == nil || len(state.activeInbound) > 0 || !state.standbyRequested {
 		c.mu.Unlock()
 		return
 	}
-	state.timer = nil
-	state.nextStandbyAt = nil
-	state.standbyRequested = true
-	instanceName := state.instance.Name
 	idleTimeout := state.idleTimeout
+	c.standbyInFlight++
 	c.mu.Unlock()
-
-	c.log.Info("auto-standby standby timer fired", "instance_id", id, "instance_name", instanceName)
+	defer func() {
+		c.mu.Lock()
+		c.standbyInFlight--
+		c.mu.Unlock()
+	}()
 
 	if err := c.store.StandbyInstance(ctx, id); err != nil {
 		recordSpanError(span, err)
 		c.recordStandbyAttempt("error")
 		c.recordControllerError("standby")
-		c.log.Warn("auto-standby standby attempt failed", "instance_id", id, "instance_name", instanceName, "error", err)
 
 		c.mu.Lock()
 		defer c.mu.Unlock()
+		if errors.Is(err, ErrInstanceNotFound) {
+			c.log.Info("auto-standby target instance no longer exists, dropping state", "instance_id", id, "instance_name", instanceName)
+			c.removeStateLocked(id)
+			return
+		}
+		c.log.Warn("auto-standby standby attempt failed", "instance_id", id, "instance_name", instanceName, "error", err)
 		if state := c.states[id]; state != nil {
 			state.standbyRequested = false
 			idleSince := c.now().UTC()
