@@ -3,7 +3,9 @@ package autostandby
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/netip"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,12 +14,16 @@ import (
 )
 
 type fakeInstanceStore struct {
+	mu               sync.Mutex
 	instances        []Instance
 	standbyIDs       []string
 	persistedRuntime map[string]*Runtime
 	events           chan InstanceEvent
 	standbyErr       error
 	listErr          error
+	setRuntimeErr    error
+	standbyStarted   chan string
+	standbyRelease   chan struct{}
 }
 
 func newFakeInstanceStore(instances []Instance) *fakeInstanceStore {
@@ -29,6 +35,8 @@ func newFakeInstanceStore(instances []Instance) *fakeInstanceStore {
 }
 
 func (f *fakeInstanceStore) ListInstances(context.Context) ([]Instance, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.listErr != nil {
 		return nil, f.listErr
 	}
@@ -40,11 +48,30 @@ func (f *fakeInstanceStore) ListInstances(context.Context) ([]Instance, error) {
 }
 
 func (f *fakeInstanceStore) StandbyInstance(_ context.Context, id string) error {
+	if f.standbyStarted != nil {
+		f.standbyStarted <- id
+	}
+	if f.standbyRelease != nil {
+		<-f.standbyRelease
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.standbyIDs = append(f.standbyIDs, id)
 	return f.standbyErr
 }
 
+func (f *fakeInstanceStore) standbyCalls() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.standbyIDs...)
+}
+
 func (f *fakeInstanceStore) SetRuntime(_ context.Context, id string, runtime *Runtime) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.setRuntimeErr != nil {
+		return f.setRuntimeErr
+	}
 	f.persistedRuntime[id] = cloneRuntime(runtime)
 	for i := range f.instances {
 		if f.instances[i].ID == id {
@@ -477,8 +504,9 @@ func TestHandleStandbyTimerCallsStandbyAndClearsState(t *testing.T) {
 	require.NoError(t, controller.startupResync(context.Background()))
 
 	controller.handleStandbyTimer(context.Background(), "inst-standby")
+	controller.standbyWG.Wait()
 
-	require.Equal(t, []string{"inst-standby"}, store.standbyIDs)
+	require.Equal(t, []string{"inst-standby"}, store.standbyCalls())
 	require.Nil(t, store.persistedRuntime["inst-standby"])
 
 	controller.mu.RLock()
@@ -517,8 +545,9 @@ func TestHandleStandbyTimerFailureRearmsIdleCountdown(t *testing.T) {
 	require.NoError(t, controller.startupResync(context.Background()))
 
 	controller.handleStandbyTimer(context.Background(), "inst-standby-fail")
+	controller.standbyWG.Wait()
 
-	require.Equal(t, []string{"inst-standby-fail"}, store.standbyIDs)
+	require.Equal(t, []string{"inst-standby-fail"}, store.standbyCalls())
 	require.NotNil(t, store.persistedRuntime["inst-standby-fail"])
 	require.NotNil(t, store.persistedRuntime["inst-standby-fail"].IdleSince)
 	assert.Equal(t, now, *store.persistedRuntime["inst-standby-fail"].IdleSince)
@@ -537,4 +566,380 @@ func TestHandleStandbyTimerFailureRearmsIdleCountdown(t *testing.T) {
 
 func mustAddr(raw string) netip.Addr {
 	return netip.MustParseAddr(raw)
+}
+
+func idleTestInstance(id, ip string, idleSince time.Time) Instance {
+	since := idleSince
+	return Instance{
+		ID:             id,
+		Name:           id,
+		State:          StateRunning,
+		NetworkEnabled: true,
+		IP:             ip,
+		AutoStandby:    &Policy{Enabled: true, IdleTimeout: "1m"},
+		Runtime:        &Runtime{IdleSince: &since},
+	}
+}
+
+func TestStandbyExecutionBoundedByMaxConcurrent(t *testing.T) {
+	t.Parallel()
+
+	idleSince := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
+	store := newFakeInstanceStore([]Instance{
+		idleTestInstance("inst-a", "192.168.100.70", idleSince),
+		idleTestInstance("inst-b", "192.168.100.71", idleSince),
+		idleTestInstance("inst-c", "192.168.100.72", idleSince),
+		idleTestInstance("inst-d", "192.168.100.73", idleSince),
+	})
+	store.standbyStarted = make(chan string, 4)
+	store.standbyRelease = make(chan struct{})
+	controller := NewController(store, &fakeConnectionSource{}, ControllerOptions{
+		Now:                   func() time.Time { return idleSince.Add(time.Minute) },
+		MaxConcurrentStandbys: 2,
+	})
+
+	require.NoError(t, controller.startupResync(context.Background()))
+
+	for _, id := range []string{"inst-a", "inst-b", "inst-c", "inst-d"} {
+		controller.handleStandbyTimer(context.Background(), id)
+	}
+
+	started := map[string]struct{}{}
+	for len(started) < 2 {
+		started[<-store.standbyStarted] = struct{}{}
+	}
+	select {
+	case id := <-store.standbyStarted:
+		t.Fatalf("standby for %s started beyond the concurrency cap", id)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(store.standbyRelease)
+	controller.standbyWG.Wait()
+	assert.Len(t, store.standbyCalls(), 4)
+}
+
+func TestStandbyCancelledByInboundActivityWhileQueued(t *testing.T) {
+	t.Parallel()
+
+	idleSince := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
+	store := newFakeInstanceStore([]Instance{
+		idleTestInstance("inst-first", "192.168.100.80", idleSince),
+		idleTestInstance("inst-queued", "192.168.100.81", idleSince),
+	})
+	store.standbyStarted = make(chan string, 2)
+	store.standbyRelease = make(chan struct{})
+	controller := NewController(store, &fakeConnectionSource{}, ControllerOptions{
+		Now:                   func() time.Time { return idleSince.Add(time.Minute) },
+		MaxConcurrentStandbys: 1,
+	})
+
+	require.NoError(t, controller.startupResync(context.Background()))
+
+	controller.handleStandbyTimer(context.Background(), "inst-first")
+	require.Equal(t, "inst-first", <-store.standbyStarted)
+	controller.handleStandbyTimer(context.Background(), "inst-queued")
+
+	controller.handleConnectionEvent(context.Background(), ConnectionEvent{
+		Type: ConnectionEventNew,
+		Connection: Connection{
+			OriginalSourceIP:        mustAddr("1.2.3.4"),
+			OriginalSourcePort:      50002,
+			OriginalDestinationIP:   mustAddr("192.168.100.81"),
+			OriginalDestinationPort: 8080,
+			TCPState:                TCPStateEstablished,
+		},
+		ObservedAt: idleSince.Add(time.Minute),
+	})
+
+	close(store.standbyRelease)
+	controller.standbyWG.Wait()
+	assert.Equal(t, []string{"inst-first"}, store.standbyCalls())
+}
+
+func TestStandbyDispatchDeduplicatesPendingRequests(t *testing.T) {
+	t.Parallel()
+
+	idleSince := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
+	store := newFakeInstanceStore([]Instance{
+		idleTestInstance("inst-dup", "192.168.100.90", idleSince),
+	})
+	store.standbyStarted = make(chan string, 2)
+	store.standbyRelease = make(chan struct{})
+	controller := NewController(store, &fakeConnectionSource{}, ControllerOptions{
+		Now: func() time.Time { return idleSince.Add(time.Minute) },
+	})
+
+	require.NoError(t, controller.startupResync(context.Background()))
+
+	controller.handleStandbyTimer(context.Background(), "inst-dup")
+	require.Equal(t, "inst-dup", <-store.standbyStarted)
+	controller.handleStandbyTimer(context.Background(), "inst-dup")
+
+	close(store.standbyRelease)
+	controller.standbyWG.Wait()
+	assert.Equal(t, []string{"inst-dup"}, store.standbyCalls())
+}
+
+func TestStandbyNotFoundDropsStateWithoutRearming(t *testing.T) {
+	t.Parallel()
+
+	idleSince := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
+	store := newFakeInstanceStore([]Instance{
+		idleTestInstance("inst-gone", "192.168.100.91", idleSince),
+	})
+	store.standbyErr = fmt.Errorf("%w: deleted concurrently", ErrInstanceNotFound)
+	controller := NewController(store, &fakeConnectionSource{}, ControllerOptions{
+		Now: func() time.Time { return idleSince.Add(time.Minute) },
+	})
+
+	require.NoError(t, controller.startupResync(context.Background()))
+
+	controller.handleStandbyTimer(context.Background(), "inst-gone")
+	controller.standbyWG.Wait()
+
+	require.Equal(t, []string{"inst-gone"}, store.standbyCalls())
+	controller.mu.RLock()
+	_, tracked := controller.states["inst-gone"]
+	controller.mu.RUnlock()
+	assert.False(t, tracked)
+}
+
+func TestResyncDuringExecutingStandbyDoesNotDoubleDispatch(t *testing.T) {
+	t.Parallel()
+
+	idleSince := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
+	inst := idleTestInstance("inst-racing", "192.168.100.92", idleSince)
+	store := newFakeInstanceStore([]Instance{inst})
+	store.standbyStarted = make(chan string, 2)
+	store.standbyRelease = make(chan struct{})
+	controller := NewController(store, &fakeConnectionSource{}, ControllerOptions{
+		Now: func() time.Time { return idleSince.Add(time.Minute) },
+	})
+
+	require.NoError(t, controller.startupResync(context.Background()))
+
+	controller.handleStandbyTimer(context.Background(), "inst-racing")
+	require.Equal(t, "inst-racing", <-store.standbyStarted)
+
+	// A lifecycle refresh while the standby executes resets standbyRequested
+	// and re-arms an already-elapsed idle timer.
+	refreshed := cloneInstance(inst)
+	require.NoError(t, controller.handleInstanceEvent(context.Background(), InstanceEvent{
+		Action:     InstanceEventUpdate,
+		InstanceID: "inst-racing",
+		Instance:   &refreshed,
+	}))
+	controller.handleStandbyTimer(context.Background(), "inst-racing")
+
+	select {
+	case <-store.standbyStarted:
+		t.Fatal("second standby dispatched while one was executing")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(store.standbyRelease)
+	controller.standbyWG.Wait()
+	assert.Equal(t, []string{"inst-racing"}, store.standbyCalls())
+}
+
+func TestActiveReconcileClearsPendingStandbyRequest(t *testing.T) {
+	t.Parallel()
+
+	idleSince := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
+	store := newFakeInstanceStore([]Instance{
+		idleTestInstance("inst-busy", "192.168.100.93", idleSince),
+		idleTestInstance("inst-pending", "192.168.100.94", idleSince),
+	})
+	store.standbyStarted = make(chan string, 2)
+	store.standbyRelease = make(chan struct{})
+	source := &fakeConnectionSource{}
+	controller := NewController(store, source, ControllerOptions{
+		Now:                   func() time.Time { return idleSince.Add(time.Minute) },
+		MaxConcurrentStandbys: 1,
+	})
+
+	require.NoError(t, controller.startupResync(context.Background()))
+
+	controller.handleStandbyTimer(context.Background(), "inst-busy")
+	require.Equal(t, "inst-busy", <-store.standbyStarted)
+	controller.handleStandbyTimer(context.Background(), "inst-pending")
+
+	// Reconcile discovers an active inbound connection for the queued instance.
+	source.connections = []Connection{{
+		OriginalSourceIP:        mustAddr("1.2.3.4"),
+		OriginalSourcePort:      50003,
+		OriginalDestinationIP:   mustAddr("192.168.100.94"),
+		OriginalDestinationPort: 8080,
+		TCPState:                TCPStateEstablished,
+	}}
+	controller.handleActiveReconcile(context.Background(), "inst-pending")
+
+	controller.mu.RLock()
+	pending := controller.states["inst-pending"]
+	require.NotNil(t, pending)
+	assert.False(t, pending.standbyRequested)
+	assert.Len(t, pending.activeInbound, 1)
+	controller.mu.RUnlock()
+
+	close(store.standbyRelease)
+	controller.standbyWG.Wait()
+	assert.Equal(t, []string{"inst-busy"}, store.standbyCalls())
+}
+
+func TestStandbyFailureWithMidFlightActivityDoesNotRearmIdle(t *testing.T) {
+	t.Parallel()
+
+	idleSince := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
+	store := newFakeInstanceStore([]Instance{
+		idleTestInstance("inst-fail-busy", "192.168.100.95", idleSince),
+	})
+	store.standbyErr = errors.New("standby failed")
+	store.standbyStarted = make(chan string, 1)
+	store.standbyRelease = make(chan struct{})
+	controller := NewController(store, &fakeConnectionSource{}, ControllerOptions{
+		Now: func() time.Time { return idleSince.Add(time.Minute) },
+	})
+
+	require.NoError(t, controller.startupResync(context.Background()))
+
+	controller.handleStandbyTimer(context.Background(), "inst-fail-busy")
+	require.Equal(t, "inst-fail-busy", <-store.standbyStarted)
+
+	// Inbound activity lands while the standby attempt is executing.
+	controller.handleConnectionEvent(context.Background(), ConnectionEvent{
+		Type: ConnectionEventNew,
+		Connection: Connection{
+			OriginalSourceIP:        mustAddr("1.2.3.4"),
+			OriginalSourcePort:      50004,
+			OriginalDestinationIP:   mustAddr("192.168.100.95"),
+			OriginalDestinationPort: 8080,
+			TCPState:                TCPStateEstablished,
+		},
+		ObservedAt: idleSince.Add(time.Minute),
+	})
+
+	close(store.standbyRelease)
+	controller.standbyWG.Wait()
+
+	controller.mu.RLock()
+	state := controller.states["inst-fail-busy"]
+	require.NotNil(t, state)
+	assert.Len(t, state.activeInbound, 1)
+	assert.False(t, state.standbyRequested)
+	assert.Nil(t, state.idleSince)
+	assert.Nil(t, state.nextStandbyAt)
+	controller.mu.RUnlock()
+
+	store.mu.Lock()
+	persisted := cloneRuntime(store.persistedRuntime["inst-fail-busy"])
+	store.mu.Unlock()
+	require.NotNil(t, persisted)
+	assert.Nil(t, persisted.IdleSince, "failure must not persist a false idle window while connections are active")
+}
+
+func TestShutdownCancelsQueuedStandbyAndDrainsWorkers(t *testing.T) {
+	t.Parallel()
+
+	idleSince := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
+	store := newFakeInstanceStore([]Instance{
+		idleTestInstance("inst-active-slot", "192.168.100.96", idleSince),
+		idleTestInstance("inst-waiting", "192.168.100.97", idleSince),
+	})
+	store.standbyStarted = make(chan string, 2)
+	store.standbyRelease = make(chan struct{})
+	controller := NewController(store, &fakeConnectionSource{}, ControllerOptions{
+		Now:                   func() time.Time { return idleSince.Add(time.Minute) },
+		MaxConcurrentStandbys: 1,
+	})
+
+	require.NoError(t, controller.startupResync(context.Background()))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	controller.handleStandbyTimer(ctx, "inst-active-slot")
+	require.Equal(t, "inst-active-slot", <-store.standbyStarted)
+	controller.handleStandbyTimer(ctx, "inst-waiting")
+
+	// Shutdown while one worker holds the slot and the other waits on it.
+	cancel()
+	close(store.standbyRelease)
+	controller.standbyWG.Wait()
+
+	assert.Equal(t, []string{"inst-active-slot"}, store.standbyCalls(),
+		"queued standby must be abandoned on shutdown, in-flight one must drain")
+}
+
+func TestErroringRefreshDoesNotCancelQueuedStandby(t *testing.T) {
+	t.Parallel()
+
+	idleSince := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
+	store := newFakeInstanceStore([]Instance{
+		idleTestInstance("inst-holder", "192.168.100.98", idleSince),
+		idleTestInstance("inst-refresh-err", "192.168.100.99", idleSince),
+	})
+	store.standbyStarted = make(chan string, 2)
+	store.standbyRelease = make(chan struct{})
+	controller := NewController(store, &fakeConnectionSource{}, ControllerOptions{
+		Now:                   func() time.Time { return idleSince.Add(time.Minute) },
+		MaxConcurrentStandbys: 1,
+	})
+
+	require.NoError(t, controller.startupResync(context.Background()))
+
+	controller.handleStandbyTimer(context.Background(), "inst-holder")
+	require.Equal(t, "inst-holder", <-store.standbyStarted)
+	controller.handleStandbyTimer(context.Background(), "inst-refresh-err")
+
+	// A refresh that errors after the queued dispatch (invalid instance IP
+	// fails connection matching) must leave the queued attempt intact.
+	broken := idleTestInstance("inst-refresh-err", "not-an-ip", idleSince)
+	require.Error(t, controller.handleInstanceEvent(context.Background(), InstanceEvent{
+		Action:     InstanceEventUpdate,
+		InstanceID: "inst-refresh-err",
+		Instance:   &broken,
+	}))
+
+	controller.mu.RLock()
+	require.NotNil(t, controller.states["inst-refresh-err"])
+	assert.True(t, controller.states["inst-refresh-err"].standbyRequested)
+	controller.mu.RUnlock()
+
+	close(store.standbyRelease)
+	controller.standbyWG.Wait()
+	assert.ElementsMatch(t, []string{"inst-holder", "inst-refresh-err"}, store.standbyCalls())
+}
+
+func TestRefreshPersistFailureStillArmsIdleTimer(t *testing.T) {
+	t.Parallel()
+
+	idleSince := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
+	inst := Instance{
+		ID:             "inst-persist-err",
+		Name:           "inst-persist-err",
+		State:          StateRunning,
+		NetworkEnabled: true,
+		IP:             "192.168.100.100",
+		AutoStandby:    &Policy{Enabled: true, IdleTimeout: "1m"},
+	}
+	store := newFakeInstanceStore([]Instance{inst})
+	controller := NewController(store, &fakeConnectionSource{}, ControllerOptions{
+		Now: func() time.Time { return idleSince },
+	})
+	store.setRuntimeErr = errors.New("metadata write failed")
+
+	// Fresh idle state forces the persist that fails; the countdown must be
+	// armed regardless.
+	refreshed := cloneInstance(inst)
+	require.NoError(t, controller.handleInstanceEvent(context.Background(), InstanceEvent{
+		Action:     InstanceEventCreate,
+		InstanceID: "inst-persist-err",
+		Instance:   &refreshed,
+	}))
+
+	controller.mu.RLock()
+	state := controller.states["inst-persist-err"]
+	require.NotNil(t, state)
+	assert.NotNil(t, state.nextStandbyAt)
+	assert.NotNil(t, state.idleSince)
+	controller.mu.RUnlock()
 }
