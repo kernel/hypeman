@@ -18,6 +18,7 @@ type Metrics struct {
 	trackedInstancesGauge  metric.Int64ObservableGauge
 	activeConnectionsGauge metric.Int64ObservableGauge
 	standbyInFlightGauge   metric.Int64ObservableGauge
+	standbyQueuedGauge     metric.Int64ObservableGauge
 	tracer                 trace.Tracer
 }
 
@@ -77,6 +78,13 @@ func newMetrics(meter metric.Meter, tracer trace.Tracer, controller *Controller)
 	if err != nil {
 		return &Metrics{tracer: tracer}
 	}
+	standbyQueuedGauge, err := meter.Int64ObservableGauge(
+		"hypeman_auto_standby_standby_queued",
+		metric.WithDescription("Standby attempts dispatched but waiting for an execution slot"),
+	)
+	if err != nil {
+		return &Metrics{tracer: tracer}
+	}
 
 	m := &Metrics{
 		conntrackEventsTotal:   conntrackEventsTotal,
@@ -86,6 +94,7 @@ func newMetrics(meter metric.Meter, tracer trace.Tracer, controller *Controller)
 		trackedInstancesGauge:  trackedInstancesGauge,
 		activeConnectionsGauge: activeConnectionsGauge,
 		standbyInFlightGauge:   standbyInFlightGauge,
+		standbyQueuedGauge:     standbyQueuedGauge,
 		tracer:                 tracer,
 	}
 
@@ -93,15 +102,16 @@ func newMetrics(meter metric.Meter, tracer trace.Tracer, controller *Controller)
 		if controller == nil {
 			return nil
 		}
-		active, countdown, ready, ineligible, totalConnections, inFlight := controller.metricSnapshot()
+		active, countdown, ready, ineligible, totalConnections, inFlight, queued := controller.metricSnapshot()
 		observer.ObserveInt64(m.trackedInstancesGauge, int64(active), metric.WithAttributes(attribute.String("phase", "active")))
 		observer.ObserveInt64(m.trackedInstancesGauge, int64(countdown), metric.WithAttributes(attribute.String("phase", "idle_countdown")))
 		observer.ObserveInt64(m.trackedInstancesGauge, int64(ready), metric.WithAttributes(attribute.String("phase", "ready_for_standby")))
 		observer.ObserveInt64(m.trackedInstancesGauge, int64(ineligible), metric.WithAttributes(attribute.String("phase", "ineligible")))
 		observer.ObserveInt64(m.activeConnectionsGauge, int64(totalConnections))
 		observer.ObserveInt64(m.standbyInFlightGauge, int64(inFlight))
+		observer.ObserveInt64(m.standbyQueuedGauge, int64(queued))
 		return nil
-	}, trackedInstancesGauge, activeConnectionsGauge, standbyInFlightGauge)
+	}, trackedInstancesGauge, activeConnectionsGauge, standbyInFlightGauge, standbyQueuedGauge)
 
 	return m
 }
@@ -147,7 +157,7 @@ func (c *Controller) recordObserverError(operation string) {
 	c.recordControllerError(operation)
 }
 
-func (c *Controller) metricSnapshot() (active, countdown, ready, ineligible, totalConnections, standbyInFlight int) {
+func (c *Controller) metricSnapshot() (active, countdown, ready, ineligible, totalConnections, standbyInFlight, standbyQueued int) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
@@ -159,6 +169,9 @@ func (c *Controller) metricSnapshot() (active, countdown, ready, ineligible, tot
 			continue
 		}
 		totalConnections += len(state.activeInbound)
+		if state.standbyRequested && !state.standbyExecuting {
+			standbyQueued++
+		}
 		switch {
 		case state.standbyRequested:
 			ready++

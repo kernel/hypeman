@@ -782,3 +782,85 @@ func TestActiveReconcileClearsPendingStandbyRequest(t *testing.T) {
 	controller.standbyWG.Wait()
 	assert.Equal(t, []string{"inst-busy"}, store.standbyCalls())
 }
+
+func TestStandbyFailureWithMidFlightActivityDoesNotRearmIdle(t *testing.T) {
+	t.Parallel()
+
+	idleSince := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
+	store := newFakeInstanceStore([]Instance{
+		idleTestInstance("inst-fail-busy", "192.168.100.95", idleSince),
+	})
+	store.standbyErr = errors.New("standby failed")
+	store.standbyStarted = make(chan string, 1)
+	store.standbyRelease = make(chan struct{})
+	controller := NewController(store, &fakeConnectionSource{}, ControllerOptions{
+		Now: func() time.Time { return idleSince.Add(time.Minute) },
+	})
+
+	require.NoError(t, controller.startupResync(context.Background()))
+
+	controller.handleStandbyTimer(context.Background(), "inst-fail-busy")
+	require.Equal(t, "inst-fail-busy", <-store.standbyStarted)
+
+	// Inbound activity lands while the standby attempt is executing.
+	controller.handleConnectionEvent(context.Background(), ConnectionEvent{
+		Type: ConnectionEventNew,
+		Connection: Connection{
+			OriginalSourceIP:        mustAddr("1.2.3.4"),
+			OriginalSourcePort:      50004,
+			OriginalDestinationIP:   mustAddr("192.168.100.95"),
+			OriginalDestinationPort: 8080,
+			TCPState:                TCPStateEstablished,
+		},
+		ObservedAt: idleSince.Add(time.Minute),
+	})
+
+	close(store.standbyRelease)
+	controller.standbyWG.Wait()
+
+	controller.mu.RLock()
+	state := controller.states["inst-fail-busy"]
+	require.NotNil(t, state)
+	assert.Len(t, state.activeInbound, 1)
+	assert.False(t, state.standbyRequested)
+	assert.Nil(t, state.idleSince)
+	assert.Nil(t, state.nextStandbyAt)
+	controller.mu.RUnlock()
+
+	store.mu.Lock()
+	persisted := cloneRuntime(store.persistedRuntime["inst-fail-busy"])
+	store.mu.Unlock()
+	require.NotNil(t, persisted)
+	assert.Nil(t, persisted.IdleSince, "failure must not persist a false idle window while connections are active")
+}
+
+func TestShutdownCancelsQueuedStandbyAndDrainsWorkers(t *testing.T) {
+	t.Parallel()
+
+	idleSince := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
+	store := newFakeInstanceStore([]Instance{
+		idleTestInstance("inst-active-slot", "192.168.100.96", idleSince),
+		idleTestInstance("inst-waiting", "192.168.100.97", idleSince),
+	})
+	store.standbyStarted = make(chan string, 2)
+	store.standbyRelease = make(chan struct{})
+	controller := NewController(store, &fakeConnectionSource{}, ControllerOptions{
+		Now:                   func() time.Time { return idleSince.Add(time.Minute) },
+		MaxConcurrentStandbys: 1,
+	})
+
+	require.NoError(t, controller.startupResync(context.Background()))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	controller.handleStandbyTimer(ctx, "inst-active-slot")
+	require.Equal(t, "inst-active-slot", <-store.standbyStarted)
+	controller.handleStandbyTimer(ctx, "inst-waiting")
+
+	// Shutdown while one worker holds the slot and the other waits on it.
+	cancel()
+	close(store.standbyRelease)
+	controller.standbyWG.Wait()
+
+	assert.Equal(t, []string{"inst-active-slot"}, store.standbyCalls(),
+		"queued standby must be abandoned on shutdown, in-flight one must drain")
+}

@@ -683,6 +683,12 @@ func (c *Controller) handleStandbyTimer(ctx context.Context, id string) {
 }
 
 func (c *Controller) executeStandby(ctx context.Context, id string, instanceName string) {
+	// The slot may have been acquired in the same instant shutdown began;
+	// never start a new standby after cancellation.
+	if ctx.Err() != nil {
+		return
+	}
+
 	ctx, span := c.startSpan(ctx, "AutoStandbyStandbyAttempt",
 		attribute.String("instance_id", id),
 	)
@@ -695,6 +701,9 @@ func (c *Controller) executeStandby(ctx context.Context, id string, instanceName
 	c.mu.Lock()
 	state := c.states[id]
 	if state == nil || state.compiledPolicy == nil || len(state.activeInbound) > 0 || !state.standbyRequested || state.standbyExecuting {
+		if state != nil && len(state.activeInbound) > 0 {
+			state.standbyRequested = false
+		}
 		c.mu.Unlock()
 		return
 	}
@@ -728,6 +737,12 @@ func (c *Controller) executeStandby(ctx context.Context, id string, instanceName
 		c.log.Warn("auto-standby standby attempt failed", "instance_id", id, "instance_name", instanceName, "error", err)
 		if state := c.states[id]; state != nil {
 			state.standbyRequested = false
+			// Inbound activity that arrived during the attempt owns the state
+			// now; the reconcile/destroy flow restarts the countdown once the
+			// connections drain.
+			if len(state.activeInbound) > 0 {
+				return
+			}
 			idleSince := c.now().UTC()
 			state.idleSince = &idleSince
 			c.armTimerLocked(id, state, idleSince)
