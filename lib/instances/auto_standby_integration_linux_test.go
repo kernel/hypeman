@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"os/exec"
 	"testing"
 	"time"
 
@@ -89,12 +90,8 @@ func (s integrationAutoStandbyStore) SubscribeInstanceEvents() (<-chan autostand
 	return dst, unsub, nil
 }
 
-func TestAutoStandbyCloudHypervisorActiveInboundTCP(t *testing.T) {
-	requireAutoStandbyE2EManualRun(t)
-	requireKVMAccess(t)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
+func setupAutoStandbyE2EInstance(t *testing.T, ctx context.Context, name string) (*manager, *autostandby.ConntrackSource, *Instance) {
+	t.Helper()
 
 	mgr, _ := setupCompressionTestManagerForHypervisor(t, hypervisor.TypeCloudHypervisor)
 	require.NoError(t, mgr.networkManager.Initialize(ctx, nil))
@@ -110,7 +107,7 @@ func TestAutoStandbyCloudHypervisorActiveInboundTCP(t *testing.T) {
 	}
 
 	inst, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
-		Name:           "auto-standby-e2e",
+		Name:           name,
 		Image:          integrationTestImageRef(t, "docker.io/library/nginx:alpine"),
 		Size:           1024 * 1024 * 1024,
 		HotplugSize:    512 * 1024 * 1024,
@@ -137,38 +134,11 @@ func TestAutoStandbyCloudHypervisorActiveInboundTCP(t *testing.T) {
 	require.NoError(t, waitForExecAgent(ctx, mgr, inst.Id, 30*time.Second))
 	require.NoError(t, waitForLogMessage(ctx, mgr, inst.Id, "start worker processes", 45*time.Second))
 
-	conn, err := dialGuestPortWithRetry(inst.IP, 80, 15*time.Second)
-	require.NoError(t, err)
-	defer func() {
-		if conn != nil {
-			_ = conn.Close()
-		}
-	}()
+	return mgr, connSource, inst
+}
 
-	require.Eventually(t, func() bool {
-		conns, err := connSource.ListConnections(ctx)
-		if err != nil {
-			t.Logf("conntrack read while waiting for inbound activity failed: %v", err)
-			return false
-		}
-
-		count, _, err := autostandby.ActiveInboundCount(autostandby.Instance{
-			ID:             inst.Id,
-			Name:           inst.Name,
-			State:          string(StateRunning),
-			NetworkEnabled: true,
-			IP:             inst.IP,
-			AutoStandby: &autostandby.Policy{
-				Enabled:     true,
-				IdleTimeout: "3s",
-			},
-		}, conns)
-		if err != nil {
-			t.Logf("active inbound count failed: %v", err)
-			return false
-		}
-		return count > 0
-	}, 10*time.Second, 200*time.Millisecond, "host->guest TCP connection never appeared in conntrack")
+func startAutoStandbyE2EController(t *testing.T, ctx context.Context, mgr *manager, connSource *autostandby.ConntrackSource) {
+	t.Helper()
 
 	controllerCtx, controllerCancel := context.WithCancel(ctx)
 	controllerDone := make(chan error, 1)
@@ -194,6 +164,58 @@ func TestAutoStandbyCloudHypervisorActiveInboundTCP(t *testing.T) {
 			t.Log("timed out waiting for auto-standby controller shutdown")
 		}
 	})
+}
+
+func requireActiveInboundEventually(t *testing.T, ctx context.Context, connSource *autostandby.ConntrackSource, inst *Instance, msg string) {
+	t.Helper()
+
+	require.Eventually(t, func() bool {
+		conns, err := connSource.ListConnections(ctx)
+		if err != nil {
+			t.Logf("conntrack read while waiting for inbound activity failed: %v", err)
+			return false
+		}
+
+		count, _, err := autostandby.ActiveInboundCount(autostandby.Instance{
+			ID:             inst.Id,
+			Name:           inst.Name,
+			State:          string(StateRunning),
+			NetworkEnabled: true,
+			IP:             inst.IP,
+			AutoStandby: &autostandby.Policy{
+				Enabled:     true,
+				IdleTimeout: "3s",
+			},
+		}, conns)
+		if err != nil {
+			t.Logf("active inbound count failed: %v", err)
+			return false
+		}
+		return count > 0
+	}, 10*time.Second, 200*time.Millisecond, msg)
+}
+
+func TestAutoStandbyCloudHypervisorActiveInboundTCP(t *testing.T) {
+	requireAutoStandbyE2EManualRun(t)
+	requireKVMAccess(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	mgr, connSource, inst := setupAutoStandbyE2EInstance(t, ctx, "auto-standby-e2e")
+	instanceID := inst.Id
+
+	conn, err := dialGuestPortWithRetry(inst.IP, 80, 15*time.Second)
+	require.NoError(t, err)
+	defer func() {
+		if conn != nil {
+			_ = conn.Close()
+		}
+	}()
+
+	requireActiveInboundEventually(t, ctx, connSource, inst, "host->guest TCP connection never appeared in conntrack")
+
+	startAutoStandbyE2EController(t, ctx, mgr, connSource)
 
 	time.Sleep(5 * time.Second)
 
@@ -207,6 +229,106 @@ func TestAutoStandbyCloudHypervisorActiveInboundTCP(t *testing.T) {
 	inst, err = waitForInstanceState(ctx, mgr, instanceID, StateStandby, 45*time.Second)
 	require.NoError(t, err)
 	require.Equal(t, StateStandby, inst.State)
+}
+
+// TestAutoStandbyCloudHypervisorHalfOpenInboundTCP reproduces the race where a
+// client dials the guest but the handshake does not complete for several
+// seconds, leaving the host-side conntrack flow in SYN_SENT — what a freshly
+// restored guest looks like while it faults its memory back in. That flow must
+// keep the VM awake: before SYN_SENT counted as activity, the idle timer fired
+// mid-handshake and put the VM into standby with the client's request in
+// flight.
+func TestAutoStandbyCloudHypervisorHalfOpenInboundTCP(t *testing.T) {
+	requireAutoStandbyE2EManualRun(t)
+	requireKVMAccess(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	mgr, connSource, inst := setupAutoStandbyE2EInstance(t, ctx, "auto-standby-e2e-halfopen")
+	instanceID := inst.Id
+
+	// Confirm the guest serves before quiescing.
+	probe, err := dialGuestPortWithRetry(inst.IP, 80, 15*time.Second)
+	require.NoError(t, err)
+	require.NoError(t, probe.Close())
+
+	// Drop the guest's replies in the raw table, before conntrack processes
+	// them: the client's SYN reaches nginx but the SYN-ACK never makes it
+	// back, so the host-side flow stays in SYN_SENT while the client
+	// retransmits — the same shape as a claim hitting a freshly restored
+	// guest that has not answered yet.
+	matchArgs := []string{"-s", inst.IP, "-p", "tcp", "--sport", "80", "-j", "DROP"}
+	require.NoError(t, runIptables(append([]string{"-t", "raw", "-I", "PREROUTING", "1"}, matchArgs...)...))
+	dropActive := true
+	removeDrop := func() error {
+		if !dropActive {
+			return nil
+		}
+		dropActive = false
+		return runIptables(append([]string{"-t", "raw", "-D", "PREROUTING"}, matchArgs...)...)
+	}
+	t.Cleanup(func() {
+		if err := removeDrop(); err != nil {
+			t.Logf("failed to remove drop rule during cleanup: %v", err)
+		}
+	})
+
+	type dialResult struct {
+		conn net.Conn
+		err  error
+	}
+	dialDone := make(chan dialResult, 1)
+	go func() {
+		conn, err := net.DialTimeout("tcp", net.JoinHostPort(inst.IP, "80"), 90*time.Second)
+		dialDone <- dialResult{conn: conn, err: err}
+	}()
+
+	requireActiveInboundEventually(t, ctx, connSource, inst, "half-open host->guest TCP flow never counted as inbound activity")
+
+	startAutoStandbyE2EController(t, ctx, mgr, connSource)
+
+	// Well past the 3s idle timeout; only the half-open flow holds the VM up.
+	time.Sleep(5 * time.Second)
+
+	select {
+	case res := <-dialDone:
+		if res.conn != nil {
+			_ = res.conn.Close()
+		}
+		t.Fatalf("dial completed while guest replies were dropped (err=%v); half-open scenario not established", res.err)
+	default:
+	}
+
+	current, err := mgr.GetInstance(ctx, instanceID)
+	require.NoError(t, err)
+	require.Equal(t, StateRunning, current.State, "instance must remain running while a client is mid-handshake")
+
+	// Let the handshake complete, then confirm the normal idle path still
+	// reaches standby once the connection closes.
+	require.NoError(t, removeDrop())
+
+	var conn net.Conn
+	select {
+	case res := <-dialDone:
+		require.NoError(t, res.err)
+		conn = res.conn
+	case <-time.After(45 * time.Second):
+		t.Fatal("connection never completed after the drop rule was removed")
+	}
+	require.NoError(t, conn.Close())
+
+	inst, err = waitForInstanceState(ctx, mgr, instanceID, StateStandby, 45*time.Second)
+	require.NoError(t, err)
+	require.Equal(t, StateStandby, inst.State)
+}
+
+func runIptables(args ...string) error {
+	out, err := exec.Command("iptables", append([]string{"-w", "5"}, args...)...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("iptables %v: %w: %s", args, err, out)
+	}
+	return nil
 }
 
 func dialGuestPortWithRetry(ip string, port int, timeout time.Duration) (net.Conn, error) {

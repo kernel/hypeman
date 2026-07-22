@@ -15,6 +15,7 @@ A VM is considered active when there is at least one tracked TCP flow where:
 That means:
 
 - inbound client connections keep the VM awake
+- a client mid-handshake (`SYN_SENT`) counts as activity, so a freshly restored guest that has not yet answered the SYN it was woken for is not put back into standby
 - replies to outbound guest requests do not keep the VM awake
 - same-host clients count by default
 
