@@ -62,10 +62,14 @@ const (
 	TCPStateRetrans     TCPState = 11
 )
 
-// Active reports whether the TCP state should keep a VM awake.
+// Active reports whether the TCP state should keep a VM awake. SYN_SENT
+// counts: a client mid-handshake is inbound demand, and a freshly restored
+// guest can take several seconds to answer the SYN it was woken for — going
+// back to standby in that window orphans the connection, since wake-on-traffic
+// does not exist.
 func (s TCPState) Active() bool {
 	switch s {
-	case TCPStateSynRecv, TCPStateEstablished, TCPStateFinWait, TCPStateCloseWait, TCPStateLastAck:
+	case TCPStateSynSent, TCPStateSynRecv, TCPStateEstablished, TCPStateFinWait, TCPStateCloseWait, TCPStateLastAck:
 		return true
 	default:
 		return false

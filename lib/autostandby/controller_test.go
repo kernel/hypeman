@@ -314,6 +314,70 @@ func TestConnectionEventsClearIdleAndStartCountdown(t *testing.T) {
 	require.NotNil(t, status.IdleSince)
 }
 
+func TestSynSentConnectionKeepsInstanceActive(t *testing.T) {
+	t.Parallel()
+
+	store := newFakeInstanceStore([]Instance{{
+		ID:             "inst-synsent",
+		Name:           "inst-synsent",
+		State:          StateRunning,
+		NetworkEnabled: true,
+		IP:             "192.168.100.33",
+		AutoStandby:    &Policy{Enabled: true, IdleTimeout: "1m"},
+	}})
+	now := time.Date(2026, 4, 6, 11, 0, 0, 0, time.UTC)
+	controller := NewController(store, &fakeConnectionSource{}, ControllerOptions{
+		Now: func() time.Time { return now },
+	})
+	require.NoError(t, controller.startupResync(context.Background()))
+
+	// A half-open handshake against a slow guest arrives as NEW in SYN_SENT.
+	controller.handleConnectionEvent(context.Background(), ConnectionEvent{
+		Type: ConnectionEventNew,
+		Connection: Connection{
+			OriginalSourceIP:        mustAddr("1.2.3.4"),
+			OriginalSourcePort:      50005,
+			OriginalDestinationIP:   mustAddr("192.168.100.33"),
+			OriginalDestinationPort: 8080,
+			TCPState:                TCPStateSynSent,
+		},
+		ObservedAt: now.Add(5 * time.Second),
+	})
+
+	status := controller.Describe(store.instances[0])
+	require.Equal(t, StatusActive, status.Status)
+	require.Equal(t, 1, status.ActiveInboundCount)
+	require.Nil(t, status.IdleSince)
+}
+
+func TestSnapshotCountsSynSentConnection(t *testing.T) {
+	t.Parallel()
+
+	store := newFakeInstanceStore([]Instance{{
+		ID:             "inst-synsent-snap",
+		Name:           "inst-synsent-snap",
+		State:          StateRunning,
+		NetworkEnabled: true,
+		IP:             "192.168.100.34",
+		AutoStandby:    &Policy{Enabled: true, IdleTimeout: "1m"},
+	}})
+	source := &fakeConnectionSource{connections: []Connection{{
+		OriginalSourceIP:        mustAddr("1.2.3.4"),
+		OriginalSourcePort:      50006,
+		OriginalDestinationIP:   mustAddr("192.168.100.34"),
+		OriginalDestinationPort: 8080,
+		TCPState:                TCPStateSynSent,
+	}}}
+	controller := NewController(store, source, ControllerOptions{
+		Now: func() time.Time { return time.Date(2026, 4, 6, 11, 0, 0, 0, time.UTC) },
+	})
+	require.NoError(t, controller.startupResync(context.Background()))
+
+	status := controller.Describe(store.instances[0])
+	require.Equal(t, StatusActive, status.Status)
+	require.Equal(t, 1, status.ActiveInboundCount)
+}
+
 func TestConnectionUpdateWithInactiveTCPStateStartsCountdown(t *testing.T) {
 	t.Parallel()
 

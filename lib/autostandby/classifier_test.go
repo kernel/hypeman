@@ -55,10 +55,16 @@ func TestActiveInboundCountCountsOnlyQualifyingInboundTCP(t *testing.T) {
 			OriginalDestinationPort: 8080,
 			TCPState:                TCPStateTimeWait,
 		},
+		{
+			OriginalSourceIP:        netip.MustParseAddr("7.7.7.7"),
+			OriginalDestinationIP:   netip.MustParseAddr("192.168.100.10"),
+			OriginalDestinationPort: 8080,
+			TCPState:                TCPStateSynSent,
+		},
 	})
 	require.NoError(t, err)
 
-	assert.Equal(t, 1, count)
+	assert.Equal(t, 2, count)
 	assert.Equal(t, 5*time.Minute, idleTimeout)
 }
 
