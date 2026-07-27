@@ -26,6 +26,11 @@ type conntrackStream struct {
 
 var errUnsupportedConntrackProtocol = errors.New("unsupported conntrack protocol")
 
+// conntrackRcvBufBytes is the receive buffer requested for the conntrack event
+// socket. The kernel default is a few hundred KB, which a host churning through
+// guests overruns regularly.
+const conntrackRcvBufBytes = 4 << 20
+
 // OpenStream subscribes to IPv4 conntrack NEW, UPDATE, and DESTROY events.
 func (s *ConntrackSource) OpenStream(ctx context.Context) (ConnectionStream, error) {
 	fd, err := unix.Socket(unix.AF_NETLINK, unix.SOCK_RAW, unix.NETLINK_NETFILTER)
@@ -37,6 +42,13 @@ func (s *ConntrackSource) OpenStream(ctx context.Context) (ConnectionStream, err
 	if err := unix.Bind(fd, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
 		closeFD()
 		return nil, fmt.Errorf("bind netfilter netlink socket: %w", err)
+	}
+	// Conntrack event bursts on a busy host overrun the default socket buffer,
+	// and the kernel drops events when that happens. Sizing it up is
+	// best-effort: SO_RCVBUFFORCE bypasses net.core.rmem_max but needs
+	// CAP_NET_ADMIN, and a socket with the default buffer still works.
+	if err := unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_RCVBUFFORCE, conntrackRcvBufBytes); err != nil {
+		_ = unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_RCVBUF, conntrackRcvBufBytes)
 	}
 	if err := unix.SetsockoptInt(fd, unix.SOL_NETLINK, unix.NETLINK_ADD_MEMBERSHIP, unix.NFNLGRP_CONNTRACK_NEW); err != nil {
 		closeFD()
@@ -92,6 +104,17 @@ func (s *conntrackStream) run(ctx context.Context) {
 		if err != nil {
 			if ctx.Err() != nil || err == unix.EBADF || err == syscall.ENOTCONN {
 				return
+			}
+			// The kernel reports ENOBUFS once after dropping events on socket
+			// buffer overflow, then keeps delivering. Report the gap so the
+			// tracked view can be rebuilt, and carry on reading; tearing the
+			// subscription down here only widens the gap.
+			if err == unix.ENOBUFS {
+				select {
+				case s.errs <- ErrEventsDropped:
+				default:
+				}
+				continue
 			}
 			select {
 			case s.errs <- fmt.Errorf("recv conntrack events: %w", err):

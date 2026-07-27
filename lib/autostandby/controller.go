@@ -27,6 +27,11 @@ const (
 // controller drops its tracking state instead of re-arming the idle timer.
 var ErrInstanceNotFound = errors.New("instance not found")
 
+// ErrEventsDropped signals that the conntrack event stream lost messages, so the
+// tracked connection view may be missing connections that are still open. The
+// subscription itself is still usable.
+var ErrEventsDropped = errors.New("conntrack events dropped")
+
 // InstanceEventAction identifies an instance lifecycle change relevant to auto-standby.
 type InstanceEventAction string
 
@@ -244,8 +249,19 @@ func (c *Controller) Run(ctx context.Context) error {
 			stream = replacement
 			c.setObserverConnected(true)
 			log.Info("auto-standby conntrack subscription restored")
+			// Events that arrived while the subscription was down are gone, and
+			// the stream is the only thing that maintains the tracked view.
+			c.resyncConnections(ctx, "subscription_restored")
 		case err := <-streamErrors:
 			if err == nil {
+				continue
+			}
+			if errors.Is(err, ErrEventsDropped) {
+				// An overflow costs events, not the subscription. Rebuild the
+				// tracked view and keep the stream.
+				c.recordConntrackEvent("stream", "dropped")
+				log.Warn("auto-standby conntrack events dropped, resyncing tracked connections")
+				c.resyncConnections(ctx, "events_dropped")
 				continue
 			}
 			c.setObserverError(err)
@@ -775,6 +791,19 @@ func (c *Controller) executeStandby(ctx context.Context, id string, instanceName
 			c.log.Warn("auto-standby failed to clear runtime after standby", "instance_id", id, "error", err)
 		}
 	}
+}
+
+// resyncConnections rebuilds tracked state from the live conntrack table. It is
+// the recovery path for a gap in the event stream: nothing else re-reads the
+// table between the periodic sync intervals, so a connection whose event was
+// lost stays invisible, and an instance still serving it looks idle.
+func (c *Controller) resyncConnections(ctx context.Context, reason string) {
+	if err := c.periodicSnapshotSync(ctx); err != nil {
+		c.recordControllerError("resync_connections")
+		c.log.Warn("auto-standby connection resync failed", "reason", reason, "error", err)
+		return
+	}
+	c.log.Info("auto-standby resynced tracked connections from host table", "reason", reason)
 }
 
 func (c *Controller) handleActiveReconcile(ctx context.Context, id string) {

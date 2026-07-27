@@ -86,21 +86,40 @@ func (f *fakeInstanceStore) SubscribeInstanceEvents() (<-chan InstanceEvent, fun
 }
 
 type fakeConnectionSource struct {
+	mu          sync.Mutex
 	connections []Connection
 	listErr     error
 	openErr     error
+	listCalls   int
+	// stream, when set, is handed to every OpenStream call so a test can push
+	// events and errors into the running controller.
+	stream *fakeConnectionStream
 }
 
 func (f *fakeConnectionSource) ListConnections(context.Context) ([]Connection, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.listCalls++
 	if f.listErr != nil {
 		return nil, f.listErr
 	}
 	return append([]Connection(nil), f.connections...), nil
 }
 
+func (f *fakeConnectionSource) listCallCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.listCalls
+}
+
 func (f *fakeConnectionSource) OpenStream(context.Context) (ConnectionStream, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.openErr != nil {
 		return nil, f.openErr
+	}
+	if f.stream != nil {
+		return f.stream, nil
 	}
 	return &fakeConnectionStream{
 		events: make(chan ConnectionEvent),
@@ -1006,4 +1025,88 @@ func TestRefreshPersistFailureStillArmsIdleTimer(t *testing.T) {
 	assert.NotNil(t, state.nextStandbyAt)
 	assert.NotNil(t, state.idleSince)
 	controller.mu.RUnlock()
+}
+
+// The event stream is the only thing that maintains the tracked connection view,
+// so a gap in it leaves instances that are still serving traffic looking idle.
+func TestConntrackEventDropResyncsWithoutDroppingSubscription(t *testing.T) {
+	t.Parallel()
+
+	idleSince := time.Date(2026, 4, 6, 11, 0, 0, 0, time.UTC)
+	store := newFakeInstanceStore([]Instance{idleTestInstance("inst-drop", "192.168.100.130", idleSince)})
+	stream := &fakeConnectionStream{events: make(chan ConnectionEvent), errs: make(chan error, 1)}
+	source := &fakeConnectionSource{stream: stream}
+	controller := NewController(store, source, ControllerOptions{
+		Now: func() time.Time { return idleSince },
+		// Park the periodic sync so any further list is attributable to the drop.
+		SnapshotSyncInterval: time.Hour,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- controller.Run(ctx) }()
+
+	require.Eventually(t, func() bool { return source.listCallCount() >= 1 }, time.Second, 5*time.Millisecond,
+		"controller should list connections at startup")
+	before := source.listCallCount()
+
+	stream.errs <- ErrEventsDropped
+
+	require.Eventually(t, func() bool { return source.listCallCount() > before }, 2*time.Second, 5*time.Millisecond,
+		"a reported event drop should trigger a resync against the host table")
+
+	// An overflow costs events, not the subscription: the controller must still
+	// be reading this stream, or the next connection is missed too.
+	select {
+	case stream.events <- ConnectionEvent{
+		Type: ConnectionEventNew,
+		Connection: Connection{
+			OriginalSourceIP:        mustAddr("1.2.3.4"),
+			OriginalSourcePort:      50020,
+			OriginalDestinationIP:   mustAddr("192.168.100.130"),
+			OriginalDestinationPort: 8080,
+			TCPState:                TCPStateEstablished,
+		},
+		ObservedAt: idleSince,
+	}:
+	case <-time.After(2 * time.Second):
+		t.Fatal("controller stopped reading the stream after an event drop")
+	}
+
+	cancel()
+	require.NoError(t, <-done)
+}
+
+func TestSubscriptionReconnectResyncsConnections(t *testing.T) {
+	t.Parallel()
+
+	idleSince := time.Date(2026, 4, 6, 11, 0, 0, 0, time.UTC)
+	store := newFakeInstanceStore([]Instance{idleTestInstance("inst-reconnect", "192.168.100.131", idleSince)})
+	stream := &fakeConnectionStream{events: make(chan ConnectionEvent), errs: make(chan error, 1)}
+	source := &fakeConnectionSource{stream: stream}
+	controller := NewController(store, source, ControllerOptions{
+		Now:                  func() time.Time { return idleSince },
+		SnapshotSyncInterval: time.Hour,
+		ReconnectDelay:       10 * time.Millisecond,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- controller.Run(ctx) }()
+
+	require.Eventually(t, func() bool { return source.listCallCount() >= 1 }, time.Second, 5*time.Millisecond,
+		"controller should list connections at startup")
+	before := source.listCallCount()
+
+	// A non-recoverable stream error tears the subscription down; everything
+	// that happens before it comes back is unobserved.
+	stream.errs <- errors.New("recv conntrack events: connection reset by peer")
+
+	require.Eventually(t, func() bool { return source.listCallCount() > before }, 3*time.Second, 5*time.Millisecond,
+		"a restored subscription should resync against the host table")
+
+	cancel()
+	require.NoError(t, <-done)
 }
