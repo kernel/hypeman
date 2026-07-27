@@ -60,6 +60,14 @@ func (s autoStandbyInstanceStore) StandbyInstance(ctx context.Context, id string
 	return err
 }
 
+func (s autoStandbyInstanceStore) RestoreInstance(ctx context.Context, id string) error {
+	_, err := s.manager.RestoreInstance(ctx, id)
+	if errors.Is(err, instances.ErrNotFound) {
+		return fmt.Errorf("%w: %v", autostandby.ErrInstanceNotFound, err)
+	}
+	return err
+}
+
 func (s autoStandbyInstanceStore) SetRuntime(ctx context.Context, id string, runtime *autostandby.Runtime) error {
 	return s.runtimeManager.SetAutoStandbyRuntime(ctx, id, runtime)
 }

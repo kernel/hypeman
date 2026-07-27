@@ -58,6 +58,11 @@ func (s integrationAutoStandbyStore) StandbyInstance(ctx context.Context, id str
 	return err
 }
 
+func (s integrationAutoStandbyStore) RestoreInstance(ctx context.Context, id string) error {
+	_, err := s.manager.RestoreInstance(ctx, id)
+	return err
+}
+
 func (s integrationAutoStandbyStore) SetRuntime(ctx context.Context, id string, runtime *autostandby.Runtime) error {
 	return s.manager.SetAutoStandbyRuntime(ctx, id, runtime)
 }

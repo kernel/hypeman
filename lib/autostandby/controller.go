@@ -53,6 +53,11 @@ type InstanceEvent struct {
 type InstanceStore interface {
 	ListInstances(ctx context.Context) ([]Instance, error)
 	StandbyInstance(ctx context.Context, id string) error
+	// RestoreInstance brings a standby instance back to running. The controller
+	// calls it when inbound activity turns up on an instance it just suspended;
+	// wake-on-traffic does not exist, so without this the connection hangs until
+	// the client gives up.
+	RestoreInstance(ctx context.Context, id string) error
 	SetRuntime(ctx context.Context, id string, runtime *Runtime) error
 	SubscribeInstanceEvents() (<-chan InstanceEvent, func(), error)
 }
@@ -763,17 +768,48 @@ func (c *Controller) executeStandby(ctx context.Context, id string, instanceName
 		return
 	}
 
-	c.recordStandbyAttempt("success")
 	c.log.Info("instance entered standby due to inbound inactivity", "instance_id", id, "instance_name", instanceName, "idle_timeout", idleTimeout)
 
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	// Inbound activity observed while the snapshot was in flight is about to be
+	// dropped by clearStateLocked, which would leave the guest suspended with a
+	// live connection pointed at it. The failing path above hands that state to
+	// the reconcile flow; a successful standby has to undo itself instead.
+	raced := false
 	if state := c.states[id]; state != nil {
+		raced = len(state.activeInbound) > 0
 		c.clearStateLocked(state)
 		if err := c.persistRuntime(ctx, id, nil); err != nil {
 			c.recordControllerError("persist_runtime")
 			c.log.Warn("auto-standby failed to clear runtime after standby", "instance_id", id, "error", err)
 		}
+	}
+	c.mu.Unlock()
+
+	if raced {
+		c.recordStandbyAttempt("raced_restored")
+		c.restoreAfterRacedStandby(ctx, id, instanceName)
+		return
+	}
+	c.recordStandbyAttempt("success")
+}
+
+// restoreAfterRacedStandby wakes an instance that reached standby while inbound
+// activity was arriving. Wake-on-traffic does not exist, so the connection that
+// raced the snapshot is already pointed at a suspended guest that nothing else
+// will wake.
+func (c *Controller) restoreAfterRacedStandby(ctx context.Context, id string, instanceName string) {
+	c.log.Warn("inbound activity raced standby, restoring instance", "instance_id", id, "instance_name", instanceName)
+
+	if err := c.store.RestoreInstance(ctx, id); err != nil {
+		if errors.Is(err, ErrInstanceNotFound) {
+			c.mu.Lock()
+			defer c.mu.Unlock()
+			c.removeStateLocked(id)
+			return
+		}
+		c.recordControllerError("restore_after_raced_standby")
+		c.log.Error("failed to restore instance after standby raced inbound activity", "instance_id", id, "instance_name", instanceName, "error", err)
 	}
 }
 

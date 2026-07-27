@@ -17,9 +17,11 @@ type fakeInstanceStore struct {
 	mu               sync.Mutex
 	instances        []Instance
 	standbyIDs       []string
+	restoreIDs       []string
 	persistedRuntime map[string]*Runtime
 	events           chan InstanceEvent
 	standbyErr       error
+	restoreErr       error
 	listErr          error
 	setRuntimeErr    error
 	standbyStarted   chan string
@@ -64,6 +66,19 @@ func (f *fakeInstanceStore) standbyCalls() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]string(nil), f.standbyIDs...)
+}
+
+func (f *fakeInstanceStore) RestoreInstance(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.restoreIDs = append(f.restoreIDs, id)
+	return f.restoreErr
+}
+
+func (f *fakeInstanceStore) restoreCalls() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.restoreIDs...)
 }
 
 func (f *fakeInstanceStore) SetRuntime(_ context.Context, id string, runtime *Runtime) error {
@@ -719,6 +734,106 @@ func TestStandbyCancelledByInboundActivityWhileQueued(t *testing.T) {
 	close(store.standbyRelease)
 	controller.standbyWG.Wait()
 	assert.Equal(t, []string{"inst-first"}, store.standbyCalls())
+}
+
+// Standby pauses and snapshots the guest, which takes long enough for a request
+// to land mid-transition. Wake-on-traffic does not exist, so the controller has
+// to undo the standby or that connection hangs until the client gives up.
+func TestStandbyRestoresInstanceWhenInboundActivityRacesSnapshot(t *testing.T) {
+	t.Parallel()
+
+	idleSince := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
+	store := newFakeInstanceStore([]Instance{
+		idleTestInstance("inst-raced", "192.168.100.122", idleSince),
+	})
+	store.standbyStarted = make(chan string, 1)
+	store.standbyRelease = make(chan struct{})
+	controller := NewController(store, &fakeConnectionSource{}, ControllerOptions{
+		Now: func() time.Time { return idleSince.Add(time.Minute) },
+	})
+
+	require.NoError(t, controller.startupResync(context.Background()))
+
+	controller.handleStandbyTimer(context.Background(), "inst-raced")
+	require.Equal(t, "inst-raced", <-store.standbyStarted)
+
+	controller.handleConnectionEvent(context.Background(), ConnectionEvent{
+		Type: ConnectionEventNew,
+		Connection: Connection{
+			OriginalSourceIP:        mustAddr("1.2.3.4"),
+			OriginalSourcePort:      50011,
+			OriginalDestinationIP:   mustAddr("192.168.100.122"),
+			OriginalDestinationPort: 8080,
+			TCPState:                TCPStateEstablished,
+		},
+		ObservedAt: idleSince.Add(time.Minute),
+	})
+
+	close(store.standbyRelease)
+	controller.standbyWG.Wait()
+
+	assert.Equal(t, []string{"inst-raced"}, store.standbyCalls())
+	assert.Equal(t, []string{"inst-raced"}, store.restoreCalls())
+}
+
+func TestStandbyRacedRestoreDropsStateWhenInstanceGone(t *testing.T) {
+	t.Parallel()
+
+	idleSince := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
+	store := newFakeInstanceStore([]Instance{
+		idleTestInstance("inst-deleted", "192.168.100.123", idleSince),
+	})
+	store.standbyStarted = make(chan string, 1)
+	store.standbyRelease = make(chan struct{})
+	store.restoreErr = fmt.Errorf("%w: deleted mid-transition", ErrInstanceNotFound)
+	controller := NewController(store, &fakeConnectionSource{}, ControllerOptions{
+		Now: func() time.Time { return idleSince.Add(time.Minute) },
+	})
+
+	require.NoError(t, controller.startupResync(context.Background()))
+
+	controller.handleStandbyTimer(context.Background(), "inst-deleted")
+	require.Equal(t, "inst-deleted", <-store.standbyStarted)
+
+	controller.handleConnectionEvent(context.Background(), ConnectionEvent{
+		Type: ConnectionEventNew,
+		Connection: Connection{
+			OriginalSourceIP:        mustAddr("1.2.3.4"),
+			OriginalSourcePort:      50012,
+			OriginalDestinationIP:   mustAddr("192.168.100.123"),
+			OriginalDestinationPort: 8080,
+			TCPState:                TCPStateEstablished,
+		},
+		ObservedAt: idleSince.Add(time.Minute),
+	})
+
+	close(store.standbyRelease)
+	controller.standbyWG.Wait()
+
+	assert.Equal(t, []string{"inst-deleted"}, store.restoreCalls())
+	controller.mu.RLock()
+	defer controller.mu.RUnlock()
+	assert.NotContains(t, controller.states, "inst-deleted")
+}
+
+func TestStandbyDoesNotRestoreWhenNoActivityRacedSnapshot(t *testing.T) {
+	t.Parallel()
+
+	idleSince := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
+	store := newFakeInstanceStore([]Instance{
+		idleTestInstance("inst-quiet", "192.168.100.124", idleSince),
+	})
+	controller := NewController(store, &fakeConnectionSource{}, ControllerOptions{
+		Now: func() time.Time { return idleSince.Add(time.Minute) },
+	})
+
+	require.NoError(t, controller.startupResync(context.Background()))
+
+	controller.handleStandbyTimer(context.Background(), "inst-quiet")
+	controller.standbyWG.Wait()
+
+	assert.Equal(t, []string{"inst-quiet"}, store.standbyCalls())
+	assert.Empty(t, store.restoreCalls())
 }
 
 func TestStandbyDispatchDeduplicatesPendingRequests(t *testing.T) {
