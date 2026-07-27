@@ -26,6 +26,13 @@ type conntrackStream struct {
 
 var errUnsupportedConntrackProtocol = errors.New("unsupported conntrack protocol")
 
+// conntrackRcvBufBytes is the receive buffer requested for the conntrack event
+// socket. The kernel drops events when this buffer overruns, and hosts churning
+// through guests overrun the default regularly. Linux stores twice what is
+// requested, so this asks for 80MiB of headroom against a net.core.rmem_default
+// of 8MiB on production hosts.
+const conntrackRcvBufBytes = 40 << 20
+
 // OpenStream subscribes to IPv4 conntrack NEW, UPDATE, and DESTROY events.
 func (s *ConntrackSource) OpenStream(ctx context.Context) (ConnectionStream, error) {
 	fd, err := unix.Socket(unix.AF_NETLINK, unix.SOCK_RAW, unix.NETLINK_NETFILTER)
@@ -37,6 +44,13 @@ func (s *ConntrackSource) OpenStream(ctx context.Context) (ConnectionStream, err
 	if err := unix.Bind(fd, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
 		closeFD()
 		return nil, fmt.Errorf("bind netfilter netlink socket: %w", err)
+	}
+	// SO_RCVBUFFORCE ignores net.core.rmem_max so the request cannot be silently
+	// clamped, but it needs CAP_NET_ADMIN. Fall back to the capped option, and
+	// tolerate both failing: a socket with the default buffer still delivers
+	// events, so buffer sizing must not stop the subscription from opening.
+	if err := unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_RCVBUFFORCE, conntrackRcvBufBytes); err != nil {
+		_ = unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_RCVBUF, conntrackRcvBufBytes)
 	}
 	if err := unix.SetsockoptInt(fd, unix.SOL_NETLINK, unix.NETLINK_ADD_MEMBERSHIP, unix.NFNLGRP_CONNTRACK_NEW); err != nil {
 		closeFD()
