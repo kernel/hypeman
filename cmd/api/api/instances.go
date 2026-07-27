@@ -25,6 +25,25 @@ import (
 	"github.com/samber/lo"
 )
 
+// toDomainNetworkEgress maps the OpenAPI egress policy to the domain type.
+// Normalization and validation happen in the instances package.
+func toDomainNetworkEgress(egress *oapi.CreateInstanceRequestNetworkEgress) *instances.NetworkEgressPolicy {
+	if egress == nil {
+		return nil
+	}
+	enabled := egress.Enabled != nil && *egress.Enabled
+	policy := &instances.NetworkEgressPolicy{Enabled: enabled}
+	if egress.Proxy != nil {
+		policy.Proxy = instances.EgressProxyMode(*egress.Proxy)
+	}
+	if egress.Enforcement != nil && egress.Enforcement.Mode != nil {
+		policy.EnforcementMode = instances.EgressEnforcementMode(*egress.Enforcement.Mode)
+	} else if enabled {
+		policy.EnforcementMode = instances.EgressEnforcementModeAll
+	}
+	return policy
+}
+
 // ListInstances lists instances, optionally filtered by state and/or tags.
 func (s *ApiService) ListInstances(ctx context.Context, request oapi.ListInstancesRequestObject) (oapi.ListInstancesResponseObject, error) {
 	log := logger.FromContext(ctx)
@@ -140,14 +159,8 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		networkEnabled = *request.Body.Network.Enabled
 	}
 	var networkEgress *instances.NetworkEgressPolicy
-	if request.Body.Network != nil && request.Body.Network.Egress != nil {
-		enabled := request.Body.Network.Egress.Enabled != nil && *request.Body.Network.Egress.Enabled
-		networkEgress = &instances.NetworkEgressPolicy{Enabled: enabled}
-		if request.Body.Network.Egress.Enforcement != nil && request.Body.Network.Egress.Enforcement.Mode != nil {
-			networkEgress.EnforcementMode = instances.EgressEnforcementMode(*request.Body.Network.Egress.Enforcement.Mode)
-		} else if enabled {
-			networkEgress.EnforcementMode = instances.EgressEnforcementModeAll
-		}
+	if request.Body.Network != nil {
+		networkEgress = toDomainNetworkEgress(request.Body.Network.Egress)
 	}
 	var credentials map[string]instances.CredentialPolicy
 	if request.Body.Credentials != nil {
@@ -1039,6 +1052,8 @@ func (s *ApiService) UpdateInstance(ctx context.Context, request oapi.UpdateInst
 		HealthCheck:      healthCheck,
 		RestartPolicy:    restartPolicy,
 		RestartPolicySet: request.Body.RestartPolicy != nil,
+		NetworkEgress:    toDomainNetworkEgress(request.Body.Egress),
+		NetworkEgressSet: request.Body.Egress != nil,
 	})
 	if err != nil {
 		switch {

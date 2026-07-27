@@ -139,6 +139,109 @@ func TestValidateCreateRequest_AllowsHTTPHTTPSOnlyEgressMode(t *testing.T) {
 	assert.Equal(t, EgressEnforcementModeHTTPHTTPSOnly, cfg.EnforcementMode)
 }
 
+func TestValidateCreateRequest_NormalizesEgressProxyMode(t *testing.T) {
+	t.Parallel()
+
+	cfg := &NetworkEgressPolicy{Enabled: true}
+	req := CreateInstanceRequest{
+		Name:           "test-egress",
+		Image:          "docker.io/library/alpine:latest",
+		NetworkEnabled: true,
+		NetworkEgress:  cfg,
+	}
+
+	err := validateCreateRequest(&req)
+	require.NoError(t, err)
+	assert.Equal(t, EgressProxyModeMITM, cfg.Proxy)
+}
+
+func TestValidateCreateRequest_RejectsInvalidEgressProxyMode(t *testing.T) {
+	t.Parallel()
+
+	req := CreateInstanceRequest{
+		Name:           "test-egress",
+		Image:          "docker.io/library/alpine:latest",
+		NetworkEnabled: true,
+		NetworkEgress: &NetworkEgressPolicy{
+			Enabled: true,
+			Proxy:   EgressProxyMode("bogus"),
+		},
+	}
+
+	err := validateCreateRequest(&req)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidRequest)
+	assert.Contains(t, err.Error(), "invalid network.egress.proxy")
+}
+
+func TestValidateCreateRequest_AllowsEnforcementOnlyEgress(t *testing.T) {
+	t.Parallel()
+
+	cfg := &NetworkEgressPolicy{
+		Enabled:         true,
+		Proxy:           EgressProxyModeNone,
+		EnforcementMode: EgressEnforcementModeAllTraffic,
+	}
+	req := CreateInstanceRequest{
+		Name:           "test-egress",
+		Image:          "docker.io/library/alpine:latest",
+		NetworkEnabled: true,
+		NetworkEgress:  cfg,
+	}
+
+	err := validateCreateRequest(&req)
+	require.NoError(t, err)
+	assert.Equal(t, EgressProxyModeNone, cfg.Proxy)
+	assert.Equal(t, EgressEnforcementModeAllTraffic, cfg.EnforcementMode)
+}
+
+func TestValidateCreateRequest_CredentialsRequireMITMProxy(t *testing.T) {
+	t.Parallel()
+
+	req := CreateInstanceRequest{
+		Name:           "test-egress",
+		Image:          "docker.io/library/alpine:latest",
+		NetworkEnabled: true,
+		Env:            map[string]string{"OUTBOUND_OPENAI_KEY": "real"},
+		NetworkEgress: &NetworkEgressPolicy{
+			Enabled: true,
+			Proxy:   EgressProxyModeNone,
+		},
+		Credentials: map[string]CredentialPolicy{
+			"OUTBOUND_OPENAI_KEY": {
+				Source: CredentialSource{Env: "OUTBOUND_OPENAI_KEY"},
+				Inject: []CredentialInjectRule{{
+					As: CredentialInjectAs{Header: "Authorization", Format: "Bearer ${value}"},
+				}},
+			},
+		},
+	}
+
+	err := validateCreateRequest(&req)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidRequest)
+	assert.Contains(t, err.Error(), "credentials require network.egress.proxy=mitm")
+}
+
+func TestEgressBlockFlags(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		mode        EgressEnforcementMode
+		blockAllTCP bool
+		blockUDP    bool
+	}{
+		{EgressEnforcementModeAll, true, false},
+		{EgressEnforcementModeHTTPHTTPSOnly, false, false},
+		{EgressEnforcementModeAllTraffic, true, true},
+	}
+	for _, tc := range cases {
+		blockAllTCP, blockUDP := egressBlockFlags(tc.mode)
+		assert.Equal(t, tc.blockAllTCP, blockAllTCP, "mode %s", tc.mode)
+		assert.Equal(t, tc.blockUDP, blockUDP, "mode %s", tc.mode)
+	}
+}
+
 func TestValidateCreateRequest_NormalizesCredentialsInPlace(t *testing.T) {
 	t.Parallel()
 

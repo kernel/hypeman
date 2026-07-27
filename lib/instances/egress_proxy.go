@@ -22,6 +22,7 @@ func cloneNetworkEgressPolicy(cfg *NetworkEgressPolicy) *NetworkEgressPolicy {
 	}
 	return &NetworkEgressPolicy{
 		Enabled:         cfg.Enabled,
+		Proxy:           cfg.Proxy,
 		EnforcementMode: cfg.EnforcementMode,
 	}
 }
@@ -66,8 +67,42 @@ func normalizeEgressEnforcementMode(mode EgressEnforcementMode) (EgressEnforceme
 		return EgressEnforcementModeAll, nil
 	case EgressEnforcementModeHTTPHTTPSOnly:
 		return EgressEnforcementModeHTTPHTTPSOnly, nil
+	case EgressEnforcementModeAllTraffic:
+		return EgressEnforcementModeAllTraffic, nil
 	default:
 		return "", fmt.Errorf("%w: invalid network.egress.enforcement.mode %q", ErrInvalidRequest, trimmed)
+	}
+}
+
+func normalizeEgressProxyMode(mode EgressProxyMode) (EgressProxyMode, error) {
+	trimmed := strings.TrimSpace(string(mode))
+	switch EgressProxyMode(trimmed) {
+	case "", EgressProxyModeMITM:
+		return EgressProxyModeMITM, nil
+	case EgressProxyModeNone:
+		return EgressProxyModeNone, nil
+	default:
+		return "", fmt.Errorf("%w: invalid network.egress.proxy %q", ErrInvalidRequest, trimmed)
+	}
+}
+
+// egressProxyMode resolves the effective proxy mode for a policy; metadata
+// persisted before the Proxy field existed resolves to mitm.
+func egressProxyMode(policy *NetworkEgressPolicy) EgressProxyMode {
+	if policy == nil || policy.Proxy == "" {
+		return EgressProxyModeMITM
+	}
+	return policy.Proxy
+}
+
+func egressBlockFlags(mode EgressEnforcementMode) (blockAllTCP, blockUDP bool) {
+	switch mode {
+	case EgressEnforcementModeHTTPHTTPSOnly:
+		return false, false
+	case EgressEnforcementModeAllTraffic:
+		return true, true
+	default:
+		return true, false
 	}
 }
 
@@ -263,6 +298,7 @@ func (m *manager) maybeRegisterEgressProxy(ctx context.Context, stored *StoredMe
 		return nil, fmt.Errorf("network.egress requires network.enabled=true")
 	}
 
+	proxyMode := egressProxyMode(stored.NetworkEgress)
 	rules := buildEgressProxyInjectRules(stored.NetworkEgress, stored.Credentials, stored.Env)
 	enforcementMode := string(stored.NetworkEgress.EnforcementMode)
 	if enforcementMode == "" {
@@ -275,10 +311,23 @@ func (m *manager) maybeRegisterEgressProxy(ctx context.Context, stored *StoredMe
 		span.SetAttributes(
 			attribute.String("operation", "register"),
 			attribute.String("enforcement_mode", enforcementMode),
-			attribute.Bool("proxy_enabled", true),
+			attribute.Bool("proxy_enabled", proxyMode == EgressProxyModeMITM),
 			attribute.Int("inject_rule_count", len(rules)),
 		)
 		defer span.End()
+	}
+
+	blockAllTCP, blockUDP := egressBlockFlags(stored.NetworkEgress.EnforcementMode)
+
+	if proxyMode == EgressProxyModeNone {
+		if err := egressproxy.ApplyEnforcement(stored.Id, netConfig.TAPDevice, netConfig.Gateway, blockAllTCP, blockUDP); err != nil {
+			if span != nil {
+				span.RecordError(err)
+				span.SetStatus(codes.Error, err.Error())
+			}
+			return nil, fmt.Errorf("apply egress enforcement: %w", err)
+		}
+		return nil, nil
 	}
 
 	svc, err := m.getOrCreateEgressProxyService()
@@ -294,7 +343,8 @@ func (m *manager) maybeRegisterEgressProxy(ctx context.Context, stored *StoredMe
 		InstanceID:        stored.Id,
 		SourceIP:          netConfig.IP,
 		TAPDevice:         netConfig.TAPDevice,
-		BlockAllTCPEgress: stored.NetworkEgress.EnforcementMode != EgressEnforcementModeHTTPHTTPSOnly,
+		BlockAllTCPEgress: blockAllTCP,
+		BlockUDPEgress:    blockUDP,
 		HeaderInjectRules: rules,
 	})
 	if err != nil {
@@ -313,6 +363,11 @@ func (m *manager) unregisterEgressProxyInstance(ctx context.Context, instanceID 
 	svc := m.egressProxy
 	m.egressProxyMu.Unlock()
 	if svc == nil {
+		// Enforcement-only instances never start the proxy service; their
+		// iptables rules still need removal.
+		if err := egressproxy.RemoveEnforcement(instanceID); err != nil {
+			logger.FromContext(ctx).WarnContext(ctx, "failed to remove egress enforcement", "instance_id", instanceID, "error", err)
+		}
 		return
 	}
 	if err := svc.UnregisterInstance(ctx, instanceID); err != nil {

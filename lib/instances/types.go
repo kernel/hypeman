@@ -31,6 +31,18 @@ type EgressEnforcementMode string
 const (
 	EgressEnforcementModeAll           EgressEnforcementMode = "all"
 	EgressEnforcementModeHTTPHTTPSOnly EgressEnforcementMode = "http_https_only"
+	EgressEnforcementModeAllTraffic    EgressEnforcementMode = "all_traffic"
+)
+
+// EgressProxyMode selects the host-side proxy behavior for the mediated egress path.
+type EgressProxyMode string
+
+const (
+	// EgressProxyModeMITM runs the host MITM proxy and injects proxy env/CA into the guest.
+	EgressProxyModeMITM EgressProxyMode = "mitm"
+	// EgressProxyModeNone applies host-side egress enforcement only; no proxy
+	// process, guest env injection, or CA install.
+	EgressProxyModeNone EgressProxyMode = "none"
 )
 
 // VolumeAttachment represents a volume attached to an instance
@@ -45,7 +57,8 @@ type VolumeAttachment struct {
 // NetworkEgressPolicy configures host-mediated outbound networking behavior.
 type NetworkEgressPolicy struct {
 	Enabled         bool                  // Whether host-mediated egress policy is enabled
-	EnforcementMode EgressEnforcementMode // all (default) blocks direct non-proxy TCP egress, http_https_only blocks only 80/443
+	Proxy           EgressProxyMode       // mitm (default; empty means mitm for pre-existing metadata) or none (enforcement only)
+	EnforcementMode EgressEnforcementMode // all (default) blocks direct non-proxy TCP egress, http_https_only blocks only 80/443, all_traffic blocks TCP and UDP
 }
 
 // CredentialSource references where real credential material is loaded from.
@@ -289,6 +302,8 @@ type UpdateInstanceRequest struct {
 	HealthCheck      *healthcheck.Policy   // Replaces the persisted health check policy when non-nil
 	RestartPolicy    *restartpolicy.Policy // Replaces the persisted restart policy when non-nil
 	RestartPolicySet bool                  // True when restart policy was present in the update request
+	NetworkEgress    *NetworkEgressPolicy  // Replaces the persisted egress policy (enforcement-only policies)
+	NetworkEgressSet bool                  // True when egress was present in the update request
 }
 
 // ForkInstanceRequest is the domain request for forking an instance.

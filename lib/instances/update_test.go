@@ -30,7 +30,58 @@ func TestValidateUpdateInstanceRequest(t *testing.T) {
 		err := validateUpdateInstanceRequest(baseMeta, UpdateInstanceRequest{})
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrInvalidRequest)
-		assert.Contains(t, err.Error(), "env, auto_standby, health_check, and/or restart_policy")
+		assert.Contains(t, err.Error(), "env, auto_standby, health_check, restart_policy, and/or egress")
+	})
+
+	t.Run("rejects egress update on mitm instances", func(t *testing.T) {
+		err := validateUpdateInstanceRequest(baseMeta, UpdateInstanceRequest{
+			NetworkEgress:    &NetworkEgressPolicy{Enabled: false},
+			NetworkEgressSet: true,
+		})
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidRequest)
+		assert.Contains(t, err.Error(), "proxy=mitm")
+	})
+
+	t.Run("rejects mitm egress via update", func(t *testing.T) {
+		err := validateUpdateInstanceRequest(&metadata{StoredMetadata: StoredMetadata{NetworkEnabled: true}}, UpdateInstanceRequest{
+			NetworkEgress:    &NetworkEgressPolicy{Enabled: true, Proxy: EgressProxyModeMITM},
+			NetworkEgressSet: true,
+		})
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidRequest)
+		assert.Contains(t, err.Error(), "proxy=none")
+	})
+
+	t.Run("rejects egress update without networking", func(t *testing.T) {
+		err := validateUpdateInstanceRequest(&metadata{}, UpdateInstanceRequest{
+			NetworkEgress:    &NetworkEgressPolicy{Enabled: true, Proxy: EgressProxyModeNone},
+			NetworkEgressSet: true,
+		})
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidRequest)
+		assert.Contains(t, err.Error(), "network.enabled")
+	})
+
+	t.Run("allows enforcement-only egress update", func(t *testing.T) {
+		meta := &metadata{StoredMetadata: StoredMetadata{NetworkEnabled: true}}
+		err := validateUpdateInstanceRequest(meta, UpdateInstanceRequest{
+			NetworkEgress:    &NetworkEgressPolicy{Enabled: true, Proxy: EgressProxyModeNone, EnforcementMode: EgressEnforcementModeAllTraffic},
+			NetworkEgressSet: true,
+		})
+		require.NoError(t, err)
+	})
+
+	t.Run("allows disabling enforcement-only egress", func(t *testing.T) {
+		meta := &metadata{StoredMetadata: StoredMetadata{
+			NetworkEnabled: true,
+			NetworkEgress:  &NetworkEgressPolicy{Enabled: true, Proxy: EgressProxyModeNone},
+		}}
+		err := validateUpdateInstanceRequest(meta, UpdateInstanceRequest{
+			NetworkEgress:    &NetworkEgressPolicy{Enabled: false},
+			NetworkEgressSet: true,
+		})
+		require.NoError(t, err)
 	})
 
 	t.Run("rejects instances without credential backed envs", func(t *testing.T) {

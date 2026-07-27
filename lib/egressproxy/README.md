@@ -32,6 +32,10 @@ That means the VM can make authenticated outbound requests without ever receivin
 - Per instance, `network.egress.enforcement.mode` controls host-side direct egress blocking:
   - `all` (default when proxy is enabled): reject direct non-proxy TCP egress from the VM TAP interface.
   - `http_https_only`: reject direct TCP egress only on destination ports `80` and `443`.
+  - `all_traffic`: reject direct TCP and UDP egress. This also blocks QUIC and direct DNS, so the guest must resolve names through its proxy.
+- Per instance, `network.egress.proxy` selects the host-side proxy behavior:
+  - `mitm` (default): the full mediated path described in this document.
+  - `none`: enforcement only. The host applies the TAP-level egress rules but does not run the MITM proxy, inject `HTTP_PROXY`/`HTTPS_PROXY` into the guest, or install the proxy CA. Intended for guests configured to reach an external proxy at the network gateway. Credentials require `mitm`. Enforcement-only policies can also be set or cleared on a live instance via `PATCH /instances/{id}` (`egress`); `mitm` policies cannot, since their guest-visible configuration is fixed at boot.
 - Inside the VM, each credential key is rewritten to `mock-<CREDENTIAL_NAME>` (for example `mock-OUTBOUND_OPENAI_KEY`).
 - Header injection is applied to HTTPS requests only after MITM decryption.
 - For HTTPS egress, the proxy validates upstream TLS certificates with the host trust store before forwarding.
@@ -64,7 +68,7 @@ Operationally, this is intended for key rotation, revocation/reissue flows, and 
 - Real secret values are persisted in the normal instance `env` metadata, which is already host-side state.
 - TLS interception requires guest trust of the proxy CA; hypeman installs this CA in the guest when proxy mode is enabled.
 - Egress enforcement is applied per instance TAP device and removed when the instance stops/standbys/deletes.
-- Enforcement intentionally targets TCP egress only. DNS/other non-TCP traffic is not rewritten and is not blocked by `all` mode.
+- The `all` and `http_https_only` modes target TCP egress only; DNS/other non-TCP traffic is not rewritten and not blocked. Use `all_traffic` to also block direct UDP egress.
 
 ## Limits of enforcement
 

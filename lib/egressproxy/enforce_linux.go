@@ -13,34 +13,46 @@ const (
 	enforcementSuffixPort80  = "80"
 	enforcementSuffixPort443 = "443"
 	enforcementSuffixAllTCP  = "all-tcp"
+	enforcementSuffixAllUDP  = "all-udp"
 )
 
-func applyEgressEnforcement(instanceID, tapDevice, gatewayIP string, proxyPort int, blockAllTCPEgress bool) error {
-	if instanceID == "" || tapDevice == "" || gatewayIP == "" || proxyPort <= 0 {
+func applyEgressEnforcement(instanceID, tapDevice, gatewayIP string, blockAllTCPEgress, blockUDPEgress bool) error {
+	if instanceID == "" || tapDevice == "" || gatewayIP == "" {
 		return fmt.Errorf("invalid egress enforcement inputs")
 	}
 
 	comment80 := enforcementComment(instanceID, enforcementSuffixPort80)
 	comment443 := enforcementComment(instanceID, enforcementSuffixPort443)
 	commentAllTCP := enforcementComment(instanceID, enforcementSuffixAllTCP)
+	commentAllUDP := enforcementComment(instanceID, enforcementSuffixAllUDP)
 
 	// Clean old rules first so updates are idempotent across restarts and mode changes.
 	_ = removeRuleByComment(comment80)
 	_ = removeRuleByComment(comment443)
 	_ = removeRuleByComment(commentAllTCP)
+	_ = removeRuleByComment(commentAllUDP)
+
+	if blockUDPEgress {
+		if err := insertRejectAllRule(tapDevice, gatewayIP, "udp", commentAllUDP); err != nil {
+			return fmt.Errorf("insert all-udp egress enforcement: %w", err)
+		}
+	}
 
 	if blockAllTCPEgress {
-		if err := insertRejectAllTCPRule(tapDevice, gatewayIP, commentAllTCP); err != nil {
+		if err := insertRejectAllRule(tapDevice, gatewayIP, "tcp", commentAllTCP); err != nil {
+			_ = removeRuleByComment(commentAllUDP)
 			return fmt.Errorf("insert all-tcp egress enforcement: %w", err)
 		}
 		return nil
 	}
 
 	if err := insertRejectRule(tapDevice, gatewayIP, 80, comment80); err != nil {
+		_ = removeRuleByComment(commentAllUDP)
 		return fmt.Errorf("insert port 80 egress enforcement: %w", err)
 	}
 	if err := insertRejectRule(tapDevice, gatewayIP, 443, comment443); err != nil {
 		_ = removeRuleByComment(comment80)
+		_ = removeRuleByComment(commentAllUDP)
 		return fmt.Errorf("insert port 443 egress enforcement: %w", err)
 	}
 
@@ -51,12 +63,10 @@ func removeEgressEnforcement(instanceID string) error {
 	if instanceID == "" {
 		return nil
 	}
-	comment80 := enforcementComment(instanceID, enforcementSuffixPort80)
-	comment443 := enforcementComment(instanceID, enforcementSuffixPort443)
-	commentAllTCP := enforcementComment(instanceID, enforcementSuffixAllTCP)
-	_ = removeRuleByComment(comment80)
-	_ = removeRuleByComment(comment443)
-	_ = removeRuleByComment(commentAllTCP)
+	_ = removeRuleByComment(enforcementComment(instanceID, enforcementSuffixPort80))
+	_ = removeRuleByComment(enforcementComment(instanceID, enforcementSuffixPort443))
+	_ = removeRuleByComment(enforcementComment(instanceID, enforcementSuffixAllTCP))
+	_ = removeRuleByComment(enforcementComment(instanceID, enforcementSuffixAllUDP))
 	return nil
 }
 
@@ -76,11 +86,11 @@ func insertRejectRule(tapDevice, gatewayIP string, port int, comment string) err
 	return nil
 }
 
-func insertRejectAllTCPRule(tapDevice, gatewayIP, comment string) error {
+func insertRejectAllRule(tapDevice, gatewayIP, protocol, comment string) error {
 	cmd := exec.Command(
 		"iptables", "-I", "FORWARD", "1",
 		"-i", tapDevice,
-		"-p", "tcp",
+		"-p", protocol,
 		"!", "-d", gatewayIP,
 		"-m", "comment", "--comment", comment,
 		"-j", "REJECT",

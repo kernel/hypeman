@@ -22,6 +22,7 @@ type InstanceConfig struct {
 	SourceIP          string
 	TAPDevice         string
 	BlockAllTCPEgress bool
+	BlockUDPEgress    bool
 	HeaderInjectRules []HeaderInjectRuleConfig
 }
 
