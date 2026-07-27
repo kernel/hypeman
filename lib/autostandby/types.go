@@ -62,17 +62,24 @@ const (
 	TCPStateRetrans     TCPState = 11
 )
 
-// Active reports whether the TCP state should keep a VM awake. SYN_SENT
-// counts: a client mid-handshake is inbound demand, and a freshly restored
-// guest can take several seconds to answer the SYN it was woken for — going
-// back to standby in that window orphans the connection, since wake-on-traffic
-// does not exist.
+// Active reports whether the TCP state should keep a VM awake. Only states
+// that mean the flow is finished stop counting; everything else is treated as
+// inbound demand, including the transient states conntrack reports on a live
+// flow and any state this enum does not name.
+//
+// The asymmetry is deliberate. Wake-on-traffic does not exist, so a flow
+// misjudged as finished is stranded until the client gives up, while a flow
+// misjudged as live only costs idle VM time until the next DESTROY event or
+// reconcile drops it. Enumerating live states instead kept missing them one at
+// a time: SYN_SENT (a client mid-handshake) had to be added separately, and
+// SYN_SENT2 — value 9, named TCPStateListen here — is a simultaneous open that
+// was still classified as finished.
 func (s TCPState) Active() bool {
 	switch s {
-	case TCPStateSynSent, TCPStateSynRecv, TCPStateEstablished, TCPStateFinWait, TCPStateCloseWait, TCPStateLastAck:
-		return true
-	default:
+	case TCPStateNone, TCPStateTimeWait, TCPStateClose:
 		return false
+	default:
+		return true
 	}
 }
 

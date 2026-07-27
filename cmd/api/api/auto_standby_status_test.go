@@ -38,6 +38,8 @@ func (s *statusStore) ListInstances(context.Context) ([]autostandby.Instance, er
 
 func (s *statusStore) StandbyInstance(context.Context, string) error { return nil }
 
+func (s *statusStore) RestoreInstance(context.Context, string) error { return nil }
+
 func (s *statusStore) SetRuntime(_ context.Context, id string, runtime *autostandby.Runtime) error {
 	if s.runtime == nil {
 		s.runtime = make(map[string]*autostandby.Runtime)
