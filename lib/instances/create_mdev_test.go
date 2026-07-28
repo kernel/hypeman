@@ -45,7 +45,7 @@ func TestCreateInstanceRejectsUnsupportedVGPUBeforeResourceReservation(t *testin
 	assert.Zero(t, validator.reserveCalls)
 }
 
-func TestWrapCreateMdevErr(t *testing.T) {
+func TestWrapCreateVGPUErr(t *testing.T) {
 	t.Parallel()
 
 	for _, tc := range []struct {
@@ -61,15 +61,15 @@ func TestWrapCreateMdevErr(t *testing.T) {
 			wantInvalidRequest: true,
 		},
 		{
-			name:        "other mdev error",
+			name:        "other vGPU error",
 			err:         errors.New("boom"),
-			wantMessage: "create vGPU mdev for profile profile: boom",
+			wantMessage: "create vGPU for profile profile: boom",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			err := wrapCreateMdevErr("profile", tc.err)
+			err := wrapCreateVGPUErr("profile", tc.err)
 
 			assert.ErrorIs(t, err, tc.err)
 			if tc.wantInvalidRequest {

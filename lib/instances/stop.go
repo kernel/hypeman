@@ -263,12 +263,10 @@ func (m *manager) stopInstance(
 		}
 	}
 
-	// 7. Destroy vGPU mdev device if present (frees vGPU slot for other VMs)
-	if inst.GPUMdevUUID != "" {
-		log.InfoContext(ctx, "destroying vGPU mdev on stop", "instance_id", id, "uuid", inst.GPUMdevUUID)
-		if err := devices.DestroyMdev(ctx, inst.GPUMdevUUID); err != nil {
-			// Log error but continue - mdev cleanup is best-effort
-			log.WarnContext(ctx, "failed to destroy mdev on stop", "instance_id", id, "uuid", inst.GPUMdevUUID, "error", err)
+	// 7. Release the vGPU assignment if present.
+	if path := storedVGPUDevicePath(stored); path != "" {
+		if err := devices.DestroyVGPU(ctx, stored.GPUFramework, path, stored.GPUMdevUUID); err != nil {
+			log.WarnContext(ctx, "failed to destroy vGPU on stop", "instance_id", id, "error", err)
 		}
 	}
 
@@ -298,11 +296,11 @@ func (m *manager) stopInstance(
 		}
 	}
 
-	// 10. Update metadata (clear PID, mdev UUID, set StoppedAt)
+	// 10. Update metadata (clear PID, set StoppedAt)
 	now := time.Now().UTC()
 	stored.StoppedAt = &now
 	stored.HypervisorPID = nil
-	stored.GPUMdevUUID = "" // Clear mdev UUID since we destroyed it
+	clearStoredVGPUDevice(stored)
 	// Boot markers are per-boot-run and must not carry across stop/restore/start.
 	stored.ProgramStartedAt = nil
 	stored.GuestAgentReadyAt = nil
