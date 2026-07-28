@@ -60,7 +60,12 @@ func ValidateDeviceName(name string) bool {
 // GPUMode represents the host's GPU configuration mode
 type GPUMode string
 
+type VGPUFramework string
+
 const (
+	VGPUFrameworkNone VGPUFramework = ""
+	VGPUFrameworkMdev VGPUFramework = "mdev"
+
 	// GPUModePassthrough indicates whole GPU VFIO passthrough
 	GPUModePassthrough GPUMode = "passthrough"
 	// GPUModeVGPU indicates SR-IOV + mdev based vGPU
@@ -73,7 +78,16 @@ const (
 type VirtualFunction struct {
 	PCIAddress string `json:"pci_address"` // e.g., "0000:82:00.4"
 	ParentGPU  string `json:"parent_gpu"`  // e.g., "0000:82:00.0"
-	HasMdev    bool   `json:"has_mdev"`    // true if an mdev is created on this VF
+	Allocated  bool   `json:"allocated"`   // true if a vGPU is assigned to this VF
+}
+
+type VGPUDevice struct {
+	Framework   VGPUFramework
+	VFAddress   string
+	ProfileType string
+	ProfileName string
+	SysfsPath   string
+	MdevUUID    string
 }
 
 // MdevDevice represents an active mediated device (vGPU instance)
