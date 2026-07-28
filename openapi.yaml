@@ -3352,6 +3352,58 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /instances/{id}/auto-standby/reset:
+    post:
+      summary: Reset the auto-standby idle countdown
+      description: |
+        Atomically resets the instance's auto-standby idle countdown and cancels any
+        queued (not yet executing) auto-standby attempt. On success the instance is
+        guaranteed not to be put into standby by the auto-standby controller before
+        `next_standby_at` in the returned status (now + the policy's idle timeout).
+
+        Callers use this before opening a connection to a candidate-idle instance:
+        a 200 means it is safe to connect within the returned window; a 409 means the
+        instance is in standby (or irrevocably entering it) and must be restored first.
+
+        Instances where auto-standby is disabled, unconfigured, unsupported, or kept
+        awake by active inbound connections return 200 with their current status —
+        there is no countdown to reset and no auto-standby will occur.
+      operationId: resetAutoStandby
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Instance ID or name
+      responses:
+        200:
+          description: Countdown reset (or nothing to reset); safe to connect until next_standby_at
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AutoStandbyStatus"
+        404:
+          description: Instance not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Instance is in standby or a standby is already executing (code `instance_in_standby`); restore it before connecting
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /instances/{id}/stats:
     get:
       summary: Get instance resource utilization stats

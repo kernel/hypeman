@@ -27,6 +27,10 @@ const (
 // controller drops its tracking state instead of re-arming the idle timer.
 var ErrInstanceNotFound = errors.New("instance not found")
 
+// ErrStandbyInProgress signals that a standby operation is already executing
+// and can no longer be cancelled.
+var ErrStandbyInProgress = errors.New("standby in progress")
+
 // InstanceEventAction identifies an instance lifecycle change relevant to auto-standby.
 type InstanceEventAction string
 
@@ -405,6 +409,47 @@ func (c *Controller) Describe(inst Instance) StatusSnapshot {
 	snapshot.Status = StatusIdleCountdown
 	snapshot.Reason = ReasonIdleTimeoutNotElapsed
 	return snapshot
+}
+
+// ResetIdle atomically restarts the idle countdown for an instance and cancels
+// any queued standby attempt, guaranteeing the controller will not put the
+// instance into standby before now + idle timeout. It fails with
+// ErrStandbyInProgress once a standby operation is executing, and is a no-op
+// for instances the controller is not counting down (untracked, ineligible, or
+// kept awake by active inbound connections).
+func (c *Controller) ResetIdle(ctx context.Context, inst Instance) (StatusSnapshot, error) {
+	now := c.now().UTC()
+
+	c.mu.Lock()
+	state := c.states[inst.ID]
+	if state != nil && state.standbyExecuting {
+		c.mu.Unlock()
+		return StatusSnapshot{}, ErrStandbyInProgress
+	}
+	if state == nil || state.compiledPolicy == nil || len(state.activeInbound) > 0 {
+		c.mu.Unlock()
+		return c.Describe(inst), nil
+	}
+	state.standbyRequested = false
+	idleSince := now
+	state.idleSince = &idleSince
+	c.armTimerLocked(inst.ID, state, now)
+	instanceName := state.instance.Name
+	idleTimeout := state.idleTimeout
+	err := c.persistRuntime(ctx, inst.ID, &Runtime{
+		IdleSince:             cloneTimePtr(state.idleSince),
+		LastInboundActivityAt: cloneTimePtr(state.lastInboundAt),
+	})
+	c.mu.Unlock()
+
+	// A failed persist breaks the reset guarantee: the next resync would
+	// restore the older idle_since and shorten the promised window.
+	if err != nil {
+		c.recordControllerError("persist_runtime")
+		return StatusSnapshot{}, fmt.Errorf("persist runtime after idle reset: %w", err)
+	}
+	c.log.Info("auto-standby idle countdown reset", "instance_id", inst.ID, "instance_name", instanceName, "idle_timeout", idleTimeout)
+	return c.Describe(inst), nil
 }
 
 func (c *Controller) startupResync(ctx context.Context) error {

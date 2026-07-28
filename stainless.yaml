@@ -113,6 +113,7 @@ resources:
       auto_standby:
         methods:
           status: get /instances/{id}/auto-standby/status
+          reset: post /instances/{id}/auto-standby/reset
       volumes:
         methods:
           attach: post /instances/{id}/volumes/{volumeId}

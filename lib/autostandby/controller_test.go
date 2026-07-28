@@ -1007,3 +1007,166 @@ func TestRefreshPersistFailureStillArmsIdleTimer(t *testing.T) {
 	assert.NotNil(t, state.idleSince)
 	controller.mu.RUnlock()
 }
+
+func TestResetIdleExtendsCountdownAndPersistsRuntime(t *testing.T) {
+	t.Parallel()
+
+	idleSince := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
+	now := idleSince.Add(50 * time.Second)
+	store := newFakeInstanceStore([]Instance{
+		idleTestInstance("inst-reset", "192.168.100.100", idleSince),
+	})
+	controller := NewController(store, &fakeConnectionSource{}, ControllerOptions{
+		Now: func() time.Time { return now },
+	})
+
+	require.NoError(t, controller.startupResync(context.Background()))
+
+	snapshot, err := controller.ResetIdle(context.Background(), store.instances[0])
+	require.NoError(t, err)
+	assert.Equal(t, StatusIdleCountdown, snapshot.Status)
+	require.NotNil(t, snapshot.NextStandbyAt)
+	assert.Equal(t, now.Add(time.Minute), *snapshot.NextStandbyAt)
+
+	require.NotNil(t, store.persistedRuntime["inst-reset"])
+	require.NotNil(t, store.persistedRuntime["inst-reset"].IdleSince)
+	assert.Equal(t, now, *store.persistedRuntime["inst-reset"].IdleSince)
+
+	// A resync must keep the reset countdown, not restore the older one.
+	require.NoError(t, controller.startupResync(context.Background()))
+	controller.mu.RLock()
+	state := controller.states["inst-reset"]
+	require.NotNil(t, state)
+	require.NotNil(t, state.nextStandbyAt)
+	assert.Equal(t, now.Add(time.Minute), *state.nextStandbyAt)
+	controller.mu.RUnlock()
+}
+
+func TestResetIdleCancelsQueuedStandby(t *testing.T) {
+	t.Parallel()
+
+	idleSince := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
+	now := idleSince.Add(time.Minute)
+	store := newFakeInstanceStore([]Instance{
+		idleTestInstance("inst-first", "192.168.100.101", idleSince),
+		idleTestInstance("inst-queued", "192.168.100.102", idleSince),
+	})
+	store.standbyStarted = make(chan string, 2)
+	store.standbyRelease = make(chan struct{})
+	controller := NewController(store, &fakeConnectionSource{}, ControllerOptions{
+		Now:                   func() time.Time { return now },
+		MaxConcurrentStandbys: 1,
+	})
+
+	require.NoError(t, controller.startupResync(context.Background()))
+
+	controller.handleStandbyTimer(context.Background(), "inst-first")
+	require.Equal(t, "inst-first", <-store.standbyStarted)
+	controller.handleStandbyTimer(context.Background(), "inst-queued")
+
+	snapshot, err := controller.ResetIdle(context.Background(), store.instances[1])
+	require.NoError(t, err)
+	assert.Equal(t, StatusIdleCountdown, snapshot.Status)
+	require.NotNil(t, snapshot.NextStandbyAt)
+	assert.Equal(t, now.Add(time.Minute), *snapshot.NextStandbyAt)
+
+	close(store.standbyRelease)
+	controller.standbyWG.Wait()
+	assert.Equal(t, []string{"inst-first"}, store.standbyCalls())
+}
+
+func TestResetIdleFailsWhileStandbyExecuting(t *testing.T) {
+	t.Parallel()
+
+	idleSince := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
+	store := newFakeInstanceStore([]Instance{
+		idleTestInstance("inst-executing", "192.168.100.103", idleSince),
+	})
+	store.standbyStarted = make(chan string, 1)
+	store.standbyRelease = make(chan struct{})
+	controller := NewController(store, &fakeConnectionSource{}, ControllerOptions{
+		Now: func() time.Time { return idleSince.Add(time.Minute) },
+	})
+
+	require.NoError(t, controller.startupResync(context.Background()))
+
+	controller.handleStandbyTimer(context.Background(), "inst-executing")
+	require.Equal(t, "inst-executing", <-store.standbyStarted)
+
+	_, err := controller.ResetIdle(context.Background(), store.instances[0])
+	assert.ErrorIs(t, err, ErrStandbyInProgress)
+
+	close(store.standbyRelease)
+	controller.standbyWG.Wait()
+	assert.Equal(t, []string{"inst-executing"}, store.standbyCalls())
+}
+
+func TestResetIdleNoopWithActiveInbound(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 6, 11, 0, 0, 0, time.UTC)
+	store := newFakeInstanceStore([]Instance{{
+		ID:             "inst-active-reset",
+		Name:           "inst-active-reset",
+		State:          StateRunning,
+		NetworkEnabled: true,
+		IP:             "192.168.100.104",
+		AutoStandby:    &Policy{Enabled: true, IdleTimeout: "1m"},
+	}})
+	source := &fakeConnectionSource{connections: []Connection{{
+		OriginalSourceIP:        mustAddr("1.2.3.4"),
+		OriginalSourcePort:      50010,
+		OriginalDestinationIP:   mustAddr("192.168.100.104"),
+		OriginalDestinationPort: 8080,
+		TCPState:                TCPStateEstablished,
+	}}}
+	controller := NewController(store, source, ControllerOptions{
+		Now: func() time.Time { return now },
+	})
+
+	require.NoError(t, controller.startupResync(context.Background()))
+
+	snapshot, err := controller.ResetIdle(context.Background(), store.instances[0])
+	require.NoError(t, err)
+	assert.Equal(t, StatusActive, snapshot.Status)
+	assert.Nil(t, snapshot.NextStandbyAt)
+}
+
+func TestResetIdleNoopWhenNotTracked(t *testing.T) {
+	t.Parallel()
+
+	store := newFakeInstanceStore([]Instance{{
+		ID:             "inst-disabled-reset",
+		Name:           "inst-disabled-reset",
+		State:          StateRunning,
+		NetworkEnabled: true,
+		IP:             "192.168.100.105",
+		AutoStandby:    &Policy{Enabled: false, IdleTimeout: "1m"},
+	}})
+	controller := NewController(store, &fakeConnectionSource{}, ControllerOptions{})
+
+	require.NoError(t, controller.startupResync(context.Background()))
+
+	snapshot, err := controller.ResetIdle(context.Background(), store.instances[0])
+	require.NoError(t, err)
+	assert.Equal(t, StatusDisabled, snapshot.Status)
+}
+
+func TestResetIdleFailsWhenPersistFails(t *testing.T) {
+	t.Parallel()
+
+	idleSince := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
+	store := newFakeInstanceStore([]Instance{
+		idleTestInstance("inst-reset-persist", "192.168.100.106", idleSince),
+	})
+	controller := NewController(store, &fakeConnectionSource{}, ControllerOptions{
+		Now: func() time.Time { return idleSince.Add(30 * time.Second) },
+	})
+
+	require.NoError(t, controller.startupResync(context.Background()))
+	store.setRuntimeErr = errors.New("metadata write failed")
+
+	_, err := controller.ResetIdle(context.Background(), store.instances[0])
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, ErrStandbyInProgress)
+}
