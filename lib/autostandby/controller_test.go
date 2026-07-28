@@ -704,6 +704,50 @@ func TestHandleStandbyTimerRearmsCountdownWhenConfirmationFails(t *testing.T) {
 	controller.mu.RUnlock()
 }
 
+func TestHandleStandbyTimerKeepsActiveStateWhenConfirmationFails(t *testing.T) {
+	t.Parallel()
+
+	idleSince := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
+	now := idleSince.Add(time.Minute)
+	inst := idleTestInstance("inst-confirm-active", "192.168.100.67", idleSince)
+	store := newFakeInstanceStore([]Instance{inst})
+	source := &fakeConnectionSource{}
+	controller := NewController(store, source, ControllerOptions{
+		Now: func() time.Time { return now },
+	})
+
+	require.NoError(t, controller.startupResync(context.Background()))
+
+	// Inbound activity arrives after the standby timer was already queued.
+	controller.handleConnectionEvent(context.Background(), ConnectionEvent{
+		Type: ConnectionEventNew,
+		Connection: Connection{
+			OriginalSourceIP:        mustAddr("1.2.3.4"),
+			OriginalSourcePort:      50300,
+			OriginalDestinationIP:   mustAddr("192.168.100.67"),
+			OriginalDestinationPort: 8080,
+			TCPState:                TCPStateEstablished,
+		},
+		ObservedAt: now,
+	})
+	source.listErr = errors.New("conntrack dump failed")
+
+	controller.handleStandbyTimer(context.Background(), "inst-confirm-active")
+	controller.standbyWG.Wait()
+
+	assert.Empty(t, store.standbyCalls())
+	require.NotNil(t, store.persistedRuntime["inst-confirm-active"])
+	assert.Nil(t, store.persistedRuntime["inst-confirm-active"].IdleSince)
+
+	controller.mu.RLock()
+	state := controller.states["inst-confirm-active"]
+	require.NotNil(t, state)
+	assert.Len(t, state.activeInbound, 1)
+	assert.Nil(t, state.idleSince)
+	assert.Nil(t, state.timer)
+	controller.mu.RUnlock()
+}
+
 func TestStreamRestoreResyncsFromConntrackTable(t *testing.T) {
 	t.Parallel()
 

@@ -678,7 +678,9 @@ func (c *Controller) confirmIdleBeforeStandby(ctx context.Context, id string) bo
 	defer c.mu.Unlock()
 
 	state := c.states[id]
-	if state == nil || state.compiledPolicy == nil {
+	// Activity can land between the timer firing and this check, and it already
+	// owns idleSince and the reconcile loop; the paths below must not clobber it.
+	if state == nil || state.compiledPolicy == nil || len(state.activeInbound) > 0 {
 		return false
 	}
 
