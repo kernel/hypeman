@@ -48,6 +48,10 @@ func (m *manager) startInstance(
 		log.ErrorContext(ctx, "invalid state for start", "instance_id", id, "state", inst.State)
 		return nil, fmt.Errorf("%w: cannot start from state %s, must be Stopped", ErrInvalidState, inst.State)
 	}
+	if err := validateVGPUHypervisor(stored.GPUProfile, stored.HypervisorType); err != nil {
+		log.ErrorContext(ctx, "invalid vGPU hypervisor", "instance_id", id, "error", err)
+		return nil, err
+	}
 
 	// 2a. Clear stale exit info from previous run and apply command overrides
 	stored.ExitCode = nil
