@@ -166,6 +166,20 @@ func TestDeleteRetainsMetadataWhenVGPUReleaseFails(t *testing.T) {
 	assert.Equal(t, "/sys/bus/pci/devices/0000:82:00.4", stored.GPUDevicePath)
 }
 
+func TestLifecycleNoopStandbyRejectsVendorVFIOVGPU(t *testing.T) {
+	m, id := newLifecycleNoopManagerWithInstance(t, StateRunning, time.Now().UTC())
+	meta, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	meta.GPUProfile = "NVIDIA L40S-2Q"
+	meta.GPUFramework = devices.VGPUFrameworkVendorVFIO
+	meta.GPUDevicePath = "/sys/bus/pci/devices/0000:82:00.4"
+	require.NoError(t, m.saveMetadata(meta))
+
+	_, err = m.StandbyInstance(context.Background(), id, StandbyInstanceRequest{})
+	require.ErrorIs(t, err, ErrInvalidState)
+	assert.ErrorContains(t, err, "standby is not supported for instances with vGPU attached")
+}
+
 func newLifecycleNoopManagerWithInstance(t *testing.T, state State, now time.Time) (*manager, string) {
 	t.Helper()
 

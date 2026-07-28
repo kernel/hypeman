@@ -89,10 +89,10 @@ func getCachedProfiles(firstVF string) []profileMetadata {
 	return cachedProfiles
 }
 
-// DiscoverVFs returns all SR-IOV Virtual Functions available for vGPU.
+// discoverMdevVFs returns all SR-IOV Virtual Functions available for mdev vGPU.
 // These are discovered by scanning /sys/class/mdev_bus/ which contains
 // VFs that can host mdev devices.
-func DiscoverVFs() ([]VirtualFunction, error) {
+func discoverMdevVFs() ([]VirtualFunction, error) {
 	entries, err := os.ReadDir(mdevBusPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -136,18 +136,7 @@ func DiscoverVFs() ([]VirtualFunction, error) {
 
 // ListGPUProfiles returns available vGPU profiles with availability counts.
 // Profiles are discovered from the first VF's mdev_supported_types directory.
-func ListGPUProfiles() ([]GPUProfile, error) {
-	vfs, err := DiscoverVFs()
-	if err != nil {
-		return nil, err
-	}
-	return ListGPUProfilesWithVFs(vfs)
-}
-
-// ListGPUProfilesWithVFs returns available vGPU profiles using pre-discovered VFs.
-// This avoids redundant VF discovery when the caller already has the list.
-// Uses parallel sysfs reads for fast availability counting.
-func ListGPUProfilesWithVFs(vfs []VirtualFunction) ([]GPUProfile, error) {
+func listMdevGPUProfilesWithVFs(vfs []VirtualFunction) ([]GPUProfile, error) {
 	if len(vfs) == 0 {
 		return nil, nil
 	}
@@ -306,7 +295,7 @@ func countAvailableForSingleProfile(freeVFsByParent map[string][]VirtualFunction
 
 // findProfileType finds the internal type name (e.g., "nvidia-556") for a profile name (e.g., "L40S-1Q")
 func findProfileType(profileName string) (string, error) {
-	vfs, err := DiscoverVFs()
+	vfs, err := discoverMdevVFs()
 	if err != nil || len(vfs) == 0 {
 		return "", fmt.Errorf("no VFs available")
 	}
@@ -532,7 +521,7 @@ func CreateMdev(ctx context.Context, profileName, instanceID string) (*MdevDevic
 	}
 
 	// Discover all VFs
-	vfs, err := DiscoverVFs()
+	vfs, err := discoverMdevVFs()
 	if err != nil {
 		return nil, fmt.Errorf("discover VFs: %w", err)
 	}
@@ -698,7 +687,7 @@ func ReconcileMdevs(ctx context.Context, instanceInfos []MdevReconcileInfo) erro
 	log := logger.FromContext(ctx)
 	_ = instanceInfos
 
-	vfs, err := DiscoverVFs()
+	vfs, err := discoverMdevVFs()
 	if err != nil {
 		return fmt.Errorf("discover managed VFs: %w", err)
 	}

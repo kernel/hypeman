@@ -11,8 +11,8 @@ import (
 func TestStoredVGPUDevicePath(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, "/sys/bus/mdev/devices/new-uuid", storedVGPUDevicePath(&StoredMetadata{
-		GPUDevicePath: "/sys/bus/mdev/devices/new-uuid",
+	assert.Equal(t, "/sys/bus/pci/devices/0000:82:00.4", storedVGPUDevicePath(&StoredMetadata{
+		GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.4",
 		GPUMdevUUID:   "legacy-uuid",
 	}))
 	assert.Equal(t, "/sys/bus/mdev/devices/legacy-uuid", storedVGPUDevicePath(&StoredMetadata{
@@ -39,13 +39,11 @@ func TestSetAndClearStoredVGPUDevice(t *testing.T) {
 
 	stored := &StoredMetadata{}
 	setStoredVGPUDevice(stored, &devices.VGPUDevice{
-		Framework: devices.VGPUFrameworkMdev,
-		SysfsPath: "/sys/bus/mdev/devices/new-uuid",
-		MdevUUID:  "new-uuid",
+		Framework: devices.VGPUFrameworkVendorVFIO,
+		SysfsPath: "/sys/bus/pci/devices/0000:82:00.4",
 	})
-	assert.Equal(t, devices.VGPUFrameworkMdev, stored.GPUFramework)
-	assert.Equal(t, "/sys/bus/mdev/devices/new-uuid", stored.GPUDevicePath)
-	assert.Equal(t, "new-uuid", stored.GPUMdevUUID)
+	assert.Equal(t, devices.VGPUFrameworkVendorVFIO, stored.GPUFramework)
+	assert.Equal(t, "/sys/bus/pci/devices/0000:82:00.4", stored.GPUDevicePath)
 
 	clearStoredVGPUDevice(stored)
 	assert.Empty(t, stored.GPUFramework)

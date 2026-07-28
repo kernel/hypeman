@@ -8,16 +8,17 @@ hypeman supports two GPU modes, automatically detected based on host configurati
 
 | Mode | Description | Use Case |
 |------|-------------|----------|
-| **vGPU (SR-IOV)** | Virtual GPUs via mdev on SR-IOV VFs | Multi-tenant, shared GPU resources |
+| **vGPU (SR-IOV)** | Virtual GPUs on SR-IOV VFs via mdev or vendor VFIO | Multi-tenant, shared GPU resources |
 | **Passthrough** | Whole GPU VFIO passthrough | Dedicated GPU per instance |
 
 The host's GPU mode is determined by the host driver configuration:
-- If `/sys/class/mdev_bus/` contains VFs → vGPU mode
-- If NVIDIA GPUs are available for VFIO → passthrough mode
+- If `/sys/class/mdev_bus/` contains VFs → mdev vGPU mode
+- If VFs expose `/sys/bus/pci/devices/<VF>/nvidia/current_vgpu_type` → vendor VFIO vGPU mode
+- If NVIDIA GPUs are available for whole-device VFIO → passthrough mode
 
 ## vGPU Mode (Recommended)
 
-vGPU mode uses NVIDIA's SR-IOV technology to create Virtual Functions (VFs), each capable of hosting an mdev (mediated device) representing a vGPU.
+vGPU mode uses NVIDIA's SR-IOV technology to create Virtual Functions (VFs). Hosts on older kernels represent each vGPU as an mdev. Hosts using NVIDIA's vendor VFIO framework assign the profile directly to the VF through `current_vgpu_type`.
 
 ### How It Works
 
@@ -74,7 +75,7 @@ curl -X POST http://localhost:8080/instances \
   }'
 ```
 
-The response includes the assigned mdev UUID:
+On an mdev host, the response also includes the assigned mdev UUID:
 
 ```json
 {
@@ -87,19 +88,16 @@ The response includes the assigned mdev UUID:
 }
 ```
 
-### Ephemeral mdev Lifecycle
+### Ephemeral vGPU Lifecycle
 
-mdev devices are **ephemeral**: created on instance start, destroyed on instance delete.
+vGPU assignments are created on instance start and released on stop or delete. Hypeman creates/removes an mdev on mdev hosts and writes the profile ID/`0` to `current_vgpu_type` on vendor VFIO hosts.
 
 ```
-Instance Create → Create mdev → Attach to VM → Instance Running
-Instance Delete → Stop VM → Destroy mdev → VF available again
+Instance Create → Assign profile to VF → Attach VF to VM → Instance Running
+Instance Stop/Delete → Release profile → VF available again
 ```
 
-This ensures:
-- **Security**: No VRAM data leakage between instances
-- **Clean state**: Fresh vGPU for each instance
-- **Automatic cleanup**: Orphaned mdevs cleaned up on server restart
+Hypeman reconciles orphaned assignments on server restart while preserving devices held open by a running VMM.
 
 ## Passthrough Mode
 
@@ -256,7 +254,8 @@ If assignment cleanup fails, Hypeman retains the instance metadata so a compatib
 
 1. Check host GPU mode detection:
    ```bash
-   ls /sys/class/mdev_bus/  # Should show VFs for vGPU mode
+   ls /sys/class/mdev_bus/
+   find /sys/bus/pci/devices -path '*/nvidia/current_vgpu_type'
    ```
 
 2. Verify NVIDIA drivers are loaded on host:
@@ -280,17 +279,18 @@ curl -s http://localhost:8080/resources | jq '.gpu.profiles'
    curl http://localhost:8080/instances/<id>/logs?source=app
    ```
 
-### mdev creation fails
+### vGPU assignment fails
 
-1. Check if VFs are available:
-   ```bash
-   ls /sys/class/mdev_bus/
-   ```
+Check the files for the framework detected on the host:
 
-2. Verify mdev types:
-   ```bash
-   cat /sys/class/mdev_bus/*/mdev_supported_types/*/available_instances
-   ```
+```bash
+# mdev
+cat /sys/class/mdev_bus/*/mdev_supported_types/*/available_instances
+
+# vendor VFIO
+cat /sys/bus/pci/devices/*/nvidia/creatable_vgpu_types
+cat /sys/bus/pci/devices/*/nvidia/current_vgpu_type
+```
 
 ## Performance Tuning
 

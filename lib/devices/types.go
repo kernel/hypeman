@@ -63,12 +63,13 @@ type GPUMode string
 type VGPUFramework string
 
 const (
-	VGPUFrameworkNone VGPUFramework = ""
-	VGPUFrameworkMdev VGPUFramework = "mdev"
+	VGPUFrameworkNone       VGPUFramework = ""
+	VGPUFrameworkMdev       VGPUFramework = "mdev"
+	VGPUFrameworkVendorVFIO VGPUFramework = "vendor-vfio"
 
 	// GPUModePassthrough indicates whole GPU VFIO passthrough
 	GPUModePassthrough GPUMode = "passthrough"
-	// GPUModeVGPU indicates SR-IOV + mdev based vGPU
+	// GPUModeVGPU indicates an mdev or vendor VFIO vGPU host
 	GPUModeVGPU GPUMode = "vgpu"
 	// GPUModeNone indicates no GPU available
 	GPUModeNone GPUMode = "none"
@@ -76,9 +77,10 @@ const (
 
 // VirtualFunction represents an SR-IOV Virtual Function for vGPU
 type VirtualFunction struct {
-	PCIAddress string `json:"pci_address"` // e.g., "0000:82:00.4"
-	ParentGPU  string `json:"parent_gpu"`  // e.g., "0000:82:00.0"
-	Allocated  bool   `json:"allocated"`   // true if a vGPU is assigned to this VF
+	PCIAddress  string `json:"pci_address"` // e.g., "0000:82:00.4"
+	ParentGPU   string `json:"parent_gpu"`  // e.g., "0000:82:00.0"
+	Allocated   bool   `json:"allocated"`   // true if a vGPU is assigned to this VF
+	ProfileType string `json:"profile_type,omitempty"`
 	// HasMdev is retained for source and JSON compatibility.
 	// Deprecated: use Allocated.
 	HasMdev bool `json:"has_mdev"`

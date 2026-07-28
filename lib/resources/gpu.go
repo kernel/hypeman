@@ -32,17 +32,16 @@ func GetGPUStatus() *GPUResourceStatus {
 	}
 }
 
-// getVGPUStatus returns GPU status for vGPU mode (SR-IOV + mdev).
+// getVGPUStatus returns GPU status for vGPU mode.
 func getVGPUStatus() *GPUResourceStatus {
 	vfs, err := devices.DiscoverVFs()
 	if err != nil || len(vfs) == 0 {
 		return nil
 	}
 
-	// Count used VFs (those with mdevs)
 	usedSlots := 0
 	for _, vf := range vfs {
-		if vf.HasMdev {
+		if vf.IsAllocated() {
 			usedSlots++
 		}
 	}
