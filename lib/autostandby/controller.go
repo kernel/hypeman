@@ -766,6 +766,20 @@ func (c *Controller) executeStandby(ctx context.Context, id string, instanceName
 		c.recordControllerError("standby_preflight")
 		c.log.Warn("auto-standby could not classify inbound connections before standby", "instance_id", id, "instance_name", instanceName, "error", err)
 	}
+	// The table read runs without the lock, so fold in anything the event loop
+	// registered while it was in flight. Committing on the pre-read view would
+	// strand exactly the connection this check exists to protect.
+	c.mu.Lock()
+	if state := c.states[id]; state != nil {
+		for key := range state.activeInbound {
+			if live == nil {
+				live = make(map[ConnectionKey]struct{}, len(state.activeInbound))
+			}
+			live[key] = struct{}{}
+		}
+	}
+	c.mu.Unlock()
+
 	if len(live) > 0 {
 		c.recordStandbyAttempt("aborted_inbound_active")
 		c.log.Info("auto-standby aborted, inbound connection live at standby time", "instance_id", id, "instance_name", instanceName, "active_inbound_connections", len(live))

@@ -1175,3 +1175,48 @@ func TestStandbyDeferralKeepsActivityThatLandedDuringTheRead(t *testing.T) {
 	assert.Nil(t, state.timer)
 	assert.False(t, state.standbyRequested)
 }
+
+// Same unlocked window as the deferral case, but on the path that commits: the
+// table read can come back empty while the event loop registers a connection,
+// and suspending on the pre-read view strands it.
+func TestStandbySkippedWhenActivityLandsDuringTheRead(t *testing.T) {
+	t.Parallel()
+
+	idleSince := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
+	store := newFakeInstanceStore([]Instance{
+		idleTestInstance("inst-raced-commit", "192.168.100.124", idleSince),
+	})
+	source := &fakeConnectionSource{}
+	controller := NewController(store, source, ControllerOptions{
+		Now: func() time.Time { return idleSince.Add(time.Minute) },
+	})
+
+	require.NoError(t, controller.startupResync(context.Background()))
+
+	// The host table stays empty; the connection arrives only as an event.
+	source.setOnList(func() {
+		controller.handleConnectionEvent(context.Background(), ConnectionEvent{
+			Type: ConnectionEventNew,
+			Connection: Connection{
+				OriginalSourceIP:        mustAddr("1.2.3.4"),
+				OriginalSourcePort:      50014,
+				OriginalDestinationIP:   mustAddr("192.168.100.124"),
+				OriginalDestinationPort: 8080,
+				TCPState:                TCPStateEstablished,
+			},
+			ObservedAt: idleSince.Add(time.Minute),
+		})
+	})
+
+	controller.handleStandbyTimer(context.Background(), "inst-raced-commit")
+	controller.standbyWG.Wait()
+
+	assert.Empty(t, store.standbyCalls(), "a connection registered during the read must abort the attempt")
+	controller.mu.RLock()
+	defer controller.mu.RUnlock()
+	state := controller.states["inst-raced-commit"]
+	require.NotNil(t, state)
+	assert.Len(t, state.activeInbound, 1)
+	assert.Nil(t, state.idleSince)
+	assert.False(t, state.standbyRequested)
+}
