@@ -374,7 +374,7 @@ func (c *Controller) Describe(inst Instance) StatusSnapshot {
 		snapshot.IdleSince = idleSince
 		snapshot.LastInboundActivityAt = lastInboundAt
 		snapshot.NextStandbyAt = nextStandbyAt
-		if !holdUntil.IsZero() {
+		if holdUntil.After(c.now().UTC()) {
 			snapshot.HoldUntil = cloneTimePtr(&holdUntil)
 		}
 		if nextStandbyAt != nil {
@@ -729,8 +729,11 @@ func (c *Controller) handleStandbyTimer(ctx context.Context, id string) {
 	}
 	// A timer callback that fired before a re-arm (hold, destroy-event
 	// restart) still delivers its id; only act once the current deadline has
-	// actually elapsed, otherwise the re-armed timer delivers again later.
+	// actually elapsed. Re-arm on the way out so the spent timer is always
+	// replaced, including when a backward clock step makes a monotonic timer
+	// fire early by wall clock.
 	if state.nextStandbyAt == nil || c.now().UTC().Before(*state.nextStandbyAt) {
+		c.armTimerLocked(id, state, c.now().UTC())
 		c.mu.Unlock()
 		return
 	}

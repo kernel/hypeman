@@ -3375,6 +3375,9 @@ paths:
 
         Instances where auto-standby is disabled, unconfigured, or unsupported
         return 200 with their current status — no auto-standby will occur.
+        `hold_until` is the guarantee: read it rather than the status code to
+        know how long the instance is protected. Holds are kept in memory, so
+        an API restart drops them.
       operationId: holdAutoStandby
       security:
         - bearerAuth: []

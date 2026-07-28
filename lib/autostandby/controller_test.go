@@ -1234,3 +1234,55 @@ func TestHoldStandbyNoopWhenPolicyDisabled(t *testing.T) {
 	assert.Equal(t, StatusDisabled, snapshot.Status)
 	assert.Nil(t, snapshot.HoldUntil)
 }
+
+func TestHandleStandbyTimerRearmsWhenDeliveryTooEarly(t *testing.T) {
+	t.Parallel()
+
+	idleSince := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
+	now := idleSince.Add(time.Minute)
+	store := newFakeInstanceStore([]Instance{
+		idleTestInstance("inst-early", "192.168.100.108", idleSince),
+	})
+	// A backward clock step can make a monotonic timer fire before its wall
+	// clock deadline; the delivery must be dropped and the timer replaced.
+	stepped := now.Add(-30 * time.Second)
+	controller := NewController(store, &fakeConnectionSource{}, ControllerOptions{
+		Now: func() time.Time { return now },
+	})
+
+	require.NoError(t, controller.startupResync(context.Background()))
+	controller.now = func() time.Time { return stepped }
+
+	controller.handleStandbyTimer(context.Background(), "inst-early")
+	controller.standbyWG.Wait()
+
+	assert.Empty(t, store.standbyCalls())
+	controller.mu.RLock()
+	state := controller.states["inst-early"]
+	require.NotNil(t, state)
+	require.NotNil(t, state.timer)
+	require.NotNil(t, state.nextStandbyAt)
+	assert.Equal(t, now, *state.nextStandbyAt)
+	controller.mu.RUnlock()
+}
+
+func TestDescribeOmitsExpiredHold(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 6, 11, 0, 0, 0, time.UTC)
+	store := newFakeInstanceStore([]Instance{
+		idleTestInstance("inst-expired-hold", "192.168.100.109", now),
+	})
+	controller := NewController(store, &fakeConnectionSource{}, ControllerOptions{
+		Now: func() time.Time { return now },
+	})
+
+	require.NoError(t, controller.startupResync(context.Background()))
+
+	snapshot, err := controller.HoldStandby(context.Background(), store.instances[0])
+	require.NoError(t, err)
+	require.NotNil(t, snapshot.HoldUntil)
+
+	controller.now = func() time.Time { return now.Add(2 * time.Minute) }
+	assert.Nil(t, controller.Describe(store.instances[0]).HoldUntil)
+}
