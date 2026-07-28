@@ -72,6 +72,7 @@ func toOAPIAutoStandbyStatus(status autostandby.StatusSnapshot) oapi.AutoStandby
 	out.IdleSince = status.IdleSince
 	out.LastInboundActivityAt = status.LastInboundActivityAt
 	out.NextStandbyAt = status.NextStandbyAt
+	out.HoldUntil = status.HoldUntil
 	if status.CountdownRemaining != nil {
 		out.CountdownRemaining = lo.ToPtr(status.CountdownRemaining.String())
 	}

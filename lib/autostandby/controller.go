@@ -27,6 +27,10 @@ const (
 // controller drops its tracking state instead of re-arming the idle timer.
 var ErrInstanceNotFound = errors.New("instance not found")
 
+// ErrStandbyInProgress signals that a standby operation is already executing
+// and can no longer be cancelled.
+var ErrStandbyInProgress = errors.New("standby in progress")
+
 // InstanceEventAction identifies an instance lifecycle change relevant to auto-standby.
 type InstanceEventAction string
 
@@ -107,6 +111,7 @@ type controllerState struct {
 	idleSince        *time.Time
 	lastInboundAt    *time.Time
 	nextStandbyAt    *time.Time
+	holdUntil        time.Time
 	timer            *time.Timer
 	reconcileTimer   *time.Timer
 	standbyRequested bool
@@ -344,6 +349,7 @@ func (c *Controller) Describe(inst Instance) StatusSnapshot {
 		idleSince          *time.Time
 		lastInboundAt      *time.Time
 		nextStandbyAt      *time.Time
+		holdUntil          time.Time
 		standbyRequested   bool
 		hasState           bool
 	)
@@ -358,6 +364,7 @@ func (c *Controller) Describe(inst Instance) StatusSnapshot {
 		idleSince = cloneTimePtr(state.idleSince)
 		lastInboundAt = cloneTimePtr(state.lastInboundAt)
 		nextStandbyAt = cloneTimePtr(state.nextStandbyAt)
+		holdUntil = state.holdUntil
 		standbyRequested = state.standbyRequested
 	}
 	c.mu.RUnlock()
@@ -367,6 +374,9 @@ func (c *Controller) Describe(inst Instance) StatusSnapshot {
 		snapshot.IdleSince = idleSince
 		snapshot.LastInboundActivityAt = lastInboundAt
 		snapshot.NextStandbyAt = nextStandbyAt
+		if holdUntil.After(c.now().UTC()) {
+			snapshot.HoldUntil = cloneTimePtr(&holdUntil)
+		}
 		if nextStandbyAt != nil {
 			remaining := nextStandbyAt.Sub(c.now().UTC())
 			if remaining < 0 {
@@ -405,6 +415,56 @@ func (c *Controller) Describe(inst Instance) StatusSnapshot {
 	snapshot.Status = StatusIdleCountdown
 	snapshot.Reason = ReasonIdleTimeoutNotElapsed
 	return snapshot
+}
+
+// HoldStandby guarantees the controller will not put the instance into
+// standby before now + the policy idle timeout, and cancels any queued
+// standby attempt. The idle countdown itself is untouched; a hold only ever
+// extends the current one. It fails with ErrStandbyInProgress once a standby
+// operation is executing, and is a no-op for instances that cannot
+// auto-standby at all (unconfigured, disabled, or ineligible).
+func (c *Controller) HoldStandby(_ context.Context, inst Instance) (StatusSnapshot, error) {
+	now := c.now().UTC()
+
+	c.mu.Lock()
+	state := c.states[inst.ID]
+	if state != nil && state.standbyExecuting {
+		c.mu.Unlock()
+		return StatusSnapshot{}, ErrStandbyInProgress
+	}
+
+	idleTimeout := time.Duration(0)
+	if state != nil && state.compiledPolicy != nil {
+		idleTimeout = state.idleTimeout
+	} else if eligible(inst) {
+		compiled, err := compilePolicy(inst.AutoStandby)
+		if err != nil {
+			c.mu.Unlock()
+			return StatusSnapshot{}, err
+		}
+		idleTimeout = compiled.idleTimeout
+		// The instance may not be seeded yet (e.g. a hold racing controller
+		// startup); record the hold on a bare state so the seeding resync
+		// arms its timer no earlier than hold_until.
+		state = c.ensureStateLocked(inst.ID)
+	}
+	if idleTimeout <= 0 {
+		c.mu.Unlock()
+		return c.Describe(inst), nil
+	}
+
+	holdUntil := now.Add(idleTimeout)
+	if holdUntil.After(state.holdUntil) {
+		state.holdUntil = holdUntil
+	}
+	state.standbyRequested = false
+	if state.compiledPolicy != nil {
+		c.armTimerLocked(inst.ID, state, now)
+	}
+	c.mu.Unlock()
+
+	c.log.Info("auto-standby hold placed", "instance_id", inst.ID, "instance_name", inst.Name, "hold_until", holdUntil)
+	return c.Describe(inst), nil
 }
 
 func (c *Controller) startupResync(ctx context.Context) error {
@@ -667,6 +727,16 @@ func (c *Controller) handleStandbyTimer(ctx context.Context, id string) {
 		c.mu.Unlock()
 		return
 	}
+	// A timer callback that fired before a re-arm (hold, destroy-event
+	// restart) still delivers its id; only act once the current deadline has
+	// actually elapsed. Re-arm on the way out so the spent timer is always
+	// replaced, including when a backward clock step makes a monotonic timer
+	// fire early by wall clock.
+	if state.nextStandbyAt == nil || c.now().UTC().Before(*state.nextStandbyAt) {
+		c.armTimerLocked(id, state, c.now().UTC())
+		c.mu.Unlock()
+		return
+	}
 	state.timer = nil
 	state.nextStandbyAt = nil
 	state.standbyRequested = true
@@ -889,6 +959,7 @@ func (c *Controller) clearStateLocked(state *controllerState) {
 	state.idleSince = nil
 	state.lastInboundAt = nil
 	state.nextStandbyAt = nil
+	state.holdUntil = time.Time{}
 	state.standbyRequested = false
 	c.cancelTimerLocked(state)
 	c.cancelReconcileLocked(state)
@@ -901,6 +972,9 @@ func (c *Controller) armTimerLocked(id string, state *controllerState, now time.
 	}
 
 	when := state.idleSince.Add(state.idleTimeout)
+	if state.holdUntil.After(when) {
+		when = state.holdUntil
+	}
 	delay := when.Sub(now)
 	if delay < 0 {
 		delay = 0
