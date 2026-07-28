@@ -90,15 +90,31 @@ type fakeConnectionSource struct {
 	connections []Connection
 	listErr     error
 	openErr     error
+	onList      func()
 }
 
 func (f *fakeConnectionSource) ListConnections(context.Context) ([]Connection, error) {
+	f.mu.Lock()
+	onList := f.onList
+	f.mu.Unlock()
+	// Runs while the caller holds no lock, so a test can land a conntrack event
+	// mid-read the way the controller's event loop would.
+	if onList != nil {
+		onList()
+	}
+
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.listErr != nil {
 		return nil, f.listErr
 	}
 	return append([]Connection(nil), f.connections...), nil
+}
+
+func (f *fakeConnectionSource) setOnList(fn func()) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.onList = fn
 }
 
 func (f *fakeConnectionSource) setConnections(conns ...Connection) {
@@ -1112,4 +1128,50 @@ func TestStandbyProceedsWhenHostTableAgreesInstanceIsIdle(t *testing.T) {
 	controller.standbyWG.Wait()
 
 	assert.Equal(t, []string{"inst-quiet"}, store.standbyCalls())
+}
+
+// The pre-suspend read happens without the controller lock, so a conntrack event
+// can register a connection while it is in flight. Deferring must not then
+// overwrite that fresh activity with a new idle countdown.
+func TestStandbyDeferralKeepsActivityThatLandedDuringTheRead(t *testing.T) {
+	t.Parallel()
+
+	idleSince := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
+	store := newFakeInstanceStore([]Instance{
+		idleTestInstance("inst-raced-read", "192.168.100.123", idleSince),
+	})
+	source := &fakeConnectionSource{}
+	controller := NewController(store, source, ControllerOptions{
+		Now: func() time.Time { return idleSince.Add(time.Minute) },
+	})
+
+	require.NoError(t, controller.startupResync(context.Background()))
+
+	source.setListErr(errors.New("conntrack permission denied"))
+	source.setOnList(func() {
+		controller.handleConnectionEvent(context.Background(), ConnectionEvent{
+			Type: ConnectionEventNew,
+			Connection: Connection{
+				OriginalSourceIP:        mustAddr("1.2.3.4"),
+				OriginalSourcePort:      50013,
+				OriginalDestinationIP:   mustAddr("192.168.100.123"),
+				OriginalDestinationPort: 8080,
+				TCPState:                TCPStateEstablished,
+			},
+			ObservedAt: idleSince.Add(time.Minute),
+		})
+	})
+
+	controller.handleStandbyTimer(context.Background(), "inst-raced-read")
+	controller.standbyWG.Wait()
+
+	assert.Empty(t, store.standbyCalls())
+	controller.mu.RLock()
+	defer controller.mu.RUnlock()
+	state := controller.states["inst-raced-read"]
+	require.NotNil(t, state)
+	assert.Len(t, state.activeInbound, 1, "activity that landed during the read must survive")
+	assert.Nil(t, state.idleSince, "deferring must not restart the countdown against a live connection")
+	assert.Nil(t, state.timer)
+	assert.False(t, state.standbyRequested)
 }

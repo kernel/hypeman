@@ -746,6 +746,12 @@ func (c *Controller) executeStandby(ctx context.Context, id string, instanceName
 		defer c.mu.Unlock()
 		if state := c.states[id]; state != nil {
 			state.standbyRequested = false
+			// The read happens without the lock, so inbound activity can land
+			// while it is in flight. That activity owns the state now; the
+			// reconcile/destroy flow restarts the countdown once it drains.
+			if len(state.activeInbound) > 0 {
+				return
+			}
 			idleSince := c.now().UTC()
 			state.idleSince = &idleSince
 			c.armTimerLocked(id, state, idleSince)
