@@ -36,6 +36,10 @@ func ListMdevDevices() ([]MdevDevice, error) {
 	return []MdevDevice{}, nil
 }
 
+func CreateVGPU(ctx context.Context, profileName, instanceID string) (*VGPUDevice, error) {
+	return nil, ErrVGPUNotSupportedOnMacOS
+}
+
 // CreateMdev returns an error on macOS as mdev is not supported.
 func CreateMdev(ctx context.Context, profileName, instanceID string) (*MdevDevice, error) {
 	return nil, ErrVGPUNotSupportedOnMacOS
@@ -49,6 +53,14 @@ func DestroyMdev(ctx context.Context, mdevUUID string) error {
 // IsMdevInUse returns false on macOS.
 func IsMdevInUse(mdevUUID string) bool {
 	return false
+}
+
+func DestroyVGPU(ctx context.Context, framework VGPUFramework, devicePath, mdevUUID string) error {
+	return nil
+}
+
+func ReconcileVGPUs(ctx context.Context) error {
+	return nil
 }
 
 // ReconcileMdevs is a no-op on macOS.
