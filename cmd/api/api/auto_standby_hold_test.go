@@ -13,13 +13,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestResetAutoStandbyExtendsCountdown(t *testing.T) {
+func TestHoldAutoStandbyExtendsCountdown(t *testing.T) {
 	t.Parallel()
 
 	inst := &instances.Instance{
 		StoredMetadata: instances.StoredMetadata{
-			Id:             "inst-reset",
-			Name:           "inst-reset",
+			Id:             "inst-hold",
+			Name:           "inst-hold",
 			NetworkEnabled: true,
 			IP:             "192.168.100.30",
 			AutoStandby:    &autostandby.Policy{Enabled: true, IdleTimeout: "5m"},
@@ -31,8 +31,8 @@ func TestResetAutoStandbyExtendsCountdown(t *testing.T) {
 	idleSince := now.Add(-4 * time.Minute)
 	store := &statusStore{
 		instances: []autostandby.Instance{{
-			ID:             "inst-reset",
-			Name:           "inst-reset",
+			ID:             "inst-hold",
+			Name:           "inst-hold",
 			State:          autostandby.StateRunning,
 			NetworkEnabled: true,
 			IP:             "192.168.100.30",
@@ -49,21 +49,19 @@ func TestResetAutoStandbyExtendsCountdown(t *testing.T) {
 	base.InstanceManager = &captureStatusManager{Manager: base.InstanceManager, instance: inst}
 	base.AutoStandbyController = controller
 
-	resp, err := base.ResetAutoStandby(ctx(), oapi.ResetAutoStandbyRequestObject{Id: "inst-reset"})
+	resp, err := base.HoldAutoStandby(ctx(), oapi.HoldAutoStandbyRequestObject{Id: "inst-hold"})
 	require.NoError(t, err)
 
-	resetResp, ok := resp.(oapi.ResetAutoStandby200JSONResponse)
+	holdResp, ok := resp.(oapi.HoldAutoStandby200JSONResponse)
 	require.True(t, ok)
-	assert.Equal(t, oapi.AutoStandbyStatusStatusIdleCountdown, resetResp.Status)
-	require.NotNil(t, resetResp.NextStandbyAt)
-	assert.Equal(t, now.Add(5*time.Minute), *resetResp.NextStandbyAt)
-
-	require.NotNil(t, store.runtime["inst-reset"])
-	require.NotNil(t, store.runtime["inst-reset"].IdleSince)
-	assert.Equal(t, now, *store.runtime["inst-reset"].IdleSince)
+	assert.Equal(t, oapi.AutoStandbyStatusStatusIdleCountdown, holdResp.Status)
+	require.NotNil(t, holdResp.HoldUntil)
+	assert.Equal(t, now.Add(5*time.Minute), *holdResp.HoldUntil)
+	require.NotNil(t, holdResp.NextStandbyAt)
+	assert.Equal(t, now.Add(5*time.Minute), *holdResp.NextStandbyAt)
 }
 
-func TestResetAutoStandbyConflictWhenInstanceInStandby(t *testing.T) {
+func TestHoldAutoStandbyConflictWhenInstanceInStandby(t *testing.T) {
 	t.Parallel()
 
 	base := newTestService(t)
@@ -78,39 +76,12 @@ func TestResetAutoStandbyConflictWhenInstanceInStandby(t *testing.T) {
 		},
 	}
 
-	resp, err := base.ResetAutoStandby(ctx(), oapi.ResetAutoStandbyRequestObject{Id: "inst-standby"})
+	resp, err := base.HoldAutoStandby(ctx(), oapi.HoldAutoStandbyRequestObject{Id: "inst-standby"})
 	require.NoError(t, err)
 
-	conflictResp, ok := resp.(oapi.ResetAutoStandby409JSONResponse)
+	conflictResp, ok := resp.(oapi.HoldAutoStandby409JSONResponse)
 	require.True(t, ok)
 	assert.Equal(t, "instance_in_standby", conflictResp.Code)
-}
-
-func TestResetAutoStandbyUnsupportedWithoutController(t *testing.T) {
-	t.Parallel()
-
-	base := newTestService(t)
-	base.InstanceManager = &captureStatusManager{
-		Manager: base.InstanceManager,
-		instance: &instances.Instance{
-			StoredMetadata: instances.StoredMetadata{
-				Id:             "inst-nosupport",
-				Name:           "inst-nosupport",
-				NetworkEnabled: true,
-				IP:             "192.168.100.31",
-				AutoStandby:    &autostandby.Policy{Enabled: true, IdleTimeout: "5m"},
-			},
-			State: instances.StateRunning,
-		},
-	}
-
-	resp, err := base.ResetAutoStandby(ctx(), oapi.ResetAutoStandbyRequestObject{Id: "inst-nosupport"})
-	require.NoError(t, err)
-
-	resetResp, ok := resp.(oapi.ResetAutoStandby200JSONResponse)
-	require.True(t, ok)
-	assert.False(t, resetResp.Supported)
-	assert.Equal(t, oapi.AutoStandbyStatusStatusUnsupported, resetResp.Status)
 }
 
 // sequenceManager returns instances in order, mimicking state that changes
@@ -131,7 +102,7 @@ func (m *sequenceManager) GetInstance(context.Context, string) (*instances.Insta
 	return inst, nil
 }
 
-func TestResetAutoStandbyConflictWhenStandbyCompletesDuringReset(t *testing.T) {
+func TestHoldAutoStandbyConflictWhenStandbyCompletesDuringHold(t *testing.T) {
 	t.Parallel()
 
 	stored := instances.StoredMetadata{
@@ -144,8 +115,6 @@ func TestResetAutoStandbyConflictWhenStandbyCompletesDuringReset(t *testing.T) {
 	running := &instances.Instance{StoredMetadata: stored, State: instances.StateRunning}
 	standby := &instances.Instance{StoredMetadata: stored, State: instances.StateStandby}
 
-	// The controller tracks nothing, mimicking state cleared by a standby that
-	// completed between the handler's initial load and ResetIdle.
 	controller := autostandby.NewController(&statusStore{}, &statusConnectionSource{}, autostandby.ControllerOptions{})
 	require.NoError(t, controller.Run(withCanceledContext(t)))
 
@@ -153,10 +122,37 @@ func TestResetAutoStandbyConflictWhenStandbyCompletesDuringReset(t *testing.T) {
 	base.InstanceManager = &sequenceManager{Manager: base.InstanceManager, sequence: []*instances.Instance{running, standby}}
 	base.AutoStandbyController = controller
 
-	resp, err := base.ResetAutoStandby(ctx(), oapi.ResetAutoStandbyRequestObject{Id: "inst-race"})
+	resp, err := base.HoldAutoStandby(ctx(), oapi.HoldAutoStandbyRequestObject{Id: "inst-race"})
 	require.NoError(t, err)
 
-	conflictResp, ok := resp.(oapi.ResetAutoStandby409JSONResponse)
+	conflictResp, ok := resp.(oapi.HoldAutoStandby409JSONResponse)
 	require.True(t, ok)
 	assert.Equal(t, "instance_in_standby", conflictResp.Code)
+}
+
+func TestHoldAutoStandbyUnsupportedWithoutController(t *testing.T) {
+	t.Parallel()
+
+	base := newTestService(t)
+	base.InstanceManager = &captureStatusManager{
+		Manager: base.InstanceManager,
+		instance: &instances.Instance{
+			StoredMetadata: instances.StoredMetadata{
+				Id:             "inst-nosupport",
+				Name:           "inst-nosupport",
+				NetworkEnabled: true,
+				IP:             "192.168.100.31",
+				AutoStandby:    &autostandby.Policy{Enabled: true, IdleTimeout: "5m"},
+			},
+			State: instances.StateRunning,
+		},
+	}
+
+	resp, err := base.HoldAutoStandby(ctx(), oapi.HoldAutoStandbyRequestObject{Id: "inst-nosupport"})
+	require.NoError(t, err)
+
+	holdResp, ok := resp.(oapi.HoldAutoStandby200JSONResponse)
+	require.True(t, ok)
+	assert.False(t, holdResp.Supported)
+	assert.Equal(t, oapi.AutoStandbyStatusStatusUnsupported, holdResp.Status)
 }

@@ -111,6 +111,7 @@ type controllerState struct {
 	idleSince        *time.Time
 	lastInboundAt    *time.Time
 	nextStandbyAt    *time.Time
+	holdUntil        time.Time
 	timer            *time.Timer
 	reconcileTimer   *time.Timer
 	standbyRequested bool
@@ -348,6 +349,7 @@ func (c *Controller) Describe(inst Instance) StatusSnapshot {
 		idleSince          *time.Time
 		lastInboundAt      *time.Time
 		nextStandbyAt      *time.Time
+		holdUntil          time.Time
 		standbyRequested   bool
 		hasState           bool
 	)
@@ -362,6 +364,7 @@ func (c *Controller) Describe(inst Instance) StatusSnapshot {
 		idleSince = cloneTimePtr(state.idleSince)
 		lastInboundAt = cloneTimePtr(state.lastInboundAt)
 		nextStandbyAt = cloneTimePtr(state.nextStandbyAt)
+		holdUntil = state.holdUntil
 		standbyRequested = state.standbyRequested
 	}
 	c.mu.RUnlock()
@@ -371,6 +374,9 @@ func (c *Controller) Describe(inst Instance) StatusSnapshot {
 		snapshot.IdleSince = idleSince
 		snapshot.LastInboundActivityAt = lastInboundAt
 		snapshot.NextStandbyAt = nextStandbyAt
+		if !holdUntil.IsZero() {
+			snapshot.HoldUntil = cloneTimePtr(&holdUntil)
+		}
 		if nextStandbyAt != nil {
 			remaining := nextStandbyAt.Sub(c.now().UTC())
 			if remaining < 0 {
@@ -411,13 +417,13 @@ func (c *Controller) Describe(inst Instance) StatusSnapshot {
 	return snapshot
 }
 
-// ResetIdle atomically restarts the idle countdown for an instance and cancels
-// any queued standby attempt, guaranteeing the controller will not put the
-// instance into standby before now + idle timeout. It fails with
-// ErrStandbyInProgress once a standby operation is executing, and is a no-op
-// for instances the controller is not counting down (untracked, ineligible, or
-// kept awake by active inbound connections).
-func (c *Controller) ResetIdle(ctx context.Context, inst Instance) (StatusSnapshot, error) {
+// HoldStandby guarantees the controller will not put the instance into
+// standby before now + the policy idle timeout, and cancels any queued
+// standby attempt. The idle countdown itself is untouched; a hold only ever
+// extends the current one. It fails with ErrStandbyInProgress once a standby
+// operation is executing, and is a no-op for instances that cannot
+// auto-standby at all (unconfigured, disabled, or ineligible).
+func (c *Controller) HoldStandby(_ context.Context, inst Instance) (StatusSnapshot, error) {
 	now := c.now().UTC()
 
 	c.mu.Lock()
@@ -426,48 +432,38 @@ func (c *Controller) ResetIdle(ctx context.Context, inst Instance) (StatusSnapsh
 		c.mu.Unlock()
 		return StatusSnapshot{}, ErrStandbyInProgress
 	}
-	if state == nil || state.compiledPolicy == nil {
-		// An eligible instance the controller has not seeded yet (e.g. a reset
-		// racing controller startup) must still get a real countdown: a later
-		// resync would otherwise seed it from a persisted idle_since that may
-		// already be expired, standbying it inside the promised window.
-		if !eligible(inst) {
-			c.mu.Unlock()
-			return c.Describe(inst), nil
-		}
+
+	idleTimeout := time.Duration(0)
+	if state != nil && state.compiledPolicy != nil {
+		idleTimeout = state.idleTimeout
+	} else if eligible(inst) {
 		compiled, err := compilePolicy(inst.AutoStandby)
 		if err != nil {
 			c.mu.Unlock()
 			return StatusSnapshot{}, err
 		}
+		idleTimeout = compiled.idleTimeout
+		// The instance may not be seeded yet (e.g. a hold racing controller
+		// startup); record the hold on a bare state so the seeding resync
+		// arms its timer no earlier than hold_until.
 		state = c.ensureStateLocked(inst.ID)
-		state.instance = cloneInstance(inst)
-		state.compiledPolicy = compiled
-		state.idleTimeout = compiled.idleTimeout
 	}
-	if len(state.activeInbound) > 0 {
+	if idleTimeout <= 0 {
 		c.mu.Unlock()
 		return c.Describe(inst), nil
 	}
+
+	holdUntil := now.Add(idleTimeout)
+	if holdUntil.After(state.holdUntil) {
+		state.holdUntil = holdUntil
+	}
 	state.standbyRequested = false
-	idleSince := now
-	state.idleSince = &idleSince
-	c.armTimerLocked(inst.ID, state, now)
-	instanceName := state.instance.Name
-	idleTimeout := state.idleTimeout
-	err := c.persistRuntime(ctx, inst.ID, &Runtime{
-		IdleSince:             cloneTimePtr(state.idleSince),
-		LastInboundActivityAt: cloneTimePtr(state.lastInboundAt),
-	})
+	if state.compiledPolicy != nil {
+		c.armTimerLocked(inst.ID, state, now)
+	}
 	c.mu.Unlock()
 
-	// A failed persist breaks the reset guarantee: the next resync would
-	// restore the older idle_since and shorten the promised window.
-	if err != nil {
-		c.recordControllerError("persist_runtime")
-		return StatusSnapshot{}, fmt.Errorf("persist runtime after idle reset: %w", err)
-	}
-	c.log.Info("auto-standby idle countdown reset", "instance_id", inst.ID, "instance_name", instanceName, "idle_timeout", idleTimeout)
+	c.log.Info("auto-standby hold placed", "instance_id", inst.ID, "instance_name", inst.Name, "hold_until", holdUntil)
 	return c.Describe(inst), nil
 }
 
@@ -601,12 +597,7 @@ func (c *Controller) refreshInstanceLocked(ctx context.Context, inst Instance, c
 	}
 
 	if runtime != nil && runtime.IdleSince != nil {
-		// Instance snapshots are listed outside the controller lock, so the
-		// persisted idle_since can predate a reset that already moved the
-		// in-memory countdown; never roll the countdown backwards.
-		if state.idleSince == nil || runtime.IdleSince.After(*state.idleSince) {
-			state.idleSince = cloneTimePtr(runtime.IdleSince)
-		}
+		state.idleSince = cloneTimePtr(runtime.IdleSince)
 		state.lastInboundAt = cloneTimePtr(runtime.LastInboundActivityAt)
 	} else {
 		state.idleSince = &now
@@ -736,7 +727,7 @@ func (c *Controller) handleStandbyTimer(ctx context.Context, id string) {
 		c.mu.Unlock()
 		return
 	}
-	// A timer callback that fired before a re-arm (ResetIdle, destroy-event
+	// A timer callback that fired before a re-arm (hold, destroy-event
 	// restart) still delivers its id; only act once the current deadline has
 	// actually elapsed, otherwise the re-armed timer delivers again later.
 	if state.nextStandbyAt == nil || c.now().UTC().Before(*state.nextStandbyAt) {
@@ -965,6 +956,7 @@ func (c *Controller) clearStateLocked(state *controllerState) {
 	state.idleSince = nil
 	state.lastInboundAt = nil
 	state.nextStandbyAt = nil
+	state.holdUntil = time.Time{}
 	state.standbyRequested = false
 	c.cancelTimerLocked(state)
 	c.cancelReconcileLocked(state)
@@ -977,6 +969,9 @@ func (c *Controller) armTimerLocked(id string, state *controllerState, now time.
 	}
 
 	when := state.idleSince.Add(state.idleTimeout)
+	if state.holdUntil.After(when) {
+		when = state.holdUntil
+	}
 	delay := when.Sub(now)
 	if delay < 0 {
 		delay = 0

@@ -1008,41 +1008,43 @@ func TestRefreshPersistFailureStillArmsIdleTimer(t *testing.T) {
 	controller.mu.RUnlock()
 }
 
-func TestResetIdleExtendsCountdownAndPersistsRuntime(t *testing.T) {
+func TestHoldStandbyExtendsArmedCountdown(t *testing.T) {
 	t.Parallel()
 
 	idleSince := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
 	now := idleSince.Add(50 * time.Second)
 	store := newFakeInstanceStore([]Instance{
-		idleTestInstance("inst-reset", "192.168.100.100", idleSince),
+		idleTestInstance("inst-hold", "192.168.100.100", idleSince),
 	})
 	controller := NewController(store, &fakeConnectionSource{}, ControllerOptions{
 		Now: func() time.Time { return now },
 	})
 
 	require.NoError(t, controller.startupResync(context.Background()))
+	persistedBefore := cloneRuntime(store.persistedRuntime["inst-hold"])
 
-	snapshot, err := controller.ResetIdle(context.Background(), store.instances[0])
+	snapshot, err := controller.HoldStandby(context.Background(), store.instances[0])
 	require.NoError(t, err)
 	assert.Equal(t, StatusIdleCountdown, snapshot.Status)
+	require.NotNil(t, snapshot.HoldUntil)
+	assert.Equal(t, now.Add(time.Minute), *snapshot.HoldUntil)
 	require.NotNil(t, snapshot.NextStandbyAt)
 	assert.Equal(t, now.Add(time.Minute), *snapshot.NextStandbyAt)
 
-	require.NotNil(t, store.persistedRuntime["inst-reset"])
-	require.NotNil(t, store.persistedRuntime["inst-reset"].IdleSince)
-	assert.Equal(t, now, *store.persistedRuntime["inst-reset"].IdleSince)
+	// Holds are in-memory only: the persisted countdown is untouched.
+	assert.Equal(t, persistedBefore, store.persistedRuntime["inst-hold"])
 
-	// A resync must keep the reset countdown, not restore the older one.
+	// A resync must keep the held deadline.
 	require.NoError(t, controller.startupResync(context.Background()))
 	controller.mu.RLock()
-	state := controller.states["inst-reset"]
+	state := controller.states["inst-hold"]
 	require.NotNil(t, state)
 	require.NotNil(t, state.nextStandbyAt)
 	assert.Equal(t, now.Add(time.Minute), *state.nextStandbyAt)
 	controller.mu.RUnlock()
 }
 
-func TestResetIdleCancelsQueuedStandby(t *testing.T) {
+func TestHoldStandbyCancelsQueuedStandby(t *testing.T) {
 	t.Parallel()
 
 	idleSince := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
@@ -1064,9 +1066,8 @@ func TestResetIdleCancelsQueuedStandby(t *testing.T) {
 	require.Equal(t, "inst-first", <-store.standbyStarted)
 	controller.handleStandbyTimer(context.Background(), "inst-queued")
 
-	snapshot, err := controller.ResetIdle(context.Background(), store.instances[1])
+	snapshot, err := controller.HoldStandby(context.Background(), store.instances[1])
 	require.NoError(t, err)
-	assert.Equal(t, StatusIdleCountdown, snapshot.Status)
 	require.NotNil(t, snapshot.NextStandbyAt)
 	assert.Equal(t, now.Add(time.Minute), *snapshot.NextStandbyAt)
 
@@ -1075,7 +1076,7 @@ func TestResetIdleCancelsQueuedStandby(t *testing.T) {
 	assert.Equal(t, []string{"inst-first"}, store.standbyCalls())
 }
 
-func TestResetIdleFailsWhileStandbyExecuting(t *testing.T) {
+func TestHoldStandbyFailsWhileStandbyExecuting(t *testing.T) {
 	t.Parallel()
 
 	idleSince := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
@@ -1093,7 +1094,7 @@ func TestResetIdleFailsWhileStandbyExecuting(t *testing.T) {
 	controller.handleStandbyTimer(context.Background(), "inst-executing")
 	require.Equal(t, "inst-executing", <-store.standbyStarted)
 
-	_, err := controller.ResetIdle(context.Background(), store.instances[0])
+	_, err := controller.HoldStandby(context.Background(), store.instances[0])
 	assert.ErrorIs(t, err, ErrStandbyInProgress)
 
 	close(store.standbyRelease)
@@ -1101,83 +1102,13 @@ func TestResetIdleFailsWhileStandbyExecuting(t *testing.T) {
 	assert.Equal(t, []string{"inst-executing"}, store.standbyCalls())
 }
 
-func TestResetIdleNoopWithActiveInbound(t *testing.T) {
-	t.Parallel()
-
-	now := time.Date(2026, 4, 6, 11, 0, 0, 0, time.UTC)
-	store := newFakeInstanceStore([]Instance{{
-		ID:             "inst-active-reset",
-		Name:           "inst-active-reset",
-		State:          StateRunning,
-		NetworkEnabled: true,
-		IP:             "192.168.100.104",
-		AutoStandby:    &Policy{Enabled: true, IdleTimeout: "1m"},
-	}})
-	source := &fakeConnectionSource{connections: []Connection{{
-		OriginalSourceIP:        mustAddr("1.2.3.4"),
-		OriginalSourcePort:      50010,
-		OriginalDestinationIP:   mustAddr("192.168.100.104"),
-		OriginalDestinationPort: 8080,
-		TCPState:                TCPStateEstablished,
-	}}}
-	controller := NewController(store, source, ControllerOptions{
-		Now: func() time.Time { return now },
-	})
-
-	require.NoError(t, controller.startupResync(context.Background()))
-
-	snapshot, err := controller.ResetIdle(context.Background(), store.instances[0])
-	require.NoError(t, err)
-	assert.Equal(t, StatusActive, snapshot.Status)
-	assert.Nil(t, snapshot.NextStandbyAt)
-}
-
-func TestResetIdleNoopWhenNotTracked(t *testing.T) {
-	t.Parallel()
-
-	store := newFakeInstanceStore([]Instance{{
-		ID:             "inst-disabled-reset",
-		Name:           "inst-disabled-reset",
-		State:          StateRunning,
-		NetworkEnabled: true,
-		IP:             "192.168.100.105",
-		AutoStandby:    &Policy{Enabled: false, IdleTimeout: "1m"},
-	}})
-	controller := NewController(store, &fakeConnectionSource{}, ControllerOptions{})
-
-	require.NoError(t, controller.startupResync(context.Background()))
-
-	snapshot, err := controller.ResetIdle(context.Background(), store.instances[0])
-	require.NoError(t, err)
-	assert.Equal(t, StatusDisabled, snapshot.Status)
-}
-
-func TestResetIdleFailsWhenPersistFails(t *testing.T) {
-	t.Parallel()
-
-	idleSince := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
-	store := newFakeInstanceStore([]Instance{
-		idleTestInstance("inst-reset-persist", "192.168.100.106", idleSince),
-	})
-	controller := NewController(store, &fakeConnectionSource{}, ControllerOptions{
-		Now: func() time.Time { return idleSince.Add(30 * time.Second) },
-	})
-
-	require.NoError(t, controller.startupResync(context.Background()))
-	store.setRuntimeErr = errors.New("metadata write failed")
-
-	_, err := controller.ResetIdle(context.Background(), store.instances[0])
-	require.Error(t, err)
-	assert.NotErrorIs(t, err, ErrStandbyInProgress)
-}
-
-func TestHandleStandbyTimerIgnoresStaleDeliveryAfterReset(t *testing.T) {
+func TestHoldStandbyIgnoresStaleTimerDelivery(t *testing.T) {
 	t.Parallel()
 
 	idleSince := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
 	now := idleSince.Add(time.Minute)
 	store := newFakeInstanceStore([]Instance{
-		idleTestInstance("inst-stale", "192.168.100.107", idleSince),
+		idleTestInstance("inst-stale", "192.168.100.104", idleSince),
 	})
 	controller := NewController(store, &fakeConnectionSource{}, ControllerOptions{
 		Now: func() time.Time { return now },
@@ -1185,14 +1116,13 @@ func TestHandleStandbyTimerIgnoresStaleDeliveryAfterReset(t *testing.T) {
 
 	require.NoError(t, controller.startupResync(context.Background()))
 
-	// The original countdown expires and enqueues a timer delivery; before the
-	// run loop processes it, a reset re-arms the countdown.
-	snapshot, err := controller.ResetIdle(context.Background(), store.instances[0])
+	// The countdown expires and enqueues a timer delivery; before the run
+	// loop processes it, a hold moves the deadline out.
+	snapshot, err := controller.HoldStandby(context.Background(), store.instances[0])
 	require.NoError(t, err)
 	require.NotNil(t, snapshot.NextStandbyAt)
 	require.Equal(t, now.Add(time.Minute), *snapshot.NextStandbyAt)
 
-	// The stale delivery must be ignored: the re-armed deadline is in the future.
 	controller.handleStandbyTimer(context.Background(), "inst-stale")
 	controller.standbyWG.Wait()
 
@@ -1206,31 +1136,74 @@ func TestHandleStandbyTimerIgnoresStaleDeliveryAfterReset(t *testing.T) {
 	controller.mu.RUnlock()
 }
 
-func TestResetIdleSeedsUntrackedEligibleInstance(t *testing.T) {
+func TestHoldStandbySurvivesConnectionChurn(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 6, 11, 0, 0, 0, time.UTC)
+	store := newFakeInstanceStore([]Instance{{
+		ID:             "inst-churn",
+		Name:           "inst-churn",
+		State:          StateRunning,
+		NetworkEnabled: true,
+		IP:             "192.168.100.105",
+		AutoStandby:    &Policy{Enabled: true, IdleTimeout: "1m"},
+	}})
+	conn := Connection{
+		OriginalSourceIP:        mustAddr("1.2.3.4"),
+		OriginalSourcePort:      50010,
+		OriginalDestinationIP:   mustAddr("192.168.100.105"),
+		OriginalDestinationPort: 8080,
+		TCPState:                TCPStateEstablished,
+	}
+	source := &fakeConnectionSource{connections: []Connection{conn}}
+	controller := NewController(store, source, ControllerOptions{
+		Now: func() time.Time { return now },
+	})
+
+	require.NoError(t, controller.startupResync(context.Background()))
+
+	snapshot, err := controller.HoldStandby(context.Background(), store.instances[0])
+	require.NoError(t, err)
+	assert.Equal(t, StatusActive, snapshot.Status)
+	require.NotNil(t, snapshot.HoldUntil)
+	assert.Equal(t, now.Add(time.Minute), *snapshot.HoldUntil)
+
+	// The held connection closing 50s later must arm the timer no earlier
+	// than hold_until.
+	controller.handleConnectionEvent(context.Background(), ConnectionEvent{
+		Type:       ConnectionEventDestroy,
+		Connection: conn,
+		ObservedAt: now.Add(50 * time.Second),
+	})
+
+	controller.mu.RLock()
+	state := controller.states["inst-churn"]
+	require.NotNil(t, state)
+	require.NotNil(t, state.nextStandbyAt)
+	assert.Equal(t, now.Add(50*time.Second).Add(time.Minute), *state.nextStandbyAt)
+	controller.mu.RUnlock()
+}
+
+func TestHoldStandbyOnUntrackedEligibleInstance(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, 4, 6, 11, 30, 0, 0, time.UTC)
 	idleSince := now.Add(-time.Minute)
 	store := newFakeInstanceStore([]Instance{
-		idleTestInstance("inst-unseeded", "192.168.100.108", idleSince),
+		idleTestInstance("inst-unseeded", "192.168.100.106", idleSince),
 	})
 	controller := NewController(store, &fakeConnectionSource{}, ControllerOptions{
 		Now: func() time.Time { return now },
 	})
 
-	// No startup resync: the reset races controller startup, before any state
-	// is seeded from the persisted (already expired) idle_since.
-	snapshot, err := controller.ResetIdle(context.Background(), store.instances[0])
+	// No startup resync: the hold races controller startup.
+	snapshot, err := controller.HoldStandby(context.Background(), store.instances[0])
 	require.NoError(t, err)
-	assert.Equal(t, StatusIdleCountdown, snapshot.Status)
-	require.NotNil(t, snapshot.NextStandbyAt)
-	assert.Equal(t, now.Add(time.Minute), *snapshot.NextStandbyAt)
+	require.NotNil(t, snapshot.HoldUntil)
+	assert.Equal(t, now.Add(time.Minute), *snapshot.HoldUntil)
 
-	require.NotNil(t, store.persistedRuntime["inst-unseeded"])
-	require.NotNil(t, store.persistedRuntime["inst-unseeded"].IdleSince)
-	assert.Equal(t, now, *store.persistedRuntime["inst-unseeded"].IdleSince)
-
-	// The startup resync that follows must keep the reset countdown.
+	// The seeding resync finds an already expired persisted idle_since; the
+	// hold must keep the timer from arming any earlier than hold_until.
 	require.NoError(t, controller.startupResync(context.Background()))
 	controller.mu.RLock()
 	state := controller.states["inst-unseeded"]
@@ -1241,38 +1214,23 @@ func TestResetIdleSeedsUntrackedEligibleInstance(t *testing.T) {
 	controller.mu.RUnlock()
 }
 
-func TestRefreshDoesNotRollBackIdleCountdown(t *testing.T) {
+func TestHoldStandbyNoopWhenPolicyDisabled(t *testing.T) {
 	t.Parallel()
 
-	staleIdleSince := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
-	now := staleIdleSince.Add(time.Minute)
-	store := newFakeInstanceStore([]Instance{
-		idleTestInstance("inst-rollback", "192.168.100.109", staleIdleSince),
-	})
-	controller := NewController(store, &fakeConnectionSource{}, ControllerOptions{
-		Now: func() time.Time { return now },
-	})
+	store := newFakeInstanceStore([]Instance{{
+		ID:             "inst-disabled",
+		Name:           "inst-disabled",
+		State:          StateRunning,
+		NetworkEnabled: true,
+		IP:             "192.168.100.107",
+		AutoStandby:    &Policy{Enabled: false, IdleTimeout: "1m"},
+	}})
+	controller := NewController(store, &fakeConnectionSource{}, ControllerOptions{})
 
 	require.NoError(t, controller.startupResync(context.Background()))
 
-	_, err := controller.ResetIdle(context.Background(), store.instances[0])
+	snapshot, err := controller.HoldStandby(context.Background(), store.instances[0])
 	require.NoError(t, err)
-
-	// An instance snapshot listed before the reset persisted still carries the
-	// stale idle_since; refreshing from it must not shorten the reset window.
-	stale := idleTestInstance("inst-rollback", "192.168.100.109", staleIdleSince)
-	require.NoError(t, controller.handleInstanceEvent(context.Background(), InstanceEvent{
-		Action:     InstanceEventUpdate,
-		InstanceID: "inst-rollback",
-		Instance:   &stale,
-	}))
-
-	controller.mu.RLock()
-	state := controller.states["inst-rollback"]
-	require.NotNil(t, state)
-	require.NotNil(t, state.idleSince)
-	assert.Equal(t, now, *state.idleSince)
-	require.NotNil(t, state.nextStandbyAt)
-	assert.Equal(t, now.Add(time.Minute), *state.nextStandbyAt)
-	controller.mu.RUnlock()
+	assert.Equal(t, StatusDisabled, snapshot.Status)
+	assert.Nil(t, snapshot.HoldUntil)
 }

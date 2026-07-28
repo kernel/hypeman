@@ -10,19 +10,19 @@ import (
 	"github.com/kernel/hypeman/lib/oapi"
 )
 
-func (s *ApiService) ResetAutoStandby(ctx context.Context, request oapi.ResetAutoStandbyRequestObject) (oapi.ResetAutoStandbyResponseObject, error) {
+func (s *ApiService) HoldAutoStandby(ctx context.Context, request oapi.HoldAutoStandbyRequestObject) (oapi.HoldAutoStandbyResponseObject, error) {
 	log := logger.FromContext(ctx)
 
 	inst, err := s.InstanceManager.GetInstance(ctx, request.Id)
 	if err != nil {
 		if err == instances.ErrNotFound || err == instances.ErrAmbiguousName {
-			return oapi.ResetAutoStandby404JSONResponse{
+			return oapi.HoldAutoStandby404JSONResponse{
 				Code:    "not_found",
 				Message: "instance not found",
 			}, nil
 		}
-		log.ErrorContext(ctx, "failed to resolve instance for auto-standby reset", "instance_id", request.Id, "error", err)
-		return oapi.ResetAutoStandby500JSONResponse{
+		log.ErrorContext(ctx, "failed to resolve instance for auto-standby hold", "instance_id", request.Id, "error", err)
+		return oapi.HoldAutoStandby500JSONResponse{
 			Code:    "internal_error",
 			Message: "failed to load instance",
 		}, nil
@@ -39,34 +39,34 @@ func (s *ApiService) ResetAutoStandby(ctx context.Context, request oapi.ResetAut
 			Reason:       autostandby.ReasonUnsupportedPlatform,
 		}
 	} else {
-		snapshot, err = s.AutoStandbyController.ResetIdle(ctx, instanceToAutoStandby(*inst))
+		snapshot, err = s.AutoStandbyController.HoldStandby(ctx, instanceToAutoStandby(*inst))
 		if err != nil {
 			if errors.Is(err, autostandby.ErrStandbyInProgress) {
-				return oapi.ResetAutoStandby409JSONResponse{
+				return oapi.HoldAutoStandby409JSONResponse{
 					Code:    "instance_in_standby",
 					Message: "instance standby is in progress; restore it before connecting",
 				}, nil
 			}
-			log.ErrorContext(ctx, "failed to reset auto-standby idle countdown", "instance_id", inst.Id, "error", err)
-			return oapi.ResetAutoStandby500JSONResponse{
+			log.ErrorContext(ctx, "failed to place auto-standby hold", "instance_id", inst.Id, "error", err)
+			return oapi.HoldAutoStandby500JSONResponse{
 				Code:    "internal_error",
-				Message: "failed to reset auto-standby idle countdown",
+				Message: "failed to place auto-standby hold",
 			}, nil
 		}
 
-		// Re-check after the reset: a standby that completed between loading
-		// the instance and ResetIdle taking the controller lock leaves nothing
-		// to reset, so ResetIdle no-ops with a stale snapshot.
+		// The instance can complete a standby between the load above and the
+		// hold taking effect; re-check so a 200 never describes a standby
+		// instance.
 		inst, err = s.InstanceManager.GetInstance(ctx, request.Id)
 		if err != nil {
 			if err == instances.ErrNotFound || err == instances.ErrAmbiguousName {
-				return oapi.ResetAutoStandby404JSONResponse{
+				return oapi.HoldAutoStandby404JSONResponse{
 					Code:    "not_found",
 					Message: "instance not found",
 				}, nil
 			}
-			log.ErrorContext(ctx, "failed to reload instance after auto-standby reset", "instance_id", request.Id, "error", err)
-			return oapi.ResetAutoStandby500JSONResponse{
+			log.ErrorContext(ctx, "failed to reload instance after auto-standby hold", "instance_id", request.Id, "error", err)
+			return oapi.HoldAutoStandby500JSONResponse{
 				Code:    "internal_error",
 				Message: "failed to load instance",
 			}, nil
@@ -74,11 +74,11 @@ func (s *ApiService) ResetAutoStandby(ctx context.Context, request oapi.ResetAut
 	}
 
 	if inst.State == instances.StateStandby {
-		return oapi.ResetAutoStandby409JSONResponse{
+		return oapi.HoldAutoStandby409JSONResponse{
 			Code:    "instance_in_standby",
 			Message: "instance is in standby; restore it before connecting",
 		}, nil
 	}
 
-	return oapi.ResetAutoStandby200JSONResponse(toOAPIAutoStandbyStatus(snapshot)), nil
+	return oapi.HoldAutoStandby200JSONResponse(toOAPIAutoStandbyStatus(snapshot)), nil
 }

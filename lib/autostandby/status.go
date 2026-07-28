@@ -44,6 +44,7 @@ type StatusSnapshot struct {
 	IdleSince             *time.Time
 	LastInboundActivityAt *time.Time
 	NextStandbyAt         *time.Time
+	HoldUntil             *time.Time
 	CountdownRemaining    *time.Duration
 	TrackingMode          string
 }

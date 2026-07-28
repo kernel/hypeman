@@ -494,6 +494,12 @@ components:
           nullable: true
           description: When the controller expects to attempt standby next, if a countdown is active.
           example: "2026-04-06T17:09:05Z"
+        hold_until:
+          type: string
+          format: date-time
+          nullable: true
+          description: Until when auto-standby is held off, if a hold is active.
+          example: "2026-04-06T17:09:05Z"
         countdown_remaining:
           type: string
           nullable: true
@@ -3352,23 +3358,24 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
-  /instances/{id}/auto-standby/reset:
+  /instances/{id}/auto-standby/hold:
     post:
-      summary: Reset the auto-standby idle countdown
+      summary: Hold off auto-standby
       description: |
-        Atomically resets the instance's auto-standby idle countdown and cancels any
-        queued (not yet executing) auto-standby attempt. On success the instance is
-        guaranteed not to be put into standby by the auto-standby controller before
-        `next_standby_at` in the returned status (now + the policy's idle timeout).
+        Places a hold that prevents the auto-standby controller from putting the
+        instance into standby before `hold_until` in the returned status (now + the
+        policy's idle timeout), and cancels any queued (not yet executing)
+        auto-standby attempt. The idle countdown itself is untouched; holds do not
+        stack — a new hold only ever extends the current one.
 
         Callers use this before opening a connection to a candidate-idle instance:
-        a 200 means it is safe to connect within the returned window; a 409 means the
-        instance is in standby (or irrevocably entering it) and must be restored first.
+        a 200 means it is safe to connect until `hold_until`; a 409 means the
+        instance is in standby (or irrevocably entering it) and must be restored
+        first.
 
-        Instances where auto-standby is disabled, unconfigured, unsupported, or kept
-        awake by active inbound connections return 200 with their current status —
-        there is no countdown to reset and no auto-standby will occur.
-      operationId: resetAutoStandby
+        Instances where auto-standby is disabled, unconfigured, or unsupported
+        return 200 with their current status — no auto-standby will occur.
+      operationId: holdAutoStandby
       security:
         - bearerAuth: []
       parameters:
@@ -3380,7 +3387,7 @@ paths:
           description: Instance ID or name
       responses:
         200:
-          description: Countdown reset (or nothing to reset); safe to connect until next_standby_at
+          description: Hold placed (or nothing to hold); safe to connect until hold_until
           content:
             application/json:
               schema:
