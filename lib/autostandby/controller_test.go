@@ -748,7 +748,7 @@ func TestHandleStandbyTimerKeepsActiveStateWhenConfirmationFails(t *testing.T) {
 	controller.mu.RUnlock()
 }
 
-func TestHandleStandbyTimerStopsTimerArmedDuringConfirmation(t *testing.T) {
+func TestHandleStandbyTimerAbortsWhenTimerRearmedDuringConfirmation(t *testing.T) {
 	t.Parallel()
 
 	idleSince := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
@@ -762,7 +762,7 @@ func TestHandleStandbyTimerStopsTimerArmedDuringConfirmation(t *testing.T) {
 
 	require.NoError(t, controller.startupResync(context.Background()))
 
-	// A standby worker failing mid-confirmation re-arms the idle timer, the same
+	// A standby worker failing mid-confirmation restarts the countdown, the same
 	// way executeStandby's failure path does.
 	var rearmed *time.Timer
 	source.hook = func() {
@@ -777,9 +777,46 @@ func TestHandleStandbyTimerStopsTimerArmedDuringConfirmation(t *testing.T) {
 	controller.handleStandbyTimer(context.Background(), "inst-confirm-rearm")
 	controller.standbyWG.Wait()
 
-	require.Equal(t, []string{"inst-confirm-rearm"}, store.standbyCalls())
+	assert.Empty(t, store.standbyCalls())
 	require.NotNil(t, rearmed)
-	assert.False(t, rearmed.Stop(), "timer armed during confirmation should have been stopped, not orphaned")
+	assert.False(t, rearmed.Stop(), "the timer armed during confirmation should have been replaced, not left running")
+
+	status := controller.Describe(inst)
+	require.NotNil(t, status.NextStandbyAt)
+	assert.Equal(t, now.Add(time.Minute), *status.NextStandbyAt)
+}
+
+func TestHandleStandbyTimerAbortsWhenHoldPlacedDuringConfirmation(t *testing.T) {
+	t.Parallel()
+
+	idleSince := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
+	now := idleSince.Add(time.Minute)
+	inst := idleTestInstance("inst-hold-race", "192.168.100.69", idleSince)
+	store := newFakeInstanceStore([]Instance{inst})
+	source := &hookedConnectionSource{}
+	controller := NewController(store, source, ControllerOptions{
+		Now: func() time.Time { return now },
+	})
+
+	require.NoError(t, controller.startupResync(context.Background()))
+
+	// The hold lands while the confirmation dump is in flight, after the timer
+	// delivery already passed the deadline check.
+	source.hook = func() {
+		_, err := controller.HoldStandby(context.Background(), inst)
+		require.NoError(t, err)
+	}
+
+	controller.handleStandbyTimer(context.Background(), "inst-hold-race")
+	controller.standbyWG.Wait()
+
+	assert.Empty(t, store.standbyCalls())
+
+	status := controller.Describe(inst)
+	require.NotNil(t, status.HoldUntil)
+	assert.Equal(t, now.Add(time.Minute), *status.HoldUntil)
+	require.NotNil(t, status.NextStandbyAt)
+	assert.Equal(t, now.Add(time.Minute), *status.NextStandbyAt)
 }
 
 func TestStreamRestoreResyncsFromConntrackTable(t *testing.T) {

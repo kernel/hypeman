@@ -784,6 +784,20 @@ func (c *Controller) confirmIdleBeforeStandby(ctx context.Context, id string) bo
 	return false
 }
 
+// standbyDeadlineElapsedLocked reports whether the armed standby deadline has
+// actually passed. A timer callback that fired before a re-arm (hold,
+// destroy-event restart) still delivers its id, so re-arm on the way out to
+// replace the spent timer, including when a backward clock step makes a
+// monotonic timer fire early by wall clock.
+func (c *Controller) standbyDeadlineElapsedLocked(id string, state *controllerState) bool {
+	now := c.now().UTC()
+	if state.nextStandbyAt == nil || now.Before(*state.nextStandbyAt) {
+		c.armTimerLocked(id, state, now)
+		return false
+	}
+	return true
+}
+
 // handleStandbyTimer marks the instance as standby-requested and hands the
 // standby call to a bounded worker so the event loop never blocks on snapshot
 // IO. Inbound activity observed while the work is queued clears
@@ -795,13 +809,7 @@ func (c *Controller) handleStandbyTimer(ctx context.Context, id string) {
 		c.mu.Unlock()
 		return
 	}
-	// A timer callback that fired before a re-arm (hold, destroy-event
-	// restart) still delivers its id; only act once the current deadline has
-	// actually elapsed. Re-arm on the way out so the spent timer is always
-	// replaced, including when a backward clock step makes a monotonic timer
-	// fire early by wall clock.
-	if state.nextStandbyAt == nil || c.now().UTC().Before(*state.nextStandbyAt) {
-		c.armTimerLocked(id, state, c.now().UTC())
+	if !c.standbyDeadlineElapsedLocked(id, state) {
 		c.mu.Unlock()
 		return
 	}
@@ -817,8 +825,14 @@ func (c *Controller) handleStandbyTimer(ctx context.Context, id string) {
 		c.mu.Unlock()
 		return
 	}
-	// Cancelled rather than dropped: the confirmation released the lock, so a
-	// failing standby worker may have armed a replacement timer in the meantime.
+	// Checked again because the confirmation released the lock: a hold placed
+	// while it ran pushes the deadline back out.
+	if !c.standbyDeadlineElapsedLocked(id, state) {
+		c.mu.Unlock()
+		return
+	}
+	// Cancelled rather than dropped: a failing standby worker may have armed a
+	// replacement timer during the confirmation.
 	c.cancelTimerLocked(state)
 	state.standbyRequested = true
 	instanceName := state.instance.Name
