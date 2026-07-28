@@ -712,6 +712,13 @@ func (c *Controller) handleStandbyTimer(ctx context.Context, id string) {
 		c.mu.Unlock()
 		return
 	}
+	// A timer callback that fired before a re-arm (ResetIdle, destroy-event
+	// restart) still delivers its id; only act once the current deadline has
+	// actually elapsed, otherwise the re-armed timer delivers again later.
+	if state.nextStandbyAt == nil || c.now().UTC().Before(*state.nextStandbyAt) {
+		c.mu.Unlock()
+		return
+	}
 	state.timer = nil
 	state.nextStandbyAt = nil
 	state.standbyRequested = true

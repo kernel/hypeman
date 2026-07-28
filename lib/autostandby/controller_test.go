@@ -1170,3 +1170,38 @@ func TestResetIdleFailsWhenPersistFails(t *testing.T) {
 	require.Error(t, err)
 	assert.NotErrorIs(t, err, ErrStandbyInProgress)
 }
+
+func TestHandleStandbyTimerIgnoresStaleDeliveryAfterReset(t *testing.T) {
+	t.Parallel()
+
+	idleSince := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
+	now := idleSince.Add(time.Minute)
+	store := newFakeInstanceStore([]Instance{
+		idleTestInstance("inst-stale", "192.168.100.107", idleSince),
+	})
+	controller := NewController(store, &fakeConnectionSource{}, ControllerOptions{
+		Now: func() time.Time { return now },
+	})
+
+	require.NoError(t, controller.startupResync(context.Background()))
+
+	// The original countdown expires and enqueues a timer delivery; before the
+	// run loop processes it, a reset re-arms the countdown.
+	snapshot, err := controller.ResetIdle(context.Background(), store.instances[0])
+	require.NoError(t, err)
+	require.NotNil(t, snapshot.NextStandbyAt)
+	require.Equal(t, now.Add(time.Minute), *snapshot.NextStandbyAt)
+
+	// The stale delivery must be ignored: the re-armed deadline is in the future.
+	controller.handleStandbyTimer(context.Background(), "inst-stale")
+	controller.standbyWG.Wait()
+
+	assert.Empty(t, store.standbyCalls())
+	controller.mu.RLock()
+	state := controller.states["inst-stale"]
+	require.NotNil(t, state)
+	assert.False(t, state.standbyRequested)
+	require.NotNil(t, state.nextStandbyAt)
+	assert.Equal(t, now.Add(time.Minute), *state.nextStandbyAt)
+	controller.mu.RUnlock()
+}
