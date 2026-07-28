@@ -137,7 +137,7 @@ func setupAutoStandbyE2EInstance(t *testing.T, ctx context.Context, name string)
 	return mgr, connSource, inst
 }
 
-func startAutoStandbyE2EController(t *testing.T, ctx context.Context, mgr *manager, connSource *autostandby.ConntrackSource) {
+func startAutoStandbyE2EController(t *testing.T, ctx context.Context, mgr *manager, connSource *autostandby.ConntrackSource) *autostandby.Controller {
 	t.Helper()
 
 	controllerCtx, controllerCancel := context.WithCancel(ctx)
@@ -164,6 +164,7 @@ func startAutoStandbyE2EController(t *testing.T, ctx context.Context, mgr *manag
 			t.Log("timed out waiting for auto-standby controller shutdown")
 		}
 	})
+	return controller
 }
 
 func requireActiveInboundEventually(t *testing.T, ctx context.Context, connSource *autostandby.ConntrackSource, inst *Instance, msg string) {
@@ -318,6 +319,87 @@ func TestAutoStandbyCloudHypervisorHalfOpenInboundTCP(t *testing.T) {
 	}
 	require.NoError(t, conn.Close())
 
+	inst, err = waitForInstanceState(ctx, mgr, instanceID, StateStandby, 45*time.Second)
+	require.NoError(t, err)
+	require.Equal(t, StateStandby, inst.State)
+}
+
+// TestAutoStandbyCloudHypervisorHoldStandby exercises HoldStandby against a
+// live VM: a hold placed mid-countdown must carry the instance past the
+// moment the countdown would have fired, without touching the persisted
+// countdown, and still let the instance reach standby once the hold expires.
+func TestAutoStandbyCloudHypervisorHoldStandby(t *testing.T) {
+	requireAutoStandbyE2EManualRun(t)
+	requireKVMAccess(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	mgr, connSource, inst := setupAutoStandbyE2EInstance(t, ctx, "auto-standby-e2e-hold")
+	instanceID := inst.Id
+
+	controller := startAutoStandbyE2EController(t, ctx, mgr, connSource)
+
+	toAutoStandby := func(inst *Instance) autostandby.Instance {
+		return autostandby.Instance{
+			ID:             inst.Id,
+			Name:           inst.Name,
+			State:          string(inst.State),
+			NetworkEnabled: inst.NetworkEnabled,
+			IP:             inst.IP,
+			AutoStandby:    inst.AutoStandby,
+		}
+	}
+
+	// Wait for the idle countdown to arm.
+	var countdownDeadline time.Time
+	require.Eventually(t, func() bool {
+		current, err := mgr.GetInstance(ctx, instanceID)
+		if err != nil || current.State != StateRunning {
+			return false
+		}
+		snapshot := controller.Describe(toAutoStandby(current))
+		if snapshot.NextStandbyAt == nil {
+			return false
+		}
+		countdownDeadline = *snapshot.NextStandbyAt
+		return true
+	}, 10*time.Second, 100*time.Millisecond, "idle countdown never armed")
+
+	// Hold 1.5s before the countdown deadline so the extension is observable.
+	if wait := time.Until(countdownDeadline.Add(-1500 * time.Millisecond)); wait > 0 {
+		time.Sleep(wait)
+	}
+
+	current, err := mgr.GetInstance(ctx, instanceID)
+	require.NoError(t, err)
+	require.Equal(t, StateRunning, current.State)
+
+	runtimeBefore, err := mgr.GetAutoStandbyRuntime(ctx, instanceID)
+	require.NoError(t, err)
+
+	snapshot, err := controller.HoldStandby(ctx, toAutoStandby(current))
+	require.NoError(t, err)
+	require.Equal(t, autostandby.StatusIdleCountdown, snapshot.Status)
+	require.NotNil(t, snapshot.HoldUntil)
+	require.True(t, snapshot.HoldUntil.After(countdownDeadline),
+		"hold_until %s must be after the countdown deadline %s", snapshot.HoldUntil, countdownDeadline)
+
+	// Holds are in-memory only: the persisted countdown is untouched.
+	runtimeAfter, err := mgr.GetAutoStandbyRuntime(ctx, instanceID)
+	require.NoError(t, err)
+	require.Equal(t, runtimeBefore, runtimeAfter)
+
+	// Just past the countdown deadline the instance must still be running;
+	// without the hold the standby would have fired here.
+	if wait := time.Until(countdownDeadline.Add(500 * time.Millisecond)); wait > 0 {
+		time.Sleep(wait)
+	}
+	current, err = mgr.GetInstance(ctx, instanceID)
+	require.NoError(t, err)
+	require.Equal(t, StateRunning, current.State, "instance must survive the countdown deadline while held")
+
+	// The hold only delays standby; it must still complete once expired.
 	inst, err = waitForInstanceState(ctx, mgr, instanceID, StateStandby, 45*time.Second)
 	require.NoError(t, err)
 	require.Equal(t, StateStandby, inst.State)
