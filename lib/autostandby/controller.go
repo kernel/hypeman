@@ -426,7 +426,26 @@ func (c *Controller) ResetIdle(ctx context.Context, inst Instance) (StatusSnapsh
 		c.mu.Unlock()
 		return StatusSnapshot{}, ErrStandbyInProgress
 	}
-	if state == nil || state.compiledPolicy == nil || len(state.activeInbound) > 0 {
+	if state == nil || state.compiledPolicy == nil {
+		// An eligible instance the controller has not seeded yet (e.g. a reset
+		// racing controller startup) must still get a real countdown: a later
+		// resync would otherwise seed it from a persisted idle_since that may
+		// already be expired, standbying it inside the promised window.
+		if !eligible(inst) {
+			c.mu.Unlock()
+			return c.Describe(inst), nil
+		}
+		compiled, err := compilePolicy(inst.AutoStandby)
+		if err != nil {
+			c.mu.Unlock()
+			return StatusSnapshot{}, err
+		}
+		state = c.ensureStateLocked(inst.ID)
+		state.instance = cloneInstance(inst)
+		state.compiledPolicy = compiled
+		state.idleTimeout = compiled.idleTimeout
+	}
+	if len(state.activeInbound) > 0 {
 		c.mu.Unlock()
 		return c.Describe(inst), nil
 	}
@@ -582,7 +601,12 @@ func (c *Controller) refreshInstanceLocked(ctx context.Context, inst Instance, c
 	}
 
 	if runtime != nil && runtime.IdleSince != nil {
-		state.idleSince = cloneTimePtr(runtime.IdleSince)
+		// Instance snapshots are listed outside the controller lock, so the
+		// persisted idle_since can predate a reset that already moved the
+		// in-memory countdown; never roll the countdown backwards.
+		if state.idleSince == nil || runtime.IdleSince.After(*state.idleSince) {
+			state.idleSince = cloneTimePtr(runtime.IdleSince)
+		}
 		state.lastInboundAt = cloneTimePtr(runtime.LastInboundActivityAt)
 	} else {
 		state.idleSince = &now

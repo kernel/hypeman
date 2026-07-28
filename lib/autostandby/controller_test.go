@@ -1205,3 +1205,74 @@ func TestHandleStandbyTimerIgnoresStaleDeliveryAfterReset(t *testing.T) {
 	assert.Equal(t, now.Add(time.Minute), *state.nextStandbyAt)
 	controller.mu.RUnlock()
 }
+
+func TestResetIdleSeedsUntrackedEligibleInstance(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 6, 11, 30, 0, 0, time.UTC)
+	idleSince := now.Add(-time.Minute)
+	store := newFakeInstanceStore([]Instance{
+		idleTestInstance("inst-unseeded", "192.168.100.108", idleSince),
+	})
+	controller := NewController(store, &fakeConnectionSource{}, ControllerOptions{
+		Now: func() time.Time { return now },
+	})
+
+	// No startup resync: the reset races controller startup, before any state
+	// is seeded from the persisted (already expired) idle_since.
+	snapshot, err := controller.ResetIdle(context.Background(), store.instances[0])
+	require.NoError(t, err)
+	assert.Equal(t, StatusIdleCountdown, snapshot.Status)
+	require.NotNil(t, snapshot.NextStandbyAt)
+	assert.Equal(t, now.Add(time.Minute), *snapshot.NextStandbyAt)
+
+	require.NotNil(t, store.persistedRuntime["inst-unseeded"])
+	require.NotNil(t, store.persistedRuntime["inst-unseeded"].IdleSince)
+	assert.Equal(t, now, *store.persistedRuntime["inst-unseeded"].IdleSince)
+
+	// The startup resync that follows must keep the reset countdown.
+	require.NoError(t, controller.startupResync(context.Background()))
+	controller.mu.RLock()
+	state := controller.states["inst-unseeded"]
+	require.NotNil(t, state)
+	require.NotNil(t, state.compiledPolicy)
+	require.NotNil(t, state.nextStandbyAt)
+	assert.Equal(t, now.Add(time.Minute), *state.nextStandbyAt)
+	controller.mu.RUnlock()
+}
+
+func TestRefreshDoesNotRollBackIdleCountdown(t *testing.T) {
+	t.Parallel()
+
+	staleIdleSince := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
+	now := staleIdleSince.Add(time.Minute)
+	store := newFakeInstanceStore([]Instance{
+		idleTestInstance("inst-rollback", "192.168.100.109", staleIdleSince),
+	})
+	controller := NewController(store, &fakeConnectionSource{}, ControllerOptions{
+		Now: func() time.Time { return now },
+	})
+
+	require.NoError(t, controller.startupResync(context.Background()))
+
+	_, err := controller.ResetIdle(context.Background(), store.instances[0])
+	require.NoError(t, err)
+
+	// An instance snapshot listed before the reset persisted still carries the
+	// stale idle_since; refreshing from it must not shorten the reset window.
+	stale := idleTestInstance("inst-rollback", "192.168.100.109", staleIdleSince)
+	require.NoError(t, controller.handleInstanceEvent(context.Background(), InstanceEvent{
+		Action:     InstanceEventUpdate,
+		InstanceID: "inst-rollback",
+		Instance:   &stale,
+	}))
+
+	controller.mu.RLock()
+	state := controller.states["inst-rollback"]
+	require.NotNil(t, state)
+	require.NotNil(t, state.idleSince)
+	assert.Equal(t, now, *state.idleSince)
+	require.NotNil(t, state.nextStandbyAt)
+	assert.Equal(t, now.Add(time.Minute), *state.nextStandbyAt)
+	controller.mu.RUnlock()
+}
