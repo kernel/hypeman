@@ -739,8 +739,9 @@ func (c *Controller) handleStandbyTimer(ctx context.Context, id string) {
 		c.mu.Unlock()
 		return
 	}
-	state.timer = nil
-	state.nextStandbyAt = nil
+	// Cancelled rather than dropped: the confirmation released the lock, so a
+	// failing standby worker may have armed a replacement timer in the meantime.
+	c.cancelTimerLocked(state)
 	state.standbyRequested = true
 	instanceName := state.instance.Name
 	c.mu.Unlock()

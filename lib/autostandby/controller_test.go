@@ -748,6 +748,40 @@ func TestHandleStandbyTimerKeepsActiveStateWhenConfirmationFails(t *testing.T) {
 	controller.mu.RUnlock()
 }
 
+func TestHandleStandbyTimerStopsTimerArmedDuringConfirmation(t *testing.T) {
+	t.Parallel()
+
+	idleSince := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
+	now := idleSince.Add(time.Minute)
+	inst := idleTestInstance("inst-confirm-rearm", "192.168.100.68", idleSince)
+	store := newFakeInstanceStore([]Instance{inst})
+	source := &hookedConnectionSource{}
+	controller := NewController(store, source, ControllerOptions{
+		Now: func() time.Time { return now },
+	})
+
+	require.NoError(t, controller.startupResync(context.Background()))
+
+	// A standby worker failing mid-confirmation re-arms the idle timer, the same
+	// way executeStandby's failure path does.
+	var rearmed *time.Timer
+	source.hook = func() {
+		controller.mu.Lock()
+		defer controller.mu.Unlock()
+		state := controller.states["inst-confirm-rearm"]
+		state.idleSince = &now
+		controller.armTimerLocked("inst-confirm-rearm", state, now)
+		rearmed = state.timer
+	}
+
+	controller.handleStandbyTimer(context.Background(), "inst-confirm-rearm")
+	controller.standbyWG.Wait()
+
+	require.Equal(t, []string{"inst-confirm-rearm"}, store.standbyCalls())
+	require.NotNil(t, rearmed)
+	assert.False(t, rearmed.Stop(), "timer armed during confirmation should have been stopped, not orphaned")
+}
+
 func TestStreamRestoreResyncsFromConntrackTable(t *testing.T) {
 	t.Parallel()
 
@@ -832,6 +866,26 @@ func TestStreamRestoreKeepsObserverConnectedWhenResyncFails(t *testing.T) {
 
 func mustAddr(raw string) netip.Addr {
 	return netip.MustParseAddr(raw)
+}
+
+// hookedConnectionSource runs a callback inside ListConnections so a test can
+// mutate controller state while a conntrack dump is in flight.
+type hookedConnectionSource struct {
+	hook func()
+}
+
+func (s *hookedConnectionSource) ListConnections(context.Context) ([]Connection, error) {
+	if s.hook != nil {
+		s.hook()
+	}
+	return nil, nil
+}
+
+func (s *hookedConnectionSource) OpenStream(context.Context) (ConnectionStream, error) {
+	return &fakeConnectionStream{
+		events: make(chan ConnectionEvent),
+		errs:   make(chan error),
+	}, nil
 }
 
 // restoreConnectionSource hands out the streams it creates so a test can fail
