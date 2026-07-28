@@ -244,6 +244,12 @@ func (c *Controller) Run(ctx context.Context) error {
 			stream = replacement
 			c.setObserverConnected(true)
 			log.Info("auto-standby conntrack subscription restored")
+			// Events published during the outage are gone, so reseed from the
+			// conntrack table instead of waiting for the next snapshot sync.
+			if err := c.startupResync(ctx); err != nil {
+				c.recordControllerError("startup_resync")
+				log.Warn("auto-standby resync after subscription restore failed", "error", err)
+			}
 		case err := <-streamErrors:
 			if err == nil {
 				continue
@@ -661,12 +667,44 @@ func (c *Controller) handleConnectionEvent(ctx context.Context, event Connection
 // IO. Inbound activity observed while the work is queued clears
 // standbyRequested and cancels the attempt.
 func (c *Controller) handleStandbyTimer(ctx context.Context, id string) {
+	// activeInbound is built from the conntrack event stream, so a dropped NEW
+	// event leaves it empty while the guest still holds a live connection. The
+	// table is authoritative, so confirm against it before taking the VM away.
+	conns, listErr := c.source.ListConnections(ctx)
+
 	c.mu.Lock()
 	state := c.states[id]
 	if state == nil || state.compiledPolicy == nil || len(state.activeInbound) > 0 || state.standbyRequested || state.standbyExecuting {
 		c.mu.Unlock()
 		return
 	}
+
+	var activeSet map[ConnectionKey]struct{}
+	err := listErr
+	if err == nil {
+		activeSet, err = matchingConnections(state.instance, state.compiledPolicy, conns)
+	}
+	if err != nil {
+		// An unconfirmed instance is treated as busy: restart the countdown
+		// rather than risk standby while a connection is open.
+		idleSince := c.now().UTC()
+		state.idleSince = &idleSince
+		c.armTimerLocked(id, state, idleSince)
+		c.mu.Unlock()
+		c.recordControllerError("standby_confirm")
+		c.log.Warn("auto-standby could not confirm idle before standby", "instance_id", id, "error", err)
+		return
+	}
+	if len(activeSet) > 0 {
+		state.activeInbound = activeSet
+		state.idleSince = nil
+		c.cancelTimerLocked(state)
+		c.armReconcileLocked(id, state)
+		c.mu.Unlock()
+		c.log.Info("auto-standby skipped standby, conntrack still reports inbound connections", "instance_id", id, "active_inbound_connections", len(activeSet))
+		return
+	}
+
 	state.timer = nil
 	state.nextStandbyAt = nil
 	state.standbyRequested = true

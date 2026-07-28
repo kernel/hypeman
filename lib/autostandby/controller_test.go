@@ -628,8 +628,152 @@ func TestHandleStandbyTimerFailureRearmsIdleCountdown(t *testing.T) {
 	controller.mu.RUnlock()
 }
 
+func TestHandleStandbyTimerSkipsStandbyWhenConntrackReportsConnection(t *testing.T) {
+	t.Parallel()
+
+	idleSince := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
+	inst := idleTestInstance("inst-missed-event", "192.168.100.63", idleSince)
+	store := newFakeInstanceStore([]Instance{inst})
+	source := &fakeConnectionSource{}
+	controller := NewController(store, source, ControllerOptions{
+		Now: func() time.Time { return idleSince.Add(time.Minute) },
+	})
+
+	require.NoError(t, controller.startupResync(context.Background()))
+
+	// The NEW event for this connection never reached the controller, so only
+	// the conntrack table knows the instance is busy.
+	source.connections = []Connection{{
+		OriginalSourceIP:        mustAddr("1.2.3.4"),
+		OriginalSourcePort:      50100,
+		OriginalDestinationIP:   mustAddr("192.168.100.63"),
+		OriginalDestinationPort: 8080,
+		TCPState:                TCPStateEstablished,
+	}}
+
+	controller.handleStandbyTimer(context.Background(), "inst-missed-event")
+	controller.standbyWG.Wait()
+
+	assert.Empty(t, store.standbyCalls())
+
+	controller.mu.RLock()
+	state := controller.states["inst-missed-event"]
+	require.NotNil(t, state)
+	assert.Len(t, state.activeInbound, 1)
+	assert.Nil(t, state.idleSince)
+	assert.Nil(t, state.timer)
+	assert.NotNil(t, state.reconcileTimer)
+	assert.False(t, state.standbyRequested)
+	controller.mu.RUnlock()
+}
+
+func TestHandleStandbyTimerRearmsCountdownWhenConfirmationFails(t *testing.T) {
+	t.Parallel()
+
+	idleSince := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
+	now := idleSince.Add(time.Minute)
+	inst := idleTestInstance("inst-confirm-fail", "192.168.100.64", idleSince)
+	store := newFakeInstanceStore([]Instance{inst})
+	source := &fakeConnectionSource{}
+	controller := NewController(store, source, ControllerOptions{
+		Now: func() time.Time { return now },
+	})
+
+	require.NoError(t, controller.startupResync(context.Background()))
+
+	source.listErr = errors.New("conntrack dump failed")
+
+	controller.handleStandbyTimer(context.Background(), "inst-confirm-fail")
+	controller.standbyWG.Wait()
+
+	assert.Empty(t, store.standbyCalls())
+
+	controller.mu.RLock()
+	state := controller.states["inst-confirm-fail"]
+	require.NotNil(t, state)
+	assert.False(t, state.standbyRequested)
+	require.NotNil(t, state.idleSince)
+	assert.Equal(t, now, *state.idleSince)
+	require.NotNil(t, state.nextStandbyAt)
+	assert.Equal(t, now.Add(time.Minute), *state.nextStandbyAt)
+	controller.mu.RUnlock()
+}
+
+func TestStreamRestoreResyncsFromConntrackTable(t *testing.T) {
+	t.Parallel()
+
+	inst := Instance{
+		ID:             "inst-restore",
+		Name:           "inst-restore",
+		State:          StateRunning,
+		NetworkEnabled: true,
+		IP:             "192.168.100.65",
+		AutoStandby:    &Policy{Enabled: true, IdleTimeout: "1m"},
+	}
+	store := newFakeInstanceStore([]Instance{inst})
+	source := &restoreConnectionSource{streams: make(chan *fakeConnectionStream, 4)}
+	controller := NewController(store, source, ControllerOptions{
+		ReconnectDelay: time.Millisecond,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- controller.Run(ctx) }()
+
+	stream := <-source.streams
+	require.Equal(t, StatusIdleCountdown, controller.Describe(inst).Status)
+
+	// The connection opens while the subscription is down, so its NEW event is
+	// never delivered.
+	source.setConnections([]Connection{{
+		OriginalSourceIP:        mustAddr("1.2.3.4"),
+		OriginalSourcePort:      50200,
+		OriginalDestinationIP:   mustAddr("192.168.100.65"),
+		OriginalDestinationPort: 8080,
+		TCPState:                TCPStateEstablished,
+	}})
+	stream.errs <- errors.New("recv conntrack events: no buffer space available")
+
+	require.Eventually(t, func() bool {
+		return controller.Describe(inst).Status == StatusActive
+	}, time.Second, 5*time.Millisecond)
+
+	cancel()
+	require.NoError(t, <-done)
+}
+
 func mustAddr(raw string) netip.Addr {
 	return netip.MustParseAddr(raw)
+}
+
+// restoreConnectionSource hands out the streams it creates so a test can fail
+// one, and serializes connection access for controllers running in Run mode.
+type restoreConnectionSource struct {
+	mu          sync.Mutex
+	connections []Connection
+	streams     chan *fakeConnectionStream
+}
+
+func (s *restoreConnectionSource) ListConnections(context.Context) ([]Connection, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]Connection(nil), s.connections...), nil
+}
+
+func (s *restoreConnectionSource) setConnections(conns []Connection) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.connections = conns
+}
+
+func (s *restoreConnectionSource) OpenStream(context.Context) (ConnectionStream, error) {
+	stream := &fakeConnectionStream{
+		events: make(chan ConnectionEvent),
+		errs:   make(chan error, 1),
+	}
+	s.streams <- stream
+	return stream, nil
 }
 
 func idleTestInstance(id, ip string, idleSince time.Time) Instance {
