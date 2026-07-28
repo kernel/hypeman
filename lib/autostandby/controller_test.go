@@ -86,16 +86,31 @@ func (f *fakeInstanceStore) SubscribeInstanceEvents() (<-chan InstanceEvent, fun
 }
 
 type fakeConnectionSource struct {
+	mu          sync.Mutex
 	connections []Connection
 	listErr     error
 	openErr     error
 }
 
 func (f *fakeConnectionSource) ListConnections(context.Context) ([]Connection, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.listErr != nil {
 		return nil, f.listErr
 	}
 	return append([]Connection(nil), f.connections...), nil
+}
+
+func (f *fakeConnectionSource) setConnections(conns ...Connection) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.connections = append([]Connection(nil), conns...)
+}
+
+func (f *fakeConnectionSource) setListErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.listErr = err
 }
 
 func (f *fakeConnectionSource) OpenStream(context.Context) (ConnectionStream, error) {
@@ -1006,4 +1021,95 @@ func TestRefreshPersistFailureStillArmsIdleTimer(t *testing.T) {
 	assert.NotNil(t, state.nextStandbyAt)
 	assert.NotNil(t, state.idleSince)
 	controller.mu.RUnlock()
+}
+
+// The tracked connection view is event-driven, and the reconcile that re-reads
+// the host table is cancelled once it drains, so a missed or misread conntrack
+// event leaves it empty while the client is still attached. Standby has to
+// confirm against the host table rather than trust that view.
+func TestStandbySkippedWhenConntrackStillShowsLiveInboundConnection(t *testing.T) {
+	t.Parallel()
+
+	idleSince := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
+	store := newFakeInstanceStore([]Instance{
+		idleTestInstance("inst-stale", "192.168.100.120", idleSince),
+	})
+	source := &fakeConnectionSource{}
+	controller := NewController(store, source, ControllerOptions{
+		Now: func() time.Time { return idleSince.Add(time.Minute) },
+	})
+
+	require.NoError(t, controller.startupResync(context.Background()))
+
+	controller.mu.RLock()
+	require.Empty(t, controller.states["inst-stale"].activeInbound)
+	controller.mu.RUnlock()
+
+	source.setConnections(Connection{
+		OriginalSourceIP:        mustAddr("1.2.3.4"),
+		OriginalSourcePort:      50010,
+		OriginalDestinationIP:   mustAddr("192.168.100.120"),
+		OriginalDestinationPort: 8080,
+		TCPState:                TCPStateEstablished,
+	})
+
+	controller.handleStandbyTimer(context.Background(), "inst-stale")
+	controller.standbyWG.Wait()
+
+	assert.Empty(t, store.standbyCalls(), "a guest with a live inbound flow must not be suspended")
+	controller.mu.RLock()
+	defer controller.mu.RUnlock()
+	state := controller.states["inst-stale"]
+	require.NotNil(t, state)
+	assert.Len(t, state.activeInbound, 1)
+	assert.False(t, state.standbyRequested)
+	assert.Nil(t, state.idleSince)
+}
+
+func TestStandbyDeferredWhenConnectionListUnavailable(t *testing.T) {
+	t.Parallel()
+
+	idleSince := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
+	store := newFakeInstanceStore([]Instance{
+		idleTestInstance("inst-unreadable", "192.168.100.121", idleSince),
+	})
+	source := &fakeConnectionSource{}
+	controller := NewController(store, source, ControllerOptions{
+		Now: func() time.Time { return idleSince.Add(time.Minute) },
+	})
+
+	require.NoError(t, controller.startupResync(context.Background()))
+	source.setListErr(errors.New("conntrack permission denied"))
+
+	controller.handleStandbyTimer(context.Background(), "inst-unreadable")
+	controller.standbyWG.Wait()
+
+	assert.Empty(t, store.standbyCalls(), "suspending blind is what strands connections")
+	controller.mu.RLock()
+	defer controller.mu.RUnlock()
+	state := controller.states["inst-unreadable"]
+	require.NotNil(t, state)
+	assert.False(t, state.standbyRequested)
+	// Re-armed rather than dropped, so the next cycle retries.
+	assert.NotNil(t, state.idleSince)
+	assert.NotNil(t, state.timer)
+}
+
+func TestStandbyProceedsWhenHostTableAgreesInstanceIsIdle(t *testing.T) {
+	t.Parallel()
+
+	idleSince := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
+	store := newFakeInstanceStore([]Instance{
+		idleTestInstance("inst-quiet", "192.168.100.122", idleSince),
+	})
+	controller := NewController(store, &fakeConnectionSource{}, ControllerOptions{
+		Now: func() time.Time { return idleSince.Add(time.Minute) },
+	})
+
+	require.NoError(t, controller.startupResync(context.Background()))
+
+	controller.handleStandbyTimer(context.Background(), "inst-quiet")
+	controller.standbyWG.Wait()
+
+	assert.Equal(t, []string{"inst-quiet"}, store.standbyCalls())
 }

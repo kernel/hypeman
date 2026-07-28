@@ -728,6 +728,54 @@ func (c *Controller) executeStandby(ctx context.Context, id string, instanceName
 		c.mu.Unlock()
 	}()
 
+	// activeInbound is built from conntrack events, and armReconcileLocked stops
+	// re-reading the host table once it drains, so nothing has compared that view
+	// against reality since the countdown started. Confirm before pausing:
+	// suspending a guest that still has a live inbound flow strands that flow,
+	// because wake-on-traffic does not exist.
+	conns, err := c.source.ListConnections(ctx)
+	if err != nil {
+		// A host table we cannot read is a transient failure, and suspending
+		// blind is what strands connections. Re-arm and try again next cycle.
+		recordSpanError(span, err)
+		c.recordStandbyAttempt("preflight_error")
+		c.recordControllerError("standby_preflight")
+		c.log.Warn("auto-standby could not read inbound connections before standby, deferring", "instance_id", id, "instance_name", instanceName, "error", err)
+
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if state := c.states[id]; state != nil {
+			state.standbyRequested = false
+			idleSince := c.now().UTC()
+			state.idleSince = &idleSince
+			c.armTimerLocked(id, state, idleSince)
+		}
+		return
+	}
+
+	live, err := c.matchingInboundConnections(id, conns)
+	if err != nil {
+		// Classification depends on the instance record, not on host state, so
+		// retrying cannot help and blocking standby forever would leak the VM.
+		c.recordControllerError("standby_preflight")
+		c.log.Warn("auto-standby could not classify inbound connections before standby", "instance_id", id, "instance_name", instanceName, "error", err)
+	}
+	if len(live) > 0 {
+		c.recordStandbyAttempt("aborted_inbound_active")
+		c.log.Info("auto-standby aborted, inbound connection live at standby time", "instance_id", id, "instance_name", instanceName, "active_inbound_connections", len(live))
+
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if state := c.states[id]; state != nil {
+			state.activeInbound = live
+			state.idleSince = nil
+			state.standbyRequested = false
+			c.cancelTimerLocked(state)
+			c.armReconcileLocked(id, state)
+		}
+		return
+	}
+
 	if err := c.store.StandbyInstance(ctx, id); err != nil {
 		recordSpanError(span, err)
 		c.recordStandbyAttempt("error")
@@ -775,6 +823,22 @@ func (c *Controller) executeStandby(ctx context.Context, id string, instanceName
 			c.log.Warn("auto-standby failed to clear runtime after standby", "instance_id", id, "error", err)
 		}
 	}
+}
+
+// matchingInboundConnections returns the flows from conns that match the
+// instance's policy.
+func (c *Controller) matchingInboundConnections(id string, conns []Connection) (map[ConnectionKey]struct{}, error) {
+	c.mu.Lock()
+	state := c.states[id]
+	if state == nil || state.compiledPolicy == nil {
+		c.mu.Unlock()
+		return nil, nil
+	}
+	inst := cloneInstance(state.instance)
+	policy := state.compiledPolicy
+	c.mu.Unlock()
+
+	return matchingConnections(inst, policy, conns)
 }
 
 func (c *Controller) handleActiveReconcile(ctx context.Context, id string) {
