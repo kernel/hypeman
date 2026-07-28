@@ -82,6 +82,10 @@ func BuildArgs(cfg hypervisor.VMConfig) []string {
 		args = append(args, "-device", fmt.Sprintf("vhost-vsock-pci,guest-cid=%d", cfg.VsockCID))
 	}
 
+	if cfg.VGPUDevicePath != "" {
+		args = append(args, "-device", fmt.Sprintf("vfio-pci,sysfsdev=%s", cfg.VGPUDevicePath))
+	}
+
 	// PCI device passthrough (GPU, mdev vGPU, etc.)
 	for _, devicePath := range cfg.PCIDevices {
 		var deviceArg string

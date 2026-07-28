@@ -122,6 +122,26 @@ func TestBuildArgs_Vsock(t *testing.T) {
 	assert.Contains(t, args, "vhost-vsock-pci,guest-cid=123")
 }
 
+func TestBuildArgs_VGPU(t *testing.T) {
+	t.Parallel()
+
+	for _, path := range []string{
+		"/sys/bus/mdev/devices/aa618089-8b16-4d01-a136-25a0f3c73123",
+		"/sys/bus/pci/devices/0000:82:00.4",
+	} {
+		path := path
+		t.Run(path, func(t *testing.T) {
+			t.Parallel()
+			args := BuildArgs(hypervisor.VMConfig{
+				VCPUs:          1,
+				MemoryBytes:    512 * 1024 * 1024,
+				VGPUDevicePath: path,
+			})
+			assert.Contains(t, args, "vfio-pci,sysfsdev="+path)
+		})
+	}
+}
+
 func TestBuildArgs_PCIPassthrough(t *testing.T) {
 	cfg := hypervisor.VMConfig{
 		VCPUs:       1,

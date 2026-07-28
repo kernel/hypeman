@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/autostandby"
+	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/healthcheck"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/instances/phasetracking"
@@ -148,8 +149,10 @@ type StoredMetadata struct {
 	Devices []string // Device IDs attached to this instance
 
 	// GPU configuration (vGPU mode)
-	GPUProfile  string // vGPU profile name (e.g., "L40S-1Q")
-	GPUMdevUUID string // mdev device UUID
+	GPUProfile    string // vGPU profile name (e.g., "L40S-1Q")
+	GPUFramework  devices.VGPUFramework
+	GPUDevicePath string
+	GPUMdevUUID   string // populated for mdev-backed vGPUs
 
 	// Command overrides (like docker run <image> <command>)
 	Entrypoint []string // Override image entrypoint (nil = use image default)
