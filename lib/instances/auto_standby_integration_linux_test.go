@@ -137,7 +137,7 @@ func setupAutoStandbyE2EInstance(t *testing.T, ctx context.Context, name string)
 	return mgr, connSource, inst
 }
 
-func startAutoStandbyE2EController(t *testing.T, ctx context.Context, mgr *manager, connSource *autostandby.ConntrackSource) {
+func startAutoStandbyE2EController(t *testing.T, ctx context.Context, mgr *manager, connSource *autostandby.ConntrackSource) *autostandby.Controller {
 	t.Helper()
 
 	controllerCtx, controllerCancel := context.WithCancel(ctx)
@@ -164,6 +164,7 @@ func startAutoStandbyE2EController(t *testing.T, ctx context.Context, mgr *manag
 			t.Log("timed out waiting for auto-standby controller shutdown")
 		}
 	})
+	return controller
 }
 
 func requireActiveInboundEventually(t *testing.T, ctx context.Context, connSource *autostandby.ConntrackSource, inst *Instance, msg string) {
@@ -318,6 +319,88 @@ func TestAutoStandbyCloudHypervisorHalfOpenInboundTCP(t *testing.T) {
 	}
 	require.NoError(t, conn.Close())
 
+	inst, err = waitForInstanceState(ctx, mgr, instanceID, StateStandby, 45*time.Second)
+	require.NoError(t, err)
+	require.Equal(t, StateStandby, inst.State)
+}
+
+// TestAutoStandbyCloudHypervisorResetIdle exercises ResetIdle against a live
+// VM: a reset issued mid-countdown must push the standby deadline past the
+// original one (the instance survives the moment the original countdown would
+// have fired), persist the new idle_since, and still let the instance reach
+// standby once the reset window elapses.
+func TestAutoStandbyCloudHypervisorResetIdle(t *testing.T) {
+	requireAutoStandbyE2EManualRun(t)
+	requireKVMAccess(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	mgr, connSource, inst := setupAutoStandbyE2EInstance(t, ctx, "auto-standby-e2e-reset")
+	instanceID := inst.Id
+
+	controller := startAutoStandbyE2EController(t, ctx, mgr, connSource)
+
+	toAutoStandby := func(inst *Instance) autostandby.Instance {
+		return autostandby.Instance{
+			ID:             inst.Id,
+			Name:           inst.Name,
+			State:          string(inst.State),
+			NetworkEnabled: inst.NetworkEnabled,
+			IP:             inst.IP,
+			AutoStandby:    inst.AutoStandby,
+		}
+	}
+
+	// Wait for the idle countdown to arm.
+	var originalDeadline time.Time
+	require.Eventually(t, func() bool {
+		current, err := mgr.GetInstance(ctx, instanceID)
+		if err != nil || current.State != StateRunning {
+			return false
+		}
+		snapshot := controller.Describe(toAutoStandby(current))
+		if snapshot.NextStandbyAt == nil {
+			return false
+		}
+		originalDeadline = *snapshot.NextStandbyAt
+		return true
+	}, 10*time.Second, 100*time.Millisecond, "idle countdown never armed")
+
+	// Reset 1.5s before the original deadline so the extension is observable.
+	if wait := time.Until(originalDeadline.Add(-1500 * time.Millisecond)); wait > 0 {
+		time.Sleep(wait)
+	}
+
+	current, err := mgr.GetInstance(ctx, instanceID)
+	require.NoError(t, err)
+	require.Equal(t, StateRunning, current.State)
+
+	resetAt := time.Now()
+	snapshot, err := controller.ResetIdle(ctx, toAutoStandby(current))
+	require.NoError(t, err)
+	require.Equal(t, autostandby.StatusIdleCountdown, snapshot.Status)
+	require.NotNil(t, snapshot.NextStandbyAt)
+	require.True(t, snapshot.NextStandbyAt.After(originalDeadline),
+		"reset deadline %s must be after the original %s", snapshot.NextStandbyAt, originalDeadline)
+
+	runtime, err := mgr.GetAutoStandbyRuntime(ctx, instanceID)
+	require.NoError(t, err)
+	require.NotNil(t, runtime)
+	require.NotNil(t, runtime.IdleSince)
+	require.WithinDuration(t, resetAt, *runtime.IdleSince, time.Second,
+		"reset must persist the new idle_since")
+
+	// Just past the original deadline the instance must still be running;
+	// without the reset the standby would have fired here.
+	if wait := time.Until(originalDeadline.Add(500 * time.Millisecond)); wait > 0 {
+		time.Sleep(wait)
+	}
+	current, err = mgr.GetInstance(ctx, instanceID)
+	require.NoError(t, err)
+	require.Equal(t, StateRunning, current.State, "instance must survive the original standby deadline after a reset")
+
+	// The reset only delays standby; the countdown must still complete.
 	inst, err = waitForInstanceState(ctx, mgr, instanceID, StateStandby, 45*time.Second)
 	require.NoError(t, err)
 	require.Equal(t, StateStandby, inst.State)
