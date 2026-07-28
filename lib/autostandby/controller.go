@@ -242,7 +242,6 @@ func (c *Controller) Run(ctx context.Context) error {
 				_ = stream.Close()
 			}
 			stream = replacement
-			c.setObserverConnected(true)
 			log.Info("auto-standby conntrack subscription restored")
 			// Events published during the outage are gone, so reseed from the
 			// conntrack table instead of waiting for the next snapshot sync.
@@ -250,6 +249,10 @@ func (c *Controller) Run(ctx context.Context) error {
 				c.recordControllerError("startup_resync")
 				log.Warn("auto-standby resync after subscription restore failed", "error", err)
 			}
+			// Marked connected after the reseed: a failed conntrack dump inside
+			// it reports an observer error, which would leave the restored
+			// subscription looking dead until the next reconnect.
+			c.setObserverConnected(true)
 		case err := <-streamErrors:
 			if err == nil {
 				continue
@@ -662,21 +665,21 @@ func (c *Controller) handleConnectionEvent(ctx context.Context, event Connection
 	}
 }
 
-// handleStandbyTimer marks the instance as standby-requested and hands the
-// standby call to a bounded worker so the event loop never blocks on snapshot
-// IO. Inbound activity observed while the work is queued clears
-// standbyRequested and cancels the attempt.
-func (c *Controller) handleStandbyTimer(ctx context.Context, id string) {
-	// activeInbound is built from the conntrack event stream, so a dropped NEW
-	// event leaves it empty while the guest still holds a live connection. The
-	// table is authoritative, so confirm against it before taking the VM away.
+// confirmIdleBeforeStandby re-reads the conntrack table and reports whether the
+// instance is still idle. activeInbound is built from the event stream, so a
+// dropped NEW event leaves it empty while the guest holds a live connection; the
+// table is authoritative. When the instance turns out to be busy the reconcile
+// loop takes the state back over, and when the table cannot be read the instance
+// is treated as busy so an unconfirmed guest is never taken away.
+func (c *Controller) confirmIdleBeforeStandby(ctx context.Context, id string) bool {
 	conns, listErr := c.source.ListConnections(ctx)
 
 	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	state := c.states[id]
-	if state == nil || state.compiledPolicy == nil || len(state.activeInbound) > 0 || state.standbyRequested || state.standbyExecuting {
-		c.mu.Unlock()
-		return
+	if state == nil || state.compiledPolicy == nil {
+		return false
 	}
 
 	var activeSet map[ConnectionKey]struct{}
@@ -685,26 +688,55 @@ func (c *Controller) handleStandbyTimer(ctx context.Context, id string) {
 		activeSet, err = matchingConnections(state.instance, state.compiledPolicy, conns)
 	}
 	if err != nil {
-		// An unconfirmed instance is treated as busy: restart the countdown
-		// rather than risk standby while a connection is open.
 		idleSince := c.now().UTC()
 		state.idleSince = &idleSince
 		c.armTimerLocked(id, state, idleSince)
-		c.mu.Unlock()
+		if persistErr := c.persistRuntime(ctx, id, &Runtime{
+			IdleSince:             cloneTimePtr(state.idleSince),
+			LastInboundActivityAt: cloneTimePtr(state.lastInboundAt),
+		}); persistErr != nil {
+			c.recordControllerError("persist_runtime")
+			c.log.Warn("auto-standby failed to persist runtime after unconfirmed standby", "instance_id", id, "error", persistErr)
+		}
 		c.recordControllerError("standby_confirm")
 		c.log.Warn("auto-standby could not confirm idle before standby", "instance_id", id, "error", err)
-		return
+		return false
 	}
-	if len(activeSet) > 0 {
-		state.activeInbound = activeSet
-		state.idleSince = nil
-		c.cancelTimerLocked(state)
-		c.armReconcileLocked(id, state)
-		c.mu.Unlock()
-		c.log.Info("auto-standby skipped standby, conntrack still reports inbound connections", "instance_id", id, "active_inbound_connections", len(activeSet))
+	if len(activeSet) == 0 {
+		return true
+	}
+
+	now := c.now().UTC()
+	state.activeInbound = activeSet
+	state.idleSince = nil
+	state.lastInboundAt = &now
+	c.cancelTimerLocked(state)
+	c.armReconcileLocked(id, state)
+	if err := c.persistRuntime(ctx, id, &Runtime{
+		LastInboundActivityAt: cloneTimePtr(state.lastInboundAt),
+	}); err != nil {
+		c.recordControllerError("persist_runtime")
+		c.log.Warn("auto-standby failed to persist runtime after standby confirmation found connections", "instance_id", id, "error", err)
+	}
+	c.log.Info("auto-standby skipped standby, conntrack still reports inbound connections", "instance_id", id, "active_inbound_connections", len(activeSet))
+	return false
+}
+
+// handleStandbyTimer marks the instance as standby-requested and hands the
+// standby call to a bounded worker so the event loop never blocks on snapshot
+// IO. Inbound activity observed while the work is queued clears
+// standbyRequested and cancels the attempt.
+func (c *Controller) handleStandbyTimer(ctx context.Context, id string) {
+	if !c.confirmIdleBeforeStandby(ctx, id) {
 		return
 	}
 
+	c.mu.Lock()
+	state := c.states[id]
+	if state == nil || state.compiledPolicy == nil || len(state.activeInbound) > 0 || state.standbyRequested || state.standbyExecuting {
+		c.mu.Unlock()
+		return
+	}
 	state.timer = nil
 	state.nextStandbyAt = nil
 	state.standbyRequested = true

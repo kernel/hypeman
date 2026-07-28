@@ -655,6 +655,8 @@ func TestHandleStandbyTimerSkipsStandbyWhenConntrackReportsConnection(t *testing
 	controller.standbyWG.Wait()
 
 	assert.Empty(t, store.standbyCalls())
+	require.NotNil(t, store.persistedRuntime["inst-missed-event"])
+	assert.Nil(t, store.persistedRuntime["inst-missed-event"].IdleSince)
 
 	controller.mu.RLock()
 	state := controller.states["inst-missed-event"]
@@ -687,6 +689,9 @@ func TestHandleStandbyTimerRearmsCountdownWhenConfirmationFails(t *testing.T) {
 	controller.standbyWG.Wait()
 
 	assert.Empty(t, store.standbyCalls())
+	require.NotNil(t, store.persistedRuntime["inst-confirm-fail"])
+	require.NotNil(t, store.persistedRuntime["inst-confirm-fail"].IdleSince)
+	assert.Equal(t, now, *store.persistedRuntime["inst-confirm-fail"].IdleSince)
 
 	controller.mu.RLock()
 	state := controller.states["inst-confirm-fail"]
@@ -743,6 +748,44 @@ func TestStreamRestoreResyncsFromConntrackTable(t *testing.T) {
 	require.NoError(t, <-done)
 }
 
+func TestStreamRestoreKeepsObserverConnectedWhenResyncFails(t *testing.T) {
+	t.Parallel()
+
+	inst := Instance{
+		ID:             "inst-restore-degraded",
+		Name:           "inst-restore-degraded",
+		State:          StateRunning,
+		NetworkEnabled: true,
+		IP:             "192.168.100.66",
+		AutoStandby:    &Policy{Enabled: true, IdleTimeout: "1m"},
+	}
+	store := newFakeInstanceStore([]Instance{inst})
+	source := &restoreConnectionSource{streams: make(chan *fakeConnectionStream, 4)}
+	controller := NewController(store, source, ControllerOptions{
+		ReconnectDelay: time.Millisecond,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- controller.Run(ctx) }()
+
+	stream := <-source.streams
+	listsBeforeRestore := source.listCalls()
+
+	source.setListErr(errors.New("conntrack dump failed"))
+	stream.errs <- errors.New("recv conntrack events: no buffer space available")
+
+	// The reseed after the restore fails, but the subscription itself is live,
+	// so the instance must not be left reporting an observer error.
+	require.Eventually(t, func() bool {
+		return source.listCalls() > listsBeforeRestore && controller.Describe(inst).Status != StatusError
+	}, time.Second, 5*time.Millisecond)
+
+	cancel()
+	require.NoError(t, <-done)
+}
+
 func mustAddr(raw string) netip.Addr {
 	return netip.MustParseAddr(raw)
 }
@@ -752,12 +795,18 @@ func mustAddr(raw string) netip.Addr {
 type restoreConnectionSource struct {
 	mu          sync.Mutex
 	connections []Connection
+	listErr     error
+	lists       int
 	streams     chan *fakeConnectionStream
 }
 
 func (s *restoreConnectionSource) ListConnections(context.Context) ([]Connection, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.lists++
+	if s.listErr != nil {
+		return nil, s.listErr
+	}
 	return append([]Connection(nil), s.connections...), nil
 }
 
@@ -765,6 +814,18 @@ func (s *restoreConnectionSource) setConnections(conns []Connection) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.connections = conns
+}
+
+func (s *restoreConnectionSource) setListErr(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.listErr = err
+}
+
+func (s *restoreConnectionSource) listCalls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lists
 }
 
 func (s *restoreConnectionSource) OpenStream(context.Context) (ConnectionStream, error) {
