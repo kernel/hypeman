@@ -36,6 +36,9 @@ const (
 //       config.json
 //       memory-ranges
 
+// instanceMetadataRelPath is metadata.json relative to an instance directory.
+const instanceMetadataRelPath = "metadata.json"
+
 // metadata wraps StoredMetadata for JSON serialization
 type metadata struct {
 	StoredMetadata
