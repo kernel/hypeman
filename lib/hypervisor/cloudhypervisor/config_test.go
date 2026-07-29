@@ -8,6 +8,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestToVMConfig_VGPU(t *testing.T) {
+	t.Parallel()
+
+	path := "/sys/bus/mdev/devices/aa618089-8b16-4d01-a136-25a0f3c73123"
+	vmCfg := ToVMConfig(hypervisor.VMConfig{VGPUDevicePath: path})
+
+	require.NotNil(t, vmCfg.Devices)
+	require.Len(t, *vmCfg.Devices, 1)
+	assert.Equal(t, path, (*vmCfg.Devices)[0].Path)
+}
+
 func TestToVMConfig_GuestMemoryBalloon(t *testing.T) {
 	cfg := hypervisor.VMConfig{
 		VCPUs:       1,
