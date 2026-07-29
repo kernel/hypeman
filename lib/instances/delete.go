@@ -7,7 +7,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/guest"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
@@ -172,10 +171,9 @@ func (m *manager) deleteInstanceWithOptions(
 	}
 
 	// 7c. Release the vGPU assignment if present.
-	if path := storedVGPUDevicePath(stored); path != "" {
-		if err := devices.DestroyVGPU(ctx, stored.GPUFramework, path, stored.GPUMdevUUID); err != nil {
-			log.WarnContext(ctx, "failed to destroy vGPU, continuing with cleanup", "instance_id", id, "error", err)
-		}
+	if err := releaseStoredVGPU(ctx, stored); err != nil {
+		log.ErrorContext(ctx, "failed to destroy vGPU; retaining instance metadata", "instance_id", id, "error", err)
+		return fmt.Errorf("destroy vGPU: %w", err)
 	}
 
 	// 8. Delete all instance data
