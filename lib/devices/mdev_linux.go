@@ -89,10 +89,10 @@ func getCachedProfiles(firstVF string) []profileMetadata {
 	return cachedProfiles
 }
 
-// discoverMdevVFs returns all SR-IOV Virtual Functions available for mdev vGPU.
+// DiscoverVFs returns all SR-IOV Virtual Functions available for vGPU.
 // These are discovered by scanning /sys/class/mdev_bus/ which contains
 // VFs that can host mdev devices.
-func discoverMdevVFs() ([]VirtualFunction, error) {
+func DiscoverVFs() ([]VirtualFunction, error) {
 	entries, err := os.ReadDir(mdevBusPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -136,7 +136,18 @@ func discoverMdevVFs() ([]VirtualFunction, error) {
 
 // ListGPUProfiles returns available vGPU profiles with availability counts.
 // Profiles are discovered from the first VF's mdev_supported_types directory.
-func listMdevGPUProfilesWithVFs(vfs []VirtualFunction) ([]GPUProfile, error) {
+func ListGPUProfiles() ([]GPUProfile, error) {
+	vfs, err := DiscoverVFs()
+	if err != nil {
+		return nil, err
+	}
+	return ListGPUProfilesWithVFs(vfs)
+}
+
+// ListGPUProfilesWithVFs returns available vGPU profiles using pre-discovered VFs.
+// This avoids redundant VF discovery when the caller already has the list.
+// Uses parallel sysfs reads for fast availability counting.
+func ListGPUProfilesWithVFs(vfs []VirtualFunction) ([]GPUProfile, error) {
 	if len(vfs) == 0 {
 		return nil, nil
 	}
@@ -243,7 +254,7 @@ func countAvailableVFsForProfilesParallel(vfs []VirtualFunction, profiles []prof
 	// Group free VFs by parent GPU (done once, shared by all goroutines)
 	freeVFsByParent := make(map[string][]VirtualFunction)
 	for _, vf := range vfs {
-		if vf.IsAllocated() {
+		if vf.HasMdev {
 			continue
 		}
 		freeVFsByParent[vf.ParentGPU] = append(freeVFsByParent[vf.ParentGPU], vf)
@@ -295,7 +306,7 @@ func countAvailableForSingleProfile(freeVFsByParent map[string][]VirtualFunction
 
 // findProfileType finds the internal type name (e.g., "nvidia-556") for a profile name (e.g., "L40S-1Q")
 func findProfileType(profileName string) (string, error) {
-	vfs, err := discoverMdevVFs()
+	vfs, err := DiscoverVFs()
 	if err != nil || len(vfs) == 0 {
 		return "", fmt.Errorf("no VFs available")
 	}
@@ -443,7 +454,7 @@ func selectLeastLoadedVF(ctx context.Context, vfs []VirtualFunction, profileType
 	allGPUs := make(map[string]bool)
 	for _, vf := range vfs {
 		allGPUs[vf.ParentGPU] = true
-		if !vf.IsAllocated() {
+		if !vf.HasMdev {
 			freeVFsByGPU[vf.ParentGPU] = append(freeVFsByGPU[vf.ParentGPU], vf)
 		}
 	}
@@ -521,7 +532,7 @@ func CreateMdev(ctx context.Context, profileName, instanceID string) (*MdevDevic
 	}
 
 	// Discover all VFs
-	vfs, err := discoverMdevVFs()
+	vfs, err := DiscoverVFs()
 	if err != nil {
 		return nil, fmt.Errorf("discover VFs: %w", err)
 	}
@@ -687,7 +698,7 @@ func ReconcileMdevs(ctx context.Context, instanceInfos []MdevReconcileInfo) erro
 	log := logger.FromContext(ctx)
 	_ = instanceInfos
 
-	vfs, err := discoverMdevVFs()
+	vfs, err := DiscoverVFs()
 	if err != nil {
 		return fmt.Errorf("discover managed VFs: %w", err)
 	}
