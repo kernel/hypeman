@@ -7,24 +7,18 @@ import (
 	"github.com/kernel/hypeman/lib/autostandby"
 	"github.com/kernel/hypeman/lib/instances"
 	"github.com/kernel/hypeman/lib/logger"
+	mw "github.com/kernel/hypeman/lib/middleware"
 	"github.com/kernel/hypeman/lib/oapi"
 )
 
 func (s *ApiService) HoldAutoStandby(ctx context.Context, request oapi.HoldAutoStandbyRequestObject) (oapi.HoldAutoStandbyResponseObject, error) {
 	log := logger.FromContext(ctx)
 
-	inst, err := s.InstanceManager.GetInstance(ctx, request.Id)
-	if err != nil {
-		if err == instances.ErrNotFound || err == instances.ErrAmbiguousName {
-			return oapi.HoldAutoStandby404JSONResponse{
-				Code:    "not_found",
-				Message: "instance not found",
-			}, nil
-		}
-		log.ErrorContext(ctx, "failed to resolve instance for auto-standby hold", "instance_id", request.Id, "error", err)
+	inst := mw.GetResolvedInstance[instances.Instance](ctx)
+	if inst == nil {
 		return oapi.HoldAutoStandby500JSONResponse{
 			Code:    "internal_error",
-			Message: "failed to load instance",
+			Message: "resource not resolved",
 		}, nil
 	}
 
@@ -39,6 +33,7 @@ func (s *ApiService) HoldAutoStandby(ctx context.Context, request oapi.HoldAutoS
 			Reason:       autostandby.ReasonUnsupportedPlatform,
 		}
 	} else {
+		var err error
 		snapshot, err = s.AutoStandbyController.HoldStandby(ctx, instanceToAutoStandby(*inst))
 		if err != nil {
 			if errors.Is(err, autostandby.ErrStandbyInProgress) {
@@ -54,10 +49,10 @@ func (s *ApiService) HoldAutoStandby(ctx context.Context, request oapi.HoldAutoS
 			}, nil
 		}
 
-		// The instance can complete a standby between the load above and the
-		// hold taking effect; re-check so a 200 never describes a standby
-		// instance.
-		inst, err = s.InstanceManager.GetInstance(ctx, request.Id)
+		// The instance can complete a standby between resolution and the hold
+		// taking effect; re-check so a 200 never describes a standby instance.
+		// Reloading by resolved ID skips the name/prefix resolution path.
+		inst, err = s.InstanceManager.GetInstance(ctx, inst.Id)
 		if err != nil {
 			if err == instances.ErrNotFound || err == instances.ErrAmbiguousName {
 				return oapi.HoldAutoStandby404JSONResponse{
