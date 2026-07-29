@@ -102,10 +102,9 @@ func (m *manager) createInstance(
 	if req.GPU != nil && req.GPU.Profile != "" && !devices.Capabilities().SupportsVGPU {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, devices.ErrVGPUNotSupportedOnMacOS)
 	}
-	hvType, err := resolveCreateHypervisor(req, m.defaultHypervisor)
-	if err != nil {
-		log.ErrorContext(ctx, "invalid create request", "error", err)
-		return nil, err
+	hvType := req.Hypervisor
+	if hvType == "" {
+		hvType = m.defaultHypervisor
 	}
 	starter, starterErr := m.getVMStarter(hvType)
 	if starterErr == nil {
