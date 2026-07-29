@@ -88,10 +88,9 @@ func (m *manager) createInstance(
 		log.ErrorContext(ctx, "invalid create request", "error", err)
 		return nil, err
 	}
-	hvType, err := resolveCreateHypervisor(req, m.defaultHypervisor)
-	if err != nil {
-		log.ErrorContext(ctx, "invalid create request", "error", err)
-		return nil, err
+	hvType := req.Hypervisor
+	if hvType == "" {
+		hvType = m.defaultHypervisor
 	}
 
 	// 2. Validate image exists and is ready; auto-pull if not found
