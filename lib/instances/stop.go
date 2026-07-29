@@ -9,7 +9,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/guest"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/instances/phasetracking"
@@ -264,10 +263,8 @@ func (m *manager) stopInstance(
 	}
 
 	// 7. Release the vGPU assignment if present.
-	if path := storedVGPUDevicePath(stored); path != "" {
-		if err := devices.DestroyVGPU(ctx, stored.GPUFramework, path, stored.GPUMdevUUID); err != nil {
-			log.WarnContext(ctx, "failed to destroy vGPU on stop", "instance_id", id, "error", err)
-		}
+	if err := releaseStoredVGPU(ctx, stored); err != nil {
+		log.WarnContext(ctx, "failed to destroy vGPU on stop; retaining assignment metadata", "instance_id", id, "error", err)
 	}
 
 	// 8. Always remove stale runtime sockets after process exit.
@@ -300,7 +297,6 @@ func (m *manager) stopInstance(
 	now := time.Now().UTC()
 	stored.StoppedAt = &now
 	stored.HypervisorPID = nil
-	clearStoredVGPUDevice(stored)
 	// Boot markers are per-boot-run and must not carry across stop/restore/start.
 	stored.ProgramStartedAt = nil
 	stored.GuestAgentReadyAt = nil
