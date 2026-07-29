@@ -56,6 +56,9 @@ func IsMdevInUse(mdevUUID string) bool {
 }
 
 func DestroyVGPU(ctx context.Context, framework VGPUFramework, devicePath, mdevUUID string) error {
+	if framework != VGPUFrameworkNone && framework != VGPUFrameworkMdev {
+		return fmt.Errorf("unknown vGPU framework %q", framework)
+	}
 	return nil
 }
 
