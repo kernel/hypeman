@@ -1,6 +1,7 @@
 package instances
 
 import (
+	"context"
 	"testing"
 
 	"github.com/kernel/hypeman/lib/devices"
@@ -18,6 +19,19 @@ func TestStoredVGPUDevicePath(t *testing.T) {
 		GPUMdevUUID: "legacy-uuid",
 	}))
 	assert.Empty(t, storedVGPUDevicePath(&StoredMetadata{}))
+}
+
+func TestReleaseStoredVGPURetainsMetadataOnFailure(t *testing.T) {
+	t.Parallel()
+
+	stored := &StoredMetadata{
+		GPUFramework:  devices.VGPUFramework("future-framework"),
+		GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.4",
+	}
+	err := releaseStoredVGPU(context.Background(), stored)
+	assert.Error(t, err)
+	assert.Equal(t, devices.VGPUFramework("future-framework"), stored.GPUFramework)
+	assert.Equal(t, "/sys/bus/pci/devices/0000:82:00.4", stored.GPUDevicePath)
 }
 
 func TestSetAndClearStoredVGPUDevice(t *testing.T) {
