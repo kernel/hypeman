@@ -362,9 +362,11 @@ func run() error {
 		return fmt.Errorf("reconcile device state: %w", err)
 	}
 
-	logger.Info("Reconciling vGPU devices...")
-	if err := devices.ReconcileVGPUs(app.Ctx); err != nil {
-		logger.Warn("failed to reconcile vGPU devices", "error", err)
+	// Reconcile mdev devices (clears orphaned vGPUs from previous runs)
+	logger.Info("Reconciling mdev devices...")
+	if err := devices.ReconcileMdevs(app.Ctx, nil); err != nil {
+		// Log but don't fail - mdev cleanup is best-effort
+		logger.Warn("failed to reconcile mdev devices", "error", err)
 	}
 
 	// Wire up resource validator for aggregate limit checking
