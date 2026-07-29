@@ -99,9 +99,10 @@ func (m *manager) createInstance(
 	if req.GPU != nil && req.GPU.Profile != "" && !devices.Capabilities().SupportsVGPU {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, devices.ErrVGPUNotSupportedOnMacOS)
 	}
-	hvType := req.Hypervisor
-	if hvType == "" {
-		hvType = m.defaultHypervisor
+	hvType, err := resolveCreateHypervisor(req, m.defaultHypervisor)
+	if err != nil {
+		log.ErrorContext(ctx, "invalid create request", "error", err)
+		return nil, err
 	}
 
 	// 2. Validate image exists and is ready; auto-pull if not found
