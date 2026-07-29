@@ -8,22 +8,6 @@ import (
 	"path/filepath"
 )
 
-func DiscoverVFs() ([]VirtualFunction, error) {
-	return discoverMdevVFs()
-}
-
-func ListGPUProfiles() ([]GPUProfile, error) {
-	vfs, err := DiscoverVFs()
-	if err != nil {
-		return nil, err
-	}
-	return ListGPUProfilesWithVFs(vfs)
-}
-
-func ListGPUProfilesWithVFs(vfs []VirtualFunction) ([]GPUProfile, error) {
-	return listMdevGPUProfilesWithVFs(vfs)
-}
-
 func CreateVGPU(ctx context.Context, profileName, instanceID string) (*VGPUDevice, error) {
 	mdev, err := CreateMdev(ctx, profileName, instanceID)
 	if err != nil {
@@ -50,8 +34,4 @@ func DestroyVGPU(ctx context.Context, framework VGPUFramework, devicePath, mdevU
 		mdevUUID = filepath.Base(devicePath)
 	}
 	return DestroyMdev(ctx, mdevUUID)
-}
-
-func ReconcileVGPUs(ctx context.Context) error {
-	return ReconcileMdevs(ctx, nil)
 }
