@@ -247,8 +247,17 @@ func (c *Controller) Run(ctx context.Context) error {
 				_ = stream.Close()
 			}
 			stream = replacement
-			c.setObserverConnected(true)
 			log.Info("auto-standby conntrack subscription restored")
+			// Events published during the outage are gone, so reseed from the
+			// conntrack table instead of waiting for the next snapshot sync.
+			if err := c.startupResync(ctx); err != nil {
+				c.recordControllerError("startup_resync")
+				log.Warn("auto-standby resync after subscription restore failed", "error", err)
+			}
+			// Marked connected after the reseed: a failed conntrack dump inside
+			// it reports an observer error, which would leave the restored
+			// subscription looking dead until the next reconnect.
+			c.setObserverConnected(true)
 		case err := <-streamErrors:
 			if err == nil {
 				continue
@@ -716,6 +725,79 @@ func (c *Controller) handleConnectionEvent(ctx context.Context, event Connection
 	}
 }
 
+// confirmIdleBeforeStandby re-reads the conntrack table and reports whether the
+// instance is still idle. activeInbound is built from the event stream, so a
+// dropped NEW event leaves it empty while the guest holds a live connection; the
+// table is authoritative. When the instance turns out to be busy the reconcile
+// loop takes the state back over, and when the table cannot be read the instance
+// is treated as busy so an unconfirmed guest is never taken away.
+func (c *Controller) confirmIdleBeforeStandby(ctx context.Context, id string) bool {
+	conns, listErr := c.source.ListConnections(ctx)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	state := c.states[id]
+	// Activity can land between the timer firing and this check, and it already
+	// owns idleSince and the reconcile loop; the paths below must not clobber it.
+	if state == nil || state.compiledPolicy == nil || len(state.activeInbound) > 0 {
+		return false
+	}
+
+	var activeSet map[ConnectionKey]struct{}
+	err := listErr
+	if err == nil {
+		activeSet, err = matchingConnections(state.instance, state.compiledPolicy, conns)
+	}
+	if err != nil {
+		idleSince := c.now().UTC()
+		state.idleSince = &idleSince
+		c.armTimerLocked(id, state, idleSince)
+		if persistErr := c.persistRuntime(ctx, id, &Runtime{
+			IdleSince:             cloneTimePtr(state.idleSince),
+			LastInboundActivityAt: cloneTimePtr(state.lastInboundAt),
+		}); persistErr != nil {
+			c.recordControllerError("persist_runtime")
+			c.log.Warn("auto-standby failed to persist runtime after unconfirmed standby", "instance_id", id, "error", persistErr)
+		}
+		c.recordControllerError("standby_confirm")
+		c.log.Warn("auto-standby could not confirm idle before standby", "instance_id", id, "error", err)
+		return false
+	}
+	if len(activeSet) == 0 {
+		return true
+	}
+
+	now := c.now().UTC()
+	state.activeInbound = activeSet
+	state.idleSince = nil
+	state.lastInboundAt = &now
+	c.cancelTimerLocked(state)
+	c.armReconcileLocked(id, state)
+	if err := c.persistRuntime(ctx, id, &Runtime{
+		LastInboundActivityAt: cloneTimePtr(state.lastInboundAt),
+	}); err != nil {
+		c.recordControllerError("persist_runtime")
+		c.log.Warn("auto-standby failed to persist runtime after standby confirmation found connections", "instance_id", id, "error", err)
+	}
+	c.log.Info("auto-standby skipped standby, conntrack still reports inbound connections", "instance_id", id, "active_inbound_connections", len(activeSet))
+	return false
+}
+
+// standbyDeadlineElapsedLocked reports whether the armed standby deadline has
+// actually passed. A timer callback that fired before a re-arm (hold,
+// destroy-event restart) still delivers its id, so re-arm on the way out to
+// replace the spent timer, including when a backward clock step makes a
+// monotonic timer fire early by wall clock.
+func (c *Controller) standbyDeadlineElapsedLocked(id string, state *controllerState) bool {
+	now := c.now().UTC()
+	if state.nextStandbyAt == nil || now.Before(*state.nextStandbyAt) {
+		c.armTimerLocked(id, state, now)
+		return false
+	}
+	return true
+}
+
 // handleStandbyTimer marks the instance as standby-requested and hands the
 // standby call to a bounded worker so the event loop never blocks on snapshot
 // IO. Inbound activity observed while the work is queued clears
@@ -727,18 +809,31 @@ func (c *Controller) handleStandbyTimer(ctx context.Context, id string) {
 		c.mu.Unlock()
 		return
 	}
-	// A timer callback that fired before a re-arm (hold, destroy-event
-	// restart) still delivers its id; only act once the current deadline has
-	// actually elapsed. Re-arm on the way out so the spent timer is always
-	// replaced, including when a backward clock step makes a monotonic timer
-	// fire early by wall clock.
-	if state.nextStandbyAt == nil || c.now().UTC().Before(*state.nextStandbyAt) {
-		c.armTimerLocked(id, state, c.now().UTC())
+	if !c.standbyDeadlineElapsedLocked(id, state) {
 		c.mu.Unlock()
 		return
 	}
-	state.timer = nil
-	state.nextStandbyAt = nil
+	c.mu.Unlock()
+
+	if !c.confirmIdleBeforeStandby(ctx, id) {
+		return
+	}
+
+	c.mu.Lock()
+	state = c.states[id]
+	if state == nil || state.compiledPolicy == nil || len(state.activeInbound) > 0 || state.standbyRequested || state.standbyExecuting {
+		c.mu.Unlock()
+		return
+	}
+	// Checked again because the confirmation released the lock: a hold placed
+	// while it ran pushes the deadline back out.
+	if !c.standbyDeadlineElapsedLocked(id, state) {
+		c.mu.Unlock()
+		return
+	}
+	// Cancelled rather than dropped: a failing standby worker may have armed a
+	// replacement timer during the confirmation.
+	c.cancelTimerLocked(state)
 	state.standbyRequested = true
 	instanceName := state.instance.Name
 	c.mu.Unlock()
