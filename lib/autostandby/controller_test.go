@@ -1384,6 +1384,51 @@ func TestHoldStandbyExtendsArmedCountdown(t *testing.T) {
 	controller.mu.RUnlock()
 }
 
+func TestHoldStandbyReplacesLongerHold(t *testing.T) {
+	t.Parallel()
+
+	idleSince := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
+	longPolicy := Instance{
+		ID:             "inst-reset-hold",
+		Name:           "inst-reset-hold",
+		State:          StateRunning,
+		NetworkEnabled: true,
+		IP:             "192.168.100.110",
+		AutoStandby:    &Policy{Enabled: true, IdleTimeout: "10m"},
+		Runtime:        &Runtime{IdleSince: &idleSince},
+	}
+	store := newFakeInstanceStore([]Instance{longPolicy})
+	now := idleSince
+	controller := NewController(store, &fakeConnectionSource{}, ControllerOptions{
+		Now: func() time.Time { return now },
+	})
+
+	require.NoError(t, controller.startupResync(context.Background()))
+
+	snapshot, err := controller.HoldStandby(context.Background(), longPolicy)
+	require.NoError(t, err)
+	require.NotNil(t, snapshot.HoldUntil)
+	assert.Equal(t, idleSince.Add(10*time.Minute), *snapshot.HoldUntil)
+
+	// Shortening the idle timeout a minute later, then holding again, must move
+	// hold_until in rather than leaving the ten minute deadline pinned.
+	now = idleSince.Add(time.Minute)
+	shortPolicy := longPolicy
+	shortPolicy.AutoStandby = &Policy{Enabled: true, IdleTimeout: "1m"}
+	require.NoError(t, controller.handleInstanceEvent(context.Background(), InstanceEvent{
+		Action:     InstanceEventUpdate,
+		InstanceID: shortPolicy.ID,
+		Instance:   &shortPolicy,
+	}))
+
+	snapshot, err = controller.HoldStandby(context.Background(), shortPolicy)
+	require.NoError(t, err)
+	require.NotNil(t, snapshot.HoldUntil)
+	assert.Equal(t, now.Add(time.Minute), *snapshot.HoldUntil)
+	require.NotNil(t, snapshot.NextStandbyAt)
+	assert.Equal(t, now.Add(time.Minute), *snapshot.NextStandbyAt)
+}
+
 func TestHoldStandbyCancelsQueuedStandby(t *testing.T) {
 	t.Parallel()
 

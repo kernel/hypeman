@@ -428,9 +428,10 @@ func (c *Controller) Describe(inst Instance) StatusSnapshot {
 
 // HoldStandby guarantees the controller will not put the instance into
 // standby before now + the policy idle timeout, and cancels any queued
-// standby attempt. The idle countdown itself is untouched; a hold only ever
-// extends the current one. It fails with ErrStandbyInProgress once a standby
-// operation is executing, and is a no-op for instances that cannot
+// standby attempt. The idle countdown itself is untouched. Each hold replaces
+// the instance's previous one, so a hold placed under a shorter idle timeout
+// moves an earlier, longer deadline in. It fails with ErrStandbyInProgress once
+// a standby operation is executing, and is a no-op for instances that cannot
 // auto-standby at all (unconfigured, disabled, or ineligible).
 func (c *Controller) HoldStandby(_ context.Context, inst Instance) (StatusSnapshot, error) {
 	now := c.now().UTC()
@@ -462,10 +463,12 @@ func (c *Controller) HoldStandby(_ context.Context, inst Instance) (StatusSnapsh
 		return c.Describe(inst), nil
 	}
 
+	// The newest hold wins. A caller holding under a shorter idle timeout is
+	// asking for a shorter deadline, and there is no release endpoint, so
+	// keeping the earlier longer one would pin the instance awake until it
+	// lapsed on its own.
 	holdUntil := now.Add(idleTimeout)
-	if holdUntil.After(state.holdUntil) {
-		state.holdUntil = holdUntil
-	}
+	state.holdUntil = holdUntil
 	state.standbyRequested = false
 	if state.compiledPolicy != nil {
 		c.armTimerLocked(inst.ID, state, now)
