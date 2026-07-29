@@ -295,9 +295,14 @@ func (s vendorVFIOSysfs) vfioDeviceInUse(vfAddress string) (bool, error) {
 		}
 		return false, err
 	}
-	devicePaths := make(map[string]struct{}, len(vfioDevices))
+	devicePaths := make(map[string]struct{}, len(vfioDevices)+1)
 	for _, device := range vfioDevices {
 		devicePaths[filepath.Join(s.vfioDevicesPath, device.Name())] = struct{}{}
+	}
+	// QEMU holds the legacy /dev/vfio/<group> node unless iommufd is
+	// configured, so check the VF's iommu group alongside the iommufd cdevs.
+	if target, err := os.Readlink(filepath.Join(s.pciDevicesPath, vfAddress, "iommu_group")); err == nil {
+		devicePaths[filepath.Join(filepath.Dir(s.vfioDevicesPath), filepath.Base(target))] = struct{}{}
 	}
 
 	processes, err := os.ReadDir(s.procPath)

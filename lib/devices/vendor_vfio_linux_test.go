@@ -84,6 +84,23 @@ func TestVendorVFIOReconcile(t *testing.T) {
 	assertFileValue(t, filepath.Join(sysfs.pciDevicesPath, "0000:e3:00.4", "nvidia", "current_vgpu_type"), "1148")
 }
 
+func TestVendorVFIOReconcilePreservesLegacyGroupFD(t *testing.T) {
+	t.Parallel()
+
+	sysfs := newTestVendorVFIOSysfs(t)
+	sysfs.addVF(t, "0000:82:00.0", "0000:82:00.4", "42", "1148", "")
+	sysfs.addVF(t, "0000:e3:00.0", "0000:e3:00.4", "43", "1148", "")
+
+	legacyGroup := filepath.Join(filepath.Dir(sysfs.vfioDevicesPath), "43")
+	fdDir := filepath.Join(sysfs.procPath, "123", "fd")
+	require.NoError(t, os.MkdirAll(fdDir, 0755))
+	require.NoError(t, os.Symlink(legacyGroup, filepath.Join(fdDir, "5")))
+
+	require.NoError(t, sysfs.reconcile(context.Background()))
+	assertFileValue(t, filepath.Join(sysfs.pciDevicesPath, "0000:82:00.4", "nvidia", "current_vgpu_type"), "0")
+	assertFileValue(t, filepath.Join(sysfs.pciDevicesPath, "0000:e3:00.4", "nvidia", "current_vgpu_type"), "1148")
+}
+
 func TestParseCreatableVGPUTypesRejectsMalformedLine(t *testing.T) {
 	t.Parallel()
 
@@ -133,6 +150,7 @@ func (s testVendorVFIOSysfs) addVF(t *testing.T, parent, address, vfioID, curren
 	vfioName := "vfio" + vfioID
 	require.NoError(t, os.MkdirAll(filepath.Join(vfPath, "vfio-dev", vfioName), 0755))
 	require.NoError(t, os.WriteFile(filepath.Join(s.vfioDevicesPath, vfioName), nil, 0600))
+	require.NoError(t, os.Symlink(filepath.Join("..", "..", "..", "kernel", "iommu_groups", vfioID), filepath.Join(vfPath, "iommu_group")))
 }
 
 func assertFileValue(t *testing.T, path, expected string) {
