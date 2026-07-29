@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/stretchr/testify/assert"
@@ -145,6 +146,24 @@ func TestLifecycleNoopStandbyWithOptionsStillRejectsStandbyInstance(t *testing.T
 	_, err := m.StandbyInstance(context.Background(), id, StandbyInstanceRequest{CompressionDelay: &delay})
 	require.ErrorIs(t, err, ErrInvalidState)
 	assertNoLifecycleEvent(t, events)
+}
+
+func TestDeleteRetainsMetadataWhenVGPUReleaseFails(t *testing.T) {
+	m, id := newLifecycleNoopManagerWithInstance(t, StateStopped, time.Now().UTC())
+	meta, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	meta.GPUProfile = "NVIDIA L40S-2Q"
+	meta.GPUFramework = devices.VGPUFramework("future-framework")
+	meta.GPUDevicePath = "/sys/bus/pci/devices/0000:82:00.4"
+	require.NoError(t, m.saveMetadata(meta))
+
+	err = m.DeleteInstance(context.Background(), id)
+	require.Error(t, err)
+
+	stored, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	assert.Equal(t, devices.VGPUFramework("future-framework"), stored.GPUFramework)
+	assert.Equal(t, "/sys/bus/pci/devices/0000:82:00.4", stored.GPUDevicePath)
 }
 
 func newLifecycleNoopManagerWithInstance(t *testing.T, state State, now time.Time) (*manager, string) {
