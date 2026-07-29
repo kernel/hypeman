@@ -49,7 +49,7 @@ func TestHoldAutoStandbyExtendsCountdown(t *testing.T) {
 	base.InstanceManager = &captureStatusManager{Manager: base.InstanceManager, instance: inst}
 	base.AutoStandbyController = controller
 
-	resp, err := base.HoldAutoStandby(ctx(), oapi.HoldAutoStandbyRequestObject{Id: "inst-hold"})
+	resp, err := base.HoldAutoStandby(ctxWithInstance(base, "inst-hold"), oapi.HoldAutoStandbyRequestObject{Id: "inst-hold"})
 	require.NoError(t, err)
 
 	holdResp, ok := resp.(oapi.HoldAutoStandby200JSONResponse)
@@ -76,7 +76,7 @@ func TestHoldAutoStandbyConflictWhenInstanceInStandby(t *testing.T) {
 		},
 	}
 
-	resp, err := base.HoldAutoStandby(ctx(), oapi.HoldAutoStandbyRequestObject{Id: "inst-standby"})
+	resp, err := base.HoldAutoStandby(ctxWithInstance(base, "inst-standby"), oapi.HoldAutoStandbyRequestObject{Id: "inst-standby"})
 	require.NoError(t, err)
 
 	conflictResp, ok := resp.(oapi.HoldAutoStandby409JSONResponse)
@@ -122,7 +122,7 @@ func TestHoldAutoStandbyConflictWhenStandbyCompletesDuringHold(t *testing.T) {
 	base.InstanceManager = &sequenceManager{Manager: base.InstanceManager, sequence: []*instances.Instance{running, standby}}
 	base.AutoStandbyController = controller
 
-	resp, err := base.HoldAutoStandby(ctx(), oapi.HoldAutoStandbyRequestObject{Id: "inst-race"})
+	resp, err := base.HoldAutoStandby(ctxWithInstance(base, "inst-race"), oapi.HoldAutoStandbyRequestObject{Id: "inst-race"})
 	require.NoError(t, err)
 
 	conflictResp, ok := resp.(oapi.HoldAutoStandby409JSONResponse)
@@ -148,7 +148,7 @@ func TestHoldAutoStandbyUnsupportedWithoutController(t *testing.T) {
 		},
 	}
 
-	resp, err := base.HoldAutoStandby(ctx(), oapi.HoldAutoStandbyRequestObject{Id: "inst-nosupport"})
+	resp, err := base.HoldAutoStandby(ctxWithInstance(base, "inst-nosupport"), oapi.HoldAutoStandbyRequestObject{Id: "inst-nosupport"})
 	require.NoError(t, err)
 
 	holdResp, ok := resp.(oapi.HoldAutoStandby200JSONResponse)
