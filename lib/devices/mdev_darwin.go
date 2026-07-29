@@ -56,10 +56,6 @@ func DestroyVGPU(ctx context.Context, framework VGPUFramework, devicePath, mdevU
 	return nil
 }
 
-func ReconcileVGPUs(ctx context.Context) error {
-	return nil
-}
-
 // ReconcileMdevs is a no-op on macOS.
 func ReconcileMdevs(ctx context.Context, instanceInfos []MdevReconcileInfo) error {
 	return nil
