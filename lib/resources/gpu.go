@@ -41,7 +41,7 @@ func getVGPUStatus() *GPUResourceStatus {
 
 	usedSlots := 0
 	for _, vf := range vfs {
-		if vf.Allocated {
+		if vf.IsAllocated() {
 			usedSlots++
 		}
 	}
