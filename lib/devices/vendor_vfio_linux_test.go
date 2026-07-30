@@ -12,9 +12,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const testCreatableTypes = `NVIDIA L40S-1Q           1147
-NVIDIA L40S-2Q           1148
-NVIDIA L40S-48Q          1159
+const testCreatableTypes = `ID    : vGPU Name
+1147  : NVIDIA L40S-1Q
+1148  : NVIDIA L40S-2Q
+1159  : NVIDIA L40S-48Q
 `
 
 func TestParseCreatableVGPUTypes(t *testing.T) {
@@ -101,10 +102,22 @@ func TestVendorVFIOReconcilePreservesLegacyGroupFD(t *testing.T) {
 	assertFileValue(t, filepath.Join(sysfs.pciDevicesPath, "0000:e3:00.4", "nvidia", "current_vgpu_type"), "1148")
 }
 
+// A GPU with no framebuffer left prints the header and nothing else.
+func TestParseCreatableVGPUTypesHeaderOnly(t *testing.T) {
+	t.Parallel()
+
+	profiles, err := parseCreatableVGPUTypes("ID    : vGPU Name\n")
+	require.NoError(t, err)
+	assert.Empty(t, profiles)
+}
+
 func TestParseCreatableVGPUTypesRejectsMalformedLine(t *testing.T) {
 	t.Parallel()
 
-	_, err := parseCreatableVGPUTypes("NVIDIA L40S-1Q not-an-id")
+	_, err := parseCreatableVGPUTypes("NVIDIA L40S-1Q 1147")
+	require.Error(t, err)
+
+	_, err = parseCreatableVGPUTypes("not-an-id : NVIDIA L40S-1Q")
 	require.Error(t, err)
 }
 

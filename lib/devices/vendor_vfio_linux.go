@@ -331,21 +331,28 @@ func (s vendorVFIOSysfs) vfioDeviceInUse(vfAddress string) (bool, error) {
 	return false, nil
 }
 
+// parseCreatableVGPUTypes reads the driver's creatable_vgpu_types listing:
+//
+//	ID    : vGPU Name
+//	1147  : NVIDIA L40S-1Q
 func parseCreatableVGPUTypes(value string) ([]profileMetadata, error) {
 	profiles := make([]profileMetadata, 0)
 	for lineNumber, line := range strings.Split(value, "\n") {
-		fields := strings.Fields(line)
-		if len(fields) == 0 {
+		if strings.TrimSpace(line) == "" {
 			continue
 		}
-		if len(fields) < 2 {
+		typeID, name, found := strings.Cut(line, ":")
+		typeID = strings.TrimSpace(typeID)
+		name = strings.TrimSpace(name)
+		if !found || name == "" {
 			return nil, fmt.Errorf("parse creatable vGPU types line %d: %q", lineNumber+1, line)
 		}
-		typeID := fields[len(fields)-1]
+		if typeID == "ID" {
+			continue
+		}
 		if _, err := strconv.Atoi(typeID); err != nil {
 			return nil, fmt.Errorf("parse vGPU type ID %q: %w", typeID, err)
 		}
-		name := strings.Join(fields[:len(fields)-1], " ")
 		profiles = append(profiles, profileMetadata{
 			TypeName:      typeID,
 			Name:          name,
