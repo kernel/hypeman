@@ -33,8 +33,9 @@ const (
 )
 
 // allowedSystemMountPaths are exact paths exempt from the system directory
-// check: internal services that own the path and require a volume mounted at
-// a fixed location under it.
+// check for instances created with AllowSystemVolumeMounts: internal
+// services that own the path and require a volume mounted at a fixed
+// location under it.
 var allowedSystemMountPaths = []string{
 	"/var/lib/buildkit", // BuildKit root volume in builder VMs
 }
@@ -640,15 +641,17 @@ func validateCreateRequest(req *CreateInstanceRequest) error {
 	req.RestartPolicy = normalizedRestartPolicy
 
 	// Validate volume attachments
-	if err := validateVolumeAttachments(req.Volumes); err != nil {
+	if err := validateVolumeAttachments(req.Volumes, req.AllowSystemVolumeMounts); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-// validateVolumeAttachments validates volume attachment requests
-func validateVolumeAttachments(volumes []VolumeAttachment) error {
+// validateVolumeAttachments validates volume attachment requests.
+// allowSystemPaths permits mounts at the reserved paths in
+// allowedSystemMountPaths and is only set for internal instances.
+func validateVolumeAttachments(volumes []VolumeAttachment, allowSystemPaths bool) error {
 	// Count total devices needed (each overlay volume needs 2 devices: base + overlay)
 	totalDevices := 0
 	for _, vol := range volumes {
@@ -672,7 +675,7 @@ func validateVolumeAttachments(volumes []VolumeAttachment) error {
 		cleanPath := filepath.Clean(vol.MountPath)
 
 		// Check for system directories
-		if isSystemDirectory(cleanPath) && !isAllowedSystemMountPath(cleanPath) {
+		if isSystemDirectory(cleanPath) && !(allowSystemPaths && isAllowedSystemMountPath(cleanPath)) {
 			return fmt.Errorf("volume %s: cannot mount to system directory %q", vol.VolumeID, cleanPath)
 		}
 
@@ -697,7 +700,7 @@ func validateVolumeAttachments(volumes []VolumeAttachment) error {
 }
 
 // isAllowedSystemMountPath reports whether path is an exact match for a
-// system path that an internal service is allowed to mount a volume at.
+// system path that an internal instance may mount a volume at.
 func isAllowedSystemMountPath(path string) bool {
 	for _, allowed := range allowedSystemMountPaths {
 		if path == allowed {
