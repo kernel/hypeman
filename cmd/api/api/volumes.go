@@ -181,6 +181,12 @@ func (s *ApiService) DeleteVolume(ctx context.Context, request oapi.DeleteVolume
 		}, nil
 	}
 	log := logger.FromContext(ctx)
+	if prefix := builds.ReservedVolumeIDPrefix(vol.Id); prefix != "" {
+		return oapi.DeleteVolume409JSONResponse{
+			Code:    "conflict",
+			Message: fmt.Sprintf("volume IDs with the prefix %q are reserved for internal use", prefix),
+		}, nil
+	}
 
 	err := s.VolumeManager.DeleteVolume(ctx, vol.Id)
 	if err != nil {
