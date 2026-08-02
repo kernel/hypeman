@@ -856,21 +856,10 @@ func runBuild(ctx context.Context, config *BuildConfig, logWriter io.Writer) (st
 	buildkitdConfig := "/home/builder/.config/buildkit/buildkitd.toml"
 	log.Printf("Using buildkitd config: %s", buildkitdConfig)
 
-	// Mount a tmpfs for BuildKit's data directory.
-	// The VM rootfs is an overlayfs (read-only ext4 + writable ext4 upper layer).
-	// BuildKit's native overlayfs snapshotter creates char device 0:0 for whiteout
-	// markers, but mknod(char 0:0) fails on an overlayfs mount because the kernel
-	// treats it as an overlayfs whiteout rather than a regular device node.
-	// Using tmpfs avoids this nested-overlayfs conflict.
 	buildkitRoot := "/var/lib/buildkit"
-	if err := os.MkdirAll(buildkitRoot, 0755); err != nil {
-		return "", "", fmt.Errorf("create buildkit root dir: %w", err)
+	if err := ensureBuildkitRoot(buildkitRoot, isMountPoint, mountBuildkitTmpfs); err != nil {
+		return "", "", err
 	}
-	mountCmd := exec.Command("mount", "-t", "tmpfs", "-o", "size=3G", "tmpfs", buildkitRoot)
-	if output, err := mountCmd.CombinedOutput(); err != nil {
-		return "", "", fmt.Errorf("mount tmpfs at %s (required for native overlayfs snapshotter): %v: %s", buildkitRoot, err, output)
-	}
-	log.Printf("Mounted tmpfs at %s for BuildKit snapshotter", buildkitRoot)
 
 	log.Printf("Running: buildctl-daemonless.sh %s", strings.Join(args, " "))
 
@@ -909,6 +898,52 @@ func runBuild(ctx context.Context, config *BuildConfig, logWriter io.Writer) (st
 	}
 
 	return digest, buildLogs.String(), nil
+}
+
+// ensureBuildkitRoot prepares BuildKit's data directory. If root is already a
+// mountpoint it is used directly. Otherwise a tmpfs is mounted there: the VM
+// rootfs is an overlayfs (read-only ext4 + writable ext4 upper layer) and
+// BuildKit's native overlayfs snapshotter creates char device 0:0 for whiteout
+// markers, but mknod(char 0:0) fails on an overlayfs mount because the kernel
+// treats it as an overlayfs whiteout rather than a regular device node. tmpfs
+// avoids this nested-overlayfs conflict.
+func ensureBuildkitRoot(root string, isMounted func(string) (bool, error), mountTmpfs func(string) error) error {
+	mounted, err := isMounted(root)
+	if err != nil {
+		return fmt.Errorf("check mountpoint %s: %w", root, err)
+	}
+	if mounted {
+		log.Printf("Using existing mount at %s for BuildKit", root)
+		return nil
+	}
+	if err := os.MkdirAll(root, 0755); err != nil {
+		return fmt.Errorf("create buildkit root dir: %w", err)
+	}
+	return mountTmpfs(root)
+}
+
+func mountBuildkitTmpfs(root string) error {
+	mountCmd := exec.Command("mount", "-t", "tmpfs", "-o", "size=3G", "tmpfs", root)
+	if output, err := mountCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("mount tmpfs at %s (required for native overlayfs snapshotter): %v: %s", root, err, output)
+	}
+	log.Printf("Mounted tmpfs at %s for BuildKit snapshotter", root)
+	return nil
+}
+
+// isMountPoint reports whether path is a mountpoint according to /proc/self/mounts.
+func isMountPoint(path string) (bool, error) {
+	data, err := os.ReadFile("/proc/self/mounts")
+	if err != nil {
+		return false, err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && fields[1] == path {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func extractDigest(metadataPath string) (string, error) {
