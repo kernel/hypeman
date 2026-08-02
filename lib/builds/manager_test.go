@@ -437,6 +437,7 @@ func setupTestManagerWithImageMgr(t *testing.T) (*manager, *mockInstanceManager,
 		imageManager:      imageMgr,
 		secretProvider:    secretProvider,
 		tokenGenerator:    NewRegistryTokenGenerator(config.RegistrySecret),
+		publisher:         noopPublisher{},
 		logger:            logger,
 		statusSubscribers: make(map[string][]chan BuildEvent),
 	}

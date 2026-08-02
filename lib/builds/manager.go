@@ -89,6 +89,10 @@ type Config struct {
 
 	// DockerSocket is the path to the Docker socket for building the builder image
 	DockerSocket string
+
+	// Publish holds optional remote publication settings for completed build
+	// images. The zero value disables publication.
+	Publish PublishConfig
 }
 
 // DefaultConfig returns the default build manager configuration
@@ -121,6 +125,7 @@ type manager struct {
 	imageManager    images.Manager
 	secretProvider  SecretProvider
 	tokenGenerator  *RegistryTokenGenerator
+	publisher       BuildPublisher
 	logger          *slog.Logger
 	metrics         *Metrics
 	createMu        sync.Mutex
@@ -146,6 +151,11 @@ func NewManager(
 		logger = slog.Default()
 	}
 
+	publisher, err := newBuildPublisher(config.Publish)
+	if err != nil {
+		return nil, fmt.Errorf("publish config: %w", err)
+	}
+
 	m := &manager{
 		config:            config,
 		paths:             p,
@@ -155,6 +165,7 @@ func NewManager(
 		imageManager:      imageMgr,
 		secretProvider:    secretProvider,
 		tokenGenerator:    NewRegistryTokenGenerator(config.RegistrySecret),
+		publisher:         publisher,
 		logger:            logger,
 		statusSubscribers: make(map[string][]chan BuildEvent),
 	}
@@ -641,6 +652,26 @@ func (m *manager) runBuild(ctx context.Context, id string, req CreateBuildReques
 				}
 			}
 		}
+	}
+
+	// Publish the completed image to the configured remote registry. The
+	// default publisher returns the local reference unchanged, so behavior is
+	// identical when publication is not configured. A publication failure
+	// fails the build.
+	publishedRef, err := m.publisher.Publish(buildCtx, buildRepo, result.ImageDigest)
+	if err != nil {
+		duration = time.Since(start)
+		durationMS = duration.Milliseconds()
+		m.logger.Error("image publication failed after build", "id", id, "error", err, "duration", duration)
+		errMsg := fmt.Sprintf("image publication failed: %v", err)
+		m.updateBuildComplete(id, StatusFailed, nil, &errMsg, &result.Provenance, &durationMS)
+		if m.metrics != nil {
+			m.metrics.RecordBuild(buildCtx, "failed", duration)
+		}
+		return
+	}
+	if publishedRef != buildRepo {
+		imageRef = publishedRef
 	}
 
 	// Recalculate duration to include image wait time for accurate reporting

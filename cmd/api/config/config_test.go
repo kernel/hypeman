@@ -539,3 +539,68 @@ func TestValidateAllowsDisabledSnapshotCompressionDefaultWithoutValidAlgorithm(t
 		t.Fatalf("expected disabled snapshot compression default to ignore algorithm/level, got %v", err)
 	}
 }
+
+func TestDefaultConfigDisablesBuildPublish(t *testing.T) {
+	cfg := defaultConfig()
+
+	if cfg.Build.Publish.Registry != "" || cfg.Build.Publish.RepositoryPrefix != "" || cfg.Build.Publish.CredentialsFile != "" {
+		t.Fatalf("expected default build.publish to be empty (disabled), got %+v", cfg.Build.Publish)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected default config to validate, got %v", err)
+	}
+}
+
+func TestValidateBuildPublishRequiresRegistry(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Build.Publish.RepositoryPrefix = "team/builds"
+
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected validation error when build.publish.repository_prefix is set without registry")
+	}
+}
+
+func TestValidateBuildPublishRequiresRepositoryPrefix(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Build.Publish.Registry = "registry.example.com"
+
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected validation error when build.publish.registry is set without repository_prefix")
+	}
+
+	cfg.Build.Publish.RepositoryPrefix = "team/builds"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected publish config with registry and prefix to validate, got %v", err)
+	}
+}
+
+func TestLoadExpandsBuildPublishCredentialsFile(t *testing.T) {
+	clearPathEnvOverrides(t)
+
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte(`
+build:
+  publish:
+    registry: registry.example.com
+    repository_prefix: team/builds
+    credentials_file: ~/.docker/remote-registry.json
+`), 0600); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("get home dir: %v", err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	want := filepath.Join(home, ".docker", "remote-registry.json")
+	if cfg.Build.Publish.CredentialsFile != want {
+		t.Fatalf("expected build.publish.credentials_file to expand to %q, got %q", want, cfg.Build.Publish.CredentialsFile)
+	}
+}

@@ -144,13 +144,26 @@ type ImagesConfig struct {
 	OCICacheGC OCICacheGCConfig       `koanf:"oci_cache_gc"`
 }
 
+// BuildPublishConfig holds optional remote publication settings for completed
+// build images. Disabled by default; set publish.registry to enable.
+type BuildPublishConfig struct {
+	// Registry is the remote registry host (e.g., "registry.example.com").
+	Registry string `koanf:"registry"`
+	// RepositoryPrefix is prepended to the build ID to form the remote repository.
+	RepositoryPrefix string `koanf:"repository_prefix"`
+	// CredentialsFile is a host-side Docker client config used to authenticate
+	// with the remote registry. Never sent to builder VMs.
+	CredentialsFile string `koanf:"credentials_file"`
+}
+
 // BuildConfig holds source-to-image build system settings.
 type BuildConfig struct {
-	MaxConcurrentSourceBuilds int    `koanf:"max_concurrent_source_builds"`
-	BuilderImage              string `koanf:"builder_image"`
-	Timeout                   int    `koanf:"timeout"`
-	SecretsDir                string `koanf:"secrets_dir"`
-	DockerSocket              string `koanf:"docker_socket"`
+	MaxConcurrentSourceBuilds int                `koanf:"max_concurrent_source_builds"`
+	BuilderImage              string             `koanf:"builder_image"`
+	Timeout                   int                `koanf:"timeout"`
+	SecretsDir                string             `koanf:"secrets_dir"`
+	DockerSocket              string             `koanf:"docker_socket"`
+	Publish                   BuildPublishConfig `koanf:"publish"`
 }
 
 // InstancesConfig holds instance-manager internal settings.
@@ -392,6 +405,7 @@ func defaultConfig() *Config {
 			Timeout:                   600,
 			SecretsDir:                "",
 			DockerSocket:              "/var/run/docker.sock",
+			Publish:                   BuildPublishConfig{}, // remote publication disabled by default
 		},
 
 		Instances: InstancesConfig{
@@ -545,6 +559,7 @@ func (c *Config) expandPathFields() {
 	c.DataDir = expandHomePath(c.DataDir)
 	c.Build.SecretsDir = expandHomePath(c.Build.SecretsDir)
 	c.Build.DockerSocket = expandHomePath(c.Build.DockerSocket)
+	c.Build.Publish.CredentialsFile = expandHomePath(c.Build.Publish.CredentialsFile)
 	c.Registry.CACertFile = expandHomePath(c.Registry.CACertFile)
 	c.Hypervisor.FirecrackerBinaryPath = expandHomePath(c.Hypervisor.FirecrackerBinaryPath)
 }
@@ -628,6 +643,12 @@ func (c *Config) Validate() error {
 	}
 	if c.Build.Timeout <= 0 {
 		return fmt.Errorf("build.timeout must be positive, got %d", c.Build.Timeout)
+	}
+	if c.Build.Publish.Registry == "" && (c.Build.Publish.RepositoryPrefix != "" || c.Build.Publish.CredentialsFile != "") {
+		return fmt.Errorf("build.publish.registry is required when build.publish.repository_prefix or build.publish.credentials_file is set")
+	}
+	if c.Build.Publish.Registry != "" && c.Build.Publish.RepositoryPrefix == "" {
+		return fmt.Errorf("build.publish.repository_prefix is required when build.publish.registry is set")
 	}
 	if c.Hypervisor.FirecrackerMaxConcurrentRestores < 0 {
 		return fmt.Errorf("hypervisor.firecracker_max_concurrent_restores must be >= 0, got %d", c.Hypervisor.FirecrackerMaxConcurrentRestores)

@@ -152,6 +152,10 @@ data_dir: /var/lib/hypeman
 #   docker_socket: /var/run/docker.sock
 #   max_concurrent_source_builds: 2
 #   timeout: 600
+#   publish:                        # optional: publish completed build images to a remote registry
+#     registry: ""                  # remote registry host; empty = disabled
+#     repository_prefix: ""         # prepended to the build ID (e.g. "team/app-builds")
+#     credentials_file: ""          # host-side Docker client config for the remote registry
 
 # =============================================================================
 # Resource Limits
