@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -118,6 +119,99 @@ func TestSetupDiskRootVolume_LeftoverDeleteError(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Empty(t, volID)
+}
+
+// TestSetupDiskRootVolume_LeftoverAttachedToStaleBuilder verifies recovery
+// when a crash left the volume attached to a surviving builder VM: the first
+// delete fails with ErrInUse, the stale builder is deleted (detaching the
+// volume), and the retry succeeds.
+func TestSetupDiskRootVolume_LeftoverAttachedToStaleBuilder(t *testing.T) {
+	mgr, instanceMgr, volumeMgr, tempDir := setupTestManager(t)
+	defer os.RemoveAll(tempDir)
+	mgr.config.DiskRootEnabled = true
+
+	created := false
+	volumeMgr.createFunc = func(ctx context.Context, req volumes.CreateVolumeRequest) (*volumes.Volume, error) {
+		if !created {
+			created = true
+			return nil, volumes.ErrAlreadyExists
+		}
+		return &volumes.Volume{Id: *req.Id, Name: req.Name, SizeGb: req.SizeGb}, nil
+	}
+	builderDeleted := false
+	volumeMgr.deleteFunc = func(ctx context.Context, id string) error {
+		if !builderDeleted {
+			return volumes.ErrInUse
+		}
+		return nil
+	}
+	instanceMgr.getFunc = func(ctx context.Context, id string) (*instances.Instance, error) {
+		if id == "builder-build-1" {
+			return &instances.Instance{
+				StoredMetadata: instances.StoredMetadata{Id: "inst-builder-build-1", Name: "builder-build-1"},
+			}, nil
+		}
+		return nil, instances.ErrNotFound
+	}
+	instanceMgr.deleteFunc = func(ctx context.Context, id string) error {
+		assert.Equal(t, "inst-builder-build-1", id)
+		builderDeleted = true
+		return nil
+	}
+
+	volID, err := mgr.setupDiskRootVolume(context.Background(), "build-1")
+
+	require.NoError(t, err)
+	assert.Equal(t, "build-disk-build-1", volID)
+	assert.True(t, builderDeleted, "stale builder holding the volume must be deleted")
+	assert.Equal(t, 2, volumeMgr.deleteCallCount)
+	assert.Equal(t, 2, volumeMgr.createCallCount)
+}
+
+// TestSetupDiskRootVolume_LeftoverInUseWithoutBuilder verifies recovery fails
+// loudly when the leftover volume is attached but no stale builder exists to
+// clean up.
+func TestSetupDiskRootVolume_LeftoverInUseWithoutBuilder(t *testing.T) {
+	mgr, _, volumeMgr, tempDir := setupTestManager(t)
+	defer os.RemoveAll(tempDir)
+	mgr.config.DiskRootEnabled = true
+
+	volumeMgr.createFunc = func(ctx context.Context, req volumes.CreateVolumeRequest) (*volumes.Volume, error) {
+		return nil, volumes.ErrAlreadyExists
+	}
+	volumeMgr.deleteFunc = func(ctx context.Context, id string) error {
+		return volumes.ErrInUse
+	}
+
+	volID, err := mgr.setupDiskRootVolume(context.Background(), "build-1")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "stale builder")
+	assert.Empty(t, volID)
+}
+
+// TestCreateBuildConfigVolume_UniqueTempPath verifies the config disk is
+// written to a unique per-call path, so concurrent builds reusing a build ID
+// (as parallel test runs sharing TMPDIR do) never collide on a fixed file.
+func TestCreateBuildConfigVolume_UniqueTempPath(t *testing.T) {
+	mgr, _, _, tempDir := setupTestManager(t)
+	defer os.RemoveAll(tempDir)
+
+	req := CreateBuildRequest{Dockerfile: "FROM alpine"}
+	prepareBuildOnDisk(t, mgr, "build-1", req)
+
+	path1, err := mgr.createBuildConfigVolume("build-1", "build-config-build-1")
+	require.NoError(t, err)
+	defer os.RemoveAll(filepath.Dir(path1))
+	path2, err := mgr.createBuildConfigVolume("build-1", "build-config-build-1")
+	require.NoError(t, err)
+	defer os.RemoveAll(filepath.Dir(path2))
+
+	assert.NotEqual(t, path1, path2)
+	for _, p := range []string{path1, path2} {
+		_, err := os.Stat(p)
+		require.NoError(t, err)
+	}
 }
 
 func TestBuilderVolumeAttachments(t *testing.T) {

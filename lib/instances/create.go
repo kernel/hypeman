@@ -32,6 +32,13 @@ const (
 	MaxVolumesPerInstance = 23
 )
 
+// allowedSystemMountPaths are exact paths exempt from the system directory
+// check: internal services that own the path and require a volume mounted at
+// a fixed location under it.
+var allowedSystemMountPaths = []string{
+	"/var/lib/buildkit", // BuildKit root volume in builder VMs
+}
+
 // systemDirectories are paths that cannot be used as volume mount points
 var systemDirectories = []string{
 	"/",
@@ -665,7 +672,7 @@ func validateVolumeAttachments(volumes []VolumeAttachment) error {
 		cleanPath := filepath.Clean(vol.MountPath)
 
 		// Check for system directories
-		if isSystemDirectory(cleanPath) {
+		if isSystemDirectory(cleanPath) && !isAllowedSystemMountPath(cleanPath) {
 			return fmt.Errorf("volume %s: cannot mount to system directory %q", vol.VolumeID, cleanPath)
 		}
 
@@ -687,6 +694,17 @@ func validateVolumeAttachments(volumes []VolumeAttachment) error {
 	}
 
 	return nil
+}
+
+// isAllowedSystemMountPath reports whether path is an exact match for a
+// system path that an internal service is allowed to mount a volume at.
+func isAllowedSystemMountPath(path string) bool {
+	for _, allowed := range allowedSystemMountPaths {
+		if path == allowed {
+			return true
+		}
+	}
+	return false
 }
 
 // isSystemDirectory checks if a path is or is under a system directory

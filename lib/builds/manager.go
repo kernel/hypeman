@@ -710,7 +710,7 @@ func (m *manager) executeBuild(ctx context.Context, id string, req CreateBuildRe
 	if err != nil {
 		return nil, fmt.Errorf("create config volume: %w", err)
 	}
-	defer os.Remove(configVolPath) // Clean up the config disk file
+	defer os.RemoveAll(filepath.Dir(configVolPath)) // Clean up the config disk file
 
 	// Register the config volume with the volume manager
 	_, err = m.volumeManager.CreateVolume(ctx, volumes.CreateVolumeRequest{
@@ -803,8 +803,8 @@ func (m *manager) setupDiskRootVolume(ctx context.Context, buildID string) (stri
 	if errors.Is(err, volumes.ErrAlreadyExists) {
 		// A previous attempt at this build crashed before cleanup. Delete
 		// the leftover volume and start fresh.
-		if delErr := m.volumeManager.DeleteVolume(ctx, volID); delErr != nil {
-			return "", fmt.Errorf("delete leftover buildkit root volume: %w", delErr)
+		if delErr := m.deleteLeftoverDiskRootVolume(ctx, buildID, volID); delErr != nil {
+			return "", delErr
 		}
 		_, err = m.volumeManager.CreateVolume(ctx, volumes.CreateVolumeRequest{
 			Id:     &volID,
@@ -816,6 +816,33 @@ func (m *manager) setupDiskRootVolume(ctx context.Context, buildID string) (stri
 		return "", err
 	}
 	return volID, nil
+}
+
+// deleteLeftoverDiskRootVolume deletes the buildkit root volume left behind
+// by a crashed build attempt. When the crash left the volume attached to a
+// surviving builder VM the delete fails with ErrInUse; delete the stale
+// builder (which detaches its volumes) and retry.
+func (m *manager) deleteLeftoverDiskRootVolume(ctx context.Context, buildID, volID string) error {
+	err := m.volumeManager.DeleteVolume(ctx, volID)
+	if !errors.Is(err, volumes.ErrInUse) {
+		if err != nil {
+			return fmt.Errorf("delete leftover buildkit root volume: %w", err)
+		}
+		return nil
+	}
+
+	builderName := fmt.Sprintf("builder-%s", buildID)
+	inst, getErr := m.instanceManager.GetInstance(ctx, builderName)
+	if getErr != nil {
+		return fmt.Errorf("leftover buildkit root volume still attached and stale builder %q not found: %w", builderName, err)
+	}
+	if delErr := m.instanceManager.DeleteInstance(ctx, inst.Id); delErr != nil {
+		return fmt.Errorf("delete stale builder %s holding leftover buildkit root volume: %w", inst.Id, delErr)
+	}
+	if err := m.volumeManager.DeleteVolume(ctx, volID); err != nil {
+		return fmt.Errorf("delete leftover buildkit root volume after stale builder removal: %w", err)
+	}
+	return nil
 }
 
 // builderVolumeAttachments returns the volume attachments for a builder VM.
@@ -1497,8 +1524,8 @@ func readFile(path string) ([]byte, error) {
 	return os.ReadFile(path)
 }
 
-// createBuildConfigVolume creates an ext4 disk containing the build.json config file
-// Returns the path to the disk file
+// createBuildConfigVolume creates an ext4 disk containing the build.json config file.
+// Returns the path to the disk file; the caller removes its parent directory.
 func (m *manager) createBuildConfigVolume(buildID, volID string) (string, error) {
 	// Read the build config
 	configPath := m.paths.BuildConfig(buildID)
@@ -1529,10 +1556,17 @@ func (m *manager) createBuildConfigVolume(buildID, volID string) (string, error)
 	metadataPath := filepath.Join(tmpDir, "metadata.json")
 	os.WriteFile(metadataPath, metadataData, 0644)
 
-	// Create ext4 disk from the directory
-	diskPath := filepath.Join(os.TempDir(), fmt.Sprintf("build-config-%s.ext4", buildID))
+	// Create the ext4 disk in a dedicated temp directory so concurrent
+	// builds and parallel test runs sharing TMPDIR never collide on a
+	// fixed path. The caller removes the directory.
+	diskDir, err := os.MkdirTemp("", "hypeman-build-config-disk-*")
+	if err != nil {
+		return "", fmt.Errorf("create config disk dir: %w", err)
+	}
+	diskPath := filepath.Join(diskDir, "build-config.ext4")
 	_, err = images.ExportRootfs(tmpDir, diskPath, images.FormatExt4)
 	if err != nil {
+		os.RemoveAll(diskDir)
 		return "", fmt.Errorf("create config disk: %w", err)
 	}
 
