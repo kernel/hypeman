@@ -173,6 +173,21 @@ func TestCreateBuild_AdminScopeValidated(t *testing.T) {
 	assert.Contains(t, badReq.Message, "cache_scope")
 }
 
+func TestCreateBuild_AdminScopeRejectsNonNormalizedScope(t *testing.T) {
+	svc := &ApiService{BuildManager: &stubBuildManager{}}
+	ctx := context.Background()
+
+	resp, err := svc.CreateBuild(ctx, createBuildRequest(t, map[string]string{
+		"dockerfile":  "FROM alpine",
+		"cache_scope": "global/node",
+	}))
+
+	require.NoError(t, err)
+	badReq, ok := resp.(oapi.CreateBuild400JSONResponse)
+	require.True(t, ok, "expected 400, got %T", resp)
+	assert.Contains(t, badReq.Message, "cache_scope")
+}
+
 func TestCreateBuild_OrdinaryCallerNoScopeByDefault(t *testing.T) {
 	mgr := &stubBuildManager{}
 	// Nil config: tenant scope derivation is disabled by default.
