@@ -784,14 +784,19 @@ func (m *manager) registerBuildConfigVolume(ctx context.Context, buildID, volID,
 		SizeGb: 1,
 	}
 	_, err := m.volumeManager.CreateVolume(ctx, req)
+	recreateAttempted := false
 	if errors.Is(err, volumes.ErrAlreadyExists) {
 		m.logger.Info("removing leftover config volume from crashed build attempt", "build_id", buildID, "volume", volID)
 		if delErr := m.deleteLeftoverBuildVolume(ctx, buildID, volID); delErr != nil {
 			return fmt.Errorf("remove leftover config volume: %w", delErr)
 		}
+		recreateAttempted = true
 		_, err = m.volumeManager.CreateVolume(ctx, req)
 	}
 	if err != nil {
+		if recreateAttempted {
+			return fmt.Errorf("create config volume: %w", err)
+		}
 		// If volume creation fails, try to use the disk file directly
 		// by copying it to the expected location
 		volPath := m.paths.VolumeData(volID)

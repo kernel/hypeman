@@ -1248,6 +1248,43 @@ func TestRegisterBuildConfigVolume_AlreadyExists(t *testing.T) {
 	assert.Equal(t, configData, copied)
 }
 
+// TestRegisterBuildConfigVolume_RecreateFailure verifies that when recreating a
+// deleted leftover config volume fails, the recreate error is surfaced rather
+// than silently masked by the copy-over fallback.
+func TestRegisterBuildConfigVolume_RecreateFailure(t *testing.T) {
+	mgr, _, volumeMgr, tempDir := setupTestManager(t)
+	defer os.RemoveAll(tempDir)
+
+	buildID := "build-crash-config-fail"
+	configVolID := "build-config-" + buildID
+
+	configDiskPath := filepath.Join(tempDir, "config.ext4")
+	require.NoError(t, os.WriteFile(configDiskPath, []byte("fake-ext4-config-disk"), 0644))
+
+	var createCalls int
+	recreateErr := fmt.Errorf("recreate failed")
+	volumeMgr.createFunc = func(ctx context.Context, req volumes.CreateVolumeRequest) (*volumes.Volume, error) {
+		createCalls++
+		if createCalls == 1 {
+			return nil, volumes.ErrAlreadyExists
+		}
+		return nil, recreateErr
+	}
+	volumeMgr.deleteFunc = func(ctx context.Context, id string) error {
+		delete(volumeMgr.volumes, id)
+		return nil
+	}
+
+	err := mgr.registerBuildConfigVolume(context.Background(), buildID, configVolID, configDiskPath)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, recreateErr)
+	assert.Contains(t, err.Error(), "create config volume")
+	assert.Equal(t, 2, createCalls, "expected delete + retry of config volume creation")
+	_, statErr := os.Stat(mgr.paths.VolumeData(configVolID))
+	assert.ErrorIs(t, statErr, os.ErrNotExist, "config volume data should not be copied when recreate fails")
+}
+
 func TestExtractInternalBaseImageRepos(t *testing.T) {
 	registryURL := "http://10.102.0.1:8085"
 
