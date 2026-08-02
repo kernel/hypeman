@@ -114,6 +114,9 @@ func TestValidateCacheScope(t *testing.T) {
 		{"valid-scope", false},
 		{"abc", false},
 		{"my-team-123", false},
+		{"Global", true},
+		{"global/node", true},
+		{"my--team", true},
 		{"", true},                       // Empty
 		{"ab", true},                     // Too short
 		{"a", true},                      // Too short

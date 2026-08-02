@@ -82,6 +82,9 @@ func ValidateCacheScope(scope string) error {
 	if normalized == "" {
 		return fmt.Errorf("cache scope contains only invalid characters")
 	}
+	if scope != normalized {
+		return fmt.Errorf("cache scope must use only lowercase letters, numbers, and hyphens")
+	}
 
 	if len(normalized) < 3 {
 		return fmt.Errorf("cache scope must be at least 3 characters")
