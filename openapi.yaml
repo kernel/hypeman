@@ -4158,7 +4158,10 @@ paths:
                   description: Optional pinned base image digest
                 cache_scope:
                   type: string
-                  description: Tenant-specific cache key prefix
+                  description: |
+                    Tenant-specific cache key prefix (operator-only, requires the build:admin scope).
+                    Ordinary callers ignore this field: the effective cache scope is derived
+                    server-side from the authenticated identity.
                 timeout_seconds:
                   type: integer
                   description: Build timeout (default 600)
@@ -4182,7 +4185,8 @@ paths:
                 is_admin_build:
                   type: string
                   description: |
-                    Set to "true" to grant push access to global cache (operator-only).
+                    Set to "true" to grant push access to global cache (operator-only, requires
+                    the build:admin scope). Requests without the build:admin scope are rejected.
                     Admin builds can populate the shared global cache that all tenant builds read from.
                 global_cache_key:
                   type: string
@@ -4210,6 +4214,12 @@ paths:
                 $ref: "#/components/schemas/Error"
         401:
           description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        403:
+          description: Forbidden (missing build:admin scope for operator-only fields)
           content:
             application/json:
               schema:

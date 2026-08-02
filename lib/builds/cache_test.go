@@ -230,3 +230,21 @@ func TestGetCacheKeyFromConfig(t *testing.T) {
 	assert.NotEmpty(t, importArg, "should generate cache args even with nil lockfileHashes")
 	assert.NotEmpty(t, exportArg)
 }
+
+func TestDeriveCacheScope(t *testing.T) {
+	scopeA := DeriveCacheScope("user-alice")
+	scopeB := DeriveCacheScope("user-bob")
+
+	// Deterministic per identity
+	assert.Equal(t, scopeA, DeriveCacheScope("user-alice"))
+
+	// Distinct identities get isolated scopes
+	assert.NotEqual(t, scopeA, scopeB)
+
+	// Derived scopes are always valid cache scopes
+	require.NoError(t, ValidateCacheScope(scopeA))
+	require.NoError(t, ValidateCacheScope(scopeB))
+
+	// Empty identity means no tenant cache
+	assert.Empty(t, DeriveCacheScope(""))
+}

@@ -51,6 +51,7 @@ Scopes follow the pattern `resource:action`. Each resource type supports `read`,
 | `build:read` | List builds, get build details, stream build events |
 | `build:write` | Create builds |
 | `build:delete` | Cancel/delete builds |
+| `build:admin` | Operator-only build options: `is_admin_build`, explicit `cache_scope` |
 
 ### Devices
 
