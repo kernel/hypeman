@@ -88,6 +88,26 @@ func TestValidateVolumeAttachments_Empty(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestValidateVolumeAttachments_AllowedSystemMountPath(t *testing.T) {
+	t.Parallel()
+	// The BuildKit root volume in builder VMs mounts at a fixed path under
+	// /var and is explicitly allowed.
+	err := validateVolumeAttachments([]VolumeAttachment{{
+		VolumeID:  "vol-1",
+		MountPath: "/var/lib/buildkit",
+	}})
+	assert.NoError(t, err)
+
+	// Parent paths and other /var subdirectories remain rejected.
+	for _, path := range []string{"/var", "/var/lib", "/var/lib/buildkit/nested", "/var/log"} {
+		err := validateVolumeAttachments([]VolumeAttachment{{
+			VolumeID:  "vol-1",
+			MountPath: path,
+		}})
+		assert.Error(t, err, "expected %q to be rejected", path)
+	}
+}
+
 func TestValidateVolumeAttachments_OverlayRequiresReadonly(t *testing.T) {
 	t.Parallel()
 	// Overlay=true with Readonly=false should fail
