@@ -907,6 +907,15 @@ func runBuild(ctx context.Context, config *BuildConfig, logWriter io.Writer) (st
 // markers, but mknod(char 0:0) fails on an overlayfs mount because the kernel
 // treats it as an overlayfs whiteout rather than a regular device node. tmpfs
 // avoids this nested-overlayfs conflict.
+//
+// SECURITY: if root is pre-mounted, it MUST be a fresh per-build volume. The
+// snapshotter root holds every layer's contents and BuildKit's step cache, so
+// sharing it across builds/tenants would let one tenant poison cached RUN steps
+// consumed by other tenants' builds or read prior builds' layers and source.
+// The mount is expected to be attached only by hypeman's internal build
+// orchestration; the instance API's system-directory guard blocks tenant volume
+// attachments under /var, and any exception for /var/lib/buildkit must stay
+// scoped to the internal build path rather than the public API.
 func ensureBuildkitRoot(root string, isMounted func(string) (bool, error), mountTmpfs func(string) error) error {
 	mounted, err := isMounted(root)
 	if err != nil {
