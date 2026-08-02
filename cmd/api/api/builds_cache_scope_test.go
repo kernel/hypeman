@@ -237,3 +237,29 @@ func TestCreateBuild_OrdinaryCallerGetsDerivedScopeWhenEnabled(t *testing.T) {
 	require.NotNil(t, mgr.createReq)
 	assert.Equal(t, builds.DeriveCacheScope("user-bob"), mgr.createReq.CacheScope)
 }
+
+func TestCreateBuild_LocalCacheEnabledImpliesDerivedScope(t *testing.T) {
+	mgr := &stubBuildManager{}
+	svc := &ApiService{
+		BuildManager: mgr,
+		Config: &config.Config{
+			Build: config.BuildConfig{
+				Cache: config.BuildCacheConfig{
+					Local: config.BuildCacheLocalConfig{Enabled: true},
+				},
+			},
+		},
+	}
+	ctx := scopes.ContextWithPermissions(context.Background(), []scopes.Scope{scopes.BuildWrite})
+	ctx = mw.ContextWithUserID(ctx, "user-bob")
+
+	resp, err := svc.CreateBuild(ctx, createBuildRequest(t, map[string]string{
+		"dockerfile": "FROM alpine",
+	}))
+
+	require.NoError(t, err)
+	_, ok := resp.(oapi.CreateBuild202JSONResponse)
+	require.True(t, ok, "expected 202, got %T", resp)
+	require.NotNil(t, mgr.createReq)
+	assert.Equal(t, builds.DeriveCacheScope("user-bob"), mgr.createReq.CacheScope)
+}

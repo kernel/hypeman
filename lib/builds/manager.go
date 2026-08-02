@@ -98,6 +98,10 @@ type Config struct {
 	// DiskRootSizeGB is the size of the per-build BuildKit root volume.
 	// Values <= 0 use DefaultDiskRootSizeGB.
 	DiskRootSizeGB int
+
+	// Cache configures persistent per-scope BuildKit cache volumes.
+	// The zero value keeps cache volumes disabled.
+	Cache CacheVolumeConfig
 }
 
 // buildkitRootMountPath is where the BuildKit root volume is mounted in the
@@ -141,6 +145,7 @@ type manager struct {
 	metrics         *Metrics
 	createMu        sync.Mutex
 	builderReady    atomic.Bool
+	cacheVolumes    *cacheVolumeManager
 
 	// Status subscription system for SSE streaming
 	statusSubscribers map[string][]chan BuildEvent
@@ -184,6 +189,10 @@ func NewManager(
 		m.metrics = metrics
 	}
 
+	if config.Cache.Enabled {
+		m.cacheVolumes = newCacheVolumeManager(config.Cache, p, volumeMgr, logger)
+	}
+
 	return m, nil
 }
 
@@ -196,6 +205,9 @@ func (m *manager) Start(ctx context.Context) error {
 		m.RecoverPendingBuilds()
 	}()
 	go m.runDiskRootReaper(ctx)
+	if m.cacheVolumes != nil {
+		m.cacheVolumes.startReaper(ctx)
+	}
 	m.logger.Info("build manager started")
 	return nil
 }

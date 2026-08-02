@@ -168,8 +168,21 @@ type BuildCacheConfig struct {
 	// DeriveTenantScope derives the tenant cache scope for a build from the
 	// authenticated identity. Disabled by default: builds that do not carry an
 	// operator-supplied cache_scope run with no tenant cache scope, so no
-	// per-tenant registry cache is imported or exported.
-	DeriveTenantScope bool `koanf:"derive_tenant_scope"`
+	// per-tenant registry cache is imported or exported. Enabling the local
+	// cache below also enables derivation, since the per-scope cache volumes
+	// require a scope.
+	DeriveTenantScope bool                  `koanf:"derive_tenant_scope"`
+	Local             BuildCacheLocalConfig `koanf:"local"`
+}
+
+// BuildCacheLocalConfig holds settings for persistent per-scope BuildKit cache
+// volumes on this host. Disabled by default.
+type BuildCacheLocalConfig struct {
+	Enabled    bool   `koanf:"enabled"`
+	SizeGB     int    `koanf:"size_gb"`
+	IdleTTL    string `koanf:"idle_ttl"`
+	MaxBytes   string `koanf:"max_bytes"`
+	MaxVolumes int    `koanf:"max_volumes"`
 }
 
 // InstancesConfig holds instance-manager internal settings.
@@ -650,6 +663,27 @@ func (c *Config) Validate() error {
 	}
 	if c.Build.DiskRoot.SizeGB < 0 {
 		return fmt.Errorf("build.disk_root.size_gb must be >= 0, got %d", c.Build.DiskRoot.SizeGB)
+	}
+	if c.Build.Cache.Local.SizeGB < 0 {
+		return fmt.Errorf("build.cache.local.size_gb must be >= 0, got %d", c.Build.Cache.Local.SizeGB)
+	}
+	if c.Build.Cache.Local.MaxVolumes < 0 {
+		return fmt.Errorf("build.cache.local.max_volumes must be >= 0, got %d", c.Build.Cache.Local.MaxVolumes)
+	}
+	if c.Build.Cache.Local.IdleTTL != "" {
+		idleTTL, err := time.ParseDuration(c.Build.Cache.Local.IdleTTL)
+		if err != nil {
+			return fmt.Errorf("build.cache.local.idle_ttl must be a valid duration, got %q: %w", c.Build.Cache.Local.IdleTTL, err)
+		}
+		if idleTTL <= 0 {
+			return fmt.Errorf("build.cache.local.idle_ttl must be positive, got %q", c.Build.Cache.Local.IdleTTL)
+		}
+	}
+	if c.Build.Cache.Local.MaxBytes != "" {
+		var size datasize.ByteSize
+		if err := size.UnmarshalText([]byte(c.Build.Cache.Local.MaxBytes)); err != nil {
+			return fmt.Errorf("build.cache.local.max_bytes must be a valid byte size, got %q: %w", c.Build.Cache.Local.MaxBytes, err)
+		}
 	}
 	if c.Hypervisor.FirecrackerMaxConcurrentRestores < 0 {
 		return fmt.Errorf("hypervisor.firecracker_max_concurrent_restores must be >= 0, got %d", c.Hypervisor.FirecrackerMaxConcurrentRestores)

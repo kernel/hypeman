@@ -231,7 +231,10 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 			Message: "cache_scope requires the build:admin scope",
 		}, nil
 	}
-	deriveTenantScope := s.Config != nil && s.Config.Build.Cache.DeriveTenantScope
+	// Local cache volumes are per-scope, so enabling them also enables
+	// identity-derived tenant scopes.
+	deriveTenantScope := s.Config != nil &&
+		(s.Config.Build.Cache.DeriveTenantScope || s.Config.Build.Cache.Local.Enabled)
 	effectiveCacheScope, err := resolveEffectiveCacheScope(mw.GetUserIDFromContext(ctx), cacheScope, isAdmin, isAdminBuild, deriveTenantScope)
 	if err != nil {
 		return oapi.CreateBuild400JSONResponse{
