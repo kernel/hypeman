@@ -363,11 +363,11 @@ func TestExecuteBuild_RecoversStaleCacheVolumeHolder(t *testing.T) {
 	}
 
 	// Instance creation fails while the cache volume is held, then succeeds
-	// once the stale builder is removed.
+	// once the stale builder is removed and its attachment is gone.
 	createCalls := 0
 	instanceMgr.createFunc = func(ctx context.Context, req instances.CreateInstanceRequest) (*instances.Instance, error) {
 		createCalls++
-		if createCalls == 1 {
+		if len(volumeMgr.volumes[cacheVolID].Attachments) > 0 {
 			return nil, volumes.ErrInUse
 		}
 		inst := &instances.Instance{
@@ -384,6 +384,7 @@ func TestExecuteBuild_RecoversStaleCacheVolumeHolder(t *testing.T) {
 	assert.Equal(t, 2, createCalls, "instance creation retried after stale holder removal")
 	_, getErr := instanceMgr.GetInstance(ctx, stale.Id)
 	assert.ErrorIs(t, getErr, instances.ErrNotFound, "stale builder deleted")
+	assert.Empty(t, volumeMgr.volumes[cacheVolID].Attachments, "attachment surviving builder deletion is detached")
 }
 
 // TestExecuteBuild_RecoversOrphanCacheVolumeAttachment verifies that stale

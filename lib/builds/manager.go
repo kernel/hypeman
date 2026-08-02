@@ -979,6 +979,23 @@ func (m *manager) detachStaleCacheVolumeHolders(ctx context.Context, cacheVolID 
 			return fmt.Errorf("delete stale builder %s holding cache volume: %w", inst.Id, err)
 		}
 		m.logger.Warn("deleted stale builder holding cache volume", "instance", inst.Id, "volume", cacheVolID)
+		// DeleteInstance only warns when a volume detach fails, so the
+		// attachment record can survive the delete. Remove it directly or
+		// the retried CreateInstance still hits in-use.
+		recheck, err := m.volumeManager.GetVolume(ctx, cacheVolID)
+		if err != nil {
+			return fmt.Errorf("recheck cache volume after stale builder removal: %w", err)
+		}
+		for _, remaining := range recheck.Attachments {
+			if remaining.InstanceID != inst.Id {
+				continue
+			}
+			if detachErr := m.volumeManager.DetachVolume(ctx, cacheVolID, inst.Id); detachErr != nil {
+				return fmt.Errorf("detach cache volume attachment surviving stale builder %s deletion: %w", inst.Id, detachErr)
+			}
+			m.logger.Warn("detached cache volume attachment surviving stale builder deletion", "instance", inst.Id, "volume", cacheVolID)
+			break
+		}
 	}
 	return nil
 }
