@@ -89,7 +89,22 @@ type Config struct {
 
 	// DockerSocket is the path to the Docker socket for building the builder image
 	DockerSocket string
+
+	// DiskRootEnabled attaches a dedicated ext4 volume at /var/lib/buildkit in
+	// each builder VM instead of relying on the tmpfs fallback in the guest.
+	DiskRootEnabled bool
+
+	// DiskRootSizeGB is the size of the per-build BuildKit root volume.
+	// Values <= 0 use DefaultDiskRootSizeGB.
+	DiskRootSizeGB int
 }
+
+// buildkitRootMountPath is where the BuildKit root volume is mounted in the
+// builder guest. The builder agent detects the mount and uses it directly.
+const buildkitRootMountPath = "/var/lib/buildkit"
+
+// DefaultDiskRootSizeGB is the default size of the per-build BuildKit root volume.
+const DefaultDiskRootSizeGB = 20
 
 // DefaultConfig returns the default build manager configuration
 func DefaultConfig() Config {
@@ -719,6 +734,16 @@ func (m *manager) executeBuild(ctx context.Context, id string, req CreateBuildRe
 	}
 	defer m.volumeManager.DeleteVolume(context.Background(), configVolID)
 
+	// Optionally create a dedicated BuildKit root volume for this build.
+	// It is attached at /var/lib/buildkit and deleted with the builder VM.
+	diskRootVolID, err := m.setupDiskRootVolume(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("create buildkit root volume: %w", err)
+	}
+	if diskRootVolID != "" {
+		defer m.volumeManager.DeleteVolume(context.Background(), diskRootVolID)
+	}
+
 	// Create builder instance
 	builderName := fmt.Sprintf("builder-%s", id)
 	networkEnabled := policy.NetworkMode == "egress"
@@ -729,18 +754,7 @@ func (m *manager) executeBuild(ctx context.Context, id string, req CreateBuildRe
 		Size:           int64(policy.MemoryMB) * 1024 * 1024,
 		Vcpus:          policy.CPUs,
 		NetworkEnabled: networkEnabled,
-		Volumes: []instances.VolumeAttachment{
-			{
-				VolumeID:  sourceVolID,
-				MountPath: "/src",
-				Readonly:  false, // Builder needs to write generated Dockerfile
-			},
-			{
-				VolumeID:  configVolID,
-				MountPath: "/config",
-				Readonly:  true,
-			},
-		},
+		Volumes:        builderVolumeAttachments(sourceVolID, configVolID, diskRootVolID),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create builder instance: %w", err)
@@ -765,6 +779,55 @@ func (m *manager) executeBuild(ctx context.Context, id string, req CreateBuildRe
 	}
 
 	return result, nil
+}
+
+// setupDiskRootVolume creates the ephemeral BuildKit root volume for a build
+// when the disk root feature is enabled. Returns "" when disabled.
+func (m *manager) setupDiskRootVolume(ctx context.Context, buildID string) (string, error) {
+	if !m.config.DiskRootEnabled {
+		return "", nil
+	}
+
+	sizeGB := m.config.DiskRootSizeGB
+	if sizeGB <= 0 {
+		sizeGB = DefaultDiskRootSizeGB
+	}
+
+	volID := fmt.Sprintf("build-disk-%s", buildID)
+	_, err := m.volumeManager.CreateVolume(ctx, volumes.CreateVolumeRequest{
+		Id:     &volID,
+		Name:   volID,
+		SizeGb: sizeGB,
+	})
+	if err != nil {
+		return "", err
+	}
+	return volID, nil
+}
+
+// builderVolumeAttachments returns the volume attachments for a builder VM.
+// diskRootVolID is empty when the disk root feature is disabled.
+func builderVolumeAttachments(sourceVolID, configVolID, diskRootVolID string) []instances.VolumeAttachment {
+	attachments := []instances.VolumeAttachment{
+		{
+			VolumeID:  sourceVolID,
+			MountPath: "/src",
+			Readonly:  false, // Builder needs to write generated Dockerfile
+		},
+		{
+			VolumeID:  configVolID,
+			MountPath: "/config",
+			Readonly:  true,
+		},
+	}
+	if diskRootVolID != "" {
+		attachments = append(attachments, instances.VolumeAttachment{
+			VolumeID:  diskRootVolID,
+			MountPath: buildkitRootMountPath,
+			Readonly:  false,
+		})
+	}
+	return attachments
 }
 
 // waitForResult waits for the build result from the builder agent via vsock
