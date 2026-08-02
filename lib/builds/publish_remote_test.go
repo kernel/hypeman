@@ -3,6 +3,7 @@ package builds
 import (
 	"context"
 	"encoding/base64"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"net/http"
@@ -74,7 +75,7 @@ func pushRandomImage(t *testing.T, ref string) string {
 
 func newTestRemotePublisher(t *testing.T, cfg PublishConfig, localRegistry string) BuildPublisher {
 	t.Helper()
-	p, err := newRemotePublisher(cfg, localRegistry, NewRegistryTokenGenerator("test-secret"))
+	p, err := newRemotePublisher(cfg, localRegistry, false, "", NewRegistryTokenGenerator("test-secret"))
 	require.NoError(t, err)
 	return p
 }
@@ -253,7 +254,7 @@ func TestRemotePublisher_AuthenticatesWithCredentialsFile(t *testing.T) {
 		Registry:         dstHost,
 		RepositoryPrefix: "team/builds",
 		CredentialsFile:  credFile,
-	}, srcHost, NewRegistryTokenGenerator("test-secret"))
+	}, srcHost, false, "", NewRegistryTokenGenerator("test-secret"))
 	require.NoError(t, err)
 
 	ref, err := p.Publish(context.Background(), "builds/build-7", digest)
@@ -303,6 +304,76 @@ func TestDockerFileKeychain(t *testing.T) {
 		other, err := k.Resolve(mustRegistry(t, "other.example.com"))
 		require.NoError(t, err)
 		assert.Equal(t, authn.Anonymous, other)
+	})
+
+	t.Run("resolves credentials for keys with /v1/ or /v2/ path suffixes", func(t *testing.T) {
+		f := filepath.Join(t.TempDir(), "config.json")
+		auth := base64.StdEncoding.EncodeToString([]byte("user:pass"))
+		require.NoError(t, os.WriteFile(f, []byte(fmt.Sprintf(
+			`{"auths":{"https://registry.example.com/v1/":{"auth":%q},"https://other.example.com/v2/":{"auth":%q}}}`,
+			auth, auth)), 0600))
+
+		k, err := dockerFileKeychain(f)
+		require.NoError(t, err)
+
+		for _, host := range []string{"registry.example.com", "other.example.com"} {
+			authenticator, err := k.Resolve(mustRegistry(t, host))
+			require.NoError(t, err)
+			cfg, err := authenticator.Authorization()
+			require.NoError(t, err)
+			assert.Equal(t, "user", cfg.Username, host)
+			assert.Equal(t, "pass", cfg.Password, host)
+		}
+	})
+}
+
+// The local registry TLS settings must be honored when pulling completed
+// images: an insecure registry is contacted over plain HTTP, a secure one
+// over HTTPS.
+func TestRemotePublisher_LocalNameOptions(t *testing.T) {
+	ref := "registry.internal:5000/builds/abc123@sha256:" + strings.Repeat("ab", 32)
+
+	secure := &remotePublisher{}
+	parsed, err := name.ParseReference(ref, secure.localNameOptions()...)
+	require.NoError(t, err)
+	assert.Equal(t, "https", parsed.Context().Registry.Scheme())
+
+	insecure := &remotePublisher{localInsecure: true}
+	parsed, err = name.ParseReference(ref, insecure.localNameOptions()...)
+	require.NoError(t, err)
+	assert.Equal(t, "http", parsed.Context().Registry.Scheme())
+}
+
+func TestRegistryCATransport(t *testing.T) {
+	t.Run("empty CA cert uses the default transport", func(t *testing.T) {
+		transport, err := registryCATransport("")
+		require.NoError(t, err)
+		assert.Nil(t, transport)
+	})
+
+	t.Run("invalid PEM is rejected", func(t *testing.T) {
+		_, err := registryCATransport("not a pem certificate")
+		require.ErrorContains(t, err, "CA certificate")
+	})
+
+	t.Run("configured CA cert is trusted", func(t *testing.T) {
+		srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
+		t.Cleanup(srv.Close)
+
+		// The server cert is self-signed: the default transport rejects it.
+		_, err := http.Get(srv.URL)
+		require.Error(t, err)
+
+		pemBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
+		transport, err := registryCATransport(string(pemBytes))
+		require.NoError(t, err)
+
+		resp, err := (&http.Client{Transport: transport}).Get(srv.URL)
+		require.NoError(t, err)
+		resp.Body.Close()
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
 	})
 }
 

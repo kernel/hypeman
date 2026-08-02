@@ -152,7 +152,7 @@ func NewManager(
 	}
 
 	tokenGen := NewRegistryTokenGenerator(config.RegistrySecret)
-	publisher, err := newBuildPublisher(config.Publish, stripRegistryScheme(config.RegistryURL), tokenGen)
+	publisher, err := newBuildPublisher(config.Publish, stripRegistryScheme(config.RegistryURL), config.RegistryInsecure, config.RegistryCACert, tokenGen)
 	if err != nil {
 		return nil, fmt.Errorf("publish config: %w", err)
 	}

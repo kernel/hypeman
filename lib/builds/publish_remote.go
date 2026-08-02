@@ -2,10 +2,13 @@ package builds
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -23,23 +26,49 @@ import (
 // are read from a host-side Docker client config. Neither is sent to builder
 // VMs.
 type remotePublisher struct {
-	config        PublishConfig
-	localRegistry string
-	tokenGen      *RegistryTokenGenerator
-	keychain      authn.Keychain
+	config         PublishConfig
+	localRegistry  string
+	localInsecure  bool
+	localTransport http.RoundTripper
+	tokenGen       *RegistryTokenGenerator
+	keychain       authn.Keychain
 }
 
-func newRemotePublisher(cfg PublishConfig, localRegistry string, tokenGen *RegistryTokenGenerator) (BuildPublisher, error) {
+func newRemotePublisher(cfg PublishConfig, localRegistry string, localInsecure bool, localCACert string, tokenGen *RegistryTokenGenerator) (BuildPublisher, error) {
 	keychain, err := dockerFileKeychain(cfg.CredentialsFile)
 	if err != nil {
 		return nil, err
 	}
+	transport, err := registryCATransport(localCACert)
+	if err != nil {
+		return nil, err
+	}
 	return &remotePublisher{
-		config:        cfg,
-		localRegistry: localRegistry,
-		tokenGen:      tokenGen,
-		keychain:      keychain,
+		config:         cfg,
+		localRegistry:  localRegistry,
+		localInsecure:  localInsecure,
+		localTransport: transport,
+		tokenGen:       tokenGen,
+		keychain:       keychain,
 	}, nil
+}
+
+// registryCATransport returns a transport that additionally trusts the given
+// PEM-encoded CA certificate, or nil when no CA certificate is configured.
+func registryCATransport(caCert string) (http.RoundTripper, error) {
+	if caCert == "" {
+		return nil, nil
+	}
+	pool, err := x509.SystemCertPool()
+	if err != nil {
+		pool = x509.NewCertPool()
+	}
+	if !pool.AppendCertsFromPEM([]byte(caCert)) {
+		return nil, fmt.Errorf("publish: parse registry CA certificate: no valid PEM certificates")
+	}
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.TLSClientConfig = &tls.Config{RootCAs: pool}
+	return t, nil
 }
 
 // Publish copies the completed local image to
@@ -51,7 +80,7 @@ func (p *remotePublisher) Publish(ctx context.Context, localRef, digest string) 
 		return "", fmt.Errorf("publish: digest is required")
 	}
 
-	srcRef, err := name.ParseReference(fmt.Sprintf("%s/%s@%s", p.localRegistry, localRef, digest))
+	srcRef, err := name.ParseReference(fmt.Sprintf("%s/%s@%s", p.localRegistry, localRef, digest), p.localNameOptions()...)
 	if err != nil {
 		return "", fmt.Errorf("publish: parse local reference: %w", err)
 	}
@@ -67,7 +96,11 @@ func (p *remotePublisher) Publish(ctx context.Context, localRef, digest string) 
 	}
 	localAuth := authn.FromConfig(authn.AuthConfig{Username: token, Password: "x"})
 
-	img, err := remote.Image(srcRef, remote.WithContext(ctx), remote.WithAuth(localAuth))
+	pullOpts := []remote.Option{remote.WithContext(ctx), remote.WithAuth(localAuth)}
+	if p.localTransport != nil {
+		pullOpts = append(pullOpts, remote.WithTransport(p.localTransport))
+	}
+	img, err := remote.Image(srcRef, pullOpts...)
 	if err != nil {
 		return "", fmt.Errorf("publish: fetch local image: %w", err)
 	}
@@ -83,6 +116,15 @@ func (p *remotePublisher) Publish(ctx context.Context, localRef, digest string) 
 	}
 
 	return dstRef.String(), nil
+}
+
+// localNameOptions returns the name parsing options for the local registry:
+// an insecure registry is contacted over plain HTTP.
+func (p *remotePublisher) localNameOptions() []name.Option {
+	if p.localInsecure {
+		return []name.Option{name.Insecure}
+	}
+	return nil
 }
 
 // pushWithRetry pushes the image, retrying transient registry errors.
@@ -202,7 +244,11 @@ func dockerFileKeychain(path string) (authn.Keychain, error) {
 		}
 		host = strings.TrimPrefix(host, "https://")
 		host = strings.TrimPrefix(host, "http://")
-		host = strings.TrimSuffix(host, "/")
+		// Keys may carry a path suffix (e.g. "registry.example.com/v1/");
+		// credentials are keyed by registry host only.
+		if idx := strings.Index(host, "/"); idx != -1 {
+			host = host[:idx]
+		}
 		auths[host] = ac
 	}
 

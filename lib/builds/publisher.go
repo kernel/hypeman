@@ -57,13 +57,15 @@ func (noopPublisher) Publish(_ context.Context, localRef, _ string) (string, err
 }
 
 // newBuildPublisher returns the publisher for the given publication config.
-// Publication is a no-op unless a remote registry is configured.
-func newBuildPublisher(cfg PublishConfig, localRegistry string, tokenGen *RegistryTokenGenerator) (BuildPublisher, error) {
+// Publication is a no-op unless a remote registry is configured. The local
+// registry TLS settings apply when pulling completed images from the local
+// registry.
+func newBuildPublisher(cfg PublishConfig, localRegistry string, localInsecure bool, localCACert string, tokenGen *RegistryTokenGenerator) (BuildPublisher, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
 	if !cfg.Enabled() {
 		return noopPublisher{}, nil
 	}
-	return newRemotePublisher(cfg, localRegistry, tokenGen)
+	return newRemotePublisher(cfg, localRegistry, localInsecure, localCACert, tokenGen)
 }
