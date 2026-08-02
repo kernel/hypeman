@@ -425,6 +425,27 @@ func ProvideBuildManager(p *paths.Paths, cfg *config.Config, instanceManager ins
 		DiskRootSizeGB:      cfg.Build.DiskRoot.SizeGB,
 	}
 
+	cacheLocal := cfg.Build.Cache.Local
+	buildConfig.Cache = builds.CacheVolumeConfig{
+		Enabled:    cacheLocal.Enabled,
+		SizeGB:     cacheLocal.SizeGB,
+		MaxVolumes: cacheLocal.MaxVolumes,
+	}
+	if cacheLocal.IdleTTL != "" {
+		idleTTL, err := parseRequiredDuration(cacheLocal.IdleTTL)
+		if err != nil {
+			return nil, fmt.Errorf("build.cache.local.idle_ttl: %w", err)
+		}
+		buildConfig.Cache.IdleTTL = idleTTL
+	}
+	if cacheLocal.MaxBytes != "" {
+		var size datasize.ByteSize
+		if err := size.UnmarshalText([]byte(cacheLocal.MaxBytes)); err != nil {
+			return nil, fmt.Errorf("build.cache.local.max_bytes: %w", err)
+		}
+		buildConfig.Cache.MaxBytes = int64(size.Bytes())
+	}
+
 	// Configure secret provider (use NoOpSecretProvider as fallback to avoid nil panics)
 	var secretProvider builds.SecretProvider
 	if cfg.Build.SecretsDir != "" {

@@ -160,6 +160,12 @@ data_dir: /var/lib/hypeman
 #     derive_tenant_scope: false    # derive a per-tenant build cache scope from the
 #                                   # authenticated identity (enables tenant registry
 #                                   # cache import/export for ordinary builds)
+#     local:
+#       enabled: false              # persistent per-tenant BuildKit cache volumes
+#       size_gb: 50                 # fixed size of each cache volume
+#       idle_ttl: 24h               # delete cache volumes unused for this long
+#       max_bytes: ""               # host-wide cap on cache volumes (e.g. 200GB, empty = unlimited)
+#       max_volumes: 0              # host-wide cap on cache volume count (0 = unlimited)
 
 # =============================================================================
 # Resource Limits
