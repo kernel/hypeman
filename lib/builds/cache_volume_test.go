@@ -150,15 +150,6 @@ func TestReap_IgnoresUnmanagedPrefixedVolume(t *testing.T) {
 	assert.NoError(t, err, "unmanaged volume must never be evicted")
 }
 
-func TestReservedVolumeIDPrefix(t *testing.T) {
-	assert.Equal(t, "build-cache-", ReservedVolumeIDPrefix("build-cache-abc"))
-	assert.Equal(t, "build-disk-", ReservedVolumeIDPrefix("build-disk-123"))
-	assert.Equal(t, "build-source-", ReservedVolumeIDPrefix("build-source-123"))
-	assert.Equal(t, "build-config-", ReservedVolumeIDPrefix("build-config-123"))
-	assert.Empty(t, ReservedVolumeIDPrefix("my-data"))
-	assert.Empty(t, ReservedVolumeIDPrefix("build-caches"))
-}
-
 func TestLockScope_SerializesSameScope(t *testing.T) {
 	mgr, _, _, tempDir := setupCacheVolumeManager(t, CacheVolumeConfig{Enabled: true})
 	defer os.RemoveAll(tempDir)

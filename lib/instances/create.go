@@ -651,10 +651,10 @@ func validateCreateRequest(req *CreateInstanceRequest) error {
 // validateVolumeAttachments validates volume attachment requests.
 // allowSystemPaths permits mounts at the reserved paths in
 // allowedSystemMountPaths and is only set for internal instances.
-func validateVolumeAttachments(volumes []VolumeAttachment, allowSystemPaths bool) error {
+func validateVolumeAttachments(vols []VolumeAttachment, allowSystemPaths bool) error {
 	// Count total devices needed (each overlay volume needs 2 devices: base + overlay)
 	totalDevices := 0
-	for _, vol := range volumes {
+	for _, vol := range vols {
 		totalDevices++
 		if vol.Overlay {
 			totalDevices++ // Overlay needs an additional device
@@ -665,7 +665,16 @@ func validateVolumeAttachments(volumes []VolumeAttachment, allowSystemPaths bool
 	}
 
 	seenPaths := make(map[string]bool)
-	for _, vol := range volumes {
+	for _, vol := range vols {
+		// Internal build volumes (cache, config, disk, source) are reserved:
+		// only internal instances may attach them, so a caller cannot tamper
+		// with or hold another scope's build volumes.
+		if !allowSystemPaths {
+			if prefix := volumes.ReservedVolumeIDPrefix(vol.VolumeID); prefix != "" {
+				return fmt.Errorf("volume %s: volume ID prefix %q is reserved for internal use", vol.VolumeID, prefix)
+			}
+		}
+
 		// Validate mount path is absolute
 		if !filepath.IsAbs(vol.MountPath) {
 			return fmt.Errorf("volume %s: mount path %q must be absolute", vol.VolumeID, vol.MountPath)

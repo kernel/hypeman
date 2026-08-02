@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/kernel/hypeman/lib/builds"
 	"github.com/kernel/hypeman/lib/logger"
 	mw "github.com/kernel/hypeman/lib/middleware"
 	"github.com/kernel/hypeman/lib/oapi"
@@ -49,7 +48,7 @@ func (s *ApiService) CreateVolume(ctx context.Context, request oapi.CreateVolume
 	}
 
 	if request.Body.Id != nil {
-		if prefix := builds.ReservedVolumeIDPrefix(*request.Body.Id); prefix != "" {
+		if prefix := volumes.ReservedVolumeIDPrefix(*request.Body.Id); prefix != "" {
 			return oapi.CreateVolume400JSONResponse{
 				Code:    "invalid_request",
 				Message: fmt.Sprintf("volume IDs with the prefix %q are reserved for internal use", prefix),
@@ -109,7 +108,7 @@ func (s *ApiService) CreateVolumeFromArchive(ctx context.Context, request oapi.C
 	// Empty/invalid archives will fail with a clear gzip error downstream
 
 	if request.Params.Id != nil {
-		if prefix := builds.ReservedVolumeIDPrefix(*request.Params.Id); prefix != "" {
+		if prefix := volumes.ReservedVolumeIDPrefix(*request.Params.Id); prefix != "" {
 			return oapi.CreateVolumeFromArchive400JSONResponse{
 				Code:    "invalid_request",
 				Message: fmt.Sprintf("volume IDs with the prefix %q are reserved for internal use", prefix),
@@ -181,7 +180,7 @@ func (s *ApiService) DeleteVolume(ctx context.Context, request oapi.DeleteVolume
 		}, nil
 	}
 	log := logger.FromContext(ctx)
-	if prefix := builds.ReservedVolumeIDPrefix(vol.Id); prefix != "" {
+	if prefix := volumes.ReservedVolumeIDPrefix(vol.Id); prefix != "" {
 		return oapi.DeleteVolume409JSONResponse{
 			Code:    "conflict",
 			Message: fmt.Sprintf("volume IDs with the prefix %q are reserved for internal use", prefix),
