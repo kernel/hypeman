@@ -152,6 +152,7 @@ type BuildConfig struct {
 	SecretsDir                string              `koanf:"secrets_dir"`
 	DockerSocket              string              `koanf:"docker_socket"`
 	DiskRoot                  BuildDiskRootConfig `koanf:"disk_root"`
+	Cache                     BuildCacheConfig    `koanf:"cache"`
 }
 
 // BuildDiskRootConfig holds settings for the ephemeral per-build BuildKit root
@@ -160,6 +161,15 @@ type BuildConfig struct {
 type BuildDiskRootConfig struct {
 	Enabled bool `koanf:"enabled"`
 	SizeGB  int  `koanf:"size_gb"`
+}
+
+// BuildCacheConfig holds build cache settings.
+type BuildCacheConfig struct {
+	// DeriveTenantScope derives the tenant cache scope for a build from the
+	// authenticated identity. Disabled by default: builds that do not carry an
+	// operator-supplied cache_scope run with no tenant cache scope, so no
+	// per-tenant registry cache is imported or exported.
+	DeriveTenantScope bool `koanf:"derive_tenant_scope"`
 }
 
 // InstancesConfig holds instance-manager internal settings.

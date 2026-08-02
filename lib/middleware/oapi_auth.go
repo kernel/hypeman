@@ -165,6 +165,12 @@ func extractTokenFromAuth(authHeader string) (string, string, error) {
 	}
 }
 
+// ContextWithUserID returns a context carrying the given user ID, matching
+// what the auth middleware sets for authenticated requests.
+func ContextWithUserID(ctx context.Context, userID string) context.Context {
+	return context.WithValue(ctx, userIDKey, userID)
+}
+
 // GetUserIDFromContext extracts the user ID from context
 func GetUserIDFromContext(ctx context.Context) string {
 	if userID, ok := ctx.Value(userIDKey).(string); ok {

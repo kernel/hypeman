@@ -156,6 +156,10 @@ data_dir: /var/lib/hypeman
 #     enabled: false                # attach a dedicated ext4 volume at /var/lib/buildkit
 #                                   # in each builder VM instead of a tmpfs
 #     size_gb: 20                   # size of the per-build BuildKit root volume
+#   cache:
+#     derive_tenant_scope: false    # derive a per-tenant build cache scope from the
+#                                   # authenticated identity (enables tenant registry
+#                                   # cache import/export for ordinary builds)
 
 # =============================================================================
 # Resource Limits

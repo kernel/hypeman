@@ -216,7 +216,8 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 
 	// The effective cache scope is computed exclusively server-side.
 	// Operator tokens (build:admin) may supply an explicit cache_scope and run
-	// admin builds; ordinary callers get a scope derived from their identity.
+	// admin builds; ordinary callers get a scope derived from their identity
+	// only when tenant scope derivation is enabled in configuration.
 	isAdmin := scopes.HasScope(ctx, scopes.BuildAdmin)
 	if isAdminBuild && !isAdmin {
 		return oapi.CreateBuild403JSONResponse{
@@ -230,7 +231,8 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 			Message: "cache_scope requires the build:admin scope",
 		}, nil
 	}
-	effectiveCacheScope, err := resolveEffectiveCacheScope(mw.GetUserIDFromContext(ctx), cacheScope, isAdmin)
+	deriveTenantScope := s.Config != nil && s.Config.Build.Cache.DeriveTenantScope
+	effectiveCacheScope, err := resolveEffectiveCacheScope(mw.GetUserIDFromContext(ctx), cacheScope, isAdmin, deriveTenantScope)
 	if err != nil {
 		return oapi.CreateBuild400JSONResponse{
 			Code:    "invalid_request",
@@ -300,13 +302,17 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 
 // resolveEffectiveCacheScope computes the cache scope passed to the build
 // manager. An admin-provided scope is validated and used as-is; otherwise the
-// scope is derived from the authenticated identity.
-func resolveEffectiveCacheScope(userID, suppliedScope string, isAdmin bool) (string, error) {
+// scope is derived from the authenticated identity when tenant scope
+// derivation is enabled, and empty when it is not (the default).
+func resolveEffectiveCacheScope(userID, suppliedScope string, isAdmin, deriveTenantScope bool) (string, error) {
 	if isAdmin && suppliedScope != "" {
 		if err := builds.ValidateCacheScope(suppliedScope); err != nil {
 			return "", fmt.Errorf("invalid cache_scope: %w", err)
 		}
 		return suppliedScope, nil
+	}
+	if !deriveTenantScope {
+		return "", nil
 	}
 	return builds.DeriveCacheScope(userID), nil
 }
