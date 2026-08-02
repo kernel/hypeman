@@ -227,3 +227,95 @@ func TestBuildQueue_Counts(t *testing.T) {
 
 	close(done)
 }
+
+func TestBuildQueue_SerialKeySerializesSameKey(t *testing.T) {
+	queue := NewBuildQueue(2)
+
+	release := make(chan struct{})
+	started := make(chan string, 3)
+	startFn := func(id string) func() {
+		return func() {
+			started <- id
+			<-release
+		}
+	}
+
+	// Two builds with the same serial key: only the first starts even though
+	// a concurrency slot is free.
+	pos1 := queue.EnqueueSerial("build-1", CreateBuildRequest{}, "scope-a", startFn("build-1"))
+	pos2 := queue.EnqueueSerial("build-2", CreateBuildRequest{}, "scope-a", startFn("build-2"))
+
+	assert.Equal(t, 0, pos1)
+	assert.Equal(t, 1, pos2)
+
+	select {
+	case id := <-started:
+		assert.Equal(t, "build-1", id)
+	case <-time.After(2 * time.Second):
+		t.Fatal("first build did not start")
+	}
+	assert.Equal(t, 1, queue.ActiveCount(), "same-key build stays pending and does not occupy a slot")
+	assert.Equal(t, 1, queue.PendingCount())
+
+	// A build with a different key starts immediately in the free slot.
+	pos3 := queue.EnqueueSerial("build-3", CreateBuildRequest{}, "scope-b", startFn("build-3"))
+	assert.Equal(t, 0, pos3)
+	select {
+	case id := <-started:
+		assert.Equal(t, "build-3", id)
+	case <-time.After(2 * time.Second):
+		t.Fatal("different-key build did not start in the free slot")
+	}
+
+	close(release)
+
+	// Once the first build completes, the serialized build starts.
+	select {
+	case id := <-started:
+		assert.Equal(t, "build-2", id)
+	case <-time.After(2 * time.Second):
+		t.Fatal("serialized build did not start after same-key build completed")
+	}
+}
+
+func TestBuildQueue_SerialKeySkipsBlockedPending(t *testing.T) {
+	queue := NewBuildQueue(2)
+
+	release := make(chan string)
+	started := make(chan string, 4)
+	startFn := func(id string) func() {
+		return func() {
+			started <- id
+			<-release
+		}
+	}
+
+	queue.EnqueueSerial("build-1", CreateBuildRequest{}, "scope-a", startFn("build-1"))
+	queue.EnqueueSerial("build-2", CreateBuildRequest{}, "scope-b", startFn("build-2"))
+	queue.EnqueueSerial("build-3", CreateBuildRequest{}, "scope-a", startFn("build-3"))
+	queue.EnqueueSerial("build-4", CreateBuildRequest{}, "scope-c", startFn("build-4"))
+
+	<-started // build-1
+	<-started // build-2
+
+	// build-2 completes: build-3 is blocked (scope-a held by build-1), so
+	// build-4 starts instead of letting the slot sit idle.
+	release <- "build-2"
+	select {
+	case id := <-started:
+		assert.Equal(t, "build-4", id, "blocked pending build is skipped for a later startable one")
+	case <-time.After(2 * time.Second):
+		t.Fatal("no pending build started after a slot freed")
+	}
+
+	// build-1 completes: build-3's key is now free and it starts.
+	release <- "build-1"
+	select {
+	case id := <-started:
+		assert.Equal(t, "build-3", id)
+	case <-time.After(2 * time.Second):
+		t.Fatal("blocked build did not start once its serial key freed")
+	}
+	release <- "build-3"
+	release <- "build-4"
+}

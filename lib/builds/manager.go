@@ -550,8 +550,10 @@ func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourc
 		return nil, fmt.Errorf("write build config: %w", err)
 	}
 
-	// Enqueue the build
-	queuePos := m.queue.Enqueue(id, req, func() {
+	// Enqueue the build. Builds sharing a cache volume are serialized by
+	// scope so a waiting same-scope build stays pending instead of holding
+	// a concurrency slot while blocked on the scope lock.
+	queuePos := m.queue.EnqueueSerial(id, req, m.buildSerialKey(req), func() {
 		m.runBuild(context.Background(), id, req, policy)
 	})
 
@@ -562,6 +564,16 @@ func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourc
 
 	m.logger.Info("build created", "id", id, "queue_position", queuePos)
 	return build, nil
+}
+
+// buildSerialKey returns the queue serialization key for a build: builds
+// that attach the same persistent cache volume share a key and never run
+// concurrently. Builds without a cache volume are unconstrained.
+func (m *manager) buildSerialKey(req CreateBuildRequest) string {
+	if m.cacheVolumes != nil && req.CacheScope != "" && !req.IsAdminBuild {
+		return req.CacheScope
+	}
+	return ""
 }
 
 // storeSource stores the source tarball for a build
@@ -760,6 +772,9 @@ func (m *manager) executeBuild(ctx context.Context, id string, req CreateBuildRe
 	// BuildKit root is exclusive to one builder at a time.
 	cacheVolID := ""
 	if m.cacheVolumes != nil && req.CacheScope != "" && !req.IsAdminBuild {
+		// The queue serializes same-scope builds before they occupy a
+		// concurrency slot; this lock guards any caller that reaches
+		// executeBuild directly.
 		unlock := m.cacheVolumes.lockScope(req.CacheScope)
 		defer unlock()
 
@@ -1465,7 +1480,7 @@ func (m *manager) RecoverPendingBuilds() {
 				continue
 			}
 
-			m.queue.Enqueue(meta.ID, *meta.Request, func() {
+			m.queue.EnqueueSerial(meta.ID, *meta.Request, m.buildSerialKey(*meta.Request), func() {
 				policy := DefaultBuildPolicy()
 				if meta.Request.BuildPolicy != nil {
 					policy = *meta.Request.BuildPolicy

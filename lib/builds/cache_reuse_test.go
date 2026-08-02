@@ -284,3 +284,18 @@ func TestCreateBuild_CacheGCKeepBytes(t *testing.T) {
 	require.NoError(t, err)
 	assert.Zero(t, readConfig(admin.ID).CacheGCKeepBytes)
 }
+
+// TestBuildSerialKey verifies only builds that attach a persistent cache
+// volume are serialized in the queue by scope.
+func TestBuildSerialKey(t *testing.T) {
+	mgr, _, volumeMgr, tempDir := setupTestManager(t)
+	defer os.RemoveAll(tempDir)
+
+	// Cache disabled: no serialization.
+	assert.Empty(t, mgr.buildSerialKey(CreateBuildRequest{CacheScope: "tenant-a"}))
+
+	enableCacheVolumes(mgr, volumeMgr, CacheVolumeConfig{Enabled: true, SizeGB: 30})
+	assert.Equal(t, "tenant-a", mgr.buildSerialKey(CreateBuildRequest{CacheScope: "tenant-a"}))
+	assert.Empty(t, mgr.buildSerialKey(CreateBuildRequest{}), "unscoped builds are unconstrained")
+	assert.Empty(t, mgr.buildSerialKey(CreateBuildRequest{CacheScope: "tenant-a", IsAdminBuild: true}), "admin builds are unconstrained")
+}

@@ -6,7 +6,12 @@ import "sync"
 type QueuedBuild struct {
 	BuildID string
 	Request CreateBuildRequest
-	StartFn func()
+	// SerialKey groups builds that must not run concurrently (e.g. builds
+	// sharing a cache volume). A queued build with a serial key only starts
+	// once no active build holds the same key, so it never occupies a
+	// concurrency slot while waiting on another build of its group.
+	SerialKey string
+	StartFn   func()
 }
 
 // BuildQueue manages concurrent builds with a configurable limit.
@@ -22,10 +27,11 @@ type QueuedBuild struct {
 // - Implement adapters: memoryQueue, redisQueue, natsQueue
 // - Use BUILD_QUEUE_BACKEND env var to select implementation
 type BuildQueue struct {
-	maxConcurrent int
-	active        map[string]bool
-	pending       []QueuedBuild
-	mu            sync.Mutex
+	maxConcurrent    int
+	active           map[string]bool
+	activeSerialKeys map[string]string // build ID -> serial key
+	pending          []QueuedBuild
+	mu               sync.Mutex
 }
 
 // NewBuildQueue creates a new build queue with the given concurrency limit
@@ -34,15 +40,23 @@ func NewBuildQueue(maxConcurrent int) *BuildQueue {
 		maxConcurrent = 1
 	}
 	return &BuildQueue{
-		maxConcurrent: maxConcurrent,
-		active:        make(map[string]bool),
-		pending:       make([]QueuedBuild, 0),
+		maxConcurrent:    maxConcurrent,
+		active:           make(map[string]bool),
+		activeSerialKeys: make(map[string]string),
+		pending:          make([]QueuedBuild, 0),
 	}
 }
 
 // Enqueue adds a build to the queue. Returns queue position (0 if started immediately, >0 if queued).
 // If the build is already building or queued, returns its current position without re-enqueueing.
 func (q *BuildQueue) Enqueue(buildID string, req CreateBuildRequest, startFn func()) int {
+	return q.EnqueueSerial(buildID, req, "", startFn)
+}
+
+// EnqueueSerial is Enqueue with a serial key: builds sharing a non-empty key
+// are serialized so a waiting build stays pending instead of occupying a
+// concurrency slot while blocked on another build of its group.
+func (q *BuildQueue) EnqueueSerial(buildID string, req CreateBuildRequest, serialKey string, startFn func()) int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -65,15 +79,15 @@ func (q *BuildQueue) Enqueue(buildID string, req CreateBuildRequest, startFn fun
 	}
 
 	build := QueuedBuild{
-		BuildID: buildID,
-		Request: req,
-		StartFn: wrappedFn,
+		BuildID:   buildID,
+		Request:   req,
+		SerialKey: serialKey,
+		StartFn:   wrappedFn,
 	}
 
-	// Start immediately if under concurrency limit
-	if len(q.active) < q.maxConcurrent {
-		q.active[buildID] = true
-		go wrappedFn()
+	// Start immediately if under concurrency limit and the serial key is free
+	if q.canStartLocked(serialKey) {
+		q.startLocked(build)
 		return 0
 	}
 
@@ -82,20 +96,69 @@ func (q *BuildQueue) Enqueue(buildID string, req CreateBuildRequest, startFn fun
 	return len(q.pending)
 }
 
-// MarkComplete marks a build as complete and starts the next pending build if any
+// canStartLocked reports whether a build with the given serial key may start.
+func (q *BuildQueue) canStartLocked(serialKey string) bool {
+	if len(q.active) >= q.maxConcurrent {
+		return false
+	}
+	if serialKey == "" {
+		return true
+	}
+	for _, key := range q.activeSerialKeys {
+		if key == serialKey {
+			return false
+		}
+	}
+	return true
+}
+
+// startLocked marks a build active and launches it.
+func (q *BuildQueue) startLocked(build QueuedBuild) {
+	q.active[build.BuildID] = true
+	if build.SerialKey != "" {
+		q.activeSerialKeys[build.BuildID] = build.SerialKey
+	}
+	go build.StartFn()
+}
+
+// MarkComplete marks a build as complete and starts pending builds while
+// capacity and serial keys allow. A pending build whose serial key is held
+// is skipped so later builds can proceed.
 func (q *BuildQueue) MarkComplete(buildID string) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
 	delete(q.active, buildID)
+	delete(q.activeSerialKeys, buildID)
 
-	// Start next pending build if we have capacity
-	if len(q.pending) > 0 && len(q.active) < q.maxConcurrent {
-		next := q.pending[0]
-		q.pending = q.pending[1:]
-		q.active[next.BuildID] = true
-		go next.StartFn()
+	for len(q.active) < q.maxConcurrent {
+		idx := -1
+		for i, build := range q.pending {
+			if q.serialKeyFreeLocked(build.SerialKey) {
+				idx = i
+				break
+			}
+		}
+		if idx == -1 {
+			return
+		}
+		next := q.pending[idx]
+		q.pending = append(q.pending[:idx], q.pending[idx+1:]...)
+		q.startLocked(next)
 	}
+}
+
+// serialKeyFreeLocked reports whether no active build holds the serial key.
+func (q *BuildQueue) serialKeyFreeLocked(serialKey string) bool {
+	if serialKey == "" {
+		return true
+	}
+	for _, key := range q.activeSerialKeys {
+		if key == serialKey {
+			return false
+		}
+	}
+	return true
 }
 
 // GetPosition returns the queue position for a build.
