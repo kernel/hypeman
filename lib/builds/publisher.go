@@ -58,9 +58,12 @@ func (noopPublisher) Publish(_ context.Context, localRef, _ string) (string, err
 
 // newBuildPublisher returns the publisher for the given publication config.
 // Publication is a no-op unless a remote registry is configured.
-func newBuildPublisher(cfg PublishConfig) (BuildPublisher, error) {
+func newBuildPublisher(cfg PublishConfig, localRegistry string, tokenGen *RegistryTokenGenerator) (BuildPublisher, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
-	return noopPublisher{}, nil
+	if !cfg.Enabled() {
+		return noopPublisher{}, nil
+	}
+	return newRemotePublisher(cfg, localRegistry, tokenGen)
 }

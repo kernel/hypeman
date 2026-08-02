@@ -22,19 +22,21 @@ func TestNoopPublisher_ReturnsLocalRefUnchanged(t *testing.T) {
 }
 
 func TestNewBuildPublisher_DisabledByDefault(t *testing.T) {
-	p, err := newBuildPublisher(PublishConfig{})
+	p, err := newBuildPublisher(PublishConfig{}, "localhost:5000", NewRegistryTokenGenerator("test"))
 	require.NoError(t, err)
 	assert.IsType(t, noopPublisher{}, p)
 }
 
 func TestNewBuildPublisher_ValidatesConfig(t *testing.T) {
-	_, err := newBuildPublisher(PublishConfig{RepositoryPrefix: "team/builds"})
+	tokenGen := NewRegistryTokenGenerator("test")
+
+	_, err := newBuildPublisher(PublishConfig{RepositoryPrefix: "team/builds"}, "localhost:5000", tokenGen)
 	require.ErrorContains(t, err, "registry")
 
-	_, err = newBuildPublisher(PublishConfig{CredentialsFile: "/creds.json"})
+	_, err = newBuildPublisher(PublishConfig{CredentialsFile: "/creds.json"}, "localhost:5000", tokenGen)
 	require.ErrorContains(t, err, "registry")
 
-	_, err = newBuildPublisher(PublishConfig{Registry: "registry.example.com"})
+	_, err = newBuildPublisher(PublishConfig{Registry: "registry.example.com"}, "localhost:5000", tokenGen)
 	require.ErrorContains(t, err, "repository_prefix")
 }
 

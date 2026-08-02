@@ -151,9 +151,15 @@ func NewManager(
 		logger = slog.Default()
 	}
 
-	publisher, err := newBuildPublisher(config.Publish)
+	tokenGen := NewRegistryTokenGenerator(config.RegistrySecret)
+	publisher, err := newBuildPublisher(config.Publish, stripRegistryScheme(config.RegistryURL), tokenGen)
 	if err != nil {
 		return nil, fmt.Errorf("publish config: %w", err)
+	}
+	if config.Publish.Enabled() {
+		logger.Info("build image publication enabled",
+			"registry", config.Publish.Registry,
+			"repository_prefix", config.Publish.RepositoryPrefix)
 	}
 
 	m := &manager{
@@ -164,7 +170,7 @@ func NewManager(
 		volumeManager:     volumeMgr,
 		imageManager:      imageMgr,
 		secretProvider:    secretProvider,
-		tokenGenerator:    NewRegistryTokenGenerator(config.RegistrySecret),
+		tokenGenerator:    tokenGen,
 		publisher:         publisher,
 		logger:            logger,
 		statusSubscribers: make(map[string][]chan BuildEvent),
