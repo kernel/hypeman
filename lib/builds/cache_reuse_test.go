@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/instances"
+	"github.com/kernel/hypeman/lib/tags"
 	"github.com/kernel/hypeman/lib/volumes"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -30,6 +31,7 @@ func enableCacheVolumes(mgr *manager, volumeMgr *mockVolumeManager, config Cache
 			Id:        id,
 			Name:      req.Name,
 			SizeGb:    req.SizeGb,
+			Tags:      tags.Clone(req.Tags),
 			CreatedAt: time.Now(),
 		}
 		volumeMgr.volumes[id] = vol
@@ -298,4 +300,57 @@ func TestBuildSerialKey(t *testing.T) {
 	assert.Equal(t, "tenant-a", mgr.buildSerialKey(CreateBuildRequest{CacheScope: "tenant-a"}))
 	assert.Empty(t, mgr.buildSerialKey(CreateBuildRequest{}), "unscoped builds are unconstrained")
 	assert.Empty(t, mgr.buildSerialKey(CreateBuildRequest{CacheScope: "tenant-a", IsAdminBuild: true}), "admin builds are unconstrained")
+}
+
+// TestExecuteBuild_RecoversStaleCacheVolumeHolder verifies that when a
+// crashed build left its builder attached to the cache volume, the next
+// same-scope build deletes the stale builder and retries instance creation
+// instead of wedging the scope.
+func TestExecuteBuild_RecoversStaleCacheVolumeHolder(t *testing.T) {
+	mgr, instanceMgr, volumeMgr, tempDir := setupTestManager(t)
+	defer os.RemoveAll(tempDir)
+	enableCacheVolumes(mgr, volumeMgr, CacheVolumeConfig{Enabled: true, SizeGB: 30})
+
+	ctx := context.Background()
+	req := CreateBuildRequest{
+		Dockerfile: "FROM alpine\nRUN echo hello",
+		CacheScope: "tenant-a",
+	}
+	prepareBuildOnDisk(t, mgr, "build-1", req)
+
+	// Pre-create the cache volume and leave it attached to a stale builder
+	// from a crashed build.
+	cacheVolID, err := mgr.cacheVolumes.ensureCacheVolume(ctx, "tenant-a")
+	require.NoError(t, err)
+	stale := &instances.Instance{
+		StoredMetadata: instances.StoredMetadata{Id: "inst-stale", Name: "builder-crashed"},
+		State:          instances.StateRunning,
+	}
+	instanceMgr.instances[stale.Id] = stale
+	volumeMgr.volumes[cacheVolID].Attachments = []volumes.Attachment{
+		{InstanceID: stale.Id, MountPath: "/var/lib/buildkit"},
+	}
+
+	// Instance creation fails while the cache volume is held, then succeeds
+	// once the stale builder is removed.
+	createCalls := 0
+	instanceMgr.createFunc = func(ctx context.Context, req instances.CreateInstanceRequest) (*instances.Instance, error) {
+		createCalls++
+		if createCalls == 1 {
+			return nil, volumes.ErrInUse
+		}
+		inst := &instances.Instance{
+			StoredMetadata: instances.StoredMetadata{Id: "inst-" + req.Name, Name: req.Name},
+			State:          instances.StateStopped,
+		}
+		instanceMgr.instances[inst.Id] = inst
+		return inst, nil
+	}
+
+	policy := DefaultBuildPolicy()
+	_, err = mgr.executeBuild(ctx, "build-1", req, &policy)
+	require.NoError(t, err)
+	assert.Equal(t, 2, createCalls, "instance creation retried after stale holder removal")
+	_, getErr := instanceMgr.GetInstance(ctx, stale.Id)
+	assert.ErrorIs(t, getErr, instances.ErrNotFound, "stale builder deleted")
 }

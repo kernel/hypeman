@@ -819,7 +819,7 @@ func (m *manager) executeBuild(ctx context.Context, id string, req CreateBuildRe
 	builderName := fmt.Sprintf("builder-%s", id)
 	networkEnabled := policy.NetworkMode == "egress"
 
-	inst, err := m.instanceManager.CreateInstance(ctx, instances.CreateInstanceRequest{
+	createReq := instances.CreateInstanceRequest{
 		Name:                    builderName,
 		Image:                   m.config.BuilderImage,
 		Size:                    int64(policy.MemoryMB) * 1024 * 1024,
@@ -827,7 +827,18 @@ func (m *manager) executeBuild(ctx context.Context, id string, req CreateBuildRe
 		NetworkEnabled:          networkEnabled,
 		Volumes:                 builderVolumeAttachments(sourceVolID, configVolID, buildkitRootVolID),
 		AllowSystemVolumeMounts: true, // builder owns the BuildKit root mount
-	})
+	}
+	inst, err := m.instanceManager.CreateInstance(ctx, createReq)
+	if err != nil && cacheVolID != "" {
+		// A crashed previous build may have left its builder holding the
+		// cache volume. Builds for a scope are serialized, so any remaining
+		// attachment is stale: remove the holder and retry once.
+		if recErr := m.detachStaleCacheVolumeHolders(ctx, cacheVolID); recErr != nil {
+			m.logger.Warn("failed to detach stale cache volume holders", "volume", cacheVolID, "error", recErr)
+		} else {
+			inst, err = m.instanceManager.CreateInstance(ctx, createReq)
+		}
+	}
 	if err != nil {
 		return nil, fmt.Errorf("create builder instance: %w", err)
 	}
@@ -840,7 +851,12 @@ func (m *manager) executeBuild(ctx context.Context, id string, req CreateBuildRe
 
 	// Ensure cleanup
 	defer func() {
-		m.instanceManager.DeleteInstance(context.Background(), inst.Id)
+		if err := m.instanceManager.DeleteInstance(context.Background(), inst.Id); err != nil {
+			// A failed delete leaves the cache volume attached, which blocks
+			// the next same-scope build until the stale holder recovery in
+			// executeBuild removes it.
+			m.logger.Error("failed to delete builder instance", "instance", inst.Id, "build", id, "error", err)
+		}
 	}()
 
 	// Wait for build result via vsock
@@ -924,6 +940,31 @@ func (m *manager) deleteStaleBuilder(ctx context.Context, buildID string) error 
 	}
 	if err := m.instanceManager.DeleteInstance(ctx, inst.Id); err != nil && !errors.Is(err, instances.ErrNotFound) {
 		return fmt.Errorf("delete stale builder %s: %w", inst.Id, err)
+	}
+	return nil
+}
+
+// detachStaleCacheVolumeHolders deletes builder instances still attached to
+// a cache volume. Same-scope builds are serialized before they reach
+// executeBuild, so an attachment remaining when a build creates its builder
+// belongs to a crashed build whose builder was never cleaned up.
+func (m *manager) detachStaleCacheVolumeHolders(ctx context.Context, cacheVolID string) error {
+	vol, err := m.volumeManager.GetVolume(ctx, cacheVolID)
+	if err != nil {
+		return fmt.Errorf("get cache volume: %w", err)
+	}
+	for _, att := range vol.Attachments {
+		inst, err := m.instanceManager.GetInstance(ctx, att.InstanceID)
+		if err != nil {
+			return fmt.Errorf("get instance %s holding cache volume: %w", att.InstanceID, err)
+		}
+		if !strings.HasPrefix(inst.Name, "builder-") {
+			return fmt.Errorf("cache volume %s attached to non-builder instance %s", cacheVolID, inst.Id)
+		}
+		if err := m.instanceManager.DeleteInstance(ctx, inst.Id); err != nil {
+			return fmt.Errorf("delete stale builder %s holding cache volume: %w", inst.Id, err)
+		}
+		m.logger.Warn("deleted stale builder holding cache volume", "instance", inst.Id, "volume", cacheVolID)
 	}
 	return nil
 }
