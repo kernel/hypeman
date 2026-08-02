@@ -79,6 +79,46 @@ func TestDeleteVolume_ByName(t *testing.T) {
 	assert.True(t, ok, "expected 204 response")
 }
 
+func TestCreateVolume_ReservedTagNamespace(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	resourceTags := oapi.Tags{"hypeman.system/managed-by": "build-cache"}
+	resp, err := svc.CreateVolume(ctx(), oapi.CreateVolumeRequestObject{
+		Body: &oapi.CreateVolumeRequest{
+			Name:   "spoofed-cache",
+			SizeGb: 1,
+			Tags:   &resourceTags,
+		},
+	})
+	require.NoError(t, err)
+	bad, ok := resp.(oapi.CreateVolume400JSONResponse)
+	require.True(t, ok, "expected 400 for reserved tag key")
+	assert.Contains(t, bad.Message, "reserved for internal use")
+
+	vols, err := svc.VolumeManager.ListVolumes(ctx())
+	require.NoError(t, err)
+	assert.Empty(t, vols, "spoofed volume should not be created")
+}
+
+func TestCreateVolumeFromArchive_ReservedTagNamespace(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	resourceTags := oapi.Tags{"hypeman.system/managed-by": "build-cache"}
+	resp, err := svc.CreateVolumeFromArchive(ctx(), oapi.CreateVolumeFromArchiveRequestObject{
+		Params: oapi.CreateVolumeFromArchiveParams{
+			Name:   "spoofed-cache",
+			SizeGb: 1,
+			Tags:   &resourceTags,
+		},
+	})
+	require.NoError(t, err)
+	bad, ok := resp.(oapi.CreateVolumeFromArchive400JSONResponse)
+	require.True(t, ok, "expected 400 for reserved tag key")
+	assert.Contains(t, bad.Message, "reserved for internal use")
+}
+
 func TestCreateVolume_ReservedIDPrefix(t *testing.T) {
 	t.Parallel()
 	svc := newTestService(t)
