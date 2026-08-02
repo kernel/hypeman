@@ -113,6 +113,37 @@ func TestValidateVolumeAttachments_AllowedSystemMountPath(t *testing.T) {
 	}
 }
 
+func TestValidateVolumeAttachments_ReservedVolumeIDPrefix(t *testing.T) {
+	t.Parallel()
+	// Internal build volume IDs are rejected for external requests
+	// (allowSystemPaths=false) so a caller cannot attach, tamper with, or
+	// hold another scope's build volumes.
+	for _, id := range []string{"build-cache-abc", "build-disk-123", "build-config-123", "build-source-123"} {
+		err := validateVolumeAttachments([]VolumeAttachment{{
+			VolumeID:  id,
+			MountPath: "/mnt/x",
+		}}, false)
+		assert.Error(t, err, "expected reserved volume ID %q to be rejected", id)
+		assert.Contains(t, err.Error(), "reserved for internal use")
+	}
+
+	// Internal instances (e.g. builder VMs) may attach them.
+	for _, id := range []string{"build-cache-abc", "build-disk-123", "build-config-123", "build-source-123"} {
+		err := validateVolumeAttachments([]VolumeAttachment{{
+			VolumeID:  id,
+			MountPath: "/mnt/x",
+		}}, true)
+		assert.NoError(t, err, "expected reserved volume ID %q to be allowed for internal instances", id)
+	}
+
+	// Lookalike IDs that do not match a reserved prefix stay allowed.
+	err := validateVolumeAttachments([]VolumeAttachment{{
+		VolumeID:  "build-caches",
+		MountPath: "/mnt/x",
+	}}, false)
+	assert.NoError(t, err)
+}
+
 func TestValidateVolumeAttachments_OverlayRequiresReadonly(t *testing.T) {
 	t.Parallel()
 	// Overlay=true with Readonly=false should fail

@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -64,28 +63,6 @@ const (
 	// cacheVolumeSweepInterval is how often the reaper evaluates eviction.
 	cacheVolumeSweepInterval = time.Minute
 )
-
-// managedVolumeIDPrefixes are volume ID prefixes reserved for volumes the
-// build manager creates internally. Public volume APIs reject
-// caller-supplied IDs with these prefixes so a caller cannot squat on or
-// tamper with an internal build volume.
-var managedVolumeIDPrefixes = []string{
-	cacheVolumeIDPrefix,
-	"build-config-",
-	"build-disk-",
-	"build-source-",
-}
-
-// ReservedVolumeIDPrefix returns the reserved internal prefix id starts
-// with, or "" when id is usable by API callers.
-func ReservedVolumeIDPrefix(id string) string {
-	for _, p := range managedVolumeIDPrefixes {
-		if strings.HasPrefix(id, p) {
-			return p
-		}
-	}
-	return ""
-}
 
 // cacheVolumeID returns the volume ID for a cache scope:
 // build-cache-<sha256(scope)>.
