@@ -55,3 +55,15 @@ func TestEnsureBuildkitRootPropagatesMountFailure(t *testing.T) {
 
 	require.ErrorContains(t, err, "mount failed")
 }
+
+func TestBuildkitWorkerGCConfig(t *testing.T) {
+	// No bound configured: no worker section, GC stays at BuildKit defaults.
+	assert.Empty(t, buildkitWorkerGCConfig(0))
+	assert.Empty(t, buildkitWorkerGCConfig(-1))
+
+	// Bounded GC: enabled with a keep threshold in MB.
+	cfg := buildkitWorkerGCConfig(45 * 1024 * 1024 * 1024)
+	assert.Contains(t, cfg, "[worker.oci]")
+	assert.Contains(t, cfg, "gc = true")
+	assert.Contains(t, cfg, "gckeepstorage = 46080")
+}

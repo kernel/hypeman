@@ -52,6 +52,7 @@ type BuildConfig struct {
 	NetworkMode      string            `json:"network_mode"`
 	IsAdminBuild     bool              `json:"is_admin_build,omitempty"`
 	GlobalCacheKey   string            `json:"global_cache_key,omitempty"`
+	CacheGCKeepBytes int64             `json:"cache_gc_keep_bytes,omitempty"`
 }
 
 // SecretRef references a secret to inject during build
@@ -730,6 +731,10 @@ func setupBuildkitdConfig(config *BuildConfig) error {
 	tomlContent.WriteString("[registry.\"docker.io\"]\n")
 	tomlContent.WriteString(fmt.Sprintf("  mirrors = [\"%s\"]\n", registryHost))
 
+	// Bound BuildKit garbage collection when a persistent cache volume is
+	// attached, so the cache cannot grow without limit.
+	tomlContent.WriteString(buildkitWorkerGCConfig(config.CacheGCKeepBytes))
+
 	// Ensure config directory exists
 	buildkitDir := "/home/builder/.config/buildkit"
 	if err := os.MkdirAll(buildkitDir, 0755); err != nil {
@@ -746,6 +751,17 @@ func setupBuildkitdConfig(config *BuildConfig) error {
 		tomlPath, registryHost, isHTTPS, config.RegistryInsecure, hasCA)
 
 	return nil
+}
+
+// buildkitWorkerGCConfig returns the buildkitd.toml worker section that
+// enables BuildKit garbage collection bounded to keepBytes, or an empty
+// string when no bound is configured.
+func buildkitWorkerGCConfig(keepBytes int64) string {
+	if keepBytes <= 0 {
+		return ""
+	}
+	keepMB := keepBytes / (1024 * 1024)
+	return fmt.Sprintf("\n[worker.oci]\n  gc = true\n  gckeepstorage = %d\n", keepMB)
 }
 
 func runBuild(ctx context.Context, config *BuildConfig, logWriter io.Writer) (string, string, error) {

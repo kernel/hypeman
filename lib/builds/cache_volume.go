@@ -237,6 +237,12 @@ func (c *cacheVolumeManager) saveLocked() error {
 	return os.Rename(tmp, c.statePath())
 }
 
+// gcKeepBytes returns the BuildKit GC keep threshold for cache volumes,
+// sized to the volume with headroom for the active build.
+func (c *cacheVolumeManager) gcKeepBytes() int64 {
+	return int64(c.config.SizeGB) * 1024 * 1024 * 1024 * 9 / 10
+}
+
 // startReaper periodically evicts cache volumes that exceed the idle TTL or
 // the host-wide byte/count limits.
 func (c *cacheVolumeManager) startReaper(ctx context.Context) {

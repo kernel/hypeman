@@ -540,6 +540,11 @@ func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourc
 		GlobalCacheKey:   req.GlobalCacheKey,
 		ImageName:        req.ImageName,
 	}
+	// When a persistent cache volume will back this build, bound BuildKit's
+	// garbage collector to the volume size.
+	if m.cacheVolumes != nil && req.CacheScope != "" && !req.IsAdminBuild {
+		buildConfig.CacheGCKeepBytes = m.cacheVolumes.gcKeepBytes()
+	}
 	if err := writeBuildConfig(m.paths, id, buildConfig); err != nil {
 		deleteBuild(m.paths, id)
 		return nil, fmt.Errorf("write build config: %w", err)
@@ -748,14 +753,49 @@ func (m *manager) executeBuild(ctx context.Context, id string, req CreateBuildRe
 	}
 	defer m.volumeManager.DeleteVolume(context.Background(), configVolID)
 
-	// Optionally create a dedicated BuildKit root volume for this build.
-	// It is attached at /var/lib/buildkit and deleted with the builder VM.
-	diskRootVolID, err := m.setupDiskRootVolume(ctx, id)
-	if err != nil {
-		return nil, fmt.Errorf("create buildkit root volume: %w", err)
+	// Attach the persistent per-scope BuildKit cache volume when the local
+	// cache is enabled. It takes precedence over the ephemeral disk root
+	// volume and is retained after the build so later builds of the same
+	// scope reuse it. Builds for a scope are serialized because the
+	// BuildKit root is exclusive to one builder at a time.
+	cacheVolID := ""
+	if m.cacheVolumes != nil && req.CacheScope != "" && !req.IsAdminBuild {
+		unlock := m.cacheVolumes.lockScope(req.CacheScope)
+		defer unlock()
+
+		volID, err := m.cacheVolumes.ensureCacheVolume(ctx, req.CacheScope)
+		if err != nil {
+			return nil, fmt.Errorf("ensure build cache volume: %w", err)
+		}
+		cacheVolID = volID
+
+		release := m.cacheVolumes.acquireVolume(volID)
+		defer func() {
+			release()
+			m.cacheVolumes.touchLastUsed(volID)
+			// Enforce host-wide limits once the volume is released.
+			m.cacheVolumes.reap(context.Background())
+		}()
 	}
-	if diskRootVolID != "" {
-		defer m.volumeManager.DeleteVolume(context.Background(), diskRootVolID)
+
+	// Otherwise, optionally create an ephemeral BuildKit root volume for
+	// this build. It is attached at /var/lib/buildkit and deleted with the
+	// builder VM.
+	diskRootVolID := ""
+	if cacheVolID == "" {
+		var err error
+		diskRootVolID, err = m.setupDiskRootVolume(ctx, id)
+		if err != nil {
+			return nil, fmt.Errorf("create buildkit root volume: %w", err)
+		}
+		if diskRootVolID != "" {
+			defer m.volumeManager.DeleteVolume(context.Background(), diskRootVolID)
+		}
+	}
+
+	buildkitRootVolID := cacheVolID
+	if buildkitRootVolID == "" {
+		buildkitRootVolID = diskRootVolID
 	}
 
 	// Create builder instance
@@ -768,7 +808,7 @@ func (m *manager) executeBuild(ctx context.Context, id string, req CreateBuildRe
 		Size:                    int64(policy.MemoryMB) * 1024 * 1024,
 		Vcpus:                   policy.CPUs,
 		NetworkEnabled:          networkEnabled,
-		Volumes:                 builderVolumeAttachments(sourceVolID, configVolID, diskRootVolID),
+		Volumes:                 builderVolumeAttachments(sourceVolID, configVolID, buildkitRootVolID),
 		AllowSystemVolumeMounts: true, // builder owns the BuildKit root mount
 	})
 	if err != nil {
@@ -872,8 +912,9 @@ func (m *manager) deleteStaleBuilder(ctx context.Context, buildID string) error 
 }
 
 // builderVolumeAttachments returns the volume attachments for a builder VM.
-// diskRootVolID is empty when the disk root feature is disabled.
-func builderVolumeAttachments(sourceVolID, configVolID, diskRootVolID string) []instances.VolumeAttachment {
+// buildkitRootVolID is the volume mounted at /var/lib/buildkit (ephemeral
+// disk root or persistent cache volume), empty when neither is enabled.
+func builderVolumeAttachments(sourceVolID, configVolID, buildkitRootVolID string) []instances.VolumeAttachment {
 	attachments := []instances.VolumeAttachment{
 		{
 			VolumeID:  sourceVolID,
@@ -886,9 +927,9 @@ func builderVolumeAttachments(sourceVolID, configVolID, diskRootVolID string) []
 			Readonly:  true,
 		},
 	}
-	if diskRootVolID != "" {
+	if buildkitRootVolID != "" {
 		attachments = append(attachments, instances.VolumeAttachment{
-			VolumeID:  diskRootVolID,
+			VolumeID:  buildkitRootVolID,
 			MountPath: buildkitRootMountPath,
 			Readonly:  false,
 		})

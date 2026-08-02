@@ -175,6 +175,10 @@ type BuildConfig struct {
 
 	// ImageName optionally sets a custom image name for the build output.
 	ImageName string `json:"image_name,omitempty"`
+
+	// CacheGCKeepBytes bounds BuildKit's garbage collector when a persistent
+	// cache volume backs this build. Zero leaves GC at BuildKit defaults.
+	CacheGCKeepBytes int64 `json:"cache_gc_keep_bytes,omitempty"`
 }
 
 // BuildEvent represents a typed SSE event for build streaming
