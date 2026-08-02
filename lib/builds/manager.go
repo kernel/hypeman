@@ -5,6 +5,7 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -799,6 +800,18 @@ func (m *manager) setupDiskRootVolume(ctx context.Context, buildID string) (stri
 		Name:   volID,
 		SizeGb: sizeGB,
 	})
+	if errors.Is(err, volumes.ErrAlreadyExists) {
+		// A previous attempt at this build crashed before cleanup. Delete
+		// the leftover volume and start fresh.
+		if delErr := m.volumeManager.DeleteVolume(ctx, volID); delErr != nil {
+			return "", fmt.Errorf("delete leftover buildkit root volume: %w", delErr)
+		}
+		_, err = m.volumeManager.CreateVolume(ctx, volumes.CreateVolumeRequest{
+			Id:     &volID,
+			Name:   volID,
+			SizeGb: sizeGB,
+		})
+	}
 	if err != nil {
 		return "", err
 	}
