@@ -281,12 +281,17 @@ func TestBuildQueue_SerialKeySerializesSameKey(t *testing.T) {
 func TestBuildQueue_SerialKeySkipsBlockedPending(t *testing.T) {
 	queue := NewBuildQueue(2)
 
-	release := make(chan string)
+	// Each build gets its own release channel so completing one build can
+	// only unblock its own goroutine.
+	release := make(map[string]chan struct{})
+	for _, id := range []string{"build-1", "build-2", "build-3", "build-4"} {
+		release[id] = make(chan struct{})
+	}
 	started := make(chan string, 4)
 	startFn := func(id string) func() {
 		return func() {
 			started <- id
-			<-release
+			<-release[id]
 		}
 	}
 
@@ -300,7 +305,7 @@ func TestBuildQueue_SerialKeySkipsBlockedPending(t *testing.T) {
 
 	// build-2 completes: build-3 is blocked (scope-a held by build-1), so
 	// build-4 starts instead of letting the slot sit idle.
-	release <- "build-2"
+	close(release["build-2"])
 	select {
 	case id := <-started:
 		assert.Equal(t, "build-4", id, "blocked pending build is skipped for a later startable one")
@@ -309,13 +314,13 @@ func TestBuildQueue_SerialKeySkipsBlockedPending(t *testing.T) {
 	}
 
 	// build-1 completes: build-3's key is now free and it starts.
-	release <- "build-1"
+	close(release["build-1"])
 	select {
 	case id := <-started:
 		assert.Equal(t, "build-3", id)
 	case <-time.After(2 * time.Second):
 		t.Fatal("blocked build did not start once its serial key freed")
 	}
-	release <- "build-3"
-	release <- "build-4"
+	close(release["build-3"])
+	close(release["build-4"])
 }
