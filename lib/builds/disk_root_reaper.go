@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kernel/hypeman/lib/instances"
 	"github.com/kernel/hypeman/lib/volumes"
 )
 
@@ -38,7 +39,9 @@ func (m *manager) runDiskRootReaper(ctx context.Context) {
 
 // sweepOrphanedDiskRootVolumes deletes build-disk-* volumes whose build is
 // gone or in a terminal state. Volumes for active builds and races against
-// concurrent use (ErrInUse/ErrNotFound) are skipped.
+// concurrent use (ErrNotFound) are skipped. A volume still attached to the
+// dead builder instance of a crashed build (ErrInUse) is freed by deleting
+// the stale builder and retrying once.
 func (m *manager) sweepOrphanedDiskRootVolumes(ctx context.Context) {
 	vols, err := m.volumeManager.ListVolumes(ctx)
 	if err != nil {
@@ -62,7 +65,11 @@ func (m *manager) sweepOrphanedDiskRootVolumes(ctx context.Context) {
 		case err == nil:
 			reaped++
 			m.logger.Info("reaped orphaned buildkit root volume", "build_id", buildID, "volume_id", vol.Id)
-		case errors.Is(err, volumes.ErrInUse), errors.Is(err, volumes.ErrNotFound):
+		case errors.Is(err, volumes.ErrInUse):
+			if m.reapAttachedDiskRootVolume(ctx, buildID, vol.Id) {
+				reaped++
+			}
+		case errors.Is(err, volumes.ErrNotFound):
 			m.logger.Debug("skipping buildkit root volume", "build_id", buildID, "volume_id", vol.Id, "reason", err)
 		default:
 			m.logger.Warn("failed to delete orphaned buildkit root volume", "build_id", buildID, "volume_id", vol.Id, "error", err)
@@ -72,6 +79,40 @@ func (m *manager) sweepOrphanedDiskRootVolumes(ctx context.Context) {
 	if reaped > 0 {
 		m.logger.Info("reaped orphaned buildkit root volumes", "count", reaped)
 	}
+}
+
+// reapAttachedDiskRootVolume handles an orphaned buildkit root volume whose
+// delete failed with ErrInUse. The build is already known to be terminal or
+// gone, so a surviving builder-<buildID> instance is stale crash debris:
+// delete it (which detaches its volumes) and retry the volume delete once.
+// If the volume is attached to anything else it is left alone. Returns true
+// when the volume was reaped.
+func (m *manager) reapAttachedDiskRootVolume(ctx context.Context, buildID, volID string) bool {
+	err := m.deleteStaleBuilder(ctx, buildID)
+	switch {
+	case err == nil:
+		m.logger.Info("deleted stale builder holding orphaned buildkit root volume", "build_id", buildID, "volume_id", volID)
+	case errors.Is(err, instances.ErrNotFound):
+		// Attached to something we don't own; never force-delete.
+		m.logger.Warn("orphaned buildkit root volume still in use by an unknown instance, skipping", "build_id", buildID, "volume_id", volID)
+		return false
+	default:
+		m.logger.Warn("failed to delete stale builder holding orphaned buildkit root volume", "build_id", buildID, "volume_id", volID, "error", err)
+		return false
+	}
+
+	err = m.volumeManager.DeleteVolume(ctx, volID)
+	switch {
+	case err == nil:
+		m.logger.Info("reaped orphaned buildkit root volume after stale builder removal", "build_id", buildID, "volume_id", volID)
+		return true
+	case errors.Is(err, volumes.ErrNotFound):
+		// Concurrent cleanup beat us to it.
+		m.logger.Debug("buildkit root volume disappeared after stale builder removal", "build_id", buildID, "volume_id", volID)
+	default:
+		m.logger.Warn("failed to delete orphaned buildkit root volume after stale builder removal", "build_id", buildID, "volume_id", volID, "error", err)
+	}
+	return false
 }
 
 // buildTerminalOrGone reports whether the build is safe to reap resources

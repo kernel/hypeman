@@ -833,16 +833,28 @@ func (m *manager) deleteLeftoverDiskRootVolume(ctx context.Context, buildID, vol
 		return nil
 	}
 
-	builderName := fmt.Sprintf("builder-%s", buildID)
-	inst, getErr := m.instanceManager.GetInstance(ctx, builderName)
-	if getErr != nil {
-		return fmt.Errorf("leftover buildkit root volume still attached and stale builder %q not found: %w", builderName, getErr)
-	}
-	if delErr := m.instanceManager.DeleteInstance(ctx, inst.Id); delErr != nil {
-		return fmt.Errorf("delete stale builder %s holding leftover buildkit root volume: %w", inst.Id, delErr)
+	if err := m.deleteStaleBuilder(ctx, buildID); err != nil {
+		return fmt.Errorf("clear stale builder holding leftover buildkit root volume: %w", err)
 	}
 	if err := m.volumeManager.DeleteVolume(ctx, volID); err != nil {
 		return fmt.Errorf("delete leftover buildkit root volume after stale builder removal: %w", err)
+	}
+	return nil
+}
+
+// deleteStaleBuilder deletes the builder-<buildID> instance left behind by a
+// crashed build, which detaches its volumes. A lookup failure (including the
+// instance being gone) is returned wrapped so callers can match
+// instances.ErrNotFound; ErrNotFound from DeleteInstance itself is tolerated
+// because the instance was already removed by a concurrent cleanup.
+func (m *manager) deleteStaleBuilder(ctx context.Context, buildID string) error {
+	builderName := fmt.Sprintf("builder-%s", buildID)
+	inst, err := m.instanceManager.GetInstance(ctx, builderName)
+	if err != nil {
+		return fmt.Errorf("get stale builder %q: %w", builderName, err)
+	}
+	if err := m.instanceManager.DeleteInstance(ctx, inst.Id); err != nil && !errors.Is(err, instances.ErrNotFound) {
+		return fmt.Errorf("delete stale builder %s: %w", inst.Id, err)
 	}
 	return nil
 }

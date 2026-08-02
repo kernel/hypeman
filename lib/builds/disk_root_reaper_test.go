@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kernel/hypeman/lib/instances"
 	"github.com/kernel/hypeman/lib/volumes"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -79,8 +80,45 @@ func TestSweepOrphanedDiskRootVolumes_SkipsActiveBuild(t *testing.T) {
 	}
 }
 
-func TestSweepOrphanedDiskRootVolumes_SkipsErrInUse(t *testing.T) {
-	mgr, _, volumeMgr, tempDir := setupTestManager(t)
+// addStaleBuilderInstance registers a builder-<buildID> instance in the mock
+// instance manager, simulating crash debris that still holds the build's
+// buildkit root volume.
+func addStaleBuilderInstance(instanceMgr *mockInstanceManager, buildID string) {
+	name := "builder-" + buildID
+	instanceMgr.instances[name] = &instances.Instance{
+		StoredMetadata: instances.StoredMetadata{Id: name, Name: name},
+		State:          instances.StateRunning,
+	}
+}
+
+func TestSweepOrphanedDiskRootVolumes_ReapsAfterStaleBuilderRemoval(t *testing.T) {
+	mgr, instanceMgr, volumeMgr, tempDir := setupTestManager(t)
+	defer os.RemoveAll(tempDir)
+
+	writeBuildMetadataForReaper(t, mgr, "build-1", StatusFailed)
+	addDiskRootVolume(volumeMgr, "build-disk-build-1")
+	addStaleBuilderInstance(instanceMgr, "build-1")
+
+	// The volume stays attached while the stale builder instance exists;
+	// deleting the builder detaches it.
+	volumeMgr.deleteFunc = func(ctx context.Context, id string) error {
+		if _, ok := instanceMgr.instances["builder-build-1"]; ok {
+			return volumes.ErrInUse
+		}
+		delete(volumeMgr.volumes, id)
+		return nil
+	}
+
+	mgr.sweepOrphanedDiskRootVolumes(context.Background())
+
+	assert.Equal(t, 1, instanceMgr.deleteCallCount, "stale builder must be deleted")
+	assert.Equal(t, 2, volumeMgr.deleteCallCount, "volume delete must be retried once after builder removal")
+	_, err := volumeMgr.GetVolume(context.Background(), "build-disk-build-1")
+	assert.ErrorIs(t, err, volumes.ErrNotFound, "volume must be reaped after stale builder removal")
+}
+
+func TestSweepOrphanedDiskRootVolumes_SkipsErrInUseWithoutBuilder(t *testing.T) {
+	mgr, instanceMgr, volumeMgr, tempDir := setupTestManager(t)
 	defer os.RemoveAll(tempDir)
 
 	writeBuildMetadataForReaper(t, mgr, "build-1", StatusFailed)
@@ -92,7 +130,54 @@ func TestSweepOrphanedDiskRootVolumes_SkipsErrInUse(t *testing.T) {
 	mgr.sweepOrphanedDiskRootVolumes(context.Background())
 
 	_, err := volumeMgr.GetVolume(context.Background(), "build-disk-build-1")
-	require.NoError(t, err, "volume still attached to a builder VM must be left alone")
+	require.NoError(t, err, "volume attached to something we don't own must be left alone")
+	assert.Equal(t, 1, volumeMgr.deleteCallCount, "no retry when the stale builder is not found")
+	assert.Equal(t, 0, instanceMgr.deleteCallCount)
+}
+
+func TestSweepOrphanedDiskRootVolumes_SkipsWhenStaleBuilderDeleteFails(t *testing.T) {
+	mgr, instanceMgr, volumeMgr, tempDir := setupTestManager(t)
+	defer os.RemoveAll(tempDir)
+
+	writeBuildMetadataForReaper(t, mgr, "build-1", StatusFailed)
+	addDiskRootVolume(volumeMgr, "build-disk-build-1")
+	addStaleBuilderInstance(instanceMgr, "build-1")
+	volumeMgr.deleteFunc = func(ctx context.Context, id string) error {
+		return volumes.ErrInUse
+	}
+	instanceMgr.deleteFunc = func(ctx context.Context, id string) error {
+		return errors.New("hypervisor unavailable")
+	}
+
+	mgr.sweepOrphanedDiskRootVolumes(context.Background())
+
+	assert.Equal(t, 1, instanceMgr.deleteCallCount)
+	assert.Equal(t, 1, volumeMgr.deleteCallCount, "no volume retry when the builder could not be deleted")
+	_, err := volumeMgr.GetVolume(context.Background(), "build-disk-build-1")
+	require.NoError(t, err, "volume must be left untouched")
+	_, err = instanceMgr.GetInstance(context.Background(), "builder-build-1")
+	require.NoError(t, err, "stale builder must be left untouched")
+}
+
+func TestSweepOrphanedDiskRootVolumes_NoRetryLoopWhenVolumeStaysInUse(t *testing.T) {
+	mgr, instanceMgr, volumeMgr, tempDir := setupTestManager(t)
+	defer os.RemoveAll(tempDir)
+
+	writeBuildMetadataForReaper(t, mgr, "build-1", StatusFailed)
+	addDiskRootVolume(volumeMgr, "build-disk-build-1")
+	addStaleBuilderInstance(instanceMgr, "build-1")
+	// Volume remains in use even after the stale builder is gone (attached
+	// elsewhere); the reaper must give up after one retry.
+	volumeMgr.deleteFunc = func(ctx context.Context, id string) error {
+		return volumes.ErrInUse
+	}
+
+	mgr.sweepOrphanedDiskRootVolumes(context.Background())
+
+	assert.Equal(t, 1, instanceMgr.deleteCallCount)
+	assert.Equal(t, 2, volumeMgr.deleteCallCount, "exactly one retry after stale builder removal")
+	_, err := volumeMgr.GetVolume(context.Background(), "build-disk-build-1")
+	require.NoError(t, err, "volume still in use must be left alone")
 }
 
 func TestSweepOrphanedDiskRootVolumes_SkipsErrNotFound(t *testing.T) {
