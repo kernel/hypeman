@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/kernel/hypeman/lib/oapi"
+	"github.com/kernel/hypeman/lib/volumes"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -113,4 +114,27 @@ func TestCreateVolumeFromArchive_ReservedIDPrefix(t *testing.T) {
 	bad, ok := resp.(oapi.CreateVolumeFromArchive400JSONResponse)
 	require.True(t, ok, "expected 400 for reserved ID")
 	assert.Contains(t, bad.Message, "reserved for internal use")
+}
+
+func TestDeleteVolume_ReservedIDPrefix(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	for _, id := range []string{"build-cache-abc", "build-disk-1", "build-source-1", "build-config-1"} {
+		_, err := svc.VolumeManager.CreateVolume(ctx(), volumes.CreateVolumeRequest{
+			Id:     &id,
+			Name:   id,
+			SizeGb: 1,
+		})
+		require.NoError(t, err)
+
+		resp, err := svc.DeleteVolume(ctxWithVolume(svc, id), oapi.DeleteVolumeRequestObject{Id: id})
+		require.NoError(t, err)
+		conflict, ok := resp.(oapi.DeleteVolume409JSONResponse)
+		require.True(t, ok, "expected 409 for reserved ID %q", id)
+		assert.Contains(t, conflict.Message, "reserved for internal use")
+
+		_, err = svc.VolumeManager.GetVolume(ctx(), id)
+		require.NoError(t, err, "reserved volume %q should not be deleted", id)
+	}
 }
