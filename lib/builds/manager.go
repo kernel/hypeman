@@ -763,19 +763,21 @@ func (m *manager) executeBuild(ctx context.Context, id string, req CreateBuildRe
 		unlock := m.cacheVolumes.lockScope(req.CacheScope)
 		defer unlock()
 
-		volID, err := m.cacheVolumes.ensureCacheVolume(ctx, req.CacheScope)
-		if err != nil {
-			return nil, fmt.Errorf("ensure build cache volume: %w", err)
-		}
-		cacheVolID = volID
-
-		release := m.cacheVolumes.acquireVolume(volID)
+		// Register the volume as in use before ensuring it exists so the
+		// reaper cannot evict it in the window between creation and
+		// attachment. The volume ID is deterministic per scope.
+		cacheVolID = cacheVolumeID(req.CacheScope)
+		release := m.cacheVolumes.acquireVolume(cacheVolID)
 		defer func() {
 			release()
-			m.cacheVolumes.touchLastUsed(volID)
+			m.cacheVolumes.touchLastUsed(cacheVolID)
 			// Enforce host-wide limits once the volume is released.
 			m.cacheVolumes.reap(context.Background())
 		}()
+
+		if _, err := m.cacheVolumes.ensureCacheVolume(ctx, req.CacheScope); err != nil {
+			return nil, fmt.Errorf("ensure build cache volume: %w", err)
+		}
 	}
 
 	// Otherwise, optionally create an ephemeral BuildKit root volume for

@@ -309,6 +309,38 @@ func TestReap_NeverEvictsInUseVolume(t *testing.T) {
 	assert.ErrorIs(t, err, volumes.ErrNotFound, "volume evicted once released")
 }
 
+func TestReap_LimitsSkipJustEnsuredInUseVolume(t *testing.T) {
+	mgr, volumeMgr, _, tempDir := setupCacheVolumeManager(t, CacheVolumeConfig{
+		Enabled:    true,
+		SizeGB:     10,
+		IdleTTL:    100 * time.Hour, // TTL not in play
+		MaxVolumes: 1,
+	})
+	defer os.RemoveAll(tempDir)
+
+	ctx := context.Background()
+	// An existing idle volume already at the host-wide cap.
+	oldID, err := mgr.ensureCacheVolume(ctx, "tenant-old")
+	require.NoError(t, err)
+
+	// executeBuild acquires the in-use guard before ensuring the volume, so
+	// a reap in the window between ensure and attach must not evict the
+	// just-created, not-yet-attached volume.
+	volID := cacheVolumeID("tenant-new")
+	release := mgr.acquireVolume(volID)
+	defer release()
+	ensuredID, err := mgr.ensureCacheVolume(ctx, "tenant-new")
+	require.NoError(t, err)
+	require.Equal(t, volID, ensuredID)
+
+	mgr.reap(ctx)
+
+	_, err = volumeMgr.GetVolume(ctx, volID)
+	assert.NoError(t, err, "just-ensured in-use volume must survive limit eviction")
+	_, err = volumeMgr.GetVolume(ctx, oldID)
+	assert.ErrorIs(t, err, volumes.ErrNotFound, "idle volume evicted to satisfy the cap")
+}
+
 func TestReap_EnforcesMaxVolumesLRU(t *testing.T) {
 	mgr, volumeMgr, now, tempDir := setupCacheVolumeManager(t, CacheVolumeConfig{
 		Enabled:    true,

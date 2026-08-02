@@ -123,7 +123,9 @@ func (c *cacheVolumeManager) lockScope(scope string) func() {
 
 // acquireVolume marks a volume as in use by a running build so the reaper
 // never evicts it, including the window between creation and attachment.
-// The returned function releases the guard.
+// Callers must acquire the guard before creating or looking up the volume;
+// the reaper does not honor scope locks. The returned function releases the
+// guard.
 func (c *cacheVolumeManager) acquireVolume(volID string) func() {
 	c.mu.Lock()
 	c.inUse[volID]++
