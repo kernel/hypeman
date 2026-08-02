@@ -4159,9 +4159,11 @@ paths:
                 cache_scope:
                   type: string
                   description: |
-                    Tenant-specific cache key prefix (operator-only, requires the build:admin scope).
-                    Ordinary callers ignore this field: the effective cache scope is derived
-                    server-side from the authenticated identity.
+                    Tenant-specific cache key prefix (operator-only). Supplying this field
+                    without the build:admin scope is rejected with 403. When omitted, the
+                    effective cache scope is computed server-side: derived from the
+                    authenticated identity if tenant scope derivation is enabled, otherwise
+                    empty.
                 timeout_seconds:
                   type: integer
                   description: Build timeout (default 600)
