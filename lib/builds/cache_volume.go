@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/paths"
+	"github.com/kernel/hypeman/lib/tags"
 	"github.com/kernel/hypeman/lib/volumes"
 )
 
@@ -52,9 +53,39 @@ const (
 	// cacheVolumeIDPrefix prefixes all cache volume IDs.
 	cacheVolumeIDPrefix = "build-cache-"
 
+	// cacheVolumeManagedTagKey and cacheVolumeManagedTagValue mark volumes
+	// created by the build cache manager. The tag distinguishes cache
+	// volumes from caller-created volumes that happen to share the ID
+	// prefix: the manager only reuses tagged volumes and the reaper only
+	// evicts tagged volumes.
+	cacheVolumeManagedTagKey   = "hypeman.system/managed-by"
+	cacheVolumeManagedTagValue = "build-cache"
+
 	// cacheVolumeSweepInterval is how often the reaper evaluates eviction.
 	cacheVolumeSweepInterval = time.Minute
 )
+
+// managedVolumeIDPrefixes are volume ID prefixes reserved for volumes the
+// build manager creates internally. Public volume APIs reject
+// caller-supplied IDs with these prefixes so a caller cannot squat on or
+// tamper with an internal build volume.
+var managedVolumeIDPrefixes = []string{
+	cacheVolumeIDPrefix,
+	"build-config-",
+	"build-disk-",
+	"build-source-",
+}
+
+// ReservedVolumeIDPrefix returns the reserved internal prefix id starts
+// with, or "" when id is usable by API callers.
+func ReservedVolumeIDPrefix(id string) string {
+	for _, p := range managedVolumeIDPrefixes {
+		if strings.HasPrefix(id, p) {
+			return p
+		}
+	}
+	return ""
+}
 
 // cacheVolumeID returns the volume ID for a cache scope:
 // build-cache-<sha256(scope)>.
@@ -134,7 +165,10 @@ func (c *cacheVolumeManager) acquireVolume(volID string) func() {
 func (c *cacheVolumeManager) ensureCacheVolume(ctx context.Context, scope string) (string, error) {
 	volID := cacheVolumeID(scope)
 
-	if _, err := c.volumeManager.GetVolume(ctx, volID); err == nil {
+	if vol, err := c.volumeManager.GetVolume(ctx, volID); err == nil {
+		if !isManagedCacheVolume(vol) {
+			return "", fmt.Errorf("cache volume %s exists but was not created by the build cache; refusing to reuse it", volID)
+		}
 		c.touchLastUsed(volID)
 		return volID, nil
 	} else if !errors.Is(err, volumes.ErrNotFound) {
@@ -145,13 +179,29 @@ func (c *cacheVolumeManager) ensureCacheVolume(ctx context.Context, scope string
 		Id:     &volID,
 		Name:   volID,
 		SizeGb: c.config.SizeGB,
+		Tags:   tags.Tags{cacheVolumeManagedTagKey: cacheVolumeManagedTagValue},
 	})
-	if err != nil && !errors.Is(err, volumes.ErrAlreadyExists) {
+	if errors.Is(err, volumes.ErrAlreadyExists) {
+		// Lost a creation race; reuse the winner only if it is ours.
+		vol, getErr := c.volumeManager.GetVolume(ctx, volID)
+		if getErr != nil {
+			return "", fmt.Errorf("get cache volume after create race: %w", getErr)
+		}
+		if !isManagedCacheVolume(vol) {
+			return "", fmt.Errorf("cache volume %s exists but was not created by the build cache; refusing to reuse it", volID)
+		}
+	} else if err != nil {
 		return "", fmt.Errorf("create cache volume: %w", err)
 	}
 
 	c.touchLastUsed(volID)
 	return volID, nil
+}
+
+// isManagedCacheVolume reports whether a volume carries the internal tag
+// marking it as created by the build cache manager.
+func isManagedCacheVolume(vol *volumes.Volume) bool {
+	return vol.Tags[cacheVolumeManagedTagKey] == cacheVolumeManagedTagValue
 }
 
 // touchLastUsed records that a cache volume was used now.
@@ -223,7 +273,9 @@ func (c *cacheVolumeManager) startReaper(ctx context.Context) {
 
 // reap deletes cache volumes that are idle past the TTL, then evicts idle
 // volumes LRU-first until the byte and count limits are satisfied. Attached
-// or in-use volumes are never evicted.
+// or in-use volumes are never evicted. Only volumes tagged as managed by the
+// build cache are considered; caller-created volumes that happen to share
+// the ID prefix are left alone.
 func (c *cacheVolumeManager) reap(ctx context.Context) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -237,7 +289,7 @@ func (c *cacheVolumeManager) reap(ctx context.Context) {
 
 	cacheVols := make([]volumes.Volume, 0)
 	for _, v := range vols {
-		if strings.HasPrefix(v.Id, cacheVolumeIDPrefix) {
+		if isManagedCacheVolume(&v) {
 			cacheVols = append(cacheVols, v)
 		}
 	}

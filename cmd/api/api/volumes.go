@@ -3,7 +3,9 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 
+	"github.com/kernel/hypeman/lib/builds"
 	"github.com/kernel/hypeman/lib/logger"
 	mw "github.com/kernel/hypeman/lib/middleware"
 	"github.com/kernel/hypeman/lib/oapi"
@@ -44,6 +46,15 @@ func (s *ApiService) CreateVolume(ctx context.Context, request oapi.CreateVolume
 			Code:    "invalid_request",
 			Message: "request body is required",
 		}, nil
+	}
+
+	if request.Body.Id != nil {
+		if prefix := builds.ReservedVolumeIDPrefix(*request.Body.Id); prefix != "" {
+			return oapi.CreateVolume400JSONResponse{
+				Code:    "invalid_request",
+				Message: fmt.Sprintf("volume IDs with the prefix %q are reserved for internal use", prefix),
+			}, nil
+		}
 	}
 
 	domainReq := volumes.CreateVolumeRequest{
@@ -96,6 +107,15 @@ func (s *ApiService) CreateVolumeFromArchive(ctx context.Context, request oapi.C
 	}
 	// Note: request.Body is never nil in Go's net/http (empty body = http.NoBody)
 	// Empty/invalid archives will fail with a clear gzip error downstream
+
+	if request.Params.Id != nil {
+		if prefix := builds.ReservedVolumeIDPrefix(*request.Params.Id); prefix != "" {
+			return oapi.CreateVolumeFromArchive400JSONResponse{
+				Code:    "invalid_request",
+				Message: fmt.Sprintf("volume IDs with the prefix %q are reserved for internal use", prefix),
+			}, nil
+		}
+	}
 
 	// Create the volume from archive - stream directly without buffering
 	domainReq := volumes.CreateVolumeFromArchiveRequest{
