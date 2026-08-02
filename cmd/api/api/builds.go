@@ -232,7 +232,7 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 		}, nil
 	}
 	deriveTenantScope := s.Config != nil && s.Config.Build.Cache.DeriveTenantScope
-	effectiveCacheScope, err := resolveEffectiveCacheScope(mw.GetUserIDFromContext(ctx), cacheScope, isAdmin, deriveTenantScope)
+	effectiveCacheScope, err := resolveEffectiveCacheScope(mw.GetUserIDFromContext(ctx), cacheScope, isAdmin, isAdminBuild, deriveTenantScope)
 	if err != nil {
 		return oapi.CreateBuild400JSONResponse{
 			Code:    "invalid_request",
@@ -301,17 +301,19 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 }
 
 // resolveEffectiveCacheScope computes the cache scope passed to the build
-// manager. An admin-provided scope is validated and used as-is; otherwise the
-// scope is derived from the authenticated identity when tenant scope
-// derivation is enabled, and empty when it is not (the default).
-func resolveEffectiveCacheScope(userID, suppliedScope string, isAdmin, deriveTenantScope bool) (string, error) {
+// manager. An admin-provided scope is validated and used as-is; admin builds
+// without an explicit scope get no cache scope (the builder agent and cache
+// volumes ignore CacheScope for admin builds); otherwise the scope is derived
+// from the authenticated identity when tenant scope derivation is enabled,
+// and empty when it is not (the default).
+func resolveEffectiveCacheScope(userID, suppliedScope string, isAdmin, isAdminBuild, deriveTenantScope bool) (string, error) {
 	if isAdmin && suppliedScope != "" {
 		if err := builds.ValidateCacheScope(suppliedScope); err != nil {
 			return "", fmt.Errorf("invalid cache_scope: %w", err)
 		}
 		return suppliedScope, nil
 	}
-	if !deriveTenantScope {
+	if isAdminBuild || !deriveTenantScope {
 		return "", nil
 	}
 	return builds.DeriveCacheScope(userID), nil

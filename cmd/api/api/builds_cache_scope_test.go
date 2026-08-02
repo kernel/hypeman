@@ -76,36 +76,42 @@ func createBuildRequest(t *testing.T, fields map[string]string) oapi.CreateBuild
 
 func TestResolveEffectiveCacheScope(t *testing.T) {
 	// Admin with explicit scope: used as-is
-	scope, err := resolveEffectiveCacheScope("user-alice", "my-team", true, false)
+	scope, err := resolveEffectiveCacheScope("user-alice", "my-team", true, false, false)
 	require.NoError(t, err)
 	assert.Equal(t, "my-team", scope)
 
 	// Admin with invalid explicit scope: rejected
-	_, err = resolveEffectiveCacheScope("user-alice", "ab", true, false)
+	_, err = resolveEffectiveCacheScope("user-alice", "ab", true, false, false)
 	require.Error(t, err)
 
 	// Admin without scope, derivation enabled: derived from identity
-	scope, err = resolveEffectiveCacheScope("user-alice", "", true, true)
+	scope, err = resolveEffectiveCacheScope("user-alice", "", true, false, true)
 	require.NoError(t, err)
 	assert.Equal(t, builds.DeriveCacheScope("user-alice"), scope)
 
 	// Ordinary caller, derivation enabled: derived from identity, supplied
 	// scope never reaches here
-	scope, err = resolveEffectiveCacheScope("user-bob", "", false, true)
+	scope, err = resolveEffectiveCacheScope("user-bob", "", false, false, true)
 	require.NoError(t, err)
 	assert.Equal(t, builds.DeriveCacheScope("user-bob"), scope)
 	assert.NotEqual(t, builds.DeriveCacheScope("user-alice"), scope)
 
 	// Derivation disabled (default): no cache scope even with an identity
-	scope, err = resolveEffectiveCacheScope("user-bob", "", false, false)
+	scope, err = resolveEffectiveCacheScope("user-bob", "", false, false, false)
 	require.NoError(t, err)
 	assert.Empty(t, scope)
-	scope, err = resolveEffectiveCacheScope("user-alice", "", true, false)
+	scope, err = resolveEffectiveCacheScope("user-alice", "", true, false, false)
 	require.NoError(t, err)
 	assert.Empty(t, scope)
 
 	// No identity: no cache scope
-	scope, err = resolveEffectiveCacheScope("", "", false, true)
+	scope, err = resolveEffectiveCacheScope("", "", false, false, true)
+	require.NoError(t, err)
+	assert.Empty(t, scope)
+
+	// Admin build without an explicit scope: no derived scope even when
+	// derivation is enabled (CacheScope is ignored for admin builds)
+	scope, err = resolveEffectiveCacheScope("user-alice", "", true, true, true)
 	require.NoError(t, err)
 	assert.Empty(t, scope)
 }
