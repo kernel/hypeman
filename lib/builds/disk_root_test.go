@@ -77,6 +77,49 @@ func TestSetupDiskRootVolume_CreateError(t *testing.T) {
 	assert.Empty(t, volID)
 }
 
+func TestSetupDiskRootVolume_LeftoverFromCrash(t *testing.T) {
+	mgr, _, volumeMgr, tempDir := setupTestManager(t)
+	defer os.RemoveAll(tempDir)
+	mgr.config.DiskRootEnabled = true
+
+	// Simulate a volume left behind by a crashed build: the first create
+	// fails with ErrAlreadyExists, the leftover is deleted, and the retry
+	// succeeds.
+	created := false
+	volumeMgr.createFunc = func(ctx context.Context, req volumes.CreateVolumeRequest) (*volumes.Volume, error) {
+		if !created {
+			created = true
+			return nil, volumes.ErrAlreadyExists
+		}
+		return &volumes.Volume{Id: *req.Id, Name: req.Name, SizeGb: req.SizeGb}, nil
+	}
+
+	volID, err := mgr.setupDiskRootVolume(context.Background(), "build-1")
+
+	require.NoError(t, err)
+	assert.Equal(t, "build-disk-build-1", volID)
+	assert.Equal(t, 1, volumeMgr.deleteCallCount)
+	assert.Equal(t, 2, volumeMgr.createCallCount)
+}
+
+func TestSetupDiskRootVolume_LeftoverDeleteError(t *testing.T) {
+	mgr, _, volumeMgr, tempDir := setupTestManager(t)
+	defer os.RemoveAll(tempDir)
+	mgr.config.DiskRootEnabled = true
+
+	volumeMgr.createFunc = func(ctx context.Context, req volumes.CreateVolumeRequest) (*volumes.Volume, error) {
+		return nil, volumes.ErrAlreadyExists
+	}
+	volumeMgr.deleteFunc = func(ctx context.Context, id string) error {
+		return errors.New("volume attached")
+	}
+
+	volID, err := mgr.setupDiskRootVolume(context.Background(), "build-1")
+
+	require.Error(t, err)
+	assert.Empty(t, volID)
+}
+
 func TestBuilderVolumeAttachments(t *testing.T) {
 	attachments := builderVolumeAttachments("src-vol", "cfg-vol", "")
 	require.Len(t, attachments, 2)
