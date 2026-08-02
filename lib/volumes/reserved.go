@@ -25,3 +25,18 @@ func ReservedVolumeIDPrefix(id string) string {
 	}
 	return ""
 }
+
+// SystemTagNamespace is the tag key namespace reserved for internal,
+// server-managed metadata (e.g. the tag marking build cache volumes).
+const SystemTagNamespace = "hypeman.system/"
+
+// ReservedTagNamespace returns the reserved internal tag namespace key
+// starts with, or "" when key is usable by API callers. Public APIs must
+// reject caller-supplied tags in this namespace so a caller cannot
+// impersonate an internally managed volume.
+func ReservedTagNamespace(key string) string {
+	if strings.HasPrefix(key, SystemTagNamespace) {
+		return SystemTagNamespace
+	}
+	return ""
+}

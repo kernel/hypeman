@@ -150,6 +150,32 @@ func TestReap_IgnoresUnmanagedPrefixedVolume(t *testing.T) {
 	assert.NoError(t, err, "unmanaged volume must never be evicted")
 }
 
+func TestReap_IgnoresTaggedVolumeWithoutPrefix(t *testing.T) {
+	mgr, volumeMgr, now, tempDir := setupCacheVolumeManager(t, CacheVolumeConfig{
+		Enabled: true,
+		SizeGB:  10,
+		IdleTTL: time.Hour,
+	})
+	defer os.RemoveAll(tempDir)
+
+	// A volume carrying the managed-by tag but an arbitrary ID — e.g. one
+	// created before the tag namespace was reserved, or outside the public
+	// API — must survive the reaper even when idle past the TTL.
+	userVol := &volumes.Volume{
+		Id:        "user-tagged-volume",
+		Name:      "user-data",
+		SizeGb:    10,
+		CreatedAt: now.Add(-72 * time.Hour),
+		Tags:      tags.Tags{cacheVolumeManagedTagKey: cacheVolumeManagedTagValue},
+	}
+	volumeMgr.volumes[userVol.Id] = userVol
+
+	mgr.reap(context.Background())
+
+	_, err := volumeMgr.GetVolume(context.Background(), userVol.Id)
+	assert.NoError(t, err, "tagged volume without the reserved ID prefix must never be evicted")
+}
+
 func TestLockScope_SerializesSameScope(t *testing.T) {
 	mgr, _, _, tempDir := setupCacheVolumeManager(t, CacheVolumeConfig{Enabled: true})
 	defer os.RemoveAll(tempDir)

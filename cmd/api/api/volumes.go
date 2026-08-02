@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 
 	"github.com/kernel/hypeman/lib/logger"
 	mw "github.com/kernel/hypeman/lib/middleware"
@@ -54,6 +55,13 @@ func (s *ApiService) CreateVolume(ctx context.Context, request oapi.CreateVolume
 				Message: fmt.Sprintf("volume IDs with the prefix %q are reserved for internal use", prefix),
 			}, nil
 		}
+	}
+
+	if key := reservedTagKey(request.Body.Tags); key != "" {
+		return oapi.CreateVolume400JSONResponse{
+			Code:    "invalid_request",
+			Message: fmt.Sprintf("tag key %q is reserved for internal use", key),
+		}, nil
 	}
 
 	domainReq := volumes.CreateVolumeRequest{
@@ -114,6 +122,13 @@ func (s *ApiService) CreateVolumeFromArchive(ctx context.Context, request oapi.C
 				Message: fmt.Sprintf("volume IDs with the prefix %q are reserved for internal use", prefix),
 			}, nil
 		}
+	}
+
+	if key := reservedTagKey(request.Params.Tags); key != "" {
+		return oapi.CreateVolumeFromArchive400JSONResponse{
+			Code:    "invalid_request",
+			Message: fmt.Sprintf("tag key %q is reserved for internal use", key),
+		}, nil
 	}
 
 	// Create the volume from archive - stream directly without buffering
@@ -229,4 +244,23 @@ func volumeToOAPI(vol volumes.Volume) oapi.Volume {
 	}
 
 	return oapiVol
+}
+
+// reservedTagKey returns the first caller-supplied tag key in the reserved
+// internal namespace, or "" when all keys are usable by API callers.
+func reservedTagKey(resourceTags *oapi.Tags) string {
+	if resourceTags == nil {
+		return ""
+	}
+	keys := make([]string, 0, len(*resourceTags))
+	for key := range *resourceTags {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if volumes.ReservedTagNamespace(key) != "" {
+			return key
+		}
+	}
+	return ""
 }

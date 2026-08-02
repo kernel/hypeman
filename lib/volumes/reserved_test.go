@@ -14,3 +14,11 @@ func TestReservedVolumeIDPrefix(t *testing.T) {
 	assert.Empty(t, ReservedVolumeIDPrefix("my-data"))
 	assert.Empty(t, ReservedVolumeIDPrefix("build-caches"))
 }
+
+func TestReservedTagNamespace(t *testing.T) {
+	assert.Equal(t, SystemTagNamespace, ReservedTagNamespace("hypeman.system/managed-by"))
+	assert.Equal(t, SystemTagNamespace, ReservedTagNamespace("hypeman.system/anything"))
+	assert.Empty(t, ReservedTagNamespace("managed-by"))
+	assert.Empty(t, ReservedTagNamespace("hypeman.system"))
+	assert.Empty(t, ReservedTagNamespace("team"))
+}

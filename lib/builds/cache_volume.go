@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -56,8 +57,9 @@ const (
 	// created by the build cache manager. The tag distinguishes cache
 	// volumes from caller-created volumes that happen to share the ID
 	// prefix: the manager only reuses tagged volumes and the reaper only
-	// evicts tagged volumes.
-	cacheVolumeManagedTagKey   = "hypeman.system/managed-by"
+	// evicts tagged volumes. The key lives in a namespace public volume
+	// APIs reserve, so callers cannot spoof it.
+	cacheVolumeManagedTagKey   = volumes.SystemTagNamespace + "managed-by"
 	cacheVolumeManagedTagValue = "build-cache"
 
 	// cacheVolumeSweepInterval is how often the reaper evaluates eviction.
@@ -175,10 +177,14 @@ func (c *cacheVolumeManager) ensureCacheVolume(ctx context.Context, scope string
 	return volID, nil
 }
 
-// isManagedCacheVolume reports whether a volume carries the internal tag
-// marking it as created by the build cache manager.
+// isManagedCacheVolume reports whether a volume is a build cache volume:
+// it carries the internal managed-by tag and the reserved cache volume ID
+// prefix. The prefix check is defense in depth — public APIs already reject
+// both — so a volume created outside the public API cannot be mistaken for
+// a cache volume by tag alone.
 func isManagedCacheVolume(vol *volumes.Volume) bool {
-	return vol.Tags[cacheVolumeManagedTagKey] == cacheVolumeManagedTagValue
+	return strings.HasPrefix(vol.Id, cacheVolumeIDPrefix) &&
+		vol.Tags[cacheVolumeManagedTagKey] == cacheVolumeManagedTagValue
 }
 
 // touchLastUsed records that a cache volume was used now.
