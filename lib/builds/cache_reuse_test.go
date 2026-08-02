@@ -246,6 +246,37 @@ func TestExecuteBuild_CacheVolumePrecedenceOverDiskRoot(t *testing.T) {
 // TestCreateBuild_CacheGCKeepBytes verifies the build config passed to the
 // builder VM carries the bounded GC setting when a persistent cache volume
 // will back the build.
+// TestExecuteBuild_FailedEnsureLeavesNoLastUsed verifies that when cache
+// volume setup fails, the deferred cleanup records no last-used entry for
+// the volume that was never created.
+func TestExecuteBuild_FailedEnsureLeavesNoLastUsed(t *testing.T) {
+	mgr, _, volumeMgr, tempDir := setupTestManager(t)
+	defer os.RemoveAll(tempDir)
+	enableCacheVolumes(mgr, volumeMgr, CacheVolumeConfig{Enabled: true, SizeGB: 30})
+
+	ctx := context.Background()
+	req := CreateBuildRequest{
+		Dockerfile: "FROM alpine\nRUN echo hello",
+		CacheScope: "tenant-a",
+	}
+	prepareBuildOnDisk(t, mgr, "build-1", req)
+
+	// An unmanaged volume squatting on the deterministic cache volume ID
+	// makes ensureCacheVolume refuse to reuse it.
+	cacheVolID := cacheVolumeID("tenant-a")
+	volumeMgr.volumes[cacheVolID] = &volumes.Volume{Id: cacheVolID, Name: cacheVolID, SizeGb: 1}
+
+	policy := DefaultBuildPolicy()
+	_, err := mgr.executeBuild(ctx, "build-1", req, &policy)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ensure build cache volume")
+
+	mgr.cacheVolumes.mu.Lock()
+	_, ok := mgr.cacheVolumes.lastUsed[cacheVolID]
+	mgr.cacheVolumes.mu.Unlock()
+	assert.False(t, ok, "no last-used entry for a volume that was never ensured")
+}
+
 func TestCreateBuild_CacheGCKeepBytes(t *testing.T) {
 	mgr, _, volumeMgr, tempDir := setupTestManager(t)
 	defer os.RemoveAll(tempDir)
