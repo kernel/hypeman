@@ -755,19 +755,20 @@ func setupBuildkitdConfig(config *BuildConfig) error {
 
 // buildkitWorkerGCConfig returns the buildkitd.toml worker section that
 // enables BuildKit garbage collection bounded to keepBytes, or an empty
-// string when no bound is configured. Sizes are quoted human-readable
-// strings: BuildKit parses them with units.RAMInBytes, so a bare integer
-// would be interpreted as bytes. The deprecated gckeepstorage (mapped to
-// reservedSpace, a retention floor) is kept for old buildkitd; the explicit
-// gcpolicy takes precedence on current BuildKit and adds maxUsedSpace so GC
-// actually reclaims above the threshold instead of only treating it as a
-// floor.
+// string when no bound is configured. gckeepstorage is emitted as integer
+// bytes, the portable form every BuildKit version that accepts it decodes;
+// the deprecated setting (a retention floor, mapped to reservedSpace) is
+// kept for old buildkitd. The explicit gcpolicy takes precedence on current
+// BuildKit and adds maxUsedSpace so GC actually reclaims above the
+// threshold instead of only treating it as a floor. The gcpolicy string
+// size form requires BuildKit >= v0.13; the builder image
+// (lib/builds/images/generic/Dockerfile) tracks moby/buildkit:latest.
 func buildkitWorkerGCConfig(keepBytes int64) string {
 	if keepBytes <= 0 {
 		return ""
 	}
 	keepMB := keepBytes / (1024 * 1024)
-	return fmt.Sprintf("\n[worker.oci]\n  gc = true\n  gckeepstorage = \"%[1]dMB\"\n  [[worker.oci.gcpolicy]]\n    reservedSpace = \"%[1]dMB\"\n    maxUsedSpace = \"%[1]dMB\"\n    all = true\n", keepMB)
+	return fmt.Sprintf("\n[worker.oci]\n  gc = true\n  gckeepstorage = %[1]d\n  [[worker.oci.gcpolicy]]\n    reservedSpace = \"%[2]dMB\"\n    maxUsedSpace = \"%[2]dMB\"\n    all = true\n", keepBytes, keepMB)
 }
 
 func runBuild(ctx context.Context, config *BuildConfig, logWriter io.Writer) (string, string, error) {

@@ -61,15 +61,14 @@ func TestBuildkitWorkerGCConfig(t *testing.T) {
 	assert.Empty(t, buildkitWorkerGCConfig(0))
 	assert.Empty(t, buildkitWorkerGCConfig(-1))
 
-	// Bounded GC: enabled with a quoted human-readable keep threshold.
-	// BuildKit parses sizes with units.RAMInBytes; a bare integer would be
-	// interpreted as bytes. gckeepstorage is the fallback for old buildkitd;
-	// the explicit gcpolicy carries both the retention floor (reservedSpace)
-	// and the reclaim ceiling (maxUsedSpace).
+	// Bounded GC: enabled with the keep threshold. gckeepstorage is integer
+	// bytes, the portable form old buildkitd decodes; the explicit gcpolicy
+	// carries both the retention floor (reservedSpace) and the reclaim
+	// ceiling (maxUsedSpace) as unit strings (BuildKit >= v0.13).
 	cfg := buildkitWorkerGCConfig(45 * 1024 * 1024 * 1024)
 	assert.Contains(t, cfg, "[worker.oci]")
 	assert.Contains(t, cfg, "gc = true")
-	assert.Contains(t, cfg, `gckeepstorage = "46080MB"`)
+	assert.Contains(t, cfg, "gckeepstorage = 48318382080")
 	assert.Contains(t, cfg, "[[worker.oci.gcpolicy]]")
 	assert.Contains(t, cfg, `reservedSpace = "46080MB"`)
 	assert.Contains(t, cfg, `maxUsedSpace = "46080MB"`)
