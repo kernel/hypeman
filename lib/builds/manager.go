@@ -835,7 +835,7 @@ func (m *manager) deleteLeftoverDiskRootVolume(ctx context.Context, buildID, vol
 	builderName := fmt.Sprintf("builder-%s", buildID)
 	inst, getErr := m.instanceManager.GetInstance(ctx, builderName)
 	if getErr != nil {
-		return fmt.Errorf("leftover buildkit root volume still attached and stale builder %q not found: %w", builderName, err)
+		return fmt.Errorf("leftover buildkit root volume still attached and stale builder %q not found: %w", builderName, getErr)
 	}
 	if delErr := m.instanceManager.DeleteInstance(ctx, inst.Id); delErr != nil {
 		return fmt.Errorf("delete stale builder %s holding leftover buildkit root volume: %w", inst.Id, delErr)

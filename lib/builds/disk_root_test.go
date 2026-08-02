@@ -187,6 +187,7 @@ func TestSetupDiskRootVolume_LeftoverInUseWithoutBuilder(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "stale builder")
+	assert.ErrorIs(t, err, instances.ErrNotFound, "error must wrap the builder lookup failure, not the volume delete error")
 	assert.Empty(t, volID)
 }
 
