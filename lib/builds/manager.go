@@ -195,6 +195,7 @@ func (m *manager) Start(ctx context.Context) error {
 		// otherwise recovered builds fail with "builder image is being prepared".
 		m.RecoverPendingBuilds()
 	}()
+	go m.runDiskRootReaper(ctx)
 	m.logger.Info("build manager started")
 	return nil
 }
@@ -795,7 +796,7 @@ func (m *manager) setupDiskRootVolume(ctx context.Context, buildID string) (stri
 		sizeGB = DefaultDiskRootSizeGB
 	}
 
-	volID := fmt.Sprintf("build-disk-%s", buildID)
+	volID := diskRootVolumePrefix + buildID
 	_, err := m.volumeManager.CreateVolume(ctx, volumes.CreateVolumeRequest{
 		Id:     &volID,
 		Name:   volID,

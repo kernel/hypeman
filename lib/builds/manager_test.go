@@ -183,6 +183,7 @@ func (m *mockInstanceManager) SubscribeLifecycleEvents(consumer instances.Lifecy
 // mockVolumeManager implements volumes.Manager for testing
 type mockVolumeManager struct {
 	volumes               map[string]*volumes.Volume
+	listFunc              func(ctx context.Context) ([]volumes.Volume, error)
 	createFunc            func(ctx context.Context, req volumes.CreateVolumeRequest) (*volumes.Volume, error)
 	createFromArchiveFunc func(ctx context.Context, req volumes.CreateVolumeFromArchiveRequest, archive io.Reader) (*volumes.Volume, error)
 	deleteFunc            func(ctx context.Context, id string) error
@@ -197,6 +198,9 @@ func newMockVolumeManager() *mockVolumeManager {
 }
 
 func (m *mockVolumeManager) ListVolumes(ctx context.Context) ([]volumes.Volume, error) {
+	if m.listFunc != nil {
+		return m.listFunc(ctx)
+	}
 	var result []volumes.Volume
 	for _, vol := range m.volumes {
 		result = append(result, *vol)
