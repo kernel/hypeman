@@ -258,20 +258,21 @@ func (c *cacheVolumeManager) reap(ctx context.Context) {
 		return v.CreatedAt
 	}
 
-	deleteLocked := func(v volumes.Volume) {
+	deleteLocked := func(v volumes.Volume) bool {
 		if err := c.volumeManager.DeleteVolume(ctx, v.Id); err != nil {
 			c.logger.Warn("failed to evict cache volume", "volume", v.Id, "error", err)
-			return
+			return false
 		}
 		c.logger.Info("evicted cache volume", "volume", v.Id)
 		delete(c.lastUsed, v.Id)
+		return true
 	}
 
-	// Idle TTL eviction
+	// Idle TTL eviction. Volumes whose delete fails stay in remaining so the
+	// limit accounting below still counts them and a later pass can retry.
 	remaining := make([]volumes.Volume, 0, len(cacheVols))
 	for _, v := range cacheVols {
-		if now.Sub(lastUsedLocked(v)) > c.config.IdleTTL && deletableLocked(v) {
-			deleteLocked(v)
+		if now.Sub(lastUsedLocked(v)) > c.config.IdleTTL && deletableLocked(v) && deleteLocked(v) {
 			continue
 		}
 		remaining = append(remaining, v)
@@ -291,8 +292,7 @@ func (c *cacheVolumeManager) reap(ctx context.Context) {
 	for _, v := range remaining {
 		overBytes := c.config.MaxBytes > 0 && totalBytes > c.config.MaxBytes
 		overCount := c.config.MaxVolumes > 0 && present > c.config.MaxVolumes
-		if (overBytes || overCount) && deletableLocked(v) {
-			deleteLocked(v)
+		if (overBytes || overCount) && deletableLocked(v) && deleteLocked(v) {
 			totalBytes -= int64(v.SizeGb) * 1024 * 1024 * 1024
 			present--
 		}

@@ -329,6 +329,101 @@ func TestReap_LimitsSkipAttachedVolumes(t *testing.T) {
 	assert.ErrorIs(t, err, volumes.ErrNotFound, "idle volume evicted instead")
 }
 
+// TestReap_FailedDeleteStaysCounted verifies a volume whose delete fails
+// (e.g. ErrInUse from a concurrent attach) stays counted toward the limits,
+// so the reaper still evicts enough volumes to satisfy them.
+func TestReap_FailedDeleteStaysCounted(t *testing.T) {
+	mgr, volumeMgr, now, tempDir := setupCacheVolumeManager(t, CacheVolumeConfig{
+		Enabled:    true,
+		SizeGB:     10,
+		IdleTTL:    100 * time.Hour,
+		MaxVolumes: 1,
+	})
+	defer os.RemoveAll(tempDir)
+
+	ctx := context.Background()
+	base := *now
+
+	oldest, err := mgr.ensureCacheVolume(ctx, "tenant-old")
+	require.NoError(t, err)
+	*now = base.Add(-2 * time.Hour)
+	mgr.touchLastUsed(oldest)
+
+	newest, err := mgr.ensureCacheVolume(ctx, "tenant-new")
+	require.NoError(t, err)
+	*now = base.Add(-time.Hour)
+	mgr.touchLastUsed(newest)
+	*now = base
+
+	volumeMgr.deleteFunc = func(ctx context.Context, id string) error {
+		if id == oldest {
+			return volumes.ErrInUse
+		}
+		delete(volumeMgr.volumes, id)
+		return nil
+	}
+
+	mgr.reap(ctx)
+
+	_, err = volumeMgr.GetVolume(ctx, oldest)
+	assert.NoError(t, err, "volume with failed delete is kept")
+	_, err = volumeMgr.GetVolume(ctx, newest)
+	assert.ErrorIs(t, err, volumes.ErrNotFound, "failed delete still counts toward the limit, so the next volume is evicted")
+}
+
+// TestReap_FailedIdleDeleteRetried verifies an idle-past-TTL volume whose
+// delete fails remains in the candidate set and is retried by the limit pass
+// instead of being silently dropped from the accounting.
+func TestReap_FailedIdleDeleteRetried(t *testing.T) {
+	mgr, volumeMgr, now, tempDir := setupCacheVolumeManager(t, CacheVolumeConfig{
+		Enabled:    true,
+		SizeGB:     10,
+		IdleTTL:    time.Hour,
+		MaxVolumes: 1,
+	})
+	defer os.RemoveAll(tempDir)
+
+	ctx := context.Background()
+	base := *now
+
+	oldest, err := mgr.ensureCacheVolume(ctx, "tenant-old")
+	require.NoError(t, err)
+	*now = base.Add(-2 * time.Hour) // past the TTL
+	mgr.touchLastUsed(oldest)
+
+	newest, err := mgr.ensureCacheVolume(ctx, "tenant-new")
+	require.NoError(t, err)
+	*now = base
+	mgr.touchLastUsed(newest)
+
+	oldestDeletes := 0
+	volumeMgr.deleteFunc = func(ctx context.Context, id string) error {
+		if id == oldest {
+			oldestDeletes++
+			return volumes.ErrInUse
+		}
+		delete(volumeMgr.volumes, id)
+		return nil
+	}
+
+	mgr.reap(ctx)
+
+	assert.Equal(t, 2, oldestDeletes, "TTL pass and limit pass both retry the failed delete")
+	_, err = volumeMgr.GetVolume(ctx, oldest)
+	assert.NoError(t, err, "volume with failed delete is kept")
+	_, err = volumeMgr.GetVolume(ctx, newest)
+	assert.ErrorIs(t, err, volumes.ErrNotFound)
+
+	// Once the delete can succeed, the next pass evicts it.
+	volumeMgr.deleteFunc = func(ctx context.Context, id string) error {
+		delete(volumeMgr.volumes, id)
+		return nil
+	}
+	mgr.reap(ctx)
+	_, err = volumeMgr.GetVolume(ctx, oldest)
+	assert.ErrorIs(t, err, volumes.ErrNotFound, "retried on the next pass")
+}
+
 func TestCacheVolumeStatePersistence(t *testing.T) {
 	config := CacheVolumeConfig{Enabled: true, SizeGB: 10}
 	mgr, _, now, tempDir := setupCacheVolumeManager(t, config)
