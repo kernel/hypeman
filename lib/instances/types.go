@@ -274,6 +274,12 @@ type CreateInstanceRequest struct {
 	AutoStandby              *autostandby.Policy         // Optional automatic standby policy
 	HealthCheck              *healthcheck.Policy         // Optional workload health check policy
 	RestartPolicy            *restartpolicy.Policy       // Optional whole-instance restart policy
+
+	// AllowSystemVolumeMounts permits volume mounts at the reserved system
+	// paths in allowedSystemMountPaths. Only set by internal services that
+	// own those paths (e.g. builder VMs mounting the BuildKit root); it is
+	// never populated from API requests.
+	AllowSystemVolumeMounts bool
 }
 
 // StartInstanceRequest is the domain request for starting a stopped instance

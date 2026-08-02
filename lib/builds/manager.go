@@ -750,12 +750,13 @@ func (m *manager) executeBuild(ctx context.Context, id string, req CreateBuildRe
 	networkEnabled := policy.NetworkMode == "egress"
 
 	inst, err := m.instanceManager.CreateInstance(ctx, instances.CreateInstanceRequest{
-		Name:           builderName,
-		Image:          m.config.BuilderImage,
-		Size:           int64(policy.MemoryMB) * 1024 * 1024,
-		Vcpus:          policy.CPUs,
-		NetworkEnabled: networkEnabled,
-		Volumes:        builderVolumeAttachments(sourceVolID, configVolID, diskRootVolID),
+		Name:                    builderName,
+		Image:                   m.config.BuilderImage,
+		Size:                    int64(policy.MemoryMB) * 1024 * 1024,
+		Vcpus:                   policy.CPUs,
+		NetworkEnabled:          networkEnabled,
+		Volumes:                 builderVolumeAttachments(sourceVolID, configVolID, diskRootVolID),
+		AllowSystemVolumeMounts: true, // builder owns the BuildKit root mount
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create builder instance: %w", err)

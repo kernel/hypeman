@@ -27,7 +27,7 @@ func TestValidateVolumeAttachments_MaxVolumes(t *testing.T) {
 		}
 	}
 
-	err := validateVolumeAttachments(volumes)
+	err := validateVolumeAttachments(volumes, false)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "cannot attach more than 23")
 }
@@ -39,7 +39,7 @@ func TestValidateVolumeAttachments_SystemDirectory(t *testing.T) {
 		MountPath: "/etc/secrets", // system directory
 	}}
 
-	err := validateVolumeAttachments(volumes)
+	err := validateVolumeAttachments(volumes, false)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "system directory")
 }
@@ -51,7 +51,7 @@ func TestValidateVolumeAttachments_DuplicatePaths(t *testing.T) {
 		{VolumeID: "vol-2", MountPath: "/mnt/data"}, // duplicate
 	}
 
-	err := validateVolumeAttachments(volumes)
+	err := validateVolumeAttachments(volumes, false)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "duplicate mount path")
 }
@@ -63,7 +63,7 @@ func TestValidateVolumeAttachments_RelativePath(t *testing.T) {
 		MountPath: "relative/path", // not absolute
 	}}
 
-	err := validateVolumeAttachments(volumes)
+	err := validateVolumeAttachments(volumes, false)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "must be absolute")
 }
@@ -75,35 +75,40 @@ func TestValidateVolumeAttachments_Valid(t *testing.T) {
 		{VolumeID: "vol-2", MountPath: "/mnt/logs"},
 	}
 
-	err := validateVolumeAttachments(volumes)
+	err := validateVolumeAttachments(volumes, false)
 	assert.NoError(t, err)
 }
 
 func TestValidateVolumeAttachments_Empty(t *testing.T) {
 	t.Parallel()
-	err := validateVolumeAttachments(nil)
+	err := validateVolumeAttachments(nil, false)
 	assert.NoError(t, err)
 
-	err = validateVolumeAttachments([]VolumeAttachment{})
+	err = validateVolumeAttachments([]VolumeAttachment{}, false)
 	assert.NoError(t, err)
 }
 
 func TestValidateVolumeAttachments_AllowedSystemMountPath(t *testing.T) {
 	t.Parallel()
 	// The BuildKit root volume in builder VMs mounts at a fixed path under
-	// /var and is explicitly allowed.
-	err := validateVolumeAttachments([]VolumeAttachment{{
+	// /var and is allowed only for internal instances that opt in.
+	buildkitRoot := []VolumeAttachment{{
 		VolumeID:  "vol-1",
 		MountPath: "/var/lib/buildkit",
-	}})
+	}}
+	err := validateVolumeAttachments(buildkitRoot, true)
 	assert.NoError(t, err)
 
-	// Parent paths and other /var subdirectories remain rejected.
+	err = validateVolumeAttachments(buildkitRoot, false)
+	assert.Error(t, err, "system mount path rejected without AllowSystemVolumeMounts")
+
+	// Parent paths and other /var subdirectories remain rejected even for
+	// internal instances.
 	for _, path := range []string{"/var", "/var/lib", "/var/lib/buildkit/nested", "/var/log"} {
 		err := validateVolumeAttachments([]VolumeAttachment{{
 			VolumeID:  "vol-1",
 			MountPath: path,
-		}})
+		}}, true)
 		assert.Error(t, err, "expected %q to be rejected", path)
 	}
 }
@@ -119,7 +124,7 @@ func TestValidateVolumeAttachments_OverlayRequiresReadonly(t *testing.T) {
 		OverlaySize: 100 * 1024 * 1024,
 	}}
 
-	err := validateVolumeAttachments(volumes)
+	err := validateVolumeAttachments(volumes, false)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "overlay mode requires readonly=true")
 }
@@ -135,7 +140,7 @@ func TestValidateVolumeAttachments_OverlayRequiresSize(t *testing.T) {
 		OverlaySize: 0, // Invalid: overlay requires size
 	}}
 
-	err := validateVolumeAttachments(volumes)
+	err := validateVolumeAttachments(volumes, false)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "overlay_size is required")
 }
@@ -151,7 +156,7 @@ func TestValidateVolumeAttachments_OverlayValid(t *testing.T) {
 		OverlaySize: 100 * 1024 * 1024, // 100MB
 	}}
 
-	err := validateVolumeAttachments(volumes)
+	err := validateVolumeAttachments(volumes, false)
 	assert.NoError(t, err)
 }
 
@@ -171,7 +176,7 @@ func TestValidateVolumeAttachments_OverlayCountsAsTwoDevices(t *testing.T) {
 		}
 	}
 
-	err := validateVolumeAttachments(volumes)
+	err := validateVolumeAttachments(volumes, false)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "cannot attach more than 23")
 }
