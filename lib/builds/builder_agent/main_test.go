@@ -61,9 +61,11 @@ func TestBuildkitWorkerGCConfig(t *testing.T) {
 	assert.Empty(t, buildkitWorkerGCConfig(0))
 	assert.Empty(t, buildkitWorkerGCConfig(-1))
 
-	// Bounded GC: enabled with a keep threshold in MB.
+	// Bounded GC: enabled with a quoted human-readable keep threshold.
+	// BuildKit parses gckeepstorage as a size string; a bare integer would
+	// be interpreted as bytes.
 	cfg := buildkitWorkerGCConfig(45 * 1024 * 1024 * 1024)
 	assert.Contains(t, cfg, "[worker.oci]")
 	assert.Contains(t, cfg, "gc = true")
-	assert.Contains(t, cfg, "gckeepstorage = 46080")
+	assert.Contains(t, cfg, `gckeepstorage = "46080MB"`)
 }

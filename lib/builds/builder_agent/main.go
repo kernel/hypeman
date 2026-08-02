@@ -755,13 +755,15 @@ func setupBuildkitdConfig(config *BuildConfig) error {
 
 // buildkitWorkerGCConfig returns the buildkitd.toml worker section that
 // enables BuildKit garbage collection bounded to keepBytes, or an empty
-// string when no bound is configured.
+// string when no bound is configured. The keep threshold is emitted as a
+// quoted human-readable size: BuildKit parses gckeepstorage with
+// units.RAMInBytes, so a bare integer would be interpreted as bytes.
 func buildkitWorkerGCConfig(keepBytes int64) string {
 	if keepBytes <= 0 {
 		return ""
 	}
 	keepMB := keepBytes / (1024 * 1024)
-	return fmt.Sprintf("\n[worker.oci]\n  gc = true\n  gckeepstorage = %d\n", keepMB)
+	return fmt.Sprintf("\n[worker.oci]\n  gc = true\n  gckeepstorage = \"%dMB\"\n", keepMB)
 }
 
 func runBuild(ctx context.Context, config *BuildConfig, logWriter io.Writer) (string, string, error) {
