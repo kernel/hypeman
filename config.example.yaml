@@ -152,6 +152,10 @@ data_dir: /var/lib/hypeman
 #   docker_socket: /var/run/docker.sock
 #   max_concurrent_source_builds: 2
 #   timeout: 600
+#   disk_root:
+#     enabled: false                # attach a dedicated ext4 volume at /var/lib/buildkit
+#                                   # in each builder VM instead of a tmpfs
+#     size_gb: 20                   # size of the per-build BuildKit root volume
 
 # =============================================================================
 # Resource Limits

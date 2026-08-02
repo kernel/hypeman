@@ -146,11 +146,20 @@ type ImagesConfig struct {
 
 // BuildConfig holds source-to-image build system settings.
 type BuildConfig struct {
-	MaxConcurrentSourceBuilds int    `koanf:"max_concurrent_source_builds"`
-	BuilderImage              string `koanf:"builder_image"`
-	Timeout                   int    `koanf:"timeout"`
-	SecretsDir                string `koanf:"secrets_dir"`
-	DockerSocket              string `koanf:"docker_socket"`
+	MaxConcurrentSourceBuilds int                 `koanf:"max_concurrent_source_builds"`
+	BuilderImage              string              `koanf:"builder_image"`
+	Timeout                   int                 `koanf:"timeout"`
+	SecretsDir                string              `koanf:"secrets_dir"`
+	DockerSocket              string              `koanf:"docker_socket"`
+	DiskRoot                  BuildDiskRootConfig `koanf:"disk_root"`
+}
+
+// BuildDiskRootConfig holds settings for the ephemeral per-build BuildKit root
+// disk. When enabled, each builder VM gets a dedicated ext4 volume mounted at
+// /var/lib/buildkit instead of a tmpfs, and the volume is deleted with the VM.
+type BuildDiskRootConfig struct {
+	Enabled bool `koanf:"enabled"`
+	SizeGB  int  `koanf:"size_gb"`
 }
 
 // InstancesConfig holds instance-manager internal settings.
@@ -628,6 +637,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Build.Timeout <= 0 {
 		return fmt.Errorf("build.timeout must be positive, got %d", c.Build.Timeout)
+	}
+	if c.Build.DiskRoot.SizeGB < 0 {
+		return fmt.Errorf("build.disk_root.size_gb must be >= 0, got %d", c.Build.DiskRoot.SizeGB)
 	}
 	if c.Hypervisor.FirecrackerMaxConcurrentRestores < 0 {
 		return fmt.Errorf("hypervisor.firecracker_max_concurrent_restores must be >= 0, got %d", c.Hypervisor.FirecrackerMaxConcurrentRestores)
