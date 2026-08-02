@@ -297,8 +297,14 @@ func TestBuildQueue_SerialKeySkipsBlockedPending(t *testing.T) {
 
 	queue.EnqueueSerial("build-1", CreateBuildRequest{}, "scope-a", startFn("build-1"))
 	queue.EnqueueSerial("build-2", CreateBuildRequest{}, "scope-b", startFn("build-2"))
-	queue.EnqueueSerial("build-3", CreateBuildRequest{}, "scope-a", startFn("build-3"))
-	queue.EnqueueSerial("build-4", CreateBuildRequest{}, "scope-c", startFn("build-4"))
+	pos3 := queue.EnqueueSerial("build-3", CreateBuildRequest{}, "scope-a", startFn("build-3"))
+	pos4 := queue.EnqueueSerial("build-4", CreateBuildRequest{}, "scope-c", startFn("build-4"))
+	assert.Equal(t, 1, pos3)
+	assert.Equal(t, 1, pos4, "queue position skips blocked pending builds")
+
+	pendingPos4 := queue.GetPosition("build-4")
+	require.NotNil(t, pendingPos4)
+	assert.Equal(t, 1, *pendingPos4)
 
 	<-started // build-1
 	<-started // build-2
@@ -312,6 +318,10 @@ func TestBuildQueue_SerialKeySkipsBlockedPending(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("no pending build started after a slot freed")
 	}
+	assert.Nil(t, queue.GetPosition("build-4"), "build-4 is running after skip-ahead")
+	pendingPos3 := queue.GetPosition("build-3")
+	require.NotNil(t, pendingPos3)
+	assert.Equal(t, 1, *pendingPos3, "blocked build stays at front once later build starts")
 
 	// build-1 completes: build-3's key is now free and it starts.
 	close(release["build-1"])

@@ -187,6 +187,7 @@ type mockVolumeManager struct {
 	createFunc            func(ctx context.Context, req volumes.CreateVolumeRequest) (*volumes.Volume, error)
 	createFromArchiveFunc func(ctx context.Context, req volumes.CreateVolumeFromArchiveRequest, archive io.Reader) (*volumes.Volume, error)
 	deleteFunc            func(ctx context.Context, id string) error
+	detachFunc            func(ctx context.Context, volumeID string, instanceID string) error
 	createCallCount       int
 	deleteCallCount       int
 }
@@ -264,6 +265,27 @@ func (m *mockVolumeManager) AttachVolume(ctx context.Context, id string, req vol
 }
 
 func (m *mockVolumeManager) DetachVolume(ctx context.Context, volumeID string, instanceID string) error {
+	if m.detachFunc != nil {
+		return m.detachFunc(ctx, volumeID, instanceID)
+	}
+	vol, ok := m.volumes[volumeID]
+	if !ok {
+		return volumes.ErrNotFound
+	}
+
+	found := false
+	filtered := make([]volumes.Attachment, 0, len(vol.Attachments))
+	for _, att := range vol.Attachments {
+		if att.InstanceID == instanceID {
+			found = true
+			continue
+		}
+		filtered = append(filtered, att)
+	}
+	if !found {
+		return fmt.Errorf("volume not attached to instance %s", instanceID)
+	}
+	vol.Attachments = filtered
 	return nil
 }
 

@@ -47,7 +47,8 @@ func NewBuildQueue(maxConcurrent int) *BuildQueue {
 	}
 }
 
-// Enqueue adds a build to the queue. Returns queue position (0 if started immediately, >0 if queued).
+// Enqueue adds a build to the queue. Returns queue position (0 if started
+// immediately, >0 if queued among pending builds that can currently start).
 // If the build is already building or queued, returns its current position without re-enqueueing.
 func (q *BuildQueue) Enqueue(buildID string, req CreateBuildRequest, startFn func()) int {
 	return q.EnqueueSerial(buildID, req, "", startFn)
@@ -66,9 +67,12 @@ func (q *BuildQueue) EnqueueSerial(buildID string, req CreateBuildRequest, seria
 	}
 
 	// Check if already in pending queue
-	for i, build := range q.pending {
+	for _, build := range q.pending {
 		if build.BuildID == buildID {
-			return i + 1 // Return existing queue position
+			if pos := q.pendingPositionLocked(buildID); pos != nil {
+				return *pos
+			}
+			return 1
 		}
 	}
 
@@ -93,7 +97,10 @@ func (q *BuildQueue) EnqueueSerial(buildID string, req CreateBuildRequest, seria
 
 	// Otherwise queue it
 	q.pending = append(q.pending, build)
-	return len(q.pending)
+	if pos := q.pendingPositionLocked(buildID); pos != nil {
+		return *pos
+	}
+	return 1
 }
 
 // canStartLocked reports whether a build with the given serial key may start.
@@ -171,14 +178,27 @@ func (q *BuildQueue) GetPosition(buildID string) *int {
 		return nil // Actively running, not queued
 	}
 
-	for i, build := range q.pending {
+	return q.pendingPositionLocked(buildID)
+}
+
+// pendingPositionLocked returns the pending queue position for buildID.
+// Position counts only pending builds whose serial keys are currently free.
+// Builds blocked by active serial keys are skipped so later startable builds
+// are not reported behind work that cannot start yet.
+func (q *BuildQueue) pendingPositionLocked(buildID string) *int {
+	pos := 0
+	for _, build := range q.pending {
+		blocked := !q.serialKeyFreeLocked(build.SerialKey)
 		if build.BuildID == buildID {
-			pos := i + 1
+			pos++
 			return &pos
 		}
+		if blocked {
+			continue
+		}
+		pos++
 	}
-
-	return nil // Not in queue
+	return nil
 }
 
 // Cancel removes a build from the pending queue.

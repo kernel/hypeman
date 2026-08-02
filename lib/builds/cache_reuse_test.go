@@ -354,3 +354,45 @@ func TestExecuteBuild_RecoversStaleCacheVolumeHolder(t *testing.T) {
 	_, getErr := instanceMgr.GetInstance(ctx, stale.Id)
 	assert.ErrorIs(t, getErr, instances.ErrNotFound, "stale builder deleted")
 }
+
+// TestExecuteBuild_RecoversOrphanCacheVolumeAttachment verifies that stale
+// recovery also handles orphaned volume attachments whose instance metadata is
+// already gone.
+func TestExecuteBuild_RecoversOrphanCacheVolumeAttachment(t *testing.T) {
+	mgr, instanceMgr, volumeMgr, tempDir := setupTestManager(t)
+	defer os.RemoveAll(tempDir)
+	enableCacheVolumes(mgr, volumeMgr, CacheVolumeConfig{Enabled: true, SizeGB: 30})
+
+	ctx := context.Background()
+	req := CreateBuildRequest{
+		Dockerfile: "FROM alpine\nRUN echo hello",
+		CacheScope: "tenant-a",
+	}
+	prepareBuildOnDisk(t, mgr, "build-1", req)
+
+	cacheVolID, err := mgr.cacheVolumes.ensureCacheVolume(ctx, "tenant-a")
+	require.NoError(t, err)
+	volumeMgr.volumes[cacheVolID].Attachments = []volumes.Attachment{
+		{InstanceID: "inst-orphan", MountPath: "/var/lib/buildkit"},
+	}
+
+	createCalls := 0
+	instanceMgr.createFunc = func(ctx context.Context, req instances.CreateInstanceRequest) (*instances.Instance, error) {
+		createCalls++
+		if len(volumeMgr.volumes[cacheVolID].Attachments) > 0 {
+			return nil, volumes.ErrInUse
+		}
+		inst := &instances.Instance{
+			StoredMetadata: instances.StoredMetadata{Id: "inst-" + req.Name, Name: req.Name},
+			State:          instances.StateStopped,
+		}
+		instanceMgr.instances[inst.Id] = inst
+		return inst, nil
+	}
+
+	policy := DefaultBuildPolicy()
+	_, err = mgr.executeBuild(ctx, "build-1", req, &policy)
+	require.NoError(t, err)
+	assert.Equal(t, 2, createCalls, "instance creation retried after orphan attachment removal")
+	assert.Empty(t, volumeMgr.volumes[cacheVolID].Attachments, "orphan attachment detached from cache volume")
+}

@@ -956,6 +956,13 @@ func (m *manager) detachStaleCacheVolumeHolders(ctx context.Context, cacheVolID 
 	for _, att := range vol.Attachments {
 		inst, err := m.instanceManager.GetInstance(ctx, att.InstanceID)
 		if err != nil {
+			if errors.Is(err, instances.ErrNotFound) {
+				if detachErr := m.volumeManager.DetachVolume(ctx, cacheVolID, att.InstanceID); detachErr != nil {
+					return fmt.Errorf("detach orphan attachment %s from cache volume: %w", att.InstanceID, detachErr)
+				}
+				m.logger.Warn("detached orphan cache volume attachment", "instance", att.InstanceID, "volume", cacheVolID)
+				continue
+			}
 			return fmt.Errorf("get instance %s holding cache volume: %w", att.InstanceID, err)
 		}
 		if !strings.HasPrefix(inst.Name, "builder-") {
