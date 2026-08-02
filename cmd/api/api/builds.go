@@ -12,7 +12,9 @@ import (
 	"github.com/kernel/hypeman/lib/builds"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/logger"
+	mw "github.com/kernel/hypeman/lib/middleware"
 	"github.com/kernel/hypeman/lib/oapi"
+	"github.com/kernel/hypeman/lib/scopes"
 	"github.com/kernel/hypeman/lib/tags"
 )
 
@@ -212,13 +214,37 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 		}
 	}
 
+	// The effective cache scope is computed exclusively server-side.
+	// Operator tokens (build:admin) may supply an explicit cache_scope and run
+	// admin builds; ordinary callers get a scope derived from their identity.
+	isAdmin := scopes.HasScope(ctx, scopes.BuildAdmin)
+	if isAdminBuild && !isAdmin {
+		return oapi.CreateBuild403JSONResponse{
+			Code:    "forbidden",
+			Message: "is_admin_build requires the build:admin scope",
+		}, nil
+	}
+	if cacheScope != "" && !isAdmin {
+		return oapi.CreateBuild403JSONResponse{
+			Code:    "forbidden",
+			Message: "cache_scope requires the build:admin scope",
+		}, nil
+	}
+	effectiveCacheScope, err := resolveEffectiveCacheScope(mw.GetUserIDFromContext(ctx), cacheScope, isAdmin)
+	if err != nil {
+		return oapi.CreateBuild400JSONResponse{
+			Code:    "invalid_request",
+			Message: err.Error(),
+		}, nil
+	}
+
 	// Note: Dockerfile validation happens in the builder agent.
 	// It will check if Dockerfile is in the source tarball or provided via dockerfile parameter.
 
 	// Build domain request
 	domainReq := builds.CreateBuildRequest{
 		BaseImageDigest: baseImageDigest,
-		CacheScope:      cacheScope,
+		CacheScope:      effectiveCacheScope,
 		Dockerfile:      dockerfile,
 		Secrets:         secrets,
 		IsAdminBuild:    isAdminBuild,
@@ -270,6 +296,19 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 	}
 
 	return oapi.CreateBuild202JSONResponse(buildToOAPI(build)), nil
+}
+
+// resolveEffectiveCacheScope computes the cache scope passed to the build
+// manager. An admin-provided scope is validated and used as-is; otherwise the
+// scope is derived from the authenticated identity.
+func resolveEffectiveCacheScope(userID, suppliedScope string, isAdmin bool) (string, error) {
+	if isAdmin && suppliedScope != "" {
+		if err := builds.ValidateCacheScope(suppliedScope); err != nil {
+			return "", fmt.Errorf("invalid cache_scope: %w", err)
+		}
+		return suppliedScope, nil
+	}
+	return builds.DeriveCacheScope(userID), nil
 }
 
 // GetBuild gets build details

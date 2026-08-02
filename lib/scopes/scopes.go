@@ -42,6 +42,7 @@ const (
 	BuildRead   Scope = "build:read"
 	BuildWrite  Scope = "build:write"  // create
 	BuildDelete Scope = "build:delete" // cancel
+	BuildAdmin  Scope = "build:admin"  // operator-only: is_admin_build, explicit cache_scope
 
 	// Device scopes
 	DeviceRead   Scope = "device:read"
@@ -67,7 +68,7 @@ var allScopes = []Scope{
 	ImageRead, ImageWrite, ImageDelete,
 	VolumeRead, VolumeWrite, VolumeDelete,
 	SnapshotRead, SnapshotWrite, SnapshotDelete,
-	BuildRead, BuildWrite, BuildDelete,
+	BuildRead, BuildWrite, BuildDelete, BuildAdmin,
 	DeviceRead, DeviceWrite, DeviceDelete,
 	IngressRead, IngressWrite, IngressDelete,
 	ResourceRead, ResourceWrite,

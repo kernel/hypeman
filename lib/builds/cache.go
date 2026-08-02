@@ -94,6 +94,18 @@ func ValidateCacheScope(scope string) error {
 	return nil
 }
 
+// DeriveCacheScope derives the effective tenant cache scope from an
+// authenticated identity (the token subject). The derivation is deterministic
+// and one-way so cache state is isolated per identity and identities are not
+// leaked into registry paths. Returns "" when the identity is empty.
+func DeriveCacheScope(identity string) string {
+	if identity == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(identity))
+	return "tenant-" + hex.EncodeToString(sum[:])[:16]
+}
+
 // ImportCacheArg returns the BuildKit --import-cache argument
 func (k *CacheKey) ImportCacheArg() string {
 	return fmt.Sprintf("type=registry,ref=%s", k.Reference)
