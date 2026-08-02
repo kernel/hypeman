@@ -1067,6 +1067,187 @@ eventLoop:
 	}
 }
 
+// setupBuildInputs writes the on-disk source tarball and build config that
+// executeBuild expects for a build.
+func setupBuildInputs(t *testing.T, mgr *manager, buildID string) {
+	t.Helper()
+	sourceDir := mgr.paths.BuildSourceDir(buildID)
+	require.NoError(t, os.MkdirAll(sourceDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(sourceDir, "source.tar.gz"), []byte("fake-tarball-data"), 0644))
+	require.NoError(t, os.MkdirAll(filepath.Dir(mgr.paths.BuildConfig(buildID)), 0755))
+	require.NoError(t, os.WriteFile(mgr.paths.BuildConfig(buildID), []byte(`{"job_id":"`+buildID+`"}`), 0644))
+}
+
+// TestExecuteBuild_SourceVolumeAlreadyExists verifies that a leftover source
+// volume from a crashed prior attempt of the same build is deleted and
+// recreated, allowing the re-run to proceed past source volume creation.
+func TestExecuteBuild_SourceVolumeAlreadyExists(t *testing.T) {
+	mgr, instanceMgr, volumeMgr, tempDir := setupTestManager(t)
+	defer os.RemoveAll(tempDir)
+
+	buildID := "build-crash-src"
+	setupBuildInputs(t, mgr, buildID)
+
+	var archiveCalls int
+	var deleted []string
+	volumeMgr.createFromArchiveFunc = func(ctx context.Context, req volumes.CreateVolumeFromArchiveRequest, archive io.Reader) (*volumes.Volume, error) {
+		archiveCalls++
+		if archiveCalls == 1 {
+			// Leftover from the crashed prior attempt
+			return nil, volumes.ErrAlreadyExists
+		}
+		vol := &volumes.Volume{Id: *req.Id, Name: req.Name}
+		volumeMgr.volumes[vol.Id] = vol
+		return vol, nil
+	}
+	volumeMgr.deleteFunc = func(ctx context.Context, id string) error {
+		deleted = append(deleted, id)
+		delete(volumeMgr.volumes, id)
+		return nil
+	}
+	// Short-circuit once volume setup is done so the test doesn't enter the
+	// vsock wait loop.
+	instanceMgr.createFunc = func(ctx context.Context, req instances.CreateInstanceRequest) (*instances.Instance, error) {
+		return nil, fmt.Errorf("stop after volume setup")
+	}
+
+	_, err := mgr.executeBuild(context.Background(), buildID, CreateBuildRequest{}, &BuildPolicy{})
+
+	// The build must get past source volume creation (it may fail later, e.g.
+	// at config disk creation or instance launch in the test environment).
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "create source volume")
+	assert.Equal(t, 2, archiveCalls, "expected delete + retry of source volume creation")
+	require.NotEmpty(t, deleted)
+	assert.Equal(t, "build-source-"+buildID, deleted[0])
+}
+
+// TestExecuteBuild_SourceVolumeInUse_StaleBuilder verifies that when the
+// leftover source volume is still attached to the crashed attempt's stale
+// builder instance, the builder is deleted (detaching the volume) before the
+// volume is deleted and recreated.
+func TestExecuteBuild_SourceVolumeInUse_StaleBuilder(t *testing.T) {
+	mgr, instanceMgr, volumeMgr, tempDir := setupTestManager(t)
+	defer os.RemoveAll(tempDir)
+
+	buildID := "build-crash-inuse"
+	setupBuildInputs(t, mgr, buildID)
+
+	// Seed the stale builder instance from the crashed attempt
+	builderName := "builder-" + buildID
+	instanceMgr.instances[builderName] = &instances.Instance{
+		StoredMetadata: instances.StoredMetadata{Id: builderName, Name: builderName},
+		State:          instances.StateRunning,
+	}
+
+	var archiveCalls int
+	var deleteCalls int
+	volumeMgr.createFromArchiveFunc = func(ctx context.Context, req volumes.CreateVolumeFromArchiveRequest, archive io.Reader) (*volumes.Volume, error) {
+		archiveCalls++
+		if archiveCalls == 1 {
+			return nil, volumes.ErrAlreadyExists
+		}
+		vol := &volumes.Volume{Id: *req.Id, Name: req.Name}
+		volumeMgr.volumes[vol.Id] = vol
+		return vol, nil
+	}
+	volumeMgr.deleteFunc = func(ctx context.Context, id string) error {
+		deleteCalls++
+		if deleteCalls == 1 {
+			// Still attached to the stale builder
+			return volumes.ErrInUse
+		}
+		delete(volumeMgr.volumes, id)
+		return nil
+	}
+	// Short-circuit once volume setup is done so the test doesn't enter the
+	// vsock wait loop.
+	instanceMgr.createFunc = func(ctx context.Context, req instances.CreateInstanceRequest) (*instances.Instance, error) {
+		return nil, fmt.Errorf("stop after volume setup")
+	}
+
+	_, err := mgr.executeBuild(context.Background(), buildID, CreateBuildRequest{}, &BuildPolicy{})
+
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "create source volume")
+	assert.Equal(t, 2, archiveCalls, "expected delete + retry of source volume creation")
+	assert.Equal(t, 1, instanceMgr.deleteCallCount, "expected stale builder instance to be deleted")
+	_, getErr := instanceMgr.GetInstance(context.Background(), builderName)
+	assert.ErrorIs(t, getErr, instances.ErrNotFound, "stale builder instance should be gone")
+}
+
+// TestExecuteBuild_SourceVolumeInUse_NoStaleBuilder verifies that when the
+// leftover source volume is in use but the crashed attempt's builder instance
+// is gone, the build fails with a clear error and nothing is force-deleted.
+func TestExecuteBuild_SourceVolumeInUse_NoStaleBuilder(t *testing.T) {
+	mgr, instanceMgr, volumeMgr, tempDir := setupTestManager(t)
+	defer os.RemoveAll(tempDir)
+
+	buildID := "build-crash-orphan"
+	setupBuildInputs(t, mgr, buildID)
+
+	var archiveCalls int
+	volumeMgr.createFromArchiveFunc = func(ctx context.Context, req volumes.CreateVolumeFromArchiveRequest, archive io.Reader) (*volumes.Volume, error) {
+		archiveCalls++
+		return nil, volumes.ErrAlreadyExists
+	}
+	volumeMgr.deleteFunc = func(ctx context.Context, id string) error {
+		return volumes.ErrInUse
+	}
+
+	_, err := mgr.executeBuild(context.Background(), buildID, CreateBuildRequest{}, &BuildPolicy{})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "refusing to force-delete")
+	assert.Equal(t, 1, archiveCalls, "create must not be retried when the leftover cannot be removed")
+	assert.Equal(t, 0, instanceMgr.deleteCallCount, "no instance should be deleted")
+}
+
+// TestRegisterBuildConfigVolume_AlreadyExists verifies that a leftover config
+// volume from a crashed prior attempt of the same build is explicitly deleted
+// and recreated rather than silently masked by the copy-over fallback.
+func TestRegisterBuildConfigVolume_AlreadyExists(t *testing.T) {
+	mgr, _, volumeMgr, tempDir := setupTestManager(t)
+	defer os.RemoveAll(tempDir)
+
+	buildID := "build-crash-config"
+	configVolID := "build-config-" + buildID
+
+	// Dummy config disk to copy over the recreated volume
+	configData := []byte("fake-ext4-config-disk")
+	configDiskPath := filepath.Join(tempDir, "config.ext4")
+	require.NoError(t, os.WriteFile(configDiskPath, configData, 0644))
+
+	var createCalls int
+	var deleted []string
+	volumeMgr.createFunc = func(ctx context.Context, req volumes.CreateVolumeRequest) (*volumes.Volume, error) {
+		createCalls++
+		if createCalls == 1 {
+			// Leftover from the crashed prior attempt
+			return nil, volumes.ErrAlreadyExists
+		}
+		vol := &volumes.Volume{Id: *req.Id, Name: req.Name}
+		volumeMgr.volumes[vol.Id] = vol
+		return vol, nil
+	}
+	volumeMgr.deleteFunc = func(ctx context.Context, id string) error {
+		deleted = append(deleted, id)
+		delete(volumeMgr.volumes, id)
+		return nil
+	}
+
+	err := mgr.registerBuildConfigVolume(context.Background(), buildID, configVolID, configDiskPath)
+
+	require.NoError(t, err)
+	assert.Equal(t, 2, createCalls, "expected delete + retry of config volume creation")
+	assert.Equal(t, []string{configVolID}, deleted)
+	assert.Contains(t, volumeMgr.volumes, configVolID, "config volume should be recreated")
+	// The config data must have been copied onto the recreated volume
+	copied, readErr := os.ReadFile(mgr.paths.VolumeData(configVolID))
+	require.NoError(t, readErr)
+	assert.Equal(t, configData, copied)
+}
+
 func TestExtractInternalBaseImageRepos(t *testing.T) {
 	registryURL := "http://10.102.0.1:8085"
 
