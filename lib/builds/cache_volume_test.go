@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/paths"
+	"github.com/kernel/hypeman/lib/tags"
 	"github.com/kernel/hypeman/lib/volumes"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -38,6 +39,7 @@ func setupCacheVolumeManager(t *testing.T, config CacheVolumeConfig) (*cacheVolu
 			Id:        id,
 			Name:      req.Name,
 			SizeGb:    req.SizeGb,
+			Tags:      tags.Clone(req.Tags),
 			CreatedAt: time.Now(),
 		}
 		volumeMgr.volumes[id] = vol
@@ -97,6 +99,64 @@ func TestEnsureCacheVolume_ReusesExisting(t *testing.T) {
 
 	assert.Equal(t, volID1, volID2)
 	assert.Equal(t, 1, volumeMgr.createCallCount)
+}
+
+func TestEnsureCacheVolume_TagsCreatedVolume(t *testing.T) {
+	mgr, volumeMgr, _, tempDir := setupCacheVolumeManager(t, CacheVolumeConfig{Enabled: true})
+	defer os.RemoveAll(tempDir)
+
+	volID, err := mgr.ensureCacheVolume(context.Background(), "tenant-a")
+	require.NoError(t, err)
+
+	vol, err := volumeMgr.GetVolume(context.Background(), volID)
+	require.NoError(t, err)
+	assert.Equal(t, "build-cache", vol.Tags["hypeman.system/managed-by"])
+}
+
+func TestEnsureCacheVolume_RejectsUnmanagedVolume(t *testing.T) {
+	mgr, volumeMgr, _, tempDir := setupCacheVolumeManager(t, CacheVolumeConfig{Enabled: true})
+	defer os.RemoveAll(tempDir)
+
+	// A caller-created volume squatting on the deterministic cache volume ID.
+	volID := cacheVolumeID("tenant-a")
+	volumeMgr.volumes[volID] = &volumes.Volume{Id: volID, Name: volID, SizeGb: 1}
+
+	_, err := mgr.ensureCacheVolume(context.Background(), "tenant-a")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not created by the build cache")
+}
+
+func TestReap_IgnoresUnmanagedPrefixedVolume(t *testing.T) {
+	mgr, volumeMgr, now, tempDir := setupCacheVolumeManager(t, CacheVolumeConfig{
+		Enabled: true,
+		SizeGB:  10,
+		IdleTTL: time.Hour,
+	})
+	defer os.RemoveAll(tempDir)
+
+	// An untagged user volume sharing the reserved prefix must survive the
+	// reaper even when it looks idle past the TTL.
+	userVol := &volumes.Volume{
+		Id:        "build-cache-user-data",
+		Name:      "user-data",
+		SizeGb:    10,
+		CreatedAt: now.Add(-72 * time.Hour),
+	}
+	volumeMgr.volumes[userVol.Id] = userVol
+
+	mgr.reap(context.Background())
+
+	_, err := volumeMgr.GetVolume(context.Background(), userVol.Id)
+	assert.NoError(t, err, "unmanaged volume must never be evicted")
+}
+
+func TestReservedVolumeIDPrefix(t *testing.T) {
+	assert.Equal(t, "build-cache-", ReservedVolumeIDPrefix("build-cache-abc"))
+	assert.Equal(t, "build-disk-", ReservedVolumeIDPrefix("build-disk-123"))
+	assert.Equal(t, "build-source-", ReservedVolumeIDPrefix("build-source-123"))
+	assert.Equal(t, "build-config-", ReservedVolumeIDPrefix("build-config-123"))
+	assert.Empty(t, ReservedVolumeIDPrefix("my-data"))
+	assert.Empty(t, ReservedVolumeIDPrefix("build-caches"))
 }
 
 func TestLockScope_SerializesSameScope(t *testing.T) {

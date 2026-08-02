@@ -77,3 +77,40 @@ func TestDeleteVolume_ByName(t *testing.T) {
 	_, ok := resp.(oapi.DeleteVolume204Response)
 	assert.True(t, ok, "expected 204 response")
 }
+
+func TestCreateVolume_ReservedIDPrefix(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	for _, id := range []string{"build-cache-abc", "build-disk-1", "build-source-1", "build-config-1"} {
+		resp, err := svc.CreateVolume(ctx(), oapi.CreateVolumeRequestObject{
+			Body: &oapi.CreateVolumeRequest{
+				Name:   "squat",
+				SizeGb: 1,
+				Id:     &id,
+			},
+		})
+		require.NoError(t, err)
+		bad, ok := resp.(oapi.CreateVolume400JSONResponse)
+		require.True(t, ok, "expected 400 for reserved ID %q", id)
+		assert.Contains(t, bad.Message, "reserved for internal use")
+	}
+}
+
+func TestCreateVolumeFromArchive_ReservedIDPrefix(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	id := "build-cache-abc"
+	resp, err := svc.CreateVolumeFromArchive(ctx(), oapi.CreateVolumeFromArchiveRequestObject{
+		Params: oapi.CreateVolumeFromArchiveParams{
+			Name:   "squat",
+			SizeGb: 1,
+			Id:     &id,
+		},
+	})
+	require.NoError(t, err)
+	bad, ok := resp.(oapi.CreateVolumeFromArchive400JSONResponse)
+	require.True(t, ok, "expected 400 for reserved ID")
+	assert.Contains(t, bad.Message, "reserved for internal use")
+}
