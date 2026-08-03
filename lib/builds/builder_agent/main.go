@@ -52,6 +52,13 @@ type BuildConfig struct {
 	NetworkMode      string            `json:"network_mode"`
 	IsAdminBuild     bool              `json:"is_admin_build,omitempty"`
 	GlobalCacheKey   string            `json:"global_cache_key,omitempty"`
+
+	// CacheGCReservedBytes and CacheGCMaxUsedBytes bound BuildKit's garbage
+	// collector when the build root is a fixed-size persistent disk. Both
+	// must be positive to take effect; zero values leave GC at BuildKit
+	// defaults (used for the tmpfs root, which needs no explicit bound).
+	CacheGCReservedBytes int64 `json:"cache_gc_reserved_bytes,omitempty"`
+	CacheGCMaxUsedBytes  int64 `json:"cache_gc_max_used_bytes,omitempty"`
 }
 
 // SecretRef references a secret to inject during build
@@ -730,6 +737,8 @@ func setupBuildkitdConfig(config *BuildConfig) error {
 	tomlContent.WriteString("[registry.\"docker.io\"]\n")
 	tomlContent.WriteString(fmt.Sprintf("  mirrors = [\"%s\"]\n", registryHost))
 
+	tomlContent.WriteString(buildkitWorkerGCConfig(config.CacheGCReservedBytes, config.CacheGCMaxUsedBytes))
+
 	// Ensure config directory exists
 	buildkitDir := "/home/builder/.config/buildkit"
 	if err := os.MkdirAll(buildkitDir, 0755); err != nil {
@@ -746,6 +755,24 @@ func setupBuildkitdConfig(config *BuildConfig) error {
 		tomlPath, registryHost, isHTTPS, config.RegistryInsecure, hasCA)
 
 	return nil
+}
+
+// buildkitWorkerGCConfig returns the buildkitd.toml OCI worker section that
+// enables BuildKit garbage collection bounded by reservedBytes (the retention
+// floor GC never reclaims below) and maxUsedBytes (the ceiling that triggers
+// reclaim), or an empty string when either bound is missing. Sizes are quoted
+// human-readable strings: BuildKit decodes them with units.RAMInBytes, so a
+// bare integer would be interpreted as bytes. The deprecated gckeepstorage is
+// deliberately not emitted: it maps to reservedSpace only, so nothing would
+// reclaim above the floor and a fixed-size disk could fill to ENOSPC.
+// gcpolicy string sizes require BuildKit >= v0.13.
+func buildkitWorkerGCConfig(reservedBytes, maxUsedBytes int64) string {
+	if reservedBytes <= 0 || maxUsedBytes <= 0 {
+		return ""
+	}
+	reservedMB := reservedBytes / (1024 * 1024)
+	maxUsedMB := maxUsedBytes / (1024 * 1024)
+	return fmt.Sprintf("\n[worker.oci]\n  gc = true\n  [[worker.oci.gcpolicy]]\n    reservedSpace = \"%dMB\"\n    maxUsedSpace = \"%dMB\"\n    all = true\n", reservedMB, maxUsedMB)
 }
 
 func runBuild(ctx context.Context, config *BuildConfig, logWriter io.Writer) (string, string, error) {
@@ -856,21 +883,10 @@ func runBuild(ctx context.Context, config *BuildConfig, logWriter io.Writer) (st
 	buildkitdConfig := "/home/builder/.config/buildkit/buildkitd.toml"
 	log.Printf("Using buildkitd config: %s", buildkitdConfig)
 
-	// Mount a tmpfs for BuildKit's data directory.
-	// The VM rootfs is an overlayfs (read-only ext4 + writable ext4 upper layer).
-	// BuildKit's native overlayfs snapshotter creates char device 0:0 for whiteout
-	// markers, but mknod(char 0:0) fails on an overlayfs mount because the kernel
-	// treats it as an overlayfs whiteout rather than a regular device node.
-	// Using tmpfs avoids this nested-overlayfs conflict.
 	buildkitRoot := "/var/lib/buildkit"
-	if err := os.MkdirAll(buildkitRoot, 0755); err != nil {
-		return "", "", fmt.Errorf("create buildkit root dir: %w", err)
+	if err := ensureBuildkitRoot(buildkitRoot, isMountPoint, mountBuildkitTmpfs); err != nil {
+		return "", "", err
 	}
-	mountCmd := exec.Command("mount", "-t", "tmpfs", "-o", "size=3G", "tmpfs", buildkitRoot)
-	if output, err := mountCmd.CombinedOutput(); err != nil {
-		return "", "", fmt.Errorf("mount tmpfs at %s (required for native overlayfs snapshotter): %v: %s", buildkitRoot, err, output)
-	}
-	log.Printf("Mounted tmpfs at %s for BuildKit snapshotter", buildkitRoot)
 
 	log.Printf("Running: buildctl-daemonless.sh %s", strings.Join(args, " "))
 
@@ -909,6 +925,61 @@ func runBuild(ctx context.Context, config *BuildConfig, logWriter io.Writer) (st
 	}
 
 	return digest, buildLogs.String(), nil
+}
+
+// ensureBuildkitRoot prepares BuildKit's data directory. If root is already a
+// mountpoint — e.g. a persistent disk attached by the host — it is used
+// directly. Otherwise a tmpfs is mounted there: the VM rootfs is an overlayfs
+// (read-only ext4 + writable ext4 upper layer) and BuildKit's native overlayfs
+// snapshotter creates char device 0:0 for whiteout markers, but mknod(char 0:0)
+// fails on an overlayfs mount because the kernel treats it as an overlayfs
+// whiteout rather than a regular device node. tmpfs avoids this
+// nested-overlayfs conflict.
+//
+// A pre-mounted root is shared state: only attach a volume there when builds
+// are serialized per volume, never to two builder VMs at once.
+func ensureBuildkitRoot(root string, isMounted func(string) (bool, error), mountTmpfs func(string) error) error {
+	mounted, err := isMounted(root)
+	if err != nil {
+		return fmt.Errorf("check mountpoint %s: %w", root, err)
+	}
+	if mounted {
+		log.Printf("Using existing mount at %s for BuildKit", root)
+		return nil
+	}
+	if err := os.MkdirAll(root, 0755); err != nil {
+		return fmt.Errorf("create buildkit root dir: %w", err)
+	}
+	return mountTmpfs(root)
+}
+
+func mountBuildkitTmpfs(root string) error {
+	mountCmd := exec.Command("mount", "-t", "tmpfs", "-o", "size=3G", "tmpfs", root)
+	if output, err := mountCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("mount tmpfs at %s (required for native overlayfs snapshotter): %v: %s", root, err, output)
+	}
+	log.Printf("Mounted tmpfs at %s for BuildKit snapshotter", root)
+	return nil
+}
+
+// isMountPoint reports whether path is a mountpoint according to
+// /proc/self/mounts, which reflects the guest's own mount namespace.
+func isMountPoint(path string) (bool, error) {
+	data, err := os.ReadFile("/proc/self/mounts")
+	if err != nil {
+		return false, err
+	}
+	return mountsContain(string(data), path), nil
+}
+
+func mountsContain(mounts, path string) bool {
+	for _, line := range strings.Split(mounts, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && fields[1] == path {
+			return true
+		}
+	}
+	return false
 }
 
 func extractDigest(metadataPath string) (string, error) {
