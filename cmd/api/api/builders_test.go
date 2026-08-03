@@ -2,6 +2,7 @@ package api
 
 import (
 	"testing"
+	"time"
 
 	"github.com/kernel/hypeman/lib/builders"
 	"github.com/kernel/hypeman/lib/oapi"
@@ -200,6 +201,13 @@ func TestPruneBuilder(t *testing.T) {
 
 	// Identity preserved.
 	assert.Equal(t, created.Id, pruned.Id)
+
+	// The reset runs in the background; wait for it so the disk recreation
+	// does not race the test's TempDir cleanup.
+	require.Eventually(t, func() bool {
+		b, err := svc.BuilderManager.GetBuilder(ctx(), created.Id)
+		return err == nil && b.Status == builders.StatusReady
+	}, 5*time.Second, 10*time.Millisecond, "prune must finish recreating the disk")
 }
 
 func TestPruneBuilder_InUse(t *testing.T) {
