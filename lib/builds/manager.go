@@ -790,12 +790,17 @@ func (m *manager) executeBuild(ctx context.Context, id string, req CreateBuildRe
 		release := m.cacheVolumes.acquireVolume(cacheVolID)
 		ensured := false
 		defer func() {
-			release()
 			// Only record usage and reap when the volume was ensured;
 			// otherwise a failed ensure would persist a lastUsed entry for
 			// a nonexistent volume that the reaper never removes.
 			if ensured {
+				// Stamp usage before releasing the in-use guard so a
+				// concurrent reap never sees the volume idle with a stale
+				// lastUsed from ensure time.
 				m.cacheVolumes.touchLastUsed(cacheVolID)
+			}
+			release()
+			if ensured {
 				// Enforce host-wide limits once the volume is released.
 				m.cacheVolumes.reap(context.Background())
 			}
