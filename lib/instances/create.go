@@ -633,18 +633,20 @@ func validateCreateRequest(req *CreateInstanceRequest) error {
 	req.RestartPolicy = normalizedRestartPolicy
 
 	// Validate volume attachments
-	if err := validateVolumeAttachments(req.Volumes); err != nil {
+	if err := validateVolumeAttachments(req.Volumes, req.AllowSystemVolumeMounts); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-// validateVolumeAttachments validates volume attachment requests
-func validateVolumeAttachments(volumes []VolumeAttachment) error {
+// validateVolumeAttachments validates volume attachment requests.
+// allowSystemVolumes permits attaching volumes whose IDs carry a reserved
+// internal prefix and is only set for internally created instances.
+func validateVolumeAttachments(attachments []VolumeAttachment, allowSystemVolumes bool) error {
 	// Count total devices needed (each overlay volume needs 2 devices: base + overlay)
 	totalDevices := 0
-	for _, vol := range volumes {
+	for _, vol := range attachments {
 		totalDevices++
 		if vol.Overlay {
 			totalDevices++ // Overlay needs an additional device
@@ -655,7 +657,7 @@ func validateVolumeAttachments(volumes []VolumeAttachment) error {
 	}
 
 	seenPaths := make(map[string]bool)
-	for _, vol := range volumes {
+	for _, vol := range attachments {
 		// Validate mount path is absolute
 		if !filepath.IsAbs(vol.MountPath) {
 			return fmt.Errorf("volume %s: mount path %q must be absolute", vol.VolumeID, vol.MountPath)
@@ -667,6 +669,13 @@ func validateVolumeAttachments(volumes []VolumeAttachment) error {
 		// Check for system directories
 		if isSystemDirectory(cleanPath) {
 			return fmt.Errorf("volume %s: cannot mount to system directory %q", vol.VolumeID, cleanPath)
+		}
+
+		// Reserved internal volume IDs are attachable only by internal instances
+		if !allowSystemVolumes {
+			if prefix := volumes.ReservedVolumeIDPrefix(vol.VolumeID); prefix != "" {
+				return fmt.Errorf("volume %s: volume IDs with the prefix %q are reserved for internal use", vol.VolumeID, prefix)
+			}
 		}
 
 		// Check for duplicate mount paths

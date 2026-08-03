@@ -27,7 +27,7 @@ func TestValidateVolumeAttachments_MaxVolumes(t *testing.T) {
 		}
 	}
 
-	err := validateVolumeAttachments(volumes)
+	err := validateVolumeAttachments(volumes, false)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "cannot attach more than 23")
 }
@@ -39,7 +39,7 @@ func TestValidateVolumeAttachments_SystemDirectory(t *testing.T) {
 		MountPath: "/etc/secrets", // system directory
 	}}
 
-	err := validateVolumeAttachments(volumes)
+	err := validateVolumeAttachments(volumes, false)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "system directory")
 }
@@ -51,7 +51,7 @@ func TestValidateVolumeAttachments_DuplicatePaths(t *testing.T) {
 		{VolumeID: "vol-2", MountPath: "/mnt/data"}, // duplicate
 	}
 
-	err := validateVolumeAttachments(volumes)
+	err := validateVolumeAttachments(volumes, false)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "duplicate mount path")
 }
@@ -63,7 +63,7 @@ func TestValidateVolumeAttachments_RelativePath(t *testing.T) {
 		MountPath: "relative/path", // not absolute
 	}}
 
-	err := validateVolumeAttachments(volumes)
+	err := validateVolumeAttachments(volumes, false)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "must be absolute")
 }
@@ -75,16 +75,16 @@ func TestValidateVolumeAttachments_Valid(t *testing.T) {
 		{VolumeID: "vol-2", MountPath: "/mnt/logs"},
 	}
 
-	err := validateVolumeAttachments(volumes)
+	err := validateVolumeAttachments(volumes, false)
 	assert.NoError(t, err)
 }
 
 func TestValidateVolumeAttachments_Empty(t *testing.T) {
 	t.Parallel()
-	err := validateVolumeAttachments(nil)
+	err := validateVolumeAttachments(nil, false)
 	assert.NoError(t, err)
 
-	err = validateVolumeAttachments([]VolumeAttachment{})
+	err = validateVolumeAttachments([]VolumeAttachment{}, false)
 	assert.NoError(t, err)
 }
 
@@ -99,7 +99,7 @@ func TestValidateVolumeAttachments_OverlayRequiresReadonly(t *testing.T) {
 		OverlaySize: 100 * 1024 * 1024,
 	}}
 
-	err := validateVolumeAttachments(volumes)
+	err := validateVolumeAttachments(volumes, false)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "overlay mode requires readonly=true")
 }
@@ -115,7 +115,7 @@ func TestValidateVolumeAttachments_OverlayRequiresSize(t *testing.T) {
 		OverlaySize: 0, // Invalid: overlay requires size
 	}}
 
-	err := validateVolumeAttachments(volumes)
+	err := validateVolumeAttachments(volumes, false)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "overlay_size is required")
 }
@@ -131,7 +131,7 @@ func TestValidateVolumeAttachments_OverlayValid(t *testing.T) {
 		OverlaySize: 100 * 1024 * 1024, // 100MB
 	}}
 
-	err := validateVolumeAttachments(volumes)
+	err := validateVolumeAttachments(volumes, false)
 	assert.NoError(t, err)
 }
 
@@ -151,7 +151,7 @@ func TestValidateVolumeAttachments_OverlayCountsAsTwoDevices(t *testing.T) {
 		}
 	}
 
-	err := validateVolumeAttachments(volumes)
+	err := validateVolumeAttachments(volumes, false)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "cannot attach more than 23")
 }
@@ -228,4 +228,27 @@ func cleanupTestProcesses(t *testing.T, mgr *manager) {
 			}
 		}
 	}
+}
+
+func TestValidateVolumeAttachments_ReservedVolumeID(t *testing.T) {
+	t.Parallel()
+	reserved := []VolumeAttachment{{
+		VolumeID:  "builder-disk-abc123",
+		MountPath: "/mnt/cache",
+	}}
+
+	err := validateVolumeAttachments(reserved, false)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "reserved for internal use")
+
+	// Internal instances may attach reserved volumes.
+	err = validateVolumeAttachments(reserved, true)
+	assert.NoError(t, err)
+
+	// Ordinary volumes remain attachable without the internal opt-in.
+	err = validateVolumeAttachments([]VolumeAttachment{{
+		VolumeID:  "builder-disks",
+		MountPath: "/mnt/data",
+	}}, false)
+	assert.NoError(t, err)
 }

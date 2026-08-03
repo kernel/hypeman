@@ -373,6 +373,23 @@ func (p *Paths) IngressMetadata(id string) string {
 	return filepath.Join(p.IngressesDir(), id+".json")
 }
 
+// Builder path methods
+
+// BuildersDir returns the root builders directory.
+func (p *Paths) BuildersDir() string {
+	return filepath.Join(p.dataDir, "builders")
+}
+
+// BuilderDir returns the directory for a specific builder.
+func (p *Paths) BuilderDir(id string) string {
+	return filepath.Join(p.BuildersDir(), id)
+}
+
+// BuilderMetadata returns the path to builder metadata.json.
+func (p *Paths) BuilderMetadata(id string) string {
+	return filepath.Join(p.BuilderDir(id), "metadata.json")
+}
+
 // Build path methods
 
 // BuildsDir returns the root builds directory.
