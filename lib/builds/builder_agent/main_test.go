@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -16,7 +17,7 @@ func TestEnsureBuildkitRootAlreadyMounted(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "buildkit")
 
 	mountCalled := false
-	err := ensureBuildkitRoot(root, false,
+	premounted, err := ensureBuildkitRoot(root, false,
 		func(path string) (bool, error) {
 			assert.Equal(t, root, path)
 			return true, nil
@@ -28,6 +29,7 @@ func TestEnsureBuildkitRootAlreadyMounted(t *testing.T) {
 	)
 
 	require.NoError(t, err)
+	assert.True(t, premounted)
 	assert.False(t, mountCalled, "tmpfs mount must not be attempted when root is already a mountpoint")
 }
 
@@ -35,7 +37,7 @@ func TestEnsureBuildkitRootMountsTmpfsWhenUnmounted(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "buildkit")
 
 	var mountedPath string
-	err := ensureBuildkitRoot(root, false,
+	premounted, err := ensureBuildkitRoot(root, false,
 		func(path string) (bool, error) { return false, nil },
 		func(path string) error {
 			mountedPath = path
@@ -44,6 +46,7 @@ func TestEnsureBuildkitRootMountsTmpfsWhenUnmounted(t *testing.T) {
 	)
 
 	require.NoError(t, err)
+	assert.False(t, premounted)
 	assert.Equal(t, root, mountedPath)
 	assert.DirExists(t, root)
 }
@@ -52,7 +55,7 @@ func TestEnsureBuildkitRootRequiresPersistentMountForGC(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "buildkit")
 	mountCalled := false
 
-	err := ensureBuildkitRoot(root, true,
+	premounted, err := ensureBuildkitRoot(root, true,
 		func(path string) (bool, error) { return false, nil },
 		func(path string) error {
 			mountCalled = true
@@ -61,13 +64,14 @@ func TestEnsureBuildkitRootRequiresPersistentMountForGC(t *testing.T) {
 	)
 
 	require.ErrorContains(t, err, "persistent BuildKit cache configured")
+	assert.False(t, premounted)
 	assert.False(t, mountCalled, "configured persistent cache must not fall back to tmpfs")
 }
 
 func TestEnsureBuildkitRootPropagatesMountFailure(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "buildkit")
 
-	err := ensureBuildkitRoot(root, false,
+	_, err := ensureBuildkitRoot(root, false,
 		func(path string) (bool, error) { return false, nil },
 		func(path string) error { return errors.New("mount failed") },
 	)
@@ -78,7 +82,7 @@ func TestEnsureBuildkitRootPropagatesMountFailure(t *testing.T) {
 func TestEnsureBuildkitRootPropagatesMountpointCheckFailure(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "buildkit")
 
-	err := ensureBuildkitRoot(root, false,
+	_, err := ensureBuildkitRoot(root, false,
 		func(path string) (bool, error) { return false, errors.New("proc unavailable") },
 		func(path string) error { return nil },
 	)
@@ -154,4 +158,72 @@ func TestBuildkitWorkerGCConfigSizeDecode(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, wantBytes, decoded, "%s must decode to the intended byte count", key)
 	}
+}
+
+func TestReconcileBuildkitVersionStamp_MatchingVersion(t *testing.T) {
+	root := t.TempDir()
+	version := "buildkitd github.com/moby/buildkit v0.23.2 abc123"
+	require.NoError(t, os.WriteFile(filepath.Join(root, buildkitVersionStampFile), []byte(version+"\n"), 0644))
+	cacheFile := filepath.Join(root, "cache.db")
+	require.NoError(t, os.WriteFile(cacheFile, []byte("cache"), 0644))
+
+	err := reconcileBuildkitVersionStamp(root, func() (string, error) { return version, nil })
+
+	require.NoError(t, err)
+	assert.FileExists(t, cacheFile, "matching stamp must keep the cache")
+}
+
+func TestReconcileBuildkitVersionStamp_IncompatibleVersionResets(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, buildkitVersionStampFile), []byte("buildkitd v0.20.0\n"), 0644))
+	cacheDir := filepath.Join(root, "snapshots")
+	require.NoError(t, os.MkdirAll(cacheDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(cacheDir, "layer"), []byte("x"), 0644))
+
+	newVersion := "buildkitd github.com/moby/buildkit v0.23.2 abc123"
+	err := reconcileBuildkitVersionStamp(root, func() (string, error) { return newVersion, nil })
+
+	require.NoError(t, err)
+	assert.NoFileExists(t, filepath.Join(cacheDir, "layer"), "incompatible stamp must reset the cache")
+	stamped, err := os.ReadFile(filepath.Join(root, buildkitVersionStampFile))
+	require.NoError(t, err)
+	assert.Equal(t, newVersion, strings.TrimSpace(string(stamped)))
+}
+
+func TestReconcileBuildkitVersionStamp_MissingStampResets(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "leftover"), []byte("x"), 0644))
+
+	version := "buildkitd github.com/moby/buildkit v0.23.2 abc123"
+	err := reconcileBuildkitVersionStamp(root, func() (string, error) { return version, nil })
+
+	require.NoError(t, err)
+	assert.NoFileExists(t, filepath.Join(root, "leftover"),
+		"unstamped content cannot be trusted to match the current BuildKit")
+	assert.FileExists(t, filepath.Join(root, buildkitVersionStampFile))
+}
+
+func TestReconcileBuildkitVersionStamp_FreshDiskStampedWithoutReset(t *testing.T) {
+	root := t.TempDir()
+	lostFound := filepath.Join(root, "lost+found")
+	require.NoError(t, os.MkdirAll(lostFound, 0755))
+
+	version := "buildkitd github.com/moby/buildkit v0.23.2 abc123"
+	err := reconcileBuildkitVersionStamp(root, func() (string, error) { return version, nil })
+
+	require.NoError(t, err)
+	assert.DirExists(t, lostFound, "a fresh disk holds no cache and must not be wiped")
+	stamped, err := os.ReadFile(filepath.Join(root, buildkitVersionStampFile))
+	require.NoError(t, err)
+	assert.Equal(t, version, strings.TrimSpace(string(stamped)))
+}
+
+func TestReconcileBuildkitVersionStamp_VersionError(t *testing.T) {
+	root := t.TempDir()
+
+	err := reconcileBuildkitVersionStamp(root, func() (string, error) {
+		return "", errors.New("buildkitd broken")
+	})
+
+	require.ErrorContains(t, err, "buildkitd broken")
 }

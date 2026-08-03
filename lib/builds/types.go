@@ -34,6 +34,7 @@ type Build struct {
 	CompletedAt       *time.Time       `json:"completed_at,omitempty"`
 	DurationMS        *int64           `json:"duration_ms,omitempty"`
 	BuilderInstanceID *string          `json:"builder_instance_id,omitempty"`
+	BuilderID         *string          `json:"builder_id,omitempty"`
 }
 
 // CreateBuildRequest represents a request to create a new build
@@ -75,6 +76,11 @@ type CreateBuildRequest struct {
 
 	// Tags are optional user-defined key-value tags for the build resource.
 	Tags tags.Tags `json:"tags,omitempty"`
+
+	// BuilderID optionally selects the Builder whose persistent cache disk
+	// backs this build. It is the only builder selector. When empty, the
+	// build uses an ephemeral tmpfs BuildKit root.
+	BuilderID string `json:"builder_id,omitempty"`
 }
 
 // BuildPolicy defines resource limits and network policy for a build

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kernel/hypeman/lib/builders"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/instances"
@@ -209,8 +210,12 @@ func (m *mockVolumeManager) CreateVolume(ctx context.Context, req volumes.Create
 	if m.createFunc != nil {
 		return m.createFunc(ctx, req)
 	}
+	id := "vol-" + req.Name
+	if req.Id != nil {
+		id = *req.Id
+	}
 	vol := &volumes.Volume{
-		Id:   "vol-" + req.Name,
+		Id:   id,
 		Name: req.Name,
 	}
 	m.volumes[vol.Id] = vol
@@ -222,8 +227,12 @@ func (m *mockVolumeManager) CreateVolumeFromArchive(ctx context.Context, req vol
 	if m.createFromArchiveFunc != nil {
 		return m.createFromArchiveFunc(ctx, req, archive)
 	}
+	id := "vol-" + req.Name
+	if req.Id != nil {
+		id = *req.Id
+	}
 	vol := &volumes.Volume{
-		Id:   "vol-" + req.Name,
+		Id:   id,
 		Name: req.Name,
 	}
 	m.volumes[vol.Id] = vol
@@ -256,10 +265,30 @@ func (m *mockVolumeManager) DeleteVolume(ctx context.Context, id string) error {
 }
 
 func (m *mockVolumeManager) AttachVolume(ctx context.Context, id string, req volumes.AttachVolumeRequest) error {
+	vol, ok := m.volumes[id]
+	if !ok {
+		return volumes.ErrNotFound
+	}
+	vol.Attachments = append(vol.Attachments, volumes.Attachment{
+		InstanceID: req.InstanceID,
+		MountPath:  req.MountPath,
+		Readonly:   req.Readonly,
+	})
 	return nil
 }
 
 func (m *mockVolumeManager) DetachVolume(ctx context.Context, volumeID string, instanceID string) error {
+	vol, ok := m.volumes[volumeID]
+	if !ok {
+		return volumes.ErrNotFound
+	}
+	remaining := make([]volumes.Attachment, 0, len(vol.Attachments))
+	for _, att := range vol.Attachments {
+		if att.InstanceID != instanceID {
+			remaining = append(remaining, att)
+		}
+	}
+	vol.Attachments = remaining
 	return nil
 }
 
@@ -427,6 +456,12 @@ func setupTestManagerWithImageMgr(t *testing.T) (*manager, *mockInstanceManager,
 	// Create a discard logger for tests
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
+	// The builders manager is real (file-backed) but shares the builds
+	// manager's volume manager, matching production wiring: both managers
+	// observe the same disk and attachment state.
+	builderMgr, err := builders.NewManager(p, builders.Config{}, volumeMgr, instanceMgr, logger, nil)
+	require.NoError(t, err)
+
 	// Create manager (without calling NewManager to avoid RecoverPendingBuilds)
 	mgr := &manager{
 		config:            config,
@@ -434,6 +469,7 @@ func setupTestManagerWithImageMgr(t *testing.T) (*manager, *mockInstanceManager,
 		queue:             NewBuildQueue(config.MaxConcurrentBuilds),
 		instanceManager:   instanceMgr,
 		volumeManager:     volumeMgr,
+		builderManager:    builderMgr,
 		imageManager:      imageMgr,
 		secretProvider:    secretProvider,
 		tokenGenerator:    NewRegistryTokenGenerator(config.RegistrySecret),

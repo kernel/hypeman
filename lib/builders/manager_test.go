@@ -671,6 +671,28 @@ func TestReleaseBuild_FailureKeepsHold(t *testing.T) {
 	require.NotNil(t, got.LastUsedAt)
 }
 
+func TestIdleReaper_SkipsQueuedBuilds(t *testing.T) {
+	m, _, _, p := setupTestManager(t, Config{IdleTTL: time.Hour})
+
+	b, err := m.CreateBuilder(context.Background(), CreateBuilderRequest{})
+	require.NoError(t, err)
+
+	// A queued build waits for a concurrency slot without holding the
+	// builder, so the reaper must consult the activity checker.
+	m.SetBuildActivityChecker(func(id string) bool { return id == b.ID })
+
+	meta, err := loadMetadata(p, b.ID)
+	require.NoError(t, err)
+	old := time.Now().Add(-2 * time.Hour)
+	meta.LastUsedAt = &old
+	require.NoError(t, saveMetadata(p, meta))
+
+	m.reapIdle(context.Background())
+
+	_, err = m.GetBuilder(context.Background(), b.ID)
+	assert.NoError(t, err, "builder with a queued build must not be reaped")
+}
+
 func TestValidateBuilderID(t *testing.T) {
 	assert.NoError(t, ValidateBuilderID("abc"))
 	assert.NoError(t, ValidateBuilderID("team-cache_1"))
@@ -693,4 +715,19 @@ func TestDeleteBuilder_ToleratesMissingDisk(t *testing.T) {
 	require.NoError(t, volumeMgr.DeleteVolume(context.Background(), b.DiskVolumeID))
 
 	assert.NoError(t, mgr.DeleteBuilder(context.Background(), b.ID))
+}
+
+func TestAcquireForBuild_NotReady(t *testing.T) {
+	mgr, _, _, p := setupTestManager(t, Config{})
+
+	b, err := mgr.CreateBuilder(context.Background(), CreateBuilderRequest{})
+	require.NoError(t, err)
+
+	meta, err := loadMetadata(p, b.ID)
+	require.NoError(t, err)
+	meta.Status = StatusPruning
+	require.NoError(t, saveMetadata(p, meta))
+
+	_, err = mgr.AcquireForBuild(context.Background(), b.ID, "build-1")
+	assert.ErrorIs(t, err, ErrInUse, "build must not acquire a builder mid-prune")
 }

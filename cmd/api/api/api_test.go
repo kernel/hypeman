@@ -10,6 +10,7 @@ import (
 
 	"github.com/kernel/hypeman/cmd/api/config"
 	"github.com/kernel/hypeman/lib/builders"
+	"github.com/kernel/hypeman/lib/builds"
 	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/instances"
@@ -49,6 +50,15 @@ func newTestService(t *testing.T) *ApiService {
 	if err != nil {
 		t.Fatalf("failed to create builders manager: %v", err)
 	}
+	buildMgr, err := builds.NewManager(p, builds.Config{
+		MaxConcurrentBuilds: 2,
+		RegistryURL:         "localhost:5000",
+		DefaultTimeout:      300,
+	}, instanceMgr, volumeMgr, builderMgr, imageMgr, &builds.NoOpSecretProvider{}, nil, nil)
+	if err != nil {
+		t.Fatalf("failed to create build manager: %v", err)
+	}
+	builderMgr.SetBuildActivityChecker(buildMgr.BuilderHasBuilds)
 
 	// Initialize network manager (creates bridge for network-enabled tests)
 	if err := networkMgr.Initialize(ctx(), nil); err != nil {
@@ -66,6 +76,7 @@ func newTestService(t *testing.T) *ApiService {
 		InstanceManager: instanceMgr,
 		VolumeManager:   volumeMgr,
 		BuilderManager:  builderMgr,
+		BuildManager:    buildMgr,
 		NetworkManager:  networkMgr,
 		DeviceManager:   deviceMgr,
 		ResourceManager: resourceMgr,

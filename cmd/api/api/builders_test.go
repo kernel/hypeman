@@ -310,3 +310,28 @@ func TestDeleteBuilder_NotFoundAfterResolution(t *testing.T) {
 	_, ok := resp.(oapi.DeleteBuilder404JSONResponse)
 	assert.True(t, ok, "expected 404 when the builder is gone after resolution")
 }
+
+func TestGetBuilder_QueueState(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	createResp, err := svc.CreateBuilder(ctx(), oapi.CreateBuilderRequestObject{
+		Body: &oapi.CreateBuilderRequest{},
+	})
+	require.NoError(t, err)
+	created := createResp.(oapi.CreateBuilder201JSONResponse)
+
+	// New fields are always present with real queue state.
+	assert.Equal(t, 1, created.MaxConcurrency)
+	assert.NotNil(t, created.QueuedBuilds, "queued_builds must be non-nil")
+	assert.Empty(t, created.QueuedBuilds)
+	assert.Nil(t, created.ActiveBuildId)
+
+	resp, err := svc.GetBuilder(ctxWithBuilder(svc, created.Id), oapi.GetBuilderRequestObject{Id: created.Id})
+	require.NoError(t, err)
+	got := resp.(oapi.GetBuilder200JSONResponse)
+	assert.Equal(t, 1, got.MaxConcurrency)
+	assert.NotNil(t, got.QueuedBuilds)
+	assert.Empty(t, got.QueuedBuilds)
+	assert.Nil(t, got.ActiveBuildId)
+}

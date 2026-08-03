@@ -19,6 +19,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/empty"
 	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
+	"github.com/kernel/hypeman/lib/builders"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/instances"
 	"github.com/kernel/hypeman/lib/paths"
@@ -59,6 +60,18 @@ type Manager interface {
 
 	// RecoverPendingBuilds recovers builds that were interrupted on restart
 	RecoverPendingBuilds()
+
+	// ActiveBuildForBuilder returns the ID of the build currently running on
+	// a builder, or nil when no build is running on it.
+	ActiveBuildForBuilder(builderID string) *string
+
+	// QueuedBuildsForBuilder returns the IDs of pending builds targeting a
+	// builder, oldest first.
+	QueuedBuildsForBuilder(builderID string) []string
+
+	// BuilderHasBuilds reports whether any build targeting the builder is
+	// queued or running.
+	BuilderHasBuilds(builderID string) bool
 }
 
 // Config holds configuration for the build manager
@@ -118,6 +131,7 @@ type manager struct {
 	queue           *BuildQueue
 	instanceManager instances.Manager
 	volumeManager   volumes.Manager
+	builderManager  builders.Manager
 	imageManager    images.Manager
 	secretProvider  SecretProvider
 	tokenGenerator  *RegistryTokenGenerator
@@ -137,6 +151,7 @@ func NewManager(
 	config Config,
 	instanceMgr instances.Manager,
 	volumeMgr volumes.Manager,
+	builderMgr builders.Manager,
 	imageMgr images.Manager,
 	secretProvider SecretProvider,
 	logger *slog.Logger,
@@ -152,6 +167,7 @@ func NewManager(
 		queue:             NewBuildQueue(config.MaxConcurrentBuilds),
 		instanceManager:   instanceMgr,
 		volumeManager:     volumeMgr,
+		builderManager:    builderMgr,
 		imageManager:      imageMgr,
 		secretProvider:    secretProvider,
 		tokenGenerator:    NewRegistryTokenGenerator(config.RegistrySecret),
@@ -388,6 +404,18 @@ func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourc
 	m.createMu.Lock()
 	defer m.createMu.Unlock()
 
+	// Resolve the builder up front: the build fails at create time when the
+	// builder does not exist, and the disk size determines the BuildKit GC
+	// bounds written into the guest config.
+	var builder *builders.Builder
+	if req.BuilderID != "" {
+		b, err := m.builderManager.GetBuilder(ctx, req.BuilderID)
+		if err != nil {
+			return nil, err
+		}
+		builder = b
+	}
+
 	// Generate build ID
 	id := cuid2.Generate()
 
@@ -511,13 +539,18 @@ func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourc
 		GlobalCacheKey:   req.GlobalCacheKey,
 		ImageName:        req.ImageName,
 	}
+	if builder != nil {
+		buildConfig.CacheGCReservedBytes, buildConfig.CacheGCMaxUsedBytes = gcBoundsForDisk(builder.DiskSizeGb)
+	}
 	if err := writeBuildConfig(m.paths, id, buildConfig); err != nil {
 		deleteBuild(m.paths, id)
 		return nil, fmt.Errorf("write build config: %w", err)
 	}
 
-	// Enqueue the build
-	queuePos := m.queue.Enqueue(id, req, func() {
+	// Enqueue the build. Builds sharing a builder are serialized by builder
+	// ID so a waiting same-builder build stays pending instead of holding a
+	// global concurrency slot while blocked on the builder's disk.
+	queuePos := m.queue.EnqueueSerial(id, req, m.buildSerialKey(req), func() {
 		m.runBuild(context.Background(), id, req, policy)
 	})
 
@@ -528,6 +561,39 @@ func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourc
 
 	m.logger.Info("build created", "id", id, "queue_position", queuePos)
 	return build, nil
+}
+
+// buildSerialKey returns the queue serialization key for a build: builds
+// that attach the same builder disk share a key and never run concurrently.
+// Builds without a builder are unconstrained.
+func (m *manager) buildSerialKey(req CreateBuildRequest) string {
+	return req.BuilderID
+}
+
+// gcBoundsForDisk computes the BuildKit GC bounds for a builder disk:
+// maxUsedSpace at 90% of the disk so GC reclaims before ENOSPC, and
+// reservedSpace at 70% so reclaim keeps a useful cache floor.
+func gcBoundsForDisk(diskSizeGb int) (reservedBytes, maxUsedBytes int64) {
+	size := int64(diskSizeGb) * 1024 * 1024 * 1024
+	return size * 7 / 10, size * 9 / 10
+}
+
+// ActiveBuildForBuilder returns the ID of the build currently running on a
+// builder, or nil.
+func (m *manager) ActiveBuildForBuilder(builderID string) *string {
+	return m.queue.ActiveBuildForSerialKey(builderID)
+}
+
+// QueuedBuildsForBuilder returns the IDs of pending builds targeting a
+// builder, oldest first.
+func (m *manager) QueuedBuildsForBuilder(builderID string) []string {
+	return m.queue.PendingBuildsForSerialKey(builderID)
+}
+
+// BuilderHasBuilds reports whether any build targeting the builder is
+// queued or running.
+func (m *manager) BuilderHasBuilds(builderID string) bool {
+	return m.ActiveBuildForBuilder(builderID) != nil || len(m.QueuedBuildsForBuilder(builderID)) > 0
 }
 
 // storeSource stores the source tarball for a build
@@ -563,6 +629,11 @@ func (m *manager) runBuild(ctx context.Context, id string, req CreateBuildReques
 
 	// Run the build in a builder VM
 	result, err := m.executeBuild(buildCtx, id, req, policy)
+
+	// executeBuild's defers release the builder acquisition when it returns,
+	// so same-builder builds may start while this build waits for image
+	// conversion and re-tagging below.
+	m.queue.ReleaseSerialKey(id)
 
 	duration := time.Since(start)
 	durationMS := duration.Milliseconds()
@@ -719,11 +790,32 @@ func (m *manager) executeBuild(ctx context.Context, id string, req CreateBuildRe
 	}
 	defer m.volumeManager.DeleteVolume(context.Background(), configVolID)
 
+	// When the build targets a builder, hold it for the duration of the VM
+	// execution and attach its persistent cache disk as the BuildKit root.
+	// Builds for a builder are serialized by the queue, and the acquisition
+	// blocks prune and delete until release (which also stamps last_used_at,
+	// including for failed builds). AcquireForBuild clears stale disk
+	// attachments left by a crashed build's VM (DeleteInstance's volume
+	// detach is warn-only, so records can leak), so a crash cannot brick
+	// the builder for later builds.
+	builderDiskVolID := ""
+	if req.BuilderID != "" {
+		if _, err := m.builderManager.AcquireForBuild(ctx, req.BuilderID, id); err != nil {
+			return nil, fmt.Errorf("acquire builder %s: %w", req.BuilderID, err)
+		}
+		defer func() {
+			if err := m.builderManager.ReleaseBuild(context.Background(), req.BuilderID, id); err != nil {
+				m.logger.Error("failed to release builder", "builder", req.BuilderID, "build", id, "error", err)
+			}
+		}()
+		builderDiskVolID = builders.DiskVolumeID(req.BuilderID)
+	}
+
 	// Create builder instance
 	builderName := fmt.Sprintf("builder-%s", id)
 	networkEnabled := policy.NetworkMode == "egress"
 
-	inst, err := m.instanceManager.CreateInstance(ctx, instances.CreateInstanceRequest{
+	createReq := instances.CreateInstanceRequest{
 		Name:           builderName,
 		Image:          m.config.BuilderImage,
 		Size:           int64(policy.MemoryMB) * 1024 * 1024,
@@ -741,7 +833,18 @@ func (m *manager) executeBuild(ctx context.Context, id string, req CreateBuildRe
 				Readonly:  true,
 			},
 		},
-	})
+	}
+	if builderDiskVolID != "" {
+		createReq.Volumes = append(createReq.Volumes, instances.VolumeAttachment{
+			VolumeID:  builderDiskVolID,
+			MountPath: "/var/lib/buildkit",
+			Readonly:  false,
+		})
+		// The builder VM owns the BuildKit root mount at a system path.
+		createReq.AllowSystemVolumeMounts = true
+		createReq.SystemVolumeMountPaths = []string{"/var/lib/buildkit"}
+	}
+	inst, err := m.instanceManager.CreateInstance(ctx, createReq)
 	if err != nil {
 		return nil, fmt.Errorf("create builder instance: %w", err)
 	}
@@ -1293,7 +1396,7 @@ func (m *manager) RecoverPendingBuilds() {
 				continue
 			}
 
-			m.queue.Enqueue(meta.ID, *meta.Request, func() {
+			m.queue.EnqueueSerial(meta.ID, *meta.Request, meta.Request.BuilderID, func() {
 				policy := DefaultBuildPolicy()
 				if meta.Request.BuildPolicy != nil {
 					policy = *meta.Request.BuildPolicy
