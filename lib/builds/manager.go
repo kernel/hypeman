@@ -610,6 +610,11 @@ func (m *manager) runBuild(ctx context.Context, id string, req CreateBuildReques
 	// Run the build in a builder VM
 	result, err := m.executeBuild(buildCtx, id, req, policy)
 
+	// executeBuild's defers release the scope lock and detach the cache
+	// volume when it returns, so same-scope builds may start while this
+	// build waits for image conversion and re-tagging below.
+	m.queue.ReleaseSerialKey(id)
+
 	duration := time.Since(start)
 	durationMS := duration.Milliseconds()
 
@@ -975,7 +980,10 @@ func (m *manager) detachStaleCacheVolumeHolders(ctx context.Context, cacheVolID 
 		if !strings.HasPrefix(inst.Name, "builder-") {
 			return fmt.Errorf("cache volume %s attached to non-builder instance %s", cacheVolID, inst.Id)
 		}
-		if err := m.instanceManager.DeleteInstance(ctx, inst.Id); err != nil {
+		// Tolerate ErrNotFound: a concurrent cleanup may have deleted the
+		// builder between GetInstance and DeleteInstance, leaving its
+		// attachment record behind for the recheck below to detach.
+		if err := m.instanceManager.DeleteInstance(ctx, inst.Id); err != nil && !errors.Is(err, instances.ErrNotFound) {
 			return fmt.Errorf("delete stale builder %s holding cache volume: %w", inst.Id, err)
 		}
 		m.logger.Warn("deleted stale builder holding cache volume", "instance", inst.Id, "volume", cacheVolID)

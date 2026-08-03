@@ -428,3 +428,35 @@ func TestExecuteBuild_RecoversOrphanCacheVolumeAttachment(t *testing.T) {
 	assert.Equal(t, 2, createCalls, "instance creation retried after orphan attachment removal")
 	assert.Empty(t, volumeMgr.volumes[cacheVolID].Attachments, "orphan attachment detached from cache volume")
 }
+
+// TestDetachStaleCacheVolumeHolders_DeleteInstanceNotFoundDetachesSurvivingAttachment
+// covers a concurrent delete landing between GetInstance and DeleteInstance:
+// the stale builder is already gone, so the surviving cache volume
+// attachment must still be detached instead of failing the build.
+func TestDetachStaleCacheVolumeHolders_DeleteInstanceNotFoundDetachesSurvivingAttachment(t *testing.T) {
+	mgr, instanceMgr, volumeMgr, tempDir := setupTestManager(t)
+	defer os.RemoveAll(tempDir)
+
+	stale := &instances.Instance{
+		StoredMetadata: instances.StoredMetadata{Id: "inst-stale", Name: "builder-old"},
+		State:          instances.StateRunning,
+	}
+	instanceMgr.instances[stale.Id] = stale
+	instanceMgr.deleteFunc = func(ctx context.Context, id string) error {
+		delete(instanceMgr.instances, id)
+		return instances.ErrNotFound
+	}
+
+	volumeMgr.volumes["cache-vol"] = &volumes.Volume{
+		Id:   "cache-vol",
+		Name: "cache-vol",
+		Attachments: []volumes.Attachment{
+			{InstanceID: stale.Id, MountPath: "/var/lib/buildkit"},
+		},
+	}
+
+	ctx := context.Background()
+	require.NoError(t, mgr.detachStaleCacheVolumeHolders(ctx, "cache-vol"))
+	assert.Empty(t, volumeMgr.volumes["cache-vol"].Attachments,
+		"surviving attachment detached despite DeleteInstance ErrNotFound")
+}
