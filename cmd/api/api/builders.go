@@ -149,6 +149,13 @@ func (s *ApiService) PruneBuilder(ctx context.Context, request oapi.PruneBuilder
 	log := logger.FromContext(ctx)
 
 	if err := s.BuilderManager.ResetDisk(ctx, b.ID); err != nil {
+		if errors.Is(err, builders.ErrNotFound) {
+			// Deleted between resolution and this call (e.g. idle reaper)
+			return oapi.PruneBuilder404JSONResponse{
+				Code:    "not_found",
+				Message: "builder not found",
+			}, nil
+		}
 		if errors.Is(err, builders.ErrInUse) {
 			return oapi.PruneBuilder409JSONResponse{
 				Code:    "conflict",

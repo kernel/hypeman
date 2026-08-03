@@ -221,6 +221,27 @@ func TestPruneBuilder_InUse(t *testing.T) {
 	assert.True(t, ok, "expected 409 while a build holds the builder")
 }
 
+func TestPruneBuilder_NotFoundAfterResolution(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	createResp, err := svc.CreateBuilder(ctx(), oapi.CreateBuilderRequestObject{
+		Body: &oapi.CreateBuilderRequest{},
+	})
+	require.NoError(t, err)
+	created := createResp.(oapi.CreateBuilder201JSONResponse)
+
+	// Resolve, then delete underneath the handler to simulate the reaper
+	// firing between resolution and the manager call.
+	resolvedCtx := ctxWithBuilder(svc, created.Id)
+	require.NoError(t, svc.BuilderManager.DeleteBuilder(ctx(), created.Id))
+
+	resp, err := svc.PruneBuilder(resolvedCtx, oapi.PruneBuilderRequestObject{Id: created.Id})
+	require.NoError(t, err)
+	_, ok := resp.(oapi.PruneBuilder404JSONResponse)
+	assert.True(t, ok, "expected 404 when the builder is gone after resolution")
+}
+
 func TestDeleteBuilder_NotFoundAfterResolution(t *testing.T) {
 	t.Parallel()
 	svc := newTestService(t)
