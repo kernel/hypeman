@@ -11,6 +11,7 @@ import (
 
 	"github.com/c2h5oh/datasize"
 	"github.com/kernel/hypeman/cmd/api/config"
+	"github.com/kernel/hypeman/lib/builders"
 	"github.com/kernel/hypeman/lib/builds"
 	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/guestmemory"
@@ -376,6 +377,26 @@ func ProvideIngressManager(p *paths.Paths, cfg *config.Config, instanceManager i
 	// IngressResolver from instances package implements ingress.InstanceResolver
 	resolver := instances.NewIngressResolver(instanceManager)
 	return ingress.NewManager(p, ingressConfig, resolver, otelLogger), nil
+}
+
+// ProvideBuilderManager provides the builders manager
+func ProvideBuilderManager(p *paths.Paths, cfg *config.Config, instanceManager instances.Manager, volumeManager volumes.Manager, log *slog.Logger) (builders.Manager, error) {
+	var idleTTL time.Duration
+	if cfg.Builders.IdleTTL != "" {
+		ttl, err := time.ParseDuration(cfg.Builders.IdleTTL)
+		if err != nil {
+			return nil, fmt.Errorf("parse builders.idle_ttl: %w", err)
+		}
+		idleTTL = ttl
+	}
+
+	meter := otel.GetMeterProvider().Meter("hypeman")
+	return builders.NewManager(p, builders.Config{
+		MaxCount:          cfg.Builders.MaxCount,
+		DefaultDiskSizeGb: cfg.Builders.DefaultDiskSizeGb,
+		MaxDiskSizeGb:     cfg.Builders.MaxDiskSizeGb,
+		IdleTTL:           idleTTL,
+	}, volumeManager, instanceManager, log, meter)
 }
 
 // ProvideBuildManager provides the build manager

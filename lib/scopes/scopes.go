@@ -208,6 +208,13 @@ var RouteScopes = map[string]Scope{
 	"GET /builds/{id}":        BuildRead,
 	"GET /builds/{id}/events": BuildRead,
 
+	// Builders
+	"GET /builders":             BuilderRead,
+	"POST /builders":            BuilderWrite,
+	"DELETE /builders/{id}":     BuilderDelete,
+	"GET /builders/{id}":        BuilderRead,
+	"POST /builders/{id}/prune": BuilderWrite,
+
 	// Devices
 	"GET /devices":           DeviceRead,
 	"POST /devices":          DeviceWrite,

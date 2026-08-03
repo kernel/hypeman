@@ -574,6 +574,12 @@ func run() error {
 		)
 	}
 
+	// Start builders manager (reconcile builder state, idle reaper)
+	if err := app.BuilderManager.Start(gctx); err != nil {
+		logger.Error("failed to start builders manager", "error", err)
+		return err
+	}
+
 	// Start build manager background services (vsock handler for builder VMs)
 	if err := app.BuildManager.Start(gctx); err != nil {
 		logger.Error("failed to start build manager", "error", err)

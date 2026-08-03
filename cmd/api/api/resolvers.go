@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/kernel/hypeman/lib/builders"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/ingress"
 	"github.com/kernel/hypeman/lib/instances"
@@ -69,6 +70,20 @@ func (r ImageResolver) Resolve(ctx context.Context, name string) (string, any, e
 	return img.Name, img, nil
 }
 
+// BuilderResolver adapts builders.Manager to middleware.ResourceResolver.
+// Builders resolve by opaque ID only; names are non-unique metadata.
+type BuilderResolver struct {
+	Manager builders.Manager
+}
+
+func (r BuilderResolver) Resolve(ctx context.Context, idOrName string) (string, any, error) {
+	b, err := r.Manager.GetBuilder(ctx, idOrName)
+	if err != nil {
+		return "", nil, err
+	}
+	return b.ID, b, nil
+}
+
 // NewResolvers creates Resolvers from the ApiService managers.
 func (s *ApiService) NewResolvers() middleware.Resolvers {
 	return middleware.Resolvers{
@@ -76,6 +91,7 @@ func (s *ApiService) NewResolvers() middleware.Resolvers {
 		Volume:   VolumeResolver{Manager: s.VolumeManager},
 		Ingress:  IngressResolver{Manager: s.IngressManager},
 		Image:    ImageResolver{Manager: s.ImageManager},
+		Builder:  BuilderResolver{Manager: s.BuilderManager},
 	}
 }
 
@@ -87,7 +103,8 @@ func ResolverErrorResponder(w http.ResponseWriter, err error, lookup string) {
 	case errors.Is(err, instances.ErrNotFound),
 		errors.Is(err, volumes.ErrNotFound),
 		errors.Is(err, ingress.ErrNotFound),
-		errors.Is(err, images.ErrNotFound):
+		errors.Is(err, images.ErrNotFound),
+		errors.Is(err, builders.ErrNotFound):
 		w.WriteHeader(http.StatusNotFound)
 		w.Write([]byte(`{"code":"not_found","message":"resource not found"}`))
 
