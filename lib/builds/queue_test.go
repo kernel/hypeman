@@ -334,3 +334,44 @@ func TestBuildQueue_SerialKeySkipsBlockedPending(t *testing.T) {
 	close(release["build-3"])
 	close(release["build-4"])
 }
+
+// TestBuildQueue_ReleaseSerialKeyStartsSameKeyPending verifies that releasing
+// a serial key lets a same-key pending build start while the active build
+// continues running (e.g. waiting for image conversion after the cache
+// volume is detached).
+func TestBuildQueue_ReleaseSerialKeyStartsSameKeyPending(t *testing.T) {
+	queue := NewBuildQueue(2)
+
+	release := make(chan struct{})
+	started := make(chan string, 2)
+	startFn := func(id string) func() {
+		return func() {
+			started <- id
+			<-release
+		}
+	}
+
+	queue.EnqueueSerial("build-1", CreateBuildRequest{}, "scope-a", startFn("build-1"))
+	queue.EnqueueSerial("build-2", CreateBuildRequest{}, "scope-a", startFn("build-2"))
+
+	select {
+	case id := <-started:
+		assert.Equal(t, "build-1", id)
+	case <-time.After(2 * time.Second):
+		t.Fatal("first build did not start")
+	}
+	assert.Equal(t, 1, queue.PendingCount())
+
+	// Releasing the key starts the pending same-key build while build-1 is
+	// still active.
+	queue.ReleaseSerialKey("build-1")
+	select {
+	case id := <-started:
+		assert.Equal(t, "build-2", id)
+	case <-time.After(2 * time.Second):
+		t.Fatal("pending same-key build did not start after serial key release")
+	}
+	assert.Equal(t, 2, queue.ActiveCount())
+
+	close(release)
+}
