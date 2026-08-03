@@ -920,7 +920,9 @@ func (m *manager) setupDiskRootVolume(ctx context.Context, buildID string) (stri
 // deleteLeftoverDiskRootVolume deletes the buildkit root volume left behind
 // by a crashed build attempt. When the crash left the volume attached to a
 // surviving builder VM the delete fails with ErrInUse; delete the stale
-// builder (which detaches its volumes) and retry.
+// builder and retry. DeleteInstance only warns when a volume detach fails,
+// so an attachment record can survive the deletion; records whose instance
+// is gone are detached directly before the retry.
 func (m *manager) deleteLeftoverDiskRootVolume(ctx context.Context, buildID, volID string) error {
 	err := m.volumeManager.DeleteVolume(ctx, volID)
 	if !errors.Is(err, volumes.ErrInUse) {
@@ -933,6 +935,26 @@ func (m *manager) deleteLeftoverDiskRootVolume(ctx context.Context, buildID, vol
 	if err := m.deleteStaleBuilder(ctx, buildID); err != nil {
 		return fmt.Errorf("clear stale builder holding leftover buildkit root volume: %w", err)
 	}
+
+	// Detach attachment records whose instance is gone or the retried
+	// DeleteVolume still hits ErrInUse.
+	if vol, err := m.volumeManager.GetVolume(ctx, volID); err == nil {
+		for _, att := range vol.Attachments {
+			if _, err := m.instanceManager.GetInstance(ctx, att.InstanceID); err == nil {
+				// Backed by a live instance; the retried delete reports ErrInUse.
+				continue
+			} else if !errors.Is(err, instances.ErrNotFound) {
+				return fmt.Errorf("inspect instance %s holding leftover buildkit root volume: %w", att.InstanceID, err)
+			}
+			if detachErr := m.volumeManager.DetachVolume(ctx, volID, att.InstanceID); detachErr != nil {
+				return fmt.Errorf("detach orphan attachment %s from leftover buildkit root volume: %w", att.InstanceID, detachErr)
+			}
+			m.logger.Warn("detached orphan attachment from leftover buildkit root volume", "instance", att.InstanceID, "volume", volID)
+		}
+	} else if !errors.Is(err, volumes.ErrNotFound) {
+		return fmt.Errorf("recheck leftover buildkit root volume after stale builder removal: %w", err)
+	}
+
 	if err := m.volumeManager.DeleteVolume(ctx, volID); err != nil {
 		return fmt.Errorf("delete leftover buildkit root volume after stale builder removal: %w", err)
 	}

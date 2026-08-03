@@ -168,6 +168,57 @@ func TestSetupDiskRootVolume_LeftoverAttachedToStaleBuilder(t *testing.T) {
 	assert.Equal(t, 2, volumeMgr.createCallCount)
 }
 
+// TestSetupDiskRootVolume_LeftoverSurvivingAttachmentDetached verifies
+// recovery when the stale builder's delete leaves its attachment record
+// behind (DeleteInstance only warns on detach failure): the record is
+// detached directly and the retried volume delete succeeds.
+func TestSetupDiskRootVolume_LeftoverSurvivingAttachmentDetached(t *testing.T) {
+	mgr, instanceMgr, volumeMgr, tempDir := setupTestManager(t)
+	defer os.RemoveAll(tempDir)
+	mgr.config.DiskRootEnabled = true
+
+	created := false
+	volumeMgr.createFunc = func(ctx context.Context, req volumes.CreateVolumeRequest) (*volumes.Volume, error) {
+		if !created {
+			created = true
+			return nil, volumes.ErrAlreadyExists
+		}
+		return &volumes.Volume{Id: *req.Id, Name: req.Name, SizeGb: req.SizeGb}, nil
+	}
+	volumeMgr.volumes["build-disk-build-1"] = &volumes.Volume{
+		Id:   "build-disk-build-1",
+		Name: "build-disk-build-1",
+		Attachments: []volumes.Attachment{
+			{InstanceID: "inst-builder-build-1", MountPath: "/var/lib/buildkit"},
+		},
+	}
+	volumeMgr.deleteFunc = func(ctx context.Context, id string) error {
+		if len(volumeMgr.volumes[id].Attachments) > 0 {
+			return volumes.ErrInUse
+		}
+		delete(volumeMgr.volumes, id)
+		return nil
+	}
+	instanceMgr.getFunc = func(ctx context.Context, id string) (*instances.Instance, error) {
+		if id == "builder-build-1" {
+			return &instances.Instance{
+				StoredMetadata: instances.StoredMetadata{Id: "inst-builder-build-1", Name: "builder-build-1"},
+			}, nil
+		}
+		return nil, instances.ErrNotFound
+	}
+	instanceMgr.deleteFunc = func(ctx context.Context, id string) error {
+		// Detach fails silently: the attachment record survives the delete.
+		return nil
+	}
+
+	volID, err := mgr.setupDiskRootVolume(context.Background(), "build-1")
+
+	require.NoError(t, err)
+	assert.Equal(t, "build-disk-build-1", volID)
+	assert.Equal(t, 2, volumeMgr.createCallCount)
+}
+
 // TestSetupDiskRootVolume_LeftoverInUseWithoutBuilder verifies recovery fails
 // loudly when the leftover volume is attached but no stale builder exists to
 // clean up.
